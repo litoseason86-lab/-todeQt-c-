@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Quick QuickControls2 QuickLayouts Sql Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Quick QuickControls2 QuickLayouts QuickTest Sql Test)
 
 if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
     set(POMODORO_TODO_EFFECTIVE_SYSROOT "${CMAKE_OSX_SYSROOT}")
@@ -78,3 +78,11 @@ target_link_libraries(PomodoroTodoTests PRIVATE
 )
 
 add_test(NAME PomodoroTodoTests COMMAND PomodoroTodoTests)
+
+add_test(
+    NAME PomodoroTodoQmlTests
+    COMMAND Qt6::qmltestrunner -input ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml
+)
+set_tests_properties(PomodoroTodoQmlTests PROPERTIES
+    ENVIRONMENT "QT_QUICK_CONTROLS_STYLE=Basic"
+)

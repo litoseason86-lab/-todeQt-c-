@@ -79,7 +79,7 @@ Item {
                 visible: root.errorText.length > 0
                 text: root.errorText
                 font.pixelSize: 13
-                color: "#9f4d3f"
+                color: "#b24f3d"
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
             }

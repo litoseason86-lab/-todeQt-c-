@@ -6,7 +6,7 @@ Rectangle {
     id: root
 
     Layout.fillWidth: true
-    implicitHeight: Math.max(68, content.implicitHeight + 24)
+    implicitHeight: Math.max(72, content.implicitHeight + 24)
     radius: 6
     color: "#faf6ee"
     border.color: "#e8dfc8"
@@ -62,8 +62,8 @@ Rectangle {
 
             text: root.taskCompleted ? "已完成" : "开始专注"
             enabled: !root.taskCompleted
-            implicitWidth: 94
-            implicitHeight: 34
+            implicitWidth: 104
+            implicitHeight: 44
 
             ToolTip.visible: hovered && !enabled
             ToolTip.text: "已完成任务不能开始专注"

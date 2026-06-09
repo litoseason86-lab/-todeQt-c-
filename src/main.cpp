@@ -2,6 +2,7 @@
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickStyle>
 #include <QUrl>
 
 #include "services/DatabaseManager.h"
@@ -11,6 +12,8 @@
 
 int main(int argc, char *argv[])
 {
+    QQuickStyle::setStyle(QStringLiteral("Basic"));
+
     QGuiApplication app(argc, argv);
 
     QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodo"));

@@ -85,7 +85,7 @@ Rectangle {
         signal clicked()
 
         Layout.fillWidth: true
-        Layout.preferredHeight: 38
+        Layout.preferredHeight: 44
         radius: 6
         color: item.isActive ? "#f0e6d2" : (mouseArea.containsMouse && item.enabled ? "#faf6ee" : "transparent")
         opacity: item.enabled ? 1.0 : 0.55

@@ -94,8 +94,8 @@ Item {
                 id: addButton
 
                 text: "添加任务"
-                implicitWidth: 96
-                implicitHeight: 36
+                implicitWidth: 112
+                implicitHeight: 44
 
                 background: Rectangle {
                     color: "#d4a574"
@@ -185,7 +185,7 @@ Item {
             Layout.fillWidth: true
             visible: root.loadError.length > 0
             text: root.loadError
-            color: "#9f4d3f"
+            color: "#b24f3d"
             font.pixelSize: 13
             wrapMode: Text.WordWrap
         }
@@ -261,9 +261,9 @@ Item {
                             taskCategory: modelData.category || ""
                             taskCompleted: modelData.completed
 
-                        onCompletionChanged: function(id, completed) {
-                            taskManager.setTaskCompleted(id, completed)
-                        }
+                            onCompletionChanged: function(id, completed) {
+                                taskManager.setTaskCompleted(id, completed)
+                            }
 
                             onStartFocusClicked: function(id, title) {
                                 if (focusTimer.startFocus(id, title)) {
@@ -282,7 +282,6 @@ Item {
     AddTaskDialog {
         id: addTaskDialog
 
-        anchors.centerIn: parent
         selectedDate: new Date()
 
         onTaskAdded: function(title, date, category) {
