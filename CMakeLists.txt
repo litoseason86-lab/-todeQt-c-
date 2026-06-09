@@ -9,6 +9,30 @@ set(CMAKE_AUTORCC ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Quick QuickControls2 QuickLayouts Sql Test)
 
+if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
+    set(POMODORO_TODO_EFFECTIVE_SYSROOT "${CMAKE_OSX_SYSROOT}")
+    if(NOT POMODORO_TODO_EFFECTIVE_SYSROOT)
+        execute_process(
+            COMMAND xcrun --sdk macosx --show-sdk-path
+            OUTPUT_VARIABLE POMODORO_TODO_EFFECTIVE_SYSROOT
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+    endif()
+
+    set(POMODORO_TODO_CURRENT_SDK_AGL "${POMODORO_TODO_EFFECTIVE_SYSROOT}/System/Library/Frameworks/AGL.framework")
+    if(NOT EXISTS "${POMODORO_TODO_CURRENT_SDK_AGL}")
+        get_target_property(POMODORO_TODO_OPENGL_LIBS WrapOpenGL::WrapOpenGL INTERFACE_LINK_LIBRARIES)
+        if(POMODORO_TODO_OPENGL_LIBS)
+            list(FILTER POMODORO_TODO_OPENGL_LIBS EXCLUDE REGEX "^-framework AGL$")
+            list(FILTER POMODORO_TODO_OPENGL_LIBS EXCLUDE REGEX "/AGL\\.framework$")
+            set_target_properties(WrapOpenGL::WrapOpenGL PROPERTIES
+                INTERFACE_LINK_LIBRARIES "${POMODORO_TODO_OPENGL_LIBS}"
+            )
+        endif()
+    endif()
+endif()
+
 set(APP_SOURCES
     src/main.cpp
     src/models/Task.cpp

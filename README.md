@@ -12,10 +12,20 @@
 
 ## 构建
 
+需要先安装 Qt 6 SDK，并把 Qt 的 CMake 前缀传给 CMake。当前验证使用的是 Qt 6.9.0：
+
 ```bash
-cmake -B build -S .
+cmake -B build -S . -DCMAKE_PREFIX_PATH=/Users/zerionlito/Qt/6.9.0/macos
 cmake --build build
 ctest --test-dir build --output-on-failure
+```
+
+如果 Qt 安装在其他位置，把 `CMAKE_PREFIX_PATH` 改成对应的 Qt 安装目录。
+
+可选的 QML 静态检查：
+
+```bash
+pyside6-qmllint qml/main.qml qml/MainWindow.qml qml/views/TodayTaskView.qml qml/views/FocusView.qml qml/components/Sidebar.qml qml/components/TaskItem.qml qml/components/AddTaskDialog.qml
 ```
 
 ## 项目结构

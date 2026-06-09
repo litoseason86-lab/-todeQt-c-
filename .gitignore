@@ -11,6 +11,7 @@ cmake-build-*/
 # Qt/CMake generated files
 *.pro.user
 *.autosave
+aqtinstall.log
 moc_*.cpp
 qrc_*.cpp
 CMakeFiles/
