@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="qml/main.qml">../qml/main.qml</file>
+        <file alias="qml/MainWindow.qml">../qml/MainWindow.qml</file>
+        <file alias="qml/views/TodayTaskView.qml">../qml/views/TodayTaskView.qml</file>
+        <file alias="qml/views/FocusView.qml">../qml/views/FocusView.qml</file>
+        <file alias="qml/components/Sidebar.qml">../qml/components/Sidebar.qml</file>
+        <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
+        <file alias="qml/components/AddTaskDialog.qml">../qml/components/AddTaskDialog.qml</file>
+    </qresource>
+</RCC>

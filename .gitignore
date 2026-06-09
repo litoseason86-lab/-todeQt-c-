@@ -8,6 +8,15 @@ Thumbs.db
 build/
 cmake-build-*/
 
+# Qt/CMake generated files
+*.pro.user
+*.autosave
+moc_*.cpp
+qrc_*.cpp
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
 # Local database files
 *.db
 *.sqlite
