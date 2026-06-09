@@ -1,0 +1,13 @@
+.superpowers/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local build output
+build/
+cmake-build-*/
+
+# Local database files
+*.db
+*.sqlite
