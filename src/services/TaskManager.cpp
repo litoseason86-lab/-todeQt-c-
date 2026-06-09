@@ -221,3 +221,77 @@ QVariantList TaskManager::getTasksByDate(const QDate& date) const
 
     return tasks;
 }
+
+QVariantList TaskManager::getWeekTasks(const QVariant& startDateValue) const
+{
+    QVariantList tasks;
+    const QDate startDate = normalizeDate(startDateValue);
+    if (!startDate.isValid()) {
+        qWarning() << "Failed to get week tasks: invalid start date";
+        return tasks;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to get week tasks: database is not open";
+        return tasks;
+    }
+
+    const QDate endDate = startDate.addDays(6);
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT id, title, category, date, completed, created_at "
+        "FROM tasks "
+        "WHERE date >= :startDate AND date <= :endDate "
+        "ORDER BY date ASC, completed ASC, created_at ASC, id ASC"));
+    query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
+
+    if (!query.exec()) {
+        qWarning() << "Failed to get week tasks:" << query.lastError().text();
+        return tasks;
+    }
+
+    while (query.next()) {
+        tasks.append(Task::fromQuery(query).toVariantMap());
+    }
+
+    return tasks;
+}
+
+QVariantList TaskManager::getMonthTasks(int year, int month) const
+{
+    QVariantList tasks;
+    const QDate startDate(year, month, 1);
+    if (!startDate.isValid()) {
+        qWarning() << "Failed to get month tasks: invalid year/month" << year << month;
+        return tasks;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to get month tasks: database is not open";
+        return tasks;
+    }
+
+    const QDate endDate = startDate.addMonths(1).addDays(-1);
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT id, title, category, date, completed, created_at "
+        "FROM tasks "
+        "WHERE date >= :startDate AND date <= :endDate "
+        "ORDER BY date ASC, completed ASC, created_at ASC, id ASC"));
+    query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
+
+    if (!query.exec()) {
+        qWarning() << "Failed to get month tasks:" << query.lastError().text();
+        return tasks;
+    }
+
+    while (query.next()) {
+        tasks.append(Task::fromQuery(query).toVariantMap());
+    }
+
+    return tasks;
+}

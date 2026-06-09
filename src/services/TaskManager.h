@@ -20,6 +20,8 @@ public:
     Q_INVOKABLE bool deleteTask(int taskId);
     Q_INVOKABLE QVariantList getTodayTasks() const;
     Q_INVOKABLE QVariantList getTasksByDate(const QDate& date) const;
+    Q_INVOKABLE QVariantList getWeekTasks(const QVariant& startDateValue) const;
+    Q_INVOKABLE QVariantList getMonthTasks(int year, int month) const;
 
 signals:
     void tasksChanged();

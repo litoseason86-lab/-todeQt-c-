@@ -4,8 +4,14 @@
         <file alias="qml/MainWindow.qml">../qml/MainWindow.qml</file>
         <file alias="qml/views/TodayTaskView.qml">../qml/views/TodayTaskView.qml</file>
         <file alias="qml/views/FocusView.qml">../qml/views/FocusView.qml</file>
+        <file alias="qml/views/WeekPlanView.qml">../qml/views/WeekPlanView.qml</file>
+        <file alias="qml/views/StatisticsView.qml">../qml/views/StatisticsView.qml</file>
+        <file alias="qml/views/MonthGoalView.qml">../qml/views/MonthGoalView.qml</file>
         <file alias="qml/components/Sidebar.qml">../qml/components/Sidebar.qml</file>
         <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
         <file alias="qml/components/AddTaskDialog.qml">../qml/components/AddTaskDialog.qml</file>
+        <file alias="qml/components/StatCard.qml">../qml/components/StatCard.qml</file>
+        <file alias="qml/components/ChartBar.qml">../qml/components/ChartBar.qml</file>
+        <file alias="qml/components/ChartPie.qml">../qml/components/ChartPie.qml</file>
     </qresource>
 </RCC>

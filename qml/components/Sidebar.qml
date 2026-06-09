@@ -56,13 +56,22 @@ Rectangle {
         SidebarItem {
             text: "本周计划"
             marker: "周"
-            enabled: false
+            isActive: root.currentView === "week"
+            onClicked: root.itemClicked("week")
+        }
+
+        SidebarItem {
+            text: "月度目标"
+            marker: "月"
+            isActive: root.currentView === "month"
+            onClicked: root.itemClicked("month")
         }
 
         SidebarItem {
             text: "数据统计"
             marker: "数"
-            enabled: false
+            isActive: root.currentView === "stats"
+            onClicked: root.itemClicked("stats")
         }
 
         Item {
@@ -70,7 +79,7 @@ Rectangle {
         }
 
         Text {
-            text: "MVP 草案"
+            text: "二阶段"
             font.pixelSize: 12
             color: "#a0896b"
         }

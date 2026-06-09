@@ -8,6 +8,22 @@ Item {
 
     property string currentView: "today"
 
+    function viewIndex(viewName) {
+        switch (viewName) {
+        case "focus":
+            return 1
+        case "week":
+            return 2
+        case "month":
+            return 3
+        case "stats":
+            return 4
+        case "today":
+        default:
+            return 0
+        }
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 0
@@ -35,7 +51,7 @@ Item {
 
             StackLayout {
                 anchors.fill: parent
-                currentIndex: root.currentView === "focus" ? 1 : 0
+                currentIndex: root.viewIndex(root.currentView)
 
                 TodayTaskView {
                     onStartFocus: function(taskId, taskTitle) {
@@ -47,6 +63,21 @@ Item {
                     onFocusEnded: {
                         root.currentView = "today"
                     }
+                }
+
+                WeekPlanView {
+                    onStartFocus: function(taskId, taskTitle) {
+                        root.currentView = "focus"
+                    }
+                }
+
+                MonthGoalView {
+                    onStartFocus: function(taskId, taskTitle) {
+                        root.currentView = "focus"
+                    }
+                }
+
+                StatisticsView {
                 }
             }
         }

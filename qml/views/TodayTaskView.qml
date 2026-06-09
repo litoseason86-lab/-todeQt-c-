@@ -54,7 +54,10 @@ Item {
     }
 
     function formatDuration(seconds) {
-        var safe = Math.max(0, Number(seconds || 0))
+        var safe = Math.max(0, Math.floor(Number(seconds || 0)))
+        if (safe > 0 && safe < 60) {
+            return safe + "秒"
+        }
         var hours = Math.floor(safe / 3600)
         var minutes = Math.floor((safe % 3600) / 60)
         if (hours > 0) {
