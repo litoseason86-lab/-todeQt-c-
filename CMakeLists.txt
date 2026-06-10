@@ -40,12 +40,15 @@ set(APP_SOURCES
     src/main.cpp
     src/models/Task.cpp
     src/models/FocusSession.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.cpp
     src/services/DatabaseManager.cpp
     src/services/CategoryManager.cpp
     src/services/ExportService.cpp
     src/services/TaskManager.cpp
     src/services/FocusTimer.cpp
     src/services/StatisticsService.cpp
+    src/services/CountdownService.cpp
     resources/qml.qrc
 )
 
@@ -91,6 +94,22 @@ target_link_libraries(PomodoroTodoTests PRIVATE
 )
 
 add_test(NAME PomodoroTodoTests COMMAND PomodoroTodoTests)
+
+add_executable(CountdownServiceTests
+    tests/CountdownServiceTests.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.cpp
+    src/services/DatabaseManager.cpp
+    src/services/CountdownService.cpp
+)
+
+target_link_libraries(CountdownServiceTests PRIVATE
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+add_test(NAME CountdownServiceTests COMMAND CountdownServiceTests)
 
 add_test(
     NAME PomodoroTodoQmlTests

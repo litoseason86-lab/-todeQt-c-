@@ -7,6 +7,7 @@
 
 #include "services/DatabaseManager.h"
 #include "services/CategoryManager.h"
+#include "services/CountdownService.h"
 #include "services/ExportService.h"
 #include "services/FocusTimer.h"
 #include "services/StatisticsService.h"
@@ -35,6 +36,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("taskManager"), TaskManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("focusTimer"), FocusTimer::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("statisticsService"), StatisticsService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
 
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,

@@ -8,6 +8,7 @@ Item {
     id: root
 
     signal startFocus(int taskId, string taskTitle)
+    signal countdownRequested()
 
     property var tasks: []
     property var todayStats: ({
@@ -17,6 +18,7 @@ Item {
             completionRate: 0
         })
     property var categoryManagerRef: null
+    property var countdownServiceRef: null
     property string loadError: ""
 
     Component.onCompleted: refresh()
@@ -180,6 +182,15 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: 1
             color: "#e8dfc8"
+        }
+
+        CountdownBanner {
+            Layout.fillWidth: true
+            primaryGoal: root.countdownServiceRef ? root.countdownServiceRef.primaryGoal : null
+            visible: root.countdownServiceRef !== null
+
+            onClicked: root.countdownRequested()
+            onAddRequested: countdownDialog.openForAdd()
         }
 
         RowLayout {
@@ -412,5 +423,12 @@ Item {
         onTaskAdded: function (title, date, categoryId) {
             taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId));
         }
+    }
+
+    CountdownDialog {
+        id: countdownDialog
+
+        parent: root
+        countdownServiceRef: root.countdownServiceRef
     }
 }

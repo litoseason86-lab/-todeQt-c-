@@ -81,6 +81,13 @@ Rectangle {
             onClicked: root.itemClicked("stats")
         }
 
+        SidebarItem {
+            text: "目标倒计时"
+            marker: "倒"
+            isActive: root.currentView === "countdown"
+            onClicked: root.itemClicked("countdown")
+        }
+
         Item {
             Layout.fillHeight: true
         }

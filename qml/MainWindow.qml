@@ -11,6 +11,7 @@ Item {
     // 淡入淡出期间只保留最后一次视图请求，避免动画队列堆积。
     property string queuedView: ""
     property bool isSwitching: false
+    property var countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
 
     function switchToView(viewName) {
         if (root.isSwitching) {
@@ -52,6 +53,8 @@ Item {
             return 3;
         case "stats":
             return 4;
+        case "countdown":
+            return 5;
         case "today":
         default:
             return 0;
@@ -102,10 +105,13 @@ Item {
 
                 TodayTaskView {
                     categoryManagerRef: categoryManager
+                    countdownServiceRef: root.countdownServiceRef
 
                     onStartFocus: function (taskId, taskTitle) {
                         root.switchToView("focus");
                     }
+
+                    onCountdownRequested: root.switchToView("countdown")
                 }
 
                 FocusView {
@@ -132,6 +138,10 @@ Item {
 
                 StatisticsView {
                     categoryManagerRef: categoryManager
+                }
+
+                CountdownView {
+                    countdownServiceRef: root.countdownServiceRef
                 }
             }
 

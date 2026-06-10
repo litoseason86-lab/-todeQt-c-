@@ -7,9 +7,13 @@
         <file alias="qml/views/WeekPlanView.qml">../qml/views/WeekPlanView.qml</file>
         <file alias="qml/views/StatisticsView.qml">../qml/views/StatisticsView.qml</file>
         <file alias="qml/views/MonthGoalView.qml">../qml/views/MonthGoalView.qml</file>
+        <file alias="qml/views/CountdownView.qml">../qml/views/CountdownView.qml</file>
         <file alias="qml/components/Sidebar.qml">../qml/components/Sidebar.qml</file>
         <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
         <file alias="qml/components/AddTaskDialog.qml">../qml/components/AddTaskDialog.qml</file>
+        <file alias="qml/components/CountdownDialog.qml">../qml/components/CountdownDialog.qml</file>
+        <file alias="qml/components/CountdownBanner.qml">../qml/components/CountdownBanner.qml</file>
+        <file alias="qml/components/CountdownItem.qml">../qml/components/CountdownItem.qml</file>
         <file alias="qml/components/StatCard.qml">../qml/components/StatCard.qml</file>
         <file alias="qml/components/ChartBar.qml">../qml/components/ChartBar.qml</file>
         <file alias="qml/components/ChartPie.qml">../qml/components/ChartPie.qml</file>
