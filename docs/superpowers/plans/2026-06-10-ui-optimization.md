@@ -1,6 +1,6 @@
 # UI优化实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** 优化番茄todo应用的UI视觉效果和交互体验，提升整体设计质量和用户体验
 
@@ -41,7 +41,7 @@
 4. 调整完成状态透明度
 5. 优化文本颜色层次
 
-- [ ] **Step 1: 添加DropShadow导入**
+- [x] **Step 1: 添加DropShadow导入**
 
 在文件顶部添加Qt5Compat.GraphicalEffects导入：
 
@@ -52,7 +52,7 @@ import QtQuick.Layouts
 import Qt5Compat.GraphicalEffects
 ```
 
-- [ ] **Step 2: 替换ShaderEffect为DropShadow**
+- [x] **Step 2: 替换ShaderEffect为DropShadow**
 
 找到当前的shadow layer（如果使用ShaderEffect），替换为DropShadow：
 
@@ -89,7 +89,7 @@ Rectangle {
 }
 ```
 
-- [ ] **Step 3: 优化CheckBox悬停效果**
+- [x] **Step 3: 优化CheckBox悬停效果**
 
 修改CheckBox的indicator，添加悬停时的边框和背景过渡：
 
@@ -131,7 +131,7 @@ CheckBox {
 }
 ```
 
-- [ ] **Step 4: 增强删除和编辑按钮的悬停效果**
+- [x] **Step 4: 增强删除和编辑按钮的悬停效果**
 
 为操作按钮添加背景高亮和缩放效果：
 
@@ -203,7 +203,7 @@ Button {
 }
 ```
 
-- [ ] **Step 5: 调整完成状态的透明度和文本颜色**
+- [x] **Step 5: 调整完成状态的透明度和文本颜色**
 
 修改任务文本的opacity和颜色：
 
@@ -228,7 +228,7 @@ Text {
 }
 ```
 
-- [ ] **Step 6: 验证视觉效果**
+- [x] **Step 6: 验证视觉效果**
 
 启动应用并验证TaskItem的以下效果：
 1. 阴影显示正确（无ShaderEffect相关错误）
@@ -243,7 +243,7 @@ cd /Users/zerionlito/code/番茄todo
 # 假设使用qml或其他Qt运行命令
 ```
 
-- [ ] **Step 7: 提交更改**
+- [x] **Step 7: 提交更改**
 
 ```bash
 git add qml/components/TaskItem.qml
@@ -270,7 +270,7 @@ git commit -m "refactor: optimize TaskItem visual effects and interactions
 4. 增强按钮交互反馈
 5. 添加容器阴影层次
 
-- [ ] **Step 1: 添加DropShadow导入**
+- [x] **Step 1: 添加DropShadow导入**
 
 确保文件顶部有Qt5Compat.GraphicalEffects导入：
 
@@ -281,7 +281,7 @@ import QtQuick.Layouts
 import Qt5Compat.GraphicalEffects
 ```
 
-- [ ] **Step 2: 优化Dialog打开/关闭动画**
+- [x] **Step 2: 优化Dialog打开/关闭动画**
 
 修改Dialog的enter和exit动画，使用220ms时长和0.94起始缩放：
 
@@ -330,7 +330,7 @@ Dialog {
 }
 ```
 
-- [ ] **Step 3: 为Dialog背景添加阴影效果**
+- [x] **Step 3: 为Dialog背景添加阴影效果**
 
 为Dialog的background添加DropShadow：
 
@@ -359,7 +359,7 @@ Dialog {
 }
 ```
 
-- [ ] **Step 4: 优化TextField焦点环效果**
+- [x] **Step 4: 优化TextField焦点环效果**
 
 为任务标题输入框添加焦点状态的边框和阴影：
 
@@ -397,7 +397,7 @@ TextField {
 }
 ```
 
-- [ ] **Step 5: 优化ComboBox悬停和打开状态**
+- [x] **Step 5: 优化ComboBox悬停和打开状态**
 
 为分类选择ComboBox添加悬停效果：
 
@@ -448,7 +448,7 @@ ComboBox {
 }
 ```
 
-- [ ] **Step 6: 增强确定和取消按钮的交互效果**
+- [x] **Step 6: 增强确定和取消按钮的交互效果**
 
 优化按钮的悬停、按下状态：
 
@@ -526,7 +526,7 @@ Button {
 }
 ```
 
-- [ ] **Step 7: 验证对话框效果**
+- [x] **Step 7: 验证对话框效果**
 
 启动应用并验证AddTaskDialog的以下效果：
 1. 对话框打开/关闭动画为220ms，缩放从0.94到1.0
@@ -537,7 +537,7 @@ Button {
 6. 确定按钮悬停时颜色为#d9a574，按下时为#c99666，有缩放效果
 7. 取消按钮悬停时背景为#f5ede3，边框为#d4a574，有缩放效果
 
-- [ ] **Step 8: 提交更改**
+- [x] **Step 8: 提交更改**
 
 ```bash
 git add qml/components/AddTaskDialog.qml
@@ -565,7 +565,7 @@ git commit -m "refactor: optimize AddTaskDialog animations and interactions
 4. 优化空状态显示
 5. 添加容器阴影
 
-- [ ] **Step 1: 添加DropShadow导入**
+- [x] **Step 1: 添加DropShadow导入**
 
 确保文件顶部有Qt5Compat.GraphicalEffects导入：
 
@@ -576,7 +576,7 @@ import QtQuick.Layouts
 import Qt5Compat.GraphicalEffects
 ```
 
-- [ ] **Step 2: 优化统计卡片的阴影效果**
+- [x] **Step 2: 优化统计卡片的阴影效果**
 
 为统计卡片（已完成/总任务/进度）添加阴影：
 
@@ -622,7 +622,7 @@ Rectangle {
 }
 ```
 
-- [ ] **Step 3: 调整描述文本颜色**
+- [x] **Step 3: 调整描述文本颜色**
 
 将页面描述文本颜色从#8b7355调整为#6d5e47以增强可读性：
 
@@ -635,7 +635,7 @@ Text {
 }
 ```
 
-- [ ] **Step 4: 优化添加任务按钮**
+- [x] **Step 4: 优化添加任务按钮**
 
 增强按钮的悬停和按下状态：
 
@@ -678,7 +678,7 @@ Button {
 }
 ```
 
-- [ ] **Step 5: 优化任务列表容器**
+- [x] **Step 5: 优化任务列表容器**
 
 为任务列表容器添加背景和阴影（如果有独立容器）：
 
@@ -714,7 +714,7 @@ Rectangle {
 }
 ```
 
-- [ ] **Step 6: 优化空状态显示**
+- [x] **Step 6: 优化空状态显示**
 
 增强空状态的视觉效果：
 
@@ -753,7 +753,7 @@ Item {
 }
 ```
 
-- [ ] **Step 7: 验证视图效果**
+- [x] **Step 7: 验证视图效果**
 
 启动应用并验证TodayTaskView的以下效果：
 1. 统计卡片有阴影效果（level 1）
@@ -763,7 +763,7 @@ Item {
 5. 任务列表容器有阴影效果
 6. 空状态显示正确的图标、文本和颜色
 
-- [ ] **Step 8: 提交更改**
+- [x] **Step 8: 提交更改**
 
 ```bash
 git add qml/views/TodayTaskView.qml
@@ -791,7 +791,7 @@ git commit -m "refactor: optimize TodayTaskView visual effects
 5. 统一字体粗细定义
 6. 优化任务详情面板
 
-- [ ] **Step 1: 添加DropShadow导入**
+- [x] **Step 1: 添加DropShadow导入**
 
 确保文件顶部有Qt5Compat.GraphicalEffects导入：
 
@@ -802,7 +802,7 @@ import QtQuick.Layouts
 import Qt5Compat.GraphicalEffects
 ```
 
-- [ ] **Step 2: 优化日历单元格悬停效果**
+- [x] **Step 2: 优化日历单元格悬停效果**
 
 为日历日期单元格添加悬停状态：
 
@@ -868,7 +868,7 @@ Rectangle {
 }
 ```
 
-- [ ] **Step 3: 优化月份导航按钮**
+- [x] **Step 3: 优化月份导航按钮**
 
 增强上一月/下一月按钮的交互效果：
 
@@ -944,7 +944,7 @@ Button {
 }
 ```
 
-- [ ] **Step 4: 为日历容器添加阴影**
+- [x] **Step 4: 为日历容器添加阴影**
 
 为日历网格容器添加level 1阴影：
 
@@ -980,7 +980,7 @@ Rectangle {
 }
 ```
 
-- [ ] **Step 5: 优化统计卡片**
+- [x] **Step 5: 优化统计卡片**
 
 为月度统计卡片添加阴影和优化样式：
 
@@ -1026,7 +1026,7 @@ Rectangle {
 }
 ```
 
-- [ ] **Step 6: 优化任务详情面板**
+- [x] **Step 6: 优化任务详情面板**
 
 增强右侧任务详情面板的视觉效果：
 
@@ -1080,7 +1080,7 @@ Rectangle {
 }
 ```
 
-- [ ] **Step 7: 统一字体粗细定义**
+- [x] **Step 7: 统一字体粗细定义**
 
 将所有使用font.bold的地方改为font.weight: Font.Bold：
 
@@ -1098,7 +1098,7 @@ Text {
 }
 ```
 
-- [ ] **Step 8: 优化星期标题行**
+- [x] **Step 8: 优化星期标题行**
 
 优化日历顶部星期标题的样式：
 
@@ -1117,7 +1117,7 @@ Repeater {
 }
 ```
 
-- [ ] **Step 9: 验证视图效果**
+- [x] **Step 9: 验证视图效果**
 
 启动应用并验证MonthGoalView的以下效果：
 1. 日历单元格悬停时背景变为#faf8f3，边框为#e8dfc8
@@ -1128,7 +1128,7 @@ Repeater {
 6. 所有字体粗细使用Font.Bold而非font.bold
 7. 非当月日期文本颜色为#b8a998
 
-- [ ] **Step 10: 提交更改**
+- [x] **Step 10: 提交更改**
 
 ```bash
 git add qml/views/MonthGoalView.qml
@@ -1155,7 +1155,7 @@ git commit -m "refactor: optimize MonthGoalView calendar and interactions
 3. 增强激活状态视觉反馈
 4. 优化分隔线样式
 
-- [ ] **Step 1: 统一字体粗细定义**
+- [x] **Step 1: 统一字体粗细定义**
 
 将所有font.bold: true替换为font.weight: Font.Bold：
 
@@ -1179,7 +1179,7 @@ Text {
 }
 ```
 
-- [ ] **Step 2: 优化SidebarItem组件的字体定义**
+- [x] **Step 2: 优化SidebarItem组件的字体定义**
 
 在SidebarItem组件中修改marker文本和主文本的字体定义：
 
@@ -1232,7 +1232,7 @@ component SidebarItem: Rectangle {
 }
 ```
 
-- [ ] **Step 3: 增强SidebarItem悬停效果**
+- [x] **Step 3: 增强SidebarItem悬停效果**
 
 优化悬停时的背景过渡和边框效果：
 
@@ -1280,7 +1280,7 @@ component SidebarItem: Rectangle {
 }
 ```
 
-- [ ] **Step 4: 优化分隔线样式**
+- [x] **Step 4: 优化分隔线样式**
 
 增强分隔线的视觉效果：
 
@@ -1295,7 +1295,7 @@ Rectangle {
 }
 ```
 
-- [ ] **Step 5: 优化版本号文本样式**
+- [x] **Step 5: 优化版本号文本样式**
 
 调整底部版本号的字体和颜色：
 
@@ -1309,7 +1309,7 @@ Text {
 }
 ```
 
-- [ ] **Step 6: 验证侧边栏效果**
+- [x] **Step 6: 验证侧边栏效果**
 
 启动应用并验证Sidebar的以下效果：
 1. 所有字体使用Font.Bold而非font.bold: true
@@ -1319,7 +1319,7 @@ Text {
 5. 所有过渡动画使用150-180ms
 6. 分隔线显示正常，透明度0.8
 
-- [ ] **Step 7: 提交更改**
+- [x] **Step 7: 提交更改**
 
 ```bash
 git add qml/components/Sidebar.qml
@@ -1345,7 +1345,7 @@ git commit -m "refactor: optimize Sidebar visual effects and font definitions
 2. 调整分隔线样式
 3. 确保背景颜色一致性
 
-- [ ] **Step 1: 优化视图切换动画时长**
+- [x] **Step 1: 优化视图切换动画时长**
 
 将视图切换动画从150ms调整为更流畅的时长：
 
@@ -1375,7 +1375,7 @@ SequentialAnimation {
 }
 ```
 
-- [ ] **Step 2: 优化分隔线样式**
+- [x] **Step 2: 优化分隔线样式**
 
 调整侧边栏和主内容区之间的分隔线：
 
@@ -1388,7 +1388,7 @@ Rectangle {
 }
 ```
 
-- [ ] **Step 3: 确保主内容区背景颜色**
+- [x] **Step 3: 确保主内容区背景颜色**
 
 确认主内容区使用正确的背景色：
 
@@ -1408,7 +1408,7 @@ Rectangle {
 }
 ```
 
-- [ ] **Step 4: 添加视图切换防抖**
+- [x] **Step 4: 添加视图切换防抖**
 
 优化switchToView函数，避免快速切换：
 
@@ -1456,7 +1456,7 @@ SequentialAnimation {
 }
 ```
 
-- [ ] **Step 5: 验证视图切换效果**
+- [x] **Step 5: 验证视图切换效果**
 
 启动应用并验证MainWindow的以下效果：
 1. 视图切换动画时长为180ms
@@ -1465,7 +1465,7 @@ SequentialAnimation {
 4. 分隔线颜色为#e8dfc8，透明度0.8
 5. 主内容区背景色为#fffef9
 
-- [ ] **Step 6: 提交更改**
+- [x] **Step 6: 提交更改**
 
 ```bash
 git add qml/MainWindow.qml

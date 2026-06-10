@@ -52,15 +52,11 @@ TestCase {
     }
 
     function sidebarItemForMarker(marker) {
-        var markerText = findText(marker);
-        verify(markerText !== null);
-        return markerText.parent.parent.parent;
+        return findChild(sidebar, "sidebarItem-" + marker);
     }
 
     function markerContainerFor(marker) {
-        var markerText = findText(marker);
-        verify(markerText !== null);
-        return markerText.parent;
+        return findChild(sidebar, "sidebarMarker-" + marker);
     }
 
     function test_titleAndGroupFontWeightsUseFontWeight() {
@@ -83,12 +79,16 @@ TestCase {
         var markerText = findText("今");
         var mainText = findText("今日任务");
 
+        verify(activeItem !== null);
+        verify(markerContainer !== null);
         verify(Qt.colorEqual(activeItem.color, "#f0e6d2"));
         verify(Qt.colorEqual(activeItem.border.color, "#d4a574"));
         compare(activeItem.border.width, 1);
         compare(activeItem.radius, 6);
         compare(activeItem.height, 44);
         compare(activeItem.opacity, 1.0);
+        compare(activeItem.layer.enabled, true);
+        verify(activeItem.layer.effect !== null);
 
         compare(markerContainer.width, 22);
         compare(markerContainer.height, 22);
@@ -110,14 +110,30 @@ TestCase {
         var markerText = findText("专");
         var mainText = findText("专注计时");
 
+        verify(inactiveItem !== null);
+        verify(markerContainer !== null);
         verify(Qt.colorEqual(inactiveItem.color, "transparent"));
         verify(Qt.colorEqual(inactiveItem.border.color, "transparent"));
         compare(inactiveItem.border.width, 0);
+        compare(inactiveItem.layer.enabled, false);
         verify(Qt.colorEqual(markerContainer.color, "#e8dfc8"));
         compare(markerText.font.weight, Font.Bold);
         verify(Qt.colorEqual(markerText.color, "#8b7355"));
         compare(mainText.font.weight, Font.Normal);
         verify(Qt.colorEqual(mainText.color, "#8b7355"));
+    }
+
+    function test_hoverSidebarItemKeepsShadowWhilePointerStaysInside() {
+        var inactiveItem = sidebarItemForMarker("月");
+
+        verify(inactiveItem !== null);
+        inactiveItem.setPointerInside(true);
+        tryCompare(inactiveItem, "visualHovered", true, 500);
+        wait(1200);
+
+        verify(Qt.colorEqual(inactiveItem.color, "#faf6ee"));
+        compare(inactiveItem.layer.enabled, true);
+        verify(inactiveItem.layer.effect !== null);
     }
 
     function test_dividerAndVersionStyles() {

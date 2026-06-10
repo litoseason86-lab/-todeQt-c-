@@ -168,7 +168,7 @@ Popup {
         }
 
         if (!root.manager.canDeleteCategory(categoryId)) {
-            root.errorText = "该科目已有任务关联，不能删除"
+            root.errorText = "该科目不能删除"
             return
         }
 

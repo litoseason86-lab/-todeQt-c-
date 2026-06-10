@@ -34,6 +34,7 @@ Rectangle {
 
     signal completionChanged(int taskId, bool completed)
     signal startFocusClicked(int taskId, string title)
+    signal deleteClicked(int taskId, string title)
 
     states: [
         State {
@@ -298,6 +299,64 @@ Rectangle {
             }
 
             onClicked: root.startFocusClicked(root.taskId, root.taskTitle)
+        }
+
+        Button {
+            id: deleteButton
+
+            objectName: "taskDeleteButton"
+            text: "删除"
+            implicitWidth: 56
+            implicitHeight: 40
+
+            background: Rectangle {
+                objectName: "taskDeleteButtonBackground"
+                radius: 6
+                color: {
+                    if (deleteButton.pressed)
+                        return "#f0e6d2";
+                    if (deleteButton.hovered)
+                        return "#f5ede3";
+                    return "#fffef9";
+                }
+                border.color: deleteButton.hovered || deleteButton.pressed ? "#b37562" : "#e8dfc8"
+                border.width: 1
+
+                Behavior on color {
+                    ColorAnimation {
+                        duration: 160
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
+                Behavior on border.color {
+                    ColorAnimation {
+                        duration: 160
+                        easing.type: Easing.OutQuad
+                    }
+                }
+            }
+
+            contentItem: Text {
+                objectName: "taskDeleteButtonLabel"
+                text: deleteButton.text
+                color: "#b37562"
+                font.pixelSize: 13
+                font.weight: Font.Medium
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+                scale: deleteButton.pressed ? 0.96 : 1.0
+                transformOrigin: Item.Center
+
+                Behavior on scale {
+                    NumberAnimation {
+                        duration: 90
+                        easing.type: Easing.OutQuad
+                    }
+                }
+            }
+
+            onClicked: root.deleteClicked(root.taskId, root.taskTitle)
         }
     }
 }

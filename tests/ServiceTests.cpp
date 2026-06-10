@@ -245,8 +245,8 @@ private slots:
     void migrationCreatesDatabaseBackup();
     void customCategoryCrudValidatesAndEmitsChanges();
     void presetCategoriesCannotBeEditedOrDeleted();
-    void associatedCategoryCannotBeDeleted();
-    void legacyTextCategoryAssociationPreventsDeletion();
+    void deletingAssociatedCategoryDetachesTasks();
+    void deletingLegacyTextCategoryClearsTaskCategoryText();
     void taskManagerReturnsFullCategoryInfo();
     void legacyAddTaskWithTextCategoryRemainsCompatible();
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
@@ -615,7 +615,7 @@ void ServiceTests::presetCategoriesCannotBeEditedOrDeleted()
     QCOMPARE(unchanged.value(QStringLiteral("color")).toString(), preset.value(QStringLiteral("color")).toString());
 }
 
-void ServiceTests::associatedCategoryCannotBeDeleted()
+void ServiceTests::deletingAssociatedCategoryDetachesTasks()
 {
     CategoryManager* manager = CategoryManager::instance();
     const int categoryId = manager->addCategory(QStringLiteral("408"), QStringLiteral("#abcdef"));
@@ -623,13 +623,18 @@ void ServiceTests::associatedCategoryCannotBeDeleted()
 
     QVERIFY(TaskManager::instance()->addTask(QStringLiteral("计组错题"), QVariant(QDate::currentDate()), categoryId));
 
-    QVERIFY(!manager->canDeleteCategory(categoryId));
-    QTest::ignoreMessage(QtWarningMsg, "Failed to delete category: category has associated tasks");
-    QVERIFY(!manager->deleteCategory(categoryId));
-    QVERIFY(!manager->getCategoryById(categoryId).isEmpty());
+    QVERIFY(manager->canDeleteCategory(categoryId));
+    QVERIFY(manager->deleteCategory(categoryId));
+    QVERIFY(manager->getCategoryById(categoryId).isEmpty());
+
+    const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
+    QCOMPARE(task.value(QStringLiteral("title")).toString(), QStringLiteral("计组错题"));
+    QCOMPARE(task.value(QStringLiteral("categoryId")).toInt(), 0);
+    QCOMPARE(task.value(QStringLiteral("categoryText")).toString(), QString());
+    QVERIFY(task.value(QStringLiteral("category")).toMap().isEmpty());
 }
 
-void ServiceTests::legacyTextCategoryAssociationPreventsDeletion()
+void ServiceTests::deletingLegacyTextCategoryClearsTaskCategoryText()
 {
     CategoryManager* manager = CategoryManager::instance();
     const int categoryId = manager->addCategory(QStringLiteral("网络原理"), QStringLiteral("#778899"));
@@ -642,10 +647,15 @@ void ServiceTests::legacyTextCategoryAssociationPreventsDeletion()
                 false,
                 dateTimeText(QDate::currentDate())) > 0);
 
-    QVERIFY(!manager->canDeleteCategory(categoryId));
-    QTest::ignoreMessage(QtWarningMsg, "Failed to delete category: category has associated tasks");
-    QVERIFY(!manager->deleteCategory(categoryId));
-    QVERIFY(!manager->getCategoryById(categoryId).isEmpty());
+    QVERIFY(manager->canDeleteCategory(categoryId));
+    QVERIFY(manager->deleteCategory(categoryId));
+    QVERIFY(manager->getCategoryById(categoryId).isEmpty());
+
+    const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
+    QCOMPARE(task.value(QStringLiteral("title")).toString(), QStringLiteral("旧文本任务"));
+    QCOMPARE(task.value(QStringLiteral("categoryId")).toInt(), 0);
+    QCOMPARE(task.value(QStringLiteral("categoryText")).toString(), QString());
+    QVERIFY(task.value(QStringLiteral("category")).toMap().isEmpty());
 }
 
 void ServiceTests::taskManagerReturnsFullCategoryInfo()

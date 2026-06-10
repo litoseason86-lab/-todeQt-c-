@@ -388,6 +388,12 @@ Item {
                                     root.loadError = "专注启动失败，请重试";
                                 }
                             }
+
+                            onDeleteClicked: function (id, title) {
+                                if (!taskManager.deleteTask(id)) {
+                                    root.loadError = "任务删除失败，请重试";
+                                }
+                            }
                         }
                     }
                 }

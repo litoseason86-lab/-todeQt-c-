@@ -187,23 +187,51 @@ bool CategoryManager::deleteCategory(int id)
         return false;
     }
 
-    if (!canDeleteCategory(id)) {
-        qWarning() << "Failed to delete category: category has associated tasks";
-        return false;
-    }
-
     QSqlDatabase db = DatabaseManager::instance()->database();
-    QSqlQuery query(db);
-    query.prepare(QStringLiteral("DELETE FROM categories WHERE id = :id AND is_preset = 0"));
-    query.bindValue(QStringLiteral(":id"), id);
-
-    if (!query.exec()) {
-        qWarning() << "Failed to delete category:" << query.lastError().text();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to delete category: database is not open";
         return false;
     }
 
-    if (query.numRowsAffected() == 0) {
+    if (!db.transaction()) {
+        qWarning() << "Failed to start delete category transaction:" << db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery detachTasks(db);
+    detachTasks.prepare(QStringLiteral(
+        "UPDATE tasks "
+        "SET category_id = NULL, category = NULL "
+        "WHERE category_id = :id "
+        "OR (category_id IS NULL AND trim(category) = :name)"));
+    detachTasks.bindValue(QStringLiteral(":id"), id);
+    detachTasks.bindValue(QStringLiteral(":name"), existing.value(QStringLiteral("name")).toString());
+
+    if (!detachTasks.exec()) {
+        qWarning() << "Failed to detach tasks before deleting category:" << detachTasks.lastError().text();
+        db.rollback();
+        return false;
+    }
+
+    QSqlQuery deleteQuery(db);
+    deleteQuery.prepare(QStringLiteral("DELETE FROM categories WHERE id = :id AND is_preset = 0"));
+    deleteQuery.bindValue(QStringLiteral(":id"), id);
+
+    if (!deleteQuery.exec()) {
+        qWarning() << "Failed to delete category:" << deleteQuery.lastError().text();
+        db.rollback();
+        return false;
+    }
+
+    if (deleteQuery.numRowsAffected() == 0) {
         qWarning() << "Failed to delete category: no rows changed" << id;
+        db.rollback();
+        return false;
+    }
+
+    if (!db.commit()) {
+        qWarning() << "Failed to commit delete category transaction:" << db.lastError().text();
+        db.rollback();
         return false;
     }
 
@@ -222,26 +250,7 @@ bool CategoryManager::canDeleteCategory(int id) const
         return false;
     }
 
-    QSqlDatabase db = DatabaseManager::instance()->database();
-    if (!db.isOpen()) {
-        qWarning() << "Failed to check category deletion: database is not open";
-        return false;
-    }
-
-    QSqlQuery query(db);
-    query.prepare(QStringLiteral(
-        "SELECT COUNT(*) FROM tasks "
-        "WHERE category_id = :id "
-        "OR (category_id IS NULL AND trim(category) = :name)"));
-    query.bindValue(QStringLiteral(":id"), id);
-    query.bindValue(QStringLiteral(":name"), existing.value(QStringLiteral("name")).toString());
-
-    if (!query.exec() || !query.next()) {
-        qWarning() << "Failed to check category task usage:" << query.lastError().text();
-        return false;
-    }
-
-    return query.value(0).toInt() == 0;
+    return true;
 }
 
 bool CategoryManager::categoryNameExists(const QString& name, int excludeId) const

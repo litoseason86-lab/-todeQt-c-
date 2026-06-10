@@ -166,11 +166,10 @@ TestCase {
         compare(mainWindow.pendingView, "week");
         compare(mainWindow.queuedView, "stats");
 
-        wait(820);
+        tryCompare(mainWindow, "isSwitching", false, 1600);
 
         compare(mainWindow.currentView, "stats");
         compare(mainWindow.pendingView, "stats");
         compare(mainWindow.queuedView, "");
-        compare(mainWindow.isSwitching, false);
     }
 }

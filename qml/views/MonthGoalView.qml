@@ -327,18 +327,19 @@ Item {
                 }
             }
 
-            RowLayout {
+            ColumnLayout {
+                objectName: "monthContentStack"
                 Layout.fillWidth: true
                 Layout.leftMargin: 24
                 Layout.rightMargin: 24
                 Layout.bottomMargin: 24
-                Layout.minimumHeight: 420
                 spacing: 16
 
                 Rectangle {
                     objectName: "monthCalendarContainer"
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
+                    Layout.minimumHeight: 520
+                    Layout.preferredHeight: 560
                     radius: 8
                     color: "#fffef9"
                     border.color: "#e8dfc8"
@@ -479,8 +480,9 @@ Item {
 
                 Rectangle {
                     objectName: "monthDetailPanel"
-                    Layout.preferredWidth: 320
-                    Layout.fillHeight: true
+                    Layout.fillWidth: true
+                    Layout.minimumHeight: 260
+                    Layout.preferredHeight: 300
                     radius: 8
                     color: "#fffef9"
                     border.color: "#e8dfc8"
@@ -579,6 +581,12 @@ Item {
                                                 root.startFocus(id, title);
                                             } else {
                                                 root.loadError = "专注启动失败，请重试";
+                                            }
+                                        }
+
+                                        onDeleteClicked: function (id, title) {
+                                            if (!taskManager.deleteTask(id)) {
+                                                root.loadError = "任务删除失败，请重试";
                                             }
                                         }
                                     }

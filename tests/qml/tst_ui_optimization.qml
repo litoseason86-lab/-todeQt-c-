@@ -44,6 +44,10 @@ TestCase {
 
         function setTaskCompleted(id, completed) {
         }
+
+        function deleteTask(id) {
+            return true;
+        }
     }
 
     QtObject {
@@ -88,6 +92,8 @@ TestCase {
     function init() {
         taskItem.taskCompleted = false;
         taskItem.opacity = 1.0;
+        todayTaskView.visible = false;
+        monthGoalView.visible = false;
         addTaskDialog.close();
         wait(220);
     }
@@ -149,6 +155,28 @@ TestCase {
 
         compare(focusButton.text, "已完成");
         compare(focusButton.enabled, false);
+    }
+
+    function test_taskItemExposesDeleteAction() {
+        var deleteButton = findChild(taskItem, "taskDeleteButton");
+        var deleteButtonBackground = findChild(taskItem, "taskDeleteButtonBackground");
+
+        verify(deleteButton !== null);
+        verify(deleteButtonBackground !== null);
+        compare(deleteButton.text, "删除");
+        compare(deleteButtonBackground.radius, 6);
+
+        var deletedTaskId = -1;
+        var deletedTaskTitle = "";
+        taskItem.deleteClicked.connect(function (taskId, title) {
+            deletedTaskId = taskId;
+            deletedTaskTitle = title;
+        });
+
+        deleteButton.clicked();
+
+        compare(deletedTaskId, 42);
+        compare(deletedTaskTitle, "测试任务");
     }
 
     function test_addTaskDialogUsesOptimizedPanelAndInputStates() {
@@ -241,6 +269,7 @@ TestCase {
     }
 
     function test_monthGoalViewUsesOptimizedCalendarAndPanels() {
+        monthGoalView.visible = true;
         wait(80);
 
         var previousButton = findChild(monthGoalView, "monthPreviousButton");
@@ -252,6 +281,7 @@ TestCase {
         var rateStatCard = findChild(monthGoalView, "monthRateStatCard");
         var calendarContainer = findChild(monthGoalView, "monthCalendarContainer");
         var detailPanel = findChild(monthGoalView, "monthDetailPanel");
+        var monthContentStack = findChild(monthGoalView, "monthContentStack");
         var addButton = findChild(monthGoalView, "monthDetailAddButton");
         var addButtonBackground = findChild(monthGoalView, "monthDetailAddButtonBackground");
         var selectedDayCell = findChild(monthGoalView, "monthDayCell-" + monthGoalView.selectedDay);
@@ -265,6 +295,7 @@ TestCase {
         verify(rateStatCard !== null);
         verify(calendarContainer !== null);
         verify(detailPanel !== null);
+        verify(monthContentStack !== null);
         verify(addButton !== null);
         verify(addButtonBackground !== null);
         verify(selectedDayCell !== null);
@@ -279,9 +310,14 @@ TestCase {
         compare(calendarContainer.radius, 8);
         compare(calendarContainer.layer.enabled, true);
         verify(calendarContainer.layer.effect !== null);
+        verify(calendarContainer.width > 0);
+        verify(calendarContainer.height >= 520);
         compare(detailPanel.radius, 8);
         compare(detailPanel.layer.enabled, true);
         verify(detailPanel.layer.effect !== null);
+        verify(Math.abs(detailPanel.width - calendarContainer.width) <= 2);
+        verify(detailPanel.y > calendarContainer.y);
+        verify(detailPanel.height >= 260);
 
         compare(selectedDayCell.radius, 6);
         verify(selectedDayCell.border.width >= 2);

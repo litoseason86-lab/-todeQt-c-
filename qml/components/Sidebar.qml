@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
+import QtQuick.Effects
 
 Rectangle {
     id: root
@@ -113,15 +114,32 @@ Rectangle {
         property string text: ""
         property string marker: ""
         property bool isActive: false
+        property bool pointerInside: false
+        readonly property bool visualHovered: item.enabled && item.pointerInside
         signal clicked
 
+        function setPointerInside(inside) {
+            item.pointerInside = item.enabled && inside;
+        }
+
+        objectName: "sidebarItem-" + item.marker
         Layout.fillWidth: true
         Layout.preferredHeight: 44
         radius: 6
-        color: item.isActive ? "#f0e6d2" : (mouseArea.containsMouse && item.enabled ? "#faf6ee" : "transparent")
-        border.color: item.isActive ? "#d4a574" : "transparent"
-        border.width: item.isActive ? 1 : 0
+        color: item.isActive ? "#f0e6d2" : (item.visualHovered ? "#faf6ee" : "transparent")
+        border.color: item.isActive ? "#d4a574" : (item.visualHovered ? "#e8dfc8" : "transparent")
+        border.width: item.isActive || item.visualHovered ? 1 : 0
         opacity: item.enabled ? 1.0 : 0.55
+        layer.enabled: item.isActive || item.visualHovered
+        layer.effect: MultiEffect {
+            autoPaddingEnabled: true
+            shadowEnabled: true
+            shadowColor: "#000000"
+            shadowOpacity: item.isActive ? 0.10 : 0.08
+            shadowBlur: item.isActive ? 0.16 : 0.12
+            shadowHorizontalOffset: 0
+            shadowVerticalOffset: 2
+        }
 
         Behavior on color {
             ColorAnimation {
@@ -144,6 +162,12 @@ Rectangle {
             }
         }
 
+        onEnabledChanged: {
+            if (!item.enabled) {
+                item.pointerInside = false;
+            }
+        }
+
         RowLayout {
             anchors.fill: parent
             anchors.leftMargin: 8
@@ -151,6 +175,7 @@ Rectangle {
             spacing: 8
 
             Rectangle {
+                objectName: "sidebarMarker-" + item.marker
                 Layout.preferredWidth: 22
                 Layout.preferredHeight: 22
                 radius: 4
@@ -192,11 +217,20 @@ Rectangle {
         MouseArea {
             id: mouseArea
 
+            objectName: "sidebarHitArea-" + item.marker
             anchors.fill: parent
             hoverEnabled: true
             enabled: item.enabled
             cursorShape: Qt.PointingHandCursor
+            onEntered: item.setPointerInside(true)
+            onExited: item.setPointerInside(false)
             onClicked: item.clicked()
+        }
+
+        HoverHandler {
+            id: hoverHandler
+            enabled: item.enabled
+            onHoveredChanged: item.setPointerInside(hovered)
         }
     }
 }
