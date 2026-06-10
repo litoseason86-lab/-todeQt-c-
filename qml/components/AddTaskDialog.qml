@@ -14,15 +14,70 @@ Popup {
     y: parent ? Math.round((parent.height - height) / 2) : 0
     padding: 0
 
+    enter: Transition {
+        ParallelAnimation {
+            NumberAnimation {
+                property: "scale"
+                from: 0.96
+                to: 1.0
+                duration: 180
+                easing.type: Easing.OutQuad
+            }
+
+            OpacityAnimator {
+                from: 0
+                to: 1
+                duration: 180
+                easing.type: Easing.OutQuad
+            }
+        }
+    }
+
+    exit: Transition {
+        OpacityAnimator {
+            from: 1
+            to: 0
+            duration: 160
+            easing.type: Easing.InQuad
+        }
+    }
+
+    Overlay.modal: Rectangle {
+        color: "#66000000"
+        opacity: root.opened ? 1 : 0
+
+        Behavior on opacity {
+            OpacityAnimator {
+                duration: 180
+                easing.type: Easing.InOutQuad
+            }
+        }
+    }
+
     property date selectedDate: new Date()
     property string heading: "添加新任务"
+    property var categoryManagerRef: null
+    property var categories: []
+    property var categoryOptions: [{ id: -1, name: "不设置科目", color: "" }]
 
-    signal taskAdded(string title, date date, string category)
+    signal taskAdded(string title, date date, var category)
 
     function resetFields() {
         titleField.text = ""
-        categoryField.text = ""
+        categoryComboBox.currentIndex = root.categoryOptions.length > 0 ? 0 : -1
         errorLabel.text = ""
+    }
+
+    function refreshCategories() {
+        if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
+            root.categories = root.categoryManagerRef.getAllCategories()
+        } else {
+            root.categories = []
+        }
+        root.categoryOptions = [{ id: -1, name: "不设置科目", color: "" }].concat(root.categories)
+        if (categoryComboBox.currentIndex < 0 && root.categoryOptions.length > 0) {
+            categoryComboBox.currentIndex = 0
+        }
     }
 
     function submit() {
@@ -33,12 +88,19 @@ Popup {
             return
         }
 
-        root.taskAdded(title, root.selectedDate, categoryField.text.trim())
+        var categoryId = categoryComboBox.currentIndex >= 0
+                && categoryComboBox.currentIndex < root.categoryOptions.length
+                ? Number(root.categoryOptions[categoryComboBox.currentIndex].id || -1)
+                : -1
+        root.taskAdded(title, root.selectedDate, categoryId)
         root.resetFields()
         root.close()
     }
 
+    Component.onCompleted: root.refreshCategories()
+
     onOpened: {
+        root.refreshCategories()
         errorLabel.text = ""
         titleField.forceActiveFocus()
     }
@@ -127,26 +189,79 @@ Popup {
             font.pixelSize: 14
         }
 
-        TextField {
-            id: categoryField
-            objectName: "categoryField"
+        ComboBox {
+            id: categoryComboBox
+            objectName: "categoryComboBox"
 
             Layout.fillWidth: true
             Layout.leftMargin: 16
             Layout.rightMargin: 16
             implicitHeight: 44
-            placeholderText: "如：数学、英语..."
-            selectByMouse: true
+            model: root.categoryOptions
+            textRole: "name"
+            currentIndex: root.categoryOptions.length > 0 ? 0 : -1
+            displayText: currentIndex >= 0 && currentIndex < root.categoryOptions.length
+                         ? root.categoryOptions[currentIndex].name
+                         : "选择科目"
 
             background: Rectangle {
                 color: "#fffef9"
-                border.color: "#e8dfc8"
+                border.color: categoryComboBox.pressed ? "#d4a574" : "#e8dfc8"
                 border.width: 1
                 radius: 4
             }
 
-            Keys.onReturnPressed: root.submit()
-            Keys.onEnterPressed: root.submit()
+            contentItem: RowLayout {
+                spacing: 8
+
+                Rectangle {
+                    Layout.leftMargin: 10
+                    Layout.preferredWidth: 18
+                    Layout.preferredHeight: 18
+                    radius: 3
+                    visible: categoryComboBox.currentIndex >= 0
+                             && categoryComboBox.currentIndex < root.categoryOptions.length
+                             && String(root.categoryOptions[categoryComboBox.currentIndex].color || "").length > 0
+                    color: visible ? root.categoryOptions[categoryComboBox.currentIndex].color : "transparent"
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    text: categoryComboBox.displayText
+                    color: "#5d4e37"
+                    font.pixelSize: 14
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
+            }
+
+            delegate: ItemDelegate {
+                width: categoryComboBox.width
+
+                contentItem: RowLayout {
+                    spacing: 8
+
+                    Rectangle {
+                        Layout.preferredWidth: 18
+                        Layout.preferredHeight: 18
+                        radius: 3
+                        visible: String(modelData.color || "").length > 0
+                        color: visible ? modelData.color : "transparent"
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: modelData.name || ""
+                        color: "#5d4e37"
+                        font.pixelSize: 13
+                        elide: Text.ElideRight
+                    }
+                }
+
+                background: Rectangle {
+                    color: highlighted ? "#f0e6d2" : "transparent"
+                }
+            }
         }
 
         Label {

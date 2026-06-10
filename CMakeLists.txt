@@ -38,6 +38,8 @@ set(APP_SOURCES
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/services/DatabaseManager.cpp
+    src/services/CategoryManager.cpp
+    src/services/ExportService.cpp
     src/services/TaskManager.cpp
     src/services/FocusTimer.cpp
     src/services/StatisticsService.cpp
@@ -45,6 +47,11 @@ set(APP_SOURCES
 )
 
 add_executable(PomodoroTodo ${APP_SOURCES})
+
+option(POMODORO_TODO_ENABLE_QML_DEBUG "Enable QML debugging and profiling hooks" ON)
+if(POMODORO_TODO_ENABLE_QML_DEBUG)
+    target_compile_definitions(PomodoroTodo PRIVATE QT_QML_DEBUG)
+endif()
 
 target_link_libraries(PomodoroTodo PRIVATE
     Qt6::Core
@@ -66,6 +73,8 @@ add_executable(PomodoroTodoTests
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/services/DatabaseManager.cpp
+    src/services/CategoryManager.cpp
+    src/services/ExportService.cpp
     src/services/TaskManager.cpp
     src/services/FocusTimer.cpp
     src/services/StatisticsService.cpp

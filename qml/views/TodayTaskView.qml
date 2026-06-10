@@ -10,6 +10,7 @@ Item {
 
     property var tasks: []
     property var todayStats: ({ totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0 })
+    property var categoryManagerRef: null
     property string loadError: ""
 
     Component.onCompleted: refresh()
@@ -18,6 +19,15 @@ Item {
         target: taskManager
 
         function onTasksChanged() {
+            root.refresh()
+        }
+    }
+
+    Connections {
+        target: root.categoryManagerRef
+        ignoreUnknownSignals: true
+
+        function onCategoriesChanged() {
             root.refresh()
         }
     }
@@ -261,7 +271,11 @@ Item {
                         TaskItem {
                             taskId: modelData.id
                             taskTitle: modelData.title
-                            taskCategory: modelData.category || ""
+                            taskCategory: modelData.category && modelData.category.name
+                                          ? modelData.category
+                                          : (modelData.categoryData && modelData.categoryData.name
+                                             ? modelData.categoryData
+                                             : (modelData.categoryText || ""))
                             taskCompleted: modelData.completed
 
                             onCompletionChanged: function(id, completed) {
@@ -286,9 +300,10 @@ Item {
         id: addTaskDialog
 
         selectedDate: new Date()
+        categoryManagerRef: root.categoryManagerRef
 
-        onTaskAdded: function(title, date, category) {
-            taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), category)
+        onTaskAdded: function(title, date, categoryId) {
+            taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId))
         }
     }
 }

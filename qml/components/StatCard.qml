@@ -8,6 +8,11 @@ Rectangle {
     property string value: "0"
     property string unit: ""
     property string subtitle: ""
+    property int animationDelay: 0
+
+    function restartIntro() {
+        fadeInAnimation.restart()
+    }
 
     implicitWidth: 190
     implicitHeight: 104
@@ -15,6 +20,23 @@ Rectangle {
     color: "#faf6ee"
     border.color: "#e8dfc8"
     border.width: 1
+    opacity: 0
+
+    Component.onCompleted: fadeInAnimation.start()
+
+    SequentialAnimation {
+        id: fadeInAnimation
+
+        ScriptAction { script: root.opacity = 0 }
+        PauseAnimation { duration: root.animationDelay }
+        OpacityAnimator {
+            target: root
+            from: 0
+            to: 1
+            duration: 180
+            easing.type: Easing.OutQuad
+        }
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -46,6 +68,28 @@ Rectangle {
                 color: "#5d4e37"
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
+
+                onTextChanged: valuePulse.restart()
+
+                SequentialAnimation {
+                    id: valuePulse
+
+                    NumberAnimation {
+                        target: valueText
+                        property: "scale"
+                        to: 1.05
+                        duration: 150
+                        easing.type: Easing.OutQuad
+                    }
+
+                    NumberAnimation {
+                        target: valueText
+                        property: "scale"
+                        to: 1.0
+                        duration: 150
+                        easing.type: Easing.InOutQuad
+                    }
+                }
             }
 
             Text {

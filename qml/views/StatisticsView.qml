@@ -9,9 +9,18 @@ Item {
     property var todayStats: ({ totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0 })
     property var weekStats: []
     property var categoryStats: ({ categories: [], totalDuration: 0 })
+    property var categoryManagerRef: null
     property string loadError: ""
 
     Component.onCompleted: refresh()
+
+    onVisibleChanged: {
+        if (visible) {
+            todayFocusCard.restartIntro()
+            taskCompletionCard.restartIntro()
+            weekTotalCard.restartIntro()
+        }
+    }
 
     Connections {
         target: taskManager
@@ -25,6 +34,15 @@ Item {
         target: focusTimer
 
         function onFocusCompleted(duration) {
+            root.refresh()
+        }
+    }
+
+    Connections {
+        target: root.categoryManagerRef
+        ignoreUnknownSignals: true
+
+        function onCategoriesChanged() {
             root.refresh()
         }
     }
@@ -114,7 +132,8 @@ Item {
             result.push({
                 label: item.name || "未分类",
                 value: Number(item.duration || 0),
-                displayValue: root.formatDuration(item.duration)
+                displayValue: root.formatDuration(item.duration),
+                color: item.color || ""
             })
         }
         return result
@@ -196,21 +215,27 @@ Item {
                 spacing: 12
 
                 StatCard {
+                    id: todayFocusCard
                     Layout.fillWidth: true
+                    animationDelay: 0
                     title: "今日专注"
                     value: root.formatDuration(root.todayStats.totalDuration)
                     subtitle: "当前自然日"
                 }
 
                 StatCard {
+                    id: taskCompletionCard
                     Layout.fillWidth: true
+                    animationDelay: 70
                     title: "任务完成"
                     value: Number(root.todayStats.completedTasks || 0) + " / " + Number(root.todayStats.totalTasks || 0)
                     subtitle: "完成率 " + Math.round(Number(root.todayStats.completionRate || 0) * 100) + "%"
                 }
 
                 StatCard {
+                    id: weekTotalCard
                     Layout.fillWidth: true
+                    animationDelay: 140
                     title: "本周累计"
                     value: root.totalDurationValue(root.weekTotalDuration())
                     unit: root.totalDurationUnit(root.weekTotalDuration())

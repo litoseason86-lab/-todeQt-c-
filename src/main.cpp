@@ -6,6 +6,8 @@
 #include <QUrl>
 
 #include "services/DatabaseManager.h"
+#include "services/CategoryManager.h"
+#include "services/ExportService.h"
 #include "services/FocusTimer.h"
 #include "services/StatisticsService.h"
 #include "services/TaskManager.h"
@@ -24,6 +26,10 @@ int main(int argc, char *argv[])
     }
 
     QQmlApplicationEngine engine;
+    engine.rootContext()->setContextProperty(QStringLiteral("categoryManager"), CategoryManager::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("CategoryManager"), CategoryManager::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("exportService"), ExportService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("ExportService"), ExportService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("taskManager"), TaskManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("focusTimer"), FocusTimer::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("statisticsService"), StatisticsService::instance());

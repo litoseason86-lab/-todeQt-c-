@@ -1,12 +1,16 @@
 #include "DatabaseManager.h"
 
 #include <QDebug>
+#include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QStringList>
+
+#include <iterator>
 
 namespace {
 constexpr auto kConnectionName = "PomodoroTodoConnection";
@@ -19,6 +23,19 @@ bool execSql(QSqlQuery& query, const QString& sql, const char* context)
     }
     return true;
 }
+
+struct PresetCategory {
+    const char* name;
+    const char* color;
+};
+
+const PresetCategory kPresetCategories[] = {
+    {"数学", "#d4a574"},
+    {"英语", "#c9956e"},
+    {"政治", "#be8568"},
+    {"专业课", "#b37562"},
+    {"其他", "#a8655c"}
+};
 }
 
 DatabaseManager::DatabaseManager(QObject* parent)
@@ -68,10 +85,10 @@ bool DatabaseManager::initialize(const QString& dbPath)
     }
 
     if (QSqlDatabase::contains(m_connectionName)) {
-        m_db = QSqlDatabase::database(m_connectionName);
-    } else {
-        m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_connectionName);
+        m_db = QSqlDatabase();
+        QSqlDatabase::removeDatabase(m_connectionName);
     }
+    m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_connectionName);
 
     m_db.setDatabaseName(path);
     if (!m_db.open()) {
@@ -102,6 +119,7 @@ bool DatabaseManager::createTables()
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL CHECK(length(trim(title)) > 0),
             category TEXT,
+            category_id INTEGER REFERENCES categories(id),
             date TEXT NOT NULL,
             completed INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -125,9 +143,20 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    if (getDatabaseVersion() < 2
+        || !tableExists(QStringLiteral("categories"))
+        || !columnExists(QStringLiteral("tasks"), QStringLiteral("category_id"))) {
+        if (!migrateToVersion2()) {
+            return false;
+        }
+    } else if (!createCategoriesTable() || !insertPresetCategories()) {
+        return false;
+    }
+
     const QStringList indexes = {
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tasks_date ON tasks(date)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tasks_completed ON tasks(completed)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tasks_category_id ON tasks(category_id)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_sessions_task ON focus_sessions(task_id)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_sessions_start ON focus_sessions(start_time)")
     };
@@ -139,6 +168,294 @@ bool DatabaseManager::createTables()
     }
 
     return true;
+}
+
+int DatabaseManager::getDatabaseVersion() const
+{
+    if (!m_db.isOpen()) {
+        return 0;
+    }
+
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral("PRAGMA user_version"))) {
+        qWarning() << "Failed to read database version:" << query.lastError().text();
+        return 0;
+    }
+
+    return query.next() ? query.value(0).toInt() : 0;
+}
+
+bool DatabaseManager::setDatabaseVersion(int version)
+{
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral("PRAGMA user_version = %1").arg(version))) {
+        qWarning() << "Failed to set database version:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion2()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+
+    if (!backupDatabaseBeforeMigration()) {
+        return false;
+    }
+
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start database migration transaction:" << m_db.lastError().text();
+        return false;
+    }
+
+    if (!createCategoriesTable() || !insertPresetCategories()) {
+        m_db.rollback();
+        return false;
+    }
+
+    if (!columnExists(QStringLiteral("tasks"), QStringLiteral("category_id"))) {
+        QSqlQuery alterQuery(m_db);
+        if (!execSql(alterQuery,
+                     QStringLiteral("ALTER TABLE tasks ADD COLUMN category_id INTEGER REFERENCES categories(id)"),
+                     "Failed to add tasks.category_id column:")) {
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    QSqlQuery indexQuery(m_db);
+    if (!execSql(indexQuery,
+                 QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tasks_category_id ON tasks(category_id)"),
+                 "Failed to create category_id index:")) {
+        m_db.rollback();
+        return false;
+    }
+
+    if (!migrateTaskCategories() || !setDatabaseVersion(2)) {
+        m_db.rollback();
+        return false;
+    }
+
+    if (!m_db.commit()) {
+        qWarning() << "Failed to commit database migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 2";
+    return true;
+}
+
+bool DatabaseManager::createCategoriesTable()
+{
+    QSqlQuery query(m_db);
+    const QString createCategories = QStringLiteral(R"SQL(
+        CREATE TABLE IF NOT EXISTS categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE CHECK(length(trim(name)) > 0),
+            color TEXT NOT NULL,
+            is_preset INTEGER NOT NULL DEFAULT 0,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    )SQL");
+
+    if (!execSql(query, createCategories, "Failed to create categories table:")) {
+        return false;
+    }
+
+    return execSql(query,
+                   QStringLiteral("CREATE INDEX IF NOT EXISTS idx_categories_display_order ON categories(display_order, name)"),
+                   "Failed to create categories display_order index:");
+}
+
+bool DatabaseManager::insertPresetCategories()
+{
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral(
+        "INSERT OR IGNORE INTO categories (name, color, is_preset, display_order) "
+        "VALUES (:name, :color, 1, :displayOrder)"));
+
+    for (int index = 0; index < int(std::size(kPresetCategories)); ++index) {
+        query.bindValue(QStringLiteral(":name"), QString::fromUtf8(kPresetCategories[index].name));
+        query.bindValue(QStringLiteral(":color"), QString::fromLatin1(kPresetCategories[index].color));
+        query.bindValue(QStringLiteral(":displayOrder"), index + 1);
+
+        if (!query.exec()) {
+            qWarning() << "Failed to insert preset category:" << query.lastError().text();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool DatabaseManager::migrateTaskCategories()
+{
+    if (!columnExists(QStringLiteral("tasks"), QStringLiteral("category_id"))) {
+        qWarning() << "Cannot migrate task categories: category_id column is missing";
+        return false;
+    }
+
+    QSqlQuery distinctQuery(m_db);
+    if (!distinctQuery.exec(QStringLiteral(
+            "SELECT DISTINCT trim(category) "
+            "FROM tasks "
+            "WHERE category_id IS NULL AND category IS NOT NULL AND trim(category) != ''"))) {
+        qWarning() << "Failed to read legacy task categories:" << distinctQuery.lastError().text();
+        return false;
+    }
+
+    QStringList categoryNames;
+    while (distinctQuery.next()) {
+        categoryNames.append(distinctQuery.value(0).toString());
+    }
+
+    QSqlQuery selectCategory(m_db);
+    QSqlQuery insertCategory(m_db);
+    QSqlQuery updateTasks(m_db);
+
+    for (int index = 0; index < categoryNames.size(); ++index) {
+        const QString categoryName = categoryNames.at(index);
+        int categoryId = -1;
+
+        selectCategory.prepare(QStringLiteral("SELECT id FROM categories WHERE name = :name"));
+        selectCategory.bindValue(QStringLiteral(":name"), categoryName);
+        if (!selectCategory.exec()) {
+            qWarning() << "Failed to look up category during migration:" << selectCategory.lastError().text();
+            return false;
+        }
+        if (selectCategory.next()) {
+            categoryId = selectCategory.value(0).toInt();
+        }
+
+        if (categoryId <= 0) {
+            insertCategory.prepare(QStringLiteral(
+                "INSERT INTO categories (name, color, is_preset, display_order) "
+                "VALUES (:name, :color, 0, :displayOrder)"));
+            insertCategory.bindValue(QStringLiteral(":name"), categoryName);
+            insertCategory.bindValue(QStringLiteral(":color"), generateColorForCategory(index + int(std::size(kPresetCategories))));
+            insertCategory.bindValue(QStringLiteral(":displayOrder"), 100 + index);
+
+            if (!insertCategory.exec()) {
+                qWarning() << "Failed to create migrated category:" << insertCategory.lastError().text();
+                return false;
+            }
+            categoryId = insertCategory.lastInsertId().toInt();
+        }
+
+        updateTasks.prepare(QStringLiteral(
+            "UPDATE tasks SET category_id = :categoryId "
+            "WHERE category_id IS NULL AND trim(category) = :categoryName"));
+        updateTasks.bindValue(QStringLiteral(":categoryId"), categoryId);
+        updateTasks.bindValue(QStringLiteral(":categoryName"), categoryName);
+
+        if (!updateTasks.exec()) {
+            qWarning() << "Failed to assign migrated category to tasks:" << updateTasks.lastError().text();
+            return false;
+        }
+    }
+
+    return true;
+}
+
+QString DatabaseManager::generateColorForCategory(int index) const
+{
+    const QStringList colors = {
+        QStringLiteral("#d4a574"),
+        QStringLiteral("#c9956e"),
+        QStringLiteral("#be8568"),
+        QStringLiteral("#b37562"),
+        QStringLiteral("#a8655c"),
+        QStringLiteral("#9d7556"),
+        QStringLiteral("#8b6550"),
+        QStringLiteral("#7a5544"),
+        QStringLiteral("#694538"),
+        QStringLiteral("#58352c")
+    };
+
+    return colors.at(index % colors.size());
+}
+
+bool DatabaseManager::backupDatabaseBeforeMigration() const
+{
+    const QString databaseName = m_db.databaseName();
+    if (databaseName.isEmpty() || databaseName == QStringLiteral(":memory:")) {
+        return true;
+    }
+
+    const QFileInfo databaseInfo(databaseName);
+    if (!databaseInfo.exists() || !databaseInfo.isFile()) {
+        return true;
+    }
+
+    const QDir databaseDir = databaseInfo.absoluteDir();
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
+    const QString backupPath = databaseDir.filePath(QStringLiteral("pomodoro_backup_%1.db").arg(timestamp));
+
+    if (!QFile::copy(databaseInfo.absoluteFilePath(), backupPath)) {
+        qWarning() << "Failed to create database migration backup:" << backupPath;
+        return false;
+    }
+
+    pruneOldBackups(databaseDir);
+    return true;
+}
+
+void DatabaseManager::pruneOldBackups(const QDir& databaseDir) const
+{
+    const QFileInfoList backups = databaseDir.entryInfoList(
+        QStringList{QStringLiteral("pomodoro_backup_*.db")},
+        QDir::Files,
+        QDir::Time);
+
+    for (int index = 3; index < backups.size(); ++index) {
+        if (!QFile::remove(backups.at(index).absoluteFilePath())) {
+            qWarning() << "Failed to remove old database backup:" << backups.at(index).absoluteFilePath();
+        }
+    }
+}
+
+bool DatabaseManager::tableExists(const QString& tableName) const
+{
+    if (!m_db.isOpen()) {
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT name FROM sqlite_master WHERE type = 'table' AND name = :name"));
+    query.bindValue(QStringLiteral(":name"), tableName);
+    if (!query.exec()) {
+        qWarning() << "Failed to inspect database table:" << query.lastError().text();
+        return false;
+    }
+
+    return query.next();
+}
+
+bool DatabaseManager::columnExists(const QString& tableName, const QString& columnName) const
+{
+    if (!m_db.isOpen() || !tableExists(tableName)) {
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral("PRAGMA table_info(%1)").arg(tableName))) {
+        qWarning() << "Failed to inspect database columns:" << query.lastError().text();
+        return false;
+    }
+
+    while (query.next()) {
+        if (query.value(1).toString() == columnName) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 QSqlDatabase DatabaseManager::database() const

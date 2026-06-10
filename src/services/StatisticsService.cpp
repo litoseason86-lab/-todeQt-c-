@@ -113,16 +113,20 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
 
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "SELECT t.category, SUM(f.duration) AS total_duration "
+        "SELECT "
+        "COALESCE(NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, '')) AS category_name, "
+        "COALESCE(NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS category_color, "
+        "SUM(f.duration) AS total_duration "
         "FROM focus_sessions f "
         "JOIN tasks t ON f.task_id = t.id "
+        "LEFT JOIN categories c ON t.category_id = c.id "
+        "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
         "WHERE date(f.start_time) >= :startDate "
         "AND date(f.start_time) <= :endDate "
         "AND f.duration IS NOT NULL "
-        "AND t.category IS NOT NULL "
-        "AND trim(t.category) != '' "
-        "GROUP BY t.category "
-        "ORDER BY total_duration DESC, t.category ASC"));
+        "AND trim(COALESCE(c.name, legacy.name, t.category, '')) != '' "
+        "GROUP BY category_name, category_color "
+        "ORDER BY total_duration DESC, category_name ASC"));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 
@@ -135,9 +139,10 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
     }
 
     while (query.next()) {
-        const int duration = query.value(1).toInt();
+        const int duration = query.value(2).toInt();
         QVariantMap category;
         category.insert(QStringLiteral("name"), query.value(0).toString());
+        category.insert(QStringLiteral("color"), query.value(1).toString());
         category.insert(QStringLiteral("duration"), duration);
         categories.append(category);
         totalDuration += duration;

@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import QtQuick.Controls
 
 Rectangle {
     id: root
@@ -8,7 +9,11 @@ Rectangle {
     color: "#faf8f3"
 
     property string currentView: "today"
+    property var categoryManagerRef: null
+    property var exportServiceRef: null
     signal itemClicked(string viewName)
+    signal categoryManagementRequested()
+    signal dataExportRequested()
 
     ColumnLayout {
         anchors.fill: parent
@@ -78,8 +83,22 @@ Rectangle {
             Layout.fillHeight: true
         }
 
+        SidebarItem {
+            text: "科目管理"
+            marker: "科"
+            isActive: false
+            onClicked: root.categoryManagementRequested()
+        }
+
+        SidebarItem {
+            text: "数据导出"
+            marker: "导"
+            isActive: false
+            onClicked: root.dataExportRequested()
+        }
+
         Text {
-            text: "二阶段"
+            text: "三阶段"
             font.pixelSize: 12
             color: "#a0896b"
         }
@@ -98,6 +117,13 @@ Rectangle {
         radius: 6
         color: item.isActive ? "#f0e6d2" : (mouseArea.containsMouse && item.enabled ? "#faf6ee" : "transparent")
         opacity: item.enabled ? 1.0 : 0.55
+
+        Behavior on color {
+            ColorAnimation {
+                duration: 150
+                easing.type: Easing.InOutQuad
+            }
+        }
 
         RowLayout {
             anchors.fill: parent

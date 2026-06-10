@@ -13,6 +13,9 @@ public:
     int id = -1;
     QString title;
     QString category;
+    int categoryId = -1;
+    QString categoryName;
+    QString categoryColor;
     QDate date;
     bool completed = false;
     QDateTime createdAt;

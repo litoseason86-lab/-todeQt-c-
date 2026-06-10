@@ -10,6 +10,7 @@ Item {
 
     property date weekStart: mondayOf(new Date())
     property var weekTasks: []
+    property var categoryManagerRef: null
     property string loadError: ""
     property date pendingAddDate: new Date()
 
@@ -19,6 +20,15 @@ Item {
         target: taskManager
 
         function onTasksChanged() {
+            root.refresh()
+        }
+    }
+
+    Connections {
+        target: root.categoryManagerRef
+        ignoreUnknownSignals: true
+
+        function onCategoriesChanged() {
             root.refresh()
         }
     }
@@ -212,7 +222,11 @@ Item {
                                 TaskItem {
                                     taskId: modelData.id
                                     taskTitle: modelData.title
-                                    taskCategory: modelData.category || ""
+                                    taskCategory: modelData.category && modelData.category.name
+                                                  ? modelData.category
+                                                  : (modelData.categoryData && modelData.categoryData.name
+                                                     ? modelData.categoryData
+                                                     : (modelData.categoryText || ""))
                                     taskCompleted: modelData.completed
 
                                     onCompletionChanged: function(id, completed) {
@@ -239,9 +253,10 @@ Item {
         id: addTaskDialog
 
         selectedDate: root.pendingAddDate
+        categoryManagerRef: root.categoryManagerRef
 
-        onTaskAdded: function(title, date, category) {
-            taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), category)
+        onTaskAdded: function(title, date, categoryId) {
+            taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId))
         }
     }
 }

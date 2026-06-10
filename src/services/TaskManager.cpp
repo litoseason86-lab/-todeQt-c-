@@ -47,6 +47,40 @@ QDate normalizeDate(const QVariant& value)
 
     return QDate();
 }
+
+QString taskSelectSql()
+{
+    return QStringLiteral(
+        "SELECT t.id, t.title, "
+        "COALESCE(c.name, t.category) AS category, "
+        "t.category_id, c.name AS category_name, c.color AS category_color, "
+        "t.date, t.completed, t.created_at "
+        "FROM tasks t "
+        "LEFT JOIN categories c ON t.category_id = c.id ");
+}
+
+bool bindCategoryTextFromId(QSqlQuery& query, int categoryId, QString* categoryName)
+{
+    if (categoryId <= 0) {
+        *categoryName = QString();
+        return true;
+    }
+
+    query.prepare(QStringLiteral("SELECT name FROM categories WHERE id = :id"));
+    query.bindValue(QStringLiteral(":id"), categoryId);
+    if (!query.exec()) {
+        qWarning() << "Failed to look up category for task:" << query.lastError().text();
+        return false;
+    }
+
+    if (!query.next()) {
+        qWarning() << "Failed to add task: category not found" << categoryId;
+        return false;
+    }
+
+    *categoryName = query.value(0).toString();
+    return true;
+}
 }
 
 TaskManager::TaskManager(QObject* parent)
@@ -80,11 +114,76 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue, const
         return false;
     }
 
+    QString normalizedCategory = category.trimmed();
+    QVariant categoryIdValue;
+    if (!normalizedCategory.isEmpty()) {
+        QSqlQuery categoryQuery(db);
+        categoryQuery.prepare(QStringLiteral("SELECT id FROM categories WHERE name = :name"));
+        categoryQuery.bindValue(QStringLiteral(":name"), normalizedCategory);
+        if (!categoryQuery.exec()) {
+            qWarning() << "Failed to look up task category:" << categoryQuery.lastError().text();
+            return false;
+        }
+        if (categoryQuery.next()) {
+            categoryIdValue = categoryQuery.value(0).toInt();
+        }
+    }
+
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "INSERT INTO tasks (title, category, date, completed) VALUES (:title, :category, :date, 0)"));
+        "INSERT INTO tasks (title, category, category_id, date, completed) "
+        "VALUES (:title, :category, :categoryId, :date, 0)"));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
-    query.bindValue(QStringLiteral(":category"), category.trimmed());
+    query.bindValue(QStringLiteral(":category"), normalizedCategory);
+    query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
+    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+
+    if (!query.exec()) {
+        qWarning() << "Failed to add task:" << query.lastError().text();
+        return false;
+    }
+
+    emit tasksChanged();
+    return true;
+}
+
+bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int categoryId)
+{
+    const QString normalizedTitle = title.trimmed();
+    if (normalizedTitle.isEmpty()) {
+        qWarning() << "Failed to add task: title is empty after trimming";
+        return false;
+    }
+
+    const QDate date = normalizeDate(dateValue);
+    if (!date.isValid()) {
+        qWarning() << "Failed to add task: invalid date";
+        return false;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to add task: database is not open";
+        return false;
+    }
+
+    QString categoryName;
+    QVariant categoryIdValue;
+    if (categoryId > 0) {
+        QSqlQuery categoryQuery(db);
+        if (!bindCategoryTextFromId(categoryQuery, categoryId, &categoryName)) {
+            return false;
+        }
+        categoryIdValue = categoryId;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "INSERT INTO tasks (title, category, category_id, date, completed) "
+        "VALUES (:title, :category, :categoryId, :date, 0)"));
+    query.bindValue(QStringLiteral(":title"), normalizedTitle);
+    query.bindValue(QStringLiteral(":category"), categoryName);
+    query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
 
     if (!query.exec()) {
@@ -205,9 +304,8 @@ QVariantList TaskManager::getTasksByDate(const QDate& date) const
     }
 
     QSqlQuery query(db);
-    query.prepare(QStringLiteral(
-        "SELECT id, title, category, date, completed, created_at "
-        "FROM tasks WHERE date = :date ORDER BY completed ASC, created_at ASC, id ASC"));
+    query.prepare(taskSelectSql() + QStringLiteral(
+        "WHERE t.date = :date ORDER BY t.completed ASC, t.created_at ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
 
     if (!query.exec()) {
@@ -239,11 +337,9 @@ QVariantList TaskManager::getWeekTasks(const QVariant& startDateValue) const
 
     const QDate endDate = startDate.addDays(6);
     QSqlQuery query(db);
-    query.prepare(QStringLiteral(
-        "SELECT id, title, category, date, completed, created_at "
-        "FROM tasks "
-        "WHERE date >= :startDate AND date <= :endDate "
-        "ORDER BY date ASC, completed ASC, created_at ASC, id ASC"));
+    query.prepare(taskSelectSql() + QStringLiteral(
+        "WHERE t.date >= :startDate AND t.date <= :endDate "
+        "ORDER BY t.date ASC, t.completed ASC, t.created_at ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 
@@ -276,11 +372,9 @@ QVariantList TaskManager::getMonthTasks(int year, int month) const
 
     const QDate endDate = startDate.addMonths(1).addDays(-1);
     QSqlQuery query(db);
-    query.prepare(QStringLiteral(
-        "SELECT id, title, category, date, completed, created_at "
-        "FROM tasks "
-        "WHERE date >= :startDate AND date <= :endDate "
-        "ORDER BY date ASC, completed ASC, created_at ASC, id ASC"));
+    query.prepare(taskSelectSql() + QStringLiteral(
+        "WHERE t.date >= :startDate AND t.date <= :endDate "
+        "ORDER BY t.date ASC, t.completed ASC, t.created_at ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 

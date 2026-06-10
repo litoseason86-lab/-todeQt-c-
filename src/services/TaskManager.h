@@ -15,6 +15,7 @@ public:
     static TaskManager* instance();
 
     Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, const QString& category = QString());
+    Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId);
     Q_INVOKABLE bool completeTask(int taskId);
     Q_INVOKABLE bool setTaskCompleted(int taskId, bool completed);
     Q_INVOKABLE bool deleteTask(int taskId);
