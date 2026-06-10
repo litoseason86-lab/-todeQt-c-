@@ -1,16 +1,13 @@
 #include "FocusTimer.h"
 
 #include "DatabaseManager.h"
+#include "FocusSessionRules.h"
 #include "TaskManager.h"
 
 #include <QDebug>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
-
-namespace {
-constexpr int kAutoCompleteThresholdSeconds = 5 * 60;
-}
 
 FocusTimer::FocusTimer(QObject* parent)
     : QObject(parent)
@@ -120,6 +117,23 @@ bool FocusTimer::stopFocus()
     }
 
     const int duration = m_elapsedSeconds;
+    if (duration < FocusSessionRules::kMinimumValidDurationSeconds) {
+        // 低于 3 分钟的会话视为无效，直接删除 startFocus 预先插入的占位记录，避免历史页出现 0 分钟噪音。
+        if (!discardFocusSession()) {
+            if (wasRunning) {
+                m_timer.start();
+            }
+            return false;
+        }
+
+        resetSession();
+        emit focusCompleted(duration);
+        emit runningStateChanged();
+        emit currentTaskChanged();
+        emit tick();
+        return true;
+    }
+
     // 保存失败时恢复计时器，不假装会话已经正常结束。
     if (!saveFocusSession(duration)) {
         if (wasRunning) {
@@ -128,7 +142,7 @@ bool FocusTimer::stopFocus()
         return false;
     }
 
-    if (duration >= kAutoCompleteThresholdSeconds) {
+    if (duration >= FocusSessionRules::kAutoCompleteTaskDurationSeconds) {
         // 一次有效专注代表任务已经被实际推进；达到 5 分钟后自动把任务标记完成。
         if (!TaskManager::instance()->setTaskCompleted(m_currentTaskId, true)) {
             qWarning() << "Failed to auto-complete task after focus session"
@@ -201,6 +215,37 @@ bool FocusTimer::saveFocusSession(int durationSeconds)
                    << "sessionId=" << m_sessionId
                    << "taskId=" << m_currentTaskId
                    << "duration=" << durationSeconds;
+        return false;
+    }
+
+    return true;
+}
+
+bool FocusTimer::discardFocusSession()
+{
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to discard invalid focus session: database is not open"
+                   << "sessionId=" << m_sessionId
+                   << "taskId=" << m_currentTaskId;
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("DELETE FROM focus_sessions WHERE id = :id"));
+    query.bindValue(QStringLiteral(":id"), m_sessionId);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to discard invalid focus session:" << query.lastError().text()
+                   << "sessionId=" << m_sessionId
+                   << "taskId=" << m_currentTaskId;
+        return false;
+    }
+
+    if (query.numRowsAffected() == 0) {
+        qWarning() << "Failed to discard invalid focus session: session row not found"
+                   << "sessionId=" << m_sessionId
+                   << "taskId=" << m_currentTaskId;
         return false;
     }
 

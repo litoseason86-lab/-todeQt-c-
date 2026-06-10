@@ -1,6 +1,7 @@
 #include "StatisticsService.h"
 
 #include "DatabaseManager.h"
+#include "FocusSessionRules.h"
 
 #include <QDebug>
 #include <QDateTime>
@@ -126,11 +127,13 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
         "WHERE date(f.start_time) >= :startDate "
         "AND date(f.start_time) <= :endDate "
         "AND f.duration IS NOT NULL "
+        "AND f.duration >= :minDuration "
         "AND trim(COALESCE(c.name, legacy.name, t.category, '')) != '' "
         "GROUP BY category_name, category_color "
         "ORDER BY total_duration DESC, category_name ASC"));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
 
     QVariantList categories;
     int totalDuration = 0;
@@ -180,8 +183,11 @@ int StatisticsService::calculateTotalDuration(const QDate& date) const
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "SELECT COALESCE(SUM(duration), 0) FROM focus_sessions "
-        "WHERE date(start_time) = :date AND duration IS NOT NULL"));
+        "WHERE date(start_time) = :date "
+        "AND duration IS NOT NULL "
+        "AND duration >= :minDuration"));
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
 
     if (!query.exec() || !query.next()) {
         qWarning() << "Failed to calculate total duration:" << query.lastError().text();

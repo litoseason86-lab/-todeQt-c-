@@ -277,51 +277,56 @@ TestCase {
         var currentButton = findChild(monthGoalView, "monthCurrentButton");
         var nextButton = findChild(monthGoalView, "monthNextButton");
         var previousButtonBackground = findChild(monthGoalView, "monthPreviousButtonBackground");
-        var totalStatCard = findChild(monthGoalView, "monthTotalStatCard");
-        var completedStatCard = findChild(monthGoalView, "monthCompletedStatCard");
-        var rateStatCard = findChild(monthGoalView, "monthRateStatCard");
         var calendarContainer = findChild(monthGoalView, "monthCalendarContainer");
-        var detailPanel = findChild(monthGoalView, "monthDetailPanel");
+        var timelinePanel = findChild(monthGoalView, "focusTimelinePanel");
+        var timelineTitle = findChild(monthGoalView, "focusTimelineTitle");
+        var emptyState = findChild(monthGoalView, "focusHistoryEmptyState");
+        var timelineScrollView = findChild(monthGoalView, "focusTimelineScrollView");
         var monthContentStack = findChild(monthGoalView, "monthContentStack");
-        var addButton = findChild(monthGoalView, "monthDetailAddButton");
-        var addButtonBackground = findChild(monthGoalView, "monthDetailAddButtonBackground");
         var selectedDayCell = findChild(monthGoalView, "monthDayCell-" + monthGoalView.selectedDay);
+        var selectedDayDuration = findChild(monthGoalView, "monthDayDuration-" + monthGoalView.selectedDay);
 
         verify(previousButton !== null);
         verify(currentButton !== null);
         verify(nextButton !== null);
         verify(previousButtonBackground !== null);
-        verify(totalStatCard !== null);
-        verify(completedStatCard !== null);
-        verify(rateStatCard !== null);
         verify(calendarContainer !== null);
-        verify(detailPanel !== null);
+        verify(timelinePanel !== null);
+        verify(timelineTitle !== null);
+        verify(emptyState !== null);
+        verify(timelineScrollView !== null);
         verify(monthContentStack !== null);
-        verify(addButton !== null);
-        verify(addButtonBackground !== null);
         verify(selectedDayCell !== null);
+        verify(selectedDayDuration !== null);
+
+        // 专注历史页已经移除旧“月度目标”的任务统计和添加任务入口。
+        compare(findChild(monthGoalView, "monthTotalStatCard"), null);
+        compare(findChild(monthGoalView, "monthCompletedStatCard"), null);
+        compare(findChild(monthGoalView, "monthRateStatCard"), null);
+        compare(findChild(monthGoalView, "monthDetailAddButton"), null);
 
         compare(previousButtonBackground.radius, 8);
-        compare(totalStatCard.radius, 8);
-        compare(completedStatCard.radius, 8);
-        compare(rateStatCard.radius, 8);
-        compare(totalStatCard.layer.enabled, true);
-        verify(totalStatCard.layer.effect !== null);
 
         compare(calendarContainer.radius, 8);
         compare(calendarContainer.layer.enabled, true);
         verify(calendarContainer.layer.effect !== null);
         verify(calendarContainer.width > 0);
         verify(calendarContainer.height >= 520);
-        compare(detailPanel.radius, 8);
-        compare(detailPanel.layer.enabled, true);
-        verify(detailPanel.layer.effect !== null);
-        verify(Math.abs(detailPanel.width - calendarContainer.width) <= 2);
-        verify(detailPanel.y > calendarContainer.y);
-        verify(detailPanel.height >= 260);
+        compare(timelinePanel.radius, 8);
+        compare(timelinePanel.layer.enabled, true);
+        verify(timelinePanel.layer.effect !== null);
+        // 宽屏下专注历史应使用左右布局，否则右侧空白、时间轴被挤到首屏之外。
+        verify(timelinePanel.x > calendarContainer.x + calendarContainer.width);
+        verify(Math.abs(timelinePanel.y - calendarContainer.y) <= 2);
+        verify(calendarContainer.width >= 360);
+        verify(timelinePanel.width >= 360);
+        verify(timelinePanel.height >= 260);
+        verify(timelineTitle.text.indexOf("专注记录") >= 0);
+        compare(emptyState.text, "这一天还没有专注记录");
+        compare(timelineScrollView.visible, monthGoalView.selectedDaySessions.length > 0);
 
         compare(selectedDayCell.radius, 6);
         verify(selectedDayCell.border.width >= 2);
-        compare(addButtonBackground.radius, 8);
+        compare(selectedDayDuration.font.pixelSize, 11);
     }
 }

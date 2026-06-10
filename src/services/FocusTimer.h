@@ -38,6 +38,7 @@ private:
 
     // 保存失败时调用方会保留当前会话状态，避免用户误以为记录已经落库。
     bool saveFocusSession(int durationSeconds);
+    bool discardFocusSession();
     void resetSession();
 
     // m_elapsedSeconds 存真实累计秒数，暂停时间不会计入专注时长。

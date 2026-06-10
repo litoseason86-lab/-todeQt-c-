@@ -2,48 +2,119 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
-import "../components"
 
 Item {
     id: root
 
+    // MainWindow 仍绑定 onStartFocus。专注历史页不再触发它，只保留接口避免现有页面装配失败。
     signal startFocus(int taskId, string taskTitle)
 
     property int currentYear: new Date().getFullYear()
     property int currentMonth: new Date().getMonth() + 1
     property int selectedDay: new Date().getDate()
-    property var monthTasks: []
     property var categoryManagerRef: null
     property string loadError: ""
-    property date pendingAddDate: dateForDay(selectedDay)
+    property var monthSessions: []
+    property var selectedDaySessions: []
+    property var dailyTotals: ({})
+    property int invalidSessionCount: 0
 
     Component.onCompleted: refresh()
 
     Connections {
-        target: taskManager
+        target: typeof focusTimer === "undefined" ? null : focusTimer
+        ignoreUnknownSignals: true
 
-        function onTasksChanged() {
+        function onFocusCompleted(duration) {
             root.refresh();
         }
     }
 
-    Connections {
-        target: root.categoryManagerRef
-        ignoreUnknownSignals: true
-
-        function onCategoriesChanged() {
-            root.refresh();
-        }
+    function hasFocusHistoryService() {
+        return typeof focusHistoryService !== "undefined" && focusHistoryService !== null;
     }
 
     function refresh() {
         try {
             root.loadError = "";
-            root.monthTasks = taskManager.getMonthTasks(root.currentYear, root.currentMonth);
+
+            if (!root.hasFocusHistoryService()) {
+                root.monthSessions = [];
+                root.dailyTotals = ({});
+                root.selectedDaySessions = [];
+                root.invalidSessionCount = 0;
+                return;
+            }
+
+            root.refreshInvalidSessionCount();
+            root.monthSessions = focusHistoryService.getMonthSessions(root.currentYear, root.currentMonth);
+            if (typeof focusHistoryService.lastError === "function"
+                    && focusHistoryService.lastError().length > 0) {
+                // 服务层返回空列表不一定代表真的没有记录；数据库失败也会空，需要单独提示用户。
+                root.loadError = "专注历史加载失败";
+            }
+            root.calculateDailyTotals();
+            root.updateSelectedDaySessions();
         } catch (error) {
-            root.monthTasks = [];
-            root.loadError = "月度目标加载失败";
+            root.monthSessions = [];
+            root.dailyTotals = ({});
+            root.selectedDaySessions = [];
+            root.invalidSessionCount = 0;
+            root.loadError = "专注历史加载失败";
         }
+    }
+
+    function refreshInvalidSessionCount() {
+        if (!root.hasFocusHistoryService() || typeof focusHistoryService.invalidSessionCount !== "function") {
+            root.invalidSessionCount = 0;
+            return;
+        }
+
+        root.invalidSessionCount = Math.max(0, Number(focusHistoryService.invalidSessionCount()) || 0);
+    }
+
+    function cleanupInvalidSessions() {
+        if (!root.hasFocusHistoryService() || typeof focusHistoryService.cleanupInvalidSessions !== "function") {
+            return;
+        }
+
+        // 清理动作只删除 3 分钟以下的已结束记录；服务层会保护正在进行的会话。
+        focusHistoryService.cleanupInvalidSessions();
+        root.refresh();
+    }
+
+    function calculateDailyTotals() {
+        var totals = {};
+
+        for (var i = 0; i < root.monthSessions.length; i++) {
+            var session = root.monthSessions[i];
+            if (!session || !session.date) {
+                continue;
+            }
+
+            // durationSeconds 来自服务层，QML 侧只做聚合；缺失或非法值按 0 处理，避免界面出现 NaN。
+            var durationSeconds = Number(session.durationSeconds) || 0;
+            if (!totals[session.date]) {
+                totals[session.date] = 0;
+            }
+            totals[session.date] += durationSeconds;
+        }
+
+        root.dailyTotals = totals;
+    }
+
+    function updateSelectedDaySessions() {
+        var selectedDate = root.selectedDateKey();
+        var filtered = [];
+
+        for (var i = 0; i < root.monthSessions.length; i++) {
+            var session = root.monthSessions[i];
+            if (session && session.date === selectedDate) {
+                filtered.push(session);
+            }
+        }
+
+        root.selectedDaySessions = filtered;
     }
 
     function daysInMonth() {
@@ -64,55 +135,87 @@ Item {
         return Qt.formatDate(value, "yyyy-MM-dd");
     }
 
-    function tasksForDay(day) {
-        var target = root.isoDate(root.dateForDay(day));
-        var result = [];
-        for (var i = 0; i < root.monthTasks.length; i++) {
-            if (Qt.formatDate(root.monthTasks[i].date, "yyyy-MM-dd") === target) {
-                result.push(root.monthTasks[i]);
+    function selectedDateKey() {
+        return root.isoDate(root.dateForDay(root.selectedDay));
+    }
+
+    function dayTotalSeconds(day) {
+        var total = root.dailyTotals[root.isoDate(root.dateForDay(day))];
+        return Number(total) || 0;
+    }
+
+    function selectedDayTotalSeconds() {
+        return root.dayTotalSeconds(root.selectedDay);
+    }
+
+    function formatDuration(seconds) {
+        if (root.hasFocusHistoryService()) {
+            return focusHistoryService.formatDuration(seconds);
+        }
+
+        if (seconds < 60) {
+            return "0分钟";
+        }
+
+        var minutes = Math.floor(seconds / 60);
+        if (minutes < 60) {
+            return minutes + "分钟";
+        }
+
+        var hours = Math.floor(minutes / 60);
+        var remainMinutes = minutes % 60;
+        return remainMinutes === 0 ? hours + "小时" : hours + "小时" + remainMinutes + "分";
+    }
+
+    function formatClock(value) {
+        if (value === undefined || value === null) {
+            return "--:--";
+        }
+
+        var text = String(value).trim();
+        if (text.length === 0) {
+            return "--:--";
+        }
+
+        // 服务层可能返回 Qt ISODate 或 SQLite 时间文本；先按字符串截取，避免 JS Date 在不同平台解析空格格式不一致。
+        var separatorIndex = text.indexOf("T");
+        if (separatorIndex < 0) {
+            separatorIndex = text.indexOf(" ");
+        }
+        if (separatorIndex >= 0 && text.length >= separatorIndex + 6) {
+            var clockText = text.substring(separatorIndex + 1, separatorIndex + 6);
+            if (/^\d{2}:\d{2}$/.test(clockText)) {
+                return clockText;
             }
         }
-        return result;
-    }
 
-    function completedCount(tasks) {
-        var count = 0;
-        for (var i = 0; i < tasks.length; i++) {
-            if (tasks[i].completed) {
-                count++;
-            }
+        var parsed = new Date(text);
+        if (!isNaN(parsed.getTime())) {
+            return Qt.formatTime(parsed, "HH:mm");
         }
-        return count;
+
+        return "--:--";
     }
 
-    function monthCompletedCount() {
-        return root.completedCount(root.monthTasks);
-    }
-
-    function selectedTasks() {
-        return root.tasksForDay(root.selectedDay);
-    }
-
-    function setMonth(year, month) {
+    function setMonth(year, month, preferredDay) {
         root.currentYear = year;
         root.currentMonth = month;
-        // 切到短月份时，避免 selectedDay 指向不存在的日期。
-        root.selectedDay = Math.min(root.selectedDay, root.daysInMonth());
+
+        // 切换月份默认回到 1 号；传入指定日期时也要夹紧，避免 31 号落到短月份外。
+        var targetDay = preferredDay === undefined ? 1 : preferredDay;
+        root.selectedDay = Math.min(Math.max(1, targetDay), root.daysInMonth());
         root.refresh();
     }
 
-    function openAddTask() {
-        root.pendingAddDate = root.dateForDay(root.selectedDay);
-        addTaskDialog.selectedDate = root.pendingAddDate;
-        addTaskDialog.open();
-    }
-
     ScrollView {
+        id: pageScrollView
+
         anchors.fill: parent
         clip: true
+        contentWidth: availableWidth
 
         ColumnLayout {
-            width: Math.max(parent.width, 1)
+            width: Math.max(pageScrollView.availableWidth, 1)
             spacing: 16
 
             Item {
@@ -127,7 +230,7 @@ Item {
                 spacing: 4
 
                 Text {
-                    text: "月度目标"
+                    text: "专注历史"
                     font.pixelSize: 24
                     font.weight: Font.Bold
                     color: "#5d4e37"
@@ -183,9 +286,9 @@ Item {
                     }
                     onClicked: {
                         if (root.currentMonth === 1) {
-                            root.setMonth(root.currentYear - 1, 12);
+                            root.setMonth(root.currentYear - 1, 12, 1);
                         } else {
-                            root.setMonth(root.currentYear, root.currentMonth - 1);
+                            root.setMonth(root.currentYear, root.currentMonth - 1, 1);
                         }
                     }
                 }
@@ -227,10 +330,7 @@ Item {
                     }
                     onClicked: {
                         var today = new Date();
-                        root.currentYear = today.getFullYear();
-                        root.currentMonth = today.getMonth() + 1;
-                        root.selectedDay = today.getDate();
-                        root.refresh();
+                        root.setMonth(today.getFullYear(), today.getMonth() + 1, today.getDate());
                     }
                 }
 
@@ -271,11 +371,57 @@ Item {
                     }
                     onClicked: {
                         if (root.currentMonth === 12) {
-                            root.setMonth(root.currentYear + 1, 1);
+                            root.setMonth(root.currentYear + 1, 1, 1);
                         } else {
-                            root.setMonth(root.currentYear, root.currentMonth + 1);
+                            root.setMonth(root.currentYear, root.currentMonth + 1, 1);
                         }
                     }
+                }
+
+                Item {
+                    Layout.fillWidth: true
+                }
+
+                Button {
+                    id: cleanupInvalidButton
+                    objectName: "focusHistoryCleanupInvalidButton"
+                    visible: root.invalidSessionCount > 0
+                    text: "清理无效记录"
+                    implicitWidth: 132
+                    implicitHeight: 40
+
+                    background: Rectangle {
+                        objectName: "focusHistoryCleanupInvalidButtonBackground"
+                        color: cleanupInvalidButton.pressed ? "#eee2c9" : (cleanupInvalidButton.hovered ? "#f5ede3" : "#fffef9")
+                        border.color: cleanupInvalidButton.hovered || cleanupInvalidButton.pressed ? "#d4a574" : "#e8dfc8"
+                        border.width: 1
+                        radius: 8
+
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: 120
+                                easing.type: Easing.OutQuad
+                            }
+                        }
+                        Behavior on border.color {
+                            ColorAnimation {
+                                duration: 120
+                                easing.type: Easing.OutQuad
+                            }
+                        }
+                    }
+
+                    contentItem: Text {
+                        text: cleanupInvalidButton.text
+                        color: "#8b7355"
+                        font.pixelSize: 13
+                        font.weight: Font.Medium
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        elide: Text.ElideRight
+                    }
+
+                    onClicked: root.cleanupInvalidSessions()
                 }
             }
 
@@ -298,49 +444,23 @@ Item {
                 wrapMode: Text.WordWrap
             }
 
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: 24
-                Layout.rightMargin: 24
-                spacing: 12
-
-                StatCard {
-                    objectName: "monthTotalStatCard"
-                    Layout.fillWidth: true
-                    title: "本月任务"
-                    value: String(root.monthTasks.length)
-                    subtitle: "计划内任务总数"
-                }
-
-                StatCard {
-                    objectName: "monthCompletedStatCard"
-                    Layout.fillWidth: true
-                    title: "已完成"
-                    value: String(root.monthCompletedCount())
-                    subtitle: "完成后会计入月度进度"
-                }
-
-                StatCard {
-                    objectName: "monthRateStatCard"
-                    Layout.fillWidth: true
-                    title: "完成率"
-                    value: root.monthTasks.length > 0 ? Math.round(root.monthCompletedCount() * 100 / root.monthTasks.length) + "%" : "0%"
-                    subtitle: "只统计本月任务"
-                }
-            }
-
-            ColumnLayout {
+            GridLayout {
                 objectName: "monthContentStack"
-                // 日历和详情上下排列，避免左右挤压导致日期单元格过窄。
+                // 宽屏下左右并排，避免右侧空白；窄屏下自动堆叠，防止卡片被压到不可读。
+                columns: root.width >= 820 ? 2 : 1
                 Layout.fillWidth: true
                 Layout.leftMargin: 24
                 Layout.rightMargin: 24
                 Layout.bottomMargin: 24
-                spacing: 16
+                columnSpacing: 16
+                rowSpacing: 16
 
                 Rectangle {
                     objectName: "monthCalendarContainer"
-                    Layout.fillWidth: true
+                    Layout.fillWidth: root.width < 820
+                    Layout.minimumWidth: 360
+                    Layout.preferredWidth: 460
+                    Layout.maximumWidth: root.width < 820 ? 100000 : 520
                     Layout.minimumHeight: 520
                     Layout.preferredHeight: 560
                     radius: 8
@@ -401,7 +521,7 @@ Item {
                                         var day = index - root.firstOffset() + 1;
                                         return day >= 1 && day <= root.daysInMonth() ? day : 0;
                                     }
-                                    property var dayTasks: dayNumber > 0 ? root.tasksForDay(dayNumber) : []
+                                    property int dayDuration: dayNumber > 0 ? root.dayTotalSeconds(dayNumber) : 0
                                     property bool todayCell: {
                                         var today = new Date();
                                         return dayNumber > 0 && root.currentYear === today.getFullYear() && root.currentMonth === today.getMonth() + 1 && dayNumber === today.getDate();
@@ -410,21 +530,20 @@ Item {
                                     objectName: dayNumber > 0 ? "monthDayCell-" + dayNumber : "monthDayCell-empty-" + index
                                     radius: 6
                                     color: {
+                                        if (dayNumber <= 0)
+                                            return "#faf6ee";
                                         if (dayNumber === root.selectedDay)
                                             return "#f0e6d2";
-                                        if (todayCell)
-                                            return "#f5ede3";
                                         if (dayMouseArea.containsMouse)
-                                            return "#faf8f3";
-                                        return "#fffef9";
+                                            return "#fffef9";
+                                        return "#faf6ee";
                                     }
                                     border.color: {
-                                        if (dayNumber === root.selectedDay || todayCell || dayMouseArea.containsMouse)
+                                        if (dayNumber > 0 && (dayNumber === root.selectedDay || todayCell || dayMouseArea.containsMouse))
                                             return "#d4a574";
                                         return "#e8dfc8";
                                     }
                                     border.width: (dayNumber === root.selectedDay || todayCell) ? 2 : 1
-                                    opacity: dayNumber > 0 ? 1.0 : 0.35
 
                                     Behavior on color {
                                         ColorAnimation {
@@ -460,10 +579,12 @@ Item {
 
                                         Text {
                                             Layout.fillWidth: true
-                                            visible: dayNumber > 0 && dayTasks.length > 0
-                                            text: dayTasks.length + "项 / 完成" + root.completedCount(dayTasks)
+                                            objectName: dayNumber > 0 ? "monthDayDuration-" + dayNumber : "monthDayDuration-empty-" + index
+                                            visible: dayNumber > 0 && dayDuration > 0
+                                            text: root.formatDuration(dayDuration)
                                             font.pixelSize: 11
-                                            color: "#8b7355"
+                                            font.weight: Font.Medium
+                                            color: "#d4a574"
                                             elide: Text.ElideRight
                                         }
                                     }
@@ -474,7 +595,10 @@ Item {
                                         enabled: parent.dayNumber > 0
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.selectedDay = parent.dayNumber
+                                        onClicked: {
+                                            root.selectedDay = parent.dayNumber;
+                                            root.updateSelectedDaySessions();
+                                        }
                                     }
                                 }
                             }
@@ -483,10 +607,11 @@ Item {
                 }
 
                 Rectangle {
-                    objectName: "monthDetailPanel"
+                    objectName: "focusTimelinePanel"
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 360
                     Layout.minimumHeight: 260
-                    Layout.preferredHeight: 300
+                    Layout.preferredHeight: root.width >= 820 ? 560 : 360
                     radius: 8
                     color: "#fffef9"
                     border.color: "#e8dfc8"
@@ -504,93 +629,167 @@ Item {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 10
+                        anchors.margins: 16
+                        spacing: 14
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 8
+                            spacing: 12
 
                             Text {
+                                objectName: "focusTimelineTitle"
                                 Layout.fillWidth: true
-                                text: root.currentMonth + "月" + root.selectedDay + "日"
+                                text: root.currentMonth + "月" + root.selectedDay + "日 专注记录"
                                 font.pixelSize: 16
                                 font.weight: Font.Bold
                                 color: "#5d4e37"
                             }
 
-                            Button {
-                                id: detailAddButton
-                                objectName: "monthDetailAddButton"
-                                text: "添加"
-                                implicitWidth: 72
-                                implicitHeight: 36
-                                background: Rectangle {
-                                    objectName: "monthDetailAddButtonBackground"
-                                    color: detailAddButton.pressed ? "#c99666" : (detailAddButton.hovered ? "#d9a574" : "#d4a574")
-                                    radius: 8
-                                    Behavior on color {
-                                        ColorAnimation {
-                                            duration: 160
-                                            easing.type: Easing.OutQuad
-                                        }
-                                    }
-                                }
-                                contentItem: Text {
-                                    text: detailAddButton.text
-                                    color: "#fffef9"
-                                    font.pixelSize: 13
-                                    font.weight: Font.Medium
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                    scale: detailAddButton.pressed ? 0.96 : 1.0
-                                }
-                                onClicked: root.openAddTask()
+                            Text {
+                                text: root.selectedDaySessions.length + "次记录"
+                                font.pixelSize: 13
+                                color: "#8b7355"
                             }
                         }
 
-                        Text {
+                        Item {
                             Layout.fillWidth: true
-                            visible: root.selectedTasks().length === 0
-                            text: "这一天还没有任务。"
-                            font.pixelSize: 13
-                            color: "#8b7355"
-                            wrapMode: Text.WordWrap
+                            Layout.fillHeight: true
+                            visible: root.selectedDaySessions.length === 0
+
+                            Text {
+                                objectName: "focusHistoryEmptyState"
+                                anchors.centerIn: parent
+                                text: "这一天还没有专注记录"
+                                font.pixelSize: 13
+                                color: "#8b7355"
+                                horizontalAlignment: Text.AlignHCenter
+                            }
                         }
 
                         ScrollView {
+                            id: timelineScrollView
+                            objectName: "focusTimelineScrollView"
                             Layout.fillWidth: true
                             Layout.fillHeight: true
+                            visible: root.selectedDaySessions.length > 0
                             clip: true
+                            contentWidth: availableWidth
+                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                            ScrollBar.vertical: ScrollBar {
+                                id: timelineVerticalScrollBar
+                                policy: ScrollBar.AsNeeded
+                                width: 8
 
-                            ColumnLayout {
-                                width: Math.max(parent.width, 1)
-                                spacing: 8
+                                contentItem: Rectangle {
+                                    implicitWidth: 4
+                                    radius: 2
+                                    color: timelineVerticalScrollBar.pressed || timelineVerticalScrollBar.hovered ? "#d4a574" : "#e8dfc8"
+                                }
+
+                                background: Rectangle {
+                                    color: "#fffef9"
+                                }
+                            }
+
+                            Column {
+                                id: timelineColumn
+                                width: Math.max(1, timelineScrollView.availableWidth)
+                                spacing: 12
 
                                 Repeater {
-                                    model: root.selectedTasks()
+                                    model: root.selectedDaySessions
 
-                                    TaskItem {
-                                        taskId: modelData.id
-                                        taskTitle: modelData.title
-                                        taskCategory: modelData.category && modelData.category.name ? modelData.category : (modelData.categoryData && modelData.categoryData.name ? modelData.categoryData : (modelData.categoryText || ""))
-                                        taskCompleted: modelData.completed
+                                    delegate: Item {
+                                        width: timelineColumn.width
+                                        height: sessionCard.height + (index < root.selectedDaySessions.length - 1 ? 14 : 0)
 
-                                        onCompletionChanged: function (id, completed) {
-                                            taskManager.setTaskCompleted(id, completed);
+                                        Rectangle {
+                                            visible: index < root.selectedDaySessions.length - 1
+                                            x: 7
+                                            y: 28
+                                            width: 2
+                                            height: Math.max(0, parent.height - y)
+                                            radius: 1
+                                            color: "#e8dfc8"
                                         }
 
-                                        onStartFocusClicked: function (id, title) {
-                                            if (focusTimer.startFocus(id, title)) {
-                                                root.startFocus(id, title);
-                                            } else {
-                                                root.loadError = "专注启动失败，请重试";
-                                            }
+                                        Rectangle {
+                                            width: 10
+                                            height: 10
+                                            x: 3
+                                            y: 18
+                                            radius: 5
+                                            color: "#d4a574"
+                                            border.color: "#fffef9"
+                                            border.width: 2
+                                            z: 2
                                         }
 
-                                        onDeleteClicked: function (id, title) {
-                                            if (!taskManager.deleteTask(id)) {
-                                                root.loadError = "任务删除失败，请重试";
+                                        Rectangle {
+                                            id: sessionCard
+                                            objectName: "focusSessionCard-" + index
+                                            x: 24
+                                            width: Math.max(1, parent.width - x)
+                                            height: 86
+                                            radius: 6
+                                            color: "#faf8f3"
+                                            border.color: "#e8dfc8"
+                                            border.width: 1
+
+                                            RowLayout {
+                                                anchors.fill: parent
+                                                anchors.margins: 12
+                                                spacing: 12
+
+                                                ColumnLayout {
+                                                    Layout.fillWidth: true
+                                                    Layout.alignment: Qt.AlignVCenter
+                                                    spacing: 5
+
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        text: modelData.taskTitle && String(modelData.taskTitle).length > 0 ? modelData.taskTitle : "未知任务"
+                                                        font.pixelSize: 15
+                                                        font.weight: Font.Medium
+                                                        color: "#3d3327"
+                                                        elide: Text.ElideRight
+                                                    }
+
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        text: root.formatClock(modelData.startTime) + " - " + root.formatClock(modelData.endTime)
+                                                        font.pixelSize: 12
+                                                        color: "#8b7355"
+                                                        elide: Text.ElideRight
+                                                    }
+                                                }
+
+                                                ColumnLayout {
+                                                    Layout.preferredWidth: 116
+                                                    Layout.maximumWidth: 140
+                                                    Layout.alignment: Qt.AlignVCenter
+                                                    spacing: 5
+
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        text: root.formatDuration(Number(modelData.durationSeconds) || 0)
+                                                        font.pixelSize: 18
+                                                        font.weight: Font.Bold
+                                                        color: "#d4a574"
+                                                        horizontalAlignment: Text.AlignRight
+                                                        elide: Text.ElideRight
+                                                    }
+
+                                                    Text {
+                                                        Layout.fillWidth: true
+                                                        text: "已完成"
+                                                        font.pixelSize: 11
+                                                        font.weight: Font.Medium
+                                                        color: "#4caf50"
+                                                        horizontalAlignment: Text.AlignRight
+                                                    }
+                                                }
                                             }
                                         }
                                     }
@@ -600,17 +799,6 @@ Item {
                     }
                 }
             }
-        }
-    }
-
-    AddTaskDialog {
-        id: addTaskDialog
-
-        selectedDate: root.pendingAddDate
-        categoryManagerRef: root.categoryManagerRef
-
-        onTaskAdded: function (title, date, categoryId) {
-            taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId));
         }
     }
 }

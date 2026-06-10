@@ -48,6 +48,9 @@ set(APP_SOURCES
     src/services/TaskManager.cpp
     src/services/FocusTimer.cpp
     src/services/StatisticsService.cpp
+    src/services/FocusSessionRules.h
+    src/services/FocusHistoryService.h
+    src/services/FocusHistoryService.cpp
     src/services/CountdownService.cpp
     resources/qml.qrc
 )
@@ -85,6 +88,7 @@ add_executable(PomodoroTodoTests
     src/services/TaskManager.cpp
     src/services/FocusTimer.cpp
     src/services/StatisticsService.cpp
+    src/services/FocusHistoryService.cpp
 )
 
 target_link_libraries(PomodoroTodoTests PRIVATE

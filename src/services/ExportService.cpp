@@ -1,6 +1,7 @@
 #include "ExportService.h"
 
 #include "DatabaseManager.h"
+#include "FocusSessionRules.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -234,7 +235,12 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
         "FROM focus_sessions f "
         "LEFT JOIN tasks t ON f.task_id = t.id "
         "LEFT JOIN categories c ON t.category_id = c.id "
-        "WHERE date(f.start_time) >= :startDate AND date(f.start_time) <= :endDate");
+        "WHERE date(f.start_time) >= :startDate "
+        "AND date(f.start_time) <= :endDate "
+        "AND f.end_time IS NOT NULL "
+        "AND f.duration IS NOT NULL "
+        "AND f.duration >= %1")
+                                     .arg(FocusSessionRules::kMinimumValidDurationSeconds);
     // 先统计总数，让 UI 可以显示确定进度，而不是只能显示加载状态。
     const int total = countRows(fromAndWhere, startDate, endDate);
 

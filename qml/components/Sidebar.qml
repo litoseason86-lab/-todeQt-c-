@@ -68,7 +68,7 @@ Rectangle {
         }
 
         SidebarItem {
-            text: "月度目标"
+            text: "专注历史"
             marker: "月"
             isActive: root.currentView === "month"
             onClicked: root.itemClicked("month")

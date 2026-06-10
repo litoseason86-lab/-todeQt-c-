@@ -12,6 +12,7 @@
 #include "../src/services/CategoryManager.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/ExportService.h"
+#include "../src/services/FocusHistoryService.h"
 #define private public
 #include "../src/services/FocusTimer.h"
 #undef private
@@ -19,6 +20,8 @@
 #include "../src/services/TaskManager.h"
 
 namespace {
+constexpr int kTestMinimumValidDurationSeconds = 3 * 60;
+
 QString dateTimeText(const QDate& date, const QString& time = QStringLiteral("12:00:00"))
 {
     return QStringLiteral("%1T%2").arg(date.toString(Qt::ISODate), time);
@@ -85,6 +88,17 @@ bool insertFocusSessionWithNullDuration(int taskId, const QDate& date)
     }
 
     return true;
+}
+
+int countFocusSessions()
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    if (!query.exec(QStringLiteral("SELECT COUNT(*) FROM focus_sessions")) || !query.next()) {
+        qWarning() << "Failed to count focus sessions:" << query.lastError().text();
+        return -1;
+    }
+
+    return query.value(0).toInt();
 }
 
 int insertTaskRowWithCategoryId(const QString& title,
@@ -240,11 +254,19 @@ private slots:
     void addTaskAcceptsIsoDateStringFromQml();
     void deleteTaskPreservesFocusSessionHistory();
     void statisticsReturnsTodayCompletionAndDuration();
+    void focusHistoryReturnsMonthSessionsWithinBoundaries();
+    void focusHistoryReturnsDayTotalsAndFormattedDurations();
+    void focusHistoryFallsBackWhenTaskWasDeleted();
+    void focusHistoryDistinguishesEmptyResultFromQueryError();
+    void focusHistorySkipsUnfinishedSessions();
+    void focusHistorySkipsInvalidShortSessions();
+    void focusHistoryCleansInvalidShortSessions();
     void getWeekStatsUsesCurrentNaturalWeek();
     void getWeekTasksReturnsInclusiveRangeAndRequiredOrder();
     void getMonthTasksReturnsInclusiveMonthRange();
     void getMonthTasksRejectsInvalidMonth();
     void getCategoryStatsAggregatesDurationsAndPercentages();
+    void statisticsIgnoresInvalidShortSessions();
     void freshDatabaseCreatesVersion2PresetCategories();
     void migrationMapsLegacyCategoryTextToCategoryIds();
     void migrationCreatesDatabaseBackup();
@@ -256,9 +278,11 @@ private slots:
     void legacyAddTaskWithTextCategoryRemainsCompatible();
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
     void exportFocusSessionsAndExportAllWriteExpectedCsvFiles();
+    void exportFocusSessionsIgnoresInvalidShortSessions();
     void exportRejectsInvalidDateRangeAndUnwritablePath();
     void stopFocusCompletesTaskAfterFiveMinutes();
     void stopFocusUnderFiveMinutesKeepsTaskPending();
+    void stopFocusUnderThreeMinutesDiscardsInvalidSession();
 
 private:
     QTemporaryDir* m_tempDir = nullptr;
@@ -360,6 +384,200 @@ void ServiceTests::statisticsReturnsTodayCompletionAndDuration()
     QCOMPARE(stats.value("completionRate").toDouble(), 0.5);
 }
 
+void ServiceTests::focusHistoryReturnsMonthSessionsWithinBoundaries()
+{
+    const QDate targetDate(2026, 6, 10);
+    const int mathTaskId = insertTaskRow(QStringLiteral("数学二"), targetDate, QStringLiteral("数学"));
+    const int englishTaskId = insertTaskRow(QStringLiteral("英语阅读"), targetDate.addDays(1), QStringLiteral("英语"));
+    QVERIFY(mathTaskId > 0);
+    QVERIFY(englishTaskId > 0);
+
+    QVERIFY(insertFocusSessionRowWithTimes(
+                mathTaskId,
+                QStringLiteral("2026-06-10T15:37:00"),
+                QStringLiteral("2026-06-10T17:34:00"),
+                7020) > 0);
+    QVERIFY(insertFocusSessionRowWithTimes(
+                englishTaskId,
+                QStringLiteral("2026-06-11T08:00:00"),
+                QStringLiteral("2026-06-11T08:30:00"),
+                1800) > 0);
+    QVERIFY(insertFocusSessionRowWithTimes(
+                mathTaskId,
+                QStringLiteral("2026-05-31T23:30:00"),
+                QStringLiteral("2026-06-01T00:10:00"),
+                2400) > 0);
+    QVERIFY(insertFocusSessionRowWithTimes(
+                mathTaskId,
+                QStringLiteral("2026-07-01T00:00:00"),
+                QStringLiteral("2026-07-01T00:10:00"),
+                600) > 0);
+
+    const QVariantList sessions = FocusHistoryService::instance()->getMonthSessions(2026, 6);
+
+    QCOMPARE(sessions.size(), 2);
+    const QVariantMap first = sessions.at(0).toMap();
+    const QVariantMap second = sessions.at(1).toMap();
+    QCOMPARE(first.value(QStringLiteral("taskId")).toInt(), mathTaskId);
+    QCOMPARE(first.value(QStringLiteral("taskTitle")).toString(), QStringLiteral("数学二"));
+    QCOMPARE(first.value(QStringLiteral("startTime")).toString(), QStringLiteral("2026-06-10T15:37:00"));
+    QCOMPARE(first.value(QStringLiteral("endTime")).toString(), QStringLiteral("2026-06-10T17:34:00"));
+    QCOMPARE(first.value(QStringLiteral("durationSeconds")).toInt(), 7020);
+    QCOMPARE(first.value(QStringLiteral("date")).toString(), QStringLiteral("2026-06-10"));
+    QCOMPARE(second.value(QStringLiteral("taskTitle")).toString(), QStringLiteral("英语阅读"));
+}
+
+void ServiceTests::focusHistoryReturnsDayTotalsAndFormattedDurations()
+{
+    const QDate targetDate(2026, 6, 10);
+    const int taskId = insertTaskRow(QStringLiteral("数学复盘"), targetDate, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionRowWithTimes(
+                taskId,
+                QStringLiteral("2026-06-10T09:00:00"),
+                QStringLiteral("2026-06-10T09:20:00"),
+                1200) > 0);
+    QVERIFY(insertFocusSessionRowWithTimes(
+                taskId,
+                QStringLiteral("2026-06-10T10:00:00"),
+                QStringLiteral("2026-06-10T10:10:00"),
+                600) > 0);
+    QVERIFY(insertFocusSessionRowWithTimes(
+                taskId,
+                QStringLiteral("2026-06-11T10:00:00"),
+                QStringLiteral("2026-06-11T10:30:00"),
+                1800) > 0);
+
+    const QVariantList daySessions = FocusHistoryService::instance()->getDaySessions(targetDate);
+
+    QCOMPARE(daySessions.size(), 2);
+    QCOMPARE(FocusHistoryService::instance()->getDayTotalDuration(targetDate), 1800);
+    QCOMPARE(FocusHistoryService::instance()->formatDuration(30), QStringLiteral("0分钟"));
+    QCOMPARE(FocusHistoryService::instance()->formatDuration(43 * 60), QStringLiteral("43分钟"));
+    QCOMPARE(FocusHistoryService::instance()->formatDuration(117 * 60), QStringLiteral("1小时57分"));
+    QCOMPARE(FocusHistoryService::instance()->formatDuration(120 * 60), QStringLiteral("2小时"));
+}
+
+void ServiceTests::focusHistoryFallsBackWhenTaskWasDeleted()
+{
+    const QDate targetDate(2026, 6, 10);
+    const int taskId = insertTaskRow(QStringLiteral("会被删除的任务"), targetDate, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+    QVERIFY(insertFocusSessionRowWithTimes(
+                taskId,
+                QStringLiteral("2026-06-10T13:00:00"),
+                QStringLiteral("2026-06-10T13:30:00"),
+                1800) > 0);
+
+    // 外键会把 focus_sessions.task_id 置空；历史页仍要展示这条专注记录。
+    QSqlQuery deleteTask(DatabaseManager::instance()->database());
+    deleteTask.prepare(QStringLiteral("DELETE FROM tasks WHERE id = :id"));
+    deleteTask.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY(deleteTask.exec());
+
+    const QVariantList daySessions = FocusHistoryService::instance()->getDaySessions(targetDate);
+
+    QCOMPARE(daySessions.size(), 1);
+    const QVariantMap session = daySessions.first().toMap();
+    QVERIFY(session.value(QStringLiteral("taskId")).isNull()
+            || !session.value(QStringLiteral("taskId")).isValid());
+    QCOMPARE(session.value(QStringLiteral("taskTitle")).toString(), QStringLiteral("未知任务"));
+}
+
+void ServiceTests::focusHistoryDistinguishesEmptyResultFromQueryError()
+{
+    QCOMPARE(FocusHistoryService::instance()->getMonthSessions(2026, 12).size(), 0);
+    QCOMPARE(FocusHistoryService::instance()->lastError(), QString());
+
+    QTest::ignoreMessage(QtWarningMsg,
+                         "Failed to get month focus sessions: invalid year/month 2026 13");
+    QCOMPARE(FocusHistoryService::instance()->getMonthSessions(2026, 13).size(), 0);
+    QVERIFY(!FocusHistoryService::instance()->lastError().isEmpty());
+}
+
+void ServiceTests::focusHistorySkipsUnfinishedSessions()
+{
+    const QDate targetDate(2026, 6, 10);
+    const int taskId = insertTaskRow(QStringLiteral("进行中的专注"), targetDate, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionRowWithTimes(
+                taskId,
+                QStringLiteral("2026-06-10T08:00:00"),
+                QStringLiteral("2026-06-10T08:30:00"),
+                1800) > 0);
+
+    QSqlQuery unfinished(DatabaseManager::instance()->database());
+    unfinished.prepare(QStringLiteral(
+        "INSERT INTO focus_sessions (task_id, start_time) "
+        "VALUES (:taskId, :startTime)"));
+    unfinished.bindValue(QStringLiteral(":taskId"), taskId);
+    unfinished.bindValue(QStringLiteral(":startTime"), QStringLiteral("2026-06-10T09:00:00"));
+    QVERIFY(unfinished.exec());
+
+    QVERIFY(insertFocusSessionWithNullDuration(taskId, targetDate));
+
+    const QVariantList sessions = FocusHistoryService::instance()->getDaySessions(targetDate);
+
+    QCOMPARE(sessions.size(), 1);
+    QCOMPARE(sessions.first().toMap().value(QStringLiteral("durationSeconds")).toInt(), 1800);
+}
+
+void ServiceTests::focusHistorySkipsInvalidShortSessions()
+{
+    const QDate targetDate(2026, 6, 10);
+    const int taskId = insertTaskRow(QStringLiteral("短时专注"), targetDate, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionRowWithTimes(
+                taskId,
+                QStringLiteral("2026-06-10T08:00:00"),
+                QStringLiteral("2026-06-10T08:00:00"),
+                0) > 0);
+    QVERIFY(insertFocusSessionRowWithTimes(
+                taskId,
+                QStringLiteral("2026-06-10T08:10:00"),
+                QStringLiteral("2026-06-10T08:11:00"),
+                60) > 0);
+    QVERIFY(insertFocusSessionRowWithTimes(
+                taskId,
+                QStringLiteral("2026-06-10T08:20:00"),
+                QStringLiteral("2026-06-10T08:22:59"),
+                kTestMinimumValidDurationSeconds - 1) > 0);
+    QVERIFY(insertFocusSessionRowWithTimes(
+                taskId,
+                QStringLiteral("2026-06-10T08:30:00"),
+                QStringLiteral("2026-06-10T08:33:00"),
+                kTestMinimumValidDurationSeconds) > 0);
+
+    const QVariantList sessions = FocusHistoryService::instance()->getDaySessions(targetDate);
+
+    QCOMPARE(sessions.size(), 1);
+    QCOMPARE(sessions.first().toMap().value(QStringLiteral("durationSeconds")).toInt(),
+             kTestMinimumValidDurationSeconds);
+    QCOMPARE(FocusHistoryService::instance()->getDayTotalDuration(targetDate),
+             kTestMinimumValidDurationSeconds);
+}
+
+void ServiceTests::focusHistoryCleansInvalidShortSessions()
+{
+    const QDate targetDate(2026, 6, 10);
+    const int taskId = insertTaskRow(QStringLiteral("清理测试"), targetDate, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionRow(taskId, targetDate, 0));
+    QVERIFY(insertFocusSessionRow(taskId, targetDate, kTestMinimumValidDurationSeconds - 1));
+    QVERIFY(insertFocusSessionRow(taskId, targetDate, kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionWithNullDuration(taskId, targetDate));
+
+    QCOMPARE(FocusHistoryService::instance()->invalidSessionCount(), 2);
+    QCOMPARE(FocusHistoryService::instance()->cleanupInvalidSessions(), 2);
+    QCOMPARE(FocusHistoryService::instance()->invalidSessionCount(), 0);
+    QCOMPARE(countFocusSessions(), 2);
+    QCOMPARE(FocusHistoryService::instance()->getDaySessions(targetDate).size(), 1);
+}
+
 void ServiceTests::getWeekStatsUsesCurrentNaturalWeek()
 {
     const QDate today = QDate::currentDate();
@@ -380,7 +598,7 @@ void ServiceTests::getWeekStatsUsesCurrentNaturalWeek()
     for (const QVariant& dayValue : weekStats) {
         totalDuration += dayValue.toMap().value(QStringLiteral("duration")).toInt();
     }
-    QCOMPARE(totalDuration, 360);
+    QCOMPARE(totalDuration, 240);
 }
 
 void ServiceTests::getWeekTasksReturnsInclusiveRangeAndRequiredOrder()
@@ -472,6 +690,29 @@ void ServiceTests::getCategoryStatsAggregatesDurationsAndPercentages()
     QCOMPARE(english.value(QStringLiteral("color")).toString(), QStringLiteral("#c9956e"));
     QCOMPARE(english.value(QStringLiteral("duration")).toInt(), 600);
     QCOMPARE(english.value(QStringLiteral("percentage")).toDouble(), 25.0);
+}
+
+void ServiceTests::statisticsIgnoresInvalidShortSessions()
+{
+    const QDate today = QDate::currentDate();
+    const int mathTaskId = insertTaskRow(QStringLiteral("数学短记录"), today, QStringLiteral("数学"));
+    const int englishTaskId = insertTaskRow(QStringLiteral("英语有效记录"), today, QStringLiteral("英语"));
+    QVERIFY(mathTaskId > 0);
+    QVERIFY(englishTaskId > 0);
+
+    QVERIFY(insertFocusSessionRow(mathTaskId, today, kTestMinimumValidDurationSeconds - 1));
+    QVERIFY(insertFocusSessionRow(englishTaskId, today, kTestMinimumValidDurationSeconds));
+
+    const QVariantMap todayStats = StatisticsService::instance()->getTodayStats();
+    QCOMPARE(todayStats.value(QStringLiteral("totalDuration")).toInt(),
+             kTestMinimumValidDurationSeconds);
+
+    const QVariantMap categoryStats = StatisticsService::instance()->getCategoryStats(today, today);
+    QCOMPARE(categoryStats.value(QStringLiteral("totalDuration")).toInt(),
+             kTestMinimumValidDurationSeconds);
+    const QVariantList categories = categoryStats.value(QStringLiteral("categories")).toList();
+    QCOMPARE(categories.size(), 1);
+    QCOMPARE(categories.first().toMap().value(QStringLiteral("name")).toString(), QStringLiteral("英语"));
 }
 
 void ServiceTests::freshDatabaseCreatesVersion2PresetCategories()
@@ -838,6 +1079,39 @@ void ServiceTests::exportFocusSessionsAndExportAllWriteExpectedCsvFiles()
     QVERIFY(readUtf8File(m_tempDir->filePath(sessionsFileName)).startsWith(QStringLiteral("ID,任务ID,任务标题,科目,开始时间,结束时间,时长(分钟)\n")));
 }
 
+void ServiceTests::exportFocusSessionsIgnoresInvalidShortSessions()
+{
+    const QDate targetDate(2026, 6, 10);
+    const int taskId = insertTaskRow(QStringLiteral("导出有效记录"), targetDate, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionRowWithTimes(
+                taskId,
+                QStringLiteral("2026-06-10T08:00:00"),
+                QStringLiteral("2026-06-10T08:02:59"),
+                kTestMinimumValidDurationSeconds - 1) > 0);
+    const int validSessionId = insertFocusSessionRowWithTimes(
+        taskId,
+        QStringLiteral("2026-06-10T08:10:00"),
+        QStringLiteral("2026-06-10T08:13:00"),
+        kTestMinimumValidDurationSeconds);
+    QVERIFY(validSessionId > 0);
+
+    const QString sessionsPath = m_tempDir->filePath(QStringLiteral("valid-sessions.csv"));
+    QSignalSpy progressSpy(ExportService::instance(), &ExportService::exportProgress);
+
+    QVERIFY(ExportService::instance()->exportFocusSessions(targetDate, targetDate, sessionsPath));
+
+    QCOMPARE(progressSpy.count(), 1);
+    QCOMPARE(progressSpy.last().at(0).toInt(), 1);
+    QCOMPARE(progressSpy.last().at(1).toInt(), 1);
+    QCOMPARE(readUtf8File(sessionsPath),
+             QStringLiteral("ID,任务ID,任务标题,科目,开始时间,结束时间,时长(分钟)\n"
+                            "%1,%2,导出有效记录,数学,2026-06-10 08:10:00,2026-06-10 08:13:00,3\n")
+                 .arg(validSessionId)
+                 .arg(taskId));
+}
+
 void ServiceTests::exportRejectsInvalidDateRangeAndUnwritablePath()
 {
     QSignalSpy invalidDateSpy(ExportService::instance(), &ExportService::exportCompleted);
@@ -886,6 +1160,21 @@ void ServiceTests::stopFocusUnderFiveMinutesKeepsTaskPending()
 
     QVERIFY(FocusTimer::instance()->stopFocus());
 
+    const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
+    QCOMPARE(task.value(QStringLiteral("completed")).toBool(), false);
+}
+
+void ServiceTests::stopFocusUnderThreeMinutesDiscardsInvalidSession()
+{
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("无效短专注"), QDate::currentDate(), QString()));
+    const int taskId = TaskManager::instance()->getTodayTasks().first().toMap().value(QStringLiteral("id")).toInt();
+
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("无效短专注")));
+    FocusTimer::instance()->m_elapsedSeconds = kTestMinimumValidDurationSeconds - 1;
+
+    QVERIFY(FocusTimer::instance()->stopFocus());
+
+    QCOMPARE(countFocusSessions(), 0);
     const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
     QCOMPARE(task.value(QStringLiteral("completed")).toBool(), false);
 }
