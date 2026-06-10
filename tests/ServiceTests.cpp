@@ -28,6 +28,7 @@ int insertTaskRow(const QString& title,
                   bool completed = false,
                   const QString& createdAt = QString())
 {
+    // 测试直接插入数据库，绕开服务层校验，方便构造边界数据。
     QSqlQuery query(DatabaseManager::instance()->database());
     query.prepare(QStringLiteral(
         "INSERT INTO tasks (title, category, date, completed, created_at) "
@@ -91,6 +92,7 @@ int insertTaskRowWithCategoryId(const QString& title,
                                 bool completed,
                                 const QString& createdAt)
 {
+    // 同时写 category_id 和旧版 category 文本，用来覆盖新旧数据混合场景。
     QSqlQuery query(DatabaseManager::instance()->database());
     query.prepare(QStringLiteral(
         "INSERT INTO tasks (title, category, category_id, date, completed, created_at) "
@@ -143,6 +145,7 @@ QString readUtf8File(const QString& filePath)
 
 bool createLegacyVersion1Database(const QString& path)
 {
+    // 构造旧版本数据库，验证真实用户升级时的迁移路径。
     const QString connectionName = QStringLiteral("LegacyMigrationSetupConnection");
     {
         QSqlDatabase legacyDb = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
@@ -623,6 +626,7 @@ void ServiceTests::deletingAssociatedCategoryDetachesTasks()
 
     QVERIFY(TaskManager::instance()->addTask(QStringLiteral("计组错题"), QVariant(QDate::currentDate()), categoryId));
 
+    // 删除科目不应该删除任务，只应该把任务变成未分类。
     QVERIFY(manager->canDeleteCategory(categoryId));
     QVERIFY(manager->deleteCategory(categoryId));
     QVERIFY(manager->getCategoryById(categoryId).isEmpty());
@@ -647,6 +651,7 @@ void ServiceTests::deletingLegacyTextCategoryClearsTaskCategoryText()
                 false,
                 dateTimeText(QDate::currentDate())) > 0);
 
+    // 旧数据只有文本科目，也必须跟新 category_id 逻辑保持同样结果。
     QVERIFY(manager->canDeleteCategory(categoryId));
     QVERIFY(manager->deleteCategory(categoryId));
     QVERIFY(manager->getCategoryById(categoryId).isEmpty());

@@ -114,6 +114,7 @@ Rectangle {
         property string text: ""
         property string marker: ""
         property bool isActive: false
+        // 显式状态能抵消 MouseArea 和 HoverHandler 在不同设备上的悬停事件差异。
         property bool pointerInside: false
         readonly property bool visualHovered: item.enabled && item.pointerInside
         signal clicked
@@ -230,6 +231,7 @@ Rectangle {
         HoverHandler {
             id: hoverHandler
             enabled: item.enabled
+            // 某些 Qt/macOS 触控板路径可能绕过 MouseArea 的进入/离开事件。
             onHoveredChanged: item.setPointerInside(hovered)
         }
     }

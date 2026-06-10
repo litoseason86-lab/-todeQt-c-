@@ -28,6 +28,7 @@ Rectangle {
     onTotalValueChanged: pieCanvas.requestPaint()
 
     function sourceData() {
+        // dataPoints 是新接口，categoryData 保留给旧统计视图。
         if (root.dataPoints && root.dataPoints.length > 0) {
             return root.dataPoints
         }
@@ -35,6 +36,7 @@ Rectangle {
     }
 
     function finiteNumber(value) {
+        // 画布绘制角度必须来自非负有效数字，避免弧线计算失效。
         var numberValue = Number(value || 0)
         return isFinite(numberValue) ? Math.max(0, numberValue) : 0
     }
@@ -68,6 +70,7 @@ Rectangle {
     }
 
     function segmentSweep(indexValue) {
+        // 每个扇区用总量占比换算成角度。
         if (root.totalValue <= 0 || indexValue < 0 || indexValue >= root.chartData.length) {
             return 0
         }
@@ -123,6 +126,7 @@ Rectangle {
                         onHeightChanged: requestPaint()
 
                         onPaint: {
+                            // 画布不会自动清掉上一帧，重绘前必须手动清空。
                             var ctx = getContext("2d")
                             ctx.clearRect(0, 0, width, height)
                             if (root.totalValue <= 0) {

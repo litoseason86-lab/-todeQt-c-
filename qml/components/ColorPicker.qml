@@ -5,6 +5,7 @@ Item {
     id: root
 
     property string selectedColor: "#d4a574"
+    // 色板与迁移生成色保持同一组，避免旧科目和新建科目视觉割裂。
     readonly property var colors: [
         "#d4a574", "#c9956e", "#be8568", "#b37562", "#a8655c",
         "#9d7556", "#8b6550", "#7a5544", "#694538", "#58352c"

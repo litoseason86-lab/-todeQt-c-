@@ -10,6 +10,9 @@ set(CMAKE_AUTORCC ON)
 find_package(Qt6 REQUIRED COMPONENTS Core Quick QuickControls2 QuickLayouts QuickTest Sql Test)
 
 if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
+    # AGL.framework 是旧版 OpenGL 框架，新版 macOS SDK 已经移除；
+    # Qt 的 WrapOpenGL 导入目标可能仍引用它。
+    # 当前 SDK 不再提供该框架时，需要移除这个过期链接项。
     set(POMODORO_TODO_EFFECTIVE_SYSROOT "${CMAKE_OSX_SYSROOT}")
     if(NOT POMODORO_TODO_EFFECTIVE_SYSROOT)
         execute_process(
@@ -50,6 +53,7 @@ add_executable(PomodoroTodo ${APP_SOURCES})
 
 option(POMODORO_TODO_ENABLE_QML_DEBUG "Enable QML debugging and profiling hooks" ON)
 if(POMODORO_TODO_ENABLE_QML_DEBUG)
+    # 通过配置项控制 QML 调试钩子，避免为了调试改动发布源码。
     target_compile_definitions(PomodoroTodo PRIVATE QT_QML_DEBUG)
 endif()
 
@@ -93,5 +97,6 @@ add_test(
     COMMAND Qt6::qmltestrunner -input ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml
 )
 set_tests_properties(PomodoroTodoQmlTests PROPERTIES
+    # 与应用的 Basic 风格保持一致，避免视觉和布局断言随宿主平台变化。
     ENVIRONMENT "QT_QUICK_CONTROLS_STYLE=Basic"
 )

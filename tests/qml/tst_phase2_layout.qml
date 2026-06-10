@@ -91,6 +91,7 @@ TestCase {
     function test_emptyChartsRenderStableFallbacks() {
         wait(50)
 
+        // 空数据时应该显示兜底文案，不能露出 NaN 这类计算错误文本。
         var barEmptyLabel = findChild(emptyBarChart, "emptyStateLabel")
         var pieEmptyLabel = findChild(emptyPieChart, "emptyStateLabel")
 
@@ -105,6 +106,7 @@ TestCase {
     function test_zeroChartsAvoidInvalidGeometry() {
         wait(50)
 
+        // 全是 0 的数据也要能画图；这里验证比例计算不会产生无效数字。
         verify(zeroBarChart.maxValue === 0)
         verify(zeroPieChart.totalValue === 0)
         verify(isFinite(zeroBarChart.normalizedValue(0)))

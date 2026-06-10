@@ -22,6 +22,7 @@ Rectangle {
     border.width: 1
 
     function sourceData() {
+        // dataPoints 是新接口，weekData 保留给旧调用方。
         if (root.dataPoints && root.dataPoints.length > 0) {
             return root.dataPoints
         }
@@ -29,6 +30,7 @@ Rectangle {
     }
 
     function finiteNumber(value) {
+        // 图表高度不能接受“不是有效数字”的值或负数，否则柱体会消失或反向。
         var numberValue = Number(value || 0)
         return isFinite(numberValue) ? Math.max(0, numberValue) : 0
     }
@@ -78,6 +80,7 @@ Rectangle {
     }
 
     function normalizedValue(value) {
+        // 所有柱体都按当前最大值换算到 0 到 1，避免小数据被固定量级压扁。
         var max = root.finiteNumber(root.maxValue)
         if (max <= 0) {
             return 0

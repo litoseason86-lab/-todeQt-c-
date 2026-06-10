@@ -12,6 +12,7 @@ TestCase {
     QtObject {
         id: fakeExportService
 
+        // 假导出服务只发信号和返回成功，用来测试弹窗状态变化。
         signal exportProgress(int current, int total)
         signal exportCompleted(bool success, string message)
 
@@ -48,6 +49,7 @@ TestCase {
         exportDialog.open()
         wait(100)
 
+        // 开始日期晚于结束日期时，界面要先拦截，不进入真实导出流程。
         var startDateInput = findChild(exportDialog, "startDateInput")
         var endDateInput = findChild(exportDialog, "endDateInput")
         startDateInput.text = "2026-06-10"

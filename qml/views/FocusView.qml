@@ -10,6 +10,7 @@ Item {
     property string errorText: ""
 
     function safeSeconds(value) {
+        // 计时显示只接受非负秒数，避免服务异常值污染 UI。
         return Math.max(0, Number(value || 0))
     }
 

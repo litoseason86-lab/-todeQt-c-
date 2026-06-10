@@ -12,6 +12,7 @@ Rectangle {
     property int animationDelay: 0
 
     function restartIntro() {
+        // 视图重新显示时重播入场动画，数据刷新不会显得突兀。
         fadeInAnimation.restart();
     }
 
@@ -89,6 +90,7 @@ Rectangle {
                 SequentialAnimation {
                     id: valuePulse
 
+                    // 数值变化时用轻微脉冲提示刷新，不改变卡片布局。
                     NumberAnimation {
                         target: valueText
                         property: "scale"

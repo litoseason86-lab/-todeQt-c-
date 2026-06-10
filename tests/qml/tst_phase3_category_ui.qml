@@ -14,6 +14,7 @@ TestCase {
 
         signal categoriesChanged()
 
+        // 假服务只保留界面测试需要的字段，避免测试依赖真实数据库。
         property var categoryItems: [
             { id: 1, name: "数学", color: "#d4a574", isPreset: true },
             { id: 6, name: "算法", color: "#6f91a6", isPreset: false }
@@ -133,6 +134,7 @@ TestCase {
         categoryDialog.open()
         wait(100)
 
+        // 通过公开方法进入编辑态，验证弹窗不会直接依赖按钮点击顺序。
         categoryDialog.beginEdit(categoryDialog.categories[1])
         compare(categoryDialog.editingCategoryId, 6)
         categoryDialog.newCategoryColor = "#445566"

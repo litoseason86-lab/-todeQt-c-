@@ -198,6 +198,7 @@ bool CategoryManager::deleteCategory(int id)
         return false;
     }
 
+    // 删除自定义科目不能删除任务；同时清空外键和旧文本字段，让新旧任务行都变成未分类。
     QSqlQuery detachTasks(db);
     detachTasks.prepare(QStringLiteral(
         "UPDATE tasks "
@@ -245,6 +246,7 @@ bool CategoryManager::canDeleteCategory(int id) const
         return false;
     }
 
+    // 任务关联不是删除阻断条件；deleteCategory() 会先解除任务关联。
     const QVariantMap existing = getCategoryById(id);
     if (existing.isEmpty() || existing.value(QStringLiteral("isPreset")).toBool()) {
         return false;

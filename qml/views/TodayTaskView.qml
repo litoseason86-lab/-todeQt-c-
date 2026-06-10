@@ -47,6 +47,7 @@ Item {
     }
 
     function refresh() {
+        // 任务和统计分开加载，避免统计失败拖垮任务列表。
         loadTasks();
         loadStats();
     }
@@ -75,6 +76,7 @@ Item {
     }
 
     function formatDuration(seconds) {
+        // 秒级专注也要显示出来，否则短测试会看起来像没有记录。
         var safe = Math.max(0, Math.floor(Number(seconds || 0)));
         if (safe > 0 && safe < 60) {
             return safe + "秒";

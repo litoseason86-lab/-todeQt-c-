@@ -25,6 +25,7 @@ FocusTimer* FocusTimer::instance()
 
 bool FocusTimer::startFocus(int taskId, const QString& taskTitle)
 {
+    // 同一时间只允许一个活动会话，否则专注时长统计会被重叠记录污染。
     if (m_sessionId != -1 || m_isRunning) {
         qWarning() << "Failed to start focus: focus timer already has an active session"
                    << "sessionId=" << m_sessionId << "taskId=" << m_currentTaskId;
@@ -114,6 +115,7 @@ bool FocusTimer::stopFocus()
     }
 
     const int duration = m_elapsedSeconds;
+    // 保存失败时恢复计时器，不假装会话已经正常结束。
     if (!saveFocusSession(duration)) {
         if (wasRunning) {
             m_timer.start();
@@ -161,6 +163,7 @@ bool FocusTimer::saveFocusSession(int durationSeconds)
         return false;
     }
 
+    // 保存实际计时秒数，而不是墙钟时间差，这样暂停/继续才会被正确计算。
     const QDateTime endTime = QDateTime::currentDateTime();
     QSqlQuery query(db);
     query.prepare(QStringLiteral(

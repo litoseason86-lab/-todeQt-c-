@@ -50,6 +50,7 @@ TestCase {
     }
 
     function verifyInsidePanel(popup: Popup, item: Item) {
+        // 把控件坐标换算到弹窗面板内部，用来确认控件没有伸出边界。
         var local = popup.background.mapFromItem(item, 0, 0)
         verify(item.width > 0, item + " has no width")
         verify(item.height > 0, item + " has no height")
@@ -93,6 +94,7 @@ TestCase {
     }
 
     function test_categorySelectionCanRemainEmpty() {
+        // -1 是“未选择科目”的约定值，服务层会把它写成空科目。
         testCase.lastCategoryId = -999
         categoryDialog.open()
         wait(100)

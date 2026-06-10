@@ -166,6 +166,7 @@ TestCase {
         compare(mainWindow.pendingView, "week");
         compare(mainWindow.queuedView, "stats");
 
+        // 动画在不同机器上可能略慢，等状态结束比固定等待更稳定。
         tryCompare(mainWindow, "isSwitching", false, 1600);
 
         compare(mainWindow.currentView, "stats");

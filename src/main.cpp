@@ -14,6 +14,7 @@
 
 int main(int argc, char *argv[])
 {
+    // 固定运行时控件风格，避免平台原生控件差异影响布局和测试。
     QQuickStyle::setStyle(QStringLiteral("Basic"));
 
     QGuiApplication app(argc, argv);
@@ -26,6 +27,7 @@ int main(int argc, char *argv[])
     }
 
     QQmlApplicationEngine engine;
+    // QML 通过单例上下文对象访问服务，视图层保持声明式和轻量。
     engine.rootContext()->setContextProperty(QStringLiteral("categoryManager"), CategoryManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("CategoryManager"), CategoryManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("exportService"), ExportService::instance());

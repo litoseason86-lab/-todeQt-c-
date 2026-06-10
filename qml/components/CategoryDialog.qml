@@ -10,6 +10,7 @@ Popup {
     property string errorText: ""
     property string newCategoryColor: "#d4a574"
     property int editingCategoryId: -1
+    // 编辑状态由 id 推导，让同一套表单同时服务新增和更新。
     property bool editingCategory: editingCategoryId > 0
 
     modal: true
@@ -172,6 +173,7 @@ Popup {
             return
         }
 
+        // 服务层会先解除任务关联，所以自定义科目可以安全删除。
         if (!root.manager.deleteCategory(categoryId)) {
             root.errorText = "科目删除失败"
             return

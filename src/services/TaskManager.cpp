@@ -18,6 +18,7 @@ bool isValidTaskId(int taskId)
 
 QDate normalizeDate(const QVariant& value)
 {
+    // QML 会传 Date，测试常传字符串，C++ 调用方也可能直接传 QDate。
     if (value.canConvert<QDate>()) {
         const QDate date = value.toDate();
         if (date.isValid()) {
@@ -50,6 +51,7 @@ QDate normalizeDate(const QVariant& value)
 
 QString taskSelectSql()
 {
+    // 同时返回标准化科目字段和旧版文本科目，让旧数据库和新 UI 共用同一查询结果。
     return QStringLiteral(
         "SELECT t.id, t.title, "
         "COALESCE(c.name, t.category) AS category, "
@@ -250,6 +252,7 @@ bool TaskManager::deleteTask(int taskId)
         return false;
     }
 
+    // 专注记录是历史数据，删除任务时只解除关联，不让记录跟着任务一起删除。
     QSqlQuery detachSessions(db);
     detachSessions.prepare(QStringLiteral("UPDATE focus_sessions SET task_id = NULL WHERE task_id = :id"));
     detachSessions.bindValue(QStringLiteral(":id"), taskId);
@@ -335,6 +338,7 @@ QVariantList TaskManager::getWeekTasks(const QVariant& startDateValue) const
         return tasks;
     }
 
+    // 周视图传入周一；这里取从周一开始的 7 天，与 UI 的 7 列保持一致。
     const QDate endDate = startDate.addDays(6);
     QSqlQuery query(db);
     query.prepare(taskSelectSql() + QStringLiteral(
@@ -370,6 +374,7 @@ QVariantList TaskManager::getMonthTasks(int year, int month) const
         return tasks;
     }
 
+    // addMonths 会处理跨年；再减一天得到当月最后一天。
     const QDate endDate = startDate.addMonths(1).addDays(-1);
     QSqlQuery query(db);
     query.prepare(taskSelectSql() + QStringLiteral(

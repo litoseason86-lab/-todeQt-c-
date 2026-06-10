@@ -85,6 +85,8 @@ bool DatabaseManager::initialize(const QString& dbPath)
     }
 
     if (QSqlDatabase::contains(m_connectionName)) {
+        // Qt 要求 removeDatabase() 前清掉所有句柄，否则旧连接可能残留，
+        // 使用临时数据库路径的测试会变得不稳定。
         m_db = QSqlDatabase();
         QSqlDatabase::removeDatabase(m_connectionName);
     }
@@ -143,6 +145,7 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // 版本 2 引入 categories/category_id，同时保留旧版文本科目。
     if (getDatabaseVersion() < 2
         || !tableExists(QStringLiteral("categories"))
         || !columnExists(QStringLiteral("tasks"), QStringLiteral("category_id"))) {
@@ -301,6 +304,8 @@ bool DatabaseManager::migrateTaskCategories()
         return false;
     }
 
+    // 旧任务把科目存成自由文本；迁移时把去重后的名称转成科目行，
+    // 同时保留原文本，兼容旧导出和 UI 回退显示。
     QSqlQuery distinctQuery(m_db);
     if (!distinctQuery.exec(QStringLiteral(
             "SELECT DISTINCT trim(category) "
@@ -365,6 +370,7 @@ bool DatabaseManager::migrateTaskCategories()
 
 QString DatabaseManager::generateColorForCategory(int index) const
 {
+    // 颜色生成必须确定性，迁移结果才可复现、可测试。
     const QStringList colors = {
         QStringLiteral("#d4a574"),
         QStringLiteral("#c9956e"),
@@ -408,6 +414,7 @@ bool DatabaseManager::backupDatabaseBeforeMigration() const
 
 void DatabaseManager::pruneOldBackups(const QDir& databaseDir) const
 {
+    // 只保留最近三个迁移备份，避免反复测试或启动应用时悄悄塞满数据目录。
     const QFileInfoList backups = databaseDir.entryInfoList(
         QStringList{QStringLiteral("pomodoro_backup_*.db")},
         QDir::Files,
@@ -443,6 +450,8 @@ bool DatabaseManager::columnExists(const QString& tableName, const QString& colu
         return false;
     }
 
+    // PRAGMA table_info 是 SQLite 查看表结构的命令，不能绑定表名，
+    // 所以调用方必须传入可信的内部表名。
     QSqlQuery query(m_db);
     if (!query.exec(QStringLiteral("PRAGMA table_info(%1)").arg(tableName))) {
         qWarning() << "Failed to inspect database columns:" << query.lastError().text();

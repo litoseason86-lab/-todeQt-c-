@@ -29,6 +29,7 @@ Rectangle {
     property bool taskCompleted: false
     property real completionOffset: 0
     readonly property bool itemHovered: hoverArea.containsMouse
+    // 视图可能传入标准化科目对象，也可能传入旧版字符串科目。
     readonly property string categoryName: typeof taskCategory === "object" ? (taskCategory && taskCategory.name ? taskCategory.name : "") : String(taskCategory || "")
     readonly property string categoryColor: typeof taskCategory === "object" ? (taskCategory && taskCategory.color ? taskCategory.color : "") : ""
 
@@ -37,6 +38,7 @@ Rectangle {
     signal deleteClicked(int taskId, string title)
 
     states: [
+        // 完成状态只做轻微位移和透明度变化，避免影响相邻任务布局。
         State {
             name: "normal"
             when: !root.taskCompleted
@@ -127,6 +129,7 @@ Rectangle {
     MouseArea {
         id: hoverArea
 
+        // 这里只处理视觉悬停；按钮和复选框各自处理点击。
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.NoButton

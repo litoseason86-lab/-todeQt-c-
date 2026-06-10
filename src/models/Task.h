@@ -10,6 +10,7 @@
 class Task
 {
 public:
+    // 这个结构体是数据库任务行在 C++ 里的形状，字段名尽量贴近数据库列名。
     int id = -1;
     QString title;
     QString category;
@@ -20,6 +21,7 @@ public:
     bool completed = false;
     QDateTime createdAt;
 
+    // fromQuery 负责从 SQL 查询结果创建对象，toVariantMap 负责交给 QML 显示。
     static Task fromQuery(const QSqlQuery& query);
     QVariantMap toVariantMap() const;
 };

@@ -6,6 +6,7 @@
 namespace {
 QVariant valueByName(const QSqlQuery& query, const char* name)
 {
+    // 测试和导出使用的 SELECT 列表不同，按列名读取能避免索引耦合。
     const int index = query.record().indexOf(QLatin1String(name));
     return index >= 0 ? query.value(index) : QVariant();
 }
@@ -20,6 +21,7 @@ FocusSession FocusSession::fromQuery(const QSqlQuery& query)
     session.startTime = QDateTime::fromString(valueByName(query, "start_time").toString(), Qt::ISODate);
     session.endTime = QDateTime::fromString(valueByName(query, "end_time").toString(), Qt::ISODate);
     if (!session.startTime.isValid()) {
+        // SQLite CURRENT_TIMESTAMP 使用空格分隔日期和时间，不是 Qt::ISODate 的 "T"。
         session.startTime = QDateTime::fromString(valueByName(query, "start_time").toString(), QStringLiteral("yyyy-MM-dd HH:mm:ss"));
     }
     if (!session.endTime.isValid()) {

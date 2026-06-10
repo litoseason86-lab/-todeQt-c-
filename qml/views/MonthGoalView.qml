@@ -51,6 +51,7 @@ Item {
     }
 
     function firstOffset() {
+        // 月历按周一开头；JS getDay() 的周日为 0，需要映射到最后一列。
         var day = new Date(root.currentYear, root.currentMonth - 1, 1).getDay();
         return day === 0 ? 6 : day - 1;
     }
@@ -95,6 +96,7 @@ Item {
     function setMonth(year, month) {
         root.currentYear = year;
         root.currentMonth = month;
+        // 切到短月份时，避免 selectedDay 指向不存在的日期。
         root.selectedDay = Math.min(root.selectedDay, root.daysInMonth());
         root.refresh();
     }
@@ -329,6 +331,7 @@ Item {
 
             ColumnLayout {
                 objectName: "monthContentStack"
+                // 日历和详情上下排列，避免左右挤压导致日期单元格过窄。
                 Layout.fillWidth: true
                 Layout.leftMargin: 24
                 Layout.rightMargin: 24
@@ -390,6 +393,7 @@ Item {
                                 model: 42
 
                                 Rectangle {
+                                    // 固定 6 周网格，月份切换时日历高度不会跳动。
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
                                     Layout.minimumHeight: 58

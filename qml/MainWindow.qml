@@ -8,6 +8,7 @@ Item {
 
     property string currentView: "today"
     property string pendingView: "today"
+    // 淡入淡出期间只保留最后一次视图请求，避免动画队列堆积。
     property string queuedView: ""
     property bool isSwitching: false
 
@@ -31,6 +32,7 @@ Item {
         root.isSwitching = false;
 
         if (root.queuedView.length > 0 && root.queuedView !== root.currentView) {
+            // 当前切换完全结束后，再启动下一次切换。
             var nextView = root.queuedView;
             root.queuedView = "";
             root.switchToView(nextView);
@@ -146,6 +148,7 @@ Item {
                 }
 
                 ScriptAction {
+                    // 在透明度最低时切换页面，隐藏 StackLayout 的硬切。
                     script: root.currentView = root.pendingView
                 }
 

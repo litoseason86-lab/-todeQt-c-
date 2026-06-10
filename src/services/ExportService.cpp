@@ -56,6 +56,7 @@ QDate ExportService::normalizeDate(const QVariant& value) const
 
 QString ExportService::escapeCsvField(const QString& field) const
 {
+    // 按 CSV 的通用规则处理：只在必要时加引号，并把内部引号写成两个引号。
     if (!field.contains(QLatin1Char(',')) && !field.contains(QLatin1Char('"'))
         && !field.contains(QLatin1Char('\n')) && !field.contains(QLatin1Char('\r'))) {
         return field;
@@ -83,6 +84,7 @@ QString ExportService::formatDateTime(const QVariant& value) const
 
 QString ExportService::categoryExpression() const
 {
+    // category_id 出现前创建的记录，导出时仍要显示旧文本科目。
     return QStringLiteral("COALESCE(NULLIF(c.name, ''), NULLIF(t.category, ''), '未分类')");
 }
 
@@ -156,6 +158,7 @@ bool ExportService::exportTasksToFile(const QDate& startDate,
         "FROM tasks t "
         "LEFT JOIN categories c ON t.category_id = c.id "
         "WHERE t.date >= :startDate AND t.date <= :endDate");
+    // 先统计总数，让 UI 可以显示确定进度，而不是只能显示加载状态。
     const int total = countRows(fromAndWhere, startDate, endDate);
 
     QSqlQuery query(db);
@@ -232,6 +235,7 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
         "LEFT JOIN tasks t ON f.task_id = t.id "
         "LEFT JOIN categories c ON t.category_id = c.id "
         "WHERE date(f.start_time) >= :startDate AND date(f.start_time) <= :endDate");
+    // 先统计总数，让 UI 可以显示确定进度，而不是只能显示加载状态。
     const int total = countRows(fromAndWhere, startDate, endDate);
 
     QSqlQuery query(db);
@@ -289,6 +293,7 @@ bool ExportService::exportAll(const QVariant& startDateValue,
     const QString tasksPath = dir.filePath(generateFileName(QStringLiteral("tasks"), startDate, endDate));
     const QString sessionsPath = dir.filePath(generateFileName(QStringLiteral("focus_sessions"), startDate, endDate));
 
+    // 批量导出时压制单文件成功信号，只在最后发一次总完成消息。
     if (!exportTasksToFile(startDate, endDate, tasksPath, false)) {
         return false;
     }
@@ -312,6 +317,7 @@ bool ExportService::finishCsvFile(QFile& file,
         return false;
     }
 
+    // close 时仍可能发现之前没暴露的写入错误，所以 flush 和 close 分开检查。
     if (!file.flush()) {
         const QString error = file.errorString();
         file.close();

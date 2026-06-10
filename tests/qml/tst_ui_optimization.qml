@@ -168,6 +168,7 @@ TestCase {
 
         var deletedTaskId = -1;
         var deletedTaskTitle = "";
+        // 不点真实数据库，只验证 TaskItem 会把正确的任务信息发出来。
         taskItem.deleteClicked.connect(function (taskId, title) {
             deletedTaskId = taskId;
             deletedTaskTitle = title;

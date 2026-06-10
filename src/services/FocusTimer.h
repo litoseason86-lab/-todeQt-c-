@@ -16,6 +16,7 @@ class FocusTimer : public QObject
 public:
     static FocusTimer* instance();
 
+    // 一个专注会话绑定一个任务；暂停只停止计时，stopFocus 才会写入数据库。
     Q_INVOKABLE bool startFocus(int taskId, const QString& taskTitle);
     Q_INVOKABLE void pauseFocus();
     Q_INVOKABLE bool resumeFocus();
@@ -35,9 +36,11 @@ signals:
 private:
     explicit FocusTimer(QObject* parent = nullptr);
 
+    // 保存失败时调用方会保留当前会话状态，避免用户误以为记录已经落库。
     bool saveFocusSession(int durationSeconds);
     void resetSession();
 
+    // m_elapsedSeconds 存真实累计秒数，暂停时间不会计入专注时长。
     QTimer m_timer;
     int m_currentTaskId = -1;
     QString m_currentTaskTitle;

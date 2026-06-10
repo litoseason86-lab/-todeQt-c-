@@ -127,6 +127,7 @@ TestCase {
         var inactiveItem = sidebarItemForMarker("月");
 
         verify(inactiveItem !== null);
+        // QtTest 在 macOS 上不稳定触发真实 hover，这里直接验证组件内部悬停状态。
         inactiveItem.setPointerInside(true);
         tryCompare(inactiveItem, "visualHovered", true, 500);
         wait(1200);

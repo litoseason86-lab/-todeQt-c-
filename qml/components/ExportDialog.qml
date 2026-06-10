@@ -82,6 +82,7 @@ Popup {
     }
 
     function mondayOf(value) {
+        // JS 的 getDay() 周日为 0，这里转换成以周一为起点。
         var date = new Date(value)
         var day = date.getDay()
         var diff = day === 0 ? -6 : 1 - day
@@ -155,6 +156,7 @@ Popup {
     }
 
     function localPath(urlValue) {
+        // FileDialog 返回 URL，服务层需要真实本地路径。
         var value = String(urlValue)
         return value.startsWith("file://") ? decodeURIComponent(value.substring(7)) : value
     }

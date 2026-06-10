@@ -6,6 +6,7 @@
 namespace {
 QVariant valueByName(const QSqlQuery& query, const char* name)
 {
+    // 共享查询的列会演进；按列名读取可以避免列顺序变化破坏映射。
     const int index = query.record().indexOf(QLatin1String(name));
     return index >= 0 ? query.value(index) : QVariant();
 }
@@ -30,6 +31,7 @@ Task Task::fromQuery(const QSqlQuery& query)
         task.createdAt = QDateTime::fromString(valueByName(query, "created_at").toString(), QStringLiteral("yyyy-MM-dd HH:mm:ss"));
     }
     if (task.categoryName.isEmpty()) {
+        // 旧数据库可能只有 tasks.category，需要映射到新的 categoryName。
         task.categoryName = task.category;
     }
     if (task.category.isEmpty()) {
@@ -55,6 +57,7 @@ QVariantMap Task::toVariantMap() const
         categoryMap.insert(QStringLiteral("color"), categoryColor);
     }
     map.insert(QStringLiteral("category"), categoryMap);
+    // 保留 categoryData，兼容早于标准化 category 对象的 QML 视图和测试。
     map.insert(QStringLiteral("categoryData"), categoryMap);
     map.insert(QStringLiteral("date"), date);
     map.insert(QStringLiteral("completed"), completed);

@@ -65,6 +65,7 @@ Item {
     }
 
     function totalDurationValue(seconds) {
+        // 小于一小时显示分钟/秒；超过一小时后切成小数小时，卡片不会过宽。
         var safe = Math.max(0, Math.floor(Number(seconds || 0)))
         if (safe < 3600) {
             return root.formatDuration(safe)
@@ -101,6 +102,7 @@ Item {
     }
 
     function barData() {
+        // 图表组件以小时为单位绘制柱高，但标签仍显示人类可读时长。
         var result = []
         for (var i = 0; i < root.weekStats.length; i++) {
             var duration = Number(root.weekStats[i].duration || 0)
@@ -125,6 +127,7 @@ Item {
     }
 
     function pieData() {
+        // 饼图只关心数值和颜色，服务层返回的秒数在这里格式化成显示文案。
         var categories = root.categoryStats.categories || []
         var result = []
         for (var i = 0; i < categories.length; i++) {

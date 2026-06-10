@@ -34,6 +34,7 @@ Item {
     }
 
     function mondayOf(value) {
+        // 周计划固定以周一为起点，避免系统区域设置影响列顺序。
         var date = new Date(value)
         var day = date.getDay()
         var diff = day === 0 ? -6 : 1 - day
@@ -53,6 +54,7 @@ Item {
     }
 
     function tasksForDay(index) {
+        // weekTasks 一次性加载，按列在前端过滤，避免每个日期重复查库。
         var target = root.isoDate(root.dayDate(index))
         var result = []
         for (var i = 0; i < root.weekTasks.length; i++) {

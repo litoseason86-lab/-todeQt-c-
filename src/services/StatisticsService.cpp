@@ -12,6 +12,7 @@
 namespace {
 QDate normalizeDate(const QVariant& value)
 {
+    // 公共 API 兼容 QML Date、ISO 字符串和 C++ QDate 调用。
     if (value.canConvert<QDate>()) {
         const QDate date = value.toDate();
         if (date.isValid()) {
@@ -111,6 +112,7 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
         return emptyCategoryStats();
     }
 
+    // 优先使用标准化科目，其次使用迁移出的旧科目，最后回退到任务旧文本。
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "SELECT "
@@ -148,6 +150,7 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
         totalDuration += duration;
     }
 
+    // 百分比依赖总时长，必须等所有行累计完之后再计算。
     for (int index = 0; index < categories.size(); ++index) {
         QVariantMap category = categories.at(index).toMap();
         const int duration = category.value(QStringLiteral("duration")).toInt();

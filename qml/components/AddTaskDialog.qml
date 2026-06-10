@@ -69,6 +69,7 @@ Popup {
     property string heading: "添加新任务"
     property var categoryManagerRef: null
     property var categories: []
+    // 第一个选项是特殊占位项，表示“不设置科目”，数据库里的 category_id 保持为空。
     property var categoryOptions: [
         {
             id: -1,
@@ -86,6 +87,7 @@ Popup {
     }
 
     function refreshCategories() {
+        // 打开时刷新，保证科目管理里的改动不用重启就能显示。
         if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
             root.categories = root.categoryManagerRef.getAllCategories();
         } else {
@@ -111,6 +113,7 @@ Popup {
             return;
         }
 
+        // 这里只传科目 id，由 TaskManager 写入数据库关联字段和兼容旧数据的文本字段。
         var categoryId = categoryComboBox.currentIndex >= 0 && categoryComboBox.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryComboBox.currentIndex].id || -1) : -1;
         root.taskAdded(title, root.selectedDate, categoryId);
         root.resetFields();
