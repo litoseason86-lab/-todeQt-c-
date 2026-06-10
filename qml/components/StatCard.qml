@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Layouts
 
 Rectangle {
@@ -11,15 +12,25 @@ Rectangle {
     property int animationDelay: 0
 
     function restartIntro() {
-        fadeInAnimation.restart()
+        fadeInAnimation.restart();
     }
 
     implicitWidth: 190
     implicitHeight: 104
-    radius: 6
-    color: "#faf6ee"
+    radius: 8
+    color: "#fffef9"
     border.color: "#e8dfc8"
     border.width: 1
+    layer.enabled: true
+    layer.effect: MultiEffect {
+        autoPaddingEnabled: true
+        shadowEnabled: true
+        shadowColor: "#000000"
+        shadowOpacity: 0.08
+        shadowBlur: 0.14
+        shadowHorizontalOffset: 0
+        shadowVerticalOffset: 2
+    }
     opacity: 0
 
     Component.onCompleted: fadeInAnimation.start()
@@ -27,8 +38,12 @@ Rectangle {
     SequentialAnimation {
         id: fadeInAnimation
 
-        ScriptAction { script: root.opacity = 0 }
-        PauseAnimation { duration: root.animationDelay }
+        ScriptAction {
+            script: root.opacity = 0
+        }
+        PauseAnimation {
+            duration: root.animationDelay
+        }
         OpacityAnimator {
             target: root
             from: 0
@@ -47,7 +62,7 @@ Rectangle {
             Layout.fillWidth: true
             text: root.title
             font.pixelSize: 13
-            font.bold: true
+            font.weight: Font.Bold
             color: "#8b7355"
             elide: Text.ElideRight
         }
@@ -62,7 +77,7 @@ Rectangle {
                 Layout.fillWidth: true
                 text: root.value
                 font.pixelSize: 28
-                font.bold: true
+                font.weight: Font.Bold
                 fontSizeMode: Text.HorizontalFit
                 minimumPixelSize: 18
                 color: "#5d4e37"

@@ -12,8 +12,8 @@ Rectangle {
     property var categoryManagerRef: null
     property var exportServiceRef: null
     signal itemClicked(string viewName)
-    signal categoryManagementRequested()
-    signal dataExportRequested()
+    signal categoryManagementRequested
+    signal dataExportRequested
 
     ColumnLayout {
         anchors.fill: parent
@@ -23,7 +23,7 @@ Rectangle {
         Text {
             text: "番茄Todo"
             font.pixelSize: 20
-            font.bold: true
+            font.weight: Font.Bold
             color: "#5d4e37"
             Layout.bottomMargin: 18
         }
@@ -31,7 +31,7 @@ Rectangle {
         Text {
             text: "时间视图"
             font.pixelSize: 12
-            font.bold: true
+            font.weight: Font.Bold
             color: "#8b7355"
             Layout.bottomMargin: 6
         }
@@ -56,6 +56,7 @@ Rectangle {
             color: "#e8dfc8"
             Layout.topMargin: 16
             Layout.bottomMargin: 16
+            opacity: 0.8
         }
 
         SidebarItem {
@@ -100,7 +101,9 @@ Rectangle {
         Text {
             text: "三阶段"
             font.pixelSize: 12
+            font.weight: Font.Normal
             color: "#a0896b"
+            opacity: 0.7
         }
     }
 
@@ -110,18 +113,34 @@ Rectangle {
         property string text: ""
         property string marker: ""
         property bool isActive: false
-        signal clicked()
+        signal clicked
 
         Layout.fillWidth: true
         Layout.preferredHeight: 44
         radius: 6
         color: item.isActive ? "#f0e6d2" : (mouseArea.containsMouse && item.enabled ? "#faf6ee" : "transparent")
+        border.color: item.isActive ? "#d4a574" : "transparent"
+        border.width: item.isActive ? 1 : 0
         opacity: item.enabled ? 1.0 : 0.55
 
         Behavior on color {
             ColorAnimation {
                 duration: 150
-                easing.type: Easing.InOutQuad
+                easing.type: Easing.OutQuad
+            }
+        }
+
+        Behavior on border.color {
+            ColorAnimation {
+                duration: 150
+                easing.type: Easing.OutQuad
+            }
+        }
+
+        Behavior on border.width {
+            NumberAnimation {
+                duration: 150
+                easing.type: Easing.OutQuad
             }
         }
 
@@ -137,12 +156,26 @@ Rectangle {
                 radius: 4
                 color: item.isActive ? "#d4a574" : "#e8dfc8"
 
+                Behavior on color {
+                    ColorAnimation {
+                        duration: 180
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
                 Text {
                     anchors.centerIn: parent
                     text: item.marker
                     font.pixelSize: 12
-                    font.bold: true
+                    font.weight: Font.Bold
                     color: item.isActive ? "#fffef9" : "#8b7355"
+
+                    Behavior on color {
+                        ColorAnimation {
+                            duration: 180
+                            easing.type: Easing.OutQuad
+                        }
+                    }
                 }
             }
 
@@ -150,6 +183,7 @@ Rectangle {
                 Layout.fillWidth: true
                 text: item.text
                 font.pixelSize: 14
+                font.weight: item.isActive ? Font.Medium : Font.Normal
                 color: item.isActive ? "#5d4e37" : "#8b7355"
                 elide: Text.ElideRight
             }
