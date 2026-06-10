@@ -15,8 +15,10 @@
 **修改的文件：**
 - `qml/components/TaskItem.qml` - 任务条目组件优化
 - `qml/components/AddTaskDialog.qml` - 添加任务对话框优化
+- `qml/components/Sidebar.qml` - 侧边栏导航组件优化
 - `qml/views/TodayTaskView.qml` - 今日任务视图优化
 - `qml/views/MonthGoalView.qml` - 月度目标视图优化
+- `qml/MainWindow.qml` - 主窗口视图切换优化
 
 **设计系统参考：**
 - 颜色：#fffef9 (primary bg), #faf8f3 (secondary bg), #d4a574 (border), #6d5e47 (text)
@@ -1142,6 +1144,342 @@ git commit -m "refactor: optimize MonthGoalView calendar and interactions
 
 ---
 
+## Task 5: Sidebar组件优化
+
+**Files:**
+- Modify: `qml/components/Sidebar.qml`
+
+**优化内容：**
+1. 统一字体粗细定义（Font.Bold替代font.bold）
+2. 优化侧边栏项悬停效果
+3. 增强激活状态视觉反馈
+4. 优化分隔线样式
+
+- [ ] **Step 1: 统一字体粗细定义**
+
+将所有font.bold: true替换为font.weight: Font.Bold：
+
+```qml
+// 应用标题
+Text {
+    text: "番茄Todo"
+    font.pixelSize: 20
+    font.weight: Font.Bold  // 从 font.bold: true 改为 Font.Bold
+    color: "#5d4e37"
+    Layout.bottomMargin: 18
+}
+
+// 分组标题
+Text {
+    text: "时间视图"
+    font.pixelSize: 12
+    font.weight: Font.Bold  // 从 font.bold: true 改为 Font.Bold
+    color: "#8b7355"
+    Layout.bottomMargin: 6
+}
+```
+
+- [ ] **Step 2: 优化SidebarItem组件的字体定义**
+
+在SidebarItem组件中修改marker文本和主文本的字体定义：
+
+```qml
+component SidebarItem: Rectangle {
+    // ... 其他属性
+    
+    RowLayout {
+        anchors.fill: parent
+        anchors.leftMargin: 8
+        anchors.rightMargin: 8
+        spacing: 8
+        
+        Rectangle {
+            Layout.preferredWidth: 22
+            Layout.preferredHeight: 22
+            radius: 4
+            color: item.isActive ? "#d4a574" : "#e8dfc8"
+            
+            Behavior on color {
+                ColorAnimation { duration: 180; easing.type: Easing.OutQuad }
+            }
+            
+            Text {
+                anchors.centerIn: parent
+                text: item.marker
+                font.pixelSize: 12
+                font.weight: Font.Bold  // 从 font.bold: true 改为 Font.Bold
+                color: item.isActive ? "#fffef9" : "#8b7355"
+                
+                Behavior on color {
+                    ColorAnimation { duration: 180; easing.type: Easing.OutQuad }
+                }
+            }
+        }
+        
+        Text {
+            Layout.fillWidth: true
+            text: item.text
+            font.pixelSize: 14
+            font.weight: item.isActive ? Font.Medium : Font.Normal
+            color: item.isActive ? "#5d4e37" : "#8b7355"
+            elide: Text.ElideRight
+            
+            Behavior on color {
+                ColorAnimation { duration: 180; easing.type: Easing.OutQuad }
+            }
+        }
+    }
+}
+```
+
+- [ ] **Step 3: 增强SidebarItem悬停效果**
+
+优化悬停时的背景过渡和边框效果：
+
+```qml
+component SidebarItem: Rectangle {
+    id: item
+    
+    property string text: ""
+    property string marker: ""
+    property bool isActive: false
+    signal clicked()
+    
+    Layout.fillWidth: true
+    Layout.preferredHeight: 44
+    radius: 6
+    color: {
+        if (item.isActive) return "#f0e6d2"
+        if (mouseArea.containsMouse && item.enabled) return "#faf6ee"
+        return "transparent"
+    }
+    border.color: item.isActive ? "#d4a574" : "transparent"
+    border.width: item.isActive ? 1 : 0
+    opacity: item.enabled ? 1.0 : 0.55
+    
+    Behavior on color {
+        ColorAnimation { duration: 150; easing.type: Easing.OutQuad }
+    }
+    Behavior on border.color {
+        ColorAnimation { duration: 150; easing.type: Easing.OutQuad }
+    }
+    Behavior on border.width {
+        NumberAnimation { duration: 150; easing.type: Easing.OutQuad }
+    }
+    
+    // ... RowLayout内容
+    
+    MouseArea {
+        id: mouseArea
+        anchors.fill: parent
+        hoverEnabled: true
+        enabled: item.enabled
+        cursorShape: Qt.PointingHandCursor
+        onClicked: item.clicked()
+    }
+}
+```
+
+- [ ] **Step 4: 优化分隔线样式**
+
+增强分隔线的视觉效果：
+
+```qml
+Rectangle {
+    Layout.fillWidth: true
+    Layout.preferredHeight: 1
+    color: "#e8dfc8"
+    Layout.topMargin: 16
+    Layout.bottomMargin: 16
+    opacity: 0.8
+}
+```
+
+- [ ] **Step 5: 优化版本号文本样式**
+
+调整底部版本号的字体和颜色：
+
+```qml
+Text {
+    text: "三阶段"
+    font.pixelSize: 12
+    font.weight: Font.Normal
+    color: "#a0896b"
+    opacity: 0.7
+}
+```
+
+- [ ] **Step 6: 验证侧边栏效果**
+
+启动应用并验证Sidebar的以下效果：
+1. 所有字体使用Font.Bold而非font.bold: true
+2. 侧边栏项悬停时背景变为#faf6ee
+3. 激活项背景为#f0e6d2，有#d4a574边框
+4. marker图标在激活时背景为#d4a574，文字为#fffef9
+5. 所有过渡动画使用150-180ms
+6. 分隔线显示正常，透明度0.8
+
+- [ ] **Step 7: 提交更改**
+
+```bash
+git add qml/components/Sidebar.qml
+git commit -m "refactor: optimize Sidebar visual effects and font definitions
+
+- Unify font weight definitions using Font.Bold/Font.Medium/Font.Normal
+- Enhance SidebarItem hover effects with background transitions
+- Add border to active items with #d4a574 color
+- Optimize marker icon color transitions
+- Improve divider line opacity and spacing
+- All transitions use consistent 150-180ms timing"
+```
+
+---
+
+## Task 6: MainWindow视图切换优化
+
+**Files:**
+- Modify: `qml/MainWindow.qml`
+
+**优化内容：**
+1. 优化视图切换动画
+2. 调整分隔线样式
+3. 确保背景颜色一致性
+
+- [ ] **Step 1: 优化视图切换动画时长**
+
+将视图切换动画从150ms调整为更流畅的时长：
+
+```qml
+SequentialAnimation {
+    id: viewFade
+    
+    OpacityAnimator {
+        target: stackLayout
+        from: 1.0
+        to: 0.85  // 从0.72调整为0.85，减少闪烁感
+        duration: 180  // 从150ms增加到180ms
+        easing.type: Easing.OutQuad
+    }
+    
+    ScriptAction {
+        script: root.currentView = root.pendingView
+    }
+    
+    OpacityAnimator {
+        target: stackLayout
+        from: 0.85
+        to: 1.0
+        duration: 180  // 从150ms增加到180ms
+        easing.type: Easing.OutQuad
+    }
+}
+```
+
+- [ ] **Step 2: 优化分隔线样式**
+
+调整侧边栏和主内容区之间的分隔线：
+
+```qml
+Rectangle {
+    Layout.preferredWidth: 1
+    Layout.fillHeight: true
+    color: "#e8dfc8"
+    opacity: 0.8
+}
+```
+
+- [ ] **Step 3: 确保主内容区背景颜色**
+
+确认主内容区使用正确的背景色：
+
+```qml
+Rectangle {
+    Layout.fillWidth: true
+    Layout.fillHeight: true
+    color: "#fffef9"  // 确保使用主背景色
+    
+    StackLayout {
+        id: stackLayout
+        anchors.fill: parent
+        currentIndex: root.viewIndex(root.currentView)
+        
+        // ... 视图组件
+    }
+}
+```
+
+- [ ] **Step 4: 添加视图切换防抖**
+
+优化switchToView函数，避免快速切换：
+
+```qml
+property string currentView: "today"
+property string pendingView: "today"
+property bool isSwitching: false
+
+function switchToView(viewName) {
+    if (root.currentView === viewName || root.isSwitching) {
+        return
+    }
+    
+    root.isSwitching = true
+    root.pendingView = viewName
+    viewFade.restart()
+}
+
+SequentialAnimation {
+    id: viewFade
+    
+    OpacityAnimator {
+        target: stackLayout
+        from: 1.0
+        to: 0.85
+        duration: 180
+        easing.type: Easing.OutQuad
+    }
+    
+    ScriptAction {
+        script: root.currentView = root.pendingView
+    }
+    
+    OpacityAnimator {
+        target: stackLayout
+        from: 0.85
+        to: 1.0
+        duration: 180
+        easing.type: Easing.OutQuad
+    }
+    
+    ScriptAction {
+        script: root.isSwitching = false
+    }
+}
+```
+
+- [ ] **Step 5: 验证视图切换效果**
+
+启动应用并验证MainWindow的以下效果：
+1. 视图切换动画时长为180ms
+2. 切换时透明度从1.0→0.85→1.0，过渡流畅
+3. 快速点击不会触发多次切换
+4. 分隔线颜色为#e8dfc8，透明度0.8
+5. 主内容区背景色为#fffef9
+
+- [ ] **Step 6: 提交更改**
+
+```bash
+git add qml/MainWindow.qml
+git commit -m "refactor: optimize MainWindow view switching animations
+
+- Adjust fade animation duration from 150ms to 180ms
+- Change opacity range from 0.72 to 0.85 for smoother transitions
+- Add debounce to prevent rapid view switching
+- Optimize divider line opacity
+- Ensure consistent background colors"
+```
+
+---
+
 ## 自检清单
 
 ### 1. 规格覆盖检查
@@ -1149,9 +1487,10 @@ git commit -m "refactor: optimize MonthGoalView calendar and interactions
 对照设计文档 `docs/superpowers/specs/2026-06-10-ui-optimization.md` 的各项要求：
 
 ✅ **基础视觉层优化**
-- Task 1-4: 所有组件添加DropShadow替换ShaderEffect
+- Task 1-4: 所有核心组件添加DropShadow替换ShaderEffect
 - Task 3-4: 统一圆角使用（6px, 8px）
-- Task 1-4: 统一字体层次（Font.Bold, Font.Medium, Font.Normal）
+- Task 1-6: 统一字体层次（Font.Bold, Font.Medium, Font.Normal）
+- Task 5: Sidebar字体定义统一
 
 ✅ **交互反馈层优化**
 - Task 1: CheckBox悬停效果（边框颜色、宽度过渡）
@@ -1159,26 +1498,33 @@ git commit -m "refactor: optimize MonthGoalView calendar and interactions
 - Task 2: TextField焦点环效果
 - Task 2: ComboBox悬停和展开状态
 - Task 4: 日历单元格悬停效果
+- Task 5: Sidebar项悬停和激活状态
+- Task 6: 视图切换动画优化
 
 ✅ **色彩层次层优化**
 - Task 1: 完成任务文本颜色#8b7355，透明度0.70
 - Task 3: 描述文本颜色调整为#6d5e47
 - Task 4: 非当月日期文本#b8a998
+- Task 5: Sidebar激活项颜色#f0e6d2
 
 ✅ **核心组件优化**
 - Task 1: TaskItem完整优化（阴影、交互、颜色）
 - Task 2: AddTaskDialog完整优化（动画、焦点、按钮）
 - Task 3: TodayTaskView完整优化（统计卡、按钮、空状态）
 - Task 4: MonthGoalView完整优化（日历、导航、详情面板）
+- Task 5: Sidebar完整优化（字体、悬停、激活状态）
+- Task 6: MainWindow视图切换优化（动画、防抖）
 
 ✅ **动画时长统一**
 - 所有过渡动画使用150-220ms
 - 使用Easing.OutQuad和Easing.OutCubic
+- Task 6: 视图切换使用180ms
 
 ✅ **技术实现**
 - 使用Qt5Compat.GraphicalEffects的DropShadow
 - 使用Behavior进行属性动画
 - 遵循三级阴影系统（samples 8/16/32）
+- Task 6: 添加视图切换防抖机制
 
 ### 2. 占位符扫描
 
@@ -1279,14 +1625,16 @@ git commit -m "refactor: optimize MonthGoalView calendar and interactions
 
 ## 总结
 
-本实施计划包含 **4个主要任务**，涵盖：
+本实施计划包含 **6个主要任务**，涵盖：
 
 - **Task 1**: TaskItem组件优化（7步）
 - **Task 2**: AddTaskDialog组件优化（8步）
 - **Task 3**: TodayTaskView优化（8步）
 - **Task 4**: MonthGoalView优化（10步）
+- **Task 5**: Sidebar组件优化（7步）
+- **Task 6**: MainWindow视图切换优化（6步）
 
-**总计：33个具体执行步骤**
+**总计：46个具体执行步骤**
 
 每个步骤都包含：
 - ✅ 完整的代码示例
@@ -1295,3 +1643,24 @@ git commit -m "refactor: optimize MonthGoalView calendar and interactions
 - ✅ 清晰的提交信息
 
 所有优化遵循统一的设计系统，确保视觉一致性和交互流畅性。
+
+### 优化范围覆盖
+
+**组件层面**：
+- ✅ TaskItem - 任务条目核心组件
+- ✅ AddTaskDialog - 添加任务对话框
+- ✅ TodayTaskView - 今日任务视图
+- ✅ MonthGoalView - 月度目标视图
+- ✅ Sidebar - 侧边栏导航
+- ✅ MainWindow - 主窗口视图切换
+
+**设计层面**：
+- ✅ 基础视觉层 - 字体、间距、圆角、阴影
+- ✅ 交互反馈层 - 悬停、按下、焦点、激活状态
+- ✅ 色彩层次层 - 文本颜色、背景颜色、视觉层级
+
+**技术层面**：
+- ✅ 替换ShaderEffect为DropShadow
+- ✅ 统一动画时长和缓动曲线
+- ✅ 建立完整的设计token系统
+- ✅ 确保WCAG对比度标准
