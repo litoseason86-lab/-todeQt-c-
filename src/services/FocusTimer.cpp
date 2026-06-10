@@ -1,11 +1,16 @@
 #include "FocusTimer.h"
 
 #include "DatabaseManager.h"
+#include "TaskManager.h"
 
 #include <QDebug>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+
+namespace {
+constexpr int kAutoCompleteThresholdSeconds = 5 * 60;
+}
 
 FocusTimer::FocusTimer(QObject* parent)
     : QObject(parent)
@@ -121,6 +126,15 @@ bool FocusTimer::stopFocus()
             m_timer.start();
         }
         return false;
+    }
+
+    if (duration >= kAutoCompleteThresholdSeconds) {
+        // 一次有效专注代表任务已经被实际推进；达到 5 分钟后自动把任务标记完成。
+        if (!TaskManager::instance()->setTaskCompleted(m_currentTaskId, true)) {
+            qWarning() << "Failed to auto-complete task after focus session"
+                       << "taskId=" << m_currentTaskId
+                       << "duration=" << duration;
+        }
     }
 
     resetSession();

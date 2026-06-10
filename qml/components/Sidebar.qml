@@ -1,13 +1,13 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
-import QtQuick.Effects
 
 Rectangle {
     id: root
 
     width: 208
-    color: "#faf8f3"
+    readonly property color sidebarBackgroundColor: "#faf8f3"
+    color: root.sidebarBackgroundColor
 
     property string currentView: "today"
     property var categoryManagerRef: null
@@ -134,38 +134,30 @@ Rectangle {
         Layout.fillWidth: true
         Layout.preferredHeight: 44
         radius: 6
-        color: item.isActive ? "#f0e6d2" : (item.visualHovered ? "#faf6ee" : "transparent")
-        border.color: item.isActive ? "#d4a574" : (item.visualHovered ? "#e8dfc8" : "transparent")
+        color: item.isActive ? "#f0e6d2" : (item.visualHovered ? "#faf6ee" : root.sidebarBackgroundColor)
+        border.color: item.isActive ? "#d4a574" : (item.visualHovered ? "#e8dfc8" : root.sidebarBackgroundColor)
         border.width: item.isActive || item.visualHovered ? 1 : 0
         opacity: item.enabled ? 1.0 : 0.55
-        layer.enabled: item.isActive || item.visualHovered
-        layer.effect: MultiEffect {
-            autoPaddingEnabled: true
-            shadowEnabled: true
-            shadowColor: "#000000"
-            shadowOpacity: item.isActive ? 0.10 : 0.08
-            shadowBlur: item.isActive ? 0.16 : 0.12
-            shadowHorizontalOffset: 0
-            shadowVerticalOffset: 2
-        }
+        // 侧边栏只用颜色和边框反馈，避免悬浮或选中时先出现阴影造成顿挫。
+        layer.enabled: false
 
         Behavior on color {
             ColorAnimation {
-                duration: 150
+                duration: 70
                 easing.type: Easing.OutQuad
             }
         }
 
         Behavior on border.color {
             ColorAnimation {
-                duration: 150
+                duration: 70
                 easing.type: Easing.OutQuad
             }
         }
 
         Behavior on border.width {
             NumberAnimation {
-                duration: 150
+                duration: 70
                 easing.type: Easing.OutQuad
             }
         }
@@ -191,7 +183,7 @@ Rectangle {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: 180
+                        duration: 70
                         easing.type: Easing.OutQuad
                     }
                 }
@@ -205,7 +197,7 @@ Rectangle {
 
                     Behavior on color {
                         ColorAnimation {
-                            duration: 180
+                            duration: 70
                             easing.type: Easing.OutQuad
                         }
                     }

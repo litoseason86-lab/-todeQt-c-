@@ -142,13 +142,13 @@ TestCase {
         verify(fadeIn !== null);
 
         compare(fadeOut.from, 1.0);
-        compare(fadeOut.to, 0.85);
-        compare(fadeOut.duration, 180);
+        compare(fadeOut.to, 0.96);
+        compare(fadeOut.duration, 70);
         compare(fadeOut.easing.type, Easing.OutQuad);
 
-        compare(fadeIn.from, 0.85);
+        compare(fadeIn.from, 0.96);
         compare(fadeIn.to, 1.0);
-        compare(fadeIn.duration, 180);
+        compare(fadeIn.duration, 70);
         compare(fadeIn.easing.type, Easing.OutQuad);
     }
 

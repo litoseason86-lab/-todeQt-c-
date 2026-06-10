@@ -87,8 +87,7 @@ TestCase {
         compare(activeItem.radius, 6);
         compare(activeItem.height, 44);
         compare(activeItem.opacity, 1.0);
-        compare(activeItem.layer.enabled, true);
-        verify(activeItem.layer.effect !== null);
+        compare(activeItem.layer.enabled, false);
 
         compare(markerContainer.width, 22);
         compare(markerContainer.height, 22);
@@ -112,8 +111,8 @@ TestCase {
 
         verify(inactiveItem !== null);
         verify(markerContainer !== null);
-        verify(Qt.colorEqual(inactiveItem.color, "transparent"));
-        verify(Qt.colorEqual(inactiveItem.border.color, "transparent"));
+        verify(Qt.colorEqual(inactiveItem.color, "#faf8f3"));
+        verify(Qt.colorEqual(inactiveItem.border.color, "#faf8f3"));
         compare(inactiveItem.border.width, 0);
         compare(inactiveItem.layer.enabled, false);
         verify(Qt.colorEqual(markerContainer.color, "#e8dfc8"));
@@ -123,7 +122,7 @@ TestCase {
         verify(Qt.colorEqual(mainText.color, "#8b7355"));
     }
 
-    function test_hoverSidebarItemKeepsShadowWhilePointerStaysInside() {
+    function test_hoverSidebarItemRespondsWithoutShadowWhilePointerStaysInside() {
         var inactiveItem = sidebarItemForMarker("月");
 
         verify(inactiveItem !== null);
@@ -133,8 +132,22 @@ TestCase {
         wait(1200);
 
         verify(Qt.colorEqual(inactiveItem.color, "#faf6ee"));
-        compare(inactiveItem.layer.enabled, true);
-        verify(inactiveItem.layer.effect !== null);
+        compare(inactiveItem.layer.enabled, false);
+    }
+
+    function test_hoverExitReturnsToBackgroundColorWithoutTransparentTarget() {
+        var inactiveItem = sidebarItemForMarker("数");
+
+        verify(inactiveItem !== null);
+        inactiveItem.setPointerInside(true);
+        tryCompare(inactiveItem, "visualHovered", true, 500);
+        inactiveItem.setPointerInside(false);
+        tryCompare(inactiveItem, "visualHovered", false, 500);
+        wait(1200);
+
+        verify(Qt.colorEqual(inactiveItem.color, "#faf8f3"));
+        verify(Qt.colorEqual(inactiveItem.border.color, "#faf8f3"));
+        compare(inactiveItem.border.width, 0);
     }
 
     function test_dividerAndVersionStyles() {

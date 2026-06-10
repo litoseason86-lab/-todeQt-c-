@@ -12,7 +12,9 @@
 #include "../src/services/CategoryManager.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/ExportService.h"
+#define private public
 #include "../src/services/FocusTimer.h"
+#undef private
 #include "../src/services/StatisticsService.h"
 #include "../src/services/TaskManager.h"
 
@@ -255,6 +257,8 @@ private slots:
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
     void exportFocusSessionsAndExportAllWriteExpectedCsvFiles();
     void exportRejectsInvalidDateRangeAndUnwritablePath();
+    void stopFocusCompletesTaskAfterFiveMinutes();
+    void stopFocusUnderFiveMinutesKeepsTaskPending();
 
 private:
     QTemporaryDir* m_tempDir = nullptr;
@@ -853,6 +857,37 @@ void ServiceTests::exportRejectsInvalidDateRangeAndUnwritablePath()
     QCOMPARE(unwritablePathSpy.count(), 1);
     QCOMPARE(unwritablePathSpy.takeFirst().at(0).toBool(), false);
     QVERIFY(!QFile::exists(unwritablePath));
+}
+
+void ServiceTests::stopFocusCompletesTaskAfterFiveMinutes()
+{
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("五分钟任务"), QDate::currentDate(), QString()));
+    const int taskId = TaskManager::instance()->getTodayTasks().first().toMap().value(QStringLiteral("id")).toInt();
+
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("五分钟任务")));
+    // 测试不应该真的等 5 分钟；这里直接推进内部累计秒数，只验证停止专注后的业务结果。
+    FocusTimer::instance()->m_elapsedSeconds = 300;
+
+    QSignalSpy tasksChangedSpy(TaskManager::instance(), &TaskManager::tasksChanged);
+    QVERIFY(FocusTimer::instance()->stopFocus());
+
+    const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
+    QCOMPARE(task.value(QStringLiteral("completed")).toBool(), true);
+    QVERIFY(tasksChangedSpy.count() >= 1);
+}
+
+void ServiceTests::stopFocusUnderFiveMinutesKeepsTaskPending()
+{
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("未满五分钟任务"), QDate::currentDate(), QString()));
+    const int taskId = TaskManager::instance()->getTodayTasks().first().toMap().value(QStringLiteral("id")).toInt();
+
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("未满五分钟任务")));
+    FocusTimer::instance()->m_elapsedSeconds = 299;
+
+    QVERIFY(FocusTimer::instance()->stopFocus());
+
+    const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
+    QCOMPARE(task.value(QStringLiteral("completed")).toBool(), false);
 }
 
 QTEST_MAIN(ServiceTests)

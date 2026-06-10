@@ -152,8 +152,8 @@ Item {
                     objectName: "viewFadeOut"
                     target: stackLayout
                     from: 1.0
-                    to: 0.85
-                    duration: 180
+                    to: 0.96
+                    duration: 70
                     easing.type: Easing.OutQuad
                 }
 
@@ -165,9 +165,9 @@ Item {
                 OpacityAnimator {
                     objectName: "viewFadeIn"
                     target: stackLayout
-                    from: 0.85
+                    from: 0.96
                     to: 1.0
-                    duration: 180
+                    duration: 70
                     easing.type: Easing.OutQuad
                 }
 
