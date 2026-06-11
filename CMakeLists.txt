@@ -55,6 +55,12 @@ set(APP_SOURCES
     resources/qml.qrc
 )
 
+set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app-icons/PomodoroTodo.icns")
+set_source_files_properties("${APP_ICON}" PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources"
+)
+list(APPEND APP_SOURCES "${APP_ICON}")
+
 add_executable(PomodoroTodo ${APP_SOURCES})
 
 option(POMODORO_TODO_ENABLE_QML_DEBUG "Enable QML debugging and profiling hooks" ON)
@@ -73,6 +79,11 @@ target_link_libraries(PomodoroTodo PRIVATE
 
 set_target_properties(PomodoroTodo PROPERTIES
     MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_ICON_FILE "PomodoroTodo.icns"
+    MACOSX_BUNDLE_BUNDLE_NAME "番茄Todo"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "com.zerionlito.pomodorotodo"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
+    MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     WIN32_EXECUTABLE TRUE
 )
 
