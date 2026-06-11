@@ -2,7 +2,9 @@
 #define STATISTICSSERVICE_H
 
 #include <QDate>
+#include <QList>
 #include <QObject>
+#include <QPair>
 #include <QVariant>
 #include <QVariantList>
 #include <QVariantMap>
@@ -18,6 +20,10 @@ public:
     Q_INVOKABLE QVariantMap getTodayStats() const;
     Q_INVOKABLE QVariantList getWeekStats() const;
     Q_INVOKABLE QVariantMap getCategoryStats(const QVariant& startDateValue, const QVariant& endDateValue) const;
+    Q_INVOKABLE QVariantMap getMonthStats() const;
+    Q_INVOKABLE int getEffectiveDays(const QDate& startDate, const QDate& endDate) const;
+    Q_INVOKABLE int getFocusSessionCount(const QDate& startDate, const QDate& endDate) const;
+    Q_INVOKABLE QVariantList getMonthWeeklySummary() const;
 
 private:
     explicit StatisticsService(QObject* parent = nullptr);
@@ -26,6 +32,8 @@ private:
     int calculateTotalDuration(const QDate& date) const;
     int countCompletedTasks(const QDate& date) const;
     int countTotalTasks(const QDate& date) const;
+    QList<QDate> getUniqueFocusDates(const QDate& startDate, const QDate& endDate) const;
+    QPair<QDate, QDate> getWeekRange(const QDate& mondayOfWeek) const;
 };
 
 #endif // STATISTICSSERVICE_H

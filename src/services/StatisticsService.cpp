@@ -51,6 +51,50 @@ QVariantMap emptyCategoryStats()
     result.insert(QStringLiteral("totalDuration"), 0);
     return result;
 }
+
+QVariantMap emptyMonthStats()
+{
+    QVariantMap result;
+    result.insert(QStringLiteral("totalDuration"), 0);
+    result.insert(QStringLiteral("effectiveDays"), 0);
+    result.insert(QStringLiteral("sessionCount"), 0);
+    result.insert(QStringLiteral("completedTasks"), 0);
+    result.insert(QStringLiteral("totalTasks"), 0);
+    return result;
+}
+
+int queryTotalDurationForRange(const QDate& startDate, const QDate& endDate, const QString& context)
+{
+    if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
+        qWarning() << "Failed to calculate total duration:" << context << "invalid date range";
+        return 0;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to calculate total duration:" << context << "database is not open";
+        return 0;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT COALESCE(SUM(duration), 0) FROM focus_sessions "
+        "WHERE date(start_time) >= :startDate "
+        "AND date(start_time) <= :endDate "
+        "AND end_time IS NOT NULL "
+        "AND duration IS NOT NULL "
+        "AND duration >= :minDuration"));
+    query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
+
+    if (!query.exec() || !query.next()) {
+        qWarning() << "Failed to calculate total duration:" << context << query.lastError().text();
+        return 0;
+    }
+
+    return query.value(0).toInt();
+}
 }
 
 StatisticsService::StatisticsService(QObject* parent)
@@ -126,6 +170,7 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
         "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
         "WHERE date(f.start_time) >= :startDate "
         "AND date(f.start_time) <= :endDate "
+        "AND f.end_time IS NOT NULL "
         "AND f.duration IS NOT NULL "
         "AND f.duration >= :minDuration "
         "AND trim(COALESCE(c.name, legacy.name, t.category, '')) != '' "
@@ -168,33 +213,122 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
     return result;
 }
 
+QVariantMap StatisticsService::getMonthStats() const
+{
+    const QDate today = QDate::currentDate();
+    const QDate firstDay(today.year(), today.month(), 1);
+    const QDate lastDay(today.year(), today.month(), today.daysInMonth());
+
+    QVariantMap result = emptyMonthStats();
+    result.insert(QStringLiteral("totalDuration"),
+                  queryTotalDurationForRange(firstDay, lastDay, QStringLiteral("month stats")));
+    result.insert(QStringLiteral("effectiveDays"), getEffectiveDays(firstDay, lastDay));
+    result.insert(QStringLiteral("sessionCount"), getFocusSessionCount(firstDay, lastDay));
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to get month stats: database is not open";
+        return result;
+    }
+
+    QSqlQuery query(db);
+    // 任务的业务日期是 tasks.date，不是创建时间；补录或跨天创建时必须按用户选择的日期归属统计。
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*) AS total, "
+        "COALESCE(SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END), 0) AS completed "
+        "FROM tasks "
+        "WHERE date >= :firstDay "
+        "AND date <= :lastDay"));
+    query.bindValue(QStringLiteral(":firstDay"), firstDay.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":lastDay"), lastDay.toString(Qt::ISODate));
+
+    if (!query.exec() || !query.next()) {
+        qWarning() << "Failed to get month task stats:" << query.lastError().text();
+        return result;
+    }
+
+    result.insert(QStringLiteral("totalTasks"), query.value(QStringLiteral("total")).toInt());
+    result.insert(QStringLiteral("completedTasks"), query.value(QStringLiteral("completed")).toInt());
+    return result;
+}
+
+int StatisticsService::getEffectiveDays(const QDate& startDate, const QDate& endDate) const
+{
+    return getUniqueFocusDates(startDate, endDate).size();
+}
+
+int StatisticsService::getFocusSessionCount(const QDate& startDate, const QDate& endDate) const
+{
+    if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
+        qWarning() << "Failed to count focus sessions: invalid date range";
+        return 0;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to count focus sessions: database is not open";
+        return 0;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*) FROM focus_sessions "
+        "WHERE date(start_time) >= :startDate "
+        "AND date(start_time) <= :endDate "
+        "AND end_time IS NOT NULL "
+        "AND duration IS NOT NULL "
+        "AND duration >= :minDuration"));
+    query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
+
+    if (!query.exec() || !query.next()) {
+        qWarning() << "Failed to count focus sessions:" << query.lastError().text();
+        return 0;
+    }
+
+    return query.value(0).toInt();
+}
+
+QVariantList StatisticsService::getMonthWeeklySummary() const
+{
+    QVariantList result;
+    const QDate today = QDate::currentDate();
+    const QDate firstDay(today.year(), today.month(), 1);
+    const QDate lastDay(today.year(), today.month(), today.daysInMonth());
+
+    QDate weekStart = firstDay;
+    int weekNumber = 1;
+    while (weekStart <= lastDay) {
+        const QDate naturalWeekStart = weekStart.addDays(1 - weekStart.dayOfWeek());
+        const QPair<QDate, QDate> naturalWeekRange = getWeekRange(naturalWeekStart);
+        QDate weekEnd = naturalWeekRange.second;
+        if (weekEnd > lastDay) {
+            weekEnd = lastDay;
+        }
+
+        QVariantMap week;
+        week.insert(QStringLiteral("label"), QStringLiteral("第%1周").arg(weekNumber));
+        week.insert(QStringLiteral("duration"),
+                    queryTotalDurationForRange(weekStart, weekEnd, QStringLiteral("month weekly summary")));
+        week.insert(QStringLiteral("startDate"), weekStart.toString(Qt::ISODate));
+        week.insert(QStringLiteral("endDate"), weekEnd.toString(Qt::ISODate));
+        result.append(week);
+
+        weekStart = weekEnd.addDays(1);
+        ++weekNumber;
+    }
+
+    return result;
+}
+
 int StatisticsService::calculateTotalDuration(const QDate& date) const
 {
     if (!date.isValid()) {
         return 0;
     }
 
-    QSqlDatabase db = DatabaseManager::instance()->database();
-    if (!db.isOpen()) {
-        qWarning() << "Failed to calculate total duration: database is not open";
-        return 0;
-    }
-
-    QSqlQuery query(db);
-    query.prepare(QStringLiteral(
-        "SELECT COALESCE(SUM(duration), 0) FROM focus_sessions "
-        "WHERE date(start_time) = :date "
-        "AND duration IS NOT NULL "
-        "AND duration >= :minDuration"));
-    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
-
-    if (!query.exec() || !query.next()) {
-        qWarning() << "Failed to calculate total duration:" << query.lastError().text();
-        return 0;
-    }
-
-    return query.value(0).toInt();
+    return queryTotalDurationForRange(date, date, QStringLiteral("single day"));
 }
 
 int StatisticsService::countCompletedTasks(const QDate& date) const
@@ -243,4 +377,52 @@ int StatisticsService::countTotalTasks(const QDate& date) const
     }
 
     return query.value(0).toInt();
+}
+
+QList<QDate> StatisticsService::getUniqueFocusDates(const QDate& startDate, const QDate& endDate) const
+{
+    QList<QDate> dates;
+    if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
+        qWarning() << "Failed to get unique focus dates: invalid date range";
+        return dates;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to get unique focus dates: database is not open";
+        return dates;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT DISTINCT date(start_time) AS focus_date "
+        "FROM focus_sessions "
+        "WHERE date(start_time) >= :startDate "
+        "AND date(start_time) <= :endDate "
+        "AND end_time IS NOT NULL "
+        "AND duration IS NOT NULL "
+        "AND duration >= :minDuration "
+        "ORDER BY focus_date ASC"));
+    query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to get unique focus dates:" << query.lastError().text();
+        return dates;
+    }
+
+    while (query.next()) {
+        const QDate date = QDate::fromString(query.value(0).toString(), Qt::ISODate);
+        if (date.isValid()) {
+            dates.append(date);
+        }
+    }
+
+    return dates;
+}
+
+QPair<QDate, QDate> StatisticsService::getWeekRange(const QDate& mondayOfWeek) const
+{
+    return qMakePair(mondayOfWeek, mondayOfWeek.addDays(6));
 }
