@@ -9,6 +9,58 @@ Item {
 
     property var todayStats: ({ totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0 })
     property string currentTimeRange: "today"
+    property var currentDateProvider: null
+    property date currentDateSnapshot: new Date()
+    // 三种时间范围各自保留选中状态，切换模式时再重置，避免日/周/月导航互相污染。
+    property date selectedDate: currentDateSnapshot
+    property date selectedWeekStart: mondayOf(currentDateSnapshot)
+    property int selectedYear: currentDateSnapshot.getFullYear()
+    property int selectedMonth: currentDateSnapshot.getMonth() + 1
+    readonly property bool isCurrentSelectedPeriod: !canGoForward
+    readonly property bool canGoForward: {
+        if (currentTimeRange === "today") {
+            var today = new Date(currentDateSnapshot)
+            today.setHours(0, 0, 0, 0)
+            var selected = new Date(selectedDate)
+            selected.setHours(0, 0, 0, 0)
+            return selected.getTime() < today.getTime()
+        }
+        if (currentTimeRange === "week") {
+            var currentMonday = mondayOf(currentDateSnapshot)
+            return selectedWeekStart.getTime() < currentMonday.getTime()
+        }
+
+        var now = new Date(currentDateSnapshot)
+        return selectedYear < now.getFullYear()
+                || (selectedYear === now.getFullYear() && selectedMonth < now.getMonth() + 1)
+    }
+    readonly property string timeRangeDisplayText: {
+        if (currentTimeRange === "today") {
+            var today = new Date(currentDateSnapshot)
+            today.setHours(0, 0, 0, 0)
+            var selected = new Date(selectedDate)
+            selected.setHours(0, 0, 0, 0)
+            if (selected.getTime() === today.getTime()) {
+                return "今天"
+            }
+            return (selectedDate.getMonth() + 1) + "月" + selectedDate.getDate() + "日"
+        }
+        if (currentTimeRange === "week") {
+            var currentMonday = mondayOf(currentDateSnapshot)
+            if (selectedWeekStart.getTime() === currentMonday.getTime()) {
+                return "本周"
+            }
+            var weekEnd = new Date(selectedWeekStart)
+            weekEnd.setDate(weekEnd.getDate() + 6)
+            return formatWeekRange(selectedWeekStart, weekEnd)
+        }
+
+        var current = new Date(currentDateSnapshot)
+        if (selectedYear === current.getFullYear() && selectedMonth === current.getMonth() + 1) {
+            return "本月"
+        }
+        return selectedYear + "年" + selectedMonth + "月"
+    }
     property var monthStats: ({ totalDuration: 0, effectiveDays: 0, sessionCount: 0, completedTasks: 0, totalTasks: 0 })
     property var monthWeeklySummary: []
     property var weekStats: []
@@ -17,6 +69,20 @@ Item {
     property string loadError: ""
     // 统计页跟今日任务、本周计划保持同一套内容边距，避免每个模块各自偏移导致边界不齐。
     readonly property int contentMargin: 24
+
+    onCurrentTimeRangeChanged: {
+        // 模式切换代表用户回到该模式的当前周期；箭头导航只改变对应模式自己的选中状态。
+        if (currentTimeRange === "today") {
+            selectedDate = new Date(currentDateSnapshot)
+        } else if (currentTimeRange === "week") {
+            selectedWeekStart = mondayOf(currentDateSnapshot)
+        } else if (currentTimeRange === "month") {
+            var now = new Date(currentDateSnapshot)
+            selectedYear = now.getFullYear()
+            selectedMonth = now.getMonth() + 1
+        }
+        refresh()
+    }
 
     Component.onCompleted: refresh()
 
@@ -99,6 +165,44 @@ Item {
         return date
     }
 
+    function formatWeekRange(start, end) {
+        return (start.getMonth() + 1) + "." + start.getDate()
+                + "-" + (end.getMonth() + 1) + "." + end.getDate()
+    }
+
+    function refreshCurrentDateSnapshot() {
+        var providedDate = root.currentDateProvider ? root.currentDateProvider() : new Date()
+        var normalizedDate = new Date(providedDate)
+        currentDateSnapshot = isNaN(normalizedDate.getTime()) ? new Date() : normalizedDate
+    }
+
+    function applyCurrentPeriodSelection() {
+        if (root.currentTimeRange === "today") {
+            root.selectedDate = new Date(root.currentDateSnapshot)
+        } else if (root.currentTimeRange === "week") {
+            root.selectedWeekStart = root.mondayOf(root.currentDateSnapshot)
+        } else if (root.currentTimeRange === "month") {
+            root.selectedYear = root.currentDateSnapshot.getFullYear()
+            root.selectedMonth = root.currentDateSnapshot.getMonth() + 1
+        }
+    }
+
+    function resetSelectedPeriodToCurrent() {
+        // 菜单项名称是“今日 / 本周 / 本月”，即使用户已经在同一模式的历史期，也必须回到当前期。
+        refreshCurrentDateSnapshot()
+        applyCurrentPeriodSelection()
+    }
+
+    function syncCurrentDateSnapshotForRefresh() {
+        // 应用长期打开跨午夜时，如果用户停在“当前期”，刷新应滚到新的今天/本周/本月；
+        // 如果用户主动查看历史期，则保留历史选择，只更新右箭头边界。
+        var shouldFollowCurrentPeriod = root.isCurrentSelectedPeriod
+        refreshCurrentDateSnapshot()
+        if (shouldFollowCurrentPeriod) {
+            applyCurrentPeriodSelection()
+        }
+    }
+
     function weekTotalDuration() {
         var total = 0
         for (var i = 0; i < root.weekStats.length; i++) {
@@ -166,12 +270,19 @@ Item {
     function refresh() {
         try {
             root.loadError = ""
-            var today = new Date()
+            root.syncCurrentDateSnapshotForRefresh()
 
-            if (root.currentTimeRange === "week") {
-                root.weekStats = statisticsService.getWeekStats()
-                var weekStart = root.mondayOf(today)
+            if (root.currentTimeRange === "today") {
+                var selectedDay = new Date(root.selectedDate)
+                root.todayStats = statisticsService.getDayStats(selectedDay)
+                root.weekStats = statisticsService.getWeekStats(root.mondayOf(selectedDay))
+                root.categoryStats = statisticsService.getCategoryStats(
+                            Qt.formatDate(selectedDay, "yyyy-MM-dd"),
+                            Qt.formatDate(selectedDay, "yyyy-MM-dd"))
+            } else if (root.currentTimeRange === "week") {
+                var weekStart = new Date(root.selectedWeekStart)
                 var weekEnd = root.endOfWeek(weekStart)
+                root.weekStats = statisticsService.getWeekStats(weekStart)
                 var weekTotal = root.weekTotalDuration()
 
                 // 多范围卡片复用 todayStats 这个绑定入口，避免 UI 层维护三套重复卡片状态。
@@ -187,8 +298,8 @@ Item {
                             Qt.formatDate(weekStart, "yyyy-MM-dd"),
                             Qt.formatDate(weekEnd, "yyyy-MM-dd"))
             } else if (root.currentTimeRange === "month") {
-                root.monthStats = statisticsService.getMonthStats()
-                root.monthWeeklySummary = statisticsService.getMonthWeeklySummary()
+                root.monthStats = statisticsService.getMonthStats(root.selectedYear, root.selectedMonth)
+                root.monthWeeklySummary = statisticsService.getMonthWeeklySummary(root.selectedYear, root.selectedMonth)
                 root.todayStats = {
                     effectiveDays: root.monthStats.effectiveDays || 0,
                     sessionCount: root.monthStats.sessionCount || 0,
@@ -198,20 +309,13 @@ Item {
                     completionRate: 0
                 }
 
-                var firstDay = new Date(today.getFullYear(), today.getMonth(), 1)
-                var lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0)
+                var firstDay = new Date(root.selectedYear, root.selectedMonth - 1, 1)
+                var lastDay = new Date(root.selectedYear, root.selectedMonth, 0)
                 root.categoryStats = statisticsService.getCategoryStats(
                             Qt.formatDate(firstDay, "yyyy-MM-dd"),
                             Qt.formatDate(lastDay, "yyyy-MM-dd"))
             } else {
                 root.currentTimeRange = "today"
-                var todayStats = statisticsService.getTodayStats()
-                todayStats.sessionCount = statisticsService.getFocusSessionCount(today, today)
-                root.todayStats = todayStats
-                root.weekStats = statisticsService.getWeekStats()
-                root.categoryStats = statisticsService.getCategoryStats(
-                            Qt.formatDate(today, "yyyy-MM-dd"),
-                            Qt.formatDate(today, "yyyy-MM-dd"))
             }
         } catch (error) {
             root.loadError = "统计数据加载失败"
@@ -221,6 +325,50 @@ Item {
             root.monthWeeklySummary = []
             root.categoryStats = { categories: [], totalDuration: 0 }
         }
+    }
+
+    function goToPreviousPeriod() {
+        if (root.currentTimeRange === "today") {
+            var previousDay = new Date(root.selectedDate)
+            previousDay.setDate(previousDay.getDate() - 1)
+            root.selectedDate = previousDay
+        } else if (root.currentTimeRange === "week") {
+            var previousWeek = new Date(root.selectedWeekStart)
+            previousWeek.setDate(previousWeek.getDate() - 7)
+            root.selectedWeekStart = previousWeek
+        } else {
+            root.selectedMonth -= 1
+            if (root.selectedMonth < 1) {
+                root.selectedMonth = 12
+                root.selectedYear -= 1
+            }
+        }
+
+        root.refresh()
+    }
+
+    function goToNextPeriod() {
+        if (!root.canGoForward) {
+            return
+        }
+
+        if (root.currentTimeRange === "today") {
+            var nextDay = new Date(root.selectedDate)
+            nextDay.setDate(nextDay.getDate() + 1)
+            root.selectedDate = nextDay
+        } else if (root.currentTimeRange === "week") {
+            var nextWeek = new Date(root.selectedWeekStart)
+            nextWeek.setDate(nextWeek.getDate() + 7)
+            root.selectedWeekStart = nextWeek
+        } else {
+            root.selectedMonth += 1
+            if (root.selectedMonth > 12) {
+                root.selectedMonth = 1
+                root.selectedYear += 1
+            }
+        }
+
+        root.refresh()
     }
 
     ScrollView {
@@ -263,154 +411,230 @@ Item {
                     }
                 }
 
-                Rectangle {
-                    id: timeRangeSelectorButton
-                    objectName: "statisticsTimeRangeSelector"
+                RowLayout {
+                    spacing: 8
 
-                    Layout.preferredWidth: 118
-                    Layout.preferredHeight: 36
-                    radius: 6
-                    color: timeRangeSelectorMouseArea.containsMouse ? "#f0e6d2" : "#faf6ee"
-                    border.width: 1
-                    border.color: timeRangeMenu.opened ? "#d4a574" : "#e8dfc8"
+                    Rectangle {
+                        id: previousPeriodButton
+                        objectName: "statisticsPreviousPeriodButton"
 
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: 12
-                        anchors.rightMargin: 12
-                        spacing: 8
+                        Layout.preferredWidth: 36
+                        Layout.preferredHeight: 36
+                        radius: 6
+                        color: previousPeriodMouseArea.containsMouse ? "#f0e6d2" : "#faf6ee"
+                        border.width: 1
+                        border.color: "#e8dfc8"
 
                         Text {
-                            Layout.fillWidth: true
-                            text: {
-                                if (root.currentTimeRange === "week") {
-                                    return "📅 本周"
-                                }
-                                if (root.currentTimeRange === "month") {
-                                    return "📅 本月"
-                                }
-                                return "📅 今日"
-                            }
-                            font.pixelSize: 14
-                            font.weight: Font.Medium
+                            anchors.centerIn: parent
+                            text: "←"
+                            font.pixelSize: 16
                             color: "#5d4e37"
-                            elide: Text.ElideRight
                         }
+
+                        MouseArea {
+                            id: previousPeriodMouseArea
+                            objectName: "statisticsPreviousPeriodArea"
+
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            preventStealing: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: root.goToPreviousPeriod()
+                        }
+                    }
+
+                    Rectangle {
+                        id: timeRangeSelectorButton
+                        objectName: "statisticsTimeRangeSelector"
+
+                        Layout.preferredWidth: 140
+                        Layout.preferredHeight: 36
+                        radius: 6
+                        color: timeRangeSelectorMouseArea.containsMouse ? "#f0e6d2" : "#faf6ee"
+                        border.width: 1
+                        border.color: timeRangeMenu.opened ? "#d4a574" : "#e8dfc8"
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: 12
+                            anchors.rightMargin: 12
+                            spacing: 8
+
+                            Text {
+                                id: timeRangeSelectorText
+                                objectName: "statisticsTimeRangeSelectorText"
+
+                                Layout.fillWidth: true
+                                text: root.timeRangeDisplayText
+                                font.pixelSize: 14
+                                font.weight: Font.Medium
+                                color: "#5d4e37"
+                                elide: Text.ElideRight
+                            }
+
+                            Text {
+                                text: "▼"
+                                font.pixelSize: 10
+                                color: "#8b7355"
+                            }
+                        }
+
+                        MouseArea {
+                            id: timeRangeSelectorMouseArea
+                            objectName: "statisticsTimeRangeSelectorArea"
+
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            preventStealing: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: timeRangeMenu.open()
+                        }
+
+                        Menu {
+                            id: timeRangeMenu
+                            objectName: "statisticsTimeRangeMenu"
+                            popupType: Popup.Item
+
+                            x: timeRangeSelectorButton.width - width
+                            y: timeRangeSelectorButton.height + 4
+                            width: 124
+
+                            background: Rectangle {
+                                implicitWidth: 124
+                                color: "#faf8f3"
+                                border.width: 1
+                                border.color: "#d4a574"
+                                radius: 8
+                                layer.enabled: true
+                                layer.effect: MultiEffect {
+                                    autoPaddingEnabled: true
+                                    shadowEnabled: true
+                                    shadowColor: "#5d4e37"
+                                    shadowOpacity: 0.15
+                                    shadowBlur: 0.18
+                                    shadowHorizontalOffset: 0
+                                    shadowVerticalOffset: 4
+                                }
+                            }
+
+                            MenuItem {
+                                objectName: "statisticsTimeRangeTodayItem"
+                                height: 40
+
+                                background: Rectangle {
+                                    color: parent.hovered ? "#f0e6d2" : "transparent"
+                                    radius: 6
+                                }
+
+                                contentItem: Text {
+                                    text: "📅 今日"
+                                    font.pixelSize: 14
+                                    color: "#5d4e37"
+                                    verticalAlignment: Text.AlignVCenter
+                                    leftPadding: 10
+                                    rightPadding: 10
+                                }
+
+                                onTriggered: {
+                                    if (root.currentTimeRange !== "today") {
+                                        root.currentTimeRange = "today"
+                                    } else {
+                                        root.resetSelectedPeriodToCurrent()
+                                        root.refresh()
+                                    }
+                                }
+                            }
+
+                            MenuItem {
+                                objectName: "statisticsTimeRangeWeekItem"
+                                height: 40
+
+                                background: Rectangle {
+                                    color: parent.hovered ? "#f0e6d2" : "transparent"
+                                    radius: 6
+                                }
+
+                                contentItem: Text {
+                                    text: "📅 本周"
+                                    font.pixelSize: 14
+                                    color: "#5d4e37"
+                                    verticalAlignment: Text.AlignVCenter
+                                    leftPadding: 10
+                                    rightPadding: 10
+                                }
+
+                                onTriggered: {
+                                    if (root.currentTimeRange !== "week") {
+                                        root.currentTimeRange = "week"
+                                    } else {
+                                        root.resetSelectedPeriodToCurrent()
+                                        root.refresh()
+                                    }
+                                }
+                            }
+
+                            MenuItem {
+                                objectName: "statisticsTimeRangeMonthItem"
+                                height: 40
+
+                                background: Rectangle {
+                                    color: parent.hovered ? "#f0e6d2" : "transparent"
+                                    radius: 6
+                                }
+
+                                contentItem: Text {
+                                    text: "📅 本月"
+                                    font.pixelSize: 14
+                                    color: "#5d4e37"
+                                    verticalAlignment: Text.AlignVCenter
+                                    leftPadding: 10
+                                    rightPadding: 10
+                                }
+
+                                onTriggered: {
+                                    if (root.currentTimeRange !== "month") {
+                                        root.currentTimeRange = "month"
+                                    } else {
+                                        root.resetSelectedPeriodToCurrent()
+                                        root.refresh()
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        id: nextPeriodButton
+                        objectName: "statisticsNextPeriodButton"
+
+                        Layout.preferredWidth: 36
+                        Layout.preferredHeight: 36
+                        radius: 6
+                        color: root.canGoForward
+                               ? (nextPeriodMouseArea.containsMouse ? "#f0e6d2" : "#faf6ee")
+                               : "#e0e0e0"
+                        border.width: 1
+                        border.color: root.canGoForward ? "#e8dfc8" : "#bdbdbd"
+                        opacity: root.canGoForward ? 1.0 : 0.55
 
                         Text {
-                            text: "▼"
-                            font.pixelSize: 10
-                            color: "#8b7355"
-                        }
-                    }
-
-                    MouseArea {
-                        id: timeRangeSelectorMouseArea
-                        objectName: "statisticsTimeRangeSelectorArea"
-
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: timeRangeMenu.open()
-                    }
-
-                    Menu {
-                        id: timeRangeMenu
-                        objectName: "statisticsTimeRangeMenu"
-                        popupType: Popup.Item
-
-                        x: timeRangeSelectorButton.width - width
-                        y: timeRangeSelectorButton.height + 4
-                        width: 124
-
-                        background: Rectangle {
-                            implicitWidth: 124
-                            color: "#faf8f3"
-                            border.width: 1
-                            border.color: "#d4a574"
-                            radius: 8
-                            layer.enabled: true
-                            layer.effect: MultiEffect {
-                                autoPaddingEnabled: true
-                                shadowEnabled: true
-                                shadowColor: "#5d4e37"
-                                shadowOpacity: 0.15
-                                shadowBlur: 0.18
-                                shadowHorizontalOffset: 0
-                                shadowVerticalOffset: 4
-                            }
+                            anchors.centerIn: parent
+                            text: "→"
+                            font.pixelSize: 16
+                            color: root.canGoForward ? "#5d4e37" : "#777777"
                         }
 
-                        MenuItem {
-                            objectName: "statisticsTimeRangeTodayItem"
-                            height: 40
+                        MouseArea {
+                            id: nextPeriodMouseArea
+                            objectName: "statisticsNextPeriodArea"
 
-                            background: Rectangle {
-                                color: parent.hovered ? "#f0e6d2" : "transparent"
-                                radius: 6
-                            }
-
-                            contentItem: Text {
-                                text: "📅 今日"
-                                font.pixelSize: 14
-                                color: "#5d4e37"
-                                verticalAlignment: Text.AlignVCenter
-                                leftPadding: 10
-                                rightPadding: 10
-                            }
-
-                            onTriggered: {
-                                root.currentTimeRange = "today"
-                                root.refresh()
-                            }
-                        }
-
-                        MenuItem {
-                            objectName: "statisticsTimeRangeWeekItem"
-                            height: 40
-
-                            background: Rectangle {
-                                color: parent.hovered ? "#f0e6d2" : "transparent"
-                                radius: 6
-                            }
-
-                            contentItem: Text {
-                                text: "📅 本周"
-                                font.pixelSize: 14
-                                color: "#5d4e37"
-                                verticalAlignment: Text.AlignVCenter
-                                leftPadding: 10
-                                rightPadding: 10
-                            }
-
-                            onTriggered: {
-                                root.currentTimeRange = "week"
-                                root.refresh()
-                            }
-                        }
-
-                        MenuItem {
-                            objectName: "statisticsTimeRangeMonthItem"
-                            height: 40
-
-                            background: Rectangle {
-                                color: parent.hovered ? "#f0e6d2" : "transparent"
-                                radius: 6
-                            }
-
-                            contentItem: Text {
-                                text: "📅 本月"
-                                font.pixelSize: 14
-                                color: "#5d4e37"
-                                verticalAlignment: Text.AlignVCenter
-                                leftPadding: 10
-                                rightPadding: 10
-                            }
-
-                            onTriggered: {
-                                root.currentTimeRange = "month"
-                                root.refresh()
-                            }
+                            anchors.fill: parent
+                            enabled: root.canGoForward
+                            hoverEnabled: true
+                            preventStealing: true
+                            cursorShape: root.canGoForward ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                            onClicked: root.goToNextPeriod()
                         }
                     }
                 }
@@ -455,9 +679,9 @@ Item {
                             return "完成率 " + Math.round(Number(root.todayStats.completionRate || 0) * 100) + "%"
                         }
                         if (root.currentTimeRange === "week") {
-                            return "本周有记录天数"
+                            return root.isCurrentSelectedPeriod ? "本周有记录天数" : "所选周有记录天数"
                         }
-                        return "本月有记录天数"
+                        return root.isCurrentSelectedPeriod ? "本月有记录天数" : "所选月有记录天数"
                     }
                 }
 
@@ -471,12 +695,12 @@ Item {
                     value: Number(root.todayStats.sessionCount || 0) + "次"
                     subtitle: {
                         if (root.currentTimeRange === "today") {
-                            return "今日完成次数"
+                            return root.isCurrentSelectedPeriod ? "今日完成次数" : "当日完成次数"
                         }
                         if (root.currentTimeRange === "week") {
-                            return "本周完成次数"
+                            return root.isCurrentSelectedPeriod ? "本周完成次数" : "所选周完成次数"
                         }
-                        return "本月完成次数"
+                        return root.isCurrentSelectedPeriod ? "本月完成次数" : "所选月完成次数"
                     }
                 }
 
@@ -488,23 +712,23 @@ Item {
                     animationDelay: 140
                     title: {
                         if (root.currentTimeRange === "today") {
-                            return "今日专注"
+                            return root.isCurrentSelectedPeriod ? "今日专注" : "当日专注"
                         }
                         if (root.currentTimeRange === "week") {
-                            return "本周累计"
+                            return root.isCurrentSelectedPeriod ? "本周累计" : "所选周累计"
                         }
-                        return "本月累计"
+                        return root.isCurrentSelectedPeriod ? "本月累计" : "所选月累计"
                     }
                     value: root.totalDurationValue(root.todayStats.totalDuration || 0)
                     unit: root.totalDurationUnit(root.todayStats.totalDuration || 0)
                     subtitle: {
                         if (root.currentTimeRange === "today") {
-                            return "当前自然日"
+                            return root.isCurrentSelectedPeriod ? "当前自然日" : "所选自然日"
                         }
                         if (root.currentTimeRange === "week") {
-                            return "本周专注时长"
+                            return root.isCurrentSelectedPeriod ? "本周专注时长" : "所选周专注时长"
                         }
-                        return "本月专注时长"
+                        return root.isCurrentSelectedPeriod ? "本月专注时长" : "所选月专注时长"
                     }
                 }
 
@@ -514,10 +738,26 @@ Item {
                 objectName: "statisticsTrendChart"
 
                 Layout.fillWidth: true
-                title: root.currentTimeRange === "month" ? "本月专注趋势" : "本周专注趋势"
+                title: {
+                    if (root.currentTimeRange === "month") {
+                        return root.isCurrentSelectedPeriod ? "本月专注趋势" : "所选月专注趋势"
+                    }
+                    if (root.currentTimeRange === "week") {
+                        return root.isCurrentSelectedPeriod ? "本周专注趋势" : "所选周专注趋势"
+                    }
+                    return root.isCurrentSelectedPeriod ? "本周专注趋势" : "所在周专注趋势"
+                }
                 dataPoints: root.currentTimeRange === "month" ? root.monthBarData() : root.barData()
                 valueSuffix: "h"
-                emptyText: root.currentTimeRange === "month" ? "本月还没有专注记录" : "本周还没有专注记录"
+                emptyText: {
+                    if (root.currentTimeRange === "month") {
+                        return root.isCurrentSelectedPeriod ? "本月还没有专注记录" : "所选月还没有专注记录"
+                    }
+                    if (root.currentTimeRange === "week") {
+                        return root.isCurrentSelectedPeriod ? "本周还没有专注记录" : "所选周还没有专注记录"
+                    }
+                    return root.isCurrentSelectedPeriod ? "本周还没有专注记录" : "所在周还没有专注记录"
+                }
             }
 
             ChartPie {
@@ -529,12 +769,12 @@ Item {
                 dataPoints: root.pieData()
                 emptyText: {
                     if (root.currentTimeRange === "today") {
-                        return "今日还没有可归类的专注记录"
+                        return root.isCurrentSelectedPeriod ? "今日还没有可归类的专注记录" : "当日还没有可归类的专注记录"
                     }
                     if (root.currentTimeRange === "week") {
-                        return "本周还没有可归类的专注记录"
+                        return root.isCurrentSelectedPeriod ? "本周还没有可归类的专注记录" : "所选周还没有可归类的专注记录"
                     }
-                    return "本月还没有可归类的专注记录"
+                    return root.isCurrentSelectedPeriod ? "本月还没有可归类的专注记录" : "所选月还没有可归类的专注记录"
                 }
             }
         }

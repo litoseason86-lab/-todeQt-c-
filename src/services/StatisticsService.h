@@ -17,12 +17,16 @@ public:
     static StatisticsService* instance();
 
     // 统计结果直接给 QML 卡片和图表使用，所以返回 QVariantMap/QVariantList。
+    Q_INVOKABLE QVariantMap getDayStats(const QDate& date) const;
     Q_INVOKABLE QVariantMap getTodayStats() const;
+    Q_INVOKABLE QVariantList getWeekStats(const QDate& weekStart) const;
     Q_INVOKABLE QVariantList getWeekStats() const;
     Q_INVOKABLE QVariantMap getCategoryStats(const QVariant& startDateValue, const QVariant& endDateValue) const;
+    Q_INVOKABLE QVariantMap getMonthStats(int year, int month) const;
     Q_INVOKABLE QVariantMap getMonthStats() const;
     Q_INVOKABLE int getEffectiveDays(const QDate& startDate, const QDate& endDate) const;
     Q_INVOKABLE int getFocusSessionCount(const QDate& startDate, const QDate& endDate) const;
+    Q_INVOKABLE QVariantList getMonthWeeklySummary(int year, int month) const;
     Q_INVOKABLE QVariantList getMonthWeeklySummary() const;
 
 private:

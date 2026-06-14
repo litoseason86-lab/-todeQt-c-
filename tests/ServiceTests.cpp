@@ -272,6 +272,7 @@ private slots:
     void addTaskAcceptsIsoDateStringFromQml();
     void deleteTaskPreservesFocusSessionHistory();
     void statisticsReturnsTodayCompletionAndDuration();
+    void getDayStatsUsesSpecifiedHistoricalDate();
     void focusHistoryReturnsMonthSessionsWithinBoundaries();
     void focusHistoryReturnsDayTotalsAndFormattedDurations();
     void focusHistoryFallsBackWhenTaskWasDeleted();
@@ -280,13 +281,16 @@ private slots:
     void focusHistorySkipsInvalidShortSessions();
     void focusHistoryCleansInvalidShortSessions();
     void getWeekStatsUsesCurrentNaturalWeek();
+    void getWeekStatsUsesSpecifiedMondayAndRejectsInvalidStart();
     void getWeekTasksReturnsInclusiveRangeAndRequiredOrder();
     void getMonthTasksReturnsInclusiveMonthRange();
     void getMonthTasksRejectsInvalidMonth();
     void getEffectiveDaysFiltersInvalidSessions();
     void getFocusSessionCountCountsOnlyValidFinishedSessions();
     void getMonthStatsUsesCurrentMonthAndTaskDate();
+    void getMonthStatsUsesSpecifiedMonthAndRejectsInvalidYearMonth();
     void getMonthWeeklySummaryStaysInsideCurrentMonth();
+    void getMonthWeeklySummaryUsesSpecifiedMonthAndRejectsInvalidYearMonth();
     void getCategoryStatsAggregatesDurationsAndPercentages();
     void statisticsIgnoresInvalidShortSessions();
     void freshDatabaseCreatesVersion2PresetCategories();
@@ -404,6 +408,47 @@ void ServiceTests::statisticsReturnsTodayCompletionAndDuration()
     QCOMPARE(stats.value("completedTasks").toInt(), 1);
     QCOMPARE(stats.value("totalTasks").toInt(), 2);
     QCOMPARE(stats.value("completionRate").toDouble(), 0.5);
+}
+
+void ServiceTests::getDayStatsUsesSpecifiedHistoricalDate()
+{
+    const QDate targetDate(2026, 6, 10);
+    const QDate otherDate = targetDate.addDays(1);
+    const int completedTaskId = insertTaskRow(QStringLiteral("历史完成任务"),
+                                              targetDate,
+                                              QStringLiteral("数学"),
+                                              true);
+    const int pendingTaskId = insertTaskRow(QStringLiteral("历史未完成任务"),
+                                            targetDate,
+                                            QStringLiteral("英语"));
+    const int otherTaskId = insertTaskRow(QStringLiteral("其他日期任务"),
+                                          otherDate,
+                                          QStringLiteral("政治"),
+                                          true);
+    QVERIFY(completedTaskId > 0);
+    QVERIFY(pendingTaskId > 0);
+    QVERIFY(otherTaskId > 0);
+
+    QVERIFY(insertFocusSessionRow(completedTaskId, targetDate, kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(pendingTaskId, targetDate, kTestMinimumValidDurationSeconds * 2));
+    QVERIFY(insertFocusSessionRow(otherTaskId, otherDate, kTestMinimumValidDurationSeconds * 10));
+    QVERIFY(insertFocusSessionRow(completedTaskId, targetDate, kTestMinimumValidDurationSeconds - 1));
+
+    const QVariantMap stats = StatisticsService::instance()->getDayStats(targetDate);
+
+    QCOMPARE(stats.value(QStringLiteral("totalDuration")).toInt(),
+             kTestMinimumValidDurationSeconds * 3);
+    QCOMPARE(stats.value(QStringLiteral("sessionCount")).toInt(), 2);
+    QCOMPARE(stats.value(QStringLiteral("completedTasks")).toInt(), 1);
+    QCOMPARE(stats.value(QStringLiteral("totalTasks")).toInt(), 2);
+    QCOMPARE(stats.value(QStringLiteral("completionRate")).toDouble(), 0.5);
+
+    const QVariantMap invalidStats = StatisticsService::instance()->getDayStats(QDate());
+    QCOMPARE(invalidStats.value(QStringLiteral("totalDuration")).toInt(), 0);
+    QCOMPARE(invalidStats.value(QStringLiteral("sessionCount")).toInt(), 0);
+    QCOMPARE(invalidStats.value(QStringLiteral("completedTasks")).toInt(), 0);
+    QCOMPARE(invalidStats.value(QStringLiteral("totalTasks")).toInt(), 0);
+    QCOMPARE(invalidStats.value(QStringLiteral("completionRate")).toDouble(), 0.0);
 }
 
 void ServiceTests::focusHistoryReturnsMonthSessionsWithinBoundaries()
@@ -623,6 +668,36 @@ void ServiceTests::getWeekStatsUsesCurrentNaturalWeek()
     QCOMPARE(totalDuration, 240);
 }
 
+void ServiceTests::getWeekStatsUsesSpecifiedMondayAndRejectsInvalidStart()
+{
+    const QDate weekStart(2026, 6, 8);
+    QCOMPARE(weekStart.dayOfWeek(), static_cast<int>(Qt::Monday));
+
+    QVERIFY(insertFocusSessionRow(-1, weekStart, kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(6), kTestMinimumValidDurationSeconds * 2));
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(-1), kTestMinimumValidDurationSeconds * 10));
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(7), kTestMinimumValidDurationSeconds * 10));
+
+    const QVariantList weekStats = StatisticsService::instance()->getWeekStats(weekStart);
+
+    QCOMPARE(weekStats.size(), 7);
+    QCOMPARE(weekStats.first().toMap().value(QStringLiteral("date")).toDate(), weekStart);
+    QCOMPARE(weekStats.last().toMap().value(QStringLiteral("date")).toDate(), weekStart.addDays(6));
+    QCOMPARE(weekStats.at(0).toMap().value(QStringLiteral("duration")).toInt(),
+             kTestMinimumValidDurationSeconds);
+    QCOMPARE(weekStats.at(6).toMap().value(QStringLiteral("duration")).toInt(),
+             kTestMinimumValidDurationSeconds * 2);
+
+    int totalDuration = 0;
+    for (const QVariant& dayValue : weekStats) {
+        totalDuration += dayValue.toMap().value(QStringLiteral("duration")).toInt();
+    }
+    QCOMPARE(totalDuration, kTestMinimumValidDurationSeconds * 3);
+
+    QVERIFY(StatisticsService::instance()->getWeekStats(QDate()).isEmpty());
+    QVERIFY(StatisticsService::instance()->getWeekStats(weekStart.addDays(1)).isEmpty());
+}
+
 void ServiceTests::getWeekTasksReturnsInclusiveRangeAndRequiredOrder()
 {
     const QDate startDate(2026, 6, 9);
@@ -748,6 +823,59 @@ void ServiceTests::getMonthStatsUsesCurrentMonthAndTaskDate()
     QCOMPARE(stats.value(QStringLiteral("totalTasks")).toInt(), 2);
 }
 
+void ServiceTests::getMonthStatsUsesSpecifiedMonthAndRejectsInvalidYearMonth()
+{
+    const QDate firstDay(2026, 2, 1);
+    const QDate lastDay(2026, 2, firstDay.daysInMonth());
+    const int completedTaskId = insertTaskRow(QStringLiteral("二月完成任务"),
+                                              firstDay,
+                                              QStringLiteral("数学"),
+                                              true,
+                                              dateTimeText(firstDay.addDays(-1)));
+    const int pendingTaskId = insertTaskRow(QStringLiteral("二月未完成任务"),
+                                            lastDay,
+                                            QStringLiteral("英语"),
+                                            false,
+                                            dateTimeText(firstDay));
+    QVERIFY(insertTaskRow(QStringLiteral("三月任务"),
+                          lastDay.addDays(1),
+                          QStringLiteral("政治"),
+                          true,
+                          dateTimeText(firstDay)) > 0);
+    QVERIFY(completedTaskId > 0);
+    QVERIFY(pendingTaskId > 0);
+
+    QVERIFY(insertFocusSessionRow(completedTaskId, firstDay, kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(pendingTaskId, lastDay, kTestMinimumValidDurationSeconds * 2));
+    QVERIFY(insertFocusSessionRow(completedTaskId, firstDay.addDays(-1), kTestMinimumValidDurationSeconds * 10));
+    QVERIFY(insertFocusSessionRow(pendingTaskId, lastDay.addDays(1), kTestMinimumValidDurationSeconds * 10));
+    QVERIFY(insertFocusSessionRow(completedTaskId, firstDay, kTestMinimumValidDurationSeconds - 1));
+    QVERIFY(insertUnfinishedFocusSessionRow(pendingTaskId, lastDay, kTestMinimumValidDurationSeconds * 5));
+
+    const QVariantMap stats = StatisticsService::instance()->getMonthStats(2026, 2);
+
+    QCOMPARE(stats.value(QStringLiteral("totalDuration")).toInt(),
+             kTestMinimumValidDurationSeconds * 3);
+    QCOMPARE(stats.value(QStringLiteral("effectiveDays")).toInt(), 2);
+    QCOMPARE(stats.value(QStringLiteral("sessionCount")).toInt(), 2);
+    QCOMPARE(stats.value(QStringLiteral("completedTasks")).toInt(), 1);
+    QCOMPARE(stats.value(QStringLiteral("totalTasks")).toInt(), 2);
+
+    const QVariantMap invalidMonth = StatisticsService::instance()->getMonthStats(2026, 13);
+    QCOMPARE(invalidMonth.value(QStringLiteral("totalDuration")).toInt(), 0);
+    QCOMPARE(invalidMonth.value(QStringLiteral("effectiveDays")).toInt(), 0);
+    QCOMPARE(invalidMonth.value(QStringLiteral("sessionCount")).toInt(), 0);
+    QCOMPARE(invalidMonth.value(QStringLiteral("completedTasks")).toInt(), 0);
+    QCOMPARE(invalidMonth.value(QStringLiteral("totalTasks")).toInt(), 0);
+
+    const QVariantMap invalidYear = StatisticsService::instance()->getMonthStats(1999, 2);
+    QCOMPARE(invalidYear.value(QStringLiteral("totalDuration")).toInt(), 0);
+    QCOMPARE(invalidYear.value(QStringLiteral("effectiveDays")).toInt(), 0);
+    QCOMPARE(invalidYear.value(QStringLiteral("sessionCount")).toInt(), 0);
+    QCOMPARE(invalidYear.value(QStringLiteral("completedTasks")).toInt(), 0);
+    QCOMPARE(invalidYear.value(QStringLiteral("totalTasks")).toInt(), 0);
+}
+
 void ServiceTests::getMonthWeeklySummaryStaysInsideCurrentMonth()
 {
     const QDate today = QDate::currentDate();
@@ -797,6 +925,50 @@ void ServiceTests::getMonthWeeklySummaryStaysInsideCurrentMonth()
     QVERIFY(coversFirstDay);
     QVERIFY(coversLastDay);
     QCOMPARE(totalDuration, kTestMinimumValidDurationSeconds * 3);
+}
+
+void ServiceTests::getMonthWeeklySummaryUsesSpecifiedMonthAndRejectsInvalidYearMonth()
+{
+    const QDate firstDay(2026, 2, 1);
+    const QDate lastDay(2026, 2, firstDay.daysInMonth());
+    const int taskId = insertTaskRow(QStringLiteral("二月周汇总"), firstDay, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionRow(taskId, firstDay, kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(taskId, lastDay, kTestMinimumValidDurationSeconds * 2));
+    QVERIFY(insertFocusSessionRow(taskId, firstDay.addDays(-1), kTestMinimumValidDurationSeconds * 10));
+    QVERIFY(insertFocusSessionRow(taskId, lastDay.addDays(1), kTestMinimumValidDurationSeconds * 10));
+
+    const QVariantList summary = StatisticsService::instance()->getMonthWeeklySummary(2026, 2);
+
+    QVERIFY(!summary.isEmpty());
+    QDate expectedStart = firstDay;
+    int totalDuration = 0;
+
+    for (int index = 0; index < summary.size(); ++index) {
+        const QVariantMap week = summary.at(index).toMap();
+        const QDate startDate = QDate::fromString(week.value(QStringLiteral("startDate")).toString(), Qt::ISODate);
+        const QDate endDate = QDate::fromString(week.value(QStringLiteral("endDate")).toString(), Qt::ISODate);
+
+        QVERIFY(startDate.isValid());
+        QVERIFY(endDate.isValid());
+        QVERIFY(startDate >= firstDay);
+        QVERIFY(endDate <= lastDay);
+        QVERIFY(startDate <= endDate);
+        QCOMPARE(startDate, expectedStart);
+        QCOMPARE(week.value(QStringLiteral("label")).toString(), QStringLiteral("第%1周").arg(index + 1));
+        QVERIFY(endDate == lastDay || endDate.dayOfWeek() == Qt::Sunday);
+
+        totalDuration += week.value(QStringLiteral("duration")).toInt();
+        expectedStart = endDate.addDays(1);
+    }
+
+    QCOMPARE(summary.first().toMap().value(QStringLiteral("startDate")).toString(), firstDay.toString(Qt::ISODate));
+    QCOMPARE(summary.last().toMap().value(QStringLiteral("endDate")).toString(), lastDay.toString(Qt::ISODate));
+    QCOMPARE(expectedStart, lastDay.addDays(1));
+    QCOMPARE(totalDuration, kTestMinimumValidDurationSeconds * 3);
+    QVERIFY(StatisticsService::instance()->getMonthWeeklySummary(2026, 0).isEmpty());
+    QVERIFY(StatisticsService::instance()->getMonthWeeklySummary(2101, 2).isEmpty());
 }
 
 void ServiceTests::getCategoryStatsAggregatesDurationsAndPercentages()

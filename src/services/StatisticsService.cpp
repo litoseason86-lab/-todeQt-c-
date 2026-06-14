@@ -52,6 +52,17 @@ QVariantMap emptyCategoryStats()
     return result;
 }
 
+QVariantMap emptyDayStats()
+{
+    QVariantMap result;
+    result.insert(QStringLiteral("totalDuration"), 0);
+    result.insert(QStringLiteral("completedTasks"), 0);
+    result.insert(QStringLiteral("totalTasks"), 0);
+    result.insert(QStringLiteral("completionRate"), 0.0);
+    result.insert(QStringLiteral("sessionCount"), 0);
+    return result;
+}
+
 QVariantMap emptyMonthStats()
 {
     QVariantMap result;
@@ -61,6 +72,22 @@ QVariantMap emptyMonthStats()
     result.insert(QStringLiteral("completedTasks"), 0);
     result.insert(QStringLiteral("totalTasks"), 0);
     return result;
+}
+
+bool isValidStatsYearMonth(int year, int month, const QString& context)
+{
+    // 统计页的年月来自 QML 状态；限制业务年份可以把明显传错的值挡在 SQL 查询前。
+    if (year < 2000 || year > 2100) {
+        qWarning() << context << "invalid year:" << year;
+        return false;
+    }
+
+    if (month < 1 || month > 12) {
+        qWarning() << context << "invalid month:" << month;
+        return false;
+    }
+
+    return true;
 }
 
 int queryTotalDurationForRange(const QDate& startDate, const QDate& endDate, const QString& context)
@@ -108,26 +135,43 @@ StatisticsService* StatisticsService::instance()
     return &service;
 }
 
-QVariantMap StatisticsService::getTodayStats() const
+QVariantMap StatisticsService::getDayStats(const QDate& date) const
 {
-    const QDate today = QDate::currentDate();
-    const int totalDuration = calculateTotalDuration(today);
-    const int completedTasks = countCompletedTasks(today);
-    const int totalTasks = countTotalTasks(today);
+    QVariantMap stats = emptyDayStats();
+    if (!date.isValid()) {
+        qWarning() << "Failed to get day stats: invalid date" << date;
+        return stats;
+    }
 
-    QVariantMap stats;
+    const int totalDuration = calculateTotalDuration(date);
+    const int completedTasks = countCompletedTasks(date);
+    const int totalTasks = countTotalTasks(date);
+
     stats.insert(QStringLiteral("totalDuration"), totalDuration);
     stats.insert(QStringLiteral("completedTasks"), completedTasks);
     stats.insert(QStringLiteral("totalTasks"), totalTasks);
     stats.insert(QStringLiteral("completionRate"), totalTasks > 0 ? static_cast<double>(completedTasks) / totalTasks : 0.0);
+    stats.insert(QStringLiteral("sessionCount"), getFocusSessionCount(date, date));
     return stats;
 }
 
-QVariantList StatisticsService::getWeekStats() const
+QVariantMap StatisticsService::getTodayStats() const
+{
+    return getDayStats(QDate::currentDate());
+}
+
+QVariantList StatisticsService::getWeekStats(const QDate& weekStart) const
 {
     QVariantList weekStats;
-    const QDate today = QDate::currentDate();
-    const QDate weekStart = today.addDays(1 - today.dayOfWeek());
+    if (!weekStart.isValid()) {
+        qWarning() << "Failed to get week stats: invalid weekStart date" << weekStart;
+        return weekStats;
+    }
+
+    if (weekStart.dayOfWeek() != Qt::Monday) {
+        qWarning() << "Failed to get week stats: weekStart is not Monday" << weekStart;
+        return weekStats;
+    }
 
     for (int offset = 0; offset < 7; ++offset) {
         const QDate date = weekStart.addDays(offset);
@@ -140,6 +184,12 @@ QVariantList StatisticsService::getWeekStats() const
     }
 
     return weekStats;
+}
+
+QVariantList StatisticsService::getWeekStats() const
+{
+    const QDate today = QDate::currentDate();
+    return getWeekStats(today.addDays(1 - today.dayOfWeek()));
 }
 
 QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, const QVariant& endDateValue) const
@@ -213,13 +263,15 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
     return result;
 }
 
-QVariantMap StatisticsService::getMonthStats() const
+QVariantMap StatisticsService::getMonthStats(int year, int month) const
 {
-    const QDate today = QDate::currentDate();
-    const QDate firstDay(today.year(), today.month(), 1);
-    const QDate lastDay(today.year(), today.month(), today.daysInMonth());
-
     QVariantMap result = emptyMonthStats();
+    if (!isValidStatsYearMonth(year, month, QStringLiteral("Failed to get month stats:"))) {
+        return result;
+    }
+
+    const QDate firstDay(year, month, 1);
+    const QDate lastDay(year, month, firstDay.daysInMonth());
     result.insert(QStringLiteral("totalDuration"),
                   queryTotalDurationForRange(firstDay, lastDay, QStringLiteral("month stats")));
     result.insert(QStringLiteral("effectiveDays"), getEffectiveDays(firstDay, lastDay));
@@ -250,6 +302,12 @@ QVariantMap StatisticsService::getMonthStats() const
     result.insert(QStringLiteral("totalTasks"), query.value(QStringLiteral("total")).toInt());
     result.insert(QStringLiteral("completedTasks"), query.value(QStringLiteral("completed")).toInt());
     return result;
+}
+
+QVariantMap StatisticsService::getMonthStats() const
+{
+    const QDate today = QDate::currentDate();
+    return getMonthStats(today.year(), today.month());
 }
 
 int StatisticsService::getEffectiveDays(const QDate& startDate, const QDate& endDate) const
@@ -290,12 +348,15 @@ int StatisticsService::getFocusSessionCount(const QDate& startDate, const QDate&
     return query.value(0).toInt();
 }
 
-QVariantList StatisticsService::getMonthWeeklySummary() const
+QVariantList StatisticsService::getMonthWeeklySummary(int year, int month) const
 {
     QVariantList result;
-    const QDate today = QDate::currentDate();
-    const QDate firstDay(today.year(), today.month(), 1);
-    const QDate lastDay(today.year(), today.month(), today.daysInMonth());
+    if (!isValidStatsYearMonth(year, month, QStringLiteral("Failed to get month weekly summary:"))) {
+        return result;
+    }
+
+    const QDate firstDay(year, month, 1);
+    const QDate lastDay(year, month, firstDay.daysInMonth());
 
     QDate weekStart = firstDay;
     int weekNumber = 1;
@@ -320,6 +381,12 @@ QVariantList StatisticsService::getMonthWeeklySummary() const
     }
 
     return result;
+}
+
+QVariantList StatisticsService::getMonthWeeklySummary() const
+{
+    const QDate today = QDate::currentDate();
+    return getMonthWeeklySummary(today.year(), today.month());
 }
 
 int StatisticsService::calculateTotalDuration(const QDate& date) const

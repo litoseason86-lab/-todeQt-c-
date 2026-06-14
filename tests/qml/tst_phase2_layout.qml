@@ -9,6 +9,7 @@ TestCase {
     when: windowShown
     width: 900
     height: 640
+    property date todaySnapshot: new Date()
 
     QtObject {
         id: taskManager
@@ -27,33 +28,66 @@ TestCase {
 
         property int effectiveDaysCalls: 0
         property int focusSessionCountCalls: 0
+        property int dayStatsCalls: 0
+        property int weekStatsCalls: 0
         property int monthStatsCalls: 0
         property int monthWeeklySummaryCalls: 0
+        property string lastDayStatsDate: ""
+        property string lastWeekStatsStartDate: ""
+        property string lastEffectiveDaysStartDate: ""
+        property string lastEffectiveDaysEndDate: ""
+        property string lastFocusSessionCountStartDate: ""
+        property string lastFocusSessionCountEndDate: ""
+        property int lastMonthStatsYear: 0
+        property int lastMonthStatsMonth: 0
+        property int lastMonthWeeklySummaryYear: 0
+        property int lastMonthWeeklySummaryMonth: 0
         property string lastCategoryStartDate: ""
         property string lastCategoryEndDate: ""
 
         function resetTracking() {
             effectiveDaysCalls = 0
             focusSessionCountCalls = 0
+            dayStatsCalls = 0
+            weekStatsCalls = 0
             monthStatsCalls = 0
             monthWeeklySummaryCalls = 0
+            lastDayStatsDate = ""
+            lastWeekStatsStartDate = ""
+            lastEffectiveDaysStartDate = ""
+            lastEffectiveDaysEndDate = ""
+            lastFocusSessionCountStartDate = ""
+            lastFocusSessionCountEndDate = ""
+            lastMonthStatsYear = 0
+            lastMonthStatsMonth = 0
+            lastMonthWeeklySummaryYear = 0
+            lastMonthWeeklySummaryMonth = 0
             lastCategoryStartDate = ""
             lastCategoryEndDate = ""
         }
 
-        function getTodayStats() {
-            return { totalDuration: 600, completedTasks: 1, totalTasks: 2, completionRate: 0.5 }
+        function getDayStats(date) {
+            dayStatsCalls += 1
+            lastDayStatsDate = testCase.isoDateOrEmpty(date)
+            return { totalDuration: 600, completedTasks: 1, totalTasks: 2, completionRate: 0.5, sessionCount: 4 }
         }
 
-        function getWeekStats() {
+        function getTodayStats() {
+            return { totalDuration: 600, completedTasks: 1, totalTasks: 2, completionRate: 0.5, sessionCount: 4 }
+        }
+
+        function getWeekStats(weekStart) {
+            weekStatsCalls += 1
+            lastWeekStatsStartDate = testCase.isoDateOrEmpty(weekStart)
+            var start = lastWeekStatsStartDate.length > 0 ? testCase.dateOnly(weekStart) : testCase.mondayOf(testCase.todaySnapshot)
             return [
-                { date: "2026-06-08", duration: 1800 },
-                { date: "2026-06-09", duration: 0 },
-                { date: "2026-06-10", duration: 3600 },
-                { date: "2026-06-11", duration: 0 },
-                { date: "2026-06-12", duration: 0 },
-                { date: "2026-06-13", duration: 0 },
-                { date: "2026-06-14", duration: 0 }
+                { date: testCase.isoDate(testCase.addDays(start, 0)), duration: 1800 },
+                { date: testCase.isoDate(testCase.addDays(start, 1)), duration: 0 },
+                { date: testCase.isoDate(testCase.addDays(start, 2)), duration: 3600 },
+                { date: testCase.isoDate(testCase.addDays(start, 3)), duration: 0 },
+                { date: testCase.isoDate(testCase.addDays(start, 4)), duration: 0 },
+                { date: testCase.isoDate(testCase.addDays(start, 5)), duration: 0 },
+                { date: testCase.isoDate(testCase.addDays(start, 6)), duration: 0 }
             ]
         }
 
@@ -70,16 +104,22 @@ TestCase {
 
         function getEffectiveDays(startDate, endDate) {
             effectiveDaysCalls += 1
+            lastEffectiveDaysStartDate = testCase.isoDateOrEmpty(startDate)
+            lastEffectiveDaysEndDate = testCase.isoDateOrEmpty(endDate)
             return 3
         }
 
         function getFocusSessionCount(startDate, endDate) {
             focusSessionCountCalls += 1
+            lastFocusSessionCountStartDate = testCase.isoDateOrEmpty(startDate)
+            lastFocusSessionCountEndDate = testCase.isoDateOrEmpty(endDate)
             return 4
         }
 
-        function getMonthStats() {
+        function getMonthStats(year, month) {
             monthStatsCalls += 1
+            lastMonthStatsYear = Number(year || 0)
+            lastMonthStatsMonth = Number(month || 0)
             return {
                 totalDuration: 7200,
                 effectiveDays: 5,
@@ -89,8 +129,10 @@ TestCase {
             }
         }
 
-        function getMonthWeeklySummary() {
+        function getMonthWeeklySummary(year, month) {
             monthWeeklySummaryCalls += 1
+            lastMonthWeeklySummaryYear = Number(year || 0)
+            lastMonthWeeklySummaryMonth = Number(month || 0)
             return [
                 { label: "第1周", duration: 3600, startDate: "2026-06-01", endDate: "2026-06-07" },
                 { label: "第2周", duration: 7200, startDate: "2026-06-08", endDate: "2026-06-14" }
@@ -148,6 +190,96 @@ TestCase {
         ]
     }
 
+    function init() {
+        todaySnapshot = dateOnly(new Date())
+        statisticsView.z = 10
+        statisticsView.visible = false
+        statisticsView.currentDateProvider = function() {
+            return todaySnapshot
+        }
+        statisticsView.currentDateSnapshot = todaySnapshot
+        statisticsView.selectedDate = todaySnapshot
+        statisticsView.selectedWeekStart = mondayOf(todaySnapshot)
+        statisticsView.selectedYear = todaySnapshot.getFullYear()
+        statisticsView.selectedMonth = todaySnapshot.getMonth() + 1
+        if (statisticsView.currentTimeRange === "today") {
+            statisticsView.currentTimeRange = "week"
+            wait(1)
+        }
+        statisticsView.currentTimeRange = "today"
+        wait(20)
+        statisticsService.resetTracking()
+    }
+
+    function dateOnly(value) {
+        var date = new Date(value)
+        date.setHours(0, 0, 0, 0)
+        return date
+    }
+
+    function addDays(value, days) {
+        var date = dateOnly(value)
+        date.setDate(date.getDate() + days)
+        return date
+    }
+
+    function mondayOf(value) {
+        var date = dateOnly(value)
+        var day = date.getDay()
+        var diff = day === 0 ? -6 : 1 - day
+        date.setDate(date.getDate() + diff)
+        return date
+    }
+
+    function isoDate(value) {
+        return Qt.formatDate(dateOnly(value), "yyyy-MM-dd")
+    }
+
+    function isoDateOrEmpty(value) {
+        if (value === undefined || value === null) {
+            return ""
+        }
+        var date = new Date(value)
+        if (isNaN(date.getTime())) {
+            return ""
+        }
+        return isoDate(date)
+    }
+
+    function dayDisplay(value) {
+        var date = dateOnly(value)
+        return (date.getMonth() + 1) + "月" + date.getDate() + "日"
+    }
+
+    function weekRangeDisplay(start) {
+        var end = addDays(start, 6)
+        return (start.getMonth() + 1) + "." + start.getDate() + "-" + (end.getMonth() + 1) + "." + end.getDate()
+    }
+
+    function previousMonthInfo() {
+        var now = dateOnly(todaySnapshot)
+        var year = now.getFullYear()
+        var month = now.getMonth()
+        if (month < 1) {
+            month = 12
+            year -= 1
+        }
+        return { year: year, month: month }
+    }
+
+    function selectTimeRange(itemName) {
+        statisticsView.visible = true
+        var menu = findChild(statisticsView, "statisticsTimeRangeMenu")
+        var item = findChild(statisticsView, itemName)
+
+        verify(menu !== null)
+        verify(item !== null)
+        menu.open()
+        tryCompare(menu, "opened", true, 1000)
+        mouseClick(item, item.width / 2, item.height / 2)
+        wait(80)
+    }
+
     function test_emptyChartsRenderStableFallbacks() {
         wait(50)
 
@@ -203,6 +335,9 @@ TestCase {
         var trendChart = findChild(statisticsView, "statisticsTrendChart")
         var pieChart = findChild(statisticsView, "statisticsCategoryChart")
         var selector = findChild(statisticsView, "statisticsTimeRangeSelector")
+        var previousArea = findChild(statisticsView, "statisticsPreviousPeriodArea")
+        var selectorText = findChild(statisticsView, "statisticsTimeRangeSelectorText")
+        var nextArea = findChild(statisticsView, "statisticsNextPeriodArea")
 
         compare(statisticsView.currentTimeRange, "today")
         verify(firstCard !== null)
@@ -211,12 +346,321 @@ TestCase {
         verify(trendChart !== null)
         verify(pieChart !== null)
         verify(selector !== null)
+        verify(previousArea !== null)
+        verify(selectorText !== null)
+        verify(nextArea !== null)
+        compare(previousArea.enabled, true)
+        compare(nextArea.enabled, false)
+        compare(selectorText.text, "今天")
         compare(firstCard.title, "任务完成")
         compare(firstCard.value, "1 / 2")
         compare(secondCard.title, "专注次数")
         compare(thirdCard.title, "今日专注")
         compare(trendChart.title, "本周专注趋势")
         compare(pieChart.emptyText, "今日还没有可归类的专注记录")
+    }
+
+    function test_statisticsDayArrowNavigationUsesSelectedDate() {
+        statisticsView.visible = true
+        wait(50)
+
+        var previousButton = findChild(statisticsView, "statisticsPreviousPeriodButton")
+        var previousArea = findChild(statisticsView, "statisticsPreviousPeriodArea")
+        var selectorText = findChild(statisticsView, "statisticsTimeRangeSelectorText")
+        var nextButton = findChild(statisticsView, "statisticsNextPeriodButton")
+        var nextArea = findChild(statisticsView, "statisticsNextPeriodArea")
+        var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
+        var thirdCard = findChild(statisticsView, "statisticsTotalDurationStatCard")
+        var trendChart = findChild(statisticsView, "statisticsTrendChart")
+        var pieChart = findChild(statisticsView, "statisticsCategoryChart")
+
+        verify(previousButton !== null)
+        verify(previousArea !== null)
+        verify(selectorText !== null)
+        verify(nextButton !== null)
+        verify(nextArea !== null)
+        verify(secondCard !== null)
+        verify(thirdCard !== null)
+        verify(trendChart !== null)
+        verify(pieChart !== null)
+        verify(previousButton.width > 0)
+        verify(previousButton.height > 0)
+        verify(previousArea.width > 0)
+        verify(previousArea.height > 0)
+        verify(nextButton.width > 0)
+        verify(nextButton.height > 0)
+
+        var yesterday = addDays(todaySnapshot, -1)
+        statisticsService.resetTracking()
+        statisticsView.goToPreviousPeriod()
+        tryCompare(selectorText, "text", dayDisplay(yesterday), 1000)
+
+        compare(statisticsView.currentTimeRange, "today")
+        compare(nextArea.enabled, true)
+        compare(secondCard.subtitle, "当日完成次数")
+        compare(thirdCard.title, "当日专注")
+        compare(thirdCard.subtitle, "所选自然日")
+        compare(trendChart.title, "所在周专注趋势")
+        compare(pieChart.emptyText, "当日还没有可归类的专注记录")
+        compare(statisticsService.dayStatsCalls, 1)
+        compare(statisticsService.lastDayStatsDate, isoDate(yesterday))
+        compare(statisticsService.lastCategoryStartDate, isoDate(yesterday))
+        compare(statisticsService.lastCategoryEndDate, isoDate(yesterday))
+
+        statisticsService.resetTracking()
+        statisticsView.goToNextPeriod()
+        tryCompare(selectorText, "text", "今天", 1000)
+
+        compare(nextArea.enabled, false)
+        compare(secondCard.subtitle, "今日完成次数")
+        compare(thirdCard.title, "今日专注")
+        compare(thirdCard.subtitle, "当前自然日")
+        compare(trendChart.title, "本周专注趋势")
+        compare(pieChart.emptyText, "今日还没有可归类的专注记录")
+        compare(statisticsService.dayStatsCalls, 1)
+        compare(statisticsService.lastDayStatsDate, isoDate(todaySnapshot))
+        compare(statisticsService.lastCategoryStartDate, isoDate(todaySnapshot))
+        compare(statisticsService.lastCategoryEndDate, isoDate(todaySnapshot))
+    }
+
+    function test_statisticsWeekArrowNavigationUsesSelectedWeek() {
+        selectTimeRange("statisticsTimeRangeWeekItem")
+
+        var previousButton = findChild(statisticsView, "statisticsPreviousPeriodButton")
+        var previousArea = findChild(statisticsView, "statisticsPreviousPeriodArea")
+        var selectorText = findChild(statisticsView, "statisticsTimeRangeSelectorText")
+        var nextArea = findChild(statisticsView, "statisticsNextPeriodArea")
+        var firstCard = findChild(statisticsView, "statisticsPrimaryStatCard")
+        var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
+        var thirdCard = findChild(statisticsView, "statisticsTotalDurationStatCard")
+        var trendChart = findChild(statisticsView, "statisticsTrendChart")
+        var pieChart = findChild(statisticsView, "statisticsCategoryChart")
+
+        verify(previousButton !== null)
+        verify(previousArea !== null)
+        verify(selectorText !== null)
+        verify(nextArea !== null)
+        verify(firstCard !== null)
+        verify(secondCard !== null)
+        verify(thirdCard !== null)
+        verify(trendChart !== null)
+        verify(pieChart !== null)
+        compare(statisticsView.currentTimeRange, "week")
+        compare(selectorText.text, "本周")
+        compare(nextArea.enabled, false)
+
+        var lastWeekStart = addDays(mondayOf(todaySnapshot), -7)
+        var lastWeekEnd = addDays(lastWeekStart, 6)
+        statisticsService.resetTracking()
+        statisticsView.goToPreviousPeriod()
+        tryCompare(selectorText, "text", weekRangeDisplay(lastWeekStart), 1000)
+
+        compare(nextArea.enabled, true)
+        compare(firstCard.subtitle, "所选周有记录天数")
+        compare(secondCard.subtitle, "所选周完成次数")
+        compare(thirdCard.title, "所选周累计")
+        compare(thirdCard.subtitle, "所选周专注时长")
+        compare(trendChart.title, "所选周专注趋势")
+        compare(pieChart.emptyText, "所选周还没有可归类的专注记录")
+        compare(statisticsService.weekStatsCalls, 1)
+        compare(statisticsService.lastWeekStatsStartDate, isoDate(lastWeekStart))
+        compare(statisticsService.effectiveDaysCalls, 1)
+        compare(statisticsService.lastEffectiveDaysStartDate, isoDate(lastWeekStart))
+        compare(statisticsService.lastEffectiveDaysEndDate, isoDate(lastWeekEnd))
+        compare(statisticsService.focusSessionCountCalls, 1)
+        compare(statisticsService.lastFocusSessionCountStartDate, isoDate(lastWeekStart))
+        compare(statisticsService.lastFocusSessionCountEndDate, isoDate(lastWeekEnd))
+        compare(statisticsService.lastCategoryStartDate, isoDate(lastWeekStart))
+        compare(statisticsService.lastCategoryEndDate, isoDate(lastWeekEnd))
+
+        statisticsService.resetTracking()
+        statisticsView.goToNextPeriod()
+        tryCompare(selectorText, "text", "本周", 1000)
+
+        compare(nextArea.enabled, false)
+        compare(firstCard.subtitle, "本周有记录天数")
+        compare(secondCard.subtitle, "本周完成次数")
+        compare(thirdCard.title, "本周累计")
+        compare(thirdCard.subtitle, "本周专注时长")
+        compare(trendChart.title, "本周专注趋势")
+        compare(pieChart.emptyText, "本周还没有可归类的专注记录")
+        compare(statisticsService.weekStatsCalls, 1)
+        compare(statisticsService.lastWeekStatsStartDate, isoDate(mondayOf(todaySnapshot)))
+    }
+
+    function test_statisticsMonthArrowNavigationUsesSelectedMonth() {
+        selectTimeRange("statisticsTimeRangeMonthItem")
+
+        var previousButton = findChild(statisticsView, "statisticsPreviousPeriodButton")
+        var previousArea = findChild(statisticsView, "statisticsPreviousPeriodArea")
+        var selectorText = findChild(statisticsView, "statisticsTimeRangeSelectorText")
+        var nextArea = findChild(statisticsView, "statisticsNextPeriodArea")
+        var firstCard = findChild(statisticsView, "statisticsPrimaryStatCard")
+        var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
+        var thirdCard = findChild(statisticsView, "statisticsTotalDurationStatCard")
+        var trendChart = findChild(statisticsView, "statisticsTrendChart")
+        var pieChart = findChild(statisticsView, "statisticsCategoryChart")
+
+        verify(previousButton !== null)
+        verify(previousArea !== null)
+        verify(selectorText !== null)
+        verify(nextArea !== null)
+        verify(firstCard !== null)
+        verify(secondCard !== null)
+        verify(thirdCard !== null)
+        verify(trendChart !== null)
+        verify(pieChart !== null)
+        compare(statisticsView.currentTimeRange, "month")
+        compare(selectorText.text, "本月")
+        compare(nextArea.enabled, false)
+
+        var expected = previousMonthInfo()
+        var firstDay = new Date(expected.year, expected.month - 1, 1)
+        var lastDay = new Date(expected.year, expected.month, 0)
+        statisticsService.resetTracking()
+        statisticsView.goToPreviousPeriod()
+        tryCompare(selectorText, "text", expected.year + "年" + expected.month + "月", 1000)
+
+        compare(nextArea.enabled, true)
+        compare(firstCard.subtitle, "所选月有记录天数")
+        compare(secondCard.subtitle, "所选月完成次数")
+        compare(thirdCard.title, "所选月累计")
+        compare(thirdCard.subtitle, "所选月专注时长")
+        compare(trendChart.title, "所选月专注趋势")
+        compare(pieChart.emptyText, "所选月还没有可归类的专注记录")
+        compare(statisticsService.monthStatsCalls, 1)
+        compare(statisticsService.lastMonthStatsYear, expected.year)
+        compare(statisticsService.lastMonthStatsMonth, expected.month)
+        compare(statisticsService.monthWeeklySummaryCalls, 1)
+        compare(statisticsService.lastMonthWeeklySummaryYear, expected.year)
+        compare(statisticsService.lastMonthWeeklySummaryMonth, expected.month)
+        compare(statisticsService.lastCategoryStartDate, isoDate(firstDay))
+        compare(statisticsService.lastCategoryEndDate, isoDate(lastDay))
+
+        statisticsService.resetTracking()
+        statisticsView.goToNextPeriod()
+        tryCompare(selectorText, "text", "本月", 1000)
+
+        compare(nextArea.enabled, false)
+        compare(firstCard.subtitle, "本月有记录天数")
+        compare(secondCard.subtitle, "本月完成次数")
+        compare(thirdCard.title, "本月累计")
+        compare(thirdCard.subtitle, "本月专注时长")
+        compare(trendChart.title, "本月专注趋势")
+        compare(pieChart.emptyText, "本月还没有可归类的专注记录")
+        compare(statisticsService.monthStatsCalls, 1)
+        compare(statisticsService.lastMonthStatsYear, todaySnapshot.getFullYear())
+        compare(statisticsService.lastMonthStatsMonth, todaySnapshot.getMonth() + 1)
+        compare(statisticsService.monthWeeklySummaryCalls, 1)
+        compare(statisticsService.lastMonthWeeklySummaryYear, todaySnapshot.getFullYear())
+        compare(statisticsService.lastMonthWeeklySummaryMonth, todaySnapshot.getMonth() + 1)
+    }
+
+    function test_statisticsMenuItemResetsCurrentRangeToCurrentPeriod() {
+        statisticsView.visible = true
+        wait(50)
+
+        var selectorText = findChild(statisticsView, "statisticsTimeRangeSelectorText")
+        var todayItem = findChild(statisticsView, "statisticsTimeRangeTodayItem")
+        var weekItem = findChild(statisticsView, "statisticsTimeRangeWeekItem")
+        var monthItem = findChild(statisticsView, "statisticsTimeRangeMonthItem")
+
+        verify(selectorText !== null)
+        verify(todayItem !== null)
+        verify(weekItem !== null)
+        verify(monthItem !== null)
+
+        statisticsView.goToPreviousPeriod()
+        compare(selectorText.text, dayDisplay(addDays(todaySnapshot, -1)))
+        statisticsService.resetTracking()
+        todayItem.triggered()
+        tryCompare(selectorText, "text", "今天", 1000)
+        compare(statisticsService.lastDayStatsDate, isoDate(todaySnapshot))
+
+        selectTimeRange("statisticsTimeRangeWeekItem")
+        statisticsView.goToPreviousPeriod()
+        compare(selectorText.text, weekRangeDisplay(addDays(mondayOf(todaySnapshot), -7)))
+        statisticsService.resetTracking()
+        weekItem.triggered()
+        tryCompare(selectorText, "text", "本周", 1000)
+        compare(statisticsService.lastWeekStatsStartDate, isoDate(mondayOf(todaySnapshot)))
+
+        selectTimeRange("statisticsTimeRangeMonthItem")
+        statisticsView.goToPreviousPeriod()
+        verify(selectorText.text !== "本月")
+        statisticsService.resetTracking()
+        monthItem.triggered()
+        tryCompare(selectorText, "text", "本月", 1000)
+        compare(statisticsService.lastMonthStatsYear, todaySnapshot.getFullYear())
+        compare(statisticsService.lastMonthStatsMonth, todaySnapshot.getMonth() + 1)
+    }
+
+    function test_statisticsRefreshTracksCurrentPeriodAfterDateSnapshotChanges() {
+        statisticsView.visible = true
+        wait(50)
+
+        var selectorText = findChild(statisticsView, "statisticsTimeRangeSelectorText")
+        verify(selectorText !== null)
+
+        var simulatedToday = new Date(2026, 5, 12)
+        var simulatedTomorrow = addDays(simulatedToday, 1)
+        var providedDate = simulatedToday
+        statisticsView.currentDateProvider = function() {
+            return providedDate
+        }
+        statisticsView.currentDateSnapshot = simulatedToday
+        statisticsView.selectedDate = simulatedToday
+        statisticsService.resetTracking()
+        providedDate = simulatedTomorrow
+        statisticsView.refresh()
+        tryCompare(selectorText, "text", "今天", 1000)
+        compare(statisticsService.lastDayStatsDate, isoDate(simulatedTomorrow))
+
+        statisticsView.goToPreviousPeriod()
+        var historicalDate = addDays(simulatedTomorrow, -1)
+        statisticsService.resetTracking()
+        providedDate = addDays(simulatedTomorrow, 1)
+        statisticsView.refresh()
+        compare(selectorText.text, dayDisplay(historicalDate))
+        compare(statisticsService.lastDayStatsDate, isoDate(historicalDate))
+
+        selectTimeRange("statisticsTimeRangeWeekItem")
+        providedDate = simulatedToday
+        statisticsView.currentDateSnapshot = simulatedToday
+        statisticsView.selectedWeekStart = mondayOf(simulatedToday)
+        statisticsService.resetTracking()
+        providedDate = addDays(simulatedToday, 7)
+        statisticsView.refresh()
+        tryCompare(selectorText, "text", "本周", 1000)
+        compare(statisticsService.lastWeekStatsStartDate, isoDate(mondayOf(addDays(simulatedToday, 7))))
+
+        statisticsView.goToPreviousPeriod()
+        var historicalWeekStart = addDays(mondayOf(addDays(simulatedToday, 7)), -7)
+        statisticsService.resetTracking()
+        providedDate = addDays(simulatedToday, 14)
+        statisticsView.refresh()
+        compare(selectorText.text, weekRangeDisplay(historicalWeekStart))
+        compare(statisticsService.lastWeekStatsStartDate, isoDate(historicalWeekStart))
+
+        selectTimeRange("statisticsTimeRangeMonthItem")
+        providedDate = new Date(2026, 5, 12)
+        statisticsView.currentDateSnapshot = providedDate
+        statisticsView.selectedYear = 2026
+        statisticsView.selectedMonth = 6
+        statisticsService.resetTracking()
+        providedDate = new Date(2026, 6, 1)
+        statisticsView.refresh()
+        tryCompare(selectorText, "text", "本月", 1000)
+        compare(statisticsService.lastMonthStatsYear, 2026)
+        compare(statisticsService.lastMonthStatsMonth, 7)
+
+        statisticsView.goToPreviousPeriod()
+        statisticsService.resetTracking()
+        providedDate = new Date(2026, 7, 1)
+        statisticsView.refresh()
+        compare(selectorText.text, "2026年6月")
+        compare(statisticsService.lastMonthStatsYear, 2026)
+        compare(statisticsService.lastMonthStatsMonth, 6)
     }
 
     function test_statisticsTimeRangeSwitchesWeekAndMonthData() {
