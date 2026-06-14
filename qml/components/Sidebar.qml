@@ -6,8 +6,26 @@ Rectangle {
     id: root
 
     width: 208
-    readonly property color sidebarBackgroundColor: "#faf8f3"
-    color: root.sidebarBackgroundColor
+    readonly property color sidebarGradientTopColor: "#faf8f3"
+    readonly property color sidebarGradientBottomColor: "#f5f0e6"
+    readonly property color sidebarItemHoverColor: "#faf6ee"
+    readonly property color sidebarItemHoverBorderColor: "#e8dfc8"
+    readonly property color sidebarItemActiveColor: "#f0e6d2"
+    readonly property color sidebarItemActiveBorderColor: "#d4a574"
+
+    gradient: Gradient {
+        orientation: Gradient.Vertical
+
+        GradientStop {
+            position: 0
+            color: root.sidebarGradientTopColor
+        }
+
+        GradientStop {
+            position: 1
+            color: root.sidebarGradientBottomColor
+        }
+    }
 
     property string currentView: "today"
     property var categoryManagerRef: null
@@ -134,8 +152,8 @@ Rectangle {
         Layout.fillWidth: true
         Layout.preferredHeight: 44
         radius: 6
-        color: item.isActive ? "#f0e6d2" : (item.visualHovered ? "#faf6ee" : root.sidebarBackgroundColor)
-        border.color: item.isActive ? "#d4a574" : (item.visualHovered ? "#e8dfc8" : root.sidebarBackgroundColor)
+        color: item.isActive ? root.sidebarItemActiveColor : (item.visualHovered ? root.sidebarItemHoverColor : "transparent")
+        border.color: item.isActive ? root.sidebarItemActiveBorderColor : (item.visualHovered ? root.sidebarItemHoverBorderColor : "transparent")
         border.width: item.isActive || item.visualHovered ? 1 : 0
         opacity: item.enabled ? 1.0 : 0.55
         // 侧边栏只用颜色和边框反馈，避免悬浮或选中时先出现阴影造成顿挫。

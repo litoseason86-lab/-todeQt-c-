@@ -127,7 +127,32 @@ TestCase {
         todayTaskView.visible = false;
         monthGoalView.visible = false;
         addTaskDialog.close();
+        if (typeof taskItem.setPointerInside === "function")
+            taskItem.setPointerInside(false);
+        var focusButton = findChild(taskItem, "focusButton");
+        var deleteButton = findChild(taskItem, "taskDeleteButton");
+        if (focusButton !== null)
+            focusButton.down = false;
+        if (deleteButton !== null)
+            deleteButton.down = false;
         wait(220);
+    }
+
+    function verifyNear(actual, expected, tolerance, message) {
+        verify(Math.abs(actual - expected) <= tolerance,
+               message + "，实际值：" + actual + "，期望值：" + expected);
+    }
+
+    function verifyWarmShadow(target, expectedOpacity, expectedBlur, expectedVerticalOffset, context) {
+        verify(target !== null, context + "需要存在阴影承载对象");
+        verify(typeof target.warmShadowColor !== "undefined", context + "需要暴露暖色阴影颜色");
+        verify(typeof target.warmShadowOpacity !== "undefined", context + "需要暴露阴影透明度");
+        verify(typeof target.warmShadowBlur !== "undefined", context + "需要暴露阴影模糊值");
+        verify(typeof target.warmShadowVerticalOffset !== "undefined", context + "需要暴露阴影垂直偏移");
+        verify(Qt.colorEqual(target.warmShadowColor, "#5d4e37"), context + "需要使用暖色阴影");
+        verifyNear(target.warmShadowOpacity, expectedOpacity, 0.015, context + " shadowOpacity");
+        verifyNear(target.warmShadowBlur, expectedBlur, 0.015, context + " shadowBlur");
+        verifyNear(target.warmShadowVerticalOffset, expectedVerticalOffset, 0.15, context + " shadowVerticalOffset");
     }
 
     function test_taskItemUsesStandardQt6ShadowMetadata() {
@@ -135,6 +160,22 @@ TestCase {
         verify(taskItem.layer.effect !== null);
         compare(taskItem.layer.effect.status, Component.Ready);
         verify(String(taskItem.layer.effect).indexOf("ShaderEffect") === -1);
+    }
+
+    function test_taskItemUsesWarmShadowAndAnimatesHoverParameters() {
+        verifyWarmShadow(taskItem, 0.08, 0.18, 2, "TaskItem 普通状态");
+
+        taskItem.setPointerInside(true);
+        tryCompare(taskItem, "itemHovered", true, 220);
+        wait(240);
+
+        verifyWarmShadow(taskItem, 0.12, 0.25, 6, "TaskItem hover 状态");
+
+        taskItem.setPointerInside(false);
+        tryCompare(taskItem, "itemHovered", false, 220);
+        wait(240);
+
+        verifyWarmShadow(taskItem, 0.08, 0.18, 2, "TaskItem hover 离开后");
     }
 
     function test_taskItemCompletedOpacityTargetIsSeventyPercent() {
@@ -187,6 +228,42 @@ TestCase {
 
         compare(focusButton.text, "已完成");
         compare(focusButton.enabled, false);
+    }
+
+    function test_taskItemButtonsUsePressedDepthAndWarmShadow() {
+        verifyButtonPressedFeedback("focusButton", "focusButtonBackground", "focusButtonLabel", "专注按钮");
+        verifyButtonPressedFeedback("taskDeleteButton", "taskDeleteButtonBackground", "taskDeleteButtonLabel", "删除按钮");
+    }
+
+    function verifyButtonPressedFeedback(buttonName, backgroundName, labelName, context) {
+        var button = findChild(taskItem, buttonName);
+        var background = findChild(taskItem, backgroundName);
+        var label = findChild(taskItem, labelName);
+
+        verify(button !== null, context + "需要存在按钮");
+        verify(background !== null, context + "需要存在背景");
+        verify(label !== null, context + "需要存在文字");
+        compare(background.layer.enabled, true);
+        verify(background.layer.effect !== null, context + "需要存在按钮背景 MultiEffect");
+        verifyWarmShadow(background, 0.08, 0.14, 2, context + "普通状态");
+        verifyNear(background.y, 0, 0.05, context + "普通状态背景 y");
+        verifyNear(label.scale, 1.0, 0.005, context + "普通状态文字缩放");
+
+        button.down = true;
+        tryCompare(button, "down", true, 220);
+        wait(130);
+
+        verifyWarmShadow(background, 0.04, 0.10, 1, context + "按下状态");
+        verifyNear(background.y, 1, 0.05, context + "按下状态背景 y");
+        verifyNear(label.scale, 0.98, 0.005, context + "按下状态文字缩放");
+
+        button.down = false;
+        tryCompare(button, "down", false, 220);
+        wait(130);
+
+        verifyWarmShadow(background, 0.08, 0.14, 2, context + "释放后");
+        verifyNear(background.y, 0, 0.05, context + "释放后背景 y");
+        verifyNear(label.scale, 1.0, 0.005, context + "释放后文字缩放");
     }
 
     function test_taskItemExposesDeleteAction() {

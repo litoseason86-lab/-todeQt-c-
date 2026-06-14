@@ -12,23 +12,30 @@ Rectangle {
     color: root.itemHovered ? "#fffef9" : "#faf6ee"
     border.color: root.itemHovered ? "#d4a574" : "#e8dfc8"
     border.width: root.itemHovered ? 1.5 : 1
+    // MultiEffect 的阴影参数不直接承载动画，先放到 root 属性上过渡，再绑定给效果。
+    property color warmShadowColor: "#5d4e37"
+    property real warmShadowOpacity: root.itemHovered ? 0.12 : 0.08
+    property real warmShadowBlur: root.itemHovered ? 0.25 : 0.18
+    property real warmShadowVerticalOffset: root.itemHovered ? 6 : 2
     layer.enabled: true
     layer.effect: MultiEffect {
         autoPaddingEnabled: true
         shadowEnabled: true
-        shadowColor: "#000000"
-        shadowOpacity: 0.08
-        shadowBlur: 0.14
+        shadowColor: root.warmShadowColor
+        shadowOpacity: root.warmShadowOpacity
+        shadowBlur: root.warmShadowBlur
         shadowHorizontalOffset: 0
-        shadowVerticalOffset: 2
+        shadowVerticalOffset: root.warmShadowVerticalOffset
     }
 
     property int taskId: 0
     property string taskTitle: ""
     property var taskCategory: ""
     property bool taskCompleted: false
+    // 显式记录指针状态，避免不同平台的 MouseArea/HoverHandler 事件差异影响 hover 视觉。
+    property bool pointerInside: false
     property real completionOffset: 0
-    readonly property bool itemHovered: hoverArea.containsMouse
+    readonly property bool itemHovered: root.pointerInside
     // 视图可能传入标准化科目对象，也可能传入旧版字符串科目。
     readonly property string categoryName: typeof taskCategory === "object" ? (taskCategory && taskCategory.name ? taskCategory.name : "") : String(taskCategory || "")
     readonly property string categoryColor: typeof taskCategory === "object" ? (taskCategory && taskCategory.color ? taskCategory.color : "") : ""
@@ -36,6 +43,10 @@ Rectangle {
     signal completionChanged(int taskId, bool completed)
     signal startFocusClicked(int taskId, string title)
     signal deleteClicked(int taskId, string title)
+
+    function setPointerInside(inside) {
+        root.pointerInside = inside;
+    }
 
     states: [
         // 完成状态只做轻微位移和透明度变化，避免影响相邻任务布局。
@@ -119,6 +130,27 @@ Rectangle {
         }
     }
 
+    Behavior on warmShadowOpacity {
+        NumberAnimation {
+            duration: 200
+            easing.type: Easing.OutQuad
+        }
+    }
+
+    Behavior on warmShadowBlur {
+        NumberAnimation {
+            duration: 200
+            easing.type: Easing.OutQuad
+        }
+    }
+
+    Behavior on warmShadowVerticalOffset {
+        NumberAnimation {
+            duration: 200
+            easing.type: Easing.OutQuad
+        }
+    }
+
     Behavior on opacity {
         OpacityAnimator {
             duration: 180
@@ -133,6 +165,15 @@ Rectangle {
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.NoButton
+        onEntered: root.setPointerInside(true)
+        onExited: root.setPointerInside(false)
+    }
+
+    HoverHandler {
+        id: hoverHandler
+
+        // HoverHandler 补足触控板或平台事件路径，MouseArea 仍负责原有视觉悬停边界。
+        onHoveredChanged: root.setPointerInside(hovered)
     }
 
     RowLayout {
@@ -257,26 +298,73 @@ Rectangle {
             enabled: !root.taskCompleted
             implicitWidth: 104
             implicitHeight: 40
+            // down 是 Qt Controls 的视觉按下态；真实点击会同步 pressed，测试可稳定驱动 down。
+            readonly property bool pressFeedbackActive: focusButton.enabled && (focusButton.down || focusButton.pressed)
 
             ToolTip.visible: hovered && !enabled
             ToolTip.text: "已完成任务不能开始专注"
 
             background: Rectangle {
+                id: focusButtonBackground
+
                 objectName: "focusButtonBackground"
                 radius: 6
+                y: focusButton.pressFeedbackActive ? 1 : 0
                 color: {
                     if (!focusButton.enabled)
                         return "#e8dfc8";
-                    if (focusButton.pressed)
+                    if (focusButton.pressFeedbackActive)
                         return "#b9854f";
                     if (focusButton.hovered)
                         return "#c8955f";
                     return "#d4a574";
                 }
+                property color warmShadowColor: "#5d4e37"
+                property real warmShadowOpacity: focusButton.pressFeedbackActive ? 0.04 : 0.08
+                property real warmShadowBlur: focusButton.pressFeedbackActive ? 0.10 : 0.14
+                property real warmShadowVerticalOffset: focusButton.pressFeedbackActive ? 1 : 2
+                layer.enabled: true
+                layer.effect: MultiEffect {
+                    autoPaddingEnabled: true
+                    shadowEnabled: true
+                    shadowColor: focusButtonBackground.warmShadowColor
+                    shadowOpacity: focusButtonBackground.warmShadowOpacity
+                    shadowBlur: focusButtonBackground.warmShadowBlur
+                    shadowHorizontalOffset: 0
+                    shadowVerticalOffset: focusButtonBackground.warmShadowVerticalOffset
+                }
 
                 Behavior on color {
                     ColorAnimation {
                         duration: 160
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
+                Behavior on y {
+                    NumberAnimation {
+                        duration: 90
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
+                Behavior on warmShadowOpacity {
+                    NumberAnimation {
+                        duration: 90
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
+                Behavior on warmShadowBlur {
+                    NumberAnimation {
+                        duration: 90
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
+                Behavior on warmShadowVerticalOffset {
+                    NumberAnimation {
+                        duration: 90
                         easing.type: Easing.OutQuad
                     }
                 }
@@ -290,7 +378,7 @@ Rectangle {
                 font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
-                scale: focusButton.pressed ? 0.96 : 1.0
+                scale: focusButton.pressFeedbackActive ? 0.98 : 1.0
                 transformOrigin: Item.Center
 
                 Behavior on scale {
@@ -311,19 +399,37 @@ Rectangle {
             text: "删除"
             implicitWidth: 56
             implicitHeight: 40
+            readonly property bool pressFeedbackActive: deleteButton.down || deleteButton.pressed
 
             background: Rectangle {
+                id: taskDeleteButtonBackground
+
                 objectName: "taskDeleteButtonBackground"
                 radius: 6
+                y: deleteButton.pressFeedbackActive ? 1 : 0
                 color: {
-                    if (deleteButton.pressed)
+                    if (deleteButton.pressFeedbackActive)
                         return "#f0e6d2";
                     if (deleteButton.hovered)
                         return "#f5ede3";
                     return "#fffef9";
                 }
-                border.color: deleteButton.hovered || deleteButton.pressed ? "#b37562" : "#e8dfc8"
+                border.color: deleteButton.hovered || deleteButton.pressFeedbackActive ? "#b37562" : "#e8dfc8"
                 border.width: 1
+                property color warmShadowColor: "#5d4e37"
+                property real warmShadowOpacity: deleteButton.pressFeedbackActive ? 0.04 : 0.08
+                property real warmShadowBlur: deleteButton.pressFeedbackActive ? 0.10 : 0.14
+                property real warmShadowVerticalOffset: deleteButton.pressFeedbackActive ? 1 : 2
+                layer.enabled: true
+                layer.effect: MultiEffect {
+                    autoPaddingEnabled: true
+                    shadowEnabled: true
+                    shadowColor: taskDeleteButtonBackground.warmShadowColor
+                    shadowOpacity: taskDeleteButtonBackground.warmShadowOpacity
+                    shadowBlur: taskDeleteButtonBackground.warmShadowBlur
+                    shadowHorizontalOffset: 0
+                    shadowVerticalOffset: taskDeleteButtonBackground.warmShadowVerticalOffset
+                }
 
                 Behavior on color {
                     ColorAnimation {
@@ -338,6 +444,34 @@ Rectangle {
                         easing.type: Easing.OutQuad
                     }
                 }
+
+                Behavior on y {
+                    NumberAnimation {
+                        duration: 90
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
+                Behavior on warmShadowOpacity {
+                    NumberAnimation {
+                        duration: 90
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
+                Behavior on warmShadowBlur {
+                    NumberAnimation {
+                        duration: 90
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
+                Behavior on warmShadowVerticalOffset {
+                    NumberAnimation {
+                        duration: 90
+                        easing.type: Easing.OutQuad
+                    }
+                }
             }
 
             contentItem: Text {
@@ -348,7 +482,7 @@ Rectangle {
                 font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
-                scale: deleteButton.pressed ? 0.96 : 1.0
+                scale: deleteButton.pressFeedbackActive ? 0.98 : 1.0
                 transformOrigin: Item.Center
 
                 Behavior on scale {

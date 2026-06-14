@@ -169,15 +169,35 @@ TestCase {
         var mainContent = findChild(mainWindow, "mainContentBackground");
         var divider = findChild(mainWindow, "mainContentDivider");
         var stackLayout = findChild(mainWindow, "mainViewStack");
+        var textureLayer = findChild(mainWindow, "paperTextureLayer");
 
         verify(mainContent !== null);
         verify(divider !== null);
         verify(stackLayout !== null);
+        verify(textureLayer !== null);
 
         verify(Qt.colorEqual(mainContent.color, "#fffef9"));
         verify(Qt.colorEqual(divider.color, "#e8dfc8"));
         compare(divider.opacity, 0.8);
         compare(stackLayout.currentIndex, mainWindow.viewIndex(mainWindow.currentView));
+    }
+
+    function test_mainContentHasNonBlockingPaperTextureLayerBelowViews() {
+        var mainContent = findChild(mainWindow, "mainContentBackground");
+        var textureLayer = findChild(mainWindow, "paperTextureLayer");
+        var stackLayout = findChild(mainWindow, "mainViewStack");
+
+        verify(mainContent !== null);
+        verify(textureLayer !== null);
+        verify(stackLayout !== null);
+        compare(textureLayer.status, Image.Ready);
+        verify(textureLayer.opacity > 0);
+        verify(textureLayer.opacity <= 0.05);
+        compare(textureLayer.fillMode, Image.Tile);
+        verify(String(textureLayer.source).indexOf("data:image/svg+xml") === 0);
+        verify(textureLayer.z < stackLayout.z);
+        compare(textureLayer.width, mainContent.width);
+        compare(textureLayer.height, mainContent.height);
     }
 
     function test_viewSwitchAnimationUsesOptimizedTimingAndOpacity() {

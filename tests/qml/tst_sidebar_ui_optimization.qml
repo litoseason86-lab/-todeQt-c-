@@ -59,6 +59,16 @@ TestCase {
         return findChild(sidebar, "sidebarMarker-" + marker);
     }
 
+    function test_sidebarUsesWarmVerticalGradientBackground() {
+        verify(sidebar.gradient !== undefined && sidebar.gradient !== null);
+        compare(sidebar.gradient.orientation, Gradient.Vertical);
+        compare(sidebar.gradient.stops.length, 2);
+        compare(sidebar.gradient.stops[0].position, 0);
+        verify(Qt.colorEqual(sidebar.gradient.stops[0].color, "#faf8f3"));
+        compare(sidebar.gradient.stops[1].position, 1);
+        verify(Qt.colorEqual(sidebar.gradient.stops[1].color, "#f5f0e6"));
+    }
+
     function test_titleAndGroupFontWeightsUseFontWeight() {
         var title = findText("番茄Todo");
         var groupTitle = findText("时间视图");
@@ -111,8 +121,8 @@ TestCase {
 
         verify(inactiveItem !== null);
         verify(markerContainer !== null);
-        verify(Qt.colorEqual(inactiveItem.color, "#faf8f3"));
-        verify(Qt.colorEqual(inactiveItem.border.color, "#faf8f3"));
+        compare(inactiveItem.color.a, 0);
+        compare(inactiveItem.border.color.a, 0);
         compare(inactiveItem.border.width, 0);
         compare(inactiveItem.layer.enabled, false);
         verify(Qt.colorEqual(markerContainer.color, "#e8dfc8"));
@@ -132,10 +142,11 @@ TestCase {
         wait(1200);
 
         verify(Qt.colorEqual(inactiveItem.color, "#faf6ee"));
+        verify(Qt.colorEqual(inactiveItem.border.color, "#e8dfc8"));
         compare(inactiveItem.layer.enabled, false);
     }
 
-    function test_hoverExitReturnsToBackgroundColorWithoutTransparentTarget() {
+    function test_hoverExitReturnsToTransparentItemSoGradientRemainsVisible() {
         var inactiveItem = sidebarItemForMarker("数");
 
         verify(inactiveItem !== null);
@@ -145,8 +156,8 @@ TestCase {
         tryCompare(inactiveItem, "visualHovered", false, 500);
         wait(1200);
 
-        verify(Qt.colorEqual(inactiveItem.color, "#faf8f3"));
-        verify(Qt.colorEqual(inactiveItem.border.color, "#faf8f3"));
+        compare(inactiveItem.color.a, 0);
+        compare(inactiveItem.border.color.a, 0);
         compare(inactiveItem.border.width, 0);
     }
 

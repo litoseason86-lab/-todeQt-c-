@@ -239,6 +239,14 @@ TestCase {
         ]
     }
 
+    StatCard {
+        id: warmShadowCard
+        objectName: "warmShadowStatCard"
+        visible: false
+        title: "阴影"
+        value: "1"
+    }
+
     function init() {
         todaySnapshot = dateOnly(new Date())
         statisticsView.z = 10
@@ -363,6 +371,20 @@ TestCase {
         verify(invalidLabel !== null)
         verify(zeroPieChart.showInvalidData)
         verify(invalidLabel.text.indexOf("NaN") === -1)
+    }
+
+    function test_statCardUsesWarmRestrainedShadow() {
+        var effect = warmShadowCard.layer.effect
+
+        verify(effect !== null)
+        compare(warmShadowCard.layer.enabled, true)
+        verify(warmShadowCard.cardShadowColor !== undefined)
+        verify(warmShadowCard.cardShadowBlur !== undefined)
+        verify(Qt.colorEqual(warmShadowCard.cardShadowColor, "#5d4e37"))
+        verify(Math.abs(warmShadowCard.cardShadowBlur - 0.18) < 0.001)
+        compare(warmShadowCard.cardShadowOpacity, 0.08)
+        compare(warmShadowCard.cardShadowHorizontalOffset, 0)
+        compare(warmShadowCard.cardShadowVerticalOffset, 2)
     }
 
     function test_statisticsDurationFormatsSubMinuteSessions() {

@@ -13,6 +13,11 @@ Rectangle {
     property string comparisonText: ""
     property int comparisonTrend: 0
     property bool showComparison: false
+    readonly property color cardShadowColor: "#5d4e37"
+    readonly property real cardShadowOpacity: 0.08
+    readonly property real cardShadowBlur: 0.18
+    readonly property real cardShadowHorizontalOffset: 0
+    readonly property real cardShadowVerticalOffset: 2
 
     function restartIntro() {
         // 视图重新显示时重播入场动画，数据刷新不会显得突兀。
@@ -29,11 +34,11 @@ Rectangle {
     layer.effect: MultiEffect {
         autoPaddingEnabled: true
         shadowEnabled: true
-        shadowColor: "#000000"
-        shadowOpacity: 0.08
-        shadowBlur: 0.14
-        shadowHorizontalOffset: 0
-        shadowVerticalOffset: 2
+        shadowColor: root.cardShadowColor
+        shadowOpacity: root.cardShadowOpacity
+        shadowBlur: root.cardShadowBlur
+        shadowHorizontalOffset: root.cardShadowHorizontalOffset
+        shadowVerticalOffset: root.cardShadowVerticalOffset
     }
     opacity: 0
 
