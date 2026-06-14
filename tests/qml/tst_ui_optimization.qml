@@ -71,6 +71,38 @@ TestCase {
                 completionRate: 0
             };
         }
+
+        function makeComparison(displayText, trend) {
+            return {
+                hasData: true,
+                displayText: displayText,
+                trend: trend
+            };
+        }
+
+        function getDayComparison(date) {
+            return {
+                taskCompletion: makeComparison("→ 0% vs 昨天", 0),
+                sessionCount: makeComparison("→ 0% vs 昨天", 0),
+                duration: makeComparison("→ 0% vs 昨天", 0)
+            };
+        }
+
+        function getWeekComparison(weekStart) {
+            return {
+                effectiveDays: makeComparison("→ 0% vs 上周", 0),
+                sessionCount: makeComparison("→ 0% vs 上周", 0),
+                duration: makeComparison("→ 0% vs 上周", 0)
+            };
+        }
+
+        function getMonthComparison(year, month) {
+            return {
+                effectiveDays: makeComparison("→ 0% vs 上月", 0),
+                sessionCount: makeComparison("→ 0% vs 上月", 0),
+                duration: makeComparison("→ 0% vs 上月", 0)
+            };
+        }
     }
 
     TodayTaskView {

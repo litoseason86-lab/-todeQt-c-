@@ -10,6 +10,9 @@ Rectangle {
     property string unit: ""
     property string subtitle: ""
     property int animationDelay: 0
+    property string comparisonText: ""
+    property int comparisonTrend: 0
+    property bool showComparison: false
 
     function restartIntro() {
         // 视图重新显示时重播入场动画，数据刷新不会显得突兀。
@@ -17,7 +20,7 @@ Rectangle {
     }
 
     implicitWidth: 190
-    implicitHeight: 104
+    implicitHeight: root.showComparison && root.comparisonText.length > 0 ? 126 : 104
     radius: 8
     color: "#fffef9"
     border.color: "#e8dfc8"
@@ -125,6 +128,25 @@ Rectangle {
             text: root.subtitle
             font.pixelSize: 12
             color: "#8b7355"
+            elide: Text.ElideRight
+        }
+
+        Text {
+            objectName: "statCardComparisonText"
+
+            Layout.fillWidth: true
+            visible: root.showComparison && root.comparisonText.length > 0
+            text: root.comparisonText
+            font.pixelSize: 13
+            color: {
+                if (root.comparisonTrend > 0) {
+                    return "#4caf50"
+                }
+                if (root.comparisonTrend < 0) {
+                    return "#f44336"
+                }
+                return "#8b7355"
+            }
             elide: Text.ElideRight
         }
     }

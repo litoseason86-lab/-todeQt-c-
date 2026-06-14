@@ -71,6 +71,22 @@ TestCase {
             };
         }
 
+        function makeComparison(displayText, trend) {
+            return {
+                hasData: true,
+                displayText: displayText,
+                trend: trend
+            };
+        }
+
+        function getDayComparison(date) {
+            return {
+                taskCompletion: makeComparison("→ 0% vs 昨天", 0),
+                sessionCount: makeComparison("→ 0% vs 昨天", 0),
+                duration: makeComparison("→ 0% vs 昨天", 0)
+            };
+        }
+
         function getWeekStats() {
             return {
                 totalDuration: 0,
@@ -80,7 +96,37 @@ TestCase {
             };
         }
 
+        function getWeekComparison(weekStart) {
+            return {
+                effectiveDays: makeComparison("→ 0% vs 上周", 0),
+                sessionCount: makeComparison("→ 0% vs 上周", 0),
+                duration: makeComparison("→ 0% vs 上周", 0)
+            };
+        }
+
         function getCategoryStats(startDate, endDate) {
+            return [];
+        }
+
+        function getMonthStats(year, month) {
+            return {
+                totalDuration: 0,
+                effectiveDays: 0,
+                sessionCount: 0,
+                completedTasks: 0,
+                totalTasks: 0
+            };
+        }
+
+        function getMonthComparison(year, month) {
+            return {
+                effectiveDays: makeComparison("→ 0% vs 上月", 0),
+                sessionCount: makeComparison("→ 0% vs 上月", 0),
+                duration: makeComparison("→ 0% vs 上月", 0)
+            };
+        }
+
+        function getMonthWeeklySummary(year, month) {
             return [];
         }
     }

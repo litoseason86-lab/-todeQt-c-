@@ -273,6 +273,7 @@ private slots:
     void deleteTaskPreservesFocusSessionHistory();
     void statisticsReturnsTodayCompletionAndDuration();
     void getDayStatsUsesSpecifiedHistoricalDate();
+    void getDayComparisonReturnsTrendTextAndRejectsInvalidDate();
     void focusHistoryReturnsMonthSessionsWithinBoundaries();
     void focusHistoryReturnsDayTotalsAndFormattedDurations();
     void focusHistoryFallsBackWhenTaskWasDeleted();
@@ -282,6 +283,7 @@ private slots:
     void focusHistoryCleansInvalidShortSessions();
     void getWeekStatsUsesCurrentNaturalWeek();
     void getWeekStatsUsesSpecifiedMondayAndRejectsInvalidStart();
+    void getWeekComparisonSumsNaturalWeeksAndRejectsInvalidStart();
     void getWeekTasksReturnsInclusiveRangeAndRequiredOrder();
     void getMonthTasksReturnsInclusiveMonthRange();
     void getMonthTasksRejectsInvalidMonth();
@@ -289,6 +291,7 @@ private slots:
     void getFocusSessionCountCountsOnlyValidFinishedSessions();
     void getMonthStatsUsesCurrentMonthAndTaskDate();
     void getMonthStatsUsesSpecifiedMonthAndRejectsInvalidYearMonth();
+    void getMonthComparisonHandlesPreviousMonthAndInvalidYearMonth();
     void getMonthWeeklySummaryStaysInsideCurrentMonth();
     void getMonthWeeklySummaryUsesSpecifiedMonthAndRejectsInvalidYearMonth();
     void getCategoryStatsAggregatesDurationsAndPercentages();
@@ -449,6 +452,70 @@ void ServiceTests::getDayStatsUsesSpecifiedHistoricalDate()
     QCOMPARE(invalidStats.value(QStringLiteral("completedTasks")).toInt(), 0);
     QCOMPARE(invalidStats.value(QStringLiteral("totalTasks")).toInt(), 0);
     QCOMPARE(invalidStats.value(QStringLiteral("completionRate")).toDouble(), 0.0);
+}
+
+void ServiceTests::getDayComparisonReturnsTrendTextAndRejectsInvalidDate()
+{
+    const QDate targetDate(2026, 6, 10);
+
+    QVERIFY(insertTaskRow(QStringLiteral("昨天完成任务"),
+                          targetDate.addDays(-1),
+                          QStringLiteral("数学"),
+                          true) > 0);
+    QVERIFY(insertTaskRow(QStringLiteral("今天完成任务一"),
+                          targetDate,
+                          QStringLiteral("数学"),
+                          true) > 0);
+    QVERIFY(insertTaskRow(QStringLiteral("今天完成任务二"),
+                          targetDate,
+                          QStringLiteral("英语"),
+                          true) > 0);
+    QVERIFY(insertFocusSessionRow(-1, targetDate.addDays(-1), 1200));
+    QVERIFY(insertFocusSessionRow(-1, targetDate, 1800));
+    QVERIFY(insertFocusSessionRow(-1, targetDate, 600));
+    QVERIFY(insertFocusSessionRow(-1, targetDate.addDays(10), 2400));
+
+    const QVariantMap comparison = StatisticsService::instance()->getDayComparison(targetDate);
+    const QVariantMap duration = comparison.value(QStringLiteral("duration")).toMap();
+    QCOMPARE(duration.value(QStringLiteral("currentValue")).toInt(), 2400);
+    QCOMPARE(duration.value(QStringLiteral("previousValue")).toInt(), 1200);
+    QCOMPARE(duration.value(QStringLiteral("changePercent")).toInt(), 100);
+    QCOMPARE(duration.value(QStringLiteral("trend")).toInt(), 1);
+    QCOMPARE(duration.value(QStringLiteral("displayText")).toString(), QStringLiteral("↗ +100% vs 昨天"));
+    QVERIFY(duration.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap sessionCount = comparison.value(QStringLiteral("sessionCount")).toMap();
+    QCOMPARE(sessionCount.value(QStringLiteral("currentValue")).toInt(), 2);
+    QCOMPARE(sessionCount.value(QStringLiteral("previousValue")).toInt(), 1);
+    QCOMPARE(sessionCount.value(QStringLiteral("changePercent")).toInt(), 100);
+    QCOMPARE(sessionCount.value(QStringLiteral("trend")).toInt(), 1);
+    QCOMPARE(sessionCount.value(QStringLiteral("displayText")).toString(), QStringLiteral("↗ +100% vs 昨天"));
+    QVERIFY(sessionCount.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap taskCompletion = comparison.value(QStringLiteral("taskCompletion")).toMap();
+    QCOMPARE(taskCompletion.value(QStringLiteral("currentValue")).toInt(), 2);
+    QCOMPARE(taskCompletion.value(QStringLiteral("previousValue")).toInt(), 1);
+    QCOMPARE(taskCompletion.value(QStringLiteral("changePercent")).toInt(), 100);
+    QCOMPARE(taskCompletion.value(QStringLiteral("trend")).toInt(), 1);
+    QCOMPARE(taskCompletion.value(QStringLiteral("displayText")).toString(), QStringLiteral("↗ +100% vs 昨天"));
+    QVERIFY(taskCompletion.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap firstRecord = StatisticsService::instance()->getDayComparison(targetDate.addDays(10));
+    const QVariantMap firstDuration = firstRecord.value(QStringLiteral("duration")).toMap();
+    QCOMPARE(firstDuration.value(QStringLiteral("currentValue")).toInt(), 2400);
+    QCOMPARE(firstDuration.value(QStringLiteral("previousValue")).toInt(), 0);
+    QCOMPARE(firstDuration.value(QStringLiteral("changePercent")).toInt(), 0);
+    QCOMPARE(firstDuration.value(QStringLiteral("trend")).toInt(), 1);
+    QCOMPARE(firstDuration.value(QStringLiteral("displayText")).toString(), QStringLiteral("首次记录"));
+    QVERIFY(firstDuration.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap noData = StatisticsService::instance()->getDayComparison(QDate(2026, 6, 30));
+    QCOMPARE(noData.value(QStringLiteral("duration")).toMap().value(QStringLiteral("hasData")).toBool(), false);
+    QCOMPARE(noData.value(QStringLiteral("sessionCount")).toMap().value(QStringLiteral("hasData")).toBool(), false);
+    QCOMPARE(noData.value(QStringLiteral("taskCompletion")).toMap().value(QStringLiteral("hasData")).toBool(), false);
+
+    const QVariantMap invalid = StatisticsService::instance()->getDayComparison(QDate());
+    QCOMPARE(invalid.value(QStringLiteral("hasData")).toBool(), false);
 }
 
 void ServiceTests::focusHistoryReturnsMonthSessionsWithinBoundaries()
@@ -698,6 +765,51 @@ void ServiceTests::getWeekStatsUsesSpecifiedMondayAndRejectsInvalidStart()
     QVERIFY(StatisticsService::instance()->getWeekStats(weekStart.addDays(1)).isEmpty());
 }
 
+void ServiceTests::getWeekComparisonSumsNaturalWeeksAndRejectsInvalidStart()
+{
+    const QDate weekStart(2026, 6, 8);
+    QCOMPARE(weekStart.dayOfWeek(), static_cast<int>(Qt::Monday));
+
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(-7), kTestMinimumValidDurationSeconds * 2));
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(-1), kTestMinimumValidDurationSeconds * 3));
+    QVERIFY(insertFocusSessionRow(-1, weekStart, kTestMinimumValidDurationSeconds * 4));
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(6), kTestMinimumValidDurationSeconds * 8));
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(3), kTestMinimumValidDurationSeconds));
+
+    const QVariantMap comparison = StatisticsService::instance()->getWeekComparison(weekStart);
+    const QVariantMap duration = comparison.value(QStringLiteral("duration")).toMap();
+    QCOMPARE(duration.value(QStringLiteral("currentValue")).toInt(),
+             kTestMinimumValidDurationSeconds * 13);
+    QCOMPARE(duration.value(QStringLiteral("previousValue")).toInt(),
+             kTestMinimumValidDurationSeconds * 5);
+    QCOMPARE(duration.value(QStringLiteral("changePercent")).toInt(), 160);
+    QCOMPARE(duration.value(QStringLiteral("trend")).toInt(), 1);
+    QCOMPARE(duration.value(QStringLiteral("displayText")).toString(), QStringLiteral("↗ +160% vs 上周"));
+    QVERIFY(duration.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap sessionCount = comparison.value(QStringLiteral("sessionCount")).toMap();
+    QCOMPARE(sessionCount.value(QStringLiteral("currentValue")).toInt(), 3);
+    QCOMPARE(sessionCount.value(QStringLiteral("previousValue")).toInt(), 2);
+    QCOMPARE(sessionCount.value(QStringLiteral("changePercent")).toInt(), 50);
+    QCOMPARE(sessionCount.value(QStringLiteral("trend")).toInt(), 1);
+    QCOMPARE(sessionCount.value(QStringLiteral("displayText")).toString(), QStringLiteral("↗ +50% vs 上周"));
+    QVERIFY(sessionCount.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap effectiveDays = comparison.value(QStringLiteral("effectiveDays")).toMap();
+    QCOMPARE(effectiveDays.value(QStringLiteral("currentValue")).toInt(), 3);
+    QCOMPARE(effectiveDays.value(QStringLiteral("previousValue")).toInt(), 2);
+    QCOMPARE(effectiveDays.value(QStringLiteral("changePercent")).toInt(), 50);
+    QCOMPARE(effectiveDays.value(QStringLiteral("trend")).toInt(), 1);
+    QCOMPARE(effectiveDays.value(QStringLiteral("displayText")).toString(), QStringLiteral("↗ +50% vs 上周"));
+    QVERIFY(effectiveDays.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap invalidDate = StatisticsService::instance()->getWeekComparison(QDate());
+    QCOMPARE(invalidDate.value(QStringLiteral("hasData")).toBool(), false);
+
+    const QVariantMap invalidWeekStart = StatisticsService::instance()->getWeekComparison(weekStart.addDays(1));
+    QCOMPARE(invalidWeekStart.value(QStringLiteral("hasData")).toBool(), false);
+}
+
 void ServiceTests::getWeekTasksReturnsInclusiveRangeAndRequiredOrder()
 {
     const QDate startDate(2026, 6, 9);
@@ -874,6 +986,95 @@ void ServiceTests::getMonthStatsUsesSpecifiedMonthAndRejectsInvalidYearMonth()
     QCOMPARE(invalidYear.value(QStringLiteral("sessionCount")).toInt(), 0);
     QCOMPARE(invalidYear.value(QStringLiteral("completedTasks")).toInt(), 0);
     QCOMPARE(invalidYear.value(QStringLiteral("totalTasks")).toInt(), 0);
+}
+
+void ServiceTests::getMonthComparisonHandlesPreviousMonthAndInvalidYearMonth()
+{
+    const QDate januaryFirst(2026, 1, 1);
+    const QDate previousDecemberFirst(2025, 12, 1);
+    const QDate februaryFirst(2026, 2, 1);
+
+    QVERIFY(insertFocusSessionRow(-1, previousDecemberFirst, kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, previousDecemberFirst.addDays(1), kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, januaryFirst, kTestMinimumValidDurationSeconds * 2));
+    QVERIFY(insertFocusSessionRow(-1, februaryFirst, kTestMinimumValidDurationSeconds * 5));
+    QVERIFY(insertFocusSessionRow(-1, februaryFirst.addDays(1), kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, februaryFirst.addDays(2), kTestMinimumValidDurationSeconds));
+
+    const QVariantMap februaryComparison = StatisticsService::instance()->getMonthComparison(2026, 2);
+    const QVariantMap februaryDuration = februaryComparison.value(QStringLiteral("duration")).toMap();
+    QCOMPARE(februaryDuration.value(QStringLiteral("currentValue")).toInt(),
+             kTestMinimumValidDurationSeconds * 7);
+    QCOMPARE(februaryDuration.value(QStringLiteral("previousValue")).toInt(),
+             kTestMinimumValidDurationSeconds * 2);
+    QCOMPARE(februaryDuration.value(QStringLiteral("changePercent")).toInt(), 250);
+    QCOMPARE(februaryDuration.value(QStringLiteral("trend")).toInt(), 1);
+    QCOMPARE(februaryDuration.value(QStringLiteral("displayText")).toString(), QStringLiteral("↗ +250% vs 上月"));
+    QVERIFY(februaryDuration.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap februarySessionCount = februaryComparison.value(QStringLiteral("sessionCount")).toMap();
+    QCOMPARE(februarySessionCount.value(QStringLiteral("currentValue")).toInt(), 3);
+    QCOMPARE(februarySessionCount.value(QStringLiteral("previousValue")).toInt(), 1);
+    QCOMPARE(februarySessionCount.value(QStringLiteral("changePercent")).toInt(), 200);
+    QCOMPARE(februarySessionCount.value(QStringLiteral("trend")).toInt(), 1);
+    QCOMPARE(februarySessionCount.value(QStringLiteral("displayText")).toString(), QStringLiteral("↗ +200% vs 上月"));
+    QVERIFY(februarySessionCount.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap februaryEffectiveDays = februaryComparison.value(QStringLiteral("effectiveDays")).toMap();
+    QCOMPARE(februaryEffectiveDays.value(QStringLiteral("currentValue")).toInt(), 3);
+    QCOMPARE(februaryEffectiveDays.value(QStringLiteral("previousValue")).toInt(), 1);
+    QCOMPARE(februaryEffectiveDays.value(QStringLiteral("changePercent")).toInt(), 200);
+    QCOMPARE(februaryEffectiveDays.value(QStringLiteral("trend")).toInt(), 1);
+    QCOMPARE(februaryEffectiveDays.value(QStringLiteral("displayText")).toString(), QStringLiteral("↗ +200% vs 上月"));
+    QVERIFY(februaryEffectiveDays.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap januaryComparison = StatisticsService::instance()->getMonthComparison(2026, 1);
+    const QVariantMap januaryDuration = januaryComparison.value(QStringLiteral("duration")).toMap();
+    QCOMPARE(januaryDuration.value(QStringLiteral("currentValue")).toInt(),
+             kTestMinimumValidDurationSeconds * 2);
+    QCOMPARE(januaryDuration.value(QStringLiteral("previousValue")).toInt(),
+             kTestMinimumValidDurationSeconds * 2);
+    QCOMPARE(januaryDuration.value(QStringLiteral("changePercent")).toInt(), 0);
+    QCOMPARE(januaryDuration.value(QStringLiteral("trend")).toInt(), 0);
+    QCOMPARE(januaryDuration.value(QStringLiteral("displayText")).toString(), QStringLiteral("→ 0% vs 上月"));
+    QVERIFY(januaryDuration.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap januarySessionCount = januaryComparison.value(QStringLiteral("sessionCount")).toMap();
+    QCOMPARE(januarySessionCount.value(QStringLiteral("currentValue")).toInt(), 1);
+    QCOMPARE(januarySessionCount.value(QStringLiteral("previousValue")).toInt(), 2);
+    QCOMPARE(januarySessionCount.value(QStringLiteral("changePercent")).toInt(), -50);
+    QCOMPARE(januarySessionCount.value(QStringLiteral("trend")).toInt(), -1);
+    QCOMPARE(januarySessionCount.value(QStringLiteral("displayText")).toString(), QStringLiteral("↘ -50% vs 上月"));
+    QVERIFY(januarySessionCount.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap marchComparison = StatisticsService::instance()->getMonthComparison(2026, 3);
+    const QVariantMap marchDuration = marchComparison.value(QStringLiteral("duration")).toMap();
+    QCOMPARE(marchDuration.value(QStringLiteral("currentValue")).toInt(), 0);
+    QCOMPARE(marchDuration.value(QStringLiteral("previousValue")).toInt(),
+             kTestMinimumValidDurationSeconds * 7);
+    QCOMPARE(marchDuration.value(QStringLiteral("changePercent")).toInt(), -100);
+    QCOMPARE(marchDuration.value(QStringLiteral("trend")).toInt(), -1);
+    QCOMPARE(marchDuration.value(QStringLiteral("displayText")).toString(), QStringLiteral("↘ -100% vs 上月"));
+    QVERIFY(marchDuration.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap marchSessionCount = marchComparison.value(QStringLiteral("sessionCount")).toMap();
+    QCOMPARE(marchSessionCount.value(QStringLiteral("currentValue")).toInt(), 0);
+    QCOMPARE(marchSessionCount.value(QStringLiteral("previousValue")).toInt(), 3);
+    QCOMPARE(marchSessionCount.value(QStringLiteral("changePercent")).toInt(), -100);
+    QCOMPARE(marchSessionCount.value(QStringLiteral("trend")).toInt(), -1);
+    QCOMPARE(marchSessionCount.value(QStringLiteral("displayText")).toString(), QStringLiteral("↘ -100% vs 上月"));
+    QVERIFY(marchSessionCount.value(QStringLiteral("hasData")).toBool());
+
+    const QVariantMap equalZeroComparison = StatisticsService::instance()->getMonthComparison(2026, 4);
+    QCOMPARE(equalZeroComparison.value(QStringLiteral("duration")).toMap().value(QStringLiteral("hasData")).toBool(), false);
+    QCOMPARE(equalZeroComparison.value(QStringLiteral("sessionCount")).toMap().value(QStringLiteral("hasData")).toBool(), false);
+    QCOMPARE(equalZeroComparison.value(QStringLiteral("effectiveDays")).toMap().value(QStringLiteral("hasData")).toBool(), false);
+
+    const QVariantMap invalidMonth = StatisticsService::instance()->getMonthComparison(2026, 0);
+    QCOMPARE(invalidMonth.value(QStringLiteral("hasData")).toBool(), false);
+
+    const QVariantMap invalidYear = StatisticsService::instance()->getMonthComparison(1999, 2);
+    QCOMPARE(invalidYear.value(QStringLiteral("hasData")).toBool(), false);
 }
 
 void ServiceTests::getMonthWeeklySummaryStaysInsideCurrentMonth()

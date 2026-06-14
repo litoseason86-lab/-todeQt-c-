@@ -32,14 +32,21 @@ TestCase {
         property int weekStatsCalls: 0
         property int monthStatsCalls: 0
         property int monthWeeklySummaryCalls: 0
+        property int dayComparisonCalls: 0
+        property int weekComparisonCalls: 0
+        property int monthComparisonCalls: 0
         property string lastDayStatsDate: ""
+        property string lastDayComparisonDate: ""
         property string lastWeekStatsStartDate: ""
+        property string lastWeekComparisonStartDate: ""
         property string lastEffectiveDaysStartDate: ""
         property string lastEffectiveDaysEndDate: ""
         property string lastFocusSessionCountStartDate: ""
         property string lastFocusSessionCountEndDate: ""
         property int lastMonthStatsYear: 0
         property int lastMonthStatsMonth: 0
+        property int lastMonthComparisonYear: 0
+        property int lastMonthComparisonMonth: 0
         property int lastMonthWeeklySummaryYear: 0
         property int lastMonthWeeklySummaryMonth: 0
         property string lastCategoryStartDate: ""
@@ -52,14 +59,21 @@ TestCase {
             weekStatsCalls = 0
             monthStatsCalls = 0
             monthWeeklySummaryCalls = 0
+            dayComparisonCalls = 0
+            weekComparisonCalls = 0
+            monthComparisonCalls = 0
             lastDayStatsDate = ""
+            lastDayComparisonDate = ""
             lastWeekStatsStartDate = ""
+            lastWeekComparisonStartDate = ""
             lastEffectiveDaysStartDate = ""
             lastEffectiveDaysEndDate = ""
             lastFocusSessionCountStartDate = ""
             lastFocusSessionCountEndDate = ""
             lastMonthStatsYear = 0
             lastMonthStatsMonth = 0
+            lastMonthComparisonYear = 0
+            lastMonthComparisonMonth = 0
             lastMonthWeeklySummaryYear = 0
             lastMonthWeeklySummaryMonth = 0
             lastCategoryStartDate = ""
@@ -76,6 +90,20 @@ TestCase {
             return { totalDuration: 600, completedTasks: 1, totalTasks: 2, completionRate: 0.5, sessionCount: 4 }
         }
 
+        function makeComparison(displayText, trend) {
+            return { hasData: true, displayText: displayText, trend: trend }
+        }
+
+        function getDayComparison(date) {
+            dayComparisonCalls += 1
+            lastDayComparisonDate = testCase.isoDateOrEmpty(date)
+            return {
+                taskCompletion: makeComparison("↘ -25% vs 昨天", -1),
+                sessionCount: makeComparison("→ 0% vs 昨天", 0),
+                duration: makeComparison("↗ +50% vs 昨天", 1)
+            }
+        }
+
         function getWeekStats(weekStart) {
             weekStatsCalls += 1
             lastWeekStatsStartDate = testCase.isoDateOrEmpty(weekStart)
@@ -89,6 +117,16 @@ TestCase {
                 { date: testCase.isoDate(testCase.addDays(start, 5)), duration: 0 },
                 { date: testCase.isoDate(testCase.addDays(start, 6)), duration: 0 }
             ]
+        }
+
+        function getWeekComparison(weekStart) {
+            weekComparisonCalls += 1
+            lastWeekComparisonStartDate = testCase.isoDateOrEmpty(weekStart)
+            return {
+                effectiveDays: makeComparison("↗ +20% vs 上周", 1),
+                sessionCount: makeComparison("→ 0% vs 上周", 0),
+                duration: makeComparison("↘ -25% vs 上周", -1)
+            }
         }
 
         function getCategoryStats(startDate, endDate) {
@@ -126,6 +164,17 @@ TestCase {
                 sessionCount: 8,
                 completedTasks: 0,
                 totalTasks: 0
+            }
+        }
+
+        function getMonthComparison(year, month) {
+            monthComparisonCalls += 1
+            lastMonthComparisonYear = Number(year || 0)
+            lastMonthComparisonMonth = Number(month || 0)
+            return {
+                effectiveDays: makeComparison("↗ +40% vs 上月", 1),
+                sessionCount: makeComparison("↘ -10% vs 上月", -1),
+                duration: makeComparison("→ 0% vs 上月", 0)
             }
         }
 
@@ -400,6 +449,7 @@ TestCase {
         compare(secondCard.subtitle, "当日完成次数")
         compare(thirdCard.title, "当日专注")
         compare(thirdCard.subtitle, "所选自然日")
+        compare(thirdCard.comparisonText, "↗ +50% vs 前天")
         compare(trendChart.title, "所在周专注趋势")
         compare(pieChart.emptyText, "当日还没有可归类的专注记录")
         compare(statisticsService.dayStatsCalls, 1)
@@ -421,6 +471,51 @@ TestCase {
         compare(statisticsService.lastDayStatsDate, isoDate(todaySnapshot))
         compare(statisticsService.lastCategoryStartDate, isoDate(todaySnapshot))
         compare(statisticsService.lastCategoryEndDate, isoDate(todaySnapshot))
+    }
+
+    function test_statisticsComparisonDefaultsToTodayAndFollowsNavigation() {
+        statisticsView.visible = true
+        wait(50)
+
+        var firstCard = findChild(statisticsView, "statisticsPrimaryStatCard")
+        var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
+        var thirdCard = findChild(statisticsView, "statisticsTotalDurationStatCard")
+        verify(firstCard !== null)
+        verify(secondCard !== null)
+        verify(thirdCard !== null)
+
+        statisticsService.resetTracking()
+        statisticsView.refresh()
+
+        tryCompare(statisticsService, "dayComparisonCalls", 1, 1000)
+        compare(statisticsService.dayComparisonCalls, 1)
+        compare(statisticsService.lastDayComparisonDate, isoDate(todaySnapshot))
+        compare(firstCard.showComparison, true)
+        compare(firstCard.comparisonText, "↘ -25% vs 昨天")
+        compare(firstCard.comparisonTrend, -1)
+        compare(secondCard.comparisonText, "→ 0% vs 昨天")
+        compare(secondCard.comparisonTrend, 0)
+        compare(thirdCard.comparisonText, "↗ +50% vs 昨天")
+        compare(thirdCard.comparisonTrend, 1)
+
+        var comparisonText = findChild(thirdCard, "statCardComparisonText")
+        verify(comparisonText !== null)
+        compare(thirdCard.implicitHeight, 126)
+        verify(Qt.colorEqual(comparisonText.color, "#4caf50"))
+
+        var yesterday = addDays(todaySnapshot, -1)
+        statisticsService.resetTracking()
+        statisticsView.goToPreviousPeriod()
+        compare(statisticsService.dayComparisonCalls, 1)
+        compare(statisticsService.lastDayComparisonDate, isoDate(yesterday))
+        compare(thirdCard.comparisonText, "↗ +50% vs 前天")
+
+        var twoDaysAgo = addDays(todaySnapshot, -2)
+        statisticsService.resetTracking()
+        statisticsView.goToPreviousPeriod()
+        compare(statisticsService.dayComparisonCalls, 1)
+        compare(statisticsService.lastDayComparisonDate, isoDate(twoDaysAgo))
+        compare(thirdCard.comparisonText, "↗ +50% vs 3天前")
     }
 
     function test_statisticsWeekArrowNavigationUsesSelectedWeek() {
@@ -460,6 +555,7 @@ TestCase {
         compare(secondCard.subtitle, "所选周完成次数")
         compare(thirdCard.title, "所选周累计")
         compare(thirdCard.subtitle, "所选周专注时长")
+        compare(thirdCard.comparisonText, "↘ -25% vs 上上周")
         compare(trendChart.title, "所选周专注趋势")
         compare(pieChart.emptyText, "所选周还没有可归类的专注记录")
         compare(statisticsService.weekStatsCalls, 1)
@@ -473,7 +569,15 @@ TestCase {
         compare(statisticsService.lastCategoryStartDate, isoDate(lastWeekStart))
         compare(statisticsService.lastCategoryEndDate, isoDate(lastWeekEnd))
 
+        var twoWeeksAgoStart = addDays(mondayOf(todaySnapshot), -14)
         statisticsService.resetTracking()
+        statisticsView.goToPreviousPeriod()
+        compare(statisticsService.weekComparisonCalls, 1)
+        compare(statisticsService.lastWeekComparisonStartDate, isoDate(twoWeeksAgoStart))
+        compare(thirdCard.comparisonText, "↘ -25% vs 3周前")
+
+        statisticsService.resetTracking()
+        statisticsView.goToNextPeriod()
         statisticsView.goToNextPeriod()
         tryCompare(selectorText, "text", "本周", 1000)
 
@@ -484,8 +588,52 @@ TestCase {
         compare(thirdCard.subtitle, "本周专注时长")
         compare(trendChart.title, "本周专注趋势")
         compare(pieChart.emptyText, "本周还没有可归类的专注记录")
-        compare(statisticsService.weekStatsCalls, 1)
+        compare(statisticsService.weekStatsCalls, 2)
         compare(statisticsService.lastWeekStatsStartDate, isoDate(mondayOf(todaySnapshot)))
+    }
+
+    function test_statisticsComparisonSwitchesWeekAndMonthData() {
+        statisticsService.resetTracking()
+        selectTimeRange("statisticsTimeRangeWeekItem")
+
+        var firstCard = findChild(statisticsView, "statisticsPrimaryStatCard")
+        var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
+        var thirdCard = findChild(statisticsView, "statisticsTotalDurationStatCard")
+        verify(firstCard !== null)
+        verify(secondCard !== null)
+        verify(thirdCard !== null)
+
+        tryCompare(statisticsService, "weekComparisonCalls", 1, 1000)
+        compare(statisticsService.weekComparisonCalls, 1)
+        compare(statisticsService.lastWeekComparisonStartDate, isoDate(mondayOf(todaySnapshot)))
+        compare(firstCard.comparisonText, "↗ +20% vs 上周")
+        compare(firstCard.comparisonTrend, 1)
+        compare(secondCard.comparisonText, "→ 0% vs 上周")
+        compare(secondCard.comparisonTrend, 0)
+        compare(thirdCard.comparisonText, "↘ -25% vs 上周")
+        compare(thirdCard.comparisonTrend, -1)
+
+        var weekComparisonText = findChild(thirdCard, "statCardComparisonText")
+        verify(weekComparisonText !== null)
+        verify(Qt.colorEqual(weekComparisonText.color, "#f44336"))
+
+        statisticsService.resetTracking()
+        selectTimeRange("statisticsTimeRangeMonthItem")
+
+        tryCompare(statisticsService, "monthComparisonCalls", 1, 1000)
+        compare(statisticsService.monthComparisonCalls, 1)
+        compare(statisticsService.lastMonthComparisonYear, todaySnapshot.getFullYear())
+        compare(statisticsService.lastMonthComparisonMonth, todaySnapshot.getMonth() + 1)
+        compare(firstCard.comparisonText, "↗ +40% vs 上月")
+        compare(firstCard.comparisonTrend, 1)
+        compare(secondCard.comparisonText, "↘ -10% vs 上月")
+        compare(secondCard.comparisonTrend, -1)
+        compare(thirdCard.comparisonText, "→ 0% vs 上月")
+        compare(thirdCard.comparisonTrend, 0)
+
+        var monthComparisonText = findChild(thirdCard, "statCardComparisonText")
+        verify(monthComparisonText !== null)
+        verify(Qt.colorEqual(monthComparisonText.color, "#8b7355"))
     }
 
     function test_statisticsMonthArrowNavigationUsesSelectedMonth() {
@@ -526,6 +674,7 @@ TestCase {
         compare(secondCard.subtitle, "所选月完成次数")
         compare(thirdCard.title, "所选月累计")
         compare(thirdCard.subtitle, "所选月专注时长")
+        compare(thirdCard.comparisonText, "→ 0% vs 上上月")
         compare(trendChart.title, "所选月专注趋势")
         compare(pieChart.emptyText, "所选月还没有可归类的专注记录")
         compare(statisticsService.monthStatsCalls, 1)
@@ -538,6 +687,12 @@ TestCase {
         compare(statisticsService.lastCategoryEndDate, isoDate(lastDay))
 
         statisticsService.resetTracking()
+        statisticsView.goToPreviousPeriod()
+        compare(statisticsService.monthComparisonCalls, 1)
+        compare(thirdCard.comparisonText, "→ 0% vs 3个月前")
+
+        statisticsService.resetTracking()
+        statisticsView.goToNextPeriod()
         statisticsView.goToNextPeriod()
         tryCompare(selectorText, "text", "本月", 1000)
 
@@ -548,10 +703,10 @@ TestCase {
         compare(thirdCard.subtitle, "本月专注时长")
         compare(trendChart.title, "本月专注趋势")
         compare(pieChart.emptyText, "本月还没有可归类的专注记录")
-        compare(statisticsService.monthStatsCalls, 1)
+        compare(statisticsService.monthStatsCalls, 2)
         compare(statisticsService.lastMonthStatsYear, todaySnapshot.getFullYear())
         compare(statisticsService.lastMonthStatsMonth, todaySnapshot.getMonth() + 1)
-        compare(statisticsService.monthWeeklySummaryCalls, 1)
+        compare(statisticsService.monthWeeklySummaryCalls, 2)
         compare(statisticsService.lastMonthWeeklySummaryYear, todaySnapshot.getFullYear())
         compare(statisticsService.lastMonthWeeklySummaryMonth, todaySnapshot.getMonth() + 1)
     }

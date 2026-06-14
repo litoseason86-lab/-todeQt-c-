@@ -9,6 +9,9 @@ Item {
 
     property var todayStats: ({ totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0 })
     property string currentTimeRange: "today"
+    property var todayComparison: ({})
+    property var weekComparison: ({})
+    property var monthComparison: ({})
     property var currentDateProvider: null
     property date currentDateSnapshot: new Date()
     // 三种时间范围各自保留选中状态，切换模式时再重置，避免日/周/月导航互相污染。
@@ -170,6 +173,12 @@ Item {
                 + "-" + (end.getMonth() + 1) + "." + end.getDate()
     }
 
+    function dayStart(value) {
+        var date = new Date(value)
+        date.setHours(0, 0, 0, 0)
+        return date
+    }
+
     function refreshCurrentDateSnapshot() {
         var providedDate = root.currentDateProvider ? root.currentDateProvider() : new Date()
         var normalizedDate = new Date(providedDate)
@@ -267,6 +276,121 @@ Item {
         return result
     }
 
+    function comparisonVisible(comparison) {
+        return Boolean(comparison && comparison.hasData && root.comparisonDisplayText(comparison).length > 0)
+    }
+
+    function comparisonDisplayText(comparison) {
+        var text = comparison && comparison.displayText ? String(comparison.displayText) : ""
+        if (text.length === 0) {
+            return text
+        }
+        return root.withSelectedPeriodComparisonLabel(text)
+    }
+
+    function withSelectedPeriodComparisonLabel(text) {
+        if (root.currentTimeRange === "today") {
+            return text.replace("昨天", root.dayComparisonLabel())
+        }
+        if (root.currentTimeRange === "week") {
+            return text.replace("上周", root.weekComparisonLabel())
+        }
+        if (root.currentTimeRange === "month") {
+            return text.replace("上月", root.monthComparisonLabel())
+        }
+        return text
+    }
+
+    function dayComparisonLabel() {
+        var today = root.dayStart(root.currentDateSnapshot)
+        var comparedDay = root.dayStart(root.selectedDate)
+        comparedDay.setDate(comparedDay.getDate() - 1)
+
+        // 标签描述的是“被比较的前一日”相对今天的位置，历史期不能简单写死为昨天。
+        var daysAgo = Math.round((today.getTime() - comparedDay.getTime()) / 86400000)
+        if (daysAgo <= 1) {
+            return "昨天"
+        }
+        if (daysAgo === 2) {
+            return "前天"
+        }
+        return daysAgo + "天前"
+    }
+
+    function weekComparisonLabel() {
+        var currentMonday = root.mondayOf(root.currentDateSnapshot)
+        var comparedWeekStart = new Date(root.selectedWeekStart)
+        comparedWeekStart.setDate(comparedWeekStart.getDate() - 7)
+        comparedWeekStart.setHours(0, 0, 0, 0)
+
+        // 周视图的比较对象是所选周的前一周；退多周时要显示真实距离。
+        var weeksAgo = Math.round((currentMonday.getTime() - comparedWeekStart.getTime()) / (7 * 86400000))
+        if (weeksAgo <= 1) {
+            return "上周"
+        }
+        if (weeksAgo === 2) {
+            return "上上周"
+        }
+        return weeksAgo + "周前"
+    }
+
+    function monthComparisonLabel() {
+        var current = new Date(root.currentDateSnapshot)
+        var comparedYear = root.selectedYear
+        var comparedMonth = root.selectedMonth - 1
+        if (comparedMonth < 1) {
+            comparedMonth = 12
+            comparedYear -= 1
+        }
+
+        // 月份用 year*12+month 计算距离，避免跨年时 “1月 vs 上月” 算错。
+        var currentIndex = current.getFullYear() * 12 + current.getMonth() + 1
+        var comparedIndex = comparedYear * 12 + comparedMonth
+        var monthsAgo = currentIndex - comparedIndex
+        if (monthsAgo <= 1) {
+            return "上月"
+        }
+        if (monthsAgo === 2) {
+            return "上上月"
+        }
+        return monthsAgo + "个月前"
+    }
+
+    function currentComparisonGroup() {
+        // 同一时间范围内的同比结果按指标拆开存放，卡片只取自己对应的那一项。
+        if (root.currentTimeRange === "week") {
+            return root.weekComparison || {}
+        }
+        if (root.currentTimeRange === "month") {
+            return root.monthComparison || {}
+        }
+        return root.todayComparison || {}
+    }
+
+    function comparisonForMetric(metricName) {
+        var comparisonGroup = root.currentComparisonGroup()
+        if (!comparisonGroup) {
+            return {}
+        }
+        return comparisonGroup[metricName] || {}
+    }
+
+    function primaryCardComparison() {
+        // 今日卡片主值是“完成数 / 总数”，因此这里比较完成任务数量；周/月卡片比较有效天数。
+        if (root.currentTimeRange === "today") {
+            return root.comparisonForMetric("taskCompletion")
+        }
+        return root.comparisonForMetric("effectiveDays")
+    }
+
+    function sessionCountComparison() {
+        return root.comparisonForMetric("sessionCount")
+    }
+
+    function durationComparison() {
+        return root.comparisonForMetric("duration")
+    }
+
     function refresh() {
         try {
             root.loadError = ""
@@ -275,6 +399,7 @@ Item {
             if (root.currentTimeRange === "today") {
                 var selectedDay = new Date(root.selectedDate)
                 root.todayStats = statisticsService.getDayStats(selectedDay)
+                root.todayComparison = statisticsService.getDayComparison(selectedDay)
                 root.weekStats = statisticsService.getWeekStats(root.mondayOf(selectedDay))
                 root.categoryStats = statisticsService.getCategoryStats(
                             Qt.formatDate(selectedDay, "yyyy-MM-dd"),
@@ -283,6 +408,7 @@ Item {
                 var weekStart = new Date(root.selectedWeekStart)
                 var weekEnd = root.endOfWeek(weekStart)
                 root.weekStats = statisticsService.getWeekStats(weekStart)
+                root.weekComparison = statisticsService.getWeekComparison(weekStart)
                 var weekTotal = root.weekTotalDuration()
 
                 // 多范围卡片复用 todayStats 这个绑定入口，避免 UI 层维护三套重复卡片状态。
@@ -299,6 +425,7 @@ Item {
                             Qt.formatDate(weekEnd, "yyyy-MM-dd"))
             } else if (root.currentTimeRange === "month") {
                 root.monthStats = statisticsService.getMonthStats(root.selectedYear, root.selectedMonth)
+                root.monthComparison = statisticsService.getMonthComparison(root.selectedYear, root.selectedMonth)
                 root.monthWeeklySummary = statisticsService.getMonthWeeklySummary(root.selectedYear, root.selectedMonth)
                 root.todayStats = {
                     effectiveDays: root.monthStats.effectiveDays || 0,
@@ -322,6 +449,9 @@ Item {
             root.todayStats = { totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0, sessionCount: 0 }
             root.weekStats = []
             root.monthStats = { totalDuration: 0, effectiveDays: 0, sessionCount: 0, completedTasks: 0, totalTasks: 0 }
+            root.todayComparison = {}
+            root.weekComparison = {}
+            root.monthComparison = {}
             root.monthWeeklySummary = []
             root.categoryStats = { categories: [], totalDuration: 0 }
         }
@@ -667,6 +797,9 @@ Item {
 
                     Layout.fillWidth: true
                     animationDelay: 0
+                    showComparison: root.comparisonVisible(root.primaryCardComparison())
+                    comparisonText: root.comparisonDisplayText(root.primaryCardComparison())
+                    comparisonTrend: Number(root.primaryCardComparison().trend || 0)
                     title: root.currentTimeRange === "today" ? "任务完成" : "有效天数"
                     value: {
                         if (root.currentTimeRange === "today") {
@@ -691,6 +824,9 @@ Item {
 
                     Layout.fillWidth: true
                     animationDelay: 70
+                    showComparison: root.comparisonVisible(root.sessionCountComparison())
+                    comparisonText: root.comparisonDisplayText(root.sessionCountComparison())
+                    comparisonTrend: Number(root.sessionCountComparison().trend || 0)
                     title: "专注次数"
                     value: Number(root.todayStats.sessionCount || 0) + "次"
                     subtitle: {
@@ -710,6 +846,9 @@ Item {
 
                     Layout.fillWidth: true
                     animationDelay: 140
+                    showComparison: root.comparisonVisible(root.durationComparison())
+                    comparisonText: root.comparisonDisplayText(root.durationComparison())
+                    comparisonTrend: Number(root.durationComparison().trend || 0)
                     title: {
                         if (root.currentTimeRange === "today") {
                             return root.isCurrentSelectedPeriod ? "今日专注" : "当日专注"

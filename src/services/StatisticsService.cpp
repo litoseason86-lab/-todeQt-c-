@@ -5,12 +5,25 @@
 
 #include <QDebug>
 #include <QDateTime>
+#include <QtMath>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QVariant>
 
 namespace {
+QVariantMap noComparisonData()
+{
+    QVariantMap result;
+    result.insert(QStringLiteral("hasData"), false);
+    result.insert(QStringLiteral("currentValue"), 0);
+    result.insert(QStringLiteral("previousValue"), 0);
+    result.insert(QStringLiteral("changePercent"), 0);
+    result.insert(QStringLiteral("trend"), 0);
+    result.insert(QStringLiteral("displayText"), QString());
+    return result;
+}
+
 QDate normalizeDate(const QVariant& value)
 {
     // 公共 API 兼容 QML Date、ISO 字符串和 C++ QDate 调用。
@@ -160,6 +173,46 @@ QVariantMap StatisticsService::getTodayStats() const
     return getDayStats(QDate::currentDate());
 }
 
+QVariantMap StatisticsService::buildComparisonResult(int currentValue, int previousValue, const QString& label) const
+{
+    if (currentValue == 0 && previousValue == 0) {
+        return noComparisonData();
+    }
+
+    QVariantMap result;
+    result.insert(QStringLiteral("currentValue"), currentValue);
+    result.insert(QStringLiteral("previousValue"), previousValue);
+    result.insert(QStringLiteral("hasData"), true);
+
+    // 前一周期为 0 时不能计算百分比；这里单独区分首次记录和两个周期都无数据。
+    if (previousValue == 0) {
+        result.insert(QStringLiteral("changePercent"), 0);
+        result.insert(QStringLiteral("trend"), currentValue > 0 ? 1 : 0);
+        result.insert(QStringLiteral("displayText"),
+                      currentValue > 0 ? QStringLiteral("首次记录")
+                                       : QStringLiteral("→ 0% vs %1").arg(label));
+        return result;
+    }
+
+    const double changeRatio = static_cast<double>(currentValue - previousValue) / previousValue;
+    const int changePercent = qRound(changeRatio * 100.0);
+
+    result.insert(QStringLiteral("changePercent"), changePercent);
+    result.insert(QStringLiteral("trend"), changePercent > 0 ? 1 : (changePercent < 0 ? -1 : 0));
+
+    const QString arrow = changePercent > 0 ? QStringLiteral("↗")
+                           : changePercent < 0 ? QStringLiteral("↘")
+                                               : QStringLiteral("→");
+    const QString sign = changePercent > 0 ? QStringLiteral("+") : QString();
+    result.insert(QStringLiteral("displayText"),
+                  QStringLiteral("%1 %2%3% vs %4")
+                      .arg(arrow)
+                      .arg(sign)
+                      .arg(changePercent)
+                      .arg(label));
+    return result;
+}
+
 QVariantList StatisticsService::getWeekStats(const QDate& weekStart) const
 {
     QVariantList weekStats;
@@ -190,6 +243,68 @@ QVariantList StatisticsService::getWeekStats() const
 {
     const QDate today = QDate::currentDate();
     return getWeekStats(today.addDays(1 - today.dayOfWeek()));
+}
+
+QVariantMap StatisticsService::getDayComparison(const QDate& date) const
+{
+    if (!date.isValid()) {
+        QVariantMap result;
+        result.insert(QStringLiteral("hasData"), false);
+        result.insert(QStringLiteral("duration"), noComparisonData());
+        result.insert(QStringLiteral("sessionCount"), noComparisonData());
+        result.insert(QStringLiteral("taskCompletion"), noComparisonData());
+        return result;
+    }
+
+    const QDate previousDate = date.addDays(-1);
+
+    QVariantMap result;
+    result.insert(QStringLiteral("duration"),
+                  buildComparisonResult(calculateTotalDuration(date),
+                                        calculateTotalDuration(previousDate),
+                                        QStringLiteral("昨天")));
+    result.insert(QStringLiteral("sessionCount"),
+                  buildComparisonResult(getFocusSessionCount(date, date),
+                                        getFocusSessionCount(previousDate, previousDate),
+                                        QStringLiteral("昨天")));
+    result.insert(QStringLiteral("taskCompletion"),
+                  buildComparisonResult(countCompletedTasks(date),
+                                        countCompletedTasks(previousDate),
+                                        QStringLiteral("昨天")));
+    return result;
+}
+
+QVariantMap StatisticsService::getWeekComparison(const QDate& weekStart) const
+{
+    if (!weekStart.isValid() || weekStart.dayOfWeek() != Qt::Monday) {
+        QVariantMap result;
+        result.insert(QStringLiteral("hasData"), false);
+        return result;
+    }
+
+    int currentDuration = 0;
+    int previousDuration = 0;
+    for (int offset = 0; offset < 7; ++offset) {
+        currentDuration += calculateTotalDuration(weekStart.addDays(offset));
+        previousDuration += calculateTotalDuration(weekStart.addDays(offset - 7));
+    }
+
+    const QDate weekEnd = weekStart.addDays(6);
+    const QDate previousWeekStart = weekStart.addDays(-7);
+    const QDate previousWeekEnd = weekStart.addDays(-1);
+
+    QVariantMap result;
+    result.insert(QStringLiteral("duration"),
+                  buildComparisonResult(currentDuration, previousDuration, QStringLiteral("上周")));
+    result.insert(QStringLiteral("effectiveDays"),
+                  buildComparisonResult(getEffectiveDays(weekStart, weekEnd),
+                                        getEffectiveDays(previousWeekStart, previousWeekEnd),
+                                        QStringLiteral("上周")));
+    result.insert(QStringLiteral("sessionCount"),
+                  buildComparisonResult(getFocusSessionCount(weekStart, weekEnd),
+                                        getFocusSessionCount(previousWeekStart, previousWeekEnd),
+                                        QStringLiteral("上周")));
+    return result;
 }
 
 QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, const QVariant& endDateValue) const
@@ -308,6 +423,41 @@ QVariantMap StatisticsService::getMonthStats() const
 {
     const QDate today = QDate::currentDate();
     return getMonthStats(today.year(), today.month());
+}
+
+QVariantMap StatisticsService::getMonthComparison(int year, int month) const
+{
+    if (!isValidStatsYearMonth(year, month, QStringLiteral("Failed to get month comparison:"))) {
+        QVariantMap result;
+        result.insert(QStringLiteral("hasData"), false);
+        return result;
+    }
+
+    int previousYear = year;
+    int previousMonth = month - 1;
+    if (previousMonth < 1) {
+        // 1 月的上月属于上一年，不能把 month=0 传给月统计接口。
+        previousMonth = 12;
+        --previousYear;
+    }
+
+    const QVariantMap currentStats = getMonthStats(year, month);
+    const QVariantMap previousStats = getMonthStats(previousYear, previousMonth);
+
+    QVariantMap result;
+    result.insert(QStringLiteral("duration"),
+                  buildComparisonResult(currentStats.value(QStringLiteral("totalDuration")).toInt(),
+                                        previousStats.value(QStringLiteral("totalDuration")).toInt(),
+                                        QStringLiteral("上月")));
+    result.insert(QStringLiteral("effectiveDays"),
+                  buildComparisonResult(currentStats.value(QStringLiteral("effectiveDays")).toInt(),
+                                        previousStats.value(QStringLiteral("effectiveDays")).toInt(),
+                                        QStringLiteral("上月")));
+    result.insert(QStringLiteral("sessionCount"),
+                  buildComparisonResult(currentStats.value(QStringLiteral("sessionCount")).toInt(),
+                                        previousStats.value(QStringLiteral("sessionCount")).toInt(),
+                                        QStringLiteral("上月")));
+    return result;
 }
 
 int StatisticsService::getEffectiveDays(const QDate& startDate, const QDate& endDate) const
