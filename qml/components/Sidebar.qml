@@ -8,6 +8,8 @@ Rectangle {
     width: 208
     readonly property color sidebarGradientTopColor: "#faf8f3"
     readonly property color sidebarGradientBottomColor: "#f5f0e6"
+    readonly property color sidebarItemIdleColor: "#faf8f3"
+    readonly property color sidebarItemIdleBorderColor: "#faf8f3"
     readonly property color sidebarItemHoverColor: "#faf6ee"
     readonly property color sidebarItemHoverBorderColor: "#e8dfc8"
     readonly property color sidebarItemActiveColor: "#f0e6d2"
@@ -152,8 +154,10 @@ Rectangle {
         Layout.fillWidth: true
         Layout.preferredHeight: 44
         radius: 6
-        color: item.isActive ? root.sidebarItemActiveColor : (item.visualHovered ? root.sidebarItemHoverColor : "transparent")
-        border.color: item.isActive ? root.sidebarItemActiveBorderColor : (item.visualHovered ? root.sidebarItemHoverBorderColor : "transparent")
+        // 不能把非激活状态设为 transparent：hover 退场时 ColorAnimation 会做透明插值，
+        // macOS 上会短暂露出灰色过渡块。默认态固定为不透明暖色，彻底切断灰闪来源。
+        color: item.isActive ? root.sidebarItemActiveColor : (item.visualHovered ? root.sidebarItemHoverColor : root.sidebarItemIdleColor)
+        border.color: item.isActive ? root.sidebarItemActiveBorderColor : (item.visualHovered ? root.sidebarItemHoverBorderColor : root.sidebarItemIdleBorderColor)
         border.width: item.isActive || item.visualHovered ? 1 : 0
         opacity: item.enabled ? 1.0 : 0.55
         // 侧边栏只用颜色和边框反馈，避免悬浮或选中时先出现阴影造成顿挫。

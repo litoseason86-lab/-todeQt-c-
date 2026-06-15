@@ -121,8 +121,10 @@ TestCase {
 
         verify(inactiveItem !== null);
         verify(markerContainer !== null);
-        compare(inactiveItem.color.a, 0);
-        compare(inactiveItem.border.color.a, 0);
+        verify(Qt.colorEqual(inactiveItem.color, "#faf8f3"));
+        compare(inactiveItem.color.a, 1);
+        verify(Qt.colorEqual(inactiveItem.border.color, "#faf8f3"));
+        compare(inactiveItem.border.color.a, 1);
         compare(inactiveItem.border.width, 0);
         compare(inactiveItem.layer.enabled, false);
         verify(Qt.colorEqual(markerContainer.color, "#e8dfc8"));
@@ -146,7 +148,7 @@ TestCase {
         compare(inactiveItem.layer.enabled, false);
     }
 
-    function test_hoverExitReturnsToTransparentItemSoGradientRemainsVisible() {
+    function test_hoverExitReturnsToSolidWarmBackgroundWithoutGrayFlash() {
         var inactiveItem = sidebarItemForMarker("数");
 
         verify(inactiveItem !== null);
@@ -156,8 +158,12 @@ TestCase {
         tryCompare(inactiveItem, "visualHovered", false, 500);
         wait(1200);
 
-        compare(inactiveItem.color.a, 0);
-        compare(inactiveItem.border.color.a, 0);
+        // 退场目标色必须是不透明暖色。透明色会参与 ColorAnimation 插值，
+        // 在 macOS 渲染中容易闪出灰块，这里锁死这个边界。
+        verify(Qt.colorEqual(inactiveItem.color, "#faf8f3"));
+        compare(inactiveItem.color.a, 1);
+        verify(Qt.colorEqual(inactiveItem.border.color, "#faf8f3"));
+        compare(inactiveItem.border.color.a, 1);
         compare(inactiveItem.border.width, 0);
     }
 
