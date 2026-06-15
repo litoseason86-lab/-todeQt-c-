@@ -32,6 +32,7 @@ Rectangle {
     property string taskTitle: ""
     property var taskCategory: ""
     property bool taskCompleted: false
+    property bool visualTaskCompleted: false
     // 显式记录指针状态，避免不同平台的 MouseArea/HoverHandler 事件差异影响 hover 视觉。
     property bool pointerInside: false
     property bool componentReady: false
@@ -90,10 +91,12 @@ Rectangle {
     onTaskCompletedChanged: {
         if (!root.componentReady) {
             // 初始数据可能直接带着已完成状态进来，此时不播放庆祝动画，只记录状态边界。
+            root.visualTaskCompleted = root.taskCompleted;
             root.completionAnimationPlayed = root.taskCompleted;
             return;
         }
 
+        root.visualTaskCompleted = root.taskCompleted;
         if (root.taskCompleted) {
             root.playCompletionAnimation();
         } else {
@@ -103,6 +106,7 @@ Rectangle {
     }
 
     Component.onCompleted: {
+        root.visualTaskCompleted = root.taskCompleted;
         root.componentReady = true;
         root.completionAnimationPlayed = root.taskCompleted;
     }
@@ -111,7 +115,7 @@ Rectangle {
         // 完成状态只做轻微位移和透明度变化，避免影响相邻任务布局。
         State {
             name: "normal"
-            when: !root.taskCompleted
+            when: !root.visualTaskCompleted
             PropertyChanges {
                 root.opacity: 1.0
                 root.completionOffset: 0
@@ -119,7 +123,7 @@ Rectangle {
         },
         State {
             name: "completed"
-            when: root.taskCompleted
+            when: root.visualTaskCompleted
             PropertyChanges {
                 root.opacity: 0.70
                 root.completionOffset: 5
@@ -314,8 +318,19 @@ Rectangle {
             Layout.preferredWidth: 28
             Layout.preferredHeight: 40
             padding: 0
-            checked: root.taskCompleted
-            onToggled: root.completionChanged(root.taskId, checked)
+            checked: root.visualTaskCompleted
+            onClicked: {
+                if (checked) {
+                    // 真实点击路径会先进入这里，再由外层同步更新数据源；先切换视觉态并播放动画，
+                    // 避免等待 model 回写时 delegate 已被刷新销毁。
+                    root.visualTaskCompleted = true;
+                    root.playCompletionAnimation();
+                } else {
+                    root.visualTaskCompleted = false;
+                    root.completionAnimationPlayed = false;
+                }
+                root.completionChanged(root.taskId, checked);
+            }
 
             indicator: Rectangle {
                 id: checkIndicator
@@ -378,8 +393,8 @@ Rectangle {
                 font.pixelSize: 15
                 font.weight: Font.Medium
                 lineHeight: 1.4
-                color: root.taskCompleted ? "#8b7355" : "#3d3327"
-                font.strikeout: root.taskCompleted
+                color: root.visualTaskCompleted ? "#8b7355" : "#3d3327"
+                font.strikeout: root.visualTaskCompleted
                 wrapMode: Text.WordWrap
 
                 Behavior on color {
@@ -417,8 +432,8 @@ Rectangle {
             id: focusButton
 
             objectName: "focusButton"
-            text: root.taskCompleted ? "已完成" : "开始专注"
-            enabled: !root.taskCompleted
+            text: root.visualTaskCompleted ? "已完成" : "开始专注"
+            enabled: !root.visualTaskCompleted
             implicitWidth: 104
             implicitHeight: 40
             // down 是 Qt Controls 的视觉按下态；真实点击会同步 pressed，测试可稳定驱动 down。

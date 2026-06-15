@@ -41,8 +41,17 @@ TestCase {
 
         signal tasksChanged
 
+        property var fakeTodayTasks: []
+        property var fakeWeekTasks: []
+        property bool setTaskCompletedResult: true
+        property int setTaskCompletedCallCount: 0
+
         function getTodayTasks() {
-            return [];
+            return fakeTodayTasks;
+        }
+
+        function getWeekTasks(weekStart) {
+            return fakeWeekTasks;
         }
 
         function getMonthTasks(year, month) {
@@ -53,6 +62,21 @@ TestCase {
         }
 
         function setTaskCompleted(id, completed) {
+            setTaskCompletedCallCount += 1;
+            if (!setTaskCompletedResult)
+                return false;
+
+            for (var i = 0; i < fakeTodayTasks.length; ++i) {
+                if (fakeTodayTasks[i].id === id)
+                    fakeTodayTasks[i].completed = completed;
+            }
+            for (var j = 0; j < fakeWeekTasks.length; ++j) {
+                if (fakeWeekTasks[j].id === id)
+                    fakeWeekTasks[j].completed = completed;
+            }
+
+            tasksChanged();
+            return true;
         }
 
         function deleteTask(id) {
@@ -123,6 +147,14 @@ TestCase {
         visible: false
     }
 
+    WeekPlanView {
+        id: weekPlanView
+
+        width: 620
+        height: 520
+        visible: false
+    }
+
     MonthGoalView {
         id: monthGoalView
 
@@ -132,6 +164,10 @@ TestCase {
     }
 
     function init() {
+        taskManager.fakeTodayTasks = [];
+        taskManager.fakeWeekTasks = [];
+        taskManager.setTaskCompletedResult = true;
+        taskManager.setTaskCompletedCallCount = 0;
         var container = findChild(taskItem, "completionParticleContainer");
         if (container !== null && container.particleCount > 0)
             tryCompare(container, "particleCount", 0, 1000);
@@ -139,6 +175,7 @@ TestCase {
         taskItem.taskCompleted = false;
         taskItem.opacity = 1.0;
         todayTaskView.visible = false;
+        weekPlanView.visible = false;
         monthGoalView.visible = false;
         addTaskDialog.close();
         if (typeof taskItem.setPointerInside === "function")
@@ -150,6 +187,33 @@ TestCase {
         if (deleteButton !== null)
             deleteButton.down = false;
         wait(220);
+    }
+
+    function configureSingleTodayTask(completed) {
+        taskManager.fakeTodayTasks = [{
+                id: 101,
+                title: "真实点击链路任务",
+                date: new Date(),
+                completed: completed,
+                categoryText: "测试"
+            }];
+        todayTaskView.visible = true;
+        todayTaskView.refresh();
+        tryCompare(todayTaskView, "tasks", taskManager.fakeTodayTasks, 220);
+    }
+
+    function configureSingleWeekTask(completed) {
+        var taskDate = weekPlanView.isoDate(weekPlanView.weekStart);
+        taskManager.fakeWeekTasks = [{
+                id: 201,
+                title: "周计划真实点击链路任务",
+                date: taskDate,
+                completed: completed,
+                categoryText: "测试"
+            }];
+        weekPlanView.visible = true;
+        weekPlanView.refresh();
+        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 220);
     }
 
     function verifyNear(actual, expected, tolerance, message) {
@@ -352,6 +416,76 @@ TestCase {
         taskItem.taskCompleted = true;
         tryCompare(container, "particleCount", 6, 120);
         tryCompare(container, "particleCount", 0, 950);
+    }
+
+    function test_todayTaskViewRealClickKeepsCompletionParticlesAcrossSynchronousRefresh() {
+        configureSingleTodayTask(false);
+
+        var taskCheckBox = findChild(todayTaskView, "taskCheckBox");
+        var container = findChild(todayTaskView, "completionParticleContainer");
+        verify(taskCheckBox !== null);
+        verify(container !== null);
+        compare(container.particleCount, 0);
+
+        taskCheckBox.forceActiveFocus();
+        keyClick(Qt.Key_Space);
+
+        compare(taskManager.setTaskCompletedCallCount, 1);
+        compare(taskManager.fakeTodayTasks[0].completed, true);
+        tryCompare(container, "particleCount", 6, 160);
+
+        tryCompare(todayTaskView, "completionRefreshDelayActive", false, 1100);
+        tryCompare(todayTaskView, "tasks", taskManager.fakeTodayTasks, 1000);
+        compare(todayTaskView.tasks[0].completed, true);
+        var refreshedContainer = findChild(todayTaskView, "completionParticleContainer");
+        verify(refreshedContainer !== null);
+        compare(refreshedContainer.particleCount, 0);
+        compare(taskManager.setTaskCompletedCallCount, 1);
+    }
+
+    function test_todayTaskViewCompletionFailureCancelsDelayedRefreshAndRestoresUncheckedState() {
+        configureSingleTodayTask(false);
+        taskManager.setTaskCompletedResult = false;
+
+        var taskCheckBox = findChild(todayTaskView, "taskCheckBox");
+        verify(taskCheckBox !== null);
+
+        taskCheckBox.forceActiveFocus();
+        keyClick(Qt.Key_Space);
+
+        compare(taskManager.setTaskCompletedCallCount, 1);
+        compare(taskManager.fakeTodayTasks[0].completed, false);
+        compare(todayTaskView.completionRefreshDelayActive, false);
+        compare(todayTaskView.loadError, "任务完成失败，请重试");
+
+        var restoredCheckBox = findChild(todayTaskView, "taskCheckBox");
+        verify(restoredCheckBox !== null);
+        compare(restoredCheckBox.checked, false);
+    }
+
+    function test_weekPlanViewRealClickKeepsCompletionParticlesAcrossSynchronousRefresh() {
+        configureSingleWeekTask(false);
+
+        var taskCheckBox = findChild(weekPlanView, "taskCheckBox");
+        var container = findChild(weekPlanView, "completionParticleContainer");
+        verify(taskCheckBox !== null);
+        verify(container !== null);
+        compare(container.particleCount, 0);
+
+        taskCheckBox.forceActiveFocus();
+        keyClick(Qt.Key_Space);
+
+        compare(taskManager.setTaskCompletedCallCount, 1);
+        compare(taskManager.fakeWeekTasks[0].completed, true);
+        tryCompare(container, "particleCount", 6, 160);
+
+        tryCompare(weekPlanView, "completionRefreshDelayActive", false, 1100);
+        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 1000);
+        compare(weekPlanView.weekTasks[0].completed, true);
+        var refreshedContainer = findChild(weekPlanView, "completionParticleContainer");
+        verify(refreshedContainer !== null);
+        compare(refreshedContainer.particleCount, 0);
+        compare(taskManager.setTaskCompletedCallCount, 1);
     }
 
     function test_focusButtonStatesLoadAndCompletedDisablesAction() {
