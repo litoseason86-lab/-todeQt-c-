@@ -22,6 +22,16 @@ TestCase {
             })
     }
 
+    TaskItem {
+        id: initiallyCompletedTaskItem
+
+        width: 420
+        visible: false
+        taskId: 43
+        taskTitle: "初始已完成任务"
+        taskCompleted: true
+    }
+
     AddTaskDialog {
         id: addTaskDialog
     }
@@ -215,6 +225,10 @@ TestCase {
         return findChild(taskItem, "completionParticleContainer");
     }
 
+    function initiallyCompletedParticleContainer() {
+        return findChild(initiallyCompletedTaskItem, "completionParticleContainer");
+    }
+
     function verifyCompletionParticle(particle, index, expectedDirectionX, expectedDirectionY) {
         var expectedColors = ["#d4a574", "#e8dfc8", "#f0e6d2"];
 
@@ -256,6 +270,71 @@ TestCase {
             verifyCompletionParticle(container.children[i], i, directions[i][0], directions[i][1]);
 
         tryCompare(container, "particleCount", 0, 950);
+    }
+
+    function test_taskItemCompletionParticlesStartAtVisibleIndicatorCenter() {
+        var container = completionParticleContainer();
+        var taskCheckIndicator = findChild(taskItem, "taskCheckIndicator");
+        verify(container !== null);
+        verify(taskCheckIndicator !== null);
+
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+
+        var firstParticle = container.children[0];
+        var indicatorPosition = taskCheckIndicator.mapToItem(taskItem, 0, 0);
+        var expectedStartX = indicatorPosition.x + taskCheckIndicator.width / 2 - firstParticle.width / 2;
+        var expectedStartY = indicatorPosition.y + taskCheckIndicator.height / 2 - firstParticle.height / 2;
+
+        verifyNear(firstParticle.startX, expectedStartX, 0.5, "完成粒子起点 x 应对齐可见复选框中心");
+        verifyNear(firstParticle.startY, expectedStartY, 0.5, "完成粒子起点 y 应对齐可见复选框中心");
+        tryCompare(container, "particleCount", 0, 950);
+    }
+
+    function test_taskItemCompletionParticlesDoNotStackDuringRapidToggle() {
+        var container = completionParticleContainer();
+        verify(container !== null);
+
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+
+        taskItem.taskCompleted = false;
+        wait(40);
+        taskItem.taskCompleted = true;
+        wait(120);
+        compare(container.particleCount, 6);
+
+        tryCompare(container, "particleCount", 0, 950);
+
+        taskItem.taskCompleted = false;
+        wait(220);
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+        tryCompare(container, "particleCount", 0, 950);
+    }
+
+    function test_taskItemInitialCompletedStateDoesNotPlayCompletionParticles() {
+        var container = initiallyCompletedParticleContainer();
+        verify(container !== null);
+
+        wait(900);
+        compare(initiallyCompletedTaskItem.taskCompleted, true);
+        compare(container.particleCount, 0);
+    }
+
+    function test_taskItemCancelCompletionRestoresOpacityAndStrikeout() {
+        var taskTitleText = findChild(taskItem, "taskTitleText");
+        verify(taskTitleText !== null);
+
+        taskItem.taskCompleted = true;
+        wait(260);
+        verify(Math.abs(taskItem.opacity - 0.70) <= 0.02);
+        compare(taskTitleText.font.strikeout, true);
+
+        taskItem.taskCompleted = false;
+        wait(220);
+        verify(Math.abs(taskItem.opacity - 1.0) <= 0.02);
+        compare(taskTitleText.font.strikeout, false);
     }
 
     function test_taskItemCompletionParticlesDoNotPlayOnCancelAndReplayAfterRecheck() {

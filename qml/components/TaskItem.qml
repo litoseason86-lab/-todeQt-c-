@@ -55,14 +55,16 @@ Rectangle {
     function playCompletionAnimation() {
         if (root.completionAnimationPlayed)
             return;
+        if (particleContainer.particleCount > 0)
+            return;
 
         root.completionAnimationPlayed = true;
 
-        var checkboxPosition = checkbox.mapToItem(root, 0, 0);
+        var indicatorPosition = checkIndicator.mapToItem(root, 0, 0);
         var particleSize = 5;
         var travelDistance = 38;
-        var startX = checkboxPosition.x + checkbox.width / 2 - particleSize / 2;
-        var startY = checkboxPosition.y + checkbox.height / 2 - particleSize / 2;
+        var startX = indicatorPosition.x + checkIndicator.width / 2 - particleSize / 2;
+        var startY = indicatorPosition.y + checkIndicator.height / 2 - particleSize / 2;
 
         for (var i = 0; i < root.completionParticleDirections.length; ++i) {
             var direction = root.completionParticleDirections[i];
@@ -316,6 +318,8 @@ Rectangle {
             onToggled: root.completionChanged(root.taskId, checked)
 
             indicator: Rectangle {
+                id: checkIndicator
+
                 objectName: "taskCheckIndicator"
                 implicitWidth: 20
                 implicitHeight: 20
