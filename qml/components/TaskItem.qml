@@ -2,18 +2,19 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
+import ".."
 
 Rectangle {
     id: root
 
     Layout.fillWidth: true
     implicitHeight: Math.max(76, content.implicitHeight + 28)
-    radius: 8
-    color: root.itemHovered ? "#fffef9" : "#faf6ee"
-    border.color: root.itemHovered ? "#d4a574" : "#e8dfc8"
+    radius: Theme.radiusLg
+    color: root.itemHovered ? Theme.surface : Theme.surfaceRaised
+    border.color: root.itemHovered ? Theme.accent : Theme.border
     border.width: root.itemHovered ? 1.5 : 1
     // MultiEffect 的阴影参数不直接承载动画，先放到 root 属性上过渡，再绑定给效果。
-    property color warmShadowColor: "#5d4e37"
+    property color warmShadowColor: Theme.ink
     property real warmShadowOpacity: root.itemHovered ? 0.12 : 0.08
     property real warmShadowBlur: root.itemHovered ? 0.25 : 0.18
     property real warmShadowVerticalOffset: root.itemHovered ? 6 : 2
@@ -42,7 +43,7 @@ Rectangle {
     // 视图可能传入标准化科目对象，也可能传入旧版字符串科目。
     readonly property string categoryName: typeof taskCategory === "object" ? (taskCategory && taskCategory.name ? taskCategory.name : "") : String(taskCategory || "")
     readonly property string categoryColor: typeof taskCategory === "object" ? (taskCategory && taskCategory.color ? taskCategory.color : "") : ""
-    readonly property var completionParticleColors: ["#d4a574", "#e8dfc8", "#f0e6d2"]
+    readonly property var completionParticleColors: [Theme.accent, Theme.border, Theme.borderSubtle]
     readonly property var completionParticleDirections: [[-1, -1], [-1, 0], [-1, 1], [1, -1], [1, 0], [1, 1]]
 
     signal completionChanged(int taskId, bool completed)
@@ -305,11 +306,11 @@ Rectangle {
         id: content
 
         anchors.fill: parent
-        anchors.leftMargin: 12
-        anchors.rightMargin: 12
-        anchors.topMargin: 12 + root.completionOffset
-        anchors.bottomMargin: 12
-        spacing: 12
+        anchors.leftMargin: Theme.space12
+        anchors.rightMargin: Theme.space12
+        anchors.topMargin: Theme.space12 + root.completionOffset
+        anchors.bottomMargin: Theme.space12
+        spacing: Theme.space12
 
         CheckBox {
             id: checkbox
@@ -340,17 +341,17 @@ Rectangle {
                 implicitHeight: 20
                 x: checkbox.leftPadding
                 y: (checkbox.height - height) / 2
-                radius: 4
-                color: checkbox.checked ? "#d4a574" : "transparent"
-                border.color: checkbox.hovered ? "#d4a574" : "#e8dfc8"
+                radius: Theme.radiusSm
+                color: checkbox.checked ? Theme.accent : "transparent"
+                border.color: checkbox.hovered ? Theme.accent : Theme.border
                 border.width: checkbox.hovered ? 2 : 1.5
 
                 Text {
                     anchors.centerIn: parent
                     text: "✓"
                     visible: checkbox.checked
-                    color: "#fffef9"
-                    font.pixelSize: 14
+                    color: Theme.surface
+                    font.pixelSize: Theme.fontLg
                     font.weight: Font.Bold
                 }
 
@@ -384,16 +385,16 @@ Rectangle {
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: 4
+            spacing: Theme.space4
 
             Text {
                 objectName: "taskTitleText"
                 Layout.fillWidth: true
                 text: root.taskTitle
-                font.pixelSize: 15
+                font.pixelSize: Theme.fontLg
                 font.weight: Font.Medium
                 lineHeight: 1.4
-                color: root.visualTaskCompleted ? "#8b7355" : "#3d3327"
+                color: root.visualTaskCompleted ? Theme.inkSoft : Theme.inkStrong
                 font.strikeout: root.visualTaskCompleted
                 wrapMode: Text.WordWrap
 
@@ -408,12 +409,12 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 visible: root.categoryName.length > 0
-                spacing: 6
+                spacing: Theme.space8
 
                 Rectangle {
                     Layout.preferredWidth: root.categoryColor.length > 0 ? 12 : 0
                     Layout.preferredHeight: 12
-                    radius: 3
+                    radius: Theme.radiusSm
                     visible: root.categoryColor.length > 0
                     color: root.categoryColor
                 }
@@ -421,8 +422,8 @@ Rectangle {
                 Text {
                     Layout.fillWidth: true
                     text: root.categoryName
-                    font.pixelSize: 12
-                    color: "#8b7355"
+                    font.pixelSize: Theme.fontSm
+                    color: Theme.inkSoft
                     elide: Text.ElideRight
                 }
             }
@@ -446,18 +447,18 @@ Rectangle {
                 id: focusButtonBackground
 
                 objectName: "focusButtonBackground"
-                radius: 6
+                radius: Theme.radiusMd
                 y: focusButton.pressFeedbackActive ? 1 : 0
                 color: {
                     if (!focusButton.enabled)
-                        return "#e8dfc8";
+                        return Theme.border;
                     if (focusButton.pressFeedbackActive)
-                        return "#b9854f";
+                        return Theme.accentStrong;
                     if (focusButton.hovered)
-                        return "#c8955f";
-                    return "#d4a574";
+                        return Theme.accentStrong;
+                    return Theme.accent;
                 }
-                property color warmShadowColor: "#5d4e37"
+                property color warmShadowColor: Theme.ink
                 property real warmShadowOpacity: focusButton.pressFeedbackActive ? 0.04 : 0.08
                 property real warmShadowBlur: focusButton.pressFeedbackActive ? 0.10 : 0.14
                 property real warmShadowVerticalOffset: focusButton.pressFeedbackActive ? 1 : 2
@@ -511,8 +512,8 @@ Rectangle {
             contentItem: Text {
                 objectName: "focusButtonLabel"
                 text: focusButton.text
-                color: focusButton.enabled ? "#fffef9" : "#a0896b"
-                font.pixelSize: 13
+                color: focusButton.enabled ? Theme.surface : Theme.inkMuted
+                font.pixelSize: Theme.fontMd
                 font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
@@ -543,18 +544,18 @@ Rectangle {
                 id: taskDeleteButtonBackground
 
                 objectName: "taskDeleteButtonBackground"
-                radius: 6
+                radius: Theme.radiusMd
                 y: deleteButton.pressFeedbackActive ? 1 : 0
                 color: {
                     if (deleteButton.pressFeedbackActive)
-                        return "#f0e6d2";
+                        return Theme.accentSoft;
                     if (deleteButton.hovered)
-                        return "#f5ede3";
-                    return "#fffef9";
+                        return Theme.surfaceSunken;
+                    return Theme.surface;
                 }
-                border.color: deleteButton.hovered || deleteButton.pressFeedbackActive ? "#b37562" : "#e8dfc8"
+                border.color: deleteButton.hovered || deleteButton.pressFeedbackActive ? "#b37562" : Theme.border
                 border.width: 1
-                property color warmShadowColor: "#5d4e37"
+                property color warmShadowColor: Theme.ink
                 property real warmShadowOpacity: deleteButton.pressFeedbackActive ? 0.04 : 0.08
                 property real warmShadowBlur: deleteButton.pressFeedbackActive ? 0.10 : 0.14
                 property real warmShadowVerticalOffset: deleteButton.pressFeedbackActive ? 1 : 2
@@ -616,7 +617,7 @@ Rectangle {
                 objectName: "taskDeleteButtonLabel"
                 text: deleteButton.text
                 color: "#b37562"
-                font.pixelSize: 13
+                font.pixelSize: Theme.fontMd
                 font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
