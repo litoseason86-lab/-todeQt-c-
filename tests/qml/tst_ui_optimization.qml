@@ -122,6 +122,10 @@ TestCase {
     }
 
     function init() {
+        var container = findChild(taskItem, "completionParticleContainer");
+        if (container !== null && container.particleCount > 0)
+            tryCompare(container, "particleCount", 0, 1000);
+
         taskItem.taskCompleted = false;
         taskItem.opacity = 1.0;
         todayTaskView.visible = false;
@@ -205,6 +209,70 @@ TestCase {
 
         compare(taskCheckBox.checked, true);
         compare(taskTitleText.font.strikeout, true);
+    }
+
+    function completionParticleContainer() {
+        return findChild(taskItem, "completionParticleContainer");
+    }
+
+    function verifyCompletionParticle(particle, index, expectedDirectionX, expectedDirectionY) {
+        var expectedColors = ["#d4a574", "#e8dfc8", "#f0e6d2"];
+
+        verify(particle !== null, "完成粒子需要存在");
+        compare(particle.objectName, "completionParticle");
+        compare(particle.width, 5);
+        compare(particle.height, 5);
+        compare(particle.radius, 2.5);
+        verify(Qt.colorEqual(particle.color, expectedColors[index % expectedColors.length]));
+        compare(particle.directionX, expectedDirectionX);
+        compare(particle.directionY, expectedDirectionY);
+        verify(Math.abs(particle.targetX - particle.startX) >= 35);
+        verify(Math.abs(particle.targetX - particle.startX) <= 40);
+        if (expectedDirectionY === 0) {
+            verifyNear(particle.targetY - particle.startY, 0, 0.5, "水平完成粒子的 y 位移");
+        } else {
+            verify(Math.abs(particle.targetY - particle.startY) >= 35);
+            verify(Math.abs(particle.targetY - particle.startY) <= 40);
+        }
+    }
+
+    function test_taskItemCompletionCreatesSixWarmParticlesAndCleansUp() {
+        var container = completionParticleContainer();
+        verify(container !== null);
+        compare(container.particleCount, 0);
+
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+
+        var directions = [
+            [-1, -1],
+            [-1, 0],
+            [-1, 1],
+            [1, -1],
+            [1, 0],
+            [1, 1]
+        ];
+        for (var i = 0; i < directions.length; ++i)
+            verifyCompletionParticle(container.children[i], i, directions[i][0], directions[i][1]);
+
+        tryCompare(container, "particleCount", 0, 950);
+    }
+
+    function test_taskItemCompletionParticlesDoNotPlayOnCancelAndReplayAfterRecheck() {
+        var container = completionParticleContainer();
+        verify(container !== null);
+
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+        tryCompare(container, "particleCount", 0, 950);
+
+        taskItem.taskCompleted = false;
+        wait(120);
+        compare(container.particleCount, 0);
+
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+        tryCompare(container, "particleCount", 0, 950);
     }
 
     function test_focusButtonStatesLoadAndCompletedDisablesAction() {

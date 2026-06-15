@@ -34,11 +34,15 @@ Rectangle {
     property bool taskCompleted: false
     // 显式记录指针状态，避免不同平台的 MouseArea/HoverHandler 事件差异影响 hover 视觉。
     property bool pointerInside: false
+    property bool componentReady: false
+    property bool completionAnimationPlayed: false
     property real completionOffset: 0
     readonly property bool itemHovered: root.pointerInside
     // 视图可能传入标准化科目对象，也可能传入旧版字符串科目。
     readonly property string categoryName: typeof taskCategory === "object" ? (taskCategory && taskCategory.name ? taskCategory.name : "") : String(taskCategory || "")
     readonly property string categoryColor: typeof taskCategory === "object" ? (taskCategory && taskCategory.color ? taskCategory.color : "") : ""
+    readonly property var completionParticleColors: ["#d4a574", "#e8dfc8", "#f0e6d2"]
+    readonly property var completionParticleDirections: [[-1, -1], [-1, 0], [-1, 1], [1, -1], [1, 0], [1, 1]]
 
     signal completionChanged(int taskId, bool completed)
     signal startFocusClicked(int taskId, string title)
@@ -46,6 +50,59 @@ Rectangle {
 
     function setPointerInside(inside) {
         root.pointerInside = inside;
+    }
+
+    function playCompletionAnimation() {
+        if (root.completionAnimationPlayed)
+            return;
+
+        root.completionAnimationPlayed = true;
+
+        var checkboxPosition = checkbox.mapToItem(root, 0, 0);
+        var particleSize = 5;
+        var travelDistance = 38;
+        var startX = checkboxPosition.x + checkbox.width / 2 - particleSize / 2;
+        var startY = checkboxPosition.y + checkbox.height / 2 - particleSize / 2;
+
+        for (var i = 0; i < root.completionParticleDirections.length; ++i) {
+            var direction = root.completionParticleDirections[i];
+            var targetX = startX + direction[0] * travelDistance;
+            var targetY = startY + direction[1] * travelDistance;
+            var particle = completionParticleComponent.createObject(particleContainer, {
+                    "x": startX,
+                    "y": startY,
+                    "startX": startX,
+                    "startY": startY,
+                    "targetX": targetX,
+                    "targetY": targetY,
+                    "directionX": direction[0],
+                    "directionY": direction[1],
+                    "color": root.completionParticleColors[i % root.completionParticleColors.length]
+                });
+
+            if (particle === null)
+                console.warn("创建任务完成粒子失败");
+        }
+    }
+
+    onTaskCompletedChanged: {
+        if (!root.componentReady) {
+            // 初始数据可能直接带着已完成状态进来，此时不播放庆祝动画，只记录状态边界。
+            root.completionAnimationPlayed = root.taskCompleted;
+            return;
+        }
+
+        if (root.taskCompleted) {
+            root.playCompletionAnimation();
+        } else {
+            // 取消完成后必须重置，下一次重新勾选才允许再次播放庆祝动画。
+            root.completionAnimationPlayed = false;
+        }
+    }
+
+    Component.onCompleted: {
+        root.componentReady = true;
+        root.completionAnimationPlayed = root.taskCompleted;
     }
 
     states: [
@@ -174,6 +231,68 @@ Rectangle {
 
         // HoverHandler 补足触控板或平台事件路径，MouseArea 仍负责原有视觉悬停边界。
         onHoveredChanged: root.setPointerInside(hovered)
+    }
+
+    Item {
+        id: particleContainer
+
+        objectName: "completionParticleContainer"
+        anchors.fill: parent
+        enabled: false
+        z: 20
+        readonly property int particleCount: children.length
+    }
+
+    Component {
+        id: completionParticleComponent
+
+        Rectangle {
+            id: particle
+
+            objectName: "completionParticle"
+            width: 5
+            height: 5
+            radius: width / 2
+            opacity: 1
+            property real startX: 0
+            property real startY: 0
+            property real targetX: 0
+            property real targetY: 0
+            property int directionX: 0
+            property int directionY: 0
+
+            SequentialAnimation {
+                running: true
+
+                ParallelAnimation {
+                    NumberAnimation {
+                        target: particle
+                        property: "x"
+                        to: particle.targetX
+                        duration: 800
+                        easing.type: Easing.OutQuad
+                    }
+
+                    NumberAnimation {
+                        target: particle
+                        property: "y"
+                        to: particle.targetY
+                        duration: 800
+                        easing.type: Easing.OutQuad
+                    }
+
+                    OpacityAnimator {
+                        target: particle
+                        from: 1
+                        to: 0
+                        duration: 800
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
+                onStopped: particle.destroy()
+            }
+        }
     }
 
     RowLayout {
