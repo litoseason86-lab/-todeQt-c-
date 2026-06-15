@@ -13,6 +13,7 @@ Item {
     property var categoryManagerRef: null
     property string loadError: ""
     property date pendingAddDate: new Date()
+    property bool completionRefreshDelayActive: false
 
     Component.onCompleted: refresh()
 
@@ -20,6 +21,19 @@ Item {
         target: taskManager
 
         function onTasksChanged() {
+            if (root.completionRefreshDelayActive)
+                return
+            root.refresh()
+        }
+    }
+
+    Timer {
+        id: completionRefreshTimer
+
+        interval: 850
+        repeat: false
+        onTriggered: {
+            root.completionRefreshDelayActive = false
             root.refresh()
         }
     }
@@ -72,6 +86,26 @@ Item {
         } catch (error) {
             root.weekTasks = []
             root.loadError = "本周计划加载失败"
+        }
+    }
+
+    function setTaskCompletedWithAnimationDelay(id, completed) {
+        if (completed) {
+            // 完成动画依附在当前 TaskItem delegate 上；TaskManager 会同步发 tasksChanged，
+            // 如果立即刷新 Repeater，delegate 会被销毁，粒子动画看不到结束。
+            root.completionRefreshDelayActive = true
+            completionRefreshTimer.restart()
+        }
+
+        var ok = taskManager.setTaskCompleted(id, completed)
+        if (!ok) {
+            completionRefreshTimer.stop()
+            root.completionRefreshDelayActive = false
+            // 失败时当前 delegate 已经被 TaskItem 乐观切到完成态；先清空模型强制销毁它，
+            // 再从数据源重载，避免界面停在“已完成”的假状态。
+            root.weekTasks = []
+            root.refresh()
+            root.loadError = completed ? "任务完成失败，请重试" : "取消完成失败，请重试"
         }
     }
 
@@ -232,7 +266,7 @@ Item {
                                     taskCompleted: modelData.completed
 
                                     onCompletionChanged: function(id, completed) {
-                                        taskManager.setTaskCompleted(id, completed)
+                                        root.setTaskCompletedWithAnimationDelay(id, completed)
                                     }
 
                                     onStartFocusClicked: function(id, title) {

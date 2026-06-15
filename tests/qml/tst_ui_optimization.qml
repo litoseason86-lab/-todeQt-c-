@@ -22,6 +22,16 @@ TestCase {
             })
     }
 
+    TaskItem {
+        id: initiallyCompletedTaskItem
+
+        width: 420
+        visible: false
+        taskId: 43
+        taskTitle: "初始已完成任务"
+        taskCompleted: true
+    }
+
     AddTaskDialog {
         id: addTaskDialog
     }
@@ -31,8 +41,17 @@ TestCase {
 
         signal tasksChanged
 
+        property var fakeTodayTasks: []
+        property var fakeWeekTasks: []
+        property bool setTaskCompletedResult: true
+        property int setTaskCompletedCallCount: 0
+
         function getTodayTasks() {
-            return [];
+            return fakeTodayTasks;
+        }
+
+        function getWeekTasks(weekStart) {
+            return fakeWeekTasks;
         }
 
         function getMonthTasks(year, month) {
@@ -43,6 +62,21 @@ TestCase {
         }
 
         function setTaskCompleted(id, completed) {
+            setTaskCompletedCallCount += 1;
+            if (!setTaskCompletedResult)
+                return false;
+
+            for (var i = 0; i < fakeTodayTasks.length; ++i) {
+                if (fakeTodayTasks[i].id === id)
+                    fakeTodayTasks[i].completed = completed;
+            }
+            for (var j = 0; j < fakeWeekTasks.length; ++j) {
+                if (fakeWeekTasks[j].id === id)
+                    fakeWeekTasks[j].completed = completed;
+            }
+
+            tasksChanged();
+            return true;
         }
 
         function deleteTask(id) {
@@ -113,6 +147,14 @@ TestCase {
         visible: false
     }
 
+    WeekPlanView {
+        id: weekPlanView
+
+        width: 620
+        height: 520
+        visible: false
+    }
+
     MonthGoalView {
         id: monthGoalView
 
@@ -122,9 +164,18 @@ TestCase {
     }
 
     function init() {
+        taskManager.fakeTodayTasks = [];
+        taskManager.fakeWeekTasks = [];
+        taskManager.setTaskCompletedResult = true;
+        taskManager.setTaskCompletedCallCount = 0;
+        var container = findChild(taskItem, "completionParticleContainer");
+        if (container !== null && container.particleCount > 0)
+            tryCompare(container, "particleCount", 0, 1000);
+
         taskItem.taskCompleted = false;
         taskItem.opacity = 1.0;
         todayTaskView.visible = false;
+        weekPlanView.visible = false;
         monthGoalView.visible = false;
         addTaskDialog.close();
         if (typeof taskItem.setPointerInside === "function")
@@ -136,6 +187,33 @@ TestCase {
         if (deleteButton !== null)
             deleteButton.down = false;
         wait(220);
+    }
+
+    function configureSingleTodayTask(completed) {
+        taskManager.fakeTodayTasks = [{
+                id: 101,
+                title: "真实点击链路任务",
+                date: new Date(),
+                completed: completed,
+                categoryText: "测试"
+            }];
+        todayTaskView.visible = true;
+        todayTaskView.refresh();
+        tryCompare(todayTaskView, "tasks", taskManager.fakeTodayTasks, 220);
+    }
+
+    function configureSingleWeekTask(completed) {
+        var taskDate = weekPlanView.isoDate(weekPlanView.weekStart);
+        taskManager.fakeWeekTasks = [{
+                id: 201,
+                title: "周计划真实点击链路任务",
+                date: taskDate,
+                completed: completed,
+                categoryText: "测试"
+            }];
+        weekPlanView.visible = true;
+        weekPlanView.refresh();
+        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 220);
     }
 
     function verifyNear(actual, expected, tolerance, message) {
@@ -205,6 +283,209 @@ TestCase {
 
         compare(taskCheckBox.checked, true);
         compare(taskTitleText.font.strikeout, true);
+    }
+
+    function completionParticleContainer() {
+        return findChild(taskItem, "completionParticleContainer");
+    }
+
+    function initiallyCompletedParticleContainer() {
+        return findChild(initiallyCompletedTaskItem, "completionParticleContainer");
+    }
+
+    function verifyCompletionParticle(particle, index, expectedDirectionX, expectedDirectionY) {
+        var expectedColors = ["#d4a574", "#e8dfc8", "#f0e6d2"];
+
+        verify(particle !== null, "完成粒子需要存在");
+        compare(particle.objectName, "completionParticle");
+        compare(particle.width, 5);
+        compare(particle.height, 5);
+        compare(particle.radius, 2.5);
+        verify(Qt.colorEqual(particle.color, expectedColors[index % expectedColors.length]));
+        compare(particle.directionX, expectedDirectionX);
+        compare(particle.directionY, expectedDirectionY);
+        verify(Math.abs(particle.targetX - particle.startX) >= 35);
+        verify(Math.abs(particle.targetX - particle.startX) <= 40);
+        if (expectedDirectionY === 0) {
+            verifyNear(particle.targetY - particle.startY, 0, 0.5, "水平完成粒子的 y 位移");
+        } else {
+            verify(Math.abs(particle.targetY - particle.startY) >= 35);
+            verify(Math.abs(particle.targetY - particle.startY) <= 40);
+        }
+    }
+
+    function test_taskItemCompletionCreatesSixWarmParticlesAndCleansUp() {
+        var container = completionParticleContainer();
+        verify(container !== null);
+        compare(container.particleCount, 0);
+
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+
+        var directions = [
+            [-1, -1],
+            [-1, 0],
+            [-1, 1],
+            [1, -1],
+            [1, 0],
+            [1, 1]
+        ];
+        for (var i = 0; i < directions.length; ++i)
+            verifyCompletionParticle(container.children[i], i, directions[i][0], directions[i][1]);
+
+        tryCompare(container, "particleCount", 0, 950);
+    }
+
+    function test_taskItemCompletionParticlesStartAtVisibleIndicatorCenter() {
+        var container = completionParticleContainer();
+        var taskCheckIndicator = findChild(taskItem, "taskCheckIndicator");
+        verify(container !== null);
+        verify(taskCheckIndicator !== null);
+
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+
+        var firstParticle = container.children[0];
+        var indicatorPosition = taskCheckIndicator.mapToItem(taskItem, 0, 0);
+        var expectedStartX = indicatorPosition.x + taskCheckIndicator.width / 2 - firstParticle.width / 2;
+        var expectedStartY = indicatorPosition.y + taskCheckIndicator.height / 2 - firstParticle.height / 2;
+
+        verifyNear(firstParticle.startX, expectedStartX, 0.5, "完成粒子起点 x 应对齐可见复选框中心");
+        verifyNear(firstParticle.startY, expectedStartY, 0.5, "完成粒子起点 y 应对齐可见复选框中心");
+        tryCompare(container, "particleCount", 0, 950);
+    }
+
+    function test_taskItemCompletionParticlesDoNotStackDuringRapidToggle() {
+        var container = completionParticleContainer();
+        verify(container !== null);
+
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+
+        taskItem.taskCompleted = false;
+        wait(40);
+        taskItem.taskCompleted = true;
+        wait(120);
+        compare(container.particleCount, 6);
+
+        tryCompare(container, "particleCount", 0, 950);
+
+        taskItem.taskCompleted = false;
+        wait(220);
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+        tryCompare(container, "particleCount", 0, 950);
+    }
+
+    function test_taskItemInitialCompletedStateDoesNotPlayCompletionParticles() {
+        var container = initiallyCompletedParticleContainer();
+        verify(container !== null);
+
+        wait(900);
+        compare(initiallyCompletedTaskItem.taskCompleted, true);
+        compare(container.particleCount, 0);
+    }
+
+    function test_taskItemCancelCompletionRestoresOpacityAndStrikeout() {
+        var taskTitleText = findChild(taskItem, "taskTitleText");
+        verify(taskTitleText !== null);
+
+        taskItem.taskCompleted = true;
+        wait(260);
+        verify(Math.abs(taskItem.opacity - 0.70) <= 0.02);
+        compare(taskTitleText.font.strikeout, true);
+
+        taskItem.taskCompleted = false;
+        wait(220);
+        verify(Math.abs(taskItem.opacity - 1.0) <= 0.02);
+        compare(taskTitleText.font.strikeout, false);
+    }
+
+    function test_taskItemCompletionParticlesDoNotPlayOnCancelAndReplayAfterRecheck() {
+        var container = completionParticleContainer();
+        verify(container !== null);
+
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+        tryCompare(container, "particleCount", 0, 950);
+
+        taskItem.taskCompleted = false;
+        wait(120);
+        compare(container.particleCount, 0);
+
+        taskItem.taskCompleted = true;
+        tryCompare(container, "particleCount", 6, 120);
+        tryCompare(container, "particleCount", 0, 950);
+    }
+
+    function test_todayTaskViewRealClickKeepsCompletionParticlesAcrossSynchronousRefresh() {
+        configureSingleTodayTask(false);
+
+        var taskCheckBox = findChild(todayTaskView, "taskCheckBox");
+        var container = findChild(todayTaskView, "completionParticleContainer");
+        verify(taskCheckBox !== null);
+        verify(container !== null);
+        compare(container.particleCount, 0);
+
+        taskCheckBox.forceActiveFocus();
+        keyClick(Qt.Key_Space);
+
+        compare(taskManager.setTaskCompletedCallCount, 1);
+        compare(taskManager.fakeTodayTasks[0].completed, true);
+        tryCompare(container, "particleCount", 6, 160);
+
+        tryCompare(todayTaskView, "completionRefreshDelayActive", false, 1100);
+        tryCompare(todayTaskView, "tasks", taskManager.fakeTodayTasks, 1000);
+        compare(todayTaskView.tasks[0].completed, true);
+        var refreshedContainer = findChild(todayTaskView, "completionParticleContainer");
+        verify(refreshedContainer !== null);
+        compare(refreshedContainer.particleCount, 0);
+        compare(taskManager.setTaskCompletedCallCount, 1);
+    }
+
+    function test_todayTaskViewCompletionFailureCancelsDelayedRefreshAndRestoresUncheckedState() {
+        configureSingleTodayTask(false);
+        taskManager.setTaskCompletedResult = false;
+
+        var taskCheckBox = findChild(todayTaskView, "taskCheckBox");
+        verify(taskCheckBox !== null);
+
+        taskCheckBox.forceActiveFocus();
+        keyClick(Qt.Key_Space);
+
+        compare(taskManager.setTaskCompletedCallCount, 1);
+        compare(taskManager.fakeTodayTasks[0].completed, false);
+        compare(todayTaskView.completionRefreshDelayActive, false);
+        compare(todayTaskView.loadError, "任务完成失败，请重试");
+
+        var restoredCheckBox = findChild(todayTaskView, "taskCheckBox");
+        verify(restoredCheckBox !== null);
+        compare(restoredCheckBox.checked, false);
+    }
+
+    function test_weekPlanViewRealClickKeepsCompletionParticlesAcrossSynchronousRefresh() {
+        configureSingleWeekTask(false);
+
+        var taskCheckBox = findChild(weekPlanView, "taskCheckBox");
+        var container = findChild(weekPlanView, "completionParticleContainer");
+        verify(taskCheckBox !== null);
+        verify(container !== null);
+        compare(container.particleCount, 0);
+
+        taskCheckBox.forceActiveFocus();
+        keyClick(Qt.Key_Space);
+
+        compare(taskManager.setTaskCompletedCallCount, 1);
+        compare(taskManager.fakeWeekTasks[0].completed, true);
+        tryCompare(container, "particleCount", 6, 160);
+
+        tryCompare(weekPlanView, "completionRefreshDelayActive", false, 1100);
+        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 1000);
+        compare(weekPlanView.weekTasks[0].completed, true);
+        var refreshedContainer = findChild(weekPlanView, "completionParticleContainer");
+        verify(refreshedContainer !== null);
+        compare(refreshedContainer.particleCount, 0);
+        compare(taskManager.setTaskCompletedCallCount, 1);
     }
 
     function test_focusButtonStatesLoadAndCompletedDisablesAction() {

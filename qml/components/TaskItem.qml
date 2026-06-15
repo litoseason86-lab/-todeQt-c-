@@ -32,13 +32,18 @@ Rectangle {
     property string taskTitle: ""
     property var taskCategory: ""
     property bool taskCompleted: false
+    property bool visualTaskCompleted: false
     // 显式记录指针状态，避免不同平台的 MouseArea/HoverHandler 事件差异影响 hover 视觉。
     property bool pointerInside: false
+    property bool componentReady: false
+    property bool completionAnimationPlayed: false
     property real completionOffset: 0
     readonly property bool itemHovered: root.pointerInside
     // 视图可能传入标准化科目对象，也可能传入旧版字符串科目。
     readonly property string categoryName: typeof taskCategory === "object" ? (taskCategory && taskCategory.name ? taskCategory.name : "") : String(taskCategory || "")
     readonly property string categoryColor: typeof taskCategory === "object" ? (taskCategory && taskCategory.color ? taskCategory.color : "") : ""
+    readonly property var completionParticleColors: ["#d4a574", "#e8dfc8", "#f0e6d2"]
+    readonly property var completionParticleDirections: [[-1, -1], [-1, 0], [-1, 1], [1, -1], [1, 0], [1, 1]]
 
     signal completionChanged(int taskId, bool completed)
     signal startFocusClicked(int taskId, string title)
@@ -48,11 +53,69 @@ Rectangle {
         root.pointerInside = inside;
     }
 
+    function playCompletionAnimation() {
+        if (root.completionAnimationPlayed)
+            return;
+        if (particleContainer.particleCount > 0)
+            return;
+
+        root.completionAnimationPlayed = true;
+
+        var indicatorPosition = checkIndicator.mapToItem(root, 0, 0);
+        var particleSize = 5;
+        var travelDistance = 38;
+        var startX = indicatorPosition.x + checkIndicator.width / 2 - particleSize / 2;
+        var startY = indicatorPosition.y + checkIndicator.height / 2 - particleSize / 2;
+
+        for (var i = 0; i < root.completionParticleDirections.length; ++i) {
+            var direction = root.completionParticleDirections[i];
+            var targetX = startX + direction[0] * travelDistance;
+            var targetY = startY + direction[1] * travelDistance;
+            var particle = completionParticleComponent.createObject(particleContainer, {
+                    "x": startX,
+                    "y": startY,
+                    "startX": startX,
+                    "startY": startY,
+                    "targetX": targetX,
+                    "targetY": targetY,
+                    "directionX": direction[0],
+                    "directionY": direction[1],
+                    "color": root.completionParticleColors[i % root.completionParticleColors.length]
+                });
+
+            if (particle === null)
+                console.warn("创建任务完成粒子失败");
+        }
+    }
+
+    onTaskCompletedChanged: {
+        if (!root.componentReady) {
+            // 初始数据可能直接带着已完成状态进来，此时不播放庆祝动画，只记录状态边界。
+            root.visualTaskCompleted = root.taskCompleted;
+            root.completionAnimationPlayed = root.taskCompleted;
+            return;
+        }
+
+        root.visualTaskCompleted = root.taskCompleted;
+        if (root.taskCompleted) {
+            root.playCompletionAnimation();
+        } else {
+            // 取消完成后必须重置，下一次重新勾选才允许再次播放庆祝动画。
+            root.completionAnimationPlayed = false;
+        }
+    }
+
+    Component.onCompleted: {
+        root.visualTaskCompleted = root.taskCompleted;
+        root.componentReady = true;
+        root.completionAnimationPlayed = root.taskCompleted;
+    }
+
     states: [
         // 完成状态只做轻微位移和透明度变化，避免影响相邻任务布局。
         State {
             name: "normal"
-            when: !root.taskCompleted
+            when: !root.visualTaskCompleted
             PropertyChanges {
                 root.opacity: 1.0
                 root.completionOffset: 0
@@ -60,7 +123,7 @@ Rectangle {
         },
         State {
             name: "completed"
-            when: root.taskCompleted
+            when: root.visualTaskCompleted
             PropertyChanges {
                 root.opacity: 0.70
                 root.completionOffset: 5
@@ -176,6 +239,68 @@ Rectangle {
         onHoveredChanged: root.setPointerInside(hovered)
     }
 
+    Item {
+        id: particleContainer
+
+        objectName: "completionParticleContainer"
+        anchors.fill: parent
+        enabled: false
+        z: 20
+        readonly property int particleCount: children.length
+    }
+
+    Component {
+        id: completionParticleComponent
+
+        Rectangle {
+            id: particle
+
+            objectName: "completionParticle"
+            width: 5
+            height: 5
+            radius: width / 2
+            opacity: 1
+            property real startX: 0
+            property real startY: 0
+            property real targetX: 0
+            property real targetY: 0
+            property int directionX: 0
+            property int directionY: 0
+
+            SequentialAnimation {
+                running: true
+
+                ParallelAnimation {
+                    NumberAnimation {
+                        target: particle
+                        property: "x"
+                        to: particle.targetX
+                        duration: 800
+                        easing.type: Easing.OutQuad
+                    }
+
+                    NumberAnimation {
+                        target: particle
+                        property: "y"
+                        to: particle.targetY
+                        duration: 800
+                        easing.type: Easing.OutQuad
+                    }
+
+                    OpacityAnimator {
+                        target: particle
+                        from: 1
+                        to: 0
+                        duration: 800
+                        easing.type: Easing.OutQuad
+                    }
+                }
+
+                onStopped: particle.destroy()
+            }
+        }
+    }
+
     RowLayout {
         id: content
 
@@ -193,10 +318,23 @@ Rectangle {
             Layout.preferredWidth: 28
             Layout.preferredHeight: 40
             padding: 0
-            checked: root.taskCompleted
-            onToggled: root.completionChanged(root.taskId, checked)
+            checked: root.visualTaskCompleted
+            onClicked: {
+                if (checked) {
+                    // 真实点击路径会先进入这里，再由外层同步更新数据源；先切换视觉态并播放动画，
+                    // 避免等待 model 回写时 delegate 已被刷新销毁。
+                    root.visualTaskCompleted = true;
+                    root.playCompletionAnimation();
+                } else {
+                    root.visualTaskCompleted = false;
+                    root.completionAnimationPlayed = false;
+                }
+                root.completionChanged(root.taskId, checked);
+            }
 
             indicator: Rectangle {
+                id: checkIndicator
+
                 objectName: "taskCheckIndicator"
                 implicitWidth: 20
                 implicitHeight: 20
@@ -255,8 +393,8 @@ Rectangle {
                 font.pixelSize: 15
                 font.weight: Font.Medium
                 lineHeight: 1.4
-                color: root.taskCompleted ? "#8b7355" : "#3d3327"
-                font.strikeout: root.taskCompleted
+                color: root.visualTaskCompleted ? "#8b7355" : "#3d3327"
+                font.strikeout: root.visualTaskCompleted
                 wrapMode: Text.WordWrap
 
                 Behavior on color {
@@ -294,8 +432,8 @@ Rectangle {
             id: focusButton
 
             objectName: "focusButton"
-            text: root.taskCompleted ? "已完成" : "开始专注"
-            enabled: !root.taskCompleted
+            text: root.visualTaskCompleted ? "已完成" : "开始专注"
+            enabled: !root.visualTaskCompleted
             implicitWidth: 104
             implicitHeight: 40
             // down 是 Qt Controls 的视觉按下态；真实点击会同步 pressed，测试可稳定驱动 down。
