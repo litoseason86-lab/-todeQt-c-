@@ -87,6 +87,27 @@ set_target_properties(PomodoroTodo PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
 
+if(APPLE)
+    set(POMODORO_TODO_LOCAL_APP_PATH "/Applications/番茄Todo.app" CACHE PATH
+        "本机固定启动入口，构建后会用最新包覆盖这里"
+    )
+    set(POMODORO_TODO_LSREGISTER
+        "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+    )
+
+    add_custom_target(deploy-local-app ALL
+        COMMAND ${CMAKE_COMMAND} -E echo "Deploying PomodoroTodo to ${POMODORO_TODO_LOCAL_APP_PATH}"
+        COMMAND /bin/rm -rf "${POMODORO_TODO_LOCAL_APP_PATH}"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:PomodoroTodo>" "${POMODORO_TODO_LOCAL_APP_PATH}"
+        # LaunchOS 依赖系统应用索引；复制后主动刷新固定入口。build 目录里的临时包可能从未注册，
+        # lsregister -u 在这种情况下会返回错误码，因此撤销临时包索引只能作为尽力而为步骤。
+        COMMAND /bin/sh -c "'${POMODORO_TODO_LSREGISTER}' -u '$<TARGET_BUNDLE_DIR:PomodoroTodo>' >/dev/null 2>&1 || true"
+        COMMAND "${POMODORO_TODO_LSREGISTER}" -f "${POMODORO_TODO_LOCAL_APP_PATH}"
+        DEPENDS PomodoroTodo
+        VERBATIM
+    )
+endif()
+
 enable_testing()
 
 add_executable(PomodoroTodoTests

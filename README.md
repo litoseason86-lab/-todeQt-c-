@@ -22,6 +22,14 @@ ctest --test-dir build --output-on-failure
 
 如果 Qt 安装在其他位置，把 `CMAKE_PREFIX_PATH` 改成对应的 Qt 安装目录。
 
+macOS 构建会自动把最新应用同步到固定入口：
+
+```text
+/Applications/番茄Todo.app
+```
+
+这避免 LaunchOS 或 LaunchServices 在 `build/PomodoroTodo.app` 和旧的 `/Applications/番茄Todo.app` 之间选错包。日常启动统一使用 `/Applications/番茄Todo.app`。
+
 可选的 QML 静态检查：
 
 ```bash
