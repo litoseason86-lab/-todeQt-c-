@@ -101,12 +101,9 @@
 ## 架构
 
 - 新建 `qml/Theme.qml`：`pragma Singleton` 的 `QtObject`，以 `readonly property` 暴露上述全部令牌及 `chartColors` 数组。
-- **注册**：在 `src/main.cpp` 用
-  `qmlRegisterSingletonType(QUrl(QStringLiteral("qrc:/qml/Theme.qml")), "App", 1, 0, "Theme");`
-  注册为单例，与现有「服务统一在 main.cpp 接线」的风格一致；避免引入 qmldir + qrc 目录导入的坑。
-  （注册机制细节在实施计划阶段最终敲定并验证；若该重载需要配合 `pragma Singleton`，按 Qt 6.9 实际行为调整。）
-- 把 `qml/Theme.qml` 加入 `resources/qml.qrc`（`alias="qml/Theme.qml"`）。
-- 使用方式：文件顶部 `import App`，然后 `color: Theme.accent`、`font.pixelSize: Theme.fontMd`、`radius: Theme.radiusMd`、`spacing: Theme.space16`。
+- **注册**（计划阶段最终敲定）：新建 `qml/qmldir`，内容 `singleton Theme Theme.qml`，把 `qml/qmldir` 与 `qml/Theme.qml` 一并加入 `resources/qml.qrc`。各 qml 通过**相对目录导入**使用：组件/视图 `import ".."`、`qml/` 根下文件 `import "."`、测试 `import "../../qml"`。
+  - 之所以不用 `main.cpp` 里的 `qmlRegisterSingletonType`：QML 测试由 `qmltestrunner` 运行（见 [CMakeLists.txt](../../CMakeLists.txt) 的 `PomodoroTodoQmlTests`），不经过 `main.cpp`，C++ 注册对测试与被测组件不可见。相对导入 + qmldir 对应用（走 qrc）和测试（走文件系统）都生效，且 `main.cpp` 完全不用改。
+- 使用方式：`color: Theme.accent`、`font.pixelSize: Theme.fontMd`、`radius: Theme.radiusMd`、`spacing: Theme.space16`。
 - 令牌全部是 UI 常量，留在 QML 层，**不进入 C++ 业务分层**。
 
 ## 分阶段迁移
