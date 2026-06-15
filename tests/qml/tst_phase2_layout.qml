@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../qml/components"
 import "../../qml/views"
+import "../../qml"
 
 TestCase {
     id: testCase
@@ -380,7 +381,7 @@ TestCase {
         compare(warmShadowCard.layer.enabled, true)
         verify(warmShadowCard.cardShadowColor !== undefined)
         verify(warmShadowCard.cardShadowBlur !== undefined)
-        verify(Qt.colorEqual(warmShadowCard.cardShadowColor, "#5d4e37"))
+        verify(Qt.colorEqual(warmShadowCard.cardShadowColor, Theme.ink))
         verify(Math.abs(warmShadowCard.cardShadowBlur - 0.18) < 0.001)
         compare(warmShadowCard.cardShadowOpacity, 0.08)
         compare(warmShadowCard.cardShadowHorizontalOffset, 0)
@@ -637,7 +638,7 @@ TestCase {
 
         var weekComparisonText = findChild(thirdCard, "statCardComparisonText")
         verify(weekComparisonText !== null)
-        verify(Qt.colorEqual(weekComparisonText.color, "#f44336"))
+        verify(Qt.colorEqual(weekComparisonText.color, Theme.danger))
 
         statisticsService.resetTracking()
         selectTimeRange("statisticsTimeRangeMonthItem")
@@ -655,7 +656,7 @@ TestCase {
 
         var monthComparisonText = findChild(thirdCard, "statCardComparisonText")
         verify(monthComparisonText !== null)
-        verify(Qt.colorEqual(monthComparisonText.color, "#8b7355"))
+        verify(Qt.colorEqual(monthComparisonText.color, Theme.inkSoft))
     }
 
     function test_statisticsMonthArrowNavigationUsesSelectedMonth() {

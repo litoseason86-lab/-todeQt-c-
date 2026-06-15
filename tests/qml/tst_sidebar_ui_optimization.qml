@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import "../../qml/components"
+import "../../qml"
 
 TestCase {
     id: testCase
@@ -44,7 +45,7 @@ TestCase {
     function findDivider() {
         var children = collectChildren(sidebar, []);
         for (var i = 0; i < children.length; ++i) {
-            if (children[i].height === 1 && Qt.colorEqual(children[i].color, "#e8dfc8")) {
+            if (children[i].height === 1 && Qt.colorEqual(children[i].color, Theme.border)) {
                 return children[i];
             }
         }
@@ -64,9 +65,9 @@ TestCase {
         compare(sidebar.gradient.orientation, Gradient.Vertical);
         compare(sidebar.gradient.stops.length, 2);
         compare(sidebar.gradient.stops[0].position, 0);
-        verify(Qt.colorEqual(sidebar.gradient.stops[0].color, "#faf8f3"));
+        verify(Qt.colorEqual(sidebar.gradient.stops[0].color, Theme.surfaceRaised));
         compare(sidebar.gradient.stops[1].position, 1);
-        verify(Qt.colorEqual(sidebar.gradient.stops[1].color, "#f5f0e6"));
+        verify(Qt.colorEqual(sidebar.gradient.stops[1].color, Theme.surfaceSunken));
     }
 
     function test_titleAndGroupFontWeightsUseFontWeight() {
@@ -75,12 +76,12 @@ TestCase {
 
         verify(title !== null);
         verify(groupTitle !== null);
-        compare(title.font.pixelSize, 20);
+        compare(title.font.pixelSize, Theme.fontXl);
         compare(title.font.weight, Font.Bold);
-        verify(Qt.colorEqual(title.color, "#5d4e37"));
-        compare(groupTitle.font.pixelSize, 12);
+        verify(Qt.colorEqual(title.color, Theme.ink));
+        compare(groupTitle.font.pixelSize, Theme.fontSm);
         compare(groupTitle.font.weight, Font.Bold);
-        verify(Qt.colorEqual(groupTitle.color, "#8b7355"));
+        verify(Qt.colorEqual(groupTitle.color, Theme.inkSoft));
     }
 
     function test_activeSidebarItemHasVisualFeedback() {
@@ -91,25 +92,25 @@ TestCase {
 
         verify(activeItem !== null);
         verify(markerContainer !== null);
-        verify(Qt.colorEqual(activeItem.color, "#f0e6d2"));
-        verify(Qt.colorEqual(activeItem.border.color, "#d4a574"));
+        verify(Qt.colorEqual(activeItem.color, Theme.accentSoft));
+        verify(Qt.colorEqual(activeItem.border.color, Theme.accent));
         compare(activeItem.border.width, 1);
-        compare(activeItem.radius, 6);
+        compare(activeItem.radius, Theme.radiusMd);
         compare(activeItem.height, 44);
         compare(activeItem.opacity, 1.0);
         compare(activeItem.layer.enabled, false);
 
         compare(markerContainer.width, 22);
         compare(markerContainer.height, 22);
-        compare(markerContainer.radius, 4);
-        verify(Qt.colorEqual(markerContainer.color, "#d4a574"));
-        compare(markerText.font.pixelSize, 12);
+        compare(markerContainer.radius, Theme.radiusSm);
+        verify(Qt.colorEqual(markerContainer.color, Theme.accent));
+        compare(markerText.font.pixelSize, Theme.fontSm);
         compare(markerText.font.weight, Font.Bold);
-        verify(Qt.colorEqual(markerText.color, "#fffef9"));
+        verify(Qt.colorEqual(markerText.color, Theme.surface));
 
-        compare(mainText.font.pixelSize, 14);
+        compare(mainText.font.pixelSize, Theme.fontLg);
         compare(mainText.font.weight, Font.Medium);
-        verify(Qt.colorEqual(mainText.color, "#5d4e37"));
+        verify(Qt.colorEqual(mainText.color, Theme.ink));
         compare(mainText.elide, Text.ElideRight);
     }
 
@@ -121,17 +122,17 @@ TestCase {
 
         verify(inactiveItem !== null);
         verify(markerContainer !== null);
-        verify(Qt.colorEqual(inactiveItem.color, "#faf8f3"));
+        verify(Qt.colorEqual(inactiveItem.color, Theme.surfaceRaised));
         compare(inactiveItem.color.a, 1);
-        verify(Qt.colorEqual(inactiveItem.border.color, "#faf8f3"));
+        verify(Qt.colorEqual(inactiveItem.border.color, Theme.surfaceRaised));
         compare(inactiveItem.border.color.a, 1);
         compare(inactiveItem.border.width, 0);
         compare(inactiveItem.layer.enabled, false);
-        verify(Qt.colorEqual(markerContainer.color, "#e8dfc8"));
+        verify(Qt.colorEqual(markerContainer.color, Theme.border));
         compare(markerText.font.weight, Font.Bold);
-        verify(Qt.colorEqual(markerText.color, "#8b7355"));
+        verify(Qt.colorEqual(markerText.color, Theme.inkSoft));
         compare(mainText.font.weight, Font.Normal);
-        verify(Qt.colorEqual(mainText.color, "#8b7355"));
+        verify(Qt.colorEqual(mainText.color, Theme.inkSoft));
     }
 
     function test_hoverSidebarItemRespondsWithoutShadowWhilePointerStaysInside() {
@@ -143,8 +144,8 @@ TestCase {
         tryCompare(inactiveItem, "visualHovered", true, 500);
         wait(1200);
 
-        verify(Qt.colorEqual(inactiveItem.color, "#faf6ee"));
-        verify(Qt.colorEqual(inactiveItem.border.color, "#e8dfc8"));
+        verify(Qt.colorEqual(inactiveItem.color, Theme.surfaceRaised));
+        verify(Qt.colorEqual(inactiveItem.border.color, Theme.border));
         compare(inactiveItem.layer.enabled, false);
     }
 
@@ -160,9 +161,9 @@ TestCase {
 
         // 退场目标色必须是不透明暖色。透明色会参与 ColorAnimation 插值，
         // 在 macOS 渲染中容易闪出灰块，这里锁死这个边界。
-        verify(Qt.colorEqual(inactiveItem.color, "#faf8f3"));
+        verify(Qt.colorEqual(inactiveItem.color, Theme.surfaceRaised));
         compare(inactiveItem.color.a, 1);
-        verify(Qt.colorEqual(inactiveItem.border.color, "#faf8f3"));
+        verify(Qt.colorEqual(inactiveItem.border.color, Theme.surfaceRaised));
         compare(inactiveItem.border.color.a, 1);
         compare(inactiveItem.border.width, 0);
     }
@@ -173,13 +174,13 @@ TestCase {
 
         verify(divider !== null);
         compare(divider.height, 1);
-        verify(Qt.colorEqual(divider.color, "#e8dfc8"));
+        verify(Qt.colorEqual(divider.color, Theme.border));
         compare(divider.opacity, 0.8);
 
         verify(version !== null);
-        compare(version.font.pixelSize, 12);
+        compare(version.font.pixelSize, Theme.fontSm);
         compare(version.font.weight, Font.Normal);
-        verify(Qt.colorEqual(version.color, "#a0896b"));
+        verify(Qt.colorEqual(version.color, Theme.inkMuted));
         compare(version.opacity, 0.7);
     }
 }

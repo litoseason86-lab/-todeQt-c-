@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Effects
 import QtQuick.Layouts
+import ".."
 
 Rectangle {
     id: root
@@ -13,7 +14,7 @@ Rectangle {
     property string comparisonText: ""
     property int comparisonTrend: 0
     property bool showComparison: false
-    readonly property color cardShadowColor: "#5d4e37"
+    readonly property color cardShadowColor: Theme.ink
     readonly property real cardShadowOpacity: 0.08
     readonly property real cardShadowBlur: 0.18
     readonly property real cardShadowHorizontalOffset: 0
@@ -26,9 +27,9 @@ Rectangle {
 
     implicitWidth: 190
     implicitHeight: root.showComparison && root.comparisonText.length > 0 ? 126 : 104
-    radius: 8
-    color: "#fffef9"
-    border.color: "#e8dfc8"
+    radius: Theme.radiusLg
+    color: Theme.surface
+    border.color: Theme.border
     border.width: 1
     layer.enabled: true
     layer.effect: MultiEffect {
@@ -64,32 +65,32 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 14
-        spacing: 6
+        anchors.margins: Theme.space12
+        spacing: Theme.space8
 
         Text {
             Layout.fillWidth: true
             text: root.title
-            font.pixelSize: 13
+            font.pixelSize: Theme.fontMd
             font.weight: Font.Bold
-            color: "#8b7355"
+            color: Theme.inkSoft
             elide: Text.ElideRight
         }
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 4
+            spacing: Theme.space4
 
             Text {
                 id: valueText
 
                 Layout.fillWidth: true
                 text: root.value
-                font.pixelSize: 28
+                font.pixelSize: Theme.fontXxl
                 font.weight: Font.Bold
                 fontSizeMode: Text.HorizontalFit
                 minimumPixelSize: 18
-                color: "#5d4e37"
+                color: Theme.ink
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
 
@@ -120,8 +121,8 @@ Rectangle {
             Text {
                 visible: root.unit.length > 0
                 text: root.unit
-                font.pixelSize: 13
-                color: "#8b7355"
+                font.pixelSize: Theme.fontMd
+                color: Theme.inkSoft
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
             }
@@ -131,8 +132,8 @@ Rectangle {
             Layout.fillWidth: true
             visible: root.subtitle.length > 0
             text: root.subtitle
-            font.pixelSize: 12
-            color: "#8b7355"
+            font.pixelSize: Theme.fontSm
+            color: Theme.inkSoft
             elide: Text.ElideRight
         }
 
@@ -142,15 +143,15 @@ Rectangle {
             Layout.fillWidth: true
             visible: root.showComparison && root.comparisonText.length > 0
             text: root.comparisonText
-            font.pixelSize: 13
+            font.pixelSize: Theme.fontMd
             color: {
                 if (root.comparisonTrend > 0) {
-                    return "#4caf50"
+                    return Theme.success
                 }
                 if (root.comparisonTrend < 0) {
-                    return "#f44336"
+                    return Theme.danger
                 }
-                return "#8b7355"
+                return Theme.inkSoft
             }
             elide: Text.ElideRight
         }

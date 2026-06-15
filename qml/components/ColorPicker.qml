@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import ".."
 
 Item {
     id: root
@@ -21,20 +22,20 @@ Item {
 
         anchors.left: parent.left
         anchors.right: parent.right
-        spacing: 8
+        spacing: Theme.space8
 
         Text {
             Layout.fillWidth: true
             text: "选择颜色"
-            font.pixelSize: 13
-            color: "#5d4e37"
+            font.pixelSize: Theme.fontMd
+            color: Theme.ink
         }
 
         GridLayout {
             Layout.fillWidth: true
             columns: 5
-            columnSpacing: 8
-            rowSpacing: 8
+            columnSpacing: Theme.space8
+            rowSpacing: Theme.space8
 
             Repeater {
                 model: root.colors
@@ -45,10 +46,10 @@ Item {
                     objectName: "colorSwatch-" + index
                     Layout.preferredWidth: 48
                     Layout.preferredHeight: 36
-                    radius: 4
+                    radius: Theme.radiusSm
                     color: modelData
                     border.width: root.selectedColor === modelData ? 3 : 1
-                    border.color: root.selectedColor === modelData ? "#5d4e37" : "#e8dfc8"
+                    border.color: root.selectedColor === modelData ? Theme.ink : Theme.border
 
                     Behavior on border.width {
                         NumberAnimation {
@@ -71,9 +72,9 @@ Item {
                         anchors.centerIn: parent
                         visible: root.selectedColor === modelData
                         text: "✓"
-                        font.pixelSize: 18
+                        font.pixelSize: Theme.fontXl
                         font.bold: true
-                        color: "#fffef9"
+                        color: Theme.surface
                     }
                 }
             }

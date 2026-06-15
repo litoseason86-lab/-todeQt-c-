@@ -1,19 +1,23 @@
 import QtQuick
 import QtQuick.Layouts
 import QtQuick.Controls
+import ".."
 
 Rectangle {
     id: root
 
     width: 208
-    readonly property color sidebarGradientTopColor: "#faf8f3"
-    readonly property color sidebarGradientBottomColor: "#f5f0e6"
-    readonly property color sidebarItemIdleColor: "#faf8f3"
-    readonly property color sidebarItemIdleBorderColor: "#faf8f3"
-    readonly property color sidebarItemHoverColor: "#faf6ee"
-    readonly property color sidebarItemHoverBorderColor: "#e8dfc8"
-    readonly property color sidebarItemActiveColor: "#f0e6d2"
-    readonly property color sidebarItemActiveBorderColor: "#d4a574"
+    readonly property color sidebarGradientTopColor: Theme.surfaceRaised
+    readonly property color sidebarGradientBottomColor: Theme.surfaceSunken
+    // 悬停反馈靠“边框浮现”表达：idle 与 hover 的底色都用 surfaceRaised，
+    // 区别在于 hover 时 border 由隐形（同底色、宽度 0）变为 Theme.border、宽度 1。
+    // 所以这里 idle/hover 底色相同不是笔误，别为了“让它们不一样”而改动。
+    readonly property color sidebarItemIdleColor: Theme.surfaceRaised
+    readonly property color sidebarItemIdleBorderColor: Theme.surfaceRaised
+    readonly property color sidebarItemHoverColor: Theme.surfaceRaised
+    readonly property color sidebarItemHoverBorderColor: Theme.border
+    readonly property color sidebarItemActiveColor: Theme.accentSoft
+    readonly property color sidebarItemActiveBorderColor: Theme.accent
 
     gradient: Gradient {
         orientation: Gradient.Vertical
@@ -38,23 +42,23 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 16
-        spacing: 4
+        anchors.margins: Theme.space16
+        spacing: Theme.space4
 
         Text {
             text: "番茄Todo"
-            font.pixelSize: 20
+            font.pixelSize: Theme.fontXl
             font.weight: Font.Bold
-            color: "#5d4e37"
-            Layout.bottomMargin: 18
+            color: Theme.ink
+            Layout.bottomMargin: Theme.space16
         }
 
         Text {
             text: "时间视图"
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSm
             font.weight: Font.Bold
-            color: "#8b7355"
-            Layout.bottomMargin: 6
+            color: Theme.inkSoft
+            Layout.bottomMargin: Theme.space8
         }
 
         SidebarItem {
@@ -74,9 +78,9 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 1
-            color: "#e8dfc8"
-            Layout.topMargin: 16
-            Layout.bottomMargin: 16
+            color: Theme.border
+            Layout.topMargin: Theme.space16
+            Layout.bottomMargin: Theme.space16
             opacity: 0.8
         }
 
@@ -128,9 +132,9 @@ Rectangle {
 
         Text {
             text: "三阶段"
-            font.pixelSize: 12
+            font.pixelSize: Theme.fontSm
             font.weight: Font.Normal
-            color: "#a0896b"
+            color: Theme.inkMuted
             opacity: 0.7
         }
     }
@@ -153,7 +157,7 @@ Rectangle {
         objectName: "sidebarItem-" + item.marker
         Layout.fillWidth: true
         Layout.preferredHeight: 44
-        radius: 6
+        radius: Theme.radiusMd
         // 不能把非激活状态设为 transparent：hover 退场时 ColorAnimation 会做透明插值，
         // macOS 上会短暂露出灰色过渡块。默认态固定为不透明暖色，彻底切断灰闪来源。
         color: item.isActive ? root.sidebarItemActiveColor : (item.visualHovered ? root.sidebarItemHoverColor : root.sidebarItemIdleColor)
@@ -192,16 +196,16 @@ Rectangle {
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: 8
-            anchors.rightMargin: 8
-            spacing: 8
+            anchors.leftMargin: Theme.space8
+            anchors.rightMargin: Theme.space8
+            spacing: Theme.space8
 
             Rectangle {
                 objectName: "sidebarMarker-" + item.marker
                 Layout.preferredWidth: 22
                 Layout.preferredHeight: 22
-                radius: 4
-                color: item.isActive ? "#d4a574" : "#e8dfc8"
+                radius: Theme.radiusSm
+                color: item.isActive ? Theme.accent : Theme.border
 
                 Behavior on color {
                     ColorAnimation {
@@ -213,9 +217,9 @@ Rectangle {
                 Text {
                     anchors.centerIn: parent
                     text: item.marker
-                    font.pixelSize: 12
+                    font.pixelSize: Theme.fontSm
                     font.weight: Font.Bold
-                    color: item.isActive ? "#fffef9" : "#8b7355"
+                    color: item.isActive ? Theme.surface : Theme.inkSoft
 
                     Behavior on color {
                         ColorAnimation {
@@ -229,9 +233,9 @@ Rectangle {
             Text {
                 Layout.fillWidth: true
                 text: item.text
-                font.pixelSize: 14
+                font.pixelSize: Theme.fontLg
                 font.weight: item.isActive ? Font.Medium : Font.Normal
-                color: item.isActive ? "#5d4e37" : "#8b7355"
+                color: item.isActive ? Theme.ink : Theme.inkSoft
                 elide: Text.ElideRight
             }
         }
