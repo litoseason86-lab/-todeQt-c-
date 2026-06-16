@@ -144,9 +144,31 @@ Item {
             }
 
             Button {
+                id: prevWeekButton
                 text: "上一周"
                 implicitWidth: 84
                 implicitHeight: 40
+
+                // 次级暖色描边样式：低调、与卡片协调，避免满屏强调色块。
+                background: Rectangle {
+                    color: prevWeekButton.pressed ? Theme.borderSubtle : (prevWeekButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                    border.color: prevWeekButton.hovered || prevWeekButton.pressed ? Theme.accent : Theme.border
+                    border.width: 1
+                    radius: Theme.radiusMd
+
+                    Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                    Behavior on border.color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                }
+
+                contentItem: Text {
+                    text: prevWeekButton.text
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.Medium
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+
                 onClicked: {
                     var date = new Date(root.weekStart)
                     date.setDate(date.getDate() - 7)
@@ -156,9 +178,30 @@ Item {
             }
 
             Button {
+                id: thisWeekButton
                 text: "本周"
                 implicitWidth: 72
                 implicitHeight: 40
+
+                background: Rectangle {
+                    color: thisWeekButton.pressed ? Theme.borderSubtle : (thisWeekButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                    border.color: thisWeekButton.hovered || thisWeekButton.pressed ? Theme.accent : Theme.border
+                    border.width: 1
+                    radius: Theme.radiusMd
+
+                    Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                    Behavior on border.color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                }
+
+                contentItem: Text {
+                    text: thisWeekButton.text
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.Medium
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+
                 onClicked: {
                     root.weekStart = root.mondayOf(new Date())
                     root.refresh()
@@ -166,9 +209,30 @@ Item {
             }
 
             Button {
+                id: nextWeekButton
                 text: "下一周"
                 implicitWidth: 84
                 implicitHeight: 40
+
+                background: Rectangle {
+                    color: nextWeekButton.pressed ? Theme.borderSubtle : (nextWeekButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                    border.color: nextWeekButton.hovered || nextWeekButton.pressed ? Theme.accent : Theme.border
+                    border.width: 1
+                    radius: Theme.radiusMd
+
+                    Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                    Behavior on border.color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                }
+
+                contentItem: Text {
+                    text: nextWeekButton.text
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.Medium
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+
                 onClicked: {
                     var date = new Date(root.weekStart)
                     date.setDate(date.getDate() + 7)
@@ -238,9 +302,33 @@ Item {
                                 }
 
                                 Button {
+                                    id: addDayButton
                                     text: "添加"
                                     implicitWidth: 72
                                     implicitHeight: 36
+
+                                    // 主强调填充，与今日任务页的「添加」按钮保持一致。
+                                    background: Rectangle {
+                                        color: addDayButton.pressed || addDayButton.hovered ? Theme.accentStrong : Theme.accent
+                                        border.color: addDayButton.hovered ? Theme.accentStrong : "transparent"
+                                        border.width: addDayButton.hovered ? 1 : 0
+                                        radius: Theme.radiusMd
+
+                                        Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                                    }
+
+                                    contentItem: Text {
+                                        text: addDayButton.text
+                                        color: Theme.surface
+                                        font.pixelSize: Theme.fontMd
+                                        font.weight: Font.Medium
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                        scale: addDayButton.pressed ? 0.96 : 1.0
+
+                                        Behavior on scale { NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
+                                    }
+
                                     onClicked: root.openAddTaskForDay(index)
                                 }
                             }
