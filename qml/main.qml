@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import "."
 
 ApplicationWindow {
     id: root
@@ -11,7 +12,7 @@ ApplicationWindow {
     minimumWidth: 860
     minimumHeight: 620
     title: "番茄Todo"
-    color: "#fffef9"
+    color: Theme.surface
 
     MainWindow {
         anchors.fill: parent

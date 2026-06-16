@@ -594,18 +594,18 @@ TestCase {
         verify(submitButtonBackground !== null);
 
         compare(dialogPanel.objectName, "dialogPanel");
-        compare(dialogPanel.radius, 8);
-        verify(Qt.colorEqual(dialogPanel.color, "#fffef9"));
-        verify(Qt.colorEqual(dialogPanel.border.color, "#e8dfc8"));
+        compare(dialogPanel.radius, Theme.radiusLg);
+        verify(Qt.colorEqual(dialogPanel.color, Theme.surface));
+        verify(Qt.colorEqual(dialogPanel.border.color, Theme.border));
         compare(dialogPanel.layer.enabled, true);
         verify(dialogPanel.layer.effect !== null);
 
-        compare(titleFieldBackground.radius, 6);
-        verify(Qt.colorEqual(titleFieldBackground.color, "#faf8f3"));
+        compare(titleFieldBackground.radius, Theme.radiusMd);
+        verify(Qt.colorEqual(titleFieldBackground.color, Theme.surfaceRaised));
 
-        compare(categoryComboBackground.radius, 6);
-        compare(cancelButtonBackground.radius, 6);
-        compare(submitButtonBackground.radius, 6);
+        compare(categoryComboBackground.radius, Theme.radiusMd);
+        compare(cancelButtonBackground.radius, Theme.radiusMd);
+        compare(submitButtonBackground.radius, Theme.radiusMd);
         compare(cancelButton.contentItem.font.weight, Font.Medium);
         compare(submitButton.contentItem.font.weight, Font.Medium);
 
@@ -613,7 +613,7 @@ TestCase {
         wait(220);
 
         verify(titleField.activeFocus);
-        verify(Qt.colorEqual(titleFieldBackground.border.color, "#c46f5f"));
+        verify(Qt.colorEqual(titleFieldBackground.border.color, Theme.dangerBorder));
         compare(titleFieldBackground.border.width, 2);
     }
 
