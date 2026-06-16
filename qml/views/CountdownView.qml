@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 import "../components"
+import ".."
 
 Item {
     id: root
@@ -25,28 +26,28 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 24
-        spacing: 18
+        anchors.margins: Theme.space24
+        spacing: Theme.space16
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 12
+            spacing: Theme.space12
 
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 4
+                spacing: Theme.space4
 
                 Text {
                     text: "目标倒计时"
-                    font.pixelSize: 24
+                    font.pixelSize: Theme.fontXxl
                     font.weight: Font.Bold
-                    color: "#5d4e37"
+                    color: Theme.ink
                 }
 
                 Text {
                     text: "把关键日期放到每天都能看见的位置。"
-                    font.pixelSize: 13
-                    color: "#8b7355"
+                    font.pixelSize: Theme.fontMd
+                    color: Theme.inkSoft
                 }
             }
 
@@ -57,14 +58,14 @@ Item {
                 implicitHeight: 44
 
                 background: Rectangle {
-                    color: addButton.pressed ? "#c99666" : (addButton.hovered ? "#d9a574" : "#d4a574")
-                    radius: 8
+                    color: addButton.pressed ? Theme.accentStrong : (addButton.hovered ? Theme.accentStrong : Theme.accent)
+                    radius: Theme.radiusLg
                 }
 
                 contentItem: Text {
                     text: addButton.text
-                    color: "#fffef9"
-                    font.pixelSize: 13
+                    color: Theme.surface
+                    font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
@@ -77,28 +78,28 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 1
-            color: "#e8dfc8"
+            color: Theme.border
         }
 
         Rectangle {
             visible: !!root.primaryGoal()
             Layout.fillWidth: true
             Layout.preferredHeight: 210
-            radius: 10
-            border.color: "#d4a574"
+            radius: Theme.radiusLg
+            border.color: Theme.accent
             border.width: 2
 
             gradient: Gradient {
                 orientation: Gradient.Horizontal
-                GradientStop { position: 0.0; color: "#f0e6d2" }
-                GradientStop { position: 1.0; color: "#fffaf1" }
+                GradientStop { position: 0.0; color: Theme.accentSoft }
+                GradientStop { position: 1.0; color: Theme.surfaceRaised }
             }
 
             layer.enabled: true
             layer.effect: MultiEffect {
                 autoPaddingEnabled: true
                 shadowEnabled: true
-                shadowColor: "#000000"
+                shadowColor: Theme.shadow
                 shadowOpacity: 0.08
                 shadowBlur: 0.14
                 shadowHorizontalOffset: 0
@@ -108,14 +109,14 @@ Item {
             ColumnLayout {
                 anchors.centerIn: parent
                 width: parent.width - 64
-                spacing: 8
+                spacing: Theme.space8
 
                 Text {
                     Layout.fillWidth: true
                     text: root.primaryGoal() ? root.primaryGoal().name : ""
-                    font.pixelSize: 16
+                    font.pixelSize: Theme.fontXl
                     font.weight: Font.Medium
-                    color: "#5d4e37"
+                    color: Theme.ink
                     horizontalAlignment: Text.AlignHCenter
                     elide: Text.ElideRight
                 }
@@ -123,9 +124,9 @@ Item {
                 Text {
                     Layout.fillWidth: true
                     text: root.primaryGoal() ? Math.abs(Number(root.primaryGoal().daysRemaining || 0)) : "0"
-                    font.pixelSize: 64
+                    font.pixelSize: Theme.fontDisplay
                     font.weight: Font.Bold
-                    color: "#d4a574"
+                    color: Theme.accent
                     horizontalAlignment: Text.AlignHCenter
                 }
 
@@ -138,16 +139,16 @@ Item {
                         }
                         return Number(goal.daysRemaining || 0) >= 0 ? "天" : "已过期";
                     }
-                    font.pixelSize: 15
-                    color: "#8b7355"
+                    font.pixelSize: Theme.fontLg
+                    color: Theme.inkSoft
                     horizontalAlignment: Text.AlignHCenter
                 }
 
                 Text {
                     Layout.fillWidth: true
                     text: root.primaryGoal() ? Qt.formatDate(root.primaryGoal().targetDate, "yyyy年MM月dd日") : ""
-                    font.pixelSize: 13
-                    color: "#6d5e47"
+                    font.pixelSize: Theme.fontMd
+                    color: Theme.ink
                     horizontalAlignment: Text.AlignHCenter
                 }
             }
@@ -167,9 +168,9 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: 8
-            color: "#fffef9"
-            border.color: "#e8dfc8"
+            radius: Theme.radiusLg
+            color: Theme.surface
+            border.color: Theme.border
             border.width: 1
 
             Text {
@@ -177,8 +178,8 @@ Item {
                 anchors.centerIn: parent
                 width: parent.width - 48
                 text: "暂无目标倒计时\n\n点击右上角添加第一个目标"
-                font.pixelSize: 15
-                color: "#8b7355"
+                font.pixelSize: Theme.fontLg
+                color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
             }
@@ -187,9 +188,9 @@ Item {
                 id: countdownListView
 
                 anchors.fill: parent
-                anchors.margins: 12
+                anchors.margins: Theme.space12
                 visible: root.primaryGoal() !== null && root.primaryGoal() !== undefined && count > 1
-                spacing: 10
+                spacing: Theme.space12
                 clip: true
                 model: root.countdownServiceRef ? root.countdownServiceRef.model : null
 
