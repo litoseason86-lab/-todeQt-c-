@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
+import ".."
 
 Item {
     id: root
@@ -117,28 +118,28 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 24
-        spacing: 16
+        anchors.margins: Theme.space24
+        spacing: Theme.space16
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 12
+            spacing: Theme.space12
 
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 4
+                spacing: Theme.space4
 
                 Text {
                     text: "本周计划"
-                    font.pixelSize: 24
+                    font.pixelSize: Theme.fontXxl
                     font.bold: true
-                    color: "#5d4e37"
+                    color: Theme.ink
                 }
 
                 Text {
                     text: root.isoDate(root.weekStart) + " - " + root.isoDate(root.dayDate(6))
-                    font.pixelSize: 13
-                    color: "#8b7355"
+                    font.pixelSize: Theme.fontMd
+                    color: Theme.inkSoft
                 }
             }
 
@@ -180,15 +181,15 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 1
-            color: "#e8dfc8"
+            color: Theme.border
         }
 
         Label {
             Layout.fillWidth: true
             visible: root.loadError.length > 0
             text: root.loadError
-            color: "#b24f3d"
-            font.pixelSize: 13
+            color: Theme.danger
+            font.pixelSize: Theme.fontMd
             wrapMode: Text.WordWrap
         }
 
@@ -199,7 +200,7 @@ Item {
 
             ColumnLayout {
                 width: Math.max(parent.width, 1)
-                spacing: 10
+                spacing: Theme.space12
 
                 Repeater {
                     model: 7
@@ -207,9 +208,9 @@ Item {
                     Rectangle {
                         Layout.fillWidth: true
                         implicitHeight: dayColumn.implicitHeight + 24
-                        radius: 6
-                        color: "#faf6ee"
-                        border.color: "#e8dfc8"
+                        radius: Theme.radiusMd
+                        color: Theme.surfaceRaised
+                        border.color: Theme.border
                         border.width: 1
 
                         property var dayTasks: root.tasksForDay(index)
@@ -220,20 +221,20 @@ Item {
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.top: parent.top
-                            anchors.margins: 12
-                            spacing: 8
+                            anchors.margins: Theme.space12
+                            spacing: Theme.space8
 
                             RowLayout {
                                 Layout.fillWidth: true
-                                spacing: 8
+                                spacing: Theme.space8
 
                                 Text {
                                     Layout.fillWidth: true
                                     text: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][index]
                                           + " " + Qt.formatDate(root.dayDate(index), "M月d日")
-                                    font.pixelSize: 16
+                                    font.pixelSize: Theme.fontXl
                                     font.bold: true
-                                    color: "#5d4e37"
+                                    color: Theme.ink
                                 }
 
                                 Button {
@@ -248,8 +249,8 @@ Item {
                                 Layout.fillWidth: true
                                 visible: dayTasks.length === 0
                                 text: "暂无任务"
-                                font.pixelSize: 13
-                                color: "#8b7355"
+                                font.pixelSize: Theme.fontMd
+                                color: Theme.inkSoft
                             }
 
                             Repeater {

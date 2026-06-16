@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
+import ".."
 
 Item {
     id: root
@@ -216,7 +217,7 @@ Item {
 
         ColumnLayout {
             width: Math.max(pageScrollView.availableWidth, 1)
-            spacing: 16
+            spacing: Theme.space16
 
             Item {
                 Layout.fillWidth: true
@@ -225,29 +226,29 @@ Item {
 
             ColumnLayout {
                 Layout.fillWidth: true
-                Layout.leftMargin: 24
-                Layout.rightMargin: 24
-                spacing: 4
+                Layout.leftMargin: Theme.space24
+                Layout.rightMargin: Theme.space24
+                spacing: Theme.space4
 
                 Text {
                     text: "专注历史"
-                    font.pixelSize: 24
+                    font.pixelSize: Theme.fontXxl
                     font.weight: Font.Bold
-                    color: "#5d4e37"
+                    color: Theme.ink
                 }
 
                 Text {
                     text: root.currentYear + "年" + root.currentMonth + "月"
-                    font.pixelSize: 13
-                    color: "#8b7355"
+                    font.pixelSize: Theme.fontMd
+                    color: Theme.inkSoft
                 }
             }
 
             RowLayout {
                 Layout.fillWidth: true
-                Layout.leftMargin: 24
-                Layout.rightMargin: 24
-                spacing: 12
+                Layout.leftMargin: Theme.space24
+                Layout.rightMargin: Theme.space24
+                spacing: Theme.space12
 
                 Button {
                     id: previousMonthButton
@@ -257,10 +258,10 @@ Item {
                     implicitHeight: 40
                     background: Rectangle {
                         objectName: "monthPreviousButtonBackground"
-                        color: previousMonthButton.pressed ? "#ddd4bb" : (previousMonthButton.hovered ? "#f5ede3" : "#fffef9")
-                        border.color: previousMonthButton.hovered || previousMonthButton.pressed ? "#d4a574" : "#e8dfc8"
+                        color: previousMonthButton.pressed ? Theme.accentSoft : (previousMonthButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                        border.color: previousMonthButton.hovered || previousMonthButton.pressed ? Theme.accent : Theme.border
                         border.width: 1
-                        radius: 8
+                        radius: Theme.radiusLg
 
                         Behavior on color {
                             ColorAnimation {
@@ -277,8 +278,8 @@ Item {
                     }
                     contentItem: Text {
                         text: previousMonthButton.text
-                        color: "#5d4e37"
-                        font.pixelSize: 13
+                        color: Theme.ink
+                        font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -301,10 +302,10 @@ Item {
                     implicitHeight: 40
                     background: Rectangle {
                         objectName: "monthCurrentButtonBackground"
-                        color: currentMonthButton.pressed ? "#ddd4bb" : (currentMonthButton.hovered ? "#f5ede3" : "#fffef9")
-                        border.color: currentMonthButton.hovered || currentMonthButton.pressed ? "#d4a574" : "#e8dfc8"
+                        color: currentMonthButton.pressed ? Theme.accentSoft : (currentMonthButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                        border.color: currentMonthButton.hovered || currentMonthButton.pressed ? Theme.accent : Theme.border
                         border.width: 1
-                        radius: 8
+                        radius: Theme.radiusLg
 
                         Behavior on color {
                             ColorAnimation {
@@ -321,8 +322,8 @@ Item {
                     }
                     contentItem: Text {
                         text: currentMonthButton.text
-                        color: "#5d4e37"
-                        font.pixelSize: 13
+                        color: Theme.ink
+                        font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -342,10 +343,10 @@ Item {
                     implicitHeight: 40
                     background: Rectangle {
                         objectName: "monthNextButtonBackground"
-                        color: nextMonthButton.pressed ? "#ddd4bb" : (nextMonthButton.hovered ? "#f5ede3" : "#fffef9")
-                        border.color: nextMonthButton.hovered || nextMonthButton.pressed ? "#d4a574" : "#e8dfc8"
+                        color: nextMonthButton.pressed ? Theme.accentSoft : (nextMonthButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                        border.color: nextMonthButton.hovered || nextMonthButton.pressed ? Theme.accent : Theme.border
                         border.width: 1
-                        radius: 8
+                        radius: Theme.radiusLg
 
                         Behavior on color {
                             ColorAnimation {
@@ -362,8 +363,8 @@ Item {
                     }
                     contentItem: Text {
                         text: nextMonthButton.text
-                        color: "#5d4e37"
-                        font.pixelSize: 13
+                        color: Theme.ink
+                        font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -392,10 +393,10 @@ Item {
 
                     background: Rectangle {
                         objectName: "focusHistoryCleanupInvalidButtonBackground"
-                        color: cleanupInvalidButton.pressed ? "#eee2c9" : (cleanupInvalidButton.hovered ? "#f5ede3" : "#fffef9")
-                        border.color: cleanupInvalidButton.hovered || cleanupInvalidButton.pressed ? "#d4a574" : "#e8dfc8"
+                        color: cleanupInvalidButton.pressed ? Theme.accentSoft : (cleanupInvalidButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                        border.color: cleanupInvalidButton.hovered || cleanupInvalidButton.pressed ? Theme.accent : Theme.border
                         border.width: 1
-                        radius: 8
+                        radius: Theme.radiusLg
 
                         Behavior on color {
                             ColorAnimation {
@@ -413,8 +414,8 @@ Item {
 
                     contentItem: Text {
                         text: cleanupInvalidButton.text
-                        color: "#8b7355"
-                        font.pixelSize: 13
+                        color: Theme.inkSoft
+                        font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -427,20 +428,20 @@ Item {
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.leftMargin: 24
-                Layout.rightMargin: 24
+                Layout.leftMargin: Theme.space24
+                Layout.rightMargin: Theme.space24
                 Layout.preferredHeight: 1
-                color: "#e8dfc8"
+                color: Theme.border
             }
 
             Label {
                 Layout.fillWidth: true
-                Layout.leftMargin: 24
-                Layout.rightMargin: 24
+                Layout.leftMargin: Theme.space24
+                Layout.rightMargin: Theme.space24
                 visible: root.loadError.length > 0
                 text: root.loadError
-                color: "#b24f3d"
-                font.pixelSize: 13
+                color: Theme.danger
+                font.pixelSize: Theme.fontMd
                 wrapMode: Text.WordWrap
             }
 
@@ -449,11 +450,11 @@ Item {
                 // 宽屏下左右并排，避免右侧空白；窄屏下自动堆叠，防止卡片被压到不可读。
                 columns: root.width >= 820 ? 2 : 1
                 Layout.fillWidth: true
-                Layout.leftMargin: 24
-                Layout.rightMargin: 24
-                Layout.bottomMargin: 24
-                columnSpacing: 16
-                rowSpacing: 16
+                Layout.leftMargin: Theme.space24
+                Layout.rightMargin: Theme.space24
+                Layout.bottomMargin: Theme.space24
+                columnSpacing: Theme.space16
+                rowSpacing: Theme.space16
 
                 Rectangle {
                     objectName: "monthCalendarContainer"
@@ -463,15 +464,15 @@ Item {
                     Layout.maximumWidth: root.width < 820 ? 100000 : 520
                     Layout.minimumHeight: 520
                     Layout.preferredHeight: 560
-                    radius: 8
-                    color: "#fffef9"
-                    border.color: "#e8dfc8"
+                    radius: Theme.radiusLg
+                    color: Theme.surface
+                    border.color: Theme.border
                     border.width: 1
                     layer.enabled: true
                     layer.effect: MultiEffect {
                         autoPaddingEnabled: true
                         shadowEnabled: true
-                        shadowColor: "#000000"
+                        shadowColor: Theme.shadow
                         shadowOpacity: 0.08
                         shadowBlur: 0.14
                         shadowHorizontalOffset: 0
@@ -480,13 +481,13 @@ Item {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 12
-                        spacing: 8
+                        anchors.margins: Theme.space12
+                        spacing: Theme.space8
 
                         GridLayout {
                             Layout.fillWidth: true
                             columns: 7
-                            columnSpacing: 6
+                            columnSpacing: Theme.space8
 
                             Repeater {
                                 model: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
@@ -494,9 +495,9 @@ Item {
                                 Text {
                                     Layout.fillWidth: true
                                     text: modelData
-                                    font.pixelSize: 12
+                                    font.pixelSize: Theme.fontSm
                                     font.weight: Font.Medium
-                                    color: "#8b7355"
+                                    color: Theme.inkSoft
                                     horizontalAlignment: Text.AlignHCenter
                                 }
                             }
@@ -506,8 +507,8 @@ Item {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             columns: 7
-                            columnSpacing: 6
-                            rowSpacing: 6
+                            columnSpacing: Theme.space8
+                            rowSpacing: Theme.space8
 
                             Repeater {
                                 model: 42
@@ -528,20 +529,20 @@ Item {
                                     }
 
                                     objectName: dayNumber > 0 ? "monthDayCell-" + dayNumber : "monthDayCell-empty-" + index
-                                    radius: 6
+                                    radius: Theme.radiusMd
                                     color: {
                                         if (dayNumber <= 0)
-                                            return "#faf6ee";
+                                            return Theme.surfaceRaised;
                                         if (dayNumber === root.selectedDay)
-                                            return "#f0e6d2";
+                                            return Theme.accentSoft;
                                         if (dayMouseArea.containsMouse)
-                                            return "#fffef9";
-                                        return "#faf6ee";
+                                            return Theme.surface;
+                                        return Theme.surfaceRaised;
                                     }
                                     border.color: {
                                         if (dayNumber > 0 && (dayNumber === root.selectedDay || todayCell || dayMouseArea.containsMouse))
-                                            return "#d4a574";
-                                        return "#e8dfc8";
+                                            return Theme.accent;
+                                        return Theme.border;
                                     }
                                     border.width: (dayNumber === root.selectedDay || todayCell) ? 2 : 1
 
@@ -566,15 +567,15 @@ Item {
 
                                     ColumnLayout {
                                         anchors.fill: parent
-                                        anchors.margins: 6
-                                        spacing: 2
+                                        anchors.margins: Theme.space8
+                                        spacing: Theme.hairline
 
                                         Text {
                                             Layout.fillWidth: true
                                             text: dayNumber > 0 ? String(dayNumber) : ""
-                                            font.pixelSize: 13
+                                            font.pixelSize: Theme.fontMd
                                             font.weight: dayNumber === root.selectedDay ? Font.Bold : Font.Normal
-                                            color: "#5d4e37"
+                                            color: Theme.ink
                                         }
 
                                         Text {
@@ -582,9 +583,9 @@ Item {
                                             objectName: dayNumber > 0 ? "monthDayDuration-" + dayNumber : "monthDayDuration-empty-" + index
                                             visible: dayNumber > 0 && dayDuration > 0
                                             text: root.formatDuration(dayDuration)
-                                            font.pixelSize: 11
+                                            font.pixelSize: Theme.fontXs
                                             font.weight: Font.Medium
-                                            color: "#d4a574"
+                                            color: Theme.accent
                                             elide: Text.ElideRight
                                         }
                                     }
@@ -612,15 +613,15 @@ Item {
                     Layout.minimumWidth: 360
                     Layout.minimumHeight: 260
                     Layout.preferredHeight: root.width >= 820 ? 560 : 360
-                    radius: 8
-                    color: "#fffef9"
-                    border.color: "#e8dfc8"
+                    radius: Theme.radiusLg
+                    color: Theme.surface
+                    border.color: Theme.border
                     border.width: 1
                     layer.enabled: true
                     layer.effect: MultiEffect {
                         autoPaddingEnabled: true
                         shadowEnabled: true
-                        shadowColor: "#000000"
+                        shadowColor: Theme.shadow
                         shadowOpacity: 0.08
                         shadowBlur: 0.14
                         shadowHorizontalOffset: 0
@@ -629,26 +630,26 @@ Item {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 16
-                        spacing: 14
+                        anchors.margins: Theme.space16
+                        spacing: Theme.space12
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 12
+                            spacing: Theme.space12
 
                             Text {
                                 objectName: "focusTimelineTitle"
                                 Layout.fillWidth: true
                                 text: root.currentMonth + "月" + root.selectedDay + "日 专注记录"
-                                font.pixelSize: 16
+                                font.pixelSize: Theme.fontXl
                                 font.weight: Font.Bold
-                                color: "#5d4e37"
+                                color: Theme.ink
                             }
 
                             Text {
                                 text: root.selectedDaySessions.length + "次记录"
-                                font.pixelSize: 13
-                                color: "#8b7355"
+                                font.pixelSize: Theme.fontMd
+                                color: Theme.inkSoft
                             }
                         }
 
@@ -661,8 +662,8 @@ Item {
                                 objectName: "focusHistoryEmptyState"
                                 anchors.centerIn: parent
                                 text: "这一天还没有专注记录"
-                                font.pixelSize: 13
-                                color: "#8b7355"
+                                font.pixelSize: Theme.fontMd
+                                color: Theme.inkSoft
                                 horizontalAlignment: Text.AlignHCenter
                             }
                         }
@@ -683,19 +684,19 @@ Item {
 
                                 contentItem: Rectangle {
                                     implicitWidth: 4
-                                    radius: 2
-                                    color: timelineVerticalScrollBar.pressed || timelineVerticalScrollBar.hovered ? "#d4a574" : "#e8dfc8"
+                                    radius: Theme.radiusSm
+                                    color: timelineVerticalScrollBar.pressed || timelineVerticalScrollBar.hovered ? Theme.accent : Theme.border
                                 }
 
                                 background: Rectangle {
-                                    color: "#fffef9"
+                                    color: Theme.surface
                                 }
                             }
 
                             Column {
                                 id: timelineColumn
                                 width: Math.max(1, timelineScrollView.availableWidth)
-                                spacing: 12
+                                spacing: Theme.space12
 
                                 Repeater {
                                     model: root.selectedDaySessions
@@ -710,8 +711,8 @@ Item {
                                             y: 28
                                             width: 2
                                             height: Math.max(0, parent.height - y)
-                                            radius: 1
-                                            color: "#e8dfc8"
+                                            radius: Theme.radiusSm
+                                            color: Theme.border
                                         }
 
                                         Rectangle {
@@ -720,8 +721,8 @@ Item {
                                             x: 3
                                             y: 18
                                             radius: 5
-                                            color: "#d4a574"
-                                            border.color: "#fffef9"
+                                            color: Theme.accent
+                                            border.color: Theme.surface
                                             border.width: 2
                                             z: 2
                                         }
@@ -732,35 +733,35 @@ Item {
                                             x: 24
                                             width: Math.max(1, parent.width - x)
                                             height: 86
-                                            radius: 6
-                                            color: "#faf8f3"
-                                            border.color: "#e8dfc8"
+                                            radius: Theme.radiusMd
+                                            color: Theme.surfaceRaised
+                                            border.color: Theme.border
                                             border.width: 1
 
                                             RowLayout {
                                                 anchors.fill: parent
-                                                anchors.margins: 12
-                                                spacing: 12
+                                                anchors.margins: Theme.space12
+                                                spacing: Theme.space12
 
                                                 ColumnLayout {
                                                     Layout.fillWidth: true
                                                     Layout.alignment: Qt.AlignVCenter
-                                                    spacing: 5
+                                                    spacing: Theme.space4
 
                                                     Text {
                                                         Layout.fillWidth: true
                                                         text: modelData.taskTitle && String(modelData.taskTitle).length > 0 ? modelData.taskTitle : "未知任务"
-                                                        font.pixelSize: 15
+                                                        font.pixelSize: Theme.fontLg
                                                         font.weight: Font.Medium
-                                                        color: "#3d3327"
+                                                        color: Theme.inkStrong
                                                         elide: Text.ElideRight
                                                     }
 
                                                     Text {
                                                         Layout.fillWidth: true
                                                         text: root.formatClock(modelData.startTime) + " - " + root.formatClock(modelData.endTime)
-                                                        font.pixelSize: 12
-                                                        color: "#8b7355"
+                                                        font.pixelSize: Theme.fontSm
+                                                        color: Theme.inkSoft
                                                         elide: Text.ElideRight
                                                     }
                                                 }
@@ -769,14 +770,14 @@ Item {
                                                     Layout.preferredWidth: 116
                                                     Layout.maximumWidth: 140
                                                     Layout.alignment: Qt.AlignVCenter
-                                                    spacing: 5
+                                                    spacing: Theme.space4
 
                                                     Text {
                                                         Layout.fillWidth: true
                                                         text: root.formatDuration(Number(modelData.durationSeconds) || 0)
-                                                        font.pixelSize: 18
+                                                        font.pixelSize: Theme.fontXl
                                                         font.weight: Font.Bold
-                                                        color: "#d4a574"
+                                                        color: Theme.accent
                                                         horizontalAlignment: Text.AlignRight
                                                         elide: Text.ElideRight
                                                     }
@@ -784,9 +785,9 @@ Item {
                                                     Text {
                                                         Layout.fillWidth: true
                                                         text: "已完成"
-                                                        font.pixelSize: 11
+                                                        font.pixelSize: Theme.fontXs
                                                         font.weight: Font.Medium
-                                                        color: "#4caf50"
+                                                        color: Theme.success
                                                         horizontalAlignment: Text.AlignRight
                                                     }
                                                 }
