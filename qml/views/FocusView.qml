@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import ".."
 
 Item {
     id: root
@@ -26,25 +27,25 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: "#f5f0e6"
+        color: Theme.surfaceSunken
 
         ColumnLayout {
             anchors.centerIn: parent
             width: Math.min(parent.width - 64, 460)
-            spacing: 28
+            spacing: Theme.space24
 
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 8
+                spacing: Theme.space8
 
                 Text {
                     Layout.fillWidth: true
                     text: focusTimer.currentTaskTitle && focusTimer.currentTaskTitle.length > 0
                           ? focusTimer.currentTaskTitle
                           : "尚未开始专注"
-                    font.pixelSize: 20
+                    font.pixelSize: Theme.fontXl
                     font.bold: true
-                    color: "#5d4e37"
+                    color: Theme.ink
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
                 }
@@ -52,8 +53,8 @@ Item {
                 Text {
                     Layout.fillWidth: true
                     text: "当前任务"
-                    font.pixelSize: 13
-                    color: "#8b7355"
+                    font.pixelSize: Theme.fontMd
+                    color: Theme.inkSoft
                     horizontalAlignment: Text.AlignHCenter
                 }
             }
@@ -61,17 +62,17 @@ Item {
             Text {
                 Layout.fillWidth: true
                 text: root.formatTime(focusTimer.elapsedSeconds)
-                font.pixelSize: 64
+                font.pixelSize: Theme.fontDisplay
                 font.bold: true
-                color: "#d4a574"
+                color: Theme.accent
                 horizontalAlignment: Text.AlignHCenter
             }
 
             Text {
                 Layout.fillWidth: true
                 text: focusTimer.isRunning ? "专注进行中" : "专注已暂停"
-                font.pixelSize: 14
-                color: "#8b7355"
+                font.pixelSize: Theme.fontLg
+                color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter
             }
 
@@ -79,15 +80,15 @@ Item {
                 Layout.fillWidth: true
                 visible: root.errorText.length > 0
                 text: root.errorText
-                font.pixelSize: 13
-                color: "#b24f3d"
+                font.pixelSize: Theme.fontMd
+                color: Theme.danger
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
             }
 
             RowLayout {
                 Layout.alignment: Qt.AlignHCenter
-                spacing: 16
+                spacing: Theme.space16
 
                 Button {
                     id: pauseButton
@@ -98,14 +99,14 @@ Item {
                     implicitHeight: 40
 
                     background: Rectangle {
-                        color: pauseButton.enabled ? "#8b7355" : "#e8dfc8"
-                        radius: 6
+                        color: pauseButton.enabled ? Theme.inkSoft : Theme.border
+                        radius: Theme.radiusMd
                     }
 
                     contentItem: Text {
                         text: pauseButton.text
-                        color: pauseButton.enabled ? "#fffef9" : "#a0896b"
-                        font.pixelSize: 14
+                        color: pauseButton.enabled ? Theme.surface : Theme.inkMuted
+                        font.pixelSize: Theme.fontLg
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
@@ -132,14 +133,14 @@ Item {
                     implicitHeight: 40
 
                     background: Rectangle {
-                        color: stopButton.enabled ? "#d4a574" : "#e8dfc8"
-                        radius: 6
+                        color: stopButton.enabled ? Theme.accent : Theme.border
+                        radius: Theme.radiusMd
                     }
 
                     contentItem: Text {
                         text: stopButton.text
-                        color: stopButton.enabled ? "#fffef9" : "#a0896b"
-                        font.pixelSize: 14
+                        color: stopButton.enabled ? Theme.surface : Theme.inkMuted
+                        font.pixelSize: Theme.fontLg
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }

@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../qml/components"
 import "../../qml/views"
+import "../../qml"
 
 TestCase {
     id: testCase
@@ -639,9 +640,9 @@ TestCase {
         verify(emptyStateCard !== null);
         verify(emptyStateIcon !== null);
 
-        verify(Qt.colorEqual(description.color, "#6d5e47"));
-        compare(addButtonBackground.radius, 8);
-        verify(Qt.colorEqual(addButtonBackground.color, "#d4a574"));
+        verify(Qt.colorEqual(description.color, Theme.ink));
+        compare(addButtonBackground.radius, Theme.radiusLg);
+        verify(Qt.colorEqual(addButtonBackground.color, Theme.accent));
         compare(addButtonBackground.border.width, 0);
         compare(addButtonLabel.font.weight, Font.Medium);
 

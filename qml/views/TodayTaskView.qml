@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 import "../components"
+import ".."
 
 Item {
     id: root
@@ -128,29 +129,29 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 24
-        spacing: 16
+        anchors.margins: Theme.space24
+        spacing: Theme.space16
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 12
+            spacing: Theme.space12
 
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 4
+                spacing: Theme.space4
 
                 Text {
                     text: "今日任务"
-                    font.pixelSize: 24
+                    font.pixelSize: Theme.fontXxl
                     font.weight: Font.Bold
-                    color: "#5d4e37"
+                    color: Theme.ink
                 }
 
                 Text {
                     objectName: "todayDescriptionText"
                     text: "把今天的学习任务收拢到一个清单里。"
-                    font.pixelSize: 13
-                    color: "#6d5e47"
+                    font.pixelSize: Theme.fontMd
+                    color: Theme.ink
                 }
             }
 
@@ -164,10 +165,10 @@ Item {
 
                 background: Rectangle {
                     objectName: "todayAddButtonBackground"
-                    color: addButton.pressed ? "#c99666" : (addButton.hovered ? "#d9a574" : "#d4a574")
-                    border.color: addButton.hovered ? "#c99666" : "transparent"
+                    color: addButton.pressed ? Theme.accentStrong : (addButton.hovered ? Theme.accentStrong : Theme.accent)
+                    border.color: addButton.hovered ? Theme.accentStrong : "transparent"
                     border.width: addButton.hovered ? 1 : 0
-                    radius: 8
+                    radius: Theme.radiusLg
 
                     Behavior on color {
                         ColorAnimation {
@@ -194,8 +195,8 @@ Item {
                 contentItem: Text {
                     objectName: "todayAddButtonLabel"
                     text: addButton.text
-                    color: "#fffef9"
-                    font.pixelSize: 14
+                    color: Theme.surface
+                    font.pixelSize: Theme.fontLg
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
@@ -216,7 +217,7 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 1
-            color: "#e8dfc8"
+            color: Theme.border
         }
 
         CountdownBanner {
@@ -230,21 +231,21 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: 12
+            spacing: Theme.space12
 
             Rectangle {
                 objectName: "todayFocusStatCard"
                 Layout.fillWidth: true
                 Layout.preferredHeight: 72
-                radius: 8
-                color: "#fffef9"
-                border.color: "#e8dfc8"
+                radius: Theme.radiusLg
+                color: Theme.surface
+                border.color: Theme.border
                 border.width: 1
                 layer.enabled: true
                 layer.effect: MultiEffect {
                     autoPaddingEnabled: true
                     shadowEnabled: true
-                    shadowColor: "#000000"
+                    shadowColor: Theme.shadow
                     shadowOpacity: 0.08
                     shadowBlur: 0.14
                     shadowHorizontalOffset: 0
@@ -253,20 +254,20 @@ Item {
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 4
+                    anchors.margins: Theme.space12
+                    spacing: Theme.space4
 
                     Text {
                         text: root.formatDuration(root.todayStats.totalDuration)
-                        font.pixelSize: 20
+                        font.pixelSize: Theme.fontXl
                         font.weight: Font.Bold
-                        color: "#5d4e37"
+                        color: Theme.ink
                     }
 
                     Text {
                         text: "今日专注"
-                        font.pixelSize: 12
-                        color: "#8b7355"
+                        font.pixelSize: Theme.fontSm
+                        color: Theme.inkSoft
                     }
                 }
             }
@@ -275,15 +276,15 @@ Item {
                 objectName: "todayCompletionStatCard"
                 Layout.fillWidth: true
                 Layout.preferredHeight: 72
-                radius: 8
-                color: "#fffef9"
-                border.color: "#e8dfc8"
+                radius: Theme.radiusLg
+                color: Theme.surface
+                border.color: Theme.border
                 border.width: 1
                 layer.enabled: true
                 layer.effect: MultiEffect {
                     autoPaddingEnabled: true
                     shadowEnabled: true
-                    shadowColor: "#000000"
+                    shadowColor: Theme.shadow
                     shadowOpacity: 0.08
                     shadowBlur: 0.14
                     shadowHorizontalOffset: 0
@@ -292,20 +293,20 @@ Item {
 
                 ColumnLayout {
                     anchors.fill: parent
-                    anchors.margins: 12
-                    spacing: 4
+                    anchors.margins: Theme.space12
+                    spacing: Theme.space4
 
                     Text {
                         text: Number(root.todayStats.completedTasks || 0) + " / " + Number(root.todayStats.totalTasks || 0)
-                        font.pixelSize: 20
+                        font.pixelSize: Theme.fontXl
                         font.weight: Font.Bold
-                        color: "#5d4e37"
+                        color: Theme.ink
                     }
 
                     Text {
                         text: "任务完成"
-                        font.pixelSize: 12
-                        color: "#8b7355"
+                        font.pixelSize: Theme.fontSm
+                        color: Theme.inkSoft
                     }
                 }
             }
@@ -315,8 +316,8 @@ Item {
             Layout.fillWidth: true
             visible: root.loadError.length > 0
             text: root.loadError
-            color: "#b24f3d"
-            font.pixelSize: 13
+            color: Theme.danger
+            font.pixelSize: Theme.fontMd
             wrapMode: Text.WordWrap
         }
 
@@ -324,15 +325,15 @@ Item {
             objectName: "todayTaskListContainer"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: "#fffef9"
-            radius: 8
-            border.color: "#e8dfc8"
+            color: Theme.surface
+            radius: Theme.radiusLg
+            border.color: Theme.border
             border.width: 1
             layer.enabled: true
             layer.effect: MultiEffect {
                 autoPaddingEnabled: true
                 shadowEnabled: true
-                shadowColor: "#000000"
+                shadowColor: Theme.shadow
                 shadowOpacity: 0.08
                 shadowBlur: 0.14
                 shadowHorizontalOffset: 0
@@ -353,9 +354,9 @@ Item {
                     Layout.alignment: Qt.AlignHCenter
                     Layout.preferredWidth: 420
                     Layout.preferredHeight: 150
-                    radius: 8
-                    color: "#faf8f3"
-                    border.color: "#e8dfc8"
+                    radius: Theme.radiusLg
+                    color: Theme.surfaceRaised
+                    border.color: Theme.border
                     border.width: 1
 
                     ColumnLayout {
@@ -368,34 +369,34 @@ Item {
                             Layout.alignment: Qt.AlignHCenter
                             Layout.preferredWidth: 40
                             Layout.preferredHeight: 40
-                            radius: 8
-                            color: "#f0e6d2"
-                            border.color: "#e8dfc8"
+                            radius: Theme.radiusLg
+                            color: Theme.accentSoft
+                            border.color: Theme.border
                             border.width: 1
 
                             Text {
                                 anchors.centerIn: parent
                                 text: "今"
-                                font.pixelSize: 18
+                                font.pixelSize: Theme.fontXl
                                 font.weight: Font.Bold
-                                color: "#d4a574"
+                                color: Theme.accent
                             }
                         }
 
                         Text {
                             Layout.fillWidth: true
                             text: "今天还没有任务"
-                            font.pixelSize: 18
+                            font.pixelSize: Theme.fontXl
                             font.weight: Font.Bold
-                            color: "#5d4e37"
+                            color: Theme.ink
                             horizontalAlignment: Text.AlignHCenter
                         }
 
                         Text {
                             Layout.fillWidth: true
                             text: "先添加一个明确到可执行的任务。空清单不是轻松，只是没有外化。"
-                            font.pixelSize: 13
-                            color: "#8b7355"
+                            font.pixelSize: Theme.fontMd
+                            color: Theme.inkSoft
                             wrapMode: Text.WordWrap
                             horizontalAlignment: Text.AlignHCenter
                         }
@@ -414,7 +415,7 @@ Item {
 
                 ColumnLayout {
                     width: Math.max(parent.width, 1)
-                    spacing: 8
+                    spacing: Theme.space8
 
                     Repeater {
                         model: root.tasks
