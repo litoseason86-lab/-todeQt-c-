@@ -361,7 +361,7 @@ Popup {
 
                                 contentItem: Text {
                                     text: deleteButton.text
-                                    color: "#b37562"
+                                    color: Theme.dangerSoft
                                     font.pixelSize: Theme.fontSm
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter

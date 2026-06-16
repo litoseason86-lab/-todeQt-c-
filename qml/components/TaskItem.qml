@@ -553,7 +553,7 @@ Rectangle {
                         return Theme.surfaceSunken;
                     return Theme.surface;
                 }
-                border.color: deleteButton.hovered || deleteButton.pressFeedbackActive ? "#b37562" : Theme.border
+                border.color: deleteButton.hovered || deleteButton.pressFeedbackActive ? Theme.dangerSoft : Theme.border
                 border.width: 1
                 property color warmShadowColor: Theme.ink
                 property real warmShadowOpacity: deleteButton.pressFeedbackActive ? 0.04 : 0.08
@@ -616,7 +616,7 @@ Rectangle {
             contentItem: Text {
                 objectName: "taskDeleteButtonLabel"
                 text: deleteButton.text
-                color: "#b37562"
+                color: Theme.dangerSoft
                 font.pixelSize: Theme.fontMd
                 font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter

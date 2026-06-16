@@ -33,6 +33,8 @@ QtObject {
     readonly property color success: "#4caf50"        // 完成/正向趋势
     readonly property color danger: "#b24f3d"         // 错误文字（暖陶土红）
     readonly property color dangerBorder: "#c46f5f"   // 错误输入框边框
+    // 删除按钮专用：比 danger 更柔和的陶土色，用于“删除”这类不该过分刺眼的破坏性操作提示。
+    readonly property color dangerSoft: "#b37562"
 
     // —— 投影 ——（纯黑；透明度由各效果自身属性控制）
     readonly property color shadow: "#000000"

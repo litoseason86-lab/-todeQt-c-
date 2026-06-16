@@ -13,6 +13,7 @@ TestCase {
         verify(Qt.colorEqual(Theme.border, "#e8dfc8"), "border 取值不对")
         verify(Qt.colorEqual(Theme.ink, "#5d4e37"), "ink 取值不对")
         verify(Qt.colorEqual(Theme.danger, "#b24f3d"), "danger 取值不对")
+        verify(Qt.colorEqual(Theme.dangerSoft, "#b37562"), "dangerSoft 取值不对")
     }
 
     function test_scaleTokens() {
