@@ -16,6 +16,9 @@ Item {
     property date pendingAddDate: new Date()
     property bool completionRefreshDelayActive: false
 
+    // 周一起点对应的星期字，索引 0~6 = 周一~周日。
+    readonly property var weekdayGlyphs: ["一", "二", "三", "四", "五", "六", "日"]
+
     Component.onCompleted: refresh()
 
     Connections {
@@ -80,6 +83,24 @@ Item {
         return result
     }
 
+    function isTodayIndex(index) {
+        // 用本地年月日比较，避免时区或时分秒影响“是否今天”的判断。
+        var d = root.dayDate(index)
+        var now = new Date()
+        return d.getFullYear() === now.getFullYear()
+                && d.getMonth() === now.getMonth()
+                && d.getDate() === now.getDate()
+    }
+
+    function weekCompletedCount() {
+        var n = 0
+        for (var i = 0; i < root.weekTasks.length; i++) {
+            if (root.weekTasks[i].completed)
+                n++
+        }
+        return n
+    }
+
     function refresh() {
         try {
             root.loadError = ""
@@ -118,11 +139,17 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.space24
+        // 右边距设为 0，让滚动区一直延伸到视图右缘、滚动条贴边（对齐其它页面）；
+        // 表头、分隔线、错误行各自补 24 右边距，滚动内容靠收窄自身宽度留白。
+        anchors.leftMargin: Theme.space24
+        anchors.topMargin: Theme.space24
+        anchors.bottomMargin: Theme.space24
+        anchors.rightMargin: 0
         spacing: Theme.space16
 
         RowLayout {
             Layout.fillWidth: true
+            Layout.rightMargin: Theme.space24
             spacing: Theme.space12
 
             ColumnLayout {
@@ -137,7 +164,13 @@ Item {
                 }
 
                 Text {
-                    text: root.isoDate(root.weekStart) + " - " + root.isoDate(root.dayDate(6))
+                    // 副标题升级为周概览：日期区间 + 本周任务量与完成数，一眼读出这一周的负载。
+                    text: {
+                        var range = Qt.formatDate(root.weekStart, "M.d") + " – " + Qt.formatDate(root.dayDate(6), "M.d")
+                        if (root.weekTasks.length === 0)
+                            return range + " · 本周暂无任务"
+                        return range + " · 本周 " + root.weekTasks.length + " 个任务 · 已完成 " + root.weekCompletedCount()
+                    }
                     font.pixelSize: Theme.fontMd
                     color: Theme.inkSoft
                 }
@@ -244,12 +277,14 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
+            Layout.rightMargin: Theme.space24
             Layout.preferredHeight: 1
             color: Theme.border
         }
 
         Label {
             Layout.fillWidth: true
+            Layout.rightMargin: Theme.space24
             visible: root.loadError.length > 0
             text: root.loadError
             color: Theme.danger
@@ -258,48 +293,193 @@ Item {
         }
 
         ScrollView {
+            id: weekScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
+            contentWidth: availableWidth
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            // 主题化竖向滚动条：细、暖色，悬停/按下转 accent，与其它滚动页面一致。
+            ScrollBar.vertical: ScrollBar {
+                id: weekVerticalScrollBar
+                policy: ScrollBar.AsNeeded
+                width: 8
+
+                contentItem: Rectangle {
+                    implicitWidth: 4
+                    radius: Theme.radiusSm
+                    color: weekVerticalScrollBar.pressed || weekVerticalScrollBar.hovered ? Theme.accent : Theme.border
+                }
+
+                background: Rectangle {
+                    color: Theme.surface
+                }
+            }
 
             ColumnLayout {
-                width: Math.max(parent.width, 1)
+                // 绑视口宽度而非内容隐含宽度：嵌套 RowLayout 会把内容隐含宽度压窄，
+                // 直接用 ScrollView 的可用宽度才能让每天的 TaskItem 撑满整行；
+                // 再减一个 space24 给右侧留白，使内容不顶到贴边的滚动条。
+                width: Math.max(weekScroll.availableWidth - Theme.space24, 1)
                 spacing: Theme.space12
 
                 Repeater {
                     model: 7
 
-                    Rectangle {
+                    // 一整天为一行：左侧星期脊柱 + 右侧正文。
+                    // 正文随负载变形——空日子塌成一行、有任务的日子展开，行高因此不对称。
+                    RowLayout {
+                        id: dayRow
+
                         Layout.fillWidth: true
-                        implicitHeight: dayColumn.implicitHeight + 24
-                        radius: Theme.radiusMd
-                        color: Theme.surfaceRaised
-                        border.color: Theme.border
-                        border.width: 1
+                        spacing: Theme.space12
 
                         property var dayTasks: root.tasksForDay(index)
+                        property bool hasTasks: dayTasks.length > 0
+                        property bool isToday: root.isTodayIndex(index)
+                        property bool isWeekend: index >= 5
 
-                        ColumnLayout {
-                            id: dayColumn
+                        // —— 星期脊柱：领起一整天；今天用强调色高亮，周末底色略沉 ——
+                        Rectangle {
+                            Layout.preferredWidth: 52
+                            Layout.fillHeight: true
+                            radius: Theme.radiusMd
+                            color: dayRow.isToday ? Theme.accent
+                                   : (dayRow.isWeekend ? Theme.surfaceSunken : Theme.surfaceRaised)
+                            border.color: dayRow.isToday ? Theme.accentStrong : Theme.border
+                            border.width: 1
 
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            anchors.margins: Theme.space12
-                            spacing: Theme.space8
+                            ColumnLayout {
+                                anchors.centerIn: parent
+                                spacing: 2
+
+                                Text {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    text: root.weekdayGlyphs[index]
+                                    font.pixelSize: Theme.fontXl
+                                    font.bold: true
+                                    color: dayRow.isToday ? Theme.surface
+                                           : (dayRow.isWeekend ? Theme.inkSoft : Theme.ink)
+                                }
+
+                                Text {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    // 等宽字体让日期数字像计时器/账本，强化“按日推进”的节奏。
+                                    text: Qt.formatDate(root.dayDate(index), "M/d")
+                                    font.family: "Menlo"
+                                    font.pixelSize: Theme.fontXs
+                                    color: dayRow.isToday ? Theme.surface : Theme.inkSoft
+                                }
+
+                                Text {
+                                    Layout.alignment: Qt.AlignHCenter
+                                    visible: dayRow.isToday
+                                    text: "今天"
+                                    font.pixelSize: 9
+                                    font.letterSpacing: 1
+                                    color: Theme.surface
+                                }
+                            }
+                        }
+
+                        // —— 空日子：塌成一行，安静地给出添加入口 ——
+                        Rectangle {
+                            visible: !dayRow.hasTasks
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 48
+                            radius: Theme.radiusMd
+                            color: Theme.surfaceRaised
+                            border.color: Theme.borderSubtle
+                            border.width: 1
 
                             RowLayout {
-                                Layout.fillWidth: true
+                                anchors.fill: parent
+                                anchors.leftMargin: Theme.space12
+                                anchors.rightMargin: Theme.space8
                                 spacing: Theme.space8
 
                                 Text {
                                     Layout.fillWidth: true
-                                    text: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"][index]
-                                          + " " + Qt.formatDate(root.dayDate(index), "M月d日")
-                                    font.pixelSize: Theme.fontXl
-                                    font.bold: true
-                                    color: Theme.ink
+                                    text: "暂无任务"
+                                    font.pixelSize: Theme.fontMd
+                                    color: Theme.inkMuted
                                 }
+
+                                Button {
+                                    id: emptyAddButton
+                                    text: "+ 添加"
+                                    implicitWidth: 72
+                                    implicitHeight: 32
+
+                                    // 空日子用次级描边的添加，保持安静；强调色只留给有活动的日子。
+                                    background: Rectangle {
+                                        color: emptyAddButton.pressed ? Theme.borderSubtle : (emptyAddButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                                        border.color: emptyAddButton.hovered || emptyAddButton.pressed ? Theme.accent : Theme.border
+                                        border.width: 1
+                                        radius: Theme.radiusMd
+
+                                        Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                                        Behavior on border.color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                                    }
+
+                                    contentItem: Text {
+                                        text: emptyAddButton.text
+                                        color: Theme.inkSoft
+                                        font.pixelSize: Theme.fontSm
+                                        font.weight: Font.Medium
+                                        horizontalAlignment: Text.AlignHCenter
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+
+                                    onClicked: root.openAddTaskForDay(index)
+                                }
+                            }
+                        }
+
+                        // —— 有任务的日子：展开任务列表 + 强调填充的添加 ——
+                        ColumnLayout {
+                            visible: dayRow.hasTasks
+                            Layout.fillWidth: true
+                            spacing: Theme.space8
+
+                            Repeater {
+                                model: dayRow.dayTasks
+
+                                TaskItem {
+                                    Layout.fillWidth: true
+                                    taskId: modelData.id
+                                    taskTitle: modelData.title
+                                    taskCategory: modelData.category && modelData.category.name
+                                                  ? modelData.category
+                                                  : (modelData.categoryData && modelData.categoryData.name
+                                                     ? modelData.categoryData
+                                                     : (modelData.categoryText || ""))
+                                    taskCompleted: modelData.completed
+
+                                    onCompletionChanged: function(id, completed) {
+                                        root.setTaskCompletedWithAnimationDelay(id, completed)
+                                    }
+
+                                    onStartFocusClicked: function(id, title) {
+                                        if (focusTimer.startFocus(id, title)) {
+                                            root.startFocus(id, title)
+                                        } else {
+                                            root.loadError = "专注启动失败，请重试"
+                                        }
+                                    }
+
+                                    onDeleteClicked: function(id, title) {
+                                        if (!taskManager.deleteTask(id)) {
+                                            root.loadError = "任务删除失败，请重试"
+                                        }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                Item { Layout.fillWidth: true }
 
                                 Button {
                                     id: addDayButton
@@ -330,47 +510,6 @@ Item {
                                     }
 
                                     onClicked: root.openAddTaskForDay(index)
-                                }
-                            }
-
-                            Text {
-                                Layout.fillWidth: true
-                                visible: dayTasks.length === 0
-                                text: "暂无任务"
-                                font.pixelSize: Theme.fontMd
-                                color: Theme.inkSoft
-                            }
-
-                            Repeater {
-                                model: dayTasks
-
-                                TaskItem {
-                                    taskId: modelData.id
-                                    taskTitle: modelData.title
-                                    taskCategory: modelData.category && modelData.category.name
-                                                  ? modelData.category
-                                                  : (modelData.categoryData && modelData.categoryData.name
-                                                     ? modelData.categoryData
-                                                     : (modelData.categoryText || ""))
-                                    taskCompleted: modelData.completed
-
-                                    onCompletionChanged: function(id, completed) {
-                                        root.setTaskCompletedWithAnimationDelay(id, completed)
-                                    }
-
-                                    onStartFocusClicked: function(id, title) {
-                                        if (focusTimer.startFocus(id, title)) {
-                                            root.startFocus(id, title)
-                                        } else {
-                                            root.loadError = "专注启动失败，请重试"
-                                        }
-                                    }
-
-                                    onDeleteClicked: function(id, title) {
-                                        if (!taskManager.deleteTask(id)) {
-                                            root.loadError = "任务删除失败，请重试"
-                                        }
-                                    }
                                 }
                             }
                         }
