@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
+import ".."
 
 Rectangle {
     id: root
@@ -19,15 +20,15 @@ Rectangle {
     signal moveDownRequested()
 
     height: 62
-    radius: 8
-    color: hitArea.containsMouse ? "#fffaf1" : "#faf8f3"
-    border.color: hitArea.containsMouse ? "#d4a574" : "#e8dfc8"
+    radius: Theme.radiusLg
+    color: Theme.surfaceRaised
+    border.color: hitArea.containsMouse ? Theme.accent : Theme.border
     border.width: 1
     layer.enabled: hitArea.containsMouse
     layer.effect: MultiEffect {
         autoPaddingEnabled: true
         shadowEnabled: true
-        shadowColor: "#000000"
+        shadowColor: Theme.shadow
         shadowOpacity: 0.08
         shadowBlur: 0.14
         shadowHorizontalOffset: 0
@@ -51,14 +52,14 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 14
-        anchors.rightMargin: 10
-        spacing: 10
+        anchors.leftMargin: Theme.space12
+        anchors.rightMargin: Theme.space12
+        spacing: Theme.space12
 
         Text {
             text: "≡"
-            font.pixelSize: 18
-            color: "#a0896b"
+            font.pixelSize: Theme.fontXl
+            color: Theme.inkMuted
         }
 
         ColumnLayout {
@@ -67,17 +68,17 @@ Rectangle {
 
             Text {
                 text: root.goalName
-                font.pixelSize: 15
+                font.pixelSize: Theme.fontLg
                 font.weight: Font.Medium
-                color: "#5d4e37"
+                color: Theme.ink
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
 
             Text {
                 text: Qt.formatDate(root.targetDate, "yyyy年MM月dd日")
-                font.pixelSize: 11
-                color: "#8b7355"
+                font.pixelSize: Theme.fontXs
+                color: Theme.inkSoft
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
@@ -85,9 +86,9 @@ Rectangle {
 
         Text {
             text: root.dayText()
-            font.pixelSize: 15
+            font.pixelSize: Theme.fontLg
             font.weight: Font.Bold
-            color: "#d4a574"
+            color: Theme.accent
         }
 
         Button {

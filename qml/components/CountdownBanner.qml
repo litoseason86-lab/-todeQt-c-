@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Effects
 import QtQuick.Layouts
+import ".."
 
 Rectangle {
     id: root
@@ -12,23 +13,23 @@ Rectangle {
     signal addRequested()
 
     height: 68
-    radius: 8
-    border.color: "#e8dfc8"
+    radius: Theme.radiusLg
+    border.color: Theme.border
     border.width: 1
     scale: hitArea.containsMouse ? 1.01 : 1.0
     transformOrigin: Item.Center
 
     gradient: Gradient {
         orientation: Gradient.Horizontal
-        GradientStop { position: 0.0; color: "#f0e6d2" }
-        GradientStop { position: 1.0; color: "#fffaf1" }
+        GradientStop { position: 0.0; color: Theme.accentSoft }
+        GradientStop { position: 1.0; color: Theme.surfaceRaised }
     }
 
     layer.enabled: true
     layer.effect: MultiEffect {
         autoPaddingEnabled: true
         shadowEnabled: true
-        shadowColor: "#000000"
+        shadowColor: Theme.shadow
         shadowOpacity: 0.08
         shadowBlur: 0.14
         shadowHorizontalOffset: 0
@@ -53,33 +54,33 @@ Rectangle {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         width: 4
-        color: "#d4a574"
-        radius: 8
+        color: Theme.accent
+        radius: Theme.radiusLg
     }
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: 20
-        anchors.rightMargin: 20
-        spacing: 16
+        anchors.leftMargin: Theme.space16
+        anchors.rightMargin: Theme.space16
+        spacing: Theme.space16
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: 4
+            spacing: Theme.space4
 
             Text {
                 text: root.hasGoal ? root.primaryGoal.name : "+ 添加目标倒计时"
-                font.pixelSize: 15
+                font.pixelSize: Theme.fontLg
                 font.weight: Font.Medium
-                color: "#5d4e37"
+                color: Theme.ink
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
 
             Text {
                 text: root.hasGoal ? Qt.formatDate(root.primaryGoal.targetDate, "yyyy年MM月dd日") : "把最重要的日期固定在今天任务上方。"
-                font.pixelSize: 11
-                color: "#8b7355"
+                font.pixelSize: Theme.fontXs
+                color: Theme.inkSoft
                 elide: Text.ElideRight
                 Layout.fillWidth: true
             }
@@ -88,9 +89,9 @@ Rectangle {
         Text {
             visible: root.hasGoal
             text: root.dayText()
-            font.pixelSize: 28
+            font.pixelSize: Theme.fontXxl
             font.weight: Font.Bold
-            color: "#d4a574"
+            color: Theme.accent
         }
     }
 
