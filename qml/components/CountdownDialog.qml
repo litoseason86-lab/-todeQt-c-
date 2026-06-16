@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
+import ".."
 
 Popup {
     id: root
@@ -151,15 +152,15 @@ Popup {
 
         implicitWidth: root.width
         implicitHeight: contentColumn.implicitHeight
-        color: "#fffef9"
-        border.color: "#e8dfc8"
+        color: Theme.surface
+        border.color: Theme.border
         border.width: 1
-        radius: 8
+        radius: Theme.radiusLg
         layer.enabled: true
         layer.effect: MultiEffect {
             autoPaddingEnabled: true
             shadowEnabled: true
-            shadowColor: "#000000"
+            shadowColor: Theme.shadow
             shadowOpacity: 0.12
             shadowBlur: 0.20
             shadowHorizontalOffset: 0
@@ -171,33 +172,33 @@ Popup {
         id: contentColumn
 
         width: root.width
-        spacing: 12
+        spacing: Theme.space12
 
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 48
-            color: "#fffef9"
-            radius: 8
+            color: Theme.surface
+            radius: Theme.radiusLg
 
             Text {
                 id: headingLabel
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
-                anchors.leftMargin: 16
+                anchors.leftMargin: Theme.space16
                 text: "添加目标"
-                color: "#5d4e37"
-                font.pixelSize: 16
+                color: Theme.ink
+                font.pixelSize: Theme.fontXl
                 font.weight: Font.Bold
             }
         }
 
         Label {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
             text: "目标名称"
-            color: "#5d4e37"
-            font.pixelSize: 14
+            color: Theme.ink
+            font.pixelSize: Theme.fontLg
         }
 
         TextField {
@@ -205,17 +206,17 @@ Popup {
             objectName: "countdownNameField"
 
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
             implicitHeight: 44
             placeholderText: "例如：研究生初试"
             selectByMouse: true
 
             background: Rectangle {
-                color: "#faf8f3"
-                border.color: errorLabel.text.length > 0 && nameField.activeFocus ? "#c46f5f" : (nameField.activeFocus ? "#d4a574" : "#e8dfc8")
+                color: Theme.surfaceRaised
+                border.color: errorLabel.text.length > 0 && nameField.activeFocus ? Theme.dangerBorder : (nameField.activeFocus ? Theme.accent : Theme.border)
                 border.width: nameField.activeFocus ? 2 : 1
-                radius: 6
+                radius: Theme.radiusMd
             }
 
             onTextEdited: errorLabel.text = ""
@@ -225,12 +226,12 @@ Popup {
 
         Label {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-            Layout.topMargin: 4
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.topMargin: Theme.space4
             text: "目标日期"
-            color: "#5d4e37"
-            font.pixelSize: 14
+            color: Theme.ink
+            font.pixelSize: Theme.fontLg
         }
 
         TextField {
@@ -238,18 +239,18 @@ Popup {
             objectName: "countdownDateField"
 
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
             implicitHeight: 44
             placeholderText: "YYYY-MM-DD"
             inputMask: "9999-99-99"
             selectByMouse: true
 
             background: Rectangle {
-                color: "#faf8f3"
-                border.color: errorLabel.text.length > 0 && dateField.activeFocus ? "#c46f5f" : (dateField.activeFocus ? "#d4a574" : "#e8dfc8")
+                color: Theme.surfaceRaised
+                border.color: errorLabel.text.length > 0 && dateField.activeFocus ? Theme.dangerBorder : (dateField.activeFocus ? Theme.accent : Theme.border)
                 border.width: dateField.activeFocus ? 2 : 1
-                radius: 6
+                radius: Theme.radiusMd
             }
 
             onTextEdited: errorLabel.text = ""
@@ -261,20 +262,20 @@ Popup {
             id: errorLabel
 
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-            color: "#b24f3d"
-            font.pixelSize: 12
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            color: Theme.danger
+            font.pixelSize: Theme.fontSm
             wrapMode: Text.WordWrap
         }
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-            Layout.topMargin: 8
-            Layout.bottomMargin: 16
-            spacing: 8
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.topMargin: Theme.space8
+            Layout.bottomMargin: Theme.space16
+            spacing: Theme.space8
 
             Item {
                 Layout.fillWidth: true
@@ -287,16 +288,16 @@ Popup {
                 implicitHeight: 44
 
                 background: Rectangle {
-                    color: cancelButton.pressed ? "#ded1b5" : (cancelButton.hovered ? "#f5ede3" : "#fffef9")
-                    border.color: cancelButton.hovered || cancelButton.pressed ? "#d4a574" : "#e8dfc8"
+                    color: cancelButton.pressed ? Theme.accentStrong : (cancelButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                    border.color: cancelButton.hovered || cancelButton.pressed ? Theme.accent : Theme.border
                     border.width: 1
-                    radius: 6
+                    radius: Theme.radiusMd
                 }
 
                 contentItem: Text {
                     text: cancelButton.text
-                    color: "#5d4e37"
-                    font.pixelSize: 13
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
@@ -313,16 +314,16 @@ Popup {
                 implicitHeight: 44
 
                 background: Rectangle {
-                    color: submitButton.pressed ? "#c99666" : (submitButton.hovered ? "#d9a574" : "#d4a574")
-                    border.color: submitButton.hovered || submitButton.pressed ? "#c99666" : "#d4a574"
+                    color: submitButton.pressed ? Theme.accentStrong : (submitButton.hovered ? Theme.accentStrong : Theme.accent)
+                    border.color: submitButton.hovered || submitButton.pressed ? Theme.accentStrong : Theme.accent
                     border.width: 1
-                    radius: 6
+                    radius: Theme.radiusMd
                 }
 
                 contentItem: Text {
                     text: submitButton.text
-                    color: "#fffef9"
-                    font.pixelSize: 13
+                    color: Theme.surface
+                    font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter

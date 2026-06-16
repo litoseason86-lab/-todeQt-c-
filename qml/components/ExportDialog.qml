@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
+import ".."
 
 Popup {
     id: root
@@ -164,38 +165,38 @@ Popup {
     background: Rectangle {
         implicitWidth: root.width
         implicitHeight: root.height
-        radius: 6
-        color: "#faf6ee"
-        border.color: "#e8dfc8"
+        radius: Theme.radiusMd
+        color: Theme.surfaceRaised
+        border.color: Theme.border
         border.width: 1
     }
 
     contentItem: ColumnLayout {
         width: root.width
         height: root.height
-        spacing: 14
+        spacing: Theme.space12
 
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 52
-            radius: 6
-            color: "#fffef9"
+            radius: Theme.radiusMd
+            color: Theme.surface
 
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
-                anchors.leftMargin: 16
+                anchors.leftMargin: Theme.space16
                 text: "数据导出"
-                font.pixelSize: 16
+                font.pixelSize: Theme.fontXl
                 font.bold: true
-                color: "#5d4e37"
+                color: Theme.ink
             }
         }
 
         GroupBox {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
             title: "日期范围"
 
             ColumnLayout {
@@ -204,7 +205,7 @@ Popup {
 
                 Flow {
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: Theme.space8
 
                     Button { text: "本周"; onClicked: root.setDateRangeThisWeek() }
                     Button { text: "本月"; onClicked: root.setDateRangeThisMonth() }
@@ -214,9 +215,9 @@ Popup {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: Theme.space8
 
-                    Label { text: "开始"; color: "#5d4e37" }
+                    Label { text: "开始"; color: Theme.ink }
                     TextField {
                         id: startDateInput
                         objectName: "startDateInput"
@@ -227,9 +228,9 @@ Popup {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: Theme.space8
 
-                    Label { text: "结束"; color: "#5d4e37" }
+                    Label { text: "结束"; color: Theme.ink }
                     TextField {
                         id: endDateInput
                         objectName: "endDateInput"
@@ -242,8 +243,8 @@ Popup {
 
         GroupBox {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
             title: "导出内容"
 
             ColumnLayout {
@@ -269,19 +270,19 @@ Popup {
 
         Text {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
             visible: root.statusText.length > 0
             text: root.statusText
-            color: root.statusText.startsWith("错误") ? "#b24f3d" : "#5d4e37"
-            font.pixelSize: 12
+            color: root.statusText.startsWith("错误") ? Theme.danger : Theme.ink
+            font.pixelSize: Theme.fontSm
             wrapMode: Text.WordWrap
         }
 
         ProgressBar {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
             visible: root.exportTotal > 0 && root.exportCurrent < root.exportTotal
             from: 0
             to: Math.max(1, root.exportTotal)
@@ -292,10 +293,10 @@ Popup {
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-            Layout.bottomMargin: 16
-            spacing: 8
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.bottomMargin: Theme.space16
+            spacing: Theme.space8
 
             Button {
                 text: "取消"
