@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import ".."
 
 Rectangle {
     id: root
@@ -16,9 +17,9 @@ Rectangle {
 
     implicitWidth: 560
     implicitHeight: 260
-    radius: 6
-    color: "#faf6ee"
-    border.color: "#e8dfc8"
+    radius: Theme.radiusMd
+    color: Theme.surfaceRaised
+    border.color: Theme.border
     border.width: 1
 
     function sourceData() {
@@ -50,7 +51,7 @@ Rectangle {
                 value: root.finiteNumber(value),
                 displayValue: item.displayValue || "",
                 subtitle: item.subtitle || "",
-                color: item.color || "#d4a574"
+                color: item.color || Theme.accent
             })
         }
         return result
@@ -90,16 +91,16 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 14
-        spacing: 12
+        anchors.margins: Theme.space12
+        spacing: Theme.space12
 
         Text {
             Layout.fillWidth: true
             visible: root.title.length > 0
             text: root.title
-            font.pixelSize: 15
+            font.pixelSize: Theme.fontLg
             font.bold: true
-            color: "#5d4e37"
+            color: Theme.ink
             elide: Text.ElideRight
         }
 
@@ -112,7 +113,7 @@ Rectangle {
                 id: bars
 
                 anchors.fill: parent
-                anchors.topMargin: 8
+                anchors.topMargin: Theme.space8
                 anchors.bottomMargin: 30
                 spacing: 10
                 visible: !root.showEmptyState
@@ -126,15 +127,15 @@ Rectangle {
 
                         ColumnLayout {
                             anchors.fill: parent
-                            spacing: 4
+                            spacing: Theme.space4
 
                             Text {
                                 Layout.fillWidth: true
                                 text: modelData.displayValue.length > 0
                                       ? modelData.displayValue
                                       : (modelData.value + root.valueSuffix)
-                                font.pixelSize: 11
-                                color: "#8b7355"
+                                font.pixelSize: Theme.fontXs
+                                color: Theme.inkSoft
                                 horizontalAlignment: Text.AlignHCenter
                                 elide: Text.ElideRight
                             }
@@ -147,12 +148,12 @@ Rectangle {
                                     anchors.left: parent.left
                                     anchors.right: parent.right
                                     anchors.bottom: parent.bottom
-                                    anchors.leftMargin: 8
-                                    anchors.rightMargin: 8
+                                    anchors.leftMargin: Theme.space8
+                                    anchors.rightMargin: Theme.space8
                                     height: parent.height * root.normalizedValue(modelData.value)
-                                    radius: 4
+                                    radius: Theme.radiusSm
                                     color: modelData.color
-                                    border.color: "#c9956e"
+                                    border.color: Theme.accentStrong
                                     border.width: height > 0 ? 1 : 0
                                     visible: height > 0
                                 }
@@ -162,15 +163,15 @@ Rectangle {
                                     anchors.right: parent.right
                                     anchors.bottom: parent.bottom
                                     height: 1
-                                    color: "#e8dfc8"
+                                    color: Theme.border
                                 }
                             }
 
                             Text {
                                 Layout.fillWidth: true
                                 text: modelData.label
-                                font.pixelSize: 12
-                                color: "#5d4e37"
+                                font.pixelSize: Theme.fontSm
+                                color: Theme.ink
                                 horizontalAlignment: Text.AlignHCenter
                                 elide: Text.ElideRight
                             }
@@ -187,8 +188,8 @@ Rectangle {
                 width: Math.min(parent.width - 24, 260)
                 visible: root.showEmptyState
                 text: root.emptyText
-                font.pixelSize: 13
-                color: "#8b7355"
+                font.pixelSize: Theme.fontMd
+                color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
             }

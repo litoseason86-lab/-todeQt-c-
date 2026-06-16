@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import "."
 import "components"
 import "views"
 
@@ -85,7 +86,7 @@ Item {
 
             Layout.preferredWidth: 1
             Layout.fillHeight: true
-            color: "#e8dfc8"
+            color: Theme.border
             opacity: 0.8
         }
 
@@ -94,7 +95,7 @@ Item {
 
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: "#fffef9"
+            color: Theme.surface
 
             Image {
                 objectName: "paperTextureLayer"

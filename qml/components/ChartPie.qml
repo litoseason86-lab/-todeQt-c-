@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import ".."
 
 Rectangle {
     id: root
@@ -13,15 +14,14 @@ Rectangle {
     readonly property real totalValue: calculateTotalValue()
     readonly property bool showEmptyState: chartData.length === 0
     readonly property bool showInvalidData: chartData.length > 0 && totalValue <= 0
-    readonly property var palette: [
-        "#d4a574", "#8b7355", "#c46f5f", "#9aa66b", "#6f91a6", "#b58aa0"
-    ]
+    // 系列配色集中管理于 Theme.chartColors，值不变。
+    readonly property var palette: Theme.chartColors
 
     implicitWidth: 560
     implicitHeight: 260
-    radius: 6
-    color: "#faf6ee"
-    border.color: "#e8dfc8"
+    radius: Theme.radiusMd
+    color: Theme.surfaceRaised
+    border.color: Theme.border
     border.width: 1
 
     onChartDataChanged: pieCanvas.requestPaint()
@@ -86,16 +86,16 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 14
-        spacing: 12
+        anchors.margins: Theme.space12
+        spacing: Theme.space12
 
         Text {
             Layout.fillWidth: true
             visible: root.title.length > 0
             text: root.title
-            font.pixelSize: 15
+            font.pixelSize: Theme.fontLg
             font.bold: true
-            color: "#5d4e37"
+            color: Theme.ink
             elide: Text.ElideRight
         }
 
@@ -150,7 +150,7 @@ Rectangle {
                                 ctx.closePath()
                                 ctx.fillStyle = root.chartData[i].color
                                 ctx.fill()
-                                ctx.strokeStyle = "#fffef9"
+                                ctx.strokeStyle = Theme.surface
                                 ctx.lineWidth = 2
                                 ctx.stroke()
                                 start += sweep
@@ -163,8 +163,8 @@ Rectangle {
                         width: Math.min(parent.width, parent.height) * 0.46
                         height: width
                         radius: width / 2
-                        color: "#faf6ee"
-                        border.color: "#e8dfc8"
+                        color: Theme.surfaceRaised
+                        border.color: Theme.border
                         border.width: root.showInvalidData ? 0 : 1
                         visible: !root.showInvalidData
                     }
@@ -177,8 +177,8 @@ Rectangle {
                         width: Math.min(parent.width - 16, 150)
                         visible: root.showInvalidData
                         text: "暂无有效数据"
-                        font.pixelSize: 12
-                        color: "#8b7355"
+                        font.pixelSize: Theme.fontSm
+                        color: Theme.inkSoft
                         horizontalAlignment: Text.AlignHCenter
                         wrapMode: Text.WordWrap
                     }
@@ -187,42 +187,42 @@ Rectangle {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    spacing: 8
+                    spacing: Theme.space8
 
                     Repeater {
                         model: root.chartData
 
                         RowLayout {
                             Layout.fillWidth: true
-                            spacing: 8
+                            spacing: Theme.space8
 
                             Rectangle {
                                 Layout.preferredWidth: 11
                                 Layout.preferredHeight: 11
-                                radius: 2
+                                radius: Theme.hairline
                                 color: modelData.color
                             }
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                spacing: 2
+                                spacing: Theme.hairline
 
                                 RowLayout {
                                     Layout.fillWidth: true
-                                    spacing: 6
+                                    spacing: Theme.space8
 
                                     Text {
                                         Layout.fillWidth: true
                                         text: modelData.label
-                                        font.pixelSize: 13
-                                        color: "#5d4e37"
+                                        font.pixelSize: Theme.fontMd
+                                        color: Theme.ink
                                         elide: Text.ElideRight
                                     }
 
                                     Text {
                                         text: root.percentage(modelData.value)
-                                        font.pixelSize: 12
-                                        color: "#8b7355"
+                                        font.pixelSize: Theme.fontSm
+                                        color: Theme.inkSoft
                                     }
                                 }
 
@@ -231,21 +231,21 @@ Rectangle {
                                     text: modelData.displayValue.length > 0
                                           ? modelData.displayValue
                                           : String(modelData.value)
-                                    font.pixelSize: 11
-                                    color: "#8b7355"
+                                    font.pixelSize: Theme.fontXs
+                                    color: Theme.inkSoft
                                     elide: Text.ElideRight
                                 }
 
                                 Rectangle {
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: 5
-                                    radius: 2
-                                    color: "#ede5d4"
+                                    radius: Theme.hairline
+                                    color: Theme.accentSoft
 
                                     Rectangle {
                                         width: parent.width * (root.totalValue > 0 ? modelData.value / root.totalValue : 0)
                                         height: parent.height
-                                        radius: 2
+                                        radius: Theme.hairline
                                         color: modelData.color
                                     }
                                 }
@@ -263,8 +263,8 @@ Rectangle {
                 width: Math.min(parent.width - 24, 260)
                 visible: root.showEmptyState
                 text: root.emptyText
-                font.pixelSize: 13
-                color: "#8b7355"
+                font.pixelSize: Theme.fontMd
+                color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
             }
