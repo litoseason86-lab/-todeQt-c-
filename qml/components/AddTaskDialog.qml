@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
+import ".."
 
 Popup {
     id: root
@@ -69,7 +70,7 @@ Popup {
     property string heading: "添加新任务"
     property var categoryManagerRef: null
     property var categories: []
-    // 第一个选项是特殊占位项，表示“不设置科目”，数据库里的 category_id 保持为空。
+    // 第一个选项是特殊占位项，表示"不设置科目"，数据库里的 category_id 保持为空。
     property var categoryOptions: [
         {
             id: -1,
@@ -136,15 +137,15 @@ Popup {
 
         implicitWidth: root.width
         implicitHeight: contentColumn.implicitHeight
-        color: "#fffef9"
-        border.color: "#e8dfc8"
+        color: Theme.surface
+        border.color: Theme.border
         border.width: 1
-        radius: 8
+        radius: Theme.radiusLg
         layer.enabled: true
         layer.effect: MultiEffect {
             autoPaddingEnabled: true
             shadowEnabled: true
-            shadowColor: "#000000"
+            shadowColor: Theme.shadow
             shadowOpacity: 0.12
             shadowBlur: 0.20
             shadowHorizontalOffset: 0
@@ -156,33 +157,33 @@ Popup {
         id: contentColumn
 
         width: root.width
-        spacing: 12
+        spacing: Theme.space12
 
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 44
-            color: "#fffef9"
-            radius: 6
+            color: Theme.surface
+            radius: Theme.radiusMd
 
             Text {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
-                anchors.leftMargin: 16
+                anchors.leftMargin: Theme.space16
                 text: root.heading
-                color: "#5d4e37"
-                font.pixelSize: 15
+                color: Theme.ink
+                font.pixelSize: Theme.fontLg
                 font.weight: Font.Bold
             }
         }
 
         Label {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-            Layout.topMargin: 4
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.topMargin: Theme.space4
             text: "任务标题"
-            color: "#5d4e37"
-            font.pixelSize: 14
+            color: Theme.ink
+            font.pixelSize: Theme.fontLg
         }
 
         TextField {
@@ -190,23 +191,23 @@ Popup {
             objectName: "titleField"
 
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
             implicitHeight: 44
             placeholderText: "输入任务内容..."
             selectByMouse: true
 
             background: Rectangle {
                 objectName: "titleFieldBackground"
-                color: "#faf8f3"
-                border.color: errorLabel.text.length > 0 ? "#c46f5f" : (titleField.activeFocus ? "#d4a574" : "#e8dfc8")
+                color: Theme.surfaceRaised
+                border.color: errorLabel.text.length > 0 ? Theme.dangerBorder : (titleField.activeFocus ? Theme.accent : Theme.border)
                 border.width: errorLabel.text.length > 0 || titleField.activeFocus ? 2 : 1
-                radius: 6
+                radius: Theme.radiusMd
                 layer.enabled: titleField.activeFocus && errorLabel.text.length === 0
                 layer.effect: MultiEffect {
                     autoPaddingEnabled: true
                     shadowEnabled: true
-                    shadowColor: "#d4a574"
+                    shadowColor: Theme.accent
                     shadowOpacity: 0.18
                     shadowBlur: 0.18
                     shadowHorizontalOffset: 0
@@ -247,12 +248,12 @@ Popup {
 
         Label {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-            Layout.topMargin: 4
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.topMargin: Theme.space4
             text: "科目分类（可选）"
-            color: "#5d4e37"
-            font.pixelSize: 14
+            color: Theme.ink
+            font.pixelSize: Theme.fontLg
         }
 
         ComboBox {
@@ -260,8 +261,8 @@ Popup {
             objectName: "categoryComboBox"
 
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
             implicitHeight: 44
             model: root.categoryOptions
             textRole: "name"
@@ -270,10 +271,10 @@ Popup {
 
             background: Rectangle {
                 objectName: "categoryComboBackground"
-                color: categoryComboBox.down || categoryComboBox.pressed ? "#f0e6d2" : (categoryComboBox.hovered ? "#f5ede3" : "#faf8f3")
-                border.color: categoryComboBox.down || categoryComboBox.pressed ? "#d4a574" : "#e8dfc8"
+                color: categoryComboBox.down || categoryComboBox.pressed ? Theme.accentSoft : (categoryComboBox.hovered ? Theme.surfaceSunken : Theme.surfaceRaised)
+                border.color: categoryComboBox.down || categoryComboBox.pressed ? Theme.accent : Theme.border
                 border.width: categoryComboBox.down || categoryComboBox.pressed ? 2 : 1
-                radius: 6
+                radius: Theme.radiusMd
 
                 Behavior on color {
                     ColorAnimation {
@@ -301,8 +302,8 @@ Popup {
                 x: categoryComboBox.width - width - 14
                 y: Math.round((categoryComboBox.height - height) / 2)
                 text: "▾"
-                color: "#8b7355"
-                font.pixelSize: 12
+                color: Theme.inkSoft
+                font.pixelSize: Theme.fontSm
                 rotation: categoryComboBox.down ? 180 : 0
                 transformOrigin: Item.Center
 
@@ -315,7 +316,7 @@ Popup {
             }
 
             contentItem: RowLayout {
-                spacing: 8
+                spacing: Theme.space8
 
                 Rectangle {
                     Layout.leftMargin: 10
@@ -330,8 +331,8 @@ Popup {
                     Layout.fillWidth: true
                     Layout.rightMargin: 26
                     text: categoryComboBox.displayText
-                    color: "#5d4e37"
-                    font.pixelSize: 14
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontLg
                     verticalAlignment: Text.AlignVCenter
                     elide: Text.ElideRight
                 }
@@ -342,7 +343,7 @@ Popup {
                 width: categoryComboBox.width
 
                 contentItem: RowLayout {
-                    spacing: 8
+                    spacing: Theme.space8
 
                     Rectangle {
                         Layout.preferredWidth: 18
@@ -355,14 +356,14 @@ Popup {
                     Text {
                         Layout.fillWidth: true
                         text: modelData.name || ""
-                        color: "#5d4e37"
-                        font.pixelSize: 13
+                        color: Theme.ink
+                        font.pixelSize: Theme.fontMd
                         elide: Text.ElideRight
                     }
                 }
 
                 background: Rectangle {
-                    color: categoryDelegate.highlighted || categoryDelegate.hovered ? "#f0e6d2" : "transparent"
+                    color: categoryDelegate.highlighted || categoryDelegate.hovered ? Theme.accentSoft : "transparent"
                 }
             }
         }
@@ -371,20 +372,20 @@ Popup {
             id: errorLabel
 
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-            color: "#b24f3d"
-            font.pixelSize: 12
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            color: Theme.danger
+            font.pixelSize: Theme.fontSm
             wrapMode: Text.WordWrap
         }
 
         RowLayout {
             Layout.fillWidth: true
-            Layout.leftMargin: 16
-            Layout.rightMargin: 16
-            Layout.topMargin: 8
-            Layout.bottomMargin: 16
-            spacing: 8
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.topMargin: Theme.space8
+            Layout.bottomMargin: Theme.space16
+            spacing: Theme.space8
 
             Item {
                 Layout.fillWidth: true
@@ -400,10 +401,10 @@ Popup {
 
                 background: Rectangle {
                     objectName: "cancelButtonBackground"
-                    color: cancelButton.pressed ? "#ded1b5" : (cancelButton.hovered ? "#f5ede3" : "#fffef9")
-                    border.color: cancelButton.hovered || cancelButton.pressed ? "#d4a574" : "#e8dfc8"
+                    color: cancelButton.pressed ? Theme.borderSubtle : (cancelButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                    border.color: cancelButton.hovered || cancelButton.pressed ? Theme.accent : Theme.border
                     border.width: 1
-                    radius: 6
+                    radius: Theme.radiusMd
 
                     Behavior on color {
                         ColorAnimation {
@@ -423,8 +424,8 @@ Popup {
                 contentItem: Text {
                     objectName: "cancelButtonLabel"
                     text: cancelButton.text
-                    color: "#5d4e37"
-                    font.pixelSize: 13
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
@@ -452,10 +453,10 @@ Popup {
 
                 background: Rectangle {
                     objectName: "submitButtonBackground"
-                    color: submitButton.pressed ? "#c99666" : (submitButton.hovered ? "#d9a574" : "#d4a574")
-                    border.color: submitButton.hovered || submitButton.pressed ? "#c99666" : "#d4a574"
+                    color: submitButton.pressed ? Theme.accentStrong : (submitButton.hovered ? Theme.accentStrong : Theme.accent)
+                    border.color: submitButton.hovered || submitButton.pressed ? Theme.accentStrong : Theme.accent
                     border.width: 1
-                    radius: 6
+                    radius: Theme.radiusMd
 
                     Behavior on color {
                         ColorAnimation {
@@ -475,8 +476,8 @@ Popup {
                 contentItem: Text {
                     objectName: "submitButtonLabel"
                     text: submitButton.text
-                    color: "#fffef9"
-                    font.pixelSize: 13
+                    color: Theme.surface
+                    font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter

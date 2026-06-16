@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import ".."
 
 Popup {
     id: root
@@ -188,9 +189,9 @@ Popup {
 
         implicitWidth: root.width
         implicitHeight: root.height
-        radius: 6
-        color: "#faf6ee"
-        border.color: "#e8dfc8"
+        radius: Theme.radiusMd
+        color: Theme.surfaceRaised
+        border.color: Theme.border
         border.width: 1
     }
 
@@ -205,21 +206,21 @@ Popup {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 52
-                radius: 6
-                color: "#fffef9"
+                radius: Theme.radiusMd
+                color: Theme.surface
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: 16
-                    anchors.rightMargin: 12
-                    spacing: 12
+                    anchors.leftMargin: Theme.space16
+                    anchors.rightMargin: Theme.space12
+                    spacing: Theme.space12
 
                     Text {
                         Layout.fillWidth: true
                         text: "科目管理"
-                        font.pixelSize: 16
+                        font.pixelSize: Theme.fontXl
                         font.bold: true
-                        color: "#5d4e37"
+                        color: Theme.ink
                     }
 
                     Button {
@@ -232,14 +233,14 @@ Popup {
                         onClicked: root.beginAdd()
 
                         background: Rectangle {
-                            radius: 4
-                            color: addButton.pressed ? "#c9956e" : "#d4a574"
+                            radius: Theme.radiusSm
+                            color: addButton.pressed ? Theme.accentStrong : Theme.accent
                         }
 
                         contentItem: Text {
                             text: addButton.text
-                            color: "#fffef9"
-                            font.pixelSize: 13
+                            color: Theme.surface
+                            font.pixelSize: Theme.fontMd
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -249,20 +250,20 @@ Popup {
 
             Label {
                 Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.topMargin: 10
+                Layout.leftMargin: Theme.space16
+                Layout.rightMargin: Theme.space16
+                Layout.topMargin: Theme.space12
                 visible: root.errorText.length > 0
                 text: root.errorText
-                color: "#b24f3d"
-                font.pixelSize: 12
+                color: Theme.danger
+                font.pixelSize: Theme.fontSm
                 wrapMode: Text.WordWrap
             }
 
             ScrollView {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.margins: 16
+                Layout.margins: Theme.space16
                 clip: true
 
                 ListView {
@@ -270,49 +271,49 @@ Popup {
                     objectName: "categoryListView"
 
                     model: root.categories
-                    spacing: 8
+                    spacing: Theme.space8
                     boundsBehavior: Flickable.StopAtBounds
 
                     delegate: Rectangle {
                         width: categoryListView.width
                         height: 60
-                        radius: 6
-                        color: "#fffef9"
-                        border.color: "#e8dfc8"
+                        radius: Theme.radiusMd
+                        color: Theme.surface
+                        border.color: Theme.border
                         border.width: 1
 
                         RowLayout {
                             anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 12
+                            anchors.margins: Theme.space12
+                            spacing: Theme.space12
 
                             Rectangle {
                                 Layout.preferredWidth: 34
                                 Layout.preferredHeight: 34
                                 radius: 5
                                 color: modelData.color || "#d4a574"
-                                border.color: "#e8dfc8"
+                                border.color: Theme.border
                                 border.width: 1
                             }
 
                             ColumnLayout {
                                 Layout.fillWidth: true
-                                spacing: 2
+                                spacing: Theme.hairline
 
                                 Text {
                                     Layout.fillWidth: true
                                     text: modelData.name || ""
-                                    font.pixelSize: 14
+                                    font.pixelSize: Theme.fontLg
                                     font.bold: true
-                                    color: "#5d4e37"
+                                    color: Theme.ink
                                     elide: Text.ElideRight
                                 }
 
                                 Text {
                                     Layout.fillWidth: true
                                     text: modelData.isPreset ? "预设科目" : "自定义科目"
-                                    font.pixelSize: 11
-                                    color: "#8b7355"
+                                    font.pixelSize: Theme.fontXs
+                                    color: Theme.inkSoft
                                     elide: Text.ElideRight
                                 }
                             }
@@ -327,16 +328,16 @@ Popup {
                                 onClicked: root.beginEdit(modelData)
 
                                 background: Rectangle {
-                                    radius: 4
-                                    color: editButton.pressed ? "#f0e6d2" : "transparent"
-                                    border.color: "#e8dfc8"
+                                    radius: Theme.radiusSm
+                                    color: editButton.pressed ? Theme.accentSoft : "transparent"
+                                    border.color: Theme.border
                                     border.width: 1
                                 }
 
                                 contentItem: Text {
                                     text: editButton.text
-                                    color: "#5d4e37"
-                                    font.pixelSize: 12
+                                    color: Theme.ink
+                                    font.pixelSize: Theme.fontSm
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
                                 }
@@ -352,16 +353,16 @@ Popup {
                                 onClicked: root.deleteCategory(modelData.id)
 
                                 background: Rectangle {
-                                    radius: 4
-                                    color: deleteButton.pressed ? "#f0e6d2" : "transparent"
-                                    border.color: "#e8dfc8"
+                                    radius: Theme.radiusSm
+                                    color: deleteButton.pressed ? Theme.accentSoft : "transparent"
+                                    border.color: Theme.border
                                     border.width: 1
                                 }
 
                                 contentItem: Text {
                                     text: deleteButton.text
                                     color: "#b37562"
-                                    font.pixelSize: 12
+                                    font.pixelSize: Theme.fontSm
                                     horizontalAlignment: Text.AlignHCenter
                                     verticalAlignment: Text.AlignVCenter
                                 }
@@ -373,9 +374,9 @@ Popup {
 
             RowLayout {
                 Layout.fillWidth: true
-                Layout.leftMargin: 16
-                Layout.rightMargin: 16
-                Layout.bottomMargin: 16
+                Layout.leftMargin: Theme.space16
+                Layout.rightMargin: Theme.space16
+                Layout.bottomMargin: Theme.space16
 
                 Item {
                     Layout.fillWidth: true
@@ -391,14 +392,14 @@ Popup {
                     onClicked: root.close()
 
                     background: Rectangle {
-                        radius: 4
-                        color: "#e8dfc8"
+                        radius: Theme.radiusSm
+                        color: Theme.border
                     }
 
                     contentItem: Text {
                         text: closeButton.text
-                        color: "#5d4e37"
-                        font.pixelSize: 13
+                        color: Theme.ink
+                        font.pixelSize: Theme.fontMd
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
@@ -411,22 +412,22 @@ Popup {
 
             anchors.fill: parent
             visible: false
-            radius: 6
-            color: "#faf6ee"
-            border.color: "#e8dfc8"
+            radius: Theme.radiusMd
+            color: Theme.surfaceRaised
+            border.color: Theme.border
             border.width: 1
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 18
-                spacing: 14
+                anchors.margins: Theme.space16
+                spacing: Theme.space12
 
                 Text {
                     Layout.fillWidth: true
                     text: root.editingCategory ? "编辑科目" : "添加新科目"
-                    font.pixelSize: 16
+                    font.pixelSize: Theme.fontXl
                     font.bold: true
-                    color: "#5d4e37"
+                    color: Theme.ink
                 }
 
                 TextField {
@@ -439,9 +440,9 @@ Popup {
                     selectByMouse: true
 
                     background: Rectangle {
-                        radius: 4
-                        color: "#fffef9"
-                        border.color: categoryNameInput.activeFocus ? "#d4a574" : "#e8dfc8"
+                        radius: Theme.radiusSm
+                        color: Theme.surface
+                        border.color: categoryNameInput.activeFocus ? Theme.accent : Theme.border
                         border.width: 1
                     }
 
@@ -465,7 +466,7 @@ Popup {
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: 8
+                    spacing: Theme.space8
 
                     Button {
                         id: cancelAddButton
@@ -476,14 +477,14 @@ Popup {
                         onClicked: root.resetAddForm()
 
                         background: Rectangle {
-                            radius: 4
-                            color: "#e8dfc8"
+                            radius: Theme.radiusSm
+                            color: Theme.border
                         }
 
                         contentItem: Text {
                             text: cancelAddButton.text
-                            color: "#5d4e37"
-                            font.pixelSize: 13
+                            color: Theme.ink
+                            font.pixelSize: Theme.fontMd
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
@@ -500,14 +501,14 @@ Popup {
                         onClicked: root.saveCategory()
 
                         background: Rectangle {
-                            radius: 4
-                            color: saveCategoryButton.enabled ? "#d4a574" : "#e8dfc8"
+                            radius: Theme.radiusSm
+                            color: saveCategoryButton.enabled ? Theme.accent : Theme.border
                         }
 
                         contentItem: Text {
                             text: saveCategoryButton.text
-                            color: saveCategoryButton.enabled ? "#fffef9" : "#8b7355"
-                            font.pixelSize: 13
+                            color: saveCategoryButton.enabled ? Theme.surface : Theme.inkSoft
+                            font.pixelSize: Theme.fontMd
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
