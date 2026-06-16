@@ -288,7 +288,7 @@ Popup {
                 implicitHeight: 44
 
                 background: Rectangle {
-                    color: cancelButton.pressed ? Theme.accentStrong : (cancelButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                    color: cancelButton.pressed ? Theme.borderSubtle : (cancelButton.hovered ? Theme.surfaceSunken : Theme.surface)
                     border.color: cancelButton.hovered || cancelButton.pressed ? Theme.accent : Theme.border
                     border.width: 1
                     radius: Theme.radiusMd
