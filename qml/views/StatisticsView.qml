@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
+import ".."
 import "../components"
 
 Item {
@@ -512,7 +513,7 @@ Item {
         ColumnLayout {
             x: root.contentMargin
             width: Math.max(statisticsScrollView.availableWidth - root.contentMargin * 2, 1)
-            spacing: 16
+            spacing: Theme.space16
 
             Item {
                 Layout.fillWidth: true
@@ -521,28 +522,28 @@ Item {
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: 16
+                spacing: Theme.space16
 
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: 4
+                    spacing: Theme.space4
 
                     Text {
                         text: "数据统计"
-                        font.pixelSize: 24
+                        font.pixelSize: Theme.fontXxl
                         font.bold: true
-                        color: "#5d4e37"
+                        color: Theme.ink
                     }
 
                     Text {
                         text: "看清时间流向，比靠感觉复盘可靠。"
-                        font.pixelSize: 13
-                        color: "#8b7355"
+                        font.pixelSize: Theme.fontMd
+                        color: Theme.inkSoft
                     }
                 }
 
                 RowLayout {
-                    spacing: 8
+                    spacing: Theme.space8
 
                     Rectangle {
                         id: previousPeriodButton
@@ -550,16 +551,16 @@ Item {
 
                         Layout.preferredWidth: 36
                         Layout.preferredHeight: 36
-                        radius: 6
-                        color: previousPeriodMouseArea.containsMouse ? "#f0e6d2" : "#faf6ee"
+                        radius: Theme.radiusMd
+                        color: previousPeriodMouseArea.containsMouse ? Theme.accentSoft : Theme.surfaceRaised
                         border.width: 1
-                        border.color: "#e8dfc8"
+                        border.color: Theme.border
 
                         Text {
                             anchors.centerIn: parent
                             text: "←"
-                            font.pixelSize: 16
-                            color: "#5d4e37"
+                            font.pixelSize: Theme.fontXl
+                            color: Theme.ink
                         }
 
                         MouseArea {
@@ -580,16 +581,16 @@ Item {
 
                         Layout.preferredWidth: 140
                         Layout.preferredHeight: 36
-                        radius: 6
-                        color: timeRangeSelectorMouseArea.containsMouse ? "#f0e6d2" : "#faf6ee"
+                        radius: Theme.radiusMd
+                        color: timeRangeSelectorMouseArea.containsMouse ? Theme.accentSoft : Theme.surfaceRaised
                         border.width: 1
-                        border.color: timeRangeMenu.opened ? "#d4a574" : "#e8dfc8"
+                        border.color: timeRangeMenu.opened ? Theme.accent : Theme.border
 
                         RowLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: 12
-                            anchors.rightMargin: 12
-                            spacing: 8
+                            anchors.leftMargin: Theme.space12
+                            anchors.rightMargin: Theme.space12
+                            spacing: Theme.space8
 
                             Text {
                                 id: timeRangeSelectorText
@@ -597,16 +598,16 @@ Item {
 
                                 Layout.fillWidth: true
                                 text: root.timeRangeDisplayText
-                                font.pixelSize: 14
+                                font.pixelSize: Theme.fontLg
                                 font.weight: Font.Medium
-                                color: "#5d4e37"
+                                color: Theme.ink
                                 elide: Text.ElideRight
                             }
 
                             Text {
                                 text: "▼"
-                                font.pixelSize: 10
-                                color: "#8b7355"
+                                font.pixelSize: Theme.fontXs
+                                color: Theme.inkSoft
                             }
                         }
 
@@ -632,15 +633,15 @@ Item {
 
                             background: Rectangle {
                                 implicitWidth: 124
-                                color: "#faf8f3"
+                                color: Theme.surfaceRaised
                                 border.width: 1
-                                border.color: "#d4a574"
-                                radius: 8
+                                border.color: Theme.accent
+                                radius: Theme.radiusLg
                                 layer.enabled: true
                                 layer.effect: MultiEffect {
                                     autoPaddingEnabled: true
                                     shadowEnabled: true
-                                    shadowColor: "#5d4e37"
+                                    shadowColor: Theme.ink
                                     shadowOpacity: 0.15
                                     shadowBlur: 0.18
                                     shadowHorizontalOffset: 0
@@ -653,17 +654,17 @@ Item {
                                 height: 40
 
                                 background: Rectangle {
-                                    color: parent.hovered ? "#f0e6d2" : "transparent"
-                                    radius: 6
+                                    color: parent.hovered ? Theme.accentSoft : "transparent"
+                                    radius: Theme.radiusMd
                                 }
 
                                 contentItem: Text {
                                     text: "📅 今日"
-                                    font.pixelSize: 14
-                                    color: "#5d4e37"
+                                    font.pixelSize: Theme.fontLg
+                                    color: Theme.ink
                                     verticalAlignment: Text.AlignVCenter
-                                    leftPadding: 10
-                                    rightPadding: 10
+                                    leftPadding: Theme.space12
+                                    rightPadding: Theme.space12
                                 }
 
                                 onTriggered: {
@@ -681,17 +682,17 @@ Item {
                                 height: 40
 
                                 background: Rectangle {
-                                    color: parent.hovered ? "#f0e6d2" : "transparent"
-                                    radius: 6
+                                    color: parent.hovered ? Theme.accentSoft : "transparent"
+                                    radius: Theme.radiusMd
                                 }
 
                                 contentItem: Text {
                                     text: "📅 本周"
-                                    font.pixelSize: 14
-                                    color: "#5d4e37"
+                                    font.pixelSize: Theme.fontLg
+                                    color: Theme.ink
                                     verticalAlignment: Text.AlignVCenter
-                                    leftPadding: 10
-                                    rightPadding: 10
+                                    leftPadding: Theme.space12
+                                    rightPadding: Theme.space12
                                 }
 
                                 onTriggered: {
@@ -709,17 +710,17 @@ Item {
                                 height: 40
 
                                 background: Rectangle {
-                                    color: parent.hovered ? "#f0e6d2" : "transparent"
-                                    radius: 6
+                                    color: parent.hovered ? Theme.accentSoft : "transparent"
+                                    radius: Theme.radiusMd
                                 }
 
                                 contentItem: Text {
                                     text: "📅 本月"
-                                    font.pixelSize: 14
-                                    color: "#5d4e37"
+                                    font.pixelSize: Theme.fontLg
+                                    color: Theme.ink
                                     verticalAlignment: Text.AlignVCenter
-                                    leftPadding: 10
-                                    rightPadding: 10
+                                    leftPadding: Theme.space12
+                                    rightPadding: Theme.space12
                                 }
 
                                 onTriggered: {
@@ -740,19 +741,19 @@ Item {
 
                         Layout.preferredWidth: 36
                         Layout.preferredHeight: 36
-                        radius: 6
+                        radius: Theme.radiusMd
                         color: root.canGoForward
-                               ? (nextPeriodMouseArea.containsMouse ? "#f0e6d2" : "#faf6ee")
-                               : "#e0e0e0"
+                               ? (nextPeriodMouseArea.containsMouse ? Theme.accentSoft : Theme.surfaceRaised)
+                               : Theme.border
                         border.width: 1
-                        border.color: root.canGoForward ? "#e8dfc8" : "#bdbdbd"
+                        border.color: root.canGoForward ? Theme.border : Theme.inkMuted
                         opacity: root.canGoForward ? 1.0 : 0.55
 
                         Text {
                             anchors.centerIn: parent
                             text: "→"
-                            font.pixelSize: 16
-                            color: root.canGoForward ? "#5d4e37" : "#777777"
+                            font.pixelSize: Theme.fontXl
+                            color: root.canGoForward ? Theme.ink : Theme.inkMuted
                         }
 
                         MouseArea {
@@ -773,23 +774,23 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 1
-                color: "#e8dfc8"
+                color: Theme.border
             }
 
             Label {
                 Layout.fillWidth: true
                 visible: root.loadError.length > 0
                 text: root.loadError
-                color: "#b24f3d"
-                font.pixelSize: 13
+                color: Theme.danger
+                font.pixelSize: Theme.fontMd
                 wrapMode: Text.WordWrap
             }
 
             GridLayout {
                 Layout.fillWidth: true
                 columns: statisticsScrollView.availableWidth >= 720 ? 3 : 1
-                columnSpacing: 16
-                rowSpacing: 16
+                columnSpacing: Theme.space16
+                rowSpacing: Theme.space16
 
                 StatCard {
                     id: todayFocusCard
@@ -903,7 +904,7 @@ Item {
                 objectName: "statisticsCategoryChart"
 
                 Layout.fillWidth: true
-                Layout.bottomMargin: 24
+                Layout.bottomMargin: Theme.space24
                 title: "科目时间分配"
                 dataPoints: root.pieData()
                 emptyText: {
