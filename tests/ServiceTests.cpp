@@ -1404,11 +1404,19 @@ void ServiceTests::routinesCategoryForeignKeyClearsWhenCategoryDeleted()
 void ServiceTests::routineCrudAddsGetsUpdatesDeletes()
 {
     RoutineManager* manager = RoutineManager::instance();
+    const int categoryId = CategoryManager::instance()->addCategory(QStringLiteral("例行科目"), QStringLiteral("#123456"));
+    QVERIFY(categoryId > 0);
+
     QSignalSpy spy(manager, &RoutineManager::routinesChanged);
 
     // 空标题被拒
     QTest::ignoreMessage(QtWarningMsg, "Failed to add routine: title is empty");
     QVERIFY(!manager->addRoutine(QStringLiteral("   "), -1));
+    QCOMPARE(spy.count(), 0);
+
+    QTest::ignoreMessage(QtWarningMsg, "Failed to add routine: category not found 999999");
+    QVERIFY(!manager->addRoutine(QStringLiteral("无效科目例行"), 999999));
+    QCOMPARE(spy.count(), 0);
 
     // 正常新增（带前后空格，应被 trim）
     QVERIFY(manager->addRoutine(QStringLiteral("  背单词 list  "), -1));
@@ -1418,21 +1426,56 @@ void ServiceTests::routineCrudAddsGetsUpdatesDeletes()
     QCOMPARE(routines.size(), 1);
     QVariantMap r = routines.first().toMap();
     QCOMPARE(r.value(QStringLiteral("title")).toString(), QStringLiteral("背单词 list"));
+    QCOMPARE(r.value(QStringLiteral("categoryId")).toInt(), -1);
+    QCOMPARE(r.value(QStringLiteral("displayOrder")).toInt(), 1);
     QCOMPARE(r.value(QStringLiteral("active")).toBool(), true);
     const int id = r.value(QStringLiteral("id")).toInt();
     QVERIFY(id > 0);
 
+    QVERIFY(manager->addRoutine(QStringLiteral("专业课复盘"), categoryId));
+    QCOMPARE(spy.count(), 2);
+    routines = manager->getRoutines();
+    QCOMPARE(routines.size(), 2);
+    const QVariantMap categoryRoutine = routines.at(1).toMap();
+    QCOMPARE(categoryRoutine.value(QStringLiteral("title")).toString(), QStringLiteral("专业课复盘"));
+    QCOMPARE(categoryRoutine.value(QStringLiteral("categoryId")).toInt(), categoryId);
+    QCOMPARE(categoryRoutine.value(QStringLiteral("categoryName")).toString(), QStringLiteral("例行科目"));
+    QCOMPARE(categoryRoutine.value(QStringLiteral("categoryColor")).toString(), QStringLiteral("#123456"));
+    QCOMPARE(categoryRoutine.value(QStringLiteral("displayOrder")).toInt(), 2);
+    const int categoryRoutineId = categoryRoutine.value(QStringLiteral("id")).toInt();
+    QVERIFY(categoryRoutineId > 0);
+
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update routine: routine not found 999999");
+    QVERIFY(!manager->updateRoutine(999999, QStringLiteral("不存在"), -1));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to set routine active: routine not found 999999");
+    QVERIFY(!manager->setRoutineActive(999999, false));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to delete routine: routine not found 999999");
+    QVERIFY(!manager->deleteRoutine(999999));
+    QCOMPARE(spy.count(), 2);
+
     // 更新标题
     QVERIFY(manager->updateRoutine(id, QStringLiteral("背单词 list 2"), -1));
+    QCOMPARE(spy.count(), 3);
     QCOMPARE(manager->getRoutines().first().toMap().value(QStringLiteral("title")).toString(),
              QStringLiteral("背单词 list 2"));
 
     // 停用
     QVERIFY(manager->setRoutineActive(id, false));
+    QCOMPARE(spy.count(), 4);
     QCOMPARE(manager->getRoutines().first().toMap().value(QStringLiteral("active")).toBool(), false);
+
+    // 删除分类会让例行项的科目关联变成 NULL，RoutineManager 也要通知列表刷新。
+    QVERIFY(CategoryManager::instance()->deleteCategory(categoryId));
+    QCOMPARE(spy.count(), 5);
+    routines = manager->getRoutines();
+    QCOMPARE(routines.at(1).toMap().value(QStringLiteral("categoryId")).toInt(), -1);
+    QCOMPARE(routines.at(1).toMap().value(QStringLiteral("categoryName")).toString(), QString());
 
     // 删除
     QVERIFY(manager->deleteRoutine(id));
+    QCOMPARE(spy.count(), 6);
+    QVERIFY(manager->deleteRoutine(categoryRoutineId));
+    QCOMPARE(spy.count(), 7);
     QVERIFY(manager->getRoutines().isEmpty());
 }
 

@@ -1,5 +1,6 @@
 #include "RoutineManager.h"
 
+#include "CategoryManager.h"
 #include "DatabaseManager.h"
 
 #include <QDebug>
@@ -15,11 +16,37 @@ QVariant nullableCategoryId(int categoryId)
     // 这样删除科目和左连接查询都能保持统一语义。
     return categoryId > 0 ? QVariant(categoryId) : QVariant();
 }
+
+bool routineCategoryExists(QSqlDatabase& db, int categoryId, const char* action)
+{
+    if (categoryId <= 0) {
+        return true;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT 1 FROM categories WHERE id = :id"));
+    query.bindValue(QStringLiteral(":id"), categoryId);
+    if (!query.exec()) {
+        qWarning() << "Failed to validate routine category:" << query.lastError().text();
+        return false;
+    }
+
+    if (!query.next()) {
+        qWarning().noquote() << QStringLiteral("Failed to %1 routine: category not found").arg(QString::fromLatin1(action)) << categoryId;
+        return false;
+    }
+
+    return true;
+}
 }
 
 RoutineManager::RoutineManager(QObject* parent)
     : QObject(parent)
 {
+    // getRoutines() 左连 categories；分类改名、换色或删除都会改变返回值，
+    // 因此把分类变化转发成 routinesChanged，避免 QML 列表停留在旧分类状态。
+    connect(CategoryManager::instance(), &CategoryManager::categoriesChanged,
+            this, &RoutineManager::routinesChanged);
 }
 
 RoutineManager* RoutineManager::instance()
@@ -39,6 +66,9 @@ bool RoutineManager::addRoutine(const QString& title, int categoryId)
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to add routine: database is not open";
+        return false;
+    }
+    if (!routineCategoryExists(db, categoryId, "add")) {
         return false;
     }
 
@@ -82,6 +112,9 @@ bool RoutineManager::updateRoutine(int id, const QString& title, int categoryId)
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to update routine: database is not open";
+        return false;
+    }
+    if (!routineCategoryExists(db, categoryId, "update")) {
         return false;
     }
 
