@@ -16,6 +16,7 @@
 #define private public
 #include "../src/services/FocusTimer.h"
 #undef private
+#include "../src/services/RoutineManager.h"
 #include "../src/services/StatisticsService.h"
 #include "../src/services/TaskManager.h"
 
@@ -386,6 +387,7 @@ private slots:
     void routinesTableExistsAfterInitialize();
     void version2MigrationAddsRoutinesSchemaAndIndex();
     void routinesCategoryForeignKeyClearsWhenCategoryDeleted();
+    void routineCrudAddsGetsUpdatesDeletes();
     void freshDatabaseCreatesVersion3PresetCategories();
     void migrationMapsLegacyCategoryTextToCategoryIds();
     void migrationCreatesDatabaseBackup();
@@ -1397,6 +1399,41 @@ void ServiceTests::routinesCategoryForeignKeyClearsWhenCategoryDeleted()
     QVERIFY(routine.exec());
     QVERIFY(routine.next());
     QVERIFY(routine.value(0).isNull());
+}
+
+void ServiceTests::routineCrudAddsGetsUpdatesDeletes()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    QSignalSpy spy(manager, &RoutineManager::routinesChanged);
+
+    // 空标题被拒
+    QTest::ignoreMessage(QtWarningMsg, "Failed to add routine: title is empty");
+    QVERIFY(!manager->addRoutine(QStringLiteral("   "), -1));
+
+    // 正常新增（带前后空格，应被 trim）
+    QVERIFY(manager->addRoutine(QStringLiteral("  背单词 list  "), -1));
+    QCOMPARE(spy.count(), 1);
+
+    QVariantList routines = manager->getRoutines();
+    QCOMPARE(routines.size(), 1);
+    QVariantMap r = routines.first().toMap();
+    QCOMPARE(r.value(QStringLiteral("title")).toString(), QStringLiteral("背单词 list"));
+    QCOMPARE(r.value(QStringLiteral("active")).toBool(), true);
+    const int id = r.value(QStringLiteral("id")).toInt();
+    QVERIFY(id > 0);
+
+    // 更新标题
+    QVERIFY(manager->updateRoutine(id, QStringLiteral("背单词 list 2"), -1));
+    QCOMPARE(manager->getRoutines().first().toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("背单词 list 2"));
+
+    // 停用
+    QVERIFY(manager->setRoutineActive(id, false));
+    QCOMPARE(manager->getRoutines().first().toMap().value(QStringLiteral("active")).toBool(), false);
+
+    // 删除
+    QVERIFY(manager->deleteRoutine(id));
+    QVERIFY(manager->getRoutines().isEmpty());
 }
 
 void ServiceTests::freshDatabaseCreatesVersion3PresetCategories()

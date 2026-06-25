@@ -44,6 +44,7 @@ set(APP_SOURCES
     src/models/CountdownModel.cpp
     src/services/DatabaseManager.cpp
     src/services/CategoryManager.cpp
+    src/services/RoutineManager.cpp
     src/services/ExportService.cpp
     src/services/TaskManager.cpp
     src/services/FocusTimer.cpp
@@ -116,6 +117,7 @@ add_executable(PomodoroTodoTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.cpp
     src/services/CategoryManager.cpp
+    src/services/RoutineManager.cpp
     src/services/ExportService.cpp
     src/services/TaskManager.cpp
     src/services/FocusTimer.cpp
