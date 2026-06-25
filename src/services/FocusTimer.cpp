@@ -8,6 +8,7 @@
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QtGlobal>
 
 FocusTimer::FocusTimer(QObject* parent)
     : QObject(parent)
@@ -16,6 +17,17 @@ FocusTimer::FocusTimer(QObject* parent)
     connect(&m_timer, &QTimer::timeout, this, [this]() {
         ++m_elapsedSeconds;
         emit tick();
+
+        if (m_mode != PomodoroMode || m_targetSeconds <= 0 || m_elapsedSeconds < m_targetSeconds) {
+            return;
+        }
+
+        // 到点后先保存当前 phase，因为 resetSession 会把阶段清空；信号必须告诉 QML 刚完成的是专注还是休息。
+        const TimerPhase completedPhase = m_phase;
+        const bool completed = completedPhase == BreakPhase ? stopFocus() : completeFocusSession();
+        if (completed) {
+            emit phaseCompleted(completedPhase);
+        }
     });
 }
 
@@ -27,10 +39,59 @@ FocusTimer* FocusTimer::instance()
 
 bool FocusTimer::startFocus(int taskId, const QString& taskTitle)
 {
+    return startFocusSession(taskId, taskTitle, FreeMode, NoPhase, 0);
+}
+
+bool FocusTimer::startPomodoroWork(int taskId, const QString& taskTitle, int workSeconds)
+{
+    if (workSeconds <= 0) {
+        qWarning() << "Failed to start pomodoro work: invalid target seconds" << workSeconds;
+        return false;
+    }
+
+    return startFocusSession(taskId, taskTitle, PomodoroMode, WorkPhase, workSeconds);
+}
+
+bool FocusTimer::startBreak(int breakSeconds)
+{
+    if (hasActiveTimer()) {
+        qWarning() << "Failed to start break: focus timer already has an active session"
+                   << "sessionId=" << m_sessionId << "phase=" << m_phase;
+        return false;
+    }
+
+    if (breakSeconds <= 0) {
+        qWarning() << "Failed to start break: invalid target seconds" << breakSeconds;
+        return false;
+    }
+
+    // 休息段只占用计时器状态，不创建 focus_sessions；否则历史、统计、导出都会把休息误当专注。
+    m_currentTaskId = -1;
+    m_currentTaskTitle.clear();
+    m_startTime = QDateTime::currentDateTime();
+    m_elapsedSeconds = 0;
+    m_isRunning = true;
+    m_sessionId = -1;
+    m_mode = PomodoroMode;
+    m_phase = BreakPhase;
+    m_targetSeconds = breakSeconds;
+    m_timer.start();
+
+    emit runningStateChanged();
+    emit currentTaskChanged();
+    emit modeChanged();
+    emit phaseChanged();
+    emit tick();
+    return true;
+}
+
+bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMode mode, TimerPhase phase, int targetSeconds)
+{
     // 同一时间只允许一个活动会话，否则专注时长统计会被重叠记录污染。
-    if (m_sessionId != -1 || m_isRunning) {
+    if (hasActiveTimer()) {
         qWarning() << "Failed to start focus: focus timer already has an active session"
-                   << "sessionId=" << m_sessionId << "taskId=" << m_currentTaskId;
+                   << "sessionId=" << m_sessionId << "taskId=" << m_currentTaskId
+                   << "phase=" << m_phase;
         return false;
     }
 
@@ -69,10 +130,15 @@ bool FocusTimer::startFocus(int taskId, const QString& taskTitle)
     m_startTime = now;
     m_elapsedSeconds = 0;
     m_isRunning = true;
+    m_mode = mode;
+    m_phase = phase;
+    m_targetSeconds = targetSeconds;
     m_timer.start();
 
     emit runningStateChanged();
     emit currentTaskChanged();
+    emit modeChanged();
+    emit phaseChanged();
     emit tick();
     return true;
 }
@@ -90,7 +156,8 @@ void FocusTimer::pauseFocus()
 
 bool FocusTimer::resumeFocus()
 {
-    if (m_sessionId == -1) {
+    const bool canResumeBreak = m_mode == PomodoroMode && m_phase == BreakPhase;
+    if (m_sessionId == -1 && !canResumeBreak) {
         qWarning() << "Failed to resume focus: no active focus session";
         return false;
     }
@@ -106,6 +173,22 @@ bool FocusTimer::resumeFocus()
 }
 
 bool FocusTimer::stopFocus()
+{
+    if (m_phase == BreakPhase) {
+        // 休息段没有数据库行，到点或手动停止都只复位；不能走专注段的保存/丢弃逻辑。
+        resetSession();
+        emit runningStateChanged();
+        emit currentTaskChanged();
+        emit modeChanged();
+        emit phaseChanged();
+        emit tick();
+        return true;
+    }
+
+    return completeFocusSession();
+}
+
+bool FocusTimer::completeFocusSession()
 {
     if (m_sessionId == -1) {
         return false;
@@ -130,6 +213,8 @@ bool FocusTimer::stopFocus()
         emit focusCompleted(duration);
         emit runningStateChanged();
         emit currentTaskChanged();
+        emit modeChanged();
+        emit phaseChanged();
         emit tick();
         return true;
     }
@@ -155,6 +240,8 @@ bool FocusTimer::stopFocus()
     emit focusCompleted(duration);
     emit runningStateChanged();
     emit currentTaskChanged();
+    emit modeChanged();
+    emit phaseChanged();
     emit tick();
     return true;
 }
@@ -177,6 +264,36 @@ bool FocusTimer::hasActiveSession() const
 QString FocusTimer::currentTaskTitle() const
 {
     return m_currentTaskTitle;
+}
+
+int FocusTimer::mode() const
+{
+    return m_mode;
+}
+
+int FocusTimer::phase() const
+{
+    return m_phase;
+}
+
+int FocusTimer::targetSeconds() const
+{
+    return m_targetSeconds;
+}
+
+int FocusTimer::remainingSeconds() const
+{
+    if (m_mode != PomodoroMode || m_targetSeconds <= 0) {
+        // 自由模式是正计时，没有目标秒数；QML 读取剩余时间时固定返回 0，避免出现伪倒计时。
+        return 0;
+    }
+
+    return qMax(0, m_targetSeconds - m_elapsedSeconds);
+}
+
+bool FocusTimer::hasActiveTimer() const
+{
+    return m_sessionId != -1 || m_isRunning || m_phase != NoPhase;
 }
 
 bool FocusTimer::saveFocusSession(int durationSeconds)
@@ -261,4 +378,7 @@ void FocusTimer::resetSession()
     m_elapsedSeconds = 0;
     m_isRunning = false;
     m_sessionId = -1;
+    m_mode = FreeMode;
+    m_phase = NoPhase;
+    m_targetSeconds = 0;
 }

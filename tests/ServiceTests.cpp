@@ -120,6 +120,21 @@ int countFocusSessions()
     return query.value(0).toInt();
 }
 
+bool taskCompletedById(int taskId)
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral("SELECT completed FROM tasks WHERE id = :id"));
+    query.bindValue(QStringLiteral(":id"), taskId);
+
+    if (!query.exec() || !query.next()) {
+        qWarning() << "Failed to read test task completion:" << query.lastError().text()
+                   << "taskId=" << taskId;
+        return false;
+    }
+
+    return query.value(0).toBool();
+}
+
 int insertTaskRowWithCategoryId(const QString& title,
                                 const QDate& date,
                                 int categoryId,
@@ -409,6 +424,10 @@ private slots:
     void stopFocusCompletesTaskAfterFiveMinutes();
     void stopFocusUnderFiveMinutesKeepsTaskPending();
     void stopFocusUnderThreeMinutesDiscardsInvalidSession();
+    void pomodoroWorkCompletionSavesSessionAndAutoCompletesTask();
+    void pomodoroBreakWritesNoSessionAndCompletes();
+    void pomodoroWorkStoppedUnderMinimumIsDiscarded();
+    void freeFocusStillCountsUpUnchanged();
 
 private:
     QTemporaryDir* m_tempDir = nullptr;
@@ -423,6 +442,8 @@ void ServiceTests::init()
 
 void ServiceTests::cleanup()
 {
+    // FocusTimer 是进程级单例；失败用例可能没走到 stopFocus，必须在关闭测试数据库前清掉活动阶段。
+    FocusTimer::instance()->resetSession();
     DatabaseManager::instance()->close();
     delete m_tempDir;
     m_tempDir = nullptr;
@@ -2074,6 +2095,88 @@ void ServiceTests::stopFocusUnderThreeMinutesDiscardsInvalidSession()
     QCOMPARE(countFocusSessions(), 0);
     const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
     QCOMPARE(task.value(QStringLiteral("completed")).toBool(), false);
+}
+
+void ServiceTests::pomodoroWorkCompletionSavesSessionAndAutoCompletesTask()
+{
+    const int taskId = insertTaskRow(QStringLiteral("番茄专注任务"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+
+    QSignalSpy phaseCompletedSpy(FocusTimer::instance(), &FocusTimer::phaseCompleted);
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("番茄专注任务"), 300));
+    QCOMPARE(FocusTimer::instance()->targetSeconds(), 300);
+    FocusTimer::instance()->m_elapsedSeconds = 299;
+
+    // 直接触发 timeout 信号，避免测试真实等待一秒；只验证状态机在边界秒的行为。
+    QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
+
+    QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 0);
+    QCOMPARE(FocusTimer::instance()->remainingSeconds(), 0);
+    QCOMPARE(countFocusSessions(), 1);
+    QCOMPARE(phaseCompletedSpy.count(), 1);
+
+    QSqlQuery sessionQuery(DatabaseManager::instance()->database());
+    QVERIFY(sessionQuery.exec(QStringLiteral("SELECT duration FROM focus_sessions")));
+    QVERIFY(sessionQuery.next());
+    QCOMPARE(sessionQuery.value(0).toInt(), 300);
+
+    QCOMPARE(taskCompletedById(taskId), true);
+}
+
+void ServiceTests::pomodoroBreakWritesNoSessionAndCompletes()
+{
+    QSignalSpy phaseCompletedSpy(FocusTimer::instance(), &FocusTimer::phaseCompleted);
+
+    QVERIFY(FocusTimer::instance()->startBreak(5));
+    QCOMPARE(FocusTimer::instance()->hasActiveSession(), false);
+    QCOMPARE(FocusTimer::instance()->targetSeconds(), 5);
+    QCOMPARE(FocusTimer::instance()->remainingSeconds(), 5);
+    FocusTimer::instance()->pauseFocus();
+    QCOMPARE(FocusTimer::instance()->isRunning(), false);
+    QVERIFY(FocusTimer::instance()->resumeFocus());
+    QCOMPARE(FocusTimer::instance()->isRunning(), true);
+    FocusTimer::instance()->m_elapsedSeconds = 4;
+
+    QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
+
+    QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 0);
+    QCOMPARE(FocusTimer::instance()->remainingSeconds(), 0);
+    QCOMPARE(countFocusSessions(), 0);
+    QCOMPARE(phaseCompletedSpy.count(), 1);
+}
+
+void ServiceTests::pomodoroWorkStoppedUnderMinimumIsDiscarded()
+{
+    const int taskId = insertTaskRow(QStringLiteral("番茄短专注"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("番茄短专注"), 300));
+    FocusTimer::instance()->m_elapsedSeconds = kTestMinimumValidDurationSeconds - 1;
+
+    QVERIFY(FocusTimer::instance()->stopFocus());
+
+    QCOMPARE(countFocusSessions(), 0);
+    QCOMPARE(FocusTimer::instance()->remainingSeconds(), 0);
+    QCOMPARE(taskCompletedById(taskId), false);
+}
+
+void ServiceTests::freeFocusStillCountsUpUnchanged()
+{
+    const int taskId = insertTaskRow(QStringLiteral("自由计时任务"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("自由计时任务")));
+    QCOMPARE(FocusTimer::instance()->remainingSeconds(), 0);
+
+    QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
+    QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
+
+    QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 2);
+    QCOMPARE(FocusTimer::instance()->remainingSeconds(), 0);
+
+    FocusTimer::instance()->m_elapsedSeconds = kTestMinimumValidDurationSeconds;
+    QVERIFY(FocusTimer::instance()->stopFocus());
+    QCOMPARE(countFocusSessions(), 1);
 }
 
 QTEST_MAIN(ServiceTests)
