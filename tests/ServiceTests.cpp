@@ -389,6 +389,7 @@ private slots:
     void routinesCategoryForeignKeyClearsWhenCategoryDeleted();
     void routineCrudAddsGetsUpdatesDeletes();
     void materializeTodayIsIdempotentAndDoesNotBackfill();
+    void materializeTodayPreservesCategoryAndDoesNotEmitSignals();
     void materializeTodayDoesNotResurrectDeletedTask();
     void materializeTodaySkipsInactiveRoutines();
     void freshDatabaseCreatesVersion3PresetCategories();
@@ -1505,6 +1506,44 @@ void ServiceTests::materializeTodayIsIdempotentAndDoesNotBackfill()
              qPrintable(check.lastError().text()));
     QVERIFY(check.next());
     QCOMPARE(check.value(0).toString(), today);
+}
+
+void ServiceTests::materializeTodayPreservesCategoryAndDoesNotEmitSignals()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    const int categoryId = CategoryManager::instance()->addCategory(QStringLiteral("例行生成科目"), QStringLiteral("#654321"));
+    QVERIFY(categoryId > 0);
+    QVERIFY(manager->addRoutine(QStringLiteral("带科目例行"), categoryId));
+    QVERIFY(manager->addRoutine(QStringLiteral("无科目例行"), -1));
+
+    QSignalSpy taskSpy(TaskManager::instance(), &TaskManager::tasksChanged);
+    QSignalSpy routineSpy(manager, &RoutineManager::routinesChanged);
+
+    QCOMPARE(manager->materializeToday(), 2);
+    QCOMPARE(taskSpy.count(), 0);
+    QCOMPARE(routineSpy.count(), 0);
+
+    const QVariantList tasks = TaskManager::instance()->getTasksByDate(QDate::currentDate());
+    QCOMPARE(tasks.size(), 2);
+
+    const QVariantMap categorized = tasks.at(0).toMap();
+    QCOMPARE(categorized.value(QStringLiteral("title")).toString(), QStringLiteral("带科目例行"));
+    QCOMPARE(categorized.value(QStringLiteral("categoryId")).toInt(), categoryId);
+    QCOMPARE(categorized.value(QStringLiteral("categoryText")).toString(), QStringLiteral("例行生成科目"));
+    QCOMPARE(categorized.value(QStringLiteral("categoryName")).toString(), QStringLiteral("例行生成科目"));
+    QCOMPARE(categorized.value(QStringLiteral("categoryColor")).toString(), QStringLiteral("#654321"));
+
+    const QVariantMap uncategorized = tasks.at(1).toMap();
+    QCOMPARE(uncategorized.value(QStringLiteral("title")).toString(), QStringLiteral("无科目例行"));
+    QVERIFY(uncategorized.value(QStringLiteral("categoryId")).isNull());
+    QCOMPARE(uncategorized.value(QStringLiteral("categoryText")).toString(), QString());
+
+    QSqlQuery rawTask(DatabaseManager::instance()->database());
+    rawTask.prepare(QStringLiteral("SELECT category FROM tasks WHERE title = :title"));
+    rawTask.bindValue(QStringLiteral(":title"), QStringLiteral("无科目例行"));
+    QVERIFY(rawTask.exec());
+    QVERIFY(rawTask.next());
+    QCOMPARE(rawTask.value(0).toString(), QString());
 }
 
 void ServiceTests::materializeTodayDoesNotResurrectDeletedTask()

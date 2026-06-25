@@ -288,34 +288,40 @@ int RoutineManager::materializeToday()
 
     int generatedCount = 0;
     for (const DueRoutine& routine : dueRoutines) {
+        QSqlQuery claimRoutine(db);
+        claimRoutine.prepare(QStringLiteral(
+            "UPDATE routines "
+            "SET last_generated_date = :today "
+            "WHERE id = :id "
+            "AND active = 1 "
+            "AND (last_generated_date IS NULL OR last_generated_date < :today)"));
+        claimRoutine.bindValue(QStringLiteral(":today"), today);
+        claimRoutine.bindValue(QStringLiteral(":id"), routine.id);
+
+        // 先用条件 UPDATE 抢占本次生成权。即使多个实例同时读到同一个 due routine，
+        // 也只有真正把 last_generated_date 改到今天的实例才能继续插入任务。
+        if (!claimRoutine.exec()) {
+            qWarning() << "Failed to claim routine generation:" << claimRoutine.lastError().text();
+            db.rollback();
+            return 0;
+        }
+        if (claimRoutine.numRowsAffected() == 0) {
+            continue;
+        }
+
         QSqlQuery insertTask(db);
         insertTask.prepare(QStringLiteral(
             "INSERT INTO tasks (title, category, category_id, date, completed) "
-            "VALUES (:title, (SELECT name FROM categories WHERE id = :categoryId), :categoryId, :date, 0)"));
+            "VALUES (:title, COALESCE((SELECT name FROM categories WHERE id = :categoryId), ''), :categoryId, :date, 0)"));
         insertTask.bindValue(QStringLiteral(":title"), routine.title);
         insertTask.bindValue(QStringLiteral(":categoryId"), routine.categoryId);
         insertTask.bindValue(QStringLiteral(":date"), today);
 
         // 这里刻意直接写 SQL，而不调用 TaskManager::addTask：
         // TaskManager 会发 tasksChanged，应用启动时生成例行任务再触发刷新，容易形成递归刷新链。
-        // 事务把“插入任务”和“标记已生成日期”绑定成一个原子动作，避免只完成一半后下次重复生成。
+        // 事务把“抢占生成权”和“插入任务”绑定成一个原子动作，避免只完成一半后下次重复生成。
         if (!insertTask.exec()) {
             qWarning() << "Failed to materialize routine task:" << insertTask.lastError().text();
-            db.rollback();
-            return 0;
-        }
-
-        QSqlQuery markRoutine(db);
-        markRoutine.prepare(QStringLiteral(
-            "UPDATE routines SET last_generated_date = :today WHERE id = :id"));
-        markRoutine.bindValue(QStringLiteral(":today"), today);
-        markRoutine.bindValue(QStringLiteral(":id"), routine.id);
-
-        if (!markRoutine.exec() || markRoutine.numRowsAffected() != 1) {
-            qWarning() << "Failed to mark routine generated:"
-                       << (markRoutine.lastError().text().isEmpty()
-                               ? QStringLiteral("routine not found")
-                               : markRoutine.lastError().text());
             db.rollback();
             return 0;
         }
