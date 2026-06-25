@@ -21,6 +21,7 @@
         <file alias="qml/components/ChartPie.qml">../qml/components/ChartPie.qml</file>
         <file alias="qml/components/ColorPicker.qml">../qml/components/ColorPicker.qml</file>
         <file alias="qml/components/CategoryDialog.qml">../qml/components/CategoryDialog.qml</file>
+        <file alias="qml/components/RoutineDialog.qml">../qml/components/RoutineDialog.qml</file>
         <file alias="qml/components/ExportDialog.qml">../qml/components/ExportDialog.qml</file>
     </qresource>
 </RCC>

@@ -37,6 +37,7 @@ Rectangle {
     property var categoryManagerRef: null
     property var exportServiceRef: null
     signal itemClicked(string viewName)
+    signal dailyRoutineRequested
     signal categoryManagementRequested
     signal dataExportRequested
 
@@ -114,6 +115,13 @@ Rectangle {
 
         Item {
             Layout.fillHeight: true
+        }
+
+        SidebarItem {
+            text: "每日例行"
+            marker: "例"
+            isActive: false
+            onClicked: root.dailyRoutineRequested()
         }
 
         SidebarItem {

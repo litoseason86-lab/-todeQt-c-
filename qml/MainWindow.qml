@@ -78,6 +78,7 @@ Item {
             }
 
             onCategoryManagementRequested: categoryDialog.open()
+            onDailyRoutineRequested: routineDialog.open()
             onDataExportRequested: exportDialog.open()
         }
 
@@ -196,6 +197,14 @@ Item {
 
         parent: root
         manager: categoryManager
+    }
+
+    RoutineDialog {
+        id: routineDialog
+
+        parent: root
+        routineManagerRef: typeof routineManager === "undefined" ? null : routineManager
+        categoryManagerRef: categoryManager
     }
 
     ExportDialog {
