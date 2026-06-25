@@ -156,12 +156,20 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // 版本 3 引入每日例行表 routines（纯新增，向后兼容）。
+    if (getDatabaseVersion() < 3 || !tableExists(QStringLiteral("routines"))) {
+        if (!migrateToVersion3()) {
+            return false;
+        }
+    }
+
     const QStringList indexes = {
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tasks_date ON tasks(date)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tasks_completed ON tasks(completed)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tasks_category_id ON tasks(category_id)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_sessions_task ON focus_sessions(task_id)"),
-        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_sessions_start ON focus_sessions(start_time)")
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_sessions_start ON focus_sessions(start_time)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_routines_active ON routines(active)")
     };
 
     for (const QString& indexSql : indexes) {
@@ -274,6 +282,52 @@ bool DatabaseManager::createCategoriesTable()
     return execSql(query,
                    QStringLiteral("CREATE INDEX IF NOT EXISTS idx_categories_display_order ON categories(display_order, name)"),
                    "Failed to create categories display_order index:");
+}
+
+bool DatabaseManager::createRoutinesTable()
+{
+    QSqlQuery query(m_db);
+    const QString createRoutines = QStringLiteral(R"SQL(
+        CREATE TABLE IF NOT EXISTS routines (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+            category_id INTEGER REFERENCES categories(id),
+            active INTEGER NOT NULL DEFAULT 1,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            last_generated_date TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    )SQL");
+    return execSql(query, createRoutines, "Failed to create routines table:");
+}
+
+bool DatabaseManager::migrateToVersion3()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+
+    // v3 只新增一张表（非破坏性），且同一次初始化中 v2 迁移已做过备份，
+    // 这里不再重复备份，避免同秒时间戳的备份文件命名冲突。
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start database migration transaction:" << m_db.lastError().text();
+        return false;
+    }
+
+    if (!createRoutinesTable() || !setDatabaseVersion(3)) {
+        m_db.rollback();
+        return false;
+    }
+
+    if (!m_db.commit()) {
+        qWarning() << "Failed to commit database migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 3";
+    return true;
 }
 
 bool DatabaseManager::insertPresetCategories()

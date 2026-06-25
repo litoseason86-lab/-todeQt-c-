@@ -30,6 +30,8 @@ private:
     bool migrateToVersion2();
     // categories 是第二阶段加入的科目表，旧任务会在迁移时补上 category_id。
     bool createCategoriesTable();
+    bool migrateToVersion3();
+    bool createRoutinesTable();
     bool insertPresetCategories();
     bool migrateTaskCategories();
     QString generateColorForCategory(int index) const;

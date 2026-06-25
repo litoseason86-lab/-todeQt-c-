@@ -296,6 +296,7 @@ private slots:
     void getMonthWeeklySummaryUsesSpecifiedMonthAndRejectsInvalidYearMonth();
     void getCategoryStatsAggregatesDurationsAndPercentages();
     void statisticsIgnoresInvalidShortSessions();
+    void routinesTableExistsAfterInitialize();
     void freshDatabaseCreatesVersion2PresetCategories();
     void migrationMapsLegacyCategoryTextToCategoryIds();
     void migrationCreatesDatabaseBackup();
@@ -1237,12 +1238,21 @@ void ServiceTests::statisticsIgnoresInvalidShortSessions()
     QCOMPARE(categories.first().toMap().value(QStringLiteral("name")).toString(), QStringLiteral("英语"));
 }
 
+void ServiceTests::routinesTableExistsAfterInitialize()
+{
+    // init() 已用全新临时库初始化，迁移应已建好 routines 表。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY2(query.exec(QStringLiteral(
+        "SELECT id, title, category_id, active, display_order, last_generated_date, created_at FROM routines")),
+        qPrintable(query.lastError().text()));
+}
+
 void ServiceTests::freshDatabaseCreatesVersion2PresetCategories()
 {
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 2);
+    QCOMPARE(versionQuery.value(0).toInt(), 3);
 
     const QVariantList presets = CategoryManager::instance()->getPresetCategories();
     QCOMPARE(presets.size(), 5);
@@ -1281,7 +1291,7 @@ void ServiceTests::migrationMapsLegacyCategoryTextToCategoryIds()
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 2);
+    QCOMPARE(versionQuery.value(0).toInt(), 3);
 
     QSqlQuery presetTask(DatabaseManager::instance()->database());
     presetTask.prepare(QStringLiteral(
