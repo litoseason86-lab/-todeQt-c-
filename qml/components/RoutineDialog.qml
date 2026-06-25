@@ -296,6 +296,9 @@ Popup {
 
                 Layout.preferredWidth: 180
                 implicitHeight: 42
+                // 统一左右内边距：左边让文字不贴框（无色点时也不顶边），右边给下拉箭头留位。
+                leftPadding: Theme.space12
+                rightPadding: 30
                 model: root.categoryOptions
                 textRole: "name"
                 currentIndex: 0
@@ -322,7 +325,6 @@ Popup {
                     spacing: Theme.space8
 
                     Rectangle {
-                        Layout.leftMargin: 10
                         Layout.preferredWidth: 14
                         Layout.preferredHeight: 14
                         radius: 7
@@ -334,7 +336,6 @@ Popup {
 
                     Text {
                         Layout.fillWidth: true
-                        Layout.rightMargin: 24
                         text: routineCategoryCombo.displayText
                         color: Theme.ink
                         font.pixelSize: Theme.fontMd
@@ -489,9 +490,50 @@ Popup {
 
                             checked: routineRow.modelData.active !== false
                             text: checked ? "启用" : "停用"
+                            spacing: Theme.space8
                             onToggled: {
                                 // 列表项只负责把用户意图转交给服务层；刷新由服务信号或失败回滚触发。
                                 root.setRoutineActive(Number(routineRow.modelData.id), checked)
+                            }
+
+                            // 自定义暖纸拨钮：开=accent、关=灰，白色滑块滑动；取代 Basic 默认难看的深色样式。
+                            indicator: Rectangle {
+                                implicitWidth: 40
+                                implicitHeight: 22
+                                radius: height / 2
+                                x: activeSwitch.leftPadding
+                                y: activeSwitch.height / 2 - height / 2
+                                color: activeSwitch.checked ? Theme.accent : Theme.borderSubtle
+                                border.color: activeSwitch.checked ? Theme.accentStrong : Theme.border
+                                border.width: 1
+
+                                Behavior on color {
+                                    ColorAnimation { duration: 120; easing.type: Easing.OutQuad }
+                                }
+
+                                Rectangle {
+                                    width: 18
+                                    height: 18
+                                    radius: height / 2
+                                    y: 2
+                                    x: activeSwitch.checked ? parent.width - width - 2 : 2
+                                    color: Theme.surface
+                                    border.color: Theme.border
+                                    border.width: 1
+
+                                    Behavior on x {
+                                        NumberAnimation { duration: 120; easing.type: Easing.OutQuad }
+                                    }
+                                }
+                            }
+
+                            contentItem: Text {
+                                text: activeSwitch.text
+                                color: activeSwitch.checked ? Theme.ink : Theme.inkSoft
+                                font.pixelSize: Theme.fontSm
+                                verticalAlignment: Text.AlignVCenter
+                                // 文字让开左侧拨钮，避免重叠。
+                                leftPadding: activeSwitch.indicator.width + activeSwitch.spacing
                             }
                         }
 

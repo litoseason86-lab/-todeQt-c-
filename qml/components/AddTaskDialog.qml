@@ -264,6 +264,9 @@ Popup {
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
             implicitHeight: 44
+            // 统一左右内边距：左边让文字不贴框（无色点时也不顶边），右边给下拉箭头留位。
+            leftPadding: Theme.space12
+            rightPadding: 32
             model: root.categoryOptions
             textRole: "name"
             currentIndex: root.categoryOptions.length > 0 ? 0 : -1
@@ -319,7 +322,6 @@ Popup {
                 spacing: Theme.space8
 
                 Rectangle {
-                    Layout.leftMargin: 10
                     Layout.preferredWidth: 18
                     Layout.preferredHeight: 18
                     radius: 3
@@ -329,7 +331,6 @@ Popup {
 
                 Text {
                     Layout.fillWidth: true
-                    Layout.rightMargin: 26
                     text: categoryComboBox.displayText
                     color: Theme.ink
                     font.pixelSize: Theme.fontLg
