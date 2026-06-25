@@ -87,6 +87,7 @@ Popup {
     }
 
     function refresh() {
+        var previousCategoryId = root.selectedCategoryId()
         if (root.routineManagerRef && root.routineManagerRef.getRoutines) {
             root.routines = root.routineManagerRef.getRoutines()
         } else {
@@ -103,8 +104,12 @@ Popup {
             color: ""
         }].concat(categories)
 
-        if (routineCategoryCombo.currentIndex < 0 && root.categoryOptions.length > 0) {
-            routineCategoryCombo.currentIndex = 0
+        routineCategoryCombo.currentIndex = 0
+        for (var i = 0; i < root.categoryOptions.length; ++i) {
+            if (Number(root.categoryOptions[i].id || -1) === previousCategoryId) {
+                routineCategoryCombo.currentIndex = i
+                break
+            }
         }
     }
 
@@ -293,7 +298,7 @@ Popup {
                 implicitHeight: 42
                 model: root.categoryOptions
                 textRole: "name"
-                currentIndex: root.categoryOptions.length > 0 ? 0 : -1
+                currentIndex: 0
                 displayText: currentIndex >= 0 && currentIndex < root.categoryOptions.length ? root.categoryOptions[currentIndex].name : "选择科目"
 
                 background: Rectangle {
