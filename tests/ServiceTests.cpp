@@ -250,6 +250,93 @@ bool createLegacyVersion1Database(const QString& path)
     return true;
 }
 
+bool createVersion2Database(const QString& path)
+{
+    // 构造已完成 v2 迁移的数据库，专门验证 v3 只新增 routines，不破坏已有科目结构。
+    const QString connectionName = QStringLiteral("Version2MigrationSetupConnection");
+    {
+        QSqlDatabase version2Db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        version2Db.setDatabaseName(path);
+        if (!version2Db.open()) {
+            qWarning() << "Failed to open version 2 database:" << version2Db.lastError().text();
+            return false;
+        }
+
+        QSqlQuery pragma(version2Db);
+        if (!pragma.exec(QStringLiteral("PRAGMA foreign_keys = ON"))) {
+            qWarning() << "Failed to enable version 2 foreign keys:" << pragma.lastError().text();
+            return false;
+        }
+
+        QSqlQuery query(version2Db);
+        if (!query.exec(QStringLiteral(R"SQL(
+            CREATE TABLE categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE CHECK(length(trim(name)) > 0),
+                color TEXT NOT NULL,
+                is_preset INTEGER NOT NULL DEFAULT 0,
+                display_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        )SQL"))) {
+            qWarning() << "Failed to create version 2 categories table:" << query.lastError().text();
+            return false;
+        }
+
+        if (!query.exec(QStringLiteral(R"SQL(
+            CREATE TABLE tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+                category TEXT,
+                category_id INTEGER REFERENCES categories(id),
+                date TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        )SQL"))) {
+            qWarning() << "Failed to create version 2 tasks table:" << query.lastError().text();
+            return false;
+        }
+
+        if (!query.exec(QStringLiteral(R"SQL(
+            CREATE TABLE focus_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER,
+                start_time TEXT NOT NULL,
+                end_time TEXT,
+                duration INTEGER,
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
+            )
+        )SQL"))) {
+            qWarning() << "Failed to create version 2 focus_sessions table:" << query.lastError().text();
+            return false;
+        }
+
+        if (!query.exec(QStringLiteral(
+                "INSERT INTO categories (name, color, is_preset, display_order) "
+                "VALUES ('数学', '#d4a574', 1, 1)"))) {
+            qWarning() << "Failed to insert version 2 category:" << query.lastError().text();
+            return false;
+        }
+
+        if (!query.exec(QStringLiteral(
+                "INSERT INTO tasks (title, category, category_id, date, completed, created_at) "
+                "VALUES ('v2 任务', '数学', 1, '2026-06-16', 0, '2026-06-16T08:00:00')"))) {
+            qWarning() << "Failed to insert version 2 task:" << query.lastError().text();
+            return false;
+        }
+
+        if (!query.exec(QStringLiteral("PRAGMA user_version = 2"))) {
+            qWarning() << "Failed to set version 2 database version:" << query.lastError().text();
+            return false;
+        }
+
+        version2Db.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    return true;
+}
+
 QStringList taskTitles(const QVariantList& tasks)
 {
     QStringList titles;
@@ -297,7 +384,9 @@ private slots:
     void getCategoryStatsAggregatesDurationsAndPercentages();
     void statisticsIgnoresInvalidShortSessions();
     void routinesTableExistsAfterInitialize();
-    void freshDatabaseCreatesVersion2PresetCategories();
+    void version2MigrationAddsRoutinesSchemaAndIndex();
+    void routinesCategoryForeignKeyClearsWhenCategoryDeleted();
+    void freshDatabaseCreatesVersion3PresetCategories();
     void migrationMapsLegacyCategoryTextToCategoryIds();
     void migrationCreatesDatabaseBackup();
     void customCategoryCrudValidatesAndEmitsChanges();
@@ -1247,7 +1336,70 @@ void ServiceTests::routinesTableExistsAfterInitialize()
         qPrintable(query.lastError().text()));
 }
 
-void ServiceTests::freshDatabaseCreatesVersion2PresetCategories()
+void ServiceTests::version2MigrationAddsRoutinesSchemaAndIndex()
+{
+    DatabaseManager::instance()->close();
+    const QString version2Path = m_tempDir->filePath(QStringLiteral("version2.sqlite"));
+    QVERIFY(createVersion2Database(version2Path));
+    QVERIFY(DatabaseManager::instance()->initialize(version2Path));
+
+    QSqlQuery versionQuery(DatabaseManager::instance()->database());
+    QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(versionQuery.next());
+    QCOMPARE(versionQuery.value(0).toInt(), 3);
+
+    // v3 从真实 v2 库升级时必须补齐 routines 表和索引，不能只覆盖全新库。
+    QSqlQuery tableQuery(DatabaseManager::instance()->database());
+    QVERIFY2(tableQuery.exec(QStringLiteral(
+                 "SELECT id, title, category_id, active, display_order, last_generated_date, created_at FROM routines")),
+             qPrintable(tableQuery.lastError().text()));
+
+    QSqlQuery indexQuery(DatabaseManager::instance()->database());
+    indexQuery.prepare(QStringLiteral(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = :name"));
+    indexQuery.bindValue(QStringLiteral(":name"), QStringLiteral("idx_routines_active"));
+    QVERIFY(indexQuery.exec());
+    QVERIFY(indexQuery.next());
+    QCOMPARE(indexQuery.value(0).toString(), QStringLiteral("idx_routines_active"));
+
+    QSqlQuery insertRoutine(DatabaseManager::instance()->database());
+    QVERIFY2(insertRoutine.exec(QStringLiteral("INSERT INTO routines (title) VALUES ('v2 升级例行')")),
+             qPrintable(insertRoutine.lastError().text()));
+
+    QSqlQuery defaults(DatabaseManager::instance()->database());
+    QVERIFY(defaults.exec(QStringLiteral(
+        "SELECT active, display_order, created_at FROM routines WHERE title = 'v2 升级例行'")));
+    QVERIFY(defaults.next());
+    QCOMPARE(defaults.value(0).toInt(), 1);
+    QCOMPARE(defaults.value(1).toInt(), 0);
+    QVERIFY(!defaults.value(2).toString().isEmpty());
+}
+
+void ServiceTests::routinesCategoryForeignKeyClearsWhenCategoryDeleted()
+{
+    CategoryManager* manager = CategoryManager::instance();
+    const int categoryId = manager->addCategory(QStringLiteral("每日专业课"), QStringLiteral("#123456"));
+    QVERIFY(categoryId > 0);
+
+    QSqlQuery insertRoutine(DatabaseManager::instance()->database());
+    insertRoutine.prepare(QStringLiteral(
+        "INSERT INTO routines (title, category_id) VALUES (:title, :categoryId)"));
+    insertRoutine.bindValue(QStringLiteral(":title"), QStringLiteral("每日复盘"));
+    insertRoutine.bindValue(QStringLiteral(":categoryId"), categoryId);
+    QVERIFY2(insertRoutine.exec(), qPrintable(insertRoutine.lastError().text()));
+
+    // routines.category_id 使用 ON DELETE SET NULL，保持“删除科目只影响未来分类关联，不删除例行项”的语义。
+    QVERIFY(manager->deleteCategory(categoryId));
+
+    QSqlQuery routine(DatabaseManager::instance()->database());
+    routine.prepare(QStringLiteral("SELECT category_id FROM routines WHERE title = :title"));
+    routine.bindValue(QStringLiteral(":title"), QStringLiteral("每日复盘"));
+    QVERIFY(routine.exec());
+    QVERIFY(routine.next());
+    QVERIFY(routine.value(0).isNull());
+}
+
+void ServiceTests::freshDatabaseCreatesVersion3PresetCategories()
 {
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));

@@ -291,7 +291,7 @@ bool DatabaseManager::createRoutinesTable()
         CREATE TABLE IF NOT EXISTS routines (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL CHECK(length(trim(title)) > 0),
-            category_id INTEGER REFERENCES categories(id),
+            category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
             active INTEGER NOT NULL DEFAULT 1,
             display_order INTEGER NOT NULL DEFAULT 0,
             last_generated_date TEXT,
