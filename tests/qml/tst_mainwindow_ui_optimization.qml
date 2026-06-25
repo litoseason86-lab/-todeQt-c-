@@ -38,12 +38,26 @@ TestCase {
 
         property bool isRunning: false
         property bool hasActiveSession: false
+        property int currentTaskId: -1
         property string currentTaskTitle: ""
+        property int mode: 0
+        property int phase: 0
+        property int targetSeconds: 0
+        property int remainingSeconds: 0
         property int elapsedSeconds: 0
 
         signal focusCompleted(int duration)
+        signal phaseCompleted(int phase)
 
         function startFocus(id, title) {
+            return true;
+        }
+
+        function startPomodoroWork(id, title, workSeconds) {
+            return true;
+        }
+
+        function startBreak(breakSeconds) {
             return true;
         }
 

@@ -17,4 +17,17 @@ ApplicationWindow {
     MainWindow {
         anchors.fill: parent
     }
+
+    // 阶段结束只做视觉提醒：把窗口拉回前台，避免用户错过番茄钟切换。
+    Connections {
+        // 说明：qmllint 无法解析运行时注入的上下文属性，这里只对这一个引用放行。
+        // qmllint disable unqualified
+        target: typeof focusTimer === "undefined" ? null : focusTimer
+        // qmllint enable unqualified
+
+        function onPhaseCompleted(phase) {
+            root.raise();
+            root.requestActivate();
+        }
+    }
 }
