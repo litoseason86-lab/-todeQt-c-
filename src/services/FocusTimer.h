@@ -12,6 +12,7 @@ class FocusTimer : public QObject
     Q_PROPERTY(bool isRunning READ isRunning NOTIFY runningStateChanged)
     Q_PROPERTY(bool hasActiveSession READ hasActiveSession NOTIFY currentTaskChanged)
     Q_PROPERTY(QString currentTaskTitle READ currentTaskTitle NOTIFY currentTaskChanged)
+    Q_PROPERTY(int currentTaskId READ currentTaskId NOTIFY currentTaskChanged)
     Q_PROPERTY(int mode READ mode NOTIFY modeChanged)
     Q_PROPERTY(int phase READ phase NOTIFY phaseChanged)
     Q_PROPERTY(int targetSeconds READ targetSeconds NOTIFY phaseChanged)
@@ -45,6 +46,7 @@ public:
     bool isRunning() const;
     bool hasActiveSession() const;
     QString currentTaskTitle() const;
+    int currentTaskId() const;
     int mode() const;
     int phase() const;
     int targetSeconds() const;

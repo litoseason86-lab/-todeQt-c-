@@ -266,6 +266,11 @@ QString FocusTimer::currentTaskTitle() const
     return m_currentTaskTitle;
 }
 
+int FocusTimer::currentTaskId() const
+{
+    return m_currentTaskId;
+}
+
 int FocusTimer::mode() const
 {
     return m_mode;
