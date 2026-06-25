@@ -308,8 +308,8 @@ bool DatabaseManager::migrateToVersion3()
         return false;
     }
 
-    // v3 只新增一张表（非破坏性），且同一次初始化中 v2 迁移已做过备份，
-    // 这里不再重复备份，避免同秒时间戳的备份文件命名冲突。
+    // v3 只新增 routines 表，不改写既有用户数据；因此不额外创建备份。
+    // 未来如果 v3 迁移开始改动旧表，必须重新评估备份策略。
     if (!m_db.transaction()) {
         qWarning() << "Failed to start database migration transaction:" << m_db.lastError().text();
         return false;
