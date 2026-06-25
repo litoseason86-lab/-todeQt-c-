@@ -11,6 +11,7 @@
 #include "services/ExportService.h"
 #include "services/FocusHistoryService.h"
 #include "services/FocusTimer.h"
+#include "services/RoutineManager.h"
 #include "services/StatisticsService.h"
 #include "services/TaskManager.h"
 
@@ -28,6 +29,9 @@ int main(int argc, char *argv[])
         return -1;
     }
 
+    // 启动即生成今天的例行任务，保证 QML 首次读取今日任务时已经能看到它们。
+    RoutineManager::instance()->materializeToday();
+
     QQmlApplicationEngine engine;
     // QML 通过单例上下文对象访问服务，视图层保持声明式和轻量。
     engine.rootContext()->setContextProperty(QStringLiteral("categoryManager"), CategoryManager::instance());
@@ -39,6 +43,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("statisticsService"), StatisticsService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("routineManager"), RoutineManager::instance());
 
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,

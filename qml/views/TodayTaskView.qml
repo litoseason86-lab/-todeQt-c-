@@ -63,7 +63,22 @@ Item {
         }
     }
 
+    Connections {
+        target: typeof routineManager !== "undefined" ? routineManager : null
+        ignoreUnknownSignals: true
+
+        function onRoutinesChanged() {
+            root.refresh();
+        }
+    }
+
     function refresh() {
+        // 跨午夜或新加例行项时，先确保当天真实任务行已生成。
+        // materializeToday 幂等且不发 tasksChanged，避免 refresh 递归。
+        if (typeof routineManager !== "undefined" && routineManager) {
+            routineManager.materializeToday();
+        }
+
         // 任务和统计分开加载，避免统计失败拖垮任务列表。
         loadTasks();
         loadStats();
