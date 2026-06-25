@@ -276,6 +276,7 @@ int RoutineManager::materializeToday()
         routine.categoryId = dueQuery.value(2);
         dueRoutines.append(routine);
     }
+    dueQuery.finish();
 
     if (dueRoutines.isEmpty()) {
         return 0;

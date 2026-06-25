@@ -390,6 +390,7 @@ private slots:
     void routineCrudAddsGetsUpdatesDeletes();
     void materializeTodayIsIdempotentAndDoesNotBackfill();
     void materializeTodayPreservesCategoryAndDoesNotEmitSignals();
+    void materializeTodayRollsBackClaimWhenTaskInsertFails();
     void materializeTodayDoesNotResurrectDeletedTask();
     void materializeTodaySkipsInactiveRoutines();
     void freshDatabaseCreatesVersion3PresetCategories();
@@ -1544,6 +1545,44 @@ void ServiceTests::materializeTodayPreservesCategoryAndDoesNotEmitSignals()
     QVERIFY(rawTask.exec());
     QVERIFY(rawTask.next());
     QCOMPARE(rawTask.value(0).toString(), QString());
+
+    QSqlQuery rawCategorizedTask(DatabaseManager::instance()->database());
+    rawCategorizedTask.prepare(QStringLiteral("SELECT category, category_id FROM tasks WHERE title = :title"));
+    rawCategorizedTask.bindValue(QStringLiteral(":title"), QStringLiteral("带科目例行"));
+    QVERIFY(rawCategorizedTask.exec());
+    QVERIFY(rawCategorizedTask.next());
+    QCOMPARE(rawCategorizedTask.value(0).toString(), QStringLiteral("例行生成科目"));
+    QCOMPARE(rawCategorizedTask.value(1).toInt(), categoryId);
+}
+
+void ServiceTests::materializeTodayRollsBackClaimWhenTaskInsertFails()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    QVERIFY(manager->addRoutine(QStringLiteral("失败例行"), -1));
+
+    QSqlQuery trigger(DatabaseManager::instance()->database());
+    QVERIFY2(trigger.exec(QStringLiteral(R"SQL(
+        CREATE TRIGGER fail_routine_task_insert
+        BEFORE INSERT ON tasks
+        WHEN NEW.title = '失败例行'
+        BEGIN
+            SELECT RAISE(ABORT, 'forced routine insert failure');
+        END
+    )SQL")), qPrintable(trigger.lastError().text()));
+
+    // 触发器模拟插入任务失败；事务必须回滚 last_generated_date 的抢占更新，
+    // 否则用户当天会既没有任务，又被标记为已生成。
+    QCOMPARE(manager->materializeToday(), 0);
+
+    QSqlQuery routine(DatabaseManager::instance()->database());
+    QVERIFY(routine.exec(QStringLiteral("SELECT last_generated_date FROM routines WHERE title = '失败例行'")));
+    QVERIFY(routine.next());
+    QVERIFY(routine.value(0).isNull());
+
+    QSqlQuery countTasks(DatabaseManager::instance()->database());
+    QVERIFY(countTasks.exec(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '失败例行'")));
+    QVERIFY(countTasks.next());
+    QCOMPARE(countTasks.value(0).toInt(), 0);
 }
 
 void ServiceTests::materializeTodayDoesNotResurrectDeletedTask()
