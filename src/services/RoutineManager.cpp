@@ -3,13 +3,21 @@
 #include "CategoryManager.h"
 #include "DatabaseManager.h"
 
+#include <QDate>
 #include <QDebug>
+#include <QList>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QVariantMap>
 
 namespace {
+struct DueRoutine {
+    int id = 0;
+    QString title;
+    QVariant categoryId;
+};
+
 QVariant nullableCategoryId(int categoryId)
 {
     // categoryId <= 0 是 QML 层传入的“未选择科目”哨兵值，数据库里必须落成 NULL，
@@ -238,5 +246,88 @@ QVariantList RoutineManager::getRoutines() const
 
 int RoutineManager::materializeToday()
 {
-    return 0;
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to materialize routines: database is not open";
+        return 0;
+    }
+
+    const QString today = QDate::currentDate().toString(Qt::ISODate);
+
+    QList<DueRoutine> dueRoutines;
+    QSqlQuery dueQuery(db);
+    dueQuery.prepare(QStringLiteral(
+        "SELECT id, title, category_id "
+        "FROM routines "
+        "WHERE active = 1 "
+        "AND (last_generated_date IS NULL OR last_generated_date < :today) "
+        "ORDER BY display_order ASC, id ASC"));
+    dueQuery.bindValue(QStringLiteral(":today"), today);
+
+    if (!dueQuery.exec()) {
+        qWarning() << "Failed to materialize routines:" << dueQuery.lastError().text();
+        return 0;
+    }
+
+    while (dueQuery.next()) {
+        DueRoutine routine;
+        routine.id = dueQuery.value(0).toInt();
+        routine.title = dueQuery.value(1).toString();
+        routine.categoryId = dueQuery.value(2);
+        dueRoutines.append(routine);
+    }
+
+    if (dueRoutines.isEmpty()) {
+        return 0;
+    }
+
+    if (!db.transaction()) {
+        qWarning() << "Failed to materialize routines: failed to start transaction" << db.lastError().text();
+        return 0;
+    }
+
+    int generatedCount = 0;
+    for (const DueRoutine& routine : dueRoutines) {
+        QSqlQuery insertTask(db);
+        insertTask.prepare(QStringLiteral(
+            "INSERT INTO tasks (title, category, category_id, date, completed) "
+            "VALUES (:title, (SELECT name FROM categories WHERE id = :categoryId), :categoryId, :date, 0)"));
+        insertTask.bindValue(QStringLiteral(":title"), routine.title);
+        insertTask.bindValue(QStringLiteral(":categoryId"), routine.categoryId);
+        insertTask.bindValue(QStringLiteral(":date"), today);
+
+        // 这里刻意直接写 SQL，而不调用 TaskManager::addTask：
+        // TaskManager 会发 tasksChanged，应用启动时生成例行任务再触发刷新，容易形成递归刷新链。
+        // 事务把“插入任务”和“标记已生成日期”绑定成一个原子动作，避免只完成一半后下次重复生成。
+        if (!insertTask.exec()) {
+            qWarning() << "Failed to materialize routine task:" << insertTask.lastError().text();
+            db.rollback();
+            return 0;
+        }
+
+        QSqlQuery markRoutine(db);
+        markRoutine.prepare(QStringLiteral(
+            "UPDATE routines SET last_generated_date = :today WHERE id = :id"));
+        markRoutine.bindValue(QStringLiteral(":today"), today);
+        markRoutine.bindValue(QStringLiteral(":id"), routine.id);
+
+        if (!markRoutine.exec() || markRoutine.numRowsAffected() != 1) {
+            qWarning() << "Failed to mark routine generated:"
+                       << (markRoutine.lastError().text().isEmpty()
+                               ? QStringLiteral("routine not found")
+                               : markRoutine.lastError().text());
+            db.rollback();
+            return 0;
+        }
+
+        ++generatedCount;
+    }
+
+    if (!db.commit()) {
+        qWarning() << "Failed to materialize routines: failed to commit transaction" << db.lastError().text();
+        db.rollback();
+        return 0;
+    }
+
+    return generatedCount;
 }

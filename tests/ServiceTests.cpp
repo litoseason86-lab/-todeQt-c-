@@ -388,6 +388,9 @@ private slots:
     void version2MigrationAddsRoutinesSchemaAndIndex();
     void routinesCategoryForeignKeyClearsWhenCategoryDeleted();
     void routineCrudAddsGetsUpdatesDeletes();
+    void materializeTodayIsIdempotentAndDoesNotBackfill();
+    void materializeTodayDoesNotResurrectDeletedTask();
+    void materializeTodaySkipsInactiveRoutines();
     void freshDatabaseCreatesVersion3PresetCategories();
     void migrationMapsLegacyCategoryTextToCategoryIds();
     void migrationCreatesDatabaseBackup();
@@ -1477,6 +1480,58 @@ void ServiceTests::routineCrudAddsGetsUpdatesDeletes()
     QVERIFY(manager->deleteRoutine(categoryRoutineId));
     QCOMPARE(spy.count(), 7);
     QVERIFY(manager->getRoutines().isEmpty());
+}
+
+void ServiceTests::materializeTodayIsIdempotentAndDoesNotBackfill()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    QVERIFY(manager->addRoutine(QStringLiteral("背单词"), -1));
+
+    const QString today = QDate::currentDate().toString(Qt::ISODate);
+
+    QCOMPARE(manager->materializeToday(), 1);
+    QCOMPARE(TaskManager::instance()->getTasksByDate(QDate::currentDate()).size(), 1);
+
+    QCOMPARE(manager->materializeToday(), 0);
+    QCOMPARE(TaskManager::instance()->getTasksByDate(QDate::currentDate()).size(), 1);
+
+    QSqlQuery upd(DatabaseManager::instance()->database());
+    QVERIFY2(upd.exec(QStringLiteral("UPDATE routines SET last_generated_date = '2000-01-01'")),
+             qPrintable(upd.lastError().text()));
+    QCOMPARE(manager->materializeToday(), 1);
+
+    QSqlQuery check(DatabaseManager::instance()->database());
+    QVERIFY2(check.exec(QStringLiteral("SELECT last_generated_date FROM routines")),
+             qPrintable(check.lastError().text()));
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toString(), today);
+}
+
+void ServiceTests::materializeTodayDoesNotResurrectDeletedTask()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    QVERIFY(manager->addRoutine(QStringLiteral("数学真题"), -1));
+    QCOMPARE(manager->materializeToday(), 1);
+
+    QVariantList todays = TaskManager::instance()->getTasksByDate(QDate::currentDate());
+    QCOMPARE(todays.size(), 1);
+    const int taskId = todays.first().toMap().value(QStringLiteral("id")).toInt();
+
+    // 删掉今天生成的任务后再生成：last_generated_date 已是今天，所以当天不应复活。
+    QVERIFY(TaskManager::instance()->deleteTask(taskId));
+    QCOMPARE(manager->materializeToday(), 0);
+    QVERIFY(TaskManager::instance()->getTasksByDate(QDate::currentDate()).isEmpty());
+}
+
+void ServiceTests::materializeTodaySkipsInactiveRoutines()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    QVERIFY(manager->addRoutine(QStringLiteral("停用项"), -1));
+    const int id = manager->getRoutines().first().toMap().value(QStringLiteral("id")).toInt();
+    QVERIFY(manager->setRoutineActive(id, false));
+
+    QCOMPARE(manager->materializeToday(), 0);
+    QVERIFY(TaskManager::instance()->getTasksByDate(QDate::currentDate()).isEmpty());
 }
 
 void ServiceTests::freshDatabaseCreatesVersion3PresetCategories()
