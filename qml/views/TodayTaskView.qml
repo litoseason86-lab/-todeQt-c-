@@ -73,9 +73,9 @@ Item {
     }
 
     function refresh() {
-        // 跨午夜或新加例行项时，先确保当天真实任务行已生成。
+        // 每次刷新前先确保当天真实任务行已生成；跨午夜后只要页面触发刷新就会补上当天例行项。
         // materializeToday 幂等且不发 tasksChanged，避免 refresh 递归。
-        if (typeof routineManager !== "undefined" && routineManager) {
+        if (typeof routineManager !== "undefined" && routineManager && routineManager.materializeToday) {
             routineManager.materializeToday();
         }
 
