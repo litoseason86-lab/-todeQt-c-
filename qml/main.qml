@@ -30,6 +30,14 @@ ApplicationWindow {
         function onPhaseCompleted(phase) {
             root.raise();
             root.requestActivate();
+            // 提示音默认开启；缺少 appSettings 时保持默认行为，不阻断原有置前提醒。
+            // qmllint disable unqualified
+            if (typeof appSettings === "undefined" || !appSettings || appSettings.soundEnabled) {
+                if (typeof phaseSoundService !== "undefined" && phaseSoundService) {
+                    phaseSoundService.playPhaseCompleteChime();
+                }
+            }
+            // qmllint enable unqualified
         }
     }
 }

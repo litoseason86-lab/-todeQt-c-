@@ -12,6 +12,7 @@
 #include "services/ExportService.h"
 #include "services/FocusHistoryService.h"
 #include "services/FocusTimer.h"
+#include "services/PhaseSoundService.h"
 #include "services/RoutineManager.h"
 #include "services/StatisticsService.h"
 #include "services/TaskManager.h"
@@ -46,6 +47,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("routineManager"), RoutineManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), AppSettings::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("phaseSoundService"), PhaseSoundService::instance());
 
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,

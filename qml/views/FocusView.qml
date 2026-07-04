@@ -898,6 +898,37 @@ Item {
                 }
             }
         }
+
+        Button {
+            id: soundToggleButton
+            objectName: "soundToggleButton"
+
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.margins: Theme.space16
+            implicitWidth: 40
+            implicitHeight: 32
+
+            onClicked: {
+                if (root.settings) {
+                    root.settings.soundEnabled = !root.settings.soundEnabled
+                }
+            }
+
+            background: Rectangle {
+                color: soundToggleButton.hovered ? Theme.surface : "transparent"
+                border.color: soundToggleButton.hovered ? Theme.border : "transparent"
+                border.width: 1
+                radius: Theme.radiusMd
+            }
+
+            contentItem: Text {
+                text: root.settings && root.settings.soundEnabled ? "🔔" : "🔕"
+                font.pixelSize: Theme.fontLg
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
     }
 
     function pomodoroStageText() {

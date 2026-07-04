@@ -62,6 +62,8 @@ set(APP_SOURCES
     src/services/FocusHistoryService.cpp
     src/services/AppSettings.h
     src/services/AppSettings.cpp
+    src/services/PhaseSoundService.h
+    src/services/PhaseSoundService.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     resources/qml.qrc

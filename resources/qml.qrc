@@ -24,5 +24,6 @@
         <file alias="qml/components/RoutineDialog.qml">../qml/components/RoutineDialog.qml</file>
         <file alias="qml/components/ExportDialog.qml">../qml/components/ExportDialog.qml</file>
         <file alias="qml/components/Toast.qml">../qml/components/Toast.qml</file>
+        <file alias="sounds/phase-complete.wav">sounds/phase-complete.wav</file>
     </qresource>
 </RCC>

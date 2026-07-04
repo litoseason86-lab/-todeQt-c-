@@ -460,4 +460,15 @@ TestCase {
         compare(chip.text, "90 分")
         restored.destroy()
     }
+
+    function test_soundToggleFlipsSetting() {
+        appSettingsMock.soundEnabled = true
+
+        const toggle = findChild(view, "soundToggleButton")
+        verify(toggle)
+        toggle.clicked()
+        compare(appSettingsMock.soundEnabled, false)
+        toggle.clicked()
+        compare(appSettingsMock.soundEnabled, true)
+    }
 }
