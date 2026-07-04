@@ -650,6 +650,18 @@ Item {
             }
 
             Text {
+                objectName: "ruleHintText"
+                Layout.fillWidth: true
+                visible: root.state === "pomoIdle"
+                text: "满 " + root.timerNumber("autoCompleteMinutes", 5) + " 分钟自动完成任务 · 不足 "
+                      + root.timerNumber("minimumValidMinutes", 3) + " 分钟不计入记录"
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontSm
+                color: Theme.inkMuted
+                horizontalAlignment: Text.AlignHCenter
+            }
+
+            Text {
                 Layout.fillWidth: true
                 visible: root.errorText.length > 0
                 text: root.errorText

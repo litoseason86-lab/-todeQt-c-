@@ -28,6 +28,8 @@ TestCase {
         property string startPomodoroWorkTitle: ""
         property int startPomodoroWorkSeconds: 0
         property int stopFocusCalls: 0
+        property int minimumValidMinutes: 3
+        property int autoCompleteMinutes: 5
 
         function startFocus(taskId, title) {
             return true
@@ -377,5 +379,15 @@ TestCase {
         compare(restored.selectedWorkMinutes, 45)
         compare(restored.selectedBreakMinutes, 10)
         restored.destroy()
+    }
+
+    function test_pomoIdleShowsRuleHint() {
+        view.toPomodoroTab(true)
+        wait(20)
+
+        const hint = findChild(view, "ruleHintText")
+        verify(hint)
+        compare(hint.text, "满 5 分钟自动完成任务 · 不足 3 分钟不计入记录")
+        compare(view.state, "pomoIdle")
     }
 }
