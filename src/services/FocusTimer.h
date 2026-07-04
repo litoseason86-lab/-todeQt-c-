@@ -60,6 +60,7 @@ signals:
     void phaseChanged();
     void focusCompleted(int duration);
     void phaseCompleted(int phase);
+    void sessionDiscarded(int duration);
 
 private:
     explicit FocusTimer(QObject* parent = nullptr);

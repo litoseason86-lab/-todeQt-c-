@@ -210,6 +210,8 @@ bool FocusTimer::completeFocusSession()
         }
 
         resetSession();
+        // 静默丢弃会让用户误以为已记录；界面靠这个信号弹出未计入提示。
+        emit sessionDiscarded(duration);
         emit focusCompleted(duration);
         emit runningStateChanged();
         emit currentTaskChanged();

@@ -427,6 +427,8 @@ private slots:
     void stopFocusCompletesTaskAfterFiveMinutes();
     void stopFocusUnderFiveMinutesKeepsTaskPending();
     void stopFocusUnderThreeMinutesDiscardsInvalidSession();
+    void shortSessionEmitsSessionDiscarded();
+    void validSessionDoesNotEmitSessionDiscarded();
     void pomodoroWorkCompletionSavesSessionAndAutoCompletesTask();
     void pomodoroBreakWritesNoSessionAndCompletes();
     void pomodoroWorkStoppedUnderMinimumIsDiscarded();
@@ -2140,6 +2142,33 @@ void ServiceTests::stopFocusUnderThreeMinutesDiscardsInvalidSession()
     QCOMPARE(countFocusSessions(), 0);
     const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
     QCOMPARE(task.value(QStringLiteral("completed")).toBool(), false);
+}
+
+void ServiceTests::shortSessionEmitsSessionDiscarded()
+{
+    const int taskId = insertTaskRow(QStringLiteral("短会话任务"), QDate::currentDate());
+    FocusTimer* timer = FocusTimer::instance();
+    QSignalSpy discardSpy(timer, &FocusTimer::sessionDiscarded);
+
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("短会话任务")));
+    timer->m_elapsedSeconds = 60;
+    QVERIFY(timer->stopFocus());
+
+    QCOMPARE(discardSpy.count(), 1);
+    QCOMPARE(discardSpy.takeFirst().at(0).toInt(), 60);
+}
+
+void ServiceTests::validSessionDoesNotEmitSessionDiscarded()
+{
+    const int taskId = insertTaskRow(QStringLiteral("有效会话任务"), QDate::currentDate());
+    FocusTimer* timer = FocusTimer::instance();
+    QSignalSpy discardSpy(timer, &FocusTimer::sessionDiscarded);
+
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("有效会话任务")));
+    timer->m_elapsedSeconds = 300;
+    QVERIFY(timer->stopFocus());
+
+    QCOMPARE(discardSpy.count(), 0);
 }
 
 void ServiceTests::pomodoroWorkCompletionSavesSessionAndAutoCompletesTask()
