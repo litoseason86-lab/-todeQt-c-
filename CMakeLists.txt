@@ -41,17 +41,28 @@ set(APP_SOURCES
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
     src/models/CountdownModel.cpp
+    src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/CategoryManager.h
     src/services/CategoryManager.cpp
+    src/services/RoutineManager.h
     src/services/RoutineManager.cpp
+    src/services/ExportService.h
     src/services/ExportService.cpp
+    src/services/TaskManager.h
     src/services/TaskManager.cpp
+    src/services/FocusTimer.h
     src/services/FocusTimer.cpp
+    src/services/StatisticsService.h
     src/services/StatisticsService.cpp
     src/services/FocusSessionRules.h
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/CountdownService.h
     src/services/CountdownService.cpp
     resources/qml.qrc
 )
@@ -115,14 +126,24 @@ add_executable(PomodoroTodoTests
     tests/ServiceTests.cpp
     src/models/Task.cpp
     src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/CategoryManager.h
     src/services/CategoryManager.cpp
+    src/services/RoutineManager.h
     src/services/RoutineManager.cpp
+    src/services/ExportService.h
     src/services/ExportService.cpp
+    src/services/TaskManager.h
     src/services/TaskManager.cpp
+    src/services/FocusTimer.h
     src/services/FocusTimer.cpp
+    src/services/StatisticsService.h
     src/services/StatisticsService.cpp
+    src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
 )
 
 target_link_libraries(PomodoroTodoTests PRIVATE
@@ -136,8 +157,11 @@ add_test(NAME PomodoroTodoTests COMMAND PomodoroTodoTests)
 add_executable(CountdownServiceTests
     tests/CountdownServiceTests.cpp
     src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
     src/models/CountdownModel.cpp
+    src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/CountdownService.h
     src/services/CountdownService.cpp
 )
 

@@ -9,6 +9,7 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include "../src/services/AppSettings.h"
 #include "../src/services/CategoryManager.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/ExportService.h"
@@ -370,6 +371,8 @@ private slots:
     void init();
     void cleanup();
 
+    void appSettingsDefaultsAndRoundTrip();
+    void appSettingsSameValueDoesNotEmit();
     void addTaskRejectsBlankTitle();
     void addTaskPersistsTrimmedTitleAndEmitsChange();
     void addTaskAcceptsIsoDateStringFromQml();
@@ -447,6 +450,48 @@ void ServiceTests::cleanup()
     DatabaseManager::instance()->close();
     delete m_tempDir;
     m_tempDir = nullptr;
+}
+
+void ServiceTests::appSettingsDefaultsAndRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.lastMode(), 0);
+        QCOMPARE(settings.workMinutes(), 25);
+        QCOMPARE(settings.breakMinutes(), 5);
+        QCOMPARE(settings.soundEnabled(), true);
+
+        QSignalSpy modeSpy(&settings, &AppSettings::lastModeChanged);
+        QSignalSpy workSpy(&settings, &AppSettings::workMinutesChanged);
+        settings.setLastMode(1);
+        settings.setWorkMinutes(45);
+        settings.setBreakMinutes(10);
+        settings.setSoundEnabled(false);
+        QCOMPARE(modeSpy.count(), 1);
+        QCOMPARE(workSpy.count(), 1);
+    }
+
+    // 重新打开同一文件，验证写入的是持久化配置，不是对象内存缓存。
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.lastMode(), 1);
+    QCOMPARE(reloaded.workMinutes(), 45);
+    QCOMPARE(reloaded.breakMinutes(), 10);
+    QCOMPARE(reloaded.soundEnabled(), false);
+}
+
+void ServiceTests::appSettingsSameValueDoesNotEmit()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppSettings settings(dir.filePath(QStringLiteral("settings.ini")));
+
+    QSignalSpy modeSpy(&settings, &AppSettings::lastModeChanged);
+    settings.setLastMode(0);
+    QCOMPARE(modeSpy.count(), 0);
 }
 
 void ServiceTests::addTaskRejectsBlankTitle()

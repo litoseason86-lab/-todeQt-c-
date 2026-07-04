@@ -6,6 +6,7 @@
 #include <QUrl>
 
 #include "services/DatabaseManager.h"
+#include "services/AppSettings.h"
 #include "services/CategoryManager.h"
 #include "services/CountdownService.h"
 #include "services/ExportService.h"
@@ -44,6 +45,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("routineManager"), RoutineManager::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), AppSettings::instance());
 
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
