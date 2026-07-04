@@ -14,6 +14,15 @@ Item {
     property bool isSwitching: false
     property var countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
     property var appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
+    property var focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
+    readonly property string windowTitleText: root.focusTimerRef
+        ? root.windowTitleFor(root.focusTimerRef.hasActiveSession,
+                              root.focusTimerRef.phase,
+                              root.focusTimerRef.mode,
+                              root.focusTimerRef.isRunning,
+                              root.focusTimerRef.remainingSeconds,
+                              root.focusTimerRef.elapsedSeconds)
+        : "番茄Todo"
 
     function switchToView(viewName) {
         if (root.isSwitching) {
@@ -63,9 +72,36 @@ Item {
         }
     }
 
+    function formatMinuteTime(seconds) {
+        var safe = Math.max(0, Number(seconds || 0))
+        var minutes = Math.floor(safe / 60)
+        var secs = safe % 60
+        return (minutes < 10 ? "0" : "") + minutes + ":" + (secs < 10 ? "0" : "") + secs
+    }
+
+    function formatClockTime(seconds) {
+        var safe = Math.max(0, Number(seconds || 0))
+        var hours = Math.floor(safe / 3600)
+        var minutes = Math.floor((safe % 3600) / 60)
+        var secs = safe % 60
+        return (hours < 10 ? "0" : "") + hours + ":"
+                + (minutes < 10 ? "0" : "") + minutes + ":"
+                + (secs < 10 ? "0" : "") + secs
+    }
+
+    function windowTitleFor(hasActiveSession, phase, mode, isRunning, remainingSeconds, elapsedSeconds) {
+        // 与侧栏一样显式传入 timer 字段，避免函数内部动态读取导致 tick 不能刷新标题。
+        var active = hasActiveSession || phase !== 0
+        if (!active) {
+            return "番茄Todo"
+        }
+        var timeText = mode === 1 ? root.formatMinuteTime(remainingSeconds) : root.formatClockTime(elapsedSeconds)
+        return (isRunning ? "" : "⏸ ") + timeText + " · 番茄Todo"
+    }
+
     function startFocusForTask(taskId, taskTitle) {
         // 已有自由专注、番茄工作或休息阶段时，不启动第二个会话；直接带用户去专注页处理当前状态。
-        if (focusTimer.hasActiveSession || focusTimer.phase !== 0) {
+        if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
             root.switchToView("focus");
             return;
         }
@@ -77,7 +113,7 @@ Item {
             return;
         }
 
-        if (focusTimer.startFocus(taskId, taskTitle)) {
+        if (root.focusTimerRef.startFocus(taskId, taskTitle)) {
             if (root.appSettingsRef) {
                 root.appSettingsRef.lastMode = 0;
             }
@@ -95,7 +131,7 @@ Item {
             currentView: root.currentView
             categoryManagerRef: categoryManager
             exportServiceRef: exportService
-            focusTimerRef: focusTimer
+            focusTimerRef: root.focusTimerRef
 
             onItemClicked: function (viewName) {
                 root.switchToView(viewName);
@@ -155,7 +191,7 @@ Item {
                 FocusView {
                     id: focusView
                     objectName: "focusViewPage"
-                    timer: focusTimer
+                    timer: root.focusTimerRef
                     settings: root.appSettingsRef
 
                     onFocusEnded: {

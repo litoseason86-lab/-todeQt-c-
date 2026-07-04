@@ -199,4 +199,24 @@ TestCase {
 
         compare(appSettings.lastMode, 0)
     }
+
+    function test_windowTitleReflectsTimerState() {
+        compare(mainWindow.windowTitleText, "番茄Todo")
+
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.mode = 1
+        focusTimer.phase = 1
+        focusTimer.remainingSeconds = 932
+        compare(mainWindow.windowTitleText, "15:32 · 番茄Todo")
+
+        focusTimer.isRunning = false
+        compare(mainWindow.windowTitleText, "⏸ 15:32 · 番茄Todo")
+
+        focusTimer.mode = 0
+        focusTimer.phase = 0
+        focusTimer.elapsedSeconds = 1934
+        focusTimer.isRunning = true
+        compare(mainWindow.windowTitleText, "00:32:14 · 番茄Todo")
+    }
 }

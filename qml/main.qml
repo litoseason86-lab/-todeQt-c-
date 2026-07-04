@@ -11,10 +11,12 @@ ApplicationWindow {
     height: 768
     minimumWidth: 860
     minimumHeight: 620
-    title: "番茄Todo"
+    title: mainContent.windowTitleText
     color: Theme.surface
 
     MainWindow {
+        id: mainContent
+
         anchors.fill: parent
     }
 
