@@ -15,17 +15,24 @@ Item {
     property int pomoTaskId: -1
     property string pomoTaskTitle: ""
     property int justCompletedPhase: 0
+    property bool workCustomSelected: false
+    property bool breakCustomSelected: false
 
     signal focusEnded()
 
     state: root.computeState()
 
     Component.onCompleted: {
-        // 只恢复当前版本支持的预设值；非法或未来版本写入的值会被选择函数挡住，界面保持默认值。
         if (root.settings) {
             root.selectWorkMinutes(Number(root.settings.workMinutes))
             root.selectBreakMinutes(Number(root.settings.breakMinutes))
         }
+        // 恢复值不在预设里时，落到“自定义”chip；这样重启后不会把 90 分误显示成无选中状态。
+        root.workCustomSelected = root.selectedWorkMinutes !== 25
+                && root.selectedWorkMinutes !== 45
+                && root.selectedWorkMinutes !== 60
+        root.breakCustomSelected = root.selectedBreakMinutes !== 5
+                && root.selectedBreakMinutes !== 10
     }
 
     function safeSeconds(value) {
@@ -164,19 +171,22 @@ Item {
     }
 
     function selectWorkMinutes(minutes) {
-        if (minutes === 25 || minutes === 45 || minutes === 60) {
-            root.selectedWorkMinutes = minutes
+        var value = Math.round(Number(minutes))
+        // 范围而非白名单：自定义时长和预设都走同一入口，持久化逻辑才能保持一致。
+        if (value >= 5 && value <= 180) {
+            root.selectedWorkMinutes = value
             if (root.settings) {
-                root.settings.workMinutes = minutes
+                root.settings.workMinutes = value
             }
         }
     }
 
     function selectBreakMinutes(minutes) {
-        if (minutes === 5 || minutes === 10) {
-            root.selectedBreakMinutes = minutes
+        var value = Math.round(Number(minutes))
+        if (value >= 1 && value <= 60) {
+            root.selectedBreakMinutes = value
             if (root.settings) {
-                root.settings.breakMinutes = minutes
+                root.settings.breakMinutes = value
             }
         }
     }
@@ -547,7 +557,7 @@ Item {
             GridLayout {
                 Layout.alignment: Qt.AlignHCenter
                 visible: root.state === "pomoIdle"
-                columns: 4
+                columns: 5
                 columnSpacing: Theme.space8
                 rowSpacing: Theme.space12
 
@@ -572,11 +582,14 @@ Item {
                     objectName: "workPreset25"
                     text: "25 分"
                     backgroundObjectName: "workPreset25Background"
-                    checked: root.selectedWorkMinutes === 25
+                    checked: !root.workCustomSelected && root.selectedWorkMinutes === 25
 
                     ButtonGroup.group: workPresetGroup
 
-                    onClicked: root.selectWorkMinutes(25)
+                    onClicked: {
+                        root.workCustomSelected = false
+                        root.selectWorkMinutes(25)
+                    }
                 }
 
                 PresetButton {
@@ -584,11 +597,14 @@ Item {
                     objectName: "workPreset45"
                     text: "45 分"
                     backgroundObjectName: "workPreset45Background"
-                    checked: root.selectedWorkMinutes === 45
+                    checked: !root.workCustomSelected && root.selectedWorkMinutes === 45
 
                     ButtonGroup.group: workPresetGroup
 
-                    onClicked: root.selectWorkMinutes(45)
+                    onClicked: {
+                        root.workCustomSelected = false
+                        root.selectWorkMinutes(45)
+                    }
                 }
 
                 PresetButton {
@@ -596,11 +612,26 @@ Item {
                     objectName: "workPreset60"
                     text: "60 分"
                     backgroundObjectName: "workPreset60Background"
-                    checked: root.selectedWorkMinutes === 60
+                    checked: !root.workCustomSelected && root.selectedWorkMinutes === 60
 
                     ButtonGroup.group: workPresetGroup
 
-                    onClicked: root.selectWorkMinutes(60)
+                    onClicked: {
+                        root.workCustomSelected = false
+                        root.selectWorkMinutes(60)
+                    }
+                }
+
+                PresetButton {
+                    id: workPresetCustom
+                    objectName: "workPresetCustom"
+                    text: root.workCustomSelected ? root.selectedWorkMinutes + " 分" : "自定义"
+                    backgroundObjectName: "workPresetCustomBackground"
+                    checked: root.workCustomSelected
+
+                    ButtonGroup.group: workPresetGroup
+
+                    onClicked: root.workCustomSelected = true
                 }
 
                 ButtonGroup {
@@ -624,11 +655,14 @@ Item {
                     objectName: "breakPreset5"
                     text: "5 分"
                     backgroundObjectName: "breakPreset5Background"
-                    checked: root.selectedBreakMinutes === 5
+                    checked: !root.breakCustomSelected && root.selectedBreakMinutes === 5
 
                     ButtonGroup.group: breakPresetGroup
 
-                    onClicked: root.selectBreakMinutes(5)
+                    onClicked: {
+                        root.breakCustomSelected = false
+                        root.selectBreakMinutes(5)
+                    }
                 }
 
                 PresetButton {
@@ -636,16 +670,81 @@ Item {
                     objectName: "breakPreset10"
                     text: "10 分"
                     backgroundObjectName: "breakPreset10Background"
-                    checked: root.selectedBreakMinutes === 10
+                    checked: !root.breakCustomSelected && root.selectedBreakMinutes === 10
 
                     ButtonGroup.group: breakPresetGroup
 
-                    onClicked: root.selectBreakMinutes(10)
+                    onClicked: {
+                        root.breakCustomSelected = false
+                        root.selectBreakMinutes(10)
+                    }
+                }
+
+                PresetButton {
+                    id: breakPresetCustom
+                    objectName: "breakPresetCustom"
+                    text: root.breakCustomSelected ? root.selectedBreakMinutes + " 分" : "自定义"
+                    backgroundObjectName: "breakPresetCustomBackground"
+                    checked: root.breakCustomSelected
+
+                    ButtonGroup.group: breakPresetGroup
+
+                    onClicked: root.breakCustomSelected = true
                 }
 
                 Item {
                     Layout.preferredWidth: 104
                     Layout.preferredHeight: 42
+                }
+            }
+
+            RowLayout {
+                Layout.alignment: Qt.AlignHCenter
+                visible: root.state === "pomoIdle" && (root.workCustomSelected || root.breakCustomSelected)
+                spacing: Theme.space16
+
+                RowLayout {
+                    visible: root.workCustomSelected
+                    spacing: Theme.space4
+
+                    Text {
+                        text: "专注(分)"
+                        textFormat: Text.PlainText
+                        color: Theme.inkSoft
+                        font.pixelSize: Theme.fontMd
+                    }
+
+                    SpinBox {
+                        id: workCustomSpinBox
+                        objectName: "workCustomSpinBox"
+                        from: 5
+                        to: 180
+                        editable: true
+                        value: root.selectedWorkMinutes
+                        onValueModified: root.selectWorkMinutes(value)
+                    }
+                }
+
+                RowLayout {
+                    visible: root.breakCustomSelected
+                    spacing: Theme.space4
+
+                    Text {
+                        text: "休息(分)"
+                        textFormat: Text.PlainText
+                        color: Theme.inkSoft
+                        font.pixelSize: Theme.fontMd
+                    }
+
+                    SpinBox {
+                        id: breakCustomSpinBox
+                        objectName: "breakCustomSpinBox"
+                        from: 1
+                        to: 60
+                        editable: true
+                        value: root.selectedBreakMinutes
+                        onValueModified: root.selectBreakMinutes(value)
+                    }
                 }
             }
 

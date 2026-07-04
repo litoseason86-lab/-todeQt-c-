@@ -101,6 +101,15 @@ TestCase {
         property bool soundEnabled: true
     }
 
+    QtObject {
+        id: customDurationSettingsMock
+
+        property int lastMode: 1
+        property int workMinutes: 90
+        property int breakMinutes: 5
+        property bool soundEnabled: true
+    }
+
     FocusView {
         id: view
         width: testCase.width
@@ -130,6 +139,8 @@ TestCase {
         appSettingsMock.workMinutes = 25
         appSettingsMock.breakMinutes = 5
         appSettingsMock.soundEnabled = true
+        view.workCustomSelected = false
+        view.breakCustomSelected = false
         wait(20)
     }
 
@@ -389,5 +400,64 @@ TestCase {
         verify(hint)
         compare(hint.text, "满 5 分钟自动完成任务 · 不足 3 分钟不计入记录")
         compare(view.state, "pomoIdle")
+    }
+
+    function test_selectMinutesAcceptsRangeAndRejectsOutOfBounds() {
+        view.toPomodoroTab(true)
+
+        view.selectWorkMinutes(90)
+        compare(view.selectedWorkMinutes, 90)
+        compare(appSettingsMock.workMinutes, 90)
+
+        view.selectWorkMinutes(4)
+        compare(view.selectedWorkMinutes, 90)
+        view.selectWorkMinutes(181)
+        compare(view.selectedWorkMinutes, 90)
+
+        view.selectBreakMinutes(1)
+        compare(view.selectedBreakMinutes, 1)
+        view.selectBreakMinutes(0)
+        compare(view.selectedBreakMinutes, 1)
+        view.selectBreakMinutes(61)
+        compare(view.selectedBreakMinutes, 1)
+    }
+
+    function test_customChipAndSpinBoxBounds() {
+        view.toPomodoroTab(true)
+        view.workCustomSelected = true
+        view.breakCustomSelected = true
+        wait(20)
+
+        const workSpin = findChild(view, "workCustomSpinBox")
+        const breakSpin = findChild(view, "breakCustomSpinBox")
+        verify(workSpin)
+        verify(breakSpin)
+        compare(workSpin.from, 5)
+        compare(workSpin.to, 180)
+        compare(breakSpin.from, 1)
+        compare(breakSpin.to, 60)
+
+        const workChip = findChild(view, "workPresetCustom")
+        verify(workChip)
+        compare(workChip.checked, true)
+    }
+
+    function test_restoreCustomDurationSelectsCustomChip() {
+        var component = Qt.createComponent("../../qml/views/FocusView.qml")
+        compare(component.status, Component.Ready)
+
+        var restored = component.createObject(testCase, {
+            timer: focusTimer,
+            settings: customDurationSettingsMock
+        })
+        verify(restored)
+        compare(restored.selectedWorkMinutes, 90)
+        compare(restored.workCustomSelected, true)
+        compare(restored.breakCustomSelected, false)
+
+        const chip = findChild(restored, "workPresetCustom")
+        verify(chip)
+        compare(chip.text, "90 分")
+        restored.destroy()
     }
 }
