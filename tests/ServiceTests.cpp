@@ -429,6 +429,7 @@ private slots:
     void stopFocusUnderThreeMinutesDiscardsInvalidSession();
     void shortSessionEmitsSessionDiscarded();
     void validSessionDoesNotEmitSessionDiscarded();
+    void focusTimerExposesRuleConstants();
     void pomodoroWorkCompletionSavesSessionAndAutoCompletesTask();
     void pomodoroBreakWritesNoSessionAndCompletes();
     void pomodoroWorkStoppedUnderMinimumIsDiscarded();
@@ -2169,6 +2170,13 @@ void ServiceTests::validSessionDoesNotEmitSessionDiscarded()
     QVERIFY(timer->stopFocus());
 
     QCOMPARE(discardSpy.count(), 0);
+}
+
+void ServiceTests::focusTimerExposesRuleConstants()
+{
+    FocusTimer* timer = FocusTimer::instance();
+    QCOMPARE(timer->minimumValidMinutes(), 3);
+    QCOMPARE(timer->autoCompleteMinutes(), 5);
 }
 
 void ServiceTests::pomodoroWorkCompletionSavesSessionAndAutoCompletesTask()

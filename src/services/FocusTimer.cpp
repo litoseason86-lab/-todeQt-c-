@@ -298,6 +298,17 @@ int FocusTimer::remainingSeconds() const
     return qMax(0, m_targetSeconds - m_elapsedSeconds);
 }
 
+int FocusTimer::minimumValidMinutes() const
+{
+    // 界面规则文案的数据源；换算自秒级常量，规则改动时文案自动跟随。
+    return FocusSessionRules::kMinimumValidDurationSeconds / 60;
+}
+
+int FocusTimer::autoCompleteMinutes() const
+{
+    return FocusSessionRules::kAutoCompleteTaskDurationSeconds / 60;
+}
+
 bool FocusTimer::hasActiveTimer() const
 {
     return m_sessionId != -1 || m_isRunning || m_phase != NoPhase;

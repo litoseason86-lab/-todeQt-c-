@@ -17,6 +17,8 @@ class FocusTimer : public QObject
     Q_PROPERTY(int phase READ phase NOTIFY phaseChanged)
     Q_PROPERTY(int targetSeconds READ targetSeconds NOTIFY phaseChanged)
     Q_PROPERTY(int remainingSeconds READ remainingSeconds NOTIFY tick)
+    Q_PROPERTY(int minimumValidMinutes READ minimumValidMinutes CONSTANT)
+    Q_PROPERTY(int autoCompleteMinutes READ autoCompleteMinutes CONSTANT)
 
 public:
     enum TimerMode {
@@ -51,6 +53,8 @@ public:
     int phase() const;
     int targetSeconds() const;
     int remainingSeconds() const;
+    int minimumValidMinutes() const;
+    int autoCompleteMinutes() const;
 
 signals:
     void tick();
