@@ -461,11 +461,7 @@ Item {
                                     }
 
                                     onStartFocusClicked: function(id, title) {
-                                        if (focusTimer.startFocus(id, title)) {
-                                            root.startFocus(id, title)
-                                        } else {
-                                            root.loadError = "专注启动失败，请重试"
-                                        }
+                                        root.startFocus(id, title)
                                     }
 
                                     onDeleteClicked: function(id, title) {

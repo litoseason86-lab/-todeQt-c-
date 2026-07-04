@@ -13,6 +13,7 @@ Item {
     property string queuedView: ""
     property bool isSwitching: false
     property var countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
+    property var appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
 
     function switchToView(viewName) {
         if (root.isSwitching) {
@@ -59,6 +60,28 @@ Item {
         case "today":
         default:
             return 0;
+        }
+    }
+
+    function startFocusForTask(taskId, taskTitle) {
+        // 已有自由专注、番茄工作或休息阶段时，不启动第二个会话；直接带用户去专注页处理当前状态。
+        if (focusTimer.hasActiveSession || focusTimer.phase !== 0) {
+            root.switchToView("focus");
+            return;
+        }
+
+        // 上次使用番茄：进入待机并预载任务，不能偷跑计时，用户还需要机会调整时长。
+        if (root.appSettingsRef && root.appSettingsRef.lastMode === 1) {
+            focusView.enterPomodoroWithTask(taskId, taskTitle);
+            root.switchToView("focus");
+            return;
+        }
+
+        if (focusTimer.startFocus(taskId, taskTitle)) {
+            if (root.appSettingsRef) {
+                root.appSettingsRef.lastMode = 0;
+            }
+            root.switchToView("focus");
         }
     }
 
@@ -122,14 +145,17 @@ Item {
                     countdownServiceRef: root.countdownServiceRef
 
                     onStartFocus: function (taskId, taskTitle) {
-                        root.switchToView("focus");
+                        root.startFocusForTask(taskId, taskTitle);
                     }
 
                     onCountdownRequested: root.switchToView("countdown")
                 }
 
                 FocusView {
+                    id: focusView
+                    objectName: "focusViewPage"
                     timer: focusTimer
+                    settings: root.appSettingsRef
 
                     onFocusEnded: {
                         root.switchToView("today");
@@ -140,7 +166,7 @@ Item {
                     categoryManagerRef: categoryManager
 
                     onStartFocus: function (taskId, taskTitle) {
-                        root.switchToView("focus");
+                        root.startFocusForTask(taskId, taskTitle);
                     }
                 }
 
@@ -148,7 +174,7 @@ Item {
                     categoryManagerRef: categoryManager
 
                     onStartFocus: function (taskId, taskTitle) {
-                        root.switchToView("focus");
+                        root.startFocusForTask(taskId, taskTitle);
                     }
                 }
 
