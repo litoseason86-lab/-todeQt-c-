@@ -10,12 +10,24 @@ TestCase {
     width: 260
     height: 520
 
+    QtObject {
+        id: focusTimerMock
+
+        property bool isRunning: false
+        property bool hasActiveSession: false
+        property int mode: 0
+        property int phase: 0
+        property int remainingSeconds: 0
+        property int elapsedSeconds: 0
+    }
+
     Sidebar {
         id: sidebar
 
         width: 208
         height: 520
         currentView: "today"
+        focusTimerRef: focusTimerMock
     }
 
     function collectChildren(item, result) {
@@ -182,5 +194,43 @@ TestCase {
         compare(version.font.weight, Font.Normal);
         verify(Qt.colorEqual(version.color, Theme.inkMuted));
         compare(version.opacity, 0.7);
+    }
+
+    function test_focusStatusShowsPomodoroCountdown() {
+        focusTimerMock.hasActiveSession = true;
+        focusTimerMock.isRunning = true;
+        focusTimerMock.mode = 1;
+        focusTimerMock.phase = 1;
+        focusTimerMock.remainingSeconds = 932;
+        wait(20);
+
+        const status = findChild(sidebar, "sidebarStatus-专");
+        verify(status);
+        compare(status.text, "● 15:32");
+    }
+
+    function test_focusStatusShowsFreeElapsedAndPause() {
+        focusTimerMock.hasActiveSession = true;
+        focusTimerMock.isRunning = false;
+        focusTimerMock.mode = 0;
+        focusTimerMock.phase = 0;
+        focusTimerMock.elapsedSeconds = 1934;
+        wait(20);
+
+        const status = findChild(sidebar, "sidebarStatus-专");
+        verify(status);
+        compare(status.text, "⏸ 00:32:14");
+    }
+
+    function test_focusStatusEmptyWhenIdle() {
+        focusTimerMock.hasActiveSession = false;
+        focusTimerMock.isRunning = false;
+        focusTimerMock.mode = 0;
+        focusTimerMock.phase = 0;
+        wait(20);
+
+        const status = findChild(sidebar, "sidebarStatus-专");
+        verify(status);
+        compare(status.text, "");
     }
 }

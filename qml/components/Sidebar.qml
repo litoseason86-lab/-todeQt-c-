@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import QtQuick.Controls
 import ".."
 
 Rectangle {
@@ -36,10 +35,38 @@ Rectangle {
     property string currentView: "today"
     property var categoryManagerRef: null
     property var exportServiceRef: null
+    property var focusTimerRef: null
     signal itemClicked(string viewName)
     signal dailyRoutineRequested
     signal categoryManagementRequested
     signal dataExportRequested
+
+    function formatMinuteTime(seconds) {
+        var safe = Math.max(0, Number(seconds || 0))
+        var minutes = Math.floor(safe / 60)
+        var secs = safe % 60
+        return (minutes < 10 ? "0" : "") + minutes + ":" + (secs < 10 ? "0" : "") + secs
+    }
+
+    function formatClockTime(seconds) {
+        var safe = Math.max(0, Number(seconds || 0))
+        var hours = Math.floor(safe / 3600)
+        var minutes = Math.floor((safe % 3600) / 60)
+        var secs = safe % 60
+        return (hours < 10 ? "0" : "") + hours + ":"
+                + (minutes < 10 ? "0" : "") + minutes + ":"
+                + (secs < 10 ? "0" : "") + secs
+    }
+
+    function focusStatusFor(hasActiveSession, phase, mode, isRunning, remainingSeconds, elapsedSeconds) {
+        // 参数显式传入，保证 QML 绑定依赖具体 timer 属性；tick 才能驱动文本每秒刷新。
+        var active = hasActiveSession || phase !== 0
+        if (!active) {
+            return ""
+        }
+        var timeText = mode === 1 ? root.formatMinuteTime(remainingSeconds) : root.formatClockTime(elapsedSeconds)
+        return (isRunning ? "● " : "⏸ ") + timeText
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -73,6 +100,14 @@ Rectangle {
             text: "专注计时"
             marker: "专"
             isActive: root.currentView === "focus"
+            statusText: root.focusTimerRef
+                        ? root.focusStatusFor(root.focusTimerRef.hasActiveSession,
+                                              root.focusTimerRef.phase,
+                                              root.focusTimerRef.mode,
+                                              root.focusTimerRef.isRunning,
+                                              root.focusTimerRef.remainingSeconds,
+                                              root.focusTimerRef.elapsedSeconds)
+                        : ""
             onClicked: root.itemClicked("focus")
         }
 
@@ -153,6 +188,7 @@ Rectangle {
         property string text: ""
         property string marker: ""
         property bool isActive: false
+        property string statusText: ""
         // 显式状态能抵消 MouseArea 和 HoverHandler 在不同设备上的悬停事件差异。
         property bool pointerInside: false
         readonly property bool visualHovered: item.enabled && item.pointerInside
@@ -245,6 +281,14 @@ Rectangle {
                 font.weight: item.isActive ? Font.Medium : Font.Normal
                 color: item.isActive ? Theme.ink : Theme.inkSoft
                 elide: Text.ElideRight
+            }
+
+            Text {
+                objectName: "sidebarStatus-" + item.marker
+                text: item.statusText
+                font.pixelSize: Theme.fontSm
+                font.weight: Font.Medium
+                color: Theme.accent
             }
         }
 

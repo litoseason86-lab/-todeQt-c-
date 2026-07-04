@@ -95,6 +95,7 @@ Item {
             currentView: root.currentView
             categoryManagerRef: categoryManager
             exportServiceRef: exportService
+            focusTimerRef: focusTimer
 
             onItemClicked: function (viewName) {
                 root.switchToView(viewName);
