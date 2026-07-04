@@ -129,6 +129,8 @@ Item {
                 }
 
                 FocusView {
+                    timer: focusTimer
+
                     onFocusEnded: {
                         root.switchToView("today");
                     }

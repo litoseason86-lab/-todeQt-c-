@@ -1,5 +1,6 @@
 import QtQuick
 import QtTest
+import "../../qml"
 import "../../qml/views"
 
 TestCase {
@@ -62,6 +63,7 @@ TestCase {
             phase = 1
             targetSeconds = workSeconds
             remainingSeconds = workSeconds
+            currentTaskId = taskId
             currentTaskTitle = title
             return true
         }
@@ -73,6 +75,8 @@ TestCase {
             phase = 2
             targetSeconds = breakSeconds
             remainingSeconds = breakSeconds
+            currentTaskId = -1
+            currentTaskTitle = ""
             return true
         }
     }
@@ -99,6 +103,8 @@ TestCase {
         focusTimer.startPomodoroWorkSeconds = 0
         focusTimer.stopFocusCalls = 0
         view.toPomodoroTab(false)
+        view.selectWorkMinutes(25)
+        view.selectBreakMinutes(5)
         wait(20)
     }
 
@@ -129,6 +135,57 @@ TestCase {
         compare(view.state, "pomoWork")
     }
 
+    function test_presetButtonsUseWarmSelectedColor() {
+        view.toPomodoroTab(true)
+        wait(20)
+
+        const workBackground = findChild(view, "workPreset25Background")
+        const breakBackground = findChild(view, "breakPreset5Background")
+        verify(workBackground)
+        verify(breakBackground)
+        verify(Qt.colorEqual(workBackground.color, Theme.accent))
+        verify(Qt.colorEqual(breakBackground.color, Theme.accent))
+    }
+
+    function test_startButtonDisabledWithoutTask() {
+        focusTimer.currentTaskId = -1
+        focusTimer.currentTaskTitle = ""
+        view.toPomodoroTab(true)
+        wait(20)
+
+        const startButton = findChild(view, "pomodoroStartButton")
+        verify(startButton)
+        compare(startButton.enabled, false)
+    }
+
+    function test_breakDoneCanRestartWithCachedTask() {
+        focusTimer.hasActiveSession = true
+        view.toPomodoroTab(true)
+        view.startPomodoro()
+        wait(20)
+
+        focusTimer.phaseCompleted(1)
+        wait(20)
+        compare(view.state, "workDone")
+
+        view.startBreak()
+        focusTimer.stopFocus()
+        focusTimer.phaseCompleted(2)
+        wait(20)
+
+        const startButton = findChild(view, "pomodoroStartButton")
+        verify(startButton)
+        compare(view.state, "breakDone")
+        compare(startButton.enabled, true)
+
+        focusTimer.startPomodoroWorkTaskId = 0
+        view.startPomodoro()
+        wait(20)
+
+        compare(focusTimer.startPomodoroWorkTaskId, 7)
+        compare(view.state, "pomoWork")
+    }
+
     function test_endPomodoroStopsBreakWithoutActiveSession() {
         view.toPomodoroTab(true)
         focusTimer.mode = 1
@@ -141,5 +198,105 @@ TestCase {
         view.endPomodoro()
 
         compare(focusTimer.stopFocusCalls, 1)
+    }
+
+    function test_freeModeHasNoFocusRing() {
+        // 环的 visible 绑定的是 root.pomodoroModeSelected，但 Item.visible 是级联读取
+        // 祖先链的——qmltestrunner 里顶层测试窗口自身的 OS 级可见性并不可靠，直接断言
+        // ring.visible 会被这个和本组件无关的因素污染。改成断言驱动它的源头布尔值。
+        view.toPomodoroTab(false)
+        wait(20)
+
+        const ring = findChild(view, "focusRing")
+        verify(ring)
+        compare(view.pomodoroModeSelected, false)
+    }
+
+    function test_pomoIdleShowsRingPreview() {
+        view.toPomodoroTab(true)
+        wait(20)
+
+        compare(view.pomodoroModeSelected, true)
+        const ring = findChild(view, "focusRing")
+        verify(ring)
+        compare(ring.showPreview, true)
+    }
+
+    function test_pomoWorkRingShowsAccentAndProgress() {
+        focusTimer.hasActiveSession = true
+        view.toPomodoroTab(true)
+        view.startPomodoro()
+        focusTimer.remainingSeconds = 932 // 15:32 剩余，对应 25 分钟目标的 62.1%
+        wait(20)
+
+        const ring = findChild(view, "focusRing")
+        verify(ring)
+        compare(ring.showPreview, false)
+        compare(ring.dimmed, false)
+        verify(Qt.colorEqual(ring.ringColor, Theme.accent))
+        verify(Math.abs(ring.progress - (932 / 1500)) < 0.001)
+    }
+
+    function test_pausedDimsRingAndLabelsGlyph() {
+        focusTimer.hasActiveSession = true
+        view.toPomodoroTab(true)
+        view.startPomodoro()
+        focusTimer.isRunning = false
+        wait(20)
+
+        const ring = findChild(view, "focusRing")
+        verify(ring)
+        compare(ring.dimmed, true)
+
+        const stageText = findChild(view, "phaseStageText")
+        verify(stageText)
+        verify(stageText.text.indexOf("⏸") !== -1)
+    }
+
+    function test_breakRingUsesBreakAccent() {
+        view.toPomodoroTab(true)
+        view.startBreak()
+        wait(20)
+
+        const ring = findChild(view, "focusRing")
+        verify(ring)
+        compare(ring.dimmed, false)
+        verify(Qt.colorEqual(ring.ringColor, Theme.focusBreakAccent))
+    }
+
+    function test_workDoneShowsClosedGreenRing() {
+        focusTimer.hasActiveSession = true
+        view.toPomodoroTab(true)
+        view.startPomodoro()
+        wait(20)
+
+        focusTimer.phaseCompleted(1)
+        wait(20)
+        compare(view.state, "workDone")
+
+        const ring = findChild(view, "focusRing")
+        verify(ring)
+        compare(ring.progress, 1)
+        verify(Qt.colorEqual(ring.ringColor, Theme.success))
+    }
+
+    function test_breakDoneShowsClosedGreenRing() {
+        focusTimer.hasActiveSession = true
+        view.toPomodoroTab(true)
+        view.startPomodoro()
+        wait(20)
+        focusTimer.phaseCompleted(1)
+        wait(20)
+
+        view.startBreak()
+        focusTimer.stopFocus()
+        focusTimer.phaseCompleted(2)
+        wait(20)
+        compare(view.state, "breakDone")
+
+        const ring = findChild(view, "focusRing")
+        verify(ring)
+        compare(ring.progress, 1)
+        verify(Qt.colorEqual(ring.ringColor, Theme.success))
     }
 }

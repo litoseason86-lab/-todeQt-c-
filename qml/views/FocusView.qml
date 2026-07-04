@@ -6,9 +6,7 @@ import ".."
 Item {
     id: root
 
-    signal focusEnded()
-
-    property var timer: typeof focusTimer !== "undefined" ? focusTimer : null
+    property var timer: null
     property string errorText: ""
     property bool pomodoroModeSelected: false
     property int selectedWorkMinutes: 25
@@ -16,6 +14,8 @@ Item {
     property int pomoTaskId: -1
     property string pomoTaskTitle: ""
     property int justCompletedPhase: 0
+
+    signal focusEnded()
 
     state: root.computeState()
 
@@ -153,6 +153,13 @@ Item {
         }
     }
 
+    function canStartPomodoro() {
+        if (!root.timer) {
+            return false
+        }
+        return root.pomoTaskId > 0 || root.timerNumber("currentTaskId", -1) > 0
+    }
+
     function startPomodoro() {
         root.justCompletedPhase = 0
         var taskId = root.pomoTaskId > 0 ? root.pomoTaskId : (root.timer ? root.timer.currentTaskId : -1)
@@ -229,14 +236,114 @@ Item {
         State { name: "breakDone" }
     ]
 
+    component PresetButton: Button {
+        id: presetButton
+
+        property string backgroundObjectName: ""
+
+        checkable: true
+        implicitWidth: 104
+        implicitHeight: 42
+
+        background: Rectangle {
+            objectName: presetButton.backgroundObjectName
+            color: presetButton.checked ? Theme.accent : (presetButton.hovered ? Theme.surface : Theme.surfaceRaised)
+            border.color: presetButton.checked ? Theme.accentStrong : Theme.border
+            border.width: 1
+            radius: Theme.radiusMd
+        }
+
+        contentItem: Text {
+            text: presetButton.text
+            textFormat: Text.PlainText
+            color: presetButton.checked ? Theme.surface : Theme.ink
+            font.pixelSize: Theme.fontMd
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    // 环形进度盘：番茄模式下的可视化核心。只负责画“轨道 + 剩余弧”，
+    // 进度/颜色/暂停/预览态全部由外部属性驱动，自身不读取 root 状态——
+    // 保持可复用、可测试（测试直接断言这几个绑定属性，不做像素级检查）。
+    component FocusRing: Canvas {
+        id: ring
+
+        property real progress: 1.0       // 剩余时间占比：1=刚开始/已合拢，0=时间耗尽
+        property color ringColor: Theme.accent
+        property bool showPreview: false  // 待机态：只画一圈虚线预览，不画进度弧
+        property bool dimmed: false       // 暂停态：整体降低不透明度，转由灰色轨道提示
+        readonly property real strokeWidth: 16
+
+        opacity: dimmed ? 0.38 : 1
+        antialiasing: true
+
+        Behavior on opacity {
+            NumberAnimation { duration: 150 }
+        }
+
+        onProgressChanged: requestPaint()
+        onRingColorChanged: requestPaint()
+        onShowPreviewChanged: requestPaint()
+        onWidthChanged: requestPaint()
+        onHeightChanged: requestPaint()
+
+        onPaint: {
+            var ctx = getContext("2d")
+            ctx.clearRect(0, 0, width, height)
+
+            var centerX = width / 2
+            var centerY = height / 2
+            var radius = Math.max(0, Math.min(width, height) / 2 - ring.strokeWidth / 2 - 2)
+            ctx.lineCap = "round"
+
+            if (ring.showPreview) {
+                ctx.beginPath()
+                ctx.setLineDash([2, 9])
+                ctx.lineWidth = ring.strokeWidth * 0.75
+                ctx.strokeStyle = Theme.border
+                ctx.arc(centerX, centerY, radius, 0, Math.PI * 2, false)
+                ctx.stroke()
+                return
+            }
+
+            // 底色轨道：完整一圈，衬出前景弧的长度对比。
+            ctx.beginPath()
+            ctx.setLineDash([])
+            ctx.lineWidth = ring.strokeWidth
+            ctx.strokeStyle = Theme.borderSubtle
+            ctx.arc(centerX, centerY, radius, 0, Math.PI * 2, false)
+            ctx.stroke()
+
+            // 进度弧从正上方（-90°）顺时针画出“剩余”部分——消退式核心视觉，
+            // progress 越小画出的弧越短，直到耗尽时完全消失。
+            var clamped = Math.max(0, Math.min(1, ring.progress))
+            if (clamped <= 0) {
+                return
+            }
+            var start = -Math.PI / 2
+            var end = start + clamped * Math.PI * 2
+            ctx.beginPath()
+            ctx.lineWidth = ring.strokeWidth
+            ctx.strokeStyle = ring.ringColor
+            ctx.arc(centerX, centerY, radius, start, end, false)
+            ctx.stroke()
+        }
+    }
+
     Rectangle {
         anchors.fill: parent
         color: Theme.surfaceSunken
 
         ColumnLayout {
-            anchors.centerIn: parent
-            width: Math.min(parent.width - 64, 500)
-            spacing: Theme.space24
+            width: Math.min(parent.width - 96, 560)
+            spacing: root.state === "pomoIdle" ? Theme.space16 : Theme.space24
+
+            anchors {
+                horizontalCenter: parent.horizontalCenter
+                verticalCenter: parent.verticalCenter
+                verticalCenterOffset: root.state === "pomoIdle" ? -28 : 0
+            }
 
             RowLayout {
                 Layout.alignment: Qt.AlignHCenter
@@ -313,6 +420,7 @@ Item {
                 }
 
                 Text {
+                    objectName: "phaseStageText"
                     Layout.fillWidth: true
                     text: root.state === "free" ? "当前任务" : root.pomodoroStageText()
                     font.pixelSize: Theme.fontMd
@@ -350,71 +458,117 @@ Item {
 
             Text {
                 Layout.fillWidth: true
+                visible: root.state === "free"
                 text: root.primaryTimeText()
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontDisplay
                 font.bold: true
-                color: root.state === "workDone" || root.state === "breakDone" ? Theme.success : Theme.accent
+                color: Theme.accent
                 horizontalAlignment: Text.AlignHCenter
+            }
+
+            FocusRing {
+                id: focusRing
+                objectName: "focusRing"
+                Layout.alignment: Qt.AlignHCenter
+                visible: root.pomodoroModeSelected
+                implicitWidth: 252
+                implicitHeight: 252
+                showPreview: root.state === "pomoIdle"
+                dimmed: root.ringDimmed()
+                progress: root.ringProgressFraction()
+                ringColor: root.ringColorForState()
+
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    spacing: Theme.space4
+
+                    Text {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: root.primaryTimeText()
+                        textFormat: Text.PlainText
+                        font.pixelSize: root.state === "pomoIdle" ? 56 : Theme.fontDisplay
+                        font.bold: true
+                        color: root.primaryTimeColor()
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Text {
+                        Layout.alignment: Qt.AlignHCenter
+                        text: root.ringCaptionText()
+                        font.pixelSize: Theme.fontMd
+                        color: Theme.inkSoft
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
             }
 
             Text {
                 Layout.fillWidth: true
-                visible: root.state === "free" || root.state === "pomoWork" || root.state === "pomoBreak"
+                visible: root.state === "free"
                 text: root.runningText()
                 font.pixelSize: Theme.fontLg
                 color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter
             }
 
-            ColumnLayout {
-                Layout.fillWidth: true
+            GridLayout {
+                Layout.alignment: Qt.AlignHCenter
                 visible: root.state === "pomoIdle"
-                spacing: Theme.space16
+                columns: 4
+                columnSpacing: Theme.space8
+                rowSpacing: Theme.space12
 
                 ButtonGroup {
                     id: workPresetGroup
                     exclusive: true
                 }
 
-                RowLayout {
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: Theme.space8
+                Text {
+                    text: "专注"
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontMd
+                    horizontalAlignment: Text.AlignRight
+                    verticalAlignment: Text.AlignVCenter
 
-                    Text {
-                        text: "专注"
-                        color: Theme.inkSoft
-                        font.pixelSize: Theme.fontMd
-                    }
+                    Layout.preferredWidth: 44
+                }
 
-                    Button {
-                        id: workPreset25
-                        objectName: "workPreset25"
-                        text: "25 分"
-                        checkable: true
-                        checked: root.selectedWorkMinutes === 25
-                        ButtonGroup.group: workPresetGroup
-                        onClicked: root.selectWorkMinutes(25)
-                    }
+                PresetButton {
+                    id: workPreset25
+                    objectName: "workPreset25"
+                    text: "25 分"
+                    backgroundObjectName: "workPreset25Background"
+                    checked: root.selectedWorkMinutes === 25
 
-                    Button {
-                        id: workPreset45
-                        objectName: "workPreset45"
-                        text: "45 分"
-                        checkable: true
-                        checked: root.selectedWorkMinutes === 45
-                        ButtonGroup.group: workPresetGroup
-                        onClicked: root.selectWorkMinutes(45)
-                    }
+                    ButtonGroup.group: workPresetGroup
 
-                    Button {
-                        id: workPreset60
-                        objectName: "workPreset60"
-                        text: "60 分"
-                        checkable: true
-                        checked: root.selectedWorkMinutes === 60
-                        ButtonGroup.group: workPresetGroup
-                        onClicked: root.selectWorkMinutes(60)
-                    }
+                    onClicked: root.selectWorkMinutes(25)
+                }
+
+                PresetButton {
+                    id: workPreset45
+                    objectName: "workPreset45"
+                    text: "45 分"
+                    backgroundObjectName: "workPreset45Background"
+                    checked: root.selectedWorkMinutes === 45
+
+                    ButtonGroup.group: workPresetGroup
+
+                    onClicked: root.selectWorkMinutes(45)
+                }
+
+                PresetButton {
+                    id: workPreset60
+                    objectName: "workPreset60"
+                    text: "60 分"
+                    backgroundObjectName: "workPreset60Background"
+                    checked: root.selectedWorkMinutes === 60
+
+                    ButtonGroup.group: workPresetGroup
+
+                    onClicked: root.selectWorkMinutes(60)
                 }
 
                 ButtonGroup {
@@ -422,35 +576,44 @@ Item {
                     exclusive: true
                 }
 
-                RowLayout {
-                    Layout.alignment: Qt.AlignHCenter
-                    spacing: Theme.space8
+                Text {
+                    text: "休息"
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontMd
+                    horizontalAlignment: Text.AlignRight
+                    verticalAlignment: Text.AlignVCenter
 
-                    Text {
-                        text: "休息"
-                        color: Theme.inkSoft
-                        font.pixelSize: Theme.fontMd
-                    }
+                    Layout.preferredWidth: 44
+                }
 
-                    Button {
-                        id: breakPreset5
-                        objectName: "breakPreset5"
-                        text: "5 分"
-                        checkable: true
-                        checked: root.selectedBreakMinutes === 5
-                        ButtonGroup.group: breakPresetGroup
-                        onClicked: root.selectBreakMinutes(5)
-                    }
+                PresetButton {
+                    id: breakPreset5
+                    objectName: "breakPreset5"
+                    text: "5 分"
+                    backgroundObjectName: "breakPreset5Background"
+                    checked: root.selectedBreakMinutes === 5
 
-                    Button {
-                        id: breakPreset10
-                        objectName: "breakPreset10"
-                        text: "10 分"
-                        checkable: true
-                        checked: root.selectedBreakMinutes === 10
-                        ButtonGroup.group: breakPresetGroup
-                        onClicked: root.selectBreakMinutes(10)
-                    }
+                    ButtonGroup.group: breakPresetGroup
+
+                    onClicked: root.selectBreakMinutes(5)
+                }
+
+                PresetButton {
+                    id: breakPreset10
+                    objectName: "breakPreset10"
+                    text: "10 分"
+                    backgroundObjectName: "breakPreset10Background"
+                    checked: root.selectedBreakMinutes === 10
+
+                    ButtonGroup.group: breakPresetGroup
+
+                    onClicked: root.selectBreakMinutes(10)
+                }
+
+                Item {
+                    Layout.preferredWidth: 104
+                    Layout.preferredHeight: 42
                 }
             }
 
@@ -528,18 +691,19 @@ Item {
                     objectName: "pomodoroStartButton"
                     visible: root.state === "pomoIdle" || root.state === "breakDone"
                     text: root.state === "breakDone" ? "开始专注" : "开始专注"
+                    enabled: root.canStartPomodoro()
                     implicitWidth: 112
                     implicitHeight: 40
                     onClicked: root.startPomodoro()
 
                     background: Rectangle {
-                        color: Theme.accent
+                        color: pomodoroStartButton.enabled ? Theme.accent : Theme.border
                         radius: Theme.radiusMd
                     }
 
                     contentItem: Text {
                         text: pomodoroStartButton.text
-                        color: Theme.surface
+                        color: pomodoroStartButton.enabled ? Theme.surface : Theme.inkMuted
                         font.pixelSize: Theme.fontLg
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -594,11 +758,13 @@ Item {
     }
 
     function pomodoroStageText() {
+        // 暂停态直接把 ⏸ 拼进文案里：环本身也会降透明度转灰，
+        // 两条线索一起给，不用点开按钮读文字也能看出“停了”。
         if (root.state === "pomoWork") {
-            return "专注中"
+            return root.timerBool("isRunning") ? "专注中" : "⏸ 专注已暂停"
         }
         if (root.state === "pomoBreak") {
-            return "休息中"
+            return root.timerBool("isRunning") ? "休息中" : "⏸ 休息已暂停"
         }
         if (root.state === "workDone") {
             return "专注完成"
@@ -623,14 +789,71 @@ Item {
     }
 
     function runningText() {
+        // 番茄模式的运行/暂停提示已经并入 pomodoroStageText()，
+        // 这里只服务自由模式（自由模式没有环，仍需要这行文字）。
         if (root.state === "free") {
             return root.timerBool("isRunning") ? "专注进行中" : "专注已暂停"
         }
-        if (root.state === "pomoWork") {
-            return root.timerBool("isRunning") ? "专注中" : "专注已暂停"
+        return ""
+    }
+
+    function ringDimmed() {
+        // 暂停只会发生在番茄的专注/休息进行阶段；完成态和待机态谈不上“暂停”。
+        return (root.state === "pomoWork" || root.state === "pomoBreak") && !root.timerBool("isRunning")
+    }
+
+    function ringProgressFraction() {
+        if (root.state === "pomoWork" || root.state === "pomoBreak") {
+            var target = root.timerNumber("targetSeconds", 0)
+            if (target <= 0) {
+                return 0
+            }
+            return Math.max(0, Math.min(1, root.timerNumber("remainingSeconds", 0) / target))
+        }
+        // 完成态刻意合拢成满环，是效仿 Apple Watch 三环合拢的庆祝式收尾，
+        // 不是字面“消退到 0”——这是唯一打破消退语义的例外。
+        return 1
+    }
+
+    function ringColorForState() {
+        if (root.state === "workDone" || root.state === "breakDone") {
+            return Theme.success
         }
         if (root.state === "pomoBreak") {
-            return root.timerBool("isRunning") ? "休息中" : "休息已暂停"
+            return Theme.focusBreakAccent
+        }
+        return Theme.accent
+    }
+
+    function primaryTimeColor() {
+        if (root.state === "workDone" || root.state === "breakDone") {
+            return Theme.success
+        }
+        if (root.ringDimmed()) {
+            return Theme.inkMuted
+        }
+        if (root.state === "pomoBreak") {
+            return Theme.focusBreakAccent
+        }
+        return Theme.accent
+    }
+
+    function ringCaptionText() {
+        var targetMinutes = Math.round(root.timerNumber("targetSeconds", 0) / 60)
+        if (root.state === "pomoIdle") {
+            return "专注 " + root.selectedWorkMinutes + " 分 · 休息 " + root.selectedBreakMinutes + " 分"
+        }
+        if (root.state === "pomoWork") {
+            return (root.ringDimmed() ? "已暂停 · 共 " : "剩余 · 共 ") + targetMinutes + " 分"
+        }
+        if (root.state === "pomoBreak") {
+            return (root.ringDimmed() ? "已暂停 · 共 " : "休息 · 共 ") + targetMinutes + " 分"
+        }
+        if (root.state === "workDone") {
+            return "这一颗番茄已完成"
+        }
+        if (root.state === "breakDone") {
+            return "休息结束，可以继续专注了"
         }
         return ""
     }

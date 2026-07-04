@@ -66,4 +66,9 @@ QtObject {
     readonly property var chartColors: [
         "#d4a574", "#8b7355", "#c46f5f", "#9aa66b", "#6f91a6", "#b58aa0"
     ]
+
+    // —— 专注页休息态强调色 ——
+    // 直接复用 chartColors 的第 4 色（苔绿），不新增色相；语义是“休息强调色”，
+    // 和图表配色场景无关，只是恰好复用同一个色值，避免专注页里出现裸索引 [3]。
+    readonly property color focusBreakAccent: chartColors[3]
 }
