@@ -99,9 +99,14 @@ Item {
         return (isRunning ? "" : "⏸ ") + timeText + " · 番茄Todo"
     }
 
+    function showToast(message) {
+        globalToast.show(message)
+    }
+
     function startFocusForTask(taskId, taskTitle) {
         // 已有自由专注、番茄工作或休息阶段时，不启动第二个会话；直接带用户去专注页处理当前状态。
         if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
+            root.showToast("已有专注进行中");
             root.switchToView("focus");
             return;
         }
@@ -254,6 +259,24 @@ Item {
                     script: root.finishViewSwitch()
                 }
             }
+        }
+    }
+
+    Toast {
+        id: globalToast
+
+        z: 100
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: Theme.space32
+    }
+
+    Connections {
+        target: root.focusTimerRef
+        ignoreUnknownSignals: true
+
+        function onSessionDiscarded(duration) {
+            root.showToast("本次专注不足 3 分钟，未计入记录")
         }
     }
 

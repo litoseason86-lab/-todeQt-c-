@@ -39,6 +39,7 @@ TestCase {
 
         signal focusCompleted(int duration)
         signal phaseCompleted(int phase)
+        signal sessionDiscarded(int duration)
 
         function startFocus(id, title) {
             startFocusCalls += 1
@@ -218,5 +219,46 @@ TestCase {
         focusTimer.elapsedSeconds = 1934
         focusTimer.isRunning = true
         compare(mainWindow.windowTitleText, "00:32:14 · 番茄Todo")
+    }
+
+    function test_toastShowsAndAutoHides() {
+        var toast = findChild(mainWindow, "globalToast")
+        verify(toast)
+        toast.displayDurationMs = 60
+
+        mainWindow.showToast("测试提示")
+        compare(toast.shown, true)
+        var label = findChild(mainWindow, "toastText")
+        verify(label)
+        compare(label.text, "测试提示")
+
+        tryCompare(toast, "shown", false, 2000)
+        toast.displayDurationMs = 3000
+    }
+
+    function test_sessionDiscardedShowsToast() {
+        var toast = findChild(mainWindow, "globalToast")
+        verify(toast)
+
+        focusTimer.sessionDiscarded(60)
+        wait(20)
+
+        compare(toast.shown, true)
+        var label = findChild(mainWindow, "toastText")
+        compare(label.text, "本次专注不足 3 分钟，未计入记录")
+    }
+
+    function test_conflictShowsToast() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+
+        mainWindow.startFocusForTask(11, "第二个任务")
+        wait(20)
+
+        var toast = findChild(mainWindow, "globalToast")
+        verify(toast)
+        compare(toast.shown, true)
+        var label = findChild(mainWindow, "toastText")
+        compare(label.text, "已有专注进行中")
     }
 }
