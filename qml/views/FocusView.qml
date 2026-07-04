@@ -7,6 +7,7 @@ Item {
     id: root
 
     property var timer: null
+    property var settings: null
     property string errorText: ""
     property bool pomodoroModeSelected: false
     property int selectedWorkMinutes: 25
@@ -18,6 +19,14 @@ Item {
     signal focusEnded()
 
     state: root.computeState()
+
+    Component.onCompleted: {
+        // 只恢复当前版本支持的预设值；非法或未来版本写入的值会被选择函数挡住，界面保持默认值。
+        if (root.settings) {
+            root.selectWorkMinutes(Number(root.settings.workMinutes))
+            root.selectBreakMinutes(Number(root.settings.breakMinutes))
+        }
+    }
 
     function safeSeconds(value) {
         // 计时显示只接受非负秒数，避免服务异常值污染 UI。
@@ -141,15 +150,34 @@ Item {
         }
     }
 
+    function enterPomodoroWithTask(taskId, title) {
+        // 任务列表一键直达番茄待机：复用 toPomodoroTab 的停止/清理逻辑，
+        // 再用显式传入的任务覆盖它从 timer 缓存的值，因为直达时 timer 里可能还没有任务。
+        root.toPomodoroTab(true)
+        var safeTitle = String(title || "")
+        if (taskId > 0) {
+            root.pomoTaskId = taskId
+        }
+        if (safeTitle.length > 0) {
+            root.pomoTaskTitle = safeTitle
+        }
+    }
+
     function selectWorkMinutes(minutes) {
         if (minutes === 25 || minutes === 45 || minutes === 60) {
             root.selectedWorkMinutes = minutes
+            if (root.settings) {
+                root.settings.workMinutes = minutes
+            }
         }
     }
 
     function selectBreakMinutes(minutes) {
         if (minutes === 5 || minutes === 10) {
             root.selectedBreakMinutes = minutes
+            if (root.settings) {
+                root.settings.breakMinutes = minutes
+            }
         }
     }
 
@@ -170,6 +198,10 @@ Item {
         }
         if (taskId > 0 && root.timer.startPomodoroWork(taskId, taskTitle, root.selectedWorkMinutes * 60)) {
             root.errorText = ""
+            // 只在真正启动番茄后记忆模式；单纯切到番茄页不改变用户偏好。
+            if (root.settings) {
+                root.settings.lastMode = 1
+            }
         } else {
             root.errorText = "番茄专注启动失败"
         }

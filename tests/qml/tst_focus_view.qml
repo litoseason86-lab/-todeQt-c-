@@ -81,11 +81,30 @@ TestCase {
         }
     }
 
+    QtObject {
+        id: appSettingsMock
+
+        property int lastMode: 0
+        property int workMinutes: 25
+        property int breakMinutes: 5
+        property bool soundEnabled: true
+    }
+
+    QtObject {
+        id: rememberedSettingsMock
+
+        property int lastMode: 1
+        property int workMinutes: 45
+        property int breakMinutes: 10
+        property bool soundEnabled: true
+    }
+
     FocusView {
         id: view
         width: testCase.width
         height: testCase.height
         timer: focusTimer
+        settings: appSettingsMock
     }
 
     function init() {
@@ -105,6 +124,10 @@ TestCase {
         view.toPomodoroTab(false)
         view.selectWorkMinutes(25)
         view.selectBreakMinutes(5)
+        appSettingsMock.lastMode = 0
+        appSettingsMock.workMinutes = 25
+        appSettingsMock.breakMinutes = 5
+        appSettingsMock.soundEnabled = true
         wait(20)
     }
 
@@ -298,5 +321,61 @@ TestCase {
         verify(ring)
         compare(ring.progress, 1)
         verify(Qt.colorEqual(ring.ringColor, Theme.success))
+    }
+
+    function test_selectPresetsWriteBackSettings() {
+        view.toPomodoroTab(true)
+        view.selectWorkMinutes(45)
+        view.selectBreakMinutes(10)
+
+        compare(appSettingsMock.workMinutes, 45)
+        compare(appSettingsMock.breakMinutes, 10)
+    }
+
+    function test_startPomodoroWritesLastMode() {
+        view.toPomodoroTab(true)
+        view.startPomodoro()
+        wait(20)
+
+        compare(view.state, "pomoWork")
+        compare(appSettingsMock.lastMode, 1)
+    }
+
+    function test_enterPomodoroWithTaskPreloadsIdle() {
+        view.enterPomodoroWithTask(9, "直达任务")
+        wait(20)
+
+        compare(view.state, "pomoIdle")
+        compare(view.pomodoroModeSelected, true)
+        compare(view.pomoTaskId, 9)
+        compare(view.pomoTaskTitle, "直达任务")
+        compare(view.canStartPomodoro(), true)
+    }
+
+    function test_enterPomodoroWithTaskStopsActiveFreeSession() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+
+        view.enterPomodoroWithTask(9, "直达任务")
+        wait(20)
+
+        // 复用 toPomodoroTab 的停止逻辑：进入直达前必须结束进行中的自由会话。
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(view.state, "pomoIdle")
+        compare(view.pomoTaskId, 9)
+    }
+
+    function test_restoreRememberedDurationsOnCreation() {
+        var component = Qt.createComponent("../../qml/views/FocusView.qml")
+        compare(component.status, Component.Ready)
+
+        var restored = component.createObject(testCase, {
+            timer: focusTimer,
+            settings: rememberedSettingsMock
+        })
+        verify(restored)
+        compare(restored.selectedWorkMinutes, 45)
+        compare(restored.selectedBreakMinutes, 10)
+        restored.destroy()
     }
 }
