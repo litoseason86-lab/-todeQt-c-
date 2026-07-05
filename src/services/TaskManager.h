@@ -21,6 +21,7 @@ public:
     // 完成、删除和查询任务后都会通过 tasksChanged 通知界面刷新。
     Q_INVOKABLE bool completeTask(int taskId);
     Q_INVOKABLE bool setTaskCompleted(int taskId, bool completed);
+    Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue);
     Q_INVOKABLE bool deleteTask(int taskId);
     // 日期查询给今日、本周和月度页面复用，返回值统一是 QML 能直接读取的列表。
     Q_INVOKABLE QVariantList getTodayTasks() const;

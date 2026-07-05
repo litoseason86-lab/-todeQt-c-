@@ -423,6 +423,8 @@ private slots:
     void deletingLegacyTextCategoryClearsTaskCategoryText();
     void taskManagerReturnsFullCategoryInfo();
     void legacyAddTaskWithTextCategoryRemainsCompatible();
+    void updateTaskChangesTitleCategoryAndDate();
+    void updateTaskRejectsBlankTitleAndInvalidId();
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
     void exportFocusSessionsAndExportAllWriteExpectedCsvFiles();
     void exportFocusSessionsIgnoresInvalidShortSessions();
@@ -1968,6 +1970,65 @@ void ServiceTests::legacyAddTaskWithTextCategoryRemainsCompatible()
 
     const QVariantMap nestedCategory = task.value(QStringLiteral("categoryData")).toMap();
     QCOMPARE(nestedCategory.value(QStringLiteral("name")).toString(), QStringLiteral("政治"));
+}
+
+void ServiceTests::updateTaskChangesTitleCategoryAndDate()
+{
+    TaskManager* manager = TaskManager::instance();
+    const QDate today = QDate::currentDate();
+    const int taskId = insertTaskRow(QStringLiteral("原标题"), today);
+    QVERIFY(taskId > 0);
+
+    const int categoryId = CategoryManager::instance()->addCategory(QStringLiteral("数学编辑"), QStringLiteral("#d4a574"));
+    QVERIFY(categoryId > 0);
+
+    QSignalSpy changedSpy(manager, &TaskManager::tasksChanged);
+    const QDate tomorrow = today.addDays(1);
+    QVERIFY(manager->updateTask(taskId,
+                                QStringLiteral("  新标题  "),
+                                categoryId,
+                                tomorrow.toString(Qt::ISODate)));
+    QCOMPARE(changedSpy.count(), 1);
+
+    const QVariantList todayTasks = manager->getTasksByDate(today);
+    QVERIFY(todayTasks.isEmpty());
+
+    const QVariantList tasks = manager->getTasksByDate(tomorrow);
+    QCOMPARE(tasks.size(), 1);
+    const QVariantMap task = tasks.first().toMap();
+    QCOMPARE(task.value(QStringLiteral("title")).toString(), QStringLiteral("新标题"));
+    QCOMPARE(task.value(QStringLiteral("categoryId")).toInt(), categoryId);
+    QCOMPARE(task.value(QStringLiteral("categoryText")).toString(), QStringLiteral("数学编辑"));
+}
+
+void ServiceTests::updateTaskRejectsBlankTitleAndInvalidId()
+{
+    TaskManager* manager = TaskManager::instance();
+    const int taskId = insertTaskRow(QStringLiteral("保持不变"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+
+    QSignalSpy changedSpy(manager, &TaskManager::tasksChanged);
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update task: title is empty after trimming");
+    QVERIFY(!manager->updateTask(taskId,
+                                 QStringLiteral("   "),
+                                 -1,
+                                 QDate::currentDate().toString(Qt::ISODate)));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update task: invalid task id -5");
+    QVERIFY(!manager->updateTask(-5,
+                                 QStringLiteral("有效标题"),
+                                 -1,
+                                 QDate::currentDate().toString(Qt::ISODate)));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update task: task not found 999999");
+    QVERIFY(!manager->updateTask(999999,
+                                 QStringLiteral("有效标题"),
+                                 -1,
+                                 QDate::currentDate().toString(Qt::ISODate)));
+    QCOMPARE(changedSpy.count(), 0);
+
+    const QVariantList tasks = manager->getTodayTasks();
+    QCOMPARE(tasks.size(), 1);
+    QCOMPARE(tasks.first().toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("保持不变"));
 }
 
 void ServiceTests::exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks()

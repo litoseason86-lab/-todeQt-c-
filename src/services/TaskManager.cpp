@@ -234,6 +234,66 @@ bool TaskManager::setTaskCompleted(int taskId, bool completed)
     return true;
 }
 
+bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue)
+{
+    if (!isValidTaskId(taskId)) {
+        qWarning() << "Failed to update task: invalid task id" << taskId;
+        return false;
+    }
+
+    const QString normalizedTitle = title.trimmed();
+    if (normalizedTitle.isEmpty()) {
+        qWarning() << "Failed to update task: title is empty after trimming";
+        return false;
+    }
+
+    const QDate date = normalizeDate(dateValue);
+    if (!date.isValid()) {
+        qWarning() << "Failed to update task: invalid date";
+        return false;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to update task: database is not open";
+        return false;
+    }
+
+    QString categoryName;
+    QVariant categoryIdValue;
+    if (categoryId > 0) {
+        QSqlQuery categoryQuery(db);
+        if (!bindCategoryTextFromId(categoryQuery, categoryId, &categoryName)) {
+            return false;
+        }
+        categoryIdValue = categoryId;
+    }
+
+    QSqlQuery query(db);
+    // category 文本仍要同步写入，保证旧导出和旧视图在 category_id 缺失时也能退回显示。
+    query.prepare(QStringLiteral(
+        "UPDATE tasks SET title = :title, category = :category, category_id = :categoryId, date = :date "
+        "WHERE id = :id"));
+    query.bindValue(QStringLiteral(":title"), normalizedTitle);
+    query.bindValue(QStringLiteral(":category"), categoryName);
+    query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
+    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":id"), taskId);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to update task:" << query.lastError().text();
+        return false;
+    }
+
+    if (query.numRowsAffected() == 0) {
+        qWarning() << "Failed to update task: task not found" << taskId;
+        return false;
+    }
+
+    emit tasksChanged();
+    return true;
+}
+
 bool TaskManager::deleteTask(int taskId)
 {
     if (!isValidTaskId(taskId)) {
