@@ -425,6 +425,8 @@ private slots:
     void legacyAddTaskWithTextCategoryRemainsCompatible();
     void updateTaskChangesTitleCategoryAndDate();
     void updateTaskRejectsBlankTitleAndInvalidId();
+    void overdueQueryExcludesTodayCompletedAndRoutine();
+    void moveTasksToTodayIsTransactional();
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
     void exportFocusSessionsAndExportAllWriteExpectedCsvFiles();
     void exportFocusSessionsIgnoresInvalidShortSessions();
@@ -2029,6 +2031,60 @@ void ServiceTests::updateTaskRejectsBlankTitleAndInvalidId()
     QCOMPARE(tasks.size(), 1);
     QCOMPARE(tasks.first().toMap().value(QStringLiteral("title")).toString(),
              QStringLiteral("保持不变"));
+}
+
+void ServiceTests::overdueQueryExcludesTodayCompletedAndRoutine()
+{
+    TaskManager* manager = TaskManager::instance();
+    const QDate today = QDate::currentDate();
+    const QDate yesterday = today.addDays(-1);
+    const QDate lastWeek = today.addDays(-6);
+
+    const int oldPending = insertTaskRow(QStringLiteral("上周残留"), lastWeek);
+    const int yesterdayPending = insertTaskRow(QStringLiteral("昨天残留"), yesterday);
+    QVERIFY(oldPending > 0);
+    QVERIFY(yesterdayPending > 0);
+    QVERIFY(insertTaskRow(QStringLiteral("昨天已完成"), yesterday, QString(), true) > 0);
+    QVERIFY(insertTaskRow(QStringLiteral("今天的任务"), today) > 0);
+
+    QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("结转排除例行"), -1));
+    const int routineLeftover = insertTaskRow(QStringLiteral("结转排除例行"), yesterday);
+    QVERIFY(routineLeftover > 0);
+
+    QSqlQuery mark(DatabaseManager::instance()->database());
+    QVERIFY2(mark.exec(QStringLiteral(
+                  "UPDATE tasks SET routine_id = (SELECT id FROM routines WHERE title = '结转排除例行') "
+                  "WHERE id = %1").arg(routineLeftover)),
+             qPrintable(mark.lastError().text()));
+
+    const QVariantList overdue = manager->getOverdueUncompletedTasks();
+    QCOMPARE(overdue.size(), 2);
+    QCOMPARE(overdue.at(0).toMap().value(QStringLiteral("id")).toInt(), oldPending);
+    QCOMPARE(overdue.at(1).toMap().value(QStringLiteral("id")).toInt(), yesterdayPending);
+}
+
+void ServiceTests::moveTasksToTodayIsTransactional()
+{
+    TaskManager* manager = TaskManager::instance();
+    const QDate yesterday = QDate::currentDate().addDays(-1);
+    const int first = insertTaskRow(QStringLiteral("结转一"), yesterday);
+    const int second = insertTaskRow(QStringLiteral("结转二"), yesterday);
+    QVERIFY(first > 0);
+    QVERIFY(second > 0);
+
+    QSignalSpy changedSpy(manager, &TaskManager::tasksChanged);
+    QTest::ignoreMessage(QtWarningMsg, "Failed to move task 999999 : \"\"");
+    QVERIFY(!manager->moveTasksToToday(QVariantList{first, 999999}));
+    QCOMPARE(changedSpy.count(), 0);
+    QCOMPARE(manager->getTasksByDate(yesterday).size(), 2);
+
+    QVERIFY(manager->moveTasksToToday(QVariantList{first, second}));
+    QCOMPARE(changedSpy.count(), 1);
+    QCOMPARE(manager->getTasksByDate(yesterday).size(), 0);
+    QCOMPARE(manager->getTodayTasks().size(), 2);
+    QCOMPARE(manager->getOverdueUncompletedTasks().size(), 0);
+
+    QVERIFY(manager->moveTasksToToday(QVariantList{}));
 }
 
 void ServiceTests::exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks()

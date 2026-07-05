@@ -28,6 +28,9 @@ public:
     Q_INVOKABLE QVariantList getTasksByDate(const QDate& date) const;
     Q_INVOKABLE QVariantList getWeekTasks(const QVariant& startDateValue) const;
     Q_INVOKABLE QVariantList getMonthTasks(int year, int month) const;
+    // 结转只处理手工任务；routine_id 非空的例行残留由例行系统自己管理。
+    Q_INVOKABLE QVariantList getOverdueUncompletedTasks() const;
+    Q_INVOKABLE bool moveTasksToToday(const QVariantList& taskIds);
 
 signals:
     void tasksChanged();

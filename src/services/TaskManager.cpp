@@ -454,3 +454,79 @@ QVariantList TaskManager::getMonthTasks(int year, int month) const
 
     return tasks;
 }
+
+QVariantList TaskManager::getOverdueUncompletedTasks() const
+{
+    QVariantList tasks;
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to get overdue tasks: database is not open";
+        return tasks;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(taskSelectSql() + QStringLiteral(
+        "WHERE t.date < :today AND t.completed = 0 AND t.routine_id IS NULL "
+        "ORDER BY t.date ASC, t.id ASC"));
+    query.bindValue(QStringLiteral(":today"), QDate::currentDate().toString(Qt::ISODate));
+
+    if (!query.exec()) {
+        qWarning() << "Failed to get overdue tasks:" << query.lastError().text();
+        return tasks;
+    }
+
+    while (query.next()) {
+        tasks.append(Task::fromQuery(query).toVariantMap());
+    }
+
+    return tasks;
+}
+
+bool TaskManager::moveTasksToToday(const QVariantList& taskIds)
+{
+    if (taskIds.isEmpty()) {
+        return true;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to move tasks: database is not open";
+        return false;
+    }
+
+    if (!db.transaction()) {
+        qWarning() << "Failed to start move tasks transaction:" << db.lastError().text();
+        return false;
+    }
+
+    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    for (const QVariant& idValue : taskIds) {
+        const int taskId = idValue.toInt();
+        if (!isValidTaskId(taskId)) {
+            qWarning() << "Failed to move tasks: invalid task id" << idValue;
+            db.rollback();
+            return false;
+        }
+
+        QSqlQuery query(db);
+        query.prepare(QStringLiteral("UPDATE tasks SET date = :today WHERE id = :id"));
+        query.bindValue(QStringLiteral(":today"), today);
+        query.bindValue(QStringLiteral(":id"), taskId);
+
+        // 一键结转必须全成或全不成；部分成功会让提示数量和列表状态互相矛盾。
+        if (!query.exec() || query.numRowsAffected() <= 0) {
+            qWarning() << "Failed to move task" << taskId << ":" << query.lastError().text();
+            db.rollback();
+            return false;
+        }
+    }
+
+    if (!db.commit()) {
+        qWarning() << "Failed to commit move tasks:" << db.lastError().text();
+        db.rollback();
+        return false;
+    }
+
+    emit tasksChanged();
+    return true;
+}
