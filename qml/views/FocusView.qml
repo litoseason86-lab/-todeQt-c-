@@ -15,12 +15,21 @@ Item {
     property int pomoTaskId: -1
     property string pomoTaskTitle: ""
     property int justCompletedPhase: 0
+    property bool panelExpanded: false
     property bool workCustomSelected: false
     property bool breakCustomSelected: false
 
     signal focusEnded()
 
     state: root.computeState()
+
+    onStateChanged: {
+        // 离开待机态就收起配置面板：回到待机永远从干净的收起态开始，
+        // 也顺带覆盖“成功启动专注后收起”这个边界。
+        if (state !== "pomoIdle") {
+            panelExpanded = false
+        }
+    }
 
     Component.onCompleted: {
         if (root.settings) {
@@ -536,6 +545,7 @@ Item {
                     }
 
                     Text {
+                        objectName: "ringCaptionText"
                         Layout.alignment: Qt.AlignHCenter
                         text: root.ringCaptionText()
                         font.pixelSize: Theme.fontMd
@@ -552,6 +562,35 @@ Item {
                 font.pixelSize: Theme.fontLg
                 color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter
+            }
+
+            Button {
+                id: durationPill
+                objectName: "durationPill"
+                Layout.alignment: Qt.AlignHCenter
+                visible: root.state === "pomoIdle"
+                implicitHeight: 36
+                implicitWidth: pillLabel.implicitWidth + Theme.space24 * 2
+                onClicked: root.panelExpanded = !root.panelExpanded
+
+                background: Rectangle {
+                    color: root.panelExpanded ? Theme.accentSoft : Theme.surfaceRaised
+                    border.color: root.panelExpanded || durationPill.hovered ? Theme.accentStrong : Theme.border
+                    border.width: 1
+                    radius: height / 2
+                }
+
+                contentItem: Text {
+                    id: pillLabel
+                    text: "专注 " + root.selectedWorkMinutes + " 分 · 休息 " + root.selectedBreakMinutes + " 分  "
+                          + (root.panelExpanded ? "▴" : "▾")
+                    textFormat: Text.PlainText
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.Medium
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
 
             GridLayout {
@@ -897,6 +936,20 @@ Item {
                     }
                 }
             }
+
+            Text {
+                objectName: "noTaskHint"
+                Layout.fillWidth: true
+                // 置灰的开始按钮必须解释原因，否则直达番茄页的用户会卡在无反馈状态。
+                text: root.state === "pomoIdle" && !root.canStartPomodoro()
+                      ? "到今日任务里点「开始专注」即可带任务进入"
+                      : ""
+                visible: text.length > 0
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontXs
+                color: Theme.inkMuted
+                horizontalAlignment: Text.AlignHCenter
+            }
         }
 
         Button {
@@ -1015,7 +1068,7 @@ Item {
     function ringCaptionText() {
         var targetMinutes = Math.round(root.timerNumber("targetSeconds", 0) / 60)
         if (root.state === "pomoIdle") {
-            return "专注 " + root.selectedWorkMinutes + " 分 · 休息 " + root.selectedBreakMinutes + " 分"
+            return root.canStartPomodoro() ? "准备开始" : "等待任务"
         }
         if (root.state === "pomoWork") {
             return (root.ringDimmed() ? "已暂停 · 共 " : "剩余 · 共 ") + targetMinutes + " 分"

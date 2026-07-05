@@ -141,6 +141,7 @@ TestCase {
         appSettingsMock.soundEnabled = true
         view.workCustomSelected = false
         view.breakCustomSelected = false
+        view.panelExpanded = false
         wait(20)
     }
 
@@ -470,5 +471,70 @@ TestCase {
         compare(appSettingsMock.soundEnabled, false)
         toggle.clicked()
         compare(appSettingsMock.soundEnabled, true)
+    }
+
+    function test_durationPillShowsSelectionAndToggles() {
+        view.toPomodoroTab(true)
+        wait(20)
+
+        const pill = findChild(view, "durationPill")
+        verify(pill)
+        verify(pill.contentItem.text.indexOf("专注 25 分 · 休息 5 分") !== -1)
+        compare(view.panelExpanded, false)
+
+        pill.clicked()
+        compare(view.panelExpanded, true)
+        pill.clicked()
+        compare(view.panelExpanded, false)
+
+        view.selectWorkMinutes(45)
+        verify(pill.contentItem.text.indexOf("专注 45 分") !== -1)
+    }
+
+    function test_panelCollapsesWhenLeavingIdle() {
+        view.toPomodoroTab(true)
+        view.panelExpanded = true
+        wait(20)
+
+        view.startPomodoro()
+        wait(20)
+        compare(view.state, "pomoWork")
+        compare(view.panelExpanded, false)
+
+        view.toPomodoroTab(true)
+        view.panelExpanded = true
+        view.toPomodoroTab(false)
+        wait(20)
+        compare(view.panelExpanded, false)
+    }
+
+    function test_idleCaptionReflectsTaskReadiness() {
+        view.toPomodoroTab(true)
+        wait(20)
+
+        const caption = findChild(view, "ringCaptionText")
+        verify(caption)
+        compare(caption.text, "准备开始")
+
+        focusTimer.currentTaskId = -1
+        focusTimer.currentTaskTitle = ""
+        view.pomoTaskId = -1
+        wait(20)
+        compare(caption.text, "等待任务")
+    }
+
+    function test_noTaskHintGuidesUser() {
+        view.toPomodoroTab(true)
+        wait(20)
+
+        const hint = findChild(view, "noTaskHint")
+        verify(hint)
+        compare(hint.text, "")
+
+        focusTimer.currentTaskId = -1
+        focusTimer.currentTaskTitle = ""
+        view.pomoTaskId = -1
+        wait(20)
+        compare(hint.text, "到今日任务里点「开始专注」即可带任务进入")
     }
 }
