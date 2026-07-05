@@ -373,6 +373,7 @@ private slots:
 
     void appSettingsDefaultsAndRoundTrip();
     void appSettingsSameValueDoesNotEmit();
+    void appSettingsRolloverIgnoredDateRoundTrip();
     void addTaskRejectsBlankTitle();
     void addTaskPersistsTrimmedTitleAndEmitsChange();
     void addTaskAcceptsIsoDateStringFromQml();
@@ -502,6 +503,26 @@ void ServiceTests::appSettingsSameValueDoesNotEmit()
     QSignalSpy modeSpy(&settings, &AppSettings::lastModeChanged);
     settings.setLastMode(0);
     QCOMPARE(modeSpy.count(), 0);
+}
+
+void ServiceTests::appSettingsRolloverIgnoredDateRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.rolloverIgnoredDate(), QString());
+        QSignalSpy spy(&settings, &AppSettings::rolloverIgnoredDateChanged);
+        settings.setRolloverIgnoredDate(QStringLiteral("2026-07-06"));
+        QCOMPARE(spy.count(), 1);
+        settings.setRolloverIgnoredDate(QStringLiteral("2026-07-06"));
+        QCOMPARE(spy.count(), 1);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.rolloverIgnoredDate(), QStringLiteral("2026-07-06"));
 }
 
 void ServiceTests::addTaskRejectsBlankTitle()

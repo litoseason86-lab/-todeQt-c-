@@ -13,6 +13,7 @@ class AppSettings : public QObject
     Q_PROPERTY(int workMinutes READ workMinutes WRITE setWorkMinutes NOTIFY workMinutesChanged)
     Q_PROPERTY(int breakMinutes READ breakMinutes WRITE setBreakMinutes NOTIFY breakMinutesChanged)
     Q_PROPERTY(bool soundEnabled READ soundEnabled WRITE setSoundEnabled NOTIFY soundEnabledChanged)
+    Q_PROPERTY(QString rolloverIgnoredDate READ rolloverIgnoredDate WRITE setRolloverIgnoredDate NOTIFY rolloverIgnoredDateChanged)
 
 public:
     static AppSettings* instance();
@@ -26,12 +27,15 @@ public:
     void setBreakMinutes(int minutes);
     bool soundEnabled() const;
     void setSoundEnabled(bool enabled);
+    QString rolloverIgnoredDate() const;
+    void setRolloverIgnoredDate(const QString& date);
 
 signals:
     void lastModeChanged();
     void workMinutesChanged();
     void breakMinutesChanged();
     void soundEnabledChanged();
+    void rolloverIgnoredDateChanged();
 
 private:
     QSettings* m_settings = nullptr;

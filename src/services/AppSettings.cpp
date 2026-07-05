@@ -5,6 +5,7 @@ const auto kLastModeKey = QStringLiteral("focus/lastMode");
 const auto kWorkMinutesKey = QStringLiteral("focus/workMinutes");
 const auto kBreakMinutesKey = QStringLiteral("focus/breakMinutes");
 const auto kSoundEnabledKey = QStringLiteral("focus/soundEnabled");
+const auto kRolloverIgnoredDateKey = QStringLiteral("rollover/lastIgnoredDate");
 }
 
 AppSettings* AppSettings::instance()
@@ -80,4 +81,21 @@ void AppSettings::setSoundEnabled(bool enabled)
     m_settings->setValue(kSoundEnabledKey, enabled);
     m_settings->sync();
     emit soundEnabledChanged();
+}
+
+QString AppSettings::rolloverIgnoredDate() const
+{
+    return m_settings->value(kRolloverIgnoredDateKey, QString()).toString();
+}
+
+void AppSettings::setRolloverIgnoredDate(const QString& date)
+{
+    if (rolloverIgnoredDate() == date) {
+        return;
+    }
+
+    // 这里只保存调用方传入的 ISO 日期字符串；空字符串用于将来需要清除忽略状态的场景。
+    m_settings->setValue(kRolloverIgnoredDateKey, date);
+    m_settings->sync();
+    emit rolloverIgnoredDateChanged();
 }
