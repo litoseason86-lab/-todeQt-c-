@@ -34,6 +34,7 @@ Rectangle {
     property var taskCategory: ""
     property bool taskCompleted: false
     property bool visualTaskCompleted: false
+    property bool titleEditing: false
     // 显式记录指针状态，避免不同平台的 MouseArea/HoverHandler 事件差异影响 hover 视觉。
     property bool pointerInside: false
     property bool componentReady: false
@@ -49,9 +50,32 @@ Rectangle {
     signal completionChanged(int taskId, bool completed)
     signal startFocusClicked(int taskId, string title)
     signal deleteClicked(int taskId, string title)
+    signal renameSubmitted(int taskId, string newTitle)
+    signal editClicked(int taskId)
 
     function setPointerInside(inside) {
         root.pointerInside = inside;
+    }
+
+    function beginTitleEdit() {
+        root.titleEditing = true;
+        titleEditField.text = root.taskTitle;
+        titleEditField.forceActiveFocus();
+        titleEditField.selectAll();
+    }
+
+    function commitTitleEdit() {
+        var newTitle = titleEditField.text.trim();
+        root.titleEditing = false;
+        // 空标题或未修改都当作取消，避免无意义刷新和空标题打到服务层。
+        if (newTitle.length === 0 || newTitle === root.taskTitle) {
+            return;
+        }
+        root.renameSubmitted(root.taskId, newTitle);
+    }
+
+    function cancelTitleEdit() {
+        root.titleEditing = false;
     }
 
     function playCompletionAnimation() {
@@ -390,6 +414,7 @@ Rectangle {
             Text {
                 objectName: "taskTitleText"
                 Layout.fillWidth: true
+                visible: !root.titleEditing
                 text: root.taskTitle
                 font.pixelSize: Theme.fontLg
                 font.weight: Font.Medium
@@ -398,10 +423,43 @@ Rectangle {
                 font.strikeout: root.visualTaskCompleted
                 wrapMode: Text.WordWrap
 
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton
+                    onDoubleTapped: root.beginTitleEdit()
+                }
+
                 Behavior on color {
                     ColorAnimation {
                         duration: 180
                         easing.type: Easing.OutQuad
+                    }
+                }
+            }
+
+            TextField {
+                id: titleEditField
+
+                objectName: "taskTitleEditField"
+                Layout.fillWidth: true
+                visible: root.titleEditing
+                font.pixelSize: Theme.fontLg
+                color: Theme.inkStrong
+                selectByMouse: true
+
+                background: Rectangle {
+                    color: Theme.surface
+                    border.color: Theme.accent
+                    border.width: 1
+                    radius: Theme.radiusSm
+                }
+
+                Keys.onReturnPressed: root.commitTitleEdit()
+                Keys.onEnterPressed: root.commitTitleEdit()
+                Keys.onEscapePressed: root.cancelTitleEdit()
+                onActiveFocusChanged: {
+                    // 失焦等同取消，避免列表中残留半编辑状态。
+                    if (!activeFocus && root.titleEditing) {
+                        root.cancelTitleEdit();
                     }
                 }
             }
@@ -434,14 +492,12 @@ Rectangle {
 
             objectName: "focusButton"
             text: root.visualTaskCompleted ? "已完成" : "开始专注"
+            visible: !root.visualTaskCompleted
             enabled: !root.visualTaskCompleted
             implicitWidth: 104
             implicitHeight: 40
             // down 是 Qt Controls 的视觉按下态；真实点击会同步 pressed，测试可稳定驱动 down。
             readonly property bool pressFeedbackActive: focusButton.enabled && (focusButton.down || focusButton.pressed)
-
-            ToolTip.visible: hovered && !enabled
-            ToolTip.text: "已完成任务不能开始专注"
 
             background: Rectangle {
                 id: focusButtonBackground
@@ -532,13 +588,59 @@ Rectangle {
         }
 
         Button {
+            id: editButton
+
+            objectName: "taskEditButton"
+            text: "编辑"
+            implicitWidth: 56
+            implicitHeight: 40
+            opacity: root.itemHovered ? 1 : 0
+            enabled: root.itemHovered
+
+            Behavior on opacity {
+                NumberAnimation {
+                    duration: 120
+                    easing.type: Easing.OutQuad
+                }
+            }
+
+            background: Rectangle {
+                radius: Theme.radiusMd
+                color: editButton.hovered ? Theme.surfaceSunken : Theme.surface
+                border.color: editButton.hovered ? Theme.accent : Theme.border
+                border.width: 1
+            }
+
+            contentItem: Text {
+                text: editButton.text
+                textFormat: Text.PlainText
+                color: Theme.inkSoft
+                font.pixelSize: Theme.fontMd
+                font.weight: Font.Medium
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            onClicked: root.editClicked(root.taskId)
+        }
+
+        Button {
             id: deleteButton
 
             objectName: "taskDeleteButton"
             text: "删除"
             implicitWidth: 56
             implicitHeight: 40
+            opacity: root.itemHovered ? 1 : 0
+            enabled: root.itemHovered
             readonly property bool pressFeedbackActive: deleteButton.down || deleteButton.pressed
+
+            Behavior on opacity {
+                NumberAnimation {
+                    duration: 120
+                    easing.type: Easing.OutQuad
+                }
+            }
 
             background: Rectangle {
                 id: taskDeleteButtonBackground
