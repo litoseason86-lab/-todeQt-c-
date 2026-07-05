@@ -189,6 +189,12 @@ Rectangle {
         property string marker: ""
         property bool isActive: false
         property string statusText: ""
+        readonly property string statusGlyph: item.statusText.indexOf("● ") === 0
+                                             ? "●"
+                                             : (item.statusText.indexOf("⏸ ") === 0 ? "⏸" : "")
+        readonly property string statusTimeText: item.statusGlyph.length > 0
+                                                ? item.statusText.slice(2)
+                                                : item.statusText
         // 显式状态能抵消 MouseArea 和 HoverHandler 在不同设备上的悬停事件差异。
         property bool pointerInside: false
         readonly property bool visualHovered: item.enabled && item.pointerInside
@@ -283,12 +289,58 @@ Rectangle {
                 elide: Text.ElideRight
             }
 
-            Text {
-                objectName: "sidebarStatus-" + item.marker
-                text: item.statusText
-                font.pixelSize: Theme.fontSm
-                font.weight: Font.Medium
-                color: Theme.accent
+            RowLayout {
+                spacing: Theme.space4
+
+                Text {
+                    id: statusPulse
+                    objectName: "sidebarStatusPulse-" + item.marker
+
+                    property bool pulseRunning: item.statusGlyph === "●"
+
+                    text: item.statusGlyph
+                    textFormat: Text.PlainText
+                    font.pixelSize: Theme.fontSm
+                    font.weight: Font.Medium
+                    color: Theme.accent
+                    opacity: 1
+
+                    SequentialAnimation on opacity {
+                        id: pulseAnimation
+
+                        running: statusPulse.pulseRunning
+                        loops: Animation.Infinite
+
+                        NumberAnimation {
+                            from: 1.0
+                            to: 0.35
+                            duration: 620
+                            easing.type: Easing.InOutQuad
+                        }
+
+                        NumberAnimation {
+                            from: 0.35
+                            to: 1.0
+                            duration: 620
+                            easing.type: Easing.InOutQuad
+                        }
+                    }
+
+                    onPulseRunningChanged: {
+                        if (!statusPulse.pulseRunning) {
+                            statusPulse.opacity = 1
+                        }
+                    }
+                }
+
+                Text {
+                    objectName: "sidebarStatus-" + item.marker
+                    text: item.statusTimeText
+                    textFormat: Text.PlainText
+                    font.pixelSize: Theme.fontSm
+                    font.weight: Font.Medium
+                    color: Theme.accent
+                }
             }
         }
 

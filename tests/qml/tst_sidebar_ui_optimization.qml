@@ -206,7 +206,12 @@ TestCase {
 
         const status = findChild(sidebar, "sidebarStatus-专");
         verify(status);
-        compare(status.text, "● 15:32");
+        compare(status.text, "15:32");
+
+        const pulse = findChild(sidebar, "sidebarStatusPulse-专");
+        verify(pulse);
+        compare(pulse.text, "●");
+        verify(pulse.pulseRunning);
     }
 
     function test_focusStatusShowsFreeElapsedAndPause() {
@@ -219,7 +224,12 @@ TestCase {
 
         const status = findChild(sidebar, "sidebarStatus-专");
         verify(status);
-        compare(status.text, "⏸ 00:32:14");
+        compare(status.text, "00:32:14");
+
+        const pause = findChild(sidebar, "sidebarStatusPulse-专");
+        verify(pause);
+        compare(pause.text, "⏸");
+        compare(pause.pulseRunning, false);
     }
 
     function test_focusStatusEmptyWhenIdle() {
@@ -232,5 +242,10 @@ TestCase {
         const status = findChild(sidebar, "sidebarStatus-专");
         verify(status);
         compare(status.text, "");
+
+        const pulse = findChild(sidebar, "sidebarStatusPulse-专");
+        verify(pulse);
+        compare(pulse.text, "");
+        compare(pulse.pulseRunning, false);
     }
 }

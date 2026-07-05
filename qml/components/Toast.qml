@@ -9,6 +9,7 @@ Rectangle {
 
     property int displayDurationMs: 3000
     property bool shown: false
+    readonly property int yOffset: root.shown ? 0 : 12
 
     function show(message) {
         label.text = message
@@ -22,11 +23,28 @@ Rectangle {
     color: Theme.inkStrong
     opacity: root.shown ? 0.92 : 0
 
+    Component.onCompleted: root.y = root.yOffset
+
+    onYOffsetChanged: {
+        toastMoveAnimation.to = root.yOffset
+        toastMoveAnimation.restart()
+    }
+
     Behavior on opacity {
         NumberAnimation {
             duration: 180
             easing.type: Easing.OutQuad
         }
+    }
+
+    NumberAnimation {
+        id: toastMoveAnimation
+        objectName: "toastMoveAnimation"
+
+        target: root
+        property: "y"
+        duration: 180
+        easing.type: Easing.OutQuad
     }
 
     Text {

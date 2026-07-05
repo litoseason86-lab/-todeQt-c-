@@ -228,11 +228,16 @@ TestCase {
 
         mainWindow.showToast("测试提示")
         compare(toast.shown, true)
+        compare(toast.yOffset, 0)
+        var moveAnimation = findChild(mainWindow, "toastMoveAnimation")
+        verify(moveAnimation)
+        compare(moveAnimation.duration <= 200, true)
         var label = findChild(mainWindow, "toastText")
         verify(label)
         compare(label.text, "测试提示")
 
         tryCompare(toast, "shown", false, 2000)
+        verify(toast.yOffset > 0)
         toast.displayDurationMs = 3000
     }
 
