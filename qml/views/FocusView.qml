@@ -98,6 +98,11 @@ Item {
         return "番茄专注"
     }
 
+    function clearPomodoroTask() {
+        root.pomoTaskId = -1
+        root.pomoTaskTitle = ""
+    }
+
     function computeState() {
         if (!root.timer) {
             return "free"
@@ -129,14 +134,17 @@ Item {
         }
 
         if (enabled) {
-            // 进入番茄前先把当前任务信息缓存到本地；自由会话一旦 stopFocus，C++ 会清空任务字段。
-            if (root.timer.currentTaskId > 0) {
+            var timerHasSession = root.timer.hasActiveSession || root.timer.phase !== 0
+            var shouldUseTimerTask = timerHasSession || root.pomoTaskId <= 0
+            // 只有正在切换真实计时会话，或本地没有“从任务页直达”的显式选择时，
+            // 才从 timer 覆盖缓存；否则会把用户刚点的任务替换成 timer 里的旧值。
+            if (shouldUseTimerTask && root.timer.currentTaskId > 0) {
                 root.pomoTaskId = root.timer.currentTaskId
             }
-            if (root.timer.currentTaskTitle && root.timer.currentTaskTitle.length > 0) {
+            if (shouldUseTimerTask && root.timer.currentTaskTitle && root.timer.currentTaskTitle.length > 0) {
                 root.pomoTaskTitle = root.timer.currentTaskTitle
             }
-            if (root.timer.hasActiveSession || root.timer.phase !== 0) {
+            if (timerHasSession) {
                 if (!root.timer.stopFocus()) {
                     root.errorText = "切换番茄失败，请重试"
                     return
@@ -152,11 +160,6 @@ Item {
         root.pomodoroModeSelected = enabled
         root.errorText = ""
         root.justCompletedPhase = 0
-
-        if (!enabled) {
-            root.pomoTaskId = -1
-            root.pomoTaskTitle = ""
-        }
     }
 
     function enterPomodoroWithTask(taskId, title) {
@@ -246,6 +249,7 @@ Item {
 
     function endPomodoro() {
         if (!root.timer) {
+            root.clearPomodoroTask()
             root.focusEnded()
             return
         }
@@ -259,6 +263,7 @@ Item {
 
         root.errorText = ""
         root.justCompletedPhase = 0
+        root.clearPomodoroTask()
         root.focusEnded()
     }
 
@@ -899,6 +904,7 @@ Item {
                     onClicked: {
                         if (root.timer && root.timer.stopFocus()) {
                             root.errorText = ""
+                            root.clearPomodoroTask()
                             root.focusEnded()
                         } else {
                             root.errorText = "专注保存失败，请重试"

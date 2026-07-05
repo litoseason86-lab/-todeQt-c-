@@ -132,6 +132,8 @@ TestCase {
         focusTimer.startPomodoroWorkTitle = ""
         focusTimer.startPomodoroWorkSeconds = 0
         focusTimer.stopFocusCalls = 0
+        view.pomoTaskId = -1
+        view.pomoTaskTitle = ""
         view.toPomodoroTab(false)
         view.selectWorkMinutes(25)
         view.selectBreakMinutes(5)
@@ -361,6 +363,22 @@ TestCase {
         compare(view.pomodoroModeSelected, true)
         compare(view.pomoTaskId, 9)
         compare(view.pomoTaskTitle, "直达任务")
+        compare(view.canStartPomodoro(), true)
+    }
+
+    function test_directTaskSurvivesModeToggleBeforeStarting() {
+        view.enterPomodoroWithTask(9, "直达任务")
+        wait(20)
+
+        view.toPomodoroTab(false)
+        wait(20)
+        view.toPomodoroTab(true)
+        wait(20)
+
+        compare(view.state, "pomoIdle")
+        compare(view.pomoTaskId, 9)
+        compare(view.pomoTaskTitle, "直达任务")
+        compare(view.taskTitle(), "直达任务")
         compare(view.canStartPomodoro(), true)
     }
 
