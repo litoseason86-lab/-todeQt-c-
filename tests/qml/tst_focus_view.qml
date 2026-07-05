@@ -139,8 +139,6 @@ TestCase {
         appSettingsMock.workMinutes = 25
         appSettingsMock.breakMinutes = 5
         appSettingsMock.soundEnabled = true
-        view.workCustomSelected = false
-        view.breakCustomSelected = false
         view.panelExpanded = false
         wait(20)
     }
@@ -395,71 +393,14 @@ TestCase {
 
     function test_pomoIdleShowsRuleHint() {
         view.toPomodoroTab(true)
+        view.panelExpanded = true
         wait(20)
 
         const hint = findChild(view, "ruleHintText")
         verify(hint)
         compare(hint.text, "满 5 分钟自动完成任务 · 不足 3 分钟不计入记录")
         compare(view.state, "pomoIdle")
-    }
-
-    function test_selectMinutesAcceptsRangeAndRejectsOutOfBounds() {
-        view.toPomodoroTab(true)
-
-        view.selectWorkMinutes(90)
-        compare(view.selectedWorkMinutes, 90)
-        compare(appSettingsMock.workMinutes, 90)
-
-        view.selectWorkMinutes(4)
-        compare(view.selectedWorkMinutes, 90)
-        view.selectWorkMinutes(181)
-        compare(view.selectedWorkMinutes, 90)
-
-        view.selectBreakMinutes(1)
-        compare(view.selectedBreakMinutes, 1)
-        view.selectBreakMinutes(0)
-        compare(view.selectedBreakMinutes, 1)
-        view.selectBreakMinutes(61)
-        compare(view.selectedBreakMinutes, 1)
-    }
-
-    function test_customChipAndSpinBoxBounds() {
-        view.toPomodoroTab(true)
-        view.workCustomSelected = true
-        view.breakCustomSelected = true
-        wait(20)
-
-        const workSpin = findChild(view, "workCustomSpinBox")
-        const breakSpin = findChild(view, "breakCustomSpinBox")
-        verify(workSpin)
-        verify(breakSpin)
-        compare(workSpin.from, 5)
-        compare(workSpin.to, 180)
-        compare(breakSpin.from, 1)
-        compare(breakSpin.to, 60)
-
-        const workChip = findChild(view, "workPresetCustom")
-        verify(workChip)
-        compare(workChip.checked, true)
-    }
-
-    function test_restoreCustomDurationSelectsCustomChip() {
-        var component = Qt.createComponent("../../qml/views/FocusView.qml")
-        compare(component.status, Component.Ready)
-
-        var restored = component.createObject(testCase, {
-            timer: focusTimer,
-            settings: customDurationSettingsMock
-        })
-        verify(restored)
-        compare(restored.selectedWorkMinutes, 90)
-        compare(restored.workCustomSelected, true)
-        compare(restored.breakCustomSelected, false)
-
-        const chip = findChild(restored, "workPresetCustom")
-        verify(chip)
-        compare(chip.text, "90 分")
-        restored.destroy()
+        compare(view.panelExpanded, true)
     }
 
     function test_soundToggleFlipsSetting() {
@@ -536,5 +477,119 @@ TestCase {
         view.pomoTaskId = -1
         wait(20)
         compare(hint.text, "到今日任务里点「开始专注」即可带任务进入")
+    }
+
+    function test_selectMinutesAcceptsRangeAndRejectsOutOfBounds() {
+        view.toPomodoroTab(true)
+
+        view.selectWorkMinutes(90)
+        compare(view.selectedWorkMinutes, 90)
+        compare(appSettingsMock.workMinutes, 90)
+
+        view.selectWorkMinutes(4)
+        compare(view.selectedWorkMinutes, 90)
+        view.selectWorkMinutes(181)
+        compare(view.selectedWorkMinutes, 90)
+
+        view.selectBreakMinutes(1)
+        compare(view.selectedBreakMinutes, 1)
+        view.selectBreakMinutes(0)
+        compare(view.selectedBreakMinutes, 1)
+        view.selectBreakMinutes(61)
+        compare(view.selectedBreakMinutes, 1)
+    }
+
+    function test_stepperAdjustsValueAndClampsAtBounds() {
+        view.toPomodoroTab(true)
+        view.panelExpanded = true
+        wait(20)
+
+        const plus = findChild(view, "workStepperPlus")
+        const minus = findChild(view, "workStepperMinus")
+        const valueText = findChild(view, "workStepperValue")
+        verify(plus)
+        verify(minus)
+        verify(valueText)
+
+        plus.clicked()
+        compare(view.selectedWorkMinutes, 26)
+        compare(appSettingsMock.workMinutes, 26)
+        compare(valueText.text, "26")
+
+        view.selectWorkMinutes(5)
+        wait(20)
+        compare(minus.enabled, false)
+        view.selectWorkMinutes(180)
+        wait(20)
+        compare(plus.enabled, false)
+
+        const breakPlus = findChild(view, "breakStepperPlus")
+        const breakMinus = findChild(view, "breakStepperMinus")
+        verify(breakPlus)
+        verify(breakMinus)
+        view.selectBreakMinutes(1)
+        wait(20)
+        compare(breakMinus.enabled, false)
+        view.selectBreakMinutes(60)
+        wait(20)
+        compare(breakPlus.enabled, false)
+    }
+
+    function test_chipsMatchPurelyByValue() {
+        view.toPomodoroTab(true)
+        view.panelExpanded = true
+        wait(20)
+
+        const chip25 = findChild(view, "workPreset25")
+        const chip45 = findChild(view, "workPreset45")
+        const chip60 = findChild(view, "workPreset60")
+        verify(chip25)
+        verify(chip45)
+        verify(chip60)
+        compare(chip25.checked, true)
+
+        // 步进到非预设值：chips 全灭，步进器本身就是“自定义”。
+        view.selectWorkMinutes(90)
+        wait(20)
+        compare(chip25.checked, false)
+        compare(chip45.checked, false)
+        compare(chip60.checked, false)
+
+        // 点 chip 回到预设：值与选中态同步恢复。
+        chip45.clicked()
+        wait(20)
+        compare(view.selectedWorkMinutes, 45)
+        compare(chip45.checked, true)
+    }
+
+    function test_restoreCustomDurationShowsInPillAndStepper() {
+        var component = Qt.createComponent("../../qml/views/FocusView.qml")
+        compare(component.status, Component.Ready)
+
+        var restored = component.createObject(testCase, {
+            timer: focusTimer,
+            settings: customDurationSettingsMock
+        })
+        verify(restored)
+        compare(restored.selectedWorkMinutes, 90)
+
+        const pill = findChild(restored, "durationPill")
+        verify(pill)
+        verify(pill.contentItem.text.indexOf("专注 90 分 · 休息 5 分") !== -1)
+
+        const chip25 = findChild(restored, "workPreset25")
+        const chip45 = findChild(restored, "workPreset45")
+        const chip60 = findChild(restored, "workPreset60")
+        verify(chip25)
+        verify(chip45)
+        verify(chip60)
+        compare(chip25.checked, false)
+        compare(chip45.checked, false)
+        compare(chip60.checked, false)
+
+        const valueText = findChild(restored, "workStepperValue")
+        verify(valueText)
+        compare(valueText.text, "90")
+        restored.destroy()
     }
 }

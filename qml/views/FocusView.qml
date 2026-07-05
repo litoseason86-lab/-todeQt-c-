@@ -16,8 +16,6 @@ Item {
     property string pomoTaskTitle: ""
     property int justCompletedPhase: 0
     property bool panelExpanded: false
-    property bool workCustomSelected: false
-    property bool breakCustomSelected: false
 
     signal focusEnded()
 
@@ -32,16 +30,11 @@ Item {
     }
 
     Component.onCompleted: {
+        // 恢复上次记住的时长；无效值会被 select 函数的范围校验挡掉，回落默认。
         if (root.settings) {
             root.selectWorkMinutes(Number(root.settings.workMinutes))
             root.selectBreakMinutes(Number(root.settings.breakMinutes))
         }
-        // 恢复值不在预设里时，落到“自定义”chip；这样重启后不会把 90 分误显示成无选中状态。
-        root.workCustomSelected = root.selectedWorkMinutes !== 25
-                && root.selectedWorkMinutes !== 45
-                && root.selectedWorkMinutes !== 60
-        root.breakCustomSelected = root.selectedBreakMinutes !== 5
-                && root.selectedBreakMinutes !== 10
     }
 
     function safeSeconds(value) {
@@ -311,6 +304,91 @@ Item {
             font.pixelSize: Theme.fontMd
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    // 暖纸步进器替代 SpinBox 与“自定义”chip。value 只读外部状态，
+    // 加减通过 adjusted 信号回给 select*Minutes，避免出现第二套时长来源。
+    component DurationStepper: RowLayout {
+        id: stepper
+
+        property int value: 0
+        property int from: 1
+        property int to: 99
+        property string namePrefix: ""
+
+        signal adjusted(int newValue)
+
+        spacing: 0
+
+        Button {
+            id: minusButton
+            objectName: stepper.namePrefix + "Minus"
+            enabled: stepper.value > stepper.from
+            implicitWidth: 32
+            implicitHeight: 36
+            onClicked: stepper.adjusted(stepper.value - 1)
+
+            background: Rectangle {
+                color: minusButton.enabled ? Theme.surface : Theme.surfaceSunken
+                border.color: Theme.border
+                border.width: 1
+                radius: Theme.radiusMd
+            }
+
+            contentItem: Text {
+                text: "−"
+                textFormat: Text.PlainText
+                color: minusButton.enabled ? Theme.inkSoft : Theme.inkMuted
+                font.pixelSize: Theme.fontLg
+                font.weight: Font.DemiBold
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+
+        Rectangle {
+            implicitWidth: 52
+            implicitHeight: 36
+            color: Theme.surfaceSunken
+            border.color: Theme.border
+            border.width: 1
+
+            Text {
+                objectName: stepper.namePrefix + "Value"
+                anchors.centerIn: parent
+                text: stepper.value
+                textFormat: Text.PlainText
+                color: Theme.inkStrong
+                font.pixelSize: Theme.fontMd
+                font.weight: Font.DemiBold
+            }
+        }
+
+        Button {
+            id: plusButton
+            objectName: stepper.namePrefix + "Plus"
+            enabled: stepper.value < stepper.to
+            implicitWidth: 32
+            implicitHeight: 36
+            onClicked: stepper.adjusted(stepper.value + 1)
+
+            background: Rectangle {
+                color: plusButton.enabled ? Theme.surface : Theme.surfaceSunken
+                border.color: Theme.border
+                border.width: 1
+                radius: Theme.radiusMd
+            }
+
+            contentItem: Text {
+                text: "+"
+                textFormat: Text.PlainText
+                color: plusButton.enabled ? Theme.inkSoft : Theme.inkMuted
+                font.pixelSize: Theme.fontLg
+                font.weight: Font.DemiBold
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
         }
     }
 
@@ -593,196 +671,131 @@ Item {
                 }
             }
 
-            GridLayout {
+            Rectangle {
+                id: durationPanel
+                objectName: "durationPanel"
                 Layout.alignment: Qt.AlignHCenter
-                visible: root.state === "pomoIdle"
-                columns: 5
-                columnSpacing: Theme.space8
-                rowSpacing: Theme.space12
+                Layout.preferredWidth: Math.min(parent.width, 440)
+                implicitHeight: panelColumn.implicitHeight + Theme.space16 * 2
+                visible: root.state === "pomoIdle" && root.panelExpanded
+                color: Theme.surfaceRaised
+                border.color: Theme.border
+                border.width: 1
+                radius: Theme.radiusLg
 
-                ButtonGroup {
-                    id: workPresetGroup
-                    exclusive: true
-                }
+                ColumnLayout {
+                    id: panelColumn
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.margins: Theme.space16
+                    spacing: Theme.space8
 
-                Text {
-                    text: "专注"
-                    textFormat: Text.PlainText
-                    color: Theme.inkSoft
-                    font.pixelSize: Theme.fontMd
-                    horizontalAlignment: Text.AlignRight
-                    verticalAlignment: Text.AlignVCenter
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.space8
 
-                    Layout.preferredWidth: 44
-                }
+                        Text {
+                            text: "专注"
+                            textFormat: Text.PlainText
+                            color: Theme.inkSoft
+                            font.pixelSize: Theme.fontMd
+                            horizontalAlignment: Text.AlignRight
+                            Layout.preferredWidth: 32
+                        }
 
-                PresetButton {
-                    id: workPreset25
-                    objectName: "workPreset25"
-                    text: "25 分"
-                    backgroundObjectName: "workPreset25Background"
-                    checked: !root.workCustomSelected && root.selectedWorkMinutes === 25
+                        PresetButton {
+                            objectName: "workPreset25"
+                            text: "25"
+                            backgroundObjectName: "workPreset25Background"
+                            checkable: false
+                            checked: root.selectedWorkMinutes === 25
+                            implicitWidth: 64
+                            implicitHeight: 36
+                            onClicked: root.selectWorkMinutes(25)
+                        }
 
-                    ButtonGroup.group: workPresetGroup
+                        PresetButton {
+                            objectName: "workPreset45"
+                            text: "45"
+                            backgroundObjectName: "workPreset45Background"
+                            checkable: false
+                            checked: root.selectedWorkMinutes === 45
+                            implicitWidth: 64
+                            implicitHeight: 36
+                            onClicked: root.selectWorkMinutes(45)
+                        }
 
-                    onClicked: {
-                        root.workCustomSelected = false
-                        root.selectWorkMinutes(25)
-                    }
-                }
+                        PresetButton {
+                            objectName: "workPreset60"
+                            text: "60"
+                            backgroundObjectName: "workPreset60Background"
+                            checkable: false
+                            checked: root.selectedWorkMinutes === 60
+                            implicitWidth: 64
+                            implicitHeight: 36
+                            onClicked: root.selectWorkMinutes(60)
+                        }
 
-                PresetButton {
-                    id: workPreset45
-                    objectName: "workPreset45"
-                    text: "45 分"
-                    backgroundObjectName: "workPreset45Background"
-                    checked: !root.workCustomSelected && root.selectedWorkMinutes === 45
-
-                    ButtonGroup.group: workPresetGroup
-
-                    onClicked: {
-                        root.workCustomSelected = false
-                        root.selectWorkMinutes(45)
-                    }
-                }
-
-                PresetButton {
-                    id: workPreset60
-                    objectName: "workPreset60"
-                    text: "60 分"
-                    backgroundObjectName: "workPreset60Background"
-                    checked: !root.workCustomSelected && root.selectedWorkMinutes === 60
-
-                    ButtonGroup.group: workPresetGroup
-
-                    onClicked: {
-                        root.workCustomSelected = false
-                        root.selectWorkMinutes(60)
-                    }
-                }
-
-                PresetButton {
-                    id: workPresetCustom
-                    objectName: "workPresetCustom"
-                    text: root.workCustomSelected ? root.selectedWorkMinutes + " 分" : "自定义"
-                    backgroundObjectName: "workPresetCustomBackground"
-                    checked: root.workCustomSelected
-
-                    ButtonGroup.group: workPresetGroup
-
-                    onClicked: root.workCustomSelected = true
-                }
-
-                ButtonGroup {
-                    id: breakPresetGroup
-                    exclusive: true
-                }
-
-                Text {
-                    text: "休息"
-                    textFormat: Text.PlainText
-                    color: Theme.inkSoft
-                    font.pixelSize: Theme.fontMd
-                    horizontalAlignment: Text.AlignRight
-                    verticalAlignment: Text.AlignVCenter
-
-                    Layout.preferredWidth: 44
-                }
-
-                PresetButton {
-                    id: breakPreset5
-                    objectName: "breakPreset5"
-                    text: "5 分"
-                    backgroundObjectName: "breakPreset5Background"
-                    checked: !root.breakCustomSelected && root.selectedBreakMinutes === 5
-
-                    ButtonGroup.group: breakPresetGroup
-
-                    onClicked: {
-                        root.breakCustomSelected = false
-                        root.selectBreakMinutes(5)
-                    }
-                }
-
-                PresetButton {
-                    id: breakPreset10
-                    objectName: "breakPreset10"
-                    text: "10 分"
-                    backgroundObjectName: "breakPreset10Background"
-                    checked: !root.breakCustomSelected && root.selectedBreakMinutes === 10
-
-                    ButtonGroup.group: breakPresetGroup
-
-                    onClicked: {
-                        root.breakCustomSelected = false
-                        root.selectBreakMinutes(10)
-                    }
-                }
-
-                PresetButton {
-                    id: breakPresetCustom
-                    objectName: "breakPresetCustom"
-                    text: root.breakCustomSelected ? root.selectedBreakMinutes + " 分" : "自定义"
-                    backgroundObjectName: "breakPresetCustomBackground"
-                    checked: root.breakCustomSelected
-
-                    ButtonGroup.group: breakPresetGroup
-
-                    onClicked: root.breakCustomSelected = true
-                }
-
-                Item {
-                    Layout.preferredWidth: 104
-                    Layout.preferredHeight: 42
-                }
-            }
-
-            RowLayout {
-                Layout.alignment: Qt.AlignHCenter
-                visible: root.state === "pomoIdle" && (root.workCustomSelected || root.breakCustomSelected)
-                spacing: Theme.space16
-
-                RowLayout {
-                    visible: root.workCustomSelected
-                    spacing: Theme.space4
-
-                    Text {
-                        text: "专注(分)"
-                        textFormat: Text.PlainText
-                        color: Theme.inkSoft
-                        font.pixelSize: Theme.fontMd
+                        DurationStepper {
+                            namePrefix: "workStepper"
+                            value: root.selectedWorkMinutes
+                            from: 5
+                            to: 180
+                            onAdjusted: function (newValue) {
+                                root.selectWorkMinutes(newValue)
+                            }
+                        }
                     }
 
-                    SpinBox {
-                        id: workCustomSpinBox
-                        objectName: "workCustomSpinBox"
-                        from: 5
-                        to: 180
-                        editable: true
-                        value: root.selectedWorkMinutes
-                        onValueModified: root.selectWorkMinutes(value)
-                    }
-                }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: Theme.space8
 
-                RowLayout {
-                    visible: root.breakCustomSelected
-                    spacing: Theme.space4
+                        Text {
+                            text: "休息"
+                            textFormat: Text.PlainText
+                            color: Theme.inkSoft
+                            font.pixelSize: Theme.fontMd
+                            horizontalAlignment: Text.AlignRight
+                            Layout.preferredWidth: 32
+                        }
 
-                    Text {
-                        text: "休息(分)"
-                        textFormat: Text.PlainText
-                        color: Theme.inkSoft
-                        font.pixelSize: Theme.fontMd
-                    }
+                        PresetButton {
+                            objectName: "breakPreset5"
+                            text: "5"
+                            backgroundObjectName: "breakPreset5Background"
+                            checkable: false
+                            checked: root.selectedBreakMinutes === 5
+                            implicitWidth: 64
+                            implicitHeight: 36
+                            onClicked: root.selectBreakMinutes(5)
+                        }
 
-                    SpinBox {
-                        id: breakCustomSpinBox
-                        objectName: "breakCustomSpinBox"
-                        from: 1
-                        to: 60
-                        editable: true
-                        value: root.selectedBreakMinutes
-                        onValueModified: root.selectBreakMinutes(value)
+                        PresetButton {
+                            objectName: "breakPreset10"
+                            text: "10"
+                            backgroundObjectName: "breakPreset10Background"
+                            checkable: false
+                            checked: root.selectedBreakMinutes === 10
+                            implicitWidth: 64
+                            implicitHeight: 36
+                            onClicked: root.selectBreakMinutes(10)
+                        }
+
+                        Item {
+                            Layout.preferredWidth: 64 + Theme.space8
+                        }
+
+                        DurationStepper {
+                            namePrefix: "breakStepper"
+                            value: root.selectedBreakMinutes
+                            from: 1
+                            to: 60
+                            onAdjusted: function (newValue) {
+                                root.selectBreakMinutes(newValue)
+                            }
+                        }
                     }
                 }
             }
@@ -790,7 +803,7 @@ Item {
             Text {
                 objectName: "ruleHintText"
                 Layout.fillWidth: true
-                visible: root.state === "pomoIdle"
+                visible: root.state === "pomoIdle" && root.panelExpanded
                 text: "满 " + root.timerNumber("autoCompleteMinutes", 5) + " 分钟自动完成任务 · 不足 "
                       + root.timerNumber("minimumValidMinutes", 3) + " 分钟不计入记录"
                 textFormat: Text.PlainText
