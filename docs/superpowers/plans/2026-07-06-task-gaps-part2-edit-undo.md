@@ -28,12 +28,15 @@
 ### Task 1: Toast 可选 action 按钮
 
 **Files:**
+
 - Modify: `qml/components/Toast.qml`
 - Modify: `qml/MainWindow.qml`（showToast 透传参数）
 - Test: `tests/qml/tst_focus_start_flow.qml`
 
 **Interfaces:**
+
 - Produces:
+
   - `Toast.show(message, actionText, actionCallback)` —— 后两参可省略，省略时行为与现状完全一致
   - 带 action 时展示时长用 `property int actionDisplayDurationMs: 5000`（与删除提交窗口对齐）
   - action 按钮 objectName `toastActionButton`；`function triggerAction()` 供测试直接调用
@@ -175,11 +178,14 @@ git commit -m "Toast 支持可选撤销动作按钮"
 ### Task 2: TaskItem 行内编辑 + 按钮 hover 化
 
 **Files:**
+
 - Modify: `qml/components/TaskItem.qml`
 - Create: `tests/qml/tst_task_item_edit.qml`
 
 **Interfaces:**
+
 - Produces:
+
   - 信号 `renameSubmitted(int taskId, string newTitle)`、`editClicked(int taskId)`
   - `property bool titleEditing: false`；函数 `beginTitleEdit()`/`commitTitleEdit()`/`cancelTitleEdit()`
   - objectName：`taskTitleEditField`、`taskEditButton`
@@ -446,11 +452,13 @@ Expected: FAIL（信号/函数/按钮不存在）。
 - [ ] **Step 4: qmllint + 测试确认通过（含既有 TaskItem 回归）**
 
 Run:
+
 ```bash
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/components/TaskItem.qml
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_task_item_edit.qml 2>/dev/null | grep -E "FAIL|Totals"
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_ui_optimization.qml 2>/dev/null | grep -E "Totals"
 ```
+
 Expected: lint 无输出；新文件全 PASS 连跑 2 次；`tst_ui_optimization` 保持既有水平（若 `test_taskItemExposesDeleteAction` 或粒子用例出现**新的确定性失败**，检查是否 hover 门控影响了真实点击路径的用例——程序化 `clicked()` 不受影响，坐标点击的用例需要先 `setPointerInside(true)`）。
 
 - [ ] **Step 5: 提交**
@@ -465,13 +473,16 @@ git commit -m "TaskItem 支持行内改标题并将编辑删除按钮 hover 化"
 ### Task 3: EditTaskDialog 组件
 
 **Files:**
+
 - Create: `qml/components/EditTaskDialog.qml`
 - Modify: `resources/qml.qrc`（注册）
 - Create: `tests/qml/tst_edit_task_dialog.qml`
 
 **Interfaces:**
-- Consumes: 视图注入 `categoryManagerRef`（提供 `getActiveCategories()`）
+
+- Consumes: 视图注入 `categoryManagerRef`（提供 `getAllCategories()`）
 - Produces:
+
   - `function openForTask(task)` —— task 为视图 modelData（含 id/title/categoryId/date）
   - 信号 `taskEdited(int taskId, string title, int categoryId, var isoDate)`（isoDate 为 `"yyyy-MM-dd"` 字符串，直接可传 updateTask）
   - `property int dateOffsetSelection`（-1=保留原日期，0/1/2=今天/明天/后天）；`function resultIsoDate()`
@@ -496,7 +507,7 @@ TestCase {
     QtObject {
         id: categoryManagerMock
 
-        function getActiveCategories() {
+        function getAllCategories() {
             return [
                 { id: 3, name: "数学", color: "#d4a574" },
                 { id: 5, name: "英语", color: "#8b7355" }
@@ -639,8 +650,8 @@ Popup {
 
     function refreshCategories() {
         var options = [{ id: -1, name: "不设置科目", color: "" }]
-        if (root.categoryManagerRef && root.categoryManagerRef.getActiveCategories) {
-            var actives = root.categoryManagerRef.getActiveCategories()
+        if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
+            var actives = root.categoryManagerRef.getAllCategories()
             for (var i = 0; i < actives.length; i++) {
                 options.push(actives[i])
             }
@@ -911,14 +922,17 @@ git commit -m "新增任务编辑弹窗组件"
 ### Task 4: 视图与 MainWindow 接线（编辑 + 延迟删除撤销）
 
 **Files:**
+
 - Modify: `qml/views/TodayTaskView.qml`
 - Modify: `qml/views/WeekPlanView.qml`
 - Modify: `qml/MainWindow.qml`
 - Test: `tests/qml/tst_focus_start_flow.qml`、`tests/qml/tst_today_rollover.qml`
 
 **Interfaces:**
+
 - Consumes: Task 1 的 Toast action、Task 2 的信号、Task 3 的 EditTaskDialog、第一部分的 `updateTask`
 - Produces:
+
   - 视图信号 `deleteRequested(int taskId, string title)` + `property int pendingDeleteTaskId: -1`（加载时过滤该行）
   - MainWindow：`function requestDeleteTask(taskId, title)`、`commitPendingDelete()`、`cancelPendingDelete()`、`property int pendingDeleteTaskId`、`property int deleteCommitDelayMs: 5000`
 
@@ -1021,10 +1035,12 @@ git commit -m "新增任务编辑弹窗组件"
 - [ ] **Step 2: 运行确认失败**
 
 Run:
+
 ```bash
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_focus_start_flow.qml 2>/dev/null | grep -E "FAIL|Totals"
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_today_rollover.qml 2>/dev/null | grep -E "FAIL|Totals"
 ```
+
 Expected: 新用例 FAIL（`requestDeleteTask`/`pendingDeleteTaskId` 不存在）。
 
 - [ ] **Step 3: 写实现**
@@ -1170,17 +1186,54 @@ delegate 加编辑接线（`onDeleteClicked` 旁）：
                     : loaded
 ```
 
-TaskItem delegate（`onDeleteClicked` 处，约 467 行）改为上抛 + 加编辑接线（与今日页同形，代码一致）；文件尾加 EditTaskDialog 实例（与今日页同形，代码一致）。
+TaskItem delegate（`onDeleteClicked` 处，约 467 行）改为上抛，并在其旁加编辑接线：
+
+```qml
+                                    onDeleteClicked: function(id, title) {
+                                        root.deleteRequested(id, title)
+                                    }
+
+                                    onRenameSubmitted: function(id, newTitle) {
+                                        var originalCategoryId = Number(modelData.categoryId || -1)
+                                        var originalDate = Qt.formatDate(modelData.date, "yyyy-MM-dd") || String(modelData.date || "").substring(0, 10)
+                                        if (!taskManager.updateTask(id, newTitle, originalCategoryId, originalDate)) {
+                                            root.loadError = "任务更新失败，请重试"
+                                        }
+                                    }
+
+                                    onEditClicked: function(id) {
+                                        editTaskDialog.openForTask(modelData)
+                                    }
+```
+
+文件尾部（AddTaskDialog 实例旁）加：
+
+```qml
+    EditTaskDialog {
+        id: editTaskDialog
+
+        parent: root
+        categoryManagerRef: root.categoryManagerRef
+
+        onTaskEdited: function (taskId, title, categoryId, isoDate) {
+            if (!taskManager.updateTask(taskId, title, categoryId, isoDate)) {
+                root.loadError = "任务更新失败，请重试"
+            }
+        }
+    }
+```
 
 - [ ] **Step 4: qmllint + 测试确认通过**
 
 Run:
+
 ```bash
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/MainWindow.qml qml/views/TodayTaskView.qml qml/views/WeekPlanView.qml
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_focus_start_flow.qml 2>/dev/null | grep -E "FAIL|Totals"
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_today_rollover.qml 2>/dev/null | grep -E "FAIL|Totals"
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_ui_optimization.qml 2>/dev/null | grep -E "Totals"
 ```
+
 Expected: lint 无输出；前两个文件全 PASS 连跑 2 次；`tst_ui_optimization` 维持既有水平（其今日页桩的 `deleteTask` 直调路径已改为上抛信号，若有用例断言"点删除后 taskManager.deleteTask 被调"需改为断言视图发出 `deleteRequested` 信号——用 `SignalSpy { target: view; signalName: "deleteRequested" }`）。
 
 - [ ] **Step 5: 全量回归 + 真机冒烟 + 提交**

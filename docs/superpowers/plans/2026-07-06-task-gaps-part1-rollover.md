@@ -25,11 +25,13 @@
 ### Task 1: schema v4 —— tasks.routine_id 列 + 存量回填
 
 **Files:**
+
 - Modify: `src/services/DatabaseManager.h`（私有函数声明加一行）
 - Modify: `src/services/DatabaseManager.cpp`（createTables 分发 + migrateToVersion4 实现）
 - Test: `tests/ServiceTests.cpp`
 
 **Interfaces:**
+
 - Produces: tasks 表新增列 `routine_id INTEGER REFERENCES routines(id)`（默认 NULL）；`user_version` 升到 4；迁移时按标题回填存量。后续任务依赖该列做插入与过滤。
 
 - [ ] **Step 1: 写失败测试**
@@ -183,10 +185,12 @@ git commit -m "schema v4 新增 tasks.routine_id 血缘列并回填存量"
 ### Task 2: materializeToday 写入 routine_id
 
 **Files:**
+
 - Modify: `src/services/RoutineManager.cpp`（INSERT 语句一处）
 - Test: `tests/ServiceTests.cpp`
 
 **Interfaces:**
+
 - Consumes: Task 1 的 routine_id 列
 - Produces: 例行生成的任务行 `routine_id` = 来源例行 id（后续结转查询据此排除）
 
@@ -255,11 +259,13 @@ git commit -m "例行生成任务写入 routine_id 血缘"
 ### Task 3: TaskManager::updateTask
 
 **Files:**
+
 - Modify: `src/services/TaskManager.h`
 - Modify: `src/services/TaskManager.cpp`
 - Test: `tests/ServiceTests.cpp`
 
 **Interfaces:**
+
 - Produces: `Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue)` —— 校验规则与 addTask 一致（trim 非空、normalizeDate、categoryId>0 时校验存在并同步 category 文本列）；成功发 `tasksChanged`。QML 侧日期可传 `"yyyy-MM-dd"` 字符串。
 
 - [ ] **Step 1: 写失败测试**
@@ -281,16 +287,9 @@ void ServiceTests::updateTaskChangesTitleCategoryAndDate()
     const int taskId = insertTaskRow(QStringLiteral("原标题"), today);
     QVERIFY(taskId > 0);
 
-    QVERIFY(CategoryManager::instance()->addCategory(QStringLiteral("数学编辑"), QStringLiteral("#d4a574")));
-    int categoryId = -1;
-    const QVariantList categories = CategoryManager::instance()->getCategories();
-    for (const QVariant& entry : categories) {
-        const QVariantMap map = entry.toMap();
-        if (map.value(QStringLiteral("name")).toString() == QStringLiteral("数学编辑")) {
-            categoryId = map.value(QStringLiteral("id")).toInt();
-            break;
-        }
-    }
+    // addCategory 直接返回新科目 id（既有接口，返回 int，失败为 -1）。
+    const int categoryId = CategoryManager::instance()->addCategory(
+        QStringLiteral("数学编辑"), QStringLiteral("#d4a574"));
     QVERIFY(categoryId > 0);
 
     QSignalSpy changedSpy(manager, &TaskManager::tasksChanged);
@@ -423,12 +422,15 @@ git commit -m "TaskManager 新增 updateTask 编辑接口"
 ### Task 4: getOverdueUncompletedTasks + moveTasksToToday
 
 **Files:**
+
 - Modify: `src/services/TaskManager.h`
 - Modify: `src/services/TaskManager.cpp`
 - Test: `tests/ServiceTests.cpp`
 
 **Interfaces:**
+
 - Produces:
+
   - `Q_INVOKABLE QVariantList getOverdueUncompletedTasks() const` —— `date < today AND completed = 0 AND routine_id IS NULL`，`date ASC, id ASC`，返回结构同 getTodayTasks
   - `Q_INVOKABLE bool moveTasksToToday(const QVariantList& taskIds)` —— 事务批量改 date；空列表返回 true；任一 id 无效或未命中整体回滚；成功发 `tasksChanged`
 
@@ -607,11 +609,13 @@ git commit -m "TaskManager 新增逾期查询与批量结转接口"
 ### Task 5: AppSettings.rolloverIgnoredDate
 
 **Files:**
+
 - Modify: `src/services/AppSettings.h`
 - Modify: `src/services/AppSettings.cpp`
 - Test: `tests/ServiceTests.cpp`
 
 **Interfaces:**
+
 - Produces: `Q_PROPERTY QString rolloverIgnoredDate`（默认 ""，键 `rollover/lastIgnoredDate`，NOTIFY `rolloverIgnoredDateChanged`）——横幅"忽略"按当天 ISO 日期记录。
 
 - [ ] **Step 1: 写失败测试**
@@ -699,13 +703,16 @@ git commit -m "AppSettings 新增结转忽略日期键"
 ### Task 6: 今日页结转横幅（QML）
 
 **Files:**
+
 - Modify: `qml/views/TodayTaskView.qml`
 - Modify: `qml/MainWindow.qml`（TodayTaskView 实例注入 settingsRef）
 - Create: `tests/qml/tst_today_rollover.qml`
 
 **Interfaces:**
+
 - Consumes: Task 4 的 `getOverdueUncompletedTasks()`/`moveTasksToToday(ids)`、Task 5 的 `rolloverIgnoredDate`
 - Produces:
+
   - TodayTaskView `property var settingsRef: null`、`property var overdueTasks: []`、`readonly` 驱动属性 `property bool rolloverBannerActive: false`
   - 函数 `moveOverdueToToday()`、`ignoreOverdueForToday()`、`todayIsoDate()`
   - objectName：横幅 `rolloverBanner`、文本 `rolloverBannerText`、按钮 `rolloverMoveButton`/`rolloverIgnoreButton`
@@ -998,11 +1005,13 @@ Expected: FAIL（`rolloverBannerActive`/`settingsRef` 不存在）。
 - [ ] **Step 4: qmllint + 测试确认通过（含既有回归）**
 
 Run:
+
 ```bash
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/views/TodayTaskView.qml qml/MainWindow.qml
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_today_rollover.qml 2>/dev/null | grep -E "FAIL|Totals"
 /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_ui_optimization.qml 2>/dev/null | grep -E "Totals"
 ```
+
 Expected: lint 无输出；rollover 全 PASS 连跑 2 次；`tst_ui_optimization` 与既有偶发水平一致（其 taskManager 桩缺新接口，靠 `loadOverdueTasks` 的守卫不崩——若出现 `getOverdueUncompletedTasks is not a function` 之类新失败必须修复守卫）。
 
 - [ ] **Step 5: 全量构建 + 提交**
