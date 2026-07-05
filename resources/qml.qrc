@@ -13,6 +13,7 @@
         <file alias="qml/components/Sidebar.qml">../qml/components/Sidebar.qml</file>
         <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
         <file alias="qml/components/AddTaskDialog.qml">../qml/components/AddTaskDialog.qml</file>
+        <file alias="qml/components/EditTaskDialog.qml">../qml/components/EditTaskDialog.qml</file>
         <file alias="qml/components/CountdownDialog.qml">../qml/components/CountdownDialog.qml</file>
         <file alias="qml/components/CountdownBanner.qml">../qml/components/CountdownBanner.qml</file>
         <file alias="qml/components/CountdownItem.qml">../qml/components/CountdownItem.qml</file>
