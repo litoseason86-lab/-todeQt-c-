@@ -150,10 +150,23 @@ Item {
                     return
                 }
             }
-        } else if (root.timer.hasActiveSession || root.timer.phase !== 0) {
-            if (!root.timer.stopFocus()) {
+        } else {
+            var hasRunningTimer = root.timer.hasActiveSession || root.timer.phase !== 0
+            if (hasRunningTimer && !root.timer.stopFocus()) {
                 root.errorText = "结束当前阶段失败，请重试"
                 return
+            }
+            if (!hasRunningTimer && root.pomoTaskId > 0) {
+                // 自由模式没有“待机开始”按钮：从任务页直达番茄待机后再切自由，
+                // 必须立刻用缓存任务启动自由专注，否则用户会落到一个无法开始的空页面。
+                if (!root.timer.startFocus(root.pomoTaskId, root.pomodoroTitle())) {
+                    root.errorText = "自由专注启动失败，请重试"
+                    return
+                }
+                root.clearPomodoroTask()
+                if (root.settings) {
+                    root.settings.lastMode = 0
+                }
             }
         }
 

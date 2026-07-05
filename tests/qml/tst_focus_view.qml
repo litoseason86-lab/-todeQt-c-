@@ -24,6 +24,9 @@ TestCase {
         property int phase: 0
         property int targetSeconds: 0
         property int remainingSeconds: 0
+        property int startFocusCalls: 0
+        property int startFocusTaskId: 0
+        property string startFocusTitle: ""
         property int startPomodoroWorkTaskId: 0
         property string startPomodoroWorkTitle: ""
         property int startPomodoroWorkSeconds: 0
@@ -32,6 +35,15 @@ TestCase {
         property int autoCompleteMinutes: 5
 
         function startFocus(taskId, title) {
+            startFocusCalls += 1
+            startFocusTaskId = taskId
+            startFocusTitle = title
+            isRunning = true
+            hasActiveSession = true
+            mode = 0
+            phase = 0
+            currentTaskId = taskId
+            currentTaskTitle = title
             return true
         }
 
@@ -128,6 +140,9 @@ TestCase {
         focusTimer.phase = 0
         focusTimer.targetSeconds = 0
         focusTimer.remainingSeconds = 0
+        focusTimer.startFocusCalls = 0
+        focusTimer.startFocusTaskId = 0
+        focusTimer.startFocusTitle = ""
         focusTimer.startPomodoroWorkTaskId = 0
         focusTimer.startPomodoroWorkTitle = ""
         focusTimer.startPomodoroWorkSeconds = 0
@@ -380,6 +395,22 @@ TestCase {
         compare(view.pomoTaskTitle, "直达任务")
         compare(view.taskTitle(), "直达任务")
         compare(view.canStartPomodoro(), true)
+    }
+
+    function test_switchingDirectPomodoroTaskToFreeStartsFocus() {
+        view.enterPomodoroWithTask(9, "直达任务")
+        wait(20)
+
+        view.toPomodoroTab(false)
+        wait(20)
+
+        compare(view.state, "free")
+        compare(focusTimer.startFocusCalls, 1)
+        compare(focusTimer.startFocusTaskId, 9)
+        compare(focusTimer.startFocusTitle, "直达任务")
+        compare(focusTimer.hasActiveSession, true)
+        compare(view.taskTitle(), "直达任务")
+        compare(appSettingsMock.lastMode, 0)
     }
 
     function test_enterPomodoroWithTaskStopsActiveFreeSession() {
