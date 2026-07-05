@@ -34,7 +34,7 @@
 
 - Produces: tasks 表新增列 `routine_id INTEGER REFERENCES routines(id)`（默认 NULL）；`user_version` 升到 4；迁移时按标题回填存量。后续任务依赖该列做插入与过滤。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `tests/ServiceTests.cpp` 的 `private slots:` 区加：
 
@@ -82,12 +82,12 @@ void ServiceTests::migrationV4BackfillsRoutineIdAndIsIdempotent()
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cmake --build build && ctest --test-dir build -R PomodoroTodoTests --output-on-failure 2>&1 | tail -15`
 Expected: 两个新用例 FAIL（`no such column: routine_id`）。
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 `src/services/DatabaseManager.h`：`migrateToVersion3();` 声明之后加：
 
@@ -168,12 +168,12 @@ bool DatabaseManager::migrateToVersion4()
 }
 ```
 
-- [ ] **Step 4: 运行确认通过（含全量 C++ 回归）**
+- [x] **Step 4: 运行确认通过（含全量 C++ 回归）**
 
 Run: `cmake --build build && ctest --test-dir build -R PomodoroTodoTests --output-on-failure 2>&1 | tail -5`
 Expected: PASS（既有迁移/任务用例不受影响）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/services/DatabaseManager.h src/services/DatabaseManager.cpp tests/ServiceTests.cpp
@@ -194,7 +194,7 @@ git commit -m "schema v4 新增 tasks.routine_id 血缘列并回填存量"
 - Consumes: Task 1 的 routine_id 列
 - Produces: 例行生成的任务行 `routine_id` = 来源例行 id（后续结转查询据此排除）
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `private slots:` 区加：
 
@@ -219,12 +219,12 @@ void ServiceTests::materializeTodayStampsRoutineId()
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `cmake --build build && ctest --test-dir build -R PomodoroTodoTests --output-on-failure 2>&1 | tail -10`
 Expected: 新用例 FAIL（routine_id 为 NULL，JOIN 无结果）。
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 `src/services/RoutineManager.cpp` 的 `materializeToday()` 中 INSERT 改为（在 `insertTask.prepare` 与绑定处）：
 
@@ -242,12 +242,12 @@ Expected: 新用例 FAIL（routine_id 为 NULL，JOIN 无结果）。
 
 （其余行保持不变，只是 SQL 多一列、多一个绑定。）
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `cmake --build build && ctest --test-dir build -R PomodoroTodoTests --output-on-failure 2>&1 | tail -5`
 Expected: PASS（既有例行生成用例不受影响——它们不检查 routine_id）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/services/RoutineManager.cpp tests/ServiceTests.cpp
@@ -268,7 +268,7 @@ git commit -m "例行生成任务写入 routine_id 血缘"
 
 - Produces: `Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue)` —— 校验规则与 addTask 一致（trim 非空、normalizeDate、categoryId>0 时校验存在并同步 category 文本列）；成功发 `tasksChanged`。QML 侧日期可传 `"yyyy-MM-dd"` 字符串。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `private slots:` 区加：
 
@@ -329,12 +329,12 @@ void ServiceTests::updateTaskRejectsBlankTitleAndInvalidId()
 
 （`CategoryManager::addCategory(name, color)` 与 `getCategories()` 为既有接口，其他用例已这样使用；若签名有出入，以 `src/services/CategoryManager.h` 为准调整取 id 方式。）
 
-- [ ] **Step 2: 运行确认编译失败**
+- [x] **Step 2: 运行确认编译失败**
 
 Run: `cmake --build build 2>&1 | tail -5`
 Expected: 编译错误（`updateTask` 不是成员）。
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 `src/services/TaskManager.h`：`setTaskCompleted` 声明之后加：
 
@@ -405,12 +405,12 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, c
 }
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `cmake --build build && ctest --test-dir build -R PomodoroTodoTests --output-on-failure 2>&1 | tail -5`
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/services/TaskManager.h src/services/TaskManager.cpp tests/ServiceTests.cpp
@@ -434,7 +434,7 @@ git commit -m "TaskManager 新增 updateTask 编辑接口"
   - `Q_INVOKABLE QVariantList getOverdueUncompletedTasks() const` —— `date < today AND completed = 0 AND routine_id IS NULL`，`date ASC, id ASC`，返回结构同 getTodayTasks
   - `Q_INVOKABLE bool moveTasksToToday(const QVariantList& taskIds)` —— 事务批量改 date；空列表返回 true；任一 id 无效或未命中整体回滚；成功发 `tasksChanged`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `private slots:` 区加：
 
@@ -498,12 +498,12 @@ void ServiceTests::moveTasksToTodayIsTransactional()
 }
 ```
 
-- [ ] **Step 2: 运行确认编译失败**
+- [x] **Step 2: 运行确认编译失败**
 
 Run: `cmake --build build 2>&1 | tail -5`
 Expected: 编译错误（两个成员不存在）。
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 `src/services/TaskManager.h`：`getMonthTasks` 声明之后加：
 
@@ -592,12 +592,12 @@ bool TaskManager::moveTasksToToday(const QVariantList& taskIds)
 }
 ```
 
-- [ ] **Step 4: 运行确认通过**
+- [x] **Step 4: 运行确认通过**
 
 Run: `cmake --build build && ctest --test-dir build -R PomodoroTodoTests --output-on-failure 2>&1 | tail -5`
 Expected: PASS。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add src/services/TaskManager.h src/services/TaskManager.cpp tests/ServiceTests.cpp
@@ -618,7 +618,7 @@ git commit -m "TaskManager 新增逾期查询与批量结转接口"
 
 - Produces: `Q_PROPERTY QString rolloverIgnoredDate`（默认 ""，键 `rollover/lastIgnoredDate`，NOTIFY `rolloverIgnoredDateChanged`）——横幅"忽略"按当天 ISO 日期记录。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `private slots:` 区加：
 
@@ -650,12 +650,12 @@ void ServiceTests::appSettingsRolloverIgnoredDateRoundTrip()
 }
 ```
 
-- [ ] **Step 2: 运行确认编译失败**
+- [x] **Step 2: 运行确认编译失败**
 
 Run: `cmake --build build 2>&1 | tail -5`
 Expected: 编译错误（成员不存在）。
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 `src/services/AppSettings.h`：Q_PROPERTY 区加：
 
@@ -688,7 +688,7 @@ void AppSettings::setRolloverIgnoredDate(const QString& date)
 }
 ```
 
-- [ ] **Step 4: 运行确认通过 + 提交**
+- [x] **Step 4: 运行确认通过 + 提交**
 
 Run: `cmake --build build && ctest --test-dir build -R PomodoroTodoTests --output-on-failure 2>&1 | tail -5`
 Expected: PASS。
@@ -717,7 +717,7 @@ git commit -m "AppSettings 新增结转忽略日期键"
   - 函数 `moveOverdueToToday()`、`ignoreOverdueForToday()`、`todayIsoDate()`
   - objectName：横幅 `rolloverBanner`、文本 `rolloverBannerText`、按钮 `rolloverMoveButton`/`rolloverIgnoreButton`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `tests/qml/tst_today_rollover.qml`：
 
@@ -857,12 +857,12 @@ TestCase {
 }
 ```
 
-- [ ] **Step 2: 运行确认失败**
+- [x] **Step 2: 运行确认失败**
 
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_today_rollover.qml 2>/dev/null | grep -E "FAIL|Totals"`
 Expected: FAIL（`rolloverBannerActive`/`settingsRef` 不存在）。
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 `qml/views/TodayTaskView.qml`：
 
@@ -1002,7 +1002,7 @@ Expected: FAIL（`rolloverBannerActive`/`settingsRef` 不存在）。
                     settingsRef: root.appSettingsRef
 ```
 
-- [ ] **Step 4: qmllint + 测试确认通过（含既有回归）**
+- [x] **Step 4: qmllint + 测试确认通过（含既有回归）**
 
 Run:
 
@@ -1014,7 +1014,7 @@ Run:
 
 Expected: lint 无输出；rollover 全 PASS 连跑 2 次；`tst_ui_optimization` 与既有偶发水平一致（其 taskManager 桩缺新接口，靠 `loadOverdueTasks` 的守卫不崩——若出现 `getOverdueUncompletedTasks is not a function` 之类新失败必须修复守卫）。
 
-- [ ] **Step 5: 全量构建 + 提交**
+- [x] **Step 5: 全量构建 + 提交**
 
 ```bash
 cmake --build build && ctest --test-dir build --output-on-failure
