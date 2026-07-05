@@ -408,6 +408,7 @@ private slots:
     void routineCrudAddsGetsUpdatesDeletes();
     void materializeTodayIsIdempotentAndDoesNotBackfill();
     void materializeTodayPreservesCategoryAndDoesNotEmitSignals();
+    void materializeTodayStampsRoutineId();
     void materializeTodayRollsBackClaimWhenTaskInsertFails();
     void materializeTodayDoesNotResurrectDeletedTask();
     void materializeTodaySkipsInactiveRoutines();
@@ -1624,6 +1625,19 @@ void ServiceTests::materializeTodayPreservesCategoryAndDoesNotEmitSignals()
     QVERIFY(rawCategorizedTask.next());
     QCOMPARE(rawCategorizedTask.value(0).toString(), QStringLiteral("例行生成科目"));
     QCOMPARE(rawCategorizedTask.value(1).toInt(), categoryId);
+}
+
+void ServiceTests::materializeTodayStampsRoutineId()
+{
+    QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("晨间背单词"), -1));
+    QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT t.routine_id FROM tasks t JOIN routines r ON r.id = t.routine_id "
+        "WHERE t.title = '晨间背单词'")));
+    QVERIFY(query.next());
+    QVERIFY(query.value(0).toInt() > 0);
 }
 
 void ServiceTests::materializeTodayRollsBackClaimWhenTaskInsertFails()

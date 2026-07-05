@@ -312,11 +312,14 @@ int RoutineManager::materializeToday()
 
         QSqlQuery insertTask(db);
         insertTask.prepare(QStringLiteral(
-            "INSERT INTO tasks (title, category, category_id, date, completed) "
-            "VALUES (:title, COALESCE((SELECT name FROM categories WHERE id = :categoryId), ''), :categoryId, :date, 0)"));
+            "INSERT INTO tasks (title, category, category_id, date, completed, routine_id) "
+            "VALUES (:title, COALESCE((SELECT name FROM categories WHERE id = :categoryId), ''), "
+            ":categoryId, :date, 0, :routineId)"));
         insertTask.bindValue(QStringLiteral(":title"), routine.title);
         insertTask.bindValue(QStringLiteral(":categoryId"), routine.categoryId);
         insertTask.bindValue(QStringLiteral(":date"), today);
+        // 血缘列用于区分“例行生成”和“手工创建”，结转功能靠它排除例行残留。
+        insertTask.bindValue(QStringLiteral(":routineId"), routine.id);
 
         // 这里刻意直接写 SQL，而不调用 TaskManager::addTask：
         // TaskManager 会发 tasksChanged，应用启动时生成例行任务再触发刷新，容易形成递归刷新链。
