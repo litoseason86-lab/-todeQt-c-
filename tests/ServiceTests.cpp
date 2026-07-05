@@ -411,7 +411,9 @@ private slots:
     void materializeTodayRollsBackClaimWhenTaskInsertFails();
     void materializeTodayDoesNotResurrectDeletedTask();
     void materializeTodaySkipsInactiveRoutines();
-    void freshDatabaseCreatesVersion3PresetCategories();
+    void freshDatabaseHasRoutineIdColumn();
+    void migrationV4BackfillsRoutineIdAndIsIdempotent();
+    void freshDatabaseCreatesVersion4PresetCategories();
     void migrationMapsLegacyCategoryTextToCategoryIds();
     void migrationCreatesDatabaseBackup();
     void customCategoryCrudValidatesAndEmitsChanges();
@@ -1422,7 +1424,7 @@ void ServiceTests::version2MigrationAddsRoutinesSchemaAndIndex()
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 3);
+    QCOMPARE(versionQuery.value(0).toInt(), 4);
 
     // v3 从真实 v2 库升级时必须补齐 routines 表和索引，不能只覆盖全新库。
     QSqlQuery tableQuery(DatabaseManager::instance()->database());
@@ -1681,12 +1683,47 @@ void ServiceTests::materializeTodaySkipsInactiveRoutines()
     QVERIFY(TaskManager::instance()->getTasksByDate(QDate::currentDate()).isEmpty());
 }
 
-void ServiceTests::freshDatabaseCreatesVersion3PresetCategories()
+void ServiceTests::freshDatabaseHasRoutineIdColumn()
+{
+    // 新库直建路径也必须带 routine_id 列，SELECT 不报错即证明列存在。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("SELECT routine_id FROM tasks LIMIT 1")));
+}
+
+void ServiceTests::migrationV4BackfillsRoutineIdAndIsIdempotent()
+{
+    QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("背单词"), -1));
+    const QDate yesterday = QDate::currentDate().addDays(-1);
+    const int routineLikeId = insertTaskRow(QStringLiteral("背单词"), yesterday);
+    const int plainId = insertTaskRow(QStringLiteral("普通任务"), yesterday);
+    QVERIFY(routineLikeId > 0);
+    QVERIFY(plainId > 0);
+
+    // 把版本拨回 3 重跑建表流程，模拟老库升级路径：
+    // 列已存在时走幂等分支，回填逻辑仍要对存量行生效。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 3")));
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    QVERIFY(query.exec(QStringLiteral("SELECT routine_id FROM tasks WHERE id = %1").arg(routineLikeId)));
+    QVERIFY(query.next());
+    QVERIFY(!query.value(0).isNull());
+
+    QVERIFY(query.exec(QStringLiteral("SELECT routine_id FROM tasks WHERE id = %1").arg(plainId)));
+    QVERIFY(query.next());
+    QVERIFY(query.value(0).isNull());
+
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 4);
+}
+
+void ServiceTests::freshDatabaseCreatesVersion4PresetCategories()
 {
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 3);
+    QCOMPARE(versionQuery.value(0).toInt(), 4);
 
     const QVariantList presets = CategoryManager::instance()->getPresetCategories();
     QCOMPARE(presets.size(), 5);
@@ -1725,7 +1762,7 @@ void ServiceTests::migrationMapsLegacyCategoryTextToCategoryIds()
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 3);
+    QCOMPARE(versionQuery.value(0).toInt(), 4);
 
     QSqlQuery presetTask(DatabaseManager::instance()->database());
     presetTask.prepare(QStringLiteral(

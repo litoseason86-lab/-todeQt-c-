@@ -31,6 +31,8 @@ private:
     // categories 是第二阶段加入的科目表，旧任务会在迁移时补上 category_id。
     bool createCategoriesTable();
     bool migrateToVersion3();
+    // v4 给 tasks 增加 routine_id 血缘列，结转功能靠它排除例行任务。
+    bool migrateToVersion4();
     bool createRoutinesTable();
     bool insertPresetCategories();
     bool migrateTaskCategories();

@@ -122,6 +122,7 @@ bool DatabaseManager::createTables()
             title TEXT NOT NULL CHECK(length(trim(title)) > 0),
             category TEXT,
             category_id INTEGER REFERENCES categories(id),
+            routine_id INTEGER REFERENCES routines(id),
             date TEXT NOT NULL,
             completed INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -159,6 +160,14 @@ bool DatabaseManager::createTables()
     // 版本 3 引入每日例行表 routines（纯新增，向后兼容）。
     if (getDatabaseVersion() < 3 || !tableExists(QStringLiteral("routines"))) {
         if (!migrateToVersion3()) {
+            return false;
+        }
+    }
+
+    // 版本 4 给 tasks 增加 routine_id 血缘列；列缺失时无论版本号都要补，防御半迁移状态。
+    if (getDatabaseVersion() < 4
+        || !columnExists(QStringLiteral("tasks"), QStringLiteral("routine_id"))) {
+        if (!migrateToVersion4()) {
             return false;
         }
     }
@@ -330,6 +339,60 @@ bool DatabaseManager::migrateToVersion3()
     return true;
 }
 
+bool DatabaseManager::migrateToVersion4()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+
+    // v4 会改写既有 tasks 行；迁移前备份是为了避免回填中途失败造成不可恢复状态。
+    if (!backupDatabaseBeforeMigration()) {
+        return false;
+    }
+
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start database migration transaction:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    if (!columnExists(QStringLiteral("tasks"), QStringLiteral("routine_id"))) {
+        if (!query.exec(QStringLiteral(
+                "ALTER TABLE tasks ADD COLUMN routine_id INTEGER REFERENCES routines(id)"))) {
+            qWarning() << "Failed to add routine_id column:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    // 尽力回填：标题与某条例行完全一致的存量任务视为该例行生成。
+    // 误标同名普通任务的代价只是不参与结转；漏标会在结转横幅出现一次，由用户处置。
+    if (!query.exec(QStringLiteral(
+            "UPDATE tasks SET routine_id = ("
+            "  SELECT r.id FROM routines r WHERE r.title = tasks.title"
+            ") WHERE routine_id IS NULL AND EXISTS ("
+            "  SELECT 1 FROM routines r WHERE r.title = tasks.title)"))) {
+        qWarning() << "Failed to backfill routine_id:" << query.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    if (!setDatabaseVersion(4)) {
+        m_db.rollback();
+        return false;
+    }
+
+    if (!m_db.commit()) {
+        qWarning() << "Failed to commit database migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 4";
+    return true;
+}
+
 bool DatabaseManager::insertPresetCategories()
 {
     QSqlQuery query(m_db);
@@ -455,7 +518,11 @@ bool DatabaseManager::backupDatabaseBeforeMigration() const
 
     const QDir databaseDir = databaseInfo.absoluteDir();
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
-    const QString backupPath = databaseDir.filePath(QStringLiteral("pomodoro_backup_%1.db").arg(timestamp));
+    QString backupPath = databaseDir.filePath(QStringLiteral("pomodoro_backup_%1.db").arg(timestamp));
+    int suffix = 1;
+    while (QFileInfo::exists(backupPath)) {
+        backupPath = databaseDir.filePath(QStringLiteral("pomodoro_backup_%1_%2.db").arg(timestamp).arg(suffix++));
+    }
 
     if (!QFile::copy(databaseInfo.absoluteFilePath(), backupPath)) {
         qWarning() << "Failed to create database migration backup:" << backupPath;
