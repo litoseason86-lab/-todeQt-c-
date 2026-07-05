@@ -17,9 +17,12 @@ Item {
             completedTasks: 0,
             totalTasks: 0,
             completionRate: 0
-        })
+    })
     property var categoryManagerRef: null
     property var countdownServiceRef: null
+    property var settingsRef: null
+    property var overdueTasks: []
+    property bool rolloverBannerActive: false
     property string loadError: ""
     property bool completionRefreshDelayActive: false
 
@@ -72,6 +75,43 @@ Item {
         }
     }
 
+    function todayIsoDate() {
+        return Qt.formatDate(new Date(), "yyyy-MM-dd");
+    }
+
+    function loadOverdueTasks() {
+        // 测试桩或旧上下文可能还没提供结转接口；缺失时按无逾期处理，不能拖垮今日页。
+        if (!taskManager.getOverdueUncompletedTasks) {
+            root.overdueTasks = [];
+            root.rolloverBannerActive = false;
+            return;
+        }
+
+        root.overdueTasks = taskManager.getOverdueUncompletedTasks();
+        var ignoredToday = root.settingsRef && root.settingsRef.rolloverIgnoredDate === root.todayIsoDate();
+        root.rolloverBannerActive = root.overdueTasks.length > 0 && !ignoredToday;
+    }
+
+    function moveOverdueToToday() {
+        var ids = [];
+        for (var i = 0; i < root.overdueTasks.length; i++) {
+            ids.push(Number(root.overdueTasks[i].id));
+        }
+
+        if (taskManager.moveTasksToToday(ids)) {
+            root.refresh();
+        } else {
+            root.loadError = "结转失败，请重试";
+        }
+    }
+
+    function ignoreOverdueForToday() {
+        if (root.settingsRef) {
+            root.settingsRef.rolloverIgnoredDate = root.todayIsoDate();
+        }
+        root.rolloverBannerActive = false;
+    }
+
     function refresh() {
         // 每次刷新前先确保当天真实任务行已生成；跨午夜后只要页面触发刷新就会补上当天例行项。
         // materializeToday 幂等且不发 tasksChanged，避免 refresh 递归。
@@ -80,6 +120,7 @@ Item {
         }
 
         // 任务和统计分开加载，避免统计失败拖垮任务列表。
+        loadOverdueTasks();
         loadTasks();
         loadStats();
     }
@@ -242,6 +283,85 @@ Item {
 
             onClicked: root.countdownRequested()
             onAddRequested: countdownDialog.openForAdd()
+        }
+
+        Rectangle {
+            objectName: "rolloverBanner"
+            Layout.fillWidth: true
+            Layout.preferredHeight: 52
+            visible: root.rolloverBannerActive
+            radius: Theme.radiusLg
+            color: Theme.accentSoft
+            border.color: Theme.accent
+            border.width: 1
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: Theme.space16
+                anchors.rightMargin: Theme.space12
+                spacing: Theme.space12
+
+                Text {
+                    objectName: "rolloverBannerText"
+                    Layout.fillWidth: true
+                    text: "之前还有 " + root.overdueTasks.length + " 个未完成任务"
+                    textFormat: Text.PlainText
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.Medium
+                    color: Theme.inkStrong
+                    elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                Button {
+                    id: rolloverMoveButton
+                    objectName: "rolloverMoveButton"
+                    text: "全部移到今天"
+                    implicitHeight: 34
+
+                    onClicked: root.moveOverdueToToday()
+
+                    background: Rectangle {
+                        color: rolloverMoveButton.hovered ? Theme.accentStrong : Theme.accent
+                        radius: Theme.radiusMd
+                    }
+
+                    contentItem: Text {
+                        text: rolloverMoveButton.text
+                        textFormat: Text.PlainText
+                        color: Theme.surface
+                        font.pixelSize: Theme.fontMd
+                        font.weight: Font.Medium
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                Button {
+                    id: rolloverIgnoreButton
+                    objectName: "rolloverIgnoreButton"
+                    text: "忽略"
+                    implicitHeight: 34
+
+                    onClicked: root.ignoreOverdueForToday()
+
+                    background: Rectangle {
+                        color: rolloverIgnoreButton.hovered ? Theme.surfaceSunken : "transparent"
+                        border.color: Theme.border
+                        border.width: 1
+                        radius: Theme.radiusMd
+                    }
+
+                    contentItem: Text {
+                        text: rolloverIgnoreButton.text
+                        textFormat: Text.PlainText
+                        color: Theme.inkSoft
+                        font.pixelSize: Theme.fontMd
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
         }
 
         RowLayout {

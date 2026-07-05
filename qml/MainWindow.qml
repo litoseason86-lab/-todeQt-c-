@@ -185,6 +185,7 @@ Item {
                 TodayTaskView {
                     categoryManagerRef: categoryManager
                     countdownServiceRef: root.countdownServiceRef
+                    settingsRef: root.appSettingsRef
 
                     onStartFocus: function (taskId, taskTitle) {
                         root.startFocusForTask(taskId, taskTitle);
