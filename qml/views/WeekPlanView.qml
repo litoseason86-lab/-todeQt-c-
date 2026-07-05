@@ -8,10 +8,12 @@ Item {
     id: root
 
     signal startFocus(int taskId, string taskTitle)
+    signal deleteRequested(int taskId, string title)
 
     property date weekStart: mondayOf(new Date())
     property var weekTasks: []
     property var categoryManagerRef: null
+    property int pendingDeleteTaskId: -1
     property string loadError: ""
     property date pendingAddDate: new Date()
     property bool completionRefreshDelayActive: false
@@ -20,6 +22,7 @@ Item {
     readonly property var weekdayGlyphs: ["一", "二", "三", "四", "五", "六", "日"]
 
     Component.onCompleted: refresh()
+    onPendingDeleteTaskIdChanged: refresh()
 
     Connections {
         target: taskManager
@@ -65,6 +68,13 @@ Item {
         return Qt.formatDate(value, "yyyy-MM-dd")
     }
 
+    function taskIsoDate(value) {
+        if (value instanceof Date) {
+            return Qt.formatDate(value, "yyyy-MM-dd")
+        }
+        return String(value || "").substring(0, 10)
+    }
+
     function dayDate(index) {
         var date = new Date(root.weekStart)
         date.setDate(date.getDate() + index)
@@ -104,7 +114,13 @@ Item {
     function refresh() {
         try {
             root.loadError = ""
-            root.weekTasks = taskManager.getWeekTasks(root.isoDate(root.weekStart))
+            var loaded = taskManager.getWeekTasks(root.isoDate(root.weekStart))
+            // 待删除行先从周视图消失；撤销时 pendingDeleteTaskId 清空后刷新恢复。
+            root.weekTasks = root.pendingDeleteTaskId > 0
+                    ? loaded.filter(function(task) {
+                        return Number(task.id) !== root.pendingDeleteTaskId
+                    })
+                    : loaded
         } catch (error) {
             root.weekTasks = []
             root.loadError = "本周计划加载失败"
@@ -465,9 +481,19 @@ Item {
                                     }
 
                                     onDeleteClicked: function(id, title) {
-                                        if (!taskManager.deleteTask(id)) {
-                                            root.loadError = "任务删除失败，请重试"
+                                        root.deleteRequested(id, title)
+                                    }
+
+                                    onRenameSubmitted: function(id, newTitle) {
+                                        var originalCategoryId = Number(modelData.categoryId || -1)
+                                        var originalDate = root.taskIsoDate(modelData.date)
+                                        if (!taskManager.updateTask(id, newTitle, originalCategoryId, originalDate)) {
+                                            root.loadError = "任务更新失败，请重试"
                                         }
+                                    }
+
+                                    onEditClicked: function(id) {
+                                        editTaskDialog.openForTask(modelData)
                                     }
                                 }
                             }
@@ -523,6 +549,19 @@ Item {
 
         onTaskAdded: function(title, date, categoryId) {
             taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId))
+        }
+    }
+
+    EditTaskDialog {
+        id: editTaskDialog
+
+        parent: root
+        categoryManagerRef: root.categoryManagerRef
+
+        onTaskEdited: function(taskId, title, categoryId, isoDate) {
+            if (!taskManager.updateTask(taskId, title, categoryId, isoDate)) {
+                root.loadError = "任务更新失败，请重试"
+            }
         }
     }
 }

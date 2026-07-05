@@ -14,12 +14,19 @@ TestCase {
 
         signal tasksChanged
 
+        property int deleteTaskCalls: 0
+        property int lastDeletedTaskId: -1
+
         function getTodayTasks() { return [] }
         function getWeekTasks(weekStart) { return [] }
         function getMonthTasks(year, month) { return [] }
         function addTask(title, date, categoryId) {}
         function setTaskCompleted(id, completed) {}
-        function deleteTask(id) { return true }
+        function deleteTask(id) {
+            deleteTaskCalls += 1
+            lastDeletedTaskId = id
+            return true
+        }
     }
 
     QtObject {
@@ -152,9 +159,12 @@ TestCase {
         focusTimer.mode = 0
         focusTimer.phase = 0
         appSettings.lastMode = 0
+        taskManager.deleteTaskCalls = 0
+        taskManager.lastDeletedTaskId = -1
         var focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
         focusView.toPomodoroTab(false)
+        mainWindow.cancelPendingDelete()
         wait(20)
     }
 
@@ -288,5 +298,49 @@ TestCase {
         mainWindow.showToast("普通提示")
         compare(toast.shown, true)
         compare(toast.actionText, "")
+    }
+
+    function test_deleteIsDeferredAndUndoable() {
+        mainWindow.deleteCommitDelayMs = 60
+
+        mainWindow.requestDeleteTask(21, "误删任务")
+        compare(mainWindow.pendingDeleteTaskId, 21)
+        compare(taskManager.deleteTaskCalls, 0)
+
+        var toast = findChild(mainWindow, "globalToast")
+        verify(toast)
+        compare(toast.shown, true)
+        compare(toast.actionText, "撤销")
+
+        toast.triggerAction()
+        compare(mainWindow.pendingDeleteTaskId, -1)
+        wait(120)
+        compare(taskManager.deleteTaskCalls, 0)
+
+        mainWindow.deleteCommitDelayMs = 5000
+    }
+
+    function test_deleteCommitsAfterTimeout() {
+        mainWindow.deleteCommitDelayMs = 60
+
+        mainWindow.requestDeleteTask(22, "真删任务")
+        tryCompare(taskManager, "deleteTaskCalls", 1, 2000)
+        compare(taskManager.lastDeletedTaskId, 22)
+        compare(mainWindow.pendingDeleteTaskId, -1)
+
+        mainWindow.deleteCommitDelayMs = 5000
+    }
+
+    function test_secondDeleteCommitsFirstImmediately() {
+        mainWindow.deleteCommitDelayMs = 5000
+
+        mainWindow.requestDeleteTask(23, "第一个")
+        mainWindow.requestDeleteTask(24, "第二个")
+
+        compare(taskManager.deleteTaskCalls, 1)
+        compare(taskManager.lastDeletedTaskId, 23)
+        compare(mainWindow.pendingDeleteTaskId, 24)
+
+        mainWindow.cancelPendingDelete()
     }
 }

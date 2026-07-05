@@ -109,6 +109,7 @@ TestCase {
         taskManager.movedIds = []
         taskManager.moveCalls = 0
         settingsMock.rolloverIgnoredDate = ""
+        view.pendingDeleteTaskId = -1
         view.refresh()
         wait(20)
     }
@@ -166,5 +167,24 @@ TestCase {
         view.refresh()
         wait(20)
         compare(view.rolloverBannerActive, false)
+    }
+
+    function test_pendingDeleteFiltersRow() {
+        taskManager.todayTasksData = [
+            { id: 31, title: "留下", completed: false, date: "2026-07-06", categoryId: -1 },
+            { id: 32, title: "待删", completed: false, date: "2026-07-06", categoryId: -1 }
+        ]
+        view.refresh()
+        wait(20)
+        compare(view.tasks.length, 2)
+
+        view.pendingDeleteTaskId = 32
+        wait(20)
+        compare(view.tasks.length, 1)
+        compare(Number(view.tasks[0].id), 31)
+
+        view.pendingDeleteTaskId = -1
+        wait(20)
+        compare(view.tasks.length, 2)
     }
 }

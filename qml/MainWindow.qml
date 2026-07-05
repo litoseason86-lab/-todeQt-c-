@@ -12,6 +12,9 @@ Item {
     // 淡入淡出期间只保留最后一次视图请求，避免动画队列堆积。
     property string queuedView: ""
     property bool isSwitching: false
+    property int pendingDeleteTaskId: -1
+    property string pendingDeleteTitle: ""
+    property int deleteCommitDelayMs: 5000
     property var countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
     property var appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
     property var focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
@@ -103,6 +106,37 @@ Item {
         globalToast.show(message, actionText, actionCallback)
     }
 
+    function requestDeleteTask(taskId, taskTitle) {
+        // 单槽撤销：新删除到来时，上一条先真正落库，撤销窗口只保护最近一次操作。
+        root.commitPendingDelete()
+
+        root.pendingDeleteTaskId = taskId
+        root.pendingDeleteTitle = String(taskTitle || "")
+        deleteCommitTimer.interval = root.deleteCommitDelayMs
+        deleteCommitTimer.restart()
+        root.showToast("已删除「" + root.pendingDeleteTitle + "」", "撤销", function() {
+            root.cancelPendingDelete()
+        })
+    }
+
+    function commitPendingDelete() {
+        if (root.pendingDeleteTaskId <= 0) {
+            return
+        }
+
+        deleteCommitTimer.stop()
+        // 到这里才真正触库；撤销窗口内数据库没有被碰过，专注记录关联不会提前丢失。
+        taskManager.deleteTask(root.pendingDeleteTaskId)
+        root.pendingDeleteTaskId = -1
+        root.pendingDeleteTitle = ""
+    }
+
+    function cancelPendingDelete() {
+        deleteCommitTimer.stop()
+        root.pendingDeleteTaskId = -1
+        root.pendingDeleteTitle = ""
+    }
+
     function startFocusForTask(taskId, taskTitle) {
         // 已有自由专注、番茄工作或休息阶段时，不启动第二个会话；直接带用户去专注页处理当前状态。
         if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
@@ -186,12 +220,16 @@ Item {
                     categoryManagerRef: categoryManager
                     countdownServiceRef: root.countdownServiceRef
                     settingsRef: root.appSettingsRef
+                    pendingDeleteTaskId: root.pendingDeleteTaskId
 
                     onStartFocus: function (taskId, taskTitle) {
                         root.startFocusForTask(taskId, taskTitle);
                     }
 
                     onCountdownRequested: root.switchToView("countdown")
+                    onDeleteRequested: function(taskId, taskTitle) {
+                        root.requestDeleteTask(taskId, taskTitle)
+                    }
                 }
 
                 FocusView {
@@ -207,9 +245,14 @@ Item {
 
                 WeekPlanView {
                     categoryManagerRef: categoryManager
+                    pendingDeleteTaskId: root.pendingDeleteTaskId
 
                     onStartFocus: function (taskId, taskTitle) {
                         root.startFocusForTask(taskId, taskTitle);
+                    }
+
+                    onDeleteRequested: function(taskId, taskTitle) {
+                        root.requestDeleteTask(taskId, taskTitle)
                     }
                 }
 
@@ -270,6 +313,13 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: Theme.space32
+    }
+
+    Timer {
+        id: deleteCommitTimer
+
+        interval: 5000
+        onTriggered: root.commitPendingDelete()
     }
 
     Connections {

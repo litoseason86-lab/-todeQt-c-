@@ -10,6 +10,7 @@ Item {
 
     signal startFocus(int taskId, string taskTitle)
     signal countdownRequested()
+    signal deleteRequested(int taskId, string title)
 
     property var tasks: []
     property var todayStats: ({
@@ -23,10 +24,12 @@ Item {
     property var settingsRef: null
     property var overdueTasks: []
     property bool rolloverBannerActive: false
+    property int pendingDeleteTaskId: -1
     property string loadError: ""
     property bool completionRefreshDelayActive: false
 
     Component.onCompleted: refresh()
+    onPendingDeleteTaskIdChanged: refresh()
 
     Connections {
         target: taskManager
@@ -112,6 +115,13 @@ Item {
         root.rolloverBannerActive = false;
     }
 
+    function taskIsoDate(value) {
+        if (value instanceof Date) {
+            return Qt.formatDate(value, "yyyy-MM-dd");
+        }
+        return String(value || "").substring(0, 10);
+    }
+
     function refresh() {
         // 每次刷新前先确保当天真实任务行已生成；跨午夜后只要页面触发刷新就会补上当天例行项。
         // materializeToday 幂等且不发 tasksChanged，避免 refresh 递归。
@@ -149,7 +159,13 @@ Item {
     function loadTasks() {
         try {
             root.loadError = "";
-            root.tasks = taskManager.getTodayTasks();
+            var loaded = taskManager.getTodayTasks();
+            // 待删除行先在界面消失；撤销时 pendingDeleteTaskId 回到 -1，刷新后自然恢复。
+            root.tasks = root.pendingDeleteTaskId > 0
+                    ? loaded.filter(function(task) {
+                        return Number(task.id) !== root.pendingDeleteTaskId;
+                    })
+                    : loaded;
         } catch (error) {
             root.tasks = [];
             root.loadError = "任务加载失败";
@@ -570,9 +586,19 @@ Item {
                             }
 
                             onDeleteClicked: function (id, title) {
-                                if (!taskManager.deleteTask(id)) {
-                                    root.loadError = "任务删除失败，请重试";
+                                root.deleteRequested(id, title);
+                            }
+
+                            onRenameSubmitted: function (id, newTitle) {
+                                var originalCategoryId = Number(modelData.categoryId || -1);
+                                var originalDate = root.taskIsoDate(modelData.date);
+                                if (!taskManager.updateTask(id, newTitle, originalCategoryId, originalDate)) {
+                                    root.loadError = "任务更新失败，请重试";
                                 }
+                            }
+
+                            onEditClicked: function (id) {
+                                editTaskDialog.openForTask(modelData);
                             }
                         }
                     }
@@ -589,6 +615,19 @@ Item {
 
         onTaskAdded: function (title, date, categoryId) {
             taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId));
+        }
+    }
+
+    EditTaskDialog {
+        id: editTaskDialog
+
+        parent: root
+        categoryManagerRef: root.categoryManagerRef
+
+        onTaskEdited: function (taskId, title, categoryId, isoDate) {
+            if (!taskManager.updateTask(taskId, title, categoryId, isoDate)) {
+                root.loadError = "任务更新失败，请重试";
+            }
         }
     }
 
