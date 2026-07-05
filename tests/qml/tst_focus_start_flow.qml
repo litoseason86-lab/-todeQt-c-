@@ -266,4 +266,27 @@ TestCase {
         var label = findChild(mainWindow, "toastText")
         compare(label.text, "已有专注进行中")
     }
+
+    function test_toastActionShowsAndFires() {
+        var toast = findChild(mainWindow, "globalToast")
+        verify(toast)
+        var fired = false
+
+        mainWindow.showToast("已删除「测试」", "撤销", function () { fired = true })
+        compare(toast.shown, true)
+        compare(toast.actionText, "撤销")
+
+        toast.triggerAction()
+        compare(fired, true)
+        compare(toast.shown, false)
+    }
+
+    function test_toastWithoutActionKeepsOldBehavior() {
+        var toast = findChild(mainWindow, "globalToast")
+        verify(toast)
+
+        mainWindow.showToast("普通提示")
+        compare(toast.shown, true)
+        compare(toast.actionText, "")
+    }
 }

@@ -99,8 +99,8 @@ Item {
         return (isRunning ? "" : "⏸ ") + timeText + " · 番茄Todo"
     }
 
-    function showToast(message) {
-        globalToast.show(message)
+    function showToast(message, actionText, actionCallback) {
+        globalToast.show(message, actionText, actionCallback)
     }
 
     function startFocusForTask(taskId, taskTitle) {

@@ -9,15 +9,33 @@ Rectangle {
 
     property int displayDurationMs: 3000
     property bool shown: false
+    property string actionText: ""
+    property var actionCallback: null
+    // 带撤销动作的提示需要给用户更长反应窗口，与延迟删除提交窗口一致。
+    property int actionDisplayDurationMs: 5000
     readonly property int yOffset: root.shown ? 0 : 12
 
-    function show(message) {
+    function show(message, action, callback) {
         label.text = message
+        root.actionText = action === undefined || action === null ? "" : String(action)
+        root.actionCallback = callback === undefined ? null : callback
+        hideTimer.interval = root.actionText.length > 0 ? root.actionDisplayDurationMs : root.displayDurationMs
         root.shown = true
         hideTimer.restart()
     }
 
-    implicitWidth: label.implicitWidth + Theme.space24 * 2
+    function triggerAction() {
+        // 先取出回调再关闭提示，避免关闭过程里的外部状态更新把回调清掉。
+        var callback = root.actionCallback
+        root.actionCallback = null
+        root.shown = false
+        hideTimer.stop()
+        if (callback) {
+            callback()
+        }
+    }
+
+    implicitWidth: contentRow.implicitWidth + Theme.space24 * 2
     implicitHeight: 40
     radius: Theme.radiusLg
     color: Theme.inkStrong
@@ -47,14 +65,36 @@ Rectangle {
         easing.type: Easing.OutQuad
     }
 
-    Text {
-        id: label
+    Row {
+        id: contentRow
 
-        objectName: "toastText"
         anchors.centerIn: parent
-        textFormat: Text.PlainText
-        color: Theme.surface
-        font.pixelSize: Theme.fontMd
+        spacing: Theme.space12
+
+        Text {
+            id: label
+
+            objectName: "toastText"
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            color: Theme.surface
+            font.pixelSize: Theme.fontMd
+        }
+
+        Text {
+            objectName: "toastActionButton"
+            anchors.verticalCenter: parent.verticalCenter
+            visible: root.actionText.length > 0
+            text: root.actionText
+            textFormat: Text.PlainText
+            color: Theme.accentSoft
+            font.pixelSize: Theme.fontMd
+            font.weight: Font.DemiBold
+
+            TapHandler {
+                onTapped: root.triggerAction()
+            }
+        }
     }
 
     Timer {
