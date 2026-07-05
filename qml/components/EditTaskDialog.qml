@@ -1,3 +1,6 @@
+// 内联组件（DateChip）和 Overlay 里要引用外层 root，按 qmllint 建议显式绑定组件作用域。
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Effects
@@ -54,8 +57,10 @@ Popup {
                 color: ""
             }
         ];
-        if (root.categoryManagerRef && root.categoryManagerRef.getActiveCategories) {
-            var actives = root.categoryManagerRef.getActiveCategories();
+        // 与 AddTaskDialog 一致走 getAllCategories——这是 CategoryManager 的真实接口名，
+        // 写错方法名会被守卫静默吞掉，下拉只剩"不设置科目"。
+        if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
+            var actives = root.categoryManagerRef.getAllCategories();
             for (var i = 0; i < actives.length; i++) {
                 options.push(actives[i]);
             }

@@ -12,7 +12,9 @@ TestCase {
     QtObject {
         id: categoryManagerMock
 
-        function getActiveCategories() {
+        // 必须与 CategoryManager 的真实接口同名（getAllCategories）：此前 mock 提供了
+        // 不存在的 getActiveCategories，测试全绿但真机下拉是空的——mock 名称错配会骗过测试。
+        function getAllCategories() {
             return [
                 { id: 3, name: "数学", color: "#d4a574" },
                 { id: 5, name: "英语", color: "#8b7355" }
