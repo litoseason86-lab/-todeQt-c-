@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>番茄待机页 · 布局重设计</title>
+<style>
+  :root{
+    --surface:#fffef9; --surfaceRaised:#faf6ee; --surfaceSunken:#f5ede3;
+    --border:#e8dfc8; --borderSubtle:#f0e6d2;
+    --inkStrong:#3d3327; --ink:#5d4e37; --inkSoft:#8b7355; --inkMuted:#a0896b;
+    --accent:#d4a574; --accentStrong:#c99666; --accentSoft:#f0e6d2;
+    --glass: rgba(255,254,249,0.62); --glassBorder: rgba(255,255,255,0.55);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:-apple-system,"SF Pro Text","PingFang SC",system-ui,sans-serif;
+    background:
+      radial-gradient(1200px 700px at 20% -10%, #fbeed8 0%, transparent 55%),
+      radial-gradient(1000px 600px at 100% 120%, #f3e2c8 0%, transparent 50%),
+      var(--surfaceSunken);
+    color:var(--ink); min-height:100vh; padding:40px 32px 64px;
+  }
+  h1{font-size:20px;color:var(--inkStrong);font-weight:600;margin-bottom:4px}
+  .sub{font-size:13px;color:var(--inkSoft);margin-bottom:14px;max-width:780px;line-height:1.6}
+  .problems{font-size:12px;color:var(--inkSoft);margin-bottom:32px;max-width:780px;line-height:1.9;
+    background:var(--surfaceRaised);border:1px solid var(--border);border-radius:10px;padding:14px 18px}
+  .problems b{color:var(--inkStrong)}
+  .grid{display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start}
+
+  .stage{
+    width:360px;min-height:560px;border-radius:20px;position:relative;
+    background:var(--glass); border:1px solid var(--glassBorder);
+    backdrop-filter:blur(24px) saturate(1.3); -webkit-backdrop-filter:blur(24px) saturate(1.3);
+    box-shadow:0 12px 40px rgba(93,78,55,0.14), inset 0 1px 0 rgba(255,255,255,0.6);
+    display:flex;flex-direction:column;align-items:center; padding:22px 24px 26px;
+  }
+  .stateTag{position:absolute;top:14px;left:16px;font-size:11px;color:var(--inkMuted);letter-spacing:.5px}
+  .bell{position:absolute;top:12px;right:14px;font-size:14px;opacity:.55;padding:4px 6px;border-radius:6px}
+  .bell:hover{background:var(--surfaceRaised)}
+
+  .segment{display:inline-flex;background:var(--surfaceSunken);border:1px solid var(--border);
+    border-radius:9px;padding:2px;gap:2px;margin-top:4px}
+  .segment button{border:0;background:transparent;color:var(--inkSoft);font-size:12px;
+    padding:5px 14px;border-radius:7px;cursor:pointer;font-weight:500}
+  .segment button.on{background:var(--accent);color:#fff;box-shadow:0 2px 6px rgba(201,150,102,0.4)}
+
+  .task{margin-top:14px;text-align:center}
+  .task .title{font-size:16px;font-weight:600;color:var(--inkStrong)}
+  .task .phase{font-size:12px;color:var(--inkSoft);margin-top:4px}
+
+  /* 环：待机预览改为极淡实心轨道，一眼读出"进度将画在这里" */
+  .dial{position:relative;width:236px;height:236px;margin:16px 0 4px}
+  .dial svg{transform:rotate(-90deg)}
+  .dial .track{fill:none;stroke:var(--borderSubtle);stroke-width:14}
+  .dial .tick{fill:none;stroke:var(--accent);stroke-width:14;stroke-linecap:round;opacity:.45}
+  .dial .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .dial .time{font-size:54px;font-weight:700;color:var(--inkStrong);font-variant-numeric:tabular-nums;line-height:1}
+  .dial .caption{font-size:12px;color:var(--inkMuted);margin-top:8px}
+
+  /* —— 方案A核心：时长摘要胶囊（点击展开配置面板） —— */
+  .durationPill{
+    margin-top:10px;display:inline-flex;align-items:center;gap:8px;cursor:pointer;
+    background:var(--surfaceRaised);border:1px solid var(--border);border-radius:999px;
+    padding:8px 18px;font-size:13px;color:var(--ink);font-weight:500;
+  }
+  .durationPill:hover{border-color:var(--accentStrong)}
+  .durationPill .chev{font-size:10px;color:var(--inkMuted)}
+  .durationPill.open{border-color:var(--accentStrong);background:var(--accentSoft)}
+
+  /* 展开面板 */
+  .panel{
+    width:100%;margin-top:12px;background:var(--surfaceRaised);
+    border:1px solid var(--border);border-radius:12px;padding:14px 14px 12px;
+  }
+  .presetRow{display:flex;align-items:center;gap:7px;margin-bottom:8px}
+  .presetRow:last-child{margin-bottom:0}
+  .presetRow .lbl{width:32px;font-size:12px;color:var(--inkSoft);text-align:right;flex:none}
+  .chip{flex:1;text-align:center;padding:8px 0;font-size:12px;border-radius:7px;cursor:pointer;
+    background:var(--surface);border:1px solid var(--border);color:var(--ink);font-weight:500}
+  .chip.on{background:var(--accent);color:#fff;border-color:var(--accentStrong);
+    box-shadow:0 2px 8px rgba(201,150,102,0.35)}
+  /* 主题化步进器 */
+  .stepper{display:flex;align-items:center;gap:0;flex:1.4}
+  .stepper button{width:30px;height:34px;border:1px solid var(--border);background:var(--surface);
+    color:var(--inkSoft);font-size:15px;cursor:pointer;font-weight:600}
+  .stepper button:first-child{border-radius:7px 0 0 7px}
+  .stepper button:last-child{border-radius:0 7px 7px 0}
+  .stepper .val{flex:1;text-align:center;height:34px;line-height:32px;border-top:1px solid var(--border);
+    border-bottom:1px solid var(--border);background:var(--surfaceSunken);
+    font-size:13px;font-weight:600;color:var(--inkStrong);font-variant-numeric:tabular-nums}
+
+  .ruleHint{font-size:11px;color:var(--inkMuted);margin-top:12px;text-align:center}
+
+  .actions{margin-top:auto;width:100%;padding-top:16px;display:flex;flex-direction:column;align-items:center;gap:8px}
+  .btn{width:200px;padding:13px 0;border:0;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer}
+  .btn.primary{background:var(--accent);color:#fff;box-shadow:0 4px 14px rgba(201,150,102,0.4)}
+  .btn.primary:disabled{background:var(--border);color:var(--inkMuted);box-shadow:none;cursor:not-allowed}
+  .microcopy{font-size:11px;color:var(--inkMuted)}
+  .microcopy a{color:var(--accentStrong);text-decoration:none;font-weight:500;cursor:pointer}
+
+  .note{font-size:11px;color:var(--inkMuted);margin-top:8px;text-align:center;font-style:italic;line-height:1.7}
+</style>
+</head>
+<body>
+  <h1>番茄待机页 · 布局重设计（渐进披露）</h1>
+  <p class="sub">核心：<b>配置退场，行动登台</b>。时长已有记忆，95% 的进入场景是"瞄一眼 → 开始"——预设面板不该常驻中央。</p>
+  <div class="problems">
+    截图诊断：<br>
+    · <b>配置抢舞台</b>：预设两行+步进器+规则+按钮垂直堆 5 层，环反而被挤到上方留白里。<br>
+    · <b>"60 分"重复出现</b>：自定义值等于预设时不去重，像 bug。→ 新规则：自定义值命中预设自动归位到预设 chip。<br>
+    · <b>三重冗余</b>：环心 60:00、环下说明、chips 说同一件事。→ 只留环心时间 + 一个摘要胶囊。<br>
+    · <b>原生灰白 SpinBox</b> 撞主题。→ 暖纸步进器（− 60 +）。<br>
+    · <b>米粒虚线环</b>读不出预览语义。→ 极淡实心轨道 + 顶部一小段强调弧。<br>
+    · <b>置灰按钮不解释</b>。→ 按钮下加一行微文案指路。
+  </div>
+
+  <div class="grid">
+
+    <!-- 方案A · 收起态（日常主场景，推荐） -->
+    <div class="stage">
+      <span class="stateTag">方案A · 收起态（日常默认，推荐）</span>
+      <span class="bell">🔔</span>
+      <div class="segment"><button>自由专注</button><button class="on">番茄</button></div>
+      <div class="task">
+        <div class="title">高数 · 多元函数微分</div>
+        <div class="phase">番茄待机</div>
+      </div>
+      <div class="dial">
+        <svg width="236" height="236" viewBox="0 0 236 236">
+          <circle class="track" cx="118" cy="118" r="104"></circle>
+          <!-- 顶部一小段强调弧：暗示进度从这里开始画 -->
+          <circle class="tick" cx="118" cy="118" r="104" stroke-dasharray="26 628"></circle>
+        </svg>
+        <div class="center">
+          <div class="time">60:00</div>
+          <div class="caption">准备开始</div>
+        </div>
+      </div>
+      <div class="durationPill">专注 60 分 · 休息 10 分 <span class="chev">▾</span></div>
+      <div class="note">配置收进一个胶囊；不点它就不打扰。<br>整页只剩：环 + 胶囊 + 开始。</div>
+      <div class="actions">
+        <button class="btn primary">开始专注</button>
+      </div>
+    </div>
+
+    <!-- 方案A · 展开态 -->
+    <div class="stage">
+      <span class="stateTag">方案A · 展开态（点胶囊后）</span>
+      <span class="bell">🔔</span>
+      <div class="segment"><button>自由专注</button><button class="on">番茄</button></div>
+      <div class="task">
+        <div class="title">高数 · 多元函数微分</div>
+        <div class="phase">番茄待机</div>
+      </div>
+      <div class="dial" style="width:190px;height:190px">
+        <svg width="190" height="190" viewBox="0 0 190 190">
+          <circle class="track" cx="95" cy="95" r="82" style="stroke-width:12"></circle>
+          <circle class="tick" cx="95" cy="95" r="82" style="stroke-width:12" stroke-dasharray="20 496"></circle>
+        </svg>
+        <div class="center">
+          <div class="time" style="font-size:42px">60:00</div>
+        </div>
+      </div>
+      <div class="durationPill open">专注 60 分 · 休息 10 分 <span class="chev">▴</span></div>
+      <div class="panel">
+        <div class="presetRow"><span class="lbl">专注</span>
+          <div class="chip">25</div><div class="chip">45</div><div class="chip on">60</div>
+          <div class="stepper"><button>−</button><span class="val">60</span><button>+</button></div>
+        </div>
+        <div class="presetRow"><span class="lbl">休息</span>
+          <div class="chip">5</div><div class="chip on">10</div>
+          <div class="stepper"><button>−</button><span class="val">10</span><button>+</button></div>
+        </div>
+      </div>
+      <div class="ruleHint">满 5 分钟自动完成任务 · 不足 3 分钟不计入记录</div>
+      <div class="note">展开时环缩小让位，收起即还原。步进器常驻面板右侧，<br>改出非预设值时 chips 全灭、步进器即"自定义"——不再有重复 chip。</div>
+      <div class="actions">
+        <button class="btn primary">开始专注</button>
+      </div>
+    </div>
+
+    <!-- 方案C · 组合套餐单行（备选） -->
+    <div class="stage">
+      <span class="stateTag">方案C · 组合套餐（备选）</span>
+      <span class="bell">🔔</span>
+      <div class="segment"><button>自由专注</button><button class="on">番茄</button></div>
+      <div class="task">
+        <div class="title">高数 · 多元函数微分</div>
+        <div class="phase">番茄待机</div>
+      </div>
+      <div class="dial">
+        <svg width="236" height="236" viewBox="0 0 236 236">
+          <circle class="track" cx="118" cy="118" r="104"></circle>
+          <circle class="tick" cx="118" cy="118" r="104" stroke-dasharray="26 628"></circle>
+        </svg>
+        <div class="center">
+          <div class="time">60:00</div>
+          <div class="caption">专注 60 · 休息 10</div>
+        </div>
+      </div>
+      <div class="panel" style="background:transparent;border:0;padding:10px 0 0">
+        <div class="presetRow">
+          <div class="chip">25 + 5</div><div class="chip">45 + 10</div>
+          <div class="chip on">60 + 10</div><div class="chip">自定义</div>
+        </div>
+      </div>
+      <div class="ruleHint">满 5 分钟自动完成任务 · 不足 3 分钟不计入记录</div>
+      <div class="note">专注+休息捆绑成套餐，两行压成一行常驻。<br>快，但自由组合（如 45+5）必须走自定义。</div>
+      <div class="actions">
+        <button class="btn primary">开始专注</button>
+      </div>
+    </div>
+
+    <!-- 无任务态微文案（两方案通用） -->
+    <div class="stage" style="min-height:560px">
+      <span class="stateTag">通用 · 无任务时的指路（A收起态示例）</span>
+      <span class="bell">🔕</span>
+      <div class="segment"><button>自由专注</button><button class="on">番茄</button></div>
+      <div class="task">
+        <div class="title" style="color:var(--inkMuted)">尚未选择任务</div>
+        <div class="phase">番茄待机</div>
+      </div>
+      <div class="dial">
+        <svg width="236" height="236" viewBox="0 0 236 236">
+          <circle class="track" cx="118" cy="118" r="104"></circle>
+        </svg>
+        <div class="center">
+          <div class="time" style="color:var(--inkMuted)">60:00</div>
+          <div class="caption">等待任务</div>
+        </div>
+      </div>
+      <div class="durationPill">专注 60 分 · 休息 10 分 <span class="chev">▾</span></div>
+      <div class="actions">
+        <button class="btn primary" disabled>开始专注</button>
+        <span class="microcopy">到 <a>今日任务</a> 里点任务卡上的「开始专注」即可带任务进入</span>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
