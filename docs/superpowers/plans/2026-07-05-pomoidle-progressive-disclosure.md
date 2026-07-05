@@ -35,7 +35,7 @@
   - 环心 caption Text 加 objectName `ringCaptionText`；pomoIdle 态文案改为 有任务`"准备开始"` / 无任务`"等待任务"`（原"专注 X 分 · 休息 Y 分"迁入胶囊）
   - 开始按钮下方微文案 Text objectName `noTaskHint`：无任务时 text 为 `"到今日任务里点「开始专注」即可带任务进入"`，有任务时为 `""`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `tests/qml/tst_focus_view.qml` 的 `init()` 末尾（`wait(20)` 之前）加一行：
 
@@ -112,12 +112,12 @@
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_focus_view.qml 2>/dev/null | grep -E "FAIL|Totals"`
 Expected: 4 个新用例 FAIL（`panelExpanded`/`durationPill`/`ringCaptionText`/`noTaskHint` 不存在）。
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 `qml/views/FocusView.qml`：
 
@@ -200,12 +200,12 @@ FocusRing 实例之后、预设 GridLayout 之前加胶囊按钮：
             }
 ```
 
-- [ ] **Step 4: qmllint + 运行测试确认通过**
+- [x] **Step 4: qmllint + 运行测试确认通过**
 
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/views/FocusView.qml && /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_focus_view.qml 2>/dev/null | grep -E "FAIL|Totals"`
 Expected: lint 无输出；全部 PASS（此时旧预设网格仍在，属过渡状态，Task 2 移除）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add qml/views/FocusView.qml tests/qml/tst_focus_view.qml
@@ -228,7 +228,7 @@ git commit -m "番茄待机页新增时长胶囊与无任务指路"
   - 移除：`workCustomSelected`/`breakCustomSelected` 属性、两个"自定义"chip、SpinBox 行、两个 ButtonGroup、`Component.onCompleted` 里的 custom 判定
   - `ruleHintText` 改为仅 `pomoIdle && panelExpanded` 可见
 
-- [ ] **Step 1: 改写失败测试**
+- [x] **Step 1: 改写失败测试**
 
 `tests/qml/tst_focus_view.qml`：
 
@@ -350,12 +350,12 @@ git commit -m "番茄待机页新增时长胶囊与无任务指路"
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_focus_view.qml 2>/dev/null | grep -E "FAIL|Totals"`
 Expected: 新用例 FAIL（stepper 不存在、chips 仍受 `workCustomSelected` 影响、`init()` 引用已删属性会先报错——先删属性引用再看断言失败均可）。
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 `qml/views/FocusView.qml`：
 
@@ -604,12 +604,12 @@ Expected: 新用例 FAIL（stepper 不存在、chips 仍受 `workCustomSelected`
                 visible: root.state === "pomoIdle" && root.panelExpanded
 ```
 
-- [ ] **Step 4: qmllint + 运行测试确认通过**
+- [x] **Step 4: qmllint + 运行测试确认通过**
 
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/views/FocusView.qml && /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_focus_view.qml 2>/dev/null | grep -E "FAIL|Totals"`
 Expected: lint 无输出；全部 PASS，连跑 2 次稳定（既有 `test_switchToPomodoroShowsPresetsAndIdleState`、`test_presetButtonsUseWarmSelectedColor` 仍应通过——chips 还在，只是搬进了面板）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add qml/views/FocusView.qml tests/qml/tst_focus_view.qml
@@ -628,7 +628,7 @@ git commit -m "待机页配置面板渐进披露并用步进器取代自定义ch
 - Consumes: Task 1 的 `panelExpanded`
 - Produces: FocusRing 待机预览改为"极淡实心轨道 + 顶部 15° 强调弧"；`focusRing.implicitWidth` 收起 252 / 展开 190（150ms 动画）；环心时间字号 收起 56 / 展开 42。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `tests/qml/tst_focus_view.qml` 文件末尾新增：
 
@@ -650,12 +650,12 @@ git commit -m "待机页配置面板渐进披露并用步进器取代自定义ch
     }
 ```
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_focus_view.qml 2>/dev/null | grep -E "FAIL|Totals"`
 Expected: FAIL（implicitWidth 恒为 252）。
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 `qml/views/FocusView.qml`：
 
@@ -705,12 +705,12 @@ focusRing 实例的尺寸改为（面板展开时让位）：
                                         : Theme.fontDisplay
 ```
 
-- [ ] **Step 4: qmllint + 运行测试确认通过**
+- [x] **Step 4: qmllint + 运行测试确认通过**
 
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/views/FocusView.qml && /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_focus_view.qml 2>/dev/null | grep -E "FAIL|Totals"`
 Expected: lint 无输出；全部 PASS（`test_pomoIdleShowsRingPreview` 只断言 `showPreview` 属性，不受画法改变影响）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 git add qml/views/FocusView.qml tests/qml/tst_focus_view.qml
@@ -724,7 +724,7 @@ git commit -m "预览环改淡轨道强调弧并在面板展开时缩小让位"
 **Files:**
 - 无新改动（验证任务；发现问题在此修复）
 
-- [ ] **Step 1: 全量构建与测试**
+- [x] **Step 1: 全量构建与测试**
 
 ```bash
 cmake --build build
@@ -733,7 +733,7 @@ ctest --test-dir build --output-on-failure
 
 Expected: C++ 两套全绿；QML 整套若仅 `tst_ui_optimization.qml` 偶发失败，单文件重跑 `tst_focus_view.qml` 连续 2 次全绿即判定通过。
 
-- [ ] **Step 2: 真机冒烟**
+- [x] **Step 2: 真机冒烟**
 
 ```bash
 open /Applications/番茄Todo.app
@@ -746,6 +746,6 @@ open /Applications/番茄Todo.app
 4. 从今日任务直达（上次番茄模式）：胶囊显示记住的时长。
 5. 启动专注：面板若展开会自动收起，进行态与原来一致。
 
-- [ ] **Step 3: 汇报结果**
+- [x] **Step 3: 汇报结果**
 
 冒烟通过后向用户汇报，等待确认是否合并回 `main`（不自行合并）。
