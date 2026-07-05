@@ -592,4 +592,20 @@ TestCase {
         compare(valueText.text, "90")
         restored.destroy()
     }
+
+    function test_ringShrinksWhenPanelExpanded() {
+        view.toPomodoroTab(true)
+        wait(20)
+
+        const ring = findChild(view, "focusRing")
+        verify(ring)
+        compare(ring.implicitWidth, 252)
+
+        view.panelExpanded = true
+        // implicitWidth 带 150ms 过渡动画，等它收敛到目标值。
+        tryCompare(ring, "implicitWidth", 190, 1000)
+
+        view.panelExpanded = false
+        tryCompare(ring, "implicitWidth", 252, 1000)
+    }
 }

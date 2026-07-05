@@ -427,12 +427,22 @@ Item {
             ctx.lineCap = "round"
 
             if (ring.showPreview) {
+                // 预览＝极淡完整轨道：预告“进度环将画在这里”，
+                // 比虚线更安静，也不会在高分屏上碎成颗粒。
                 ctx.beginPath()
-                ctx.setLineDash([2, 9])
-                ctx.lineWidth = ring.strokeWidth * 0.75
-                ctx.strokeStyle = Theme.border
+                ctx.setLineDash([])
+                ctx.lineWidth = ring.strokeWidth
+                ctx.strokeStyle = Theme.borderSubtle
                 ctx.arc(centerX, centerY, radius, 0, Math.PI * 2, false)
                 ctx.stroke()
+
+                // 顶部约 15° 的强调弧：暗示正式计时会从正上方开始消退。
+                ctx.beginPath()
+                ctx.globalAlpha = 0.45
+                ctx.strokeStyle = Theme.accent
+                ctx.arc(centerX, centerY, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI / 12, false)
+                ctx.stroke()
+                ctx.globalAlpha = 1
                 return
             }
 
@@ -601,12 +611,19 @@ Item {
                 objectName: "focusRing"
                 Layout.alignment: Qt.AlignHCenter
                 visible: root.pomodoroModeSelected
-                implicitWidth: 252
-                implicitHeight: 252
+                implicitWidth: root.state === "pomoIdle" && root.panelExpanded ? 190 : 252
+                implicitHeight: implicitWidth
                 showPreview: root.state === "pomoIdle"
                 dimmed: root.ringDimmed()
                 progress: root.ringProgressFraction()
                 ringColor: root.ringColorForState()
+
+                Behavior on implicitWidth {
+                    NumberAnimation {
+                        duration: 150
+                        easing.type: Easing.OutQuad
+                    }
+                }
 
                 ColumnLayout {
                     anchors.centerIn: parent
@@ -616,7 +633,9 @@ Item {
                         Layout.alignment: Qt.AlignHCenter
                         text: root.primaryTimeText()
                         textFormat: Text.PlainText
-                        font.pixelSize: root.state === "pomoIdle" ? 56 : Theme.fontDisplay
+                        font.pixelSize: root.state === "pomoIdle"
+                                        ? (root.panelExpanded ? 42 : 56)
+                                        : Theme.fontDisplay
                         font.bold: true
                         color: root.primaryTimeColor()
                         horizontalAlignment: Text.AlignHCenter
