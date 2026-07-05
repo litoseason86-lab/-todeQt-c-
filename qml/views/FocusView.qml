@@ -756,6 +756,12 @@ Item {
                             onClicked: root.selectWorkMinutes(60)
                         }
 
+                        Item {
+                            // 专注行比休息行多一个 chip，不能用固定宽度硬凑；
+                            // 弹性 spacer 把步进器稳定推到面板右内边距。
+                            Layout.fillWidth: true
+                        }
+
                         DurationStepper {
                             namePrefix: "workStepper"
                             value: root.selectedWorkMinutes
@@ -803,7 +809,7 @@ Item {
                         }
 
                         Item {
-                            Layout.preferredWidth: 64 + Theme.space8
+                            Layout.fillWidth: true
                         }
 
                         DurationStepper {

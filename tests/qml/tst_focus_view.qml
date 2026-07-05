@@ -608,4 +608,24 @@ TestCase {
         view.panelExpanded = false
         tryCompare(ring, "implicitWidth", 252, 1000)
     }
+
+    function test_durationPanelSteppersAlignToRightEdge() {
+        view.toPomodoroTab(true)
+        view.panelExpanded = true
+        wait(20)
+
+        const panel = findChild(view, "durationPanel")
+        const workPlus = findChild(view, "workStepperPlus")
+        const breakPlus = findChild(view, "breakStepperPlus")
+        verify(panel)
+        verify(workPlus)
+        verify(breakPlus)
+
+        const workRight = workPlus.mapToItem(panel, workPlus.width, 0).x
+        const breakRight = breakPlus.mapToItem(panel, breakPlus.width, 0).x
+        const expectedRight = panel.width - Theme.space16
+
+        compare(Math.round(workRight), Math.round(expectedRight))
+        compare(Math.round(breakRight), Math.round(expectedRight))
+    }
 }
