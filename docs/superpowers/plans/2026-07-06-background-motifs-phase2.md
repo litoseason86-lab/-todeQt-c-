@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - 注释、提交说明一律中文；注释解释"为什么/边界"（AGENTS.md）。
-- 构建：`cmake --build build`；**不得改 build/**。QML 单文件：`/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/<文件>`；验收 = 连续 2 次全绿。
+- 构建：`cmake --build build`；**不得改 build/**。macOS 上该命令通过 `deploy-local-app ALL` 目标自动把最新包部署到 `/Applications/番茄Todo.app`（内部先 `rm -rf` 再 `copy_directory`），因此真机验收只需 `cmake --build build && open /Applications/番茄Todo.app`，**不要手动 cp**。
+- 自动测试一律无头运行（不弹窗）：所有 `qmltestrunner`/`ctest` 命令带 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic`；已实测 offscreen 下 Canvas `onPaint` 正常触发、`paintCount` 自增。QML 单文件：`QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/<文件>`；验收 = 连续 2 次全绿。
 - qmllint 零警告：`/Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/components/BackgroundWallpaper.qml`。
 - QML 测试纪律：不断言 `visible === true`；浮点/alpha 用近似断言，不做像素抓取。
 - **主题 id ↔ motif 映射（固定）**：warmPaper→windowLight、sunset→sunsetPeaks、celadon→orchid、mist→moonMist、sakura→fallingPetals、wheat→goldenWaves。
@@ -38,15 +39,36 @@
 
 - [ ] **Step 1: 写失败测试**
 
-在 `tests/qml/tst_theme_tokens.qml` 的 `test_backgroundThemesDefinitions()` 内层循环里，`compare(String(b.color).charAt(0), "#")` 那段之后、内层 for 之外补一行 motif 校验。定位到该函数里 `verify(String(t.name).length > 0, ...)` 之后加：
+两处修改。① 在 `test_backgroundThemesDefinitions()` 函数里 `verify(String(t.name).length > 0, ...)` 之后加一行"非空"兜底：
 
 ```qml
             verify(String(t.motif).length > 0, t.id + " 缺 motif 字段")
 ```
 
+② 再新增一个**精确映射**测试函数（防"暖纸误配成 goldenWaves"这类错配——只查非空/分发都会漏掉它）。在 `test_backgroundThemesDefinitions()` 之后加：
+
+```qml
+    function test_backgroundThemesMotifMapping() {
+        // id→motif 是固定契约，错配属硬错误，逐一钉死。
+        var expected = {
+            warmPaper: "windowLight",
+            sunset: "sunsetPeaks",
+            celadon: "orchid",
+            mist: "moonMist",
+            sakura: "fallingPetals",
+            wheat: "goldenWaves"
+        }
+        var themes = Theme.backgroundThemes
+        for (var i = 0; i < themes.length; i++) {
+            var t = themes[i]
+            compare(t.motif, expected[t.id], t.id + " 的 motif 配错")
+        }
+    }
+```
+
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_theme_tokens.qml`
+Run: `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_theme_tokens.qml`
 Expected: FAIL（`motif` undefined）。
 
 - [ ] **Step 3: 实现——给六个主题各加 motif**
@@ -84,7 +106,7 @@ Expected: FAIL（`motif` undefined）。
 
 - [ ] **Step 4: 跑测试确认通过（2 次）**
 
-Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_theme_tokens.qml`（×2）
+Run: `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_theme_tokens.qml`（×2）
 Expected: 全绿 ×2。
 
 - [ ] **Step 5: 提交**
@@ -122,6 +144,12 @@ git commit -m "Theme 六主题各标注 motif 字段"
 在文件末尾 `test_noTiledNoiseTextureLayer()` 之后加：
 
 ```qml
+    function test_supportedMotifsIsExactFixedList() {
+        // 声明式清单钉死：属性存在但内容漂移（漏写/多写一项）也要红。
+        compare(wallpaper.supportedMotifs,
+                ["windowLight", "sunsetPeaks", "orchid", "moonMist", "fallingPetals", "goldenWaves"])
+    }
+
     function test_resolvedMotifForCeladonIsOrchid() {
         wallpaper.themeId = "celadon"
         compare(wallpaper.resolvedMotif, "orchid")
@@ -133,16 +161,28 @@ git commit -m "Theme 六主题各标注 motif 字段"
     }
 
     function test_everyThemeDispatchesToItsMotif() {
-        // 遍历所有主题：证明每个 motif 都被 switch 分发到并执行到绘制函数末尾。
+        // 遍历所有主题：证明每次切换都真正触发了对应画笔（motifPaintCount 增长），
+        // 且落到正确 motif（lastPaintedMotif）。只查 lastPaintedMotif 会因 init 已画过
+        // 首项而"同值不触发"假绿，故每轮先切到占位主题打断，再断言计数增长。
         // 将来新增主题若忘写画笔，lastPaintedMotif 停在 "" → 本测试自动变红（覆盖守护）。
         var themes = Theme.backgroundThemes
         for (var i = 0; i < themes.length; i++) {
+            // 先切到一个与目标不同的占位（非法 motif 的探针主题），强制打断上一轮状态。
+            wallpaper.themeSource = [{ id: "__gap", name: "间隔", base: "#eeeeee", motif: "__none", blobs: [] }]
+            wallpaper.themeId = "__gap"
+            tryVerify(function() { return wallpaper.lastPaintedMotif === "" }, 3000)
+            var before = wallpaper.motifPaintCount
+
+            wallpaper.themeSource = Theme.backgroundThemes
             wallpaper.themeId = themes[i].id
-            ;(function(expected) {
-                tryVerify(function() { return wallpaper.lastPaintedMotif === expected }, 3000,
-                          "主题 motif " + expected + " 未分发到绘制")
-            })(themes[i].motif)
+            ;(function(expected, prev) {
+                tryVerify(function() {
+                    return wallpaper.lastPaintedMotif === expected && wallpaper.motifPaintCount > prev
+                }, 3000, "主题 motif " + expected + " 未触发画笔（计数未增长或分发错）")
+            })(themes[i].motif, before)
         }
+        wallpaper.themeSource = Theme.backgroundThemes
+        wallpaper.themeId = "warmPaper"
     }
 
     function test_unknownMotifSkipsDrawingButKeepsGradient() {
@@ -164,7 +204,7 @@ git commit -m "Theme 六主题各标注 motif 字段"
 
 - [ ] **Step 2: 跑测试确认失败**
 
-Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_background_wallpaper.qml`
+Run: `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_background_wallpaper.qml`
 Expected: 新测试 FAIL（`resolvedMotif`/`lastPaintedMotif` 未定义）。既有 5 个测试仍应通过。
 
 - [ ] **Step 3: 实现骨架——整体替换 `qml/components/BackgroundWallpaper.qml`**
@@ -303,7 +343,7 @@ Item {
 
 - [ ] **Step 4: 跑测试确认通过（2 次）+ lint**
 
-Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_background_wallpaper.qml`（×2）
+Run: `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_background_wallpaper.qml`（×2）
 Expected: 全绿 ×2（含既有 5 个 + 新增 4 个）。
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/components/BackgroundWallpaper.qml`
 Expected: 零警告。
@@ -421,14 +461,15 @@ git commit -m "壁纸组件加入 motif 分发骨架与绘制分发驱动属性"
 
 - [ ] **Step 4: 自动回归（2 次）+ lint**
 
-Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_background_wallpaper.qml`（×2）
+Run: `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_background_wallpaper.qml`（×2）
 Expected: 全绿 ×2（分发测试不变；绘制不改变属性契约）。
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/components/BackgroundWallpaper.qml`
 Expected: 零警告。
 
 - [ ] **Step 5: 真机视觉验收（人工，不可用自动测试替代）**
 
-Run: `cmake --build build && cp -R build/PomodoroTodo.app /Applications/番茄Todo.app && open /Applications/番茄Todo.app`
+Run: `cmake --build build && open /Applications/番茄Todo.app`
+（`cmake --build build` 已通过 `deploy-local-app` 目标自动 `rm -rf` + `copy_directory` 到 /Applications 并刷新 launch 索引，无需手动 cp。）
 人工确认：设置里切到**暮橙**——落日 + 三层远山剪影，透过玻璃后山影淡雅、不糊文字；切到**麦浪**——右上暖阳 + 三层麦浪。两张缩略图在设置画廊里也应显示对应图案。观感不满意就调对应 `fillCurveBand`/α 后重跑本步，满意再提交。
 
 - [ ] **Step 6: 提交**
@@ -530,14 +571,15 @@ git commit -m "壁纸绘制暮橙落日远山与麦浪金浪"
 
 - [ ] **Step 4: 自动回归（2 次）+ lint**
 
-Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_background_wallpaper.qml`（×2）
+Run: `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_background_wallpaper.qml`（×2）
 Expected: 全绿 ×2。
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/components/BackgroundWallpaper.qml`
 Expected: 零警告。
 
 - [ ] **Step 5: 真机视觉验收（人工）**
 
-Run: `cmake --build build && cp -R build/PomodoroTodo.app /Applications/番茄Todo.app && open /Applications/番茄Todo.app`
+Run: `cmake --build build && open /Applications/番茄Todo.app`
+（构建即自动部署到 /Applications，无需手动 cp。）
 人工确认：**暖纸**（默认）——斜光带 + 两团暖白光斑 + 右下极淡同心弧，最安静不抢戏；**晨雾**——左上残月 + 三条雾带 + 远丘。不满意调 α/坐标后重跑本步。
 
 - [ ] **Step 6: 提交**
@@ -638,14 +680,15 @@ git commit -m "壁纸绘制暖纸窗光与晨雾月雾"
 
 - [ ] **Step 4: 自动回归（2 次）+ lint**
 
-Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_background_wallpaper.qml`（×2）
+Run: `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_background_wallpaper.qml`（×2）
 Expected: 全绿 ×2。
 Run: `/Users/zerionlito/Qt/6.9.0/macos/bin/qmllint qml/components/BackgroundWallpaper.qml`
 Expected: 零警告。
 
 - [ ] **Step 5: 真机视觉验收（人工）**
 
-Run: `cmake --build build && cp -R build/PomodoroTodo.app /Applications/番茄Todo.app && open /Applications/番茄Todo.app`
+Run: `cmake --build build && open /Applications/番茄Todo.app`
+（构建即自动部署到 /Applications，无需手动 cp。）
 人工确认：**青瓷**——左下角五笔兰叶 + 两点花苞，水墨留白感；**樱粉**——九片花瓣飘落，甜而不腻（花瓣 α 全 ≤0.5）。不满意调笔触/花瓣参数后重跑本步。
 
 - [ ] **Step 6: 提交**
@@ -665,7 +708,8 @@ git commit -m "壁纸绘制青瓷兰草与樱粉落樱"
 
 - [ ] **Step 1: 全量构建 + 三套测试**
 
-Run: `cmake --build build && ctest --test-dir build --output-on-failure`
+Run: `cmake --build build && QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic ctest --test-dir build --output-on-failure`
+（env 前缀放在 `&&` 之后，确保作用于 ctest 而非只作用于 cmake；ctest 里 QML 子测试原本仅设 Basic，offscreen 消除弹窗。）
 Expected: 3/3 通过（QML 套件若 tst_ui_optimization.qml 偶发窗口曝光失败，按既有基线重跑一次区分；本计划改动的 tst_theme_tokens/tst_background_wallpaper 必须稳定绿）。
 
 - [ ] **Step 2: 六张整体真机验收（人工）**
