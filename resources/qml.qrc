@@ -10,6 +10,7 @@
         <file alias="qml/views/StatisticsView.qml">../qml/views/StatisticsView.qml</file>
         <file alias="qml/views/MonthGoalView.qml">../qml/views/MonthGoalView.qml</file>
         <file alias="qml/views/CountdownView.qml">../qml/views/CountdownView.qml</file>
+        <file alias="qml/components/BackgroundWallpaper.qml">../qml/components/BackgroundWallpaper.qml</file>
         <file alias="qml/components/Sidebar.qml">../qml/components/Sidebar.qml</file>
         <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
         <file alias="qml/components/AddTaskDialog.qml">../qml/components/AddTaskDialog.qml</file>
