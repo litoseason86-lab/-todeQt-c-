@@ -83,8 +83,58 @@ Item {
             paintCount += 1
         }
 
+        // —— 绘制原语（比例坐标系内，供各 motif 复用）——
+        function radialGlow(ctx, cx, cy, r, color, alpha) {
+            // 从中心色淡出到全透明的软光；缩放坐标系里非等比会自然拉成椭圆。
+            ctx.save()
+            ctx.translate(cx, cy)
+            ctx.scale(r, r)
+            var c = Qt.color(color)
+            var g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1)
+            g.addColorStop(0, Qt.rgba(c.r, c.g, c.b, alpha))
+            g.addColorStop(1, Qt.rgba(c.r, c.g, c.b, 0))
+            ctx.fillStyle = g
+            ctx.beginPath()
+            ctx.arc(0, 0, 1, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.restore()
+        }
+
+        function solidCircle(ctx, cx, cy, r, color, alpha) {
+            ctx.save()
+            ctx.globalAlpha = alpha
+            ctx.fillStyle = color
+            ctx.beginPath()
+            ctx.arc(cx, cy, r, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.restore()
+        }
+
+        function fillCurveBand(ctx, pts, color, alpha) {
+            // pts 是一条起伏顶边的二次贝塞尔控制点，向下闭合到底边形成山/浪的整片色块。
+            var points = pts || []
+            if (points.length < 2) {
+                return
+            }
+            ctx.save()
+            ctx.globalAlpha = alpha
+            ctx.fillStyle = color
+            ctx.beginPath()
+            ctx.moveTo(points[0], points[1])
+            for (var i = 2; i + 3 < points.length; i += 4) {
+                ctx.quadraticCurveTo(points[i], points[i + 1], points[i + 2], points[i + 3])
+            }
+            ctx.lineTo(100, 62)
+            ctx.lineTo(0, 62)
+            ctx.closePath()
+            ctx.fill()
+            ctx.restore()
+        }
+
         function paintMotif(ctx, motif) {
             lastPaintedMotif = ""
+            ctx.save()
+            ctx.scale(width / 100, height / 62)
             switch (motif) {
             case "windowLight":
                 paintWindowLight(ctx)
@@ -106,8 +156,10 @@ Item {
                 break
             default:
                 // 未知图案保留底色和光晕；不计入 motifPaintCount，便于测试发现错误映射。
+                ctx.restore()
                 return
             }
+            ctx.restore()
             lastPaintedMotif = motif
             motifPaintCount += 1
         }
@@ -116,6 +168,23 @@ Item {
         }
 
         function paintSunsetPeaks(ctx) {
+            // 落日外晕和三层远山都在 100×62 坐标系中绘制，窗口缩放时保持构图比例。
+            ctx.save()
+            ctx.translate(70, 19)
+            ctx.scale(15, 15)
+            var sun = ctx.createRadialGradient(0, 0, 0, 0, 0, 1)
+            sun.addColorStop(0, Qt.rgba(1, 0.965, 0.894, 0.7))
+            sun.addColorStop(0.7, Qt.rgba(1, 0.886, 0.722, 0.35))
+            sun.addColorStop(1, Qt.rgba(1, 0.886, 0.722, 0))
+            ctx.fillStyle = sun
+            ctx.beginPath()
+            ctx.arc(0, 0, 1, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.restore()
+            solidCircle(ctx, 70, 19, 8, "#fff3dd", 0.9)
+            fillCurveBand(ctx, [0, 44, 18, 35, 34, 41, 50, 47, 66, 39, 84, 32, 100, 42], "#e8a17b", 0.24)
+            fillCurveBand(ctx, [0, 50, 22, 41, 44, 47, 66, 53, 84, 46, 93, 43, 100, 46], "#d98a68", 0.28)
+            fillCurveBand(ctx, [0, 56, 30, 49, 55, 53, 78, 57, 100, 52], "#c67857", 0.30)
         }
 
         function paintOrchid(ctx) {
@@ -128,6 +197,11 @@ Item {
         }
 
         function paintGoldenWaves(ctx) {
+            radialGlow(ctx, 81, 11, 17, "#fff8dd", 0.55)
+            // 三层起伏麦浪由浅入深铺满下沿，靠 alpha 控制存在感，避免压过前景文字。
+            fillCurveBand(ctx, [0, 45, 15, 41, 30, 44, 45, 47, 60, 43, 80, 38, 100, 45], "#eccf8e", 0.32)
+            fillCurveBand(ctx, [0, 52, 20, 47, 40, 50, 60, 53, 80, 49, 90, 47, 100, 50], "#e0bd72", 0.38)
+            fillCurveBand(ctx, [0, 58, 25, 54, 50, 56, 75, 58, 100, 55], "#d4ad5e", 0.42)
         }
     }
 
