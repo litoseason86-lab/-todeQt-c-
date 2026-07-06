@@ -71,4 +71,41 @@ QtObject {
     // 直接复用 chartColors 的第 4 色（苔绿），不新增色相；语义是“休息强调色”，
     // 和图表配色场景无关，只是恰好复用同一个色值，避免专注页里出现裸索引 [3]。
     readonly property color focusBreakAccent: chartColors[3]
+
+    // —— 玻璃令牌（背景主题：磨砂面板，均衡档定稿）——
+    // 用“白 + alpha”而非灰色：面板叠在彩色壁纸上，白基半透明才能透出壁纸色相。
+    readonly property color glassSidebar: Qt.rgba(1, 1, 252 / 255, 0.55)
+    readonly property color glassCard: Qt.rgba(1, 1, 250 / 255, 0.68)
+    readonly property color glassDialog: Qt.rgba(1, 254 / 255, 249 / 255, 0.94)
+    readonly property color glassBorder: Qt.rgba(1, 1, 1, 0.65)
+
+    // —— 背景壁纸主题定义（唯一来源：画廊缩略图与壁纸层都读这里）——
+    // 首位必须是默认暖纸：BackgroundWallpaper 对未知 id 回落 backgroundThemes[0]。
+    // blobs 的 cx/cy/rx/ry 是相对窗口宽/高的比例，光晕由中心色淡出到全透明。
+    readonly property var backgroundThemes: [
+        { id: "warmPaper", name: "暖纸", base: "#faf2e4", blobs: [
+            { cx: 0.18, cy: 0.15, rx: 0.90, ry: 0.70, color: "#fdf3e0" },
+            { cx: 0.85, cy: 0.25, rx: 0.80, ry: 0.60, color: "#f6e2c8" },
+            { cx: 0.55, cy: 0.95, rx: 1.00, ry: 0.80, color: "#f2ded2" } ] },
+        { id: "sunset", name: "暮橙", base: "#fdeadb", blobs: [
+            { cx: 0.15, cy: 0.10, rx: 0.85, ry: 0.70, color: "#ffe3c2" },
+            { cx: 0.88, cy: 0.30, rx: 0.90, ry: 0.65, color: "#fbc9ad" },
+            { cx: 0.50, cy: 1.00, rx: 1.10, ry: 0.75, color: "#f9d5c4" } ] },
+        { id: "celadon", name: "青瓷", base: "#edf5ee", blobs: [
+            { cx: 0.20, cy: 0.12, rx: 0.85, ry: 0.65, color: "#ddefe2" },
+            { cx: 0.85, cy: 0.35, rx: 0.80, ry: 0.70, color: "#cde7dd" },
+            { cx: 0.45, cy: 1.00, rx: 1.00, ry: 0.80, color: "#e3f1e4" } ] },
+        { id: "mist", name: "晨雾", base: "#f0eff7", blobs: [
+            { cx: 0.18, cy: 0.15, rx: 0.85, ry: 0.65, color: "#e4e4f4" },
+            { cx: 0.85, cy: 0.28, rx: 0.85, ry: 0.70, color: "#d7e2f3" },
+            { cx: 0.50, cy: 1.00, rx: 1.00, ry: 0.80, color: "#ebe4f2" } ] },
+        { id: "sakura", name: "樱粉", base: "#fdf0f1", blobs: [
+            { cx: 0.20, cy: 0.12, rx: 0.85, ry: 0.65, color: "#fbdbe2" },
+            { cx: 0.85, cy: 0.30, rx: 0.85, ry: 0.70, color: "#f8e2ea" },
+            { cx: 0.50, cy: 1.00, rx: 1.00, ry: 0.80, color: "#fceaea" } ] },
+        { id: "wheat", name: "麦浪", base: "#fbf5e2", blobs: [
+            { cx: 0.18, cy: 0.12, rx: 0.85, ry: 0.65, color: "#f8edc6" },
+            { cx: 0.85, cy: 0.32, rx: 0.85, ry: 0.70, color: "#f3e3b4" },
+            { cx: 0.50, cy: 1.00, rx: 1.00, ry: 0.80, color: "#f9f0d2" } ] }
+    ]
 }

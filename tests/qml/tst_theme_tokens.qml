@@ -28,4 +28,33 @@ TestCase {
         // 顺带校验首元素值，确保数组不是被序列化成空串等异常形态。
         verify(Qt.colorEqual(Theme.chartColors[0], "#d4a574"), "chartColors[0] 取值不对")
     }
+
+    function test_glassTokens() {
+        verify(Qt.colorEqual(Theme.glassSidebar, Qt.rgba(1, 1, 252 / 255, 0.55)), "glassSidebar 取值不对")
+        verify(Qt.colorEqual(Theme.glassCard, Qt.rgba(1, 1, 250 / 255, 0.68)), "glassCard 取值不对")
+        verify(Qt.colorEqual(Theme.glassDialog, Qt.rgba(1, 254 / 255, 249 / 255, 0.94)), "glassDialog 取值不对")
+        verify(Qt.colorEqual(Theme.glassBorder, Qt.rgba(1, 1, 1, 0.65)), "glassBorder 取值不对")
+    }
+
+    function test_backgroundThemesDefinitions() {
+        var themes = Theme.backgroundThemes
+        compare(themes.length, 6)
+        compare(themes[0].id, "warmPaper")
+
+        var seen = {}
+        for (var i = 0; i < themes.length; i++) {
+            var t = themes[i]
+            verify(!seen[t.id], "id 重复: " + t.id)
+            seen[t.id] = true
+            verify(String(t.name).length > 0, t.id + " 缺名称")
+            compare(String(t.base).charAt(0), "#")
+            compare(t.blobs.length, 3)
+            for (var j = 0; j < 3; j++) {
+                var b = t.blobs[j]
+                verify(b.cx >= 0 && b.cy >= 0, t.id + " 光晕坐标非法")
+                verify(b.rx > 0 && b.ry > 0, t.id + " 光晕半径非法")
+                compare(String(b.color).charAt(0), "#")
+            }
+        }
+    }
 }
