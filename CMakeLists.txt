@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Quick QuickControls2 QuickLayouts QuickTest Sql Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 QuickLayouts QuickTest Sql Test)
 
 if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
     # AGL.framework 是旧版 OpenGL 框架，新版 macOS SDK 已经移除；
@@ -67,6 +67,7 @@ set(APP_SOURCES
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     resources/qml.qrc
+    resources/fonts.qrc
 )
 
 set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app-icons/PomodoroTodo.icns")
@@ -174,6 +175,22 @@ target_link_libraries(CountdownServiceTests PRIVATE
 )
 
 add_test(NAME CountdownServiceTests COMMAND CountdownServiceTests)
+
+add_executable(FontAssetsTests
+    tests/FontAssetsTests.cpp
+    resources/fonts.qrc
+)
+
+target_link_libraries(FontAssetsTests PRIVATE
+    Qt6::Gui
+    Qt6::Test
+)
+
+add_test(NAME FontAssetsTests COMMAND FontAssetsTests)
+set_tests_properties(FontAssetsTests PROPERTIES
+    # 字体校验无需真实窗口；offscreen 保证后台不弹窗。
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
 
 add_test(
     NAME PomodoroTodoQmlTests

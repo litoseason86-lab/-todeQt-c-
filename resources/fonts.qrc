@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="fonts/SpaceGrotesk-Medium.ttf">fonts/SpaceGrotesk-Medium.ttf</file>
+        <file alias="fonts/SpaceGrotesk-Bold.ttf">fonts/SpaceGrotesk-Bold.ttf</file>
+        <file alias="fonts/BricolageGrotesque-Bold.ttf">fonts/BricolageGrotesque-Bold.ttf</file>
+    </qresource>
+</RCC>
