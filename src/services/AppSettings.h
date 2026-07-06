@@ -14,6 +14,7 @@ class AppSettings : public QObject
     Q_PROPERTY(int breakMinutes READ breakMinutes WRITE setBreakMinutes NOTIFY breakMinutesChanged)
     Q_PROPERTY(bool soundEnabled READ soundEnabled WRITE setSoundEnabled NOTIFY soundEnabledChanged)
     Q_PROPERTY(QString rolloverIgnoredDate READ rolloverIgnoredDate WRITE setRolloverIgnoredDate NOTIFY rolloverIgnoredDateChanged)
+    Q_PROPERTY(QString backgroundTheme READ backgroundTheme WRITE setBackgroundTheme NOTIFY backgroundThemeChanged)
 
 public:
     static AppSettings* instance();
@@ -29,6 +30,8 @@ public:
     void setSoundEnabled(bool enabled);
     QString rolloverIgnoredDate() const;
     void setRolloverIgnoredDate(const QString& date);
+    QString backgroundTheme() const;
+    void setBackgroundTheme(const QString& themeId);
 
 signals:
     void lastModeChanged();
@@ -36,6 +39,7 @@ signals:
     void breakMinutesChanged();
     void soundEnabledChanged();
     void rolloverIgnoredDateChanged();
+    void backgroundThemeChanged();
 
 private:
     QSettings* m_settings = nullptr;

@@ -374,6 +374,7 @@ private slots:
     void appSettingsDefaultsAndRoundTrip();
     void appSettingsSameValueDoesNotEmit();
     void appSettingsRolloverIgnoredDateRoundTrip();
+    void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void addTaskRejectsBlankTitle();
     void addTaskPersistsTrimmedTitleAndEmitsChange();
     void addTaskAcceptsIsoDateStringFromQml();
@@ -523,6 +524,32 @@ void ServiceTests::appSettingsRolloverIgnoredDateRoundTrip()
 
     AppSettings reloaded(path);
     QCOMPARE(reloaded.rolloverIgnoredDate(), QStringLiteral("2026-07-06"));
+}
+
+void ServiceTests::appSettingsBackgroundThemeDefaultAndRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        // 默认必须是暖纸：与 Theme.backgroundThemes 首位的回落约定一致。
+        QCOMPARE(settings.backgroundTheme(), QStringLiteral("warmPaper"));
+
+        QSignalSpy spy(&settings, &AppSettings::backgroundThemeChanged);
+        settings.setBackgroundTheme(QStringLiteral("celadon"));
+        QCOMPARE(settings.backgroundTheme(), QStringLiteral("celadon"));
+        QCOMPARE(spy.count(), 1);
+
+        // 同值写入不重复发信号（与其它偏好一致）。
+        settings.setBackgroundTheme(QStringLiteral("celadon"));
+        QCOMPARE(spy.count(), 1);
+    }
+
+    // 重建实例验证持久化。
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.backgroundTheme(), QStringLiteral("celadon"));
 }
 
 void ServiceTests::addTaskRejectsBlankTitle()

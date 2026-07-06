@@ -6,6 +6,7 @@ const auto kWorkMinutesKey = QStringLiteral("focus/workMinutes");
 const auto kBreakMinutesKey = QStringLiteral("focus/breakMinutes");
 const auto kSoundEnabledKey = QStringLiteral("focus/soundEnabled");
 const auto kRolloverIgnoredDateKey = QStringLiteral("rollover/lastIgnoredDate");
+const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 }
 
 AppSettings* AppSettings::instance()
@@ -98,4 +99,22 @@ void AppSettings::setRolloverIgnoredDate(const QString& date)
     m_settings->setValue(kRolloverIgnoredDateKey, date);
     m_settings->sync();
     emit rolloverIgnoredDateChanged();
+}
+
+QString AppSettings::backgroundTheme() const
+{
+    // 只存取字符串、不校验合法性：主题定义的唯一来源在 Theme.qml。
+    // 未知 id 的回落由 BackgroundWallpaper 负责，避免 C++ 和 QML 两处维护主题列表。
+    return m_settings->value(kBackgroundThemeKey, QStringLiteral("warmPaper")).toString();
+}
+
+void AppSettings::setBackgroundTheme(const QString& themeId)
+{
+    if (backgroundTheme() == themeId) {
+        return;
+    }
+
+    m_settings->setValue(kBackgroundThemeKey, themeId);
+    m_settings->sync();
+    emit backgroundThemeChanged();
 }
