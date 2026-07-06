@@ -187,6 +187,7 @@ Item {
             onCategoryManagementRequested: categoryDialog.open()
             onDailyRoutineRequested: routineDialog.open()
             onDataExportRequested: exportDialog.open()
+            onSettingsRequested: settingsDialog.open()
         }
 
         Rectangle {
@@ -359,5 +360,12 @@ Item {
 
         parent: root
         exportServiceRef: exportService
+    }
+
+    SettingsDialog {
+        id: settingsDialog
+
+        parent: root
+        appSettingsRef: root.appSettingsRef
     }
 }
