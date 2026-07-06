@@ -1,7 +1,7 @@
 # 背景主题（壁纸 + 磨砂面板 + 设置弹窗）设计文档
 
 日期：2026-07-06
-状态：视觉方案经可视化伴随逐屏确认，技术架构已确认
+状态：视觉方案经可视化伴随逐屏确认；技术架构经用户审阅后修订（v2：补 qrc、定拆分边界、玻璃化映射表、验收测试加硬）
 
 ## 背景
 
@@ -20,9 +20,17 @@
 
 ### 1. 壁纸层（新组件 `qml/components/BackgroundWallpaper.qml`）
 
-- 铺在 MainWindow 最底层；每张壁纸 = 底色 + 3 个椭圆径向渐变光晕。
-- 用 Canvas 绘制（FocusRing 已有 Canvas 先例）：`createRadialGradient` 只支持正圆，椭圆光晕通过 `ctx.save()` + `ctx.scale()` 变换实现；仅在窗口尺寸变化时重画，无每帧开销。
-- 组件对外接口：`property string themeId`，内部按 id 从 Theme 取定义；未知 id 回落默认暖纸定义。
+- 铺在 MainWindow 最底层；每张壁纸 = 底色 + 3 个椭圆径向渐变光晕 + 噪点颗粒层。
+- 用 Canvas 绘制（FocusRing 已有 Canvas 先例）：`createRadialGradient` 只支持正圆，椭圆光晕通过 `ctx.save()` + `ctx.scale()` 变换实现。
+- 噪点颗粒：组件内叠一层现有 `paperTextureLayer` 同款 SVG 噪点 Image（opacity 0.03，`Image.Tile`），让纸感全局延续（计划二会移除 MainWindow 里的旧噪点层，避免双重噪点——见映射表）。
+- **重绘时机（接口行为，三条都必须实现）**：
+  - `onThemeIdChanged: requestPaint()`——切主题必须触发重绘；
+  - `onWidthChanged`/`onHeightChanged: requestPaint()`——窗口 resize 重画；
+  - 宽或高 ≤ 0 时 `onPaint` 直接返回（初始化瞬间防御）。
+- 对外接口：
+  - `property string themeId`；
+  - `readonly property var resolvedTheme`——按 id 从 `Theme.backgroundThemes` 解析出的定义；查不到时回落暖纸定义（回落逻辑的唯一所在，见"状态与设置"）；
+  - `readonly property int paintCount`——每次 `onPaint` 实际绘制后自增，供测试断言"切主题触发了重绘"（驱动属性，不做像素级检查）。
 
 ### 2. 磨砂层（Theme 新增玻璃令牌，无模糊管线）
 
@@ -37,14 +45,36 @@
 | `glassDialog` | `Qt.rgba(1, 254/255, 249/255, 0.94)` | 弹窗面板（近实心，保证弹窗可读性） |
 | `glassBorder` | `Qt.rgba(1, 1, 1, 0.65)` | 玻璃面板细白描边 |
 
-### 3. 内容层改造（最终观感 = 区块浮在壁纸上）
+### 3. 内容层玻璃化映射表（计划二的完整执行清单）
 
-- 侧栏（[Sidebar.qml](../../../qml/components/Sidebar.qml)）底色 → `glassSidebar` + `glassBorder` 描边。
-- 六个视图根背景改透明；各视图的**顶层区块**（今日任务卡、专注计时区、统计卡片区等）底色 → `glassCard` + `glassBorder` 描边，区块之间露出壁纸。
-- 各弹窗（AddTask/EditTask/Category/Countdown/Routine/Export/Settings）面板 → `glassDialog`。
-- 区块**内部**的小元素（输入框、chip、次级容器、TaskItem 行）保持现有暖纸令牌不动——它们坐在玻璃卡片上观感成立，改动范围收住。
-- Toast、CountdownBanner 本期不动。
-- main.qml 窗口 `color: Theme.surface` 保留作壁纸未加载时的兜底色。
+六个视图的根都是无底色 `Item`（"根透明"天然成立），页面底色实际来自 MainWindow 的 `mainContentBackground`。逐文件映射如下——**不在表内的元素一律不动**（输入框、chip、TaskItem 行、按钮、次级容器等坐在玻璃面板上观感成立）：
+
+| 文件 | 目标（objectName / 位置） | 现状 | 改为 |
+| --- | --- | --- | --- |
+| MainWindow.qml | `mainContentBackground` | `Theme.surface` | `"transparent"` |
+| MainWindow.qml | `paperTextureLayer`（噪点 Image） | opacity 0.03 常驻 | 整块删除（噪点已并入 BackgroundWallpaper） |
+| MainWindow.qml | `mainContentDivider`（1px 竖线） | `Theme.border` | 不动（细线压在壁纸上无碍） |
+| TodayTaskView.qml | `todayTaskListContainer` | `Theme.surface` + `Theme.border` | 底色 → `glassCard`，边框 → `glassBorder` |
+| components/StatCard.qml | 组件根 Rectangle（[StatCard.qml:31](../../../qml/components/StatCard.qml#L31)） | `Theme.surface` + `Theme.border` | 底色 → `glassCard`，边框 → `glassBorder`（一处改动同时覆盖今日页 2 卡 + 统计页 3 卡） |
+| FocusView.qml | 整页底板 Rectangle（[FocusView.qml:491](../../../qml/views/FocusView.qml#L491)，`anchors.fill` 全页） | `Theme.surfaceSunken` | 底色 → `glassCard`（整页一块玻璃底板，**不改内部布局**——专注页刚重构过且状态机复杂，不做"中央列包卡"的结构手术） |
+| WeekPlanView.qml | 7 个 day row 容器（[WeekPlanView.qml:364](../../../qml/views/WeekPlanView.qml#L364)） | 今天=高亮 / 周末=`surfaceSunken` / 工作日=`surfaceRaised` | 今天行高亮分支保留；周末与工作日统一 → `glassCard`（周末的弱区分保留在既有星期文字样式上） |
+| MonthGoalView.qml | `monthCalendarContainer` | `Theme.surface` 卡片 | 底色 → `glassCard`，边框 → `glassBorder` |
+| MonthGoalView.qml | `focusTimelinePanel` | `Theme.surface` 卡片 | 底色 → `glassCard`，边框 → `glassBorder` |
+| components/ChartBar.qml | 组件根 Rectangle（[ChartBar.qml:21](../../../qml/components/ChartBar.qml#L21)） | `Theme.surfaceRaised` + `Theme.border` | 底色 → `glassCard`，边框 → `glassBorder`（覆盖统计页趋势图） |
+| components/ChartPie.qml | 组件根 Rectangle（[ChartPie.qml:23](../../../qml/components/ChartPie.qml#L23)） | `Theme.surfaceRaised` + `Theme.border` | 底色 → `glassCard`，边框 → `glassBorder`（覆盖统计页科目分配图） |
+| components/CountdownItem.qml | 组件根 Rectangle（[CountdownItem.qml:26](../../../qml/components/CountdownItem.qml#L26)） | `Theme.surfaceRaised`；hover 时边框 `border → accent` | 底色 → `glassCard`；hover 边框行为保留（倒计时页无外层大容器，卡片即顶层区块） |
+| 7 个弹窗（AddTask/EditTask/Category/Countdown/Routine/Export/Settings） | 各自 panel Rectangle | `Theme.surface` | 底色 → `glassDialog`（描边保留现状） |
+| TodayTaskView.qml | `rolloverBanner` | `Theme.accentSoft` + `Theme.accent` 边框 | **不动**——它是逾期提醒的强调横幅，焦糖底就是它的语义，玻璃化会消解提醒强度 |
+| components/Toast.qml、CountdownBanner.qml | — | — | 本期不动 |
+
+**侧栏玻璃化（计划一，单独列出因有灰闪约束）**：
+
+| 目标 | 现状 | 改为 |
+| --- | --- | --- |
+| Sidebar 根 Rectangle | 垂直渐变 `surfaceRaised → surfaceSunken` | 去掉 `gradient`，`color: Theme.glassSidebar` |
+| SidebarItem idle 底色/边框色 | 不透明 `surfaceRaised`（注释明言不能用 `transparent`：ColorAnimation 从黑基透明插值会闪灰） | `Qt.rgba(1, 1, 1, 0)`——**白基透明**，与 hover 白色插值时 RGB 恒为白、只动 alpha，不经过灰，既守住防灰闪约束又露出玻璃 |
+| SidebarItem hover 底色 | 不透明 `surfaceRaised` | `Qt.rgba(1, 1, 1, 0.45)` |
+| SidebarItem active 底色/边框 | `accentSoft` / `accent` | 不动 |
 
 ## 主题定义（唯一来源：Theme.qml）
 
@@ -71,19 +101,34 @@
 
 **设置弹窗（新组件 `qml/components/SettingsDialog.qml`）**：
 
-- 骨架同 AddTaskDialog（居中 Popup、磨砂面板 `glassDialog`、进出场动画、`pragma ComponentBehavior: Bound`）；
-- 标题"设置"，栏目标签"背景主题"，2×3 画廊：每格 = 渐变缩略图（CSS 同源的三光晕渐变，Canvas 小尺寸绘制或直接复用 BackgroundWallpaper 缩小实例）+ 迷你磨砂条示意 + 名称；
-- 选中态：焦糖描边（`Theme.accent`）+ 右上角对勾徽标；
-- 点击缩略图 → `appSettings.backgroundTheme = id`（即切即存），无确认按钮，仅"关闭"；
+- 骨架同 AddTaskDialog（居中 Popup、面板 `glassDialog`、进出场动画）；
+- 标题"设置"，栏目标签"背景主题"，2×3 画廊；
+- **缩略图定死为复用 `BackgroundWallpaper` 小尺寸实例**（`themeId` 属性即插即用，天然与壁纸层同源；不另造 ThemePreview、不用独立小 Canvas），缩略图内叠一条迷你磨砂 Rectangle（`glassCard`）示意玻璃效果，下方名称文字；
+- 选中态：焦糖描边（`Theme.accent`）+ 右上角对勾徽标，绑定源 `appSettingsRef.backgroundTheme === modelData.id`；
+- 点击缩略图 → `appSettingsRef.backgroundTheme = id`（即切即存），无确认按钮，仅"关闭"；
 - `property var appSettingsRef`，缺失时（测试/降级）画廊照常渲染、点击不写入。
 
-**侧栏齿轮**：Sidebar 底部固定齿轮按钮，`signal settingsClicked`，MainWindow 接线打开弹窗。
+**侧栏设置入口（位置定稿）**：在 [Sidebar.qml](../../../qml/components/Sidebar.qml) 底部工具组内，「数据导出」SidebarItem **之后**、「三阶段」文字标签**之前**，新增一个 SidebarItem（text「设置」，marker「设」，复用既有条目样式与 hover 行为，不做独立齿轮 icon）；新增 `signal settingsRequested`，MainWindow 接线打开弹窗。「三阶段」标签保留不动。
+
+## 资源注册（qml.qrc）
+
+新增 QML 文件必须注册进 [resources/qml.qrc](../../../resources/qml.qrc)（该工程逐文件显式注册，漏注册则打包后的 app 在运行时找不到组件）：
+
+- `<file alias="qml/components/BackgroundWallpaper.qml">../qml/components/BackgroundWallpaper.qml</file>`
+- `<file alias="qml/components/SettingsDialog.qml">../qml/components/SettingsDialog.qml</file>`
+
+两条都在**计划一**完成（两个新组件均属计划一）；计划二无新文件。实施计划中 qrc 注册为独立步骤，紧跟组件创建。
 
 ## 错误处理
 
 - 未知主题 id（将来删壁纸/手改配置文件）：BackgroundWallpaper 按 id 查不到定义时回落暖纸定义；AppSettings 不参与校验（避免 C++/QML 两处维护主题列表）。
-- Canvas 在窗口 resize 时 `requestPaint()`；组件尺寸为 0 时跳过绘制（初始化瞬间的防御）。
+- Canvas 宽或高 ≤ 0 时跳过绘制；`onThemeIdChanged`/resize 必触发 `requestPaint()`（接口行为，见壁纸层小节）。
 - appSettings 上下文属性缺失（qmltestrunner 环境）：所有引用走 `typeof appSettings !== "undefined"` 守卫或 ref 注入，与现有模式一致。
+
+## 代码质量约束
+
+- 新增组件（BackgroundWallpaper、SettingsDialog）要求 qmllint 零警告；含内联组件或引用外层 id 时按既有惯例加 `pragma ComponentBehavior: Bound`（EditTaskDialog 先例）。既有组件不做 lint 整改，不扩大战线。
+- 注释遵守 AGENTS.md：解释为什么/边界（如白基透明的防灰闪理由必须写成注释留在 Sidebar 里，替换原注释）。
 
 ## 测试策略
 
@@ -93,17 +138,24 @@
 - set 后 get 返回新值且发 `backgroundThemeChanged`；
 - 持久化：重建 AppSettings 实例后值保留。
 
-**QML**：
+**QML——数据与行为**：
 
 - 主题定义完整性：`Theme.backgroundThemes` 恰 6 项、id 唯一、每项含 name/base/3 个 blob 且字段齐全；
-- BackgroundWallpaper：`themeId` 设合法 id 后内部解析出的定义（暴露 `readonly property var resolvedTheme`）匹配；设非法 id 回落暖纸；
-- SettingsDialog：画廊 Repeater 数量 = 6；点击第 n 格 → mock appSettings 收到正确 id；选中态绑定源（`appSettingsRef.backgroundTheme === modelData.id`）断言；
-- 纪律：断言驱动属性，不断言 `visible === true`（项目既有教训）。
+- BackgroundWallpaper：设合法 id 后 `resolvedTheme.id` 匹配；设非法 id 回落 `resolvedTheme.id === "warmPaper"`；
+- BackgroundWallpaper 重绘：记录当前 `paintCount`，改 `themeId` 后 `tryVerify(paintCount 增加)`——直接守护"切主题必须重绘"这条接口行为；
+- SettingsDialog：画廊 Repeater 数量 = 6；点击第 n 格 → mock appSettings 收到正确 id；选中态绑定源断言。
+
+**QML——视觉验收（守护"壁纸别被盖住"这类核心失败）**：
+
+- 计划一：Sidebar 根 `color === Theme.glassSidebar` 且 `gradient === null`；
+- 计划二：`mainContentBackground.color` 为透明（`color.a === 0`）；FocusView 整页底板 `color === Theme.glassCard`；`todayTaskListContainer.color === Theme.glassCard`；StatCard 根 `color === Theme.glassCard`——逐条断言驱动属性，任何一个视图"仍是不透明块"都会红；
+- 纪律：断言驱动属性/颜色值，不断言 `visible === true`（项目既有教训）；不做像素抓取（沙盒环境不可靠）。
 
 ## 影响面与拆分建议
 
 - C++：AppSettings（一个属性）。
-- QML：Theme（令牌 + 主题定义）、新增 BackgroundWallpaper、新增 SettingsDialog、Sidebar（齿轮 + 玻璃化）、MainWindow（壁纸层 + 弹窗接线 + 主容器透明化）、六视图顶层区块玻璃化、六个既有弹窗面板换 `glassDialog`。
-- 实施计划拆两份：
-  - **计划一（基础设施 + 可切换壁纸）**：AppSettings 属性 → Theme 令牌与主题定义 → BackgroundWallpaper → MainWindow 接壁纸层 + 主容器过渡为整块 `glassCard` → Sidebar 玻璃化 + 齿轮 → SettingsDialog + 接线。独立可交付：壁纸可切换、侧栏与主面板已是玻璃。
-  - **计划二（视图与弹窗玻璃化）**：主容器改透明，六视图根透明 + 顶层区块 `glassCard` 描边，六弹窗 `glassDialog`。交付最终"区块浮在壁纸上"观感。
+- 资源：resources/qml.qrc（两条注册，计划一）。
+- QML：Theme（令牌 + 主题定义）、新增 BackgroundWallpaper、新增 SettingsDialog、Sidebar（玻璃化 + 设置条目）、MainWindow（壁纸层 + 弹窗接线；计划二再动 `mainContentBackground`/噪点层）、映射表所列六视图与组件、7 个弹窗。
+- 实施计划拆两份，**边界以 `mainContentBackground` 为界、只动一次**：
+  - **计划一（基础设施 + 可切换壁纸）**：AppSettings 属性 → Theme 令牌与主题定义 → BackgroundWallpaper（含噪点与重绘行为）→ qrc 注册 → MainWindow 接壁纸层 → Sidebar 玻璃化 + 设置条目 → SettingsDialog + 接线。**主内容区（`mainContentBackground`）保持现状不动**：本阶段壁纸只在侧栏区域透出，这是明确的过渡状态，不是缺陷。独立可交付：设置弹窗全流程可用、壁纸可切换且持久化。
+  - **计划二（内容层玻璃化）**：`mainContentBackground` 改透明 + 删旧噪点层 → 按映射表逐文件玻璃化六视图与组件卡片 → 7 弹窗 `glassDialog` → 视觉验收测试。交付最终"区块浮在壁纸上"观感。
