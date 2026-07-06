@@ -80,19 +80,23 @@ TestCase {
         compare(renameSpy.count, 0)
     }
 
-    function test_hoverGatesEditAndDeleteButtons() {
+    function test_editAndDeleteButtonsAreAlwaysAvailable() {
         const editButton = findChild(item, "taskEditButton")
         const deleteButton = findChild(item, "taskDeleteButton")
         verify(editButton)
         verify(deleteButton)
 
-        compare(editButton.enabled, false)
-        compare(deleteButton.enabled, false)
+        compare(editButton.enabled, true)
+        compare(deleteButton.enabled, true)
+        compare(editButton.opacity, 1)
+        compare(deleteButton.opacity, 1)
 
         item.setPointerInside(true)
         wait(20)
         compare(editButton.enabled, true)
         compare(deleteButton.enabled, true)
+        compare(editButton.opacity, 1)
+        compare(deleteButton.opacity, 1)
 
         editButton.clicked()
         compare(editSpy.count, 1)

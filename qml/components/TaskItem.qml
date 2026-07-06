@@ -592,21 +592,14 @@ Rectangle {
 
             objectName: "taskEditButton"
             text: "编辑"
-            implicitWidth: 56
-            implicitHeight: 40
-            opacity: root.itemHovered ? 1 : 0
-            enabled: root.itemHovered
-
-            Behavior on opacity {
-                NumberAnimation {
-                    duration: 120
-                    easing.type: Easing.OutQuad
-                }
-            }
+            implicitWidth: 48
+            implicitHeight: 36
+            opacity: 1
+            enabled: true
 
             background: Rectangle {
                 radius: Theme.radiusMd
-                color: editButton.hovered ? Theme.surfaceSunken : Theme.surface
+                color: editButton.hovered ? Theme.surfaceSunken : "transparent"
                 border.color: editButton.hovered ? Theme.accent : Theme.border
                 border.width: 1
             }
@@ -629,18 +622,11 @@ Rectangle {
 
             objectName: "taskDeleteButton"
             text: "删除"
-            implicitWidth: 56
-            implicitHeight: 40
-            opacity: root.itemHovered ? 1 : 0
-            enabled: root.itemHovered
+            implicitWidth: 48
+            implicitHeight: 36
+            opacity: 1
+            enabled: true
             readonly property bool pressFeedbackActive: deleteButton.down || deleteButton.pressed
-
-            Behavior on opacity {
-                NumberAnimation {
-                    duration: 120
-                    easing.type: Easing.OutQuad
-                }
-            }
 
             background: Rectangle {
                 id: taskDeleteButtonBackground
@@ -653,7 +639,7 @@ Rectangle {
                         return Theme.accentSoft;
                     if (deleteButton.hovered)
                         return Theme.surfaceSunken;
-                    return Theme.surface;
+                    return "transparent";
                 }
                 border.color: deleteButton.hovered || deleteButton.pressFeedbackActive ? Theme.dangerSoft : Theme.border
                 border.width: 1
