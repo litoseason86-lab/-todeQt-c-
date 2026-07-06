@@ -131,6 +131,48 @@ Item {
             ctx.restore()
         }
 
+        function fillEllipse(ctx, cx, cy, rx, ry, color, alpha) {
+            ctx.save()
+            ctx.translate(cx, cy)
+            ctx.scale(rx, ry)
+            ctx.globalAlpha = alpha
+            ctx.fillStyle = color
+            ctx.beginPath()
+            ctx.arc(0, 0, 1, 0, Math.PI * 2)
+            ctx.fill()
+            ctx.restore()
+        }
+
+        function fillPolygon(ctx, pts, color, alpha) {
+            // pts 是闭合多边形点列；点数不足时直接跳过，避免测试注入坏数据拖垮整张壁纸。
+            var points = pts || []
+            if (points.length < 4) {
+                return
+            }
+            ctx.save()
+            ctx.globalAlpha = alpha
+            ctx.fillStyle = color
+            ctx.beginPath()
+            ctx.moveTo(points[0], points[1])
+            for (var i = 2; i + 1 < points.length; i += 2) {
+                ctx.lineTo(points[i], points[i + 1])
+            }
+            ctx.closePath()
+            ctx.fill()
+            ctx.restore()
+        }
+
+        function strokeArc(ctx, cx, cy, r, color, lineWidth, alpha) {
+            ctx.save()
+            ctx.globalAlpha = alpha
+            ctx.strokeStyle = color
+            ctx.lineWidth = lineWidth
+            ctx.beginPath()
+            ctx.arc(cx, cy, r, 0, Math.PI * 2)
+            ctx.stroke()
+            ctx.restore()
+        }
+
         function paintMotif(ctx, motif) {
             lastPaintedMotif = ""
             ctx.save()
@@ -165,6 +207,13 @@ Item {
         }
 
         function paintWindowLight(ctx) {
+            radialGlow(ctx, 22, 14, 17, "#ffffff", 0.55)
+            radialGlow(ctx, 80, 50, 21, "#ffffff", 0.32)
+            // 斜射入窗的柔光带。
+            fillPolygon(ctx, [0, 32, 100, 6, 100, 15, 0, 42], "#ffffff", 0.10)
+            // 圆心放在画布外下方，只露出右下角的极淡弧线。
+            strokeArc(ctx, 93, 66, 18, "#dfc7a4", 0.5, 0.22)
+            strokeArc(ctx, 93, 66, 25, "#dfc7a4", 0.5, 0.14)
         }
 
         function paintSunsetPeaks(ctx) {
@@ -191,6 +240,13 @@ Item {
         }
 
         function paintMoonMist(ctx) {
+            radialGlow(ctx, 27, 13, 11, "#ffffff", 0.5)
+            solidCircle(ctx, 27, 13, 5.5, "#ffffff", 0.7)
+            // 三条横向雾带渐次下沉，底部远丘只保留低透明度轮廓。
+            fillEllipse(ctx, 52, 33, 62, 4.5, "#ffffff", 0.22)
+            fillEllipse(ctx, 28, 43, 52, 4, "#e9e9f8", 0.28)
+            fillEllipse(ctx, 72, 52, 58, 5, "#dfe4f4", 0.30)
+            fillCurveBand(ctx, [0, 50, 28, 44, 54, 48, 78, 52, 100, 46], "#b7bdd8", 0.16)
         }
 
         function paintFallingPetals(ctx) {
