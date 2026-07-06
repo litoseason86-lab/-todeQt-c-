@@ -30,6 +30,13 @@ TestCase {
         focusTimerRef: focusTimerMock
     }
 
+    SignalSpy {
+        id: settingsSpy
+
+        target: sidebar
+        signalName: "settingsRequested"
+    }
+
     function collectChildren(item, result) {
         if (!item || !item.children) {
             return result;
@@ -72,14 +79,24 @@ TestCase {
         return findChild(sidebar, "sidebarMarker-" + marker);
     }
 
-    function test_sidebarUsesWarmVerticalGradientBackground() {
-        verify(sidebar.gradient !== undefined && sidebar.gradient !== null);
-        compare(sidebar.gradient.orientation, Gradient.Vertical);
-        compare(sidebar.gradient.stops.length, 2);
-        compare(sidebar.gradient.stops[0].position, 0);
-        verify(Qt.colorEqual(sidebar.gradient.stops[0].color, Theme.surfaceRaised));
-        compare(sidebar.gradient.stops[1].position, 1);
-        verify(Qt.colorEqual(sidebar.gradient.stops[1].color, Theme.surfaceSunken));
+    function test_glassSurface() {
+        verify(Qt.colorEqual(sidebar.color, Theme.glassSidebar), "侧栏底色应为玻璃令牌")
+        verify(!sidebar.gradient, "侧栏渐变应已移除")
+    }
+
+    function test_itemIdleIsWhiteBasedTransparent() {
+        verify(sidebar.sidebarItemIdleColor.a < 0.01, "idle 底色应全透明")
+        verify(sidebar.sidebarItemIdleColor.r > 0.99, "idle 底色必须白基")
+        verify(sidebar.sidebarItemIdleBorderColor.a < 0.01, "idle 边框应全透明")
+        verify(Qt.colorEqual(sidebar.sidebarItemHoverColor, Qt.rgba(1, 1, 1, 0.45)), "hover 应为半透明白")
+    }
+
+    function test_settingsEntryEmitsSignal() {
+        var item = findChild(sidebar, "sidebarItem-设")
+        verify(item, "设置条目应存在")
+        settingsSpy.clear()
+        item.clicked()
+        compare(settingsSpy.count, 1)
     }
 
     function test_titleAndGroupFontWeightsUseFontWeight() {
@@ -134,10 +151,10 @@ TestCase {
 
         verify(inactiveItem !== null);
         verify(markerContainer !== null);
-        verify(Qt.colorEqual(inactiveItem.color, Theme.surfaceRaised));
-        compare(inactiveItem.color.a, 1);
-        verify(Qt.colorEqual(inactiveItem.border.color, Theme.surfaceRaised));
-        compare(inactiveItem.border.color.a, 1);
+        verify(Qt.colorEqual(inactiveItem.color, sidebar.sidebarItemIdleColor));
+        verify(inactiveItem.color.a < 0.01);
+        verify(Qt.colorEqual(inactiveItem.border.color, sidebar.sidebarItemIdleBorderColor));
+        verify(inactiveItem.border.color.a < 0.01);
         compare(inactiveItem.border.width, 0);
         compare(inactiveItem.layer.enabled, false);
         verify(Qt.colorEqual(markerContainer.color, Theme.border));
@@ -156,7 +173,7 @@ TestCase {
         tryCompare(inactiveItem, "visualHovered", true, 500);
         wait(1200);
 
-        verify(Qt.colorEqual(inactiveItem.color, Theme.surfaceRaised));
+        verify(Qt.colorEqual(inactiveItem.color, sidebar.sidebarItemHoverColor));
         verify(Qt.colorEqual(inactiveItem.border.color, Theme.border));
         compare(inactiveItem.layer.enabled, false);
     }
@@ -171,12 +188,11 @@ TestCase {
         tryCompare(inactiveItem, "visualHovered", false, 500);
         wait(1200);
 
-        // 退场目标色必须是不透明暖色。透明色会参与 ColorAnimation 插值，
-        // 在 macOS 渲染中容易闪出灰块，这里锁死这个边界。
-        verify(Qt.colorEqual(inactiveItem.color, Theme.surfaceRaised));
-        compare(inactiveItem.color.a, 1);
-        verify(Qt.colorEqual(inactiveItem.border.color, Theme.surfaceRaised));
-        compare(inactiveItem.border.color.a, 1);
+        // 退场目标色必须是白基透明，不用 Qt 的黑基 transparent，避免 hover 动画插出灰闪。
+        verify(Qt.colorEqual(inactiveItem.color, sidebar.sidebarItemIdleColor));
+        verify(inactiveItem.color.a < 0.01);
+        verify(Qt.colorEqual(inactiveItem.border.color, sidebar.sidebarItemIdleBorderColor));
+        verify(inactiveItem.border.color.a < 0.01);
         compare(inactiveItem.border.width, 0);
     }
 

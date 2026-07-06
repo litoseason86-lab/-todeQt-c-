@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Layouts
 import ".."
@@ -6,31 +8,15 @@ Rectangle {
     id: root
 
     width: 208
-    readonly property color sidebarGradientTopColor: Theme.surfaceRaised
-    readonly property color sidebarGradientBottomColor: Theme.surfaceSunken
-    // 悬停反馈靠“边框浮现”表达：idle 与 hover 的底色都用 surfaceRaised，
-    // 区别在于 hover 时 border 由隐形（同底色、宽度 0）变为 Theme.border、宽度 1。
-    // 所以这里 idle/hover 底色相同不是笔误，别为了“让它们不一样”而改动。
-    readonly property color sidebarItemIdleColor: Theme.surfaceRaised
-    readonly property color sidebarItemIdleBorderColor: Theme.surfaceRaised
-    readonly property color sidebarItemHoverColor: Theme.surfaceRaised
+    color: Theme.glassSidebar
+    // 玻璃侧栏上的条目默认态要“隐形”才能透出壁纸；但不能用 Qt 的 transparent（黑基透明）：
+    // hover 退场的 ColorAnimation 会在黑白之间插出灰闪。白基透明只动 alpha，不经过灰。
+    readonly property color sidebarItemIdleColor: Qt.rgba(1, 1, 1, 0)
+    readonly property color sidebarItemIdleBorderColor: Qt.rgba(1, 1, 1, 0)
+    readonly property color sidebarItemHoverColor: Qt.rgba(1, 1, 1, 0.45)
     readonly property color sidebarItemHoverBorderColor: Theme.border
     readonly property color sidebarItemActiveColor: Theme.accentSoft
     readonly property color sidebarItemActiveBorderColor: Theme.accent
-
-    gradient: Gradient {
-        orientation: Gradient.Vertical
-
-        GradientStop {
-            position: 0
-            color: root.sidebarGradientTopColor
-        }
-
-        GradientStop {
-            position: 1
-            color: root.sidebarGradientBottomColor
-        }
-    }
 
     property string currentView: "today"
     property var categoryManagerRef: null
@@ -40,6 +26,7 @@ Rectangle {
     signal dailyRoutineRequested
     signal categoryManagementRequested
     signal dataExportRequested
+    signal settingsRequested
 
     function formatMinuteTime(seconds) {
         var safe = Math.max(0, Number(seconds || 0))
@@ -173,6 +160,13 @@ Rectangle {
             onClicked: root.dataExportRequested()
         }
 
+        SidebarItem {
+            text: "设置"
+            marker: "设"
+            isActive: false
+            onClicked: root.settingsRequested()
+        }
+
         Text {
             text: "三阶段"
             font.pixelSize: Theme.fontSm
@@ -208,8 +202,8 @@ Rectangle {
         Layout.fillWidth: true
         Layout.preferredHeight: 44
         radius: Theme.radiusMd
-        // 不能把非激活状态设为 transparent：hover 退场时 ColorAnimation 会做透明插值，
-        // macOS 上会短暂露出灰色过渡块。默认态固定为不透明暖色，彻底切断灰闪来源。
+        // 不能把非激活状态设为 transparent：Qt 的 transparent 是黑基透明，
+        // hover 退场时 ColorAnimation 会插出灰色。白基透明只变化 alpha，能透出壁纸且不灰闪。
         color: item.isActive ? root.sidebarItemActiveColor : (item.visualHovered ? root.sidebarItemHoverColor : root.sidebarItemIdleColor)
         border.color: item.isActive ? root.sidebarItemActiveBorderColor : (item.visualHovered ? root.sidebarItemHoverBorderColor : root.sidebarItemIdleBorderColor)
         border.width: item.isActive || item.visualHovered ? 1 : 0
@@ -303,7 +297,6 @@ Rectangle {
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Medium
                     color: Theme.accent
-                    opacity: 1
 
                     SequentialAnimation on opacity {
                         id: pulseAnimation
