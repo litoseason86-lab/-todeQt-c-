@@ -683,4 +683,14 @@ TestCase {
         compare(Math.round(workRight), Math.round(expectedRight))
         compare(Math.round(breakRight), Math.round(expectedRight))
     }
+
+    function test_timeNumeralsUseClockFamily() {
+        var freeText = findChild(view, "focusFreeTimeText")
+        verify(freeText)
+        compare(freeText.font.family, Theme.fontFamilyClock)
+
+        var ringText = findChild(view, "focusRingTimeText")
+        verify(ringText)
+        compare(ringText.font.family, Theme.fontFamilyClock)
+    }
 }

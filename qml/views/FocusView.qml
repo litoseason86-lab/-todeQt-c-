@@ -618,11 +618,13 @@ Item {
             }
 
             Text {
+                objectName: "focusFreeTimeText"
                 Layout.fillWidth: true
                 visible: root.state === "free"
                 text: root.primaryTimeText()
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontDisplay
+                font.family: Theme.fontFamilyClock
                 font.bold: true
                 color: Theme.accent
                 horizontalAlignment: Text.AlignHCenter
@@ -652,12 +654,14 @@ Item {
                     spacing: Theme.space4
 
                     Text {
+                        objectName: "focusRingTimeText"
                         Layout.alignment: Qt.AlignHCenter
                         text: root.primaryTimeText()
                         textFormat: Text.PlainText
                         font.pixelSize: root.state === "pomoIdle"
                                         ? (root.panelExpanded ? 42 : 56)
                                         : Theme.fontDisplay
+                        font.family: Theme.fontFamilyClock
                         font.bold: true
                         color: root.primaryTimeColor()
                         horizontalAlignment: Text.AlignHCenter

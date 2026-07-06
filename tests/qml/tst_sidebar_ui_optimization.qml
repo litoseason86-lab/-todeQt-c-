@@ -264,4 +264,10 @@ TestCase {
         compare(pulse.text, "");
         compare(pulse.pulseRunning, false);
     }
+
+    function test_statusTimeUsesClockFamily() {
+        var statusText = findChild(sidebar, "sidebarStatus-专")
+        verify(statusText)
+        compare(statusText.font.family, Theme.fontFamilyClock)
+    }
 }

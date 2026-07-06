@@ -331,6 +331,7 @@ Rectangle {
                     text: item.statusTimeText
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontSm
+                    font.family: Theme.fontFamilyClock
                     font.weight: Font.Medium
                     color: Theme.accent
                 }
