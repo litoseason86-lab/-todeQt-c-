@@ -1,7 +1,7 @@
 import QtQuick
 import ".."
 
-// 背景壁纸层：底色 + 三个椭圆径向光晕 + 噪点颗粒。
+// 背景壁纸层：底色 + 三个椭圆径向光晕。
 // 主题定义唯一来源是 Theme.backgroundThemes；未知 id 在这里回落首位暖纸。
 Item {
     id: root
@@ -64,11 +64,4 @@ Item {
         }
     }
 
-    Image {
-        // 纸感噪点随壁纸整层走；计划二会移除 MainWindow 里的旧噪点层，避免双重颗粒。
-        anchors.fill: parent
-        opacity: 0.03
-        fillMode: Image.Tile
-        source: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='noise'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23noise)'/></svg>"
-    }
 }

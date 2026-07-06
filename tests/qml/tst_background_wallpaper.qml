@@ -21,6 +21,19 @@ TestCase {
         wallpaper.themeId = "warmPaper"
     }
 
+    function collectChildren(item, result) {
+        if (!item || !item.children) {
+            return result
+        }
+
+        for (var i = 0; i < item.children.length; ++i) {
+            var child = item.children[i]
+            result.push(child)
+            collectChildren(child, result)
+        }
+        return result
+    }
+
     function test_defaultResolvesWarmPaper() {
         compare(wallpaper.themeId, "warmPaper")
         compare(wallpaper.resolvedTheme.id, "warmPaper")
@@ -41,5 +54,15 @@ TestCase {
         var before = wallpaper.paintCount
         wallpaper.themeId = "sunset"
         tryVerify(function() { return wallpaper.paintCount > before }, 3000)
+    }
+
+    function test_noTiledNoiseTextureLayer() {
+        var children = collectChildren(wallpaper, [])
+        for (var i = 0; i < children.length; ++i) {
+            var item = children[i]
+            if (item.fillMode === Image.Tile && String(item.source).indexOf("feTurbulence") >= 0) {
+                fail("SVG 噪点瓦片会在浅色壁纸上形成柱状拼接块，应移除")
+            }
+        }
     }
 }
