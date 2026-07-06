@@ -595,7 +595,7 @@ TestCase {
 
         compare(dialogPanel.objectName, "dialogPanel");
         compare(dialogPanel.radius, Theme.radiusLg);
-        verify(Qt.colorEqual(dialogPanel.color, Theme.surface));
+        verify(Qt.colorEqual(dialogPanel.color, Theme.glassDialog));
         verify(Qt.colorEqual(dialogPanel.border.color, Theme.border));
         compare(dialogPanel.layer.enabled, true);
         verify(dialogPanel.layer.effect !== null);
