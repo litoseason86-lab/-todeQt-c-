@@ -489,8 +489,12 @@ Item {
     }
 
     Rectangle {
+        objectName: "focusPageBackdrop"
+
         anchors.fill: parent
-        color: Theme.surfaceSunken
+        // 整页一块玻璃底板透出壁纸；不做“中央列包卡”的结构手术：
+        // 专注页状态机复杂，玻璃化只换材质、不动布局。
+        color: Theme.glassCard
 
         ColumnLayout {
             width: Math.min(parent.width - 96, 560)

@@ -160,6 +160,12 @@ TestCase {
         wait(20)
     }
 
+    function test_pageBackdropIsGlass() {
+        var backdrop = findChild(view, "focusPageBackdrop")
+        verify(backdrop, "整页底板应有 objectName 供守护")
+        verify(Qt.colorEqual(backdrop.color, Theme.glassCard))
+    }
+
     function test_switchToPomodoroShowsPresetsAndIdleState() {
         view.toPomodoroTab(true)
         wait(20)
