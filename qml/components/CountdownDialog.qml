@@ -152,7 +152,7 @@ Popup {
 
         implicitWidth: root.width
         implicitHeight: contentColumn.implicitHeight
-        color: Theme.surface
+        color: Theme.glassDialog
         border.color: Theme.border
         border.width: 1
         radius: Theme.radiusLg

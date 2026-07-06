@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import "../../qml/components"
+import "../../qml"
 
 TestCase {
     id: testCase
@@ -101,5 +102,14 @@ TestCase {
 
         compare(editedSpy.count, 0)
         verify(dialog.errorText.length > 0)
+    }
+
+    function test_panelIsGlassDialog() {
+        dialog.openForTask({ id: 1, title: "任意", categoryId: -1, date: isoWithOffset(0) })
+        wait(20)
+        var panel = findChild(dialog, "editDialogPanel")
+        verify(panel)
+        verify(Qt.colorEqual(panel.color, Theme.glassDialog))
+        dialog.close()
     }
 }

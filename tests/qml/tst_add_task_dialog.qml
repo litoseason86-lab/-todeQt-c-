@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtTest
 import "../../qml/components"
+import "../../qml"
 
 TestCase {
     id: testCase
@@ -111,5 +112,14 @@ TestCase {
 
         compare(testCase.lastCategoryId, -1)
         categoryDialog.close()
+    }
+
+    function test_panelIsGlassDialog() {
+        dialog.open()
+        wait(20)
+        var panel = findChild(dialog, "dialogPanel")
+        verify(panel)
+        verify(Qt.colorEqual(panel.color, Theme.glassDialog))
+        dialog.close()
     }
 }
