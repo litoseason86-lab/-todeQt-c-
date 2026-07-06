@@ -47,6 +47,7 @@ TestCase {
             verify(!seen[t.id], "id 重复: " + t.id)
             seen[t.id] = true
             verify(String(t.name).length > 0, t.id + " 缺名称")
+            verify(String(t.motif).length > 0, t.id + " 缺图案标识")
             compare(String(t.base).charAt(0), "#")
             compare(t.blobs.length, 3)
             for (var j = 0; j < 3; j++) {
@@ -55,6 +56,23 @@ TestCase {
                 verify(b.rx > 0 && b.ry > 0, t.id + " 光晕半径非法")
                 compare(String(b.color).charAt(0), "#")
             }
+        }
+    }
+
+    function test_backgroundThemesMotifMapping() {
+        var expected = {
+            warmPaper: "windowLight",
+            sunset: "sunsetPeaks",
+            celadon: "orchid",
+            mist: "moonMist",
+            sakura: "fallingPetals",
+            wheat: "goldenWaves"
+        }
+        var themes = Theme.backgroundThemes
+
+        for (var i = 0; i < themes.length; i++) {
+            var theme = themes[i]
+            compare(theme.motif, expected[theme.id], theme.id + " 图案映射错误")
         }
     }
 }
