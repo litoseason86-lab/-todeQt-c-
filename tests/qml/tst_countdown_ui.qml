@@ -1,5 +1,6 @@
 import QtQuick
 import QtTest
+import "../../qml"
 import "../../qml/components"
 import "../../qml/views"
 
@@ -149,5 +150,11 @@ TestCase {
 
         verify(fakeCountdownService.primaryGoal !== null)
         compare(countdownModel.count, 1)
+    }
+
+    function test_countdownHeroDaysUsesDataFamily() {
+        var daysText = findChild(countdownView, "countdownHeroDays")
+        verify(daysText)
+        compare(daysText.font.family, Theme.fontFamilyData)
     }
 }

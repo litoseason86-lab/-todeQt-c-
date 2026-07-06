@@ -122,9 +122,11 @@ Item {
                 }
 
                 Text {
+                    objectName: "countdownHeroDays"
                     Layout.fillWidth: true
                     text: root.primaryGoal() ? Math.abs(Number(root.primaryGoal().daysRemaining || 0)) : "0"
                     font.pixelSize: Theme.fontDisplay
+                    font.family: Theme.fontFamilyData
                     font.weight: Font.Bold
                     color: Theme.accent
                     horizontalAlignment: Text.AlignHCenter

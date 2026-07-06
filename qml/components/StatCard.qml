@@ -83,10 +83,12 @@ Rectangle {
 
             Text {
                 id: valueText
+                objectName: "statCardValue"
 
                 Layout.fillWidth: true
                 text: root.value
                 font.pixelSize: Theme.fontXxl
+                font.family: Theme.fontFamilyData
                 font.weight: Font.Bold
                 fontSizeMode: Text.HorizontalFit
                 minimumPixelSize: 18

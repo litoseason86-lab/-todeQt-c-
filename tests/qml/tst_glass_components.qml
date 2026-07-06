@@ -44,6 +44,12 @@ TestCase {
         verify(Qt.colorEqual(statCard.border.color, Theme.glassBorder))
     }
 
+    function test_statCardValueUsesDataFamily() {
+        var valueText = findChild(statCard, "statCardValue")
+        verify(valueText)
+        compare(valueText.font.family, Theme.fontFamilyData)
+    }
+
     function test_chartBarGlass() {
         verify(Qt.colorEqual(chartBar.color, Theme.glassCard))
         verify(Qt.colorEqual(chartBar.border.color, Theme.glassBorder))
