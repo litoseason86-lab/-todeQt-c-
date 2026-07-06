@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import "../../qml/views"
+import "../../qml"
 
 TestCase {
     id: testCase
@@ -186,5 +187,12 @@ TestCase {
         view.pendingDeleteTaskId = -1
         wait(20)
         compare(view.tasks.length, 2)
+    }
+
+    function test_taskListContainerIsGlass() {
+        var container = findChild(view, "todayTaskListContainer")
+        verify(container)
+        verify(Qt.colorEqual(container.color, Theme.glassCard))
+        verify(Qt.colorEqual(container.border.color, Theme.glassBorder))
     }
 }

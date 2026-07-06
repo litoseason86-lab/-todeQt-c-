@@ -476,9 +476,9 @@ Item {
             objectName: "todayTaskListContainer"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: Theme.surface
+            color: Theme.glassCard
             radius: Theme.radiusLg
-            border.color: Theme.border
+            border.color: Theme.glassBorder
             border.width: 1
             layer.enabled: true
             layer.effect: MultiEffect {
