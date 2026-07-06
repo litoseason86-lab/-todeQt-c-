@@ -23,6 +23,11 @@ TestCase {
         compare(Theme.radiusMd, 6)
     }
 
+    function test_fontFamilyTokens() {
+        compare(Theme.fontFamilyClock, "Space Grotesk")
+        compare(Theme.fontFamilyData, "Bricolage Grotesque")
+    }
+
     function test_chartColorsIsArray() {
         compare(Theme.chartColors.length, 6)
         // 顺带校验首元素值，确保数组不是被序列化成空串等异常形态。

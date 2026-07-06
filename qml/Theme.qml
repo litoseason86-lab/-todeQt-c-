@@ -48,6 +48,11 @@ QtObject {
     readonly property int fontXxl: 24
     readonly property int fontDisplay: 64
 
+    // —— 字族（数字英雄；纯拉丁，仅对数字/拉丁可见，中文回退苹方）——
+    // 字族名必须与打包 ttf 的家族名一致，FontAssetsTests 用 id 作用域守门。
+    readonly property string fontFamilyClock: "Space Grotesk"      // 冷·计时数字
+    readonly property string fontFamilyData: "Bricolage Grotesque" // 暖·统计/倒计时数字
+
     // —— 间距 Spacing（4/8 栅格）——
     readonly property int hairline: 2
     readonly property int space4: 4
