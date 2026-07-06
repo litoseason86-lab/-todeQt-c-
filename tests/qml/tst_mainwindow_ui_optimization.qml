@@ -190,7 +190,7 @@ TestCase {
         wait(20);
     }
 
-    function test_mainContentAndDividerUseOptimizedColors() {
+    function test_mainContentBackgroundTransparentAndDividerUnchanged() {
         var mainContent = findChild(mainWindow, "mainContentBackground");
         var divider = findChild(mainWindow, "mainContentDivider");
         var stackLayout = findChild(mainWindow, "mainViewStack");
@@ -199,30 +199,12 @@ TestCase {
         verify(mainContent !== null);
         verify(divider !== null);
         verify(stackLayout !== null);
-        verify(textureLayer !== null);
+        verify(textureLayer === null, "旧噪点层应已移除，避免和 BackgroundWallpaper 双重叠加");
 
-        verify(Qt.colorEqual(mainContent.color, "#fffef9"));
+        verify(mainContent.color.a < 0.01, "主内容区必须透明，否则壁纸被盖住");
         verify(Qt.colorEqual(divider.color, "#e8dfc8"));
         compare(divider.opacity, 0.8);
         compare(stackLayout.currentIndex, mainWindow.viewIndex(mainWindow.currentView));
-    }
-
-    function test_mainContentHasNonBlockingPaperTextureLayerBelowViews() {
-        var mainContent = findChild(mainWindow, "mainContentBackground");
-        var textureLayer = findChild(mainWindow, "paperTextureLayer");
-        var stackLayout = findChild(mainWindow, "mainViewStack");
-
-        verify(mainContent !== null);
-        verify(textureLayer !== null);
-        verify(stackLayout !== null);
-        compare(textureLayer.status, Image.Ready);
-        verify(textureLayer.opacity > 0);
-        verify(textureLayer.opacity <= 0.05);
-        compare(textureLayer.fillMode, Image.Tile);
-        verify(String(textureLayer.source).indexOf("data:image/svg+xml") === 0);
-        verify(textureLayer.z < stackLayout.z);
-        compare(textureLayer.width, mainContent.width);
-        compare(textureLayer.height, mainContent.height);
     }
 
     function test_wallpaperLayerFollowsSettings() {

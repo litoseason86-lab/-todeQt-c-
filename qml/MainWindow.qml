@@ -204,25 +204,14 @@ Item {
 
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: Theme.surface
-
-            Image {
-                objectName: "paperTextureLayer"
-
-                anchors.fill: parent
-                z: 0
-                visible: true
-                opacity: 0.03
-                fillMode: Image.Tile
-                source: "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='noise'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23noise)'/></svg>"
-            }
+            // 透明让壁纸透出；此 Rectangle 保留为 StackLayout 的布局宿主，不再承担底色。
+            color: "transparent"
 
             StackLayout {
                 id: stackLayout
                 objectName: "mainViewStack"
 
                 anchors.fill: parent
-                z: 1
                 currentIndex: root.viewIndex(root.currentView)
 
                 TodayTaskView {
