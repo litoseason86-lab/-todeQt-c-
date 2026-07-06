@@ -21,9 +21,9 @@ Rectangle {
 
     height: 62
     radius: Theme.radiusLg
-    // 悬停反馈靠“边框变色”表达：底色 idle/hover 都用 surfaceRaised（原来两个近似值已归并），
+    // 悬停反馈靠“边框变色”表达：底色 idle/hover 都用玻璃卡片材质，
     // 悬停时由 border 从 Theme.border 变为 Theme.accent 来提示，所以底色不随悬停变化不是笔误。
-    color: Theme.surfaceRaised
+    color: Theme.glassCard
     border.color: hitArea.containsMouse ? Theme.accent : Theme.border
     border.width: 1
     layer.enabled: hitArea.containsMouse

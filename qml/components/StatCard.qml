@@ -28,8 +28,8 @@ Rectangle {
     implicitWidth: 190
     implicitHeight: root.showComparison && root.comparisonText.length > 0 ? 126 : 104
     radius: Theme.radiusLg
-    color: Theme.surface
-    border.color: Theme.border
+    color: Theme.glassCard
+    border.color: Theme.glassBorder
     border.width: 1
     layer.enabled: true
     layer.effect: MultiEffect {

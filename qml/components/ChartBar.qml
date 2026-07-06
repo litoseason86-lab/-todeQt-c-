@@ -18,8 +18,8 @@ Rectangle {
     implicitWidth: 560
     implicitHeight: 260
     radius: Theme.radiusMd
-    color: Theme.surfaceRaised
-    border.color: Theme.border
+    color: Theme.glassCard
+    border.color: Theme.glassBorder
     border.width: 1
 
     function sourceData() {
