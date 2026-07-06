@@ -20,9 +20,9 @@
 
 ### 1. 壁纸层（新组件 `qml/components/BackgroundWallpaper.qml`）
 
-- 铺在 MainWindow 最底层；每张壁纸 = 底色 + 3 个椭圆径向渐变光晕 + 噪点颗粒层。
+- 铺在 MainWindow 最底层；每张壁纸 = 底色 + 3 个椭圆径向渐变光晕。
 - 用 Canvas 绘制（FocusRing 已有 Canvas 先例）：`createRadialGradient` 只支持正圆，椭圆光晕通过 `ctx.save()` + `ctx.scale()` 变换实现。
-- 噪点颗粒：组件内叠一层现有 `paperTextureLayer` 同款 SVG 噪点 Image（opacity 0.03，`Image.Tile`），让纸感全局延续（计划二会移除 MainWindow 里的旧噪点层，避免双重噪点——见映射表）。
+- **噪点颗粒（执行期修正：整体退役）**：原设计让壁纸组件内叠 `paperTextureLayer` 同款 SVG 噪点 Image 延续纸感，但真机验证发现 `Image.Tile` + feTurbulence SVG 在浅色壁纸上渲染成肉眼可见的柱状拼接块。噪点层从壁纸组件移除、MainWindow 旧噪点层随透明化删除，纸感颗粒纹理整体退役；`tst_background_wallpaper.qml` 的 `test_noTiledNoiseTextureLayer` 守护不回潮。
 - **重绘时机（接口行为，三条都必须实现）**：
   - `onThemeIdChanged: requestPaint()`——切主题必须触发重绘；
   - `onWidthChanged`/`onHeightChanged: requestPaint()`——窗口 resize 重画；
@@ -52,18 +52,21 @@
 | 文件 | 目标（objectName / 位置） | 现状 | 改为 |
 | --- | --- | --- | --- |
 | MainWindow.qml | `mainContentBackground` | `Theme.surface` | `"transparent"` |
-| MainWindow.qml | `paperTextureLayer`（噪点 Image） | opacity 0.03 常驻 | 整块删除（噪点已并入 BackgroundWallpaper） |
+| MainWindow.qml | `paperTextureLayer`（噪点 Image） | opacity 0.03 常驻 | 整块删除（噪点纹理退役：SVG 瓦片在壁纸上呈柱状拼接块，见壁纸层小节） |
 | MainWindow.qml | `mainContentDivider`（1px 竖线） | `Theme.border` | 不动（细线压在壁纸上无碍） |
 | TodayTaskView.qml | `todayTaskListContainer` | `Theme.surface` + `Theme.border` | 底色 → `glassCard`，边框 → `glassBorder` |
 | components/StatCard.qml | 组件根 Rectangle（[StatCard.qml:31](../../../qml/components/StatCard.qml#L31)） | `Theme.surface` + `Theme.border` | 底色 → `glassCard`，边框 → `glassBorder`（一处改动同时覆盖今日页 2 卡 + 统计页 3 卡） |
 | FocusView.qml | 整页底板 Rectangle（[FocusView.qml:491](../../../qml/views/FocusView.qml#L491)，`anchors.fill` 全页） | `Theme.surfaceSunken` | 底色 → `glassCard`（整页一块玻璃底板，**不改内部布局**——专注页刚重构过且状态机复杂，不做"中央列包卡"的结构手术） |
-| WeekPlanView.qml | 7 个 day row 容器（[WeekPlanView.qml:364](../../../qml/views/WeekPlanView.qml#L364)） | 今天=高亮 / 周末=`surfaceSunken` / 工作日=`surfaceRaised` | 今天行高亮分支保留；周末与工作日统一 → `glassCard`（周末的弱区分保留在既有星期文字样式上） |
+| WeekPlanView.qml | 星期脊柱（[WeekPlanView.qml:360](../../../qml/views/WeekPlanView.qml#L360)，52px 日期标签柱） | 今天=`accent` / 周末=`surfaceSunken` / 工作日=`surfaceRaised` | **不动**——day row 本体是无底色 RowLayout（行透明天然成立），脊柱是承载今天/周末语义的色标签，玻璃化会消解区分 |
+| WeekPlanView.qml | 空日子占位块（[WeekPlanView.qml:402](../../../qml/views/WeekPlanView.qml#L402)） | `Theme.surfaceRaised` + `borderSubtle` | 底色 → `glassCard`，边框 → `glassBorder`（占位应比内容更轻；TaskItem 内容卡保持暖纸材质，属有意的层级差） |
+| WeekPlanView.qml | 滚动条轨道（[WeekPlanView.qml:330](../../../qml/views/WeekPlanView.qml#L330)） | `Theme.surface` | `"transparent"`（透明化后不透明轨道会变成压在壁纸上的白条） |
+| MonthGoalView.qml | 时间线内滚动条轨道（[MonthGoalView.qml:691](../../../qml/views/MonthGoalView.qml#L691)） | `Theme.surface` | `"transparent"`（同上） |
 | MonthGoalView.qml | `monthCalendarContainer` | `Theme.surface` 卡片 | 底色 → `glassCard`，边框 → `glassBorder` |
 | MonthGoalView.qml | `focusTimelinePanel` | `Theme.surface` 卡片 | 底色 → `glassCard`，边框 → `glassBorder` |
 | components/ChartBar.qml | 组件根 Rectangle（[ChartBar.qml:21](../../../qml/components/ChartBar.qml#L21)） | `Theme.surfaceRaised` + `Theme.border` | 底色 → `glassCard`，边框 → `glassBorder`（覆盖统计页趋势图） |
 | components/ChartPie.qml | 组件根 Rectangle（[ChartPie.qml:23](../../../qml/components/ChartPie.qml#L23)） | `Theme.surfaceRaised` + `Theme.border` | 底色 → `glassCard`，边框 → `glassBorder`（覆盖统计页科目分配图） |
 | components/CountdownItem.qml | 组件根 Rectangle（[CountdownItem.qml:26](../../../qml/components/CountdownItem.qml#L26)） | `Theme.surfaceRaised`；hover 时边框 `border → accent` | 底色 → `glassCard`；hover 边框行为保留（倒计时页无外层大容器，卡片即顶层区块） |
-| 7 个弹窗（AddTask/EditTask/Category/Countdown/Routine/Export/Settings） | 各自 panel Rectangle | `Theme.surface` | 底色 → `glassDialog`（描边保留现状） |
+| 7 个弹窗 | 各自 `background: Rectangle` 面板 | `surface`（AddTask:140 / EditTask:203 / Countdown:155）或 `surfaceRaised`（Category:193 / Routine:183 / Export:169） | 底色 → `glassDialog`（描边保留现状；Settings 是新组件、生而 glass，属计划一） |
 | TodayTaskView.qml | `rolloverBanner` | `Theme.accentSoft` + `Theme.accent` 边框 | **不动**——它是逾期提醒的强调横幅，焦糖底就是它的语义，玻璃化会消解提醒强度 |
 | components/Toast.qml、CountdownBanner.qml | — | — | 本期不动 |
 
