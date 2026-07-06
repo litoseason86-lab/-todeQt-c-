@@ -1,16 +1,27 @@
 import QtQuick
 import ".."
 
-// 背景壁纸层：底色 + 三个椭圆径向光晕。
-// 主题定义唯一来源是 Theme.backgroundThemes；未知 id 在这里回落首位暖纸。
+// 背景壁纸层：底色 + 光晕 + 主题图案。
+// 主题定义默认来自 Theme.backgroundThemes；测试可注入 themeSource，避免修改全局单例。
 Item {
     id: root
 
     property string themeId: "warmPaper"
+    property var themeSource: Theme.backgroundThemes
     property alias paintCount: canvas.paintCount
+    readonly property alias lastPaintedMotif: canvas.lastPaintedMotif
+    readonly property alias motifPaintCount: canvas.motifPaintCount
+    readonly property var supportedMotifs: [
+        "windowLight",
+        "sunsetPeaks",
+        "orchid",
+        "moonMist",
+        "fallingPetals",
+        "goldenWaves"
+    ]
 
     readonly property var resolvedTheme: {
-        var themes = Theme.backgroundThemes
+        var themes = root.themeSource
         for (var i = 0; i < themes.length; i++) {
             if (themes[i].id === root.themeId) {
                 return themes[i]
@@ -20,11 +31,18 @@ Item {
     }
 
     onThemeIdChanged: canvas.requestPaint()
+    onThemeSourceChanged: canvas.requestPaint()
+
+    function forceRepaintForTest() {
+        canvas.requestPaint()
+    }
 
     Canvas {
         id: canvas
 
         property int paintCount: 0
+        property int motifPaintCount: 0
+        property string lastPaintedMotif: ""
 
         anchors.fill: parent
         onWidthChanged: requestPaint()
@@ -39,11 +57,12 @@ Item {
             var theme = root.resolvedTheme
 
             ctx.clearRect(0, 0, width, height)
-            ctx.fillStyle = theme.base
+            ctx.fillStyle = theme.base || Theme.backgroundThemes[0].base
             ctx.fillRect(0, 0, width, height)
 
-            for (var i = 0; i < theme.blobs.length; i++) {
-                var blob = theme.blobs[i]
+            var blobs = theme.blobs || []
+            for (var i = 0; i < blobs.length; i++) {
+                var blob = blobs[i]
                 // createRadialGradient 只支持正圆；缩放坐标系后画单位圆即可得到椭圆光晕。
                 ctx.save()
                 ctx.translate(blob.cx * width, blob.cy * height)
@@ -60,7 +79,55 @@ Item {
                 ctx.restore()
             }
 
+            paintMotif(ctx, theme.motif || "")
             paintCount += 1
+        }
+
+        function paintMotif(ctx, motif) {
+            lastPaintedMotif = ""
+            switch (motif) {
+            case "windowLight":
+                paintWindowLight(ctx)
+                break
+            case "sunsetPeaks":
+                paintSunsetPeaks(ctx)
+                break
+            case "orchid":
+                paintOrchid(ctx)
+                break
+            case "moonMist":
+                paintMoonMist(ctx)
+                break
+            case "fallingPetals":
+                paintFallingPetals(ctx)
+                break
+            case "goldenWaves":
+                paintGoldenWaves(ctx)
+                break
+            default:
+                // 未知图案保留底色和光晕；不计入 motifPaintCount，便于测试发现错误映射。
+                return
+            }
+            lastPaintedMotif = motif
+            motifPaintCount += 1
+        }
+
+        function paintWindowLight(ctx) {
+        }
+
+        function paintSunsetPeaks(ctx) {
+        }
+
+        function paintOrchid(ctx) {
+        }
+
+        function paintMoonMist(ctx) {
+        }
+
+        function paintFallingPetals(ctx) {
+        }
+
+        function paintGoldenWaves(ctx) {
         }
     }
 
