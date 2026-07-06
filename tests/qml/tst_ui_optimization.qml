@@ -720,4 +720,50 @@ TestCase {
         verify(selectedDayCell.border.width >= 2);
         compare(selectedDayDuration.font.pixelSize, 11);
     }
+
+    function test_weekEmptyDayIsGlass() {
+        taskManager.fakeWeekTasks = []
+        weekPlanView.visible = true
+        weekPlanView.refresh()
+        wait(80)
+
+        var emptyCard = findChild(weekPlanView, "weekEmptyDayCard")
+        verify(emptyCard, "空日子占位块应有 objectName 供守护")
+        verify(Qt.colorEqual(emptyCard.color, Theme.glassCard))
+        verify(Qt.colorEqual(emptyCard.border.color, Theme.glassBorder))
+    }
+
+    function test_weekScrollTrackTransparent() {
+        weekPlanView.visible = true
+        wait(80)
+
+        var track = findChild(weekPlanView, "weekScrollTrack")
+        verify(track)
+        // 主容器透明后，不透明轨道会变成压在壁纸上的白条。
+        verify(track.color.a < 0.01)
+    }
+
+    function test_monthTimelineScrollTrackTransparent() {
+        monthGoalView.visible = true
+        wait(80)
+
+        var track = findChild(monthGoalView, "monthTimelineScrollTrack")
+        verify(track)
+        verify(track.color.a < 0.01)
+    }
+
+    function test_monthContainersAreGlass() {
+        monthGoalView.visible = true
+        wait(80)
+
+        var calendar = findChild(monthGoalView, "monthCalendarContainer")
+        verify(calendar)
+        verify(Qt.colorEqual(calendar.color, Theme.glassCard))
+        verify(Qt.colorEqual(calendar.border.color, Theme.glassBorder))
+
+        var timeline = findChild(monthGoalView, "focusTimelinePanel")
+        verify(timeline)
+        verify(Qt.colorEqual(timeline.color, Theme.glassCard))
+        verify(Qt.colorEqual(timeline.border.color, Theme.glassBorder))
+    }
 }

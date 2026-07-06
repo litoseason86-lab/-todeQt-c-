@@ -465,8 +465,8 @@ Item {
                     Layout.minimumHeight: 520
                     Layout.preferredHeight: 560
                     radius: Theme.radiusLg
-                    color: Theme.surface
-                    border.color: Theme.border
+                    color: Theme.glassCard
+                    border.color: Theme.glassBorder
                     border.width: 1
                     layer.enabled: true
                     layer.effect: MultiEffect {
@@ -614,8 +614,8 @@ Item {
                     Layout.minimumHeight: 260
                     Layout.preferredHeight: root.width >= 820 ? 560 : 360
                     radius: Theme.radiusLg
-                    color: Theme.surface
-                    border.color: Theme.border
+                    color: Theme.glassCard
+                    border.color: Theme.glassBorder
                     border.width: 1
                     layer.enabled: true
                     layer.effect: MultiEffect {
@@ -689,7 +689,9 @@ Item {
                                 }
 
                                 background: Rectangle {
-                                    color: Theme.surface
+                                    objectName: "monthTimelineScrollTrack"
+
+                                    color: "transparent"
                                 }
                             }
 

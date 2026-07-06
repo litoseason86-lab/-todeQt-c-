@@ -328,7 +328,10 @@ Item {
                 }
 
                 background: Rectangle {
-                    color: Theme.surface
+                    objectName: "weekScrollTrack"
+
+                    // 主容器透明后轨道必须跟着透明，否则是一条压在壁纸上的白带。
+                    color: "transparent"
                 }
             }
 
@@ -400,12 +403,15 @@ Item {
 
                         // —— 空日子：塌成一行，安静地给出添加入口 ——
                         Rectangle {
+                            objectName: "weekEmptyDayCard"
+
                             visible: !dayRow.hasTasks
                             Layout.fillWidth: true
                             Layout.preferredHeight: 48
                             radius: Theme.radiusMd
-                            color: Theme.surfaceRaised
-                            border.color: Theme.borderSubtle
+                            // 占位应比内容更轻：玻璃占位 vs 暖纸内容卡是有意的材质层级。
+                            color: Theme.glassCard
+                            border.color: Theme.glassBorder
                             border.width: 1
 
                             RowLayout {
