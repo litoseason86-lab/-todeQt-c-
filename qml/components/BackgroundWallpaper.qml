@@ -173,6 +173,37 @@ Item {
             ctx.restore()
         }
 
+        function strokeQuad(ctx, x0, y0, cx, cy, x1, y1, color, lineWidth, alpha) {
+            // 一笔兰叶：二次贝塞尔描边，圆头收尾，模拟轻笔触而不是硬折线。
+            ctx.save()
+            ctx.globalAlpha = alpha
+            ctx.strokeStyle = color
+            ctx.lineWidth = lineWidth
+            ctx.lineCap = "round"
+            ctx.beginPath()
+            ctx.moveTo(x0, y0)
+            ctx.quadraticCurveTo(cx, cy, x1, y1)
+            ctx.stroke()
+            ctx.restore()
+        }
+
+        function fillPetal(ctx, tx, ty, rotDeg, s, color, alpha) {
+            // 花瓣用泪滴双弧闭合；旋转和缩放由调用处控制，保证同一基形能产生飘落差异。
+            ctx.save()
+            ctx.translate(tx, ty)
+            ctx.rotate(rotDeg * Math.PI / 180)
+            ctx.scale(s, s)
+            ctx.globalAlpha = alpha
+            ctx.fillStyle = color
+            ctx.beginPath()
+            ctx.moveTo(0, -3)
+            ctx.bezierCurveTo(1.8, -1.4, 1.8, 1.6, 0, 3)
+            ctx.bezierCurveTo(-1.8, 1.6, -1.8, -1.4, 0, -3)
+            ctx.closePath()
+            ctx.fill()
+            ctx.restore()
+        }
+
         function paintMotif(ctx, motif) {
             lastPaintedMotif = ""
             ctx.save()
@@ -237,6 +268,15 @@ Item {
         }
 
         function paintOrchid(ctx) {
+            radialGlow(ctx, 78, 12, 15, "#ffffff", 0.4)
+            // 左下角五笔兰叶由粗到细，透明度逐步降低，避免在任务文字后面形成强干扰。
+            strokeQuad(ctx, 6, 62, 10, 42, 26, 30, "#6fa791", 1.1, 0.38)
+            strokeQuad(ctx, 8, 62, 16, 48, 34, 42, "#6fa791", 1.0, 0.30)
+            strokeQuad(ctx, 5, 62, 6, 44, 12, 34, "#6fa791", 0.9, 0.26)
+            strokeQuad(ctx, 9, 62, 18, 54, 30, 52, "#6fa791", 0.8, 0.20)
+            strokeQuad(ctx, 7, 62, 12, 50, 16, 40, "#6fa791", 0.7, 0.16)
+            solidCircle(ctx, 27.5, 29, 1.1, "#8fbfae", 0.45)
+            solidCircle(ctx, 30, 32, 0.8, "#8fbfae", 0.32)
         }
 
         function paintMoonMist(ctx) {
@@ -250,6 +290,17 @@ Item {
         }
 
         function paintFallingPetals(ctx) {
+            radialGlow(ctx, 16, 12, 16, "#ffd9e4", 0.55)
+            // 九片花瓣右上到左下飘落，近大远小、近实远虚。
+            fillPetal(ctx, 62, 10, 24, 1.4, "#f29db5", 0.50)
+            fillPetal(ctx, 74, 18, -38, 1.0, "#eeb0c4", 0.42)
+            fillPetal(ctx, 86, 9, 64, 0.8, "#f29db5", 0.35)
+            fillPetal(ctx, 90, 30, -15, 1.2, "#eeb0c4", 0.40)
+            fillPetal(ctx, 80, 44, 40, 0.9, "#f2a5ba", 0.32)
+            fillPetal(ctx, 68, 55, -58, 1.1, "#eeb0c4", 0.28)
+            fillPetal(ctx, 38, 52, 18, 0.8, "#f2a5ba", 0.24)
+            fillPetal(ctx, 50, 22, -30, 0.7, "#f5bccb", 0.30)
+            fillPetal(ctx, 24, 34, 52, 0.9, "#f5bccb", 0.20)
         }
 
         function paintGoldenWaves(ctx) {
