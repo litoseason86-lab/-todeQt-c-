@@ -93,8 +93,15 @@ readonly property string fontFamilyData: "Bricolage Grotesque" // 暖·统计数
 
 - 新增 `tests/FontAssetsTests.cpp`，`#include <QGuiApplication>`（QFontDatabase 需 GUI 实例；ServiceTests 是 QCoreApplication，不能复用）、`QTEST_MAIN` 用 QGuiApplication，`add_test` 环境设 `QT_QPA_PLATFORM=offscreen`（无弹窗）；
 - 目标链接 `resources/fonts.qrc` + `Qt6::Gui Qt6::Test`；
-- 断言，逐个字体：`QFile(":/fonts/SpaceGrotesk-Bold.ttf").exists()` 为真；`QFontDatabase::addApplicationFont(":/fonts/…")` 返回值 `!= -1`；
-- **字族名一致性**：注册后 `QFontDatabase::families()` 必须包含 `"Space Grotesk"` 与 `"Bricolage Grotesque"`——直接钉死"ttf 实际家族名 == Theme 令牌字符串"，防止令牌写了 `"Space Grotesk"` 而字体家族其实是别的名字导致真机静默回退。
+- 逐个字体：`QFile(":/fonts/SpaceGrotesk-Bold.ttf").exists()` 为真；`addApplicationFont` 返回 id `!= -1`；
+- **字族名一致性（用 id 作用域，不用全局 families）**：必须断言**这个 qrc 文件注册出来的** family 等于 Theme 令牌字符串——用 `applicationFontFamilies(id)` 而非 `families()`。后者查的是"系统当前有没有这个 family"，开发机若已装 Space Grotesk 会假绿；前者只看该文件本身，才真正钉死"ttf 家族名 == 令牌"。原文：
+
+```cpp
+const int id = QFontDatabase::addApplicationFont(QStringLiteral(":/fonts/SpaceGrotesk-Bold.ttf"));
+QVERIFY(id != -1);
+QVERIFY(QFontDatabase::applicationFontFamilies(id).contains(QStringLiteral("Space Grotesk")));
+// Medium 同理；Bricolage：applicationFontFamilies(id).contains("Bricolage Grotesque")。
+```
 
 **② QML 令牌与应用（驱动属性断言，不做像素/渲染检查）**：
 
@@ -114,6 +121,6 @@ readonly property string fontFamilyData: "Bricolage Grotesque" // 暖·统计数
 
 - C++：main.cpp（注册三字体）、新增 `tests/FontAssetsTests.cpp`。
 - 资源：`resources/fonts/`（三 ttf + 两授权）、新增 `resources/fonts.qrc`。
-- 构建：CMakeLists——`fonts.qrc` 加入 app 目标；新增 `FontAssetsTests` 可执行 + `add_test`（Qt6::Gui/Test，环境 offscreen）。
+- 构建：CMakeLists——① `find_package` **显式补 `Gui`**（现为 `Core Quick QuickControls2 QuickLayouts QuickTest Sql Test`，改为 `Core Gui Quick …`；Quick 虽间接带 Gui，但字体测试目标不靠隐式依赖）；② `fonts.qrc` 加入 app 目标；③ 新增 `FontAssetsTests` 可执行 + `add_test`（链接 `Qt6::Gui Qt6::Test` + `fonts.qrc`，`set_tests_properties` 环境 `QT_QPA_PLATFORM=offscreen`）。
 - QML：Theme（两令牌）、FocusView（计时，两 objectName）、Sidebar（计时，复用现有 objectName）、StatCard（数据，一 objectName）、CountdownView（数据，一 objectName，纯数字天数）。CountdownBanner 排除。
 - **单份实施计划**：Task 1 字体资产 + `fonts.qrc` + CMake 接线 + `FontAssetsTests` 守门（TDD：先红后绿）→ Task 2 main.cpp 注册三字体 → Task 3 Theme 两令牌 → Task 4 计时数字套 clock 字族（FocusView + Sidebar，加 objectName + QML 断言）→ Task 5 数据数字套 data 字族（StatCard + CountdownView，加 objectName + QML 断言）→ Task 6 全量无头回归 +（人工）真机视觉/等宽验收。
