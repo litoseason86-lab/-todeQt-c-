@@ -1,4 +1,6 @@
 #include <QCoreApplication>
+#include <QDebug>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -23,6 +25,19 @@ int main(int argc, char *argv[])
     QQuickStyle::setStyle(QStringLiteral("Basic"));
 
     QGuiApplication app(argc, argv);
+
+    // 打包的数字字体：计时数字（Space Grotesk）与统计/倒计时数字（Bricolage）。
+    // 注册失败仅告警、不阻断启动；字族解析不到时 Qt 会回退系统字，数字仍可读。
+    const QStringList bundledFonts = {
+        QStringLiteral(":/fonts/SpaceGrotesk-Medium.ttf"),
+        QStringLiteral(":/fonts/SpaceGrotesk-Bold.ttf"),
+        QStringLiteral(":/fonts/BricolageGrotesque-Bold.ttf"),
+    };
+    for (const QString& fontPath : bundledFonts) {
+        if (QFontDatabase::addApplicationFont(fontPath) == -1) {
+            qWarning() << "字体注册失败，将回退系统字:" << fontPath;
+        }
+    }
 
     QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodo"));
     QCoreApplication::setApplicationName(QStringLiteral("PomodoroTodo"));
