@@ -74,6 +74,17 @@ TestCase {
     }
 
     QtObject {
+        id: appSettings
+
+        property int lastMode: 0
+        property int workMinutes: 25
+        property int breakMinutes: 5
+        property bool soundEnabled: true
+        property string rolloverIgnoredDate: ""
+        property string backgroundTheme: "celadon"
+    }
+
+    QtObject {
         id: statisticsService
 
         function getTodayStats() {
@@ -212,6 +223,17 @@ TestCase {
         verify(textureLayer.z < stackLayout.z);
         compare(textureLayer.width, mainContent.width);
         compare(textureLayer.height, mainContent.height);
+    }
+
+    function test_wallpaperLayerFollowsSettings() {
+        var wallpaper = findChild(mainWindow, "backgroundWallpaperLayer")
+        verify(wallpaper)
+        compare(wallpaper.themeId, "celadon")
+        compare(wallpaper.resolvedTheme.id, "celadon")
+
+        appSettings.backgroundTheme = "sunset"
+        compare(wallpaper.themeId, "sunset")
+        appSettings.backgroundTheme = "celadon"
     }
 
     function test_viewSwitchAnimationUsesOptimizedTimingAndOpacity() {

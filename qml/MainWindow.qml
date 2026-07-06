@@ -160,6 +160,14 @@ Item {
         }
     }
 
+    BackgroundWallpaper {
+        objectName: "backgroundWallpaperLayer"
+
+        anchors.fill: parent
+        // 声明在最前 = 画在最底层；侧栏和主内容作为后声明兄弟自然叠在其上。
+        themeId: root.appSettingsRef ? root.appSettingsRef.backgroundTheme : "warmPaper"
+    }
+
     RowLayout {
         anchors.fill: parent
         spacing: 0
