@@ -48,14 +48,14 @@ qt-ui-design 审计（2026-07-07）指出两处 Warning：① 无 reduced-motion
   - 开关：`settingsSoundSwitch` / `settingsReduceMotionSwitch`（Switch 本体，测 `checked`）；各自 `indicator` 的轨道 `...SwitchTrack`、圆钮 `...SwitchThumb`（测轨/钮颜色是否在暖纸令牌体系内，例：`settingsSoundSwitchTrack`）；
   - 管理行：`settingsManageRoutine` / `settingsManageCategory` / `settingsManageExport`。
 
-**高度与滚动策略**（三段化后内容变高，须防小窗口/测试 520px 溢出）：内容整体放进 `ScrollView`（`clip: true`，竖向滚动条走既有暖色主题化样式），Popup 高度封顶：
+**高度与滚动策略**（三段化后内容变高，须防小窗口/测试 520px 溢出）：内容整体放进 `ScrollView`（`clip: true`，`contentWidth: availableWidth` 防横滚），竖向滚动条**直接复用** [WeekPlanView.qml:319](../../../qml/views/WeekPlanView.qml#L319) / [MonthGoalView.qml:680](../../../qml/views/MonthGoalView.qml#L680) 已有的暖色主题化 `ScrollBar.vertical` 写法（细、暖、hover/press 转 accent），不重新设计。Popup 高度封顶：
 
 ```qml
 height: Math.min(contentColumn.implicitHeight,
                  parent ? parent.height - Theme.space32 * 2 : contentColumn.implicitHeight)
 ```
 
-即内容不超窗时按内容高、超窗时封顶到 `parent.height - 64` 并在内部滚动。`ScrollView` 的 `contentWidth: availableWidth` 避免横向滚动。验收含：测试窗口 520px 高下不溢出、可滚到"关闭"。
+即内容不超窗按内容高、超窗封顶到 `parent.height - 64` 并内部滚动。关闭按钮加 `objectName: "settingsCloseButton"`（验收"可滚到关闭"时用 `findChild` 直接取，不靠遍历文本）。验收含：测试窗口 520px 高下不溢出、`settingsCloseButton` 可达。
 
 ## 侧栏瘦身（Sidebar）
 
@@ -78,16 +78,24 @@ height: Math.min(contentColumn.implicitHeight,
 
 ## 减少动效：机制与范围
 
-**机制**：`reduceMotion` 经上下文属性 `appSettings` 全局可达。每个含被门控动画的组件加一个守卫式只读属性（沿用 main.qml 既有 `typeof appSettings` 模式 + `// qmllint disable unqualified`）：
+**机制（reduceMotion 来源按组件既有注入方式取，别一律走全局）**——否则已有 `settings`/`appSettingsRef` 注入的组件在测试里还要再造全局 `appSettings`，白绕：
+
+| 组件 | reduceMotion 取值 |
+| --- | --- |
+| MainWindow | `root.appSettingsRef && root.appSettingsRef.reduceMotion`（已有 `appSettingsRef`） |
+| FocusView | `root.settings && root.settings.reduceMotion`（已有 `settings` 属性，现有测试全走 `settings: appSettingsMock`） |
+| Sidebar / StatCard（无设置注入） | 全局守卫式只读属性（沿用 main.qml 的 `typeof appSettings` 模式） |
+
+Sidebar/StatCard 各加一个**可注入属性**（非 readonly：默认绑定走全局守卫，测试可直接赋值，免造全局 `appSettings`）：
 
 ```qml
 // qmllint disable unqualified
-readonly property bool reduceMotionActive:
+property bool reduceMotionActive:
     typeof appSettings !== "undefined" && appSettings && appSettings.reduceMotion
 // qmllint enable unqualified
 ```
 
-测试文件不注入 appSettings → 求值 `false` → 动画照常，测试不受影响。MainWindow 已有 `appSettingsRef`，直接用 `root.appSettingsRef && root.appSettingsRef.reduceMotion`，无需守卫。
+生产环境该绑定成立（全局 `appSettings` 存在）；测试里 `sidebar.reduceMotionActive = true` / `statCard.reduceMotionActive = true` 直接置真，无需全局上下文。FocusView/MainWindow 直接用既有 `settings`/`appSettingsRef` 注入。
 
 **门控范围**（非必要/循环/大位移；开启时改为瞬时）：
 
@@ -98,21 +106,39 @@ readonly property bool reduceMotionActive:
 | [FocusView.qml:615](../../../qml/views/FocusView.qml#L615) completionBanner 闪烁 | "专注完成"横幅无限闪 | `running: completionBanner.visible && !reduceMotionActive`；停时 opacity 复位 1 |
 | [StatCard.qml:102](../../../qml/components/StatCard.qml#L102) `valuePulse` | 数值变化跳动脉冲 | `onTextChanged`：`if (!reduceMotionActive) valuePulse.restart()` |
 
-**MainWindow 瞬时切换必须完整复位状态**（否则动画中途开启减动效、或快速连切会留半切换态）。`switchToView(viewName)` 在 reduceMotion 开启时执行：
+**MainWindow 瞬时切换必须完整复位状态、且分支必须在 `isSwitching` 早退之前**——否则"动画中途已开启 reduceMotion 再切页"会先命中现有 `if (isSwitching) { queuedView=…; return; }`，瞬时分支根本不执行、半切换态照旧。`switchToView(viewName)` 整体重排为：
 
 ```qml
-if (root.appSettingsRef && root.appSettingsRef.reduceMotion) {
-    viewFade.stop();
-    root.currentView = viewName;
+function switchToView(viewName) {
+    // 已在目标视图且未处于切换中：无操作（原早退判断，保留）。
+    if (root.currentView === viewName && !root.isSwitching) {
+        return;
+    }
+
+    // reduceMotion：瞬时切换 + 完整复位，必须在 isSwitching 早退之前，
+    // 才能接住“动画中途开启减动效再切页”的场景。
+    if (root.appSettingsRef && root.appSettingsRef.reduceMotion) {
+        viewFade.stop();
+        root.currentView = viewName;
+        root.pendingView = viewName;
+        root.queuedView = "";
+        root.isSwitching = false;
+        stackLayout.opacity = 1.0;
+        return;
+    }
+
+    // 动画进行中：仅记最后一次请求，等本次切换结束再启动（原逻辑）。
+    if (root.isSwitching) {
+        root.queuedView = viewName;
+        return;
+    }
+
+    root.isSwitching = true;
     root.pendingView = viewName;
     root.queuedView = "";
-    root.isSwitching = false;
-    stackLayout.opacity = 1.0;
-    return;
+    viewFade.restart();
 }
 ```
-
-放在 `switchToView` 现有 `isSwitching`/`currentView===viewName` 早退判断之后、`viewFade.restart()` 之前。
 
 **动画测试入口**（现有动画多为内部 id，`findChild` 找不到；须暴露驱动属性，否则"门控断言"无从写起）：
 
@@ -144,10 +170,10 @@ if (root.appSettingsRef && root.appSettingsRef.reduceMotion) {
   - 缺 appSettingsRef 时渲染不崩、开关点击不写。
 - **Sidebar**：`findChild` 找不到 例行/科目/导出 三项的 objectName（`sidebarItem-例`/`-科`/`-导`）与"三阶段"文本（改写旧 `test_dividerAndVersionStyles`）；`sidebarItem-设` 仍在；`settingsRequested` 仍可 emit。
 - **减少动效门控**（断言驱动属性，不断言视觉；计划二）：
-  - Sidebar：mock `focusTimerRef` 置运行中番茄（令 `statusGlyph==="●"`、`pulseRunning` 为真）。`reduceMotion=false` 时 `findChild("sidebarStatusPulse-专").pulseAnimationRunning===true`；置 `reduceMotion=true` 后转 `false`。
-  - FocusView：置 `state="workDone"`（completionBanner 可见）。`findChild("focusCompletionBanner").blinkRunning` 随 `reduceMotion` 由 `true`→`false`。
-  - StatCard：`reduceMotion=true` 时改 `value`，断言 `statCard.valuePulseRunning===false`；`reduceMotion=false` 时改 `value` 后 `valuePulseRunning===true`。
-  - MainWindow：注入 `appSettings.reduceMotion=true` 后调 `switchToView("focus")`，断言 `currentView==="focus"` 立即成立且 `isSwitching===false`、`stackLayout.opacity===1.0`（未走淡入淡出）。
+  - Sidebar：mock `focusTimerRef` 置运行中番茄（令 `statusGlyph==="●"`、`pulseRunning` 为真）。`sidebar.reduceMotionActive=false` 时 `findChild("sidebarStatusPulse-专").pulseAnimationRunning===true`；置 `sidebar.reduceMotionActive=true` 后转 `false`（直接赋属性，免造全局 appSettings）。
+  - FocusView：`settings` 用既有 `appSettingsMock`（加 `reduceMotion` 属性）；置 `state="workDone"`（completionBanner 可见），`findChild("focusCompletionBanner").blinkRunning` 随 `appSettingsMock.reduceMotion` 由 `true`→`false`。
+  - StatCard：`statCard.reduceMotionActive=true` 时改 `value`，断言 `statCard.valuePulseRunning===false`；置 `false` 后改 `value` 则 `valuePulseRunning===true`。
+  - MainWindow：`appSettingsMock.reduceMotion=true` 后调 `switchToView("focus")`，断言 `currentView==="focus"` 立即成立且 `isSwitching===false`、`stackLayout.opacity===1.0`（未走淡入淡出）。
   - 遵守不断言 `visible===true`。
 
 ## 影响面与拆分
