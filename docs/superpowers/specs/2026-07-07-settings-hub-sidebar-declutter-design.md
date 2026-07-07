@@ -41,10 +41,21 @@ qt-ui-design 审计（2026-07-07）指出两处 Warning：① 无 reduced-motion
 ```
 
 - **段标题**沿用现有"背景主题"那种 `fontSm/Bold/inkSoft` 小标题样式（偏好、管理）；
-- **开关**：`QtQuick.Controls.Basic` 的 `Switch`，自定义 `indicator`（轨道 + 圆钮）贴合暖纸令牌（开=`Theme.accent` 轨、关=`Theme.surfaceSunken` 轨），与 app 既有自绘控件一致；`checked` 绑 `appSettingsRef.<key>`，`onToggled` 写 `appSettingsRef.<key> = checked`；缺 appSettingsRef（测试/降级）时只显示不写、不崩溃（同画廊守卫）；
+- **开关**：`QtQuick.Controls.Basic` 的 `Switch`，自定义 `indicator`（轨道 + 圆钮）贴合暖纸令牌（开=`Theme.accent` 轨、关=`Theme.surfaceSunken` 轨、钮=`Theme.surface`），与 app 既有自绘控件一致；`checked` 绑 `appSettingsRef.<key>`，`onToggled` 写 `appSettingsRef.<key> = checked`；缺 appSettingsRef（测试/降级）时只显示不写、不崩溃（同画廊守卫）；
 - **管理行**：一行文字 + 右侧 `›`，整行可点，`MouseArea` → `root.close()` + `emit 对应信号`；
 - 新增信号：`signal routineRequested`、`signal categoryRequested`、`signal exportRequested`；
-- objectName：`settingsSoundSwitch`、`settingsReduceMotionSwitch`、`settingsManageRoutine`、`settingsManageCategory`、`settingsManageExport`（测试入口）。
+- **objectName 层级**（测试入口，含自绘控件内部件以便校验令牌）：
+  - 开关：`settingsSoundSwitch` / `settingsReduceMotionSwitch`（Switch 本体，测 `checked`）；各自 `indicator` 的轨道 `...SwitchTrack`、圆钮 `...SwitchThumb`（测轨/钮颜色是否在暖纸令牌体系内，例：`settingsSoundSwitchTrack`）；
+  - 管理行：`settingsManageRoutine` / `settingsManageCategory` / `settingsManageExport`。
+
+**高度与滚动策略**（三段化后内容变高，须防小窗口/测试 520px 溢出）：内容整体放进 `ScrollView`（`clip: true`，竖向滚动条走既有暖色主题化样式），Popup 高度封顶：
+
+```qml
+height: Math.min(contentColumn.implicitHeight,
+                 parent ? parent.height - Theme.space32 * 2 : contentColumn.implicitHeight)
+```
+
+即内容不超窗时按内容高、超窗时封顶到 `parent.height - 64` 并在内部滚动。`ScrollView` 的 `contentWidth: availableWidth` 避免横向滚动。验收含：测试窗口 520px 高下不溢出、可滚到"关闭"。
 
 ## 侧栏瘦身（Sidebar）
 
@@ -53,7 +64,8 @@ qt-ui-design 审计（2026-07-07）指出两处 Warning：① 无 reduced-motion
 - 删除 3 个 SidebarItem（每日例行/科目管理/数据导出）及其 `signal dailyRoutineRequested`、`categoryManagementRequested`、`dataExportRequested`；
 - 删除底部无功能的"三阶段" `Text` 标签；
 - 保留"设置"SidebarItem 与 `signal settingsRequested`；
-- 若 `categoryManagerRef`/`exportServiceRef` 属性在移除后确认无其它引用，一并删除（实施时 grep 核实，避免留死属性）。
+- 若 `categoryManagerRef`/`exportServiceRef` 属性在移除后确认无其它引用，一并删除（实施时 grep 核实，避免留死属性）；
+- **旧测试同步**（否则新旧断言打架）：`tests/qml/tst_sidebar_ui_optimization.qml` 的 `test_dividerAndVersionStyles()`（`findText("三阶段")`）依赖已删标签，计划一必须删除或改写该用例；新增"三项管理入口与三阶段标签已不存在"的断言。
 
 ## MainWindow 接线迁移
 
@@ -81,10 +93,34 @@ readonly property bool reduceMotionActive:
 
 | 位置 | 动画 | reduceMotion 开启时 |
 | --- | --- | --- |
-| [MainWindow.qml:274](../../../qml/MainWindow.qml#L274) `viewFade` | 视图切换淡入淡出 | `switchToView` 跳过 `viewFade.restart()`，直接置 `currentView`（瞬时切换） |
-| [Sidebar.qml:302](../../../qml/components/Sidebar.qml#L302) `pulseAnimation` | 侧栏状态 ● 循环脉冲 | `running: pulseRunning && !reduceMotionActive`；停时 opacity 复位 1 |
-| [FocusView.qml:615](../../../qml/views/FocusView.qml#L615) completionBanner 闪烁 | "专注完成"横幅无限闪 | `running: completionBanner.visible && !reduceMotionActive` |
+| [MainWindow.qml:274](../../../qml/MainWindow.qml#L274) `viewFade` | 视图切换淡入淡出 | `switchToView` 走瞬时分支（完整状态复位，见下） |
+| [Sidebar.qml:302](../../../qml/components/Sidebar.qml#L302) `pulseAnimation` | 侧栏状态 ● 循环脉冲 | `running: pulseRunning && !reduceMotionActive`；停时 `onRunningChanged`/既有 `onPulseRunningChanged` 把 opacity 复位 1 |
+| [FocusView.qml:615](../../../qml/views/FocusView.qml#L615) completionBanner 闪烁 | "专注完成"横幅无限闪 | `running: completionBanner.visible && !reduceMotionActive`；停时 opacity 复位 1 |
 | [StatCard.qml:102](../../../qml/components/StatCard.qml#L102) `valuePulse` | 数值变化跳动脉冲 | `onTextChanged`：`if (!reduceMotionActive) valuePulse.restart()` |
+
+**MainWindow 瞬时切换必须完整复位状态**（否则动画中途开启减动效、或快速连切会留半切换态）。`switchToView(viewName)` 在 reduceMotion 开启时执行：
+
+```qml
+if (root.appSettingsRef && root.appSettingsRef.reduceMotion) {
+    viewFade.stop();
+    root.currentView = viewName;
+    root.pendingView = viewName;
+    root.queuedView = "";
+    root.isSwitching = false;
+    stackLayout.opacity = 1.0;
+    return;
+}
+```
+
+放在 `switchToView` 现有 `isSwitching`/`currentView===viewName` 早退判断之后、`viewFade.restart()` 之前。
+
+**动画测试入口**（现有动画多为内部 id，`findChild` 找不到；须暴露驱动属性，否则"门控断言"无从写起）：
+
+| 组件 | 新增测试入口 |
+| --- | --- |
+| Sidebar `statusPulse`（已有 objectName `sidebarStatusPulse-<marker>`） | 加 `readonly property bool pulseAnimationRunning: pulseAnimation.running` |
+| FocusView completionBanner | Rectangle 加 `objectName: "focusCompletionBanner"`；匿名 `OpacityAnimator on opacity` 提取为带 `id: completionBlink` 的具名动画；加 `readonly property bool blinkRunning: completionBlink.running` |
+| StatCard 根（测试直接用实例 id `statCard`） | 加 `readonly property bool valuePulseRunning: valuePulse.running` |
 
 **不门控**（属必要反馈或低风险微交互）：专注环进度动画（表达时间进度，是功能不是装饰）、70ms 悬停颜色/边框过渡、弹窗进出场 220ms scale/opacity（短、单次、非循环，是打开反馈）。范围保守，先覆盖最"晃眼"的循环/大位移。
 
@@ -106,8 +142,13 @@ readonly property bool reduceMotionActive:
   - 减少动效 Switch 同理绑 `reduceMotion`；
   - 三个管理行点击各自 emit `routineRequested`/`categoryRequested`/`exportRequested`（SignalSpy）；
   - 缺 appSettingsRef 时渲染不崩、开关点击不写。
-- **Sidebar**：`findChild` 找不到 例行/科目/导出 三项的 objectName（`sidebarItem-例`/`-科`/`-导`）与"三阶段"文本；`sidebarItem-设` 仍在；`settingsRequested` 仍可 emit。
-- **减少动效门控**（断言驱动属性，不断言视觉）：注入 mock `appSettings.reduceMotion=true`，断言 Sidebar `reduceMotionActive===true` 且 `pulseAnimation.running===false`；MainWindow 注入后调 `switchToView`，断言 `currentView` 立即变（未走淡入淡出，`isSwitching` 不被置起或立即回落）。遵守不断言 `visible===true`。
+- **Sidebar**：`findChild` 找不到 例行/科目/导出 三项的 objectName（`sidebarItem-例`/`-科`/`-导`）与"三阶段"文本（改写旧 `test_dividerAndVersionStyles`）；`sidebarItem-设` 仍在；`settingsRequested` 仍可 emit。
+- **减少动效门控**（断言驱动属性，不断言视觉；计划二）：
+  - Sidebar：mock `focusTimerRef` 置运行中番茄（令 `statusGlyph==="●"`、`pulseRunning` 为真）。`reduceMotion=false` 时 `findChild("sidebarStatusPulse-专").pulseAnimationRunning===true`；置 `reduceMotion=true` 后转 `false`。
+  - FocusView：置 `state="workDone"`（completionBanner 可见）。`findChild("focusCompletionBanner").blinkRunning` 随 `reduceMotion` 由 `true`→`false`。
+  - StatCard：`reduceMotion=true` 时改 `value`，断言 `statCard.valuePulseRunning===false`；`reduceMotion=false` 时改 `value` 后 `valuePulseRunning===true`。
+  - MainWindow：注入 `appSettings.reduceMotion=true` 后调 `switchToView("focus")`，断言 `currentView==="focus"` 立即成立且 `isSwitching===false`、`stackLayout.opacity===1.0`（未走淡入淡出）。
+  - 遵守不断言 `visible===true`。
 
 ## 影响面与拆分
 
