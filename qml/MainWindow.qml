@@ -176,17 +176,12 @@ Item {
             Layout.preferredWidth: 208
             Layout.fillHeight: true
             currentView: root.currentView
-            categoryManagerRef: categoryManager
-            exportServiceRef: exportService
             focusTimerRef: root.focusTimerRef
 
             onItemClicked: function (viewName) {
                 root.switchToView(viewName);
             }
 
-            onCategoryManagementRequested: categoryDialog.open()
-            onDailyRoutineRequested: routineDialog.open()
-            onDataExportRequested: exportDialog.open()
             onSettingsRequested: settingsDialog.open()
         }
 
@@ -338,6 +333,7 @@ Item {
 
     RoutineDialog {
         id: routineDialog
+        objectName: "routineDialogRoot"
 
         parent: root
         routineManagerRef: typeof routineManager === "undefined" ? null : routineManager
@@ -353,8 +349,13 @@ Item {
 
     SettingsDialog {
         id: settingsDialog
+        objectName: "settingsDialog"
 
         parent: root
         appSettingsRef: root.appSettingsRef
+
+        onRoutineRequested: routineDialog.open()
+        onCategoryRequested: categoryDialog.open()
+        onExportRequested: exportDialog.open()
     }
 }

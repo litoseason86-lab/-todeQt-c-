@@ -19,13 +19,8 @@ Rectangle {
     readonly property color sidebarItemActiveBorderColor: Theme.accent
 
     property string currentView: "today"
-    property var categoryManagerRef: null
-    property var exportServiceRef: null
     property var focusTimerRef: null
     signal itemClicked(string viewName)
-    signal dailyRoutineRequested
-    signal categoryManagementRequested
-    signal dataExportRequested
     signal settingsRequested
 
     function formatMinuteTime(seconds) {

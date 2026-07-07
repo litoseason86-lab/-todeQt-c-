@@ -80,6 +80,7 @@ TestCase {
         property int workMinutes: 25
         property int breakMinutes: 5
         property bool soundEnabled: true
+        property bool reduceMotion: false
         property string rolloverIgnoredDate: ""
         property string backgroundTheme: "celadon"
     }
@@ -256,5 +257,17 @@ TestCase {
         compare(mainWindow.currentView, "stats");
         compare(mainWindow.pendingView, "stats");
         compare(mainWindow.queuedView, "");
+    }
+
+    function test_settingsRoutineSignalOpensRoutineDialog() {
+        var settings = findChild(mainWindow, "settingsDialog")
+        verify(settings, "SettingsDialog 实例应存在")
+        var routine = findChild(mainWindow, "routineDialogRoot")
+        verify(routine, "RoutineDialog 实例应存在")
+
+        compare(routine.opened, false)
+        settings.routineRequested()
+        tryCompare(routine, "opened", true, 500)
+        routine.close()
     }
 }
