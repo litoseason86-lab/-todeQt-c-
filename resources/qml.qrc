@@ -10,6 +10,7 @@
         <file alias="qml/views/StatisticsView.qml">../qml/views/StatisticsView.qml</file>
         <file alias="qml/views/StatisticsFormat.js">../qml/views/StatisticsFormat.js</file>
         <file alias="qml/views/MonthGoalView.qml">../qml/views/MonthGoalView.qml</file>
+        <file alias="qml/views/MonthGoalFormat.js">../qml/views/MonthGoalFormat.js</file>
         <file alias="qml/views/CountdownView.qml">../qml/views/CountdownView.qml</file>
         <file alias="qml/components/BackgroundWallpaper.qml">../qml/components/BackgroundWallpaper.qml</file>
         <file alias="qml/components/SettingsDialog.qml">../qml/components/SettingsDialog.qml</file>
@@ -17,6 +18,7 @@
         <file alias="qml/components/PresetButton.qml">../qml/components/PresetButton.qml</file>
         <file alias="qml/components/DurationStepper.qml">../qml/components/DurationStepper.qml</file>
         <file alias="qml/components/FocusRing.qml">../qml/components/FocusRing.qml</file>
+        <file alias="qml/components/FocusTimeline.qml">../qml/components/FocusTimeline.qml</file>
         <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
         <file alias="qml/components/AddTaskDialog.qml">../qml/components/AddTaskDialog.qml</file>
         <file alias="qml/components/EditTaskDialog.qml">../qml/components/EditTaskDialog.qml</file>

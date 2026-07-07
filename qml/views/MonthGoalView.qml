@@ -3,6 +3,8 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
+import "../components"
+import "MonthGoalFormat.js" as MgFmt
 
 Item {
     id: root
@@ -132,16 +134,12 @@ Item {
         return new Date(root.currentYear, root.currentMonth - 1, Math.max(1, day));
     }
 
-    function isoDate(value) {
-        return Qt.formatDate(value, "yyyy-MM-dd");
-    }
-
     function selectedDateKey() {
-        return root.isoDate(root.dateForDay(root.selectedDay));
+        return MgFmt.isoDate(root.dateForDay(root.selectedDay));
     }
 
     function dayTotalSeconds(day) {
-        var total = root.dailyTotals[root.isoDate(root.dateForDay(day))];
+        var total = root.dailyTotals[MgFmt.isoDate(root.dateForDay(day))];
         return Number(total) || 0;
     }
 
@@ -166,36 +164,6 @@ Item {
         var hours = Math.floor(minutes / 60);
         var remainMinutes = minutes % 60;
         return remainMinutes === 0 ? hours + "小时" : hours + "小时" + remainMinutes + "分";
-    }
-
-    function formatClock(value) {
-        if (value === undefined || value === null) {
-            return "--:--";
-        }
-
-        var text = String(value).trim();
-        if (text.length === 0) {
-            return "--:--";
-        }
-
-        // 服务层可能返回 Qt ISODate 或 SQLite 时间文本；先按字符串截取，避免 JS Date 在不同平台解析空格格式不一致。
-        var separatorIndex = text.indexOf("T");
-        if (separatorIndex < 0) {
-            separatorIndex = text.indexOf(" ");
-        }
-        if (separatorIndex >= 0 && text.length >= separatorIndex + 6) {
-            var clockText = text.substring(separatorIndex + 1, separatorIndex + 6);
-            if (/^\d{2}:\d{2}$/.test(clockText)) {
-                return clockText;
-            }
-        }
-
-        var parsed = new Date(text);
-        if (!isNaN(parsed.getTime())) {
-            return Qt.formatTime(parsed, "HH:mm");
-        }
-
-        return "--:--";
     }
 
     function setMonth(year, month, preferredDay) {
@@ -607,199 +575,16 @@ Item {
                     }
                 }
 
-                Rectangle {
-                    objectName: "focusTimelinePanel"
+                FocusTimeline {
                     Layout.fillWidth: true
                     Layout.minimumWidth: 360
                     Layout.minimumHeight: 260
                     Layout.preferredHeight: root.width >= 820 ? 560 : 360
-                    radius: Theme.radiusLg
-                    color: Theme.glassCard
-                    border.color: Theme.glassBorder
-                    border.width: 1
-                    layer.enabled: true
-                    layer.effect: MultiEffect {
-                        autoPaddingEnabled: true
-                        shadowEnabled: true
-                        shadowColor: Theme.shadow
-                        shadowOpacity: 0.08
-                        shadowBlur: 0.14
-                        shadowHorizontalOffset: 0
-                        shadowVerticalOffset: 2
-                    }
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: Theme.space16
-                        spacing: Theme.space12
-
-                        RowLayout {
-                            Layout.fillWidth: true
-                            spacing: Theme.space12
-
-                            Text {
-                                objectName: "focusTimelineTitle"
-                                Layout.fillWidth: true
-                                text: root.currentMonth + "月" + root.selectedDay + "日 专注记录"
-                                font.pixelSize: Theme.fontXl
-                                font.weight: Font.Bold
-                                color: Theme.ink
-                            }
-
-                            Text {
-                                text: root.selectedDaySessions.length + "次记录"
-                                font.pixelSize: Theme.fontMd
-                                color: Theme.inkSoft
-                            }
-                        }
-
-                        Item {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            visible: root.selectedDaySessions.length === 0
-
-                            Text {
-                                objectName: "focusHistoryEmptyState"
-                                anchors.centerIn: parent
-                                text: "这一天还没有专注记录"
-                                font.pixelSize: Theme.fontMd
-                                color: Theme.inkSoft
-                                horizontalAlignment: Text.AlignHCenter
-                            }
-                        }
-
-                        ScrollView {
-                            id: timelineScrollView
-                            objectName: "focusTimelineScrollView"
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            visible: root.selectedDaySessions.length > 0
-                            clip: true
-                            contentWidth: availableWidth
-                            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-                            ScrollBar.vertical: ScrollBar {
-                                id: timelineVerticalScrollBar
-                                policy: ScrollBar.AsNeeded
-                                width: 8
-
-                                contentItem: Rectangle {
-                                    implicitWidth: 4
-                                    radius: Theme.radiusSm
-                                    color: timelineVerticalScrollBar.pressed || timelineVerticalScrollBar.hovered ? Theme.accent : Theme.border
-                                }
-
-                                background: Rectangle {
-                                    objectName: "monthTimelineScrollTrack"
-
-                                    color: "transparent"
-                                }
-                            }
-
-                            Column {
-                                id: timelineColumn
-                                width: Math.max(1, timelineScrollView.availableWidth)
-                                spacing: Theme.space12
-
-                                Repeater {
-                                    model: root.selectedDaySessions
-
-                                    delegate: Item {
-                                        width: timelineColumn.width
-                                        height: sessionCard.height + (index < root.selectedDaySessions.length - 1 ? 14 : 0)
-
-                                        Rectangle {
-                                            visible: index < root.selectedDaySessions.length - 1
-                                            x: 7
-                                            y: 28
-                                            width: 2
-                                            height: Math.max(0, parent.height - y)
-                                            radius: Theme.radiusSm
-                                            color: Theme.border
-                                        }
-
-                                        Rectangle {
-                                            width: 10
-                                            height: 10
-                                            x: 3
-                                            y: 18
-                                            radius: 5
-                                            color: Theme.accent
-                                            border.color: Theme.surface
-                                            border.width: 2
-                                            z: 2
-                                        }
-
-                                        Rectangle {
-                                            id: sessionCard
-                                            objectName: "focusSessionCard-" + index
-                                            x: 24
-                                            width: Math.max(1, parent.width - x)
-                                            height: 86
-                                            radius: Theme.radiusMd
-                                            color: Theme.surfaceRaised
-                                            border.color: Theme.border
-                                            border.width: 1
-
-                                            RowLayout {
-                                                anchors.fill: parent
-                                                anchors.margins: Theme.space12
-                                                spacing: Theme.space12
-
-                                                ColumnLayout {
-                                                    Layout.fillWidth: true
-                                                    Layout.alignment: Qt.AlignVCenter
-                                                    spacing: Theme.space4
-
-                                                    Text {
-                                                        Layout.fillWidth: true
-                                                        text: modelData.taskTitle && String(modelData.taskTitle).length > 0 ? modelData.taskTitle : "未知任务"
-                                                        font.pixelSize: Theme.fontLg
-                                                        font.weight: Font.Medium
-                                                        color: Theme.inkStrong
-                                                        elide: Text.ElideRight
-                                                    }
-
-                                                    Text {
-                                                        Layout.fillWidth: true
-                                                        text: root.formatClock(modelData.startTime) + " - " + root.formatClock(modelData.endTime)
-                                                        font.pixelSize: Theme.fontSm
-                                                        color: Theme.inkSoft
-                                                        elide: Text.ElideRight
-                                                    }
-                                                }
-
-                                                ColumnLayout {
-                                                    Layout.preferredWidth: 116
-                                                    Layout.maximumWidth: 140
-                                                    Layout.alignment: Qt.AlignVCenter
-                                                    spacing: Theme.space4
-
-                                                    Text {
-                                                        Layout.fillWidth: true
-                                                        text: root.formatDuration(Number(modelData.durationSeconds) || 0)
-                                                        font.pixelSize: Theme.fontXl
-                                                        font.weight: Font.Bold
-                                                        color: Theme.accent
-                                                        horizontalAlignment: Text.AlignRight
-                                                        elide: Text.ElideRight
-                                                    }
-
-                                                    Text {
-                                                        Layout.fillWidth: true
-                                                        text: "已完成"
-                                                        font.pixelSize: Theme.fontXs
-                                                        font.weight: Font.Medium
-                                                        color: Theme.success
-                                                        horizontalAlignment: Text.AlignRight
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    sessions: root.selectedDaySessions
+                    selectedDay: root.selectedDay
+                    currentMonth: root.currentMonth
+                    viewWidth: root.width
+                    formatDurationFn: root.formatDuration
                 }
             }
         }
