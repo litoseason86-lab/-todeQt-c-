@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Effects
 import QtQuick.Layouts
@@ -14,6 +16,11 @@ Rectangle {
     property string comparisonText: ""
     property int comparisonTrend: 0
     property bool showComparison: false
+    // 减少动效默认读全局 appSettings；测试可直接覆盖该属性，不需要构造完整应用上下文。
+    // qmllint disable unqualified
+    property bool reduceMotionActive: typeof appSettings !== "undefined" && appSettings && appSettings.reduceMotion
+    // qmllint enable unqualified
+    readonly property bool valuePulseRunning: valuePulse.running
     readonly property color cardShadowColor: Theme.ink
     readonly property real cardShadowOpacity: 0.08
     readonly property real cardShadowBlur: 0.18
@@ -44,6 +51,13 @@ Rectangle {
     opacity: 0
 
     Component.onCompleted: fadeInAnimation.start()
+
+    onReduceMotionActiveChanged: {
+        if (root.reduceMotionActive) {
+            valuePulse.stop()
+            valueText.scale = 1
+        }
+    }
 
     SequentialAnimation {
         id: fadeInAnimation
@@ -96,7 +110,11 @@ Rectangle {
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
 
-                onTextChanged: valuePulse.restart()
+                onTextChanged: {
+                    if (!root.reduceMotionActive) {
+                        valuePulse.restart()
+                    }
+                }
 
                 SequentialAnimation {
                     id: valuePulse

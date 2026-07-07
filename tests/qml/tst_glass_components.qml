@@ -50,6 +50,21 @@ TestCase {
         compare(valueText.font.family, Theme.fontFamilyData)
     }
 
+    function test_valuePulseGatedByReduceMotion() {
+        statCard.reduceMotionActive = false
+        statCard.value = "1"
+        wait(20)
+
+        statCard.value = "2"
+        tryCompare(statCard, "valuePulseRunning", true, 100)
+        tryCompare(statCard, "valuePulseRunning", false, 600)
+
+        statCard.reduceMotionActive = true
+        statCard.value = "3"
+        wait(20)
+        compare(statCard.valuePulseRunning, false)
+    }
+
     function test_chartBarGlass() {
         verify(Qt.colorEqual(chartBar.color, Theme.glassCard))
         verify(Qt.colorEqual(chartBar.border.color, Theme.glassBorder))
