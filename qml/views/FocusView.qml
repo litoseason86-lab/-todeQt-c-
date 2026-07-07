@@ -592,9 +592,15 @@ Item {
 
             Rectangle {
                 id: completionBanner
+                objectName: "focusCompletionBanner"
+                // 不直接用 Item.visible 驱动动画：offscreen 测试和非当前 StackLayout 页面会让 effective visible 为 false。
+                // 这里保留业务源条件，动画门控只看状态和减少动效开关。
+                readonly property bool shouldShow: root.state === "workDone" || root.state === "breakDone"
+                readonly property bool blinkRunning: completionBlink.running
+
                 Layout.fillWidth: true
                 Layout.preferredHeight: 44
-                visible: root.state === "workDone" || root.state === "breakDone"
+                visible: completionBanner.shouldShow
                 opacity: visible ? 1 : 0
                 color: Theme.accentSoft
                 border.color: Theme.accent
@@ -609,11 +615,20 @@ Item {
                 }
 
                 OpacityAnimator on opacity {
+                    id: completionBlink
+
                     from: 0.35
                     to: 1
                     duration: 520
                     loops: Animation.Infinite
-                    running: completionBanner.visible
+                    running: completionBanner.shouldShow && !(root.settings && root.settings.reduceMotion)
+
+                    onRunningChanged: {
+                        // 减少动效会停掉循环闪烁；停在低透明帧会削弱完成反馈，所以恢复到静止可见值。
+                        if (!running) {
+                            completionBanner.opacity = completionBanner.shouldShow ? 1 : 0
+                        }
+                    }
                 }
             }
 

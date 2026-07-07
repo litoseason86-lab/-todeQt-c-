@@ -102,6 +102,7 @@ TestCase {
         property int workMinutes: 25
         property int breakMinutes: 5
         property bool soundEnabled: true
+        property bool reduceMotion: false
     }
 
     QtObject {
@@ -156,6 +157,7 @@ TestCase {
         appSettingsMock.workMinutes = 25
         appSettingsMock.breakMinutes = 5
         appSettingsMock.soundEnabled = true
+        appSettingsMock.reduceMotion = false
         view.panelExpanded = false
         wait(20)
     }
@@ -336,6 +338,25 @@ TestCase {
         verify(ring)
         compare(ring.progress, 1)
         verify(Qt.colorEqual(ring.ringColor, Theme.success))
+    }
+
+    function test_completionBlinkGatedByReduceMotion() {
+        appSettingsMock.reduceMotion = false
+        focusTimer.hasActiveSession = true
+        view.toPomodoroTab(true)
+        view.startPomodoro()
+        wait(20)
+
+        focusTimer.phaseCompleted(1)
+        wait(20)
+        compare(view.state, "workDone")
+
+        var banner = findChild(view, "focusCompletionBanner")
+        verify(banner)
+        verify(banner.blinkRunning === true, "常态下完成横幅应闪烁")
+
+        appSettingsMock.reduceMotion = true
+        tryCompare(banner, "blinkRunning", false, 500)
     }
 
     function test_breakDoneShowsClosedGreenRing() {
