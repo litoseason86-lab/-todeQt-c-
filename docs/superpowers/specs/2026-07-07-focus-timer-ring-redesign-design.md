@@ -67,7 +67,8 @@
 现状 `focusRingTimeText` 是**单个 `Text` + `textFormat: Text.PlainText`**（[FocusView.qml:671](../../../qml/views/FocusView.qml#L671)），单 PlainText 无法让冒号单独变化。定案：
 
 - **仍是单个 `Text`，`objectName: "focusRingTimeText"` 保留在这同一个 Text 上**（不拆 RowLayout、不迁移 objectName）。这样 `test_timeNumeralsUseClockFamily`（读 `ringText.font.family`）与未来测试都锚在同一层，不分裂。
-- 将 `textFormat` 改为 **`Text.StyledText`**；`text` 由新 helper **`ringTimeMarkup()`** 生成：把 `primaryTimeText()`（番茄语境恒为单冒号 `MM:SS`）在 `":"` 处切开，包成 `parts[0] + '<font color="' + Theme.focusColonMuted + '">:</font>' + parts[1]`；无冒号时回落纯文本。
+- 将 `textFormat` 改为 **`Text.StyledText`**；`text` 由新 helper **`ringTimeMarkup()`** 生成：把 `primaryTimeText()`（番茄语境恒为单冒号 `MM:SS`）在 `":"` 处切开，包成 `parts[0] + '<font color="' + Theme.focusColonMuted + '">:</font>' + parts[1]`。
+- **转义/防注入（评审补点）**：`ringTimeMarkup()` 先用 `/^[0-9:]+$/` 校验入参；不匹配、或不含恰好一个冒号，则**回落返回原始纯字符串**（不拼任何标签）。杜绝未来 `primaryTimeText()` 文案变化把 StyledText 搞出标签注入或显示异常。
 - **冒号只弱化「颜色」，不弱化「字重」**。理由：Space Grotesk 仅打包 300/500/700 三档，向 StyledText span 请求中间字重会触发 Qt 合成，跨字体不可靠、且难自动守门；「更淡」的颜色已达到视觉上「更细」的观感。此项为对评审「更淡更细」的显式收敛。
 - `font.family` 与 `font.weight` 仍作用于**整个 Text**（见下），故家族/字重测试不受 StyledText 影响。
 
@@ -132,7 +133,7 @@ PreferenceSwitchRow {
 `tst_focus_view`（含 `test_timeNumeralsUseClockFamily` 读 `focusRingTimeText.font.family`、`test_freeTimeNumeralUsesReadableInk`）、`tst_theme_tokens`、`tst_settings_dialog`、`FontAssetsTests`。
 
 ### 新增守门
-1. **字重自动守门（硬点·钉死）**：现 [FontAssetsTests.cpp](../../../tests/FontAssetsTests.cpp) 只校验 family 名，错误的 Regular/Medium 文件只要 family 叫「Space Grotesk」也假绿。新增用例 `spaceGroteskLightRegistersAsSpaceGroteskLight()`：注册 `:/fonts/SpaceGrotesk-Light.ttf` → 取 `applicationFontFamilies(id)` 得 family → **断言 `QFontDatabase::styles(family)` 包含 `"Light"`**（辅以 `QFontInfo(QFont(family, ptSize, QFont::Light)).weight()` 落在 Light 档的二次校验）。错误字重文件不含 "Light" 样式，即被捕获。
+1. **字重自动守门（硬点·钉死）**：现 [FontAssetsTests.cpp](../../../tests/FontAssetsTests.cpp) 只校验 family 名，错误的 Regular/Medium 文件只要 family 叫「Space Grotesk」也假绿。新增用例 `spaceGroteskLightRegistersAsSpaceGroteskLight()`：注册 `:/fonts/SpaceGrotesk-Light.ttf` → 取 `applicationFontFamilies(id)` 得**资源自身的 family**。**证据链主次（评审补点）**：以 `applicationFontFamilies(id)` 确认资源 family + `QFontInfo(QFont(resourceFamily, ptSize, QFont::Light)).weight()` 落在 Light 档为**主证据**；`QFontDatabase::styles(family)` 含 `"Light"` 仅作**辅助**，不作唯一证据——因为它查的是全局家族，开发机若已装系统版 Space Grotesk Light 会掩盖 qrc 塞错文件的问题（沿用本文件既有「用 id 作用域避免全局假绿」的原则）。
 2. **Theme 令牌**：`tst_theme_tokens` 新增对 9 个新令牌存在性断言；对 `focusColonMuted` 与数字色不做对比度硬性要求（装饰性），但对数字主色维持既有 accentInk 断言。
 3. **设置开关（硬点·钉死）**：`tst_settings_dialog` 新增：mock `slimClockFont`；(a) `mouseClick(settingsSlimClockFontSwitchRow, 8, h/2)` → `slimClockFont` 翻一次；(b) `mouseClick(settingsSlimClockFontSwitch)` → 再翻一次；(c) 缺 appSettings 时点击不崩不写。
 4. **AppSettings 往返**：新增覆盖 `slimClockFont` 读写与**默认值 `true`**。
