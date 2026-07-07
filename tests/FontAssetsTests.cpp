@@ -1,5 +1,6 @@
 #include <QFile>
 #include <QFontDatabase>
+#include <QFontInfo>
 #include <QGuiApplication>
 #include <QtTest>
 
@@ -11,6 +12,7 @@ class FontAssetsTests : public QObject
     Q_OBJECT
 
 private slots:
+    void spaceGroteskLightRegistersAsSpaceGroteskLight();
     void spaceGroteskMediumRegistersAsSpaceGrotesk();
     void spaceGroteskBoldRegistersAsSpaceGrotesk();
     void bricolageBoldRegistersAsBricolage();
@@ -31,6 +33,37 @@ private:
                             + QStringLiteral("，实际 ") + families.join(QLatin1Char(','))));
     }
 };
+
+void FontAssetsTests::spaceGroteskLightRegistersAsSpaceGroteskLight()
+{
+    const QString resourcePath = QStringLiteral(":/fonts/SpaceGrotesk-Light.ttf");
+    QVERIFY2(QFile(resourcePath).exists(),
+             qPrintable(QStringLiteral("资源不存在: ") + resourcePath));
+
+    const int id = QFontDatabase::addApplicationFont(resourcePath);
+    QVERIFY2(id != -1,
+             qPrintable(QStringLiteral("注册失败: ") + resourcePath));
+
+    // 主证据 1：只信任刚注册资源自己的 family 名，避免开发机已装同名字体造成假绿。
+    const QStringList families = QFontDatabase::applicationFontFamilies(id);
+    QVERIFY2(families.contains(QStringLiteral("Space Grotesk")),
+             qPrintable(QStringLiteral("family 名不符，实际 ")
+                        + families.join(QLatin1Char(','))));
+
+    // 主证据 2：请求 Light 字重时必须解析到细字重档，拦住 Regular/Medium 文件塞错别名。
+    QFont requested(QStringLiteral("Space Grotesk"));
+    requested.setWeight(QFont::Light);
+    const int resolvedWeight = QFontInfo(requested).weight();
+    QVERIFY2(resolvedWeight <= QFont::Normal,
+             qPrintable(QStringLiteral("请求 Light 未解析到细字重，实际 weight=")
+                        + QString::number(resolvedWeight)));
+
+    // 辅助证据：styles() 查询全局家族，不能单独作为判断依据，但能给失败时更直接的诊断。
+    const QStringList styles = QFontDatabase::styles(QStringLiteral("Space Grotesk"));
+    QVERIFY2(styles.contains(QStringLiteral("Light")),
+             qPrintable(QStringLiteral("styles 无 Light（仅辅助），实际 ")
+                        + styles.join(QLatin1Char(','))));
+}
 
 void FontAssetsTests::spaceGroteskMediumRegistersAsSpaceGrotesk()
 {

@@ -29,6 +29,7 @@ int main(int argc, char *argv[])
     // 打包的数字字体：计时数字（Space Grotesk）与统计/倒计时数字（Bricolage）。
     // 注册失败仅告警、不阻断启动；字族解析不到时 Qt 会回退系统字，数字仍可读。
     const QStringList bundledFonts = {
+        QStringLiteral(":/fonts/SpaceGrotesk-Light.ttf"),
         QStringLiteral(":/fonts/SpaceGrotesk-Medium.ttf"),
         QStringLiteral(":/fonts/SpaceGrotesk-Bold.ttf"),
         QStringLiteral(":/fonts/BricolageGrotesque-Bold.ttf"),
