@@ -8,7 +8,9 @@ TestCase {
     name: "SettingsDialog"
     when: windowShown
     width: 700
-    height: 520
+    // 三段化后内容更高：给足高度让弹窗不触发滚动裁剪，管理行才在视口内可被 mouseClick 命中
+    // （520px 下的滚动到关闭属人工冒烟验收，不在此单测覆盖）。
+    height: 820
 
     QtObject {
         id: appSettingsMock
@@ -148,5 +150,17 @@ TestCase {
         dialog.open()
         wait(20)
         verify(findChild(dialog, "settingsCloseButton"))
+    }
+
+    function test_preferencesAndManageAreGroupedCards() {
+        dialog.open()
+        wait(20)
+        var prefGroup = findChild(dialog, "settingsPreferenceGroup")
+        var manageGroup = findChild(dialog, "settingsManageGroup")
+        verify(prefGroup, "偏好应收进组卡")
+        verify(manageGroup, "管理应收进组卡")
+        // 组卡是不透明浅色（内容不再直接坐在半透玻璃上）。
+        verify(Qt.colorEqual(prefGroup.color, Theme.surfaceRaised))
+        verify(Qt.colorEqual(manageGroup.color, Theme.surfaceRaised))
     }
 }

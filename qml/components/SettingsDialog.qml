@@ -73,7 +73,8 @@ Popup {
     }
 
     Overlay.modal: Rectangle {
-        color: "#66000000"
+        // 比默认 40% 再深一档：设置内容多，遮罩加深让背景后退、弹窗聚焦、玻璃后不再透出杂字。
+        color: "#8c000000"
         opacity: root.opened ? 1 : 0
 
         Behavior on opacity {
@@ -255,6 +256,7 @@ Popup {
 
             Text {
                 Layout.leftMargin: Theme.space16
+                Layout.topMargin: Theme.space8
                 text: "偏好"
                 textFormat: Text.PlainText
                 color: Theme.inkSoft
@@ -262,30 +264,39 @@ Popup {
                 font.weight: Font.Bold
             }
 
-            PreferenceSwitchRow {
-                label: "提示音"
-                switchName: "settingsSoundSwitch"
-                checkedValue: root.appSettingsRef ? root.appSettingsRef.soundEnabled : true
-                onToggledTo: function (value) {
-                    if (root.appSettingsRef) {
-                        root.appSettingsRef.soundEnabled = value
+            SectionGroup {
+                objectName: "settingsPreferenceGroup"
+
+                PreferenceSwitchRow {
+                    label: "提示音"
+                    caption: "阶段完成时播放"
+                    switchName: "settingsSoundSwitch"
+                    checkedValue: root.appSettingsRef ? root.appSettingsRef.soundEnabled : true
+                    onToggledTo: function (value) {
+                        if (root.appSettingsRef) {
+                            root.appSettingsRef.soundEnabled = value
+                        }
                     }
                 }
-            }
 
-            PreferenceSwitchRow {
-                label: "减少动效"
-                switchName: "settingsReduceMotionSwitch"
-                checkedValue: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
-                onToggledTo: function (value) {
-                    if (root.appSettingsRef) {
-                        root.appSettingsRef.reduceMotion = value
+                RowDivider {}
+
+                PreferenceSwitchRow {
+                    label: "减少动效"
+                    caption: "关闭循环与切换动画"
+                    switchName: "settingsReduceMotionSwitch"
+                    checkedValue: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
+                    onToggledTo: function (value) {
+                        if (root.appSettingsRef) {
+                            root.appSettingsRef.reduceMotion = value
+                        }
                     }
                 }
             }
 
             Text {
                 Layout.leftMargin: Theme.space16
+                Layout.topMargin: Theme.space8
                 text: "管理"
                 textFormat: Text.PlainText
                 color: Theme.inkSoft
@@ -293,30 +304,38 @@ Popup {
                 font.weight: Font.Bold
             }
 
-            ManageEntryRow {
-                label: "每日例行"
-                rowName: "settingsManageRoutine"
-                onActivated: {
-                    root.close()
-                    root.routineRequested()
-                }
-            }
+            SectionGroup {
+                objectName: "settingsManageGroup"
 
-            ManageEntryRow {
-                label: "科目管理"
-                rowName: "settingsManageCategory"
-                onActivated: {
-                    root.close()
-                    root.categoryRequested()
+                ManageEntryRow {
+                    label: "每日例行"
+                    rowName: "settingsManageRoutine"
+                    onActivated: {
+                        root.close()
+                        root.routineRequested()
+                    }
                 }
-            }
 
-            ManageEntryRow {
-                label: "数据导出"
-                rowName: "settingsManageExport"
-                onActivated: {
-                    root.close()
-                    root.exportRequested()
+                RowDivider {}
+
+                ManageEntryRow {
+                    label: "科目管理"
+                    rowName: "settingsManageCategory"
+                    onActivated: {
+                        root.close()
+                        root.categoryRequested()
+                    }
+                }
+
+                RowDivider {}
+
+                ManageEntryRow {
+                    label: "数据导出"
+                    rowName: "settingsManageExport"
+                    onActivated: {
+                        root.close()
+                        root.exportRequested()
+                    }
                 }
             }
 
@@ -352,25 +371,74 @@ Popup {
         }
     }
 
-    // 偏好开关行：内部 Switch 保留 Basic 控件语义，视觉层改成暖纸轨道和圆钮。
+    // 分段组卡：偏好/管理各自的行收进一张不透明浅色卡，内容不再直接坐在半透玻璃上，
+    // 天生清晰；圆角 + clip 让内部行的 hover 高亮贴合卡角。
+    component SectionGroup: Rectangle {
+        default property alias content: groupColumn.data
+
+        Layout.fillWidth: true
+        Layout.leftMargin: Theme.space16
+        Layout.rightMargin: Theme.space16
+        implicitHeight: groupColumn.implicitHeight
+        color: Theme.surfaceRaised
+        border.color: Theme.borderSubtle
+        border.width: 1
+        radius: Theme.radiusMd
+        clip: true
+
+        ColumnLayout {
+            id: groupColumn
+
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            spacing: 0
+        }
+    }
+
+    // 组卡内行间分隔线：细、缩进，替代大留白做分隔。
+    component RowDivider: Rectangle {
+        Layout.fillWidth: true
+        Layout.leftMargin: Theme.space12
+        Layout.rightMargin: Theme.space12
+        Layout.preferredHeight: 1
+        color: Theme.borderSubtle
+    }
+
+    // 偏好开关行：左标签 + 副说明，右暖纸自绘 Switch；行内边距由组卡负责整体缩进。
     component PreferenceSwitchRow: RowLayout {
         id: prefRow
 
         property string label: ""
+        property string caption: ""
         property string switchName: ""
         property bool checkedValue: false
         signal toggledTo(bool value)
 
         Layout.fillWidth: true
-        Layout.leftMargin: Theme.space16
-        Layout.rightMargin: Theme.space16
+        Layout.leftMargin: Theme.space12
+        Layout.rightMargin: Theme.space12
+        Layout.topMargin: Theme.space8
+        Layout.bottomMargin: Theme.space8
 
-        Text {
+        ColumnLayout {
             Layout.fillWidth: true
-            text: prefRow.label
-            textFormat: Text.PlainText
-            color: Theme.ink
-            font.pixelSize: Theme.fontMd
+            spacing: 1
+
+            Text {
+                text: prefRow.label
+                textFormat: Text.PlainText
+                color: Theme.ink
+                font.pixelSize: Theme.fontMd
+            }
+
+            Text {
+                visible: prefRow.caption.length > 0
+                text: prefRow.caption
+                textFormat: Text.PlainText
+                color: Theme.inkMuted
+                font.pixelSize: Theme.fontXs
+            }
         }
 
         Switch {
@@ -412,6 +480,7 @@ Popup {
     }
 
     // 管理入口行：整行可点，右侧箭头只表达“进入下一层”，弹窗本身负责发信号。
+    // 缩进由外层组卡负责；本行只做整行 hover 高亮（被组卡 clip 贴合圆角）。
     component ManageEntryRow: Rectangle {
         id: manageRow
 
@@ -421,16 +490,13 @@ Popup {
 
         objectName: manageRow.rowName
         Layout.fillWidth: true
-        Layout.leftMargin: Theme.space16
-        Layout.rightMargin: Theme.space16
-        implicitHeight: 40
-        radius: Theme.radiusMd
+        implicitHeight: 44
         color: manageHover.hovered ? Theme.surfaceSunken : "transparent"
 
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: Theme.space8
-            anchors.rightMargin: Theme.space8
+            anchors.leftMargin: Theme.space12
+            anchors.rightMargin: Theme.space12
 
             Text {
                 Layout.fillWidth: true
