@@ -20,6 +20,10 @@ Rectangle {
 
     property string currentView: "today"
     property var focusTimerRef: null
+    // 减少动效默认读全局 appSettings；测试可直接覆盖该属性，避免为了一个开关伪造整套上下文。
+    // qmllint disable unqualified
+    property bool reduceMotionActive: typeof appSettings !== "undefined" && appSettings && appSettings.reduceMotion
+    // qmllint enable unqualified
     signal itemClicked(string viewName)
     signal settingsRequested
 
@@ -257,6 +261,7 @@ Rectangle {
                     objectName: "sidebarStatusPulse-" + item.marker
 
                     property bool pulseRunning: item.statusGlyph === "●"
+                    readonly property bool pulseAnimationRunning: pulseAnimation.running
 
                     text: item.statusGlyph
                     textFormat: Text.PlainText
@@ -267,7 +272,7 @@ Rectangle {
                     SequentialAnimation on opacity {
                         id: pulseAnimation
 
-                        running: statusPulse.pulseRunning
+                        running: statusPulse.pulseRunning && !root.reduceMotionActive
                         loops: Animation.Infinite
 
                         NumberAnimation {
@@ -282,6 +287,13 @@ Rectangle {
                             to: 1.0
                             duration: 620
                             easing.type: Easing.InOutQuad
+                        }
+
+                        onRunningChanged: {
+                            // 减少动效或状态变化都会停动画；停在半透明帧会像“禁用态”，所以回到不透明。
+                            if (!running) {
+                                statusPulse.opacity = 1
+                            }
                         }
                     }
 

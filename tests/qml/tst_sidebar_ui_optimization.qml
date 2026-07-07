@@ -230,6 +230,23 @@ TestCase {
         verify(pulse.pulseRunning);
     }
 
+    function test_pulseGatedByReduceMotion() {
+        focusTimerMock.hasActiveSession = true
+        focusTimerMock.isRunning = true
+        focusTimerMock.mode = 1
+        focusTimerMock.phase = 1
+        focusTimerMock.remainingSeconds = 300
+        wait(20)
+
+        var pulse = findChild(sidebar, "sidebarStatusPulse-专")
+        verify(pulse)
+        sidebar.reduceMotionActive = false
+        verify(pulse.pulseAnimationRunning === true, "常态下状态圆点应脉冲")
+
+        sidebar.reduceMotionActive = true
+        verify(pulse.pulseAnimationRunning === false, "减动效下状态圆点应停")
+    }
+
     function test_focusStatusShowsFreeElapsedAndPause() {
         focusTimerMock.hasActiveSession = true;
         focusTimerMock.isRunning = false;
