@@ -4,6 +4,7 @@ import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
 import "../components"
+import "StatisticsFormat.js" as StatFmt
 
 Item {
     id: root
@@ -17,7 +18,7 @@ Item {
     property date currentDateSnapshot: new Date()
     // 三种时间范围各自保留选中状态，切换模式时再重置，避免日/周/月导航互相污染。
     property date selectedDate: currentDateSnapshot
-    property date selectedWeekStart: mondayOf(currentDateSnapshot)
+    property date selectedWeekStart: StatFmt.mondayOf(currentDateSnapshot)
     property int selectedYear: currentDateSnapshot.getFullYear()
     property int selectedMonth: currentDateSnapshot.getMonth() + 1
     readonly property bool isCurrentSelectedPeriod: !canGoForward
@@ -30,7 +31,7 @@ Item {
             return selected.getTime() < today.getTime()
         }
         if (currentTimeRange === "week") {
-            var currentMonday = mondayOf(currentDateSnapshot)
+            var currentMonday = StatFmt.mondayOf(currentDateSnapshot)
             return selectedWeekStart.getTime() < currentMonday.getTime()
         }
 
@@ -50,13 +51,13 @@ Item {
             return (selectedDate.getMonth() + 1) + "月" + selectedDate.getDate() + "日"
         }
         if (currentTimeRange === "week") {
-            var currentMonday = mondayOf(currentDateSnapshot)
+            var currentMonday = StatFmt.mondayOf(currentDateSnapshot)
             if (selectedWeekStart.getTime() === currentMonday.getTime()) {
                 return "本周"
             }
             var weekEnd = new Date(selectedWeekStart)
             weekEnd.setDate(weekEnd.getDate() + 6)
-            return formatWeekRange(selectedWeekStart, weekEnd)
+            return StatFmt.formatWeekRange(selectedWeekStart, weekEnd)
         }
 
         var current = new Date(currentDateSnapshot)
@@ -79,7 +80,7 @@ Item {
         if (currentTimeRange === "today") {
             selectedDate = new Date(currentDateSnapshot)
         } else if (currentTimeRange === "week") {
-            selectedWeekStart = mondayOf(currentDateSnapshot)
+            selectedWeekStart = StatFmt.mondayOf(currentDateSnapshot)
         } else if (currentTimeRange === "month") {
             var now = new Date(currentDateSnapshot)
             selectedYear = now.getFullYear()
@@ -123,63 +124,6 @@ Item {
         }
     }
 
-    function formatDuration(seconds) {
-        var safe = Math.max(0, Math.floor(Number(seconds || 0)))
-        if (safe > 0 && safe < 60) {
-            return safe + "秒"
-        }
-        var hours = Math.floor(safe / 3600)
-        var minutes = Math.floor((safe % 3600) / 60)
-        if (hours > 0) {
-            return hours + "小时" + minutes + "分钟"
-        }
-        return minutes + "分钟"
-    }
-
-    function decimalHours(seconds) {
-        return (Math.max(0, Number(seconds || 0)) / 3600).toFixed(1)
-    }
-
-    function totalDurationValue(seconds) {
-        // 小于一小时显示分钟/秒；超过一小时后切成小数小时，卡片不会过宽。
-        var safe = Math.max(0, Math.floor(Number(seconds || 0)))
-        if (safe < 3600) {
-            return root.formatDuration(safe)
-        }
-        return root.decimalHours(safe)
-    }
-
-    function totalDurationUnit(seconds) {
-        var safe = Math.max(0, Math.floor(Number(seconds || 0)))
-        return safe >= 3600 ? "小时" : ""
-    }
-
-    function mondayOf(value) {
-        var date = new Date(value)
-        var day = date.getDay()
-        var diff = day === 0 ? -6 : 1 - day
-        date.setDate(date.getDate() + diff)
-        date.setHours(0, 0, 0, 0)
-        return date
-    }
-
-    function endOfWeek(start) {
-        var date = new Date(start)
-        date.setDate(date.getDate() + 6)
-        return date
-    }
-
-    function formatWeekRange(start, end) {
-        return (start.getMonth() + 1) + "." + start.getDate()
-                + "-" + (end.getMonth() + 1) + "." + end.getDate()
-    }
-
-    function dayStart(value) {
-        var date = new Date(value)
-        date.setHours(0, 0, 0, 0)
-        return date
-    }
-
     function refreshCurrentDateSnapshot() {
         var providedDate = root.currentDateProvider ? root.currentDateProvider() : new Date()
         var normalizedDate = new Date(providedDate)
@@ -190,7 +134,7 @@ Item {
         if (root.currentTimeRange === "today") {
             root.selectedDate = new Date(root.currentDateSnapshot)
         } else if (root.currentTimeRange === "week") {
-            root.selectedWeekStart = root.mondayOf(root.currentDateSnapshot)
+            root.selectedWeekStart = StatFmt.mondayOf(root.currentDateSnapshot)
         } else if (root.currentTimeRange === "month") {
             root.selectedYear = root.currentDateSnapshot.getFullYear()
             root.selectedMonth = root.currentDateSnapshot.getMonth() + 1
@@ -229,9 +173,9 @@ Item {
             result.push({
                 label: "",
                 value: duration / 3600,
-                displayValue: root.formatDuration(duration)
+                displayValue: StatFmt.formatDuration(duration)
             })
-            result[i].label = root.weekdayLabel(root.weekStats[i].date, i)
+            result[i].label = StatFmt.weekdayLabel(root.weekStats[i].date, i)
         }
         return result
     }
@@ -245,20 +189,10 @@ Item {
             result.push({
                 label: weekData.label || ("第" + (i + 1) + "周"),
                 value: duration / 3600,
-                displayValue: root.formatDuration(duration)
+                displayValue: StatFmt.formatDuration(duration)
             })
         }
         return result
-    }
-
-    function weekdayLabel(dateValue, indexValue) {
-        var fallback = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-        var date = dateValue instanceof Date ? dateValue : new Date(dateValue)
-        if (isNaN(date.getTime())) {
-            return fallback[indexValue % fallback.length]
-        }
-        var labels = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
-        return labels[date.getDay()]
     }
 
     function pieData() {
@@ -270,7 +204,7 @@ Item {
             result.push({
                 label: item.name || "未分类",
                 value: Number(item.duration || 0),
-                displayValue: root.formatDuration(item.duration),
+                displayValue: StatFmt.formatDuration(item.duration),
                 color: item.color || ""
             })
         }
@@ -303,8 +237,8 @@ Item {
     }
 
     function dayComparisonLabel() {
-        var today = root.dayStart(root.currentDateSnapshot)
-        var comparedDay = root.dayStart(root.selectedDate)
+        var today = StatFmt.dayStart(root.currentDateSnapshot)
+        var comparedDay = StatFmt.dayStart(root.selectedDate)
         comparedDay.setDate(comparedDay.getDate() - 1)
 
         // 标签描述的是“被比较的前一日”相对今天的位置，历史期不能简单写死为昨天。
@@ -319,7 +253,7 @@ Item {
     }
 
     function weekComparisonLabel() {
-        var currentMonday = root.mondayOf(root.currentDateSnapshot)
+        var currentMonday = StatFmt.mondayOf(root.currentDateSnapshot)
         var comparedWeekStart = new Date(root.selectedWeekStart)
         comparedWeekStart.setDate(comparedWeekStart.getDate() - 7)
         comparedWeekStart.setHours(0, 0, 0, 0)
@@ -401,13 +335,13 @@ Item {
                 var selectedDay = new Date(root.selectedDate)
                 root.todayStats = statisticsService.getDayStats(selectedDay)
                 root.todayComparison = statisticsService.getDayComparison(selectedDay)
-                root.weekStats = statisticsService.getWeekStats(root.mondayOf(selectedDay))
+                root.weekStats = statisticsService.getWeekStats(StatFmt.mondayOf(selectedDay))
                 root.categoryStats = statisticsService.getCategoryStats(
                             Qt.formatDate(selectedDay, "yyyy-MM-dd"),
                             Qt.formatDate(selectedDay, "yyyy-MM-dd"))
             } else if (root.currentTimeRange === "week") {
                 var weekStart = new Date(root.selectedWeekStart)
-                var weekEnd = root.endOfWeek(weekStart)
+                var weekEnd = StatFmt.endOfWeek(weekStart)
                 root.weekStats = statisticsService.getWeekStats(weekStart)
                 root.weekComparison = statisticsService.getWeekComparison(weekStart)
                 var weekTotal = root.weekTotalDuration()
@@ -859,8 +793,8 @@ Item {
                         }
                         return root.isCurrentSelectedPeriod ? "本月累计" : "所选月累计"
                     }
-                    value: root.totalDurationValue(root.todayStats.totalDuration || 0)
-                    unit: root.totalDurationUnit(root.todayStats.totalDuration || 0)
+                    value: StatFmt.totalDurationValue(root.todayStats.totalDuration || 0)
+                    unit: StatFmt.totalDurationUnit(root.todayStats.totalDuration || 0)
                     subtitle: {
                         if (root.currentTimeRange === "today") {
                             return root.isCurrentSelectedPeriod ? "当前自然日" : "所选自然日"

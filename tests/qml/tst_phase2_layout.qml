@@ -3,6 +3,7 @@ import QtTest
 import "../../qml/components"
 import "../../qml/views"
 import "../../qml"
+import "../../qml/views/StatisticsFormat.js" as StatFmt
 
 TestCase {
     id: testCase
@@ -389,13 +390,13 @@ TestCase {
     }
 
     function test_statisticsDurationFormatsSubMinuteSessions() {
-        compare(statisticsView.formatDuration(0), "0分钟")
-        compare(statisticsView.formatDuration(2), "2秒")
-        compare(statisticsView.formatDuration(61), "1分钟")
-        compare(statisticsView.totalDurationValue(2), "2秒")
-        compare(statisticsView.totalDurationUnit(2), "")
-        compare(statisticsView.totalDurationValue(3660), "1.0")
-        compare(statisticsView.totalDurationUnit(3660), "小时")
+        compare(StatFmt.formatDuration(0), "0分钟")
+        compare(StatFmt.formatDuration(2), "2秒")
+        compare(StatFmt.formatDuration(61), "1分钟")
+        compare(StatFmt.totalDurationValue(2), "2秒")
+        compare(StatFmt.totalDurationUnit(2), "")
+        compare(StatFmt.totalDurationValue(3660), "1.0")
+        compare(StatFmt.totalDurationUnit(3660), "小时")
     }
 
     function test_statisticsTimeRangeDefaultsToToday() {

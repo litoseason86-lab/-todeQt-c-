@@ -8,6 +8,7 @@
         <file alias="qml/views/FocusView.qml">../qml/views/FocusView.qml</file>
         <file alias="qml/views/WeekPlanView.qml">../qml/views/WeekPlanView.qml</file>
         <file alias="qml/views/StatisticsView.qml">../qml/views/StatisticsView.qml</file>
+        <file alias="qml/views/StatisticsFormat.js">../qml/views/StatisticsFormat.js</file>
         <file alias="qml/views/MonthGoalView.qml">../qml/views/MonthGoalView.qml</file>
         <file alias="qml/views/CountdownView.qml">../qml/views/CountdownView.qml</file>
         <file alias="qml/components/BackgroundWallpaper.qml">../qml/components/BackgroundWallpaper.qml</file>
