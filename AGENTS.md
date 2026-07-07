@@ -34,6 +34,7 @@
 
 - 保持当前项目分层：`src/services`、`src/models`、`qml`、`tests` 的职责不要混杂。
 - 修改功能后要运行相关构建和测试，再报告结果。
+- 后台测试和自动验证不得弹出应用窗口；Qt/QML 测试默认使用 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic`。不要在自动流程里执行 `open /Applications/番茄Todo.app`、`open build/*.app` 或其他会拉起 GUI 窗口的命令，除非用户本轮明确要求做人工真机视觉验收。
 - 不要改动 `build/` 生成物。
 
 ## Git 提交规则
