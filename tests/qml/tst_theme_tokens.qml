@@ -80,4 +80,31 @@ TestCase {
             compare(theme.motif, expected[theme.id], theme.id + " 图案映射错误")
         }
     }
+
+    // WCAG 相对亮度与对比度：把“数字文字色必须可读”做成永久守门，
+    // 将来有人把 accentInk 调浅到不达标会立刻变红。
+    function relativeLuminance(c) {
+        function channel(v) {
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    }
+
+    function contrastRatio(a, b) {
+        var l1 = relativeLuminance(a)
+        var l2 = relativeLuminance(b)
+        var hi = Math.max(l1, l2)
+        var lo = Math.min(l1, l2)
+        return (hi + 0.05) / (lo + 0.05)
+    }
+
+    function test_accentInkMeetsAaOnSurface() {
+        verify(Theme.accentInk !== undefined, "accentInk 令牌应存在")
+        // accentInk 是 accent 的“可读文字版”：焦糖棕 #d4a574 作文字仅 2.2:1，
+        // 数字英雄必须过 WCAG AA 正文 4.5:1（surface 与 glassCard 上都要过）。
+        var onSurface = contrastRatio(Theme.accentInk, Theme.surface)
+        verify(onSurface >= 4.5, "accentInk 对 surface 对比度应≥4.5，实际 " + onSurface.toFixed(2))
+        var onCard = contrastRatio(Theme.accentInk, Theme.glassCard)
+        verify(onCard >= 4.5, "accentInk 对 glassCard 对比度应≥4.5，实际 " + onCard.toFixed(2))
+    }
 }

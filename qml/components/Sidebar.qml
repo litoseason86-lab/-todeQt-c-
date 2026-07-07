@@ -296,7 +296,7 @@ Rectangle {
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Medium
-                    color: Theme.accent
+                    color: Theme.accentInk
 
                     SequentialAnimation on opacity {
                         id: pulseAnimation
@@ -333,7 +333,7 @@ Rectangle {
                     font.pixelSize: Theme.fontSm
                     font.family: Theme.fontFamilyClock
                     font.weight: Font.Medium
-                    color: Theme.accent
+                    color: Theme.accentInk
                 }
             }
         }

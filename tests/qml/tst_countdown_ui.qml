@@ -157,4 +157,11 @@ TestCase {
         verify(daysText)
         compare(daysText.font.family, Theme.fontFamilyData)
     }
+
+    function test_countdownHeroDaysUsesReadableInk() {
+        // 倒计时天数大字用 accentInk（AA 达标），不得回退低对比的 accent。
+        var daysText = findChild(countdownView, "countdownHeroDays")
+        verify(daysText)
+        verify(Qt.colorEqual(daysText.color, Theme.accentInk), "倒计时天数应为 accentInk")
+    }
 }

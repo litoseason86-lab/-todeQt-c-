@@ -26,6 +26,10 @@ QtObject {
     // 一个是“强调淡底/选中态”，一个是“更弱的分隔线”。保留为两个独立令牌，
     // 将来想单独微调其一时不会牵连另一个，改色前请确认改的是哪个角色。
     readonly property color accentSoft: "#f0e6d2"     // 强调淡底/选中态
+    // accent 作前景文字仅 2.2:1，远不达 WCAG。accentInk 是它的“可读文字版”——
+    // 压深到在 surface/glassCard 上过 AA 正文 4.5:1，专供数字英雄与强调文字；
+    // 装饰用途（环形进度、按钮填充、marker）仍用 accent。tst_theme_tokens 守门对比度。
+    readonly property color accentInk: "#9c6a34"      // 强调文字/数字（AA 达标）
 
     // —— 语义 Semantic ——
     // success 沿用界面里既有的 Material 绿（#4caf50），本次只做令牌收敛、

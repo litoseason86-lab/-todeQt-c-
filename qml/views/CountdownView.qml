@@ -128,7 +128,7 @@ Item {
                     font.pixelSize: Theme.fontDisplay
                     font.family: Theme.fontFamilyData
                     font.weight: Font.Bold
-                    color: Theme.accent
+                    color: Theme.accentInk
                     horizontalAlignment: Text.AlignHCenter
                 }
 

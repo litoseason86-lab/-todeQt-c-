@@ -626,7 +626,7 @@ Item {
                 font.pixelSize: Theme.fontDisplay
                 font.family: Theme.fontFamilyClock
                 font.bold: true
-                color: Theme.accent
+                color: Theme.accentInk
                 horizontalAlignment: Text.AlignHCenter
             }
 
@@ -1127,7 +1127,8 @@ Item {
         if (root.state === "pomoBreak") {
             return Theme.focusBreakAccent
         }
-        return Theme.accent
+        // 环内计时读数（番茄工作/自由专注运行态）：用可读文字色，别用低对比的 accent。
+        return Theme.accentInk
     }
 
     function ringCaptionText() {

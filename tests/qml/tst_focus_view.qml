@@ -693,4 +693,12 @@ TestCase {
         verify(ringText)
         compare(ringText.font.family, Theme.fontFamilyClock)
     }
+
+    function test_freeTimeNumeralUsesReadableInk() {
+        // 自由专注大字用 accentInk（AA 达标），不得回退低对比的 accent。
+        var freeText = findChild(view, "focusFreeTimeText")
+        verify(freeText)
+        verify(Qt.colorEqual(freeText.color, Theme.accentInk),
+               "自由专注计时数字应为 accentInk")
+    }
 }
