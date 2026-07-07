@@ -754,4 +754,11 @@ TestCase {
         compare(ringText.font.weight, Font.Medium)
         compare(freeText.font.weight, Font.Medium)
     }
+
+    function test_focusRingObjectNamePreserved() {
+        var ring = findChild(view, "focusRing")
+        verify(ring)
+        verify(ring.strokeWidth !== undefined)
+        verify(ring.progress !== undefined)
+    }
 }

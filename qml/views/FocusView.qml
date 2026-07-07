@@ -420,7 +420,7 @@ Item {
         property color ringColor: Theme.accent
         property bool showPreview: false  // 待机态：只画一圈虚线预览，不画进度弧
         property bool dimmed: false       // 暂停态：整体降低不透明度，转由灰色轨道提示
-        readonly property real strokeWidth: 16
+        readonly property real strokeWidth: 14
 
         opacity: dimmed ? 0.38 : 1
         antialiasing: true
@@ -438,15 +438,49 @@ Item {
         onPaint: {
             var ctx = getContext("2d")
             ctx.clearRect(0, 0, width, height)
+            if (width <= 0 || height <= 0) {
+                return
+            }
+
+            function withAlpha(colorValue, alpha) {
+                return Qt.rgba(colorValue.r, colorValue.g, colorValue.b, alpha)
+            }
 
             var centerX = width / 2
             var centerY = height / 2
             var radius = Math.max(0, Math.min(width, height) / 2 - ring.strokeWidth / 2 - 2)
+            var discR = Math.max(0, radius - ring.strokeWidth / 2 - 6)
             ctx.lineCap = "round"
 
+            // 玻璃内盘：落影只包在 save/restore 里，避免 Canvas 全局阴影污染轨道和进度弧。
+            ctx.save()
+            ctx.shadowColor = withAlpha(Theme.focusGlassShadow, 0.15)
+            ctx.shadowBlur = 14
+            ctx.shadowOffsetY = 7
+            var disc = ctx.createRadialGradient(centerX, centerY - discR * 0.16, discR * 0.1,
+                                                centerX, centerY, discR)
+            disc.addColorStop(0, Theme.focusGlassCenter)
+            disc.addColorStop(1, Theme.focusGlassEdge)
+            ctx.beginPath()
+            ctx.fillStyle = disc
+            ctx.arc(centerX, centerY, discR, 0, Math.PI * 2, false)
+            ctx.fill()
+            ctx.restore()
+
+            // 顶部高光：单独绘制，不参与状态语义，只负责玻璃受光质感。
+            ctx.save()
+            ctx.beginPath()
+            ctx.ellipse(centerX - discR * 0.10, centerY - discR * 0.55,
+                        discR * 0.82, discR * 0.28, 0, 0, Math.PI * 2, false)
+            var highlight = ctx.createLinearGradient(0, centerY - discR * 0.78, 0, centerY - discR * 0.22)
+            highlight.addColorStop(0, withAlpha(Theme.focusGlassHighlight, 0.85))
+            highlight.addColorStop(1, withAlpha(Theme.focusGlassHighlight, 0))
+            ctx.fillStyle = highlight
+            ctx.fill()
+            ctx.restore()
+
             if (ring.showPreview) {
-                // 预览＝极淡完整轨道：预告“进度环将画在这里”，
-                // 比虚线更安静，也不会在高分屏上碎成颗粒。
+                // 待机态沿用同一块玻璃盘，只把弧层降级为极淡轨道 + 顶部小段提示。
                 ctx.beginPath()
                 ctx.setLineDash([])
                 ctx.lineWidth = ring.strokeWidth
@@ -468,7 +502,7 @@ Item {
             ctx.beginPath()
             ctx.setLineDash([])
             ctx.lineWidth = ring.strokeWidth
-            ctx.strokeStyle = Theme.borderSubtle
+            ctx.strokeStyle = Theme.focusRingTrack
             ctx.arc(centerX, centerY, radius, 0, Math.PI * 2, false)
             ctx.stroke()
 
@@ -480,9 +514,32 @@ Item {
             }
             var start = -Math.PI / 2
             var end = start + clamped * Math.PI * 2
+
+            var arcStroke
+            if (Qt.colorEqual(ring.ringColor, Theme.accent)) {
+                var grad = ctx.createLinearGradient(centerX, centerY - radius,
+                                                    centerX + radius, centerY + radius)
+                grad.addColorStop(0, Theme.focusRingArcStart)
+                grad.addColorStop(0.5, Theme.focusRingArcMid)
+                grad.addColorStop(1, Theme.focusRingArcEnd)
+                arcStroke = grad
+            } else {
+                arcStroke = ring.ringColor
+            }
+
+            // 辉光底：用加宽低透明描边模拟发光，不使用 shadow，避免状态泄漏到后续绘制。
+            ctx.save()
+            ctx.globalAlpha = 0.35
+            ctx.beginPath()
+            ctx.lineWidth = ring.strokeWidth + 6
+            ctx.strokeStyle = arcStroke
+            ctx.arc(centerX, centerY, radius, start, end, false)
+            ctx.stroke()
+            ctx.restore()
+
             ctx.beginPath()
             ctx.lineWidth = ring.strokeWidth
-            ctx.strokeStyle = ring.ringColor
+            ctx.strokeStyle = arcStroke
             ctx.arc(centerX, centerY, radius, start, end, false)
             ctx.stroke()
         }
