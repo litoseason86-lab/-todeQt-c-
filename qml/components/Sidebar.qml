@@ -140,39 +140,10 @@ Rectangle {
         }
 
         SidebarItem {
-            text: "每日例行"
-            marker: "例"
-            isActive: false
-            onClicked: root.dailyRoutineRequested()
-        }
-
-        SidebarItem {
-            text: "科目管理"
-            marker: "科"
-            isActive: false
-            onClicked: root.categoryManagementRequested()
-        }
-
-        SidebarItem {
-            text: "数据导出"
-            marker: "导"
-            isActive: false
-            onClicked: root.dataExportRequested()
-        }
-
-        SidebarItem {
             text: "设置"
             marker: "设"
             isActive: false
             onClicked: root.settingsRequested()
-        }
-
-        Text {
-            text: "三阶段"
-            font.pixelSize: Theme.fontSm
-            font.weight: Font.Normal
-            color: Theme.inkMuted
-            opacity: 0.7
         }
     }
 

@@ -196,20 +196,20 @@ TestCase {
         compare(inactiveItem.border.width, 0);
     }
 
-    function test_dividerAndVersionStyles() {
+    function test_dividerStyleAndManagementRemoved() {
         var divider = findDivider();
-        var version = findText("三阶段");
 
         verify(divider !== null);
         compare(divider.height, 1);
         verify(Qt.colorEqual(divider.color, Theme.border));
         compare(divider.opacity, 0.8);
 
-        verify(version !== null);
-        compare(version.font.pixelSize, Theme.fontSm);
-        compare(version.font.weight, Font.Normal);
-        verify(Qt.colorEqual(version.color, Theme.inkMuted));
-        compare(version.opacity, 0.7);
+        // 管理项已迁入设置弹窗，“三阶段”孤儿标签已删。
+        verify(findText("三阶段") === null, "三阶段标签应已删除");
+        verify(findChild(sidebar, "sidebarItem-例") === null, "每日例行应已移出侧栏");
+        verify(findChild(sidebar, "sidebarItem-科") === null, "科目管理应已移出侧栏");
+        verify(findChild(sidebar, "sidebarItem-导") === null, "数据导出应已移出侧栏");
+        verify(findChild(sidebar, "sidebarItem-设") !== null, "设置项应保留");
     }
 
     function test_focusStatusShowsPomodoroCountdown() {
