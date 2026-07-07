@@ -188,6 +188,7 @@ TestCase {
         mainWindow.queuedView = "";
         mainWindow.isSwitching = false;
         mainWindow.opacity = 1.0;
+        appSettings.reduceMotion = false;
         wait(20);
     }
 
@@ -269,5 +270,16 @@ TestCase {
         settings.routineRequested()
         tryCompare(routine, "opened", true, 500)
         routine.close()
+    }
+
+    function test_viewSwitchInstantUnderReduceMotion() {
+        appSettings.reduceMotion = true
+        mainWindow.switchToView("focus")
+
+        compare(mainWindow.currentView, "focus")
+        compare(mainWindow.isSwitching, false)
+        var stack = findChild(mainWindow, "mainViewStack")
+        verify(stack)
+        compare(stack.opacity, 1.0)
     }
 }

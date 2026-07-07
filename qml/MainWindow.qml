@@ -28,12 +28,24 @@ Item {
         : "番茄Todo"
 
     function switchToView(viewName) {
-        if (root.isSwitching) {
-            root.queuedView = viewName;
+        if (root.currentView === viewName && !root.isSwitching) {
             return;
         }
 
-        if (root.currentView === viewName) {
+        // 减少动效要求立即切页，并完整清掉淡入淡出的中间状态；
+        // 该分支必须在 isSwitching 早退之前，才能接住动画中途切换开关的场景。
+        if (root.appSettingsRef && root.appSettingsRef.reduceMotion) {
+            viewFade.stop();
+            root.currentView = viewName;
+            root.pendingView = viewName;
+            root.queuedView = "";
+            root.isSwitching = false;
+            stackLayout.opacity = 1.0;
+            return;
+        }
+
+        if (root.isSwitching) {
+            root.queuedView = viewName;
             return;
         }
 
