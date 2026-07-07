@@ -130,6 +130,47 @@ TestCase {
         compare(appSettingsMock.reduceMotion, true)
     }
 
+    function test_clickingPreferenceRowsTogglesSettings() {
+        dialog.open()
+        wait(20)
+
+        var soundRow = findChild(dialog, "settingsSoundSwitchRow")
+        var motionRow = findChild(dialog, "settingsReduceMotionSwitchRow")
+        verify(soundRow)
+        verify(motionRow)
+
+        mouseClick(soundRow, 8, soundRow.height / 2, Qt.LeftButton, Qt.NoModifier)
+        compare(appSettingsMock.soundEnabled, false)
+
+        mouseClick(motionRow, 8, motionRow.height / 2, Qt.LeftButton, Qt.NoModifier)
+        compare(appSettingsMock.reduceMotion, true)
+    }
+
+    function test_clickingPreferenceSwitchTogglesOnce() {
+        dialog.open()
+        wait(20)
+
+        var soundSwitch = findChild(dialog, "settingsSoundSwitch")
+        verify(soundSwitch)
+
+        mouseClick(soundSwitch)
+        compare(appSettingsMock.soundEnabled, false)
+    }
+
+    function test_preferenceSwitchesAlignToGroupRightEdge() {
+        dialog.open()
+        wait(20)
+
+        var prefGroup = findChild(dialog, "settingsPreferenceGroup")
+        var switchTrack = findChild(dialog, "settingsSoundSwitchTrack")
+        verify(prefGroup)
+        verify(switchTrack)
+
+        var trackPos = switchTrack.mapToItem(prefGroup, 0, 0)
+        verify(trackPos.x + switchTrack.width >= prefGroup.width - Theme.space24,
+               "偏好开关应贴近组卡右侧，不能挤在文字旁边")
+    }
+
     function test_manageRowsEmitSignals() {
         dialog.open()
         wait(20)

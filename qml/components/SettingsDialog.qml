@@ -111,6 +111,8 @@ Popup {
     contentItem: ScrollView {
         id: settingsScroll
 
+        topPadding: Theme.space8
+        bottomPadding: Theme.space8
         clip: true
         contentWidth: availableWidth
         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
@@ -139,7 +141,7 @@ Popup {
 
             Text {
                 Layout.leftMargin: Theme.space24
-                Layout.topMargin: Theme.space24
+                Layout.topMargin: Theme.space16
                 text: "设置"
                 textFormat: Text.PlainText
                 color: Theme.ink
@@ -160,6 +162,7 @@ Popup {
             GridLayout {
                 Layout.leftMargin: Theme.space24
                 Layout.rightMargin: Theme.space24
+                Layout.alignment: Qt.AlignHCenter
                 columns: 3
                 rowSpacing: Theme.space12
                 columnSpacing: Theme.space16
@@ -181,14 +184,14 @@ Popup {
                             ? root.appSettingsRef.backgroundTheme === themeCell.modelData.id
                             : themeCell.modelData.id === "warmPaper"
 
-                        Layout.preferredWidth: 150
+                        Layout.preferredWidth: 160
                         spacing: Theme.space4
 
                         Rectangle {
                             id: thumbFrame
                             objectName: "settingsThemeThumb-" + themeCell.modelData.id
 
-                            width: 150
+                            width: 160
                             height: 72
                             radius: Theme.radiusMd
                             clip: true
@@ -415,7 +418,7 @@ Popup {
     }
 
     // 偏好开关行：左标签 + 副说明，右暖纸自绘 Switch；行内边距由组卡负责整体缩进。
-    component PreferenceSwitchRow: RowLayout {
+    component PreferenceSwitchRow: Rectangle {
         id: prefRow
 
         property string label: ""
@@ -424,15 +427,24 @@ Popup {
         property bool checkedValue: false
         signal toggledTo(bool value)
 
+        objectName: prefRow.switchName + "Row"
         Layout.fillWidth: true
         Layout.leftMargin: Theme.space12
         Layout.rightMargin: Theme.space12
-        Layout.topMargin: Theme.space8
-        Layout.bottomMargin: Theme.space8
+        implicitHeight: 64
+        color: preferenceHover.hovered ? Theme.surfaceSunken : "transparent"
 
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: 1
+        function togglePreference() {
+            prefRow.toggledTo(!prefRow.checkedValue)
+        }
+
+        Column {
+            anchors.left: parent.left
+            anchors.right: prefSwitch.left
+            anchors.leftMargin: Theme.space12
+            anchors.rightMargin: Theme.space12
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 2
 
             Text {
                 text: prefRow.label
@@ -455,6 +467,11 @@ Popup {
             id: prefSwitch
             objectName: prefRow.switchName
 
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.space12
+            anchors.verticalCenter: parent.verticalCenter
+            implicitWidth: 40
+            implicitHeight: 22
             checked: prefRow.checkedValue
             onToggled: prefRow.toggledTo(checked)
 
@@ -486,6 +503,16 @@ Popup {
             }
 
             contentItem: Item {}
+        }
+
+        HoverHandler {
+            id: preferenceHover
+        }
+
+        TapHandler {
+            // 偏好项应按整行理解：用户点标签、副说明或开关区域都切换同一个设置。
+            // 这里不依赖 Switch 自身很小的命中范围，避免桌面鼠标点击文字时“看似点了但无效”。
+            onTapped: prefRow.togglePreference()
         }
     }
 
