@@ -73,6 +73,7 @@ Popup {
     }
 
     Overlay.modal: Rectangle {
+        objectName: "settingsOverlay"
         // 比默认 40% 再深一档：设置内容多，遮罩加深让背景后退、弹窗聚焦、玻璃后不再透出杂字。
         color: "#8c000000"
         opacity: root.opened ? 1 : 0
@@ -279,7 +280,9 @@ Popup {
                     }
                 }
 
-                RowDivider {}
+                RowDivider {
+                    objectName: "settingsPreferenceDivider"
+                }
 
                 PreferenceSwitchRow {
                     label: "减少动效"
@@ -316,7 +319,9 @@ Popup {
                     }
                 }
 
-                RowDivider {}
+                RowDivider {
+                    objectName: "settingsManageDividerRoutineCategory"
+                }
 
                 ManageEntryRow {
                     label: "科目管理"
@@ -327,7 +332,9 @@ Popup {
                     }
                 }
 
-                RowDivider {}
+                RowDivider {
+                    objectName: "settingsManageDividerCategoryExport"
+                }
 
                 ManageEntryRow {
                     label: "数据导出"
@@ -433,6 +440,7 @@ Popup {
             }
 
             Text {
+                objectName: prefRow.switchName + "Caption"
                 visible: prefRow.caption.length > 0
                 text: prefRow.caption
                 textFormat: Text.PlainText
@@ -490,7 +498,7 @@ Popup {
 
         objectName: manageRow.rowName
         Layout.fillWidth: true
-        implicitHeight: 44
+        implicitHeight: 40
         color: manageHover.hovered ? Theme.surfaceSunken : "transparent"
 
         RowLayout {

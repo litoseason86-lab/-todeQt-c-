@@ -85,7 +85,7 @@ QtObject {
     // 用“白 + alpha”而非灰色：面板叠在彩色壁纸上，白基半透明才能透出壁纸色相。
     readonly property color glassSidebar: Qt.rgba(1, 1, 252 / 255, 0.55)
     readonly property color glassCard: Qt.rgba(1, 1, 250 / 255, 0.68)
-    readonly property color glassDialog: Qt.rgba(1, 254 / 255, 249 / 255, 0.94)
+    readonly property color glassDialog: Qt.rgba(1, 254 / 255, 249 / 255, 0.985)
     readonly property color glassBorder: Qt.rgba(1, 1, 1, 0.65)
 
     // —— 背景壁纸主题定义（唯一来源：画廊缩略图与壁纸层都读这里）——

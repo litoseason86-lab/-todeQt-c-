@@ -163,4 +163,28 @@ TestCase {
         verify(Qt.colorEqual(prefGroup.color, Theme.surfaceRaised))
         verify(Qt.colorEqual(manageGroup.color, Theme.surfaceRaised))
     }
+
+    function test_panelIsNearlyOpaqueAndPreferenceRowsAreConnected() {
+        dialog.open()
+        wait(20)
+
+        var panel = findChild(dialog, "settingsDialogPanel")
+        verify(panel)
+        verify(panel.color.a >= 0.98, "设置弹窗底色应接近不透明，不能透出背景文字")
+
+        var soundCaption = findChild(dialog, "settingsSoundSwitchCaption")
+        var motionCaption = findChild(dialog, "settingsReduceMotionSwitchCaption")
+        verify(soundCaption)
+        verify(motionCaption)
+        compare(soundCaption.text, "阶段完成时播放")
+        compare(motionCaption.text, "关闭循环与切换动画")
+
+        verify(findChild(dialog, "settingsPreferenceDivider"))
+        verify(findChild(dialog, "settingsManageDividerRoutineCategory"))
+        verify(findChild(dialog, "settingsManageDividerCategoryExport"))
+
+        var routineRow = findChild(dialog, "settingsManageRoutine")
+        verify(routineRow)
+        compare(routineRow.implicitHeight, 40)
+    }
 }
