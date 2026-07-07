@@ -640,7 +640,7 @@ Item {
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontDisplay
                 font.family: Theme.fontFamilyClock
-                font.bold: true
+                font.weight: (root.settings && root.settings.slimClockFont) ? Font.Light : Font.Medium
                 color: Theme.accentInk
                 horizontalAlignment: Text.AlignHCenter
             }
@@ -671,13 +671,13 @@ Item {
                     Text {
                         objectName: "focusRingTimeText"
                         Layout.alignment: Qt.AlignHCenter
-                        text: root.primaryTimeText()
-                        textFormat: Text.PlainText
+                        text: root.ringTimeMarkup(root.primaryTimeText())
+                        textFormat: Text.StyledText
                         font.pixelSize: root.state === "pomoIdle"
                                         ? (root.panelExpanded ? 42 : 56)
                                         : Theme.fontDisplay
                         font.family: Theme.fontFamilyClock
-                        font.bold: true
+                        font.weight: (root.settings && root.settings.slimClockFont) ? Font.Light : Font.Medium
                         color: root.primaryTimeColor()
                         horizontalAlignment: Text.AlignHCenter
                     }
@@ -1144,6 +1144,20 @@ Item {
         }
         // 环内计时读数（番茄工作/自由专注运行态）：用可读文字色，别用低对比的 accent。
         return Theme.accentInk
+    }
+
+    function ringTimeMarkup(plain) {
+        // 环内冒号只做颜色弱化，不请求额外字重；并且只接受标准数字冒号格式。
+        // 未来若时间文本变成说明文案或含标签，直接回落纯文本，避免 StyledText 误解析。
+        var text = String(plain)
+        if (!/^[0-9:]+$/.test(text)) {
+            return text
+        }
+        var parts = text.split(":")
+        if (parts.length !== 2) {
+            return text
+        }
+        return parts[0] + '<font color="' + Theme.focusColonMuted + '">:</font>' + parts[1]
     }
 
     function ringCaptionText() {

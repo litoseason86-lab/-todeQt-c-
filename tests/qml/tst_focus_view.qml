@@ -103,6 +103,7 @@ TestCase {
         property int breakMinutes: 5
         property bool soundEnabled: true
         property bool reduceMotion: false
+        property bool slimClockFont: true
     }
 
     QtObject {
@@ -112,6 +113,7 @@ TestCase {
         property int workMinutes: 45
         property int breakMinutes: 10
         property bool soundEnabled: true
+        property bool slimClockFont: true
     }
 
     QtObject {
@@ -121,6 +123,7 @@ TestCase {
         property int workMinutes: 90
         property int breakMinutes: 5
         property bool soundEnabled: true
+        property bool slimClockFont: true
     }
 
     FocusView {
@@ -158,6 +161,7 @@ TestCase {
         appSettingsMock.breakMinutes = 5
         appSettingsMock.soundEnabled = true
         appSettingsMock.reduceMotion = false
+        appSettingsMock.slimClockFont = true
         view.panelExpanded = false
         wait(20)
     }
@@ -721,5 +725,33 @@ TestCase {
         verify(freeText)
         verify(Qt.colorEqual(freeText.color, Theme.accentInk),
                "自由专注计时数字应为 accentInk")
+    }
+
+    function test_ringTimeMarkupWrapsColonOnly() {
+        var out = view.ringTimeMarkup("25:00")
+        verify(out.indexOf("<font") !== -1, "标准 MM:SS 应包裹冒号 font 标签")
+        verify(out.indexOf("25") === 0, "分钟段应在标签前原样保留")
+        verify(out.indexOf("00") !== -1, "秒段应保留")
+    }
+
+    function test_ringTimeMarkupFallsBackOnNonStandard() {
+        compare(view.ringTimeMarkup("<b>x</b>"), "<b>x</b>")
+        compare(view.ringTimeMarkup("01:02:03"), "01:02:03")
+        compare(view.ringTimeMarkup("2500"), "2500")
+    }
+
+    function test_clockDigitsFollowSlimSetting() {
+        var ringText = findChild(view, "focusRingTimeText")
+        var freeText = findChild(view, "focusFreeTimeText")
+        verify(ringText)
+        verify(freeText)
+
+        appSettingsMock.slimClockFont = true
+        compare(ringText.font.weight, Font.Light)
+        compare(freeText.font.weight, Font.Light)
+
+        appSettingsMock.slimClockFont = false
+        compare(ringText.font.weight, Font.Medium)
+        compare(freeText.font.weight, Font.Medium)
     }
 }
