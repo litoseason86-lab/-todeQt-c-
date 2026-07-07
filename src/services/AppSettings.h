@@ -13,6 +13,7 @@ class AppSettings : public QObject
     Q_PROPERTY(int workMinutes READ workMinutes WRITE setWorkMinutes NOTIFY workMinutesChanged)
     Q_PROPERTY(int breakMinutes READ breakMinutes WRITE setBreakMinutes NOTIFY breakMinutesChanged)
     Q_PROPERTY(bool soundEnabled READ soundEnabled WRITE setSoundEnabled NOTIFY soundEnabledChanged)
+    Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY reduceMotionChanged)
     Q_PROPERTY(QString rolloverIgnoredDate READ rolloverIgnoredDate WRITE setRolloverIgnoredDate NOTIFY rolloverIgnoredDateChanged)
     Q_PROPERTY(QString backgroundTheme READ backgroundTheme WRITE setBackgroundTheme NOTIFY backgroundThemeChanged)
 
@@ -28,6 +29,8 @@ public:
     void setBreakMinutes(int minutes);
     bool soundEnabled() const;
     void setSoundEnabled(bool enabled);
+    bool reduceMotion() const;
+    void setReduceMotion(bool enabled);
     QString rolloverIgnoredDate() const;
     void setRolloverIgnoredDate(const QString& date);
     QString backgroundTheme() const;
@@ -38,6 +41,7 @@ signals:
     void workMinutesChanged();
     void breakMinutesChanged();
     void soundEnabledChanged();
+    void reduceMotionChanged();
     void rolloverIgnoredDateChanged();
     void backgroundThemeChanged();
 

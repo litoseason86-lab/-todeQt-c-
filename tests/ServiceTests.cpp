@@ -373,6 +373,7 @@ private slots:
 
     void appSettingsDefaultsAndRoundTrip();
     void appSettingsSameValueDoesNotEmit();
+    void appSettingsReduceMotionRoundTrip();
     void appSettingsRolloverIgnoredDateRoundTrip();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void addTaskRejectsBlankTitle();
@@ -504,6 +505,30 @@ void ServiceTests::appSettingsSameValueDoesNotEmit()
     QSignalSpy modeSpy(&settings, &AppSettings::lastModeChanged);
     settings.setLastMode(0);
     QCOMPARE(modeSpy.count(), 0);
+}
+
+void ServiceTests::appSettingsReduceMotionRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.reduceMotion(), false);
+
+        QSignalSpy spy(&settings, &AppSettings::reduceMotionChanged);
+        settings.setReduceMotion(true);
+        QCOMPARE(settings.reduceMotion(), true);
+        QCOMPARE(spy.count(), 1);
+
+        settings.setReduceMotion(true);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    // 重新构造对象验证 QSettings 已落盘，不只是当前对象缓存。
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.reduceMotion(), true);
 }
 
 void ServiceTests::appSettingsRolloverIgnoredDateRoundTrip()

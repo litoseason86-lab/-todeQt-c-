@@ -5,6 +5,7 @@ const auto kLastModeKey = QStringLiteral("focus/lastMode");
 const auto kWorkMinutesKey = QStringLiteral("focus/workMinutes");
 const auto kBreakMinutesKey = QStringLiteral("focus/breakMinutes");
 const auto kSoundEnabledKey = QStringLiteral("focus/soundEnabled");
+const auto kReduceMotionKey = QStringLiteral("appearance/reduceMotion");
 const auto kRolloverIgnoredDateKey = QStringLiteral("rollover/lastIgnoredDate");
 const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 }
@@ -82,6 +83,23 @@ void AppSettings::setSoundEnabled(bool enabled)
     m_settings->setValue(kSoundEnabledKey, enabled);
     m_settings->sync();
     emit soundEnabledChanged();
+}
+
+bool AppSettings::reduceMotion() const
+{
+    return m_settings->value(kReduceMotionKey, false).toBool();
+}
+
+void AppSettings::setReduceMotion(bool enabled)
+{
+    if (reduceMotion() == enabled) {
+        return;
+    }
+
+    // 减少动效属于无障碍偏好，写入后立即落盘，避免下次启动又恢复动画。
+    m_settings->setValue(kReduceMotionKey, enabled);
+    m_settings->sync();
+    emit reduceMotionChanged();
 }
 
 QString AppSettings::rolloverIgnoredDate() const
