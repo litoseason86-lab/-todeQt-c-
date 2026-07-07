@@ -299,6 +299,22 @@ Popup {
                         }
                     }
                 }
+
+                RowDivider {
+                    objectName: "settingsPreferenceDividerSlimClock"
+                }
+
+                PreferenceSwitchRow {
+                    label: "纤细计时字体"
+                    caption: "更秀气的表盘数字；关闭则用更清晰的中黑"
+                    switchName: "settingsSlimClockFontSwitch"
+                    checkedValue: root.appSettingsRef ? root.appSettingsRef.slimClockFont : true
+                    onToggledTo: function (value) {
+                        if (root.appSettingsRef) {
+                            root.appSettingsRef.slimClockFont = value
+                        }
+                    }
+                }
             }
 
             Text {

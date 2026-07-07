@@ -18,6 +18,7 @@ TestCase {
         property string backgroundTheme: "warmPaper"
         property bool soundEnabled: true
         property bool reduceMotion: false
+        property bool slimClockFont: true
     }
 
     Component {
@@ -36,6 +37,7 @@ TestCase {
         appSettingsMock.backgroundTheme = "warmPaper"
         appSettingsMock.soundEnabled = true
         appSettingsMock.reduceMotion = false
+        appSettingsMock.slimClockFont = true
         dialog.appSettingsRef = appSettingsMock
         dialog.close()
         wait(20)
@@ -155,6 +157,54 @@ TestCase {
 
         mouseClick(soundSwitch)
         compare(appSettingsMock.soundEnabled, false)
+    }
+
+    function test_slimClockFontSwitchBindsSetting() {
+        appSettingsMock.slimClockFont = true
+        dialog.open()
+        wait(20)
+
+        var sw = findChild(dialog, "settingsSlimClockFontSwitch")
+        verify(sw)
+        compare(sw.checked, true)
+
+        sw.toggle()
+        sw.toggled()
+        compare(appSettingsMock.slimClockFont, false)
+    }
+
+    function test_slimClockFontRowTogglesOnce() {
+        appSettingsMock.slimClockFont = true
+        dialog.open()
+        wait(20)
+
+        var row = findChild(dialog, "settingsSlimClockFontSwitchRow")
+        verify(row)
+        mouseClick(row, 8, row.height / 2, Qt.LeftButton, Qt.NoModifier)
+        compare(appSettingsMock.slimClockFont, false)
+    }
+
+    function test_slimClockFontSwitchTogglesOnce() {
+        appSettingsMock.slimClockFont = true
+        dialog.open()
+        wait(20)
+
+        var sw = findChild(dialog, "settingsSlimClockFontSwitch")
+        verify(sw)
+        mouseClick(sw)
+        compare(appSettingsMock.slimClockFont, false)
+    }
+
+    function test_slimClockFontMissingSettingsRefIsNoop() {
+        appSettingsMock.slimClockFont = true
+        dialog.appSettingsRef = null
+        dialog.open()
+        wait(20)
+
+        var row = findChild(dialog, "settingsSlimClockFontSwitchRow")
+        verify(row)
+        mouseClick(row, 8, row.height / 2, Qt.LeftButton, Qt.NoModifier)
+        compare(appSettingsMock.slimClockFont, true)
     }
 
     function test_preferenceSwitchesAlignToGroupRightEdge() {
