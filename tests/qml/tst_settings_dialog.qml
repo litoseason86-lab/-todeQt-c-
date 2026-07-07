@@ -187,4 +187,27 @@ TestCase {
         verify(routineRow)
         compare(routineRow.implicitHeight, 40)
     }
+
+    function test_dialogUsesWideReferenceLayout() {
+        dialog.open()
+        wait(20)
+
+        verify(dialog.width >= 540, "设置弹窗不能继续使用窄 420 版式")
+
+        var warmThumb = themeThumb("warmPaper")
+        verify(warmThumb)
+        verify(warmThumb.width >= 148, "主题缩略图应放大到参考图的宽卡片尺度")
+        verify(warmThumb.height >= 70, "主题缩略图高度应随宽卡片放大")
+
+        var prefGroup = findChild(dialog, "settingsPreferenceGroup")
+        verify(prefGroup)
+        verify(prefGroup.x >= Theme.space24, "组卡左边距应扩大到 24")
+        verify(prefGroup.width <= dialog.width - Theme.space24 * 2 + 1,
+               "组卡宽度应给左右 24 留白")
+
+        var closeButton = findChild(dialog, "settingsCloseButton")
+        verify(closeButton)
+        compare(closeButton.implicitWidth, 96)
+        compare(closeButton.implicitHeight, 40)
+    }
 }

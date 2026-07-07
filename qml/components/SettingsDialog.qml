@@ -20,7 +20,7 @@ Popup {
     modal: true
     focus: true
     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-    width: Math.min(420, parent ? Math.max(320, parent.width - 64) : 420)
+    width: parent ? Math.min(560, Math.max(420, parent.width - 96)) : 560
     height: Math.min(contentColumn.implicitHeight,
                      parent ? parent.height - Theme.space32 * 2 : contentColumn.implicitHeight)
     x: parent ? Math.round((parent.width - width) / 2) : 0
@@ -135,33 +135,34 @@ Popup {
             id: contentColumn
 
             width: settingsScroll.availableWidth
-            spacing: Theme.space12
+            spacing: Theme.space8
 
             Text {
-                Layout.leftMargin: Theme.space16
-                Layout.topMargin: Theme.space16
+                Layout.leftMargin: Theme.space24
+                Layout.topMargin: Theme.space24
                 text: "设置"
                 textFormat: Text.PlainText
                 color: Theme.ink
-                font.pixelSize: Theme.fontLg
+                font.pixelSize: Theme.fontXl
                 font.weight: Font.Bold
             }
 
             Text {
-                Layout.leftMargin: Theme.space16
+                Layout.leftMargin: Theme.space24
+                Layout.topMargin: Theme.space8
                 text: "背景主题"
                 textFormat: Text.PlainText
                 color: Theme.inkSoft
-                font.pixelSize: Theme.fontSm
+                font.pixelSize: Theme.fontMd
                 font.weight: Font.Bold
             }
 
             GridLayout {
-                Layout.leftMargin: Theme.space16
-                Layout.rightMargin: Theme.space16
+                Layout.leftMargin: Theme.space24
+                Layout.rightMargin: Theme.space24
                 columns: 3
                 rowSpacing: Theme.space12
-                columnSpacing: Theme.space12
+                columnSpacing: Theme.space16
 
                 Repeater {
                     id: themeRepeater
@@ -180,15 +181,15 @@ Popup {
                             ? root.appSettingsRef.backgroundTheme === themeCell.modelData.id
                             : themeCell.modelData.id === "warmPaper"
 
-                        Layout.preferredWidth: 104
+                        Layout.preferredWidth: 150
                         spacing: Theme.space4
 
                         Rectangle {
                             id: thumbFrame
                             objectName: "settingsThemeThumb-" + themeCell.modelData.id
 
-                            width: 104
-                            height: 66
+                            width: 150
+                            height: 72
                             radius: Theme.radiusMd
                             clip: true
                             color: themeCell.selected ? Theme.accentSoft : Qt.rgba(1, 1, 1, 0)
@@ -256,12 +257,12 @@ Popup {
             }
 
             Text {
-                Layout.leftMargin: Theme.space16
-                Layout.topMargin: Theme.space8
+                Layout.leftMargin: Theme.space24
+                Layout.topMargin: Theme.space12
                 text: "偏好"
                 textFormat: Text.PlainText
                 color: Theme.inkSoft
-                font.pixelSize: Theme.fontSm
+                font.pixelSize: Theme.fontMd
                 font.weight: Font.Bold
             }
 
@@ -298,12 +299,12 @@ Popup {
             }
 
             Text {
-                Layout.leftMargin: Theme.space16
-                Layout.topMargin: Theme.space8
+                Layout.leftMargin: Theme.space24
+                Layout.topMargin: Theme.space12
                 text: "管理"
                 textFormat: Text.PlainText
                 color: Theme.inkSoft
-                font.pixelSize: Theme.fontSm
+                font.pixelSize: Theme.fontMd
                 font.weight: Font.Bold
             }
 
@@ -351,11 +352,12 @@ Popup {
                 objectName: "settingsCloseButton"
 
                 Layout.alignment: Qt.AlignRight
-                Layout.rightMargin: Theme.space16
-                Layout.bottomMargin: Theme.space16
+                Layout.rightMargin: Theme.space24
+                Layout.topMargin: Theme.space8
+                Layout.bottomMargin: Theme.space24
                 text: "关闭"
-                implicitWidth: 80
-                implicitHeight: 36
+                implicitWidth: 96
+                implicitHeight: 40
 
                 onClicked: root.close()
 
@@ -384,8 +386,8 @@ Popup {
         default property alias content: groupColumn.data
 
         Layout.fillWidth: true
-        Layout.leftMargin: Theme.space16
-        Layout.rightMargin: Theme.space16
+        Layout.leftMargin: Theme.space24
+        Layout.rightMargin: Theme.space24
         implicitHeight: groupColumn.implicitHeight
         color: Theme.surfaceRaised
         border.color: Theme.borderSubtle
