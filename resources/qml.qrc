@@ -13,6 +13,9 @@
         <file alias="qml/components/BackgroundWallpaper.qml">../qml/components/BackgroundWallpaper.qml</file>
         <file alias="qml/components/SettingsDialog.qml">../qml/components/SettingsDialog.qml</file>
         <file alias="qml/components/Sidebar.qml">../qml/components/Sidebar.qml</file>
+        <file alias="qml/components/PresetButton.qml">../qml/components/PresetButton.qml</file>
+        <file alias="qml/components/DurationStepper.qml">../qml/components/DurationStepper.qml</file>
+        <file alias="qml/components/FocusRing.qml">../qml/components/FocusRing.qml</file>
         <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
         <file alias="qml/components/AddTaskDialog.qml">../qml/components/AddTaskDialog.qml</file>
         <file alias="qml/components/EditTaskDialog.qml">../qml/components/EditTaskDialog.qml</file>
