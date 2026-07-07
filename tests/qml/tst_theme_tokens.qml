@@ -41,6 +41,18 @@ TestCase {
         verify(Qt.colorEqual(Theme.glassBorder, Qt.rgba(1, 1, 1, 0.65)), "glassBorder 取值不对")
     }
 
+    function test_focusRingTokens() {
+        verify(Qt.colorEqual(Theme.focusRingArcStart, "#f1bd7e"), "focusRingArcStart 取值不对")
+        verify(Qt.colorEqual(Theme.focusRingArcMid, "#f4d3ab"), "focusRingArcMid 取值不对")
+        verify(Qt.colorEqual(Theme.focusRingArcEnd, "#f4c3bd"), "focusRingArcEnd 取值不对")
+        verify(Qt.colorEqual(Theme.focusRingTrack, "#faf1e8"), "focusRingTrack 取值不对")
+        verify(Qt.colorEqual(Theme.focusGlassCenter, "#fffefb"), "focusGlassCenter 取值不对")
+        verify(Qt.colorEqual(Theme.focusGlassEdge, "#fdf3ee"), "focusGlassEdge 取值不对")
+        verify(Qt.colorEqual(Theme.focusGlassShadow, "#e2b9a6"), "focusGlassShadow 取值不对")
+        verify(Qt.colorEqual(Theme.focusGlassHighlight, "#ffffff"), "focusGlassHighlight 取值不对")
+        verify(Qt.colorEqual(Theme.focusColonMuted, "#e8bda6"), "focusColonMuted 取值不对")
+    }
+
     function test_backgroundThemesDefinitions() {
         var themes = Theme.backgroundThemes
         compare(themes.length, 6)

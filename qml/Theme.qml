@@ -81,6 +81,20 @@ QtObject {
     // 和图表配色场景无关，只是恰好复用同一个色值，避免专注页里出现裸索引 [3]。
     readonly property color focusBreakAccent: chartColors[3]
 
+    // —— 专注计时环（玻璃表盘）——
+    // 进度弧双色霞光渐变：只用于专注进行态；休息/完成态退化为状态语义单色。
+    readonly property color focusRingArcStart: "#f1bd7e"   // 琥珀
+    readonly property color focusRingArcMid: "#f4d3ab"     // 柔金
+    readonly property color focusRingArcEnd: "#f4c3bd"     // 樱粉
+    readonly property color focusRingTrack: "#faf1e8"      // 底色轨道
+    // 玻璃内盘径向渐变与顶部高光；落影色在绘制时另配低透明度。
+    readonly property color focusGlassCenter: "#fffefb"
+    readonly property color focusGlassEdge: "#fdf3ee"
+    readonly property color focusGlassShadow: "#e2b9a6"
+    readonly property color focusGlassHighlight: "#ffffff"
+    // 冒号只弱化颜色，不弱化字重；Space Grotesk 当前只打包 300/500/700 三档。
+    readonly property color focusColonMuted: "#e8bda6"
+
     // —— 玻璃令牌（背景主题：磨砂面板，均衡档定稿）——
     // 用“白 + alpha”而非灰色：面板叠在彩色壁纸上，白基半透明才能透出壁纸色相。
     readonly property color glassSidebar: Qt.rgba(1, 1, 252 / 255, 0.55)
