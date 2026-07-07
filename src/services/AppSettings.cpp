@@ -6,6 +6,7 @@ const auto kWorkMinutesKey = QStringLiteral("focus/workMinutes");
 const auto kBreakMinutesKey = QStringLiteral("focus/breakMinutes");
 const auto kSoundEnabledKey = QStringLiteral("focus/soundEnabled");
 const auto kReduceMotionKey = QStringLiteral("appearance/reduceMotion");
+const auto kSlimClockFontKey = QStringLiteral("appearance/slimClockFont");
 const auto kRolloverIgnoredDateKey = QStringLiteral("rollover/lastIgnoredDate");
 const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 }
@@ -100,6 +101,23 @@ void AppSettings::setReduceMotion(bool enabled)
     m_settings->setValue(kReduceMotionKey, enabled);
     m_settings->sync();
     emit reduceMotionChanged();
+}
+
+bool AppSettings::slimClockFont() const
+{
+    return m_settings->value(kSlimClockFontKey, true).toBool();
+}
+
+void AppSettings::setSlimClockFont(bool enabled)
+{
+    if (slimClockFont() == enabled) {
+        return;
+    }
+
+    // 计时数字字重属于即时可见的外观偏好，写入后立即落盘，保持设置项行为一致。
+    m_settings->setValue(kSlimClockFontKey, enabled);
+    m_settings->sync();
+    emit slimClockFontChanged();
 }
 
 QString AppSettings::rolloverIgnoredDate() const

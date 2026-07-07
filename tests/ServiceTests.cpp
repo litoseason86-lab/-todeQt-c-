@@ -374,6 +374,7 @@ private slots:
     void appSettingsDefaultsAndRoundTrip();
     void appSettingsSameValueDoesNotEmit();
     void appSettingsReduceMotionRoundTrip();
+    void appSettingsSlimClockFontRoundTrip();
     void appSettingsRolloverIgnoredDateRoundTrip();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void addTaskRejectsBlankTitle();
@@ -529,6 +530,30 @@ void ServiceTests::appSettingsReduceMotionRoundTrip()
     // 重新构造对象验证 QSettings 已落盘，不只是当前对象缓存。
     AppSettings reloaded(path);
     QCOMPARE(reloaded.reduceMotion(), true);
+}
+
+void ServiceTests::appSettingsSlimClockFontRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.slimClockFont(), true);
+
+        QSignalSpy spy(&settings, &AppSettings::slimClockFontChanged);
+        settings.setSlimClockFont(false);
+        QCOMPARE(settings.slimClockFont(), false);
+        QCOMPARE(spy.count(), 1);
+
+        settings.setSlimClockFont(false);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    // 重新构造对象验证 QSettings 已落盘，不只是当前对象缓存。
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.slimClockFont(), false);
 }
 
 void ServiceTests::appSettingsRolloverIgnoredDateRoundTrip()
