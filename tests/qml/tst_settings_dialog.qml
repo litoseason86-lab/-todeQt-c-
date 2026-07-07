@@ -14,6 +14,14 @@ TestCase {
         id: appSettingsMock
 
         property string backgroundTheme: "warmPaper"
+        property bool soundEnabled: true
+        property bool reduceMotion: false
+    }
+
+    Component {
+        id: signalSpyComponent
+
+        SignalSpy {}
     }
 
     SettingsDialog {
@@ -24,6 +32,8 @@ TestCase {
 
     function init() {
         appSettingsMock.backgroundTheme = "warmPaper"
+        appSettingsMock.soundEnabled = true
+        appSettingsMock.reduceMotion = false
         dialog.appSettingsRef = appSettingsMock
         dialog.close()
         wait(20)
@@ -88,5 +98,55 @@ TestCase {
         verify(thumb)
         mouseClick(thumb) // 缺 appSettings（测试/降级）时：不崩溃、不写入。
         compare(appSettingsMock.backgroundTheme, "warmPaper")
+    }
+
+    function test_soundSwitchBindsSetting() {
+        appSettingsMock.soundEnabled = true
+        dialog.open()
+        wait(20)
+
+        var sw = findChild(dialog, "settingsSoundSwitch")
+        verify(sw)
+        compare(sw.checked, true)
+
+        sw.toggle()
+        sw.toggled()
+        compare(appSettingsMock.soundEnabled, false)
+    }
+
+    function test_reduceMotionSwitchBindsSetting() {
+        appSettingsMock.reduceMotion = false
+        dialog.open()
+        wait(20)
+
+        var sw = findChild(dialog, "settingsReduceMotionSwitch")
+        verify(sw)
+        compare(sw.checked, false)
+
+        sw.toggle()
+        sw.toggled()
+        compare(appSettingsMock.reduceMotion, true)
+    }
+
+    function test_manageRowsEmitSignals() {
+        dialog.open()
+        wait(20)
+
+        var routineSpy = createTemporaryObject(signalSpyComponent, testCase, {
+            target: dialog,
+            signalName: "routineRequested"
+        })
+        verify(routineSpy)
+
+        var row = findChild(dialog, "settingsManageRoutine")
+        verify(row)
+        mouseClick(row)
+        compare(routineSpy.count, 1)
+    }
+
+    function test_closeButtonHasObjectName() {
+        dialog.open()
+        wait(20)
+        verify(findChild(dialog, "settingsCloseButton"))
     }
 }
