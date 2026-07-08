@@ -44,8 +44,6 @@ Rectangle {
     // 视图可能传入标准化科目对象，也可能传入旧版字符串科目。
     readonly property string categoryName: typeof taskCategory === "object" ? (taskCategory && taskCategory.name ? taskCategory.name : "") : String(taskCategory || "")
     readonly property string categoryColor: typeof taskCategory === "object" ? (taskCategory && taskCategory.color ? taskCategory.color : "") : ""
-    readonly property var completionParticleColors: [Theme.accent, Theme.border, Theme.borderSubtle]
-    readonly property var completionParticleDirections: [[-1, -1], [-1, 0], [-1, 1], [1, -1], [1, 0], [1, 1]]
 
     signal completionChanged(int taskId, bool completed)
     signal startFocusClicked(int taskId, string title)
@@ -81,36 +79,16 @@ Rectangle {
     function playCompletionAnimation() {
         if (root.completionAnimationPlayed)
             return;
-        if (particleContainer.particleCount > 0)
+        if (completionParticles.particleCount > 0)
             return;
 
         root.completionAnimationPlayed = true;
 
+        // 原点必须留在 TaskItem：只有这里知道复选框的真实位置，粒子组件只负责按坐标播放。
         var indicatorPosition = checkIndicator.mapToItem(root, 0, 0);
-        var particleSize = 5;
-        var travelDistance = 38;
-        var startX = indicatorPosition.x + checkIndicator.width / 2 - particleSize / 2;
-        var startY = indicatorPosition.y + checkIndicator.height / 2 - particleSize / 2;
-
-        for (var i = 0; i < root.completionParticleDirections.length; ++i) {
-            var direction = root.completionParticleDirections[i];
-            var targetX = startX + direction[0] * travelDistance;
-            var targetY = startY + direction[1] * travelDistance;
-            var particle = completionParticleComponent.createObject(particleContainer, {
-                    "x": startX,
-                    "y": startY,
-                    "startX": startX,
-                    "startY": startY,
-                    "targetX": targetX,
-                    "targetY": targetY,
-                    "directionX": direction[0],
-                    "directionY": direction[1],
-                    "color": root.completionParticleColors[i % root.completionParticleColors.length]
-                });
-
-            if (particle === null)
-                console.warn("创建任务完成粒子失败");
-        }
+        var startX = indicatorPosition.x + checkIndicator.width / 2 - 2.5;
+        var startY = indicatorPosition.y + checkIndicator.height / 2 - 2.5;
+        completionParticles.burst(startX, startY);
     }
 
     onTaskCompletedChanged: {
@@ -264,66 +242,10 @@ Rectangle {
         onHoveredChanged: root.setPointerInside(hovered)
     }
 
-    Item {
-        id: particleContainer
+    CompletionParticles {
+        id: completionParticles
 
-        objectName: "completionParticleContainer"
         anchors.fill: parent
-        enabled: false
-        z: 20
-        readonly property int particleCount: children.length
-    }
-
-    Component {
-        id: completionParticleComponent
-
-        Rectangle {
-            id: particle
-
-            objectName: "completionParticle"
-            width: 5
-            height: 5
-            radius: width / 2
-            opacity: 1
-            property real startX: 0
-            property real startY: 0
-            property real targetX: 0
-            property real targetY: 0
-            property int directionX: 0
-            property int directionY: 0
-
-            SequentialAnimation {
-                running: true
-
-                ParallelAnimation {
-                    NumberAnimation {
-                        target: particle
-                        property: "x"
-                        to: particle.targetX
-                        duration: 800
-                        easing.type: Easing.OutQuad
-                    }
-
-                    NumberAnimation {
-                        target: particle
-                        property: "y"
-                        to: particle.targetY
-                        duration: 800
-                        easing.type: Easing.OutQuad
-                    }
-
-                    OpacityAnimator {
-                        target: particle
-                        from: 1
-                        to: 0
-                        duration: 800
-                        easing.type: Easing.OutQuad
-                    }
-                }
-
-                onStopped: particle.destroy()
-            }
-        }
     }
 
     RowLayout {

@@ -19,6 +19,7 @@
         <file alias="qml/components/DurationStepper.qml">../qml/components/DurationStepper.qml</file>
         <file alias="qml/components/FocusRing.qml">../qml/components/FocusRing.qml</file>
         <file alias="qml/components/FocusTimeline.qml">../qml/components/FocusTimeline.qml</file>
+        <file alias="qml/components/CompletionParticles.qml">../qml/components/CompletionParticles.qml</file>
         <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
         <file alias="qml/components/AddTaskDialog.qml">../qml/components/AddTaskDialog.qml</file>
         <file alias="qml/components/EditTaskDialog.qml">../qml/components/EditTaskDialog.qml</file>
