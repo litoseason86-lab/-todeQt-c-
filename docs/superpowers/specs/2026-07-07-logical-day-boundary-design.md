@@ -31,13 +31,19 @@
 
 ```cpp
 namespace LogicalDay {
-// 逻辑今天：现在回拨 dayStartHour 小时后的日历日。
-inline QDate today(int dayStartHour) {
-    return QDateTime::currentDateTime().addSecs(-dayStartHour * 3600).date();
-}
-// 某时间戳的逻辑日。
+// 某时间戳的逻辑日（唯一算法所在）。
 inline QDate dateOf(const QDateTime& ts, int dayStartHour) {
     return ts.addSecs(-dayStartHour * 3600).date();
+}
+// 逻辑今天：薄包装，不复制算法——单一来源。
+inline QDate today(int dayStartHour) {
+    return dateOf(QDateTime::currentDateTime(), dayStartHour);
+}
+// 距下一个逻辑日界点的毫秒数（供刷新定时器；纯函数、可单测）。
+inline qint64 msUntilNextBoundary(const QDateTime& now, int dayStartHour) {
+    QDateTime boundary(now.date(), QTime(dayStartHour, 0));
+    if (now >= boundary) boundary = boundary.addDays(1);
+    return now.msecsTo(boundary);
 }
 // SQLite date() 修饰符：date(start_time, sqlShift(h)) 即按逻辑日取日期。
 inline QString sqlShift(int dayStartHour) {
@@ -117,17 +123,38 @@ C++ 侧 `dateTime.date()` 形式的日期提取（StatisticsService:40/53、Task
 | TodayTaskView 结转横幅 `todayIso` | 与 overdue 判定一致 |
 | EditTaskDialog 今天/明天/后天 chip 的"今天"（isoWithOffset(0)） | 编辑日期快捷项 |
 | ExportDialog 快捷"本周/本月/今天"锚点 | 导出范围 |
+| **WeekPlanView `weekStart: mondayOf(new Date())`（13）** | 本周起点——改 `mondayOf(LogicalDay.todayDate(h, new Date()))` |
+| **WeekPlanView `isTodayIndex`（96-102，`new Date()`）** | "今天"高亮——与逻辑今天比 |
+| **WeekPlanView `isPastIndex`（105+）** | 过去日判定——与逻辑今天比 |
+| **WeekPlanView"本周"按钮 / 回到本周** | 重置 weekStart 到 `mondayOf(逻辑今天)` |
+
+**WeekPlanView 必须纳入**——否则凌晨 0–4 点：今日任务页认为"还是昨天"、周计划页却认为"已是今天"，两页自相矛盾（正是此前"本周页面"问题的根源）。放计划二。
 
 **目标倒计时"还有 N 天"是 C++ 算的，不能只改 QML**（QML 只展示）。有两条路径，且 **model 层不得反向依赖 AppSettings 单例**（`src/models` 依赖 `src/services` 会污染模型测试/复用/序列化）——把设置依赖挡在 service 层，用注入基准日：
 
+**两条 daysRemaining 路径**（核实过代码，都要走同一注入基准日 `m_referenceDate`，否则列表更新了顶部横幅还是旧天数）：① 顶部横幅 `primaryGoal().daysRemaining` 经 [goalToVariantMap:381](../../../src/services/CountdownService.cpp#L381) → `goal.daysRemaining()`；② 列表 [CountdownModel:34](../../../src/models/CountdownModel.cpp#L34) DaysRemainingRole → `goal.daysRemaining()`。
+
 | 位置 | 现状 | 改为 |
 | --- | --- | --- |
-| [CountdownService.cpp:245](../../../src/services/CountdownService.cpp#L245) calculateDaysRemaining（primaryGoal() 的 daysRemaining 走它） | `QDate::currentDate().daysTo(targetDate)` | `LogicalDay::today(AppSettings::instance()->dayStartHour()).daysTo(targetDate)`（service 合法依赖 AppSettings） |
-| [CountdownGoal.cpp:86](../../../src/models/CountdownGoal.cpp#L86) `daysRemaining()`（纯值对象） | 内部读 `QDate::currentDate()` | 改为纯函数 `daysRemainingFrom(const QDate& baseDate) const`（`= baseDate.daysTo(m_targetDate)`），**不读任何单例** |
-| [CountdownModel.cpp:34](../../../src/models/CountdownModel.cpp#L34) DaysRemainingRole | `goal.daysRemaining()` | `goal.daysRemainingFrom(m_referenceDate)`；CountdownModel 新增 `QDate m_referenceDate`（默认 `QDate::currentDate()`）+ `setReferenceDate(QDate)`（更新并对 DaysRemainingRole 发 `dataChanged`）。**仍不依赖 AppSettings** |
-| CountdownService（注入点） | — | refresh/setGoals 时 `model->setReferenceDate(LogicalDay::today(AppSettings::instance()->dayStartHour()))`；`dayStartHourChanged` 时也重注入 |
+| [CountdownGoal.cpp:86](../../../src/models/CountdownGoal.cpp#L86) `daysRemaining()`（纯值对象，src/models） | 内部读 `QDate::currentDate()` | 改为纯函数 `daysRemainingFrom(const QDate& baseDate) const`（`= baseDate.daysTo(m_targetDate)`），**删掉读单例的 daysRemaining()**（其调用点见下两行；无残留调用后编译才过） |
+| [CountdownModel.cpp:34](../../../src/models/CountdownModel.cpp#L34) DaysRemainingRole | `goal.daysRemaining()` | `goal.daysRemainingFrom(m_referenceDate)`；Model 新增 `QDate m_referenceDate`（默认 `QDate::currentDate()`）+ `setReferenceDate(QDate)`（更新 + 对 DaysRemainingRole 发 `dataChanged`）。**不依赖 AppSettings** |
+| [CountdownService.cpp:381](../../../src/services/CountdownService.cpp#L381) goalToVariantMap | `goal.daysRemaining()` | `goal.daysRemainingFrom(m_referenceDate)`（service 持有 `m_referenceDate`） |
+| [CountdownService.cpp:239](../../../src/services/CountdownService.cpp#L239) calculateDaysRemaining（若仍被调用） | `QDate::currentDate().daysTo(...)` | `m_referenceDate.daysTo(...)`；若已无调用则删除 |
+| **CountdownService 新增私有 `syncReferenceDate()`** | — | `m_referenceDate = LogicalDay::today(AppSettings::instance()->dayStartHour()); m_model.setReferenceDate(m_referenceDate); updatePrimaryGoal();`（后者触发 `primaryGoalChanged`）。**调用时机**：构造函数（[27](../../../src/services/CountdownService.cpp#L27)，在首次 loadGoals 前）、[loadGoals:299](../../../src/services/CountdownService.cpp#L299) 末尾、`AppSettings::dayStartHourChanged` 连接、逻辑日失效事件（见下节）。goalToVariantMap 与 model role 由此吃同一 `m_referenceDate`。 |
 
 **明确不动**：`getTasksByDate(显式日期)`、任务/目标的 `date` 字段本身（用户指派的日历日，非时间戳）、周/月边界（由逻辑今天自然派生）。
+
+## 逻辑日失效与刷新（否则改设置/跨日界后已打开页面显示旧数据）
+
+现状：今日页只在任务/分类/专注/例行变化时刷新（[TodayTaskView.qml:34](../../../qml/views/TodayTaskView.qml#L34)）。改"每日起始时间"后，已打开的今日/周/月/统计/倒计时**不会自动重查**；应用从 3:59 挂到 4:00 也不刷新。需要统一的"逻辑日失效"契约：
+
+- **新增 `LogicalDayService`**（C++ 单例，上下文属性 `logicalDayService`），信号 `changed()`：
+  - 构造时连接 `AppSettings::dayStartHourChanged` → `onInvalidate()`；
+  - `onInvalidate()`：`emit changed()` + 重排边界定时器；
+  - 边界定时器：单次 QTimer，间隔 `LogicalDay::msUntilNextBoundary(now, h)`，到点 → `onInvalidate()`（自然跨过逻辑午夜时失效并重排）。
+- **各视图/模型订阅** `logicalDayService.changed` 后各自重载：TodayTaskView.refresh、WeekPlanView（重算 weekStart/今天/过去 + refresh）、MonthGoalView.refresh、StatisticsView.refresh、Countdown（服务侧 `syncReferenceDate` 已由 `dayStartHourChanged` 覆盖，跨边界再由 `changed` 触发一次 syncReferenceDate）。
+- **计划归属**：`LogicalDayService` + StatisticsView 订阅进**计划一**（设置在计划一就能改，统计必须随改刷新）；Today/Week/Month/Countdown 订阅进**计划二**。
+- **可测**：不依赖真实凌晨——`msUntilNextBoundary(固定 now, h)` 纯函数单测；`changed()` 的响应经"改 `dayStartHour` → `changed` 发出 → 视图 refresh 被调/模型重载"验证（QML 用 mock service 直接 `changed()`，或改 mock appSettings.dayStartHour 触发）。
 
 ## 设置 UI（objectName 契约写成可执行接口）
 
@@ -159,14 +186,16 @@ focus_sessions 存时间戳、按天纯属聚合逻辑——改 SQL 修饰符即
 - **FocusHistoryService**：getMonthSessions/getDaySessions/session_date 各验证凌晨 session 归逻辑日（同法，显式日期）。
 - **ExportService**：导出范围按逻辑日过滤（01:00 session 落在前一天的范围内）。
 - getTodayStats/getTodayTasks/materializeToday：验证等价于以 `LogicalDay::today(h)` 为日的对应查询（不模拟真实凌晨）。
-- **倒计时（分层）**：`CountdownGoal::daysRemainingFrom(base)` 纯函数（`base` 与 `targetDate` 差值，不读单例——model 测试不碰全局状态）；`CountdownModel::setReferenceDate` 后 DaysRemainingRole 随基准日变化（发 dataChanged）；CountdownService 注入逻辑今天后 primaryGoal().daysRemaining 与 model role 一致。
+- **倒计时（分层 + 双路径 + 通知）**：`CountdownGoal::daysRemainingFrom(base)` 纯函数（不读单例，model 测试不碰全局）；`CountdownModel::setReferenceDate` 后 DaysRemainingRole 随基准日变（发 dataChanged）；`syncReferenceDate` 后**同时断言** DaysRemainingRole、`primaryGoal().daysRemaining`、`primaryGoalChanged` 发出（三者同一基准日，防"列表更新了横幅没更新"）。
+- **LogicalDayService**：`LogicalDay::msUntilNextBoundary(固定 now, h)` 纯函数穷举（now 在界点前/后、跨日）；改 `dayStartHour` → `changed()` 发出（SignalSpy）；不测真实边界定时器等待。
+- **失效刷新（QML）**：mock `logicalDayService` 直接 emit `changed`（或改 mock appSettings.dayStartHour），断言各视图 refresh 被调/重查（Today/Week/Month/Statistics）。
 
 **QML**：`LogicalDay.js` `todayDate/todayIso(dayStartHour, nowDate)` 用**固定 nowDate** 穷举边界（凌晨 1 点 h=4 → 前一天；两函数返回类型分别为 Date / ISO 串）；设置项 `settingsDayStartRow`/`settingsDayStartValue`/`settingsDayStartPlus` 绑定/写入 `dayStartHour`（点加断言 mock 变化、缺 ref 不写）。
 
 ## 影响面与拆分
 
-- C++：AppSettings（属性 + 归一化）、新增 LogicalDay.h、StatisticsService + **FocusHistoryService（querySessions 改命名占位符）+ ExportService**（SQL 分桶）、TaskManager/RoutineManager（today）、**倒计时（CountdownGoal 改 daysRemainingFrom 纯函数 + CountdownModel 注入 referenceDate + CountdownService 注入逻辑今天）**。
-- QML：新增 LogicalDay.js、SettingsDialog（步进器行）、AddTaskDialog/MonthGoalView/TodayTaskView/EditTaskDialog/ExportDialog 的"今天"（倒计时是 C++，不在此列）。
+- C++：AppSettings（属性 + 归一化）、新增 LogicalDay.h、**新增 LogicalDayService（失效信号 + 边界定时器）**、StatisticsService + **FocusHistoryService（querySessions 改命名占位符）+ ExportService**（SQL 分桶）、TaskManager/RoutineManager（today）、**倒计时（CountdownGoal 改 daysRemainingFrom 纯函数 + CountdownModel 注入 referenceDate + CountdownService syncReferenceDate）**。
+- QML：新增 LogicalDay.js、SettingsDialog（步进器行）、AddTaskDialog/MonthGoalView/TodayTaskView/**WeekPlanView**/EditTaskDialog/ExportDialog 的"今天" + 各视图订阅 `logicalDayService.changed`（倒计时是 C++）。
 - 拆两份计划：
-  - **计划一（核心 + 专注归日全口径一致）**：AppSettings.dayStartHour（含归一化）+ LogicalDay.h + **所有 focus_sessions 分桶入口**（StatisticsService 4 处 + FocusHistoryService querySessions 命名重构 + ExportService 1 处，见上表）+ StatisticsService 的 today + 设置 UI 步进器。**FocusHistoryService/ExportService 必须与 StatisticsService 同批**——否则总时长按 4 点、次数/有效天数/历史/导出按 0 点，口径打架、假完成。交付：专注归日全口径统一、可调日界点。
-  - **计划二（任务/例行/倒计时/QML 今天）**：TaskManager（今日任务 + 结转）、RoutineManager（例行）、**倒计时（CountdownGoal daysRemainingFrom 纯 + CountdownModel referenceDate + CountdownService 注入，model 层零 AppSettings 依赖）**、QML 各"今天"（todayDate/todayIso）。交付：全 app "今天"统一到逻辑日。
+  - **计划一（核心 + 专注归日全口径一致 + 失效基建）**：AppSettings.dayStartHour（含归一化）+ LogicalDay.h + **LogicalDayService** + **所有 focus_sessions 分桶入口**（StatisticsService 4 处 + FocusHistoryService querySessions 命名重构 + ExportService 1 处）+ StatisticsService 的 today + StatisticsView 订阅 changed + 设置 UI 步进器。**FocusHistoryService/ExportService 必须与 StatisticsService 同批**——否则口径打架、假完成。交付：专注归日全口径统一、可调日界点、改设置即刷新统计。
+  - **计划二（任务/例行/倒计时/周计划/QML 今天 + 各视图失效订阅）**：TaskManager（今日任务 + 结转）、RoutineManager（例行）、**倒计时（分层：CountdownGoal daysRemainingFrom 纯 + CountdownModel referenceDate + CountdownService syncReferenceDate + 三条 daysRemaining 路径同基准日 + primaryGoalChanged）**、QML 各"今天"（含 WeekPlanView weekStart/isTodayIndex/isPastIndex/本周按钮）、Today/Week/Month/Countdown 订阅 `logicalDayService.changed`。交付：全 app "今天"统一到逻辑日、跨设置/跨日界自动刷新。
