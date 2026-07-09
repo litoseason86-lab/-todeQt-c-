@@ -209,12 +209,15 @@ TestCase {
 
     function test_preferenceSwitchesAlignToGroupRightEdge() {
         dialog.open()
-        wait(20)
 
         var prefGroup = findChild(dialog, "settingsPreferenceGroup")
         var switchTrack = findChild(dialog, "settingsSoundSwitchTrack")
         verify(prefGroup)
         verify(switchTrack)
+        tryVerify(function() {
+            return prefGroup.width > 0 && switchTrack.width > 0
+                    && switchTrack.mapToItem(prefGroup, 0, 0).x > 0
+        }, 1000)
 
         var trackPos = switchTrack.mapToItem(prefGroup, 0, 0)
         verify(trackPos.x + switchTrack.width >= prefGroup.width - Theme.space24,
