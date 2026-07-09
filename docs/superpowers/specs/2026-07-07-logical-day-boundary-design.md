@@ -63,7 +63,17 @@ function todayIso(dayStartHour, nowDate) {
 }
 ```
 
-调用点传 `appSettings ? appSettings.dayStartHour : 4` 与 `new Date()`。**需要 Date 的**（AddTaskDialog.selectedDate、MonthGoalView 初始日）用 `todayDate`；**需要 ISO 字符串的**（TodayTaskView 结转 todayIso、EditTaskDialog"今天"、ExportDialog 范围、倒计时天数基准）用 `todayIso`。二者不混用一个函数。
+调用点取 hour **必须用项目既有的守卫模式**（测试环境未注入 `appSettings` 上下文属性时直接引用会抛 ReferenceError）：`typeof appSettings !== "undefined" && appSettings ? appSettings.dayStartHour : 4`（配 `// qmllint disable unqualified`，同 main.qml 先例），now 传 `new Date()`。为避免每个 QML 文件重复这段守卫，`LogicalDay.js` 再出一个便捷函数：
+
+```js
+// 传入 app 的 appSettings（可能为 undefined）与可选 now，内部守卫取 hour。
+function resolveHour(appSettingsOrUndef) {
+    return (typeof appSettingsOrUndef !== "undefined" && appSettingsOrUndef)
+        ? appSettingsOrUndef.dayStartHour : 4;
+}
+```
+
+**需要 Date 的**（AddTaskDialog.selectedDate、MonthGoalView 初始日）用 `todayDate`；**需要 ISO 字符串的**（TodayTaskView 结转、EditTaskDialog"今天"、ExportDialog 范围）用 `todayIso`。二者不混用一个函数。
 
 ## 改动映射（每个日界点 → 改法）
 
@@ -75,12 +85,17 @@ function todayIso(dayStartHour, nowDate) {
 | [StatisticsService.cpp:336-337](../../../src/services/StatisticsService.cpp#L336) 趋势/分类 | `date(f.start_time) …` | 同上 | 一 |
 | [StatisticsService.cpp:484-486](../../../src/services/StatisticsService.cpp#L484) getFocusSessionCount | `date(start_time) >= … <= …` | 两处加 `, :dayShift` | 一 |
 | [StatisticsService.cpp:615-618](../../../src/services/StatisticsService.cpp#L615) getUniqueFocusDates | `SELECT DISTINCT date(start_time) … WHERE date(start_time) …` | **SELECT 与 WHERE 三处**都加 `, :dayShift`（有效专注天数按逻辑日去重） | 一 |
-| [FocusHistoryService.cpp:48](../../../src/services/FocusHistoryService.cpp#L48) getMonthSessions | `date(fs.start_time) >= ? AND date(fs.start_time) < ?` | 两处加 `, ?`（shift 值前插参数列表） | 一 |
-| [FocusHistoryService.cpp:60](../../../src/services/FocusHistoryService.cpp#L60) getDaySessions | `date(fs.start_time) = ?` | 加 `, ?` | 一 |
-| [FocusHistoryService.cpp:184](../../../src/services/FocusHistoryService.cpp#L184) session_date 列 | `date(fs.start_time) AS session_date` | 加 `, ?`（历史卡片/日历按逻辑日归组） | 一 |
+| [FocusHistoryService.cpp:48/60/184](../../../src/services/FocusHistoryService.cpp#L164) querySessions 及其调用 | SELECT `date(fs.start_time) AS session_date` + WHERE `date(fs.start_time) >= ?…`（**positional**） | **改用命名占位符**（见下"querySessions 重构"），避免 positional bind 顺序脆弱 | 一 |
 | [ExportService.cpp:238-239](../../../src/services/ExportService.cpp#L238) 导出范围 | `date(f.start_time) >= :startDate … <= :endDate` | 两处加 `, :dayShift`——**导出与 UI 统计同口径，按逻辑日**（明确决策，非"可能"） | 一 |
 
-实施时 `grep -rn "date(.*start_time" src/` 全覆盖核对，确保无遗漏。getDayTotalDuration 等若还有 `date(fs.start_time)` 一并纳入。
+实施时 `grep -rn "date(.*start_time" src/` 全覆盖核对（含 getDayTotalDuration 等），确保无遗漏。
+
+**querySessions 重构（回应 positional bind 顺序脆弱）**：[querySessions](../../../src/services/FocusHistoryService.cpp#L164) 现在 SQL 全是 positional `?`、循环 `bindValue(index, ...)`。加 SELECT 的 shift 后位置会错位。**改为命名占位符**——`:shift` 命名后在 SELECT 与 WHERE 各处复用、只 bind 一次，彻底消除顺序问题：
+
+- 签名改 `querySessions(const QString& whereClause /* 用命名占位符 */, const QVariantMap& namedBinds)`；
+- 内部：`query.bindValue(":shift", LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()))` + 遍历 `namedBinds` 逐一 `bindValue(key, value)`；SELECT 改 `date(fs.start_time, :shift) AS session_date`；
+- getMonthSessions：whereClause = `"date(fs.start_time, :shift) >= :startDate AND date(fs.start_time, :shift) < :endDate"`，namedBinds `{":startDate": start, ":endDate": nextMonthStart}`；
+- getDaySessions：whereClause = `"date(fs.start_time, :shift) = :date"`，namedBinds `{":date": date}`。
 
 C++ 侧 `dateTime.date()` 形式的日期提取（StatisticsService:40/53、TaskManager:32/45、ExportService:38/51）：这些是"把某字段转 QDate"的通用解析器，**入参可能是 session 时间戳也可能是任务的 date 字段**——不在解析器内改，而是在 SQL 层（上表）统一处理 session 归日；任务/目标 date 字段本就是逻辑日、不动。
 
@@ -103,7 +118,13 @@ C++ 侧 `dateTime.date()` 形式的日期提取（StatisticsService:40/53、Task
 | TodayTaskView 结转横幅 `todayIso` | 与 overdue 判定一致 |
 | EditTaskDialog 今天/明天/后天 chip 的"今天"（isoWithOffset(0)） | 编辑日期快捷项 |
 | ExportDialog 快捷"本周/本月/今天"锚点 | 导出范围 |
-| CountdownView/目标倒计时"还有 N 天" | 用逻辑今天（凌晨 2 点仍显示"昨天"的天数，与全 app 一致） |
+
+**目标倒计时"还有 N 天"是 C++ 算的，不能只改 QML**（QML 只展示 `goal.daysRemaining`）——两处 `QDate::currentDate().daysTo(...)` 改逻辑今天：
+
+| 位置 | 现状 | 改为 |
+| --- | --- | --- |
+| [CountdownService.cpp:245](../../../src/services/CountdownService.cpp#L245) calculateDaysRemaining | `QDate::currentDate().daysTo(targetDate)` | `LogicalDay::today(AppSettings::instance()->dayStartHour()).daysTo(targetDate)` |
+| [CountdownGoal.cpp:86](../../../src/models/CountdownGoal.cpp#L86) daysRemaining（model role） | `QDate::currentDate().daysTo(m_targetDate)` | 同上（model 读 AppSettings 单例；凌晨 2 点仍显示"昨天"的天数，与全 app 一致） |
 
 **明确不动**：`getTasksByDate(显式日期)`、任务/目标的 `date` 字段本身（用户指派的日历日，非时间戳）、周/月边界（由逻辑今天自然派生）。
 
@@ -142,8 +163,8 @@ focus_sessions 存时间戳、按天纯属聚合逻辑——改 SQL 修饰符即
 
 ## 影响面与拆分
 
-- C++：AppSettings（属性 + 归一化）、新增 LogicalDay.h、StatisticsService + **FocusHistoryService + ExportService**（SQL 分桶）、TaskManager/RoutineManager（today）。
-- QML：新增 LogicalDay.js、SettingsDialog（步进器行）、AddTaskDialog/MonthGoalView/TodayTaskView/EditTaskDialog/ExportDialog/CountdownView 的"今天"。
+- C++：AppSettings（属性 + 归一化）、新增 LogicalDay.h、StatisticsService + **FocusHistoryService（querySessions 改命名占位符）+ ExportService**（SQL 分桶）、TaskManager/RoutineManager（today）、**CountdownService + CountdownGoal（倒计时 daysRemaining）**。
+- QML：新增 LogicalDay.js、SettingsDialog（步进器行）、AddTaskDialog/MonthGoalView/TodayTaskView/EditTaskDialog/ExportDialog 的"今天"（倒计时是 C++，不在此列）。
 - 拆两份计划：
-  - **计划一（核心 + 专注归日全口径一致）**：AppSettings.dayStartHour（含归一化）+ LogicalDay.h + **所有 focus_sessions 分桶入口**（StatisticsService 4 处 + FocusHistoryService 3 处 + ExportService 1 处，见上表）+ StatisticsService 的 today + 设置 UI 步进器。**FocusHistoryService/ExportService 必须与 StatisticsService 同批**——否则总时长按 4 点、次数/有效天数/历史/导出按 0 点，口径打架、假完成。交付：专注归日全口径统一、可调日界点。
-  - **计划二（任务/例行/QML 今天）**：TaskManager（今日任务 + 结转）、RoutineManager（例行）、QML 各"今天"（todayDate/todayIso）、倒计时。交付：全 app "今天"统一到逻辑日。
+  - **计划一（核心 + 专注归日全口径一致）**：AppSettings.dayStartHour（含归一化）+ LogicalDay.h + **所有 focus_sessions 分桶入口**（StatisticsService 4 处 + FocusHistoryService querySessions 命名重构 + ExportService 1 处，见上表）+ StatisticsService 的 today + 设置 UI 步进器。**FocusHistoryService/ExportService 必须与 StatisticsService 同批**——否则总时长按 4 点、次数/有效天数/历史/导出按 0 点，口径打架、假完成。交付：专注归日全口径统一、可调日界点。
+  - **计划二（任务/例行/倒计时/QML 今天）**：TaskManager（今日任务 + 结转）、RoutineManager（例行）、**CountdownService/CountdownGoal（倒计时 daysRemaining，C++）**、QML 各"今天"（todayDate/todayIso）。交付：全 app "今天"统一到逻辑日。
