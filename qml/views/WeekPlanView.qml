@@ -148,6 +148,9 @@ Item {
     }
 
     function openAddTaskForDay(index) {
+        if (!root.isTodayIndex(index))
+            return
+
         root.pendingAddDate = root.dayDate(index)
         addTaskDialog.selectedDate = root.pendingAddDate
         addTaskDialog.open()
@@ -430,13 +433,15 @@ Item {
                                 Button {
                                     id: emptyAddButton
                                     text: "+ 添加"
+                                    enabled: dayRow.isToday
                                     implicitWidth: 72
                                     implicitHeight: 32
 
                                     // 空日子用次级描边的添加，保持安静；强调色只留给有活动的日子。
                                     background: Rectangle {
-                                        color: emptyAddButton.pressed ? Theme.borderSubtle : (emptyAddButton.hovered ? Theme.surfaceSunken : Theme.surface)
-                                        border.color: emptyAddButton.hovered || emptyAddButton.pressed ? Theme.accent : Theme.border
+                                        color: !emptyAddButton.enabled ? Theme.surfaceSunken
+                                               : (emptyAddButton.pressed ? Theme.borderSubtle : (emptyAddButton.hovered ? Theme.surfaceSunken : Theme.surface))
+                                        border.color: emptyAddButton.enabled && (emptyAddButton.hovered || emptyAddButton.pressed) ? Theme.accent : Theme.border
                                         border.width: 1
                                         radius: Theme.radiusMd
 
@@ -446,7 +451,7 @@ Item {
 
                                     contentItem: Text {
                                         text: emptyAddButton.text
-                                        color: Theme.inkSoft
+                                        color: emptyAddButton.enabled ? Theme.inkSoft : Theme.inkMuted
                                         font.pixelSize: Theme.fontSm
                                         font.weight: Font.Medium
                                         horizontalAlignment: Text.AlignHCenter
@@ -477,13 +482,15 @@ Item {
                                                      ? modelData.categoryData
                                                      : (modelData.categoryText || ""))
                                     taskCompleted: modelData.completed
+                                    startFocusAllowed: dayRow.isToday
 
                                     onCompletionChanged: function(id, completed) {
                                         root.setTaskCompletedWithAnimationDelay(id, completed)
                                     }
 
                                     onStartFocusClicked: function(id, title) {
-                                        root.startFocus(id, title)
+                                        if (dayRow.isToday)
+                                            root.startFocus(id, title)
                                     }
 
                                     onDeleteClicked: function(id, title) {
@@ -512,14 +519,16 @@ Item {
                                 Button {
                                     id: addDayButton
                                     text: "添加"
+                                    enabled: dayRow.isToday
                                     implicitWidth: 72
                                     implicitHeight: 36
 
                                     // 主强调填充，与今日任务页的「添加」按钮保持一致。
                                     background: Rectangle {
-                                        color: addDayButton.pressed || addDayButton.hovered ? Theme.accentStrong : Theme.accent
-                                        border.color: addDayButton.hovered ? Theme.accentStrong : "transparent"
-                                        border.width: addDayButton.hovered ? 1 : 0
+                                        color: !addDayButton.enabled ? Theme.border
+                                               : (addDayButton.pressed || addDayButton.hovered ? Theme.accentStrong : Theme.accent)
+                                        border.color: addDayButton.enabled && addDayButton.hovered ? Theme.accentStrong : "transparent"
+                                        border.width: addDayButton.enabled && addDayButton.hovered ? 1 : 0
                                         radius: Theme.radiusMd
 
                                         Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
@@ -527,7 +536,7 @@ Item {
 
                                     contentItem: Text {
                                         text: addDayButton.text
-                                        color: Theme.surface
+                                        color: addDayButton.enabled ? Theme.surface : Theme.inkMuted
                                         font.pixelSize: Theme.fontMd
                                         font.weight: Font.Medium
                                         horizontalAlignment: Text.AlignHCenter

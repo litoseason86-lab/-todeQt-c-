@@ -156,6 +156,12 @@ TestCase {
         visible: false
     }
 
+    SignalSpy {
+        id: weekStartFocusSpy
+        target: weekPlanView
+        signalName: "startFocus"
+    }
+
     MonthGoalView {
         id: monthGoalView
 
@@ -178,6 +184,7 @@ TestCase {
         todayTaskView.visible = false;
         weekPlanView.visible = false;
         monthGoalView.visible = false;
+        weekStartFocusSpy.clear();
         addTaskDialog.close();
         if (typeof taskItem.setPointerInside === "function")
             taskItem.setPointerInside(false);
@@ -215,6 +222,20 @@ TestCase {
         weekPlanView.visible = true;
         weekPlanView.refresh();
         tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 220);
+    }
+
+    function todayWeekIndex() {
+        for (var i = 0; i < 7; ++i) {
+            if (weekPlanView.isTodayIndex(i))
+                return i;
+        }
+        return -1;
+    }
+
+    function nonTodayWeekIndex() {
+        var todayIndex = todayWeekIndex();
+        verify(todayIndex >= 0, "当前周视图应包含今天");
+        return todayIndex > 0 ? todayIndex - 1 : todayIndex + 1;
     }
 
     function verifyNear(actual, expected, tolerance, message) {
@@ -487,6 +508,39 @@ TestCase {
         verify(refreshedContainer !== null);
         compare(refreshedContainer.particleCount, 0);
         compare(taskManager.setTaskCompletedCallCount, 1);
+    }
+
+    function test_weekPlanViewBlocksAddingTaskForNonTodayDate() {
+        weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
+        var originalPendingDate = weekPlanView.pendingAddDate;
+        var blockedIndex = nonTodayWeekIndex();
+
+        weekPlanView.openAddTaskForDay(blockedIndex);
+
+        compare(weekPlanView.isoDate(weekPlanView.pendingAddDate), weekPlanView.isoDate(originalPendingDate));
+    }
+
+    function test_weekPlanViewBlocksStartFocusForNonTodayTask() {
+        weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
+        var blockedIndex = nonTodayWeekIndex();
+        var blockedDate = weekPlanView.isoDate(weekPlanView.dayDate(blockedIndex));
+        taskManager.fakeWeekTasks = [{
+                id: 302,
+                title: "非今天任务",
+                date: blockedDate,
+                completed: false,
+                categoryText: "测试"
+            }];
+        weekPlanView.visible = true;
+        weekPlanView.refresh();
+        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 220);
+
+        var focusButton = findChild(weekPlanView, "focusButton");
+        verify(focusButton !== null);
+        compare(focusButton.enabled, false);
+        mouseClick(focusButton, focusButton.width / 2, focusButton.height / 2);
+
+        compare(weekStartFocusSpy.count, 0);
     }
 
     function test_focusButtonStatesLoadAndCompletedDisablesAction() {
