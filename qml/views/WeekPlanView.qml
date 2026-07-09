@@ -102,6 +102,18 @@ Item {
                 && d.getDate() === now.getDate()
     }
 
+    function isPastIndex(index) {
+        var d = root.dayDate(index)
+        d.setHours(0, 0, 0, 0)
+        var now = new Date()
+        now.setHours(0, 0, 0, 0)
+        return d.getTime() < now.getTime()
+    }
+
+    function canAddTaskForIndex(index) {
+        return !root.isPastIndex(index)
+    }
+
     function weekCompletedCount() {
         var n = 0
         for (var i = 0; i < root.weekTasks.length; i++) {
@@ -148,7 +160,7 @@ Item {
     }
 
     function openAddTaskForDay(index) {
-        if (!root.isTodayIndex(index))
+        if (!root.canAddTaskForIndex(index))
             return
 
         root.pendingAddDate = root.dayDate(index)
@@ -353,13 +365,17 @@ Item {
                     RowLayout {
                         id: dayRow
 
+                        required property int index
+
+                        objectName: "weekDayRow-" + dayRow.index
                         Layout.fillWidth: true
                         spacing: Theme.space12
 
-                        property var dayTasks: root.tasksForDay(index)
+                        property var dayTasks: root.tasksForDay(dayRow.index)
                         property bool hasTasks: dayTasks.length > 0
-                        property bool isToday: root.isTodayIndex(index)
-                        property bool isWeekend: index >= 5
+                        property bool isToday: root.isTodayIndex(dayRow.index)
+                        property bool canAddTask: root.canAddTaskForIndex(dayRow.index)
+                        property bool isWeekend: dayRow.index >= 5
 
                         // —— 星期脊柱：领起一整天；今天用强调色高亮，周末底色略沉 ——
                         Rectangle {
@@ -377,7 +393,7 @@ Item {
 
                                 Text {
                                     Layout.alignment: Qt.AlignHCenter
-                                    text: root.weekdayGlyphs[index]
+                                    text: root.weekdayGlyphs[dayRow.index]
                                     font.pixelSize: Theme.fontXl
                                     font.bold: true
                                     color: dayRow.isToday ? Theme.surface
@@ -387,7 +403,7 @@ Item {
                                 Text {
                                     Layout.alignment: Qt.AlignHCenter
                                     // 等宽字体让日期数字像计时器/账本，强化“按日推进”的节奏。
-                                    text: Qt.formatDate(root.dayDate(index), "M/d")
+                                    text: Qt.formatDate(root.dayDate(dayRow.index), "M/d")
                                     font.family: "Menlo"
                                     font.pixelSize: Theme.fontXs
                                     color: dayRow.isToday ? Theme.surface : Theme.inkSoft
@@ -432,8 +448,11 @@ Item {
 
                                 Button {
                                     id: emptyAddButton
+
+                                    objectName: "weekEmptyAddButton-" + dayRow.index
                                     text: "+ 添加"
-                                    enabled: dayRow.isToday
+                                    visible: dayRow.canAddTask
+                                    enabled: dayRow.canAddTask
                                     implicitWidth: 72
                                     implicitHeight: 32
 
@@ -458,7 +477,7 @@ Item {
                                         verticalAlignment: Text.AlignVCenter
                                     }
 
-                                    onClicked: root.openAddTaskForDay(index)
+                                    onClicked: root.openAddTaskForDay(dayRow.index)
                                 }
                             }
                         }
@@ -483,6 +502,7 @@ Item {
                                                      : (modelData.categoryText || ""))
                                     taskCompleted: modelData.completed
                                     startFocusAllowed: dayRow.isToday
+                                    showStartFocus: dayRow.isToday
 
                                     onCompletionChanged: function(id, completed) {
                                         root.setTaskCompletedWithAnimationDelay(id, completed)
@@ -518,8 +538,11 @@ Item {
 
                                 Button {
                                     id: addDayButton
+
+                                    objectName: "weekAddButton-" + dayRow.index
                                     text: "添加"
-                                    enabled: dayRow.isToday
+                                    visible: dayRow.canAddTask
+                                    enabled: dayRow.canAddTask
                                     implicitWidth: 72
                                     implicitHeight: 36
 
@@ -546,7 +569,7 @@ Item {
                                         Behavior on scale { NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
                                     }
 
-                                    onClicked: root.openAddTaskForDay(index)
+                                    onClicked: root.openAddTaskForDay(dayRow.index)
                                 }
                             }
                         }

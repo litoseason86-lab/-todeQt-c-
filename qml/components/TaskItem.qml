@@ -37,6 +37,8 @@ Rectangle {
     property bool titleEditing: false
     // 父视图负责判断任务是否允许开始专注；TaskItem 只消费结果，避免把日期规则塞进通用任务项。
     property bool startFocusAllowed: true
+    // 父视图负责决定这个任务是否属于“执行态”；历史和未来任务不露出执行入口。
+    property bool showStartFocus: true
     // 显式记录指针状态，避免不同平台的 MouseArea/HoverHandler 事件差异影响 hover 视觉。
     property bool pointerInside: false
     property bool componentReady: false
@@ -416,7 +418,7 @@ Rectangle {
 
             objectName: "focusButton"
             text: root.visualTaskCompleted ? "已完成" : "开始专注"
-            visible: !root.visualTaskCompleted
+            visible: root.showStartFocus && !root.visualTaskCompleted
             enabled: !root.visualTaskCompleted && root.startFocusAllowed
             implicitWidth: 104
             implicitHeight: 40

@@ -211,11 +211,10 @@ TestCase {
     }
 
     function configureSingleWeekTask(completed) {
-        var taskDate = weekPlanView.isoDate(weekPlanView.weekStart);
         taskManager.fakeWeekTasks = [{
                 id: 201,
                 title: "周计划真实点击链路任务",
-                date: taskDate,
+                date: weekPlanView.weekStart,
                 completed: completed,
                 categoryText: "测试"
             }];
@@ -236,6 +235,18 @@ TestCase {
         var todayIndex = todayWeekIndex();
         verify(todayIndex >= 0, "当前周视图应包含今天");
         return todayIndex > 0 ? todayIndex - 1 : todayIndex + 1;
+    }
+
+    function pastWeekIndex() {
+        var todayIndex = todayWeekIndex();
+        verify(todayIndex > 0, "当前测试日期应位于周二之后，才能覆盖过去日期");
+        return todayIndex - 1;
+    }
+
+    function futureWeekIndex() {
+        var todayIndex = todayWeekIndex();
+        verify(todayIndex < 6, "当前测试日期应位于周六之前，才能覆盖未来日期");
+        return todayIndex + 1;
     }
 
     function verifyNear(actual, expected, tolerance, message) {
@@ -510,24 +521,23 @@ TestCase {
         compare(taskManager.setTaskCompletedCallCount, 1);
     }
 
-    function test_weekPlanViewBlocksAddingTaskForNonTodayDate() {
+    function test_weekPlanViewBlocksAddingTaskForPastDate() {
         weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
         var originalPendingDate = weekPlanView.pendingAddDate;
-        var blockedIndex = nonTodayWeekIndex();
+        var blockedIndex = pastWeekIndex();
 
         weekPlanView.openAddTaskForDay(blockedIndex);
 
         compare(weekPlanView.isoDate(weekPlanView.pendingAddDate), weekPlanView.isoDate(originalPendingDate));
     }
 
-    function test_weekPlanViewBlocksStartFocusForNonTodayTask() {
+    function test_weekPlanViewHidesPastTaskExecutionActions() {
         weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
-        var blockedIndex = nonTodayWeekIndex();
-        var blockedDate = weekPlanView.isoDate(weekPlanView.dayDate(blockedIndex));
+        var blockedIndex = pastWeekIndex();
         taskManager.fakeWeekTasks = [{
                 id: 302,
-                title: "非今天任务",
-                date: blockedDate,
+                title: "过去任务",
+                date: weekPlanView.dayDate(blockedIndex),
                 completed: false,
                 categoryText: "测试"
             }];
@@ -537,10 +547,38 @@ TestCase {
 
         var focusButton = findChild(weekPlanView, "focusButton");
         verify(focusButton !== null);
+        compare(focusButton.visible, false);
         compare(focusButton.enabled, false);
-        mouseClick(focusButton, focusButton.width / 2, focusButton.height / 2);
+        var pastAddButton = findChild(weekPlanView, "weekAddButton-" + blockedIndex);
+        verify(pastAddButton !== null);
+        compare(pastAddButton.visible, false);
+        compare(pastAddButton.enabled, false);
 
         compare(weekStartFocusSpy.count, 0);
+    }
+
+    function test_weekPlanViewShowsFuturePlanningButNotExecutionActions() {
+        weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
+        var futureIndex = futureWeekIndex();
+        taskManager.fakeWeekTasks = [{
+                id: 303,
+                title: "未来任务",
+                date: weekPlanView.dayDate(futureIndex),
+                completed: false,
+                categoryText: "测试"
+            }];
+        weekPlanView.visible = true;
+        weekPlanView.refresh();
+        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 220);
+        compare(weekPlanView.tasksForDay(futureIndex).length, 1);
+
+        var focusButton = findChild(weekPlanView, "focusButton");
+        verify(focusButton !== null);
+        compare(focusButton.visible, false);
+        compare(focusButton.enabled, false);
+        var futureAddButton = findChild(weekPlanView, "weekAddButton-" + futureIndex);
+        verify(futureAddButton !== null);
+        compare(futureAddButton.enabled, true);
     }
 
     function test_focusButtonStatesLoadAndCompletedDisablesAction() {
