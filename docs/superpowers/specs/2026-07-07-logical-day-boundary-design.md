@@ -1,7 +1,7 @@
 # 逻辑日界点（凌晨归属前一天）设计文档
 
 日期：2026-07-07
-状态：方向经问答确认（可配置、默认凌晨 4 点）；规格 v6（补失效机制四缺口：定时器构造即排期 / 跨日补例行 / StatisticsView 时间源改逻辑今天 / MonthGoalView 全"今天"入口 + 当前期跟随）
+状态：方向经问答确认（可配置、默认凌晨 4 点）；规格 v7（修实现级三漏洞：统计 onChanged 只调 refresh 不 reset / Week+Month 落 `logicalToday` 可观察属性支撑响应式重算与位置保留 / 边界定时器 objectName 测试契约）
 
 ## 背景
 
@@ -119,21 +119,22 @@ C++ 侧 `dateTime.date()` 形式的日期提取（StatisticsService:40/53、Task
 | 位置 | 用途 |
 | --- | --- |
 | AddTaskDialog `selectedDate`（69） | 新任务默认日期 |
-| MonthGoalView `currentYear/currentMonth/selectedDay`（15-17） | 月历初始定位 |
+| MonthGoalView `currentYear/currentMonth/selectedDay`（15-17） | 月历初始定位——由 `root.logicalToday` 派生 |
 | TodayTaskView 结转横幅 `todayIso` | 与 overdue 判定一致 |
 | EditTaskDialog 今天/明天/后天 chip 的"今天"（isoWithOffset(0)） | 编辑日期快捷项 |
 | ExportDialog 快捷"本周/本月/今天"锚点 | 导出范围 |
-| **WeekPlanView `weekStart: mondayOf(new Date())`（13）** | 本周起点——改 `mondayOf(LogicalDay.todayDate(h, new Date()))` |
-| **WeekPlanView `isTodayIndex`（96-102，`new Date()`）** | "今天"高亮——与逻辑今天比 |
-| **WeekPlanView `isPastIndex`（105+）** | 过去日判定——与逻辑今天比 |
-| **WeekPlanView"本周"按钮 / 回到本周** | 重置 weekStart 到 `mondayOf(逻辑今天)` |
-| **StatisticsView `refreshCurrentDateSnapshot`（127-131）/ `currentDateProvider` 默认** | 快照默认取 `LogicalDay.todayDate(h, new Date())` 而非 `new Date()`——**只订阅 changed 不改时间源没意义**（见下失效节） |
-| **MonthGoalView"本月"按钮（301）** | `var today = LogicalDay.todayDate(h, new Date())` 后 `setMonth(...)` |
-| **MonthGoalView 日历"今天"高亮 `todayCell`（494-496）** | `var today = LogicalDay.todayDate(h, new Date())` 后比对 |
+| **WeekPlanView `weekStart: mondayOf(new Date())`（13）** | 本周起点——改 `mondayOf(root.logicalToday)` |
+| **WeekPlanView `isTodayIndex`（96-102，`new Date()`）** | "今天"高亮——与 `root.logicalToday` 比 |
+| **WeekPlanView `isPastIndex`（105+）** | 过去日判定——与 `root.logicalToday` 比 |
+| **WeekPlanView"本周"按钮 / 回到本周** | 重置 weekStart 到 `mondayOf(root.logicalToday)` |
+| **StatisticsView `refreshCurrentDateSnapshot`（127-131）** | **provider 返回值与默认 `new Date()` 都要过 `LogicalDay.todayDate(h, providedDate)`**——若只替换默认值，注入 provider 的测试（凌晨 1 点固定 Date）依旧走物理日、断言失败。即：`currentDateSnapshot = LogicalDay.todayDate(h, providedDate)` |
+| **MonthGoalView / WeekPlanView 新增 `property date logicalToday`** | 见下失效节——把 `new Date()` 换成函数内取逻辑今天**不是响应式绑定**，跨 4 点时没有属性变化驱动 `todayCell`/`isTodayIndex`/`isPastIndex` 重算；必须落成可观察属性，所有"今天"判定读它 |
+| **MonthGoalView"本月"按钮（301）** | `root.setMonth(logicalToday.getFullYear(), logicalToday.getMonth() + 1, logicalToday.getDate())` |
+| **MonthGoalView 日历"今天"高亮 `todayCell`（494-496）** | 与 `root.logicalToday` 比对（绑定依赖属性，跨日自动重算） |
 
 **WeekPlanView 必须纳入**——否则凌晨 0–4 点：今日任务页认为"还是昨天"、周计划页却认为"已是今天"，两页自相矛盾（正是此前"本周页面"问题的根源）。放计划二。
 
-**每个视图内所有"今天"入口必须一次改齐——初始值、按钮、单元格高亮都要**（漏一处就页内自相矛盾）：MonthGoalView 除初始 `currentYear/currentMonth/selectedDay`（15-17）外，"本月"按钮（301）与日历 `todayCell` 高亮（494-496）都读 `new Date()`，凌晨窗口会出现"初始选中昨天、点本月跳今天、今天高亮也是今天"三者打架，必须同改。StatisticsView 的时间源是 `refreshCurrentDateSnapshot`/`currentDateProvider`（不是散落的 `new Date()`），把默认快照改成逻辑今天即可全页跟随。
+**每个视图内所有"今天"入口必须一次改齐——初始值、按钮、单元格高亮都要**（漏一处就页内自相矛盾）：MonthGoalView 除初始 `currentYear/currentMonth/selectedDay`（15-17）外，"本月"按钮（301）与日历 `todayCell` 高亮（494-496）都读 `new Date()`，凌晨窗口会出现"初始选中昨天、点本月跳今天、今天高亮也是今天"三者打架，必须同改。StatisticsView 的时间源是 `refreshCurrentDateSnapshot`/`currentDateProvider`（不是散落的 `new Date()`），在快照函数内统一过 `LogicalDay.todayDate(h, providedDate)`（provider 注入值与默认值都过）即可全页跟随。
 
 **目标倒计时"还有 N 天"是 C++ 算的，不能只改 QML**（QML 只展示）。有两条路径，且 **model 层不得反向依赖 AppSettings 单例**（`src/models` 依赖 `src/services` 会污染模型测试/复用/序列化）——把设置依赖挡在 service 层，用注入基准日：
 
@@ -154,15 +155,18 @@ C++ 侧 `dateTime.date()` 形式的日期提取（StatisticsService:40/53、Task
 现状：今日页只在任务/分类/专注/例行变化时刷新（[TodayTaskView.qml:34](../../../qml/views/TodayTaskView.qml#L34)）。改"每日起始时间"后，已打开的今日/周/月/统计/倒计时**不会自动重查**；应用从 3:59 挂到 4:00 也不刷新。需要统一的"逻辑日失效"契约：
 
 - **新增 `LogicalDayService`**（C++ 单例，上下文属性 `logicalDayService`），信号 `changed()`，两个方法职责分明：
-  - `scheduleNextBoundary()`（私有）：`m_timer.start(LogicalDay::msUntilNextBoundary(QDateTime::currentDateTime(), h))`（单次 QTimer）。**只排期、不发信号**。
+  - 边界定时器：`m_boundaryTimer = new QTimer(this)`，**`setObjectName("logicalDayBoundaryTimer")`**——objectName 是测试契约（`findChild<QTimer*>` 可查），私有成员 QTimer 测试无合法访问路径；单次触发。
+  - `scheduleNextBoundary()`（私有）：`m_boundaryTimer->start(LogicalDay::msUntilNextBoundary(QDateTime::currentDateTime(), h))`。**只排期、不发信号**。
   - `onInvalidate()`（槽）：`emit changed()` **然后** `scheduleNextBoundary()`（发信号后立刻重排下一界点）。
-  - **构造时**：连接 `AppSettings::dayStartHourChanged` → `onInvalidate()`、`m_timer.timeout` → `onInvalidate()`，**然后立即调用一次 `scheduleNextBoundary()`**。这一步是关键——否则定时器要等第一次 `onInvalidate()` 才启动；用户若从不改设置，它永不启动、跨 4 点不会发 `changed()`。构造即排期保证"不改任何设置也能跨逻辑午夜自动刷新"。
+  - **构造时**：连接 `AppSettings::dayStartHourChanged` → `onInvalidate()`、`m_boundaryTimer->timeout` → `onInvalidate()`，**然后立即调用一次 `scheduleNextBoundary()`**。这一步是关键——否则定时器要等第一次 `onInvalidate()` 才启动；用户若从不改设置，它永不启动、跨 4 点不会发 `changed()`。构造即排期保证"不改任何设置也能跨逻辑午夜自动刷新"。
 - **跨逻辑日必须先补当日例行、再刷视图**（否则新逻辑日的例行任务尚未落库，视图刷新只拿到残缺数据）。现状 `RoutineManager::materializeToday()` 只在启动时调一次（[main.cpp:51](../../../src/main.cpp#L51)）。**在 main.cpp、QML 加载前**把 `LogicalDayService::changed` 连到 `RoutineManager::materializeToday()`——connect 先于 `engine.load(url)`，且 `materializeToday` 是直接连接、在 `changed()` 的同步派发中先于任何 QML 视图槽执行，保证"例行先生成、视图后刷新"。`materializeToday` 本就幂等（同日重复调不重复插），跨设置反复触发安全。
+- **Week/Month 新增可观察状态 `property date logicalToday`**——这是"今天判定能跨日自动重算 + 能保留用户位置"的前提。把 `new Date()` 换成函数内取逻辑今天**不是响应式绑定**：跨 4 点时没有任何属性变化，`todayCell`/`isTodayIndex`/`isPastIndex` 不会重新求值，`refresh()` 重查数据也救不了纯日期绑定。且更新前的旧值就是"旧逻辑今天"，是判断"用户是否停在当前期"的唯一依据：
+  - 初始化：`property date logicalToday: LogicalDay.todayDate(h, new Date())`（就地守卫取 h）；`onChanged` 时先留旧值再更新：`var prev = root.logicalToday; root.logicalToday = LogicalDay.todayDate(h, new Date())`。
 - **各视图/模型订阅** `logicalDayService.changed` 后各自重载：
   - TodayTaskView：`refresh()`；
-  - WeekPlanView：重算 `weekStart`/今天/过去索引 + `refresh()`；
-  - StatisticsView：`resetSelectedPeriodToCurrent()`（复用其"当前期跟随、历史期保留"逻辑——已在 [StatisticsView.qml:144](../../../qml/views/StatisticsView.qml#L144)），前提是时间源已改逻辑今天（见上 QML 映射表，仅订阅不改 `refreshCurrentDateSnapshot` 会刷成物理今天，与 `getTodayStats` 的逻辑今天打架）；
-  - MonthGoalView：**同"当前期跟随、历史期保留"决策**——若当前正显示逻辑今天所在月，则更新 `currentYear/currentMonth/selectedDay` 到新逻辑今天；若在浏览历史月，仅 `refresh()` 保留浏览位置（照搬 StatisticsView 的 applyCurrentPeriodSelection/resetSelected 思路，不硬跳走用户）；
+  - WeekPlanView：所有今天/过去判定（`isTodayIndex`/`isPastIndex`）与 `weekStart` 初始值/"本周"按钮都基于 `logicalToday`；`onChanged`：**仅当原 `weekStart` 等于 `mondayOf(prev)`（用户停在逻辑本周）才 `weekStart = mondayOf(新 logicalToday)`**，在浏览历史/未来周则保留位置；随后 `refresh()`。否则周日跨到周一时会把浏览历史周的用户强制拉走；
+  - StatisticsView：`onChanged` **只调 `refresh()`**——[refresh():332](../../../qml/views/StatisticsView.qml#L332) 已调 [syncCurrentDateSnapshotForRefresh:150](../../../qml/views/StatisticsView.qml#L150)，它正是"停在当前期才跟随、历史期保留"的实现。**不要调 `resetSelectedPeriodToCurrent()`**——该函数按注释语义无条件重置回当前期（[144-148](../../../qml/views/StatisticsView.qml#L144)，供"今日/本周/本月"菜单点击用），会把浏览历史期的用户强制拉走。时间源前提见上 QML 映射表（provider 返回值也过 `LogicalDay.todayDate`）；
+  - MonthGoalView：初始定位、"本月"按钮、`todayCell` 高亮都基于 `logicalToday`；`onChanged`：**仅当原 `selectedDay`+`currentYear/currentMonth` 恰等于 `prev`（用户选中的就是旧逻辑今天）才把年月选中日跳到新 `logicalToday`**——只比"是否当前月"不够：用户可能在当前月查看 7 号，跨日后不应被强制跳到 8 号；其余情况保留位置、仅 `refresh()`；
   - Countdown：服务侧 `syncReferenceDate` 已由 `dayStartHourChanged` 覆盖设置变更，跨边界再由 `changed` 触发一次 `syncReferenceDate`（在 CountdownService 内连接 `logicalDayService.changed`）。
 - **QML 订阅守卫**：视图用 `Connections { target: typeof logicalDayService !== "undefined" ? logicalDayService : null; ignoreUnknownSignals: true; function onChanged() {…} }`。QML 测试单独实例化视图、无此上下文对象，直接引用会 ReferenceError；`typeof` 守卫 + `ignoreUnknownSignals` 让缺服务时安全降级（同现有 categoriesChanged 订阅先例）。
 - **计划归属**：`LogicalDayService` + main.cpp 的 materializeToday 连接 + StatisticsView 订阅进**计划一**（设置在计划一就能改，统计与例行必须随改刷新）；Today/Week/Month/Countdown 订阅进**计划二**。
@@ -199,9 +203,10 @@ focus_sessions 存时间戳、按天纯属聚合逻辑——改 SQL 修饰符即
 - **ExportService**：导出范围按逻辑日过滤（01:00 session 落在前一天的范围内）。
 - getTodayStats/getTodayTasks/materializeToday：验证等价于以 `LogicalDay::today(h)` 为日的对应查询（不模拟真实凌晨）。
 - **倒计时（分层 + 双路径 + 通知）**：`CountdownGoal::daysRemainingFrom(base)` 纯函数（不读单例，model 测试不碰全局）；`CountdownModel::setReferenceDate` 后 DaysRemainingRole 随基准日变（发 dataChanged）；`syncReferenceDate` 后**同时断言** DaysRemainingRole、`primaryGoal().daysRemaining`、`primaryGoalChanged` 发出（三者同一基准日，防"列表更新了横幅没更新"）。
-- **LogicalDayService**：`LogicalDay::msUntilNextBoundary(固定 now, h)` 纯函数穷举（now 在界点前/后、跨日）；**构造后定时器即启动**（新建实例后其内部 QTimer `isActive()` 为真——覆盖"不改设置也会排期"这一关键修复）；改 `dayStartHour` → `changed()` 发出（SignalSpy）；不测真实边界定时器等待。
+- **LogicalDayService**：`LogicalDay::msUntilNextBoundary(固定 now, h)` 纯函数穷举（now 在界点前/后、跨日）；**构造后定时器即启动**——经 objectName 契约访问：`auto* t = service->findChild<QTimer*>("logicalDayBoundaryTimer"); QVERIFY(t && t->isActive() && t->remainingTime() > 0)`（私有成员无合法测试路径，objectName 是唯一约定入口）；改 `dayStartHour` → `changed()` 发出（SignalSpy）；不测真实边界定时器等待。
 - **跨逻辑日补例行**：连接 `LogicalDayService::changed` → `RoutineManager::materializeToday` 后，emit `changed` → 断言新逻辑日的例行任务已落库；再次 emit → 断言不重复插入（幂等）。
-- **失效刷新（QML）**：mock `logicalDayService` 直接 emit `changed`，断言各视图重查（Today/Week/Month/Statistics）；**StatisticsView 时间源**：`currentDateProvider` 注入固定凌晨 1 点 Date（h=4）→ `refreshCurrentDateSnapshot` 后快照为前一逻辑日、`selectedDate` 落前一天（证明改了时间源、非仅订阅信号）。
+- **失效刷新（QML）**：mock `logicalDayService` 直接 emit `changed`，断言各视图重查（Today/Week/Month/Statistics）；**StatisticsView 时间源**：`currentDateProvider` 注入固定凌晨 1 点 Date（h=4）→ `refreshCurrentDateSnapshot` 后快照为前一逻辑日、`selectedDate` 落前一天（证明 provider 值也过了 `LogicalDay.todayDate`、非仅换默认值）。
+- **"当前期跟随、历史期保留"（QML）**：WeekPlanView——停在逻辑本周时 emit `changed`（mock 换 `logicalToday`）→ `weekStart` 跳到新逻辑周；先翻到历史周再 emit → `weekStart` 不动。MonthGoalView——`selectedDay` 为旧逻辑今天时 emit → 年月选中日跳到新 `logicalToday`；选中当前月其他日（如 7 号）emit → 选中不跳走。`logicalToday` 属性变化后断言 `isTodayIndex`/`todayCell` 判定随之重算（响应式，非函数内取时）。
 
 **QML**：`LogicalDay.js` `todayDate/todayIso(dayStartHour, nowDate)` 用**固定 nowDate** 穷举边界（凌晨 1 点 h=4 → 前一天；两函数返回类型分别为 Date / ISO 串）；设置项 `settingsDayStartRow`/`settingsDayStartValue`/`settingsDayStartPlus` 绑定/写入 `dayStartHour`（点加断言 mock 变化、缺 ref 不写）。
 
@@ -211,4 +216,4 @@ focus_sessions 存时间戳、按天纯属聚合逻辑——改 SQL 修饰符即
 - QML：新增 LogicalDay.js、SettingsDialog（步进器行）、AddTaskDialog/MonthGoalView（初始 + 本月按钮 + todayCell 高亮）/TodayTaskView/**WeekPlanView**/EditTaskDialog/ExportDialog 的"今天"、**StatisticsView 时间源改逻辑今天** + 各视图订阅 `logicalDayService.changed`（守卫 `typeof … : null` + `ignoreUnknownSignals`；倒计时是 C++）。
 - 拆两份计划：
   - **计划一（核心 + 专注归日全口径一致 + 失效基建）**：AppSettings.dayStartHour（含归一化）+ LogicalDay.h + **LogicalDayService（构造即排期）** + **main.cpp 的 changed → materializeToday 连接** + **所有 focus_sessions 分桶入口**（StatisticsService 4 处 + FocusHistoryService querySessions 命名重构 + ExportService 1 处）+ StatisticsService 的 today + **StatisticsView 时间源改逻辑今天 + 订阅 changed** + 设置 UI 步进器。**FocusHistoryService/ExportService 必须与 StatisticsService 同批**——否则口径打架、假完成。交付：专注归日全口径统一、可调日界点、改设置即刷新统计、跨日界自动补例行。
-  - **计划二（任务/例行/倒计时/周计划/QML 今天 + 各视图失效订阅）**：TaskManager（今日任务 + 结转）、RoutineManager（例行）、**倒计时（分层：CountdownGoal daysRemainingFrom 纯 + CountdownModel referenceDate + CountdownService syncReferenceDate + 三条 daysRemaining 路径同基准日 + primaryGoalChanged）**、QML 各"今天"（含 MonthGoalView 本月按钮/todayCell、WeekPlanView weekStart/isTodayIndex/isPastIndex/本周按钮）、Today/Week/Month/Countdown 订阅 `logicalDayService.changed`（含 Month/Stat 的"当前期跟随、历史期保留"决策）。交付：全 app "今天"统一到逻辑日、跨设置/跨日界自动刷新。
+  - **计划二（任务/例行/倒计时/周计划/QML 今天 + 各视图失效订阅）**：TaskManager（今日任务 + 结转）、RoutineManager（例行）、**倒计时（分层：CountdownGoal daysRemainingFrom 纯 + CountdownModel referenceDate + CountdownService syncReferenceDate + 三条 daysRemaining 路径同基准日 + primaryGoalChanged）**、QML 各"今天"（含 MonthGoalView 本月按钮/todayCell、WeekPlanView weekStart/isTodayIndex/isPastIndex/本周按钮）、Today/Week/Month/Countdown 订阅 `logicalDayService.changed`（**Week/Month 落 `logicalToday` 可观察属性**，含"当前期跟随、历史期保留"决策）。交付：全 app "今天"统一到逻辑日、跨设置/跨日界自动刷新。
