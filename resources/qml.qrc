@@ -20,6 +20,7 @@
         <file alias="qml/components/DurationStepper.qml">../qml/components/DurationStepper.qml</file>
         <file alias="qml/components/FocusRing.qml">../qml/components/FocusRing.qml</file>
         <file alias="qml/components/FocusImmersiveOverlay.qml">../qml/components/FocusImmersiveOverlay.qml</file>
+        <file alias="qml/components/ImmersionWindowSync.qml">../qml/components/ImmersionWindowSync.qml</file>
         <file alias="qml/components/FocusTimeline.qml">../qml/components/FocusTimeline.qml</file>
         <file alias="qml/components/CompletionParticles.qml">../qml/components/CompletionParticles.qml</file>
         <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
