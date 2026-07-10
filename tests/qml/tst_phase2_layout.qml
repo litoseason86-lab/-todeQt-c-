@@ -254,7 +254,7 @@ TestCase {
         statisticsView.z = 10
         statisticsView.visible = false
         statisticsView.currentDateProvider = function() {
-            return todaySnapshot
+            return noonOf(todaySnapshot)
         }
         statisticsView.currentDateSnapshot = todaySnapshot
         statisticsView.selectedDate = todaySnapshot
@@ -273,6 +273,13 @@ TestCase {
     function dateOnly(value) {
         var date = new Date(value)
         date.setHours(0, 0, 0, 0)
+        return date
+    }
+
+    function noonOf(value) {
+        // 模拟“现在”统一用正午，任何合法日界点（0-6）下都归输入日。
+        var date = new Date(value)
+        date.setHours(12, 0, 0, 0)
         return date
     }
 
@@ -785,7 +792,7 @@ TestCase {
         var simulatedTomorrow = addDays(simulatedToday, 1)
         var providedDate = simulatedToday
         statisticsView.currentDateProvider = function() {
-            return providedDate
+            return noonOf(providedDate)
         }
         statisticsView.currentDateSnapshot = simulatedToday
         statisticsView.selectedDate = simulatedToday

@@ -4,6 +4,7 @@ import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
 import "../components"
+import "../LogicalDay.js" as LogicalDay
 import "StatisticsFormat.js" as StatFmt
 
 Item {
@@ -124,10 +125,31 @@ Item {
         }
     }
 
+    Connections {
+        // 改设置或跨逻辑日只触发 refresh；refresh 内已有“当前期跟随、历史期保留”。
+        // resetSelectedPeriodToCurrent 是菜单的强制重置语义，不能在后台失效时调用。
+        // qmllint disable unqualified
+        target: typeof logicalDayService !== "undefined" ? logicalDayService : null
+        // qmllint enable unqualified
+        ignoreUnknownSignals: true
+
+        function onChanged() {
+            root.refresh()
+        }
+    }
+
     function refreshCurrentDateSnapshot() {
         var providedDate = root.currentDateProvider ? root.currentDateProvider() : new Date()
         var normalizedDate = new Date(providedDate)
-        currentDateSnapshot = isNaN(normalizedDate.getTime()) ? new Date() : normalizedDate
+        if (isNaN(normalizedDate.getTime())) {
+            normalizedDate = new Date()
+        }
+        // provider 注入值与真实现在都必须过逻辑日换算，否则测试和生产会形成两套口径。
+        // qmllint disable unqualified
+        var hour = (typeof appSettings !== "undefined" && appSettings)
+                ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        currentDateSnapshot = LogicalDay.todayDate(hour, normalizedDate)
     }
 
     function applyCurrentPeriodSelection() {
