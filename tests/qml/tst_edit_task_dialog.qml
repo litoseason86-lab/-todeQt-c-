@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../qml/components"
 import "../../qml"
+import "../../qml/LogicalDay.js" as LogicalDay
 
 TestCase {
     id: testCase
@@ -9,6 +10,12 @@ TestCase {
     when: windowShown
     width: 700
     height: 500
+
+    QtObject {
+        id: appSettings
+
+        property int dayStartHour: 4
+    }
 
     QtObject {
         id: categoryManagerMock
@@ -41,7 +48,8 @@ TestCase {
     }
 
     function isoWithOffset(offset) {
-        var d = new Date()
+        // 测试必须与组件使用同一逻辑日，否则凌晨 0~4 点会把“今天”错当成物理新日。
+        var d = LogicalDay.todayDate(appSettings.dayStartHour, new Date())
         d.setDate(d.getDate() + offset)
         return Qt.formatDate(d, "yyyy-MM-dd")
     }
