@@ -1,7 +1,9 @@
 #include "TaskManager.h"
 
 #include "../models/Task.h"
+#include "AppSettings.h"
 #include "DatabaseManager.h"
+#include "LogicalDay.h"
 
 #include <QDebug>
 #include <QDateTime>
@@ -349,7 +351,7 @@ bool TaskManager::deleteTask(int taskId)
 
 QVariantList TaskManager::getTodayTasks() const
 {
-    return getTasksByDate(QDate::currentDate());
+    return getTasksByDate(LogicalDay::today(AppSettings::instance()->dayStartHour()));
 }
 
 QVariantList TaskManager::getTasksByDate(const QDate& date) const
@@ -468,7 +470,8 @@ QVariantList TaskManager::getOverdueUncompletedTasks() const
     query.prepare(taskSelectSql() + QStringLiteral(
         "WHERE t.date < :today AND t.completed = 0 AND t.routine_id IS NULL "
         "ORDER BY t.date ASC, t.id ASC"));
-    query.bindValue(QStringLiteral(":today"), QDate::currentDate().toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":today"),
+                    LogicalDay::today(AppSettings::instance()->dayStartHour()).toString(Qt::ISODate));
 
     if (!query.exec()) {
         qWarning() << "Failed to get overdue tasks:" << query.lastError().text();
@@ -499,7 +502,8 @@ bool TaskManager::moveTasksToToday(const QVariantList& taskIds)
         return false;
     }
 
-    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    const QString today = LogicalDay::today(
+                              AppSettings::instance()->dayStartHour()).toString(Qt::ISODate);
     for (const QVariant& idValue : taskIds) {
         const int taskId = idValue.toInt();
         if (!isValidTaskId(taskId)) {

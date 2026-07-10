@@ -469,6 +469,7 @@ private slots:
     void deletingAssociatedCategoryDetachesTasks();
     void deletingLegacyTextCategoryClearsTaskCategoryText();
     void taskManagerReturnsFullCategoryInfo();
+    void taskManagerTodayUsesLogicalToday();
     void legacyAddTaskWithTextCategoryRemainsCompatible();
     void updateTaskChangesTitleCategoryAndDate();
     void updateTaskRejectsBlankTitleAndInvalidId();
@@ -810,7 +811,7 @@ void ServiceTests::addTaskRejectsBlankTitle()
 {
     QSignalSpy spy(TaskManager::instance(), &TaskManager::tasksChanged);
 
-    QVERIFY(!TaskManager::instance()->addTask("   ", QVariant(QDate::currentDate()), "数学"));
+    QVERIFY(!TaskManager::instance()->addTask("   ", QVariant(logicalToday()), "数学"));
 
     QCOMPARE(spy.count(), 0);
     QCOMPARE(TaskManager::instance()->getTodayTasks().size(), 0);
@@ -820,7 +821,7 @@ void ServiceTests::addTaskPersistsTrimmedTitleAndEmitsChange()
 {
     QSignalSpy spy(TaskManager::instance(), &TaskManager::tasksChanged);
 
-    QVERIFY(TaskManager::instance()->addTask("  数据结构第三章  ", QVariant(QDate::currentDate()), "数据结构"));
+    QVERIFY(TaskManager::instance()->addTask("  数据结构第三章  ", QVariant(logicalToday()), "数据结构"));
 
     QCOMPARE(spy.count(), 1);
     const QVariantList tasks = TaskManager::instance()->getTodayTasks();
@@ -834,7 +835,7 @@ void ServiceTests::addTaskPersistsTrimmedTitleAndEmitsChange()
 
 void ServiceTests::addTaskAcceptsIsoDateStringFromQml()
 {
-    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    const QString today = logicalToday().toString(Qt::ISODate);
 
     QVERIFY(TaskManager::instance()->addTask("政治选择题", today, "政治"));
 
@@ -845,7 +846,7 @@ void ServiceTests::addTaskAcceptsIsoDateStringFromQml()
 
 void ServiceTests::deleteTaskPreservesFocusSessionHistory()
 {
-    QVERIFY(TaskManager::instance()->addTask("操作系统真题", QVariant(QDate::currentDate()), "操作系统"));
+    QVERIFY(TaskManager::instance()->addTask("操作系统真题", QVariant(logicalToday()), "操作系统"));
     const int taskId = TaskManager::instance()->getTodayTasks().first().toMap().value("id").toInt();
 
     QSqlQuery insert(DatabaseManager::instance()->database());
@@ -853,8 +854,8 @@ void ServiceTests::deleteTaskPreservesFocusSessionHistory()
         "INSERT INTO focus_sessions (task_id, start_time, end_time, duration) "
         "VALUES (:taskId, :startTime, :endTime, 1200)"));
     insert.bindValue(QStringLiteral(":taskId"), taskId);
-    insert.bindValue(QStringLiteral(":startTime"), dateTimeText(QDate::currentDate()));
-    insert.bindValue(QStringLiteral(":endTime"), dateTimeText(QDate::currentDate(), QStringLiteral("12:30:00")));
+    insert.bindValue(QStringLiteral(":startTime"), dateTimeText(logicalToday()));
+    insert.bindValue(QStringLiteral(":endTime"), dateTimeText(logicalToday(), QStringLiteral("12:30:00")));
     QVERIFY(insert.exec());
 
     QVERIFY(TaskManager::instance()->deleteTask(taskId));
@@ -1761,7 +1762,7 @@ void ServiceTests::getCategoryStatsAggregatesDurationsAndPercentages()
 
 void ServiceTests::statisticsIgnoresInvalidShortSessions()
 {
-    const QDate today = QDate::currentDate();
+    const QDate today = logicalToday();
     const int mathTaskId = insertTaskRow(QStringLiteral("数学短记录"), today, QStringLiteral("数学"));
     const int englishTaskId = insertTaskRow(QStringLiteral("英语有效记录"), today, QStringLiteral("英语"));
     QVERIFY(mathTaskId > 0);
@@ -2262,7 +2263,7 @@ void ServiceTests::deletingAssociatedCategoryDetachesTasks()
     const int categoryId = manager->addCategory(QStringLiteral("408"), QStringLiteral("#abcdef"));
     QVERIFY(categoryId > 0);
 
-    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("计组错题"), QVariant(QDate::currentDate()), categoryId));
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("计组错题"), QVariant(logicalToday()), categoryId));
 
     // 删除科目不应该删除任务，只应该把任务变成未分类。
     QVERIFY(manager->canDeleteCategory(categoryId));
@@ -2283,11 +2284,11 @@ void ServiceTests::deletingLegacyTextCategoryClearsTaskCategoryText()
     QVERIFY(categoryId > 0);
     QVERIFY(insertTaskRowWithCategoryId(
                 QStringLiteral("旧文本任务"),
-                QDate::currentDate(),
+                logicalToday(),
                 -1,
                 QStringLiteral("网络原理"),
                 false,
-                dateTimeText(QDate::currentDate())) > 0);
+                dateTimeText(logicalToday())) > 0);
 
     // 旧数据只有文本科目，也必须跟新 category_id 逻辑保持同样结果。
     QVERIFY(manager->canDeleteCategory(categoryId));
@@ -2307,7 +2308,7 @@ void ServiceTests::taskManagerReturnsFullCategoryInfo()
     const int categoryId = manager->addCategory(QStringLiteral("数据结构"), QStringLiteral("#123abc"));
     QVERIFY(categoryId > 0);
 
-    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("图论专题"), QVariant(QDate::currentDate()), categoryId));
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("图论专题"), QVariant(logicalToday()), categoryId));
 
     const QVariantList tasks = TaskManager::instance()->getTodayTasks();
     QCOMPARE(tasks.size(), 1);
@@ -2329,9 +2330,32 @@ void ServiceTests::taskManagerReturnsFullCategoryInfo()
     QCOMPARE(nestedCategory.value(QStringLiteral("color")).toString(), QStringLiteral("#123abc"));
 }
 
+void ServiceTests::taskManagerTodayUsesLogicalToday()
+{
+    AppSettings::instance()->setDayStartHour(4);
+    TaskManager* manager = TaskManager::instance();
+
+    QVERIFY(manager->addTask(QStringLiteral("逻辑今日任务"), QVariant(logicalToday()), QString()));
+    QVERIFY(manager->addTask(QStringLiteral("逻辑昨日任务"),
+                             QVariant(logicalToday().addDays(-1)), QString()));
+
+    QCOMPARE(manager->getTodayTasks(), manager->getTasksByDate(logicalToday()));
+    QCOMPARE(manager->getTodayTasks().size(), 1);
+
+    const QVariantList overdue = manager->getOverdueUncompletedTasks();
+    QCOMPARE(overdue.size(), 1);
+    QCOMPARE(overdue.first().toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("逻辑昨日任务"));
+
+    QVERIFY(manager->moveTasksToToday(
+        QVariantList{overdue.first().toMap().value(QStringLiteral("id"))}));
+    QCOMPARE(manager->getTasksByDate(logicalToday()).size(), 2);
+    QVERIFY(manager->getOverdueUncompletedTasks().isEmpty());
+}
+
 void ServiceTests::legacyAddTaskWithTextCategoryRemainsCompatible()
 {
-    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("政治选择题"), QVariant(QDate::currentDate()), QStringLiteral("政治")));
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("政治选择题"), QVariant(logicalToday()), QStringLiteral("政治")));
 
     const QVariantList tasks = TaskManager::instance()->getTodayTasks();
     QCOMPARE(tasks.size(), 1);
@@ -2378,7 +2402,7 @@ void ServiceTests::updateTaskChangesTitleCategoryAndDate()
 void ServiceTests::updateTaskRejectsBlankTitleAndInvalidId()
 {
     TaskManager* manager = TaskManager::instance();
-    const int taskId = insertTaskRow(QStringLiteral("保持不变"), QDate::currentDate());
+    const int taskId = insertTaskRow(QStringLiteral("保持不变"), logicalToday());
     QVERIFY(taskId > 0);
 
     QSignalSpy changedSpy(manager, &TaskManager::tasksChanged);
@@ -2386,17 +2410,17 @@ void ServiceTests::updateTaskRejectsBlankTitleAndInvalidId()
     QVERIFY(!manager->updateTask(taskId,
                                  QStringLiteral("   "),
                                  -1,
-                                 QDate::currentDate().toString(Qt::ISODate)));
+                                 logicalToday().toString(Qt::ISODate)));
     QTest::ignoreMessage(QtWarningMsg, "Failed to update task: invalid task id -5");
     QVERIFY(!manager->updateTask(-5,
                                  QStringLiteral("有效标题"),
                                  -1,
-                                 QDate::currentDate().toString(Qt::ISODate)));
+                                 logicalToday().toString(Qt::ISODate)));
     QTest::ignoreMessage(QtWarningMsg, "Failed to update task: task not found 999999");
     QVERIFY(!manager->updateTask(999999,
                                  QStringLiteral("有效标题"),
                                  -1,
-                                 QDate::currentDate().toString(Qt::ISODate)));
+                                 logicalToday().toString(Qt::ISODate)));
     QCOMPARE(changedSpy.count(), 0);
 
     const QVariantList tasks = manager->getTodayTasks();
@@ -2408,7 +2432,7 @@ void ServiceTests::updateTaskRejectsBlankTitleAndInvalidId()
 void ServiceTests::overdueQueryExcludesTodayCompletedAndRoutine()
 {
     TaskManager* manager = TaskManager::instance();
-    const QDate today = QDate::currentDate();
+    const QDate today = logicalToday();
     const QDate yesterday = today.addDays(-1);
     const QDate lastWeek = today.addDays(-6);
 
@@ -2438,7 +2462,7 @@ void ServiceTests::overdueQueryExcludesTodayCompletedAndRoutine()
 void ServiceTests::moveTasksToTodayIsTransactional()
 {
     TaskManager* manager = TaskManager::instance();
-    const QDate yesterday = QDate::currentDate().addDays(-1);
+    const QDate yesterday = logicalToday().addDays(-1);
     const int first = insertTaskRow(QStringLiteral("结转一"), yesterday);
     const int second = insertTaskRow(QStringLiteral("结转二"), yesterday);
     QVERIFY(first > 0);
@@ -2668,7 +2692,7 @@ void ServiceTests::exportRejectsInvalidDateRangeAndUnwritablePath()
 
 void ServiceTests::stopFocusCompletesTaskAfterFiveMinutes()
 {
-    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("五分钟任务"), QDate::currentDate(), QString()));
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("五分钟任务"), logicalToday(), QString()));
     const int taskId = TaskManager::instance()->getTodayTasks().first().toMap().value(QStringLiteral("id")).toInt();
 
     QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("五分钟任务")));
@@ -2685,7 +2709,7 @@ void ServiceTests::stopFocusCompletesTaskAfterFiveMinutes()
 
 void ServiceTests::stopFocusUnderFiveMinutesKeepsTaskPending()
 {
-    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("未满五分钟任务"), QDate::currentDate(), QString()));
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("未满五分钟任务"), logicalToday(), QString()));
     const int taskId = TaskManager::instance()->getTodayTasks().first().toMap().value(QStringLiteral("id")).toInt();
 
     QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("未满五分钟任务")));
@@ -2699,7 +2723,7 @@ void ServiceTests::stopFocusUnderFiveMinutesKeepsTaskPending()
 
 void ServiceTests::stopFocusUnderThreeMinutesDiscardsInvalidSession()
 {
-    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("无效短专注"), QDate::currentDate(), QString()));
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("无效短专注"), logicalToday(), QString()));
     const int taskId = TaskManager::instance()->getTodayTasks().first().toMap().value(QStringLiteral("id")).toInt();
 
     QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("无效短专注")));
