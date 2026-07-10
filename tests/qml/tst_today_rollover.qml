@@ -19,8 +19,10 @@ TestCase {
         property var overdueData: []
         property var movedIds: []
         property int moveCalls: 0
+        property int todayCalls: 0
 
         function getTodayTasks() {
+            todayCalls += 1
             return todayTasksData
         }
 
@@ -62,6 +64,12 @@ TestCase {
         function updateTask(id, title, categoryId, date) {
             return true
         }
+    }
+
+    QtObject {
+        id: logicalDayService
+
+        signal changed()
     }
 
     QtObject {
@@ -109,6 +117,7 @@ TestCase {
         taskManager.overdueData = []
         taskManager.movedIds = []
         taskManager.moveCalls = 0
+        taskManager.todayCalls = 0
         settingsMock.rolloverIgnoredDate = ""
         view.pendingDeleteTaskId = -1
         view.refresh()
@@ -194,5 +203,13 @@ TestCase {
         verify(container)
         verify(Qt.colorEqual(container.color, Theme.glassCard))
         verify(Qt.colorEqual(container.border.color, Theme.glassBorder))
+    }
+
+    function test_logicalDayChangedTriggersRefresh() {
+        var before = taskManager.todayCalls
+
+        logicalDayService.changed()
+
+        verify(taskManager.todayCalls > before)
     }
 }

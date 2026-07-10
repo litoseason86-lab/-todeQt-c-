@@ -79,6 +79,19 @@ Item {
         }
     }
 
+    Connections {
+        // 逻辑日失效后重新查询今日任务与结转。main.cpp 的直连会先补齐新日例行任务，
+        // 因此这个视图槽只负责重载，不重复承担跨层调度职责。
+        // qmllint disable unqualified
+        target: typeof logicalDayService !== "undefined" ? logicalDayService : null
+        // qmllint enable unqualified
+        ignoreUnknownSignals: true
+
+        function onChanged() {
+            root.refresh()
+        }
+    }
+
     function todayIsoDate() {
         // 结转忽略日期与 TaskManager 的逾期判定必须使用同一逻辑今天。
         // qmllint disable unqualified
