@@ -421,6 +421,7 @@ private slots:
     void statisticsTodayUsesLogicalToday();
     void getDayStatsUsesSpecifiedHistoricalDate();
     void getDayComparisonReturnsTrendTextAndRejectsInvalidDate();
+    void focusHistoryBucketsSessionsByLogicalDay();
     void focusHistoryReturnsMonthSessionsWithinBoundaries();
     void focusHistoryReturnsDayTotalsAndFormattedDurations();
     void focusHistoryFallsBackWhenTaskWasDeleted();
@@ -960,6 +961,27 @@ void ServiceTests::getDayComparisonReturnsTrendTextAndRejectsInvalidDate()
     QCOMPARE(invalid.value(QStringLiteral("hasData")).toBool(), false);
 }
 
+void ServiceTests::focusHistoryBucketsSessionsByLogicalDay()
+{
+    AppSettings::instance()->setDayStartHour(4);
+    FocusHistoryService* service = FocusHistoryService::instance();
+
+    const QDate monthFirst(2026, 8, 1);
+    const int taskId = insertTaskRow(QStringLiteral("跨月凌晨"), monthFirst);
+    QVERIFY(taskId > 0);
+    QVERIFY(insertFocusSessionRowAt(taskId, monthFirst, QStringLiteral("01:00:00"),
+                                    QStringLiteral("01:30:00"), 1800));
+
+    const QVariantList julySessions = service->getMonthSessions(2026, 7);
+    QCOMPARE(julySessions.size(), 1);
+    QCOMPARE(julySessions.first().toMap().value(QStringLiteral("date")).toString(),
+             QStringLiteral("2026-07-31"));
+    QVERIFY(service->getMonthSessions(2026, 8).isEmpty());
+
+    QCOMPARE(service->getDaySessions(QDate(2026, 7, 31)).size(), 1);
+    QVERIFY(service->getDaySessions(monthFirst).isEmpty());
+}
+
 void ServiceTests::focusHistoryReturnsMonthSessionsWithinBoundaries()
 {
     const QDate targetDate(2026, 6, 10);
@@ -991,9 +1013,11 @@ void ServiceTests::focusHistoryReturnsMonthSessionsWithinBoundaries()
 
     const QVariantList sessions = FocusHistoryService::instance()->getMonthSessions(2026, 6);
 
-    QCOMPARE(sessions.size(), 2);
+    // 7月1日 00:00 在 4 点日界前，逻辑日仍是 6月30日，因此属于 6 月历史。
+    QCOMPARE(sessions.size(), 3);
     const QVariantMap first = sessions.at(0).toMap();
     const QVariantMap second = sessions.at(1).toMap();
+    const QVariantMap third = sessions.at(2).toMap();
     QCOMPARE(first.value(QStringLiteral("taskId")).toInt(), mathTaskId);
     QCOMPARE(first.value(QStringLiteral("taskTitle")).toString(), QStringLiteral("数学二"));
     QCOMPARE(first.value(QStringLiteral("startTime")).toString(), QStringLiteral("2026-06-10T15:37:00"));
@@ -1001,6 +1025,8 @@ void ServiceTests::focusHistoryReturnsMonthSessionsWithinBoundaries()
     QCOMPARE(first.value(QStringLiteral("durationSeconds")).toInt(), 7020);
     QCOMPARE(first.value(QStringLiteral("date")).toString(), QStringLiteral("2026-06-10"));
     QCOMPARE(second.value(QStringLiteral("taskTitle")).toString(), QStringLiteral("英语阅读"));
+    QCOMPARE(third.value(QStringLiteral("startTime")).toString(), QStringLiteral("2026-07-01T00:00:00"));
+    QCOMPARE(third.value(QStringLiteral("date")).toString(), QStringLiteral("2026-06-30"));
 }
 
 void ServiceTests::focusHistoryReturnsDayTotalsAndFormattedDurations()

@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <QVariantMap>
 
 class FocusHistoryService : public QObject
 {
@@ -25,9 +26,10 @@ public:
 private:
     explicit FocusHistoryService(QObject* parent = nullptr);
 
-    // whereClause 只接收本类内部拼出的条件；外部值必须走 bindValues，避免 SQL 拼接污染。
+    // whereClause 只接收本类内部条件；命名占位符允许 :shift 在 SELECT/WHERE 复用，
+    // 其余外部值统一走 namedBinds，避免位置索引随 SQL 结构变化而错位。
     QVariantList querySessions(const QString& whereClause,
-                               const QVariantList& bindValues = QVariantList()) const;
+                               const QVariantMap& namedBinds = QVariantMap()) const;
 
     // 查询方法是 const，但错误信息属于“最近一次调用状态”，不改变业务数据本身。
     mutable QString m_lastError;

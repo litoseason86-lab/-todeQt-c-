@@ -1,7 +1,9 @@
 #include "FocusHistoryService.h"
 
+#include "AppSettings.h"
 #include "DatabaseManager.h"
 #include "FocusSessionRules.h"
+#include "LogicalDay.h"
 
 #include <QDebug>
 #include <QSqlDatabase>
@@ -45,8 +47,10 @@ QVariantList FocusHistoryService::getMonthSessions(int year, int month) const
 
     // 使用左闭右开区间：[当月第一天, 下月第一天)。跨年由 QDate 处理，避免手写 12 月边界。
     const QDate nextMonthStart = startDate.addMonths(1);
-    return querySessions(QStringLiteral("date(fs.start_time) >= ? AND date(fs.start_time) < ?"),
-                         QVariantList{startDate.toString(Qt::ISODate), nextMonthStart.toString(Qt::ISODate)});
+    return querySessions(QStringLiteral("date(fs.start_time, :shift) >= :startDate "
+                                        "AND date(fs.start_time, :shift) < :endDate"),
+                         QVariantMap{{QStringLiteral(":startDate"), startDate.toString(Qt::ISODate)},
+                                     {QStringLiteral(":endDate"), nextMonthStart.toString(Qt::ISODate)}});
 }
 
 QVariantList FocusHistoryService::getDaySessions(const QDate& date) const
@@ -57,8 +61,8 @@ QVariantList FocusHistoryService::getDaySessions(const QDate& date) const
         return QVariantList();
     }
 
-    return querySessions(QStringLiteral("date(fs.start_time) = ?"),
-                         QVariantList{date.toString(Qt::ISODate)});
+    return querySessions(QStringLiteral("date(fs.start_time, :shift) = :date"),
+                         QVariantMap{{QStringLiteral(":date"), date.toString(Qt::ISODate)}});
 }
 
 int FocusHistoryService::getDayTotalDuration(const QDate& date) const
@@ -161,7 +165,8 @@ int FocusHistoryService::cleanupInvalidSessions()
     return query.numRowsAffected();
 }
 
-QVariantList FocusHistoryService::querySessions(const QString& whereClause, const QVariantList& bindValues) const
+QVariantList FocusHistoryService::querySessions(const QString& whereClause,
+                                                const QVariantMap& namedBinds) const
 {
     m_lastError.clear();
     QVariantList sessions;
@@ -181,7 +186,7 @@ QVariantList FocusHistoryService::querySessions(const QString& whereClause, cons
         "fs.start_time AS start_time, "
         "fs.end_time AS end_time, "
         "fs.duration AS duration_seconds, "
-        "date(fs.start_time) AS session_date "
+        "date(fs.start_time, :shift) AS session_date "
         "FROM focus_sessions fs "
         "LEFT JOIN tasks t ON fs.task_id = t.id ");
 
@@ -204,8 +209,10 @@ QVariantList FocusHistoryService::querySessions(const QString& whereClause, cons
     QSqlQuery query(db);
     query.prepare(sql);
 
-    for (int index = 0; index < bindValues.size(); ++index) {
-        query.bindValue(index, bindValues.at(index));
+    query.bindValue(QStringLiteral(":shift"),
+                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
+    for (auto it = namedBinds.constBegin(); it != namedBinds.constEnd(); ++it) {
+        query.bindValue(it.key(), it.value());
     }
 
     if (!query.exec()) {
