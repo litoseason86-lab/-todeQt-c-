@@ -9,6 +9,7 @@ const auto kReduceMotionKey = QStringLiteral("appearance/reduceMotion");
 const auto kSlimClockFontKey = QStringLiteral("appearance/slimClockFont");
 const auto kRolloverIgnoredDateKey = QStringLiteral("rollover/lastIgnoredDate");
 const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
+const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
 }
 
 AppSettings* AppSettings::instance()
@@ -153,4 +154,28 @@ void AppSettings::setBackgroundTheme(const QString& themeId)
     m_settings->setValue(kBackgroundThemeKey, themeId);
     m_settings->sync();
     emit backgroundThemeChanged();
+}
+
+int AppSettings::normalizeDayStartHour(int hour)
+{
+    // 越界值代表配置损坏，统一回默认值；不能 clamp 成 0 或 6 改变用户的日期口径。
+    return (hour >= 0 && hour <= 6) ? hour : 4;
+}
+
+int AppSettings::dayStartHour() const
+{
+    // 读取时也归一化，拦住旧版本或手工编辑遗留的坏值。
+    return normalizeDayStartHour(m_settings->value(kDayStartHourKey, 4).toInt());
+}
+
+void AppSettings::setDayStartHour(int hour)
+{
+    const int normalized = normalizeDayStartHour(hour);
+    if (dayStartHour() == normalized) {
+        return;
+    }
+
+    m_settings->setValue(kDayStartHourKey, normalized);
+    m_settings->sync();
+    emit dayStartHourChanged();
 }

@@ -17,6 +17,7 @@ class AppSettings : public QObject
     Q_PROPERTY(bool slimClockFont READ slimClockFont WRITE setSlimClockFont NOTIFY slimClockFontChanged)
     Q_PROPERTY(QString rolloverIgnoredDate READ rolloverIgnoredDate WRITE setRolloverIgnoredDate NOTIFY rolloverIgnoredDateChanged)
     Q_PROPERTY(QString backgroundTheme READ backgroundTheme WRITE setBackgroundTheme NOTIFY backgroundThemeChanged)
+    Q_PROPERTY(int dayStartHour READ dayStartHour WRITE setDayStartHour NOTIFY dayStartHourChanged)
 
 public:
     static AppSettings* instance();
@@ -38,6 +39,8 @@ public:
     void setRolloverIgnoredDate(const QString& date);
     QString backgroundTheme() const;
     void setBackgroundTheme(const QString& themeId);
+    int dayStartHour() const;
+    void setDayStartHour(int hour);
 
 signals:
     void lastModeChanged();
@@ -48,8 +51,11 @@ signals:
     void slimClockFontChanged();
     void rolloverIgnoredDateChanged();
     void backgroundThemeChanged();
+    void dayStartHourChanged();
 
 private:
+    static int normalizeDayStartHour(int hour);
+
     QSettings* m_settings = nullptr;
 };
 

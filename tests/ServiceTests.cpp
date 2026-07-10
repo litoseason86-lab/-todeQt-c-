@@ -377,6 +377,8 @@ private slots:
     void appSettingsSlimClockFontRoundTrip();
     void appSettingsRolloverIgnoredDateRoundTrip();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
+    void appSettingsDayStartHourNormalizeAndPersist();
+    void appSettingsDayStartHourRejectsCorruptIniValue();
     void addTaskRejectsBlankTitle();
     void addTaskPersistsTrimmedTitleAndEmitsChange();
     void addTaskAcceptsIsoDateStringFromQml();
@@ -600,6 +602,55 @@ void ServiceTests::appSettingsBackgroundThemeDefaultAndRoundTrip()
     // 重建实例验证持久化。
     AppSettings reloaded(path);
     QCOMPARE(reloaded.backgroundTheme(), QStringLiteral("celadon"));
+}
+
+void ServiceTests::appSettingsDayStartHourNormalizeAndPersist()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.dayStartHour(), 4);
+
+        QSignalSpy spy(&settings, &AppSettings::dayStartHourChanged);
+        settings.setDayStartHour(5);
+        QCOMPARE(settings.dayStartHour(), 5);
+        QCOMPARE(spy.count(), 1);
+
+        // 归一化不是 clamp：越界配置视为损坏，一律回默认值 4。
+        settings.setDayStartHour(99);
+        QCOMPARE(settings.dayStartHour(), 4);
+        settings.setDayStartHour(-1);
+        QCOMPARE(settings.dayStartHour(), 4);
+
+        const int countBefore = spy.count();
+        settings.setDayStartHour(4);
+        QCOMPARE(spy.count(), countBefore);
+
+        settings.setDayStartHour(6);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.dayStartHour(), 6);
+}
+
+void ServiceTests::appSettingsDayStartHourRejectsCorruptIniValue()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    // 坏值可能来自旧版本或手工编辑，读取入口必须统一归一化。
+    {
+        QSettings raw(path, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("logic/dayStartHour"), 99);
+        raw.sync();
+    }
+
+    AppSettings settings(path);
+    QCOMPARE(settings.dayStartHour(), 4);
 }
 
 void ServiceTests::addTaskRejectsBlankTitle()
