@@ -72,7 +72,7 @@ main.qml (ApplicationWindow)
 - 按钮 enabled 与 FocusView 现有按钮一一对应，尤其 breakDone 的「开始专注」沿用 `canStartPomodoro()`——休息后任务上下文可能已丢，不能常亮。
 - 沉浸层渲染 `focusViewRef.errorText`（时间下方小字，`Theme.danger` 色）：结束/开始休息等操作失败时不能静默——原页面的错误提示此刻被隐藏，用户看不见。
 - 字体沿用 `Theme.fontFamilyClock` 与 `settings.slimClockFont` 细体开关；番茄环内时间的冒号淡化复用 `ringTimeMarkup()`（自由模式 HH:MM:SS 与现状一致，纯文本不淡化）。
-- 右上角浮现组：🔔 声音开关（切 `settings.soundEnabled`）+ ✕ 退出全屏。
+- 右上角浮现组：✕ 退出全屏。（实现阶段定稿：原设计的 🔔 声音快捷开关移除——普通专注页已有同款开关，沉浸层保持极简，见提交 81ca7c8。）
 - 防御：沉浸中 state 若意外落入 `pomoIdle`/`free` 无会话等「无可投影」状态，发 `exitRequested()` 自动退出，不呈现空画面。
 
 ### 悬停显控
