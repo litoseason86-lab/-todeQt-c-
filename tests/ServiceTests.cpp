@@ -10,6 +10,7 @@
 #include <QtTest>
 
 #include "../src/services/AppSettings.h"
+#include "../src/services/LogicalDay.h"
 #include "../src/services/CategoryManager.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/ExportService.h"
@@ -379,6 +380,8 @@ private slots:
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void appSettingsDayStartHourNormalizeAndPersist();
     void appSettingsDayStartHourRejectsCorruptIniValue();
+    void logicalDayDateOfBoundaries();
+    void logicalDayMsUntilNextBoundary();
     void addTaskRejectsBlankTitle();
     void addTaskPersistsTrimmedTitleAndEmitsChange();
     void addTaskAcceptsIsoDateStringFromQml();
@@ -651,6 +654,45 @@ void ServiceTests::appSettingsDayStartHourRejectsCorruptIniValue()
 
     AppSettings settings(path);
     QCOMPARE(settings.dayStartHour(), 4);
+}
+
+void ServiceTests::logicalDayDateOfBoundaries()
+{
+    const QDate day(2026, 7, 8);
+
+    QCOMPARE(LogicalDay::dateOf(QDateTime(day, QTime(3, 59)), 4), day.addDays(-1));
+    QCOMPARE(LogicalDay::dateOf(QDateTime(day, QTime(4, 0)), 4), day);
+    QCOMPARE(LogicalDay::dateOf(QDateTime(day, QTime(0, 0)), 0), day);
+    QCOMPARE(LogicalDay::dateOf(QDateTime(day, QTime(5, 59)), 6), day.addDays(-1));
+    QCOMPARE(LogicalDay::dateOf(QDateTime(day, QTime(6, 0)), 6), day);
+
+    QCOMPARE(LogicalDay::dateOf(QDateTime(QDate(2026, 8, 1), QTime(1, 0)), 4),
+             QDate(2026, 7, 31));
+    QCOMPARE(LogicalDay::dateOf(QDateTime(QDate(2027, 1, 1), QTime(2, 30)), 4),
+             QDate(2026, 12, 31));
+
+    // 用调用前后时刻包围薄包装结果，避免恰好跨过日界点时出现竞态假失败。
+    const QDateTime before = QDateTime::currentDateTime();
+    const QDate actualToday = LogicalDay::today(4);
+    const QDateTime after = QDateTime::currentDateTime();
+    const QDate expectedBefore = LogicalDay::dateOf(before, 4);
+    const QDate expectedAfter = LogicalDay::dateOf(after, 4);
+    QVERIFY(actualToday == expectedBefore || actualToday == expectedAfter);
+
+    QCOMPARE(LogicalDay::sqlShift(4), QStringLiteral("-4 hours"));
+    QCOMPARE(LogicalDay::sqlShift(0), QStringLiteral("-0 hours"));
+}
+
+void ServiceTests::logicalDayMsUntilNextBoundary()
+{
+    const QDate day(2026, 7, 8);
+
+    QCOMPARE(LogicalDay::msUntilNextBoundary(QDateTime(day, QTime(2, 0)), 4),
+             qint64(2) * 3600 * 1000);
+    QCOMPARE(LogicalDay::msUntilNextBoundary(QDateTime(day, QTime(5, 0)), 4),
+             qint64(23) * 3600 * 1000);
+    QCOMPARE(LogicalDay::msUntilNextBoundary(QDateTime(day, QTime(4, 0)), 4),
+             qint64(24) * 3600 * 1000);
 }
 
 void ServiceTests::addTaskRejectsBlankTitle()
