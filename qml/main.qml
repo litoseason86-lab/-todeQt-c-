@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import "."
+import "components"
 
 ApplicationWindow {
     id: root
@@ -18,6 +19,28 @@ ApplicationWindow {
         id: mainContent
 
         anchors.fill: parent
+    }
+
+    ImmersionWindowSync {
+        id: immersionSync
+    }
+
+    Connections {
+        target: mainContent
+
+        function onFocusImmersiveActiveChanged() {
+            root.visibility = immersionSync.visibilityForImmersiveChange(
+                        mainContent.focusImmersiveActive, root.visibility)
+        }
+    }
+
+    // 系统手势或绿灯退出原生全屏时，反向归零沉浸事实源。
+    onVisibilityChanged: {
+        if (!immersionSync.immersiveActiveAfterVisibilityChange(
+                    root.visibility, mainContent.focusImmersiveActive)
+                && mainContent.focusImmersiveActive) {
+            mainContent.focusImmersiveActive = false
+        }
     }
 
     // 阶段结束只做视觉提醒：把窗口拉回前台，避免用户错过番茄钟切换。

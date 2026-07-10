@@ -81,6 +81,8 @@ TestCase {
         property int breakMinutes: 5
         property bool soundEnabled: true
         property bool reduceMotion: false
+        property bool slimClockFont: true
+        property int dayStartHour: 4
         property string rolloverIgnoredDate: ""
         property string backgroundTheme: "celadon"
     }
@@ -281,5 +283,65 @@ TestCase {
         var stack = findChild(mainWindow, "mainViewStack")
         verify(stack)
         compare(stack.opacity, 1.0)
+    }
+
+    function test_immersiveWiringActivatesAndDeactivates() {
+        compare(mainWindow.focusImmersiveActive, false)
+
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        wait(20)
+
+        const focusView = findChild(mainWindow, "focusViewPage")
+        verify(focusView)
+        focusView.immersiveRequested()
+        compare(mainWindow.focusImmersiveActive, true)
+
+        const row = findChild(mainWindow, "mainContentRow")
+        verify(row)
+        compare(row.visible, false)
+
+        const overlay = findChild(mainWindow, "focusImmersiveOverlay")
+        verify(overlay)
+        overlay.exitRequested()
+        compare(mainWindow.focusImmersiveActive, false)
+
+        focusTimer.hasActiveSession = false
+        focusTimer.isRunning = false
+    }
+
+    function test_focusEndedExitsImmersiveAndReturnsToday() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        wait(20)
+
+        const focusView = findChild(mainWindow, "focusViewPage")
+        verify(focusView)
+        focusView.immersiveRequested()
+        compare(mainWindow.focusImmersiveActive, true)
+
+        focusView.focusEnded()
+        compare(mainWindow.focusImmersiveActive, false)
+        compare(mainWindow.currentView, "today")
+
+        focusTimer.hasActiveSession = false
+        focusTimer.isRunning = false
+    }
+
+    function test_unprojectableAutoExitsViaOverlay() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        wait(20)
+
+        const focusView = findChild(mainWindow, "focusViewPage")
+        verify(focusView)
+        focusView.immersiveRequested()
+        compare(mainWindow.focusImmersiveActive, true)
+
+        focusTimer.hasActiveSession = false
+        wait(20)
+        compare(mainWindow.focusImmersiveActive, false)
+
+        focusTimer.isRunning = false
     }
 }

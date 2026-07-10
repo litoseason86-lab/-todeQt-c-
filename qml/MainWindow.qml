@@ -12,6 +12,8 @@ Item {
     // 淡入淡出期间只保留最后一次视图请求，避免动画队列堆积。
     property string queuedView: ""
     property bool isSwitching: false
+    // 原生全屏、主内容显隐和沉浸覆盖层都从这一事实源派生，避免三处互相写状态。
+    property bool focusImmersiveActive: false
     property int pendingDeleteTaskId: -1
     property string pendingDeleteTitle: ""
     property int deleteCommitDelayMs: 5000
@@ -181,8 +183,11 @@ Item {
     }
 
     RowLayout {
+        objectName: "mainContentRow"
+
         anchors.fill: parent
         spacing: 0
+        visible: !root.focusImmersiveActive
 
         Sidebar {
             Layout.preferredWidth: 208
@@ -244,8 +249,12 @@ Item {
                     settings: root.appSettingsRef
 
                     onFocusEnded: {
+                        // 先退出沉浸再切页，今日页不能留在无侧栏的原生全屏状态。
+                        root.focusImmersiveActive = false;
                         root.switchToView("today");
                     }
+
+                    onImmersiveRequested: root.focusImmersiveActive = true
                 }
 
                 WeekPlanView {
@@ -309,6 +318,20 @@ Item {
                 }
             }
         }
+    }
+
+    FocusImmersiveOverlay {
+        id: focusImmersiveOverlay
+        objectName: "focusImmersiveOverlay"
+
+        anchors.fill: parent
+        visible: root.focusImmersiveActive
+        active: root.focusImmersiveActive
+        focusViewRef: focusView
+        timerRef: root.focusTimerRef
+        settingsRef: root.appSettingsRef
+
+        onExitRequested: root.focusImmersiveActive = false
     }
 
     Toast {
