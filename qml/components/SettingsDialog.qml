@@ -315,6 +315,60 @@ Popup {
                         }
                     }
                 }
+
+                RowDivider {
+                    objectName: "settingsPreferenceDividerDayStart"
+                }
+
+                Rectangle {
+                    objectName: "settingsDayStartRow"
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Theme.space12
+                    Layout.rightMargin: Theme.space12
+                    implicitHeight: 64
+                    color: "transparent"
+
+                    Column {
+                        anchors.left: parent.left
+                        anchors.right: dayStartStepper.left
+                        anchors.leftMargin: Theme.space12
+                        anchors.rightMargin: Theme.space12
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 2
+
+                        Text {
+                            text: "每日起始时间"
+                            textFormat: Text.PlainText
+                            color: Theme.ink
+                            font.pixelSize: Theme.fontMd
+                        }
+
+                        Text {
+                            text: "凌晨此点前算前一天（4 = 凌晨4点）"
+                            textFormat: Text.PlainText
+                            color: Theme.inkMuted
+                            font.pixelSize: Theme.fontSm
+                        }
+                    }
+
+                    DurationStepper {
+                        id: dayStartStepper
+
+                        anchors.right: parent.right
+                        anchors.rightMargin: Theme.space12
+                        anchors.verticalCenter: parent.verticalCenter
+                        from: 0
+                        to: 6
+                        value: root.appSettingsRef ? root.appSettingsRef.dayStartHour : 4
+                        namePrefix: "settingsDayStart"
+                        onAdjusted: function (newValue) {
+                            // 测试或降级环境缺少设置对象时只展示默认值，不写入任何外部状态。
+                            if (root.appSettingsRef) {
+                                root.appSettingsRef.dayStartHour = newValue
+                            }
+                        }
+                    }
+                }
             }
 
             Text {

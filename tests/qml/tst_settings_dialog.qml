@@ -8,9 +8,9 @@ TestCase {
     name: "SettingsDialog"
     when: windowShown
     width: 700
-    // 三段化后内容更高：给足高度让弹窗不触发滚动裁剪，管理行才在视口内可被 mouseClick 命中
+    // 新增第四行偏好后给足高度，避免单测点击被滚动裁剪干扰。
     // （520px 下的滚动到关闭属人工冒烟验收，不在此单测覆盖）。
-    height: 820
+    height: 880
 
     QtObject {
         id: appSettingsMock
@@ -19,6 +19,7 @@ TestCase {
         property bool soundEnabled: true
         property bool reduceMotion: false
         property bool slimClockFont: true
+        property int dayStartHour: 4
     }
 
     Component {
@@ -38,6 +39,7 @@ TestCase {
         appSettingsMock.soundEnabled = true
         appSettingsMock.reduceMotion = false
         appSettingsMock.slimClockFont = true
+        appSettingsMock.dayStartHour = 4
         dialog.appSettingsRef = appSettingsMock
         dialog.close()
         wait(20)
@@ -303,5 +305,31 @@ TestCase {
         verify(closeButton)
         compare(closeButton.implicitWidth, 96)
         compare(closeButton.implicitHeight, 40)
+    }
+
+    function test_dayStartStepperBindsAndWrites() {
+        dialog.open()
+        wait(20)
+
+        verify(findChild(dialog, "settingsDayStartRow"))
+        var valueText = findChild(dialog, "settingsDayStartValue")
+        verify(valueText)
+        compare(valueText.text, "4")
+
+        mouseClick(findChild(dialog, "settingsDayStartPlus"))
+        compare(appSettingsMock.dayStartHour, 5)
+        compare(valueText.text, "5")
+
+        mouseClick(findChild(dialog, "settingsDayStartMinus"))
+        compare(appSettingsMock.dayStartHour, 4)
+    }
+
+    function test_dayStartStepperMissingSettingsRefIsNoop() {
+        dialog.appSettingsRef = null
+        dialog.open()
+        wait(20)
+
+        mouseClick(findChild(dialog, "settingsDayStartPlus"))
+        compare(appSettingsMock.dayStartHour, 4)
     }
 }
