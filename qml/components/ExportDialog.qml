@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 import ".."
+import "../LogicalDay.js" as LogicalDay
 
 Popup {
     id: root
@@ -82,6 +83,14 @@ Popup {
         }
     }
 
+    function logicalToday() {
+        // qmllint disable unqualified
+        var hour = (typeof appSettings !== "undefined" && appSettings)
+                ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        return LogicalDay.todayDate(hour, new Date())
+    }
+
     function mondayOf(value) {
         // JS 的 getDay() 周日为 0，这里转换成以周一为起点。
         var date = new Date(value)
@@ -92,25 +101,26 @@ Popup {
     }
 
     function setDateRangeThisWeek() {
-        startDateInput.text = Qt.formatDate(mondayOf(new Date()), "yyyy-MM-dd")
-        endDateInput.text = Qt.formatDate(new Date(), "yyyy-MM-dd")
+        var today = logicalToday()
+        startDateInput.text = Qt.formatDate(mondayOf(today), "yyyy-MM-dd")
+        endDateInput.text = Qt.formatDate(today, "yyyy-MM-dd")
     }
 
     function setDateRangeThisMonth() {
-        var today = new Date()
+        var today = logicalToday()
         startDateInput.text = Qt.formatDate(new Date(today.getFullYear(), today.getMonth(), 1), "yyyy-MM-dd")
         endDateInput.text = Qt.formatDate(today, "yyyy-MM-dd")
     }
 
     function setDateRangeLastMonth() {
-        var today = new Date()
+        var today = logicalToday()
         startDateInput.text = Qt.formatDate(new Date(today.getFullYear(), today.getMonth() - 1, 1), "yyyy-MM-dd")
         endDateInput.text = Qt.formatDate(new Date(today.getFullYear(), today.getMonth(), 0), "yyyy-MM-dd")
     }
 
     function setDateRangeAll() {
         startDateInput.text = "2020-01-01"
-        endDateInput.text = Qt.formatDate(new Date(), "yyyy-MM-dd")
+        endDateInput.text = Qt.formatDate(logicalToday(), "yyyy-MM-dd")
     }
 
     function parsedDate(text) {

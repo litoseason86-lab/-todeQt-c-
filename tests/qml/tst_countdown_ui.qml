@@ -16,6 +16,13 @@ TestCase {
     property string addedDateText: ""
     property int bannerClickCount: 0
     property int bannerAddCount: 0
+    property var fakeNow: new Date(2026, 6, 8, 3, 59)
+
+    QtObject {
+        id: appSettings
+
+        property int dayStartHour: 4
+    }
 
     ListModel {
         id: countdownModel
@@ -88,6 +95,7 @@ TestCase {
     CountdownDialog {
         id: countdownDialog
         countdownServiceRef: fakeCountdownService
+        logicalNowProvider: function() { return testCase.fakeNow }
     }
 
     CountdownView {
@@ -105,6 +113,7 @@ TestCase {
         testCase.addedDateText = ""
         testCase.bannerClickCount = 0
         testCase.bannerAddCount = 0
+        testCase.fakeNow = new Date(2026, 6, 8, 3, 59)
         countdownModel.clear()
         fakeCountdownService.primaryGoal = null
         countdownDialog.close()
@@ -141,6 +150,19 @@ TestCase {
         compare(testCase.addedName, "研究生初试")
         compare(testCase.addedDateText, "2026-12-23")
         verify(fakeCountdownService.primaryGoal !== null)
+    }
+
+    function test_dialogDefaultDateUsesLogicalToday() {
+        compare(countdownDialog.dateToInput(null), "2026-07-07")
+        countdownDialog.openForAdd()
+        var dateField = findChild(countdownDialog, "countdownDateField")
+        verify(dateField)
+        compare(dateField.text, "2026-08-06")
+
+        countdownDialog.close()
+        testCase.fakeNow = new Date(2026, 6, 8, 4, 0)
+        countdownDialog.openForAdd()
+        compare(dateField.text, "2026-08-07")
     }
 
     function test_countdownViewReflectsPrimaryGoal() {

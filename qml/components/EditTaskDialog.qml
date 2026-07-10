@@ -6,6 +6,7 @@ import QtQuick.Controls.Basic
 import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
+import "../LogicalDay.js" as LogicalDay
 
 // 任务编辑弹窗：标题、科目、日期快捷项。旧日期不在快捷项内时必须保留原值。
 Popup {
@@ -36,7 +37,12 @@ Popup {
     padding: 0
 
     function isoWithOffset(offset) {
-        var d = new Date();
+        // 快捷日期以逻辑今天为锚，避免凌晨编辑时“今天”跳到物理次日。
+        // qmllint disable unqualified
+        var hour = (typeof appSettings !== "undefined" && appSettings)
+                ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        var d = LogicalDay.todayDate(hour, new Date());
         d.setDate(d.getDate() + offset);
         return Qt.formatDate(d, "yyyy-MM-dd");
     }

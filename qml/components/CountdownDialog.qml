@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
+import "../LogicalDay.js" as LogicalDay
 
 Popup {
     id: root
@@ -17,24 +18,36 @@ Popup {
     padding: 0
 
     property var countdownServiceRef: null
+    // 仅测试注入；生产为空时读取真实时间。
+    property var logicalNowProvider: null
     property int editGoalId: -1
     readonly property bool isEditMode: editGoalId >= 0
 
     signal goalSaved()
 
+    function logicalToday() {
+        // qmllint disable use-proper-function
+        var now = root.logicalNowProvider ? root.logicalNowProvider() : new Date()
+        // qmllint enable use-proper-function
+        // qmllint disable unqualified
+        var hour = (typeof appSettings !== "undefined" && appSettings)
+                ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        return LogicalDay.todayDate(hour, now)
+    }
+
     function dateToInput(value) {
-        if (!value) {
-            return Qt.formatDate(new Date(), "yyyy-MM-dd");
-        }
-        return Qt.formatDate(value, "yyyy-MM-dd");
+        return Qt.formatDate(value ? value : root.logicalToday(), "yyyy-MM-dd");
     }
 
     function openForAdd() {
         editGoalId = -1;
         headingLabel.text = "添加目标";
         nameField.text = "";
-        // 默认 30 天后，给用户一个可直接调整的未来日期。
-        dateField.text = dateToInput(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+        // 以逻辑今天做日历加法，凌晨窗口不会比其它页面多算一天。
+        var defaultDate = new Date(root.logicalToday());
+        defaultDate.setDate(defaultDate.getDate() + 30);
+        dateField.text = dateToInput(defaultDate);
         errorLabel.text = "";
         open();
     }

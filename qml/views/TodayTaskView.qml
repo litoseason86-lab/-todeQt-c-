@@ -4,6 +4,7 @@ import QtQuick.Effects
 import QtQuick.Layouts
 import "../components"
 import ".."
+import "../LogicalDay.js" as LogicalDay
 
 Item {
     id: root
@@ -79,7 +80,12 @@ Item {
     }
 
     function todayIsoDate() {
-        return Qt.formatDate(new Date(), "yyyy-MM-dd");
+        // 结转忽略日期与 TaskManager 的逾期判定必须使用同一逻辑今天。
+        // qmllint disable unqualified
+        var hour = (typeof appSettings !== "undefined" && appSettings)
+                ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        return LogicalDay.todayIso(hour, new Date());
     }
 
     function loadOverdueTasks() {
@@ -610,7 +616,6 @@ Item {
     AddTaskDialog {
         id: addTaskDialog
 
-        selectedDate: new Date()
         categoryManagerRef: root.categoryManagerRef
 
         onTaskAdded: function (title, date, categoryId) {

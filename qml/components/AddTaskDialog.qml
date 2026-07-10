@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
+import "../LogicalDay.js" as LogicalDay
 
 Popup {
     id: root
@@ -66,7 +67,14 @@ Popup {
         }
     }
 
-    property date selectedDate: new Date()
+    property date selectedDate: {
+        // 凌晨日界点前创建的任务仍属于前一逻辑日。
+        // qmllint disable unqualified
+        var hour = (typeof appSettings !== "undefined" && appSettings)
+                ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        return LogicalDay.todayDate(hour, new Date())
+    }
     property string heading: "添加新任务"
     property var categoryManagerRef: null
     property var categories: []
