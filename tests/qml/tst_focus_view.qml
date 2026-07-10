@@ -31,6 +31,7 @@ TestCase {
         property string startPomodoroWorkTitle: ""
         property int startPomodoroWorkSeconds: 0
         property int stopFocusCalls: 0
+        property bool stopFocusFails: false
         property int minimumValidMinutes: 3
         property int autoCompleteMinutes: 5
 
@@ -58,6 +59,9 @@ TestCase {
 
         function stopFocus() {
             stopFocusCalls += 1
+            if (stopFocusFails) {
+                return false
+            }
             isRunning = false
             hasActiveSession = false
             mode = 0
@@ -134,6 +138,18 @@ TestCase {
         settings: appSettingsMock
     }
 
+    SignalSpy {
+        id: focusEndedSpy
+        target: view
+        signalName: "focusEnded"
+    }
+
+    SignalSpy {
+        id: immersiveSpy
+        target: view
+        signalName: "immersiveRequested"
+    }
+
     function init() {
         focusTimer.elapsedSeconds = 0
         focusTimer.isRunning = false
@@ -163,6 +179,9 @@ TestCase {
         appSettingsMock.reduceMotion = false
         appSettingsMock.slimClockFont = true
         view.panelExpanded = false
+        focusTimer.stopFocusFails = false
+        focusEndedSpy.clear()
+        immersiveSpy.clear()
         wait(20)
     }
 
@@ -760,5 +779,65 @@ TestCase {
         verify(ring)
         verify(ring.strokeWidth !== undefined)
         verify(ring.progress !== undefined)
+    }
+
+    function test_endFreeFocusStopsSessionAndSignals() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        wait(20)
+
+        view.endFreeFocus()
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(view.errorText, "")
+        compare(focusEndedSpy.count, 1)
+    }
+
+    function test_endFreeFocusFailureShowsErrorWithoutSignal() {
+        focusTimer.hasActiveSession = true
+        focusTimer.stopFocusFails = true
+        wait(20)
+
+        view.endFreeFocus()
+
+        compare(view.errorText, "专注保存失败，请重试")
+        compare(focusEndedSpy.count, 0)
+    }
+
+    function test_immersiveAvailableOnlyWhileTiming() {
+        // 自由模式无会话：不可进沉浸。
+        compare(view.immersiveAvailable, false)
+
+        // 自由模式有会话（含暂停）：可进。
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = false
+        wait(20)
+        compare(view.immersiveAvailable, true)
+
+        // 番茄待机：不可进。
+        focusTimer.hasActiveSession = false
+        view.toPomodoroTab(true)
+        wait(20)
+        compare(view.state, "pomoIdle")
+        compare(view.immersiveAvailable, false)
+
+        // 番茄工作中：可进。
+        view.startPomodoro()
+        wait(20)
+        compare(view.state, "pomoWork")
+        compare(view.immersiveAvailable, true)
+
+        // 工作完成态：不可进（完成态按钮常驻，无需先全屏）。
+        focusTimer.phaseCompleted(1)
+        wait(20)
+        compare(view.state, "workDone")
+        compare(view.immersiveAvailable, false)
+    }
+
+    function test_immersiveButtonEmitsRequest() {
+        const button = findChild(view, "immersiveButton")
+        verify(button)
+        button.clicked()
+        compare(immersiveSpy.count, 1)
     }
 }

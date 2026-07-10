@@ -19,6 +19,12 @@ Item {
     property bool panelExpanded: false
 
     signal focusEnded()
+    signal immersiveRequested()
+
+    // 沉浸入口只在计时进行中（含暂停）开放：待机/完成/未开始要么需要配置面板，
+    // 要么即将离开专注页，极简全屏没有意义。
+    readonly property bool immersiveAvailable: state === "pomoWork" || state === "pomoBreak"
+            || (state === "free" && timerBool("hasActiveSession"))
 
     state: root.computeState()
 
@@ -279,6 +285,17 @@ Item {
         root.justCompletedPhase = 0
         root.clearPomodoroTask()
         root.focusEnded()
+    }
+
+    function endFreeFocus() {
+        // 自由模式结束逻辑单点：页面按钮与沉浸层共用，避免两处复制。
+        if (root.timer && root.timer.stopFocus()) {
+            root.errorText = ""
+            root.clearPomodoroTask()
+            root.focusEnded()
+        } else {
+            root.errorText = "专注保存失败，请重试"
+        }
     }
 
     Connections {
@@ -748,15 +765,7 @@ Item {
                         verticalAlignment: Text.AlignVCenter
                     }
 
-                    onClicked: {
-                        if (root.timer && root.timer.stopFocus()) {
-                            root.errorText = ""
-                            root.clearPomodoroTask()
-                            root.focusEnded()
-                        } else {
-                            root.errorText = "专注保存失败，请重试"
-                        }
-                    }
+                    onClicked: root.endFreeFocus()
                 }
 
                 Button {
@@ -869,6 +878,36 @@ Item {
             contentItem: Text {
                 text: root.settings && root.settings.soundEnabled ? "🔔" : "🔕"
                 font.pixelSize: Theme.fontLg
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+        }
+
+        Button {
+            id: immersiveButton
+            objectName: "immersiveButton"
+
+            anchors.top: parent.top
+            anchors.right: soundToggleButton.left
+            anchors.topMargin: Theme.space16
+            anchors.rightMargin: Theme.space8
+            implicitWidth: 40
+            implicitHeight: 32
+            visible: root.immersiveAvailable
+
+            onClicked: root.immersiveRequested()
+
+            background: Rectangle {
+                color: immersiveButton.hovered ? Theme.surface : "transparent"
+                border.color: immersiveButton.hovered ? Theme.border : "transparent"
+                border.width: 1
+                radius: Theme.radiusMd
+            }
+
+            contentItem: Text {
+                text: "⛶"
+                font.pixelSize: Theme.fontLg
+                color: Theme.ink
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
             }
