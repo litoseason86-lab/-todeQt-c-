@@ -57,6 +57,9 @@ set(APP_SOURCES
     src/services/FocusTimer.cpp
     src/services/StatisticsService.h
     src/services/StatisticsService.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
     src/services/FocusSessionRules.h
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
@@ -147,6 +150,9 @@ add_executable(PomodoroTodoTests
     src/services/FocusHistoryService.cpp
     src/services/AppSettings.h
     src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
 )
 
 target_link_libraries(PomodoroTodoTests PRIVATE

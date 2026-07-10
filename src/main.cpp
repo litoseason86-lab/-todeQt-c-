@@ -14,6 +14,7 @@
 #include "services/ExportService.h"
 #include "services/FocusHistoryService.h"
 #include "services/FocusTimer.h"
+#include "services/LogicalDayService.h"
 #include "services/PhaseSoundService.h"
 #include "services/RoutineManager.h"
 #include "services/StatisticsService.h"
@@ -50,6 +51,11 @@ int main(int argc, char *argv[])
     // 启动即生成今天的例行任务，保证 QML 首次读取今日任务时已经能看到它们。
     RoutineManager::instance()->materializeToday();
 
+    // 失效信号同步派发时先补新逻辑日例行，再由后接入的 QML 视图重查。
+    // 连接必须早于 engine.load，否则视图槽可能先看到尚未补齐的数据。
+    QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed,
+                     RoutineManager::instance(), &RoutineManager::materializeToday);
+
     QQmlApplicationEngine engine;
     // QML 通过单例上下文对象访问服务，视图层保持声明式和轻量。
     engine.rootContext()->setContextProperty(QStringLiteral("categoryManager"), CategoryManager::instance());
@@ -63,6 +69,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("routineManager"), RoutineManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), AppSettings::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("logicalDayService"), LogicalDayService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("phaseSoundService"), PhaseSoundService::instance());
 
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));

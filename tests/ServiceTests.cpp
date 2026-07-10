@@ -7,10 +7,12 @@
 #include <QSignalSpy>
 #include <QSqlQuery>
 #include <QTemporaryDir>
+#include <QTimer>
 #include <QtTest>
 
 #include "../src/services/AppSettings.h"
 #include "../src/services/LogicalDay.h"
+#include "../src/services/LogicalDayService.h"
 #include "../src/services/CategoryManager.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/ExportService.h"
@@ -412,6 +414,9 @@ private slots:
     void appSettingsDayStartHourRejectsCorruptIniValue();
     void logicalDayDateOfBoundaries();
     void logicalDayMsUntilNextBoundary();
+    void logicalDayServiceSchedulesTimerOnConstruction();
+    void logicalDayServiceEmitsChangedOnDayStartHourChange();
+    void logicalDayChangeMaterializesRoutineIdempotently();
     void addTaskRejectsBlankTitle();
     void addTaskPersistsTrimmedTitleAndEmitsChange();
     void addTaskAcceptsIsoDateStringFromQml();
@@ -728,6 +733,77 @@ void ServiceTests::logicalDayMsUntilNextBoundary()
              qint64(23) * 3600 * 1000);
     QCOMPARE(LogicalDay::msUntilNextBoundary(QDateTime(day, QTime(4, 0)), 4),
              qint64(24) * 3600 * 1000);
+}
+
+void ServiceTests::logicalDayServiceSchedulesTimerOnConstruction()
+{
+    LogicalDayService service;
+    auto* timer = service.findChild<QTimer*>(QStringLiteral("logicalDayBoundaryTimer"));
+    QVERIFY(timer);
+    QVERIFY(timer->isActive());
+}
+
+void ServiceTests::logicalDayServiceEmitsChangedOnDayStartHourChange()
+{
+    AppSettings::instance()->setDayStartHour(4);
+    LogicalDayService service;
+    QSignalSpy spy(&service, &LogicalDayService::changed);
+
+    AppSettings::instance()->setDayStartHour(5);
+    QCOMPARE(spy.count(), 1);
+
+    AppSettings::instance()->setDayStartHour(5);
+    QCOMPARE(spy.count(), 1);
+}
+
+void ServiceTests::logicalDayChangeMaterializesRoutineIdempotently()
+{
+    // 选择距下一界点最远的合法小时，避免测试执行中恰好跨日。
+    const QDateTime now = QDateTime::currentDateTime();
+    int safeHour = 0;
+    qint64 longestDelay = -1;
+    for (int hour = 0; hour <= 6; ++hour) {
+        const qint64 delay = LogicalDay::msUntilNextBoundary(now, hour);
+        if (delay > longestDelay) {
+            longestDelay = delay;
+            safeHour = hour;
+        }
+    }
+    AppSettings::instance()->setDayStartHour(safeHour);
+    QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("失效补例行"), -1));
+
+    LogicalDayService service;
+    connect(&service, &LogicalDayService::changed,
+            RoutineManager::instance(), &RoutineManager::materializeToday);
+
+    auto countRoutineTasks = []() {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        if (!query.exec(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '失效补例行'"))
+            || !query.next()) {
+            return -1;
+        }
+        return query.value(0).toInt();
+    };
+
+    QCOMPARE(countRoutineTasks(), 0);
+
+    service.changed();
+    QCOMPARE(countRoutineTasks(), 1);
+
+    QSqlQuery taskDate(DatabaseManager::instance()->database());
+    QVERIFY(taskDate.exec(QStringLiteral(
+        "SELECT date FROM tasks WHERE title = '失效补例行'")));
+    QVERIFY(taskDate.next());
+    QCOMPARE(taskDate.value(0).toString(), logicalToday().toString(Qt::ISODate));
+
+    QSqlQuery generatedDate(DatabaseManager::instance()->database());
+    QVERIFY(generatedDate.exec(QStringLiteral(
+        "SELECT last_generated_date FROM routines WHERE title = '失效补例行'")));
+    QVERIFY(generatedDate.next());
+    QCOMPARE(generatedDate.value(0).toString(), logicalToday().toString(Qt::ISODate));
+
+    service.changed();
+    QCOMPARE(countRoutineTasks(), 1);
 }
 
 void ServiceTests::addTaskRejectsBlankTitle()
@@ -1861,13 +1937,13 @@ void ServiceTests::materializeTodayIsIdempotentAndDoesNotBackfill()
     RoutineManager* manager = RoutineManager::instance();
     QVERIFY(manager->addRoutine(QStringLiteral("背单词"), -1));
 
-    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    const QString today = logicalToday().toString(Qt::ISODate);
 
     QCOMPARE(manager->materializeToday(), 1);
-    QCOMPARE(TaskManager::instance()->getTasksByDate(QDate::currentDate()).size(), 1);
+    QCOMPARE(TaskManager::instance()->getTasksByDate(logicalToday()).size(), 1);
 
     QCOMPARE(manager->materializeToday(), 0);
-    QCOMPARE(TaskManager::instance()->getTasksByDate(QDate::currentDate()).size(), 1);
+    QCOMPARE(TaskManager::instance()->getTasksByDate(logicalToday()).size(), 1);
 
     QSqlQuery upd(DatabaseManager::instance()->database());
     QVERIFY2(upd.exec(QStringLiteral("UPDATE routines SET last_generated_date = '2000-01-01'")),
@@ -1896,7 +1972,7 @@ void ServiceTests::materializeTodayPreservesCategoryAndDoesNotEmitSignals()
     QCOMPARE(taskSpy.count(), 0);
     QCOMPARE(routineSpy.count(), 0);
 
-    const QVariantList tasks = TaskManager::instance()->getTasksByDate(QDate::currentDate());
+    const QVariantList tasks = TaskManager::instance()->getTasksByDate(logicalToday());
     QCOMPARE(tasks.size(), 2);
 
     const QVariantMap categorized = tasks.at(0).toMap();
@@ -1976,14 +2052,14 @@ void ServiceTests::materializeTodayDoesNotResurrectDeletedTask()
     QVERIFY(manager->addRoutine(QStringLiteral("数学真题"), -1));
     QCOMPARE(manager->materializeToday(), 1);
 
-    QVariantList todays = TaskManager::instance()->getTasksByDate(QDate::currentDate());
+    QVariantList todays = TaskManager::instance()->getTasksByDate(logicalToday());
     QCOMPARE(todays.size(), 1);
     const int taskId = todays.first().toMap().value(QStringLiteral("id")).toInt();
 
     // 删掉今天生成的任务后再生成：last_generated_date 已是今天，所以当天不应复活。
     QVERIFY(TaskManager::instance()->deleteTask(taskId));
     QCOMPARE(manager->materializeToday(), 0);
-    QVERIFY(TaskManager::instance()->getTasksByDate(QDate::currentDate()).isEmpty());
+    QVERIFY(TaskManager::instance()->getTasksByDate(logicalToday()).isEmpty());
 }
 
 void ServiceTests::materializeTodaySkipsInactiveRoutines()
@@ -1994,7 +2070,7 @@ void ServiceTests::materializeTodaySkipsInactiveRoutines()
     QVERIFY(manager->setRoutineActive(id, false));
 
     QCOMPARE(manager->materializeToday(), 0);
-    QVERIFY(TaskManager::instance()->getTasksByDate(QDate::currentDate()).isEmpty());
+    QVERIFY(TaskManager::instance()->getTasksByDate(logicalToday()).isEmpty());
 }
 
 void ServiceTests::freshDatabaseHasRoutineIdColumn()

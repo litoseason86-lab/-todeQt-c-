@@ -1,7 +1,9 @@
 #include "RoutineManager.h"
 
+#include "AppSettings.h"
 #include "CategoryManager.h"
 #include "DatabaseManager.h"
+#include "LogicalDay.h"
 
 #include <QDate>
 #include <QDebug>
@@ -252,7 +254,9 @@ int RoutineManager::materializeToday()
         return 0;
     }
 
-    const QString today = QDate::currentDate().toString(Qt::ISODate);
+    // 例行任务属于逻辑日；凌晨日界点前生成时仍应落在前一天。
+    const QString today = LogicalDay::today(
+                              AppSettings::instance()->dayStartHour()).toString(Qt::ISODate);
 
     QList<DueRoutine> dueRoutines;
     QSqlQuery dueQuery(db);
