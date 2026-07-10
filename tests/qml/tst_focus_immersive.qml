@@ -74,6 +74,12 @@ TestCase {
         active: true
     }
 
+    SignalSpy {
+        id: exitSpy
+        target: overlay
+        signalName: "exitRequested"
+    }
+
     function init() {
         focusViewStub.state = "pomoWork"
         focusViewStub.errorText = ""
@@ -97,6 +103,7 @@ TestCase {
         settingsStub.soundEnabled = true
         overlay.controlsRevealed = false
         overlay.active = true
+        exitSpy.clear()
         wait(20)
     }
 
@@ -251,5 +258,91 @@ TestCase {
         compare(overlay.fadeAnimated, true)
         settingsStub.reduceMotion = true
         compare(overlay.fadeAnimated, false)
+    }
+
+    function test_buttonMappingPerState() {
+        compare(overlay.primaryButtonText, "暂停")
+        compare(overlay.primaryButtonEnabled, true)
+        compare(overlay.secondaryButtonText, "结束")
+
+        timerStub.isRunning = false
+        compare(overlay.primaryButtonText, "继续")
+
+        timerStub.isRunning = true
+        focusViewStub.state = "pomoBreak"
+        compare(overlay.secondaryButtonText, "跳过休息")
+
+        focusViewStub.state = "free"
+        compare(overlay.secondaryButtonText, "结束专注")
+        compare(overlay.primaryButtonEnabled, true)
+        timerStub.hasActiveSession = false
+        compare(overlay.primaryButtonEnabled, false)
+
+        timerStub.hasActiveSession = true
+        focusViewStub.state = "workDone"
+        compare(overlay.primaryButtonText, "开始休息")
+        compare(overlay.primaryButtonEnabled, true)
+
+        focusViewStub.state = "breakDone"
+        compare(overlay.primaryButtonText, "开始专注")
+        compare(overlay.primaryButtonEnabled, true)
+        focusViewStub.canStart = false
+        compare(overlay.primaryButtonEnabled, false)
+    }
+
+    function test_actionsForwardToFocusView() {
+        overlay.triggerPrimary()
+        compare(focusViewStub.togglePauseCalls, 1)
+
+        overlay.triggerSecondary()
+        compare(focusViewStub.endPomodoroCalls, 1)
+
+        focusViewStub.state = "workDone"
+        overlay.triggerPrimary()
+        compare(focusViewStub.startBreakCalls, 1)
+
+        focusViewStub.state = "breakDone"
+        overlay.triggerPrimary()
+        compare(focusViewStub.startPomodoroCalls, 1)
+
+        focusViewStub.state = "free"
+        overlay.triggerSecondary()
+        compare(focusViewStub.endFreeFocusCalls, 1)
+    }
+
+    function test_exitPathsEmitSignal() {
+        overlay.requestExit()
+        compare(exitSpy.count, 1)
+
+        const exitButton = findChild(overlay, "immersiveExitButton")
+        verify(exitButton)
+        exitButton.clicked()
+        compare(exitSpy.count, 2)
+    }
+
+    function test_soundButtonFlipsSetting() {
+        const sound = findChild(overlay, "immersiveSoundButton")
+        verify(sound)
+        sound.clicked()
+        compare(settingsStub.soundEnabled, false)
+        sound.clicked()
+        compare(settingsStub.soundEnabled, true)
+    }
+
+    function test_unprojectableStateAutoExits() {
+        focusViewStub.state = "pomoIdle"
+        wait(20)
+        compare(exitSpy.count, 1)
+    }
+
+    function test_activationIntoUnprojectableStateAutoExits() {
+        overlay.active = false
+        focusViewStub.state = "pomoIdle"
+        wait(20)
+        exitSpy.clear()
+
+        overlay.active = true
+        wait(20)
+        compare(exitSpy.count, 1)
     }
 }

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtQuick.Layouts
 import ".."
 
@@ -11,6 +12,8 @@ Item {
     property var timerRef: null
     property var settingsRef: null
     property bool active: false
+
+    signal exitRequested()
 
     readonly property string projectedState: focusViewRef ? String(focusViewRef.state) : ""
     readonly property bool completionState: projectedState === "workDone" || projectedState === "breakDone"
@@ -52,6 +55,83 @@ Item {
         controlsRevealed = false
     }
 
+    function requestExit() {
+        root.exitRequested()
+    }
+
+    // 沉浸中若意外落入待机或无会话自由态，立即退出，不能留下空白全屏。
+    onProjectableChanged: {
+        if (active && !projectable) {
+            requestExit()
+        }
+    }
+
+    onActiveChanged: {
+        if (active && !projectable) {
+            requestExit()
+        }
+    }
+
+    readonly property string primaryButtonText: {
+        if (projectedState === "workDone") {
+            return "开始休息"
+        }
+        if (projectedState === "breakDone") {
+            return "开始专注"
+        }
+        return timerRef && timerRef.isRunning ? "暂停" : "继续"
+    }
+
+    // 完成态按钮镜像 FocusView 的业务前置条件，防止任务上下文缺失时误亮。
+    readonly property bool primaryButtonEnabled: {
+        if (projectedState === "workDone") {
+            return true
+        }
+        if (projectedState === "breakDone") {
+            return focusViewRef ? Boolean(focusViewRef.canStartPomodoro()) : false
+        }
+        if (projectedState === "free") {
+            return timerRef ? Boolean(timerRef.hasActiveSession) : false
+        }
+        return timerRef ? Number(timerRef.phase || 0) !== 0 : false
+    }
+
+    readonly property string secondaryButtonText: {
+        if (projectedState === "pomoBreak") {
+            return "跳过休息"
+        }
+        if (projectedState === "free") {
+            return "结束专注"
+        }
+        return "结束"
+    }
+
+    function triggerPrimary() {
+        if (!focusViewRef) {
+            return
+        }
+        if (projectedState === "workDone") {
+            focusViewRef.startBreak()
+            return
+        }
+        if (projectedState === "breakDone") {
+            focusViewRef.startPomodoro()
+            return
+        }
+        focusViewRef.togglePause()
+    }
+
+    function triggerSecondary() {
+        if (!focusViewRef) {
+            return
+        }
+        if (projectedState === "free") {
+            focusViewRef.endFreeFocus()
+            return
+        }
+        focusViewRef.endPomodoro()
+    }
+
     function viewText(name) {
         return focusViewRef ? String(focusViewRef[name]()) : ""
     }
@@ -61,6 +141,12 @@ Item {
 
         interval: 3000
         onTriggered: root.hideControls()
+    }
+
+    Shortcut {
+        sequence: "Esc"
+        enabled: root.active
+        onActivated: root.requestExit()
     }
 
     Rectangle {
@@ -199,6 +285,140 @@ Item {
                 color: Theme.danger
                 horizontalAlignment: Text.AlignHCenter
                 wrapMode: Text.WordWrap
+            }
+        }
+
+        RowLayout {
+            id: topControls
+
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.margins: Theme.space16
+            spacing: Theme.space8
+            opacity: root.controlsShown ? 1 : 0
+            visible: opacity > 0
+
+            Behavior on opacity {
+                enabled: root.fadeAnimated
+                NumberAnimation { duration: 180 }
+            }
+
+            Button {
+                id: immersiveSoundButton
+                objectName: "immersiveSoundButton"
+
+                implicitWidth: 40
+                implicitHeight: 32
+
+                onClicked: {
+                    if (root.settingsRef) {
+                        root.settingsRef.soundEnabled = !root.settingsRef.soundEnabled
+                    }
+                }
+
+                background: Rectangle {
+                    color: immersiveSoundButton.hovered ? Theme.surface : "transparent"
+                    border.color: immersiveSoundButton.hovered ? Theme.border : "transparent"
+                    border.width: 1
+                    radius: Theme.radiusMd
+                }
+
+                contentItem: Text {
+                    text: root.settingsRef && root.settingsRef.soundEnabled ? "🔔" : "🔕"
+                    font.pixelSize: Theme.fontLg
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            Button {
+                id: immersiveExitButton
+                objectName: "immersiveExitButton"
+
+                implicitWidth: 40
+                implicitHeight: 32
+
+                onClicked: root.requestExit()
+
+                background: Rectangle {
+                    color: immersiveExitButton.hovered ? Theme.surface : "transparent"
+                    border.color: immersiveExitButton.hovered ? Theme.border : "transparent"
+                    border.width: 1
+                    radius: Theme.radiusMd
+                }
+
+                contentItem: Text {
+                    text: "✕"
+                    font.pixelSize: Theme.fontLg
+                    color: Theme.ink
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+        }
+
+        RowLayout {
+            id: bottomControls
+
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Theme.space32
+            spacing: Theme.space16
+            opacity: root.controlsShown ? 1 : 0
+            visible: opacity > 0
+
+            Behavior on opacity {
+                enabled: root.fadeAnimated
+                NumberAnimation { duration: 180 }
+            }
+
+            Button {
+                id: immersivePrimaryButton
+                objectName: "immersivePrimaryButton"
+
+                implicitWidth: 112
+                implicitHeight: 40
+                enabled: root.primaryButtonEnabled
+
+                onClicked: root.triggerPrimary()
+
+                background: Rectangle {
+                    color: immersivePrimaryButton.enabled
+                           ? (root.completionState ? Theme.accent : Theme.inkSoft)
+                           : Theme.border
+                    radius: Theme.radiusMd
+                }
+
+                contentItem: Text {
+                    text: root.primaryButtonText
+                    color: immersivePrimaryButton.enabled ? Theme.surface : Theme.inkMuted
+                    font.pixelSize: Theme.fontLg
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            Button {
+                id: immersiveSecondaryButton
+                objectName: "immersiveSecondaryButton"
+
+                implicitWidth: 112
+                implicitHeight: 40
+
+                onClicked: root.triggerSecondary()
+
+                background: Rectangle {
+                    color: root.completionState ? Theme.inkSoft : Theme.accent
+                    radius: Theme.radiusMd
+                }
+
+                contentItem: Text {
+                    text: root.secondaryButtonText
+                    color: Theme.surface
+                    font.pixelSize: Theme.fontLg
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
             }
         }
     }
