@@ -2,6 +2,7 @@
     <qresource prefix="/">
         <file alias="qml/qmldir">../qml/qmldir</file>
         <file alias="qml/Theme.qml">../qml/Theme.qml</file>
+        <file alias="qml/LogicalDay.js">../qml/LogicalDay.js</file>
         <file alias="qml/main.qml">../qml/main.qml</file>
         <file alias="qml/MainWindow.qml">../qml/MainWindow.qml</file>
         <file alias="qml/views/TodayTaskView.qml">../qml/views/TodayTaskView.qml</file>
