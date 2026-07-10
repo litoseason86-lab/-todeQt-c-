@@ -67,7 +67,10 @@ main.qml (ApplicationWindow)
 | `workDone` | 「专注完成」横幅 + 绿色满环 + 任务名 | 开始休息 + 结束（**常驻**） |
 | `breakDone` | 「休息结束」横幅 + 绿色满环 + 任务名 | 开始专注 + 结束（**常驻**） |
 
-- 时间/文案复用 focusViewRef 已有函数（`primaryTimeText()`、`pomodoroStageText()` 等）通过引用调用，不复制格式化逻辑。
+- 时间/文案复用 focusViewRef 已有函数（`primaryTimeText()`、`pomodoroStageText()` 等）通过引用调用，不复制格式化逻辑。（可行性依据：现有 UI 的每秒 tick 正是经这些函数建立绑定依赖；FocusView 隐藏后绑定与 Connections 照常求值。）
+- FocusRing 绑定沿用现有函数：`progress: ringProgressFraction()`、`ringColor: ringColorForState()`、`dimmed: ringDimmed()`；`showPreview` 恒 false（沉浸中无待机态）。
+- 按钮 enabled 与 FocusView 现有按钮一一对应，尤其 breakDone 的「开始专注」沿用 `canStartPomodoro()`——休息后任务上下文可能已丢，不能常亮。
+- 沉浸层渲染 `focusViewRef.errorText`（时间下方小字，`Theme.danger` 色）：结束/开始休息等操作失败时不能静默——原页面的错误提示此刻被隐藏，用户看不见。
 - 字体沿用 `Theme.fontFamilyClock` 与 `settings.slimClockFont` 细体开关；番茄环内时间的冒号淡化复用 `ringTimeMarkup()`（自由模式 HH:MM:SS 与现状一致，纯文本不淡化）。
 - 右上角浮现组：🔔 声音开关（切 `settings.soundEnabled`）+ ✕ 退出全屏。
 - 防御：沉浸中 state 若意外落入 `pomoIdle`/`free` 无会话等「无可投影」状态，发 `exitRequested()` 自动退出，不呈现空画面。
@@ -100,14 +103,18 @@ main.qml (ApplicationWindow)
 
 ```text
 property int preImmersiveVisibility: Window.Windowed
+property bool enteringFullScreen: false        // 进入过渡护栏
 
-进入（active → true）: 记录当前 visibility → 置 Window.FullScreen
+进入（active → true）: 记录当前 visibility → enteringFullScreen = true → 置 Window.FullScreen
 退出（active → false）: 若记录值为 FullScreen（用户原本就在原生全屏）→ 保持全屏只收覆盖层；
                         否则还原记录值（Windowed/Maximized）
-onVisibilityChanged:    若 visibility 离开 FullScreen 且 active 仍为 true → 归零 active
+onVisibilityChanged:    若 visibility === FullScreen → enteringFullScreen = false；
+                        否则若 !enteringFullScreen 且 active 仍为 true → 归零 active（系统侧退出）
 ```
 
-**无环论证**：进入路径里 visibility 变为 FullScreen 不满足归零条件；我方退出路径先归零 active，再改 visibility，handler 里 active 已 false；系统侧退出路径 visibility 先变，归零 active 后的还原写入是同值赋值，不再触发变化。
+**进入过渡护栏**：macOS 全屏过渡是异步的，从 Maximized 进入时不保证不发中间 visibility 事件；`enteringFullScreen` 在首次观察到 FullScreen 之前屏蔽「系统侧退出」判定，防止进入动画途中被误判而自我取消。护栏不拦手动退出——Esc/✕ 走 active 归零路径，不依赖该判定。
+
+**无环论证**：进入路径 visibility 变为 FullScreen 只清护栏，不满足归零条件；我方退出路径先归零 active 再改 visibility，handler 里 active 已 false；系统侧退出路径 visibility 先变，归零 active 后的还原写入是同值赋值，不再触发变化。
 
 ## 边界与错误处理
 
@@ -131,7 +138,7 @@ onVisibilityChanged:    若 visibility 离开 FullScreen 且 active 仍为 true 
 4. 动作转发：调用层内按钮 handler，断言 mock 收到 `togglePause`/`endPomodoro`/`startBreak`/`startPomodoro`/`endFreeFocus`。
 5. 退出信号：Esc handler 与 ✕ handler 均发 `exitRequested`；无可投影状态自动发 `exitRequested`。
 6. FocusView：⛶ 显示条件表达式（以 readonly bool 属性暴露供断言）、`immersiveRequested` 信号、`endFreeFocus()` 提炼后原按钮行为不变。
-7. main.qml 联动逻辑若难以在 offscreen 驱动真实 visibility，把「进入/退出/系统退出」的决策提炼为纯函数测试，实际窗口行为留给手动验证清单。
+7. main.qml 联动逻辑若难以在 offscreen 驱动真实 visibility，把「进入/退出/系统退出/过渡护栏」的决策提炼为纯函数测试（含：`enteringFullScreen` 屏蔽期内的中间 visibility 事件不触发误退），实际窗口行为留给手动验证清单。
 
 新文件注册进 CMakeLists（qml 模块 + 测试目标）。
 
@@ -143,8 +150,8 @@ onVisibilityChanged:    若 visibility 离开 FullScreen 且 active 仍为 true 
 | `qml/views/FocusView.qml` | +⛶ 按钮、+`immersiveRequested()` 信号、提炼 `endFreeFocus()` |
 | `qml/MainWindow.qml` | +属性、+层声明、RowLayout visible 绑定、`onFocusEnded` 补一行 |
 | `qml/main.qml` | +visibility 双向同步 |
-| `tests/qml/tst_focus_immersive.qml` | **新增** |
-| `CMakeLists.txt` | 注册新 QML 文件与测试 |
+| `tests/qml/tst_focus_immersive.qml` | **新增**（qmltestrunner 按 `-input tests/qml` 目录自动发现，无需注册） |
+| `resources/qml.qrc` | 注册 `FocusImmersiveOverlay.qml`（QML 经 qrc 打包，非 CMake 直列） |
 
 ## 明确不做（YAGNI）
 
@@ -156,4 +163,5 @@ onVisibilityChanged:    若 visibility 离开 FullScreen 且 active 仍为 true 
 ## 附录：UI 定稿 mockup
 
 可视化伴随会话产物（已确认）：`.superpowers/brainstorm/86852-1783685713/content/immersive-ui.html`
-— 含入口条、沉浸静止态、悬停态、完成态、自由模式五屏,配色取自 Theme 真实令牌。
+— 含入口条、沉浸静止态、悬停态、完成态、自由模式五屏，配色取自 Theme 真实令牌。
+（本地产物，该目录在 .gitignore 内不入库；如需长期留档可另行拷贝。）
