@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 import ".."
+import "../LogicalDay.js" as LogicalDay
 
 Item {
     id: root
@@ -11,6 +12,10 @@ Item {
     signal deleteRequested(int taskId, string title)
 
     property date weekStart: mondayOf(new Date())
+    // logicalToday 是命令式快照。若写成绑定，设置变化会在 changed 槽保存 prev 前提前重算，
+    // 导致“是否正在浏览当前周”的判断失真。
+    property date logicalToday
+    property var logicalNowProvider: null
     property var weekTasks: []
     property var categoryManagerRef: null
     property int pendingDeleteTaskId: -1
@@ -21,7 +26,11 @@ Item {
     // 周一起点对应的星期字，索引 0~6 = 周一~周日。
     readonly property var weekdayGlyphs: ["一", "二", "三", "四", "五", "六", "日"]
 
-    Component.onCompleted: refresh()
+    Component.onCompleted: {
+        root.logicalToday = root.computeLogicalToday()
+        root.weekStart = root.mondayOf(root.logicalToday)
+        root.refresh()
+    }
     onPendingDeleteTaskIdChanged: refresh()
 
     Connections {
@@ -52,6 +61,37 @@ Item {
         function onCategoriesChanged() {
             root.refresh()
         }
+    }
+
+    Connections {
+        // qmllint disable unqualified
+        target: typeof logicalDayService !== "undefined" ? logicalDayService : null
+        // qmllint enable unqualified
+        ignoreUnknownSignals: true
+
+        function onChanged() {
+            // 必须先基于旧 logicalToday 判断跟随关系，再读取新时间；顺序反转会把历史周误判为当前周。
+            var previousLogicalToday = new Date(root.logicalToday)
+            var wasFollowingCurrentWeek = root.isoDate(root.weekStart)
+                    === root.isoDate(root.mondayOf(previousLogicalToday))
+            var nextLogicalToday = root.computeLogicalToday()
+            root.logicalToday = nextLogicalToday
+            if (wasFollowingCurrentWeek)
+                root.weekStart = root.mondayOf(nextLogicalToday)
+            root.refresh()
+        }
+    }
+
+    function computeLogicalToday() {
+        // provider 仅用于稳定测试；生产默认读取真实本地时间。
+        // qmllint disable use-proper-function
+        var now = root.logicalNowProvider ? root.logicalNowProvider() : new Date()
+        // qmllint enable use-proper-function
+        // qmllint disable unqualified
+        var hour = (typeof appSettings !== "undefined" && appSettings)
+                ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        return LogicalDay.todayDate(hour, now)
     }
 
     function mondayOf(value) {
@@ -94,20 +134,20 @@ Item {
     }
 
     function isTodayIndex(index) {
-        // 用本地年月日比较，避免时区或时分秒影响“是否今天”的判断。
+        // 比较命令式逻辑日快照，避免凌晨 0~日界点仍被标成物理新日。
         var d = root.dayDate(index)
-        var now = new Date()
-        return d.getFullYear() === now.getFullYear()
-                && d.getMonth() === now.getMonth()
-                && d.getDate() === now.getDate()
+        var today = new Date(root.logicalToday)
+        return d.getFullYear() === today.getFullYear()
+                && d.getMonth() === today.getMonth()
+                && d.getDate() === today.getDate()
     }
 
     function isPastIndex(index) {
         var d = root.dayDate(index)
         d.setHours(0, 0, 0, 0)
-        var now = new Date()
-        now.setHours(0, 0, 0, 0)
-        return d.getTime() < now.getTime()
+        var today = new Date(root.logicalToday)
+        today.setHours(0, 0, 0, 0)
+        return d.getTime() < today.getTime()
     }
 
     function canAddTaskForIndex(index) {
@@ -243,6 +283,7 @@ Item {
 
             Button {
                 id: thisWeekButton
+                objectName: "weekThisWeekButton"
                 text: "本周"
                 implicitWidth: 72
                 implicitHeight: 40
@@ -267,7 +308,7 @@ Item {
                 }
 
                 onClicked: {
-                    root.weekStart = root.mondayOf(new Date())
+                    root.weekStart = root.mondayOf(root.logicalToday)
                     root.refresh()
                 }
             }
