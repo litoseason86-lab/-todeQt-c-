@@ -469,6 +469,7 @@ private slots:
     void updateTaskRejectsBlankTitleAndInvalidId();
     void overdueQueryExcludesTodayCompletedAndRoutine();
     void moveTasksToTodayIsTransactional();
+    void exportFocusSessionsUsesLogicalDayRange();
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
     void exportFocusSessionsAndExportAllWriteExpectedCsvFiles();
     void exportFocusSessionsIgnoresInvalidShortSessions();
@@ -2380,6 +2381,33 @@ void ServiceTests::moveTasksToTodayIsTransactional()
     QCOMPARE(manager->getOverdueUncompletedTasks().size(), 0);
 
     QVERIFY(manager->moveTasksToToday(QVariantList{}));
+}
+
+void ServiceTests::exportFocusSessionsUsesLogicalDayRange()
+{
+    AppSettings::instance()->setDayStartHour(4);
+    const QDate day(2026, 7, 8);
+    const int taskId = insertTaskRow(QStringLiteral("导出边界"), day, QStringLiteral("政治"));
+    QVERIFY(taskId > 0);
+    QVERIFY(insertFocusSessionRowAt(taskId, day, QStringLiteral("01:00:00"),
+                                    QStringLiteral("01:30:00"), 1800));
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    const QString hitPath = dir.filePath(QStringLiteral("hit.csv"));
+    QVERIFY(ExportService::instance()->exportFocusSessions(day.addDays(-1),
+                                                           day.addDays(-1),
+                                                           hitPath));
+    QFile hitFile(hitPath);
+    QVERIFY(hitFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    QVERIFY(QString::fromUtf8(hitFile.readAll()).contains(QStringLiteral("导出边界")));
+
+    const QString missPath = dir.filePath(QStringLiteral("miss.csv"));
+    QVERIFY(ExportService::instance()->exportFocusSessions(day, day, missPath));
+    QFile missFile(missPath);
+    QVERIFY(missFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    QVERIFY(!QString::fromUtf8(missFile.readAll()).contains(QStringLiteral("导出边界")));
 }
 
 void ServiceTests::exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks()

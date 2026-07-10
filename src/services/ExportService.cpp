@@ -1,7 +1,9 @@
 #include "ExportService.h"
 
+#include "AppSettings.h"
 #include "DatabaseManager.h"
 #include "FocusSessionRules.h"
+#include "LogicalDay.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -231,15 +233,19 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
         return false;
     }
 
+    // countRows 与主查询复用同一 SQL 片段。shift 由 0-6 的归一化整数生成，
+    // 以字面量嵌入可避免两条查询各自维护额外绑定，且不存在外部输入注入面。
     const QString fromAndWhere = QStringLiteral(
         "FROM focus_sessions f "
         "LEFT JOIN tasks t ON f.task_id = t.id "
         "LEFT JOIN categories c ON t.category_id = c.id "
-        "WHERE date(f.start_time) >= :startDate "
-        "AND date(f.start_time) <= :endDate "
+        "WHERE date(f.start_time, '%1') >= :startDate "
+        "AND date(f.start_time, '%1') <= :endDate "
         "AND f.end_time IS NOT NULL "
         "AND f.duration IS NOT NULL "
-        "AND f.duration >= %1")
+        "AND f.duration >= %2")
+                                     .arg(LogicalDay::sqlShift(
+                                         AppSettings::instance()->dayStartHour()))
                                      .arg(FocusSessionRules::kMinimumValidDurationSeconds);
     // 先统计总数，让 UI 可以显示确定进度，而不是只能显示加载状态。
     const int total = countRows(fromAndWhere, startDate, endDate);
