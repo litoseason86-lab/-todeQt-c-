@@ -320,13 +320,8 @@ TestCase {
         compare(exitSpy.count, 2)
     }
 
-    function test_soundButtonFlipsSetting() {
-        const sound = findChild(overlay, "immersiveSoundButton")
-        verify(sound)
-        sound.clicked()
-        compare(settingsStub.soundEnabled, false)
-        sound.clicked()
-        compare(settingsStub.soundEnabled, true)
+    function test_soundButtonIsAbsent() {
+        compare(findChild(overlay, "immersiveSoundButton"), null)
     }
 
     function test_unprojectableStateAutoExits() {

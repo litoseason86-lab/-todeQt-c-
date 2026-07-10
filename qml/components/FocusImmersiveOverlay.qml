@@ -304,34 +304,6 @@ Item {
             }
 
             Button {
-                id: immersiveSoundButton
-                objectName: "immersiveSoundButton"
-
-                implicitWidth: 40
-                implicitHeight: 32
-
-                onClicked: {
-                    if (root.settingsRef) {
-                        root.settingsRef.soundEnabled = !root.settingsRef.soundEnabled
-                    }
-                }
-
-                background: Rectangle {
-                    color: immersiveSoundButton.hovered ? Theme.surface : "transparent"
-                    border.color: immersiveSoundButton.hovered ? Theme.border : "transparent"
-                    border.width: 1
-                    radius: Theme.radiusMd
-                }
-
-                contentItem: Text {
-                    text: root.settingsRef && root.settingsRef.soundEnabled ? "🔔" : "🔕"
-                    font.pixelSize: Theme.fontLg
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-            }
-
-            Button {
                 id: immersiveExitButton
                 objectName: "immersiveExitButton"
 
