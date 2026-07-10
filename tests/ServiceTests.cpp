@@ -75,6 +75,30 @@ bool insertFocusSessionRow(int taskId, const QDate& date, int duration)
     return true;
 }
 
+bool insertFocusSessionRowAt(int taskId,
+                             const QDate& date,
+                             const QString& startTime,
+                             const QString& endTime,
+                             int duration)
+{
+    // 起止时刻可控，用于构造日界点前后的固定 session，避免测试依赖真实时钟。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO focus_sessions (task_id, start_time, end_time, duration) "
+        "VALUES (:taskId, :startTime, :endTime, :duration)"));
+    query.bindValue(QStringLiteral(":taskId"), taskId > 0 ? QVariant(taskId) : QVariant());
+    query.bindValue(QStringLiteral(":startTime"), dateTimeText(date, startTime));
+    query.bindValue(QStringLiteral(":endTime"), dateTimeText(date, endTime));
+    query.bindValue(QStringLiteral(":duration"), duration);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to insert boundary focus session:" << query.lastError().text();
+        return false;
+    }
+
+    return true;
+}
+
 bool insertFocusSessionWithNullDuration(int taskId, const QDate& date)
 {
     QSqlQuery query(DatabaseManager::instance()->database());
@@ -363,6 +387,12 @@ QStringList taskTitles(const QVariantList& tasks)
     }
     return titles;
 }
+
+QDate logicalToday()
+{
+    // 测试里所有“服务的今天”都必须与生产设置使用同一口径。
+    return LogicalDay::today(AppSettings::instance()->dayStartHour());
+}
 }
 
 class ServiceTests : public QObject {
@@ -387,6 +417,8 @@ private slots:
     void addTaskAcceptsIsoDateStringFromQml();
     void deleteTaskPreservesFocusSessionHistory();
     void statisticsReturnsTodayCompletionAndDuration();
+    void statisticsBucketsSessionsByLogicalDay();
+    void statisticsTodayUsesLogicalToday();
     void getDayStatsUsesSpecifiedHistoricalDate();
     void getDayComparisonReturnsTrendTextAndRejectsInvalidDate();
     void focusHistoryReturnsMonthSessionsWithinBoundaries();
@@ -466,6 +498,7 @@ void ServiceTests::cleanup()
 {
     // FocusTimer 是进程级单例；失败用例可能没走到 stopFocus，必须在关闭测试数据库前清掉活动阶段。
     FocusTimer::instance()->resetSession();
+    AppSettings::instance()->setDayStartHour(4);
     DatabaseManager::instance()->close();
     delete m_tempDir;
     m_tempDir = nullptr;
@@ -757,17 +790,19 @@ void ServiceTests::deleteTaskPreservesFocusSessionHistory()
 
 void ServiceTests::statisticsReturnsTodayCompletionAndDuration()
 {
-    QVERIFY(TaskManager::instance()->addTask("英语阅读", QVariant(QDate::currentDate()), "英语"));
-    QVERIFY(TaskManager::instance()->addTask("数学错题", QVariant(QDate::currentDate()), "数学"));
-    const QVariantList tasks = TaskManager::instance()->getTodayTasks();
+    const QDate today = logicalToday();
+    QVERIFY(TaskManager::instance()->addTask("英语阅读", QVariant(today), "英语"));
+    QVERIFY(TaskManager::instance()->addTask("数学错题", QVariant(today), "数学"));
+    // TaskManager 的无参“今天”要到计划二才切换；本用例只验证 StatisticsService。
+    const QVariantList tasks = TaskManager::instance()->getTasksByDate(today);
     QVERIFY(TaskManager::instance()->completeTask(tasks.first().toMap().value("id").toInt()));
 
     QSqlQuery insert(DatabaseManager::instance()->database());
     insert.prepare(QStringLiteral(
         "INSERT INTO focus_sessions (task_id, start_time, end_time, duration) "
         "VALUES (NULL, :startTime, :endTime, 1800)"));
-    insert.bindValue(QStringLiteral(":startTime"), dateTimeText(QDate::currentDate()));
-    insert.bindValue(QStringLiteral(":endTime"), dateTimeText(QDate::currentDate(), QStringLiteral("12:30:00")));
+    insert.bindValue(QStringLiteral(":startTime"), dateTimeText(today));
+    insert.bindValue(QStringLiteral(":endTime"), dateTimeText(today, QStringLiteral("12:30:00")));
     QVERIFY(insert.exec());
 
     const QVariantMap stats = StatisticsService::instance()->getTodayStats();
@@ -775,6 +810,49 @@ void ServiceTests::statisticsReturnsTodayCompletionAndDuration()
     QCOMPARE(stats.value("completedTasks").toInt(), 1);
     QCOMPARE(stats.value("totalTasks").toInt(), 2);
     QCOMPARE(stats.value("completionRate").toDouble(), 0.5);
+}
+
+void ServiceTests::statisticsBucketsSessionsByLogicalDay()
+{
+    AppSettings::instance()->setDayStartHour(4);
+    StatisticsService* service = StatisticsService::instance();
+
+    const QDate day(2026, 7, 8);
+    const int taskId = insertTaskRow(QStringLiteral("凌晨自习"), day, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionRowAt(taskId, day, QStringLiteral("01:00:00"),
+                                    QStringLiteral("01:25:00"), 1500));
+    QVERIFY(insertFocusSessionRowAt(taskId, day, QStringLiteral("05:00:00"),
+                                    QStringLiteral("05:15:00"), 900));
+
+    QCOMPARE(service->getDayStats(day.addDays(-1)).value(QStringLiteral("totalDuration")).toInt(),
+             1500);
+    QCOMPARE(service->getDayStats(day).value(QStringLiteral("totalDuration")).toInt(), 900);
+
+    QCOMPARE(service->getFocusSessionCount(day.addDays(-1), day.addDays(-1)), 1);
+    QCOMPARE(service->getFocusSessionCount(day, day), 1);
+
+    QCOMPARE(service->getEffectiveDays(day.addDays(-1), day), 2);
+    QCOMPARE(service->getEffectiveDays(day.addDays(-1), day.addDays(-1)), 1);
+
+    const QVariantMap categoryStats = service->getCategoryStats(
+        day.addDays(-1).toString(Qt::ISODate), day.addDays(-1).toString(Qt::ISODate));
+    QCOMPARE(categoryStats.value(QStringLiteral("totalDuration")).toInt(), 1500);
+}
+
+void ServiceTests::statisticsTodayUsesLogicalToday()
+{
+    AppSettings::instance()->setDayStartHour(4);
+    StatisticsService* service = StatisticsService::instance();
+
+    const QDate today = LogicalDay::today(4);
+    const int taskId = insertTaskRow(QStringLiteral("今日等价"), today, QStringLiteral("英语"));
+    QVERIFY(taskId > 0);
+    QVERIFY(insertFocusSessionRowAt(taskId, today, QStringLiteral("12:00:00"),
+                                    QStringLiteral("12:30:00"), 1800));
+
+    QCOMPARE(service->getTodayStats(), service->getDayStats(today));
 }
 
 void ServiceTests::getDayStatsUsesSpecifiedHistoricalDate()
@@ -1078,7 +1156,7 @@ void ServiceTests::focusHistoryCleansInvalidShortSessions()
 
 void ServiceTests::getWeekStatsUsesCurrentNaturalWeek()
 {
-    const QDate today = QDate::currentDate();
+    const QDate today = logicalToday();
     const QDate weekStart = today.addDays(1 - today.dayOfWeek());
 
     QVERIFY(insertFocusSessionRow(-1, weekStart, 120));
@@ -1260,7 +1338,7 @@ void ServiceTests::getFocusSessionCountCountsOnlyValidFinishedSessions()
 
 void ServiceTests::getMonthStatsUsesCurrentMonthAndTaskDate()
 {
-    const QDate today = QDate::currentDate();
+    const QDate today = logicalToday();
     const QDate firstDay(today.year(), today.month(), 1);
     const QDate lastDay(today.year(), today.month(), today.daysInMonth());
 
@@ -1443,7 +1521,7 @@ void ServiceTests::getMonthComparisonHandlesPreviousMonthAndInvalidYearMonth()
 
 void ServiceTests::getMonthWeeklySummaryStaysInsideCurrentMonth()
 {
-    const QDate today = QDate::currentDate();
+    const QDate today = logicalToday();
     const QDate firstDay(today.year(), today.month(), 1);
     const QDate lastDay(today.year(), today.month(), today.daysInMonth());
     const int taskId = insertTaskRow(QStringLiteral("本月周汇总"), firstDay, QStringLiteral("数学"));

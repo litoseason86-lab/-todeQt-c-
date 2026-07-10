@@ -1,7 +1,9 @@
 #include "StatisticsService.h"
 
+#include "AppSettings.h"
 #include "DatabaseManager.h"
 #include "FocusSessionRules.h"
+#include "LogicalDay.h"
 
 #include <QDebug>
 #include <QDateTime>
@@ -119,11 +121,13 @@ int queryTotalDurationForRange(const QDate& startDate, const QDate& endDate, con
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "SELECT COALESCE(SUM(duration), 0) FROM focus_sessions "
-        "WHERE date(start_time) >= :startDate "
-        "AND date(start_time) <= :endDate "
+        "WHERE date(start_time, :dayShift) >= :startDate "
+        "AND date(start_time, :dayShift) <= :endDate "
         "AND end_time IS NOT NULL "
         "AND duration IS NOT NULL "
         "AND duration >= :minDuration"));
+    query.bindValue(QStringLiteral(":dayShift"),
+                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
@@ -170,7 +174,7 @@ QVariantMap StatisticsService::getDayStats(const QDate& date) const
 
 QVariantMap StatisticsService::getTodayStats() const
 {
-    return getDayStats(QDate::currentDate());
+    return getDayStats(LogicalDay::today(AppSettings::instance()->dayStartHour()));
 }
 
 QVariantMap StatisticsService::buildComparisonResult(int currentValue, int previousValue, const QString& label) const
@@ -241,7 +245,7 @@ QVariantList StatisticsService::getWeekStats(const QDate& weekStart) const
 
 QVariantList StatisticsService::getWeekStats() const
 {
-    const QDate today = QDate::currentDate();
+    const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
     return getWeekStats(today.addDays(1 - today.dayOfWeek()));
 }
 
@@ -333,14 +337,16 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
         "JOIN tasks t ON f.task_id = t.id "
         "LEFT JOIN categories c ON t.category_id = c.id "
         "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
-        "WHERE date(f.start_time) >= :startDate "
-        "AND date(f.start_time) <= :endDate "
+        "WHERE date(f.start_time, :dayShift) >= :startDate "
+        "AND date(f.start_time, :dayShift) <= :endDate "
         "AND f.end_time IS NOT NULL "
         "AND f.duration IS NOT NULL "
         "AND f.duration >= :minDuration "
         "AND trim(COALESCE(c.name, legacy.name, t.category, '')) != '' "
         "GROUP BY category_name, category_color "
         "ORDER BY total_duration DESC, category_name ASC"));
+    query.bindValue(QStringLiteral(":dayShift"),
+                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
@@ -421,7 +427,7 @@ QVariantMap StatisticsService::getMonthStats(int year, int month) const
 
 QVariantMap StatisticsService::getMonthStats() const
 {
-    const QDate today = QDate::currentDate();
+    const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
     return getMonthStats(today.year(), today.month());
 }
 
@@ -481,11 +487,13 @@ int StatisticsService::getFocusSessionCount(const QDate& startDate, const QDate&
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "SELECT COUNT(*) FROM focus_sessions "
-        "WHERE date(start_time) >= :startDate "
-        "AND date(start_time) <= :endDate "
+        "WHERE date(start_time, :dayShift) >= :startDate "
+        "AND date(start_time, :dayShift) <= :endDate "
         "AND end_time IS NOT NULL "
         "AND duration IS NOT NULL "
         "AND duration >= :minDuration"));
+    query.bindValue(QStringLiteral(":dayShift"),
+                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
@@ -535,7 +543,7 @@ QVariantList StatisticsService::getMonthWeeklySummary(int year, int month) const
 
 QVariantList StatisticsService::getMonthWeeklySummary() const
 {
-    const QDate today = QDate::currentDate();
+    const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
     return getMonthWeeklySummary(today.year(), today.month());
 }
 
@@ -612,14 +620,16 @@ QList<QDate> StatisticsService::getUniqueFocusDates(const QDate& startDate, cons
 
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "SELECT DISTINCT date(start_time) AS focus_date "
+        "SELECT DISTINCT date(start_time, :dayShift) AS focus_date "
         "FROM focus_sessions "
-        "WHERE date(start_time) >= :startDate "
-        "AND date(start_time) <= :endDate "
+        "WHERE date(start_time, :dayShift) >= :startDate "
+        "AND date(start_time, :dayShift) <= :endDate "
         "AND end_time IS NOT NULL "
         "AND duration IS NOT NULL "
         "AND duration >= :minDuration "
         "ORDER BY focus_date ASC"));
+    query.bindValue(QStringLiteral(":dayShift"),
+                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
