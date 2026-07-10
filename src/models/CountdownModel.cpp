@@ -31,7 +31,7 @@ QVariant CountdownModel::data(const QModelIndex& index, int role) const
     case DisplayOrderRole:
         return goal.displayOrder();
     case DaysRemainingRole:
-        return goal.daysRemaining();
+        return goal.daysRemainingFrom(m_referenceDate);
     default:
         return QVariant();
     }
@@ -99,6 +99,19 @@ void CountdownModel::moveGoal(int fromIndex, int toIndex)
     beginMoveRows(QModelIndex(), fromIndex, fromIndex, QModelIndex(), destinationChild);
     m_goals.move(fromIndex, toIndex);
     endMoveRows();
+}
+
+void CountdownModel::setReferenceDate(const QDate& referenceDate)
+{
+    if (m_referenceDate == referenceDate) {
+        return;
+    }
+
+    m_referenceDate = referenceDate;
+    if (!m_goals.isEmpty()) {
+        // 基准日变化只影响剩余天数角色，不迫使 QML 重读其它字段。
+        emit dataChanged(index(0), index(m_goals.count() - 1), {DaysRemainingRole});
+    }
 }
 
 const QList<CountdownGoal>& CountdownModel::goals() const

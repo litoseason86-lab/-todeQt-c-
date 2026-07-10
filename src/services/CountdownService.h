@@ -25,6 +25,9 @@ public:
     Q_INVOKABLE bool reorder(int fromIndex, int toIndex);
     Q_INVOKABLE int calculateDaysRemaining(const QDate& targetDate) const;
 
+    // 列表角色与主目标横幅同步基准日的唯一入口；公开以便测试注入固定日期。
+    void syncReferenceDateTo(const QDate& referenceDate);
+
     CountdownModel* model() const;
     QVariant primaryGoal() const;
 
@@ -39,11 +42,13 @@ private:
     bool initializeDatabase();
     void loadGoals();
     void updatePrimaryGoal();
+    void syncReferenceDate();
     int findGoalIndexById(int id) const;
     bool validateGoalInput(const QString& name, const QDate& targetDate, QString* normalizedName);
     QVariantMap goalToVariantMap(const CountdownGoal& goal) const;
 
     CountdownModel* m_model = nullptr;
+    QDate m_referenceDate;
     QVariantMap m_primaryGoalCache;
     bool m_databaseReady = false;
     QString m_databaseName;

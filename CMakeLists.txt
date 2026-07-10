@@ -172,6 +172,11 @@ add_executable(CountdownServiceTests
     src/services/DatabaseManager.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
 )
 
 target_link_libraries(CountdownServiceTests PRIVATE

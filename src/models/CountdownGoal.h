@@ -40,7 +40,8 @@ public:
     void setCreatedAt(const QDateTime& createdAt);
     void setUpdatedAt(const QDateTime& updatedAt);
 
-    int daysRemaining() const;
+    // 基准日由调用方注入，模型值对象不反向依赖设置或服务单例。
+    int daysRemainingFrom(const QDate& baseDate) const;
 
 private:
     int m_id = -1;

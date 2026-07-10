@@ -1,6 +1,9 @@
 #include "CountdownService.h"
 
+#include "AppSettings.h"
 #include "DatabaseManager.h"
+#include "LogicalDay.h"
+#include "LogicalDayService.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -28,6 +31,11 @@ CountdownService::CountdownService(QObject* parent)
     : QObject(parent)
     , m_model(new CountdownModel(this))
 {
+    // 必须先定基准日再加载，否则初次构造的横幅 map 会短暂使用物理日。
+    syncReferenceDate();
+    connect(LogicalDayService::instance(), &LogicalDayService::changed,
+            this, &CountdownService::syncReferenceDate);
+
     const QSqlDatabase db = DatabaseManager::instance()->database();
     if (db.isOpen() && initializeDatabase()) {
         loadGoals();
@@ -242,7 +250,7 @@ int CountdownService::calculateDaysRemaining(const QDate& targetDate) const
         return 0;
     }
 
-    return QDate::currentDate().daysTo(targetDate);
+    return m_referenceDate.daysTo(targetDate);
 }
 
 bool CountdownService::ensureDatabaseReady()
@@ -320,7 +328,8 @@ void CountdownService::loadGoals()
     }
 
     m_model->setGoals(goals);
-    updatePrimaryGoal();
+    // 换库重载后重推统一基准日；内部同时刷新主目标缓存和通知。
+    syncReferenceDate();
 }
 
 void CountdownService::updatePrimaryGoal()
@@ -378,6 +387,19 @@ QVariantMap CountdownService::goalToVariantMap(const CountdownGoal& goal) const
     map.insert(QStringLiteral("name"), goal.name());
     map.insert(QStringLiteral("targetDate"), goal.targetDate());
     map.insert(QStringLiteral("displayOrder"), goal.displayOrder());
-    map.insert(QStringLiteral("daysRemaining"), goal.daysRemaining());
+    map.insert(QStringLiteral("daysRemaining"), goal.daysRemainingFrom(m_referenceDate));
     return map;
+}
+
+void CountdownService::syncReferenceDateTo(const QDate& referenceDate)
+{
+    m_referenceDate = referenceDate;
+    // 列表和横幅必须吃同一基准日，避免一处刷新后另一处仍显示旧天数。
+    m_model->setReferenceDate(referenceDate);
+    updatePrimaryGoal();
+}
+
+void CountdownService::syncReferenceDate()
+{
+    syncReferenceDateTo(LogicalDay::today(AppSettings::instance()->dayStartHour()));
 }

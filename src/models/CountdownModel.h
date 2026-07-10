@@ -31,11 +31,14 @@ public:
     void updateGoal(int index, const CountdownGoal& goal);
     void removeGoal(int index);
     void moveGoal(int fromIndex, int toIndex);
+    void setReferenceDate(const QDate& referenceDate);
 
     const QList<CountdownGoal>& goals() const;
 
 private:
     QList<CountdownGoal> m_goals;
+    // 独立模型默认保持旧行为；服务构造后立即用逻辑今天覆盖。
+    QDate m_referenceDate = QDate::currentDate();
 };
 
 #endif // COUNTDOWNMODEL_H

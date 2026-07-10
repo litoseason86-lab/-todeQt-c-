@@ -77,11 +77,11 @@ void CountdownGoal::setUpdatedAt(const QDateTime& updatedAt)
     m_updatedAt = updatedAt;
 }
 
-int CountdownGoal::daysRemaining() const
+int CountdownGoal::daysRemainingFrom(const QDate& baseDate) const
 {
-    if (!m_targetDate.isValid()) {
+    if (!m_targetDate.isValid() || !baseDate.isValid()) {
         return 0;
     }
 
-    return QDate::currentDate().daysTo(m_targetDate);
+    return baseDate.daysTo(m_targetDate);
 }

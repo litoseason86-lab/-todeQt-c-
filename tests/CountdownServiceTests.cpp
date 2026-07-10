@@ -7,8 +7,10 @@
 #include <QtTest>
 #include <QVariantMap>
 
+#include "../src/services/AppSettings.h"
 #include "../src/services/CountdownService.h"
 #include "../src/services/DatabaseManager.h"
+#include "../src/services/LogicalDay.h"
 
 namespace {
 QString nameAt(CountdownModel* model, int row)
@@ -48,6 +50,8 @@ private slots:
     void samePathReinitializeReloadsFreshDatabase();
     void primaryGoalReturnsQmlReadableMap();
     void calculateDaysRemainingHandlesPastAndInvalidDates();
+    void modelReferenceDateDrivesDaysRemaining();
+    void syncReferenceDateUpdatesBothPathsAndNotifies();
 
 private:
     void clearGoals();
@@ -75,6 +79,9 @@ void CountdownServiceTests::cleanupTestCase()
 void CountdownServiceTests::init()
 {
     clearGoals();
+    AppSettings::instance()->setDayStartHour(4);
+    CountdownService::instance()->syncReferenceDateTo(
+        LogicalDay::today(AppSettings::instance()->dayStartHour()));
 }
 
 void CountdownServiceTests::cleanup()
@@ -162,7 +169,7 @@ void CountdownServiceTests::updateGoalValidatesAndUpdatesExistingGoal()
     QCOMPARE(nameAt(service->model(), 0), QStringLiteral("更新目标"));
     QCOMPARE(service->model()->data(service->model()->index(0), CountdownModel::TargetDateRole).toDate(), updatedDate);
     QCOMPARE(service->model()->data(service->model()->index(0), CountdownModel::DaysRemainingRole).toInt(),
-             QDate::currentDate().daysTo(updatedDate));
+             LogicalDay::today(AppSettings::instance()->dayStartHour()).daysTo(updatedDate));
 
     QSqlQuery query(DatabaseManager::instance()->database());
     query.prepare(QStringLiteral("SELECT name, target_date, updated_at FROM countdown_goals WHERE id = :id"));
@@ -308,14 +315,16 @@ void CountdownServiceTests::primaryGoalReturnsQmlReadableMap()
     QCOMPARE(primary.value(QStringLiteral("goalId")).toInt(), goalIdAt(service->model(), 0));
     QCOMPARE(primary.value(QStringLiteral("name")).toString(), QStringLiteral("目标1"));
     QCOMPARE(primary.value(QStringLiteral("targetDate")).toDate(), firstDate);
-    QCOMPARE(primary.value(QStringLiteral("daysRemaining")).toInt(), QDate::currentDate().daysTo(firstDate));
+    QCOMPARE(primary.value(QStringLiteral("daysRemaining")).toInt(),
+             LogicalDay::today(AppSettings::instance()->dayStartHour()).daysTo(firstDate));
 
     QVERIFY(service->reorder(1, 0));
     primary = service->primaryGoal().toMap();
     QCOMPARE(primary.value(QStringLiteral("goalId")).toInt(), goalIdAt(service->model(), 0));
     QCOMPARE(primary.value(QStringLiteral("name")).toString(), QStringLiteral("目标2"));
     QCOMPARE(primary.value(QStringLiteral("targetDate")).toDate(), secondDate);
-    QCOMPARE(primary.value(QStringLiteral("daysRemaining")).toInt(), QDate::currentDate().daysTo(secondDate));
+    QCOMPARE(primary.value(QStringLiteral("daysRemaining")).toInt(),
+             LogicalDay::today(AppSettings::instance()->dayStartHour()).daysTo(secondDate));
 
     QVERIFY(service->deleteGoal(goalIdAt(service->model(), 0)));
     QVERIFY(service->deleteGoal(goalIdAt(service->model(), 0)));
@@ -325,12 +334,44 @@ void CountdownServiceTests::primaryGoalReturnsQmlReadableMap()
 void CountdownServiceTests::calculateDaysRemainingHandlesPastAndInvalidDates()
 {
     CountdownService* service = CountdownService::instance();
-    const QDate today = QDate::currentDate();
+    const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
 
     QCOMPARE(service->calculateDaysRemaining(today), 0);
     QCOMPARE(service->calculateDaysRemaining(today.addDays(10)), 10);
     QCOMPARE(service->calculateDaysRemaining(today.addDays(-5)), -5);
     QCOMPARE(service->calculateDaysRemaining(QDate()), 0);
+}
+
+void CountdownServiceTests::modelReferenceDateDrivesDaysRemaining()
+{
+    CountdownService* service = CountdownService::instance();
+    const QDate reference = LogicalDay::today(AppSettings::instance()->dayStartHour());
+    QVERIFY(service->addGoal(QStringLiteral("参考日目标"), reference.addDays(10)));
+
+    CountdownModel* model = service->model();
+    QSignalSpy dataSpy(model, &QAbstractItemModel::dataChanged);
+
+    model->setReferenceDate(reference.addDays(7));
+    QCOMPARE(model->data(model->index(0), CountdownModel::DaysRemainingRole).toInt(), 3);
+    QCOMPARE(dataSpy.count(), 1);
+
+    model->setReferenceDate(reference.addDays(7));
+    QCOMPARE(dataSpy.count(), 1);
+}
+
+void CountdownServiceTests::syncReferenceDateUpdatesBothPathsAndNotifies()
+{
+    CountdownService* service = CountdownService::instance();
+    const QDate reference = LogicalDay::today(AppSettings::instance()->dayStartHour());
+    QVERIFY(service->addGoal(QStringLiteral("双路径目标"), reference.addDays(30)));
+
+    QSignalSpy primarySpy(service, &CountdownService::primaryGoalChanged);
+    service->syncReferenceDateTo(reference.addDays(7));
+
+    QCOMPARE(service->model()->data(service->model()->index(0),
+                                    CountdownModel::DaysRemainingRole).toInt(), 23);
+    QCOMPARE(service->primaryGoal().toMap().value(QStringLiteral("daysRemaining")).toInt(), 23);
+    QCOMPARE(primarySpy.count(), 1);
 }
 
 QTEST_MAIN(CountdownServiceTests)
