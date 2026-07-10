@@ -95,6 +95,7 @@ TestCase {
         settingsStub.reduceMotion = false
         settingsStub.slimClockFont = true
         settingsStub.soundEnabled = true
+        overlay.controlsRevealed = false
         overlay.active = true
         wait(20)
     }
@@ -209,5 +210,46 @@ TestCase {
 
         settingsStub.slimClockFont = false
         compare(time.font.weight, Font.Medium)
+    }
+
+    function test_revealControlsStartsHideCountdown() {
+        compare(overlay.controlsRevealed, false)
+        overlay.revealControls()
+        compare(overlay.controlsRevealed, true)
+        compare(overlay.hideTimerRunning, true)
+
+        overlay.hideControls()
+        compare(overlay.controlsRevealed, false)
+        compare(overlay.controlsShown, false)
+    }
+
+    function test_controlsPinnedWhenPausedOrDone() {
+        compare(overlay.controlsPinned, false)
+
+        timerStub.isRunning = false
+        compare(overlay.controlsPinned, true)
+        compare(overlay.controlsShown, true)
+
+        timerStub.isRunning = true
+        focusViewStub.state = "breakDone"
+        compare(overlay.controlsPinned, true)
+
+        focusViewStub.state = "pomoWork"
+        compare(overlay.controlsPinned, false)
+    }
+
+    function test_cursorHidesWithControls() {
+        const hover = findChild(overlay, "immersiveHoverArea")
+        verify(hover)
+        compare(hover.cursorShape, Qt.BlankCursor)
+
+        overlay.revealControls()
+        compare(hover.cursorShape, Qt.ArrowCursor)
+    }
+
+    function test_fadeAnimatedFollowsReduceMotion() {
+        compare(overlay.fadeAnimated, true)
+        settingsStub.reduceMotion = true
+        compare(overlay.fadeAnimated, false)
     }
 }

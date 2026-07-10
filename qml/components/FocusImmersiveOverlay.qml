@@ -36,8 +36,31 @@ Item {
         return projectedState === "free" && Boolean(timerRef.hasActiveSession)
     }
 
+    // 鼠标移动后控制浮现 3 秒；暂停和完成态固定显示，避免关键动作自己消失。
+    property bool controlsRevealed: false
+    readonly property bool controlsPinned: sessionPaused || completionState
+    readonly property bool controlsShown: controlsRevealed || controlsPinned
+    readonly property bool fadeAnimated: !(settingsRef && settingsRef.reduceMotion)
+    readonly property alias hideTimerRunning: hideTimer.running
+
+    function revealControls() {
+        controlsRevealed = true
+        hideTimer.restart()
+    }
+
+    function hideControls() {
+        controlsRevealed = false
+    }
+
     function viewText(name) {
         return focusViewRef ? String(focusViewRef[name]()) : ""
+    }
+
+    Timer {
+        id: hideTimer
+
+        interval: 3000
+        onTriggered: root.hideControls()
     }
 
     Rectangle {
@@ -45,6 +68,18 @@ Item {
 
         anchors.fill: parent
         color: Theme.glassCard
+
+        MouseArea {
+            objectName: "immersiveHoverArea"
+
+            anchors.fill: parent
+            hoverEnabled: true
+            // 只观察移动，不接收点击；后续浮现的控制按钮必须能正常命中。
+            acceptedButtons: Qt.NoButton
+            cursorShape: root.controlsShown ? Qt.ArrowCursor : Qt.BlankCursor
+
+            onPositionChanged: root.revealControls()
+        }
 
         ColumnLayout {
             width: Math.min(parent.width - 96, 640)
