@@ -1,14 +1,14 @@
-# 逻辑日界点 · 计划二（任务/例行/倒计时/周计划/QML 今天 + 视图失效订阅）实施计划
+# 逻辑日界点 · 计划二（任务/倒计时/周计划/QML 今天 + 视图失效订阅）实施计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 把全 app 剩余的"今天"统一到逻辑日：TaskManager（今日任务/结转）、RoutineManager（例行）、倒计时三条 daysRemaining 路径（分层注入基准日 + primaryGoalChanged 通知）、QML 各"今天"入口（Today/AddTask/EditTask/Export/Week/Month），并让 Today/Week/Month/Countdown 订阅 `logicalDayService.changed` 实现"当前期跟随、历史期保留"的跨日/改设置自动刷新。
+**Goal:** 把全 app 剩余的"今天"统一到逻辑日：TaskManager（今日任务/结转）、倒计时三条 daysRemaining 路径（分层注入基准日 + primaryGoalChanged 通知）、QML 各"今天"入口（Today/AddTask/EditTask/Export/Countdown/Week/Month），并让 Today/Week/Month/Countdown 订阅 `logicalDayService.changed` 实现"当前期跟随、历史期保留"的跨日/改设置自动刷新。
 
 **Architecture:** C++ 服务在调用点读 `AppSettings::instance()->dayStartHour()` 传给 `LogicalDay::today(h)`；**model 层零单例依赖**——CountdownGoal 改纯函数 `daysRemainingFrom(base)`、CountdownModel 注入 `m_referenceDate`、CountdownService 私有 `syncReferenceDate()` 统一推送并触发 `primaryGoalChanged`。QML 侧 Week/Month 落**命令式状态 `logicalToday`**（非绑定）+ `logicalNowProvider` 注入时间，`onChanged` 按六步固定顺序（prev→wasFollowing→next→赋值→移动→refresh）。
 
 **Tech Stack:** Qt 6.9 / C++17 / SQLite / QML / Qt Test / qmltestrunner
 
-**Depends on:** 计划一已完成（`LogicalDay.h`、`LogicalDay.js`（含 qrc）、`AppSettings.dayStartHour`、`LogicalDayService` + 上下文属性、ServiceTests 的 `insertFocusSessionRowAt`/`logicalToday()` helper 均已存在）。继续在分支 `logical-day` 上执行。
+**Depends on:** 计划一已完成（`LogicalDay.h`、`LogicalDay.js`（含 qrc）、`AppSettings.dayStartHour`、`RoutineManager::materializeToday()` 已按逻辑日生成、`LogicalDayService` + 上下文属性、ServiceTests 的 `insertFocusSessionRowAt`/`logicalToday()` helper 均已存在）。继续在分支 `logical-day` 上执行。
 
 ## Global Constraints
 
@@ -23,16 +23,15 @@
 
 ---
 
-### Task 1: TaskManager / RoutineManager 的今天改逻辑日
+### Task 1: TaskManager 的今天改逻辑日
 
 **Files:**
 - Modify: `src/services/TaskManager.cpp`
-- Modify: `src/services/RoutineManager.cpp`
 - Test: `tests/ServiceTests.cpp`
 
 **Interfaces:**
 - Consumes: `LogicalDay::today(int)`、`AppSettings::dayStartHour()`、测试 helper `logicalToday()`（计划一 Task 3 已加）。
-- Produces: `getTodayTasks()`/overdue 判定/`moveTasksToToday`/`materializeToday` 的"今天"= 逻辑今天。
+- Produces: `getTodayTasks()`/overdue 判定/`moveTasksToToday` 的"今天"= 逻辑今天。RoutineManager 已在计划一完成，避免计划一的“失效补例行”连接只接到物理日实现。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -40,10 +39,9 @@
 
 ```cpp
     void taskManagerTodayUsesLogicalToday();
-    void routineMaterializeStampsLogicalToday();
 ```
 
-实现（加在既有 materializeToday 系列测试之后）：
+实现（加在既有任务管理测试之后）：
 
 ```cpp
 void ServiceTests::taskManagerTodayUsesLogicalToday()
@@ -70,30 +68,14 @@ void ServiceTests::taskManagerTodayUsesLogicalToday()
     QVERIFY(manager->getOverdueUncompletedTasks().isEmpty());
 }
 
-void ServiceTests::routineMaterializeStampsLogicalToday()
-{
-    AppSettings::instance()->setDayStartHour(4);
-    QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("逻辑日例行"), -1));
-
-    QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
-
-    // 生成的任务与 last_generated_date 都必须是逻辑今天，否则跨 0-4 点会重复生成。
-    QCOMPARE(TaskManager::instance()->getTasksByDate(logicalToday()).size(), 1);
-
-    QSqlQuery check(DatabaseManager::instance()->database());
-    QVERIFY2(check.exec(QStringLiteral("SELECT last_generated_date FROM routines")),
-             qPrintable(check.lastError().text()));
-    QVERIFY(check.next());
-    QCOMPARE(check.value(0).toString(), logicalToday().toString(Qt::ISODate));
-}
 ```
 
 - [ ] **Step 2: 确认现状（凌晨窗口外两者等价，测试可能先绿）**
 
-Run: `cmake --build build && QT_QPA_PLATFORM=offscreen ./build/PomodoroTodoTests taskManagerTodayUsesLogicalToday routineMaterializeStampsLogicalToday`
-Expected: 白天运行时可能已通过（逻辑今天=物理今天）——这两个测试的价值是**锁定契约**：实现改完后凌晨运行也成立。继续 Step 3。
+Run: `cmake --build build && QT_QPA_PLATFORM=offscreen ./build/PomodoroTodoTests taskManagerTodayUsesLogicalToday`
+Expected: 白天运行时可能已通过（逻辑今天=物理今天）——该测试锁定包装契约；核心日期算法的 RED/GREEN 已由计划一 LogicalDay 纯函数测试覆盖。继续 Step 3。
 
-- [ ] **Step 3: 实现（4 处替换）**
+- [ ] **Step 3: 实现（3 处替换）**
 
 `src/services/TaskManager.cpp` include 区加：
 
@@ -121,35 +103,25 @@ Expected: 白天运行时可能已通过（逻辑今天=物理今天）——这
     const QString today = LogicalDay::today(AppSettings::instance()->dayStartHour()).toString(Qt::ISODate);
 ```
 
-`src/services/RoutineManager.cpp` include 区加同两行；`materializeToday`（约 255 行）：
-
-```cpp
-    const QString today = LogicalDay::today(AppSettings::instance()->dayStartHour()).toString(Qt::ISODate);
-```
-
 - [ ] **Step 4: 既有"今天"耦合用例改 logicalToday()（消除凌晨假失败）**
 
-以下 6 个既有测试把 `QDate::currentDate()` 当"服务的今天"用，实现改后凌晨 0-4 点运行会假失败。**在这些函数体内把每处 `QDate::currentDate()` 整体替换为 `logicalToday()`**（显式日期自洽的其它测试一律不动）：
+以下 2 个既有测试把 `QDate::currentDate()` 当"服务的今天"用，实现改后凌晨 0-4 点运行会假失败。**在这些函数体内把每处 `QDate::currentDate()` 整体替换为 `logicalToday()`**（显式日期自洽的其它测试一律不动）：
 
-- `materializeTodayIsIdempotentAndDoesNotBackfill`（3 处）
-- `materializeTodayPreservesCategoryAndDoesNotEmitSignals`（1 处）
-- `materializeTodayDoesNotResurrectDeletedTask`（2 处）
-- `materializeTodaySkipsInactiveRoutines`（1 处）
 - `overdueQueryExcludesTodayCompletedAndRoutine`（1 处，含由它派生的 yesterday）
 - `moveTasksToTodayIsTransactional`（1 处，含由它派生的 yesterday）
 
-替换后核对：`awk '/^void ServiceTests::/{fn=$2} /QDate::currentDate/{print NR" "fn}' tests/ServiceTests.cpp | grep -E "materializeToday|overdueQuery|moveTasksToToday"` 应无输出。
+替换后核对：`awk '/^void ServiceTests::/{fn=$2} /QDate::currentDate/{print NR" "fn}' tests/ServiceTests.cpp | grep -E "overdueQuery|moveTasksToToday"` 应无输出。
 
 - [ ] **Step 5: 跑测试（GREEN）**
 
-Run: `cmake --build build && QT_QPA_PLATFORM=offscreen ./build/PomodoroTodoTests taskManagerTodayUsesLogicalToday routineMaterializeStampsLogicalToday materializeTodayIsIdempotentAndDoesNotBackfill materializeTodayPreservesCategoryAndDoesNotEmitSignals materializeTodayStampsRoutineId materializeTodayRollsBackClaimWhenTaskInsertFails materializeTodayDoesNotResurrectDeletedTask materializeTodaySkipsInactiveRoutines overdueQueryExcludesTodayCompletedAndRoutine moveTasksToTodayIsTransactional`
-Expected: 10 passed。
+Run: `cmake --build build && QT_QPA_PLATFORM=offscreen ./build/PomodoroTodoTests taskManagerTodayUsesLogicalToday overdueQueryExcludesTodayCompletedAndRoutine moveTasksToTodayIsTransactional`
+Expected: 3 passed。
 
 - [ ] **Step 6: 提交**
 
 ```bash
-git add src/services/TaskManager.cpp src/services/RoutineManager.cpp tests/ServiceTests.cpp
-git commit -m "任务与例行的今天改逻辑日（今日任务/结转/moveTasksToToday/materializeToday）"
+git add src/services/TaskManager.cpp tests/ServiceTests.cpp
+git commit -m "任务管理的今天改逻辑日（今日任务/逾期判定/moveTasksToToday）"
 ```
 
 ---
@@ -474,10 +446,14 @@ git commit -m "倒计时分层改注入基准日（daysRemainingFrom+referenceDa
 - Modify: `qml/components/AddTaskDialog.qml`
 - Modify: `qml/components/EditTaskDialog.qml`
 - Modify: `qml/components/ExportDialog.qml`
+- Modify: `qml/components/CountdownDialog.qml`
+- Test: `tests/qml/tst_countdown_ui.qml`
 
 **Interfaces:**
 - Consumes: `LogicalDay.todayDate/todayIso`（计划一 Task 7）。
-- Produces: 结转横幅"今天"、新任务默认日期、编辑"今天/明天/后天"、导出快捷范围全部以逻辑今天为锚。
+- Produces: 结转横幅"今天"、新任务默认日期、编辑"今天/明天/后天"、导出快捷范围、目标倒计时空值回落与默认 30 天后全部以逻辑今天为锚。
+
+**源码补漏：** 规格的 QML 映射表没有列 `CountdownDialog`，但现状 `dateToInput()` 空值回落和 `openForAdd()` 默认 30 天后分别直接读取 `new Date()` / `Date.now()`。不改会导致凌晨窗口里倒计时新增目标仍比全 app 多一天，因此本任务把它作为必须项补入，而不是留作无关扩展。
 
 - [ ] **Step 1: TodayTaskView 的 todayIsoDate**
 
@@ -604,22 +580,110 @@ import "../LogicalDay.js" as LogicalDay
 
 （`property date currentDate`（11 行）无任何读取点，属死属性，不动不删——本计划不做无关清理。）
 
-- [ ] **Step 5: 回归 ×2 + lint**
+- [ ] **Step 5: CountdownDialog 的日期回落与“默认 30 天后”改逻辑日，并补固定时间测试**
+
+`qml/components/CountdownDialog.qml`：
+
+1）import 区加：
+
+```qml
+import "../LogicalDay.js" as LogicalDay
+```
+
+2）属性区加测试可控时间源：
+
+```qml
+    // 仅测试注入；生产为 null 时读取真实现在。
+    property var logicalNowProvider: null
+```
+
+3）`dateToInput()` 前加本地逻辑今天函数，并把空值回落改为逻辑今天：
+
+```qml
+    function logicalToday() {
+        var now = root.logicalNowProvider ? root.logicalNowProvider() : new Date()
+        // qmllint disable unqualified
+        var h = (typeof appSettings !== "undefined" && appSettings) ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        return LogicalDay.todayDate(h, now)
+    }
+
+    function dateToInput(value) {
+        return Qt.formatDate(value ? value : root.logicalToday(), "yyyy-MM-dd")
+    }
+```
+
+4）`openForAdd()` 中物理 `Date.now() + 30天` 改为从逻辑今天做日历加法：
+
+```qml
+        // 默认 30 天后必须从逻辑今天起算：凌晨日界点前不能比全 app 多算一天。
+        var defaultDate = new Date(root.logicalToday())
+        defaultDate.setDate(defaultDate.getDate() + 30)
+        dateField.text = dateToInput(defaultDate)
+```
+
+`tests/qml/tst_countdown_ui.qml`：
+
+1）TestCase 属性区加固定时钟，并提供 appSettings mock：
+
+```qml
+    property var fakeNow: new Date(2026, 6, 8, 3, 59)
+
+    QtObject {
+        id: appSettings
+
+        property int dayStartHour: 4
+    }
+```
+
+2）CountdownDialog 实例增加固定 provider（函数本身不替换，只修改 `fakeNow`）：
+
+```qml
+        logicalNowProvider: function() { return testCase.fakeNow }
+```
+
+3）`init()` 中复位：
+
+```qml
+        testCase.fakeNow = new Date(2026, 6, 8, 3, 59)
+```
+
+4）新增用例：
+
+```qml
+    function test_dialogDefaultDateUsesLogicalToday() {
+        // 7月8日 03:59、h=4 → 逻辑今天 7月7日；默认 30 天后应是 8月6日。
+        compare(countdownDialog.dateToInput(null), "2026-07-07")
+        countdownDialog.openForAdd()
+        var dateField = findChild(countdownDialog, "countdownDateField")
+        verify(dateField)
+        compare(dateField.text, "2026-08-06")
+
+        // 跨过 4 点后逻辑今天变 7月8日，默认值同步变为 8月7日。
+        countdownDialog.close()
+        testCase.fakeNow = new Date(2026, 6, 8, 4, 0)
+        countdownDialog.openForAdd()
+        compare(dateField.text, "2026-08-07")
+    }
+```
+
+- [ ] **Step 6: 回归 ×2 + lint**
 
 Run（各 ×2）:
 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_today_rollover.qml`
 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_add_task_dialog.qml`
 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_edit_task_dialog.qml`
 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_phase3_export_ui.qml`
+`QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic /Users/zerionlito/Qt/6.9.0/macos/bin/qmltestrunner -input tests/qml/tst_countdown_ui.qml`
 Expected: 全绿 ×2（白天运行逻辑今天=物理今天，既有断言不变；若有用例把"今天"写死为 `new Date()` 对比而失败，把该断言改为经 `LogicalDay.todayDate(4, new Date())` 计算——语义即"与组件同口径"）。
-Run: `for f in qml/views/TodayTaskView.qml qml/components/AddTaskDialog.qml qml/components/EditTaskDialog.qml qml/components/ExportDialog.qml; do /Users/zerionlito/Qt/6.9.0/macos/bin/qmllint $f; done`
+Run: `for f in qml/views/TodayTaskView.qml qml/components/AddTaskDialog.qml qml/components/EditTaskDialog.qml qml/components/ExportDialog.qml qml/components/CountdownDialog.qml; do /Users/zerionlito/Qt/6.9.0/macos/bin/qmllint $f; done`
 Expected: 不新增警告。
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 7: 提交**
 
 ```bash
-git add qml/views/TodayTaskView.qml qml/components/AddTaskDialog.qml qml/components/EditTaskDialog.qml qml/components/ExportDialog.qml
-git commit -m "QML 对话框与今日页的今天改逻辑日（结转/新任务默认/编辑chip/导出快捷范围）"
+git add qml/views/TodayTaskView.qml qml/components/AddTaskDialog.qml qml/components/EditTaskDialog.qml qml/components/ExportDialog.qml qml/components/CountdownDialog.qml tests/qml/tst_countdown_ui.qml
+git commit -m "QML 今日入口统一逻辑日（任务编辑导出与倒计时默认日期）"
 ```
 
 ---
@@ -1166,9 +1230,9 @@ Expected: 全部通过（既有 offscreen 偶发按基线重跑区分）。
 
 Run: `grep -rn "QDate::currentDate" src/services/ src/models/`
 Expected: 仅剩与"今天"语义无关的用途（如时间戳生成）；`TaskManager/RoutineManager/StatisticsService/CountdownService/CountdownGoal` 中不应再有"今天"含义的 currentDate。
-Run: `grep -rn "new Date()" qml/views/TodayTaskView.qml qml/views/WeekPlanView.qml qml/views/MonthGoalView.qml qml/components/AddTaskDialog.qml qml/components/EditTaskDialog.qml qml/components/ExportDialog.qml | grep -v "logicalNowProvider\|computeLogicalToday\|LogicalDay.today\|logicalToday()"`
+Run: `grep -rn "new Date()\|Date.now()" qml/views/TodayTaskView.qml qml/views/WeekPlanView.qml qml/views/MonthGoalView.qml qml/components/AddTaskDialog.qml qml/components/EditTaskDialog.qml qml/components/ExportDialog.qml qml/components/CountdownDialog.qml | grep -v "logicalNowProvider\|computeLogicalToday\|LogicalDay.today\|logicalToday()"`
 Expected: 输出里不应有"今天"语义的裸 `new Date()`（provider 兜底与非日期用途除外，逐条人工确认）。
 
 - [ ] **Step 3: 收官汇报**
 
-汇报：全 app"今天"统一逻辑日（任务/结转/例行/倒计时双路径/周计划/月历/统计/导出/对话框）、跨设置与跨日界自动刷新（Today/Week/Month/Statistics/Countdown 全订阅，Week/Month 带"当前期跟随、历史期保留"）、测试全绿 ×2。等待用户人工验收（改设置步进器 → 各页即时刷新；可把日界点临时调到当前小时+1 观察跨界行为）。**不自行合并回 main。**
+汇报：全 app"今天"统一逻辑日（任务/结转/例行/倒计时双路径与新增目标默认日期/周计划/月历/统计/导出/对话框）、跨设置与跨日界自动刷新（Today/Week/Month/Statistics/Countdown 全订阅，Week/Month 带"当前期跟随、历史期保留"）、测试全绿 ×2。等待用户人工验收（改设置步进器 → 各页即时刷新；可把日界点临时调到当前小时+1 观察跨界行为）。**不自行合并回 main。**
