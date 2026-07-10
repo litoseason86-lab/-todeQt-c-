@@ -5,6 +5,7 @@ import QtQuick.Layouts
 import ".."
 import "../components"
 import "MonthGoalFormat.js" as MgFmt
+import "../LogicalDay.js" as LogicalDay
 
 Item {
     id: root
@@ -15,6 +16,9 @@ Item {
     property int currentYear: new Date().getFullYear()
     property int currentMonth: new Date().getMonth() + 1
     property int selectedDay: new Date().getDate()
+    // logicalToday 必须是命令式快照；绑定会在 changed 槽保存旧值前提前重算。
+    property date logicalToday
+    property var logicalNowProvider: null
     property var categoryManagerRef: null
     property string loadError: ""
     property var monthSessions: []
@@ -22,7 +26,13 @@ Item {
     property var dailyTotals: ({})
     property int invalidSessionCount: 0
 
-    Component.onCompleted: refresh()
+    Component.onCompleted: {
+        root.logicalToday = root.computeLogicalToday()
+        root.currentYear = root.logicalToday.getFullYear()
+        root.currentMonth = root.logicalToday.getMonth() + 1
+        root.selectedDay = root.logicalToday.getDate()
+        root.refresh()
+    }
 
     Connections {
         target: typeof focusTimer === "undefined" ? null : focusTimer
@@ -31,6 +41,41 @@ Item {
         function onFocusCompleted(duration) {
             root.refresh();
         }
+    }
+
+    Connections {
+        // qmllint disable unqualified
+        target: typeof logicalDayService !== "undefined" ? logicalDayService : null
+        // qmllint enable unqualified
+        ignoreUnknownSignals: true
+
+        function onChanged() {
+            // 只有选中日期等于旧逻辑今天时才跟随；仅比较月份会把用户从手选日期强行拉走。
+            var previousLogicalToday = new Date(root.logicalToday)
+            var wasFollowingCurrentDay = root.selectedDay === previousLogicalToday.getDate()
+                    && root.currentMonth === previousLogicalToday.getMonth() + 1
+                    && root.currentYear === previousLogicalToday.getFullYear()
+            var nextLogicalToday = root.computeLogicalToday()
+            root.logicalToday = nextLogicalToday
+            if (wasFollowingCurrentDay) {
+                root.setMonth(nextLogicalToday.getFullYear(), nextLogicalToday.getMonth() + 1,
+                              nextLogicalToday.getDate())
+            } else {
+                root.refresh()
+            }
+        }
+    }
+
+    function computeLogicalToday() {
+        // provider 仅用于稳定测试；生产默认读取真实本地时间。
+        // qmllint disable use-proper-function
+        var now = root.logicalNowProvider ? root.logicalNowProvider() : new Date()
+        // qmllint enable use-proper-function
+        // qmllint disable unqualified
+        var hour = (typeof appSettings !== "undefined" && appSettings)
+                ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        return LogicalDay.todayDate(hour, now)
     }
 
     function hasFocusHistoryService() {
@@ -298,7 +343,7 @@ Item {
                         scale: currentMonthButton.pressed ? 0.96 : 1.0
                     }
                     onClicked: {
-                        var today = new Date();
+                        var today = root.logicalToday;
                         root.setMonth(today.getFullYear(), today.getMonth() + 1, today.getDate());
                     }
                 }
@@ -491,10 +536,12 @@ Item {
                                         return day >= 1 && day <= root.daysInMonth() ? day : 0;
                                     }
                                     property int dayDuration: dayNumber > 0 ? root.dayTotalSeconds(dayNumber) : 0
+                                    // qmllint disable unqualified
                                     property bool todayCell: {
-                                        var today = new Date();
+                                        var today = root.logicalToday;
                                         return dayNumber > 0 && root.currentYear === today.getFullYear() && root.currentMonth === today.getMonth() + 1 && dayNumber === today.getDate();
                                     }
+                                    // qmllint enable unqualified
 
                                     objectName: dayNumber > 0 ? "monthDayCell-" + dayNumber : "monthDayCell-empty-" + index
                                     radius: Theme.radiusMd
