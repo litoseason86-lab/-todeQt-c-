@@ -502,15 +502,8 @@ TestCase {
         compare(view.panelExpanded, true)
     }
 
-    function test_soundToggleFlipsSetting() {
-        appSettingsMock.soundEnabled = true
-
-        const toggle = findChild(view, "soundToggleButton")
-        verify(toggle)
-        toggle.clicked()
-        compare(appSettingsMock.soundEnabled, false)
-        toggle.clicked()
-        compare(appSettingsMock.soundEnabled, true)
+    function test_soundToggleIsAbsent() {
+        compare(findChild(view, "soundToggleButton"), null)
     }
 
     function test_durationPillShowsSelectionAndToggles() {
