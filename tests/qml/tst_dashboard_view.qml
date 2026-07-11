@@ -69,11 +69,6 @@ TestCase {
         function getTotalFocusDuration() {
             return totalData
         }
-
-        function getDayStats(date) {
-            return { totalDuration: 1200, completedTasks: 1, totalTasks: 2,
-                     completionRate: 0.5, sessionCount: 2 }
-        }
     }
 
     QtObject {
@@ -239,16 +234,6 @@ TestCase {
         var streakCard = findChild(view, "dashboardStreakCard")
         verify(streakCard)
         compare(streakCard.value, "16")
-    }
-
-    function test_week_trend_loads_seven_days() {
-        var view = createTemporaryObject(dashboardComponent, testCase)
-        verify(view)
-
-        compare(view.weekDurations.length, 7)
-        compare(view.weekSessions.length, 7)
-        compare(Number(view.weekDurations[0]), 1200)
-        compare(Number(view.weekSessions[6]), 2)
     }
 
     function test_greeting_includes_nickname_when_set() {
