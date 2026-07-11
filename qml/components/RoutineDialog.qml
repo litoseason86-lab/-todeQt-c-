@@ -461,7 +461,7 @@ Popup {
                             Layout.preferredWidth: 12
                             Layout.preferredHeight: 12
                             radius: 6
-                            color: String(routineRow.modelData.categoryColor || "").length > 0 ? routineRow.modelData.categoryColor : Theme.border
+                            color: String(routineRow.modelData.categoryColor || "").length > 0 ? Theme.displayCategoryColor(routineRow.modelData.categoryColor) : Theme.border
                         }
 
                         ColumnLayout {

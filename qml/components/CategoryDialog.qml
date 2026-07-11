@@ -9,7 +9,7 @@ Popup {
     property var manager: null
     property var categories: []
     property string errorText: ""
-    property string newCategoryColor: "#d4a574"
+    property string newCategoryColor: "#e8b04e"
     property int editingCategoryId: -1
     // 编辑状态由 id 推导，让同一套表单同时服务新增和更新。
     property bool editingCategory: editingCategoryId > 0
@@ -85,7 +85,7 @@ Popup {
     function resetAddForm() {
         categoryNameInput.text = ""
         root.editingCategoryId = -1
-        root.newCategoryColor = "#d4a574"
+        root.newCategoryColor = "#e8b04e"
         colorPicker.selectedColor = root.newCategoryColor
         root.errorText = ""
         addCategoryPanel.visible = false
@@ -106,7 +106,7 @@ Popup {
         root.errorText = ""
         root.editingCategoryId = Number(category.id || -1)
         categoryNameInput.text = category.name || ""
-        root.newCategoryColor = category.color || "#d4a574"
+        root.newCategoryColor = Theme.displayCategoryColor(category.color || "#e8b04e")
         colorPicker.selectedColor = root.newCategoryColor
         addCategoryPanel.visible = true
         categoryNameInput.forceActiveFocus()
@@ -291,7 +291,7 @@ Popup {
                                 Layout.preferredWidth: 34
                                 Layout.preferredHeight: 34
                                 radius: 5
-                                color: modelData.color || "#d4a574"
+                                color: Theme.displayCategoryColor(modelData.color || "#e8b04e")
                                 border.color: Theme.border
                                 border.width: 1
                             }

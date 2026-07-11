@@ -94,6 +94,20 @@ QtObject {
         return legacyThemeMap[themeId] || themeId
     }
 
+    // 旧焦糖棕分类色 → 新多彩色盘的显示映射。分类颜色是用户数据，库里旧值不改写，
+    // 渲染时统一换新装；未知颜色（含新色盘的值）原样返回。与 ColorPicker.colors 同步维护。
+    readonly property var legacyCategoryColorMap: ({
+        "#d4a574": "#e8b04e", "#c9956e": "#ef8a65", "#be8568": "#e5638f",
+        "#b37562": "#d9647f", "#a8655c": "#c77fd9", "#9d7556": "#8fbf6f",
+        "#8b6550": "#54b3a4", "#7a5544": "#5f9ed9", "#694538": "#8f7ff0",
+        "#58352c": "#8a94a6"
+    })
+
+    function displayCategoryColor(color) {
+        var key = String(color).toLowerCase()
+        return legacyCategoryColorMap[key] || color
+    }
+
     function resolveTheme(themeId) {
         var target = migrateThemeId(themeId)
         for (var i = 0; i < themes.length; i++) {
@@ -112,7 +126,7 @@ QtObject {
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/warm.png"),
             base: "#f3e3cf",
             surface: "#fffcf5", surfaceRaised: "#fdf6ea", surfaceSunken: "#f7ecd9",
-            border: "#e4c9a0", borderSubtle: "#f0dfc2",
+            border: "#dcbc8a", borderSubtle: "#ead4ab",
             inkStrong: "#52422e", ink: "#6b573d", inkSoft: "#9c8266", inkMuted: "#b09a7d",
             accent: "#dc9550", accentStrong: "#c98240", accentSoft: "#f6dfb9", accentInk: "#9a6524",
             success: "#4caf50", danger: "#b24f3d", dangerBorder: "#c46f5f", dangerSoft: "#b37562",
@@ -132,8 +146,8 @@ QtObject {
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/pink.png"),
             base: "#efc4d0",
             surface: "#fffbfd", surfaceRaised: "#fdf4f8", surfaceSunken: "#f9e7ee",
-            border: "#e8b7cc", borderSubtle: "#f3d3e0",
-            inkStrong: "#573f4b", ink: "#6d525f", inkSoft: "#a37f8f", inkMuted: "#b697a4",
+            border: "#e0a6c1", borderSubtle: "#efc9da",
+            inkStrong: "#5a3648", ink: "#7a4a61", inkSoft: "#ad7590", inkMuted: "#c495aa",
             accent: "#e5638f", accentStrong: "#d1517d", accentSoft: "#f8cfdd", accentInk: "#b03e66",
             success: "#4caf50", danger: "#b24f3d", dangerBorder: "#c46f5f", dangerSoft: "#b37562",
             chartColors: ["#e5638f", "#a37f8f", "#c46f5f", "#9aa66b", "#6f91a6", "#b58aa0"],
@@ -152,8 +166,8 @@ QtObject {
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/jiangnan.png"),
             base: "#dfe8e2",
             surface: "#fafdfb", surfaceRaised: "#f1f8f4", surfaceSunken: "#e7f1eb",
-            border: "#b7d3c6", borderSubtle: "#d5e6dc",
-            inkStrong: "#39473f", ink: "#54655c", inkSoft: "#84948a", inkMuted: "#9daba2",
+            border: "#a3c8b6", borderSubtle: "#c8ddd1",
+            inkStrong: "#2e4a3c", ink: "#4a6a59", inkSoft: "#729784", inkMuted: "#93af9f",
             accent: "#5f9e85", accentStrong: "#4f8b73", accentSoft: "#cfe6da", accentInk: "#3e7d63",
             success: "#4caf50", danger: "#b24f3d", dangerBorder: "#c46f5f", dangerSoft: "#b37562",
             chartColors: ["#5f9e85", "#84948a", "#c46f5f", "#9aa66b", "#6f91a6", "#b58aa0"],

@@ -400,7 +400,7 @@ Rectangle {
                     Layout.preferredHeight: 12
                     radius: Theme.radiusSm
                     visible: root.categoryColor.length > 0
-                    color: root.categoryColor
+                    color: Theme.displayCategoryColor(root.categoryColor)
                 }
 
                 Text {

@@ -79,4 +79,12 @@ TestCase {
         compare(Theme.palette.id, "starry")
         compare(Theme.palette.mode, "dark")
     }
+
+    function test_displayCategoryColorMapsLegacyPalette() {
+        compare(Theme.displayCategoryColor("#d4a574"), "#e8b04e")
+        compare(Theme.displayCategoryColor("#D4A574"), "#e8b04e")
+        compare(Theme.displayCategoryColor("#58352c"), "#8a94a6")
+        compare(Theme.displayCategoryColor("#e5638f"), "#e5638f")
+        compare(Theme.displayCategoryColor("#123456"), "#123456")
+    }
 }

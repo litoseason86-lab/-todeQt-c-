@@ -5,11 +5,12 @@ import ".."
 Item {
     id: root
 
-    property string selectedColor: "#d4a574"
-    // 色板与迁移生成色保持同一组，避免旧科目和新建科目视觉割裂。
+    property string selectedColor: "#e8b04e"
+    // 多彩色盘：分类色要在六款主题（含暗色）上都看得清。旧焦糖棕存量值
+    // 由 Theme.displayCategoryColor 在渲染时映射到这组新色。
     readonly property var colors: [
-        "#d4a574", "#c9956e", "#be8568", "#b37562", "#a8655c",
-        "#9d7556", "#8b6550", "#7a5544", "#694538", "#58352c"
+        "#e8b04e", "#ef8a65", "#e5638f", "#d9647f", "#c77fd9",
+        "#8fbf6f", "#54b3a4", "#5f9ed9", "#8f7ff0", "#8a94a6"
     ]
 
     signal colorSelected(string color)

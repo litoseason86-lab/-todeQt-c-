@@ -18,7 +18,7 @@ TestCase {
         verify(Qt.colorEqual(Theme.accent, "#dc9550"), "accent 取值不对")
         verify(Qt.colorEqual(Theme.accentStrong, "#c98240"), "accentStrong 取值不对")
         verify(Qt.colorEqual(Theme.surface, "#fffcf5"), "surface 取值不对")
-        verify(Qt.colorEqual(Theme.border, "#e4c9a0"), "border 取值不对")
+        verify(Qt.colorEqual(Theme.border, "#dcbc8a"), "border 取值不对")
         verify(Qt.colorEqual(Theme.ink, "#6b573d"), "ink 取值不对")
         verify(Qt.colorEqual(Theme.danger, "#b24f3d"), "danger 取值不对")
         verify(Qt.colorEqual(Theme.dangerSoft, "#b37562"), "dangerSoft 取值不对")
