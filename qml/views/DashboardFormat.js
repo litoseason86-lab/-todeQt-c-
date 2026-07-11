@@ -21,42 +21,6 @@ function greetingFor(hour) {
     return "夜深了"
 }
 
-// 距目标日零点的剩余时间段。isoDate 用 "yyyy-MM-dd" 字符串而不是 Date：
-// QDate 传入 QML 会落在 UTC 零点，西侧时区直接取 getDate() 会差一天。
-function countdownSegments(isoDate, now) {
-    var parts = String(isoDate || "").split("-")
-    if (parts.length !== 3) {
-        return null
-    }
-
-    var target = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]))
-    var diffMs = target.getTime() - now.getTime()
-
-    if (diffMs <= 0) {
-        return {
-            expired: true,
-            // 过期天数向下取整：目标日当天 = 已过期 0 天，语义与横幅“已过期 N 天”一致。
-            expiredDays: Math.floor((now.getTime() - target.getTime()) / 86400000),
-            days: 0, hours: 0, minutes: 0, seconds: 0
-        }
-    }
-
-    var total = Math.floor(diffMs / 1000)
-    return {
-        expired: false,
-        expiredDays: 0,
-        days: Math.floor(total / 86400),
-        hours: Math.floor((total % 86400) / 3600),
-        minutes: Math.floor((total % 3600) / 60),
-        seconds: total % 60
-    }
-}
-
-function two(value) {
-    var safe = Math.max(0, Number(value) || 0)
-    return (safe < 10 ? "0" : "") + safe
-}
-
 // 累计秒数 → 小时文案：破百后小数位失去意义，改为取整。
 function totalHoursText(totalSeconds) {
     var hours = Math.max(0, Number(totalSeconds) || 0) / 3600

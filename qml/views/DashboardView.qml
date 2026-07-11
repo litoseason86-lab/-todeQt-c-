@@ -296,11 +296,10 @@ Item {
                 }
             }
 
-            DashboardCountdownHero {
-                objectName: "dashboardCountdownHero"
+            CountdownBanner {
+                objectName: "dashboardCountdownBanner"
 
                 Layout.fillWidth: true
-                Layout.preferredHeight: 96
                 primaryGoal: root.countdownServiceRef ? root.countdownServiceRef.primaryGoal : null
                 visible: root.countdownServiceRef !== null
 

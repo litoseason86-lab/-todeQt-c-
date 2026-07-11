@@ -16,7 +16,6 @@
         <file alias="qml/views/DashboardView.qml">../qml/views/DashboardView.qml</file>
         <file alias="qml/views/DashboardFormat.js">../qml/views/DashboardFormat.js</file>
         <file alias="qml/components/GlassPanel.qml">../qml/components/GlassPanel.qml</file>
-        <file alias="qml/components/DashboardCountdownHero.qml">../qml/components/DashboardCountdownHero.qml</file>
         <file alias="qml/components/DashboardTimerPanel.qml">../qml/components/DashboardTimerPanel.qml</file>
         <file alias="qml/components/BackgroundWallpaper.qml">../qml/components/BackgroundWallpaper.qml</file>
         <file alias="qml/components/SettingsDialog.qml">../qml/components/SettingsDialog.qml</file>

@@ -149,14 +149,6 @@ TestCase {
         }
     }
 
-    Component {
-        id: heroComponent
-
-        DashboardCountdownHero {
-            width: 600
-        }
-    }
-
     function init() {
         taskManager.todayTasksData = []
         taskManager.addedTitles = []
@@ -181,28 +173,7 @@ TestCase {
         compare(DashboardFormat.greetingFor(23), "夜深了")
     }
 
-    function test_countdown_segments() {
-        var seg = DashboardFormat.countdownSegments("2026-07-22", new Date(2026, 6, 12, 0, 0, 0))
-        compare(seg.expired, false)
-        compare(seg.days, 10)
-        compare(seg.hours, 0)
-        compare(seg.minutes, 0)
-        compare(seg.seconds, 0)
-
-        seg = DashboardFormat.countdownSegments("2099-01-01", new Date(2098, 11, 31, 23, 59, 30))
-        compare(seg.days, 0)
-        compare(seg.seconds, 30)
-
-        seg = DashboardFormat.countdownSegments("2026-07-10", new Date(2026, 6, 12, 12, 0, 0))
-        compare(seg.expired, true)
-        compare(seg.expiredDays, 2)
-
-        compare(DashboardFormat.countdownSegments("", new Date()), null)
-    }
-
     function test_number_formats() {
-        compare(DashboardFormat.two(5), "05")
-        compare(DashboardFormat.two(59), "59")
         compare(DashboardFormat.totalHoursText(7200), "2")
         compare(DashboardFormat.totalHoursText(9000), "2.5")
         compare(DashboardFormat.totalHoursText(124 * 3600), "124")
@@ -373,28 +344,4 @@ TestCase {
         compare(startSpy.count, 1)
     }
 
-    // —— DashboardCountdownHero 路由 ——
-
-    function test_hero_activate_routes_by_goal() {
-        var hero = createTemporaryObject(heroComponent, testCase)
-        verify(hero)
-
-        var addSpy = createTemporaryObject(spyComponent, testCase,
-                                           { target: hero, signalName: "addRequested" })
-        hero.activate()
-        compare(addSpy.count, 1)
-
-        hero.primaryGoal = { name: "考研", targetDate: new Date(2099, 0, 1) }
-        verify(hero.hasGoal)
-        hero.updateSegments()
-        verify(hero.segments !== null)
-        compare(hero.segments.expired, false)
-        verify(hero.segments.days > 0)
-
-        var clickSpy = createTemporaryObject(spyComponent, testCase,
-                                             { target: hero, signalName: "clicked" })
-        hero.activate()
-        compare(clickSpy.count, 1)
-        compare(addSpy.count, 1)
-    }
 }
