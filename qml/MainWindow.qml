@@ -174,6 +174,25 @@ Item {
         }
     }
 
+    Component.onCompleted: {
+        // 旧主题 id 只在启动时迁移写回一次，此后设置里存的都是新 id。
+        if (root.appSettingsRef) {
+            var migrated = Theme.migrateThemeId(root.appSettingsRef.backgroundTheme)
+            if (migrated !== root.appSettingsRef.backgroundTheme) {
+                root.appSettingsRef.backgroundTheme = migrated
+            }
+        }
+    }
+
+    // 设置值（可能是旧 id）迁移后驱动全局色板。
+    Binding {
+        target: Theme
+        property: "activeThemeId"
+        value: root.appSettingsRef
+            ? Theme.migrateThemeId(root.appSettingsRef.backgroundTheme)
+            : "warm"
+    }
+
     BackgroundWallpaper {
         objectName: "backgroundWallpaperLayer"
 

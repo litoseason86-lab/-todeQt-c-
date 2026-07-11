@@ -206,7 +206,7 @@ TestCase {
         verify(textureLayer === null, "旧噪点层应已移除，避免和 BackgroundWallpaper 双重叠加");
 
         verify(mainContent.color.a < 0.01, "主内容区必须透明，否则壁纸被盖住");
-        verify(Qt.colorEqual(divider.color, "#e8dfc8"));
+        verify(Qt.colorEqual(divider.color, Theme.border));
         compare(divider.opacity, 0.8);
         compare(stackLayout.currentIndex, mainWindow.viewIndex(mainWindow.currentView));
     }

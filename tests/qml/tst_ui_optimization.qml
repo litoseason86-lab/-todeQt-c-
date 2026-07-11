@@ -260,7 +260,8 @@ TestCase {
         verify(typeof target.warmShadowOpacity !== "undefined", context + "需要暴露阴影透明度");
         verify(typeof target.warmShadowBlur !== "undefined", context + "需要暴露阴影模糊值");
         verify(typeof target.warmShadowVerticalOffset !== "undefined", context + "需要暴露阴影垂直偏移");
-        verify(Qt.colorEqual(target.warmShadowColor, "#5d4e37"), context + "需要使用暖色阴影");
+        // 阴影色绑定 Theme.ink，随主题切换；暖主题默认即旧暖棕语义。
+        verify(Qt.colorEqual(target.warmShadowColor, Theme.ink), context + "需要使用暖色阴影");
         verifyNear(target.warmShadowOpacity, expectedOpacity, 0.015, context + " shadowOpacity");
         verifyNear(target.warmShadowBlur, expectedBlur, 0.015, context + " shadowBlur");
         verifyNear(target.warmShadowVerticalOffset, expectedVerticalOffset, 0.15, context + " shadowVerticalOffset");
@@ -327,7 +328,8 @@ TestCase {
     }
 
     function verifyCompletionParticle(particle, index, expectedDirectionX, expectedDirectionY) {
-        var expectedColors = ["#d4a574", "#e8dfc8", "#f0e6d2"];
+        // 与 CompletionParticles.particleColors 保持一致：accent / border / borderSubtle。
+        var expectedColors = [Theme.accent, Theme.border, Theme.borderSubtle];
 
         verify(particle !== null, "完成粒子需要存在");
         compare(particle.objectName, "completionParticle");
