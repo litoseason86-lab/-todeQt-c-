@@ -66,7 +66,11 @@ GlassPanel {
                 Text {
                     anchors.centerIn: parent
                     text: root.icon
-                    font.pixelSize: Theme.fontMd
+                    textFormat: Text.PlainText
+                    // 单字标记沿用侧栏的设计语言：焦糖字 + 玻璃底，不用表情图标。
+                    font.pixelSize: Theme.fontSm
+                    font.weight: Font.Bold
+                    color: Theme.accentInk
                 }
             }
 

@@ -78,8 +78,12 @@ GlassPanel {
 
             Text {
                 anchors.centerIn: parent
-                text: "⏳"
-                font.pixelSize: Theme.fontXl
+                text: "倒"
+                textFormat: Text.PlainText
+                // 与侧栏「目标倒计时」的单字标记一致，不用表情图标。
+                font.pixelSize: Theme.fontLg
+                font.weight: Font.Bold
+                color: Theme.accentInk
             }
         }
 

@@ -266,28 +266,19 @@ Item {
                     Layout.fillWidth: true
                     spacing: Theme.space4
 
-                    RowLayout {
-                        spacing: Theme.space8
+                    Text {
+                        objectName: "dashboardGreeting"
 
-                        Text {
-                            objectName: "dashboardGreeting"
-
-                            // 有昵称念名字，没有就只问好；逗号跟随昵称一起出现。
-                            text: {
-                                var nickname = root.settingsRef ? String(root.settingsRef.nickname || "") : ""
-                                var greeting = DashboardFormat.greetingFor(root.now.getHours())
-                                return nickname.length > 0 ? greeting + "，" + nickname : greeting
-                            }
-                            textFormat: Text.PlainText
-                            font.pixelSize: Theme.fontXxl
-                            font.weight: Font.Bold
-                            color: Theme.inkStrong
+                        // 有昵称念名字，没有就只问好；逗号跟随昵称一起出现。
+                        text: {
+                            var nickname = root.settingsRef ? String(root.settingsRef.nickname || "") : ""
+                            var greeting = DashboardFormat.greetingFor(root.now.getHours())
+                            return nickname.length > 0 ? greeting + "，" + nickname : greeting
                         }
-
-                        Text {
-                            text: "👋"
-                            font.pixelSize: Theme.fontXxl
-                        }
+                        textFormat: Text.PlainText
+                        font.pixelSize: Theme.fontXxl
+                        font.weight: Font.Bold
+                        color: Theme.inkStrong
                     }
 
                     Text {
@@ -306,21 +297,6 @@ Item {
 
                         anchors.centerIn: parent
                         spacing: Theme.space8
-
-                        Rectangle {
-                            Layout.preferredWidth: 32
-                            Layout.preferredHeight: 32
-                            radius: 16
-                            color: Theme.glassAccent
-                            border.color: Theme.glassBorder
-                            border.width: 1
-
-                            Text {
-                                anchors.centerIn: parent
-                                text: "🕐"
-                                font.pixelSize: Theme.fontLg
-                            }
-                        }
 
                         ColumnLayout {
                             spacing: 2
@@ -366,7 +342,7 @@ Item {
 
                 DashboardStatCard {
                     Layout.fillWidth: true
-                    icon: "🍅"
+                    icon: "番"
                     title: "今日专注番茄"
                     value: String(Number(root.todayStats.sessionCount || 0))
                     unit: "个"
@@ -380,7 +356,7 @@ Item {
 
                 DashboardStatCard {
                     Layout.fillWidth: true
-                    icon: "🎯"
+                    icon: "完"
                     title: "今日任务完成"
                     value: Number(root.todayStats.completedTasks || 0) + " / " + Number(root.todayStats.totalTasks || 0)
                     subtitle: "完成率 " + Math.round(Number(root.todayStats.completionRate || 0) * 100) + "%"
@@ -414,7 +390,7 @@ Item {
                     objectName: "dashboardStreakCard"
 
                     Layout.fillWidth: true
-                    icon: "🔥"
+                    icon: "连"
                     title: "专注连续天数"
                     value: String(root.streakDays)
                     unit: "天"
@@ -431,7 +407,7 @@ Item {
                     objectName: "dashboardTotalCard"
 
                     Layout.fillWidth: true
-                    icon: "🏆"
+                    icon: "累"
                     title: "累计专注时长"
                     value: DashboardFormat.totalHoursText(root.totalFocusSeconds)
                     unit: "小时"
