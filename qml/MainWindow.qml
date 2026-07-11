@@ -184,6 +184,15 @@ Item {
         }
     }
 
+    // 壁纸主题决定令牌走日间/夜间版（只翻明暗，色相仍是暖纸）。
+    Binding {
+        target: Theme
+        property: "activeThemeId"
+        value: root.appSettingsRef
+            ? Theme.migrateThemeId(root.appSettingsRef.backgroundTheme)
+            : "warm"
+    }
+
     BackgroundWallpaper {
         objectName: "backgroundWallpaperLayer"
 

@@ -7,6 +7,14 @@ import "../../qml"
 TestCase {
     name: "ThemeTokens"
 
+    function init() {
+        Theme.activeThemeId = "warm"
+    }
+
+    function cleanupTestCase() {
+        Theme.activeThemeId = "warm"
+    }
+
     function test_colorTokens() {
         verify(Qt.colorEqual(Theme.accent, "#d4a574"), "accent 取值不对")
         verify(Qt.colorEqual(Theme.accentStrong, "#c99666"), "accentStrong 取值不对")
@@ -58,5 +66,18 @@ TestCase {
 
     function test_focusBreakAccentIsChartColor3() {
         verify(Qt.colorEqual(Theme.focusBreakAccent, Theme.chartColors[3]))
+    }
+
+    function test_darkWallpaperSwitchesToNightVariant() {
+        Theme.activeThemeId = "moon"
+        verify(Theme.darkMode, "moon 应为夜间版")
+        verify(Qt.colorEqual(Theme.ink, "#e0d4bd"), "夜间版 ink 应为暖米白")
+        verify(Qt.colorEqual(Theme.surface, "#2a241c"), "夜间版 surface 应为暗暖")
+        verify(Qt.colorEqual(Theme.accent, "#d4a574"), "焦糖强调色两版应一致")
+        verify(Qt.colorEqual(Theme.glassCard, Qt.rgba(38 / 255, 33 / 255, 25 / 255, 0.45)),
+               "夜间版 glassCard 应为暗暖玻璃")
+        Theme.activeThemeId = "pink"
+        verify(!Theme.darkMode, "pink 应为日间版")
+        verify(Qt.colorEqual(Theme.ink, "#5d4e37"), "日间版 ink 应复原")
     }
 }

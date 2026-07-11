@@ -2,43 +2,41 @@ pragma Singleton
 import QtQuick
 
 // 全应用设计令牌的唯一来源。各 qml 通过相对目录导入后用 Theme.xxx 引用。
-// 颜色为暖纸主题（固定不随壁纸变化）；字号/间距/圆角为收敛后的比例阶梯。
+// 色相永远是暖纸家族；暗色壁纸下切到"夜间版"（米白墨水 + 暗暖玻璃），
+// 只翻转明暗、不换色相。字号/间距/圆角为收敛后的比例阶梯。
 QtObject {
+    // 当前壁纸主题 id，由 MainWindow 绑定设置注入；决定明暗版式。
+    property string activeThemeId: "warm"
+    readonly property bool darkMode: resolveTheme(activeThemeId).mode === "dark"
+
     // —— 纸面 Surface ——
-    readonly property color surface: "#fffef9"        // 主内容区底色
-    readonly property color surfaceRaised: "#faf6ee"  // 卡片/浮起块
-    readonly property color surfaceSunken: "#f5ede3"  // 输入框/次级容器
+    readonly property color surface: darkMode ? "#2a241c" : "#fffef9"        // 主内容区底色
+    readonly property color surfaceRaised: darkMode ? "#332c22" : "#faf6ee"  // 卡片/浮起块
+    readonly property color surfaceSunken: darkMode ? "#211c15" : "#f5ede3"  // 输入框/次级容器
 
     // —— 边框 Border ——
-    readonly property color border: "#e8dfc8"         // 主分隔线
-    readonly property color borderSubtle: "#f0e6d2"   // 更弱的分隔
+    readonly property color border: darkMode ? "#4d4433" : "#e8dfc8"         // 主分隔线
+    readonly property color borderSubtle: darkMode ? "#3a3327" : "#f0e6d2"   // 更弱的分隔
 
-    // —— 文字 Ink ——
-    readonly property color inkStrong: "#3d3327"      // 标题/强调
-    readonly property color ink: "#5d4e37"            // 正文
-    readonly property color inkSoft: "#8b7355"        // 次要文字
-    readonly property color inkMuted: "#a0896b"       // 占位/禁用
+    // —— 文字 Ink（夜间版为暖米白系）——
+    readonly property color inkStrong: darkMode ? "#f3ead9" : "#3d3327"      // 标题/强调
+    readonly property color ink: darkMode ? "#e0d4bd" : "#5d4e37"            // 正文
+    readonly property color inkSoft: darkMode ? "#b3a68c" : "#8b7355"        // 次要文字
+    readonly property color inkMuted: darkMode ? "#8c8069" : "#a0896b"       // 占位/禁用
 
-    // —— 强调 Accent（焦糖棕）——
+    // —— 强调 Accent（焦糖棕，两种明暗下同一色相）——
     readonly property color accent: "#d4a574"         // 基础态
     readonly property color accentStrong: "#c99666"   // 悬停/按下 深一档
-    // accentSoft 当前与 borderSubtle 恰好同值（#f0e6d2），但语义不同：
-    // 一个是“强调淡底/选中态”，一个是“更弱的分隔线”。保留为两个独立令牌，
-    // 将来想单独微调其一时不会牵连另一个，改色前请确认改的是哪个角色。
-    readonly property color accentSoft: "#f0e6d2"     // 强调淡底/选中态
-    // accent 作前景文字仅 2.2:1，远不达 WCAG。accentInk 是它的“可读文字版”——
-    // 压深到在 surface/glassCard 上过 AA 正文 4.5:1，专供数字英雄与强调文字；
-    // 装饰用途（环形进度、按钮填充、marker）仍用 accent。tst_theme_tokens 守门对比度。
-    readonly property color accentInk: "#9c6a34"      // 强调文字/数字（AA 达标）
+    // 强调淡底/选中态：夜间版换成暗暖底，保持"淡淡一层强调"的语义。
+    readonly property color accentSoft: darkMode ? "#4a3d2b" : "#f0e6d2"
+    // accent 作前景文字不达 AA；accentInk 是"可读文字版"——浅底压深、暗底提亮。
+    readonly property color accentInk: darkMode ? "#e6b980" : "#9c6a34"
 
-    // —— 语义 Semantic ——
-    // success 沿用界面里既有的 Material 绿（#4caf50），本次只做令牌收敛、
-    // 不调整其色相；若日后要把它调成更贴合暖纸的色调，改这一处即可全局生效。
-    readonly property color success: "#4caf50"        // 完成/正向趋势
-    readonly property color danger: "#b24f3d"         // 错误文字（暖陶土红）
-    readonly property color dangerBorder: "#c46f5f"   // 错误输入框边框
-    // 删除按钮专用：比 danger 更柔和的陶土色，用于“删除”这类不该过分刺眼的破坏性操作提示。
-    readonly property color dangerSoft: "#b37562"
+    // —— 语义 Semantic（夜间版提亮一档保对比）——
+    readonly property color success: darkMode ? "#6fcf73" : "#4caf50"
+    readonly property color danger: darkMode ? "#e0705a" : "#b24f3d"
+    readonly property color dangerBorder: darkMode ? "#d97f6c" : "#c46f5f"
+    readonly property color dangerSoft: darkMode ? "#cc8a76" : "#b37562"
 
     // —— 投影 ——（纯黑；透明度由各效果自身属性控制）
     readonly property color shadow: "#000000"
@@ -71,43 +69,52 @@ QtObject {
     readonly property int radiusMd: 6
     readonly property int radiusLg: 8
 
-    // —— 数据色：饼图系列配色（值不变，集中管理）——
-    readonly property var chartColors: [
-        "#d4a574", "#8b7355", "#c46f5f", "#9aa66b", "#6f91a6", "#b58aa0"
-    ]
+    // —— 数据色：饼图系列配色（夜间版整体提亮）——
+    readonly property var chartColors: darkMode
+        ? ["#d4a574", "#b3a68c", "#d97f6c", "#a8bd7e", "#8aa9c0", "#c9a0b5"]
+        : ["#d4a574", "#8b7355", "#c46f5f", "#9aa66b", "#6f91a6", "#b58aa0"]
 
     // —— 专注页休息态强调色 ——
-    // 直接复用 chartColors 的第 4 色（苔绿），不新增色相；语义是“休息强调色”，
-    // 和图表配色场景无关，只是恰好复用同一个色值，避免专注页里出现裸索引 [3]。
+    // 直接复用 chartColors 的第 4 色（苔绿），不新增色相；语义是"休息强调色"。
     readonly property color focusBreakAccent: chartColors[3]
 
-    // —— 专注计时环（玻璃表盘）——
-    // 进度弧双色霞光渐变：只用于专注进行态；休息/完成态退化为状态语义单色。
+    // —— 专注计时环（玻璃表盘；弧光两版共用暖金系，盘面随明暗）——
     readonly property color focusRingArcStart: "#f1bd7e"   // 琥珀
     readonly property color focusRingArcMid: "#f4d3ab"     // 柔金
     readonly property color focusRingArcEnd: "#f4c3bd"     // 樱粉
-    readonly property color focusRingTrack: "#faf1e8"      // 底色轨道
-    // 玻璃内盘径向渐变与顶部高光；落影色在绘制时另配低透明度。
-    readonly property color focusGlassCenter: "#fffefb"
-    readonly property color focusGlassEdge: "#fdf3ee"
-    readonly property color focusGlassShadow: "#e2b9a6"
-    readonly property color focusGlassHighlight: "#ffffff"
+    readonly property color focusRingTrack: darkMode ? "#3a3327" : "#faf1e8" // 底色轨道
+    readonly property color focusGlassCenter: darkMode ? "#332c22" : "#fffefb"
+    readonly property color focusGlassEdge: darkMode ? "#2a241c" : "#fdf3ee"
+    readonly property color focusGlassShadow: darkMode ? "#171310" : "#e2b9a6"
+    readonly property color focusGlassHighlight: darkMode ? "#4d4433" : "#ffffff"
     // 冒号只弱化颜色，不弱化字重；Space Grotesk 当前只打包 300/500/700 三档。
-    readonly property color focusColonMuted: "#e8bda6"
+    readonly property color focusColonMuted: darkMode ? "#8c7355" : "#e8bda6"
 
-    // —— 玻璃令牌（磨砂面板，均衡档定稿）——
-    // 用“白 + alpha”而非灰色：面板叠在彩色壁纸上，白基半透明才能透出壁纸色相。
-    readonly property color glassSidebar: Qt.rgba(1, 1, 252 / 255, 0.55)
-    readonly property color glassCard: Qt.rgba(1, 1, 250 / 255, 0.42)
+    // —— 玻璃令牌（透壁纸磨砂面板；夜间版为暗暖玻璃）——
+    // 白/暗暖 + alpha：面板叠在壁纸上，半透明才能透出壁纸。
+    readonly property color glassSidebar: darkMode
+        ? Qt.rgba(30 / 255, 26 / 255, 20 / 255, 0.55)
+        : Qt.rgba(1, 1, 252 / 255, 0.55)
+    readonly property color glassCard: darkMode
+        ? Qt.rgba(38 / 255, 33 / 255, 25 / 255, 0.45)
+        : Qt.rgba(1, 1, 250 / 255, 0.42)
     // 卡片/按钮悬停态：比 glassCard 实一档，仍透出壁纸。
-    readonly property color glassHover: Qt.rgba(1, 1, 250 / 255, 0.62)
-    // 选中态/高亮底：accentSoft 奶油色的半透明版，用在直接叠壁纸的高亮件上。
-    readonly property color glassAccent: Qt.rgba(240 / 255, 230 / 255, 210 / 255, 0.55)
-    readonly property color glassDialog: Qt.rgba(1, 254 / 255, 249 / 255, 0.985)
-    readonly property color glassBorder: Qt.rgba(1, 1, 1, 0.65)
+    readonly property color glassHover: darkMode
+        ? Qt.rgba(48 / 255, 42 / 255, 32 / 255, 0.65)
+        : Qt.rgba(1, 1, 250 / 255, 0.62)
+    // 选中态/高亮底：夜间版为焦糖的半透明高光。
+    readonly property color glassAccent: darkMode
+        ? Qt.rgba(212 / 255, 165 / 255, 116 / 255, 0.28)
+        : Qt.rgba(240 / 255, 230 / 255, 210 / 255, 0.55)
+    readonly property color glassDialog: darkMode
+        ? Qt.rgba(42 / 255, 36 / 255, 28 / 255, 0.985)
+        : Qt.rgba(1, 254 / 255, 249 / 255, 0.985)
+    readonly property color glassBorder: darkMode
+        ? Qt.rgba(1, 1, 1, 0.18)
+        : Qt.rgba(1, 1, 1, 0.65)
 
-    // ══ 背景壁纸主题（只换壁纸，UI 色值永远保持上方暖纸令牌）══
-    // themes[0] 必须是默认 warm：resolveTheme 对未知 id 回落首位。壁纸原图直出，无罩层。
+    // ══ 背景壁纸主题（壁纸原图直出；mode 决定上方令牌走日间/夜间版）══
+    // themes[0] 必须是默认 warm：resolveTheme 对未知 id 回落首位。
     readonly property var legacyThemeMap: ({
         warmPaper: "warm", sunset: "warm", wheat: "warm",
         celadon: "jiangnan", mist: "jiangnan",
