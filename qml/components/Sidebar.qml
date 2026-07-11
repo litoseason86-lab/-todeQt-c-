@@ -76,6 +76,13 @@ Rectangle {
         }
 
         SidebarItem {
+            text: "仪表盘"
+            marker: "仪"
+            isActive: root.currentView === "dashboard"
+            onClicked: root.itemClicked("dashboard")
+        }
+
+        SidebarItem {
             text: "今日任务"
             marker: "今"
             isActive: root.currentView === "today"

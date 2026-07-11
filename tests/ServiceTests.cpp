@@ -442,6 +442,9 @@ private slots:
     void getMonthTasksRejectsInvalidMonth();
     void getEffectiveDaysFiltersInvalidSessions();
     void getFocusSessionCountCountsOnlyValidFinishedSessions();
+    void getStreakDaysCountsBackFromLogicalToday();
+    void getStreakDaysStartsFromYesterdayWhenTodayHasNoFocus();
+    void getTotalFocusDurationSumsOnlyValidSessions();
     void getMonthStatsUsesCurrentMonthAndTaskDate();
     void getMonthStatsUsesSpecifiedMonthAndRejectsInvalidYearMonth();
     void getMonthComparisonHandlesPreviousMonthAndInvalidYearMonth();
@@ -1438,6 +1441,49 @@ void ServiceTests::getFocusSessionCountCountsOnlyValidFinishedSessions()
     QVERIFY(insertFocusSessionRow(taskId, endDate.addDays(1), kTestMinimumValidDurationSeconds));
 
     QCOMPARE(StatisticsService::instance()->getFocusSessionCount(startDate, endDate), 3);
+}
+
+void ServiceTests::getStreakDaysCountsBackFromLogicalToday()
+{
+    const QDate today = logicalToday();
+
+    QVERIFY(insertFocusSessionRow(-1, today, kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-1), kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-2), kTestMinimumValidDurationSeconds));
+    // 第 3 天断档；更早的记录不能透过断档续上连击。
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-4), kTestMinimumValidDurationSeconds));
+
+    QCOMPARE(StatisticsService::instance()->getStreakDays(), 3);
+}
+
+void ServiceTests::getStreakDaysStartsFromYesterdayWhenTodayHasNoFocus()
+{
+    const QDate today = logicalToday();
+    QCOMPARE(StatisticsService::instance()->getStreakDays(), 0);
+
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-1), kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-2), kTestMinimumValidDurationSeconds));
+    // 今天只有无效短会话：不算今天，但也不打断从昨天起算的连击。
+    QVERIFY(insertFocusSessionRow(-1, today, kTestMinimumValidDurationSeconds - 1));
+
+    QCOMPARE(StatisticsService::instance()->getStreakDays(), 2);
+}
+
+void ServiceTests::getTotalFocusDurationSumsOnlyValidSessions()
+{
+    const QDate today = logicalToday();
+    QCOMPARE(StatisticsService::instance()->getTotalFocusDuration(), 0);
+
+    const int taskId = insertTaskRow(QStringLiteral("累计时长任务"), today);
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionRow(-1, today, kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-30), kTestMinimumValidDurationSeconds * 3));
+    QVERIFY(insertFocusSessionRow(-1, today, kTestMinimumValidDurationSeconds - 1));
+    // NULL 时长辅助函数不转换 -1 任务号，这里必须挂在真实任务上才能通过外键。
+    QVERIFY(insertFocusSessionWithNullDuration(taskId, today));
+
+    QCOMPARE(StatisticsService::instance()->getTotalFocusDuration(), kTestMinimumValidDurationSeconds * 4);
 }
 
 void ServiceTests::getMonthStatsUsesCurrentMonthAndTaskDate()

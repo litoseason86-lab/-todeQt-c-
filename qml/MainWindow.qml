@@ -84,6 +84,9 @@ Item {
             return 4;
         case "countdown":
             return 5;
+        case "dashboard":
+            // 仪表盘追加在栈尾，避免挪动既有视图索引影响测试与切页逻辑。
+            return 6;
         case "today":
         default:
             return 0;
@@ -332,6 +335,26 @@ Item {
 
                 CountdownView {
                     countdownServiceRef: root.countdownServiceRef
+                }
+
+                DashboardView {
+                    objectName: "dashboardViewPage"
+
+                    categoryManagerRef: categoryManager
+                    countdownServiceRef: root.countdownServiceRef
+                    settingsRef: root.appSettingsRef
+                    wallpaperRef: wallpaperLayer
+                    pendingDeleteTaskId: root.pendingDeleteTaskId
+
+                    onStartFocus: function (taskId, taskTitle) {
+                        root.startFocusForTask(taskId, taskTitle);
+                    }
+
+                    onCountdownRequested: root.switchToView("countdown")
+                    onFocusPageRequested: root.switchToView("focus")
+                    onDeleteRequested: function(taskId, taskTitle) {
+                        root.requestDeleteTask(taskId, taskTitle)
+                    }
                 }
             }
 
