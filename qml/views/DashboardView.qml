@@ -3,7 +3,6 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "../components"
 import ".."
-import "../LogicalDay.js" as LogicalDay
 import "DashboardFormat.js" as DashboardFormat
 
 // 仪表盘：问候头部 + 倒计时英雄横幅 + 四张统计卡 + 今日任务面板 + 专注计时面板。
@@ -27,16 +26,13 @@ Item {
     property int streakDays: 0
     property int totalFocusSeconds: 0
     property string loadError: ""
-    // all=全部 active=进行中 done=已完成；对应头部三个筛选片。
+    // all=全部 done=已完成；仪表盘任务面板只看不加，添加去今日任务页。
     property string filterMode: "all"
     property bool completionRefreshDelayActive: false
     // 时钟快照：问候语与日期卡共用，分钟级刷新足够。
     property var now: new Date()
 
     readonly property var filteredTasks: {
-        if (root.filterMode === "active") {
-            return root.tasks.filter(function(task) { return !task.completed })
-        }
         if (root.filterMode === "done") {
             return root.tasks.filter(function(task) { return Boolean(task.completed) })
         }
@@ -115,14 +111,6 @@ Item {
         }
     }
 
-    function todayIsoDate() {
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
-        return LogicalDay.todayIso(hour, new Date())
-    }
-
     function refresh() {
         // 先幂等补齐当天例行任务，再分别加载任务与统计，互不拖垮。
         if (typeof routineManager !== "undefined" && routineManager && routineManager.materializeToday) {
@@ -172,19 +160,6 @@ Item {
             root.tasks = []
             root.refresh()
             root.loadError = completed ? "任务完成失败，请重试" : "取消完成失败，请重试"
-        }
-    }
-
-    function submitQuickAdd() {
-        var title = quickAddField.text.trim()
-        if (title.length === 0) {
-            return
-        }
-        // -1 = 未分类；仪表盘只求快速记下，分类留给编辑弹窗补充。
-        if (taskManager.addTask(title, root.todayIsoDate(), -1)) {
-            quickAddField.clear()
-        } else {
-            root.loadError = "任务添加失败，请重试"
         }
     }
 
@@ -407,7 +382,6 @@ Item {
                         Repeater {
                             model: [
                                 { key: "all", label: "全部" },
-                                { key: "active", label: "进行中" },
                                 { key: "done", label: "已完成" }
                             ]
 
@@ -456,65 +430,6 @@ Item {
                         }
                     }
 
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: Theme.space8
-
-                        TextField {
-                            id: quickAddField
-                            objectName: "dashboardQuickAddField"
-
-                            Layout.fillWidth: true
-                            implicitHeight: 38
-                            placeholderText: "添加一项任务，按 Enter 快速保存"
-                            placeholderTextColor: Theme.inkMuted
-                            color: Theme.ink
-                            font.pixelSize: Theme.fontMd
-
-                            background: Rectangle {
-                                color: Theme.surfaceSunken
-                                radius: Theme.radiusLg
-                                border.color: quickAddField.activeFocus ? Theme.accent : Theme.borderSubtle
-                                border.width: 1
-                            }
-
-                            onAccepted: root.submitQuickAdd()
-                        }
-
-                        Button {
-                            id: quickAddButton
-                            objectName: "dashboardQuickAddButton"
-
-                            text: "＋ 添加"
-                            implicitWidth: 84
-                            implicitHeight: 38
-
-                            onClicked: root.submitQuickAdd()
-
-                            background: Rectangle {
-                                color: quickAddButton.pressed || quickAddButton.hovered ? Theme.accentStrong : Theme.accent
-                                radius: Theme.radiusLg
-
-                                Behavior on color {
-                                    ColorAnimation {
-                                        duration: 160
-                                        easing.type: Easing.OutQuad
-                                    }
-                                }
-                            }
-
-                            contentItem: Text {
-                                text: quickAddButton.text
-                                textFormat: Text.PlainText
-                                color: Theme.surface
-                                font.pixelSize: Theme.fontMd
-                                font.weight: Font.Medium
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                        }
-                    }
-
                     Text {
                         objectName: "dashboardEmptyHint"
 
@@ -522,7 +437,7 @@ Item {
                         Layout.topMargin: Theme.space24
                         visible: root.filteredTasks.length === 0 && root.loadError.length === 0
                         text: root.tasks.length === 0
-                              ? "今天还没有任务，先记下第一件要做的事。"
+                              ? "今天还没有任务，去「今日任务」页添加。"
                               : "这个筛选下没有任务。"
                         font.pixelSize: Theme.fontMd
                         color: Theme.inkMuted

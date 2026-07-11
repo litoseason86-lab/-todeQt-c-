@@ -19,17 +19,9 @@ TestCase {
         signal tasksChanged
 
         property var todayTasksData: []
-        property var addedTitles: []
-        property var addedDates: []
 
         function getTodayTasks() {
             return todayTasksData
-        }
-
-        function addTask(title, date, categoryId) {
-            addedTitles.push(title)
-            addedDates.push(date)
-            return true
         }
 
         function setTaskCompleted(id, completed) {
@@ -151,8 +143,6 @@ TestCase {
 
     function init() {
         taskManager.todayTasksData = []
-        taskManager.addedTitles = []
-        taskManager.addedDates = []
         focusTimer.phase = 0
         focusTimer.hasActiveSession = false
         focusTimer.isRunning = false
@@ -230,33 +220,12 @@ TestCase {
         verify(view)
         compare(view.filteredTasks.length, 2)
 
-        view.filterMode = "active"
-        compare(view.filteredTasks.length, 1)
-        compare(Number(view.filteredTasks[0].id), 1)
-
         view.filterMode = "done"
         compare(view.filteredTasks.length, 1)
         compare(Number(view.filteredTasks[0].id), 2)
-    }
 
-    function test_quick_add_submits_trimmed_title() {
-        var view = createTemporaryObject(dashboardComponent, testCase)
-        verify(view)
-
-        var field = findChild(view, "dashboardQuickAddField")
-        verify(field)
-        field.text = "  背单词 50 个  "
-        view.submitQuickAdd()
-
-        compare(taskManager.addedTitles.length, 1)
-        compare(taskManager.addedTitles[0], "背单词 50 个")
-        // 快速添加必须落在逻辑今天，且提交后清空输入框。
-        compare(taskManager.addedDates[0], view.todayIsoDate())
-        compare(field.text, "")
-
-        field.text = "   "
-        view.submitQuickAdd()
-        compare(taskManager.addedTitles.length, 1)
+        // 仪表盘只读面板：不提供快速添加入口。
+        compare(findChild(view, "dashboardQuickAddField"), null)
     }
 
     function test_start_first_pending_task() {
