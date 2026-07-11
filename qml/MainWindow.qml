@@ -184,15 +184,6 @@ Item {
         }
     }
 
-    // 设置值（可能是旧 id）迁移后驱动全局色板。
-    Binding {
-        target: Theme
-        property: "activeThemeId"
-        value: root.appSettingsRef
-            ? Theme.migrateThemeId(root.appSettingsRef.backgroundTheme)
-            : "warm"
-    }
-
     BackgroundWallpaper {
         objectName: "backgroundWallpaperLayer"
 

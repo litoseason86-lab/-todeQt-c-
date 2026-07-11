@@ -217,8 +217,8 @@ Popup {
                                 height: 16
                                 radius: Theme.radiusSm
                                 // 每格预览显示该主题的玻璃观感，而非当前全局 Theme。
-                                color: themeCell.modelData.glassCard
-                                border.color: themeCell.modelData.glassBorder
+                                color: Theme.glassCard
+                                border.color: Theme.glassBorder
                                 border.width: 1
                             }
 
