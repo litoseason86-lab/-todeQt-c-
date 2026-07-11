@@ -263,14 +263,17 @@ Item {
                 objectName: "dashboardTimerPrimaryButton"
 
                 text: root.activeAny ? (root.running ? "暂停" : "继续") : "开始专注"
-                implicitWidth: 132
-                implicitHeight: 40
+                implicitWidth: 104
+                implicitHeight: 34
 
                 onClicked: root.primaryAction()
 
-                background: Rectangle {
-                    color: primaryButton.pressed || primaryButton.hovered ? Theme.accentStrong : Theme.accent
-                    radius: 20
+                // 与页面卡片同一玻璃基底：glassCard 半透明底 + 玻璃描边 + 受光棱边；
+                // 悬停加实一档、按下用强调玻璃反馈，不再用大块实心焦糖。
+                background: GlassPanel {
+                    color: primaryButton.pressed ? Theme.glassAccent
+                           : (primaryButton.hovered ? Theme.glassHover : Theme.glassCard)
+                    panelShadowEnabled: false
 
                     Behavior on color {
                         ColorAnimation {
@@ -283,8 +286,8 @@ Item {
                 contentItem: Text {
                     text: primaryButton.text
                     textFormat: Text.PlainText
-                    color: Theme.surface
-                    font.pixelSize: Theme.fontLg
+                    color: Theme.accentInk
+                    font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
@@ -297,8 +300,8 @@ Item {
 
                 visible: root.activeAny
                 text: "结束"
-                implicitWidth: 68
-                implicitHeight: 40
+                implicitWidth: 60
+                implicitHeight: 34
 
                 onClicked: {
                     if (root.timerRef) {
@@ -306,11 +309,17 @@ Item {
                     }
                 }
 
-                background: Rectangle {
+                background: GlassPanel {
                     color: stopButton.hovered ? Theme.glassHover : Qt.rgba(1, 1, 1, 0)
-                    border.color: Theme.border
-                    border.width: 1
-                    radius: 20
+                    specularEnabled: false
+                    panelShadowEnabled: false
+
+                    Behavior on color {
+                        ColorAnimation {
+                            duration: 160
+                            easing.type: Easing.OutQuad
+                        }
+                    }
                 }
 
                 contentItem: Text {
