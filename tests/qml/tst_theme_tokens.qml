@@ -17,8 +17,8 @@ TestCase {
     function test_defaultWarmTokens() {
         verify(Qt.colorEqual(Theme.accent, "#dc9550"), "accent 取值不对")
         verify(Qt.colorEqual(Theme.accentStrong, "#c98240"), "accentStrong 取值不对")
-        verify(Qt.colorEqual(Theme.surface, "#fffdf6"), "surface 取值不对")
-        verify(Qt.colorEqual(Theme.border, "#ead9bd"), "border 取值不对")
+        verify(Qt.colorEqual(Theme.surface, "#fdf6e8"), "surface 取值不对")
+        verify(Qt.colorEqual(Theme.border, "#e7cfa8"), "border 取值不对")
         verify(Qt.colorEqual(Theme.ink, "#6b573d"), "ink 取值不对")
         verify(Qt.colorEqual(Theme.danger, "#b24f3d"), "danger 取值不对")
         verify(Qt.colorEqual(Theme.dangerSoft, "#b37562"), "dangerSoft 取值不对")
@@ -36,7 +36,7 @@ TestCase {
     }
 
     function test_glassTokensFollowTheme() {
-        verify(Qt.colorEqual(Theme.glassSidebar, Qt.rgba(1, 250 / 255, 242 / 255, 0.68)),
+        verify(Qt.colorEqual(Theme.glassSidebar, Qt.rgba(253 / 255, 246 / 255, 232 / 255, 0.68)),
                "warm glassSidebar 取值不对")
         Theme.activeThemeId = "moon"
         verify(Qt.colorEqual(Theme.glassCard, Qt.rgba(20 / 255, 32 / 255, 50 / 255, 0.74)),
