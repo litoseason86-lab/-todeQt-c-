@@ -149,11 +149,14 @@ Item {
         onActivated: root.requestExit()
     }
 
-    Rectangle {
+    // 沉浸态直接铺主题壁纸原图（不带可读性罩层），氛围完整展示。
+    BackgroundWallpaper {
         objectName: "immersiveBackdrop"
 
         anchors.fill: parent
-        color: Theme.glassCard
+        themeId: root.settingsRef && root.settingsRef.backgroundTheme
+                 ? root.settingsRef.backgroundTheme
+                 : "warm"
 
         MouseArea {
             objectName: "immersiveHoverArea"
@@ -179,7 +182,7 @@ Item {
                 Layout.preferredHeight: 44
                 Layout.preferredWidth: bannerText.implicitWidth + Theme.space24 * 2
                 visible: root.completionState
-                color: Theme.accentSoft
+                color: Theme.glassAccent
                 border.color: Theme.accent
                 radius: Theme.radiusMd
 

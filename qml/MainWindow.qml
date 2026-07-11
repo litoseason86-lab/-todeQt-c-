@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Layouts
 import "."
 import "components"
@@ -174,12 +175,59 @@ Item {
         }
     }
 
+    Component.onCompleted: {
+        // 旧主题 id 只在启动时迁移写回一次，此后设置里存的都是新 id。
+        if (root.appSettingsRef) {
+            var migrated = Theme.migrateThemeId(root.appSettingsRef.backgroundTheme)
+            if (migrated !== root.appSettingsRef.backgroundTheme) {
+                root.appSettingsRef.backgroundTheme = migrated
+            }
+        }
+    }
+
+    // 壁纸主题决定令牌走日间/夜间版（只翻明暗，色相仍是暖纸）。
+    Binding {
+        target: Theme
+        property: "activeThemeId"
+        value: root.appSettingsRef
+            ? Theme.migrateThemeId(root.appSettingsRef.backgroundTheme)
+            : "warm"
+    }
+
     BackgroundWallpaper {
+        id: wallpaperLayer
         objectName: "backgroundWallpaperLayer"
 
         anchors.fill: parent
         // 声明在最前 = 画在最底层；侧栏和主内容作为后声明兄弟自然叠在其上。
-        themeId: root.appSettingsRef ? root.appSettingsRef.backgroundTheme : "warmPaper"
+        themeId: root.appSettingsRef ? root.appSettingsRef.backgroundTheme : "warm"
+    }
+
+    // 侧栏毛玻璃底：全应用唯一的实时模糊区。壁纸是静态图，只对侧栏
+    // 208px 条带采样模糊一次；卡片仍走半透明蒙层，避免逐卡片模糊的开销。
+    Item {
+        objectName: "sidebarFrost"
+
+        width: 208
+        height: parent.height
+        visible: !root.focusImmersiveActive
+
+        ShaderEffectSource {
+            id: sidebarBackdropSource
+
+            anchors.fill: parent
+            visible: false
+            sourceItem: wallpaperLayer
+            sourceRect: Qt.rect(0, 0, width, height)
+        }
+
+        MultiEffect {
+            anchors.fill: parent
+            source: sidebarBackdropSource
+            blurEnabled: true
+            blur: 0.9
+            blurMax: 48
+        }
     }
 
     RowLayout {

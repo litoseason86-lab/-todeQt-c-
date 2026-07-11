@@ -84,7 +84,7 @@ TestCase {
         property bool slimClockFont: true
         property int dayStartHour: 4
         property string rolloverIgnoredDate: ""
-        property string backgroundTheme: "celadon"
+        property string backgroundTheme: "jiangnan"
     }
 
     QtObject {
@@ -206,7 +206,7 @@ TestCase {
         verify(textureLayer === null, "旧噪点层应已移除，避免和 BackgroundWallpaper 双重叠加");
 
         verify(mainContent.color.a < 0.01, "主内容区必须透明，否则壁纸被盖住");
-        verify(Qt.colorEqual(divider.color, "#e8dfc8"));
+        verify(Qt.colorEqual(divider.color, Theme.border));
         compare(divider.opacity, 0.8);
         compare(stackLayout.currentIndex, mainWindow.viewIndex(mainWindow.currentView));
     }
@@ -214,12 +214,13 @@ TestCase {
     function test_wallpaperLayerFollowsSettings() {
         var wallpaper = findChild(mainWindow, "backgroundWallpaperLayer")
         verify(wallpaper)
-        compare(wallpaper.themeId, "celadon")
-        compare(wallpaper.resolvedTheme.id, "celadon")
+        compare(wallpaper.themeId, "jiangnan")
+        compare(wallpaper.resolvedTheme.id, "jiangnan")
 
-        appSettings.backgroundTheme = "sunset"
-        compare(wallpaper.themeId, "sunset")
-        appSettings.backgroundTheme = "celadon"
+        appSettings.backgroundTheme = "starry"
+        compare(wallpaper.themeId, "starry")
+        compare(wallpaper.resolvedTheme.id, "starry")
+        appSettings.backgroundTheme = "jiangnan"
     }
 
     function test_viewSwitchAnimationUsesOptimizedTimingAndOpacity() {

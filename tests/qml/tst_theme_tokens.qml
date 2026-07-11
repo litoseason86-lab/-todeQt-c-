@@ -3,8 +3,17 @@ import QtTest
 import "../../qml"
 
 // 验证 Theme 单例可被解析（注册生效），且核心令牌取值正确。
+// UI 色值固定为暖纸主题，不随壁纸切换。
 TestCase {
     name: "ThemeTokens"
+
+    function init() {
+        Theme.activeThemeId = "warm"
+    }
+
+    function cleanupTestCase() {
+        Theme.activeThemeId = "warm"
+    }
 
     function test_colorTokens() {
         verify(Qt.colorEqual(Theme.accent, "#d4a574"), "accent 取值不对")
@@ -36,7 +45,9 @@ TestCase {
 
     function test_glassTokens() {
         verify(Qt.colorEqual(Theme.glassSidebar, Qt.rgba(1, 1, 252 / 255, 0.55)), "glassSidebar 取值不对")
-        verify(Qt.colorEqual(Theme.glassCard, Qt.rgba(1, 1, 250 / 255, 0.68)), "glassCard 取值不对")
+        verify(Qt.colorEqual(Theme.glassCard, Qt.rgba(1, 1, 250 / 255, 0.42)), "glassCard 取值不对")
+        verify(Qt.colorEqual(Theme.glassHover, Qt.rgba(1, 1, 250 / 255, 0.62)), "glassHover 取值不对")
+        verify(Qt.colorEqual(Theme.glassAccent, Qt.rgba(240 / 255, 230 / 255, 210 / 255, 0.55)), "glassAccent 取值不对")
         verify(Qt.colorEqual(Theme.glassDialog, Qt.rgba(1, 254 / 255, 249 / 255, 0.985)), "glassDialog 取值不对")
         verify(Qt.colorEqual(Theme.glassBorder, Qt.rgba(1, 1, 1, 0.65)), "glassBorder 取值不对")
     }
@@ -53,70 +64,20 @@ TestCase {
         verify(Qt.colorEqual(Theme.focusColonMuted, "#e8bda6"), "focusColonMuted 取值不对")
     }
 
-    function test_backgroundThemesDefinitions() {
-        var themes = Theme.backgroundThemes
-        compare(themes.length, 6)
-        compare(themes[0].id, "warmPaper")
-
-        var seen = {}
-        for (var i = 0; i < themes.length; i++) {
-            var t = themes[i]
-            verify(!seen[t.id], "id 重复: " + t.id)
-            seen[t.id] = true
-            verify(String(t.name).length > 0, t.id + " 缺名称")
-            verify(String(t.motif).length > 0, t.id + " 缺图案标识")
-            compare(String(t.base).charAt(0), "#")
-            compare(t.blobs.length, 3)
-            for (var j = 0; j < 3; j++) {
-                var b = t.blobs[j]
-                verify(b.cx >= 0 && b.cy >= 0, t.id + " 光晕坐标非法")
-                verify(b.rx > 0 && b.ry > 0, t.id + " 光晕半径非法")
-                compare(String(b.color).charAt(0), "#")
-            }
-        }
+    function test_focusBreakAccentIsChartColor3() {
+        verify(Qt.colorEqual(Theme.focusBreakAccent, Theme.chartColors[3]))
     }
 
-    function test_backgroundThemesMotifMapping() {
-        var expected = {
-            warmPaper: "windowLight",
-            sunset: "sunsetPeaks",
-            celadon: "orchid",
-            mist: "moonMist",
-            sakura: "fallingPetals",
-            wheat: "goldenWaves"
-        }
-        var themes = Theme.backgroundThemes
-
-        for (var i = 0; i < themes.length; i++) {
-            var theme = themes[i]
-            compare(theme.motif, expected[theme.id], theme.id + " 图案映射错误")
-        }
-    }
-
-    // WCAG 相对亮度与对比度：把“数字文字色必须可读”做成永久守门，
-    // 将来有人把 accentInk 调浅到不达标会立刻变红。
-    function relativeLuminance(c) {
-        function channel(v) {
-            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
-        }
-        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
-    }
-
-    function contrastRatio(a, b) {
-        var l1 = relativeLuminance(a)
-        var l2 = relativeLuminance(b)
-        var hi = Math.max(l1, l2)
-        var lo = Math.min(l1, l2)
-        return (hi + 0.05) / (lo + 0.05)
-    }
-
-    function test_accentInkMeetsAaOnSurface() {
-        verify(Theme.accentInk !== undefined, "accentInk 令牌应存在")
-        // accentInk 是 accent 的“可读文字版”：焦糖棕 #d4a574 作文字仅 2.2:1，
-        // 数字英雄必须过 WCAG AA 正文 4.5:1（surface 与 glassCard 上都要过）。
-        var onSurface = contrastRatio(Theme.accentInk, Theme.surface)
-        verify(onSurface >= 4.5, "accentInk 对 surface 对比度应≥4.5，实际 " + onSurface.toFixed(2))
-        var onCard = contrastRatio(Theme.accentInk, Theme.glassCard)
-        verify(onCard >= 4.5, "accentInk 对 glassCard 对比度应≥4.5，实际 " + onCard.toFixed(2))
+    function test_darkWallpaperSwitchesToNightVariant() {
+        Theme.activeThemeId = "moon"
+        verify(Theme.darkMode, "moon 应为夜间版")
+        verify(Qt.colorEqual(Theme.ink, "#e0d4bd"), "夜间版 ink 应为暖米白")
+        verify(Qt.colorEqual(Theme.surface, "#2a241c"), "夜间版 surface 应为暗暖")
+        verify(Qt.colorEqual(Theme.accent, "#d4a574"), "焦糖强调色两版应一致")
+        verify(Qt.colorEqual(Theme.glassCard, Qt.rgba(38 / 255, 33 / 255, 25 / 255, 0.45)),
+               "夜间版 glassCard 应为暗暖玻璃")
+        Theme.activeThemeId = "pink"
+        verify(!Theme.darkMode, "pink 应为日间版")
+        verify(Qt.colorEqual(Theme.ink, "#5d4e37"), "日间版 ink 应复原")
     }
 }

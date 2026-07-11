@@ -326,7 +326,7 @@ Item {
             Layout.preferredHeight: 52
             visible: root.rolloverBannerActive
             radius: Theme.radiusLg
-            color: Theme.accentSoft
+            color: Theme.glassAccent
             border.color: Theme.accent
             border.width: 1
 

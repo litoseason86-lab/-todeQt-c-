@@ -70,6 +70,7 @@ set(APP_SOURCES
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     resources/qml.qrc
+    resources/wallpapers.qrc
     resources/fonts.qrc
 )
 
@@ -200,6 +201,22 @@ target_link_libraries(FontAssetsTests PRIVATE
 add_test(NAME FontAssetsTests COMMAND FontAssetsTests)
 set_tests_properties(FontAssetsTests PROPERTIES
     # 字体校验无需真实窗口；offscreen 保证后台不弹窗。
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+add_executable(WallpaperAssetsTests
+    tests/WallpaperAssetsTests.cpp
+    resources/wallpapers.qrc
+)
+
+target_link_libraries(WallpaperAssetsTests PRIVATE
+    Qt6::Gui
+    Qt6::Test
+)
+
+add_test(NAME WallpaperAssetsTests COMMAND WallpaperAssetsTests)
+set_tests_properties(WallpaperAssetsTests PROPERTIES
+    # 图片解码无需真实窗口；offscreen 保证后台不弹窗。
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
 

@@ -230,7 +230,7 @@ Popup {
 
                     background: Rectangle {
                         radius: Theme.radiusSm
-                        color: closeButton.pressed ? Theme.borderSubtle : (closeButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                        color: closeButton.pressed ? Theme.glassHover : (closeButton.hovered ? Theme.glassHover : Theme.glassCard)
                         border.color: closeButton.hovered || closeButton.pressed ? Theme.accent : Theme.border
                         border.width: 1
                     }
@@ -547,7 +547,7 @@ Popup {
 
                             background: Rectangle {
                                 radius: Theme.radiusSm
-                                color: deleteButton.pressed ? Theme.borderSubtle : (deleteButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                                color: deleteButton.pressed ? Theme.glassHover : (deleteButton.hovered ? Theme.glassHover : Theme.glassCard)
                                 border.color: deleteButton.hovered || deleteButton.pressed ? Theme.dangerSoft : Theme.border
                                 border.width: 1
                             }

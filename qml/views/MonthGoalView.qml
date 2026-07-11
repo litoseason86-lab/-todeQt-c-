@@ -271,7 +271,7 @@ Item {
                     implicitHeight: 40
                     background: Rectangle {
                         objectName: "monthPreviousButtonBackground"
-                        color: previousMonthButton.pressed ? Theme.accentSoft : (previousMonthButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                        color: previousMonthButton.pressed ? Theme.glassHover : (previousMonthButton.hovered ? Theme.glassHover : Theme.glassCard)
                         border.color: previousMonthButton.hovered || previousMonthButton.pressed ? Theme.accent : Theme.border
                         border.width: 1
                         radius: Theme.radiusLg
@@ -315,7 +315,7 @@ Item {
                     implicitHeight: 40
                     background: Rectangle {
                         objectName: "monthCurrentButtonBackground"
-                        color: currentMonthButton.pressed ? Theme.accentSoft : (currentMonthButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                        color: currentMonthButton.pressed ? Theme.glassHover : (currentMonthButton.hovered ? Theme.glassHover : Theme.glassCard)
                         border.color: currentMonthButton.hovered || currentMonthButton.pressed ? Theme.accent : Theme.border
                         border.width: 1
                         radius: Theme.radiusLg
@@ -356,7 +356,7 @@ Item {
                     implicitHeight: 40
                     background: Rectangle {
                         objectName: "monthNextButtonBackground"
-                        color: nextMonthButton.pressed ? Theme.accentSoft : (nextMonthButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                        color: nextMonthButton.pressed ? Theme.glassHover : (nextMonthButton.hovered ? Theme.glassHover : Theme.glassCard)
                         border.color: nextMonthButton.hovered || nextMonthButton.pressed ? Theme.accent : Theme.border
                         border.width: 1
                         radius: Theme.radiusLg
@@ -406,7 +406,7 @@ Item {
 
                     background: Rectangle {
                         objectName: "focusHistoryCleanupInvalidButtonBackground"
-                        color: cleanupInvalidButton.pressed ? Theme.accentSoft : (cleanupInvalidButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                        color: cleanupInvalidButton.pressed ? Theme.glassHover : (cleanupInvalidButton.hovered ? Theme.glassHover : Theme.glassCard)
                         border.color: cleanupInvalidButton.hovered || cleanupInvalidButton.pressed ? Theme.accent : Theme.border
                         border.width: 1
                         radius: Theme.radiusLg

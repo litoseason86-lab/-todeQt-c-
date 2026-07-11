@@ -107,10 +107,13 @@ TestCase {
         wait(20)
     }
 
-    function test_backdropUsesGlassToken() {
+    function test_backdropShowsWallpaper() {
         const backdrop = findChild(overlay, "immersiveBackdrop")
         verify(backdrop)
-        verify(Qt.colorEqual(backdrop.color, Theme.glassCard))
+        // 沉浸态铺壁纸原图，source 指向主题壁纸资源。
+        const image = findChild(backdrop, "wallpaperImage")
+        verify(image)
+        verify(String(image.source).indexOf("resources/wallpapers/") >= 0)
     }
 
     function test_pomoWorkProjectsRingAndTexts() {
