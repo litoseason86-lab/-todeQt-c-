@@ -10,6 +10,7 @@ const auto kSlimClockFontKey = QStringLiteral("appearance/slimClockFont");
 const auto kRolloverIgnoredDateKey = QStringLiteral("rollover/lastIgnoredDate");
 const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
+const auto kNicknameKey = QStringLiteral("profile/nickname");
 }
 
 AppSettings* AppSettings::instance()
@@ -178,4 +179,22 @@ void AppSettings::setDayStartHour(int hour)
     m_settings->setValue(kDayStartHourKey, normalized);
     m_settings->sync();
     emit dayStartHourChanged();
+}
+
+QString AppSettings::nickname() const
+{
+    return m_settings->value(kNicknameKey, QString()).toString();
+}
+
+void AppSettings::setNickname(const QString& name)
+{
+    // 首尾空白一律去掉：昵称用于问候语拼接，尾随空格会让标点悬空。
+    const QString normalized = name.trimmed();
+    if (nickname() == normalized) {
+        return;
+    }
+
+    m_settings->setValue(kNicknameKey, normalized);
+    m_settings->sync();
+    emit nicknameChanged();
 }

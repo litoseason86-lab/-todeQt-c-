@@ -26,6 +26,9 @@ Item {
     property var todayStats: ({ totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0, sessionCount: 0 })
     property int streakDays: 0
     property int totalFocusSeconds: 0
+    // 近 7 个逻辑日（含今天，旧→新）的专注时长与番茄数，喂给统计卡迷你图表。
+    property var weekDurations: []
+    property var weekSessions: []
     property string loadError: ""
     // all=全部 active=进行中 done=已完成；对应头部三个筛选片。
     property string filterMode: "all"
@@ -158,6 +161,31 @@ Item {
             root.streakDays = 0
             root.totalFocusSeconds = 0
         }
+        loadWeekTrend()
+    }
+
+    function loadWeekTrend() {
+        // 趋势图与核心统计分开兜底：7 次单日查询任何一次失败，只丢图表不丢数字。
+        try {
+            // qmllint disable unqualified
+            var hour = (typeof appSettings !== "undefined" && appSettings)
+                    ? appSettings.dayStartHour : 4
+            // qmllint enable unqualified
+            var today = LogicalDay.todayDate(hour, new Date())
+            var durations = []
+            var sessions = []
+            for (var i = 6; i >= 0; i--) {
+                var day = new Date(today.getFullYear(), today.getMonth(), today.getDate() - i)
+                var stats = statisticsService.getDayStats(day)
+                durations.push(Number(stats.totalDuration || 0))
+                sessions.push(Number(stats.sessionCount || 0))
+            }
+            root.weekDurations = durations
+            root.weekSessions = sessions
+        } catch (error) {
+            root.weekDurations = []
+            root.weekSessions = []
+        }
     }
 
     function setTaskCompletedWithAnimationDelay(id, completed) {
@@ -238,14 +266,28 @@ Item {
                     Layout.fillWidth: true
                     spacing: Theme.space4
 
-                    Text {
-                        objectName: "dashboardGreeting"
+                    RowLayout {
+                        spacing: Theme.space8
 
-                        text: DashboardFormat.greetingFor(root.now.getHours()) + "，今天也要专注呀"
-                        textFormat: Text.PlainText
-                        font.pixelSize: Theme.fontXxl
-                        font.weight: Font.Bold
-                        color: Theme.inkStrong
+                        Text {
+                            objectName: "dashboardGreeting"
+
+                            // 有昵称念名字，没有就只问好；逗号跟随昵称一起出现。
+                            text: {
+                                var nickname = root.settingsRef ? String(root.settingsRef.nickname || "") : ""
+                                var greeting = DashboardFormat.greetingFor(root.now.getHours())
+                                return nickname.length > 0 ? greeting + "，" + nickname : greeting
+                            }
+                            textFormat: Text.PlainText
+                            font.pixelSize: Theme.fontXxl
+                            font.weight: Font.Bold
+                            color: Theme.inkStrong
+                        }
+
+                        Text {
+                            text: "👋"
+                            font.pixelSize: Theme.fontXxl
+                        }
                     }
 
                     Text {
@@ -256,32 +298,51 @@ Item {
                 }
 
                 GlassPanel {
-                    Layout.preferredWidth: dateColumn.implicitWidth + Theme.space32
-                    Layout.preferredHeight: 56
+                    Layout.preferredWidth: dateRow.implicitWidth + Theme.space32
+                    Layout.preferredHeight: 60
 
-                    ColumnLayout {
-                        id: dateColumn
+                    RowLayout {
+                        id: dateRow
 
                         anchors.centerIn: parent
-                        spacing: 2
+                        spacing: Theme.space8
 
-                        Text {
-                            objectName: "dashboardDateText"
+                        Rectangle {
+                            Layout.preferredWidth: 32
+                            Layout.preferredHeight: 32
+                            radius: 16
+                            color: Theme.glassAccent
+                            border.color: Theme.glassBorder
+                            border.width: 1
 
-                            Layout.alignment: Qt.AlignHCenter
-                            text: Qt.formatDate(root.now, "yyyy年M月d日")
-                            textFormat: Text.PlainText
-                            font.pixelSize: Theme.fontMd
-                            font.weight: Font.Medium
-                            color: Theme.inkStrong
+                            Text {
+                                anchors.centerIn: parent
+                                text: "🕐"
+                                font.pixelSize: Theme.fontLg
+                            }
                         }
 
-                        Text {
-                            Layout.alignment: Qt.AlignHCenter
-                            text: Qt.formatDate(root.now, "dddd")
-                            textFormat: Text.PlainText
-                            font.pixelSize: Theme.fontXs
-                            color: Theme.inkSoft
+                        ColumnLayout {
+                            spacing: 2
+
+                            Text {
+                                objectName: "dashboardDateText"
+
+                                text: Qt.formatDate(root.now, "yyyy年M月d日") + " " + Qt.formatDate(root.now, "dddd")
+                                textFormat: Text.PlainText
+                                font.pixelSize: Theme.fontMd
+                                font.weight: Font.Medium
+                                color: Theme.inkStrong
+                            }
+
+                            Text {
+                                // 参考图此处是农历，暂无历表数据，先用“今年第 N 天”占位。
+                                text: "今年第 " + (Math.floor((root.now.getTime()
+                                        - new Date(root.now.getFullYear(), 0, 1).getTime()) / 86400000) + 1) + " 天"
+                                textFormat: Text.PlainText
+                                font.pixelSize: Theme.fontXs
+                                color: Theme.inkSoft
+                            }
                         }
                     }
                 }
@@ -303,42 +364,84 @@ Item {
                 Layout.fillWidth: true
                 spacing: Theme.space12
 
-                StatCard {
+                DashboardStatCard {
                     Layout.fillWidth: true
+                    icon: "🍅"
                     title: "今日专注番茄"
                     value: String(Number(root.todayStats.sessionCount || 0))
                     unit: "个"
                     subtitle: "专注 " + root.formatDuration(root.todayStats.totalDuration)
+
+                    MiniTrendChart {
+                        anchors.fill: parent
+                        values: root.weekDurations
+                    }
                 }
 
-                StatCard {
+                DashboardStatCard {
                     Layout.fillWidth: true
+                    icon: "🎯"
                     title: "今日任务完成"
                     value: Number(root.todayStats.completedTasks || 0) + " / " + Number(root.todayStats.totalTasks || 0)
                     subtitle: "完成率 " + Math.round(Number(root.todayStats.completionRate || 0) * 100) + "%"
                     animationDelay: 60
+
+                    Rectangle {
+                        // 完成率进度条：轨道 + 按比例的实心填充。
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 6
+                        radius: 3
+                        color: Theme.surfaceSunken
+                        border.color: Theme.borderSubtle
+                        border.width: 1
+
+                        Rectangle {
+                            objectName: "dashboardCompletionFill"
+
+                            anchors.left: parent.left
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            width: parent.width * Math.min(1, Math.max(0, Number(root.todayStats.completionRate || 0)))
+                            radius: 3
+                            color: Theme.accent
+                        }
+                    }
                 }
 
-                StatCard {
+                DashboardStatCard {
                     objectName: "dashboardStreakCard"
 
                     Layout.fillWidth: true
+                    icon: "🔥"
                     title: "专注连续天数"
                     value: String(root.streakDays)
                     unit: "天"
                     subtitle: root.streakDays > 0 ? "继续保持这股势头" : "今天就是第一天"
                     animationDelay: 120
+
+                    MiniTrendChart {
+                        anchors.fill: parent
+                        values: root.weekSessions
+                    }
                 }
 
-                StatCard {
+                DashboardStatCard {
                     objectName: "dashboardTotalCard"
 
                     Layout.fillWidth: true
+                    icon: "🏆"
                     title: "累计专注时长"
                     value: DashboardFormat.totalHoursText(root.totalFocusSeconds)
                     unit: "小时"
                     subtitle: "相当于 " + DashboardFormat.equivalentDaysText(root.totalFocusSeconds) + " 天"
                     animationDelay: 180
+
+                    MiniBarChart {
+                        anchors.fill: parent
+                        values: root.weekDurations
+                    }
                 }
             }
 

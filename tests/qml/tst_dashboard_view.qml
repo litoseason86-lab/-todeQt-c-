@@ -69,6 +69,11 @@ TestCase {
         function getTotalFocusDuration() {
             return totalData
         }
+
+        function getDayStats(date) {
+            return { totalDuration: 1200, completedTasks: 1, totalTasks: 2,
+                     completionRate: 0.5, sessionCount: 2 }
+        }
     }
 
     QtObject {
@@ -125,6 +130,7 @@ TestCase {
         property int workMinutes: 25
         property int breakMinutes: 5
         property int lastMode: 0
+        property string nickname: ""
     }
 
     Component {
@@ -166,6 +172,7 @@ TestCase {
         focusTimer.pauseCalls = 0
         focusTimer.resumeCalls = 0
         focusTimer.stopCalls = 0
+        appSettings.nickname = ""
     }
 
     // —— DashboardFormat 纯函数 ——
@@ -232,6 +239,29 @@ TestCase {
         var streakCard = findChild(view, "dashboardStreakCard")
         verify(streakCard)
         compare(streakCard.value, "16")
+    }
+
+    function test_week_trend_loads_seven_days() {
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+
+        compare(view.weekDurations.length, 7)
+        compare(view.weekSessions.length, 7)
+        compare(Number(view.weekDurations[0]), 1200)
+        compare(Number(view.weekSessions[6]), 2)
+    }
+
+    function test_greeting_includes_nickname_when_set() {
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+
+        var greeting = findChild(view, "dashboardGreeting")
+        verify(greeting)
+        // 空昵称：只有问候语，不能出现悬空逗号。
+        verify(greeting.text.indexOf("，") === -1)
+
+        appSettings.nickname = "zjk"
+        verify(greeting.text.indexOf("，zjk") > 0)
     }
 
     function test_filter_modes() {

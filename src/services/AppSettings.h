@@ -18,6 +18,7 @@ class AppSettings : public QObject
     Q_PROPERTY(QString rolloverIgnoredDate READ rolloverIgnoredDate WRITE setRolloverIgnoredDate NOTIFY rolloverIgnoredDateChanged)
     Q_PROPERTY(QString backgroundTheme READ backgroundTheme WRITE setBackgroundTheme NOTIFY backgroundThemeChanged)
     Q_PROPERTY(int dayStartHour READ dayStartHour WRITE setDayStartHour NOTIFY dayStartHourChanged)
+    Q_PROPERTY(QString nickname READ nickname WRITE setNickname NOTIFY nicknameChanged)
 
 public:
     static AppSettings* instance();
@@ -41,6 +42,8 @@ public:
     void setBackgroundTheme(const QString& themeId);
     int dayStartHour() const;
     void setDayStartHour(int hour);
+    QString nickname() const;
+    void setNickname(const QString& name);
 
 signals:
     void lastModeChanged();
@@ -52,6 +55,7 @@ signals:
     void rolloverIgnoredDateChanged();
     void backgroundThemeChanged();
     void dayStartHourChanged();
+    void nicknameChanged();
 
 private:
     static int normalizeDayStartHour(int hour);

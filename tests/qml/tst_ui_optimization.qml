@@ -154,6 +154,11 @@ TestCase {
         width: 620
         height: 520
         visible: false
+        // 固定“逻辑今天”为周三正午：过去/未来列在任何真实日期都可覆盖。
+        // 此前依赖真实日历——周日没有“未来列”、周一没有“过去列”，用例必挂。
+        logicalNowProvider: function () {
+            return new Date(2026, 6, 8, 12, 0, 0)
+        }
     }
 
     SignalSpy {

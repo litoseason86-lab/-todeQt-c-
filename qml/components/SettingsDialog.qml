@@ -370,6 +370,73 @@ Popup {
                         }
                     }
                 }
+
+                RowDivider {
+                    objectName: "settingsPreferenceDividerNickname"
+                }
+
+                Rectangle {
+                    objectName: "settingsNicknameRow"
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Theme.space12
+                    Layout.rightMargin: Theme.space12
+                    implicitHeight: 64
+                    color: "transparent"
+
+                    Column {
+                        anchors.left: parent.left
+                        anchors.right: nicknameField.left
+                        anchors.leftMargin: Theme.space12
+                        anchors.rightMargin: Theme.space12
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 2
+
+                        Text {
+                            text: "昵称"
+                            textFormat: Text.PlainText
+                            color: Theme.ink
+                            font.pixelSize: Theme.fontMd
+                        }
+
+                        Text {
+                            text: "用于仪表盘的问候语，留空则只显示问候"
+                            textFormat: Text.PlainText
+                            color: Theme.inkMuted
+                            font.pixelSize: Theme.fontSm
+                        }
+                    }
+
+                    TextField {
+                        id: nicknameField
+                        objectName: "settingsNicknameField"
+
+                        anchors.right: parent.right
+                        anchors.rightMargin: Theme.space12
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 140
+                        implicitHeight: 34
+                        text: root.appSettingsRef ? root.appSettingsRef.nickname : ""
+                        placeholderText: "怎么称呼你"
+                        placeholderTextColor: Theme.inkMuted
+                        color: Theme.ink
+                        font.pixelSize: Theme.fontMd
+                        maximumLength: 12
+
+                        background: Rectangle {
+                            color: Theme.surfaceSunken
+                            radius: Theme.radiusMd
+                            border.color: nicknameField.activeFocus ? Theme.accent : Theme.borderSubtle
+                            border.width: 1
+                        }
+
+                        // 失焦或回车才写入，避免每敲一个字都落盘刷新问候语。
+                        onEditingFinished: {
+                            if (root.appSettingsRef) {
+                                root.appSettingsRef.nickname = nicknameField.text
+                            }
+                        }
+                    }
+                }
             }
 
             Text {

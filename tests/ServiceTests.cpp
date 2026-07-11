@@ -409,6 +409,7 @@ private slots:
     void appSettingsReduceMotionRoundTrip();
     void appSettingsSlimClockFontRoundTrip();
     void appSettingsRolloverIgnoredDateRoundTrip();
+    void appSettingsNicknameTrimsAndRoundTrips();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void appSettingsDayStartHourNormalizeAndPersist();
     void appSettingsDayStartHourRejectsCorruptIniValue();
@@ -623,6 +624,31 @@ void ServiceTests::appSettingsRolloverIgnoredDateRoundTrip()
 
     AppSettings reloaded(path);
     QCOMPARE(reloaded.rolloverIgnoredDate(), QStringLiteral("2026-07-06"));
+}
+
+void ServiceTests::appSettingsNicknameTrimsAndRoundTrips()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.nickname(), QString());
+
+        QSignalSpy spy(&settings, &AppSettings::nicknameChanged);
+        settings.setNickname(QStringLiteral("  zjk  "));
+        // 存储的是去空白后的昵称，问候语拼接不会出现悬空标点。
+        QCOMPARE(settings.nickname(), QStringLiteral("zjk"));
+        QCOMPARE(spy.count(), 1);
+
+        // 语义同值（只差空白）不再发信号。
+        settings.setNickname(QStringLiteral("zjk "));
+        QCOMPARE(spy.count(), 1);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.nickname(), QStringLiteral("zjk"));
 }
 
 void ServiceTests::appSettingsBackgroundThemeDefaultAndRoundTrip()
