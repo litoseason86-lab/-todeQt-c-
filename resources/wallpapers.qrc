@@ -1,0 +1,10 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="resources/wallpapers/warm.png">wallpapers/warm.png</file>
+        <file alias="resources/wallpapers/pink.png">wallpapers/pink.png</file>
+        <file alias="resources/wallpapers/jiangnan.png">wallpapers/jiangnan.png</file>
+        <file alias="resources/wallpapers/starry.png">wallpapers/starry.png</file>
+        <file alias="resources/wallpapers/rainy.png">wallpapers/rainy.png</file>
+        <file alias="resources/wallpapers/moon.png">wallpapers/moon.png</file>
+    </qresource>
+</RCC>
