@@ -108,9 +108,9 @@
 
 ## 暗色模式的系统面
 
-- 暗色主题激活时，macOS 原生 NSVisualEffectView（vibrancy 层）需切换到暗色外观
-  （`NSAppearance` dark / material 对应调整），否则玻璃底色发灰。实现时在现有
-  vibrancy 桥接代码上加 per-window appearance 切换。
+- 本应用的"玻璃"是 QML 半透明色块（白/暗 + alpha 叠在壁纸上），**没有**原生
+  NSVisualEffectView（该方案 2026-06 已试验并放弃，勿引入）。暗色主题只需把
+  glass 系 token 换成暗色半透明值，无系统层改动。
 - 弹窗、Toast、沉浸式专注层等全部消费 Theme token，无需单独适配，但需逐一目检。
 
 ## 设置与持久化
