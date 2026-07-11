@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<!--
+  Liquid Glass — Pill Button
+  ==========================
+  Self-contained demo of Apple's Liquid Glass effect on a pill-shaped CTA button.
+  Works in Chrome/Chromium only (backdrop-filter + SVG filter URL).
+
+  TECHNIQUE:
+    1. A hidden <svg> defines the filter: feImage (displacement map) → feDisplacementMap
+    2. The .glass-filter div applies: backdrop-filter + filter:url(#lg-btn-filter)
+    3. Layer composition: refraction → tint → specular rim → content
+
+  DISPLACEMENT MAP (inline SVG gradient):
+    - Two linear gradients (black→red for X, black→green for Y), screen-blended
+    - Neutral gray rounded-rect mask blurred to neutralize center
+    - Encodes edge-only displacement: center = no warp, borders = max warp
+
+  KEY PARAMETERS TO TUNE:
+    scale:         How intense the refraction is. Negative = magnify (Apple-style).
+                   Try -20 (subtle) to -60 (dramatic). Default: -35
+    blur:          Frosted glass thickness. Try 8px–20px. Default: 12px
+    tint:          Glass surface color. rgba(255,255,255, 0.15–0.30) for light glass.
+    specular:      Rim highlight intensity. Reduce alpha for subtler light catch.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Liquid Glass Button</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      /* Vivid demo background to show the refraction effect */
+      background:
+        radial-gradient(ellipse at 20% 50%, #ff6b6b 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 20%, #4ecdc4 0%, transparent 50%),
+        radial-gradient(ellipse at 50% 80%, #45b7d1 0%, transparent 50%),
+        linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    }
+
+    .demo-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 1.5rem;
+      font-weight: 700;
+      color: rgba(255,255,255,0.15);
+      white-space: nowrap;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    /* ================================================================
+       GLASS BUTTON
+       ================================================================ */
+    .glass-btn {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 300px;
+      height: 56px;
+      border-radius: 28px;          /* pill shape */
+      border: none;
+      cursor: pointer;
+      overflow: hidden;
+      /* Outer shadow for elevation */
+      box-shadow:
+        0 8px 32px rgba(0,0,0,0.4),
+        0 2px 8px rgba(0,0,0,0.3);
+      transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+
+    .glass-btn:hover {
+      transform: translateY(-1px);
+      box-shadow:
+        0 12px 40px rgba(0,0,0,0.5),
+        0 4px 12px rgba(0,0,0,0.4);
+    }
+
+    .glass-btn:active {
+      transform: translateY(0);
+    }
+
+    /* Layer 0 — Refraction filter (Chrome-only via SVG backdrop-filter) */
+    .glass-btn__refract {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      /* SVG filter applies the displacement map refraction.
+         blur(12px) creates the frosted glass thickness.
+         brightness/saturate enhance the glass look. */
+      backdrop-filter: blur(12px) url(#lg-btn-filter) brightness(1.1) saturate(1.3);
+      -webkit-backdrop-filter: blur(12px) url(#lg-btn-filter) brightness(1.1) saturate(1.3);
+      /* Fallback for non-Chrome: backdrop-filter still applies blur */
+      isolation: isolate;
+    }
+
+    /* Layer 1 — Semi-transparent glass tint */
+    .glass-btn__tint {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: rgba(255, 255, 255, 0.18);
+    }
+
+    /* Layer 2 — Specular rim highlight (simulates light catching the glass edge) */
+    .glass-btn__specular {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      /* Top edge: bright catch light. Bottom edge: subtle secondary. Side edges: gentle. */
+      box-shadow:
+        inset 0  1px 0   rgba(255,255,255,0.80),
+        inset 0 -1px 0   rgba(255,255,255,0.20),
+        inset  1px 0 0   rgba(255,255,255,0.25),
+        inset -1px 0 0   rgba(255,255,255,0.25);
+    }
+
+    /* Layer 3 — Content (always on top) */
+    .glass-btn__content {
+      position: relative;
+      z-index: 10;
+      color: #ffffff;
+      font-size: 15px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.25);
+    }
+
+    /* Browser support warning */
+    .compat-note {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 12px;
+      color: rgba(255,255,255,0.4);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Demo background text to make refraction visible -->
+  <p class="demo-text">Liquid Glass &bull; iOS 26 &bull; Refraction</p>
+
+  <!-- ================================================================
+       SVG FILTER DEFINITION (hidden)
+       The displacement map is an inline SVG encoded as a data URI.
+       Two linear gradients (X and Y) plus a blurred neutral gray mask
+       create edge-only refraction: center stays clean, borders warp.
+       ================================================================ -->
+  <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute;overflow:hidden">
+    <defs>
+      <filter id="lg-btn-filter" color-interpolation-filters="sRGB"
+              x="0%" y="0%" width="100%" height="100%">
+
+        <!-- Displacement map: inline SVG with gradient encoding -->
+        <!-- X gradient: black(0) → red(255) left-to-right encodes horizontal warp -->
+        <!-- Y gradient: black(0) → green(255) top-to-bottom encodes vertical warp -->
+        <!-- Gray mask blurred over shape neutralizes the center (128,128 = no displacement) -->
+        <feImage
+          result="dispMap"
+          x="0" y="0" width="300" height="56"
+          preserveAspectRatio="none"
+          href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'300'%20height%3D'56'%3E%3Cdefs%3E%3ClinearGradient%20id%3D'gx'%20x1%3D'0%25'%20y1%3D'0%25'%20x2%3D'100%25'%20y2%3D'0%25'%3E%3Cstop%20offset%3D'0%25'%20stop-color%3D'%23000'%2F%3E%3Cstop%20offset%3D'100%25'%20stop-color%3D'%23f00'%2F%3E%3C%2FlinearGradient%3E%3ClinearGradient%20id%3D'gy'%20x1%3D'0%25'%20y1%3D'0%25'%20x2%3D'0%25'%20y2%3D'100%25'%3E%3Cstop%20offset%3D'0%25'%20stop-color%3D'%23000'%2F%3E%3Cstop%20offset%3D'100%25'%20stop-color%3D'%230f0'%2F%3E%3C%2FlinearGradient%3E%3Cfilter%20id%3D'b'%3E%3CfeGaussianBlur%20stdDeviation%3D'8'%2F%3E%3C%2Ffilter%3E%3C%2Fdefs%3E%3Crect%20width%3D'300'%20height%3D'56'%20rx%3D'28'%20fill%3D'url(%23gx)'%20style%3D'mix-blend-mode%3Ascreen'%2F%3E%3Crect%20width%3D'300'%20height%3D'56'%20rx%3D'28'%20fill%3D'url(%23gy)'%20style%3D'mix-blend-mode%3Ascreen'%2F%3E%3Crect%20width%3D'300'%20height%3D'56'%20rx%3D'28'%20fill%3D'%23808080'%20filter%3D'url(%23b)'%2F%3E%3C%2Fsvg%3E"
+        />
+
+        <!-- Apply displacement map to background content.
+             scale=-35: negative = magnifying lens effect (Apple-style inward lensing).
+             Positive scale = fish-eye/shrinking effect.
+             R channel drives X, G channel drives Y. -->
+        <feDisplacementMap
+          in="SourceGraphic"
+          in2="dispMap"
+          scale="-35"
+          xChannelSelector="R"
+          yChannelSelector="G"
+        />
+
+      </filter>
+    </defs>
+  </svg>
+
+  <!-- ================================================================
+       BUTTON MARKUP
+       Four stacked layers: refract, tint, specular, content
+       ================================================================ -->
+  <button class="glass-btn" type="button">
+    <div class="glass-btn__refract"></div>
+    <div class="glass-btn__tint"></div>
+    <div class="glass-btn__specular"></div>
+    <span class="glass-btn__content">Get Started</span>
+  </button>
+
+  <p class="compat-note">⚠ Full effect requires Chrome/Chromium. Other browsers show frosted blur fallback.</p>
+
+</body>
+</html>

@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<!--
+  Liquid Glass — Frosted Card with Chromatic Aberration
+  =======================================================
+  Demonstrates a larger glass card (360×220) with the full chromatic aberration
+  technique: three separate feDisplacementMap passes for R, G, B channels with
+  slightly different scale values, then blended back together.
+
+  CHROMATIC ABERRATION EXPLAINED:
+    Real glass disperses different wavelengths of light at different angles
+    (like a prism). We simulate this by displacing the R, G, and B channels
+    separately with slightly different scale values, then recombining:
+      - Red   channel: scale -42  (baseline)
+      - Green channel: scale -45  (slightly stronger = prism spread)
+      - Blue  channel: scale -43  (between red and green)
+    The feColorMatrix primitives isolate each channel, feBlend merges them.
+    Result: subtle rainbow fringing at glass edges, like real optical glass.
+
+  PERFORMANCE NOTE:
+    Three feDisplacementMap passes is more GPU-intensive than one.
+    Use chromatic aberration for hero elements only, not repeated list items.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Liquid Glass Card</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(ellipse at 10% 30%, #e96c6c 0%, transparent 45%),
+        radial-gradient(ellipse at 90% 70%, #6c9ee9 0%, transparent 45%),
+        radial-gradient(ellipse at 60% 10%, #c96ce9 0%, transparent 45%),
+        radial-gradient(ellipse at 30% 90%, #6ce9a0 0%, transparent 45%),
+        linear-gradient(135deg, #0d1117 0%, #161b22 100%);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      padding: 40px;
+    }
+
+    /* ================================================================
+       GLASS CARD
+       ================================================================ */
+    .glass-card {
+      position: relative;
+      width: 360px;
+      height: 220px;
+      border-radius: 20px;
+      overflow: hidden;
+      box-shadow:
+        0 20px 60px rgba(0,0,0,0.5),
+        0 4px 16px rgba(0,0,0,0.3);
+    }
+
+    /* Layer 0 — Refraction + chromatic aberration filter */
+    .glass-card__refract {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      backdrop-filter: blur(16px) url(#lg-card-filter) brightness(1.05) saturate(1.4);
+      -webkit-backdrop-filter: blur(16px) url(#lg-card-filter) brightness(1.05) saturate(1.4);
+      isolation: isolate;
+    }
+
+    /* Layer 1 — Tint (darker for card, more substantial material) */
+    .glass-card__tint {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: rgba(255, 255, 255, 0.10);
+    }
+
+    /* Layer 2 — Specular highlights */
+    .glass-card__specular {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      box-shadow:
+        inset 0  1px 0   rgba(255,255,255,0.60),
+        inset 0 -1px 0   rgba(255,255,255,0.10),
+        inset  1px 0 0   rgba(255,255,255,0.15),
+        inset -1px 0 0   rgba(255,255,255,0.15);
+    }
+
+    /* Layer 3 — Card content */
+    .glass-card__content {
+      position: relative;
+      z-index: 10;
+      padding: 28px;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .card-eyebrow {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.5);
+    }
+
+    .card-title {
+      font-size: 22px;
+      font-weight: 700;
+      color: #ffffff;
+      line-height: 1.25;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+
+    .card-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .card-avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #4ecdc4, #45b7d1);
+      border: 1px solid rgba(255,255,255,0.3);
+    }
+
+    .card-meta-text {
+      font-size: 13px;
+      color: rgba(255,255,255,0.65);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ================================================================
+       SVG FILTER — CHROMATIC ABERRATION
+       Three feDisplacementMap passes (one per color channel) with
+       different scale values, then merged with feBlend mode=screen.
+       ================================================================ -->
+  <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute;overflow:hidden">
+    <defs>
+      <filter id="lg-card-filter" color-interpolation-filters="sRGB"
+              x="0%" y="0%" width="100%" height="100%">
+
+        <!-- Displacement map for 360×220 card, radius 20 -->
+        <feImage
+          result="dispMap"
+          x="0" y="0" width="360" height="220"
+          preserveAspectRatio="none"
+          href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'360'%20height%3D'220'%3E%3Cdefs%3E%3ClinearGradient%20id%3D'gx'%20x1%3D'0%25'%20y1%3D'0%25'%20x2%3D'100%25'%20y2%3D'0%25'%3E%3Cstop%20offset%3D'0%25'%20stop-color%3D'%23000'%2F%3E%3Cstop%20offset%3D'100%25'%20stop-color%3D'%23f00'%2F%3E%3C%2FlinearGradient%3E%3ClinearGradient%20id%3D'gy'%20x1%3D'0%25'%20y1%3D'0%25'%20x2%3D'0%25'%20y2%3D'100%25'%3E%3Cstop%20offset%3D'0%25'%20stop-color%3D'%23000'%2F%3E%3Cstop%20offset%3D'100%25'%20stop-color%3D'%230f0'%2F%3E%3C%2FlinearGradient%3E%3Cfilter%20id%3D'b'%3E%3CfeGaussianBlur%20stdDeviation%3D'10'%2F%3E%3C%2Ffilter%3E%3C%2Fdefs%3E%3Crect%20width%3D'360'%20height%3D'220'%20rx%3D'20'%20fill%3D'url(%23gx)'%20style%3D'mix-blend-mode%3Ascreen'%2F%3E%3Crect%20width%3D'360'%20height%3D'220'%20rx%3D'20'%20fill%3D'url(%23gy)'%20style%3D'mix-blend-mode%3Ascreen'%2F%3E%3Crect%20width%3D'360'%20height%3D'220'%20rx%3D'20'%20fill%3D'%23808080'%20filter%3D'url(%23b)'%2F%3E%3C%2Fsvg%3E"
+        />
+
+        <!-- === CHROMATIC ABERRATION: 3 passes with different scale values === -->
+
+        <!-- Pass 1: Red channel — scale -42 (baseline) -->
+        <feDisplacementMap
+          in="SourceGraphic" in2="dispMap"
+          scale="-42" xChannelSelector="R" yChannelSelector="G"
+          result="dispR"
+        />
+        <!-- Isolate only Red channel from dispR result -->
+        <feColorMatrix in="dispR" type="matrix"
+          values="1 0 0 0 0
+                  0 0 0 0 0
+                  0 0 0 0 0
+                  0 0 0 1 0"
+          result="Ronly"
+        />
+
+        <!-- Pass 2: Green channel — scale -45 (slightly more dispersed) -->
+        <feDisplacementMap
+          in="SourceGraphic" in2="dispMap"
+          scale="-45" xChannelSelector="R" yChannelSelector="G"
+          result="dispG"
+        />
+        <!-- Isolate only Green channel -->
+        <feColorMatrix in="dispG" type="matrix"
+          values="0 0 0 0 0
+                  0 1 0 0 0
+                  0 0 0 0 0
+                  0 0 0 1 0"
+          result="Gonly"
+        />
+
+        <!-- Pass 3: Blue channel — scale -43 (between red and green) -->
+        <feDisplacementMap
+          in="SourceGraphic" in2="dispMap"
+          scale="-43" xChannelSelector="R" yChannelSelector="G"
+          result="dispB"
+        />
+        <!-- Isolate only Blue channel -->
+        <feColorMatrix in="dispB" type="matrix"
+          values="0 0 0 0 0
+                  0 0 0 0 0
+                  0 0 1 0 0
+                  0 0 0 1 0"
+          result="Bonly"
+        />
+
+        <!-- Merge all three channels back. screen blend adds them together. -->
+        <feBlend in="Ronly" in2="Gonly" mode="screen" result="RG"/>
+        <feBlend in="RG"    in2="Bonly" mode="screen" result="chromatic"/>
+
+      </filter>
+    </defs>
+  </svg>
+
+  <!-- Card -->
+  <div class="glass-card">
+    <div class="glass-card__refract"></div>
+    <div class="glass-card__tint"></div>
+    <div class="glass-card__specular"></div>
+    <div class="glass-card__content">
+      <div>
+        <p class="card-eyebrow">Featured</p>
+        <h2 class="card-title">Liquid Glass<br>in the Browser</h2>
+      </div>
+      <div class="card-meta">
+        <div class="card-avatar"></div>
+        <span class="card-meta-text">CSS · SVG · Chrome only</span>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

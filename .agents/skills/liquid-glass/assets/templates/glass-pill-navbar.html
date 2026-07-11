@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<!--
+  Liquid Glass — Pill Tab Bar (Apple-style)
+  ==========================================
+  Replicates Apple's floating pill tab bar from iOS 26/macOS 26.
+  Three tabs: the active tab has a nested inner glass element that
+  creates the "lifted" selected-state effect Apple uses.
+
+  NESTED GLASS STATES:
+    Apple uses two levels of glass:
+      1. Outer pill:   the main tab bar (blurs/refracts everything behind it)
+      2. Inner active: the selected tab indicator (a smaller glass bubble inside)
+    This creates a sense of depth — the active tab appears to "lift" off
+    the already-glass surface of the bar.
+
+  TAB BAR LAYOUT:
+    - Fixed 360px wide, 60px tall pill (border-radius: 30px)
+    - Items distributed evenly via flexbox
+    - Active item: separate inner glass bubble + dark text
+    - Inactive items: white icon + label, reduced opacity
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Liquid Glass Tab Bar</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background:
+        radial-gradient(ellipse at 30% 40%, #7b68ee 0%, transparent 50%),
+        radial-gradient(ellipse at 70% 60%, #ff6b9d 0%, transparent 50%),
+        radial-gradient(ellipse at 50% 20%, #ffd93d 0%, transparent 40%),
+        linear-gradient(180deg, #1a0533 0%, #0d0d1a 100%);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Rounded', 'Segoe UI', sans-serif;
+    }
+
+    /* ================================================================
+       OUTER TAB BAR — main glass pill
+       ================================================================ */
+    .tab-bar {
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      width: 360px;
+      height: 60px;
+      border-radius: 30px;
+      overflow: hidden;
+      box-shadow:
+        0 12px 40px rgba(0,0,0,0.45),
+        0 2px 8px rgba(0,0,0,0.3);
+    }
+
+    /* Outer glass filter layers */
+    .tab-bar__refract {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      backdrop-filter: blur(20px) url(#lg-nav-filter) brightness(1.05) saturate(1.5);
+      -webkit-backdrop-filter: blur(20px) url(#lg-nav-filter) brightness(1.05) saturate(1.5);
+      isolation: isolate;
+    }
+    .tab-bar__tint {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: rgba(255,255,255,0.12);
+    }
+    .tab-bar__specular {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      box-shadow:
+        inset 0  1px 0 rgba(255,255,255,0.65),
+        inset 0 -1px 0 rgba(255,255,255,0.10);
+    }
+
+    /* Tab items container (above glass layers) */
+    .tab-bar__items {
+      position: relative;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-around;
+      width: 100%;
+      height: 100%;
+      padding: 0 6px;
+    }
+
+    /* ================================================================
+       INDIVIDUAL TAB ITEMS
+       ================================================================ */
+    .tab-item {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      border-radius: 22px;
+      cursor: pointer;
+      transition: opacity 0.2s ease;
+      min-width: 64px;
+      height: 48px;
+      padding: 0 12px;
+    }
+
+    .tab-item__icon {
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .tab-item__label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+    }
+
+    /* Inactive tabs */
+    .tab-item--inactive {
+      opacity: 0.55;
+      color: #ffffff;
+    }
+
+    .tab-item--inactive:hover {
+      opacity: 0.75;
+    }
+
+    /* ================================================================
+       ACTIVE TAB — nested inner glass bubble
+       ================================================================ */
+    .tab-item--active {
+      color: #1a1a2e;
+    }
+
+    /* The inner glass bubble sits behind the icon/label */
+    .tab-item__bubble {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      overflow: hidden;
+    }
+
+    /* Inner glass refraction (lighter, less blur — it's on top of outer glass) */
+    .tab-item__bubble-refract {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      backdrop-filter: blur(8px) brightness(1.2);
+      -webkit-backdrop-filter: blur(8px) brightness(1.2);
+      isolation: isolate;
+    }
+
+    /* Inner tint: white/semi-opaque = the "selected" glass look */
+    .tab-item__bubble-tint {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: rgba(255,255,255,0.88);
+    }
+
+    /* Inner specular: top edge very bright */
+    .tab-item__bubble-specular {
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,1.0),
+        inset 0 -1px 0 rgba(255,255,255,0.3);
+    }
+
+    /* Icon + label sit above the bubble */
+    .tab-item__icon,
+    .tab-item__label {
+      position: relative;
+      z-index: 2;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ================================================================
+       SVG FILTER — outer tab bar pill (360×60, radius 30)
+       ================================================================ -->
+  <svg xmlns="http://www.w3.org/2000/svg" width="0" height="0" style="position:absolute;overflow:hidden">
+    <defs>
+      <filter id="lg-nav-filter" color-interpolation-filters="sRGB"
+              x="0%" y="0%" width="100%" height="100%">
+        <feImage
+          result="dispMap"
+          x="0" y="0" width="360" height="60"
+          preserveAspectRatio="none"
+          href="data:image/svg+xml,%3Csvg%20xmlns%3D'http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg'%20width%3D'360'%20height%3D'60'%3E%3Cdefs%3E%3ClinearGradient%20id%3D'gx'%20x1%3D'0%25'%20y1%3D'0%25'%20x2%3D'100%25'%20y2%3D'0%25'%3E%3Cstop%20offset%3D'0%25'%20stop-color%3D'%23000'%2F%3E%3Cstop%20offset%3D'100%25'%20stop-color%3D'%23f00'%2F%3E%3C%2FlinearGradient%3E%3ClinearGradient%20id%3D'gy'%20x1%3D'0%25'%20y1%3D'0%25'%20x2%3D'0%25'%20y2%3D'100%25'%3E%3Cstop%20offset%3D'0%25'%20stop-color%3D'%23000'%2F%3E%3Cstop%20offset%3D'100%25'%20stop-color%3D'%230f0'%2F%3E%3C%2FlinearGradient%3E%3Cfilter%20id%3D'b'%3E%3CfeGaussianBlur%20stdDeviation%3D'7'%2F%3E%3C%2Ffilter%3E%3C%2Fdefs%3E%3Crect%20width%3D'360'%20height%3D'60'%20rx%3D'30'%20fill%3D'url(%23gx)'%20style%3D'mix-blend-mode%3Ascreen'%2F%3E%3Crect%20width%3D'360'%20height%3D'60'%20rx%3D'30'%20fill%3D'url(%23gy)'%20style%3D'mix-blend-mode%3Ascreen'%2F%3E%3Crect%20width%3D'360'%20height%3D'60'%20rx%3D'30'%20fill%3D'%23808080'%20filter%3D'url(%23b)'%2F%3E%3C%2Fsvg%3E"
+        />
+        <feDisplacementMap
+          in="SourceGraphic" in2="dispMap"
+          scale="-35" xChannelSelector="R" yChannelSelector="G"
+        />
+      </filter>
+    </defs>
+  </svg>
+
+  <!-- ================================================================
+       TAB BAR MARKUP
+       ================================================================ -->
+  <nav class="tab-bar" role="tablist" aria-label="Main navigation">
+
+    <!-- Glass background layers for the outer bar -->
+    <div class="tab-bar__refract" aria-hidden="true"></div>
+    <div class="tab-bar__tint"    aria-hidden="true"></div>
+    <div class="tab-bar__specular" aria-hidden="true"></div>
+
+    <!-- Tab items -->
+    <div class="tab-bar__items">
+
+      <!-- Active tab (Home) — has nested inner glass bubble -->
+      <button class="tab-item tab-item--active" role="tab" aria-selected="true">
+        <div class="tab-item__bubble" aria-hidden="true">
+          <div class="tab-item__bubble-refract"></div>
+          <div class="tab-item__bubble-tint"></div>
+          <div class="tab-item__bubble-specular"></div>
+        </div>
+        <span class="tab-item__icon">⌂</span>
+        <span class="tab-item__label">Home</span>
+      </button>
+
+      <!-- Inactive tab -->
+      <button class="tab-item tab-item--inactive" role="tab" aria-selected="false">
+        <span class="tab-item__icon">🔍</span>
+        <span class="tab-item__label">Search</span>
+      </button>
+
+      <!-- Inactive tab -->
+      <button class="tab-item tab-item--inactive" role="tab" aria-selected="false">
+        <span class="tab-item__icon">⚙</span>
+        <span class="tab-item__label">Settings</span>
+      </button>
+
+    </div>
+  </nav>
+
+</body>
+</html>
