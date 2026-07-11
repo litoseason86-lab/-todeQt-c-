@@ -149,11 +149,15 @@ Item {
         onActivated: root.requestExit()
     }
 
-    Rectangle {
+    // 沉浸态直接铺主题壁纸原图（不带可读性罩层），氛围完整展示。
+    BackgroundWallpaper {
         objectName: "immersiveBackdrop"
 
         anchors.fill: parent
-        color: Theme.glassCard
+        scrimEnabled: false
+        themeId: root.settingsRef && root.settingsRef.backgroundTheme
+                 ? root.settingsRef.backgroundTheme
+                 : "warm"
 
         MouseArea {
             objectName: "immersiveHoverArea"

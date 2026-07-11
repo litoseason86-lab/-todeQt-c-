@@ -8,6 +8,8 @@ Item {
 
     property string themeId: "warm"
     property var themeSource: Theme.themes
+    // 沉浸式专注等场景要壁纸原图完整展示，可关掉可读性罩层。
+    property bool scrimEnabled: true
 
     readonly property var resolvedTheme: {
         var target = Theme.migrateThemeId(root.themeId)
@@ -42,8 +44,8 @@ Item {
         objectName: "wallpaperScrim"
 
         anchors.fill: parent
-        // 主题化罩层：无原生 backdrop blur，靠它压住壁纸亮度/细节，
-        // 让半透明卡片和文字浮出来。明亮主题为柔白纱，暗色主题为深色纱。
-        color: root.resolvedTheme.wallpaperScrim || "transparent"
+        // 可读性罩层：无原生 backdrop blur，靠它压住壁纸亮度/细节，
+        // 让暖纸半透明面板和文字浮出来。
+        color: root.scrimEnabled ? (root.resolvedTheme.wallpaperScrim || "transparent") : "transparent"
     }
 }

@@ -86,6 +86,15 @@ TestCase {
                "罩层颜色应取主题 wallpaperScrim")
     }
 
+    function test_scrimTransparentWhenDisabled() {
+        wallpaper.themeId = "pink"
+        wallpaper.scrimEnabled = false
+        var scrim = findChild(wallpaper, "wallpaperScrim")
+        verify(Qt.colorEqual(scrim.color, "transparent"),
+               "scrimEnabled=false 时罩层应全透明")
+        wallpaper.scrimEnabled = true
+    }
+
     function test_scrimTransparentWhenThemeOmitsToken() {
         wallpaper.themeSource = [
             { id: "custom", name: "自定义", mode: "light", base: "#ffffff", wallpaper: "" }
