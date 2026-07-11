@@ -21,8 +21,8 @@ Rectangle {
 
     gradient: Gradient {
         orientation: Gradient.Horizontal
-        GradientStop { position: 0.0; color: Theme.accentSoft }
-        GradientStop { position: 1.0; color: Theme.surfaceRaised }
+        GradientStop { position: 0.0; color: Qt.rgba(240 / 255, 230 / 255, 210 / 255, 0.55) }
+        GradientStop { position: 1.0; color: Qt.rgba(250 / 255, 246 / 255, 238 / 255, 0.40) }
     }
 
     layer.enabled: true

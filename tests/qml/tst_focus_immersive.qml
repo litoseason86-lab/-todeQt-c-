@@ -107,14 +107,10 @@ TestCase {
         wait(20)
     }
 
-    function test_backdropShowsWallpaperWithoutScrim() {
+    function test_backdropShowsWallpaper() {
         const backdrop = findChild(overlay, "immersiveBackdrop")
         verify(backdrop)
-        // 沉浸态铺壁纸原图：罩层关闭、壁纸 source 指向主题壁纸资源。
-        compare(backdrop.scrimEnabled, false)
-        const scrim = findChild(backdrop, "wallpaperScrim")
-        verify(scrim)
-        verify(Qt.colorEqual(scrim.color, "transparent"))
+        // 沉浸态铺壁纸原图，source 指向主题壁纸资源。
         const image = findChild(backdrop, "wallpaperImage")
         verify(image)
         verify(String(image.source).indexOf("resources/wallpapers/") >= 0)

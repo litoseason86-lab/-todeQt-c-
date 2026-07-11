@@ -78,30 +78,4 @@ TestCase {
         compare(String(image.source), "")
     }
 
-    function test_scrimMatchesThemeToken() {
-        wallpaper.themeId = "pink"
-        var scrim = findChild(wallpaper, "wallpaperScrim")
-        verify(scrim !== null, "缺 wallpaperScrim 罩层")
-        verify(Qt.colorEqual(scrim.color, wallpaper.resolvedTheme.wallpaperScrim),
-               "罩层颜色应取主题 wallpaperScrim")
-    }
-
-    function test_scrimTransparentWhenDisabled() {
-        wallpaper.themeId = "pink"
-        wallpaper.scrimEnabled = false
-        var scrim = findChild(wallpaper, "wallpaperScrim")
-        verify(Qt.colorEqual(scrim.color, "transparent"),
-               "scrimEnabled=false 时罩层应全透明")
-        wallpaper.scrimEnabled = true
-    }
-
-    function test_scrimTransparentWhenThemeOmitsToken() {
-        wallpaper.themeSource = [
-            { id: "custom", name: "自定义", mode: "light", base: "#ffffff", wallpaper: "" }
-        ]
-        wallpaper.themeId = "custom"
-        var scrim = findChild(wallpaper, "wallpaperScrim")
-        verify(Qt.colorEqual(scrim.color, "transparent"),
-               "无 wallpaperScrim 的主题罩层应全透明")
-    }
 }

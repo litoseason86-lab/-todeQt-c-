@@ -24,7 +24,7 @@ TestCase {
     }
 
     function test_everyThemeHasWallpaperMetadata() {
-        var keys = ["name", "mode", "base", "wallpaper", "wallpaperScrim"]
+        var keys = ["name", "mode", "base", "wallpaper"]
         for (var i = 0; i < Theme.themes.length; i++) {
             var t = Theme.themes[i]
             for (var k = 0; k < keys.length; k++) {

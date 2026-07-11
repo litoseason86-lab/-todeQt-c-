@@ -154,7 +154,6 @@ Item {
         objectName: "immersiveBackdrop"
 
         anchors.fill: parent
-        scrimEnabled: false
         themeId: root.settingsRef && root.settingsRef.backgroundTheme
                  ? root.settingsRef.backgroundTheme
                  : "warm"

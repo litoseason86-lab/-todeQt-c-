@@ -10,7 +10,7 @@ Rectangle {
     Layout.fillWidth: true
     implicitHeight: Math.max(76, content.implicitHeight + 28)
     radius: Theme.radiusLg
-    color: root.itemHovered ? Theme.surface : Theme.surfaceRaised
+    color: root.itemHovered ? Theme.glassHover : Theme.glassCard
     border.color: root.itemHovered ? Theme.accent : Theme.border
     border.width: root.itemHovered ? 1.5 : 1
     // MultiEffect 的阴影参数不直接承载动画，先放到 root 属性上过渡，再绑定给效果。

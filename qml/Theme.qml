@@ -98,14 +98,14 @@ QtObject {
     // —— 玻璃令牌（磨砂面板，均衡档定稿）——
     // 用“白 + alpha”而非灰色：面板叠在彩色壁纸上，白基半透明才能透出壁纸色相。
     readonly property color glassSidebar: Qt.rgba(1, 1, 252 / 255, 0.55)
-    readonly property color glassCard: Qt.rgba(1, 1, 250 / 255, 0.68)
+    readonly property color glassCard: Qt.rgba(1, 1, 250 / 255, 0.42)
+    // 卡片/按钮悬停态：比 glassCard 实一档，仍透出壁纸。
+    readonly property color glassHover: Qt.rgba(1, 1, 250 / 255, 0.62)
     readonly property color glassDialog: Qt.rgba(1, 254 / 255, 249 / 255, 0.985)
     readonly property color glassBorder: Qt.rgba(1, 1, 1, 0.65)
 
     // ══ 背景壁纸主题（只换壁纸，UI 色值永远保持上方暖纸令牌）══
-    // themes[0] 必须是默认 warm：resolveTheme 对未知 id 回落首位。
-    // wallpaperScrim 是压在壁纸上的暖白纱：明亮壁纸 18% 防抢戏，
-    // 暗色壁纸 30%——暖纸半透明面板叠在深色图上需要更多提亮保可读。
+    // themes[0] 必须是默认 warm：resolveTheme 对未知 id 回落首位。壁纸原图直出，无罩层。
     readonly property var legacyThemeMap: ({
         warmPaper: "warm", sunset: "warm", wheat: "warm",
         celadon: "jiangnan", mist: "jiangnan",
@@ -130,38 +130,32 @@ QtObject {
         {
             id: "warm", name: "暖色", mode: "light",
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/warm.png"),
-            base: "#f3e3cf",
-            wallpaperScrim: Qt.rgba(1, 254 / 255, 249 / 255, 0.18)
+            base: "#f3e3cf"
         },
         {
             id: "pink", name: "粉色", mode: "light",
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/pink.png"),
-            base: "#efc4d0",
-            wallpaperScrim: Qt.rgba(1, 254 / 255, 249 / 255, 0.18)
+            base: "#efc4d0"
         },
         {
             id: "jiangnan", name: "烟雨江南", mode: "light",
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/jiangnan.png"),
-            base: "#dfe8e2",
-            wallpaperScrim: Qt.rgba(1, 254 / 255, 249 / 255, 0.18)
+            base: "#dfe8e2"
         },
         {
             id: "starry", name: "星空", mode: "dark",
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/starry.png"),
-            base: "#12102a",
-            wallpaperScrim: Qt.rgba(1, 254 / 255, 249 / 255, 0.30)
+            base: "#12102a"
         },
         {
             id: "rainy", name: "雨夜窗景", mode: "dark",
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/rainy.png"),
-            base: "#0f1622",
-            wallpaperScrim: Qt.rgba(1, 254 / 255, 249 / 255, 0.30)
+            base: "#0f1622"
         },
         {
             id: "moon", name: "月夜山影", mode: "dark",
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/moon.png"),
-            base: "#0d1626",
-            wallpaperScrim: Qt.rgba(1, 254 / 255, 249 / 255, 0.30)
+            base: "#0d1626"
         }
     ]
 }

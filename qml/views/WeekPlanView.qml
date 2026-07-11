@@ -255,7 +255,7 @@ Item {
 
                 // 次级暖色描边样式：低调、与卡片协调，避免满屏强调色块。
                 background: Rectangle {
-                    color: prevWeekButton.pressed ? Theme.borderSubtle : (prevWeekButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                    color: prevWeekButton.pressed ? Theme.glassHover : (prevWeekButton.hovered ? Theme.glassHover : Theme.glassCard)
                     border.color: prevWeekButton.hovered || prevWeekButton.pressed ? Theme.accent : Theme.border
                     border.width: 1
                     radius: Theme.radiusMd
@@ -289,7 +289,7 @@ Item {
                 implicitHeight: 40
 
                 background: Rectangle {
-                    color: thisWeekButton.pressed ? Theme.borderSubtle : (thisWeekButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                    color: thisWeekButton.pressed ? Theme.glassHover : (thisWeekButton.hovered ? Theme.glassHover : Theme.glassCard)
                     border.color: thisWeekButton.hovered || thisWeekButton.pressed ? Theme.accent : Theme.border
                     border.width: 1
                     radius: Theme.radiusMd
@@ -320,7 +320,7 @@ Item {
                 implicitHeight: 40
 
                 background: Rectangle {
-                    color: nextWeekButton.pressed ? Theme.borderSubtle : (nextWeekButton.hovered ? Theme.surfaceSunken : Theme.surface)
+                    color: nextWeekButton.pressed ? Theme.glassHover : (nextWeekButton.hovered ? Theme.glassHover : Theme.glassCard)
                     border.color: nextWeekButton.hovered || nextWeekButton.pressed ? Theme.accent : Theme.border
                     border.width: 1
                     radius: Theme.radiusMd
@@ -500,7 +500,7 @@ Item {
                                     // 空日子用次级描边的添加，保持安静；强调色只留给有活动的日子。
                                     background: Rectangle {
                                         color: !emptyAddButton.enabled ? Theme.surfaceSunken
-                                               : (emptyAddButton.pressed ? Theme.borderSubtle : (emptyAddButton.hovered ? Theme.surfaceSunken : Theme.surface))
+                                               : (emptyAddButton.pressed ? Theme.glassHover : (emptyAddButton.hovered ? Theme.glassHover : Theme.glassCard))
                                         border.color: emptyAddButton.enabled && (emptyAddButton.hovered || emptyAddButton.pressed) ? Theme.accent : Theme.border
                                         border.width: 1
                                         radius: Theme.radiusMd
