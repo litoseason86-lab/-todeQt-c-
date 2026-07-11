@@ -37,4 +37,13 @@ Item {
         cache: true
         smooth: true
     }
+
+    Rectangle {
+        objectName: "wallpaperScrim"
+
+        anchors.fill: parent
+        // 主题化罩层：无原生 backdrop blur，靠它压住壁纸亮度/细节，
+        // 让半透明卡片和文字浮出来。明亮主题为柔白纱，暗色主题为深色纱。
+        color: root.resolvedTheme.wallpaperScrim || "transparent"
+    }
 }

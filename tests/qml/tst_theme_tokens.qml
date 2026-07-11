@@ -36,12 +36,12 @@ TestCase {
     }
 
     function test_glassTokensFollowTheme() {
-        verify(Qt.colorEqual(Theme.glassSidebar, Qt.rgba(1, 250 / 255, 242 / 255, 0.55)),
+        verify(Qt.colorEqual(Theme.glassSidebar, Qt.rgba(1, 250 / 255, 242 / 255, 0.68)),
                "warm glassSidebar 取值不对")
         Theme.activeThemeId = "moon"
-        verify(Qt.colorEqual(Theme.glassCard, Qt.rgba(20 / 255, 32 / 255, 50 / 255, 0.62)),
+        verify(Qt.colorEqual(Theme.glassCard, Qt.rgba(20 / 255, 32 / 255, 50 / 255, 0.74)),
                "moon glassCard 取值不对")
-        verify(Qt.colorEqual(Theme.glassBorder, Qt.rgba(1, 1, 1, 0.14)),
+        verify(Qt.colorEqual(Theme.glassBorder, Qt.rgba(1, 1, 1, 0.22)),
                "暗色 glassBorder 取值不对")
     }
 

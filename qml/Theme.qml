@@ -121,10 +121,11 @@ QtObject {
             focusRingTrack: "#faf1e8",
             focusGlassCenter: "#fffefb", focusGlassEdge: "#fdf3ee", focusGlassShadow: "#e2b9a6",
             focusGlassHighlight: "#ffffff", focusColonMuted: "#e8bda6",
-            glassSidebar: Qt.rgba(1, 250 / 255, 242 / 255, 0.55),
-            glassCard: Qt.rgba(1, 252 / 255, 246 / 255, 0.70),
+            glassSidebar: Qt.rgba(1, 250 / 255, 242 / 255, 0.68),
+            glassCard: Qt.rgba(1, 252 / 255, 246 / 255, 0.85),
             glassDialog: Qt.rgba(1, 252 / 255, 246 / 255, 0.985),
-            glassBorder: Qt.rgba(1, 1, 1, 0.65)
+            glassBorder: Qt.rgba(1, 1, 1, 0.85),
+            wallpaperScrim: Qt.rgba(1, 252 / 255, 246 / 255, 0.30)
         },
         {
             id: "pink", name: "粉色", mode: "light",
@@ -140,10 +141,11 @@ QtObject {
             focusRingTrack: "#fbecf1",
             focusGlassCenter: "#fffcfd", focusGlassEdge: "#fdf0f4", focusGlassShadow: "#e3a8bd",
             focusGlassHighlight: "#ffffff", focusColonMuted: "#edb7c8",
-            glassSidebar: Qt.rgba(1, 242 / 255, 246 / 255, 0.55),
-            glassCard: Qt.rgba(1, 250 / 255, 252 / 255, 0.70),
+            glassSidebar: Qt.rgba(1, 242 / 255, 246 / 255, 0.68),
+            glassCard: Qt.rgba(1, 250 / 255, 252 / 255, 0.85),
             glassDialog: Qt.rgba(1, 250 / 255, 252 / 255, 0.985),
-            glassBorder: Qt.rgba(1, 1, 1, 0.65)
+            glassBorder: Qt.rgba(1, 1, 1, 0.85),
+            wallpaperScrim: Qt.rgba(1, 250 / 255, 252 / 255, 0.34)
         },
         {
             id: "jiangnan", name: "烟雨江南", mode: "light",
@@ -159,10 +161,11 @@ QtObject {
             focusRingTrack: "#eaf3ee",
             focusGlassCenter: "#fdfffe", focusGlassEdge: "#f0f7f3", focusGlassShadow: "#b6cfc2",
             focusGlassHighlight: "#ffffff", focusColonMuted: "#b9d2c6",
-            glassSidebar: Qt.rgba(248 / 255, 252 / 255, 250 / 255, 0.55),
-            glassCard: Qt.rgba(252 / 255, 254 / 255, 253 / 255, 0.70),
+            glassSidebar: Qt.rgba(248 / 255, 252 / 255, 250 / 255, 0.68),
+            glassCard: Qt.rgba(252 / 255, 254 / 255, 253 / 255, 0.85),
             glassDialog: Qt.rgba(252 / 255, 254 / 255, 253 / 255, 0.985),
-            glassBorder: Qt.rgba(1, 1, 1, 0.65)
+            glassBorder: Qt.rgba(1, 1, 1, 0.85),
+            wallpaperScrim: Qt.rgba(251 / 255, 253 / 255, 252 / 255, 0.30)
         },
         {
             id: "starry", name: "星空", mode: "dark",
@@ -178,10 +181,11 @@ QtObject {
             focusRingTrack: "#2a2650",
             focusGlassCenter: "#262254", focusGlassEdge: "#1d1a40", focusGlassShadow: "#0c0a20",
             focusGlassHighlight: "#4a4488", focusColonMuted: "#6a5fae",
-            glassSidebar: Qt.rgba(20 / 255, 18 / 255, 42 / 255, 0.55),
-            glassCard: Qt.rgba(32 / 255, 30 / 255, 62 / 255, 0.62),
+            glassSidebar: Qt.rgba(20 / 255, 18 / 255, 42 / 255, 0.65),
+            glassCard: Qt.rgba(32 / 255, 30 / 255, 62 / 255, 0.74),
             glassDialog: Qt.rgba(26 / 255, 24 / 255, 52 / 255, 0.985),
-            glassBorder: Qt.rgba(1, 1, 1, 0.14)
+            glassBorder: Qt.rgba(1, 1, 1, 0.22),
+            wallpaperScrim: Qt.rgba(18 / 255, 16 / 255, 42 / 255, 0.32)
         },
         {
             id: "rainy", name: "雨夜窗景", mode: "dark",
@@ -197,10 +201,11 @@ QtObject {
             focusRingTrack: "#263143",
             focusGlassCenter: "#223040", focusGlassEdge: "#1a2534", focusGlassShadow: "#0b1119",
             focusGlassHighlight: "#3d4f63", focusColonMuted: "#8a7a5e",
-            glassSidebar: Qt.rgba(16 / 255, 24 / 255, 38 / 255, 0.55),
-            glassCard: Qt.rgba(26 / 255, 36 / 255, 52 / 255, 0.62),
+            glassSidebar: Qt.rgba(16 / 255, 24 / 255, 38 / 255, 0.65),
+            glassCard: Qt.rgba(26 / 255, 36 / 255, 52 / 255, 0.74),
             glassDialog: Qt.rgba(22 / 255, 31 / 255, 45 / 255, 0.985),
-            glassBorder: Qt.rgba(1, 1, 1, 0.14)
+            glassBorder: Qt.rgba(1, 1, 1, 0.22),
+            wallpaperScrim: Qt.rgba(15 / 255, 22 / 255, 34 / 255, 0.32)
         },
         {
             id: "moon", name: "月夜山影", mode: "dark",
@@ -216,10 +221,11 @@ QtObject {
             focusRingTrack: "#223349",
             focusGlassCenter: "#1f3044", focusGlassEdge: "#182636", focusGlassShadow: "#0a121c",
             focusGlassHighlight: "#37516b", focusColonMuted: "#5f7e9e",
-            glassSidebar: Qt.rgba(12 / 255, 22 / 255, 38 / 255, 0.55),
-            glassCard: Qt.rgba(20 / 255, 32 / 255, 50 / 255, 0.62),
+            glassSidebar: Qt.rgba(12 / 255, 22 / 255, 38 / 255, 0.65),
+            glassCard: Qt.rgba(20 / 255, 32 / 255, 50 / 255, 0.74),
             glassDialog: Qt.rgba(16 / 255, 27 / 255, 42 / 255, 0.985),
-            glassBorder: Qt.rgba(1, 1, 1, 0.14)
+            glassBorder: Qt.rgba(1, 1, 1, 0.22),
+            wallpaperScrim: Qt.rgba(13 / 255, 22 / 255, 38 / 255, 0.32)
         }
     ]
 }

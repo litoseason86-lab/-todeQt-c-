@@ -38,7 +38,7 @@ TestCase {
             "focusRingArcStart", "focusRingArcMid", "focusRingArcEnd", "focusRingTrack",
             "focusGlassCenter", "focusGlassEdge", "focusGlassShadow",
             "focusGlassHighlight", "focusColonMuted",
-            "glassSidebar", "glassCard", "glassDialog", "glassBorder"]
+            "glassSidebar", "glassCard", "glassDialog", "glassBorder", "wallpaperScrim"]
         for (var i = 0; i < Theme.themes.length; i++) {
             var t = Theme.themes[i]
             for (var k = 0; k < keys.length; k++) {
