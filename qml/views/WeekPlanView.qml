@@ -418,13 +418,12 @@ Item {
                         property bool canAddTask: root.canAddTaskForIndex(dayRow.index)
                         property bool isWeekend: dayRow.index >= 5
 
-                        // —— 星期脊柱：领起一整天；今天用强调色高亮，周末底色略沉 ——
+                        // —— 星期脊柱：领起一整天；今天用强调色高亮，其余为透壁纸玻璃 ——
                         Rectangle {
                             Layout.preferredWidth: 52
                             Layout.fillHeight: true
                             radius: Theme.radiusMd
-                            color: dayRow.isToday ? Theme.accent
-                                   : (dayRow.isWeekend ? Theme.surfaceSunken : Theme.surfaceRaised)
+                            color: dayRow.isToday ? Theme.accent : Theme.glassCard
                             border.color: dayRow.isToday ? Theme.accentStrong : Theme.border
                             border.width: 1
 

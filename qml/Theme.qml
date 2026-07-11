@@ -101,6 +101,8 @@ QtObject {
     readonly property color glassCard: Qt.rgba(1, 1, 250 / 255, 0.42)
     // 卡片/按钮悬停态：比 glassCard 实一档，仍透出壁纸。
     readonly property color glassHover: Qt.rgba(1, 1, 250 / 255, 0.62)
+    // 选中态/高亮底：accentSoft 奶油色的半透明版，用在直接叠壁纸的高亮件上。
+    readonly property color glassAccent: Qt.rgba(240 / 255, 230 / 255, 210 / 255, 0.55)
     readonly property color glassDialog: Qt.rgba(1, 254 / 255, 249 / 255, 0.985)
     readonly property color glassBorder: Qt.rgba(1, 1, 1, 0.65)
 

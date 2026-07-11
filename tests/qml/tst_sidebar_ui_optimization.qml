@@ -121,7 +121,7 @@ TestCase {
 
         verify(activeItem !== null);
         verify(markerContainer !== null);
-        verify(Qt.colorEqual(activeItem.color, Theme.accentSoft));
+        verify(Qt.colorEqual(activeItem.color, Theme.glassAccent));
         verify(Qt.colorEqual(activeItem.border.color, Theme.accent));
         compare(activeItem.border.width, 1);
         compare(activeItem.radius, Theme.radiusMd);
@@ -157,7 +157,7 @@ TestCase {
         verify(inactiveItem.border.color.a < 0.01);
         compare(inactiveItem.border.width, 0);
         compare(inactiveItem.layer.enabled, false);
-        verify(Qt.colorEqual(markerContainer.color, Theme.border));
+        verify(Qt.colorEqual(markerContainer.color, Theme.glassCard));
         compare(markerText.font.weight, Font.Bold);
         verify(Qt.colorEqual(markerText.color, Theme.inkSoft));
         compare(mainText.font.weight, Font.Normal);

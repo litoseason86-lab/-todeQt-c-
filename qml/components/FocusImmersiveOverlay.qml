@@ -182,7 +182,7 @@ Item {
                 Layout.preferredHeight: 44
                 Layout.preferredWidth: bannerText.implicitWidth + Theme.space24 * 2
                 visible: root.completionState
-                color: Theme.accentSoft
+                color: Theme.glassAccent
                 border.color: Theme.accent
                 radius: Theme.radiusMd
 

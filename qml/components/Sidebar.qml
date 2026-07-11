@@ -15,7 +15,7 @@ Rectangle {
     readonly property color sidebarItemIdleBorderColor: Qt.rgba(1, 1, 1, 0)
     readonly property color sidebarItemHoverColor: Qt.rgba(1, 1, 1, 0.45)
     readonly property color sidebarItemHoverBorderColor: Theme.border
-    readonly property color sidebarItemActiveColor: Theme.accentSoft
+    readonly property color sidebarItemActiveColor: Theme.glassAccent
     readonly property color sidebarItemActiveBorderColor: Theme.accent
 
     property string currentView: "today"
@@ -219,7 +219,7 @@ Rectangle {
                 Layout.preferredWidth: 22
                 Layout.preferredHeight: 22
                 radius: Theme.radiusSm
-                color: item.isActive ? Theme.accent : Theme.border
+                color: item.isActive ? Theme.accent : Theme.glassCard
 
                 Behavior on color {
                     ColorAnimation {
