@@ -1,141 +1,101 @@
-# 背景主题系统大改：六张 AI 壁纸 + 全套 UI 色板随主题切换
+# 背景主题系统大改：六张 AI 壁纸 + 暖纸夜间版 + 侧栏毛玻璃
 
-日期：2026-07-11
-状态：已实现并经多轮实机迭代定稿。
-**最终定稿（2026-07-11 实机验收后用户拍板，覆盖本文关于 UI 色板的所有内容）：
-只换壁纸，UI 色值永远保持原版暖纸令牌不变。** 随主题切换的 UI 色板机制
-（palette/activeThemeId、暗色界面、多彩分类色盘）已全部移除；保留的内容：
-六张壁纸 + qrc 资源、themes 壁纸元数据（id/name/mode/base/wallpaper/wallpaperScrim）、
-旧 id 迁移、壁纸罩层（明亮 18% / 暗色 30% 暖白纱保可读性）。
+日期：2026-07-11（多轮实机迭代，2026-07-12 收尾）
+状态：已实现、已合入 main（详见项目记忆 theme-overhaul-plan-2026-07）。本文档为最终实现的事后记录。
 
-## 目标
+## 最终形态
 
 推翻现有六款 Canvas 程序化绘制的"简笔画"背景主题，替换为：
 
-1. **六张照片级 AI 生成壁纸**（用户用 ChatGPT Plus 生成，已入库）；
-2. **每主题一整套 UI 色板**：文字墨水、玻璃/卡片、边框、强调色、图表色全部随主题切换；
-3. **三款暗色主题**带完整暗色界面（浅色文字、暗色玻璃）。
+1. **六张照片级 AI 生成壁纸**（用户用 ChatGPT Plus 生成，已入库 `resources/wallpapers/`）；
+2. **UI 色相永远是暖纸家族**，不随壁纸切换主题色板；
+3. **暗色壁纸自动切换到"暖纸夜间版"**：只翻转明暗（米白墨水 + 暗暖玻璃），强调色/色相不变；
+4. **侧栏是全应用唯一的真实毛玻璃区**：对静态壁纸做一次区域采样模糊，卡片/按钮维持半透明蒙层，不逐一实时模糊。
 
-审美基准（用户反复校准后定案，详见记忆 background-theme-aesthetic-feedback）：
-虚焦摄影感、大面积留白、克制的高级感；忌密集小图案、贴纸感、程序化绘制的具象元素。
+审美基准：虚焦摄影感壁纸、克制的高级感；忌密集小图案、贴纸感、程序化绘制的具象元素、大片不透明白块。
 
-## 非目标
+## 决策过程（供后续维护者理解为什么不是"每主题一套色板"）
 
-- 不新增功能（参考图中的问候语头部、用户资料卡、音乐播放条等一律不做）；
-- 不做动态/动画壁纸；
-- 不改字体系统；
-- 番茄图标、布局、组件结构不动——只换"颜色与背景"。
+实现过程中先后尝试并被用户否掉的方向：
 
-## 主题阵容（六款，id 为新标识）
+1. **每主题一整套 UI 色板**（含暗色界面、多彩分类色盘、随主题切换的 accent/ink/glass）——实机看后用户认为"不像同一个 App"，且暗色分类色映射增加了不必要的复杂度，最终**全部回退**；
+2. **UI 固定暖纸 + 壁纸罩层遮盖**（明亮 18%/暗色 30% 暖白纱压在壁纸上保可读性）——用户反馈"白雾太多不精美"，**罩层机制整体删除**；
+3. **UI 固定暖纸 + 无罩层玻璃透壁纸**——明亮三款（暖/粉/江南）效果良好，但暗色三款下暖褐色文字压在深色壁纸透出的玻璃上完全不可读（用户原话"这是能看的吗"）；
+4. **最终定案：暖纸夜间版**——不逐 token 手改，而是给 Theme 增加一个 `darkMode` 派生位（由当前壁纸的 `mode` 字段决定），墨水/玻璃/语义色按明暗各存一套值，色相（尤其 accent 焦糖棕）两版共用同一色号，只翻转明暗关系。这样"UI 永远是暖纸"的用户要求和"暗色壁纸必须可读"的物理约束同时满足。
 
-| id | 名称 | 明/暗 | 壁纸文件 | 强调色 | 定位 |
-| --- | --- | --- | --- | --- | --- |
-| `warm` | 暖色·晨光 | 明亮 | warm.png | 蜂蜜琥珀 `#dc9550` | 默认主题，旧暖纸精神续作 |
-| `pink` | 粉色·樱雾 | 明亮 | pink.png | 深玫瑰粉 `#e5638f` | 樱花虚焦散景 |
-| `jiangnan` | 烟雨江南 | 明亮 | jiangnan.png | 青瓷绿 `#5f9e85` | 水墨湖山 |
-| `starry` | 星空 | 暗色 | starry.png | 星雾紫 `#8f7ff0` | 星云星野 |
-| `rainy` | 雨夜窗景 | 暗色 | rainy.png | 暖琥珀 `#e8a34e` | 夜窗水珠光斑 |
-| `moon` | 月夜山影 | 暗色 | moon.png | 月光青蓝 `#7fa8d9` | 月下层叠山影 |
+## 主题阵容（六款）
 
-默认主题为 `warm`（延续旧默认"暖纸"的气质）。
+| id | 名称 | mode | 壁纸文件 | 定位 |
+| --- | --- | --- | --- | --- |
+| `warm` | 暖色 | light | warm.png | 默认主题，旧暖纸精神续作 |
+| `pink` | 粉色 | light | pink.png | 樱花虚焦散景 |
+| `jiangnan` | 烟雨江南 | light | jiangnan.png | 水墨湖山 |
+| `starry` | 星空 | dark | starry.png | 星云星野 |
+| `rainy` | 雨夜窗景 | dark | rainy.png | 夜窗水珠光斑 |
+| `moon` | 月夜山影 | dark | moon.png | 月下层叠山影 |
+
+默认主题为 `warm`。`Theme.themes[i].mode` 是唯一驱动 UI 明暗切换的字段——不存在"每个主题独立色板"，只有 light/dark 两套 UI 版式。
 
 ### 旧 id 迁移
 
-设置里已持久化的旧值按下表映射，未知值回落 `warm`：
-
-| 旧 id | warmPaper | sunset | celadon | mist | sakura | wheat |
+| 旧 id | warmPaper | sunset | wheat | celadon | mist | sakura |
 | --- | --- | --- | --- | --- | --- | --- |
-| 新 id | warm | warm | jiangnan | jiangnan | pink | warm |
+| 新 id | warm | warm | warm | jiangnan | jiangnan | pink |
 
-（旧主题全部为浅色，因此迁移目标一律选浅色款，不把老用户突然切进暗色界面。）
+`Theme.migrateThemeId()` 负责映射，未知值原样返回，`Theme.resolveTheme()` 对无法解析的 id 回落 `themes[0]`（warm）。MainWindow 启动时把设置里的旧 id 迁移写回，此后设置存的都是新 id。
 
-## 壁纸层（BackgroundWallpaper 重写）
+## 壁纸层（BackgroundWallpaper）
 
-- **放弃 Canvas 绘制**。组件改为 `Image`：`fillMode: PreserveAspectCrop`、异步加载、
-  `sourceSize` 限制为窗口所需尺寸避免超采样。
-- 壁纸资源：`resources/wallpapers/{warm,pink,jiangnan,starry,rainy,moon}.png`（1536×1024，已入库），
-  新建 `resources/wallpapers.qrc` 并接入 CMake。
-- 图片未加载完成/加载失败时显示该主题的 `base` 底色（每主题定义一个与壁纸主色调一致的纯色），
-  不出现白闪或黑闪。
-- 组件对外接口保持 `themeId`，未知 id 回落默认主题（表首 `warm`）。
-- 旧 motif 绘制原语、`supportedMotifs`、`paintCount` 等 API 随 Canvas 一并删除。
+- Canvas 绘制已完全移除，组件改为 `Image`：`fillMode: PreserveAspectCrop`、`asynchronous: true`、`cache: true`。
+- 壁纸资源：`resources/wallpapers/{warm,pink,jiangnan,starry,rainy,moon}.png`（1536×1024），`resources/wallpapers.qrc` 打包，`WallpaperAssetsTests.cpp` 守门六张图可解码且尺寸正确。
+- `wallpaperBase` 兜底 Rectangle 在图片加载完成前显示主题 `base` 纯色，避免白闪/黑闪。
+- **无罩层**：壁纸原图直接展示，可读性完全交给下方的暖纸夜间版机制，不再用半透明纱压暗壁纸。
+- 沉浸式专注全屏（`FocusImmersiveOverlay`）直接铺 `BackgroundWallpaper`，是壁纸氛围展示最完整的场景。
 
-## 主题色板系统（Theme.qml 升级）
+## Theme.qml：darkMode 派生 token
 
-### 结构
+- `Theme.activeThemeId`：由 `MainWindow` 的 `Binding` 绑定到 `appSettingsRef.backgroundTheme`（经 `migrateThemeId` 归一化）。
+- `Theme.darkMode: resolveTheme(activeThemeId).mode === "dark"`：唯一的明暗开关。
+- 受 `darkMode`影响的 token：`surface*`、`border*`、`ink*`、`accentSoft`、`accentInk`、`success/danger` 系、`chartColors`、`focusRingTrack`、`focusGlass*`、`focusColonMuted`、`glassSidebar/glassCard/glassHover/glassAccent/glassDialog/glassBorder`。
+- **不受影响、两版同值**：`accent`、`accentStrong`、`shadow`、字号/字族/间距/圆角、`focusRingArcStart/Mid/End`（专注环弧光两版共用暖金渐变）。
+- 新增的语义 token：
+  - `glassHover`：卡片/按钮悬停态，比 `glassCard` 实一档；
+  - `glassAccent`：选中态/高亮底（侧栏选中项、倒计时横幅、沉浸完成态横幅），是 `accentSoft` 的半透明版。
 
-- `Theme.themes`：六个主题的完整定义数组（id、名称、mode、壁纸 URL、base、全套色板 token）。
-- `Theme.activeThemeId`：由设置注入；`Theme.palette` 解析为当前主题色板。
-- **兼容层**：现有 `Theme.ink`、`Theme.surface`、`Theme.accent` 等全部属性名保留，
-  改为绑定到 `palette` 的对应 token——存量组件不用改引用，颜色即自动随主题切换。
-- 组件中所有硬编码颜色（如有）在实现时一并清理为 Theme 引用。
+## 组件改动（透壁纸玻璃化）
 
-### 每主题 token 清单（与现 Theme.qml 分区一致）
+以下不透明的 `surface`/`accentSoft` 底全部换成对应的玻璃 token，让壁纸透出：
 
-墨水 `inkStrong/ink/inkSoft/inkMuted`、表面 `surface/surfaceRaised/surfaceSunken`、
-边框 `border/borderSubtle`、强调 `accent/accentStrong/accentSoft/accentInk`、
-玻璃 `glassSidebar/glassCard`、语义 `success/danger` 系、`shadow`、
-图表 `chartColors[]`、专注环 `focusRing*` / `focusGlass*` 系。
+- `TaskItem` 任务卡：`surface`/`surfaceRaised` → `glassCard`/`glassHover`；
+- 周计划页三态按钮（上一周/本周/下一周/编辑/删除等，`WeekPlanView`、`MonthGoalView`、`CountdownDialog`、`RoutineDialog`、`AddTaskDialog` 共用的三态写法）：`surface`/`surfaceSunken`/`borderSubtle` 组合 → `glassCard`/`glassHover`；
+- 周计划星期脊柱（日期牌）：`surfaceRaised`/`surfaceSunken` → `glassCard`（今天仍用 `accent` 实色高亮）；
+- `Sidebar` 选中项底色、图标小方块：`accentSoft`/`border` → `glassAccent`/`glassCard`；
+- `CountdownBanner` 渐变、`TodayTaskView` 顺延提醒横幅、`FocusImmersiveOverlay` 完成态横幅：`accentSoft` → `glassAccent`（`CountdownBanner` 是渐变，两端都换成半透明色）。
 
-### 已审核定案的核心色值
+弹窗背景（`glassDialog`，98.5% 不透明）不做玻璃化处理——弹窗需要完全遮盖下方内容，两个明暗版各有一份接近实底的值。
 
-**明亮三款**（表面/边框在现值基础上做同色相微调，语义色沿用现值）：
+## 侧栏真实毛玻璃
 
-| token | warm | pink | jiangnan |
-| --- | --- | --- | --- |
-| accent | #dc9550 | #e5638f | #5f9e85 |
-| inkStrong | #52422e | #573f4b | #39473f |
-| ink | #6b573d | #6d525f | #54655c |
-| inkSoft | #9c8266 | #a37f8f | #84948a |
-| glassSidebar | #fffaf2 @55% | #fff2f6 @55% | #f8fcfa @55% |
-| glassCard | #fffcf6 @70% | #fffafc @70% | #fcfefd @70% |
-| accentSoft(选中底) | #f7e5c8 | #fadbe6 | #dcece3 |
-
-**暗色三款**（浅色墨水 + 暗色玻璃；语义色 success/danger 提亮一档保证对比）：
-
-| token | starry | rainy | moon |
-| --- | --- | --- | --- |
-| accent | #8f7ff0 | #e8a34e | #7fa8d9 |
-| inkStrong | #eceafb | #f0ebe2 | #e9eff7 |
-| ink | #c6c2e0 | #c9c3b6 | #c0cbd9 |
-| inkSoft | #8f8ab0 | #8f8c84 | #8494a6 |
-| glassSidebar | #14122a @55% | #101826 @55% | #0c1626 @55% |
-| glassCard | #201e3e @62% | #1a2434 @62% | #142032 @62% |
-| accentSoft(选中底) | accent @22–28% | 同左 | 同左 |
-
-### 派生规则（未逐一列出的 token）
-
-- `accentStrong`＝accent 加深一档；`accentInk`＝accent 压到 AA 对比达标；
-- `surface*`＝对应玻璃色的不透明近似（明亮款近白、暗色款近玻璃底色）；
-- `border*`＝ink 与 surface 的低对比中间值；
-- `chartColors`、`focusRing*`、`focusGlass*` 按各主题强调色同族推导（暗色主题轨道/玻璃用暗色系）；
-- 推导值在实现时落库为显式 hex（不留运行时计算），并以实机截图验收。
-
-## 暗色模式的系统面
-
-- 本应用的"玻璃"是 QML 半透明色块（白/暗 + alpha 叠在壁纸上），**没有**原生
-  NSVisualEffectView（该方案 2026-06 已试验并放弃，勿引入）。暗色主题只需把
-  glass 系 token 换成暗色半透明值，无系统层改动。
-- 弹窗、Toast、沉浸式专注层等全部消费 Theme token，无需单独适配，但需逐一目检。
-
-## 设置与持久化
-
-- 沿用现有 `appSettings.backgroundTheme` 键；启动时执行旧 id 迁移（见上表）。
-- SettingsDialog 的主题选择器更新为六款新主题，选项预览用壁纸缩略图 + 主题名
-  （缩略图直接引用壁纸资源，缩小显示）。
+- `MainWindow.qml` 新增一个独立于 `mainContentRow` 的 `sidebarFrost` Item（208px 宽，随 `focusImmersiveActive` 隐藏），内部：
+  1. `ShaderEffectSource` 对 `wallpaperLayer`（壁纸层）按侧栏区域采样一次；
+  2. `MultiEffect` 对采样结果做 `blurEnabled: true, blur: 0.9, blurMax: 48`；
+  3. `Sidebar` 组件本身叠在其上，用半透明 `glassSidebar` 上色。
+- 这是全应用唯一的实时模糊区域；卡片/按钮不做逐一模糊（性能考虑，壁纸是静态图，模糊一次即可覆盖所有卡片场景，视觉差异可忽略）。
+- 未采用原生 NSVisualEffectView（该路径 2026-06 已试验并放弃，见项目记忆 番茄todo-mac-vibrancy）；这里的"毛玻璃"是纯 QML 后处理效果，跨平台一致。
 
 ## 测试
 
-- `tst_background_wallpaper.qml` 重写：六主题 id → 壁纸 source 映射、未知 id 回落、
-  base 兜底色存在；删除全部 motif/paintCount 断言。
-- Theme 测试：六主题 token 完整性（每主题都能解析出全部 token）、旧 id 迁移映射、
-  明暗 mode 标记正确。
-- 沿用项目 QML 测试红线：不断言 `item.visible === true`（见记忆 qml-test-visible-assertion-pitfall）。
-- 图片资源存在性测试（qrc 内六张壁纸可加载）。
+- `WallpaperAssetsTests.cpp`：六张壁纸 qrc 存在、可解码、尺寸 1536×1024（offscreen 平台）。
+- `tst_theme_palettes.qml`：六主题阵容、mode 标记、壁纸元数据字段、旧 id 迁移、`resolveTheme` 回落。
+- `tst_theme_tokens.qml`：默认 warm 态的固定色值；`test_darkWallpaperSwitchesToNightVariant` 验证切到 `moon` 后墨水/玻璃切换到夜间版而 `accent` 保持不变，切回 `pink` 后日间版复原。
+- `tst_background_wallpaper.qml`：主题解析、迁移、`wallpaperImage` 加载、`wallpaperBase` 兜底色匹配；已删除罩层相关用例（罩层机制已整体移除）。
+- `tst_focus_immersive.qml`：沉浸态背景显示壁纸图片（`wallpaperImage` source 指向壁纸资源）。
+- `tst_sidebar_ui_optimization.qml`：侧栏选中态断言更新为 `glassAccent`，图标底断言更新为 `glassCard`。
+- 沿用项目 QML 测试红线：不断言 `item.visible === true`。
 
-## 验收
+## 验收结论
 
-- 六款主题逐一切换：壁纸、侧栏、卡片、按钮、文字、图表、专注环全部随之变化，无残留旧配色；
-- 暗色主题下所有正文文字对比 ≥ AA；
+- 六款主题逐一切换：壁纸、侧栏（真实模糊）、卡片、按钮、文字、图表、专注环全部随明暗自动适配，无残留不透明白块；
+- 暗色主题下正文文字对比经暖纸夜间版校正后可读；
 - 主题切换即时生效、无需重启；
-- 设计稿（Artifact「番茄todo · 背景主题设计稿」）为视觉验收基准。
+- 视觉验收基准：Artifact「番茄todo · 背景主题设计稿」+ 用户多轮实机截图反馈。
