@@ -171,7 +171,7 @@ Popup {
                     id: themeRepeater
                     objectName: "settingsThemeRepeater"
 
-                    model: Theme.backgroundThemes
+                    model: Theme.themes
 
                     delegate: Column {
                         id: themeCell
@@ -182,7 +182,7 @@ Popup {
                         // 选中态直接绑设置属性（函数调用不具备响应性，这里必须是属性链）。
                         readonly property bool selected: root.appSettingsRef
                             ? root.appSettingsRef.backgroundTheme === themeCell.modelData.id
-                            : themeCell.modelData.id === "warmPaper"
+                            : themeCell.modelData.id === "warm"
 
                         Layout.preferredWidth: 160
                         spacing: Theme.space4
@@ -216,8 +216,9 @@ Popup {
                                 anchors.bottomMargin: 8
                                 height: 16
                                 radius: Theme.radiusSm
-                                color: Theme.glassCard
-                                border.color: Theme.glassBorder
+                                // 每格预览显示该主题的玻璃观感，而非当前全局 Theme。
+                                color: themeCell.modelData.glassCard
+                                border.color: themeCell.modelData.glassBorder
                                 border.width: 1
                             }
 

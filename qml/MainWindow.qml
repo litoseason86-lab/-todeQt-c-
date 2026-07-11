@@ -179,7 +179,7 @@ Item {
 
         anchors.fill: parent
         // 声明在最前 = 画在最底层；侧栏和主内容作为后声明兄弟自然叠在其上。
-        themeId: root.appSettingsRef ? root.appSettingsRef.backgroundTheme : "warmPaper"
+        themeId: root.appSettingsRef ? root.appSettingsRef.backgroundTheme : "warm"
     }
 
     RowLayout {

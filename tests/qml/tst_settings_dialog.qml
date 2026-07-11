@@ -15,7 +15,7 @@ TestCase {
     QtObject {
         id: appSettingsMock
 
-        property string backgroundTheme: "warmPaper"
+        property string backgroundTheme: "warm"
         property bool soundEnabled: true
         property bool reduceMotion: false
         property bool slimClockFont: true
@@ -35,7 +35,7 @@ TestCase {
     }
 
     function init() {
-        appSettingsMock.backgroundTheme = "warmPaper"
+        appSettingsMock.backgroundTheme = "warm"
         appSettingsMock.soundEnabled = true
         appSettingsMock.reduceMotion = false
         appSettingsMock.slimClockFont = true
@@ -74,24 +74,24 @@ TestCase {
     function test_clickThumbWritesThemeId() {
         dialog.open()
         wait(20)
-        var thumb = themeThumb("celadon")
+        var thumb = themeThumb("jiangnan")
         verify(thumb)
         mouseClick(thumb)
-        compare(appSettingsMock.backgroundTheme, "celadon")
+        compare(appSettingsMock.backgroundTheme, "jiangnan")
     }
 
     function test_selectedFollowsSettings() {
         dialog.open()
         wait(20)
-        var warmCell = themeCell("warmPaper")
-        var celadonCell = themeCell("celadon")
+        var warmCell = themeCell("warm")
+        var jiangnanCell = themeCell("jiangnan")
         verify(warmCell)
-        verify(celadonCell)
+        verify(jiangnanCell)
         verify(warmCell.selected)
-        verify(!celadonCell.selected)
+        verify(!jiangnanCell.selected)
 
-        appSettingsMock.backgroundTheme = "celadon"
-        verify(celadonCell.selected)
+        appSettingsMock.backgroundTheme = "jiangnan"
+        verify(jiangnanCell.selected)
         verify(!warmCell.selected)
     }
 
@@ -100,10 +100,10 @@ TestCase {
         dialog.open()
         wait(20)
         compare(findChild(dialog, "settingsThemeRepeater").count, 6)
-        var thumb = themeThumb("sunset")
+        var thumb = themeThumb("starry")
         verify(thumb)
         mouseClick(thumb) // 缺 appSettings（测试/降级）时：不崩溃、不写入。
-        compare(appSettingsMock.backgroundTheme, "warmPaper")
+        compare(appSettingsMock.backgroundTheme, "warm")
     }
 
     function test_soundSwitchBindsSetting() {
@@ -290,7 +290,7 @@ TestCase {
 
         verify(dialog.width >= 540, "设置弹窗不能继续使用窄 420 版式")
 
-        var warmThumb = themeThumb("warmPaper")
+        var warmThumb = themeThumb("warm")
         verify(warmThumb)
         verify(warmThumb.width >= 148, "主题缩略图应放大到参考图的宽卡片尺度")
         verify(warmThumb.height >= 70, "主题缩略图高度应随宽卡片放大")
