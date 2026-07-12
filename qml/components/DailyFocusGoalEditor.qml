@@ -9,6 +9,8 @@ FocusScope {
     property int initialMinutes: 0
     property bool reduceMotion: false
     property string validationError: ""
+    // 横排模式：底部目标条内联编辑用；竖排（默认）留给卡片形态。
+    property bool horizontal: false
 
     readonly property alias hourText: hourField.text
     readonly property alias minuteText: minuteField.text
@@ -77,23 +79,29 @@ FocusScope {
         event.accepted = true
     }
 
-    ColumnLayout {
+    GridLayout {
         id: editorColumn
 
         anchors.left: parent.left
         anchors.right: parent.right
-        spacing: Theme.space8
+        // 竖排=三行（输入/报错/按钮），横排=一行三组并列。
+        flow: root.horizontal ? GridLayout.LeftToRight : GridLayout.TopToBottom
+        columns: root.horizontal ? 3 : 1
+        rows: root.horizontal ? 1 : 3
+        rowSpacing: Theme.space8
+        columnSpacing: Theme.space12
 
         RowLayout {
-            Layout.fillWidth: true
+            Layout.fillWidth: !root.horizontal
             spacing: Theme.space8
 
             TextField {
                 id: hourField
                 objectName: "focusGoalHourField"
 
-                Layout.fillWidth: true
-                Layout.preferredHeight: 38
+                Layout.fillWidth: !root.horizontal
+                Layout.preferredWidth: root.horizontal ? 56 : -1
+                Layout.preferredHeight: root.horizontal ? 32 : 38
                 activeFocusOnTab: true
                 selectByMouse: true
                 horizontalAlignment: TextInput.AlignHCenter
@@ -125,8 +133,9 @@ FocusScope {
                 id: minuteField
                 objectName: "focusGoalMinuteField"
 
-                Layout.fillWidth: true
-                Layout.preferredHeight: 38
+                Layout.fillWidth: !root.horizontal
+                Layout.preferredWidth: root.horizontal ? 56 : -1
+                Layout.preferredHeight: root.horizontal ? 32 : 38
                 activeFocusOnTab: true
                 selectByMouse: true
                 horizontalAlignment: TextInput.AlignHCenter
@@ -159,19 +168,20 @@ FocusScope {
             objectName: "focusGoalValidationError"
 
             Layout.fillWidth: true
-            visible: root.validationError.length > 0
+            visible: root.horizontal || root.validationError.length > 0
             text: root.validationError
             color: Theme.danger
             font.pixelSize: Theme.fontXs
-            wrapMode: Text.WordWrap
+            wrapMode: root.horizontal ? Text.NoWrap : Text.WordWrap
+            elide: root.horizontal ? Text.ElideRight : Text.ElideNone
             Accessible.role: Accessible.AlertMessage
         }
 
         RowLayout {
-            Layout.fillWidth: true
+            Layout.fillWidth: !root.horizontal
             spacing: Theme.space8
 
-            Item { Layout.fillWidth: true }
+            Item { Layout.fillWidth: !root.horizontal }
 
             Button {
                 id: cancelButton

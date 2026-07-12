@@ -452,74 +452,6 @@ Item {
             }
         }
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: Theme.space12
-
-            FocusGoalCard {
-                id: todayGoalCard
-                objectName: "todayGoalCard"
-
-                Layout.fillWidth: true
-                // 原「今日专注」统计卡原位升级：目标的设置/修改只在本页（仪表盘只读）。
-                editable: true
-                totalSeconds: root.liveSecondsSource.liveSeconds
-                goalMinutes: root.dailyFocusGoalMinutes
-                quickFillMinutes: root.yesterdayGoalMinutes
-                reduceMotion: root.settingsRef ? Boolean(root.settingsRef.reduceMotion) : false
-
-                onGoalSubmitted: function (totalMinutes) {
-                    todayGoalCard.handleSaveResult(root.saveDailyFocusGoal(totalMinutes))
-                }
-            }
-
-            Rectangle {
-                objectName: "todayCompletionStatCard"
-                Layout.fillWidth: true
-                // 与左侧目标卡等高。不能用 Layout.fillHeight：内层 RowLayout 只要有
-                // 可伸展子项自身就变成可伸展，会和下方任务列表抢整页高度。
-                Layout.preferredHeight: Math.max(72, todayGoalCard.implicitHeight)
-                radius: Theme.radiusLg
-                color: Theme.surface
-                border.color: Theme.border
-                border.width: 1
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    autoPaddingEnabled: true
-                    shadowEnabled: true
-                    shadowColor: Theme.shadow
-                    shadowOpacity: 0.08
-                    shadowBlur: 0.14
-                    shadowHorizontalOffset: 0
-                    shadowVerticalOffset: 2
-                }
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: Theme.space12
-                    spacing: Theme.space4
-
-                    Text {
-                        text: Number(root.todayStats.completedTasks || 0) + " / " + Number(root.todayStats.totalTasks || 0)
-                        font.pixelSize: Theme.fontXl
-                        font.weight: Font.Bold
-                        color: Theme.ink
-                    }
-
-                    Text {
-                        text: "任务完成"
-                        font.pixelSize: Theme.fontSm
-                        color: Theme.inkSoft
-                    }
-
-                    Item {
-                        // 卡片随目标卡加高时，数值仍贴顶排布，不被均匀拉散。
-                        Layout.fillHeight: true
-                    }
-                }
-            }
-        }
-
         Label {
             Layout.fillWidth: true
             visible: root.loadError.length > 0
@@ -660,6 +592,25 @@ Item {
                         }
                     }
                 }
+            }
+        }
+
+        FocusGoalStrip {
+            id: todayGoalCard
+            objectName: "todayGoalCard"
+
+            Layout.fillWidth: true
+            // 贴底状态条：目标的设置/修改只在本页（仪表盘只读）；
+            // 「任务完成」计数并入条右端，顶部统计行已整体撤销。
+            totalSeconds: root.liveSecondsSource.liveSeconds
+            goalMinutes: root.dailyFocusGoalMinutes
+            quickFillMinutes: root.yesterdayGoalMinutes
+            completedTasks: Number(root.todayStats.completedTasks || 0)
+            totalTasks: Number(root.todayStats.totalTasks || 0)
+            reduceMotion: root.settingsRef ? Boolean(root.settingsRef.reduceMotion) : false
+
+            onGoalSubmitted: function (totalMinutes) {
+                todayGoalCard.handleSaveResult(root.saveDailyFocusGoal(totalMinutes))
             }
         }
     }

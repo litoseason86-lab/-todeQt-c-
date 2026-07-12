@@ -529,7 +529,7 @@ TestCase {
     }
 
     function test_weekPlanViewBlocksAddingTaskForPastDate() {
-        weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
+        weekPlanView.weekStart = weekPlanView.mondayOf(weekPlanView.logicalToday);
         var originalPendingDate = weekPlanView.pendingAddDate;
         var blockedIndex = pastWeekIndex();
 
@@ -539,7 +539,7 @@ TestCase {
     }
 
     function test_weekPlanViewHidesPastTaskExecutionActions() {
-        weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
+        weekPlanView.weekStart = weekPlanView.mondayOf(weekPlanView.logicalToday);
         var blockedIndex = pastWeekIndex();
         taskManager.fakeWeekTasks = [{
                 id: 302,
@@ -565,7 +565,7 @@ TestCase {
     }
 
     function test_weekPlanViewShowsFuturePlanningButNotExecutionActions() {
-        weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
+        weekPlanView.weekStart = weekPlanView.mondayOf(weekPlanView.logicalToday);
         var futureIndex = futureWeekIndex();
         taskManager.fakeWeekTasks = [{
                 id: 303,
@@ -751,8 +751,7 @@ TestCase {
         var addButton = findChild(todayTaskView, "todayAddButton");
         var addButtonBackground = findChild(todayTaskView, "todayAddButtonBackground");
         var addButtonLabel = findChild(todayTaskView, "todayAddButtonLabel");
-        var goalCard = findChild(todayTaskView, "todayGoalCard");
-        var completionStatCard = findChild(todayTaskView, "todayCompletionStatCard");
+        var goalStrip = findChild(todayTaskView, "todayGoalCard");
         var taskListContainer = findChild(todayTaskView, "todayTaskListContainer");
         var emptyStateCard = findChild(todayTaskView, "todayEmptyStateCard");
         var emptyStateIcon = findChild(todayTaskView, "todayEmptyStateIcon");
@@ -761,8 +760,7 @@ TestCase {
         verify(addButton !== null);
         verify(addButtonBackground !== null);
         verify(addButtonLabel !== null);
-        verify(goalCard !== null);
-        verify(completionStatCard !== null);
+        verify(goalStrip !== null);
         verify(taskListContainer !== null);
         verify(emptyStateCard !== null);
         verify(emptyStateIcon !== null);
@@ -773,12 +771,11 @@ TestCase {
         compare(addButtonBackground.border.width, 0);
         compare(addButtonLabel.font.weight, Font.Medium);
 
-        // 原「今日专注」统计卡已升级为可编辑目标卡（玻璃基底，内嵌关落影）。
-        compare(goalCard.radius, Theme.radiusLg);
-        compare(goalCard.editable, true);
-        compare(completionStatCard.radius, 8);
-        compare(completionStatCard.layer.enabled, true);
-        verify(completionStatCard.layer.effect !== null);
+        // 顶部统计行已撤销：目标功能收进贴底状态条，完成数并入条右端。
+        compare(goalStrip.radius, Theme.radiusLg);
+        compare(goalStrip.editable, true);
+        var doneCount = findChild(todayTaskView, "stripDoneCount");
+        verify(doneCount !== null);
 
         compare(taskListContainer.radius, 8);
         compare(taskListContainer.layer.enabled, true);

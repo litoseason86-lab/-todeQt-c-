@@ -21,6 +21,7 @@
         <file alias="qml/components/FocusGoalCard.qml">../qml/components/FocusGoalCard.qml</file>
         <file alias="qml/components/DailyFocusGoalEditor.qml">../qml/components/DailyFocusGoalEditor.qml</file>
         <file alias="qml/components/FocusLiveSeconds.qml">../qml/components/FocusLiveSeconds.qml</file>
+        <file alias="qml/components/FocusGoalStrip.qml">../qml/components/FocusGoalStrip.qml</file>
         <file alias="qml/components/DashboardTimerPanel.qml">../qml/components/DashboardTimerPanel.qml</file>
         <file alias="qml/components/BackgroundWallpaper.qml">../qml/components/BackgroundWallpaper.qml</file>
         <file alias="qml/components/SettingsDialog.qml">../qml/components/SettingsDialog.qml</file>
