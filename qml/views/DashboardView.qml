@@ -472,68 +472,75 @@ Item {
                         color: Theme.inkSoft
                     }
 
-                    Text {
-                        objectName: "dashboardEmptyHint"
-
-                        Layout.fillWidth: true
-                        Layout.topMargin: Theme.space24
-                        visible: root.filteredTasks.length === 0 && root.loadError.length === 0
-                        text: root.tasks.length === 0
-                              ? "今天还没有任务，去「今日任务」页添加。"
-                              : (root.doneFilter
-                                 ? "今天还没有已完成的任务。"
-                                 : "这个筛选下没有任务。")
-                        font.pixelSize: Theme.fontMd
-                        color: Theme.inkMuted
-                        horizontalAlignment: Text.AlignHCenter
-                    }
-
-                    ScrollView {
+                    // 主体区始终占满剩余高度：列表隐藏时布局不重排，
+                    // 头部行与筛选胶囊在「全部/已完成」两种状态下位置完全一致。
+                    Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        clip: true
-                        visible: root.filteredTasks.length > 0
 
-                        ColumnLayout {
-                            width: Math.max(parent.width, 1)
-                            // 已完成列表行距收紧，配合 compact TaskItem 提高一屏密度。
-                            spacing: root.doneFilter ? Theme.space4 : Theme.space8
+                        Text {
+                            objectName: "dashboardEmptyHint"
 
-                            Repeater {
-                                model: root.filteredTasks
+                            anchors.centerIn: parent
+                            width: parent.width
+                            visible: root.filteredTasks.length === 0 && root.loadError.length === 0
+                            text: root.tasks.length === 0
+                                  ? "今天还没有任务，去「今日任务」页添加。"
+                                  : (root.doneFilter
+                                     ? "今天还没有已完成的任务。"
+                                     : "这个筛选下没有任务。")
+                            font.pixelSize: Theme.fontMd
+                            color: Theme.inkMuted
+                            horizontalAlignment: Text.AlignHCenter
+                            wrapMode: Text.WordWrap
+                        }
 
-                                TaskItem {
-                                    taskId: modelData.id
-                                    taskTitle: modelData.title
-                                    taskCategory: modelData.category && modelData.category.name ? modelData.category : (modelData.categoryData && modelData.categoryData.name ? modelData.categoryData : (modelData.categoryText || ""))
-                                    taskCompleted: modelData.completed
-                                    // 已完成筛选：紧凑只读行 + 右侧「已完成」徽章，去掉编辑/删除/开始专注空洞。
-                                    compact: root.doneFilter
-                                    showStartFocus: !root.doneFilter
-                                    showEditDelete: !root.doneFilter
+                        ScrollView {
+                            anchors.fill: parent
+                            clip: true
+                            visible: root.filteredTasks.length > 0
 
-                                    onCompletionChanged: function (id, completed) {
-                                        root.setTaskCompletedWithAnimationDelay(id, completed)
-                                    }
+                            ColumnLayout {
+                                width: Math.max(parent.width, 1)
+                                // 已完成列表行距收紧，配合 compact TaskItem 提高一屏密度。
+                                spacing: root.doneFilter ? Theme.space4 : Theme.space8
 
-                                    onStartFocusClicked: function (id, title) {
-                                        root.startFocus(id, title)
-                                    }
+                                Repeater {
+                                    model: root.filteredTasks
 
-                                    onDeleteClicked: function (id, title) {
-                                        root.deleteRequested(id, title)
-                                    }
+                                    TaskItem {
+                                        taskId: modelData.id
+                                        taskTitle: modelData.title
+                                        taskCategory: modelData.category && modelData.category.name ? modelData.category : (modelData.categoryData && modelData.categoryData.name ? modelData.categoryData : (modelData.categoryText || ""))
+                                        taskCompleted: modelData.completed
+                                        // 已完成筛选：紧凑只读行 + 右侧「已完成」徽章，去掉编辑/删除/开始专注空洞。
+                                        compact: root.doneFilter
+                                        showStartFocus: !root.doneFilter
+                                        showEditDelete: !root.doneFilter
 
-                                    onRenameSubmitted: function (id, newTitle) {
-                                        var originalCategoryId = Number(modelData.categoryId || -1)
-                                        var originalDate = root.taskIsoDate(modelData.date)
-                                        if (!taskManager.updateTask(id, newTitle, originalCategoryId, originalDate)) {
-                                            root.loadError = "任务更新失败，请重试"
+                                        onCompletionChanged: function (id, completed) {
+                                            root.setTaskCompletedWithAnimationDelay(id, completed)
                                         }
-                                    }
 
-                                    onEditClicked: function (id) {
-                                        editTaskDialog.openForTask(modelData)
+                                        onStartFocusClicked: function (id, title) {
+                                            root.startFocus(id, title)
+                                        }
+
+                                        onDeleteClicked: function (id, title) {
+                                            root.deleteRequested(id, title)
+                                        }
+
+                                        onRenameSubmitted: function (id, newTitle) {
+                                            var originalCategoryId = Number(modelData.categoryId || -1)
+                                            var originalDate = root.taskIsoDate(modelData.date)
+                                            if (!taskManager.updateTask(id, newTitle, originalCategoryId, originalDate)) {
+                                                root.loadError = "任务更新失败，请重试"
+                                            }
+                                        }
+
+                                        onEditClicked: function (id) {
+                                            editTaskDialog.openForTask(modelData)
+                                        }
                                     }
                                 }
                             }
