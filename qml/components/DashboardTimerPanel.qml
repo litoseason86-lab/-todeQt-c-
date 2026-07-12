@@ -13,14 +13,11 @@ Item {
     property var settingsRef: null
     property var wallpaperRef: null
     property int sessionCount: 0
-    property int goalMinutes: 0
     // 降级开关：毛玻璃不可用（无壁纸引用/低配）时走纯色玻璃。
     property bool frostEnabled: true
 
     signal openFocusRequested()
     signal startRequested()
-    // 仪表盘目标卡只读；未设置时用户点引导链接，向上请求跳到今日任务页。
-    signal goalSetupRequested()
 
     readonly property bool frostActive: glassBackdrop.effectActive
 
@@ -51,17 +48,6 @@ Item {
             return Number(root.timerRef.remainingSeconds) / Number(root.timerRef.targetSeconds)
         }
         return 1
-    }
-
-    // 今日已落库的专注秒数（由 DashboardView 注入统计口径）。
-    property int todayFocusSeconds: 0
-
-    // 实时口径统一走 FocusLiveSeconds，与今日任务页共用一份定义。
-    readonly property int liveFocusSeconds: liveSecondsSource.liveSeconds
-
-    readonly property FocusLiveSeconds liveSecondsSource: FocusLiveSeconds {
-        timerRef: root.timerRef
-        baseSeconds: root.todayFocusSeconds
     }
 
     // 采样区域 = 面板在壁纸坐标系里的矩形。mapToItem 本身不产生绑定依赖，
@@ -321,20 +307,6 @@ Item {
             }
         }
 
-        FocusGoalCard {
-            id: goalCard
-            objectName: "dashboardGoalCard"
-
-            Layout.fillWidth: true
-            Layout.topMargin: Theme.space4
-            // 只读实例：展示与今日页同一份数据，设置动作引导回今日任务页。
-            editable: false
-            totalSeconds: root.liveFocusSeconds
-            goalMinutes: root.goalMinutes
-            reduceMotion: root.settingsRef ? Boolean(root.settingsRef.reduceMotion) : false
-
-            onSetupRequested: root.goalSetupRequested()
-        }
 
         Item {
             Layout.fillHeight: true

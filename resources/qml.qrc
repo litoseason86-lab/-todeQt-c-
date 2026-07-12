@@ -18,7 +18,6 @@
         <file alias="qml/components/GlassPanel.qml">../qml/components/GlassPanel.qml</file>
         <file alias="qml/components/GlassToolbarButton.qml">../qml/components/GlassToolbarButton.qml</file>
         <file alias="qml/components/LiquidGlassBackdrop.qml">../qml/components/LiquidGlassBackdrop.qml</file>
-        <file alias="qml/components/FocusGoalCard.qml">../qml/components/FocusGoalCard.qml</file>
         <file alias="qml/components/DailyFocusGoalEditor.qml">../qml/components/DailyFocusGoalEditor.qml</file>
         <file alias="qml/components/FocusLiveSeconds.qml">../qml/components/FocusLiveSeconds.qml</file>
         <file alias="qml/components/FocusGoalStrip.qml">../qml/components/FocusGoalStrip.qml</file>

@@ -16,14 +16,17 @@ GlassPanel {
     property bool editing: false
     property bool reduceMotion: false
     property string saveError: ""
-    // 与卡片同接口：本条只在今日任务页使用，恒为可编辑。
+    // 今日任务页实例可编辑；仪表盘实例只读，未设置时引导跳转。
     property bool editable: true
     // 快捷沿用的数据源（昨天的目标分钟数）；无效时回落推荐 4 小时。
     property int quickFillMinutes: 0
     property int completedTasks: 0
     property int totalTasks: 0
+    // 仪表盘已有「今日任务完成」统计卡，条右端计数可关闭避免重复。
+    property bool showDoneCount: true
 
     signal goalSubmitted(int totalMinutes)
+    signal setupRequested()
 
     readonly property bool hasGoal: root.goalMinutes >= 1 && root.goalMinutes <= 1440
     readonly property int safeSeconds: Math.max(0, Number(root.totalSeconds || 0))
@@ -147,10 +150,30 @@ GlassPanel {
                 Layout.fillWidth: true
             }
 
+            Label {
+                objectName: "focusGoalGuideLink"
+
+                visible: !root.editable
+                text: qsTr("去「今日任务」页设置 ›")
+                color: guideArea.containsMouse ? Theme.accentInk : Theme.inkSoft
+                font.pixelSize: Theme.fontSm
+
+                MouseArea {
+                    id: guideArea
+
+                    anchors.fill: parent
+                    anchors.margins: -Theme.space4
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.setupRequested()
+                }
+            }
+
             Button {
                 id: quickFillChip
                 objectName: "focusGoalQuickChip"
 
+                visible: root.editable
                 text: root.quickFillLabel
                 activeFocusOnTab: true
                 implicitHeight: 26
@@ -180,6 +203,7 @@ GlassPanel {
                 id: setGoalButton
                 objectName: "focusGoalSetButton"
 
+                visible: root.editable
                 text: qsTr("设置今日目标")
                 activeFocusOnTab: true
                 implicitHeight: 30
@@ -203,7 +227,9 @@ GlassPanel {
                 }
             }
 
-            DoneCount {}
+            DoneCount {
+                visible: root.showDoneCount
+            }
         }
 
         // —— 编辑（横排内联，复用同一编辑器与校验） ——
@@ -271,10 +297,20 @@ GlassPanel {
                 }
             }
 
+            Label {
+                objectName: "focusGoalTarget"
+
+                visible: !root.editable
+                text: qsTr("目标 %1").arg(root.targetText)
+                color: Theme.inkSoft
+                font.pixelSize: Theme.fontSm
+            }
+
             Button {
                 id: modifyGoalButton
                 objectName: "focusGoalModifyButton"
 
+                visible: root.editable
                 text: qsTr("目标 %1 · 修改 ›").arg(root.targetText)
                 activeFocusOnTab: true
                 flat: true
@@ -370,7 +406,9 @@ GlassPanel {
                 elide: Text.ElideRight
             }
 
-            DoneCount {}
+            DoneCount {
+                visible: root.showDoneCount
+            }
         }
     }
 

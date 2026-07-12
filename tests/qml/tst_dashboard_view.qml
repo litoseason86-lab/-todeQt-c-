@@ -358,13 +358,13 @@ TestCase {
         }
     }
 
-    // —— FocusGoalCard 目标进度 ——
+    // —— FocusGoalStrip 目标进度（纯逻辑，与页面无关） ——
 
     Component {
         id: goalCardComponent
 
-        FocusGoalCard {
-            width: 260
+        FocusGoalStrip {
+            width: 720
         }
     }
 
@@ -469,32 +469,33 @@ TestCase {
         compare(card.editing, false)
     }
 
-    function test_timer_panel_live_focus_seconds() {
-        var panel = createTemporaryObject(timerPanelComponent, testCase,
-                                          { todayFocusSeconds: 600 })
-        verify(panel)
+    function test_dashboard_goal_strip_live_seconds_and_setup_jump() {
+        // 通栏条挂在 DashboardView(统计卡下方),实时口径走视图级 FocusLiveSeconds。
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
 
-        // 待机：只有落库累计。
-        compare(panel.liveFocusSeconds, 600)
+        var strip = findChild(view, "dashboardGoalCard")
+        verify(strip)
+        compare(strip.editable, false)
+        compare(strip.showDoneCount, false)
 
-        // 番茄工作阶段：叠加进行中秒数。
+        // 待机：只有落库累计(统计桩 9180 秒)。
+        compare(strip.totalSeconds, 9180)
+
+        // 番茄工作阶段叠加进行中秒数；休息不累计。
         focusTimer.phase = 1
         focusTimer.elapsedSeconds = 300
-        compare(panel.liveFocusSeconds, 900)
-
-        // 休息阶段不累计。
+        compare(strip.totalSeconds, 9480)
         focusTimer.phase = 2
-        compare(panel.liveFocusSeconds, 600)
+        compare(strip.totalSeconds, 9180)
 
-        // 只读目标卡：引导链接向上请求跳到今日任务页，面板不碰设置存储。
-        var setupSpy = createTemporaryObject(spyComponent, testCase,
-                                             { target: panel, signalName: "goalSetupRequested" })
-        var card = findChild(panel, "dashboardGoalCard")
-        verify(card)
-        compare(card.editable, false)
-        card.setupRequested()
-        compare(setupSpy.count, 1)
+        // 只读条：引导链接向上请求跳到今日任务页。
+        var jumpSpy = createTemporaryObject(spyComponent, testCase,
+                                            { target: view, signalName: "todayPageRequested" })
+        strip.setupRequested()
+        compare(jumpSpy.count, 1)
         focusTimer.elapsedSeconds = 0
+        focusTimer.phase = 0
     }
 
     // —— DashboardTimerPanel 状态机 ——
