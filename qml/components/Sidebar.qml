@@ -8,7 +8,8 @@ Rectangle {
     id: root
 
     width: 208
-    color: Theme.glassSidebar
+    // 导航栏允许着色玻璃；实时模糊由 MainWindow.sidebarFrost 单层采样，这里不二次模糊。
+    color: Theme.glassBlurAllowed ? Theme.glassSidebar : Theme.glassSolidSidebar
     // 玻璃侧栏上的条目默认态要“隐形”才能透出壁纸；但不能用 Qt 的 transparent（黑基透明）：
     // hover 退场的 ColorAnimation 会在黑白之间插出灰闪。白基透明只动 alpha，不经过灰。
     readonly property color sidebarItemIdleColor: Qt.rgba(1, 1, 1, 0)
@@ -26,6 +27,8 @@ Rectangle {
     // qmllint enable unqualified
     signal itemClicked(string viewName)
     signal settingsRequested
+    // 请求收起侧栏：由 MainWindow 做宽度动画与持久化，侧栏自身不持有布局态。
+    signal collapseRequested()
 
     function formatMinuteTime(seconds) {
         var safe = Math.max(0, Number(seconds || 0))
@@ -59,12 +62,41 @@ Rectangle {
         anchors.margins: Theme.space16
         spacing: Theme.space4
 
-        Text {
-            text: "番茄Todo"
-            font.pixelSize: Theme.fontXl
-            font.weight: Font.Bold
-            color: Theme.ink
-            Layout.bottomMargin: Theme.space16
+        // 标题行右侧放 Apple 风侧栏切换钮（收起）。
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.bottomMargin: Theme.space8
+            spacing: Theme.space8
+
+            Text {
+                text: "番茄Todo"
+                font.pixelSize: Theme.fontXl
+                font.weight: Font.Bold
+                color: Theme.ink
+                Layout.fillWidth: true
+                elide: Text.ElideRight
+            }
+
+            GlassToolbarButton {
+                id: collapseButton
+                objectName: "sidebarCollapseButton"
+
+                Layout.preferredWidth: 30
+                Layout.preferredHeight: 30
+                implicitWidth: 30
+                implicitHeight: 30
+                reduceMotion: root.reduceMotionActive
+                // 嵌在侧栏玻璃上：关掉落影，避免双层阴影发灰。
+                solidFallback: !Theme.glassBlurAllowed
+                Accessible.name: "隐藏侧栏"
+                onClicked: root.collapseRequested()
+
+                // 侧栏内嵌钮不需要再套一层 panel 阴影。
+                Component.onCompleted: {
+                    if (background && background.panelShadowEnabled !== undefined)
+                        background.panelShadowEnabled = false
+                }
+            }
         }
 
         Text {

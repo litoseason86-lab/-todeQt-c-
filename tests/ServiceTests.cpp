@@ -410,6 +410,7 @@ private slots:
     void appSettingsSlimClockFontRoundTrip();
     void appSettingsRolloverIgnoredDateRoundTrip();
     void appSettingsNicknameTrimsAndRoundTrips();
+    void appSettingsSidebarVisibleRoundTrip();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void appSettingsDayStartHourNormalizeAndPersist();
     void appSettingsDayStartHourRejectsCorruptIniValue();
@@ -649,6 +650,30 @@ void ServiceTests::appSettingsNicknameTrimsAndRoundTrips()
 
     AppSettings reloaded(path);
     QCOMPARE(reloaded.nickname(), QStringLiteral("zjk"));
+}
+
+void ServiceTests::appSettingsSidebarVisibleRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        // 默认展开，与首次打开的可发现性一致。
+        QCOMPARE(settings.sidebarVisible(), true);
+
+        QSignalSpy spy(&settings, &AppSettings::sidebarVisibleChanged);
+        settings.setSidebarVisible(false);
+        QCOMPARE(settings.sidebarVisible(), false);
+        QCOMPARE(spy.count(), 1);
+
+        settings.setSidebarVisible(false);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.sidebarVisible(), false);
 }
 
 void ServiceTests::appSettingsBackgroundThemeDefaultAndRoundTrip()

@@ -39,6 +39,22 @@ Item {
         return root.tasks
     }
 
+    // 角标与摘要用：已完成条数独立计算，避免「已完成」筛选时角标仍显示全部任务数。
+    readonly property int completedTaskCount: {
+        var n = 0
+        for (var i = 0; i < root.tasks.length; i++) {
+            if (root.tasks[i].completed)
+                n += 1
+        }
+        return n
+    }
+
+    readonly property int panelTaskCount: root.filterMode === "done"
+                                         ? root.completedTaskCount
+                                         : root.tasks.length
+
+    readonly property bool doneFilter: root.filterMode === "done"
+
     Component.onCompleted: refresh()
     onPendingDeleteTaskIdChanged: refresh()
 
@@ -367,7 +383,8 @@ Item {
                                 objectName: "dashboardTaskCount"
 
                                 anchors.centerIn: parent
-                                text: String(root.tasks.length)
+                                // 角标跟随当前筛选：已完成页显示完成数，全部页显示总数。
+                                text: String(root.panelTaskCount)
                                 textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontXs
                                 font.weight: Font.Bold
@@ -379,6 +396,7 @@ Item {
                             Layout.fillWidth: true
                         }
 
+                        // 筛选胶囊对齐参考图：选中为实心 accent + 浅字，未选中透明底。
                         Repeater {
                             model: [
                                 { key: "all", label: "全部" },
@@ -395,10 +413,13 @@ Item {
                                 implicitWidth: filterLabel.implicitWidth + Theme.space16
                                 implicitHeight: 26
                                 radius: 13
-                                color: filterChip.selected ? Theme.glassAccent
+                                color: filterChip.selected
+                                       ? Theme.accent
                                        : (filterArea.containsMouse ? Theme.glassHover : Qt.rgba(1, 1, 1, 0))
-                                border.color: filterChip.selected ? Theme.accent : Theme.borderSubtle
-                                border.width: 1
+                                border.color: filterChip.selected
+                                              ? Theme.accent
+                                              : Theme.borderSubtle
+                                border.width: filterChip.selected ? 0 : 1
 
                                 Behavior on color {
                                     ColorAnimation {
@@ -415,7 +436,7 @@ Item {
                                     textFormat: Text.PlainText
                                     font.pixelSize: Theme.fontSm
                                     font.weight: filterChip.selected ? Font.Medium : Font.Normal
-                                    color: filterChip.selected ? Theme.accentInk : Theme.inkSoft
+                                    color: filterChip.selected ? Theme.surface : Theme.inkSoft
                                 }
 
                                 MouseArea {
@@ -430,6 +451,27 @@ Item {
                         }
                     }
 
+                    // 已完成筛选摘要：一眼看到进度，列表本身改为紧凑只读行。
+                    // 可见性只绑 filterMode，避免 tasks 数组引用变化时 length 绑定偶发不刷新。
+                    Text {
+                        objectName: "dashboardDoneSummary"
+
+                        Layout.fillWidth: true
+                        visible: root.filterMode === "done"
+                        text: root.tasks.length === 0
+                              ? "今天还没有任务"
+                              : (root.completedTaskCount > 0
+                                 ? ("已完成 " + root.completedTaskCount + " / " + root.tasks.length
+                                    + " · 完成率 "
+                                    + Math.round(root.completedTaskCount * 100
+                                                 / Math.max(root.tasks.length, 1))
+                                    + "%")
+                                 : "今天还没有勾完的任务")
+                        textFormat: Text.PlainText
+                        font.pixelSize: Theme.fontSm
+                        color: Theme.inkSoft
+                    }
+
                     Text {
                         objectName: "dashboardEmptyHint"
 
@@ -438,7 +480,9 @@ Item {
                         visible: root.filteredTasks.length === 0 && root.loadError.length === 0
                         text: root.tasks.length === 0
                               ? "今天还没有任务，去「今日任务」页添加。"
-                              : "这个筛选下没有任务。"
+                              : (root.doneFilter
+                                 ? "今天还没有已完成的任务。"
+                                 : "这个筛选下没有任务。")
                         font.pixelSize: Theme.fontMd
                         color: Theme.inkMuted
                         horizontalAlignment: Text.AlignHCenter
@@ -452,7 +496,8 @@ Item {
 
                         ColumnLayout {
                             width: Math.max(parent.width, 1)
-                            spacing: Theme.space8
+                            // 已完成列表行距收紧，配合 compact TaskItem 提高一屏密度。
+                            spacing: root.doneFilter ? Theme.space4 : Theme.space8
 
                             Repeater {
                                 model: root.filteredTasks
@@ -462,6 +507,10 @@ Item {
                                     taskTitle: modelData.title
                                     taskCategory: modelData.category && modelData.category.name ? modelData.category : (modelData.categoryData && modelData.categoryData.name ? modelData.categoryData : (modelData.categoryText || ""))
                                     taskCompleted: modelData.completed
+                                    // 已完成筛选：紧凑只读行 + 右侧「已完成」徽章，去掉编辑/删除/开始专注空洞。
+                                    compact: root.doneFilter
+                                    showStartFocus: !root.doneFilter
+                                    showEditDelete: !root.doneFilter
 
                                     onCompletionChanged: function (id, completed) {
                                         root.setTaskCompletedWithAnimationDelay(id, completed)

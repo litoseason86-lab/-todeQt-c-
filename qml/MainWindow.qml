@@ -21,6 +21,15 @@ Item {
     property var countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
     property var appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
     property var focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
+    // 侧栏展开态：优先读设置；测试未注入 settings 时本地默认真。
+    property bool sidebarVisible: root.appSettingsRef
+                                  ? root.appSettingsRef.sidebarVisible
+                                  : true
+    // 侧栏展开宽度常量：动画与毛玻璃采样共用，避免三处写死数字漂移。
+    readonly property int sidebarExpandedWidth: 208
+    readonly property bool sidebarMotionReduced: root.appSettingsRef
+                                                 ? root.appSettingsRef.reduceMotion
+                                                 : false
     readonly property string windowTitleText: root.focusTimerRef
         ? root.windowTitleFor(root.focusTimerRef.hasActiveSession,
                               root.focusTimerRef.phase,
@@ -29,6 +38,18 @@ Item {
                               root.focusTimerRef.remainingSeconds,
                               root.focusTimerRef.elapsedSeconds)
         : "番茄Todo"
+
+    function setSidebarVisible(visible) {
+        if (root.appSettingsRef) {
+            root.appSettingsRef.sidebarVisible = visible
+        } else {
+            root.sidebarVisible = visible
+        }
+    }
+
+    function toggleSidebar() {
+        root.setSidebarVisible(!root.sidebarVisible)
+    }
 
     function switchToView(viewName) {
         if (root.currentView === viewName && !root.isSwitching) {
@@ -206,14 +227,23 @@ Item {
         themeId: root.appSettingsRef ? root.appSettingsRef.backgroundTheme : "warm"
     }
 
-    // 侧栏毛玻璃底：全应用唯一的实时模糊区。壁纸是静态图，只对侧栏
-    // 208px 条带采样模糊一次；卡片仍走半透明蒙层，避免逐卡片模糊的开销。
+    // 侧栏毛玻璃底：宽度跟随展开动画，收起时收缩为 0，避免空白模糊带。
     Item {
+        id: sidebarFrost
         objectName: "sidebarFrost"
 
-        width: 208
+        width: sidebarShell.width
         height: parent.height
-        visible: !root.focusImmersiveActive
+        visible: !root.focusImmersiveActive && width > 0.5
+        opacity: Math.min(1, sidebarShell.width / root.sidebarExpandedWidth)
+
+        Behavior on opacity {
+            enabled: !root.sidebarMotionReduced
+            NumberAnimation {
+                duration: 280
+                easing.type: Easing.OutCubic
+            }
+        }
 
         ShaderEffectSource {
             id: sidebarBackdropSource
@@ -221,7 +251,7 @@ Item {
             anchors.fill: parent
             visible: false
             sourceItem: wallpaperLayer
-            sourceRect: Qt.rect(0, 0, width, height)
+            sourceRect: Qt.rect(0, 0, Math.max(1, width), height)
         }
 
         MultiEffect {
@@ -240,26 +270,79 @@ Item {
         spacing: 0
         visible: !root.focusImmersiveActive
 
-        Sidebar {
-            Layout.preferredWidth: 208
-            Layout.fillHeight: true
-            currentView: root.currentView
-            focusTimerRef: root.focusTimerRef
+        // 侧栏壳：裁剪 + 宽度弹簧收起；内部 Sidebar 保持 208 宽，避免内容随宽度挤扁。
+        Item {
+            id: sidebarShell
+            objectName: "sidebarShell"
 
-            onItemClicked: function (viewName) {
-                root.switchToView(viewName);
+            Layout.preferredWidth: width
+            Layout.minimumWidth: width
+            Layout.maximumWidth: width
+            Layout.fillHeight: true
+            width: root.sidebarVisible ? root.sidebarExpandedWidth : 0
+            clip: true
+
+            Behavior on width {
+                enabled: !root.sidebarMotionReduced
+                NumberAnimation {
+                    duration: 320
+                    // OutCubic 接近 AppKit 侧边栏收起的减速感。
+                    easing.type: Easing.OutCubic
+                }
             }
 
-            onSettingsRequested: settingsDialog.open()
+            Sidebar {
+                id: sidebar
+                objectName: "mainSidebar"
+
+                width: root.sidebarExpandedWidth
+                height: parent.height
+                // 收起末段略淡出，展开先淡入，减少硬切。
+                opacity: root.sidebarVisible ? 1 : 0
+                currentView: root.currentView
+                focusTimerRef: root.focusTimerRef
+
+                Behavior on opacity {
+                    enabled: !root.sidebarMotionReduced
+                    NumberAnimation {
+                        duration: 220
+                        easing.type: Easing.OutCubic
+                    }
+                }
+
+                onItemClicked: function (viewName) {
+                    root.switchToView(viewName);
+                }
+
+                onSettingsRequested: settingsDialog.open()
+                onCollapseRequested: root.setSidebarVisible(false)
+            }
         }
 
         Rectangle {
             objectName: "mainContentDivider"
 
-            Layout.preferredWidth: 1
+            Layout.preferredWidth: root.sidebarVisible ? 1 : 0
             Layout.fillHeight: true
             color: Theme.border
-            opacity: 0.8
+            opacity: root.sidebarVisible ? 0.8 : 0
+            visible: width > 0
+
+            Behavior on Layout.preferredWidth {
+                enabled: !root.sidebarMotionReduced
+                NumberAnimation {
+                    duration: 280
+                    easing.type: Easing.OutCubic
+                }
+            }
+
+            Behavior on opacity {
+                enabled: !root.sidebarMotionReduced
+                NumberAnimation {
+                    duration: 200
+                    easing.type: Easing.OutCubic
+                }
+            }
         }
 
         Rectangle {
@@ -389,6 +472,110 @@ Item {
                 }
             }
         }
+    }
+
+    // 侧栏收起后：左上角悬浮玻璃钮（Apple 风格），点击展开。
+    Item {
+        id: sidebarRevealButton
+        objectName: "sidebarRevealButton"
+
+        // 沉浸专注时不出现；展开时淡出并关闭命中。
+        visible: !root.focusImmersiveActive
+        enabled: !root.sidebarVisible
+        width: 36
+        height: 36
+        x: 14
+        y: 14
+        z: 40
+        opacity: (!root.sidebarVisible && !root.focusImmersiveActive) ? 1 : 0
+        scale: sidebarRevealMouse.pressed ? 0.92
+               : (sidebarRevealHover.hovered ? 1.04 : 1.0)
+        transformOrigin: Item.Center
+
+        // 进场：自左侧轻滑 + 淡入，像 macOS 工具条出现。
+        Behavior on opacity {
+            enabled: !root.sidebarMotionReduced
+            NumberAnimation {
+                duration: 240
+                easing.type: Easing.OutCubic
+            }
+        }
+        Behavior on scale {
+            enabled: !root.sidebarMotionReduced
+            NumberAnimation {
+                duration: 160
+                easing.type: Easing.OutCubic
+            }
+        }
+
+        // 柔和落影：悬浮控件需要轻微离面感，但不抢内容。
+        layer.enabled: opacity > 0.01
+        layer.effect: MultiEffect {
+            autoPaddingEnabled: true
+            shadowEnabled: true
+            shadowColor: Theme.shadow
+            shadowOpacity: 0.14
+            shadowBlur: 0.35
+            shadowHorizontalOffset: 0
+            shadowVerticalOffset: 3
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            radius: 10
+            color: sidebarRevealMouse.pressed
+                   ? Theme.glassAccent
+                   : (sidebarRevealHover.hovered ? Theme.glassHover : Theme.glassCard)
+            border.color: Theme.glassBorder
+            border.width: 1
+
+            Behavior on color {
+                enabled: !root.sidebarMotionReduced
+                ColorAnimation {
+                    duration: 140
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+
+        // 与侧栏收起钮同一套 sidebar.left 符号，保证双向控件认知一致。
+        Item {
+            anchors.centerIn: parent
+            width: 15
+            height: 13
+
+            Rectangle {
+                anchors.fill: parent
+                radius: 2.5
+                color: "transparent"
+                border.color: Theme.inkSoft
+                border.width: 1.4
+            }
+
+            Rectangle {
+                width: 4.5
+                height: parent.height
+                radius: 1.5
+                color: Theme.inkSoft
+            }
+        }
+
+        HoverHandler {
+            id: sidebarRevealHover
+            enabled: sidebarRevealButton.enabled
+        }
+
+        MouseArea {
+            id: sidebarRevealMouse
+            anchors.fill: parent
+            enabled: sidebarRevealButton.enabled
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.setSidebarVisible(true)
+        }
+
+        Accessible.role: Accessible.Button
+        Accessible.name: "显示侧栏"
+        Accessible.onPressAction: root.setSidebarVisible(true)
     }
 
     FocusImmersiveOverlay {

@@ -99,6 +99,25 @@ TestCase {
         compare(settingsSpy.count, 1)
     }
 
+    SignalSpy {
+        id: collapseSpy
+        target: sidebar
+        signalName: "collapseRequested"
+    }
+
+    function test_collapseButtonEmitsCollapseRequested() {
+        var btn = findChild(sidebar, "sidebarCollapseButton")
+        verify(btn !== null, "应有 Apple 风格收起按钮")
+        // AbstractButton 自身即命中区，不单设 MouseArea；校验尺寸达到桌面指针可点标准。
+        verify(btn.enabled, "收起钮应可点击")
+        verify(btn.implicitWidth >= 30 && btn.implicitHeight >= 30, "命中区应足够大")
+        compare(btn.Accessible.name, "隐藏侧栏")
+        // 触发按钮自身的 clicked 信号，校验到 collapseRequested 的完整接线。
+        collapseSpy.clear()
+        btn.clicked()
+        compare(collapseSpy.count, 1)
+    }
+
     function test_titleAndGroupFontWeightsUseFontWeight() {
         var title = findText("番茄Todo");
         var groupTitle = findText("时间视图");

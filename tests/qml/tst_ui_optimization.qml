@@ -597,8 +597,12 @@ TestCase {
         verify(focusButtonBackground !== null);
         verify(focusButtonLabel !== null);
         compare(focusButton.implicitWidth, 104);
-        compare(focusButton.implicitHeight, 40);
-        compare(focusButtonBackground.radius, 6);
+        // 与仪表盘主按钮统一 34 高；圆角走 GlassPanel 的 radiusLg。
+        compare(focusButton.implicitHeight, 34);
+        compare(focusButtonBackground.radius, Theme.radiusLg);
+        compare(focusButtonBackground.panelShadowEnabled, false);
+        verify(Qt.colorEqual(focusButtonBackground.color, Theme.glassCard));
+        verify(Qt.colorEqual(focusButtonLabel.color, Theme.accentInk));
 
         compare(focusButton.text, "开始专注");
         compare(focusButton.enabled, true);
@@ -612,8 +616,32 @@ TestCase {
     }
 
     function test_taskItemButtonsUsePressedDepthAndWarmShadow() {
-        verifyButtonPressedFeedback("focusButton", "focusButtonBackground", "focusButtonLabel", "专注按钮");
+        // 开始专注改为玻璃反馈；删除仍保留按下位移 + 暖色阴影深度。
+        verifyFocusButtonGlassFeedback();
         verifyButtonPressedFeedback("taskDeleteButton", "taskDeleteButtonBackground", "taskDeleteButtonLabel", "删除按钮");
+    }
+
+    function verifyFocusButtonGlassFeedback() {
+        var button = findChild(taskItem, "focusButton");
+        var background = findChild(taskItem, "focusButtonBackground");
+        var label = findChild(taskItem, "focusButtonLabel");
+
+        verify(button !== null, "专注按钮需要存在");
+        verify(background !== null, "专注按钮需要存在玻璃背景");
+        verify(label !== null, "专注按钮需要存在文字");
+        compare(background.panelShadowEnabled, false);
+        verify(Qt.colorEqual(background.color, Theme.glassCard), "专注按钮普通态应使用 glassCard");
+        verify(Qt.colorEqual(label.color, Theme.accentInk), "专注按钮字色应为 accentInk");
+
+        button.down = true;
+        tryCompare(button, "down", true, 220);
+        wait(180);
+        verify(Qt.colorEqual(background.color, Theme.glassAccent), "专注按钮按下应使用 glassAccent");
+
+        button.down = false;
+        tryCompare(button, "down", false, 220);
+        wait(180);
+        verify(Qt.colorEqual(background.color, Theme.glassCard), "专注按钮释放后应回到 glassCard");
     }
 
     function verifyButtonPressedFeedback(buttonName, backgroundName, labelName, context) {

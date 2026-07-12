@@ -91,7 +91,11 @@ QtObject {
     readonly property color focusColonMuted: darkMode ? "#8c7355" : "#e8bda6"
 
     // —— 玻璃令牌（透壁纸磨砂面板；夜间版为暗暖玻璃）——
-    // 白/暗暖 + alpha：面板叠在壁纸上，半透明才能透出壁纸。
+    // 使用原则（性能 + 可读性）：
+    // 1) 实时模糊只给导航条/浮动工具/弹窗/重要控制（侧栏条带、仪表盘专注面板）。
+    // 2) 内容卡只用半透明色块（glassCard 等），禁止每张卡都 MultiEffect 模糊。
+    // 3) 字色一律走 inkStrong / accentInk，不在玻璃上用低对比灰。
+    // 4) glassBlurAllowed=false 时调用方改用 glassSolid* 降级。
     readonly property color glassSidebar: darkMode
         ? Qt.rgba(30 / 255, 26 / 255, 20 / 255, 0.55)
         : Qt.rgba(1, 1, 252 / 255, 0.55)
@@ -112,6 +116,23 @@ QtObject {
     readonly property color glassBorder: darkMode
         ? Qt.rgba(1, 1, 1, 0.18)
         : Qt.rgba(1, 1, 1, 0.65)
+
+    // 无模糊降级：更高不透明度，保证浅/深底上 ink 字色仍可读。
+    readonly property color glassSolidCard: darkMode
+        ? Qt.rgba(42 / 255, 36 / 255, 28 / 255, 0.92)
+        : Qt.rgba(1, 253 / 255, 248 / 255, 0.92)
+    readonly property color glassSolidHover: darkMode
+        ? Qt.rgba(52 / 255, 45 / 255, 34 / 255, 0.95)
+        : Qt.rgba(1, 250 / 255, 244 / 255, 0.96)
+    readonly property color glassSolidAccent: darkMode
+        ? Qt.rgba(212 / 255, 165 / 255, 116 / 255, 0.42)
+        : Qt.rgba(240 / 255, 230 / 255, 210 / 255, 0.88)
+    readonly property color glassSolidSidebar: darkMode
+        ? Qt.rgba(30 / 255, 26 / 255, 20 / 255, 0.94)
+        : Qt.rgba(1, 252 / 255, 246 / 255, 0.94)
+
+    // 全局允许实时模糊：低配/测试可关，侧栏与专注面板走 solid 降级。
+    property bool glassBlurAllowed: true
 
     // ══ 背景壁纸主题（壁纸原图直出；mode 决定上方令牌走日间/夜间版）══
     // themes[0] 必须是默认 warm：resolveTheme 对未知 id 回落首位。

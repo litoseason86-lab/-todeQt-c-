@@ -774,19 +774,38 @@ Item {
                     visible: root.state === "pomoIdle" || root.state === "breakDone"
                     text: root.state === "breakDone" ? "开始专注" : "开始专注"
                     enabled: root.canStartPomodoro()
-                    implicitWidth: 112
-                    implicitHeight: 40
+                    // 与仪表盘/任务卡「开始专注」统一：104×34 + 玻璃基底。
+                    implicitWidth: 104
+                    implicitHeight: 34
                     onClicked: root.startPomodoro()
 
-                    background: Rectangle {
-                        color: pomodoroStartButton.enabled ? Theme.accent : Theme.border
-                        radius: Theme.radiusMd
+                    // 玻璃主按钮：半透明 glass 色阶 + 受光棱边，不用实心焦糖。
+                    background: GlassPanel {
+                        color: {
+                            if (!pomodoroStartButton.enabled)
+                                return Theme.border
+                            if (pomodoroStartButton.pressed || pomodoroStartButton.down)
+                                return Theme.glassAccent
+                            if (pomodoroStartButton.hovered)
+                                return Theme.glassHover
+                            return Theme.glassCard
+                        }
+                        panelShadowEnabled: false
+
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: 160
+                                easing.type: Easing.OutQuad
+                            }
+                        }
                     }
 
                     contentItem: Text {
                         text: pomodoroStartButton.text
-                        color: pomodoroStartButton.enabled ? Theme.surface : Theme.inkMuted
-                        font.pixelSize: Theme.fontLg
+                        textFormat: Text.PlainText
+                        color: pomodoroStartButton.enabled ? Theme.accentInk : Theme.inkMuted
+                        font.pixelSize: Theme.fontMd
+                        font.weight: Font.Medium
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
@@ -796,19 +815,31 @@ Item {
                     id: startBreakButton
                     visible: root.state === "workDone"
                     text: "开始休息"
-                    implicitWidth: 112
-                    implicitHeight: 40
+                    // 同主按钮规格，避免「开始休息」仍是实心焦糖块。
+                    implicitWidth: 104
+                    implicitHeight: 34
                     onClicked: root.startBreak()
 
-                    background: Rectangle {
-                        color: Theme.accent
-                        radius: Theme.radiusMd
+                    background: GlassPanel {
+                        color: startBreakButton.pressed || startBreakButton.down
+                               ? Theme.glassAccent
+                               : (startBreakButton.hovered ? Theme.glassHover : Theme.glassCard)
+                        panelShadowEnabled: false
+
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: 160
+                                easing.type: Easing.OutQuad
+                            }
+                        }
                     }
 
                     contentItem: Text {
                         text: startBreakButton.text
-                        color: Theme.surface
-                        font.pixelSize: Theme.fontLg
+                        textFormat: Text.PlainText
+                        color: Theme.accentInk
+                        font.pixelSize: Theme.fontMd
+                        font.weight: Font.Medium
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }

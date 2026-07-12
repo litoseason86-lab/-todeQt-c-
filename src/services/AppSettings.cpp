@@ -11,6 +11,7 @@ const auto kRolloverIgnoredDateKey = QStringLiteral("rollover/lastIgnoredDate");
 const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
 const auto kNicknameKey = QStringLiteral("profile/nickname");
+const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
 }
 
 AppSettings* AppSettings::instance()
@@ -197,4 +198,21 @@ void AppSettings::setNickname(const QString& name)
     m_settings->setValue(kNicknameKey, normalized);
     m_settings->sync();
     emit nicknameChanged();
+}
+
+bool AppSettings::sidebarVisible() const
+{
+    return m_settings->value(kSidebarVisibleKey, true).toBool();
+}
+
+void AppSettings::setSidebarVisible(bool visible)
+{
+    if (sidebarVisible() == visible) {
+        return;
+    }
+
+    // 侧栏显隐是即时布局偏好，落盘避免下次启动又弹出已收起的侧栏。
+    m_settings->setValue(kSidebarVisibleKey, visible);
+    m_settings->sync();
+    emit sidebarVisibleChanged();
 }

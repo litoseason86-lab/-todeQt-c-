@@ -19,6 +19,8 @@ class AppSettings : public QObject
     Q_PROPERTY(QString backgroundTheme READ backgroundTheme WRITE setBackgroundTheme NOTIFY backgroundThemeChanged)
     Q_PROPERTY(int dayStartHour READ dayStartHour WRITE setDayStartHour NOTIFY dayStartHourChanged)
     Q_PROPERTY(QString nickname READ nickname WRITE setNickname NOTIFY nicknameChanged)
+    // 侧栏展开态：跨启动记忆，与 macOS 应用侧边栏习惯一致。
+    Q_PROPERTY(bool sidebarVisible READ sidebarVisible WRITE setSidebarVisible NOTIFY sidebarVisibleChanged)
 
 public:
     static AppSettings* instance();
@@ -44,6 +46,8 @@ public:
     void setDayStartHour(int hour);
     QString nickname() const;
     void setNickname(const QString& name);
+    bool sidebarVisible() const;
+    void setSidebarVisible(bool visible);
 
 signals:
     void lastModeChanged();
@@ -56,6 +60,7 @@ signals:
     void backgroundThemeChanged();
     void dayStartHourChanged();
     void nicknameChanged();
+    void sidebarVisibleChanged();
 
 private:
     static int normalizeDayStartHour(int hour);

@@ -212,20 +212,73 @@ TestCase {
 
     function test_filter_modes() {
         taskManager.todayTasksData = [
-            { id: 1, title: "未完成任务", completed: false },
-            { id: 2, title: "已完成任务", completed: true }
+            { id: 1, title: "未完成任务", completed: false, categoryText: "学习" },
+            { id: 2, title: "已完成任务", completed: true, categoryText: "工作" },
+            { id: 3, title: "另一件完成", completed: true, categoryText: "" }
         ]
 
         var view = createTemporaryObject(dashboardComponent, testCase)
         verify(view)
-        compare(view.filteredTasks.length, 2)
+        compare(view.filteredTasks.length, 3)
+        compare(view.completedTaskCount, 2)
+        compare(view.panelTaskCount, 3)
+
+        var countBadge = findChild(view, "dashboardTaskCount")
+        verify(countBadge)
+        compare(countBadge.text, "3")
 
         view.filterMode = "done"
-        compare(view.filteredTasks.length, 1)
+        compare(view.doneFilter, true)
+        compare(view.filteredTasks.length, 2)
         compare(Number(view.filteredTasks[0].id), 2)
+        compare(view.panelTaskCount, 2)
+        compare(countBadge.text, "2")
+
+        // 已完成摘要：完成数 / 总数 · 完成率。
+        // 注意：createTemporaryObject 的可见树可能整树 visible=false，
+        // 所以只断言文案与业务属性，不读子项 .visible。
+        var summary = findChild(view, "dashboardDoneSummary")
+        verify(summary)
+        verify(summary.text.indexOf("已完成 2 / 3") >= 0)
+        verify(summary.text.indexOf("67%") >= 0)
+
+        // 紧凑只读：应有完成徽章节点；列表项 compact + 关闭编辑/开始专注。
+        verify(findChild(view, "taskCompletedBadge") !== null)
+        function findFirstTaskItem(item) {
+            if (!item)
+                return null
+            if (item.taskId !== undefined && item.compact !== undefined
+                    && item.showEditDelete !== undefined && item.taskTitle !== undefined
+                    && item.taskId > 0)
+                return item
+            var kids = item.children ? item.children.length : 0
+            for (var i = 0; i < kids; i++) {
+                var found = findFirstTaskItem(item.children[i])
+                if (found)
+                    return found
+            }
+            return null
+        }
+        var taskItem = findFirstTaskItem(view)
+        verify(taskItem !== null, "应能找到仪表盘任务行")
+        compare(taskItem.compact, true)
+        compare(taskItem.showEditDelete, false)
+        compare(taskItem.showStartFocus, false)
+        compare(taskItem.taskCompleted, true)
 
         // 仪表盘只读面板：不提供快速添加入口。
         compare(findChild(view, "dashboardQuickAddField"), null)
+
+        // 切回全部：角标恢复总数，行回到可编辑规格。
+        view.filterMode = "all"
+        compare(view.doneFilter, false)
+        compare(countBadge.text, "3")
+        wait(40)
+        taskItem = findFirstTaskItem(view)
+        verify(taskItem !== null)
+        compare(taskItem.compact, false)
+        compare(taskItem.showEditDelete, true)
+        compare(taskItem.showStartFocus, true)
     }
 
     function test_start_first_pending_task() {

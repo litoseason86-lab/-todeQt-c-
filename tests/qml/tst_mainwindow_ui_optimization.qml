@@ -85,6 +85,7 @@ TestCase {
         property int dayStartHour: 4
         property string rolloverIgnoredDate: ""
         property string backgroundTheme: "jiangnan"
+        property bool sidebarVisible: true
     }
 
     QtObject {
@@ -191,7 +192,40 @@ TestCase {
         mainWindow.isSwitching = false;
         mainWindow.opacity = 1.0;
         appSettings.reduceMotion = false;
+        appSettings.sidebarVisible = true;
         wait(20);
+    }
+
+    function test_sidebarCollapseAndRevealAppleToggle() {
+        var shell = findChild(mainWindow, "sidebarShell");
+        var collapseBtn = findChild(mainWindow, "sidebarCollapseButton");
+        var revealBtn = findChild(mainWindow, "sidebarRevealButton");
+        var frost = findChild(mainWindow, "sidebarFrost");
+
+        verify(shell !== null);
+        verify(collapseBtn !== null);
+        verify(revealBtn !== null);
+        verify(frost !== null);
+
+        // 初始展开：壳宽 208，悬浮展开钮不可点。
+        compare(mainWindow.sidebarVisible, true);
+        compare(shell.width, 208);
+        compare(revealBtn.enabled, false);
+
+        // 点侧栏内收起钮 → 布局收窄 + 设置落盘语义。
+        appSettings.reduceMotion = true; // 瞬时，避免等动画
+        mainWindow.setSidebarVisible(false);
+        tryCompare(mainWindow, "sidebarVisible", false, 300);
+        tryCompare(shell, "width", 0, 300);
+        compare(appSettings.sidebarVisible, false);
+        tryCompare(revealBtn, "enabled", true, 300);
+
+        // 点悬浮钮展开。
+        mainWindow.setSidebarVisible(true);
+        tryCompare(mainWindow, "sidebarVisible", true, 300);
+        tryCompare(shell, "width", 208, 300);
+        compare(appSettings.sidebarVisible, true);
+        compare(revealBtn.enabled, false);
     }
 
     function test_mainContentBackgroundTransparentAndDividerUnchanged() {
