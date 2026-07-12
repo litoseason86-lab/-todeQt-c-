@@ -37,14 +37,6 @@ Item {
     // 生产默认读系统时间；测试注入固定时间，避免逻辑日用例依赖真实日期。
     property var nowProvider: null
 
-    // 实时专注秒数统一口径（与今日任务页共用 FocusLiveSeconds，禁止各自拼接）。
-    readonly property FocusLiveSeconds dashboardLiveSeconds: FocusLiveSeconds {
-        // qmllint disable unqualified
-        timerRef: typeof focusTimer !== "undefined" ? focusTimer : null
-        // qmllint enable unqualified
-        baseSeconds: Number(root.todayStats.totalDuration || 0)
-    }
-
     readonly property var filteredTasks: {
         if (root.filterMode === "done") {
             return root.tasks.filter(function(task) { return Boolean(task.completed) })
@@ -388,21 +380,6 @@ Item {
                 }
             }
 
-            FocusGoalStrip {
-                objectName: "dashboardGoalCard"
-
-                Layout.fillWidth: true
-                // 统计卡下方通栏只读：设置/修改去今日任务页；
-                // 完成数已有独立统计卡，条右端计数关闭避免重复。
-                editable: false
-                showDoneCount: false
-                totalSeconds: dashboardLiveSeconds.liveSeconds
-                goalMinutes: root.dailyFocusGoalMinutes
-                reduceMotion: root.settingsRef ? Boolean(root.settingsRef.reduceMotion) : false
-
-                onSetupRequested: root.todayPageRequested()
-            }
-
             Label {
                 Layout.fillWidth: true
                 visible: root.loadError.length > 0
@@ -622,9 +599,13 @@ Item {
             settingsRef: root.settingsRef
             wallpaperRef: root.wallpaperRef
             sessionCount: Number(root.todayStats.sessionCount || 0)
+            todayFocusSeconds: Number(root.todayStats.totalDuration || 0)
+            goalMinutes: root.dailyFocusGoalMinutes
 
             onOpenFocusRequested: root.focusPageRequested()
             onStartRequested: root.startFirstPendingTask()
+            // 仪表盘不承担目标设置：引导链接直接送用户去今日任务页。
+            onGoalSetupRequested: root.todayPageRequested()
         }
     }
 
