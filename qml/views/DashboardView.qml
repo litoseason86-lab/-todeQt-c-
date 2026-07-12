@@ -559,6 +559,7 @@ Item {
             settingsRef: root.settingsRef
             wallpaperRef: root.wallpaperRef
             sessionCount: Number(root.todayStats.sessionCount || 0)
+            todayFocusSeconds: Number(root.todayStats.totalDuration || 0)
 
             onOpenFocusRequested: root.focusPageRequested()
             onStartRequested: root.startFirstPendingTask()

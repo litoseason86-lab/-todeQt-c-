@@ -12,6 +12,7 @@ const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
 const auto kNicknameKey = QStringLiteral("profile/nickname");
 const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
+const auto kDailyFocusGoalHoursKey = QStringLiteral("focus/dailyGoalHours");
 }
 
 AppSettings* AppSettings::instance()
@@ -215,4 +216,28 @@ void AppSettings::setSidebarVisible(bool visible)
     m_settings->setValue(kSidebarVisibleKey, visible);
     m_settings->sync();
     emit sidebarVisibleChanged();
+}
+
+int AppSettings::normalizeDailyFocusGoalHours(int hours)
+{
+    // 越界代表配置损坏，回默认 3 小时；不 clamp，避免悄悄改变用户目标口径。
+    return (hours >= 1 && hours <= 12) ? hours : 3;
+}
+
+int AppSettings::dailyFocusGoalHours() const
+{
+    return normalizeDailyFocusGoalHours(
+        m_settings->value(kDailyFocusGoalHoursKey, 3).toInt());
+}
+
+void AppSettings::setDailyFocusGoalHours(int hours)
+{
+    const int normalized = normalizeDailyFocusGoalHours(hours);
+    if (dailyFocusGoalHours() == normalized) {
+        return;
+    }
+
+    m_settings->setValue(kDailyFocusGoalHoursKey, normalized);
+    m_settings->sync();
+    emit dailyFocusGoalHoursChanged();
 }

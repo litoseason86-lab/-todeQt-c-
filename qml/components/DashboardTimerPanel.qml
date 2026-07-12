@@ -3,7 +3,6 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
-import "../views/DashboardFormat.js" as DashboardFormat
 
 // 仪表盘专注面板：重要控制组件，是仪表盘唯一做“背景采样毛玻璃”的地方。
 // 液态玻璃四层：采样模糊(壁纸静态,代价可控) → 着色 → 受光棱边 → 内容；
@@ -52,12 +51,18 @@ Item {
         return 1
     }
 
-    readonly property var tips: [
-        "专注不是一鼓作气，而是无数个 25 分钟的积累。",
-        "开始前把手机放到视线之外，分心会少一半。",
-        "休息时离开屏幕，眼睛和思路都会感谢你。",
-        "任务太大就拆小，小到一个番茄能推进为止。"
-    ]
+    // 今日已落库的专注秒数（由 DashboardView 注入统计口径）。
+    property int todayFocusSeconds: 0
+
+    // 实时总时长 = 落库累计 + 进行中会话秒数；休息阶段不累计，与统计口径一致。
+    // 显式经由 timerRef.elapsedSeconds 读取，tick 信号才能驱动逐秒走字。
+    readonly property int liveFocusSeconds: {
+        var base = Math.max(0, Number(root.todayFocusSeconds || 0))
+        if (root.timerRef && (root.phase === 1 || (root.phase === 0 && root.hasSession))) {
+            base += Math.max(0, Number(root.timerRef.elapsedSeconds || 0))
+        }
+        return base
+    }
 
     // 采样区域 = 面板在壁纸坐标系里的矩形。mapToItem 本身不产生绑定依赖，
     // 这里显式引用面板与壁纸的几何属性，窗口缩放/布局变化时才会重算。
@@ -333,41 +338,25 @@ Item {
             }
         }
 
-        Item {
-            Layout.fillHeight: true
-        }
+        FocusGoalCard {
+            objectName: "dashboardGoalCard"
 
-        GlassPanel {
             Layout.fillWidth: true
-            implicitHeight: tipColumn.implicitHeight + Theme.space24
-            color: Theme.glassAccent
-            specularEnabled: false
-            panelShadowEnabled: false
+            Layout.topMargin: Theme.space4
+            totalSeconds: root.liveFocusSeconds
+            goalHours: root.settingsRef
+                       ? Math.max(1, Number(root.settingsRef.dailyFocusGoalHours) || 3)
+                       : 3
 
-            ColumnLayout {
-                id: tipColumn
-
-                anchors.fill: parent
-                anchors.margins: Theme.space12
-                spacing: Theme.space4
-
-                Text {
-                    text: "✦ 专注小贴士"
-                    textFormat: Text.PlainText
-                    font.pixelSize: Theme.fontSm
-                    font.weight: Font.Bold
-                    color: Theme.accentInk
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: DashboardFormat.dailyPick(root.tips, new Date())
-                    textFormat: Text.PlainText
-                    font.pixelSize: Theme.fontSm
-                    color: Theme.inkSoft
-                    wrapMode: Text.WordWrap
+            onGoalAdjusted: function (hours) {
+                if (root.settingsRef) {
+                    root.settingsRef.dailyFocusGoalHours = hours
                 }
             }
+        }
+
+        Item {
+            Layout.fillHeight: true
         }
     }
 }

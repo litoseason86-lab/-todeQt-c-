@@ -21,6 +21,8 @@ class AppSettings : public QObject
     Q_PROPERTY(QString nickname READ nickname WRITE setNickname NOTIFY nicknameChanged)
     // 侧栏展开态：跨启动记忆，与 macOS 应用侧边栏习惯一致。
     Q_PROPERTY(bool sidebarVisible READ sidebarVisible WRITE setSidebarVisible NOTIFY sidebarVisibleChanged)
+    // 每日专注目标（小时）：仪表盘目标进度卡使用。
+    Q_PROPERTY(int dailyFocusGoalHours READ dailyFocusGoalHours WRITE setDailyFocusGoalHours NOTIFY dailyFocusGoalHoursChanged)
 
 public:
     static AppSettings* instance();
@@ -48,6 +50,8 @@ public:
     void setNickname(const QString& name);
     bool sidebarVisible() const;
     void setSidebarVisible(bool visible);
+    int dailyFocusGoalHours() const;
+    void setDailyFocusGoalHours(int hours);
 
 signals:
     void lastModeChanged();
@@ -61,9 +65,11 @@ signals:
     void dayStartHourChanged();
     void nicknameChanged();
     void sidebarVisibleChanged();
+    void dailyFocusGoalHoursChanged();
 
 private:
     static int normalizeDayStartHour(int hour);
+    static int normalizeDailyFocusGoalHours(int hours);
 
     QSettings* m_settings = nullptr;
 };

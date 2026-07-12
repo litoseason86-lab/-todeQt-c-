@@ -410,6 +410,7 @@ private slots:
     void appSettingsSlimClockFontRoundTrip();
     void appSettingsRolloverIgnoredDateRoundTrip();
     void appSettingsNicknameTrimsAndRoundTrips();
+    void appSettingsDailyFocusGoalHoursNormalizeAndRoundTrip();
     void appSettingsSidebarVisibleRoundTrip();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void appSettingsDayStartHourNormalizeAndPersist();
@@ -674,6 +675,32 @@ void ServiceTests::appSettingsSidebarVisibleRoundTrip()
 
     AppSettings reloaded(path);
     QCOMPARE(reloaded.sidebarVisible(), false);
+}
+
+void ServiceTests::appSettingsDailyFocusGoalHoursNormalizeAndRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.dailyFocusGoalHours(), 3);
+
+        QSignalSpy spy(&settings, &AppSettings::dailyFocusGoalHoursChanged);
+        settings.setDailyFocusGoalHours(5);
+        QCOMPARE(settings.dailyFocusGoalHours(), 5);
+        QCOMPARE(spy.count(), 1);
+
+        // 越界写入回默认 3，而不是被 clamp 成边界值。
+        settings.setDailyFocusGoalHours(0);
+        QCOMPARE(settings.dailyFocusGoalHours(), 3);
+        settings.setDailyFocusGoalHours(24);
+        QCOMPARE(settings.dailyFocusGoalHours(), 3);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.dailyFocusGoalHours(), 3);
 }
 
 void ServiceTests::appSettingsBackgroundThemeDefaultAndRoundTrip()

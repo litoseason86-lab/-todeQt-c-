@@ -118,6 +118,7 @@ TestCase {
         property int breakMinutes: 5
         property int lastMode: 0
         property string nickname: ""
+        property int dailyFocusGoalHours: 3
     }
 
     Component {
@@ -310,6 +311,81 @@ TestCase {
 
         SignalSpy {
         }
+    }
+
+    // —— FocusGoalCard 目标进度 ——
+
+    Component {
+        id: goalCardComponent
+
+        FocusGoalCard {
+            width: 260
+        }
+    }
+
+    function test_goal_card_clock_and_percent() {
+        var card = createTemporaryObject(goalCardComponent, testCase,
+                                         { totalSeconds: 2 * 3600 + 35 * 60 + 45, goalHours: 3 })
+        verify(card)
+
+        compare(card.clockText, "02:35:45")
+        // 9345 / 10800 = 86.5% 向下取整。
+        compare(card.percent, 86)
+        compare(card.goalReached, false)
+
+        card.totalSeconds = 3 * 3600 + 1
+        compare(card.percent, 100)
+        compare(card.goalReached, true)
+
+        var pctText = findChild(card, "focusGoalPercent")
+        verify(pctText)
+        compare(pctText.text, "目标达成")
+
+        // 负数与零目标都不能出 NaN/越界。
+        card.totalSeconds = -5
+        compare(card.clockText, "00:00:00")
+        compare(card.percent, 0)
+    }
+
+    function test_goal_card_inline_editing_emits_adjustment() {
+        var card = createTemporaryObject(goalCardComponent, testCase, { goalHours: 3 })
+        verify(card)
+        compare(card.editing, false)
+
+        var adjustSpy = createTemporaryObject(spyComponent, testCase,
+                                              { target: card, signalName: "goalAdjusted" })
+        card.editing = true
+        var stepper = findChild(card, "focusGoalStepper")
+        verify(stepper)
+        stepper.adjusted(5)
+        compare(adjustSpy.count, 1)
+        compare(Number(adjustSpy.signalArguments[0][0]), 5)
+    }
+
+    function test_timer_panel_live_focus_seconds() {
+        var panel = createTemporaryObject(timerPanelComponent, testCase,
+                                          { todayFocusSeconds: 600 })
+        verify(panel)
+
+        // 待机：只有落库累计。
+        compare(panel.liveFocusSeconds, 600)
+
+        // 番茄工作阶段：叠加进行中秒数。
+        focusTimer.phase = 1
+        focusTimer.elapsedSeconds = 300
+        compare(panel.liveFocusSeconds, 900)
+
+        // 休息阶段不累计。
+        focusTimer.phase = 2
+        compare(panel.liveFocusSeconds, 600)
+
+        // 目标调整回写设置。
+        var card = findChild(panel, "dashboardGoalCard")
+        verify(card)
+        card.goalAdjusted(6)
+        compare(appSettings.dailyFocusGoalHours, 6)
+        appSettings.dailyFocusGoalHours = 3
+        focusTimer.elapsedSeconds = 0
     }
 
     // —— DashboardTimerPanel 状态机 ——

@@ -8,8 +8,9 @@ import "views"
 Item {
     id: root
 
-    property string currentView: "today"
-    property string pendingView: "today"
+    // 默认落地页为仪表盘：一屏看全今日概览，任务/专注一步可达。
+    property string currentView: "dashboard"
+    property string pendingView: "dashboard"
     // 淡入淡出期间只保留最后一次视图请求，避免动画队列堆积。
     property string queuedView: ""
     property bool isSwitching: false
