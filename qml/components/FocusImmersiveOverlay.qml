@@ -351,23 +351,39 @@ Item {
                 id: immersivePrimaryButton
                 objectName: "immersivePrimaryButton"
 
-                implicitWidth: 112
-                implicitHeight: 40
+                // 与页面内「开始专注」同尺寸；暂停/继续/开始休息也走同一玻璃主按钮。
+                implicitWidth: 104
+                implicitHeight: 34
                 enabled: root.primaryButtonEnabled
 
                 onClicked: root.triggerPrimary()
 
-                background: Rectangle {
-                    color: immersivePrimaryButton.enabled
-                           ? (root.completionState ? Theme.accent : Theme.inkSoft)
-                           : Theme.border
-                    radius: Theme.radiusMd
+                background: GlassPanel {
+                    color: {
+                        if (!immersivePrimaryButton.enabled)
+                            return Theme.border
+                        if (immersivePrimaryButton.pressed || immersivePrimaryButton.down)
+                            return Theme.glassAccent
+                        if (immersivePrimaryButton.hovered)
+                            return Theme.glassHover
+                        return Theme.glassCard
+                    }
+                    panelShadowEnabled: false
+
+                    Behavior on color {
+                        ColorAnimation {
+                            duration: 160
+                            easing.type: Easing.OutQuad
+                        }
+                    }
                 }
 
                 contentItem: Text {
                     text: root.primaryButtonText
-                    color: immersivePrimaryButton.enabled ? Theme.surface : Theme.inkMuted
-                    font.pixelSize: Theme.fontLg
+                    textFormat: Text.PlainText
+                    color: immersivePrimaryButton.enabled ? Theme.accentInk : Theme.inkMuted
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
@@ -377,20 +393,30 @@ Item {
                 id: immersiveSecondaryButton
                 objectName: "immersiveSecondaryButton"
 
-                implicitWidth: 112
-                implicitHeight: 40
+                implicitWidth: 104
+                implicitHeight: 34
 
                 onClicked: root.triggerSecondary()
 
-                background: Rectangle {
-                    color: root.completionState ? Theme.inkSoft : Theme.accent
-                    radius: Theme.radiusMd
+                // 次按钮：透明玻璃底，悬停才加实；与仪表盘「结束」一致。
+                background: GlassPanel {
+                    color: immersiveSecondaryButton.hovered ? Theme.glassHover : Qt.rgba(1, 1, 1, 0)
+                    specularEnabled: false
+                    panelShadowEnabled: false
+
+                    Behavior on color {
+                        ColorAnimation {
+                            duration: 160
+                            easing.type: Easing.OutQuad
+                        }
+                    }
                 }
 
                 contentItem: Text {
                     text: root.secondaryButtonText
-                    color: Theme.surface
-                    font.pixelSize: Theme.fontLg
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontMd
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }

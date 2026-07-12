@@ -13,6 +13,16 @@
         <file alias="qml/views/MonthGoalView.qml">../qml/views/MonthGoalView.qml</file>
         <file alias="qml/views/MonthGoalFormat.js">../qml/views/MonthGoalFormat.js</file>
         <file alias="qml/views/CountdownView.qml">../qml/views/CountdownView.qml</file>
+        <file alias="qml/views/DashboardView.qml">../qml/views/DashboardView.qml</file>
+        <file alias="qml/views/DashboardFormat.js">../qml/views/DashboardFormat.js</file>
+        <file alias="qml/components/GlassPanel.qml">../qml/components/GlassPanel.qml</file>
+        <file alias="qml/components/GlassToolbarButton.qml">../qml/components/GlassToolbarButton.qml</file>
+        <file alias="qml/components/LiquidGlassBackdrop.qml">../qml/components/LiquidGlassBackdrop.qml</file>
+        <file alias="qml/components/FocusGoalCard.qml">../qml/components/FocusGoalCard.qml</file>
+        <file alias="qml/components/DailyFocusGoalEditor.qml">../qml/components/DailyFocusGoalEditor.qml</file>
+        <file alias="qml/components/FocusLiveSeconds.qml">../qml/components/FocusLiveSeconds.qml</file>
+        <file alias="qml/components/FocusGoalStrip.qml">../qml/components/FocusGoalStrip.qml</file>
+        <file alias="qml/components/DashboardTimerPanel.qml">../qml/components/DashboardTimerPanel.qml</file>
         <file alias="qml/components/BackgroundWallpaper.qml">../qml/components/BackgroundWallpaper.qml</file>
         <file alias="qml/components/SettingsDialog.qml">../qml/components/SettingsDialog.qml</file>
         <file alias="qml/components/Sidebar.qml">../qml/components/Sidebar.qml</file>

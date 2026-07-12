@@ -604,6 +604,87 @@ int StatisticsService::countTotalTasks(const QDate& date) const
     return query.value(0).toInt();
 }
 
+int StatisticsService::getTotalFocusDuration() const
+{
+    // 全量累计不带日期条件：逻辑日只影响“归到哪一天”，不影响历史总量。
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to get total focus duration: database is not open";
+        return 0;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT COALESCE(SUM(duration), 0) FROM focus_sessions "
+        "WHERE end_time IS NOT NULL "
+        "AND duration IS NOT NULL "
+        "AND duration >= :minDuration"));
+    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
+
+    if (!query.exec() || !query.next()) {
+        qWarning() << "Failed to get total focus duration:" << query.lastError().text();
+        return 0;
+    }
+
+    return query.value(0).toInt();
+}
+
+int StatisticsService::getStreakDays() const
+{
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to get streak days: database is not open";
+        return 0;
+    }
+
+    // 只取“有有效专注的唯一逻辑日”倒序，在内存里从今天往回数连续段；
+    // 天数级数据量很小，避免在 SQL 里写递归连击查询。
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT DISTINCT date(start_time, :dayShift) AS focus_date "
+        "FROM focus_sessions "
+        "WHERE end_time IS NOT NULL "
+        "AND duration IS NOT NULL "
+        "AND duration >= :minDuration "
+        "ORDER BY focus_date DESC"));
+    query.bindValue(QStringLiteral(":dayShift"),
+                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
+    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to get streak days:" << query.lastError().text();
+        return 0;
+    }
+
+    int streak = 0;
+    QDate expected = LogicalDay::today(AppSettings::instance()->dayStartHour());
+    while (query.next()) {
+        const QDate date = QDate::fromString(query.value(0).toString(), Qt::ISODate);
+        if (!date.isValid() || date > expected) {
+            // 晚于今天的记录只可能来自时钟回拨等异常数据，跳过不参与连击。
+            continue;
+        }
+
+        if (date == expected) {
+            ++streak;
+            expected = expected.addDays(-1);
+            continue;
+        }
+
+        if (streak == 0 && date == expected.addDays(-1)) {
+            // 今天还没专注不算断（这一天尚未结束），连击从昨天开始回溯。
+            ++streak;
+            expected = date.addDays(-1);
+            continue;
+        }
+
+        // 日期出现断档，连击到此为止。
+        break;
+    }
+
+    return streak;
+}
+
 QList<QDate> StatisticsService::getUniqueFocusDates(const QDate& startDate, const QDate& endDate) const
 {
     QList<QDate> dates;

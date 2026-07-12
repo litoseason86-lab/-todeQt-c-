@@ -1,9 +1,10 @@
 import QtQuick
-import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
 
-Rectangle {
+// 与页面其它玻璃卡同一基底（glassCard + 玻璃描边 + 受光棱边 + 柔影），
+// 不再自带暖色渐变，避免在冷色壁纸上显得发黄突兀。
+GlassPanel {
     id: root
 
     property var primaryGoal: null
@@ -13,28 +14,8 @@ Rectangle {
     signal addRequested()
 
     height: 68
-    radius: Theme.radiusLg
-    border.color: Theme.border
-    border.width: 1
     scale: hitArea.containsMouse ? 1.01 : 1.0
     transformOrigin: Item.Center
-
-    gradient: Gradient {
-        orientation: Gradient.Horizontal
-        GradientStop { position: 0.0; color: Qt.rgba(240 / 255, 230 / 255, 210 / 255, 0.55) }
-        GradientStop { position: 1.0; color: Qt.rgba(250 / 255, 246 / 255, 238 / 255, 0.40) }
-    }
-
-    layer.enabled: true
-    layer.effect: MultiEffect {
-        autoPaddingEnabled: true
-        shadowEnabled: true
-        shadowColor: Theme.shadow
-        shadowOpacity: 0.08
-        shadowBlur: 0.14
-        shadowHorizontalOffset: 0
-        shadowVerticalOffset: 2
-    }
 
     function dayText() {
         if (!root.hasGoal) {

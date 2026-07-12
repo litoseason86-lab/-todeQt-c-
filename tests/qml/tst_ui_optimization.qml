@@ -154,6 +154,11 @@ TestCase {
         width: 620
         height: 520
         visible: false
+        // 固定“逻辑今天”为周三正午：过去/未来列在任何真实日期都可覆盖。
+        // 此前依赖真实日历——周日没有“未来列”、周一没有“过去列”，用例必挂。
+        logicalNowProvider: function () {
+            return new Date(2026, 6, 8, 12, 0, 0)
+        }
     }
 
     SignalSpy {
@@ -524,7 +529,7 @@ TestCase {
     }
 
     function test_weekPlanViewBlocksAddingTaskForPastDate() {
-        weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
+        weekPlanView.weekStart = weekPlanView.mondayOf(weekPlanView.logicalToday);
         var originalPendingDate = weekPlanView.pendingAddDate;
         var blockedIndex = pastWeekIndex();
 
@@ -534,7 +539,7 @@ TestCase {
     }
 
     function test_weekPlanViewHidesPastTaskExecutionActions() {
-        weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
+        weekPlanView.weekStart = weekPlanView.mondayOf(weekPlanView.logicalToday);
         var blockedIndex = pastWeekIndex();
         taskManager.fakeWeekTasks = [{
                 id: 302,
@@ -560,7 +565,7 @@ TestCase {
     }
 
     function test_weekPlanViewShowsFuturePlanningButNotExecutionActions() {
-        weekPlanView.weekStart = weekPlanView.mondayOf(new Date());
+        weekPlanView.weekStart = weekPlanView.mondayOf(weekPlanView.logicalToday);
         var futureIndex = futureWeekIndex();
         taskManager.fakeWeekTasks = [{
                 id: 303,
@@ -592,8 +597,12 @@ TestCase {
         verify(focusButtonBackground !== null);
         verify(focusButtonLabel !== null);
         compare(focusButton.implicitWidth, 104);
-        compare(focusButton.implicitHeight, 40);
-        compare(focusButtonBackground.radius, 6);
+        // 与仪表盘主按钮统一 34 高；圆角走 GlassPanel 的 radiusLg。
+        compare(focusButton.implicitHeight, 34);
+        compare(focusButtonBackground.radius, Theme.radiusLg);
+        compare(focusButtonBackground.panelShadowEnabled, false);
+        verify(Qt.colorEqual(focusButtonBackground.color, Theme.glassCard));
+        verify(Qt.colorEqual(focusButtonLabel.color, Theme.accentInk));
 
         compare(focusButton.text, "开始专注");
         compare(focusButton.enabled, true);
@@ -607,8 +616,32 @@ TestCase {
     }
 
     function test_taskItemButtonsUsePressedDepthAndWarmShadow() {
-        verifyButtonPressedFeedback("focusButton", "focusButtonBackground", "focusButtonLabel", "专注按钮");
+        // 开始专注改为玻璃反馈；删除仍保留按下位移 + 暖色阴影深度。
+        verifyFocusButtonGlassFeedback();
         verifyButtonPressedFeedback("taskDeleteButton", "taskDeleteButtonBackground", "taskDeleteButtonLabel", "删除按钮");
+    }
+
+    function verifyFocusButtonGlassFeedback() {
+        var button = findChild(taskItem, "focusButton");
+        var background = findChild(taskItem, "focusButtonBackground");
+        var label = findChild(taskItem, "focusButtonLabel");
+
+        verify(button !== null, "专注按钮需要存在");
+        verify(background !== null, "专注按钮需要存在玻璃背景");
+        verify(label !== null, "专注按钮需要存在文字");
+        compare(background.panelShadowEnabled, false);
+        verify(Qt.colorEqual(background.color, Theme.glassCard), "专注按钮普通态应使用 glassCard");
+        verify(Qt.colorEqual(label.color, Theme.accentInk), "专注按钮字色应为 accentInk");
+
+        button.down = true;
+        tryCompare(button, "down", true, 220);
+        wait(180);
+        verify(Qt.colorEqual(background.color, Theme.glassAccent), "专注按钮按下应使用 glassAccent");
+
+        button.down = false;
+        tryCompare(button, "down", false, 220);
+        wait(180);
+        verify(Qt.colorEqual(background.color, Theme.glassCard), "专注按钮释放后应回到 glassCard");
     }
 
     function verifyButtonPressedFeedback(buttonName, backgroundName, labelName, context) {
@@ -718,8 +751,7 @@ TestCase {
         var addButton = findChild(todayTaskView, "todayAddButton");
         var addButtonBackground = findChild(todayTaskView, "todayAddButtonBackground");
         var addButtonLabel = findChild(todayTaskView, "todayAddButtonLabel");
-        var focusStatCard = findChild(todayTaskView, "todayFocusStatCard");
-        var completionStatCard = findChild(todayTaskView, "todayCompletionStatCard");
+        var goalStrip = findChild(todayTaskView, "todayGoalCard");
         var taskListContainer = findChild(todayTaskView, "todayTaskListContainer");
         var emptyStateCard = findChild(todayTaskView, "todayEmptyStateCard");
         var emptyStateIcon = findChild(todayTaskView, "todayEmptyStateIcon");
@@ -728,8 +760,7 @@ TestCase {
         verify(addButton !== null);
         verify(addButtonBackground !== null);
         verify(addButtonLabel !== null);
-        verify(focusStatCard !== null);
-        verify(completionStatCard !== null);
+        verify(goalStrip !== null);
         verify(taskListContainer !== null);
         verify(emptyStateCard !== null);
         verify(emptyStateIcon !== null);
@@ -740,12 +771,11 @@ TestCase {
         compare(addButtonBackground.border.width, 0);
         compare(addButtonLabel.font.weight, Font.Medium);
 
-        compare(focusStatCard.radius, 8);
-        compare(completionStatCard.radius, 8);
-        compare(focusStatCard.layer.enabled, true);
-        compare(completionStatCard.layer.enabled, true);
-        verify(focusStatCard.layer.effect !== null);
-        verify(completionStatCard.layer.effect !== null);
+        // 顶部统计行已撤销：目标功能收进贴底状态条，完成数并入条右端。
+        compare(goalStrip.radius, Theme.radiusLg);
+        compare(goalStrip.editable, true);
+        var doneCount = findChild(todayTaskView, "stripDoneCount");
+        verify(doneCount !== null);
 
         compare(taskListContainer.radius, 8);
         compare(taskListContainer.layer.enabled, true);

@@ -409,6 +409,9 @@ private slots:
     void appSettingsReduceMotionRoundTrip();
     void appSettingsSlimClockFontRoundTrip();
     void appSettingsRolloverIgnoredDateRoundTrip();
+    void appSettingsNicknameTrimsAndRoundTrips();
+    void appSettingsDailyFocusGoalMinutesByDate();
+    void appSettingsSidebarVisibleRoundTrip();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void appSettingsDayStartHourNormalizeAndPersist();
     void appSettingsDayStartHourRejectsCorruptIniValue();
@@ -442,6 +445,9 @@ private slots:
     void getMonthTasksRejectsInvalidMonth();
     void getEffectiveDaysFiltersInvalidSessions();
     void getFocusSessionCountCountsOnlyValidFinishedSessions();
+    void getStreakDaysCountsBackFromLogicalToday();
+    void getStreakDaysStartsFromYesterdayWhenTodayHasNoFocus();
+    void getTotalFocusDurationSumsOnlyValidSessions();
     void getMonthStatsUsesCurrentMonthAndTaskDate();
     void getMonthStatsUsesSpecifiedMonthAndRejectsInvalidYearMonth();
     void getMonthComparisonHandlesPreviousMonthAndInvalidYearMonth();
@@ -620,6 +626,94 @@ void ServiceTests::appSettingsRolloverIgnoredDateRoundTrip()
 
     AppSettings reloaded(path);
     QCOMPARE(reloaded.rolloverIgnoredDate(), QStringLiteral("2026-07-06"));
+}
+
+void ServiceTests::appSettingsNicknameTrimsAndRoundTrips()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.nickname(), QString());
+
+        QSignalSpy spy(&settings, &AppSettings::nicknameChanged);
+        settings.setNickname(QStringLiteral("  zjk  "));
+        // 存储的是去空白后的昵称，问候语拼接不会出现悬空标点。
+        QCOMPARE(settings.nickname(), QStringLiteral("zjk"));
+        QCOMPARE(spy.count(), 1);
+
+        // 语义同值（只差空白）不再发信号。
+        settings.setNickname(QStringLiteral("zjk "));
+        QCOMPARE(spy.count(), 1);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.nickname(), QStringLiteral("zjk"));
+}
+
+void ServiceTests::appSettingsSidebarVisibleRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        // 默认展开，与首次打开的可发现性一致。
+        QCOMPARE(settings.sidebarVisible(), true);
+
+        QSignalSpy spy(&settings, &AppSettings::sidebarVisibleChanged);
+        settings.setSidebarVisible(false);
+        QCOMPARE(settings.sidebarVisible(), false);
+        QCOMPARE(spy.count(), 1);
+
+        settings.setSidebarVisible(false);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.sidebarVisible(), false);
+}
+
+void ServiceTests::appSettingsDailyFocusGoalMinutesByDate()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 0);
+
+        QSignalSpy spy(&settings, &AppSettings::dailyFocusGoalChanged);
+        QVERIFY(!settings.setDailyFocusGoal(QString(), 140));
+        QVERIFY(!settings.setDailyFocusGoal(QStringLiteral("2026-7-12"), 140));
+        QVERIFY(!settings.setDailyFocusGoal(QStringLiteral("2026-07-12"), 0));
+        QVERIFY(!settings.setDailyFocusGoal(QStringLiteral("2026-07-12"), 1441));
+        QCOMPARE(spy.count(), 0);
+
+        QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-12"), 140));
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 140);
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-13")), 0);
+        QCOMPARE(spy.count(), 1);
+
+        // 同值保存幂等，非法保存也不能覆盖已有合法目标。
+        QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-12"), 140));
+        QVERIFY(!settings.setDailyFocusGoal(QStringLiteral("2026-07-12"), -1));
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 140);
+        QCOMPARE(spy.count(), 1);
+
+        // 新逻辑日目标替换当前记录，24 小时整是合法上界。
+        QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-13"), 1440));
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 0);
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-13")), 1440);
+        QCOMPARE(spy.count(), 2);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-13")), 1440);
 }
 
 void ServiceTests::appSettingsBackgroundThemeDefaultAndRoundTrip()
@@ -1438,6 +1532,49 @@ void ServiceTests::getFocusSessionCountCountsOnlyValidFinishedSessions()
     QVERIFY(insertFocusSessionRow(taskId, endDate.addDays(1), kTestMinimumValidDurationSeconds));
 
     QCOMPARE(StatisticsService::instance()->getFocusSessionCount(startDate, endDate), 3);
+}
+
+void ServiceTests::getStreakDaysCountsBackFromLogicalToday()
+{
+    const QDate today = logicalToday();
+
+    QVERIFY(insertFocusSessionRow(-1, today, kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-1), kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-2), kTestMinimumValidDurationSeconds));
+    // 第 3 天断档；更早的记录不能透过断档续上连击。
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-4), kTestMinimumValidDurationSeconds));
+
+    QCOMPARE(StatisticsService::instance()->getStreakDays(), 3);
+}
+
+void ServiceTests::getStreakDaysStartsFromYesterdayWhenTodayHasNoFocus()
+{
+    const QDate today = logicalToday();
+    QCOMPARE(StatisticsService::instance()->getStreakDays(), 0);
+
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-1), kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-2), kTestMinimumValidDurationSeconds));
+    // 今天只有无效短会话：不算今天，但也不打断从昨天起算的连击。
+    QVERIFY(insertFocusSessionRow(-1, today, kTestMinimumValidDurationSeconds - 1));
+
+    QCOMPARE(StatisticsService::instance()->getStreakDays(), 2);
+}
+
+void ServiceTests::getTotalFocusDurationSumsOnlyValidSessions()
+{
+    const QDate today = logicalToday();
+    QCOMPARE(StatisticsService::instance()->getTotalFocusDuration(), 0);
+
+    const int taskId = insertTaskRow(QStringLiteral("累计时长任务"), today);
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionRow(-1, today, kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, today.addDays(-30), kTestMinimumValidDurationSeconds * 3));
+    QVERIFY(insertFocusSessionRow(-1, today, kTestMinimumValidDurationSeconds - 1));
+    // NULL 时长辅助函数不转换 -1 任务号，这里必须挂在真实任务上才能通过外键。
+    QVERIFY(insertFocusSessionWithNullDuration(taskId, today));
+
+    QCOMPARE(StatisticsService::instance()->getTotalFocusDuration(), kTestMinimumValidDurationSeconds * 4);
 }
 
 void ServiceTests::getMonthStatsUsesCurrentMonthAndTaskDate()

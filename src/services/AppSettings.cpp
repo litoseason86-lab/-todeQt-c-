@@ -1,5 +1,7 @@
 #include "AppSettings.h"
 
+#include <QDate>
+
 namespace {
 const auto kLastModeKey = QStringLiteral("focus/lastMode");
 const auto kWorkMinutesKey = QStringLiteral("focus/workMinutes");
@@ -10,6 +12,11 @@ const auto kSlimClockFontKey = QStringLiteral("appearance/slimClockFont");
 const auto kRolloverIgnoredDateKey = QStringLiteral("rollover/lastIgnoredDate");
 const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
+const auto kNicknameKey = QStringLiteral("profile/nickname");
+const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
+const auto kDailyFocusGoalDateKey = QStringLiteral("focus/dailyGoalDate");
+const auto kDailyFocusGoalMinutesKey = QStringLiteral("focus/dailyGoalMinutes");
+const auto kLegacyDailyFocusGoalHoursKey = QStringLiteral("focus/dailyGoalHours");
 }
 
 AppSettings* AppSettings::instance()
@@ -178,4 +185,95 @@ void AppSettings::setDayStartHour(int hour)
     m_settings->setValue(kDayStartHourKey, normalized);
     m_settings->sync();
     emit dayStartHourChanged();
+}
+
+QString AppSettings::nickname() const
+{
+    return m_settings->value(kNicknameKey, QString()).toString();
+}
+
+void AppSettings::setNickname(const QString& name)
+{
+    // 首尾空白一律去掉：昵称用于问候语拼接，尾随空格会让标点悬空。
+    const QString normalized = name.trimmed();
+    if (nickname() == normalized) {
+        return;
+    }
+
+    m_settings->setValue(kNicknameKey, normalized);
+    m_settings->sync();
+    emit nicknameChanged();
+}
+
+bool AppSettings::sidebarVisible() const
+{
+    return m_settings->value(kSidebarVisibleKey, true).toBool();
+}
+
+void AppSettings::setSidebarVisible(bool visible)
+{
+    if (sidebarVisible() == visible) {
+        return;
+    }
+
+    // 侧栏显隐是即时布局偏好，落盘避免下次启动又弹出已收起的侧栏。
+    m_settings->setValue(kSidebarVisibleKey, visible);
+    m_settings->sync();
+    emit sidebarVisibleChanged();
+}
+
+int AppSettings::dailyFocusGoalMinutesForDate(const QString& isoDate) const
+{
+    const QDate requestedDate = QDate::fromString(isoDate, Qt::ISODate);
+    if (!requestedDate.isValid() || requestedDate.toString(Qt::ISODate) != isoDate) {
+        return 0;
+    }
+
+    if (m_settings->value(kDailyFocusGoalDateKey).toString() != isoDate) {
+        return 0;
+    }
+
+    const int minutes = m_settings->value(kDailyFocusGoalMinutesKey, 0).toInt();
+    // 损坏配置按“当天未设置”处理，不能把异常值带进百分比计算。
+    return (minutes >= 1 && minutes <= 24 * 60) ? minutes : 0;
+}
+
+bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)
+{
+    const QDate requestedDate = QDate::fromString(isoDate, Qt::ISODate);
+    if (!requestedDate.isValid() || requestedDate.toString(Qt::ISODate) != isoDate
+            || minutes < 1 || minutes > 24 * 60) {
+        return false;
+    }
+
+    if (m_settings->value(kDailyFocusGoalDateKey).toString() == isoDate
+            && m_settings->value(kDailyFocusGoalMinutesKey).toInt() == minutes) {
+        return true;
+    }
+
+    const bool hadPreviousDate = m_settings->contains(kDailyFocusGoalDateKey);
+    const bool hadPreviousMinutes = m_settings->contains(kDailyFocusGoalMinutesKey);
+    const bool hadLegacyHours = m_settings->contains(kLegacyDailyFocusGoalHoursKey);
+    const QVariant previousDate = m_settings->value(kDailyFocusGoalDateKey);
+    const QVariant previousMinutes = m_settings->value(kDailyFocusGoalMinutesKey);
+    const QVariant previousLegacyHours = m_settings->value(kLegacyDailyFocusGoalHoursKey);
+
+    // 日期与分钟必须作为一项设置写入；旧整小时值没有日期语义，成功保存新目标后清理。
+    m_settings->setValue(kDailyFocusGoalDateKey, isoDate);
+    m_settings->setValue(kDailyFocusGoalMinutesKey, minutes);
+    m_settings->remove(kLegacyDailyFocusGoalHoursKey);
+    m_settings->sync();
+    if (m_settings->status() != QSettings::NoError) {
+        hadPreviousDate ? m_settings->setValue(kDailyFocusGoalDateKey, previousDate)
+                        : m_settings->remove(kDailyFocusGoalDateKey);
+        hadPreviousMinutes ? m_settings->setValue(kDailyFocusGoalMinutesKey, previousMinutes)
+                           : m_settings->remove(kDailyFocusGoalMinutesKey);
+        hadLegacyHours ? m_settings->setValue(kLegacyDailyFocusGoalHoursKey, previousLegacyHours)
+                       : m_settings->remove(kLegacyDailyFocusGoalHoursKey);
+        m_settings->sync();
+        return false;
+    }
+
+    emit dailyFocusGoalChanged();
+    return true;
 }

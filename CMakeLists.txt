@@ -72,6 +72,7 @@ set(APP_SOURCES
     resources/qml.qrc
     resources/wallpapers.qrc
     resources/fonts.qrc
+    resources/shaders.qrc
 )
 
 set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app-icons/PomodoroTodo.icns")
@@ -219,6 +220,18 @@ set_tests_properties(WallpaperAssetsTests PROPERTIES
     # 图片解码无需真实窗口；offscreen 保证后台不弹窗。
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
+
+add_executable(ShaderAssetsTests
+    tests/ShaderAssetsTests.cpp
+    resources/shaders.qrc
+)
+
+target_link_libraries(ShaderAssetsTests PRIVATE
+    Qt6::Core
+    Qt6::Test
+)
+
+add_test(NAME ShaderAssetsTests COMMAND ShaderAssetsTests)
 
 add_test(
     NAME PomodoroTodoQmlTests

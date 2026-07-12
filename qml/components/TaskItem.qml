@@ -8,16 +8,21 @@ Rectangle {
     id: root
 
     Layout.fillWidth: true
-    implicitHeight: Math.max(76, content.implicitHeight + 28)
+    // compact：仪表盘「已完成」等只读列表用更矮的行高，避免每张卡都占 76 的执行态高度。
+    implicitHeight: Math.max(root.compact ? 48 : 76, content.implicitHeight + (root.compact ? 16 : 28))
     radius: Theme.radiusLg
     color: root.itemHovered ? Theme.glassHover : Theme.glassCard
     border.color: root.itemHovered ? Theme.accent : Theme.border
     border.width: root.itemHovered ? 1.5 : 1
     // MultiEffect 的阴影参数不直接承载动画，先放到 root 属性上过渡，再绑定给效果。
     property color warmShadowColor: Theme.ink
-    property real warmShadowOpacity: root.itemHovered ? 0.12 : 0.08
-    property real warmShadowBlur: root.itemHovered ? 0.25 : 0.18
-    property real warmShadowVerticalOffset: root.itemHovered ? 6 : 2
+    // compact 行阴影压轻一档，列表密排时不互相发灰。
+    property real warmShadowOpacity: root.compact ? (root.itemHovered ? 0.08 : 0.05)
+                                                  : (root.itemHovered ? 0.12 : 0.08)
+    property real warmShadowBlur: root.compact ? (root.itemHovered ? 0.16 : 0.12)
+                                               : (root.itemHovered ? 0.25 : 0.18)
+    property real warmShadowVerticalOffset: root.compact ? (root.itemHovered ? 3 : 1)
+                                                         : (root.itemHovered ? 6 : 2)
     layer.enabled: true
     layer.effect: MultiEffect {
         autoPaddingEnabled: true
@@ -39,6 +44,10 @@ Rectangle {
     property bool startFocusAllowed: true
     // 父视图负责决定这个任务是否属于“执行态”；历史和未来任务不露出执行入口。
     property bool showStartFocus: true
+    // 父视图控制编辑/删除入口；仪表盘已完成筛选为纯查看，关掉后右侧改放状态徽章。
+    property bool showEditDelete: true
+    // 紧凑只读行：标题单行省略、分类横排、行高更矮，专供仪表盘已完成列表等。
+    property bool compact: false
     // 显式记录指针状态，避免不同平台的 MouseArea/HoverHandler 事件差异影响 hover 视觉。
     property bool pointerInside: false
     property bool componentReady: false
@@ -120,6 +129,7 @@ Rectangle {
 
     states: [
         // 完成状态只做轻微位移和透明度变化，避免影响相邻任务布局。
+        // compact 完成态不再下沉位移：密排列表里 5px 偏移会显得参差不齐。
         State {
             name: "normal"
             when: !root.visualTaskCompleted
@@ -132,8 +142,8 @@ Rectangle {
             name: "completed"
             when: root.visualTaskCompleted
             PropertyChanges {
-                root.opacity: 0.70
-                root.completionOffset: 5
+                root.opacity: root.compact ? 0.88 : 0.70
+                root.completionOffset: root.compact ? 0 : 5
             }
         }
     ]
@@ -256,18 +266,19 @@ Rectangle {
         id: content
 
         anchors.fill: parent
-        anchors.leftMargin: Theme.space12
-        anchors.rightMargin: Theme.space12
-        anchors.topMargin: Theme.space12 + root.completionOffset
-        anchors.bottomMargin: Theme.space12
-        spacing: Theme.space12
+        anchors.leftMargin: root.compact ? Theme.space8 : Theme.space12
+        anchors.rightMargin: root.compact ? Theme.space8 : Theme.space12
+        anchors.topMargin: (root.compact ? Theme.space8 : Theme.space12) + root.completionOffset
+        anchors.bottomMargin: root.compact ? Theme.space8 : Theme.space12
+        spacing: root.compact ? Theme.space8 : Theme.space12
 
         CheckBox {
             id: checkbox
 
             objectName: "taskCheckBox"
             Layout.preferredWidth: 28
-            Layout.preferredHeight: 40
+            Layout.preferredHeight: root.compact ? 28 : 40
+            Layout.alignment: Qt.AlignVCenter
             padding: 0
             checked: root.visualTaskCompleted
             onClicked: {
@@ -287,8 +298,8 @@ Rectangle {
                 id: checkIndicator
 
                 objectName: "taskCheckIndicator"
-                implicitWidth: 20
-                implicitHeight: 20
+                implicitWidth: root.compact ? 18 : 20
+                implicitHeight: root.compact ? 18 : 20
                 x: checkbox.leftPadding
                 y: (checkbox.height - height) / 2
                 radius: Theme.radiusSm
@@ -301,7 +312,7 @@ Rectangle {
                     text: "✓"
                     visible: checkbox.checked
                     color: Theme.surface
-                    font.pixelSize: Theme.fontLg
+                    font.pixelSize: root.compact ? Theme.fontMd : Theme.fontLg
                     font.weight: Font.Bold
                 }
 
@@ -335,29 +346,64 @@ Rectangle {
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: Theme.space4
+            Layout.alignment: Qt.AlignVCenter
+            spacing: root.compact ? 2 : Theme.space4
 
-            Text {
-                objectName: "taskTitleText"
+            // compact：标题与分类同一视觉行族，标题单行省略，避免完成列表被长标题撑得参差。
+            RowLayout {
                 Layout.fillWidth: true
+                spacing: Theme.space8
                 visible: !root.titleEditing
-                text: root.taskTitle
-                font.pixelSize: Theme.fontLg
-                font.weight: Font.Medium
-                lineHeight: 1.4
-                color: root.visualTaskCompleted ? Theme.inkSoft : Theme.inkStrong
-                font.strikeout: root.visualTaskCompleted
-                wrapMode: Text.WordWrap
 
-                TapHandler {
-                    acceptedButtons: Qt.LeftButton
-                    onDoubleTapped: root.beginTitleEdit()
+                Text {
+                    objectName: "taskTitleText"
+                    Layout.fillWidth: true
+                    text: root.taskTitle
+                    font.pixelSize: root.compact ? Theme.fontMd : Theme.fontLg
+                    font.weight: Font.Medium
+                    lineHeight: root.compact ? 1.2 : 1.4
+                    color: root.visualTaskCompleted ? Theme.inkSoft : Theme.inkStrong
+                    font.strikeout: root.visualTaskCompleted
+                    wrapMode: root.compact ? Text.NoWrap : Text.WordWrap
+                    elide: root.compact ? Text.ElideRight : Text.ElideNone
+                    maximumLineCount: root.compact ? 1 : 0
+
+                    TapHandler {
+                        enabled: root.showEditDelete
+                        acceptedButtons: Qt.LeftButton
+                        onDoubleTapped: root.beginTitleEdit()
+                    }
+
+                    Behavior on color {
+                        ColorAnimation {
+                            duration: 180
+                            easing.type: Easing.OutQuad
+                        }
+                    }
                 }
 
-                Behavior on color {
-                    ColorAnimation {
-                        duration: 180
-                        easing.type: Easing.OutQuad
+                // compact 且有分类：色点 + 名横排在标题右侧，省掉第二行高度。
+                RowLayout {
+                    visible: root.compact && root.categoryName.length > 0
+                    spacing: 4
+                    Layout.alignment: Qt.AlignVCenter
+
+                    Rectangle {
+                        Layout.preferredWidth: 8
+                        Layout.preferredHeight: 8
+                        radius: 4
+                        visible: root.categoryColor.length > 0
+                        color: root.categoryColor
+                    }
+
+                    Text {
+                        objectName: "taskCategoryInline"
+                        text: root.categoryName
+                        textFormat: Text.PlainText
+                        font.pixelSize: Theme.fontXs
+                        color: Theme.inkMuted
+                        elide: Text.ElideRight
+                        Layout.maximumWidth: 88
                     }
                 }
             }
@@ -390,9 +436,10 @@ Rectangle {
                 }
             }
 
+            // 非 compact：分类仍独占第二行，与今日任务页执行态一致。
             RowLayout {
                 Layout.fillWidth: true
-                visible: root.categoryName.length > 0
+                visible: !root.compact && root.categoryName.length > 0
                 spacing: Theme.space8
 
                 Rectangle {
@@ -420,72 +467,33 @@ Rectangle {
             text: root.visualTaskCompleted ? "已完成" : "开始专注"
             visible: root.showStartFocus && !root.visualTaskCompleted
             enabled: !root.visualTaskCompleted && root.startFocusAllowed
+            // 与仪表盘 DashboardTimerPanel 主按钮同尺寸，避免两处“开始专注”视觉规格漂移。
             implicitWidth: 104
-            implicitHeight: 40
+            implicitHeight: 34
             // down 是 Qt Controls 的视觉按下态；真实点击会同步 pressed，测试可稳定驱动 down。
             readonly property bool pressFeedbackActive: focusButton.enabled && (focusButton.down || focusButton.pressed)
 
-            background: Rectangle {
+            // 与仪表盘专注按钮同一玻璃基底：glassCard 半透明底 + 玻璃描边 + 受光棱边；
+            // 悬停加实一档、按下用强调玻璃反馈，不再用大块实心焦糖。
+            // 嵌在任务卡玻璃上，关掉落影避免阴影叠层发灰。
+            background: GlassPanel {
                 id: focusButtonBackground
 
                 objectName: "focusButtonBackground"
-                radius: Theme.radiusMd
-                y: focusButton.pressFeedbackActive ? 1 : 0
                 color: {
                     if (!focusButton.enabled)
-                        return Theme.border;
+                        return Theme.border
                     if (focusButton.pressFeedbackActive)
-                        return Theme.accentStrong;
+                        return Theme.glassAccent
                     if (focusButton.hovered)
-                        return Theme.accentStrong;
-                    return Theme.accent;
+                        return Theme.glassHover
+                    return Theme.glassCard
                 }
-                property color warmShadowColor: Theme.ink
-                property real warmShadowOpacity: focusButton.pressFeedbackActive ? 0.04 : 0.08
-                property real warmShadowBlur: focusButton.pressFeedbackActive ? 0.10 : 0.14
-                property real warmShadowVerticalOffset: focusButton.pressFeedbackActive ? 1 : 2
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    autoPaddingEnabled: true
-                    shadowEnabled: true
-                    shadowColor: focusButtonBackground.warmShadowColor
-                    shadowOpacity: focusButtonBackground.warmShadowOpacity
-                    shadowBlur: focusButtonBackground.warmShadowBlur
-                    shadowHorizontalOffset: 0
-                    shadowVerticalOffset: focusButtonBackground.warmShadowVerticalOffset
-                }
+                panelShadowEnabled: false
 
                 Behavior on color {
                     ColorAnimation {
                         duration: 160
-                        easing.type: Easing.OutQuad
-                    }
-                }
-
-                Behavior on y {
-                    NumberAnimation {
-                        duration: 90
-                        easing.type: Easing.OutQuad
-                    }
-                }
-
-                Behavior on warmShadowOpacity {
-                    NumberAnimation {
-                        duration: 90
-                        easing.type: Easing.OutQuad
-                    }
-                }
-
-                Behavior on warmShadowBlur {
-                    NumberAnimation {
-                        duration: 90
-                        easing.type: Easing.OutQuad
-                    }
-                }
-
-                Behavior on warmShadowVerticalOffset {
-                    NumberAnimation {
-                        duration: 90
                         easing.type: Easing.OutQuad
                     }
                 }
@@ -494,20 +502,12 @@ Rectangle {
             contentItem: Text {
                 objectName: "focusButtonLabel"
                 text: focusButton.text
-                color: focusButton.enabled ? Theme.surface : Theme.inkMuted
+                // accentInk：浅/深主题下都可读的强调字色，配玻璃底而不是实心焦糖上的 surface 白字。
+                color: focusButton.enabled ? Theme.accentInk : Theme.inkMuted
                 font.pixelSize: Theme.fontMd
                 font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
-                scale: focusButton.pressFeedbackActive ? 0.98 : 1.0
-                transformOrigin: Item.Center
-
-                Behavior on scale {
-                    NumberAnimation {
-                        duration: 90
-                        easing.type: Easing.OutQuad
-                    }
-                }
             }
 
             onClicked: {
@@ -516,13 +516,37 @@ Rectangle {
             }
         }
 
+        // 纯查看完成态：右侧固定「已完成」玻璃徽章，填补开始专注/编辑/删除腾出的空洞。
+        GlassPanel {
+            objectName: "taskCompletedBadge"
+            visible: root.visualTaskCompleted && !root.showEditDelete
+            Layout.alignment: Qt.AlignVCenter
+            implicitWidth: completedBadgeLabel.implicitWidth + Theme.space12
+            implicitHeight: root.compact ? 24 : 28
+            radius: Theme.radiusMd
+            color: Theme.glassAccent
+            specularEnabled: false
+            panelShadowEnabled: false
+
+            Text {
+                id: completedBadgeLabel
+                anchors.centerIn: parent
+                text: "已完成"
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontXs
+                font.weight: Font.Medium
+                color: Theme.accentInk
+            }
+        }
+
         Button {
             id: editButton
 
             objectName: "taskEditButton"
             text: "编辑"
+            visible: root.showEditDelete
             implicitWidth: 48
-            implicitHeight: 36
+            implicitHeight: root.compact ? 30 : 36
             opacity: 1
             enabled: true
 
@@ -551,8 +575,9 @@ Rectangle {
 
             objectName: "taskDeleteButton"
             text: "删除"
+            visible: root.showEditDelete
             implicitWidth: 48
-            implicitHeight: 36
+            implicitHeight: root.compact ? 30 : 36
             opacity: 1
             enabled: true
             readonly property bool pressFeedbackActive: deleteButton.down || deleteButton.pressed

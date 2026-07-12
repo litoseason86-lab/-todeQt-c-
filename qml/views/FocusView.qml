@@ -13,8 +13,9 @@ Item {
     property bool pomodoroModeSelected: false
     property int selectedWorkMinutes: 25
     property int selectedBreakMinutes: 5
-    property int pomoTaskId: -1
-    property string pomoTaskTitle: ""
+    // 任务页传入的待启动任务由专注页暂存；真正点击开始后，活动任务以 timer 为准。
+    property int selectedTaskId: -1
+    property string selectedTaskTitle: ""
     property int justCompletedPhase: 0
     property bool panelExpanded: false
 
@@ -80,24 +81,18 @@ Item {
     }
 
     function taskTitle() {
-        if (root.pomodoroModeSelected) {
-            if (root.pomoTaskTitle && root.pomoTaskTitle.length > 0) {
-                return root.pomoTaskTitle
-            }
-            if (root.timerTitle().length > 0) {
-                return root.timerTitle()
-            }
-            return "尚未选择任务"
+        if (root.timerBool("hasActiveSession") && root.timerTitle().length > 0) {
+            return root.timerTitle()
         }
-
-        return root.timerTitle().length > 0
-                ? root.timerTitle()
-                : "尚未开始专注"
+        if (root.selectedTaskTitle.length > 0) {
+            return root.selectedTaskTitle
+        }
+        return root.pomodoroModeSelected ? "尚未选择任务" : "尚未开始专注"
     }
 
     function pomodoroTitle() {
-        if (root.pomoTaskTitle && root.pomoTaskTitle.length > 0) {
-            return root.pomoTaskTitle
+        if (root.selectedTaskTitle.length > 0) {
+            return root.selectedTaskTitle
         }
         if (root.timerTitle().length > 0) {
             return root.timerTitle()
@@ -105,9 +100,32 @@ Item {
         return "番茄专注"
     }
 
-    function clearPomodoroTask() {
-        root.pomoTaskId = -1
-        root.pomoTaskTitle = ""
+    function clearSelectedTask() {
+        root.selectedTaskId = -1
+        root.selectedTaskTitle = ""
+    }
+
+    function syncToActiveTimer() {
+        if (!root.timer || (!root.timer.hasActiveSession && root.timer.phase === 0)) {
+            return
+        }
+
+        // 计时开始后，服务才是唯一事实源；本地模式和待机缓存只能服务于尚未开始的状态。
+        var timerUsesPomodoro = root.timer.mode === 1 || root.timer.phase !== 0
+        root.pomodoroModeSelected = timerUsesPomodoro
+        if (!timerUsesPomodoro) {
+            root.selectedTaskId = root.timer.currentTaskId
+            root.selectedTaskTitle = root.timer.currentTaskTitle || ""
+            return
+        }
+
+        // 休息阶段没有任务 id，保留刚完成工作阶段的缓存，供下一轮继续使用。
+        if (root.timer.currentTaskId > 0) {
+            root.selectedTaskId = root.timer.currentTaskId
+        }
+        if (root.timer.currentTaskTitle && root.timer.currentTaskTitle.length > 0) {
+            root.selectedTaskTitle = root.timer.currentTaskTitle
+        }
     }
 
     function computeState() {
@@ -142,14 +160,14 @@ Item {
 
         if (enabled) {
             var timerHasSession = root.timer.hasActiveSession || root.timer.phase !== 0
-            var shouldUseTimerTask = timerHasSession || root.pomoTaskId <= 0
+            var shouldUseTimerTask = timerHasSession || root.selectedTaskId <= 0
             // 只有正在切换真实计时会话，或本地没有“从任务页直达”的显式选择时，
             // 才从 timer 覆盖缓存；否则会把用户刚点的任务替换成 timer 里的旧值。
             if (shouldUseTimerTask && root.timer.currentTaskId > 0) {
-                root.pomoTaskId = root.timer.currentTaskId
+                root.selectedTaskId = root.timer.currentTaskId
             }
             if (shouldUseTimerTask && root.timer.currentTaskTitle && root.timer.currentTaskTitle.length > 0) {
-                root.pomoTaskTitle = root.timer.currentTaskTitle
+                root.selectedTaskTitle = root.timer.currentTaskTitle
             }
             if (timerHasSession) {
                 if (!root.timer.stopFocus()) {
@@ -163,18 +181,6 @@ Item {
                 root.errorText = "结束当前阶段失败，请重试"
                 return
             }
-            if (!hasRunningTimer && root.pomoTaskId > 0) {
-                // 自由模式没有“待机开始”按钮：从任务页直达番茄待机后再切自由，
-                // 必须立刻用缓存任务启动自由专注，否则用户会落到一个无法开始的空页面。
-                if (!root.timer.startFocus(root.pomoTaskId, root.pomodoroTitle())) {
-                    root.errorText = "自由专注启动失败，请重试"
-                    return
-                }
-                root.clearPomodoroTask()
-                if (root.settings) {
-                    root.settings.lastMode = 0
-                }
-            }
         }
 
         root.pomodoroModeSelected = enabled
@@ -183,16 +189,50 @@ Item {
     }
 
     function enterPomodoroWithTask(taskId, title) {
-        // 任务列表一键直达番茄待机：复用 toPomodoroTab 的停止/清理逻辑，
-        // 再用显式传入的任务覆盖它从 timer 缓存的值，因为直达时 timer 里可能还没有任务。
-        root.toPomodoroTab(true)
-        var safeTitle = String(title || "")
-        if (taskId > 0) {
-            root.pomoTaskId = taskId
+        var safeTitle = String(title || "").trim()
+        if (!root.timer || taskId <= 0 || safeTitle.length === 0) {
+            root.errorText = "番茄任务无效，请重试"
+            return false
         }
-        if (safeTitle.length > 0) {
-            root.pomoTaskTitle = safeTitle
+
+        // 外部任务选择是新的明确意图，必须一次性替换模式和任务缓存。
+        // 不复用 toPomodoroTab：它面向页内切换，会优先保留旧缓存，正是任务错位的来源。
+        if ((root.timer.hasActiveSession || root.timer.phase !== 0) && !root.timer.stopFocus()) {
+            root.errorText = "切换番茄失败，请重试"
+            return false
         }
+
+        root.pomodoroModeSelected = true
+        root.selectedTaskId = taskId
+        root.selectedTaskTitle = safeTitle
+        root.errorText = ""
+        root.justCompletedPhase = 0
+        return true
+    }
+
+    function enterFreeWithTask(taskId, title) {
+        var safeTitle = String(title || "").trim()
+        if (!root.timer || taskId <= 0 || safeTitle.length === 0) {
+            root.errorText = "自由专注任务无效，请重试"
+            return false
+        }
+        if (root.timer.hasActiveSession || root.timer.phase !== 0) {
+            root.errorText = "已有专注进行中"
+            return false
+        }
+        root.pomodoroModeSelected = false
+        root.selectedTaskId = taskId
+        root.selectedTaskTitle = safeTitle
+        root.errorText = ""
+        root.justCompletedPhase = 0
+        return true
+    }
+
+    function enterWithTask(taskId, title, usePomodoro) {
+        // 所有任务页统一走这一入口，只选择任务和模式；计时器只能由本页开始按钮启动。
+        return usePomodoro
+                ? root.enterPomodoroWithTask(taskId, title)
+                : root.enterFreeWithTask(taskId, title)
     }
 
     function selectWorkMinutes(minutes) {
@@ -220,12 +260,39 @@ Item {
         if (!root.timer) {
             return false
         }
-        return root.pomoTaskId > 0 || root.timerNumber("currentTaskId", -1) > 0
+        return (root.selectedTaskId > 0 && root.selectedTaskTitle.length > 0)
+                || (root.timerNumber("currentTaskId", -1) > 0 && root.timerTitle().length > 0)
+    }
+
+    function canStartFreeFocus() {
+        return root.timer !== null
+                && !root.timerBool("hasActiveSession")
+                && root.timerNumber("phase", 0) === 0
+                && root.selectedTaskId > 0
+                && root.selectedTaskTitle.length > 0
+    }
+
+    function startFreeFocus() {
+        if (!root.canStartFreeFocus()) {
+            root.errorText = "请先选择要专注的任务"
+            return false
+        }
+        if (!root.timer.startFocus(root.selectedTaskId, root.selectedTaskTitle)) {
+            root.errorText = "自由专注启动失败，请重试"
+            return false
+        }
+
+        root.errorText = ""
+        root.justCompletedPhase = 0
+        if (root.settings) {
+            root.settings.lastMode = 0
+        }
+        return true
     }
 
     function startPomodoro() {
         root.justCompletedPhase = 0
-        var taskId = root.pomoTaskId > 0 ? root.pomoTaskId : (root.timer ? root.timer.currentTaskId : -1)
+        var taskId = root.selectedTaskId > 0 ? root.selectedTaskId : (root.timer ? root.timer.currentTaskId : -1)
         var taskTitle = root.pomodoroTitle()
         if (!root.timer) {
             root.errorText = "番茄专注启动失败"
@@ -269,7 +336,7 @@ Item {
 
     function endPomodoro() {
         if (!root.timer) {
-            root.clearPomodoroTask()
+            root.clearSelectedTask()
             root.focusEnded()
             return
         }
@@ -283,7 +350,7 @@ Item {
 
         root.errorText = ""
         root.justCompletedPhase = 0
-        root.clearPomodoroTask()
+        root.clearSelectedTask()
         root.focusEnded()
     }
 
@@ -291,7 +358,7 @@ Item {
         // 自由模式结束逻辑单点：页面按钮与沉浸层共用，避免两处复制。
         if (root.timer && root.timer.stopFocus()) {
             root.errorText = ""
-            root.clearPomodoroTask()
+            root.clearSelectedTask()
             root.focusEnded()
         } else {
             root.errorText = "专注保存失败，请重试"
@@ -301,6 +368,18 @@ Item {
     Connections {
         target: root.timer
         ignoreUnknownSignals: true
+
+        function onCurrentTaskChanged() {
+            root.syncToActiveTimer()
+        }
+
+        function onModeChanged() {
+            root.syncToActiveTimer()
+        }
+
+        function onPhaseChanged() {
+            root.syncToActiveTimer()
+        }
 
         function onPhaseCompleted(phase) {
             root.justCompletedPhase = phase
@@ -411,7 +490,9 @@ Item {
                 Text {
                     objectName: "phaseStageText"
                     Layout.fillWidth: true
-                    text: root.state === "free" ? "当前任务" : root.pomodoroStageText()
+                    text: root.state === "free"
+                          ? (root.timerBool("hasActiveSession") ? qsTr("当前任务") : qsTr("自由专注待机"))
+                          : root.pomodoroStageText()
                     font.pixelSize: Theme.fontMd
                     color: Theme.inkSoft
                     horizontalAlignment: Text.AlignHCenter
@@ -721,8 +802,44 @@ Item {
                 spacing: Theme.space16
 
                 Button {
+                    id: freeStartButton
+                    objectName: "freeStartButton"
+
+                    visible: root.state === "free" && !root.timerBool("hasActiveSession")
+                    text: qsTr("开始专注")
+                    enabled: root.canStartFreeFocus()
+                    implicitWidth: 104
+                    implicitHeight: 34
+                    onClicked: root.startFreeFocus()
+
+                    background: GlassPanel {
+                        color: {
+                            if (!freeStartButton.enabled)
+                                return Theme.border
+                            if (freeStartButton.pressed || freeStartButton.down)
+                                return Theme.glassAccent
+                            if (freeStartButton.hovered)
+                                return Theme.glassHover
+                            return Theme.glassCard
+                        }
+                        panelShadowEnabled: false
+                    }
+
+                    contentItem: Text {
+                        text: freeStartButton.text
+                        textFormat: Text.PlainText
+                        color: freeStartButton.enabled ? Theme.accentInk : Theme.inkMuted
+                        font.pixelSize: Theme.fontMd
+                        font.weight: Font.Medium
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                Button {
                     id: pauseButton
-                    visible: root.state === "free" || root.state === "pomoWork" || root.state === "pomoBreak"
+                    visible: (root.state === "free" && root.timerBool("hasActiveSession"))
+                             || root.state === "pomoWork" || root.state === "pomoBreak"
                     text: root.timerBool("isRunning") ? "暂停" : "继续"
                     enabled: root.state === "free" ? root.timerBool("hasActiveSession") : root.timerNumber("phase", 0) !== 0
                     implicitWidth: 104
@@ -746,7 +863,7 @@ Item {
 
                 Button {
                     id: freeStopButton
-                    visible: root.state === "free"
+                    visible: root.state === "free" && root.timerBool("hasActiveSession")
                     text: "结束专注"
                     enabled: root.timerBool("hasActiveSession")
                     implicitWidth: 104
@@ -774,19 +891,38 @@ Item {
                     visible: root.state === "pomoIdle" || root.state === "breakDone"
                     text: root.state === "breakDone" ? "开始专注" : "开始专注"
                     enabled: root.canStartPomodoro()
-                    implicitWidth: 112
-                    implicitHeight: 40
+                    // 与仪表盘/任务卡「开始专注」统一：104×34 + 玻璃基底。
+                    implicitWidth: 104
+                    implicitHeight: 34
                     onClicked: root.startPomodoro()
 
-                    background: Rectangle {
-                        color: pomodoroStartButton.enabled ? Theme.accent : Theme.border
-                        radius: Theme.radiusMd
+                    // 玻璃主按钮：半透明 glass 色阶 + 受光棱边，不用实心焦糖。
+                    background: GlassPanel {
+                        color: {
+                            if (!pomodoroStartButton.enabled)
+                                return Theme.border
+                            if (pomodoroStartButton.pressed || pomodoroStartButton.down)
+                                return Theme.glassAccent
+                            if (pomodoroStartButton.hovered)
+                                return Theme.glassHover
+                            return Theme.glassCard
+                        }
+                        panelShadowEnabled: false
+
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: 160
+                                easing.type: Easing.OutQuad
+                            }
+                        }
                     }
 
                     contentItem: Text {
                         text: pomodoroStartButton.text
-                        color: pomodoroStartButton.enabled ? Theme.surface : Theme.inkMuted
-                        font.pixelSize: Theme.fontLg
+                        textFormat: Text.PlainText
+                        color: pomodoroStartButton.enabled ? Theme.accentInk : Theme.inkMuted
+                        font.pixelSize: Theme.fontMd
+                        font.weight: Font.Medium
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
@@ -796,19 +932,31 @@ Item {
                     id: startBreakButton
                     visible: root.state === "workDone"
                     text: "开始休息"
-                    implicitWidth: 112
-                    implicitHeight: 40
+                    // 同主按钮规格，避免「开始休息」仍是实心焦糖块。
+                    implicitWidth: 104
+                    implicitHeight: 34
                     onClicked: root.startBreak()
 
-                    background: Rectangle {
-                        color: Theme.accent
-                        radius: Theme.radiusMd
+                    background: GlassPanel {
+                        color: startBreakButton.pressed || startBreakButton.down
+                               ? Theme.glassAccent
+                               : (startBreakButton.hovered ? Theme.glassHover : Theme.glassCard)
+                        panelShadowEnabled: false
+
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: 160
+                                easing.type: Easing.OutQuad
+                            }
+                        }
                     }
 
                     contentItem: Text {
                         text: startBreakButton.text
-                        color: Theme.surface
-                        font.pixelSize: Theme.fontLg
+                        textFormat: Text.PlainText
+                        color: Theme.accentInk
+                        font.pixelSize: Theme.fontMd
+                        font.weight: Font.Medium
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
                     }
@@ -840,10 +988,11 @@ Item {
             Text {
                 objectName: "noTaskHint"
                 Layout.fillWidth: true
-                // 置灰的开始按钮必须解释原因，否则直达番茄页的用户会卡在无反馈状态。
-                text: root.state === "pomoIdle" && !root.canStartPomodoro()
-                      ? "到今日任务里点「开始专注」即可带任务进入"
-                      : ""
+                // 两种模式都从任务页带入待启动任务；没有任务时必须说明开始按钮为何不可用。
+                text: ((root.state === "free" && !root.timerBool("hasActiveSession")
+                        && !root.canStartFreeFocus())
+                       || (root.state === "pomoIdle" && !root.canStartPomodoro()))
+                      ? qsTr("到今日任务里点「开始专注」即可带任务进入") : ""
                 visible: text.length > 0
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontXs
@@ -918,6 +1067,9 @@ Item {
         // 番茄模式的运行/暂停提示已经并入 pomodoroStageText()，
         // 这里只服务自由模式（自由模式没有环，仍需要这行文字）。
         if (root.state === "free") {
+            if (!root.timerBool("hasActiveSession")) {
+                return root.selectedTaskId > 0 ? "准备开始" : "尚未选择任务"
+            }
             return root.timerBool("isRunning") ? "专注进行中" : "专注已暂停"
         }
         return ""

@@ -29,6 +29,8 @@ public:
     Q_INVOKABLE QVariantMap getMonthComparison(int year, int month) const;
     Q_INVOKABLE int getEffectiveDays(const QDate& startDate, const QDate& endDate) const;
     Q_INVOKABLE int getFocusSessionCount(const QDate& startDate, const QDate& endDate) const;
+    Q_INVOKABLE int getStreakDays() const;
+    Q_INVOKABLE int getTotalFocusDuration() const;
     Q_INVOKABLE QVariantList getMonthWeeklySummary(int year, int month) const;
     Q_INVOKABLE QVariantList getMonthWeeklySummary() const;
 
