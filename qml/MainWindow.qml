@@ -270,6 +270,23 @@ Item {
         spacing: 0
         visible: !root.focusImmersiveActive
 
+        // 收起态预留通道：把手所在的 32px 归入布局，内容右移让位，
+        // 「不重叠」成为布局事实；展开时通道归零。
+        Item {
+            objectName: "sidebarRevealGutter"
+
+            Layout.preferredWidth: root.sidebarVisible ? 0 : 32
+            Layout.fillHeight: true
+
+            Behavior on Layout.preferredWidth {
+                enabled: !root.sidebarMotionReduced
+                NumberAnimation {
+                    duration: 320
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+
         // 侧栏壳：裁剪 + 宽度弹簧收起；内部 Sidebar 保持 208 宽，避免内容随宽度挤扁。
         Item {
             id: sidebarShell
@@ -474,100 +491,114 @@ Item {
         }
     }
 
-    // 侧栏收起后：左缘竖直居中的小箭头把手，点击展开。
-    // 半胶囊贴边造型：左半圆角推出窗外只露右半，像从边缘长出的把手；
-    // 竖直居中避开页面标题区，视觉重量远小于悬浮钮，不与内容争位。
+    // 侧栏收起后：左缘 32px 通道整条是感应区，箭头把手默认隐身，
+    // 指针进入通道才淡入滑出（自动隐藏，界面静置时零噪音）。
     Item {
         id: sidebarRevealButton
         objectName: "sidebarRevealButton"
 
-        // 沉浸专注时不出现；展开时整体缩回窗外并关闭命中。
+        // 沉浸专注时不出现；展开时关闭命中。
         visible: !root.focusImmersiveActive
         enabled: !root.sidebarVisible
-        width: 34
-        height: 56
-        x: enabled ? (sidebarRevealHover.hovered ? -8 : -12) : -34
-        anchors.verticalCenter: parent.verticalCenter
+        width: 32
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        x: 0
         z: 40
-        opacity: (!root.sidebarVisible && !root.focusImmersiveActive) ? 1 : 0
 
-        Behavior on opacity {
-            enabled: !root.sidebarMotionReduced
-            NumberAnimation {
-                duration: 240
-                easing.type: Easing.OutCubic
-            }
-        }
-        // 悬停滑出、退场缩回共用一条 x 动画，把手像被“拉出/推回”边缘。
-        Behavior on x {
-            enabled: !root.sidebarMotionReduced
-            NumberAnimation {
-                duration: 200
-                easing.type: Easing.OutCubic
-            }
-        }
-
-        // 柔和落影：贴边控件需要轻微离面感，但不抢内容。
-        layer.enabled: opacity > 0.01
-        layer.effect: MultiEffect {
-            autoPaddingEnabled: true
-            shadowEnabled: true
-            shadowColor: Theme.shadow
-            shadowOpacity: 0.14
-            shadowBlur: 0.35
-            shadowHorizontalOffset: 0
-            shadowVerticalOffset: 3
-        }
-
-        Rectangle {
-            anchors.fill: parent
-            // 半胶囊：左侧圆角落在窗外，命中区内只见右侧弧边。
-            radius: height / 2
-            color: sidebarRevealMouse.pressed
-                   ? Theme.glassAccent
-                   : (sidebarRevealHover.hovered ? Theme.glassHover : Theme.glassCard)
-            border.color: Theme.glassBorder
-            border.width: 1
-
-            Behavior on color {
-                enabled: !root.sidebarMotionReduced
-                ColorAnimation {
-                    duration: 140
-                    easing.type: Easing.OutCubic
-                }
-            }
-        }
-
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.right: parent.right
-            anchors.rightMargin: 7
-            text: "»"
-            textFormat: Text.PlainText
-            font.pixelSize: Theme.fontXl
-            font.weight: Font.Medium
-            color: sidebarRevealHover.hovered ? Theme.accentInk : Theme.inkSoft
-
-            Behavior on color {
-                enabled: !root.sidebarMotionReduced
-                ColorAnimation {
-                    duration: 140
-                    easing.type: Easing.OutCubic
-                }
-            }
-        }
-
+        // 整条通道感应：把手很小，若只在把手上感应会很难“找到”它。
         HoverHandler {
-            id: sidebarRevealHover
+            id: sidebarRevealAreaHover
             enabled: sidebarRevealButton.enabled
         }
 
-        MouseArea {
-            id: sidebarRevealMouse
-            anchors.fill: parent
-            enabled: sidebarRevealButton.enabled
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.setSidebarVisible(true)
+        Item {
+            id: sidebarRevealHandle
+
+            readonly property bool shown: sidebarRevealButton.enabled
+                                          && sidebarRevealAreaHover.hovered
+
+            width: 34
+            height: 56
+            // 隐身态缩在窗外，显形时滑出；半胶囊左圆角始终藏在窗外。
+            x: shown ? -12 : -26
+            anchors.verticalCenter: parent.verticalCenter
+            opacity: shown ? 1 : 0
+
+            Behavior on opacity {
+                enabled: !root.sidebarMotionReduced
+                NumberAnimation {
+                    duration: 200
+                    easing.type: Easing.OutCubic
+                }
+            }
+            Behavior on x {
+                enabled: !root.sidebarMotionReduced
+                NumberAnimation {
+                    duration: 200
+                    easing.type: Easing.OutCubic
+                }
+            }
+
+            // 柔和落影：贴边控件需要轻微离面感，但不抢内容。
+            layer.enabled: opacity > 0.01
+            layer.effect: MultiEffect {
+                autoPaddingEnabled: true
+                shadowEnabled: true
+                shadowColor: Theme.shadow
+                shadowOpacity: 0.14
+                shadowBlur: 0.35
+                shadowHorizontalOffset: 0
+                shadowVerticalOffset: 3
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                // 半胶囊：左侧圆角落在窗外，命中区内只见右侧弧边。
+                radius: height / 2
+                color: sidebarRevealMouse.pressed
+                       ? Theme.glassAccent
+                       : (sidebarRevealMouse.containsMouse ? Theme.glassHover : Theme.glassCard)
+                border.color: Theme.glassBorder
+                border.width: 1
+
+                Behavior on color {
+                    enabled: !root.sidebarMotionReduced
+                    ColorAnimation {
+                        duration: 140
+                        easing.type: Easing.OutCubic
+                    }
+                }
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.right: parent.right
+                anchors.rightMargin: 7
+                text: "»"
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontXl
+                font.weight: Font.Medium
+                color: sidebarRevealMouse.containsMouse ? Theme.accentInk : Theme.inkSoft
+
+                Behavior on color {
+                    enabled: !root.sidebarMotionReduced
+                    ColorAnimation {
+                        duration: 140
+                        easing.type: Easing.OutCubic
+                    }
+                }
+            }
+
+            MouseArea {
+                id: sidebarRevealMouse
+
+                anchors.fill: parent
+                enabled: sidebarRevealButton.enabled
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.setSidebarVisible(true)
+            }
         }
 
         Accessible.role: Accessible.Button
