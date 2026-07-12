@@ -474,25 +474,23 @@ Item {
         }
     }
 
-    // 侧栏收起后：左上角悬浮玻璃钮（Apple 风格），点击展开。
+    // 侧栏收起后：左缘竖直居中的小箭头把手，点击展开。
+    // 半胶囊贴边造型：左半圆角推出窗外只露右半，像从边缘长出的把手；
+    // 竖直居中避开页面标题区，视觉重量远小于悬浮钮，不与内容争位。
     Item {
         id: sidebarRevealButton
         objectName: "sidebarRevealButton"
 
-        // 沉浸专注时不出现；展开时淡出并关闭命中。
+        // 沉浸专注时不出现；展开时整体缩回窗外并关闭命中。
         visible: !root.focusImmersiveActive
         enabled: !root.sidebarVisible
-        width: 36
-        height: 36
-        x: 14
-        y: 14
+        width: 34
+        height: 56
+        x: enabled ? (sidebarRevealHover.hovered ? -8 : -12) : -34
+        anchors.verticalCenter: parent.verticalCenter
         z: 40
         opacity: (!root.sidebarVisible && !root.focusImmersiveActive) ? 1 : 0
-        scale: sidebarRevealMouse.pressed ? 0.92
-               : (sidebarRevealHover.hovered ? 1.04 : 1.0)
-        transformOrigin: Item.Center
 
-        // 进场：自左侧轻滑 + 淡入，像 macOS 工具条出现。
         Behavior on opacity {
             enabled: !root.sidebarMotionReduced
             NumberAnimation {
@@ -500,15 +498,16 @@ Item {
                 easing.type: Easing.OutCubic
             }
         }
-        Behavior on scale {
+        // 悬停滑出、退场缩回共用一条 x 动画，把手像被“拉出/推回”边缘。
+        Behavior on x {
             enabled: !root.sidebarMotionReduced
             NumberAnimation {
-                duration: 160
+                duration: 200
                 easing.type: Easing.OutCubic
             }
         }
 
-        // 柔和落影：悬浮控件需要轻微离面感，但不抢内容。
+        // 柔和落影：贴边控件需要轻微离面感，但不抢内容。
         layer.enabled: opacity > 0.01
         layer.effect: MultiEffect {
             autoPaddingEnabled: true
@@ -522,7 +521,8 @@ Item {
 
         Rectangle {
             anchors.fill: parent
-            radius: 10
+            // 半胶囊：左侧圆角落在窗外，命中区内只见右侧弧边。
+            radius: height / 2
             color: sidebarRevealMouse.pressed
                    ? Theme.glassAccent
                    : (sidebarRevealHover.hovered ? Theme.glassHover : Theme.glassCard)
@@ -538,25 +538,22 @@ Item {
             }
         }
 
-        // 与侧栏收起钮同一套 sidebar.left 符号，保证双向控件认知一致。
-        Item {
-            anchors.centerIn: parent
-            width: 15
-            height: 13
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.right: parent.right
+            anchors.rightMargin: 7
+            text: "»"
+            textFormat: Text.PlainText
+            font.pixelSize: Theme.fontXl
+            font.weight: Font.Medium
+            color: sidebarRevealHover.hovered ? Theme.accentInk : Theme.inkSoft
 
-            Rectangle {
-                anchors.fill: parent
-                radius: 2.5
-                color: "transparent"
-                border.color: Theme.inkSoft
-                border.width: 1.4
-            }
-
-            Rectangle {
-                width: 4.5
-                height: parent.height
-                radius: 1.5
-                color: Theme.inkSoft
+            Behavior on color {
+                enabled: !root.sidebarMotionReduced
+                ColorAnimation {
+                    duration: 140
+                    easing.type: Easing.OutCubic
+                }
             }
         }
 
