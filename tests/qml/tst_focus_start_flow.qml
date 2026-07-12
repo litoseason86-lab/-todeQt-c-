@@ -171,17 +171,26 @@ TestCase {
         var focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
         focusView.toPomodoroTab(false)
+        focusView.clearSelectedTask()
         mainWindow.cancelPendingDelete()
         wait(20)
     }
 
-    function test_freeModeStartsTimerImmediately() {
+    function test_freeModeEntersIdleWithoutStartingTimer() {
         appSettings.lastMode = 0
 
         mainWindow.startFocusForTask(7, "自由任务")
+        wait(20)
 
-        compare(focusTimer.startFocusCalls, 1)
-        compare(focusTimer.startFocusTaskId, 7)
+        var focusView = findChild(mainWindow, "focusViewPage")
+        verify(focusView)
+        compare(focusTimer.startFocusCalls, 0)
+        compare(focusView.selectedTaskId, 7)
+        compare(focusView.selectedTaskTitle, "自由任务")
+        compare(focusView.taskTitle(), "自由任务")
+        var startButton = findChild(focusView, "freeStartButton")
+        verify(startButton)
+        compare(startButton.enabled, true)
         compare(mainWindow.pendingView, "focus")
     }
 
@@ -191,18 +200,26 @@ TestCase {
 
         // 用户上次停留在番茄页，但持久化模式仍是自由专注时，两个状态源会发生漂移。
         focusView.pomodoroModeSelected = true
-        focusView.pomoTaskId = 7
-        focusView.pomoTaskTitle = "旧任务"
+        focusView.selectedTaskId = 7
+        focusView.selectedTaskTitle = "旧任务"
         appSettings.lastMode = 0
 
         mainWindow.startFocusForTask(12, "操作系统")
         wait(20)
 
+        compare(focusTimer.startFocusCalls, 0)
+        compare(focusView.pomodoroModeSelected, false)
+        compare(focusView.selectedTaskId, 12)
+        compare(focusView.selectedTaskTitle, "操作系统")
+        compare(focusView.taskTitle(), "操作系统")
+
+        var startButton = findChild(focusView, "freeStartButton")
+        verify(startButton)
+        startButton.clicked()
+        wait(20)
         compare(focusTimer.startFocusTaskId, 12)
         compare(focusTimer.startFocusTaskTitle, "操作系统")
         compare(focusView.pomodoroModeSelected, false)
-        compare(focusView.pomoTaskId, -1)
-        compare(focusView.pomoTaskTitle, "")
         compare(focusView.taskTitle(), "操作系统")
         compare(mainWindow.pendingView, "focus")
     }
@@ -217,8 +234,8 @@ TestCase {
         var focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
         compare(focusView.pomodoroModeSelected, true)
-        compare(focusView.pomoTaskId, 9)
-        compare(focusView.pomoTaskTitle, "番茄任务")
+        compare(focusView.selectedTaskId, 9)
+        compare(focusView.selectedTaskTitle, "番茄任务")
         compare(mainWindow.pendingView, "focus")
     }
 
@@ -231,8 +248,8 @@ TestCase {
         var focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
         focusView.pomodoroModeSelected = true
-        focusView.pomoTaskId = 7
-        focusView.pomoTaskTitle = "旧番茄任务"
+        focusView.selectedTaskId = 7
+        focusView.selectedTaskTitle = "旧番茄任务"
 
         mainWindow.startFocusForTask(11, "第二个任务")
 
@@ -242,10 +259,15 @@ TestCase {
         compare(mainWindow.pendingView, "focus")
     }
 
-    function test_freeStartWritesLastMode() {
+    function test_explicitFreeStartWritesLastMode() {
         appSettings.lastMode = 0
 
         mainWindow.startFocusForTask(7, "自由任务")
+        var focusView = findChild(mainWindow, "focusViewPage")
+        verify(focusView)
+        compare(focusTimer.startFocusCalls, 0)
+
+        verify(focusView.startFreeFocus())
 
         compare(appSettings.lastMode, 0)
     }

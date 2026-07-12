@@ -186,8 +186,8 @@ Item {
             return;
         }
 
-        // 模式选择、任务缓存和计时器启动必须由 FocusView 原子协调；
-        // MainWindow 只决定沿用哪种模式，否则专注页可能显示上一次缓存的任务。
+        // MainWindow 只传递任务和上次模式；FocusView 进入对应待机态。
+        // 真正创建计时会话必须等用户在专注页再次点击“开始专注”。
         var usePomodoro = root.appSettingsRef && root.appSettingsRef.lastMode === 1
         if (focusView.enterWithTask(taskId, taskTitle, usePomodoro)) {
             root.switchToView("focus");
