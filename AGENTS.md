@@ -37,6 +37,28 @@
 - 后台测试和自动验证不得弹出应用窗口；Qt/QML 测试默认使用 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic`。不要在自动流程里执行 `open /Applications/番茄Todo.app`、`open build/*.app` 或其他会拉起 GUI 窗口的命令，除非用户本轮明确要求做人工真机视觉验收。
 - 不要改动 `build/` 生成物。
 
+## 构建与部署规则
+
+- 用户说“构建”“重新构建”或要求生成最新应用时，默认含部署步骤，不能只生成临时目录中的 `.app`。
+- 应用构建必须以 CMake 的 `deploy-local-app` 目标结束，将当前分支的最新应用部署到 `/Applications/番茄Todo.app`。该目标负责删除旧包、复制新包并通过 `lsregister` 刷新系统索引。
+- 构建目录放在仓库外的临时目录，禁止修改仓库内 `build/` 生成物。
+- 部署完成后必须校验构建包与 `/Applications/番茄Todo.app` 主二进制一致，并报告部署结果。
+- 构建和部署不等于启动。未经用户本轮明确要求，禁止执行 `open`、直接运行应用二进制或以其他方式拉起 GUI。
+- 如果部署时已有番茄 Todo 进程运行，不得擅自结束进程；需要明确提醒用户退出并重新打开，才能加载新二进制。
+
+## Qt/QML 界面规则
+
+- 创建、修改或重构 Qt 6/QML 界面时，必须使用 `qt-qml` 和 `qt-ui-design` Skill，并遵守项目现有 `Theme.qml`、Qt Quick Controls 风格、组件边界和交互模式。
+- 涉及毛玻璃、液态玻璃、折射或背景采样时，必须参考 `liquid-glass` Skill 的光学分层、边缘折射、背景采样和高光设计；该 Skill 的 Web 实现只作为原理参考，不能复制其技术栈。
+- 界面实现只允许使用 Qt 6、QML 和项目现有 C++ 后端。禁止生成或引入 SwiftUI、UIKit、CSS、HTML、JavaScript Web UI、React 或其他 Web 前端实现。
+- 优先使用 QML `Rectangle`、`MultiEffect`、`ShaderEffect`、`layer.enabled`、`Behavior`、`NumberAnimation` 和 Qt Quick Controls。Shader 必须采用 Qt 6 支持的预编译资源形式，并提供资源测试。
+- 毛玻璃只用于导航栏、浮动工具栏、弹窗和重要控制组件。普通任务卡、统计卡及主要内容区域必须保持清晰，禁止把所有卡片都做成实时玻璃。
+- 光学层按“背景采样/折射 → 半透明着色 → 边缘高光 → 业务内容”组织；业务内容始终位于最高层，不能被 Shader 或模糊层直接处理。
+- 浅色和深色背景必须同时保证文字、图标、输入边界和焦点状态的对比度。颜色优先使用 `Theme.qml` 的语义令牌，禁止依赖单一颜色表达状态。
+- 以稳定 60 FPS 为优先目标。限制实时模糊与 Shader pass 数量，静态背景采样应按需更新；页面不可见或效果关闭时必须停止更新或卸载效果层。
+- 必须提供不支持模糊、关闭模糊、缺少采样源或 Shader 初始化失败时的半透明纯色降级方案。降级后业务功能、布局和文字可读性不能受损。
+- 动效必须支持 `reduceMotion`，并保证鼠标、键盘焦点和屏幕阅读器基础可用性。
+
 ## Git 提交规则
 
 - Git 提交说明必须使用中文，清楚描述本次提交解决的问题或完成的功能。
