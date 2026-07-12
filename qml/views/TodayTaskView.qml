@@ -476,9 +476,9 @@ Item {
             Rectangle {
                 objectName: "todayCompletionStatCard"
                 Layout.fillWidth: true
-                // 与左侧目标卡等高，目标卡三态高度变化时同步伸缩。
-                Layout.fillHeight: true
-                Layout.minimumHeight: 72
+                // 与左侧目标卡等高。不能用 Layout.fillHeight：内层 RowLayout 只要有
+                // 可伸展子项自身就变成可伸展，会和下方任务列表抢整页高度。
+                Layout.preferredHeight: Math.max(72, todayGoalCard.implicitHeight)
                 radius: Theme.radiusLg
                 color: Theme.surface
                 border.color: Theme.border
@@ -510,6 +510,11 @@ Item {
                         text: "任务完成"
                         font.pixelSize: Theme.fontSm
                         color: Theme.inkSoft
+                    }
+
+                    Item {
+                        // 卡片随目标卡加高时，数值仍贴顶排布，不被均匀拉散。
+                        Layout.fillHeight: true
                     }
                 }
             }
