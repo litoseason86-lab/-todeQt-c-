@@ -110,6 +110,28 @@ Item {
         root.pomoTaskTitle = ""
     }
 
+    function syncToActiveTimer() {
+        if (!root.timer || (!root.timer.hasActiveSession && root.timer.phase === 0)) {
+            return
+        }
+
+        // 计时开始后，服务才是唯一事实源；本地模式和待机缓存只能服务于尚未开始的状态。
+        var timerUsesPomodoro = root.timer.mode === 1 || root.timer.phase !== 0
+        root.pomodoroModeSelected = timerUsesPomodoro
+        if (!timerUsesPomodoro) {
+            root.clearPomodoroTask()
+            return
+        }
+
+        // 休息阶段没有任务 id，保留刚完成工作阶段的缓存，供下一轮继续使用。
+        if (root.timer.currentTaskId > 0) {
+            root.pomoTaskId = root.timer.currentTaskId
+        }
+        if (root.timer.currentTaskTitle && root.timer.currentTaskTitle.length > 0) {
+            root.pomoTaskTitle = root.timer.currentTaskTitle
+        }
+    }
+
     function computeState() {
         if (!root.timer) {
             return "free"
@@ -183,16 +205,58 @@ Item {
     }
 
     function enterPomodoroWithTask(taskId, title) {
-        // 任务列表一键直达番茄待机：复用 toPomodoroTab 的停止/清理逻辑，
-        // 再用显式传入的任务覆盖它从 timer 缓存的值，因为直达时 timer 里可能还没有任务。
-        root.toPomodoroTab(true)
-        var safeTitle = String(title || "")
-        if (taskId > 0) {
-            root.pomoTaskId = taskId
+        var safeTitle = String(title || "").trim()
+        if (!root.timer || taskId <= 0 || safeTitle.length === 0) {
+            root.errorText = "番茄任务无效，请重试"
+            return false
         }
-        if (safeTitle.length > 0) {
-            root.pomoTaskTitle = safeTitle
+
+        // 外部任务选择是新的明确意图，必须一次性替换模式和任务缓存。
+        // 不复用 toPomodoroTab：它面向页内切换，会优先保留旧缓存，正是任务错位的来源。
+        if ((root.timer.hasActiveSession || root.timer.phase !== 0) && !root.timer.stopFocus()) {
+            root.errorText = "切换番茄失败，请重试"
+            return false
         }
+
+        root.pomodoroModeSelected = true
+        root.pomoTaskId = taskId
+        root.pomoTaskTitle = safeTitle
+        root.errorText = ""
+        root.justCompletedPhase = 0
+        return true
+    }
+
+    function startFreeFocusWithTask(taskId, title) {
+        var safeTitle = String(title || "").trim()
+        if (!root.timer || taskId <= 0 || safeTitle.length === 0) {
+            root.errorText = "自由专注任务无效，请重试"
+            return false
+        }
+        if (root.timer.hasActiveSession || root.timer.phase !== 0) {
+            root.errorText = "已有专注进行中"
+            return false
+        }
+        if (!root.timer.startFocus(taskId, safeTitle)) {
+            root.errorText = "自由专注启动失败，请重试"
+            return false
+        }
+
+        // 服务启动成功后再切换页面状态，失败时保留原界面，避免制造新的半同步状态。
+        root.pomodoroModeSelected = false
+        root.clearPomodoroTask()
+        root.errorText = ""
+        root.justCompletedPhase = 0
+        if (root.settings) {
+            root.settings.lastMode = 0
+        }
+        return true
+    }
+
+    function enterWithTask(taskId, title, usePomodoro) {
+        // 所有任务页统一走这一入口，模式、缓存和计时器不会再由不同页面分别修改。
+        return usePomodoro
+                ? root.enterPomodoroWithTask(taskId, title)
+                : root.startFreeFocusWithTask(taskId, title)
     }
 
     function selectWorkMinutes(minutes) {
@@ -301,6 +365,18 @@ Item {
     Connections {
         target: root.timer
         ignoreUnknownSignals: true
+
+        function onCurrentTaskChanged() {
+            root.syncToActiveTimer()
+        }
+
+        function onModeChanged() {
+            root.syncToActiveTimer()
+        }
+
+        function onPhaseChanged() {
+            root.syncToActiveTimer()
+        }
 
         function onPhaseCompleted(phase) {
             root.justCompletedPhase = phase

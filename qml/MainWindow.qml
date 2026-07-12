@@ -180,22 +180,16 @@ Item {
     function startFocusForTask(taskId, taskTitle) {
         // 已有自由专注、番茄工作或休息阶段时，不启动第二个会话；直接带用户去专注页处理当前状态。
         if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
+            focusView.syncToActiveTimer()
             root.showToast("已有专注进行中");
             root.switchToView("focus");
             return;
         }
 
-        // 上次使用番茄：进入待机并预载任务，不能偷跑计时，用户还需要机会调整时长。
-        if (root.appSettingsRef && root.appSettingsRef.lastMode === 1) {
-            focusView.enterPomodoroWithTask(taskId, taskTitle);
-            root.switchToView("focus");
-            return;
-        }
-
-        if (root.focusTimerRef.startFocus(taskId, taskTitle)) {
-            if (root.appSettingsRef) {
-                root.appSettingsRef.lastMode = 0;
-            }
+        // 模式选择、任务缓存和计时器启动必须由 FocusView 原子协调；
+        // MainWindow 只决定沿用哪种模式，否则专注页可能显示上一次缓存的任务。
+        var usePomodoro = root.appSettingsRef && root.appSettingsRef.lastMode === 1
+        if (focusView.enterWithTask(taskId, taskTitle, usePomodoro)) {
             root.switchToView("focus");
         }
     }

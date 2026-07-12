@@ -43,6 +43,7 @@ TestCase {
         property int elapsedSeconds: 0
         property int startFocusCalls: 0
         property int startFocusTaskId: 0
+        property string startFocusTaskTitle: ""
 
         signal focusCompleted(int duration)
         signal phaseCompleted(int phase)
@@ -51,6 +52,9 @@ TestCase {
         function startFocus(id, title) {
             startFocusCalls += 1
             startFocusTaskId = id
+            startFocusTaskTitle = title
+            currentTaskId = id
+            currentTaskTitle = title
             hasActiveSession = true
             isRunning = true
             return true
@@ -154,6 +158,9 @@ TestCase {
         mainWindow.isSwitching = false
         focusTimer.startFocusCalls = 0
         focusTimer.startFocusTaskId = 0
+        focusTimer.startFocusTaskTitle = ""
+        focusTimer.currentTaskId = -1
+        focusTimer.currentTaskTitle = ""
         focusTimer.hasActiveSession = false
         focusTimer.isRunning = false
         focusTimer.mode = 0
@@ -178,6 +185,28 @@ TestCase {
         compare(mainWindow.pendingView, "focus")
     }
 
+    function test_freeStartReplacesStalePomodoroTaskState() {
+        var focusView = findChild(mainWindow, "focusViewPage")
+        verify(focusView)
+
+        // 用户上次停留在番茄页，但持久化模式仍是自由专注时，两个状态源会发生漂移。
+        focusView.pomodoroModeSelected = true
+        focusView.pomoTaskId = 7
+        focusView.pomoTaskTitle = "旧任务"
+        appSettings.lastMode = 0
+
+        mainWindow.startFocusForTask(12, "操作系统")
+        wait(20)
+
+        compare(focusTimer.startFocusTaskId, 12)
+        compare(focusTimer.startFocusTaskTitle, "操作系统")
+        compare(focusView.pomodoroModeSelected, false)
+        compare(focusView.pomoTaskId, -1)
+        compare(focusView.pomoTaskTitle, "")
+        compare(focusView.taskTitle(), "操作系统")
+        compare(mainWindow.pendingView, "focus")
+    }
+
     function test_pomodoroModeEntersIdleWithTask() {
         appSettings.lastMode = 1
 
@@ -196,10 +225,20 @@ TestCase {
     function test_conflictNavigatesWithoutStarting() {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
+        focusTimer.currentTaskId = 4
+        focusTimer.currentTaskTitle = "正在专注的任务"
+        focusTimer.mode = 0
+        var focusView = findChild(mainWindow, "focusViewPage")
+        verify(focusView)
+        focusView.pomodoroModeSelected = true
+        focusView.pomoTaskId = 7
+        focusView.pomoTaskTitle = "旧番茄任务"
 
         mainWindow.startFocusForTask(11, "第二个任务")
 
         compare(focusTimer.startFocusCalls, 0)
+        compare(focusView.pomodoroModeSelected, false)
+        compare(focusView.taskTitle(), "正在专注的任务")
         compare(mainWindow.pendingView, "focus")
     }
 
