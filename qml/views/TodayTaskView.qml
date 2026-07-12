@@ -373,6 +373,25 @@ Item {
             onAddRequested: countdownDialog.openForAdd()
         }
 
+        FocusGoalStrip {
+            id: todayGoalCard
+            objectName: "todayGoalCard"
+
+            Layout.fillWidth: true
+            // 倒计时横幅下方通栏（与仪表盘同构）：设置/修改只在本页；
+            // 「任务完成」计数并入条右端。
+            totalSeconds: root.liveSecondsSource.liveSeconds
+            goalMinutes: root.dailyFocusGoalMinutes
+            quickFillMinutes: root.yesterdayGoalMinutes
+            completedTasks: Number(root.todayStats.completedTasks || 0)
+            totalTasks: Number(root.todayStats.totalTasks || 0)
+            reduceMotion: root.settingsRef ? Boolean(root.settingsRef.reduceMotion) : false
+
+            onGoalSubmitted: function (totalMinutes) {
+                todayGoalCard.handleSaveResult(root.saveDailyFocusGoal(totalMinutes))
+            }
+        }
+
         Rectangle {
             objectName: "rolloverBanner"
             Layout.fillWidth: true
@@ -595,24 +614,6 @@ Item {
             }
         }
 
-        FocusGoalStrip {
-            id: todayGoalCard
-            objectName: "todayGoalCard"
-
-            Layout.fillWidth: true
-            // 贴底状态条：目标的设置/修改只在本页（仪表盘只读）；
-            // 「任务完成」计数并入条右端，顶部统计行已整体撤销。
-            totalSeconds: root.liveSecondsSource.liveSeconds
-            goalMinutes: root.dailyFocusGoalMinutes
-            quickFillMinutes: root.yesterdayGoalMinutes
-            completedTasks: Number(root.todayStats.completedTasks || 0)
-            totalTasks: Number(root.todayStats.totalTasks || 0)
-            reduceMotion: root.settingsRef ? Boolean(root.settingsRef.reduceMotion) : false
-
-            onGoalSubmitted: function (totalMinutes) {
-                todayGoalCard.handleSaveResult(root.saveDailyFocusGoal(totalMinutes))
-            }
-        }
     }
 
     AddTaskDialog {
