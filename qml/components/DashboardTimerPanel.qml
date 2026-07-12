@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
 
@@ -14,13 +13,15 @@ Item {
     property var settingsRef: null
     property var wallpaperRef: null
     property int sessionCount: 0
+    property int goalMinutes: 0
     // 降级开关：毛玻璃不可用（无壁纸引用/低配）时走纯色玻璃。
     property bool frostEnabled: true
 
     signal openFocusRequested()
     signal startRequested()
+    signal goalSaveRequested(int totalMinutes)
 
-    readonly property bool frostActive: root.frostEnabled && root.wallpaperRef !== null
+    readonly property bool frostActive: glassBackdrop.effectActive
 
     // —— 计时状态派生（字段显式经过 timerRef 属性读取，tick 信号才能驱动刷新）——
     readonly property int phase: root.timerRef ? Number(root.timerRef.phase) : 0
@@ -108,41 +109,28 @@ Item {
         }
     }
 
-    // —— 液态玻璃 Layer 0：壁纸采样 + 模糊，圆角遮罩防止四角溢出 ——
-    // 壁纸是静态图，纹理只在图片加载/换主题时重传，模糊代价限定在本面板区域。
-    ShaderEffectSource {
-        id: frostSource
-
-        visible: false
-        sourceItem: root.wallpaperRef
-        sourceRect: root.frostRect
+    function handleGoalSaveResult(success) {
+        goalCard.handleSaveResult(success)
     }
 
-    Rectangle {
-        id: frostMask
-
-        anchors.fill: parent
-        radius: Theme.radiusLg
-        visible: false
-    }
-
-    MultiEffect {
+    // Layer0：外层专注面板是本页唯一的实时背景采样区域。
+    LiquidGlassBackdrop {
+        id: glassBackdrop
         objectName: "dashboardTimerFrost"
 
         anchors.fill: parent
-        visible: root.frostActive
-        source: frostSource
-        blurEnabled: true
-        blur: 0.9
-        blurMax: 48
-        maskEnabled: true
-        maskSource: frostMask
+        sourceItem: root.wallpaperRef
+        sourceRect: root.frostRect
+        cornerRadius: Theme.radiusLg
+        // 页面不可见时销毁 Shader/MultiEffect，避免 StackLayout 后台页面继续占 GPU pass。
+        effectEnabled: root.frostEnabled && root.visible
+        fallbackColor: Theme.glassSolidCard
     }
 
     // —— Layer 1+2：着色 + 受光棱边（毛玻璃在下时着色更透，降级时更实保对比度）——
     GlassPanel {
         anchors.fill: parent
-        color: root.frostActive ? Theme.glassCard : Theme.glassHover
+        color: root.frostActive ? Theme.glassCard : Qt.rgba(1, 1, 1, 0)
     }
 
     ColumnLayout {
@@ -339,19 +327,17 @@ Item {
         }
 
         FocusGoalCard {
+            id: goalCard
             objectName: "dashboardGoalCard"
 
             Layout.fillWidth: true
             Layout.topMargin: Theme.space4
             totalSeconds: root.liveFocusSeconds
-            goalHours: root.settingsRef
-                       ? Math.max(1, Number(root.settingsRef.dailyFocusGoalHours) || 3)
-                       : 3
+            goalMinutes: root.goalMinutes
+            reduceMotion: root.settingsRef ? Boolean(root.settingsRef.reduceMotion) : false
 
-            onGoalAdjusted: function (hours) {
-                if (root.settingsRef) {
-                    root.settingsRef.dailyFocusGoalHours = hours
-                }
+            onGoalSubmitted: function (totalMinutes) {
+                root.goalSaveRequested(totalMinutes)
             }
         }
 

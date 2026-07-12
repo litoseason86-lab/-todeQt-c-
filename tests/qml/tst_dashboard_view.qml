@@ -11,6 +11,7 @@ TestCase {
     when: windowShown
     width: 1100
     height: 720
+    property var logicalNow: new Date(2026, 6, 12, 12, 0, 0)
 
     // —— 上下文对象桩：同名 id 让视图的非限定引用解析到这里 ——
     QtObject {
@@ -112,13 +113,30 @@ TestCase {
     QtObject {
         id: appSettings
 
+        signal dailyFocusGoalChanged
+
         property int dayStartHour: 4
         property bool reduceMotion: true
         property int workMinutes: 25
         property int breakMinutes: 5
         property int lastMode: 0
         property string nickname: ""
-        property int dailyFocusGoalHours: 3
+        property string focusGoalDate: ""
+        property int focusGoalMinutes: 0
+        property bool focusGoalSaveSucceeds: true
+
+        function dailyFocusGoalMinutesForDate(isoDate) {
+            return isoDate === focusGoalDate ? focusGoalMinutes : 0
+        }
+
+        function setDailyFocusGoal(isoDate, minutes) {
+            if (!focusGoalSaveSucceeds)
+                return false
+            focusGoalDate = isoDate
+            focusGoalMinutes = minutes
+            dailyFocusGoalChanged()
+            return true
+        }
     }
 
     Component {
@@ -128,6 +146,7 @@ TestCase {
             width: 1000
             height: 680
             settingsRef: appSettings
+            nowProvider: function() { return testCase.logicalNow }
         }
     }
 
@@ -142,6 +161,27 @@ TestCase {
         }
     }
 
+    Rectangle {
+        id: wallpaperSample
+
+        width: 320
+        height: 580
+        z: -1
+        color: "#d9b38c"
+    }
+
+    Component {
+        id: liquidGlassComponent
+
+        LiquidGlassBackdrop {
+            width: 300
+            height: 560
+            sourceItem: wallpaperSample
+            sourceRect: Qt.rect(0, 0, 300, 560)
+            refractionShader: Qt.resolvedUrl("../../resources/shaders/liquid_glass.frag.qsb")
+        }
+    }
+
     function init() {
         taskManager.todayTasksData = []
         focusTimer.phase = 0
@@ -151,6 +191,11 @@ TestCase {
         focusTimer.resumeCalls = 0
         focusTimer.stopCalls = 0
         appSettings.nickname = ""
+        appSettings.focusGoalDate = ""
+        appSettings.focusGoalMinutes = 0
+        appSettings.focusGoalSaveSucceeds = true
+        testCase.logicalNow = new Date(2026, 6, 12, 12, 0, 0)
+        Theme.glassBlurAllowed = true
     }
 
     // —— DashboardFormat 纯函数 ——
@@ -325,7 +370,8 @@ TestCase {
 
     function test_goal_card_clock_and_percent() {
         var card = createTemporaryObject(goalCardComponent, testCase,
-                                         { totalSeconds: 2 * 3600 + 35 * 60 + 45, goalHours: 3 })
+                                         { totalSeconds: 2 * 3600 + 35 * 60 + 45,
+                                           goalMinutes: 180 })
         verify(card)
 
         compare(card.clockText, "02:35:45")
@@ -339,7 +385,10 @@ TestCase {
 
         var pctText = findChild(card, "focusGoalPercent")
         verify(pctText)
-        compare(pctText.text, "目标达成")
+        compare(pctText.text, "100%")
+        var reachedText = findChild(card, "focusGoalReachedLabel")
+        verify(reachedText)
+        compare(reachedText.text, "目标达成")
 
         // 负数与零目标都不能出 NaN/越界。
         card.totalSeconds = -5
@@ -347,19 +396,75 @@ TestCase {
         compare(card.percent, 0)
     }
 
-    function test_goal_card_inline_editing_emits_adjustment() {
-        var card = createTemporaryObject(goalCardComponent, testCase, { goalHours: 3 })
+    function test_goal_card_unset_and_arbitrary_duration_editor() {
+        var card = createTemporaryObject(goalCardComponent, testCase, { goalMinutes: 0 })
         verify(card)
+        compare(card.hasGoal, false)
+        compare(card.percent, 0)
         compare(card.editing, false)
+        var unsetLabel = findChild(card, "focusGoalUnsetLabel")
+        verify(unsetLabel)
+        compare(unsetLabel.text, "尚未设置")
 
-        var adjustSpy = createTemporaryObject(spyComponent, testCase,
-                                              { target: card, signalName: "goalAdjusted" })
-        card.editing = true
-        var stepper = findChild(card, "focusGoalStepper")
-        verify(stepper)
-        stepper.adjusted(5)
-        compare(adjustSpy.count, 1)
-        compare(Number(adjustSpy.signalArguments[0][0]), 5)
+        var submitSpy = createTemporaryObject(spyComponent, testCase,
+                                              { target: card, signalName: "goalSubmitted" })
+        card.beginEditing()
+        compare(card.editing, true)
+        var loader = findChild(card, "focusGoalEditorLoader")
+        verify(loader)
+        tryCompare(loader, "status", Loader.Ready, 300)
+        verify(loader.item)
+
+        var hourField = findChild(loader.item, "focusGoalHourField")
+        var minuteField = findChild(loader.item, "focusGoalMinuteField")
+        var errorLabel = findChild(loader.item, "focusGoalValidationError")
+        verify(hourField)
+        verify(minuteField)
+        verify(errorLabel)
+
+        hourField.text = "0"
+        minuteField.text = "0"
+        loader.item.submit()
+        compare(submitSpy.count, 0)
+        verify(loader.item.validationError.indexOf("至少") >= 0)
+
+        hourField.text = "24"
+        minuteField.text = "1"
+        loader.item.submit()
+        compare(submitSpy.count, 0)
+        verify(loader.item.validationError.indexOf("分钟必须为 0") >= 0)
+
+        hourField.text = "2"
+        minuteField.text = "20"
+        loader.item.submit()
+        compare(submitSpy.count, 1)
+        compare(Number(submitSpy.signalArguments[0][0]), 140)
+
+        card.handleSaveResult(false)
+        compare(card.editing, true)
+        verify(card.saveError.length > 0)
+        card.handleSaveResult(true)
+        compare(card.editing, false)
+    }
+
+    function test_dashboard_goal_is_bound_to_logical_day() {
+        appSettings.focusGoalDate = "2026-07-12"
+        appSettings.focusGoalMinutes = 140
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+        compare(view.logicalTodayIso, "2026-07-12")
+        compare(view.dailyFocusGoalMinutes, 140)
+
+        // 跨到下一个逻辑日后，昨天目标不继承。
+        testCase.logicalNow = new Date(2026, 6, 13, 12, 0, 0)
+        logicalDayService.changed()
+        compare(view.logicalTodayIso, "2026-07-13")
+        compare(view.dailyFocusGoalMinutes, 0)
+
+        verify(view.saveDailyFocusGoal(95))
+        compare(appSettings.focusGoalDate, "2026-07-13")
+        compare(appSettings.focusGoalMinutes, 95)
+        compare(view.dailyFocusGoalMinutes, 95)
     }
 
     function test_timer_panel_live_focus_seconds() {
@@ -379,12 +484,14 @@ TestCase {
         focusTimer.phase = 2
         compare(panel.liveFocusSeconds, 600)
 
-        // 目标调整回写设置。
+        // 目标卡只向上请求保存，计时面板不直接碰设置存储。
+        var goalSpy = createTemporaryObject(spyComponent, testCase,
+                                            { target: panel, signalName: "goalSaveRequested" })
         var card = findChild(panel, "dashboardGoalCard")
         verify(card)
-        card.goalAdjusted(6)
-        compare(appSettings.dailyFocusGoalHours, 6)
-        appSettings.dailyFocusGoalHours = 3
+        card.goalSubmitted(155)
+        compare(goalSpy.count, 1)
+        compare(Number(goalSpy.signalArguments[0][0]), 155)
         focusTimer.elapsedSeconds = 0
     }
 
@@ -440,6 +547,28 @@ TestCase {
         compare(focusTimer.resumeCalls, 1)
         // 待机分支只发信号，不该误触暂停/继续。
         compare(startSpy.count, 1)
+    }
+
+    function test_liquid_glass_effect_and_solid_fallback() {
+        Theme.glassBlurAllowed = false
+        var backdrop = createTemporaryObject(liquidGlassComponent, testCase)
+        verify(backdrop)
+        compare(backdrop.effectActive, false)
+
+        var loader = findChild(backdrop, "liquidGlassEffectLoader")
+        var fallback = findChild(backdrop, "liquidGlassFallback")
+        verify(loader)
+        verify(fallback)
+        compare(loader.active, false)
+        verify(Qt.colorEqual(fallback.color, Theme.glassSolidCard))
+
+        Theme.glassBlurAllowed = true
+        compare(backdrop.effectActive, true)
+        tryCompare(loader, "active", true, 300)
+        tryCompare(loader, "status", Loader.Ready, 500)
+        var refraction = findChild(backdrop, "liquidGlassRefraction")
+        verify(refraction)
+        verify(String(refraction.fragmentShader).indexOf("liquid_glass.frag.qsb") >= 0)
     }
 
 }

@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import "../components"
 import ".."
 import "DashboardFormat.js" as DashboardFormat
+import "../LogicalDay.js" as LogicalDay
 
 // 仪表盘：问候头部 + 倒计时英雄横幅 + 四张统计卡 + 今日任务面板 + 专注计时面板。
 // 内容区保持清晰的半透明色块，毛玻璃只出现在右侧专注面板（重要控制组件）。
@@ -25,12 +26,15 @@ Item {
     property var todayStats: ({ totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0, sessionCount: 0 })
     property int streakDays: 0
     property int totalFocusSeconds: 0
+    property int dailyFocusGoalMinutes: 0
     property string loadError: ""
     // all=全部 done=已完成；仪表盘任务面板只看不加，添加去今日任务页。
     property string filterMode: "all"
     property bool completionRefreshDelayActive: false
     // 时钟快照：问候语与日期卡共用，分钟级刷新足够。
     property var now: new Date()
+    // 生产默认读系统时间；测试注入固定时间，避免逻辑日用例依赖真实日期。
+    property var nowProvider: null
 
     readonly property var filteredTasks: {
         if (root.filterMode === "done") {
@@ -54,8 +58,17 @@ Item {
                                          : root.tasks.length
 
     readonly property bool doneFilter: root.filterMode === "done"
+    readonly property string logicalTodayIso: {
+        // 设置服务缺席或测试桩未提供该属性时，继续使用项目约定的凌晨 4 点作为逻辑换日边界。
+        var hour = root.settingsRef && root.settingsRef.dayStartHour !== undefined
+                ? Number(root.settingsRef.dayStartHour) : 4
+        return LogicalDay.todayIso(hour, root.now)
+    }
 
-    Component.onCompleted: refresh()
+    Component.onCompleted: {
+        root.now = root.currentNow()
+        refresh()
+    }
     onPendingDeleteTaskIdChanged: refresh()
 
     Timer {
@@ -63,7 +76,7 @@ Item {
         interval: 60000
         repeat: true
         running: root.visible
-        onTriggered: root.now = new Date()
+        onTriggered: root.now = root.currentNow()
     }
 
     Connections {
@@ -82,6 +95,15 @@ Item {
 
         function onCategoriesChanged() {
             root.refresh()
+        }
+    }
+
+    Connections {
+        target: root.settingsRef
+        ignoreUnknownSignals: true
+
+        function onDailyFocusGoalChanged() {
+            root.loadDailyFocusGoal()
         }
     }
 
@@ -110,7 +132,7 @@ Item {
         ignoreUnknownSignals: true
 
         function onChanged() {
-            root.now = new Date()
+            root.now = root.currentNow()
             root.refresh()
         }
     }
@@ -134,6 +156,13 @@ Item {
         }
         loadTasks()
         loadStats()
+        loadDailyFocusGoal()
+    }
+
+    function currentNow() {
+        // qmllint disable use-proper-function
+        return root.nowProvider ? root.nowProvider() : new Date()
+        // qmllint enable use-proper-function
     }
 
     function loadTasks() {
@@ -162,6 +191,22 @@ Item {
             root.streakDays = 0
             root.totalFocusSeconds = 0
         }
+    }
+
+    function loadDailyFocusGoal() {
+        if (!root.settingsRef || !root.settingsRef.dailyFocusGoalMinutesForDate) {
+            root.dailyFocusGoalMinutes = 0
+            return
+        }
+        root.dailyFocusGoalMinutes = Number(
+            root.settingsRef.dailyFocusGoalMinutesForDate(root.logicalTodayIso) || 0)
+    }
+
+    function saveDailyFocusGoal(minutes) {
+        if (!root.settingsRef || !root.settingsRef.setDailyFocusGoal) {
+            return false
+        }
+        return Boolean(root.settingsRef.setDailyFocusGoal(root.logicalTodayIso, minutes))
     }
 
     function setTaskCompletedWithAnimationDelay(id, completed) {
@@ -551,6 +596,7 @@ Item {
         }
 
         DashboardTimerPanel {
+            id: dashboardTimerPanel
             objectName: "dashboardTimerPanel"
 
             Layout.preferredWidth: 300
@@ -560,9 +606,14 @@ Item {
             wallpaperRef: root.wallpaperRef
             sessionCount: Number(root.todayStats.sessionCount || 0)
             todayFocusSeconds: Number(root.todayStats.totalDuration || 0)
+            goalMinutes: root.dailyFocusGoalMinutes
 
             onOpenFocusRequested: root.focusPageRequested()
             onStartRequested: root.startFirstPendingTask()
+            onGoalSaveRequested: function(totalMinutes) {
+                dashboardTimerPanel.handleGoalSaveResult(
+                    root.saveDailyFocusGoal(totalMinutes))
+            }
         }
     }
 

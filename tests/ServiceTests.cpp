@@ -410,7 +410,7 @@ private slots:
     void appSettingsSlimClockFontRoundTrip();
     void appSettingsRolloverIgnoredDateRoundTrip();
     void appSettingsNicknameTrimsAndRoundTrips();
-    void appSettingsDailyFocusGoalHoursNormalizeAndRoundTrip();
+    void appSettingsDailyFocusGoalMinutesByDate();
     void appSettingsSidebarVisibleRoundTrip();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void appSettingsDayStartHourNormalizeAndPersist();
@@ -677,7 +677,7 @@ void ServiceTests::appSettingsSidebarVisibleRoundTrip()
     QCOMPARE(reloaded.sidebarVisible(), false);
 }
 
-void ServiceTests::appSettingsDailyFocusGoalHoursNormalizeAndRoundTrip()
+void ServiceTests::appSettingsDailyFocusGoalMinutesByDate()
 {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
@@ -685,22 +685,35 @@ void ServiceTests::appSettingsDailyFocusGoalHoursNormalizeAndRoundTrip()
 
     {
         AppSettings settings(path);
-        QCOMPARE(settings.dailyFocusGoalHours(), 3);
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 0);
 
-        QSignalSpy spy(&settings, &AppSettings::dailyFocusGoalHoursChanged);
-        settings.setDailyFocusGoalHours(5);
-        QCOMPARE(settings.dailyFocusGoalHours(), 5);
+        QSignalSpy spy(&settings, &AppSettings::dailyFocusGoalChanged);
+        QVERIFY(!settings.setDailyFocusGoal(QString(), 140));
+        QVERIFY(!settings.setDailyFocusGoal(QStringLiteral("2026-7-12"), 140));
+        QVERIFY(!settings.setDailyFocusGoal(QStringLiteral("2026-07-12"), 0));
+        QVERIFY(!settings.setDailyFocusGoal(QStringLiteral("2026-07-12"), 1441));
+        QCOMPARE(spy.count(), 0);
+
+        QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-12"), 140));
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 140);
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-13")), 0);
         QCOMPARE(spy.count(), 1);
 
-        // 越界写入回默认 3，而不是被 clamp 成边界值。
-        settings.setDailyFocusGoalHours(0);
-        QCOMPARE(settings.dailyFocusGoalHours(), 3);
-        settings.setDailyFocusGoalHours(24);
-        QCOMPARE(settings.dailyFocusGoalHours(), 3);
+        // 同值保存幂等，非法保存也不能覆盖已有合法目标。
+        QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-12"), 140));
+        QVERIFY(!settings.setDailyFocusGoal(QStringLiteral("2026-07-12"), -1));
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 140);
+        QCOMPARE(spy.count(), 1);
+
+        // 新逻辑日目标替换当前记录，24 小时整是合法上界。
+        QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-13"), 1440));
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 0);
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-13")), 1440);
+        QCOMPARE(spy.count(), 2);
     }
 
     AppSettings reloaded(path);
-    QCOMPARE(reloaded.dailyFocusGoalHours(), 3);
+    QCOMPARE(reloaded.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-13")), 1440);
 }
 
 void ServiceTests::appSettingsBackgroundThemeDefaultAndRoundTrip()

@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/shaders">
+        <file alias="liquid_glass.frag.qsb">shaders/liquid_glass.frag.qsb</file>
+    </qresource>
+</RCC>

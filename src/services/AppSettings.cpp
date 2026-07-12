@@ -1,5 +1,7 @@
 #include "AppSettings.h"
 
+#include <QDate>
+
 namespace {
 const auto kLastModeKey = QStringLiteral("focus/lastMode");
 const auto kWorkMinutesKey = QStringLiteral("focus/workMinutes");
@@ -12,7 +14,9 @@ const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
 const auto kNicknameKey = QStringLiteral("profile/nickname");
 const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
-const auto kDailyFocusGoalHoursKey = QStringLiteral("focus/dailyGoalHours");
+const auto kDailyFocusGoalDateKey = QStringLiteral("focus/dailyGoalDate");
+const auto kDailyFocusGoalMinutesKey = QStringLiteral("focus/dailyGoalMinutes");
+const auto kLegacyDailyFocusGoalHoursKey = QStringLiteral("focus/dailyGoalHours");
 }
 
 AppSettings* AppSettings::instance()
@@ -218,26 +222,58 @@ void AppSettings::setSidebarVisible(bool visible)
     emit sidebarVisibleChanged();
 }
 
-int AppSettings::normalizeDailyFocusGoalHours(int hours)
+int AppSettings::dailyFocusGoalMinutesForDate(const QString& isoDate) const
 {
-    // 越界代表配置损坏，回默认 3 小时；不 clamp，避免悄悄改变用户目标口径。
-    return (hours >= 1 && hours <= 12) ? hours : 3;
-}
-
-int AppSettings::dailyFocusGoalHours() const
-{
-    return normalizeDailyFocusGoalHours(
-        m_settings->value(kDailyFocusGoalHoursKey, 3).toInt());
-}
-
-void AppSettings::setDailyFocusGoalHours(int hours)
-{
-    const int normalized = normalizeDailyFocusGoalHours(hours);
-    if (dailyFocusGoalHours() == normalized) {
-        return;
+    const QDate requestedDate = QDate::fromString(isoDate, Qt::ISODate);
+    if (!requestedDate.isValid() || requestedDate.toString(Qt::ISODate) != isoDate) {
+        return 0;
     }
 
-    m_settings->setValue(kDailyFocusGoalHoursKey, normalized);
+    if (m_settings->value(kDailyFocusGoalDateKey).toString() != isoDate) {
+        return 0;
+    }
+
+    const int minutes = m_settings->value(kDailyFocusGoalMinutesKey, 0).toInt();
+    // 损坏配置按“当天未设置”处理，不能把异常值带进百分比计算。
+    return (minutes >= 1 && minutes <= 24 * 60) ? minutes : 0;
+}
+
+bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)
+{
+    const QDate requestedDate = QDate::fromString(isoDate, Qt::ISODate);
+    if (!requestedDate.isValid() || requestedDate.toString(Qt::ISODate) != isoDate
+            || minutes < 1 || minutes > 24 * 60) {
+        return false;
+    }
+
+    if (m_settings->value(kDailyFocusGoalDateKey).toString() == isoDate
+            && m_settings->value(kDailyFocusGoalMinutesKey).toInt() == minutes) {
+        return true;
+    }
+
+    const bool hadPreviousDate = m_settings->contains(kDailyFocusGoalDateKey);
+    const bool hadPreviousMinutes = m_settings->contains(kDailyFocusGoalMinutesKey);
+    const bool hadLegacyHours = m_settings->contains(kLegacyDailyFocusGoalHoursKey);
+    const QVariant previousDate = m_settings->value(kDailyFocusGoalDateKey);
+    const QVariant previousMinutes = m_settings->value(kDailyFocusGoalMinutesKey);
+    const QVariant previousLegacyHours = m_settings->value(kLegacyDailyFocusGoalHoursKey);
+
+    // 日期与分钟必须作为一项设置写入；旧整小时值没有日期语义，成功保存新目标后清理。
+    m_settings->setValue(kDailyFocusGoalDateKey, isoDate);
+    m_settings->setValue(kDailyFocusGoalMinutesKey, minutes);
+    m_settings->remove(kLegacyDailyFocusGoalHoursKey);
     m_settings->sync();
-    emit dailyFocusGoalHoursChanged();
+    if (m_settings->status() != QSettings::NoError) {
+        hadPreviousDate ? m_settings->setValue(kDailyFocusGoalDateKey, previousDate)
+                        : m_settings->remove(kDailyFocusGoalDateKey);
+        hadPreviousMinutes ? m_settings->setValue(kDailyFocusGoalMinutesKey, previousMinutes)
+                           : m_settings->remove(kDailyFocusGoalMinutesKey);
+        hadLegacyHours ? m_settings->setValue(kLegacyDailyFocusGoalHoursKey, previousLegacyHours)
+                       : m_settings->remove(kLegacyDailyFocusGoalHoursKey);
+        m_settings->sync();
+        return false;
+    }
+
+    emit dailyFocusGoalChanged();
+    return true;
 }
