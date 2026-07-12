@@ -15,6 +15,7 @@ Item {
     signal countdownRequested()
     signal deleteRequested(int taskId, string title)
     signal focusPageRequested()
+    signal todayPageRequested()
 
     property var categoryManagerRef: null
     property var countdownServiceRef: null
@@ -200,13 +201,6 @@ Item {
         }
         root.dailyFocusGoalMinutes = Number(
             root.settingsRef.dailyFocusGoalMinutesForDate(root.logicalTodayIso) || 0)
-    }
-
-    function saveDailyFocusGoal(minutes) {
-        if (!root.settingsRef || !root.settingsRef.setDailyFocusGoal) {
-            return false
-        }
-        return Boolean(root.settingsRef.setDailyFocusGoal(root.logicalTodayIso, minutes))
     }
 
     function setTaskCompletedWithAnimationDelay(id, completed) {
@@ -610,10 +604,8 @@ Item {
 
             onOpenFocusRequested: root.focusPageRequested()
             onStartRequested: root.startFirstPendingTask()
-            onGoalSaveRequested: function(totalMinutes) {
-                dashboardTimerPanel.handleGoalSaveResult(
-                    root.saveDailyFocusGoal(totalMinutes))
-            }
+            // 仪表盘不承担目标设置：引导链接直接送用户去今日任务页。
+            onGoalSetupRequested: root.todayPageRequested()
         }
     }
 

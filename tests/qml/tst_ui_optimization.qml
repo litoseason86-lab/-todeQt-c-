@@ -751,7 +751,7 @@ TestCase {
         var addButton = findChild(todayTaskView, "todayAddButton");
         var addButtonBackground = findChild(todayTaskView, "todayAddButtonBackground");
         var addButtonLabel = findChild(todayTaskView, "todayAddButtonLabel");
-        var focusStatCard = findChild(todayTaskView, "todayFocusStatCard");
+        var goalCard = findChild(todayTaskView, "todayGoalCard");
         var completionStatCard = findChild(todayTaskView, "todayCompletionStatCard");
         var taskListContainer = findChild(todayTaskView, "todayTaskListContainer");
         var emptyStateCard = findChild(todayTaskView, "todayEmptyStateCard");
@@ -761,7 +761,7 @@ TestCase {
         verify(addButton !== null);
         verify(addButtonBackground !== null);
         verify(addButtonLabel !== null);
-        verify(focusStatCard !== null);
+        verify(goalCard !== null);
         verify(completionStatCard !== null);
         verify(taskListContainer !== null);
         verify(emptyStateCard !== null);
@@ -773,11 +773,11 @@ TestCase {
         compare(addButtonBackground.border.width, 0);
         compare(addButtonLabel.font.weight, Font.Medium);
 
-        compare(focusStatCard.radius, 8);
+        // 原「今日专注」统计卡已升级为可编辑目标卡（玻璃基底，内嵌关落影）。
+        compare(goalCard.radius, Theme.radiusLg);
+        compare(goalCard.editable, true);
         compare(completionStatCard.radius, 8);
-        compare(focusStatCard.layer.enabled, true);
         compare(completionStatCard.layer.enabled, true);
-        verify(focusStatCard.layer.effect !== null);
         verify(completionStatCard.layer.effect !== null);
 
         compare(taskListContainer.radius, 8);

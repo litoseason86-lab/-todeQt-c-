@@ -28,9 +28,31 @@ Item {
     property int pendingDeleteTaskId: -1
     property string loadError: ""
     property bool completionRefreshDelayActive: false
+    // 当日专注目标（分钟）；0 = 今天尚未设置。设置/修改只在本页发生。
+    property int dailyFocusGoalMinutes: 0
+    // 昨天的目标分钟数：未设置态快捷 chip 的数据源（单键快照跨日后即昨天值）。
+    property int yesterdayGoalMinutes: 0
+
+    // 实时专注秒数统一口径（与仪表盘共用 FocusLiveSeconds，禁止各自拼接）。
+    readonly property FocusLiveSeconds liveSecondsSource: FocusLiveSeconds {
+        // qmllint disable unqualified
+        timerRef: typeof focusTimer !== "undefined" ? focusTimer : null
+        // qmllint enable unqualified
+        baseSeconds: Number(root.todayStats.totalDuration || 0)
+    }
 
     Component.onCompleted: refresh()
     onPendingDeleteTaskIdChanged: refresh()
+
+    Connections {
+        // 目标保存后（本页或未来其它入口）重读，保证展示与存储一致。
+        target: root.settingsRef
+        ignoreUnknownSignals: true
+
+        function onDailyFocusGoalChanged() {
+            root.loadDailyFocusGoal()
+        }
+    }
 
     Connections {
         target: taskManager
@@ -101,6 +123,36 @@ Item {
         return LogicalDay.todayIso(hour, new Date());
     }
 
+    function yesterdayIsoDate() {
+        // qmllint disable unqualified
+        var hour = (typeof appSettings !== "undefined" && appSettings)
+                ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        var today = LogicalDay.todayDate(hour, new Date())
+        var yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1)
+        return Qt.formatDate(yesterday, "yyyy-MM-dd")
+    }
+
+    function loadDailyFocusGoal() {
+        // 只认「目标日期 == 逻辑今天」；不一致视为今天未设置。
+        if (!root.settingsRef || !root.settingsRef.dailyFocusGoalMinutesForDate) {
+            root.dailyFocusGoalMinutes = 0
+            root.yesterdayGoalMinutes = 0
+            return
+        }
+        root.dailyFocusGoalMinutes = Number(
+            root.settingsRef.dailyFocusGoalMinutesForDate(root.todayIsoDate()) || 0)
+        root.yesterdayGoalMinutes = Number(
+            root.settingsRef.dailyFocusGoalMinutesForDate(root.yesterdayIsoDate()) || 0)
+    }
+
+    function saveDailyFocusGoal(minutes) {
+        if (!root.settingsRef || !root.settingsRef.setDailyFocusGoal) {
+            return false
+        }
+        return Boolean(root.settingsRef.setDailyFocusGoal(root.todayIsoDate(), minutes))
+    }
+
     function loadOverdueTasks() {
         // 测试桩或旧上下文可能还没提供结转接口；缺失时按无逾期处理，不能拖垮今日页。
         if (!taskManager.getOverdueUncompletedTasks) {
@@ -152,6 +204,7 @@ Item {
         loadOverdueTasks();
         loadTasks();
         loadStats();
+        loadDailyFocusGoal();
     }
 
     function setTaskCompletedWithAnimationDelay(id, completed) {
@@ -403,49 +456,29 @@ Item {
             Layout.fillWidth: true
             spacing: Theme.space12
 
-            Rectangle {
-                objectName: "todayFocusStatCard"
+            FocusGoalCard {
+                id: todayGoalCard
+                objectName: "todayGoalCard"
+
                 Layout.fillWidth: true
-                Layout.preferredHeight: 72
-                radius: Theme.radiusLg
-                color: Theme.surface
-                border.color: Theme.border
-                border.width: 1
-                layer.enabled: true
-                layer.effect: MultiEffect {
-                    autoPaddingEnabled: true
-                    shadowEnabled: true
-                    shadowColor: Theme.shadow
-                    shadowOpacity: 0.08
-                    shadowBlur: 0.14
-                    shadowHorizontalOffset: 0
-                    shadowVerticalOffset: 2
-                }
+                // 原「今日专注」统计卡原位升级：目标的设置/修改只在本页（仪表盘只读）。
+                editable: true
+                totalSeconds: root.liveSecondsSource.liveSeconds
+                goalMinutes: root.dailyFocusGoalMinutes
+                quickFillMinutes: root.yesterdayGoalMinutes
+                reduceMotion: root.settingsRef ? Boolean(root.settingsRef.reduceMotion) : false
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: Theme.space12
-                    spacing: Theme.space4
-
-                    Text {
-                        text: root.formatDuration(root.todayStats.totalDuration)
-                        font.pixelSize: Theme.fontXl
-                        font.weight: Font.Bold
-                        color: Theme.ink
-                    }
-
-                    Text {
-                        text: "今日专注"
-                        font.pixelSize: Theme.fontSm
-                        color: Theme.inkSoft
-                    }
+                onGoalSubmitted: function (totalMinutes) {
+                    todayGoalCard.handleSaveResult(root.saveDailyFocusGoal(totalMinutes))
                 }
             }
 
             Rectangle {
                 objectName: "todayCompletionStatCard"
                 Layout.fillWidth: true
-                Layout.preferredHeight: 72
+                // 与左侧目标卡等高，目标卡三态高度变化时同步伸缩。
+                Layout.fillHeight: true
+                Layout.minimumHeight: 72
                 radius: Theme.radiusLg
                 color: Theme.surface
                 border.color: Theme.border

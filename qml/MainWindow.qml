@@ -453,6 +453,7 @@ Item {
 
                     onCountdownRequested: root.switchToView("countdown")
                     onFocusPageRequested: root.switchToView("focus")
+                    onTodayPageRequested: root.switchToView("today")
                     onDeleteRequested: function(taskId, taskTitle) {
                         root.requestDeleteTask(taskId, taskTitle)
                     }

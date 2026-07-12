@@ -461,10 +461,12 @@ TestCase {
         compare(view.logicalTodayIso, "2026-07-13")
         compare(view.dailyFocusGoalMinutes, 0)
 
-        verify(view.saveDailyFocusGoal(95))
-        compare(appSettings.focusGoalDate, "2026-07-13")
-        compare(appSettings.focusGoalMinutes, 95)
-        compare(view.dailyFocusGoalMinutes, 95)
+        // 保存动作已移交今日任务页；仪表盘上的目标卡是只读实例。
+        var card = findChild(view, "dashboardGoalCard")
+        verify(card)
+        compare(card.editable, false)
+        card.beginEditing()
+        compare(card.editing, false)
     }
 
     function test_timer_panel_live_focus_seconds() {
@@ -484,14 +486,14 @@ TestCase {
         focusTimer.phase = 2
         compare(panel.liveFocusSeconds, 600)
 
-        // 目标卡只向上请求保存，计时面板不直接碰设置存储。
-        var goalSpy = createTemporaryObject(spyComponent, testCase,
-                                            { target: panel, signalName: "goalSaveRequested" })
+        // 只读目标卡：引导链接向上请求跳到今日任务页，面板不碰设置存储。
+        var setupSpy = createTemporaryObject(spyComponent, testCase,
+                                             { target: panel, signalName: "goalSetupRequested" })
         var card = findChild(panel, "dashboardGoalCard")
         verify(card)
-        card.goalSubmitted(155)
-        compare(goalSpy.count, 1)
-        compare(Number(goalSpy.signalArguments[0][0]), 155)
+        compare(card.editable, false)
+        card.setupRequested()
+        compare(setupSpy.count, 1)
         focusTimer.elapsedSeconds = 0
     }
 

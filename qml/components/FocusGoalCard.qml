@@ -14,8 +14,19 @@ GlassPanel {
     property bool editing: false
     property bool reduceMotion: false
     property string saveError: ""
+    // 只有今日任务页实例可编辑；仪表盘实例只读，未设置时引导跳转。
+    property bool editable: true
+    // 快捷沿用的数据源（昨天的目标分钟数）；无效时回落推荐 4 小时。
+    property int quickFillMinutes: 0
 
     signal goalSubmitted(int totalMinutes)
+    signal setupRequested()
+
+    readonly property bool quickFillFromYesterday: root.quickFillMinutes >= 1 && root.quickFillMinutes <= 1440
+    readonly property int quickFillValue: root.quickFillFromYesterday ? root.quickFillMinutes : 240
+    readonly property string quickFillLabel: root.quickFillFromYesterday
+        ? qsTr("沿用昨天 · %1").arg(root.formatTarget(root.quickFillMinutes))
+        : qsTr("推荐 · 4:00")
 
     readonly property bool hasGoal: root.goalMinutes >= 1 && root.goalMinutes <= 1440
     readonly property int safeSeconds: Math.max(0, Number(root.totalSeconds || 0))
@@ -48,6 +59,10 @@ GlassPanel {
     }
 
     function beginEditing() {
+        // 只读实例（仪表盘）不进入编辑态，编辑一律回今日任务页。
+        if (!root.editable) {
+            return
+        }
         root.saveError = ""
         root.editing = true
     }
@@ -102,7 +117,8 @@ GlassPanel {
 
             Label {
                 Layout.fillWidth: true
-                text: qsTr("为今天定一个清晰、可完成的目标。")
+                text: root.editable ? qsTr("为今天定一个清晰、可完成的目标。")
+                                    : qsTr("目标在「今日任务」页设置。")
                 color: Theme.inkMuted
                 font.pixelSize: Theme.fontXs
                 wrapMode: Text.WordWrap
@@ -113,6 +129,7 @@ GlassPanel {
                 objectName: "focusGoalSetButton"
                 Layout.fillWidth: true
                 Layout.topMargin: Theme.space4
+                visible: root.editable
                 text: qsTr("设置今日目标")
                 activeFocusOnTab: true
                 implicitHeight: 34
@@ -131,6 +148,57 @@ GlassPanel {
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            Button {
+                id: quickFillChip
+                objectName: "focusGoalQuickChip"
+
+                visible: root.editable
+                Layout.topMargin: 2
+                text: root.quickFillLabel
+                activeFocusOnTab: true
+                implicitHeight: 26
+                // 快捷落库：保留"每天主动确认"的仪式，消掉重复输入。
+                onClicked: root.goalSubmitted(root.quickFillValue)
+
+                background: Rectangle {
+                    radius: 13
+                    color: quickFillChip.pressed ? Theme.glassAccent
+                           : (quickFillChip.hovered ? Theme.glassHover : Theme.glassAccent)
+                    border.color: quickFillChip.hovered ? Theme.accent : Theme.glassBorder
+                    border.width: 1
+                }
+
+                contentItem: Text {
+                    text: quickFillChip.text
+                    leftPadding: Theme.space8
+                    rightPadding: Theme.space8
+                    color: Theme.accentInk
+                    font.pixelSize: Theme.fontXs
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
+
+            Label {
+                objectName: "focusGoalGuideLink"
+
+                visible: !root.editable
+                Layout.topMargin: 2
+                text: qsTr("去「今日任务」页设置 ›")
+                color: guideArea.containsMouse ? Theme.accentInk : Theme.inkSoft
+                font.pixelSize: Theme.fontSm
+
+                MouseArea {
+                    id: guideArea
+
+                    anchors.fill: parent
+                    anchors.margins: -Theme.space4
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.setupRequested()
                 }
             }
         }
@@ -164,6 +232,7 @@ GlassPanel {
                 Button {
                     id: modifyGoalButton
                     objectName: "focusGoalModifyButton"
+                    visible: root.editable
                     text: qsTr("修改目标")
                     activeFocusOnTab: true
                     flat: true

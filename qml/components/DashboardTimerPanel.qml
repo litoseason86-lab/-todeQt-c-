@@ -19,7 +19,8 @@ Item {
 
     signal openFocusRequested()
     signal startRequested()
-    signal goalSaveRequested(int totalMinutes)
+    // 仪表盘目标卡只读；未设置时用户点引导链接，向上请求跳到今日任务页。
+    signal goalSetupRequested()
 
     readonly property bool frostActive: glassBackdrop.effectActive
 
@@ -55,14 +56,12 @@ Item {
     // 今日已落库的专注秒数（由 DashboardView 注入统计口径）。
     property int todayFocusSeconds: 0
 
-    // 实时总时长 = 落库累计 + 进行中会话秒数；休息阶段不累计，与统计口径一致。
-    // 显式经由 timerRef.elapsedSeconds 读取，tick 信号才能驱动逐秒走字。
-    readonly property int liveFocusSeconds: {
-        var base = Math.max(0, Number(root.todayFocusSeconds || 0))
-        if (root.timerRef && (root.phase === 1 || (root.phase === 0 && root.hasSession))) {
-            base += Math.max(0, Number(root.timerRef.elapsedSeconds || 0))
-        }
-        return base
+    // 实时口径统一走 FocusLiveSeconds，与今日任务页共用一份定义。
+    readonly property int liveFocusSeconds: liveSecondsSource.liveSeconds
+
+    readonly property FocusLiveSeconds liveSecondsSource: FocusLiveSeconds {
+        timerRef: root.timerRef
+        baseSeconds: root.todayFocusSeconds
     }
 
     // 采样区域 = 面板在壁纸坐标系里的矩形。mapToItem 本身不产生绑定依赖，
@@ -107,10 +106,6 @@ Item {
         } else {
             root.timerRef.resumeFocus()
         }
-    }
-
-    function handleGoalSaveResult(success) {
-        goalCard.handleSaveResult(success)
     }
 
     // Layer0：外层专注面板是本页唯一的实时背景采样区域。
@@ -332,13 +327,13 @@ Item {
 
             Layout.fillWidth: true
             Layout.topMargin: Theme.space4
+            // 只读实例：展示与今日页同一份数据，设置动作引导回今日任务页。
+            editable: false
             totalSeconds: root.liveFocusSeconds
             goalMinutes: root.goalMinutes
             reduceMotion: root.settingsRef ? Boolean(root.settingsRef.reduceMotion) : false
 
-            onGoalSubmitted: function (totalMinutes) {
-                root.goalSaveRequested(totalMinutes)
-            }
+            onSetupRequested: root.goalSetupRequested()
         }
 
         Item {
