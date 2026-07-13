@@ -22,6 +22,7 @@ Item {
     property string loadError: ""
     property date pendingAddDate: new Date()
     property bool completionRefreshDelayActive: false
+    property bool pageActive: true
 
     // 周一起点对应的星期字，索引 0~6 = 周一~周日。
     readonly property var weekdayGlyphs: ["一", "二", "三", "四", "五", "六", "日"]
@@ -29,17 +30,31 @@ Item {
     Component.onCompleted: {
         root.logicalToday = root.computeLogicalToday()
         root.weekStart = root.mondayOf(root.logicalToday)
-        root.refresh()
+        if (root.pageActive)
+            root.refresh()
     }
-    onPendingDeleteTaskIdChanged: refresh()
+    onPageActiveChanged: {
+        if (root.pageActive)
+            root.refresh()
+    }
+    onPendingDeleteTaskIdChanged: {
+        if (root.pageActive)
+            refresh()
+    }
 
     Connections {
         target: taskManager
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onTasksChanged() {
             if (root.completionRefreshDelayActive)
                 return
             root.refresh()
+        }
+
+        function onOperationFailed(message) {
+            root.loadError = String(message || "本周计划加载失败")
         }
     }
 
@@ -57,6 +72,7 @@ Item {
     Connections {
         target: root.categoryManagerRef
         ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onCategoriesChanged() {
             root.refresh()
@@ -364,13 +380,15 @@ Item {
             wrapMode: Text.WordWrap
         }
 
-        ScrollView {
+        ListView {
             id: weekScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
-            contentWidth: availableWidth
-            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            model: 7
+            spacing: Theme.space12
+            boundsBehavior: Flickable.StopAtBounds
+            cacheBuffer: 180
             // 主题化竖向滚动条：细、暖色，悬停/按下转 accent，与其它滚动页面一致。
             ScrollBar.vertical: ScrollBar {
                 id: weekVerticalScrollBar
@@ -391,25 +409,15 @@ Item {
                 }
             }
 
-            ColumnLayout {
-                // 绑视口宽度而非内容隐含宽度：嵌套 RowLayout 会把内容隐含宽度压窄，
-                // 直接用 ScrollView 的可用宽度才能让每天的 TaskItem 撑满整行；
-                // 再减一个 space24 给右侧留白，使内容不顶到贴边的滚动条。
-                width: Math.max(weekScroll.availableWidth - Theme.space24, 1)
-                spacing: Theme.space12
-
-                Repeater {
-                    model: 7
-
-                    // 一整天为一行：左侧星期脊柱 + 右侧正文。
-                    // 正文随负载变形——空日子塌成一行、有任务的日子展开，行高因此不对称。
-                    RowLayout {
+            // 以“日”为虚拟化单位；屏幕外日期的任务组件不会常驻，避免整周任务一次性全部创建。
+            delegate: RowLayout {
                         id: dayRow
 
                         required property int index
 
                         objectName: "weekDayRow-" + dayRow.index
-                        Layout.fillWidth: true
+                        width: Math.max(ListView.view.width - Theme.space24, 1)
+                        height: implicitHeight
                         spacing: Theme.space12
 
                         property var dayTasks: root.tasksForDay(dayRow.index)
@@ -614,8 +622,6 @@ Item {
                             }
                         }
                     }
-                }
-            }
         }
     }
 
@@ -624,9 +630,8 @@ Item {
 
         selectedDate: root.pendingAddDate
         categoryManagerRef: root.categoryManagerRef
-
-        onTaskAdded: function(title, date, categoryId) {
-            taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId))
+        taskSubmitter: function(title, date, categoryId) {
+            return taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId))
         }
     }
 

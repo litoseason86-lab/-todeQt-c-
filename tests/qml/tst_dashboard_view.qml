@@ -18,6 +18,7 @@ TestCase {
         id: taskManager
 
         signal tasksChanged
+        signal operationFailed(string message)
 
         property var todayTasksData: []
 
@@ -40,6 +41,8 @@ TestCase {
 
     QtObject {
         id: statisticsService
+
+        signal operationFailed(string message)
 
         property var todayStatsData: ({
             totalDuration: 9180,
@@ -99,6 +102,7 @@ TestCase {
         id: routineManager
 
         signal routinesChanged
+        signal operationFailed(string message)
 
         function materializeToday() {
         }
@@ -241,6 +245,20 @@ TestCase {
         var streakCard = findChild(view, "dashboardStreakCard")
         verify(streakCard)
         compare(streakCard.value, "16")
+    }
+
+    function test_serviceFailuresAreShownInsteadOfEmptyState() {
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+
+        taskManager.operationFailed("任务数据库故障")
+        compare(view.loadError, "任务数据库故障")
+
+        statisticsService.operationFailed("统计数据库故障")
+        compare(view.loadError, "统计数据库故障")
+
+        routineManager.operationFailed("例行生成故障")
+        compare(view.loadError, "例行生成故障")
     }
 
     function test_greeting_includes_nickname_when_set() {

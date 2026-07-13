@@ -24,9 +24,11 @@ public:
 
 signals:
     void routinesChanged();
+    void operationFailed(const QString& message);
 
 private:
     explicit RoutineManager(QObject* parent = nullptr);
+    void reportFailure(const QString& message) const;
 };
 
 #endif // ROUTINEMANAGER_H

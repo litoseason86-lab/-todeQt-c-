@@ -34,6 +34,9 @@ public:
     Q_INVOKABLE QVariantList getMonthWeeklySummary(int year, int month) const;
     Q_INVOKABLE QVariantList getMonthWeeklySummary() const;
 
+signals:
+    void operationFailed(const QString& message);
+
 private:
     explicit StatisticsService(QObject* parent = nullptr);
 

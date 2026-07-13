@@ -25,18 +25,25 @@ Item {
     property var selectedDaySessions: []
     property var dailyTotals: ({})
     property int invalidSessionCount: 0
+    property bool pageActive: true
 
     Component.onCompleted: {
         root.logicalToday = root.computeLogicalToday()
         root.currentYear = root.logicalToday.getFullYear()
         root.currentMonth = root.logicalToday.getMonth() + 1
         root.selectedDay = root.logicalToday.getDate()
-        root.refresh()
+        if (root.pageActive)
+            root.refresh()
+    }
+    onPageActiveChanged: {
+        if (root.pageActive)
+            root.refresh()
     }
 
     Connections {
         target: typeof focusTimer === "undefined" ? null : focusTimer
         ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onFocusCompleted(duration) {
             root.refresh();
@@ -61,7 +68,8 @@ Item {
                 root.setMonth(nextLogicalToday.getFullYear(), nextLogicalToday.getMonth() + 1,
                               nextLogicalToday.getDate())
             } else {
-                root.refresh()
+                if (root.pageActive)
+                    root.refresh()
             }
         }
     }

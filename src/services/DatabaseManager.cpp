@@ -122,7 +122,8 @@ bool DatabaseManager::createTables()
             title TEXT NOT NULL CHECK(length(trim(title)) > 0),
             category TEXT,
             category_id INTEGER REFERENCES categories(id),
-            routine_id INTEGER REFERENCES routines(id),
+            routine_id INTEGER REFERENCES routines(id) ON DELETE SET NULL,
+            routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
             date TEXT NOT NULL,
             completed INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -143,6 +144,26 @@ bool DatabaseManager::createTables()
         )
     )SQL");
     if (!execSql(query, createSessionsTable, "Failed to create focus_sessions table:")) {
+        return false;
+    }
+
+    const QString createActiveFocusStateTable = QStringLiteral(R"SQL(
+        CREATE TABLE IF NOT EXISTS active_focus_state (
+            singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
+            session_id INTEGER UNIQUE,
+            task_id INTEGER,
+            task_title TEXT NOT NULL DEFAULT '',
+            elapsed_seconds INTEGER NOT NULL DEFAULT 0 CHECK(elapsed_seconds >= 0),
+            mode INTEGER NOT NULL,
+            phase INTEGER NOT NULL,
+            target_seconds INTEGER NOT NULL DEFAULT 0 CHECK(target_seconds >= 0),
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES focus_sessions(id) ON DELETE CASCADE,
+            FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
+        )
+    )SQL");
+    // 历史表只保存已完成记录；活动状态独立存放，应用异常退出后才能恢复，而不是留下不可见的 NULL 占位行。
+    if (!execSql(query, createActiveFocusStateTable, "Failed to create active_focus_state table:")) {
         return false;
     }
 
@@ -168,6 +189,19 @@ bool DatabaseManager::createTables()
     if (getDatabaseVersion() < 4
         || !columnExists(QStringLiteral("tasks"), QStringLiteral("routine_id"))) {
         if (!migrateToVersion4()) {
+            return false;
+        }
+    }
+
+    if (getDatabaseVersion() < 5 || !routineForeignKeyUsesSetNull()) {
+        if (!migrateToVersion5()) {
+            return false;
+        }
+    }
+
+    if (getDatabaseVersion() < 6
+        || !columnExists(QStringLiteral("tasks"), QStringLiteral("routine_generated"))) {
+        if (!migrateToVersion6()) {
             return false;
         }
     }
@@ -359,24 +393,15 @@ bool DatabaseManager::migrateToVersion4()
     QSqlQuery query(m_db);
     if (!columnExists(QStringLiteral("tasks"), QStringLiteral("routine_id"))) {
         if (!query.exec(QStringLiteral(
-                "ALTER TABLE tasks ADD COLUMN routine_id INTEGER REFERENCES routines(id)"))) {
+                "ALTER TABLE tasks ADD COLUMN routine_id INTEGER REFERENCES routines(id) ON DELETE SET NULL"))) {
             qWarning() << "Failed to add routine_id column:" << query.lastError().text();
             m_db.rollback();
             return false;
         }
     }
 
-    // 尽力回填：标题与某条例行完全一致的存量任务视为该例行生成。
-    // 误标同名普通任务的代价只是不参与结转；漏标会在结转横幅出现一次，由用户处置。
-    if (!query.exec(QStringLiteral(
-            "UPDATE tasks SET routine_id = ("
-            "  SELECT r.id FROM routines r WHERE r.title = tasks.title"
-            ") WHERE routine_id IS NULL AND EXISTS ("
-            "  SELECT 1 FROM routines r WHERE r.title = tasks.title)"))) {
-        qWarning() << "Failed to backfill routine_id:" << query.lastError().text();
-        m_db.rollback();
-        return false;
-    }
+    // 旧版本没有保存任务血缘，标题相同不能证明任务由例行规则生成。
+    // 宁可让旧任务参与一次结转，也不能把用户手工任务永久误标成例行任务。
 
     if (!setDatabaseVersion(4)) {
         m_db.rollback();
@@ -391,6 +416,186 @@ bool DatabaseManager::migrateToVersion4()
 
     qInfo() << "Database migrated to version 4";
     return true;
+}
+
+bool DatabaseManager::migrateToVersion5()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+    if (!backupDatabaseBeforeMigration()) {
+        return false;
+    }
+
+    // SQLite 不能直接修改外键动作，只能重建表。外键开关必须在事务外关闭，
+    // 否则 DROP 旧表时会错误地触发引用表的级联动作。
+    QSqlQuery pragmaQuery(m_db);
+    if (!pragmaQuery.exec(QStringLiteral("PRAGMA foreign_keys = OFF"))) {
+        qWarning() << "Failed to disable foreign keys for version 5 migration:"
+                   << pragmaQuery.lastError().text();
+        return false;
+    }
+
+    auto restoreForeignKeys = [this]() {
+        QSqlQuery query(m_db);
+        if (!query.exec(QStringLiteral("PRAGMA foreign_keys = ON"))) {
+            qWarning() << "Failed to restore foreign key enforcement:" << query.lastError().text();
+            return false;
+        }
+        return true;
+    };
+
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 5 migration:" << m_db.lastError().text();
+        restoreForeignKeys();
+        return false;
+    }
+
+    const QString provenanceExpression = columnExists(
+        QStringLiteral("tasks"), QStringLiteral("routine_generated"))
+        ? QStringLiteral("routine_generated") : QStringLiteral("0");
+
+    QSqlQuery query(m_db);
+    const QStringList statements = {
+        QStringLiteral(R"SQL(
+            CREATE TABLE tasks_v5 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+                category TEXT,
+                category_id INTEGER REFERENCES categories(id),
+                routine_id INTEGER REFERENCES routines(id) ON DELETE SET NULL,
+                routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
+                date TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        )SQL"),
+        QStringLiteral(
+            "INSERT INTO tasks_v5 (id, title, category, category_id, routine_id, routine_generated, date, completed, created_at) "
+            "SELECT id, title, category, category_id, routine_id, %1, date, completed, created_at FROM tasks")
+            .arg(provenanceExpression),
+        QStringLiteral("DROP TABLE tasks"),
+        QStringLiteral("ALTER TABLE tasks_v5 RENAME TO tasks")
+    };
+
+    for (const QString& statement : statements) {
+        if (!query.exec(statement)) {
+            qWarning() << "Failed during version 5 migration:" << query.lastError().text();
+            m_db.rollback();
+            restoreForeignKeys();
+            return false;
+        }
+    }
+
+    // 只解除能被时间顺序证明为错误的旧回填：任务早于例行规则创建，不可能由该规则生成。
+    if (!query.exec(QStringLiteral(R"SQL(
+        UPDATE tasks
+        SET routine_id = NULL
+        WHERE routine_id IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM routines r
+              WHERE r.id = tasks.routine_id
+                AND datetime(tasks.created_at) < datetime(r.created_at)
+          )
+    )SQL"))) {
+        qWarning() << "Failed to detach impossible routine lineage:" << query.lastError().text();
+        m_db.rollback();
+        restoreForeignKeys();
+        return false;
+    }
+
+    if (!setDatabaseVersion(5) || !m_db.commit()) {
+        qWarning() << "Failed to commit version 5 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        restoreForeignKeys();
+        return false;
+    }
+
+    if (!restoreForeignKeys()) {
+        return false;
+    }
+
+    QSqlQuery checkQuery(m_db);
+    if (!checkQuery.exec(QStringLiteral("PRAGMA foreign_key_check"))) {
+        qWarning() << "Failed to validate version 5 foreign keys:" << checkQuery.lastError().text();
+        return false;
+    }
+    if (checkQuery.next()) {
+        qWarning() << "Version 5 migration produced a foreign key violation"
+                   << checkQuery.value(0).toString() << checkQuery.value(1).toInt();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 5";
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion6()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+    if (!backupDatabaseBeforeMigration()) {
+        return false;
+    }
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 6 migration:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    if (!columnExists(QStringLiteral("tasks"), QStringLiteral("routine_generated"))) {
+        if (!query.exec(QStringLiteral(
+                "ALTER TABLE tasks ADD COLUMN routine_generated INTEGER NOT NULL DEFAULT 0 "
+                "CHECK(routine_generated IN (0, 1))"))) {
+            qWarning() << "Failed to add routine provenance column:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    // v4 的 routine_id 可能只因标题相同而被回填。旧库没有足够证据区分真假，
+    // 因此统一解除不可信关联；从 v6 起只有生成器写入 routine_generated=1。
+    if (!query.exec(QStringLiteral(
+            "UPDATE tasks SET routine_id = NULL WHERE routine_generated = 0 AND routine_id IS NOT NULL"))) {
+        qWarning() << "Failed to clear untrusted routine lineage:" << query.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    if (!setDatabaseVersion(6) || !m_db.commit()) {
+        qWarning() << "Failed to commit version 6 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 6";
+    return true;
+}
+
+bool DatabaseManager::routineForeignKeyUsesSetNull() const
+{
+    if (!m_db.isOpen()) {
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral("PRAGMA foreign_key_list(tasks)"))) {
+        return false;
+    }
+
+    while (query.next()) {
+        const QString referencedTable = query.value(2).toString();
+        const QString fromColumn = query.value(3).toString();
+        const QString onDelete = query.value(6).toString();
+        if (referencedTable == QStringLiteral("routines")
+            && fromColumn == QStringLiteral("routine_id")) {
+            return onDelete.compare(QStringLiteral("SET NULL"), Qt::CaseInsensitive) == 0;
+        }
+    }
+    return false;
 }
 
 bool DatabaseManager::insertPresetCategories()

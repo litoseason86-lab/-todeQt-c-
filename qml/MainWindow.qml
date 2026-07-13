@@ -148,7 +148,9 @@ Item {
 
     function requestDeleteTask(taskId, taskTitle) {
         // 单槽撤销：新删除到来时，上一条先真正落库，撤销窗口只保护最近一次操作。
-        root.commitPendingDelete()
+        if (!root.commitPendingDelete()) {
+            return false
+        }
 
         root.pendingDeleteTaskId = taskId
         root.pendingDeleteTitle = String(taskTitle || "")
@@ -157,18 +159,27 @@ Item {
         root.showToast("已删除「" + root.pendingDeleteTitle + "」", "撤销", function() {
             root.cancelPendingDelete()
         })
+        return true
     }
 
     function commitPendingDelete() {
         if (root.pendingDeleteTaskId <= 0) {
-            return
+            return true
         }
 
         deleteCommitTimer.stop()
         // 到这里才真正触库；撤销窗口内数据库没有被碰过，专注记录关联不会提前丢失。
-        taskManager.deleteTask(root.pendingDeleteTaskId)
+        var deletedTitle = root.pendingDeleteTitle
+        if (!taskManager.deleteTask(root.pendingDeleteTaskId)) {
+            // 失败后立即解除隐藏，让任务重新出现；不能把数据库失败伪装成“已删除”。
+            root.pendingDeleteTaskId = -1
+            root.pendingDeleteTitle = ""
+            root.showToast("删除「" + deletedTitle + "」失败，请重试")
+            return false
+        }
         root.pendingDeleteTaskId = -1
         root.pendingDeleteTitle = ""
+        return true
     }
 
     function cancelPendingDelete() {
@@ -373,6 +384,7 @@ Item {
                 currentIndex: root.viewIndex(root.currentView)
 
                 TodayTaskView {
+                    pageActive: root.currentView === "today"
                     categoryManagerRef: categoryManager
                     countdownServiceRef: root.countdownServiceRef
                     settingsRef: root.appSettingsRef
@@ -404,6 +416,7 @@ Item {
                 }
 
                 WeekPlanView {
+                    pageActive: root.currentView === "week"
                     categoryManagerRef: categoryManager
                     pendingDeleteTaskId: root.pendingDeleteTaskId
 
@@ -417,6 +430,7 @@ Item {
                 }
 
                 MonthGoalView {
+                    pageActive: root.currentView === "month"
                     categoryManagerRef: categoryManager
 
                     onStartFocus: function (taskId, taskTitle) {
@@ -425,6 +439,7 @@ Item {
                 }
 
                 StatisticsView {
+                    pageActive: root.currentView === "stats"
                     categoryManagerRef: categoryManager
                 }
 
@@ -434,6 +449,7 @@ Item {
 
                 DashboardView {
                     objectName: "dashboardViewPage"
+                    pageActive: root.currentView === "dashboard"
 
                     categoryManagerRef: categoryManager
                     countdownServiceRef: root.countdownServiceRef

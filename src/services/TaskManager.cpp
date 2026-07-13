@@ -98,6 +98,11 @@ TaskManager* TaskManager::instance()
     return &manager;
 }
 
+void TaskManager::reportFailure(const QString& message) const
+{
+    emit const_cast<TaskManager*>(this)->operationFailed(message);
+}
+
 bool TaskManager::addTask(const QString& title, const QVariant& dateValue, const QString& category)
 {
     const QString normalizedTitle = title.trimmed();
@@ -359,12 +364,14 @@ QVariantList TaskManager::getTasksByDate(const QDate& date) const
     QVariantList tasks;
     if (!date.isValid()) {
         qWarning() << "Failed to get tasks: invalid date";
+        reportFailure(QStringLiteral("任务日期无效"));
         return tasks;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get tasks: database is not open";
+        reportFailure(QStringLiteral("数据库未打开，无法加载任务"));
         return tasks;
     }
 
@@ -375,6 +382,7 @@ QVariantList TaskManager::getTasksByDate(const QDate& date) const
 
     if (!query.exec()) {
         qWarning() << "Failed to get tasks:" << query.lastError().text();
+        reportFailure(QStringLiteral("任务加载失败: %1").arg(query.lastError().text()));
         return tasks;
     }
 
@@ -391,12 +399,14 @@ QVariantList TaskManager::getWeekTasks(const QVariant& startDateValue) const
     const QDate startDate = normalizeDate(startDateValue);
     if (!startDate.isValid()) {
         qWarning() << "Failed to get week tasks: invalid start date";
+        reportFailure(QStringLiteral("周计划日期无效"));
         return tasks;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get week tasks: database is not open";
+        reportFailure(QStringLiteral("数据库未打开，无法加载周计划"));
         return tasks;
     }
 
@@ -411,6 +421,7 @@ QVariantList TaskManager::getWeekTasks(const QVariant& startDateValue) const
 
     if (!query.exec()) {
         qWarning() << "Failed to get week tasks:" << query.lastError().text();
+        reportFailure(QStringLiteral("周计划加载失败: %1").arg(query.lastError().text()));
         return tasks;
     }
 
@@ -427,12 +438,14 @@ QVariantList TaskManager::getMonthTasks(int year, int month) const
     const QDate startDate(year, month, 1);
     if (!startDate.isValid()) {
         qWarning() << "Failed to get month tasks: invalid year/month" << year << month;
+        reportFailure(QStringLiteral("月计划日期无效"));
         return tasks;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get month tasks: database is not open";
+        reportFailure(QStringLiteral("数据库未打开，无法加载月计划"));
         return tasks;
     }
 
@@ -447,6 +460,7 @@ QVariantList TaskManager::getMonthTasks(int year, int month) const
 
     if (!query.exec()) {
         qWarning() << "Failed to get month tasks:" << query.lastError().text();
+        reportFailure(QStringLiteral("月计划加载失败: %1").arg(query.lastError().text()));
         return tasks;
     }
 
@@ -463,18 +477,20 @@ QVariantList TaskManager::getOverdueUncompletedTasks() const
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get overdue tasks: database is not open";
+        reportFailure(QStringLiteral("数据库未打开，无法加载逾期任务"));
         return tasks;
     }
 
     QSqlQuery query(db);
     query.prepare(taskSelectSql() + QStringLiteral(
-        "WHERE t.date < :today AND t.completed = 0 AND t.routine_id IS NULL "
+        "WHERE t.date < :today AND t.completed = 0 AND t.routine_generated = 0 "
         "ORDER BY t.date ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":today"),
                     LogicalDay::today(AppSettings::instance()->dayStartHour()).toString(Qt::ISODate));
 
     if (!query.exec()) {
         qWarning() << "Failed to get overdue tasks:" << query.lastError().text();
+        reportFailure(QStringLiteral("逾期任务加载失败: %1").arg(query.lastError().text()));
         return tasks;
     }
 

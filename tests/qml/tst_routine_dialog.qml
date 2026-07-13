@@ -20,8 +20,14 @@ TestCase {
         id: fakeRoutineManager
 
         signal routinesChanged()
+        signal operationFailed(string message)
+        property bool failLoad: false
 
         function getRoutines() {
+            if (failLoad) {
+                operationFailed("例行数据库故障")
+                return []
+            }
             return testCase.added
         }
 
@@ -59,7 +65,14 @@ TestCase {
     QtObject {
         id: fakeCategoryManager
 
+        signal operationFailed(string message)
+        property bool failLoad: false
+
         function getAllCategories() {
+            if (failLoad) {
+                operationFailed("科目数据库故障")
+                return []
+            }
             return [
                 { id: 7, name: "数学", color: "#d4a574" }
             ]
@@ -78,6 +91,8 @@ TestCase {
         testCase.lastCategoryId = -999
         testCase.deletedId = -1
         testCase.addResult = true
+        fakeRoutineManager.failLoad = false
+        fakeCategoryManager.failLoad = false
         dialog.routineManagerRef = fakeRoutineManager
         dialog.categoryManagerRef = fakeCategoryManager
         dialog.close()
@@ -103,6 +118,16 @@ TestCase {
         compare(testCase.added[0].title, "背单词 list")
         compare(testCase.lastCategoryId, -1)
         compare(list.count, 1)
+        dialog.close()
+    }
+
+    function test_refreshFailureIsNotClearedWhenDialogOpens() {
+        fakeRoutineManager.failLoad = true
+        dialog.open()
+        tryCompare(dialog, "opened", true, 500)
+
+        compare(dialog.errorText, "例行数据库故障")
+
         dialog.close()
     }
 

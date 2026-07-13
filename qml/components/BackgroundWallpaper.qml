@@ -8,6 +8,8 @@ Item {
 
     property string themeId: "warm"
     property var themeSource: Theme.themes
+    // 缩略图传入实际像素尺寸；全屏壁纸保持 0×0，继续按原图解码以避免窗口缩放失真。
+    property size requestedSourceSize: Qt.size(0, 0)
 
     readonly property var resolvedTheme: {
         var target = Theme.migrateThemeId(root.themeId)
@@ -32,6 +34,7 @@ Item {
 
         anchors.fill: parent
         source: root.resolvedTheme.wallpaper || ""
+        sourceSize: root.requestedSourceSize
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         cache: true

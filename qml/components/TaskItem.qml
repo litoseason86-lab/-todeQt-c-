@@ -23,6 +23,8 @@ Rectangle {
                                                : (root.itemHovered ? 0.25 : 0.18)
     property real warmShadowVerticalOffset: root.compact ? (root.itemHovered ? 3 : 1)
                                                          : (root.itemHovered ? 6 : 2)
+    // 图层生命周期必须稳定：hover 事件分发期间切换 layer.enabled 会重建效果项，
+    // Qt Quick 此时仍在递归遍历命中树，可能继续访问已释放的 QQuickItem。
     layer.enabled: true
     layer.effect: MultiEffect {
         autoPaddingEnabled: true
@@ -601,6 +603,7 @@ Rectangle {
                 property real warmShadowOpacity: deleteButton.pressFeedbackActive ? 0.04 : 0.08
                 property real warmShadowBlur: deleteButton.pressFeedbackActive ? 0.10 : 0.14
                 property real warmShadowVerticalOffset: deleteButton.pressFeedbackActive ? 1 : 2
+                // 按钮 hover/按下期间只改阴影参数，不改变效果层生命周期。
                 layer.enabled: true
                 layer.effect: MultiEffect {
                     autoPaddingEnabled: true

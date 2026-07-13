@@ -73,6 +73,7 @@ Item {
     property var categoryStats: ({ categories: [], totalDuration: 0 })
     property var categoryManagerRef: null
     property string loadError: ""
+    property bool pageActive: true
     // 统计页跟今日任务、本周计划保持同一套内容边距，避免每个模块各自偏移导致边界不齐。
     readonly property int contentMargin: 24
 
@@ -90,7 +91,14 @@ Item {
         refresh()
     }
 
-    Component.onCompleted: refresh()
+    Component.onCompleted: {
+        if (root.pageActive)
+            refresh()
+    }
+    onPageActiveChanged: {
+        if (root.pageActive)
+            refresh()
+    }
 
     onVisibleChanged: {
         if (visible) {
@@ -102,6 +110,7 @@ Item {
 
     Connections {
         target: taskManager
+        enabled: root.pageActive
 
         function onTasksChanged() {
             root.refresh()
@@ -109,7 +118,18 @@ Item {
     }
 
     Connections {
+        target: statisticsService
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
+
+        function onOperationFailed(message) {
+            root.loadError = String(message || "统计数据加载失败")
+        }
+    }
+
+    Connections {
         target: focusTimer
+        enabled: root.pageActive
 
         function onFocusCompleted(duration) {
             root.refresh()
@@ -119,6 +139,7 @@ Item {
     Connections {
         target: root.categoryManagerRef
         ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onCategoriesChanged() {
             root.refresh()

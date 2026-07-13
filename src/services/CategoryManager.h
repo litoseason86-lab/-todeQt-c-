@@ -32,6 +32,7 @@ public:
 
 signals:
     void categoriesChanged();
+    void operationFailed(const QString& message);
 
 private:
     explicit CategoryManager(QObject* parent = nullptr);
@@ -40,6 +41,7 @@ private:
     QVariantMap categoryFromQuery(const QSqlQuery& query) const;
     QVariantList queryCategories(const QString& sql) const;
     bool isValidColor(const QString& color) const;
+    void reportFailure(const QString& message) const;
 };
 
 #endif // CATEGORYMANAGER_H

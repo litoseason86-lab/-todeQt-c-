@@ -28,15 +28,18 @@ public:
     Q_INVOKABLE QVariantList getTasksByDate(const QDate& date) const;
     Q_INVOKABLE QVariantList getWeekTasks(const QVariant& startDateValue) const;
     Q_INVOKABLE QVariantList getMonthTasks(int year, int month) const;
-    // 结转只处理手工任务；routine_id 非空的例行残留由例行系统自己管理。
+    // 结转只排除具有可信生成标记的例行任务；旧版仅按标题猜出的 routine_id 不可信。
     Q_INVOKABLE QVariantList getOverdueUncompletedTasks() const;
     Q_INVOKABLE bool moveTasksToToday(const QVariantList& taskIds);
 
 signals:
     void tasksChanged();
+    // 查询失败不能再伪装成合法空列表；页面监听该信号展示明确错误。
+    void operationFailed(const QString& message);
 
 private:
     explicit TaskManager(QObject* parent = nullptr);
+    void reportFailure(const QString& message) const;
 };
 
 #endif // TASKMANAGER_H

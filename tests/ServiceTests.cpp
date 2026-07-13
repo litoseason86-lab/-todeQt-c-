@@ -7,6 +7,7 @@
 #include <QSignalSpy>
 #include <QSqlQuery>
 #include <QTemporaryDir>
+#include <QTimeZone>
 #include <QTimer>
 #include <QtTest>
 
@@ -146,6 +147,16 @@ int countFocusSessions()
     }
 
     return query.value(0).toInt();
+}
+
+void setFocusElapsedSeconds(FocusTimer* timer, int seconds)
+{
+    // 单调时钟无法伪造系统时间；测试直接设置已累计段，并重启当前运行段，避免真实等待数分钟。
+    timer->m_accumulatedMilliseconds = static_cast<qint64>(seconds) * 1000;
+    timer->m_elapsedSeconds = seconds;
+    if (timer->m_isRunning) {
+        timer->m_runClock.restart();
+    }
 }
 
 bool taskCompletedById(int taskId)
@@ -417,6 +428,7 @@ private slots:
     void appSettingsDayStartHourRejectsCorruptIniValue();
     void logicalDayDateOfBoundaries();
     void logicalDayMsUntilNextBoundary();
+    void logicalDayHandlesDstFallBackByWallClock();
     void logicalDayServiceSchedulesTimerOnConstruction();
     void logicalDayServiceEmitsChangedOnDayStartHourChange();
     void logicalDayChangeMaterializesRoutineIdempotently();
@@ -459,6 +471,7 @@ private slots:
     void version2MigrationAddsRoutinesSchemaAndIndex();
     void routinesCategoryForeignKeyClearsWhenCategoryDeleted();
     void routineCrudAddsGetsUpdatesDeletes();
+    void deletingMaterializedRoutineDetachesExistingTask();
     void materializeTodayIsIdempotentAndDoesNotBackfill();
     void materializeTodayPreservesCategoryAndDoesNotEmitSignals();
     void materializeTodayStampsRoutineId();
@@ -466,7 +479,8 @@ private slots:
     void materializeTodayDoesNotResurrectDeletedTask();
     void materializeTodaySkipsInactiveRoutines();
     void freshDatabaseHasRoutineIdColumn();
-    void migrationV4BackfillsRoutineIdAndIsIdempotent();
+    void migrationV4DoesNotGuessRoutineLineage();
+    void migrationV6ClearsUntrustedRoutineLineage();
     void freshDatabaseCreatesVersion4PresetCategories();
     void migrationMapsLegacyCategoryTextToCategoryIds();
     void migrationCreatesDatabaseBackup();
@@ -475,17 +489,20 @@ private slots:
     void deletingAssociatedCategoryDetachesTasks();
     void deletingLegacyTextCategoryClearsTaskCategoryText();
     void taskManagerReturnsFullCategoryInfo();
+    void taskCreatedAtTreatsSqliteTimestampAsUtc();
     void taskManagerTodayUsesLogicalToday();
     void legacyAddTaskWithTextCategoryRemainsCompatible();
     void updateTaskChangesTitleCategoryAndDate();
     void updateTaskRejectsBlankTitleAndInvalidId();
-    void overdueQueryExcludesTodayCompletedAndRoutine();
+    void overdueQueryExcludesTodayCompletedAndTrustedRoutine();
     void moveTasksToTodayIsTransactional();
     void exportFocusSessionsUsesLogicalDayRange();
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
     void exportFocusSessionsAndExportAllWriteExpectedCsvFiles();
     void exportFocusSessionsIgnoresInvalidShortSessions();
     void exportRejectsInvalidDateRangeAndUnwritablePath();
+    void exportFailurePreservesExistingFile();
+    void exportAllRejectsInvalidDestinationBeforeReplacingFiles();
     void stopFocusCompletesTaskAfterFiveMinutes();
     void stopFocusUnderFiveMinutesKeepsTaskPending();
     void stopFocusUnderThreeMinutesDiscardsInvalidSession();
@@ -496,6 +513,10 @@ private slots:
     void pomodoroBreakWritesNoSessionAndCompletes();
     void pomodoroWorkStoppedUnderMinimumIsDiscarded();
     void freeFocusStillCountsUpUnchanged();
+    void focusTimerUsesMonotonicElapsedTimeAfterBlockedEventLoop();
+    void interruptedFocusRestoresPausedAndKeepsProgress();
+    void startupCleanupRemovesLegacyOrphanedSession();
+    void queryServicesReportDatabaseFailureInsteadOfSilentEmptyData();
 
 private:
     QTemporaryDir* m_tempDir = nullptr;
@@ -828,6 +849,18 @@ void ServiceTests::logicalDayMsUntilNextBoundary()
              qint64(23) * 3600 * 1000);
     QCOMPARE(LogicalDay::msUntilNextBoundary(QDateTime(day, QTime(4, 0)), 4),
              qint64(24) * 3600 * 1000);
+}
+
+void ServiceTests::logicalDayHandlesDstFallBackByWallClock()
+{
+    const QTimeZone newYork("America/New_York");
+    QVERIFY(newYork.isValid());
+    const QDateTime afterFallback(QDate(2026, 11, 1), QTime(3, 30), newYork,
+                                  QDateTime::TransitionResolution::PreferStandard);
+
+    // 回拨日 03:30 的墙钟仍早于 04:00，必须归前一天；减固定四小时会错误落在当天。
+    QCOMPARE(LogicalDay::dateOf(afterFallback, 4), QDate(2026, 10, 31));
+    QCOMPARE(LogicalDay::msUntilNextBoundary(afterFallback, 4), qint64(30) * 60 * 1000);
 }
 
 void ServiceTests::logicalDayServiceSchedulesTimerOnConstruction()
@@ -1939,7 +1972,7 @@ void ServiceTests::version2MigrationAddsRoutinesSchemaAndIndex()
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 4);
+    QCOMPARE(versionQuery.value(0).toInt(), 6);
 
     // v3 从真实 v2 库升级时必须补齐 routines 表和索引，不能只覆盖全新库。
     QSqlQuery tableQuery(DatabaseManager::instance()->database());
@@ -2070,6 +2103,28 @@ void ServiceTests::routineCrudAddsGetsUpdatesDeletes()
     QVERIFY(manager->getRoutines().isEmpty());
 }
 
+void ServiceTests::deletingMaterializedRoutineDetachesExistingTask()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    QVERIFY(manager->addRoutine(QStringLiteral("删除后保留任务"), -1));
+    const int routineId = manager->getRoutines().first().toMap().value(QStringLiteral("id")).toInt();
+    QVERIFY(routineId > 0);
+    QCOMPARE(manager->materializeToday(), 1);
+
+    const QVariantList tasks = TaskManager::instance()->getTasksByDate(logicalToday());
+    QCOMPARE(tasks.size(), 1);
+    const int taskId = tasks.first().toMap().value(QStringLiteral("id")).toInt();
+
+    QVERIFY(manager->deleteRoutine(routineId));
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral("SELECT routine_id FROM tasks WHERE id = :id"));
+    query.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY(query.exec());
+    QVERIFY(query.next());
+    QVERIFY(query.value(0).isNull());
+}
+
 void ServiceTests::materializeTodayIsIdempotentAndDoesNotBackfill()
 {
     RoutineManager* manager = RoutineManager::instance();
@@ -2148,10 +2203,11 @@ void ServiceTests::materializeTodayStampsRoutineId()
 
     QSqlQuery query(DatabaseManager::instance()->database());
     QVERIFY(query.exec(QStringLiteral(
-        "SELECT t.routine_id FROM tasks t JOIN routines r ON r.id = t.routine_id "
+        "SELECT t.routine_id, t.routine_generated FROM tasks t JOIN routines r ON r.id = t.routine_id "
         "WHERE t.title = '晨间背单词'")));
     QVERIFY(query.next());
     QVERIFY(query.value(0).toInt() > 0);
+    QCOMPARE(query.value(1).toInt(), 1);
 }
 
 void ServiceTests::materializeTodayRollsBackClaimWhenTaskInsertFails()
@@ -2213,12 +2269,12 @@ void ServiceTests::materializeTodaySkipsInactiveRoutines()
 
 void ServiceTests::freshDatabaseHasRoutineIdColumn()
 {
-    // 新库直建路径也必须带 routine_id 列，SELECT 不报错即证明列存在。
+    // 新库直建路径必须同时带关联和可信来源列，不能再靠 routine_id 猜任务来源。
     QSqlQuery query(DatabaseManager::instance()->database());
-    QVERIFY(query.exec(QStringLiteral("SELECT routine_id FROM tasks LIMIT 1")));
+    QVERIFY(query.exec(QStringLiteral("SELECT routine_id, routine_generated FROM tasks LIMIT 1")));
 }
 
-void ServiceTests::migrationV4BackfillsRoutineIdAndIsIdempotent()
+void ServiceTests::migrationV4DoesNotGuessRoutineLineage()
 {
     QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("背单词"), -1));
     const QDate yesterday = QDate::currentDate().addDays(-1);
@@ -2227,15 +2283,14 @@ void ServiceTests::migrationV4BackfillsRoutineIdAndIsIdempotent()
     QVERIFY(routineLikeId > 0);
     QVERIFY(plainId > 0);
 
-    // 把版本拨回 3 重跑建表流程，模拟老库升级路径：
-    // 列已存在时走幂等分支，回填逻辑仍要对存量行生效。
+    // 把版本拨回 3 重跑升级路径；同名只能证明文本相同，不能证明任务由例行规则生成。
     QSqlQuery query(DatabaseManager::instance()->database());
     QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 3")));
     QVERIFY(DatabaseManager::instance()->createTables());
 
     QVERIFY(query.exec(QStringLiteral("SELECT routine_id FROM tasks WHERE id = %1").arg(routineLikeId)));
     QVERIFY(query.next());
-    QVERIFY(!query.value(0).isNull());
+    QVERIFY(query.value(0).isNull());
 
     QVERIFY(query.exec(QStringLiteral("SELECT routine_id FROM tasks WHERE id = %1").arg(plainId)));
     QVERIFY(query.next());
@@ -2243,7 +2298,31 @@ void ServiceTests::migrationV4BackfillsRoutineIdAndIsIdempotent()
 
     QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(query.next());
-    QCOMPARE(query.value(0).toInt(), 4);
+    QCOMPARE(query.value(0).toInt(), 6);
+}
+
+void ServiceTests::migrationV6ClearsUntrustedRoutineLineage()
+{
+    QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("同名旧任务"), -1));
+    const int taskId = insertTaskRow(QStringLiteral("同名旧任务"), logicalToday().addDays(-1));
+    QVERIFY(taskId > 0);
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "UPDATE tasks SET routine_id = (SELECT id FROM routines WHERE title = '同名旧任务'), "
+        "routine_generated = 0 WHERE id = %1").arg(taskId)));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 5")));
+
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT routine_id, routine_generated FROM tasks WHERE id = %1").arg(taskId)));
+    QVERIFY(query.next());
+    QVERIFY(query.value(0).isNull());
+    QCOMPARE(query.value(1).toInt(), 0);
+
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 6);
 }
 
 void ServiceTests::freshDatabaseCreatesVersion4PresetCategories()
@@ -2251,7 +2330,7 @@ void ServiceTests::freshDatabaseCreatesVersion4PresetCategories()
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 4);
+    QCOMPARE(versionQuery.value(0).toInt(), 6);
 
     const QVariantList presets = CategoryManager::instance()->getPresetCategories();
     QCOMPARE(presets.size(), 5);
@@ -2290,7 +2369,7 @@ void ServiceTests::migrationMapsLegacyCategoryTextToCategoryIds()
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 4);
+    QCOMPARE(versionQuery.value(0).toInt(), 6);
 
     QSqlQuery presetTask(DatabaseManager::instance()->database());
     presetTask.prepare(QStringLiteral(
@@ -2467,6 +2546,23 @@ void ServiceTests::taskManagerReturnsFullCategoryInfo()
     QCOMPARE(nestedCategory.value(QStringLiteral("color")).toString(), QStringLiteral("#123abc"));
 }
 
+void ServiceTests::taskCreatedAtTreatsSqliteTimestampAsUtc()
+{
+    const QString storedUtc = QStringLiteral("2026-06-09 16:30:00");
+    const int taskId = insertTaskRow(QStringLiteral("UTC 创建时间任务"), logicalToday(),
+                                     QString(), false, storedUtc);
+    QVERIFY(taskId > 0);
+
+    const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
+    QDateTime expected(QDate(2026, 6, 9), QTime(16, 30), QTimeZone::UTC);
+    expected = expected.toLocalTime();
+    QCOMPARE(task.value(QStringLiteral("createdAt")).toDateTime(), expected);
+
+    const QString exportPath = m_tempDir->filePath(QStringLiteral("utc-created-at.csv"));
+    QVERIFY(ExportService::instance()->exportTasks(logicalToday(), logicalToday(), exportPath));
+    QVERIFY(readUtf8File(exportPath).contains(expected.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"))));
+}
+
 void ServiceTests::taskManagerTodayUsesLogicalToday()
 {
     AppSettings::instance()->setDayStartHour(4);
@@ -2566,7 +2662,7 @@ void ServiceTests::updateTaskRejectsBlankTitleAndInvalidId()
              QStringLiteral("保持不变"));
 }
 
-void ServiceTests::overdueQueryExcludesTodayCompletedAndRoutine()
+void ServiceTests::overdueQueryExcludesTodayCompletedAndTrustedRoutine()
 {
     TaskManager* manager = TaskManager::instance();
     const QDate today = logicalToday();
@@ -2581,19 +2677,26 @@ void ServiceTests::overdueQueryExcludesTodayCompletedAndRoutine()
     QVERIFY(insertTaskRow(QStringLiteral("今天的任务"), today) > 0);
 
     QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("结转排除例行"), -1));
-    const int routineLeftover = insertTaskRow(QStringLiteral("结转排除例行"), yesterday);
-    QVERIFY(routineLeftover > 0);
+    const int ambiguousSameTitle = insertTaskRow(QStringLiteral("结转排除例行"), yesterday);
+    const int trustedRoutine = insertTaskRow(QStringLiteral("可信例行"), yesterday);
+    QVERIFY(ambiguousSameTitle > 0);
+    QVERIFY(trustedRoutine > 0);
 
     QSqlQuery mark(DatabaseManager::instance()->database());
     QVERIFY2(mark.exec(QStringLiteral(
                   "UPDATE tasks SET routine_id = (SELECT id FROM routines WHERE title = '结转排除例行') "
-                  "WHERE id = %1").arg(routineLeftover)),
+                  "WHERE id = %1").arg(ambiguousSameTitle)),
+             qPrintable(mark.lastError().text()));
+    QVERIFY2(mark.exec(QStringLiteral(
+                  "UPDATE tasks SET routine_id = (SELECT id FROM routines WHERE title = '结转排除例行'), "
+                  "routine_generated = 1 WHERE id = %1").arg(trustedRoutine)),
              qPrintable(mark.lastError().text()));
 
     const QVariantList overdue = manager->getOverdueUncompletedTasks();
-    QCOMPARE(overdue.size(), 2);
+    QCOMPARE(overdue.size(), 3);
     QCOMPARE(overdue.at(0).toMap().value(QStringLiteral("id")).toInt(), oldPending);
     QCOMPARE(overdue.at(1).toMap().value(QStringLiteral("id")).toInt(), yesterdayPending);
+    QCOMPARE(overdue.at(2).toMap().value(QStringLiteral("id")).toInt(), ambiguousSameTitle);
 }
 
 void ServiceTests::moveTasksToTodayIsTransactional()
@@ -2827,6 +2930,42 @@ void ServiceTests::exportRejectsInvalidDateRangeAndUnwritablePath()
     QVERIFY(!QFile::exists(unwritablePath));
 }
 
+void ServiceTests::exportFailurePreservesExistingFile()
+{
+    const QString filePath = m_tempDir->filePath(QStringLiteral("existing.csv"));
+    QFile original(filePath);
+    QVERIFY(original.open(QIODevice::WriteOnly | QIODevice::Text));
+    QCOMPARE(original.write("existing-content\n"), qint64(17));
+    original.close();
+
+    DatabaseManager::instance()->close();
+    QVERIFY(!ExportService::instance()->exportTasks(
+        QDate(2026, 6, 10), QDate(2026, 6, 10), filePath));
+
+    QCOMPARE(readUtf8File(filePath), QStringLiteral("existing-content\n"));
+}
+
+void ServiceTests::exportAllRejectsInvalidDestinationBeforeReplacingFiles()
+{
+    const QDate day(2026, 6, 10);
+    const QString tasksName = ExportService::instance()->generateFileName(
+        QStringLiteral("tasks"), day, day);
+    const QString sessionsName = ExportService::instance()->generateFileName(
+        QStringLiteral("focus_sessions"), day, day);
+    const QString tasksPath = m_tempDir->filePath(tasksName);
+    const QString sessionsPath = m_tempDir->filePath(sessionsName);
+
+    QFile original(tasksPath);
+    QVERIFY(original.open(QIODevice::WriteOnly | QIODevice::Text));
+    QCOMPARE(original.write("old-tasks\n"), qint64(10));
+    original.close();
+    QVERIFY(QDir().mkpath(sessionsPath));
+
+    QVERIFY(!ExportService::instance()->exportAll(day, day, m_tempDir->path()));
+    QCOMPARE(readUtf8File(tasksPath), QStringLiteral("old-tasks\n"));
+    QVERIFY(QFileInfo(sessionsPath).isDir());
+}
+
 void ServiceTests::stopFocusCompletesTaskAfterFiveMinutes()
 {
     QVERIFY(TaskManager::instance()->addTask(QStringLiteral("五分钟任务"), logicalToday(), QString()));
@@ -2834,7 +2973,7 @@ void ServiceTests::stopFocusCompletesTaskAfterFiveMinutes()
 
     QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("五分钟任务")));
     // 测试不应该真的等 5 分钟；这里直接推进内部累计秒数，只验证停止专注后的业务结果。
-    FocusTimer::instance()->m_elapsedSeconds = 300;
+    setFocusElapsedSeconds(FocusTimer::instance(), 300);
 
     QSignalSpy tasksChangedSpy(TaskManager::instance(), &TaskManager::tasksChanged);
     QVERIFY(FocusTimer::instance()->stopFocus());
@@ -2850,7 +2989,7 @@ void ServiceTests::stopFocusUnderFiveMinutesKeepsTaskPending()
     const int taskId = TaskManager::instance()->getTodayTasks().first().toMap().value(QStringLiteral("id")).toInt();
 
     QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("未满五分钟任务")));
-    FocusTimer::instance()->m_elapsedSeconds = 299;
+    setFocusElapsedSeconds(FocusTimer::instance(), 299);
 
     QVERIFY(FocusTimer::instance()->stopFocus());
 
@@ -2864,7 +3003,7 @@ void ServiceTests::stopFocusUnderThreeMinutesDiscardsInvalidSession()
     const int taskId = TaskManager::instance()->getTodayTasks().first().toMap().value(QStringLiteral("id")).toInt();
 
     QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("无效短专注")));
-    FocusTimer::instance()->m_elapsedSeconds = kTestMinimumValidDurationSeconds - 1;
+    setFocusElapsedSeconds(FocusTimer::instance(), kTestMinimumValidDurationSeconds - 1);
 
     QVERIFY(FocusTimer::instance()->stopFocus());
 
@@ -2880,7 +3019,7 @@ void ServiceTests::shortSessionEmitsSessionDiscarded()
     QSignalSpy discardSpy(timer, &FocusTimer::sessionDiscarded);
 
     QVERIFY(timer->startFocus(taskId, QStringLiteral("短会话任务")));
-    timer->m_elapsedSeconds = 60;
+    setFocusElapsedSeconds(timer, 60);
     QVERIFY(timer->stopFocus());
 
     QCOMPARE(discardSpy.count(), 1);
@@ -2894,7 +3033,7 @@ void ServiceTests::validSessionDoesNotEmitSessionDiscarded()
     QSignalSpy discardSpy(timer, &FocusTimer::sessionDiscarded);
 
     QVERIFY(timer->startFocus(taskId, QStringLiteral("有效会话任务")));
-    timer->m_elapsedSeconds = 300;
+    setFocusElapsedSeconds(timer, 300);
     QVERIFY(timer->stopFocus());
 
     QCOMPARE(discardSpy.count(), 0);
@@ -2915,7 +3054,7 @@ void ServiceTests::pomodoroWorkCompletionSavesSessionAndAutoCompletesTask()
     QSignalSpy phaseCompletedSpy(FocusTimer::instance(), &FocusTimer::phaseCompleted);
     QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("番茄专注任务"), 300));
     QCOMPARE(FocusTimer::instance()->targetSeconds(), 300);
-    FocusTimer::instance()->m_elapsedSeconds = 299;
+    setFocusElapsedSeconds(FocusTimer::instance(), 300);
 
     // 直接触发 timeout 信号，避免测试真实等待一秒；只验证状态机在边界秒的行为。
     QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
@@ -2945,7 +3084,7 @@ void ServiceTests::pomodoroBreakWritesNoSessionAndCompletes()
     QCOMPARE(FocusTimer::instance()->isRunning(), false);
     QVERIFY(FocusTimer::instance()->resumeFocus());
     QCOMPARE(FocusTimer::instance()->isRunning(), true);
-    FocusTimer::instance()->m_elapsedSeconds = 4;
+    setFocusElapsedSeconds(FocusTimer::instance(), 5);
 
     QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
 
@@ -2961,7 +3100,7 @@ void ServiceTests::pomodoroWorkStoppedUnderMinimumIsDiscarded()
     QVERIFY(taskId > 0);
 
     QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("番茄短专注"), 300));
-    FocusTimer::instance()->m_elapsedSeconds = kTestMinimumValidDurationSeconds - 1;
+    setFocusElapsedSeconds(FocusTimer::instance(), kTestMinimumValidDurationSeconds - 1);
 
     QVERIFY(FocusTimer::instance()->stopFocus());
 
@@ -2978,15 +3117,90 @@ void ServiceTests::freeFocusStillCountsUpUnchanged()
     QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("自由计时任务")));
     QCOMPARE(FocusTimer::instance()->remainingSeconds(), 0);
 
+    setFocusElapsedSeconds(FocusTimer::instance(), 1);
     QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
+    setFocusElapsedSeconds(FocusTimer::instance(), 2);
     QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
 
     QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 2);
     QCOMPARE(FocusTimer::instance()->remainingSeconds(), 0);
 
-    FocusTimer::instance()->m_elapsedSeconds = kTestMinimumValidDurationSeconds;
+    setFocusElapsedSeconds(FocusTimer::instance(), kTestMinimumValidDurationSeconds);
     QVERIFY(FocusTimer::instance()->stopFocus());
     QCOMPARE(countFocusSessions(), 1);
+}
+
+void ServiceTests::focusTimerUsesMonotonicElapsedTimeAfterBlockedEventLoop()
+{
+    const int taskId = insertTaskRow(QStringLiteral("阻塞计时任务"), QDate::currentDate());
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("阻塞计时任务")));
+
+    // 模拟 GUI 线程两秒没有处理事件；恢复后只触发一次 timeout，计时仍必须反映真实经过时间。
+    QTest::qSleep(2100);
+    QVERIFY(QMetaObject::invokeMethod(&timer->m_timer, "timeout", Qt::DirectConnection));
+    QVERIFY(timer->elapsedSeconds() >= 2);
+
+    setFocusElapsedSeconds(timer, kTestMinimumValidDurationSeconds);
+    QVERIFY(timer->stopFocus());
+}
+
+void ServiceTests::interruptedFocusRestoresPausedAndKeepsProgress()
+{
+    const int taskId = insertTaskRow(QStringLiteral("中断恢复任务"), QDate::currentDate());
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("中断恢复任务")));
+    setFocusElapsedSeconds(timer, 185);
+
+    timer->prepareForShutdown();
+    timer->resetSession();
+
+    QVERIFY(timer->restoreInterruptedSession());
+    QCOMPARE(timer->hasActiveSession(), true);
+    QCOMPARE(timer->isRunning(), false);
+    QCOMPARE(timer->currentTaskId(), taskId);
+    QCOMPARE(timer->currentTaskTitle(), QStringLiteral("中断恢复任务"));
+    QCOMPARE(timer->elapsedSeconds(), 185);
+
+    QVERIFY(timer->resumeFocus());
+    QVERIFY(timer->stopFocus());
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("SELECT duration FROM focus_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 185);
+    QVERIFY(!query.next());
+}
+
+void ServiceTests::startupCleanupRemovesLegacyOrphanedSession()
+{
+    const int taskId = insertTaskRow(QStringLiteral("旧版脏会话任务"), QDate::currentDate());
+    QVERIFY(insertUnfinishedFocusSessionRow(taskId, QDate::currentDate(), 120));
+    QCOMPARE(countFocusSessions(), 1);
+
+    QVERIFY(FocusTimer::instance()->restoreInterruptedSession());
+    QCOMPARE(countFocusSessions(), 0);
+}
+
+void ServiceTests::queryServicesReportDatabaseFailureInsteadOfSilentEmptyData()
+{
+    QSignalSpy taskFailureSpy(TaskManager::instance(), &TaskManager::operationFailed);
+    QSignalSpy statisticsFailureSpy(StatisticsService::instance(), &StatisticsService::operationFailed);
+    QSignalSpy categoryFailureSpy(CategoryManager::instance(), &CategoryManager::operationFailed);
+    QSignalSpy routineFailureSpy(RoutineManager::instance(), &RoutineManager::operationFailed);
+
+    DatabaseManager::instance()->close();
+
+    QVERIFY(TaskManager::instance()->getTodayTasks().isEmpty());
+    const QVariantMap stats = StatisticsService::instance()->getDayStats(QDate::currentDate());
+    QCOMPARE(stats.value(QStringLiteral("totalDuration")).toInt(), 0);
+    QVERIFY(CategoryManager::instance()->getAllCategories().isEmpty());
+    QVERIFY(RoutineManager::instance()->getRoutines().isEmpty());
+
+    QVERIFY(taskFailureSpy.count() >= 1);
+    QVERIFY(statisticsFailureSpy.count() >= 1);
+    QVERIFY(categoryFailureSpy.count() >= 1);
+    QVERIFY(routineFailureSpy.count() >= 1);
 }
 
 QTEST_MAIN(ServiceTests)

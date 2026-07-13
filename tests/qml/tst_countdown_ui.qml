@@ -186,4 +186,28 @@ TestCase {
         verify(daysText)
         verify(Qt.colorEqual(daysText.color, Theme.accentInk), "倒计时天数应为 accentInk")
     }
+
+    function test_firstSecondaryGoalCanBecomePrimaryWithoutBlankRow() {
+        countdownModel.append({
+            goalId: 1, name: "主目标", targetDate: new Date(2026, 11, 23),
+            displayOrder: 0, daysRemaining: 10
+        })
+        countdownModel.append({
+            goalId: 2, name: "可晋升目标", targetDate: new Date(2027, 0, 1),
+            displayOrder: 1, daysRemaining: 20
+        })
+        fakeCountdownService.primaryGoal = countdownModel.get(0)
+        countdownView.visible = true
+        wait(100)
+
+        var list = findChild(countdownView, "countdownSecondaryList")
+        var item = findChild(countdownView, "countdownSecondaryItem")
+        verify(list)
+        verify(item)
+        compare(item.canMoveUp, true)
+        compare(Math.round(item.mapToItem(list, 0, 0).y), 0)
+
+        item.moveUpRequested()
+        compare(countdownModel.get(0).name, "可晋升目标")
+    }
 }

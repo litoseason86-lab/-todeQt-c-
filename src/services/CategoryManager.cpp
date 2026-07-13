@@ -56,6 +56,7 @@ QVariantMap CategoryManager::getCategoryById(int id) const
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get category: database is not open";
+        reportFailure(QStringLiteral("数据库未打开，无法加载科目"));
         return QVariantMap();
     }
 
@@ -67,6 +68,7 @@ QVariantMap CategoryManager::getCategoryById(int id) const
 
     if (!query.exec()) {
         qWarning() << "Failed to get category:" << query.lastError().text();
+        reportFailure(QStringLiteral("科目加载失败: %1").arg(query.lastError().text()));
         return QVariantMap();
     }
 
@@ -297,18 +299,25 @@ QVariantMap CategoryManager::categoryFromQuery(const QSqlQuery& query) const
     return category;
 }
 
+void CategoryManager::reportFailure(const QString& message) const
+{
+    emit const_cast<CategoryManager*>(this)->operationFailed(message);
+}
+
 QVariantList CategoryManager::queryCategories(const QString& sql) const
 {
     QVariantList categories;
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to query categories: database is not open";
+        reportFailure(QStringLiteral("数据库未打开，无法加载科目"));
         return categories;
     }
 
     QSqlQuery query(db);
     if (!query.exec(sql)) {
         qWarning() << "Failed to query categories:" << query.lastError().text();
+        reportFailure(QStringLiteral("科目加载失败: %1").arg(query.lastError().text()));
         return categories;
     }
 

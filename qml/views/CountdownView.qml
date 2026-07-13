@@ -188,39 +188,59 @@ Item {
 
             ListView {
                 id: countdownListView
+                objectName: "countdownSecondaryList"
 
                 anchors.fill: parent
                 anchors.margins: Theme.space12
                 visible: root.primaryGoal() !== null && root.primaryGoal() !== undefined && count > 1
-                spacing: Theme.space12
+                spacing: 0
                 clip: true
                 model: root.countdownServiceRef ? root.countdownServiceRef.model : null
 
-                delegate: CountdownItem {
-                    visible: index > 0
-                    width: ListView.view.width
-                    goalId: model.goalId
-                    goalName: model.name
-                    targetDate: model.targetDate
-                    daysRemaining: model.daysRemaining
-                    canMoveUp: index > 1
-                    canMoveDown: index < ListView.view.count - 1
+                delegate: Loader {
+                    id: secondaryGoalLoader
 
-                    onClicked: root.openEditor(model.goalId, model.name, model.targetDate)
-                    onDeleteRequested: function (id) {
-                        if (root.countdownServiceRef) {
-                            root.countdownServiceRef.deleteGoal(id);
+                    width: ListView.view.width
+                    height: active ? 74 : 0
+                    active: index > 0
+
+                    property int sourceIndex: index
+                    property int sourceGoalId: model.goalId
+                    property string sourceName: model.name
+                    property date sourceTargetDate: model.targetDate
+                    property int sourceDaysRemaining: model.daysRemaining
+
+                    sourceComponent: CountdownItem {
+                        objectName: "countdownSecondaryItem"
+                        width: secondaryGoalLoader.width
+                        height: 62
+                        goalId: secondaryGoalLoader.sourceGoalId
+                        goalName: secondaryGoalLoader.sourceName
+                        targetDate: secondaryGoalLoader.sourceTargetDate
+                        daysRemaining: secondaryGoalLoader.sourceDaysRemaining
+                        // 第一条次要目标对应源模型 index 1，上移就是晋升主目标。
+                        canMoveUp: secondaryGoalLoader.sourceIndex > 0
+                        canMoveDown: secondaryGoalLoader.sourceIndex < countdownListView.count - 1
+
+                        onClicked: root.openEditor(goalId, goalName, targetDate)
+                        onDeleteRequested: function (id) {
+                            if (root.countdownServiceRef) {
+                                root.countdownServiceRef.deleteGoal(id);
+                            }
                         }
-                    }
-                    onMoveUpRequested: {
-                        if (root.countdownServiceRef) {
-                            // 上移/下移是拖拽排序的低风险替代交互，同样会更新首选目标顺序。
-                            root.countdownServiceRef.reorder(index, index - 1);
+                        onMoveUpRequested: {
+                            if (root.countdownServiceRef) {
+                                root.countdownServiceRef.reorder(
+                                    secondaryGoalLoader.sourceIndex,
+                                    secondaryGoalLoader.sourceIndex - 1);
+                            }
                         }
-                    }
-                    onMoveDownRequested: {
-                        if (root.countdownServiceRef) {
-                            root.countdownServiceRef.reorder(index, index + 1);
+                        onMoveDownRequested: {
+                            if (root.countdownServiceRef) {
+                                root.countdownServiceRef.reorder(
+                                    secondaryGoalLoader.sourceIndex,
+                                    secondaryGoalLoader.sourceIndex + 1);
+                            }
                         }
                     }
                 }

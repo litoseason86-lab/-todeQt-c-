@@ -2,8 +2,8 @@
 #define EXPORTSERVICE_H
 
 #include <QDate>
-#include <QFile>
 #include <QObject>
+#include <QSaveFile>
 #include <QString>
 #include <QTextStream>
 #include <QVariant>
@@ -53,10 +53,14 @@ private:
                                    const QDate& endDate,
                                    const QString& filePath,
                                    bool emitSuccess);
-    bool finishCsvFile(QFile& file,
+    bool finishCsvFile(QSaveFile& file,
                        QTextStream& stream,
                        const QString& successMessage,
                        bool emitSuccess);
+    bool commitExportPair(const QString& stagedTasksPath,
+                          const QString& tasksPath,
+                          const QString& stagedSessionsPath,
+                          const QString& sessionsPath);
 };
 
 #endif // EXPORTSERVICE_H

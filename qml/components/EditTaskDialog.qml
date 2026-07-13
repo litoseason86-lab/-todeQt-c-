@@ -74,6 +74,15 @@ Popup {
         root.categoryOptions = options;
     }
 
+    Connections {
+        target: root.categoryManagerRef
+        ignoreUnknownSignals: true
+
+        function onOperationFailed(message) {
+            root.errorText = String(message || "科目加载失败")
+        }
+    }
+
     function openForTask(task) {
         root.errorText = "";
         root.editingTaskId = Number(task.id);

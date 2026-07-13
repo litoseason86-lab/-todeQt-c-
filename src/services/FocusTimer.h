@@ -2,8 +2,11 @@
 #define FOCUSTIMER_H
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QTimer>
+
+class QSqlDatabase;
 
 class FocusTimer : public QObject
 {
@@ -44,6 +47,11 @@ public:
     Q_INVOKABLE bool resumeFocus();
     Q_INVOKABLE bool stopFocus();
 
+    // 数据库初始化后调用：中断的会话恢复为暂停状态，关闭应用期间不会被误算为专注时间。
+    bool restoreInterruptedSession();
+    // 应用退出前同步单调时钟到数据库；不结束会话，下一次启动仍可继续。
+    void prepareForShutdown();
+
     int elapsedSeconds() const;
     bool isRunning() const;
     bool hasActiveSession() const;
@@ -75,14 +83,24 @@ private:
     // 保存失败时调用方会保留当前会话状态，避免用户误以为记录已经落库。
     bool saveFocusSession(int durationSeconds);
     bool discardFocusSession();
+    bool persistActiveState();
+    bool writeActiveState(QSqlDatabase& db);
+    bool clearActiveState(QSqlDatabase& db);
+    bool cleanupOrphanedSessions();
+    qint64 currentElapsedMilliseconds() const;
+    void syncElapsedTime();
+    void freezeElapsedTime();
     void resetSession();
 
-    // m_elapsedSeconds 存真实累计秒数，暂停时间不会计入专注时长。
+    // QTimer 只负责刷新界面；真实时长来自单调时钟，GUI 卡顿导致漏 tick 时也不会少算。
     QTimer m_timer;
+    QElapsedTimer m_runClock;
     int m_currentTaskId = -1;
     QString m_currentTaskTitle;
     QDateTime m_startTime;
     int m_elapsedSeconds = 0;
+    qint64 m_accumulatedMilliseconds = 0;
+    int m_lastCheckpointSeconds = 0;
     bool m_isRunning = false;
     int m_sessionId = -1;
     TimerMode m_mode = FreeMode;

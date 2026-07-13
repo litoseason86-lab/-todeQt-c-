@@ -506,11 +506,14 @@ Item {
                 // 这里保留业务源条件，动画门控只看状态和减少动效开关。
                 readonly property bool shouldShow: root.state === "workDone" || root.state === "breakDone"
                 readonly property bool blinkRunning: completionBlink.running
+                property real blinkOpacity: 1
 
                 Layout.fillWidth: true
                 Layout.preferredHeight: 44
                 visible: completionBanner.shouldShow
-                opacity: visible ? 1 : 0
+                opacity: completionBanner.shouldShow
+                         ? (completionBlink.running ? completionBanner.blinkOpacity : 1)
+                         : 0
                 color: Theme.accentSoft
                 border.color: Theme.accent
                 radius: Theme.radiusMd
@@ -523,7 +526,7 @@ Item {
                     color: Theme.inkStrong
                 }
 
-                OpacityAnimator on opacity {
+                NumberAnimation on blinkOpacity {
                     id: completionBlink
 
                     from: 0.35
@@ -532,12 +535,6 @@ Item {
                     loops: Animation.Infinite
                     running: completionBanner.shouldShow && !(root.settings && root.settings.reduceMotion)
 
-                    onRunningChanged: {
-                        // 减少动效会停掉循环闪烁；停在低透明帧会削弱完成反馈，所以恢复到静止可见值。
-                        if (!running) {
-                            completionBanner.opacity = completionBanner.shouldShow ? 1 : 0
-                        }
-                    }
                 }
             }
 

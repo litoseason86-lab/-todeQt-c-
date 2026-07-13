@@ -16,6 +16,7 @@ TestCase {
 
         property int deleteTaskCalls: 0
         property int lastDeletedTaskId: -1
+        property bool deleteSucceeds: true
 
         function getTodayTasks() { return [] }
         function getWeekTasks(weekStart) { return [] }
@@ -25,7 +26,7 @@ TestCase {
         function deleteTask(id) {
             deleteTaskCalls += 1
             lastDeletedTaskId = id
-            return true
+            return deleteSucceeds
         }
     }
 
@@ -168,6 +169,7 @@ TestCase {
         appSettings.lastMode = 0
         taskManager.deleteTaskCalls = 0
         taskManager.lastDeletedTaskId = -1
+        taskManager.deleteSucceeds = true
         var focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
         focusView.toPomodoroTab(false)
@@ -309,6 +311,8 @@ TestCase {
 
         tryCompare(toast, "shown", false, 2000)
         verify(toast.yOffset > 0)
+        compare(toast.actionText, "")
+        compare(toast.actionCallback, null)
         toast.displayDurationMs = 3000
     }
 
@@ -403,5 +407,18 @@ TestCase {
         compare(mainWindow.pendingDeleteTaskId, 24)
 
         mainWindow.cancelPendingDelete()
+    }
+
+    function test_deleteFailureRestoresHiddenTaskAndReportsError() {
+        taskManager.deleteSucceeds = false
+        mainWindow.requestDeleteTask(25, "删除失败任务")
+
+        compare(mainWindow.commitPendingDelete(), false)
+        compare(mainWindow.pendingDeleteTaskId, -1)
+        var toast = findChild(mainWindow, "globalToast")
+        verify(toast)
+        var toastText = findChild(toast, "toastText")
+        verify(toastText)
+        verify(toastText.text.indexOf("失败") >= 0)
     }
 }

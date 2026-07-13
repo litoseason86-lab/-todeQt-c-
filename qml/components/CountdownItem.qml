@@ -26,7 +26,8 @@ Rectangle {
     color: Theme.glassCard
     border.color: hitArea.containsMouse ? Theme.accent : Theme.border
     border.width: 1
-    layer.enabled: hitArea.containsMouse
+    // 悬停事件分发期间不重建效果层，避免 Qt Quick 的 hover 命中树留下失效项指针。
+    layer.enabled: true
     layer.effect: MultiEffect {
         autoPaddingEnabled: true
         shadowEnabled: true

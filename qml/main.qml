@@ -21,6 +21,13 @@ ApplicationWindow {
         anchors.fill: parent
     }
 
+    onClosing: function(close) {
+        // 撤销窗口尚未结束时关闭应用，必须先同步提交；失败则阻止退出，避免任务下次启动“复活”。
+        if (!mainContent.commitPendingDelete()) {
+            close.accepted = false
+        }
+    }
+
     ImmersionWindowSync {
         id: immersionSync
     }

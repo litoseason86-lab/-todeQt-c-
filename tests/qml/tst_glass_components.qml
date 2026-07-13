@@ -77,6 +77,8 @@ TestCase {
 
     function test_countdownItemGlassKeepsHoverBorder() {
         verify(Qt.colorEqual(countdownItem.color, Theme.glassCard))
+        // hover 只能改视觉参数，不能在指针事件分发期间销毁图层效果项。
+        compare(countdownItem.layer.enabled, true)
         // hover 描边行为是既有交互（border → accent），底色玻璃化不得动它；
         // 默认态（无悬停）边框仍应是 Theme.border。
         verify(Qt.colorEqual(countdownItem.border.color, Theme.border))

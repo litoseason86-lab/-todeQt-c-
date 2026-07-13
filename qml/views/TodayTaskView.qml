@@ -28,6 +28,7 @@ Item {
     property int pendingDeleteTaskId: -1
     property string loadError: ""
     property bool completionRefreshDelayActive: false
+    property bool pageActive: true
     // 当日专注目标（分钟）；0 = 今天尚未设置。设置/修改只在本页发生。
     property int dailyFocusGoalMinutes: 0
     // 昨天的目标分钟数：未设置态快捷 chip 的数据源（单键快照跨日后即昨天值）。
@@ -41,8 +42,18 @@ Item {
         baseSeconds: Number(root.todayStats.totalDuration || 0)
     }
 
-    Component.onCompleted: refresh()
-    onPendingDeleteTaskIdChanged: refresh()
+    Component.onCompleted: {
+        if (root.pageActive)
+            refresh()
+    }
+    onPageActiveChanged: {
+        if (root.pageActive)
+            refresh()
+    }
+    onPendingDeleteTaskIdChanged: {
+        if (root.pageActive)
+            refresh()
+    }
 
     Connections {
         // 目标保存后（本页或未来其它入口）重读，保证展示与存储一致。
@@ -56,11 +67,17 @@ Item {
 
     Connections {
         target: taskManager
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onTasksChanged() {
             if (root.completionRefreshDelayActive)
                 return;
             root.refresh();
+        }
+
+        function onOperationFailed(message) {
+            root.loadError = String(message || "任务加载失败")
         }
     }
 
@@ -78,6 +95,7 @@ Item {
     Connections {
         target: root.categoryManagerRef
         ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onCategoriesChanged() {
             root.refresh();
@@ -86,6 +104,7 @@ Item {
 
     Connections {
         target: focusTimer
+        enabled: root.pageActive
 
         function onFocusCompleted(duration) {
             root.refresh();
@@ -93,11 +112,26 @@ Item {
     }
 
     Connections {
+        target: statisticsService
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
+
+        function onOperationFailed(message) {
+            root.loadError = String(message || "统计数据加载失败")
+        }
+    }
+
+    Connections {
         target: typeof routineManager !== "undefined" ? routineManager : null
         ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onRoutinesChanged() {
             root.refresh();
+        }
+
+        function onOperationFailed(message) {
+            root.loadError = String(message || "每日例行生成失败")
         }
     }
 
@@ -567,19 +601,19 @@ Item {
                 }
             }
 
-            ScrollView {
+            ListView {
+                id: todayTaskList
+
                 anchors.fill: parent
                 clip: true
                 visible: root.tasks.length > 0
+                model: root.tasks
+                spacing: Theme.space8
+                boundsBehavior: Flickable.StopAtBounds
 
-                ColumnLayout {
-                    width: Math.max(parent.width, 1)
-                    spacing: Theme.space8
-
-                    Repeater {
-                        model: root.tasks
-
-                        TaskItem {
+                delegate: TaskItem {
+                            width: todayTaskList.width
+                            height: implicitHeight
                             taskId: modelData.id
                             taskTitle: modelData.title
                             taskCategory: modelData.category && modelData.category.name ? modelData.category : (modelData.categoryData && modelData.categoryData.name ? modelData.categoryData : (modelData.categoryText || ""))
@@ -609,8 +643,6 @@ Item {
                                 editTaskDialog.openForTask(modelData);
                             }
                         }
-                    }
-                }
             }
         }
 
@@ -620,9 +652,8 @@ Item {
         id: addTaskDialog
 
         categoryManagerRef: root.categoryManagerRef
-
-        onTaskAdded: function (title, date, categoryId) {
-            taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId));
+        taskSubmitter: function (title, date, categoryId) {
+            return taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId));
         }
     }
 

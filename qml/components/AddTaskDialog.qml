@@ -77,6 +77,8 @@ Popup {
     }
     property string heading: "添加新任务"
     property var categoryManagerRef: null
+    // 生产页面注入返回 bool 的提交函数；信号保留给独立组件和旧测试使用。
+    property var taskSubmitter: null
     property var categories: []
     // 第一个选项是特殊占位项，表示"不设置科目"，数据库里的 category_id 保持为空。
     property var categoryOptions: [
@@ -124,16 +126,35 @@ Popup {
 
         // 这里只传科目 id，由 TaskManager 写入数据库关联字段和兼容旧数据的文本字段。
         var categoryId = categoryComboBox.currentIndex >= 0 && categoryComboBox.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryComboBox.currentIndex].id || -1) : -1;
-        root.taskAdded(title, root.selectedDate, categoryId);
+        var succeeded = true;
+        if (root.taskSubmitter) {
+            succeeded = Boolean(root.taskSubmitter(title, root.selectedDate, categoryId));
+        } else {
+            root.taskAdded(title, root.selectedDate, categoryId);
+        }
+        if (!succeeded) {
+            errorLabel.text = "保存失败，请检查数据库后重试";
+            titleField.forceActiveFocus();
+            return;
+        }
         root.resetFields();
         root.close();
+    }
+
+    Connections {
+        target: root.categoryManagerRef
+        ignoreUnknownSignals: true
+
+        function onOperationFailed(message) {
+            errorLabel.text = String(message || "科目加载失败")
+        }
     }
 
     Component.onCompleted: root.refreshCategories()
 
     onOpened: {
-        root.refreshCategories();
         errorLabel.text = "";
+        root.refreshCategories();
         titleField.forceActiveFocus();
     }
 
@@ -379,6 +400,7 @@ Popup {
 
         Label {
             id: errorLabel
+            objectName: "addTaskErrorLabel"
 
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16

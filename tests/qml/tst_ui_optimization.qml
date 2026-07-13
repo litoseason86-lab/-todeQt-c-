@@ -41,6 +41,7 @@ TestCase {
         id: taskManager
 
         signal tasksChanged
+        signal operationFailed(string message)
 
         property var fakeTodayTasks: []
         property var fakeWeekTasks: []
@@ -97,6 +98,8 @@ TestCase {
 
     QtObject {
         id: statisticsService
+
+        signal operationFailed(string message)
 
         function getTodayStats() {
             return {
@@ -274,9 +277,18 @@ TestCase {
 
     function test_taskItemUsesStandardQt6ShadowMetadata() {
         compare(taskItem.layer.enabled, true);
+        taskItem.setPointerInside(true);
+        compare(taskItem.layer.enabled, true);
         verify(taskItem.layer.effect !== null);
         compare(taskItem.layer.effect.status, Component.Ready);
         verify(String(taskItem.layer.effect).indexOf("ShaderEffect") === -1);
+        taskItem.setPointerInside(false);
+        compare(taskItem.layer.enabled, true);
+    }
+
+    function test_todayTaskViewShowsStatisticsDatabaseFailure() {
+        statisticsService.operationFailed("统计读取失败")
+        compare(todayTaskView.loadError, "统计读取失败")
     }
 
     function test_taskItemUsesWarmShadowAndAnimatesHoverParameters() {
@@ -660,6 +672,7 @@ TestCase {
 
         button.down = true;
         tryCompare(button, "down", true, 220);
+        tryCompare(background.layer, "enabled", true, 220);
         wait(130);
 
         verifyWarmShadow(background, 0.04, 0.10, 1, context + "按下状态");
@@ -670,6 +683,7 @@ TestCase {
         tryCompare(button, "down", false, 220);
         wait(130);
 
+        compare(background.layer.enabled, true);
         verifyWarmShadow(background, 0.08, 0.14, 2, context + "释放后");
         verifyNear(background.y, 0, 0.05, context + "释放后背景 y");
         verifyNear(label.scale, 1.0, 0.005, context + "释放后文字缩放");

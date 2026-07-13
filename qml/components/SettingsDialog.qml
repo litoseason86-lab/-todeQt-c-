@@ -204,9 +204,11 @@ Popup {
                                 anchors.fill: parent
                                 anchors.margins: 3
                                 themeId: themeCell.modelData.id
+                                requestedSourceSize: Qt.size(154, 66)
                             }
 
                             Rectangle {
+                                objectName: "settingsThemeGlass-" + themeCell.modelData.id
                                 // 迷你磨砂条：让用户换主题前预感玻璃面板的观感。
                                 anchors.left: parent.left
                                 anchors.right: parent.right
@@ -217,8 +219,8 @@ Popup {
                                 height: 16
                                 radius: Theme.radiusSm
                                 // 每格预览显示该主题的玻璃观感，而非当前全局 Theme。
-                                color: Theme.glassCard
-                                border.color: Theme.glassBorder
+                                color: Theme.glassCardForMode(themeCell.modelData.mode)
+                                border.color: Theme.glassBorderForMode(themeCell.modelData.mode)
                                 border.width: 1
                             }
 

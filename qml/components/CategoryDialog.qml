@@ -72,6 +72,10 @@ Popup {
         function onCategoriesChanged() {
             root.refresh()
         }
+
+        function onOperationFailed(message) {
+            root.errorText = String(message || "科目加载失败")
+        }
     }
 
     function refresh() {

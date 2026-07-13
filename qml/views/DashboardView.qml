@@ -32,6 +32,7 @@ Item {
     // all=全部 done=已完成；仪表盘任务面板只看不加，添加去今日任务页。
     property string filterMode: "all"
     property bool completionRefreshDelayActive: false
+    property bool pageActive: true
     // 时钟快照：问候语与日期卡共用，分钟级刷新足够。
     property var now: new Date()
     // 生产默认读系统时间；测试注入固定时间，避免逻辑日用例依赖真实日期。
@@ -68,31 +69,56 @@ Item {
 
     Component.onCompleted: {
         root.now = root.currentNow()
-        refresh()
+        if (root.pageActive)
+            refresh()
     }
-    onPendingDeleteTaskIdChanged: refresh()
+    onPageActiveChanged: {
+        if (root.pageActive)
+            refresh()
+    }
+    onPendingDeleteTaskIdChanged: {
+        if (root.pageActive)
+            refresh()
+    }
 
     Timer {
         // 问候语跨时段、日期跨天都靠这只分钟表推进；页面不可见时停走。
         interval: 60000
         repeat: true
-        running: root.visible
+        running: root.visible && root.pageActive
         onTriggered: root.now = root.currentNow()
     }
 
     Connections {
         target: taskManager
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onTasksChanged() {
             if (root.completionRefreshDelayActive)
                 return
             root.refresh()
         }
+
+        function onOperationFailed(message) {
+            root.loadError = String(message || "任务加载失败")
+        }
+    }
+
+    Connections {
+        target: statisticsService
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
+
+        function onOperationFailed(message) {
+            root.loadError = String(message || "统计数据加载失败")
+        }
     }
 
     Connections {
         target: root.categoryManagerRef
         ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onCategoriesChanged() {
             root.refresh()
@@ -110,6 +136,7 @@ Item {
 
     Connections {
         target: focusTimer
+        enabled: root.pageActive
 
         function onFocusCompleted(duration) {
             root.refresh()
@@ -119,9 +146,14 @@ Item {
     Connections {
         target: typeof routineManager !== "undefined" ? routineManager : null
         ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onRoutinesChanged() {
             root.refresh()
+        }
+
+        function onOperationFailed(message) {
+            root.loadError = String(message || "每日例行生成失败")
         }
     }
 

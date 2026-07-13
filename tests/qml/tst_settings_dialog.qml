@@ -71,6 +71,27 @@ TestCase {
         compare(repeater.count, 6)
     }
 
+    function test_eachThumbnailUsesCandidateThemeGlassAndDecodeSize() {
+        var warmCell = themeCell("warm")
+        var starryCell = themeCell("starry")
+        verify(warmCell)
+        verify(starryCell)
+
+        var warmGlass = findChild(warmCell, "settingsThemeGlass-warm")
+        var starryGlass = findChild(starryCell, "settingsThemeGlass-starry")
+        verify(warmGlass)
+        verify(starryGlass)
+        verify(Qt.colorEqual(warmGlass.color, Theme.glassCardForMode("light")))
+        verify(Qt.colorEqual(starryGlass.color, Theme.glassCardForMode("dark")))
+        verify(!Qt.colorEqual(warmGlass.color, starryGlass.color))
+
+        var warmThumb = themeThumb("warm")
+        var wallpaper = findChild(warmThumb, "wallpaperImage")
+        verify(wallpaper)
+        compare(wallpaper.sourceSize.width, 154)
+        compare(wallpaper.sourceSize.height, 66)
+    }
+
     function test_clickThumbWritesThemeId() {
         dialog.open()
         wait(20)

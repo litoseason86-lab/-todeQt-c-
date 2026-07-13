@@ -15,7 +15,13 @@ FocusTimer::FocusTimer(QObject* parent)
 {
     m_timer.setInterval(1000);
     connect(&m_timer, &QTimer::timeout, this, [this]() {
-        ++m_elapsedSeconds;
+        syncElapsedTime();
+        // 每五秒保存一次活动进度；崩溃最多损失一个检查点区间，正常退出会再做一次同步。
+        if (m_elapsedSeconds - m_lastCheckpointSeconds >= 5) {
+            if (persistActiveState()) {
+                m_lastCheckpointSeconds = m_elapsedSeconds;
+            }
+        }
         emit tick();
 
         if (m_mode != PomodoroMode || m_targetSeconds <= 0 || m_elapsedSeconds < m_targetSeconds) {
@@ -70,11 +76,19 @@ bool FocusTimer::startBreak(int breakSeconds)
     m_currentTaskTitle.clear();
     m_startTime = QDateTime::currentDateTime();
     m_elapsedSeconds = 0;
+    m_accumulatedMilliseconds = 0;
+    m_lastCheckpointSeconds = 0;
     m_isRunning = true;
     m_sessionId = -1;
     m_mode = PomodoroMode;
     m_phase = BreakPhase;
     m_targetSeconds = breakSeconds;
+    m_runClock.start();
+
+    if (!persistActiveState()) {
+        resetSession();
+        return false;
+    }
     m_timer.start();
 
     emit runningStateChanged();
@@ -113,6 +127,11 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
     }
 
     const QDateTime now = QDateTime::currentDateTime();
+    if (!db.transaction()) {
+        qWarning() << "Failed to start focus: could not begin transaction" << db.lastError().text();
+        return false;
+    }
+
     QSqlQuery query(db);
     query.prepare(QStringLiteral("INSERT INTO focus_sessions (task_id, start_time) VALUES (:taskId, :startTime)"));
     query.bindValue(QStringLiteral(":taskId"), taskId);
@@ -121,6 +140,7 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
     if (!query.exec()) {
         qWarning() << "Failed to create focus session:" << query.lastError().text()
                    << "taskId=" << taskId;
+        db.rollback();
         return false;
     }
 
@@ -129,10 +149,21 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
     m_currentTaskTitle = normalizedTitle;
     m_startTime = now;
     m_elapsedSeconds = 0;
+    m_accumulatedMilliseconds = 0;
+    m_lastCheckpointSeconds = 0;
     m_isRunning = true;
     m_mode = mode;
     m_phase = phase;
     m_targetSeconds = targetSeconds;
+    m_runClock.start();
+
+    if (!writeActiveState(db) || !db.commit()) {
+        qWarning() << "Failed to persist active focus state:" << db.lastError().text()
+                   << "taskId=" << taskId;
+        db.rollback();
+        resetSession();
+        return false;
+    }
     m_timer.start();
 
     emit runningStateChanged();
@@ -149,8 +180,16 @@ void FocusTimer::pauseFocus()
         return;
     }
 
+    freezeElapsedTime();
     m_timer.stop();
     m_isRunning = false;
+    if (!persistActiveState()) {
+        qWarning() << "Failed to checkpoint focus while pausing"
+                   << "sessionId=" << m_sessionId;
+    } else {
+        m_lastCheckpointSeconds = m_elapsedSeconds;
+    }
+    emit tick();
     emit runningStateChanged();
 }
 
@@ -166,8 +205,9 @@ bool FocusTimer::resumeFocus()
         return true;
     }
 
-    m_timer.start();
     m_isRunning = true;
+    m_runClock.start();
+    m_timer.start();
     emit runningStateChanged();
     return true;
 }
@@ -176,6 +216,20 @@ bool FocusTimer::stopFocus()
 {
     if (m_phase == BreakPhase) {
         // 休息段没有数据库行，到点或手动停止都只复位；不能走专注段的保存/丢弃逻辑。
+        const bool wasRunning = m_isRunning;
+        if (wasRunning) {
+            freezeElapsedTime();
+            m_timer.stop();
+        }
+        QSqlDatabase db = DatabaseManager::instance()->database();
+        if (!db.isOpen() || !clearActiveState(db)) {
+            if (wasRunning) {
+                m_isRunning = true;
+                m_runClock.start();
+                m_timer.start();
+            }
+            return false;
+        }
         resetSession();
         emit runningStateChanged();
         emit currentTaskChanged();
@@ -196,6 +250,7 @@ bool FocusTimer::completeFocusSession()
 
     const bool wasRunning = m_isRunning;
     if (wasRunning) {
+        freezeElapsedTime();
         m_timer.stop();
     }
 
@@ -204,6 +259,7 @@ bool FocusTimer::completeFocusSession()
         // 低于 3 分钟的会话视为无效，直接删除 startFocus 预先插入的占位记录，避免历史页出现 0 分钟噪音。
         if (!discardFocusSession()) {
             if (wasRunning) {
+                m_runClock.start();
                 m_timer.start();
             }
             return false;
@@ -224,6 +280,7 @@ bool FocusTimer::completeFocusSession()
     // 保存失败时恢复计时器，不假装会话已经正常结束。
     if (!saveFocusSession(duration)) {
         if (wasRunning) {
+            m_runClock.start();
             m_timer.start();
         }
         return false;
@@ -250,7 +307,7 @@ bool FocusTimer::completeFocusSession()
 
 int FocusTimer::elapsedSeconds() const
 {
-    return m_elapsedSeconds;
+    return static_cast<int>(currentElapsedMilliseconds() / 1000);
 }
 
 bool FocusTimer::isRunning() const
@@ -295,7 +352,7 @@ int FocusTimer::remainingSeconds() const
         return 0;
     }
 
-    return qMax(0, m_targetSeconds - m_elapsedSeconds);
+    return qMax(0, m_targetSeconds - elapsedSeconds());
 }
 
 int FocusTimer::minimumValidMinutes() const
@@ -326,7 +383,13 @@ bool FocusTimer::saveFocusSession(int durationSeconds)
         return false;
     }
 
-    // 保存实际计时秒数，而不是墙钟时间差，这样暂停/继续才会被正确计算。
+    if (!db.transaction()) {
+        qWarning() << "Failed to save focus session: could not begin transaction"
+                   << db.lastError().text();
+        return false;
+    }
+
+    // 保存单调时钟累计秒数，而不是墙钟时间差，这样暂停、系统改时钟和 GUI 卡顿都不会污染时长。
     const QDateTime endTime = QDateTime::currentDateTime();
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
@@ -342,6 +405,7 @@ bool FocusTimer::saveFocusSession(int durationSeconds)
                    << "duration=" << durationSeconds
                    << "startTime=" << m_startTime.toString(Qt::ISODate)
                    << "endTime=" << endTime.toString(Qt::ISODate);
+        db.rollback();
         return false;
     }
 
@@ -350,6 +414,14 @@ bool FocusTimer::saveFocusSession(int durationSeconds)
                    << "sessionId=" << m_sessionId
                    << "taskId=" << m_currentTaskId
                    << "duration=" << durationSeconds;
+        db.rollback();
+        return false;
+    }
+
+    if (!clearActiveState(db) || !db.commit()) {
+        qWarning() << "Failed to finish focus session transaction:" << db.lastError().text()
+                   << "sessionId=" << m_sessionId;
+        db.rollback();
         return false;
     }
 
@@ -366,6 +438,12 @@ bool FocusTimer::discardFocusSession()
         return false;
     }
 
+    if (!db.transaction()) {
+        qWarning() << "Failed to discard invalid focus session: could not begin transaction"
+                   << db.lastError().text();
+        return false;
+    }
+
     QSqlQuery query(db);
     query.prepare(QStringLiteral("DELETE FROM focus_sessions WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), m_sessionId);
@@ -374,6 +452,7 @@ bool FocusTimer::discardFocusSession()
         qWarning() << "Failed to discard invalid focus session:" << query.lastError().text()
                    << "sessionId=" << m_sessionId
                    << "taskId=" << m_currentTaskId;
+        db.rollback();
         return false;
     }
 
@@ -381,10 +460,236 @@ bool FocusTimer::discardFocusSession()
         qWarning() << "Failed to discard invalid focus session: session row not found"
                    << "sessionId=" << m_sessionId
                    << "taskId=" << m_currentTaskId;
+        db.rollback();
+        return false;
+    }
+
+    if (!clearActiveState(db) || !db.commit()) {
+        qWarning() << "Failed to discard focus session transaction:" << db.lastError().text()
+                   << "sessionId=" << m_sessionId;
+        db.rollback();
         return false;
     }
 
     return true;
+}
+
+bool FocusTimer::persistActiveState()
+{
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to persist active focus state: database is not open";
+        return false;
+    }
+
+    return writeActiveState(db);
+}
+
+bool FocusTimer::writeActiveState(QSqlDatabase& db)
+{
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(R"SQL(
+        INSERT INTO active_focus_state (
+            singleton_id, session_id, task_id, task_title, elapsed_seconds,
+            mode, phase, target_seconds, updated_at
+        ) VALUES (
+            1, :sessionId, :taskId, :taskTitle, :elapsedSeconds,
+            :mode, :phase, :targetSeconds, :updatedAt
+        )
+        ON CONFLICT(singleton_id) DO UPDATE SET
+            session_id = excluded.session_id,
+            task_id = excluded.task_id,
+            task_title = excluded.task_title,
+            elapsed_seconds = excluded.elapsed_seconds,
+            mode = excluded.mode,
+            phase = excluded.phase,
+            target_seconds = excluded.target_seconds,
+            updated_at = excluded.updated_at
+    )SQL"));
+    query.bindValue(QStringLiteral(":sessionId"), m_sessionId > 0 ? QVariant(m_sessionId) : QVariant());
+    query.bindValue(QStringLiteral(":taskId"), m_currentTaskId > 0 ? QVariant(m_currentTaskId) : QVariant());
+    query.bindValue(QStringLiteral(":taskTitle"),
+                    m_currentTaskTitle.isNull() ? QStringLiteral("") : m_currentTaskTitle);
+    query.bindValue(QStringLiteral(":elapsedSeconds"), elapsedSeconds());
+    query.bindValue(QStringLiteral(":mode"), static_cast<int>(m_mode));
+    query.bindValue(QStringLiteral(":phase"), static_cast<int>(m_phase));
+    query.bindValue(QStringLiteral(":targetSeconds"), m_targetSeconds);
+    query.bindValue(QStringLiteral(":updatedAt"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+
+    if (!query.exec()) {
+        qWarning() << "Failed to write active focus state:" << query.lastError().text()
+                   << "sessionId=" << m_sessionId << "phase=" << m_phase;
+        return false;
+    }
+    return true;
+}
+
+bool FocusTimer::clearActiveState(QSqlDatabase& db)
+{
+    QSqlQuery query(db);
+    if (!query.exec(QStringLiteral("DELETE FROM active_focus_state WHERE singleton_id = 1"))) {
+        qWarning() << "Failed to clear active focus state:" << query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool FocusTimer::cleanupOrphanedSessions()
+{
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        return false;
+    }
+
+    QSqlQuery query(db);
+    // 只有被活动状态引用的 NULL 会话才可恢复；其余都是旧版本或异常中断遗留的不可见垃圾。
+    if (!query.exec(QStringLiteral(R"SQL(
+        DELETE FROM focus_sessions
+        WHERE end_time IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM active_focus_state
+              WHERE active_focus_state.session_id = focus_sessions.id
+          )
+    )SQL"))) {
+        qWarning() << "Failed to clean orphaned focus sessions:" << query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool FocusTimer::restoreInterruptedSession()
+{
+    if (hasActiveTimer()) {
+        qWarning() << "Failed to restore focus state: timer already active";
+        return false;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        return false;
+    }
+
+    QSqlQuery stateQuery(db);
+    if (!stateQuery.exec(QStringLiteral(R"SQL(
+        SELECT session_id, task_id, task_title, elapsed_seconds, mode, phase, target_seconds
+        FROM active_focus_state WHERE singleton_id = 1
+    )SQL"))) {
+        qWarning() << "Failed to read active focus state:" << stateQuery.lastError().text();
+        return false;
+    }
+
+    if (!stateQuery.next()) {
+        return cleanupOrphanedSessions();
+    }
+
+    const int restoredSessionId = stateQuery.value(0).isNull() ? -1 : stateQuery.value(0).toInt();
+    const int restoredTaskId = stateQuery.value(1).isNull() ? -1 : stateQuery.value(1).toInt();
+    const QString restoredTitle = stateQuery.value(2).toString().trimmed();
+    const int restoredElapsed = qMax(0, stateQuery.value(3).toInt());
+    const int restoredMode = stateQuery.value(4).toInt();
+    const int restoredPhase = stateQuery.value(5).toInt();
+    const int restoredTarget = qMax(0, stateQuery.value(6).toInt());
+
+    const bool isFreeFocus = restoredMode == FreeMode && restoredPhase == NoPhase
+        && restoredSessionId > 0 && restoredTaskId > 0 && !restoredTitle.isEmpty();
+    const bool isPomodoroWork = restoredMode == PomodoroMode && restoredPhase == WorkPhase
+        && restoredSessionId > 0 && restoredTaskId > 0 && !restoredTitle.isEmpty() && restoredTarget > 0;
+    const bool isPomodoroBreak = restoredMode == PomodoroMode && restoredPhase == BreakPhase
+        && restoredSessionId == -1 && restoredTarget > 0;
+
+    QDateTime restoredStartTime;
+    bool sessionRowValid = isPomodoroBreak;
+    if (restoredSessionId > 0) {
+        QSqlQuery sessionQuery(db);
+        sessionQuery.prepare(QStringLiteral(
+            "SELECT start_time FROM focus_sessions WHERE id = :id AND end_time IS NULL"));
+        sessionQuery.bindValue(QStringLiteral(":id"), restoredSessionId);
+        if (!sessionQuery.exec()) {
+            qWarning() << "Failed to validate interrupted focus session:"
+                       << sessionQuery.lastError().text();
+            return false;
+        }
+        if (sessionQuery.next()) {
+            restoredStartTime = QDateTime::fromString(sessionQuery.value(0).toString(), Qt::ISODate);
+            sessionRowValid = restoredStartTime.isValid();
+        }
+    }
+
+    if (!(isFreeFocus || isPomodoroWork || isPomodoroBreak) || !sessionRowValid) {
+        qWarning() << "Discarding invalid active focus state"
+                   << "sessionId=" << restoredSessionId << "mode=" << restoredMode
+                   << "phase=" << restoredPhase;
+        if (!clearActiveState(db)) {
+            return false;
+        }
+        return cleanupOrphanedSessions();
+    }
+
+    m_sessionId = restoredSessionId;
+    m_currentTaskId = restoredTaskId;
+    m_currentTaskTitle = restoredTitle;
+    m_startTime = isPomodoroBreak ? QDateTime::currentDateTime() : restoredStartTime;
+    m_elapsedSeconds = restoredElapsed;
+    m_accumulatedMilliseconds = static_cast<qint64>(restoredElapsed) * 1000;
+    m_lastCheckpointSeconds = restoredElapsed;
+    m_isRunning = false;
+    m_mode = static_cast<TimerMode>(restoredMode);
+    m_phase = static_cast<TimerPhase>(restoredPhase);
+    m_targetSeconds = restoredTarget;
+    m_runClock.invalidate();
+    m_timer.stop();
+
+    if (!cleanupOrphanedSessions()) {
+        resetSession();
+        return false;
+    }
+
+    emit runningStateChanged();
+    emit currentTaskChanged();
+    emit modeChanged();
+    emit phaseChanged();
+    emit tick();
+    return true;
+}
+
+void FocusTimer::prepareForShutdown()
+{
+    if (!hasActiveTimer()) {
+        return;
+    }
+
+    if (m_isRunning) {
+        freezeElapsedTime();
+        m_timer.stop();
+        m_isRunning = false;
+    }
+
+    if (!persistActiveState()) {
+        qWarning() << "Failed to checkpoint active focus state before shutdown"
+                   << "sessionId=" << m_sessionId << "phase=" << m_phase;
+    }
+}
+
+qint64 FocusTimer::currentElapsedMilliseconds() const
+{
+    if (m_isRunning && m_runClock.isValid()) {
+        return m_accumulatedMilliseconds + m_runClock.elapsed();
+    }
+    return m_accumulatedMilliseconds;
+}
+
+void FocusTimer::syncElapsedTime()
+{
+    m_elapsedSeconds = static_cast<int>(currentElapsedMilliseconds() / 1000);
+}
+
+void FocusTimer::freezeElapsedTime()
+{
+    if (m_isRunning && m_runClock.isValid()) {
+        m_accumulatedMilliseconds += m_runClock.elapsed();
+        m_runClock.invalidate();
+    }
+    syncElapsedTime();
 }
 
 void FocusTimer::resetSession()
@@ -394,9 +699,12 @@ void FocusTimer::resetSession()
     m_currentTaskTitle.clear();
     m_startTime = QDateTime();
     m_elapsedSeconds = 0;
+    m_accumulatedMilliseconds = 0;
+    m_lastCheckpointSeconds = 0;
     m_isRunning = false;
     m_sessionId = -1;
     m_mode = FreeMode;
     m_phase = NoPhase;
     m_targetSeconds = 0;
+    m_runClock.invalidate();
 }

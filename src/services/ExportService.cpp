@@ -9,10 +9,14 @@
 #include <QDebug>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QSaveFile>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QTextStream>
+#include <QTimeZone>
+#include <QUuid>
 
 ExportService::ExportService(QObject* parent)
     : QObject(parent)
@@ -72,17 +76,22 @@ QString ExportService::escapeCsvField(const QString& field) const
 
 QString ExportService::formatDateTime(const QVariant& value) const
 {
-    const QDateTime isoDateTime = QDateTime::fromString(value.toString(), Qt::ISODate);
-    if (isoDateTime.isValid()) {
-        return isoDateTime.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    const QString text = value.toString();
+    if (text.contains(QLatin1Char('T'))) {
+        const QDateTime isoDateTime = QDateTime::fromString(text, Qt::ISODate);
+        if (isoDateTime.isValid()) {
+            return isoDateTime.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        }
     }
 
-    const QDateTime sqliteDateTime = QDateTime::fromString(value.toString(), QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    QDateTime sqliteDateTime = QDateTime::fromString(text, QStringLiteral("yyyy-MM-dd HH:mm:ss"));
     if (sqliteDateTime.isValid()) {
-        return sqliteDateTime.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        // 无 T 的格式来自 SQLite CURRENT_TIMESTAMP，语义固定为 UTC。
+        sqliteDateTime.setTimeZone(QTimeZone::UTC);
+        return sqliteDateTime.toLocalTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
     }
 
-    return value.toString();
+    return text;
 }
 
 QString ExportService::categoryExpression() const
@@ -140,8 +149,15 @@ bool ExportService::exportTasksToFile(const QDate& startDate,
         return false;
     }
 
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        emit exportCompleted(false, QStringLiteral("数据库未打开"));
+        return false;
+    }
+
+    // QSaveFile 写入同目录临时文件，只有 commit 成功才原子替换目标；任何中途失败都保留旧文件。
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         emit exportCompleted(false, QStringLiteral("无法创建文件: %1").arg(file.errorString()));
         return false;
     }
@@ -149,13 +165,6 @@ bool ExportService::exportTasksToFile(const QDate& startDate,
     QTextStream out(&file);
     out.setEncoding(QStringConverter::Utf8);
     out << QStringLiteral("ID,标题,科目,日期,完成状态,创建时间\n");
-
-    QSqlDatabase db = DatabaseManager::instance()->database();
-    if (!db.isOpen()) {
-        file.close();
-        emit exportCompleted(false, QStringLiteral("数据库未打开"));
-        return false;
-    }
 
     const QString fromAndWhere = QStringLiteral(
         "FROM tasks t "
@@ -174,7 +183,7 @@ bool ExportService::exportTasksToFile(const QDate& startDate,
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 
     if (!query.exec()) {
-        file.close();
+        file.cancelWriting();
         emit exportCompleted(false, QStringLiteral("数据库查询失败: %1").arg(query.lastError().text()));
         return false;
     }
@@ -216,8 +225,14 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
         return false;
     }
 
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        emit exportCompleted(false, QStringLiteral("数据库未打开"));
+        return false;
+    }
+
+    QSaveFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         emit exportCompleted(false, QStringLiteral("无法创建文件: %1").arg(file.errorString()));
         return false;
     }
@@ -225,13 +240,6 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
     QTextStream out(&file);
     out.setEncoding(QStringConverter::Utf8);
     out << QStringLiteral("ID,任务ID,任务标题,科目,开始时间,结束时间,时长(分钟)\n");
-
-    QSqlDatabase db = DatabaseManager::instance()->database();
-    if (!db.isOpen()) {
-        file.close();
-        emit exportCompleted(false, QStringLiteral("数据库未打开"));
-        return false;
-    }
 
     // countRows 与主查询复用同一 SQL 片段。shift 由 0-6 的归一化整数生成，
     // 以字面量嵌入可避免两条查询各自维护额外绑定，且不存在外部输入注入面。
@@ -260,7 +268,7 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 
     if (!query.exec()) {
-        file.close();
+        file.cancelWriting();
         emit exportCompleted(false, QStringLiteral("数据库查询失败: %1").arg(query.lastError().text()));
         return false;
     }
@@ -305,11 +313,31 @@ bool ExportService::exportAll(const QVariant& startDateValue,
     const QString tasksPath = dir.filePath(generateFileName(QStringLiteral("tasks"), startDate, endDate));
     const QString sessionsPath = dir.filePath(generateFileName(QStringLiteral("focus_sessions"), startDate, endDate));
 
-    // 批量导出时压制单文件成功信号，只在最后发一次总完成消息。
-    if (!exportTasksToFile(startDate, endDate, tasksPath, false)) {
+    const QFileInfo tasksInfo(tasksPath);
+    const QFileInfo sessionsInfo(sessionsPath);
+    if ((tasksInfo.exists() && !tasksInfo.isFile())
+        || (sessionsInfo.exists() && !sessionsInfo.isFile())) {
+        emit exportCompleted(false, QStringLiteral("导出目标不是普通文件"));
         return false;
     }
-    if (!exportFocusSessionsToFile(startDate, endDate, sessionsPath, false)) {
+
+    const QString stagingSuffix = QStringLiteral(".staging-%1")
+                                      .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const QString stagedTasksPath = tasksPath + stagingSuffix;
+    const QString stagedSessionsPath = sessionsPath + stagingSuffix;
+
+    // 两份数据先全部写入暂存文件；任意查询或写入失败都不会碰现有导出结果。
+    if (!exportTasksToFile(startDate, endDate, stagedTasksPath, false)) {
+        return false;
+    }
+    if (!exportFocusSessionsToFile(startDate, endDate, stagedSessionsPath, false)) {
+        QFile::remove(stagedTasksPath);
+        return false;
+    }
+
+    if (!commitExportPair(stagedTasksPath, tasksPath, stagedSessionsPath, sessionsPath)) {
+        QFile::remove(stagedTasksPath);
+        QFile::remove(stagedSessionsPath);
         return false;
     }
 
@@ -317,34 +345,82 @@ bool ExportService::exportAll(const QVariant& startDateValue,
     return true;
 }
 
-bool ExportService::finishCsvFile(QFile& file,
+bool ExportService::finishCsvFile(QSaveFile& file,
                                   QTextStream& stream,
                                   const QString& successMessage,
                                   bool emitSuccess)
 {
     stream.flush();
     if (stream.status() != QTextStream::Ok) {
-        file.close();
+        file.cancelWriting();
         emit exportCompleted(false, QStringLiteral("写入 CSV 失败"));
         return false;
     }
 
-    // close 时仍可能发现之前没暴露的写入错误，所以 flush 和 close 分开检查。
-    if (!file.flush()) {
-        const QString error = file.errorString();
-        file.close();
-        emit exportCompleted(false, QStringLiteral("写入文件失败: %1").arg(error));
-        return false;
-    }
-
-    file.close();
-    if (file.error() != QFileDevice::NoError) {
-        emit exportCompleted(false, QStringLiteral("关闭文件失败: %1").arg(file.errorString()));
+    if (!file.commit()) {
+        emit exportCompleted(false, QStringLiteral("提交文件失败: %1").arg(file.errorString()));
         return false;
     }
 
     if (emitSuccess) {
         emit exportCompleted(true, successMessage);
+    }
+    return true;
+}
+
+bool ExportService::commitExportPair(const QString& stagedTasksPath,
+                                     const QString& tasksPath,
+                                     const QString& stagedSessionsPath,
+                                     const QString& sessionsPath)
+{
+    const QString backupSuffix = QStringLiteral(".backup-%1")
+                                     .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const QString tasksBackup = tasksPath + backupSuffix;
+    const QString sessionsBackup = sessionsPath + backupSuffix;
+    const bool hadTasks = QFileInfo::exists(tasksPath);
+    const bool hadSessions = QFileInfo::exists(sessionsPath);
+
+    auto restoreBackup = [](const QString& backupPath, const QString& destinationPath, bool existed) {
+        if (!existed) {
+            return true;
+        }
+        QFile::remove(destinationPath);
+        return QFile::rename(backupPath, destinationPath);
+    };
+
+    if (hadTasks && !QFile::rename(tasksPath, tasksBackup)) {
+        emit exportCompleted(false, QStringLiteral("无法备份原任务导出文件"));
+        return false;
+    }
+    if (hadSessions && !QFile::rename(sessionsPath, sessionsBackup)) {
+        restoreBackup(tasksBackup, tasksPath, hadTasks);
+        emit exportCompleted(false, QStringLiteral("无法备份原专注导出文件"));
+        return false;
+    }
+
+    if (!QFile::rename(stagedTasksPath, tasksPath)) {
+        restoreBackup(tasksBackup, tasksPath, hadTasks);
+        restoreBackup(sessionsBackup, sessionsPath, hadSessions);
+        emit exportCompleted(false, QStringLiteral("无法提交任务导出文件"));
+        return false;
+    }
+
+    if (!QFile::rename(stagedSessionsPath, sessionsPath)) {
+        QFile::remove(tasksPath);
+        const bool tasksRestored = restoreBackup(tasksBackup, tasksPath, hadTasks);
+        const bool sessionsRestored = restoreBackup(sessionsBackup, sessionsPath, hadSessions);
+        emit exportCompleted(false,
+                             tasksRestored && sessionsRestored
+                                 ? QStringLiteral("无法提交专注导出文件，原文件已恢复")
+                                 : QStringLiteral("无法提交专注导出文件，且原文件恢复失败"));
+        return false;
+    }
+
+    if (hadTasks) {
+        QFile::remove(tasksBackup);
+    }
+    if (hadSessions) {
+        QFile::remove(sessionsBackup);
     }
     return true;
 }

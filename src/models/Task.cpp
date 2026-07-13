@@ -2,6 +2,7 @@
 
 #include <QDateTime>
 #include <QSqlRecord>
+#include <QTimeZone>
 
 namespace {
 QVariant valueByName(const QSqlQuery& query, const char* name)
@@ -26,9 +27,15 @@ Task Task::fromQuery(const QSqlQuery& query)
     task.categoryColor = valueByName(query, "category_color").toString();
     task.date = QDate::fromString(valueByName(query, "date").toString(), Qt::ISODate);
     task.completed = valueByName(query, "completed").toBool();
-    task.createdAt = QDateTime::fromString(valueByName(query, "created_at").toString(), Qt::ISODate);
-    if (!task.createdAt.isValid()) {
-        task.createdAt = QDateTime::fromString(valueByName(query, "created_at").toString(), QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+    const QString createdAtText = valueByName(query, "created_at").toString();
+    task.createdAt = QDateTime::fromString(createdAtText, Qt::ISODate);
+    if (!createdAtText.contains(QLatin1Char('T'))) {
+        // SQLite CURRENT_TIMESTAMP 没有时区后缀，但标准规定值是 UTC；先标记 UTC 再转本地。
+        task.createdAt = QDateTime::fromString(createdAtText, QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+        if (task.createdAt.isValid()) {
+            task.createdAt.setTimeZone(QTimeZone::UTC);
+            task.createdAt = task.createdAt.toLocalTime();
+        }
     }
     if (task.categoryName.isEmpty()) {
         // 旧数据库可能只有 tasks.category，需要映射到新的 categoryName。

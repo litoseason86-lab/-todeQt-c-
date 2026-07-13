@@ -14,6 +14,13 @@
 #include <QVariant>
 
 namespace {
+void reportStatisticsFailure(const QString& detail)
+{
+    emit StatisticsService::instance()->operationFailed(
+        detail.isEmpty() ? QStringLiteral("统计数据加载失败")
+                         : QStringLiteral("统计数据加载失败: %1").arg(detail));
+}
+
 QVariantMap noComparisonData()
 {
     QVariantMap result;
@@ -115,6 +122,7 @@ int queryTotalDurationForRange(const QDate& startDate, const QDate& endDate, con
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to calculate total duration:" << context << "database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
         return 0;
     }
 
@@ -134,6 +142,7 @@ int queryTotalDurationForRange(const QDate& startDate, const QDate& endDate, con
 
     if (!query.exec() || !query.next()) {
         qWarning() << "Failed to calculate total duration:" << context << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
         return 0;
     }
 
@@ -323,6 +332,7 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get category stats: database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
         return emptyCategoryStats();
     }
 
@@ -356,6 +366,7 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
 
     if (!query.exec()) {
         qWarning() << "Failed to get category stats:" << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
         return emptyCategoryStats();
     }
 
@@ -401,6 +412,7 @@ QVariantMap StatisticsService::getMonthStats(int year, int month) const
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get month stats: database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
         return result;
     }
 
@@ -417,6 +429,7 @@ QVariantMap StatisticsService::getMonthStats(int year, int month) const
 
     if (!query.exec() || !query.next()) {
         qWarning() << "Failed to get month task stats:" << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
         return result;
     }
 
@@ -481,6 +494,7 @@ int StatisticsService::getFocusSessionCount(const QDate& startDate, const QDate&
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to count focus sessions: database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
         return 0;
     }
 
@@ -500,6 +514,7 @@ int StatisticsService::getFocusSessionCount(const QDate& startDate, const QDate&
 
     if (!query.exec() || !query.next()) {
         qWarning() << "Failed to count focus sessions:" << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
         return 0;
     }
 
@@ -565,6 +580,7 @@ int StatisticsService::countCompletedTasks(const QDate& date) const
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to count completed tasks: database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
         return 0;
     }
 
@@ -574,6 +590,7 @@ int StatisticsService::countCompletedTasks(const QDate& date) const
 
     if (!query.exec() || !query.next()) {
         qWarning() << "Failed to count completed tasks:" << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
         return 0;
     }
 
@@ -589,6 +606,7 @@ int StatisticsService::countTotalTasks(const QDate& date) const
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to count total tasks: database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
         return 0;
     }
 
@@ -598,6 +616,7 @@ int StatisticsService::countTotalTasks(const QDate& date) const
 
     if (!query.exec() || !query.next()) {
         qWarning() << "Failed to count total tasks:" << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
         return 0;
     }
 
@@ -610,6 +629,7 @@ int StatisticsService::getTotalFocusDuration() const
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get total focus duration: database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
         return 0;
     }
 
@@ -623,6 +643,7 @@ int StatisticsService::getTotalFocusDuration() const
 
     if (!query.exec() || !query.next()) {
         qWarning() << "Failed to get total focus duration:" << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
         return 0;
     }
 
@@ -634,6 +655,7 @@ int StatisticsService::getStreakDays() const
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get streak days: database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
         return 0;
     }
 
@@ -653,6 +675,7 @@ int StatisticsService::getStreakDays() const
 
     if (!query.exec()) {
         qWarning() << "Failed to get streak days:" << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
         return 0;
     }
 
@@ -696,6 +719,7 @@ QList<QDate> StatisticsService::getUniqueFocusDates(const QDate& startDate, cons
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get unique focus dates: database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
         return dates;
     }
 
@@ -717,6 +741,7 @@ QList<QDate> StatisticsService::getUniqueFocusDates(const QDate& startDate, cons
 
     if (!query.exec()) {
         qWarning() << "Failed to get unique focus dates:" << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
         return dates;
     }
 

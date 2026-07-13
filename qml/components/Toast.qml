@@ -28,6 +28,7 @@ Rectangle {
         // 先取出回调再关闭提示，避免关闭过程里的外部状态更新把回调清掉。
         var callback = root.actionCallback
         root.actionCallback = null
+        root.actionText = ""
         root.shown = false
         hideTimer.stop()
         if (callback) {
@@ -40,6 +41,8 @@ Rectangle {
     radius: Theme.radiusLg
     color: Theme.inkStrong
     opacity: root.shown ? 0.92 : 0
+    visible: root.shown || opacity > 0.001
+    enabled: root.shown
 
     Component.onCompleted: root.y = root.yOffset
 
@@ -92,6 +95,7 @@ Rectangle {
             font.weight: Font.DemiBold
 
             TapHandler {
+                enabled: root.shown && root.actionText.length > 0
                 onTapped: root.triggerAction()
             }
         }
@@ -101,6 +105,10 @@ Rectangle {
         id: hideTimer
 
         interval: root.displayDurationMs
-        onTriggered: root.shown = false
+        onTriggered: {
+            root.shown = false
+            root.actionCallback = null
+            root.actionText = ""
+        }
     }
 }

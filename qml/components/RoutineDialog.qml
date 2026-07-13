@@ -72,8 +72,8 @@ Popup {
     Component.onCompleted: root.refresh()
 
     onOpened: {
-        root.refresh()
         root.errorText = ""
+        root.refresh()
         routineTitleField.forceActiveFocus()
     }
 
@@ -83,6 +83,19 @@ Popup {
 
         function onRoutinesChanged() {
             root.refresh()
+        }
+
+        function onOperationFailed(message) {
+            root.errorText = String(message || "每日例行加载失败")
+        }
+    }
+
+    Connections {
+        target: root.categoryManagerRef
+        ignoreUnknownSignals: true
+
+        function onOperationFailed(message) {
+            root.errorText = String(message || "科目加载失败")
         }
     }
 

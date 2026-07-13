@@ -83,7 +83,7 @@ list(APPEND APP_SOURCES "${APP_ICON}")
 
 add_executable(PomodoroTodo ${APP_SOURCES})
 
-option(POMODORO_TODO_ENABLE_QML_DEBUG "Enable QML debugging and profiling hooks" ON)
+option(POMODORO_TODO_ENABLE_QML_DEBUG "Enable QML debugging and profiling hooks" OFF)
 if(POMODORO_TODO_ENABLE_QML_DEBUG)
     # 通过配置项控制 QML 调试钩子，避免为了调试改动发布源码。
     target_compile_definitions(PomodoroTodo PRIVATE QT_QML_DEBUG)
@@ -238,6 +238,6 @@ add_test(
     COMMAND Qt6::qmltestrunner -input ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml
 )
 set_tests_properties(PomodoroTodoQmlTests PROPERTIES
-    # 与应用的 Basic 风格保持一致，避免视觉和布局断言随宿主平台变化。
-    ENVIRONMENT "QT_QUICK_CONTROLS_STYLE=Basic"
+    # 测试固定离屏平台与 Basic 风格，后台验证不得创建真实应用窗口。
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic"
 )

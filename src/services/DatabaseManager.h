@@ -31,8 +31,12 @@ private:
     // categories 是第二阶段加入的科目表，旧任务会在迁移时补上 category_id。
     bool createCategoriesTable();
     bool migrateToVersion3();
-    // v4 给 tasks 增加 routine_id 血缘列，结转功能靠它排除例行任务。
+    // v4 给 tasks 增加 routine_id；该版本曾按标题猜测血缘，v6 会清理不可信关联。
     bool migrateToVersion4();
+    // v5 重建 tasks 外键，使删除例行规则时既有任务只解除血缘，不被删除也不阻塞删除。
+    bool migrateToVersion5();
+    // v6 引入可信来源标记；只有新版本实际生成的例行任务才可退出逾期结转。
+    bool migrateToVersion6();
     bool createRoutinesTable();
     bool insertPresetCategories();
     bool migrateTaskCategories();
@@ -41,6 +45,7 @@ private:
     void pruneOldBackups(const QDir& databaseDir) const;
     bool tableExists(const QString& tableName) const;
     bool columnExists(const QString& tableName, const QString& columnName) const;
+    bool routineForeignKeyUsesSetNull() const;
 
     // Qt 的数据库连接按名字管理，测试切换数据库路径时必须能精确关闭旧连接。
     QString m_connectionName;

@@ -65,6 +65,11 @@ RoutineManager* RoutineManager::instance()
     return &manager;
 }
 
+void RoutineManager::reportFailure(const QString& message) const
+{
+    emit const_cast<RoutineManager*>(this)->operationFailed(message);
+}
+
 bool RoutineManager::addRoutine(const QString& title, int categoryId)
 {
     const QString normalizedTitle = title.trimmed();
@@ -218,6 +223,7 @@ QVariantList RoutineManager::getRoutines() const
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get routines: database is not open";
+        reportFailure(QStringLiteral("数据库未打开，无法加载每日例行"));
         return routines;
     }
 
@@ -228,6 +234,7 @@ QVariantList RoutineManager::getRoutines() const
             "LEFT JOIN categories c ON c.id = r.category_id "
             "ORDER BY r.display_order ASC, r.id ASC"))) {
         qWarning() << "Failed to get routines:" << query.lastError().text();
+        reportFailure(QStringLiteral("每日例行加载失败: %1").arg(query.lastError().text()));
         return routines;
     }
 
@@ -251,6 +258,7 @@ int RoutineManager::materializeToday()
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to materialize routines: database is not open";
+        reportFailure(QStringLiteral("数据库未打开，无法生成每日例行"));
         return 0;
     }
 
@@ -270,6 +278,7 @@ int RoutineManager::materializeToday()
 
     if (!dueQuery.exec()) {
         qWarning() << "Failed to materialize routines:" << dueQuery.lastError().text();
+        reportFailure(QStringLiteral("每日例行生成失败: %1").arg(dueQuery.lastError().text()));
         return 0;
     }
 
@@ -288,6 +297,7 @@ int RoutineManager::materializeToday()
 
     if (!db.transaction()) {
         qWarning() << "Failed to materialize routines: failed to start transaction" << db.lastError().text();
+        reportFailure(QStringLiteral("每日例行生成失败: %1").arg(db.lastError().text()));
         return 0;
     }
 
@@ -307,6 +317,7 @@ int RoutineManager::materializeToday()
         // 也只有真正把 last_generated_date 改到今天的实例才能继续插入任务。
         if (!claimRoutine.exec()) {
             qWarning() << "Failed to claim routine generation:" << claimRoutine.lastError().text();
+            reportFailure(QStringLiteral("每日例行生成失败: %1").arg(claimRoutine.lastError().text()));
             db.rollback();
             return 0;
         }
@@ -316,13 +327,13 @@ int RoutineManager::materializeToday()
 
         QSqlQuery insertTask(db);
         insertTask.prepare(QStringLiteral(
-            "INSERT INTO tasks (title, category, category_id, date, completed, routine_id) "
+            "INSERT INTO tasks (title, category, category_id, date, completed, routine_id, routine_generated) "
             "VALUES (:title, COALESCE((SELECT name FROM categories WHERE id = :categoryId), ''), "
-            ":categoryId, :date, 0, :routineId)"));
+            ":categoryId, :date, 0, :routineId, 1)"));
         insertTask.bindValue(QStringLiteral(":title"), routine.title);
         insertTask.bindValue(QStringLiteral(":categoryId"), routine.categoryId);
         insertTask.bindValue(QStringLiteral(":date"), today);
-        // 血缘列用于区分“例行生成”和“手工创建”，结转功能靠它排除例行残留。
+        // routine_generated 是可信来源标记；routine_id 单独存在不能证明任务由规则生成。
         insertTask.bindValue(QStringLiteral(":routineId"), routine.id);
 
         // 这里刻意直接写 SQL，而不调用 TaskManager::addTask：
@@ -330,6 +341,7 @@ int RoutineManager::materializeToday()
         // 事务把“抢占生成权”和“插入任务”绑定成一个原子动作，避免只完成一半后下次重复生成。
         if (!insertTask.exec()) {
             qWarning() << "Failed to materialize routine task:" << insertTask.lastError().text();
+            reportFailure(QStringLiteral("每日例行生成失败: %1").arg(insertTask.lastError().text()));
             db.rollback();
             return 0;
         }
@@ -339,6 +351,7 @@ int RoutineManager::materializeToday()
 
     if (!db.commit()) {
         qWarning() << "Failed to materialize routines: failed to commit transaction" << db.lastError().text();
+        reportFailure(QStringLiteral("每日例行生成失败: %1").arg(db.lastError().text()));
         db.rollback();
         return 0;
     }

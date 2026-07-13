@@ -31,7 +31,14 @@ TestCase {
     QtObject {
         id: fakeCategoryManager
 
+        signal operationFailed(string message)
+        property bool failLoad: false
+
         function getAllCategories() {
+            if (failLoad) {
+                operationFailed("科目数据库故障")
+                return []
+            }
             return [
                 { id: 1, name: "数学", color: "#d4a574" },
                 { id: 2, name: "英语", color: "#c9956e" }
@@ -48,6 +55,11 @@ TestCase {
         onTaskAdded: function(title, date, categoryId) {
             testCase.lastCategoryId = Number(categoryId)
         }
+    }
+
+    AddTaskDialog {
+        id: failingDialog
+        taskSubmitter: function(title, date, categoryId) { return false }
     }
 
     function verifyInsidePanel(popup: Popup, item: Item) {
@@ -121,5 +133,36 @@ TestCase {
         verify(panel)
         verify(Qt.colorEqual(panel.color, Theme.glassDialog))
         dialog.close()
+    }
+
+    function test_failedSubmitKeepsInputAndDialogOpen() {
+        wait(260)
+        failingDialog.open()
+        tryCompare(failingDialog, "opened", true, 500)
+        var titleField = findChild(failingDialog, "titleField")
+        var errorLabel = findChild(failingDialog, "addTaskErrorLabel")
+        verify(titleField)
+        verify(errorLabel)
+
+        titleField.text = "不能丢失的输入"
+        failingDialog.submit()
+
+        compare(failingDialog.opened, true)
+        compare(titleField.text, "不能丢失的输入")
+        verify(errorLabel.text.length > 0)
+        failingDialog.close()
+    }
+
+    function test_categoryFailureSurvivesOpenRefresh() {
+        fakeCategoryManager.failLoad = true
+        categoryDialog.open()
+        tryCompare(categoryDialog, "opened", true, 500)
+
+        var errorLabel = findChild(categoryDialog, "addTaskErrorLabel")
+        verify(errorLabel)
+        compare(errorLabel.text, "科目数据库故障")
+
+        categoryDialog.close()
+        fakeCategoryManager.failLoad = false
     }
 }

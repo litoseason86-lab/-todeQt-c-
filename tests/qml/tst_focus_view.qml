@@ -380,6 +380,7 @@ TestCase {
 
         appSettingsMock.reduceMotion = true
         tryCompare(banner, "blinkRunning", false, 500)
+        compare(banner.opacity, 1)
     }
 
     function test_breakDoneShowsClosedGreenRing() {
