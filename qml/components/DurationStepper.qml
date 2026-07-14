@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import ".."
 
@@ -12,6 +12,7 @@ RowLayout {
     property int from: 1
     property int to: 99
     property string namePrefix: ""
+    property string accessibleName: "时长"
 
     signal adjusted(int newValue)
 
@@ -21,8 +22,10 @@ RowLayout {
         id: minusButton
         objectName: stepper.namePrefix + "Minus"
         enabled: stepper.value > stepper.from
-        implicitWidth: 32
-        implicitHeight: 36
+        implicitWidth: 44
+        implicitHeight: 44
+        activeFocusOnTab: true
+        Accessible.name: "减少" + stepper.accessibleName
         onClicked: stepper.adjusted(stepper.value - 1)
 
         background: Rectangle {
@@ -44,8 +47,8 @@ RowLayout {
     }
 
     Rectangle {
-        implicitWidth: 52
-        implicitHeight: 36
+        implicitWidth: 56
+        implicitHeight: 44
         color: Theme.surfaceSunken
         border.color: Theme.border
         border.width: 1
@@ -58,6 +61,8 @@ RowLayout {
             color: Theme.inkStrong
             font.pixelSize: Theme.fontMd
             font.weight: Font.DemiBold
+            Accessible.role: Accessible.StaticText
+            Accessible.name: stepper.accessibleName + "，" + stepper.value + "分钟"
         }
     }
 
@@ -65,8 +70,10 @@ RowLayout {
         id: plusButton
         objectName: stepper.namePrefix + "Plus"
         enabled: stepper.value < stepper.to
-        implicitWidth: 32
-        implicitHeight: 36
+        implicitWidth: 44
+        implicitHeight: 44
+        activeFocusOnTab: true
+        Accessible.name: "增加" + stepper.accessibleName
         onClicked: stepper.adjusted(stepper.value + 1)
 
         background: Rectangle {

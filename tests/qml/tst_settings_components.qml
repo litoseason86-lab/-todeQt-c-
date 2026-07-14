@@ -14,6 +14,11 @@ TestCase {
         property string backgroundTheme: "warm"
         property bool reduceMotion: false
         property bool slimClockFont: true
+        property bool soundEnabled: true
+        property int workMinutes: 60
+        property int breakMinutes: 10
+        property string nickname: ""
+        property int dayStartHour: 4
     }
 
     SettingsNavigation {
@@ -28,10 +33,14 @@ TestCase {
 
     SettingsFocusPage {
         id: focusPage
+        width: 520
+        appSettingsRef: appSettingsMock
     }
 
     SettingsGeneralPage {
         id: generalPage
+        width: 520
+        appSettingsRef: appSettingsMock
     }
 
     SettingsDataPage {
@@ -103,5 +112,38 @@ TestCase {
         verify(motionSwitch)
         compare(motionSwitch.animationDuration, 0)
         appSettingsMock.reduceMotion = false
+    }
+
+    function test_focusDurationsWriteSharedSettings() {
+        appSettingsMock.workMinutes = 60
+        appSettingsMock.breakMinutes = 10
+        var workPlus = findChild(focusPage, "settingsWorkMinutesPlus")
+        var breakMinus = findChild(focusPage, "settingsBreakMinutesMinus")
+        verify(workPlus)
+        verify(breakMinus)
+        workPlus.click()
+        breakMinus.click()
+        compare(appSettingsMock.workMinutes, 61)
+        compare(appSettingsMock.breakMinutes, 9)
+    }
+
+    function test_generalPageCommitsNicknameDraft() {
+        appSettingsMock.nickname = ""
+        generalPage.appSettingsRef = null
+        generalPage.appSettingsRef = appSettingsMock
+        var field = findChild(generalPage, "settingsNicknameField")
+        verify(field)
+        field.text = "  小番茄  "
+        generalPage.nicknameDraft = field.text
+        verify(generalPage.commitPendingEdits())
+        compare(appSettingsMock.nickname, "小番茄")
+    }
+
+    function test_generalDayStartUsesSharedSetting() {
+        appSettingsMock.dayStartHour = 4
+        var plus = findChild(generalPage, "settingsDayStartPlus")
+        verify(plus)
+        plus.click()
+        compare(appSettingsMock.dayStartHour, 5)
     }
 }
