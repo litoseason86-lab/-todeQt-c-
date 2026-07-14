@@ -426,6 +426,8 @@ private slots:
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void appSettingsDayStartHourNormalizeAndPersist();
     void appSettingsDayStartHourRejectsCorruptIniValue();
+    void appSettingsFocusDurationsNormalizeCorruptValues();
+    void appSettingsWriteFailureDoesNotEmitSuccess();
     void logicalDayDateOfBoundaries();
     void logicalDayMsUntilNextBoundary();
     void logicalDayHandlesDstFallBackByWallClock();
@@ -745,8 +747,8 @@ void ServiceTests::appSettingsBackgroundThemeDefaultAndRoundTrip()
 
     {
         AppSettings settings(path);
-        // 默认必须是暖纸：与 Theme.backgroundThemes 首位的回落约定一致。
-        QCOMPARE(settings.backgroundTheme(), QStringLiteral("warmPaper"));
+        // 默认主题 ID 必须和 Theme.backgroundThemes 的真实首项一致，避免首次启动触发迁移写回。
+        QCOMPARE(settings.backgroundTheme(), QStringLiteral("warm"));
 
         QSignalSpy spy(&settings, &AppSettings::backgroundThemeChanged);
         settings.setBackgroundTheme(QStringLiteral("celadon"));
@@ -810,6 +812,54 @@ void ServiceTests::appSettingsDayStartHourRejectsCorruptIniValue()
 
     AppSettings settings(path);
     QCOMPARE(settings.dayStartHour(), 4);
+}
+
+void ServiceTests::appSettingsFocusDurationsNormalizeCorruptValues()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    // 旧版本或手工编辑可能留下越界值；读取入口不能把它们传给计时器。
+    {
+        QSettings raw(path, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("focus/workMinutes"), 181);
+        raw.setValue(QStringLiteral("focus/breakMinutes"), 0);
+        raw.sync();
+    }
+
+    AppSettings settings(path);
+    QCOMPARE(settings.workMinutes(), 25);
+    QCOMPARE(settings.breakMinutes(), 5);
+
+    QSignalSpy workSpy(&settings, &AppSettings::workMinutesChanged);
+    QSignalSpy breakSpy(&settings, &AppSettings::breakMinutesChanged);
+    settings.setWorkMinutes(4);
+    settings.setBreakMinutes(61);
+    QCOMPARE(settings.workMinutes(), 25);
+    QCOMPARE(settings.breakMinutes(), 5);
+    QCOMPARE(workSpy.count(), 0);
+    QCOMPARE(breakSpy.count(), 0);
+}
+
+void ServiceTests::appSettingsWriteFailureDoesNotEmitSuccess()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    // 把现有目录当作 ini 文件路径会稳定触发 QSettings::AccessError，覆盖真实的磁盘写入失败路径。
+    AppSettings settings(dir.path());
+    QSignalSpy changedSpy(&settings, &AppSettings::soundEnabledChanged);
+    QSignalSpy successSpy(&settings, &AppSettings::settingsWriteSucceeded);
+    QSignalSpy failureSpy(&settings, &AppSettings::settingsWriteFailed);
+
+    settings.setSoundEnabled(false);
+
+    QCOMPARE(changedSpy.count(), 0);
+    QCOMPARE(successSpy.count(), 0);
+    QCOMPARE(failureSpy.count(), 1);
+    QCOMPARE(failureSpy.first().at(0).toString(), QStringLiteral("focus/soundEnabled"));
+    QCOMPARE(settings.soundEnabled(), true);
 }
 
 void ServiceTests::logicalDayDateOfBoundaries()

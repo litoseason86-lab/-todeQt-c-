@@ -64,9 +64,14 @@ signals:
     void nicknameChanged();
     void sidebarVisibleChanged();
     void dailyFocusGoalChanged();
+    void settingsWriteSucceeded(const QString& key);
+    void settingsWriteFailed(const QString& key, const QString& message);
 
 private:
+    static int normalizeWorkMinutes(int minutes);
+    static int normalizeBreakMinutes(int minutes);
     static int normalizeDayStartHour(int hour);
+    bool writeValue(const QString& key, const QVariant& value);
     QSettings* m_settings = nullptr;
 };
 
