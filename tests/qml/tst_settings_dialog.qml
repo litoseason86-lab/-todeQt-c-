@@ -27,6 +27,8 @@ TestCase {
         property string nickname: ""
         property int workMinutes: 25
         property int breakMinutes: 5
+        signal settingsWriteSucceeded(string key)
+        signal settingsWriteFailed(string key, string message)
     }
 
     SettingsDialog {
@@ -36,8 +38,12 @@ TestCase {
     }
 
     function init() {
+        appSettingsMock.reduceMotion = false
+        appSettingsMock.nickname = ""
         dialog.close()
         dialog.currentSection = 0
+        dialog.statusIsError = false
+        dialog.statusText = "设置将自动保存到本机"
         wait(20)
     }
 
@@ -52,6 +58,24 @@ TestCase {
         compare(findChild(navigation, "settingsCategoryRepeater").count, 5)
         verify(findChild(dialog, "settingsStatusText"))
         verify(findChild(dialog, "settingsCloseButton"))
+    }
+
+    function test_sectionChangeCommitsNicknameDraft() {
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        dialog.requestSection(2)
+
+        var pageLoader = findChild(dialog, "settingsPageLoader")
+        verify(pageLoader)
+        tryCompare(pageLoader, "status", Loader.Ready)
+        var field = findChild(pageLoader.item, "settingsNicknameField")
+        verify(field)
+        field.text = "  小番茄  "
+        pageLoader.item.nicknameDraft = field.text
+
+        dialog.requestSection(0)
+        compare(appSettingsMock.nickname, "小番茄")
+        compare(dialog.currentSection, 0)
     }
 
     function test_categoryButtonIsKeyboardFocusable() {
@@ -102,5 +126,41 @@ TestCase {
 
         compare(routineSpy.count, 1)
         tryCompare(dialog, "opened", false)
+    }
+
+    function test_writeFailureStaysVisibleUntilSuccess() {
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        appSettingsMock.settingsWriteFailed("appearance/reduceMotion", "设置文件不可写")
+
+        var status = findChild(dialog, "settingsStatusText")
+        verify(status)
+        compare(status.text, "无法保存设置，请检查系统权限后重试")
+        verify(status.visible)
+        verify(dialog.statusIsError)
+
+        appSettingsMock.settingsWriteSucceeded("appearance/reduceMotion")
+        compare(status.text, "所有设置已保存到本机")
+        verify(!dialog.statusIsError)
+    }
+
+    function test_controlsMeetMinimumTarget() {
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        var navigation = findChild(dialog, "settingsNavigation")
+        verify(navigation)
+        verify(findChild(dialog, "settingsCloseButton").implicitHeight >= 44)
+        verify(findChild(navigation, "settingsCategoryAppearance").implicitHeight >= 44)
+    }
+
+    function test_reduceMotionStopsDialogAndNavigationAnimations() {
+        appSettingsMock.reduceMotion = true
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        compare(dialog.animationDuration, 0)
+        var navigation = findChild(dialog, "settingsNavigation")
+        verify(navigation)
+        compare(navigation.animationDuration, 0)
+        appSettingsMock.reduceMotion = false
     }
 }

@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
@@ -9,6 +11,8 @@ Control {
     objectName: "settingsNavigation"
     property int currentIndex: 0
     property bool compact: false
+    property bool reduceMotion: false
+    readonly property int animationDuration: reduceMotion ? 0 : 100
     signal categoryRequested(int index)
 
     readonly property var categories: [
@@ -81,7 +85,7 @@ Control {
                     radius: Theme.radiusMd
 
                     Behavior on color {
-                        ColorAnimation { duration: 100 }
+                        ColorAnimation { duration: root.animationDuration }
                     }
                 }
 

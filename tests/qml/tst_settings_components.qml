@@ -76,8 +76,12 @@ TestCase {
     function test_navigationAndControlMetrics() {
         compare(settingsSwitch.implicitHeight, 44)
         compare(settingsSwitch.animationDuration, 120)
+        compare(navigation.animationDuration, 100)
         settingsSwitch.reduceMotion = true
         compare(settingsSwitch.animationDuration, 0)
+        navigation.reduceMotion = true
+        compare(navigation.animationDuration, 0)
+        navigation.reduceMotion = false
     }
 
     function test_appearancePageUsesBoundedThemeGallery() {

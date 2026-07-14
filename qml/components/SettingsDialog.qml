@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Effects
@@ -11,6 +13,8 @@ Popup {
     property var appSettingsRef: null
     property int currentSection: 0
     property string statusText: "设置将自动保存到本机"
+    property bool statusIsError: false
+    property SettingsGeneralPage activeGeneralPage: null
     readonly property bool reduceMotion: appSettingsRef ? appSettingsRef.reduceMotion : false
     readonly property int animationDuration: reduceMotion ? 0 : 160
     readonly property var sectionTitles: ["外观", "专注", "通用", "数据与管理", "关于"]
@@ -34,18 +38,14 @@ Popup {
             return
         }
         // 通用页可能仍有正在编辑的文本，切页前先给当前页提交或拒绝切换的机会。
-        if (pageLoader.status === Loader.Ready && pageLoader.item
-                && typeof pageLoader.item.commitPendingEdits === "function"
-                && !pageLoader.item.commitPendingEdits()) {
+        if (activeGeneralPage && !activeGeneralPage.commitPendingEdits()) {
             return
         }
         currentSection = index
     }
 
     function requestClose() {
-        if (pageLoader.status === Loader.Ready && pageLoader.item
-                && typeof pageLoader.item.commitPendingEdits === "function"
-                && !pageLoader.item.commitPendingEdits()) {
+        if (activeGeneralPage && !activeGeneralPage.commitPendingEdits()) {
             return
         }
         close()
@@ -175,6 +175,7 @@ Popup {
                 Layout.fillHeight: true
                 currentIndex: root.currentSection
                 compact: root.compact
+                reduceMotion: root.reduceMotion
                 onCategoryRequested: index => root.requestSection(index)
             }
 
@@ -229,9 +230,12 @@ Popup {
                         objectName: "settingsStatusText"
                         Layout.fillWidth: true
                         text: root.statusText
-                        color: Theme.inkSoft
+                        color: root.statusIsError ? Theme.danger : Theme.inkSoft
                         font.pixelSize: Theme.fontMd
                         elide: Text.ElideRight
+                        Accessible.role: root.statusIsError
+                                         ? Accessible.AlertMessage : Accessible.StaticText
+                        Accessible.name: text
                     }
                 }
             }
@@ -256,9 +260,37 @@ Popup {
         }
     }
 
+    Connections {
+        target: root.appSettingsRef
+        ignoreUnknownSignals: true
+
+        function onSettingsWriteSucceeded(key) {
+            root.statusIsError = false
+            root.statusText = "所有设置已保存到本机"
+        }
+
+        function onSettingsWriteFailed(key, message) {
+            // 后端错误详情可能随平台变化；界面给出稳定动作指引，错误态保持到下一次成功写入。
+            root.statusIsError = true
+            root.statusText = "无法保存设置，请检查系统权限后重试"
+        }
+    }
+
     Component { id: appearancePageComponent; SettingsAppearancePage {} }
     Component { id: focusPageComponent; SettingsFocusPage {} }
-    Component { id: generalPageComponent; SettingsGeneralPage {} }
+    Component {
+        id: generalPageComponent
+
+        SettingsGeneralPage {
+            id: generalPage
+
+            Component.onCompleted: {
+                // Loader 只暴露 QObject 静态类型；具体页面注册强类型引用，壳层不猜测动态属性。
+                root.activeGeneralPage = generalPage
+            }
+            Component.onDestruction: root.activeGeneralPage = null
+        }
+    }
     Component { id: dataPageComponent; SettingsDataPage {} }
     Component { id: aboutPageComponent; SettingsAboutPage {} }
 }
