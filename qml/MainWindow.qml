@@ -224,6 +224,13 @@ Item {
             : "warm"
     }
 
+    // 减少透明度：关掉全局实时模糊，所有玻璃面切到不透明降级（省电/更清晰）。
+    Binding {
+        target: Theme
+        property: "glassBlurAllowed"
+        value: root.appSettingsRef ? !root.appSettingsRef.reduceTransparency : true
+    }
+
     BackgroundWallpaper {
         id: wallpaperLayer
         objectName: "backgroundWallpaperLayer"

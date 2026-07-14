@@ -309,9 +309,21 @@ Item {
         }
     }
 
+    function nextBreakMinutes() {
+        // 长休息：每完成 N 个番茄，这一次休息更久。连续数由 FocusTimer 维护（只计自然到点的番茄），
+        // 手动和自动开始休息共用同一判定，行为一致。
+        if (root.settings && root.settings.longBreakEnabled && root.timer
+                && root.settings.longBreakInterval > 0
+                && root.timer.completedPomodoros > 0
+                && (root.timer.completedPomodoros % root.settings.longBreakInterval) === 0) {
+            return root.settings.longBreakMinutes
+        }
+        return root.selectedBreakMinutes
+    }
+
     function startBreak() {
         root.justCompletedPhase = 0
-        if (root.timer && root.timer.startBreak(root.selectedBreakMinutes * 60)) {
+        if (root.timer && root.timer.startBreak(root.nextBreakMinutes() * 60)) {
             root.errorText = ""
         } else {
             root.errorText = "休息启动失败"
@@ -350,6 +362,8 @@ Item {
 
         root.errorText = ""
         root.justCompletedPhase = 0
+        // 完全结束番茄循环：连续计数归零，下一轮长休息节奏从头开始。
+        root.timer.resetPomodoroCount()
         root.clearSelectedTask()
         root.focusEnded()
     }
@@ -383,6 +397,31 @@ Item {
 
         function onPhaseCompleted(phase) {
             root.justCompletedPhase = phase
+            // 自动衔接（可选，默认关）：延一小段再切，让用户看清完成态、听到提示音后再进入下一阶段。
+            var wantsAuto = root.settings
+                    && ((phase === 1 && root.settings.autoStartBreak)
+                        || (phase === 2 && root.settings.autoStartNextPomodoro))
+            if (wantsAuto) {
+                autoAdvanceTimer.pendingPhase = phase
+                autoAdvanceTimer.restart()
+            }
+        }
+    }
+
+    // 自动衔接的延迟切换：减少动效时立即切，否则留 0.9s 缓冲。
+    Timer {
+        id: autoAdvanceTimer
+
+        property int pendingPhase: 0
+
+        interval: (root.settings && root.settings.reduceMotion) ? 0 : 900
+        repeat: false
+        onTriggered: {
+            if (autoAdvanceTimer.pendingPhase === 1) {
+                root.startBreak()
+            } else if (autoAdvanceTimer.pendingPhase === 2) {
+                root.startPomodoro()
+            }
         }
     }
 

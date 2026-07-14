@@ -428,6 +428,10 @@ private slots:
     void appSettingsDayStartHourRejectsCorruptIniValue();
     void appSettingsFocusDurationsNormalizeCorruptValues();
     void appSettingsWriteFailureDoesNotEmitSuccess();
+    void appSettingsReduceTransparencyRoundTrip();
+    void appSettingsRaiseOnPhaseCompleteDefaultsOnAndRoundTrips();
+    void appSettingsAutoStartDefaultsOffAndRoundTrips();
+    void appSettingsLongBreakDefaultsAndNormalizes();
     void logicalDayDateOfBoundaries();
     void logicalDayMsUntilNextBoundary();
     void logicalDayHandlesDstFallBackByWallClock();
@@ -860,6 +864,128 @@ void ServiceTests::appSettingsWriteFailureDoesNotEmitSuccess()
     QCOMPARE(failureSpy.count(), 1);
     QCOMPARE(failureSpy.first().at(0).toString(), QStringLiteral("focus/soundEnabled"));
     QCOMPARE(settings.soundEnabled(), true);
+}
+
+void ServiceTests::appSettingsReduceTransparencyRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.reduceTransparency(), false);
+
+        QSignalSpy spy(&settings, &AppSettings::reduceTransparencyChanged);
+        settings.setReduceTransparency(true);
+        QCOMPARE(settings.reduceTransparency(), true);
+        QCOMPARE(spy.count(), 1);
+
+        settings.setReduceTransparency(true);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.reduceTransparency(), true);
+}
+
+void ServiceTests::appSettingsRaiseOnPhaseCompleteDefaultsOnAndRoundTrips()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        // 默认开启：保留既有“阶段结束置前”提醒。
+        QCOMPARE(settings.raiseOnPhaseComplete(), true);
+
+        QSignalSpy spy(&settings, &AppSettings::raiseOnPhaseCompleteChanged);
+        settings.setRaiseOnPhaseComplete(false);
+        QCOMPARE(settings.raiseOnPhaseComplete(), false);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.raiseOnPhaseComplete(), false);
+}
+
+void ServiceTests::appSettingsAutoStartDefaultsOffAndRoundTrips()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        // 自动衔接默认关闭，避免打断用户手动确认节奏。
+        QCOMPARE(settings.autoStartBreak(), false);
+        QCOMPARE(settings.autoStartNextPomodoro(), false);
+
+        QSignalSpy breakSpy(&settings, &AppSettings::autoStartBreakChanged);
+        QSignalSpy nextSpy(&settings, &AppSettings::autoStartNextPomodoroChanged);
+        settings.setAutoStartBreak(true);
+        settings.setAutoStartNextPomodoro(true);
+        QCOMPARE(breakSpy.count(), 1);
+        QCOMPARE(nextSpy.count(), 1);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.autoStartBreak(), true);
+    QCOMPARE(reloaded.autoStartNextPomodoro(), true);
+}
+
+void ServiceTests::appSettingsLongBreakDefaultsAndNormalizes()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        // 默认：长休息开启，15 分钟，每 4 个番茄一次。
+        QCOMPARE(settings.longBreakEnabled(), true);
+        QCOMPARE(settings.longBreakMinutes(), 15);
+        QCOMPARE(settings.longBreakInterval(), 4);
+
+        settings.setLongBreakEnabled(false);
+        settings.setLongBreakMinutes(20);
+        settings.setLongBreakInterval(3);
+        QCOMPARE(settings.longBreakEnabled(), false);
+        QCOMPARE(settings.longBreakMinutes(), 20);
+        QCOMPARE(settings.longBreakInterval(), 3);
+    }
+
+    // 落盘验证：重新构造读取到的仍是设定值，不是当前对象缓存。
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.longBreakEnabled(), false);
+    QCOMPARE(reloaded.longBreakMinutes(), 20);
+    QCOMPARE(reloaded.longBreakInterval(), 3);
+
+    // 坏值可能来自旧版本或手工编辑，读取入口必须归一化回默认；
+    // 再写入同样越界的值会被归一化成默认（等于当前值），因此不触发 changed。
+    QTemporaryDir corruptDir;
+    QVERIFY(corruptDir.isValid());
+    const QString corruptPath = corruptDir.filePath(QStringLiteral("settings.ini"));
+    {
+        QSettings raw(corruptPath, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("focus/longBreakMinutes"), 999);
+        raw.setValue(QStringLiteral("focus/longBreakInterval"), 1);
+        raw.sync();
+    }
+
+    AppSettings corrupt(corruptPath);
+    QCOMPARE(corrupt.longBreakMinutes(), 15);
+    QCOMPARE(corrupt.longBreakInterval(), 4);
+
+    QSignalSpy minutesSpy(&corrupt, &AppSettings::longBreakMinutesChanged);
+    QSignalSpy intervalSpy(&corrupt, &AppSettings::longBreakIntervalChanged);
+    corrupt.setLongBreakMinutes(4);   // 越界 → 归一化 15，等于当前默认，静默无操作
+    corrupt.setLongBreakInterval(9);  // 越界 → 归一化 4，等于当前默认，静默无操作
+    QCOMPARE(corrupt.longBreakMinutes(), 15);
+    QCOMPARE(corrupt.longBreakInterval(), 4);
+    QCOMPARE(minutesSpy.count(), 0);
+    QCOMPARE(intervalSpy.count(), 0);
 }
 
 void ServiceTests::logicalDayDateOfBoundaries()

@@ -32,6 +32,13 @@ FocusTimer::FocusTimer(QObject* parent)
         const TimerPhase completedPhase = m_phase;
         const bool completed = completedPhase == BreakPhase ? stopFocus() : completeFocusSession();
         if (completed) {
+            // 只有自然到点的番茄专注段才计入连续数（此分支已被上面的 PomodoroMode 守卫圈定）；
+            // 手动提前结束走 stopFocus，不经过这里，不应算作完成一个番茄。计数先于 phaseCompleted，
+            // 让 QML 的长休息判定读到已更新的值。
+            if (completedPhase == WorkPhase) {
+                ++m_completedPomodoros;
+                emit completedPomodorosChanged();
+            }
             emit phaseCompleted(completedPhase);
         }
     });
@@ -364,6 +371,20 @@ int FocusTimer::minimumValidMinutes() const
 int FocusTimer::autoCompleteMinutes() const
 {
     return FocusSessionRules::kAutoCompleteTaskDurationSeconds / 60;
+}
+
+int FocusTimer::completedPomodoros() const
+{
+    return m_completedPomodoros;
+}
+
+void FocusTimer::resetPomodoroCount()
+{
+    if (m_completedPomodoros == 0) {
+        return;
+    }
+    m_completedPomodoros = 0;
+    emit completedPomodorosChanged();
 }
 
 bool FocusTimer::hasActiveTimer() const

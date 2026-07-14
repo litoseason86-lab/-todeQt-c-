@@ -34,6 +34,9 @@ TestCase {
         property bool stopFocusFails: false
         property int minimumValidMinutes: 3
         property int autoCompleteMinutes: 5
+        property int completedPomodoros: 0
+        property int startBreakSeconds: 0
+        property int resetPomodoroCountCalls: 0
 
         function startFocus(taskId, title) {
             startFocusCalls += 1
@@ -87,6 +90,7 @@ TestCase {
         }
 
         function startBreak(breakSeconds) {
+            startBreakSeconds = breakSeconds
             isRunning = true
             hasActiveSession = false
             mode = 1
@@ -96,6 +100,11 @@ TestCase {
             currentTaskId = -1
             currentTaskTitle = ""
             return true
+        }
+
+        function resetPomodoroCount() {
+            resetPomodoroCountCalls += 1
+            completedPomodoros = 0
         }
     }
 
@@ -108,6 +117,11 @@ TestCase {
         property bool soundEnabled: true
         property bool reduceMotion: false
         property bool slimClockFont: true
+        property bool autoStartBreak: false
+        property bool autoStartNextPomodoro: false
+        property bool longBreakEnabled: true
+        property int longBreakMinutes: 15
+        property int longBreakInterval: 4
     }
 
     QtObject {
@@ -180,6 +194,14 @@ TestCase {
         appSettingsMock.slimClockFont = true
         view.panelExpanded = false
         focusTimer.stopFocusFails = false
+        focusTimer.completedPomodoros = 0
+        focusTimer.startBreakSeconds = 0
+        focusTimer.resetPomodoroCountCalls = 0
+        appSettingsMock.autoStartBreak = false
+        appSettingsMock.autoStartNextPomodoro = false
+        appSettingsMock.longBreakEnabled = true
+        appSettingsMock.longBreakMinutes = 15
+        appSettingsMock.longBreakInterval = 4
         focusEndedSpy.clear()
         immersiveSpy.clear()
         wait(20)
@@ -838,5 +860,67 @@ TestCase {
         verify(button)
         button.clicked()
         compare(immersiveSpy.count, 1)
+    }
+
+    function test_longBreakDecisionUsesCompletedCount() {
+        view.toPomodoroTab(true)
+        view.selectBreakMinutes(5)
+
+        // 未到间隔：普通休息时长。
+        focusTimer.completedPomodoros = 2
+        view.startBreak()
+        compare(focusTimer.startBreakSeconds, 5 * 60)
+
+        // 到达间隔倍数：长休息时长。
+        focusTimer.completedPomodoros = 4
+        view.startBreak()
+        compare(focusTimer.startBreakSeconds, 15 * 60)
+
+        // 关闭长休息：始终普通休息。
+        appSettingsMock.longBreakEnabled = false
+        view.startBreak()
+        compare(focusTimer.startBreakSeconds, 5 * 60)
+    }
+
+    function test_endPomodoroResetsPomodoroCount() {
+        focusTimer.phase = 1
+        focusTimer.hasActiveSession = true
+        focusTimer.completedPomodoros = 3
+        view.endPomodoro()
+        compare(focusTimer.resetPomodoroCountCalls, 1)
+    }
+
+    function test_autoStartBreakAfterWorkComplete() {
+        view.toPomodoroTab(true)
+        view.selectBreakMinutes(5)
+        appSettingsMock.reduceMotion = true      // 自动衔接计时器 interval=0，尽快触发
+        appSettingsMock.autoStartBreak = true
+        focusTimer.startBreakSeconds = 0
+
+        focusTimer.phaseCompleted(1)
+        tryCompare(focusTimer, "startBreakSeconds", 5 * 60)
+    }
+
+    function test_autoStartNextPomodoroAfterBreak() {
+        view.toPomodoroTab(true)
+        view.selectedTaskId = 7
+        view.selectedTaskTitle = "测试任务"
+        view.selectWorkMinutes(25)
+        appSettingsMock.reduceMotion = true
+        appSettingsMock.autoStartNextPomodoro = true
+        focusTimer.startPomodoroWorkSeconds = 0
+
+        focusTimer.phaseCompleted(2)
+        tryCompare(focusTimer, "startPomodoroWorkSeconds", 25 * 60)
+    }
+
+    function test_autoStartStaysOffByDefault() {
+        // 默认关闭：阶段完成后停在完成态，不自动进入下一段。
+        view.toPomodoroTab(true)
+        focusTimer.startBreakSeconds = 0
+        focusTimer.phaseCompleted(1)
+        wait(60)
+        compare(view.state, "workDone")
+        compare(focusTimer.startBreakSeconds, 0)
     }
 }

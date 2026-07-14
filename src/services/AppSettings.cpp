@@ -14,6 +14,13 @@ const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
 const auto kNicknameKey = QStringLiteral("profile/nickname");
 const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
+const auto kReduceTransparencyKey = QStringLiteral("appearance/reduceTransparency");
+const auto kRaiseOnPhaseCompleteKey = QStringLiteral("focus/raiseOnPhaseComplete");
+const auto kAutoStartBreakKey = QStringLiteral("focus/autoStartBreak");
+const auto kAutoStartNextPomodoroKey = QStringLiteral("focus/autoStartNextPomodoro");
+const auto kLongBreakEnabledKey = QStringLiteral("focus/longBreakEnabled");
+const auto kLongBreakMinutesKey = QStringLiteral("focus/longBreakMinutes");
+const auto kLongBreakIntervalKey = QStringLiteral("focus/longBreakInterval");
 const auto kDailyFocusGoalDateKey = QStringLiteral("focus/dailyGoalDate");
 const auto kDailyFocusGoalMinutesKey = QStringLiteral("focus/dailyGoalMinutes");
 const auto kLegacyDailyFocusGoalHoursKey = QStringLiteral("focus/dailyGoalHours");
@@ -191,6 +198,18 @@ int AppSettings::normalizeDayStartHour(int hour)
     return (hour >= 0 && hour <= 6) ? hour : 4;
 }
 
+int AppSettings::normalizeLongBreakMinutes(int minutes)
+{
+    // 长休息 5–60 分钟；坏值回默认 15，不静默夹到极端值。
+    return (minutes >= 5 && minutes <= 60) ? minutes : 15;
+}
+
+int AppSettings::normalizeLongBreakInterval(int count)
+{
+    // 每 2–8 个番茄一次长休息；坏值回默认 4。
+    return (count >= 2 && count <= 8) ? count : 4;
+}
+
 int AppSettings::dayStartHour() const
 {
     // 读取时也归一化，拦住旧版本或手工编辑遗留的坏值。
@@ -240,6 +259,115 @@ void AppSettings::setSidebarVisible(bool visible)
 
     if (writeValue(kSidebarVisibleKey, visible)) {
         emit sidebarVisibleChanged();
+    }
+}
+
+bool AppSettings::reduceTransparency() const
+{
+    return m_settings->value(kReduceTransparencyKey, false).toBool();
+}
+
+void AppSettings::setReduceTransparency(bool enabled)
+{
+    if (reduceTransparency() == enabled) {
+        return;
+    }
+    if (writeValue(kReduceTransparencyKey, enabled)) {
+        emit reduceTransparencyChanged();
+    }
+}
+
+bool AppSettings::raiseOnPhaseComplete() const
+{
+    // 默认开启：保持“阶段结束把窗口拉回前台”的既有提醒行为，用户可关闭。
+    return m_settings->value(kRaiseOnPhaseCompleteKey, true).toBool();
+}
+
+void AppSettings::setRaiseOnPhaseComplete(bool enabled)
+{
+    if (raiseOnPhaseComplete() == enabled) {
+        return;
+    }
+    if (writeValue(kRaiseOnPhaseCompleteKey, enabled)) {
+        emit raiseOnPhaseCompleteChanged();
+    }
+}
+
+bool AppSettings::autoStartBreak() const
+{
+    return m_settings->value(kAutoStartBreakKey, false).toBool();
+}
+
+void AppSettings::setAutoStartBreak(bool enabled)
+{
+    if (autoStartBreak() == enabled) {
+        return;
+    }
+    if (writeValue(kAutoStartBreakKey, enabled)) {
+        emit autoStartBreakChanged();
+    }
+}
+
+bool AppSettings::autoStartNextPomodoro() const
+{
+    return m_settings->value(kAutoStartNextPomodoroKey, false).toBool();
+}
+
+void AppSettings::setAutoStartNextPomodoro(bool enabled)
+{
+    if (autoStartNextPomodoro() == enabled) {
+        return;
+    }
+    if (writeValue(kAutoStartNextPomodoroKey, enabled)) {
+        emit autoStartNextPomodoroChanged();
+    }
+}
+
+bool AppSettings::longBreakEnabled() const
+{
+    // 默认开启：契合番茄工作法“每 4 个后长休息”的经典节奏，用户可关闭。
+    return m_settings->value(kLongBreakEnabledKey, true).toBool();
+}
+
+void AppSettings::setLongBreakEnabled(bool enabled)
+{
+    if (longBreakEnabled() == enabled) {
+        return;
+    }
+    if (writeValue(kLongBreakEnabledKey, enabled)) {
+        emit longBreakEnabledChanged();
+    }
+}
+
+int AppSettings::longBreakMinutes() const
+{
+    return normalizeLongBreakMinutes(m_settings->value(kLongBreakMinutesKey, 15).toInt());
+}
+
+void AppSettings::setLongBreakMinutes(int minutes)
+{
+    const int normalized = normalizeLongBreakMinutes(minutes);
+    if (longBreakMinutes() == normalized) {
+        return;
+    }
+    if (writeValue(kLongBreakMinutesKey, normalized)) {
+        emit longBreakMinutesChanged();
+    }
+}
+
+int AppSettings::longBreakInterval() const
+{
+    return normalizeLongBreakInterval(m_settings->value(kLongBreakIntervalKey, 4).toInt());
+}
+
+void AppSettings::setLongBreakInterval(int count)
+{
+    const int normalized = normalizeLongBreakInterval(count);
+    if (longBreakInterval() == normalized) {
+        return;
+    }
+    if (writeValue(kLongBreakIntervalKey, normalized)) {
+        emit longBreakIntervalChanged();
     }
 }
 
