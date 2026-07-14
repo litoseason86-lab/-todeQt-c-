@@ -25,6 +25,16 @@
         <file alias="qml/components/DashboardTimerPanel.qml">../qml/components/DashboardTimerPanel.qml</file>
         <file alias="qml/components/BackgroundWallpaper.qml">../qml/components/BackgroundWallpaper.qml</file>
         <file alias="qml/components/SettingsDialog.qml">../qml/components/SettingsDialog.qml</file>
+        <file alias="qml/components/settings/SettingsNavigation.qml">../qml/components/settings/SettingsNavigation.qml</file>
+        <file alias="qml/components/settings/SettingsSection.qml">../qml/components/settings/SettingsSection.qml</file>
+        <file alias="qml/components/settings/SettingsRow.qml">../qml/components/settings/SettingsRow.qml</file>
+        <file alias="qml/components/settings/SettingsSwitch.qml">../qml/components/settings/SettingsSwitch.qml</file>
+        <file alias="qml/components/settings/SettingsThemeChoice.qml">../qml/components/settings/SettingsThemeChoice.qml</file>
+        <file alias="qml/components/settings/SettingsAppearancePage.qml">../qml/components/settings/SettingsAppearancePage.qml</file>
+        <file alias="qml/components/settings/SettingsFocusPage.qml">../qml/components/settings/SettingsFocusPage.qml</file>
+        <file alias="qml/components/settings/SettingsGeneralPage.qml">../qml/components/settings/SettingsGeneralPage.qml</file>
+        <file alias="qml/components/settings/SettingsDataPage.qml">../qml/components/settings/SettingsDataPage.qml</file>
+        <file alias="qml/components/settings/SettingsAboutPage.qml">../qml/components/settings/SettingsAboutPage.qml</file>
         <file alias="qml/components/Sidebar.qml">../qml/components/Sidebar.qml</file>
         <file alias="qml/components/PresetButton.qml">../qml/components/PresetButton.qml</file>
         <file alias="qml/components/DurationStepper.qml">../qml/components/DurationStepper.qml</file>
