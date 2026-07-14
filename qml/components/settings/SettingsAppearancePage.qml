@@ -22,6 +22,7 @@ FocusScope {
         SettingsSection {
             title: "背景主题"
             description: "选择背景时会立即预览并保存。深色主题会同步提高文字与控件对比度。"
+            card: false
 
             GridLayout {
                 Layout.fillWidth: true
@@ -54,6 +55,7 @@ FocusScope {
             SettingsRow {
                 label: "减少动效"
                 caption: "关闭弹窗、开关与页面切换中的非必要动画"
+                iconName: "spark"
                 compact: root.compact
 
                 SettingsSwitch {
@@ -78,6 +80,7 @@ FocusScope {
             SettingsRow {
                 label: "纤细计时字体"
                 caption: "专注页使用更轻的数字字重"
+                iconText: "Aa"
                 compact: root.compact
 
                 SettingsSwitch {
@@ -88,6 +91,31 @@ FocusScope {
                     onToggled: {
                         if (root.appSettingsRef) {
                             root.appSettingsRef.slimClockFont = checked
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Theme.borderSubtle
+            }
+
+            SettingsRow {
+                label: "减少透明度"
+                caption: "关闭毛玻璃，改用不透明面板，更清晰也更省电"
+                iconName: "layers"
+                compact: root.compact
+
+                SettingsSwitch {
+                    objectName: "settingsReduceTransparencySwitch"
+                    text: "减少透明度"
+                    checked: root.appSettingsRef ? root.appSettingsRef.reduceTransparency : false
+                    reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
+                    onToggled: {
+                        if (root.appSettingsRef) {
+                            root.appSettingsRef.reduceTransparency = checked
                         }
                     }
                 }

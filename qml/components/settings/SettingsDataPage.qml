@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import ".."
 import "../.."
 
 FocusScope {
@@ -31,6 +32,7 @@ FocusScope {
                 objectName: "settingsManageRoutine"
                 text: "每日例行"
                 caption: "管理自动生成的重复任务"
+                iconName: "calendar"
                 onClicked: root.routineRequested()
             }
 
@@ -44,6 +46,7 @@ FocusScope {
                 objectName: "settingsManageCategory"
                 text: "科目管理"
                 caption: "维护任务分类、名称和颜色"
+                iconName: "grid"
                 onClicked: root.categoryRequested()
             }
 
@@ -57,6 +60,7 @@ FocusScope {
                 objectName: "settingsManageExport"
                 text: "数据导出"
                 caption: "把任务与专注记录导出为本机文件"
+                iconName: "export"
                 onClicked: root.exportRequested()
             }
         }
@@ -101,6 +105,7 @@ FocusScope {
         id: control
 
         required property string caption
+        required property string iconName
 
         Layout.fillWidth: true
         implicitHeight: 60
@@ -110,13 +115,28 @@ FocusScope {
 
         background: Rectangle {
             color: control.hovered ? Theme.surfaceSunken : "transparent"
-            border.color: control.activeFocus ? Theme.accent : "transparent"
+            border.color: control.activeFocus ? Theme.accentInk : "transparent"
             border.width: control.activeFocus ? 2 : 0
             radius: Theme.radiusMd
         }
 
         contentItem: RowLayout {
             spacing: Theme.space12
+
+            Rectangle {
+                Layout.preferredWidth: 30
+                Layout.preferredHeight: 30
+                Layout.alignment: Qt.AlignVCenter
+                radius: Theme.radiusSm + 2
+                color: Theme.accentSoft
+
+                GlyphIcon {
+                    anchors.centerIn: parent
+                    name: control.iconName
+                    size: 17
+                    color: Theme.accentInk
+                }
+            }
 
             ColumnLayout {
                 Layout.fillWidth: true

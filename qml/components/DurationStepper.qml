@@ -13,6 +13,8 @@ RowLayout {
     property int to: 99
     property string namePrefix: ""
     property string accessibleName: "时长"
+    // 读屏单位后缀；时长类用“分钟”，计数类（如番茄个数）传“个”。
+    property string unit: "分钟"
 
     signal adjusted(int newValue)
 
@@ -62,7 +64,7 @@ RowLayout {
             font.pixelSize: Theme.fontMd
             font.weight: Font.DemiBold
             Accessible.role: Accessible.StaticText
-            Accessible.name: stepper.accessibleName + "，" + stepper.value + "分钟"
+            Accessible.name: stepper.accessibleName + "，" + stepper.value + stepper.unit
         }
     }
 

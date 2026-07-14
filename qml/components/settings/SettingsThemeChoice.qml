@@ -14,7 +14,7 @@ Button {
 
     objectName: "settingsThemeChoice-" + themeId
     implicitWidth: 154
-    implicitHeight: 104
+    implicitHeight: 122
     checkable: true
     checked: Theme.migrateThemeId(appSettingsRef ? appSettingsRef.backgroundTheme : "warm") === themeId
     activeFocusOnTab: true
@@ -38,7 +38,7 @@ Button {
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 66
+            Layout.preferredHeight: 84
             Layout.margins: 3
             Layout.bottomMargin: 0
             radius: Theme.radiusSm
@@ -48,20 +48,28 @@ Button {
             BackgroundWallpaper {
                 anchors.fill: parent
                 themeId: root.themeId
-                requestedSourceSize: Qt.size(154, 66)
+                requestedSourceSize: Qt.size(154, 84)
             }
 
+            // 玻璃计时预览环：透出候选主题的玻璃色，中央显示 25:00（用真实计时字体）。
             Rectangle {
                 objectName: "settingsThemeGlass-" + root.themeId
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.bottom: parent.bottom
-                anchors.margins: Theme.space8
-                height: 15
-                radius: Theme.radiusSm
+                anchors.centerIn: parent
+                width: 56
+                height: 56
+                radius: width / 2
                 color: Theme.glassCardForMode(root.themeMode)
                 border.color: Theme.glassBorderForMode(root.themeMode)
-                border.width: 1
+                border.width: 1.5
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "25:00"
+                    color: root.themeMode === "dark" ? "#f3ead9" : "#463a2b"
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.DemiBold
+                    font.family: Theme.fontFamilyClock
+                }
             }
 
             Rectangle {

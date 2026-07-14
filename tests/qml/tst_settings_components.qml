@@ -25,6 +25,13 @@ TestCase {
         property int breakMinutes: 10
         property string nickname: ""
         property int dayStartHour: 4
+        property bool reduceTransparency: false
+        property bool raiseOnPhaseComplete: true
+        property bool autoStartBreak: false
+        property bool autoStartNextPomodoro: false
+        property bool longBreakEnabled: true
+        property int longBreakMinutes: 15
+        property int longBreakInterval: 4
     }
 
     SettingsNavigation {
@@ -94,7 +101,7 @@ TestCase {
         var wallpaper = findChild(warmChoice, "wallpaperImage")
         verify(wallpaper)
         compare(wallpaper.sourceSize.width, 154)
-        compare(wallpaper.sourceSize.height, 66)
+        compare(wallpaper.sourceSize.height, 84)
     }
 
     function test_legacyThemeStillShowsWarmSelected() {
@@ -138,6 +145,54 @@ TestCase {
         breakMinus.click()
         compare(appSettingsMock.workMinutes, 61)
         compare(appSettingsMock.breakMinutes, 9)
+    }
+
+    function test_reduceTransparencyWritesSetting() {
+        appSettingsMock.reduceTransparency = false
+        var sw = findChild(appearancePage, "settingsReduceTransparencySwitch")
+        verify(sw)
+        sw.click()
+        compare(appSettingsMock.reduceTransparency, true)
+    }
+
+    function test_raiseOnPhaseCompleteWritesSetting() {
+        appSettingsMock.raiseOnPhaseComplete = true
+        var sw = findChild(focusPage, "settingsRaiseOnPhaseSwitch")
+        verify(sw)
+        sw.click()
+        compare(appSettingsMock.raiseOnPhaseComplete, false)
+    }
+
+    function test_autoStartSwitchesWriteSettings() {
+        appSettingsMock.autoStartBreak = false
+        appSettingsMock.autoStartNextPomodoro = false
+        var breakSwitch = findChild(focusPage, "settingsAutoStartBreakSwitch")
+        var nextSwitch = findChild(focusPage, "settingsAutoStartNextSwitch")
+        verify(breakSwitch)
+        verify(nextSwitch)
+        breakSwitch.click()
+        nextSwitch.click()
+        compare(appSettingsMock.autoStartBreak, true)
+        compare(appSettingsMock.autoStartNextPomodoro, true)
+    }
+
+    function test_longBreakControlsWriteSettings() {
+        appSettingsMock.longBreakEnabled = true
+        appSettingsMock.longBreakMinutes = 15
+        appSettingsMock.longBreakInterval = 4
+        var minutesPlus = findChild(focusPage, "settingsLongBreakMinutesPlus")
+        var intervalMinus = findChild(focusPage, "settingsLongBreakIntervalMinus")
+        verify(minutesPlus)
+        verify(intervalMinus)
+        minutesPlus.click()
+        intervalMinus.click()
+        compare(appSettingsMock.longBreakMinutes, 16)
+        compare(appSettingsMock.longBreakInterval, 3)
+
+        var longSwitch = findChild(focusPage, "settingsLongBreakSwitch")
+        verify(longSwitch)
+        longSwitch.click()
+        compare(appSettingsMock.longBreakEnabled, false)
     }
 
     function test_generalPageCommitsNicknameDraft() {

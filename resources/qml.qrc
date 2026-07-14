@@ -38,6 +38,7 @@
         <file alias="qml/components/Sidebar.qml">../qml/components/Sidebar.qml</file>
         <file alias="qml/components/PresetButton.qml">../qml/components/PresetButton.qml</file>
         <file alias="qml/components/DurationStepper.qml">../qml/components/DurationStepper.qml</file>
+        <file alias="qml/components/GlyphIcon.qml">../qml/components/GlyphIcon.qml</file>
         <file alias="qml/components/FocusRing.qml">../qml/components/FocusRing.qml</file>
         <file alias="qml/components/FocusImmersiveOverlay.qml">../qml/components/FocusImmersiveOverlay.qml</file>
         <file alias="qml/components/ImmersionWindowSync.qml">../qml/components/ImmersionWindowSync.qml</file>

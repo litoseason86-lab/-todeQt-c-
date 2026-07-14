@@ -112,123 +112,75 @@ Popup {
         }
     }
 
-    contentItem: ColumnLayout {
-        spacing: Theme.space12
+    contentItem: RowLayout {
+        spacing: Theme.space16
 
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: Theme.space12
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 1
-
-                Text {
-                    text: root.sectionTitles[root.currentSection]
-                    color: Theme.inkStrong
-                    font.pixelSize: Theme.fontXl
-                    font.weight: Font.DemiBold
-                }
-
-                Text {
-                    text: "调整番茄 Todo 在这台 Mac 上的行为"
-                    color: Theme.inkSoft
-                    font.pixelSize: Theme.fontMd
-                }
-            }
-
-            Button {
-                id: closeButton
-
-                objectName: "settingsCloseButton"
-                implicitWidth: 44
-                implicitHeight: 44
-                text: "×"
-                activeFocusOnTab: true
-                Accessible.name: "关闭设置"
-                onClicked: root.requestClose()
-
-                background: Rectangle {
-                    color: closeButton.hovered ? Theme.surfaceSunken : "transparent"
-                    border.color: closeButton.activeFocus ? Theme.accent : Theme.borderSubtle
-                    border.width: 1
-                    radius: Theme.radiusMd
-                }
-
-                contentItem: Text {
-                    text: closeButton.text
-                    color: Theme.ink
-                    font.pixelSize: Theme.fontXl
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-            }
+        SettingsNavigation {
+            Layout.preferredWidth: root.compact ? 168 : 204
+            Layout.fillHeight: true
+            currentIndex: root.currentSection
+            compact: root.compact
+            reduceMotion: root.reduceMotion
+            onCategoryRequested: index => root.requestSection(index)
         }
 
-        RowLayout {
+        Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: Theme.space16
+            color: Theme.surface
+            border.color: Theme.borderSubtle
+            border.width: 1
+            radius: Theme.radiusLg
 
-            SettingsNavigation {
-                Layout.preferredWidth: root.compact ? 148 : 168
-                Layout.fillHeight: true
-                currentIndex: root.currentSection
-                compact: root.compact
-                reduceMotion: root.reduceMotion
-                onCategoryRequested: index => root.requestSection(index)
-            }
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: Theme.space16
+                spacing: Theme.space12
 
-            Rectangle {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                color: Theme.surface
-                border.color: Theme.borderSubtle
-                border.width: 1
-                radius: Theme.radiusLg
+                Text {
+                    Layout.fillWidth: true
+                    text: "设置"
+                    color: Theme.inkStrong
+                    font.pixelSize: Theme.fontXxl
+                    font.weight: Font.Bold
+                }
 
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: Theme.space16
-                    spacing: Theme.space8
+                ScrollView {
+                    id: pageScroll
 
-                    ScrollView {
-                        id: pageScroll
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    clip: true
+                    contentWidth: availableWidth
+                    ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        clip: true
-                        contentWidth: availableWidth
-                        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                    Loader {
+                        id: pageLoader
 
-                        Loader {
-                            id: pageLoader
-
-                            objectName: "settingsPageLoader"
-                            width: pageScroll.availableWidth
-                            sourceComponent: root.currentSection === 0 ? appearancePageComponent
-                                           : root.currentSection === 1 ? focusPageComponent
-                                           : root.currentSection === 2 ? generalPageComponent
-                                           : root.currentSection === 3 ? dataPageComponent
-                                           : aboutPageComponent
-                            onLoaded: {
-                                if (item) {
-                                    item.appSettingsRef = Qt.binding(function() { return root.appSettingsRef })
-                                    item.compact = Qt.binding(function() { return root.compact })
-                                }
+                        objectName: "settingsPageLoader"
+                        width: pageScroll.availableWidth
+                        sourceComponent: root.currentSection === 0 ? appearancePageComponent
+                                       : root.currentSection === 1 ? focusPageComponent
+                                       : root.currentSection === 2 ? generalPageComponent
+                                       : root.currentSection === 3 ? dataPageComponent
+                                       : aboutPageComponent
+                        onLoaded: {
+                            if (item) {
+                                item.appSettingsRef = Qt.binding(function() { return root.appSettingsRef })
+                                item.compact = Qt.binding(function() { return root.compact })
                             }
                         }
                     }
+                }
 
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 1
-                        color: Theme.borderSubtle
-                    }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: Theme.space12
 
                     Text {
                         objectName: "settingsStatusText"
                         Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignVCenter
                         text: root.statusText
                         color: root.statusIsError ? Theme.danger : Theme.inkSoft
                         font.pixelSize: Theme.fontMd
@@ -236,6 +188,32 @@ Popup {
                         Accessible.role: root.statusIsError
                                          ? Accessible.AlertMessage : Accessible.StaticText
                         Accessible.name: text
+                    }
+
+                    Button {
+                        id: closeButton
+
+                        objectName: "settingsCloseButton"
+                        implicitHeight: 44
+                        activeFocusOnTab: true
+                        Accessible.name: "关闭设置"
+                        onClicked: root.requestClose()
+
+                        background: Rectangle {
+                            implicitWidth: 92
+                            color: closeButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
+                            border.color: closeButton.activeFocus ? Theme.accentInk : Theme.border
+                            border.width: closeButton.activeFocus ? 2 : 1
+                            radius: Theme.radiusMd
+                        }
+
+                        contentItem: Text {
+                            text: "关闭"
+                            color: Theme.ink
+                            font.pixelSize: Theme.fontLg
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
                     }
                 }
             }

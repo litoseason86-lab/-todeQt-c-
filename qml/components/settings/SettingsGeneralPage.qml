@@ -49,6 +49,7 @@ FocusScope {
             SettingsRow {
                 label: "昵称"
                 caption: "留空时使用默认问候"
+                iconName: "person"
                 compact: root.compact
 
                 TextField {
@@ -83,6 +84,7 @@ FocusScope {
             SettingsRow {
                 label: "一天开始于"
                 caption: "可设置 00:00–06:00"
+                iconName: "sunrise"
                 compact: root.compact
 
                 DurationStepper {

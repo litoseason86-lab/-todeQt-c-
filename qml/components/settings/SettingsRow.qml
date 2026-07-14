@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import ".."
 import "../.."
 
 Rectangle {
@@ -8,6 +9,9 @@ Rectangle {
     default property alias trailing: trailingSlot.data
     property string label: ""
     property string caption: ""
+    // 行首图标：iconName 走 GlyphIcon 线性图标；iconText 走文字字形（如「Aa」）。
+    property string iconName: ""
+    property string iconText: ""
     property bool compact: false
 
     Layout.fillWidth: true
@@ -16,11 +20,37 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        spacing: Theme.space16
+        spacing: Theme.space12
+
+        Rectangle {
+            visible: root.iconName.length > 0 || root.iconText.length > 0
+            Layout.preferredWidth: 30
+            Layout.preferredHeight: 30
+            Layout.alignment: Qt.AlignVCenter
+            radius: Theme.radiusSm + 2
+            color: Theme.accentSoft
+
+            GlyphIcon {
+                anchors.centerIn: parent
+                visible: root.iconName.length > 0
+                name: root.iconName
+                size: 17
+                color: Theme.accentInk
+            }
+
+            Text {
+                anchors.centerIn: parent
+                visible: root.iconText.length > 0
+                text: root.iconText
+                color: Theme.accentInk
+                font.pixelSize: Theme.fontLg
+                font.weight: Font.Bold
+            }
+        }
 
         ColumnLayout {
             Layout.fillWidth: true
-            Layout.minimumWidth: 120
+            Layout.minimumWidth: 110
             spacing: 2
 
             Text {
