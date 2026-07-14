@@ -83,6 +83,10 @@ list(APPEND APP_SOURCES "${APP_ICON}")
 
 add_executable(PomodoroTodo ${APP_SOURCES})
 
+target_compile_definitions(PomodoroTodo PRIVATE
+    POMODORO_TODO_VERSION="${PROJECT_VERSION}"
+)
+
 option(POMODORO_TODO_ENABLE_QML_DEBUG "Enable QML debugging and profiling hooks" OFF)
 if(POMODORO_TODO_ENABLE_QML_DEBUG)
     # 通过配置项控制 QML 调试钩子，避免为了调试改动发布源码。

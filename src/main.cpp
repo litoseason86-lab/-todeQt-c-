@@ -43,6 +43,8 @@ int main(int argc, char *argv[])
 
     QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodo"));
     QCoreApplication::setApplicationName(QStringLiteral("PomodoroTodo"));
+    // 关于页直接读取 Qt.application.version；由 CMake 项目版本注入，避免 UI 手写两份版本号。
+    QCoreApplication::setApplicationVersion(QStringLiteral(POMODORO_TODO_VERSION));
 
     if (!DatabaseManager::instance()->initialize()) {
         return -1;

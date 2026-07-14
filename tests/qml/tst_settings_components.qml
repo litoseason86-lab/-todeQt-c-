@@ -8,6 +8,12 @@ TestCase {
     name: "SettingsComponents"
     when: windowShown
 
+    Component {
+        id: signalSpyComponent
+
+        SignalSpy {}
+    }
+
     QtObject {
         id: appSettingsMock
 
@@ -45,10 +51,13 @@ TestCase {
 
     SettingsDataPage {
         id: dataPage
+        width: 520
+        appSettingsRef: appSettingsMock
     }
 
     SettingsAboutPage {
         id: aboutPage
+        width: 520
     }
 
     SettingsSwitch {
@@ -145,5 +154,23 @@ TestCase {
         verify(plus)
         plus.click()
         compare(appSettingsMock.dayStartHour, 5)
+    }
+
+    function test_dataActionsEmitSignals() {
+        var routineSpy = createTemporaryObject(signalSpyComponent, testCase, {
+            target: dataPage,
+            signalName: "routineRequested"
+        })
+        verify(routineSpy)
+        var routineButton = findChild(dataPage, "settingsManageRoutine")
+        verify(routineButton)
+        routineButton.click()
+        compare(routineSpy.count, 1)
+    }
+
+    function test_aboutUsesApplicationVersion() {
+        var versionText = findChild(aboutPage, "settingsAboutVersion")
+        verify(versionText)
+        compare(versionText.text, Qt.application.version)
     }
 }

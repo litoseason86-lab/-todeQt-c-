@@ -10,6 +10,12 @@ TestCase {
     width: 1000
     height: 760
 
+    Component {
+        id: signalSpyComponent
+
+        SignalSpy {}
+    }
+
     QtObject {
         id: appSettingsMock
 
@@ -73,5 +79,28 @@ TestCase {
 
         testCase.width = 1000
         testCase.height = 760
+    }
+
+    function test_dataActionClosesDialogAndForwardsSignal() {
+        var routineSpy = createTemporaryObject(signalSpyComponent, testCase, {
+            target: dialog,
+            signalName: "routineRequested"
+        })
+        verify(routineSpy)
+
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        dialog.requestSection(3)
+        compare(dialog.currentSection, 3)
+
+        var pageLoader = findChild(dialog, "settingsPageLoader")
+        verify(pageLoader)
+        tryCompare(pageLoader, "status", Loader.Ready)
+        var routineButton = findChild(pageLoader.item, "settingsManageRoutine")
+        verify(routineButton)
+        routineButton.click()
+
+        compare(routineSpy.count, 1)
+        tryCompare(dialog, "opened", false)
     }
 }
