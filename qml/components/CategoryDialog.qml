@@ -243,7 +243,7 @@ Popup {
 
                         contentItem: Text {
                             text: addButton.text
-                            color: Theme.surface
+                            color: Theme.accentForeground
                             font.pixelSize: Theme.fontMd
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
@@ -511,7 +511,7 @@ Popup {
 
                         contentItem: Text {
                             text: saveCategoryButton.text
-                            color: saveCategoryButton.enabled ? Theme.surface : Theme.inkSoft
+                            color: saveCategoryButton.enabled ? Theme.accentForeground : Theme.inkSoft
                             font.pixelSize: Theme.fontMd
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter

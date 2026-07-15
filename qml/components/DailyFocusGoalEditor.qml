@@ -222,7 +222,7 @@ FocusScope {
 
                 contentItem: Text {
                     text: saveButton.text
-                    color: Theme.surface
+                    color: Theme.accentForeground
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter

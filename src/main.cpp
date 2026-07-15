@@ -43,6 +43,8 @@ int main(int argc, char *argv[])
 
     QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodo"));
     QCoreApplication::setApplicationName(QStringLiteral("PomodoroTodo"));
+    // 关于页直接读取 Qt.application.version；由 CMake 项目版本注入，避免 UI 手写两份版本号。
+    QCoreApplication::setApplicationVersion(QStringLiteral(POMODORO_TODO_VERSION));
 
     if (!DatabaseManager::instance()->initialize()) {
         return -1;
@@ -53,6 +55,8 @@ int main(int argc, char *argv[])
     }
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
                      FocusTimer::instance(), &FocusTimer::prepareForShutdown);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                     DatabaseManager::instance(), &DatabaseManager::close);
 
     // 启动即生成今天的例行任务，保证 QML 首次读取今日任务时已经能看到它们。
     RoutineManager::instance()->materializeToday();

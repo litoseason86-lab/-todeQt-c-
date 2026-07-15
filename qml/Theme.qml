@@ -21,7 +21,7 @@ QtObject {
     // —— 文字 Ink（夜间版为暖米白系）——
     readonly property color inkStrong: darkMode ? "#f3ead9" : "#3d3327"      // 标题/强调
     readonly property color ink: darkMode ? "#e0d4bd" : "#5d4e37"            // 正文
-    readonly property color inkSoft: darkMode ? "#b3a68c" : "#8b7355"        // 次要文字
+    readonly property color inkSoft: darkMode ? "#b3a68c" : "#765f45"        // 次要文字（浅色面满足正文 AA）
     readonly property color inkMuted: darkMode ? "#8c8069" : "#a0896b"       // 占位/禁用
 
     // —— 强调 Accent（焦糖棕，两种明暗下同一色相）——
@@ -31,6 +31,10 @@ QtObject {
     readonly property color accentSoft: darkMode ? "#4a3d2b" : "#f0e6d2"
     // accent 作前景文字不达 AA；accentInk 是"可读文字版"——浅底压深、暗底提亮。
     readonly property color accentInk: darkMode ? "#e6b980" : "#9c6a34"
+    // accent 本身是中高亮底，选中项必须使用固定深色前景；暗色主题若沿用米白字仅有 1.86:1。
+    readonly property color accentForeground: "#2a241c"
+    // 键盘焦点环独立于品牌色，确保在浅/深面板上都达到非文本 3:1 对比。
+    readonly property color focusRing: darkMode ? "#f1bd7e" : "#8a5728"
 
     // —— 语义 Semantic（夜间版提亮一档保对比）——
     readonly property color success: darkMode ? "#6fcf73" : "#4caf50"

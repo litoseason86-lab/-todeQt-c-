@@ -22,15 +22,17 @@ class FocusTimer : public QObject
     Q_PROPERTY(int remainingSeconds READ remainingSeconds NOTIFY tick)
     Q_PROPERTY(int minimumValidMinutes READ minimumValidMinutes CONSTANT)
     Q_PROPERTY(int autoCompleteMinutes READ autoCompleteMinutes CONSTANT)
+    // 本轮连续完成的番茄数（自然到点才计），供长休息判定“每 N 个后休息更久”。
+    Q_PROPERTY(int completedPomodoros READ completedPomodoros NOTIFY completedPomodorosChanged)
 
 public:
-    enum TimerMode {
+    enum TimerMode : int {
         FreeMode = 0,
         PomodoroMode = 1
     };
     Q_ENUM(TimerMode)
 
-    enum TimerPhase {
+    enum TimerPhase : int {
         NoPhase = 0,
         WorkPhase = 1,
         BreakPhase = 2
@@ -43,9 +45,13 @@ public:
     Q_INVOKABLE bool startFocus(int taskId, const QString& taskTitle);
     Q_INVOKABLE bool startPomodoroWork(int taskId, const QString& taskTitle, int workSeconds);
     Q_INVOKABLE bool startBreak(int breakSeconds);
+    // QML 在番茄休息阶段继续携带任务上下文，应用重启后才能自动开始同一任务的下一轮。
+    Q_INVOKABLE bool startBreakForTask(int breakSeconds, int taskId, const QString& taskTitle);
     Q_INVOKABLE void pauseFocus();
     Q_INVOKABLE bool resumeFocus();
     Q_INVOKABLE bool stopFocus();
+    // 用户完全结束番茄循环时重置连续计数，下一轮长休息节奏从头开始。
+    Q_INVOKABLE void resetPomodoroCount();
 
     // 数据库初始化后调用：中断的会话恢复为暂停状态，关闭应用期间不会被误算为专注时间。
     bool restoreInterruptedSession();
@@ -63,6 +69,7 @@ public:
     int remainingSeconds() const;
     int minimumValidMinutes() const;
     int autoCompleteMinutes() const;
+    int completedPomodoros() const;
 
 signals:
     void tick();
@@ -73,11 +80,14 @@ signals:
     void focusCompleted(int duration);
     void phaseCompleted(int phase);
     void sessionDiscarded(int duration);
+    void completedPomodorosChanged();
+    void taskAutoCompleteFailed(int taskId);
 
 private:
     explicit FocusTimer(QObject* parent = nullptr);
 
     bool startFocusSession(int taskId, const QString& taskTitle, TimerMode mode, TimerPhase phase, int targetSeconds);
+    bool startBreakSession(int breakSeconds, int taskId, const QString& taskTitle);
     bool completeFocusSession();
     bool hasActiveTimer() const;
     // 保存失败时调用方会保留当前会话状态，避免用户误以为记录已经落库。
@@ -106,6 +116,7 @@ private:
     TimerMode m_mode = FreeMode;
     TimerPhase m_phase = NoPhase;
     int m_targetSeconds = 0;
+    int m_completedPomodoros = 0;
 };
 
 #endif // FOCUSTIMER_H

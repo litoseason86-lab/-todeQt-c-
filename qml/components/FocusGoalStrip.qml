@@ -337,7 +337,7 @@ GlassPanel {
                     Label {
                         anchors.centerIn: parent
                         text: "✓"
-                        color: Theme.surface
+                        color: Theme.accentForeground
                         font.pixelSize: Theme.fontXs
                         Accessible.ignored: true
                     }

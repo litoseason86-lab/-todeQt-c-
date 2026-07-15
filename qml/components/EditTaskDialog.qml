@@ -152,7 +152,7 @@ Popup {
         contentItem: Text {
             text: chip.text
             textFormat: Text.PlainText
-            color: chip.checked ? Theme.surface : Theme.ink
+            color: chip.checked ? Theme.accentForeground : Theme.ink
             font.pixelSize: Theme.fontMd
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
@@ -404,7 +404,7 @@ Popup {
                 contentItem: Text {
                     text: confirmButton.text
                     textFormat: Text.PlainText
-                    color: Theme.surface
+                    color: Theme.accentForeground
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter

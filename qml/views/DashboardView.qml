@@ -507,7 +507,7 @@ Item {
                                     textFormat: Text.PlainText
                                     font.pixelSize: Theme.fontSm
                                     font.weight: filterChip.selected ? Font.Medium : Font.Normal
-                                    color: filterChip.selected ? Theme.surface : Theme.inkSoft
+                                    color: filterChip.selected ? Theme.accentForeground : Theme.inkSoft
                                 }
 
                                 MouseArea {

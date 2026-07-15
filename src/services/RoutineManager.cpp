@@ -167,17 +167,43 @@ bool RoutineManager::deleteRoutine(int id)
         return false;
     }
 
+    if (!db.transaction()) {
+        qWarning() << "Failed to start routine delete transaction:" << db.lastError().text();
+        return false;
+    }
+
+    // 删除规则后，历史任务必须退化成普通任务。只让外键把 routine_id 置空会留下
+    // routine_generated=1，逾期结转仍把它当成受规则管理的任务，最终形成不可见黑洞。
+    QSqlQuery detachTasks(db);
+    detachTasks.prepare(QStringLiteral(
+        "UPDATE tasks SET routine_id = NULL, routine_generated = 0 WHERE routine_id = :id"));
+    detachTasks.bindValue(QStringLiteral(":id"), id);
+    if (!detachTasks.exec()) {
+        qWarning() << "Failed to detach tasks before deleting routine:"
+                   << detachTasks.lastError().text();
+        db.rollback();
+        return false;
+    }
+
     QSqlQuery query(db);
     query.prepare(QStringLiteral("DELETE FROM routines WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), id);
 
     if (!query.exec()) {
         qWarning() << "Failed to delete routine:" << query.lastError().text();
+        db.rollback();
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to delete routine: routine not found" << id;
+        db.rollback();
+        return false;
+    }
+
+    if (!db.commit()) {
+        qWarning() << "Failed to commit routine deletion:" << db.lastError().text();
+        db.rollback();
         return false;
     }
 

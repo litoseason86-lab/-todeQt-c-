@@ -18,6 +18,8 @@ Item {
     property string selectedTaskTitle: ""
     property int justCompletedPhase: 0
     property bool panelExpanded: false
+    // 页面容器显式声明是否当前页；不能依赖 effective visible，离屏测试和窗口层级会污染该值。
+    property bool pageActive: true
 
     signal focusEnded()
     signal immersiveRequested()
@@ -42,6 +44,15 @@ Item {
         if (root.settings) {
             root.selectWorkMinutes(Number(root.settings.workMinutes))
             root.selectBreakMinutes(Number(root.settings.breakMinutes))
+        }
+        // C++ 在 QML 加载前恢复会话时不会重放旧信号；首次构造必须主动读取服务现态。
+        root.syncToActiveTimer()
+    }
+
+    onTimerChanged: Qt.callLater(root.syncToActiveTimer)
+    onPageActiveChanged: {
+        if (!pageActive) {
+            root.cancelAutoAdvance()
         }
     }
 
@@ -105,6 +116,11 @@ Item {
         root.selectedTaskTitle = ""
     }
 
+    function cancelAutoAdvance() {
+        autoAdvanceTimer.stop()
+        autoAdvanceTimer.pendingPhase = 0
+    }
+
     function syncToActiveTimer() {
         if (!root.timer || (!root.timer.hasActiveSession && root.timer.phase === 0)) {
             return
@@ -152,6 +168,7 @@ Item {
     }
 
     function toPomodoroTab(enabled) {
+        root.cancelAutoAdvance()
         if (!root.timer) {
             root.pomodoroModeSelected = enabled
             root.justCompletedPhase = 0
@@ -189,6 +206,7 @@ Item {
     }
 
     function enterPomodoroWithTask(taskId, title) {
+        root.cancelAutoAdvance()
         var safeTitle = String(title || "").trim()
         if (!root.timer || taskId <= 0 || safeTitle.length === 0) {
             root.errorText = "番茄任务无效，请重试"
@@ -211,6 +229,7 @@ Item {
     }
 
     function enterFreeWithTask(taskId, title) {
+        root.cancelAutoAdvance()
         var safeTitle = String(title || "").trim()
         if (!root.timer || taskId <= 0 || safeTitle.length === 0) {
             root.errorText = "自由专注任务无效，请重试"
@@ -273,6 +292,7 @@ Item {
     }
 
     function startFreeFocus() {
+        root.cancelAutoAdvance()
         if (!root.canStartFreeFocus()) {
             root.errorText = "请先选择要专注的任务"
             return false
@@ -291,6 +311,7 @@ Item {
     }
 
     function startPomodoro() {
+        root.cancelAutoAdvance()
         root.justCompletedPhase = 0
         var taskId = root.selectedTaskId > 0 ? root.selectedTaskId : (root.timer ? root.timer.currentTaskId : -1)
         var taskTitle = root.pomodoroTitle()
@@ -309,9 +330,34 @@ Item {
         }
     }
 
+    function nextBreakMinutes() {
+        // 长休息：每完成 N 个番茄，这一次休息更久。连续数由 FocusTimer 维护（只计自然到点的番茄），
+        // 手动和自动开始休息共用同一判定，行为一致。
+        if (root.settings && root.settings.longBreakEnabled && root.timer
+                && root.settings.longBreakInterval > 0
+                && root.timer.completedPomodoros > 0
+                && (root.timer.completedPomodoros % root.settings.longBreakInterval) === 0) {
+            return root.settings.longBreakMinutes
+        }
+        return root.selectedBreakMinutes
+    }
+
     function startBreak() {
+        root.cancelAutoAdvance()
         root.justCompletedPhase = 0
-        if (root.timer && root.timer.startBreak(root.selectedBreakMinutes * 60)) {
+        var taskId = root.selectedTaskId > 0 ? root.selectedTaskId
+                                            : (root.timer ? root.timer.currentTaskId : -1)
+        var taskTitle = root.selectedTaskTitle.length > 0 ? root.selectedTaskTitle
+                                                          : root.timerTitle()
+        var started = false
+        if (root.timer && typeof root.timer.startBreakForTask === "function") {
+            started = root.timer.startBreakForTask(
+                        root.nextBreakMinutes() * 60, taskId, taskTitle)
+        } else if (root.timer) {
+            // 仅保留给旧测试替身和滚动升级的兼容入口；生产后端始终提供带任务上下文的方法。
+            started = root.timer.startBreak(root.nextBreakMinutes() * 60)
+        }
+        if (started) {
             root.errorText = ""
         } else {
             root.errorText = "休息启动失败"
@@ -335,6 +381,7 @@ Item {
     }
 
     function endPomodoro() {
+        root.cancelAutoAdvance()
         if (!root.timer) {
             root.clearSelectedTask()
             root.focusEnded()
@@ -350,11 +397,14 @@ Item {
 
         root.errorText = ""
         root.justCompletedPhase = 0
+        // 完全结束番茄循环：连续计数归零，下一轮长休息节奏从头开始。
+        root.timer.resetPomodoroCount()
         root.clearSelectedTask()
         root.focusEnded()
     }
 
     function endFreeFocus() {
+        root.cancelAutoAdvance()
         // 自由模式结束逻辑单点：页面按钮与沉浸层共用，避免两处复制。
         if (root.timer && root.timer.stopFocus()) {
             root.errorText = ""
@@ -382,7 +432,70 @@ Item {
         }
 
         function onPhaseCompleted(phase) {
+            root.cancelAutoAdvance()
             root.justCompletedPhase = phase
+            // 自动衔接（可选，默认关）：延一小段再切，让用户看清完成态、听到提示音后再进入下一阶段。
+            var wantsAuto = root.settings
+                    && ((phase === 1 && root.settings.autoStartBreak)
+                        || (phase === 2 && root.settings.autoStartNextPomodoro))
+            if (wantsAuto) {
+                autoAdvanceTimer.pendingPhase = phase
+                autoAdvanceTimer.restart()
+            }
+        }
+    }
+
+    Connections {
+        target: root.settings
+        ignoreUnknownSignals: true
+
+        function onWorkMinutesChanged() {
+            var value = Number(root.settings.workMinutes)
+            if (value >= 5 && value <= 180) {
+                root.selectedWorkMinutes = value
+            }
+        }
+
+        function onBreakMinutesChanged() {
+            var value = Number(root.settings.breakMinutes)
+            if (value >= 1 && value <= 60) {
+                root.selectedBreakMinutes = value
+            }
+        }
+
+        function onAutoStartBreakChanged() {
+            if (!root.settings.autoStartBreak && autoAdvanceTimer.pendingPhase === 1) {
+                root.cancelAutoAdvance()
+            }
+        }
+
+        function onAutoStartNextPomodoroChanged() {
+            if (!root.settings.autoStartNextPomodoro && autoAdvanceTimer.pendingPhase === 2) {
+                root.cancelAutoAdvance()
+            }
+        }
+    }
+
+    // 自动衔接的延迟切换：减少动效时立即切，否则留 0.9s 缓冲。
+    Timer {
+        id: autoAdvanceTimer
+
+        property int pendingPhase: 0
+
+        interval: (root.settings && root.settings.reduceMotion) ? 0 : 900
+        repeat: false
+        onTriggered: {
+            var phase = autoAdvanceTimer.pendingPhase
+            autoAdvanceTimer.pendingPhase = 0
+            // 延迟期间用户可能已经结束循环、切页或关闭自动衔接；触发前必须重验全部前提。
+            if (!root.pageActive || root.justCompletedPhase !== phase || !root.settings) {
+                return
+            }
+            if (phase === 1 && root.settings.autoStartBreak) {
+                root.startBreak()
+            } else if (phase === 2 && root.settings.autoStartNextPomodoro) {
+                root.startPomodoro()
+            }
         }
     }
 
@@ -417,17 +530,11 @@ Item {
                 Layout.alignment: Qt.AlignHCenter
                 spacing: Theme.space8
 
-                ButtonGroup {
-                    id: modeGroup
-                    exclusive: true
-                }
-
                 Button {
                     id: freeModeButton
                     text: "自由专注"
-                    checkable: true
+                    checkable: false
                     checked: !root.pomodoroModeSelected
-                    ButtonGroup.group: modeGroup
                     implicitWidth: 112
                     implicitHeight: 36
                     onClicked: root.toPomodoroTab(false)
@@ -440,7 +547,7 @@ Item {
 
                     contentItem: Text {
                         text: freeModeButton.text
-                        color: freeModeButton.checked ? Theme.surface : Theme.ink
+                        color: freeModeButton.checked ? Theme.accentForeground : Theme.ink
                         font.pixelSize: Theme.fontMd
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -450,9 +557,8 @@ Item {
                 Button {
                     id: pomodoroModeButton
                     text: "番茄"
-                    checkable: true
+                    checkable: false
                     checked: root.pomodoroModeSelected
-                    ButtonGroup.group: modeGroup
                     implicitWidth: 112
                     implicitHeight: 36
                     onClicked: root.toPomodoroTab(true)
@@ -465,7 +571,7 @@ Item {
 
                     contentItem: Text {
                         text: pomodoroModeButton.text
-                        color: pomodoroModeButton.checked ? Theme.surface : Theme.ink
+                        color: pomodoroModeButton.checked ? Theme.accentForeground : Theme.ink
                         font.pixelSize: Theme.fontMd
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter

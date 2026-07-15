@@ -137,6 +137,11 @@ bool CountdownService::updateGoal(int id, const QString& name, const QDate& targ
         emit errorOccurred(QStringLiteral("更新目标失败: ") + query.lastError().text());
         return false;
     }
+    if (query.numRowsAffected() != 1) {
+        emit errorOccurred(QStringLiteral("更新目标失败: 目标数据已变化，请刷新后重试"));
+        loadGoals();
+        return false;
+    }
 
     CountdownGoal updatedGoal = m_model->goals().at(index);
     updatedGoal.setName(normalizedName);
@@ -268,8 +273,7 @@ bool CountdownService::ensureDatabaseReady()
         return false;
     }
 
-    loadGoals();
-    return true;
+    return loadGoals();
 }
 
 bool CountdownService::initializeDatabase()
@@ -304,7 +308,7 @@ bool CountdownService::initializeDatabase()
     return true;
 }
 
-void CountdownService::loadGoals()
+bool CountdownService::loadGoals()
 {
     QSqlQuery query(DatabaseManager::instance()->database());
     query.prepare(QStringLiteral(
@@ -313,7 +317,8 @@ void CountdownService::loadGoals()
 
     if (!query.exec()) {
         qWarning() << "Failed to load countdown goals:" << query.lastError().text();
-        return;
+        emit errorOccurred(QStringLiteral("读取倒计时目标失败: ") + query.lastError().text());
+        return false;
     }
 
     QList<CountdownGoal> goals;
@@ -330,6 +335,7 @@ void CountdownService::loadGoals()
     m_model->setGoals(goals);
     // 换库重载后重推统一基准日；内部同时刷新主目标缓存和通知。
     syncReferenceDate();
+    return true;
 }
 
 void CountdownService::updatePrimaryGoal()

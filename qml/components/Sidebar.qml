@@ -272,7 +272,7 @@ Rectangle {
                     text: item.marker
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Bold
-                    color: item.isActive ? Theme.surface : Theme.inkSoft
+                    color: item.isActive ? Theme.accentForeground : Theme.inkSoft
 
                     Behavior on color {
                         ColorAnimation {

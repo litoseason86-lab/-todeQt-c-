@@ -43,6 +43,7 @@ private slots:
     void addGoalPersistsTrimmedNameAndUsesMaxDisplayOrder();
     void rejectsInvalidNamesAndDates();
     void updateGoalValidatesAndUpdatesExistingGoal();
+    void updateGoalIgnoredWriteKeepsModelUnchanged();
     void deleteGoalRemovesModelDatabaseAndRefreshesPrimary();
     void reorderMovesModelPersistsOrdersAndRefreshesPrimary();
     void reorderFailureKeepsOriginalModelOrder();
@@ -179,6 +180,30 @@ void CountdownServiceTests::updateGoalValidatesAndUpdatesExistingGoal()
     QCOMPARE(query.value(0).toString(), QStringLiteral("更新目标"));
     QCOMPARE(QDate::fromString(query.value(1).toString(), Qt::ISODate), updatedDate);
     QVERIFY(!query.value(2).toString().isEmpty());
+}
+
+void CountdownServiceTests::updateGoalIgnoredWriteKeepsModelUnchanged()
+{
+    CountdownService* service = CountdownService::instance();
+    const QDate originalDate = QDate::currentDate().addDays(10);
+    QVERIFY(service->addGoal(QStringLiteral("原始目标"), originalDate));
+    const int id = goalIdAt(service->model(), 0);
+
+    QSqlQuery trigger(DatabaseManager::instance()->database());
+    QVERIFY(trigger.exec(QStringLiteral(
+        "CREATE TRIGGER ignore_countdown_update "
+        "BEFORE UPDATE ON countdown_goals "
+        "BEGIN SELECT RAISE(IGNORE); END")));
+
+    QSignalSpy errorSpy(service, &CountdownService::errorOccurred);
+    QVERIFY(!service->updateGoal(id, QStringLiteral("不应写入"), originalDate.addDays(1)));
+    QCOMPARE(errorSpy.count(), 1);
+    QCOMPARE(nameAt(service->model(), 0), QStringLiteral("原始目标"));
+    QCOMPARE(service->model()->data(service->model()->index(0), CountdownModel::TargetDateRole).toDate(),
+             originalDate);
+
+    QSqlQuery dropTrigger(DatabaseManager::instance()->database());
+    QVERIFY(dropTrigger.exec(QStringLiteral("DROP TRIGGER ignore_countdown_update")));
 }
 
 void CountdownServiceTests::deleteGoalRemovesModelDatabaseAndRefreshesPrimary()

@@ -23,7 +23,7 @@ Button {
     contentItem: Text {
         text: presetButton.text
         textFormat: Text.PlainText
-        color: presetButton.checked ? Theme.surface : Theme.ink
+        color: presetButton.checked ? Theme.accentForeground : Theme.ink
         font.pixelSize: Theme.fontMd
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter

@@ -58,10 +58,13 @@ ApplicationWindow {
         // qmllint enable unqualified
 
         function onPhaseCompleted(phase) {
-            root.raise();
-            root.requestActivate();
-            // 提示音默认开启；缺少 appSettings 时保持默认行为，不阻断原有置前提醒。
+            // 置前提醒默认开启；关掉后仅靠提示音，不打断当前窗口。缺少 appSettings 时保持原行为。
             // qmllint disable unqualified
+            if (typeof appSettings === "undefined" || !appSettings || appSettings.raiseOnPhaseComplete) {
+                root.raise();
+                root.requestActivate();
+            }
+            // 提示音默认开启；缺少 appSettings 时保持默认行为，不阻断原有提醒。
             if (typeof appSettings === "undefined" || !appSettings || appSettings.soundEnabled) {
                 if (typeof phaseSoundService !== "undefined" && phaseSoundService) {
                     phaseSoundService.playPhaseCompleteChime();

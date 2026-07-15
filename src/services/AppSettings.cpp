@@ -14,9 +14,29 @@ const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
 const auto kNicknameKey = QStringLiteral("profile/nickname");
 const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
+const auto kReduceTransparencyKey = QStringLiteral("appearance/reduceTransparency");
+const auto kRaiseOnPhaseCompleteKey = QStringLiteral("focus/raiseOnPhaseComplete");
+const auto kAutoStartBreakKey = QStringLiteral("focus/autoStartBreak");
+const auto kAutoStartNextPomodoroKey = QStringLiteral("focus/autoStartNextPomodoro");
+const auto kLongBreakEnabledKey = QStringLiteral("focus/longBreakEnabled");
+const auto kLongBreakMinutesKey = QStringLiteral("focus/longBreakMinutes");
+const auto kLongBreakIntervalKey = QStringLiteral("focus/longBreakInterval");
 const auto kDailyFocusGoalDateKey = QStringLiteral("focus/dailyGoalDate");
 const auto kDailyFocusGoalMinutesKey = QStringLiteral("focus/dailyGoalMinutes");
 const auto kLegacyDailyFocusGoalHoursKey = QStringLiteral("focus/dailyGoalHours");
+
+QString settingsErrorMessage(QSettings::Status status)
+{
+    switch (status) {
+    case QSettings::AccessError:
+        return QStringLiteral("设置文件不可写");
+    case QSettings::FormatError:
+        return QStringLiteral("设置文件格式无效");
+    case QSettings::NoError:
+        break;
+    }
+    return QStringLiteral("设置保存失败");
+}
 }
 
 AppSettings* AppSettings::instance()
@@ -27,10 +47,9 @@ AppSettings* AppSettings::instance()
 
 AppSettings::AppSettings(const QString& settingsFilePath, QObject* parent)
     : QObject(parent)
-    , m_settings(settingsFilePath.isEmpty()
-                     ? new QSettings(this)
-                     : new QSettings(settingsFilePath, QSettings::IniFormat, this))
+    , m_settingsFilePath(settingsFilePath)
 {
+    recreateSettingsBackend();
 }
 
 int AppSettings::lastMode() const
@@ -43,40 +62,41 @@ void AppSettings::setLastMode(int mode)
     if (lastMode() == mode) {
         return;
     }
-    m_settings->setValue(kLastModeKey, mode);
-    // 偏好写入后立即落盘，避免应用被强制退出时丢掉用户刚选择的启动模式。
-    m_settings->sync();
-    emit lastModeChanged();
+    if (writeValue(kLastModeKey, mode)) {
+        emit lastModeChanged();
+    }
 }
 
 int AppSettings::workMinutes() const
 {
-    return m_settings->value(kWorkMinutesKey, 25).toInt();
+    return normalizeWorkMinutes(m_settings->value(kWorkMinutesKey, 25).toInt());
 }
 
 void AppSettings::setWorkMinutes(int minutes)
 {
-    if (workMinutes() == minutes) {
+    const int normalized = normalizeWorkMinutes(minutes);
+    if (workMinutes() == normalized) {
         return;
     }
-    m_settings->setValue(kWorkMinutesKey, minutes);
-    m_settings->sync();
-    emit workMinutesChanged();
+    if (writeValue(kWorkMinutesKey, normalized)) {
+        emit workMinutesChanged();
+    }
 }
 
 int AppSettings::breakMinutes() const
 {
-    return m_settings->value(kBreakMinutesKey, 5).toInt();
+    return normalizeBreakMinutes(m_settings->value(kBreakMinutesKey, 5).toInt());
 }
 
 void AppSettings::setBreakMinutes(int minutes)
 {
-    if (breakMinutes() == minutes) {
+    const int normalized = normalizeBreakMinutes(minutes);
+    if (breakMinutes() == normalized) {
         return;
     }
-    m_settings->setValue(kBreakMinutesKey, minutes);
-    m_settings->sync();
-    emit breakMinutesChanged();
+    if (writeValue(kBreakMinutesKey, normalized)) {
+        emit breakMinutesChanged();
+    }
 }
 
 bool AppSettings::soundEnabled() const
@@ -89,9 +109,9 @@ void AppSettings::setSoundEnabled(bool enabled)
     if (soundEnabled() == enabled) {
         return;
     }
-    m_settings->setValue(kSoundEnabledKey, enabled);
-    m_settings->sync();
-    emit soundEnabledChanged();
+    if (writeValue(kSoundEnabledKey, enabled)) {
+        emit soundEnabledChanged();
+    }
 }
 
 bool AppSettings::reduceMotion() const
@@ -105,10 +125,9 @@ void AppSettings::setReduceMotion(bool enabled)
         return;
     }
 
-    // 减少动效属于无障碍偏好，写入后立即落盘，避免下次启动又恢复动画。
-    m_settings->setValue(kReduceMotionKey, enabled);
-    m_settings->sync();
-    emit reduceMotionChanged();
+    if (writeValue(kReduceMotionKey, enabled)) {
+        emit reduceMotionChanged();
+    }
 }
 
 bool AppSettings::slimClockFont() const
@@ -122,10 +141,9 @@ void AppSettings::setSlimClockFont(bool enabled)
         return;
     }
 
-    // 计时数字字重属于即时可见的外观偏好，写入后立即落盘，保持设置项行为一致。
-    m_settings->setValue(kSlimClockFontKey, enabled);
-    m_settings->sync();
-    emit slimClockFontChanged();
+    if (writeValue(kSlimClockFontKey, enabled)) {
+        emit slimClockFontChanged();
+    }
 }
 
 QString AppSettings::rolloverIgnoredDate() const
@@ -139,17 +157,16 @@ void AppSettings::setRolloverIgnoredDate(const QString& date)
         return;
     }
 
-    // 这里只保存调用方传入的 ISO 日期字符串；空字符串用于将来需要清除忽略状态的场景。
-    m_settings->setValue(kRolloverIgnoredDateKey, date);
-    m_settings->sync();
-    emit rolloverIgnoredDateChanged();
+    if (writeValue(kRolloverIgnoredDateKey, date)) {
+        emit rolloverIgnoredDateChanged();
+    }
 }
 
 QString AppSettings::backgroundTheme() const
 {
     // 只存取字符串、不校验合法性：主题定义的唯一来源在 Theme.qml。
     // 未知 id 的回落由 BackgroundWallpaper 负责，避免 C++ 和 QML 两处维护主题列表。
-    return m_settings->value(kBackgroundThemeKey, QStringLiteral("warmPaper")).toString();
+    return m_settings->value(kBackgroundThemeKey, QStringLiteral("warm")).toString();
 }
 
 void AppSettings::setBackgroundTheme(const QString& themeId)
@@ -158,15 +175,38 @@ void AppSettings::setBackgroundTheme(const QString& themeId)
         return;
     }
 
-    m_settings->setValue(kBackgroundThemeKey, themeId);
-    m_settings->sync();
-    emit backgroundThemeChanged();
+    if (writeValue(kBackgroundThemeKey, themeId)) {
+        emit backgroundThemeChanged();
+    }
+}
+
+int AppSettings::normalizeWorkMinutes(int minutes)
+{
+    // 专注时长与界面步进器使用同一边界；坏配置回默认值，不能悄悄夹到极端值。
+    return (minutes >= 5 && minutes <= 180) ? minutes : 25;
+}
+
+int AppSettings::normalizeBreakMinutes(int minutes)
+{
+    return (minutes >= 1 && minutes <= 60) ? minutes : 5;
 }
 
 int AppSettings::normalizeDayStartHour(int hour)
 {
     // 越界值代表配置损坏，统一回默认值；不能 clamp 成 0 或 6 改变用户的日期口径。
     return (hour >= 0 && hour <= 6) ? hour : 4;
+}
+
+int AppSettings::normalizeLongBreakMinutes(int minutes)
+{
+    // 长休息 5–60 分钟；坏值回默认 15，不静默夹到极端值。
+    return (minutes >= 5 && minutes <= 60) ? minutes : 15;
+}
+
+int AppSettings::normalizeLongBreakInterval(int count)
+{
+    // 每 2–8 个番茄一次长休息；坏值回默认 4。
+    return (count >= 2 && count <= 8) ? count : 4;
 }
 
 int AppSettings::dayStartHour() const
@@ -182,9 +222,9 @@ void AppSettings::setDayStartHour(int hour)
         return;
     }
 
-    m_settings->setValue(kDayStartHourKey, normalized);
-    m_settings->sync();
-    emit dayStartHourChanged();
+    if (writeValue(kDayStartHourKey, normalized)) {
+        emit dayStartHourChanged();
+    }
 }
 
 QString AppSettings::nickname() const
@@ -200,9 +240,9 @@ void AppSettings::setNickname(const QString& name)
         return;
     }
 
-    m_settings->setValue(kNicknameKey, normalized);
-    m_settings->sync();
-    emit nicknameChanged();
+    if (writeValue(kNicknameKey, normalized)) {
+        emit nicknameChanged();
+    }
 }
 
 bool AppSettings::sidebarVisible() const
@@ -216,10 +256,118 @@ void AppSettings::setSidebarVisible(bool visible)
         return;
     }
 
-    // 侧栏显隐是即时布局偏好，落盘避免下次启动又弹出已收起的侧栏。
-    m_settings->setValue(kSidebarVisibleKey, visible);
-    m_settings->sync();
-    emit sidebarVisibleChanged();
+    if (writeValue(kSidebarVisibleKey, visible)) {
+        emit sidebarVisibleChanged();
+    }
+}
+
+bool AppSettings::reduceTransparency() const
+{
+    return m_settings->value(kReduceTransparencyKey, false).toBool();
+}
+
+void AppSettings::setReduceTransparency(bool enabled)
+{
+    if (reduceTransparency() == enabled) {
+        return;
+    }
+    if (writeValue(kReduceTransparencyKey, enabled)) {
+        emit reduceTransparencyChanged();
+    }
+}
+
+bool AppSettings::raiseOnPhaseComplete() const
+{
+    // 默认开启：保持“阶段结束把窗口拉回前台”的既有提醒行为，用户可关闭。
+    return m_settings->value(kRaiseOnPhaseCompleteKey, true).toBool();
+}
+
+void AppSettings::setRaiseOnPhaseComplete(bool enabled)
+{
+    if (raiseOnPhaseComplete() == enabled) {
+        return;
+    }
+    if (writeValue(kRaiseOnPhaseCompleteKey, enabled)) {
+        emit raiseOnPhaseCompleteChanged();
+    }
+}
+
+bool AppSettings::autoStartBreak() const
+{
+    return m_settings->value(kAutoStartBreakKey, false).toBool();
+}
+
+void AppSettings::setAutoStartBreak(bool enabled)
+{
+    if (autoStartBreak() == enabled) {
+        return;
+    }
+    if (writeValue(kAutoStartBreakKey, enabled)) {
+        emit autoStartBreakChanged();
+    }
+}
+
+bool AppSettings::autoStartNextPomodoro() const
+{
+    return m_settings->value(kAutoStartNextPomodoroKey, false).toBool();
+}
+
+void AppSettings::setAutoStartNextPomodoro(bool enabled)
+{
+    if (autoStartNextPomodoro() == enabled) {
+        return;
+    }
+    if (writeValue(kAutoStartNextPomodoroKey, enabled)) {
+        emit autoStartNextPomodoroChanged();
+    }
+}
+
+bool AppSettings::longBreakEnabled() const
+{
+    // 默认开启：契合番茄工作法“每 4 个后长休息”的经典节奏，用户可关闭。
+    return m_settings->value(kLongBreakEnabledKey, true).toBool();
+}
+
+void AppSettings::setLongBreakEnabled(bool enabled)
+{
+    if (longBreakEnabled() == enabled) {
+        return;
+    }
+    if (writeValue(kLongBreakEnabledKey, enabled)) {
+        emit longBreakEnabledChanged();
+    }
+}
+
+int AppSettings::longBreakMinutes() const
+{
+    return normalizeLongBreakMinutes(m_settings->value(kLongBreakMinutesKey, 15).toInt());
+}
+
+void AppSettings::setLongBreakMinutes(int minutes)
+{
+    const int normalized = normalizeLongBreakMinutes(minutes);
+    if (longBreakMinutes() == normalized) {
+        return;
+    }
+    if (writeValue(kLongBreakMinutesKey, normalized)) {
+        emit longBreakMinutesChanged();
+    }
+}
+
+int AppSettings::longBreakInterval() const
+{
+    return normalizeLongBreakInterval(m_settings->value(kLongBreakIntervalKey, 4).toInt());
+}
+
+void AppSettings::setLongBreakInterval(int count)
+{
+    const int normalized = normalizeLongBreakInterval(count);
+    if (longBreakInterval() == normalized) {
+        return;
+    }
+    if (writeValue(kLongBreakIntervalKey, normalized)) {
+        emit longBreakIntervalChanged();
+    }
 }
 
 int AppSettings::dailyFocusGoalMinutesForDate(const QString& isoDate) const
@@ -246,17 +394,14 @@ bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)
         return false;
     }
 
+    if (m_settings->status() != QSettings::NoError) {
+        recreateSettingsBackend();
+    }
+
     if (m_settings->value(kDailyFocusGoalDateKey).toString() == isoDate
             && m_settings->value(kDailyFocusGoalMinutesKey).toInt() == minutes) {
         return true;
     }
-
-    const bool hadPreviousDate = m_settings->contains(kDailyFocusGoalDateKey);
-    const bool hadPreviousMinutes = m_settings->contains(kDailyFocusGoalMinutesKey);
-    const bool hadLegacyHours = m_settings->contains(kLegacyDailyFocusGoalHoursKey);
-    const QVariant previousDate = m_settings->value(kDailyFocusGoalDateKey);
-    const QVariant previousMinutes = m_settings->value(kDailyFocusGoalMinutesKey);
-    const QVariant previousLegacyHours = m_settings->value(kLegacyDailyFocusGoalHoursKey);
 
     // 日期与分钟必须作为一项设置写入；旧整小时值没有日期语义，成功保存新目标后清理。
     m_settings->setValue(kDailyFocusGoalDateKey, isoDate);
@@ -264,16 +409,46 @@ bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)
     m_settings->remove(kLegacyDailyFocusGoalHoursKey);
     m_settings->sync();
     if (m_settings->status() != QSettings::NoError) {
-        hadPreviousDate ? m_settings->setValue(kDailyFocusGoalDateKey, previousDate)
-                        : m_settings->remove(kDailyFocusGoalDateKey);
-        hadPreviousMinutes ? m_settings->setValue(kDailyFocusGoalMinutesKey, previousMinutes)
-                           : m_settings->remove(kDailyFocusGoalMinutesKey);
-        hadLegacyHours ? m_settings->setValue(kLegacyDailyFocusGoalHoursKey, previousLegacyHours)
-                       : m_settings->remove(kLegacyDailyFocusGoalHoursKey);
-        m_settings->sync();
+        const QString message = settingsErrorMessage(m_settings->status());
+        // QSettings::status 是粘滞状态：一次 AccessError 后，即使路径恢复可写，同一对象仍会继续报错。
+        // 重建后端既丢弃未落盘缓存，也允许用户修复权限后在本次进程内直接重试。
+        recreateSettingsBackend();
+        emit settingsWriteFailed(QStringLiteral("focus/dailyGoal"), message);
         return false;
     }
 
     emit dailyFocusGoalChanged();
+    emit settingsWriteSucceeded(QStringLiteral("focus/dailyGoal"));
     return true;
+}
+
+bool AppSettings::writeValue(const QString& key, const QVariant& value)
+{
+    // 刚发生过错误时，构造阶段本身也可能再次把状态置成 AccessError。
+    // 每次新写入前再建一次后端，用户修复权限/路径后无需重启进程即可恢复。
+    if (m_settings->status() != QSettings::NoError) {
+        recreateSettingsBackend();
+    }
+
+    // changed 信号只能表示“已持久化”。先同步并检查状态，失败时重建后端并丢弃缓存，
+    // 避免界面显示伪成功，也避免错误状态污染后续重试。
+    m_settings->setValue(key, value);
+    m_settings->sync();
+    if (m_settings->status() == QSettings::NoError) {
+        emit settingsWriteSucceeded(key);
+        return true;
+    }
+
+    const QString message = settingsErrorMessage(m_settings->status());
+    recreateSettingsBackend();
+    emit settingsWriteFailed(key, message);
+    return false;
+}
+
+void AppSettings::recreateSettingsBackend()
+{
+    delete m_settings;
+    m_settings = m_settingsFilePath.isEmpty()
+        ? new QSettings(this)
+        : new QSettings(m_settingsFilePath, QSettings::IniFormat, this);
 }

@@ -154,7 +154,7 @@ TestCase {
         verify(Qt.colorEqual(markerContainer.color, Theme.accent));
         compare(markerText.font.pixelSize, Theme.fontSm);
         compare(markerText.font.weight, Font.Bold);
-        verify(Qt.colorEqual(markerText.color, Theme.surface));
+        verify(Qt.colorEqual(markerText.color, Theme.accentForeground));
 
         compare(mainText.font.pixelSize, Theme.fontLg);
         compare(mainText.font.weight, Font.Medium);

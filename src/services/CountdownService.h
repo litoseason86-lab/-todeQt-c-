@@ -40,7 +40,7 @@ private:
 
     bool ensureDatabaseReady();
     bool initializeDatabase();
-    void loadGoals();
+    bool loadGoals();
     void updatePrimaryGoal();
     void syncReferenceDate();
     int findGoalIndexById(int id) const;

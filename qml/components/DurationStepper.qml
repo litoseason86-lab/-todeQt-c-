@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import ".."
 
@@ -12,6 +12,9 @@ RowLayout {
     property int from: 1
     property int to: 99
     property string namePrefix: ""
+    property string accessibleName: "时长"
+    // 读屏单位后缀；时长类用“分钟”，计数类（如番茄个数）传“个”。
+    property string unit: "分钟"
 
     signal adjusted(int newValue)
 
@@ -21,14 +24,16 @@ RowLayout {
         id: minusButton
         objectName: stepper.namePrefix + "Minus"
         enabled: stepper.value > stepper.from
-        implicitWidth: 32
-        implicitHeight: 36
+        implicitWidth: 44
+        implicitHeight: 44
+        activeFocusOnTab: true
+        Accessible.name: "减少" + stepper.accessibleName
         onClicked: stepper.adjusted(stepper.value - 1)
 
         background: Rectangle {
             color: minusButton.enabled ? Theme.surface : Theme.surfaceSunken
-            border.color: Theme.border
-            border.width: 1
+            border.color: minusButton.activeFocus ? Theme.focusRing : Theme.border
+            border.width: minusButton.activeFocus ? 2 : 1
             radius: Theme.radiusMd
         }
 
@@ -44,8 +49,8 @@ RowLayout {
     }
 
     Rectangle {
-        implicitWidth: 52
-        implicitHeight: 36
+        implicitWidth: 56
+        implicitHeight: 44
         color: Theme.surfaceSunken
         border.color: Theme.border
         border.width: 1
@@ -58,6 +63,8 @@ RowLayout {
             color: Theme.inkStrong
             font.pixelSize: Theme.fontMd
             font.weight: Font.DemiBold
+            Accessible.role: Accessible.StaticText
+            Accessible.name: stepper.accessibleName + "，" + stepper.value + stepper.unit
         }
     }
 
@@ -65,14 +72,16 @@ RowLayout {
         id: plusButton
         objectName: stepper.namePrefix + "Plus"
         enabled: stepper.value < stepper.to
-        implicitWidth: 32
-        implicitHeight: 36
+        implicitWidth: 44
+        implicitHeight: 44
+        activeFocusOnTab: true
+        Accessible.name: "增加" + stepper.accessibleName
         onClicked: stepper.adjusted(stepper.value + 1)
 
         background: Rectangle {
             color: plusButton.enabled ? Theme.surface : Theme.surfaceSunken
-            border.color: Theme.border
-            border.width: 1
+            border.color: plusButton.activeFocus ? Theme.focusRing : Theme.border
+            border.width: plusButton.activeFocus ? 2 : 1
             radius: Theme.radiusMd
         }
 

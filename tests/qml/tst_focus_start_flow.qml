@@ -42,6 +42,9 @@ TestCase {
         property int targetSeconds: 0
         property int remainingSeconds: 0
         property int elapsedSeconds: 0
+        property int minimumValidMinutes: 3
+        property int autoCompleteMinutes: 5
+        property int completedPomodoros: 0
         property int startFocusCalls: 0
         property int startFocusTaskId: 0
         property string startFocusTaskTitle: ""
@@ -49,6 +52,7 @@ TestCase {
         signal focusCompleted(int duration)
         signal phaseCompleted(int phase)
         signal sessionDiscarded(int duration)
+        signal taskAutoCompleteFailed(int taskId)
 
         function startFocus(id, title) {
             startFocusCalls += 1
@@ -63,6 +67,8 @@ TestCase {
 
         function startPomodoroWork(id, title, workSeconds) { return true }
         function startBreak(breakSeconds) { return true }
+        function startBreakForTask(breakSeconds, taskId, title) { return true }
+        function resetPomodoroCount() { completedPomodoros = 0 }
         function pauseFocus() {}
         function resumeFocus() { return true }
 
@@ -82,6 +88,20 @@ TestCase {
         property int workMinutes: 25
         property int breakMinutes: 5
         property bool soundEnabled: true
+        property bool reduceMotion: false
+        property bool slimClockFont: true
+        property int dayStartHour: 4
+        property string rolloverIgnoredDate: ""
+        property string backgroundTheme: "warm"
+        property bool sidebarVisible: true
+        property bool reduceTransparency: false
+        property bool raiseOnPhaseComplete: true
+        property bool autoStartBreak: false
+        property bool autoStartNextPomodoro: false
+        property bool longBreakEnabled: true
+        property int longBreakMinutes: 15
+        property int longBreakInterval: 4
+        property string nickname: ""
     }
 
     QtObject {

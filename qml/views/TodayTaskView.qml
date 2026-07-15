@@ -373,7 +373,7 @@ Item {
                 contentItem: Text {
                     objectName: "todayAddButtonLabel"
                     text: addButton.text
-                    color: Theme.surface
+                    color: Theme.accentForeground
                     font.pixelSize: Theme.fontLg
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
@@ -470,7 +470,7 @@ Item {
                     contentItem: Text {
                         text: rolloverMoveButton.text
                         textFormat: Text.PlainText
-                        color: Theme.surface
+                        color: Theme.accentForeground
                         font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
                         horizontalAlignment: Text.AlignHCenter
