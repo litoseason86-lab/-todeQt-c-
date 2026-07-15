@@ -454,7 +454,7 @@ Item {
                                     text: Qt.formatDate(root.dayDate(dayRow.index), "M/d")
                                     font.family: "Menlo"
                                     font.pixelSize: Theme.fontXs
-                                    color: dayRow.isToday ? Theme.surface : Theme.inkSoft
+                                    color: dayRow.isToday ? Theme.accentForeground : Theme.inkSoft
                                 }
 
                                 Text {
@@ -463,7 +463,7 @@ Item {
                                     text: "今天"
                                     font.pixelSize: 9
                                     font.letterSpacing: 1
-                                    color: Theme.surface
+                                    color: Theme.accentForeground
                                 }
                             }
                         }

@@ -47,10 +47,9 @@ AppSettings* AppSettings::instance()
 
 AppSettings::AppSettings(const QString& settingsFilePath, QObject* parent)
     : QObject(parent)
-    , m_settings(settingsFilePath.isEmpty()
-                     ? new QSettings(this)
-                     : new QSettings(settingsFilePath, QSettings::IniFormat, this))
+    , m_settingsFilePath(settingsFilePath)
 {
+    recreateSettingsBackend();
 }
 
 int AppSettings::lastMode() const
@@ -395,17 +394,14 @@ bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)
         return false;
     }
 
+    if (m_settings->status() != QSettings::NoError) {
+        recreateSettingsBackend();
+    }
+
     if (m_settings->value(kDailyFocusGoalDateKey).toString() == isoDate
             && m_settings->value(kDailyFocusGoalMinutesKey).toInt() == minutes) {
         return true;
     }
-
-    const bool hadPreviousDate = m_settings->contains(kDailyFocusGoalDateKey);
-    const bool hadPreviousMinutes = m_settings->contains(kDailyFocusGoalMinutesKey);
-    const bool hadLegacyHours = m_settings->contains(kLegacyDailyFocusGoalHoursKey);
-    const QVariant previousDate = m_settings->value(kDailyFocusGoalDateKey);
-    const QVariant previousMinutes = m_settings->value(kDailyFocusGoalMinutesKey);
-    const QVariant previousLegacyHours = m_settings->value(kLegacyDailyFocusGoalHoursKey);
 
     // 日期与分钟必须作为一项设置写入；旧整小时值没有日期语义，成功保存新目标后清理。
     m_settings->setValue(kDailyFocusGoalDateKey, isoDate);
@@ -414,13 +410,9 @@ bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)
     m_settings->sync();
     if (m_settings->status() != QSettings::NoError) {
         const QString message = settingsErrorMessage(m_settings->status());
-        hadPreviousDate ? m_settings->setValue(kDailyFocusGoalDateKey, previousDate)
-                        : m_settings->remove(kDailyFocusGoalDateKey);
-        hadPreviousMinutes ? m_settings->setValue(kDailyFocusGoalMinutesKey, previousMinutes)
-                           : m_settings->remove(kDailyFocusGoalMinutesKey);
-        hadLegacyHours ? m_settings->setValue(kLegacyDailyFocusGoalHoursKey, previousLegacyHours)
-                       : m_settings->remove(kLegacyDailyFocusGoalHoursKey);
-        m_settings->sync();
+        // QSettings::status 是粘滞状态：一次 AccessError 后，即使路径恢复可写，同一对象仍会继续报错。
+        // 重建后端既丢弃未落盘缓存，也允许用户修复权限后在本次进程内直接重试。
+        recreateSettingsBackend();
         emit settingsWriteFailed(QStringLiteral("focus/dailyGoal"), message);
         return false;
     }
@@ -432,10 +424,14 @@ bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)
 
 bool AppSettings::writeValue(const QString& key, const QVariant& value)
 {
-    const bool hadPreviousValue = m_settings->contains(key);
-    const QVariant previousValue = m_settings->value(key);
+    // 刚发生过错误时，构造阶段本身也可能再次把状态置成 AccessError。
+    // 每次新写入前再建一次后端，用户修复权限/路径后无需重启进程即可恢复。
+    if (m_settings->status() != QSettings::NoError) {
+        recreateSettingsBackend();
+    }
 
-    // changed 信号只能表示“已持久化”。先同步并检查状态，失败时恢复内存缓存，避免界面显示伪成功。
+    // changed 信号只能表示“已持久化”。先同步并检查状态，失败时重建后端并丢弃缓存，
+    // 避免界面显示伪成功，也避免错误状态污染后续重试。
     m_settings->setValue(key, value);
     m_settings->sync();
     if (m_settings->status() == QSettings::NoError) {
@@ -444,8 +440,15 @@ bool AppSettings::writeValue(const QString& key, const QVariant& value)
     }
 
     const QString message = settingsErrorMessage(m_settings->status());
-    hadPreviousValue ? m_settings->setValue(key, previousValue) : m_settings->remove(key);
-    m_settings->sync();
+    recreateSettingsBackend();
     emit settingsWriteFailed(key, message);
     return false;
+}
+
+void AppSettings::recreateSettingsBackend()
+{
+    delete m_settings;
+    m_settings = m_settingsFilePath.isEmpty()
+        ? new QSettings(this)
+        : new QSettings(m_settingsFilePath, QSettings::IniFormat, this);
 }

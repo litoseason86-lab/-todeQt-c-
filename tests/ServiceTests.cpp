@@ -428,6 +428,7 @@ private slots:
     void appSettingsDayStartHourRejectsCorruptIniValue();
     void appSettingsFocusDurationsNormalizeCorruptValues();
     void appSettingsWriteFailureDoesNotEmitSuccess();
+    void appSettingsCanRetryAfterWriteFailure();
     void appSettingsReduceTransparencyRoundTrip();
     void appSettingsRaiseOnPhaseCompleteDefaultsOnAndRoundTrips();
     void appSettingsAutoStartDefaultsOffAndRoundTrips();
@@ -478,6 +479,7 @@ private slots:
     void routinesCategoryForeignKeyClearsWhenCategoryDeleted();
     void routineCrudAddsGetsUpdatesDeletes();
     void deletingMaterializedRoutineDetachesExistingTask();
+    void databaseCloseRemovesNamedConnection();
     void materializeTodayIsIdempotentAndDoesNotBackfill();
     void materializeTodayPreservesCategoryAndDoesNotEmitSignals();
     void materializeTodayStampsRoutineId();
@@ -517,6 +519,8 @@ private slots:
     void focusTimerExposesRuleConstants();
     void pomodoroWorkCompletionSavesSessionAndAutoCompletesTask();
     void pomodoroBreakWritesNoSessionAndCompletes();
+    void pomodoroBreakRestoresTaskContextAndCount();
+    void focusAutoCompleteFailureIsReported();
     void pomodoroWorkStoppedUnderMinimumIsDiscarded();
     void freeFocusStillCountsUpUnchanged();
     void focusTimerUsesMonotonicElapsedTimeAfterBlockedEventLoop();
@@ -539,6 +543,7 @@ void ServiceTests::cleanup()
 {
     // FocusTimer 是进程级单例；失败用例可能没走到 stopFocus，必须在关闭测试数据库前清掉活动阶段。
     FocusTimer::instance()->resetSession();
+    FocusTimer::instance()->resetPomodoroCount();
     AppSettings::instance()->setDayStartHour(4);
     DatabaseManager::instance()->close();
     delete m_tempDir;
@@ -864,6 +869,31 @@ void ServiceTests::appSettingsWriteFailureDoesNotEmitSuccess()
     QCOMPARE(failureSpy.count(), 1);
     QCOMPARE(failureSpy.first().at(0).toString(), QStringLiteral("focus/soundEnabled"));
     QCOMPARE(settings.soundEnabled(), true);
+}
+
+void ServiceTests::appSettingsCanRetryAfterWriteFailure()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+    QVERIFY(QDir().mkpath(path));
+
+    AppSettings settings(path);
+    QSignalSpy failureSpy(&settings, &AppSettings::settingsWriteFailed);
+    QSignalSpy successSpy(&settings, &AppSettings::settingsWriteSucceeded);
+
+    settings.setSoundEnabled(false);
+    QCOMPARE(failureSpy.count(), 1);
+    QCOMPARE(settings.soundEnabled(), true);
+
+    // 模拟用户修复目录/权限。后端对象若保留粘滞 AccessError，这次写入仍会失败直到重启。
+    QVERIFY(QDir(path).removeRecursively());
+    settings.setSoundEnabled(false);
+    QCOMPARE(successSpy.count(), 1);
+    QCOMPARE(settings.soundEnabled(), false);
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.soundEnabled(), false);
 }
 
 void ServiceTests::appSettingsReduceTransparencyRoundTrip()
@@ -2090,20 +2120,28 @@ void ServiceTests::getCategoryStatsAggregatesDurationsAndPercentages()
         QVariant(endDate));
     const QVariantList categories = stats.value(QStringLiteral("categories")).toList();
 
-    QCOMPARE(stats.value(QStringLiteral("totalDuration")).toInt(), 2400);
-    QCOMPARE(categories.size(), 2);
+    QCOMPARE(stats.value(QStringLiteral("totalDuration")).toInt(), 3600);
+    QCOMPARE(categories.size(), 4);
 
     const QVariantMap math = categories.at(0).toMap();
     QCOMPARE(math.value(QStringLiteral("name")).toString(), QString("数学"));
     QCOMPARE(math.value(QStringLiteral("color")).toString(), QStringLiteral("#d4a574"));
     QCOMPARE(math.value(QStringLiteral("duration")).toInt(), 1800);
-    QCOMPARE(math.value(QStringLiteral("percentage")).toDouble(), 75.0);
+    QCOMPARE(math.value(QStringLiteral("percentage")).toDouble(), 50.0);
 
-    const QVariantMap english = categories.at(1).toMap();
+    const QVariantMap detached = categories.at(1).toMap();
+    QCOMPARE(detached.value(QStringLiteral("name")).toString(), QStringLiteral("未关联任务"));
+    QCOMPARE(detached.value(QStringLiteral("duration")).toInt(), 700);
+
+    const QVariantMap english = categories.at(2).toMap();
     QCOMPARE(english.value(QStringLiteral("name")).toString(), QString("英语"));
     QCOMPARE(english.value(QStringLiteral("color")).toString(), QStringLiteral("#c9956e"));
     QCOMPARE(english.value(QStringLiteral("duration")).toInt(), 600);
-    QCOMPARE(english.value(QStringLiteral("percentage")).toDouble(), 25.0);
+    QCOMPARE(english.value(QStringLiteral("percentage")).toDouble(), 600.0 * 100.0 / 3600.0);
+
+    const QVariantMap uncategorized = categories.at(3).toMap();
+    QCOMPARE(uncategorized.value(QStringLiteral("name")).toString(), QStringLiteral("未分类"));
+    QCOMPARE(uncategorized.value(QStringLiteral("duration")).toInt(), 500);
 }
 
 void ServiceTests::statisticsIgnoresInvalidShortSessions()
@@ -2294,11 +2332,19 @@ void ServiceTests::deletingMaterializedRoutineDetachesExistingTask()
     QVERIFY(manager->deleteRoutine(routineId));
 
     QSqlQuery query(DatabaseManager::instance()->database());
-    query.prepare(QStringLiteral("SELECT routine_id FROM tasks WHERE id = :id"));
+    query.prepare(QStringLiteral("SELECT routine_id, routine_generated FROM tasks WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), taskId);
     QVERIFY(query.exec());
     QVERIFY(query.next());
     QVERIFY(query.value(0).isNull());
+    QCOMPARE(query.value(1).toInt(), 0);
+}
+
+void ServiceTests::databaseCloseRemovesNamedConnection()
+{
+    QVERIFY(QSqlDatabase::contains(QStringLiteral("PomodoroTodoConnection")));
+    DatabaseManager::instance()->close();
+    QVERIFY(!QSqlDatabase::contains(QStringLiteral("PomodoroTodoConnection")));
 }
 
 void ServiceTests::materializeTodayIsIdempotentAndDoesNotBackfill()
@@ -3151,12 +3197,20 @@ void ServiceTests::stopFocusCompletesTaskAfterFiveMinutes()
     // 测试不应该真的等 5 分钟；这里直接推进内部累计秒数，只验证停止专注后的业务结果。
     setFocusElapsedSeconds(FocusTimer::instance(), 300);
 
+    bool timerWasActiveDuringTaskRefresh = true;
+    const QMetaObject::Connection refreshConnection = connect(
+        TaskManager::instance(), &TaskManager::tasksChanged, this, [&timerWasActiveDuringTaskRefresh]() {
+            FocusTimer* timer = FocusTimer::instance();
+            timerWasActiveDuringTaskRefresh = timer->hasActiveSession() || timer->phase() != FocusTimer::NoPhase;
+        });
     QSignalSpy tasksChangedSpy(TaskManager::instance(), &TaskManager::tasksChanged);
     QVERIFY(FocusTimer::instance()->stopFocus());
+    disconnect(refreshConnection);
 
     const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
     QCOMPARE(task.value(QStringLiteral("completed")).toBool(), true);
     QVERIFY(tasksChangedSpy.count() >= 1);
+    QCOMPARE(timerWasActiveDuringTaskRefresh, false);
 }
 
 void ServiceTests::stopFocusUnderFiveMinutesKeepsTaskPending()
@@ -3268,6 +3322,47 @@ void ServiceTests::pomodoroBreakWritesNoSessionAndCompletes()
     QCOMPARE(FocusTimer::instance()->remainingSeconds(), 0);
     QCOMPARE(countFocusSessions(), 0);
     QCOMPARE(phaseCompletedSpy.count(), 1);
+}
+
+void ServiceTests::pomodoroBreakRestoresTaskContextAndCount()
+{
+    FocusTimer* timer = FocusTimer::instance();
+    const int taskId = insertTaskRow(QStringLiteral("跨启动任务"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+    timer->m_completedPomodoros = 3;
+    QVERIFY(timer->startBreakForTask(600, taskId, QStringLiteral("跨启动任务")));
+    setFocusElapsedSeconds(timer, 120);
+    timer->prepareForShutdown();
+
+    // 模拟进程重建后的初始内存，恢复结果只能来自 active_focus_state。
+    timer->resetSession();
+    timer->m_completedPomodoros = 0;
+    QVERIFY(timer->restoreInterruptedSession());
+
+    QCOMPARE(timer->phase(), int(FocusTimer::BreakPhase));
+    QCOMPARE(timer->isRunning(), false);
+    QCOMPARE(timer->currentTaskId(), taskId);
+    QCOMPARE(timer->currentTaskTitle(), QStringLiteral("跨启动任务"));
+    QCOMPARE(timer->completedPomodoros(), 3);
+    QCOMPARE(timer->elapsedSeconds(), 120);
+    QVERIFY(timer->stopFocus());
+}
+
+void ServiceTests::focusAutoCompleteFailureIsReported()
+{
+    const int taskId = insertTaskRow(QStringLiteral("自动完成失败任务"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+    FocusTimer* timer = FocusTimer::instance();
+    QSignalSpy failureSpy(timer, &FocusTimer::taskAutoCompleteFailed);
+
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("自动完成失败任务")));
+    QVERIFY(TaskManager::instance()->deleteTask(taskId));
+    setFocusElapsedSeconds(timer, timer->autoCompleteMinutes() * 60);
+    QVERIFY(timer->stopFocus());
+
+    QCOMPARE(failureSpy.count(), 1);
+    QCOMPARE(failureSpy.first().at(0).toInt(), taskId);
+    QCOMPARE(timer->hasActiveSession(), false);
 }
 
 void ServiceTests::pomodoroWorkStoppedUnderMinimumIsDiscarded()

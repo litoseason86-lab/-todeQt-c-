@@ -26,7 +26,8 @@ Popup {
 
     modal: true
     focus: true
-    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    // 关闭前必须提交昵称草稿；禁用 Popup 的绕过式自动关闭，Escape 和按钮统一走 requestClose()。
+    closePolicy: Popup.NoAutoClose
     width: parent ? Math.min(760, Math.max(0, parent.width - Theme.space32 * 2)) : 760
     height: parent ? Math.min(640, Math.max(0, parent.height - Theme.space32 * 2)) : 640
     x: parent ? Math.round((parent.width - width) / 2) : 0
@@ -42,6 +43,43 @@ Popup {
             return
         }
         currentSection = index
+        Qt.callLater(root.resetPageScroll)
+    }
+
+    function resetPageScroll() {
+        if (pageScroll.contentItem) {
+            pageScroll.contentItem.contentY = 0
+        }
+    }
+
+    function belongsToLoadedPage(item) {
+        var current = item
+        while (current) {
+            if (current === pageLoader.item) {
+                return true
+            }
+            current = current.parent
+        }
+        return false
+    }
+
+    function ensureFocusVisible(item) {
+        if (!opened || !item || !pageLoader.item || !root.belongsToLoadedPage(item)
+                || !pageScroll.contentItem) {
+            return
+        }
+
+        var flickable = pageScroll.contentItem
+        var point = item.mapToItem(pageLoader, 0, 0)
+        var top = point.y - Theme.space8
+        var bottom = point.y + item.height + Theme.space8
+        if (top < flickable.contentY) {
+            flickable.contentY = Math.max(0, top)
+        } else if (bottom > flickable.contentY + flickable.height) {
+            flickable.contentY = Math.min(
+                        Math.max(0, flickable.contentHeight - flickable.height),
+                        bottom - flickable.height)
+        }
     }
 
     function requestClose() {
@@ -50,6 +88,8 @@ Popup {
         }
         close()
     }
+
+    onOpened: resetPageScroll()
 
     enter: Transition {
         ParallelAnimation {
@@ -114,6 +154,10 @@ Popup {
 
     contentItem: RowLayout {
         spacing: Theme.space16
+        Keys.onEscapePressed: event => {
+            root.requestClose()
+            event.accepted = true
+        }
 
         SettingsNavigation {
             Layout.preferredWidth: root.compact ? 168 : 204
@@ -147,6 +191,7 @@ Popup {
 
                 ScrollView {
                     id: pageScroll
+                    objectName: "settingsPageScroll"
 
                     Layout.fillWidth: true
                     Layout.fillHeight: true
@@ -202,7 +247,7 @@ Popup {
                         background: Rectangle {
                             implicitWidth: 92
                             color: closeButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
-                            border.color: closeButton.activeFocus ? Theme.accentInk : Theme.border
+                            border.color: closeButton.activeFocus ? Theme.focusRing : Theme.border
                             border.width: closeButton.activeFocus ? 2 : 1
                             radius: Theme.radiusMd
                         }
@@ -235,6 +280,17 @@ Popup {
         function onExportRequested() {
             root.close()
             root.exportRequested()
+        }
+    }
+
+    Connections {
+        // Popup 本身不在普通 Item 继承链上；从页内 Item 取得实际 QQuickWindow 才能收到焦点项变化。
+        target: pageScroll.Window.window
+        ignoreUnknownSignals: true
+
+        function onActiveFocusItemChanged() {
+            root.ensureFocusVisible(pageScroll.Window.window
+                                    ? pageScroll.Window.window.activeFocusItem : null)
         }
     }
 

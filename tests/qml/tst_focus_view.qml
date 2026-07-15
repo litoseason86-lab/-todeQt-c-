@@ -36,6 +36,8 @@ TestCase {
         property int autoCompleteMinutes: 5
         property int completedPomodoros: 0
         property int startBreakSeconds: 0
+        property int startBreakTaskId: -1
+        property string startBreakTaskTitle: ""
         property int resetPomodoroCountCalls: 0
 
         function startFocus(taskId, title) {
@@ -102,6 +104,21 @@ TestCase {
             return true
         }
 
+        function startBreakForTask(breakSeconds, taskId, title) {
+            startBreakTaskId = taskId
+            startBreakTaskTitle = title
+            startBreakSeconds = breakSeconds
+            isRunning = true
+            hasActiveSession = false
+            mode = 1
+            phase = 2
+            targetSeconds = breakSeconds
+            remainingSeconds = breakSeconds
+            currentTaskId = taskId
+            currentTaskTitle = title
+            return true
+        }
+
         function resetPomodoroCount() {
             resetPomodoroCountCalls += 1
             completedPomodoros = 0
@@ -152,6 +169,15 @@ TestCase {
         settings: appSettingsMock
     }
 
+    Component {
+        id: focusViewComponent
+
+        FocusView {
+            width: testCase.width
+            height: testCase.height
+        }
+    }
+
     SignalSpy {
         id: focusEndedSpy
         target: view
@@ -183,6 +209,7 @@ TestCase {
         focusTimer.stopFocusCalls = 0
         view.selectedTaskId = -1
         view.selectedTaskTitle = ""
+        view.pageActive = true
         view.toPomodoroTab(false)
         view.selectWorkMinutes(25)
         view.selectBreakMinutes(5)
@@ -196,6 +223,8 @@ TestCase {
         focusTimer.stopFocusFails = false
         focusTimer.completedPomodoros = 0
         focusTimer.startBreakSeconds = 0
+        focusTimer.startBreakTaskId = -1
+        focusTimer.startBreakTaskTitle = ""
         focusTimer.resetPomodoroCountCalls = 0
         appSettingsMock.autoStartBreak = false
         appSettingsMock.autoStartNextPomodoro = false
@@ -211,6 +240,27 @@ TestCase {
         var backdrop = findChild(view, "focusPageBackdrop")
         verify(backdrop, "整页底板应有 objectName 供守护")
         verify(Qt.colorEqual(backdrop.color, Theme.glassCard))
+    }
+
+    function test_restoredTimerIsReadWhenViewIsCreated() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = false
+        focusTimer.mode = 1
+        focusTimer.phase = 1
+        focusTimer.currentTaskId = 88
+        focusTimer.currentTaskTitle = "恢复任务"
+        focusTimer.targetSeconds = 1500
+        focusTimer.remainingSeconds = 900
+
+        var restoredView = createTemporaryObject(focusViewComponent, testCase, {
+            timer: focusTimer,
+            settings: appSettingsMock
+        })
+        verify(restoredView)
+        tryCompare(restoredView, "pomodoroModeSelected", true)
+        compare(restoredView.state, "pomoWork")
+        compare(restoredView.selectedTaskId, 88)
+        compare(restoredView.selectedTaskTitle, "恢复任务")
     }
 
     function test_switchToPomodoroShowsPresetsAndIdleState() {
@@ -922,5 +972,32 @@ TestCase {
         wait(60)
         compare(view.state, "workDone")
         compare(focusTimer.startBreakSeconds, 0)
+    }
+
+    function test_settingsDurationChangesUpdateIdleSelection() {
+        appSettingsMock.workMinutes = 60
+        appSettingsMock.breakMinutes = 12
+        tryCompare(view, "selectedWorkMinutes", 60)
+        tryCompare(view, "selectedBreakMinutes", 12)
+    }
+
+    function test_autoAdvanceIsCancelledWhenLeavingPage() {
+        view.toPomodoroTab(true)
+        appSettingsMock.autoStartBreak = true
+        appSettingsMock.reduceMotion = false
+        focusTimer.phaseCompleted(1)
+        view.pageActive = false
+        wait(950)
+        compare(focusTimer.startBreakSeconds, 0)
+        view.pageActive = true
+    }
+
+    function test_breakKeepsTaskContextForNextPomodoro() {
+        view.toPomodoroTab(true)
+        view.selectedTaskId = 7
+        view.selectedTaskTitle = "测试任务"
+        view.startBreak()
+        compare(focusTimer.startBreakTaskId, 7)
+        compare(focusTimer.startBreakTaskTitle, "测试任务")
     }
 }

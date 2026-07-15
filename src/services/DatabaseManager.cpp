@@ -1,6 +1,7 @@
 #include "DatabaseManager.h"
 
 #include <QDebug>
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -46,9 +47,7 @@ DatabaseManager::DatabaseManager(QObject* parent)
 
 DatabaseManager::~DatabaseManager()
 {
-    if (m_db.isValid()) {
-        m_db.close();
-    }
+    close();
 }
 
 DatabaseManager* DatabaseManager::instance()
@@ -157,6 +156,7 @@ bool DatabaseManager::createTables()
             mode INTEGER NOT NULL,
             phase INTEGER NOT NULL,
             target_seconds INTEGER NOT NULL DEFAULT 0 CHECK(target_seconds >= 0),
+            completed_pomodoros INTEGER NOT NULL DEFAULT 0 CHECK(completed_pomodoros >= 0),
             updated_at TEXT NOT NULL,
             FOREIGN KEY (session_id) REFERENCES focus_sessions(id) ON DELETE CASCADE,
             FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
@@ -167,39 +167,61 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // 活动会话表不参与 user_version 迁移链。旧用户可能已经有该表但缺少新列，
+    // 必须在每次建表检查时补齐，否则恢复番茄轮次会静默退回 0。
+    if (!columnExists(QStringLiteral("active_focus_state"),
+                      QStringLiteral("completed_pomodoros"))) {
+        if (!execSql(query,
+                     QStringLiteral("ALTER TABLE active_focus_state ADD COLUMN "
+                                    "completed_pomodoros INTEGER NOT NULL DEFAULT 0 "
+                                    "CHECK(completed_pomodoros >= 0)"),
+                     "Failed to add active focus pomodoro count:")) {
+            return false;
+        }
+    }
+
+    int version = getDatabaseVersion();
+    if (version < 0) {
+        return false;
+    }
+
     // 版本 2 引入 categories/category_id，同时保留旧版文本科目。
-    if (getDatabaseVersion() < 2
+    if (version < 2
         || !tableExists(QStringLiteral("categories"))
         || !columnExists(QStringLiteral("tasks"), QStringLiteral("category_id"))) {
         if (!migrateToVersion2()) {
             return false;
         }
+        version = 2;
     } else if (!createCategoriesTable() || !insertPresetCategories()) {
         return false;
     }
 
     // 版本 3 引入每日例行表 routines（纯新增，向后兼容）。
-    if (getDatabaseVersion() < 3 || !tableExists(QStringLiteral("routines"))) {
+    if (version < 3 || !tableExists(QStringLiteral("routines"))) {
         if (!migrateToVersion3()) {
             return false;
         }
+        version = 3;
     }
 
     // 版本 4 给 tasks 增加 routine_id 血缘列；列缺失时无论版本号都要补，防御半迁移状态。
-    if (getDatabaseVersion() < 4
+    if (version < 4
         || !columnExists(QStringLiteral("tasks"), QStringLiteral("routine_id"))) {
         if (!migrateToVersion4()) {
             return false;
         }
+        version = 4;
     }
 
-    if (getDatabaseVersion() < 5 || !routineForeignKeyUsesSetNull()) {
+    if (version < 5 || !routineForeignKeyUsesSetNull()) {
         if (!migrateToVersion5()) {
             return false;
         }
+        version = 5;
     }
 
-    if (getDatabaseVersion() < 6
+    if (version < 6
         || !columnExists(QStringLiteral("tasks"), QStringLiteral("routine_generated"))) {
         if (!migrateToVersion6()) {
             return false;
@@ -227,16 +249,21 @@ bool DatabaseManager::createTables()
 int DatabaseManager::getDatabaseVersion() const
 {
     if (!m_db.isOpen()) {
-        return 0;
+        qWarning() << "Failed to read database version: database is not open";
+        return -1;
     }
 
     QSqlQuery query(m_db);
     if (!query.exec(QStringLiteral("PRAGMA user_version"))) {
         qWarning() << "Failed to read database version:" << query.lastError().text();
-        return 0;
+        return -1;
     }
 
-    return query.next() ? query.value(0).toInt() : 0;
+    if (!query.next()) {
+        qWarning() << "Failed to read database version: query returned no row";
+        return -1;
+    }
+    return query.value(0).toInt();
 }
 
 bool DatabaseManager::setDatabaseVersion(int version)
@@ -505,7 +532,30 @@ bool DatabaseManager::migrateToVersion5()
         return false;
     }
 
-    if (!setDatabaseVersion(5) || !m_db.commit()) {
+    if (!setDatabaseVersion(5)) {
+        m_db.rollback();
+        restoreForeignKeys();
+        return false;
+    }
+
+    // foreign_key_check 即使在 enforcement 关闭时也会扫描约束。必须在提交前验证，
+    // 否则检测到损坏时事务已经不可回滚，只能留下半迁移数据库。
+    QSqlQuery checkQuery(m_db);
+    if (!checkQuery.exec(QStringLiteral("PRAGMA foreign_key_check"))) {
+        qWarning() << "Failed to validate version 5 foreign keys:" << checkQuery.lastError().text();
+        m_db.rollback();
+        restoreForeignKeys();
+        return false;
+    }
+    if (checkQuery.next()) {
+        qWarning() << "Version 5 migration produced a foreign key violation"
+                   << checkQuery.value(0).toString() << checkQuery.value(1).toInt();
+        m_db.rollback();
+        restoreForeignKeys();
+        return false;
+    }
+
+    if (!m_db.commit()) {
         qWarning() << "Failed to commit version 5 migration:" << m_db.lastError().text();
         m_db.rollback();
         restoreForeignKeys();
@@ -513,17 +563,6 @@ bool DatabaseManager::migrateToVersion5()
     }
 
     if (!restoreForeignKeys()) {
-        return false;
-    }
-
-    QSqlQuery checkQuery(m_db);
-    if (!checkQuery.exec(QStringLiteral("PRAGMA foreign_key_check"))) {
-        qWarning() << "Failed to validate version 5 foreign keys:" << checkQuery.lastError().text();
-        return false;
-    }
-    if (checkQuery.next()) {
-        qWarning() << "Version 5 migration produced a foreign key violation"
-                   << checkQuery.value(0).toString() << checkQuery.value(1).toInt();
         return false;
     }
 
@@ -805,7 +844,16 @@ bool DatabaseManager::isOpen() const
 
 void DatabaseManager::close()
 {
+    const QString connectionName = m_connectionName;
     if (m_db.isValid()) {
         m_db.close();
+    }
+    // removeDatabase() 前必须释放成员句柄。仅 close() 会把命名连接永久留在 Qt 全局池中，
+    // 测试换库和应用退出时都可能继续持有旧路径或打印连接仍在使用的警告。
+    m_db = QSqlDatabase();
+    // 函数静态单例的析构可能晚于 QCoreApplication；Qt SQL 全局注册表此时已不可访问。
+    // 正常运行由 aboutToQuit 主动 close，析构路径只做安全兜底。
+    if (QCoreApplication::instance() && QSqlDatabase::contains(connectionName)) {
+        QSqlDatabase::removeDatabase(connectionName);
     }
 }

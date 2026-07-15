@@ -23,6 +23,14 @@ TestCase {
         property bool soundEnabled: true
         property bool reduceMotion: false
         property bool slimClockFont: true
+        property bool reduceTransparency: false
+        property bool sidebarVisible: true
+        property bool raiseOnPhaseComplete: true
+        property bool autoStartBreak: false
+        property bool autoStartNextPomodoro: false
+        property bool longBreakEnabled: true
+        property int longBreakMinutes: 15
+        property int longBreakInterval: 4
         property int dayStartHour: 4
         property string nickname: ""
         property int workMinutes: 25
@@ -162,5 +170,25 @@ TestCase {
         verify(navigation)
         compare(navigation.animationDuration, 0)
         appSettingsMock.reduceMotion = false
+    }
+
+    function test_keyboardFocusScrollsLongPageIntoViewAndSectionResets() {
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        dialog.requestSection(1)
+
+        var pageLoader = findChild(dialog, "settingsPageLoader")
+        var pageScroll = findChild(dialog, "settingsPageScroll")
+        verify(pageLoader)
+        verify(pageScroll)
+        tryCompare(pageLoader, "status", Loader.Ready)
+
+        var bottomSwitch = findChild(pageLoader.item, "settingsRaiseOnPhaseSwitch")
+        verify(bottomSwitch)
+        bottomSwitch.forceActiveFocus()
+        tryVerify(function() { return pageScroll.contentItem.contentY > 0 })
+
+        dialog.requestSection(0)
+        tryCompare(pageScroll.contentItem, "contentY", 0)
     }
 }

@@ -337,14 +337,17 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
     }
 
     // 优先使用标准化科目，其次使用迁移出的旧科目，最后回退到任务旧文本。
+    // 任务删除后 focus_sessions.task_id 会被外键置空；统计仍必须保留这段真实专注时间。
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "SELECT "
-        "COALESCE(NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, '')) AS category_name, "
+        "CASE WHEN t.id IS NULL THEN '未关联任务' "
+        "ELSE COALESCE(NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), '未分类') "
+        "END AS category_name, "
         "COALESCE(NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS category_color, "
         "SUM(f.duration) AS total_duration "
         "FROM focus_sessions f "
-        "JOIN tasks t ON f.task_id = t.id "
+        "LEFT JOIN tasks t ON f.task_id = t.id "
         "LEFT JOIN categories c ON t.category_id = c.id "
         "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
         "WHERE date(f.start_time, :dayShift) >= :startDate "
@@ -352,7 +355,6 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
         "AND f.end_time IS NOT NULL "
         "AND f.duration IS NOT NULL "
         "AND f.duration >= :minDuration "
-        "AND trim(COALESCE(c.name, legacy.name, t.category, '')) != '' "
         "GROUP BY category_name, category_color "
         "ORDER BY total_duration DESC, category_name ASC"));
     query.bindValue(QStringLiteral(":dayShift"),

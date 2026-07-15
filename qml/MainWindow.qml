@@ -247,7 +247,8 @@ Item {
 
         width: sidebarShell.width
         height: parent.height
-        visible: !root.focusImmersiveActive && width > 0.5
+        // 减少透明度时整棵实时采样树停止渲染，侧栏自身改用 glassSolidSidebar。
+        visible: Theme.glassBlurAllowed && !root.focusImmersiveActive && width > 0.5
         opacity: Math.min(1, sidebarShell.width / root.sidebarExpandedWidth)
 
         Behavior on opacity {
@@ -263,6 +264,7 @@ Item {
 
             anchors.fill: parent
             visible: false
+            live: Theme.glassBlurAllowed
             sourceItem: wallpaperLayer
             sourceRect: Qt.rect(0, 0, Math.max(1, width), height)
         }
@@ -412,6 +414,7 @@ Item {
                     objectName: "focusViewPage"
                     timer: root.focusTimerRef
                     settings: root.appSettingsRef
+                    pageActive: root.currentView === "focus"
 
                     onFocusEnded: {
                         // 先退出沉浸再切页，今日页不能留在无侧栏的原生全屏状态。
@@ -661,6 +664,10 @@ Item {
 
         function onSessionDiscarded(duration) {
             root.showToast("本次专注不足 3 分钟，未计入记录")
+        }
+
+        function onTaskAutoCompleteFailed(taskId) {
+            root.showToast("专注记录已保存，但任务自动完成失败，请手动检查")
         }
     }
 

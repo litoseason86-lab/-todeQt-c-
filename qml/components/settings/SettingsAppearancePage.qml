@@ -61,11 +61,11 @@ FocusScope {
                 SettingsSwitch {
                     objectName: "settingsReduceMotionSwitch"
                     text: "减少动效"
-                    checked: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
-                    reduceMotion: checked
-                    onToggled: {
+                    persistedChecked: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
+                    reduceMotion: persistedChecked
+                    onChangeRequested: enabled => {
                         if (root.appSettingsRef) {
-                            root.appSettingsRef.reduceMotion = checked
+                            root.appSettingsRef.reduceMotion = enabled
                         }
                     }
                 }
@@ -86,11 +86,11 @@ FocusScope {
                 SettingsSwitch {
                     objectName: "settingsSlimClockFontSwitch"
                     text: "纤细计时字体"
-                    checked: root.appSettingsRef ? root.appSettingsRef.slimClockFont : true
+                    persistedChecked: root.appSettingsRef ? root.appSettingsRef.slimClockFont : true
                     reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
-                    onToggled: {
+                    onChangeRequested: enabled => {
                         if (root.appSettingsRef) {
-                            root.appSettingsRef.slimClockFont = checked
+                            root.appSettingsRef.slimClockFont = enabled
                         }
                     }
                 }
@@ -111,11 +111,11 @@ FocusScope {
                 SettingsSwitch {
                     objectName: "settingsReduceTransparencySwitch"
                     text: "减少透明度"
-                    checked: root.appSettingsRef ? root.appSettingsRef.reduceTransparency : false
+                    persistedChecked: root.appSettingsRef ? root.appSettingsRef.reduceTransparency : false
                     reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
-                    onToggled: {
+                    onChangeRequested: enabled => {
                         if (root.appSettingsRef) {
-                            root.appSettingsRef.reduceTransparency = checked
+                            root.appSettingsRef.reduceTransparency = enabled
                         }
                     }
                 }

@@ -67,6 +67,16 @@ bool FocusTimer::startPomodoroWork(int taskId, const QString& taskTitle, int wor
 
 bool FocusTimer::startBreak(int breakSeconds)
 {
+    return startBreakSession(breakSeconds, -1, QString());
+}
+
+bool FocusTimer::startBreakForTask(int breakSeconds, int taskId, const QString& taskTitle)
+{
+    return startBreakSession(breakSeconds, taskId, taskTitle);
+}
+
+bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& taskTitle)
+{
     if (hasActiveTimer()) {
         qWarning() << "Failed to start break: focus timer already has an active session"
                    << "sessionId=" << m_sessionId << "phase=" << m_phase;
@@ -79,8 +89,11 @@ bool FocusTimer::startBreak(int breakSeconds)
     }
 
     // 休息段只占用计时器状态，不创建 focus_sessions；否则历史、统计、导出都会把休息误当专注。
-    m_currentTaskId = -1;
-    m_currentTaskTitle.clear();
+    // 任务字段仅作为下一轮番茄的恢复上下文，不参与休息统计。
+    const QString normalizedTitle = taskTitle.trimmed();
+    const bool hasTaskContext = taskId > 0 && !normalizedTitle.isEmpty();
+    m_currentTaskId = hasTaskContext ? taskId : -1;
+    m_currentTaskTitle = hasTaskContext ? normalizedTitle : QString();
     m_startTime = QDateTime::currentDateTime();
     m_elapsedSeconds = 0;
     m_accumulatedMilliseconds = 0;
@@ -293,16 +306,23 @@ bool FocusTimer::completeFocusSession()
         return false;
     }
 
-    if (duration >= FocusSessionRules::kAutoCompleteTaskDurationSeconds) {
+    const int completedTaskId = m_currentTaskId;
+    const bool shouldAutoCompleteTask = duration >= FocusSessionRules::kAutoCompleteTaskDurationSeconds;
+
+    // 会话已经持久化后先清空活动态，再触发 TaskManager::tasksChanged。否则订阅方会在同一刷新中
+    // 同时看到“已完成数据库记录”和“仍活动的计时器”，把最后一段时长重复计入界面统计。
+    resetSession();
+
+    if (shouldAutoCompleteTask) {
         // 一次有效专注代表任务已经被实际推进；达到 5 分钟后自动把任务标记完成。
-        if (!TaskManager::instance()->setTaskCompleted(m_currentTaskId, true)) {
+        if (!TaskManager::instance()->setTaskCompleted(completedTaskId, true)) {
             qWarning() << "Failed to auto-complete task after focus session"
-                       << "taskId=" << m_currentTaskId
+                       << "taskId=" << completedTaskId
                        << "duration=" << duration;
+            emit taskAutoCompleteFailed(completedTaskId);
         }
     }
 
-    resetSession();
     emit focusCompleted(duration);
     emit runningStateChanged();
     emit currentTaskChanged();
@@ -384,6 +404,9 @@ void FocusTimer::resetPomodoroCount()
         return;
     }
     m_completedPomodoros = 0;
+    if (hasActiveTimer() && !persistActiveState()) {
+        qWarning() << "Failed to persist reset pomodoro count";
+    }
     emit completedPomodorosChanged();
 }
 
@@ -512,10 +535,10 @@ bool FocusTimer::writeActiveState(QSqlDatabase& db)
     query.prepare(QStringLiteral(R"SQL(
         INSERT INTO active_focus_state (
             singleton_id, session_id, task_id, task_title, elapsed_seconds,
-            mode, phase, target_seconds, updated_at
+            mode, phase, target_seconds, completed_pomodoros, updated_at
         ) VALUES (
             1, :sessionId, :taskId, :taskTitle, :elapsedSeconds,
-            :mode, :phase, :targetSeconds, :updatedAt
+            :mode, :phase, :targetSeconds, :completedPomodoros, :updatedAt
         )
         ON CONFLICT(singleton_id) DO UPDATE SET
             session_id = excluded.session_id,
@@ -525,6 +548,7 @@ bool FocusTimer::writeActiveState(QSqlDatabase& db)
             mode = excluded.mode,
             phase = excluded.phase,
             target_seconds = excluded.target_seconds,
+            completed_pomodoros = excluded.completed_pomodoros,
             updated_at = excluded.updated_at
     )SQL"));
     query.bindValue(QStringLiteral(":sessionId"), m_sessionId > 0 ? QVariant(m_sessionId) : QVariant());
@@ -535,6 +559,7 @@ bool FocusTimer::writeActiveState(QSqlDatabase& db)
     query.bindValue(QStringLiteral(":mode"), static_cast<int>(m_mode));
     query.bindValue(QStringLiteral(":phase"), static_cast<int>(m_phase));
     query.bindValue(QStringLiteral(":targetSeconds"), m_targetSeconds);
+    query.bindValue(QStringLiteral(":completedPomodoros"), m_completedPomodoros);
     query.bindValue(QStringLiteral(":updatedAt"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
 
     if (!query.exec()) {
@@ -592,7 +617,8 @@ bool FocusTimer::restoreInterruptedSession()
 
     QSqlQuery stateQuery(db);
     if (!stateQuery.exec(QStringLiteral(R"SQL(
-        SELECT session_id, task_id, task_title, elapsed_seconds, mode, phase, target_seconds
+        SELECT session_id, task_id, task_title, elapsed_seconds, mode, phase, target_seconds,
+               completed_pomodoros
         FROM active_focus_state WHERE singleton_id = 1
     )SQL"))) {
         qWarning() << "Failed to read active focus state:" << stateQuery.lastError().text();
@@ -610,13 +636,17 @@ bool FocusTimer::restoreInterruptedSession()
     const int restoredMode = stateQuery.value(4).toInt();
     const int restoredPhase = stateQuery.value(5).toInt();
     const int restoredTarget = qMax(0, stateQuery.value(6).toInt());
+    const int restoredPomodoros = qMax(0, stateQuery.value(7).toInt());
 
     const bool isFreeFocus = restoredMode == FreeMode && restoredPhase == NoPhase
         && restoredSessionId > 0 && restoredTaskId > 0 && !restoredTitle.isEmpty();
     const bool isPomodoroWork = restoredMode == PomodoroMode && restoredPhase == WorkPhase
         && restoredSessionId > 0 && restoredTaskId > 0 && !restoredTitle.isEmpty() && restoredTarget > 0;
     const bool isPomodoroBreak = restoredMode == PomodoroMode && restoredPhase == BreakPhase
-        && restoredSessionId == -1 && restoredTarget > 0;
+        && restoredSessionId == -1 && restoredTarget > 0
+        // 休息期间任务可能被删除，外键会把 task_id 置空但保留标题；休息计时仍应恢复，
+        // 只是下一轮因缺少有效任务 id 而保持不可启动。
+        && (restoredTaskId == -1 || !restoredTitle.isEmpty());
 
     QDateTime restoredStartTime;
     bool sessionRowValid = isPomodoroBreak;
@@ -657,6 +687,7 @@ bool FocusTimer::restoreInterruptedSession()
     m_mode = static_cast<TimerMode>(restoredMode);
     m_phase = static_cast<TimerPhase>(restoredPhase);
     m_targetSeconds = restoredTarget;
+    m_completedPomodoros = restoredPomodoros;
     m_runClock.invalidate();
     m_timer.stop();
 
@@ -669,6 +700,7 @@ bool FocusTimer::restoreInterruptedSession()
     emit currentTaskChanged();
     emit modeChanged();
     emit phaseChanged();
+    emit completedPomodorosChanged();
     emit tick();
     return true;
 }

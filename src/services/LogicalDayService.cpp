@@ -9,6 +9,9 @@
 #include <QTimeZone>
 #include <QTimer>
 
+#include <algorithm>
+#include <limits>
+
 LogicalDayService* LogicalDayService::instance()
 {
     static LogicalDayService service;
@@ -82,6 +85,9 @@ void LogicalDayService::scheduleNextBoundary()
 {
     const qint64 delay = LogicalDay::msUntilNextBoundary(
         QDateTime::currentDateTime(), AppSettings::instance()->dayStartHour());
-    // 合法日界点的最长间隔是 24 小时，安全落在 QTimer 的 int 范围内。
-    m_boundaryTimer->start(static_cast<int>(delay));
+    // 系统时钟跳变、无效时区边界或平台差异都可能让纯计算结果越界。
+    // 至少 1ms 可避免 0/负间隔形成忙循环，上限使用 QTimer 能接收的 int 范围。
+    const qint64 safeDelay = std::clamp(
+        delay, qint64(1), qint64((std::numeric_limits<int>::max)()));
+    m_boundaryTimer->start(static_cast<int>(safeDelay));
 }

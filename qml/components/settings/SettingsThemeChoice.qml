@@ -15,7 +15,8 @@ Button {
     objectName: "settingsThemeChoice-" + themeId
     implicitWidth: 154
     implicitHeight: 122
-    checkable: true
+    // 选中态由持久化主题唯一决定；按钮自身不切换 checked，避免再次点击当前主题后视觉失选。
+    checkable: false
     checked: Theme.migrateThemeId(appSettingsRef ? appSettingsRef.backgroundTheme : "warm") === themeId
     activeFocusOnTab: true
     Accessible.name: "背景主题：" + themeName
@@ -28,7 +29,7 @@ Button {
 
     background: Rectangle {
         color: root.checked ? Theme.accentSoft : "transparent"
-        border.color: root.activeFocus || root.checked ? Theme.accent : Theme.border
+        border.color: root.activeFocus ? Theme.focusRing : (root.checked ? Theme.accent : Theme.border)
         border.width: root.activeFocus ? 2 : 1
         radius: Theme.radiusMd
     }
@@ -85,7 +86,7 @@ Button {
                 Text {
                     anchors.centerIn: parent
                     text: "✓"
-                    color: Theme.surface
+                    color: Theme.accentForeground
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Bold
                 }

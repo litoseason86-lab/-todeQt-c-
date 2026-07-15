@@ -45,6 +45,9 @@ TestCase {
         property int targetSeconds: 0
         property int remainingSeconds: 0
         property int elapsedSeconds: 0
+        property int minimumValidMinutes: 3
+        property int autoCompleteMinutes: 5
+        property int completedPomodoros: 0
 
         signal focusCompleted(int duration)
         signal phaseCompleted(int phase)
@@ -60,6 +63,9 @@ TestCase {
         function startBreak(breakSeconds) {
             return true;
         }
+
+        function startBreakForTask(breakSeconds, taskId, title) { return true }
+        function resetPomodoroCount() { completedPomodoros = 0 }
 
         function pauseFocus() {
         }
@@ -86,6 +92,14 @@ TestCase {
         property string rolloverIgnoredDate: ""
         property string backgroundTheme: "jiangnan"
         property bool sidebarVisible: true
+        property bool reduceTransparency: false
+        property bool raiseOnPhaseComplete: true
+        property bool autoStartBreak: false
+        property bool autoStartNextPomodoro: false
+        property bool longBreakEnabled: true
+        property int longBreakMinutes: 15
+        property int longBreakInterval: 4
+        property string nickname: ""
     }
 
     QtObject {
@@ -191,9 +205,21 @@ TestCase {
         mainWindow.queuedView = "";
         mainWindow.isSwitching = false;
         mainWindow.opacity = 1.0;
+        mainWindow.focusImmersiveActive = false;
         appSettings.reduceMotion = false;
         appSettings.sidebarVisible = true;
+        appSettings.reduceTransparency = false;
         wait(20);
+    }
+
+    function test_reduceTransparencyStopsSidebarBackdrop() {
+        var frost = findChild(mainWindow, "sidebarFrost")
+        verify(frost)
+        tryCompare(Theme, "glassBlurAllowed", true)
+
+        appSettings.reduceTransparency = true
+        tryCompare(Theme, "glassBlurAllowed", false)
+        tryCompare(frost, "visible", false)
     }
 
     function test_sidebarCollapseAndRevealAppleToggle() {

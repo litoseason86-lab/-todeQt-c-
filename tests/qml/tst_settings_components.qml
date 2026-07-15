@@ -91,6 +91,26 @@ TestCase {
         navigation.reduceMotion = false
     }
 
+    function test_switchRollsBackWhenPersistedValueDoesNotChange() {
+        settingsSwitch.persistedChecked = false
+        settingsSwitch.click()
+        tryCompare(settingsSwitch, "checked", false)
+    }
+
+    function test_currentNavigationAndThemeCannotToggleOff() {
+        navigation.currentIndex = 0
+        var appearanceButton = findChild(navigation, "settingsCategoryAppearance")
+        verify(appearanceButton)
+        appearanceButton.click()
+        verify(appearanceButton.checked)
+
+        appSettingsMock.backgroundTheme = "warm"
+        var warmChoice = findChild(appearancePage, "settingsThemeChoice-warm")
+        verify(warmChoice)
+        warmChoice.click()
+        verify(warmChoice.checked)
+    }
+
     function test_appearancePageUsesBoundedThemeGallery() {
         var repeater = findChild(appearancePage, "settingsThemeRepeater")
         verify(repeater)

@@ -11,12 +11,12 @@ int CountdownModel::rowCount(const QModelIndex& parent) const
         return 0;
     }
 
-    return m_goals.count();
+    return m_goals.size();
 }
 
 QVariant CountdownModel::data(const QModelIndex& index, int role) const
 {
-    if (!index.isValid() || index.row() < 0 || index.row() >= m_goals.count()) {
+    if (!index.isValid() || index.row() < 0 || index.row() >= m_goals.size()) {
         return QVariant();
     }
 
@@ -32,9 +32,9 @@ QVariant CountdownModel::data(const QModelIndex& index, int role) const
         return goal.displayOrder();
     case DaysRemainingRole:
         return goal.daysRemainingFrom(m_referenceDate);
-    default:
-        return QVariant();
     }
+    // role 是 int，QML 或代理模型可能传入 Qt 内建角色；未知角色明确返回空值。
+    return QVariant();
 }
 
 QHash<int, QByteArray> CountdownModel::roleNames() const
@@ -57,7 +57,7 @@ void CountdownModel::setGoals(const QList<CountdownGoal>& goals)
 
 void CountdownModel::addGoal(const CountdownGoal& goal)
 {
-    const int row = m_goals.count();
+    const int row = m_goals.size();
     beginInsertRows(QModelIndex(), row, row);
     m_goals.append(goal);
     endInsertRows();
@@ -65,7 +65,7 @@ void CountdownModel::addGoal(const CountdownGoal& goal)
 
 void CountdownModel::updateGoal(int index, const CountdownGoal& goal)
 {
-    if (index < 0 || index >= m_goals.count()) {
+    if (index < 0 || index >= m_goals.size()) {
         return;
     }
 
@@ -78,7 +78,7 @@ void CountdownModel::updateGoal(int index, const CountdownGoal& goal)
 
 void CountdownModel::removeGoal(int index)
 {
-    if (index < 0 || index >= m_goals.count()) {
+    if (index < 0 || index >= m_goals.size()) {
         return;
     }
 
@@ -89,8 +89,8 @@ void CountdownModel::removeGoal(int index)
 
 void CountdownModel::moveGoal(int fromIndex, int toIndex)
 {
-    if (fromIndex < 0 || fromIndex >= m_goals.count()
-        || toIndex < 0 || toIndex >= m_goals.count()
+    if (fromIndex < 0 || fromIndex >= m_goals.size()
+        || toIndex < 0 || toIndex >= m_goals.size()
         || fromIndex == toIndex) {
         return;
     }
@@ -110,7 +110,7 @@ void CountdownModel::setReferenceDate(const QDate& referenceDate)
     m_referenceDate = referenceDate;
     if (!m_goals.isEmpty()) {
         // 基准日变化只影响剩余天数角色，不迫使 QML 重读其它字段。
-        emit dataChanged(index(0), index(m_goals.count() - 1), {DaysRemainingRole});
+        emit dataChanged(index(0), index(m_goals.size() - 1), {DaysRemainingRole});
     }
 }
 

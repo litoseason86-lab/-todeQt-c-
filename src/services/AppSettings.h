@@ -105,7 +105,9 @@ private:
     static int normalizeDayStartHour(int hour);
     static int normalizeLongBreakMinutes(int minutes);
     static int normalizeLongBreakInterval(int count);
+    void recreateSettingsBackend();
     bool writeValue(const QString& key, const QVariant& value);
+    QString m_settingsFilePath;
     QSettings* m_settings = nullptr;
 };
 

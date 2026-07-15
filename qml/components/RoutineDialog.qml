@@ -287,7 +287,7 @@ Popup {
                 selectByMouse: true
 
                 background: Rectangle {
-                    color: Theme.surface
+                    color: Theme.accentForeground
                     border.color: root.errorText.length > 0 ? Theme.dangerBorder : (routineTitleField.activeFocus ? Theme.accent : Theme.border)
                     border.width: root.errorText.length > 0 || routineTitleField.activeFocus ? 2 : 1
                     radius: Theme.radiusMd

@@ -84,11 +84,11 @@ FocusScope {
                 SettingsSwitch {
                     objectName: "settingsLongBreakSwitch"
                     text: "长休息"
-                    checked: root.longBreakOn
+                    persistedChecked: root.longBreakOn
                     reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
-                    onToggled: {
+                    onChangeRequested: enabled => {
                         if (root.appSettingsRef) {
-                            root.appSettingsRef.longBreakEnabled = checked
+                            root.appSettingsRef.longBreakEnabled = enabled
                         }
                     }
                 }
@@ -165,11 +165,11 @@ FocusScope {
                 SettingsSwitch {
                     objectName: "settingsAutoStartBreakSwitch"
                     text: "自动开始休息"
-                    checked: root.appSettingsRef ? root.appSettingsRef.autoStartBreak : false
+                    persistedChecked: root.appSettingsRef ? root.appSettingsRef.autoStartBreak : false
                     reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
-                    onToggled: {
+                    onChangeRequested: enabled => {
                         if (root.appSettingsRef) {
-                            root.appSettingsRef.autoStartBreak = checked
+                            root.appSettingsRef.autoStartBreak = enabled
                         }
                     }
                 }
@@ -190,11 +190,11 @@ FocusScope {
                 SettingsSwitch {
                     objectName: "settingsAutoStartNextSwitch"
                     text: "休息后自动开始下一个番茄"
-                    checked: root.appSettingsRef ? root.appSettingsRef.autoStartNextPomodoro : false
+                    persistedChecked: root.appSettingsRef ? root.appSettingsRef.autoStartNextPomodoro : false
                     reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
-                    onToggled: {
+                    onChangeRequested: enabled => {
                         if (root.appSettingsRef) {
-                            root.appSettingsRef.autoStartNextPomodoro = checked
+                            root.appSettingsRef.autoStartNextPomodoro = enabled
                         }
                     }
                 }
@@ -213,11 +213,11 @@ FocusScope {
                 SettingsSwitch {
                     objectName: "settingsSoundSwitch"
                     text: "阶段完成提示音"
-                    checked: root.appSettingsRef ? root.appSettingsRef.soundEnabled : true
+                    persistedChecked: root.appSettingsRef ? root.appSettingsRef.soundEnabled : true
                     reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
-                    onToggled: {
+                    onChangeRequested: enabled => {
                         if (root.appSettingsRef) {
-                            root.appSettingsRef.soundEnabled = checked
+                            root.appSettingsRef.soundEnabled = enabled
                         }
                     }
                 }
@@ -238,11 +238,11 @@ FocusScope {
                 SettingsSwitch {
                     objectName: "settingsRaiseOnPhaseSwitch"
                     text: "阶段结束时窗口置前"
-                    checked: root.appSettingsRef ? root.appSettingsRef.raiseOnPhaseComplete : true
+                    persistedChecked: root.appSettingsRef ? root.appSettingsRef.raiseOnPhaseComplete : true
                     reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
-                    onToggled: {
+                    onChangeRequested: enabled => {
                         if (root.appSettingsRef) {
-                            root.appSettingsRef.raiseOnPhaseComplete = checked
+                            root.appSettingsRef.raiseOnPhaseComplete = enabled
                         }
                     }
                 }

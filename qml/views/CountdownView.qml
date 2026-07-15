@@ -64,7 +64,7 @@ Item {
 
                 contentItem: Text {
                     text: addButton.text
-                    color: Theme.surface
+                    color: Theme.accentForeground
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter

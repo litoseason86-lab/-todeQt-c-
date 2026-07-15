@@ -101,7 +101,8 @@ Control {
                 Layout.fillWidth: true
                 implicitHeight: 44
                 text: modelData.title
-                checkable: true
+                // currentIndex 是唯一选中源；当前项再次点击不能把自身切成未选中。
+                checkable: false
                 checked: root.currentIndex === index
                 activeFocusOnTab: true
                 Accessible.name: modelData.title + "设置"
@@ -124,7 +125,7 @@ Control {
                            : (categoryButton.hovered
                               ? hoverTint
                               : Qt.rgba(hoverTint.r, hoverTint.g, hoverTint.b, 0))
-                    border.color: categoryButton.activeFocus ? Theme.accentInk : "transparent"
+                    border.color: categoryButton.activeFocus ? Theme.focusRing : "transparent"
                     border.width: categoryButton.activeFocus ? 2 : 0
                     radius: Theme.radiusMd
 
@@ -149,14 +150,14 @@ Control {
                             anchors.centerIn: parent
                             name: categoryButton.modelData.icon
                             size: 17
-                            color: categoryButton.checked ? Theme.inkStrong : Theme.inkSoft
+                            color: categoryButton.checked ? Theme.accentForeground : Theme.inkSoft
                         }
                     }
 
                     Text {
                         Layout.fillWidth: true
                         text: categoryButton.text
-                        color: categoryButton.checked ? Theme.inkStrong : Theme.ink
+                        color: categoryButton.checked ? Theme.accentForeground : Theme.ink
                         font.pixelSize: Theme.fontLg
                         font.weight: categoryButton.checked ? Font.DemiBold : Font.Normal
                         elide: Text.ElideRight
