@@ -242,6 +242,55 @@ TestCase {
         verify(Qt.colorEqual(backdrop.color, Theme.glassCard))
     }
 
+    function test_modeSwitchReflectsAndDrivesMode() {
+        var modeSwitch = findChild(view, "focusModeSwitch")
+        verify(modeSwitch, "专注页应有模式分段控件")
+        compare(modeSwitch.currentIndex, 0, "自由模式时应停在第 0 段")
+
+        // 点番茄段：控件自己不改选中态，必须由页面把模式改掉再反映回来。
+        findChild(modeSwitch, "segmentedSwitchSegment1").clicked()
+        wait(20)
+        compare(view.pomodoroModeSelected, true)
+        compare(modeSwitch.currentIndex, 1, "模式切换后选中段应跟着走")
+
+        findChild(modeSwitch, "segmentedSwitchSegment0").clicked()
+        wait(20)
+        compare(view.pomodoroModeSelected, false)
+        compare(modeSwitch.currentIndex, 0)
+    }
+
+    // 切换器必须钉死在页面顶部。自由模式下方是一行大字时钟，番茄模式下方是圆环加时长面板，
+    // 两者高度差很大：一旦切换器重新参与正文的垂直居中，切模式时就会被正文顶得上下跳。
+    function test_modeSwitchStaysPutAcrossModes() {
+        var modeSwitch = findChild(view, "focusModeSwitch")
+        verify(modeSwitch, "专注页应有模式分段控件")
+
+        view.toPomodoroTab(false)
+        wait(20)
+        var freePos = modeSwitch.mapToItem(view, 0, 0)
+
+        view.toPomodoroTab(true)
+        wait(20)
+        var pomoPos = modeSwitch.mapToItem(view, 0, 0)
+
+        // 顺带确认两种模式的正文高度确实不同，否则这条用例会变成永远成立的空壳。
+        verify(view.state !== "free", "应已切到番茄模式")
+        compare(pomoPos.y, freePos.y, "切模式后切换器不应上下移动")
+        compare(pomoPos.x, freePos.x, "切模式后切换器不应左右移动")
+    }
+
+    // 模式还会被任务页跳转、服务恢复会话等外部路径改写；选中态必须跟着业务状态走，
+    // 不能因为用户点过一次就把绑定弄丢。
+    function test_modeSwitchFollowsExternalModeChange() {
+        var modeSwitch = findChild(view, "focusModeSwitch")
+        findChild(modeSwitch, "segmentedSwitchSegment1").clicked()
+        wait(20)
+
+        view.toPomodoroTab(false)
+        wait(20)
+        compare(modeSwitch.currentIndex, 0, "外部改模式后选中段仍应同步")
+    }
+
     function test_restoredTimerIsReadWhenViewIsCreated() {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = false

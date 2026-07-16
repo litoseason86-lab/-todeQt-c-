@@ -120,6 +120,19 @@ QtObject {
     readonly property color glassBorder: darkMode
         ? Qt.rgba(1, 1, 1, 0.18)
         : Qt.rgba(1, 1, 1, 0.65)
+    // 凹槽底（分段控件轨道这类"嵌进面板里"的容器）：比周围玻璃暗一档。
+    // 浅色下用暖褐色而不是中性灰，避免在焦糖配色里透出脏灰。
+    // 单独立一个令牌是因为 glassCard/glassHover 都是"浮起"语义，
+    // 直接拿来当轨道会和浮在它上面的胶囊分不开。
+    readonly property color glassTrack: darkMode
+        ? Qt.rgba(0, 0, 0, 0.32)
+        : Qt.rgba(120 / 255, 96 / 255, 64 / 255, 0.16)
+    // 轨道上浮起的选中块（分段控件的胶囊）。近乎不透明，且必须和 glassTrack 拉开明度：
+    // 浅色下压到近白，夜间反过来提到比轨道亮的暖灰——夜间若沿用 glassCard 这类暗底，
+    // 胶囊会和轨道糊成一片，选中态就没了。
+    readonly property color glassThumb: darkMode
+        ? Qt.rgba(78 / 255, 68 / 255, 52 / 255, 0.95)
+        : Qt.rgba(1, 253 / 255, 248 / 255, 0.95)
 
     function glassCardForMode(mode) {
         return mode === "dark"
@@ -144,6 +157,12 @@ QtObject {
     readonly property color glassSolidSidebar: darkMode
         ? Qt.rgba(30 / 255, 26 / 255, 20 / 255, 0.94)
         : Qt.rgba(1, 252 / 255, 246 / 255, 0.94)
+    readonly property color glassSolidTrack: darkMode
+        ? Qt.rgba(24 / 255, 20 / 255, 15 / 255, 0.92)
+        : Qt.rgba(238 / 255, 229 / 255, 214 / 255, 0.92)
+    readonly property color glassSolidThumb: darkMode
+        ? Qt.rgba(84 / 255, 73 / 255, 56 / 255, 0.98)
+        : Qt.rgba(1, 254 / 255, 250 / 255, 0.98)
 
     // 全局允许实时模糊：低配/测试可关，侧栏与专注面板走 solid 降级。
     property bool glassBlurAllowed: true

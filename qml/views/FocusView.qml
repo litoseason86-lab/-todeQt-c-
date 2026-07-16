@@ -516,67 +516,50 @@ Item {
         // 专注页状态机复杂，玻璃化只换材质、不动布局。
         color: Theme.glassCard
 
+        // 模式切换器钉死在页面顶部，不参与正文的垂直居中。
+        // 两种模式下方的内容高度差很大（自由是一行大字时钟，番茄是圆环加时长面板），
+        // 之前切换器跟正文一起居中，正文一变高就把切换器顶得上下跳。
+        // macOS 的分段控件（日历的日/周/月/年、访达的视图切换）一律待在固定位置。
+        SegmentedSwitch {
+            id: modeSwitch
+            objectName: "focusModeSwitch"
+
+            anchors.top: parent.top
+            anchors.topMargin: Theme.space24
+            anchors.horizontalCenter: parent.horizontalCenter
+            segments: [qsTr("自由专注"), qsTr("番茄专注")]
+            // 选中态始终跟随业务状态：模式还会被任务页跳转、服务恢复会话等外部路径改写，
+            // 控件不能自己记一份，否则两边会漂移。
+            currentIndex: root.pomodoroModeSelected ? 1 : 0
+            reduceMotion: root.settings ? root.settings.reduceMotion : false
+            solidFallback: !Theme.glassBlurAllowed
+            Accessible.name: qsTr("专注模式")
+
+            onActivated: function (index) { root.toPomodoroTab(index === 1) }
+        }
+
+        // 正文的居中参考系：切换器下方的剩余空间。
+        // 用一个不可见的 Item 圈出这块区域，正文在其中居中即可，
+        // 不必把正文塞进切换器所在的那一列——那样内容一变高就会推动切换器。
+        Item {
+            id: contentRegion
+
+            anchors {
+                top: modeSwitch.bottom
+                left: parent.left
+                right: parent.right
+                bottom: parent.bottom
+            }
+        }
+
         ColumnLayout {
             width: Math.min(parent.width - 96, 560)
             spacing: root.state === "pomoIdle" ? Theme.space16 : Theme.space24
 
             anchors {
                 horizontalCenter: parent.horizontalCenter
-                verticalCenter: parent.verticalCenter
+                verticalCenter: contentRegion.verticalCenter
                 verticalCenterOffset: root.state === "pomoIdle" ? -28 : 0
-            }
-
-            RowLayout {
-                Layout.alignment: Qt.AlignHCenter
-                spacing: Theme.space8
-
-                Button {
-                    id: freeModeButton
-                    text: "自由专注"
-                    checkable: false
-                    checked: !root.pomodoroModeSelected
-                    implicitWidth: 112
-                    implicitHeight: 36
-                    onClicked: root.toPomodoroTab(false)
-
-                    background: Rectangle {
-                        color: freeModeButton.checked ? Theme.accent : Theme.surfaceRaised
-                        border.color: freeModeButton.checked ? Theme.accentStrong : Theme.border
-                        radius: Theme.radiusMd
-                    }
-
-                    contentItem: Text {
-                        text: freeModeButton.text
-                        color: freeModeButton.checked ? Theme.accentForeground : Theme.ink
-                        font.pixelSize: Theme.fontMd
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
-
-                Button {
-                    id: pomodoroModeButton
-                    text: "番茄"
-                    checkable: false
-                    checked: root.pomodoroModeSelected
-                    implicitWidth: 112
-                    implicitHeight: 36
-                    onClicked: root.toPomodoroTab(true)
-
-                    background: Rectangle {
-                        color: pomodoroModeButton.checked ? Theme.accent : Theme.surfaceRaised
-                        border.color: pomodoroModeButton.checked ? Theme.accentStrong : Theme.border
-                        radius: Theme.radiusMd
-                    }
-
-                    contentItem: Text {
-                        text: pomodoroModeButton.text
-                        color: pomodoroModeButton.checked ? Theme.accentForeground : Theme.ink
-                        font.pixelSize: Theme.fontMd
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
-                }
             }
 
             ColumnLayout {
