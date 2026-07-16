@@ -14,7 +14,7 @@ Button {
 
     background: Rectangle {
         objectName: presetButton.backgroundObjectName
-        color: presetButton.checked ? Theme.accent : (presetButton.hovered ? Theme.surface : Theme.surfaceRaised)
+        color: presetButton.checked ? Theme.accentFill : (presetButton.hovered ? Theme.surface : Theme.surfaceRaised)
         border.color: presetButton.checked ? Theme.accentStrong : Theme.border
         border.width: 1
         radius: Theme.radiusMd
@@ -23,7 +23,7 @@ Button {
     contentItem: Text {
         text: presetButton.text
         textFormat: Text.PlainText
-        color: presetButton.checked ? Theme.accentForeground : Theme.ink
+        color: presetButton.checked ? Theme.accentFillInk : Theme.ink
         font.pixelSize: Theme.fontMd
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter

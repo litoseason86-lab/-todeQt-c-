@@ -343,7 +343,7 @@ Item {
 
                 background: Rectangle {
                     objectName: "todayAddButtonBackground"
-                    color: addButton.pressed ? Theme.accentStrong : (addButton.hovered ? Theme.accentStrong : Theme.accent)
+                    color: addButton.pressed ? Theme.accentFillStrong : (addButton.hovered ? Theme.accentFillStrong : Theme.accentFill)
                     border.color: addButton.hovered ? Theme.accentStrong : "transparent"
                     border.width: addButton.hovered ? 1 : 0
                     radius: Theme.radiusLg
@@ -373,7 +373,7 @@ Item {
                 contentItem: Text {
                     objectName: "todayAddButtonLabel"
                     text: addButton.text
-                    color: Theme.accentForeground
+                    color: Theme.accentFillInk
                     font.pixelSize: Theme.fontLg
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
@@ -463,14 +463,14 @@ Item {
                     onClicked: root.moveOverdueToToday()
 
                     background: Rectangle {
-                        color: rolloverMoveButton.hovered ? Theme.accentStrong : Theme.accent
+                        color: rolloverMoveButton.hovered ? Theme.accentFillStrong : Theme.accentFill
                         radius: Theme.radiusMd
                     }
 
                     contentItem: Text {
                         text: rolloverMoveButton.text
                         textFormat: Text.PlainText
-                        color: Theme.accentForeground
+                        color: Theme.accentFillInk
                         font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
                         horizontalAlignment: Text.AlignHCenter

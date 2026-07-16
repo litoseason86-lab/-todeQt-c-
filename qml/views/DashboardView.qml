@@ -485,10 +485,10 @@ Item {
                                 implicitHeight: 26
                                 radius: 13
                                 color: filterChip.selected
-                                       ? Theme.accent
+                                       ? Theme.accentFill
                                        : (filterArea.containsMouse ? Theme.glassHover : Qt.rgba(1, 1, 1, 0))
                                 border.color: filterChip.selected
-                                              ? Theme.accent
+                                              ? Theme.accentFill
                                               : Theme.borderSubtle
                                 border.width: filterChip.selected ? 0 : 1
 
@@ -507,7 +507,7 @@ Item {
                                     textFormat: Text.PlainText
                                     font.pixelSize: Theme.fontSm
                                     font.weight: filterChip.selected ? Font.Medium : Font.Normal
-                                    color: filterChip.selected ? Theme.accentForeground : Theme.inkSoft
+                                    color: filterChip.selected ? Theme.accentFillInk : Theme.inkSoft
                                 }
 
                                 MouseArea {

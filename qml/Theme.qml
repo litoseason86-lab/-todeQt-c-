@@ -27,6 +27,16 @@ QtObject {
     // —— 强调 Accent（焦糖棕，两种明暗下同一色相）——
     readonly property color accent: "#d4a574"         // 基础态
     readonly property color accentStrong: "#c99666"   // 悬停/按下 深一档
+    // 大面积色块（主按钮、侧栏徽章、选中 chip）走 Apple 的 tinted button 做法：
+    // 不用实心焦糖，而是淡淡一层暖色罩 + 深焦糖文字（accentFillInk）。
+    // 单独立令牌而不是直接把 accent 调浅，是因为 accent 还兼任边框、专注圆环、
+    // 滚动条这些细线条——细线必须够深才看得见，大色块却要克制，两者诉求相反。
+    readonly property color accentFill: darkMode ? "#4a3d2b" : "#f0e6d2"
+    // 悬停/按下加深一档，仍是罩而不是实心。
+    readonly property color accentFillStrong: darkMode ? "#52432e" : "#e5d0ac"
+    // 淡罩上的文字/图标：accentInk(#9c6a34) 在淡罩上只有 3.75:1 不达 AA，
+    // 必须用更深的焦糖——#7a4c1e 在常态罩 5.89:1、悬停罩 4.84:1，均过正文 AA。
+    readonly property color accentFillInk: darkMode ? "#e6b980" : "#7a4c1e"
     // 强调淡底/选中态：夜间版换成暗暖底，保持"淡淡一层强调"的语义。
     readonly property color accentSoft: darkMode ? "#4a3d2b" : "#f0e6d2"
     // accent 作前景文字不达 AA；accentInk 是"可读文字版"——浅底压深、暗底提亮。

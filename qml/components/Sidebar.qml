@@ -258,7 +258,7 @@ Rectangle {
                 Layout.preferredWidth: 22
                 Layout.preferredHeight: 22
                 radius: Theme.radiusSm
-                color: item.isActive ? Theme.accent : Theme.glassCard
+                color: item.isActive ? Theme.accentFill : Theme.glassCard
 
                 Behavior on color {
                     ColorAnimation {
@@ -272,7 +272,7 @@ Rectangle {
                     text: item.marker
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Bold
-                    color: item.isActive ? Theme.accentForeground : Theme.inkSoft
+                    color: item.isActive ? Theme.accentFillInk : Theme.inkSoft
 
                     Behavior on color {
                         ColorAnimation {

@@ -347,8 +347,8 @@ TestCase {
         const breakBackground = findChild(view, "breakPreset5Background")
         verify(workBackground)
         verify(breakBackground)
-        verify(Qt.colorEqual(workBackground.color, Theme.accent))
-        verify(Qt.colorEqual(breakBackground.color, Theme.accent))
+        verify(Qt.colorEqual(workBackground.color, Theme.accentFill))
+        verify(Qt.colorEqual(breakBackground.color, Theme.accentFill))
     }
 
     function test_startButtonDisabledWithoutTask() {

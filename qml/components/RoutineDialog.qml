@@ -398,14 +398,15 @@ Popup {
 
                 background: Rectangle {
                     radius: Theme.radiusMd
-                    color: routineAddButton.pressed ? Theme.accentStrong : (routineAddButton.hovered ? Theme.accentStrong : Theme.accent)
+                    color: routineAddButton.pressed ? Theme.accentFillStrong : (routineAddButton.hovered ? Theme.accentFillStrong : Theme.accentFill)
                     border.color: Theme.accent
                     border.width: 1
                 }
 
                 contentItem: Text {
                     text: routineAddButton.text
-                    color: Theme.surface
+                    // 淡罩底上不能用近白的 surface 当字色，会直接消失。
+                    color: Theme.accentFillInk
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter

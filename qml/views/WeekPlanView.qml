@@ -431,7 +431,7 @@ Item {
                             Layout.preferredWidth: 52
                             Layout.fillHeight: true
                             radius: Theme.radiusMd
-                            color: dayRow.isToday ? Theme.accent : Theme.glassCard
+                            color: dayRow.isToday ? Theme.accentFill : Theme.glassCard
                             border.color: dayRow.isToday ? Theme.accentStrong : Theme.border
                             border.width: 1
 
@@ -444,7 +444,9 @@ Item {
                                     text: root.weekdayGlyphs[dayRow.index]
                                     font.pixelSize: Theme.fontXl
                                     font.bold: true
-                                    color: dayRow.isToday ? Theme.surface
+                                    // 「今天」徽章底已从实心焦糖换成淡罩，近白的 surface 会消失，
+                                    // 改用罩上专用的深焦糖字。
+                                    color: dayRow.isToday ? Theme.accentFillInk
                                            : (dayRow.isWeekend ? Theme.inkSoft : Theme.ink)
                                 }
 
@@ -454,7 +456,7 @@ Item {
                                     text: Qt.formatDate(root.dayDate(dayRow.index), "M/d")
                                     font.family: "Menlo"
                                     font.pixelSize: Theme.fontXs
-                                    color: dayRow.isToday ? Theme.accentForeground : Theme.inkSoft
+                                    color: dayRow.isToday ? Theme.accentFillInk : Theme.inkSoft
                                 }
 
                                 Text {
@@ -463,7 +465,7 @@ Item {
                                     text: "今天"
                                     font.pixelSize: 9
                                     font.letterSpacing: 1
-                                    color: Theme.accentForeground
+                                    color: Theme.accentFillInk
                                 }
                             }
                         }

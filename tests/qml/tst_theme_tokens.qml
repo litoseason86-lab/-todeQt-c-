@@ -18,6 +18,11 @@ TestCase {
     function test_colorTokens() {
         verify(Qt.colorEqual(Theme.accent, "#d4a574"), "accent 取值不对")
         verify(Qt.colorEqual(Theme.accentStrong, "#c99666"), "accentStrong 取值不对")
+        // 大色块走 Apple tinted 做法：淡罩底 + 深焦糖字；边框/圆环仍用更深的 accent。
+        verify(Qt.colorEqual(Theme.accentFill, "#f0e6d2"), "accentFill 取值不对")
+        verify(Qt.colorEqual(Theme.accentFillStrong, "#e5d0ac"), "accentFillStrong 取值不对")
+        // 罩上文字必须是过 AA 的深焦糖：accentInk 在淡罩上只有 3.75:1，不能拿来用。
+        verify(Qt.colorEqual(Theme.accentFillInk, "#7a4c1e"), "accentFillInk 取值不对")
         verify(Qt.colorEqual(Theme.surface, "#fffef9"), "surface 取值不对")
         verify(Qt.colorEqual(Theme.border, "#e8dfc8"), "border 取值不对")
         verify(Qt.colorEqual(Theme.ink, "#5d4e37"), "ink 取值不对")

@@ -58,13 +58,13 @@ Item {
                 implicitHeight: 44
 
                 background: Rectangle {
-                    color: addButton.pressed ? Theme.accentStrong : (addButton.hovered ? Theme.accentStrong : Theme.accent)
+                    color: addButton.pressed ? Theme.accentFillStrong : (addButton.hovered ? Theme.accentFillStrong : Theme.accentFill)
                     radius: Theme.radiusLg
                 }
 
                 contentItem: Text {
                     text: addButton.text
-                    color: Theme.accentForeground
+                    color: Theme.accentFillInk
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter

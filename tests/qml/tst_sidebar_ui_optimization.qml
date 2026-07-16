@@ -151,10 +151,10 @@ TestCase {
         compare(markerContainer.width, 22);
         compare(markerContainer.height, 22);
         compare(markerContainer.radius, Theme.radiusSm);
-        verify(Qt.colorEqual(markerContainer.color, Theme.accent));
+        verify(Qt.colorEqual(markerContainer.color, Theme.accentFill));
         compare(markerText.font.pixelSize, Theme.fontSm);
         compare(markerText.font.weight, Font.Bold);
-        verify(Qt.colorEqual(markerText.color, Theme.accentForeground));
+        verify(Qt.colorEqual(markerText.color, Theme.accentFillInk));
 
         compare(mainText.font.pixelSize, Theme.fontLg);
         compare(mainText.font.weight, Font.Medium);

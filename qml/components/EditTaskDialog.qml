@@ -143,7 +143,7 @@ Popup {
         onClicked: root.dateOffsetSelection = chip.offset
 
         background: Rectangle {
-            color: chip.checked ? Theme.accent : (chip.hovered ? Theme.surface : Theme.surfaceRaised)
+            color: chip.checked ? Theme.accentFill : (chip.hovered ? Theme.surface : Theme.surfaceRaised)
             border.color: chip.checked ? Theme.accentStrong : Theme.border
             border.width: 1
             radius: Theme.radiusMd
@@ -152,7 +152,7 @@ Popup {
         contentItem: Text {
             text: chip.text
             textFormat: Text.PlainText
-            color: chip.checked ? Theme.accentForeground : Theme.ink
+            color: chip.checked ? Theme.accentFillInk : Theme.ink
             font.pixelSize: Theme.fontMd
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
@@ -397,14 +397,14 @@ Popup {
                 onClicked: root.submit()
 
                 background: Rectangle {
-                    color: confirmButton.hovered ? Theme.accentStrong : Theme.accent
+                    color: confirmButton.hovered ? Theme.accentFillStrong : Theme.accentFill
                     radius: Theme.radiusMd
                 }
 
                 contentItem: Text {
                     text: confirmButton.text
                     textFormat: Text.PlainText
-                    color: Theme.accentForeground
+                    color: Theme.accentFillInk
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter

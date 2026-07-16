@@ -215,14 +215,14 @@ FocusScope {
 
                 background: Rectangle {
                     radius: Theme.radiusMd
-                    color: saveButton.pressed ? Theme.accentStrong : Theme.accent
+                    color: saveButton.pressed ? Theme.accentFillStrong : Theme.accentFill
                     border.width: saveButton.visualFocus ? 2 : 1
                     border.color: saveButton.visualFocus ? Theme.inkStrong : Theme.glassBorder
                 }
 
                 contentItem: Text {
                     text: saveButton.text
-                    color: Theme.accentForeground
+                    color: Theme.accentFillInk
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter

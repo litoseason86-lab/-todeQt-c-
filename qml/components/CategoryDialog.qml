@@ -238,12 +238,12 @@ Popup {
 
                         background: Rectangle {
                             radius: Theme.radiusSm
-                            color: addButton.pressed ? Theme.accentStrong : Theme.accent
+                            color: addButton.pressed ? Theme.accentFillStrong : Theme.accentFill
                         }
 
                         contentItem: Text {
                             text: addButton.text
-                            color: Theme.accentForeground
+                            color: Theme.accentFillInk
                             font.pixelSize: Theme.fontMd
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
@@ -506,12 +506,12 @@ Popup {
 
                         background: Rectangle {
                             radius: Theme.radiusSm
-                            color: saveCategoryButton.enabled ? Theme.accent : Theme.border
+                            color: saveCategoryButton.enabled ? Theme.accentFill : Theme.border
                         }
 
                         contentItem: Text {
                             text: saveCategoryButton.text
-                            color: saveCategoryButton.enabled ? Theme.accentForeground : Theme.inkSoft
+                            color: saveCategoryButton.enabled ? Theme.accentFillInk : Theme.inkSoft
                             font.pixelSize: Theme.fontMd
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter

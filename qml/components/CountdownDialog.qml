@@ -327,7 +327,7 @@ Popup {
                 implicitHeight: 44
 
                 background: Rectangle {
-                    color: submitButton.pressed ? Theme.accentStrong : (submitButton.hovered ? Theme.accentStrong : Theme.accent)
+                    color: submitButton.pressed ? Theme.accentFillStrong : (submitButton.hovered ? Theme.accentFillStrong : Theme.accentFill)
                     border.color: submitButton.hovered || submitButton.pressed ? Theme.accentStrong : Theme.accent
                     border.width: 1
                     radius: Theme.radiusMd
@@ -335,7 +335,7 @@ Popup {
 
                 contentItem: Text {
                     text: submitButton.text
-                    color: Theme.accentForeground
+                    color: Theme.accentFillInk
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter

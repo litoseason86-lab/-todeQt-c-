@@ -781,7 +781,7 @@ TestCase {
 
         verify(Qt.colorEqual(description.color, Theme.ink));
         compare(addButtonBackground.radius, Theme.radiusLg);
-        verify(Qt.colorEqual(addButtonBackground.color, Theme.accent));
+        verify(Qt.colorEqual(addButtonBackground.color, Theme.accentFill));
         compare(addButtonBackground.border.width, 0);
         compare(addButtonLabel.font.weight, Font.Medium);
 
