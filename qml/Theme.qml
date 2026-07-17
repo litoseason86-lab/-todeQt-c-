@@ -127,6 +127,11 @@ QtObject {
     readonly property color glassDialog: darkMode
         ? Qt.rgba(42 / 255, 36 / 255, 28 / 255, 0.985)
         : Qt.rgba(1, 254 / 255, 249 / 255, 0.985)
+    // 设置对话框专用微透面板：比 glassDialog 再透一档，隐约透出壁纸。
+    // 业务小弹窗（新建任务等）仍用 glassDialog 近实底——它们叠在杂内容上，再透会发花。
+    readonly property color glassDialogSoft: darkMode
+        ? Qt.rgba(42 / 255, 36 / 255, 28 / 255, 0.94)
+        : Qt.rgba(1, 254 / 255, 249 / 255, 0.94)
     readonly property color glassBorder: darkMode
         ? Qt.rgba(1, 1, 1, 0.18)
         : Qt.rgba(1, 1, 1, 0.65)

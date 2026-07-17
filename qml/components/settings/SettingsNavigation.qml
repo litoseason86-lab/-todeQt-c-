@@ -27,12 +27,8 @@ Control {
     implicitWidth: compact ? 168 : 204
     padding: Theme.space12
 
-    background: Rectangle {
-        color: Theme.surfaceRaised
-        border.color: Theme.borderSubtle
-        border.width: 1
-        radius: Theme.radiusLg
-    }
+    // 导航直接躺在对话框面板上，不再套自己的卡片底（去框中框）。
+    background: null
 
     contentItem: ColumnLayout {
         spacing: Theme.space4
@@ -120,8 +116,9 @@ Control {
                     // 静息态用「全透明的暖色」而非 "transparent"（= 透明黑），
                     // 否则 ColorAnimation 会经过半透明黑，悬停闪灰影。
                     readonly property color hoverTint: Theme.surfaceSunken
+                    // 选中态走 Apple tinted 做法：淡罩 + 深焦糖字，不再用实心焦糖大色块。
                     color: categoryButton.checked
-                           ? Theme.accent
+                           ? Theme.accentFill
                            : (categoryButton.hovered
                               ? hoverTint
                               : Qt.rgba(hoverTint.r, hoverTint.g, hoverTint.b, 0))
@@ -142,22 +139,23 @@ Control {
                         Layout.preferredWidth: 26
                         Layout.preferredHeight: 26
                         radius: Theme.radiusSm + 2
+                        // 淡罩上白 50% 才能把图标底衬出来；夜间罩本身就暗，白色要压低避免发亮。
                         color: categoryButton.checked
-                               ? Qt.rgba(1, 1, 1, 0.32)
+                               ? Qt.rgba(1, 1, 1, Theme.darkMode ? 0.12 : 0.5)
                                : Theme.surfaceSunken
 
                         GlyphIcon {
                             anchors.centerIn: parent
                             name: categoryButton.modelData.icon
                             size: 17
-                            color: categoryButton.checked ? Theme.accentForeground : Theme.inkSoft
+                            color: categoryButton.checked ? Theme.accentFillInk : Theme.inkSoft
                         }
                     }
 
                     Text {
                         Layout.fillWidth: true
                         text: categoryButton.text
-                        color: categoryButton.checked ? Theme.accentForeground : Theme.ink
+                        color: categoryButton.checked ? Theme.accentFillInk : Theme.ink
                         font.pixelSize: Theme.fontLg
                         font.weight: categoryButton.checked ? Font.DemiBold : Font.Normal
                         elide: Text.ElideRight

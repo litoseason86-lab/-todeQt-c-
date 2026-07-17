@@ -54,6 +54,7 @@ TestCase {
         verify(Qt.colorEqual(Theme.glassHover, Qt.rgba(1, 1, 250 / 255, 0.62)), "glassHover 取值不对")
         verify(Qt.colorEqual(Theme.glassAccent, Qt.rgba(240 / 255, 230 / 255, 210 / 255, 0.55)), "glassAccent 取值不对")
         verify(Qt.colorEqual(Theme.glassDialog, Qt.rgba(1, 254 / 255, 249 / 255, 0.985)), "glassDialog 取值不对")
+        verify(Qt.colorEqual(Theme.glassDialogSoft, Qt.rgba(1, 254 / 255, 249 / 255, 0.94)), "glassDialogSoft 取值不对")
         verify(Qt.colorEqual(Theme.glassBorder, Qt.rgba(1, 1, 1, 0.65)), "glassBorder 取值不对")
     }
 
