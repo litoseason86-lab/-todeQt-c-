@@ -2,7 +2,7 @@
 #include <QImage>
 #include <QtTest>
 
-// 壁纸资源守门：六张主题壁纸必须打包进 qrc、可解码、尺寸 1536×1024。
+// 壁纸资源守门：七张主题壁纸必须打包进 qrc、可解码、尺寸 1536×1024。
 class WallpaperAssetsTests : public QObject
 {
     Q_OBJECT
@@ -11,7 +11,7 @@ private slots:
     void wallpaperAssets_data()
     {
         QTest::addColumn<QString>("path");
-        const char* names[] = { "warm", "pink", "jiangnan", "starry", "rainy", "moon" };
+        const char* names[] = { "warm", "pink", "jiangnan", "sword", "starry", "rainy", "moon" };
         for (const char* name : names) {
             QTest::newRow(name)
                 << QStringLiteral(":/resources/wallpapers/%1.png").arg(QLatin1String(name));

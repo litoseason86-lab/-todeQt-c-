@@ -114,7 +114,7 @@ TestCase {
     function test_appearancePageUsesBoundedThemeGallery() {
         var repeater = findChild(appearancePage, "settingsThemeRepeater")
         verify(repeater)
-        compare(repeater.count, 6)
+        compare(repeater.count, 7)
 
         var warmChoice = findChild(appearancePage, "settingsThemeChoice-warm")
         verify(warmChoice)

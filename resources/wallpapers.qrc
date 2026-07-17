@@ -6,5 +6,6 @@
         <file alias="resources/wallpapers/starry.png">wallpapers/starry.png</file>
         <file alias="resources/wallpapers/rainy.png">wallpapers/rainy.png</file>
         <file alias="resources/wallpapers/moon.png">wallpapers/moon.png</file>
+        <file alias="resources/wallpapers/sword.png">wallpapers/sword.png</file>
     </qresource>
 </RCC>

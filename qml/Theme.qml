@@ -216,6 +216,11 @@ QtObject {
             base: "#dfe8e2"
         },
         {
+            id: "sword", name: "雪岭剑影", mode: "light",
+            wallpaper: Qt.resolvedUrl("../resources/wallpapers/sword.png"),
+            base: "#ccd4e6"
+        },
+        {
             id: "starry", name: "星空", mode: "dark",
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/starry.png"),
             base: "#12102a"
