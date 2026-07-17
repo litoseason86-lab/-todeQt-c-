@@ -213,6 +213,11 @@ Popup {
                             if (item) {
                                 item.appSettingsRef = Qt.binding(function() { return root.appSettingsRef })
                                 item.compact = Qt.binding(function() { return root.compact })
+                                // 关于页这类"内容少于一屏"的页面需要知道视口高度做垂直居中；
+                                // 其余页面没有该属性，跳过即可。
+                                if (item.hasOwnProperty("viewportHeight")) {
+                                    item.viewportHeight = Qt.binding(function() { return pageScroll.height })
+                                }
                             }
                         }
                     }
