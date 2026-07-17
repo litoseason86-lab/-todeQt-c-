@@ -43,7 +43,6 @@ FocusScope {
                         appSettingsRef: root.appSettingsRef
                         themeId: modelData.id
                         themeName: modelData.name
-                        themeMode: modelData.mode
                     }
                 }
             }

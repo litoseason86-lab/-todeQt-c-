@@ -10,7 +10,6 @@ Button {
     property var appSettingsRef: null
     property string themeId: ""
     property string themeName: ""
-    property string themeMode: "light"
 
     objectName: "settingsThemeChoice-" + themeId
     implicitWidth: 154
@@ -50,27 +49,6 @@ Button {
                 anchors.fill: parent
                 themeId: root.themeId
                 requestedSourceSize: Qt.size(154, 84)
-            }
-
-            // 玻璃计时预览环：透出候选主题的玻璃色，中央显示 25:00（用真实计时字体）。
-            Rectangle {
-                objectName: "settingsThemeGlass-" + root.themeId
-                anchors.centerIn: parent
-                width: 56
-                height: 56
-                radius: width / 2
-                color: Theme.glassCardForMode(root.themeMode)
-                border.color: Theme.glassBorderForMode(root.themeMode)
-                border.width: 1.5
-
-                Text {
-                    anchors.centerIn: parent
-                    text: "25:00"
-                    color: root.themeMode === "dark" ? "#f3ead9" : "#463a2b"
-                    font.pixelSize: Theme.fontMd
-                    font.weight: Font.DemiBold
-                    font.family: Theme.fontFamilyClock
-                }
             }
 
             Rectangle {

@@ -132,7 +132,7 @@ TestCase {
         appSettingsMock.backgroundTheme = "warm"
     }
 
-    function test_themeChoiceWritesThemeAndUsesCandidateGlass() {
+    function test_themeChoiceWritesTheme() {
         appSettingsMock.backgroundTheme = "warm"
         var starryChoice = findChild(appearancePage, "settingsThemeChoice-starry")
         verify(starryChoice)
@@ -140,9 +140,8 @@ TestCase {
         compare(appSettingsMock.backgroundTheme, "starry")
         verify(starryChoice.checked)
 
-        var starryGlass = findChild(starryChoice, "settingsThemeGlass-starry")
-        verify(starryGlass)
-        verify(Qt.colorEqual(starryGlass.color, Theme.glassCardForMode("dark")))
+        // 缩略图只展示壁纸本身，不再叠加计时预览环。
+        verify(!findChild(starryChoice, "settingsThemeGlass-starry"))
         appSettingsMock.backgroundTheme = "warm"
     }
 
