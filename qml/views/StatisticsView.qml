@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
 import "../components"
@@ -497,12 +496,19 @@ Item {
                 Layout.preferredHeight: 8
             }
 
-            RowLayout {
+            // 标题贴左，分段控件 + 周期导航作为一组压在内容区的水平中心，
+            // 与专注页顶部居中的模式切换同一版式语言；用普通 Item 而不是
+            // RowLayout，是因为「相对整行居中」不能靠行内剩余空间分配表达。
+            Item {
                 Layout.fillWidth: true
-                spacing: Theme.space16
+                implicitHeight: Math.max(headerTitleColumn.implicitHeight,
+                                         headerControlColumn.implicitHeight)
 
                 ColumnLayout {
-                    Layout.fillWidth: true
+                    id: headerTitleColumn
+
+                    anchors.left: parent.left
+                    anchors.top: parent.top
                     spacing: Theme.space4
 
                     Text {
@@ -519,230 +525,132 @@ Item {
                     }
                 }
 
-                RowLayout {
+                // 两层：上为「日/周/月」分段控件（与专注页同构），下为周期导航。
+                ColumnLayout {
+                    id: headerControlColumn
+
+                    anchors.top: parent.top
+                    // 居中优先；窗口窄到会压住标题时向右让位，不重叠。
+                    x: Math.max((parent.width - width) / 2,
+                                headerTitleColumn.width + Theme.space16)
                     spacing: Theme.space8
 
-                    Rectangle {
-                        id: previousPeriodButton
-                        objectName: "statisticsPreviousPeriodButton"
-
-                        Layout.preferredWidth: 36
-                        Layout.preferredHeight: 36
-                        radius: Theme.radiusMd
-                        color: previousPeriodMouseArea.containsMouse ? Theme.accentSoft : Theme.surfaceRaised
-                        border.width: 1
-                        border.color: Theme.border
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: "←"
-                            font.pixelSize: Theme.fontXl
-                            color: Theme.ink
-                        }
-
-                        MouseArea {
-                            id: previousPeriodMouseArea
-                            objectName: "statisticsPreviousPeriodArea"
-
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            preventStealing: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.goToPreviousPeriod()
-                        }
-                    }
-
-                    Rectangle {
-                        id: timeRangeSelectorButton
+                    SegmentedSwitch {
+                        id: timeRangeSwitch
                         objectName: "statisticsTimeRangeSelector"
 
-                        Layout.preferredWidth: 140
-                        Layout.preferredHeight: 36
-                        radius: Theme.radiusMd
-                        color: timeRangeSelectorMouseArea.containsMouse ? Theme.accentSoft : Theme.surfaceRaised
-                        border.width: 1
-                        border.color: timeRangeMenu.opened ? Theme.accent : Theme.border
+                        Layout.alignment: Qt.AlignHCenter
+                        segments: ["今日", "本周", "本月"]
+                        // 两字文案用默认 96px 会把控件撑到和标题抢地盘。
+                        minSegmentWidth: 72
+                        // 选中态跟随业务状态；点已选中的段等于「回到当前期」。
+                        currentIndex: root.currentTimeRange === "week" ? 1
+                                      : (root.currentTimeRange === "month" ? 2 : 0)
+                        // qmllint disable unqualified
+                        reduceMotion: typeof appSettings !== "undefined" && appSettings
+                                      ? Boolean(appSettings.reduceMotion) : false
+                        // qmllint enable unqualified
+                        solidFallback: !Theme.glassBlurAllowed
 
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.space12
-                            anchors.rightMargin: Theme.space12
-                            spacing: Theme.space8
-
-                            Text {
-                                id: timeRangeSelectorText
-                                objectName: "statisticsTimeRangeSelectorText"
-
-                                Layout.fillWidth: true
-                                text: root.timeRangeDisplayText
-                                font.pixelSize: Theme.fontLg
-                                font.weight: Font.Medium
-                                color: Theme.ink
-                                elide: Text.ElideRight
-                            }
-
-                            Text {
-                                text: "▼"
-                                font.pixelSize: Theme.fontXs
-                                color: Theme.inkSoft
-                            }
-                        }
-
-                        MouseArea {
-                            id: timeRangeSelectorMouseArea
-                            objectName: "statisticsTimeRangeSelectorArea"
-
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            preventStealing: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: timeRangeMenu.open()
-                        }
-
-                        Menu {
-                            id: timeRangeMenu
-                            objectName: "statisticsTimeRangeMenu"
-                            popupType: Popup.Item
-
-                            x: timeRangeSelectorButton.width - width
-                            y: timeRangeSelectorButton.height + 4
-                            width: 124
-
-                            background: Rectangle {
-                                implicitWidth: 124
-                                color: Theme.surfaceRaised
-                                border.width: 1
-                                border.color: Theme.accent
-                                radius: Theme.radiusLg
-                                layer.enabled: true
-                                layer.effect: MultiEffect {
-                                    autoPaddingEnabled: true
-                                    shadowEnabled: true
-                                    shadowColor: Theme.ink
-                                    shadowOpacity: 0.15
-                                    shadowBlur: 0.18
-                                    shadowHorizontalOffset: 0
-                                    shadowVerticalOffset: 4
-                                }
-                            }
-
-                            MenuItem {
-                                objectName: "statisticsTimeRangeTodayItem"
-                                height: 40
-
-                                background: Rectangle {
-                                    color: parent.hovered ? Theme.accentSoft : "transparent"
-                                    radius: Theme.radiusMd
-                                }
-
-                                contentItem: Text {
-                                    text: "📅 今日"
-                                    font.pixelSize: Theme.fontLg
-                                    color: Theme.ink
-                                    verticalAlignment: Text.AlignVCenter
-                                    leftPadding: Theme.space12
-                                    rightPadding: Theme.space12
-                                }
-
-                                onTriggered: {
-                                    if (root.currentTimeRange !== "today") {
-                                        root.currentTimeRange = "today"
-                                    } else {
-                                        root.resetSelectedPeriodToCurrent()
-                                        root.refresh()
-                                    }
-                                }
-                            }
-
-                            MenuItem {
-                                objectName: "statisticsTimeRangeWeekItem"
-                                height: 40
-
-                                background: Rectangle {
-                                    color: parent.hovered ? Theme.accentSoft : "transparent"
-                                    radius: Theme.radiusMd
-                                }
-
-                                contentItem: Text {
-                                    text: "📅 本周"
-                                    font.pixelSize: Theme.fontLg
-                                    color: Theme.ink
-                                    verticalAlignment: Text.AlignVCenter
-                                    leftPadding: Theme.space12
-                                    rightPadding: Theme.space12
-                                }
-
-                                onTriggered: {
-                                    if (root.currentTimeRange !== "week") {
-                                        root.currentTimeRange = "week"
-                                    } else {
-                                        root.resetSelectedPeriodToCurrent()
-                                        root.refresh()
-                                    }
-                                }
-                            }
-
-                            MenuItem {
-                                objectName: "statisticsTimeRangeMonthItem"
-                                height: 40
-
-                                background: Rectangle {
-                                    color: parent.hovered ? Theme.accentSoft : "transparent"
-                                    radius: Theme.radiusMd
-                                }
-
-                                contentItem: Text {
-                                    text: "📅 本月"
-                                    font.pixelSize: Theme.fontLg
-                                    color: Theme.ink
-                                    verticalAlignment: Text.AlignVCenter
-                                    leftPadding: Theme.space12
-                                    rightPadding: Theme.space12
-                                }
-
-                                onTriggered: {
-                                    if (root.currentTimeRange !== "month") {
-                                        root.currentTimeRange = "month"
-                                    } else {
-                                        root.resetSelectedPeriodToCurrent()
-                                        root.refresh()
-                                    }
-                                }
+                        onActivated: function (index) {
+                            var ranges = ["today", "week", "month"]
+                            if (root.currentTimeRange === ranges[index]) {
+                                root.resetSelectedPeriodToCurrent()
+                                root.refresh()
+                            } else {
+                                root.currentTimeRange = ranges[index]
                             }
                         }
                     }
 
-                    Rectangle {
-                        id: nextPeriodButton
-                        objectName: "statisticsNextPeriodButton"
+                    RowLayout {
+                        Layout.alignment: Qt.AlignHCenter
+                        spacing: Theme.space8
 
-                        Layout.preferredWidth: 36
-                        Layout.preferredHeight: 36
-                        radius: Theme.radiusMd
-                        color: root.canGoForward
-                               ? (nextPeriodMouseArea.containsMouse ? Theme.accentSoft : Theme.surfaceRaised)
-                               : Theme.border
-                        border.width: 1
-                        border.color: root.canGoForward ? Theme.border : Theme.inkMuted
-                        opacity: root.canGoForward ? 1.0 : 0.55
+                        Rectangle {
+                            id: previousPeriodButton
+                            objectName: "statisticsPreviousPeriodButton"
 
-                        Text {
-                            anchors.centerIn: parent
-                            text: "→"
-                            font.pixelSize: Theme.fontXl
-                            color: root.canGoForward ? Theme.ink : Theme.inkMuted
+                            Layout.preferredWidth: 32
+                            Layout.preferredHeight: 32
+                            radius: Theme.radiusMd
+                            color: previousPeriodMouseArea.containsMouse ? Theme.glassHover : Theme.glassCard
+                            border.width: 1
+                            border.color: previousPeriodMouseArea.containsMouse ? Theme.accent : Theme.border
+
+                            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutQuad } }
+                            Behavior on border.color { ColorAnimation { duration: 120; easing.type: Easing.OutQuad } }
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "‹"
+                                font.pixelSize: Theme.fontXl
+                                color: Theme.ink
+                            }
+
+                            MouseArea {
+                                id: previousPeriodMouseArea
+                                objectName: "statisticsPreviousPeriodArea"
+
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                preventStealing: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.goToPreviousPeriod()
+                            }
                         }
 
-                        MouseArea {
-                            id: nextPeriodMouseArea
-                            objectName: "statisticsNextPeriodArea"
+                        Text {
+                            id: timeRangeSelectorText
+                            objectName: "statisticsTimeRangeSelectorText"
 
-                            anchors.fill: parent
-                            enabled: root.canGoForward
-                            hoverEnabled: true
-                            preventStealing: true
-                            cursorShape: root.canGoForward ? Qt.PointingHandCursor : Qt.ForbiddenCursor
-                            onClicked: root.goToNextPeriod()
+                            // 固定宽度让两侧箭头不随「今天/2026年12月」的长短跳动。
+                            Layout.preferredWidth: 116
+                            text: root.timeRangeDisplayText
+                            font.pixelSize: Theme.fontLg
+                            font.weight: Font.Medium
+                            color: Theme.ink
+                            horizontalAlignment: Text.AlignHCenter
+                            elide: Text.ElideRight
+                        }
+
+                        Rectangle {
+                            id: nextPeriodButton
+                            objectName: "statisticsNextPeriodButton"
+
+                            Layout.preferredWidth: 32
+                            Layout.preferredHeight: 32
+                            radius: Theme.radiusMd
+                            color: root.canGoForward
+                                   ? (nextPeriodMouseArea.containsMouse ? Theme.glassHover : Theme.glassCard)
+                                   : Theme.glassCard
+                            border.width: 1
+                            border.color: root.canGoForward
+                                          ? (nextPeriodMouseArea.containsMouse ? Theme.accent : Theme.border)
+                                          : Theme.borderSubtle
+                            opacity: root.canGoForward ? 1.0 : 0.55
+
+                            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutQuad } }
+                            Behavior on border.color { ColorAnimation { duration: 120; easing.type: Easing.OutQuad } }
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "›"
+                                font.pixelSize: Theme.fontXl
+                                color: root.canGoForward ? Theme.ink : Theme.inkMuted
+                            }
+
+                            MouseArea {
+                                id: nextPeriodMouseArea
+                                objectName: "statisticsNextPeriodArea"
+
+                                anchors.fill: parent
+                                enabled: root.canGoForward
+                                hoverEnabled: true
+                                preventStealing: true
+                                cursorShape: root.canGoForward ? Qt.PointingHandCursor : Qt.ForbiddenCursor
+                                onClicked: root.goToNextPeriod()
+                            }
                         }
                     }
                 }

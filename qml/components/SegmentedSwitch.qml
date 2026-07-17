@@ -31,7 +31,8 @@ FocusScope {
     property int segmentWidth: 0
     // 文案两侧留白；不写死总宽是因为翻译后中文/英文长度差异很大。
     readonly property int labelPadding: Theme.space16
-    readonly property int minSegmentWidth: 96
+    // 默认段宽照顾专注页的四字文案；短文案（如统计页的两字段）可由调用方调小。
+    property int minSegmentWidth: 96
     // 轨道内壁到胶囊的缝隙，即胶囊「嵌在槽里」的那圈厚度。
     readonly property int trackInset: 3
     // 胶囊平移与文字变色共用这一个时长，两者必须完全同步才跟手。

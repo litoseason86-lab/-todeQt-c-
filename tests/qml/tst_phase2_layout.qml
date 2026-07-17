@@ -333,16 +333,14 @@ TestCase {
         return { year: year, month: month }
     }
 
-    function selectTimeRange(itemName) {
+    function selectTimeRange(index) {
+        // 分段控件是受控组件，点击段只发 activated；直接触发段的 clicked
+        // 走和真实点击一致的信号链，又不依赖离屏环境的鼠标坐标命中。
         statisticsView.visible = true
-        var menu = findChild(statisticsView, "statisticsTimeRangeMenu")
-        var item = findChild(statisticsView, itemName)
+        var segment = findChild(statisticsView, "segmentedSwitchSegment" + index)
 
-        verify(menu !== null)
-        verify(item !== null)
-        menu.open()
-        tryCompare(menu, "opened", true, 1000)
-        mouseClick(item, item.width / 2, item.height / 2)
+        verify(segment !== null)
+        segment.clicked()
         wait(80)
     }
 
@@ -550,7 +548,7 @@ TestCase {
     }
 
     function test_statisticsWeekArrowNavigationUsesSelectedWeek() {
-        selectTimeRange("statisticsTimeRangeWeekItem")
+        selectTimeRange(1)
 
         var previousButton = findChild(statisticsView, "statisticsPreviousPeriodButton")
         var previousArea = findChild(statisticsView, "statisticsPreviousPeriodArea")
@@ -625,7 +623,7 @@ TestCase {
 
     function test_statisticsComparisonSwitchesWeekAndMonthData() {
         statisticsService.resetTracking()
-        selectTimeRange("statisticsTimeRangeWeekItem")
+        selectTimeRange(1)
 
         var firstCard = findChild(statisticsView, "statisticsPrimaryStatCard")
         var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
@@ -649,7 +647,7 @@ TestCase {
         verify(Qt.colorEqual(weekComparisonText.color, Theme.danger))
 
         statisticsService.resetTracking()
-        selectTimeRange("statisticsTimeRangeMonthItem")
+        selectTimeRange(2)
 
         tryCompare(statisticsService, "monthComparisonCalls", 1, 1000)
         compare(statisticsService.monthComparisonCalls, 1)
@@ -668,7 +666,7 @@ TestCase {
     }
 
     function test_statisticsMonthArrowNavigationUsesSelectedMonth() {
-        selectTimeRange("statisticsTimeRangeMonthItem")
+        selectTimeRange(2)
 
         var previousButton = findChild(statisticsView, "statisticsPreviousPeriodButton")
         var previousArea = findChild(statisticsView, "statisticsPreviousPeriodArea")
@@ -742,40 +740,41 @@ TestCase {
         compare(statisticsService.lastMonthWeeklySummaryMonth, todaySnapshot.getMonth() + 1)
     }
 
-    function test_statisticsMenuItemResetsCurrentRangeToCurrentPeriod() {
+    function test_statisticsActiveSegmentClickResetsCurrentRangeToCurrentPeriod() {
+        // 点击已选中的段等价于旧菜单的「回到当前期」语义。
         statisticsView.visible = true
         wait(50)
 
         var selectorText = findChild(statisticsView, "statisticsTimeRangeSelectorText")
-        var todayItem = findChild(statisticsView, "statisticsTimeRangeTodayItem")
-        var weekItem = findChild(statisticsView, "statisticsTimeRangeWeekItem")
-        var monthItem = findChild(statisticsView, "statisticsTimeRangeMonthItem")
+        var todaySegment = findChild(statisticsView, "segmentedSwitchSegment0")
+        var weekSegment = findChild(statisticsView, "segmentedSwitchSegment1")
+        var monthSegment = findChild(statisticsView, "segmentedSwitchSegment2")
 
         verify(selectorText !== null)
-        verify(todayItem !== null)
-        verify(weekItem !== null)
-        verify(monthItem !== null)
+        verify(todaySegment !== null)
+        verify(weekSegment !== null)
+        verify(monthSegment !== null)
 
         statisticsView.goToPreviousPeriod()
         compare(selectorText.text, dayDisplay(addDays(todaySnapshot, -1)))
         statisticsService.resetTracking()
-        todayItem.triggered()
+        todaySegment.clicked()
         tryCompare(selectorText, "text", "今天", 1000)
         compare(statisticsService.lastDayStatsDate, isoDate(todaySnapshot))
 
-        selectTimeRange("statisticsTimeRangeWeekItem")
+        selectTimeRange(1)
         statisticsView.goToPreviousPeriod()
         compare(selectorText.text, weekRangeDisplay(addDays(mondayOf(todaySnapshot), -7)))
         statisticsService.resetTracking()
-        weekItem.triggered()
+        weekSegment.clicked()
         tryCompare(selectorText, "text", "本周", 1000)
         compare(statisticsService.lastWeekStatsStartDate, isoDate(mondayOf(todaySnapshot)))
 
-        selectTimeRange("statisticsTimeRangeMonthItem")
+        selectTimeRange(2)
         statisticsView.goToPreviousPeriod()
         verify(selectorText.text !== "本月")
         statisticsService.resetTracking()
-        monthItem.triggered()
+        monthSegment.clicked()
         tryCompare(selectorText, "text", "本月", 1000)
         compare(statisticsService.lastMonthStatsYear, todaySnapshot.getFullYear())
         compare(statisticsService.lastMonthStatsMonth, todaySnapshot.getMonth() + 1)
@@ -810,7 +809,7 @@ TestCase {
         compare(selectorText.text, dayDisplay(historicalDate))
         compare(statisticsService.lastDayStatsDate, isoDate(historicalDate))
 
-        selectTimeRange("statisticsTimeRangeWeekItem")
+        selectTimeRange(1)
         providedDate = simulatedToday
         statisticsView.currentDateSnapshot = simulatedToday
         statisticsView.selectedWeekStart = mondayOf(simulatedToday)
@@ -828,7 +827,7 @@ TestCase {
         compare(selectorText.text, weekRangeDisplay(historicalWeekStart))
         compare(statisticsService.lastWeekStatsStartDate, isoDate(historicalWeekStart))
 
-        selectTimeRange("statisticsTimeRangeMonthItem")
+        selectTimeRange(2)
         providedDate = new Date(2026, 5, 12)
         statisticsView.currentDateSnapshot = providedDate
         statisticsView.selectedYear = 2026
@@ -858,23 +857,17 @@ TestCase {
         var trendChart = findChild(statisticsView, "statisticsTrendChart")
         var pieChart = findChild(statisticsView, "statisticsCategoryChart")
         var selector = findChild(statisticsView, "statisticsTimeRangeSelector")
-        var selectorArea = findChild(statisticsView, "statisticsTimeRangeSelectorArea")
-        var menu = findChild(statisticsView, "statisticsTimeRangeMenu")
-        var weekItem = findChild(statisticsView, "statisticsTimeRangeWeekItem")
-        var monthItem = findChild(statisticsView, "statisticsTimeRangeMonthItem")
+        var weekSegment = findChild(statisticsView, "segmentedSwitchSegment1")
+        var monthSegment = findChild(statisticsView, "segmentedSwitchSegment2")
 
         verify(selector !== null)
-        verify(selectorArea !== null)
-        verify(menu !== null)
-        verify(weekItem !== null)
-        verify(monthItem !== null)
+        verify(weekSegment !== null)
+        verify(monthSegment !== null)
 
         statisticsService.resetTracking()
         statisticsView.visible = true
         wait(50)
-        menu.open()
-        tryCompare(menu, "opened", true, 1000)
-        mouseClick(weekItem, weekItem.width / 2, weekItem.height / 2)
+        weekSegment.clicked()
         wait(80)
 
         compare(statisticsView.currentTimeRange, "week")
@@ -891,9 +884,7 @@ TestCase {
         compare(statisticsService.focusSessionCountCalls, 1)
 
         statisticsService.resetTracking()
-        menu.open()
-        tryCompare(menu, "opened", true, 1000)
-        mouseClick(monthItem, monthItem.width / 2, monthItem.height / 2)
+        monthSegment.clicked()
         wait(80)
 
         compare(statisticsView.currentTimeRange, "month")
