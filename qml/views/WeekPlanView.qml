@@ -452,9 +452,9 @@ Item {
 
                                 Text {
                                     Layout.alignment: Qt.AlignHCenter
-                                    // 等宽字体让日期数字像计时器/账本，强化“按日推进”的节奏。
+                                    // 日期数字走全应用统一的计时数字字体，与侧栏计时同一张脸。
                                     text: Qt.formatDate(root.dayDate(dayRow.index), "M/d")
-                                    font.family: "Menlo"
+                                    font.family: Theme.fontFamilyClock
                                     font.pixelSize: Theme.fontXs
                                     color: dayRow.isToday ? Theme.accentFillInk : Theme.inkSoft
                                 }

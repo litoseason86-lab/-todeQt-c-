@@ -608,7 +608,8 @@ Item {
                                             text: root.formatDuration(dayDuration)
                                             font.pixelSize: Theme.fontXs
                                             font.weight: Font.Medium
-                                            color: Theme.accent
+                                            // accent 作前景文字不达 AA，小字号必须用可读版 accentInk。
+                                            color: Theme.accentInk
                                             elide: Text.ElideRight
                                         }
                                     }
