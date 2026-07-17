@@ -236,10 +236,11 @@ TestCase {
         wait(20)
     }
 
-    function test_pageBackdropIsGlass() {
+    function test_pageBackdropIsTransparent() {
         var backdrop = findChild(view, "focusPageBackdrop")
         verify(backdrop, "整页底板应有 objectName 供守护")
-        verify(Qt.colorEqual(backdrop.color, Theme.glassCard))
+        // 壁纸直出：整页不允许再铺玻璃罩，材质必须全透明。
+        verify(Qt.colorEqual(backdrop.color, "transparent"))
     }
 
     function test_modeSwitchReflectsAndDrivesMode() {
