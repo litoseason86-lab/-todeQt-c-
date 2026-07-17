@@ -22,9 +22,9 @@ Rectangle {
     height: 62
     radius: Theme.radiusLg
     // 悬停反馈靠“边框变色”表达：底色 idle/hover 都用玻璃卡片材质，
-    // 悬停时由 border 从 Theme.border 变为 Theme.accent 来提示，所以底色不随悬停变化不是笔误。
+    // 悬停时由 border 从玻璃描边变为 Theme.accent 来提示，所以底色不随悬停变化不是笔误。
     color: Theme.glassCard
-    border.color: hitArea.containsMouse ? Theme.accent : Theme.border
+    border.color: hitArea.containsMouse ? Theme.accent : Theme.glassBorder
     border.width: 1
     // 悬停事件分发期间不重建效果层，避免 Qt Quick 的 hover 命中树留下失效项指针。
     layer.enabled: true
@@ -38,9 +38,44 @@ Rectangle {
         shadowVerticalOffset: 2
     }
 
-    function dayText() {
-        var days = Number(root.daysRemaining || 0);
-        return days >= 0 ? Math.abs(days) + "天" : "已过期 " + Math.abs(days) + "天";
+    // 上移/下移/删除共用的安静描边样式：默认玻璃底，悬停才转强调色，
+    // 避免每行三颗按钮把列表变成按钮墙。
+    component RowActionButton: Button {
+        id: actionButton
+
+        implicitWidth: 34
+        implicitHeight: 34
+
+        background: Rectangle {
+            radius: Theme.radiusMd
+            color: actionButton.pressed || actionButton.hovered ? Theme.glassHover : Theme.glassCard
+            border.color: actionButton.enabled && (actionButton.hovered || actionButton.pressed)
+                          ? Theme.accent : Theme.border
+            border.width: 1
+            opacity: actionButton.enabled ? 1.0 : 0.45
+
+            Behavior on color {
+                ColorAnimation {
+                    duration: 120
+                    easing.type: Easing.OutQuad
+                }
+            }
+
+            Behavior on border.color {
+                ColorAnimation {
+                    duration: 120
+                    easing.type: Easing.OutQuad
+                }
+            }
+        }
+
+        contentItem: Text {
+            text: actionButton.text
+            color: actionButton.enabled ? Theme.inkSoft : Theme.inkMuted
+            font.pixelSize: Theme.fontMd
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
     }
 
     MouseArea {
@@ -55,15 +90,9 @@ Rectangle {
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: Theme.space12
+        anchors.leftMargin: Theme.space16
         anchors.rightMargin: Theme.space12
         spacing: Theme.space12
-
-        Text {
-            text: "≡"
-            font.pixelSize: Theme.fontXl
-            color: Theme.inkMuted
-        }
 
         ColumnLayout {
             Layout.fillWidth: true
@@ -88,32 +117,46 @@ Rectangle {
         }
 
         Text {
-            text: root.dayText()
-            font.pixelSize: Theme.fontLg
-            font.weight: Font.Bold
-            color: Theme.accent
+            visible: root.daysRemaining < 0
+            Layout.alignment: Qt.AlignBaseline
+            text: "已过期"
+            font.pixelSize: Theme.fontXs
+            color: Theme.inkSoft
         }
 
-        Button {
+        Text {
+            Layout.alignment: Qt.AlignBaseline
+            text: Math.abs(Number(root.daysRemaining || 0))
+            font.pixelSize: Theme.fontXxl
+            font.family: Theme.fontFamilyData
+            font.weight: Font.Bold
+            color: Theme.accentInk
+        }
+
+        Text {
+            Layout.alignment: Qt.AlignBaseline
+            text: "天"
+            font.pixelSize: Theme.fontSm
+            color: Theme.inkSoft
+        }
+
+        RowActionButton {
             text: "↑"
             enabled: root.canMoveUp
-            implicitWidth: 34
-            implicitHeight: 34
+            Accessible.name: "上移"
             onClicked: root.moveUpRequested()
         }
 
-        Button {
+        RowActionButton {
             text: "↓"
             enabled: root.canMoveDown
-            implicitWidth: 34
-            implicitHeight: 34
+            Accessible.name: "下移"
             onClicked: root.moveDownRequested()
         }
 
-        Button {
+        RowActionButton {
             text: "删除"
             implicitWidth: 52
-            implicitHeight: 34
             onClicked: root.deleteRequested(root.goalId)
         }
     }
