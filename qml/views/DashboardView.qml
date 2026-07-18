@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Effects
 import QtQuick.Layouts
 import "../components"
 import ".."
@@ -659,10 +660,10 @@ Item {
                 id: dashboardTimerPanel
                 objectName: "dashboardTimerPanel"
 
-                // 收起时面板贴右缘滑出，避免内容随壳宽挤扁。
+                // 收起时面板贴左缘滑出（壳从右往左收），避免内容随壳宽挤扁。
                 width: 300
                 height: parent.height
-                anchors.right: parent.right
+                anchors.left: parent.left
                 opacity: root.timerPanelVisible ? 1 : 0
                 timerRef: typeof focusTimer !== "undefined" ? focusTimer : null
                 settingsRef: root.settingsRef
@@ -686,67 +687,134 @@ Item {
                 onHideRequested: root.setTimerPanelVisible(false)
             }
         }
-    }
 
-    // 收起后的恢复入口：贴右窗缘半胶囊（右圆角落在窗外），镜像侧栏把手。
-    Item {
-        id: timerRevealButton
-        objectName: "dashboardTimerRevealButton"
+        // 收起态预留通道：让内容右侧总留白 = 行距16 + 通道16 + 页边距24 = 56，
+        // 与 MainWindow 左侧「把手通道32 + 页边距24」对齐，左右留白一致。
+        Item {
+            objectName: "dashboardTimerRevealGutter"
 
-        anchors.right: parent.right
-        anchors.rightMargin: -16
-        anchors.verticalCenter: parent.verticalCenter
-        width: 32
-        height: 64
-        z: 10
-        visible: opacity > 0.01
-        opacity: root.timerPanelVisible ? 0 : 1
-        enabled: !root.timerPanelVisible
+            Layout.preferredWidth: width
+            Layout.minimumWidth: width
+            Layout.maximumWidth: width
+            Layout.fillHeight: true
+            width: root.timerPanelVisible ? 0 : 16
+            visible: width > 0.5
 
-        Behavior on opacity {
-            enabled: !root.timerMotionReduced
-            NumberAnimation {
-                duration: 200
-                easing.type: Easing.OutCubic
-            }
-        }
-
-        Rectangle {
-            anchors.fill: parent
-            radius: height / 2
-            color: timerRevealMouse.pressed
-                   ? Theme.glassAccent
-                   : (timerRevealMouse.containsMouse ? Theme.glassHover : Theme.glassCard)
-            border.color: Theme.glassBorder
-            border.width: 1
-
-            Behavior on color {
+            Behavior on width {
                 enabled: !root.timerMotionReduced
-                ColorAnimation {
-                    duration: 140
+                NumberAnimation {
+                    duration: 320
                     easing.type: Easing.OutCubic
                 }
             }
         }
+    }
 
-        Text {
-            anchors.verticalCenter: parent.verticalCenter
-            anchors.left: parent.left
-            anchors.leftMargin: 7
-            text: "«"
-            textFormat: Text.PlainText
-            font.pixelSize: Theme.fontXl
-            font.weight: Font.Medium
-            color: timerRevealMouse.containsMouse ? Theme.accentInk : Theme.inkSoft
+    // 面板收起后：右缘 32px 通道整条是感应区，箭头把手默认隐身，
+    // 指针进入通道才淡入滑出（自动隐藏，界面静置时零噪音）；镜像侧栏把手。
+    Item {
+        id: timerRevealButton
+        objectName: "dashboardTimerRevealButton"
+
+        enabled: !root.timerPanelVisible
+        width: 32
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        z: 40
+
+        // 整条通道感应：把手很小，若只在把手上感应会很难“找到”它。
+        HoverHandler {
+            id: timerRevealAreaHover
+            enabled: timerRevealButton.enabled
         }
 
-        MouseArea {
-            id: timerRevealMouse
+        Item {
+            id: timerRevealHandle
 
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: root.setTimerPanelVisible(true)
+            readonly property bool shown: timerRevealButton.enabled
+                                          && timerRevealAreaHover.hovered
+
+            width: 34
+            height: 56
+            // 隐身态缩在窗外，显形时滑出；半胶囊右圆角始终藏在窗外。
+            x: shown ? parent.width - 22 : parent.width - 8
+            anchors.verticalCenter: parent.verticalCenter
+            opacity: shown ? 1 : 0
+
+            Behavior on opacity {
+                enabled: !root.timerMotionReduced
+                NumberAnimation {
+                    duration: 200
+                    easing.type: Easing.OutCubic
+                }
+            }
+            Behavior on x {
+                enabled: !root.timerMotionReduced
+                NumberAnimation {
+                    duration: 200
+                    easing.type: Easing.OutCubic
+                }
+            }
+
+            // 柔和落影：贴边控件需要轻微离面感，但不抢内容。
+            layer.enabled: opacity > 0.01
+            layer.effect: MultiEffect {
+                autoPaddingEnabled: true
+                shadowEnabled: true
+                shadowColor: Theme.shadow
+                shadowOpacity: 0.14
+                shadowBlur: 0.35
+                shadowHorizontalOffset: 0
+                shadowVerticalOffset: 3
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                radius: height / 2
+                color: timerRevealMouse.pressed
+                       ? Theme.glassAccent
+                       : (timerRevealMouse.containsMouse ? Theme.glassHover : Theme.glassCard)
+                border.color: Theme.glassBorder
+                border.width: 1
+
+                Behavior on color {
+                    enabled: !root.timerMotionReduced
+                    ColorAnimation {
+                        duration: 140
+                        easing.type: Easing.OutCubic
+                    }
+                }
+            }
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.left: parent.left
+                anchors.leftMargin: 7
+                text: "«"
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontXl
+                font.weight: Font.Medium
+                color: timerRevealMouse.containsMouse ? Theme.accentInk : Theme.inkSoft
+
+                Behavior on color {
+                    enabled: !root.timerMotionReduced
+                    ColorAnimation {
+                        duration: 140
+                        easing.type: Easing.OutCubic
+                    }
+                }
+            }
+
+            MouseArea {
+                id: timerRevealMouse
+
+                anchors.fill: parent
+                enabled: timerRevealButton.enabled
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.setTimerPanelVisible(true)
+            }
         }
 
         Accessible.role: Accessible.Button

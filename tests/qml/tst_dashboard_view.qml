@@ -542,6 +542,11 @@ TestCase {
         tryCompare(shell, "width", 0)
         tryCompare(reveal, "enabled", true)
 
+        // 收起后右侧留出把手通道：行距16+通道16+页边距24 与左侧 32+24 对齐。
+        var gutter = findChild(view, "dashboardTimerRevealGutter")
+        verify(gutter)
+        tryCompare(gutter, "width", 16)
+
         // 恢复把手的无障碍动作与点击共用同一入口：重新展开。
         view.setTimerPanelVisible(true)
         compare(appSettings.dashboardTimerVisible, true)
