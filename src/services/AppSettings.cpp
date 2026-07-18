@@ -14,6 +14,7 @@ const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
 const auto kNicknameKey = QStringLiteral("profile/nickname");
 const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
+const auto kDashboardTimerVisibleKey = QStringLiteral("appearance/dashboardTimerVisible");
 const auto kReduceTransparencyKey = QStringLiteral("appearance/reduceTransparency");
 const auto kRaiseOnPhaseCompleteKey = QStringLiteral("focus/raiseOnPhaseComplete");
 const auto kAutoStartBreakKey = QStringLiteral("focus/autoStartBreak");
@@ -258,6 +259,22 @@ void AppSettings::setSidebarVisible(bool visible)
 
     if (writeValue(kSidebarVisibleKey, visible)) {
         emit sidebarVisibleChanged();
+    }
+}
+
+bool AppSettings::dashboardTimerVisible() const
+{
+    return m_settings->value(kDashboardTimerVisibleKey, true).toBool();
+}
+
+void AppSettings::setDashboardTimerVisible(bool visible)
+{
+    if (dashboardTimerVisible() == visible) {
+        return;
+    }
+
+    if (writeValue(kDashboardTimerVisibleKey, visible)) {
+        emit dashboardTimerVisibleChanged();
     }
 }
 

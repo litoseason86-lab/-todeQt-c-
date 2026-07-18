@@ -38,6 +38,19 @@ Item {
     // 生产默认读系统时间；测试注入固定时间，避免逻辑日用例依赖真实日期。
     property var nowProvider: null
 
+    // 专注计时面板展开态：持久化在设置里跨启动记忆，与侧栏同一套收起习惯。
+    readonly property bool timerPanelVisible: root.settingsRef
+            && root.settingsRef.dashboardTimerVisible !== undefined
+            ? Boolean(root.settingsRef.dashboardTimerVisible) : true
+    readonly property bool timerMotionReduced: root.settingsRef
+            ? Boolean(root.settingsRef.reduceMotion) : false
+
+    function setTimerPanelVisible(visible) {
+        if (root.settingsRef) {
+            root.settingsRef.dashboardTimerVisible = visible
+        }
+    }
+
     readonly property var filteredTasks: {
         if (root.filterMode === "done") {
             return root.tasks.filter(function(task) { return Boolean(task.completed) })
@@ -621,24 +634,124 @@ Item {
             }
         }
 
-        DashboardTimerPanel {
-            id: dashboardTimerPanel
-            objectName: "dashboardTimerPanel"
+        // 面板壳：裁剪 + 宽度弹簧收起，动效语言与 MainWindow 的 sidebarShell 一致。
+        Item {
+            id: timerPanelShell
+            objectName: "dashboardTimerShell"
 
-            Layout.preferredWidth: 300
+            Layout.preferredWidth: width
+            Layout.minimumWidth: width
+            Layout.maximumWidth: width
             Layout.fillHeight: true
-            timerRef: typeof focusTimer !== "undefined" ? focusTimer : null
-            settingsRef: root.settingsRef
-            wallpaperRef: root.wallpaperRef
-            sessionCount: Number(root.todayStats.sessionCount || 0)
-            todayFocusSeconds: Number(root.todayStats.totalDuration || 0)
-            goalMinutes: root.dailyFocusGoalMinutes
+            width: root.timerPanelVisible ? 300 : 0
+            clip: true
+            visible: width > 0.5
 
-            onOpenFocusRequested: root.focusPageRequested()
-            onStartRequested: root.startFirstPendingTask()
-            // 仪表盘不承担目标设置：引导链接直接送用户去今日任务页。
-            onGoalSetupRequested: root.todayPageRequested()
+            Behavior on width {
+                enabled: !root.timerMotionReduced
+                NumberAnimation {
+                    duration: 320
+                    easing.type: Easing.OutCubic
+                }
+            }
+
+            DashboardTimerPanel {
+                id: dashboardTimerPanel
+                objectName: "dashboardTimerPanel"
+
+                // 收起时面板贴右缘滑出，避免内容随壳宽挤扁。
+                width: 300
+                height: parent.height
+                anchors.right: parent.right
+                opacity: root.timerPanelVisible ? 1 : 0
+                timerRef: typeof focusTimer !== "undefined" ? focusTimer : null
+                settingsRef: root.settingsRef
+                wallpaperRef: root.wallpaperRef
+                sessionCount: Number(root.todayStats.sessionCount || 0)
+                todayFocusSeconds: Number(root.todayStats.totalDuration || 0)
+                goalMinutes: root.dailyFocusGoalMinutes
+
+                Behavior on opacity {
+                    enabled: !root.timerMotionReduced
+                    NumberAnimation {
+                        duration: 220
+                        easing.type: Easing.OutCubic
+                    }
+                }
+
+                onOpenFocusRequested: root.focusPageRequested()
+                onStartRequested: root.startFirstPendingTask()
+                // 仪表盘不承担目标设置：引导链接直接送用户去今日任务页。
+                onGoalSetupRequested: root.todayPageRequested()
+                onHideRequested: root.setTimerPanelVisible(false)
+            }
         }
+    }
+
+    // 收起后的恢复入口：贴右窗缘半胶囊（右圆角落在窗外），镜像侧栏把手。
+    Item {
+        id: timerRevealButton
+        objectName: "dashboardTimerRevealButton"
+
+        anchors.right: parent.right
+        anchors.rightMargin: -16
+        anchors.verticalCenter: parent.verticalCenter
+        width: 32
+        height: 64
+        z: 10
+        visible: opacity > 0.01
+        opacity: root.timerPanelVisible ? 0 : 1
+        enabled: !root.timerPanelVisible
+
+        Behavior on opacity {
+            enabled: !root.timerMotionReduced
+            NumberAnimation {
+                duration: 200
+                easing.type: Easing.OutCubic
+            }
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            radius: height / 2
+            color: timerRevealMouse.pressed
+                   ? Theme.glassAccent
+                   : (timerRevealMouse.containsMouse ? Theme.glassHover : Theme.glassCard)
+            border.color: Theme.glassBorder
+            border.width: 1
+
+            Behavior on color {
+                enabled: !root.timerMotionReduced
+                ColorAnimation {
+                    duration: 140
+                    easing.type: Easing.OutCubic
+                }
+            }
+        }
+
+        Text {
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: parent.left
+            anchors.leftMargin: 7
+            text: "«"
+            textFormat: Text.PlainText
+            font.pixelSize: Theme.fontXl
+            font.weight: Font.Medium
+            color: timerRevealMouse.containsMouse ? Theme.accentInk : Theme.inkSoft
+        }
+
+        MouseArea {
+            id: timerRevealMouse
+
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.setTimerPanelVisible(true)
+        }
+
+        Accessible.role: Accessible.Button
+        Accessible.name: "显示专注计时"
+        Accessible.onPressAction: root.setTimerPanelVisible(true)
     }
 
     EditTaskDialog {
