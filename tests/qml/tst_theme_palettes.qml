@@ -2,20 +2,20 @@ import QtQuick
 import QtTest
 import "../../qml"
 
-// 壁纸主题元数据：六款阵容、壁纸 URL、旧 id 迁移。UI 色值不随主题（见 tst_theme_tokens）。
+// 壁纸主题元数据：七款阵容、壁纸 URL、旧 id 迁移。UI 色值不随主题（见 tst_theme_tokens）。
 TestCase {
     name: "ThemePalettes"
 
     function test_themesLineup() {
-        var expected = ["warm", "pink", "jiangnan", "starry", "rainy", "moon"]
-        compare(Theme.themes.length, 6)
+        var expected = ["warm", "pink", "jiangnan", "sword", "starry", "rainy", "moon"]
+        compare(Theme.themes.length, 7)
         for (var i = 0; i < expected.length; i++) {
             compare(Theme.themes[i].id, expected[i])
         }
     }
 
     function test_modes() {
-        var modes = { warm: "light", pink: "light", jiangnan: "light",
+        var modes = { warm: "light", pink: "light", jiangnan: "light", sword: "light",
                       starry: "dark", rainy: "dark", moon: "dark" }
         for (var i = 0; i < Theme.themes.length; i++) {
             var t = Theme.themes[i]

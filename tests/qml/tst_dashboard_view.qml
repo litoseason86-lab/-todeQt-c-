@@ -121,6 +121,7 @@ TestCase {
 
         property int dayStartHour: 4
         property bool reduceMotion: true
+        property bool dashboardTimerVisible: true
         property int workMinutes: 25
         property int breakMinutes: 5
         property int lastMode: 0
@@ -516,6 +517,42 @@ TestCase {
     }
 
     // —— DashboardTimerPanel 状态机 ——
+
+    function test_timer_panel_hide_and_reveal() {
+        appSettings.dashboardTimerVisible = true
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+
+        var shell = findChild(view, "dashboardTimerShell")
+        var reveal = findChild(view, "dashboardTimerRevealButton")
+        var panel = findChild(view, "dashboardTimerPanel")
+        var hideLink = findChild(view, "dashboardTimerHideLink")
+        verify(shell)
+        verify(reveal)
+        verify(panel)
+        verify(hideLink)
+
+        // 展开态：壳全宽，恢复把手不可交互。
+        compare(shell.width, 300)
+        compare(reveal.enabled, false)
+
+        // 「隐藏」链接向上发信号：写回设置并收起（mock 关了动效，宽度立即归零）。
+        panel.hideRequested()
+        compare(appSettings.dashboardTimerVisible, false)
+        tryCompare(shell, "width", 0)
+        tryCompare(reveal, "enabled", true)
+
+        // 收起后右侧留出把手通道：行距16+通道16+页边距24 与左侧 32+24 对齐。
+        var gutter = findChild(view, "dashboardTimerRevealGutter")
+        verify(gutter)
+        tryCompare(gutter, "width", 16)
+
+        // 恢复把手的无障碍动作与点击共用同一入口：重新展开。
+        view.setTimerPanelVisible(true)
+        compare(appSettings.dashboardTimerVisible, true)
+        tryCompare(shell, "width", 300)
+        appSettings.dashboardTimerVisible = true
+    }
 
     function test_timer_panel_idle_preview() {
         var panel = createTemporaryObject(timerPanelComponent, testCase)

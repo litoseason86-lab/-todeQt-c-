@@ -137,7 +137,7 @@ Popup {
         id: panel
 
         objectName: "settingsDialogPanel"
-        color: Theme.glassBlurAllowed ? Theme.glassDialog : Theme.glassSolidCard
+        color: Theme.glassBlurAllowed ? Theme.glassDialogSoft : Theme.glassSolidCard
         border.color: Theme.glassBorder
         border.width: 1
         radius: Theme.radiusLg
@@ -171,9 +171,9 @@ Popup {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: Theme.surface
-            border.color: Theme.borderSubtle
-            border.width: 1
+            // 内容直接躺在对话框面板上（macOS 系统设置层次）；
+            // Rectangle 保留为布局宿主，不再自带底色和描边。
+            color: "transparent"
             radius: Theme.radiusLg
 
             ColumnLayout {
@@ -213,6 +213,11 @@ Popup {
                             if (item) {
                                 item.appSettingsRef = Qt.binding(function() { return root.appSettingsRef })
                                 item.compact = Qt.binding(function() { return root.compact })
+                                // 关于页这类"内容少于一屏"的页面需要知道视口高度做垂直居中；
+                                // 其余页面没有该属性，跳过即可。
+                                if (item.hasOwnProperty("viewportHeight")) {
+                                    item.viewportHeight = Qt.binding(function() { return pageScroll.height })
+                                }
                             }
                         }
                     }

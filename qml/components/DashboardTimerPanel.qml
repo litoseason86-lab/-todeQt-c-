@@ -21,6 +21,8 @@ Item {
     signal startRequested()
     // 仪表盘目标卡只读；未设置时用户点引导链接，向上请求跳到今日任务页。
     signal goalSetupRequested()
+    // 用户点「隐藏」：面板自己不改布局，向上请求由 DashboardView 收起并持久化。
+    signal hideRequested()
 
     readonly property bool frostActive: glassBackdrop.effectActive
 
@@ -161,6 +163,28 @@ Item {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: root.openFocusRequested()
                 }
+            }
+
+            Text {
+                objectName: "dashboardTimerHideLink"
+
+                text: "隐藏 »"
+                font.pixelSize: Theme.fontSm
+                color: hideLinkArea.containsMouse ? Theme.accentInk : Theme.inkSoft
+
+                MouseArea {
+                    id: hideLinkArea
+
+                    anchors.fill: parent
+                    anchors.margins: -Theme.space4
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.hideRequested()
+                }
+
+                Accessible.role: Accessible.Button
+                Accessible.name: "隐藏专注计时"
+                Accessible.onPressAction: root.hideRequested()
             }
         }
 

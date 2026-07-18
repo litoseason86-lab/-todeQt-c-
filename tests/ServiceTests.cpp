@@ -423,6 +423,7 @@ private slots:
     void appSettingsNicknameTrimsAndRoundTrips();
     void appSettingsDailyFocusGoalMinutesByDate();
     void appSettingsSidebarVisibleRoundTrip();
+    void appSettingsDashboardTimerVisibleRoundTrip();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void appSettingsDayStartHourNormalizeAndPersist();
     void appSettingsDayStartHourRejectsCorruptIniValue();
@@ -707,6 +708,30 @@ void ServiceTests::appSettingsSidebarVisibleRoundTrip()
 
     AppSettings reloaded(path);
     QCOMPARE(reloaded.sidebarVisible(), false);
+}
+
+void ServiceTests::appSettingsDashboardTimerVisibleRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        // 默认展开，与首次打开的可发现性一致。
+        QCOMPARE(settings.dashboardTimerVisible(), true);
+
+        QSignalSpy spy(&settings, &AppSettings::dashboardTimerVisibleChanged);
+        settings.setDashboardTimerVisible(false);
+        QCOMPARE(settings.dashboardTimerVisible(), false);
+        QCOMPARE(spy.count(), 1);
+
+        settings.setDashboardTimerVisible(false);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.dashboardTimerVisible(), false);
 }
 
 void ServiceTests::appSettingsDailyFocusGoalMinutesByDate()

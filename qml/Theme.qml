@@ -127,6 +127,11 @@ QtObject {
     readonly property color glassDialog: darkMode
         ? Qt.rgba(42 / 255, 36 / 255, 28 / 255, 0.985)
         : Qt.rgba(1, 254 / 255, 249 / 255, 0.985)
+    // 设置对话框专用微透面板：比 glassDialog 再透一档，隐约透出壁纸。
+    // 业务小弹窗（新建任务等）仍用 glassDialog 近实底——它们叠在杂内容上，再透会发花。
+    readonly property color glassDialogSoft: darkMode
+        ? Qt.rgba(42 / 255, 36 / 255, 28 / 255, 0.94)
+        : Qt.rgba(1, 254 / 255, 249 / 255, 0.94)
     readonly property color glassBorder: darkMode
         ? Qt.rgba(1, 1, 1, 0.18)
         : Qt.rgba(1, 1, 1, 0.65)
@@ -143,16 +148,6 @@ QtObject {
     readonly property color glassThumb: darkMode
         ? Qt.rgba(78 / 255, 68 / 255, 52 / 255, 0.95)
         : Qt.rgba(1, 253 / 255, 248 / 255, 0.95)
-
-    function glassCardForMode(mode) {
-        return mode === "dark"
-                ? Qt.rgba(38 / 255, 33 / 255, 25 / 255, 0.45)
-                : Qt.rgba(1, 1, 250 / 255, 0.42)
-    }
-
-    function glassBorderForMode(mode) {
-        return mode === "dark" ? Qt.rgba(1, 1, 1, 0.18) : Qt.rgba(1, 1, 1, 0.65)
-    }
 
     // 无模糊降级：更高不透明度，保证浅/深底上 ink 字色仍可读。
     readonly property color glassSolidCard: darkMode
@@ -214,6 +209,11 @@ QtObject {
             id: "jiangnan", name: "烟雨江南", mode: "light",
             wallpaper: Qt.resolvedUrl("../resources/wallpapers/jiangnan.png"),
             base: "#dfe8e2"
+        },
+        {
+            id: "sword", name: "雪岭剑影", mode: "light",
+            wallpaper: Qt.resolvedUrl("../resources/wallpapers/sword.png"),
+            base: "#ccd4e6"
         },
         {
             id: "starry", name: "星空", mode: "dark",

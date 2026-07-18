@@ -512,9 +512,10 @@ Item {
         objectName: "focusPageBackdrop"
 
         anchors.fill: parent
-        // 整页一块玻璃底板透出壁纸；不做“中央列包卡”的结构手术：
-        // 专注页状态机复杂，玻璃化只换材质、不动布局。
-        color: Theme.glassCard
+        // 壁纸原图直出，不再铺整页玻璃：分段控件/表盘/按钮各自带玻璃衬底，
+        // 整页罩属重复着色，在高调壁纸（如雪岭剑影）上会把画面洗糊。
+        // Rectangle 保留为整页布局宿主（与 mainContentBackground 同惯例）。
+        color: "transparent"
 
         // 模式切换器钉死在页面顶部，不参与正文的垂直居中。
         // 两种模式下方的内容高度差很大（自由是一行大字时钟，番茄是圆环加时长面板），
