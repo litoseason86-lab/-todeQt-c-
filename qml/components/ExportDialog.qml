@@ -124,6 +124,11 @@ Popup {
     }
 
     function parsedDate(text) {
+        // 只认 yyyy-MM-dd：new Date 会宽容解析 "2026/07/19" 等格式，
+        // 造成前端放行、C++ 端拒绝的口径不一致。
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(text))) {
+            return null
+        }
         var date = new Date(text)
         return isNaN(date.getTime()) ? null : date
     }
