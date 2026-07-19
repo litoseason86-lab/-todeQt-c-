@@ -76,7 +76,11 @@ bool DatabaseManager::initialize(const QString& dbPath)
     }
 
     if (m_db.isOpen() && m_db.databaseName() == path) {
-        return createTables();
+        if (!createTables()) {
+            return false;
+        }
+        emit databaseChanged();
+        return true;
     }
 
     if (m_db.isValid()) {
@@ -103,7 +107,11 @@ bool DatabaseManager::initialize(const QString& dbPath)
         return false;
     }
 
-    return createTables();
+    if (!createTables()) {
+        return false;
+    }
+    emit databaseChanged();
+    return true;
 }
 
 bool DatabaseManager::createTables()

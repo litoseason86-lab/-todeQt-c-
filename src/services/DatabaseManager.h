@@ -20,6 +20,11 @@ public:
     bool isOpen() const;
     void close();
 
+signals:
+    // 每次成功初始化（含同路径重开与换库）都会发出；持有模型缓存的服务
+    // 依赖它整体重载，避免在每次业务操作前防御性地全量刷新。
+    void databaseChanged();
+
 private:
     explicit DatabaseManager(QObject* parent = nullptr);
     ~DatabaseManager() override;

@@ -36,6 +36,16 @@ CountdownService::CountdownService(QObject* parent)
     connect(LogicalDayService::instance(), &LogicalDayService::changed,
             this, &CountdownService::syncReferenceDate);
 
+    // 换库/同路径重开统一由 DatabaseManager 通知驱动整体重载；
+    // 业务操作路径（ensureDatabaseReady）便不再需要防御性的全量刷新。
+    connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged, this, [this]() {
+        if (initializeDatabase()) {
+            loadGoals();
+        } else {
+            m_databaseReady = false;
+        }
+    });
+
     const QSqlDatabase db = DatabaseManager::instance()->database();
     if (db.isOpen() && initializeDatabase()) {
         loadGoals();
@@ -266,8 +276,12 @@ bool CountdownService::ensureDatabaseReady()
         return false;
     }
 
-    // DatabaseManager 在测试或重启时可能用同一路径重新打开数据库。
-    // 这里每次确认表结构并重载模型，避免单例缓存指向旧数据库内容。
+    // 换库和重开由 databaseChanged 信号整体重载；这里只兜底“信号建立前就绪”的场景。
+    // 常规增删改不再全量 reset 模型，避免每次操作都重建列表 delegate 并丢失滚动位置。
+    if (m_databaseReady && m_databaseName == db.databaseName()) {
+        return true;
+    }
+
     if (!initializeDatabase()) {
         emit errorOccurred(QStringLiteral("初始化倒计时数据库失败"));
         return false;

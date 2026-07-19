@@ -49,6 +49,7 @@ private slots:
     void reorderFailureKeepsOriginalModelOrder();
     void reorderIgnoredUpdateKeepsOriginalModelOrder();
     void samePathReinitializeReloadsFreshDatabase();
+    void routineMutationsDoNotResetModel();
     void primaryGoalReturnsQmlReadableMap();
     void calculateDaysRemainingHandlesPastAndInvalidDates();
     void modelReferenceDateDrivesDaysRemaining();
@@ -324,6 +325,29 @@ void CountdownServiceTests::samePathReinitializeReloadsFreshDatabase()
     QVERIFY(service->addGoal(QStringLiteral("新目标"), QDate::currentDate().addDays(20)));
     QCOMPARE(service->model()->rowCount(), 1);
     QCOMPARE(nameAt(service->model(), 0), QStringLiteral("新目标"));
+}
+
+void CountdownServiceTests::routineMutationsDoNotResetModel()
+{
+    CountdownService* service = CountdownService::instance();
+    QVERIFY(service->addGoal(QStringLiteral("目标A"), QDate::currentDate().addDays(5)));
+    QVERIFY(service->addGoal(QStringLiteral("目标B"), QDate::currentDate().addDays(6)));
+
+    // 常规增删改不允许全量 reset：否则 QML 列表每次操作都重建 delegate 并丢失滚动位置。
+    // 换库重载（databaseChanged 信号路径）才允许 reset，由 samePathReinitialize 用例覆盖。
+    QSignalSpy resetSpy(service->model(), &QAbstractItemModel::modelReset);
+
+    QVERIFY(service->addGoal(QStringLiteral("目标C"), QDate::currentDate().addDays(7)));
+    QCOMPARE(resetSpy.count(), 0);
+
+    QVERIFY(service->updateGoal(goalIdAt(service->model(), 0),
+                                QStringLiteral("目标A改"),
+                                QDate::currentDate().addDays(8)));
+    QCOMPARE(resetSpy.count(), 0);
+
+    QVERIFY(service->deleteGoal(goalIdAt(service->model(), 2)));
+    QCOMPARE(resetSpy.count(), 0);
+    QCOMPARE(service->model()->rowCount(), 2);
 }
 
 void CountdownServiceTests::primaryGoalReturnsQmlReadableMap()
