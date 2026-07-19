@@ -10,9 +10,17 @@
 class TaskManager : public QObject
 {
     Q_OBJECT
+    // 输入框 maximumLength 与服务端校验共用同一上限；QML 侧读取该常量属性。
+    Q_PROPERTY(int maxTitleLength READ maxTitleLength CONSTANT)
 
 public:
+    // 任务与例行标题共用的长度上限（QChar 计数）。超长标题不损坏数据，
+    // 但会撑爆列表行和导出 CSV；与 CountdownService 一样采取拒绝而非截断。
+    static constexpr int kMaxTitleLength = 100;
+
     static TaskManager* instance();
+
+    int maxTitleLength() const { return kMaxTitleLength; }
 
     // Q_INVOKABLE 表示 QML 可以直接调用这些方法。
     // 新增任务支持旧版文本科目，也支持新版 category_id 科目编号。

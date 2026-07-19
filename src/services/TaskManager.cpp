@@ -110,6 +110,10 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue, const
         qWarning() << "Failed to add task: title is empty after trimming";
         return false;
     }
+    if (normalizedTitle.size() > kMaxTitleLength) {
+        qWarning() << "Failed to add task: title exceeds" << kMaxTitleLength << "characters";
+        return false;
+    }
 
     const QDate date = normalizeDate(dateValue);
     if (!date.isValid()) {
@@ -161,6 +165,10 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int c
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
         qWarning() << "Failed to add task: title is empty after trimming";
+        return false;
+    }
+    if (normalizedTitle.size() > kMaxTitleLength) {
+        qWarning() << "Failed to add task: title exceeds" << kMaxTitleLength << "characters";
         return false;
     }
 
@@ -251,6 +259,10 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, c
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
         qWarning() << "Failed to update task: title is empty after trimming";
+        return false;
+    }
+    if (normalizedTitle.size() > kMaxTitleLength) {
+        qWarning() << "Failed to update task: title exceeds" << kMaxTitleLength << "characters";
         return false;
     }
 

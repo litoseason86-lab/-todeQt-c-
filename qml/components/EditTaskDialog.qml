@@ -264,6 +264,8 @@ Popup {
             Layout.rightMargin: Theme.space16
             implicitHeight: 44
             placeholderText: "任务内容"
+            // 与 TaskManager::kMaxTitleLength 保持一致；超长粘贴在输入端截断。
+            maximumLength: 100
             selectByMouse: true
             font.pixelSize: Theme.fontMd
             color: Theme.inkStrong

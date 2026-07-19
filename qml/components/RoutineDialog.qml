@@ -284,6 +284,8 @@ Popup {
                 Layout.fillWidth: true
                 implicitHeight: 42
                 placeholderText: "输入每天要做的事..."
+                // 与 TaskManager::kMaxTitleLength 保持一致；超长粘贴在输入端截断。
+                maximumLength: 100
                 selectByMouse: true
 
                 background: Rectangle {

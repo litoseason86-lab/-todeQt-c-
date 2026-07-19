@@ -4,6 +4,7 @@
 #include "CategoryManager.h"
 #include "DatabaseManager.h"
 #include "LogicalDay.h"
+#include "TaskManager.h"
 
 #include <QDate>
 #include <QDebug>
@@ -77,6 +78,12 @@ bool RoutineManager::addRoutine(const QString& title, int categoryId)
         qWarning("Failed to add routine: title is empty");
         return false;
     }
+    // 例行标题会物化成任务标题，必须遵守同一上限。
+    if (normalizedTitle.size() > TaskManager::kMaxTitleLength) {
+        qWarning() << "Failed to add routine: title exceeds"
+                   << TaskManager::kMaxTitleLength << "characters";
+        return false;
+    }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
@@ -121,6 +128,11 @@ bool RoutineManager::updateRoutine(int id, const QString& title, int categoryId)
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
         qWarning() << "Failed to update routine: title is empty";
+        return false;
+    }
+    if (normalizedTitle.size() > TaskManager::kMaxTitleLength) {
+        qWarning() << "Failed to update routine: title exceeds"
+                   << TaskManager::kMaxTitleLength << "characters";
         return false;
     }
 
