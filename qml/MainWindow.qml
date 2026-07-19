@@ -423,6 +423,14 @@ Item {
                     }
 
                     onImmersiveRequested: root.focusImmersiveActive = true
+
+                    onAutoAdvanced: function (phase) {
+                        // 用户正盯着专注页时切换本身可见，不必再弹提示。
+                        if (root.currentView !== "focus") {
+                            root.showToast(phase === 1 ? "专注完成，已自动开始休息"
+                                                       : "休息结束，已自动开始下一个番茄")
+                        }
+                    }
                 }
 
                 WeekPlanView {

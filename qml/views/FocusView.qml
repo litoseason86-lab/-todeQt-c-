@@ -23,6 +23,8 @@ Item {
 
     signal focusEnded()
     signal immersiveRequested()
+    // 自动衔接实际发生时发出；MainWindow 在用户不在专注页时用它弹提示。
+    signal autoAdvanced(int phase)
 
     // 沉浸入口只在计时进行中（含暂停）开放：待机/完成/未开始要么需要配置面板，
     // 要么即将离开专注页，极简全屏没有意义。
@@ -50,11 +52,6 @@ Item {
     }
 
     onTimerChanged: Qt.callLater(root.syncToActiveTimer)
-    onPageActiveChanged: {
-        if (!pageActive) {
-            root.cancelAutoAdvance()
-        }
-    }
 
     function safeSeconds(value) {
         // 计时显示只接受非负秒数，避免服务异常值污染 UI。
@@ -487,14 +484,21 @@ Item {
         onTriggered: {
             var phase = autoAdvanceTimer.pendingPhase
             autoAdvanceTimer.pendingPhase = 0
-            // 延迟期间用户可能已经结束循环、切页或关闭自动衔接；触发前必须重验全部前提。
-            if (!root.pageActive || root.justCompletedPhase !== phase || !root.settings) {
+            // 延迟期间用户可能已经结束循环或关闭自动衔接；触发前必须重验前提。
+            // 自动衔接跟随计时器而不是页面：用户在仪表盘等其它页时同样生效。
+            if (root.justCompletedPhase !== phase || !root.settings) {
                 return
             }
             if (phase === 1 && root.settings.autoStartBreak) {
                 root.startBreak()
+                if (root.errorText.length === 0) {
+                    root.autoAdvanced(1)
+                }
             } else if (phase === 2 && root.settings.autoStartNextPomodoro) {
                 root.startPomodoro()
+                if (root.errorText.length === 0) {
+                    root.autoAdvanced(2)
+                }
             }
         }
     }

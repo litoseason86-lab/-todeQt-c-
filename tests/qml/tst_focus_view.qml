@@ -1031,14 +1031,15 @@ TestCase {
         tryCompare(view, "selectedBreakMinutes", 12)
     }
 
-    function test_autoAdvanceIsCancelledWhenLeavingPage() {
+    function test_autoAdvanceContinuesWhenLeavingPage() {
+        // 自动衔接跟随计时器而不是页面：切去仪表盘等其它页面时休息照常自动开始。
         view.toPomodoroTab(true)
         appSettingsMock.autoStartBreak = true
         appSettingsMock.reduceMotion = false
+        focusTimer.startBreakSeconds = 0
         focusTimer.phaseCompleted(1)
         view.pageActive = false
-        wait(950)
-        compare(focusTimer.startBreakSeconds, 0)
+        tryCompare(focusTimer, "startBreakSeconds", 5 * 60)
         view.pageActive = true
     }
 
