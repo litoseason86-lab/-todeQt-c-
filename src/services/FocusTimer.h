@@ -84,6 +84,10 @@ signals:
     void taskAutoCompleteFailed(int taskId);
 
 private:
+    // 单元测试需要直接推进单调时钟和内部计数来模拟长时间运行；
+    // 用受控友元替代测试侧 #define private public 的未定义行为写法。
+    friend class ServiceTests;
+
     explicit FocusTimer(QObject* parent = nullptr);
 
     bool startFocusSession(int taskId, const QString& taskTitle, TimerMode mode, TimerPhase phase, int targetSeconds);

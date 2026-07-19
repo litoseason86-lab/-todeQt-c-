@@ -18,9 +18,8 @@
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/ExportService.h"
 #include "../src/services/FocusHistoryService.h"
-#define private public
+// FocusTimer 声明了 friend class ServiceTests，测试可直接访问内部时钟状态。
 #include "../src/services/FocusTimer.h"
-#undef private
 #include "../src/services/RoutineManager.h"
 #include "../src/services/StatisticsService.h"
 #include "../src/services/TaskManager.h"
@@ -147,16 +146,6 @@ int countFocusSessions()
     }
 
     return query.value(0).toInt();
-}
-
-void setFocusElapsedSeconds(FocusTimer* timer, int seconds)
-{
-    // 单调时钟无法伪造系统时间；测试直接设置已累计段，并重启当前运行段，避免真实等待数分钟。
-    timer->m_accumulatedMilliseconds = static_cast<qint64>(seconds) * 1000;
-    timer->m_elapsedSeconds = seconds;
-    if (timer->m_isRunning) {
-        timer->m_runClock.restart();
-    }
 }
 
 bool taskCompletedById(int taskId)
@@ -530,8 +519,21 @@ private slots:
     void queryServicesReportDatabaseFailureInsteadOfSilentEmptyData();
 
 private:
+    // 需要访问 FocusTimer 私有时钟状态，必须挂在 friend 类下而不是自由函数里。
+    static void setFocusElapsedSeconds(FocusTimer* timer, int seconds);
+
     QTemporaryDir* m_tempDir = nullptr;
 };
+
+void ServiceTests::setFocusElapsedSeconds(FocusTimer* timer, int seconds)
+{
+    // 单调时钟无法伪造系统时间；测试直接设置已累计段，并重启当前运行段，避免真实等待数分钟。
+    timer->m_accumulatedMilliseconds = static_cast<qint64>(seconds) * 1000;
+    timer->m_elapsedSeconds = seconds;
+    if (timer->m_isRunning) {
+        timer->m_runClock.restart();
+    }
+}
 
 void ServiceTests::init()
 {
