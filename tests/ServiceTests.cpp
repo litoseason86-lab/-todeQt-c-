@@ -516,6 +516,7 @@ private slots:
     void focusTimerUsesMonotonicElapsedTimeAfterBlockedEventLoop();
     void interruptedFocusRestoresPausedAndKeepsProgress();
     void restoreKeepsSessionWhenTaskWasDeleted();
+    void completionSaveFailureNotifiesOnceAndKeepsRetrying();
     void startupCleanupRemovesLegacyOrphanedSession();
     void queryServicesReportDatabaseFailureInsteadOfSilentEmptyData();
 
@@ -3501,6 +3502,23 @@ void ServiceTests::restoreKeepsSessionWhenTaskWasDeleted()
         "SELECT duration FROM focus_sessions WHERE end_time IS NOT NULL")));
     QVERIFY(query.next());
     QCOMPARE(query.value(0).toInt(), 360);
+}
+
+void ServiceTests::completionSaveFailureNotifiesOnceAndKeepsRetrying()
+{
+    const int taskId = insertTaskRow(QStringLiteral("保存失败重试任务"), QDate::currentDate());
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("保存失败重试任务"), 1));
+
+    // 到点前关库：完成保存必然失败，计时器应继续运行并每秒重试，但只提示一次。
+    QSignalSpy failureSpy(timer, &FocusTimer::operationFailed);
+    DatabaseManager::instance()->close();
+
+    QTRY_COMPARE_WITH_TIMEOUT(failureSpy.count(), 1, 5000);
+    // 再等两个 tick，确认重试不会把提示刷成第二条。
+    QTest::qWait(2200);
+    QCOMPARE(failureSpy.count(), 1);
+    QCOMPARE(timer->isRunning(), true);
 }
 
 void ServiceTests::startupCleanupRemovesLegacyOrphanedSession()

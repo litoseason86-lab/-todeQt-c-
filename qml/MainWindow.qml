@@ -677,6 +677,10 @@ Item {
         function onTaskAutoCompleteFailed(taskId) {
             root.showToast("专注记录已保存，但任务自动完成失败，请手动检查")
         }
+
+        function onOperationFailed(message) {
+            root.showToast(String(message || "专注操作失败"))
+        }
     }
 
     CategoryDialog {

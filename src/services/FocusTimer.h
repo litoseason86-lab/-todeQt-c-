@@ -82,6 +82,8 @@ signals:
     void sessionDiscarded(int duration);
     void completedPomodorosChanged();
     void taskAutoCompleteFailed(int taskId);
+    // 到点保存失败进入每秒自动重试时提示一次；恢复成功或会话复位后允许再次提示。
+    void operationFailed(const QString& message);
 
 private:
     // 单元测试需要直接推进单调时钟和内部计数来模拟长时间运行；
@@ -121,6 +123,8 @@ private:
     TimerPhase m_phase = NoPhase;
     int m_targetSeconds = 0;
     int m_completedPomodoros = 0;
+    // 到点保存失败的“已提示”标记，防止每秒重试把提示刷成噪音。
+    bool m_completionFailureNotified = false;
 };
 
 #endif // FOCUSTIMER_H
