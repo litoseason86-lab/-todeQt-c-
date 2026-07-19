@@ -515,6 +515,7 @@ private slots:
     void freeFocusStillCountsUpUnchanged();
     void focusTimerUsesMonotonicElapsedTimeAfterBlockedEventLoop();
     void interruptedFocusRestoresPausedAndKeepsProgress();
+    void restoreKeepsSessionWhenTaskWasDeleted();
     void startupCleanupRemovesLegacyOrphanedSession();
     void queryServicesReportDatabaseFailureInsteadOfSilentEmptyData();
 
@@ -3468,6 +3469,38 @@ void ServiceTests::interruptedFocusRestoresPausedAndKeepsProgress()
     QVERIFY(query.next());
     QCOMPARE(query.value(0).toInt(), 185);
     QVERIFY(!query.next());
+}
+
+void ServiceTests::restoreKeepsSessionWhenTaskWasDeleted()
+{
+    const int taskId = insertTaskRow(QStringLiteral("会被删除的任务"), QDate::currentDate());
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("会被删除的任务")));
+    setFocusElapsedSeconds(timer, 240);
+    timer->prepareForShutdown();
+
+    // 删除任务：外键把 active_focus_state.task_id 和 focus_sessions.task_id 置空，
+    // 但活动状态里的标题快照仍在。已计入的进行中会话必须照常恢复。
+    QVERIFY(TaskManager::instance()->deleteTask(taskId));
+    timer->resetSession();
+
+    QVERIFY(timer->restoreInterruptedSession());
+    QCOMPARE(timer->hasActiveSession(), true);
+    QCOMPARE(timer->currentTaskId(), -1);
+    QCOMPARE(timer->currentTaskTitle(), QStringLiteral("会被删除的任务"));
+    QCOMPARE(timer->elapsedSeconds(), 240);
+
+    // 完成后正常落库；没有可完成的任务时不应发出自动完成失败的告警。
+    QSignalSpy autoCompleteFailSpy(timer, &FocusTimer::taskAutoCompleteFailed);
+    setFocusElapsedSeconds(timer, 360);
+    QVERIFY(timer->stopFocus());
+    QCOMPARE(autoCompleteFailSpy.count(), 0);
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT duration FROM focus_sessions WHERE end_time IS NOT NULL")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 360);
 }
 
 void ServiceTests::startupCleanupRemovesLegacyOrphanedSession()

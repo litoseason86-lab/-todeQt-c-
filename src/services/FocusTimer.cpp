@@ -307,7 +307,10 @@ bool FocusTimer::completeFocusSession()
     }
 
     const int completedTaskId = m_currentTaskId;
-    const bool shouldAutoCompleteTask = duration >= FocusSessionRules::kAutoCompleteTaskDurationSeconds;
+    // 任务可能在会话进行中被删除（外键置空后恢复的会话 task_id 为 -1）；
+    // 没有可完成的任务时跳过自动完成，而不是制造一次必然失败的告警。
+    const bool shouldAutoCompleteTask = completedTaskId > 0
+        && duration >= FocusSessionRules::kAutoCompleteTaskDurationSeconds;
 
     // 会话已经持久化后先清空活动态，再触发 TaskManager::tasksChanged。否则订阅方会在同一刷新中
     // 同时看到“已完成数据库记录”和“仍活动的计时器”，把最后一段时长重复计入界面统计。
@@ -638,10 +641,13 @@ bool FocusTimer::restoreInterruptedSession()
     const int restoredTarget = qMax(0, stateQuery.value(6).toInt());
     const int restoredPomodoros = qMax(0, stateQuery.value(7).toInt());
 
+    // 任务可能在会话进行中被删除：外键把 task_id 置空，但标题快照仍在。
+    // 已经计入的进行中会话必须照常恢复（与休息段同一宽容口径），
+    // 只是结束后因 task_id 无效不再自动完成任务。
     const bool isFreeFocus = restoredMode == FreeMode && restoredPhase == NoPhase
-        && restoredSessionId > 0 && restoredTaskId > 0 && !restoredTitle.isEmpty();
+        && restoredSessionId > 0 && !restoredTitle.isEmpty();
     const bool isPomodoroWork = restoredMode == PomodoroMode && restoredPhase == WorkPhase
-        && restoredSessionId > 0 && restoredTaskId > 0 && !restoredTitle.isEmpty() && restoredTarget > 0;
+        && restoredSessionId > 0 && !restoredTitle.isEmpty() && restoredTarget > 0;
     const bool isPomodoroBreak = restoredMode == PomodoroMode && restoredPhase == BreakPhase
         && restoredSessionId == -1 && restoredTarget > 0
         // 休息期间任务可能被删除，外键会把 task_id 置空但保留标题；休息计时仍应恢复，
