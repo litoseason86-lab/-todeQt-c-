@@ -418,6 +418,8 @@ Rectangle {
                 visible: root.titleEditing
                 font.pixelSize: Theme.fontLg
                 color: Theme.inkStrong
+                // 与 TaskManager::kMaxTitleLength 保持一致；超长粘贴在输入端截断。
+                maximumLength: 100
                 selectByMouse: true
 
                 background: Rectangle {
