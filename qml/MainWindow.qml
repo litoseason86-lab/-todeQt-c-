@@ -143,6 +143,11 @@ Item {
     }
 
     function showToast(message, actionText, actionCallback) {
+        // 提示条是单槽：任何新提示都会顶掉撤销条。撤销入口一旦不可见就立即提交删除，
+        // 不让“看不见的删除倒计时”在背后继续走完 5 秒。
+        if (root.pendingDeleteTaskId > 0) {
+            root.commitPendingDelete()
+        }
         globalToast.show(message, actionText, actionCallback)
     }
 
@@ -156,7 +161,8 @@ Item {
         root.pendingDeleteTitle = String(taskTitle || "")
         deleteCommitTimer.interval = root.deleteCommitDelayMs
         deleteCommitTimer.restart()
-        root.showToast("已删除「" + root.pendingDeleteTitle + "」", "撤销", function() {
+        // 直接走 globalToast：showToast 会把“已有待删任务”先提交，撤销条自己不能触发这条规则。
+        globalToast.show("已删除「" + root.pendingDeleteTitle + "」", "撤销", function() {
             root.cancelPendingDelete()
         })
         return true
