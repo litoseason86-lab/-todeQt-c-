@@ -30,6 +30,8 @@ macOS 构建会自动把最新应用同步到固定入口：
 
 这避免 LaunchOS 或 LaunchServices 在 `build/PomodoroTodo.app` 和旧的 `/Applications/番茄Todo.app` 之间选错包。日常启动统一使用 `/Applications/番茄Todo.app`。
 
+审计、CI 或临时目录构建时传 `-DPOMODORO_TODO_DEPLOY_LOCAL=OFF`，可跳过自动部署，避免非正式构建覆盖固定入口。
+
 可选的 QML 静态检查：
 
 ```bash

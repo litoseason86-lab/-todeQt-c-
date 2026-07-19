@@ -111,7 +111,11 @@ set_target_properties(PomodoroTodo PROPERTIES
     WIN32_EXECUTABLE TRUE
 )
 
-if(APPLE)
+# 日常开发目录保持自动同步；审计/CI/临时构建传 -DPOMODORO_TODO_DEPLOY_LOCAL=OFF，
+# 避免非正式构建悄悄覆盖固定启动入口。
+option(POMODORO_TODO_DEPLOY_LOCAL "构建后自动把应用同步到本机固定启动入口" ON)
+
+if(APPLE AND POMODORO_TODO_DEPLOY_LOCAL)
     set(POMODORO_TODO_LOCAL_APP_PATH "/Applications/番茄Todo.app" CACHE PATH
         "本机固定启动入口，构建后会用最新包覆盖这里"
     )
