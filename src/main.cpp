@@ -1,10 +1,13 @@
 #include <QCoreApplication>
 #include <QDebug>
+#include <QDir>
 #include <QFontDatabase>
 #include <QGuiApplication>
+#include <QLockFile>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
+#include <QStandardPaths>
 #include <QUrl>
 
 #include "services/DatabaseManager.h"
@@ -45,6 +48,23 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationName(QStringLiteral("PomodoroTodo"));
     // 关于页直接读取 Qt.application.version；由 CMake 项目版本注入，避免 UI 手写两份版本号。
     QCoreApplication::setApplicationVersion(QStringLiteral(POMODORO_TODO_VERSION));
+
+    // 单实例守卫：两个进程共享同一数据库时会互相覆盖 active_focus_state 检查点。
+    // QLockFile 按锁文件中的 PID 识别崩溃残留锁；正常运行的第二个实例直接退出。
+    const QString instanceLockDir =
+        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QDir().mkpath(instanceLockDir);
+    QLockFile instanceLock(QDir(instanceLockDir).filePath(QStringLiteral("pomodoro-todo.lock")));
+    // 锁与进程同生命周期，禁用按时长判旧，避免长时间运行后锁被误判为过期。
+    instanceLock.setStaleLockTime(0);
+    if (!instanceLock.tryLock(0)) {
+        if (instanceLock.error() == QLockFile::LockFailedError) {
+            qWarning() << "番茄Todo 已在运行，本实例退出";
+            return 0;
+        }
+        // 锁目录不可写等环境问题不阻断启动；数据库初始化会对同一目录做权威检查。
+        qWarning() << "无法创建单实例锁，跳过检查:" << instanceLockDir;
+    }
 
     if (!DatabaseManager::instance()->initialize()) {
         return -1;
