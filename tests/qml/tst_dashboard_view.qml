@@ -82,6 +82,7 @@ TestCase {
         property int pauseCalls: 0
         property int resumeCalls: 0
         property int stopCalls: 0
+        property int resetCountCalls: 0
 
         function pauseFocus() {
             pauseCalls += 1
@@ -95,6 +96,10 @@ TestCase {
         function stopFocus() {
             stopCalls += 1
             return true
+        }
+
+        function resetPomodoroCount() {
+            resetCountCalls += 1
         }
     }
 
@@ -195,6 +200,7 @@ TestCase {
         focusTimer.pauseCalls = 0
         focusTimer.resumeCalls = 0
         focusTimer.stopCalls = 0
+        focusTimer.resetCountCalls = 0
         appSettings.nickname = ""
         appSettings.focusGoalDate = ""
         appSettings.focusGoalMinutes = 0
@@ -604,6 +610,26 @@ TestCase {
         compare(focusTimer.resumeCalls, 1)
         // 待机分支只发信号，不该误触暂停/继续。
         compare(startSpy.count, 1)
+    }
+
+    function test_timer_panel_stop_resets_pomodoro_cycle() {
+        var panel = createTemporaryObject(timerPanelComponent, testCase)
+        verify(panel)
+        var stopButton = findChild(panel, "dashboardTimerStopButton")
+        verify(stopButton)
+
+        // 番茄阶段的「结束」= 结束整轮循环：连续计数必须归零，与专注页同语义。
+        focusTimer.phase = 1
+        focusTimer.hasActiveSession = true
+        stopButton.clicked()
+        compare(focusTimer.stopCalls, 1)
+        compare(focusTimer.resetCountCalls, 1)
+
+        // 自由专注不涉及番茄计数，结束时不应触碰。
+        focusTimer.phase = 0
+        stopButton.clicked()
+        compare(focusTimer.stopCalls, 2)
+        compare(focusTimer.resetCountCalls, 1)
     }
 
     function test_liquid_glass_effect_and_solid_fallback() {

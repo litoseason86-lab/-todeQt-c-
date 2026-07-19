@@ -316,8 +316,15 @@ Item {
                 implicitHeight: 34
 
                 onClicked: {
-                    if (root.timerRef) {
-                        root.timerRef.stopFocus()
+                    if (!root.timerRef) {
+                        return
+                    }
+                    // 与专注页「结束」同语义：结束番茄循环时连续计数一并归零，
+                    // 否则下一轮长休息节奏会被上一轮残留计数带偏；自由专注不涉及计数。
+                    var endsPomodoroCycle = root.phase !== 0
+                    if (root.timerRef.stopFocus() && endsPomodoroCycle
+                            && root.timerRef.resetPomodoroCount) {
+                        root.timerRef.resetPomodoroCount()
                     }
                 }
 
