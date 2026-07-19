@@ -173,6 +173,39 @@ target_link_libraries(PomodoroTodoTests PRIVATE
 
 add_test(NAME PomodoroTodoTests COMMAND PomodoroTodoTests)
 
+add_executable(RobustnessTests
+    tests/RobustnessTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/RoutineManager.h
+    src/services/RoutineManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/StatisticsService.h
+    src/services/StatisticsService.cpp
+    src/services/FocusHistoryService.h
+    src/services/FocusHistoryService.cpp
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+)
+
+target_link_libraries(RobustnessTests PRIVATE
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+add_test(NAME RobustnessTests COMMAND RobustnessTests)
+
 add_executable(CountdownServiceTests
     tests/CountdownServiceTests.cpp
     src/models/CountdownGoal.cpp
