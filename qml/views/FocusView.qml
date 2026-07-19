@@ -627,8 +627,10 @@ Item {
                     to: 1
                     duration: 520
                     loops: Animation.Infinite
-                    running: completionBanner.shouldShow && !(root.settings && root.settings.reduceMotion)
-
+                    // pageActive 门控：完成态可能在用户停留在其它页时长期存在，
+                    // 无限闪烁动画不能在不可见页面上空转（不看 effective visible，离屏测试会污染）。
+                    running: completionBanner.shouldShow && root.pageActive
+                             && !(root.settings && root.settings.reduceMotion)
                 }
             }
 
