@@ -12,25 +12,41 @@ class TaskManager : public QObject
     Q_OBJECT
     // 输入框 maximumLength 与服务端校验共用同一上限；QML 侧读取该常量属性。
     Q_PROPERTY(int maxTitleLength READ maxTitleLength CONSTANT)
+    // 预估番茄数上限；输入控件与服务端校验共用，QML 读取该常量属性。
+    Q_PROPERTY(int maxEstimatedPomodoros READ maxEstimatedPomodoros CONSTANT)
 
 public:
     // 任务与例行标题共用的长度上限（QChar 计数）。超长标题不损坏数据，
     // 但会撑爆列表行和导出 CSV；与 CountdownService 一样采取拒绝而非截断。
     static constexpr int kMaxTitleLength = 100;
+    // 预估番茄数取值范围 [0, 99]，0 表示未设置。越界一律夹紧而非拒绝，
+    // 避免界面因一个预估值填错就无法保存任务本体。
+    static constexpr int kMaxEstimatedPomodoros = 99;
 
     static TaskManager* instance();
 
     int maxTitleLength() const { return kMaxTitleLength; }
+    int maxEstimatedPomodoros() const { return kMaxEstimatedPomodoros; }
 
     // Q_INVOKABLE 表示 QML 可以直接调用这些方法。
     // 新增任务支持旧版文本科目，也支持新版 category_id 科目编号。
     Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, const QString& category = QString());
     Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId);
+    // 带预估番茄数的新增重载；QML 按参数个数选择，不依赖默认参数。
+    Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId, int estimatedPomodoros);
     // 完成、删除和查询任务后都会通过 tasksChanged 通知界面刷新。
     Q_INVOKABLE bool completeTask(int taskId);
     Q_INVOKABLE bool setTaskCompleted(int taskId, bool completed);
+    // 四参重载只改标题/科目/日期，保留原预估值（重命名走这里）；五参重载额外更新预估番茄数。
     Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue);
+    Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue, int estimatedPomodoros);
     Q_INVOKABLE bool deleteTask(int taskId);
+    // 删除撤销 UI 用来区分“例行生成的当日实例”与普通任务：删除实例只影响今天，
+    // 例行规则本身在 routines 表中不受影响。据此给出更准确的撤销提示。
+    Q_INVOKABLE bool isRoutineGeneratedTask(int taskId) const;
+    // 单任务实际番茄/专注分钟聚合接口，供需要即时读取的调用方；有效口径与列表聚合完全一致。
+    Q_INVOKABLE int getCompletedPomodorosForTask(int taskId) const;
+    Q_INVOKABLE int getFocusedMinutesForTask(int taskId) const;
     // 日期查询给今日、本周和月度页面复用，返回值统一是 QML 能直接读取的列表。
     Q_INVOKABLE QVariantList getTodayTasks() const;
     Q_INVOKABLE QVariantList getTasksByDate(const QDate& date) const;

@@ -69,6 +69,8 @@ Item {
     property var monthStats: ({ totalDuration: 0, effectiveDays: 0, sessionCount: 0, completedTasks: 0, totalTasks: 0 })
     property var monthWeeklySummary: []
     property var weekStats: []
+    // 每周复盘数据（仅 week 范围加载）：计划/实际番茄、科目对账、事实与建议。
+    property var weeklyReview: ({})
     property var categoryStats: ({ categories: [], totalDuration: 0 })
     property var categoryManagerRef: null
     property string loadError: ""
@@ -386,6 +388,9 @@ Item {
                 var weekEnd = StatFmt.endOfWeek(weekStart)
                 root.weekStats = statisticsService.getWeekStats(weekStart)
                 root.weekComparison = statisticsService.getWeekComparison(weekStart)
+                // 测试桩或旧上下文可能未提供复盘接口；缺失时按空复盘处理，不拖垮周统计加载。
+                root.weeklyReview = statisticsService.getWeeklyReview
+                        ? statisticsService.getWeeklyReview(weekStart) : ({})
                 var weekTotal = root.weekTotalDuration()
 
                 // 多范围卡片复用 todayStats 这个绑定入口，避免 UI 层维护三套重复卡片状态。
@@ -430,6 +435,7 @@ Item {
             root.weekComparison = {}
             root.monthComparison = {}
             root.monthWeeklySummary = []
+            root.weeklyReview = {}
             root.categoryStats = { categories: [], totalDuration: 0 }
         }
     }
@@ -783,6 +789,16 @@ Item {
                     }
                     return root.isCurrentSelectedPeriod ? "本周还没有专注记录" : "所在周还没有专注记录"
                 }
+            }
+
+            WeeklyReviewCard {
+                objectName: "statisticsWeeklyReviewCard"
+
+                Layout.fillWidth: true
+                // 复盘只在周视图出现，避免新增一级导航；数据由服务层聚合。
+                visible: root.currentTimeRange === "week"
+                review: root.weeklyReview
+                isCurrentPeriod: root.isCurrentSelectedPeriod
             }
 
             ChartPie {

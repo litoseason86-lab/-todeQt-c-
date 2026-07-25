@@ -8,12 +8,23 @@
 #include <QDebug>
 #include <QDateTime>
 #include <QtMath>
+#include <QMap>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QTime>
 #include <QVariant>
 
+#include <algorithm>
+
 namespace {
+constexpr int kReviewMinimumSubjectPlan = 3;
+constexpr double kReviewSubjectGapPoints = 20.0;
+constexpr double kReviewStableRateMinimum = 85.0;
+constexpr double kReviewStableRateMaximum = 115.0;
+constexpr double kReviewOverplannedRate = 60.0;
+constexpr double kReviewUnderplannedRate = 120.0;
+
 void reportStatisticsFailure(const QString& detail)
 {
     emit StatisticsService::instance()->operationFailed(
@@ -760,4 +771,258 @@ QList<QDate> StatisticsService::getUniqueFocusDates(const QDate& startDate, cons
 QPair<QDate, QDate> StatisticsService::getWeekRange(const QDate& mondayOfWeek) const
 {
     return qMakePair(mondayOfWeek, mondayOfWeek.addDays(6));
+}
+
+QVariantMap StatisticsService::weeklyAggregates(const QDate& weekStart, const QDate& weekEnd) const
+{
+    QVariantMap result;
+    result.insert(QStringLiteral("plannedTotal"), 0);
+    result.insert(QStringLiteral("completedTotal"), 0);
+    result.insert(QStringLiteral("focusedSeconds"), 0);
+    result.insert(QStringLiteral("activeDays"), 0);
+    result.insert(QStringLiteral("subjects"), QVariantList());
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
+        return result;
+    }
+
+    const int dayStartHour = AppSettings::instance()->dayStartHour();
+    const QString dayShift = LogicalDay::sqlShift(dayStartHour);
+    const QString startIso = weekStart.toString(Qt::ISODate);
+    const QString endIso = weekEnd.toString(Qt::ISODate);
+    // start_time 以 ISO 日期时间存储；使用真实半开边界让 idx_sessions_start 可用于范围扫描。
+    // 边界不带时区后缀，兼容历史无偏移字符串和当前带偏移字符串的共同日期时间前缀。
+    const QString startAt =
+        QDateTime(weekStart, QTime(dayStartHour, 0)).toString(
+            QStringLiteral("yyyy-MM-ddTHH:mm:ss"));
+    const QString endAt =
+        QDateTime(weekEnd.addDays(1), QTime(dayStartHour, 0)).toString(
+            QStringLiteral("yyyy-MM-ddTHH:mm:ss"));
+
+    // 按科目名合并计划与实际；科目名的解析口径与 getCategoryStats 一致，保证两侧能对齐。
+    QMap<QString, QVariantMap> subjects;
+    auto ensureSubject = [&subjects](const QString& name, const QString& color) -> QVariantMap& {
+        if (!subjects.contains(name)) {
+            QVariantMap entry;
+            entry.insert(QStringLiteral("name"), name);
+            entry.insert(QStringLiteral("color"), color);
+            entry.insert(QStringLiteral("planned"), 0);
+            entry.insert(QStringLiteral("actual"), 0);
+            subjects.insert(name, entry);
+        }
+        return subjects[name];
+    };
+
+    int plannedTotal = 0;
+    // 计划番茄：按任务的计划日期归入本周（tasks.date 为 yyyy-MM-dd，字典序即日期序）。
+    {
+        QSqlQuery query(db);
+        // 别名避开真实列名 color/name，否则 GROUP BY 会因 categories 联表出现歧义列而报错。
+        query.prepare(QStringLiteral(
+            "SELECT COALESCE(NULLIF(c.name,''), NULLIF(legacy.name,''), NULLIF(t.category,''), '未分类') AS subject_name, "
+            "COALESCE(NULLIF(c.color,''), NULLIF(legacy.color,''), '#d4a574') AS subject_color, "
+            "SUM(t.estimated_pomodoros) AS planned "
+            "FROM tasks t "
+            "LEFT JOIN categories c ON t.category_id = c.id "
+            "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
+            "WHERE t.date >= :startDate AND t.date <= :endDate AND t.estimated_pomodoros > 0 "
+            "GROUP BY subject_name, subject_color"));
+        query.bindValue(QStringLiteral(":startDate"), startIso);
+        query.bindValue(QStringLiteral(":endDate"), endIso);
+        if (!query.exec()) {
+            reportStatisticsFailure(query.lastError().text());
+            return result;
+        }
+        while (query.next()) {
+            const int planned = query.value(2).toInt();
+            QVariantMap& entry = ensureSubject(query.value(0).toString(), query.value(1).toString());
+            entry[QStringLiteral("planned")] = entry.value(QStringLiteral("planned")).toInt() + planned;
+            plannedTotal += planned;
+        }
+    }
+
+    int completedTotal = 0;
+    int focusedSeconds = 0;
+    // 实际番茄：只计番茄工作段(mode=1)的有效会话；专注秒数含两种模式的有效会话（供“专注时长”展示）。
+    // 有效口径复用 kMinimumValidDurationSeconds，与任务实际番茄聚合完全一致。
+    {
+        QSqlQuery query(db);
+        query.prepare(QStringLiteral(R"SQL(
+            WITH filtered AS (
+                SELECT task_id, mode, duration, date(start_time, :dayShift) AS logical_date
+                FROM focus_sessions
+                WHERE start_time >= :startAt AND start_time < :endAt
+                  AND end_time IS NOT NULL
+                  AND duration IS NOT NULL
+                  AND duration >= :minDuration
+            ),
+            grouped AS (
+                SELECT CASE WHEN t.id IS NULL THEN '未关联任务'
+                       ELSE COALESCE(NULLIF(c.name,''), NULLIF(legacy.name,''),
+                                     NULLIF(t.category,''), '未分类') END AS subject_name,
+                       COALESCE(NULLIF(c.color,''), NULLIF(legacy.color,''), '#d4a574')
+                           AS subject_color,
+                       SUM(CASE WHEN f.mode = 1 THEN 1 ELSE 0 END) AS actual_pomodoros,
+                       SUM(f.duration) AS focused_seconds
+                FROM filtered f
+                LEFT JOIN tasks t ON f.task_id = t.id
+                LEFT JOIN categories c ON t.category_id = c.id
+                LEFT JOIN categories legacy
+                       ON t.category_id IS NULL AND legacy.name = t.category
+                GROUP BY subject_name, subject_color
+            )
+            SELECT 0 AS row_kind, subject_name, subject_color,
+                   actual_pomodoros, focused_seconds, 0 AS active_days
+            FROM grouped
+            UNION ALL
+            SELECT 1, '', '', 0, 0, COUNT(DISTINCT logical_date)
+            FROM filtered
+        )SQL"));
+        query.bindValue(QStringLiteral(":dayShift"), dayShift);
+        query.bindValue(QStringLiteral(":startAt"), startAt);
+        query.bindValue(QStringLiteral(":endAt"), endAt);
+        query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
+        if (!query.exec()) {
+            reportStatisticsFailure(query.lastError().text());
+            return result;
+        }
+        while (query.next()) {
+            if (query.value(0).toInt() == 1) {
+                result[QStringLiteral("activeDays")] = query.value(5).toInt();
+                continue;
+            }
+            const int actual = query.value(3).toInt();
+            const int focused = query.value(4).toInt();
+            QVariantMap& entry =
+                ensureSubject(query.value(1).toString(), query.value(2).toString());
+            entry[QStringLiteral("actual")] = entry.value(QStringLiteral("actual")).toInt() + actual;
+            completedTotal += actual;
+            focusedSeconds += focused;
+        }
+    }
+
+    QVariantList subjectList;
+    for (auto it = subjects.constBegin(); it != subjects.constEnd(); ++it) {
+        QVariantMap entry = it.value();
+        const int planned = entry.value(QStringLiteral("planned")).toInt();
+        const int actual = entry.value(QStringLiteral("actual")).toInt();
+        // 只有实际没计划标记“未计划投入”；只有计划没实际则完成率 0%。
+        entry.insert(QStringLiteral("unplanned"), planned == 0 && actual > 0);
+        entry.insert(QStringLiteral("rate"),
+                     planned > 0 ? static_cast<double>(actual) * 100.0 / planned : 0.0);
+        subjectList.append(entry);
+    }
+    // 计划多的科目排前，便于对账阅读。
+    std::sort(subjectList.begin(), subjectList.end(), [](const QVariant& a, const QVariant& b) {
+        const QVariantMap ma = a.toMap();
+        const QVariantMap mb = b.toMap();
+        if (ma.value(QStringLiteral("planned")).toInt() != mb.value(QStringLiteral("planned")).toInt()) {
+            return ma.value(QStringLiteral("planned")).toInt() > mb.value(QStringLiteral("planned")).toInt();
+        }
+        if (ma.value(QStringLiteral("actual")).toInt()
+            != mb.value(QStringLiteral("actual")).toInt()) {
+            return ma.value(QStringLiteral("actual")).toInt()
+                > mb.value(QStringLiteral("actual")).toInt();
+        }
+        return ma.value(QStringLiteral("name")).toString()
+            < mb.value(QStringLiteral("name")).toString();
+    });
+
+    result[QStringLiteral("plannedTotal")] = plannedTotal;
+    result[QStringLiteral("completedTotal")] = completedTotal;
+    result[QStringLiteral("focusedSeconds")] = focusedSeconds;
+    result[QStringLiteral("subjects")] = subjectList;
+    return result;
+}
+
+QVariantMap StatisticsService::getWeeklyReview(const QDate& weekStart) const
+{
+    QVariantMap result;
+    result.insert(QStringLiteral("hasData"), false);
+    result.insert(QStringLiteral("subjects"), QVariantList());
+    result.insert(QStringLiteral("factText"), QString());
+    result.insert(QStringLiteral("suggestionText"), QString());
+
+    if (!weekStart.isValid() || weekStart.dayOfWeek() != Qt::Monday) {
+        qWarning() << "Failed to build weekly review: weekStart is not Monday" << weekStart;
+        return result;
+    }
+
+    const QDate weekEnd = weekStart.addDays(6);
+    const QVariantMap current = weeklyAggregates(weekStart, weekEnd);
+    const QVariantMap previous = weeklyAggregates(weekStart.addDays(-7), weekStart.addDays(-1));
+
+    const int planned = current.value(QStringLiteral("plannedTotal")).toInt();
+    const int completed = current.value(QStringLiteral("completedTotal")).toInt();
+    const int focusedSeconds = current.value(QStringLiteral("focusedSeconds")).toInt();
+    const QVariantList subjects = current.value(QStringLiteral("subjects")).toList();
+    // 计划为 0 时不除零：完成率视为无（0），由 UI 与结论规则单独处理“未计划”。
+    const double rate = planned > 0 ? static_cast<double>(completed) * 100.0 / planned : 0.0;
+
+    result[QStringLiteral("weekStart")] = weekStart.toString(Qt::ISODate);
+    result[QStringLiteral("weekEnd")] = weekEnd.toString(Qt::ISODate);
+    result[QStringLiteral("plannedPomodoros")] = planned;
+    result[QStringLiteral("completedPomodoros")] = completed;
+    result[QStringLiteral("completionRate")] = rate;
+    result[QStringLiteral("focusedMinutes")] = focusedSeconds / 60;
+    result[QStringLiteral("activeDays")] = current.value(QStringLiteral("activeDays")).toInt();
+    result[QStringLiteral("previousCompletedPomodoros")] = previous.value(QStringLiteral("completedTotal")).toInt();
+    result[QStringLiteral("previousFocusedMinutes")] = previous.value(QStringLiteral("focusedSeconds")).toInt() / 60;
+    result[QStringLiteral("previousActiveDays")] = previous.value(QStringLiteral("activeDays")).toInt();
+    result[QStringLiteral("subjects")] = subjects;
+
+    // 确定性结论：最多一条事实 + 一条建议。用词只陈述事实、不评价人格。
+    QString factText;
+    QString suggestionText;
+
+    // 规则一：找出计划≥3 且完成率比总体低至少 20 个百分点、最低的那个科目。
+    double worstGap = -1.0;
+    QString worstSubject;
+    for (const QVariant& value : subjects) {
+        const QVariantMap subject = value.toMap();
+        const int subjectPlanned = subject.value(QStringLiteral("planned")).toInt();
+        if (subjectPlanned < kReviewMinimumSubjectPlan) {
+            continue;
+        }
+        const double subjectRate = subject.value(QStringLiteral("rate")).toDouble();
+        if (subjectRate <= rate - kReviewSubjectGapPoints) {
+            const double gap = rate - subjectRate;
+            if (gap > worstGap) {
+                worstGap = gap;
+                worstSubject = subject.value(QStringLiteral("name")).toString();
+            }
+        }
+    }
+
+    if (!worstSubject.isEmpty()) {
+        factText = worstSubject + QStringLiteral("的实际投入明显低于计划。");
+    } else if (planned > 0
+               && rate >= kReviewStableRateMinimum
+               && rate <= kReviewStableRateMaximum) {
+        // 规则四：计划基本准确。
+        factText = QStringLiteral("本周计划与实际基本一致，当前估算较稳定。");
+    }
+
+    if (planned == 0 && completed > 0) {
+        suggestionText = QStringLiteral("为任务设置预计番茄数后，这里能给出计划完成率与偏差分析。");
+    } else if (planned > 0 && rate < kReviewOverplannedRate) {
+        // 规则二：总体高估。
+        suggestionText = QStringLiteral("下周总计划量可以先下调 15%～25%，避免继续累积无法完成的任务。");
+    } else if (planned > 0 && rate > kReviewUnderplannedRate) {
+        // 规则三：总体低估。
+        suggestionText = QStringLiteral("本周实际投入明显高于预估，可以适当提高下周计划量，或重新校准任务预估。");
+    }
+
+    result[QStringLiteral("factText")] = factText;
+    result[QStringLiteral("suggestionText")] = suggestionText;
+    result[QStringLiteral("hasData")] = planned > 0 || completed > 0;
+    return result;
+}
+
+QVariantMap StatisticsService::getWeeklyReview() const
+{
+    const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
+    return getWeeklyReview(today.addDays(1 - today.dayOfWeek()));
 }

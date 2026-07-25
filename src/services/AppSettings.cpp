@@ -17,6 +17,8 @@ const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
 const auto kDashboardTimerVisibleKey = QStringLiteral("appearance/dashboardTimerVisible");
 const auto kReduceTransparencyKey = QStringLiteral("appearance/reduceTransparency");
 const auto kRaiseOnPhaseCompleteKey = QStringLiteral("focus/raiseOnPhaseComplete");
+const auto kCloseToTrayKey = QStringLiteral("window/closeToTray");
+const auto kCloseToTrayHintShownKey = QStringLiteral("window/closeToTrayHintShown");
 const auto kAutoStartBreakKey = QStringLiteral("focus/autoStartBreak");
 const auto kAutoStartNextPomodoroKey = QStringLiteral("focus/autoStartNextPomodoro");
 const auto kLongBreakEnabledKey = QStringLiteral("focus/longBreakEnabled");
@@ -51,6 +53,34 @@ AppSettings::AppSettings(const QString& settingsFilePath, QObject* parent)
     , m_settingsFilePath(settingsFilePath)
 {
     recreateSettingsBackend();
+}
+
+void AppSettings::reload()
+{
+    // 重新绑定磁盘存储（恢复流程刚覆盖过设置文件），再广播全部变更让 QML 绑定刷新。
+    recreateSettingsBackend();
+    emit lastModeChanged();
+    emit workMinutesChanged();
+    emit breakMinutesChanged();
+    emit soundEnabledChanged();
+    emit reduceMotionChanged();
+    emit slimClockFontChanged();
+    emit rolloverIgnoredDateChanged();
+    emit backgroundThemeChanged();
+    emit dayStartHourChanged();
+    emit nicknameChanged();
+    emit sidebarVisibleChanged();
+    emit dashboardTimerVisibleChanged();
+    emit reduceTransparencyChanged();
+    emit raiseOnPhaseCompleteChanged();
+    emit closeToTrayChanged();
+    emit closeToTrayHintShownChanged();
+    emit autoStartBreakChanged();
+    emit autoStartNextPomodoroChanged();
+    emit longBreakEnabledChanged();
+    emit longBreakMinutesChanged();
+    emit longBreakIntervalChanged();
+    emit dailyFocusGoalChanged();
 }
 
 int AppSettings::lastMode() const
@@ -306,6 +336,38 @@ void AppSettings::setRaiseOnPhaseComplete(bool enabled)
     }
     if (writeValue(kRaiseOnPhaseCompleteKey, enabled)) {
         emit raiseOnPhaseCompleteChanged();
+    }
+}
+
+bool AppSettings::closeToTray() const
+{
+    // 未经用户明确选择，红色关闭按钮必须保持“退出应用”的普通语义。
+    // 菜单栏驻留属于可选行为，不能用默认值把用户困在不可见进程里。
+    return m_settings->value(kCloseToTrayKey, false).toBool();
+}
+
+void AppSettings::setCloseToTray(bool enabled)
+{
+    if (closeToTray() == enabled) {
+        return;
+    }
+    if (writeValue(kCloseToTrayKey, enabled)) {
+        emit closeToTrayChanged();
+    }
+}
+
+bool AppSettings::closeToTrayHintShown() const
+{
+    return m_settings->value(kCloseToTrayHintShownKey, false).toBool();
+}
+
+void AppSettings::setCloseToTrayHintShown(bool shown)
+{
+    if (closeToTrayHintShown() == shown) {
+        return;
+    }
+    if (writeValue(kCloseToTrayHintShownKey, shown)) {
+        emit closeToTrayHintShownChanged();
     }
 }
 

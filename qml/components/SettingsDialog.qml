@@ -11,6 +11,7 @@ Popup {
     id: root
 
     property var appSettingsRef: null
+    property var backupServiceRef: null
     property int currentSection: 0
     property string statusText: "设置将自动保存到本机"
     property bool statusIsError: false
@@ -23,6 +24,8 @@ Popup {
     signal routineRequested
     signal categoryRequested
     signal exportRequested
+    signal backupRequested
+    signal restoreRequested
 
     modal: true
     focus: true
@@ -213,6 +216,10 @@ Popup {
                             if (item) {
                                 item.appSettingsRef = Qt.binding(function() { return root.appSettingsRef })
                                 item.compact = Qt.binding(function() { return root.compact })
+                                // 数据页需要备份服务引用；其余页面没有该属性，跳过即可。
+                                if (item.hasOwnProperty("backupServiceRef")) {
+                                    item.backupServiceRef = Qt.binding(function() { return root.backupServiceRef })
+                                }
                                 // 关于页这类"内容少于一屏"的页面需要知道视口高度做垂直居中；
                                 // 其余页面没有该属性，跳过即可。
                                 if (item.hasOwnProperty("viewportHeight")) {
@@ -285,6 +292,14 @@ Popup {
         function onExportRequested() {
             root.close()
             root.exportRequested()
+        }
+        function onBackupRequested() {
+            root.close()
+            root.backupRequested()
+        }
+        function onRestoreRequested() {
+            root.close()
+            root.restoreRequested()
         }
     }
 

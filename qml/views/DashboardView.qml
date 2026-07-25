@@ -17,6 +17,8 @@ Item {
     signal deleteRequested(int taskId, string title)
     signal focusPageRequested()
     signal todayPageRequested()
+    // 完成任务后向上冒泡，供 MainWindow 弹出“撤销完成”提示条。
+    signal taskCompletionUndoable(int taskId, string title)
 
     property var categoryManagerRef: null
     property var countdownServiceRef: null
@@ -261,7 +263,20 @@ Item {
             root.tasks = []
             root.refresh()
             root.loadError = completed ? "任务完成失败，请重试" : "取消完成失败，请重试"
+            return
         }
+        if (completed) {
+            root.taskCompletionUndoable(id, root.taskTitleById(id))
+        }
+    }
+
+    function taskTitleById(id) {
+        for (var i = 0; i < root.tasks.length; i++) {
+            if (Number(root.tasks[i].id) === id) {
+                return String(root.tasks[i].title || "")
+            }
+        }
+        return ""
     }
 
     function startFirstPendingTask() {
@@ -598,6 +613,8 @@ Item {
                                         taskTitle: modelData.title
                                         taskCategory: modelData.category && modelData.category.name ? modelData.category : (modelData.categoryData && modelData.categoryData.name ? modelData.categoryData : (modelData.categoryText || ""))
                                         taskCompleted: modelData.completed
+                                        estimatedPomodoros: Number(modelData.estimatedPomodoros || 0)
+                                        actualPomodoros: Number(modelData.actualPomodoros || 0)
                                         // 已完成筛选：紧凑只读行 + 右侧「已完成」徽章，去掉编辑/删除/开始专注空洞。
                                         compact: root.doneFilter
                                         showStartFocus: !root.doneFilter
@@ -828,8 +845,8 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        onTaskEdited: function (taskId, title, categoryId, isoDate) {
-            if (!taskManager.updateTask(taskId, title, categoryId, isoDate)) {
+        onTaskEdited: function (taskId, title, categoryId, isoDate, estimatedPomodoros) {
+            if (!taskManager.updateTask(taskId, title, categoryId, isoDate, Number(estimatedPomodoros))) {
                 root.loadError = "任务更新失败，请重试"
             }
         }

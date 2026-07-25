@@ -27,6 +27,11 @@ Task Task::fromQuery(const QSqlQuery& query)
     task.categoryColor = valueByName(query, "category_color").toString();
     task.date = QDate::fromString(valueByName(query, "date").toString(), Qt::ISODate);
     task.completed = valueByName(query, "completed").toBool();
+    // 预估值只有 tasks 查询才带；聚合列（实际番茄/专注秒数）只有带 JOIN 的任务查询才有。
+    // 缺列时 valueByName 返回无效 QVariant，toInt() 得 0，不会破坏不含这些列的旧查询。
+    task.estimatedPomodoros = valueByName(query, "estimated_pomodoros").toInt();
+    task.actualPomodoros = valueByName(query, "actual_pomodoros").toInt();
+    task.focusedSeconds = valueByName(query, "focused_seconds").toInt();
     const QString createdAtText = valueByName(query, "created_at").toString();
     task.createdAt = QDateTime::fromString(createdAtText, Qt::ISODate);
     if (!createdAtText.contains(QLatin1Char('T'))) {
@@ -69,5 +74,9 @@ QVariantMap Task::toVariantMap() const
     map.insert(QStringLiteral("date"), date);
     map.insert(QStringLiteral("completed"), completed);
     map.insert(QStringLiteral("createdAt"), createdAt);
+    map.insert(QStringLiteral("estimatedPomodoros"), estimatedPomodoros);
+    map.insert(QStringLiteral("actualPomodoros"), actualPomodoros);
+    map.insert(QStringLiteral("focusedSeconds"), focusedSeconds);
+    map.insert(QStringLiteral("focusedMinutes"), focusedSeconds / 60);
     return map;
 }

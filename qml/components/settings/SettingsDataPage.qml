@@ -11,10 +11,28 @@ FocusScope {
 
     objectName: "settingsDataPage"
     property var appSettingsRef: null
+    property var backupServiceRef: null
     property bool compact: false
+    readonly property bool backupBusy: root.backupServiceRef
+                                       ? root.backupServiceRef.busy : false
     signal routineRequested
     signal categoryRequested
     signal exportRequested
+    signal backupRequested
+    signal restoreRequested
+
+    // 最近备份时间说明；无备份服务或从未备份时给出中性文案。
+    readonly property string lastBackupCaption: {
+        if (!root.backupServiceRef)
+            return "开启后每周自动备份一次，保留最近 4 份"
+        if (root.backupBusy)
+            return root.backupServiceRef.operationText || "正在处理数据"
+        var iso = root.backupServiceRef.lastBackupTimeIso
+        if (!iso || iso.length === 0)
+            return "尚未自动备份；开启后每周备份一次，保留最近 4 份"
+        var d = new Date(iso)
+        return "最近备份：" + Qt.formatDateTime(d, "yyyy-MM-dd HH:mm")
+    }
 
     implicitHeight: contentColumn.implicitHeight
 
@@ -65,37 +83,74 @@ FocusScope {
             }
         }
 
-        Rectangle {
-            Layout.fillWidth: true
-            implicitHeight: localDataColumn.implicitHeight + Theme.space24
-            color: Theme.surfaceSunken
-            border.color: Theme.borderSubtle
-            border.width: 1
-            radius: Theme.radiusMd
+        SettingsSection {
+            title: "数据备份与恢复"
+            description: "备份是含任务、专注记录、倒计时目标与偏好的完整单文件快照。可自行放入 iCloud 云盘或移动硬盘长期保存；恢复会替换当前全部数据。"
 
-            ColumnLayout {
-                id: localDataColumn
+            ManageButton {
+                objectName: "settingsBackupNow"
+                text: "立即备份"
+                caption: "把全部数据保存为一个备份文件"
+                iconName: "layers"
+                enabled: !root.backupBusy
+                onClicked: root.backupRequested()
+            }
 
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                anchors.margins: Theme.space12
-                spacing: Theme.space4
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Theme.borderSubtle
+            }
 
-                Text {
-                    Layout.fillWidth: true
-                    text: "本机数据"
-                    color: Theme.inkStrong
-                    font.pixelSize: Theme.fontLg
-                    font.weight: Font.DemiBold
+            ManageButton {
+                objectName: "settingsRestoreBackup"
+                text: "从备份恢复"
+                caption: "用备份文件替换当前全部数据（会先自动备份当前数据）"
+                iconName: "sunrise"
+                enabled: !root.backupBusy
+                onClicked: root.restoreRequested()
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Theme.borderSubtle
+            }
+
+            ManageButton {
+                objectName: "settingsOpenBackupFolder"
+                text: "打开备份文件夹"
+                caption: "在访达中查看自动与手动备份"
+                iconName: "data"
+                enabled: !root.backupBusy
+                onClicked: {
+                    if (root.backupServiceRef)
+                        root.backupServiceRef.openBackupsFolder()
                 }
+            }
 
-                Text {
-                    Layout.fillWidth: true
-                    text: "任务、专注记录和偏好保存在这台 Mac。应用当前不提供账号、云同步或自动备份。"
-                    color: Theme.inkSoft
-                    font.pixelSize: Theme.fontMd
-                    wrapMode: Text.WordWrap
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Theme.borderSubtle
+            }
+
+            SettingsRow {
+                label: "自动备份"
+                caption: root.lastBackupCaption
+                iconName: "round"
+                compact: root.compact
+
+                SettingsSwitch {
+                    objectName: "settingsAutoBackupSwitch"
+                    text: "自动备份"
+                    persistedChecked: root.backupServiceRef ? root.backupServiceRef.autoBackupEnabled : true
+                    reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
+                    enabled: !root.backupBusy
+                    onChangeRequested: enabled => {
+                        if (root.backupServiceRef)
+                            root.backupServiceRef.autoBackupEnabled = enabled
+                    }
                 }
             }
         }

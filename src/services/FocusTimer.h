@@ -2,11 +2,11 @@
 #define FOCUSTIMER_H
 
 #include <QDateTime>
-#include <QElapsedTimer>
 #include <QObject>
 #include <QTimer>
 
 class QSqlDatabase;
+class MonotonicClock;
 
 class FocusTimer : public QObject
 {
@@ -89,6 +89,10 @@ private:
     // 单元测试需要直接推进单调时钟和内部计数来模拟长时间运行；
     // 用受控友元替代测试侧 #define private public 的未定义行为写法。
     friend class ServiceTests;
+    // 菜单栏控制器测试需要在用例间复位单例计时器状态。
+    friend class PlatformControlTests;
+    // 计时健壮性测试注入 FakeClock 模拟休眠/时钟跳变。
+    friend class TimingRobustnessTests;
 
     explicit FocusTimer(QObject* parent = nullptr);
 
@@ -109,8 +113,11 @@ private:
     void resetSession();
 
     // QTimer 只负责刷新界面；真实时长来自单调时钟，GUI 卡顿导致漏 tick 时也不会少算。
+    // 时钟基准可注入：默认 mach_continuous_time（含休眠、抗改钟），测试注入 FakeClock。
     QTimer m_timer;
-    QElapsedTimer m_runClock;
+    const MonotonicClock* m_clock;
+    // 当前运行段的起点（纳秒，取自 m_clock）；仅在 m_isRunning 为真时有意义。
+    qint64 m_runSegmentStartNsecs = 0;
     int m_currentTaskId = -1;
     QString m_currentTaskTitle;
     QDateTime m_startTime;

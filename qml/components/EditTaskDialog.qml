@@ -24,8 +24,10 @@ Popup {
     property string originalIsoDate: ""
     property int dateOffsetSelection: -1
     property string errorText: ""
+    // 预计番茄数，0 表示未设置；openForTask 从任务数据回填。
+    property int estimatedPomodoros: 0
 
-    signal taskEdited(int taskId, string title, int categoryId, var isoDate)
+    signal taskEdited(int taskId, string title, int categoryId, var isoDate, int estimatedPomodoros)
 
     modal: true
     focus: true
@@ -87,6 +89,7 @@ Popup {
         root.errorText = "";
         root.editingTaskId = Number(task.id);
         titleField.text = String(task.title || "");
+        root.estimatedPomodoros = Number(task.estimatedPomodoros || 0);
         root.originalIsoDate = root.normalizedIso(task.date);
 
         root.refreshCategories();
@@ -126,7 +129,7 @@ Popup {
         }
 
         var categoryId = categoryCombo.currentIndex >= 0 && categoryCombo.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryCombo.currentIndex].id || -1) : -1;
-        root.taskEdited(root.editingTaskId, title, categoryId, root.resultIsoDate());
+        root.taskEdited(root.editingTaskId, title, categoryId, root.resultIsoDate(), root.estimatedPomodoros);
         root.close();
     }
 
@@ -297,6 +300,46 @@ Popup {
             implicitHeight: 40
             model: root.categoryOptions
             textRole: "name"
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            spacing: Theme.space8
+
+            Text {
+                text: "预计番茄数"
+                textFormat: Text.PlainText
+                color: Theme.inkSoft
+                font.pixelSize: Theme.fontMd
+            }
+
+            DurationStepper {
+                objectName: "editEstimateStepper"
+                namePrefix: "editEstimate"
+                accessibleName: "预计番茄数"
+                unit: "个"
+                from: 0
+                // qmllint disable unqualified
+                to: (typeof taskManager !== "undefined" && taskManager && taskManager.maxEstimatedPomodoros)
+                    ? taskManager.maxEstimatedPomodoros : 99
+                // qmllint enable unqualified
+                value: root.estimatedPomodoros
+                onAdjusted: function (newValue) {
+                    root.estimatedPomodoros = newValue;
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                visible: root.estimatedPomodoros === 0
+                text: "未设置"
+                textFormat: Text.PlainText
+                color: Theme.inkMuted
+                font.pixelSize: Theme.fontSm
+                verticalAlignment: Text.AlignVCenter
+            }
         }
 
         RowLayout {

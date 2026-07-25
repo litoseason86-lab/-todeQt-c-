@@ -33,6 +33,10 @@ public:
     Q_INVOKABLE int getTotalFocusDuration() const;
     Q_INVOKABLE QVariantList getMonthWeeklySummary(int year, int month) const;
     Q_INVOKABLE QVariantList getMonthWeeklySummary() const;
+    // 每周复盘：计划 vs 实际番茄、科目对账、与上周对比，以及确定性事实/建议。
+    // weekStart 必须是周一；无参版取当前逻辑周。全部走批量聚合 SQL，不遍历原始记录。
+    Q_INVOKABLE QVariantMap getWeeklyReview(const QDate& weekStart) const;
+    Q_INVOKABLE QVariantMap getWeeklyReview() const;
 
 signals:
     void operationFailed(const QString& message);
@@ -47,6 +51,9 @@ private:
     QList<QDate> getUniqueFocusDates(const QDate& startDate, const QDate& endDate) const;
     QPair<QDate, QDate> getWeekRange(const QDate& mondayOfWeek) const;
     QVariantMap buildComparisonResult(int currentValue, int previousValue, const QString& label) const;
+    // 某周的计划/实际聚合：{plannedTotal, completedTotal, focusedSeconds, activeDays, subjects[]}。
+    // subjects 按科目名合并计划与实际番茄，供复盘对账与结论规则使用。
+    QVariantMap weeklyAggregates(const QDate& weekStart, const QDate& weekEnd) const;
 };
 
 #endif // STATISTICSSERVICE_H

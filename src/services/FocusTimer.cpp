@@ -2,6 +2,7 @@
 
 #include "DatabaseManager.h"
 #include "FocusSessionRules.h"
+#include "MonotonicClock.h"
 #include "TaskManager.h"
 
 #include <QDebug>
@@ -12,6 +13,7 @@
 
 FocusTimer::FocusTimer(QObject* parent)
     : QObject(parent)
+    , m_clock(SystemMonotonicClock::instance())
 {
     m_timer.setInterval(1000);
     connect(&m_timer, &QTimer::timeout, this, [this]() {
@@ -109,7 +111,7 @@ bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& 
     m_mode = PomodoroMode;
     m_phase = BreakPhase;
     m_targetSeconds = breakSeconds;
-    m_runClock.start();
+    m_runSegmentStartNsecs = m_clock->nowNsecs();
 
     if (!persistActiveState()) {
         resetSession();
@@ -159,9 +161,13 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
     }
 
     QSqlQuery query(db);
-    query.prepare(QStringLiteral("INSERT INTO focus_sessions (task_id, start_time) VALUES (:taskId, :startTime)"));
+    // 记录本段专注模式：番茄工作段计入任务实际番茄，自由计时段只累计专注分钟。
+    // 休息段不建 focus_sessions 行，因此这里的 mode 只会是 Free 或 Pomodoro。
+    query.prepare(QStringLiteral(
+        "INSERT INTO focus_sessions (task_id, start_time, mode) VALUES (:taskId, :startTime, :mode)"));
     query.bindValue(QStringLiteral(":taskId"), taskId);
     query.bindValue(QStringLiteral(":startTime"), now.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":mode"), static_cast<int>(mode));
 
     if (!query.exec()) {
         qWarning() << "Failed to create focus session:" << query.lastError().text()
@@ -181,7 +187,7 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
     m_mode = mode;
     m_phase = phase;
     m_targetSeconds = targetSeconds;
-    m_runClock.start();
+    m_runSegmentStartNsecs = m_clock->nowNsecs();
 
     if (!writeActiveState(db) || !db.commit()) {
         qWarning() << "Failed to persist active focus state:" << db.lastError().text()
@@ -232,7 +238,7 @@ bool FocusTimer::resumeFocus()
     }
 
     m_isRunning = true;
-    m_runClock.start();
+    m_runSegmentStartNsecs = m_clock->nowNsecs();
     m_timer.start();
     emit runningStateChanged();
     return true;
@@ -251,7 +257,7 @@ bool FocusTimer::stopFocus()
         if (!db.isOpen() || !clearActiveState(db)) {
             if (wasRunning) {
                 m_isRunning = true;
-                m_runClock.start();
+                m_runSegmentStartNsecs = m_clock->nowNsecs();
                 m_timer.start();
             }
             return false;
@@ -285,7 +291,7 @@ bool FocusTimer::completeFocusSession()
         // 低于 3 分钟的会话视为无效，直接删除 startFocus 预先插入的占位记录，避免历史页出现 0 分钟噪音。
         if (!discardFocusSession()) {
             if (wasRunning) {
-                m_runClock.start();
+                m_runSegmentStartNsecs = m_clock->nowNsecs();
                 m_timer.start();
             }
             return false;
@@ -306,7 +312,7 @@ bool FocusTimer::completeFocusSession()
     // 保存失败时恢复计时器，不假装会话已经正常结束。
     if (!saveFocusSession(duration)) {
         if (wasRunning) {
-            m_runClock.start();
+            m_runSegmentStartNsecs = m_clock->nowNsecs();
             m_timer.start();
         }
         return false;
@@ -322,14 +328,22 @@ bool FocusTimer::completeFocusSession()
     // 同时看到“已完成数据库记录”和“仍活动的计时器”，把最后一段时长重复计入界面统计。
     resetSession();
 
+    bool taskChangeAlreadyEmitted = false;
     if (shouldAutoCompleteTask) {
         // 一次有效专注代表任务已经被实际推进；达到 5 分钟后自动把任务标记完成。
-        if (!TaskManager::instance()->setTaskCompleted(completedTaskId, true)) {
+        taskChangeAlreadyEmitted =
+            TaskManager::instance()->setTaskCompleted(completedTaskId, true);
+        if (!taskChangeAlreadyEmitted) {
             qWarning() << "Failed to auto-complete task after focus session"
                        << "taskId=" << completedTaskId
                        << "duration=" << duration;
             emit taskAutoCompleteFailed(completedTaskId);
         }
+    }
+    if (completedTaskId > 0 && !taskChangeAlreadyEmitted) {
+        // 3～5 分钟的有效会话不会自动完成任务，但实际番茄/专注秒数已经改变；
+        // 周计划等只监听 tasksChanged 的页面也必须刷新派生统计。
+        emit TaskManager::instance()->tasksChanged();
     }
 
     emit focusCompleted(duration);
@@ -700,7 +714,7 @@ bool FocusTimer::restoreInterruptedSession()
     m_phase = static_cast<TimerPhase>(restoredPhase);
     m_targetSeconds = restoredTarget;
     m_completedPomodoros = restoredPomodoros;
-    m_runClock.invalidate();
+    m_runSegmentStartNsecs = -1;
     m_timer.stop();
 
     if (!cleanupOrphanedSessions()) {
@@ -737,8 +751,11 @@ void FocusTimer::prepareForShutdown()
 
 qint64 FocusTimer::currentElapsedMilliseconds() const
 {
-    if (m_isRunning && m_runClock.isValid()) {
-        return m_accumulatedMilliseconds + m_runClock.elapsed();
+    // 运行段起点为 -1 表示当前没有活动段（暂停/恢复/复位后），此时只返回已累计时长。
+    // 运行段时长来自单调时钟差值：mach_continuous_time 含系统休眠，合盖唤醒后自动补上休眠时长。
+    if (m_isRunning && m_runSegmentStartNsecs >= 0) {
+        const qint64 segmentMs = (m_clock->nowNsecs() - m_runSegmentStartNsecs) / 1000000;
+        return m_accumulatedMilliseconds + qMax<qint64>(0, segmentMs);
     }
     return m_accumulatedMilliseconds;
 }
@@ -750,9 +767,11 @@ void FocusTimer::syncElapsedTime()
 
 void FocusTimer::freezeElapsedTime()
 {
-    if (m_isRunning && m_runClock.isValid()) {
-        m_accumulatedMilliseconds += m_runClock.elapsed();
-        m_runClock.invalidate();
+    // 把当前运行段折进累计时长，并标记运行段结束（-1），避免暂停/结束瞬间被重复计入。
+    if (m_isRunning && m_runSegmentStartNsecs >= 0) {
+        const qint64 segmentMs = (m_clock->nowNsecs() - m_runSegmentStartNsecs) / 1000000;
+        m_accumulatedMilliseconds += qMax<qint64>(0, segmentMs);
+        m_runSegmentStartNsecs = -1;
     }
     syncElapsedTime();
 }
@@ -772,5 +791,5 @@ void FocusTimer::resetSession()
     m_phase = NoPhase;
     m_targetSeconds = 0;
     m_completionFailureNotified = false;
-    m_runClock.invalidate();
+    m_runSegmentStartNsecs = -1;
 }

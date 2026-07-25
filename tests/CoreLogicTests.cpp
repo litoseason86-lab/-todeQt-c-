@@ -35,6 +35,7 @@ private slots:
 
     // —— DatabaseManager ——
     void databaseChangedSignalFiresOnEveryInitialize();
+    void futureSchemaIsRejectedBeforeAnyMutation();
     void migrationBackupsArePrunedToThree();
 
     // —— CategoryManager：输入校验矩阵与重复数据 ——
@@ -227,6 +228,43 @@ void CoreLogicTests::databaseChangedSignalFiresOnEveryInitialize()
     }
     QVERIFY(!DatabaseManager::instance()->initialize(corruptPath));
     QCOMPARE(changedSpy.count(), 2);
+}
+
+void CoreLogicTests::futureSchemaIsRejectedBeforeAnyMutation()
+{
+    DatabaseManager::instance()->close();
+    const QString futurePath = m_tempDir->filePath(QStringLiteral("future.sqlite"));
+
+    {
+        const QString connectionName = QStringLiteral("CoreLogicFutureSchema");
+        QSqlDatabase database =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(futurePath);
+        QVERIFY(database.open());
+
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QStringLiteral("CREATE TABLE future_only (id INTEGER PRIMARY KEY)")));
+        QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = %1")
+                               .arg(DatabaseManager::kCurrentSchemaVersion + 1)));
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(QStringLiteral("CoreLogicFutureSchema"));
+
+    QVERIFY(!DatabaseManager::instance()->initialize(futurePath));
+
+    // 旧程序遇到未来 schema 时只能拒绝打开，不能先创建自己的表再报不兼容。
+    QSqlQuery tableQuery(DatabaseManager::instance()->database());
+    tableQuery.prepare(QStringLiteral(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = :name"));
+    tableQuery.bindValue(QStringLiteral(":name"), QStringLiteral("active_focus_state"));
+    QVERIFY(tableQuery.exec());
+    QVERIFY(tableQuery.next());
+    QCOMPARE(tableQuery.value(0).toInt(), 0);
+
+    QSqlQuery versionQuery(DatabaseManager::instance()->database());
+    QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(versionQuery.next());
+    QCOMPARE(versionQuery.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion + 1);
 }
 
 void CoreLogicTests::migrationBackupsArePrunedToThree()

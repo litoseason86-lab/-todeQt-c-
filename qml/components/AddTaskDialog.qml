@@ -76,6 +76,8 @@ Popup {
         return LogicalDay.todayDate(hour, new Date())
     }
     property string heading: "添加新任务"
+    // 预计番茄数，0 表示未设置。上限读 TaskManager 常量，与服务端校验同源。
+    property int estimatedPomodoros: 0
     property var categoryManagerRef: null
     // 生产页面注入返回 bool 的提交函数；信号保留给独立组件和旧测试使用。
     property var taskSubmitter: null
@@ -89,11 +91,12 @@ Popup {
         }
     ]
 
-    signal taskAdded(string title, date date, var category)
+    signal taskAdded(string title, date date, var category, int estimatedPomodoros)
 
     function resetFields() {
         titleField.text = "";
         categoryComboBox.currentIndex = root.categoryOptions.length > 0 ? 0 : -1;
+        root.estimatedPomodoros = 0;
         errorLabel.text = "";
     }
 
@@ -128,9 +131,9 @@ Popup {
         var categoryId = categoryComboBox.currentIndex >= 0 && categoryComboBox.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryComboBox.currentIndex].id || -1) : -1;
         var succeeded = true;
         if (root.taskSubmitter) {
-            succeeded = Boolean(root.taskSubmitter(title, root.selectedDate, categoryId));
+            succeeded = Boolean(root.taskSubmitter(title, root.selectedDate, categoryId, root.estimatedPomodoros));
         } else {
-            root.taskAdded(title, root.selectedDate, categoryId);
+            root.taskAdded(title, root.selectedDate, categoryId, root.estimatedPomodoros);
         }
         if (!succeeded) {
             errorLabel.text = "保存失败，请检查数据库后重试";
@@ -397,6 +400,48 @@ Popup {
                 background: Rectangle {
                     color: categoryDelegate.highlighted || categoryDelegate.hovered ? Theme.accentSoft : "transparent"
                 }
+            }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.topMargin: Theme.space4
+            text: "预计番茄数（可选）"
+            color: Theme.ink
+            font.pixelSize: Theme.fontLg
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            spacing: Theme.space8
+
+            DurationStepper {
+                objectName: "addEstimateStepper"
+                namePrefix: "addEstimate"
+                accessibleName: "预计番茄数"
+                unit: "个"
+                from: 0
+                // qmllint disable unqualified
+                to: (typeof taskManager !== "undefined" && taskManager && taskManager.maxEstimatedPomodoros)
+                    ? taskManager.maxEstimatedPomodoros : 99
+                // qmllint enable unqualified
+                value: root.estimatedPomodoros
+                onAdjusted: function (newValue) {
+                    root.estimatedPomodoros = newValue;
+                }
+            }
+
+            Text {
+                Layout.fillWidth: true
+                text: root.estimatedPomodoros > 0 ? "" : "未设置"
+                textFormat: Text.PlainText
+                color: Theme.inkMuted
+                font.pixelSize: Theme.fontSm
+                verticalAlignment: Text.AlignVCenter
             }
         }
 

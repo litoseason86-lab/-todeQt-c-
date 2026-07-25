@@ -121,6 +121,17 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    int version = getDatabaseVersion();
+    if (version < 0) {
+        return false;
+    }
+    if (version > kCurrentSchemaVersion) {
+        // 必须在任何 CREATE/ALTER 之前拒绝未来 schema，旧程序不能先修改再宣布不兼容。
+        qWarning() << "Database schema is newer than this application:"
+                   << version << ">" << kCurrentSchemaVersion;
+        return false;
+    }
+
     QSqlQuery query(m_db);
 
     const QString createTasksTable = QStringLiteral(R"SQL(
@@ -131,6 +142,7 @@ bool DatabaseManager::createTables()
             category_id INTEGER REFERENCES categories(id),
             routine_id INTEGER REFERENCES routines(id) ON DELETE SET NULL,
             routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
+            estimated_pomodoros INTEGER NOT NULL DEFAULT 0,
             date TEXT NOT NULL,
             completed INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -147,6 +159,7 @@ bool DatabaseManager::createTables()
             start_time TEXT NOT NULL,
             end_time TEXT,
             duration INTEGER,
+            mode INTEGER NOT NULL DEFAULT 1,
             FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
         )
     )SQL");
@@ -188,11 +201,6 @@ bool DatabaseManager::createTables()
         }
     }
 
-    int version = getDatabaseVersion();
-    if (version < 0) {
-        return false;
-    }
-
     // 版本 2 引入 categories/category_id，同时保留旧版文本科目。
     if (version < 2
         || !tableExists(QStringLiteral("categories"))
@@ -232,6 +240,17 @@ bool DatabaseManager::createTables()
     if (version < 6
         || !columnExists(QStringLiteral("tasks"), QStringLiteral("routine_generated"))) {
         if (!migrateToVersion6()) {
+            return false;
+        }
+        version = 6;
+    }
+
+    // 版本 7 给 tasks 增加预估番茄数，给 focus_sessions 增加专注模式列；
+    // 任一列缺失都要补，防御半迁移或旧库缺列时实际番茄聚合静默失真。
+    if (version < 7
+        || !columnExists(QStringLiteral("tasks"), QStringLiteral("estimated_pomodoros"))
+        || !columnExists(QStringLiteral("focus_sessions"), QStringLiteral("mode"))) {
+        if (!migrateToVersion7()) {
             return false;
         }
     }
@@ -619,6 +638,51 @@ bool DatabaseManager::migrateToVersion6()
     }
 
     qInfo() << "Database migrated to version 6";
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion7()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+    if (!backupDatabaseBeforeMigration()) {
+        return false;
+    }
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 7 migration:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    if (!columnExists(QStringLiteral("tasks"), QStringLiteral("estimated_pomodoros"))) {
+        if (!query.exec(QStringLiteral(
+                "ALTER TABLE tasks ADD COLUMN estimated_pomodoros INTEGER NOT NULL DEFAULT 0"))) {
+            qWarning() << "Failed to add tasks.estimated_pomodoros column:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    // 旧专注记录无法追溯当时是番茄还是自由计时；统一按番茄模式对待。多数历史记录来自番茄
+    // 计时器，默认 1 让升级后既有任务的实际番茄数不至于凭空归零。此为已知取舍，见输出说明。
+    if (!columnExists(QStringLiteral("focus_sessions"), QStringLiteral("mode"))) {
+        if (!query.exec(QStringLiteral(
+                "ALTER TABLE focus_sessions ADD COLUMN mode INTEGER NOT NULL DEFAULT 1"))) {
+            qWarning() << "Failed to add focus_sessions.mode column:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    if (!setDatabaseVersion(7) || !m_db.commit()) {
+        qWarning() << "Failed to commit version 7 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 7";
     return true;
 }
 

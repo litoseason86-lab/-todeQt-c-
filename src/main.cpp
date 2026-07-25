@@ -3,7 +3,6 @@
 #include <QDir>
 #include <QFontDatabase>
 #include <QGuiApplication>
-#include <QLockFile>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -12,16 +11,23 @@
 
 #include "services/DatabaseManager.h"
 #include "services/AppSettings.h"
+#include "services/BackupService.h"
 #include "services/CategoryManager.h"
 #include "services/CountdownService.h"
 #include "services/ExportService.h"
 #include "services/FocusHistoryService.h"
 #include "services/FocusTimer.h"
 #include "services/LogicalDayService.h"
+#include "services/NotificationService.h"
 #include "services/PhaseSoundService.h"
 #include "services/RoutineManager.h"
 #include "services/StatisticsService.h"
 #include "services/TaskManager.h"
+#include "services/TrayController.h"
+#include "services/SingleInstanceGuard.h"
+
+#include "platform/macos/MacNotificationBackend.h"
+#include "platform/macos/MacStatusBarController.h"
 
 int main(int argc, char *argv[])
 {
@@ -50,19 +56,23 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationVersion(QStringLiteral(POMODORO_TODO_VERSION));
 
     // 单实例守卫：两个进程共享同一数据库时会互相覆盖 active_focus_state 检查点。
-    // QLockFile 按锁文件中的 PID 识别崩溃残留锁；正常运行的第二个实例直接退出。
+    // 重复启动不再静默退出，而是通过本地 IPC 召回现有窗口。
     const QString instanceLockDir =
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QDir().mkpath(instanceLockDir);
-    QLockFile instanceLock(QDir(instanceLockDir).filePath(QStringLiteral("pomodoro-todo.lock")));
-    // 锁与进程同生命周期，禁用按时长判旧，避免长时间运行后锁被误判为过期。
-    instanceLock.setStaleLockTime(0);
-    if (!instanceLock.tryLock(0)) {
-        if (instanceLock.error() == QLockFile::LockFailedError) {
-            qWarning() << "番茄Todo 已在运行，本实例退出";
-            return 0;
-        }
-        // 锁目录不可写等环境问题不阻断启动；数据库初始化会对同一目录做权威检查。
+    SingleInstanceGuard instanceGuard(
+        QDir(instanceLockDir).filePath(QStringLiteral("pomodoro-todo.lock")),
+        QStringLiteral("com.zerionlito.PomodoroTodo"));
+    const SingleInstanceGuard::StartResult instanceResult = instanceGuard.start();
+    if (instanceResult == SingleInstanceGuard::SecondaryInstanceNotified) {
+        return 0;
+    }
+    if (instanceResult == SingleInstanceGuard::SecondaryInstanceUnreachable) {
+        qWarning() << "番茄Todo 已在运行，但无法召回现有窗口";
+        return 0;
+    }
+    if (instanceResult == SingleInstanceGuard::LockUnavailable) {
+        // 锁目录不可写等环境问题不阻断启动；数据库初始化会对同一目录做最终校验。
         qWarning() << "无法创建单实例锁，跳过检查:" << instanceLockDir;
     }
 
@@ -77,6 +87,22 @@ int main(int argc, char *argv[])
                      FocusTimer::instance(), &FocusTimer::prepareForShutdown);
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
                      DatabaseManager::instance(), &DatabaseManager::close);
+
+    // 关闭主窗口时隐藏到菜单栏而不退出：菜单栏计时器让应用在无可见窗口时仍需存活。
+    app.setQuitOnLastWindowClosed(false);
+
+    // 菜单栏与系统通知：平台无关的 TrayController/NotificationService 负责逻辑，
+    // macOS 后端负责 NSStatusItem 与 UNUserNotificationCenter。全部在 app 之后创建，
+    // 生命周期与 main 同长；showWindow/quit 意图交给 QML 落实（复用窗口与待删提交逻辑）。
+    TrayController trayController(FocusTimer::instance());
+    QObject::connect(&instanceGuard, &SingleInstanceGuard::activationRequested,
+                     &trayController, &TrayController::requestShowWindow);
+    MacStatusBarController statusBar(&trayController);
+    trayController.setView(&statusBar);
+
+    MacNotificationBackend notificationBackend;
+    NotificationService::instance()->setBackend(&notificationBackend);
+    NotificationService::instance()->requestAuthorization();
 
     // 启动即生成今天的例行任务，保证 QML 首次读取今日任务时已经能看到它们。
     RoutineManager::instance()->materializeToday();
@@ -101,6 +127,9 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), AppSettings::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("logicalDayService"), LogicalDayService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("phaseSoundService"), PhaseSoundService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("trayController"), &trayController);
+    engine.rootContext()->setContextProperty(QStringLiteral("notificationService"), NotificationService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("backupService"), BackupService::instance());
 
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
@@ -111,5 +140,10 @@ int main(int argc, char *argv[])
     }, Qt::QueuedConnection);
 
     engine.load(url);
-    return app.exec();
+    // 自动备份放到后台线程。退出时不再重复执行重 I/O，避免应用长时间卡在关闭阶段。
+    BackupService::instance()->requestAutoBackupIfDue();
+    const int exitCode = app.exec();
+    // 平台后端是 main 栈对象；事件循环结束后先清空非拥有指针，再进入局部对象析构。
+    NotificationService::instance()->setBackend(nullptr);
+    return exitCode;
 }

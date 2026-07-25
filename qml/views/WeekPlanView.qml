@@ -10,6 +10,8 @@ Item {
 
     signal startFocus(int taskId, string taskTitle)
     signal deleteRequested(int taskId, string title)
+    // 完成任务后向上冒泡，供 MainWindow 弹出“撤销完成”提示条。
+    signal taskCompletionUndoable(int taskId, string title)
 
     property date weekStart: mondayOf(new Date())
     // logicalToday 是命令式快照。若写成绑定，设置变化会在 changed 槽保存 prev 前提前重算，
@@ -195,7 +197,7 @@ Item {
         }
     }
 
-    function setTaskCompletedWithAnimationDelay(id, completed) {
+    function setTaskCompletedWithAnimationDelay(id, completed, title) {
         if (completed) {
             // 完成动画依附在当前 TaskItem delegate 上；TaskManager 会同步发 tasksChanged，
             // 如果立即刷新 Repeater，delegate 会被销毁，粒子动画看不到结束。
@@ -212,6 +214,10 @@ Item {
             root.weekTasks = []
             root.refresh()
             root.loadError = completed ? "任务完成失败，请重试" : "取消完成失败，请重试"
+            return
+        }
+        if (completed) {
+            root.taskCompletionUndoable(id, String(title || ""))
         }
     }
 
@@ -551,11 +557,13 @@ Item {
                                                      ? modelData.categoryData
                                                      : (modelData.categoryText || ""))
                                     taskCompleted: modelData.completed
+                                    estimatedPomodoros: Number(modelData.estimatedPomodoros || 0)
+                                    actualPomodoros: Number(modelData.actualPomodoros || 0)
                                     startFocusAllowed: dayRow.isToday
                                     showStartFocus: dayRow.isToday
 
                                     onCompletionChanged: function(id, completed) {
-                                        root.setTaskCompletedWithAnimationDelay(id, completed)
+                                        root.setTaskCompletedWithAnimationDelay(id, completed, modelData.title)
                                     }
 
                                     onStartFocusClicked: function(id, title) {
@@ -632,8 +640,8 @@ Item {
 
         selectedDate: root.pendingAddDate
         categoryManagerRef: root.categoryManagerRef
-        taskSubmitter: function(title, date, categoryId) {
-            return taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId))
+        taskSubmitter: function(title, date, categoryId, estimatedPomodoros) {
+            return taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedPomodoros))
         }
     }
 
@@ -643,8 +651,8 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        onTaskEdited: function(taskId, title, categoryId, isoDate) {
-            if (!taskManager.updateTask(taskId, title, categoryId, isoDate)) {
+        onTaskEdited: function(taskId, title, categoryId, isoDate, estimatedPomodoros) {
+            if (!taskManager.updateTask(taskId, title, categoryId, isoDate, Number(estimatedPomodoros))) {
                 root.loadError = "任务更新失败，请重试"
             }
         }

@@ -27,6 +27,10 @@ class AppSettings : public QObject
     Q_PROPERTY(bool reduceTransparency READ reduceTransparency WRITE setReduceTransparency NOTIFY reduceTransparencyChanged)
     // 阶段结束时把窗口带到最前；关掉后仅靠提示音提醒，不打断当前操作。
     Q_PROPERTY(bool raiseOnPhaseComplete READ raiseOnPhaseComplete WRITE setRaiseOnPhaseComplete NOTIFY raiseOnPhaseCompleteChanged)
+    // 关闭主窗口时隐藏到菜单栏而非退出；默认关闭，避免标准关闭操作留下不可见进程。
+    Q_PROPERTY(bool closeToTray READ closeToTray WRITE setCloseToTray NOTIFY closeToTrayChanged)
+    // 是否已展示过“关闭即隐藏到菜单栏”的首次提示；只提示一次，避免每次关闭都打扰。
+    Q_PROPERTY(bool closeToTrayHintShown READ closeToTrayHintShown WRITE setCloseToTrayHintShown NOTIFY closeToTrayHintShownChanged)
     // 番茄自动衔接：专注结束自动进入休息、休息结束自动开始下一个番茄（默认关，避免打断）。
     Q_PROPERTY(bool autoStartBreak READ autoStartBreak WRITE setAutoStartBreak NOTIFY autoStartBreakChanged)
     Q_PROPERTY(bool autoStartNextPomodoro READ autoStartNextPomodoro WRITE setAutoStartNextPomodoro NOTIFY autoStartNextPomodoroChanged)
@@ -67,6 +71,10 @@ public:
     void setReduceTransparency(bool enabled);
     bool raiseOnPhaseComplete() const;
     void setRaiseOnPhaseComplete(bool enabled);
+    bool closeToTray() const;
+    void setCloseToTray(bool enabled);
+    bool closeToTrayHintShown() const;
+    void setCloseToTrayHintShown(bool shown);
     bool autoStartBreak() const;
     void setAutoStartBreak(bool enabled);
     bool autoStartNextPomodoro() const;
@@ -79,6 +87,9 @@ public:
     void setLongBreakInterval(int count);
     Q_INVOKABLE int dailyFocusGoalMinutesForDate(const QString& isoDate) const;
     Q_INVOKABLE bool setDailyFocusGoal(const QString& isoDate, int minutes);
+    // 从磁盘重新读取全部偏好并广播变更信号。数据恢复覆盖设置文件后调用，
+    // 让 QML 绑定即时刷新，无需重启。
+    Q_INVOKABLE void reload();
 
 signals:
     void lastModeChanged();
@@ -95,6 +106,8 @@ signals:
     void dashboardTimerVisibleChanged();
     void reduceTransparencyChanged();
     void raiseOnPhaseCompleteChanged();
+    void closeToTrayChanged();
+    void closeToTrayHintShownChanged();
     void autoStartBreakChanged();
     void autoStartNextPomodoroChanged();
     void longBreakEnabledChanged();

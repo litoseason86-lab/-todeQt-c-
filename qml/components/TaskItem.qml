@@ -40,6 +40,19 @@ Rectangle {
     property string taskTitle: ""
     property var taskCategory: ""
     property bool taskCompleted: false
+    // 预计与实际番茄数：实际值由服务层从专注记录聚合，刷新/重启后一致。
+    property int estimatedPomodoros: 0
+    property int actualPomodoros: 0
+    // 未设置预估时显示“已专注 N 个番茄”，设置后显示“N / M 个番茄”；都为 0 时不显示。
+    readonly property string pomodoroSummary: {
+        if (root.estimatedPomodoros > 0)
+            return root.actualPomodoros + " / " + root.estimatedPomodoros + " 个番茄";
+        if (root.actualPomodoros > 0)
+            return "已专注 " + root.actualPomodoros + " 个番茄";
+        return "";
+    }
+    readonly property bool pomodoroOverflow: root.estimatedPomodoros > 0
+                                             && root.actualPomodoros > root.estimatedPomodoros
     property bool visualTaskCompleted: false
     property bool titleEditing: false
     // 父视图负责判断任务是否允许开始专注；TaskItem 只消费结果，避免把日期规则塞进通用任务项。
@@ -407,6 +420,29 @@ Rectangle {
                         elide: Text.ElideRight
                         Layout.maximumWidth: 88
                     }
+                }
+            }
+
+            // 番茄进度：克制的小字，不比标题醒目；超出预估只做轻提示，不报错、不阻止继续专注。
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.space4
+                visible: !root.titleEditing && root.pomodoroSummary.length > 0
+
+                Text {
+                    objectName: "taskPomodoroSummary"
+                    text: root.pomodoroSummary
+                    textFormat: Text.PlainText
+                    font.pixelSize: root.compact ? Theme.fontXs : Theme.fontSm
+                    color: root.pomodoroOverflow ? Theme.accent : Theme.inkMuted
+                }
+
+                Text {
+                    visible: root.pomodoroOverflow
+                    text: "已超出预估"
+                    textFormat: Text.PlainText
+                    font.pixelSize: Theme.fontXs
+                    color: Theme.inkMuted
                 }
             }
 

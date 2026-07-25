@@ -2,12 +2,16 @@ cmake_minimum_required(VERSION 3.16)
 
 project(PomodoroTodo VERSION 0.1.0 LANGUAGES CXX)
 
+# 菜单栏与系统通知走 macOS 原生 API（NSStatusItem / UNUserNotificationCenter），
+# 需要 Objective-C++ 编译能力。本项目只面向 macOS，不做其它平台分支。
+enable_language(OBJCXX)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Quick QuickControls2 QuickLayouts QuickTest Sql Test)
+find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Network Quick QuickControls2 QuickLayouts QuickTest Sql Test)
 
 if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
     # AGL.framework 是旧版 OpenGL 框架，新版 macOS SDK 已经移除；
@@ -55,6 +59,8 @@ set(APP_SOURCES
     src/services/TaskManager.cpp
     src/services/FocusTimer.h
     src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
     src/services/StatisticsService.h
     src/services/StatisticsService.cpp
     src/services/LogicalDay.h
@@ -69,6 +75,20 @@ set(APP_SOURCES
     src/services/PhaseSoundService.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
+    src/services/TrayController.h
+    src/services/TrayController.cpp
+    src/services/NotificationService.h
+    src/services/NotificationService.cpp
+    src/services/SingleInstanceGuard.h
+    src/services/SingleInstanceGuard.cpp
+    src/services/BackupOperations.h
+    src/services/BackupOperations.cpp
+    src/services/BackupService.h
+    src/services/BackupService.cpp
+    src/platform/macos/MacStatusBarController.h
+    src/platform/macos/MacStatusBarController.mm
+    src/platform/macos/MacNotificationBackend.h
+    src/platform/macos/MacNotificationBackend.mm
     resources/qml.qrc
     resources/wallpapers.qrc
     resources/fonts.qrc
@@ -83,6 +103,13 @@ list(APPEND APP_SOURCES "${APP_ICON}")
 
 add_executable(PomodoroTodo ${APP_SOURCES})
 
+# 菜单栏/通知的 ObjC++ 后端用 ARC 管理 Cocoa 对象生命周期。
+set_source_files_properties(
+    src/platform/macos/MacStatusBarController.mm
+    src/platform/macos/MacNotificationBackend.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+)
+
 target_compile_definitions(PomodoroTodo PRIVATE
     POMODORO_TODO_VERSION="${PROJECT_VERSION}"
 )
@@ -95,10 +122,16 @@ endif()
 
 target_link_libraries(PomodoroTodo PRIVATE
     Qt6::Core
+    Qt6::Concurrent
+    Qt6::Network
     Qt6::Quick
     Qt6::QuickControls2
     Qt6::QuickLayouts
     Qt6::Sql
+    # 菜单栏、通知与窗口/Dock 行为所需的 macOS 系统框架。
+    "-framework AppKit"
+    "-framework Foundation"
+    "-framework UserNotifications"
 )
 
 set_target_properties(PomodoroTodo PROPERTIES
@@ -154,6 +187,8 @@ add_executable(PomodoroTodoTests
     src/services/TaskManager.cpp
     src/services/FocusTimer.h
     src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
     src/services/StatisticsService.h
     src/services/StatisticsService.cpp
     src/services/FocusHistoryService.h
@@ -188,6 +223,8 @@ add_executable(CoreLogicTests
     src/services/TaskManager.cpp
     src/services/FocusTimer.h
     src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
     src/services/CountdownService.h
@@ -221,6 +258,8 @@ add_executable(RobustnessTests
     src/services/TaskManager.cpp
     src/services/FocusTimer.h
     src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
     src/services/StatisticsService.h
     src/services/StatisticsService.cpp
     src/services/FocusHistoryService.h
@@ -263,6 +302,114 @@ target_link_libraries(CountdownServiceTests PRIVATE
 )
 
 add_test(NAME CountdownServiceTests COMMAND CountdownServiceTests)
+
+# 菜单栏控制器与通知服务是平台无关层，测试不引入任何 .mm / AppKit 依赖，
+# 用假视图与假通知后端验证状态机与降级逻辑。
+add_executable(PlatformControlTests
+    tests/PlatformControlTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/TrayController.h
+    src/services/TrayController.cpp
+    src/services/NotificationService.h
+    src/services/NotificationService.cpp
+    src/services/SingleInstanceGuard.h
+    src/services/SingleInstanceGuard.cpp
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+)
+
+target_link_libraries(PlatformControlTests PRIVATE
+    Qt6::Core
+    Qt6::Network
+    Qt6::Sql
+    Qt6::Test
+)
+
+add_test(NAME PlatformControlTests COMMAND PlatformControlTests)
+
+# 备份/恢复：SQLite 快照 + 嵌入偏好；测试用临时目录与临时数据库，覆盖一致性与回滚。
+add_executable(BackupServiceTests
+    tests/BackupServiceTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/BackupOperations.h
+    src/services/BackupOperations.cpp
+    src/services/BackupService.h
+    src/services/BackupService.cpp
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+)
+
+target_link_libraries(BackupServiceTests PRIVATE
+    Qt6::Core
+    Qt6::Concurrent
+    Qt6::Gui
+    Qt6::Sql
+    Qt6::Test
+)
+
+add_test(NAME BackupServiceTests COMMAND BackupServiceTests)
+set_tests_properties(BackupServiceTests PROPERTIES
+    # QDesktopServices/QtGui 需要一个平台；离屏即可，不弹窗。
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# 计时健壮性：注入 FakeClock 模拟休眠、时钟跳变、跨界完成，不依赖真实等待或机器睡眠。
+add_executable(TimingRobustnessTests
+    tests/TimingRobustnessTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+)
+
+target_link_libraries(TimingRobustnessTests PRIVATE
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+add_test(NAME TimingRobustnessTests COMMAND TimingRobustnessTests)
 
 add_executable(FontAssetsTests
     tests/FontAssetsTests.cpp

@@ -3,6 +3,7 @@
 #include "../models/Task.h"
 #include "AppSettings.h"
 #include "DatabaseManager.h"
+#include "FocusSessionRules.h"
 #include "LogicalDay.h"
 
 #include <QDebug>
@@ -51,16 +52,45 @@ QDate normalizeDate(const QVariant& value)
     return QDate();
 }
 
+int clampEstimatedPomodoros(int value)
+{
+    // 越界一律夹紧：负数当未设置，超上限压到上限，绝不因预估值让任务本体保存失败。
+    return qBound(0, value, TaskManager::kMaxEstimatedPomodoros);
+}
+
+// 一条专注记录计入某任务实际番茄，当且仅当：番茄工作模式(mode=1)且时长达到有效专注门槛。
+// 自由计时(mode=0)只累计专注分钟，不折算番茄。这是“有效番茄”的唯一口径，列表聚合与单任务
+// 查询都从这里取；不允许在别处复制出第二套阈值或模式判断。
+QString validPomodoroCountExpr()
+{
+    return QStringLiteral("SUM(CASE WHEN mode = 1 AND duration >= %1 THEN 1 ELSE 0 END)")
+        .arg(FocusSessionRules::kMinimumValidDurationSeconds);
+}
+
+// 专注分钟对模式不敏感：番茄段和自由计时段都算，只要达到有效专注门槛。
+QString focusedSecondsExpr()
+{
+    return QStringLiteral("SUM(CASE WHEN duration >= %1 THEN duration ELSE 0 END)")
+        .arg(FocusSessionRules::kMinimumValidDurationSeconds);
+}
+
 QString taskSelectSql()
 {
     // 同时返回标准化科目字段和旧版文本科目，让旧数据库和新 UI 共用同一查询结果。
+    // 日期条件先利用 tasks 索引筛出当前页面任务，再按 task_id 走专注记录索引聚合。
+    // 若先把整张 focus_sessions 分组物化，历史记录越多，每次打开任务页都会线性变慢。
     return QStringLiteral(
         "SELECT t.id, t.title, "
         "COALESCE(c.name, t.category) AS category, "
         "t.category_id, c.name AS category_name, c.color AS category_color, "
-        "t.date, t.completed, t.created_at "
+        "t.date, t.completed, t.created_at, t.estimated_pomodoros, "
+        "COALESCE((SELECT %1 FROM focus_sessions fs "
+        "WHERE fs.task_id = t.id AND fs.duration IS NOT NULL), 0) AS actual_pomodoros, "
+        "COALESCE((SELECT %2 FROM focus_sessions fs "
+        "WHERE fs.task_id = t.id AND fs.duration IS NOT NULL), 0) AS focused_seconds "
         "FROM tasks t "
-        "LEFT JOIN categories c ON t.category_id = c.id ");
+        "LEFT JOIN categories c ON t.category_id = c.id ")
+        .arg(validPomodoroCountExpr(), focusedSecondsExpr());
 }
 
 bool bindCategoryTextFromId(QSqlQuery& query, int categoryId, QString* categoryName)
@@ -90,6 +120,9 @@ bool bindCategoryTextFromId(QSqlQuery& query, int categoryId, QString* categoryN
 TaskManager::TaskManager(QObject* parent)
     : QObject(parent)
 {
+    // 数据库整体恢复后，所有 QML 列表快照必须失效；否则旧任务 ID 会继续作用于新库。
+    connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged,
+            this, &TaskManager::tasksChanged);
 }
 
 TaskManager* TaskManager::instance()
@@ -162,6 +195,11 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue, const
 
 bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int categoryId)
 {
+    return addTask(title, dateValue, categoryId, 0);
+}
+
+bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int categoryId, int estimatedPomodoros)
+{
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
         qWarning() << "Failed to add task: title is empty after trimming";
@@ -196,12 +234,13 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int c
 
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "INSERT INTO tasks (title, category, category_id, date, completed) "
-        "VALUES (:title, :category, :categoryId, :date, 0)"));
+        "INSERT INTO tasks (title, category, category_id, date, completed, estimated_pomodoros) "
+        "VALUES (:title, :category, :categoryId, :date, 0, :estimated)"));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
     query.bindValue(QStringLiteral(":category"), categoryName);
     query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":estimated"), clampEstimatedPomodoros(estimatedPomodoros));
 
     if (!query.exec()) {
         qWarning() << "Failed to add task:" << query.lastError().text();
@@ -249,7 +288,31 @@ bool TaskManager::setTaskCompleted(int taskId, bool completed)
     return true;
 }
 
+bool TaskManager::isRoutineGeneratedTask(int taskId) const
+{
+    if (!isValidTaskId(taskId)) {
+        return false;
+    }
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        return false;
+    }
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT routine_generated FROM tasks WHERE id = :id"));
+    query.bindValue(QStringLiteral(":id"), taskId);
+    if (!query.exec() || !query.next()) {
+        return false;
+    }
+    return query.value(0).toInt() == 1;
+}
+
 bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue)
+{
+    // 四参重命名/改期路径：预估番茄数用 -1 哨兵表示保持不变，避免重命名顺手清零用户的预估。
+    return updateTask(taskId, title, categoryId, dateValue, -1);
+}
+
+bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue, int estimatedPomodoros)
 {
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to update task: invalid task id" << taskId;
@@ -288,15 +351,25 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, c
         categoryIdValue = categoryId;
     }
 
+    // 预估番茄数为负视为“保持不变”，只有非负值才写入并夹紧到合法区间。
+    const bool updateEstimate = estimatedPomodoros >= 0;
+
     QSqlQuery query(db);
     // category 文本仍要同步写入，保证旧导出和旧视图在 category_id 缺失时也能退回显示。
-    query.prepare(QStringLiteral(
-        "UPDATE tasks SET title = :title, category = :category, category_id = :categoryId, date = :date "
-        "WHERE id = :id"));
+    query.prepare(updateEstimate
+        ? QStringLiteral(
+            "UPDATE tasks SET title = :title, category = :category, category_id = :categoryId, "
+            "date = :date, estimated_pomodoros = :estimated WHERE id = :id")
+        : QStringLiteral(
+            "UPDATE tasks SET title = :title, category = :category, category_id = :categoryId, "
+            "date = :date WHERE id = :id"));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
     query.bindValue(QStringLiteral(":category"), categoryName);
     query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    if (updateEstimate) {
+        query.bindValue(QStringLiteral(":estimated"), clampEstimatedPomodoros(estimatedPomodoros));
+    }
     query.bindValue(QStringLiteral(":id"), taskId);
 
     if (!query.exec()) {
@@ -561,4 +634,50 @@ bool TaskManager::moveTasksToToday(const QVariantList& taskIds)
 
     emit tasksChanged();
     return true;
+}
+
+int TaskManager::getCompletedPomodorosForTask(int taskId) const
+{
+    if (!isValidTaskId(taskId)) {
+        return 0;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to count task pomodoros: database is not open";
+        return 0;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT ") + validPomodoroCountExpr()
+        + QStringLiteral(" AS actual FROM focus_sessions WHERE task_id = :id AND duration IS NOT NULL"));
+    query.bindValue(QStringLiteral(":id"), taskId);
+    if (!query.exec() || !query.next()) {
+        qWarning() << "Failed to count task pomodoros:" << query.lastError().text();
+        return 0;
+    }
+    return query.value(0).toInt();
+}
+
+int TaskManager::getFocusedMinutesForTask(int taskId) const
+{
+    if (!isValidTaskId(taskId)) {
+        return 0;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to sum task focus minutes: database is not open";
+        return 0;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT ") + focusedSecondsExpr()
+        + QStringLiteral(" AS focused FROM focus_sessions WHERE task_id = :id AND duration IS NOT NULL"));
+    query.bindValue(QStringLiteral(":id"), taskId);
+    if (!query.exec() || !query.next()) {
+        qWarning() << "Failed to sum task focus minutes:" << query.lastError().text();
+        return 0;
+    }
+    return query.value(0).toInt() / 60;
 }

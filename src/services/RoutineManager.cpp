@@ -58,6 +58,8 @@ RoutineManager::RoutineManager(QObject* parent)
     // 因此把分类变化转发成 routinesChanged，避免 QML 列表停留在旧分类状态。
     connect(CategoryManager::instance(), &CategoryManager::categoriesChanged,
             this, &RoutineManager::routinesChanged);
+    connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged,
+            this, &RoutineManager::routinesChanged);
 }
 
 RoutineManager* RoutineManager::instance()

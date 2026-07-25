@@ -110,8 +110,11 @@ Rectangle {
                 visible: !root.showEmptyState
 
                 Item {
-                    Layout.preferredWidth: Math.min(parent.width * 0.42, parent.height)
-                    Layout.fillHeight: true
+                    // 饼图直径设上限，宽面板上也不至于撑得过大、与图例失衡。
+                    readonly property real pieSize: Math.min(parent.width * 0.42, parent.height, 176)
+                    Layout.preferredWidth: pieSize
+                    Layout.preferredHeight: pieSize
+                    Layout.alignment: Qt.AlignVCenter
 
                     Canvas {
                         id: pieCanvas
@@ -185,21 +188,26 @@ Rectangle {
                 }
 
                 ColumnLayout {
+                    // 图例竖向居中,少量科目时不会挤在顶部留下大片空白。
                     Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    spacing: Theme.space8
+                    Layout.alignment: Qt.AlignVCenter
+                    spacing: Theme.space12
 
                     Repeater {
                         model: root.chartData
 
                         RowLayout {
+                            // 整条图例统一限宽,百分比对齐在占比条右端上方,不会飘到面板最右侧。
                             Layout.fillWidth: true
+                            Layout.maximumWidth: 320
                             spacing: Theme.space8
 
                             Rectangle {
                                 Layout.preferredWidth: 11
                                 Layout.preferredHeight: 11
-                                radius: Theme.hairline
+                                Layout.alignment: Qt.AlignTop
+                                Layout.topMargin: 3
+                                radius: 3
                                 color: modelData.color
                             }
 
@@ -237,15 +245,17 @@ Rectangle {
                                 }
 
                                 Rectangle {
+                                    // 占比条随文案块限宽,单一科目 100% 时不会拉成横贯整行的进度条。
                                     Layout.fillWidth: true
-                                    Layout.preferredHeight: 5
-                                    radius: Theme.hairline
+                                    Layout.topMargin: 2
+                                    Layout.preferredHeight: 6
+                                    radius: 3
                                     color: Theme.accentSoft
 
                                     Rectangle {
                                         width: parent.width * (root.totalValue > 0 ? modelData.value / root.totalValue : 0)
                                         height: parent.height
-                                        radius: Theme.hairline
+                                        radius: 3
                                         color: modelData.color
                                     }
                                 }

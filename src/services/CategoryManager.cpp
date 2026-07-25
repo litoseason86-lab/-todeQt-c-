@@ -18,6 +18,9 @@ bool isValidCategoryId(int id)
 CategoryManager::CategoryManager(QObject* parent)
     : QObject(parent)
 {
+    // 数据库整体替换会让所有科目快照失效，统一广播而不是让每个页面感知数据库层。
+    connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged,
+            this, &CategoryManager::categoriesChanged);
 }
 
 CategoryManager* CategoryManager::instance()

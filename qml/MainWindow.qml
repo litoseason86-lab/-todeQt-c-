@@ -1,4 +1,7 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
+import QtQuick.Dialogs
 import QtQuick.Effects
 import QtQuick.Layouts
 import "."
@@ -19,9 +22,11 @@ Item {
     property int pendingDeleteTaskId: -1
     property string pendingDeleteTitle: ""
     property int deleteCommitDelayMs: 5000
+    property string restoreInspectionPath: ""
     property var countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
     property var appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
     property var focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
+    property var backupServiceRef: typeof backupService === "undefined" ? null : backupService
     // 侧栏展开态：优先读设置；测试未注入 settings 时本地默认真。
     property bool sidebarVisible: root.appSettingsRef
                                   ? root.appSettingsRef.sidebarVisible
@@ -161,11 +166,28 @@ Item {
         root.pendingDeleteTitle = String(taskTitle || "")
         deleteCommitTimer.interval = root.deleteCommitDelayMs
         deleteCommitTimer.restart()
+        // 例行生成的当日实例：删除只影响今天，例行规则本身不受影响，撤销文案据此区分，
+        // 让用户明白这不是删掉了整条例行规则。
+        var isRoutine = (typeof taskManager !== "undefined" && taskManager && taskManager.isRoutineGeneratedTask)
+                ? taskManager.isRoutineGeneratedTask(taskId) : false
+        var deleteMessage = isRoutine
+                ? "已删除今天的例行任务「" + root.pendingDeleteTitle + "」"
+                : "已删除「" + root.pendingDeleteTitle + "」"
         // 直接走 globalToast：showToast 会把“已有待删任务”先提交，撤销条自己不能触发这条规则。
-        globalToast.show("已删除「" + root.pendingDeleteTitle + "」", "撤销", function() {
+        globalToast.show(deleteMessage, "撤销", function() {
             root.cancelPendingDelete()
         })
         return true
+    }
+
+    // 完成撤销：完成已即时写库，撤销时把完成态翻回。5 秒撤销条内点击即可恢复完成前状态，
+    // 任务 ID、排序、字段都不变（只改了 completed 一列）。
+    function showCompletionUndoToast(taskId, taskTitle) {
+        showToast("已完成「" + String(taskTitle || "") + "」", "撤销", function() {
+            if (!taskManager.setTaskCompleted(taskId, false)) {
+                root.showToast("撤销完成失败，请重试")
+            }
+        })
     }
 
     function commitPendingDelete() {
@@ -413,6 +435,9 @@ Item {
                     onDeleteRequested: function(taskId, taskTitle) {
                         root.requestDeleteTask(taskId, taskTitle)
                     }
+                    onTaskCompletionUndoable: function(taskId, title) {
+                        root.showCompletionUndoToast(taskId, title)
+                    }
                 }
 
                 FocusView {
@@ -450,6 +475,9 @@ Item {
 
                     onDeleteRequested: function(taskId, taskTitle) {
                         root.requestDeleteTask(taskId, taskTitle)
+                    }
+                    onTaskCompletionUndoable: function(taskId, title) {
+                        root.showCompletionUndoToast(taskId, title)
                     }
                 }
 
@@ -490,6 +518,9 @@ Item {
                     onTodayPageRequested: root.switchToView("today")
                     onDeleteRequested: function(taskId, taskTitle) {
                         root.requestDeleteTask(taskId, taskTitle)
+                    }
+                    onTaskCompletionUndoable: function(taskId, title) {
+                        root.showCompletionUndoToast(taskId, title)
                     }
                 }
             }
@@ -718,9 +749,110 @@ Item {
 
         parent: root
         appSettingsRef: root.appSettingsRef
+        backupServiceRef: root.backupServiceRef
 
         onRoutineRequested: routineDialog.open()
         onCategoryRequested: categoryDialog.open()
         onExportRequested: exportDialog.open()
+        onBackupRequested: root.openBackupSaveDialog()
+        onRestoreRequested: restoreOpenDialog.open()
+    }
+
+    function openBackupSaveDialog() {
+        // 建议文件名含当前时间，必须在每次打开前重新生成；FileDialog 会改写 selectedFile，
+        // 不能依赖一个没有 NOTIFY 的长期绑定。
+        if (!root.backupServiceRef)
+            return
+        var directory = root.backupServiceRef.backupsDirectory()
+        backupSaveDialog.currentFolder = Qt.resolvedUrl("file://" + directory)
+        backupSaveDialog.selectedFile = Qt.resolvedUrl(
+                    "file://" + directory + "/" + root.backupServiceRef.suggestedBackupFileName())
+        backupSaveDialog.open()
+    }
+
+    function backupLocalPath(urlValue) {
+        // FileDialog 返回 URL，服务层需要真实本地路径。
+        var value = String(urlValue)
+        return value.startsWith("file://") ? decodeURIComponent(value.substring(7)) : value
+    }
+
+    FileDialog {
+        id: backupSaveDialog
+
+        title: "保存备份"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["番茄Todo 备份 (*.tomatobackup)"]
+        onAccepted: {
+            if (root.backupServiceRef)
+                root.backupServiceRef.requestBackup(root.backupLocalPath(selectedFile))
+        }
+    }
+
+    FileDialog {
+        id: restoreOpenDialog
+
+        title: "选择要恢复的备份"
+        fileMode: FileDialog.OpenFile
+        nameFilters: ["番茄Todo 备份 (*.tomatobackup)"]
+        onAccepted: {
+            if (!root.backupServiceRef)
+                return
+            var path = root.backupLocalPath(selectedFile)
+            root.restoreInspectionPath = path
+            root.backupServiceRef.requestBackupInfo(path)
+        }
+    }
+
+    RestoreConfirmDialog {
+        id: restoreConfirmDialog
+
+        parent: root
+        onConfirmed: function (path) {
+            if (root.backupServiceRef)
+                root.backupServiceRef.requestRestore(path)
+        }
+    }
+
+    Connections {
+        // 备份/恢复结果统一用底部 Toast 反馈，成功失败都给可理解的说明。
+        target: root.backupServiceRef
+        ignoreUnknownSignals: true
+
+        function onBackupCompleted(success, message) {
+            root.showToast(String(message || (success ? "备份完成" : "备份失败")))
+        }
+        function onBackupInfoReady(sourcePath, info) {
+            if (String(sourcePath) !== root.restoreInspectionPath)
+                return
+            root.restoreInspectionPath = ""
+            if (!info.valid) {
+                root.showToast(info.reason && String(info.reason).length > 0
+                               ? info.reason : "该备份文件无法恢复")
+                return
+            }
+            restoreConfirmDialog.backupPath = String(sourcePath)
+            restoreConfirmDialog.info = info
+            restoreConfirmDialog.open()
+        }
+        function onRestoreStarted() {
+            // 旧库的撤销删除命令不能跨过数据库整体替换边界，否则相同主键会删错恢复数据。
+            root.cancelPendingDelete()
+        }
+        function onRestoreCompleted(success, message) {
+            root.showToast(String(message || (success ? "恢复完成" : "恢复失败")))
+        }
+    }
+
+    Loader {
+        anchors.fill: parent
+        z: 10000
+        active: root.backupServiceRef && root.backupServiceRef.operationBlocksUi
+
+        sourceComponent: Component {
+            BackupOperationOverlay {
+                message: root.backupServiceRef ? root.backupServiceRef.operationText : ""
+                reduceMotion: root.sidebarMotionReduced
+            }
+        }
     }
 }

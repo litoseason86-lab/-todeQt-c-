@@ -20,6 +20,11 @@ public:
     QDate date;
     bool completed = false;
     QDateTime createdAt;
+    // 用户预估的番茄数；0 表示未设置。实际番茄数与专注秒数是从 focus_sessions 聚合出来的
+    // 只读派生值，不落在 tasks 表里，避免与专注记录产生第二份可能不一致的真相。
+    int estimatedPomodoros = 0;
+    int actualPomodoros = 0;
+    int focusedSeconds = 0;
 
     // fromQuery 负责从 SQL 查询结果创建对象，toVariantMap 负责交给 QML 显示。
     static Task fromQuery(const QSqlQuery& query);

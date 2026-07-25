@@ -11,6 +11,10 @@ class DatabaseManager : public QObject
     Q_OBJECT
 
 public:
+    // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
+    // 高于此值的备份由更高版本应用创建，拒绝恢复。
+    static constexpr int kCurrentSchemaVersion = 7;
+
     static DatabaseManager* instance();
 
     // 初始化会打开数据库、建表并执行必要迁移；dbPath 为空时使用应用默认路径。
@@ -42,6 +46,9 @@ private:
     bool migrateToVersion5();
     // v6 引入可信来源标记；只有新版本实际生成的例行任务才可退出逾期结转。
     bool migrateToVersion6();
+    // v7 给 tasks 增加预估番茄数、给 focus_sessions 增加专注模式；后者用来把正向计时
+    // 与番茄工作段区分开，实际番茄数聚合时只计番茄模式，避免把自由计时误折算成番茄。
+    bool migrateToVersion7();
     bool createRoutinesTable();
     bool insertPresetCategories();
     bool migrateTaskCategories();

@@ -54,6 +54,10 @@ QtObject {
 
     // —— 投影 ——（纯黑；透明度由各效果自身属性控制）
     readonly property color shadow: "#000000"
+    // 模态事务遮罩：恢复数据库时阻断旧界面继续提交写操作。
+    readonly property color modalScrim: darkMode
+        ? Qt.rgba(0, 0, 0, 0.72)
+        : Qt.rgba(0, 0, 0, 0.42)
 
     // —— 字号 Type Scale ——
     readonly property int fontXs: 11
