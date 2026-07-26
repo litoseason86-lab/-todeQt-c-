@@ -5,6 +5,10 @@ import QtQuick
 // 色相永远是暖纸家族；暗色壁纸下切到"夜间版"（米白墨水 + 暗暖玻璃），
 // 只翻转明暗、不换色相。字号/间距/圆角为收敛后的比例阶梯。
 QtObject {
+    // 全局减少动效事实源。所有动画必须将时长归零，
+    // 无限循环和装饰粒子则必须直接停止，避免隐形占用 CPU/GPU。
+    property bool reduceMotion: false
+
     // 当前壁纸主题 id，由 MainWindow 绑定设置注入；决定明暗版式。
     property string activeThemeId: "warm"
     readonly property bool darkMode: resolveTheme(activeThemeId).mode === "dark"

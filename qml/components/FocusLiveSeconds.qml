@@ -9,6 +9,8 @@ QtObject {
 
     property var timerRef: null
     property int baseSeconds: 0
+    // 为空时保持通用组件的旧行为；今日页与仪表盘必须传 yyyy-MM-dd。
+    property string logicalDate: ""
 
     readonly property int phase: root.timerRef ? Number(root.timerRef.phase) : 0
     readonly property bool hasSession: root.timerRef ? Boolean(root.timerRef.hasActiveSession) : false
@@ -16,7 +18,11 @@ QtObject {
     // 显式经由 timerRef.elapsedSeconds 读取，tick 信号才能驱动逐秒刷新。
     readonly property int liveSeconds: {
         var base = Math.max(0, Number(root.baseSeconds || 0))
-        if (root.timerRef && (root.phase === 1 || (root.phase === 0 && root.hasSession))) {
+        var sessionBelongsHere = !root.timerRef || root.logicalDate.length === 0
+                || root.timerRef.sessionLogicalDate === undefined
+                || String(root.timerRef.sessionLogicalDate || "") === root.logicalDate
+        if (root.timerRef && sessionBelongsHere
+                && (root.phase === 1 || (root.phase === 0 && root.hasSession))) {
             base += Math.max(0, Number(root.timerRef.elapsedSeconds || 0))
         }
         return base

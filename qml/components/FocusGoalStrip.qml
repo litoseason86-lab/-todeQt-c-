@@ -317,7 +317,7 @@ GlassPanel {
                     Behavior on width {
                         enabled: !root.reduceMotion
                         NumberAnimation {
-                            duration: 300
+                            duration: Theme.reduceMotion ? 0 : 300
                             easing.type: Easing.OutCubic
                         }
                     }

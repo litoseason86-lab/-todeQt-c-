@@ -49,7 +49,8 @@ TestCase {
             completedTasks: 7,
             totalTasks: 10,
             completionRate: 0.7,
-            sessionCount: 5
+            sessionCount: 5,
+            pomodoroCount: 2
         })
         property int streakData: 16
         property int totalData: 124 * 3600
@@ -77,6 +78,7 @@ TestCase {
         property bool isRunning: false
         property int remainingSeconds: 0
         property int elapsedSeconds: 0
+        property string sessionLogicalDate: "2026-07-12"
         property int targetSeconds: 0
         property string currentTaskTitle: ""
         property int pauseCalls: 0
@@ -168,6 +170,7 @@ TestCase {
             height: 560
             timerRef: focusTimer
             settingsRef: appSettings
+            logicalDate: "2026-07-12"
         }
     }
 
@@ -197,6 +200,7 @@ TestCase {
         focusTimer.phase = 0
         focusTimer.hasActiveSession = false
         focusTimer.isRunning = false
+        focusTimer.sessionLogicalDate = "2026-07-12"
         focusTimer.pauseCalls = 0
         focusTimer.resumeCalls = 0
         focusTimer.stopCalls = 0
@@ -241,6 +245,7 @@ TestCase {
         verify(view)
 
         compare(Number(view.todayStats.sessionCount), 5)
+        compare(Number(view.todayStats.pomodoroCount), 2)
         compare(view.streakDays, 16)
         compare(view.totalFocusSeconds, 124 * 3600)
 
@@ -252,6 +257,13 @@ TestCase {
         var streakCard = findChild(view, "dashboardStreakCard")
         verify(streakCard)
         compare(streakCard.value, "16")
+
+        const pomodoroCard = findChild(view, "todayPomodoroCard")
+        const timerPomodoroText = findChild(view, "dashboardTimerSessionCount")
+        verify(pomodoroCard)
+        verify(timerPomodoroText)
+        compare(pomodoroCard.value, "2")
+        compare(timerPomodoroText.text, "今日已专注 2 个番茄")
     }
 
     function test_serviceFailuresAreShownInsteadOfEmptyState() {
@@ -507,6 +519,11 @@ TestCase {
         focusTimer.elapsedSeconds = 300
         compare(panel.liveFocusSeconds, 900)
 
+        // 跨逻辑日后，旧会话仍在运行也不得叠加到新一天的已落库统计上。
+        focusTimer.sessionLogicalDate = "2026-07-11"
+        compare(panel.liveFocusSeconds, 600)
+        focusTimer.sessionLogicalDate = "2026-07-12"
+
         // 休息阶段不累计。
         focusTimer.phase = 2
         compare(panel.liveFocusSeconds, 600)
@@ -646,12 +663,25 @@ TestCase {
         verify(Qt.colorEqual(fallback.color, Theme.glassSolidCard))
 
         Theme.glassBlurAllowed = true
-        compare(backdrop.effectActive, true)
         tryCompare(loader, "active", true, 300)
         tryCompare(loader, "status", Loader.Ready, 500)
         var refraction = findChild(backdrop, "liquidGlassRefraction")
         verify(refraction)
         verify(String(refraction.fragmentShader).indexOf("liquid_glass.frag.qsb") >= 0)
+        // CI 的软件渲染后端不支持 ShaderEffect；GPU 后端则应进入有效态。
+        // 两者都必须在有限时间内给出明确结果，不能永久停在伪加载态。
+        tryVerify(function() { return backdrop.effectActive || backdrop.shaderFailed }, 1200)
+        if (backdrop.shaderFailed) {
+            compare(backdrop.effectActive, false)
+            compare(backdrop.fallbackActive, true)
+        }
+
+        backdrop.refractionShader = Qt.resolvedUrl("missing-liquid-glass.frag.qsb")
+        tryCompare(backdrop, "shaderFailed", true, 1200)
+        compare(backdrop.effectActive, false)
+        tryCompare(loader, "active", false, 100)
+        compare(backdrop.fallbackActive, true)
+        verify(backdrop.shaderError.length > 0)
     }
 
 }

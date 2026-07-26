@@ -88,7 +88,7 @@ GlassPanel {
 
     Behavior on scale {
         NumberAnimation {
-            duration: 150
+            duration: Theme.reduceMotion ? 0 : 150
             easing.type: Easing.OutQuad
         }
     }

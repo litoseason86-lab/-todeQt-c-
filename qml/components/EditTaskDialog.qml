@@ -26,6 +26,8 @@ Popup {
     property string errorText: ""
     // 预计番茄数，0 表示未设置；openForTask 从任务数据回填。
     property int estimatedPomodoros: 0
+    // 生产页面注入返回 bool 的写入函数；保留信号用于独立组件和兼容测试。
+    property var taskSubmitter: null
 
     signal taskEdited(int taskId, string title, int categoryId, var isoDate, int estimatedPomodoros)
 
@@ -129,7 +131,21 @@ Popup {
         }
 
         var categoryId = categoryCombo.currentIndex >= 0 && categoryCombo.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryCombo.currentIndex].id || -1) : -1;
-        root.taskEdited(root.editingTaskId, title, categoryId, root.resultIsoDate(), root.estimatedPomodoros);
+        var succeeded = true
+        if (root.taskSubmitter) {
+            succeeded = Boolean(root.taskSubmitter(
+                root.editingTaskId, title, categoryId,
+                root.resultIsoDate(), root.estimatedPomodoros))
+        } else {
+            root.taskEdited(root.editingTaskId, title, categoryId,
+                            root.resultIsoDate(), root.estimatedPomodoros)
+        }
+        if (!succeeded) {
+            root.errorText = "保存失败，请检查数据库后重试"
+            titleField.forceActiveFocus()
+            titleField.selectAll()
+            return
+        }
         root.close();
     }
 
@@ -168,14 +184,14 @@ Popup {
                 property: "scale"
                 from: 0.94
                 to: 1.0
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.OutCubic
             }
 
             OpacityAnimator {
                 from: 0
                 to: 1
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.OutQuad
             }
         }
@@ -187,14 +203,14 @@ Popup {
                 property: "scale"
                 from: 1.0
                 to: 0.94
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.InQuad
             }
 
             OpacityAnimator {
                 from: 1
                 to: 0
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.InQuad
             }
         }
@@ -206,7 +222,7 @@ Popup {
 
         Behavior on opacity {
             OpacityAnimator {
-                duration: 180
+                duration: Theme.reduceMotion ? 0 : 180
                 easing.type: Easing.InOutQuad
             }
         }

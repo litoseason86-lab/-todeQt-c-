@@ -321,9 +321,15 @@ bool BackupService::restoreFromPreRestoreSnapshot(const QString& preRestorePath,
     const BackupOperations::OperationResult copy =
         BackupOperations::atomicCopy(preRestorePath, dbPath);
     if (!copy.success) {
+        // 与异步回滚同理：拷贝失败不代表原库损坏，必须把连接重新打开，
+        // 否则调用方拿到 false 之后整个应用没有数据库可用。
+        const bool reopened = DatabaseManager::instance()->initialize(dbPath);
         if (error) {
-            *error = QStringLiteral("自动回滚失败：%1。恢复前备份仍保留在 %2")
-                         .arg(copy.error, preRestorePath);
+            *error = reopened
+                ? QStringLiteral("自动回滚失败：%1。恢复前备份仍保留在 %2")
+                      .arg(copy.error, preRestorePath)
+                : QStringLiteral("自动回滚失败且数据库无法打开：%1。恢复前备份仍保留在 %2")
+                      .arg(copy.error, preRestorePath);
         }
         return false;
     }
@@ -698,8 +704,14 @@ void BackupService::rollbackAsyncRestore(
         const BackupOperations::OperationResult result = watcher->result();
         watcher->deleteLater();
 
+        // 无论回滚拷贝成败，都必须先把数据库重新打开：拷贝失败时原库文件通常仍完好，
+        // 只是连接被关掉了。若把 initialize 挂在 && 链后半段，拷贝一失败就会短路，
+        // 应用会一直停在"数据库未打开"的僵尸态，连再试一次恢复都做不到。
+        const bool reopened =
+            DatabaseManager::instance()->initialize(context->databasePath);
+
         bool rolledBack = result.success
-            && DatabaseManager::instance()->initialize(context->databasePath)
+            && reopened
             && verifyRestoredDatabase()
             && cleanBackupTables()
             && applySettingsSnapshot(context->originalSettings);
@@ -710,15 +722,32 @@ void BackupService::rollbackAsyncRestore(
             rolledBack = FocusTimer::instance()->restoreInterruptedSession();
         }
 
-        const QString message = rolledBack
-            ? reason + QStringLiteral("，已回滚到恢复前数据")
-            : reason + QStringLiteral("；自动回滚失败，恢复前备份保留在 ")
+        QString message;
+        if (rolledBack) {
+            message = reason + QStringLiteral("，已回滚到恢复前数据");
+        } else if (reopened) {
+            // 数据库能打开就说明用户还能继续用，提示语必须和"彻底不可用"区分开。
+            message = reason + QStringLiteral("；自动回滚未完成，当前数据可能不完整，"
+                                              "恢复前备份保留在 ")
                 + context->preRestorePath;
+        } else {
+            message = reason + QStringLiteral("；自动回滚失败且数据库无法打开，"
+                                              "请重启应用；恢复前备份保留在 ")
+                + context->preRestorePath;
+        }
         setLastError(message);
         setBusy(false);
         emit restoreCompleted(false, message);
     });
-    watcher->setFuture(QtConcurrent::run([context]() {
+    const bool forceFailure = m_forceRollbackCopyFailureForTest;
+    m_forceRollbackCopyFailureForTest = false;   // 一次性开关，用完即清
+    watcher->setFuture(QtConcurrent::run([context, forceFailure]() {
+        if (forceFailure) {
+            BackupOperations::OperationResult forced;
+            forced.success = false;
+            forced.error = QStringLiteral("测试注入的回滚拷贝失败");
+            return forced;
+        }
         return BackupOperations::atomicCopy(
             context->preRestorePath, context->databasePath);
     }));

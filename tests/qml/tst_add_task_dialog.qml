@@ -62,6 +62,13 @@ TestCase {
         taskSubmitter: function(title, date, categoryId) { return false }
     }
 
+    property date providedDate: new Date(2026, 6, 25, 12, 0, 0)
+
+    AddTaskDialog {
+        id: refreshedDateDialog
+        selectedDateProvider: function() { return testCase.providedDate }
+    }
+
     function verifyInsidePanel(popup: Popup, item: Item) {
         // 把控件坐标换算到弹窗面板内部，用来确认控件没有伸出边界。
         var local = popup.background.mapFromItem(item, 0, 0)
@@ -164,5 +171,21 @@ TestCase {
 
         categoryDialog.close()
         fakeCategoryManager.failLoad = false
+    }
+
+    function test_selectedDateRefreshesEveryTimeDialogOpens() {
+        testCase.providedDate = new Date(2026, 6, 25, 12, 0, 0)
+        refreshedDateDialog.open()
+        tryCompare(refreshedDateDialog, "opened", true, 500)
+        compare(Qt.formatDate(refreshedDateDialog.selectedDate, "yyyy-MM-dd"), "2026-07-25")
+        refreshedDateDialog.close()
+        tryCompare(refreshedDateDialog, "opened", false, 500)
+
+        // 模拟弹窗长时间未用后跨过逻辑日边界；再打开不得沿用上次日期。
+        testCase.providedDate = new Date(2026, 6, 26, 12, 0, 0)
+        refreshedDateDialog.open()
+        tryCompare(refreshedDateDialog, "opened", true, 500)
+        compare(Qt.formatDate(refreshedDateDialog.selectedDate, "yyyy-MM-dd"), "2026-07-26")
+        refreshedDateDialog.close()
     }
 }

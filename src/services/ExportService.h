@@ -42,6 +42,7 @@ private:
     QString escapeCsvField(const QString& field) const;
     QString formatDateTime(const QVariant& value) const;
     QString categoryExpression() const;
+    QString sessionCategoryExpression() const;
     int countRows(const QString& fromAndWhereSql,
                   const QDate& startDate,
                   const QDate& endDate) const;

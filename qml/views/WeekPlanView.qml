@@ -282,8 +282,8 @@ Item {
                     border.width: 1
                     radius: Theme.radiusMd
 
-                    Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
-                    Behavior on border.color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                    Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
+                    Behavior on border.color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
                 }
 
                 contentItem: Text {
@@ -316,8 +316,8 @@ Item {
                     border.width: 1
                     radius: Theme.radiusMd
 
-                    Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
-                    Behavior on border.color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                    Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
+                    Behavior on border.color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
                 }
 
                 contentItem: Text {
@@ -347,8 +347,8 @@ Item {
                     border.width: 1
                     radius: Theme.radiusMd
 
-                    Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
-                    Behavior on border.color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                    Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
+                    Behavior on border.color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
                 }
 
                 contentItem: Text {
@@ -520,8 +520,8 @@ Item {
                                         border.width: 1
                                         radius: Theme.radiusMd
 
-                                        Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
-                                        Behavior on border.color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                                        Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
+                                        Behavior on border.color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
                                     }
 
                                     contentItem: Text {
@@ -575,12 +575,15 @@ Item {
                                         root.deleteRequested(id, title)
                                     }
 
-                                    onRenameSubmitted: function(id, newTitle) {
+                                    renameSubmitter: function(id, newTitle) {
                                         var originalCategoryId = Number(modelData.categoryId || -1)
                                         var originalDate = root.taskIsoDate(modelData.date)
-                                        if (!taskManager.updateTask(id, newTitle, originalCategoryId, originalDate)) {
+                                        var succeeded = Boolean(taskManager.updateTask(
+                                            id, newTitle, originalCategoryId, originalDate))
+                                        if (!succeeded) {
                                             root.loadError = "任务更新失败，请重试"
                                         }
+                                        return succeeded
                                     }
 
                                     onEditClicked: function(id) {
@@ -612,7 +615,7 @@ Item {
                                         border.width: addDayButton.enabled && addDayButton.hovered ? 1 : 0
                                         radius: Theme.radiusMd
 
-                                        Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutQuad } }
+                                        Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad } }
                                     }
 
                                     contentItem: Text {
@@ -624,7 +627,7 @@ Item {
                                         verticalAlignment: Text.AlignVCenter
                                         scale: addDayButton.pressed ? 0.96 : 1.0
 
-                                        Behavior on scale { NumberAnimation { duration: 90; easing.type: Easing.OutQuad } }
+                                        Behavior on scale { NumberAnimation { duration: Theme.reduceMotion ? 0 : 90; easing.type: Easing.OutQuad } }
                                     }
 
                                     onClicked: root.openAddTaskForDay(dayRow.index)
@@ -651,10 +654,13 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        onTaskEdited: function(taskId, title, categoryId, isoDate, estimatedPomodoros) {
-            if (!taskManager.updateTask(taskId, title, categoryId, isoDate, Number(estimatedPomodoros))) {
+        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedPomodoros) {
+            var succeeded = Boolean(taskManager.updateTask(
+                taskId, title, categoryId, isoDate, Number(estimatedPomodoros)))
+            if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"
             }
+            return succeeded
         }
     }
 }

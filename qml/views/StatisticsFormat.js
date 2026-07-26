@@ -1,5 +1,23 @@
 .pragma library
 
+var LEVELS = [
+    { lv: 1, min: 0, name: "起步" },
+    { lv: 2, min: 3, name: "上路" },
+    { lv: 3, min: 8, name: "成习" },
+    { lv: 4, min: 20, name: "丰收" },
+    { lv: 5, min: 40, name: "燎原" }
+]
+
+function levelOf(count) {
+    var normalized = Math.max(0, Math.floor(Number(count || 0)))
+    var current = LEVELS[0]
+    for (var i = 0; i < LEVELS.length; ++i) {
+        if (normalized >= LEVELS[i].min)
+            current = LEVELS[i]
+    }
+    return current
+}
+
 function formatDuration(seconds) {
     var safe = Math.max(0, Math.floor(Number(seconds || 0)))
     if (safe > 0 && safe < 60) {

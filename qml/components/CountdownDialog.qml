@@ -113,14 +113,14 @@ Popup {
                 property: "scale"
                 from: 0.94
                 to: 1.0
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.OutCubic
             }
 
             OpacityAnimator {
                 from: 0
                 to: 1
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.OutQuad
             }
         }
@@ -132,14 +132,14 @@ Popup {
                 property: "scale"
                 from: 1.0
                 to: 0.94
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.InQuad
             }
 
             OpacityAnimator {
                 from: 1
                 to: 0
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.InQuad
             }
         }
@@ -151,7 +151,7 @@ Popup {
 
         Behavior on opacity {
             OpacityAnimator {
-                duration: 180
+                duration: Theme.reduceMotion ? 0 : 180
                 easing.type: Easing.InOutQuad
             }
         }

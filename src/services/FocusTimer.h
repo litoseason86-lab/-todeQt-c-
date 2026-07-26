@@ -24,6 +24,8 @@ class FocusTimer : public QObject
     Q_PROPERTY(int autoCompleteMinutes READ autoCompleteMinutes CONSTANT)
     // 本轮连续完成的番茄数（自然到点才计），供长休息判定“每 N 个后休息更久”。
     Q_PROPERTY(int completedPomodoros READ completedPomodoros NOTIFY completedPomodorosChanged)
+    // 会话归属日由开始时刻与当前逻辑日边界共同决定，页面用它避免跨日重复累加。
+    Q_PROPERTY(QString sessionLogicalDate READ sessionLogicalDate NOTIFY sessionLogicalDateChanged)
 
 public:
     enum TimerMode : int {
@@ -70,6 +72,7 @@ public:
     int minimumValidMinutes() const;
     int autoCompleteMinutes() const;
     int completedPomodoros() const;
+    QString sessionLogicalDate() const;
 
 signals:
     void tick();
@@ -81,6 +84,7 @@ signals:
     void phaseCompleted(int phase);
     void sessionDiscarded(int duration);
     void completedPomodorosChanged();
+    void sessionLogicalDateChanged();
     void taskAutoCompleteFailed(int taskId);
     // 到点保存失败进入每秒自动重试时提示一次；恢复成功或会话复位后允许再次提示。
     void operationFailed(const QString& message);
@@ -98,10 +102,10 @@ private:
 
     bool startFocusSession(int taskId, const QString& taskTitle, TimerMode mode, TimerPhase phase, int targetSeconds);
     bool startBreakSession(int breakSeconds, int taskId, const QString& taskTitle);
-    bool completeFocusSession();
+    bool completeFocusSession(bool naturalCompletion);
     bool hasActiveTimer() const;
     // 保存失败时调用方会保留当前会话状态，避免用户误以为记录已经落库。
-    bool saveFocusSession(int durationSeconds);
+    bool saveFocusSession(int durationSeconds, bool naturalCompletion);
     bool discardFocusSession();
     bool persistActiveState();
     bool writeActiveState(QSqlDatabase& db);

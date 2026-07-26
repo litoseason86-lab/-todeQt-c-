@@ -100,13 +100,13 @@ Popup {
                 property: "scale"
                 from: 0.97
                 to: 1
-                duration: root.animationDuration
+                duration: Theme.reduceMotion ? 0 : root.animationDuration
                 easing.type: Easing.OutCubic
             }
             OpacityAnimator {
                 from: 0
                 to: 1
-                duration: root.animationDuration
+                duration: Theme.reduceMotion ? 0 : root.animationDuration
             }
         }
     }
@@ -117,12 +117,12 @@ Popup {
                 property: "scale"
                 from: 1
                 to: 0.97
-                duration: root.animationDuration
+                duration: Theme.reduceMotion ? 0 : root.animationDuration
             }
             OpacityAnimator {
                 from: 1
                 to: 0
-                duration: root.animationDuration
+                duration: Theme.reduceMotion ? 0 : root.animationDuration
             }
         }
     }
@@ -132,7 +132,7 @@ Popup {
         opacity: root.opened ? 1 : 0
 
         Behavior on opacity {
-            NumberAnimation { duration: root.animationDuration }
+            NumberAnimation { duration: Theme.reduceMotion ? 0 : root.animationDuration }
         }
     }
 

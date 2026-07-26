@@ -1,4 +1,7 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
+import QtQuick.Controls.Basic
 import QtTest
 import "../../qml"
 
@@ -192,11 +195,57 @@ TestCase {
         id: exportService
     }
 
+    QtObject {
+        id: goalService
+
+        signal goalProgressed(int goalId, string title, int doneCount, int targetPomodoros)
+        signal milestoneReached(int goalId, string title, int percent)
+        signal goalsChanged
+
+        property var detailData: ({
+            id: 7,
+            title: "英语精读",
+            doneCount: 50,
+            targetPomodoros: 100,
+            percent: 50,
+            achieved: false,
+            forecastDays: 10
+        })
+
+        function getGoals() { return [] }
+        function getGoal(goalId) { return detailData }
+        function getGoalDailyCounts(goalId, year, month) { return [] }
+    }
+
+    QtObject {
+        id: phaseSoundService
+
+        property int milestoneCalls: 0
+        property int achievedCalls: 0
+
+        function playMilestoneChime() {
+            milestoneCalls += 1
+            return true
+        }
+        function playGoalAchievedChime() {
+            achievedCalls += 1
+            return true
+        }
+    }
+
     MainWindow {
         id: mainWindow
 
         width: testCase.width
         height: testCase.height
+        taskManagerRef: taskManager
+        categoryManagerRef: categoryManager
+        exportServiceRef: exportService
+        statisticsServiceRef: statisticsService
+        appSettingsRef: appSettings
+        focusTimerRef: focusTimer
+        goalServiceRef: goalService
+        phaseSoundServiceRef: phaseSoundService
     }
 
     function init() {
@@ -209,6 +258,13 @@ TestCase {
         appSettings.reduceMotion = false;
         appSettings.sidebarVisible = true;
         appSettings.reduceTransparency = false;
+        appSettings.soundEnabled = true;
+        phaseSoundService.milestoneCalls = 0
+        phaseSoundService.achievedCalls = 0
+        mainWindow.milestoneQueue = []
+        mainWindow.suppressedMilestones = []
+        mainWindow.milestonePresentationScheduled = false
+        mainWindow.disposeActiveMilestoneDialog()
         wait(20);
     }
 
@@ -387,6 +443,116 @@ TestCase {
 
         focusTimer.hasActiveSession = false
         focusTimer.isRunning = false
+    }
+
+    function test_goalProgressedShowsGlobalToast() {
+        goalService.goalProgressed(7, "英语精读", 3, 100)
+        var toastText = findChild(mainWindow, "toastText")
+        verify(toastText !== null)
+        tryCompare(toastText, "text", "英语精读 +1 · 3/100")
+    }
+
+    function test_milestoneCreatesPlainDialogOutsideImmersive() {
+        appSettings.reduceMotion = true
+        goalService.detailData = {
+            id: 7, title: "英语精读", doneCount: 50, targetPomodoros: 100,
+            percent: 50, achieved: false, forecastDays: 10
+        }
+
+        goalService.milestoneReached(7, "英语精读", 50)
+        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
+        compare(mainWindow.activeMilestoneDialog.percent, 50)
+        compare(mainWindow.activeMilestoneDialog.achieved, false)
+        compare(phaseSoundService.milestoneCalls, 1)
+        compare(phaseSoundService.achievedCalls, 0)
+    }
+
+    function test_immersiveSuppressesDialogButKeepsSoundAndAddsExitToast() {
+        appSettings.reduceMotion = true
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        wait(20)
+        var focusView = findChild(mainWindow, "focusViewPage")
+        verify(focusView !== null)
+        focusView.immersiveRequested()
+        tryCompare(mainWindow, "focusImmersiveActive", true)
+
+        goalService.milestoneReached(7, "英语精读", 50)
+        tryCompare(phaseSoundService, "milestoneCalls", 1)
+        compare(mainWindow.activeMilestoneDialog, null)
+        verify(mainWindow.suppressedMilestone !== null)
+
+        mainWindow.focusImmersiveActive = false
+        var toastText = findChild(mainWindow, "toastText")
+        verify(toastText !== null)
+        tryVerify(function() { return toastText.text.indexOf("50%") >= 0 })
+        compare(mainWindow.suppressedMilestone, null)
+        focusTimer.hasActiveSession = false
+        focusTimer.isRunning = false
+    }
+
+    function test_reduceMotionCreatesNoRewardParticles() {
+        appSettings.reduceMotion = true
+        goalService.milestoneReached(7, "英语精读", 50)
+        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
+        tryCompare(mainWindow, "rewardParticleCount", 0)
+    }
+
+    function test_milestoneParticlesAreVisibleAboveDialog() {
+        // 反面用例只能证明减少动效时不创建粒子；这里同时锁住数量和宿主层级，
+        // 避免动画对象正常运行，却被 Popup 所在的 overlay 整层遮住。
+        appSettings.reduceMotion = false
+        goalService.milestoneReached(7, "英语精读", 50)
+        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
+        tryVerify(function() { return mainWindow.rewardParticleCount > 0 })
+
+        const particles = findChild(mainWindow, "goalRewardParticles")
+        verify(particles !== null)
+        compare(particles.parent, Overlay.overlay)
+    }
+
+    function test_goalAchievementUsesAchievedDialogAndChime() {
+        appSettings.reduceMotion = true
+        goalService.detailData = {
+            id: 7, title: "英语精读", doneCount: 100, targetPomodoros: 100,
+            percent: 100, achieved: true, forecastDays: 0
+        }
+
+        goalService.milestoneReached(7, "英语精读", 100)
+        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
+        compare(mainWindow.activeMilestoneDialog.achieved, true)
+        compare(mainWindow.activeMilestoneDialog.percent, 100)
+        compare(phaseSoundService.milestoneCalls, 0)
+        compare(phaseSoundService.achievedCalls, 1)
+    }
+
+    function test_backToBackMilestonesArePresentedInOrder() {
+        appSettings.reduceMotion = true
+
+        goalService.milestoneReached(7, "英语精读", 50)
+        goalService.milestoneReached(8, "写作训练", 100)
+
+        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
+        compare(mainWindow.activeMilestoneDialog.goalId, 7)
+        compare(mainWindow.pendingMilestone.goalId, 8)
+
+        mainWindow.activeMilestoneDialog.dismiss()
+        tryVerify(function() {
+            return mainWindow.activeMilestoneDialog !== null
+                    && mainWindow.activeMilestoneDialog.goalId === 8
+        })
+        compare(mainWindow.pendingMilestone, null)
+        compare(phaseSoundService.milestoneCalls, 1)
+        compare(phaseSoundService.achievedCalls, 1)
+    }
+
+    function test_escapeClosesMilestoneAndReleasesLifecycle() {
+        appSettings.reduceMotion = true
+        goalService.milestoneReached(7, "英语精读", 50)
+        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
+
+        keyClick(Qt.Key_Escape)
+        tryCompare(mainWindow, "activeMilestoneDialog", null)
     }
 
     function test_unprojectableAutoExitsViaOverlay() {

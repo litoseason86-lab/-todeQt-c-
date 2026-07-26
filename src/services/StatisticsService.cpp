@@ -93,6 +93,7 @@ QVariantMap emptyDayStats()
     result.insert(QStringLiteral("totalTasks"), 0);
     result.insert(QStringLiteral("completionRate"), 0.0);
     result.insert(QStringLiteral("sessionCount"), 0);
+    result.insert(QStringLiteral("pomodoroCount"), 0);
     return result;
 }
 
@@ -189,6 +190,7 @@ QVariantMap StatisticsService::getDayStats(const QDate& date) const
     stats.insert(QStringLiteral("totalTasks"), totalTasks);
     stats.insert(QStringLiteral("completionRate"), totalTasks > 0 ? static_cast<double>(completedTasks) / totalTasks : 0.0);
     stats.insert(QStringLiteral("sessionCount"), getFocusSessionCount(date, date));
+    stats.insert(QStringLiteral("pomodoroCount"), getValidPomodoroCount(date, date));
     return stats;
 }
 
@@ -347,18 +349,20 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
         return emptyCategoryStats();
     }
 
-    // 优先使用标准化科目，其次使用迁移出的旧科目，最后回退到任务旧文本。
-    // 任务删除后 focus_sessions.task_id 会被外键置空；统计仍必须保留这段真实专注时间。
+    // 会话快照优先；对迁移前的旧记录才回退到当前任务科目。
+    // 因此删任务或删科目只会解除当前对象，不会把历史专注重写成“未关联任务”。
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "SELECT "
-        "CASE WHEN t.id IS NULL THEN '未关联任务' "
-        "ELSE COALESCE(NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), '未分类') "
-        "END AS category_name, "
-        "COALESCE(NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS category_color, "
+        "COALESCE(NULLIF(snapshot_category.name, ''), NULLIF(f.category_name_snapshot, ''), "
+        "NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), "
+        "CASE WHEN t.id IS NULL THEN '未关联任务' ELSE '未分类' END) AS category_name, "
+        "COALESCE(NULLIF(snapshot_category.color, ''), NULLIF(f.category_color_snapshot, ''), "
+        "NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS category_color, "
         "SUM(f.duration) AS total_duration "
         "FROM focus_sessions f "
         "LEFT JOIN tasks t ON f.task_id = t.id "
+        "LEFT JOIN categories snapshot_category ON f.category_id_snapshot = snapshot_category.id "
         "LEFT JOIN categories c ON t.category_id = c.id "
         "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
         "WHERE date(f.start_time, :dayShift) >= :startDate "
@@ -531,6 +535,43 @@ int StatisticsService::getFocusSessionCount(const QDate& startDate, const QDate&
         return 0;
     }
 
+    return query.value(0).toInt();
+}
+
+int StatisticsService::getValidPomodoroCount(const QDate& startDate, const QDate& endDate) const
+{
+    if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
+        qWarning() << "Failed to count valid pomodoros: invalid date range";
+        return 0;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to count valid pomodoros: database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
+        return 0;
+    }
+
+    QSqlQuery query(db);
+    // 与会话数使用完全相同的逻辑日窗口；差异只是番茄还必须满足唯一事实源的模式与自然到点条件。
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*) FROM focus_sessions fs "
+        "WHERE date(fs.start_time, :dayShift) >= :startDate "
+        "AND date(fs.start_time, :dayShift) <= :endDate "
+        "AND fs.end_time IS NOT NULL "
+        "AND fs.duration IS NOT NULL "
+        "AND %1")
+                      .arg(FocusSessionRules::validPomodoroPredicate(QStringLiteral("fs"))));
+    query.bindValue(QStringLiteral(":dayShift"),
+                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
+    query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
+
+    if (!query.exec() || !query.next()) {
+        qWarning() << "Failed to count valid pomodoros:" << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
+        return 0;
+    }
     return query.value(0).toInt();
 }
 
@@ -845,13 +886,15 @@ QVariantMap StatisticsService::weeklyAggregates(const QDate& weekStart, const QD
 
     int completedTotal = 0;
     int focusedSeconds = 0;
-    // 实际番茄：只计番茄工作段(mode=1)的有效会话；专注秒数含两种模式的有效会话（供“专注时长”展示）。
+    // 实际番茄：只计自然到点的有效番茄工作段；专注秒数含两种模式的有效会话。
     // 有效口径复用 kMinimumValidDurationSeconds，与任务实际番茄聚合完全一致。
     {
         QSqlQuery query(db);
         query.prepare(QStringLiteral(R"SQL(
             WITH filtered AS (
-                SELECT task_id, mode, duration, date(start_time, :dayShift) AS logical_date
+                SELECT task_id, mode, pomodoro_completed, duration,
+                       category_id_snapshot, category_name_snapshot, category_color_snapshot,
+                       date(start_time, :dayShift) AS logical_date
                 FROM focus_sessions
                 WHERE start_time >= :startAt AND start_time < :endAt
                   AND end_time IS NOT NULL
@@ -859,15 +902,22 @@ QVariantMap StatisticsService::weeklyAggregates(const QDate& weekStart, const QD
                   AND duration >= :minDuration
             ),
             grouped AS (
-                SELECT CASE WHEN t.id IS NULL THEN '未关联任务'
-                       ELSE COALESCE(NULLIF(c.name,''), NULLIF(legacy.name,''),
-                                     NULLIF(t.category,''), '未分类') END AS subject_name,
-                       COALESCE(NULLIF(c.color,''), NULLIF(legacy.color,''), '#d4a574')
+                SELECT COALESCE(NULLIF(snapshot_category.name,''),
+                                NULLIF(f.category_name_snapshot,''), NULLIF(c.name,''),
+                                NULLIF(legacy.name,''), NULLIF(t.category,''),
+                                CASE WHEN t.id IS NULL THEN '未关联任务'
+                                     ELSE '未分类' END) AS subject_name,
+                       COALESCE(NULLIF(snapshot_category.color,''),
+                                NULLIF(f.category_color_snapshot,''), NULLIF(c.color,''),
+                                NULLIF(legacy.color,''), '#d4a574')
                            AS subject_color,
-                       SUM(CASE WHEN f.mode = 1 THEN 1 ELSE 0 END) AS actual_pomodoros,
+                       SUM(CASE WHEN %1
+                                THEN 1 ELSE 0 END) AS actual_pomodoros,
                        SUM(f.duration) AS focused_seconds
                 FROM filtered f
                 LEFT JOIN tasks t ON f.task_id = t.id
+                LEFT JOIN categories snapshot_category
+                       ON f.category_id_snapshot = snapshot_category.id
                 LEFT JOIN categories c ON t.category_id = c.id
                 LEFT JOIN categories legacy
                        ON t.category_id IS NULL AND legacy.name = t.category
@@ -879,7 +929,7 @@ QVariantMap StatisticsService::weeklyAggregates(const QDate& weekStart, const QD
             UNION ALL
             SELECT 1, '', '', 0, 0, COUNT(DISTINCT logical_date)
             FROM filtered
-        )SQL"));
+        )SQL").arg(FocusSessionRules::validPomodoroPredicate(QStringLiteral("f"))));
         query.bindValue(QStringLiteral(":dayShift"), dayShift);
         query.bindValue(QStringLiteral(":startAt"), startAt);
         query.bindValue(QStringLiteral(":endAt"), endAt);

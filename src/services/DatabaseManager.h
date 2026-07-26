@@ -13,7 +13,7 @@ class DatabaseManager : public QObject
 public:
     // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
-    static constexpr int kCurrentSchemaVersion = 7;
+    static constexpr int kCurrentSchemaVersion = 9;
 
     static DatabaseManager* instance();
 
@@ -49,6 +49,10 @@ private:
     // v7 给 tasks 增加预估番茄数、给 focus_sessions 增加专注模式；后者用来把正向计时
     // 与番茄工作段区分开，实际番茄数聚合时只计番茄模式，避免把自由计时误折算成番茄。
     bool migrateToVersion7();
+    // v8 持久化“自然到点”事实，手动停止的番茄段不再被误算为完整番茄。
+    bool migrateToVersion8();
+    // v9 把会话开始时的科目写入历史快照，任务删除后统计与长期目标仍有归属。
+    bool migrateToVersion9();
     bool createRoutinesTable();
     bool insertPresetCategories();
     bool migrateTaskCategories();
@@ -62,6 +66,8 @@ private:
     // Qt 的数据库连接按名字管理，测试切换数据库路径时必须能精确关闭旧连接。
     QString m_connectionName;
     QSqlDatabase m_db;
+    // 一次 createTables 可能连跨多级迁移；只允许第一级留下整链开始前的原始快照。
+    mutable bool m_migrationSnapshotTaken = false;
 };
 
 #endif // DATABASEMANAGER_H

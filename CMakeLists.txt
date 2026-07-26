@@ -11,7 +11,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Concurrent Core Gui Network Quick QuickControls2 QuickLayouts QuickTest Sql Test)
+# 6.7 是 QDateTime::TransitionResolution 的引入版本（见 src/services/LogicalDay.h 的逻辑日边界计算）。
+# 不写下界的话，用更低版本的 Qt 也能配置成功，报错要推迟到编译期才出现。
+find_package(Qt6 6.7 REQUIRED COMPONENTS Concurrent Core Gui Network Quick QuickControls2 QuickLayouts QuickTest Sql Test)
+message(STATUS "使用的 Qt: ${Qt6_VERSION} @ ${Qt6_DIR}")
 
 if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
     # AGL.framework 是旧版 OpenGL 框架，新版 macOS SDK 已经移除；
@@ -45,6 +48,8 @@ set(APP_SOURCES
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/models/CountdownGoal.cpp
+    src/models/LongGoal.h
+    src/models/LongGoal.cpp
     src/models/CountdownModel.h
     src/models/CountdownModel.cpp
     src/services/DatabaseManager.h
@@ -75,6 +80,8 @@ set(APP_SOURCES
     src/services/PhaseSoundService.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
+    src/services/GoalService.h
+    src/services/GoalService.cpp
     src/services/TrayController.h
     src/services/TrayController.cpp
     src/services/NotificationService.h
@@ -152,18 +159,27 @@ if(APPLE AND POMODORO_TODO_DEPLOY_LOCAL)
     set(POMODORO_TODO_LOCAL_APP_PATH "/Applications/番茄Todo.app" CACHE PATH
         "本机固定启动入口，构建后会用最新包覆盖这里"
     )
+    # 这个路径是 cache 变量，命令行可以覆盖，而下面的部署步骤会对它执行递归删除。
+    # 写错一层目录就会不可逆地删掉无关内容，所以在配置阶段就挡住不像应用包的路径。
+    if(NOT POMODORO_TODO_LOCAL_APP_PATH MATCHES "\\.app$")
+        message(FATAL_ERROR
+            "POMODORO_TODO_LOCAL_APP_PATH 必须指向一个 .app 应用包，当前值："
+            "${POMODORO_TODO_LOCAL_APP_PATH}。若只想构建而不部署，请传 -DPOMODORO_TODO_DEPLOY_LOCAL=OFF。")
+    endif()
     set(POMODORO_TODO_LSREGISTER
         "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
     )
 
     add_custom_target(deploy-local-app ALL
         COMMAND ${CMAKE_COMMAND} -E echo "Deploying PomodoroTodo to ${POMODORO_TODO_LOCAL_APP_PATH}"
-        COMMAND /bin/rm -rf "${POMODORO_TODO_LOCAL_APP_PATH}"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:PomodoroTodo>" "${POMODORO_TODO_LOCAL_APP_PATH}"
-        # LaunchOS 依赖系统应用索引；复制后主动刷新固定入口。build 目录里的临时包可能从未注册，
-        # lsregister -u 在这种情况下会返回错误码，因此撤销临时包索引只能作为尽力而为步骤。
-        COMMAND /bin/sh -c "'${POMODORO_TODO_LSREGISTER}' -u '$<TARGET_BUNDLE_DIR:PomodoroTodo>' >/dev/null 2>&1 || true"
-        COMMAND "${POMODORO_TODO_LSREGISTER}" -f "${POMODORO_TODO_LOCAL_APP_PATH}"
+        # 脚本先复制到同文件系统的临时包，验证主二进制后再原子切换，
+        # 避免复制失败后 /Applications 中连旧版都不剩。
+        COMMAND ${CMAKE_COMMAND}
+            "-DSOURCE_APP=$<TARGET_BUNDLE_DIR:PomodoroTodo>"
+            "-DDESTINATION_APP=${POMODORO_TODO_LOCAL_APP_PATH}"
+            "-DBUNDLE_EXECUTABLE=PomodoroTodo"
+            "-DLSREGISTER=${POMODORO_TODO_LSREGISTER}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeployLocalApp.cmake"
         DEPENDS PomodoroTodo
         VERBATIM
     )
@@ -175,6 +191,10 @@ add_executable(PomodoroTodoTests
     tests/ServiceTests.cpp
     src/models/Task.cpp
     src/models/FocusSession.cpp
+    src/models/LongGoal.h
+    src/models/LongGoal.cpp
+    src/services/GoalService.h
+    src/services/GoalService.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
     src/services/CategoryManager.h
@@ -302,6 +322,32 @@ target_link_libraries(CountdownServiceTests PRIVATE
 )
 
 add_test(NAME CountdownServiceTests COMMAND CountdownServiceTests)
+
+# 长期目标：进度全部由 focus_sessions 现算，所以测试直接写入专注记录再断言聚合结果。
+# 不引入 FocusTimer——本目标验证的是聚合口径与里程碑去重，不是计时器状态机。
+add_executable(GoalServiceTests
+    tests/GoalServiceTests.cpp
+    src/models/LongGoal.h
+    src/models/LongGoal.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/GoalService.h
+    src/services/GoalService.cpp
+    src/services/FocusSessionRules.h
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+)
+
+target_link_libraries(GoalServiceTests PRIVATE
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+add_test(NAME GoalServiceTests COMMAND GoalServiceTests)
 
 # 菜单栏控制器与通知服务是平台无关层，测试不引入任何 .mm / AppKit 依赖，
 # 用假视图与假通知后端验证状态机与降级逻辑。
@@ -454,6 +500,34 @@ target_link_libraries(ShaderAssetsTests PRIVATE
 )
 
 add_test(NAME ShaderAssetsTests COMMAND ShaderAssetsTests)
+
+add_executable(SoundAssetsTests
+    tests/SoundAssetsTests.cpp
+    resources/qml.qrc
+)
+
+target_link_libraries(SoundAssetsTests PRIVATE
+    Qt6::Core
+    Qt6::Test
+)
+
+add_test(NAME SoundAssetsTests COMMAND SoundAssetsTests)
+
+add_executable(QmlResourceManifestTests
+    tests/QmlResourceManifestTests.cpp
+    resources/qml.qrc
+)
+
+target_compile_definitions(QmlResourceManifestTests PRIVATE
+    QML_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/qml"
+)
+
+target_link_libraries(QmlResourceManifestTests PRIVATE
+    Qt6::Core
+    Qt6::Test
+)
+
+add_test(NAME QmlResourceManifestTests COMMAND QmlResourceManifestTests)
 
 add_test(
     NAME PomodoroTodoQmlTests

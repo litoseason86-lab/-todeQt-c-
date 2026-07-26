@@ -18,7 +18,9 @@ Rectangle {
     property bool showComparison: false
     // 减少动效默认读全局 appSettings；测试可直接覆盖该属性，不需要构造完整应用上下文。
     // qmllint disable unqualified
-    property bool reduceMotionActive: typeof appSettings !== "undefined" && appSettings && appSettings.reduceMotion
+    property bool reduceMotionActive: Theme.reduceMotion
+                                      || (typeof appSettings !== "undefined"
+                                          && appSettings && appSettings.reduceMotion)
     // qmllint enable unqualified
     readonly property bool valuePulseRunning: valuePulse.running
     readonly property color cardShadowColor: Theme.ink
@@ -66,13 +68,13 @@ Rectangle {
             script: root.opacity = 0
         }
         PauseAnimation {
-            duration: root.animationDelay
+            duration: Theme.reduceMotion ? 0 : root.animationDelay
         }
         OpacityAnimator {
             target: root
             from: 0
             to: 1
-            duration: 180
+            duration: Theme.reduceMotion ? 0 : 180
             easing.type: Easing.OutQuad
         }
     }
@@ -124,7 +126,7 @@ Rectangle {
                         target: valueText
                         property: "scale"
                         to: 1.05
-                        duration: 150
+                        duration: Theme.reduceMotion ? 0 : 150
                         easing.type: Easing.OutQuad
                     }
 
@@ -132,7 +134,7 @@ Rectangle {
                         target: valueText
                         property: "scale"
                         to: 1.0
-                        duration: 150
+                        duration: Theme.reduceMotion ? 0 : 150
                         easing.type: Easing.InOutQuad
                     }
                 }

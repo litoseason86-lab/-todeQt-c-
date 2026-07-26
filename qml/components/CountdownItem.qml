@@ -56,14 +56,14 @@ Rectangle {
 
             Behavior on color {
                 ColorAnimation {
-                    duration: 120
+                    duration: Theme.reduceMotion ? 0 : 120
                     easing.type: Easing.OutQuad
                 }
             }
 
             Behavior on border.color {
                 ColorAnimation {
-                    duration: 120
+                    duration: Theme.reduceMotion ? 0 : 120
                     easing.type: Easing.OutQuad
                 }
             }

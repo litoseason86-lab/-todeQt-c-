@@ -52,20 +52,46 @@ TestCase {
         }
     }
 
+    QtObject {
+        id: goalService
+
+        signal goalsChanged
+        signal operationFailed(string message)
+
+        property bool shouldFail: false
+        property var goalsData: []
+
+        function getGoals() {
+            if (shouldFail) {
+                operationFailed("读取长期目标失败")
+                return []
+            }
+            return goalsData
+        }
+    }
+
     StatisticsView {
         id: view
 
         width: 900
         height: 700
-        currentDateProvider: function() {
-            return new Date(2026, 6, 8, 1, 0)
-        }
+        taskManagerRef: taskManager
+        statisticsServiceRef: statisticsService
+        focusTimerRef: focusTimer
+        logicalDayServiceRef: logicalDayService
+        appSettingsRef: appSettings
+        goalServiceRef: goalService
+        currentDateOverride: new Date(2026, 6, 8, 1, 0)
     }
 
     function init() {
         view.currentTimeRange = "today"
         view.refreshCurrentDateSnapshot()
         view.applyCurrentPeriodSelection()
+        goalService.shouldFail = false
+        goalService.goalsData = []
+        view.achievedGoals = []
+        view.achievedGoalsError = ""
         testCase.dayStatsCalls = 0
     }
 
@@ -88,5 +114,23 @@ TestCase {
         compare(Qt.formatDate(view.selectedDate, "yyyy-MM-dd"), "2026-07-07")
         logicalDayService.changed()
         compare(Qt.formatDate(view.selectedDate, "yyyy-MM-dd"), "2026-07-07")
+    }
+
+    function test_achievedGoalFailureKeepsDataAndShowsError() {
+        goalService.goalsData = [{
+            id: 9,
+            title: "已完成目标",
+            achieved: true,
+            achievedAt: new Date(2026, 6, 1)
+        }]
+        view.refreshAchievedGoals()
+        compare(view.achievedGoals.length, 1)
+
+        goalService.shouldFail = true
+        view.refreshAchievedGoals()
+
+        compare(view.achievedGoals.length, 1)
+        compare(view.achievedGoalsError, "读取长期目标失败")
+        compare(findChild(view, "achievedGoalsEmptyText").text, "读取长期目标失败")
     }
 }

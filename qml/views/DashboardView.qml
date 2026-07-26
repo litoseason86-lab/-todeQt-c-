@@ -27,7 +27,8 @@ Item {
     property int pendingDeleteTaskId: -1
 
     property var tasks: []
-    property var todayStats: ({ totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0, sessionCount: 0 })
+    property var todayStats: ({ totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0,
+                                sessionCount: 0, pomodoroCount: 0 })
     property int streakDays: 0
     property int totalFocusSeconds: 0
     property int dailyFocusGoalMinutes: 0
@@ -236,7 +237,7 @@ Item {
             root.totalFocusSeconds = Number(statisticsService.getTotalFocusDuration() || 0)
         } catch (error) {
             root.todayStats = { totalDuration: 0, completedTasks: 0, totalTasks: root.tasks.length,
-                                completionRate: 0, sessionCount: 0 }
+                                completionRate: 0, sessionCount: 0, pomodoroCount: 0 }
             root.streakDays = 0
             root.totalFocusSeconds = 0
         }
@@ -403,9 +404,10 @@ Item {
                 spacing: Theme.space12
 
                 StatCard {
+                    objectName: "todayPomodoroCard"
                     Layout.fillWidth: true
                     title: "今日专注番茄"
-                    value: String(Number(root.todayStats.sessionCount || 0))
+                    value: String(Number(root.todayStats.pomodoroCount || 0))
                     unit: "个"
                     subtitle: "专注 " + root.formatDuration(root.todayStats.totalDuration)
                 }
@@ -523,7 +525,7 @@ Item {
 
                                 Behavior on color {
                                     ColorAnimation {
-                                        duration: 120
+                                        duration: Theme.reduceMotion ? 0 : 120
                                         easing.type: Easing.OutQuad
                                     }
                                 }
@@ -632,12 +634,15 @@ Item {
                                             root.deleteRequested(id, title)
                                         }
 
-                                        onRenameSubmitted: function (id, newTitle) {
+                                        renameSubmitter: function (id, newTitle) {
                                             var originalCategoryId = Number(modelData.categoryId || -1)
                                             var originalDate = root.taskIsoDate(modelData.date)
-                                            if (!taskManager.updateTask(id, newTitle, originalCategoryId, originalDate)) {
+                                            var succeeded = Boolean(taskManager.updateTask(
+                                                id, newTitle, originalCategoryId, originalDate))
+                                            if (!succeeded) {
                                                 root.loadError = "任务更新失败，请重试"
                                             }
+                                            return succeeded
                                         }
 
                                         onEditClicked: function (id) {
@@ -668,7 +673,7 @@ Item {
             Behavior on width {
                 enabled: !root.timerMotionReduced
                 NumberAnimation {
-                    duration: 320
+                    duration: Theme.reduceMotion ? 0 : 320
                     easing.type: Easing.OutCubic
                 }
             }
@@ -685,14 +690,16 @@ Item {
                 timerRef: typeof focusTimer !== "undefined" ? focusTimer : null
                 settingsRef: root.settingsRef
                 wallpaperRef: root.wallpaperRef
-                sessionCount: Number(root.todayStats.sessionCount || 0)
+                // 面板文案明确写“番茄”，所以必须与首屏卡片共用有效番茄口径，不能继续传会话数。
+                sessionCount: Number(root.todayStats.pomodoroCount || 0)
                 todayFocusSeconds: Number(root.todayStats.totalDuration || 0)
+                logicalDate: root.logicalTodayIso
                 goalMinutes: root.dailyFocusGoalMinutes
 
                 Behavior on opacity {
                     enabled: !root.timerMotionReduced
                     NumberAnimation {
-                        duration: 220
+                        duration: Theme.reduceMotion ? 0 : 220
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -720,7 +727,7 @@ Item {
             Behavior on width {
                 enabled: !root.timerMotionReduced
                 NumberAnimation {
-                    duration: 320
+                    duration: Theme.reduceMotion ? 0 : 320
                     easing.type: Easing.OutCubic
                 }
             }
@@ -762,14 +769,14 @@ Item {
             Behavior on opacity {
                 enabled: !root.timerMotionReduced
                 NumberAnimation {
-                    duration: 200
+                    duration: Theme.reduceMotion ? 0 : 200
                     easing.type: Easing.OutCubic
                 }
             }
             Behavior on x {
                 enabled: !root.timerMotionReduced
                 NumberAnimation {
-                    duration: 200
+                    duration: Theme.reduceMotion ? 0 : 200
                     easing.type: Easing.OutCubic
                 }
             }
@@ -798,7 +805,7 @@ Item {
                 Behavior on color {
                     enabled: !root.timerMotionReduced
                     ColorAnimation {
-                        duration: 140
+                        duration: Theme.reduceMotion ? 0 : 140
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -817,7 +824,7 @@ Item {
                 Behavior on color {
                     enabled: !root.timerMotionReduced
                     ColorAnimation {
-                        duration: 140
+                        duration: Theme.reduceMotion ? 0 : 140
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -845,10 +852,13 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        onTaskEdited: function (taskId, title, categoryId, isoDate, estimatedPomodoros) {
-            if (!taskManager.updateTask(taskId, title, categoryId, isoDate, Number(estimatedPomodoros))) {
+        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedPomodoros) {
+            var succeeded = Boolean(taskManager.updateTask(
+                taskId, title, categoryId, isoDate, Number(estimatedPomodoros)))
+            if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"
             }
+            return succeeded
         }
     }
 

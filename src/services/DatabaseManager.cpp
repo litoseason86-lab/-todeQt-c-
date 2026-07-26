@@ -1,4 +1,5 @@
 #include "DatabaseManager.h"
+#include "FocusSessionRules.h"
 
 #include <QDebug>
 #include <QCoreApplication>
@@ -132,6 +133,9 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // createTables 是一条完整迁移链的边界；每次进入都重置，使结构缺列触发的防御性迁移也能正确备份。
+    m_migrationSnapshotTaken = false;
+
     QSqlQuery query(m_db);
 
     const QString createTasksTable = QStringLiteral(R"SQL(
@@ -160,6 +164,10 @@ bool DatabaseManager::createTables()
             end_time TEXT,
             duration INTEGER,
             mode INTEGER NOT NULL DEFAULT 1,
+            pomodoro_completed INTEGER NOT NULL DEFAULT 0 CHECK(pomodoro_completed IN (0, 1)),
+            category_id_snapshot INTEGER,
+            category_name_snapshot TEXT NOT NULL DEFAULT '',
+            category_color_snapshot TEXT NOT NULL DEFAULT '',
             FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
         )
     )SQL");
@@ -253,6 +261,28 @@ bool DatabaseManager::createTables()
         if (!migrateToVersion7()) {
             return false;
         }
+        version = 7;
+    }
+
+    if (version < 8
+        || !columnExists(QStringLiteral("focus_sessions"),
+                         QStringLiteral("pomodoro_completed"))) {
+        if (!migrateToVersion8()) {
+            return false;
+        }
+        version = 8;
+    }
+
+    if (version < 9
+        || !columnExists(QStringLiteral("focus_sessions"),
+                         QStringLiteral("category_id_snapshot"))
+        || !columnExists(QStringLiteral("focus_sessions"),
+                         QStringLiteral("category_name_snapshot"))
+        || !columnExists(QStringLiteral("focus_sessions"),
+                         QStringLiteral("category_color_snapshot"))) {
+        if (!migrateToVersion9()) {
+            return false;
+        }
     }
 
     const QStringList indexes = {
@@ -260,6 +290,8 @@ bool DatabaseManager::createTables()
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tasks_completed ON tasks(completed)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_tasks_category_id ON tasks(category_id)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_sessions_task ON focus_sessions(task_id)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_sessions_category_snapshot "
+                       "ON focus_sessions(category_id_snapshot)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_sessions_start ON focus_sessions(start_time)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_routines_active ON routines(active)")
     };
@@ -686,6 +718,147 @@ bool DatabaseManager::migrateToVersion7()
     return true;
 }
 
+bool DatabaseManager::migrateToVersion8()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+    if (!backupDatabaseBeforeMigration()) {
+        return false;
+    }
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 8 migration:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    // 只有本次真正新增列时才能用启发式回填。列已存在时，其中的 0/1 是
+    // 新版记录的真实“手动停止/自然到点”事实，重刷会造成不可恢复的篡改。
+    const bool columnJustAdded = !columnExists(QStringLiteral("focus_sessions"),
+                                                QStringLiteral("pomodoro_completed"));
+    if (columnJustAdded) {
+        if (!query.exec(QStringLiteral(
+                "ALTER TABLE focus_sessions ADD COLUMN pomodoro_completed "
+                "INTEGER NOT NULL DEFAULT 0 CHECK(pomodoro_completed IN (0, 1))"))) {
+            qWarning() << "Failed to add focus_sessions.pomodoro_completed column:"
+                       << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    if (columnJustAdded) {
+        // 旧版没有保存“自然到点”事实，无法完美还原。为避免升级后历史番茄归零，
+        // 只对升级前已完成、且达到有效门槛的番茄模式记录做一次兼容回填。
+        // 模式与阈值取自唯一事实源，这里不复制第二套字面量。
+        if (!query.exec(QStringLiteral(
+                "UPDATE focus_sessions SET pomodoro_completed = "
+                "CASE WHEN mode = %1 AND end_time IS NOT NULL AND duration >= %2 "
+                "THEN 1 ELSE 0 END")
+                            .arg(FocusSessionRules::kPomodoroMode)
+                            .arg(FocusSessionRules::kMinimumValidDurationSeconds))) {
+            qWarning() << "Failed to backfill completed pomodoros:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    if (!setDatabaseVersion(8) || !m_db.commit()) {
+        qWarning() << "Failed to commit version 8 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 8";
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion9()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+    if (!backupDatabaseBeforeMigration()) {
+        return false;
+    }
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 9 migration:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    const struct {
+        QString name;
+        QString definition;
+    } snapshotColumns[] = {
+        {QStringLiteral("category_id_snapshot"), QStringLiteral("INTEGER")},
+        {QStringLiteral("category_name_snapshot"), QStringLiteral("TEXT NOT NULL DEFAULT ''")},
+        {QStringLiteral("category_color_snapshot"), QStringLiteral("TEXT NOT NULL DEFAULT ''")}
+    };
+
+    for (const auto& column : snapshotColumns) {
+        if (columnExists(QStringLiteral("focus_sessions"), column.name)) {
+            continue;
+        }
+        if (!query.exec(QStringLiteral("ALTER TABLE focus_sessions ADD COLUMN %1 %2")
+                            .arg(column.name, column.definition))) {
+            qWarning() << "Failed to add focus session category snapshot column:"
+                       << column.name << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    // 从尚未删除的任务回填历史归属。旧文本科目会先尝试匹配 categories，
+    // 匹配不到也保留名称；快照列不设外键，否则删科目会再次擦除历史。
+    if (!query.exec(QStringLiteral(R"SQL(
+        UPDATE focus_sessions
+        SET category_id_snapshot = (
+                SELECT COALESCE(t.category_id, legacy_category.id)
+                FROM tasks t
+                LEFT JOIN categories legacy_category
+                       ON t.category_id IS NULL AND legacy_category.name = t.category
+                WHERE t.id = focus_sessions.task_id
+            ),
+            category_name_snapshot = COALESCE((
+                SELECT COALESCE(current_category.name, legacy_category.name, t.category)
+                FROM tasks t
+                LEFT JOIN categories current_category ON t.category_id = current_category.id
+                LEFT JOIN categories legacy_category
+                       ON t.category_id IS NULL AND legacy_category.name = t.category
+                WHERE t.id = focus_sessions.task_id
+            ), ''),
+            category_color_snapshot = COALESCE((
+                SELECT COALESCE(current_category.color, legacy_category.color)
+                FROM tasks t
+                LEFT JOIN categories current_category ON t.category_id = current_category.id
+                LEFT JOIN categories legacy_category
+                       ON t.category_id IS NULL AND legacy_category.name = t.category
+                WHERE t.id = focus_sessions.task_id
+            ), '')
+        WHERE task_id IS NOT NULL
+          AND category_id_snapshot IS NULL
+          AND category_name_snapshot = ''
+          AND category_color_snapshot = ''
+    )SQL"))) {
+        qWarning() << "Failed to backfill focus session category snapshots:"
+                   << query.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    if (!setDatabaseVersion(9) || !m_db.commit()) {
+        qWarning() << "Failed to commit version 9 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 9";
+    return true;
+}
+
 bool DatabaseManager::routineForeignKeyUsesSetNull() const
 {
     if (!m_db.isOpen()) {
@@ -822,6 +995,10 @@ QString DatabaseManager::generateColorForCategory(int index) const
 
 bool DatabaseManager::backupDatabaseBeforeMigration() const
 {
+    if (m_migrationSnapshotTaken) {
+        return true;
+    }
+
     const QString databaseName = m_db.databaseName();
     if (databaseName.isEmpty() || databaseName == QStringLiteral(":memory:")) {
         return true;
@@ -840,11 +1017,21 @@ bool DatabaseManager::backupDatabaseBeforeMigration() const
         backupPath = databaseDir.filePath(QStringLiteral("pomodoro_backup_%1_%2.db").arg(timestamp).arg(suffix++));
     }
 
-    if (!QFile::copy(databaseInfo.absoluteFilePath(), backupPath)) {
-        qWarning() << "Failed to create database migration backup:" << backupPath;
+    // SQLite 的 WAL 文件可能还保存着已提交、但未回写到主库的页。
+    // 直接复制 .db 会丢数据，VACUUM INTO 则从当前连接生成一致性快照。
+    QString escapedBackupPath = backupPath;
+    escapedBackupPath.replace(QLatin1Char('\''), QStringLiteral("''"));
+    QSqlQuery snapshotQuery(m_db);
+    if (!snapshotQuery.exec(QStringLiteral("VACUUM main INTO '%1'").arg(escapedBackupPath))) {
+        QFile::remove(backupPath);
+        qWarning() << "Failed to create database migration snapshot:"
+                   << backupPath << snapshotQuery.lastError().text();
         return false;
     }
 
+    // 一次启动可能连跨多级迁移。若每级都 VACUUM INTO，保留最近三份的策略
+    // 会删掉唯一早于所有破坏性回填的原始快照，还会无意义地逐页重建整库多次。
+    m_migrationSnapshotTaken = true;
     pruneOldBackups(databaseDir);
     return true;
 }

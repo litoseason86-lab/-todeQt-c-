@@ -23,6 +23,8 @@ class AppSettings : public QObject
     Q_PROPERTY(bool sidebarVisible READ sidebarVisible WRITE setSidebarVisible NOTIFY sidebarVisibleChanged)
     // 仪表盘右侧专注计时面板的展开态：跨启动记忆，与侧栏同一套收起习惯。
     Q_PROPERTY(bool dashboardTimerVisible READ dashboardTimerVisible WRITE setDashboardTimerVisible NOTIFY dashboardTimerVisibleChanged)
+    // 长期目标页的列表/网格偏好；非法值统一回退到列表。
+    Q_PROPERTY(QString goalViewMode READ goalViewMode WRITE setGoalViewMode NOTIFY goalViewModeChanged)
     // 关闭毛玻璃、改用不透明面板（省电/更清晰，呼应 macOS “减少透明度”）。
     Q_PROPERTY(bool reduceTransparency READ reduceTransparency WRITE setReduceTransparency NOTIFY reduceTransparencyChanged)
     // 阶段结束时把窗口带到最前；关掉后仅靠提示音提醒，不打断当前操作。
@@ -67,6 +69,8 @@ public:
     void setSidebarVisible(bool visible);
     bool dashboardTimerVisible() const;
     void setDashboardTimerVisible(bool visible);
+    QString goalViewMode() const;
+    void setGoalViewMode(const QString& mode);
     bool reduceTransparency() const;
     void setReduceTransparency(bool enabled);
     bool raiseOnPhaseComplete() const;
@@ -104,6 +108,7 @@ signals:
     void nicknameChanged();
     void sidebarVisibleChanged();
     void dashboardTimerVisibleChanged();
+    void goalViewModeChanged();
     void reduceTransparencyChanged();
     void raiseOnPhaseCompleteChanged();
     void closeToTrayChanged();

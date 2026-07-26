@@ -127,7 +127,7 @@ Control {
                     radius: Theme.radiusMd
 
                     Behavior on color {
-                        ColorAnimation { duration: root.animationDuration }
+                        ColorAnimation { duration: Theme.reduceMotion ? 0 : root.animationDuration }
                     }
                 }
 

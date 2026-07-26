@@ -9,6 +9,10 @@
 namespace {
 const auto kPhaseCompleteResource = QStringLiteral(":/sounds/phase-complete.wav");
 const auto kPhaseCompleteFileName = QStringLiteral("pomodoro-todo-phase-complete.wav");
+const auto kMilestoneResource = QStringLiteral(":/sounds/milestone.wav");
+const auto kMilestoneFileName = QStringLiteral("pomodoro-todo-milestone.wav");
+const auto kGoalAchievedResource = QStringLiteral(":/sounds/goal-achieved.wav");
+const auto kGoalAchievedFileName = QStringLiteral("pomodoro-todo-goal-achieved.wav");
 }
 
 PhaseSoundService* PhaseSoundService::instance()
@@ -24,8 +28,25 @@ PhaseSoundService::PhaseSoundService(QObject* parent)
 
 bool PhaseSoundService::playPhaseCompleteChime()
 {
+    return playSound(kPhaseCompleteResource, kPhaseCompleteFileName);
+}
+
+bool PhaseSoundService::playMilestoneChime()
+{
+    // 三音上行比普通阶段结束提示更明亮，但保持短促，表达 25/50/75% 的稀有度。
+    return playSound(kMilestoneResource, kMilestoneFileName);
+}
+
+bool PhaseSoundService::playGoalAchievedChime()
+{
+    // 达成音在三音基础上升到高八度，和普通里程碑形成可听见的层级差异。
+    return playSound(kGoalAchievedResource, kGoalAchievedFileName);
+}
+
+bool PhaseSoundService::playSound(const QString& resourcePath, const QString& fileName) const
+{
 #ifdef Q_OS_MACOS
-    const QString soundFilePath = ensurePhaseCompleteFile();
+    const QString soundFilePath = ensureSoundFile(resourcePath, fileName);
     if (soundFilePath.isEmpty()) {
         return false;
     }
@@ -38,7 +59,8 @@ bool PhaseSoundService::playPhaseCompleteChime()
 #endif
 }
 
-QString PhaseSoundService::ensurePhaseCompleteFile() const
+QString PhaseSoundService::ensureSoundFile(const QString& resourcePath,
+                                           const QString& fileName) const
 {
     const QString tempRoot = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
     if (tempRoot.isEmpty()) {
@@ -50,8 +72,8 @@ QString PhaseSoundService::ensurePhaseCompleteFile() const
         return QString();
     }
 
-    const QString targetPath = QDir(targetDir).filePath(kPhaseCompleteFileName);
-    QFile source(kPhaseCompleteResource);
+    const QString targetPath = QDir(targetDir).filePath(fileName);
+    QFile source(resourcePath);
     if (!source.exists()) {
         return QString();
     }

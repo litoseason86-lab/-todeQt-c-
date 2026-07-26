@@ -43,7 +43,8 @@ Item {
     property bool controlsRevealed: false
     readonly property bool controlsPinned: sessionPaused || completionState
     readonly property bool controlsShown: controlsRevealed || controlsPinned
-    readonly property bool fadeAnimated: !(settingsRef && settingsRef.reduceMotion)
+    readonly property bool fadeAnimated: !Theme.reduceMotion
+                                         && !(settingsRef && settingsRef.reduceMotion)
     readonly property alias hideTimerRunning: hideTimer.running
 
     function revealControls() {
@@ -303,7 +304,7 @@ Item {
 
             Behavior on opacity {
                 enabled: root.fadeAnimated
-                NumberAnimation { duration: 180 }
+                NumberAnimation { duration: Theme.reduceMotion ? 0 : 180 }
             }
 
             Button {
@@ -344,7 +345,7 @@ Item {
 
             Behavior on opacity {
                 enabled: root.fadeAnimated
-                NumberAnimation { duration: 180 }
+                NumberAnimation { duration: Theme.reduceMotion ? 0 : 180 }
             }
 
             Button {
@@ -372,7 +373,7 @@ Item {
 
                     Behavior on color {
                         ColorAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }
@@ -406,7 +407,7 @@ Item {
 
                     Behavior on color {
                         ColorAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }

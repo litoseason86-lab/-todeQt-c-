@@ -53,7 +53,7 @@ Item {
 
                     Behavior on border.width {
                         NumberAnimation {
-                            duration: 150
+                            duration: Theme.reduceMotion ? 0 : 150
                             easing.type: Easing.InOutQuad
                         }
                     }

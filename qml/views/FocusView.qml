@@ -341,7 +341,6 @@ Item {
 
     function startBreak() {
         root.cancelAutoAdvance()
-        root.justCompletedPhase = 0
         var taskId = root.selectedTaskId > 0 ? root.selectedTaskId
                                             : (root.timer ? root.timer.currentTaskId : -1)
         var taskTitle = root.selectedTaskTitle.length > 0 ? root.selectedTaskTitle
@@ -355,6 +354,8 @@ Item {
             started = root.timer.startBreak(root.nextBreakMinutes() * 60)
         }
         if (started) {
+            // 只有后端真正建立休息阶段后才消费完成态；失败时用户必须仍能重试。
+            root.justCompletedPhase = 0
             root.errorText = ""
         } else {
             root.errorText = "休息启动失败"
@@ -536,7 +537,8 @@ Item {
             // 选中态始终跟随业务状态：模式还会被任务页跳转、服务恢复会话等外部路径改写，
             // 控件不能自己记一份，否则两边会漂移。
             currentIndex: root.pomodoroModeSelected ? 1 : 0
-            reduceMotion: root.settings ? root.settings.reduceMotion : false
+            // 测试桩和旧设置对象可能没有 reduceMotion；显式转布尔可把缺失属性稳定降级为 false。
+            reduceMotion: Boolean(root.settings && root.settings.reduceMotion)
             solidFallback: !Theme.glassBlurAllowed
             Accessible.name: qsTr("专注模式")
 
@@ -620,17 +622,20 @@ Item {
                     color: Theme.inkStrong
                 }
 
-                NumberAnimation on blinkOpacity {
+                NumberAnimation {
                     id: completionBlink
 
+                    target: completionBanner
+                    property: "blinkOpacity"
                     from: 0.35
                     to: 1
-                    duration: 520
+                    duration: Theme.reduceMotion ? 0 : 520
                     loops: Animation.Infinite
                     // pageActive 门控：完成态可能在用户停留在其它页时长期存在，
                     // 无限闪烁动画不能在不可见页面上空转（不看 effective visible，离屏测试会污染）。
                     running: completionBanner.shouldShow && root.pageActive
                              && !(root.settings && root.settings.reduceMotion)
+                             && !Theme.reduceMotion
                 }
             }
 
@@ -661,7 +666,7 @@ Item {
 
                 Behavior on implicitWidth {
                     NumberAnimation {
-                        duration: 150
+                        duration: Theme.reduceMotion ? 0 : 150
                         easing.type: Easing.OutQuad
                     }
                 }
@@ -1004,7 +1009,7 @@ Item {
 
                         Behavior on color {
                             ColorAnimation {
-                                duration: 160
+                                duration: Theme.reduceMotion ? 0 : 160
                                 easing.type: Easing.OutQuad
                             }
                         }
@@ -1038,7 +1043,7 @@ Item {
 
                         Behavior on color {
                             ColorAnimation {
-                                duration: 160
+                                duration: Theme.reduceMotion ? 0 : 160
                                 easing.type: Easing.OutQuad
                             }
                         }

@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtTest
 import "../../qml"
@@ -170,6 +172,12 @@ TestCase {
 
         width: testCase.width
         height: testCase.height
+        taskManagerRef: taskManager
+        categoryManagerRef: categoryManager
+        exportServiceRef: exportService
+        statisticsServiceRef: statisticsService
+        appSettingsRef: appSettings
+        focusTimerRef: focusTimer
     }
 
     function init() {

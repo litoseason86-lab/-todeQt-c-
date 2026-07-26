@@ -17,6 +17,10 @@ Item {
     readonly property var particleDirections: [[-1, -1], [-1, 0], [-1, 1], [1, -1], [1, 0], [1, 1]]
 
     function burst(originX, originY) {
+        // 减少动效时连粒子对象都不创建，而不是把 800ms 动画压成一帧闪烁。
+        if (Theme.reduceMotion) {
+            return
+        }
         // 已在迸发中就不重复创建，保持原 TaskItem 的防重入边界。
         if (root.particleCount > 0) {
             return;
@@ -69,7 +73,7 @@ Item {
                         target: particle
                         property: "x"
                         to: particle.targetX
-                        duration: 800
+                        duration: Theme.reduceMotion ? 0 : 800
                         easing.type: Easing.OutQuad
                     }
 
@@ -77,7 +81,7 @@ Item {
                         target: particle
                         property: "y"
                         to: particle.targetY
-                        duration: 800
+                        duration: Theme.reduceMotion ? 0 : 800
                         easing.type: Easing.OutQuad
                     }
 
@@ -85,7 +89,7 @@ Item {
                         target: particle
                         from: 1
                         to: 0
-                        duration: 800
+                        duration: Theme.reduceMotion ? 0 : 800
                         easing.type: Easing.OutQuad
                     }
                 }

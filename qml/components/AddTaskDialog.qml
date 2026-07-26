@@ -23,14 +23,14 @@ Popup {
                 property: "scale"
                 from: 0.94
                 to: 1.0
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.OutCubic
             }
 
             OpacityAnimator {
                 from: 0
                 to: 1
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.OutQuad
             }
         }
@@ -42,14 +42,14 @@ Popup {
                 property: "scale"
                 from: 1.0
                 to: 0.94
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.InQuad
             }
 
             OpacityAnimator {
                 from: 1
                 to: 0
-                duration: 220
+                duration: Theme.reduceMotion ? 0 : 220
                 easing.type: Easing.InQuad
             }
         }
@@ -61,7 +61,7 @@ Popup {
 
         Behavior on opacity {
             OpacityAnimator {
-                duration: 180
+                duration: Theme.reduceMotion ? 0 : 180
                 easing.type: Easing.InOutQuad
             }
         }
@@ -75,6 +75,8 @@ Popup {
         // qmllint enable unqualified
         return LogicalDay.todayDate(hour, new Date())
     }
+    // “今日”入口每次打开都要重算逻辑日；周计划入口不注入此函数，保留用户点选的日期。
+    property var selectedDateProvider: null
     property string heading: "添加新任务"
     // 预计番茄数，0 表示未设置。上限读 TaskManager 常量，与服务端校验同源。
     property int estimatedPomodoros: 0
@@ -156,6 +158,12 @@ Popup {
     Component.onCompleted: root.refreshCategories()
 
     onOpened: {
+        if (root.selectedDateProvider) {
+            var refreshedDate = root.selectedDateProvider()
+            if (refreshedDate instanceof Date && !isNaN(refreshedDate.getTime())) {
+                root.selectedDate = refreshedDate
+            }
+        }
         errorLabel.text = "";
         root.refreshCategories();
         titleField.forceActiveFocus();
@@ -250,21 +258,21 @@ Popup {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: 180
+                        duration: Theme.reduceMotion ? 0 : 180
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on border.color {
                     ColorAnimation {
-                        duration: 180
+                        duration: Theme.reduceMotion ? 0 : 180
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on border.width {
                     NumberAnimation {
-                        duration: 180
+                        duration: Theme.reduceMotion ? 0 : 180
                         easing.type: Easing.OutQuad
                     }
                 }
@@ -315,21 +323,21 @@ Popup {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: 180
+                        duration: Theme.reduceMotion ? 0 : 180
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on border.color {
                     ColorAnimation {
-                        duration: 180
+                        duration: Theme.reduceMotion ? 0 : 180
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on border.width {
                     NumberAnimation {
-                        duration: 180
+                        duration: Theme.reduceMotion ? 0 : 180
                         easing.type: Easing.OutQuad
                     }
                 }
@@ -346,7 +354,7 @@ Popup {
 
                 Behavior on rotation {
                     NumberAnimation {
-                        duration: 180
+                        duration: Theme.reduceMotion ? 0 : 180
                         easing.type: Easing.OutQuad
                     }
                 }
@@ -486,14 +494,14 @@ Popup {
 
                     Behavior on color {
                         ColorAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }
 
                     Behavior on border.color {
                         ColorAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }
@@ -512,7 +520,7 @@ Popup {
 
                     Behavior on scale {
                         NumberAnimation {
-                            duration: 90
+                            duration: Theme.reduceMotion ? 0 : 90
                             easing.type: Easing.OutQuad
                         }
                     }
@@ -538,14 +546,14 @@ Popup {
 
                     Behavior on color {
                         ColorAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }
 
                     Behavior on border.color {
                         ColorAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }
@@ -564,7 +572,7 @@ Popup {
 
                     Behavior on scale {
                         NumberAnimation {
-                            duration: 90
+                            duration: Theme.reduceMotion ? 0 : 90
                             easing.type: Easing.OutQuad
                         }
                     }

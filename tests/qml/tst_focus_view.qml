@@ -38,6 +38,7 @@ TestCase {
         property int startBreakSeconds: 0
         property int startBreakTaskId: -1
         property string startBreakTaskTitle: ""
+        property bool startBreakFails: false
         property int resetPomodoroCountCalls: 0
 
         function startFocus(taskId, title) {
@@ -93,6 +94,8 @@ TestCase {
 
         function startBreak(breakSeconds) {
             startBreakSeconds = breakSeconds
+            if (startBreakFails)
+                return false
             isRunning = true
             hasActiveSession = false
             mode = 1
@@ -108,6 +111,8 @@ TestCase {
             startBreakTaskId = taskId
             startBreakTaskTitle = title
             startBreakSeconds = breakSeconds
+            if (startBreakFails)
+                return false
             isRunning = true
             hasActiveSession = false
             mode = 1
@@ -225,6 +230,7 @@ TestCase {
         focusTimer.startBreakSeconds = 0
         focusTimer.startBreakTaskId = -1
         focusTimer.startBreakTaskTitle = ""
+        focusTimer.startBreakFails = false
         focusTimer.resetPomodoroCountCalls = 0
         appSettingsMock.autoStartBreak = false
         appSettingsMock.autoStartNextPomodoro = false
@@ -389,6 +395,27 @@ TestCase {
 
         compare(focusTimer.startPomodoroWorkTaskId, 7)
         compare(view.state, "pomoWork")
+    }
+
+    function test_failedBreakStartKeepsCompletionStateForRetry() {
+        view.toPomodoroTab(true)
+        view.selectedTaskId = 7
+        view.selectedTaskTitle = "测试任务"
+        focusTimer.phaseCompleted(1)
+        wait(20)
+        compare(view.state, "workDone")
+
+        focusTimer.startBreakFails = true
+        view.startBreak()
+        compare(view.state, "workDone")
+        compare(view.justCompletedPhase, 1)
+        verify(view.errorText.length > 0)
+
+        focusTimer.startBreakFails = false
+        view.startBreak()
+        compare(view.justCompletedPhase, 0)
+        compare(view.state, "pomoBreak")
+        compare(view.errorText, "")
     }
 
     function test_endPomodoroStopsBreakWithoutActiveSession() {

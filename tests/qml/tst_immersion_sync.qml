@@ -35,6 +35,15 @@ TestCase {
         compare(sync.immersiveActiveAfterVisibilityChange(Window.Windowed, true), false)
     }
 
+    function test_hideToTrayKeepsImmersiveStateUntilWindowIsShownAgain() {
+        sync.visibilityForImmersiveChange(true, Window.Windowed)
+        sync.immersiveActiveAfterVisibilityChange(Window.FullScreen, true)
+
+        // 隐藏只改变窗口可见性，不能触发“退出沉浸→恢复 Windowed”的反馈回路。
+        compare(sync.immersiveActiveAfterVisibilityChange(Window.Hidden, true), true)
+        compare(sync.preImmersiveVisibility, Window.Windowed)
+    }
+
     function test_guardIgnoresIntermediateStatesDuringEntry() {
         sync.visibilityForImmersiveChange(true, Window.Maximized)
 

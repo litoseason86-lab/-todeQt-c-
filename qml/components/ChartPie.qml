@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Layouts
 import ".."
@@ -15,7 +17,7 @@ Rectangle {
     readonly property bool showEmptyState: chartData.length === 0
     readonly property bool showInvalidData: chartData.length > 0 && totalValue <= 0
     // 系列配色集中管理于 Theme.chartColors，值不变。
-    readonly property var palette: Theme.chartColors
+    readonly property var chartColors: Theme.chartColors
 
     implicitWidth: 560
     implicitHeight: 260
@@ -55,7 +57,7 @@ Rectangle {
                 label: String(label || "未分类"),
                 value: root.finiteNumber(value),
                 displayValue: item.displayValue || "",
-                color: item.color || root.palette[i % root.palette.length]
+                color: item.color || root.chartColors[i % root.chartColors.length]
             })
         }
         return result
@@ -197,6 +199,10 @@ Rectangle {
                         model: root.chartData
 
                         RowLayout {
+                            id: legendRow
+
+                            required property var modelData
+
                             // 整条图例统一限宽,百分比对齐在占比条右端上方,不会飘到面板最右侧。
                             Layout.fillWidth: true
                             Layout.maximumWidth: 320
@@ -208,7 +214,7 @@ Rectangle {
                                 Layout.alignment: Qt.AlignTop
                                 Layout.topMargin: 3
                                 radius: 3
-                                color: modelData.color
+                                color: legendRow.modelData.color
                             }
 
                             ColumnLayout {
@@ -221,14 +227,14 @@ Rectangle {
 
                                     Text {
                                         Layout.fillWidth: true
-                                        text: modelData.label
+                                        text: legendRow.modelData.label
                                         font.pixelSize: Theme.fontMd
                                         color: Theme.ink
                                         elide: Text.ElideRight
                                     }
 
                                     Text {
-                                        text: root.percentage(modelData.value)
+                                        text: root.percentage(legendRow.modelData.value)
                                         font.pixelSize: Theme.fontSm
                                         color: Theme.inkSoft
                                     }
@@ -236,9 +242,9 @@ Rectangle {
 
                                 Text {
                                     Layout.fillWidth: true
-                                    text: modelData.displayValue.length > 0
-                                          ? modelData.displayValue
-                                          : String(modelData.value)
+                                    text: legendRow.modelData.displayValue.length > 0
+                                          ? legendRow.modelData.displayValue
+                                          : String(legendRow.modelData.value)
                                     font.pixelSize: Theme.fontXs
                                     color: Theme.inkSoft
                                     elide: Text.ElideRight
@@ -253,10 +259,11 @@ Rectangle {
                                     color: Theme.accentSoft
 
                                     Rectangle {
-                                        width: parent.width * (root.totalValue > 0 ? modelData.value / root.totalValue : 0)
+                                        width: parent.width * (root.totalValue > 0
+                                                               ? legendRow.modelData.value / root.totalValue : 0)
                                         height: parent.height
                                         radius: 3
-                                        color: modelData.color
+                                        color: legendRow.modelData.color
                                     }
                                 }
                             }

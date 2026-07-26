@@ -43,7 +43,7 @@ Rectangle {
             anchors.topMargin: Theme.space24
             width: 32
             height: 32
-            running: !root.reduceMotion
+            running: !root.reduceMotion && !Theme.reduceMotion
             visible: running
         }
 

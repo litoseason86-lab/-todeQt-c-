@@ -35,6 +35,14 @@ TestCase {
         categoryManagerRef: categoryManagerMock
     }
 
+    EditTaskDialog {
+        id: failingDialog
+        categoryManagerRef: categoryManagerMock
+        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedPomodoros) {
+            return false
+        }
+    }
+
     SignalSpy {
         id: editedSpy
         target: dialog
@@ -44,6 +52,7 @@ TestCase {
     function init() {
         editedSpy.clear()
         dialog.close()
+        failingDialog.close()
         wait(20)
     }
 
@@ -110,6 +119,22 @@ TestCase {
 
         compare(editedSpy.count, 0)
         verify(dialog.errorText.length > 0)
+    }
+
+    function test_failedSubmitKeepsDraftAndDialogOpen() {
+        failingDialog.openForTask({
+            id: 11, title: "旧标题", categoryId: -1, date: isoWithOffset(0)
+        })
+        tryCompare(failingDialog, "opened", true, 500)
+
+        const titleField = findChild(failingDialog, "editTitleField")
+        verify(titleField)
+        titleField.text = "不能丢的修改"
+        failingDialog.submit()
+
+        compare(failingDialog.opened, true)
+        compare(titleField.text, "不能丢的修改")
+        verify(failingDialog.errorText.length > 0)
     }
 
     function test_panelIsGlassDialog() {

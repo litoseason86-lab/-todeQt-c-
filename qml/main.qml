@@ -6,6 +6,16 @@ import "components"
 ApplicationWindow {
     id: root
 
+    // 只有真实应用入口绑定全局令牌，避免多个独立 MainWindow 测试实例争抢单例属性。
+    Binding {
+        target: Theme
+        property: "reduceMotion"
+        // qmllint disable unqualified
+        value: typeof appSettings !== "undefined" && appSettings
+               ? Boolean(appSettings.reduceMotion) : false
+        // qmllint enable unqualified
+    }
+
     // 这里是 QML 应用入口，只负责窗口尺寸和装载真正的主界面。
     visible: true
     width: 1024
@@ -19,6 +29,21 @@ ApplicationWindow {
         id: mainContent
 
         anchors.fill: parent
+        // 上下文属性只在应用入口解包，业务组件内部全部消费显式引用，避免动态作用域漂移。
+        // qmllint disable unqualified
+        taskManagerRef: typeof taskManager === "undefined" ? null : taskManager
+        categoryManagerRef: typeof categoryManager === "undefined" ? null : categoryManager
+        routineManagerRef: typeof routineManager === "undefined" ? null : routineManager
+        exportServiceRef: typeof exportService === "undefined" ? null : exportService
+        statisticsServiceRef: typeof statisticsService === "undefined" ? null : statisticsService
+        countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
+        appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
+        focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
+        logicalDayServiceRef: typeof logicalDayService === "undefined" ? null : logicalDayService
+        backupServiceRef: typeof backupService === "undefined" ? null : backupService
+        goalServiceRef: typeof goalService === "undefined" ? null : goalService
+        phaseSoundServiceRef: typeof phaseSoundService === "undefined" ? null : phaseSoundService
+        // qmllint enable unqualified
     }
 
     onClosing: function(close) {

@@ -46,7 +46,7 @@ Switch {
 
             Behavior on x {
                 NumberAnimation {
-                    duration: root.animationDuration
+                    duration: Theme.reduceMotion ? 0 : root.animationDuration
                     easing.type: Easing.OutCubic
                 }
             }

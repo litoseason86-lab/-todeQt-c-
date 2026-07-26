@@ -15,6 +15,7 @@
         <file alias="qml/views/CountdownView.qml">../qml/views/CountdownView.qml</file>
         <file alias="qml/views/DashboardView.qml">../qml/views/DashboardView.qml</file>
         <file alias="qml/views/DashboardFormat.js">../qml/views/DashboardFormat.js</file>
+        <file alias="qml/views/GoalsView.qml">../qml/views/GoalsView.qml</file>
         <file alias="qml/components/GlassPanel.qml">../qml/components/GlassPanel.qml</file>
         <file alias="qml/components/GlassToolbarButton.qml">../qml/components/GlassToolbarButton.qml</file>
         <file alias="qml/components/SegmentedSwitch.qml">../qml/components/SegmentedSwitch.qml</file>
@@ -40,6 +41,13 @@
         <file alias="qml/components/PresetButton.qml">../qml/components/PresetButton.qml</file>
         <file alias="qml/components/DurationStepper.qml">../qml/components/DurationStepper.qml</file>
         <file alias="qml/components/GlyphIcon.qml">../qml/components/GlyphIcon.qml</file>
+        <file alias="qml/components/GoalCard.qml">../qml/components/GoalCard.qml</file>
+        <file alias="qml/components/GoalTile.qml">../qml/components/GoalTile.qml</file>
+        <file alias="qml/components/GoalFormDialog.qml">../qml/components/GoalFormDialog.qml</file>
+        <file alias="qml/components/Grid100.qml">../qml/components/Grid100.qml</file>
+        <file alias="qml/components/GoalHeatmap.qml">../qml/components/GoalHeatmap.qml</file>
+        <file alias="qml/components/MilestoneDialog.qml">../qml/components/MilestoneDialog.qml</file>
+        <file alias="qml/components/AchievedGoalsCard.qml">../qml/components/AchievedGoalsCard.qml</file>
         <file alias="qml/components/FocusRing.qml">../qml/components/FocusRing.qml</file>
         <file alias="qml/components/FocusImmersiveOverlay.qml">../qml/components/FocusImmersiveOverlay.qml</file>
         <file alias="qml/components/ImmersionWindowSync.qml">../qml/components/ImmersionWindowSync.qml</file>
@@ -64,5 +72,7 @@
         <file alias="qml/components/WeeklyReviewCard.qml">../qml/components/WeeklyReviewCard.qml</file>
         <file alias="qml/components/Toast.qml">../qml/components/Toast.qml</file>
         <file alias="sounds/phase-complete.wav">sounds/phase-complete.wav</file>
+        <file alias="sounds/milestone.wav">sounds/milestone.wav</file>
+        <file alias="sounds/goal-achieved.wav">sounds/goal-achieved.wav</file>
     </qresource>
 </RCC>

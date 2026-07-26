@@ -68,6 +68,8 @@ Rectangle {
     property bool componentReady: false
     property bool completionAnimationPlayed: false
     property real completionOffset: 0
+    // 页面注入返回 bool 的重命名函数，失败时保留编辑态和用户输入。
+    property var renameSubmitter: null
     readonly property bool itemHovered: root.pointerInside
     // 视图可能传入标准化科目对象，也可能传入旧版字符串科目。
     readonly property string categoryName: typeof taskCategory === "object" ? (taskCategory && taskCategory.name ? taskCategory.name : "") : String(taskCategory || "")
@@ -92,12 +94,21 @@ Rectangle {
 
     function commitTitleEdit() {
         var newTitle = titleEditField.text.trim();
-        root.titleEditing = false;
         // 空标题或未修改都当作取消，避免无意义刷新和空标题打到服务层。
         if (newTitle.length === 0 || newTitle === root.taskTitle) {
+            root.titleEditing = false;
             return;
         }
-        root.renameSubmitted(root.taskId, newTitle);
+        if (root.renameSubmitter
+                && !Boolean(root.renameSubmitter(root.taskId, newTitle))) {
+            titleEditField.forceActiveFocus()
+            titleEditField.selectAll()
+            return
+        }
+        if (!root.renameSubmitter) {
+            root.renameSubmitted(root.taskId, newTitle)
+        }
+        root.titleEditing = false;
     }
 
     function cancelTitleEdit() {
@@ -171,14 +182,14 @@ Rectangle {
             ParallelAnimation {
                 OpacityAnimator {
                     target: root
-                    duration: 200
+                    duration: Theme.reduceMotion ? 0 : 200
                     easing.type: Easing.OutQuad
                 }
 
                 NumberAnimation {
                     target: root
                     property: "completionOffset"
-                    duration: 200
+                    duration: Theme.reduceMotion ? 0 : 200
                     easing.type: Easing.OutQuad
                 }
             }
@@ -190,14 +201,14 @@ Rectangle {
             ParallelAnimation {
                 OpacityAnimator {
                     target: root
-                    duration: 150
+                    duration: Theme.reduceMotion ? 0 : 150
                     easing.type: Easing.InQuad
                 }
 
                 NumberAnimation {
                     target: root
                     property: "completionOffset"
-                    duration: 150
+                    duration: Theme.reduceMotion ? 0 : 150
                     easing.type: Easing.InQuad
                 }
             }
@@ -206,49 +217,49 @@ Rectangle {
 
     Behavior on color {
         ColorAnimation {
-            duration: 180
+            duration: Theme.reduceMotion ? 0 : 180
             easing.type: Easing.OutQuad
         }
     }
 
     Behavior on border.color {
         ColorAnimation {
-            duration: 180
+            duration: Theme.reduceMotion ? 0 : 180
             easing.type: Easing.OutQuad
         }
     }
 
     Behavior on border.width {
         NumberAnimation {
-            duration: 180
+            duration: Theme.reduceMotion ? 0 : 180
             easing.type: Easing.OutQuad
         }
     }
 
     Behavior on warmShadowOpacity {
         NumberAnimation {
-            duration: 200
+            duration: Theme.reduceMotion ? 0 : 200
             easing.type: Easing.OutQuad
         }
     }
 
     Behavior on warmShadowBlur {
         NumberAnimation {
-            duration: 200
+            duration: Theme.reduceMotion ? 0 : 200
             easing.type: Easing.OutQuad
         }
     }
 
     Behavior on warmShadowVerticalOffset {
         NumberAnimation {
-            duration: 200
+            duration: Theme.reduceMotion ? 0 : 200
             easing.type: Easing.OutQuad
         }
     }
 
     Behavior on opacity {
         OpacityAnimator {
-            duration: 180
+            duration: Theme.reduceMotion ? 0 : 180
             easing.type: Easing.OutQuad
         }
     }
@@ -333,21 +344,21 @@ Rectangle {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: 180
+                        duration: Theme.reduceMotion ? 0 : 180
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on border.color {
                     ColorAnimation {
-                        duration: 180
+                        duration: Theme.reduceMotion ? 0 : 180
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on border.width {
                     NumberAnimation {
-                        duration: 180
+                        duration: Theme.reduceMotion ? 0 : 180
                         easing.type: Easing.OutQuad
                     }
                 }
@@ -391,7 +402,7 @@ Rectangle {
 
                     Behavior on color {
                         ColorAnimation {
-                            duration: 180
+                            duration: Theme.reduceMotion ? 0 : 180
                             easing.type: Easing.OutQuad
                         }
                     }
@@ -533,7 +544,7 @@ Rectangle {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: 160
+                        duration: Theme.reduceMotion ? 0 : 160
                         easing.type: Easing.OutQuad
                     }
                 }
@@ -655,42 +666,42 @@ Rectangle {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: 160
+                        duration: Theme.reduceMotion ? 0 : 160
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on border.color {
                     ColorAnimation {
-                        duration: 160
+                        duration: Theme.reduceMotion ? 0 : 160
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on y {
                     NumberAnimation {
-                        duration: 90
+                        duration: Theme.reduceMotion ? 0 : 90
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on warmShadowOpacity {
                     NumberAnimation {
-                        duration: 90
+                        duration: Theme.reduceMotion ? 0 : 90
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on warmShadowBlur {
                     NumberAnimation {
-                        duration: 90
+                        duration: Theme.reduceMotion ? 0 : 90
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Behavior on warmShadowVerticalOffset {
                     NumberAnimation {
-                        duration: 90
+                        duration: Theme.reduceMotion ? 0 : 90
                         easing.type: Easing.OutQuad
                     }
                 }
@@ -709,7 +720,7 @@ Rectangle {
 
                 Behavior on scale {
                     NumberAnimation {
-                        duration: 90
+                        duration: Theme.reduceMotion ? 0 : 90
                         easing.type: Easing.OutQuad
                     }
                 }

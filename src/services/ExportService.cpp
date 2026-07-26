@@ -100,6 +100,14 @@ QString ExportService::categoryExpression() const
     return QStringLiteral("COALESCE(NULLIF(c.name, ''), NULLIF(t.category, ''), '未分类')");
 }
 
+QString ExportService::sessionCategoryExpression() const
+{
+    // 会话快照是历史事实；当前任务列只为迁移前的旧数据提供兼容回退。
+    return QStringLiteral(
+        "COALESCE(NULLIF(snapshot_category.name, ''), NULLIF(f.category_name_snapshot, ''), "
+        "NULLIF(c.name, ''), NULLIF(t.category, ''), '未分类')");
+}
+
 int ExportService::countRows(const QString& fromAndWhereSql,
                              const QDate& startDate,
                              const QDate& endDate) const
@@ -246,6 +254,7 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
     const QString fromAndWhere = QStringLiteral(
         "FROM focus_sessions f "
         "LEFT JOIN tasks t ON f.task_id = t.id "
+        "LEFT JOIN categories snapshot_category ON f.category_id_snapshot = snapshot_category.id "
         "LEFT JOIN categories c ON t.category_id = c.id "
         "WHERE date(f.start_time, '%1') >= :startDate "
         "AND date(f.start_time, '%1') <= :endDate "
@@ -263,7 +272,7 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
         "SELECT f.id, f.task_id, COALESCE(t.title, '未关联任务') AS task_title, "
         "%1 AS category_name, f.start_time, f.end_time, COALESCE(f.duration, 0) "
         "%2 "
-        "ORDER BY f.start_time ASC, f.id ASC").arg(categoryExpression(), fromAndWhere));
+        "ORDER BY f.start_time ASC, f.id ASC").arg(sessionCategoryExpression(), fromAndWhere));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 

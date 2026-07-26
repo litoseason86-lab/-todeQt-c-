@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Controls.Basic
 import QtQuick.Dialogs
 import QtQuick.Effects
 import QtQuick.Layouts
@@ -23,10 +24,28 @@ Item {
     property string pendingDeleteTitle: ""
     property int deleteCommitDelayMs: 5000
     property string restoreInspectionPath: ""
-    property var countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
-    property var appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
-    property var focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
-    property var backupServiceRef: typeof backupService === "undefined" ? null : backupService
+    property var taskManagerRef: null
+    property var categoryManagerRef: null
+    property var routineManagerRef: null
+    property var exportServiceRef: null
+    property var statisticsServiceRef: null
+    property var countdownServiceRef: null
+    property var appSettingsRef: null
+    property var focusTimerRef: null
+    property var logicalDayServiceRef: null
+    property var backupServiceRef: null
+    property var goalServiceRef: null
+    property var phaseSoundServiceRef: null
+    property var milestoneQueue: []
+    property var suppressedMilestones: []
+    property bool milestonePresentationScheduled: false
+    readonly property var pendingMilestone: root.milestoneQueue.length > 0
+                                            ? root.milestoneQueue[0] : null
+    readonly property var suppressedMilestone: root.suppressedMilestones.length > 0
+                                               ? root.suppressedMilestones[root.suppressedMilestones.length - 1]
+                                               : null
+    property var activeMilestoneDialog: null
+    readonly property int rewardParticleCount: rewardParticles.particleCount
     // 侧栏展开态：优先读设置；测试未注入 settings 时本地默认真。
     property bool sidebarVisible: root.appSettingsRef
                                   ? root.appSettingsRef.sidebarVisible
@@ -64,7 +83,7 @@ Item {
 
         // 减少动效要求立即切页，并完整清掉淡入淡出的中间状态；
         // 该分支必须在 isSwitching 早退之前，才能接住动画中途切换开关的场景。
-        if (root.appSettingsRef && root.appSettingsRef.reduceMotion) {
+        if (Theme.reduceMotion || root.sidebarMotionReduced) {
             viewFade.stop();
             root.currentView = viewName;
             root.pendingView = viewName;
@@ -114,6 +133,9 @@ Item {
         case "dashboard":
             // 仪表盘追加在栈尾，避免挪动既有视图索引影响测试与切页逻辑。
             return 6;
+        case "goals":
+            // 目标页继续追加在栈尾，既有视图索引保持不变。
+            return 7;
         case "today":
         default:
             return 0;
@@ -156,6 +178,127 @@ Item {
         globalToast.show(message, actionText, actionCallback)
     }
 
+    function scheduleMilestonePresentation() {
+        if (root.milestonePresentationScheduled || root.activeMilestoneDialog
+                || root.milestoneQueue.length === 0) {
+            return
+        }
+
+        root.milestonePresentationScheduled = true
+        Qt.callLater(root.presentPendingMilestone)
+    }
+
+    function enqueueMilestone(goalId, title, percent) {
+        // 同一个同步信号链可能连续跨过多个目标的阈值。数组每次复制后再赋值，确保 QML 发出属性变更。
+        const queued = root.milestoneQueue.slice()
+        queued.push({ goalId: goalId, title: title, percent: percent })
+        root.milestoneQueue = queued
+        root.scheduleMilestonePresentation()
+    }
+
+    function presentPendingMilestone() {
+        root.milestonePresentationScheduled = false
+        if (root.activeMilestoneDialog || root.milestoneQueue.length === 0)
+            return
+
+        const queued = root.milestoneQueue.slice()
+        const milestone = queued.shift()
+        root.milestoneQueue = queued
+
+        // 声音不依赖当前页面，也不被沉浸层压制；它是专注完成后的第一层即时反馈。
+        const soundAllowed = !root.appSettingsRef || Boolean(root.appSettingsRef.soundEnabled)
+        if (soundAllowed && root.phaseSoundServiceRef) {
+            if (Number(milestone.percent) === 100
+                    && root.phaseSoundServiceRef.playGoalAchievedChime)
+                root.phaseSoundServiceRef.playGoalAchievedChime()
+            else if (root.phaseSoundServiceRef.playMilestoneChime)
+                root.phaseSoundServiceRef.playMilestoneChime()
+        }
+
+        if (root.focusImmersiveActive) {
+            // 沉浸时保留每个稀有事件，但不盖住全屏专注；退出后合并为一条补告知 Toast。
+            const suppressed = root.suppressedMilestones.slice()
+            suppressed.push(milestone)
+            root.suppressedMilestones = suppressed
+            root.scheduleMilestonePresentation()
+            return
+        }
+
+        const goal = root.goalServiceRef && root.goalServiceRef.getGoal
+                ? root.goalServiceRef.getGoal(Number(milestone.goalId)) : ({})
+        const dialog = milestoneDialogComponent.createObject(root, {
+            goalId: Number(milestone.goalId),
+            goalTitle: String(milestone.title || ""),
+            percent: Number(milestone.percent || 0),
+            doneCount: Number(goal.doneCount || 0),
+            targetCount: Number(goal.targetPomodoros || 0),
+            achieved: Number(milestone.percent) === 100,
+            reduceMotion: Theme.reduceMotion
+                          || Boolean(root.appSettingsRef && root.appSettingsRef.reduceMotion)
+        })
+        if (!dialog) {
+            root.showToast(String(milestone.title || "") + " 已达成 "
+                           + Number(milestone.percent || 0) + "%")
+            root.scheduleMilestonePresentation()
+            return
+        }
+        root.activeMilestoneDialog = dialog
+        dialog.closed.connect(function() { root.finalizeMilestoneDialog(dialog) })
+        dialog.viewGoalRequested.connect(function() { root.openRewardGoal(dialog.goalId) })
+        dialog.open()
+
+        if (!Theme.reduceMotion
+                && !(root.appSettingsRef && root.appSettingsRef.reduceMotion)) {
+            Qt.callLater(function() {
+                if (root.activeMilestoneDialog === dialog) {
+                    // Popup 的视觉项会被 Controls 重挂到 overlay，因此用坐标映射取得
+                    // 真实屏幕中心，不依赖 Popup 逻辑 parent 的 x/y 语义。
+                    const center = dialog.contentItem.mapToItem(
+                                rewardParticles,
+                                dialog.contentItem.width / 2,
+                                dialog.contentItem.height / 2)
+                    rewardParticles.burst(center.x, center.y)
+                }
+            })
+        }
+    }
+
+    function finalizeMilestoneDialog(dialog) {
+        if (root.activeMilestoneDialog === dialog)
+            root.activeMilestoneDialog = null
+        dialog.destroy()
+        root.scheduleMilestonePresentation()
+    }
+
+    function disposeActiveMilestoneDialog() {
+        const dialog = root.activeMilestoneDialog
+        if (!dialog)
+            return
+        // Popup.closed 在退出动画完成后统一销毁，避免提前 destroy 截断动画或漏接 Escape 关闭。
+        dialog.close()
+    }
+
+    function openRewardGoal(goalId) {
+        root.disposeActiveMilestoneDialog()
+        root.switchToView("goals")
+        // 切页由既有淡入淡出状态机管理；详情子状态可先写入，页面出现时已经是正确目标。
+        Qt.callLater(function() { goalsView.openGoal(goalId) })
+    }
+
+    onFocusImmersiveActiveChanged: {
+        if (!root.focusImmersiveActive && root.suppressedMilestones.length > 0) {
+            const suppressed = root.suppressedMilestones.slice()
+            root.suppressedMilestones = []
+            const messages = []
+            for (let i = 0; i < suppressed.length; ++i) {
+                const milestone = suppressed[i]
+                messages.push(String(milestone.title || "") + " "
+                              + Number(milestone.percent || 0) + "%")
+            }
+            root.showToast("✦ " + messages.join("；"))
+        }
+    }
+
     function requestDeleteTask(taskId, taskTitle) {
         // 单槽撤销：新删除到来时，上一条先真正落库，撤销窗口只保护最近一次操作。
         if (!root.commitPendingDelete()) {
@@ -168,8 +311,8 @@ Item {
         deleteCommitTimer.restart()
         // 例行生成的当日实例：删除只影响今天，例行规则本身不受影响，撤销文案据此区分，
         // 让用户明白这不是删掉了整条例行规则。
-        var isRoutine = (typeof taskManager !== "undefined" && taskManager && taskManager.isRoutineGeneratedTask)
-                ? taskManager.isRoutineGeneratedTask(taskId) : false
+        const isRoutine = root.taskManagerRef && root.taskManagerRef.isRoutineGeneratedTask
+                ? root.taskManagerRef.isRoutineGeneratedTask(taskId) : false
         var deleteMessage = isRoutine
                 ? "已删除今天的例行任务「" + root.pendingDeleteTitle + "」"
                 : "已删除「" + root.pendingDeleteTitle + "」"
@@ -184,7 +327,7 @@ Item {
     // 任务 ID、排序、字段都不变（只改了 completed 一列）。
     function showCompletionUndoToast(taskId, taskTitle) {
         showToast("已完成「" + String(taskTitle || "") + "」", "撤销", function() {
-            if (!taskManager.setTaskCompleted(taskId, false)) {
+            if (!root.taskManagerRef || !root.taskManagerRef.setTaskCompleted(taskId, false)) {
                 root.showToast("撤销完成失败，请重试")
             }
         })
@@ -198,7 +341,7 @@ Item {
         deleteCommitTimer.stop()
         // 到这里才真正触库；撤销窗口内数据库没有被碰过，专注记录关联不会提前丢失。
         var deletedTitle = root.pendingDeleteTitle
-        if (!taskManager.deleteTask(root.pendingDeleteTaskId)) {
+        if (!root.taskManagerRef || !root.taskManagerRef.deleteTask(root.pendingDeleteTaskId)) {
             // 失败后立即解除隐藏，让任务重新出现；不能把数据库失败伪装成“已删除”。
             root.pendingDeleteTaskId = -1
             root.pendingDeleteTitle = ""
@@ -282,7 +425,7 @@ Item {
         Behavior on opacity {
             enabled: !root.sidebarMotionReduced
             NumberAnimation {
-                duration: 280
+                duration: Theme.reduceMotion ? 0 : 280
                 easing.type: Easing.OutCubic
             }
         }
@@ -324,7 +467,7 @@ Item {
             Behavior on Layout.preferredWidth {
                 enabled: !root.sidebarMotionReduced
                 NumberAnimation {
-                    duration: 320
+                    duration: Theme.reduceMotion ? 0 : 320
                     easing.type: Easing.OutCubic
                 }
             }
@@ -335,17 +478,16 @@ Item {
             id: sidebarShell
             objectName: "sidebarShell"
 
-            Layout.preferredWidth: width
-            Layout.minimumWidth: width
-            Layout.maximumWidth: width
+            Layout.preferredWidth: root.sidebarVisible ? root.sidebarExpandedWidth : 0
+            Layout.minimumWidth: Layout.preferredWidth
+            Layout.maximumWidth: Layout.preferredWidth
             Layout.fillHeight: true
-            width: root.sidebarVisible ? root.sidebarExpandedWidth : 0
             clip: true
 
-            Behavior on width {
+            Behavior on Layout.preferredWidth {
                 enabled: !root.sidebarMotionReduced
                 NumberAnimation {
-                    duration: 320
+                    duration: Theme.reduceMotion ? 0 : 320
                     // OutCubic 接近 AppKit 侧边栏收起的减速感。
                     easing.type: Easing.OutCubic
                 }
@@ -365,7 +507,7 @@ Item {
                 Behavior on opacity {
                     enabled: !root.sidebarMotionReduced
                     NumberAnimation {
-                        duration: 220
+                        duration: Theme.reduceMotion ? 0 : 220
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -391,7 +533,7 @@ Item {
             Behavior on Layout.preferredWidth {
                 enabled: !root.sidebarMotionReduced
                 NumberAnimation {
-                    duration: 280
+                    duration: Theme.reduceMotion ? 0 : 280
                     easing.type: Easing.OutCubic
                 }
             }
@@ -399,7 +541,7 @@ Item {
             Behavior on opacity {
                 enabled: !root.sidebarMotionReduced
                 NumberAnimation {
-                    duration: 200
+                    duration: Theme.reduceMotion ? 0 : 200
                     easing.type: Easing.OutCubic
                 }
             }
@@ -422,7 +564,7 @@ Item {
 
                 TodayTaskView {
                     pageActive: root.currentView === "today"
-                    categoryManagerRef: categoryManager
+                    categoryManagerRef: root.categoryManagerRef
                     countdownServiceRef: root.countdownServiceRef
                     settingsRef: root.appSettingsRef
                     pendingDeleteTaskId: root.pendingDeleteTaskId
@@ -466,7 +608,7 @@ Item {
 
                 WeekPlanView {
                     pageActive: root.currentView === "week"
-                    categoryManagerRef: categoryManager
+                    categoryManagerRef: root.categoryManagerRef
                     pendingDeleteTaskId: root.pendingDeleteTaskId
 
                     onStartFocus: function (taskId, taskTitle) {
@@ -483,7 +625,7 @@ Item {
 
                 MonthGoalView {
                     pageActive: root.currentView === "month"
-                    categoryManagerRef: categoryManager
+                    categoryManagerRef: root.categoryManagerRef
 
                     onStartFocus: function (taskId, taskTitle) {
                         root.startFocusForTask(taskId, taskTitle);
@@ -492,7 +634,14 @@ Item {
 
                 StatisticsView {
                     pageActive: root.currentView === "stats"
-                    categoryManagerRef: categoryManager
+                    taskManagerRef: root.taskManagerRef
+                    statisticsServiceRef: root.statisticsServiceRef
+                    focusTimerRef: root.focusTimerRef
+                    logicalDayServiceRef: root.logicalDayServiceRef
+                    appSettingsRef: root.appSettingsRef
+                    categoryManagerRef: root.categoryManagerRef
+                    goalServiceRef: root.goalServiceRef
+                    onGoalRequested: function(goalId) { root.openRewardGoal(goalId) }
                 }
 
                 CountdownView {
@@ -503,7 +652,7 @@ Item {
                     objectName: "dashboardViewPage"
                     pageActive: root.currentView === "dashboard"
 
-                    categoryManagerRef: categoryManager
+                    categoryManagerRef: root.categoryManagerRef
                     countdownServiceRef: root.countdownServiceRef
                     settingsRef: root.appSettingsRef
                     wallpaperRef: wallpaperLayer
@@ -523,6 +672,15 @@ Item {
                         root.showCompletionUndoToast(taskId, title)
                     }
                 }
+
+                GoalsView {
+                    id: goalsView
+                    objectName: "goalsViewPage"
+                    pageActive: root.currentView === "goals"
+                    goalServiceRef: root.goalServiceRef
+                    categoryManagerRef: root.categoryManagerRef
+                    settingsRef: root.appSettingsRef
+                }
             }
 
             SequentialAnimation {
@@ -533,7 +691,7 @@ Item {
                     target: stackLayout
                     from: 1.0
                     to: 0.96
-                    duration: 70
+                    duration: Theme.reduceMotion ? 0 : 70
                     easing.type: Easing.OutQuad
                 }
 
@@ -547,7 +705,7 @@ Item {
                     target: stackLayout
                     from: 0.96
                     to: 1.0
-                    duration: 70
+                    duration: Theme.reduceMotion ? 0 : 70
                     easing.type: Easing.OutQuad
                 }
 
@@ -595,14 +753,14 @@ Item {
             Behavior on opacity {
                 enabled: !root.sidebarMotionReduced
                 NumberAnimation {
-                    duration: 200
+                    duration: Theme.reduceMotion ? 0 : 200
                     easing.type: Easing.OutCubic
                 }
             }
             Behavior on x {
                 enabled: !root.sidebarMotionReduced
                 NumberAnimation {
-                    duration: 200
+                    duration: Theme.reduceMotion ? 0 : 200
                     easing.type: Easing.OutCubic
                 }
             }
@@ -632,7 +790,7 @@ Item {
                 Behavior on color {
                     enabled: !root.sidebarMotionReduced
                     ColorAnimation {
-                        duration: 140
+                        duration: Theme.reduceMotion ? 0 : 140
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -651,7 +809,7 @@ Item {
                 Behavior on color {
                     enabled: !root.sidebarMotionReduced
                     ColorAnimation {
-                        duration: 140
+                        duration: Theme.reduceMotion ? 0 : 140
                         easing.type: Easing.OutCubic
                     }
                 }
@@ -687,6 +845,24 @@ Item {
         onExitRequested: root.focusImmersiveActive = false
     }
 
+    CompletionParticles {
+        id: rewardParticles
+        objectName: "goalRewardParticles"
+        // Popup 渲染在窗口 overlay 层，该层整体高于 contentItem；MainWindow 内部
+        // 的 z 值再高也跨不过这个边界，所以奖励粒子必须直接挂在同一 overlay。
+        parent: root.Overlay.overlay
+        anchors.fill: parent
+        z: 110
+    }
+
+    Component {
+        id: milestoneDialogComponent
+
+        MilestoneDialog {
+            parent: root
+        }
+    }
+
     Toast {
         id: globalToast
 
@@ -701,6 +877,22 @@ Item {
 
         interval: 5000
         onTriggered: root.commitPendingDelete()
+    }
+
+    Connections {
+        // 奖励回路挂在全局壳层，目标页开不开着都能收到推进与里程碑事件。
+        target: root.goalServiceRef
+        ignoreUnknownSignals: true
+
+        function onGoalProgressed(goalId, title, doneCount, targetPomodoros) {
+            root.showToast(String(title || "") + " +1 · "
+                           + Number(doneCount) + "/" + Number(targetPomodoros))
+        }
+
+        function onMilestoneReached(goalId, title, percent) {
+            // C++ 的 focusCompleted 信号链仍在同步收尾；这里只记录参数，把 UI 和声音推迟到下一轮事件循环。
+            root.enqueueMilestone(goalId, title, percent)
+        }
     }
 
     Connections {
@@ -724,7 +916,7 @@ Item {
         id: categoryDialog
 
         parent: root
-        manager: categoryManager
+        manager: root.categoryManagerRef
     }
 
     RoutineDialog {
@@ -732,15 +924,15 @@ Item {
         objectName: "routineDialogRoot"
 
         parent: root
-        routineManagerRef: typeof routineManager === "undefined" ? null : routineManager
-        categoryManagerRef: categoryManager
+        routineManagerRef: root.routineManagerRef
+        categoryManagerRef: root.categoryManagerRef
     }
 
     ExportDialog {
         id: exportDialog
 
         parent: root
-        exportServiceRef: exportService
+        exportServiceRef: root.exportServiceRef
     }
 
     SettingsDialog {
@@ -825,11 +1017,14 @@ Item {
             if (String(sourcePath) !== root.restoreInspectionPath)
                 return
             root.restoreInspectionPath = ""
+            // Connections 的目标是运行时注入的 var，qmllint 无法推导该信号参数结构。
+            // qmllint disable missing-property
             if (!info.valid) {
                 root.showToast(info.reason && String(info.reason).length > 0
                                ? info.reason : "该备份文件无法恢复")
                 return
             }
+            // qmllint enable missing-property
             restoreConfirmDialog.backupPath = String(sourcePath)
             restoreConfirmDialog.info = info
             restoreConfirmDialog.open()

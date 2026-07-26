@@ -12,25 +12,36 @@
 
 ## 构建
 
-需要先安装 Qt 6 SDK，并把 Qt 的 CMake 前缀传给 CMake。当前验证使用的是 Qt 6.9.0：
+需要先安装 Qt 6.7 或更高版本，并使用该 SDK 自带的 `qt-cmake`。
+本机已验证的工具是 `/Users/zerionlito/Qt/6.9.0/macos/bin/qt-cmake`；它会同步设置
+Qt SDK 支持的 macOS 部署下界。不要用当前 Homebrew Qt 构建部署包：其 Qt Quick 框架最低要求
+macOS 26，会让应用二进制和链接框架的部署版本不一致。
+
+### 验证构建（只想跑测试时用这个）
+
+构建目录放在仓库外，并关闭自动部署，避免覆盖你正在用的 `/Applications/番茄Todo.app`：
 
 ```bash
-cmake -B build -S . -DCMAKE_PREFIX_PATH=/Users/zerionlito/Qt/6.9.0/macos
-cmake --build build
-ctest --test-dir build --output-on-failure
+/Users/zerionlito/Qt/6.9.0/macos/bin/qt-cmake -B /tmp/pt-build -S . -DPOMODORO_TODO_DEPLOY_LOCAL=OFF
+cmake --build /tmp/pt-build -j8
+cd /tmp/pt-build && QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic ctest --output-on-failure
 ```
 
-如果 Qt 安装在其他位置，把 `CMAKE_PREFIX_PATH` 改成对应的 Qt 安装目录。
+### 构建并部署
 
-macOS 构建会自动把最新应用同步到固定入口：
+日常要更新本机应用时用这个。构建结束会自动把最新包同步到固定入口：
 
 ```text
 /Applications/番茄Todo.app
 ```
 
-这避免 LaunchOS 或 LaunchServices 在 `build/PomodoroTodo.app` 和旧的 `/Applications/番茄Todo.app` 之间选错包。日常启动统一使用 `/Applications/番茄Todo.app`。
+```bash
+/Users/zerionlito/Qt/6.9.0/macos/bin/qt-cmake -B /tmp/pt-build -S .
+cmake --build /tmp/pt-build -j8
+```
 
-审计、CI 或临时目录构建时传 `-DPOMODORO_TODO_DEPLOY_LOCAL=OFF`，可跳过自动部署，避免非正式构建覆盖固定入口。
+固定入口的存在是为了避免 LaunchServices 在临时构建目录里的 `.app` 和旧的
+`/Applications/番茄Todo.app` 之间选错包。日常启动统一使用 `/Applications/番茄Todo.app`。
 
 可选的 QML 静态检查：
 

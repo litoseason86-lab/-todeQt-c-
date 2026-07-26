@@ -153,6 +153,10 @@ Canvas {
             roundRect(4.5, 13.5, 6, 6, 1.4)
             roundRect(13.5, 13.5, 6, 6, 1.4)
             break
+        case "list": // 列表版式：左侧项目点 + 三条内容线
+            dot(5, 7, 1.2); dot(5, 12, 1.2); dot(5, 17, 1.2)
+            line(9, 7, 20, 7); line(9, 12, 20, 12); line(9, 17, 20, 17)
+            break
         case "export": // 数据导出
             begin(); ctx.moveTo(12, 4); ctx.lineTo(12, 15); stroke()
             poly([8, 8, 12, 4, 16, 8], false)

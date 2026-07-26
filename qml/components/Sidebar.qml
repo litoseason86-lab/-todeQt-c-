@@ -23,7 +23,9 @@ Rectangle {
     property var focusTimerRef: null
     // 减少动效默认读全局 appSettings；测试可直接覆盖该属性，避免为了一个开关伪造整套上下文。
     // qmllint disable unqualified
-    property bool reduceMotionActive: typeof appSettings !== "undefined" && appSettings && appSettings.reduceMotion
+    property bool reduceMotionActive: Theme.reduceMotion
+                                      || (typeof appSettings !== "undefined"
+                                          && appSettings && appSettings.reduceMotion)
     // qmllint enable unqualified
     signal itemClicked(string viewName)
     signal settingsRequested
@@ -173,6 +175,14 @@ Rectangle {
             onClicked: root.itemClicked("countdown")
         }
 
+        SidebarItem {
+            text: "目标"
+            marker: "目"
+            iconName: "target"
+            isActive: root.currentView === "goals"
+            onClicked: root.itemClicked("goals")
+        }
+
         Item {
             Layout.fillHeight: true
         }
@@ -190,6 +200,8 @@ Rectangle {
 
         property string text: ""
         property string marker: ""
+        // 新入口优先使用项目已有线性图标；旧入口仍显示单字标记，避免扩大本期视觉改造范围。
+        property string iconName: ""
         property bool isActive: false
         property string statusText: ""
         readonly property string statusGlyph: item.statusText.indexOf("● ") === 0
@@ -222,21 +234,21 @@ Rectangle {
 
         Behavior on color {
             ColorAnimation {
-                duration: 70
+                duration: Theme.reduceMotion ? 0 : 70
                 easing.type: Easing.OutQuad
             }
         }
 
         Behavior on border.color {
             ColorAnimation {
-                duration: 70
+                duration: Theme.reduceMotion ? 0 : 70
                 easing.type: Easing.OutQuad
             }
         }
 
         Behavior on border.width {
             NumberAnimation {
-                duration: 70
+                duration: Theme.reduceMotion ? 0 : 70
                 easing.type: Easing.OutQuad
             }
         }
@@ -262,13 +274,14 @@ Rectangle {
 
                 Behavior on color {
                     ColorAnimation {
-                        duration: 70
+                        duration: Theme.reduceMotion ? 0 : 70
                         easing.type: Easing.OutQuad
                     }
                 }
 
                 Text {
                     anchors.centerIn: parent
+                    visible: item.iconName.length === 0
                     text: item.marker
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Bold
@@ -276,10 +289,18 @@ Rectangle {
 
                     Behavior on color {
                         ColorAnimation {
-                            duration: 70
+                            duration: Theme.reduceMotion ? 0 : 70
                             easing.type: Easing.OutQuad
                         }
                     }
+                }
+
+                GlyphIcon {
+                    anchors.centerIn: parent
+                    visible: item.iconName.length > 0
+                    name: item.iconName
+                    size: 16
+                    color: item.isActive ? Theme.accentFillInk : Theme.inkSoft
                 }
             }
 
@@ -311,20 +332,22 @@ Rectangle {
                     SequentialAnimation on opacity {
                         id: pulseAnimation
 
-                        running: statusPulse.pulseRunning && !root.reduceMotionActive
+                        running: statusPulse.pulseRunning
+                                 && !root.reduceMotionActive
+                                 && !Theme.reduceMotion
                         loops: Animation.Infinite
 
                         NumberAnimation {
                             from: 1.0
                             to: 0.35
-                            duration: 620
+                            duration: Theme.reduceMotion ? 0 : 620
                             easing.type: Easing.InOutQuad
                         }
 
                         NumberAnimation {
                             from: 0.35
                             to: 1.0
-                            duration: 620
+                            duration: Theme.reduceMotion ? 0 : 620
                             easing.type: Easing.InOutQuad
                         }
 

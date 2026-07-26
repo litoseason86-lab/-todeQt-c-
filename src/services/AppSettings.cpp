@@ -15,6 +15,7 @@ const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
 const auto kNicknameKey = QStringLiteral("profile/nickname");
 const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
 const auto kDashboardTimerVisibleKey = QStringLiteral("appearance/dashboardTimerVisible");
+const auto kGoalViewModeKey = QStringLiteral("goals/viewMode");
 const auto kReduceTransparencyKey = QStringLiteral("appearance/reduceTransparency");
 const auto kRaiseOnPhaseCompleteKey = QStringLiteral("focus/raiseOnPhaseComplete");
 const auto kCloseToTrayKey = QStringLiteral("window/closeToTray");
@@ -71,6 +72,7 @@ void AppSettings::reload()
     emit nicknameChanged();
     emit sidebarVisibleChanged();
     emit dashboardTimerVisibleChanged();
+    emit goalViewModeChanged();
     emit reduceTransparencyChanged();
     emit raiseOnPhaseCompleteChanged();
     emit closeToTrayChanged();
@@ -305,6 +307,26 @@ void AppSettings::setDashboardTimerVisible(bool visible)
 
     if (writeValue(kDashboardTimerVisibleKey, visible)) {
         emit dashboardTimerVisibleChanged();
+    }
+}
+
+QString AppSettings::goalViewMode() const
+{
+    const QString stored = m_settings->value(kGoalViewModeKey, QStringLiteral("list")).toString();
+    return stored == QStringLiteral("grid") ? stored : QStringLiteral("list");
+}
+
+void AppSettings::setGoalViewMode(const QString& mode)
+{
+    // 只有两种可持久化版式；损坏配置和新增未知值都不能让 QML 进入空白态。
+    const QString normalized = mode == QStringLiteral("grid")
+        ? QStringLiteral("grid")
+        : QStringLiteral("list");
+    if (goalViewMode() == normalized) {
+        return;
+    }
+    if (writeValue(kGoalViewModeKey, normalized)) {
+        emit goalViewModeChanged();
     }
 }
 

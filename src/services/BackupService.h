@@ -72,6 +72,11 @@ signals:
     void operationTextChanged();
 
 private:
+    // 回滚拷贝失败在真实环境由磁盘满/文件占用触发，测试无法稳定复现（快照刚写出，必然可拷）。
+    // 沿用 FocusTimer 的受控友元约定，用一个测试专用开关强制该分支，
+    // 避免测试侧 #define private public 的未定义行为写法。
+    friend class BackupServiceTests;
+
     struct RestoreContext;
 
     // 写快照的实际步骤由纯后台操作层执行，当前函数保留给单元测试和非 GUI 调用。
@@ -107,6 +112,8 @@ private:
     bool m_busy = false;
     bool m_operationBlocksUi = false;
     QString m_operationText;
+    // 仅供 BackupServiceTests 置位：强制下一次回滚的拷贝返回失败。生产代码永远不写它。
+    bool m_forceRollbackCopyFailureForTest = false;
 };
 
 #endif // BACKUPSERVICE_H

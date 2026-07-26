@@ -24,7 +24,7 @@ AbstractButton {
     Behavior on scale {
         enabled: !root.reduceMotion
         NumberAnimation {
-            duration: 140
+            duration: Theme.reduceMotion ? 0 : 140
             easing.type: Easing.OutCubic
         }
     }
@@ -67,7 +67,7 @@ AbstractButton {
         Behavior on color {
             enabled: !root.reduceMotion
             ColorAnimation {
-                duration: 140
+                duration: Theme.reduceMotion ? 0 : 140
                 easing.type: Easing.OutCubic
             }
         }

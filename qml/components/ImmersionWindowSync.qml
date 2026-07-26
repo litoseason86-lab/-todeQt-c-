@@ -25,6 +25,11 @@ QtObject {
     }
 
     function immersiveActiveAfterVisibilityChange(visibility, active) {
+        // 隐藏到菜单栏不是“退出全屏”意图。若在 Hidden 时清空 active，
+        // 反向绑定会立即恢复隐藏前的窗口可见性，造成“关闭后又弹回”。
+        if (visibility === Window.Hidden) {
+            return active
+        }
         if (visibility === Window.FullScreen) {
             enteringFullScreen = false
             return active

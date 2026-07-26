@@ -42,6 +42,7 @@ Item {
         timerRef: typeof focusTimer !== "undefined" ? focusTimer : null
         // qmllint enable unqualified
         baseSeconds: Number(root.todayStats.totalDuration || 0)
+        logicalDate: root.todayIsoDate()
     }
 
     Component.onCompleted: {
@@ -157,6 +158,14 @@ Item {
                 ? appSettings.dayStartHour : 4
         // qmllint enable unqualified
         return LogicalDay.todayIso(hour, new Date());
+    }
+
+    function currentLogicalTodayDate() {
+        // qmllint disable unqualified
+        var hour = (typeof appSettings !== "undefined" && appSettings)
+                ? appSettings.dayStartHour : 4
+        // qmllint enable unqualified
+        return LogicalDay.todayDate(hour, new Date())
     }
 
     function yesterdayIsoDate() {
@@ -365,21 +374,21 @@ Item {
 
                     Behavior on color {
                         ColorAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }
 
                     Behavior on border.color {
                         ColorAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }
 
                     Behavior on border.width {
                         NumberAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }
@@ -397,7 +406,7 @@ Item {
 
                     Behavior on scale {
                         NumberAnimation {
-                            duration: 90
+                            duration: Theme.reduceMotion ? 0 : 90
                             easing.type: Easing.OutQuad
                         }
                     }
@@ -648,12 +657,15 @@ Item {
                                 root.deleteRequested(id, title);
                             }
 
-                            onRenameSubmitted: function (id, newTitle) {
+                            renameSubmitter: function (id, newTitle) {
                                 var originalCategoryId = Number(modelData.categoryId || -1);
                                 var originalDate = root.taskIsoDate(modelData.date);
-                                if (!taskManager.updateTask(id, newTitle, originalCategoryId, originalDate)) {
+                                var succeeded = Boolean(taskManager.updateTask(
+                                    id, newTitle, originalCategoryId, originalDate))
+                                if (!succeeded) {
                                     root.loadError = "任务更新失败，请重试";
                                 }
+                                return succeeded
                             }
 
                             onEditClicked: function (id) {
@@ -669,6 +681,7 @@ Item {
         id: addTaskDialog
 
         categoryManagerRef: root.categoryManagerRef
+        selectedDateProvider: function () { return root.currentLogicalTodayDate() }
         taskSubmitter: function (title, date, categoryId, estimatedPomodoros) {
             return taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedPomodoros));
         }
@@ -680,10 +693,13 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        onTaskEdited: function (taskId, title, categoryId, isoDate, estimatedPomodoros) {
-            if (!taskManager.updateTask(taskId, title, categoryId, isoDate, Number(estimatedPomodoros))) {
+        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedPomodoros) {
+            var succeeded = Boolean(taskManager.updateTask(
+                taskId, title, categoryId, isoDate, Number(estimatedPomodoros)))
+            if (!succeeded) {
                 root.loadError = "任务更新失败，请重试";
             }
+            return succeeded
         }
     }
 

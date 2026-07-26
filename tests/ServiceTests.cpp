@@ -20,6 +20,7 @@
 #include "../src/services/FocusHistoryService.h"
 // FocusTimer 声明了 friend class ServiceTests，测试可直接访问内部时钟状态。
 #include "../src/services/FocusTimer.h"
+#include "../src/services/GoalService.h"
 #include "../src/services/MonotonicClock.h"
 #include "../src/services/RoutineManager.h"
 #include "../src/services/StatisticsService.h"
@@ -63,12 +64,15 @@ bool insertFocusSessionRow(int taskId, const QDate& date, int duration)
 {
     QSqlQuery query(DatabaseManager::instance()->database());
     query.prepare(QStringLiteral(
-        "INSERT INTO focus_sessions (task_id, start_time, end_time, duration) "
-        "VALUES (:taskId, :startTime, :endTime, :duration)"));
+        "INSERT INTO focus_sessions "
+        "(task_id, start_time, end_time, duration, pomodoro_completed) "
+        "VALUES (:taskId, :startTime, :endTime, :duration, :pomodoroCompleted)"));
     query.bindValue(QStringLiteral(":taskId"), taskId > 0 ? QVariant(taskId) : QVariant());
     query.bindValue(QStringLiteral(":startTime"), dateTimeText(date));
     query.bindValue(QStringLiteral(":endTime"), dateTimeText(date, QStringLiteral("12:30:00")));
     query.bindValue(QStringLiteral(":duration"), duration);
+    query.bindValue(QStringLiteral(":pomodoroCompleted"),
+                    duration >= kTestMinimumValidDurationSeconds ? 1 : 0);
 
     if (!query.exec()) {
         qWarning() << "Failed to insert test focus session:" << query.lastError().text();
@@ -83,13 +87,16 @@ bool insertFocusSessionRowWithMode(int taskId, const QDate& date, int duration, 
     // 显式写入模式：mode=1 为番茄工作段，mode=0 为自由计时段，用来验证聚合只把番茄段计入番茄数。
     QSqlQuery query(DatabaseManager::instance()->database());
     query.prepare(QStringLiteral(
-        "INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) "
-        "VALUES (:taskId, :startTime, :endTime, :duration, :mode)"));
+        "INSERT INTO focus_sessions "
+        "(task_id, start_time, end_time, duration, mode, pomodoro_completed) "
+        "VALUES (:taskId, :startTime, :endTime, :duration, :mode, :pomodoroCompleted)"));
     query.bindValue(QStringLiteral(":taskId"), taskId > 0 ? QVariant(taskId) : QVariant());
     query.bindValue(QStringLiteral(":startTime"), dateTimeText(date));
     query.bindValue(QStringLiteral(":endTime"), dateTimeText(date, QStringLiteral("12:30:00")));
     query.bindValue(QStringLiteral(":duration"), duration);
     query.bindValue(QStringLiteral(":mode"), mode);
+    query.bindValue(QStringLiteral(":pomodoroCompleted"),
+                    mode == 1 && duration >= kTestMinimumValidDurationSeconds ? 1 : 0);
 
     if (!query.exec()) {
         qWarning() << "Failed to insert moded focus session:" << query.lastError().text();
@@ -163,12 +170,15 @@ bool insertFocusSessionRowAt(int taskId,
     // 起止时刻可控，用于构造日界点前后的固定 session，避免测试依赖真实时钟。
     QSqlQuery query(DatabaseManager::instance()->database());
     query.prepare(QStringLiteral(
-        "INSERT INTO focus_sessions (task_id, start_time, end_time, duration) "
-        "VALUES (:taskId, :startTime, :endTime, :duration)"));
+        "INSERT INTO focus_sessions "
+        "(task_id, start_time, end_time, duration, pomodoro_completed) "
+        "VALUES (:taskId, :startTime, :endTime, :duration, :pomodoroCompleted)"));
     query.bindValue(QStringLiteral(":taskId"), taskId > 0 ? QVariant(taskId) : QVariant());
     query.bindValue(QStringLiteral(":startTime"), dateTimeText(date, startTime));
     query.bindValue(QStringLiteral(":endTime"), dateTimeText(date, endTime));
     query.bindValue(QStringLiteral(":duration"), duration);
+    query.bindValue(QStringLiteral(":pomodoroCompleted"),
+                    duration >= kTestMinimumValidDurationSeconds ? 1 : 0);
 
     if (!query.exec()) {
         qWarning() << "Failed to insert boundary focus session:" << query.lastError().text();
@@ -274,12 +284,15 @@ int insertFocusSessionRowWithTimes(int taskId,
 {
     QSqlQuery query(DatabaseManager::instance()->database());
     query.prepare(QStringLiteral(
-        "INSERT INTO focus_sessions (task_id, start_time, end_time, duration) "
-        "VALUES (:taskId, :startTime, :endTime, :duration)"));
+        "INSERT INTO focus_sessions "
+        "(task_id, start_time, end_time, duration, pomodoro_completed) "
+        "VALUES (:taskId, :startTime, :endTime, :duration, :pomodoroCompleted)"));
     query.bindValue(QStringLiteral(":taskId"), taskId > 0 ? QVariant(taskId) : QVariant());
     query.bindValue(QStringLiteral(":startTime"), startTime);
     query.bindValue(QStringLiteral(":endTime"), endTime);
     query.bindValue(QStringLiteral(":duration"), duration);
+    query.bindValue(QStringLiteral(":pomodoroCompleted"),
+                    duration >= kTestMinimumValidDurationSeconds ? 1 : 0);
 
     if (!query.exec()) {
         qWarning() << "Failed to insert timed focus session:" << query.lastError().text();
@@ -369,6 +382,153 @@ bool createLegacyVersion1Database(const QString& path)
     }
     QSqlDatabase::removeDatabase(connectionName);
     return true;
+}
+
+// 构造 schema v7 形态的数据库：focus_sessions 尚无完成事实与科目快照列。
+// 数据逐行覆盖 v8 的阈值、NULL 三值逻辑和模式分支，同时为 v9 保留任务已删边界。
+bool createLegacyVersion7Database(const QString& path, bool includeDayBoundaryRows = false)
+{
+    const QString connectionName = QStringLiteral("Version7MigrationSetupConnection");
+    bool setupSucceeded = false;
+    {
+        QSqlDatabase legacyDb = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        legacyDb.setDatabaseName(path);
+        if (!legacyDb.open()) {
+            qWarning() << "Failed to open version 7 database:" << legacyDb.lastError().text();
+        } else {
+            QSqlQuery query(legacyDb);
+            setupSucceeded = [&]() {
+                if (!query.exec(QStringLiteral(R"SQL(
+                    CREATE TABLE categories (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT NOT NULL UNIQUE CHECK(length(trim(name)) > 0),
+                        color TEXT NOT NULL,
+                        is_preset INTEGER NOT NULL DEFAULT 0,
+                        display_order INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                )SQL"))) {
+                    qWarning() << "Failed to create version 7 categories:" << query.lastError().text();
+                    return false;
+                }
+                if (!query.exec(QStringLiteral(R"SQL(
+                    CREATE TABLE routines (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+                        category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+                        active INTEGER NOT NULL DEFAULT 1,
+                        display_order INTEGER NOT NULL DEFAULT 0,
+                        last_generated_date TEXT,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                )SQL"))) {
+                    qWarning() << "Failed to create version 7 routines:" << query.lastError().text();
+                    return false;
+                }
+                if (!query.exec(QStringLiteral(R"SQL(
+                    CREATE TABLE tasks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+                        category TEXT,
+                        category_id INTEGER REFERENCES categories(id),
+                        routine_id INTEGER REFERENCES routines(id) ON DELETE SET NULL,
+                        routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
+                        estimated_pomodoros INTEGER NOT NULL DEFAULT 0,
+                        date TEXT NOT NULL,
+                        completed INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    )
+                )SQL"))) {
+                    qWarning() << "Failed to create version 7 tasks:" << query.lastError().text();
+                    return false;
+                }
+                if (!query.exec(QStringLiteral(R"SQL(
+                    CREATE TABLE focus_sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        task_id INTEGER,
+                        start_time TEXT NOT NULL,
+                        end_time TEXT,
+                        duration INTEGER,
+                        mode INTEGER NOT NULL DEFAULT 1,
+                        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
+                    )
+                )SQL"))) {
+                    qWarning() << "Failed to create version 7 focus sessions:" << query.lastError().text();
+                    return false;
+                }
+                if (!query.exec(QStringLiteral(
+                        "INSERT INTO categories (id, name, color, is_preset, display_order) "
+                        "VALUES (1, '学习', '#d4a574', 0, 1)"))
+                    || !query.exec(QStringLiteral(
+                        "INSERT INTO tasks (id, title, category, category_id, date, completed, created_at) "
+                        "VALUES (1, '保留科目的任务', '学习', 1, '2026-07-20', 0, "
+                        "'2026-07-20T08:00:00')"))
+                    || !query.exec(QStringLiteral(
+                        "INSERT INTO tasks (id, title, category, category_id, date, completed, created_at) "
+                        "VALUES (2, '迁移前已删任务', '学习', 1, '2026-07-20', 0, "
+                        "'2026-07-20T08:00:00')"))) {
+                    qWarning() << "Failed to seed version 7 category/tasks:" << query.lastError().text();
+                    return false;
+                }
+
+                struct LegacySessionRow {
+                    int taskId;
+                    QString startTime;
+                    QVariant endTime;
+                    QVariant duration;
+                    int mode;
+                };
+                const QList<LegacySessionRow> rows{
+                    {1, QStringLiteral("2026-07-20T08:00:00"), QStringLiteral("2026-07-20T08:25:00"), 1500, 1},
+                    {2, QStringLiteral("2026-07-20T09:00:00"), QStringLiteral("2026-07-20T09:04:00"), 240, 1},
+                    {1, QStringLiteral("2026-07-20T10:00:00"), QStringLiteral("2026-07-20T10:02:59"), 179, 1},
+                    {1, QStringLiteral("2026-07-20T11:00:00"), QStringLiteral("2026-07-20T11:03:00"), 180, 1},
+                    {1, QStringLiteral("2026-07-20T12:00:00"), QStringLiteral("2026-07-20T12:30:00"), 1800, 0},
+                    {1, QStringLiteral("2026-07-20T13:00:00"), QVariant(), 1500, 1},
+                    {1, QStringLiteral("2026-07-20T14:00:00"), QStringLiteral("2026-07-20T14:25:00"), QVariant(), 1},
+                };
+                query.prepare(QStringLiteral(
+                    "INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) "
+                    "VALUES (:taskId, :startTime, :endTime, :duration, :mode)"));
+                for (const LegacySessionRow &row : rows) {
+                    query.bindValue(QStringLiteral(":taskId"), row.taskId);
+                    query.bindValue(QStringLiteral(":startTime"), row.startTime);
+                    query.bindValue(QStringLiteral(":endTime"), row.endTime);
+                    query.bindValue(QStringLiteral(":duration"), row.duration);
+                    query.bindValue(QStringLiteral(":mode"), row.mode);
+                    if (!query.exec()) {
+                        qWarning() << "Failed to seed version 7 focus session:" << query.lastError().text();
+                        return false;
+                    }
+                }
+
+                if (includeDayBoundaryRows) {
+                    // 这两行只用来证明回填不读取逻辑日设置，时刻分别卡在 04:00 边界两侧。
+                    if (!query.exec(QStringLiteral(
+                            "INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) VALUES "
+                            "(1, '2026-07-21T03:59:00', '2026-07-21T04:24:00', 1500, 1), "
+                            "(1, '2026-07-21T04:01:00', '2026-07-21T04:26:00', 1500, 1)"))) {
+                        qWarning() << "Failed to seed version 7 day-boundary sessions:"
+                                   << query.lastError().text();
+                        return false;
+                    }
+                }
+
+                // 外键在该独立夹具连接中默认关闭，因此删任务后 session.task_id 仍保留 2，
+                // 模拟旧库里已无法回溯任务的历史行，以锁住 v9 的空快照边界。
+                if (!query.exec(QStringLiteral("DELETE FROM tasks WHERE id = 2"))
+                    || !query.exec(QStringLiteral("PRAGMA user_version = 7"))) {
+                    qWarning() << "Failed to finalize version 7 fixture:" << query.lastError().text();
+                    return false;
+                }
+                return true;
+            }();
+            legacyDb.close();
+        }
+    }
+    // QSqlDatabase 必须先离开作用域再移除命名连接，否则 Qt 会警告连接仍在使用。
+    QSqlDatabase::removeDatabase(connectionName);
+    return setupSucceeded;
 }
 
 bool createVersion2Database(const QString& path)
@@ -490,6 +650,7 @@ private slots:
     void appSettingsDailyFocusGoalMinutesByDate();
     void appSettingsSidebarVisibleRoundTrip();
     void appSettingsDashboardTimerVisibleRoundTrip();
+    void appSettingsGoalViewModeNormalizesAndRoundTrips();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void appSettingsDayStartHourNormalizeAndPersist();
     void appSettingsDayStartHourRejectsCorruptIniValue();
@@ -532,6 +693,8 @@ private slots:
     void getMonthTasksRejectsInvalidMonth();
     void getEffectiveDaysFiltersInvalidSessions();
     void getFocusSessionCountCountsOnlyValidFinishedSessions();
+    void validPomodoroCountExcludesFreeTimerAndManualStops();
+    void validPomodoroCountUsesSameLogicalDayAsSessionCount();
     void getStreakDaysCountsBackFromLogicalToday();
     void getStreakDaysStartsFromYesterdayWhenTodayHasNoFocus();
     void getTotalFocusDurationSumsOnlyValidSessions();
@@ -560,6 +723,14 @@ private slots:
     void freshDatabaseCreatesVersion4PresetCategories();
     void migrationMapsLegacyCategoryTextToCategoryIds();
     void migrationCreatesDatabaseBackup();
+    void migrationV8BackfillsPomodoroCompletedPerRow();
+    void migrationV8DoesNotInventPomodorosForFreeTimerSessions();
+    void migrationV9SnapshotsCategoryForSessionsWithTasks();
+    void migrationV9LeavesSnapshotEmptyWhenTaskIsGone();
+    void migrationV9PreservesSnapshotAfterCategoryDeletion();
+    void migrationV8BackfillIsIndependentOfDayStartHour();
+    void migrationV8DoesNotRewriteExistingCompletionFacts();
+    void multiStepMigrationKeepsOnlyThePreMigrationSnapshot();
     void customCategoryCrudValidatesAndEmitsChanges();
     void presetCategoriesCannotBeEditedOrDeleted();
     void deletingAssociatedCategoryDetachesTasks();
@@ -586,6 +757,8 @@ private slots:
     void validSessionDoesNotEmitSessionDiscarded();
     void focusTimerExposesRuleConstants();
     void pomodoroWorkCompletionSavesSessionAndAutoCompletesTask();
+    void manuallyStoppedPomodoroDoesNotCountAsCompleted();
+    void realPomodoroSessionAdvancesLongGoalAndFiresMilestone();
     void pomodoroBreakWritesNoSessionAndCompletes();
     void pomodoroBreakRestoresTaskContextAndCount();
     void focusAutoCompleteFailureIsReported();
@@ -605,6 +778,7 @@ private slots:
     void pomodoroAggregationDoesNotCrossTasksOrLeakUnbound();
     void recoveredPomodoroStillCountsForOriginalTask();
     void deletingTaskDetachesButKeepsPomodoroHistory();
+    void deletingTaskKeepsCategorySnapshotForStatisticsAndGoals();
     void isRoutineGeneratedTaskDistinguishesInstances();
     void completeUndoRestoresPriorStateWithoutTouchingFields();
     void weeklyReviewAggregatesPlannedActualAndSeparatesFreeTime();
@@ -831,6 +1005,30 @@ void ServiceTests::appSettingsDashboardTimerVisibleRoundTrip()
 
     AppSettings reloaded(path);
     QCOMPARE(reloaded.dashboardTimerVisible(), false);
+}
+
+void ServiceTests::appSettingsGoalViewModeNormalizesAndRoundTrips()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.goalViewMode(), QStringLiteral("list"));
+
+        QSignalSpy spy(&settings, &AppSettings::goalViewModeChanged);
+        settings.setGoalViewMode(QStringLiteral("grid"));
+        QCOMPARE(settings.goalViewMode(), QStringLiteral("grid"));
+        QCOMPARE(spy.count(), 1);
+
+        settings.setGoalViewMode(QStringLiteral("masonry"));
+        QCOMPARE(settings.goalViewMode(), QStringLiteral("list"));
+        QCOMPARE(spy.count(), 2);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.goalViewMode(), QStringLiteral("list"));
 }
 
 void ServiceTests::appSettingsDailyFocusGoalMinutesByDate()
@@ -1921,6 +2119,58 @@ void ServiceTests::getFocusSessionCountCountsOnlyValidFinishedSessions()
     QCOMPARE(StatisticsService::instance()->getFocusSessionCount(startDate, endDate), 3);
 }
 
+void ServiceTests::validPomodoroCountExcludesFreeTimerAndManualStops()
+{
+    const QDate day(2026, 7, 12);
+    const int taskId = insertTaskRow(QStringLiteral("番茄口径对照"), day, QStringLiteral("英语"));
+    QVERIFY(taskId > 0);
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO focus_sessions "
+        "(task_id, start_time, end_time, duration, mode, pomodoro_completed) "
+        "VALUES (:taskId, :startTime, :endTime, :duration, :mode, :completed)"));
+    const auto insertSession = [&](const QString& time, int duration, int mode, int completed) {
+        query.bindValue(QStringLiteral(":taskId"), taskId);
+        query.bindValue(QStringLiteral(":startTime"), dateTimeText(day, time));
+        query.bindValue(QStringLiteral(":endTime"), dateTimeText(day, QStringLiteral("23:59:00")));
+        query.bindValue(QStringLiteral(":duration"), duration);
+        query.bindValue(QStringLiteral(":mode"), mode);
+        query.bindValue(QStringLiteral(":completed"), completed);
+        return query.exec();
+    };
+
+    QVERIFY(insertSession(QStringLiteral("08:00:00"), 1500, 1, 1));
+    QVERIFY(insertSession(QStringLiteral("09:00:00"), 1440, 1, 0));
+    QVERIFY(insertSession(QStringLiteral("10:00:00"), 2400, 0, 0));
+    QVERIFY(insertSession(QStringLiteral("11:00:00"), 100, 1, 0));
+
+    // 旧函数仍是“有效会话数”，新函数才是“有效番茄数”；两者不能被顺手统一。
+    QCOMPARE(StatisticsService::instance()->getFocusSessionCount(day, day), 3);
+    QCOMPARE(StatisticsService::instance()->getValidPomodoroCount(day, day), 1);
+}
+
+void ServiceTests::validPomodoroCountUsesSameLogicalDayAsSessionCount()
+{
+    AppSettings::instance()->setDayStartHour(4);
+    const QDate naturalDay(2026, 7, 21);
+    const int taskId = insertTaskRow(QStringLiteral("逻辑日番茄口径"), naturalDay,
+                                     QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+    QVERIFY(insertFocusSessionRowAt(taskId, naturalDay, QStringLiteral("02:00:00"),
+                                    QStringLiteral("02:25:00"), 1500));
+    QVERIFY(insertFocusSessionRowAt(taskId, naturalDay, QStringLiteral("12:00:00"),
+                                    QStringLiteral("12:25:00"), 1500));
+
+    const QDate previousLogicalDay = naturalDay.addDays(-1);
+    QCOMPARE(StatisticsService::instance()->getFocusSessionCount(previousLogicalDay,
+                                                                  previousLogicalDay), 1);
+    QCOMPARE(StatisticsService::instance()->getValidPomodoroCount(previousLogicalDay,
+                                                                   previousLogicalDay), 1);
+    QCOMPARE(StatisticsService::instance()->getFocusSessionCount(naturalDay, naturalDay), 1);
+    QCOMPARE(StatisticsService::instance()->getValidPomodoroCount(naturalDay, naturalDay), 1);
+}
+
 void ServiceTests::getStreakDaysCountsBackFromLogicalToday()
 {
     const QDate today = logicalToday();
@@ -2334,7 +2584,7 @@ void ServiceTests::version2MigrationAddsRoutinesSchemaAndIndex()
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 7);
+    QCOMPARE(versionQuery.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
 
     // v3 从真实 v2 库升级时必须补齐 routines 表和索引，不能只覆盖全新库。
     QSqlQuery tableQuery(DatabaseManager::instance()->database());
@@ -2668,7 +2918,7 @@ void ServiceTests::migrationV4DoesNotGuessRoutineLineage()
 
     QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(query.next());
-    QCOMPARE(query.value(0).toInt(), 7);
+    QCOMPARE(query.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
 }
 
 void ServiceTests::migrationV6ClearsUntrustedRoutineLineage()
@@ -2692,7 +2942,7 @@ void ServiceTests::migrationV6ClearsUntrustedRoutineLineage()
 
     QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(query.next());
-    QCOMPARE(query.value(0).toInt(), 7);
+    QCOMPARE(query.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
 }
 
 void ServiceTests::freshDatabaseCreatesVersion4PresetCategories()
@@ -2700,7 +2950,7 @@ void ServiceTests::freshDatabaseCreatesVersion4PresetCategories()
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 7);
+    QCOMPARE(versionQuery.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
 
     const QVariantList presets = CategoryManager::instance()->getPresetCategories();
     QCOMPARE(presets.size(), 5);
@@ -2739,7 +2989,7 @@ void ServiceTests::migrationMapsLegacyCategoryTextToCategoryIds()
     QSqlQuery versionQuery(DatabaseManager::instance()->database());
     QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(versionQuery.next());
-    QCOMPARE(versionQuery.value(0).toInt(), 7);
+    QCOMPARE(versionQuery.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
 
     QSqlQuery presetTask(DatabaseManager::instance()->database());
     presetTask.prepare(QStringLiteral(
@@ -2781,14 +3031,217 @@ void ServiceTests::migrationCreatesDatabaseBackup()
 {
     DatabaseManager::instance()->close();
 
-    const QString legacyPath = m_tempDir->filePath(QStringLiteral("legacy-backup.sqlite"));
+    // 迁移备份会写到数据库同目录。用独立子目录隔离 init() 为默认测试库生成的快照，
+    // 否则按文件名取第一份会偶然验证到另一个库，与快照策略无关。
+    const QString migrationDirPath = m_tempDir->filePath(QStringLiteral("wal-migration-backup"));
+    QVERIFY(QDir().mkpath(migrationDirPath));
+    const QString legacyPath = QDir(migrationDirPath).filePath(QStringLiteral("legacy-backup.sqlite"));
+    QVERIFY(createLegacyVersion1Database(legacyPath));
+
+    // 保持 WAL 连接打开，确保新插入行尚未被检查点回写到主库文件。
+    // 这能稳定区分 SQLite 快照与错误的单文件复制。
+    const QString walConnectionName = QStringLiteral("MigrationWalSetupConnection");
+    bool initialized = false;
+    {
+        QSqlDatabase walDatabase = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                              walConnectionName);
+        walDatabase.setDatabaseName(legacyPath);
+        QVERIFY(walDatabase.open());
+
+        QSqlQuery walQuery(walDatabase);
+        QVERIFY(walQuery.exec(QStringLiteral("PRAGMA journal_mode = WAL")));
+        QVERIFY(walQuery.next());
+        QCOMPARE(walQuery.value(0).toString().toLower(), QStringLiteral("wal"));
+        QVERIFY(walQuery.exec(QStringLiteral("PRAGMA wal_autocheckpoint = 0")));
+        QVERIFY(walQuery.exec(QStringLiteral(
+            "INSERT INTO tasks (title, category, date, completed, created_at) "
+            "VALUES ('WAL 中的迁移任务', '数学', '2026-06-11', 0, '2026-06-11T08:00:00')")));
+        QVERIFY(QFileInfo::exists(legacyPath + QStringLiteral("-wal")));
+
+        initialized = DatabaseManager::instance()->initialize(legacyPath);
+        walDatabase.close();
+    }
+    QSqlDatabase::removeDatabase(walConnectionName);
+    QVERIFY(initialized);
+
+    const QStringList backups = QDir(migrationDirPath).entryList(
+        QStringList{QStringLiteral("pomodoro_backup_*.db")},
+        QDir::Files);
+    QCOMPARE(backups.size(), 1);
+
+    const QString verificationConnection = QStringLiteral("MigrationBackupVerificationConnection");
+    {
+        QSqlDatabase backupDatabase = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                                 verificationConnection);
+        backupDatabase.setDatabaseName(QDir(migrationDirPath).filePath(backups.constFirst()));
+        QVERIFY(backupDatabase.open());
+
+        QSqlQuery taskQuery(backupDatabase);
+        QVERIFY(taskQuery.exec(QStringLiteral(
+            "SELECT COUNT(*) FROM tasks WHERE title = 'WAL 中的迁移任务'")));
+        QVERIFY(taskQuery.next());
+        QCOMPARE(taskQuery.value(0).toInt(), 1);
+        backupDatabase.close();
+    }
+    QSqlDatabase::removeDatabase(verificationConnection);
+}
+
+void ServiceTests::migrationV8BackfillsPomodoroCompletedPerRow()
+{
+    DatabaseManager::instance()->close();
+    const QString legacyPath = m_tempDir->filePath(QStringLiteral("legacy-v7-pomodoro.sqlite"));
+    QVERIFY(createLegacyVersion7Database(legacyPath));
+    QVERIFY(DatabaseManager::instance()->initialize(legacyPath));
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT id, pomodoro_completed FROM focus_sessions ORDER BY id")));
+    const QList<int> expected{1, 1, 0, 1, 0, 0, 0};
+    for (int index = 0; index < expected.size(); ++index) {
+        QVERIFY2(query.next(), "v8 回填后的行数少于夹具输入");
+        QCOMPARE(query.value(0).toInt(), index + 1);
+        // 必须逐行断言：聚合 COUNT 会漏掉一行误增、另一行误减的抵消错误。
+        QCOMPARE(query.value(1).toInt(), expected.at(index));
+    }
+    QVERIFY2(!query.next(), "v8 回填夹具出现未断言的额外行");
+}
+
+void ServiceTests::migrationV8DoesNotInventPomodorosForFreeTimerSessions()
+{
+    DatabaseManager::instance()->close();
+    const QString legacyPath = m_tempDir->filePath(QStringLiteral("legacy-v7-free-timer.sqlite"));
+    QVERIFY(createLegacyVersion7Database(legacyPath));
+    QVERIFY(DatabaseManager::instance()->initialize(legacyPath));
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT pomodoro_completed FROM focus_sessions WHERE id = 5 AND mode = 0")));
+    QVERIFY(query.next());
+    // 自由计时即使远超 3 分钟也只累计专注时长，不得伪造完整番茄。
+    QCOMPARE(query.value(0).toInt(), 0);
+}
+
+void ServiceTests::migrationV9SnapshotsCategoryForSessionsWithTasks()
+{
+    DatabaseManager::instance()->close();
+    const QString legacyPath = m_tempDir->filePath(QStringLiteral("legacy-v7-snapshot.sqlite"));
+    QVERIFY(createLegacyVersion7Database(legacyPath));
+    QVERIFY(DatabaseManager::instance()->initialize(legacyPath));
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT category_id_snapshot, category_name_snapshot, category_color_snapshot "
+        "FROM focus_sessions WHERE id = 1")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    QCOMPARE(query.value(1).toString(), QStringLiteral("学习"));
+    QCOMPARE(query.value(2).toString(), QStringLiteral("#d4a574"));
+}
+
+void ServiceTests::migrationV9LeavesSnapshotEmptyWhenTaskIsGone()
+{
+    DatabaseManager::instance()->close();
+    const QString legacyPath = m_tempDir->filePath(QStringLiteral("legacy-v7-missing-task.sqlite"));
+    QVERIFY(createLegacyVersion7Database(legacyPath));
+    QVERIFY(DatabaseManager::instance()->initialize(legacyPath));
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT task_id, category_id_snapshot, category_name_snapshot, category_color_snapshot "
+        "FROM focus_sessions WHERE id = 2")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 2);
+    QVERIFY(query.value(1).isNull());
+    QCOMPARE(query.value(2).toString(), QString());
+    QCOMPARE(query.value(3).toString(), QString());
+}
+
+void ServiceTests::migrationV9PreservesSnapshotAfterCategoryDeletion()
+{
+    DatabaseManager::instance()->close();
+    const QString legacyPath = m_tempDir->filePath(QStringLiteral("legacy-v7-delete-category.sqlite"));
+    QVERIFY(createLegacyVersion7Database(legacyPath));
+    QVERIFY(DatabaseManager::instance()->initialize(legacyPath));
+
+    QVERIFY(CategoryManager::instance()->deleteCategory(1));
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT category_id_snapshot, category_name_snapshot, category_color_snapshot "
+        "FROM focus_sessions WHERE id = 1")));
+    QVERIFY(query.next());
+    // 快照列故意不设外键：科目删除后，历史归属仍必须可追溯。
+    QCOMPARE(query.value(0).toInt(), 1);
+    QCOMPARE(query.value(1).toString(), QStringLiteral("学习"));
+    QCOMPARE(query.value(2).toString(), QStringLiteral("#d4a574"));
+}
+
+void ServiceTests::migrationV8BackfillIsIndependentOfDayStartHour()
+{
+    AppSettings::instance()->setDayStartHour(4);
+    DatabaseManager::instance()->close();
+    const QString legacyPath = m_tempDir->filePath(QStringLiteral("legacy-v7-day-boundary.sqlite"));
+    QVERIFY(createLegacyVersion7Database(legacyPath, true));
+    QVERIFY(DatabaseManager::instance()->initialize(legacyPath));
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT id, pomodoro_completed FROM focus_sessions WHERE id IN (8, 9) ORDER BY id")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 8);
+    QCOMPARE(query.value(1).toInt(), 1);
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 9);
+    QCOMPARE(query.value(1).toInt(), 1);
+    // 逻辑日只影响统计归属，v8 回填是逐行事实推断，不得把 04:00 日界点混入判定。
+    QVERIFY(!query.next());
+}
+
+void ServiceTests::migrationV8DoesNotRewriteExistingCompletionFacts()
+{
+    DatabaseManager::instance()->close();
+    const QString legacyPath = m_tempDir->filePath(QStringLiteral("legacy-v7-existing-fact.sqlite"));
+    QVERIFY(createLegacyVersion7Database(legacyPath));
+    QVERIFY(DatabaseManager::instance()->initialize(legacyPath));
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    // 模拟恢复了“列已存在、但版本号偏旧”的库：0 是用户手动停止的真实事实。
+    QVERIFY(query.exec(QStringLiteral(
+        "UPDATE focus_sessions SET pomodoro_completed = 0 WHERE id = 1")));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 7")));
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT pomodoro_completed FROM focus_sessions WHERE id = 1")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
+}
+
+void ServiceTests::multiStepMigrationKeepsOnlyThePreMigrationSnapshot()
+{
+    DatabaseManager::instance()->close();
+    const QString migrationDirPath = m_tempDir->filePath(QStringLiteral("snapshot-chain"));
+    QVERIFY(QDir().mkpath(migrationDirPath));
+    const QString legacyPath = QDir(migrationDirPath).filePath(QStringLiteral("legacy-v1.sqlite"));
     QVERIFY(createLegacyVersion1Database(legacyPath));
     QVERIFY(DatabaseManager::instance()->initialize(legacyPath));
 
-    const QStringList backups = QDir(m_tempDir->path()).entryList(
-        QStringList{QStringLiteral("pomodoro_backup_*.db")},
-        QDir::Files);
-    QVERIFY(!backups.isEmpty());
+    const QStringList backups = QDir(migrationDirPath).entryList(
+        QStringList{QStringLiteral("pomodoro_backup_*.db")}, QDir::Files);
+    QCOMPARE(backups.size(), 1);
+
+    const QString connectionName = QStringLiteral("PreMigrationSnapshotVerificationConnection");
+    {
+        QSqlDatabase snapshot = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        snapshot.setDatabaseName(QDir(migrationDirPath).filePath(backups.constFirst()));
+        QVERIFY(snapshot.open());
+        QSqlQuery versionQuery(snapshot);
+        QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
+        QVERIFY(versionQuery.next());
+        // 保留的必须是整条迁移开始前的 v1，不是中间某一级的半成品。
+        QCOMPARE(versionQuery.value(0).toInt(), 1);
+        snapshot.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
 }
 
 void ServiceTests::customCategoryCrudValidatesAndEmitsChanges()
@@ -3443,11 +3896,88 @@ void ServiceTests::pomodoroWorkCompletionSavesSessionAndAutoCompletesTask()
     QCOMPARE(phaseCompletedSpy.count(), 1);
 
     QSqlQuery sessionQuery(DatabaseManager::instance()->database());
-    QVERIFY(sessionQuery.exec(QStringLiteral("SELECT duration FROM focus_sessions")));
+    QVERIFY(sessionQuery.exec(QStringLiteral(
+        "SELECT duration, pomodoro_completed FROM focus_sessions")));
     QVERIFY(sessionQuery.next());
     QCOMPARE(sessionQuery.value(0).toInt(), 300);
+    QCOMPARE(sessionQuery.value(1).toInt(), 1);
 
     QCOMPARE(taskCompletedById(taskId), true);
+}
+
+void ServiceTests::manuallyStoppedPomodoroDoesNotCountAsCompleted()
+{
+    const int taskId = insertTaskRow(QStringLiteral("手动停止番茄"), logicalToday());
+    QVERIFY(taskId > 0);
+
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("手动停止番茄"), 25 * 60));
+    setFocusElapsedSeconds(timer, 10 * 60);
+    QVERIFY(timer->stopFocus());
+
+    // 时长仍然是有效专注，但没有自然到点，不得计入完整番茄。
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 10);
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(taskId), 0);
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT duration, pomodoro_completed FROM focus_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 10 * 60);
+    QCOMPARE(query.value(1).toInt(), 0);
+}
+
+void ServiceTests::realPomodoroSessionAdvancesLongGoalAndFiresMilestone()
+{
+    // 端到端用例：GoalServiceTests 里的专注记录是手工 INSERT 的，若 FocusTimer 实际写入的
+    // mode / duration / task_id 与那边的假设不一致，单测照样全绿而线上进度恒为 0。
+    // 这里让 FocusTimer 真的跑完一个番茄，验证聚合口径在两端确实对得上。
+    AppSettings::instance()->setDayStartHour(0);
+
+    QSqlQuery categoryQuery(DatabaseManager::instance()->database());
+    QVERIFY(categoryQuery.exec(QStringLiteral(
+        "INSERT INTO categories (name, color) VALUES ('长期目标科目', '#d4a574')")));
+    const int categoryId = categoryQuery.lastInsertId().toInt();
+    QVERIFY(categoryId > 0);
+
+    const int taskId = insertTaskRowWithCategoryId(QStringLiteral("目标推进任务"),
+                                                   QDate::currentDate(),
+                                                   categoryId,
+                                                   QString(),
+                                                   false,
+                                                   QDateTime::currentDateTime().toString(Qt::ISODate));
+    QVERIFY(taskId > 0);
+
+    GoalService* goals = GoalService::instance();
+    // 目标定成 1 个番茄，跑完一轮就直接跨到 100%，一次覆盖进度聚合与里程碑两条链路。
+    QVERIFY(goals->addGoal(QStringLiteral("端到端目标"), categoryId, 1,
+                           QDate::currentDate(), QVariant()));
+    const QVariantList created = goals->getGoals();
+    QCOMPARE(created.size(), 1);
+    const int goalId = created.first().toMap().value(QStringLiteral("id")).toInt();
+    QCOMPARE(goals->getGoal(goalId).value(QStringLiteral("doneCount")).toInt(), 0);
+
+    QSignalSpy milestoneSpy(goals, &GoalService::milestoneReached);
+
+    // 与 main.cpp 中的装配保持一致：专注结束后重算里程碑。
+    QVERIFY(QObject::connect(FocusTimer::instance(), &FocusTimer::focusCompleted,
+                             goals, &GoalService::refreshMilestones));
+
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("目标推进任务"), 300));
+    setFocusElapsedSeconds(FocusTimer::instance(), 300);
+    QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
+
+    const QVariantMap goal = goals->getGoal(goalId);
+    QCOMPARE(goal.value(QStringLiteral("doneCount")).toInt(), 1);
+    QCOMPARE(goal.value(QStringLiteral("achieved")).toBool(), true);
+    QCOMPARE(goal.value(QStringLiteral("percent")).toInt(), 100);
+
+    QCOMPARE(milestoneSpy.count(), 1);
+    QCOMPARE(milestoneSpy.first().at(0).toInt(), goalId);
+    QCOMPARE(milestoneSpy.first().at(2).toInt(), 100);
+
+    QObject::disconnect(FocusTimer::instance(), &FocusTimer::focusCompleted,
+                        goals, &GoalService::refreshMilestones);
 }
 
 void ServiceTests::pomodoroBreakWritesNoSessionAndCompletes()
@@ -3801,10 +4331,10 @@ void ServiceTests::recoveredPomodoroStillCountsForOriginalTask()
     QVERIFY(timer->restoreInterruptedSession());
     QCOMPARE(timer->currentTaskId(), taskId);
 
-    // 恢复后继续跑满有效时长并正常结束，记录仍归属原任务且计一个番茄。
+    // 恢复后继续跑到目标秒，必须走自然到点分支才能计一个番茄。
     QVERIFY(timer->resumeFocus());
     setFocusElapsedSeconds(timer, 25 * 60);
-    QVERIFY(timer->stopFocus());
+    QVERIFY(QMetaObject::invokeMethod(&timer->m_timer, "timeout", Qt::DirectConnection));
 
     QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(taskId), 1);
     const QVariantMap task = taskMapById(TaskManager::instance()->getTasksByDate(logicalToday()), taskId);
@@ -3826,6 +4356,53 @@ void ServiceTests::deletingTaskDetachesButKeepsPomodoroHistory()
     QVERIFY(query.next());
     QVERIFY(query.value(0).isNull());
     QCOMPARE(query.value(2).toInt(), 25 * 60);
+}
+
+void ServiceTests::deletingTaskKeepsCategorySnapshotForStatisticsAndGoals()
+{
+    AppSettings::instance()->setDayStartHour(0);
+    QSqlQuery categoryQuery(DatabaseManager::instance()->database());
+    QVERIFY(categoryQuery.exec(QStringLiteral(
+        "INSERT INTO categories (name, color) VALUES ('历史快照科目', '#123456')")));
+    const int categoryId = categoryQuery.lastInsertId().toInt();
+    QVERIFY(categoryId > 0);
+
+    const int taskId = insertTaskRowWithCategoryId(
+        QStringLiteral("会被删除的快照任务"), logicalToday(), categoryId,
+        QString(), false, QDateTime::currentDateTime().toString(Qt::ISODate));
+    QVERIFY(taskId > 0);
+
+    GoalService* goals = GoalService::instance();
+    QVERIFY(goals->addGoal(QStringLiteral("快照目标"), categoryId, 1,
+                           logicalToday(), QVariant()));
+    const int goalId = goals->getGoals().first().toMap().value(QStringLiteral("id")).toInt();
+
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("会被删除的快照任务"), 300));
+    setFocusElapsedSeconds(timer, 300);
+    QVERIFY(QMetaObject::invokeMethod(&timer->m_timer, "timeout", Qt::DirectConnection));
+
+    QVERIFY(TaskManager::instance()->deleteTask(taskId));
+
+    QSqlQuery snapshotQuery(DatabaseManager::instance()->database());
+    QVERIFY(snapshotQuery.exec(QStringLiteral(
+        "SELECT task_id, category_id_snapshot, category_name_snapshot, "
+        "category_color_snapshot FROM focus_sessions")));
+    QVERIFY(snapshotQuery.next());
+    QVERIFY(snapshotQuery.value(0).isNull());
+    QCOMPARE(snapshotQuery.value(1).toInt(), categoryId);
+    QCOMPARE(snapshotQuery.value(2).toString(), QStringLiteral("历史快照科目"));
+    QCOMPARE(snapshotQuery.value(3).toString(), QStringLiteral("#123456"));
+
+    const QVariantMap stats = StatisticsService::instance()->getCategoryStats(
+        logicalToday(), logicalToday());
+    const QVariantList categories = stats.value(QStringLiteral("categories")).toList();
+    QCOMPARE(categories.size(), 1);
+    QCOMPARE(categories.first().toMap().value(QStringLiteral("name")).toString(),
+             QStringLiteral("历史快照科目"));
+    QCOMPARE(categories.first().toMap().value(QStringLiteral("duration")).toInt(), 300);
+
+    QCOMPARE(goals->getGoal(goalId).value(QStringLiteral("doneCount")).toInt(), 1);
 }
 
 void ServiceTests::isRoutineGeneratedTaskDistinguishesInstances()

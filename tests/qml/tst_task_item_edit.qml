@@ -33,6 +33,7 @@ TestCase {
         item.taskTitle = "原始标题"
         item.taskCompleted = false
         item.titleEditing = false
+        item.renameSubmitter = null
         item.setPointerInside(false)
         renameSpy.clear()
         editSpy.clear()
@@ -77,6 +78,20 @@ TestCase {
         item.cancelTitleEdit()
 
         compare(item.titleEditing, false)
+        compare(renameSpy.count, 0)
+    }
+
+    function test_failedRenameKeepsDraftAndEditingState() {
+        item.renameSubmitter = function(taskId, title) { return false }
+        item.beginTitleEdit()
+        const field = findChild(item, "taskTitleEditField")
+        verify(field)
+        field.text = "保留的行内草稿"
+
+        item.commitTitleEdit()
+
+        compare(item.titleEditing, true)
+        compare(field.text, "保留的行内草稿")
         compare(renameSpy.count, 0)
     }
 

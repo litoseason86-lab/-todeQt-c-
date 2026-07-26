@@ -58,13 +58,11 @@ int clampEstimatedPomodoros(int value)
     return qBound(0, value, TaskManager::kMaxEstimatedPomodoros);
 }
 
-// 一条专注记录计入某任务实际番茄，当且仅当：番茄工作模式(mode=1)且时长达到有效专注门槛。
-// 自由计时(mode=0)只累计专注分钟，不折算番茄。这是“有效番茄”的唯一口径，列表聚合与单任务
-// 查询都从这里取；不允许在别处复制出第二套阈值或模式判断。
-QString validPomodoroCountExpr()
+// “有效番茄”的口径已上移到 FocusSessionRules，长期目标进度要复用同一份定义。
+// 这里保留一个同名薄封装，只是为了让本文件原有调用点不必逐个改写。
+QString validPomodoroCountExpr(const QString& tableAlias = QString())
 {
-    return QStringLiteral("SUM(CASE WHEN mode = 1 AND duration >= %1 THEN 1 ELSE 0 END)")
-        .arg(FocusSessionRules::kMinimumValidDurationSeconds);
+    return FocusSessionRules::validPomodoroCountExpr(tableAlias);
 }
 
 // 专注分钟对模式不敏感：番茄段和自由计时段都算，只要达到有效专注门槛。
@@ -90,7 +88,7 @@ QString taskSelectSql()
         "WHERE fs.task_id = t.id AND fs.duration IS NOT NULL), 0) AS focused_seconds "
         "FROM tasks t "
         "LEFT JOIN categories c ON t.category_id = c.id ")
-        .arg(validPomodoroCountExpr(), focusedSecondsExpr());
+        .arg(validPomodoroCountExpr(QStringLiteral("fs")), focusedSecondsExpr());
 }
 
 bool bindCategoryTextFromId(QSqlQuery& query, int categoryId, QString* categoryName)

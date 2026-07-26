@@ -17,12 +17,49 @@ Item {
     property bool effectEnabled: true
     property color fallbackColor: Theme.glassSolidCard
     property url refractionShader: "qrc:/shaders/liquid_glass.frag.qsb"
+    readonly property bool shaderFailed: d.shaderFailed
+    readonly property string shaderError: d.shaderError
 
     signal sampleRefreshRequested()
 
-    readonly property bool effectActive: root.effectEnabled
-                                         && Theme.glassBlurAllowed
-                                         && root.sourceItem !== null
+    readonly property bool effectRequested: root.effectEnabled
+                                            && Theme.glassBlurAllowed
+                                            && root.sourceItem !== null
+    readonly property bool effectActive: root.effectRequested
+                                         && !d.shaderFailed
+                                         && d.shaderReady
+                                         && effectLoader.status === Loader.Ready
+    readonly property bool fallbackActive: !root.effectActive
+
+    QtObject {
+        id: d
+
+        property bool shaderReady: false
+        property bool shaderFailed: false
+        property string shaderError: ""
+    }
+
+    function resetShaderState() {
+        d.shaderReady = false
+        d.shaderFailed = false
+        d.shaderError = ""
+    }
+
+    function updateShaderStatus(statusValue, errorLog) {
+        if (statusValue === ShaderEffect.Compiled) {
+            d.shaderReady = true
+            d.shaderFailed = false
+            d.shaderError = ""
+        } else if (statusValue === ShaderEffect.Error) {
+            // Loader.Ready 只表示 QML 对象创建成功，不代表 Shader 可用。
+            // 编译失败后卸载效果层，立即显示可读的纯色降级背景。
+            d.shaderReady = false
+            d.shaderFailed = true
+            d.shaderError = errorLog || "Shader 编译失败"
+        } else {
+            d.shaderReady = false
+        }
+    }
 
     function refreshSample() {
         if (effectLoader.status === Loader.Ready)
@@ -33,6 +70,11 @@ Item {
     onSourceRectChanged: root.refreshSample()
     onWidthChanged: root.refreshSample()
     onHeightChanged: root.refreshSample()
+    onRefractionShaderChanged: root.resetShaderState()
+    onEffectRequestedChanged: {
+        if (!root.effectRequested)
+            root.resetShaderState()
+    }
 
     Connections {
         target: root.sourceItem
@@ -46,7 +88,7 @@ Item {
     Rectangle {
         objectName: "liquidGlassFallback"
         anchors.fill: parent
-        visible: !root.effectActive
+        visible: root.fallbackActive
         radius: root.cornerRadius
         color: root.fallbackColor
     }
@@ -56,10 +98,19 @@ Item {
         objectName: "liquidGlassEffectLoader"
 
         anchors.fill: parent
-        active: root.effectActive
+        active: root.effectRequested && !d.shaderFailed
         asynchronous: false
         sourceComponent: effectComponent
         onLoaded: root.sampleRefreshRequested()
+        onStatusChanged: {
+            if (status === Loader.Error) {
+                d.shaderReady = false
+                d.shaderFailed = true
+                d.shaderError = "玻璃效果层加载失败"
+            } else if (status === Loader.Null) {
+                d.shaderReady = false
+            }
+        }
     }
 
     Component {
@@ -73,6 +124,22 @@ Item {
 
                 function onSampleRefreshRequested() {
                     backdropSource.scheduleUpdate()
+                }
+            }
+
+            Timer {
+                interval: 750
+                running: root.effectRequested && !d.shaderReady && !d.shaderFailed
+                repeat: false
+
+                onTriggered: {
+                    if (refractionEffect.status === ShaderEffect.Uncompiled) {
+                        // 软件渲染后端不会把 ShaderEffect 标记为 Error，
+                        // 而是永久停在 Uncompiled，因此需要有限时的失败判定。
+                        d.shaderReady = false
+                        d.shaderFailed = true
+                        d.shaderError = "当前图形后端未能初始化 Shader"
+                    }
                 }
             }
 
@@ -103,6 +170,9 @@ Item {
                 property real bezelWidth: root.bezelWidth
                 property real refractionStrength: root.refractionStrength
                 fragmentShader: root.refractionShader
+
+                onStatusChanged: root.updateShaderStatus(status, log)
+                Component.onCompleted: root.updateShaderStatus(status, log)
             }
 
             Rectangle {

@@ -14,7 +14,7 @@ Item {
     property var todayComparison: ({})
     property var weekComparison: ({})
     property var monthComparison: ({})
-    property var currentDateProvider: null
+    property date currentDateOverride
     property date currentDateSnapshot: new Date()
     // 三种时间范围各自保留选中状态，切换模式时再重置，避免日/周/月导航互相污染。
     property date selectedDate: currentDateSnapshot
@@ -72,11 +72,21 @@ Item {
     // 每周复盘数据（仅 week 范围加载）：计划/实际番茄、科目对账、事实与建议。
     property var weeklyReview: ({})
     property var categoryStats: ({ categories: [], totalDuration: 0 })
+    property var taskManagerRef: null
+    property var statisticsServiceRef: null
+    property var focusTimerRef: null
+    property var logicalDayServiceRef: null
+    property var appSettingsRef: null
     property var categoryManagerRef: null
+    property var goalServiceRef: null
+    property var achievedGoals: []
+    property string achievedGoalsError: ""
     property string loadError: ""
     property bool pageActive: true
     // 统计页跟今日任务、本周计划保持同一套内容边距，避免每个模块各自偏移导致边界不齐。
     readonly property int contentMargin: 24
+
+    signal goalRequested(int goalId)
 
     onCurrentTimeRangeChanged: {
         // 模式切换代表用户回到该模式的当前周期；箭头导航只改变对应模式自己的选中状态。
@@ -110,7 +120,7 @@ Item {
     }
 
     Connections {
-        target: taskManager
+        target: root.taskManagerRef
         enabled: root.pageActive
 
         function onTasksChanged() {
@@ -119,7 +129,7 @@ Item {
     }
 
     Connections {
-        target: statisticsService
+        target: root.statisticsServiceRef
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
@@ -129,7 +139,7 @@ Item {
     }
 
     Connections {
-        target: focusTimer
+        target: root.focusTimerRef
         enabled: root.pageActive
 
         function onFocusCompleted(duration) {
@@ -148,11 +158,24 @@ Item {
     }
 
     Connections {
+        target: root.goalServiceRef
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
+
+        function onGoalsChanged() {
+            // 长期成就不随统计周期变化，只刷新这一块，避免无意义地重查全部统计图表。
+            root.refreshAchievedGoals()
+        }
+
+        function onOperationFailed(message) {
+            root.achievedGoalsError = String(message || qsTr("已达成目标加载失败"))
+        }
+    }
+
+    Connections {
         // 改设置或跨逻辑日只触发 refresh；refresh 内已有“当前期跟随、历史期保留”。
         // resetSelectedPeriodToCurrent 是菜单的强制重置语义，不能在后台失效时调用。
-        // qmllint disable unqualified
-        target: typeof logicalDayService !== "undefined" ? logicalDayService : null
-        // qmllint enable unqualified
+        target: root.logicalDayServiceRef
         ignoreUnknownSignals: true
 
         function onChanged() {
@@ -161,16 +184,12 @@ Item {
     }
 
     function refreshCurrentDateSnapshot() {
-        var providedDate = root.currentDateProvider ? root.currentDateProvider() : new Date()
-        var normalizedDate = new Date(providedDate)
+        var normalizedDate = new Date(root.currentDateOverride)
         if (isNaN(normalizedDate.getTime())) {
             normalizedDate = new Date()
         }
         // provider 注入值与真实现在都必须过逻辑日换算，否则测试和生产会形成两套口径。
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
+        const hour = root.appSettingsRef ? root.appSettingsRef.dayStartHour : 4
         currentDateSnapshot = LogicalDay.todayDate(hour, normalizedDate)
     }
 
@@ -370,45 +389,79 @@ Item {
         return root.comparisonForMetric("duration")
     }
 
+    function achievementTimestamp(value) {
+        var date = value instanceof Date ? value : new Date(String(value || ""))
+        return isNaN(date.getTime()) ? 0 : date.getTime()
+    }
+
+    function refreshAchievedGoals() {
+        root.achievedGoalsError = ""
+        if (!root.goalServiceRef || !root.goalServiceRef.getGoals) {
+            root.achievedGoals = []
+            return
+        }
+        try {
+            const allGoals = root.goalServiceRef.getGoals() || []
+            // C++ 服务以“空数组 + operationFailed”报告查询失败；失败时保留旧数据，
+            // 不能把数据库故障伪装成“用户还没有达成目标”。
+            if (root.achievedGoalsError.length > 0)
+                return
+
+            const achieved = []
+            for (let i = 0; i < allGoals.length; ++i) {
+                if (Boolean(allGoals[i].achieved))
+                    achieved.push(allGoals[i])
+            }
+            achieved.sort(function(left, right) {
+                return root.achievementTimestamp(right.achievedAt)
+                        - root.achievementTimestamp(left.achievedAt)
+            })
+            root.achievedGoals = achieved
+        } catch (error) {
+            root.achievedGoalsError = qsTr("已达成目标加载失败")
+        }
+    }
+
     function refresh() {
+        root.refreshAchievedGoals()
         try {
             root.loadError = ""
             root.syncCurrentDateSnapshotForRefresh()
 
             if (root.currentTimeRange === "today") {
                 var selectedDay = new Date(root.selectedDate)
-                root.todayStats = statisticsService.getDayStats(selectedDay)
-                root.todayComparison = statisticsService.getDayComparison(selectedDay)
-                root.weekStats = statisticsService.getWeekStats(StatFmt.mondayOf(selectedDay))
-                root.categoryStats = statisticsService.getCategoryStats(
+                root.todayStats = root.statisticsServiceRef.getDayStats(selectedDay)
+                root.todayComparison = root.statisticsServiceRef.getDayComparison(selectedDay)
+                root.weekStats = root.statisticsServiceRef.getWeekStats(StatFmt.mondayOf(selectedDay))
+                root.categoryStats = root.statisticsServiceRef.getCategoryStats(
                             Qt.formatDate(selectedDay, "yyyy-MM-dd"),
                             Qt.formatDate(selectedDay, "yyyy-MM-dd"))
             } else if (root.currentTimeRange === "week") {
                 var weekStart = new Date(root.selectedWeekStart)
                 var weekEnd = StatFmt.endOfWeek(weekStart)
-                root.weekStats = statisticsService.getWeekStats(weekStart)
-                root.weekComparison = statisticsService.getWeekComparison(weekStart)
+                root.weekStats = root.statisticsServiceRef.getWeekStats(weekStart)
+                root.weekComparison = root.statisticsServiceRef.getWeekComparison(weekStart)
                 // 测试桩或旧上下文可能未提供复盘接口；缺失时按空复盘处理，不拖垮周统计加载。
-                root.weeklyReview = statisticsService.getWeeklyReview
-                        ? statisticsService.getWeeklyReview(weekStart) : ({})
+                root.weeklyReview = root.statisticsServiceRef.getWeeklyReview
+                        ? root.statisticsServiceRef.getWeeklyReview(weekStart) : ({})
                 var weekTotal = root.weekTotalDuration()
 
                 // 多范围卡片复用 todayStats 这个绑定入口，避免 UI 层维护三套重复卡片状态。
                 root.todayStats = {
-                    effectiveDays: statisticsService.getEffectiveDays(weekStart, weekEnd),
-                    sessionCount: statisticsService.getFocusSessionCount(weekStart, weekEnd),
+                    effectiveDays: root.statisticsServiceRef.getEffectiveDays(weekStart, weekEnd),
+                    sessionCount: root.statisticsServiceRef.getFocusSessionCount(weekStart, weekEnd),
                     totalDuration: weekTotal,
                     completedTasks: 0,
                     totalTasks: 0,
                     completionRate: 0
                 }
-                root.categoryStats = statisticsService.getCategoryStats(
+                root.categoryStats = root.statisticsServiceRef.getCategoryStats(
                             Qt.formatDate(weekStart, "yyyy-MM-dd"),
                             Qt.formatDate(weekEnd, "yyyy-MM-dd"))
             } else if (root.currentTimeRange === "month") {
-                root.monthStats = statisticsService.getMonthStats(root.selectedYear, root.selectedMonth)
-                root.monthComparison = statisticsService.getMonthComparison(root.selectedYear, root.selectedMonth)
-                root.monthWeeklySummary = statisticsService.getMonthWeeklySummary(root.selectedYear, root.selectedMonth)
+                root.monthStats = root.statisticsServiceRef.getMonthStats(root.selectedYear, root.selectedMonth)
+                root.monthComparison = root.statisticsServiceRef.getMonthComparison(root.selectedYear, root.selectedMonth)
+                root.monthWeeklySummary = root.statisticsServiceRef.getMonthWeeklySummary(root.selectedYear, root.selectedMonth)
                 root.todayStats = {
                     effectiveDays: root.monthStats.effectiveDays || 0,
                     sessionCount: root.monthStats.sessionCount || 0,
@@ -420,7 +473,7 @@ Item {
 
                 var firstDay = new Date(root.selectedYear, root.selectedMonth - 1, 1)
                 var lastDay = new Date(root.selectedYear, root.selectedMonth, 0)
-                root.categoryStats = statisticsService.getCategoryStats(
+                root.categoryStats = root.statisticsServiceRef.getCategoryStats(
                             Qt.formatDate(firstDay, "yyyy-MM-dd"),
                             Qt.formatDate(lastDay, "yyyy-MM-dd"))
             } else {
@@ -552,10 +605,7 @@ Item {
                         // 选中态跟随业务状态；点已选中的段等于「回到当前期」。
                         currentIndex: root.currentTimeRange === "week" ? 1
                                       : (root.currentTimeRange === "month" ? 2 : 0)
-                        // qmllint disable unqualified
-                        reduceMotion: typeof appSettings !== "undefined" && appSettings
-                                      ? Boolean(appSettings.reduceMotion) : false
-                        // qmllint enable unqualified
+                        reduceMotion: Boolean(root.appSettingsRef && root.appSettingsRef.reduceMotion)
                         solidFallback: !Theme.glassBlurAllowed
 
                         onActivated: function (index) {
@@ -584,8 +634,8 @@ Item {
                             border.width: 1
                             border.color: previousPeriodMouseArea.containsMouse ? Theme.accent : Theme.border
 
-                            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutQuad } }
-                            Behavior on border.color { ColorAnimation { duration: 120; easing.type: Easing.OutQuad } }
+                            Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 120; easing.type: Easing.OutQuad } }
+                            Behavior on border.color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 120; easing.type: Easing.OutQuad } }
 
                             Text {
                                 anchors.centerIn: parent
@@ -636,8 +686,8 @@ Item {
                                           : Theme.borderSubtle
                             opacity: root.canGoForward ? 1.0 : 0.55
 
-                            Behavior on color { ColorAnimation { duration: 120; easing.type: Easing.OutQuad } }
-                            Behavior on border.color { ColorAnimation { duration: 120; easing.type: Easing.OutQuad } }
+                            Behavior on color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 120; easing.type: Easing.OutQuad } }
+                            Behavior on border.color { ColorAnimation { duration: Theme.reduceMotion ? 0 : 120; easing.type: Easing.OutQuad } }
 
                             Text {
                                 anchors.centerIn: parent
@@ -817,6 +867,17 @@ Item {
                     }
                     return root.isCurrentSelectedPeriod ? "本月还没有可归类的专注记录" : "所选月还没有可归类的专注记录"
                 }
+            }
+
+            AchievedGoalsCard {
+                objectName: "statisticsAchievedGoalsCard"
+
+                Layout.fillWidth: true
+                Layout.bottomMargin: Theme.space24
+                achievedGoals: root.achievedGoals
+                errorText: root.achievedGoalsError
+                levelInfo: StatFmt.levelOf(root.achievedGoals.length)
+                onGoalClicked: function(goalId) { root.goalRequested(goalId) }
             }
         }
     }

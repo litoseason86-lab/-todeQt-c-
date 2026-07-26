@@ -123,7 +123,7 @@ FocusScope {
             Behavior on x {
                 enabled: !root.reduceMotion
                 XAnimator {
-                    duration: root.slideDuration
+                    duration: Theme.reduceMotion ? 0 : root.slideDuration
                     easing.type: Easing.OutCubic
                 }
             }
@@ -181,7 +181,7 @@ FocusScope {
                         Behavior on color {
                             enabled: !root.reduceMotion
                             ColorAnimation {
-                                duration: root.slideDuration
+                                duration: Theme.reduceMotion ? 0 : root.slideDuration
                                 easing.type: Easing.OutCubic
                             }
                         }

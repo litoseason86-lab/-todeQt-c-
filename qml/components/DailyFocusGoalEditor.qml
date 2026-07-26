@@ -32,12 +32,12 @@ FocusScope {
 
     Behavior on opacity {
         enabled: !root.reduceMotion
-        NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+        NumberAnimation { duration: Theme.reduceMotion ? 0 : 180; easing.type: Easing.OutCubic }
     }
 
     Behavior on scale {
         enabled: !root.reduceMotion
-        NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+        NumberAnimation { duration: Theme.reduceMotion ? 0 : 180; easing.type: Easing.OutCubic }
     }
 
     function loadInitialValue() {

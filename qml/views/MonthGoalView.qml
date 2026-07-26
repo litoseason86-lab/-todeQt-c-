@@ -286,13 +286,13 @@ Item {
 
                         Behavior on color {
                             ColorAnimation {
-                                duration: 160
+                                duration: Theme.reduceMotion ? 0 : 160
                                 easing.type: Easing.OutQuad
                             }
                         }
                         Behavior on border.color {
                             ColorAnimation {
-                                duration: 160
+                                duration: Theme.reduceMotion ? 0 : 160
                                 easing.type: Easing.OutQuad
                             }
                         }
@@ -330,13 +330,13 @@ Item {
 
                         Behavior on color {
                             ColorAnimation {
-                                duration: 160
+                                duration: Theme.reduceMotion ? 0 : 160
                                 easing.type: Easing.OutQuad
                             }
                         }
                         Behavior on border.color {
                             ColorAnimation {
-                                duration: 160
+                                duration: Theme.reduceMotion ? 0 : 160
                                 easing.type: Easing.OutQuad
                             }
                         }
@@ -371,13 +371,13 @@ Item {
 
                         Behavior on color {
                             ColorAnimation {
-                                duration: 160
+                                duration: Theme.reduceMotion ? 0 : 160
                                 easing.type: Easing.OutQuad
                             }
                         }
                         Behavior on border.color {
                             ColorAnimation {
-                                duration: 160
+                                duration: Theme.reduceMotion ? 0 : 160
                                 easing.type: Easing.OutQuad
                             }
                         }
@@ -421,13 +421,13 @@ Item {
 
                         Behavior on color {
                             ColorAnimation {
-                                duration: 120
+                                duration: Theme.reduceMotion ? 0 : 120
                                 easing.type: Easing.OutQuad
                             }
                         }
                         Behavior on border.color {
                             ColorAnimation {
-                                duration: 120
+                                duration: Theme.reduceMotion ? 0 : 120
                                 easing.type: Easing.OutQuad
                             }
                         }
@@ -571,19 +571,19 @@ Item {
 
                                     Behavior on color {
                                         ColorAnimation {
-                                            duration: 160
+                                            duration: Theme.reduceMotion ? 0 : 160
                                             easing.type: Easing.OutQuad
                                         }
                                     }
                                     Behavior on border.color {
                                         ColorAnimation {
-                                            duration: 160
+                                            duration: Theme.reduceMotion ? 0 : 160
                                             easing.type: Easing.OutQuad
                                         }
                                     }
                                     Behavior on border.width {
                                         NumberAnimation {
-                                            duration: 160
+                                            duration: Theme.reduceMotion ? 0 : 160
                                             easing.type: Easing.OutQuad
                                         }
                                     }

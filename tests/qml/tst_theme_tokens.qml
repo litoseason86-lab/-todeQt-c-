@@ -9,10 +9,12 @@ TestCase {
 
     function init() {
         Theme.activeThemeId = "warm"
+        Theme.reduceMotion = false
     }
 
     function cleanupTestCase() {
         Theme.activeThemeId = "warm"
+        Theme.reduceMotion = false
     }
 
     function test_colorTokens() {
@@ -35,6 +37,12 @@ TestCase {
         compare(Theme.fontXxl, 24)
         compare(Theme.space16, 16)
         compare(Theme.radiusMd, 6)
+    }
+
+    function test_reduceMotionTokenCanBeChangedAtRuntime() {
+        compare(Theme.reduceMotion, false)
+        Theme.reduceMotion = true
+        compare(Theme.reduceMotion, true)
     }
 
     function test_fontFamilyTokens() {

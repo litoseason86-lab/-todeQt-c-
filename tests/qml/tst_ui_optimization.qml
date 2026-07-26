@@ -179,6 +179,7 @@ TestCase {
     }
 
     function init() {
+        Theme.reduceMotion = false;
         taskManager.fakeTodayTasks = [];
         taskManager.fakeWeekTasks = [];
         taskManager.setTaskCompletedResult = true;
@@ -203,6 +204,10 @@ TestCase {
         if (deleteButton !== null)
             deleteButton.down = false;
         wait(220);
+    }
+
+    function cleanup() {
+        Theme.reduceMotion = false;
     }
 
     function configureSingleTodayTask(completed) {
@@ -386,6 +391,18 @@ TestCase {
             verifyCompletionParticle(container.children[i], i, directions[i][0], directions[i][1]);
 
         tryCompare(container, "particleCount", 0, 950);
+    }
+
+    function test_reduceMotionDoesNotCreateCompletionParticles() {
+        var container = completionParticleContainer();
+        verify(container !== null);
+        compare(container.particleCount, 0);
+
+        Theme.reduceMotion = true;
+        taskItem.taskCompleted = true;
+        wait(30);
+
+        compare(container.particleCount, 0);
     }
 
     function test_taskItemCompletionParticlesStartAtVisibleIndicatorCenter() {

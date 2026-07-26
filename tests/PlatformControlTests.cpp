@@ -1,4 +1,5 @@
 #include <QDate>
+#include <QFile>
 #include <QSignalSpy>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -13,6 +14,15 @@
 #include "../src/services/TrayController.h"
 
 namespace {
+
+// macOS 上 QLocalServer 的名字长度上限会随 Qt 版本变化：Qt 6.9 只能接受 46 字符，
+// 原测试的 53 字符名字在 Qt 6.11 能过、在 6.9 必然失败。短后缀保留并行测试所需的唯一性，
+// 同时避免两个用例因复用固定端点而互相 removeServer。
+QString uniqueShortServerName()
+{
+    return QStringLiteral("pt-%1").arg(
+        QUuid::createUuid().toString(QUuid::Id128).left(8));
+}
 
 // 假菜单栏视图：只记录最近一次推送的展示状态与推送次数。
 class FakeTrayView : public TrayView
@@ -89,6 +99,7 @@ private slots:
     void breakStateIsDistinguished();
     void showAndQuitEmitIntentSignals();
     void repeatedLaunchRequestsExistingWindow();
+    void unavailableInstanceLockFailsClosed();
     void restoredSessionIsReflectedInMenu();
 
     void phaseCompleteWorkNotificationDeliversOnce();
@@ -221,8 +232,7 @@ void PlatformControlTests::showAndQuitEmitIntentSignals()
 void PlatformControlTests::repeatedLaunchRequestsExistingWindow()
 {
     const QString lockPath = m_tempDir->filePath(QStringLiteral("instance.lock"));
-    const QString serverName = QStringLiteral("PomodoroTodoTest-%1")
-                                   .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    const QString serverName = uniqueShortServerName();
 
     SingleInstanceGuard primary(lockPath, serverName);
     QCOMPARE(primary.start(), SingleInstanceGuard::PrimaryInstance);
@@ -231,6 +241,22 @@ void PlatformControlTests::repeatedLaunchRequestsExistingWindow()
     SingleInstanceGuard secondary(lockPath, serverName);
     QCOMPARE(secondary.start(), SingleInstanceGuard::SecondaryInstanceNotified);
     QTRY_COMPARE_WITH_TIMEOUT(activationSpy.count(), 1, 1000);
+}
+
+void PlatformControlTests::unavailableInstanceLockFailsClosed()
+{
+    // 把“父目录”造成普通文件，QLockFile 必然无法创建锁文件。
+    // 这与锁被另一个进程占用不同：应用无法证明单实例，必须关闭失败。
+    const QString blockedParent = m_tempDir->filePath(QStringLiteral("not-a-directory"));
+    QFile blocker(blockedParent);
+    QVERIFY(blocker.open(QIODevice::WriteOnly));
+    QVERIFY(blocker.write("blocked") > 0);
+    blocker.close();
+
+    SingleInstanceGuard guard(
+        blockedParent + QStringLiteral("/instance.lock"),
+        uniqueShortServerName());
+    QCOMPARE(guard.start(), SingleInstanceGuard::LockUnavailable);
 }
 
 void PlatformControlTests::restoredSessionIsReflectedInMenu()

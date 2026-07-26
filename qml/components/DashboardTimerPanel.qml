@@ -14,6 +14,7 @@ Item {
     property var wallpaperRef: null
     property int sessionCount: 0
     property int goalMinutes: 0
+    property string logicalDate: ""
     // 降级开关：毛玻璃不可用（无壁纸引用/低配）时走纯色玻璃。
     property bool frostEnabled: true
 
@@ -64,6 +65,7 @@ Item {
     readonly property FocusLiveSeconds liveSecondsSource: FocusLiveSeconds {
         timerRef: root.timerRef
         baseSeconds: root.todayFocusSeconds
+        logicalDate: root.logicalDate
     }
 
     // 采样区域 = 面板在壁纸坐标系里的矩形。mapToItem 本身不产生绑定依赖，
@@ -289,7 +291,7 @@ Item {
 
                     Behavior on color {
                         ColorAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }
@@ -335,7 +337,7 @@ Item {
 
                     Behavior on color {
                         ColorAnimation {
-                            duration: 160
+                            duration: Theme.reduceMotion ? 0 : 160
                             easing.type: Easing.OutQuad
                         }
                     }

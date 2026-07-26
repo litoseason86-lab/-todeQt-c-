@@ -40,8 +40,8 @@ SingleInstanceGuard::StartResult SingleInstanceGuard::start()
             return m_result;
         }
 
-        // 锁目录不可写时保持旧行为：让数据库初始化继续做最终校验，不能因为
-        // 一个辅助锁的权限问题把应用完全封死。
+        // 这不是普通的“没抢到锁”，而是无法证明本进程具有排他权。
+        // 调用方必须停止启动，否则两个进程会并发写数据库与活动会话状态。
         m_result = LockUnavailable;
         return m_result;
     }

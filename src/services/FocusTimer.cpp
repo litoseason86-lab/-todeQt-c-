@@ -1,7 +1,9 @@
 #include "FocusTimer.h"
 
+#include "AppSettings.h"
 #include "DatabaseManager.h"
 #include "FocusSessionRules.h"
+#include "LogicalDay.h"
 #include "MonotonicClock.h"
 #include "TaskManager.h"
 
@@ -16,6 +18,8 @@ FocusTimer::FocusTimer(QObject* parent)
     , m_clock(SystemMonotonicClock::instance())
 {
     m_timer.setInterval(1000);
+    connect(AppSettings::instance(), &AppSettings::dayStartHourChanged,
+            this, &FocusTimer::sessionLogicalDateChanged);
     connect(&m_timer, &QTimer::timeout, this, [this]() {
         syncElapsedTime();
         // 每五秒保存一次活动进度；崩溃最多损失一个检查点区间，正常退出会再做一次同步。
@@ -32,7 +36,9 @@ FocusTimer::FocusTimer(QObject* parent)
 
         // 到点后先保存当前 phase，因为 resetSession 会把阶段清空；信号必须告诉 QML 刚完成的是专注还是休息。
         const TimerPhase completedPhase = m_phase;
-        const bool completed = completedPhase == BreakPhase ? stopFocus() : completeFocusSession();
+        const bool completed = completedPhase == BreakPhase
+            ? stopFocus()
+            : completeFocusSession(true);
         if (completed) {
             m_completionFailureNotified = false;
             // 只有自然到点的番茄专注段才计入连续数（此分支已被上面的 PomodoroMode 守卫圈定）；
@@ -121,6 +127,7 @@ bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& 
 
     emit runningStateChanged();
     emit currentTaskChanged();
+    emit sessionLogicalDateChanged();
     emit modeChanged();
     emit phaseChanged();
     emit tick();
@@ -161,15 +168,28 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
     }
 
     QSqlQuery query(db);
-    // 记录本段专注模式：番茄工作段计入任务实际番茄，自由计时段只累计专注分钟。
-    // 休息段不建 focus_sessions 行，因此这里的 mode 只会是 Free 或 Pomodoro。
-    query.prepare(QStringLiteral(
-        "INSERT INTO focus_sessions (task_id, start_time, mode) VALUES (:taskId, :startTime, :mode)"));
+    // 会话一开始就固化科目，不等结束时再查。这样任务在计时中被改科目或删除，
+    // 历史仍归属于开始专注时的科目。快照不设外键，科目本身删除后也能保留名称与颜色。
+    query.prepare(QStringLiteral(R"SQL(
+        INSERT INTO focus_sessions (
+            task_id, start_time, mode,
+            category_id_snapshot, category_name_snapshot, category_color_snapshot
+        )
+        SELECT :taskId, :startTime, :mode,
+               COALESCE(t.category_id, legacy_category.id),
+               COALESCE(current_category.name, legacy_category.name, t.category, ''),
+               COALESCE(current_category.color, legacy_category.color, '')
+        FROM tasks t
+        LEFT JOIN categories current_category ON t.category_id = current_category.id
+        LEFT JOIN categories legacy_category
+               ON t.category_id IS NULL AND legacy_category.name = t.category
+        WHERE t.id = :taskId
+    )SQL"));
     query.bindValue(QStringLiteral(":taskId"), taskId);
     query.bindValue(QStringLiteral(":startTime"), now.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":mode"), static_cast<int>(mode));
 
-    if (!query.exec()) {
+    if (!query.exec() || query.numRowsAffected() != 1) {
         qWarning() << "Failed to create focus session:" << query.lastError().text()
                    << "taskId=" << taskId;
         db.rollback();
@@ -177,6 +197,12 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
     }
 
     m_sessionId = query.lastInsertId().toInt();
+    if (m_sessionId <= 0) {
+        qWarning() << "Failed to create focus session: invalid inserted id"
+                   << "taskId=" << taskId;
+        db.rollback();
+        return false;
+    }
     m_currentTaskId = taskId;
     m_currentTaskTitle = normalizedTitle;
     m_startTime = now;
@@ -200,6 +226,7 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
 
     emit runningStateChanged();
     emit currentTaskChanged();
+    emit sessionLogicalDateChanged();
     emit modeChanged();
     emit phaseChanged();
     emit tick();
@@ -271,10 +298,10 @@ bool FocusTimer::stopFocus()
         return true;
     }
 
-    return completeFocusSession();
+    return completeFocusSession(false);
 }
 
-bool FocusTimer::completeFocusSession()
+bool FocusTimer::completeFocusSession(bool naturalCompletion)
 {
     if (m_sessionId == -1) {
         return false;
@@ -310,7 +337,7 @@ bool FocusTimer::completeFocusSession()
     }
 
     // 保存失败时恢复计时器，不假装会话已经正常结束。
-    if (!saveFocusSession(duration)) {
+    if (!saveFocusSession(duration, naturalCompletion)) {
         if (wasRunning) {
             m_runSegmentStartNsecs = m_clock->nowNsecs();
             m_timer.start();
@@ -421,6 +448,15 @@ int FocusTimer::completedPomodoros() const
     return m_completedPomodoros;
 }
 
+QString FocusTimer::sessionLogicalDate() const
+{
+    if (m_sessionId <= 0 || !m_startTime.isValid()) {
+        return QString();
+    }
+    return LogicalDay::dateOf(m_startTime, AppSettings::instance()->dayStartHour())
+        .toString(Qt::ISODate);
+}
+
 void FocusTimer::resetPomodoroCount()
 {
     if (m_completedPomodoros == 0) {
@@ -438,7 +474,7 @@ bool FocusTimer::hasActiveTimer() const
     return m_sessionId != -1 || m_isRunning || m_phase != NoPhase;
 }
 
-bool FocusTimer::saveFocusSession(int durationSeconds)
+bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion)
 {
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
@@ -460,9 +496,15 @@ bool FocusTimer::saveFocusSession(int durationSeconds)
     const QDateTime endTime = QDateTime::currentDateTime();
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "UPDATE focus_sessions SET end_time = :endTime, duration = :duration WHERE id = :id"));
+        "UPDATE focus_sessions SET end_time = :endTime, duration = :duration, "
+        "pomodoro_completed = :pomodoroCompleted WHERE id = :id"));
     query.bindValue(QStringLiteral(":endTime"), endTime.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":duration"), durationSeconds);
+    const bool completedPomodoro = naturalCompletion
+        && m_mode == PomodoroMode
+        && m_phase == WorkPhase
+        && durationSeconds >= FocusSessionRules::kMinimumValidDurationSeconds;
+    query.bindValue(QStringLiteral(":pomodoroCompleted"), completedPomodoro ? 1 : 0);
     query.bindValue(QStringLiteral(":id"), m_sessionId);
 
     if (!query.exec()) {
@@ -724,6 +766,7 @@ bool FocusTimer::restoreInterruptedSession()
 
     emit runningStateChanged();
     emit currentTaskChanged();
+    emit sessionLogicalDateChanged();
     emit modeChanged();
     emit phaseChanged();
     emit completedPomodorosChanged();
@@ -792,4 +835,5 @@ void FocusTimer::resetSession()
     m_targetSeconds = 0;
     m_completionFailureNotified = false;
     m_runSegmentStartNsecs = -1;
+    emit sessionLogicalDateChanged();
 }

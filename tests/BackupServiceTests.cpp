@@ -33,8 +33,9 @@ bool insertFocusSession(int taskId, int duration)
 {
     QSqlQuery query(DatabaseManager::instance()->database());
     query.prepare(QStringLiteral(
-        "INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) "
-        "VALUES (:taskId, :start, :end, :duration, 1)"));
+        "INSERT INTO focus_sessions "
+        "(task_id, start_time, end_time, duration, mode, pomodoro_completed) "
+        "VALUES (:taskId, :start, :end, :duration, 1, 1)"));
     query.bindValue(QStringLiteral(":taskId"), taskId);
     query.bindValue(QStringLiteral(":start"), QStringLiteral("2026-07-20T10:00:00"));
     query.bindValue(QStringLiteral(":end"), QStringLiteral("2026-07-20T10:25:00"));
@@ -139,6 +140,8 @@ private slots:
     void restoreFailureKeepsOriginalDatabaseIntact();
     void activeTimerBlocksRestore();
     void asyncRestoreReloadsTaskSnapshots();
+    void asyncRestoreRollbackReopensDatabaseWhenCopyFails();
+    void asyncRestoreRollbackRestoresOriginalTaskCount();
     void olderSchemaBackupRestoresAndMigrates();
     void autoBackupRespectsIntervalAndRetention();
     void autoBackupDisabledDoesNothing();
@@ -467,6 +470,75 @@ void BackupServiceTests::asyncRestoreReloadsTaskSnapshots()
     QVERIFY(tasksChangedSpy.count() >= 1);
     QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
     QVERIFY(!BackupService::instance()->busy());
+}
+
+void BackupServiceTests::asyncRestoreRollbackReopensDatabaseWhenCopyFails()
+{
+    QVERIFY(insertTask(QStringLiteral("原始任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    QVERIFY(insertTask(QStringLiteral("恢复前新增")) > 0);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+
+    // 设置文件只读 → applySettingsSnapshot 失败 → 安装阶段判定失败 → 触发回滚。
+    QFile settingsFile(settingsPath());
+    if (!settingsFile.exists()) {
+        QSettings seed(settingsPath(), QSettings::IniFormat);
+        seed.setValue(QStringLiteral("backup/seed"), 1);
+        seed.sync();
+    }
+    QVERIFY(QFile::setPermissions(settingsPath(), QFileDevice::ReadOwner));
+
+    // 受控开关只影响下一次回滚，用来稳定模拟磁盘满造成的拷贝失败。
+    BackupService::instance()->m_forceRollbackCopyFailureForTest = true;
+
+    QSignalSpy restoredSpy(BackupService::instance(), &BackupService::restoreCompleted);
+    BackupService::instance()->requestRestore(backupFile());
+    QVERIFY2(restoredSpy.wait(10000), "异步恢复未在 10 秒内结束");
+    QCOMPARE(restoredSpy.last().at(0).toBool(), false);
+
+    // 回滚拷贝失败了，但数据库必须仍然是打开且可用的。
+    QVERIFY2(DatabaseManager::instance()->isOpen(),
+             "回滚拷贝失败后数据库仍处于关闭状态，应用会变成僵尸态");
+    QSqlQuery probe(DatabaseManager::instance()->database());
+    QVERIFY2(probe.exec(QStringLiteral("SELECT COUNT(*) FROM tasks")) && probe.next(),
+             "数据库虽然标记为打开，但已经无法查询");
+
+    // 数据库已可用时不应误导用户重启应用。
+    const QString message = restoredSpy.last().at(1).toString();
+    QVERIFY2(!message.contains(QStringLiteral("请重启应用")),
+             "数据库已重新打开，提示语不应要求用户重启");
+
+    QVERIFY(QFile::setPermissions(settingsPath(),
+                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    QVERIFY(!BackupService::instance()->busy());
+}
+
+void BackupServiceTests::asyncRestoreRollbackRestoresOriginalTaskCount()
+{
+    QVERIFY(insertTask(QStringLiteral("原始任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    QVERIFY(insertTask(QStringLiteral("恢复前新增")) > 0);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+
+    QFile settingsFile(settingsPath());
+    if (!settingsFile.exists()) {
+        QSettings seed(settingsPath(), QSettings::IniFormat);
+        seed.setValue(QStringLiteral("backup/seed"), 1);
+        seed.sync();
+    }
+    QVERIFY(QFile::setPermissions(settingsPath(), QFileDevice::ReadOwner));
+
+    QSignalSpy restoredSpy(BackupService::instance(), &BackupService::restoreCompleted);
+    BackupService::instance()->requestRestore(backupFile());
+    QVERIFY2(restoredSpy.wait(10000), "异步恢复未在 10 秒内结束");
+    QCOMPARE(restoredSpy.last().at(0).toBool(), false);
+
+    // 未注入失败时回滚应完整恢复原库，包括恢复前新增的第二条任务。
+    QVERIFY(DatabaseManager::instance()->isOpen());
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+
+    QVERIFY(QFile::setPermissions(settingsPath(),
+                                  QFileDevice::ReadOwner | QFileDevice::WriteOwner));
 }
 
 void BackupServiceTests::olderSchemaBackupRestoresAndMigrates()

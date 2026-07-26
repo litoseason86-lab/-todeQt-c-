@@ -53,7 +53,7 @@ Rectangle {
 
     Behavior on opacity {
         NumberAnimation {
-            duration: 180
+            duration: Theme.reduceMotion ? 0 : 180
             easing.type: Easing.OutQuad
         }
     }
@@ -64,7 +64,7 @@ Rectangle {
 
         target: root
         property: "y"
-        duration: 180
+        duration: Theme.reduceMotion ? 0 : 180
         easing.type: Easing.OutQuad
     }
 

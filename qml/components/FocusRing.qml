@@ -17,7 +17,7 @@ Canvas {
     antialiasing: true
 
     Behavior on opacity {
-        NumberAnimation { duration: 150 }
+        NumberAnimation { duration: Theme.reduceMotion ? 0 : 150 }
     }
 
     onProgressChanged: requestPaint()
