@@ -29,6 +29,7 @@
 | 012 | 仪表盘「今日专注番茄」改用有效番茄口径 | P1 | S | 011 | DONE（已验证） |
 | 013 | 奖励回路三缺陷（粒子被遮挡 / 失败态伪装成空态 / 复选框绑定断裂） | P1 | S-M | — | DONE（前两项修复；复选框缺陷未复现，已收敛单一状态源） |
 | 014 | 音效与 QML 资源清单守门测试 | P2 | S | — | DONE（已验证） |
+| 015 | 玻璃卡描边改用对比细线，修亮壁纸下卡片边界消失 | P2 | M | — | TODO |
 
 状态取值：TODO | IN PROGRESS | DONE | BLOCKED（附一行原因）| REJECTED（附一行理由）
 
@@ -168,8 +169,8 @@
 | `reorderGoal`（约 50 行 + 事务 + 3 个用例 + 一个专用索引）**零调用者**，且它按 `loadGoals(全部)` 算下标，而 UI 渲染的是过滤后的列表——将来接拖拽排序会移错行 | S。要么删，要么把签名改成收 goal **id** 而不是列表下标（那样天然与过滤无关）。同理 `GoalsView.qml:44` 的 `goalOpened` 信号也无处理器 |
 | `achieved_at` 只写不清（`GoalService.cpp:559`、`:706` 都带 `IS NULL` 守卫）。目标达成后调高目标值、再次达成，显示的仍是**第一次**的日期，统计页的已达成列表也按这个错日期排序 | S、影响小。注意 `LongGoal.h:47-49` 有一条刻意规则「进度回退不清空它」，清空只能限定在「用户主动改了目标值」这条路径 |
 | 每次启动后的**第一个**番茄没有 `+1` toast（进度缓存首刷静默播种，且 `refreshMilestones` 的唯一调用者是 `main.cpp:126` 的 focusCompleted 连接）。`plans/008` 写的是「崩溃恢复后首个番茄不 toast」，实际频率高一个数量级；改 `dayStartHour` 也会吃掉下一个 toast | S。**里程碑弹窗不受影响**（走数据库位掩码，与这个内存缓存无关），所以核心庆祝是好的，丢的只是轻量 toast。修法是加一个专用的静默播种函数，或者干脆改文档 |
-| `MilestoneDialog` 达成态把背景刷成 `Theme.accentFill`，标题和百分比正确换成了 `accentFillInk`，但 `:105` 的目标标题仍是 `inkStrong`、`:120` 仍是 `inkSoft`（这两个令牌是给普通卡片底调的）；`GoalCard.qml:132-141` 的达成徽标同样把 `accentFillInk` 用在了玻璃卡底上 | S。需要实测对比度而不是凭感觉判断 |
-| 目标热力图的番茄数量**只用透明度深浅**表达（`GoalHeatmap.qml:96-122`，格里的文字是日期不是数量），没有 `Accessible.name`、没有 tooltip、没有形状差异 | S。项目规则明写「禁止依赖单一颜色表达状态」。热力图恰好是这个功能「看得见才坚持得下去」的主要载体 |
+| `MilestoneDialog` 达成态把背景刷成 `Theme.accentFill`，标题和百分比正确换成了 `accentFillInk`，但 `:105` 的目标标题仍是 `inkStrong`、`:120` 仍是 `inkSoft`（这两个令牌是给普通卡片底调的） | S。需要实测对比度而不是凭感觉判断。**`GoalCard` 那一半已修**（2026-07-27）：达成徽标底色由 `transparent` 改为 `Theme.glassAccent`，`accentFillInk` 现在落在强调罩上而不是玻璃卡底上，与该令牌的设计语义一致。`MilestoneDialog` 的两处仍未处理 |
+| ~~目标热力图的番茄数量**只用透明度深浅**表达，没有 `Accessible.name`、没有 tooltip~~ | **已修**（2026-07-27 目标页玻璃改造顺带）：每格补 `Accessible.name`（「N 日，M 个番茄」/「无投入」）与悬停 `ToolTip`，用例 `test_heatmap_exposes_count_without_relying_on_color` 锁定（已实测：移除该属性后用例转红） |
 | `PhaseSoundService` 每次播放都 `remove` + `copy` 一次临时文件（GUI 线程上同步写 40-64KB），且这些临时文件从不清理 | S。庆祝触发那一帧的卡顿。`afplay` 的参数构造本身是安全的（绝对路径 + `QStringList`，无 shell） |
 | `main.cpp:75-79` 把 `SingleInstanceGuard::LockUnavailable` 从「警告后继续」改成了 `qCritical` + `return -1`。策略本身站得住，但用户双击图标只会看到应用闪一下消失，诊断信息只在 Console.app 里 | S。加个可见的错误提示即可 |
 | 目标进度聚合在每次 `focusCompleted` 都全量重跑（含被丢弃的短会话），`refreshMilestones` 结尾**无条件**发 `goalsChanged`，扇出到两个视图共 5 次查询 | MED 置信度：调用链确定，但「会成为问题」是推断不是实测。目标数是个位数、`pageActive` 也拦掉一部分。要做的话先测量，别盲改 |
