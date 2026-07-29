@@ -1,6 +1,8 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+// 只用 ToolTip 附加属性、不定制任何控件外观，因此保持不锁定具体样式的导入。
+import QtQuick.Controls
 import QtQuick.Layouts
 import ".."
 
@@ -95,6 +97,18 @@ Item {
                                                    && root.today.getDate() === day
                 readonly property real intensity: count > 0 && root.maxCount > 0
                                                   ? 0.25 + 0.75 * count / root.maxCount : 0
+                readonly property string accessibilityName: {
+                    if (!dayCell.inMonth)
+                        return ""
+                    if (dayCell.isToday) {
+                        return dayCell.count > 0
+                                ? qsTr("%1 日，今天，%2 个番茄").arg(dayCell.day).arg(dayCell.count)
+                                : qsTr("%1 日，今天，无投入").arg(dayCell.day)
+                    }
+                    return dayCell.count > 0
+                            ? qsTr("%1 日，%2 个番茄").arg(dayCell.day).arg(dayCell.count)
+                            : qsTr("%1 日，无投入").arg(dayCell.day)
+                }
 
                 objectName: inMonth ? "goalHeatmapDay-" + day : "goalHeatmapOffset-" + index
                 width: (calendarGrid.width - Theme.space4 * 6) / 7
@@ -103,6 +117,27 @@ Item {
                 color: inMonth ? Theme.surfaceSunken : "transparent"
                 border.color: dayCell.isToday ? Theme.accent : "transparent"
                 border.width: dayCell.isToday ? 2 : 0
+
+                // 投入量此前只由色块深浅表达，读屏用户和色觉障碍用户拿不到任何数量信息，
+                // 格子里的数字又是日期不是数量。这里补两条非颜色通道：
+                // 读屏播报走 Accessible.name，鼠标用户走悬停提示。
+                Accessible.role: Accessible.StaticText
+                Accessible.ignored: !dayCell.inMonth
+                Accessible.name: dayCell.accessibilityName
+
+                ToolTip {
+                    visible: dayHover.hovered && dayCell.inMonth
+                    delay: 300
+                    text: dayCell.count > 0
+                          ? qsTr("%1 月 %2 日 · %3 个番茄")
+                            .arg(root.month).arg(dayCell.day).arg(dayCell.count)
+                          : qsTr("%1 月 %2 日 · 无投入").arg(root.month).arg(dayCell.day)
+                }
+
+                HoverHandler {
+                    id: dayHover
+                    enabled: dayCell.inMonth
+                }
 
                 Rectangle {
                     anchors.fill: parent
@@ -119,6 +154,8 @@ Item {
                            ? Theme.accentForeground : Theme.ink
                     font.pixelSize: Theme.fontSm
                     font.weight: dayCell.isToday ? Font.Bold : Font.Normal
+                    // 无障碍名称由父格子统一提供，避免辅助技术重复朗读日期。
+                    Accessible.ignored: true
                 }
             }
         }

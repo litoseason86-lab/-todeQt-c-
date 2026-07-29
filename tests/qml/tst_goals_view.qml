@@ -2,6 +2,8 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtTest
+// 断言选中态用的是哪个语义令牌，需要直接引用 Theme。
+import "../../qml"
 import "../../qml/components"
 import "../../qml/views"
 
@@ -140,6 +142,12 @@ TestCase {
         Grid100 { width: 360 }
     }
 
+    Component {
+        id: heatmapComponent
+
+        GoalHeatmap { width: 360 }
+    }
+
     function activeGoal() {
         return {
             id: 1,
@@ -219,6 +227,27 @@ TestCase {
 
         card.goal = achievedGoal()
         tryCompare(card, "secondaryText", "已达成 · 7月20日")
+    }
+
+    // ListView/GridView 会复用卡片实例。切换到另一个目标时，圆弧和数字必须在同一帧
+    // 使用新目标的数据，不能让圆弧继续展示上一个目标的进度。
+    function test_reused_card_updates_progress_arc_immediately() {
+        const firstGoal = activeGoal()
+        firstGoal.percent = 20
+        const card = createTemporaryObject(cardComponent, testCase, { goal: firstGoal })
+        verify(!!card, "Component exists")
+
+        const progressArc = findChild(card, "goalProgressArc")
+        verify(!!progressArc, "Object exists")
+        compare(progressArc.sweepAngle, 72)
+
+        const nextGoal = activeGoal()
+        nextGoal.id = 2
+        nextGoal.percent = 80
+        card.goal = nextGoal
+
+        compare(card.percent, 80)
+        compare(progressArc.sweepAngle, 288)
     }
 
     function test_service_signal_refreshes_only_active_page() {
@@ -436,6 +465,65 @@ TestCase {
         }
         compare(findChild(grid, "grid100Cell-23").border.width, 0)
         compare(findChild(grid, "grid100Cell-25").border.width, 0)
+    }
+
+    // 投入量原本只由色块深浅表达，色觉障碍与读屏用户拿不到任何数量信息。
+    // 这条锁住非颜色通道：每个当月格子都要能播报出具体番茄数。
+    function test_heatmap_exposes_count_without_relying_on_color() {
+        const heatmap = createTemporaryObject(heatmapComponent, testCase, {
+            year: 2026,
+            month: 7,
+            today: new Date(2026, 6, 27),
+            dailyCounts: [{ day: 9, count: 5 }]
+        })
+        verify(!!heatmap, "Component exists")
+
+        const busyDay = findChild(heatmap, "goalHeatmapDay-9")
+        verify(!!busyDay, "Object exists")
+        verify(busyDay.Accessible.name.indexOf("5") >= 0)
+        verify(busyDay.Accessible.name.indexOf("9") >= 0)
+
+        const idleDay = findChild(heatmap, "goalHeatmapDay-10")
+        verify(!!idleDay, "Object exists")
+        verify(idleDay.Accessible.name.length > 0)
+        verify(idleDay.Accessible.name.indexOf("无投入") >= 0)
+
+        const todayCell = findChild(heatmap, "goalHeatmapDay-27")
+        verify(!!todayCell, "Object exists")
+        verify(todayCell.Accessible.name.indexOf("今天") >= 0)
+    }
+
+    // 三条视觉修复此前零覆盖，回归了不会有任何提示：
+    // 徽章贴边、切换器白框、主按钮与倒计时页不同款。
+    function test_card_reserves_padding_so_status_badge_leaves_the_border() {
+        const card = createTemporaryObject(cardComponent, testCase, { goal: activeGoal() })
+        verify(!!card, "Component exists")
+        // 曾经是 0：AbstractButton 默认零内边距，右侧「进行中」几乎压在描边上。
+        verify(card.leftPadding > 0)
+        verify(card.rightPadding > 0)
+    }
+
+    function test_view_mode_selection_uses_warm_tint_not_white_block() {
+        const view = createTemporaryObject(goalsComponent, testCase)
+        verify(!!view, "Component exists")
+
+        const listFill = findChild(view, "goalViewModeFill-list")
+        verify(!!listFill, "Object exists")
+        // 曾用 glassThumb（浅色下接近纯白），压在壁纸上是一块突兀的白方框。
+        compare(String(listFill.color), String(Theme.accentFill))
+        verify(String(listFill.color) !== String(Theme.glassThumb))
+    }
+
+    function test_primary_button_matches_countdown_page_metrics() {
+        const view = createTemporaryObject(goalsComponent, testCase)
+        verify(!!view, "Component exists")
+
+        const newButton = findChild(view, "newGoalButton")
+        verify(!!newButton, "Object exists")
+        // 与倒计时页「添加目标」同款：108×44、无描边。
+        compare(newButton.implicitWidth, 108)
+        compare(newButton.implicitHeight, 44)
+        compare(newButton.background.border.width, 0)
     }
 
     function test_unknown_forecast_has_no_remaining_days_copy() {

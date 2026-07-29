@@ -42,6 +42,7 @@
         <file alias="qml/components/DurationStepper.qml">../qml/components/DurationStepper.qml</file>
         <file alias="qml/components/GlyphIcon.qml">../qml/components/GlyphIcon.qml</file>
         <file alias="qml/components/GoalCard.qml">../qml/components/GoalCard.qml</file>
+        <file alias="qml/components/GoalProgressRing.qml">../qml/components/GoalProgressRing.qml</file>
         <file alias="qml/components/GoalTile.qml">../qml/components/GoalTile.qml</file>
         <file alias="qml/components/GoalFormDialog.qml">../qml/components/GoalFormDialog.qml</file>
         <file alias="qml/components/Grid100.qml">../qml/components/Grid100.qml</file>

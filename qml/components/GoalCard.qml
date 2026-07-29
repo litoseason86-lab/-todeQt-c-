@@ -34,13 +34,33 @@ AbstractButton {
     implicitHeight: 76
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
+    // AbstractButton 默认不留内边距，contentItem 会一直铺到卡边框，
+    // 右侧状态徽章因此几乎贴着描边。左右各留一档，让内容在玻璃里有呼吸位。
+    leftPadding: Theme.space16
+    rightPadding: Theme.space16
     Accessible.name: String(root.goal.title || qsTr("未命名目标")) + "，" + root.secondaryText
 
-    background: Rectangle {
-        color: root.down || root.hovered ? Theme.glassHover : Theme.glassCard
-        border.color: root.activeFocus || root.hovered ? Theme.accent : Theme.glassBorder
+    // 玻璃分层复用 GlassPanel：着色 + 顶部受光棱边 + 底部暗棱。
+    // 之前是裸 Rectangle，只有一层均匀半透明，壁纸亮部会把卡边界吃掉——
+    // 让卡片在任意壁纸上都站得住的是棱边，不是落影。
+    //
+    // 刻意关掉落影：落影走 layer.enabled + MultiEffect，列表每一行都会多占一个 FBO
+    // 和一遍阴影 pass；而且一旦该效果初始化失败，整块面板会连同底色一起消失
+    // （内容卡是本页主体，不能承担这个风险）。厚度感由上下棱边 + 描边表达。
+    background: GlassPanel {
+        objectName: "goalCardBackground"
+
+        color: {
+            if (!Theme.glassBlurAllowed)
+                return root.down || root.hovered ? Theme.glassSolidHover : Theme.glassSolidCard
+            return root.down || root.hovered ? Theme.glassHover : Theme.glassCard
+        }
+        border.color: root.activeFocus ? Theme.focusRing
+                                       : (root.hovered ? Theme.accent : Theme.glassBorderContrast)
         border.width: root.activeFocus ? 2 : 1
-        radius: Theme.radiusLg
+        bottomRimEnabled: true
+        panelShadowEnabled: false
+        solidFallback: !Theme.glassBlurAllowed
 
         Behavior on color {
             ColorAnimation { duration: Theme.reduceMotion ? 0 : 120 }
@@ -50,55 +70,14 @@ AbstractButton {
     contentItem: RowLayout {
         spacing: Theme.space12
 
-        Item {
+        GoalProgressRing {
+            percent: root.percent
+            achieved: root.achieved
+            ringSize: 44
+            strokeWidth: 4
+            labelPixelSize: Theme.fontXs
             Layout.preferredWidth: 48
             Layout.preferredHeight: 48
-
-            Canvas {
-                id: ring
-
-                anchors.centerIn: parent
-                width: 44
-                height: 44
-                antialiasing: true
-
-                onPaint: {
-                    var ctx = getContext("2d")
-                    ctx.reset()
-                    ctx.lineWidth = 4
-                    ctx.lineCap = "round"
-                    ctx.strokeStyle = Theme.borderSubtle
-                    ctx.beginPath()
-                    ctx.arc(22, 22, 18, 0, Math.PI * 2)
-                    ctx.stroke()
-                    if (root.percent > 0) {
-                        ctx.strokeStyle = root.achieved ? Theme.accentInk : Theme.accent
-                        ctx.beginPath()
-                        ctx.arc(22, 22, 18, -Math.PI / 2,
-                                -Math.PI / 2 + Math.PI * 2 * root.percent / 100)
-                        ctx.stroke()
-                    }
-                }
-
-                Connections {
-                    target: Theme
-                    function onDarkModeChanged() { ring.requestPaint() }
-                }
-                Connections {
-                    target: root
-                    function onPercentChanged() { ring.requestPaint() }
-                    function onAchievedChanged() { ring.requestPaint() }
-                }
-            }
-
-            Text {
-                anchors.centerIn: parent
-                text: root.percent + "%"
-                color: Theme.ink
-                font.pixelSize: Theme.fontXs
-                font.family: Theme.fontFamilyData
-                font.weight: Font.Bold
-            }
         }
 
         ColumnLayout {
@@ -125,13 +104,17 @@ AbstractButton {
             }
         }
 
-        Rectangle {
+        // 状态徽章嵌在卡玻璃上：关掉落影避免阴影叠层发灰，
+        // 关掉棱边高光避免小色块上出现过密的亮线。
+        GlassPanel {
             Layout.preferredWidth: statusText.implicitWidth + Theme.space16
             Layout.preferredHeight: 28
             radius: height / 2
-            color: root.achieved ? "transparent" : Theme.accentFill
+            color: root.achieved ? Theme.glassAccent : Theme.accentFill
             border.color: root.achieved ? Theme.accentInk : "transparent"
             border.width: root.achieved ? 1 : 0
+            specularEnabled: false
+            panelShadowEnabled: false
 
             Text {
                 id: statusText

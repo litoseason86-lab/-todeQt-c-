@@ -23,13 +23,28 @@ AbstractButton {
     implicitHeight: 158
     hoverEnabled: true
     focusPolicy: Qt.StrongFocus
+    // 与列表卡同理：AbstractButton 默认零内边距，contentItem 会铺到描边，
+    // 长标题会一路 elide 到边框上。瓦片比列表卡窄，取小一档避免挤压中间的进度环。
+    leftPadding: Theme.space12
+    rightPadding: Theme.space12
     Accessible.name: String(root.goal.title || qsTr("未命名目标")) + "，" + root.secondaryText
 
-    background: Rectangle {
-        color: root.down || root.hovered ? Theme.glassHover : Theme.glassCard
-        border.color: root.activeFocus || root.hovered ? Theme.accent : Theme.glassBorder
+    // 与列表卡走同一套玻璃分层，避免两种版式在同一页里厚度感不一致。
+    background: GlassPanel {
+        objectName: "goalTileBackground"
+
+        color: {
+            if (!Theme.glassBlurAllowed)
+                return root.down || root.hovered ? Theme.glassSolidHover : Theme.glassSolidCard
+            return root.down || root.hovered ? Theme.glassHover : Theme.glassCard
+        }
+        border.color: root.activeFocus ? Theme.focusRing
+                                       : (root.hovered ? Theme.accent : Theme.glassBorderContrast)
         border.width: root.activeFocus ? 2 : 1
-        radius: Theme.radiusLg
+        bottomRimEnabled: true
+        // 与列表卡同理：delegate 不用落影，避免逐格 FBO 与效果失败时整块消失。
+        panelShadowEnabled: false
+        solidFallback: !Theme.glassBlurAllowed
 
         Behavior on color {
             ColorAnimation { duration: Theme.reduceMotion ? 0 : 120 }
@@ -39,56 +54,15 @@ AbstractButton {
     contentItem: ColumnLayout {
         spacing: Theme.space8
 
-        Item {
+        GoalProgressRing {
+            percent: root.percent
+            achieved: root.achieved
+            ringSize: 72
+            strokeWidth: 6
+            labelPixelSize: Theme.fontLg
             Layout.alignment: Qt.AlignHCenter
             Layout.preferredWidth: 76
             Layout.preferredHeight: 76
-
-            Canvas {
-                id: ring
-
-                anchors.centerIn: parent
-                width: 72
-                height: 72
-                antialiasing: true
-
-                onPaint: {
-                    var ctx = getContext("2d")
-                    ctx.reset()
-                    ctx.lineWidth = 6
-                    ctx.lineCap = "round"
-                    ctx.strokeStyle = Theme.borderSubtle
-                    ctx.beginPath()
-                    ctx.arc(36, 36, 30, 0, Math.PI * 2)
-                    ctx.stroke()
-                    if (root.percent > 0) {
-                        ctx.strokeStyle = root.achieved ? Theme.accentInk : Theme.accent
-                        ctx.beginPath()
-                        ctx.arc(36, 36, 30, -Math.PI / 2,
-                                -Math.PI / 2 + Math.PI * 2 * root.percent / 100)
-                        ctx.stroke()
-                    }
-                }
-
-                Connections {
-                    target: Theme
-                    function onDarkModeChanged() { ring.requestPaint() }
-                }
-                Connections {
-                    target: root
-                    function onPercentChanged() { ring.requestPaint() }
-                    function onAchievedChanged() { ring.requestPaint() }
-                }
-            }
-
-            Text {
-                anchors.centerIn: parent
-                text: root.percent + "%"
-                color: Theme.inkStrong
-                font.pixelSize: Theme.fontLg
-                font.family: Theme.fontFamilyData
-                font.weight: Font.Bold
-            }
         }
 
         Text {

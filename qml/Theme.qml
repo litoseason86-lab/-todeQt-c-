@@ -143,6 +143,13 @@ QtObject {
     readonly property color glassBorder: darkMode
         ? Qt.rgba(1, 1, 1, 0.18)
         : Qt.rgba(1, 1, 1, 0.65)
+    // 内容卡专用分隔描边。glassBorder 浅色版是白的，压在亮壁纸（雪岭/樱粉这类近白图）
+    // 上会和近白的 glassCard 一起消失，卡片边界整个看不见。
+    // Apple 的浅色材质同样不用白边：顶部留一道白高光表现受光，四周则是一道很淡的深色
+    // 细线来切断背景。这里照此处理——夜间版沿用提亮的白线（暗底上深线才是隐形的）。
+    readonly property color glassBorderContrast: darkMode
+        ? Qt.rgba(1, 1, 1, 0.20)
+        : Qt.rgba(90 / 255, 72 / 255, 48 / 255, 0.22)
     // 凹槽底（分段控件轨道这类"嵌进面板里"的容器）：比周围玻璃暗一档。
     // 浅色下用暖褐色而不是中性灰，避免在焦糖配色里透出脏灰。
     // 单独立一个令牌是因为 glassCard/glassHover 都是"浮起"语义，

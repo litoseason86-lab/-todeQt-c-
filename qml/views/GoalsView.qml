@@ -267,11 +267,12 @@ Item {
                 }
             }
 
+            // 尺寸与倒计时页的「添加目标」保持一致（108×44），两页的主操作按钮同款。
             GoalActionButton {
                 objectName: "newGoalButton"
                 text: qsTr("新建")
                 accentAction: true
-                implicitWidth: 88
+                implicitWidth: 108
                 implicitHeight: 44
                 onClicked: root.openCreateForm()
             }
@@ -293,13 +294,15 @@ Item {
 
             Item { Layout.fillWidth: true }
 
-            Rectangle {
+            // 与相邻的分段控件同材质：都是浮在内容之上的控制条，
+            // 走 GlassPanel 的凹槽轨道 + 棱边，避免同一行里两种玻璃质感。
+            GlassPanel {
+                color: Theme.glassBlurAllowed ? Theme.glassTrack : Theme.glassSolidTrack
+                radius: Theme.radiusMd
+                specularEnabled: false
+                panelShadowEnabled: false
                 Layout.preferredWidth: 82
                 Layout.preferredHeight: 40
-                color: Theme.glassTrack
-                border.color: Theme.glassBorder
-                border.width: 1
-                radius: Theme.radiusMd
 
                 Row {
                     anchors.fill: parent
@@ -324,17 +327,32 @@ Item {
                             Accessible.checked: modeButton.selected
                             onClicked: root.setViewMode(modeButton.modelData)
 
-                            background: Rectangle {
-                                color: modeButton.selected ? Theme.glassThumb : "transparent"
-                                border.color: modeButton.activeFocus ? Theme.focusRing : "transparent"
-                                border.width: modeButton.activeFocus ? 2 : 0
-                                radius: Theme.radiusSm
+                            // 选中态用暖色淡罩，不用 glassThumb——后者在浅色下接近纯白，
+                            // 压在壁纸上就是一块突兀的白方框。淡罩与侧栏选中项是同一套语汇。
+                            background: Item {
+                                Rectangle {
+                                    objectName: "goalViewModeFill-" + modeButton.modelData
+                                    anchors.fill: parent
+                                    visible: modeButton.selected
+                                    color: Theme.accentFill
+                                    radius: Theme.radiusSm
+                                }
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    visible: modeButton.activeFocus
+                                    color: Qt.rgba(0, 0, 0, 0)
+                                    border.color: Theme.focusRing
+                                    border.width: 2
+                                    radius: Theme.radiusSm
+                                }
                             }
 
                             contentItem: GlyphIcon {
                                 name: modeButton.modelData
                                 size: 18
-                                color: modeButton.selected ? Theme.inkStrong : Theme.inkSoft
+                                // 选中格底是 accentFill 淡罩，字色必须用配套的 accentFillInk 才达对比。
+                                color: modeButton.selected ? Theme.accentFillInk : Theme.inkSoft
                             }
                         }
                     }
@@ -343,11 +361,14 @@ Item {
         }
 
         Text {
-            Layout.fillWidth: true
+            // 没有错误时整条让出布局位。ColumnLayout 会跳过不可见项，
+            // 否则这里始终占着一行行高 + 一档 spacing，把列表整体往下推。
+            visible: root.errorText.length > 0
             text: root.errorText
             color: Theme.danger
             font.pixelSize: Theme.fontSm
             wrapMode: Text.WordWrap
+            Layout.fillWidth: true
         }
 
         Item {
@@ -487,17 +508,19 @@ Item {
                 }
             }
 
-            Rectangle {
+            GlassPanel {
                 Layout.fillWidth: true
                 Layout.maximumWidth: 560
                 Layout.alignment: Qt.AlignHCenter
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
                 implicitHeight: progressContent.implicitHeight + Theme.space32
-                color: Theme.glassCard
-                border.color: Theme.glassBorder
+                border.color: Theme.glassBorderContrast
                 border.width: 1
                 radius: Theme.radiusLg
+                bottomRimEnabled: true
+                panelShadowEnabled: false
+                solidFallback: !Theme.glassBlurAllowed
 
                 ColumnLayout {
                     id: progressContent
@@ -542,17 +565,19 @@ Item {
                 }
             }
 
-            Rectangle {
+            GlassPanel {
                 Layout.fillWidth: true
                 Layout.maximumWidth: 560
                 Layout.alignment: Qt.AlignHCenter
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
                 implicitHeight: gridContent.implicitHeight + Theme.space32
-                color: Theme.glassCard
-                border.color: Theme.glassBorder
+                border.color: Theme.glassBorderContrast
                 border.width: 1
                 radius: Theme.radiusLg
+                bottomRimEnabled: true
+                panelShadowEnabled: false
+                solidFallback: !Theme.glassBlurAllowed
 
                 ColumnLayout {
                     id: gridContent
@@ -602,17 +627,19 @@ Item {
                 }
             }
 
-            Rectangle {
+            GlassPanel {
                 Layout.fillWidth: true
                 Layout.maximumWidth: 560
                 Layout.alignment: Qt.AlignHCenter
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
                 implicitHeight: heatmapContent.implicitHeight + Theme.space32
-                color: Theme.glassCard
-                border.color: Theme.glassBorder
+                border.color: Theme.glassBorderContrast
                 border.width: 1
                 radius: Theme.radiusLg
+                bottomRimEnabled: true
+                panelShadowEnabled: false
+                solidFallback: !Theme.glassBlurAllowed
 
                 ColumnLayout {
                     id: heatmapContent
@@ -755,10 +782,11 @@ Item {
                       ? Theme.accentFillStrong : Theme.accentFill)
                    : (actionButton.down || actionButton.hovered
                       ? Theme.glassHover : Theme.glassCard)
-            border.color: actionButton.dangerAction ? Theme.dangerBorder
-                          : (actionButton.accentAction ? Theme.accent : Theme.border)
-            border.width: 1
-            radius: Theme.radiusMd
+            // 主操作（accentAction）与倒计时页的「添加目标」同款：纯淡罩、不描边、大圆角。
+            // 次级和危险操作保留描边——它们叠在玻璃卡上，没有描边会糊进背景。
+            border.color: actionButton.dangerAction ? Theme.dangerBorder : Theme.border
+            border.width: actionButton.accentAction ? 0 : 1
+            radius: actionButton.accentAction ? Theme.radiusLg : Theme.radiusMd
         }
         contentItem: Text {
             text: actionButton.text
