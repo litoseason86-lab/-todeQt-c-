@@ -6,12 +6,13 @@
 > **Drift check（先跑这个）**：
 >
 > ```bash
+> git diff --stat 52726d9..HEAD -- qml/Theme.qml qml/components qml/views qml/MainWindow.qml tests/qml/tst_theme_tokens.qml
 > grep -n "glassBorderContrast" qml/Theme.qml                 # 必须命中（令牌已存在）
 > grep -n "border.color: Theme.glassBorder$" qml/components/GlassPanel.qml   # 必须命中（默认值待改）
 > grep -rc "Theme.glassBorder\b" qml/ | grep -v ":0" | wc -l  # 记下当前使用点分布
 > ```
 >
-> 第一条不命中说明 `glassBorderContrast` 令牌尚未落地 → STOP。
+> `git diff` 有输出时先对照下文使用点；grep 第一条不命中说明令牌尚未落地 → STOP。
 
 ## Status
 
@@ -20,7 +21,7 @@
 - **Risk**: MED（改的是全应用每一张玻璃卡的描边，视觉影响面大但可逆）
 - **Depends on**: none（`glassBorderContrast` 令牌已在目标页改造中落地）
 - **Category**: bug / design-system
-- **Planned at**: commit `2bee279` + 未提交的目标页改动，2026-07-27
+- **Planned at**: commit `52726d9`, 2026-07-29（已按当前干净工作区复核）
 
 ## Why this matters
 

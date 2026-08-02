@@ -4,6 +4,9 @@
 按下表顺序执行，除非依赖关系另有要求。每位执行者：**先完整读完计划再动手**，
 遵守其中的 STOP conditions，做完更新自己那一行的状态。
 
+2026-07-29 在 commit `52726d9` 上追加第四轮计划 016–024，并把 015 的漂移基线
+校正到当前干净工作区。早期批次的基线说明保留为历史执行记录，不适用于 015 之后的计划。
+
 > **本仓库的特殊情况**：`43ba2ee` 时工作区有一批未提交的新文件（长期目标功能：
 > `src/models/LongGoal.*`、`src/services/GoalService.*`、`tests/GoalServiceTests.cpp`，
 > 以及 `CMakeLists.txt`、`src/main.cpp`、`src/services/FocusSessionRules.h`、
@@ -30,12 +33,139 @@
 | 013 | 奖励回路三缺陷（粒子被遮挡 / 失败态伪装成空态 / 复选框绑定断裂） | P1 | S-M | — | DONE（前两项修复；复选框缺陷未复现，已收敛单一状态源） |
 | 014 | 音效与 QML 资源清单守门测试 | P2 | S | — | DONE（已验证） |
 | 015 | 玻璃卡描边改用对比细线，修亮壁纸下卡片边界消失 | P2 | M | — | TODO |
+| 016 | 自然到点番茄的持久化时长封顶在目标时长 | P1 | S | — | TODO |
+| 017 | 删除正在专注的任务时立即解除计时器关联 | P1 | M | 016 | TODO |
+| 018 | 恢复数据库时同步恢复番茄循环计数 | P1 | M | 017 | TODO |
+| 019 | 为 v8 完整番茄口径变更增加一次性说明 | P1 | M | — | TODO |
+| 020 | 科目变更时刷新目标并阻止表单静默改绑 | P1 | S | — | TODO |
+| 021 | 统一倒计时失败语义并让页面显示可恢复错误 | P1 | S | — | TODO |
+| 022 | 每次投递前刷新 macOS 通知授权状态 | P2 | M | — | TODO |
+| 023 | 合并重复刷新信号并按事件循环批处理页面查询 | P2 | M | — | TODO |
+| 024 | 为每个 CTest 进程设置明确超时 | P2 | S | 022 | TODO |
+| 025 | 建立 QML 渲染性能测量工装（后续性能计划的前置） | P1* | M | — | DONE（已复核，待合并：分支 `advisor/025-perf-harness`） |
+| 026 | 阴影 MultiEffect 设定 blurMax，停止为不存在的模糊预留纹理 | P2 | S | 025 | DONE（已复核，待合并：分支 `advisor/026-shadow-blurmax`，基于 025） |
+| 027 | 任务列表启用 delegate 复用，两处 Repeater 改虚拟化 | P2 | M | 025 | DONE（已复核，待合并：分支 `advisor/027-list-virtualization`，链在 026 之上） |
+| 028 | 七个页面改为按需加载 | P3 | M | 025, 027 | TODO |
+| 029 | 消除 241 处 unqualified 访问并接入 qmllint | P3 | M | — | TODO |
+| 030 | 专注计时环从 Canvas 换成 Shape | P3 | M | 025 | TODO |
+| 031 | 菜单栏宿主析构时断开对 TrayController 的裸指针 | P3 | S | — | TODO |
+
+\* 025 的 P1 是**本批次内**的相对优先级，不是全局 P1：它不修任何缺陷，
+只是让 026/027/028/030 能拿数字验收，所以要先做。
 
 状态取值：TODO | IN PROGRESS | DONE | BLOCKED（附一行原因）| REJECTED（附一行理由）
 
-> **给 010-014 的执行者：漂移检查不能用 `git diff`。** 这五份计划针对的代码
-> **全部还在工作区、没有提交**（HEAD 仍是 `43ba2ee`，工作区有 77 个文件、2038 行改动）。
-> 每份计划的开头都给了替代的 grep 判据，用那个。
+> **历史执行记录（010–014，现均已 DONE）**：这五份计划编写时，目标代码尚在
+> commit `43ba2ee` 的未提交工作区里，所以当时不能用 `git diff` 做漂移检查，计划内改用 grep。
+> 这段只解释旧计划为什么采用特殊判据，不描述 2026-07-29 的当前工作区。
+
+### 第四轮执行批次（016–024，2026-07-29）
+
+本批次把审计发现 F01–F10 全部转成自包含计划；F08 与 F09 都属于“同一业务动作触发重复刷新”，
+合并进 023，避免两个执行者先后改同一组 signal/页面。015 是前一批遗留 TODO，不属于 F01–F10，
+仍建议先执行；随后按编号执行 016–024，最少冲突。
+
+| 审计项 | 实质问题 | 计划 |
+|---|---|---|
+| F01 | 休眠越过目标后，自然完成番茄保存全部越界时长 | 016 |
+| F02 | 删除活动任务只解绑数据库，计时器内存仍持有悬空 task id | 017 |
+| F03 | 数据库恢复没有替换/回滚 `completedPomodoros` 内存态 | 018 |
+| F04 | v8 历史兼容口径与升级后规则不同，用户没有一次性说明 | 019 |
+| F05 | 科目变化不失效目标页，编辑表单还会把缺失科目静默改成第一项 | 020 |
+| F06 | 倒计时失败被吞掉，初次查询故障伪装成合法空态 | 021 |
+| F07 | macOS 通知拒绝状态永久短路，系统重新授权后仍需重启 | 022 |
+| F08 | 换库经 database/category 两条链重复发 `routinesChanged` | 023 |
+| F09 | tasks/focus/categories/routines 同步扇出导致页面重复整页查询 | 023 |
+| F10 | CTest 进程无 timeout，死锁会让后台验证无限挂起 | 024 |
+
+依赖与顺序：
+
+- 016 → 017 → 018 是硬顺序：三份连续修改 `FocusTimer`，且后者测试以之前的新契约为基线。
+- 019、020、021、022、023 彼此无功能硬依赖；按编号串行能避开 `qml.qrc` 和视图文件冲突。
+- 024 硬依赖 022：024 的全覆盖清单必须包含 022 新增的 `MacNotificationBackendTests`。
+- 这批计划只授权执行者修改各自 Scope；旧债、方向性建议和 015 之外的 TODO 没有被暗中并入。
+
+## 第五轮审计（2026-07-29，针对四轮都没覆盖的两块）
+
+### 范围与理由（第五轮）
+
+第四轮审的就是当前 HEAD `52726d9` 的代码，此后**源码一行未变**（工作区只多了 plans/ 文件）。
+再跑全量扫描必然大面积重复，因此本轮只审跨四轮**从未覆盖**的两块：
+
+1. **QML 渲染性能** —— 四轮都记着「从未实测」；
+2. **macOS 平台层** —— 连续三轮记为「未做正确性深挖」。
+
+**执行现状（本轮最该记住的事实）**：015–024 共 10 份计划全部 TODO、零执行。
+本轮又加 7 份，积压变成 17 份。维护者已知悉并选择全部立项。
+
+### 已确认并立项（→ plans/025-031）
+
+| 发现 | 证据 | 计划 |
+|---|---|---|
+| `blurMax` 全线用缺省 32，而阴影实际半径只有 4.5–11px；`autoPaddingEnabled: true` 按 32px 预留纹理 | `blurMax` 全仓仅 2 处且都不在阴影上；14 个文件开 `autoPaddingEnabled` | 026 |
+| 两个任务列表用 `Repeater` 不虚拟化 | `DashboardView.qml:610`、`WeekPlanView.qml:547`（后者外层 `ListView` 还带 `cacheBuffer: 180`） | 027 |
+| `reuseItems` 只在目标页有 | 全仓仅 `GoalsView.qml:387,410`；今日任务/倒计时列表每次滚动重建最重的 delegate | 027 |
+| 侧栏磨砂缺 `autoPaddingEnabled: false`，`blurMax: 48` 超默认 | `MainWindow.qml:443-449`；Qt 文档明确要求整背景模糊必须关掉自动 padding | 026 |
+| 七个页面全生命周期常驻 | `MainWindow.qml:558` 直接实例化，全仓仅 1 个 `Loader` | 028 |
+| 241 处 unqualified 访问阻断 AOT 绑定编译 | 实测 qmllint 数字；43/67 文件缺 `pragma ComponentBehavior: Bound`；qmllint 未接构建且 exit 0 | 029 |
+| `FocusRing` 仍是 `Canvas`，且宽度带 150ms 动画 | `FocusRing.qml:23-27` 五个 `requestPaint()` 触发源含 width/height；`FocusView.qml:660` 有尺寸动画 | 030 |
+| 没有性能测量工装 | 无 harness；`ENABLE_QML_DEBUG` 默认 OFF；这是上面四条只能标 INFERRED 的根因 | 025 |
+| `PTStatusBarController` 用 `assign` 持裸 `TrayController*` | `MacStatusBarController.mm:10`，五个菜单动作的 `if (self.controller)` 挡不住悬垂指针 | 031 |
+
+### 本轮**推翻**的既有推断（不要再携带）
+
+- **「侧栏 `live: true` 每帧重采样壁纸」—— 推翻。** `BackgroundWallpaper.qml` 是纯静态
+  （零动画零定时器），`ShaderEffectSource.live` 的语义是「源变才更新」，静态源在稳态下不重采样。
+  真正的成本是 `autoPaddingEnabled` 的 padding，不是 `live`（已按此写进 026）。
+- **「有动画在后台页空转」—— 实测推翻。** 组件单独实例化后 5s/15s 两个采样点帧数持平
+  （`StatCard` 40/40、`GoalCard` 10/10），说明是一次性入场动画。
+  全树 2 处无限动画都正确门控（`FocusView.qml:632-634` 走 `pageActive`、`Sidebar.qml:335-338`）。
+- **「delegate 每行一个 FBO」—— 修正为两个。** `TaskItem` 根节点一个、删除按钮背景一个
+  （`TaskItem.qml:28` 与 `:656`）；两个嵌套 `GlassPanel` 已正确设 `panelShadowEnabled: false`。
+
+### macOS 平台层：四轮悬案，结论是干净的
+
+本轮把 671 行（4 个平台文件 + TrayController/NotificationService）读完，**未发现实质缺陷**：
+
+- **ARC 已启用**：`CMakeLists.txt:117` 的 `COMPILE_OPTIONS "-fobjc-arc"`，带中文说明。
+  因此 `MacNotificationBackend.mm:74-75` 的 `[... copy]` 不泄漏。
+- **通知完成回调的线程处理是对的**：`NotificationService.cpp:70-73` 用 `QPointer` +
+  `QMetaObject::invokeMethod` 切回服务对象线程，并注释说明「macOS 完成回调不保证位于 GUI 线程」。
+- `safeNotificationCenter()`（`MacNotificationBackend.mm:20-30`）对无 bundle 标识的情况
+  先判空再 `@try`，避免未签名运行时抛 `NSInternalInconsistencyException` 崩溃。
+- `CFBridgingRetain`/`CFBridgingRelease` 配对正确。
+
+唯一一条是 031 的裸指针，且**现状不会崩**——`main.cpp:99-102` 的栈声明顺序已经保证
+`statusBar` 先于 `trayController` 析构。立项理由是「正确性依赖隐式声明顺序、无任何代码说明」，
+不是「马上会出事」。**这一层可以从「未审风险」里划掉了。**
+
+### 顺带验证的待执行计划前提（都属实，可放心执行）
+
+- **016**：`syncElapsedTime()`（`FocusTimer.cpp:24`→`:808`）确实把含休眠的经过时间原样写进
+  `m_elapsedSeconds`，`:316` 的 `const int duration = m_elapsedSeconds` 原样保存。
+  项目用的是含休眠的 `mach_continuous_time`，所以休眠穿过目标点是真实路径，不是理论风险。
+- **017**：`FocusTimer.h:125` 的 `m_currentTaskId` 确实是内存态。
+- **018**：`FocusTimer` 确实**没有**连接 `databaseChanged`，恢复数据库后内存里的
+  `m_completedPomodoros` 不会被替换。
+- **022**：`MacNotificationBackend.mm:63` 在 `deliver()` 开头就对 `state == 2` 返回，
+  够不到 `:80` 的 `getNotificationSettingsWithCompletionHandler` 状态刷新——拒绝后确实永久短路。
+
+### 本轮未审计的范围（第五轮）
+
+- **真实 GPU 帧时、FBO 分配量、Retina 纹理内存**——需要可见窗口，
+  按 `AGENTS.md` 的「后台验证不得弹窗」红线没有做。plans/025 就是为解决这个而立的，
+  但它也只做到离屏帧计数，GPU 采样留给人手动执行。
+- 旧积压（统计页全表扫描、v5 迁移、`FocusView` 1251 行、备份快照清理等）**未重审**，仍然有效。
+- `docs/superpowers/plans/` 的 31 份历史计划、`docs/testing/` 的三份过期报告，仍未清理。
+- 第四轮（016–024）的findings本身未做独立复核，只抽验了 016/017/018/022 的事实前提。
+
+### 一条工装侧的记录
+
+子代理在测量过程中于 `/tmp` 留下两个临时文件（已清理）。更重要的是它验证出了
+**离屏测量的三条硬约束**，已写进 plans/025：必须用 `QSG_RHI_BACKEND=software`
+（不是 `QT_QUICK_BACKEND=software`，后者 `grabToImage()` 返回 false）；
+`GlassPanel` 的落影在软件后端渲染为空、会被误判成「面板消失」；
+harness 的 import 需要 URL scheme。
 
 ### 奖励机制批次（006-009）的来源与决策记录
 
@@ -114,7 +244,7 @@
 
 ## 第三轮审计（2026-07-26，针对未提交的 2038 行）
 
-### 范围与理由
+### 范围与理由（第三轮）
 
 上一轮在 `43ba2ee` 覆盖了全仓，那些发现都还记在下面的「本轮已核实但未立项」表里，
 **没有重审**。这一轮的靶心是此后新增、且从未被审过的东西：
@@ -235,7 +365,7 @@
 第三种“不确定”状态；发布说明和应用内一次性提示需明确告知“升级后只有自然到点才计完整番茄”。
 本决策不改动 010-014 已锁定的迁移口径；提示的交互与持久化属于独立发布任务。
 
-### 本轮未审计的范围
+### 本轮未审计的范围（第三轮）
 
 - `src/platform/macos/*.mm` —— 连续第二轮未做正确性深挖。
 - QML 渲染性能**仍未实测**（没跑 qmlprofiler）。上表里 delegate 层 FBO 那条的
