@@ -23,6 +23,8 @@ public:
     Q_INVOKABLE bool updateGoal(int id, const QString& name, const QDate& targetDate);
     Q_INVOKABLE bool deleteGoal(int id);
     Q_INVOKABLE bool reorder(int fromIndex, int toIndex);
+    // 读取失败时保留当前模型；调用方只能在 true 和 goalsReloaded 后清除错误提示。
+    Q_INVOKABLE bool reload();
     Q_INVOKABLE int calculateDaysRemaining(const QDate& targetDate) const;
 
     // 列表角色与主目标横幅同步基准日的唯一入口；公开以便测试注入固定日期。
@@ -33,7 +35,9 @@ public:
 
 signals:
     void primaryGoalChanged();
-    void errorOccurred(const QString& message);
+    void operationFailed(const QString& message);
+    // 仅在完整查询成功并同步 model/主目标后发出，供页面解除可恢复错误状态。
+    void goalsReloaded();
 
 private:
     explicit CountdownService(QObject* parent = nullptr);

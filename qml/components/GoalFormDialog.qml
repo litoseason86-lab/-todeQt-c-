@@ -16,6 +16,10 @@ Popup {
     property int editingGoalId: -1
     property string errorText: ""
     property var categories: []
+    // 编辑期间科目可能被另一个窗口删除。单独保存 id，不能只从 ComboBox 的旧索引推断，
+    // 否则模型刷新后会把用户未确认的“第一项”误写回目标。
+    property int selectedCategoryId: -1
+    property bool refreshingCategorySelection: false
     readonly property bool longTerm: longTermCheck.checked
     readonly property bool editing: root.editingGoalId > 0
     readonly property int maxTitleLength: root.goalServiceRef
@@ -63,18 +67,22 @@ Popup {
         return value
     }
 
-    function refreshCategories(selectedCategoryId) {
+    function refreshCategories(desiredCategoryId, selectFirstWhenMissing) {
+        root.refreshingCategorySelection = true
         root.categories = root.categoryManagerRef && root.categoryManagerRef.getAllCategories
                 ? root.categoryManagerRef.getAllCategories() : []
         categoryCombo.currentIndex = -1
         for (var i = 0; i < root.categories.length; ++i) {
-            if (Number(root.categories[i].id) === Number(selectedCategoryId)) {
+            if (Number(root.categories[i].id) === Number(desiredCategoryId)) {
                 categoryCombo.currentIndex = i
                 break
             }
         }
-        if (categoryCombo.currentIndex < 0 && root.categories.length > 0)
+        if (categoryCombo.currentIndex < 0 && selectFirstWhenMissing && root.categories.length > 0)
             categoryCombo.currentIndex = 0
+        root.selectedCategoryId = categoryCombo.currentIndex >= 0
+                ? Number(root.categories[categoryCombo.currentIndex].id) : -1
+        root.refreshingCategorySelection = false
     }
 
     function openForAdd() {
@@ -85,7 +93,8 @@ Popup {
         startDateField.text = root.todayIso()
         deadlineField.text = ""
         longTermCheck.checked = true
-        root.refreshCategories(-1)
+        // 新建目标没有历史选择，默认首项只是便利，不会改写既有数据。
+        root.refreshCategories(-1, true)
         root.open()
     }
 
@@ -97,7 +106,8 @@ Popup {
         startDateField.text = root.dateToIso(goal.startDate) || root.todayIso()
         deadlineField.text = root.dateToIso(goal.deadline)
         longTermCheck.checked = deadlineField.text.length === 0
-        root.refreshCategories(goal.categoryId)
+        // 编辑既有目标时，缺失的原科目必须保持未选择状态，要求用户明确确认新归属。
+        root.refreshCategories(goal.categoryId, false)
         root.open()
     }
 
@@ -164,10 +174,7 @@ Popup {
         ignoreUnknownSignals: true
 
         function onCategoriesChanged() {
-            var selectedId = categoryCombo.currentIndex >= 0
-                    && categoryCombo.currentIndex < root.categories.length
-                    ? root.categories[categoryCombo.currentIndex].id : -1
-            root.refreshCategories(selectedId)
+            root.refreshCategories(root.selectedCategoryId, !root.editing)
         }
         function onOperationFailed(message) {
             root.errorText = String(message || qsTr("科目加载失败"))
@@ -271,6 +278,28 @@ Popup {
                 displayText: currentIndex >= 0 && currentIndex < root.categories.length
                              ? String(root.categories[currentIndex].name || "")
                              : qsTr("选择科目")
+                Accessible.description: root.editing && currentIndex < 0
+                                        ? qsTr("原科目已删除，请重新选择") : ""
+                onCurrentIndexChanged: {
+                    if (!root.refreshingCategorySelection && currentIndex >= 0
+                            && currentIndex < root.categories.length) {
+                        root.selectedCategoryId = Number(root.categories[currentIndex].id)
+                    }
+                }
+            }
+
+            Text {
+                id: missingCategoryHint
+                objectName: "goalCategoryMissingHint"
+
+                visible: root.editing && categoryCombo.currentIndex < 0
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.space16
+                Layout.rightMargin: Theme.space16
+                text: qsTr("原科目已删除，请重新选择")
+                color: Theme.danger
+                font.pixelSize: Theme.fontSm
+                wrapMode: Text.WordWrap
             }
 
             RowLayout {

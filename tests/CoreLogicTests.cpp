@@ -439,7 +439,7 @@ void CoreLogicTests::formatDurationBoundaries()
 void CoreLogicTests::countdownGoalNameLengthBoundary()
 {
     CountdownService* service = CountdownService::instance();
-    QSignalSpy errorSpy(service, &CountdownService::errorOccurred);
+    QSignalSpy errorSpy(service, &CountdownService::operationFailed);
 
     // 恰好 50 字符（trim 后）允许。
     const QString name50(50, QChar(u'考'));

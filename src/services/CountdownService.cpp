@@ -40,15 +40,20 @@ CountdownService::CountdownService(QObject* parent)
     // 业务操作路径（ensureDatabaseReady）便不再需要防御性的全量刷新。
     connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged, this, [this]() {
         if (initializeDatabase()) {
-            loadGoals();
+            reload();
         } else {
             m_databaseReady = false;
+            emit operationFailed(QStringLiteral("初始化倒计时数据库失败"));
         }
     });
 
     const QSqlDatabase db = DatabaseManager::instance()->database();
-    if (db.isOpen() && initializeDatabase()) {
-        loadGoals();
+    if (db.isOpen()) {
+        if (initializeDatabase()) {
+            reload();
+        } else {
+            emit operationFailed(QStringLiteral("初始化倒计时数据库失败"));
+        }
     }
 }
 
@@ -88,7 +93,7 @@ bool CountdownService::addGoal(const QString& name, const QDate& targetDate)
     QSqlQuery orderQuery(db);
     orderQuery.prepare(QStringLiteral("SELECT COALESCE(MAX(display_order), -1) + 1 FROM countdown_goals"));
     if (!orderQuery.exec() || !orderQuery.next()) {
-        emit errorOccurred(QStringLiteral("获取目标排序失败: ") + orderQuery.lastError().text());
+        emit operationFailed(QStringLiteral("获取目标排序失败: ") + orderQuery.lastError().text());
         return false;
     }
     const int displayOrder = orderQuery.value(0).toInt();
@@ -105,7 +110,7 @@ bool CountdownService::addGoal(const QString& name, const QDate& targetDate)
     insertQuery.bindValue(QStringLiteral(":updatedAt"), now.toString(Qt::ISODate));
 
     if (!insertQuery.exec()) {
-        emit errorOccurred(QStringLiteral("添加目标失败: ") + insertQuery.lastError().text());
+        emit operationFailed(QStringLiteral("添加目标失败: ") + insertQuery.lastError().text());
         return false;
     }
 
@@ -128,7 +133,7 @@ bool CountdownService::updateGoal(int id, const QString& name, const QDate& targ
 
     const int index = findGoalIndexById(id);
     if (index < 0) {
-        emit errorOccurred(QStringLiteral("目标不存在"));
+        emit operationFailed(QStringLiteral("目标不存在"));
         return false;
     }
 
@@ -144,12 +149,12 @@ bool CountdownService::updateGoal(int id, const QString& name, const QDate& targ
     query.bindValue(QStringLiteral(":id"), id);
 
     if (!query.exec()) {
-        emit errorOccurred(QStringLiteral("更新目标失败: ") + query.lastError().text());
+        emit operationFailed(QStringLiteral("更新目标失败: ") + query.lastError().text());
         return false;
     }
     if (query.numRowsAffected() != 1) {
-        emit errorOccurred(QStringLiteral("更新目标失败: 目标数据已变化，请刷新后重试"));
         loadGoals();
+        emit operationFailed(QStringLiteral("更新目标失败: 目标数据已变化，请刷新后重试"));
         return false;
     }
 
@@ -170,7 +175,7 @@ bool CountdownService::deleteGoal(int id)
 
     const int index = findGoalIndexById(id);
     if (index < 0) {
-        emit errorOccurred(QStringLiteral("目标不存在"));
+        emit operationFailed(QStringLiteral("目标不存在"));
         return false;
     }
 
@@ -178,12 +183,12 @@ bool CountdownService::deleteGoal(int id)
     query.prepare(QStringLiteral("DELETE FROM countdown_goals WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), id);
     if (!query.exec()) {
-        emit errorOccurred(QStringLiteral("删除目标失败: ") + query.lastError().text());
+        emit operationFailed(QStringLiteral("删除目标失败: ") + query.lastError().text());
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
-        emit errorOccurred(QStringLiteral("目标不存在"));
+        emit operationFailed(QStringLiteral("目标不存在"));
         return false;
     }
 
@@ -213,8 +218,11 @@ bool CountdownService::reorder(int fromIndex, int toIndex)
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.transaction()) {
-        emit errorOccurred(QStringLiteral("开始排序事务失败: ") + db.lastError().text());
+        const QString failure = QStringLiteral("开始排序事务失败: ") + db.lastError().text();
+        // reload 成功会发 goalsReloaded，页面据此清除旧错误；因此必须先刷新再报告本次
+        // 写入失败，避免同一调用栈里的成功读操作把真实失败状态立刻覆盖掉。
         loadGoals();
+        emit operationFailed(failure);
         return false;
     }
 
@@ -230,14 +238,14 @@ bool CountdownService::reorder(int fromIndex, int toIndex)
         if (!query.exec()) {
             const QString errorText = query.lastError().text();
             db.rollback();
-            emit errorOccurred(QStringLiteral("排序失败: ") + errorText);
+            emit operationFailed(QStringLiteral("排序失败: ") + errorText);
             m_model->setGoals(originalGoals);
             updatePrimaryGoal();
             return false;
         }
         if (query.numRowsAffected() != 1) {
             db.rollback();
-            emit errorOccurred(QStringLiteral("排序失败: 目标数据已变化，请刷新后重试"));
+            emit operationFailed(QStringLiteral("排序失败: 目标数据已变化，请刷新后重试"));
             m_model->setGoals(originalGoals);
             updatePrimaryGoal();
             return false;
@@ -247,7 +255,7 @@ bool CountdownService::reorder(int fromIndex, int toIndex)
     if (!db.commit()) {
         const QString errorText = db.lastError().text();
         db.rollback();
-        emit errorOccurred(QStringLiteral("提交排序事务失败: ") + errorText);
+        emit operationFailed(QStringLiteral("提交排序事务失败: ") + errorText);
         m_model->setGoals(originalGoals);
         updatePrimaryGoal();
         return false;
@@ -272,7 +280,7 @@ bool CountdownService::ensureDatabaseReady()
 {
     const QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
-        emit errorOccurred(QStringLiteral("数据库未初始化"));
+        emit operationFailed(QStringLiteral("数据库未初始化"));
         return false;
     }
 
@@ -283,10 +291,18 @@ bool CountdownService::ensureDatabaseReady()
     }
 
     if (!initializeDatabase()) {
-        emit errorOccurred(QStringLiteral("初始化倒计时数据库失败"));
+        emit operationFailed(QStringLiteral("初始化倒计时数据库失败"));
         return false;
     }
 
+    return true;
+}
+
+bool CountdownService::reload()
+{
+    if (!ensureDatabaseReady()) {
+        return false;
+    }
     return loadGoals();
 }
 
@@ -331,7 +347,8 @@ bool CountdownService::loadGoals()
 
     if (!query.exec()) {
         qWarning() << "Failed to load countdown goals:" << query.lastError().text();
-        emit errorOccurred(QStringLiteral("读取倒计时目标失败: ") + query.lastError().text());
+        // 查询失败时不能清空旧模型；页面仍可展示上次成功数据和可恢复错误。
+        emit operationFailed(QStringLiteral("读取倒计时目标失败: ") + query.lastError().text());
         return false;
     }
 
@@ -349,6 +366,7 @@ bool CountdownService::loadGoals()
     m_model->setGoals(goals);
     // 换库重载后重推统一基准日；内部同时刷新主目标缓存和通知。
     syncReferenceDate();
+    emit goalsReloaded();
     return true;
 }
 
@@ -385,12 +403,12 @@ bool CountdownService::validateGoalInput(const QString& name,
 {
     const QString trimmedName = name.trimmed();
     if (trimmedName.isEmpty() || trimmedName.length() > kMaxGoalNameLength) {
-        emit errorOccurred(QStringLiteral("目标名称长度必须在1-50字符之间"));
+        emit operationFailed(QStringLiteral("目标名称长度必须在1-50字符之间"));
         return false;
     }
 
     if (!targetDate.isValid()) {
-        emit errorOccurred(QStringLiteral("目标日期无效"));
+        emit operationFailed(QStringLiteral("目标日期无效"));
         return false;
     }
 

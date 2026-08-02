@@ -2,6 +2,7 @@
 
 #include <QElapsedTimer>
 #include <QFile>
+#include <QSignalSpy>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -12,6 +13,7 @@
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusHistoryService.h"
 #include "../src/services/FocusTimer.h"
+#include "../src/services/RoutineManager.h"
 #include "../src/services/StatisticsService.h"
 #include "../src/services/TaskManager.h"
 
@@ -33,6 +35,7 @@ private slots:
     void veryLongUnicodeTitleRoundTrips();
     void rapidRepeatedAddAndQueryRemainsConsistent();
     void reopenAfterCloseKeepsData();
+    void databaseChangeInvalidatesRoutinesOnlyOnce();
     void largeDatasetQueriesStayFast();
 
 private:
@@ -245,6 +248,18 @@ void RobustnessTests::reopenAfterCloseKeepsData()
     QCOMPARE(tasks.size(), 1);
     QCOMPARE(tasks.first().toMap().value(QStringLiteral("title")).toString(),
              QStringLiteral("重启保留任务"));
+}
+
+void RobustnessTests::databaseChangeInvalidatesRoutinesOnlyOnce()
+{
+    RoutineManager* routines = RoutineManager::instance();
+    QSignalSpy changedSpy(routines, &RoutineManager::routinesChanged);
+
+    // 换库/同路径重开会先由 CategoryManager 归一成 categoriesChanged；例行服务只能
+    // 从这一条链路接收一次失效，不能再额外直连数据库信号。
+    DatabaseManager::instance()->databaseChanged();
+
+    QCOMPARE(changedSpy.count(), 1);
 }
 
 void RobustnessTests::largeDatasetQueriesStayFast()

@@ -12,6 +12,7 @@
 
 #include "../src/models/LongGoal.h"
 #include "../src/services/AppSettings.h"
+#include "../src/services/CategoryManager.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusSessionRules.h"
 #include "../src/services/GoalService.h"
@@ -71,6 +72,7 @@ private slots:
     void firstRefreshSeedsProgressCacheWithoutEmitting();
     void progressRollbackThenRegainEmitsProgressAgain();
     void databaseChangeClearsProgressCache();
+    void categoryChangeInvalidatesGoalsExactlyOnce();
     void crossingSeveralMilestonesAtOnceReportsOnlyHighest();
     void newGoalWithBackfilledHistoryDoesNotCelebrate();
     void raisingTargetClearsStaleMilestonesSoTheyCanFireAgain();
@@ -680,6 +682,30 @@ void GoalServiceTests::databaseChangeClearsProgressCache()
     DatabaseManager::instance()->databaseChanged();
     service->refreshMilestones();
     QCOMPARE(spy.count(), 0);
+}
+
+void GoalServiceTests::categoryChangeInvalidatesGoalsExactlyOnce()
+{
+    GoalService* service = GoalService::instance();
+    CategoryManager* categories = CategoryManager::instance();
+    const int categoryId = categories->addCategory(QStringLiteral("待删除科目"),
+                                                   QStringLiteral("#123456"));
+    QVERIFY(categoryId > 0);
+    const int goalId = addGoalReturningId(QStringLiteral("会跟随科目变化的目标"), categoryId, 8,
+                                          QDate::currentDate());
+    QVERIFY(goalId > 0);
+
+    QSignalSpy changedSpy(service, &GoalService::goalsChanged);
+    QVERIFY(categories->updateCategory(categoryId, QStringLiteral("重命名科目"),
+                                       QStringLiteral("#654321")));
+    QCOMPARE(changedSpy.count(), 1);
+    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("categoryName")).toString(),
+             QStringLiteral("重命名科目"));
+
+    changedSpy.clear();
+    QVERIFY(categories->deleteCategory(categoryId));
+    QCOMPARE(changedSpy.count(), 1);
+    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("categoryId")).toInt(), 0);
 }
 
 void GoalServiceTests::crossingSeveralMilestonesAtOnceReportsOnlyHighest()

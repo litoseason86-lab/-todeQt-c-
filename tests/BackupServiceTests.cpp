@@ -125,6 +125,7 @@ private slots:
     void cleanup();
 
     void createBackupProducesSingleFileNoTemp();
+    void backupRejectsRuntimeProtectedDestinations();
     void backupCapturesAllBusinessTables();
     void backupWorksUnderWalMode();
     void corruptedBackupIsRejected();
@@ -145,6 +146,7 @@ private slots:
     void olderSchemaBackupRestoresAndMigrates();
     void autoBackupRespectsIntervalAndRetention();
     void autoBackupDisabledDoesNothing();
+    void shutdownWaitsForAsyncWorkers();
 
 private:
     QString dbPath() const { return m_tempDir->filePath(QStringLiteral("pomodoro.db")); }
@@ -185,6 +187,28 @@ void BackupServiceTests::createBackupProducesSingleFileNoTemp()
     const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
     QCOMPARE(info.value(QStringLiteral("valid")).toBool(), true);
     QCOMPARE(info.value(QStringLiteral("schemaVersion")).toInt(), DatabaseManager::kCurrentSchemaVersion);
+}
+
+void BackupServiceTests::backupRejectsRuntimeProtectedDestinations()
+{
+    QVERIFY(insertTask(QStringLiteral("受保护目标任务")) > 0);
+
+    // settings.ini 尚不存在也必须被保护；路径中的不存在目录和 .. 只是在制造别名，
+    // 不能让调用方借此把快照写到应用运行时会使用的位置。
+    QVERIFY(!QFileInfo::exists(settingsPath()));
+    const QString aliasedSettingsPath = QDir(m_tempDir->path()).filePath(
+        QStringLiteral("not-created/../settings.ini"));
+    QVERIFY(!BackupService::instance()->createBackup(aliasedSettingsPath));
+    QVERIFY(BackupService::instance()->lastError().contains(QStringLiteral("设置文件")));
+    QVERIFY(!QFileInfo::exists(settingsPath()));
+
+    const QString aliasedDatabasePath = QDir(m_tempDir->path()).filePath(
+        QStringLiteral("not-created/../pomodoro.db"));
+    QVERIFY(!BackupService::instance()->createBackup(aliasedDatabasePath));
+    QVERIFY(BackupService::instance()->lastError().contains(QStringLiteral("数据库")));
+    QVERIFY(!BackupService::instance()->createBackup(dbPath() + QStringLiteral("-wal")));
+    QVERIFY(BackupService::instance()->lastError().contains(QStringLiteral("受保护")));
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
 }
 
 void BackupServiceTests::backupCapturesAllBusinessTables()
@@ -593,6 +617,27 @@ void BackupServiceTests::autoBackupDisabledDoesNothing()
     const QStringList autos = dir.entryList(
         QStringList{QStringLiteral("auto-*.tomatobackup")}, QDir::Files);
     QVERIFY(autos.isEmpty());
+}
+
+void BackupServiceTests::shutdownWaitsForAsyncWorkers()
+{
+    QVERIFY(insertTask(QStringLiteral("退出时的异步备份任务")) > 0);
+
+    BackupService* service = BackupService::instance();
+    service->requestBackup(backupFile());
+    QVERIFY(service->busy());
+
+    // 不处理事件循环就进入退出收束：只有 waitForFinished() 真正等待了后台任务，
+    // 这里才能看到完整文件；随后再次调用必须是无副作用的幂等操作。
+    service->prepareForShutdown();
+    QVERIFY(!service->busy());
+    QVERIFY(QFileInfo::exists(backupFile()));
+    service->prepareForShutdown();
+
+    const QString ignoredPath = m_tempDir->filePath(QStringLiteral("after-shutdown.tomatobackup"));
+    service->requestBackup(ignoredPath);
+    QVERIFY(!service->busy());
+    QVERIFY(!QFileInfo::exists(ignoredPath));
 }
 
 QTEST_MAIN(BackupServiceTests)

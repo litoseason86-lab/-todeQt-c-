@@ -8,6 +8,9 @@ Item {
     id: root
 
     property var countdownServiceRef: null
+    property string loadError: ""
+    readonly property bool showingErrorState: root.loadError.length > 0
+    readonly property bool showingEmptyState: !root.primaryGoal() && !root.showingErrorState
 
     function primaryGoal() {
         return root.countdownServiceRef ? root.countdownServiceRef.primaryGoal : null;
@@ -15,6 +18,22 @@ Item {
 
     function openEditor(goalId, name, targetDate) {
         countdownDialog.openForEdit(goalId, name, targetDate);
+    }
+
+    function keepOperationFailure(fallbackMessage) {
+        if (root.loadError.length === 0)
+            root.loadError = fallbackMessage
+    }
+
+    function retryLoad() {
+        if (!root.countdownServiceRef || !root.countdownServiceRef.reload) {
+            root.keepOperationFailure(qsTr("倒计时服务不可用，无法重试"))
+            return false
+        }
+        const reloaded = root.countdownServiceRef.reload()
+        if (!reloaded)
+            root.keepOperationFailure(qsTr("重新加载倒计时目标失败，请重试"))
+        return reloaded
     }
 
     function weekdayText(value) {
@@ -41,6 +60,20 @@ Item {
         id: countdownDialog
         parent: root
         countdownServiceRef: root.countdownServiceRef
+    }
+
+    Connections {
+        target: root.countdownServiceRef
+        ignoreUnknownSignals: true
+
+        function onOperationFailed(message) {
+            root.loadError = String(message || qsTr("倒计时数据操作失败"))
+        }
+
+        function onGoalsReloaded() {
+            // 只有服务确认已完整刷新模型后才能清错，不能用任意 UI 操作掩盖读取失败。
+            root.loadError = ""
+        }
     }
 
     ColumnLayout {
@@ -103,6 +136,70 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: 1
             color: Theme.border
+        }
+
+        GlassPanel {
+            id: errorBanner
+            objectName: "countdownErrorBanner"
+
+            visible: root.showingErrorState && !!root.primaryGoal()
+            Layout.fillWidth: true
+            Layout.preferredHeight: 64
+            color: Theme.surfaceRaised
+            border.color: Theme.dangerBorder
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: Theme.space16
+                anchors.rightMargin: Theme.space12
+                spacing: Theme.space12
+
+                Text {
+                    text: "!"
+                    color: Theme.danger
+                    font.pixelSize: Theme.fontXl
+                    font.weight: Font.Bold
+                    Accessible.ignored: true
+                }
+
+                Text {
+                    objectName: "countdownErrorText"
+                    Layout.fillWidth: true
+                    text: root.loadError
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontMd
+                    wrapMode: Text.WordWrap
+                }
+
+                Button {
+                    id: bannerRetryButton
+                    objectName: "countdownBannerRetryButton"
+                    text: qsTr("重试")
+                    activeFocusOnTab: true
+                    implicitWidth: 76
+                    implicitHeight: 44
+                    Accessible.name: text
+
+                    background: Rectangle {
+                        color: bannerRetryButton.down ? Theme.accentFillStrong
+                                                      : Theme.accentFill
+                        border.color: bannerRetryButton.activeFocus ? Theme.focusRing : Theme.accent
+                        border.width: bannerRetryButton.activeFocus ? 2 : 1
+                        radius: Theme.radiusMd
+                    }
+
+                    contentItem: Text {
+                        text: bannerRetryButton.text
+                        color: Theme.accentFillInk
+                        font.pixelSize: Theme.fontMd
+                        font.weight: Font.Medium
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+
+                    onClicked: root.retryLoad()
+                }
+            }
         }
 
         // —— 英雄卡：与全应用一致的玻璃面板；悬停用描边转强调色提示可点击 ——
@@ -235,22 +332,28 @@ Item {
 
                         onClicked: root.openEditor(goalId, goalName, targetDate)
                         onDeleteRequested: function (id) {
-                            if (root.countdownServiceRef) {
-                                root.countdownServiceRef.deleteGoal(id);
+                            root.loadError = ""
+                            if (!root.countdownServiceRef
+                                    || !root.countdownServiceRef.deleteGoal(id)) {
+                                root.keepOperationFailure(qsTr("删除目标失败，请重试"))
                             }
                         }
                         onMoveUpRequested: {
-                            if (root.countdownServiceRef) {
-                                root.countdownServiceRef.reorder(
-                                    secondaryGoalLoader.sourceIndex,
-                                    secondaryGoalLoader.sourceIndex - 1);
+                            root.loadError = ""
+                            if (!root.countdownServiceRef
+                                    || !root.countdownServiceRef.reorder(
+                                        secondaryGoalLoader.sourceIndex,
+                                        secondaryGoalLoader.sourceIndex - 1)) {
+                                root.keepOperationFailure(qsTr("调整目标顺序失败，请重试"))
                             }
                         }
                         onMoveDownRequested: {
-                            if (root.countdownServiceRef) {
-                                root.countdownServiceRef.reorder(
-                                    secondaryGoalLoader.sourceIndex,
-                                    secondaryGoalLoader.sourceIndex + 1);
+                            root.loadError = ""
+                            if (!root.countdownServiceRef
+                                    || !root.countdownServiceRef.reorder(
+                                        secondaryGoalLoader.sourceIndex,
+                                        secondaryGoalLoader.sourceIndex + 1)) {
+                                root.keepOperationFailure(qsTr("调整目标顺序失败，请重试"))
                             }
                         }
                     }
@@ -261,7 +364,7 @@ Item {
             GlassPanel {
                 objectName: "countdownEmptyStateCard"
 
-                visible: !root.primaryGoal()
+                visible: root.showingEmptyState
                 anchors.centerIn: parent
                 width: Math.min(420, parent.width - Theme.space16)
                 height: 190
@@ -303,6 +406,72 @@ Item {
                         color: Theme.inkSoft
                         wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+
+            GlassPanel {
+                id: errorStateCard
+                objectName: "countdownLoadErrorCard"
+
+                visible: root.showingErrorState && !root.primaryGoal()
+                anchors.centerIn: parent
+                width: Math.min(420, parent.width - Theme.space16)
+                height: 210
+                border.color: Theme.dangerBorder
+
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    width: parent.width - 48
+                    spacing: Theme.space12
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("倒计时数据读取失败")
+                        color: Theme.inkStrong
+                        font.pixelSize: Theme.fontXl
+                        font.weight: Font.Bold
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Text {
+                        objectName: "countdownLoadErrorText"
+                        Layout.fillWidth: true
+                        text: root.loadError
+                        color: Theme.ink
+                        font.pixelSize: Theme.fontMd
+                        wrapMode: Text.WordWrap
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+
+                    Button {
+                        id: errorRetryButton
+                        objectName: "countdownRetryButton"
+                        Layout.alignment: Qt.AlignHCenter
+                        text: qsTr("重试")
+                        activeFocusOnTab: true
+                        implicitWidth: 96
+                        implicitHeight: 44
+                        Accessible.name: text
+
+                        background: Rectangle {
+                            color: errorRetryButton.down ? Theme.accentFillStrong
+                                                         : Theme.accentFill
+                            border.color: errorRetryButton.activeFocus ? Theme.focusRing : Theme.accent
+                            border.width: errorRetryButton.activeFocus ? 2 : 1
+                            radius: Theme.radiusMd
+                        }
+
+                        contentItem: Text {
+                            text: errorRetryButton.text
+                            color: Theme.accentFillInk
+                            font.pixelSize: Theme.fontMd
+                            font.weight: Font.Medium
+                            horizontalAlignment: Text.AlignHCenter
+                            verticalAlignment: Text.AlignVCenter
+                        }
+
+                        onClicked: root.retryLoad()
                     }
                 }
             }

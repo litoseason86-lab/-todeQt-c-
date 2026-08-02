@@ -111,6 +111,8 @@ private:
     bool writeActiveState(QSqlDatabase& db);
     bool clearActiveState(QSqlDatabase& db);
     bool cleanupOrphanedSessions();
+    // 任务删除提交后按 ID 解绑当前会话；标题是历史快照，不能随任务一起清空。
+    void handleTaskDeleted(int taskId);
     qint64 currentElapsedMilliseconds() const;
     void syncElapsedTime();
     void freezeElapsedTime();

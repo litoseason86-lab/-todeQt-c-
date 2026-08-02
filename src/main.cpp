@@ -81,12 +81,19 @@ int main(int argc, char *argv[])
     if (!DatabaseManager::instance()->initialize()) {
         return -1;
     }
+    // v8 历史回填与新版本自然到点规则口径不同；只在本次启动原本就有数据库且
+    // 用户尚未确认时注入说明上下文。这里不查询历史会话，也不参与 schema 判断。
+    const bool naturalCompletionNoticeRequired =
+        DatabaseManager::instance()->openedExistingDatabase()
+        && !AppSettings::instance()->naturalCompletionNoticeShown();
 
     if (!FocusTimer::instance()->restoreInterruptedSession()) {
         qWarning() << "活动专注会话恢复失败";
     }
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
                      FocusTimer::instance(), &FocusTimer::prepareForShutdown);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                     BackupService::instance(), &BackupService::prepareForShutdown);
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
                      DatabaseManager::instance(), &DatabaseManager::close);
 
@@ -144,6 +151,8 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("trayController"), &trayController);
     engine.rootContext()->setContextProperty(QStringLiteral("notificationService"), NotificationService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("backupService"), BackupService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("naturalCompletionNoticeRequired"),
+                                             naturalCompletionNoticeRequired);
 
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,

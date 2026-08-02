@@ -36,6 +36,46 @@ QString escapedSqlString(QString value)
     return value.replace(QLatin1Char('\''), QStringLiteral("''"));
 }
 
+QString normalizedPath(const QString& path)
+{
+    const QFileInfo input(path);
+    const QString absolutePath = QDir::cleanPath(input.absoluteFilePath());
+    const QFileInfo absoluteInfo(absolutePath);
+    const QString canonicalPath = absoluteInfo.canonicalFilePath();
+    if (!canonicalPath.isEmpty()) {
+        return QDir::cleanPath(canonicalPath);
+    }
+
+    // 目标文件尚不存在时 canonicalFilePath() 会返回空。向上找到已存在的父目录，
+    // 先规范化其中的符号链接，再补回不存在的目录和文件名，避免别名绕过保护检查。
+    QStringList missingDirectories;
+    QString existingParent = absoluteInfo.absolutePath();
+    while (!QFileInfo::exists(existingParent)) {
+        const QFileInfo parentInfo(existingParent);
+        const QString directoryName = parentInfo.fileName();
+        const QString nextParent = parentInfo.absolutePath();
+        if (directoryName.isEmpty() || nextParent == existingParent) {
+            break;
+        }
+        missingDirectories.prepend(directoryName);
+        existingParent = nextParent;
+    }
+
+    QString normalizedParent = QFileInfo(existingParent).canonicalFilePath();
+    if (normalizedParent.isEmpty()) {
+        normalizedParent = QDir::cleanPath(existingParent);
+    }
+    for (const QString& directoryName : missingDirectories) {
+        normalizedParent = QDir(normalizedParent).filePath(directoryName);
+    }
+    return QDir::cleanPath(QDir(normalizedParent).filePath(absoluteInfo.fileName()));
+}
+
+bool pathsMatch(const QString& leftPath, const QString& rightPath)
+{
+    return !rightPath.isEmpty() && normalizedPath(leftPath) == normalizedPath(rightPath);
+}
+
 bool tableExists(const QSqlDatabase& database, const QString& tableName)
 {
     QSqlQuery query(database);
@@ -236,6 +276,32 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
     if (destinationPath.trimmed().isEmpty()) {
         result.error = QStringLiteral("备份目标路径为空");
         return result;
+    }
+
+    if (pathsMatch(destinationPath, sourceDatabasePath)) {
+        result.error = QStringLiteral("备份目标不能覆盖正在使用的数据库");
+        return result;
+    }
+
+    // SQLite 的 WAL/SHM/journal 和 QSettings 锁文件都可能在运行时被写入；即使目标文件
+    // 还不存在，也必须按规范化路径拒绝，避免快照的原子替换破坏当前进程的数据或偏好。
+    const QString effectiveSettingsPath = makeSettings(settingsFilePath)->fileName();
+    QStringList protectedRuntimeFiles = {
+        sourceDatabasePath + QStringLiteral("-wal"),
+        sourceDatabasePath + QStringLiteral("-shm"),
+        sourceDatabasePath + QStringLiteral("-journal")
+    };
+    if (!effectiveSettingsPath.isEmpty()) {
+        protectedRuntimeFiles.append(effectiveSettingsPath);
+        protectedRuntimeFiles.append(effectiveSettingsPath + QStringLiteral(".lock"));
+    }
+    for (const QString& protectedPath : protectedRuntimeFiles) {
+        if (pathsMatch(destinationPath, protectedPath)) {
+            result.error = protectedPath == effectiveSettingsPath
+                ? QStringLiteral("备份目标不能覆盖当前设置文件")
+                : QStringLiteral("备份目标不能覆盖运行时受保护文件");
+            return result;
+        }
     }
 
     const QFileInfo destinationInfo(destinationPath);

@@ -33,6 +33,8 @@ class AppSettings : public QObject
     Q_PROPERTY(bool closeToTray READ closeToTray WRITE setCloseToTray NOTIFY closeToTrayChanged)
     // 是否已展示过“关闭即隐藏到菜单栏”的首次提示；只提示一次，避免每次关闭都打扰。
     Q_PROPERTY(bool closeToTrayHintShown READ closeToTrayHintShown WRITE setCloseToTrayHintShown NOTIFY closeToTrayHintShownChanged)
+    // v8 迁移后的完整番茄计数规则说明；只在已有数据库的升级启动时确认一次。
+    Q_PROPERTY(bool naturalCompletionNoticeShown READ naturalCompletionNoticeShown WRITE setNaturalCompletionNoticeShown NOTIFY naturalCompletionNoticeShownChanged)
     // 番茄自动衔接：专注结束自动进入休息、休息结束自动开始下一个番茄（默认关，避免打断）。
     Q_PROPERTY(bool autoStartBreak READ autoStartBreak WRITE setAutoStartBreak NOTIFY autoStartBreakChanged)
     Q_PROPERTY(bool autoStartNextPomodoro READ autoStartNextPomodoro WRITE setAutoStartNextPomodoro NOTIFY autoStartNextPomodoroChanged)
@@ -79,6 +81,8 @@ public:
     void setCloseToTray(bool enabled);
     bool closeToTrayHintShown() const;
     void setCloseToTrayHintShown(bool shown);
+    bool naturalCompletionNoticeShown() const;
+    void setNaturalCompletionNoticeShown(bool shown);
     bool autoStartBreak() const;
     void setAutoStartBreak(bool enabled);
     bool autoStartNextPomodoro() const;
@@ -113,6 +117,7 @@ signals:
     void raiseOnPhaseCompleteChanged();
     void closeToTrayChanged();
     void closeToTrayHintShownChanged();
+    void naturalCompletionNoticeShownChanged();
     void autoStartBreakChanged();
     void autoStartNextPomodoroChanged();
     void longBreakEnabledChanged();

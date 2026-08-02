@@ -660,6 +660,7 @@ private slots:
     void appSettingsReduceTransparencyRoundTrip();
     void appSettingsRaiseOnPhaseCompleteDefaultsOnAndRoundTrips();
     void appSettingsCloseToTrayDefaultsOffAndRoundTrips();
+    void appSettingsNaturalCompletionNoticeRoundTripsAndReloads();
     void appSettingsAutoStartDefaultsOffAndRoundTrips();
     void appSettingsLongBreakDefaultsAndNormalizes();
     void logicalDayDateOfBoundaries();
@@ -706,11 +707,13 @@ private slots:
     void getCategoryStatsAggregatesDurationsAndPercentages();
     void statisticsIgnoresInvalidShortSessions();
     void routinesTableExistsAfterInitialize();
+    void databaseReinitializeEmitsRoutineChangeOnce();
     void version2MigrationAddsRoutinesSchemaAndIndex();
     void routinesCategoryForeignKeyClearsWhenCategoryDeleted();
     void routineCrudAddsGetsUpdatesDeletes();
     void deletingMaterializedRoutineDetachesExistingTask();
     void databaseCloseRemovesNamedConnection();
+    void databaseOpenedExistingFlagTracksSuccessfulStartupOnly();
     void materializeTodayIsIdempotentAndDoesNotBackfill();
     void materializeTodayPreservesCategoryAndDoesNotEmitSignals();
     void materializeTodayStampsRoutineId();
@@ -761,11 +764,12 @@ private slots:
     void realPomodoroSessionAdvancesLongGoalAndFiresMilestone();
     void pomodoroBreakWritesNoSessionAndCompletes();
     void pomodoroBreakRestoresTaskContextAndCount();
-    void focusAutoCompleteFailureIsReported();
+    void deletingActiveTaskDetachesTimerAndSuppressesAutoCompleteFailure();
     void pomodoroWorkStoppedUnderMinimumIsDiscarded();
     void freeFocusStillCountsUpUnchanged();
     void focusTimerUsesMonotonicElapsedTimeAfterBlockedEventLoop();
     void interruptedFocusRestoresPausedAndKeepsProgress();
+    void restoreWithoutActiveStateResetsPomodoroCount();
     void restoreKeepsSessionWhenTaskWasDeleted();
     void completionSaveFailureNotifiesOnceAndKeepsRetrying();
     void startupCleanupRemovesLegacyOrphanedSession();
@@ -1284,6 +1288,34 @@ void ServiceTests::appSettingsCloseToTrayDefaultsOffAndRoundTrips()
 
     AppSettings reloaded(path);
     QCOMPARE(reloaded.closeToTray(), true);
+}
+
+void ServiceTests::appSettingsNaturalCompletionNoticeRoundTripsAndReloads()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.naturalCompletionNoticeShown(), false);
+
+        QSignalSpy changedSpy(&settings, &AppSettings::naturalCompletionNoticeShownChanged);
+        settings.setNaturalCompletionNoticeShown(true);
+        QCOMPARE(settings.naturalCompletionNoticeShown(), true);
+        QCOMPARE(changedSpy.count(), 1);
+
+        // 重复确认不能写盘或再次广播；否则 Loader 可能被无意义地重建。
+        settings.setNaturalCompletionNoticeShown(true);
+        QCOMPARE(changedSpy.count(), 1);
+
+        // 数据恢复会重建 QSettings 后端，所有绑定都必须收到一次刷新通知。
+        settings.reload();
+        QCOMPARE(changedSpy.count(), 2);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.naturalCompletionNoticeShown(), true);
 }
 
 void ServiceTests::appSettingsAutoStartDefaultsOffAndRoundTrips()
@@ -2574,6 +2606,24 @@ void ServiceTests::routinesTableExistsAfterInitialize()
         qPrintable(query.lastError().text()));
 }
 
+void ServiceTests::databaseReinitializeEmitsRoutineChangeOnce()
+{
+    // 两个单例必须先构造，再换库；否则测试只是在验证“尚未建立的连接不会发信号”。
+    CategoryManager* categoryManager = CategoryManager::instance();
+    RoutineManager* routineManager = RoutineManager::instance();
+    QVERIFY(categoryManager);
+    QVERIFY(routineManager);
+
+    QSignalSpy routinesChangedSpy(routineManager, &RoutineManager::routinesChanged);
+    QVERIFY(routinesChangedSpy.isValid());
+
+    const QString reopenedDatabase = m_tempDir->filePath(QStringLiteral("reopened.sqlite"));
+    QVERIFY(DatabaseManager::instance()->initialize(reopenedDatabase));
+
+    // CategoryManager 已将换库事实转发一次；RoutineManager 不能再直连数据库重复广播。
+    QCOMPARE(routinesChangedSpy.count(), 1);
+}
+
 void ServiceTests::version2MigrationAddsRoutinesSchemaAndIndex()
 {
     DatabaseManager::instance()->close();
@@ -2743,6 +2793,31 @@ void ServiceTests::databaseCloseRemovesNamedConnection()
     QVERIFY(QSqlDatabase::contains(QStringLiteral("PomodoroTodoConnection")));
     DatabaseManager::instance()->close();
     QVERIFY(!QSqlDatabase::contains(QStringLiteral("PomodoroTodoConnection")));
+}
+
+void ServiceTests::databaseOpenedExistingFlagTracksSuccessfulStartupOnly()
+{
+    DatabaseManager* manager = DatabaseManager::instance();
+    manager->close();
+
+    const QString newDatabasePath = m_tempDir->filePath(QStringLiteral("notice-context.sqlite"));
+    QVERIFY(!QFileInfo::exists(newDatabasePath));
+    QVERIFY(manager->initialize(newDatabasePath));
+    QCOMPARE(manager->openedExistingDatabase(), false);
+
+    // 同路径重入仍属于这次新安装启动，不能因为文件已经被 SQLite 创建而改判成旧安装。
+    QVERIFY(manager->initialize(newDatabasePath));
+    QCOMPARE(manager->openedExistingDatabase(), false);
+
+    manager->close();
+    QVERIFY(manager->initialize(newDatabasePath));
+    QCOMPARE(manager->openedExistingDatabase(), true);
+
+    const QString invalidDatabasePath = m_tempDir->filePath(QStringLiteral("not-a-database-directory"));
+    QVERIFY(QDir().mkpath(invalidDatabasePath));
+    QVERIFY(!manager->initialize(invalidDatabasePath));
+    // 失败路径只留下诊断，不得覆盖上一次成功初始化的启动上下文。
+    QCOMPARE(manager->openedExistingDatabase(), true);
 }
 
 void ServiceTests::materializeTodayIsIdempotentAndDoesNotBackfill()
@@ -4026,20 +4101,34 @@ void ServiceTests::pomodoroBreakRestoresTaskContextAndCount()
     QVERIFY(timer->stopFocus());
 }
 
-void ServiceTests::focusAutoCompleteFailureIsReported()
+void ServiceTests::deletingActiveTaskDetachesTimerAndSuppressesAutoCompleteFailure()
 {
-    const int taskId = insertTaskRow(QStringLiteral("自动完成失败任务"), QDate::currentDate());
+    const int taskId = insertTaskRow(QStringLiteral("删除中的活动任务"), QDate::currentDate());
     QVERIFY(taskId > 0);
     FocusTimer* timer = FocusTimer::instance();
-    QSignalSpy failureSpy(timer, &FocusTimer::taskAutoCompleteFailed);
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("删除中的活动任务")));
 
-    QVERIFY(timer->startFocus(taskId, QStringLiteral("自动完成失败任务")));
+    QSignalSpy currentTaskChangedSpy(timer, &FocusTimer::currentTaskChanged);
+    QSignalSpy failureSpy(timer, &FocusTimer::taskAutoCompleteFailed);
     QVERIFY(TaskManager::instance()->deleteTask(taskId));
+
+    // TaskManager 的提交后删除信号必须立刻解绑内存 ID，但会话标题是历史快照，不能丢失。
+    QCOMPARE(timer->currentTaskId(), -1);
+    QCOMPARE(timer->currentTaskTitle(), QStringLiteral("删除中的活动任务"));
+    QCOMPARE(currentTaskChangedSpy.count(), 1);
+
+    QSqlQuery activeStateQuery(DatabaseManager::instance()->database());
+    QVERIFY(activeStateQuery.exec(QStringLiteral(
+        "SELECT task_id, task_title FROM active_focus_state WHERE singleton_id = 1")));
+    QVERIFY(activeStateQuery.next());
+    QVERIFY(activeStateQuery.value(0).isNull());
+    QCOMPARE(activeStateQuery.value(1).toString(), QStringLiteral("删除中的活动任务"));
+
     setFocusElapsedSeconds(timer, timer->autoCompleteMinutes() * 60);
     QVERIFY(timer->stopFocus());
 
-    QCOMPARE(failureSpy.count(), 1);
-    QCOMPARE(failureSpy.first().at(0).toInt(), taskId);
+    // 删除后的会话仍应保存，但因已解绑任务，结束时不能尝试自动完成一个不存在的任务。
+    QCOMPARE(failureSpy.count(), 0);
     QCOMPARE(timer->hasActiveSession(), false);
 }
 
@@ -4119,6 +4208,28 @@ void ServiceTests::interruptedFocusRestoresPausedAndKeepsProgress()
     QVERIFY(query.next());
     QCOMPARE(query.value(0).toInt(), 185);
     QVERIFY(!query.next());
+}
+
+void ServiceTests::restoreWithoutActiveStateResetsPomodoroCount()
+{
+    FocusTimer* timer = FocusTimer::instance();
+    QSqlQuery stateQuery(DatabaseManager::instance()->database());
+    QVERIFY(stateQuery.exec(QStringLiteral(
+        "SELECT COUNT(*) FROM active_focus_state WHERE singleton_id = 1")));
+    QVERIFY(stateQuery.next());
+    QCOMPARE(stateQuery.value(0).toInt(), 0);
+
+    // 模拟换库后遗留在单例内存中的上一轮计数；新库无活动状态时不能把它带过去。
+    timer->m_completedPomodoros = 3;
+    QSignalSpy pomodoroCountSpy(timer, &FocusTimer::completedPomodorosChanged);
+
+    QVERIFY(timer->restoreInterruptedSession());
+    QCOMPARE(timer->completedPomodoros(), 0);
+    QCOMPARE(pomodoroCountSpy.count(), 1);
+
+    // 计数已经为零时再次恢复不应制造无意义的属性变更通知。
+    QVERIFY(timer->restoreInterruptedSession());
+    QCOMPARE(pomodoroCountSpy.count(), 1);
 }
 
 void ServiceTests::restoreKeepsSessionWhenTaskWasDeleted()

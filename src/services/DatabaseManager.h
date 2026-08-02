@@ -22,6 +22,9 @@ public:
     QSqlDatabase database() const;
     bool createTables();
     bool isOpen() const;
+    // 本次成功打开数据库前磁盘文件是否已存在。仅用于决定是否展示迁移说明，
+    // 不能拿它替代 schema 版本或用户历史内容判断。
+    bool openedExistingDatabase() const;
     void close();
 
 signals:
@@ -68,6 +71,12 @@ private:
     QSqlDatabase m_db;
     // 一次 createTables 可能连跨多级迁移；只允许第一级留下整链开始前的原始快照。
     mutable bool m_migrationSnapshotTaken = false;
+    // 只在 initialize 成功后更新。失败或同路径重入不能篡改首次成功打开时的事实。
+    bool m_openedExistingDatabase = false;
+    // SQLite 打开成功但建表/迁移失败时，连接仍可能可用。保留这次打开前的事实，
+    // 使修复问题后对同一路径重试时仍按最初启动语义提交，而不是把新库误判为旧库。
+    bool m_currentDatabaseExistedBeforeOpen = false;
+    bool m_currentDatabaseInitializationSucceeded = false;
 };
 
 #endif // DATABASEMANAGER_H

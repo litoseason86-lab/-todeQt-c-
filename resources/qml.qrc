@@ -23,6 +23,7 @@
         <file alias="qml/components/FocusGoalCard.qml">../qml/components/FocusGoalCard.qml</file>
         <file alias="qml/components/DailyFocusGoalEditor.qml">../qml/components/DailyFocusGoalEditor.qml</file>
         <file alias="qml/components/FocusLiveSeconds.qml">../qml/components/FocusLiveSeconds.qml</file>
+        <file alias="qml/components/RefreshCoalescer.qml">../qml/components/RefreshCoalescer.qml</file>
         <file alias="qml/components/FocusGoalStrip.qml">../qml/components/FocusGoalStrip.qml</file>
         <file alias="qml/components/DashboardTimerPanel.qml">../qml/components/DashboardTimerPanel.qml</file>
         <file alias="qml/components/BackgroundWallpaper.qml">../qml/components/BackgroundWallpaper.qml</file>
@@ -70,6 +71,7 @@
         <file alias="qml/components/BackupOperationOverlay.qml">../qml/components/BackupOperationOverlay.qml</file>
         <file alias="qml/components/PhaseCompletionCoordinator.qml">../qml/components/PhaseCompletionCoordinator.qml</file>
         <file alias="qml/components/RestoreConfirmDialog.qml">../qml/components/RestoreConfirmDialog.qml</file>
+        <file alias="qml/components/NaturalCompletionNoticeDialog.qml">../qml/components/NaturalCompletionNoticeDialog.qml</file>
         <file alias="qml/components/WeeklyReviewCard.qml">../qml/components/WeeklyReviewCard.qml</file>
         <file alias="qml/components/Toast.qml">../qml/components/Toast.qml</file>
         <file alias="sounds/phase-complete.wav">sounds/phase-complete.wav</file>

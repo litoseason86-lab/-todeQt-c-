@@ -1,6 +1,7 @@
 #include "GoalService.h"
 
 #include "AppSettings.h"
+#include "CategoryManager.h"
 #include "DatabaseManager.h"
 #include "FocusSessionRules.h"
 #include "LogicalDay.h"
@@ -33,11 +34,12 @@ QDate logicalToday()
 GoalService::GoalService(QObject* parent)
     : QObject(parent)
 {
-    // 换库或同路径重开由 DatabaseManager 统一广播；这里只需把建表状态作废，
-    // 下一次业务调用时 ensureDatabaseReady 会重新建表。
-    connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged, this, [this]() {
+    // 目标查询左连 categories，科目改名、换色、删除及换库都会改变返回值。
+    // CategoryManager 已把 databaseChanged 归一成 categoriesChanged；只订阅这一个事实源，
+    // 避免换库时从两条链路重复发 goalsChanged，导致目标页无意义重查两次。
+    connect(CategoryManager::instance(), &CategoryManager::categoriesChanged, this, [this]() {
         m_databaseReady = false;
-        // 数据库切换后目标 id 与进度都属于另一套命名空间，旧缓存绝不能跨库比较。
+        // 科目变化或换库后，目标 id 与进度缓存都可能失效，不能跨状态比较。
         m_lastDoneCounts.clear();
         if (initializeDatabase()) {
             emit goalsChanged();

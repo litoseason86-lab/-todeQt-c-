@@ -48,6 +48,8 @@ private slots:
     void reorderMovesModelPersistsOrdersAndRefreshesPrimary();
     void reorderFailureKeepsOriginalModelOrder();
     void reorderIgnoredUpdateKeepsOriginalModelOrder();
+    void reloadFailurePreservesModelAndRecoveryEmitsGoalsReloaded();
+    void databaseChangeInitializationFailureReportsOperationFailed();
     void samePathReinitializeReloadsFreshDatabase();
     void routineMutationsDoNotResetModel();
     void primaryGoalReturnsQmlReadableMap();
@@ -59,6 +61,7 @@ private:
     void clearGoals();
 
     QTemporaryDir* m_tempDir = nullptr;
+    QString m_databasePath;
 };
 
 void CountdownServiceTests::initTestCase()
@@ -68,7 +71,8 @@ void CountdownServiceTests::initTestCase()
 
     QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTest"));
     QCoreApplication::setApplicationName(QStringLiteral("CountdownServiceTests"));
-    QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath(QStringLiteral("countdown-test.sqlite"))));
+    m_databasePath = m_tempDir->filePath(QStringLiteral("countdown-test.sqlite"));
+    QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
 }
 
 void CountdownServiceTests::cleanupTestCase()
@@ -141,7 +145,7 @@ void CountdownServiceTests::addGoalPersistsTrimmedNameAndUsesMaxDisplayOrder()
 void CountdownServiceTests::rejectsInvalidNamesAndDates()
 {
     CountdownService* service = CountdownService::instance();
-    QSignalSpy errorSpy(service, &CountdownService::errorOccurred);
+    QSignalSpy errorSpy(service, &CountdownService::operationFailed);
 
     QVERIFY(!service->addGoal(QString(), QDate::currentDate()));
     QVERIFY(!service->addGoal(QStringLiteral("   "), QDate::currentDate()));
@@ -161,7 +165,7 @@ void CountdownServiceTests::updateGoalValidatesAndUpdatesExistingGoal()
     QVERIFY(service->addGoal(QStringLiteral("原始目标"), originalDate));
     const int id = goalIdAt(service->model(), 0);
 
-    QSignalSpy errorSpy(service, &CountdownService::errorOccurred);
+    QSignalSpy errorSpy(service, &CountdownService::operationFailed);
     QVERIFY(!service->updateGoal(id, QStringLiteral("  "), updatedDate));
     QVERIFY(!service->updateGoal(id, QStringLiteral("更新目标"), QDate()));
     QVERIFY(!service->updateGoal(9999, QStringLiteral("不存在目标"), updatedDate));
@@ -196,7 +200,7 @@ void CountdownServiceTests::updateGoalIgnoredWriteKeepsModelUnchanged()
         "BEFORE UPDATE ON countdown_goals "
         "BEGIN SELECT RAISE(IGNORE); END")));
 
-    QSignalSpy errorSpy(service, &CountdownService::errorOccurred);
+    QSignalSpy errorSpy(service, &CountdownService::operationFailed);
     QVERIFY(!service->updateGoal(id, QStringLiteral("不应写入"), originalDate.addDays(1)));
     QCOMPARE(errorSpy.count(), 1);
     QCOMPARE(nameAt(service->model(), 0), QStringLiteral("原始目标"));
@@ -224,7 +228,7 @@ void CountdownServiceTests::deleteGoalRemovesModelDatabaseAndRefreshesPrimary()
     QVERIFY(countQuery.next());
     QCOMPARE(countQuery.value(0).toInt(), 1);
 
-    QSignalSpy errorSpy(service, &CountdownService::errorOccurred);
+    QSignalSpy errorSpy(service, &CountdownService::operationFailed);
     QVERIFY(!service->deleteGoal(9999));
     QCOMPARE(errorSpy.count(), 1);
 }
@@ -272,7 +276,7 @@ void CountdownServiceTests::reorderFailureKeepsOriginalModelOrder()
         "BEFORE UPDATE OF display_order ON countdown_goals "
         "BEGIN SELECT RAISE(ABORT, 'blocked reorder'); END")));
 
-    QSignalSpy errorSpy(service, &CountdownService::errorOccurred);
+    QSignalSpy errorSpy(service, &CountdownService::operationFailed);
     QVERIFY(!service->reorder(2, 0));
     QCOMPARE(errorSpy.count(), 1);
     QCOMPARE(nameAt(service->model(), 0), QStringLiteral("目标1"));
@@ -297,7 +301,7 @@ void CountdownServiceTests::reorderIgnoredUpdateKeepsOriginalModelOrder()
         "WHEN OLD.name = '目标3' "
         "BEGIN SELECT RAISE(IGNORE); END")));
 
-    QSignalSpy errorSpy(service, &CountdownService::errorOccurred);
+    QSignalSpy errorSpy(service, &CountdownService::operationFailed);
     QVERIFY(!service->reorder(2, 0));
     QCOMPARE(errorSpy.count(), 1);
     QCOMPARE(nameAt(service->model(), 0), QStringLiteral("目标1"));
@@ -306,6 +310,50 @@ void CountdownServiceTests::reorderIgnoredUpdateKeepsOriginalModelOrder()
 
     QSqlQuery dropTrigger(DatabaseManager::instance()->database());
     QVERIFY(dropTrigger.exec(QStringLiteral("DROP TRIGGER ignore_countdown_reorder")));
+}
+
+void CountdownServiceTests::reloadFailurePreservesModelAndRecoveryEmitsGoalsReloaded()
+{
+    CountdownService* service = CountdownService::instance();
+    QVERIFY(service->addGoal(QStringLiteral("保留中的目标"), QDate::currentDate().addDays(12)));
+
+    QSqlQuery dropTable(DatabaseManager::instance()->database());
+    QVERIFY(dropTable.exec(QStringLiteral("DROP TABLE countdown_goals")));
+
+    QSignalSpy failureSpy(service, &CountdownService::operationFailed);
+    QSignalSpy reloadedSpy(service, &CountdownService::goalsReloaded);
+    QVERIFY(!service->reload());
+    QCOMPARE(failureSpy.count(), 1);
+    QCOMPARE(reloadedSpy.count(), 0);
+    // 读取失败时 UI 仍需要可展示上一份完整数据，不能把错误伪装成空列表。
+    QCOMPARE(service->model()->rowCount(), 1);
+    QCOMPARE(nameAt(service->model(), 0), QStringLiteral("保留中的目标"));
+
+    // 关闭再打开会走 databaseChanged 的完整初始化链，重建倒计时表并产生成功重载信号。
+    DatabaseManager::instance()->close();
+    QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
+    QCOMPARE(reloadedSpy.count(), 1);
+    QCOMPARE(service->model()->rowCount(), 0);
+}
+
+void CountdownServiceTests::databaseChangeInitializationFailureReportsOperationFailed()
+{
+    CountdownService* service = CountdownService::instance();
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    QSqlQuery replaceTable(db);
+    QVERIFY(replaceTable.exec(QStringLiteral("DROP TABLE countdown_goals")));
+    // 用同名 view 模拟不破坏主库的局部结构故障：CREATE TABLE IF NOT EXISTS 会明确失败，
+    // 从而验证 databaseChanged 路径不会静默吞掉初始化错误。
+    QVERIFY(replaceTable.exec(QStringLiteral(
+        "CREATE VIEW countdown_goals AS SELECT 1 AS id")));
+
+    QSignalSpy failureSpy(service, &CountdownService::operationFailed);
+    QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
+    QCOMPARE(failureSpy.count(), 1);
+
+    QVERIFY(replaceTable.exec(QStringLiteral("DROP VIEW countdown_goals")));
+    // 上一步失败会清除就绪标记；显式 reload 应重建表，供后续测试继续使用同一临时库。
+    QVERIFY(service->reload());
 }
 
 void CountdownServiceTests::samePathReinitializeReloadsFreshDatabase()

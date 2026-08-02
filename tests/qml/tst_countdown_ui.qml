@@ -33,6 +33,13 @@ TestCase {
 
         property var model: countdownModel
         property var primaryGoal: null
+        property bool deleteSucceeds: true
+        property bool reorderSucceeds: true
+        property bool reloadSucceeds: true
+        property int reloadCalls: 0
+
+        signal operationFailed(string message)
+        signal goalsReloaded()
 
         function addGoal(name, targetDate) {
             testCase.addCount += 1
@@ -61,14 +68,26 @@ TestCase {
         }
 
         function deleteGoal(id) {
+            if (!deleteSucceeds)
+                return false
             countdownModel.clear()
             primaryGoal = null
             return true
         }
 
         function reorder(fromIndex, toIndex) {
+            if (!reorderSucceeds)
+                return false
             countdownModel.move(fromIndex, toIndex, 1)
+            primaryGoal = countdownModel.count > 0 ? countdownModel.get(0) : null
             return true
+        }
+
+        function reload() {
+            reloadCalls += 1
+            if (reloadSucceeds)
+                goalsReloaded()
+            return reloadSucceeds
         }
     }
 
@@ -116,6 +135,11 @@ TestCase {
         testCase.fakeNow = new Date(2026, 6, 8, 3, 59)
         countdownModel.clear()
         fakeCountdownService.primaryGoal = null
+        fakeCountdownService.deleteSucceeds = true
+        fakeCountdownService.reorderSucceeds = true
+        fakeCountdownService.reloadSucceeds = true
+        fakeCountdownService.reloadCalls = 0
+        countdownView.loadError = ""
         countdownDialog.close()
     }
 
@@ -209,5 +233,66 @@ TestCase {
 
         item.moveUpRequested()
         compare(countdownModel.get(0).name, "可晋升目标")
+    }
+
+    function test_operationFailureWithoutDataUsesErrorStateInsteadOfEmptyState() {
+        fakeCountdownService.operationFailed("读取倒计时目标失败")
+
+        tryCompare(countdownView, "showingErrorState", true)
+        compare(countdownView.showingEmptyState, false)
+        var errorText = findChild(countdownView, "countdownLoadErrorText")
+        verify(errorText !== null)
+        compare(errorText.text, "读取倒计时目标失败")
+    }
+
+    function test_operationFailureKeepsExistingGoalAndShowsBanner() {
+        fakeCountdownService.addGoal("已有目标", new Date(2026, 11, 23))
+        fakeCountdownService.operationFailed("读取失败，但旧数据可用")
+
+        tryCompare(countdownView, "showingErrorState", true)
+        compare(countdownModel.count, 1)
+        compare(fakeCountdownService.primaryGoal.name, "已有目标")
+        var bannerText = findChild(countdownView, "countdownErrorText")
+        verify(bannerText !== null)
+        compare(bannerText.text, "读取失败，但旧数据可用")
+    }
+
+    function test_retrySuccessClearsRecoverableError() {
+        fakeCountdownService.operationFailed("临时读取失败")
+        tryCompare(countdownView, "showingErrorState", true)
+
+        compare(countdownView.retryLoad(), true)
+        compare(fakeCountdownService.reloadCalls, 1)
+        tryCompare(countdownView, "showingErrorState", false)
+    }
+
+    function test_falseDeleteAndReorderShowFallbackErrors() {
+        countdownModel.append({
+            goalId: 1, name: "主目标", targetDate: new Date(2026, 11, 23),
+            displayOrder: 0, daysRemaining: 10
+        })
+        countdownModel.append({
+            goalId: 2, name: "次要目标", targetDate: new Date(2027, 0, 1),
+            displayOrder: 1, daysRemaining: 20
+        })
+        fakeCountdownService.primaryGoal = countdownModel.get(0)
+        countdownView.visible = true
+
+        var item = null
+        tryVerify(function() {
+            item = findChild(countdownView, "countdownSecondaryItem")
+            return item !== null
+        })
+
+        fakeCountdownService.deleteSucceeds = false
+        item.deleteRequested(2)
+        tryCompare(countdownView, "showingErrorState", true)
+        compare(countdownView.loadError, "删除目标失败，请重试")
+
+        countdownView.loadError = ""
+        fakeCountdownService.reorderSucceeds = false
+        item.moveUpRequested()
+        tryCompare(countdownView, "showingErrorState", true)
+        compare(countdownView.loadError, "调整目标顺序失败，请重试")
     }
 }

@@ -90,6 +90,7 @@ Item {
             refresh()
     }
     onPageActiveChanged: {
+        refreshCoalescer.cancel()
         if (root.pageActive)
             refresh()
     }
@@ -106,6 +107,13 @@ Item {
         onTriggered: root.now = root.currentNow()
     }
 
+    RefreshCoalescer {
+        id: refreshCoalescer
+
+        active: root.pageActive
+        onTriggered: root.refresh()
+    }
+
     Connections {
         target: taskManager
         ignoreUnknownSignals: true
@@ -114,7 +122,7 @@ Item {
         function onTasksChanged() {
             if (root.completionRefreshDelayActive)
                 return
-            root.refresh()
+            refreshCoalescer.request()
         }
 
         function onOperationFailed(message) {
@@ -138,7 +146,7 @@ Item {
         enabled: root.pageActive
 
         function onCategoriesChanged() {
-            root.refresh()
+            refreshCoalescer.request()
         }
     }
 
@@ -156,7 +164,7 @@ Item {
         enabled: root.pageActive
 
         function onFocusCompleted(duration) {
-            root.refresh()
+            refreshCoalescer.request()
         }
     }
 
@@ -166,7 +174,7 @@ Item {
         enabled: root.pageActive
 
         function onRoutinesChanged() {
-            root.refresh()
+            refreshCoalescer.request()
         }
 
         function onOperationFailed(message) {
@@ -183,7 +191,7 @@ Item {
 
         function onChanged() {
             root.now = root.currentNow()
-            root.refresh()
+            refreshCoalescer.request()
         }
     }
 
@@ -195,6 +203,8 @@ Item {
         repeat: false
         onTriggered: {
             root.completionRefreshDelayActive = false
+            // 定时刷新已覆盖这一轮数据；取消排队失效，避免粒子结束后紧跟第二次重查。
+            refreshCoalescer.cancel()
             root.refresh()
         }
     }

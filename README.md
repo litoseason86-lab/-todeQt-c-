@@ -24,7 +24,7 @@ macOS 26，会让应用二进制和链接框架的部署版本不一致。
 ```bash
 /Users/zerionlito/Qt/6.9.0/macos/bin/qt-cmake -B /tmp/pt-build -S . -DPOMODORO_TODO_DEPLOY_LOCAL=OFF
 cmake --build /tmp/pt-build -j8
-cd /tmp/pt-build && QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic ctest --output-on-failure
+cd /tmp/pt-build && QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic ctest --output-on-failure --timeout 240
 ```
 
 ### 构建并部署

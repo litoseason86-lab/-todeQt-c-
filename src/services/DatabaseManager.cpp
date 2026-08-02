@@ -62,23 +62,31 @@ bool DatabaseManager::initialize(const QString& dbPath)
     QString path = dbPath.trimmed();
     if (path.isEmpty()) {
         const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        if (dataDir.isEmpty() || !QDir().mkpath(dataDir)) {
+        if (dataDir.isEmpty()) {
             qWarning() << "Failed to prepare application data directory:" << dataDir;
             return false;
         }
-        path = QDir(dataDir).filePath(QStringLiteral("pomodoro.db"));
+        path = QDir(dataDir).absoluteFilePath(QStringLiteral("pomodoro.db"));
     } else {
-        const QFileInfo fileInfo(path);
-        const QDir parentDir = fileInfo.absoluteDir();
-        if (!parentDir.exists() && !QDir().mkpath(parentDir.absolutePath())) {
-            qWarning() << "Failed to prepare database directory:" << parentDir.absolutePath();
-            return false;
-        }
+        path = QFileInfo(path).absoluteFilePath();
+    }
+
+    // 必须在创建目录、打开 SQLite 或迁移前记录事实。它只服务于一次性升级说明，
+    // 不能根据迁移后的 schema 反推，否则全新安装也会被误判成旧用户。
+    const bool existedBeforeOpen = QFileInfo::exists(path);
+    const QDir parentDir = QFileInfo(path).absoluteDir();
+    if (!parentDir.exists() && !QDir().mkpath(parentDir.absolutePath())) {
+        qWarning() << "Failed to prepare database directory:" << parentDir.absolutePath();
+        return false;
     }
 
     if (m_db.isOpen() && m_db.databaseName() == path) {
         if (!createTables()) {
             return false;
+        }
+        if (!m_currentDatabaseInitializationSucceeded) {
+            m_openedExistingDatabase = m_currentDatabaseExistedBeforeOpen;
+            m_currentDatabaseInitializationSucceeded = true;
         }
         emit databaseChanged();
         return true;
@@ -95,6 +103,8 @@ bool DatabaseManager::initialize(const QString& dbPath)
         QSqlDatabase::removeDatabase(m_connectionName);
     }
     m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_connectionName);
+    m_currentDatabaseExistedBeforeOpen = existedBeforeOpen;
+    m_currentDatabaseInitializationSucceeded = false;
 
     m_db.setDatabaseName(path);
     if (!m_db.open()) {
@@ -111,6 +121,9 @@ bool DatabaseManager::initialize(const QString& dbPath)
     if (!createTables()) {
         return false;
     }
+    // 只有完整打开并迁移成功才提交本次启动的上下文；失败不能污染上一次成功结果。
+    m_openedExistingDatabase = m_currentDatabaseExistedBeforeOpen;
+    m_currentDatabaseInitializationSucceeded = true;
     emit databaseChanged();
     return true;
 }
@@ -1099,6 +1112,11 @@ QSqlDatabase DatabaseManager::database() const
 bool DatabaseManager::isOpen() const
 {
     return m_db.isOpen();
+}
+
+bool DatabaseManager::openedExistingDatabase() const
+{
+    return m_openedExistingDatabase;
 }
 
 void DatabaseManager::close()

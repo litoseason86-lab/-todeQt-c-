@@ -20,6 +20,7 @@ const auto kReduceTransparencyKey = QStringLiteral("appearance/reduceTransparenc
 const auto kRaiseOnPhaseCompleteKey = QStringLiteral("focus/raiseOnPhaseComplete");
 const auto kCloseToTrayKey = QStringLiteral("window/closeToTray");
 const auto kCloseToTrayHintShownKey = QStringLiteral("window/closeToTrayHintShown");
+const auto kNaturalCompletionNoticeShownKey = QStringLiteral("migration/v8NaturalCompletionNoticeShown");
 const auto kAutoStartBreakKey = QStringLiteral("focus/autoStartBreak");
 const auto kAutoStartNextPomodoroKey = QStringLiteral("focus/autoStartNextPomodoro");
 const auto kLongBreakEnabledKey = QStringLiteral("focus/longBreakEnabled");
@@ -77,6 +78,7 @@ void AppSettings::reload()
     emit raiseOnPhaseCompleteChanged();
     emit closeToTrayChanged();
     emit closeToTrayHintShownChanged();
+    emit naturalCompletionNoticeShownChanged();
     emit autoStartBreakChanged();
     emit autoStartNextPomodoroChanged();
     emit longBreakEnabledChanged();
@@ -390,6 +392,21 @@ void AppSettings::setCloseToTrayHintShown(bool shown)
     }
     if (writeValue(kCloseToTrayHintShownKey, shown)) {
         emit closeToTrayHintShownChanged();
+    }
+}
+
+bool AppSettings::naturalCompletionNoticeShown() const
+{
+    return m_settings->value(kNaturalCompletionNoticeShownKey, false).toBool();
+}
+
+void AppSettings::setNaturalCompletionNoticeShown(bool shown)
+{
+    if (naturalCompletionNoticeShown() == shown) {
+        return;
+    }
+    if (writeValue(kNaturalCompletionNoticeShownKey, shown)) {
+        emit naturalCompletionNoticeShownChanged();
     }
 }
 

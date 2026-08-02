@@ -26,6 +26,8 @@ TestCase {
         property var goalsData: []
         property int getCalls: 0
         property int addCalls: 0
+        property int updateCalls: 0
+        property int lastUpdatedCategoryId: -1
         property int deleteCalls: 0
         property bool addSucceeds: true
         property bool deleteSucceeds: true
@@ -60,6 +62,8 @@ TestCase {
             return addSucceeds
         }
         function updateGoal(goalId, title, categoryId, target, startDate, deadline) {
+            updateCalls += 1
+            lastUpdatedCategoryId = categoryId
             return true
         }
         function getGoalDailyCounts(goalId, year, month) {
@@ -90,8 +94,10 @@ TestCase {
         signal categoriesChanged
         signal operationFailed(string message)
 
+        property var categoriesData: [{ id: 7, name: "学习", color: "#d4a574" }]
+
         function getAllCategories() {
-            return [{ id: 7, name: "学习", color: "#d4a574" }]
+            return categoriesData
         }
     }
 
@@ -179,6 +185,8 @@ TestCase {
         goalService.goalsData = []
         goalService.getCalls = 0
         goalService.addCalls = 0
+        goalService.updateCalls = 0
+        goalService.lastUpdatedCategoryId = -1
         goalService.deleteCalls = 0
         goalService.addSucceeds = true
         goalService.deleteSucceeds = true
@@ -186,6 +194,7 @@ TestCase {
         goalService.failGoalQuery = false
         goalService.lastDailyYear = 0
         goalService.lastDailyMonth = 0
+        categoryManager.categoriesData = [{ id: 7, name: "学习", color: "#d4a574" }]
         appSettings.goalViewMode = "list"
         appSettings.dayStartHour = 4
     }
@@ -343,6 +352,36 @@ TestCase {
         compare(dialog.editingGoalId, -1)
     }
 
+    function test_edit_losing_category_requires_explicit_reselection() {
+        var view = createTemporaryObject(goalsComponent, testCase)
+        verify(view !== null)
+        var dialog = findChild(view, "goalFormDialog")
+        verify(dialog !== null)
+        var categoryCombo = findChild(dialog, "goalCategoryCombo")
+        var missingHint = findChild(dialog, "goalCategoryMissingHint")
+        verify(categoryCombo !== null)
+        verify(missingHint !== null)
+
+        dialog.openForEdit(activeGoal())
+        tryCompare(dialog, "opened", true)
+        compare(categoryCombo.currentIndex, 0)
+
+        categoryManager.categoriesData = [{ id: 8, name: "新科目", color: "#123456" }]
+        categoryManager.categoriesChanged()
+        tryCompare(categoryCombo, "currentIndex", -1)
+        compare(missingHint.text, "原科目已删除，请重新选择")
+
+        compare(dialog.submit(), false)
+        compare(goalService.updateCalls, 0)
+        compare(dialog.errorText, "请先为目标选择科目")
+
+        categoryCombo.currentIndex = 0
+        tryCompare(dialog, "selectedCategoryId", 8)
+        compare(dialog.submit(), true)
+        compare(goalService.updateCalls, 1)
+        compare(goalService.lastUpdatedCategoryId, 8)
+    }
+
     function test_open_goal_and_return_use_page_substate() {
         goalService.goalsData = [activeGoal()]
         var view = createTemporaryObject(goalsComponent, testCase)
@@ -413,7 +452,7 @@ TestCase {
     }
 
     function test_longTermCheckStaysInSyncAfterUserToggle() {
-        var view = createTemporaryObject(goalsComponent, testCase)
+        var view = createTemporaryObject(goalsComponent, testCase, { width: 640, height: 520 })
         verify(view !== null)
         const dialog = findChild(view, "goalFormDialog")
         const longTermCheck = findChild(dialog, "goalLongTermCheck")
@@ -425,7 +464,10 @@ TestCase {
         dialog.openForAdd()
         tryCompare(dialog, "opened", true)
         compare(longTermCheck.checked, true)
-        mouseClick(longTermCheck, longTermCheck.width / 2, longTermCheck.height / 2)
+        // Popup 被临时测试根承载时不保证映射到窗口坐标；用控件真实支持的键盘操作
+        // 验证交互，既避开离屏坐标假失败，也覆盖无鼠标用户的同一行为。
+        longTermCheck.forceActiveFocus()
+        keyClick(Qt.Key_Space)
         tryCompare(longTermCheck, "checked", false)
         dialog.close()
         tryCompare(dialog, "opened", false)

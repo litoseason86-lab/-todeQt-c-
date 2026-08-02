@@ -57,6 +57,7 @@ private slots:
     void pauseDoesNotConsumeTime();
     void sleepDuringRunCountsTowardElapsed();
     void sleepPastEndCompletesExactlyOnce();
+    void manuallyStoppedPomodoroPreservesElapsedPastTarget();
     void freeModeCountsUpAcrossSleep();
     void elapsedIgnoresWallClockAdvance();
     void recoveryFreezesAtCheckpointNotOfflineTime();
@@ -149,10 +150,36 @@ void TimingRobustnessTests::sleepPastEndCompletesExactlyOnce()
     QCOMPARE(FocusTimer::instance()->hasActiveSession(), false);
     QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 0);
 
+    QSqlQuery savedSession(DatabaseManager::instance()->database());
+    QVERIFY(savedSession.exec(QStringLiteral(
+        "SELECT duration, pomodoro_completed FROM focus_sessions")));
+    QVERIFY(savedSession.next());
+    // 合盖超过目标后自然完成，落库时长必须是目标 5 分钟而不是实际跨越的 10 分钟。
+    QCOMPARE(savedSession.value(0).toInt(), 5 * 60);
+    QCOMPARE(savedSession.value(1).toInt(), 1);
+
     // 再次 tick 不得二次完成（会话已复位，守卫拦截）。
     m_clock.advanceSecs(60);
     tick();
     QCOMPARE(phaseSpy.count(), 1);
+}
+
+void TimingRobustnessTests::manuallyStoppedPomodoroPreservesElapsedPastTarget()
+{
+    const int taskId = insertTask(QStringLiteral("手动结束不截断"));
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("手动结束不截断"), 5 * 60));
+
+    // 不触发 timeout，模拟用户在事件循环恢复后主动结束；手动结束不是自然到点，
+    // 即使已超过番茄目标也必须保存真实经过时长。
+    m_clock.advanceSecs(10 * 60);
+    QVERIFY(FocusTimer::instance()->stopFocus());
+
+    QSqlQuery savedSession(DatabaseManager::instance()->database());
+    QVERIFY(savedSession.exec(QStringLiteral(
+        "SELECT duration, pomodoro_completed FROM focus_sessions")));
+    QVERIFY(savedSession.next());
+    QCOMPARE(savedSession.value(0).toInt(), 10 * 60);
+    QCOMPARE(savedSession.value(1).toInt(), 0);
 }
 
 void TimingRobustnessTests::freeModeCountsUpAcrossSleep()
@@ -165,6 +192,12 @@ void TimingRobustnessTests::freeModeCountsUpAcrossSleep()
     // 自由计时是正计时、无目标；休眠时长照常累加。
     QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 10 * 60);
     QCOMPARE(FocusTimer::instance()->remainingSeconds(), 0);
+
+    QVERIFY(FocusTimer::instance()->stopFocus());
+    QSqlQuery savedSession(DatabaseManager::instance()->database());
+    QVERIFY(savedSession.exec(QStringLiteral("SELECT duration FROM focus_sessions")));
+    QVERIFY(savedSession.next());
+    QCOMPARE(savedSession.value(0).toInt(), 10 * 60);
 }
 
 void TimingRobustnessTests::elapsedIgnoresWallClockAdvance()

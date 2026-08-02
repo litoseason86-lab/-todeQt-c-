@@ -99,6 +99,7 @@ Item {
             selectedYear = now.getFullYear()
             selectedMonth = now.getMonth() + 1
         }
+        refreshCoalescer.cancel()
         refresh()
     }
 
@@ -107,8 +108,16 @@ Item {
             refresh()
     }
     onPageActiveChanged: {
+        refreshCoalescer.cancel()
         if (root.pageActive)
             refresh()
+    }
+
+    RefreshCoalescer {
+        id: refreshCoalescer
+
+        active: root.pageActive
+        onTriggered: root.refresh()
     }
 
     onVisibleChanged: {
@@ -124,7 +133,7 @@ Item {
         enabled: root.pageActive
 
         function onTasksChanged() {
-            root.refresh()
+            refreshCoalescer.request()
         }
     }
 
@@ -143,7 +152,7 @@ Item {
         enabled: root.pageActive
 
         function onFocusCompleted(duration) {
-            root.refresh()
+            refreshCoalescer.request()
         }
     }
 
@@ -153,7 +162,7 @@ Item {
         enabled: root.pageActive
 
         function onCategoriesChanged() {
-            root.refresh()
+            refreshCoalescer.request()
         }
     }
 
@@ -179,7 +188,7 @@ Item {
         ignoreUnknownSignals: true
 
         function onChanged() {
-            root.refresh()
+            refreshCoalescer.request()
         }
     }
 
@@ -543,7 +552,11 @@ Item {
         anchors.fill: parent
         clip: true
         contentWidth: availableWidth
-        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        // 显式创建横向滚动条再关闭，避免离屏测试中默认 attached 实例尚未创建时对 null 赋值。
+        ScrollBar.horizontal: ScrollBar {
+            objectName: "statisticsHorizontalScrollBar"
+            policy: ScrollBar.AlwaysOff
+        }
 
         ColumnLayout {
             x: root.contentMargin

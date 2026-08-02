@@ -331,6 +331,8 @@ add_executable(GoalServiceTests
     src/models/LongGoal.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
     src/services/GoalService.h
     src/services/GoalService.cpp
     src/services/FocusSessionRules.h
@@ -386,6 +388,24 @@ target_link_libraries(PlatformControlTests PRIVATE
 )
 
 add_test(NAME PlatformControlTests COMMAND PlatformControlTests)
+
+# 原生通知授权的状态查询可由 fake 注入，测试不访问系统通知中心或弹授权框。
+add_executable(MacNotificationBackendTests
+    tests/MacNotificationBackendTests.cpp
+    src/services/NotificationService.h
+    src/services/NotificationService.cpp
+    src/platform/macos/MacNotificationBackend.h
+    src/platform/macos/MacNotificationBackend.mm
+)
+
+target_link_libraries(MacNotificationBackendTests PRIVATE
+    Qt6::Core
+    Qt6::Test
+    "-framework Foundation"
+    "-framework UserNotifications"
+)
+
+add_test(NAME MacNotificationBackendTests COMMAND MacNotificationBackendTests)
 
 # 备份/恢复：SQLite 快照 + 嵌入偏好；测试用临时目录与临时数据库，覆盖一致性与回滚。
 add_executable(BackupServiceTests
@@ -536,4 +556,27 @@ add_test(
 set_tests_properties(PomodoroTodoQmlTests PROPERTIES
     # 测试固定离屏平台与 Basic 风格，后台验证不得创建真实应用窗口。
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic"
+)
+
+# 每个 CTest 进程都需要 watchdog：QML runner 聚合全部文件，因此比单个业务/资产测试留出更宽余量。
+set_tests_properties(PomodoroTodoQmlTests PROPERTIES TIMEOUT 180)
+set_tests_properties(
+    PomodoroTodoTests
+    CoreLogicTests
+    RobustnessTests
+    CountdownServiceTests
+    GoalServiceTests
+    PlatformControlTests
+    BackupServiceTests
+    TimingRobustnessTests
+    PROPERTIES TIMEOUT 90
+)
+set_tests_properties(
+    FontAssetsTests
+    WallpaperAssetsTests
+    ShaderAssetsTests
+    SoundAssetsTests
+    QmlResourceManifestTests
+    MacNotificationBackendTests
+    PROPERTIES TIMEOUT 30
 )

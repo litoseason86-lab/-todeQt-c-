@@ -58,6 +58,8 @@ public:
 
 signals:
     void tasksChanged();
+    // 仅在删除事务提交后发出。计时器等持有任务 ID 的服务据此解绑，避免通过查询猜测删除结果。
+    void taskDeleted(int taskId);
     // 查询失败不能再伪装成合法空列表；页面监听该信号展示明确错误。
     void operationFailed(const QString& message);
 

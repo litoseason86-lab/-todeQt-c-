@@ -2,10 +2,13 @@
 #define BACKUPSERVICE_H
 
 #include <QObject>
+#include <QList>
 #include <QSharedPointer>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
+
+class QFutureWatcherBase;
 
 namespace BackupOperations {
 struct OperationResult;
@@ -29,6 +32,7 @@ public:
 
     static BackupService* instance();
     explicit BackupService(QObject* parent = nullptr);
+    ~BackupService() override;
 
     // 测试注入设置文件路径与备份目录；生产用默认（默认 QSettings + AppDataLocation/backups）。
     // 数据库路径始终取自 DatabaseManager 当前连接，无需注入。
@@ -45,6 +49,9 @@ public:
     Q_INVOKABLE void requestBackupInfo(const QString& srcPath);
     Q_INVOKABLE void requestRestore(const QString& srcPath);
     void requestAutoBackupIfDue();
+    // aboutToQuit 中调用：先让后台文件任务结束，再允许数据库和 Qt 全局对象销毁。
+    // 该函数可重复调用，避免退出路径因重复信号或析构兜底而二次释放 watcher。
+    void prepareForShutdown();
 
     Q_INVOKABLE QString backupsDirectory() const;
     Q_INVOKABLE QVariantList listBackups() const;
@@ -105,6 +112,8 @@ private:
     void setBusy(bool busy,
                  const QString& operationText = QString(),
                  bool operationBlocksUi = false);
+    void trackWorker(QFutureWatcherBase* watcher);
+    void retireWorker(QFutureWatcherBase* watcher);
 
     QString m_settingsFilePath;   // 空 = 默认 QSettings（生产）
     QString m_backupsDir;         // 空 = AppDataLocation/backups
@@ -112,6 +121,9 @@ private:
     bool m_busy = false;
     bool m_operationBlocksUi = false;
     QString m_operationText;
+    // QtConcurrent 任务不归 QObject 生命周期管理；必须持有 watcher，才能在事件循环停止前等待。
+    QList<QFutureWatcherBase*> m_activeWorkers;
+    bool m_shutdownPrepared = false;
     // 仅供 BackupServiceTests 置位：强制下一次回滚的拷贝返回失败。生产代码永远不写它。
     bool m_forceRollbackCopyFailureForTest = false;
 };

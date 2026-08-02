@@ -73,6 +73,12 @@ TestCase {
     }
 
     QtObject {
+        id: categoryManager
+
+        signal categoriesChanged()
+    }
+
+    QtObject {
         id: statisticsService
 
         function getTodayStats() {
@@ -100,6 +106,15 @@ TestCase {
     }
 
     QtObject {
+        id: routineManager
+
+        signal routinesChanged()
+
+        function materializeToday() {
+        }
+    }
+
+    QtObject {
         id: settingsMock
 
         property string rolloverIgnoredDate: ""
@@ -109,6 +124,7 @@ TestCase {
         id: view
         width: testCase.width
         height: testCase.height
+        categoryManagerRef: categoryManager
         settingsRef: settingsMock
     }
 
@@ -210,6 +226,29 @@ TestCase {
 
         logicalDayService.changed()
 
-        verify(taskManager.todayCalls > before)
+        tryVerify(function() { return taskManager.todayCalls > before }, 1000)
+    }
+
+    function test_synchronous_data_invalidations_share_one_refresh() {
+        var callsBefore = taskManager.todayCalls
+
+        taskManager.tasksChanged()
+        focusTimer.focusCompleted(1500)
+        categoryManager.categoriesChanged()
+        routineManager.routinesChanged()
+        logicalDayService.changed()
+
+        // 同一事件循环内的多条失效链只做一次整页查询。
+        tryCompare(taskManager, "todayCalls", callsBefore + 1, 1000)
+    }
+
+    function test_cross_event_loop_invalidations_are_not_swallowed() {
+        var callsBefore = taskManager.todayCalls
+
+        taskManager.tasksChanged()
+        tryCompare(taskManager, "todayCalls", callsBefore + 1, 1000)
+
+        focusTimer.focusCompleted(1500)
+        tryCompare(taskManager, "todayCalls", callsBefore + 2, 1000)
     }
 }

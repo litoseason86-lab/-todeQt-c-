@@ -21,8 +21,10 @@ TestCase {
         signal operationFailed(string message)
 
         property var todayTasksData: []
+        property int todayTasksCalls: 0
 
         function getTodayTasks() {
+            todayTasksCalls += 1
             return todayTasksData
         }
 
@@ -116,6 +118,12 @@ TestCase {
     }
 
     QtObject {
+        id: categoryManager
+
+        signal categoriesChanged
+    }
+
+    QtObject {
         id: logicalDayService
 
         signal changed
@@ -157,6 +165,7 @@ TestCase {
         DashboardView {
             width: 1000
             height: 680
+            categoryManagerRef: categoryManager
             settingsRef: appSettings
             nowProvider: function() { return testCase.logicalNow }
         }
@@ -197,6 +206,7 @@ TestCase {
 
     function init() {
         taskManager.todayTasksData = []
+        taskManager.todayTasksCalls = 0
         focusTimer.phase = 0
         focusTimer.hasActiveSession = false
         focusTimer.isRunning = false
@@ -278,6 +288,54 @@ TestCase {
 
         routineManager.operationFailed("例行生成故障")
         compare(view.loadError, "例行生成故障")
+    }
+
+    function test_synchronous_data_invalidations_share_one_refresh() {
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+        var callsBefore = taskManager.todayTasksCalls
+
+        taskManager.tasksChanged()
+        focusTimer.focusCompleted(1500)
+        categoryManager.categoriesChanged()
+        routineManager.routinesChanged()
+        logicalDayService.changed()
+
+        // 同一事件循环内的多条失效链只做一次整页查询。
+        tryCompare(taskManager, "todayTasksCalls", callsBefore + 1, 1000)
+    }
+
+    function test_cross_event_loop_invalidations_are_not_swallowed() {
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+        var callsBefore = taskManager.todayTasksCalls
+
+        taskManager.tasksChanged()
+        tryCompare(taskManager, "todayTasksCalls", callsBefore + 1, 1000)
+
+        focusTimer.focusCompleted(1500)
+        tryCompare(taskManager, "todayTasksCalls", callsBefore + 2, 1000)
+    }
+
+    function test_page_activation_keeps_the_first_refresh_immediate() {
+        var view = createTemporaryObject(dashboardComponent, testCase, { pageActive: false })
+        verify(view)
+        compare(taskManager.todayTasksCalls, 0)
+
+        view.pageActive = true
+        tryCompare(taskManager, "todayTasksCalls", 1, 1000)
+    }
+
+    function test_completion_animation_still_defers_task_refresh() {
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+        var callsBefore = taskManager.todayTasksCalls
+
+        view.completionRefreshDelayActive = true
+        taskManager.tasksChanged()
+        wait(40)
+        compare(taskManager.todayTasksCalls, callsBefore)
+        view.completionRefreshDelayActive = false
     }
 
     function test_greeting_includes_nickname_when_set() {
@@ -382,6 +440,7 @@ TestCase {
         // 没有待办任务时改为带用户去专注页，而不是静默失败。
         taskManager.todayTasksData = []
         taskManager.tasksChanged()
+        tryCompare(view, "tasks", taskManager.todayTasksData, 1000)
         var focusSpy = createTemporaryObject(spyComponent, testCase,
                                              { target: view, signalName: "focusPageRequested" })
         view.startFirstPendingTask()
@@ -495,8 +554,8 @@ TestCase {
         // 跨到下一个逻辑日后，昨天目标不继承。
         testCase.logicalNow = new Date(2026, 6, 13, 12, 0, 0)
         logicalDayService.changed()
-        compare(view.logicalTodayIso, "2026-07-13")
-        compare(view.dailyFocusGoalMinutes, 0)
+        tryCompare(view, "logicalTodayIso", "2026-07-13", 1000)
+        tryCompare(view, "dailyFocusGoalMinutes", 0, 1000)
 
         // 保存动作已移交今日任务页；仪表盘上的目标卡是只读实例。
         var card = findChild(view, "dashboardGoalCard")

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtTest
 import "../../qml/views"
 
@@ -38,6 +39,12 @@ TestCase {
     }
 
     QtObject {
+        id: categoryManager
+
+        signal categoriesChanged()
+    }
+
+    QtObject {
         id: statisticsService
 
         function getDayStats(day) {
@@ -60,8 +67,10 @@ TestCase {
 
         property bool shouldFail: false
         property var goalsData: []
+        property int getGoalsCalls: 0
 
         function getGoals() {
+            getGoalsCalls++
             if (shouldFail) {
                 operationFailed("读取长期目标失败")
                 return []
@@ -80,6 +89,7 @@ TestCase {
         focusTimerRef: focusTimer
         logicalDayServiceRef: logicalDayService
         appSettingsRef: appSettings
+        categoryManagerRef: categoryManager
         goalServiceRef: goalService
         currentDateOverride: new Date(2026, 6, 8, 1, 0)
     }
@@ -90,6 +100,7 @@ TestCase {
         view.applyCurrentPeriodSelection()
         goalService.shouldFail = false
         goalService.goalsData = []
+        goalService.getGoalsCalls = 0
         view.achievedGoals = []
         view.achievedGoalsError = ""
         testCase.dayStatsCalls = 0
@@ -100,20 +111,59 @@ TestCase {
         compare(Qt.formatDate(view.selectedDate, "yyyy-MM-dd"), "2026-07-07")
     }
 
+    function test_horizontal_scrollbar_remains_disabled() {
+        const horizontalBar = findChild(view, "statisticsHorizontalScrollBar")
+        verify(horizontalBar)
+        compare(horizontalBar.policy, ScrollBar.AlwaysOff)
+    }
+
     function test_changedTriggersRefreshAndKeepsHistoricalSelection() {
         view.selectedDate = new Date(2026, 5, 1)
         var callsBefore = testCase.dayStatsCalls
 
         logicalDayService.changed()
 
-        verify(testCase.dayStatsCalls > callsBefore)
+        tryVerify(function() { return testCase.dayStatsCalls > callsBefore }, 1000)
         compare(Qt.formatDate(view.selectedDate, "yyyy-MM-dd"), "2026-06-01")
     }
 
     function test_changedFollowsCurrentPeriod() {
         compare(Qt.formatDate(view.selectedDate, "yyyy-MM-dd"), "2026-07-07")
         logicalDayService.changed()
+        tryCompare(testCase, "dayStatsCalls", 1, 1000)
         compare(Qt.formatDate(view.selectedDate, "yyyy-MM-dd"), "2026-07-07")
+    }
+
+    function test_synchronous_data_invalidations_share_one_refresh() {
+        var callsBefore = testCase.dayStatsCalls
+
+        taskManager.tasksChanged()
+        focusTimer.focusCompleted(1500)
+        categoryManager.categoriesChanged()
+        logicalDayService.changed()
+
+        // 同一事件循环内的多条失效链只做一次整页查询。
+        tryCompare(testCase, "dayStatsCalls", callsBefore + 1, 1000)
+    }
+
+    function test_cross_event_loop_invalidations_are_not_swallowed() {
+        var callsBefore = testCase.dayStatsCalls
+
+        taskManager.tasksChanged()
+        tryCompare(testCase, "dayStatsCalls", callsBefore + 1, 1000)
+
+        focusTimer.focusCompleted(1500)
+        tryCompare(testCase, "dayStatsCalls", callsBefore + 2, 1000)
+    }
+
+    function test_goal_changes_stay_on_the_fine_grained_refresh_path() {
+        var pageRefreshCalls = testCase.dayStatsCalls
+        var goalCalls = goalService.getGoalsCalls
+
+        goalService.goalsChanged()
+
+        tryCompare(goalService, "getGoalsCalls", goalCalls + 1, 1000)
+        compare(testCase.dayStatsCalls, pageRefreshCalls)
     }
 
     function test_achievedGoalFailureKeepsDataAndShowsError() {

@@ -20,6 +20,10 @@ FocusTimer::FocusTimer(QObject* parent)
     m_timer.setInterval(1000);
     connect(AppSettings::instance(), &AppSettings::dayStartHourChanged,
             this, &FocusTimer::sessionLogicalDateChanged);
+    // 删除信号携带已提交的任务 ID。不能在计时器内查询任务是否存在：查询与删除之间
+    // 会产生竞态，且跨线程/换库时可能读到另一份数据库；只按这条事实信号解绑内存状态。
+    connect(TaskManager::instance(), &TaskManager::taskDeleted,
+            this, &FocusTimer::handleTaskDeleted);
     connect(&m_timer, &QTimer::timeout, this, [this]() {
         syncElapsedTime();
         // 每五秒保存一次活动进度；崩溃最多损失一个检查点区间，正常退出会再做一次同步。
@@ -313,7 +317,14 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion)
         m_timer.stop();
     }
 
-    const int duration = m_elapsedSeconds;
+    int duration = m_elapsedSeconds;
+    if (naturalCompletion && m_mode == PomodoroMode && m_phase == WorkPhase
+        && m_targetSeconds > 0) {
+        // 单调时钟会把合盖期间一并计入；自然到点的番茄应记录配置目标，而不是
+        // 唤醒后才处理 timeout 所造成的超额时间。手动停止和自由计时不走此分支，
+        // 仍完整保留用户实际专注时长。
+        duration = qMin(duration, m_targetSeconds);
+    }
     if (duration < FocusSessionRules::kMinimumValidDurationSeconds) {
         // 低于 3 分钟的会话视为无效，直接删除 startFocus 预先插入的占位记录，避免历史页出现 0 分钟噪音。
         if (!discardFocusSession()) {
@@ -668,6 +679,22 @@ bool FocusTimer::cleanupOrphanedSessions()
     return true;
 }
 
+void FocusTimer::handleTaskDeleted(int taskId)
+{
+    if (taskId <= 0 || m_currentTaskId != taskId) {
+        return;
+    }
+
+    // 删除事务已完成，外键已把数据库中的 task_id 设为 NULL；这里同步内存并再次
+    // 写入活动快照，保证恢复路径也不会带回已删除的 ID。标题是会话快照，必须保留。
+    m_currentTaskId = -1;
+    if (hasActiveTimer() && !persistActiveState()) {
+        qWarning() << "Failed to detach deleted task from active focus state"
+                   << "taskId=" << taskId << "sessionId=" << m_sessionId;
+    }
+    emit currentTaskChanged();
+}
+
 bool FocusTimer::restoreInterruptedSession()
 {
     if (hasActiveTimer()) {
@@ -691,7 +718,15 @@ bool FocusTimer::restoreInterruptedSession()
     }
 
     if (!stateQuery.next()) {
-        return cleanupOrphanedSessions();
+        // 换库或恢复不含活动状态的备份时，内存可能还保留上一库的番茄循环计数。
+        // 数据库没有活动状态就没有可继承的计数，必须清零并通知 QML 更新长休息判定。
+        const bool pomodoroCountChanged = m_completedPomodoros != 0;
+        m_completedPomodoros = 0;
+        const bool cleanupSucceeded = cleanupOrphanedSessions();
+        if (pomodoroCountChanged) {
+            emit completedPomodorosChanged();
+        }
+        return cleanupSucceeded;
     }
 
     const int restoredSessionId = stateQuery.value(0).isNull() ? -1 : stateQuery.value(0).toInt();

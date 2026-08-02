@@ -46,6 +46,57 @@ ApplicationWindow {
         // qmllint enable unqualified
     }
 
+    function acknowledgeNaturalCompletionNotice() {
+        // 上下文条件与 Loader 已保证设置存在；这里仍保留守卫，避免独立 QML 验证时误写空对象。
+        // qmllint disable unqualified
+        if (typeof appSettings === "undefined" || !appSettings)
+            return
+
+        appSettings.naturalCompletionNoticeShown = true
+        if (appSettings.naturalCompletionNoticeShown)
+            return
+
+        // 写盘失败时不能把一次性说明伪装成已确认。弹窗自身已关闭，下一事件循环重新打开，
+        // 让用户修复权限后仍可明确确认；这里不改 Loader.active，以保留其声明式绑定。
+        mainContent.showToast(qsTr("提示确认未保存，请检查设置文件权限后重试"))
+        Qt.callLater(function() {
+            if (naturalCompletionNoticeLoader.status === Loader.Ready
+                    && naturalCompletionNoticeLoader.item) {
+                // Loader.item 的静态类型是 QObject；实际来源固定为该说明 Popup。
+                // qmllint disable missing-property
+                naturalCompletionNoticeLoader.item.open()
+                // qmllint enable missing-property
+            }
+        })
+        // qmllint enable unqualified
+    }
+
+    Loader {
+        id: naturalCompletionNoticeLoader
+        objectName: "naturalCompletionNoticeLoader"
+
+        anchors.fill: parent
+        // 仅向升级前已有数据库且尚未确认的用户展示。设置写成功后绑定自动变 false，
+        // Loader 会销毁 Popup，避免它在当前会话或后续启动再次出现。
+        // qmllint disable unqualified
+        active: typeof naturalCompletionNoticeRequired !== "undefined"
+                && Boolean(naturalCompletionNoticeRequired)
+                && typeof appSettings !== "undefined" && appSettings
+                && !appSettings.naturalCompletionNoticeShown
+        // qmllint enable unqualified
+        source: "components/NaturalCompletionNoticeDialog.qml"
+
+        onLoaded: {
+            if (status !== Loader.Ready || !item)
+                return
+            // source 固定为 NaturalCompletionNoticeDialog；Loader 的 QObject 推导不到其信号和方法。
+            // qmllint disable missing-property
+            item.acknowledged.connect(root.acknowledgeNaturalCompletionNotice)
+            item.open()
+            // qmllint enable missing-property
+        }
+    }
+
     onClosing: function(close) {
         // 数据库备份/恢复尚未结束时禁止关闭或退出，避免线程被销毁在原子替换中途。
         // qmllint disable unqualified

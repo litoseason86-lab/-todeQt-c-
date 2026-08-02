@@ -433,6 +433,9 @@ bool TaskManager::deleteTask(int taskId)
         return false;
     }
 
+    // 先广播精确删除事实，让计时器在列表刷新前解绑当前任务 ID；这样订阅 tasksChanged
+    // 的页面不会观察到“任务已删、计时器仍绑定旧 ID”的中间状态。
+    emit taskDeleted(taskId);
     emit tasksChanged();
     return true;
 }

@@ -83,6 +83,12 @@ BackupService::BackupService(QObject* parent)
 {
 }
 
+BackupService::~BackupService()
+{
+    // main 的 aboutToQuit 会在 QGuiApplication 析构前先调用；这里仅覆盖异常退出路径。
+    prepareForShutdown();
+}
+
 BackupService* BackupService::instance()
 {
     static BackupService service;
@@ -145,6 +151,55 @@ void BackupService::setBusy(bool busy,
         m_operationBlocksUi = nextBlocksUi;
         emit operationBlocksUiChanged();
     }
+}
+
+void BackupService::trackWorker(QFutureWatcherBase* watcher)
+{
+    Q_ASSERT(watcher);
+    m_activeWorkers.append(watcher);
+    connect(watcher, &QObject::destroyed, this, [this, watcher]() {
+        m_activeWorkers.removeAll(watcher);
+    });
+}
+
+void BackupService::retireWorker(QFutureWatcherBase* watcher)
+{
+    if (!watcher) {
+        return;
+    }
+
+    m_activeWorkers.removeAll(watcher);
+    // 这里只在正常完成回调中执行，事件循环仍在运行；退出路径由 prepareForShutdown()
+    // 断开回调后同步 delete，避免在发射 finished 信号期间销毁 sender。
+    watcher->deleteLater();
+}
+
+void BackupService::prepareForShutdown()
+{
+    if (m_shutdownPrepared) {
+        return;
+    }
+    m_shutdownPrepared = true;
+
+    const QList<QFutureWatcherBase*> workers = m_activeWorkers;
+    for (QFutureWatcherBase* watcher : workers) {
+        if (watcher) {
+            // 完成回调会访问数据库、设置和 QML 信号；退出阶段只等待文件任务结束，
+            // 不再启动恢复链的下一段，也不能依赖已停止事件循环执行 deleteLater。
+            QObject::disconnect(watcher, nullptr, this, nullptr);
+        }
+    }
+    for (QFutureWatcherBase* watcher : workers) {
+        if (watcher) {
+            watcher->waitForFinished();
+        }
+    }
+    for (QFutureWatcherBase* watcher : workers) {
+        if (watcher && m_activeWorkers.removeOne(watcher)) {
+            delete watcher;
+        }
+    }
+    setBusy(false);
 }
 
 QString BackupService::databasePath() const
@@ -461,6 +516,9 @@ void BackupService::startBackupJob(const QString& destinationPath,
                                    const QString& kind,
                                    bool automatic)
 {
+    if (m_shutdownPrepared) {
+        return;
+    }
     if (m_busy) {
         if (!automatic) {
             emit backupCompleted(false, QStringLiteral("已有备份或恢复任务正在执行"));
@@ -481,10 +539,14 @@ void BackupService::startBackupJob(const QString& destinationPath,
                       : QStringLiteral("正在创建备份"),
             !automatic);
     auto* watcher = new QFutureWatcher<BackupOperations::OperationResult>(this);
+    trackWorker(watcher);
     connect(watcher, &QFutureWatcherBase::finished, this,
             [this, watcher, automatic]() {
         const BackupOperations::OperationResult result = watcher->result();
-        watcher->deleteLater();
+        retireWorker(watcher);
+        if (m_shutdownPrepared) {
+            return;
+        }
 
         if (automatic && result.success) {
             std::unique_ptr<QSettings> settings = makeSettings(m_settingsFilePath);
@@ -531,6 +593,9 @@ void BackupService::requestBackup(const QString& destPath)
 
 void BackupService::requestBackupInfo(const QString& srcPath)
 {
+    if (m_shutdownPrepared) {
+        return;
+    }
     if (m_busy) {
         QVariantMap info;
         info.insert(QStringLiteral("valid"), false);
@@ -541,10 +606,14 @@ void BackupService::requestBackupInfo(const QString& srcPath)
 
     setBusy(true, QStringLiteral("正在校验备份"), true);
     auto* watcher = new QFutureWatcher<QVariantMap>(this);
+    trackWorker(watcher);
     connect(watcher, &QFutureWatcherBase::finished, this,
             [this, watcher, srcPath]() {
         const QVariantMap info = watcher->result();
-        watcher->deleteLater();
+        retireWorker(watcher);
+        if (m_shutdownPrepared) {
+            return;
+        }
         setBusy(false);
         emit backupInfoReady(srcPath, info);
     });
@@ -556,6 +625,9 @@ void BackupService::requestBackupInfo(const QString& srcPath)
 
 void BackupService::requestRestore(const QString& srcPath)
 {
+    if (m_shutdownPrepared) {
+        return;
+    }
     if (m_busy) {
         emit restoreCompleted(false, QStringLiteral("已有备份或恢复任务正在执行"));
         return;
@@ -591,10 +663,14 @@ void BackupService::requestRestore(const QString& srcPath)
     emit restoreStarted();
 
     auto* watcher = new QFutureWatcher<RestorePreflightResult>(this);
+    trackWorker(watcher);
     connect(watcher, &QFutureWatcherBase::finished, this,
             [this, watcher, context]() {
         const RestorePreflightResult result = watcher->result();
-        watcher->deleteLater();
+        retireWorker(watcher);
+        if (m_shutdownPrepared) {
+            return;
+        }
         if (!result.success) {
             setLastError(result.error);
             setBusy(false);
@@ -625,15 +701,22 @@ void BackupService::requestRestore(const QString& srcPath)
 void BackupService::installPreparedRestore(
     const QSharedPointer<RestoreContext>& context)
 {
+    if (m_shutdownPrepared) {
+        return;
+    }
     // 从此刻起关闭主连接，后台线程才能得到一个精确且不会再被业务层修改的恢复前快照。
     DatabaseManager::instance()->close();
     setBusy(true, QStringLiteral("正在备份当前数据并恢复"), true);
 
     auto* watcher = new QFutureWatcher<BackupOperations::OperationResult>(this);
+    trackWorker(watcher);
     connect(watcher, &QFutureWatcherBase::finished, this,
             [this, watcher, context]() {
         const BackupOperations::OperationResult result = watcher->result();
-        watcher->deleteLater();
+        retireWorker(watcher);
+        if (m_shutdownPrepared) {
+            return;
+        }
         if (!result.success) {
             // 原子安装失败时旧数据库仍在原路径，只需重新打开；恢复前快照若已生成则继续保留。
             const bool reopened =
@@ -695,14 +778,21 @@ void BackupService::rollbackAsyncRestore(
     const QSharedPointer<RestoreContext>& context,
     const QString& reason)
 {
+    if (m_shutdownPrepared) {
+        return;
+    }
     DatabaseManager::instance()->close();
     setBusy(true, QStringLiteral("恢复失败，正在安全回滚"), true);
 
     auto* watcher = new QFutureWatcher<BackupOperations::OperationResult>(this);
+    trackWorker(watcher);
     connect(watcher, &QFutureWatcherBase::finished, this,
             [this, watcher, context, reason]() {
         const BackupOperations::OperationResult result = watcher->result();
-        watcher->deleteLater();
+        retireWorker(watcher);
+        if (m_shutdownPrepared) {
+            return;
+        }
 
         // 无论回滚拷贝成败，都必须先把数据库重新打开：拷贝失败时原库文件通常仍完好，
         // 只是连接被关掉了。若把 initialize 挂在 && 链后半段，拷贝一失败就会短路，
@@ -769,6 +859,9 @@ bool BackupService::autoBackupDue() const
 
 bool BackupService::runAutoBackupIfDue()
 {
+    if (m_shutdownPrepared) {
+        return true;
+    }
     setLastError(QString());
     if (!autoBackupDue()) {
         return true;
@@ -800,7 +893,7 @@ bool BackupService::runAutoBackupIfDue()
 
 void BackupService::requestAutoBackupIfDue()
 {
-    if (m_busy || !autoBackupDue()) {
+    if (m_shutdownPrepared || m_busy || !autoBackupDue()) {
         return;
     }
     const QString path = QDir(autoBackupsDir()).filePath(

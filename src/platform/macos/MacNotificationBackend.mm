@@ -7,10 +7,24 @@
 
 #include <utility>
 
+namespace {
+MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery();
+MacNotificationBackend::NotificationSubmitter makeNotificationSubmitter();
+}
+
 MacNotificationBackend::MacNotificationBackend()
-    : m_authState(std::make_shared<std::atomic<int>>(0))
+    : MacNotificationBackend(makeAuthorizationQuery(), makeNotificationSubmitter())
 {
 }
+
+MacNotificationBackend::MacNotificationBackend(AuthorizationQuery authorizationQuery,
+                                               NotificationSubmitter notificationSubmitter)
+    : m_authState(std::make_shared<std::atomic<int>>(0))
+    , m_authorizationQuery(std::move(authorizationQuery))
+    , m_notificationSubmitter(std::move(notificationSubmitter))
+{
+}
+
 MacNotificationBackend::~MacNotificationBackend() = default;
 
 namespace {
@@ -27,6 +41,64 @@ UNUserNotificationCenter* safeNotificationCenter()
     } @catch (NSException* exception) {
         return nil;
     }
+}
+
+MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery()
+{
+    return [](MacNotificationBackend::AuthorizationResultCallback callback) {
+        UNUserNotificationCenter* center = safeNotificationCenter();
+        if (center == nil) {
+            callback(false, QStringLiteral("系统通知中心不可用"));
+            return;
+        }
+
+        const auto completion =
+            std::make_shared<MacNotificationBackend::AuthorizationResultCallback>(std::move(callback));
+        [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings* settings) {
+            const bool allowed = settings.authorizationStatus == UNAuthorizationStatusAuthorized
+                || settings.authorizationStatus == UNAuthorizationStatusProvisional;
+            (*completion)(allowed, allowed ? QString() : QStringLiteral("系统通知权限不可用"));
+        }];
+    };
+}
+
+MacNotificationBackend::NotificationSubmitter makeNotificationSubmitter()
+{
+    return [](const QString& title,
+              const QString& body,
+              bool playSound,
+              NotificationBackend::DeliveryCallback callback) {
+        UNUserNotificationCenter* center = safeNotificationCenter();
+        if (center == nil) {
+            callback(false, QStringLiteral("系统通知中心不可用"));
+            return;
+        }
+
+        NSString* notificationTitle = [title.toNSString() copy];
+        NSString* notificationBody = [body.toNSString() copy];
+        const auto completion =
+            std::make_shared<NotificationBackend::DeliveryCallback>(std::move(callback));
+
+        UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
+        content.title = notificationTitle;
+        content.body = notificationBody;
+        content.sound = playSound ? [UNNotificationSound defaultSound] : nil;
+
+        UNNotificationRequest* request =
+            [UNNotificationRequest requestWithIdentifier:[[NSUUID UUID] UUIDString]
+                                                 content:content
+                                                 trigger:nil];
+        [center addNotificationRequest:request
+                 withCompletionHandler:^(NSError* _Nullable error) {
+            if (error != nil) {
+                qWarning() << "系统通知投递失败:"
+                           << QString::fromNSString(error.localizedDescription);
+                (*completion)(false, QString::fromNSString(error.localizedDescription));
+                return;
+            }
+            (*completion)(true, QString());
+        }];
+    };
 }
 }
 
@@ -60,50 +132,33 @@ void MacNotificationBackend::deliver(const QString& title,
                                      bool playSound,
                                      DeliveryCallback callback)
 {
-    if (m_authState->load() == 2) {
-        callback(false, QStringLiteral("系统通知权限已被拒绝"));
-        return;
-    }
-
-    UNUserNotificationCenter* center = safeNotificationCenter();
-    if (center == nil) {
-        callback(false, QStringLiteral("系统通知中心不可用"));
-        return;
-    }
-
-    NSString* notificationTitle = [title.toNSString() copy];
-    NSString* notificationBody = [body.toNSString() copy];
     const std::shared_ptr<std::atomic<int>> state = m_authState;
     const auto completion =
         std::make_shared<DeliveryCallback>(std::move(callback));
 
-    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings* settings) {
-        const bool allowed = settings.authorizationStatus == UNAuthorizationStatusAuthorized
-            || settings.authorizationStatus == UNAuthorizationStatusProvisional;
+    // 不能用上一次“被拒绝”的缓存短路。用户可在系统设置中授权而不重启应用，
+    // 每次投递前查询当前权限，才能在下一次阶段提醒时自动恢复。
+    if (!m_authorizationQuery) {
+        (*completion)(false, QStringLiteral("系统通知授权查询不可用"));
+        return;
+    }
+
+    const NotificationSubmitter submitter = m_notificationSubmitter;
+    m_authorizationQuery([state, submitter, title, body, playSound, completion](bool allowed,
+                                                                                  const QString& error) {
         state->store(allowed ? 1 : 2);
         if (!allowed) {
-            (*completion)(false, QStringLiteral("系统通知权限不可用"));
+            (*completion)(false, error.isEmpty()
+                          ? QStringLiteral("系统通知权限不可用") : error);
             return;
         }
-
-        UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
-        content.title = notificationTitle;
-        content.body = notificationBody;
-        content.sound = playSound ? [UNNotificationSound defaultSound] : nil;
-
-        UNNotificationRequest* request =
-            [UNNotificationRequest requestWithIdentifier:[[NSUUID UUID] UUIDString]
-                                                 content:content
-                                                 trigger:nil];
-        [center addNotificationRequest:request
-                 withCompletionHandler:^(NSError* _Nullable error) {
-            if (error != nil) {
-                qWarning() << "系统通知投递失败:"
-                           << QString::fromNSString(error.localizedDescription);
-                (*completion)(false, QString::fromNSString(error.localizedDescription));
-                return;
-            }
-            (*completion)(true, QString());
-        }];
-    }];
+        if (!submitter) {
+            (*completion)(false, QStringLiteral("系统通知投递不可用"));
+            return;
+        }
+        // 投递失败不等于授权失效；缓存仍保留本次已观察到的 allowed 状态。
+        submitter(title, body, playSound, [completion](bool success, const QString& reason) {
+            (*completion)(success, reason);
+        });
+    });
 }
