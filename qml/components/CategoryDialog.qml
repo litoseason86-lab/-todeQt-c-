@@ -103,7 +103,7 @@ Popup {
     }
 
     function beginEdit(category) {
-        if (!category || category.isPreset) {
+        if (!category) {
             return
         }
 
@@ -324,8 +324,8 @@ Popup {
 
                             Button {
                                 id: editButton
+                                objectName: "editCategoryButton-" + Number(modelData.id)
 
-                                visible: !modelData.isPreset
                                 text: "编辑"
                                 implicitWidth: 64
                                 implicitHeight: 34

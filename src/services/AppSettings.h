@@ -12,6 +12,8 @@ class AppSettings : public QObject
     Q_PROPERTY(int lastMode READ lastMode WRITE setLastMode NOTIFY lastModeChanged)
     Q_PROPERTY(int workMinutes READ workMinutes WRITE setWorkMinutes NOTIFY workMinutesChanged)
     Q_PROPERTY(int breakMinutes READ breakMinutes WRITE setBreakMinutes NOTIFY breakMinutesChanged)
+    // 自由计时超过该小时数后，结束时必须确认记录或丢弃；默认 8 小时。
+    Q_PROPERTY(int freeTimerWarningHours READ freeTimerWarningHours WRITE setFreeTimerWarningHours NOTIFY freeTimerWarningHoursChanged)
     Q_PROPERTY(bool soundEnabled READ soundEnabled WRITE setSoundEnabled NOTIFY soundEnabledChanged)
     Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY reduceMotionChanged)
     Q_PROPERTY(bool slimClockFont READ slimClockFont WRITE setSlimClockFont NOTIFY slimClockFontChanged)
@@ -53,6 +55,8 @@ public:
     void setWorkMinutes(int minutes);
     int breakMinutes() const;
     void setBreakMinutes(int minutes);
+    int freeTimerWarningHours() const;
+    void setFreeTimerWarningHours(int hours);
     bool soundEnabled() const;
     void setSoundEnabled(bool enabled);
     bool reduceMotion() const;
@@ -103,6 +107,7 @@ signals:
     void lastModeChanged();
     void workMinutesChanged();
     void breakMinutesChanged();
+    void freeTimerWarningHoursChanged();
     void soundEnabledChanged();
     void reduceMotionChanged();
     void slimClockFontChanged();
@@ -130,6 +135,7 @@ signals:
 private:
     static int normalizeWorkMinutes(int minutes);
     static int normalizeBreakMinutes(int minutes);
+    static int normalizeFreeTimerWarningHours(int hours);
     static int normalizeDayStartHour(int hour);
     static int normalizeLongBreakMinutes(int minutes);
     static int normalizeLongBreakInterval(int count);

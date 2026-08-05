@@ -655,6 +655,7 @@ private slots:
     void appSettingsDayStartHourNormalizeAndPersist();
     void appSettingsDayStartHourRejectsCorruptIniValue();
     void appSettingsFocusDurationsNormalizeCorruptValues();
+    void appSettingsFreeTimerWarningHoursDefaultsAndNormalizes();
     void appSettingsWriteFailureDoesNotEmitSuccess();
     void appSettingsCanRetryAfterWriteFailure();
     void appSettingsReduceTransparencyRoundTrip();
@@ -735,7 +736,7 @@ private slots:
     void migrationV8DoesNotRewriteExistingCompletionFacts();
     void multiStepMigrationKeepsOnlyThePreMigrationSnapshot();
     void customCategoryCrudValidatesAndEmitsChanges();
-    void presetCategoriesCannotBeEditedOrDeleted();
+    void presetCategoriesCanBeEditedButNotDeleted();
     void deletingAssociatedCategoryDetachesTasks();
     void deletingLegacyTextCategoryClearsTaskCategoryText();
     void taskManagerReturnsFullCategoryInfo();
@@ -753,13 +754,16 @@ private slots:
     void exportRejectsInvalidDateRangeAndUnwritablePath();
     void exportFailurePreservesExistingFile();
     void exportAllRejectsInvalidDestinationBeforeReplacingFiles();
-    void stopFocusCompletesTaskAfterFiveMinutes();
+    void freeFocusDoesNotAutoCompletePlannedTask();
+    void discardFreeFocusRemovesLongSessionWithoutRecording();
     void stopFocusUnderFiveMinutesKeepsTaskPending();
     void stopFocusUnderThreeMinutesDiscardsInvalidSession();
     void shortSessionEmitsSessionDiscarded();
     void validSessionDoesNotEmitSessionDiscarded();
-    void focusTimerExposesRuleConstants();
-    void pomodoroWorkCompletionSavesSessionAndAutoCompletesTask();
+    void focusTimerExposesMinimumValidDuration();
+    void pomodoroWorkCompletesOnlyWhenPlannedCountReached();
+    void pomodoroWorkRequiresPositiveExactPlan();
+    void pomodoroTargetCompletionFailureKeepsSession();
     void manuallyStoppedPomodoroDoesNotCountAsCompleted();
     void realPomodoroSessionAdvancesLongGoalAndFiresMilestone();
     void pomodoroBreakWritesNoSessionAndCompletes();
@@ -1175,6 +1179,33 @@ void ServiceTests::appSettingsFocusDurationsNormalizeCorruptValues()
     QCOMPARE(settings.breakMinutes(), 5);
     QCOMPARE(workSpy.count(), 0);
     QCOMPARE(breakSpy.count(), 0);
+}
+
+void ServiceTests::appSettingsFreeTimerWarningHoursDefaultsAndNormalizes()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.freeTimerWarningHours(), 8);
+
+        QSignalSpy spy(&settings, &AppSettings::freeTimerWarningHoursChanged);
+        settings.setFreeTimerWarningHours(12);
+        QCOMPARE(settings.freeTimerWarningHours(), 12);
+        QCOMPARE(spy.count(), 1);
+
+        // 越界值视为配置损坏并回到默认 8 小时，不夹到 1 或 24。
+        settings.setFreeTimerWarningHours(0);
+        QCOMPARE(settings.freeTimerWarningHours(), 8);
+        QCOMPARE(spy.count(), 2);
+        settings.setFreeTimerWarningHours(25);
+        QCOMPARE(spy.count(), 2);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.freeTimerWarningHours(), 8);
 }
 
 void ServiceTests::appSettingsWriteFailureDoesNotEmitSuccess()
@@ -3354,21 +3385,29 @@ void ServiceTests::customCategoryCrudValidatesAndEmitsChanges()
     QVERIFY(manager->getCategoryById(id).isEmpty());
 }
 
-void ServiceTests::presetCategoriesCannotBeEditedOrDeleted()
+void ServiceTests::presetCategoriesCanBeEditedButNotDeleted()
 {
     CategoryManager* manager = CategoryManager::instance();
     const QVariantMap preset = manager->getPresetCategories().first().toMap();
     const int presetId = preset.value(QStringLiteral("id")).toInt();
 
-    QTest::ignoreMessage(QtWarningMsg, "Failed to update category: preset category cannot be edited");
-    QVERIFY(!manager->updateCategory(presetId, QStringLiteral("数学改名"), QStringLiteral("#112233")));
+    QVERIFY(manager->updateCategory(presetId, QStringLiteral("数学改名"), QStringLiteral("#112233")));
+
+    const QVariantMap updated = manager->getCategoryById(presetId);
+    QCOMPARE(updated.value(QStringLiteral("name")).toString(), QStringLiteral("数学改名"));
+    QCOMPARE(updated.value(QStringLiteral("color")).toString(), QStringLiteral("#112233"));
+    QCOMPARE(updated.value(QStringLiteral("isPreset")).toBool(), true);
 
     QTest::ignoreMessage(QtWarningMsg, "Failed to delete category: preset category cannot be deleted");
     QVERIFY(!manager->deleteCategory(presetId));
+    QVERIFY(!manager->canDeleteCategory(presetId));
 
-    const QVariantMap unchanged = manager->getCategoryById(presetId);
-    QCOMPARE(unchanged.value(QStringLiteral("name")).toString(), preset.value(QStringLiteral("name")).toString());
-    QCOMPARE(unchanged.value(QStringLiteral("color")).toString(), preset.value(QStringLiteral("color")).toString());
+    // 重启会再次执行默认科目播种；编辑过的预设行必须按稳定顺序识别，不能按旧名称复制一份。
+    QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath(QStringLiteral("test.sqlite"))));
+    QCOMPARE(manager->getPresetCategories().size(), 5);
+    const QVariantMap persisted = manager->getCategoryById(presetId);
+    QCOMPARE(persisted.value(QStringLiteral("name")).toString(), QStringLiteral("数学改名"));
+    QCOMPARE(persisted.value(QStringLiteral("color")).toString(), QStringLiteral("#112233"));
 }
 
 void ServiceTests::deletingAssociatedCategoryDetachesTasks()
@@ -3864,13 +3903,13 @@ void ServiceTests::exportAllRejectsInvalidDestinationBeforeReplacingFiles()
     QVERIFY(QFileInfo(sessionsPath).isDir());
 }
 
-void ServiceTests::stopFocusCompletesTaskAfterFiveMinutes()
+void ServiceTests::freeFocusDoesNotAutoCompletePlannedTask()
 {
-    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("五分钟任务"), logicalToday(), QString()));
-    const int taskId = TaskManager::instance()->getTodayTasks().first().toMap().value(QStringLiteral("id")).toInt();
+    const int taskId = insertPlannedTask(QStringLiteral("自由计时任务"), logicalToday(), -1, 1);
+    QVERIFY(taskId > 0);
 
-    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("五分钟任务")));
-    // 测试不应该真的等 5 分钟；这里直接推进内部累计秒数，只验证停止专注后的业务结果。
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("自由计时任务")));
+    // 自由计时只累计专注分钟，不产生完整番茄，因此即使时长很长也不能完成任务。
     setFocusElapsedSeconds(FocusTimer::instance(), 300);
 
     bool timerWasActiveDuringTaskRefresh = true;
@@ -3883,10 +3922,36 @@ void ServiceTests::stopFocusCompletesTaskAfterFiveMinutes()
     QVERIFY(FocusTimer::instance()->stopFocus());
     disconnect(refreshConnection);
 
-    const QVariantMap task = TaskManager::instance()->getTodayTasks().first().toMap();
-    QCOMPARE(task.value(QStringLiteral("completed")).toBool(), true);
+    const QVariantMap task = taskMapById(TaskManager::instance()->getTodayTasks(), taskId);
+    QCOMPARE(task.value(QStringLiteral("completed")).toBool(), false);
+    QCOMPARE(task.value(QStringLiteral("actualPomodoros")).toInt(), 0);
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 5);
     QVERIFY(tasksChangedSpy.count() >= 1);
     QCOMPARE(timerWasActiveDuringTaskRefresh, false);
+}
+
+void ServiceTests::discardFreeFocusRemovesLongSessionWithoutRecording()
+{
+    const int taskId = insertPlannedTask(QStringLiteral("忘记关闭的自由计时"), logicalToday(), -1, 1);
+    QVERIFY(taskId > 0);
+
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("忘记关闭的自由计时")));
+    setFocusElapsedSeconds(timer, 8 * 60 * 60);
+    QVERIFY(!timer->requiresFreeFocusStopConfirmation(8));
+    setFocusElapsedSeconds(timer, 8 * 60 * 60 + 1);
+    QVERIFY(timer->requiresFreeFocusStopConfirmation(8));
+    setFocusElapsedSeconds(timer, 9 * 60 * 60);
+
+    QSignalSpy focusCompletedSpy(timer, &FocusTimer::focusCompleted);
+    QVERIFY(timer->discardFreeFocus());
+
+    QCOMPARE(countFocusSessions(), 0);
+    QCOMPARE(timer->hasActiveSession(), false);
+    QCOMPARE(timer->isRunning(), false);
+    QCOMPARE(focusCompletedSpy.count(), 0);
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(taskId), 0);
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 0);
 }
 
 void ServiceTests::stopFocusUnderFiveMinutesKeepsTaskPending()
@@ -3945,20 +4010,19 @@ void ServiceTests::validSessionDoesNotEmitSessionDiscarded()
     QCOMPARE(discardSpy.count(), 0);
 }
 
-void ServiceTests::focusTimerExposesRuleConstants()
+void ServiceTests::focusTimerExposesMinimumValidDuration()
 {
     FocusTimer* timer = FocusTimer::instance();
     QCOMPARE(timer->minimumValidMinutes(), 3);
-    QCOMPARE(timer->autoCompleteMinutes(), 5);
 }
 
-void ServiceTests::pomodoroWorkCompletionSavesSessionAndAutoCompletesTask()
+void ServiceTests::pomodoroWorkCompletesOnlyWhenPlannedCountReached()
 {
-    const int taskId = insertTaskRow(QStringLiteral("番茄专注任务"), QDate::currentDate());
+    const int taskId = insertPlannedTask(QStringLiteral("三颗番茄任务"), QDate::currentDate(), -1, 3);
     QVERIFY(taskId > 0);
 
     QSignalSpy phaseCompletedSpy(FocusTimer::instance(), &FocusTimer::phaseCompleted);
-    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("番茄专注任务"), 300));
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("三颗番茄任务"), 300));
     QCOMPARE(FocusTimer::instance()->targetSeconds(), 300);
     setFocusElapsedSeconds(FocusTimer::instance(), 300);
 
@@ -3969,15 +4033,82 @@ void ServiceTests::pomodoroWorkCompletionSavesSessionAndAutoCompletesTask()
     QCOMPARE(FocusTimer::instance()->remainingSeconds(), 0);
     QCOMPARE(countFocusSessions(), 1);
     QCOMPARE(phaseCompletedSpy.count(), 1);
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(taskId), 1);
+    QCOMPARE(taskCompletedById(taskId), false);
+
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("三颗番茄任务"), 300));
+    setFocusElapsedSeconds(FocusTimer::instance(), 300);
+    QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
+
+    QCOMPARE(countFocusSessions(), 2);
+    QCOMPARE(phaseCompletedSpy.count(), 2);
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(taskId), 2);
+    QCOMPARE(taskCompletedById(taskId), false);
+
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("三颗番茄任务"), 300));
+    setFocusElapsedSeconds(FocusTimer::instance(), 300);
+    QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
+
+    QCOMPARE(countFocusSessions(), 3);
+    QCOMPARE(phaseCompletedSpy.count(), 3);
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(taskId), 3);
+    QCOMPARE(taskCompletedById(taskId), true);
 
     QSqlQuery sessionQuery(DatabaseManager::instance()->database());
     QVERIFY(sessionQuery.exec(QStringLiteral(
-        "SELECT duration, pomodoro_completed FROM focus_sessions")));
+        "SELECT COUNT(*), MIN(duration), MAX(duration), SUM(pomodoro_completed) FROM focus_sessions")));
     QVERIFY(sessionQuery.next());
-    QCOMPARE(sessionQuery.value(0).toInt(), 300);
-    QCOMPARE(sessionQuery.value(1).toInt(), 1);
+    QCOMPARE(sessionQuery.value(0).toInt(), 3);
+    QCOMPARE(sessionQuery.value(1).toInt(), 300);
+    QCOMPARE(sessionQuery.value(2).toInt(), 300);
+    QCOMPARE(sessionQuery.value(3).toInt(), 3);
+}
 
-    QCOMPARE(taskCompletedById(taskId), true);
+void ServiceTests::pomodoroWorkRequiresPositiveExactPlan()
+{
+    const int noPlanTaskId = insertPlannedTask(QStringLiteral("未设计划任务"), logicalToday(), -1, 0);
+    QVERIFY(noPlanTaskId > 0);
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(noPlanTaskId, QStringLiteral("未设计划任务"), 300));
+    setFocusElapsedSeconds(FocusTimer::instance(), 300);
+    QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(noPlanTaskId), 1);
+    QCOMPARE(taskCompletedById(noPlanTaskId), false);
+
+    const int overTargetTaskId = insertPlannedTask(QStringLiteral("已超额任务"), logicalToday(), -1, 1);
+    QVERIFY(overTargetTaskId > 0);
+    QVERIFY(insertFocusSessionRowWithMode(overTargetTaskId, logicalToday(), 300, 1));
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(overTargetTaskId, QStringLiteral("已超额任务"), 300));
+    setFocusElapsedSeconds(FocusTimer::instance(), 300);
+    QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(overTargetTaskId), 2);
+    QCOMPARE(taskCompletedById(overTargetTaskId), false);
+}
+
+void ServiceTests::pomodoroTargetCompletionFailureKeepsSession()
+{
+    const int taskId = insertPlannedTask(QStringLiteral("自动完成失败任务"), logicalToday(), -1, 1);
+    QVERIFY(taskId > 0);
+
+    QSqlQuery trigger(DatabaseManager::instance()->database());
+    QVERIFY(trigger.exec(QStringLiteral(R"SQL(
+        CREATE TRIGGER fail_task_auto_completion
+        BEFORE UPDATE OF completed ON tasks
+        WHEN NEW.id = %1 AND NEW.completed = 1
+        BEGIN
+            SELECT RAISE(ABORT, 'forced auto completion failure');
+        END
+    )SQL").arg(taskId)));
+
+    FocusTimer* timer = FocusTimer::instance();
+    QSignalSpy failureSpy(timer, &FocusTimer::taskAutoCompleteFailed);
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("自动完成失败任务"), 300));
+    setFocusElapsedSeconds(timer, 300);
+    QVERIFY(QMetaObject::invokeMethod(&timer->m_timer, "timeout", Qt::DirectConnection));
+
+    QCOMPARE(failureSpy.count(), 1);
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(taskId), 1);
+    QCOMPARE(taskCompletedById(taskId), false);
+    QCOMPARE(countFocusSessions(), 1);
 }
 
 void ServiceTests::manuallyStoppedPomodoroDoesNotCountAsCompleted()
@@ -4124,7 +4255,7 @@ void ServiceTests::deletingActiveTaskDetachesTimerAndSuppressesAutoCompleteFailu
     QVERIFY(activeStateQuery.value(0).isNull());
     QCOMPARE(activeStateQuery.value(1).toString(), QStringLiteral("删除中的活动任务"));
 
-    setFocusElapsedSeconds(timer, timer->autoCompleteMinutes() * 60);
+    setFocusElapsedSeconds(timer, 300);
     QVERIFY(timer->stopFocus());
 
     // 删除后的会话仍应保存，但因已解绑任务，结束时不能尝试自动完成一个不存在的任务。

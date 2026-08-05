@@ -49,7 +49,6 @@ TestCase {
         property int remainingSeconds: 0
         property int elapsedSeconds: 0
         property int minimumValidMinutes: 3
-        property int autoCompleteMinutes: 5
         property int completedPomodoros: 0
 
         signal focusCompleted(int duration)

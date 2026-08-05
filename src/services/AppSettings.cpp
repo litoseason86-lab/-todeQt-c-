@@ -6,6 +6,7 @@ namespace {
 const auto kLastModeKey = QStringLiteral("focus/lastMode");
 const auto kWorkMinutesKey = QStringLiteral("focus/workMinutes");
 const auto kBreakMinutesKey = QStringLiteral("focus/breakMinutes");
+const auto kFreeTimerWarningHoursKey = QStringLiteral("focus/freeTimerWarningHours");
 const auto kSoundEnabledKey = QStringLiteral("focus/soundEnabled");
 const auto kReduceMotionKey = QStringLiteral("appearance/reduceMotion");
 const auto kSlimClockFontKey = QStringLiteral("appearance/slimClockFont");
@@ -64,6 +65,7 @@ void AppSettings::reload()
     emit lastModeChanged();
     emit workMinutesChanged();
     emit breakMinutesChanged();
+    emit freeTimerWarningHoursChanged();
     emit soundEnabledChanged();
     emit reduceMotionChanged();
     emit slimClockFontChanged();
@@ -131,6 +133,23 @@ void AppSettings::setBreakMinutes(int minutes)
     }
     if (writeValue(kBreakMinutesKey, normalized)) {
         emit breakMinutesChanged();
+    }
+}
+
+int AppSettings::freeTimerWarningHours() const
+{
+    return normalizeFreeTimerWarningHours(
+        m_settings->value(kFreeTimerWarningHoursKey, 8).toInt());
+}
+
+void AppSettings::setFreeTimerWarningHours(int hours)
+{
+    const int normalized = normalizeFreeTimerWarningHours(hours);
+    if (freeTimerWarningHours() == normalized) {
+        return;
+    }
+    if (writeValue(kFreeTimerWarningHoursKey, normalized)) {
+        emit freeTimerWarningHoursChanged();
     }
 }
 
@@ -224,6 +243,12 @@ int AppSettings::normalizeWorkMinutes(int minutes)
 int AppSettings::normalizeBreakMinutes(int minutes)
 {
     return (minutes >= 1 && minutes <= 60) ? minutes : 5;
+}
+
+int AppSettings::normalizeFreeTimerWarningHours(int hours)
+{
+    // 1–24 小时足以覆盖正常长时专注；坏配置回默认 8，不夹到边界制造意外提醒。
+    return (hours >= 1 && hours <= 24) ? hours : 8;
 }
 
 int AppSettings::normalizeDayStartHour(int hour)

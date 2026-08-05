@@ -31,9 +31,9 @@ TestCase {
         property string startPomodoroWorkTitle: ""
         property int startPomodoroWorkSeconds: 0
         property int stopFocusCalls: 0
+        property int discardFreeFocusCalls: 0
         property bool stopFocusFails: false
         property int minimumValidMinutes: 3
-        property int autoCompleteMinutes: 5
         property int completedPomodoros: 0
         property int startBreakSeconds: 0
         property int startBreakTaskId: -1
@@ -75,6 +75,22 @@ TestCase {
             currentTaskId = 0
             currentTaskTitle = ""
             return true
+        }
+
+        function discardFreeFocus() {
+            discardFreeFocusCalls += 1
+            isRunning = false
+            hasActiveSession = false
+            mode = 0
+            phase = 0
+            currentTaskId = 0
+            currentTaskTitle = ""
+            return true
+        }
+
+        function requiresFreeFocusStopConfirmation(thresholdHours) {
+            return hasActiveSession && mode === 0
+                    && elapsedSeconds > thresholdHours * 60 * 60
         }
 
         function startPomodoroWork(taskId, title, workSeconds) {
@@ -144,6 +160,7 @@ TestCase {
         property bool longBreakEnabled: true
         property int longBreakMinutes: 15
         property int longBreakInterval: 4
+        property int freeTimerWarningHours: 8
     }
 
     QtObject {
@@ -212,6 +229,7 @@ TestCase {
         focusTimer.startPomodoroWorkTitle = ""
         focusTimer.startPomodoroWorkSeconds = 0
         focusTimer.stopFocusCalls = 0
+        focusTimer.discardFreeFocusCalls = 0
         view.selectedTaskId = -1
         view.selectedTaskTitle = ""
         view.pageActive = true
@@ -237,6 +255,11 @@ TestCase {
         appSettingsMock.longBreakEnabled = true
         appSettingsMock.longBreakMinutes = 15
         appSettingsMock.longBreakInterval = 4
+        appSettingsMock.freeTimerWarningHours = 8
+        const warningDialog = findChild(view, "longFreeFocusConfirmDialog")
+        if (warningDialog) {
+            warningDialog.close()
+        }
         focusEndedSpy.clear()
         immersiveSpy.clear()
         wait(20)
@@ -652,7 +675,7 @@ TestCase {
 
         const hint = findChild(view, "ruleHintText")
         verify(hint)
-        compare(hint.text, "满 5 分钟自动完成任务 · 不足 3 分钟不计入记录")
+        compare(hint.text, "完成计划的最后一个番茄时自动完成任务 · 不足 3 分钟不计入记录")
         compare(view.state, "pomoIdle")
         compare(view.panelExpanded, true)
     }
@@ -950,6 +973,138 @@ TestCase {
 
         compare(view.errorText, "专注保存失败，请重试")
         compare(focusEndedSpy.count, 0)
+    }
+
+    function test_freeFocusAtWarningThresholdStopsWithoutConfirmation() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 8 * 60 * 60
+
+        view.endFreeFocus()
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusEndedSpy.count, 1)
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        compare(dialog.opened, false)
+    }
+
+    function test_customFreeFocusWarningThresholdIsUsed() {
+        appSettingsMock.freeTimerWarningHours = 12
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 9 * 60 * 60
+
+        view.endFreeFocus()
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusEndedSpy.count, 1)
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        compare(dialog.opened, false)
+    }
+
+    function test_longFreeFocusCanBeRecordedAfterConfirmation() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 8 * 60 * 60 + 1
+
+        view.endFreeFocus()
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        tryCompare(dialog, "opened", true)
+        compare(focusTimer.stopFocusCalls, 0)
+
+        const recordButton = findChild(dialog, "longFreeFocusRecordButton")
+        verify(recordButton)
+        mouseClick(recordButton)
+        tryCompare(focusTimer, "stopFocusCalls", 1)
+        tryCompare(focusEndedSpy, "count", 1)
+        compare(focusTimer.discardFreeFocusCalls, 0)
+    }
+
+    function test_longFreeFocusCanBeDiscardedAfterConfirmation() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 9 * 60 * 60
+
+        view.endFreeFocus()
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        tryCompare(dialog, "opened", true)
+        const discardButton = findChild(dialog, "longFreeFocusDiscardButton")
+        verify(discardButton)
+        mouseClick(discardButton)
+
+        tryCompare(focusTimer, "discardFreeFocusCalls", 1)
+        tryCompare(focusEndedSpy, "count", 1)
+        compare(focusTimer.stopFocusCalls, 0)
+    }
+
+    function test_longFreeFocusConfirmationCanContinueTiming() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 9 * 60 * 60
+
+        view.endFreeFocus()
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        tryCompare(dialog, "opened", true)
+        const continueButton = findChild(dialog, "longFreeFocusContinueButton")
+        verify(continueButton)
+        mouseClick(continueButton)
+
+        tryCompare(dialog, "opened", false)
+        compare(focusTimer.stopFocusCalls, 0)
+        compare(focusTimer.discardFreeFocusCalls, 0)
+        compare(focusTimer.hasActiveSession, true)
+        compare(focusEndedSpy.count, 0)
+    }
+
+    function test_switchingLongFreeFocusToPomodoroAlsoConfirms() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 9 * 60 * 60
+        focusTimer.currentTaskId = 7
+        focusTimer.currentTaskTitle = "测试任务"
+
+        view.toPomodoroTab(true)
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        tryCompare(dialog, "opened", true)
+        compare(view.pomodoroModeSelected, false)
+        const recordButton = findChild(dialog, "longFreeFocusRecordButton")
+        verify(recordButton)
+        mouseClick(recordButton)
+
+        tryCompare(view, "pomodoroModeSelected", true)
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(view.selectedTaskId, 7)
+        compare(view.selectedTaskTitle, "测试任务")
+    }
+
+    function test_enterPomodoroWithTaskAfterLongFreeConfirmationKeepsNewTask() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 9 * 60 * 60
+
+        compare(view.enterPomodoroWithTask(9, "新番茄任务"), true)
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        tryCompare(dialog, "opened", true)
+        const discardButton = findChild(dialog, "longFreeFocusDiscardButton")
+        verify(discardButton)
+        mouseClick(discardButton)
+
+        tryCompare(view, "pomodoroModeSelected", true)
+        compare(focusTimer.discardFreeFocusCalls, 1)
+        compare(view.selectedTaskId, 9)
+        compare(view.selectedTaskTitle, "新番茄任务")
     }
 
     function test_immersiveAvailableOnlyWhileTiming() {

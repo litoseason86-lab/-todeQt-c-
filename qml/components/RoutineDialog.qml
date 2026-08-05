@@ -20,6 +20,9 @@ Popup {
         }
     ]
     property string errorText: ""
+    // 编辑复用顶部表单：0 表示新增模式，避免复制一套标题和科目输入控件后状态漂移。
+    property int editingRoutineId: -1
+    readonly property bool editingRoutine: editingRoutineId > 0
 
     modal: true
     focus: true
@@ -77,6 +80,15 @@ Popup {
         routineTitleField.forceActiveFocus()
     }
 
+    onClosed: {
+        if (root.editingRoutine) {
+            // 关闭弹窗等同放弃当前编辑，不能让旧标题遗留在新增模式里被误添加。
+            root.editingRoutineId = -1
+            routineTitleField.text = ""
+            root.errorText = ""
+        }
+    }
+
     Connections {
         target: root.routineManagerRef
         ignoreUnknownSignals: true
@@ -117,9 +129,14 @@ Popup {
             color: ""
         }].concat(categories)
 
+        root.selectCategory(previousCategoryId)
+    }
+
+    function selectCategory(categoryId) {
+        var wantedCategoryId = Number(categoryId)
         routineCategoryCombo.currentIndex = 0
         for (var i = 0; i < root.categoryOptions.length; ++i) {
-            if (Number(root.categoryOptions[i].id || -1) === previousCategoryId) {
+            if (Number(root.categoryOptions[i].id || -1) === wantedCategoryId) {
                 routineCategoryCombo.currentIndex = i
                 break
             }
@@ -136,9 +153,32 @@ Popup {
         return option && option.id !== undefined && option.id !== null ? Number(option.id) : -1
     }
 
+    function beginEditing(routine) {
+        var routineId = Number(routine && routine.id)
+        if (routineId <= 0) {
+            return
+        }
+
+        root.editingRoutineId = routineId
+        routineTitleField.text = String(routine.title || "")
+        root.selectCategory(routine.categoryId)
+        root.errorText = ""
+        routineTitleField.forceActiveFocus()
+    }
+
+    function cancelEditing() {
+        root.editingRoutineId = -1
+        routineTitleField.text = ""
+        root.errorText = ""
+        routineTitleField.forceActiveFocus()
+    }
+
     function submit() {
-        if (!root.routineManagerRef || !root.routineManagerRef.addRoutine) {
-            root.errorText = "每日例行服务不可用"
+        var isEditing = root.editingRoutine
+        var operationAvailable = root.routineManagerRef
+                && (isEditing ? root.routineManagerRef.updateRoutine : root.routineManagerRef.addRoutine)
+        if (!operationAvailable) {
+            root.errorText = isEditing ? "每日例行编辑服务不可用" : "每日例行服务不可用"
             routineTitleField.forceActiveFocus()
             return
         }
@@ -150,13 +190,17 @@ Popup {
             return
         }
 
-        if (root.routineManagerRef.addRoutine(title, root.selectedCategoryId())) {
+        var succeeded = isEditing
+                ? root.routineManagerRef.updateRoutine(root.editingRoutineId, title, root.selectedCategoryId())
+                : root.routineManagerRef.addRoutine(title, root.selectedCategoryId())
+        if (succeeded) {
             routineTitleField.text = ""
+            root.editingRoutineId = -1
             root.errorText = ""
             root.refresh()
             routineTitleField.forceActiveFocus()
         } else {
-            root.errorText = "例行任务添加失败，名称可能已存在"
+            root.errorText = isEditing ? "例行任务保存失败，请检查名称后重试" : "例行任务添加失败，名称可能已存在"
             routineTitleField.forceActiveFocus()
         }
     }
@@ -180,7 +224,12 @@ Popup {
         }
 
         if (root.routineManagerRef.deleteRoutine(routineId)) {
-            root.errorText = ""
+            if (root.editingRoutineId === Number(routineId)) {
+                // 正在编辑的规则被删掉后必须退出编辑态，否则后续“保存”会指向已不存在的 id。
+                root.cancelEditing()
+            } else {
+                root.errorText = ""
+            }
             root.refresh()
         } else {
             root.errorText = "例行任务删除失败"
@@ -264,7 +313,9 @@ Popup {
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
             Layout.topMargin: Theme.space12
-            text: "把每天都要做的任务加进来，以后自动出现在今日清单。"
+            text: root.editingRoutine
+                ? "正在编辑例行任务；保存后会影响之后自动生成的任务。"
+                : "把每天都要做的任务加进来，以后自动出现在今日清单。"
             color: Theme.inkSoft
             font.pixelSize: Theme.fontMd
             wrapMode: Text.WordWrap
@@ -284,13 +335,19 @@ Popup {
                 Layout.fillWidth: true
                 implicitHeight: 42
                 placeholderText: "输入每天要做的事..."
+                color: Theme.ink
+                placeholderTextColor: Theme.inkMuted
+                selectionColor: Theme.accent
+                selectedTextColor: Theme.accentForeground
+                Accessible.name: root.editingRoutine ? qsTr("编辑后的例行任务名称") : qsTr("例行任务名称")
                 // 与 TaskManager::kMaxTitleLength 保持一致；超长粘贴在输入端截断。
                 maximumLength: 100
                 selectByMouse: true
 
                 background: Rectangle {
-                    color: Theme.accentForeground
-                    border.color: root.errorText.length > 0 ? Theme.dangerBorder : (routineTitleField.activeFocus ? Theme.accent : Theme.border)
+                    // accentForeground 是焦糖选中态的深色文字，误作底色才形成截图中的黑条。
+                    color: Theme.surfaceSunken
+                    border.color: root.errorText.length > 0 ? Theme.dangerBorder : (routineTitleField.activeFocus ? Theme.focusRing : Theme.border)
                     border.width: root.errorText.length > 0 || routineTitleField.activeFocus ? 2 : 1
                     radius: Theme.radiusMd
                 }
@@ -393,9 +450,10 @@ Popup {
                 id: routineAddButton
                 objectName: "routineAddButton"
 
-                text: "添加"
+                text: root.editingRoutine ? qsTr("保存") : qsTr("添加")
                 implicitWidth: 76
                 implicitHeight: 42
+                Accessible.name: root.editingRoutine ? qsTr("保存例行任务") : qsTr("添加例行任务")
                 onClicked: root.submit()
 
                 background: Rectangle {
@@ -417,16 +475,55 @@ Popup {
             }
         }
 
-        Label {
+        RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
             Layout.topMargin: Theme.space8
-            visible: root.errorText.length > 0
-            text: root.errorText
-            color: Theme.danger
-            font.pixelSize: Theme.fontSm
-            wrapMode: Text.WordWrap
+            Layout.preferredHeight: visible ? 36 : 0
+            visible: root.errorText.length > 0 || root.editingRoutine
+            spacing: Theme.space8
+
+            Label {
+                Layout.fillWidth: true
+                text: root.errorText.length > 0
+                    ? root.errorText
+                    : qsTr("保存后仅影响后续自动生成的任务。")
+                color: root.errorText.length > 0 ? Theme.danger : Theme.inkSoft
+                font.pixelSize: Theme.fontSm
+                wrapMode: Text.WordWrap
+            }
+
+            Button {
+                id: routineCancelEditButton
+                objectName: "routineCancelEditButton"
+
+                visible: root.editingRoutine
+                text: qsTr("取消编辑")
+                implicitWidth: 76
+                implicitHeight: 34
+                Accessible.name: qsTr("取消编辑例行任务")
+                onClicked: root.cancelEditing()
+
+                background: Rectangle {
+                    radius: Theme.radiusSm
+                    color: routineCancelEditButton.pressed
+                        ? Theme.glassHover
+                        : (routineCancelEditButton.hovered ? Theme.glassHover : Theme.glassCard)
+                    border.color: routineCancelEditButton.hovered || routineCancelEditButton.pressed
+                        ? Theme.accent
+                        : Theme.border
+                    border.width: 1
+                }
+
+                contentItem: Text {
+                    text: routineCancelEditButton.text
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontSm
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+            }
         }
 
         Rectangle {
@@ -550,6 +647,32 @@ Popup {
                                 verticalAlignment: Text.AlignVCenter
                                 // 文字让开左侧拨钮，避免重叠。
                                 leftPadding: activeSwitch.indicator.width + activeSwitch.spacing
+                            }
+                        }
+
+                        Button {
+                            id: editButton
+                            objectName: "routineEditButton"
+
+                            text: qsTr("编辑")
+                            implicitWidth: 64
+                            implicitHeight: 34
+                            Accessible.name: qsTr("编辑例行任务")
+                            onClicked: root.beginEditing(routineRow.modelData)
+
+                            background: Rectangle {
+                                radius: Theme.radiusSm
+                                color: editButton.pressed ? Theme.glassHover : (editButton.hovered ? Theme.glassHover : Theme.glassCard)
+                                border.color: editButton.hovered || editButton.pressed ? Theme.accent : Theme.border
+                                border.width: 1
+                            }
+
+                            contentItem: Text {
+                                text: editButton.text
+                                color: Theme.accentFillInk
+                                font.pixelSize: Theme.fontMd
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
                             }
                         }
 

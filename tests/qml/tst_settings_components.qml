@@ -32,6 +32,7 @@ TestCase {
         property bool longBreakEnabled: true
         property int longBreakMinutes: 15
         property int longBreakInterval: 4
+        property int freeTimerWarningHours: 8
     }
 
     SettingsNavigation {
@@ -164,6 +165,17 @@ TestCase {
         breakMinus.click()
         compare(appSettingsMock.workMinutes, 61)
         compare(appSettingsMock.breakMinutes, 9)
+    }
+
+    function test_freeTimerWarningHoursWritesSharedSetting() {
+        appSettingsMock.freeTimerWarningHours = 8
+        var plus = findChild(focusPage, "settingsFreeTimerWarningHoursPlus")
+        var valueText = findChild(focusPage, "settingsFreeTimerWarningHoursValue")
+        verify(plus)
+        verify(valueText)
+        plus.click()
+        compare(appSettingsMock.freeTimerWarningHours, 9)
+        compare(valueText.text, "9")
     }
 
     function test_reduceTransparencyWritesSetting() {

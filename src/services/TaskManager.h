@@ -16,6 +16,12 @@ class TaskManager : public QObject
     Q_PROPERTY(int maxEstimatedPomodoros READ maxEstimatedPomodoros CONSTANT)
 
 public:
+    enum class TargetCompletionResult {
+        NotReached,
+        Completed,
+        Failed
+    };
+
     // 任务与例行标题共用的长度上限（QChar 计数）。超长标题不损坏数据，
     // 但会撑爆列表行和导出 CSV；与 CountdownService 一样采取拒绝而非截断。
     static constexpr int kMaxTitleLength = 100;
@@ -37,6 +43,8 @@ public:
     // 完成、删除和查询任务后都会通过 tasksChanged 通知界面刷新。
     Q_INVOKABLE bool completeTask(int taskId);
     Q_INVOKABLE bool setTaskCompleted(int taskId, bool completed);
+    // 只在一颗有效番茄刚入账后调用；用单条 SQL 按实际数恰好等于计划数完成任务，避免检查与更新之间漂移。
+    TargetCompletionResult completeTaskIfPomodoroTargetReached(int taskId);
     // 四参重载只改标题/科目/日期，保留原预估值（重命名走这里）；五参重载额外更新预估番茄数。
     Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue);
     Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue, int estimatedPomodoros);

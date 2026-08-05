@@ -13,6 +13,20 @@
 #include <QSqlQuery>
 #include <QtGlobal>
 
+namespace {
+bool isCompletedPomodoroSession(bool naturalCompletion,
+                                FocusTimer::TimerMode mode,
+                                FocusTimer::TimerPhase phase,
+                                int durationSeconds)
+{
+    // 写入事实与结束后的自动完成判定共用这一处，避免一边记成有效番茄、另一边却不推进任务。
+    return naturalCompletion
+        && mode == FocusTimer::PomodoroMode
+        && phase == FocusTimer::WorkPhase
+        && durationSeconds >= FocusSessionRules::kMinimumValidDurationSeconds;
+}
+}
+
 FocusTimer::FocusTimer(QObject* parent)
     : QObject(parent)
     , m_clock(SystemMonotonicClock::instance())
@@ -305,6 +319,48 @@ bool FocusTimer::stopFocus()
     return completeFocusSession(false);
 }
 
+bool FocusTimer::requiresFreeFocusStopConfirmation(int thresholdHours) const
+{
+    const int normalizedHours = (thresholdHours >= 1 && thresholdHours <= 24)
+        ? thresholdHours : 8;
+    return m_sessionId != -1
+        && m_mode == FreeMode
+        && m_phase == NoPhase
+        && elapsedSeconds() > normalizedHours * 60 * 60;
+}
+
+bool FocusTimer::discardFreeFocus()
+{
+    if (m_sessionId == -1 || m_mode != FreeMode || m_phase != NoPhase) {
+        qWarning() << "Failed to discard free focus: no active free-focus session";
+        return false;
+    }
+
+    const bool wasRunning = m_isRunning;
+    if (wasRunning) {
+        freezeElapsedTime();
+        m_timer.stop();
+    }
+
+    // discardFocusSession 在同一事务中删除会话行和活动快照；失败时恢复计时，不能造成界面已结束但脏行仍在。
+    if (!discardFocusSession()) {
+        if (wasRunning) {
+            m_isRunning = true;
+            m_runSegmentStartNsecs = m_clock->nowNsecs();
+            m_timer.start();
+        }
+        return false;
+    }
+
+    resetSession();
+    emit runningStateChanged();
+    emit currentTaskChanged();
+    emit modeChanged();
+    emit phaseChanged();
+    emit tick();
+    return true;
+}
+
 bool FocusTimer::completeFocusSession(bool naturalCompletion)
 {
     if (m_sessionId == -1) {
@@ -357,30 +413,29 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion)
     }
 
     const int completedTaskId = m_currentTaskId;
+    const bool completedPomodoro = isCompletedPomodoroSession(
+        naturalCompletion, m_mode, m_phase, duration);
     // 任务可能在会话进行中被删除（外键置空后恢复的会话 task_id 为 -1）；
     // 没有可完成的任务时跳过自动完成，而不是制造一次必然失败的告警。
-    const bool shouldAutoCompleteTask = completedTaskId > 0
-        && duration >= FocusSessionRules::kAutoCompleteTaskDurationSeconds;
+    const bool shouldCheckTaskTarget = completedTaskId > 0 && completedPomodoro;
 
     // 会话已经持久化后先清空活动态，再触发 TaskManager::tasksChanged。否则订阅方会在同一刷新中
     // 同时看到“已完成数据库记录”和“仍活动的计时器”，把最后一段时长重复计入界面统计。
     resetSession();
 
     bool taskChangeAlreadyEmitted = false;
-    if (shouldAutoCompleteTask) {
-        // 一次有效专注代表任务已经被实际推进；达到 5 分钟后自动把任务标记完成。
-        taskChangeAlreadyEmitted =
-            TaskManager::instance()->setTaskCompleted(completedTaskId, true);
-        if (!taskChangeAlreadyEmitted) {
-            qWarning() << "Failed to auto-complete task after focus session"
-                       << "taskId=" << completedTaskId
-                       << "duration=" << duration;
+    if (shouldCheckTaskTarget) {
+        // 只有本次自然到点的工作番茄入账后，实际数恰好等于正数计划值才完成任务。
+        // 已超额时保持原状态，防止用户重新打开任务后又被下一颗番茄强行完成。
+        const TaskManager::TargetCompletionResult result =
+            TaskManager::instance()->completeTaskIfPomodoroTargetReached(completedTaskId);
+        taskChangeAlreadyEmitted = result == TaskManager::TargetCompletionResult::Completed;
+        if (result == TaskManager::TargetCompletionResult::Failed) {
             emit taskAutoCompleteFailed(completedTaskId);
         }
     }
     if (completedTaskId > 0 && !taskChangeAlreadyEmitted) {
-        // 3～5 分钟的有效会话不会自动完成任务，但实际番茄/专注秒数已经改变；
-        // 周计划等只监听 tasksChanged 的页面也必须刷新派生统计。
+        // 未到计划数、自由计时或手动停止仍可能改变专注秒数；只监听 tasksChanged 的页面也必须刷新。
         emit TaskManager::instance()->tasksChanged();
     }
 
@@ -449,11 +504,6 @@ int FocusTimer::minimumValidMinutes() const
     return FocusSessionRules::kMinimumValidDurationSeconds / 60;
 }
 
-int FocusTimer::autoCompleteMinutes() const
-{
-    return FocusSessionRules::kAutoCompleteTaskDurationSeconds / 60;
-}
-
 int FocusTimer::completedPomodoros() const
 {
     return m_completedPomodoros;
@@ -511,10 +561,8 @@ bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion)
         "pomodoro_completed = :pomodoroCompleted WHERE id = :id"));
     query.bindValue(QStringLiteral(":endTime"), endTime.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":duration"), durationSeconds);
-    const bool completedPomodoro = naturalCompletion
-        && m_mode == PomodoroMode
-        && m_phase == WorkPhase
-        && durationSeconds >= FocusSessionRules::kMinimumValidDurationSeconds;
+    const bool completedPomodoro = isCompletedPomodoroSession(
+        naturalCompletion, m_mode, m_phase, durationSeconds);
     query.bindValue(QStringLiteral(":pomodoroCompleted"), completedPomodoro ? 1 : 0);
     query.bindValue(QStringLiteral(":id"), m_sessionId);
 

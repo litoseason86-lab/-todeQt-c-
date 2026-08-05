@@ -1,5 +1,6 @@
 #include "TrayController.h"
 
+#include "AppSettings.h"
 #include "FocusTimer.h"
 
 TrayController::TrayController(FocusTimer* timer, QObject* parent)
@@ -111,6 +112,13 @@ void TrayController::requestResume()
 
 void TrayController::requestStop()
 {
+    if (m_timer->requiresFreeFocusStopConfirmation(
+            AppSettings::instance()->freeTimerWarningHours())) {
+        // 菜单栏没有弹窗宿主；先召回主窗口，再让 FocusView 打开与页面按钮相同的确认框。
+        emit showWindowRequested();
+        emit longFreeFocusStopRequested();
+        return;
+    }
     m_timer->stopFocus();
 }
 

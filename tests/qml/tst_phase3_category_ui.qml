@@ -53,7 +53,7 @@ TestCase {
             updatedId = id
             categoryItems = categoryItems.map(function(item) {
                 if (item.id === id) {
-                    return { id: id, name: name, color: color, isPreset: false }
+                    return { id: id, name: name, color: color, isPreset: item.isPreset }
                 }
                 return item
             })
@@ -144,6 +144,37 @@ TestCase {
         compare(fakeCategoryManager.updatedId, 6)
         compare(categoryDialog.categories[1].name, "算法")
         compare(categoryDialog.categories[1].color, "#445566")
+        compare(categoryDialog.editingCategoryId, -1)
+        categoryDialog.close()
+    }
+
+    function test_categoryDialogCanEditPresetCategory() {
+        categoryDialog.open()
+        wait(100)
+
+        const listView = findChild(categoryDialog, "categoryListView")
+        verify(listView)
+        const firstRow = listView.itemAtIndex(0)
+        verify(firstRow)
+        const editButton = findChild(firstRow, "editCategoryButton-1")
+        verify(editButton)
+        compare(editButton.visible, true)
+
+        categoryDialog.beginEdit(categoryDialog.categories[0])
+        compare(categoryDialog.editingCategoryId, 1)
+
+        const input = findChild(categoryDialog, "categoryNameInput")
+        verify(input)
+        compare(input.text, "数学")
+        input.text = "高等数学"
+        categoryDialog.newCategoryColor = "#334455"
+        categoryDialog.saveCategory()
+        wait(50)
+
+        compare(fakeCategoryManager.updatedId, 1)
+        compare(categoryDialog.categories[0].name, "高等数学")
+        compare(categoryDialog.categories[0].color, "#334455")
+        compare(categoryDialog.categories[0].isPreset, true)
         compare(categoryDialog.editingCategoryId, -1)
         categoryDialog.close()
     }

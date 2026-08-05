@@ -376,6 +376,13 @@ Item {
         }
     }
 
+    function requestLongFreeFocusStop() {
+        root.focusImmersiveActive = false
+        root.switchToView("focus")
+        // 弹窗状态属于 FocusView；菜单栏只传递“用户要结束”这一意图。
+        Qt.callLater(focusView.endFreeFocus)
+    }
+
     Component.onCompleted: {
         // 旧主题 id 只在启动时迁移写回一次，此后设置里存的都是新 id。
         if (root.appSettingsRef) {

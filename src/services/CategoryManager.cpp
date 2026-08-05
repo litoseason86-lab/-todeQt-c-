@@ -135,11 +135,6 @@ bool CategoryManager::updateCategory(int id, const QString& name, const QString&
         return false;
     }
 
-    if (existing.value(QStringLiteral("isPreset")).toBool()) {
-        qWarning() << "Failed to update category: preset category cannot be edited";
-        return false;
-    }
-
     const QString normalizedName = name.trimmed();
     const QString normalizedColor = color.trimmed();
     if (normalizedName.isEmpty()) {
@@ -160,7 +155,7 @@ bool CategoryManager::updateCategory(int id, const QString& name, const QString&
     QSqlDatabase db = DatabaseManager::instance()->database();
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "UPDATE categories SET name = :name, color = :color WHERE id = :id AND is_preset = 0"));
+        "UPDATE categories SET name = :name, color = :color WHERE id = :id"));
     query.bindValue(QStringLiteral(":name"), normalizedName);
     query.bindValue(QStringLiteral(":color"), normalizedColor);
     query.bindValue(QStringLiteral(":id"), id);

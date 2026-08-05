@@ -21,7 +21,6 @@ class FocusTimer : public QObject
     Q_PROPERTY(int targetSeconds READ targetSeconds NOTIFY phaseChanged)
     Q_PROPERTY(int remainingSeconds READ remainingSeconds NOTIFY tick)
     Q_PROPERTY(int minimumValidMinutes READ minimumValidMinutes CONSTANT)
-    Q_PROPERTY(int autoCompleteMinutes READ autoCompleteMinutes CONSTANT)
     // 本轮连续完成的番茄数（自然到点才计），供长休息判定“每 N 个后休息更久”。
     Q_PROPERTY(int completedPomodoros READ completedPomodoros NOTIFY completedPomodorosChanged)
     // 会话归属日由开始时刻与当前逻辑日边界共同决定，页面用它避免跨日重复累加。
@@ -52,6 +51,9 @@ public:
     Q_INVOKABLE void pauseFocus();
     Q_INVOKABLE bool resumeFocus();
     Q_INVOKABLE bool stopFocus();
+    Q_INVOKABLE bool requiresFreeFocusStopConfirmation(int thresholdHours) const;
+    // 用户在超长自由计时确认框选择“不记录”时，删除会话及活动快照，不进入统计。
+    Q_INVOKABLE bool discardFreeFocus();
     // 用户完全结束番茄循环时重置连续计数，下一轮长休息节奏从头开始。
     Q_INVOKABLE void resetPomodoroCount();
 
@@ -70,7 +72,6 @@ public:
     int targetSeconds() const;
     int remainingSeconds() const;
     int minimumValidMinutes() const;
-    int autoCompleteMinutes() const;
     int completedPomodoros() const;
     QString sessionLogicalDate() const;
 

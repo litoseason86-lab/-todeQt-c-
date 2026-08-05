@@ -286,6 +286,45 @@ bool TaskManager::setTaskCompleted(int taskId, bool completed)
     return true;
 }
 
+TaskManager::TargetCompletionResult TaskManager::completeTaskIfPomodoroTargetReached(int taskId)
+{
+    if (!isValidTaskId(taskId)) {
+        qWarning() << "Failed to auto-complete task: invalid task id" << taskId;
+        return TargetCompletionResult::Failed;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to auto-complete task: database is not open";
+        return TargetCompletionResult::Failed;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "UPDATE tasks SET completed = 1 "
+        "WHERE id = :id AND completed = 0 AND estimated_pomodoros > 0 "
+        "AND estimated_pomodoros = COALESCE(("
+        "SELECT %1 FROM focus_sessions fs "
+        "WHERE fs.task_id = tasks.id AND fs.duration IS NOT NULL"
+        "), 0)")
+        .arg(validPomodoroCountExpr(QStringLiteral("fs"))));
+    query.bindValue(QStringLiteral(":id"), taskId);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to auto-complete task at pomodoro target:"
+                   << query.lastError().text() << "taskId=" << taskId;
+        return TargetCompletionResult::Failed;
+    }
+
+    if (query.numRowsAffected() == 0) {
+        // 计划为 0、尚未达到、已经超额或任务已完成都属于正常的“不自动完成”。
+        return TargetCompletionResult::NotReached;
+    }
+
+    emit tasksChanged();
+    return TargetCompletionResult::Completed;
+}
+
 bool TaskManager::isRoutineGeneratedTask(int taskId) const
 {
     if (!isValidTaskId(taskId)) {

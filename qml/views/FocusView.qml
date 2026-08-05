@@ -20,6 +20,10 @@ Item {
     property bool panelExpanded: false
     // 页面容器显式声明是否当前页；不能依赖 effective visible，离屏测试和窗口层级会污染该值。
     property bool pageActive: true
+    // 超时确认是异步的；这里保存确认后要继续执行的用户动作，弹窗本身不持有页面业务状态。
+    property string pendingLongFreeAction: ""
+    property int pendingLongFreeTaskId: -1
+    property string pendingLongFreeTaskTitle: ""
 
     signal focusEnded()
     signal immersiveRequested()
@@ -118,6 +122,71 @@ Item {
         autoAdvanceTimer.pendingPhase = 0
     }
 
+    function freeTimerWarningHours() {
+        var configured = root.settings ? Number(root.settings.freeTimerWarningHours) : 8
+        return configured >= 1 && configured <= 24 ? Math.round(configured) : 8
+    }
+
+    function shouldConfirmLongFreeStop() {
+        if (!root.timer || !root.timer.hasActiveSession || Number(root.timer.mode || 0) !== 0) {
+            return false
+        }
+        if (typeof root.timer.requiresFreeFocusStopConfirmation === "function") {
+            return root.timer.requiresFreeFocusStopConfirmation(root.freeTimerWarningHours())
+        }
+        // “超过”按严格大于处理：恰好 8:00:00 不弹，8:00:01 才进入保险确认。
+        return Number(root.timer.elapsedSeconds || 0) > root.freeTimerWarningHours() * 60 * 60
+    }
+
+    function clearPendingLongFreeAction() {
+        root.pendingLongFreeAction = ""
+        root.pendingLongFreeTaskId = -1
+        root.pendingLongFreeTaskTitle = ""
+    }
+
+    function requestLongFreeConfirmation(action, taskId, taskTitle) {
+        root.pendingLongFreeAction = action
+        root.pendingLongFreeTaskId = Number(taskId || -1)
+        root.pendingLongFreeTaskTitle = String(taskTitle || "")
+        longFreeFocusConfirmDialog.elapsedSeconds = Number(root.timer.elapsedSeconds || 0)
+        longFreeFocusConfirmDialog.thresholdHours = root.freeTimerWarningHours()
+        longFreeFocusConfirmDialog.open()
+    }
+
+    function applyPostFreeStopAction(action, taskId, taskTitle) {
+        root.errorText = ""
+        root.justCompletedPhase = 0
+        if (action === "end") {
+            root.clearSelectedTask()
+            root.focusEnded()
+        } else if (action === "toPomodoro") {
+            root.pomodoroModeSelected = true
+        } else if (action === "enterPomodoro") {
+            root.pomodoroModeSelected = true
+            root.selectedTaskId = taskId
+            root.selectedTaskTitle = taskTitle
+        }
+    }
+
+    function finishLongFreeAction(recordSession) {
+        var action = root.pendingLongFreeAction
+        var taskId = root.pendingLongFreeTaskId
+        var taskTitle = root.pendingLongFreeTaskTitle
+        root.clearPendingLongFreeAction()
+
+        if (!root.timer || action.length === 0) {
+            return
+        }
+        var succeeded = recordSession
+                ? root.timer.stopFocus()
+                : (typeof root.timer.discardFreeFocus === "function" && root.timer.discardFreeFocus())
+        if (!succeeded) {
+            root.errorText = recordSession ? "专注保存失败，请重试" : "专注丢弃失败，请重试"
+            return
+        }
+        root.applyPostFreeStopAction(action, taskId, taskTitle)
+    }
+
     function syncToActiveTimer() {
         if (!root.timer || (!root.timer.hasActiveSession && root.timer.phase === 0)) {
             return
@@ -184,6 +253,10 @@ Item {
                 root.selectedTaskTitle = root.timer.currentTaskTitle
             }
             if (timerHasSession) {
+                if (root.shouldConfirmLongFreeStop()) {
+                    root.requestLongFreeConfirmation("toPomodoro", -1, "")
+                    return
+                }
                 if (!root.timer.stopFocus()) {
                     root.errorText = "切换番茄失败，请重试"
                     return
@@ -212,9 +285,15 @@ Item {
 
         // 外部任务选择是新的明确意图，必须一次性替换模式和任务缓存。
         // 不复用 toPomodoroTab：它面向页内切换，会优先保留旧缓存，正是任务错位的来源。
-        if ((root.timer.hasActiveSession || root.timer.phase !== 0) && !root.timer.stopFocus()) {
-            root.errorText = "切换番茄失败，请重试"
-            return false
+        if (root.timer.hasActiveSession || root.timer.phase !== 0) {
+            if (root.shouldConfirmLongFreeStop()) {
+                root.requestLongFreeConfirmation("enterPomodoro", taskId, safeTitle)
+                return true
+            }
+            if (!root.timer.stopFocus()) {
+                root.errorText = "切换番茄失败，请重试"
+                return false
+            }
         }
 
         root.pomodoroModeSelected = true
@@ -404,13 +483,15 @@ Item {
     function endFreeFocus() {
         root.cancelAutoAdvance()
         // 自由模式结束逻辑单点：页面按钮与沉浸层共用，避免两处复制。
-        if (root.timer && root.timer.stopFocus()) {
-            root.errorText = ""
-            root.clearSelectedTask()
-            root.focusEnded()
-        } else {
-            root.errorText = "专注保存失败，请重试"
+        if (root.shouldConfirmLongFreeStop()) {
+            root.requestLongFreeConfirmation("end", -1, "")
+            return
         }
+        if (!root.timer || !root.timer.stopFocus()) {
+            root.errorText = "专注保存失败，请重试"
+            return
+        }
+        root.applyPostFreeStopAction("end", -1, "")
     }
 
     Connections {
@@ -500,6 +581,21 @@ Item {
                 if (root.errorText.length === 0) {
                     root.autoAdvanced(2)
                 }
+            }
+        }
+    }
+
+    LongFreeFocusConfirmDialog {
+        id: longFreeFocusConfirmDialog
+
+        parent: root
+        onRecordRequested: root.finishLongFreeAction(true)
+        onDiscardRequested: root.finishLongFreeAction(false)
+        onContinueRequested: root.clearPendingLongFreeAction()
+        onClosed: {
+            // Escape 或窗口关闭都等价于“继续计时”；绝不能在没有明确选择时保存或丢弃。
+            if (root.pendingLongFreeAction.length > 0) {
+                root.clearPendingLongFreeAction()
             }
         }
     }
@@ -877,7 +973,7 @@ Item {
                 objectName: "ruleHintText"
                 Layout.fillWidth: true
                 visible: root.state === "pomoIdle" && root.panelExpanded
-                text: "满 " + root.timerNumber("autoCompleteMinutes", 5) + " 分钟自动完成任务 · 不足 "
+                text: "完成计划的最后一个番茄时自动完成任务 · 不足 "
                       + root.timerNumber("minimumValidMinutes", 3) + " 分钟不计入记录"
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontSm

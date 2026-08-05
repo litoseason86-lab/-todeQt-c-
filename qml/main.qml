@@ -149,6 +149,10 @@ ApplicationWindow {
             root.requestActivate()
         }
 
+        function onLongFreeFocusStopRequested() {
+            mainContent.requestLongFreeFocusStop()
+        }
+
         function onQuitRequested() {
             // qmllint disable unqualified
             if (typeof backupService !== "undefined" && backupService && backupService.busy) {

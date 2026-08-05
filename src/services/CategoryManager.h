@@ -21,7 +21,7 @@ public:
     Q_INVOKABLE QVariantList getCustomCategories() const;
     Q_INVOKABLE QVariantMap getCategoryById(int id) const;
 
-    // 预设科目不能改名或删除，自定义科目才允许增删改。
+    // 预设科目允许改名和换色，但不能删除；自定义科目允许完整增删改。
     Q_INVOKABLE int addCategory(const QString& name, const QString& color);
     Q_INVOKABLE bool updateCategory(int id, const QString& name, const QString& color);
     Q_INVOKABLE bool deleteCategory(int id);

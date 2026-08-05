@@ -897,18 +897,32 @@ bool DatabaseManager::routineForeignKeyUsesSetNull() const
 
 bool DatabaseManager::insertPresetCategories()
 {
-    QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
+    QSqlQuery existingQuery(m_db);
+    existingQuery.prepare(QStringLiteral(
+        "SELECT 1 FROM categories WHERE is_preset = 1 AND display_order = :displayOrder LIMIT 1"));
+
+    QSqlQuery insertQuery(m_db);
+    insertQuery.prepare(QStringLiteral(
         "INSERT OR IGNORE INTO categories (name, color, is_preset, display_order) "
         "VALUES (:name, :color, 1, :displayOrder)"));
 
     for (int index = 0; index < int(std::size(kPresetCategories)); ++index) {
-        query.bindValue(QStringLiteral(":name"), QString::fromUtf8(kPresetCategories[index].name));
-        query.bindValue(QStringLiteral(":color"), QString::fromLatin1(kPresetCategories[index].color));
-        query.bindValue(QStringLiteral(":displayOrder"), index + 1);
+        const int displayOrder = index + 1;
+        existingQuery.bindValue(QStringLiteral(":displayOrder"), displayOrder);
+        if (!existingQuery.exec()) {
+            qWarning() << "Failed to inspect preset category:" << existingQuery.lastError().text();
+            return false;
+        }
+        if (existingQuery.next()) {
+            // display_order 是预设科目的稳定身份。用户可修改名称和颜色，启动时不能按旧名称再复制一行。
+            continue;
+        }
 
-        if (!query.exec()) {
-            qWarning() << "Failed to insert preset category:" << query.lastError().text();
+        insertQuery.bindValue(QStringLiteral(":name"), QString::fromUtf8(kPresetCategories[index].name));
+        insertQuery.bindValue(QStringLiteral(":color"), QString::fromLatin1(kPresetCategories[index].color));
+        insertQuery.bindValue(QStringLiteral(":displayOrder"), displayOrder);
+        if (!insertQuery.exec()) {
+            qWarning() << "Failed to insert preset category:" << insertQuery.lastError().text();
             return false;
         }
     }

@@ -205,6 +205,33 @@ FocusScope {
             title: "提醒"
 
             SettingsRow {
+                label: "自由计时超时确认"
+                caption: "超过该时长，结束时确认是否记录"
+                iconName: "focus"
+                compact: root.compact
+
+                DurationStepper {
+                    namePrefix: "settingsFreeTimerWarningHours"
+                    accessibleName: "自由计时超时确认"
+                    unit: "小时"
+                    value: root.appSettingsRef ? root.appSettingsRef.freeTimerWarningHours : 8
+                    from: 1
+                    to: 24
+                    onAdjusted: newValue => {
+                        if (root.appSettingsRef) {
+                            root.appSettingsRef.freeTimerWarningHours = newValue
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Theme.borderSubtle
+            }
+
+            SettingsRow {
                 label: "阶段完成提示音"
                 caption: "专注或休息结束时播放系统提示音"
                 iconName: "bell"

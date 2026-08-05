@@ -6,6 +6,7 @@
 #include <QUuid>
 #include <QtTest>
 
+#include "../src/services/AppSettings.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusTimer.h"
 #include "../src/services/NotificationService.h"
@@ -95,6 +96,7 @@ private slots:
     void idleDisplayHasNoControls();
     void startingFocusDrivesMenuState();
     void menuActionsForwardToTimer();
+    void menuStopRequestsConfirmationForLongFreeFocus();
     void pausedStateOffersResumeAndKeepsTiming();
     void breakStateIsDistinguished();
     void showAndQuitEmitIntentSignals();
@@ -184,6 +186,28 @@ void PlatformControlTests::menuActionsForwardToTimer()
     controller.requestStop();
     QVERIFY(!FocusTimer::instance()->hasActiveSession());
     QCOMPARE(FocusTimer::instance()->phase(), int(FocusTimer::NoPhase));
+}
+
+void PlatformControlTests::menuStopRequestsConfirmationForLongFreeFocus()
+{
+    TrayController controller(FocusTimer::instance());
+    const int taskId = insertTaskRow(QStringLiteral("超长自由计时"));
+    QVERIFY(taskId > 0);
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("超长自由计时")));
+
+    const int thresholdHours = AppSettings::instance()->freeTimerWarningHours();
+    FocusTimer::instance()->m_accumulatedMilliseconds =
+        static_cast<qint64>(thresholdHours * 60 * 60 + 1) * 1000;
+    // 固定累计值，不让真实时钟在断言之间继续增长；本用例只验证菜单动作路由。
+    FocusTimer::instance()->m_runSegmentStartNsecs = -1;
+
+    QSignalSpy showSpy(&controller, &TrayController::showWindowRequested);
+    QSignalSpy confirmationSpy(&controller, &TrayController::longFreeFocusStopRequested);
+    controller.requestStop();
+
+    QCOMPARE(showSpy.count(), 1);
+    QCOMPARE(confirmationSpy.count(), 1);
+    QCOMPARE(FocusTimer::instance()->hasActiveSession(), true);
 }
 
 void PlatformControlTests::pausedStateOffersResumeAndKeepsTiming()
