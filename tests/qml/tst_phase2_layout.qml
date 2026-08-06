@@ -191,15 +191,6 @@ TestCase {
         }
     }
 
-    QtObject {
-        id: goalService
-
-        signal goalsChanged
-        property var goalsData: []
-
-        function getGoals() { return goalsData }
-    }
-
     StatisticsView {
         id: statisticsView
 
@@ -209,7 +200,6 @@ TestCase {
         taskManagerRef: taskManager
         statisticsServiceRef: statisticsService
         focusTimerRef: focusTimer
-        goalServiceRef: goalService
     }
 
     TodayTaskView {
@@ -263,7 +253,6 @@ TestCase {
     }
 
     function init() {
-        goalService.goalsData = []
         todaySnapshot = dateOnly(new Date())
         statisticsView.z = 10
         statisticsView.visible = false
@@ -280,16 +269,6 @@ TestCase {
         statisticsView.currentTimeRange = "today"
         wait(20)
         statisticsService.resetTracking()
-    }
-
-    function achievedGoal(id, title, year, month, day) {
-        return {
-            id: id,
-            title: title,
-            achieved: true,
-            achievedAt: new Date(year, month - 1, day, 12, 0, 0),
-            categoryColor: "#d4a574"
-        }
     }
 
     function dateOnly(value) {
@@ -424,48 +403,6 @@ TestCase {
         compare(StatFmt.totalDurationUnit(2), "")
         compare(StatFmt.totalDurationValue(3660), "1.0")
         compare(StatFmt.totalDurationUnit(3660), "小时")
-    }
-
-    function test_achieved_goals_empty_state_starts_at_level_one() {
-        goalService.goalsData = []
-        statisticsView.refreshAchievedGoals()
-        var card = findChild(statisticsView, "statisticsAchievedGoalsCard")
-        verify(card !== null)
-        tryCompare(card, "levelText", "LV.1 起步")
-        verify(card.emptyText.length > 0)
-        compare(card.displayedCount, 0)
-    }
-
-    function test_three_achieved_goals_reach_level_two_and_sort_newest_first() {
-        goalService.goalsData = [
-            achievedGoal(1, "较早", 2026, 6, 1),
-            achievedGoal(2, "最新", 2026, 7, 14),
-            achievedGoal(3, "中间", 2026, 6, 30),
-            { id: 4, title: "未完成", achieved: false }
-        ]
-        statisticsView.refreshAchievedGoals()
-        var card = findChild(statisticsView, "statisticsAchievedGoalsCard")
-        verify(card !== null)
-
-        tryCompare(card, "levelText", "LV.2 上路")
-        compare(card.displayedCount, 3)
-        compare(String(card.displayedGoals[0].title), "最新")
-        compare(Number(card.displayedGoals[0].id), 2)
-    }
-
-    function test_eight_achieved_goals_collapse_to_five_then_expand() {
-        var goals = []
-        for (var i = 0; i < 8; ++i)
-            goals.push(achievedGoal(i + 1, "目标" + (i + 1), 2026, 7, i + 1))
-        goalService.goalsData = goals
-        statisticsView.refreshAchievedGoals()
-        var card = findChild(statisticsView, "statisticsAchievedGoalsCard")
-        verify(card !== null)
-
-        tryCompare(card, "levelText", "LV.3 成习")
-        tryCompare(card, "displayedCount", 5)
-        card.toggleExpanded()
-        tryCompare(card, "displayedCount", 8)
     }
 
     function test_achievement_level_boundaries() {

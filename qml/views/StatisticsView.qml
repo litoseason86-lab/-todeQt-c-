@@ -78,15 +78,10 @@ Item {
     property var logicalDayServiceRef: null
     property var appSettingsRef: null
     property var categoryManagerRef: null
-    property var goalServiceRef: null
-    property var achievedGoals: []
-    property string achievedGoalsError: ""
     property string loadError: ""
     property bool pageActive: true
     // 统计页跟今日任务、本周计划保持同一套内容边距，避免每个模块各自偏移导致边界不齐。
     readonly property int contentMargin: 24
-
-    signal goalRequested(int goalId)
 
     onCurrentTimeRangeChanged: {
         // 模式切换代表用户回到该模式的当前周期；箭头导航只改变对应模式自己的选中状态。
@@ -163,21 +158,6 @@ Item {
 
         function onCategoriesChanged() {
             refreshCoalescer.request()
-        }
-    }
-
-    Connections {
-        target: root.goalServiceRef
-        ignoreUnknownSignals: true
-        enabled: root.pageActive
-
-        function onGoalsChanged() {
-            // 长期成就不随统计周期变化，只刷新这一块，避免无意义地重查全部统计图表。
-            root.refreshAchievedGoals()
-        }
-
-        function onOperationFailed(message) {
-            root.achievedGoalsError = String(message || qsTr("已达成目标加载失败"))
         }
     }
 
@@ -398,41 +378,7 @@ Item {
         return root.comparisonForMetric("duration")
     }
 
-    function achievementTimestamp(value) {
-        var date = value instanceof Date ? value : new Date(String(value || ""))
-        return isNaN(date.getTime()) ? 0 : date.getTime()
-    }
-
-    function refreshAchievedGoals() {
-        root.achievedGoalsError = ""
-        if (!root.goalServiceRef || !root.goalServiceRef.getGoals) {
-            root.achievedGoals = []
-            return
-        }
-        try {
-            const allGoals = root.goalServiceRef.getGoals() || []
-            // C++ 服务以“空数组 + operationFailed”报告查询失败；失败时保留旧数据，
-            // 不能把数据库故障伪装成“用户还没有达成目标”。
-            if (root.achievedGoalsError.length > 0)
-                return
-
-            const achieved = []
-            for (let i = 0; i < allGoals.length; ++i) {
-                if (Boolean(allGoals[i].achieved))
-                    achieved.push(allGoals[i])
-            }
-            achieved.sort(function(left, right) {
-                return root.achievementTimestamp(right.achievedAt)
-                        - root.achievementTimestamp(left.achievedAt)
-            })
-            root.achievedGoals = achieved
-        } catch (error) {
-            root.achievedGoalsError = qsTr("已达成目标加载失败")
-        }
-    }
-
     function refresh() {
-        root.refreshAchievedGoals()
         try {
             root.loadError = ""
             root.syncCurrentDateSnapshotForRefresh()
@@ -882,16 +828,6 @@ Item {
                 }
             }
 
-            AchievedGoalsCard {
-                objectName: "statisticsAchievedGoalsCard"
-
-                Layout.fillWidth: true
-                Layout.bottomMargin: Theme.space24
-                achievedGoals: root.achievedGoals
-                errorText: root.achievedGoalsError
-                levelInfo: StatFmt.levelOf(root.achievedGoals.length)
-                onGoalClicked: function(goalId) { root.goalRequested(goalId) }
-            }
         }
     }
 }

@@ -647,8 +647,6 @@ Item {
                     logicalDayServiceRef: root.logicalDayServiceRef
                     appSettingsRef: root.appSettingsRef
                     categoryManagerRef: root.categoryManagerRef
-                    goalServiceRef: root.goalServiceRef
-                    onGoalRequested: function(goalId) { root.openRewardGoal(goalId) }
                 }
 
                 CountdownView {

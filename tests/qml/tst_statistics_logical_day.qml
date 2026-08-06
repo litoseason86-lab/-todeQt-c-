@@ -59,26 +59,6 @@ TestCase {
         }
     }
 
-    QtObject {
-        id: goalService
-
-        signal goalsChanged
-        signal operationFailed(string message)
-
-        property bool shouldFail: false
-        property var goalsData: []
-        property int getGoalsCalls: 0
-
-        function getGoals() {
-            getGoalsCalls++
-            if (shouldFail) {
-                operationFailed("读取长期目标失败")
-                return []
-            }
-            return goalsData
-        }
-    }
-
     StatisticsView {
         id: view
 
@@ -90,7 +70,6 @@ TestCase {
         logicalDayServiceRef: logicalDayService
         appSettingsRef: appSettings
         categoryManagerRef: categoryManager
-        goalServiceRef: goalService
         currentDateOverride: new Date(2026, 6, 8, 1, 0)
     }
 
@@ -98,11 +77,6 @@ TestCase {
         view.currentTimeRange = "today"
         view.refreshCurrentDateSnapshot()
         view.applyCurrentPeriodSelection()
-        goalService.shouldFail = false
-        goalService.goalsData = []
-        goalService.getGoalsCalls = 0
-        view.achievedGoals = []
-        view.achievedGoalsError = ""
         testCase.dayStatsCalls = 0
     }
 
@@ -156,31 +130,4 @@ TestCase {
         tryCompare(testCase, "dayStatsCalls", callsBefore + 2, 1000)
     }
 
-    function test_goal_changes_stay_on_the_fine_grained_refresh_path() {
-        var pageRefreshCalls = testCase.dayStatsCalls
-        var goalCalls = goalService.getGoalsCalls
-
-        goalService.goalsChanged()
-
-        tryCompare(goalService, "getGoalsCalls", goalCalls + 1, 1000)
-        compare(testCase.dayStatsCalls, pageRefreshCalls)
-    }
-
-    function test_achievedGoalFailureKeepsDataAndShowsError() {
-        goalService.goalsData = [{
-            id: 9,
-            title: "已完成目标",
-            achieved: true,
-            achievedAt: new Date(2026, 6, 1)
-        }]
-        view.refreshAchievedGoals()
-        compare(view.achievedGoals.length, 1)
-
-        goalService.shouldFail = true
-        view.refreshAchievedGoals()
-
-        compare(view.achievedGoals.length, 1)
-        compare(view.achievedGoalsError, "读取长期目标失败")
-        compare(findChild(view, "achievedGoalsEmptyText").text, "读取长期目标失败")
-    }
 }

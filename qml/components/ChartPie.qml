@@ -155,9 +155,7 @@ Rectangle {
                                 ctx.closePath()
                                 ctx.fillStyle = root.chartData[i].color
                                 ctx.fill()
-                                ctx.strokeStyle = Theme.surface
-                                ctx.lineWidth = 2
-                                ctx.stroke()
+                                // 不描白边：扇区之间靠颜色区分，避免玻璃卡上出现突兀的白色轮廓。
                                 start += sweep
                             }
                         }
