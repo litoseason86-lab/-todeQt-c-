@@ -32,19 +32,19 @@
 | 012 | 仪表盘「今日专注番茄」改用有效番茄口径 | P1 | S | 011 | DONE（已验证） |
 | 013 | 奖励回路三缺陷（粒子被遮挡 / 失败态伪装成空态 / 复选框绑定断裂） | P1 | S-M | — | DONE（前两项修复；复选框缺陷未复现，已收敛单一状态源） |
 | 014 | 音效与 QML 资源清单守门测试 | P2 | S | — | DONE（已验证） |
-| 015 | 玻璃卡描边改用对比细线，修亮壁纸下卡片边界消失 | P2 | M | — | TODO |
-| 016 | 自然到点番茄的持久化时长封顶在目标时长 | P1 | S | — | TODO |
-| 017 | 删除正在专注的任务时立即解除计时器关联 | P1 | M | 016 | TODO |
-| 018 | 恢复数据库时同步恢复番茄循环计数 | P1 | M | 017 | TODO |
-| 019 | 为 v8 完整番茄口径变更增加一次性说明 | P1 | M | — | TODO |
-| 020 | 科目变更时刷新目标并阻止表单静默改绑 | P1 | S | — | TODO |
-| 021 | 统一倒计时失败语义并让页面显示可恢复错误 | P1 | S | — | TODO |
-| 022 | 每次投递前刷新 macOS 通知授权状态 | P2 | M | — | TODO |
-| 023 | 合并重复刷新信号并按事件循环批处理页面查询 | P2 | M | — | TODO |
-| 024 | 为每个 CTest 进程设置明确超时 | P2 | S | 022 | TODO |
-| 025 | 建立 QML 渲染性能测量工装（后续性能计划的前置） | P1* | M | — | DONE（已复核，待合并：分支 `advisor/025-perf-harness`） |
-| 026 | 阴影 MultiEffect 设定 blurMax，停止为不存在的模糊预留纹理 | P2 | S | 025 | DONE（已复核，待合并：分支 `advisor/026-shadow-blurmax`，基于 025） |
-| 027 | 任务列表启用 delegate 复用，两处 Repeater 改虚拟化 | P2 | M | 025 | DONE（已复核，待合并：分支 `advisor/027-list-virtualization`，链在 026 之上） |
+| 015 | 玻璃卡描边改用对比细线，修亮壁纸下卡片边界消失 | P2 | M | — | DONE（`52726d9`） |
+| 016 | 自然到点番茄的持久化时长封顶在目标时长 | P1 | S | — | DONE（`aa17e34`） |
+| 017 | 删除正在专注的任务时立即解除计时器关联 | P1 | M | 016 | DONE（`aa17e34`） |
+| 018 | 恢复数据库时同步恢复番茄循环计数 | P1 | M | 017 | DONE（`aa17e34`） |
+| 019 | 为 v8 完整番茄口径变更增加一次性说明 | P1 | M | — | DONE（`aa17e34`，新增 NaturalCompletionNoticeDialog） |
+| 020 | 科目变更时刷新目标并阻止表单静默改绑 | P1 | S | — | DONE（`aa17e34`） |
+| 021 | 统一倒计时失败语义并让页面显示可恢复错误 | P1 | S | — | DONE（`aa17e34`） |
+| 022 | 每次投递前刷新 macOS 通知授权状态 | P2 | M | — | DONE（`aa17e34`） |
+| 023 | 合并重复刷新信号并按事件循环批处理页面查询 | P2 | M | — | DONE（`aa17e34`，新增 RefreshCoalescer） |
+| 024 | 为每个 CTest 进程设置明确超时 | P2 | S | 022 | DONE（`aa17e34`，CMake TIMEOUT 30/90/180） |
+| 025 | 建立 QML 渲染性能测量工装（后续性能计划的前置） | P1* | M | — | TODO（原 `advisor/025-perf-harness` 分支已删除，未合并） |
+| 026 | 阴影 MultiEffect 设定 blurMax，停止为不存在的模糊预留纹理 | P2 | S | 025 | TODO（原 `advisor/026-shadow-blurmax` 分支已删除，未合并） |
+| 027 | 任务列表启用 delegate 复用，两处 Repeater 改虚拟化 | P2 | M | 025 | TODO（原 `advisor/027-list-virtualization` 分支已删除，未合并） |
 | 028 | 七个页面改为按需加载 | P3 | M | 025, 027 | TODO |
 | 029 | 消除 241 处 unqualified 访问并接入 qmllint | P3 | M | — | TODO |
 | 030 | 专注计时环从 Canvas 换成 Shape | P3 | M | 025 | TODO |
@@ -54,6 +54,25 @@
 只是让 026/027/028/030 能拿数字验收，所以要先做。
 
 状态取值：TODO | IN PROGRESS | DONE | BLOCKED（附一行原因）| REJECTED（附一行理由）
+
+> **2026-08-06 状态复核（基于 commit `444e335`，逐条对代码核实）**：
+> - **015 → DONE**：commit `52726d9` 把玻璃描边铺开到全应用。
+> - **016–024 → DONE**：整批 F01–F10 已在 commit `aa17e34`「修复计时备份与页面刷新缺陷」实现——
+>   FocusTimer 时长封顶（`qMin(duration, m_targetSeconds)`）/ 删除任务解绑 / 恢复番茄计数，
+>   新增 `NaturalCompletionNoticeDialog`（019）、`RefreshCoalescer`（023），
+>   GoalFormDialog+GoalService 科目失效（020）、CountdownService 错误语义（021）、
+>   MacNotificationBackend 授权刷新（022）、CMake CTest 超时 30/90/180（024）。
+>   commit `56e46a6` 只新增 015–031 的**计划文档**，不含实现。
+> - **025 / 026 / 027 → 回退 TODO**：原实现在 `advisor/025|026|027` 分支（曾标「待合并」），
+>   这些分支已于 2026-08-05 按维护者要求删除、未合并进主线。代码核对确认未落地：
+>   侧栏仍 `autoPaddingEnabled: true` / `blurMax: 48`（026）、两个任务列表仍用非虚拟化
+>   `Repeater`（027）、无性能工装（025）。
+> - **028–031 维持 TODO**：代码核对确认未落地——`MainWindow` 仅 1 个 `Loader`（028）、
+>   `FocusRing` 仍是 `Canvas`（030）、`MacStatusBarController` 仍用 `assign` 裸指针（031）、
+>   qmllint 未接入构建（029）。
+
+下方各「审计轮次」段落是**带日期的历史记录**，保留当时的事实快照（例如「第五轮」记的
+「015–024 全部 TODO」是 2026-07-29 的状态），不随本次复核改写；当前状态以上表为准。
 
 > **历史执行记录（010–014，现均已 DONE）**：这五份计划编写时，目标代码尚在
 > commit `43ba2ee` 的未提交工作区里，所以当时不能用 `git diff` 做漂移检查，计划内改用 grep。
