@@ -24,6 +24,10 @@ public:
     Q_INVOKABLE QVariantList getWeekStats() const;
     Q_INVOKABLE QVariantMap getWeekComparison(const QDate& weekStart) const;
     Q_INVOKABLE QVariantMap getCategoryStats(const QVariant& startDateValue, const QVariant& endDateValue) const;
+    // 今日学习统计：按 task_id 分组聚合指定逻辑日的专注时长与有效番茄数。
+    // task_id 为空(自由计时未选任务)会归为单行 unassigned=true。无参版取当前逻辑日。
+    Q_INVOKABLE QVariantMap getDayTaskStats(const QDate& date) const;
+    Q_INVOKABLE QVariantMap getTodayTaskStats() const;
     Q_INVOKABLE QVariantMap getMonthStats(int year, int month) const;
     Q_INVOKABLE QVariantMap getMonthStats() const;
     Q_INVOKABLE QVariantMap getMonthComparison(int year, int month) const;

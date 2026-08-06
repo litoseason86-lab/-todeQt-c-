@@ -56,6 +56,7 @@ TestCase {
         })
         property int streakData: 16
         property int totalData: 124 * 3600
+        property var todayTaskStatsData: ({ tasks: [], totalDuration: 0, taskCount: 0 })
 
         function getTodayStats() {
             return todayStatsData
@@ -67,6 +68,10 @@ TestCase {
 
         function getTotalFocusDuration() {
             return totalData
+        }
+
+        function getTodayTaskStats() {
+            return todayTaskStatsData
         }
     }
 
@@ -219,8 +224,20 @@ TestCase {
         appSettings.focusGoalDate = ""
         appSettings.focusGoalMinutes = 0
         appSettings.focusGoalSaveSucceeds = true
+        statisticsService.todayTaskStatsData = { tasks: [], totalDuration: 0, taskCount: 0 }
         testCase.logicalNow = new Date(2026, 6, 12, 12, 0, 0)
         Theme.glassBlurAllowed = true
+    }
+
+    // 递归统计某 objectName 的节点数（Repeater 生成的行也在可视子树里）。
+    function countObjects(item, name) {
+        if (!item)
+            return 0
+        var n = (item.objectName === name) ? 1 : 0
+        var kids = item.children ? item.children.length : 0
+        for (var i = 0; i < kids; i++)
+            n += countObjects(item.children[i], name)
+        return n
     }
 
     // —— DashboardFormat 纯函数 ——
@@ -420,6 +437,61 @@ TestCase {
         compare(taskItem.compact, false)
         compare(taskItem.showEditDelete, true)
         compare(taskItem.showStartFocus, true)
+    }
+
+    function test_learning_segment_lists_today_focus() {
+        statisticsService.todayTaskStatsData = {
+            totalDuration: 9000,
+            taskCount: 2,
+            tasks: [
+                { taskId: 1, title: "高数第七章", color: "#C08457", focusedSeconds: 5400, pomodoros: 3, completed: false, unassigned: false },
+                { taskId: -1, title: "", color: "", focusedSeconds: 3600, pomodoros: 0, completed: false, unassigned: true }
+            ]
+        }
+
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+
+        // 第三个筛选胶囊存在。
+        var chip = findChild(view, "dashboardFilter-learning")
+        verify(chip)
+
+        view.filterMode = "learning"
+
+        var list = findChild(view, "dashboardTodayLearningList")
+        verify(list)
+        compare(Number(list.stats.taskCount), 2)
+        compare(Number(list.stats.totalDuration), 9000)
+
+        // 角标跟随学习统计的任务数。
+        compare(view.panelTaskCount, 2)
+        var countBadge = findChild(view, "dashboardTaskCount")
+        verify(countBadge)
+        compare(countBadge.text, "2")
+
+        // 摘要文案：项数 + 今日总时长。
+        var summary = findChild(view, "todayLearningSummary")
+        verify(summary)
+        verify(summary.text.indexOf("共 2 项") >= 0)
+        verify(summary.text.indexOf("2小时30分钟") >= 0)
+
+        // 两行任务(含未关联专注)。
+        compare(countObjects(view, "todayLearningRow"), 2)
+    }
+
+    function test_learning_segment_empty_state() {
+        statisticsService.todayTaskStatsData = { tasks: [], totalDuration: 0, taskCount: 0 }
+
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+
+        view.filterMode = "learning"
+
+        compare(view.panelTaskCount, 0)
+        var empty = findChild(view, "todayLearningEmptyText")
+        verify(empty)
+        verify(empty.text.indexOf("还没有专注记录") >= 0)
+        compare(countObjects(view, "todayLearningRow"), 0)
     }
 
     function test_start_first_pending_task() {

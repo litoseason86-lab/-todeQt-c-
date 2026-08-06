@@ -85,6 +85,15 @@ QVariantMap emptyCategoryStats()
     return result;
 }
 
+QVariantMap emptyTaskStats()
+{
+    QVariantMap result;
+    result.insert(QStringLiteral("tasks"), QVariantList());
+    result.insert(QStringLiteral("totalDuration"), 0);
+    result.insert(QStringLiteral("taskCount"), 0);
+    return result;
+}
+
 QVariantMap emptyDayStats()
 {
     QVariantMap result;
@@ -410,6 +419,91 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
     result.insert(QStringLiteral("categories"), categories);
     result.insert(QStringLiteral("totalDuration"), totalDuration);
     return result;
+}
+
+QVariantMap StatisticsService::getDayTaskStats(const QDate& date) const
+{
+    if (!date.isValid()) {
+        qWarning() << "Failed to get day task stats: invalid date";
+        return emptyTaskStats();
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to get day task stats: database is not open";
+        reportStatisticsFailure(QStringLiteral("数据库未打开"));
+        return emptyTaskStats();
+    }
+
+    // 按 task_id 分组：同一任务当天的多段专注累加成一行。GROUP BY f.task_id 会把所有
+    // task_id 为空的自由计时会话归入同一组，天然得到「未关联专注」单行。
+    // 专注时长对 mode 不敏感(番茄段+自由段都算)，番茄数走 FocusSessionRules 唯一口径。
+    // 科目名/色沿用 getCategoryStats 的快照优先 COALESCE 链，保证与饼图一致。
+    QSqlQuery query(db);
+    const QString sql = QStringLiteral(
+        "SELECT "
+        "f.task_id AS task_id, "
+        "t.title AS task_title, "
+        "COALESCE(t.completed, 0) AS task_completed, "
+        "COALESCE(NULLIF(snapshot_category.name, ''), NULLIF(f.category_name_snapshot, ''), "
+        "NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), '') AS category_name, "
+        "COALESCE(NULLIF(snapshot_category.color, ''), NULLIF(f.category_color_snapshot, ''), "
+        "NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS category_color, "
+        "SUM(f.duration) AS focused_seconds, "
+        "%1 AS pomodoros "
+        "FROM focus_sessions f "
+        "LEFT JOIN tasks t ON f.task_id = t.id "
+        "LEFT JOIN categories snapshot_category ON f.category_id_snapshot = snapshot_category.id "
+        "LEFT JOIN categories c ON t.category_id = c.id "
+        "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
+        "WHERE date(f.start_time, :dayShift) = :date "
+        "AND f.end_time IS NOT NULL "
+        "AND f.duration IS NOT NULL "
+        "AND f.duration >= :minDuration "
+        "GROUP BY f.task_id "
+        "ORDER BY focused_seconds DESC, task_title ASC")
+        .arg(FocusSessionRules::validPomodoroCountExpr(QStringLiteral("f")));
+    query.prepare(sql);
+    query.bindValue(QStringLiteral(":dayShift"),
+                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
+    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to get day task stats:" << query.lastError().text();
+        reportStatisticsFailure(query.lastError().text());
+        return emptyTaskStats();
+    }
+
+    QVariantList tasks;
+    int totalDuration = 0;
+    while (query.next()) {
+        const bool unassigned = query.value(0).isNull();
+        const int focusedSeconds = query.value(5).toInt();
+
+        QVariantMap task;
+        task.insert(QStringLiteral("taskId"), unassigned ? -1 : query.value(0).toInt());
+        task.insert(QStringLiteral("title"), query.value(1).toString());
+        task.insert(QStringLiteral("completed"), query.value(2).toInt() != 0);
+        task.insert(QStringLiteral("categoryName"), query.value(3).toString());
+        task.insert(QStringLiteral("color"), query.value(4).toString());
+        task.insert(QStringLiteral("focusedSeconds"), focusedSeconds);
+        task.insert(QStringLiteral("pomodoros"), query.value(6).toInt());
+        task.insert(QStringLiteral("unassigned"), unassigned);
+        tasks.append(task);
+        totalDuration += focusedSeconds;
+    }
+
+    QVariantMap result;
+    result.insert(QStringLiteral("tasks"), tasks);
+    result.insert(QStringLiteral("totalDuration"), totalDuration);
+    result.insert(QStringLiteral("taskCount"), tasks.size());
+    return result;
+}
+
+QVariantMap StatisticsService::getTodayTaskStats() const
+{
+    return getDayTaskStats(LogicalDay::today(AppSettings::instance()->dayStartHour()));
 }
 
 QVariantMap StatisticsService::getMonthStats(int year, int month) const

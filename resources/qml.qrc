@@ -74,6 +74,7 @@
         <file alias="qml/components/LongFreeFocusConfirmDialog.qml">../qml/components/LongFreeFocusConfirmDialog.qml</file>
         <file alias="qml/components/NaturalCompletionNoticeDialog.qml">../qml/components/NaturalCompletionNoticeDialog.qml</file>
         <file alias="qml/components/WeeklyReviewCard.qml">../qml/components/WeeklyReviewCard.qml</file>
+        <file alias="qml/components/TodayLearningList.qml">../qml/components/TodayLearningList.qml</file>
         <file alias="qml/components/Toast.qml">../qml/components/Toast.qml</file>
         <file alias="sounds/phase-complete.wav">sounds/phase-complete.wav</file>
         <file alias="sounds/milestone.wav">sounds/milestone.wav</file>

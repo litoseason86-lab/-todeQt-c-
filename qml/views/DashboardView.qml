@@ -29,6 +29,8 @@ Item {
     property var tasks: []
     property var todayStats: ({ totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0,
                                 sessionCount: 0, pomodoroCount: 0 })
+    // 今日学习统计：按任务聚合的当天专注时长/番茄，供「学习统计」分段展示。
+    property var todayTaskStats: ({ tasks: [], totalDuration: 0, taskCount: 0 })
     property int streakDays: 0
     property int totalFocusSeconds: 0
     property int dailyFocusGoalMinutes: 0
@@ -72,9 +74,11 @@ Item {
         return n
     }
 
-    readonly property int panelTaskCount: root.filterMode === "done"
-                                         ? root.completedTaskCount
-                                         : root.tasks.length
+    readonly property int panelTaskCount: root.filterMode === "learning"
+                                         ? Number(root.todayTaskStats.taskCount || 0)
+                                         : (root.filterMode === "done"
+                                            ? root.completedTaskCount
+                                            : root.tasks.length)
 
     readonly property bool doneFilter: root.filterMode === "done"
     readonly property string logicalTodayIso: {
@@ -216,6 +220,7 @@ Item {
         }
         loadTasks()
         loadStats()
+        loadTodayTaskStats()
         loadDailyFocusGoal()
     }
 
@@ -250,6 +255,14 @@ Item {
                                 completionRate: 0, sessionCount: 0, pomodoroCount: 0 }
             root.streakDays = 0
             root.totalFocusSeconds = 0
+        }
+    }
+
+    function loadTodayTaskStats() {
+        try {
+            root.todayTaskStats = statisticsService.getTodayTaskStats()
+        } catch (error) {
+            root.todayTaskStats = { tasks: [], totalDuration: 0, taskCount: 0 }
         }
     }
 
@@ -512,7 +525,8 @@ Item {
                         Repeater {
                             model: [
                                 { key: "all", label: "全部" },
-                                { key: "done", label: "已完成" }
+                                { key: "done", label: "已完成" },
+                                { key: "learning", label: "学习统计" }
                             ]
 
                             Rectangle {
@@ -595,7 +609,8 @@ Item {
 
                             anchors.centerIn: parent
                             width: parent.width
-                            visible: root.filteredTasks.length === 0 && root.loadError.length === 0
+                            visible: root.filterMode !== "learning"
+                                     && root.filteredTasks.length === 0 && root.loadError.length === 0
                             text: root.tasks.length === 0
                                   ? "今天还没有任务，去「今日任务」页添加。"
                                   : (root.doneFilter
@@ -607,10 +622,18 @@ Item {
                             wrapMode: Text.WordWrap
                         }
 
+                        // 学习统计分段：任务清单换成「今日专注过的任务 + 各自时长」列表。
+                        TodayLearningList {
+                            objectName: "dashboardTodayLearningList"
+                            anchors.fill: parent
+                            visible: root.filterMode === "learning"
+                            stats: root.todayTaskStats
+                        }
+
                         ScrollView {
                             anchors.fill: parent
                             clip: true
-                            visible: root.filteredTasks.length > 0
+                            visible: root.filterMode !== "learning" && root.filteredTasks.length > 0
 
                             ColumnLayout {
                                 width: Math.max(parent.width, 1)

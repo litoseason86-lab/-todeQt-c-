@@ -707,6 +707,10 @@ private slots:
     void getMonthWeeklySummaryUsesSpecifiedMonthAndRejectsInvalidYearMonth();
     void getCategoryStatsAggregatesDurationsAndPercentages();
     void statisticsIgnoresInvalidShortSessions();
+    void getDayTaskStatsAggregatesPerTask();
+    void getDayTaskStatsGroupsUnassignedFocus();
+    void getDayTaskStatsPomodoroCountUsesValidRule();
+    void getDayTaskStatsRespectsLogicalDayAndEmptyDate();
     void routinesTableExistsAfterInitialize();
     void databaseReinitializeEmitsRoutineChangeOnce();
     void version2MigrationAddsRoutinesSchemaAndIndex();
@@ -2626,6 +2630,121 @@ void ServiceTests::statisticsIgnoresInvalidShortSessions()
     const QVariantList categories = categoryStats.value(QStringLiteral("categories")).toList();
     QCOMPARE(categories.size(), 1);
     QCOMPARE(categories.first().toMap().value(QStringLiteral("name")).toString(), QStringLiteral("英语"));
+}
+
+void ServiceTests::getDayTaskStatsAggregatesPerTask()
+{
+    const QDate today = logicalToday();
+    const int mathId = insertTaskRow(QStringLiteral("高数第七章"), today, QStringLiteral("数学"));
+    const int engId = insertTaskRow(QStringLiteral("英语阅读"), today, QStringLiteral("英语"));
+    QVERIFY(mathId > 0);
+    QVERIFY(engId > 0);
+
+    // 数学：两段有效(1500+900=2400)，各计一个番茄；英语：一段 600。
+    QVERIFY(insertFocusSessionRow(mathId, today, 1500));
+    QVERIFY(insertFocusSessionRow(mathId, today, 900));
+    QVERIFY(insertFocusSessionRow(engId, today, 600));
+    // 排除项：短于阈值、null 时长、其它逻辑日，都不进今日聚合。
+    QVERIFY(insertFocusSessionRow(mathId, today, kTestMinimumValidDurationSeconds - 1));
+    QVERIFY(insertFocusSessionWithNullDuration(engId, today));
+    QVERIFY(insertFocusSessionRow(mathId, today.addDays(-1), 3000));
+
+    const QVariantMap stats = StatisticsService::instance()->getDayTaskStats(today);
+    const QVariantList tasks = stats.value(QStringLiteral("tasks")).toList();
+
+    QCOMPARE(stats.value(QStringLiteral("taskCount")).toInt(), 2);
+    QCOMPARE(stats.value(QStringLiteral("totalDuration")).toInt(), 3000); // 2400 + 600
+    QCOMPARE(tasks.size(), 2);
+
+    // 按今日时长降序：数学(2400)在前，英语(600)在后。
+    const QVariantMap first = tasks.at(0).toMap();
+    QCOMPARE(first.value(QStringLiteral("taskId")).toInt(), mathId);
+    QCOMPARE(first.value(QStringLiteral("title")).toString(), QStringLiteral("高数第七章"));
+    QCOMPARE(first.value(QStringLiteral("focusedSeconds")).toInt(), 2400);
+    QCOMPARE(first.value(QStringLiteral("pomodoros")).toInt(), 2);
+    QCOMPARE(first.value(QStringLiteral("unassigned")).toBool(), false);
+
+    const QVariantMap second = tasks.at(1).toMap();
+    QCOMPARE(second.value(QStringLiteral("taskId")).toInt(), engId);
+    QCOMPARE(second.value(QStringLiteral("focusedSeconds")).toInt(), 600);
+    QCOMPARE(second.value(QStringLiteral("pomodoros")).toInt(), 1);
+}
+
+void ServiceTests::getDayTaskStatsGroupsUnassignedFocus()
+{
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("有主任务"), today, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionRow(taskId, today, 600));
+    // 两段未关联任务(task_id 为空)的专注应汇成单独一行。
+    QVERIFY(insertFocusSessionRow(-1, today, 1200));
+    QVERIFY(insertFocusSessionRow(-1, today, 300));
+
+    const QVariantMap stats = StatisticsService::instance()->getDayTaskStats(today);
+    const QVariantList tasks = stats.value(QStringLiteral("tasks")).toList();
+    QCOMPARE(stats.value(QStringLiteral("taskCount")).toInt(), 2);
+
+    QVariantMap unassigned;
+    for (const QVariant& value : tasks) {
+        const QVariantMap row = value.toMap();
+        if (row.value(QStringLiteral("unassigned")).toBool()) {
+            unassigned = row;
+            break;
+        }
+    }
+    QVERIFY(!unassigned.isEmpty());
+    QCOMPARE(unassigned.value(QStringLiteral("focusedSeconds")).toInt(), 1500); // 1200 + 300
+    QCOMPARE(unassigned.value(QStringLiteral("taskId")).toInt(), -1);
+    // 未关联行时长最大(1500 > 600)，排在首位。
+    QCOMPARE(tasks.at(0).toMap().value(QStringLiteral("unassigned")).toBool(), true);
+}
+
+void ServiceTests::getDayTaskStatsPomodoroCountUsesValidRule()
+{
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("专注任务"), today, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    // 番茄段(mode=1)计一个番茄；自由计时(mode=0)只累计时长、不计番茄。
+    QVERIFY(insertFocusSessionRowWithMode(taskId, today, 25 * 60, 1));
+    QVERIFY(insertFocusSessionRowWithMode(taskId, today, 30 * 60, 0));
+
+    const QVariantMap stats = StatisticsService::instance()->getDayTaskStats(today);
+    const QVariantList tasks = stats.value(QStringLiteral("tasks")).toList();
+    QCOMPARE(tasks.size(), 1);
+
+    const QVariantMap row = tasks.at(0).toMap();
+    QCOMPARE(row.value(QStringLiteral("focusedSeconds")).toInt(), 25 * 60 + 30 * 60); // 两段都计时长
+    QCOMPARE(row.value(QStringLiteral("pomodoros")).toInt(), 1);                       // 只番茄段计番茄
+}
+
+void ServiceTests::getDayTaskStatsRespectsLogicalDayAndEmptyDate()
+{
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("跨界任务"), today, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    // dayStartHour=4：今天凌晨 02:00 的一段应归入「逻辑昨天」，不进 today。
+    const QString earlyStart = today.toString(Qt::ISODate) + QStringLiteral("T02:00:00");
+    const QString earlyEnd = today.toString(Qt::ISODate) + QStringLiteral("T02:30:00");
+    QVERIFY(insertFocusSessionRowWithTimes(taskId, earlyStart, earlyEnd, 1800) > 0);
+
+    const QVariantMap todayStats = StatisticsService::instance()->getDayTaskStats(today);
+    QCOMPARE(todayStats.value(QStringLiteral("taskCount")).toInt(), 0);
+    QVERIFY(todayStats.value(QStringLiteral("tasks")).toList().isEmpty());
+
+    const QVariantMap yesterdayStats =
+        StatisticsService::instance()->getDayTaskStats(today.addDays(-1));
+    QCOMPARE(yesterdayStats.value(QStringLiteral("taskCount")).toInt(), 1);
+    QCOMPARE(yesterdayStats.value(QStringLiteral("tasks")).toList().at(0).toMap()
+                 .value(QStringLiteral("focusedSeconds")).toInt(),
+             1800);
+
+    // 无效日期安全返回空。
+    const QVariantMap invalid = StatisticsService::instance()->getDayTaskStats(QDate());
+    QCOMPARE(invalid.value(QStringLiteral("taskCount")).toInt(), 0);
+    QVERIFY(invalid.value(QStringLiteral("tasks")).toList().isEmpty());
 }
 
 void ServiceTests::routinesTableExistsAfterInitialize()
