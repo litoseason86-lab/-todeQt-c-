@@ -391,7 +391,11 @@ Item {
                             Text {
                                 objectName: "dashboardDateText"
 
-                                text: Qt.formatDate(root.now, "yyyy年M月d日") + " " + Qt.formatDate(root.now, "dddd")
+                                // 必须走 toLocaleDateString + 显式 zh_CN，不能用 Qt.formatDate：
+                                // Qt.formatDate 传格式字符串时不查区域设置，"dddd" 恒定输出英文
+                                // 星期名（"Friday"），会和前半段中文日期拼成「2026年8月7日 Friday」。
+                                // 界面全中文，星期名也固定用中文，不跟随系统语言。
+                                text: root.now.toLocaleDateString(Qt.locale("zh_CN"), "yyyy年M月d日 dddd")
                                 textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontMd
                                 font.weight: Font.Medium
@@ -427,12 +431,12 @@ Item {
                 spacing: Theme.space12
 
                 StatCard {
-                    objectName: "todayPomodoroCard"
+                    objectName: "todayFocusDurationCard"
                     Layout.fillWidth: true
-                    title: "今日专注番茄"
-                    value: String(Number(root.todayStats.pomodoroCount || 0))
-                    unit: "个"
-                    subtitle: "专注 " + root.formatDuration(root.todayStats.totalDuration)
+                    title: "今日专注时长"
+                    value: DashboardFormat.totalHoursText(root.todayStats.totalDuration)
+                    unit: "小时"
+                    subtitle: "共 " + Number(root.todayStats.sessionCount || 0) + " 次专注"
                 }
 
                 StatCard {
@@ -631,12 +635,26 @@ Item {
                         }
 
                         ScrollView {
+                            id: taskScrollView
+                            objectName: "dashboardTaskScrollView"
+
                             anchors.fill: parent
                             clip: true
                             visible: root.filterMode !== "learning" && root.filteredTasks.length > 0
+                            // 内容宽度锁死在可用宽度（= 视口宽 - 纵向滚动条），横向永不溢出。
+                            contentWidth: availableWidth
+                            // 显式建横向滚动条再关闭：离屏测试里 attached 实例可能尚未创建，
+                            // 直接给 ScrollBar.horizontal.policy 赋值会打到 null 上。
+                            ScrollBar.horizontal: ScrollBar {
+                                objectName: "dashboardTaskHorizontalScrollBar"
+                                policy: ScrollBar.AlwaysOff
+                            }
 
                             ColumnLayout {
-                                width: Math.max(parent.width, 1)
+                                // 绑 availableWidth 而不是 parent.width：ScrollView 里的 parent 是
+                                // 内容项本身，宽度反过来由内容撑出来，会让任务行伸到纵向滚动条底下
+                                // 被裁掉（「已完成」徽章缺角），并凭空多出一条横向滚动条。
+                                width: Math.max(taskScrollView.availableWidth, 1)
                                 // 已完成列表行距收紧，配合 compact TaskItem 提高一屏密度。
                                 spacing: root.doneFilter ? Theme.space4 : Theme.space8
 

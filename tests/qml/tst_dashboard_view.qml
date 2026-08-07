@@ -285,12 +285,44 @@ TestCase {
         verify(streakCard)
         compare(streakCard.value, "16")
 
-        const pomodoroCard = findChild(view, "todayPomodoroCard")
+        const focusDurationCard = findChild(view, "todayFocusDurationCard")
         const timerPomodoroText = findChild(view, "dashboardTimerSessionCount")
-        verify(pomodoroCard)
+        verify(focusDurationCard)
         verify(timerPomodoroText)
-        compare(pomodoroCard.value, "2")
+        compare(focusDurationCard.title, "今日专注时长")
+        compare(focusDurationCard.value, "2.6")
+        compare(focusDurationCard.unit, "小时")
+        compare(focusDurationCard.subtitle, "共 5 次专注")
         compare(timerPomodoroText.text, "今日已专注 2 个番茄")
+    }
+
+    // 星期名必须是中文。Qt.formatDate 传格式字符串时不查区域设置，"dddd" 恒定输出
+    // "Sunday"，会拼出「2026年7月12日 Sunday」；这条用例把中文星期钉死。
+    function test_dateTextUsesChineseWeekday() {
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+
+        var dateText = findChild(view, "dashboardDateText")
+        verify(dateText)
+        // logicalNow 固定为 2026-07-12（星期日），不依赖运行日期。
+        compare(dateText.text, "2026年7月12日 星期日")
+    }
+
+    // 任务列表横向不许溢出：内容宽度绑 availableWidth 而不是 parent.width，
+    // 否则内容项会被自身内容撑宽，任务行伸到纵向滚动条底下被裁掉。
+    function test_taskListDoesNotOverflowHorizontally() {
+        taskManager.todayTasksData = [
+            { id: 1, title: "一个标题很长很长很长很长很长很长很长很长的任务", completed: false },
+            { id: 2, title: "另一个任务", completed: true }
+        ]
+
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+
+        var scrollView = findChild(view, "dashboardTaskScrollView")
+        verify(scrollView)
+        verify(scrollView.availableWidth > 0)
+        compare(scrollView.contentWidth, scrollView.availableWidth)
     }
 
     function test_serviceFailuresAreShownInsteadOfEmptyState() {
@@ -477,6 +509,18 @@ TestCase {
 
         // 两行任务(含未关联专注)。
         compare(countObjects(view, "todayLearningRow"), 2)
+
+        // 行要铺满面板宽度：时长列靠右对齐才读得出「任务 —— 时长」的对应关系。
+        // 绑错成 parent.width 时行会缩到内容自然宽，时长列悬在面板中间。
+        var learningScroll = findChild(list, "todayLearningScrollView")
+        verify(learningScroll)
+        verify(learningScroll.availableWidth > 0)
+        compare(learningScroll.contentWidth, learningScroll.availableWidth)
+
+        // 行宽由布局 polish 阶段算出，创建后不是立刻就位，所以用 tryCompare 轮询。
+        var row = findChild(list, "todayLearningRow")
+        verify(row)
+        tryCompare(row, "width", learningScroll.availableWidth)
     }
 
     function test_learning_segment_empty_state() {

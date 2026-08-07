@@ -54,12 +54,25 @@ Item {
         }
 
         ScrollView {
+            id: rowScrollView
+            objectName: "todayLearningScrollView"
+
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
+            // 内容宽度锁死在可用宽度（= 视口宽 - 纵向滚动条），横向永不溢出。
+            contentWidth: availableWidth
+            // 显式建横向滚动条再关闭：离屏测试里 attached 实例可能尚未创建，
+            // 直接给 ScrollBar.horizontal.policy 赋值会打到 null 上。
+            ScrollBar.horizontal: ScrollBar {
+                objectName: "todayLearningHorizontalScrollBar"
+                policy: ScrollBar.AlwaysOff
+            }
 
             ColumnLayout {
-                width: Math.max(parent.width, 1)
+                // 绑 availableWidth 而不是 parent.width：ScrollView 里的 parent 是内容项本身，
+                // 宽度反过来由内容撑出来，行会缩在左侧一小条、时长列悬在面板中间。
+                width: Math.max(rowScrollView.availableWidth, 1)
                 spacing: Theme.space12
 
                 Repeater {

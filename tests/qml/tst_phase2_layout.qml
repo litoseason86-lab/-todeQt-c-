@@ -399,8 +399,13 @@ TestCase {
         compare(StatFmt.formatDuration(0), "0分钟")
         compare(StatFmt.formatDuration(2), "2秒")
         compare(StatFmt.formatDuration(61), "1分钟")
-        compare(StatFmt.totalDurationValue(2), "2秒")
-        compare(StatFmt.totalDurationUnit(2), "")
+        // 单位一律单独返回，数字串里不许出现中文单位。
+        compare(StatFmt.totalDurationValue(2), "2")
+        compare(StatFmt.totalDurationUnit(2), "秒")
+        compare(StatFmt.totalDurationValue(0), "0")
+        compare(StatFmt.totalDurationUnit(0), "分钟")
+        compare(StatFmt.totalDurationValue(2700), "45")
+        compare(StatFmt.totalDurationUnit(2700), "分钟")
         compare(StatFmt.totalDurationValue(3660), "1.0")
         compare(StatFmt.totalDurationUnit(3660), "小时")
     }
@@ -877,8 +882,11 @@ TestCase {
 
         compare(statisticsView.currentTimeRange, "week")
         compare(firstCard.title, "有效天数")
-        compare(firstCard.value, "3天")
-        compare(secondCard.value, "4次")
+        // 单位一律走 unit 属性，不拼进 value：三张卡的数字与单位字号才一致。
+        compare(firstCard.value, "3")
+        compare(firstCard.unit, "天")
+        compare(secondCard.value, "4")
+        compare(secondCard.unit, "次")
         compare(thirdCard.title, "本周累计")
         compare(thirdCard.value, "1.5")
         compare(thirdCard.unit, "小时")
@@ -894,8 +902,10 @@ TestCase {
 
         compare(statisticsView.currentTimeRange, "month")
         compare(firstCard.title, "有效天数")
-        compare(firstCard.value, "5天")
-        compare(secondCard.value, "8次")
+        compare(firstCard.value, "5")
+        compare(firstCard.unit, "天")
+        compare(secondCard.value, "8")
+        compare(secondCard.unit, "次")
         compare(thirdCard.title, "本月累计")
         compare(thirdCard.value, "2.0")
         compare(thirdCard.unit, "小时")

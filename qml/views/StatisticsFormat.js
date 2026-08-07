@@ -35,18 +35,28 @@ function decimalHours(seconds) {
     return (Math.max(0, Number(seconds || 0)) / 3600).toFixed(1)
 }
 
+// 统计卡的「数字」与「单位」始终分两个值返回，不要把单位拼进数字里：
+// 卡片用大号数据字排数字、小号弱色排单位，中文单位混进数字串会走字体回退，
+// 同一排卡片的字重和基线就对不上了。
+// 满一小时后切成小数小时，卡片不会过宽。
 function totalDurationValue(seconds) {
-    // 小于一小时显示分钟/秒；超过一小时后切成小数小时，卡片不会过宽。
     var safe = Math.max(0, Math.floor(Number(seconds || 0)))
-    if (safe < 3600) {
-        return formatDuration(safe)
+    if (safe >= 3600) {
+        return decimalHours(safe)
     }
-    return decimalHours(safe)
+    if (safe > 0 && safe < 60) {
+        return String(safe)
+    }
+    return String(Math.floor(safe / 60))
 }
 
 function totalDurationUnit(seconds) {
     var safe = Math.max(0, Math.floor(Number(seconds || 0)))
-    return safe >= 3600 ? "小时" : ""
+    if (safe >= 3600) {
+        return "小时"
+    }
+    // 不足一分钟才按秒读；0 秒归到「分钟」，空数据仍读作「0 分钟」。
+    return (safe > 0 && safe < 60) ? "秒" : "分钟"
 }
 
 function mondayOf(value) {

@@ -101,7 +101,13 @@ Rectangle {
                 id: valueText
                 objectName: "statCardValue"
 
-                Layout.fillWidth: true
+                // 数值和单位要读成一个量（「2.6 小时」）。这里不能撑满整行：
+                // 撑满会把单位顶到卡片最右缘，中间空出一大段，数字和单位读着像两回事。
+                // 改为按内容取宽，上限收在「卡片内宽 - 单位宽」，
+                // 长数值被上限截住时仍由 HorizontalFit 缩字号兜底。
+                Layout.maximumWidth: Math.max(
+                        root.width - Theme.space12 * 2
+                        - (unitText.visible ? unitText.implicitWidth + Theme.space4 : 0), 1)
                 text: root.value
                 font.pixelSize: Theme.fontXxl
                 font.family: Theme.fontFamilyData
@@ -141,12 +147,19 @@ Rectangle {
             }
 
             Text {
+                id: unitText
+
                 visible: root.unit.length > 0
                 text: root.unit
                 font.pixelSize: Theme.fontMd
                 color: Theme.inkSoft
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
+            }
+
+            // 富余宽度全部归这根尾部弹簧，数值与单位保持在左侧成组。
+            Item {
+                Layout.fillWidth: true
             }
         }
 

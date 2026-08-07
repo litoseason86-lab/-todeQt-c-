@@ -706,8 +706,11 @@ Item {
                         if (root.currentTimeRange === "today") {
                             return Number(root.todayStats.completedTasks || 0) + " / " + Number(root.todayStats.totalTasks || 0)
                         }
-                        return Number(root.todayStats.effectiveDays || 0) + "天"
+                        return String(Number(root.todayStats.effectiveDays || 0))
                     }
+                    // 单位走 unit 而不是拼进 value：同一行三张卡要用同一套字号，
+                    // 拼进 value 会让「天」和数字一样大一样重，右边那张的「小时」却是小号弱色。
+                    unit: root.currentTimeRange === "today" ? "" : "天"
                     subtitle: {
                         if (root.currentTimeRange === "today") {
                             return "完成率 " + Math.round(Number(root.todayStats.completionRate || 0) * 100) + "%"
@@ -729,7 +732,8 @@ Item {
                     comparisonText: root.comparisonDisplayText(root.sessionCountComparison())
                     comparisonTrend: Number(root.sessionCountComparison().trend || 0)
                     title: "专注次数"
-                    value: Number(root.todayStats.sessionCount || 0) + "次"
+                    value: String(Number(root.todayStats.sessionCount || 0))
+                    unit: "次"
                     subtitle: {
                         if (root.currentTimeRange === "today") {
                             return root.isCurrentSelectedPeriod ? "今日完成次数" : "当日完成次数"
