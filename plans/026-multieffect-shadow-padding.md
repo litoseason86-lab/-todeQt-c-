@@ -6,12 +6,15 @@
 > **Drift check（先跑这个）**：
 >
 > ```bash
-> git diff --stat 52726d9..HEAD -- qml
-> grep -rn "blurMax" qml/          # 当前应只有 2 处：MainWindow.qml、LiquidGlassBackdrop.qml
+> git diff --stat 0aa89af..HEAD -- qml   # 基线 2026-08-07 复核时更新
+> grep -rn "blurMax" qml/          # 当前应只有 2 处：MainWindow.qml:455、LiquidGlassBackdrop.qml:193
 > grep -rc "autoPaddingEnabled: true" qml/ | grep -v ":0" | wc -l   # 当前应为 14
 > ```
 >
 > 数字对不上就先核对下文的使用点，明显不符按 STOP condition 处理。
+>
+> 2026-08-07 在 `0aa89af` 上重验：两个数字都没变，只有行号漂移
+> ——侧栏 `MultiEffect` 由 `:443-449` 移到 **`MainWindow.qml:450-456`**（`blurMax: 48` 在 `:455`）。
 
 ## Status
 

@@ -6,10 +6,14 @@
 > **Drift check（先跑这个）**：
 >
 > ```bash
-> git diff --stat 52726d9..HEAD -- src/platform src/services/TrayController.cpp src/main.cpp
-> grep -n "assign) TrayController" src/platform/macos/MacStatusBarController.mm  # 必须命中
-> grep -n "MacStatusBarController statusBar" src/main.cpp                        # 必须命中 :102 附近
+> git diff --stat 0aa89af..HEAD -- src/platform src/services/TrayController.cpp src/main.cpp  # 基线 2026-08-07 复核时更新
+> grep -n "assign) TrayController" src/platform/macos/MacStatusBarController.mm  # 必须命中 :10
+> grep -n "MacStatusBarController statusBar" src/main.cpp                        # 必须命中 :109 附近
 > ```
+>
+> 2026-08-07 在 `0aa89af` 上重验：`MacStatusBarController.mm:10` 仍是 `assign` 裸指针。
+> **行号漂移**：`main.cpp` 里的栈声明由 `:102` 移到 **`:109`**——这条声明顺序仍然是
+> "现在不会崩"的唯一依据，改动 `main.cpp` 时不要打乱它。
 
 ## Status
 

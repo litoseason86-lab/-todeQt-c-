@@ -6,11 +6,17 @@
 > **Drift check（先跑这个）**：
 >
 > ```bash
-> git diff --stat 52726d9..HEAD -- qml/views qml/components/TaskItem.qml
-> grep -rn "reuseItems" qml/                        # 当前应只有 GoalsView 两处
-> grep -n "Repeater" qml/views/DashboardView.qml    # 应命中 :610 附近
+> git diff --stat 0aa89af..HEAD -- qml/views qml/components/TaskItem.qml  # 基线 2026-08-07 复核时更新
+> grep -rn "reuseItems" qml/                        # 当前应只有 GoalsView:387,410 两处
+> grep -n "Repeater" qml/views/DashboardView.qml    # 任务列表那处应命中 :661 附近
 > grep -n "Repeater" qml/views/WeekPlanView.qml     # 应命中 :547 附近
 > ```
+>
+> 2026-08-07 在 `0aa89af` 上重验：两处 `Repeater` 仍未虚拟化，`reuseItems` 仍只在目标页。
+> **行号漂移**：`DashboardView` 的任务列表 `Repeater` 由 `:610` 移到 **`:661`**
+> （`0aa89af` 修 `ScrollView` 宽度绑定时上移了内容项）。注意同文件 `:529` 还有一个
+> `Repeater`，那是筛选胶囊（三个固定项），**不是本计划的目标**，不要改它。
+> `WeekPlanView.qml:547` 与外层 `ListView` 的 `cacheBuffer: 180`（`:397`）都没变。
 
 ## Status
 

@@ -6,38 +6,54 @@
 > **Drift check（先跑这个）**：
 >
 > ```bash
-> git diff --stat 52726d9..HEAD -- qml
-> /opt/homebrew/bin/qmllint -I qml qml/*.qml qml/views/*.qml qml/components/*.qml \
->   qml/components/settings/*.qml 2>&1 | grep -c "unqualified"     # 基线：241
-> grep -rc "pragma ComponentBehavior: Bound" qml/ | grep -cv ":0"  # 当前约 24/67
+> git diff --stat 0aa89af..HEAD -- qml
+> /Users/zerionlito/Qt/6.9.0/macos/bin/qmllint -I qml qml/*.qml qml/views/*.qml \
+>   qml/components/*.qml qml/components/settings/*.qml 2>&1 | grep -c "unqualified"
+> grep -rl "pragma ComponentBehavior: Bound" qml/ | wc -l
 > ```
 >
-> 基线数字与 241 差距很大时先记下实测值，用实测值当基线，**不要硬凑**。
+> **基线已在 2026-08-07 于 commit `0aa89af` 重测**（原基线 241 是 2026-07-29 在 `52726d9`
+> 用 Homebrew qmllint 测的，已作废）：
+>
+> - `[unqualified]` **250** 条（qmllint 总警告 258：另有 4 条 `[use-proper-function]`、4 条 `[missing-property]`）
+> - QML 文件 **71** 个，其中 **21** 个已带 `pragma ComponentBehavior: Bound`
+> - 集中度未变，前五名仍是视图文件：`DashboardView` 42 / `WeekPlanView` 38 /
+>   `TodayTaskView` 38 / `MonthGoalView` 32 / `CountdownView` 31，合计 181 条（72%）
+> - **退出码仍为 0**——这正是本计划要解决的「等于没有门禁」
+>
+> 工具改用目标 Qt SDK 自带的 `qmllint`（`/Users/zerionlito/Qt/6.9.0/macos/bin/qmllint`），
+> 不要用 `/opt/homebrew/bin/qmllint`：本项目已明确 Homebrew Qt 不用于本仓库，两者版本不同、数字不可比。
+>
+> 基线数字与上面差距很大时先记下实测值，用实测值当基线，**不要硬凑**。
 
 ## Status
 
 - **Priority**: P3
-- **Effort**: M（机械改写，但 241 处横跨 43 个文件）
+- **Effort**: M（机械改写，250 处横跨 71 个文件中的多数视图）
 - **Risk**: MED（加 `pragma ComponentBehavior: Bound` 会改变名字解析，依赖外层 id 的地方会运行时报错）
 - **Depends on**: none
 - **Category**: tech-debt / perf
 - **Planned at**: commit `52726d9`, 2026-07-29
+- **基线重测**: commit `0aa89af`, 2026-08-07（数字见下表；仍未开工）
 
 ## Why this matters
 
-实测（不是推断）：`qmllint` 在 67 个 QML 文件上报出 **241 条 `[unqualified]`**，
-集中在五个视图文件：
+实测（不是推断）：`qmllint` 在 **71** 个 QML 文件上报出 **250 条 `[unqualified]`**，
+集中在五个视图文件（下表为 2026-08-07 在 `0aa89af` 上用 Qt 6.9.0 SDK 的 qmllint 重测；
+括号里是 2026-07-29 的旧数，供对比——总量与集中度基本没变）：
 
 | 文件 | 条数 |
 |---|---|
-| `qml/views/DashboardView.qml` | 41 |
+| `qml/views/DashboardView.qml` | 42（旧 41） |
 | `qml/views/WeekPlanView.qml` | 38 |
 | `qml/views/TodayTaskView.qml` | 38 |
 | `qml/views/MonthGoalView.qml` | 32 |
-| `qml/views/CountdownView.qml` | 25 |
+| `qml/views/CountdownView.qml` | 31（旧 25） |
 | `qml/components/FocusTimeline.qml` | 13 |
 | `qml/components/ColorPicker.qml` | 12 |
 | `qml/components/CategoryDialog.qml` | 11 |
+
+前五名合计 181 条，占全部的 72%——先做这五个文件就能拿到绝大部分收益。
 
 两个代价：
 

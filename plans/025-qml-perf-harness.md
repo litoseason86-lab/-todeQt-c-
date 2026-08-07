@@ -6,7 +6,7 @@
 > **Drift check（先跑这个）**：
 >
 > ```bash
-> git diff --stat 52726d9..HEAD -- CMakeLists.txt qml tests
+> git diff --stat 0aa89af..HEAD -- CMakeLists.txt qml tests   # 基线 2026-08-07 复核时更新
 > ls /Users/zerionlito/Qt/6.9.0/macos/bin/qmlprofiler   # 必须存在
 > grep -n "POMODORO_TODO_ENABLE_QML_DEBUG" CMakeLists.txt  # 必须命中
 > ls tests/perf 2>/dev/null                              # 应当不存在（本计划新建）

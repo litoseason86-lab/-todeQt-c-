@@ -6,11 +6,16 @@
 > **Drift check（先跑这个）**：
 >
 > ```bash
-> git diff --stat 52726d9..HEAD -- qml/MainWindow.qml qml/views
-> grep -n "StackLayout" qml/MainWindow.qml          # 应命中 :558 附近
+> git diff --stat 0aa89af..HEAD -- qml/MainWindow.qml qml/views  # 基线 2026-08-07 复核时更新
+> grep -n "StackLayout" qml/MainWindow.qml          # 声明处应命中 :565 附近
 > grep -c "Loader" qml/MainWindow.qml               # 当前应为 1
-> grep -n "focusView\." qml/MainWindow.qml          # 应命中 :365 与 :374
+> grep -n "focusView\." qml/MainWindow.qml          # 应命中 :365、:374、:383
 > ```
+>
+> 2026-08-07 在 `0aa89af` 上重验：仍只有 1 个 `Loader`，七个页面仍全部直接实例化。
+> **行号漂移**：`StackLayout` 声明由 `:558` 移到 **`:565`**（`:562`、`:704` 的命中是注释里的词，不是声明）。
+> `focusView.` 的调用点比原计划多一处：`:365`、`:374` 之外还有 `:383` 的 `Qt.callLater(focusView.endFreeFocus)`
+> ——改 `Loader` 时这三处都要一起处理。
 
 ## Status
 

@@ -6,11 +6,17 @@
 > **Drift check（先跑这个）**：
 >
 > ```bash
-> git diff --stat 52726d9..HEAD -- qml/components/FocusRing.qml qml/views/FocusView.qml
-> head -8 qml/components/FocusRing.qml | grep -n "Canvas"      # 必须命中（待改）
+> git diff --stat 0aa89af..HEAD -- qml/components/FocusRing.qml qml/views/FocusView.qml  # 基线 2026-08-07 复核时更新
+> head -8 qml/components/FocusRing.qml | grep -n "Canvas"      # 必须命中（待改，当前在 :7）
 > grep -n "preferredRendererType" qml/components/GoalProgressRing.qml  # 必须命中（参照件）
-> grep -n "implicitWidth" qml/views/FocusView.qml | head       # 定位 :660 附近的动画
+> grep -n "implicitWidth" qml/views/FocusView.qml | head       # 定位 :756 附近的动画
 > ```
+>
+> 2026-08-07 在 `0aa89af` 上重验：`FocusRing.qml:7` 仍是 `Canvas`，
+> `:23-27` 的五个 `requestPaint()` 触发源（含 `onWidthChanged`/`onHeightChanged`）一个没少。
+> **行号漂移**：`FocusView` 里的 `FocusRing` 实例由 `:660` 移到 **`:751`**，
+> 尺寸动画在 **`:756-757`**（`implicitWidth` 190↔252）+ **`:763`** 的 `Behavior on implicitWidth`
+> ——这就是"宽度动画每帧触发 `requestPaint()`"的那条链。
 
 ## Status
 
