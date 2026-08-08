@@ -121,6 +121,11 @@ TestCase {
     }
 
     TodayTaskView {
+        taskManagerRef: taskManager
+        statisticsServiceRef: statisticsService
+        routineManagerRef: routineManager
+        focusTimerRef: focusTimer
+        logicalDayServiceRef: logicalDayService
         id: view
         width: testCase.width
         height: testCase.height

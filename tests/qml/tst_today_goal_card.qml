@@ -100,6 +100,11 @@ TestCase {
         id: todayViewComponent
 
         TodayTaskView {
+            taskManagerRef: taskManager
+            statisticsServiceRef: statisticsService
+            routineManagerRef: routineManager
+            focusTimerRef: focusTimer
+            logicalDayServiceRef: logicalDayService
             width: 860
             height: 600
             settingsRef: appSettings

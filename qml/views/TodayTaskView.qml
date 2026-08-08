@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
@@ -28,6 +30,13 @@ Item {
             totalTasks: 0,
             completionRate: 0
     })
+    // 上下文属性只在 main.qml 解包，视图内部一律消费显式引用。
+    // 裸名字依赖 QML 的动态作用域，视图对外部的真实依赖既看不出来也换不掉。
+    property var taskManagerRef: null
+    property var statisticsServiceRef: null
+    property var routineManagerRef: null
+    property var focusTimerRef: null
+    property var logicalDayServiceRef: null
     property var categoryManagerRef: null
     property var countdownServiceRef: null
     property var settingsRef: null
@@ -44,9 +53,7 @@ Item {
 
     // 实时专注秒数统一口径（与仪表盘共用 FocusLiveSeconds，禁止各自拼接）。
     readonly property FocusLiveSeconds liveSecondsSource: FocusLiveSeconds {
-        // qmllint disable unqualified
-        timerRef: typeof focusTimer !== "undefined" ? focusTimer : null
-        // qmllint enable unqualified
+        timerRef: root.focusTimerRef
         baseSeconds: Number(root.todayStats.totalDuration || 0)
         logicalDate: root.todayIsoDate()
     }
@@ -76,7 +83,7 @@ Item {
     }
 
     Connections {
-        target: taskManager
+        target: root.taskManagerRef
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
@@ -122,7 +129,7 @@ Item {
     }
 
     Connections {
-        target: focusTimer
+        target: root.focusTimerRef
         enabled: root.pageActive
 
         function onFocusCompleted(duration) {
@@ -131,7 +138,7 @@ Item {
     }
 
     Connections {
-        target: statisticsService
+        target: root.statisticsServiceRef
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
@@ -141,7 +148,7 @@ Item {
     }
 
     Connections {
-        target: typeof routineManager !== "undefined" ? routineManager : null
+        target: root.routineManagerRef
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
@@ -157,9 +164,7 @@ Item {
     Connections {
         // 逻辑日失效后重新查询今日任务与结转。main.cpp 的直连会先补齐新日例行任务，
         // 因此这个视图槽只负责重载，不重复承担跨层调度职责。
-        // qmllint disable unqualified
-        target: typeof logicalDayService !== "undefined" ? logicalDayService : null
-        // qmllint enable unqualified
+        target: root.logicalDayServiceRef
         ignoreUnknownSignals: true
 
         function onChanged() {
@@ -169,26 +174,20 @@ Item {
 
     function todayIsoDate() {
         // 结转忽略日期与 TaskManager 的逾期判定必须使用同一逻辑今天。
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
+        // settingsRef 就是 appSettings，没有理由再从动态作用域摸一次同一个对象。
+        var hour = root.settingsRef ? root.settingsRef.dayStartHour : 4
         return LogicalDay.todayIso(hour, new Date());
     }
 
     function currentLogicalTodayDate() {
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
+        // settingsRef 就是 appSettings，没有理由再从动态作用域摸一次同一个对象。
+        var hour = root.settingsRef ? root.settingsRef.dayStartHour : 4
         return LogicalDay.todayDate(hour, new Date())
     }
 
     function yesterdayIsoDate() {
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
+        // settingsRef 就是 appSettings，没有理由再从动态作用域摸一次同一个对象。
+        var hour = root.settingsRef ? root.settingsRef.dayStartHour : 4
         var today = LogicalDay.todayDate(hour, new Date())
         var yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1)
         return Qt.formatDate(yesterday, "yyyy-MM-dd")
@@ -216,13 +215,13 @@ Item {
 
     function loadOverdueTasks() {
         // 测试桩或旧上下文可能还没提供结转接口；缺失时按无逾期处理，不能拖垮今日页。
-        if (!taskManager.getOverdueUncompletedTasks) {
+        if (!root.taskManagerRef || !root.taskManagerRef.getOverdueUncompletedTasks) {
             root.overdueTasks = [];
             root.rolloverBannerActive = false;
             return;
         }
 
-        root.overdueTasks = taskManager.getOverdueUncompletedTasks();
+        root.overdueTasks = root.taskManagerRef.getOverdueUncompletedTasks();
         var ignoredToday = root.settingsRef && root.settingsRef.rolloverIgnoredDate === root.todayIsoDate();
         root.rolloverBannerActive = root.overdueTasks.length > 0 && !ignoredToday;
     }
@@ -233,7 +232,7 @@ Item {
             ids.push(Number(root.overdueTasks[i].id));
         }
 
-        if (taskManager.moveTasksToToday(ids)) {
+        if (root.taskManagerRef && root.taskManagerRef.moveTasksToToday(ids)) {
             root.refresh();
         } else {
             root.loadError = "结转失败，请重试";
@@ -257,8 +256,8 @@ Item {
     function refresh() {
         // 每次刷新前先确保当天真实任务行已生成；跨午夜后只要页面触发刷新就会补上当天例行项。
         // materializeToday 幂等且不发 tasksChanged，避免 refresh 递归。
-        if (typeof routineManager !== "undefined" && routineManager && routineManager.materializeToday) {
-            routineManager.materializeToday();
+        if (root.routineManagerRef && root.routineManagerRef.materializeToday) {
+            root.routineManagerRef.materializeToday();
         }
 
         // 任务和统计分开加载，避免统计失败拖垮任务列表。
@@ -276,7 +275,7 @@ Item {
             completionRefreshTimer.restart();
         }
 
-        var ok = taskManager.setTaskCompleted(id, completed);
+        var ok = root.taskManagerRef.setTaskCompleted(id, completed);
         if (!ok) {
             completionRefreshTimer.stop();
             root.completionRefreshDelayActive = false;
@@ -305,7 +304,7 @@ Item {
     function loadTasks() {
         try {
             root.loadError = "";
-            var loaded = taskManager.getTodayTasks();
+            var loaded = root.taskManagerRef.getTodayTasks();
             // 待删除行先在界面消失；撤销时 pendingDeleteTaskId 回到 -1，刷新后自然恢复。
             root.tasks = root.pendingDeleteTaskId > 0
                     ? loaded.filter(function(task) {
@@ -320,7 +319,7 @@ Item {
 
     function loadStats() {
         try {
-            root.todayStats = statisticsService.getTodayStats();
+            root.todayStats = root.statisticsServiceRef.getTodayStats();
         } catch (error) {
             root.todayStats = {
                 totalDuration: 0,
@@ -652,14 +651,20 @@ Item {
                 boundsBehavior: Flickable.StopAtBounds
 
                 delegate: TaskItem {
+                            id: todayTaskRow
+
+                            // pragma ComponentBehavior: Bound 之后 delegate 不再继承外层作用域，
+                            // 必须显式声明它消费的模型角色。
+                            required property var modelData
+
                             width: todayTaskList.width
                             height: implicitHeight
-                            taskId: modelData.id
-                            taskTitle: modelData.title
-                            taskCategory: modelData.category && modelData.category.name ? modelData.category : (modelData.categoryData && modelData.categoryData.name ? modelData.categoryData : (modelData.categoryText || ""))
-                            taskCompleted: modelData.completed
-                            estimatedPomodoros: Number(modelData.estimatedPomodoros || 0)
-                            actualPomodoros: Number(modelData.actualPomodoros || 0)
+                            taskId: todayTaskRow.modelData.id
+                            taskTitle: todayTaskRow.modelData.title
+                            taskCategory: todayTaskRow.modelData.category && todayTaskRow.modelData.category.name ? todayTaskRow.modelData.category : (todayTaskRow.modelData.categoryData && todayTaskRow.modelData.categoryData.name ? todayTaskRow.modelData.categoryData : (todayTaskRow.modelData.categoryText || ""))
+                            taskCompleted: todayTaskRow.modelData.completed
+                            estimatedPomodoros: Number(todayTaskRow.modelData.estimatedPomodoros || 0)
+                            actualPomodoros: Number(todayTaskRow.modelData.actualPomodoros || 0)
 
                             onCompletionChanged: function (id, completed) {
                                 root.setTaskCompletedWithAnimationDelay(id, completed);
@@ -674,9 +679,9 @@ Item {
                             }
 
                             renameSubmitter: function (id, newTitle) {
-                                var originalCategoryId = Number(modelData.categoryId || -1);
-                                var originalDate = root.taskIsoDate(modelData.date);
-                                var succeeded = Boolean(taskManager.updateTask(
+                                var originalCategoryId = Number(todayTaskRow.modelData.categoryId || -1);
+                                var originalDate = root.taskIsoDate(todayTaskRow.modelData.date);
+                                var succeeded = Boolean(root.taskManagerRef.updateTask(
                                     id, newTitle, originalCategoryId, originalDate))
                                 if (!succeeded) {
                                     root.loadError = "任务更新失败，请重试";
@@ -685,7 +690,7 @@ Item {
                             }
 
                             onEditClicked: function (id) {
-                                editTaskDialog.openForTask(modelData);
+                                editTaskDialog.openForTask(todayTaskRow.modelData);
                             }
                         }
             }
@@ -699,7 +704,7 @@ Item {
         categoryManagerRef: root.categoryManagerRef
         selectedDateProvider: function () { return root.currentLogicalTodayDate() }
         taskSubmitter: function (title, date, categoryId, estimatedPomodoros) {
-            return taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedPomodoros));
+            return root.taskManagerRef.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedPomodoros));
         }
     }
 
@@ -710,7 +715,7 @@ Item {
         categoryManagerRef: root.categoryManagerRef
 
         taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedPomodoros) {
-            var succeeded = Boolean(taskManager.updateTask(
+            var succeeded = Boolean(root.taskManagerRef.updateTask(
                 taskId, title, categoryId, isoDate, Number(estimatedPomodoros)))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试";

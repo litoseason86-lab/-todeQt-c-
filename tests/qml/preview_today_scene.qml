@@ -83,6 +83,11 @@ Rectangle {
     }
 
     TodayTaskView {
+        taskManagerRef: taskManager
+        statisticsServiceRef: statisticsService
+        routineManagerRef: routineManager
+        focusTimerRef: focusTimer
+        logicalDayServiceRef: logicalDayService
         id: view
 
         anchors.fill: parent

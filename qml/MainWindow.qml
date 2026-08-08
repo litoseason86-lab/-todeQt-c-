@@ -707,6 +707,11 @@ Item {
                     id: todayTaskView
                     objectName: "todayTaskViewPage"
                     pageActive: root.currentView === "today"
+                    taskManagerRef: root.taskManagerRef
+                    statisticsServiceRef: root.statisticsServiceRef
+                    routineManagerRef: root.routineManagerRef
+                    focusTimerRef: root.focusTimerRef
+                    logicalDayServiceRef: root.logicalDayServiceRef
                     categoryManagerRef: root.categoryManagerRef
                     countdownServiceRef: root.countdownServiceRef
                     settingsRef: root.appSettingsRef

@@ -144,6 +144,9 @@ TestCase {
     }
 
     TodayTaskView {
+        taskManagerRef: taskManager
+        statisticsServiceRef: statisticsService
+        focusTimerRef: focusTimer
         id: todayTaskView
 
         width: 620
