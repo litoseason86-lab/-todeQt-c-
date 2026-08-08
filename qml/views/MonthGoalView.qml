@@ -410,9 +410,30 @@ Item {
                     id: cleanupInvalidButton
                     objectName: "focusHistoryCleanupInvalidButton"
                     visible: root.invalidSessionCount > 0
-                    text: "清理无效记录"
-                    implicitWidth: 132
+                    // 两步确认：这个动作永久删除专注记录，没有撤销。应用对自己的要求
+                    // 更高——删一条任务给 5 秒撤销条，恢复数据库有确认弹窗，
+                    // 唯独这里是一点即删。不上模态框是因为被删的记录本来就被所有统计
+                    // 排除（不足 3 分钟），分量配不上一个模态框；但也不能毫无确认。
+                    property bool confirming: false
+
+                    text: cleanupInvalidButton.confirming
+                          ? "确认删除 " + root.invalidSessionCount + " 条？"
+                          : "清理无效记录"
+                    implicitWidth: cleanupInvalidButton.confirming ? 168 : 132
                     implicitHeight: 40
+                    Accessible.description: cleanupInvalidButton.confirming
+                        ? "再次点击将永久删除这些记录，无法撤销"
+                        : "清理不足 3 分钟的已结束专注记录"
+
+                    // 移开鼠标或失焦即撤销确认态，避免一个「已武装」的删除按钮长期留在界面上。
+                    onHoveredChanged: {
+                        if (!cleanupInvalidButton.hovered)
+                            cleanupInvalidButton.confirming = false
+                    }
+                    onActiveFocusChanged: {
+                        if (!cleanupInvalidButton.activeFocus)
+                            cleanupInvalidButton.confirming = false
+                    }
 
                     background: Rectangle {
                         objectName: "focusHistoryCleanupInvalidButtonBackground"
@@ -445,7 +466,14 @@ Item {
                         elide: Text.ElideRight
                     }
 
-                    onClicked: root.cleanupInvalidSessions()
+                    onClicked: {
+                        if (!cleanupInvalidButton.confirming) {
+                            cleanupInvalidButton.confirming = true
+                            return
+                        }
+                        cleanupInvalidButton.confirming = false
+                        root.cleanupInvalidSessions()
+                    }
                 }
             }
 
