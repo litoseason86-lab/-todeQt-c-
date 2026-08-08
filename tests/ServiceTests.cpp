@@ -789,6 +789,7 @@ private slots:
     void restoreWithoutActiveStateResetsPomodoroCount();
     void restoreKeepsSessionWhenTaskWasDeleted();
     void completionSaveFailureNotifiesOnceAndKeepsRetrying();
+    void discardedShortPomodoroDoesNotAdvanceLongBreakCount();
     void startupCleanupRemovesLegacyOrphanedSession();
     void queryServicesReportDatabaseFailureInsteadOfSilentEmptyData();
     void estimatedPomodorosDefaultsToZeroAfterMigration();
@@ -4755,6 +4756,29 @@ void ServiceTests::restoreKeepsSessionWhenTaskWasDeleted()
         "SELECT duration FROM focus_sessions WHERE end_time IS NOT NULL")));
     QVERIFY(query.next());
     QCOMPARE(query.value(0).toInt(), 360);
+}
+
+void ServiceTests::discardedShortPomodoroDoesNotAdvanceLongBreakCount()
+{
+    // 长休息的连续计数必须与「写入时算不算有效番茄」同一口径。此前它只看
+    // 「刚结束的是工作阶段」：一个到点却因时长不足被整条丢弃的会话，会话没进数据库，
+    // 计数却 +1，于是长休息节奏被一条无效记录推着走。
+    //
+    // 此前不出错只依赖一个外部事实——UI 把专注时长下限锁在 5 分钟。
+    // 但 startPomodoroWork 是 Q_INVOKABLE，边界并不在 UI 上。
+    FocusTimer* timer = FocusTimer::instance();
+    const int taskId = insertTaskRow(QStringLiteral("超短番茄"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+    QCOMPARE(timer->completedPomodoros(), 0);
+
+    QSignalSpy discardedSpy(timer, &FocusTimer::sessionDiscarded);
+    // 1 秒目标：到点时时长必然低于有效门槛，会话应被丢弃。
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("超短番茄"), 1));
+    QTRY_COMPARE_WITH_TIMEOUT(discardedSpy.count(), 1, 5000);
+
+    // 会话被丢弃 → 数据库里没有记录 → 连续番茄数也不该动。
+    QCOMPARE(countFocusSessions(), 0);
+    QCOMPARE(timer->completedPomodoros(), 0);
 }
 
 void ServiceTests::completionSaveFailureNotifiesOnceAndKeepsRetrying()

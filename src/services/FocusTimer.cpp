@@ -54,15 +54,17 @@ FocusTimer::FocusTimer(QObject* parent)
 
         // 到点后先保存当前 phase，因为 resetSession 会把阶段清空；信号必须告诉 QML 刚完成的是专注还是休息。
         const TimerPhase completedPhase = m_phase;
+        bool countedAsPomodoro = false;
         const bool completed = completedPhase == BreakPhase
             ? stopFocus()
-            : completeFocusSession(true);
+            : completeFocusSession(true, &countedAsPomodoro);
         if (completed) {
             m_completionFailureNotified = false;
             // 只有自然到点的番茄专注段才计入连续数（此分支已被上面的 PomodoroMode 守卫圈定）；
             // 手动提前结束走 stopFocus，不经过这里，不应算作完成一个番茄。计数先于 phaseCompleted，
             // 让 QML 的长休息判定读到已更新的值。
-            if (completedPhase == WorkPhase) {
+            // 以结算结果为准，而不是只看阶段：时长不足被整条丢弃的会话不推进长休息节奏。
+            if (completedPhase == WorkPhase && countedAsPomodoro) {
                 ++m_completedPomodoros;
                 emit completedPomodorosChanged();
             }
@@ -361,8 +363,11 @@ bool FocusTimer::discardFreeFocus()
     return true;
 }
 
-bool FocusTimer::completeFocusSession(bool naturalCompletion)
+bool FocusTimer::completeFocusSession(bool naturalCompletion, bool* countedAsPomodoro)
 {
+    if (countedAsPomodoro) {
+        *countedAsPomodoro = false;
+    }
     if (m_sessionId == -1) {
         return false;
     }
@@ -415,6 +420,9 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion)
     const int completedTaskId = m_currentTaskId;
     const bool completedPomodoro = isCompletedPomodoroSession(
         naturalCompletion, m_mode, m_phase, duration);
+    if (countedAsPomodoro) {
+        *countedAsPomodoro = completedPomodoro;
+    }
     // 任务可能在会话进行中被删除（外键置空后恢复的会话 task_id 为 -1）；
     // 没有可完成的任务时跳过自动完成，而不是制造一次必然失败的告警。
     const bool shouldCheckTaskTarget = completedTaskId > 0 && completedPomodoro;

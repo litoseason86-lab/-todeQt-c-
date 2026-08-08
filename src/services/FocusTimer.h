@@ -103,7 +103,11 @@ private:
 
     bool startFocusSession(int taskId, const QString& taskTitle, TimerMode mode, TimerPhase phase, int targetSeconds);
     bool startBreakSession(int breakSeconds, int taskId, const QString& taskTitle);
-    bool completeFocusSession(bool naturalCompletion);
+    // countedAsPomodoro 回传「这次结算是否真的记成了一个有效番茄」。长休息的连续计数
+    // 必须以它为准：到点结算里仍可能因为时长不足被整条丢弃，那种会话不该推进长休息节奏。
+    // 此前计数只看「刚结束的是工作阶段」，与写入口径是两套判断，靠「UI 把时长下限锁在
+    // 5 分钟」这个外部事实才不出错——而 startPomodoroWork 是 Q_INVOKABLE，边界并不在这里。
+    bool completeFocusSession(bool naturalCompletion, bool* countedAsPomodoro = nullptr);
     bool hasActiveTimer() const;
     // 保存失败时调用方会保留当前会话状态，避免用户误以为记录已经落库。
     bool saveFocusSession(int durationSeconds, bool naturalCompletion);
