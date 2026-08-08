@@ -666,7 +666,10 @@ Item {
             Layout.fillHeight: true
             color: Theme.border
             opacity: root.sidebarVisible ? 0.8 : 0
-            visible: width > 0
+            // visible 不能只看布局产出的 width：Qt Quick Layouts 会排除不可见的项，
+            // 而 width 初始为 0 → visible 为假 → 布局排除它 → width 永远上不去。
+            // 这条分隔线因此一直没渲染出来过（既有用例只查颜色和 opacity，查不到）。
+            visible: root.sidebarVisible || width > 0
 
             Behavior on Layout.preferredWidth {
                 enabled: !root.sidebarMotionReduced

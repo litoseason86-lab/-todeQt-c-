@@ -353,6 +353,10 @@ TestCase {
         verify(mainContent.color.a < 0.01, "主内容区必须透明，否则壁纸被盖住");
         verify(Qt.colorEqual(divider.color, Theme.border));
         compare(divider.opacity, 0.8);
+        // 侧栏展开时分隔线必须真的占到宽度。此前只查颜色与 opacity，
+        // 一条宽度恒为 0、从未渲染出来的分隔线也能让这条用例全绿——实测就是如此。
+        // 只断言 width 不断言 visible：本项目的 QML 测试沙箱里 visible 的级联不可靠。
+        tryCompare(divider, "width", 1);
         compare(stackLayout.currentIndex, mainWindow.viewIndex(mainWindow.currentView));
     }
 
