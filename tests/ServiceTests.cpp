@@ -691,6 +691,7 @@ private slots:
     void getWeekStatsUsesSpecifiedMondayAndRejectsInvalidStart();
     void getWeekComparisonSumsNaturalWeeksAndRejectsInvalidStart();
     void weekComparisonRangeQueryEqualsPerDaySum();
+    void weekStatsGroupedDurationsEqualPerDayQueries();
     void getWeekTasksReturnsInclusiveRangeAndRequiredOrder();
     void getMonthTasksReturnsInclusiveMonthRange();
     void getMonthTasksRejectsInvalidMonth();
@@ -2058,6 +2059,46 @@ void ServiceTests::getWeekStatsUsesSpecifiedMondayAndRejectsInvalidStart()
 
     QVERIFY(StatisticsService::instance()->getWeekStats(QDate()).isEmpty());
     QVERIFY(StatisticsService::instance()->getWeekStats(weekStart.addDays(1)).isEmpty());
+}
+
+void ServiceTests::weekStatsGroupedDurationsEqualPerDayQueries()
+{
+    // getWeekStats 原本按天调 7 次单日时长查询（每次一遍全表扫描），现在改成
+    // 一次 GROUP BY。这条用例钉死两点：逐日结果仍与单日查询逐一相等，
+    // 且没有会话的日子必须是 0——GROUP BY 不会为空日返回行，缺失键要能正确落到 0。
+    const QDate weekStart(2026, 4, 6);
+    QCOMPARE(weekStart.dayOfWeek(), static_cast<int>(Qt::Monday));
+
+    // 周一、周三、周日有数据，其余四天空着。
+    QVERIFY(insertFocusSessionRow(-1, weekStart, kTestMinimumValidDurationSeconds * 2));
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(2), kTestMinimumValidDurationSeconds * 5));
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(2), kTestMinimumValidDurationSeconds));
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(6), kTestMinimumValidDurationSeconds * 3));
+    // 低于有效门槛，任何一天都不该计入。
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(1), kTestMinimumValidDurationSeconds - 1));
+
+    const QVariantList weekStats = StatisticsService::instance()->getWeekStats(weekStart);
+    QCOMPARE(weekStats.size(), 7);
+
+    const QList<int> expected = {
+        kTestMinimumValidDurationSeconds * 2,
+        0,
+        kTestMinimumValidDurationSeconds * 6,
+        0,
+        0,
+        0,
+        kTestMinimumValidDurationSeconds * 3,
+    };
+    for (int offset = 0; offset < 7; ++offset) {
+        const QVariantMap day = weekStats.at(offset).toMap();
+        QCOMPARE(day.value(QStringLiteral("date")).toDate(), weekStart.addDays(offset));
+        QCOMPARE(day.value(QStringLiteral("duration")).toInt(), expected.at(offset));
+        // 与单日查询逐一比对：两条路径必须给出同一个数。
+        const QVariantMap dayStats =
+            StatisticsService::instance()->getDayStats(weekStart.addDays(offset));
+        QCOMPARE(day.value(QStringLiteral("duration")).toInt(),
+                 dayStats.value(QStringLiteral("totalDuration")).toInt());
+    }
 }
 
 void ServiceTests::weekComparisonRangeQueryEqualsPerDaySum()
