@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
@@ -20,6 +22,14 @@ Item {
     // 完成任务后向上冒泡，供 MainWindow 弹出“撤销完成”提示条。
     signal taskCompletionUndoable(int taskId, string title)
 
+    // 上下文属性只在 main.qml 解包，视图内部一律消费显式引用。
+    // 直接写 root.taskManagerRef / root.statisticsServiceRef 这类裸名字依赖 QML 的动态作用域：
+    // 解析结果取决于运行时的作用域链，测试里靠「同名 id」也能撞上，
+    // 于是视图对外部的真实依赖既看不出来、也换不掉。
+    property var taskManagerRef: null
+    property var statisticsServiceRef: null
+    property var routineManagerRef: null
+    property var focusTimerRef: null
     property var categoryManagerRef: null
     property var countdownServiceRef: null
     property var settingsRef: null
@@ -119,7 +129,7 @@ Item {
     }
 
     Connections {
-        target: taskManager
+        target: root.taskManagerRef
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
@@ -135,7 +145,7 @@ Item {
     }
 
     Connections {
-        target: statisticsService
+        target: root.statisticsServiceRef
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
@@ -164,7 +174,7 @@ Item {
     }
 
     Connections {
-        target: focusTimer
+        target: root.focusTimerRef
         enabled: root.pageActive
 
         function onFocusCompleted(duration) {
@@ -173,7 +183,7 @@ Item {
     }
 
     Connections {
-        target: typeof routineManager !== "undefined" ? routineManager : null
+        target: root.routineManagerRef
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
@@ -215,8 +225,8 @@ Item {
 
     function refresh() {
         // 先幂等补齐当天例行任务，再分别加载任务与统计，互不拖垮。
-        if (typeof routineManager !== "undefined" && routineManager && routineManager.materializeToday) {
-            routineManager.materializeToday()
+        if (root.routineManagerRef && root.routineManagerRef.materializeToday) {
+            root.routineManagerRef.materializeToday()
         }
         loadTasks()
         loadStats()
@@ -233,7 +243,7 @@ Item {
     function loadTasks() {
         try {
             root.loadError = ""
-            var loaded = taskManager.getTodayTasks()
+            var loaded = root.taskManagerRef.getTodayTasks()
             root.tasks = root.pendingDeleteTaskId > 0
                     ? loaded.filter(function(task) {
                         return Number(task.id) !== root.pendingDeleteTaskId
@@ -247,9 +257,9 @@ Item {
 
     function loadStats() {
         try {
-            root.todayStats = statisticsService.getTodayStats()
-            root.streakDays = Number(statisticsService.getStreakDays() || 0)
-            root.totalFocusSeconds = Number(statisticsService.getTotalFocusDuration() || 0)
+            root.todayStats = root.statisticsServiceRef.getTodayStats()
+            root.streakDays = Number(root.statisticsServiceRef.getStreakDays() || 0)
+            root.totalFocusSeconds = Number(root.statisticsServiceRef.getTotalFocusDuration() || 0)
         } catch (error) {
             root.todayStats = { totalDuration: 0, completedTasks: 0, totalTasks: root.tasks.length,
                                 completionRate: 0, sessionCount: 0, pomodoroCount: 0 }
@@ -260,7 +270,7 @@ Item {
 
     function loadTodayTaskStats() {
         try {
-            root.todayTaskStats = statisticsService.getTodayTaskStats()
+            root.todayTaskStats = root.statisticsServiceRef.getTodayTaskStats()
         } catch (error) {
             root.todayTaskStats = { tasks: [], totalDuration: 0, taskCount: 0 }
         }
@@ -281,7 +291,7 @@ Item {
             completionRefreshTimer.restart()
         }
 
-        if (!taskManager.setTaskCompleted(id, completed)) {
+        if (!root.taskManagerRef.setTaskCompleted(id, completed)) {
             completionRefreshTimer.stop()
             root.completionRefreshDelayActive = false
             root.tasks = []
@@ -662,12 +672,19 @@ Item {
                                     model: root.filteredTasks
 
                                     TaskItem {
-                                        taskId: modelData.id
-                                        taskTitle: modelData.title
-                                        taskCategory: modelData.category && modelData.category.name ? modelData.category : (modelData.categoryData && modelData.categoryData.name ? modelData.categoryData : (modelData.categoryText || ""))
-                                        taskCompleted: modelData.completed
-                                        estimatedPomodoros: Number(modelData.estimatedPomodoros || 0)
-                                        actualPomodoros: Number(modelData.actualPomodoros || 0)
+                                        id: taskRow
+
+                                        // Repeater 的 delegate 必须显式声明它消费的模型角色：
+                                        // pragma ComponentBehavior: Bound 之后不再继承外层作用域，
+                                        // 裸写 modelData 会在运行时解析失败（本文件另一个 delegate 早就这么写了）。
+                                        required property var modelData
+
+                                        taskId: taskRow.modelData.id
+                                        taskTitle: taskRow.modelData.title
+                                        taskCategory: taskRow.modelData.category && taskRow.modelData.category.name ? taskRow.modelData.category : (taskRow.modelData.categoryData && taskRow.modelData.categoryData.name ? taskRow.modelData.categoryData : (taskRow.modelData.categoryText || ""))
+                                        taskCompleted: taskRow.modelData.completed
+                                        estimatedPomodoros: Number(taskRow.modelData.estimatedPomodoros || 0)
+                                        actualPomodoros: Number(taskRow.modelData.actualPomodoros || 0)
                                         // 已完成筛选：紧凑只读行 + 右侧「已完成」徽章，去掉编辑/删除/开始专注空洞。
                                         compact: root.doneFilter
                                         showStartFocus: !root.doneFilter
@@ -686,9 +703,9 @@ Item {
                                         }
 
                                         renameSubmitter: function (id, newTitle) {
-                                            var originalCategoryId = Number(modelData.categoryId || -1)
-                                            var originalDate = root.taskIsoDate(modelData.date)
-                                            var succeeded = Boolean(taskManager.updateTask(
+                                            var originalCategoryId = Number(taskRow.modelData.categoryId || -1)
+                                            var originalDate = root.taskIsoDate(taskRow.modelData.date)
+                                            var succeeded = Boolean(root.taskManagerRef.updateTask(
                                                 id, newTitle, originalCategoryId, originalDate))
                                             if (!succeeded) {
                                                 root.loadError = "任务更新失败，请重试"
@@ -697,7 +714,7 @@ Item {
                                         }
 
                                         onEditClicked: function (id) {
-                                            editTaskDialog.openForTask(modelData)
+                                            editTaskDialog.openForTask(taskRow.modelData)
                                         }
                                     }
                                 }
@@ -744,7 +761,7 @@ Item {
                 height: parent.height
                 anchors.left: parent.left
                 opacity: root.timerPanelVisible ? 1 : 0
-                timerRef: typeof focusTimer !== "undefined" ? focusTimer : null
+                timerRef: root.focusTimerRef
                 settingsRef: root.settingsRef
                 wallpaperRef: root.wallpaperRef
                 // 面板文案明确写“番茄”，所以必须与首屏卡片共用有效番茄口径，不能继续传会话数。
@@ -910,7 +927,7 @@ Item {
         categoryManagerRef: root.categoryManagerRef
 
         taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedPomodoros) {
-            var succeeded = Boolean(taskManager.updateTask(
+            var succeeded = Boolean(root.taskManagerRef.updateTask(
                 taskId, title, categoryId, isoDate, Number(estimatedPomodoros)))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"

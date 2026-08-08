@@ -13,7 +13,7 @@ TestCase {
     height: 720
     property var logicalNow: new Date(2026, 6, 12, 12, 0, 0)
 
-    // —— 上下文对象桩：同名 id 让视图的非限定引用解析到这里 ——
+    // —— 服务桩：由下面的 DashboardView 显式注入，不再依赖同名 id 的动态作用域 ——
     QtObject {
         id: taskManager
 
@@ -170,6 +170,13 @@ TestCase {
         DashboardView {
             width: 1000
             height: 680
+            // 此前这些桩是靠「同名 id 撞上视图里的非限定引用」被解析到的，
+            // 也就是说测试在替视图验证一条动态作用域链，而不是验证它声明的依赖。
+            // 现在显式注入，视图对外部的依赖在两侧都写得出来。
+            taskManagerRef: taskManager
+            statisticsServiceRef: statisticsService
+            routineManagerRef: routineManager
+            focusTimerRef: focusTimer
             categoryManagerRef: categoryManager
             settingsRef: appSettings
             nowProvider: function() { return testCase.logicalNow }

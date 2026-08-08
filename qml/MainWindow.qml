@@ -790,6 +790,10 @@ Item {
                     objectName: "dashboardViewPage"
                     pageActive: root.currentView === "dashboard"
 
+                    taskManagerRef: root.taskManagerRef
+                    statisticsServiceRef: root.statisticsServiceRef
+                    routineManagerRef: root.routineManagerRef
+                    focusTimerRef: root.focusTimerRef
                     categoryManagerRef: root.categoryManagerRef
                     countdownServiceRef: root.countdownServiceRef
                     settingsRef: root.appSettingsRef
