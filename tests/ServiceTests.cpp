@@ -311,7 +311,8 @@ QString readUtf8File(const QString& filePath)
     return QString::fromUtf8(file.readAll());
 }
 
-bool createLegacyVersion1Database(const QString& path)
+bool createLegacyVersion1Database(const QString& path,
+                                  const QList<QPair<QString, QString>>& extraRows = {})
 {
     // 构造旧版本数据库，验证真实用户升级时的迁移路径。
     const QString connectionName = QStringLiteral("LegacyMigrationSetupConnection");
@@ -356,11 +357,14 @@ bool createLegacyVersion1Database(const QString& path)
             "INSERT INTO tasks (title, category, date, completed, created_at) "
             "VALUES (:title, :category, :date, 0, :createdAt)"));
 
-        const QList<QPair<QString, QString>> rows = {
+        QList<QPair<QString, QString>> rows = {
             {QStringLiteral("旧数学任务"), QStringLiteral("数学")},
             {QStringLiteral("旧自定义任务"), QStringLiteral("数据结构")},
             {QStringLiteral("旧空科目任务"), QString()}
         };
+        // 额外行由调用方按需追加。默认不加，因为有用例硬编码了这三条的数量——
+        // 共享 fixture 一旦改动就会波及所有依赖它的用例。
+        rows.append(extraRows);
 
         for (const auto& row : rows) {
             query.bindValue(QStringLiteral(":title"), row.first);
@@ -734,6 +738,7 @@ private slots:
     void migrationV5RefusesToRebuildWhenTasksHasAnUnknownColumn();
     void freshDatabaseCreatesVersion4PresetCategories();
     void migrationMapsLegacyCategoryTextToCategoryIds();
+    void migrationCategoryMappingHandlesWhitespaceAndCaseBoundaries();
     void migrationCreatesDatabaseBackup();
     void migrationV8BackfillsPomodoroCompletedPerRow();
     void migrationV8DoesNotInventPomodorosForFreeTimerSessions();
@@ -3437,6 +3442,57 @@ void ServiceTests::migrationMapsLegacyCategoryTextToCategoryIds()
     QVERIFY(emptyTask.next());
     QCOMPARE(emptyTask.value(0).toString(), QString());
     QVERIFY(emptyTask.value(1).isNull());
+}
+
+void ServiceTests::migrationCategoryMappingHandlesWhitespaceAndCaseBoundaries()
+{
+    // 这里锁的不是「现在有 bug」，而是一组必须成对存在的约定：
+    // migrateTaskCategories 在 SELECT DISTINCT 和 UPDATE 两处各写了一次 trim()，
+    // categories.name 的 UNIQUE 与查找端的 `name = :name` 各自用二进制排序规则。
+    // 任何一侧被单独改掉，用户的科目就会被静默拆开或合并，且没有任何报错。
+    DatabaseManager::instance()->close();
+    const QString legacyPath = m_tempDir->filePath(QStringLiteral("legacy-boundaries.sqlite"));
+    const QList<QPair<QString, QString>> boundaryRows = {
+        {QStringLiteral("旧带空格任务"), QStringLiteral("  数学  ")},
+        {QStringLiteral("旧纯空白科目任务"), QStringLiteral("   ")},
+        {QStringLiteral("旧小写英文任务"), QStringLiteral("english")},
+        {QStringLiteral("旧大写英文任务"), QStringLiteral("English")}
+    };
+    QVERIFY(createLegacyVersion1Database(legacyPath, boundaryRows));
+    QVERIFY(DatabaseManager::instance()->initialize(legacyPath));
+
+    auto categoryIdOf = [](const QString& taskTitle) {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        query.prepare(QStringLiteral("SELECT category_id FROM tasks WHERE title = :title"));
+        query.bindValue(QStringLiteral(":title"), taskTitle);
+        if (!query.exec() || !query.next()) {
+            return QVariant();
+        }
+        return query.value(0);
+    };
+
+    // 前后空白必须被裁掉，和不带空白的同名任务归到同一个科目。
+    const QVariant paddedId = categoryIdOf(QStringLiteral("旧带空格任务"));
+    const QVariant plainId = categoryIdOf(QStringLiteral("旧数学任务"));
+    QVERIFY(!paddedId.isNull());
+    QCOMPARE(paddedId.toInt(), plainId.toInt());
+
+    // 纯空白等同于「没有科目」，不能建出一个名字是空白的科目行。
+    QVERIFY(categoryIdOf(QStringLiteral("旧纯空白科目任务")).isNull());
+    QSqlQuery blankCategory(DatabaseManager::instance()->database());
+    QVERIFY(blankCategory.exec(QStringLiteral(
+        "SELECT COUNT(*) FROM categories WHERE trim(name) = ''")));
+    QVERIFY(blankCategory.next());
+    QCOMPARE(blankCategory.value(0).toInt(), 0);
+
+    // 大小写不同视为两个科目——UNIQUE 与查找端都是二进制比较，两侧一致。
+    // 若将来给其中一侧加上 COLLATE NOCASE 而另一侧没加，迁移会在插入时撞唯一约束
+    // 而整体失败；这条断言会先把那次改动拦下来。
+    const QVariant lowerId = categoryIdOf(QStringLiteral("旧小写英文任务"));
+    const QVariant upperId = categoryIdOf(QStringLiteral("旧大写英文任务"));
+    QVERIFY(!lowerId.isNull());
+    QVERIFY(!upperId.isNull());
+    QVERIFY(lowerId.toInt() != upperId.toInt());
 }
 
 void ServiceTests::migrationCreatesDatabaseBackup()
