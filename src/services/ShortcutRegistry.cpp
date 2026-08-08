@@ -2,6 +2,7 @@
 
 #include "AppSettings.h"
 
+#include <QDebug>
 #include <QKeyCombination>
 
 namespace {
@@ -170,8 +171,20 @@ QString ShortcutRegistry::sequenceFor(const QString& actionId) const
 
     // 「有覆盖键」才读覆盖值——空串是合法覆盖，表示用户主动停用了这个动作，
     // 和「从没改过、用默认」是两种不同的状态。
-    if (m_settings && m_settings->hasShortcutOverride(actionId))
-        return m_settings->shortcutOverride(actionId);
+    if (m_settings && m_settings->hasShortcutOverride(actionId)) {
+        const QString override = m_settings->shortcutOverride(actionId);
+        // 空串就是「已停用」，原样返回。
+        if (override.isEmpty())
+            return QString();
+        // 非空但解析不出合法组合 = 配置损坏（手工编辑过，或来自格式不同的版本）。
+        // 与 AppSettings 里所有数值项一致：读取时就挡住坏值，回退到默认键位而不是
+        // 把它交给 QML —— 那样会得到一个既显示不出键位、又不算「已停用」的行。
+        const QKeySequence parsed =
+            QKeySequence::fromString(override, QKeySequence::PortableText);
+        if (validate(parsed).isEmpty())
+            return portableTextOf(parsed);
+        qWarning() << "忽略损坏的快捷键配置:" << actionId << override;
+    }
 
     return definition->defaultSequence;
 }

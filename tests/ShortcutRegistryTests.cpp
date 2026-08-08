@@ -124,6 +124,7 @@ private slots:
     void defaultsAreUsedWhenNothingOverridden();
     void inAppAndGlobalListsPartitionAllActions();
     void assignPersistsAndNotifies();
+    void corruptOverrideFallsBackToTheDefault();
     void inAppActionsAcceptBareKeys();
     void bareTabAndEscapeStayReservedForKeyboardNavigation();
     void assignRejectsConflictWithAnotherActionInAnyScope();
@@ -218,6 +219,25 @@ void ShortcutRegistryTests::assignPersistsAndNotifies()
     QCOMPARE(reopened.sequenceFor(QStringLiteral("task.new")), QStringLiteral("Ctrl+Shift+N"));
     QCOMPARE(fieldOf(reopened.actions(), QStringLiteral("task.new"),
                      QStringLiteral("isDefault")).toBool(), false);
+}
+
+void ShortcutRegistryTests::corruptOverrideFallsBackToTheDefault()
+{
+    // 设置文件可能被手工编辑，也可能来自格式不同的版本。AppSettings 里每个数值项
+    // 都在读取时归一化坏值，键位这一项此前没有——坏值会被原样交给 QML，
+    // 得到一个既显示不出键位、又不算「已停用」的行。
+    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("task.new"),
+                                            QStringLiteral("这不是键位")));
+
+    ShortcutRegistry registry(m_settings);
+    QCOMPARE(registry.sequenceFor(QStringLiteral("task.new")), QStringLiteral("Ctrl+N"));
+    QCOMPARE(fieldOf(registry.actions(), QStringLiteral("task.new"),
+                     QStringLiteral("isDisabled")).toBool(), false);
+
+    // 用户主动停用（空串）不是损坏，必须原样保留。
+    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("view.week"), QString()));
+    ShortcutRegistry reopened(m_settings);
+    QVERIFY(reopened.sequenceFor(QStringLiteral("view.week")).isEmpty());
 }
 
 void ShortcutRegistryTests::inAppActionsAcceptBareKeys()
