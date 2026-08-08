@@ -172,6 +172,47 @@
 > `docs/testing/` 三份 2026-06 报告已加历史声明与勘误（其中「有关联任务的科目不可删除」与现行代码相反）。
 > **仍未清理**：`docs/superpowers/plans/` 的 31 份历史计划（1216 个未勾选项）。
 
+> **2026-08-08 深度审核收官：11 个 C++ 服务与全部 QML 已逐个读完**
+>
+> 此前的记录里「第二层机械判据」明确写了它覆盖不到「单个函数内的业务逻辑正确性」。
+> 这一条补上那部分：所有服务都已逐段读过，结论如下。
+>
+> **找到并修复的缺陷（3 个，均有证伪检验过的用例）**
+> 1. `FocusTimer` 长休息计数与写入口径分裂（`377055c`）。会话写入与任务自动完成共用
+>    `isCompletedPomodoroSession`（含时长门槛），但连续计数只看「刚结束的是工作阶段」：
+>    一个到点却因时长不足被整条丢弃的会话——数据库里没有记录——计数仍会 +1。
+>    第一轮审计驳回过这条，理由是「UI 把下限锁在 5 分钟，路径不可达」；
+>    本轮取舍不同：`startPomodoroWork` 是 Q_INVOKABLE，边界不在 UI 上，
+>    不该让正确性依赖别处的守卫。**注意不能在 API 边界拒绝短番茄**——
+>    `completionSaveFailureNotifiesOnceAndKeepsRetrying` 正当地用 1 秒目标快速触发到点。
+> 2. 「清理无效记录」一点即永久删除（`12c4bb4`）。改两步确认；服务层本身正确。
+> 3. 侧栏分隔线布局可见性自指死锁（`aeb84ce`，见上文）。
+>
+> **逐个读完、确认无缺陷的服务**（不必再审）
+>
+> | 服务 | 关键结论 |
+> |---|---|
+> | `TaskManager` | 4 处番茄口径全走 `FocusSessionRules`，无副本；自动完成用**精确相等**而非 `>=`，超额后重开任务不会被下一颗番茄强行完成；批量结转逐个校验 id、全成或全不成 |
+> | `GoalService` | 里程碑只按位或不清位（进度回退再涨回不重复庆祝）；DB 写成功后才发信号；一次跨多档只报最高档 |
+> | `RoutineManager` | 条件 UPDATE 抢占生成权，跨实例并发也不会重复插入 |
+> | `BackupOperations` | `QSaveFile` + `setDirectWriteFallback(false)`，失败必 `cancelWriting`；挡住「备份目标覆盖正在使用的数据库」 |
+> | `ExportService` | CSV 转义符合 RFC 4180。公式注入维持第一轮的驳回（单机单用户，标题作者即导出者） |
+> | `FocusHistoryService` | 删除范围正确：只删已结束且低于共享门槛的，明确保护 `duration IS NULL` 的进行中会话 |
+> | `CountdownService` | `reorder` 作用于模型自身列表、UPDATE 按 id；QML 传的是模型下标而非可见下标（可见列表跳过 index 0），映射正确——**不是** `GoalService::reorderGoal` 那种下标隐患 |
+> | `CategoryManager` | 预设保护两层（早退 + DELETE 的 `AND is_preset = 0`）；`numRowsAffected == 0` 也回滚；解绑同时清 `category_id` 与旧文本；不动 `focus_sessions` 的 v9 科目快照，历史正是靠它存活 |
+> | `TrayController` / `SingleInstanceGuard` | 第五轮已专审；裸指针本轮已修（`880b29d`） |
+>
+> **QML 侧**：74 个文件的 `unqualified` 由 250 归零，`Quick.layout-positioning` 由 4 归零。
+> `FocusView`（1347 行）逐段读过——审计记录里「状态双源」那条指控不成立，
+> `state` 是绑定推导，且初始化竞态已被 `Component.onCompleted` 里的 `syncToActiveTimer` 防住。
+>
+> **两处补上的零覆盖组件**：`FocusTimeline`（`tst_focus_timeline.qml`）与
+> 「清理无效记录」按钮（`tst_month_cleanup_confirm.qml`）。两者的零覆盖分别导致了
+> 一次被静态检查抓到的回归、和一个一直没人发现的安全缺口。
+>
+> **仍然保留的既有判断（不要重复推翻）**：CSV 公式注入、`reorderGoal` 零调用者的
+> 下标隐患（建议接拖拽排序时改成收 goal id）、`StatisticsFormat.js` 的 `levelOf()` 孤儿。
+
 > **2026-08-08 全量审计的覆盖边界（重要：说清楚"审完了"到底指什么）**
 >
 > 这一轮的目标是「深度审核完全部代码」。逐行通读近万行 C++ 加 74 个 QML 文件不现实，
