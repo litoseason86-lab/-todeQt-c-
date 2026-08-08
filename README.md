@@ -53,7 +53,7 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
 `POMODORO_TODO_DEPLOY_LOCAL` 是 CMake cache 变量，会持久化在构建目录里：在同一个目录先跑验证构建再跑部署构建，
 `OFF` 仍然生效，`deploy-local-app` 目标根本不会被创建，部署会静默失效。
 
-测试规模（2026-08-08 实测，Qt 6.9.0）：**17 个 ctest 目标全绿，约 71 秒**——
+测试规模（2026-08-08 实测，Qt 6.9.0）：**18 个 ctest 目标全绿，约 72 秒**——
 16 个 C++ 目标共 324 个测试函数，`PomodoroTodoQmlTests` 覆盖 `tests/qml/` 的 34 个文件、467 条断言函数。
 单个目标的跑法与说明见 `docs/运行命令.md`。
 

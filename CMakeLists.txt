@@ -636,6 +636,41 @@ target_link_libraries(QmlResourceManifestTests PRIVATE
 pomodoro_todo_enable_warnings(QmlResourceManifestTests)
 add_test(NAME QmlResourceManifestTests COMMAND QmlResourceManifestTests)
 
+# QML 静态检查门禁。此前 qmllint 只是「可以手动跑一下」，输出 250 条 unqualified
+# 却退出码 0，等于没有门禁——那批告警也确实累积到了 250 条。
+#
+# 现在 unqualified 与 Quick.layout-positioning 都已清零，接成 ctest 条目把这个状态锁住。
+# 判据是「显式豁免两类已知项 + 其余零容忍」，而不是笼统设一个告警数量上限：
+# 后者会让「修好一条旧的、混进一条新的」蒙混过关。
+#
+# 两类豁免的理由：
+#   missing-property     —— qmllint 推导不到 ScrollView.contentItem 等运行时类型，属工具限制
+#   use-proper-function  —— 项目既定的回调注入模式（AddTaskDialog 的 taskSubmitter 等）
+# 任何一类将来被清干净，就把对应的 disable 去掉，门禁自动收紧。
+find_program(POMODORO_TODO_QMLLINT
+    NAMES qmllint
+    HINTS "${QT6_INSTALL_PREFIX}/bin" "${Qt6_DIR}/../../../bin"
+    NO_CMAKE_SYSTEM_PATH
+)
+if(POMODORO_TODO_QMLLINT)
+    file(GLOB_RECURSE POMODORO_TODO_QML_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/qml/*.qml")
+    add_test(
+        NAME QmlLintGate
+        COMMAND ${POMODORO_TODO_QMLLINT}
+            -I "${CMAKE_CURRENT_SOURCE_DIR}/qml"
+            --missing-property disable
+            --use-proper-function disable
+            --max-warnings 0
+            ${POMODORO_TODO_QML_SOURCES}
+    )
+    set_tests_properties(QmlLintGate PROPERTIES TIMEOUT 60)
+    message(STATUS "QML 静态检查门禁已启用: ${POMODORO_TODO_QMLLINT}")
+else()
+    # 找不到就跳过而不是配置失败：qmllint 随 Qt SDK 提供，但不该让缺它挡住构建。
+    message(WARNING "未找到 qmllint，跳过 QML 静态检查门禁")
+endif()
+
 add_test(
     NAME PomodoroTodoQmlTests
     COMMAND Qt6::qmltestrunner -input ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml
