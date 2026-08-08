@@ -38,8 +38,19 @@ TestCase {
     EditTaskDialog {
         id: failingDialog
         categoryManagerRef: categoryManagerMock
-        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedPomodoros) {
+        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedMinutes) {
             return false
+        }
+    }
+
+    property int submittedMinutes: -1
+
+    EditTaskDialog {
+        id: estimateDialog
+        categoryManagerRef: categoryManagerMock
+        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedMinutes) {
+            testCase.submittedMinutes = Number(estimatedMinutes)
+            return true
         }
     }
 
@@ -53,6 +64,8 @@ TestCase {
         editedSpy.clear()
         dialog.close()
         failingDialog.close()
+        estimateDialog.close()
+        testCase.submittedMinutes = -1
         wait(20)
     }
 
@@ -145,4 +158,71 @@ TestCase {
         verify(Qt.colorEqual(panel.color, Theme.glassDialog))
         dialog.close()
     }
+
+    function estimateFieldsOf(popup) {
+        var hour = findChild(popup, "editEstimateHourField")
+        var minute = findChild(popup, "editEstimateMinuteField")
+        verify(hour)
+        verify(minute)
+        return { hour: hour, minute: minute }
+    }
+
+    function test_openPrefillsEstimateAsHoursAndMinutes() {
+        estimateDialog.openForTask({ id: 11, title: "线代", categoryId: 3,
+                                     date: isoWithOffset(0), estimatedMinutes: 150 })
+        wait(20)
+
+        var fields = estimateFieldsOf(estimateDialog)
+        compare(fields.hour.text, "2")
+        compare(fields.minute.text, "30")
+
+        // 换一个任务：上一次的预估不能残留。数据库里存的是分钟，回填也必须按分钟拆。
+        estimateDialog.close()
+        estimateDialog.openForTask({ id: 12, title: "英语", categoryId: 5,
+                                     date: isoWithOffset(0), estimatedMinutes: 45 })
+        wait(20)
+        fields = estimateFieldsOf(estimateDialog)
+        compare(fields.hour.text, "0")
+        compare(fields.minute.text, "45")
+
+        // 改了输入但没保存就关掉，再打开同一个任务：预估值没变，绑定不会发出变化信号，
+        // 只有 openForTask 里那句显式重灌能把上次的残留冲掉。
+        fields.hour.text = "3"
+        fields.minute.text = "30"
+        estimateDialog.close()
+        estimateDialog.openForTask({ id: 12, title: "英语", categoryId: 5,
+                                     date: isoWithOffset(0), estimatedMinutes: 45 })
+        wait(20)
+        fields = estimateFieldsOf(estimateDialog)
+        compare(fields.hour.text, "0")
+        compare(fields.minute.text, "45")
+        estimateDialog.close()
+    }
+
+    function test_editedEstimateIsSubmittedAsMinutes() {
+        estimateDialog.openForTask({ id: 13, title: "高数", categoryId: 3,
+                                     date: isoWithOffset(0), estimatedMinutes: 60 })
+        wait(20)
+
+        var fields = estimateFieldsOf(estimateDialog)
+        fields.hour.text = "1"
+        fields.minute.text = "30"
+        estimateDialog.submit()
+        compare(testCase.submittedMinutes, 90)
+    }
+
+    function test_incompleteEstimateBlocksEditSubmit() {
+        estimateDialog.openForTask({ id: 14, title: "政治", categoryId: 3,
+                                     date: isoWithOffset(0), estimatedMinutes: 60 })
+        wait(20)
+
+        var fields = estimateFieldsOf(estimateDialog)
+        fields.hour.text = ""
+        estimateDialog.submit()
+        // 清空后不能静默存 0，否则用户看不出预估被抹掉了。
+        compare(testCase.submittedMinutes, -1)
+        verify(estimateDialog.errorText.length > 0)
+        estimateDialog.close()
+    }
 }
+

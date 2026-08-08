@@ -663,8 +663,8 @@ Item {
                             taskTitle: todayTaskRow.modelData.title
                             taskCategory: todayTaskRow.modelData.category && todayTaskRow.modelData.category.name ? todayTaskRow.modelData.category : (todayTaskRow.modelData.categoryData && todayTaskRow.modelData.categoryData.name ? todayTaskRow.modelData.categoryData : (todayTaskRow.modelData.categoryText || ""))
                             taskCompleted: todayTaskRow.modelData.completed
-                            estimatedPomodoros: Number(todayTaskRow.modelData.estimatedPomodoros || 0)
-                            actualPomodoros: Number(todayTaskRow.modelData.actualPomodoros || 0)
+                            estimatedMinutes: Number(todayTaskRow.modelData.estimatedMinutes || 0)
+                            focusedMinutes: Number(todayTaskRow.modelData.focusedMinutes || 0)
 
                             onCompletionChanged: function (id, completed) {
                                 root.setTaskCompletedWithAnimationDelay(id, completed);
@@ -703,8 +703,8 @@ Item {
 
         categoryManagerRef: root.categoryManagerRef
         selectedDateProvider: function () { return root.currentLogicalTodayDate() }
-        taskSubmitter: function (title, date, categoryId, estimatedPomodoros) {
-            return root.taskManagerRef.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedPomodoros));
+        taskSubmitter: function (title, date, categoryId, estimatedMinutes) {
+            return root.taskManagerRef.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedMinutes));
         }
     }
 
@@ -714,9 +714,9 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedPomodoros) {
+        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes) {
             var succeeded = Boolean(root.taskManagerRef.updateTask(
-                taskId, title, categoryId, isoDate, Number(estimatedPomodoros)))
+                taskId, title, categoryId, isoDate, Number(estimatedMinutes)))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试";
             }

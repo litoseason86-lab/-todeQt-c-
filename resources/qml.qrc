@@ -3,6 +3,7 @@
         <file alias="qml/qmldir">../qml/qmldir</file>
         <file alias="qml/Theme.qml">../qml/Theme.qml</file>
         <file alias="qml/LogicalDay.js">../qml/LogicalDay.js</file>
+        <file alias="qml/Duration.js">../qml/Duration.js</file>
         <file alias="qml/main.qml">../qml/main.qml</file>
         <file alias="qml/MainWindow.qml">../qml/MainWindow.qml</file>
         <file alias="qml/views/TodayTaskView.qml">../qml/views/TodayTaskView.qml</file>
@@ -22,6 +23,7 @@
         <file alias="qml/components/LiquidGlassBackdrop.qml">../qml/components/LiquidGlassBackdrop.qml</file>
         <file alias="qml/components/FocusGoalCard.qml">../qml/components/FocusGoalCard.qml</file>
         <file alias="qml/components/DailyFocusGoalEditor.qml">../qml/components/DailyFocusGoalEditor.qml</file>
+        <file alias="qml/components/DurationFieldPair.qml">../qml/components/DurationFieldPair.qml</file>
         <file alias="qml/components/FocusLiveSeconds.qml">../qml/components/FocusLiveSeconds.qml</file>
         <file alias="qml/components/RefreshCoalescer.qml">../qml/components/RefreshCoalescer.qml</file>
         <file alias="qml/components/FocusGoalStrip.qml">../qml/components/FocusGoalStrip.qml</file>

@@ -62,6 +62,16 @@ TestCase {
         taskSubmitter: function(title, date, categoryId) { return false }
     }
 
+    property int submittedMinutes: -1
+
+    AddTaskDialog {
+        id: estimateDialog
+        taskSubmitter: function(title, date, categoryId, estimatedMinutes) {
+            testCase.submittedMinutes = Number(estimatedMinutes)
+            return true
+        }
+    }
+
     property date providedDate: new Date(2026, 6, 25, 12, 0, 0)
 
     AddTaskDialog {
@@ -171,6 +181,85 @@ TestCase {
 
         categoryDialog.close()
         fakeCategoryManager.failLoad = false
+    }
+
+    function estimateFieldsOf(popup) {
+        var hour = findChild(popup, "addEstimateHourField")
+        var minute = findChild(popup, "addEstimateMinuteField")
+        verify(hour)
+        verify(minute)
+        return { hour: hour, minute: minute }
+    }
+
+    function test_estimateIsSubmittedAsMinutes() {
+        testCase.submittedMinutes = -1
+        estimateDialog.open()
+        tryCompare(estimateDialog, "opened", true, 500)
+        findChild(estimateDialog, "titleField").text = "高数复习"
+
+        var fields = estimateFieldsOf(estimateDialog)
+        // 小时和分钟必须合成一个分钟数交给服务层，而不是各传各的。
+        fields.hour.text = "1"
+        fields.minute.text = "45"
+        estimateDialog.submit()
+        compare(testCase.submittedMinutes, 105)
+        tryCompare(estimateDialog, "opened", false, 500)
+    }
+
+    function test_estimateDefaultsToUnsetAndResetsBetweenOpens() {
+        testCase.submittedMinutes = -1
+        estimateDialog.open()
+        tryCompare(estimateDialog, "opened", true, 500)
+        findChild(estimateDialog, "titleField").text = "留空预计"
+
+        var fields = estimateFieldsOf(estimateDialog)
+        // 不填等于「未设置」，要老老实实传 0，而不是替用户猜一个默认时长。
+        compare(fields.hour.text, "0")
+        compare(fields.minute.text, "0")
+        estimateDialog.submit()
+        compare(testCase.submittedMinutes, 0)
+
+        // 上一次填过的值不能留到下一次打开——那会让用户在不知情下重复套用旧预估。
+        estimateDialog.open()
+        tryCompare(estimateDialog, "opened", true, 500)
+        findChild(estimateDialog, "titleField").text = "第二次"
+        fields = estimateFieldsOf(estimateDialog)
+        fields.hour.text = "2"
+        fields.minute.text = "0"
+        estimateDialog.submit()
+        compare(testCase.submittedMinutes, 120)
+
+        estimateDialog.open()
+        tryCompare(estimateDialog, "opened", true, 500)
+        fields = estimateFieldsOf(estimateDialog)
+        compare(fields.hour.text, "0")
+        compare(fields.minute.text, "0")
+
+        // 填了但没提交：estimatedMinutes 从没被改过，绑定不会发出变化信号，
+        // 只有 resetFields 里那句显式重灌能把输入框清干净。关闭走的就是这条路。
+        fields.hour.text = "3"
+        fields.minute.text = "30"
+        compare(estimateDialog.estimatedMinutes, 0)
+        estimateDialog.resetFields()
+        compare(fields.hour.text, "0")
+        compare(fields.minute.text, "0")
+        estimateDialog.close()
+    }
+
+    function test_incompleteEstimateBlocksSubmit() {
+        testCase.submittedMinutes = -1
+        estimateDialog.open()
+        tryCompare(estimateDialog, "opened", true, 500)
+        findChild(estimateDialog, "titleField").text = "清空分钟"
+
+        var fields = estimateFieldsOf(estimateDialog)
+        fields.minute.text = ""
+        estimateDialog.submit()
+        // 清空后提交曾会静默存成 0；必须挡住并把弹窗留在原地让用户看见报错。
+        compare(testCase.submittedMinutes, -1)
+        compare(estimateDialog.opened, true)
+        verify(findChild(estimateDialog, "addTaskErrorLabel").text.length > 0)
+        estimateDialog.close()
     }
 
     function test_selectedDateRefreshesEveryTimeDialogOpens() {

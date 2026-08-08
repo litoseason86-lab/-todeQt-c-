@@ -24,12 +24,12 @@ Popup {
     property string originalIsoDate: ""
     property int dateOffsetSelection: -1
     property string errorText: ""
-    // 预计番茄数，0 表示未设置；openForTask 从任务数据回填。
-    property int estimatedPomodoros: 0
+    // 预计用时（分钟），0 表示未设置；openForTask 从任务数据回填。
+    property int estimatedMinutes: 0
     // 生产页面注入返回 bool 的写入函数；保留信号用于独立组件和兼容测试。
     property var taskSubmitter: null
 
-    signal taskEdited(int taskId, string title, int categoryId, var isoDate, int estimatedPomodoros)
+    signal taskEdited(int taskId, string title, int categoryId, var isoDate, int estimatedMinutes)
 
     modal: true
     focus: true
@@ -91,7 +91,8 @@ Popup {
         root.errorText = "";
         root.editingTaskId = Number(task.id);
         titleField.text = String(task.title || "");
-        root.estimatedPomodoros = Number(task.estimatedPomodoros || 0);
+        root.estimatedMinutes = Number(task.estimatedMinutes || 0);
+        estimateFields.reload();
         root.originalIsoDate = root.normalizedIso(task.date);
 
         root.refreshCategories();
@@ -130,15 +131,23 @@ Popup {
             return;
         }
 
+        // 预计用时留空/越界时挡住提交，否则会静默存成 0（=未设置）。
+        if (estimateFields.validationError.length > 0) {
+            root.errorText = estimateFields.validationError;
+            estimateFields.focusFirstField();
+            return;
+        }
+        root.estimatedMinutes = estimateFields.enteredMinutes;
+
         var categoryId = categoryCombo.currentIndex >= 0 && categoryCombo.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryCombo.currentIndex].id || -1) : -1;
         var succeeded = true
         if (root.taskSubmitter) {
             succeeded = Boolean(root.taskSubmitter(
                 root.editingTaskId, title, categoryId,
-                root.resultIsoDate(), root.estimatedPomodoros))
+                root.resultIsoDate(), root.estimatedMinutes))
         } else {
             root.taskEdited(root.editingTaskId, title, categoryId,
-                            root.resultIsoDate(), root.estimatedPomodoros)
+                            root.resultIsoDate(), root.estimatedMinutes)
         }
         if (!succeeded) {
             root.errorText = "保存失败，请检查数据库后重试"
@@ -325,31 +334,30 @@ Popup {
             spacing: Theme.space8
 
             Text {
-                text: "预计番茄数"
+                text: "预计用时"
                 textFormat: Text.PlainText
                 color: Theme.inkSoft
                 font.pixelSize: Theme.fontMd
             }
 
-            DurationStepper {
-                objectName: "editEstimateStepper"
+            DurationFieldPair {
+                id: estimateFields
+
+                objectName: "editEstimateFields"
                 namePrefix: "editEstimate"
-                accessibleName: "预计番茄数"
-                unit: "个"
-                from: 0
+                accessiblePrefix: "预计用时"
+                compact: true
+                totalMinutes: root.estimatedMinutes
                 // qmllint disable unqualified
-                to: (typeof taskManager !== "undefined" && taskManager && taskManager.maxEstimatedPomodoros)
-                    ? taskManager.maxEstimatedPomodoros : 99
+                maximumMinutes: (typeof taskManager !== "undefined" && taskManager && taskManager.maxEstimatedMinutes)
+                    ? taskManager.maxEstimatedMinutes : 24 * 60
                 // qmllint enable unqualified
-                value: root.estimatedPomodoros
-                onAdjusted: function (newValue) {
-                    root.estimatedPomodoros = newValue;
-                }
+                onAccepted: root.submit()
             }
 
             Text {
                 Layout.fillWidth: true
-                visible: root.estimatedPomodoros === 0
+                visible: estimateFields.enteredMinutes === 0
                 text: "未设置"
                 textFormat: Text.PlainText
                 color: Theme.inkMuted

@@ -675,7 +675,7 @@ TestCase {
 
         const hint = findChild(view, "ruleHintText")
         verify(hint)
-        compare(hint.text, "完成计划的最后一个番茄时自动完成任务 · 不足 3 分钟不计入记录")
+        compare(hint.text, "专注时长达到预计用时时自动完成任务 · 不足 3 分钟不计入记录")
         compare(view.state, "pomoIdle")
         compare(view.panelExpanded, true)
     }

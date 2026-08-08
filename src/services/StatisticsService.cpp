@@ -19,7 +19,9 @@
 #include <algorithm>
 
 namespace {
-constexpr int kReviewMinimumSubjectPlan = 3;
+// 科目要进入「投入明显低于计划」的判定，至少得有这么多计划用时。
+// 单位随 v10 从「番茄个数」改为「分钟」，取 60 分钟以保持与原来 3 个番茄相当的量级。
+constexpr int kReviewMinimumSubjectPlan = 60;
 constexpr double kReviewSubjectGapPoints = 20.0;
 constexpr double kReviewStableRateMinimum = 85.0;
 constexpr double kReviewStableRateMaximum = 115.0;
@@ -1016,6 +1018,7 @@ QVariantMap StatisticsService::weeklyAggregates(const QDate& weekStart, const QD
             entry.insert(QStringLiteral("color"), color);
             entry.insert(QStringLiteral("planned"), 0);
             entry.insert(QStringLiteral("actual"), 0);
+            entry.insert(QStringLiteral("focusedSeconds"), 0);
             subjects.insert(name, entry);
         }
         return subjects[name];
@@ -1029,11 +1032,11 @@ QVariantMap StatisticsService::weeklyAggregates(const QDate& weekStart, const QD
         query.prepare(QStringLiteral(
             "SELECT COALESCE(NULLIF(c.name,''), NULLIF(legacy.name,''), NULLIF(t.category,''), '未分类') AS subject_name, "
             "COALESCE(NULLIF(c.color,''), NULLIF(legacy.color,''), '#d4a574') AS subject_color, "
-            "SUM(t.estimated_pomodoros) AS planned "
+            "SUM(t.estimated_minutes) AS planned "
             "FROM tasks t "
             "LEFT JOIN categories c ON t.category_id = c.id "
             "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
-            "WHERE t.date >= :startDate AND t.date <= :endDate AND t.estimated_pomodoros > 0 "
+            "WHERE t.date >= :startDate AND t.date <= :endDate AND t.estimated_minutes > 0 "
             "GROUP BY subject_name, subject_color"));
         query.bindValue(QStringLiteral(":startDate"), startIso);
         query.bindValue(QStringLiteral(":endDate"), endIso);
@@ -1113,6 +1116,8 @@ QVariantMap StatisticsService::weeklyAggregates(const QDate& weekStart, const QD
             QVariantMap& entry =
                 ensureSubject(query.value(1).toString(), query.value(2).toString());
             entry[QStringLiteral("actual")] = entry.value(QStringLiteral("actual")).toInt() + actual;
+            entry[QStringLiteral("focusedSeconds")] =
+                entry.value(QStringLiteral("focusedSeconds")).toInt() + focused;
             completedTotal += actual;
             focusedSeconds += focused;
         }
@@ -1123,10 +1128,14 @@ QVariantMap StatisticsService::weeklyAggregates(const QDate& weekStart, const QD
         QVariantMap entry = it.value();
         const int planned = entry.value(QStringLiteral("planned")).toInt();
         const int actual = entry.value(QStringLiteral("actual")).toInt();
+        // 计划单位已改为「预计用时（分钟）」，完成率必须拿同单位的实际投入去比，
+        // 否则是「分钟 ÷ 番茄个数」这种没有意义的数。
+        const int focusedMinutes = entry.value(QStringLiteral("focusedSeconds")).toInt() / 60;
+        entry.insert(QStringLiteral("focusedMinutes"), focusedMinutes);
         // 只有实际没计划标记“未计划投入”；只有计划没实际则完成率 0%。
-        entry.insert(QStringLiteral("unplanned"), planned == 0 && actual > 0);
+        entry.insert(QStringLiteral("unplanned"), planned == 0 && (actual > 0 || focusedMinutes > 0));
         entry.insert(QStringLiteral("rate"),
-                     planned > 0 ? static_cast<double>(actual) * 100.0 / planned : 0.0);
+                     planned > 0 ? static_cast<double>(focusedMinutes) * 100.0 / planned : 0.0);
         subjectList.append(entry);
     }
     // 计划多的科目排前，便于对账阅读。
@@ -1173,15 +1182,17 @@ QVariantMap StatisticsService::getWeeklyReview(const QDate& weekStart) const
     const int completed = current.value(QStringLiteral("completedTotal")).toInt();
     const int focusedSeconds = current.value(QStringLiteral("focusedSeconds")).toInt();
     const QVariantList subjects = current.value(QStringLiteral("subjects")).toList();
+    const int focusedMinutes = focusedSeconds / 60;
+    // 计划单位已是分钟，完成率 = 实际专注分钟 / 计划用时分钟。
     // 计划为 0 时不除零：完成率视为无（0），由 UI 与结论规则单独处理“未计划”。
-    const double rate = planned > 0 ? static_cast<double>(completed) * 100.0 / planned : 0.0;
+    const double rate = planned > 0 ? static_cast<double>(focusedMinutes) * 100.0 / planned : 0.0;
 
     result[QStringLiteral("weekStart")] = weekStart.toString(Qt::ISODate);
     result[QStringLiteral("weekEnd")] = weekEnd.toString(Qt::ISODate);
-    result[QStringLiteral("plannedPomodoros")] = planned;
+    result[QStringLiteral("plannedMinutes")] = planned;
     result[QStringLiteral("completedPomodoros")] = completed;
     result[QStringLiteral("completionRate")] = rate;
-    result[QStringLiteral("focusedMinutes")] = focusedSeconds / 60;
+    result[QStringLiteral("focusedMinutes")] = focusedMinutes;
     result[QStringLiteral("activeDays")] = current.value(QStringLiteral("activeDays")).toInt();
     result[QStringLiteral("previousCompletedPomodoros")] = previous.value(QStringLiteral("completedTotal")).toInt();
     result[QStringLiteral("previousFocusedMinutes")] = previous.value(QStringLiteral("focusedSeconds")).toInt() / 60;
@@ -1221,7 +1232,7 @@ QVariantMap StatisticsService::getWeeklyReview(const QDate& weekStart) const
     }
 
     if (planned == 0 && completed > 0) {
-        suggestionText = QStringLiteral("为任务设置预计番茄数后，这里能给出计划完成率与偏差分析。");
+        suggestionText = QStringLiteral("为任务设置预计用时后，这里能给出计划完成率与偏差分析。");
     } else if (planned > 0 && rate < kReviewOverplannedRate) {
         // 规则二：总体高估。
         suggestionText = QStringLiteral("下周总计划量可以先下调 15%～25%，避免继续累积无法完成的任务。");

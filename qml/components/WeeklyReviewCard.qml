@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import "../Duration.js" as Duration
 import ".."
 
 // 每周复盘卡片：计划 vs 实际、与上周对比、科目对账、确定性事实+建议。
@@ -11,7 +12,8 @@ Rectangle {
     property bool isCurrentPeriod: true
 
     readonly property bool hasData: root.review && root.review.hasData === true
-    readonly property int planned: root.review ? Number(root.review.plannedPomodoros || 0) : 0
+    // 分钟转「N 小时 M 分」，与今日专注目标同一种读法。
+    readonly property int planned: root.review ? Number(root.review.plannedMinutes || 0) : 0
     readonly property int completed: root.review ? Number(root.review.completedPomodoros || 0) : 0
     readonly property real rate: root.review ? Number(root.review.completionRate || 0) : 0
     readonly property var subjects: root.review && root.review.subjects ? root.review.subjects : []
@@ -88,8 +90,8 @@ Rectangle {
 
             Repeater {
                 model: [
-                    { label: "计划番茄", value: String(root.planned) },
-                    { label: "实际完成", value: String(root.completed) },
+                    { label: "计划用时", value: root.planned > 0 ? Duration.format(root.planned) : "未设置" },
+                    { label: "实际投入", value: Duration.format(Number(root.review ? root.review.focusedMinutes || 0 : 0)) },
                     { label: "计划完成率", value: root.planned > 0 ? Math.round(root.rate) + "%" : "未设置" }
                 ]
 

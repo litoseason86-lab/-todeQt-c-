@@ -159,7 +159,7 @@ bool DatabaseManager::createTables()
             category_id INTEGER REFERENCES categories(id),
             routine_id INTEGER REFERENCES routines(id) ON DELETE SET NULL,
             routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
-            estimated_pomodoros INTEGER NOT NULL DEFAULT 0,
+            estimated_minutes INTEGER NOT NULL DEFAULT 0,
             date TEXT NOT NULL,
             completed INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -274,10 +274,16 @@ bool DatabaseManager::createTables()
         version = 6;
     }
 
-    // 版本 7 给 tasks 增加预估番茄数，给 focus_sessions 增加专注模式列；
+    // 版本 7 给 tasks 增加任务预估列，给 focus_sessions 增加专注模式列；
     // 任一列缺失都要补，防御半迁移或旧库缺列时实际番茄聚合静默失真。
+    //
+    // 这里的结构检查必须查 v10 之后的列名 estimated_minutes，不能查 v7 当年加的
+    // estimated_pomodoros：v10 会在换算完成后删掉旧列，若仍按旧列名判断，
+    // 一个已经迁到 v10 的库每次启动都会重跑 v7–v10 四步迁移（各建一次迁移快照），
+    // 最终状态自愈、用户数据不丢（v10 的回填有 estimated_minutes = 0 守卫），
+    // 但那是每次启动都白做一遍的重活。
     if (version < 7
-        || !columnExists(QStringLiteral("tasks"), QStringLiteral("estimated_pomodoros"))
+        || !columnExists(QStringLiteral("tasks"), QStringLiteral("estimated_minutes"))
         || !columnExists(QStringLiteral("focus_sessions"), QStringLiteral("mode"))) {
         if (!migrateToVersion7()) {
             return false;
@@ -302,6 +308,16 @@ bool DatabaseManager::createTables()
         || !columnExists(QStringLiteral("focus_sessions"),
                          QStringLiteral("category_color_snapshot"))) {
         if (!migrateToVersion9()) {
+            return false;
+        }
+        version = 9;
+    }
+
+    // v10 把「预估番茄数」换成「预计用时（分钟）」。列缺失时无论版本号都要补，
+    // 与前面几步一样防御半迁移状态。
+    if (version < 10
+        || !columnExists(QStringLiteral("tasks"), QStringLiteral("estimated_minutes"))) {
+        if (!migrateToVersion10()) {
             return false;
         }
     }
@@ -564,7 +580,7 @@ bool DatabaseManager::migrateToVersion5()
     //
     // 触发条件里有一条结构检查（外键动作不对就重建），所以这段代码会在**已经迁移到
     // 最新版本的库**上运行，而不只是在 v4 升 v5 时运行——这正是漏列会造成用户数据
-    // 丢失的原因：v7 的 estimated_pomodoros 曾经就不在清单里，重建后全部归零。
+    // 丢失的原因：v7 的 estimated_pomodoros（现为 estimated_minutes）曾经就不在清单里，重建后全部归零。
     const QStringList knownColumns = {
         QStringLiteral("id"),
         QStringLiteral("title"),
@@ -575,7 +591,7 @@ bool DatabaseManager::migrateToVersion5()
         QStringLiteral("date"),
         QStringLiteral("completed"),
         QStringLiteral("created_at"),
-        QStringLiteral("estimated_pomodoros"),
+        QStringLiteral("estimated_minutes"),
     };
 
     // 遇到不认识的列就拒绝重建。宁可让迁移失败并留下明确日志，
@@ -595,8 +611,8 @@ bool DatabaseManager::migrateToVersion5()
         currentColumns.contains(QStringLiteral("routine_generated"))
         ? QStringLiteral("routine_generated") : QStringLiteral("0");
     const QString estimateExpression =
-        currentColumns.contains(QStringLiteral("estimated_pomodoros"))
-        ? QStringLiteral("estimated_pomodoros") : QStringLiteral("0");
+        currentColumns.contains(QStringLiteral("estimated_minutes"))
+        ? QStringLiteral("estimated_minutes") : QStringLiteral("0");
 
     QSqlQuery query(m_db);
     const QStringList statements = {
@@ -611,12 +627,12 @@ bool DatabaseManager::migrateToVersion5()
                 date TEXT NOT NULL,
                 completed INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                estimated_pomodoros INTEGER NOT NULL DEFAULT 0
+                estimated_minutes INTEGER NOT NULL DEFAULT 0
             )
         )SQL"),
         QStringLiteral(
             "INSERT INTO tasks_v5 (id, title, category, category_id, routine_id, "
-            "routine_generated, date, completed, created_at, estimated_pomodoros) "
+            "routine_generated, date, completed, created_at, estimated_minutes) "
             "SELECT id, title, category, category_id, routine_id, %1, date, completed, "
             "created_at, %2 FROM tasks")
             .arg(provenanceExpression, estimateExpression),
@@ -1071,6 +1087,72 @@ QString DatabaseManager::generateColorForCategory(int index) const
     };
 
     return colors.at(index % colors.size());
+}
+
+bool DatabaseManager::migrateToVersion10()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+    if (!backupDatabaseBeforeMigration()) {
+        return false;
+    }
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 10 migration:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    if (!columnExists(QStringLiteral("tasks"), QStringLiteral("estimated_minutes"))) {
+        if (!query.exec(QStringLiteral(
+                "ALTER TABLE tasks ADD COLUMN estimated_minutes INTEGER NOT NULL DEFAULT 0"))) {
+            qWarning() << "Failed to add tasks.estimated_minutes:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    // 回填：把旧的「预估番茄数」折算成分钟。
+    //
+    // **换算基准无法从旧数据还原**——旧库只存了番茄个数，没存用户当时的专注时长设置，
+    // 而那个设置是可改的。这里用 25 分钟（应用出厂默认，也是番茄工作法的标准长度）折算，
+    // 对把时长改成 50 分钟的用户会低估一半。之所以仍选它而不是读当前设置：
+    // 当前设置反映的是"现在"，用它折算历史同样是猜，而且会让同一份旧数据在不同机器上
+    // 得到不同结果；固定基准至少是可复现、可解释的。
+    //
+    // 只回填尚未设置过分钟数的行（守卫 estimated_minutes = 0），迁移重入不会二次放大。
+    if (columnExists(QStringLiteral("tasks"), QStringLiteral("estimated_pomodoros"))) {
+        if (!query.exec(QStringLiteral(
+                "UPDATE tasks SET estimated_minutes = estimated_pomodoros * 25 "
+                "WHERE estimated_minutes = 0 AND estimated_pomodoros > 0"))) {
+            qWarning() << "Failed to backfill estimated_minutes:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+
+        // 回填完成后删除旧列，不留一个没人读、却会让下一个读代码的人以为仍是事实源的死列。
+        // SQLite 3.35+ 支持 DROP COLUMN；该列无索引、无视图与触发器引用。
+        // 删除失败不算迁移失败：回填已经成功，新列可用；旧列留着只是整洁性问题。
+        if (!query.exec(QStringLiteral("ALTER TABLE tasks DROP COLUMN estimated_pomodoros"))) {
+            qWarning() << "旧列 estimated_pomodoros 删除失败（不影响功能）:"
+                       << query.lastError().text();
+        }
+    }
+
+    if (!setDatabaseVersion(10)) {
+        m_db.rollback();
+        return false;
+    }
+
+    if (!m_db.commit()) {
+        qWarning() << "Failed to commit version 10 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 10";
+    return true;
 }
 
 bool DatabaseManager::backupDatabaseBeforeMigration() const

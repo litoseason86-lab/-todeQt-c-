@@ -80,8 +80,8 @@ Popup {
     // “今日”入口每次打开都要重算逻辑日；周计划入口不注入此函数，保留用户点选的日期。
     property var selectedDateProvider: null
     property string heading: "添加新任务"
-    // 预计番茄数，0 表示未设置。上限读 TaskManager 常量，与服务端校验同源。
-    property int estimatedPomodoros: 0
+    // 预计用时（分钟），0 表示未设置。上限读 TaskManager 常量，与服务端校验同源。
+    property int estimatedMinutes: 0
     property var categoryManagerRef: null
     // 生产页面注入返回 bool 的提交函数；信号保留给独立组件和旧测试使用。
     property var taskSubmitter: null
@@ -95,12 +95,13 @@ Popup {
         }
     ]
 
-    signal taskAdded(string title, date date, var category, int estimatedPomodoros)
+    signal taskAdded(string title, date date, var category, int estimatedMinutes)
 
     function resetFields() {
         titleField.text = "";
         categoryComboBox.currentIndex = root.categoryOptions.length > 0 ? 0 : -1;
-        root.estimatedPomodoros = 0;
+        root.estimatedMinutes = 0;
+        estimateFields.reload();
         errorLabel.text = "";
     }
 
@@ -131,13 +132,21 @@ Popup {
             return;
         }
 
+        // 预计用时留空/越界时直接挡住，避免把 0 当成「没填」写进库。
+        if (estimateFields.validationError.length > 0) {
+            errorLabel.text = estimateFields.validationError;
+            estimateFields.focusFirstField();
+            return;
+        }
+        root.estimatedMinutes = estimateFields.enteredMinutes;
+
         // 这里只传科目 id，由 TaskManager 写入数据库关联字段和兼容旧数据的文本字段。
         var categoryId = categoryComboBox.currentIndex >= 0 && categoryComboBox.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryComboBox.currentIndex].id || -1) : -1;
         var succeeded = true;
         if (root.taskSubmitter) {
-            succeeded = Boolean(root.taskSubmitter(title, root.selectedDate, categoryId, root.estimatedPomodoros));
+            succeeded = Boolean(root.taskSubmitter(title, root.selectedDate, categoryId, root.estimatedMinutes));
         } else {
-            root.taskAdded(title, root.selectedDate, categoryId, root.estimatedPomodoros);
+            root.taskAdded(title, root.selectedDate, categoryId, root.estimatedMinutes);
         }
         if (!succeeded) {
             errorLabel.text = "保存失败，请检查数据库后重试";
@@ -421,7 +430,7 @@ Popup {
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
             Layout.topMargin: Theme.space4
-            text: "预计番茄数（可选）"
+            text: "预计用时（可选）"
             color: Theme.ink
             font.pixelSize: Theme.fontLg
         }
@@ -432,25 +441,24 @@ Popup {
             Layout.rightMargin: Theme.space16
             spacing: Theme.space8
 
-            DurationStepper {
-                objectName: "addEstimateStepper"
+            DurationFieldPair {
+                id: estimateFields
+
+                objectName: "addEstimateFields"
                 namePrefix: "addEstimate"
-                accessibleName: "预计番茄数"
-                unit: "个"
-                from: 0
+                accessiblePrefix: "预计用时"
+                compact: true
+                totalMinutes: root.estimatedMinutes
                 // qmllint disable unqualified
-                to: (typeof taskManager !== "undefined" && taskManager && taskManager.maxEstimatedPomodoros)
-                    ? taskManager.maxEstimatedPomodoros : 99
+                maximumMinutes: (typeof taskManager !== "undefined" && taskManager && taskManager.maxEstimatedMinutes)
+                    ? taskManager.maxEstimatedMinutes : 24 * 60
                 // qmllint enable unqualified
-                value: root.estimatedPomodoros
-                onAdjusted: function (newValue) {
-                    root.estimatedPomodoros = newValue;
-                }
+                onAccepted: root.submit()
             }
 
             Text {
                 Layout.fillWidth: true
-                text: root.estimatedPomodoros > 0 ? "" : "未设置"
+                text: estimateFields.enteredMinutes > 0 ? "" : "未设置"
                 textFormat: Text.PlainText
                 color: Theme.inkMuted
                 font.pixelSize: Theme.fontSm

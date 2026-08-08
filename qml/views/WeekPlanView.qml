@@ -564,8 +564,8 @@ Item {
                                                      ? weekTaskRow.modelData.categoryData
                                                      : (weekTaskRow.modelData.categoryText || ""))
                                     taskCompleted: weekTaskRow.modelData.completed
-                                    estimatedPomodoros: Number(weekTaskRow.modelData.estimatedPomodoros || 0)
-                                    actualPomodoros: Number(weekTaskRow.modelData.actualPomodoros || 0)
+                                    estimatedMinutes: Number(weekTaskRow.modelData.estimatedMinutes || 0)
+                                    focusedMinutes: Number(weekTaskRow.modelData.focusedMinutes || 0)
                                     startFocusAllowed: dayRow.isToday
                                     showStartFocus: dayRow.isToday
 
@@ -650,8 +650,8 @@ Item {
 
         selectedDate: root.pendingAddDate
         categoryManagerRef: root.categoryManagerRef
-        taskSubmitter: function(title, date, categoryId, estimatedPomodoros) {
-            return root.taskManagerRef.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedPomodoros))
+        taskSubmitter: function(title, date, categoryId, estimatedMinutes) {
+            return root.taskManagerRef.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedMinutes))
         }
     }
 
@@ -661,9 +661,9 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedPomodoros) {
+        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedMinutes) {
             var succeeded = Boolean(root.taskManagerRef.updateTask(
-                taskId, title, categoryId, isoDate, Number(estimatedPomodoros)))
+                taskId, title, categoryId, isoDate, Number(estimatedMinutes)))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"
             }

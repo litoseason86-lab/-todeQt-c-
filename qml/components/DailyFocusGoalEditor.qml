@@ -12,8 +12,6 @@ FocusScope {
     // 横排模式：底部目标条内联编辑用；竖排（默认）留给卡片形态。
     property bool horizontal: false
 
-    readonly property alias hourText: hourField.text
-    readonly property alias minuteText: minuteField.text
 
     signal submitted(int totalMinutes)
     signal cancelled()
@@ -26,8 +24,7 @@ FocusScope {
         root.loadInitialValue()
         root.opacity = 1
         root.scale = 1
-        hourField.forceActiveFocus()
-        hourField.selectAll()
+        durationFields.focusFirstField()
     }
 
     Behavior on opacity {
@@ -41,37 +38,24 @@ FocusScope {
     }
 
     function loadInitialValue() {
-        var safe = Math.max(0, Math.min(1440, Number(root.initialMinutes || 0)))
-        hourField.text = String(Math.floor(safe / 60))
-        minuteField.text = String(safe % 60)
+        durationFields.totalMinutes = Math.max(0, Math.min(1440, Number(root.initialMinutes || 0)))
+        durationFields.reload()
         root.validationError = ""
     }
 
     function submit() {
-        if (!hourField.acceptableInput || !minuteField.acceptableInput
-                || hourField.text.length === 0 || minuteField.text.length === 0) {
-            root.validationError = qsTr("请输入有效的小时和分钟")
+        // 形式校验（能否解析、是否越界）在共享字段里，这里只补目标特有的下限。
+        if (durationFields.validationError.length > 0) {
+            root.validationError = durationFields.validationError
             return
         }
-
-        var hours = Number(hourField.text)
-        var minutes = Number(minuteField.text)
-        var totalMinutes = hours * 60 + minutes
-        if (totalMinutes <= 0) {
+        if (durationFields.enteredMinutes <= 0) {
             root.validationError = qsTr("目标至少需要 1 分钟")
-            return
-        }
-        if (hours === 24 && minutes !== 0) {
-            root.validationError = qsTr("24 小时是上限，分钟必须为 0")
-            return
-        }
-        if (totalMinutes > 1440) {
-            root.validationError = qsTr("目标不能超过 24 小时")
             return
         }
 
         root.validationError = ""
-        root.submitted(totalMinutes)
+        root.submitted(durationFields.enteredMinutes)
     }
 
     Keys.onEscapePressed: function(event) {
@@ -91,77 +75,15 @@ FocusScope {
         rowSpacing: Theme.space8
         columnSpacing: Theme.space12
 
-        RowLayout {
+        DurationFieldPair {
+            id: durationFields
+
             Layout.fillWidth: !root.horizontal
-            spacing: Theme.space8
-
-            TextField {
-                id: hourField
-                objectName: "focusGoalHourField"
-
-                Layout.fillWidth: !root.horizontal
-                Layout.preferredWidth: root.horizontal ? 56 : -1
-                Layout.preferredHeight: root.horizontal ? 32 : 38
-                activeFocusOnTab: true
-                selectByMouse: true
-                horizontalAlignment: TextInput.AlignHCenter
-                inputMethodHints: Qt.ImhDigitsOnly
-                maximumLength: 2
-                font.pixelSize: Theme.fontMd
-                color: Theme.inkStrong
-                Accessible.name: qsTr("今日专注目标小时")
-                validator: IntValidator { bottom: 0; top: 24 }
-                KeyNavigation.tab: minuteField
-                Keys.onReturnPressed: root.submit()
-                Keys.onEnterPressed: root.submit()
-
-                background: Rectangle {
-                    radius: Theme.radiusMd
-                    color: Theme.surfaceSunken
-                    border.width: hourField.activeFocus ? 2 : 1
-                    border.color: hourField.activeFocus ? Theme.accent : Theme.borderSubtle
-                }
-            }
-
-            Label {
-                text: qsTr("小时")
-                color: Theme.inkSoft
-                font.pixelSize: Theme.fontSm
-            }
-
-            TextField {
-                id: minuteField
-                objectName: "focusGoalMinuteField"
-
-                Layout.fillWidth: !root.horizontal
-                Layout.preferredWidth: root.horizontal ? 56 : -1
-                Layout.preferredHeight: root.horizontal ? 32 : 38
-                activeFocusOnTab: true
-                selectByMouse: true
-                horizontalAlignment: TextInput.AlignHCenter
-                inputMethodHints: Qt.ImhDigitsOnly
-                maximumLength: 2
-                font.pixelSize: Theme.fontMd
-                color: Theme.inkStrong
-                Accessible.name: qsTr("今日专注目标分钟")
-                validator: IntValidator { bottom: 0; top: 59 }
-                KeyNavigation.tab: cancelButton
-                Keys.onReturnPressed: root.submit()
-                Keys.onEnterPressed: root.submit()
-
-                background: Rectangle {
-                    radius: Theme.radiusMd
-                    color: Theme.surfaceSunken
-                    border.width: minuteField.activeFocus ? 2 : 1
-                    border.color: minuteField.activeFocus ? Theme.accent : Theme.borderSubtle
-                }
-            }
-
-            Label {
-                text: qsTr("分钟")
-                color: Theme.inkSoft
-                font.pixelSize: Theme.fontSm
-            }
+            compact: root.horizontal
+            namePrefix: "focusGoal"
+            accessiblePrefix: qsTr("今日专注目标")
+            tabTarget: cancelButton
+            onAccepted: root.submit()
         }
 
         Label {
@@ -210,7 +132,7 @@ FocusScope {
                 activeFocusOnTab: true
                 implicitWidth: 64
                 implicitHeight: 32
-                KeyNavigation.tab: hourField
+                KeyNavigation.tab: durationFields.firstField
                 onClicked: root.submit()
 
                 background: Rectangle {

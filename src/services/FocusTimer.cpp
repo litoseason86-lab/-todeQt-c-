@@ -425,7 +425,9 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion, bool* countedAsPom
     }
     // 任务可能在会话进行中被删除（外键置空后恢复的会话 task_id 为 -1）；
     // 没有可完成的任务时跳过自动完成，而不是制造一次必然失败的告警。
-    const bool shouldCheckTaskTarget = completedTaskId > 0 && completedPomodoro;
+    // 预计用时是时间口径，自由计时的时长同样是「用时」，所以不再只在自然到点的番茄后判定。
+    // 只要这次会话真的入了库（时长达到有效门槛），就该看看它有没有把任务推过预计用时。
+    const bool shouldCheckTaskTarget = completedTaskId > 0;
 
     // 会话已经持久化后先清空活动态，再触发 TaskManager::tasksChanged。否则订阅方会在同一刷新中
     // 同时看到“已完成数据库记录”和“仍活动的计时器”，把最后一段时长重复计入界面统计。
@@ -433,10 +435,10 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion, bool* countedAsPom
 
     bool taskChangeAlreadyEmitted = false;
     if (shouldCheckTaskTarget) {
-        // 只有本次自然到点的工作番茄入账后，实际数恰好等于正数计划值才完成任务。
-        // 已超额时保持原状态，防止用户重新打开任务后又被下一颗番茄强行完成。
+        // 本次会话把累计专注时长推过任务的预计用时时才完成它；
+        // 「本次之前就已超额」由 TaskManager 侧的第二个条件挡住。
         const TaskManager::TargetCompletionResult result =
-            TaskManager::instance()->completeTaskIfPomodoroTargetReached(completedTaskId);
+            TaskManager::instance()->completeTaskIfEstimateReached(completedTaskId, duration);
         taskChangeAlreadyEmitted = result == TaskManager::TargetCompletionResult::Completed;
         if (result == TaskManager::TargetCompletionResult::Failed) {
             emit taskAutoCompleteFailed(completedTaskId);

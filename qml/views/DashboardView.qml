@@ -683,8 +683,8 @@ Item {
                                         taskTitle: taskRow.modelData.title
                                         taskCategory: taskRow.modelData.category && taskRow.modelData.category.name ? taskRow.modelData.category : (taskRow.modelData.categoryData && taskRow.modelData.categoryData.name ? taskRow.modelData.categoryData : (taskRow.modelData.categoryText || ""))
                                         taskCompleted: taskRow.modelData.completed
-                                        estimatedPomodoros: Number(taskRow.modelData.estimatedPomodoros || 0)
-                                        actualPomodoros: Number(taskRow.modelData.actualPomodoros || 0)
+                                        estimatedMinutes: Number(taskRow.modelData.estimatedMinutes || 0)
+                                        focusedMinutes: Number(taskRow.modelData.focusedMinutes || 0)
                                         // 已完成筛选：紧凑只读行 + 右侧「已完成」徽章，去掉编辑/删除/开始专注空洞。
                                         compact: root.doneFilter
                                         showStartFocus: !root.doneFilter
@@ -926,9 +926,9 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedPomodoros) {
+        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes) {
             var succeeded = Boolean(root.taskManagerRef.updateTask(
-                taskId, title, categoryId, isoDate, Number(estimatedPomodoros)))
+                taskId, title, categoryId, isoDate, Number(estimatedMinutes)))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"
             }

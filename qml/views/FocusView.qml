@@ -973,7 +973,7 @@ Item {
                 objectName: "ruleHintText"
                 Layout.fillWidth: true
                 visible: root.state === "pomoIdle" && root.panelExpanded
-                text: "完成计划的最后一个番茄时自动完成任务 · 不足 "
+                text: "专注时长达到预计用时时自动完成任务 · 不足 "
                       + root.timerNumber("minimumValidMinutes", 3) + " 分钟不计入记录"
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontSm

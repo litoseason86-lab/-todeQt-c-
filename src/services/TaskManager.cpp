@@ -52,10 +52,10 @@ QDate normalizeDate(const QVariant& value)
     return QDate();
 }
 
-int clampEstimatedPomodoros(int value)
+int clampEstimatedMinutes(int value)
 {
     // 越界一律夹紧：负数当未设置，超上限压到上限，绝不因预估值让任务本体保存失败。
-    return qBound(0, value, TaskManager::kMaxEstimatedPomodoros);
+    return qBound(0, value, TaskManager::kMaxEstimatedMinutes);
 }
 
 // “有效番茄”的口径已上移到 FocusSessionRules，长期目标进度要复用同一份定义。
@@ -66,9 +66,14 @@ QString validPomodoroCountExpr(const QString& tableAlias = QString())
 }
 
 // 专注分钟对模式不敏感：番茄段和自由计时段都算，只要达到有效专注门槛。
-QString focusedSecondsExpr()
+QString focusedSecondsExpr(const QString& tableAlias = QString())
 {
-    return QStringLiteral("SUM(CASE WHEN duration >= %1 THEN duration ELSE 0 END)")
+    // 带别名的形式给子查询用（JOIN 场景下裸列名会有歧义）；不传别名时行为与原来一致。
+    const QString column = tableAlias.isEmpty()
+        ? QStringLiteral("duration")
+        : (tableAlias + QStringLiteral(".duration"));
+    return QStringLiteral("SUM(CASE WHEN %1 >= %2 THEN %1 ELSE 0 END)")
+        .arg(column)
         .arg(FocusSessionRules::kMinimumValidDurationSeconds);
 }
 
@@ -81,7 +86,7 @@ QString taskSelectSql()
         "SELECT t.id, t.title, "
         "COALESCE(c.name, t.category) AS category, "
         "t.category_id, c.name AS category_name, c.color AS category_color, "
-        "t.date, t.completed, t.created_at, t.estimated_pomodoros, "
+        "t.date, t.completed, t.created_at, t.estimated_minutes, "
         "COALESCE((SELECT %1 FROM focus_sessions fs "
         "WHERE fs.task_id = t.id AND fs.duration IS NOT NULL), 0) AS actual_pomodoros, "
         "COALESCE((SELECT %2 FROM focus_sessions fs "
@@ -196,7 +201,7 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int c
     return addTask(title, dateValue, categoryId, 0);
 }
 
-bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int categoryId, int estimatedPomodoros)
+bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int categoryId, int estimatedMinutes)
 {
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
@@ -232,13 +237,13 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int c
 
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "INSERT INTO tasks (title, category, category_id, date, completed, estimated_pomodoros) "
+        "INSERT INTO tasks (title, category, category_id, date, completed, estimated_minutes) "
         "VALUES (:title, :category, :categoryId, :date, 0, :estimated)"));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
     query.bindValue(QStringLiteral(":category"), categoryName);
     query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":estimated"), clampEstimatedPomodoros(estimatedPomodoros));
+    query.bindValue(QStringLiteral(":estimated"), clampEstimatedMinutes(estimatedMinutes));
 
     if (!query.exec()) {
         qWarning() << "Failed to add task:" << query.lastError().text();
@@ -286,7 +291,8 @@ bool TaskManager::setTaskCompleted(int taskId, bool completed)
     return true;
 }
 
-TaskManager::TargetCompletionResult TaskManager::completeTaskIfPomodoroTargetReached(int taskId)
+TaskManager::TargetCompletionResult TaskManager::completeTaskIfEstimateReached(
+    int taskId, int justCompletedSeconds)
 {
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to auto-complete task: invalid task id" << taskId;
@@ -299,25 +305,35 @@ TaskManager::TargetCompletionResult TaskManager::completeTaskIfPomodoroTargetRea
         return TargetCompletionResult::Failed;
     }
 
+    // 判据是「本次会话把累计时长推过了门槛」：
+    //   累计秒数 >= 预计用时  且  扣掉本次之后 < 预计用时
+    // 第二个条件不能省。只判「累计已超」的话，用户重新打开一个早已超额的任务后，
+    // 下一次专注会立刻把它又关掉——换成分钟之前那条「精确相等」写法守的就是这个性质。
+    //
+    // 累计时长走 focusedSecondsExpr（与任务行展示同一口径，不足 3 分钟的会话不计），
+    // 且不区分番茄与自由计时：估的是「用时」，自由专注的时间同样是用时。
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "UPDATE tasks SET completed = 1 "
-        "WHERE id = :id AND completed = 0 AND estimated_pomodoros > 0 "
-        "AND estimated_pomodoros = COALESCE(("
-        "SELECT %1 FROM focus_sessions fs "
-        "WHERE fs.task_id = tasks.id AND fs.duration IS NOT NULL"
-        "), 0)")
-        .arg(validPomodoroCountExpr(QStringLiteral("fs"))));
+        "WHERE id = :id AND completed = 0 AND estimated_minutes > 0 "
+        "AND COALESCE((SELECT %1 FROM focus_sessions fs "
+        "  WHERE fs.task_id = tasks.id AND fs.duration IS NOT NULL), 0) "
+        "    >= estimated_minutes * 60 "
+        "AND COALESCE((SELECT %1 FROM focus_sessions fs "
+        "  WHERE fs.task_id = tasks.id AND fs.duration IS NOT NULL), 0) - :justCompleted "
+        "    < estimated_minutes * 60")
+        .arg(focusedSecondsExpr(QStringLiteral("fs"))));
     query.bindValue(QStringLiteral(":id"), taskId);
+    query.bindValue(QStringLiteral(":justCompleted"), qMax(0, justCompletedSeconds));
 
     if (!query.exec()) {
-        qWarning() << "Failed to auto-complete task at pomodoro target:"
+        qWarning() << "Failed to auto-complete task at duration estimate:"
                    << query.lastError().text() << "taskId=" << taskId;
         return TargetCompletionResult::Failed;
     }
 
     if (query.numRowsAffected() == 0) {
-        // 计划为 0、尚未达到、已经超额或任务已完成都属于正常的“不自动完成”。
+        // 计划为 0、尚未达到、本次之前就已超额、或任务已完成，都属于正常的“不自动完成”。
         return TargetCompletionResult::NotReached;
     }
 
@@ -349,7 +365,7 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, c
     return updateTask(taskId, title, categoryId, dateValue, -1);
 }
 
-bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue, int estimatedPomodoros)
+bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue, int estimatedMinutes)
 {
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to update task: invalid task id" << taskId;
@@ -388,15 +404,15 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, c
         categoryIdValue = categoryId;
     }
 
-    // 预估番茄数为负视为“保持不变”，只有非负值才写入并夹紧到合法区间。
-    const bool updateEstimate = estimatedPomodoros >= 0;
+    // 预计用时为负视为“保持不变”，只有非负值才写入并夹紧到合法区间。
+    const bool updateEstimate = estimatedMinutes >= 0;
 
     QSqlQuery query(db);
     // category 文本仍要同步写入，保证旧导出和旧视图在 category_id 缺失时也能退回显示。
     query.prepare(updateEstimate
         ? QStringLiteral(
             "UPDATE tasks SET title = :title, category = :category, category_id = :categoryId, "
-            "date = :date, estimated_pomodoros = :estimated WHERE id = :id")
+            "date = :date, estimated_minutes = :estimated WHERE id = :id")
         : QStringLiteral(
             "UPDATE tasks SET title = :title, category = :category, category_id = :categoryId, "
             "date = :date WHERE id = :id"));
@@ -405,7 +421,7 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, c
     query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
     if (updateEstimate) {
-        query.bindValue(QStringLiteral(":estimated"), clampEstimatedPomodoros(estimatedPomodoros));
+        query.bindValue(QStringLiteral(":estimated"), clampEstimatedMinutes(estimatedMinutes));
     }
     query.bindValue(QStringLiteral(":id"), taskId);
 

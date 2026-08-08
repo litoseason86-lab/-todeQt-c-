@@ -13,7 +13,7 @@ class DatabaseManager : public QObject
 public:
     // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
-    static constexpr int kCurrentSchemaVersion = 9;
+    static constexpr int kCurrentSchemaVersion = 10;
 
     static DatabaseManager* instance();
 
@@ -56,6 +56,8 @@ private:
     bool migrateToVersion8();
     // v9 把会话开始时的科目写入历史快照，任务删除后统计与长期目标仍有归属。
     bool migrateToVersion9();
+    // v10：任务的「预估番茄数」改为「预计用时（分钟）」。
+    bool migrateToVersion10();
     bool createRoutinesTable();
     bool insertPresetCategories();
     bool migrateTaskCategories();

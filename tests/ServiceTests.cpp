@@ -126,7 +126,7 @@ int insertPlannedTask(const QString& title, const QDate& date, int categoryId, i
 {
     QSqlQuery query(DatabaseManager::instance()->database());
     query.prepare(QStringLiteral(
-        "INSERT INTO tasks (title, category_id, date, completed, estimated_pomodoros) "
+        "INSERT INTO tasks (title, category_id, date, completed, estimated_minutes) "
         "VALUES (:title, :categoryId, :date, 0, :estimated)"));
     query.bindValue(QStringLiteral(":title"), title);
     query.bindValue(QStringLiteral(":categoryId"), categoryId > 0 ? QVariant(categoryId) : QVariant());
@@ -437,7 +437,7 @@ bool createLegacyVersion7Database(const QString& path, bool includeDayBoundaryRo
                         category_id INTEGER REFERENCES categories(id),
                         routine_id INTEGER REFERENCES routines(id) ON DELETE SET NULL,
                         routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
-                        estimated_pomodoros INTEGER NOT NULL DEFAULT 0,
+                        estimated_minutes INTEGER NOT NULL DEFAULT 0,
                         date TEXT NOT NULL,
                         completed INTEGER NOT NULL DEFAULT 0,
                         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -734,6 +734,8 @@ private slots:
     void freshDatabaseHasRoutineIdColumn();
     void migrationV4DoesNotGuessRoutineLineage();
     void migrationV6ClearsUntrustedRoutineLineage();
+    void migrationV10ConvertsPomodoroEstimateToMinutes();
+    void migrationV10IsIdempotentAndDoesNotLoop();
     void migrationV5RebuildKeepsColumnsAddedAfterV5();
     void migrationV5RefusesToRebuildWhenTasksHasAnUnknownColumn();
     void freshDatabaseCreatesVersion4PresetCategories();
@@ -767,14 +769,14 @@ private slots:
     void exportRejectsInvalidDateRangeAndUnwritablePath();
     void exportFailurePreservesExistingFile();
     void exportAllRejectsInvalidDestinationBeforeReplacingFiles();
-    void freeFocusDoesNotAutoCompletePlannedTask();
+    void freeFocusCountsTowardDurationEstimate();
     void discardFreeFocusRemovesLongSessionWithoutRecording();
     void stopFocusUnderFiveMinutesKeepsTaskPending();
     void stopFocusUnderThreeMinutesDiscardsInvalidSession();
     void shortSessionEmitsSessionDiscarded();
     void validSessionDoesNotEmitSessionDiscarded();
     void focusTimerExposesMinimumValidDuration();
-    void pomodoroWorkCompletesOnlyWhenPlannedCountReached();
+    void pomodoroWorkCompletesOnlyWhenPlannedDurationReached();
     void pomodoroWorkRequiresPositiveExactPlan();
     void pomodoroTargetCompletionFailureKeepsSession();
     void manuallyStoppedPomodoroDoesNotCountAsCompleted();
@@ -792,7 +794,7 @@ private slots:
     void discardedShortPomodoroDoesNotAdvanceLongBreakCount();
     void startupCleanupRemovesLegacyOrphanedSession();
     void queryServicesReportDatabaseFailureInsteadOfSilentEmptyData();
-    void estimatedPomodorosDefaultsToZeroAfterMigration();
+    void estimatedMinutesDefaultsToZeroAfterMigration();
     void addTaskPersistsEstimatedPomodoros();
     void updateTaskChangesEstimateAndRenamePreservesIt();
     void taskAggregatesActualPomodorosFromValidWorkSessions();
@@ -3285,6 +3287,107 @@ void ServiceTests::freshDatabaseCreatesVersion4PresetCategories()
     }
 }
 
+void ServiceTests::migrationV10ConvertsPomodoroEstimateToMinutes()
+{
+    // v10 把「预估番茄数」换成「预计用时（分钟）」。换算基准无法从旧数据还原
+    // （旧库只存个数，没存当时的专注时长设置），实现里固定用 25 分钟折算，
+    // 这条用例把那个基准钉死——将来有人改基准，必须是有意识的决定。
+    QSqlQuery setup(DatabaseManager::instance()->database());
+    QVERIFY(setup.exec(QStringLiteral("PRAGMA user_version = 9")));
+    QVERIFY(setup.exec(QStringLiteral(
+        "ALTER TABLE tasks ADD COLUMN estimated_pomodoros INTEGER NOT NULL DEFAULT 0")));
+
+    const int estimated = insertTaskRow(QStringLiteral("有预估的任务"), logicalToday());
+    const int plain = insertTaskRow(QStringLiteral("没预估的任务"), logicalToday());
+    QVERIFY(estimated > 0 && plain > 0);
+    setup.prepare(QStringLiteral(
+        "UPDATE tasks SET estimated_pomodoros = 4, estimated_minutes = 0 WHERE id = :id"));
+    setup.bindValue(QStringLiteral(":id"), estimated);
+    QVERIFY(setup.exec());
+
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    QSqlQuery check(DatabaseManager::instance()->database());
+    check.prepare(QStringLiteral("SELECT estimated_minutes FROM tasks WHERE id = :id"));
+    check.bindValue(QStringLiteral(":id"), estimated);
+    QVERIFY(check.exec());
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toInt(), 100);   // 4 个番茄 × 25 分钟
+
+    check.bindValue(QStringLiteral(":id"), plain);
+    QVERIFY(check.exec());
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toInt(), 0);     // 原本没预估的保持 0，不该被折算出数字
+
+    // 旧列换算完就删掉，不留一个没人读却像事实源的死列。
+    QSqlQuery info(DatabaseManager::instance()->database());
+    QVERIFY(info.exec(QStringLiteral("PRAGMA table_info(tasks)")));
+    QStringList columns;
+    while (info.next()) {
+        columns.append(info.value(1).toString());
+    }
+    QVERIFY(columns.contains(QStringLiteral("estimated_minutes")));
+    QVERIFY(!columns.contains(QStringLiteral("estimated_pomodoros")));
+}
+
+void ServiceTests::migrationV10IsIdempotentAndDoesNotLoop()
+{
+    // 回归点：v7 的结构检查原本查 estimated_pomodoros，而 v10 会删掉那一列。
+    // 若仍按旧列名判断，一个已迁到 v10 的库每次启动都会重跑 v7–v10 四步迁移。
+    //
+    // 注意最终状态是自愈的（v7 重加旧列，v10 又删掉；回填有 estimated_minutes = 0
+    // 守卫所以不覆写用户数据）——所以光看结束状态**测不出来**，必须观察「有没有重跑」
+    // 本身。这里拦截迁移日志：已经是最新版本时，再次建表不得输出任何 migrated 记录。
+    const int taskId = insertTaskRow(QStringLiteral("已换算的任务"), logicalToday());
+    QVERIFY(taskId > 0);
+    QSqlQuery seed(DatabaseManager::instance()->database());
+    seed.prepare(QStringLiteral("UPDATE tasks SET estimated_minutes = 90 WHERE id = :id"));
+    seed.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY(seed.exec());
+
+    // 第一次先把库带到最新版本。
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    // 之后再建表两次，捕获迁移日志：不该再有任何一步迁移被执行。
+    static QStringList migrationLogs;
+    migrationLogs.clear();
+    QtMessageHandler previous = qInstallMessageHandler(
+        [](QtMsgType type, const QMessageLogContext&, const QString& text) {
+            if (type == QtInfoMsg && text.contains(QStringLiteral("migrated to version"))) {
+                migrationLogs.append(text);
+            }
+        });
+    for (int i = 0; i < 2; ++i) {
+        QVERIFY(DatabaseManager::instance()->createTables());
+    }
+    qInstallMessageHandler(previous);
+    QVERIFY2(migrationLogs.isEmpty(),
+             qPrintable(QStringLiteral("已是最新版本却仍重跑了迁移: ")
+                        + migrationLogs.join(QStringLiteral(" / "))));
+
+    QSqlQuery info(DatabaseManager::instance()->database());
+    QVERIFY(info.exec(QStringLiteral("PRAGMA table_info(tasks)")));
+    QStringList columns;
+    while (info.next()) {
+        columns.append(info.value(1).toString());
+    }
+    // 旧列不该被重新加回来。
+    QVERIFY(!columns.contains(QStringLiteral("estimated_pomodoros")));
+
+    // 用户填的分钟数必须原样保留，不被回填覆写。
+    QSqlQuery check(DatabaseManager::instance()->database());
+    check.prepare(QStringLiteral("SELECT estimated_minutes FROM tasks WHERE id = :id"));
+    check.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY(check.exec());
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toInt(), 90);
+
+    QSqlQuery versionQuery(DatabaseManager::instance()->database());
+    QVERIFY(versionQuery.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(versionQuery.next());
+    QCOMPARE(versionQuery.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+}
+
 void ServiceTests::migrationV5RebuildKeepsColumnsAddedAfterV5()
 {
     // v5 迁移的触发条件是「version < 5 **或** tasks.routine_id 的外键动作不是 SET NULL」。
@@ -3292,14 +3395,14 @@ void ServiceTests::migrationV5RebuildKeepsColumnsAddedAfterV5()
     // 而那次重建用的是冻结在 v5 那一刻的列清单——v5 之后新增的列会被静默丢掉。
     //
     // v6 的 routine_generated 被专门保住了（provenanceExpression），说明写的人想过这件事；
-    // v7 的 estimated_pomodoros 没有——这正是本用例要锁住的缺口。
+    // v7 的预估列没有——这正是本用例要锁住的缺口（该列在 v10 已更名为 estimated_minutes）。
     const QDate today = logicalToday();
     const int taskId = insertTaskRow(QStringLiteral("有预估的任务"), today);
     QVERIFY(taskId > 0);
 
     QSqlQuery seed(DatabaseManager::instance()->database());
     seed.prepare(QStringLiteral(
-        "UPDATE tasks SET estimated_pomodoros = 5 WHERE id = :id"));
+        "UPDATE tasks SET estimated_minutes = 125 WHERE id = :id"));
     seed.bindValue(QStringLiteral(":id"), taskId);
     QVERIFY(seed.exec());
 
@@ -3321,12 +3424,12 @@ void ServiceTests::migrationV5RebuildKeepsColumnsAddedAfterV5()
                 date TEXT NOT NULL,
                 completed INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                estimated_pomodoros INTEGER NOT NULL DEFAULT 0
+                estimated_minutes INTEGER NOT NULL DEFAULT 0
             )
         )SQL"),
         QStringLiteral("INSERT INTO tasks_broken SELECT id, title, category, category_id, "
                        "routine_id, routine_generated, date, completed, created_at, "
-                       "estimated_pomodoros FROM tasks"),
+                       "estimated_minutes FROM tasks"),
         QStringLiteral("DROP TABLE tasks"),
         QStringLiteral("ALTER TABLE tasks_broken RENAME TO tasks")
     };
@@ -3337,13 +3440,13 @@ void ServiceTests::migrationV5RebuildKeepsColumnsAddedAfterV5()
 
     QVERIFY(DatabaseManager::instance()->createTables());
 
-    // 重建后预估番茄数必须原样还在——丢的是用户手填的数据，且没有任何提示。
+    // 重建后预计用时必须原样还在——丢的是用户手填的数据，且没有任何提示。
     QSqlQuery check(DatabaseManager::instance()->database());
-    check.prepare(QStringLiteral("SELECT estimated_pomodoros FROM tasks WHERE id = :id"));
+    check.prepare(QStringLiteral("SELECT estimated_minutes FROM tasks WHERE id = :id"));
     check.bindValue(QStringLiteral(":id"), taskId);
     QVERIFY(check.exec());
     QVERIFY(check.next());
-    QCOMPARE(check.value(0).toInt(), 5);
+    QCOMPARE(check.value(0).toInt(), 125);
 }
 
 void ServiceTests::migrationV5RefusesToRebuildWhenTasksHasAnUnknownColumn()
@@ -3368,13 +3471,13 @@ void ServiceTests::migrationV5RefusesToRebuildWhenTasksHasAnUnknownColumn()
                 date TEXT NOT NULL,
                 completed INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                estimated_pomodoros INTEGER NOT NULL DEFAULT 0,
+                estimated_minutes INTEGER NOT NULL DEFAULT 0,
                 future_column TEXT
             )
         )SQL"),
         QStringLiteral("INSERT INTO tasks_broken SELECT id, title, category, category_id, "
                        "routine_id, routine_generated, date, completed, created_at, "
-                       "estimated_pomodoros, future_column FROM tasks"),
+                       "estimated_minutes, future_column FROM tasks"),
         QStringLiteral("DROP TABLE tasks"),
         QStringLiteral("ALTER TABLE tasks_broken RENAME TO tasks")
     };
@@ -3394,7 +3497,7 @@ void ServiceTests::migrationV5RefusesToRebuildWhenTasksHasAnUnknownColumn()
         columns.append(info.value(1).toString());
     }
     QVERIFY(columns.contains(QStringLiteral("future_column")));
-    QVERIFY(columns.contains(QStringLiteral("estimated_pomodoros")));
+    QVERIFY(columns.contains(QStringLiteral("estimated_minutes")));
 }
 
 void ServiceTests::migrationMapsLegacyCategoryTextToCategoryIds()
@@ -4266,13 +4369,15 @@ void ServiceTests::exportAllRejectsInvalidDestinationBeforeReplacingFiles()
     QVERIFY(QFileInfo(sessionsPath).isDir());
 }
 
-void ServiceTests::freeFocusDoesNotAutoCompletePlannedTask()
+void ServiceTests::freeFocusCountsTowardDurationEstimate()
 {
-    const int taskId = insertPlannedTask(QStringLiteral("自由计时任务"), logicalToday(), -1, 1);
+    // v10 之前：预估是「番茄个数」，自由计时不产生完整番茄，所以再久也不完成任务。
+    // v10 之后：预估是「预计用时」，自由专注的时间同样是用时——满了就该完成，
+    // 否则「预计用时 5 分钟」的标签是骗人的。这条用例锁的就是这次语义变更。
+    const int taskId = insertPlannedTask(QStringLiteral("自由计时任务"), logicalToday(), -1, 5);
     QVERIFY(taskId > 0);
 
     QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("自由计时任务")));
-    // 自由计时只累计专注分钟，不产生完整番茄，因此即使时长很长也不能完成任务。
     setFocusElapsedSeconds(FocusTimer::instance(), 300);
 
     bool timerWasActiveDuringTaskRefresh = true;
@@ -4286,10 +4391,12 @@ void ServiceTests::freeFocusDoesNotAutoCompletePlannedTask()
     disconnect(refreshConnection);
 
     const QVariantMap task = taskMapById(TaskManager::instance()->getTodayTasks(), taskId);
-    QCOMPARE(task.value(QStringLiteral("completed")).toBool(), false);
+    QCOMPARE(task.value(QStringLiteral("completed")).toBool(), true);
+    // 自由计时仍然不产生「完整番茄」，那是另一套口径，不因这次变更而改变。
     QCOMPARE(task.value(QStringLiteral("actualPomodoros")).toInt(), 0);
     QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 5);
     QVERIFY(tasksChangedSpy.count() >= 1);
+    // 刷新时计时器必须已经收尾，否则页面会把最后一段时长重复计入。
     QCOMPARE(timerWasActiveDuringTaskRefresh, false);
 }
 
@@ -4379,9 +4486,10 @@ void ServiceTests::focusTimerExposesMinimumValidDuration()
     QCOMPARE(timer->minimumValidMinutes(), 3);
 }
 
-void ServiceTests::pomodoroWorkCompletesOnlyWhenPlannedCountReached()
+void ServiceTests::pomodoroWorkCompletesOnlyWhenPlannedDurationReached()
 {
-    const int taskId = insertPlannedTask(QStringLiteral("三颗番茄任务"), QDate::currentDate(), -1, 3);
+    // 计划 15 分钟 = 三段 5 分钟的番茄；前两段不该完成，第三段跨过门槛才完成。
+    const int taskId = insertPlannedTask(QStringLiteral("三颗番茄任务"), QDate::currentDate(), -1, 15);
     QVERIFY(taskId > 0);
 
     QSignalSpy phaseCompletedSpy(FocusTimer::instance(), &FocusTimer::phaseCompleted);
@@ -4829,7 +4937,7 @@ void ServiceTests::queryServicesReportDatabaseFailureInsteadOfSilentEmptyData()
     QVERIFY(routineFailureSpy.count() >= 1);
 }
 
-void ServiceTests::estimatedPomodorosDefaultsToZeroAfterMigration()
+void ServiceTests::estimatedMinutesDefaultsToZeroAfterMigration()
 {
     // 旧库升级后必须补出 estimated_pomodoros 列且默认 0，原有任务与专注记录一条不丢。
     DatabaseManager::instance()->close();
@@ -4843,7 +4951,7 @@ void ServiceTests::estimatedPomodorosDefaultsToZeroAfterMigration()
 
     QSqlQuery query(DatabaseManager::instance()->database());
     QVERIFY(query.exec(QStringLiteral(
-        "SELECT COUNT(*), MIN(estimated_pomodoros), MAX(estimated_pomodoros) FROM tasks")));
+        "SELECT COUNT(*), MIN(estimated_minutes), MAX(estimated_minutes) FROM tasks")));
     QVERIFY(query.next());
     // 三条旧任务全部保留，且预估默认 0。
     QCOMPARE(query.value(0).toInt(), 3);
@@ -4855,7 +4963,7 @@ void ServiceTests::addTaskPersistsEstimatedPomodoros()
 {
     // 四参新增重载写入预估值，越界一律夹紧到 [0, 99]，绝不因预估值导致任务保存失败。
     QVERIFY(TaskManager::instance()->addTask(QStringLiteral("四番茄任务"), logicalToday(), -1, 4));
-    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("越界任务"), logicalToday(), -1, 500));
+    QVERIFY(TaskManager::instance()->addTask(QStringLiteral("越界任务"), logicalToday(), -1, 5000));
 
     const QVariantList tasks = TaskManager::instance()->getTodayTasks();
     QVariantMap normal;
@@ -4868,9 +4976,9 @@ void ServiceTests::addTaskPersistsEstimatedPomodoros()
             clamped = map;
         }
     }
-    QCOMPARE(normal.value(QStringLiteral("estimatedPomodoros")).toInt(), 4);
-    QCOMPARE(clamped.value(QStringLiteral("estimatedPomodoros")).toInt(),
-             TaskManager::kMaxEstimatedPomodoros);
+    QCOMPARE(normal.value(QStringLiteral("estimatedMinutes")).toInt(), 4);
+    QCOMPARE(clamped.value(QStringLiteral("estimatedMinutes")).toInt(),
+             TaskManager::kMaxEstimatedMinutes);
 }
 
 void ServiceTests::updateTaskChangesEstimateAndRenamePreservesIt()
@@ -4883,14 +4991,14 @@ void ServiceTests::updateTaskChangesEstimateAndRenamePreservesIt()
     QVERIFY(TaskManager::instance()->updateTask(
         taskId, QStringLiteral("待改预估"), -1, logicalToday(), 6));
     QCOMPARE(taskMapById(TaskManager::instance()->getTodayTasks(), taskId)
-                 .value(QStringLiteral("estimatedPomodoros")).toInt(), 6);
+                 .value(QStringLiteral("estimatedMinutes")).toInt(), 6);
 
     // 四参重载（重命名）不得清零已有预估。
     QVERIFY(TaskManager::instance()->updateTask(
         taskId, QStringLiteral("改了标题"), -1, logicalToday()));
     const QVariantMap renamed = taskMapById(TaskManager::instance()->getTodayTasks(), taskId);
     QCOMPARE(renamed.value(QStringLiteral("title")).toString(), QStringLiteral("改了标题"));
-    QCOMPARE(renamed.value(QStringLiteral("estimatedPomodoros")).toInt(), 6);
+    QCOMPARE(renamed.value(QStringLiteral("estimatedMinutes")).toInt(), 6);
 }
 
 void ServiceTests::taskAggregatesActualPomodorosFromValidWorkSessions()
@@ -5070,7 +5178,7 @@ void ServiceTests::completeUndoRestoresPriorStateWithoutTouchingFields()
     QCOMPARE(after.value(QStringLiteral("id")).toInt(), taskId);
     QCOMPARE(after.value(QStringLiteral("completed")).toBool(), false);
     QCOMPARE(after.value(QStringLiteral("title")).toString(), QStringLiteral("可撤销完成"));
-    QCOMPARE(after.value(QStringLiteral("estimatedPomodoros")).toInt(), 3);
+    QCOMPARE(after.value(QStringLiteral("estimatedMinutes")).toInt(), 3);
 }
 
 void ServiceTests::weeklyReviewAggregatesPlannedActualAndSeparatesFreeTime()
@@ -5081,27 +5189,33 @@ void ServiceTests::weeklyReviewAggregatesPlannedActualAndSeparatesFreeTime()
     const int polId = categoryIdByName(QStringLiteral("政治"));
     QVERIFY(mathId > 0 && polId > 0);
 
-    const int mathTask = insertPlannedTask(QStringLiteral("数学任务"), weekday, mathId, 4);
-    const int polTask = insertPlannedTask(QStringLiteral("政治任务"), weekday, polId, 6);
+    // v10 起「计划」的单位是分钟：数学 100 分钟、政治 150 分钟，合计 250。
+    const int mathTask = insertPlannedTask(QStringLiteral("数学任务"), weekday, mathId, 100);
+    const int polTask = insertPlannedTask(QStringLiteral("政治任务"), weekday, polId, 150);
     QVERIFY(mathTask > 0 && polTask > 0);
 
     // 有效番茄工作段（mode 默认 1）：数学 3 个、政治 2 个。
     for (int i = 0; i < 3; ++i) QVERIFY(insertFocusSessionRow(mathTask, weekday, 25 * 60));
     for (int i = 0; i < 2; ++i) QVERIFY(insertFocusSessionRow(polTask, weekday, 25 * 60));
-    // 自由计时段（mode 0）30 分钟：只进专注时长，不折算番茄、不进完成率。
+    // 自由计时段（mode 0）30 分钟：不折算番茄，但**计入专注时长**，
+    // 而完成率现在就是按时长算的，所以它会进完成率——这正是 v10 的语义变化。
     QVERIFY(insertFocusSessionRowWithMode(mathTask, weekday, 30 * 60, 0));
 
     const QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart);
     QCOMPARE(review.value(QStringLiteral("hasData")).toBool(), true);
-    QCOMPARE(review.value(QStringLiteral("plannedPomodoros")).toInt(), 10);
+    QCOMPARE(review.value(QStringLiteral("plannedMinutes")).toInt(), 250);
+    // 完整番茄仍是独立口径，不因计划改成分钟而变。
     QCOMPARE(review.value(QStringLiteral("completedPomodoros")).toInt(), 5);
-    QCOMPARE(qRound(review.value(QStringLiteral("completionRate")).toDouble()), 50);
     // 专注时长含两种模式的有效会话：5×25 + 30 = 155 分钟。
     QCOMPARE(review.value(QStringLiteral("focusedMinutes")).toInt(), 155);
+    // 完成率 = 实际专注分钟 / 计划分钟 = 155 / 250 = 62%。
+    QCOMPARE(qRound(review.value(QStringLiteral("completionRate")).toDouble()), 62);
 
     const QVariantList subjects = review.value(QStringLiteral("subjects")).toList();
     QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("actual")).toInt(), 3);
-    QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("planned")).toInt(), 4);
+    QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("planned")).toInt(), 100);
+    // 数学：3×25 + 30 自由 = 105 分钟。
+    QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("focusedMinutes")).toInt(), 105);
     QCOMPARE(subjectByName(subjects, QStringLiteral("政治")).value(QStringLiteral("actual")).toInt(), 2);
 }
 
@@ -5117,7 +5231,7 @@ void ServiceTests::weeklyReviewHandlesZeroPlanAndUnplannedSubjects()
     QVERIFY(insertFocusSessionRow(task, weekday, 25 * 60));
 
     const QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart);
-    QCOMPARE(review.value(QStringLiteral("plannedPomodoros")).toInt(), 0);
+    QCOMPARE(review.value(QStringLiteral("plannedMinutes")).toInt(), 0);
     QCOMPARE(review.value(QStringLiteral("completedPomodoros")).toInt(), 2);
     QCOMPARE(review.value(QStringLiteral("completionRate")).toDouble(), 0.0);
     QCOMPARE(review.value(QStringLiteral("hasData")).toBool(), true);
@@ -5125,7 +5239,7 @@ void ServiceTests::weeklyReviewHandlesZeroPlanAndUnplannedSubjects()
     const QVariantList subjects = review.value(QStringLiteral("subjects")).toList();
     QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("unplanned")).toBool(), true);
     // 无计划但有实际时，建议引导设置预估。
-    QVERIFY(review.value(QStringLiteral("suggestionText")).toString().contains(QStringLiteral("预计番茄数")));
+    QVERIFY(review.value(QStringLiteral("suggestionText")).toString().contains(QStringLiteral("预计用时")));
 }
 
 void ServiceTests::weeklyReviewComparesPreviousWeekAndBoundaries()
@@ -5163,13 +5277,14 @@ void ServiceTests::weeklyReviewLowestSubjectRuleAndSingleSuggestion()
     const int polId = categoryIdByName(QStringLiteral("政治"));
     const int engId = categoryIdByName(QStringLiteral("英语"));
 
-    // 数学 10/8=80%，政治 10/1=10%，英语 2/0=0%(计划<3 不参与规则一)。
-    // 总体 9/22≈41%；政治 10% 比总体低 31pp(≥20)且计划≥3 → 被规则一点名。
-    const int mathTask = insertPlannedTask(QStringLiteral("数学"), weekday, mathId, 10);
+    // 计划单位是分钟（v10）。数学 250 计划 / 200 实际 = 80%，
+    // 政治 250 计划 / 25 实际 = 10%，英语 50 计划 / 0 实际（计划 < 60 分钟，不参与规则一）。
+    // 总体 225/550≈41%；政治 10% 比总体低 31pp(≥20) 且计划≥60 → 被规则一点名。
+    const int mathTask = insertPlannedTask(QStringLiteral("数学"), weekday, mathId, 250);
     for (int i = 0; i < 8; ++i) QVERIFY(insertFocusSessionRow(mathTask, weekday, 25 * 60));
-    const int polTask = insertPlannedTask(QStringLiteral("政治"), weekday, polId, 10);
+    const int polTask = insertPlannedTask(QStringLiteral("政治"), weekday, polId, 250);
     QVERIFY(insertFocusSessionRow(polTask, weekday, 25 * 60));
-    insertPlannedTask(QStringLiteral("英语"), weekday, engId, 2); // 有计划无实际
+    insertPlannedTask(QStringLiteral("英语"), weekday, engId, 50); // 有计划无实际，且低于规则一门槛
 
     const QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart);
     // 规则一：偏差最大且计划≥3 的政治被点名。
@@ -5188,8 +5303,9 @@ void ServiceTests::weeklyReviewBalancedPlanGivesSteadyConclusion()
     const QDate weekday = weekStart.addDays(1);
     const int mathId = categoryIdByName(QStringLiteral("数学"));
 
-    // 计划 10、实际 9 → 90%，落在 85–115 区间：结论“基本一致”，不给下调/上调建议。
-    const int task = insertPlannedTask(QStringLiteral("稳定任务"), weekday, mathId, 10);
+    // 计划 250 分钟、实际 225 分钟 → 90%，落在 85–115 区间：
+    // 结论“基本一致”，不给下调/上调建议。
+    const int task = insertPlannedTask(QStringLiteral("稳定任务"), weekday, mathId, 250);
     for (int i = 0; i < 9; ++i) QVERIFY(insertFocusSessionRow(task, weekday, 25 * 60));
 
     const QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart);

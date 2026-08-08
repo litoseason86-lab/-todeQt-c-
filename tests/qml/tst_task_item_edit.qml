@@ -34,6 +34,8 @@ TestCase {
         item.taskCompleted = false
         item.titleEditing = false
         item.renameSubmitter = null
+        item.estimatedMinutes = 0
+        item.focusedMinutes = 0
         item.setPointerInside(false)
         renameSpy.clear()
         editSpy.clear()
@@ -125,5 +127,27 @@ TestCase {
         item.taskCompleted = true
         wait(260)
         compare(focusButton.visible, false)
+    }
+
+    function test_focusSummaryReadsAsDurationNotPomodoroCount() {
+        // 未设预计：只报已投入，不能凭空造出一个「/ 0」的分母。
+        item.focusedMinutes = 40
+        compare(item.focusSummary, "已专注 40 分钟")
+        compare(item.estimateOverflow, false)
+
+        // 设了预计：左右都按时长展示，超过一小时要进位成「N 小时 M 分」。
+        item.estimatedMinutes = 150
+        item.focusedMinutes = 75
+        compare(item.focusSummary, "1 小时 15 分 / 2 小时 30 分")
+        compare(item.estimateOverflow, false)
+
+        // 超出预计要能被看出来，这是任务行上唯一的超时信号。
+        item.focusedMinutes = 200
+        compare(item.estimateOverflow, true)
+
+        // 都是 0 时不占版面。
+        item.estimatedMinutes = 0
+        item.focusedMinutes = 0
+        compare(item.focusSummary, "")
     }
 }

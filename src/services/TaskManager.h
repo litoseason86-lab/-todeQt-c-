@@ -13,7 +13,7 @@ class TaskManager : public QObject
     // 输入框 maximumLength 与服务端校验共用同一上限；QML 侧读取该常量属性。
     Q_PROPERTY(int maxTitleLength READ maxTitleLength CONSTANT)
     // 预估番茄数上限；输入控件与服务端校验共用，QML 读取该常量属性。
-    Q_PROPERTY(int maxEstimatedPomodoros READ maxEstimatedPomodoros CONSTANT)
+    Q_PROPERTY(int maxEstimatedMinutes READ maxEstimatedMinutes CONSTANT)
 
 public:
     enum class TargetCompletionResult {
@@ -27,27 +27,33 @@ public:
     static constexpr int kMaxTitleLength = 100;
     // 预估番茄数取值范围 [0, 99]，0 表示未设置。越界一律夹紧而非拒绝，
     // 避免界面因一个预估值填错就无法保存任务本体。
-    static constexpr int kMaxEstimatedPomodoros = 99;
+    // 预计用时上限 24 小时，与「今日专注目标」同一上界；0 表示未设置。
+    static constexpr int kMaxEstimatedMinutes = 24 * 60;
 
     static TaskManager* instance();
 
     int maxTitleLength() const { return kMaxTitleLength; }
-    int maxEstimatedPomodoros() const { return kMaxEstimatedPomodoros; }
+    int maxEstimatedMinutes() const { return kMaxEstimatedMinutes; }
 
     // Q_INVOKABLE 表示 QML 可以直接调用这些方法。
     // 新增任务支持旧版文本科目，也支持新版 category_id 科目编号。
     Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, const QString& category = QString());
     Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId);
     // 带预估番茄数的新增重载；QML 按参数个数选择，不依赖默认参数。
-    Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId, int estimatedPomodoros);
+    Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId, int estimatedMinutes);
     // 完成、删除和查询任务后都会通过 tasksChanged 通知界面刷新。
     Q_INVOKABLE bool completeTask(int taskId);
     Q_INVOKABLE bool setTaskCompleted(int taskId, bool completed);
     // 只在一颗有效番茄刚入账后调用；用单条 SQL 按实际数恰好等于计划数完成任务，避免检查与更新之间漂移。
-    TargetCompletionResult completeTaskIfPomodoroTargetReached(int taskId);
+    // 本次会话结束后，若累计专注时长刚跨过任务的预计用时就自动完成它。
+    //
+    // 必须传入本次会话的时长：判据是「这一次把总时长推过了门槛」，而不是「总时长已超」。
+    // 后者会让用户重新打开一个已超额的任务后，下一次专注立刻又被强行完成——
+    // 这正是改成分钟之前那条「精确相等」写法在守的性质，换成分钟后精确相等不再可行。
+    TargetCompletionResult completeTaskIfEstimateReached(int taskId, int justCompletedSeconds);
     // 四参重载只改标题/科目/日期，保留原预估值（重命名走这里）；五参重载额外更新预估番茄数。
     Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue);
-    Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue, int estimatedPomodoros);
+    Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue, int estimatedMinutes);
     Q_INVOKABLE bool deleteTask(int taskId);
     // 删除撤销 UI 用来区分“例行生成的当日实例”与普通任务：删除实例只影响今天，
     // 例行规则本身在 routines 表中不受影响。据此给出更准确的撤销提示。

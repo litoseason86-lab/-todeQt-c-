@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
+import "../Duration.js" as Duration
 import ".."
 
 Rectangle {
@@ -42,19 +43,19 @@ Rectangle {
     property string taskTitle: ""
     property var taskCategory: ""
     property bool taskCompleted: false
-    // 预计与实际番茄数：实际值由服务层从专注记录聚合，刷新/重启后一致。
-    property int estimatedPomodoros: 0
-    property int actualPomodoros: 0
-    // 未设置预估时显示“已专注 N 个番茄”，设置后显示“N / M 个番茄”；都为 0 时不显示。
-    readonly property string pomodoroSummary: {
-        if (root.estimatedPomodoros > 0)
-            return root.actualPomodoros + " / " + root.estimatedPomodoros + " 个番茄";
-        if (root.actualPomodoros > 0)
-            return "已专注 " + root.actualPomodoros + " 个番茄";
+    // 预计与实际用时（分钟）：实际值由服务层从专注记录聚合，刷新/重启后一致。
+    property int estimatedMinutes: 0
+    property int focusedMinutes: 0
+    // 未设置预估时显示“已专注 N”，设置后显示“已用 / 预计”；都为 0 时不显示。
+    readonly property string focusSummary: {
+        if (root.estimatedMinutes > 0)
+            return Duration.format(root.focusedMinutes) + " / " + Duration.format(root.estimatedMinutes);
+        if (root.focusedMinutes > 0)
+            return "已专注 " + Duration.format(root.focusedMinutes);
         return "";
     }
-    readonly property bool pomodoroOverflow: root.estimatedPomodoros > 0
-                                             && root.actualPomodoros > root.estimatedPomodoros
+    readonly property bool estimateOverflow: root.estimatedMinutes > 0
+                                             && root.focusedMinutes > root.estimatedMinutes
     property bool visualTaskCompleted: false
     property bool titleEditing: false
     // 父视图负责判断任务是否允许开始专注；TaskItem 只消费结果，避免把日期规则塞进通用任务项。
@@ -440,18 +441,18 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Theme.space4
-                visible: !root.titleEditing && root.pomodoroSummary.length > 0
+                visible: !root.titleEditing && root.focusSummary.length > 0
 
                 Text {
                     objectName: "taskPomodoroSummary"
-                    text: root.pomodoroSummary
+                    text: root.focusSummary
                     textFormat: Text.PlainText
                     font.pixelSize: root.compact ? Theme.fontXs : Theme.fontSm
-                    color: root.pomodoroOverflow ? Theme.accent : Theme.inkMuted
+                    color: root.estimateOverflow ? Theme.accent : Theme.inkMuted
                 }
 
                 Text {
-                    visible: root.pomodoroOverflow
+                    visible: root.estimateOverflow
                     text: "已超出预估"
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontXs
