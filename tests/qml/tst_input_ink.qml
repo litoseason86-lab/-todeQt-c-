@@ -87,6 +87,20 @@ TestCase {
                 row.name + " 的选区底色")
         compare(String(item.palette.highlightedText), String(Theme.inputSelectedInk),
                 row.name + " 的选中字色")
+        compare(String(item.palette.window), String(Theme.inputPopupSurface),
+                row.name + " 的下拉面板底色")
+        compare(String(item.palette.mid), String(Theme.inputPopupBorder),
+                row.name + " 的下拉面板边框")
+        compare(String(item.palette.light), String(Theme.inputPopupHighlight),
+                row.name + " 的下拉高亮行底色")
+        compare(String(item.palette.midlight), String(Theme.inputPopupHighlight),
+                row.name + " 的下拉按下行底色")
+        compare(String(item.palette.base), String(Theme.inputControlSurface),
+                row.name + " 的默认输入框底色")
+        compare(String(item.palette.button), String(Theme.inputControlSurface),
+                row.name + " 的闭合下拉框底色")
+        compare(String(item.palette.buttonText), String(Theme.inputControlInk),
+                row.name + " 的闭合下拉框文字色")
     }
 
     function test_palette_follows_the_theme_data() {
@@ -121,6 +135,66 @@ TestCase {
         verify(placeholderContrast >= 3.0,
                row.tag + "占位文字对比度只有 " + placeholderContrast.toFixed(2) + ":1")
 
+        dialog.close()
+    }
+
+    function test_dropdown_panel_is_readable_data() {
+        return [
+            { tag: "夜间", themeId: "starry" },
+            { tag: "日间", themeId: "warm" }
+        ]
+    }
+
+    function test_dropdown_panel_is_readable(row) {
+        Theme.activeThemeId = row.themeId
+        var dialog = createTemporaryObject(addComponent, testCase,
+                                           { categoryManagerRef: categoryManagerMock })
+        verify(dialog)
+        dialog.open()
+        wait(50)
+
+        var combo = findChild(dialog, "categoryComboBox")
+        verify(combo)
+        combo.popup.open()
+        wait(80)
+
+        // 这就是上报的那一处：面板底走 palette.window，不接管就是白的，
+        // 而选项文字是跟着主题的米白 —— 夜间主题下白底米白字，看不见。
+        var panel = combo.popup.background.color
+        var itemContrast = contrastRatio(Theme.ink, panel)
+        verify(itemContrast >= 4.5,
+               row.tag + "下拉选项对比度只有 " + itemContrast.toFixed(2) + ":1")
+
+        // 高亮行换了底色，同样要能读。highlightedText 同时服务选区和高亮行，
+        // 所以这条一旦为了「让选区更醒目」被单独调开，另一处必然发暗。
+        var highlightContrast = contrastRatio(Theme.inputSelectedInk, Theme.inputPopupHighlight)
+        verify(highlightContrast >= 4.5,
+               row.tag + "下拉高亮行对比度只有 " + highlightContrast.toFixed(2) + ":1")
+        var selectionContrast = contrastRatio(Theme.inputSelectedInk, Theme.inputSelection)
+        verify(selectionContrast >= 4.5,
+               row.tag + "文本选区对比度只有 " + selectionContrast.toFixed(2) + ":1")
+
+        // 高亮行必须能从面板底里认出来，否则「当前选中哪一行」看不出。
+        var highlightSeparation = contrastRatio(Theme.inputPopupHighlight, panel)
+        verify(highlightSeparation >= 1.2,
+               row.tag + "高亮行与面板底几乎相同（" + highlightSeparation.toFixed(2) + "）")
+
+        // 闭合状态下拉框显示的文字走 palette.buttonText，默认深灰，夜间同样发暗。
+        var closedInk = contrastRatio(Theme.inputControlInk, Theme.inputControlSurface)
+        verify(closedInk >= 4.5,
+               row.tag + "闭合下拉框文字对比度只有 " + closedInk.toFixed(2) + ":1")
+        // 展开时 Basic 把下拉框自身的底换成 palette.mid（同一个值还兼任面板边框），
+        // 也就是说边框色调深了会顺带让展开态的文字发暗，这里一并守住。
+        var expandedInk = contrastRatio(Theme.inputControlInk, Theme.inputPopupBorder)
+        verify(expandedInk >= 4.5,
+               row.tag + "展开态下拉框文字对比度只有 " + expandedInk.toFixed(2) + ":1")
+
+        // 面板必须和它压着的对话框面板分得开，否则下拉展开时看不出边界。
+        var panelSeparation = contrastRatio(panel, Theme.glassDialog)
+        verify(panelSeparation >= 1.05,
+               row.tag + "下拉面板与对话框底色几乎相同（" + panelSeparation.toFixed(3) + "）")
+
+        combo.popup.close()
         dialog.close()
     }
 

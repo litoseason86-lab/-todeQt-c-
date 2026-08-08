@@ -34,15 +34,34 @@ QtObject {
     // 本主题，也不跟随 macOS 外观**。所以夜间主题下不显式接管的输入框，打进去的字
     // 会是深灰压在深棕底上，几乎看不见（2026-08-09 用户在「添加新任务」上报）。
     //
-    // 值只在这里定义一次；使用方在自己的根节点上写四行 palette 赋值，
+    // 值只在这里定义一次；使用方在自己的根节点上照抄同一组 palette 赋值，
     // palette 会沿子项树传播，框内所有输入控件一次覆盖。应用入口 main.qml 已经
     // 兜了一层，各弹窗/页面再写一遍是为了**单独实例化时**（离屏走查、QML 测试）
     // 也是真的——漏写的后果只是走查图不准，线上仍由入口那层保底。
+    // tst_input_ink.qml 会逐个根节点、逐个角色核对，抄漏了会转红。
     readonly property color inputInk: inkStrong
     readonly property color inputPlaceholderInk: inkMuted
-    // 选区底色两种明暗下同一焦糖；选中文字固定用深墨，保证压在焦糖上仍然清楚。
-    readonly property color inputSelection: accent
-    readonly property color inputSelectedInk: "#3d3327"
+    // 选区底与下拉高亮行同一个值（原因见下方注释）；选中文字用 inkStrong，
+    // 两种明暗下压在这层暖罩上都在 8:1 以上。
+    readonly property color inputSelection: accentFillStrong
+    readonly property color inputSelectedInk: inkStrong
+
+    // 下拉列表同理，而且牵扯的角色更多（2026-08-09 上报的第二处，截图是白底米白字）：
+    //   palette.window     弹出面板底 —— 默认白色
+    //   palette.mid        弹出面板边框
+    //   palette.light      高亮行底（只在高亮/按下时才画，决定「选中哪一行」看不看得出来）
+    //   palette.buttonText 闭合状态下拉框显示的文字 —— 默认深灰，夜间同样发暗
+    //   palette.button     闭合状态下拉框的底（未自定义 background 的那几个下拉框用它）
+    //   palette.base       未自定义 background 的输入框底
+    //
+    // highlightedText 同时服务「文本选区」和「下拉高亮行」两处，所以这两处的底色
+    // 必须取同一族，否则一处能读另一处必然发暗——这就是 inputSelection 和
+    // inputPopupHighlight 取同一个值的原因，别为了「让选区更醒目」单独调其中一个。
+    readonly property color inputPopupSurface: surfaceRaised
+    readonly property color inputPopupBorder: border
+    readonly property color inputPopupHighlight: accentFillStrong
+    readonly property color inputControlSurface: surfaceRaised
+    readonly property color inputControlInk: ink
 
     // —— 强调 Accent（焦糖棕，两种明暗下同一色相）——
     readonly property color accent: "#d4a574"         // 基础态

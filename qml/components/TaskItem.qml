@@ -15,6 +15,15 @@ Rectangle {
     palette.placeholderText: Theme.inputPlaceholderInk
     palette.highlight: Theme.inputSelection
     palette.highlightedText: Theme.inputSelectedInk
+    // 下拉面板与选项行；不接管的话夜间主题下是白底配米白字。
+    palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
+    // 未自定义 background 的下拉框/输入框，闭合状态的底与文字也得接管。
+    palette.base: Theme.inputControlSurface
+    palette.button: Theme.inputControlSurface
+    palette.buttonText: Theme.inputControlInk
 
     Layout.fillWidth: true
     // compact：仪表盘「已完成」等只读列表用更矮的行高，避免每张卡都占 76 的执行态高度。
