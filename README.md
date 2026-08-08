@@ -53,8 +53,9 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
 `POMODORO_TODO_DEPLOY_LOCAL` 是 CMake cache 变量，会持久化在构建目录里：在同一个目录先跑验证构建再跑部署构建，
 `OFF` 仍然生效，`deploy-local-app` 目标根本不会被创建，部署会静默失效。
 
-测试规模（2026-08-08 实测，Qt 6.9.0）：**18 个 ctest 目标全绿，约 72 秒**——
-16 个 C++ 目标共 324 个测试函数，`PomodoroTodoQmlTests` 覆盖 `tests/qml/` 的 34 个文件、467 条断言函数。
+测试规模（2026-08-08 实测，Qt 6.9.0）：**18 个 ctest 目标全绿，约 68 秒**——
+16 个 C++ 目标共 329 个测试函数，`PomodoroTodoQmlTests` 覆盖 `tests/qml/` 的 36 个文件、476 条断言函数；
+另有 `QmlLintGate` 一条 QML 静态检查门禁（unqualified 与 layout-positioning 零容忍）。
 单个目标的跑法与说明见 `docs/运行命令.md`。
 
 ### 构建并部署
@@ -85,7 +86,10 @@ cmake --build /tmp/pt-build -j8
   qml/*.qml qml/views/*.qml qml/components/*.qml qml/components/settings/*.qml
 ```
 
-注意它目前**不是门禁**：2026-08-07 实测输出 259 条警告（其中 250 条 `[unqualified]`）但退出码仍为 0，清理计划见 `plans/029`。
+**它现在是门禁**：ctest 条目 `QmlLintGate` 对 `unqualified` 与 `Quick.layout-positioning` 零容忍
+（两者均已清零），只显式豁免 `missing-property` 与 `use-proper-function` 两类——
+前者是 qmllint 推导不到运行时类型的工具限制，后者是项目既定的回调注入模式。
+上面那条手工命令用于查看全部告警；门禁判据以 CMake 里的 `QmlLintGate` 为准。
 
 ## 项目结构
 
@@ -98,8 +102,8 @@ resources/             Qt 资源文件（字体、壁纸、音效）
 shaders/               预编译 Shader 资源
 cmake/                 构建脚本（DeployLocalApp.cmake：部署到 /Applications 的原子切换逻辑）
 tests/                 Qt Test 自动化测试（C++ 用例 + tests/qml/ 的 Qt Quick Test）
-docs/                  运行命令与专题方案；superpowers/ 为历史归档（只保留设计规格）
-plans/                 编号实施计划（plans/README.md 是执行状态索引）
+docs/                  运行命令与专题方案；superpowers/ 为历史归档（只保留设计规格 specs/）
+plans/                 只有 README.md：执行状态索引与历次审计记录（编号计划正文已执行完毕并删除）
 ```
 
 业务逻辑（标准 C++/Qt）与 macOS 原生代码（`.mm`）保持分离：`src/services` 只依赖平台无关抽象，原生实现放在 `src/platform/macos`。
