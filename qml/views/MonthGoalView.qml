@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
@@ -19,6 +21,11 @@ Item {
     // logicalToday 必须是命令式快照；绑定会在 changed 槽保存旧值前提前重算。
     property date logicalToday
     property var logicalNowProvider: null
+    // 上下文属性只在 main.qml 解包，视图内部一律消费显式引用。
+    property var focusTimerRef: null
+    property var focusHistoryServiceRef: null
+    property var logicalDayServiceRef: null
+    property var settingsRef: null
     property var categoryManagerRef: null
     property string loadError: ""
     property var monthSessions: []
@@ -41,7 +48,7 @@ Item {
     }
 
     Connections {
-        target: typeof focusTimer === "undefined" ? null : focusTimer
+        target: root.focusTimerRef
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
@@ -51,9 +58,7 @@ Item {
     }
 
     Connections {
-        // qmllint disable unqualified
-        target: typeof logicalDayService !== "undefined" ? logicalDayService : null
-        // qmllint enable unqualified
+        target: root.logicalDayServiceRef
         ignoreUnknownSignals: true
 
         function onChanged() {
@@ -79,15 +84,12 @@ Item {
         // qmllint disable use-proper-function
         var now = root.logicalNowProvider ? root.logicalNowProvider() : new Date()
         // qmllint enable use-proper-function
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
+        var hour = root.settingsRef ? root.settingsRef.dayStartHour : 4
         return LogicalDay.todayDate(hour, now)
     }
 
     function hasFocusHistoryService() {
-        return typeof focusHistoryService !== "undefined" && focusHistoryService !== null;
+        return root.focusHistoryServiceRef !== null;
     }
 
     function refresh() {
@@ -103,9 +105,9 @@ Item {
             }
 
             root.refreshInvalidSessionCount();
-            root.monthSessions = focusHistoryService.getMonthSessions(root.currentYear, root.currentMonth);
-            if (typeof focusHistoryService.lastError === "function"
-                    && focusHistoryService.lastError().length > 0) {
+            root.monthSessions = root.focusHistoryServiceRef.getMonthSessions(root.currentYear, root.currentMonth);
+            if (typeof root.focusHistoryServiceRef.lastError === "function"
+                    && root.focusHistoryServiceRef.lastError().length > 0) {
                 // 服务层返回空列表不一定代表真的没有记录；数据库失败也会空，需要单独提示用户。
                 root.loadError = "专注历史加载失败";
             }
@@ -121,21 +123,21 @@ Item {
     }
 
     function refreshInvalidSessionCount() {
-        if (!root.hasFocusHistoryService() || typeof focusHistoryService.invalidSessionCount !== "function") {
+        if (!root.hasFocusHistoryService() || typeof root.focusHistoryServiceRef.invalidSessionCount !== "function") {
             root.invalidSessionCount = 0;
             return;
         }
 
-        root.invalidSessionCount = Math.max(0, Number(focusHistoryService.invalidSessionCount()) || 0);
+        root.invalidSessionCount = Math.max(0, Number(root.focusHistoryServiceRef.invalidSessionCount()) || 0);
     }
 
     function cleanupInvalidSessions() {
-        if (!root.hasFocusHistoryService() || typeof focusHistoryService.cleanupInvalidSessions !== "function") {
+        if (!root.hasFocusHistoryService() || typeof root.focusHistoryServiceRef.cleanupInvalidSessions !== "function") {
             return;
         }
 
         // 清理动作只删除 3 分钟以下的已结束记录；服务层会保护正在进行的会话。
-        focusHistoryService.cleanupInvalidSessions();
+        root.focusHistoryServiceRef.cleanupInvalidSessions();
         root.refresh();
     }
 
@@ -202,7 +204,7 @@ Item {
 
     function formatDuration(seconds) {
         if (root.hasFocusHistoryService()) {
-            return focusHistoryService.formatDuration(seconds);
+            return root.focusHistoryServiceRef.formatDuration(seconds);
         }
 
         if (seconds < 60) {
@@ -514,8 +516,12 @@ Item {
                                 model: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 
                                 Text {
+                                    id: weekdayHeader
+
+                                    required property var modelData
+
                                     Layout.fillWidth: true
-                                    text: modelData
+                                    text: weekdayHeader.modelData
                                     font.pixelSize: Theme.fontSm
                                     font.weight: Font.Medium
                                     color: Theme.inkSoft
@@ -535,12 +541,16 @@ Item {
                                 model: 42
 
                                 Rectangle {
+                                    id: calendarCell
+
+                                    required property int index
+
                                     // 固定 6 周网格，月份切换时日历高度不会跳动。
                                     Layout.fillWidth: true
                                     Layout.fillHeight: true
                                     Layout.minimumHeight: 58
                                     property int dayNumber: {
-                                        var day = index - root.firstOffset() + 1;
+                                        var day = calendarCell.index - root.firstOffset() + 1;
                                         return day >= 1 && day <= root.daysInMonth() ? day : 0;
                                     }
                                     property int dayDuration: dayNumber > 0 ? root.dayTotalSeconds(dayNumber) : 0
@@ -551,7 +561,7 @@ Item {
                                     }
                                     // qmllint enable unqualified
 
-                                    objectName: dayNumber > 0 ? "monthDayCell-" + dayNumber : "monthDayCell-empty-" + index
+                                    objectName: dayNumber > 0 ? "monthDayCell-" + dayNumber : "monthDayCell-empty-" + calendarCell.index
                                     radius: Theme.radiusMd
                                     color: {
                                         if (dayNumber <= 0)
@@ -595,17 +605,17 @@ Item {
 
                                         Text {
                                             Layout.fillWidth: true
-                                            text: dayNumber > 0 ? String(dayNumber) : ""
+                                            text: calendarCell.dayNumber > 0 ? String(calendarCell.dayNumber) : ""
                                             font.pixelSize: Theme.fontMd
-                                            font.weight: dayNumber === root.selectedDay ? Font.Bold : Font.Normal
+                                            font.weight: calendarCell.dayNumber === root.selectedDay ? Font.Bold : Font.Normal
                                             color: Theme.ink
                                         }
 
                                         Text {
                                             Layout.fillWidth: true
-                                            objectName: dayNumber > 0 ? "monthDayDuration-" + dayNumber : "monthDayDuration-empty-" + index
-                                            visible: dayNumber > 0 && dayDuration > 0
-                                            text: root.formatDuration(dayDuration)
+                                            objectName: calendarCell.dayNumber > 0 ? "monthDayDuration-" + calendarCell.dayNumber : "monthDayDuration-empty-" + calendarCell.index
+                                            visible: calendarCell.dayNumber > 0 && calendarCell.dayDuration > 0
+                                            text: root.formatDuration(calendarCell.dayDuration)
                                             font.pixelSize: Theme.fontXs
                                             font.weight: Font.Medium
                                             // accent 作前景文字不达 AA，小字号必须用可读版 accentInk。

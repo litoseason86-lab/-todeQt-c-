@@ -36,6 +36,7 @@ ApplicationWindow {
         routineManagerRef: typeof routineManager === "undefined" ? null : routineManager
         exportServiceRef: typeof exportService === "undefined" ? null : exportService
         statisticsServiceRef: typeof statisticsService === "undefined" ? null : statisticsService
+        focusHistoryServiceRef: typeof focusHistoryService === "undefined" ? null : focusHistoryService
         countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
         appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
         focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer

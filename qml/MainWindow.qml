@@ -29,6 +29,7 @@ Item {
     property var routineManagerRef: null
     property var exportServiceRef: null
     property var statisticsServiceRef: null
+    property var focusHistoryServiceRef: null
     property var countdownServiceRef: null
     property var appSettingsRef: null
     property var focusTimerRef: null
@@ -776,6 +777,10 @@ Item {
 
                 MonthGoalView {
                     pageActive: root.currentView === "month"
+                    focusTimerRef: root.focusTimerRef
+                    focusHistoryServiceRef: root.focusHistoryServiceRef
+                    logicalDayServiceRef: root.logicalDayServiceRef
+                    settingsRef: root.appSettingsRef
                     categoryManagerRef: root.categoryManagerRef
 
                     onStartFocus: function (taskId, taskTitle) {

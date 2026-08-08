@@ -175,6 +175,7 @@ TestCase {
     }
 
     MonthGoalView {
+        focusTimerRef: focusTimer
         id: monthGoalView
 
         width: 920

@@ -24,6 +24,8 @@ TestCase {
     }
 
     MonthGoalView {
+        logicalDayServiceRef: logicalDayService
+        settingsRef: appSettings
         id: view
 
         width: 1000

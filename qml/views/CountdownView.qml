@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -308,15 +310,24 @@ Item {
                 delegate: Loader {
                     id: secondaryGoalLoader
 
+                    // pragma ComponentBehavior: Bound 之后 delegate 不再继承外层作用域，
+                    // 模型角色必须显式声明。这里用的是 QAbstractListModel 的具名角色，
+                    // 所以逐个声明而不是 modelData。
+                    required property int index
+                    required property int goalId
+                    required property string name
+                    required property date targetDate
+                    required property int daysRemaining
+
                     width: ListView.view.width
                     height: active ? 74 : 0
-                    active: index > 0
+                    active: secondaryGoalLoader.index > 0
 
-                    property int sourceIndex: index
-                    property int sourceGoalId: model.goalId
-                    property string sourceName: model.name
-                    property date sourceTargetDate: model.targetDate
-                    property int sourceDaysRemaining: model.daysRemaining
+                    property int sourceIndex: secondaryGoalLoader.index
+                    property int sourceGoalId: secondaryGoalLoader.goalId
+                    property string sourceName: secondaryGoalLoader.name
+                    property date sourceTargetDate: secondaryGoalLoader.targetDate
+                    property int sourceDaysRemaining: secondaryGoalLoader.daysRemaining
 
                     sourceComponent: CountdownItem {
                         objectName: "countdownSecondaryItem"
