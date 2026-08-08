@@ -690,6 +690,7 @@ private slots:
     void getWeekStatsUsesCurrentNaturalWeek();
     void getWeekStatsUsesSpecifiedMondayAndRejectsInvalidStart();
     void getWeekComparisonSumsNaturalWeeksAndRejectsInvalidStart();
+    void weekComparisonRangeQueryEqualsPerDaySum();
     void getWeekTasksReturnsInclusiveRangeAndRequiredOrder();
     void getMonthTasksReturnsInclusiveMonthRange();
     void getMonthTasksRejectsInvalidMonth();
@@ -2057,6 +2058,37 @@ void ServiceTests::getWeekStatsUsesSpecifiedMondayAndRejectsInvalidStart()
 
     QVERIFY(StatisticsService::instance()->getWeekStats(QDate()).isEmpty());
     QVERIFY(StatisticsService::instance()->getWeekStats(weekStart.addDays(1)).isEmpty());
+}
+
+void ServiceTests::weekComparisonRangeQueryEqualsPerDaySum()
+{
+    // getWeekComparison 原本按天循环查 14 次，现在改成两次区间查询。这条改动的
+    // 前提是「7 天各自求和」与「同一区间求和」完全等价——每条会话只属于一个逻辑日，
+    // 区间谓词两端闭合，行集和过滤条件相同。这里把这个前提本身钉死，
+    // 而不只是校验某组固定数字，将来任何一边改了口径都会被抓到。
+    const QDate weekStart(2026, 3, 2);
+    QCOMPARE(weekStart.dayOfWeek(), static_cast<int>(Qt::Monday));
+
+    // 每天放不同时长，并混入一条低于有效门槛的会话（它两边都不该计入）。
+    for (int offset = 0; offset < 7; ++offset) {
+        QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(offset),
+                                      kTestMinimumValidDurationSeconds * (offset + 1)));
+    }
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(2),
+                                  kTestMinimumValidDurationSeconds - 1));
+
+    int perDaySum = 0;
+    for (int offset = 0; offset < 7; ++offset) {
+        const QVariantMap dayStats =
+            StatisticsService::instance()->getDayStats(weekStart.addDays(offset));
+        perDaySum += dayStats.value(QStringLiteral("totalDuration")).toInt();
+    }
+
+    const QVariantMap comparison = StatisticsService::instance()->getWeekComparison(weekStart);
+    const QVariantMap duration = comparison.value(QStringLiteral("duration")).toMap();
+    QCOMPARE(duration.value(QStringLiteral("currentValue")).toInt(), perDaySum);
+    // 1+2+...+7 = 28 倍门槛；不足门槛的那条被两边一致地排除。
+    QCOMPARE(perDaySum, kTestMinimumValidDurationSeconds * 28);
 }
 
 void ServiceTests::getWeekComparisonSumsNaturalWeeksAndRejectsInvalidStart()
