@@ -110,6 +110,33 @@
 > ——等级体系目前不对用户可见。要么删，要么在别处重新接入。
 >
 > **本轮新增功能（444e335 之后，尚未在任何计划里立项，属直接开发）**：
+> - **快捷键（2026-08-07，分支 `feature/keyboard-shortcuts`）**：新增平台无关的
+>   `src/services/ShortcutRegistry.{h,cpp}`（18 个动作的默认键位、用户覆盖、跨作用域冲突判定、
+>   全局热键装配）+ `GlobalHotkeyBackend.h`（纯虚后端接口）+
+>   `src/platform/macos/MacGlobalHotkeyBackend.{h,mm}`（Carbon `RegisterEventHotKey`，
+>   **不需要辅助功能授权**，这是不用 NSEvent 全局监听的原因）。
+>   `AppSettings` 加 `shortcuts/<actionId>` 覆盖值，三态语义：键不存在=默认 / 非空=自定义 / 空串=停用。
+>   QML 侧 `components/AppShortcuts.qml` 用 `Instantiator` 按清单生成 `Shortcut`，
+>   与全局热键信号汇成同一条 `actionTriggered(actionId)` 出口，`MainWindow.triggerShortcutAction` 分发；
+>   设置中心新增「快捷键」分页（`SettingsShortcutsPage` + `ShortcutRecorder`，第 4 个分段，
+>   `sectionTitles` 从 5 项变 6 项）。新增 ctest 目标 `ShortcutRegistryTests`(18)、`MacGlobalHotkeyTests`(6)
+>   与 `tests/qml/tst_shortcuts.qml`(12)；`tst_mainwindow_ui_optimization.qml` 加两条
+>   「弹窗接管焦点时快捷键让路」「输入框获焦时单键让路」用例。
+>   **全局热键出厂不占任何系统按键**（`defaultSequence` 为空，用户在设置里自行指定）：
+>   初版预设 ⌃⌥P/E/T 实测与用户已装的其他应用撞车，而撞车表现是「别的应用那个键失灵」，
+>   使用者根本联想不到是本应用干的。应用内快捷键没有这个问题，只在本应用前台生效。
+>   **应用内快捷键允许绑单个按键**（空格、数字键等；全局热键不行，它没有让路机制）。
+>   配套护栏：无修饰键的快捷键在焦点落于文本输入框时自动停用，带 ⌘/⌃/⌥ 的不受影响
+>   （判据是对 `activeFocusItem` 做鸭子类型判断 `selectedText` + `inputMethodComposing`；
+>   任务行内联重命名和每日目标编辑器的输入框都不在弹窗里，overlay 守卫盖不住）。
+>   裸 Tab / Backtab / Esc 仍被拒绝：它们是焦点导航与关闭弹窗的唯一手段，绑了就没法用键盘改回来。
+>   **应用内快捷键在弹窗接管焦点时整体让路**：Qt 的 Shortcut 不受弹窗遮挡影响，
+>   实测在新建任务对话框里打字时按 ⌘1 会把弹窗背后的页面切走。判据用「焦点是否落进
+>   `Overlay.overlay`」而不是「overlay 上有没有子项」——目标热力图的悬停 ToolTip 同样挂在
+>   overlay 上却不取焦，按子项判断会让鼠标划过热力图时快捷键整体失灵（两种判据都实测验证过）。
+>   **两条值得记住的坑**：Qt 在 macOS 上交换 Ctrl 与 Meta（PortableText 的 `Ctrl` = ⌘，`Meta` = ⌃），
+>   全局热键写成 `Meta+Alt+X` 才是 ⌃⌥X；`AbstractButton` 已有 FINAL 的 `display` 属性，
+>   自定义控件不能用这个名字。
 > - `2319c83` 仪表盘任务面板加第三筛选分段「学习统计」；`StatisticsService::getDayTaskStats(date)`
 >   / `getTodayTaskStats()` 按 `task_id` 聚合逻辑日的专注时长与有效番茄，口径全走 `FocusSessionRules`，
 >   `task_id` 为空的自由计时汇成「未关联专注」一行；新增 `TodayLearningList.qml`。

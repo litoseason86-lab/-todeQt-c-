@@ -14,6 +14,13 @@
 - **设置中心**：通用 / 专注 / 外观 / 数据 / 关于五页，含每日专注目标、逻辑日起始时间（`dayStartHour`，凌晨记账算前一天）。
 - **计时健壮性**：跨系统休眠、锁屏、系统时间变化仍能正确计时（基于 `mach_continuous_time`）。
 - **macOS 原生集成**：菜单栏倒计时（`NSStatusItem`）+ 阶段完成系统通知（`UNUserNotificationCenter`）；关闭主窗口可最小化到菜单栏。
+- **快捷键**：18 个动作全部可自定义（设置中心「快捷键」分页录制改键、冲突检测、单行/整体恢复默认、可停用）。
+  应用内 15 个开箱即用：⌘1–⌘8 切页、⌘N 新建任务、⌘↩ 开始/暂停专注、⌘⇧↩ 结束专注、
+  ⌘⇧F 沉浸模式、⌘\ 侧栏、⌘, 设置、⌘/ 快捷键速查。应用内键位**可以只用一个键**（空格、数字键等）：
+  焦点在输入框时无修饰键的快捷键自动让路，带 ⌘/⌃/⌥ 的照常可用；弹窗接管焦点时整体让路，不会在弹窗背后误切页。
+  另有 3 个全局热键（开始/暂停、结束专注、召回/隐藏窗口）走 Carbon `RegisterEventHotKey`，
+  应用在后台也能触发且**不需要辅助功能授权**——但**出厂不占用任何系统按键**，
+  需要时在设置里自行指定（预设键位难免和已装的其他应用撞车，而撞车表现是别的应用那个键失灵，很难排查）。
 - **数据安全**：单文件备份与恢复（`.tomatobackup`，含自动备份与失败回滚）、CSV 导出；删除/完成任务提供撤销。
 
 ## 技术栈
@@ -46,8 +53,8 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
 `POMODORO_TODO_DEPLOY_LOCAL` 是 CMake cache 变量，会持久化在构建目录里：在同一个目录先跑验证构建再跑部署构建，
 `OFF` 仍然生效，`deploy-local-app` 目标根本不会被创建，部署会静默失效。
 
-测试规模（2026-08-07 实测，Qt 6.9.0）：**15 个 ctest 目标全绿，约 74 秒**——
-14 个 C++ 目标共 298 个测试函数，`PomodoroTodoQmlTests` 覆盖 `tests/qml/` 的 32 个文件、448 条断言函数。
+测试规模（2026-08-07 实测，Qt 6.9.0）：**17 个 ctest 目标全绿，约 67 秒**——
+16 个 C++ 目标共 320 个测试函数，`PomodoroTodoQmlTests` 覆盖 `tests/qml/` 的 33 个文件、462 条断言函数。
 单个目标的跑法与说明见 `docs/运行命令.md`。
 
 ### 构建并部署
@@ -75,14 +82,14 @@ cmake --build /tmp/pt-build -j8
   qml/*.qml qml/views/*.qml qml/components/*.qml qml/components/settings/*.qml
 ```
 
-注意它目前**不是门禁**：2026-08-07 实测输出 258 条警告（其中 250 条 `[unqualified]`）但退出码仍为 0，清理计划见 `plans/029`。
+注意它目前**不是门禁**：2026-08-07 实测输出 259 条警告（其中 250 条 `[unqualified]`）但退出码仍为 0，清理计划见 `plans/029`。
 
 ## 项目结构
 
 ```text
 src/models/            数据模型
 src/services/          C++ 服务层（跨平台业务逻辑）
-src/platform/macos/    macOS 原生层（菜单栏 NSStatusItem、通知 UNUserNotificationCenter，Objective-C++）
+src/platform/macos/    macOS 原生层（菜单栏 NSStatusItem、通知 UNUserNotificationCenter、全局热键 Carbon，Objective-C++）
 qml/                   QML 界面（views/ 页面、components/ 组件、components/settings/ 设置面板）
 resources/             Qt 资源文件（字体、壁纸、音效）
 shaders/               预编译 Shader 资源

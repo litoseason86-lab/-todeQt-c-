@@ -92,10 +92,15 @@ set(APP_SOURCES
     src/services/BackupOperations.cpp
     src/services/BackupService.h
     src/services/BackupService.cpp
+    src/services/GlobalHotkeyBackend.h
+    src/services/ShortcutRegistry.h
+    src/services/ShortcutRegistry.cpp
     src/platform/macos/MacStatusBarController.h
     src/platform/macos/MacStatusBarController.mm
     src/platform/macos/MacNotificationBackend.h
     src/platform/macos/MacNotificationBackend.mm
+    src/platform/macos/MacGlobalHotkeyBackend.h
+    src/platform/macos/MacGlobalHotkeyBackend.mm
     resources/qml.qrc
     resources/wallpapers.qrc
     resources/fonts.qrc
@@ -111,9 +116,11 @@ list(APPEND APP_SOURCES "${APP_ICON}")
 add_executable(PomodoroTodo ${APP_SOURCES})
 
 # 菜单栏/通知的 ObjC++ 后端用 ARC 管理 Cocoa 对象生命周期。
+# 全局热键后端只调 Carbon 的 C 接口、不持有 ObjC 对象，一并开 ARC 保持编译选项一致。
 set_source_files_properties(
     src/platform/macos/MacStatusBarController.mm
     src/platform/macos/MacNotificationBackend.mm
+    src/platform/macos/MacGlobalHotkeyBackend.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
 )
 
@@ -139,6 +146,9 @@ target_link_libraries(PomodoroTodo PRIVATE
     "-framework AppKit"
     "-framework Foundation"
     "-framework UserNotifications"
+    # 全局快捷键走 Carbon 的 RegisterEventHotKey：它不需要辅助功能授权，
+    # 而 NSEvent 全局监听需要，对一个本地番茄钟来说索要那个权限并不合理。
+    "-framework Carbon"
 )
 
 set_target_properties(PomodoroTodo PROPERTIES
@@ -407,6 +417,50 @@ target_link_libraries(MacNotificationBackendTests PRIVATE
 
 add_test(NAME MacNotificationBackendTests COMMAND MacNotificationBackendTests)
 
+# 快捷键注册表是平台无关层：默认键位、用户覆盖、冲突判定与全局热键装配全在这里，
+# 用假热键后端验证，不向系统注册任何真实热键。
+add_executable(ShortcutRegistryTests
+    tests/ShortcutRegistryTests.cpp
+    src/services/GlobalHotkeyBackend.h
+    src/services/ShortcutRegistry.h
+    src/services/ShortcutRegistry.cpp
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+)
+
+target_link_libraries(ShortcutRegistryTests PRIVATE
+    Qt6::Core
+    # QKeySequence 属于 QtGui；这里不创建任何窗口，离屏平台即可。
+    Qt6::Gui
+    Qt6::Test
+)
+
+add_test(NAME ShortcutRegistryTests COMMAND ShortcutRegistryTests)
+set_tests_properties(ShortcutRegistryTests PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
+# 全局热键后端里唯一容易写错的是键码/修饰位翻译（Qt 在 macOS 上交换了 Ctrl 与 Meta）。
+# 这个目标只测那段纯函数，不调用 RegisterEventHotKey，因此不会占用系统按键。
+add_executable(MacGlobalHotkeyTests
+    tests/MacGlobalHotkeyTests.cpp
+    src/services/GlobalHotkeyBackend.h
+    src/platform/macos/MacGlobalHotkeyBackend.h
+    src/platform/macos/MacGlobalHotkeyBackend.mm
+)
+
+target_link_libraries(MacGlobalHotkeyTests PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Test
+    "-framework Carbon"
+)
+
+add_test(NAME MacGlobalHotkeyTests COMMAND MacGlobalHotkeyTests)
+set_tests_properties(MacGlobalHotkeyTests PROPERTIES
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+)
+
 # 备份/恢复：SQLite 快照 + 嵌入偏好；测试用临时目录与临时数据库，覆盖一致性与回滚。
 add_executable(BackupServiceTests
     tests/BackupServiceTests.cpp
@@ -569,6 +623,7 @@ set_tests_properties(
     PlatformControlTests
     BackupServiceTests
     TimingRobustnessTests
+    ShortcutRegistryTests
     PROPERTIES TIMEOUT 90
 )
 set_tests_properties(
@@ -578,5 +633,6 @@ set_tests_properties(
     SoundAssetsTests
     QmlResourceManifestTests
     MacNotificationBackendTests
+    MacGlobalHotkeyTests
     PROPERTIES TIMEOUT 30
 )

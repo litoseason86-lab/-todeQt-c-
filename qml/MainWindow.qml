@@ -36,6 +36,9 @@ Item {
     property var backupServiceRef: null
     property var goalServiceRef: null
     property var phaseSoundServiceRef: null
+    property var shortcutRegistryRef: null
+    // 「召回 / 隐藏主窗口」只能由 ApplicationWindow 落实；这里和菜单栏一样只发意图。
+    signal windowToggleRequested()
     property var milestoneQueue: []
     property var suppressedMilestones: []
     property bool milestonePresentationScheduled: false
@@ -63,6 +66,44 @@ Item {
                               root.focusTimerRef.remainingSeconds,
                               root.focusTimerRef.elapsedSeconds)
         : "番茄Todo"
+
+    // 弹窗是否已经把输入焦点接管走。Qt 的 Shortcut 不受弹窗遮挡影响：不挡住的话，
+    // 用户正在新建任务对话框里打字时按 ⌘1，页面会在弹窗背后被切走（已实测复现）。
+    //
+    // 判据用「焦点是否落进 overlay」而不是「overlay 上有没有子项」：本应用的弹窗
+    // 全部是 modal + focus，而目标热力图的悬停 ToolTip 同样挂在 overlay 上却不取焦，
+    // 按子项判断会让鼠标划过热力图时快捷键整体失灵。
+    readonly property bool overlayHoldsFocus: root.itemInsideOverlay(
+        root.Window.window ? root.Window.window.activeFocusItem : null)
+
+    // 焦点是否落在文本输入框上。用鸭子类型判断而不是类型判断：应用里的输入框
+    // 既有 TextField 也有 TextArea，还包在 SettingsRow / TaskItem 等自定义组件里，
+    // selectedText + inputMethodComposing 这两个属性是 TextInput/TextEdit 系独有的。
+    // 注意「任务行内联重命名」和「每日目标编辑器」的输入框都不在弹窗里，
+    // overlayHoldsFocus 盖不住它们，必须单独判。
+    readonly property bool textInputFocused: root.isTextInputItem(
+        root.Window.window ? root.Window.window.activeFocusItem : null)
+
+    function isTextInputItem(item) {
+        return !!item
+                && typeof item.selectedText !== "undefined"
+                && typeof item.inputMethodComposing !== "undefined"
+    }
+
+    function itemInsideOverlay(item) {
+        const overlay = root.Overlay.overlay
+        if (!overlay || !item) {
+            return false
+        }
+        let current = item
+        while (current) {
+            if (current === overlay) {
+                return true
+            }
+            current = current.parent
+        }
+        return false
+    }
 
     function setSidebarVisible(visible) {
         if (root.appSettingsRef) {
@@ -376,6 +417,96 @@ Item {
         }
     }
 
+    // —— 快捷键动作分发 ——
+    // 应用内快捷键与全局热键最终都落到这里，按动作 id 分发。键位是什么、由谁触发，
+    // 全部由 ShortcutRegistry 决定，这一层只关心「做什么」。
+    function triggerShortcutAction(actionId) {
+        switch (String(actionId)) {
+        case "view.dashboard": root.switchToView("dashboard"); return
+        case "view.today": root.switchToView("today"); return
+        case "view.focus": root.switchToView("focus"); return
+        case "view.week": root.switchToView("week"); return
+        case "view.month": root.switchToView("month"); return
+        case "view.stats": root.switchToView("stats"); return
+        case "view.countdown": root.switchToView("countdown"); return
+        case "view.goals": root.switchToView("goals"); return
+        case "task.new": root.newTaskFromShortcut(); return
+        case "window.toggleSidebar": root.toggleSidebar(); return
+        case "window.settings": settingsDialog.open(); return
+        case "window.shortcutHelp": root.openShortcutSettings(); return
+        // 应用内与全局是两条独立的键位，但落到同一个动作上。
+        case "focus.toggle":
+        case "global.focusToggle": root.toggleFocusFromShortcut(); return
+        case "focus.stop":
+        case "global.focusStop": root.stopFocusFromShortcut(); return
+        case "focus.immersive": root.toggleImmersiveFromShortcut(); return
+        case "global.toggleWindow": root.windowToggleRequested(); return
+        }
+    }
+
+    function newTaskFromShortcut() {
+        // 新建任务对话框属于今日任务页；先切页再打开，避免在统计页这类无关页面上
+        // 弹出一个没有上下文的输入框。切页可能带淡入淡出，用 callLater 等它落定。
+        root.switchToView("today")
+        Qt.callLater(function() { todayTaskView.openAddTaskDialog() })
+    }
+
+    function openShortcutSettings() {
+        settingsDialog.open()
+        settingsDialog.requestSection(settingsDialog.shortcutSectionIndex)
+    }
+
+    function toggleFocusFromShortcut() {
+        if (!root.focusTimerRef) {
+            return
+        }
+        if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
+            focusView.togglePause()
+            // togglePause 是同步的，这里读到的已经是切换之后的状态。
+            root.showToast(root.focusTimerRef.isRunning ? "已继续专注" : "已暂停专注")
+            return
+        }
+
+        // 没有会话时不能凭空开始：番茄和自由计时都要先绑定任务，交回专注页由用户选。
+        root.switchToView("focus")
+        root.showToast("请先选择要专注的任务")
+    }
+
+    function stopFocusFromShortcut() {
+        if (!root.focusTimerRef) {
+            return
+        }
+        if (!root.focusTimerRef.hasActiveSession && root.focusTimerRef.phase === 0) {
+            root.showToast("当前没有进行中的专注")
+            return
+        }
+
+        // 结束分番茄/自由两条路径，自由计时超时还要走确认弹窗——这些规则都在 FocusView 里，
+        // 快捷键不复制一份，只切到专注页再调它的单点入口（确认弹窗要可见才有意义）。
+        root.focusImmersiveActive = false
+        root.switchToView("focus")
+        Qt.callLater(function() {
+            if (focusView.pomodoroModeSelected) {
+                focusView.endPomodoro()
+            } else {
+                focusView.endFreeFocus()
+            }
+        })
+    }
+
+    function toggleImmersiveFromShortcut() {
+        if (root.focusImmersiveActive) {
+            root.focusImmersiveActive = false
+            return
+        }
+        if (!focusView.immersiveAvailable) {
+            root.showToast("沉浸模式只在番茄专注或休息进行中可用")
+            return
+        }
+        root.switchToView("focus")
+        root.focusImmersiveActive = true
+    }
+
     function requestLongFreeFocusStop() {
         root.focusImmersiveActive = false
         root.switchToView("focus")
@@ -570,6 +701,8 @@ Item {
                 currentIndex: root.viewIndex(root.currentView)
 
                 TodayTaskView {
+                    id: todayTaskView
+                    objectName: "todayTaskViewPage"
                     pageActive: root.currentView === "today"
                     categoryManagerRef: root.categoryManagerRef
                     countdownServiceRef: root.countdownServiceRef
@@ -868,6 +1001,32 @@ Item {
         }
     }
 
+    AppShortcuts {
+        id: appShortcuts
+        objectName: "appShortcuts"
+
+        registryRef: root.shortcutRegistryRef
+        // 两种情况必须整体让路：设置页正在录制新键位（否则录不到已被占用的组合），
+        // 以及任何弹窗已经接管输入焦点（否则会在弹窗背后偷偷切页/开始专注）。
+        suspended: settingsDialog.recordingShortcut || root.overlayHoldsFocus
+        textInputFocused: root.textInputFocused
+
+        onActionTriggered: function (actionId) {
+            root.triggerShortcutAction(actionId)
+        }
+    }
+
+    Connections {
+        // 全局热键被系统拒绝（多半是被别的应用占用）时给一句可执行的提示；
+        // 设置页里那一行也会同时标成「未生效」。
+        target: root.shortcutRegistryRef
+        ignoreUnknownSignals: true
+
+        function onGlobalRegistrationFailed(actionId, title) {
+            root.showToast("全局快捷键「" + String(title) + "」未能生效，可能已被其他应用占用")
+        }
+    }
+
     Toast {
         id: globalToast
 
@@ -947,6 +1106,7 @@ Item {
         parent: root
         appSettingsRef: root.appSettingsRef
         backupServiceRef: root.backupServiceRef
+        shortcutRegistryRef: root.shortcutRegistryRef
 
         onRoutineRequested: routineDialog.open()
         onCategoryRequested: categoryDialog.open()

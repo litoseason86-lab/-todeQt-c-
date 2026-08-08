@@ -99,6 +99,16 @@ public:
     void setLongBreakInterval(int count);
     Q_INVOKABLE int dailyFocusGoalMinutesForDate(const QString& isoDate) const;
     Q_INVOKABLE bool setDailyFocusGoal(const QString& isoDate, int minutes);
+
+    // 快捷键自定义：按动作 id 存 QKeySequence 的 PortableText（如 "Ctrl+1"）。
+    // 三种状态必须能区分开：键不存在 = 用代码里的默认键位；键存在且非空 = 用户改过；
+    // 键存在但为空串 = 用户主动停用了这个动作。默认键位本身不落盘，
+    // 这样以后调整默认值对没自定义过的用户能直接生效。
+    Q_INVOKABLE bool hasShortcutOverride(const QString& actionId) const;
+    Q_INVOKABLE QString shortcutOverride(const QString& actionId) const;
+    Q_INVOKABLE bool setShortcutOverride(const QString& actionId, const QString& portableSequence);
+    Q_INVOKABLE bool clearShortcutOverride(const QString& actionId);
+    Q_INVOKABLE bool clearAllShortcutOverrides();
     // 从磁盘重新读取全部偏好并广播变更信号。数据恢复覆盖设置文件后调用，
     // 让 QML 绑定即时刷新，无需重启。
     Q_INVOKABLE void reload();
@@ -129,6 +139,8 @@ signals:
     void longBreakMinutesChanged();
     void longBreakIntervalChanged();
     void dailyFocusGoalChanged();
+    // 任意一处快捷键覆盖值变化（含批量恢复默认与数据恢复后的重读）。
+    void shortcutOverridesChanged();
     void settingsWriteSucceeded(const QString& key);
     void settingsWriteFailed(const QString& key, const QString& message);
 
@@ -139,8 +151,12 @@ private:
     static int normalizeDayStartHour(int hour);
     static int normalizeLongBreakMinutes(int minutes);
     static int normalizeLongBreakInterval(int count);
+    static QString shortcutKey(const QString& actionId);
     void recreateSettingsBackend();
     bool writeValue(const QString& key, const QVariant& value);
+    // 删除同样要检查落盘状态：权限问题下 remove 也会静默失败，
+    // 「恢复默认」不能在设置文件没变的情况下告诉用户已经改回去了。
+    bool removeValue(const QString& key);
     QString m_settingsFilePath;
     QSettings* m_settings = nullptr;
 };

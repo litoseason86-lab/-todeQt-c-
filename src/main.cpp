@@ -22,11 +22,13 @@
 #include "services/NotificationService.h"
 #include "services/PhaseSoundService.h"
 #include "services/RoutineManager.h"
+#include "services/ShortcutRegistry.h"
 #include "services/StatisticsService.h"
 #include "services/TaskManager.h"
 #include "services/TrayController.h"
 #include "services/SingleInstanceGuard.h"
 
+#include "platform/macos/MacGlobalHotkeyBackend.h"
 #include "platform/macos/MacNotificationBackend.h"
 #include "platform/macos/MacStatusBarController.h"
 
@@ -113,6 +115,12 @@ int main(int argc, char *argv[])
     NotificationService::instance()->setBackend(&notificationBackend);
     NotificationService::instance()->requestAuthorization();
 
+    // 快捷键：应用内键位由 QML 的 Shortcut 直接消费 ShortcutRegistry 的清单；
+    // 全局热键交给 Carbon 后端向系统注册。后端是 main 的栈对象，事件循环结束后
+    // 显式解绑（见函数末尾），不依赖栈上声明顺序来保证注销先于析构。
+    MacGlobalHotkeyBackend globalHotkeyBackend;
+    ShortcutRegistry::instance()->setGlobalBackend(&globalHotkeyBackend);
+
     // 启动即生成今天的例行任务，保证 QML 首次读取今日任务时已经能看到它们。
     RoutineManager::instance()->materializeToday();
 
@@ -151,6 +159,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("trayController"), &trayController);
     engine.rootContext()->setContextProperty(QStringLiteral("notificationService"), NotificationService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("backupService"), BackupService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("shortcutRegistry"), ShortcutRegistry::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("naturalCompletionNoticeRequired"),
                                              naturalCompletionNoticeRequired);
 
@@ -168,5 +177,7 @@ int main(int argc, char *argv[])
     const int exitCode = app.exec();
     // 平台后端是 main 栈对象；事件循环结束后先清空非拥有指针，再进入局部对象析构。
     NotificationService::instance()->setBackend(nullptr);
+    // 同理：解绑会先把已注册的系统热键全部注销，避免进程退出后系统里残留热键登记。
+    ShortcutRegistry::instance()->setGlobalBackend(nullptr);
     return exitCode;
 }

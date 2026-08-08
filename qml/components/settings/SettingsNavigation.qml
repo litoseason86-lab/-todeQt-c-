@@ -20,11 +20,12 @@ Control {
         { title: "外观", icon: "appearance", objectName: "settingsCategoryAppearance" },
         { title: "专注", icon: "focus", objectName: "settingsCategoryFocus" },
         { title: "通用", icon: "general", objectName: "settingsCategoryGeneral" },
+        { title: "快捷键", icon: "keyboard", objectName: "settingsCategoryShortcuts" },
         { title: "数据与管理", icon: "data", objectName: "settingsCategoryData" },
         { title: "关于", icon: "about", objectName: "settingsCategoryAbout" }
     ]
 
-    implicitWidth: compact ? 168 : 204
+    implicitWidth: compact ? 160 : 188
     padding: Theme.space12
 
     // 导航直接躺在对话框面板上，不再套自己的卡片底（去框中框）。
@@ -34,6 +35,8 @@ Control {
         spacing: Theme.space4
 
         // —— 应用标识 ——
+        // 收成单行：原来 40px 图标 + 两行文字占掉 76px，而这块只是自我介绍，
+        // 不承担任何导航功能。标语「专注 · 规划 · 成长」在关于页已经有一份。
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space4
@@ -42,9 +45,9 @@ Control {
             spacing: Theme.space8
 
             Rectangle {
-                Layout.preferredWidth: 40
-                Layout.preferredHeight: 40
-                radius: Theme.radiusMd
+                Layout.preferredWidth: 24
+                Layout.preferredHeight: 24
+                radius: Theme.radiusSm + 2
                 color: Theme.accentSoft
                 border.color: Theme.accent
                 border.width: 1
@@ -53,31 +56,18 @@ Control {
                     anchors.centerIn: parent
                     text: "番"
                     color: Theme.accentInk
-                    font.pixelSize: 22
+                    font.pixelSize: 14
                     font.weight: Font.Bold
                 }
             }
 
-            ColumnLayout {
+            Text {
                 Layout.fillWidth: true
-                spacing: 0
-
-                Text {
-                    Layout.fillWidth: true
-                    text: "番茄Todo"
-                    color: Theme.inkStrong
-                    font.pixelSize: Theme.fontXl
-                    font.weight: Font.DemiBold
-                    elide: Text.ElideRight
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: "专注 · 规划 · 成长"
-                    color: Theme.inkSoft
-                    font.pixelSize: Theme.fontSm
-                    elide: Text.ElideRight
-                }
+                text: "番茄Todo"
+                color: Theme.inkStrong
+                font.pixelSize: Theme.fontLg
+                font.weight: Font.DemiBold
+                elide: Text.ElideRight
             }
         }
 
@@ -134,22 +124,16 @@ Control {
                 contentItem: RowLayout {
                     spacing: Theme.space8
 
-                    Rectangle {
-                        Layout.leftMargin: Theme.space4
-                        Layout.preferredWidth: 26
-                        Layout.preferredHeight: 26
-                        radius: Theme.radiusSm + 2
-                        // 淡罩上白 50% 才能把图标底衬出来；夜间罩本身就暗，白色要压低避免发亮。
-                        color: categoryButton.checked
-                               ? Qt.rgba(1, 1, 1, Theme.darkMode ? 0.12 : 0.5)
-                               : Theme.surfaceSunken
-
-                        GlyphIcon {
-                            anchors.centerIn: parent
-                            name: categoryButton.modelData.icon
-                            size: 17
-                            color: categoryButton.checked ? Theme.accentFillInk : Theme.inkSoft
-                        }
+                    // 与设置行同一个取舍：图标不再套色块底。选中态已经由整行的淡罩
+                    // 和字重表达，图标底再来一层就是三重强调。
+                    GlyphIcon {
+                        Layout.leftMargin: Theme.space8
+                        Layout.preferredWidth: 18
+                        Layout.preferredHeight: 18
+                        Layout.alignment: Qt.AlignVCenter
+                        name: categoryButton.modelData.icon
+                        size: 18
+                        color: categoryButton.checked ? Theme.accentFillInk : Theme.inkSoft
                     }
 
                     Text {

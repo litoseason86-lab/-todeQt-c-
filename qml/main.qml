@@ -43,6 +43,7 @@ ApplicationWindow {
         backupServiceRef: typeof backupService === "undefined" ? null : backupService
         goalServiceRef: typeof goalService === "undefined" ? null : goalService
         phaseSoundServiceRef: typeof phaseSoundService === "undefined" ? null : phaseSoundService
+        shortcutRegistryRef: typeof shortcutRegistry === "undefined" ? null : shortcutRegistry
         // qmllint enable unqualified
     }
 
@@ -195,6 +196,18 @@ ApplicationWindow {
         function onFocusImmersiveActiveChanged() {
             root.visibility = immersionSync.visibilityForImmersiveChange(
                         mainContent.focusImmersiveActive, root.visibility)
+        }
+
+        // 全局热键的「召回 / 隐藏主窗口」。判据是「可见且已激活」而不是只看 visible：
+        // 窗口露在别的应用后面时，用户按这组键的意图是把它叫到前面，不是把它藏起来。
+        function onWindowToggleRequested() {
+            if (root.visible && root.active) {
+                root.hide()
+                return
+            }
+            root.show()
+            root.raise()
+            root.requestActivate()
         }
     }
 

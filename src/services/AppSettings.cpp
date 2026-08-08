@@ -30,6 +30,8 @@ const auto kLongBreakIntervalKey = QStringLiteral("focus/longBreakInterval");
 const auto kDailyFocusGoalDateKey = QStringLiteral("focus/dailyGoalDate");
 const auto kDailyFocusGoalMinutesKey = QStringLiteral("focus/dailyGoalMinutes");
 const auto kLegacyDailyFocusGoalHoursKey = QStringLiteral("focus/dailyGoalHours");
+// 快捷键覆盖值统一放在这个分组下，「全部恢复默认」才能一次 remove 掉整组。
+const auto kShortcutGroup = QStringLiteral("shortcuts");
 
 QString settingsErrorMessage(QSettings::Status status)
 {
@@ -87,6 +89,7 @@ void AppSettings::reload()
     emit longBreakMinutesChanged();
     emit longBreakIntervalChanged();
     emit dailyFocusGoalChanged();
+    emit shortcutOverridesChanged();
 }
 
 int AppSettings::lastMode() const
@@ -565,6 +568,65 @@ bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)
     return true;
 }
 
+QString AppSettings::shortcutKey(const QString& actionId)
+{
+    return kShortcutGroup + QLatin1Char('/') + actionId;
+}
+
+bool AppSettings::hasShortcutOverride(const QString& actionId) const
+{
+    if (actionId.isEmpty()) {
+        return false;
+    }
+    return m_settings->contains(shortcutKey(actionId));
+}
+
+QString AppSettings::shortcutOverride(const QString& actionId) const
+{
+    if (actionId.isEmpty()) {
+        return QString();
+    }
+    return m_settings->value(shortcutKey(actionId)).toString();
+}
+
+bool AppSettings::setShortcutOverride(const QString& actionId, const QString& portableSequence)
+{
+    if (actionId.isEmpty()) {
+        return false;
+    }
+
+    // 空串是有意义的值（= 停用该动作），所以这里不做“空就删除”的转换。
+    if (!writeValue(shortcutKey(actionId), portableSequence)) {
+        return false;
+    }
+    emit shortcutOverridesChanged();
+    return true;
+}
+
+bool AppSettings::clearShortcutOverride(const QString& actionId)
+{
+    if (actionId.isEmpty()) {
+        return false;
+    }
+    if (!m_settings->contains(shortcutKey(actionId))) {
+        return true;
+    }
+    if (!removeValue(shortcutKey(actionId))) {
+        return false;
+    }
+    emit shortcutOverridesChanged();
+    return true;
+}
+
+bool AppSettings::clearAllShortcutOverrides()
+{
+    if (!removeValue(kShortcutGroup)) {
+        return false;
+    }
+    emit shortcutOverridesChanged();
+    return true;
+}
+
 bool AppSettings::writeValue(const QString& key, const QVariant& value)
 {
     // 刚发生过错误时，构造阶段本身也可能再次把状态置成 AccessError。
@@ -576,6 +638,27 @@ bool AppSettings::writeValue(const QString& key, const QVariant& value)
     // changed 信号只能表示“已持久化”。先同步并检查状态，失败时重建后端并丢弃缓存，
     // 避免界面显示伪成功，也避免错误状态污染后续重试。
     m_settings->setValue(key, value);
+    m_settings->sync();
+    if (m_settings->status() == QSettings::NoError) {
+        emit settingsWriteSucceeded(key);
+        return true;
+    }
+
+    const QString message = settingsErrorMessage(m_settings->status());
+    recreateSettingsBackend();
+    emit settingsWriteFailed(key, message);
+    return false;
+}
+
+bool AppSettings::removeValue(const QString& key)
+{
+    // 与 writeValue 同一套错误处理：QSettings::status 是粘滞的，先重建再删，
+    // 删完必须 sync 并检查状态，不能把“没写成盘”当成删除成功。
+    if (m_settings->status() != QSettings::NoError) {
+        recreateSettingsBackend();
+    }
+
+    m_settings->remove(key);
     m_settings->sync();
     if (m_settings->status() == QSettings::NoError) {
         emit settingsWriteSucceeded(key);

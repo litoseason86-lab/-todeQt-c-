@@ -55,15 +55,27 @@ TestCase {
         wait(20)
     }
 
-    function test_shellUsesFiveCategoryNavigation() {
+    function test_shellUsesSixCategoryNavigation() {
         dialog.open()
         tryCompare(dialog, "opened", true)
-        compare(dialog.width, 760)
-        verify(dialog.height <= 640)
+        // 820×680：原来的 760×640 让专注/快捷键/数据三页的内容被页脚硬切。
+        compare(dialog.width, 820)
+        verify(dialog.height <= 680)
+        // 页脚分隔线让"内容还能往下滚"成为版式事实，而不是看起来像渲染缺陷。
+        verify(findChild(dialog, "settingsFooterDivider"))
+        // 标题显示当前分页名而不是固定的「设置」，承担 wayfinding。
+        var title = findChild(dialog, "settingsSectionTitle")
+        verify(title)
+        compare(title.text, dialog.sectionTitles[dialog.currentSection])
 
         var navigation = findChild(dialog, "settingsNavigation")
         verify(navigation)
-        compare(findChild(navigation, "settingsCategoryRepeater").count, 5)
+        // 外观 / 专注 / 通用 / 快捷键 / 数据与管理 / 关于
+        compare(findChild(navigation, "settingsCategoryRepeater").count, 6)
+        compare(dialog.sectionTitles.length, 6)
+        // ⌘/「快捷键速查」靠这个索引直达；它必须真的指向快捷键页，
+        // 否则以后插入分段时会静默跳到隔壁页面。
+        compare(dialog.sectionTitles[dialog.shortcutSectionIndex], "快捷键")
         verify(findChild(dialog, "settingsStatusText"))
         verify(findChild(dialog, "settingsCloseButton"))
     }
@@ -122,8 +134,10 @@ TestCase {
 
         dialog.open()
         tryCompare(dialog, "opened", true)
-        dialog.requestSection(3)
-        compare(dialog.currentSection, 3)
+        // 「数据与管理」在快捷键页插入后后移了一位；索引写死会随分段增减漂移。
+        var dataSection = dialog.sectionTitles.indexOf("数据与管理")
+        dialog.requestSection(dataSection)
+        compare(dialog.currentSection, dataSection)
 
         var pageLoader = findChild(dialog, "settingsPageLoader")
         verify(pageLoader)

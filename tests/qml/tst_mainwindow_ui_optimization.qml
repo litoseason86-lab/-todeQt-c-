@@ -232,6 +232,35 @@ TestCase {
         }
     }
 
+    // 最小快捷键注册表：只给一条应用内动作，够验证「弹窗打开时整体让路」这条接线。
+    // 键位规则本身由 ShortcutRegistryTests 与 tst_shortcuts.qml 覆盖。
+    QtObject {
+        id: shortcutRegistry
+
+        readonly property var inAppActions: [{
+            id: "view.dashboard", title: "仪表盘", group: "导航",
+            sequence: "Ctrl+1", display: "\u2318" + "1",
+            defaultSequence: "Ctrl+1", defaultDisplay: "\u2318" + "1",
+            isDefault: true, isGlobal: false, isDisabled: false,
+            registered: true, hasDefault: true, hasModifier: true
+        }, {
+            // 单键绑定：应用内允许，但焦点进输入框时必须让路。
+            id: "focus.toggle", title: "开始 / 暂停专注", group: "专注",
+            sequence: "Space", display: "Space",
+            defaultSequence: "Ctrl+Return", defaultDisplay: "\u2318\u21a9",
+            isDefault: false, isGlobal: false, isDisabled: false,
+            registered: true, hasDefault: true, hasModifier: false
+        }]
+        readonly property var actions: shortcutRegistry.inAppActions
+        readonly property var globalActions: []
+        readonly property var groups: ["导航"]
+
+        signal globalActionTriggered(string actionId)
+        signal globalRegistrationFailed(string actionId, string title)
+
+        function normalize(key, modifiers) { return "" }
+    }
+
     MainWindow {
         id: mainWindow
 
@@ -245,6 +274,7 @@ TestCase {
         focusTimerRef: focusTimer
         goalServiceRef: goalService
         phaseSoundServiceRef: phaseSoundService
+        shortcutRegistryRef: shortcutRegistry
     }
 
     function init() {
@@ -569,5 +599,59 @@ TestCase {
         compare(mainWindow.focusImmersiveActive, false)
 
         focusTimer.isRunning = false
+    }
+
+    function test_inAppShortcutsStandDownWhileADialogHoldsFocus() {
+        // Qt 的 Shortcut 不受弹窗遮挡影响：不主动让路的话，用户在新建任务对话框里
+        // 打字时按 ⌘1，页面会在弹窗背后被切走（已实测复现）。
+        const appShortcuts = findChild(mainWindow, "appShortcuts")
+        verify(appShortcuts)
+        compare(appShortcuts.suspended, false)
+
+        const dialog = findChild(mainWindow, "settingsDialog")
+        verify(dialog)
+        dialog.open()
+        tryCompare(appShortcuts, "suspended", true)
+
+        // 让路必须真的落到每个 Shortcut 上，光有一个标记位不算数。
+        const instantiator = findChild(appShortcuts, "inAppShortcutInstantiator")
+        verify(instantiator)
+        verify(instantiator.count > 0)
+        compare(instantiator.objectAt(0).enabled, false)
+
+        dialog.close()
+        tryCompare(appShortcuts, "suspended", false)
+        tryCompare(instantiator.objectAt(0), "enabled", true)
+    }
+
+    function test_bareKeyShortcutsStandDownWhileTypingOutsideAnyDialog() {
+        // 任务行的内联重命名框和每日目标编辑器都不在弹窗里，overlayHoldsFocus 盖不住，
+        // 必须靠 textInputFocused 单独兜住——否则把空格绑成「开始/暂停」之后，
+        // 在这些输入框里就再也打不出空格。
+        const appShortcuts = findChild(mainWindow, "appShortcuts")
+        const instantiator = findChild(appShortcuts, "inAppShortcutInstantiator")
+        verify(instantiator)
+        compare(instantiator.count, 2)
+
+        const probe = textInputProbe.createObject(mainWindow)
+        verify(probe)
+        probe.forceActiveFocus()
+        tryCompare(mainWindow, "textInputFocused", true)
+
+        // 单键让路，带修饰键的照常可用（macOS 上输入时按 ⌘1 切页是正常行为）。
+        tryCompare(instantiator.objectAt(1), "enabled", false)
+        compare(instantiator.objectAt(0).enabled, true)
+        // 弹窗没开，整体 suspended 不应被误置。
+        compare(appShortcuts.suspended, false)
+
+        probe.destroy()
+        tryCompare(mainWindow, "textInputFocused", false)
+        tryCompare(instantiator.objectAt(1), "enabled", true)
+    }
+
+    Component {
+        id: textInputProbe
+
+        TextField {}
     }
 }

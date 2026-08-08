@@ -20,6 +20,10 @@ Canvas {
     onColorChanged: requestPaint()
     onNameChanged: requestPaint()
     onWidthChanged: requestPaint()
+    // Canvas 以 visible: false 创建时不会分配绘制目标，之后变可见也不会自动重绘，
+    // 结果是图标位永远空着（设置行的图标就踩过这个坑：调用方用
+    // `visible: iconName.length > 0` 门控，首帧就是隐藏态）。变可见时补一次请求。
+    onVisibleChanged: if (visible) requestPaint()
 
     onPaint: {
         var ctx = getContext("2d")
@@ -64,6 +68,14 @@ Canvas {
         case "focus": // 时钟
             circle(12, 12, 9)
             begin(); ctx.moveTo(12, 7.5); ctx.lineTo(12, 12); ctx.lineTo(15.5, 13.5); stroke()
+            break
+        case "keyboard": // 快捷键：键盘外框 + 两排键位 + 空格键
+            roundRect(2.5, 6, 19, 12, 2.2)
+            dot(6.5, 10, 0.9)
+            dot(10, 10, 0.9)
+            dot(13.5, 10, 0.9)
+            dot(17, 10, 0.9)
+            line(8, 14.4, 16, 14.4)
             break
         case "general": // 滑块
             line(4, 8.5, 20, 8.5)

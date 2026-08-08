@@ -9,6 +9,12 @@ import "../LogicalDay.js" as LogicalDay
 Item {
     id: root
 
+    // 新建任务对话框归本页所有；快捷键（⌘N）经 MainWindow 走这个入口，
+    // 而不是从外面直接摸内部 id。
+    function openAddTaskDialog() {
+        addTaskDialog.open()
+    }
+
     signal startFocus(int taskId, string taskTitle)
     signal countdownRequested()
     signal deleteRequested(int taskId, string title)

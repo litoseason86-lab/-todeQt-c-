@@ -163,7 +163,8 @@ FocusScope {
         required property string iconName
 
         Layout.fillWidth: true
-        implicitHeight: 60
+        // 与 SettingsRow 对齐：44 是可点目标的无障碍下限，两行文字自然长到 ~52px。
+        implicitHeight: 52
         activeFocusOnTab: true
         Accessible.name: text
         Accessible.description: caption
@@ -178,19 +179,16 @@ FocusScope {
         contentItem: RowLayout {
             spacing: Theme.space12
 
-            Rectangle {
-                Layout.preferredWidth: 30
-                Layout.preferredHeight: 30
+            // 与 SettingsRow 同一个取舍：图标不再套浅色圆角方块。那层色块在每一行
+            // 重复出现，是零信息量的装饰，却主导了整页的视觉噪音。
+            GlyphIcon {
+                Layout.leftMargin: Theme.space4
+                Layout.preferredWidth: 20
+                Layout.preferredHeight: 20
                 Layout.alignment: Qt.AlignVCenter
-                radius: Theme.radiusSm + 2
-                color: Theme.accentSoft
-
-                GlyphIcon {
-                    anchors.centerIn: parent
-                    name: control.iconName
-                    size: 17
-                    color: Theme.accentInk
-                }
+                name: control.iconName
+                size: 20
+                color: Theme.inkSoft
             }
 
             ColumnLayout {

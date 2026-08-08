@@ -12,13 +12,22 @@ Popup {
 
     property var appSettingsRef: null
     property var backupServiceRef: null
+    property var shortcutRegistryRef: null
     property int currentSection: 0
-    property string statusText: "设置将自动保存到本机"
+    // 静息态留空：「设置将自动保存到本机」是一句永远为真的话，占一整行却零信息量。
+    // 只有真正发生过写入（成功或失败）时这一行才有内容。
+    property string statusText: ""
     property bool statusIsError: false
     property SettingsGeneralPage activeGeneralPage: null
     readonly property bool reduceMotion: appSettingsRef ? appSettingsRef.reduceMotion : false
     readonly property int animationDuration: reduceMotion ? 0 : 160
-    readonly property var sectionTitles: ["外观", "专注", "通用", "数据与管理", "关于"]
+    readonly property var sectionTitles: ["外观", "专注", "通用", "快捷键", "数据与管理", "关于"]
+    // 「快捷键速查」(⌘/) 要直接跳到这一页。从标题表里查出来而不是写死数字：
+    // 以后再插一个分段时，写死的索引会静默指到隔壁页面去。
+    readonly property int shortcutSectionIndex: sectionTitles.indexOf("快捷键")
+    // 快捷键页正在等待用户按下新组合。此时应用内快捷键必须整体让路，
+    // 否则按 ⌘1 会先被「切到仪表盘」吃掉，永远录不进去。
+    property bool recordingShortcut: false
     readonly property bool compact: width < 680
 
     signal routineRequested
@@ -31,8 +40,10 @@ Popup {
     focus: true
     // 关闭前必须提交昵称草稿；禁用 Popup 的绕过式自动关闭，Escape 和按钮统一走 requestClose()。
     closePolicy: Popup.NoAutoClose
-    width: parent ? Math.min(760, Math.max(0, parent.width - Theme.space32 * 2)) : 760
-    height: parent ? Math.min(640, Math.max(0, parent.height - Theme.space32 * 2)) : 640
+    // 820 宽让外观页的主题画廊有余量、快捷键行不再挤；高度尽量吃满可用空间，
+    // 因为专注/快捷键/数据三页的内容本来就超过一屏。
+    width: parent ? Math.min(820, Math.max(0, parent.width - Theme.space32 * 2)) : 820
+    height: parent ? Math.min(680, Math.max(0, parent.height - Theme.space32 * 2)) : 680
     x: parent ? Math.round((parent.width - width) / 2) : 0
     y: parent ? Math.round((parent.height - height) / 2) : 0
     padding: Theme.space16
@@ -184,12 +195,19 @@ Popup {
                 anchors.margins: Theme.space16
                 spacing: Theme.space12
 
+                // 标题显示当前分页名而不是固定的「设置」：模态窗 + 左栏品牌区已经
+                // 说明了这是设置，再写一次「设置」是第三层重复标题，白吃一行高度。
+                // 换成分页名后这一行开始承担 wayfinding，与 macOS 系统设置一致。
                 Text {
+                    objectName: "settingsSectionTitle"
                     Layout.fillWidth: true
-                    text: "设置"
+                    Layout.bottomMargin: Theme.space4
+                    text: root.sectionTitles[root.currentSection]
                     color: Theme.inkStrong
-                    font.pixelSize: Theme.fontXxl
-                    font.weight: Font.Bold
+                    font.pixelSize: Theme.fontXl
+                    font.weight: Font.DemiBold
+                    Accessible.role: Accessible.Heading
+                    Accessible.name: text + "设置"
                 }
 
                 ScrollView {
@@ -210,7 +228,8 @@ Popup {
                         sourceComponent: root.currentSection === 0 ? appearancePageComponent
                                        : root.currentSection === 1 ? focusPageComponent
                                        : root.currentSection === 2 ? generalPageComponent
-                                       : root.currentSection === 3 ? dataPageComponent
+                                       : root.currentSection === 3 ? shortcutsPageComponent
+                                       : root.currentSection === 4 ? dataPageComponent
                                        : aboutPageComponent
                         onLoaded: {
                             if (item) {
@@ -220,6 +239,10 @@ Popup {
                                 if (item.hasOwnProperty("backupServiceRef")) {
                                     item.backupServiceRef = Qt.binding(function() { return root.backupServiceRef })
                                 }
+                                // 快捷键页需要注册表引用；其余页面没有该属性，跳过即可。
+                                if (item.hasOwnProperty("shortcutRegistryRef")) {
+                                    item.shortcutRegistryRef = Qt.binding(function() { return root.shortcutRegistryRef })
+                                }
                                 // 关于页这类"内容少于一屏"的页面需要知道视口高度做垂直居中；
                                 // 其余页面没有该属性，跳过即可。
                                 if (item.hasOwnProperty("viewportHeight")) {
@@ -228,6 +251,15 @@ Popup {
                             }
                         }
                     }
+                }
+
+                // 页脚分隔线：内容区与页脚原来直接相接，超出一屏的页面（专注/快捷键/数据）
+                // 被齐平切断，看起来像渲染缺陷而不是"可以往下滚"。
+                Rectangle {
+                    objectName: "settingsFooterDivider"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 1
+                    color: Theme.borderSubtle
                 }
 
                 RowLayout {
@@ -245,6 +277,7 @@ Popup {
                         Accessible.role: root.statusIsError
                                          ? Accessible.AlertMessage : Accessible.StaticText
                         Accessible.name: text
+                        Accessible.ignored: text.length === 0
                     }
 
                     Button {
@@ -343,6 +376,16 @@ Popup {
                 root.activeGeneralPage = generalPage
             }
             Component.onDestruction: root.activeGeneralPage = null
+        }
+    }
+    Component {
+        id: shortcutsPageComponent
+
+        SettingsShortcutsPage {
+            // 录制态必须上抬到对话框：应用内 Shortcut 挂在 MainWindow 上，
+            // 页面自己关不掉它们。
+            onRecordingChanged: root.recordingShortcut = recording
+            Component.onDestruction: root.recordingShortcut = false
         }
     }
     Component { id: dataPageComponent; SettingsDataPage {} }
