@@ -155,6 +155,7 @@ TestCase {
     }
 
     WeekPlanView {
+        taskManagerRef: taskManager
         id: weekPlanView
 
         width: 620

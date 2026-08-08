@@ -756,6 +756,9 @@ Item {
 
                 WeekPlanView {
                     pageActive: root.currentView === "week"
+                    taskManagerRef: root.taskManagerRef
+                    logicalDayServiceRef: root.logicalDayServiceRef
+                    settingsRef: root.appSettingsRef
                     categoryManagerRef: root.categoryManagerRef
                     pendingDeleteTaskId: root.pendingDeleteTaskId
 

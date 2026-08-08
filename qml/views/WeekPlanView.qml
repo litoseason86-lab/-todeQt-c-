@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -19,6 +21,10 @@ Item {
     property date logicalToday
     property var logicalNowProvider: null
     property var weekTasks: []
+    // 上下文属性只在 main.qml 解包，视图内部一律消费显式引用。
+    property var taskManagerRef: null
+    property var logicalDayServiceRef: null
+    property var settingsRef: null
     property var categoryManagerRef: null
     property int pendingDeleteTaskId: -1
     property string loadError: ""
@@ -45,7 +51,7 @@ Item {
     }
 
     Connections {
-        target: taskManager
+        target: root.taskManagerRef
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
@@ -82,9 +88,7 @@ Item {
     }
 
     Connections {
-        // qmllint disable unqualified
-        target: typeof logicalDayService !== "undefined" ? logicalDayService : null
-        // qmllint enable unqualified
+        target: root.logicalDayServiceRef
         ignoreUnknownSignals: true
 
         function onChanged() {
@@ -105,10 +109,7 @@ Item {
         // qmllint disable use-proper-function
         var now = root.logicalNowProvider ? root.logicalNowProvider() : new Date()
         // qmllint enable use-proper-function
-        // qmllint disable unqualified
-        var hour = (typeof appSettings !== "undefined" && appSettings)
-                ? appSettings.dayStartHour : 4
-        // qmllint enable unqualified
+        var hour = root.settingsRef ? root.settingsRef.dayStartHour : 4
         return LogicalDay.todayDate(hour, now)
     }
 
@@ -184,7 +185,7 @@ Item {
     function refresh() {
         try {
             root.loadError = ""
-            var loaded = taskManager.getWeekTasks(root.isoDate(root.weekStart))
+            var loaded = root.taskManagerRef.getWeekTasks(root.isoDate(root.weekStart))
             // 待删除行先从周视图消失；撤销时 pendingDeleteTaskId 清空后刷新恢复。
             root.weekTasks = root.pendingDeleteTaskId > 0
                     ? loaded.filter(function(task) {
@@ -205,7 +206,7 @@ Item {
             completionRefreshTimer.restart()
         }
 
-        var ok = taskManager.setTaskCompleted(id, completed)
+        var ok = root.taskManagerRef.setTaskCompleted(id, completed)
         if (!ok) {
             completionRefreshTimer.stop()
             root.completionRefreshDelayActive = false
@@ -548,22 +549,28 @@ Item {
                                 model: dayRow.dayTasks
 
                                 TaskItem {
+                                    id: weekTaskRow
+
+                                    // pragma ComponentBehavior: Bound 之后 delegate 不再继承
+                                    // 外层作用域，必须显式声明消费的模型角色。
+                                    required property var modelData
+
                                     Layout.fillWidth: true
-                                    taskId: modelData.id
-                                    taskTitle: modelData.title
-                                    taskCategory: modelData.category && modelData.category.name
-                                                  ? modelData.category
-                                                  : (modelData.categoryData && modelData.categoryData.name
-                                                     ? modelData.categoryData
-                                                     : (modelData.categoryText || ""))
-                                    taskCompleted: modelData.completed
-                                    estimatedPomodoros: Number(modelData.estimatedPomodoros || 0)
-                                    actualPomodoros: Number(modelData.actualPomodoros || 0)
+                                    taskId: weekTaskRow.modelData.id
+                                    taskTitle: weekTaskRow.modelData.title
+                                    taskCategory: weekTaskRow.modelData.category && weekTaskRow.modelData.category.name
+                                                  ? weekTaskRow.modelData.category
+                                                  : (weekTaskRow.modelData.categoryData && weekTaskRow.modelData.categoryData.name
+                                                     ? weekTaskRow.modelData.categoryData
+                                                     : (weekTaskRow.modelData.categoryText || ""))
+                                    taskCompleted: weekTaskRow.modelData.completed
+                                    estimatedPomodoros: Number(weekTaskRow.modelData.estimatedPomodoros || 0)
+                                    actualPomodoros: Number(weekTaskRow.modelData.actualPomodoros || 0)
                                     startFocusAllowed: dayRow.isToday
                                     showStartFocus: dayRow.isToday
 
                                     onCompletionChanged: function(id, completed) {
-                                        root.setTaskCompletedWithAnimationDelay(id, completed, modelData.title)
+                                        root.setTaskCompletedWithAnimationDelay(id, completed, weekTaskRow.modelData.title)
                                     }
 
                                     onStartFocusClicked: function(id, title) {
@@ -576,9 +583,9 @@ Item {
                                     }
 
                                     renameSubmitter: function(id, newTitle) {
-                                        var originalCategoryId = Number(modelData.categoryId || -1)
-                                        var originalDate = root.taskIsoDate(modelData.date)
-                                        var succeeded = Boolean(taskManager.updateTask(
+                                        var originalCategoryId = Number(weekTaskRow.modelData.categoryId || -1)
+                                        var originalDate = root.taskIsoDate(weekTaskRow.modelData.date)
+                                        var succeeded = Boolean(root.taskManagerRef.updateTask(
                                             id, newTitle, originalCategoryId, originalDate))
                                         if (!succeeded) {
                                             root.loadError = "任务更新失败，请重试"
@@ -587,7 +594,7 @@ Item {
                                     }
 
                                     onEditClicked: function(id) {
-                                        editTaskDialog.openForTask(modelData)
+                                        editTaskDialog.openForTask(weekTaskRow.modelData)
                                     }
                                 }
                             }
@@ -644,7 +651,7 @@ Item {
         selectedDate: root.pendingAddDate
         categoryManagerRef: root.categoryManagerRef
         taskSubmitter: function(title, date, categoryId, estimatedPomodoros) {
-            return taskManager.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedPomodoros))
+            return root.taskManagerRef.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedPomodoros))
         }
     }
 
@@ -655,7 +662,7 @@ Item {
         categoryManagerRef: root.categoryManagerRef
 
         taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedPomodoros) {
-            var succeeded = Boolean(taskManager.updateTask(
+            var succeeded = Boolean(root.taskManagerRef.updateTask(
                 taskId, title, categoryId, isoDate, Number(estimatedPomodoros)))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"

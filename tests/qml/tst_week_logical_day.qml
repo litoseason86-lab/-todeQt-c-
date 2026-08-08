@@ -36,6 +36,9 @@ TestCase {
     }
 
     WeekPlanView {
+        taskManagerRef: taskManager
+        logicalDayServiceRef: logicalDayService
+        settingsRef: appSettings
         id: view
 
         width: 1000
