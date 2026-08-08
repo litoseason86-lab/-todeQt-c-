@@ -113,3 +113,14 @@ void MacStatusBarController::updateDisplay(const TrayDisplay& display)
     PTStatusBarController* impl = (__bridge PTStatusBarController*)m_impl;
     [impl applyDisplay:display];
 }
+
+void MacStatusBarController::detachController()
+{
+    if (!m_impl) {
+        return;
+    }
+    // 置空之后菜单项回调里的 `if (self.controller)` 才真正起作用：
+    // 此前它挡的是"从未设置过"，挡不住"控制器已经销毁"。
+    PTStatusBarController* impl = (__bridge PTStatusBarController*)m_impl;
+    impl.controller = nullptr;
+}

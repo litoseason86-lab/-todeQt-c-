@@ -17,6 +17,15 @@ public:
 
     void updateDisplay(const TrayDisplay& display) override;
 
+    // 断开对 TrayController 的裸指针引用。菜单项的点击回调直接调用控制器，
+    // 而 ObjC 宿主只持有一个 assign（弱）指针——控制器先销毁的话，
+    // 那五个回调里的 `if (self.controller)` 挡不住悬垂指针（非空但已失效）。
+    //
+    // 宿主必须在控制器销毁前调用一次。目前 main.cpp 的栈声明顺序恰好保证了
+    // 正确的析构次序，但那是隐式的、代码里没有任何地方说明；显式解绑之后，
+    // 正确性不再依赖声明顺序。
+    void detachController();
+
 private:
     void* m_impl = nullptr; // PTStatusBarController*（ObjC）
 };

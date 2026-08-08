@@ -103,6 +103,7 @@ private slots:
     void repeatedLaunchRequestsExistingWindow();
     void unavailableInstanceLockFailsClosed();
     void restoredSessionIsReflectedInMenu();
+    void detachedViewStopsReceivingUpdates();
 
     void phaseCompleteWorkNotificationDeliversOnce();
     void phaseCompleteBreakDistinguishesLongBreak();
@@ -145,6 +146,30 @@ void PlatformControlTests::idleDisplayHasNoControls()
     QVERIFY(display.stateLine.contains(QStringLiteral("空闲")));
     // setView 后立即推送一次当前状态。
     QCOMPARE(view.updateCount, 1);
+}
+
+void PlatformControlTests::detachedViewStopsReceivingUpdates()
+{
+    TrayController controller(FocusTimer::instance());
+    FakeTrayView view;
+    controller.setView(&view);
+    QCOMPARE(view.updateCount, 1);
+
+    // 解绑之后计时器再变化也不能推给这个视图。菜单栏宿主与控制器互相持有裸指针，
+    // 宿主先销毁时若控制器还在推送，就是往已释放对象上写——此前只靠 main.cpp 里
+    // 「trayController 声明在 statusBar 之前」这条隐式约定兜着，代码里没有任何说明。
+    controller.setView(nullptr);
+    const int detachedCount = view.updateCount;
+
+    const int taskId = insertTaskRow(QStringLiteral("解绑后仍在跑的任务"));
+    QVERIFY(taskId > 0);
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("解绑后仍在跑的任务"), 25 * 60));
+
+    QCOMPARE(view.updateCount, detachedCount);
+    // 控制器自身仍然正常工作，只是不再有视图可推。
+    QVERIFY(controller.display().canPause);
+
+    QVERIFY(FocusTimer::instance()->stopFocus());
 }
 
 void PlatformControlTests::startingFocusDrivesMenuState()

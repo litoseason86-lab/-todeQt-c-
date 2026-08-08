@@ -22,17 +22,6 @@ namespace {
 // 一个稳稳达标的番茄时长：高于有效门槛即可，具体数值对断言没有意义。
 constexpr int kValidPomodoroSeconds = FocusSessionRules::kMinimumValidDurationSeconds + 60;
 
-QVariantMap goalById(const QVariantList& goals, int id)
-{
-    for (const QVariant& entry : goals) {
-        const QVariantMap map = entry.toMap();
-        if (map.value(QStringLiteral("id")).toInt() == id) {
-            return map;
-        }
-    }
-    return QVariantMap();
-}
-
 }
 
 class GoalServiceTests : public QObject

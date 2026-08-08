@@ -179,5 +179,10 @@ int main(int argc, char *argv[])
     NotificationService::instance()->setBackend(nullptr);
     // 同理：解绑会先把已注册的系统热键全部注销，避免进程退出后系统里残留热键登记。
     ShortcutRegistry::instance()->setGlobalBackend(nullptr);
+    // 菜单栏与控制器互相持有裸指针，两个方向都要显式断开。此前正确性只靠
+    // 「trayController 声明在 statusBar 之前所以析构更晚」这一条隐式约定支撑，
+    // 而代码里没有任何地方写着这件事——挪一行声明就会变成悬垂指针。
+    trayController.setView(nullptr);
+    statusBar.detachController();
     return exitCode;
 }

@@ -22,6 +22,14 @@ Item {
 
     signal sampleRefreshRequested()
 
+    // 调用方义务：effectEnabled 必须带上自身的可见性，例如
+    //     effectEnabled: root.frostEnabled && root.visible
+    // 这是全应用最贵的构造（背景采样 FBO + 折射 Shader + 模糊各一个 GPU pass），
+    // 漏写就会让它在被 StackLayout 切走的后台页面上常驻。
+    //
+    // 这一项曾经试过收进组件内部（直接与 root.visible 求与），但本项目的 QML 测试
+    // 沙箱里 visible 的级联不可靠——组件挂在 TestCase 下时恒为假，
+    // 于是这个最贵的组件反而完全失去测试覆盖。宁可把义务写在契约里由调用方落实。
     readonly property bool effectRequested: root.effectEnabled
                                             && Theme.glassBlurAllowed
                                             && root.sourceItem !== null

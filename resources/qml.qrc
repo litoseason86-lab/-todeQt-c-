@@ -53,7 +53,6 @@
         <file alias="qml/components/Grid100.qml">../qml/components/Grid100.qml</file>
         <file alias="qml/components/GoalHeatmap.qml">../qml/components/GoalHeatmap.qml</file>
         <file alias="qml/components/MilestoneDialog.qml">../qml/components/MilestoneDialog.qml</file>
-        <file alias="qml/components/AchievedGoalsCard.qml">../qml/components/AchievedGoalsCard.qml</file>
         <file alias="qml/components/FocusRing.qml">../qml/components/FocusRing.qml</file>
         <file alias="qml/components/FocusImmersiveOverlay.qml">../qml/components/FocusImmersiveOverlay.qml</file>
         <file alias="qml/components/ImmersionWindowSync.qml">../qml/components/ImmersionWindowSync.qml</file>

@@ -195,6 +195,23 @@ if(APPLE AND POMODORO_TODO_DEPLOY_LOCAL)
     )
 endif()
 
+# 编译告警门禁。实测（2026-08-08，Qt 6.9.0 / AppleClang）全仓在 -Wall -Wextra 下
+# 只有一条告警且已清掉，所以开启的代价接近零、收益是把这个状态锁住：以后新代码
+# 引入未初始化成员、签名不匹配、漏 case 之类的问题会当场暴露，而不是等到审计轮次。
+#
+# 只加到本项目自己的目标上，不用 CMAKE_CXX_FLAGS 全局污染——那会连 Qt 自动生成的
+# moc/qrc 代码也一起管，那些不是我们能修的。
+# 不开 -Werror：单条告警不值得阻断本地开发，CI 里可另行升级。
+function(pomodoro_todo_enable_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra)
+    endif()
+endfunction()
+
+pomodoro_todo_enable_warnings(PomodoroTodo)
+
 enable_testing()
 
 add_executable(PomodoroTodoTests
@@ -236,6 +253,7 @@ target_link_libraries(PomodoroTodoTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(PomodoroTodoTests)
 add_test(NAME PomodoroTodoTests COMMAND PomodoroTodoTests)
 
 add_executable(CoreLogicTests
@@ -272,6 +290,7 @@ target_link_libraries(CoreLogicTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(CoreLogicTests)
 add_test(NAME CoreLogicTests COMMAND CoreLogicTests)
 
 add_executable(RobustnessTests
@@ -307,6 +326,7 @@ target_link_libraries(RobustnessTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(RobustnessTests)
 add_test(NAME RobustnessTests COMMAND RobustnessTests)
 
 add_executable(CountdownServiceTests
@@ -331,6 +351,7 @@ target_link_libraries(CountdownServiceTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(CountdownServiceTests)
 add_test(NAME CountdownServiceTests COMMAND CountdownServiceTests)
 
 # 长期目标：进度全部由 focus_sessions 现算，所以测试直接写入专注记录再断言聚合结果。
@@ -359,6 +380,7 @@ target_link_libraries(GoalServiceTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(GoalServiceTests)
 add_test(NAME GoalServiceTests COMMAND GoalServiceTests)
 
 # 菜单栏控制器与通知服务是平台无关层，测试不引入任何 .mm / AppKit 依赖，
@@ -397,6 +419,7 @@ target_link_libraries(PlatformControlTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(PlatformControlTests)
 add_test(NAME PlatformControlTests COMMAND PlatformControlTests)
 
 # 原生通知授权的状态查询可由 fake 注入，测试不访问系统通知中心或弹授权框。
@@ -415,6 +438,7 @@ target_link_libraries(MacNotificationBackendTests PRIVATE
     "-framework UserNotifications"
 )
 
+pomodoro_todo_enable_warnings(MacNotificationBackendTests)
 add_test(NAME MacNotificationBackendTests COMMAND MacNotificationBackendTests)
 
 # 快捷键注册表是平台无关层：默认键位、用户覆盖、冲突判定与全局热键装配全在这里，
@@ -435,6 +459,7 @@ target_link_libraries(ShortcutRegistryTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(ShortcutRegistryTests)
 add_test(NAME ShortcutRegistryTests COMMAND ShortcutRegistryTests)
 set_tests_properties(ShortcutRegistryTests PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
@@ -456,6 +481,7 @@ target_link_libraries(MacGlobalHotkeyTests PRIVATE
     "-framework Carbon"
 )
 
+pomodoro_todo_enable_warnings(MacGlobalHotkeyTests)
 add_test(NAME MacGlobalHotkeyTests COMMAND MacGlobalHotkeyTests)
 set_tests_properties(MacGlobalHotkeyTests PROPERTIES
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
@@ -495,6 +521,7 @@ target_link_libraries(BackupServiceTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(BackupServiceTests)
 add_test(NAME BackupServiceTests COMMAND BackupServiceTests)
 set_tests_properties(BackupServiceTests PROPERTIES
     # QDesktopServices/QtGui 需要一个平台；离屏即可，不弹窗。
@@ -529,6 +556,7 @@ target_link_libraries(TimingRobustnessTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(TimingRobustnessTests)
 add_test(NAME TimingRobustnessTests COMMAND TimingRobustnessTests)
 
 add_executable(FontAssetsTests
@@ -541,6 +569,7 @@ target_link_libraries(FontAssetsTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(FontAssetsTests)
 add_test(NAME FontAssetsTests COMMAND FontAssetsTests)
 set_tests_properties(FontAssetsTests PROPERTIES
     # 字体校验无需真实窗口；offscreen 保证后台不弹窗。
@@ -557,6 +586,7 @@ target_link_libraries(WallpaperAssetsTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(WallpaperAssetsTests)
 add_test(NAME WallpaperAssetsTests COMMAND WallpaperAssetsTests)
 set_tests_properties(WallpaperAssetsTests PROPERTIES
     # 图片解码无需真实窗口；offscreen 保证后台不弹窗。
@@ -573,6 +603,7 @@ target_link_libraries(ShaderAssetsTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(ShaderAssetsTests)
 add_test(NAME ShaderAssetsTests COMMAND ShaderAssetsTests)
 
 add_executable(SoundAssetsTests
@@ -585,6 +616,7 @@ target_link_libraries(SoundAssetsTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(SoundAssetsTests)
 add_test(NAME SoundAssetsTests COMMAND SoundAssetsTests)
 
 add_executable(QmlResourceManifestTests
@@ -601,6 +633,7 @@ target_link_libraries(QmlResourceManifestTests PRIVATE
     Qt6::Test
 )
 
+pomodoro_todo_enable_warnings(QmlResourceManifestTests)
 add_test(NAME QmlResourceManifestTests COMMAND QmlResourceManifestTests)
 
 add_test(
