@@ -134,6 +134,7 @@ private slots:
     void formatVersionMismatchIsRejected();
     void schemaMetadataMismatchIsRejected();
     void restoreCreatesPreRestoreSnapshot();
+    void repeatedRestoresCapPreRestoreSnapshots();
     void restoreMatchesTaskAndSessionCounts();
     void restorePreservesCountdownGoals();
     void restoreRestoresSettingsValue();
@@ -356,6 +357,40 @@ void BackupServiceTests::restoreCreatesPreRestoreSnapshot()
     const QStringList before = dir.entryList(
         QStringList{QStringLiteral("before-restore-*.tomatobackup")}, QDir::Files);
     QVERIFY(!before.isEmpty());
+}
+
+void BackupServiceTests::repeatedRestoresCapPreRestoreSnapshots()
+{
+    QVERIFY(insertTask(QStringLiteral("原始任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    // 恢复前快照此前完全没有清理逻辑（pruneAutoBackups 只匹配 auto- 前缀），
+    // 每恢复一次就永久多留一份完整数据库副本。
+    //
+    // 不用「连续恢复很多次」来造这个局面：快照文件名带秒级时间戳，那样每次都要
+    // qSleep 一秒才能拿到不同文件名，一个用例就要跑七八秒。直接铺好历史快照，
+    // 再跑一次真实恢复，测到的是同一段清理逻辑。
+    QDir(backupsDir()).mkpath(QStringLiteral("."));
+    const int existing = BackupService::kBeforeRestoreRetention + 3;
+    for (int i = 0; i < existing; ++i) {
+        QFile stale(QDir(backupsDir()).filePath(
+            QStringLiteral("before-restore-2020010100000%1.tomatobackup").arg(i)));
+        QVERIFY(stale.open(QIODevice::WriteOnly));
+        stale.write("stale");
+        stale.close();
+    }
+
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+
+    QDir dir(backupsDir());
+    const QStringList snapshots = dir.entryList(
+        QStringList{QStringLiteral("before-restore-*.tomatobackup")}, QDir::Files);
+    QCOMPARE(snapshots.size(), BackupService::kBeforeRestoreRetention);
+
+    // 自动备份是另一套配额，不能被恢复前快照挤掉，反之亦然。
+    const QStringList autos = dir.entryList(
+        QStringList{QStringLiteral("auto-*.tomatobackup")}, QDir::Files);
+    QVERIFY(autos.isEmpty());
 }
 
 void BackupServiceTests::restoreMatchesTaskAndSessionCounts()

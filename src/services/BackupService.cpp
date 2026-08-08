@@ -468,6 +468,10 @@ bool BackupService::restoreBackup(const QString& srcPath)
         emit restoreCompleted(false, m_lastError);
         return false;
     }
+    // 先清到 N-1 再写新的一份，恢复结束后恰好留 N 份。放在创建之前而不是之后，
+    // 是因为异步恢复的快照是在工作线程里写的，成功/失败分支各有出口；
+    // 统一在入口处清理只需要一个插入点，也始终跑在 GUI 线程上。
+    pruneBeforeRestoreBackups();
     const QString preRestorePath = QDir(autoBackupsDir()).filePath(
         kBeforeRestorePrefix + timestampToken() + kBackupExtension);
     emit restoreStarted();
@@ -652,6 +656,7 @@ void BackupService::requestRestore(const QString& srcPath)
         return;
     }
 
+    pruneBeforeRestoreBackups();
     auto context = QSharedPointer<RestoreContext>::create();
     context->sourcePath = srcPath;
     context->databasePath = dbPath;
@@ -903,14 +908,26 @@ void BackupService::requestAutoBackupIfDue()
 
 void BackupService::pruneAutoBackups() const
 {
+    pruneByPrefix(kAutoPrefix, kAutoBackupRetention);
+}
+
+void BackupService::pruneBeforeRestoreBackups() const
+{
+    // 留 N-1 个位置给马上要写入的这一份，恢复结束后总数恰好是 kBeforeRestoreRetention。
+    pruneByPrefix(kBeforeRestorePrefix, kBeforeRestoreRetention - 1);
+}
+
+void BackupService::pruneByPrefix(const QString& prefix, int retention) const
+{
     QDir dir(autoBackupsDir());
-    const QFileInfoList autos = dir.entryInfoList(
-        QStringList{kAutoPrefix + QStringLiteral("*") + kBackupExtension},
+    // QDir::Time 是修改时间倒序，所以下标 [0, retention) 就是要保留的最新几份。
+    const QFileInfoList files = dir.entryInfoList(
+        QStringList{prefix + QStringLiteral("*") + kBackupExtension},
         QDir::Files,
         QDir::Time);
-    for (int index = kAutoBackupRetention; index < autos.size(); ++index) {
-        if (!QFile::remove(autos.at(index).absoluteFilePath())) {
-            qWarning() << "删除过期自动备份失败:" << autos.at(index).absoluteFilePath();
+    for (int index = retention; index < files.size(); ++index) {
+        if (!QFile::remove(files.at(index).absoluteFilePath())) {
+            qWarning() << "删除过期备份失败:" << files.at(index).absoluteFilePath();
         }
     }
 }

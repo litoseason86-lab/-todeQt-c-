@@ -29,6 +29,10 @@ public:
     // 备份文件扩展名与自动备份保留份数、周期。
     static constexpr int kAutoBackupRetention = 4;
     static constexpr int kAutoBackupIntervalDays = 7;
+    // 恢复前快照单独计数，不与自动备份共用配额：这两类的作用完全不同——
+    // 自动备份是周期性存档，恢复前快照是「这次恢复搞砸了还能退回去」的保险。
+    // 混在一起算的话，连续几次恢复就会把周期存档全挤掉，反之亦然。
+    static constexpr int kBeforeRestoreRetention = 3;
 
     static BackupService* instance();
     explicit BackupService(QObject* parent = nullptr);
@@ -108,6 +112,11 @@ private:
     void rollbackAsyncRestore(const QSharedPointer<RestoreContext>& context,
                               const QString& reason);
     void pruneAutoBackups() const;
+    // 恢复前快照此前完全没有清理逻辑：pruneAutoBackups 只匹配 auto- 前缀，
+    // 而 before-restore- 快照写在同一目录，每恢复一次就永久多留一份完整数据库副本。
+    void pruneBeforeRestoreBackups() const;
+    // 两类快照共用的按前缀清理。files 按修改时间倒序，保留最新 retention 份。
+    void pruneByPrefix(const QString& prefix, int retention) const;
     void setLastError(const QString& message) const;
     void setBusy(bool busy,
                  const QString& operationText = QString(),
