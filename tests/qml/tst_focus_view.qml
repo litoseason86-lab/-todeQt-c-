@@ -865,11 +865,13 @@ TestCase {
 
     function test_ringShrinksWhenPanelExpanded() {
         view.toPomodoroTab(true)
-        wait(20)
 
         const ring = findChild(view, "focusRing")
         verify(ring)
-        compare(ring.implicitWidth, 252)
+        // 切到番茄页签同样会触发那个 150ms 的尺寸过渡，所以这里和下面两处一样要等收敛。
+        // 原来是固定 wait(20) 后直接精确比对，实测在稍慢的环境下会读到动画中途的值
+        // （例如 251.95 vs 252）而假红。
+        tryCompare(ring, "implicitWidth", 252, 1000)
 
         view.panelExpanded = true
         // implicitWidth 带 150ms 过渡动画，等它收敛到目标值。
@@ -882,18 +884,26 @@ TestCase {
     function test_durationPanelSteppersAlignToRightEdge() {
         view.toPomodoroTab(true)
         view.panelExpanded = true
-        wait(20)
 
-        const panel = findChild(view, "durationPanel")
-        const workPlus = findChild(view, "workStepperPlus")
-        const breakPlus = findChild(view, "breakStepperPlus")
-        verify(panel)
-        verify(workPlus)
-        verify(breakPlus)
+        // 展开面板到布局落定是异步的，固定 wait 只是在赌它够快。实测：把本文件里
+        // 全部 wait(20) 降到 wait(0) 时，66 条用例只有这一条失败——说明其余的
+        // wait 都有 20 倍余量，而这一条是真的贴着时序在跑，负载高的机器上会假红。
+        // 改成轮询「面板与步进器都已就位且有尺寸」，最终断言仍用 compare，
+        // 这样对不齐时的失败信息里还能看到具体数值。
+        let panel = null
+        let workPlus = null
+        let breakPlus = null
+        tryVerify(function () {
+            panel = findChild(view, "durationPanel")
+            workPlus = findChild(view, "workStepperPlus")
+            breakPlus = findChild(view, "breakStepperPlus")
+            return panel && workPlus && breakPlus
+                && panel.width > 0 && workPlus.width > 0 && breakPlus.width > 0
+        })
 
+        const expectedRight = panel.width - Theme.space16
         const workRight = workPlus.mapToItem(panel, workPlus.width, 0).x
         const breakRight = breakPlus.mapToItem(panel, breakPlus.width, 0).x
-        const expectedRight = panel.width - Theme.space16
 
         compare(Math.round(workRight), Math.round(expectedRight))
         compare(Math.round(breakRight), Math.round(expectedRight))
