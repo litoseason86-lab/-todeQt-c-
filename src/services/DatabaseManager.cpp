@@ -251,11 +251,19 @@ bool DatabaseManager::createTables()
         version = 4;
     }
 
-    if (version < 5 || !routineForeignKeyUsesSetNull()) {
+    // v5 是整个迁移链里唯一会整表重建 tasks 的一步，代价最高、破坏力最大。
+    // 结构检查失败时才重建，而「查询本身没跑成功」不算结构失败——否则一次瞬时的
+    // PRAGMA 故障就会让一个已经迁移完成的库白白重建一次。
+    bool foreignKeyCheckSucceeded = false;
+    const bool foreignKeyIsCorrect = routineForeignKeyUsesSetNull(&foreignKeyCheckSucceeded);
+    if (version < 5 || (foreignKeyCheckSucceeded && !foreignKeyIsCorrect)) {
         if (!migrateToVersion5()) {
             return false;
         }
         version = 5;
+    } else if (!foreignKeyCheckSucceeded) {
+        // 不重建，但也不能假装一切正常：下次启动查询成功时会再判一次。
+        qWarning() << "跳过 v5 外键检查：无法读取 tasks 外键定义，本次不重建该表";
     }
 
     if (version < 6
@@ -551,9 +559,44 @@ bool DatabaseManager::migrateToVersion5()
         return false;
     }
 
-    const QString provenanceExpression = columnExists(
-        QStringLiteral("tasks"), QStringLiteral("routine_generated"))
+    // 这一步是整表重建，不是 ALTER：新表只会拿到下面写死的这些列，没列进来的
+    // 一律连同数据被丢掉。因此每次给 tasks 新增列，都必须同步更新这份清单。
+    //
+    // 触发条件里有一条结构检查（外键动作不对就重建），所以这段代码会在**已经迁移到
+    // 最新版本的库**上运行，而不只是在 v4 升 v5 时运行——这正是漏列会造成用户数据
+    // 丢失的原因：v7 的 estimated_pomodoros 曾经就不在清单里，重建后全部归零。
+    const QStringList knownColumns = {
+        QStringLiteral("id"),
+        QStringLiteral("title"),
+        QStringLiteral("category"),
+        QStringLiteral("category_id"),
+        QStringLiteral("routine_id"),
+        QStringLiteral("routine_generated"),
+        QStringLiteral("date"),
+        QStringLiteral("completed"),
+        QStringLiteral("created_at"),
+        QStringLiteral("estimated_pomodoros"),
+    };
+
+    // 遇到不认识的列就拒绝重建。宁可让迁移失败并留下明确日志，
+    // 也不能把一列用户数据静默抹掉——后者事后无法察觉，也无法还原。
+    const QStringList currentColumns = tableColumns(QStringLiteral("tasks"));
+    for (const QString& column : currentColumns) {
+        if (!knownColumns.contains(column)) {
+            qCritical() << "拒绝执行 v5 重建：tasks 存在重建清单未覆盖的列" << column
+                        << "——请把它加进 migrateToVersion5 的 knownColumns 与建表语句";
+            restoreForeignKeys();
+            return false;
+        }
+    }
+
+    // 从真正的 v4 库升级时后面这些列还不存在，用默认值兜底。
+    const QString provenanceExpression =
+        currentColumns.contains(QStringLiteral("routine_generated"))
         ? QStringLiteral("routine_generated") : QStringLiteral("0");
+    const QString estimateExpression =
+        currentColumns.contains(QStringLiteral("estimated_pomodoros"))
+        ? QStringLiteral("estimated_pomodoros") : QStringLiteral("0");
 
     QSqlQuery query(m_db);
     const QStringList statements = {
@@ -567,13 +610,16 @@ bool DatabaseManager::migrateToVersion5()
                 routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
                 date TEXT NOT NULL,
                 completed INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                estimated_pomodoros INTEGER NOT NULL DEFAULT 0
             )
         )SQL"),
         QStringLiteral(
-            "INSERT INTO tasks_v5 (id, title, category, category_id, routine_id, routine_generated, date, completed, created_at) "
-            "SELECT id, title, category, category_id, routine_id, %1, date, completed, created_at FROM tasks")
-            .arg(provenanceExpression),
+            "INSERT INTO tasks_v5 (id, title, category, category_id, routine_id, "
+            "routine_generated, date, completed, created_at, estimated_pomodoros) "
+            "SELECT id, title, category, category_id, routine_id, %1, date, completed, "
+            "created_at, %2 FROM tasks")
+            .arg(provenanceExpression, estimateExpression),
         QStringLiteral("DROP TABLE tasks"),
         QStringLiteral("ALTER TABLE tasks_v5 RENAME TO tasks")
     };
@@ -872,15 +918,22 @@ bool DatabaseManager::migrateToVersion9()
     return true;
 }
 
-bool DatabaseManager::routineForeignKeyUsesSetNull() const
+bool DatabaseManager::routineForeignKeyUsesSetNull(bool* checkSucceeded) const
 {
+    if (checkSucceeded) {
+        *checkSucceeded = false;
+    }
     if (!m_db.isOpen()) {
         return false;
     }
 
     QSqlQuery query(m_db);
     if (!query.exec(QStringLiteral("PRAGMA foreign_key_list(tasks)"))) {
+        qWarning() << "无法读取 tasks 外键定义:" << query.lastError().text();
         return false;
+    }
+    if (checkSucceeded) {
+        *checkSucceeded = true;
     }
 
     while (query.next()) {
@@ -1093,6 +1146,25 @@ bool DatabaseManager::tableExists(const QString& tableName) const
     }
 
     return query.next();
+}
+
+QStringList DatabaseManager::tableColumns(const QString& tableName) const
+{
+    QStringList columns;
+    if (!m_db.isOpen()) {
+        return columns;
+    }
+    QSqlQuery query(m_db);
+    // 表名来自代码内的字面量，不接受外部输入，因此这里直接拼接是安全的
+    // （PRAGMA 也不支持绑定参数）。
+    if (!query.exec(QStringLiteral("PRAGMA table_info(%1)").arg(tableName))) {
+        qWarning() << "无法读取表结构:" << tableName << query.lastError().text();
+        return columns;
+    }
+    while (query.next()) {
+        columns.append(query.value(1).toString());
+    }
+    return columns;
 }
 
 bool DatabaseManager::columnExists(const QString& tableName, const QString& columnName) const

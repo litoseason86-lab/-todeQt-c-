@@ -728,6 +728,8 @@ private slots:
     void freshDatabaseHasRoutineIdColumn();
     void migrationV4DoesNotGuessRoutineLineage();
     void migrationV6ClearsUntrustedRoutineLineage();
+    void migrationV5RebuildKeepsColumnsAddedAfterV5();
+    void migrationV5RefusesToRebuildWhenTasksHasAnUnknownColumn();
     void freshDatabaseCreatesVersion4PresetCategories();
     void migrationMapsLegacyCategoryTextToCategoryIds();
     void migrationCreatesDatabaseBackup();
@@ -3202,6 +3204,118 @@ void ServiceTests::freshDatabaseCreatesVersion4PresetCategories()
         QCOMPARE(category.value(QStringLiteral("isPreset")).toBool(), true);
         QCOMPARE(category.value(QStringLiteral("displayOrder")).toInt(), index + 1);
     }
+}
+
+void ServiceTests::migrationV5RebuildKeepsColumnsAddedAfterV5()
+{
+    // v5 迁移的触发条件是「version < 5 **或** tasks.routine_id 的外键动作不是 SET NULL」。
+    // 后一条是为了修半迁移状态，但它会让一个已经是 v9 的库也走进 v5 的整表重建，
+    // 而那次重建用的是冻结在 v5 那一刻的列清单——v5 之后新增的列会被静默丢掉。
+    //
+    // v6 的 routine_generated 被专门保住了（provenanceExpression），说明写的人想过这件事；
+    // v7 的 estimated_pomodoros 没有——这正是本用例要锁住的缺口。
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("有预估的任务"), today);
+    QVERIFY(taskId > 0);
+
+    QSqlQuery seed(DatabaseManager::instance()->database());
+    seed.prepare(QStringLiteral(
+        "UPDATE tasks SET estimated_pomodoros = 5 WHERE id = :id"));
+    seed.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY(seed.exec());
+
+    // 把 tasks 的外键动作改成非 SET NULL，制造出「结构检查判定需要重建」的局面。
+    // 现实中同一条路径还有另一个入口：routineForeignKeyUsesSetNull() 在 PRAGMA
+    // 查询失败时也返回 false，分不清「外键真的不对」和「这次没查成功」。
+    // user_version 保持在当前版本不动，模拟的就是一个已完成迁移的库。
+    QSqlQuery rebuild(DatabaseManager::instance()->database());
+    QVERIFY(rebuild.exec(QStringLiteral("PRAGMA foreign_keys = OFF")));
+    const QStringList breakForeignKey = {
+        QStringLiteral(R"SQL(
+            CREATE TABLE tasks_broken (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+                category TEXT,
+                category_id INTEGER REFERENCES categories(id),
+                routine_id INTEGER REFERENCES routines(id) ON DELETE CASCADE,
+                routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
+                date TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                estimated_pomodoros INTEGER NOT NULL DEFAULT 0
+            )
+        )SQL"),
+        QStringLiteral("INSERT INTO tasks_broken SELECT id, title, category, category_id, "
+                       "routine_id, routine_generated, date, completed, created_at, "
+                       "estimated_pomodoros FROM tasks"),
+        QStringLiteral("DROP TABLE tasks"),
+        QStringLiteral("ALTER TABLE tasks_broken RENAME TO tasks")
+    };
+    for (const QString& statement : breakForeignKey) {
+        QVERIFY2(rebuild.exec(statement), qPrintable(rebuild.lastError().text()));
+    }
+    QVERIFY(rebuild.exec(QStringLiteral("PRAGMA foreign_keys = ON")));
+
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    // 重建后预估番茄数必须原样还在——丢的是用户手填的数据，且没有任何提示。
+    QSqlQuery check(DatabaseManager::instance()->database());
+    check.prepare(QStringLiteral("SELECT estimated_pomodoros FROM tasks WHERE id = :id"));
+    check.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY(check.exec());
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toInt(), 5);
+}
+
+void ServiceTests::migrationV5RefusesToRebuildWhenTasksHasAnUnknownColumn()
+{
+    // 复发路径：以后给 tasks 加了列却忘了更新 v5 重建清单。此前的行为是静默丢列丢数据，
+    // 事后既察觉不到也还原不了。现在要求它直接失败并留下日志。
+    QSqlQuery prepare(DatabaseManager::instance()->database());
+    QVERIFY(prepare.exec(QStringLiteral(
+        "ALTER TABLE tasks ADD COLUMN future_column TEXT")));
+
+    // 同样用「外键动作不对」把 v5 重建逼出来。
+    QVERIFY(prepare.exec(QStringLiteral("PRAGMA foreign_keys = OFF")));
+    const QStringList breakForeignKey = {
+        QStringLiteral(R"SQL(
+            CREATE TABLE tasks_broken (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+                category TEXT,
+                category_id INTEGER REFERENCES categories(id),
+                routine_id INTEGER REFERENCES routines(id) ON DELETE CASCADE,
+                routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
+                date TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                estimated_pomodoros INTEGER NOT NULL DEFAULT 0,
+                future_column TEXT
+            )
+        )SQL"),
+        QStringLiteral("INSERT INTO tasks_broken SELECT id, title, category, category_id, "
+                       "routine_id, routine_generated, date, completed, created_at, "
+                       "estimated_pomodoros, future_column FROM tasks"),
+        QStringLiteral("DROP TABLE tasks"),
+        QStringLiteral("ALTER TABLE tasks_broken RENAME TO tasks")
+    };
+    for (const QString& statement : breakForeignKey) {
+        QVERIFY2(prepare.exec(statement), qPrintable(prepare.lastError().text()));
+    }
+    QVERIFY(prepare.exec(QStringLiteral("PRAGMA foreign_keys = ON")));
+
+    // 迁移必须失败，而不是丢掉 future_column。
+    QVERIFY(!DatabaseManager::instance()->createTables());
+
+    // 未知列与其它列都必须原封不动地还在。
+    QSqlQuery info(DatabaseManager::instance()->database());
+    QVERIFY(info.exec(QStringLiteral("PRAGMA table_info(tasks)")));
+    QStringList columns;
+    while (info.next()) {
+        columns.append(info.value(1).toString());
+    }
+    QVERIFY(columns.contains(QStringLiteral("future_column")));
+    QVERIFY(columns.contains(QStringLiteral("estimated_pomodoros")));
 }
 
 void ServiceTests::migrationMapsLegacyCategoryTextToCategoryIds()

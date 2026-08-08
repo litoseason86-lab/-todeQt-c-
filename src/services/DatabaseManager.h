@@ -64,7 +64,13 @@ private:
     void pruneOldBackups(const QDir& databaseDir) const;
     bool tableExists(const QString& tableName) const;
     bool columnExists(const QString& tableName, const QString& columnName) const;
-    bool routineForeignKeyUsesSetNull() const;
+    // 表的当前列名集合。v5 整表重建需要它来确认自己认识 tasks 的每一列——
+    // 重建用的是写死的列清单，遇到不认识的列必须拒绝执行而不是把它连同数据丢掉。
+    QStringList tableColumns(const QString& tableName) const;
+    // tasks.routine_id 的外键动作是否已经是 SET NULL。
+    // checkSucceeded 用来区分「外键确实不对」和「这次查询没成功」：
+    // 两者都返回 false，但只有前者才该触发 v5 的整表重建。
+    bool routineForeignKeyUsesSetNull(bool* checkSucceeded = nullptr) const;
 
     // Qt 的数据库连接按名字管理，测试切换数据库路径时必须能精确关闭旧连接。
     QString m_connectionName;

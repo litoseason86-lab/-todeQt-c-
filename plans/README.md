@@ -172,6 +172,37 @@
 > `docs/testing/` 三份 2026-06 报告已加历史声明与勘误（其中「有关联任务的科目不可删除」与现行代码相反）。
 > **仍未清理**：`docs/superpowers/plans/` 的 31 份历史计划（1216 个未勾选项）。
 
+> **2026-08-08 根源层审计（`DatabaseManager` 迁移链）**
+>
+> 按「被多少文件包含」定位根源：`AppSettings`(21)、`DatabaseManager`(20) 是依赖树的底。
+> `DatabaseManager` 里风险最高的是 v1→v9 迁移链——它不可逆地改写用户数据。
+>
+> **发现并修复一个会静默丢用户数据的缺陷（先写特征测试证实，测试先红后绿）：**
+> v5 是整条链里唯一**整表重建 `tasks`** 的一步，用的是冻结在 v5 那一刻的 9 列清单。
+> v6 的 `routine_generated` 被专门用 `provenanceExpression` 保住了（说明当年想过这件事），
+> 但 v7 加的 `estimated_pomodoros` 没跟上：重建后该列**全部归零**。
+>
+> 关键在于它不只是「v4 升 v5」时才跑。触发条件是
+> `version < 5 || !routineForeignKeyUsesSetNull()`，第二个条件是为了修半迁移状态，
+> 这意味着**这段重建会在已经迁到 v9 的库上运行**；而该函数在 `PRAGMA` 查询失败时
+> 也返回 false，分不清「外键真的不对」和「这次没查成功」。
+>
+> 修法分两个方向：
+> - **减少触发面**：`routineForeignKeyUsesSetNull(bool* checkSucceeded)`。查询失败不再
+>   等于「需要重建」，只告警并跳过，下次启动查询成功时再判。
+> - **限制破坏力**：补上 `estimated_pomodoros`，并加一道**未知列拒绝执行**的守卫。
+>   这条比补列本身更重要——它把「以后有人加列忘了更新清单」的后果从静默丢数据
+>   变成迁移失败 + 明确日志。后者能被发现，前者不能。
+>
+> 用例：`migrationV5RebuildKeepsColumnsAddedAfterV5`、
+> `migrationV5RefusesToRebuildWhenTasksHasAnUnknownColumn`。
+> **这条可以从第一轮审计的「v5 迁移用冻结列集重建」积压里划掉。**
+>
+> **本轮未审的根源层部分**（下一轮继续）：`DatabaseManager` 的 v2 旧文本科目映射边界、
+> `initialize()`/`close()` 的开关语义（备份恢复会反复调用）、以及 `AppSettings` 整体。
+>
+> 测试基线更新：**324** 个 C++ 测试函数（`PomodoroTodoTests` 160），17 个目标 71 秒。
+
 > **2026-08-08 复核（基于 `e3a38b8`，本轮实际改动）**
 >
 > **测试基线（本次实测，Qt 6.9.0）**：`ctest` **17/17 全绿，69 秒**。
