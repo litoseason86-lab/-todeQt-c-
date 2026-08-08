@@ -53,8 +53,8 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
 `POMODORO_TODO_DEPLOY_LOCAL` 是 CMake cache 变量，会持久化在构建目录里：在同一个目录先跑验证构建再跑部署构建，
 `OFF` 仍然生效，`deploy-local-app` 目标根本不会被创建，部署会静默失效。
 
-测试规模（2026-08-07 实测，Qt 6.9.0）：**17 个 ctest 目标全绿，约 67 秒**——
-16 个 C++ 目标共 320 个测试函数，`PomodoroTodoQmlTests` 覆盖 `tests/qml/` 的 33 个文件、462 条断言函数。
+测试规模（2026-08-08 实测，Qt 6.9.0）：**17 个 ctest 目标全绿，约 69 秒**——
+16 个 C++ 目标共 322 个测试函数，`PomodoroTodoQmlTests` 覆盖 `tests/qml/` 的 34 个文件、467 条断言函数。
 单个目标的跑法与说明见 `docs/运行命令.md`。
 
 ### 构建并部署
@@ -74,6 +74,9 @@ cmake --build /tmp/pt-build -j8
 `/Applications/番茄Todo.app` 之间选错包。日常启动统一使用 `/Applications/番茄Todo.app`。
 部署脚本（`cmake/DeployLocalApp.cmake`）的顺序是：复制到暂存目录 → 校验主二进制存在 →
 把旧包改名备份 → 原子 rename 换上新包 → 清理备份并刷新 `lsregister`；任一步失败都会把旧包放回原位。
+
+构建对应用与全部测试目标开启 `-Wall -Wextra`（`pomodoro_todo_enable_warnings`），
+当前实测 0 警告；没开 `-Werror`，单条告警不阻断本地开发。
 
 可选的 QML 静态检查（用目标 Qt SDK 自带的 `qmllint`，不要用 PySide6 工具链）：
 
@@ -95,7 +98,7 @@ resources/             Qt 资源文件（字体、壁纸、音效）
 shaders/               预编译 Shader 资源
 cmake/                 构建脚本（DeployLocalApp.cmake：部署到 /Applications 的原子切换逻辑）
 tests/                 Qt Test 自动化测试（C++ 用例 + tests/qml/ 的 Qt Quick Test）
-docs/                  设计与开发文档（设计稿/、testing/ 与 superpowers/ 为历史归档）
+docs/                  运行命令与专题方案；superpowers/ 为历史归档（只保留设计规格）
 plans/                 编号实施计划（plans/README.md 是执行状态索引）
 ```
 

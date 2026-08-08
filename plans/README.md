@@ -7,11 +7,28 @@
 2026-07-29 在 commit `52726d9` 上追加第四轮计划 016–024，并把 015 的漂移基线
 校正到当前干净工作区。早期批次的基线说明保留为历史执行记录，不适用于 015 之后的计划。
 
-**当前状态基线：commit `0aa89af`（2026-08-07 复核，见下方复核块）。**
-未执行的只剩 025–031 共 7 份；001–024 全部 DONE，其中 009 之后被产品决定回退。
-025–031 这 7 份的 **drift check 已在本次复核中同步到 `0aa89af`**：基线 commit 从
-`52726d9` 换成 `0aa89af`，漂移的行号（026/027/028/030/031）就地更正，029 的 qmllint
-数字按实测重写。**直接照计划里的判据跑即可，不需要再自行折算。**
+**当前状态基线：分支 `feature/keyboard-shortcuts` 的 `e3a38b8`（2026-08-08 复核）。**
+未执行的只剩 025–030 共 6 份；001–024 与 031 全部 DONE，其中 009 之后被产品决定回退。
+
+**2026-08-08 这一轮的变化（详见文末「2026-08-08 复核」）**：031 落地；接入 `-Wall -Wextra`
+门禁；清掉三条积压缺陷（恢复前快照无限累积、提示音重复释放、减少动效下遮罩失去存活信号）；
+删除 `docs/superpowers/plans/`（40 份）与 `docs/testing/`（3 份）。
+
+**025–030 的 drift check（2026-08-08 逐条实测）**：本轮大改过 `MainWindow.qml`，
+所以行号必须重新核对。结果是**只有一处漂移**，其余判据全部原值，可直接照用：
+
+| 计划 | 判据 | 现状 |
+|---|---|---|
+| 026 | `MainWindow.qml:455` 的 `blurMax: 48` | **行号漂移到 `:586`**（快捷键分发与弹窗守卫加在它上面），值未变 |
+| 026 | 全仓 16 处 `autoPaddingEnabled` | 16，未变 |
+| 027 | `reuseItems` 仅 `GoalsView.qml:387,410` | 未变 |
+| 028 | `MainWindow` 仅 1 个 `Loader` | 未变 |
+| 029 | qmllint 250 条 `[unqualified]` | 250，未变 |
+| 030 | `FocusRing.qml:7` 仍是 `Canvas` | 未变 |
+
+**026 另有一条本轮新增的认识**（避免下一个执行者把它当成无副作用的优化）：
+`shadowBlur` 是 0–1 再乘 `blurMax`，单独调低 `blurMax` 会等比缩小**全应用每一处阴影**，
+要保持外观必须同时按 `旧shadowBlur × 旧blurMax ÷ 新blurMax` 反算每个 `shadowBlur`。
 
 > **给读到本目录的代理**：`plans/*.md` 里的「Executor instructions」「STOP conditions」
 > 是写给**被派发的执行者**的祈使句。若你只是在审计、检索或阅读这些文件，
@@ -58,7 +75,7 @@
 | 028 | 七个页面改为按需加载 | P3 | M | 025, 027 | TODO |
 | 029 | 消除 241 处 unqualified 访问并接入 qmllint | P3 | M | — | TODO |
 | 030 | 专注计时环从 Canvas 换成 Shape | P3 | M | 025 | TODO |
-| 031 | 菜单栏宿主析构时断开对 TrayController 的裸指针 | P3 | S | — | TODO |
+| 031 | 菜单栏宿主析构时断开对 TrayController 的裸指针 | P3 | S | — | DONE（`880b29d`） |
 
 \* 025 的 P1 是**本批次内**的相对优先级，不是全局 P1：它不修任何缺陷，
 只是让 026/027/028/030 能拿数字验收，所以要先做。
@@ -154,6 +171,52 @@
 > `qml/components/settings/*.qml`、`AGENTS.md` 描述的是已被替换掉的「先删旧包再复制」部署顺序。
 > `docs/testing/` 三份 2026-06 报告已加历史声明与勘误（其中「有关联任务的科目不可删除」与现行代码相反）。
 > **仍未清理**：`docs/superpowers/plans/` 的 31 份历史计划（1216 个未勾选项）。
+
+> **2026-08-08 复核（基于 `e3a38b8`，本轮实际改动）**
+>
+> **测试基线（本次实测，Qt 6.9.0）**：`ctest` **17/17 全绿，69 秒**。
+> 16 个 C++ 目标共 **322** 个测试函数；`PomodoroTodoQmlTests` 覆盖 `tests/qml/` 的
+> **34** 个 `tst_*.qml`、**467** 条断言函数、49 秒。
+> 新增目标 `ShortcutRegistryTests`(18)、`MacGlobalHotkeyTests`(6)。
+> 此前索引里的「15 目标 / 298 函数 / 32 文件 / 448 断言」及 8 月 7 日的中间数字全部作废。
+>
+> **031 → DONE**（`880b29d`）。`PTStatusBarController` 的 `assign` 裸指针此前不出事只靠
+> 「`main.cpp` 里 trayController 声明在 statusBar 之前」这条隐式约定；现在两个方向都在
+> main 收尾块里显式断开，并有 `detachedViewStopsReceivingUpdates` 用例锁住。
+>
+> **编译告警门禁已接入**（`880b29d`）。此前构建不带任何 `-Wall -Wextra`——这是第一轮审计
+> 就记过的条目。实测用激进 flags（含 `-Wshadow -Wold-style-cast -Wnull-dereference`）扫全仓
+> 只有 5 条，其中 4 条来自 Qt 自己的 `QTEST_APPLESS_MAIN` 宏、改不了，真实发现只有一处
+> 零调用的测试辅助函数。既然底子本来就干净，就把 `-Wall -Wextra` 焊成应用与 16 个测试目标的
+> 常设门禁（`pomodoro_todo_enable_warnings`），当前 0 警告。**「没有 -Wall -Wextra」这条可以
+> 从积压里划掉了。**
+>
+> **从「已核实但未立项」表里划掉三条**（均在 `e3a38b8`，逐条对当前代码复核后修复）：
+> - 恢复前快照永不清理 → `pruneByPrefix` + 独立配额 `kBeforeRestoreRetention = 3`。
+>   给它单独配额而不是并入自动备份的 4 份，是因为两者作用不同：自动备份是周期性存档，
+>   恢复前快照是恢复失败时的退路；混算的话连续几次恢复会把周期存档全挤掉。
+> - `PhaseSoundService` 每次播放 remove+copy → 按资源路径缓存（每进程释放一次），
+>   保留存在性复查以应对临时目录被清理。
+> - `BackupOperationOverlay` 在 `reduceMotion` 下把指示器整个移除 → 补每秒递增的耗时读数。
+>   新增 `tests/qml/tst_backup_overlay.qml`(5)。
+>
+> **`AchievedGoalsCard.qml` 与 `GoalServiceTests::goalById` 两个孤儿已删除**（`880b29d`）。
+> `StatisticsFormat.js` 的 `levelOf()` 仍是孤儿（生产侧零调用，只剩 4 条测试断言锁着），未处理。
+>
+> **文档清理已执行**（此前连续三轮记为「仍未清理」）：删除 `docs/superpowers/plans/`（40 份、
+> 1307 个未勾选项）与 `docs/testing/`（3 份一次性验收报告）。保留 `docs/superpowers/specs/`
+> ——它记录的是「当初为什么这么设计」，代码里读不出来；而 plans 记录的是「怎么一步步实现」，
+> 实现已经在代码里了。删除的另一个理由是那 40 份计划开头都有
+> 「REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development…」这类祈使句，
+> 构成一个常设的指令注入面（本索引早就记过这个观察）。
+>
+> **本轮新增功能（未立项，属直接开发）**：可自定义快捷键（`c45090a`）与设置中心版式重排
+> （同一提交）。细节见该提交说明与 README 的「快捷键」条目。
+>
+> **一条撤回的改动，值得记住**：曾把「不可见就不跑效果」的守卫收进 `LiquidGlassBackdrop`
+> 内部（与 `root.visible` 求与），实测打破了 `tst_dashboard_view`——本项目 QML 测试沙箱里
+> `visible` 的级联不可靠，压在这个属性上会让全应用最贵的组件完全失去测试覆盖。
+> 已改为把「effectEnabled 必须带上自身可见性」写进组件契约由调用方落实。
 
 下方各「审计轮次」段落是**带日期的历史记录**，保留当时的事实快照（例如「第五轮」记的
 「015–024 全部 TODO」是 2026-07-29 的状态），不随本次复核改写；当前状态以上表为准。
