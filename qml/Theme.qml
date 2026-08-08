@@ -28,6 +28,22 @@ QtObject {
     readonly property color inkSoft: darkMode ? "#b3a68c" : "#765f45"        // 次要文字（浅色面满足正文 AA）
     readonly property color inkMuted: darkMode ? "#8c8069" : "#a0896b"       // 占位/禁用
 
+    // —— 输入控件的字色 ——
+    // TextField/TextArea 的正文、占位、选区颜色不是我们画的，是 Qt Quick Controls
+    // 从 palette 取的，而 Basic 风格的默认 palette.text 是写死的 #353637——**不跟随
+    // 本主题，也不跟随 macOS 外观**。所以夜间主题下不显式接管的输入框，打进去的字
+    // 会是深灰压在深棕底上，几乎看不见（2026-08-09 用户在「添加新任务」上报）。
+    //
+    // 值只在这里定义一次；使用方在自己的根节点上写四行 palette 赋值，
+    // palette 会沿子项树传播，框内所有输入控件一次覆盖。应用入口 main.qml 已经
+    // 兜了一层，各弹窗/页面再写一遍是为了**单独实例化时**（离屏走查、QML 测试）
+    // 也是真的——漏写的后果只是走查图不准，线上仍由入口那层保底。
+    readonly property color inputInk: inkStrong
+    readonly property color inputPlaceholderInk: inkMuted
+    // 选区底色两种明暗下同一焦糖；选中文字固定用深墨，保证压在焦糖上仍然清楚。
+    readonly property color inputSelection: accent
+    readonly property color inputSelectedInk: "#3d3327"
+
     // —— 强调 Accent（焦糖棕，两种明暗下同一色相）——
     readonly property color accent: "#d4a574"         // 基础态
     readonly property color accentStrong: "#c99666"   // 悬停/按下 深一档

@@ -6,6 +6,16 @@ import "components"
 ApplicationWindow {
     id: root
 
+    // 全应用输入框字色的兜底层。Qt Quick Controls 的 TextField 从 palette 取正文/占位/
+    // 选区颜色，Basic 风格的默认值写死深灰，夜间主题下几乎看不见。palette 会从窗口
+    // 传播到每个子项和弹窗（弹窗虽然重挂到 overlay，仍以窗口为调色板来源），
+    // 所以这一处就覆盖了全部输入控件，包括以后新加的。各弹窗自己也写了一份，
+    // 那份只为独立实例化（离屏走查、QML 测试）准确，线上以这里为准。
+    palette.text: Theme.inputInk
+    palette.placeholderText: Theme.inputPlaceholderInk
+    palette.highlight: Theme.inputSelection
+    palette.highlightedText: Theme.inputSelectedInk
+
     // 只有真实应用入口绑定全局令牌，避免多个独立 MainWindow 测试实例争抢单例属性。
     Binding {
         target: Theme

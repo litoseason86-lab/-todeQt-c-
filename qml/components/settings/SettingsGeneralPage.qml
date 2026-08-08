@@ -7,6 +7,12 @@ import "../.."
 FocusScope {
     id: root
 
+    // 输入框字色必须接管：Basic 风格默认 palette.text 写死深灰，夜间主题下看不见。
+    palette.text: Theme.inputInk
+    palette.placeholderText: Theme.inputPlaceholderInk
+    palette.highlight: Theme.inputSelection
+    palette.highlightedText: Theme.inputSelectedInk
+
     objectName: "settingsGeneralPage"
     property var appSettingsRef: null
     property bool compact: false

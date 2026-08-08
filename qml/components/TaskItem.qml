@@ -10,6 +10,12 @@ import ".."
 Rectangle {
     id: root
 
+    // 输入框字色必须接管：Basic 风格默认 palette.text 写死深灰，夜间主题下看不见。
+    palette.text: Theme.inputInk
+    palette.placeholderText: Theme.inputPlaceholderInk
+    palette.highlight: Theme.inputSelection
+    palette.highlightedText: Theme.inputSelectedInk
+
     Layout.fillWidth: true
     // compact：仪表盘「已完成」等只读列表用更矮的行高，避免每张卡都占 76 的执行态高度。
     implicitHeight: Math.max(root.compact ? 48 : 76, content.implicitHeight + (root.compact ? 16 : 28))
