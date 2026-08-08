@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Layouts
 import ".."
@@ -41,15 +43,19 @@ Item {
                 model: root.colors
 
                 Rectangle {
+        // delegate 显式声明消费的模型角色（pragma ComponentBehavior: Bound）。
+        required property var modelData
+        required property int index
+
                     id: swatch
 
-                    objectName: "colorSwatch-" + index
+                    objectName: "colorSwatch-" + swatch.index
                     Layout.preferredWidth: 48
                     Layout.preferredHeight: 36
                     radius: Theme.radiusSm
-                    color: modelData
-                    border.width: root.selectedColor === modelData ? 3 : 1
-                    border.color: root.selectedColor === modelData ? Theme.ink : Theme.border
+                    color: swatch.modelData
+                    border.width: root.selectedColor === swatch.modelData ? 3 : 1
+                    border.color: root.selectedColor === swatch.modelData ? Theme.ink : Theme.border
 
                     Behavior on border.width {
                         NumberAnimation {
@@ -63,14 +69,14 @@ Item {
                         cursorShape: Qt.PointingHandCursor
 
                         onClicked: {
-                            root.selectedColor = modelData
-                            root.colorSelected(modelData)
+                            root.selectedColor = swatch.modelData
+                            root.colorSelected(swatch.modelData)
                         }
                     }
 
                     Text {
                         anchors.centerIn: parent
-                        visible: root.selectedColor === modelData
+                        visible: root.selectedColor === swatch.modelData
                         text: "✓"
                         font.pixelSize: Theme.fontXl
                         font.bold: true

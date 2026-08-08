@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -106,11 +108,17 @@ Rectangle {
                     model: root.sessions
 
                     delegate: Item {
+                        id: sessionRow
+
+                        // delegate 显式声明消费的模型角色（pragma ComponentBehavior: Bound）。
+                        required property var modelData
+                        required property int index
+
                         width: timelineColumn.width
-                        height: sessionCard.height + (index < root.sessions.length - 1 ? 14 : 0)
+                        height: sessionCard.height + (sessionRow.index < root.sessions.length - 1 ? 14 : 0)
 
                         Rectangle {
-                            visible: index < root.sessions.length - 1
+                            visible: sessionRow.index < root.sessions.length - 1
                             x: 7
                             y: 28
                             width: 2
@@ -133,7 +141,7 @@ Rectangle {
 
                         Rectangle {
                             id: sessionCard
-                            objectName: "focusSessionCard-" + index
+                            objectName: "focusSessionCard-" + sessionRow.index
                             x: 24
                             width: Math.max(1, parent.width - x)
                             height: 86
@@ -154,7 +162,7 @@ Rectangle {
 
                                     Text {
                                         Layout.fillWidth: true
-                                        text: modelData.taskTitle && String(modelData.taskTitle).length > 0 ? modelData.taskTitle : "未知任务"
+                                        text: sessionRow.modelData.taskTitle && String(sessionRow.modelData.taskTitle).length > 0 ? sessionRow.modelData.taskTitle : "未知任务"
                                         font.pixelSize: Theme.fontLg
                                         font.weight: Font.Medium
                                         color: Theme.inkStrong
@@ -163,7 +171,7 @@ Rectangle {
 
                                     Text {
                                         Layout.fillWidth: true
-                                        text: MgFmt.formatClock(modelData.startTime) + " - " + MgFmt.formatClock(modelData.endTime)
+                                        text: MgFmt.formatClock(sessionRow.modelData.startTime) + " - " + MgFmt.formatClock(sessionRow.modelData.endTime)
                                         font.pixelSize: Theme.fontSm
                                         color: Theme.inkSoft
                                         elide: Text.ElideRight
@@ -178,7 +186,7 @@ Rectangle {
 
                                     Text {
                                         Layout.fillWidth: true
-                                        text: root.formatDurationFn(Number(modelData.durationSeconds) || 0)
+                                        text: root.formatDurationFn(Number(sessionRow.modelData.durationSeconds) || 0)
                                         font.pixelSize: Theme.fontXl
                                         font.weight: Font.Bold
                                         color: Theme.accent

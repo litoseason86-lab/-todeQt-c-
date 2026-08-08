@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Layouts
 import ".."
@@ -122,6 +124,11 @@ Rectangle {
                     model: root.chartData
 
                     Item {
+        id: delegateItem
+
+        // delegate 显式声明消费的模型角色（pragma ComponentBehavior: Bound）。
+        required property var modelData
+
                         Layout.fillWidth: true
                         Layout.fillHeight: true
 
@@ -131,9 +138,9 @@ Rectangle {
 
                             Text {
                                 Layout.fillWidth: true
-                                text: modelData.displayValue.length > 0
-                                      ? modelData.displayValue
-                                      : (modelData.value + root.valueSuffix)
+                                text: delegateItem.modelData.displayValue.length > 0
+                                      ? delegateItem.modelData.displayValue
+                                      : (delegateItem.modelData.value + root.valueSuffix)
                                 font.pixelSize: Theme.fontXs
                                 color: Theme.inkSoft
                                 horizontalAlignment: Text.AlignHCenter
@@ -150,9 +157,9 @@ Rectangle {
                                     anchors.bottom: parent.bottom
                                     anchors.leftMargin: Theme.space8
                                     anchors.rightMargin: Theme.space8
-                                    height: parent.height * root.normalizedValue(modelData.value)
+                                    height: parent.height * root.normalizedValue(delegateItem.modelData.value)
                                     radius: Theme.radiusSm
-                                    color: modelData.color
+                                    color: delegateItem.modelData.color
                                     border.color: Theme.accentStrong
                                     border.width: height > 0 ? 1 : 0
                                     visible: height > 0
@@ -169,7 +176,7 @@ Rectangle {
 
                             Text {
                                 Layout.fillWidth: true
-                                text: modelData.label
+                                text: delegateItem.modelData.label
                                 font.pixelSize: Theme.fontSm
                                 color: Theme.ink
                                 horizontalAlignment: Text.AlignHCenter

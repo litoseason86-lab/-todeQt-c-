@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -279,6 +281,11 @@ Popup {
                     boundsBehavior: Flickable.StopAtBounds
 
                     delegate: Rectangle {
+                        id: categoryRow
+
+                        // delegate 显式声明消费的模型角色（pragma ComponentBehavior: Bound）。
+                        required property var modelData
+
                         width: categoryListView.width
                         height: 60
                         radius: Theme.radiusMd
@@ -295,7 +302,7 @@ Popup {
                                 Layout.preferredWidth: 34
                                 Layout.preferredHeight: 34
                                 radius: 5
-                                color: modelData.color || "#d4a574"
+                                color: categoryRow.modelData.color || "#d4a574"
                                 border.color: Theme.border
                                 border.width: 1
                             }
@@ -306,7 +313,7 @@ Popup {
 
                                 Text {
                                     Layout.fillWidth: true
-                                    text: modelData.name || ""
+                                    text: categoryRow.modelData.name || ""
                                     font.pixelSize: Theme.fontLg
                                     font.bold: true
                                     color: Theme.ink
@@ -315,7 +322,7 @@ Popup {
 
                                 Text {
                                     Layout.fillWidth: true
-                                    text: modelData.isPreset ? "预设科目" : "自定义科目"
+                                    text: categoryRow.modelData.isPreset ? "预设科目" : "自定义科目"
                                     font.pixelSize: Theme.fontXs
                                     color: Theme.inkSoft
                                     elide: Text.ElideRight
@@ -324,12 +331,12 @@ Popup {
 
                             Button {
                                 id: editButton
-                                objectName: "editCategoryButton-" + Number(modelData.id)
+                                objectName: "editCategoryButton-" + Number(categoryRow.modelData.id)
 
                                 text: "编辑"
                                 implicitWidth: 64
                                 implicitHeight: 34
-                                onClicked: root.beginEdit(modelData)
+                                onClicked: root.beginEdit(categoryRow.modelData)
 
                                 background: Rectangle {
                                     radius: Theme.radiusSm
@@ -350,11 +357,11 @@ Popup {
                             Button {
                                 id: deleteButton
 
-                                visible: !modelData.isPreset
+                                visible: !categoryRow.modelData.isPreset
                                 text: "删除"
                                 implicitWidth: 64
                                 implicitHeight: 34
-                                onClicked: root.deleteCategory(modelData.id)
+                                onClicked: root.deleteCategory(categoryRow.modelData.id)
 
                                 background: Rectangle {
                                     radius: Theme.radiusSm

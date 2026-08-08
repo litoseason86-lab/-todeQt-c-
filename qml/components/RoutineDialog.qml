@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Effects
@@ -417,6 +419,9 @@ Popup {
                 }
 
                 delegate: ItemDelegate {
+        // delegate 显式声明消费的模型角色（pragma ComponentBehavior: Bound）。
+        required property var modelData
+
                     id: categoryDelegate
                     width: routineCategoryCombo.width
 
@@ -427,13 +432,13 @@ Popup {
                             Layout.preferredWidth: 14
                             Layout.preferredHeight: 14
                             radius: 7
-                            visible: String(modelData.color || "").length > 0
-                            color: visible ? modelData.color : "transparent"
+                            visible: String(categoryDelegate.modelData.color || "").length > 0
+                            color: visible ? categoryDelegate.modelData.color : "transparent"
                         }
 
                         Text {
                             Layout.fillWidth: true
-                            text: modelData.name || ""
+                            text: categoryDelegate.modelData.name || ""
                             color: Theme.ink
                             font.pixelSize: Theme.fontMd
                             elide: Text.ElideRight
