@@ -713,15 +713,21 @@ Item {
             id: timerPanelShell
             objectName: "dashboardTimerShell"
 
-            Layout.preferredWidth: width
-            Layout.minimumWidth: width
-            Layout.maximumWidth: width
+            // 动画必须挂在 Layout.preferredWidth 上，不能挂在 width 上：
+            // 布局才是 width 的所有者，反过来让 Layout.preferredWidth 去读 width
+            // 会形成循环，qmllint 直接判为 undefined behavior。
+            // MainWindow 的侧栏收起是同一个场景，用的就是下面这种写法。
+            Layout.preferredWidth: root.timerPanelVisible ? 300 : 0
+            Layout.minimumWidth: Layout.preferredWidth
+            Layout.maximumWidth: Layout.preferredWidth
             Layout.fillHeight: true
-            width: root.timerPanelVisible ? 300 : 0
             clip: true
-            visible: width > 0.5
+            // visible 不能只看布局产出的 width：Qt Quick Layouts 会排除不可见的项，
+            // 而 width 初始为 0 → visible 为假 → 布局排除它 → width 永远上不去，
+            // 形成自指死锁。先看意图，再用 width 兜住收起动画的收尾那一段。
+            visible: root.timerPanelVisible || width > 0.5
 
-            Behavior on width {
+            Behavior on Layout.preferredWidth {
                 enabled: !root.timerMotionReduced
                 NumberAnimation {
                     duration: Theme.reduceMotion ? 0 : 320
@@ -768,14 +774,14 @@ Item {
         Item {
             objectName: "dashboardTimerRevealGutter"
 
-            Layout.preferredWidth: width
-            Layout.minimumWidth: width
-            Layout.maximumWidth: width
+            Layout.preferredWidth: root.timerPanelVisible ? 0 : 16
+            Layout.minimumWidth: Layout.preferredWidth
+            Layout.maximumWidth: Layout.preferredWidth
             Layout.fillHeight: true
-            width: root.timerPanelVisible ? 0 : 16
-            visible: width > 0.5
+            // 同上：这条通道的意图与面板相反，展开时才该消失。
+            visible: !root.timerPanelVisible || width > 0.5
 
-            Behavior on width {
+            Behavior on Layout.preferredWidth {
                 enabled: !root.timerMotionReduced
                 NumberAnimation {
                     duration: Theme.reduceMotion ? 0 : 320

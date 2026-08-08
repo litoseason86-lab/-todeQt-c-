@@ -60,8 +60,9 @@ FocusScope {
         Rectangle {
             Layout.alignment: Qt.AlignHCenter
             Layout.topMargin: Theme.space4
-            width: versionRow.implicitWidth + Theme.space16
-            height: 24
+            // ColumnLayout 管理的项不能直接写 width/height，那是 undefined behavior。
+            Layout.preferredWidth: versionRow.implicitWidth + Theme.space16
+            Layout.preferredHeight: 24
             radius: 12
             color: Theme.surfaceSunken
 

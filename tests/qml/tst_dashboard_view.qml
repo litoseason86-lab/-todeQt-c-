@@ -731,7 +731,10 @@ TestCase {
         verify(hideLink)
 
         // 展开态：壳全宽，恢复把手不可交互。
-        compare(shell.width, 300)
+        // 宽度现在由布局协商产出（Layout.preferredWidth 驱动），需要一次布局 pass；
+        // 此前是直接写 item 的 width 才能紧跟创建就读到值，但那种写法是
+        // qmllint 判定的 undefined behavior。同用例后面几处本来就用 tryCompare。
+        tryCompare(shell, "width", 300)
         compare(reveal.enabled, false)
 
         // 「隐藏」链接向上发信号：写回设置并收起（mock 关了动效，宽度立即归零）。
