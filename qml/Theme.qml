@@ -101,9 +101,19 @@ QtObject {
 
     // —— 投影 ——（纯黑；透明度由各效果自身属性控制）
     readonly property color shadow: "#000000"
-    // 模态事务遮罩：恢复数据库时阻断旧界面继续提交写操作。
+    // 模态事务遮罩：恢复数据库时阻断旧界面继续提交写操作。这一档要明显比普通弹窗重，
+    // 「压不住背景」正是它要避免的——用户必须看出此刻什么都点不了。
+    // 日间原为 0.42，与下面普通弹窗那档同值——两者一样重，阻断信号就没了
+    // （tst_input_ink 的语义断言抓到的）。提到 0.56，两套主题下都明显更重。
     readonly property color modalScrim: darkMode
         ? Qt.rgba(0, 0, 0, 0.72)
+        : Qt.rgba(0, 0, 0, 0.56)
+    // 普通业务弹窗的遮罩。此前 8 个弹窗各自硬编码 #66000000（固定 0.40、不跟主题），
+    // 另外 5 个借用了上面的阻断档（夜间 0.72），两套并存没有原则，并排看得出轻重不一。
+    // 统一到这一档：日间保持 0.42 与原值几乎无差，夜间提到 0.62——夜间壁纸本身就暗，
+    // 0.40 压不出层次；同时仍明显轻于阻断档，两者的语义差别保留。
+    readonly property color dialogScrim: darkMode
+        ? Qt.rgba(0, 0, 0, 0.62)
         : Qt.rgba(0, 0, 0, 0.42)
 
     // —— 字号 Type Scale ——
@@ -158,7 +168,12 @@ QtObject {
     readonly property color focusGlassShadow: darkMode ? "#171310" : "#e2b9a6"
     readonly property color focusGlassHighlight: darkMode ? "#4d4433" : "#ffffff"
     // 冒号只弱化颜色，不弱化字重；Space Grotesk 当前只打包 300/500/700 三档。
-    readonly property color focusColonMuted: darkMode ? "#8c7355" : "#e8bda6"
+    // 日间原为 #e8bda6——那是个浅色调，压在近白纸面上只有 1.70:1，时间会读成
+    // 「03 25 20」。两套主题原本也不对称：夜间是压暗去饱和的哑光棕，日间却是提亮的
+    // 浅调。现在统一按夜间那套做法，两档取同一色相(32.7°)同一饱和度(0.244)，
+    // 只有明度分明暗，各自 4.5:1。数字本身是 11.5:1，冒号仍只有约 1/2.5 的强度，
+    // 主次关系没变。
+    readonly property color focusColonMuted: darkMode ? "#a99071" : "#856d51"
 
     // —— 玻璃令牌（透壁纸磨砂面板；夜间版为暗暖玻璃）——
     // 使用原则（性能 + 可读性）：

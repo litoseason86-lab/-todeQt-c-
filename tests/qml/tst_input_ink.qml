@@ -216,4 +216,24 @@ TestCase {
 
         dialog.close()
     }
+
+    function test_blocking_scrim_stays_heavier_than_the_dialog_scrim_data() {
+        return [
+            { tag: "夜间", themeId: "starry" },
+            { tag: "日间", themeId: "warm" }
+        ]
+    }
+
+    function test_blocking_scrim_stays_heavier_than_the_dialog_scrim(row) {
+        Theme.activeThemeId = row.themeId
+
+        // 两个遮罩档语义不同：普通弹窗只要压住背景，恢复数据库那档要让用户看出
+        // 此刻什么都点不了。谁把它们合并成一个值，这条就转红。
+        verify(Theme.modalScrim.a > Theme.dialogScrim.a,
+               row.tag + "阻断遮罩(" + Theme.modalScrim.a.toFixed(2)
+               + ") 没有比普通弹窗遮罩(" + Theme.dialogScrim.a.toFixed(2) + ") 更重")
+        // 也不能淡到压不住：普通弹窗至少要盖掉背景四成。
+        verify(Theme.dialogScrim.a >= 0.4,
+               row.tag + "普通弹窗遮罩只有 " + Theme.dialogScrim.a.toFixed(2))
+    }
 }

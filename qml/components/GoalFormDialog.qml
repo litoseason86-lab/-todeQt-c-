@@ -209,7 +209,7 @@ Popup {
 
     onOpened: titleField.forceActiveFocus()
 
-    Overlay.modal: Rectangle { color: Theme.modalScrim }
+    Overlay.modal: Rectangle { color: Theme.dialogScrim }
 
     background: Rectangle {
         color: Theme.glassBlurAllowed ? Theme.glassDialog : Theme.glassSolidCard

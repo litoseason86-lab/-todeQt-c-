@@ -717,7 +717,7 @@ Item {
         x: parent ? Math.round((parent.width - width) / 2) : 0
         y: parent ? Math.round((parent.height - height) / 2) : 0
         padding: Theme.space16
-        Overlay.modal: Rectangle { color: Theme.modalScrim }
+        Overlay.modal: Rectangle { color: Theme.dialogScrim }
         background: Rectangle {
             color: Theme.glassBlurAllowed ? Theme.glassDialog : Theme.glassSolidCard
             border.color: Theme.glassBorder

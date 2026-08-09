@@ -290,18 +290,10 @@ TestCase {
         shortcutRegistryRef: shortcutRegistry
     }
 
-    // 已知且有意为之的例外。每条都必须写清楚「为什么可以这样」和实测值——
-    // 加一条进来是一次明确的产品决定，不是让门禁闭嘴的手段。
-    readonly property var knownExceptions: [
-        {
-            // 22px Medium，处在 WCAG 大号文字门槛边缘，算正文就不达标。
-            // 它是大号时钟里数字之间的分隔符，信息全在数字上；Theme 里明确写了
-            // 「冒号只弱化颜色，不弱化字重」。要改成达标色（#d0784a）会把冒号变成
-            // 明显的赭红，改变时钟的观感，属于产品取向问题，留给维护者决定。
-            text: ":",
-            reason: "时钟分隔符，设计上刻意弱化；日间实测 1.70:1"
-        }
-    ]
+    // 目前没有例外。加一条进来必须是一次明确的产品决定，并写清「为什么可以这样」
+    // 和实测值——不是让门禁闭嘴的手段。此前唯一那条（时钟冒号日间 1.70:1）
+    // 已在 2026-08-09 按两套主题对称的做法修掉，不再需要豁免。
+    readonly property var knownExceptions: []
 
     function isExempt(item) {
         for (var i = 0; i < testCase.knownExceptions.length; ++i) {

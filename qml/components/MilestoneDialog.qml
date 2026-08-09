@@ -58,7 +58,7 @@ Popup {
     }
 
     Overlay.modal: Rectangle {
-        color: Theme.modalScrim
+        color: Theme.dialogScrim
 
         TapHandler {
             onTapped: root.dismiss()

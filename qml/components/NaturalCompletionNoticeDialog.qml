@@ -36,7 +36,7 @@ Popup {
     }
 
     Overlay.modal: Rectangle {
-        color: Theme.modalScrim
+        color: Theme.dialogScrim
     }
 
     background: Rectangle {

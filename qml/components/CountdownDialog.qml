@@ -165,7 +165,7 @@ Popup {
     }
 
     Overlay.modal: Rectangle {
-        color: "#66000000"
+        color: Theme.dialogScrim
         opacity: root.opened ? 1 : 0
 
         Behavior on opacity {

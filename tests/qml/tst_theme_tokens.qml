@@ -75,7 +75,9 @@ TestCase {
         verify(Qt.colorEqual(Theme.focusGlassEdge, "#fdf3ee"), "focusGlassEdge 取值不对")
         verify(Qt.colorEqual(Theme.focusGlassShadow, "#e2b9a6"), "focusGlassShadow 取值不对")
         verify(Qt.colorEqual(Theme.focusGlassHighlight, "#ffffff"), "focusGlassHighlight 取值不对")
-        verify(Qt.colorEqual(Theme.focusColonMuted, "#e8bda6"), "focusColonMuted 取值不对")
+        // 2026-08-09 由 #e8bda6 改为 #856d51：旧值是个浅色调，压在近白纸面上只有
+        // 1.70:1，时间读成「03 06 40」。新值与夜间那档同色相同饱和度，只有明度分明暗。
+        verify(Qt.colorEqual(Theme.focusColonMuted, "#856d51"), "focusColonMuted 取值不对")
     }
 
     function test_focusBreakAccentIsChartColor3() {
