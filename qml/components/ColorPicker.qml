@@ -80,7 +80,9 @@ Item {
                         text: "✓"
                         font.pixelSize: Theme.fontXl
                         font.bold: true
-                        color: Theme.surface
+                        // 底是用户挑的科目色，不是主题色：按底色亮度选墨，
+                        // 否则夜间主题下深色科目上的对勾会消失。
+                        color: Theme.inkOn(swatch.modelData)
                     }
                 }
             }

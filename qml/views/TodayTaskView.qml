@@ -611,7 +611,8 @@ Item {
                                 text: "今"
                                 font.pixelSize: Theme.fontXl
                                 font.weight: Font.Bold
-                                color: Theme.accent
+                                // 底是 accentSoft 暖罩：accent 压上去只有 1.80:1，暖罩上必须用 accentFillInk。
+                                color: Theme.accentFillInk
                             }
                         }
 

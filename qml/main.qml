@@ -21,9 +21,11 @@ ApplicationWindow {
     palette.light: Theme.inputPopupHighlight
     palette.midlight: Theme.inputPopupHighlight
     // 未自定义 background 的下拉框/输入框，闭合状态的底与文字也得接管。
-    palette.base: Theme.inputControlSurface
-    palette.button: Theme.inputControlSurface
-    palette.buttonText: Theme.inputControlInk
+    palette.base: Theme.controlSurface
+    palette.button: Theme.controlSurface
+    palette.buttonText: Theme.controlInk
+    // GroupBox 标题、勾选框文字，以及没显式写 color 的 Label 都吃这个。
+    palette.windowText: Theme.controlInk
 
     // 只有真实应用入口绑定全局令牌，避免多个独立 MainWindow 测试实例争抢单例属性。
     Binding {

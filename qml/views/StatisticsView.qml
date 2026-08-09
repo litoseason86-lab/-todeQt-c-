@@ -652,7 +652,7 @@ Item {
                                 anchors.centerIn: parent
                                 text: "›"
                                 font.pixelSize: Theme.fontXl
-                                color: root.canGoForward ? Theme.ink : Theme.inkMuted
+                                color: root.canGoForward ? Theme.ink : Theme.inkSoft
                             }
 
                             MouseArea {

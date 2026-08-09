@@ -119,7 +119,7 @@ GlassPanel {
                 Layout.fillWidth: true
                 text: root.editable ? qsTr("为今天定一个清晰、可完成的目标。")
                                     : qsTr("目标在「今日任务」页设置。")
-                color: Theme.inkMuted
+                color: Theme.inkSoft
                 font.pixelSize: Theme.fontXs
                 wrapMode: Text.WordWrap
             }
@@ -273,7 +273,7 @@ GlassPanel {
                     Label {
                         objectName: "focusGoalReachedLabel"
                         text: qsTr("目标达成")
-                        color: Theme.focusBreakAccent
+                        color: Theme.focusBreakInk
                         font.pixelSize: Theme.fontSm
                         font.weight: Font.Bold
                     }
@@ -291,7 +291,7 @@ GlassPanel {
                 Label {
                     objectName: "focusGoalPercent"
                     text: root.percent + "%"
-                    color: root.goalReached ? Theme.focusBreakAccent : Theme.accentInk
+                    color: root.goalReached ? Theme.focusBreakInk : Theme.accentInk
                     font.pixelSize: Theme.fontSm
                     font.family: Theme.fontFamilyData
                     font.weight: Font.Bold

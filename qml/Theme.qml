@@ -51,6 +51,7 @@ QtObject {
     //   palette.mid        弹出面板边框
     //   palette.light      高亮行底（只在高亮/按下时才画，决定「选中哪一行」看不看得出来）
     //   palette.buttonText 闭合状态下拉框显示的文字 —— 默认深灰，夜间同样发暗
+//   palette.windowText GroupBox 标题 / 勾选框文字 / Label 默认字色 —— 同样深灰
     //   palette.button     闭合状态下拉框的底（未自定义 background 的那几个下拉框用它）
     //   palette.base       未自定义 background 的输入框底
     //
@@ -60,8 +61,11 @@ QtObject {
     readonly property color inputPopupSurface: surfaceRaised
     readonly property color inputPopupBorder: border
     readonly property color inputPopupHighlight: accentFillStrong
-    readonly property color inputControlSurface: surfaceRaised
-    readonly property color inputControlInk: ink
+    readonly property color controlSurface: surfaceRaised
+    // 控件的常规文字：GroupBox 标题、CheckBox/RadioButton 的文字、闭合状态下拉框，
+    // 以及**所有没显式写 color 的 Label**（Label.color 默认就是 palette.windowText）。
+    // 全仓 48 个 Label 里只要漏一个，夜间主题下就是一行几乎看不见的字。
+    readonly property color controlInk: ink
 
     // —— 强调 Accent（焦糖棕，两种明暗下同一色相）——
     readonly property color accent: "#d4a574"         // 基础态
@@ -79,7 +83,9 @@ QtObject {
     // 强调淡底/选中态：夜间版换成暗暖底，保持"淡淡一层强调"的语义。
     readonly property color accentSoft: darkMode ? "#4a3d2b" : "#f0e6d2"
     // accent 作前景文字不达 AA；accentInk 是"可读文字版"——浅底压深、暗底提亮。
-    readonly property color accentInk: darkMode ? "#e6b980" : "#9c6a34"
+    // 日间原为 #9c6a34，实测压在最深的一档纸面（#f5ede3）只有 4.00:1，压到 #8d5f2b
+    // 后最差 4.76:1。压在暖罩上仍必须换 accentFillInk，别拿这个顶。
+    readonly property color accentInk: darkMode ? "#e6b980" : "#8d5f2b"
     // accent 本身是中高亮底，选中项必须使用固定深色前景；暗色主题若沿用米白字仅有 1.86:1。
     readonly property color accentForeground: "#2a241c"
     // 键盘焦点环独立于品牌色，确保在浅/深面板上都达到非文本 3:1 对比。
@@ -87,7 +93,9 @@ QtObject {
 
     // —— 语义 Semantic（夜间版提亮一档保对比）——
     readonly property color success: darkMode ? "#6fcf73" : "#4caf50"
-    readonly property color danger: darkMode ? "#e0705a" : "#b24f3d"
+    // 夜间原为 #e0705a，压在 surfaceRaised(#332c22) 上 4.35:1，差一点点不达正文 AA
+    // （倒计时错误横幅的「!」实测踩到）。同色相提亮到 #e1745e 后最差 4.50:1。
+    readonly property color danger: darkMode ? "#e1745e" : "#b24f3d"
     readonly property color dangerBorder: darkMode ? "#d97f6c" : "#c46f5f"
     readonly property color dangerSoft: darkMode ? "#cc8a76" : "#b37562"
 
@@ -133,7 +141,12 @@ QtObject {
 
     // —— 专注页休息态强调色 ——
     // 直接复用 chartColors 的第 4 色（苔绿），不新增色相；语义是"休息强调色"。
+    // 只能当填充用（进度条、圆点、圆环）。
     readonly property color focusBreakAccent: chartColors[3]
+    // 同一语义的**文字版**。图表色是给色块调的，日间那档 #9aa66b 压在纸面上只有
+    // 2.25:1，「目标达成」这行字几乎看不见；压深到 #5f6b3a 后 4.96:1。
+    // 夜间那档本来就够（5.28:1），保持不变以免休息态的绿变味。
+    readonly property color focusBreakInk: darkMode ? chartColors[3] : "#5f6b3a"
 
     // —— 专注计时环（玻璃表盘；弧光两版共用暖金系，盘面随明暗）——
     readonly property color focusRingArcStart: "#f1bd7e"   // 琥珀
@@ -229,6 +242,35 @@ QtObject {
         celadon: "jiangnan", mist: "jiangnan",
         sakura: "pink"
     })
+
+    // —— 压在「非主题色」上的字色 ——
+    // 科目色是用户从固定色板里挑的，跟明暗主题没有关系。所以压在它上面的字
+    // 不能按 darkMode 决定颜色——夜间主题下深色科目就是深底深字（实测最低 1.43:1）。
+    // 这里直接比两个候选墨色谁的对比度高就用谁：不需要猜亮度阈值，
+    // 以后色板增删或改成用户自定义颜色也自动成立。
+    //
+    // 这组色板的中间几档用纯黑纯白都到不了正文 4.5:1（最好也只有 4.07:1），
+    // 但这类标记都是大号加粗字形，适用门槛是 3:1，取最优后最差 4.07:1，够用。
+    function relativeLuminance(colorValue) {
+        var c = Qt.color(colorValue)
+        function channel(v) {
+            return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b)
+    }
+
+    function contrastRatio(a, b) {
+        var la = relativeLuminance(a)
+        var lb = relativeLuminance(b)
+        return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+    }
+
+    // 在任意底色上挑一个看得清的墨色。
+    function inkOn(background) {
+        var deep = "#2a241c"
+        var pale = "#fffef9"
+        return contrastRatio(deep, background) >= contrastRatio(pale, background) ? deep : pale
+    }
 
     function migrateThemeId(themeId) {
         return legacyThemeMap[themeId] || themeId

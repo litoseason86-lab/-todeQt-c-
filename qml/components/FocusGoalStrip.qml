@@ -346,7 +346,7 @@ GlassPanel {
                 Label {
                     objectName: "focusGoalReachedLabel"
                     text: qsTr("目标达成")
-                    color: Theme.focusBreakAccent
+                    color: Theme.focusBreakInk
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Bold
                 }

@@ -12,6 +12,21 @@ import "views"
 Item {
     id: root
 
+    // 输入/控件字色必须接管：Basic 风格的默认调色板写死一组浅色主题的值，
+    // 既不跟随本应用主题也不跟随 macOS 外观。视图里的控件由这一层覆盖。
+    palette.text: Theme.inputInk
+    palette.placeholderText: Theme.inputPlaceholderInk
+    palette.highlight: Theme.inputSelection
+    palette.highlightedText: Theme.inputSelectedInk
+    palette.window: Theme.inputPopupSurface
+    palette.mid: Theme.inputPopupBorder
+    palette.light: Theme.inputPopupHighlight
+    palette.midlight: Theme.inputPopupHighlight
+    palette.base: Theme.controlSurface
+    palette.button: Theme.controlSurface
+    palette.buttonText: Theme.controlInk
+    palette.windowText: Theme.controlInk
+
     // 默认落地页为仪表盘：一屏看全今日概览，任务/专注一步可达。
     property string currentView: "dashboard"
     property string pendingView: "dashboard"

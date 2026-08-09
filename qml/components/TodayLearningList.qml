@@ -33,7 +33,7 @@ Item {
         visible: root.taskCount === 0
         text: "今天还没有专注记录。\n开始一次专注后，这里会按任务汇总时长。"
         textFormat: Text.PlainText
-        color: Theme.inkMuted
+        color: Theme.inkSoft
         font.pixelSize: Theme.fontMd
         horizontalAlignment: Text.AlignHCenter
         wrapMode: Text.WordWrap

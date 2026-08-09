@@ -646,8 +646,9 @@ Item {
                                             text: root.formatDuration(calendarCell.dayDuration)
                                             font.pixelSize: Theme.fontXs
                                             font.weight: Font.Medium
-                                            // accent 作前景文字不达 AA，小字号必须用可读版 accentInk。
-                                            color: Theme.accentInk
+                                            // 今天那一格底是 accentFill 暖罩，accentInk 压上去只有
+                                            // 3.75:1；暖罩上的文字统一用 accentFillInk。
+                                            color: Theme.accentFillInk
                                             elide: Text.ElideRight
                                         }
                                     }

@@ -64,7 +64,7 @@ Rectangle {
                 text: (root.review && root.review.weekStart ? root.review.weekStart : "") + " 至 "
                       + (root.review && root.review.weekEnd ? root.review.weekEnd : "")
                 textFormat: Text.PlainText
-                color: Theme.inkMuted
+                color: Theme.inkSoft
                 font.pixelSize: Theme.fontSm
             }
         }

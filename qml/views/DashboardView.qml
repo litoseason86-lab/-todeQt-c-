@@ -631,7 +631,7 @@ Item {
                                      ? "今天还没有已完成的任务。"
                                      : "这个筛选下没有任务。")
                             font.pixelSize: Theme.fontMd
-                            color: Theme.inkMuted
+                            color: Theme.inkSoft
                             horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.WordWrap
                         }

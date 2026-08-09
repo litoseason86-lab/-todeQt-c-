@@ -977,7 +977,7 @@ Item {
                       + root.timerNumber("minimumValidMinutes", 3) + " 分钟不计入记录"
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontSm
-                color: Theme.inkMuted
+                color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter
             }
 
@@ -1190,7 +1190,7 @@ Item {
                 visible: text.length > 0
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontXs
-                color: Theme.inkMuted
+                color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter
             }
         }

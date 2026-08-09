@@ -95,12 +95,14 @@ TestCase {
                 row.name + " 的下拉高亮行底色")
         compare(String(item.palette.midlight), String(Theme.inputPopupHighlight),
                 row.name + " 的下拉按下行底色")
-        compare(String(item.palette.base), String(Theme.inputControlSurface),
+        compare(String(item.palette.base), String(Theme.controlSurface),
                 row.name + " 的默认输入框底色")
-        compare(String(item.palette.button), String(Theme.inputControlSurface),
+        compare(String(item.palette.button), String(Theme.controlSurface),
                 row.name + " 的闭合下拉框底色")
-        compare(String(item.palette.buttonText), String(Theme.inputControlInk),
+        compare(String(item.palette.buttonText), String(Theme.controlInk),
                 row.name + " 的闭合下拉框文字色")
+        compare(String(item.palette.windowText), String(Theme.controlInk),
+                row.name + " 的控件常规文字色")
     }
 
     function test_palette_follows_the_theme_data() {
@@ -180,12 +182,12 @@ TestCase {
                row.tag + "高亮行与面板底几乎相同（" + highlightSeparation.toFixed(2) + "）")
 
         // 闭合状态下拉框显示的文字走 palette.buttonText，默认深灰，夜间同样发暗。
-        var closedInk = contrastRatio(Theme.inputControlInk, Theme.inputControlSurface)
+        var closedInk = contrastRatio(Theme.controlInk, Theme.controlSurface)
         verify(closedInk >= 4.5,
                row.tag + "闭合下拉框文字对比度只有 " + closedInk.toFixed(2) + ":1")
         // 展开时 Basic 把下拉框自身的底换成 palette.mid（同一个值还兼任面板边框），
         // 也就是说边框色调深了会顺带让展开态的文字发暗，这里一并守住。
-        var expandedInk = contrastRatio(Theme.inputControlInk, Theme.inputPopupBorder)
+        var expandedInk = contrastRatio(Theme.controlInk, Theme.inputPopupBorder)
         verify(expandedInk >= 4.5,
                row.tag + "展开态下拉框文字对比度只有 " + expandedInk.toFixed(2) + ":1")
 

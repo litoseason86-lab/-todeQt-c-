@@ -500,7 +500,7 @@ Item {
                                     Layout.fillWidth: true
                                     text: "暂无任务"
                                     font.pixelSize: Theme.fontMd
-                                    color: Theme.inkMuted
+                                    color: Theme.inkSoft
                                 }
 
                                 Button {
@@ -627,7 +627,9 @@ Item {
 
                                     contentItem: Text {
                                         text: addDayButton.text
-                                        color: addDayButton.enabled ? Theme.surface : Theme.inkMuted
+                                        // 底是实心 accent：近白字只有 2.20:1，
+                                        // 必须用为此定义的固定深色前景。禁用态维持 inkMuted。
+                                        color: addDayButton.enabled ? Theme.accentForeground : Theme.inkMuted
                                         font.pixelSize: Theme.fontMd
                                         font.weight: Font.Medium
                                         horizontalAlignment: Text.AlignHCenter
