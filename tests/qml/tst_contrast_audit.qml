@@ -223,7 +223,27 @@ TestCase {
             forecastDays: 10
         })
 
-        function getGoals() { return [] }
+        // 目标页的卡片必须真的渲染出来才会被走查到。四条样本刻意覆盖结论的
+        // 四种取值（来得及/长期/已达成/偏慢），它们各用一种颜色。
+        function getGoals() {
+            return [
+                { id: 1, title: "考研数学 一轮复习", categoryName: "数学",
+                  categoryColor: "#d4a574", targetPomodoros: 200, doneCount: 148,
+                  percent: 74, achieved: false, forecastDays: 21,
+                  deadline: new Date(2099, 11, 19) },
+                { id: 2, title: "英语真题精练", categoryName: "英语",
+                  categoryColor: "#c9956e", targetPomodoros: 150, doneCount: 39,
+                  percent: 26, achieved: false, forecastDays: 68 },
+                { id: 3, title: "政治强化背诵", categoryName: "政治",
+                  categoryColor: "#cc8a76", targetPomodoros: 100, doneCount: 100,
+                  percent: 100, achieved: true, achievedAt: new Date(2026, 7, 1),
+                  forecastDays: 0 },
+                { id: 4, title: "专业课 408 数据结构", categoryName: "专业课",
+                  categoryColor: "#b86b58", targetPomodoros: 300, doneCount: 12,
+                  percent: 4, achieved: false, forecastDays: 240,
+                  deadline: new Date(2026, 11, 19) }
+            ]
+        }
         function getGoal(goalId) { return detailData }
         function getGoalDailyCounts(goalId, year, month) { return [] }
     }

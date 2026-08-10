@@ -229,26 +229,40 @@ TestCase {
         tryCompare(appSettings, "goalViewMode", "list")
     }
 
-    function test_card_secondary_text_uses_forecast_and_achievement_date() {
-        var card = createTemporaryObject(cardComponent, testCase, { goal: activeGoal() })
+    function test_card_states_the_pace_facts_and_the_verdict() {
+        // 原来这些信息挤在一行副文案里；现在事实归 detailText、判断归 verdict，
+        // 两者都要跟着 goal 换。
+        var goal = activeGoal()
+        goal.deadline = new Date(2026, 11, 19)
+        var card = createTemporaryObject(cardComponent, testCase,
+                                         { goal: goal, today: new Date(2026, 7, 10) })
         verify(card !== null)
-        compare(card.secondaryText, "62 / 100 番茄 · 照此速度还需 21 天")
+        verify(card.detailText.indexOf("照此速度 21 天完成") >= 0,
+               "实际为：" + card.detailText)
+        verify(card.detailText.indexOf("距截止 131 天") >= 0)
+        compare(card.forecastVerdict.text, "来得及")
 
         card.goal = achievedGoal()
-        tryCompare(card, "secondaryText", "已达成 · 7月20日")
+        tryCompare(card, "detailText", "已达成 · 7 月 20 日")
+        compare(card.forecastVerdict.text, "已达成")
     }
 
-    // ListView/GridView 会复用卡片实例。切换到另一个目标时，圆弧和数字必须在同一帧
-    // 使用新目标的数据，不能让圆弧继续展示上一个目标的进度。
-    function test_reused_card_updates_progress_arc_immediately() {
+    // ListView/GridView 会复用卡片实例。切换到另一个目标时，进度和数字必须在同一帧
+    // 使用新目标的数据，不能让进度条继续展示上一个目标的进度。
+    // 2026-08-10 列表卡的环形换成横贯进度条，这条随之改测进度条宽度。
+    function test_reused_card_updates_progress_immediately() {
         const firstGoal = activeGoal()
         firstGoal.percent = 20
-        const card = createTemporaryObject(cardComponent, testCase, { goal: firstGoal })
+        const card = createTemporaryObject(cardComponent, testCase,
+                                           { goal: firstGoal, width: 400 })
         verify(!!card, "Component exists")
 
-        const progressArc = findChild(card, "goalProgressArc")
-        verify(!!progressArc, "Object exists")
-        compare(progressArc.sweepAngle, 72)
+        const track = findChild(card, "goalCardProgressTrack")
+        const fill = findChild(card, "goalCardProgressFill")
+        verify(!!track, "Object exists")
+        verify(!!fill, "Object exists")
+        verify(track.width > 0)
+        compare(Math.round(fill.width), Math.round(track.width * 0.2))
 
         const nextGoal = activeGoal()
         nextGoal.id = 2
@@ -256,7 +270,9 @@ TestCase {
         card.goal = nextGoal
 
         compare(card.percent, 80)
-        compare(progressArc.sweepAngle, 288)
+        // 同一帧就要是新值：这里刻意用精确比较而不是 tryVerify，
+        // 一旦有人给宽度加上过渡动画，这条会立刻转红。
+        compare(Math.round(fill.width), Math.round(track.width * 0.8))
     }
 
     function test_service_signal_refreshes_only_active_page() {
@@ -537,12 +553,17 @@ TestCase {
 
     // 三条视觉修复此前零覆盖，回归了不会有任何提示：
     // 徽章贴边、切换器白框、主按钮与倒计时页不同款。
-    function test_card_reserves_padding_so_status_badge_leaves_the_border() {
+    function test_card_reserves_padding_on_every_side() {
         const card = createTemporaryObject(cardComponent, testCase, { goal: activeGoal() })
         verify(!!card, "Component exists")
-        // 曾经是 0：AbstractButton 默认零内边距，右侧「进行中」几乎压在描边上。
+        // 曾经是 0：AbstractButton 默认零内边距，内容会一路铺到描边上。
+        // 2026-08-10 改成三层版式后上下也有内容（进度条、结论行），四边都要留。
+        // 这条同时挡住「写了个不存在的 Theme.spaceNN」——那种笔误求值为
+        // undefined，内边距会静默变回 0，正是本次改版踩到的。
         verify(card.leftPadding > 0)
         verify(card.rightPadding > 0)
+        verify(card.topPadding > 0)
+        verify(card.bottomPadding > 0)
     }
 
     function test_view_mode_selection_uses_warm_tint_not_white_block() {
@@ -562,10 +583,15 @@ TestCase {
 
         const newButton = findChild(view, "newGoalButton")
         verify(!!newButton, "Object exists")
-        // 与倒计时页「添加目标」同款：108×44、无描边。
+        // 尺寸仍与倒计时页「添加目标」同款：108×44。
         compare(newButton.implicitWidth, 108)
         compare(newButton.implicitHeight, 44)
-        compare(newButton.background.border.width, 0)
+        // 描边此前是 0（「主操作不描边」）。实测 accentFill 压在七套壁纸上
+        // 最好 1.26:1、暖色下 1.02:1，远低于 WCAG 1.4.11 对界面组件边界要求的
+        // 3:1，按钮整个化进背景。2026-08-10 补一圈 accentFillInk 描边
+        // （日间 4.68:1、夜间 10.01:1）。别再按「主操作不描边」改回 0。
+        compare(newButton.background.border.width, 1)
+        compare(String(newButton.background.border.color), String(Theme.accentFillInk))
     }
 
     function test_unknown_forecast_has_no_remaining_days_copy() {

@@ -26,6 +26,10 @@ Item {
     property var detailGoal: ({})
     property var dailyCounts: []
     property date detailToday: new Date()
+    // 列表/网格里「距截止还有几天」的基准日。与 detailToday 分开：详情页那份只在
+    // 打开详情时刷新，列表这份每次 refresh 都要跟上，否则跨过逻辑日边界后
+    // 天数会停在昨天。
+    property date listToday: new Date()
     property int detailYear: detailToday.getFullYear()
     property int detailMonth: detailToday.getMonth() + 1
     property bool deletingDetail: false
@@ -77,6 +81,7 @@ Item {
         if (!root.goalServiceRef || !root.goalServiceRef.getGoals)
             return
         root.errorText = ""
+        root.listToday = root.logicalToday()
         const loadedGoals = root.goalServiceRef.getGoals() || []
         // C++ 服务以“空数组 + 同步 operationFailed”报告查询失败。此时保留旧数据，
         // 不能把数据库故障伪装成“用户没有目标”，否则还会误导用户重复创建。
@@ -391,6 +396,9 @@ Item {
 
                     width: ListView.view.width
                     goal: modelData
+                    // 逻辑日只由页面算一次：卡片自己 new Date() 会绕开
+                    // dayStartHour，凌晨 4 点前算出的「距截止」会差一天。
+                    today: root.listToday
                     onClicked: root.activateGoal(goalId)
                 }
             }
@@ -405,7 +413,7 @@ Item {
                 visible: root.viewMode === "grid" && root.goalsCount > 0
                 clip: true
                 cellWidth: Math.floor(width / columnCount)
-                cellHeight: 170
+                cellHeight: 208
                 model: root.filteredGoals
                 reuseItems: true
 
@@ -414,6 +422,7 @@ Item {
 
                     width: Math.max(150, GridView.view.cellWidth - Theme.space12)
                     goal: modelData
+                    today: root.listToday
                     onClicked: root.activateGoal(goalId)
                 }
             }
@@ -782,10 +791,14 @@ Item {
                       ? Theme.accentFillStrong : Theme.accentFill)
                    : (actionButton.down || actionButton.hovered
                       ? Theme.glassHover : Theme.glassCard)
-            // 主操作（accentAction）与倒计时页的「添加目标」同款：纯淡罩、不描边、大圆角。
-            // 次级和危险操作保留描边——它们叠在玻璃卡上，没有描边会糊进背景。
-            border.color: actionButton.dangerAction ? Theme.dangerBorder : Theme.border
-            border.width: actionButton.accentAction ? 0 : 1
+            // 主操作原本是「纯淡罩、不描边」，与倒计时页的「添加目标」同款。但实测
+            // accentFill 压在七套壁纸上最好也只有 1.26:1、暖色下 1.02:1——远低于
+            // WCAG 1.4.11 对「界面组件边界」要求的 3:1，按钮整个化进背景里找不到。
+            // 补一圈 accentFillInk 描边（它本来就是这个按钮的文字色，配对天然成立），
+            // 日间最差 4.68:1、夜间 10.01:1。别再按「主操作不描边」改回去。
+            border.color: actionButton.dangerAction ? Theme.dangerBorder
+                          : (actionButton.accentAction ? Theme.accentFillInk : Theme.border)
+            border.width: 1
             radius: actionButton.accentAction ? Theme.radiusLg : Theme.radiusMd
         }
         contentItem: Text {
