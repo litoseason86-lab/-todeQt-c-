@@ -16,8 +16,9 @@ TestCase {
 
         signal tasksChanged
 
+        property var todayTasks: []
         function getTodayTasks() {
-            return []
+            return taskManager.todayTasks
         }
 
         function getOverdueUncompletedTasks() {
@@ -214,5 +215,55 @@ TestCase {
         // 休息阶段不累计。
         focusTimer.phase = 2
         compare(card.totalSeconds, 3600)
+    }
+
+    function plannedTask(minutes) {
+        return { id: Math.floor(Math.random() * 100000) + 1, title: "任务",
+                 date: new Date(), completed: false, estimatedMinutes: minutes,
+                 focusedMinutes: 0, categoryName: "", categoryColor: "" }
+    }
+
+    function test_planned_load_is_compared_against_the_daily_goal_data() {
+        return [
+            { tag: "排少了", plan: [60, 30], goal: 180, total: "1 小时 30 分", delta: "还可排 1 小时 30 分" },
+            { tag: "排多了", plan: [120, 90], goal: 180, total: "3 小时 30 分", delta: "超出 30 分钟" },
+            { tag: "刚好",   plan: [90, 90],  goal: 180, total: "3 小时",      delta: "刚好" }
+        ]
+    }
+
+    function test_planned_load_is_compared_against_the_daily_goal(row) {
+        // 任务有预计用时、目标也是分钟，但此前没有任何地方把两者对上——
+        // 排完任务不知道是排多了还是排少了。这条守住这个对比。
+        taskManager.todayTasks = row.plan.map(testCase.plannedTask)
+        appSettings.focusGoalDate = Qt.formatDate(new Date(), "yyyy-MM-dd")
+        appSettings.focusGoalMinutes = row.goal
+
+        var view = createTemporaryObject(todayViewComponent, testCase)
+        verify(!!view, "Component exists")
+        view.refresh()
+        wait(60)
+
+        var total = findChild(view, "stripPlannedMinutes")
+        verify(!!total, "Object exists")
+        compare(total.text, row.total, row.tag)
+
+        var delta = findChild(view, "stripPlannedDelta")
+        verify(!!delta, "Object exists")
+        compare(delta.text, row.delta, row.tag)
+    }
+
+    function test_planned_load_makes_no_judgement_without_a_goal() {
+        // 没设目标时没有可比基准，只报总量，不能凭空给「超出/还可排」。
+        taskManager.todayTasks = [testCase.plannedTask(45)]
+        appSettings.focusGoalDate = ""
+        appSettings.focusGoalMinutes = 0
+
+        var view = createTemporaryObject(todayViewComponent, testCase)
+        verify(!!view, "Component exists")
+        view.refresh()
+        wait(60)
+
+        compare(findChild(view, "stripPlannedMinutes").text, "45 分钟")
+        compare(findChild(view, "stripPlannedDelta").text, "")
     }
 }

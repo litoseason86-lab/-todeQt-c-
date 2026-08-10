@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import "../Duration.js" as Duration
 import ".."
 
 // 今日专注目标 · 贴底状态条（今日任务页专用，横排三态：未设置/编辑/展示）。
@@ -22,6 +23,9 @@ GlassPanel {
     property int quickFillMinutes: 0
     property int completedTasks: 0
     property int totalTasks: 0
+    // 今天所有任务「预计用时」之和。任务侧早就有这个数、目标也是分钟，
+    // 但此前没有任何地方把两者对上——用户排完任务不知道自己是排多了还是排少了。
+    property int plannedMinutes: 0
 
     signal goalSubmitted(int totalMinutes)
 
@@ -34,6 +38,10 @@ GlassPanel {
     readonly property bool goalReached: root.hasGoal && root.safeSeconds >= root.goalSeconds
     readonly property string clockText: root.formatClock(root.safeSeconds)
     readonly property string targetText: root.formatTarget(root.goalMinutes)
+
+    readonly property bool hasPlan: root.plannedMinutes > 0
+    // 正数=排的活超过目标，负数=还有余量。没设目标时不做判断。
+    readonly property int plannedDeltaMinutes: root.hasGoal ? root.plannedMinutes - root.goalMinutes : 0
 
     readonly property bool quickFillFromYesterday: root.quickFillMinutes >= 1 && root.quickFillMinutes <= 1440
     readonly property int quickFillValue: root.quickFillFromYesterday ? root.quickFillMinutes : 240
@@ -73,6 +81,54 @@ GlassPanel {
             root.editing = false
         } else {
             root.saveError = qsTr("目标保存失败，请重试")
+        }
+    }
+
+    // 「今日已排」：任务预计用时之和，以及它与目标的差额。与 DoneCount 同款版式，
+    // 未设目标时只报总量、不给判断——那时没有可比的基准。
+    component PlannedLoad: RowLayout {
+        spacing: Theme.space8
+        visible: root.hasPlan
+
+        Rectangle {
+            Layout.preferredWidth: 1
+            Layout.preferredHeight: 24
+            color: Theme.border
+            opacity: 0.8
+        }
+
+        Label {
+            text: qsTr("已排")
+            color: Theme.inkSoft
+            font.pixelSize: Theme.fontSm
+        }
+
+        Label {
+            objectName: "stripPlannedMinutes"
+            text: Duration.format(root.plannedMinutes)
+            color: Theme.inkStrong
+            font.pixelSize: Theme.fontLg
+            font.family: Theme.fontFamilyData
+            font.weight: Font.Bold
+        }
+
+        Label {
+            objectName: "stripPlannedDelta"
+            // 没设目标时给空串而不是靠 visible 藏起来：这个项目的离屏环境里
+            // visible 的级联判定不可靠，用文案本身表达"没有可说的"更稳。
+            text: {
+                if (!root.hasGoal)
+                    return ""
+                if (root.plannedDeltaMinutes > 0)
+                    return qsTr("超出 %1").arg(Duration.format(root.plannedDeltaMinutes))
+                if (root.plannedDeltaMinutes < 0)
+                    return qsTr("还可排 %1").arg(Duration.format(-root.plannedDeltaMinutes))
+                return qsTr("刚好")
+            }
+            visible: text.length > 0
+            // 超出不是错误，只是信息：用次要色，不用告警色。
+            color: Theme.inkSoft
+            font.pixelSize: Theme.fontXs
         }
     }
 
@@ -202,6 +258,8 @@ GlassPanel {
                     verticalAlignment: Text.AlignVCenter
                 }
             }
+
+            PlannedLoad {}
 
             DoneCount {}
         }
@@ -369,6 +427,8 @@ GlassPanel {
                 font.pixelSize: Theme.fontXs
                 elide: Text.ElideRight
             }
+
+            PlannedLoad {}
 
             DoneCount {}
         }

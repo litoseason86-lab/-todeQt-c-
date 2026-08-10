@@ -48,6 +48,14 @@ Item {
     property bool pageActive: true
     // 当日专注目标（分钟）；0 = 今天尚未设置。设置/修改只在本页发生。
     property int dailyFocusGoalMinutes: 0
+    // 今天排了多少活（全部任务的预计用时之和，完成与否都算——问的是"排了多少"）。
+    readonly property int plannedMinutesToday: {
+        var sum = 0
+        for (var i = 0; i < root.tasks.length; ++i) {
+            sum += Math.max(0, Number(root.tasks[i].estimatedMinutes || 0))
+        }
+        return sum
+    }
     // 昨天的目标分钟数：未设置态快捷 chip 的数据源（单键快照跨日后即昨天值）。
     property int yesterdayGoalMinutes: 0
 
@@ -456,6 +464,7 @@ Item {
             totalSeconds: root.liveSecondsSource.liveSeconds
             goalMinutes: root.dailyFocusGoalMinutes
             quickFillMinutes: root.yesterdayGoalMinutes
+            plannedMinutes: root.plannedMinutesToday
             completedTasks: Number(root.todayStats.completedTasks || 0)
             totalTasks: Number(root.todayStats.totalTasks || 0)
             reduceMotion: root.settingsRef ? Boolean(root.settingsRef.reduceMotion) : false
