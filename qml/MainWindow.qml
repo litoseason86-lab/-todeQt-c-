@@ -5,6 +5,7 @@ import QtQuick.Controls.Basic
 import QtQuick.Dialogs
 import QtQuick.Effects
 import QtQuick.Layouts
+import "Duration.js" as Duration
 import "."
 import "components"
 import "views"
@@ -287,8 +288,8 @@ Item {
             goalId: Number(milestone.goalId),
             goalTitle: String(milestone.title || ""),
             percent: Number(milestone.percent || 0),
-            doneCount: Number(goal.doneCount || 0),
-            targetCount: Number(goal.targetPomodoros || 0),
+            doneCount: Number(goal.doneMinutes || 0),
+            targetCount: Number(goal.targetMinutes || 0),
             achieved: Number(milestone.percent) === 100,
             reduceMotion: Theme.reduceMotion
                           || Boolean(root.appSettingsRef && root.appSettingsRef.reduceMotion)
@@ -1083,9 +1084,12 @@ Item {
         target: root.goalServiceRef
         ignoreUnknownSignals: true
 
-        function onGoalProgressed(goalId, title, doneCount, targetPomodoros) {
-            root.showToast(String(title || "") + " +1 · "
-                           + Number(doneCount) + "/" + Number(targetPomodoros))
+        function onGoalProgressed(goalId, title, doneMinutes, targetMinutes) {
+            // 旧文案是「+1」——那是番茄单位下「又完成一个」的意思。进度改成分钟后
+            // 每次推进的增量不固定，信号里也没带增量，只如实报当前进度。
+            root.showToast(String(title || "") + " · "
+                           + Duration.format(Number(doneMinutes))
+                           + " / " + Duration.format(Number(targetMinutes)))
         }
 
         function onMilestoneReached(goalId, title, percent) {

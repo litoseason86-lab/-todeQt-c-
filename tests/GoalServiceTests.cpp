@@ -21,6 +21,9 @@ namespace {
 
 // 一个稳稳达标的番茄时长：高于有效门槛即可，具体数值对断言没有意义。
 constexpr int kValidPomodoroSeconds = FocusSessionRules::kMinimumValidDurationSeconds + 60;
+// v11 起目标进度以分钟计。一条有效会话 = 240 秒 = 4 分钟，断言里直接用它换算，
+// 避免每处写死数字后看不出来源。
+constexpr int kValidSessionMinutes = kValidPomodoroSeconds / 60;
 
 }
 
@@ -44,7 +47,7 @@ private slots:
     void addGoalRollsBackAfterCommitFailure();
 
     // 进度聚合口径
-    void progressCountsOnlyValidPomodorosOfBoundCategory();
+    void progressCountsFocusedMinutesOfBoundCategoryIncludingFreeTiming();
     void progressIgnoresSessionsBeforeStartDate();
     void progressFollowsLogicalDayBoundary();
     void deletingSessionsRollsProgressBack();
@@ -183,12 +186,16 @@ void GoalServiceTests::insertSession(int taskId,
     QVERIFY2(query.exec(), qPrintable(query.lastError().text()));
 }
 
+// target 沿用「多少条有效会话的量」这个单位，内部再折算成分钟。v11 把目标改成分钟后，
+// 若直接把原来的数字当分钟用，各用例里的里程碑比例（25/50/75%）会全部错位；
+// 在这里统一折算，既有用例的数字和意图都不用动。
 int GoalServiceTests::addGoalReturningId(const QString& title,
                                          int categoryId,
-                                         int target,
+                                         int targetSessions,
                                          const QDate& startDate)
 {
     GoalService* service = GoalService::instance();
+    const int target = targetSessions * kValidSessionMinutes;
     if (!service->addGoal(title, categoryId, target, startDate, QVariant())) {
         return -1;
     }
@@ -230,16 +237,16 @@ void GoalServiceTests::rejectsEmptyOverlongTitlesAndInvalidTargets()
     const int categoryId = addCategory(QStringLiteral("英语"));
     QVERIFY(categoryId > 0);
 
-    QVERIFY(!service->addGoal(QStringLiteral("   "), categoryId, 100, QVariant(), QVariant()));
+    QVERIFY(!service->addGoal(QStringLiteral("   "), categoryId, 100 * kValidSessionMinutes, QVariant(), QVariant()));
     QVERIFY(!service->addGoal(QString(GoalService::kMaxTitleLength + 1, QChar(u'字')),
                               categoryId, 100, QVariant(), QVariant()));
     QVERIFY(!service->addGoal(QStringLiteral("零目标"), categoryId, 0, QVariant(), QVariant()));
     QVERIFY(!service->addGoal(QStringLiteral("超上限"), categoryId,
-                              GoalService::kMaxTargetPomodoros + 1, QVariant(), QVariant()));
+                              GoalService::kMaxTargetMinutes + 1, QVariant(), QVariant()));
     QVERIFY(service->getGoals().isEmpty());
 
     // 标题两端空白被裁掉，而不是原样存进去。
-    QVERIFY(service->addGoal(QStringLiteral("  英语精读  "), categoryId, 100, QVariant(), QVariant()));
+    QVERIFY(service->addGoal(QStringLiteral("  英语精读  "), categoryId, 100 * kValidSessionMinutes, QVariant(), QVariant()));
     const QVariantList goals = service->getGoals();
     QCOMPARE(goals.size(), 1);
     QCOMPARE(goals.first().toMap().value(QStringLiteral("title")).toString(),
@@ -253,15 +260,15 @@ void GoalServiceTests::rejectsGoalWithoutCategory()
     QVERIFY(categoryId > 0);
 
     // 没有科目的目标进度恒为 0、里程碑永不触发，必须在写入时就拒绝。
-    QVERIFY(!service->addGoal(QStringLiteral("无科目目标"), 0, 100, QVariant(), QVariant()));
-    QVERIFY(!service->addGoal(QStringLiteral("负数科目"), -1, 100, QVariant(), QVariant()));
+    QVERIFY(!service->addGoal(QStringLiteral("无科目目标"), 0, 100 * kValidSessionMinutes, QVariant(), QVariant()));
+    QVERIFY(!service->addGoal(QStringLiteral("负数科目"), -1, 100 * kValidSessionMinutes, QVariant(), QVariant()));
     QVERIFY(service->getGoals().isEmpty());
 
     // 已存在的目标也不允许把科目清空。
-    QVERIFY(service->addGoal(QStringLiteral("英语精读"), categoryId, 100, QVariant(), QVariant()));
+    QVERIFY(service->addGoal(QStringLiteral("英语精读"), categoryId, 100 * kValidSessionMinutes, QVariant(), QVariant()));
     const int goalId = service->getGoals().first().toMap().value(QStringLiteral("id")).toInt();
-    QVERIFY(!service->updateGoal(goalId, QStringLiteral("英语精读"), 0, 100,
-                                 QVariant(), QVariant()));
+    QVERIFY(!service->updateGoal(goalId, QStringLiteral("英语精读"), 0,
+                                 100 * kValidSessionMinutes, QVariant(), QVariant()));
     QCOMPARE(service->getGoal(goalId).value(QStringLiteral("categoryId")).toInt(), categoryId);
 }
 
@@ -276,14 +283,14 @@ void GoalServiceTests::rejectsInvalidGoalIdsWithoutFallingBackToFirstGoal()
     // 0 和负数是未初始化/非法编号，绝不能被 loadGoals 的“读取全部”哨兵解释。
     QVERIFY(service->getGoal(0).isEmpty());
     QVERIFY(service->getGoal(-1).isEmpty());
-    QVERIFY(!service->updateGoal(0, QStringLiteral("不应成功"), categoryId, 10,
-                                 QDate::currentDate(), QVariant()));
-    QVERIFY(!service->updateGoal(-1, QStringLiteral("不应成功"), categoryId, 10,
-                                 QDate::currentDate(), QVariant()));
+    QVERIFY(!service->updateGoal(0, QStringLiteral("不应成功"), categoryId,
+                                 10 * kValidSessionMinutes, QDate::currentDate(), QVariant()));
+    QVERIFY(!service->updateGoal(-1, QStringLiteral("不应成功"), categoryId,
+                                 10 * kValidSessionMinutes, QDate::currentDate(), QVariant()));
 
     const QVariantMap unchanged = service->getGoal(goalId);
     QCOMPARE(unchanged.value(QStringLiteral("title")).toString(), QStringLiteral("不能被误读"));
-    QCOMPARE(unchanged.value(QStringLiteral("targetPomodoros")).toInt(), 100);
+    QCOMPARE(unchanged.value(QStringLiteral("targetMinutes")).toInt(), 100 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::addGoalRollsBackAfterCommitFailure()
@@ -295,13 +302,13 @@ void GoalServiceTests::addGoalRollsBackAfterCommitFailure()
 
     // 不存在的科目在延迟外键模式下会让 INSERT 成功、COMMIT 失败，
     // 用它稳定覆盖“提交失败后必须显式回滚”的连接状态。
-    QVERIFY(!service->addGoal(QStringLiteral("必须回滚"), 999999, 100,
+    QVERIFY(!service->addGoal(QStringLiteral("必须回滚"), 999999, 100 * kValidSessionMinutes,
                               QDate::currentDate(), QVariant()));
     QVERIFY(service->getGoals().isEmpty());
 
     // 若失败事务仍挂在连接上，这次 addGoal 会报“事务内不能再次开启事务”。
     const int categoryId = addCategory(QStringLiteral("英语"));
-    QVERIFY(service->addGoal(QStringLiteral("回滚后可继续"), categoryId, 100,
+    QVERIFY(service->addGoal(QStringLiteral("回滚后可继续"), categoryId, 100 * kValidSessionMinutes,
                              QDate::currentDate(), QVariant()));
 }
 
@@ -312,7 +319,7 @@ void GoalServiceTests::goalWithClearedCategoryStaysReadableAndRebindable()
     const int newCategory = addCategory(QStringLiteral("新科目"));
     QVERIFY(oldCategory > 0 && newCategory > 0);
 
-    QVERIFY(service->addGoal(QStringLiteral("待改绑目标"), oldCategory, 100,
+    QVERIFY(service->addGoal(QStringLiteral("待改绑目标"), oldCategory, 100 * kValidSessionMinutes,
                              QVariant(), QVariant()));
     const int goalId = service->getGoals().first().toMap().value(QStringLiteral("id")).toInt();
 
@@ -326,14 +333,14 @@ void GoalServiceTests::goalWithClearedCategoryStaysReadableAndRebindable()
 
     const QVariantMap orphan = service->getGoal(goalId);
     QVERIFY2(!orphan.isEmpty(), "科目被清空的存量目标必须仍能读出来");
-    QCOMPARE(orphan.value(QStringLiteral("doneCount")).toInt(), 0);
+    QCOMPARE(orphan.value(QStringLiteral("doneMinutes")).toInt(), 0 * kValidSessionMinutes);
 
-    QVERIFY(service->updateGoal(goalId, QStringLiteral("待改绑目标"), newCategory, 100,
+    QVERIFY(service->updateGoal(goalId, QStringLiteral("待改绑目标"), newCategory, 100 * kValidSessionMinutes,
                                 QVariant(), QVariant()));
     QCOMPARE(service->getGoal(goalId).value(QStringLiteral("categoryId")).toInt(), newCategory);
 }
 
-void GoalServiceTests::progressCountsOnlyValidPomodorosOfBoundCategory()
+void GoalServiceTests::progressCountsFocusedMinutesOfBoundCategoryIncludingFreeTiming()
 {
     GoalService* service = GoalService::instance();
     const int englishId = addCategory(QStringLiteral("英语"));
@@ -345,9 +352,11 @@ void GoalServiceTests::progressCountsOnlyValidPomodorosOfBoundCategory()
     // 计入：番茄模式且时长达标
     insertSession(englishTask, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
     insertSession(englishTask, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
-    // 不计入：自由计时（mode=0）只累计分钟，不折算番茄
+    // **计入**：自由计时（mode=0）。这是 v11 的核心改动——目标进度以「投入分钟」计，
+    // 对计时模式不敏感。此前它按番茄个数算，自由计时刷再久目标也纹丝不动，
+    // 而任务的预计用时又是把自由计时算进去的，同一段专注在两处得出相反结论。
     insertSession(englishTask, now, kValidPomodoroSeconds, 0);
-    // 不计入：番茄模式但没到有效门槛
+    // 不计入：没到有效专注门槛（3 分钟），这条门槛两种口径共用
     insertSession(englishTask, now, FocusSessionRules::kMinimumValidDurationSeconds - 1,
                   FocusSessionRules::kPomodoroMode);
     // 不计入：别的科目
@@ -358,8 +367,8 @@ void GoalServiceTests::progressCountsOnlyValidPomodorosOfBoundCategory()
     QVERIFY(goalId > 0);
 
     const QVariantMap goal = service->getGoal(goalId);
-    QCOMPARE(goal.value(QStringLiteral("doneCount")).toInt(), 2);
-    QCOMPARE(goal.value(QStringLiteral("percent")).toInt(), 2);
+    QCOMPARE(goal.value(QStringLiteral("doneMinutes")).toInt(), 3 * kValidSessionMinutes);
+    QCOMPARE(goal.value(QStringLiteral("percent")).toInt(), 3);
     QCOMPARE(goal.value(QStringLiteral("achieved")).toBool(), false);
 }
 
@@ -378,13 +387,13 @@ void GoalServiceTests::progressIgnoresSessionsBeforeStartDate()
     const int goalId = addGoalReturningId(QStringLiteral("英语精读"), categoryId, 100,
                                           QDate::currentDate().addDays(-3));
     QVERIFY(goalId > 0);
-    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneCount")).toInt(), 2);
+    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneMinutes")).toInt(), 2 * kValidSessionMinutes);
 
     // 起始日就是当天：只剩今天那条。这也是“填过去的日期即可回填历史”的反向验证。
     const int todayGoalId = addGoalReturningId(QStringLiteral("今天起"), categoryId, 100,
                                                QDate::currentDate());
     QVERIFY(todayGoalId > 0);
-    QCOMPARE(service->getGoal(todayGoalId).value(QStringLiteral("doneCount")).toInt(), 1);
+    QCOMPARE(service->getGoal(todayGoalId).value(QStringLiteral("doneMinutes")).toInt(), 1 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::progressFollowsLogicalDayBoundary()
@@ -404,13 +413,13 @@ void GoalServiceTests::progressFollowsLogicalDayBoundary()
     // 起始日 = anchor 当天：那条 02:00 记录逻辑上属于前一天，不该计入。
     const int strictId = addGoalReturningId(QStringLiteral("当天起"), categoryId, 100, anchor);
     QVERIFY(strictId > 0);
-    QCOMPARE(service->getGoal(strictId).value(QStringLiteral("doneCount")).toInt(), 0);
+    QCOMPARE(service->getGoal(strictId).value(QStringLiteral("doneMinutes")).toInt(), 0 * kValidSessionMinutes);
 
     // 起始日 = 前一天：计入。
     const int looseId = addGoalReturningId(QStringLiteral("前一天起"), categoryId, 100,
                                            anchor.addDays(-1));
     QVERIFY(looseId > 0);
-    QCOMPARE(service->getGoal(looseId).value(QStringLiteral("doneCount")).toInt(), 1);
+    QCOMPARE(service->getGoal(looseId).value(QStringLiteral("doneMinutes")).toInt(), 1 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::deletingSessionsRollsProgressBack()
@@ -427,13 +436,13 @@ void GoalServiceTests::deletingSessionsRollsProgressBack()
     const int goalId = addGoalReturningId(QStringLiteral("英语精读"), categoryId, 100,
                                           QDate::currentDate().addDays(-1));
     QVERIFY(goalId > 0);
-    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneCount")).toInt(), 5);
+    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneMinutes")).toInt(), 5 * kValidSessionMinutes);
 
     // 进度是现算的：删掉记录后立刻回退，不需要任何补偿逻辑。
     QSqlQuery del(DatabaseManager::instance()->database());
     QVERIFY(del.exec(QStringLiteral("DELETE FROM focus_sessions WHERE id IN "
                                     "(SELECT id FROM focus_sessions LIMIT 2)")));
-    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneCount")).toInt(), 3);
+    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneMinutes")).toInt(), 3 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::dailyCountsGroupByLogicalDay()
@@ -457,9 +466,9 @@ void GoalServiceTests::dailyCountsGroupByLogicalDay()
     const QVariantList counts = service->getGoalDailyCounts(goalId, 2026, 7);
     QCOMPARE(counts.size(), 2);
     QCOMPARE(counts.at(0).toMap().value(QStringLiteral("day")).toInt(), 1);
-    QCOMPARE(counts.at(0).toMap().value(QStringLiteral("count")).toInt(), 1);
+    QCOMPARE(counts.at(0).toMap().value(QStringLiteral("count")).toInt(), 1 * kValidSessionMinutes);
     QCOMPARE(counts.at(1).toMap().value(QStringLiteral("day")).toInt(), 2);
-    QCOMPARE(counts.at(1).toMap().value(QStringLiteral("count")).toInt(), 1);
+    QCOMPARE(counts.at(1).toMap().value(QStringLiteral("count")).toInt(), 1 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::dailyCountsRespectStartDateAndCategory()
@@ -485,7 +494,7 @@ void GoalServiceTests::dailyCountsRespectStartDateAndCategory()
     const QVariantList counts = service->getGoalDailyCounts(goalId, 2026, 7);
     QCOMPARE(counts.size(), 1);
     QCOMPARE(counts.first().toMap().value(QStringLiteral("day")).toInt(), 11);
-    QCOMPARE(counts.first().toMap().value(QStringLiteral("count")).toInt(), 1);
+    QCOMPARE(counts.first().toMap().value(QStringLiteral("count")).toInt(), 1 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::forecastIsUnknownWithoutSessionsAndZeroWhenAchieved()
@@ -529,7 +538,7 @@ void GoalServiceTests::forecastUsesActiveDaysNotCalendarDays()
     QVERIFY(goalId > 0);
 
     const QVariantMap goal = service->getGoal(goalId);
-    QCOMPARE(goal.value(QStringLiteral("doneCount")).toInt(), 4);
+    QCOMPARE(goal.value(QStringLiteral("doneMinutes")).toInt(), 4 * kValidSessionMinutes);
     // 还差 6 个，速度 2 个/活跃日 → 3 天。若错用自然日 20 天当分母，结果会是 30 天。
     QCOMPARE(goal.value(QStringLiteral("forecastDays")).toInt(), 3);
 }
@@ -585,7 +594,7 @@ void GoalServiceTests::progressRollbackThenRegainDoesNotRefire()
     QSqlQuery del(DatabaseManager::instance()->database());
     QVERIFY(del.exec(QStringLiteral("DELETE FROM focus_sessions WHERE id = "
                                     "(SELECT MAX(id) FROM focus_sessions)")));
-    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneCount")).toInt(), 1);
+    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneMinutes")).toInt(), 1 * kValidSessionMinutes);
     service->refreshMilestones();
     QCOMPARE(spy.count(), 1);
 
@@ -617,8 +626,8 @@ void GoalServiceTests::firstRefreshSeedsProgressCacheWithoutEmitting()
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.first().at(0).toInt(), goalId);
     QCOMPARE(spy.first().at(1).toString(), QStringLiteral("英语精读"));
-    QCOMPARE(spy.first().at(2).toInt(), 3);
-    QCOMPARE(spy.first().at(3).toInt(), 100);
+    QCOMPARE(spy.first().at(2).toInt(), 3 * kValidSessionMinutes);
+    QCOMPARE(spy.first().at(3).toInt(), 100 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::progressRollbackThenRegainEmitsProgressAgain()
@@ -650,7 +659,7 @@ void GoalServiceTests::progressRollbackThenRegainEmitsProgressAgain()
     insertSession(taskId, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
     service->refreshMilestones();
     QCOMPARE(spy.count(), 1);
-    QCOMPARE(spy.first().at(2).toInt(), 2);
+    QCOMPARE(spy.first().at(2).toInt(), 2 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::databaseChangeClearsProgressCache()
@@ -743,7 +752,7 @@ void GoalServiceTests::newGoalWithBackfilledHistoryDoesNotCelebrate()
     const int goalId = addGoalReturningId(QStringLiteral("英语精读"), categoryId, 8,
                                           QDate::currentDate().addDays(-1));
     QVERIFY(goalId > 0);
-    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneCount")).toInt(), 6);
+    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneMinutes")).toInt(), 6 * kValidSessionMinutes);
 
     service->refreshMilestones();
     QCOMPARE(spy.count(), 0);
@@ -777,7 +786,7 @@ void GoalServiceTests::raisingTargetClearsStaleMilestonesSoTheyCanFireAgain()
 
     // 目标从 8 提到 24：6 个番茄只剩 25%，75% 那档不再成立，必须被清掉，
     // 否则用户真的做到 18 个时永远等不到 75% 的庆祝。
-    QVERIFY(service->updateGoal(goalId, QStringLiteral("英语精读"), categoryId, 24,
+    QVERIFY(service->updateGoal(goalId, QStringLiteral("英语精读"), categoryId, 24 * kValidSessionMinutes,
                                 QDate::currentDate().addDays(-1), QVariant()));
     QCOMPARE(service->getGoal(goalId).value(QStringLiteral("percent")).toInt(), 25);
 
@@ -815,7 +824,7 @@ void GoalServiceTests::loweringTargetFiresNewMilestoneAndSetsAchievedAt()
     QVERIFY(!service->getGoal(goalId).value(QStringLiteral("achievedAt")).toDateTime().isValid());
 
     spy.clear();
-    QVERIFY(service->updateGoal(goalId, QStringLiteral("英语精读"), categoryId, 6,
+    QVERIFY(service->updateGoal(goalId, QStringLiteral("英语精读"), categoryId, 6 * kValidSessionMinutes,
                                 QDate::currentDate().addDays(-1), QVariant()));
 
     QCOMPARE(spy.count(), 1);
@@ -850,7 +859,7 @@ void GoalServiceTests::presentationOnlyEditPreservesMilestoneHistory()
     milestoneSpy.clear();
 
     // 进度回退后只改标题：这不改变进度定义，已经庆祝过的 25% 位必须保留。
-    QVERIFY(service->updateGoal(goalId, QStringLiteral("新标题"), categoryId, 8,
+    QVERIFY(service->updateGoal(goalId, QStringLiteral("新标题"), categoryId, 8 * kValidSessionMinutes,
                                 QDate::currentDate().addDays(-1), QVariant()));
     insertSession(taskId, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
     service->refreshMilestones();
@@ -875,16 +884,16 @@ void GoalServiceTests::updateGoalReseedsProgressCache()
     QVERIFY(goalId > 0);
     service->refreshMilestones();
 
-    QVERIFY(service->updateGoal(goalId, QStringLiteral("改绑目标"), newCategoryId, 100,
+    QVERIFY(service->updateGoal(goalId, QStringLiteral("改绑目标"), newCategoryId, 100 * kValidSessionMinutes,
                                 QDate::currentDate().addDays(-1), QVariant()));
-    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneCount")).toInt(), 0);
+    QCOMPARE(service->getGoal(goalId).value(QStringLiteral("doneMinutes")).toInt(), 0 * kValidSessionMinutes);
 
     QSignalSpy progressedSpy(service, &GoalService::goalProgressed);
     insertSession(newTaskId, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
     service->refreshMilestones();
     QCOMPARE(progressedSpy.count(), 1);
     QCOMPARE(progressedSpy.first().at(0).toInt(), goalId);
-    QCOMPARE(progressedSpy.first().at(2).toInt(), 1);
+    QCOMPARE(progressedSpy.first().at(2).toInt(), 1 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::refreshMilestonesInvalidatesGoalData()
@@ -914,13 +923,13 @@ void GoalServiceTests::updateGoalRollsBackWhenMilestoneWriteFails()
         "WHEN NEW.id = %1 BEGIN SELECT RAISE(ABORT, 'forced failure'); END")
             .arg(goalId)), qPrintable(trigger.lastError().text()));
 
-    QVERIFY(!service->updateGoal(goalId, QStringLiteral("不应落库"), categoryId, 4,
+    QVERIFY(!service->updateGoal(goalId, QStringLiteral("不应落库"), categoryId, 4 * kValidSessionMinutes,
                                  QDate::currentDate(), QVariant()));
 
     // 第二步写入失败后，第一步已执行的标题和目标值也必须回滚。
     const QVariantMap unchanged = service->getGoal(goalId);
     QCOMPARE(unchanged.value(QStringLiteral("title")).toString(), QStringLiteral("原目标"));
-    QCOMPARE(unchanged.value(QStringLiteral("targetPomodoros")).toInt(), 8);
+    QCOMPARE(unchanged.value(QStringLiteral("targetMinutes")).toInt(), 8 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::deleteGoalRemovesItAndLeavesOtherProgressIntact()
@@ -949,7 +958,7 @@ void GoalServiceTests::deleteGoalRemovesItAndLeavesOtherProgressIntact()
 
     // 进度是从 focus_sessions 现算的，不存在目标行里，所以删掉一个目标
     // 绝不该影响另一个目标的进度。这条断言就是守住"进度不落库"这个设计前提。
-    QCOMPARE(service->getGoal(secondId).value(QStringLiteral("doneCount")).toInt(), 3);
+    QCOMPARE(service->getGoal(secondId).value(QStringLiteral("doneMinutes")).toInt(), 3 * kValidSessionMinutes);
 }
 
 void GoalServiceTests::deleteGoalRejectsUnknownId()
@@ -979,9 +988,9 @@ void GoalServiceTests::reorderGoalMovesEntryAndRewritesDisplayOrder()
     const QDate start = QDate::currentDate();
     // 三个目标必须一次性建完再取顺序：addGoalReturningId 依赖"新目标排在末尾"，
     // 这个前提在重排之后就不再成立了。
-    QVERIFY(service->addGoal(QStringLiteral("甲"), categoryId, 100, start, QVariant()));
-    QVERIFY(service->addGoal(QStringLiteral("乙"), categoryId, 100, start, QVariant()));
-    QVERIFY(service->addGoal(QStringLiteral("丙"), categoryId, 100, start, QVariant()));
+    QVERIFY(service->addGoal(QStringLiteral("甲"), categoryId, 100 * kValidSessionMinutes, start, QVariant()));
+    QVERIFY(service->addGoal(QStringLiteral("乙"), categoryId, 100 * kValidSessionMinutes, start, QVariant()));
+    QVERIFY(service->addGoal(QStringLiteral("丙"), categoryId, 100 * kValidSessionMinutes, start, QVariant()));
 
     auto titlesInOrder = [service]() {
         QStringList titles;
@@ -1021,8 +1030,8 @@ void GoalServiceTests::reorderGoalRejectsOutOfRangeIndexWithoutTouchingData()
     GoalService* service = GoalService::instance();
     const int categoryId = addCategory(QStringLiteral("英语"));
     const QDate start = QDate::currentDate();
-    QVERIFY(service->addGoal(QStringLiteral("甲"), categoryId, 100, start, QVariant()));
-    QVERIFY(service->addGoal(QStringLiteral("乙"), categoryId, 100, start, QVariant()));
+    QVERIFY(service->addGoal(QStringLiteral("甲"), categoryId, 100 * kValidSessionMinutes, start, QVariant()));
+    QVERIFY(service->addGoal(QStringLiteral("乙"), categoryId, 100 * kValidSessionMinutes, start, QVariant()));
 
     auto titlesInOrder = [service]() {
         QStringList titles;
@@ -1048,7 +1057,7 @@ void GoalServiceTests::reorderGoalWithSameIndexIsNoOp()
 {
     GoalService* service = GoalService::instance();
     const int categoryId = addCategory(QStringLiteral("英语"));
-    QVERIFY(service->addGoal(QStringLiteral("甲"), categoryId, 100,
+    QVERIFY(service->addGoal(QStringLiteral("甲"), categoryId, 100 * kValidSessionMinutes,
                              QDate::currentDate(), QVariant()));
 
     QSignalSpy changedSpy(service, &GoalService::goalsChanged);

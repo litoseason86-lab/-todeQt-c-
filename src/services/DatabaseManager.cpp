@@ -160,6 +160,8 @@ bool DatabaseManager::createTables()
             routine_id INTEGER REFERENCES routines(id) ON DELETE SET NULL,
             routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
             estimated_minutes INTEGER NOT NULL DEFAULT 0,
+            notes TEXT NOT NULL DEFAULT '',
+            display_order INTEGER NOT NULL DEFAULT 0,
             date TEXT NOT NULL,
             completed INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -318,6 +320,24 @@ bool DatabaseManager::createTables()
     if (version < 10
         || !columnExists(QStringLiteral("tasks"), QStringLiteral("estimated_minutes"))) {
         if (!migrateToVersion10()) {
+            return false;
+        }
+        version = 10;
+    }
+
+    // v11：长期目标改用分钟、任务加备注与手动排序。三列缺任意一列都要补，
+    // 与前面几步同理防御半迁移状态。
+    // long_goals 由 GoalService 懒建：全新库跑到这里时它还不存在，那就没有要迁的东西
+    // （建表语句本身已经是 target_minutes）。不加这个判断，结构守卫会认为列永远缺失，
+    // 每次启动都重跑一遍 v11。
+    const bool goalTableNeedsMigration =
+        tableExists(QStringLiteral("long_goals"))
+        && !columnExists(QStringLiteral("long_goals"), QStringLiteral("target_minutes"));
+    if (version < 11
+        || goalTableNeedsMigration
+        || !columnExists(QStringLiteral("tasks"), QStringLiteral("notes"))
+        || !columnExists(QStringLiteral("tasks"), QStringLiteral("display_order"))) {
+        if (!migrateToVersion11()) {
             return false;
         }
     }
@@ -592,6 +612,8 @@ bool DatabaseManager::migrateToVersion5()
         QStringLiteral("completed"),
         QStringLiteral("created_at"),
         QStringLiteral("estimated_minutes"),
+        QStringLiteral("notes"),
+        QStringLiteral("display_order"),
     };
 
     // 遇到不认识的列就拒绝重建。宁可让迁移失败并留下明确日志，
@@ -613,6 +635,13 @@ bool DatabaseManager::migrateToVersion5()
     const QString estimateExpression =
         currentColumns.contains(QStringLiteral("estimated_minutes"))
         ? QStringLiteral("estimated_minutes") : QStringLiteral("0");
+    // v11 的两列同理：从更老的库升上来时它们还不存在，用默认值兜底。
+    const QString notesExpression =
+        currentColumns.contains(QStringLiteral("notes"))
+        ? QStringLiteral("notes") : QStringLiteral("''");
+    const QString orderExpression =
+        currentColumns.contains(QStringLiteral("display_order"))
+        ? QStringLiteral("display_order") : QStringLiteral("0");
 
     QSqlQuery query(m_db);
     const QStringList statements = {
@@ -627,15 +656,18 @@ bool DatabaseManager::migrateToVersion5()
                 date TEXT NOT NULL,
                 completed INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                estimated_minutes INTEGER NOT NULL DEFAULT 0
+                estimated_minutes INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                display_order INTEGER NOT NULL DEFAULT 0
             )
         )SQL"),
         QStringLiteral(
             "INSERT INTO tasks_v5 (id, title, category, category_id, routine_id, "
-            "routine_generated, date, completed, created_at, estimated_minutes) "
+            "routine_generated, date, completed, created_at, estimated_minutes, "
+            "notes, display_order) "
             "SELECT id, title, category, category_id, routine_id, %1, date, completed, "
-            "created_at, %2 FROM tasks")
-            .arg(provenanceExpression, estimateExpression),
+            "created_at, %2, %3, %4 FROM tasks")
+            .arg(provenanceExpression, estimateExpression, notesExpression, orderExpression),
         QStringLiteral("DROP TABLE tasks"),
         QStringLiteral("ALTER TABLE tasks_v5 RENAME TO tasks")
     };
@@ -1152,6 +1184,90 @@ bool DatabaseManager::migrateToVersion10()
     }
 
     qInfo() << "Database migrated to version 10";
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion11()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+    if (!backupDatabaseBeforeMigration()) {
+        return false;
+    }
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 11 migration:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+
+    // ── 长期目标：番茄数 → 分钟 ──
+    // 换算基准与 v10 同样取 25 分钟，理由也一样：旧库只存了番茄个数，没存用户当时的
+    // 专注时长设置。两次迁移必须用同一个基准，否则同一个用户的任务预估和目标预估
+    // 会按不同尺子折算，长期目标看起来永远比任务"贵"或"便宜"。
+    if (tableExists(QStringLiteral("long_goals"))
+        && !columnExists(QStringLiteral("long_goals"), QStringLiteral("target_minutes"))) {
+        if (!query.exec(QStringLiteral(
+                "ALTER TABLE long_goals ADD COLUMN target_minutes INTEGER NOT NULL DEFAULT 0"))) {
+            qWarning() << "Failed to add long_goals.target_minutes:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+    if (tableExists(QStringLiteral("long_goals"))
+        && columnExists(QStringLiteral("long_goals"), QStringLiteral("target_pomodoros"))) {
+        // 守卫 target_minutes = 0：迁移重入不会把已折算的值二次放大。
+        if (!query.exec(QStringLiteral(
+                "UPDATE long_goals SET target_minutes = target_pomodoros * 25 "
+                "WHERE target_minutes = 0 AND target_pomodoros > 0"))) {
+            qWarning() << "Failed to backfill target_minutes:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+        // 删除失败不算迁移失败：回填已成功、新列可用，旧列留着只是整洁性问题。
+        if (!query.exec(QStringLiteral("ALTER TABLE long_goals DROP COLUMN target_pomodoros"))) {
+            qWarning() << "Failed to drop long_goals.target_pomodoros (non-fatal):"
+                       << query.lastError().text();
+        }
+    }
+
+    // ── 任务备注 ──
+    if (!columnExists(QStringLiteral("tasks"), QStringLiteral("notes"))) {
+        if (!query.exec(QStringLiteral(
+                "ALTER TABLE tasks ADD COLUMN notes TEXT NOT NULL DEFAULT ''"))) {
+            qWarning() << "Failed to add tasks.notes:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    // ── 任务手动排序 ──
+    // 默认 0 而不是按 id 回填：0 表示"没排过"，列表在同序时回落到 id 升序，
+    // 与迁移前的顺序一致。若在这里按 id 写死序号，用户第一次拖动后
+    // 其余任务的相对位置反而会跟着变。
+    if (!columnExists(QStringLiteral("tasks"), QStringLiteral("display_order"))) {
+        if (!query.exec(QStringLiteral(
+                "ALTER TABLE tasks ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0"))) {
+            qWarning() << "Failed to add tasks.display_order:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    if (!setDatabaseVersion(11)) {
+        m_db.rollback();
+        return false;
+    }
+
+    if (!m_db.commit()) {
+        qWarning() << "Failed to commit version 11 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 11";
     return true;
 }
 

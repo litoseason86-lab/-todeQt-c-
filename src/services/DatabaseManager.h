@@ -13,7 +13,7 @@ class DatabaseManager : public QObject
 public:
     // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
-    static constexpr int kCurrentSchemaVersion = 10;
+    static constexpr int kCurrentSchemaVersion = 11;
 
     static DatabaseManager* instance();
 
@@ -58,6 +58,11 @@ private:
     bool migrateToVersion9();
     // v10：任务的「预估番茄数」改为「预计用时（分钟）」。
     bool migrateToVersion10();
+    // v11 一次做三件事，合并成一次迁移是为了只建一份迁移快照、只重入一次：
+    //   long_goals.target_pomodoros → target_minutes（长期目标与任务统一到分钟）
+    //   tasks.notes                  （任务备注）
+    //   tasks.display_order          （任务手动排序）
+    bool migrateToVersion11();
     bool createRoutinesTable();
     bool insertPresetCategories();
     bool migrateTaskCategories();

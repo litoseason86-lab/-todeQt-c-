@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import "../Duration.js" as Duration
 import "../GoalForecast.js" as GoalForecast
 import ".."
 
@@ -14,8 +15,8 @@ AbstractButton {
 
     property var goal: ({})
     readonly property int goalId: Number(root.goal.id || -1)
-    readonly property int doneCount: Math.max(0, Number(root.goal.doneCount || 0))
-    readonly property int targetCount: Math.max(0, Number(root.goal.targetPomodoros || 0))
+    readonly property int doneMinutes: Math.max(0, Number(root.goal.doneMinutes || 0))
+    readonly property int targetMinutes: Math.max(0, Number(root.goal.targetMinutes || 0))
     readonly property int percent: Math.max(0, Math.min(100, Number(root.goal.percent || 0)))
     readonly property bool achieved: Boolean(root.goal.achieved)
     readonly property string categoryName: String(root.goal.categoryName || "")
@@ -23,7 +24,8 @@ AbstractButton {
                                            ? root.goal.categoryColor : Theme.accent
     // 计数行始终报计数：达成与否由环形和下面的结论行表达，
     // 这里再写一次「已达成」会让同一张卡上出现两遍同样的词。
-    readonly property string secondaryText: qsTr("%1 / %2 番茄").arg(root.doneCount).arg(root.targetCount)
+    readonly property string secondaryText: Duration.format(root.doneMinutes)
+                                           + " / " + Duration.format(root.targetMinutes)
 
     // 逻辑日由页面注入，与列表卡同一来源。
     property var today: new Date()

@@ -5,6 +5,7 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import ".."
 import "../components"
+import "../Duration.js" as Duration
 import "../LogicalDay.js" as LogicalDay
 
 Item {
@@ -558,9 +559,9 @@ Item {
                         }
                         Item { Layout.fillWidth: true }
                         Text {
-                            text: qsTr("%1 / %2 番茄")
-                                  .arg(Number(root.detailGoal.doneCount || 0))
-                                  .arg(Number(root.detailGoal.targetPomodoros || 0))
+                            text: Duration.format(Number(root.detailGoal.doneMinutes || 0))
+                                  + " / "
+                                  + Duration.format(Number(root.detailGoal.targetMinutes || 0))
                             color: Theme.ink
                             font.pixelSize: Theme.fontMd
                         }
@@ -629,8 +630,8 @@ Item {
                         Layout.maximumWidth: 360
                         Layout.alignment: Qt.AlignHCenter
                         Layout.preferredHeight: implicitHeight
-                        doneCount: Number(root.detailGoal.doneCount || 0)
-                        targetCount: Number(root.detailGoal.targetPomodoros || 0)
+                        doneCount: Number(root.detailGoal.doneMinutes || 0)
+                        targetCount: Number(root.detailGoal.targetMinutes || 0)
                     }
 
                     Text {

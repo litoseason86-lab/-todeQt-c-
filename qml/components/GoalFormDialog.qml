@@ -42,9 +42,9 @@ Popup {
     readonly property int maxTitleLength: root.goalServiceRef
                                                   ? Number(root.goalServiceRef.maxTitleLength || 100)
                                                   : 100
-    readonly property int maxTargetPomodoros: root.goalServiceRef
-                                                      ? Number(root.goalServiceRef.maxTargetPomodoros || 9999)
-                                                      : 9999
+    readonly property int maxTargetMinutes: root.goalServiceRef
+                                                      ? Number(root.goalServiceRef.maxTargetMinutes || 60000)
+                                                      : 60000
 
     modal: true
     focus: true
@@ -106,7 +106,9 @@ Popup {
         root.editingGoalId = -1
         root.errorText = ""
         titleField.text = ""
-        targetField.text = "100"
+        // 默认 100 分钟：与旧版默认「100 个番茄」不是一回事，旧默认按 25 分钟折算是
+        // 2500 分钟（≈42 小时），对新建目标来说过大。100 分钟是个能当天推进的起点。
+        targetField.totalMinutes = 100
         startDateField.text = root.todayIso()
         deadlineField.text = ""
         longTermCheck.checked = true
@@ -119,7 +121,8 @@ Popup {
         root.editingGoalId = Number(goal.id || -1)
         root.errorText = ""
         titleField.text = String(goal.title || "")
-        targetField.text = String(goal.targetPomodoros || 1)
+        targetField.totalMinutes = Number(goal.targetMinutes || 0)
+        targetField.reload()
         startDateField.text = root.dateToIso(goal.startDate) || root.todayIso()
         deadlineField.text = root.dateToIso(goal.deadline)
         longTermCheck.checked = deadlineField.text.length === 0
@@ -141,10 +144,15 @@ Popup {
             categoryCombo.forceActiveFocus()
             return false
         }
-        var target = Number(targetField.text)
-        if (!Number.isInteger(target) || target < 1 || target > root.maxTargetPomodoros) {
-            root.errorText = qsTr("目标番茄数必须在 1 到 %1 之间").arg(root.maxTargetPomodoros)
-            targetField.forceActiveFocus()
+        if (targetField.validationError.length > 0) {
+            root.errorText = targetField.validationError
+            targetField.focusFirstField()
+            return false
+        }
+        var target = targetField.enteredMinutes
+        if (target < 1) {
+            root.errorText = qsTr("目标投入至少 1 分钟")
+            targetField.focusFirstField()
             return false
         }
         var startDate = root.parseIsoDate(startDateField.text)
@@ -327,14 +335,16 @@ Popup {
 
                 ColumnLayout {
                     Layout.fillWidth: true
-                    Label { text: qsTr("目标番茄数"); color: Theme.ink }
-                    TextField {
+                    Label { text: qsTr("目标投入"); color: Theme.ink }
+                    // 与任务的「预计用时」、今日专注目标同一个输入组件：
+                    // 全应用只有一种填时长的方式。
+                    DurationFieldPair {
                         id: targetField
                         objectName: "goalTargetField"
                         Layout.fillWidth: true
-                        implicitHeight: 44
-                        inputMethodHints: Qt.ImhDigitsOnly
-                        validator: IntValidator { bottom: 1; top: root.maxTargetPomodoros }
+                        namePrefix: "goalTarget"
+                        accessiblePrefix: qsTr("目标投入")
+                        maximumMinutes: root.maxTargetMinutes
                     }
                 }
 

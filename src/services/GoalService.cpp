@@ -40,7 +40,7 @@ GoalService::GoalService(QObject* parent)
     connect(CategoryManager::instance(), &CategoryManager::categoriesChanged, this, [this]() {
         m_databaseReady = false;
         // 科目变化或换库后，目标 id 与进度缓存都可能失效，不能跨状态比较。
-        m_lastDoneCounts.clear();
+        m_lastDoneMinutes.clear();
         if (initializeDatabase()) {
             emit goalsChanged();
         }
@@ -48,7 +48,7 @@ GoalService::GoalService(QObject* parent)
     connect(AppSettings::instance(), &AppSettings::dayStartHourChanged, this, [this]() {
         // 逻辑日起点参与所有进度 SQL。口径变化后旧缓存不能继续比较，
         // 否则下一次专注可能凭空出现 +1，或被旧的较大计数吞掉。
-        m_lastDoneCounts.clear();
+        m_lastDoneMinutes.clear();
         emit goalsChanged();
     });
 
@@ -86,7 +86,7 @@ bool GoalService::initializeDatabase()
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "title TEXT NOT NULL CHECK(length(trim(title)) > 0), "
             "category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL, "
-            "target_pomodoros INTEGER NOT NULL CHECK(target_pomodoros > 0), "
+            "target_minutes INTEGER NOT NULL CHECK(target_minutes > 0), "
             "start_date TEXT NOT NULL, "
             "deadline TEXT, "
             "display_order INTEGER NOT NULL DEFAULT 0, "
@@ -130,29 +130,32 @@ bool GoalService::ensureDatabaseReady()
 
 QString GoalService::goalSelectSql() const
 {
-    // 进度不存库，每次查询现算；有效会话先在 CTE 中归一成“科目 + 逻辑日”，
-    // 再一次性聚合全部目标的完成数和活跃日，避免目标越多 SQL 往返次数越多。
+    // 进度不存库，每次查询现算；有效会话先在 CTE 中归一成“科目 + 逻辑日 + 时长”，
+    // 再一次性聚合全部目标的投入分钟和活跃日，避免目标越多 SQL 往返次数越多。
     // 这样删掉一条专注记录后进度自动回退，不存在“奖励状态和真实数据对不上”的可能。
-    // 口径：会话快照科目、自然完成番茄、时长达标、且落在起始逻辑日之后。
-    // 番茄的判定表达式从 FocusSessionRules 取，与任务列表用的是同一份定义。
+    //
+    // v11 起口径是「有效专注分钟」而不是「完整番茄数」：番茄口径下自由计时对目标
+    // 毫无贡献，用户用正向计时刷三小时，目标纹丝不动。判定表达式从 FocusSessionRules
+    // 取，与任务的预计用时是同一份定义。
     return QStringLiteral(
         "WITH valid_sessions AS ("
         "SELECT COALESCE(fs.category_id_snapshot, t.category_id) AS category_id, "
-        "date(fs.start_time, :dayShift) AS logical_day "
+        "date(fs.start_time, :dayShift) AS logical_day, "
+        "fs.duration AS duration "
         "FROM focus_sessions fs "
         "LEFT JOIN tasks t ON fs.task_id = t.id "
-        "WHERE %1) "
+        "WHERE fs.duration IS NOT NULL AND fs.duration >= %1) "
         "SELECT g.id, g.title, g.category_id, "
         "c.name AS category_name, c.color AS category_color, "
-        "g.target_pomodoros, g.start_date, g.deadline, g.display_order, "
+        "g.target_minutes, g.start_date, g.deadline, g.display_order, "
         "g.fired_milestones, g.achieved_at, g.created_at, "
-        "COUNT(v.logical_day) AS done_count, "
+        "COALESCE(SUM(v.duration), 0) / 60 AS done_minutes, "
         "COUNT(DISTINCT v.logical_day) AS active_days "
         "FROM long_goals g "
         "LEFT JOIN categories c ON g.category_id = c.id "
         "LEFT JOIN valid_sessions v ON v.category_id = g.category_id "
         "AND v.logical_day >= g.start_date ")
-        .arg(FocusSessionRules::validPomodoroPredicate(QStringLiteral("fs")));
+        .arg(FocusSessionRules::kMinimumValidDurationSeconds);
 }
 
 QList<LongGoal> GoalService::loadGoals(std::optional<int> singleGoalId, bool* ok)
@@ -196,16 +199,16 @@ QList<LongGoal> GoalService::loadGoals(std::optional<int> singleGoalId, bool* ok
 
 int GoalService::forecastDaysFor(const LongGoal& goal, int activeDays) const
 {
-    const int remain = goal.targetPomodoros - goal.doneCount;
+    const int remain = goal.targetMinutes - goal.doneMinutes;
     if (remain <= 0) {
         return 0;
     }
-    if (activeDays <= 0 || goal.doneCount <= 0) {
+    if (activeDays <= 0 || goal.doneMinutes <= 0) {
         // 还没有任何有效番茄，无从推算速度。界面据此隐藏这一行，而不是显示一个编造的天数。
         return -1;
     }
 
-    const double rate = static_cast<double>(goal.doneCount) / static_cast<double>(activeDays);
+    const double rate = static_cast<double>(goal.doneMinutes) / static_cast<double>(activeDays);
     return static_cast<int>(std::ceil(static_cast<double>(remain) / rate));
 }
 
@@ -284,9 +287,11 @@ QVariantList GoalService::getGoalDailyCounts(int goalId, int year, int month)
     QSqlDatabase db = DatabaseManager::instance()->database();
     QSqlQuery query(db);
     // 科目口径必须优先使用会话快照：任务后来改科目或被删除，都不能改写历史归属。
-    // 有效番茄表达式直接取 FocusSessionRules，避免热力图另造时长阈值。
+    // 单位与目标进度保持一致（v11 起是分钟）：热力图深浅表达的必须是同一件事，
+    // 否则格子最深的那天未必是投入最多的那天。阈值同样取 FocusSessionRules。
     query.prepare(QStringLiteral(
-        "SELECT date(fs.start_time, :dayShift) AS logical_day, %1 AS count "
+        "SELECT date(fs.start_time, :dayShift) AS logical_day, "
+        "COALESCE(SUM(CASE WHEN fs.duration >= %1 THEN fs.duration ELSE 0 END), 0) / 60 AS count "
         "FROM focus_sessions fs "
         "LEFT JOIN tasks t ON fs.task_id = t.id "
         "WHERE COALESCE(fs.category_id_snapshot, t.category_id) = :categoryId "
@@ -295,7 +300,7 @@ QVariantList GoalService::getGoalDailyCounts(int goalId, int year, int month)
         "AND date(fs.start_time, :dayShift) BETWEEN :monthFirst AND :monthLast "
         "GROUP BY logical_day "
         "ORDER BY logical_day ASC")
-                      .arg(FocusSessionRules::validPomodoroCountExpr(QStringLiteral("fs"))));
+                      .arg(FocusSessionRules::kMinimumValidDurationSeconds));
     query.bindValue(QStringLiteral(":dayShift"), dayShift());
     query.bindValue(QStringLiteral(":categoryId"), goal.categoryId);
     query.bindValue(QStringLiteral(":startDate"), goal.startDate.toString(Qt::ISODate));
@@ -328,7 +333,7 @@ QVariantList GoalService::getGoalDailyCounts(int goalId, int year, int month)
 
 bool GoalService::validateInput(const QString& title,
                                 int categoryId,
-                                int targetPomodoros,
+                                int targetMinutes,
                                 QString* normalizedTitle)
 {
     const QString trimmed = title.trimmed();
@@ -341,8 +346,8 @@ bool GoalService::validateInput(const QString& title,
         reportFailure(QStringLiteral("目标名称不能超过 %1 个字").arg(kMaxTitleLength));
         return false;
     }
-    if (targetPomodoros <= 0 || targetPomodoros > kMaxTargetPomodoros) {
-        reportFailure(QStringLiteral("目标番茄数需在 1 到 %1 之间").arg(kMaxTargetPomodoros));
+    if (targetMinutes <= 0 || targetMinutes > kMaxTargetMinutes) {
+        reportFailure(QStringLiteral("目标番茄数需在 1 到 %1 之间").arg(kMaxTargetMinutes));
         return false;
     }
 
@@ -368,12 +373,12 @@ QDate GoalService::resolveStartDate(const QVariant& startDateValue) const
 
 bool GoalService::addGoal(const QString& title,
                           int categoryId,
-                          int targetPomodoros,
+                          int targetMinutes,
                           const QVariant& startDateValue,
                           const QVariant& deadlineValue)
 {
     QString normalizedTitle;
-    if (!validateInput(title, categoryId, targetPomodoros, &normalizedTitle)) {
+    if (!validateInput(title, categoryId, targetMinutes, &normalizedTitle)) {
         return false;
     }
     if (!ensureDatabaseReady()) {
@@ -403,14 +408,14 @@ bool GoalService::addGoal(const QString& title,
     QSqlQuery insertQuery(db);
     insertQuery.prepare(QStringLiteral(
         "INSERT INTO long_goals "
-        "(title, category_id, target_pomodoros, start_date, deadline, display_order, "
+        "(title, category_id, target_minutes, start_date, deadline, display_order, "
         "fired_milestones, achieved_at, created_at) "
         "VALUES (:title, :categoryId, :target, :startDate, :deadline, :displayOrder, "
         "0, NULL, :createdAt)"));
     insertQuery.bindValue(QStringLiteral(":title"), normalizedTitle);
     insertQuery.bindValue(QStringLiteral(":categoryId"),
                           categoryId > 0 ? QVariant(categoryId) : QVariant());
-    insertQuery.bindValue(QStringLiteral(":target"), targetPomodoros);
+    insertQuery.bindValue(QStringLiteral(":target"), targetMinutes);
     insertQuery.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     insertQuery.bindValue(QStringLiteral(":deadline"),
                           deadline.isValid() ? QVariant(deadline.toString(Qt::ISODate)) : QVariant());
@@ -437,7 +442,7 @@ bool GoalService::addGoal(const QString& title,
     }
 
     const LongGoal& goal = created.first();
-    const int mask = LongGoal::milestonesForProgress(goal.doneCount, goal.targetPomodoros);
+    const int mask = LongGoal::milestonesForProgress(goal.doneMinutes, goal.targetMinutes);
     if (mask != 0) {
         QSqlQuery seedQuery(db);
         seedQuery.prepare(QStringLiteral(
@@ -472,7 +477,7 @@ bool GoalService::addGoal(const QString& title,
 bool GoalService::updateGoal(int goalId,
                              const QString& title,
                              int categoryId,
-                             int targetPomodoros,
+                             int targetMinutes,
                              const QVariant& startDateValue,
                              const QVariant& deadlineValue)
 {
@@ -481,7 +486,7 @@ bool GoalService::updateGoal(int goalId,
         return false;
     }
     QString normalizedTitle;
-    if (!validateInput(title, categoryId, targetPomodoros, &normalizedTitle)) {
+    if (!validateInput(title, categoryId, targetMinutes, &normalizedTitle)) {
         return false;
     }
     if (!ensureDatabaseReady()) {
@@ -514,12 +519,12 @@ bool GoalService::updateGoal(int goalId,
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "UPDATE long_goals SET title = :title, category_id = :categoryId, "
-        "target_pomodoros = :target, start_date = :startDate, deadline = :deadline "
+        "target_minutes = :target, start_date = :startDate, deadline = :deadline "
         "WHERE id = :id"));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
     query.bindValue(QStringLiteral(":categoryId"),
                     categoryId > 0 ? QVariant(categoryId) : QVariant());
-    query.bindValue(QStringLiteral(":target"), targetPomodoros);
+    query.bindValue(QStringLiteral(":target"), targetMinutes);
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":deadline"),
                     deadline.isValid() ? QVariant(deadline.toString(Qt::ISODate)) : QVariant());
@@ -545,10 +550,10 @@ bool GoalService::updateGoal(int goalId,
     const LongGoal& goal = updated.first();
     const LongGoal& oldGoal = existing.first();
     const bool progressDefinitionChanged = oldGoal.categoryId != goal.categoryId
-        || oldGoal.targetPomodoros != goal.targetPomodoros
+        || oldGoal.targetMinutes != goal.targetMinutes
         || oldGoal.startDate != goal.startDate;
     const int mask = progressDefinitionChanged
-        ? LongGoal::milestonesForProgress(goal.doneCount, goal.targetPomodoros)
+        ? LongGoal::milestonesForProgress(goal.doneMinutes, goal.targetMinutes)
         : oldGoal.firedMilestones;
     const int newBits = progressDefinitionChanged
         ? mask & ~oldGoal.firedMilestones
@@ -581,7 +586,7 @@ bool GoalService::updateGoal(int goalId,
 
     // 编辑可能改变进度聚合口径。提交成功后立即以新值重建基线，
     // 下一次真实番茄才能准确判断“是否前进”。
-    m_lastDoneCounts.insert(goalId, goal.doneCount);
+    m_lastDoneMinutes.insert(goalId, goal.doneMinutes);
     emit goalsChanged();
     if (newBits != 0) {
         int highest = 0;
@@ -614,7 +619,7 @@ bool GoalService::deleteGoal(int goalId)
         return false;
     }
 
-    m_lastDoneCounts.remove(goalId);
+    m_lastDoneMinutes.remove(goalId);
     emit goalsChanged();
     return true;
 }
@@ -681,16 +686,16 @@ void GoalService::refreshMilestones()
     }
 
     for (const LongGoal& goal : goals) {
-        const bool hasPreviousCount = m_lastDoneCounts.contains(goal.id);
-        const int previousCount = m_lastDoneCounts.value(goal.id, -1);
+        const bool hasPreviousCount = m_lastDoneMinutes.contains(goal.id);
+        const int previousCount = m_lastDoneMinutes.value(goal.id, -1);
         // 先写缓存再发同步信号，避免接收方重入 refreshMilestones 时重复发同一推进。
-        m_lastDoneCounts.insert(goal.id, goal.doneCount);
-        if (hasPreviousCount && goal.doneCount > previousCount) {
-            emit goalProgressed(goal.id, goal.title, goal.doneCount, goal.targetPomodoros);
+        m_lastDoneMinutes.insert(goal.id, goal.doneMinutes);
+        if (hasPreviousCount && goal.doneMinutes > previousCount) {
+            emit goalProgressed(goal.id, goal.title, goal.doneMinutes, goal.targetMinutes);
         }
         // 无条件写回：进度回退后再涨回也属于一次真实推进，应该重新出现轻量 Toast。
 
-        const int mask = LongGoal::milestonesForProgress(goal.doneCount, goal.targetPomodoros);
+        const int mask = LongGoal::milestonesForProgress(goal.doneMinutes, goal.targetMinutes);
         // 只做按位或，绝不清位：进度回退（比如删掉几条专注记录）再涨回来时不该重复庆祝。
         // 需要清位的只有用户主动改变进度口径（目标值、科目、起始日），
         // 那条路径在 updateGoal 里单独处理。
@@ -728,7 +733,7 @@ void GoalService::refreshMilestones()
         emit milestoneReached(goal.id, goal.title, highest);
     }
 
-    // doneCount、百分比、预测和热力都是查询时派生值，没有数据库行可替它们发变更通知。
+    // doneMinutes、百分比、预测和热力都是查询时派生值，没有数据库行可替它们发变更通知。
     // 每轮重算结束统一失效一次，目标页即使正打开也不会继续展示旧进度。
     emit goalsChanged();
 }

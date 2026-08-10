@@ -159,8 +159,8 @@ TestCase {
             id: 1,
             title: "完成课程",
             categoryId: 7,
-            targetPomodoros: 100,
-            doneCount: 62,
+            targetMinutes: 100,
+            doneMinutes: 62,
             percent: 62,
             achieved: false,
             forecastDays: 21
@@ -172,8 +172,8 @@ TestCase {
             id: 2,
             title: "读完经典",
             categoryId: 7,
-            targetPomodoros: 40,
-            doneCount: 40,
+            targetMinutes: 40,
+            doneMinutes: 40,
             percent: 100,
             achieved: true,
             achievedAt: new Date(2026, 6, 20, 12, 0, 0),
@@ -359,7 +359,9 @@ TestCase {
 
         dialog.openForAdd()
         findChild(dialog, "goalTitleField").text = "新的长期目标"
-        findChild(dialog, "goalTargetField").text = "20"
+        // 目标量改成与任务预计用时同款的小时+分钟输入
+        findChild(dialog, "goalTargetHourField").text = "0"
+        findChild(dialog, "goalTargetMinuteField").text = "20"
         findChild(dialog, "goalStartDateField").text = "2026-07-26"
 
         compare(dialog.submit(), false)
@@ -609,5 +611,20 @@ TestCase {
         compare(view.openGoal(1), true)
         tryCompare(view, "detailForecastText", "")
         verify(view.detailForecastText.indexOf("还需") < 0)
+    }
+
+    function test_goal_progress_is_shown_as_duration_not_pomodoro_count() {
+        // v11 起目标以「投入分钟」计量。此前是番茄个数，而任务的预计用时是分钟，
+        // 同一个应用里两套单位；更要命的是番茄口径把自由计时排除在外，
+        // 用正向计时刷再久目标也不动。这条守住展示单位这一半。
+        var goal = activeGoal()
+        goal.doneMinutes = 95
+        goal.targetMinutes = 240
+        var card = createTemporaryObject(cardComponent, testCase, { goal: goal })
+        verify(!!card, "Component exists")
+
+        var count = findChild(card, "goalCardCount")
+        verify(!!count, "Object exists")
+        compare(count.text, "1 小时 35 分 / 4 小时")
     }
 }

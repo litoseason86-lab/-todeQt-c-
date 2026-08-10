@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import "../Duration.js" as Duration
 import "../GoalForecast.js" as GoalForecast
 import ".."
 
@@ -20,8 +21,8 @@ AbstractButton {
     property var today: new Date()
 
     readonly property int goalId: Number(root.goal.id || -1)
-    readonly property int doneCount: Math.max(0, Number(root.goal.doneCount || 0))
-    readonly property int targetCount: Math.max(0, Number(root.goal.targetPomodoros || 0))
+    readonly property int doneMinutes: Math.max(0, Number(root.goal.doneMinutes || 0))
+    readonly property int targetMinutes: Math.max(0, Number(root.goal.targetMinutes || 0))
     readonly property int percent: Math.max(0, Math.min(100, Number(root.goal.percent || 0)))
     readonly property bool achieved: Boolean(root.goal.achieved)
     readonly property string categoryName: String(root.goal.categoryName || "")
@@ -116,7 +117,7 @@ AbstractButton {
 
             Text {
                 objectName: "goalCardCount"
-                text: qsTr("%1 / %2").arg(root.doneCount).arg(root.targetCount)
+                text: Duration.format(root.doneMinutes) + " / " + Duration.format(root.targetMinutes)
                 textFormat: Text.PlainText
                 color: Theme.inkSoft
                 font.pixelSize: Theme.fontSm

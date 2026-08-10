@@ -33,25 +33,25 @@ QDateTime parseStoredDateTime(const QString& value)
 }
 }
 
-int LongGoal::percentOf(int doneCount, int targetPomodoros)
+int LongGoal::percentOf(int doneMinutes, int targetMinutes)
 {
-    if (targetPomodoros <= 0) {
+    if (targetMinutes <= 0) {
         return 0;
     }
     // 上限夹到 100：超额完成仍然只显示 100%，避免出现 130% 这种没有意义的进度。
     const int raw = static_cast<int>(std::llround(
-        static_cast<double>(doneCount) / static_cast<double>(targetPomodoros) * 100.0));
+        static_cast<double>(doneMinutes) / static_cast<double>(targetMinutes) * 100.0));
     return std::clamp(raw, 0, 100);
 }
 
 int LongGoal::percent() const
 {
-    return percentOf(doneCount, targetPomodoros);
+    return percentOf(doneMinutes, targetMinutes);
 }
 
-int LongGoal::milestonesForProgress(int doneCount, int targetPomodoros)
+int LongGoal::milestonesForProgress(int doneMinutes, int targetMinutes)
 {
-    if (targetPomodoros <= 0) {
+    if (targetMinutes <= 0) {
         return 0;
     }
 
@@ -61,8 +61,8 @@ int LongGoal::milestonesForProgress(int doneCount, int targetPomodoros)
     for (int i = 0; i < 4; ++i) {
         const int percent = kMilestonePercents[i];
         // 达标所需番茄数向上取整：target=10、percent=25 时需要 3 个而不是 2.5 个。
-        const int needed = (targetPomodoros * percent + 99) / 100;
-        if (doneCount >= needed) {
+        const int needed = (targetMinutes * percent + 99) / 100;
+        if (doneMinutes >= needed) {
             mask |= (1 << i);
         }
     }
@@ -82,7 +82,7 @@ LongGoal LongGoal::fromQuery(const QSqlQuery& query)
     goal.categoryName = valueByName(query, "category_name").toString();
     goal.categoryColor = valueByName(query, "category_color").toString();
 
-    goal.targetPomodoros = valueByName(query, "target_pomodoros").toInt();
+    goal.targetMinutes = valueByName(query, "target_minutes").toInt();
     goal.startDate = QDate::fromString(valueByName(query, "start_date").toString(), Qt::ISODate);
 
     const QString deadlineText = valueByName(query, "deadline").toString();
@@ -97,7 +97,7 @@ LongGoal LongGoal::fromQuery(const QSqlQuery& query)
 
     // done_count 只有带聚合子查询的列表查询才有；缺列时 toInt() 得 0，
     // 不会破坏只读取目标本体的查询。
-    goal.doneCount = valueByName(query, "done_count").toInt();
+    goal.doneMinutes = valueByName(query, "done_minutes").toInt();
     goal.activeDays = valueByName(query, "active_days").toInt();
     return goal;
 }
@@ -110,7 +110,7 @@ QVariantMap LongGoal::toVariantMap() const
     map.insert(QStringLiteral("categoryId"), categoryId > 0 ? QVariant(categoryId) : QVariant());
     map.insert(QStringLiteral("categoryName"), categoryName);
     map.insert(QStringLiteral("categoryColor"), categoryColor);
-    map.insert(QStringLiteral("targetPomodoros"), targetPomodoros);
+    map.insert(QStringLiteral("targetMinutes"), targetMinutes);
     map.insert(QStringLiteral("startDate"), startDate);
     // 截止日为空时给 QML 一个无效 QVariant，界面据此显示“长期目标”。
     map.insert(QStringLiteral("deadline"), deadline.isValid() ? QVariant(deadline) : QVariant());
@@ -118,7 +118,7 @@ QVariantMap LongGoal::toVariantMap() const
     map.insert(QStringLiteral("firedMilestones"), firedMilestones);
     map.insert(QStringLiteral("achievedAt"), achievedAt.isValid() ? QVariant(achievedAt) : QVariant());
     map.insert(QStringLiteral("createdAt"), createdAt);
-    map.insert(QStringLiteral("doneCount"), doneCount);
+    map.insert(QStringLiteral("doneMinutes"), doneMinutes);
     map.insert(QStringLiteral("percent"), percent());
     map.insert(QStringLiteral("achieved"), isAchieved());
     map.insert(QStringLiteral("forecastDays"), forecastDays);

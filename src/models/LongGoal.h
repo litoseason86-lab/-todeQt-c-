@@ -36,7 +36,10 @@ public:
     int categoryId = -1;
     QString categoryName;
     QString categoryColor;
-    int targetPomodoros = 0;
+    // 目标以「投入分钟」计量。v11 之前是番茄个数，改动的实质不是换单位——
+    // 番茄口径只数完整番茄，用户用自由计时刷再久目标也纹丝不动；分钟口径对模式
+    // 不敏感，两种计时都算。见 FocusSessionRules::focusedSecondsExpr。
+    int targetMinutes = 0;
     // 起始逻辑日：只有这天（含）之后的专注记录才算进度。
     // 填过去的日期即可把已有历史记录回填进来，新建目标当场就有进度。
     QDate startDate;
@@ -50,19 +53,19 @@ public:
     QDateTime createdAt;
 
     // 以下三个字段不来自 long_goals 表，由 GoalService 聚合后填入，仅用于交给界面。
-    int doneCount = 0;
-    // 预测分母只统计真正做过有效番茄的逻辑日，由同一条聚合查询计算，不暴露给界面。
+    int doneMinutes = 0;
+    // 预测分母只统计真正有有效专注的逻辑日，由同一条聚合查询计算，不暴露给界面。
     int activeDays = 0;
     // 照当前速度预计还需多少天；无法预测（尚无任何记录）时为 -1，已达成时为 0。
     int forecastDays = -1;
 
-    bool isAchieved() const { return targetPomodoros > 0 && doneCount >= targetPomodoros; }
+    bool isAchieved() const { return targetMinutes > 0 && doneMinutes >= targetMinutes; }
     int percent() const;
 
     // percentOf 供里程碑判定复用，避免在服务层重复写同一个夹紧逻辑。
-    static int percentOf(int doneCount, int targetPomodoros);
+    static int percentOf(int doneMinutes, int targetMinutes);
     // 给定完成数应当点亮的位掩码；只看当前进度，不关心历史。
-    static int milestonesForProgress(int doneCount, int targetPomodoros);
+    static int milestonesForProgress(int doneMinutes, int targetMinutes);
 
     static LongGoal fromQuery(const QSqlQuery& query);
     QVariantMap toVariantMap() const;

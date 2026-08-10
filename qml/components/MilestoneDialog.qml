@@ -3,6 +3,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import "../Duration.js" as Duration
 import ".."
 
 // 奖励弹窗保持“素版”：层级只靠字号、留白和焦糖色，不用绿色、emoji 或图章制造廉价刺激。
@@ -113,7 +114,7 @@ Popup {
             objectName: "milestoneProgressText"
             Layout.fillWidth: true
             text: root.achieved
-                  ? qsTr("累计 %1 个番茄").arg(root.doneCount)
+                  ? qsTr("累计投入 %1").arg(Duration.format(root.doneCount))
                   : qsTr("%1 / %2 番茄，还剩 %3 个")
                     .arg(root.doneCount).arg(root.targetCount)
                     .arg(Math.max(0, root.targetCount - root.doneCount))

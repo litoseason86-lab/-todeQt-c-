@@ -4627,12 +4627,14 @@ void ServiceTests::realPomodoroSessionAdvancesLongGoalAndFiresMilestone()
 
     GoalService* goals = GoalService::instance();
     // 目标定成 1 个番茄，跑完一轮就直接跨到 100%，一次覆盖进度聚合与里程碑两条链路。
-    QVERIFY(goals->addGoal(QStringLiteral("端到端目标"), categoryId, 1,
+    // 目标 5 分钟：下面那次专注是 300 秒，刚好达成。v11 前这里是「1 个番茄」，
+    // 换算基准变了但用例意图没变。
+    QVERIFY(goals->addGoal(QStringLiteral("端到端目标"), categoryId, 5,
                            QDate::currentDate(), QVariant()));
     const QVariantList created = goals->getGoals();
     QCOMPARE(created.size(), 1);
     const int goalId = created.first().toMap().value(QStringLiteral("id")).toInt();
-    QCOMPARE(goals->getGoal(goalId).value(QStringLiteral("doneCount")).toInt(), 0);
+    QCOMPARE(goals->getGoal(goalId).value(QStringLiteral("doneMinutes")).toInt(), 0);
 
     QSignalSpy milestoneSpy(goals, &GoalService::milestoneReached);
 
@@ -4645,7 +4647,7 @@ void ServiceTests::realPomodoroSessionAdvancesLongGoalAndFiresMilestone()
     QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
 
     const QVariantMap goal = goals->getGoal(goalId);
-    QCOMPARE(goal.value(QStringLiteral("doneCount")).toInt(), 1);
+    QCOMPARE(goal.value(QStringLiteral("doneMinutes")).toInt(), 5);
     QCOMPARE(goal.value(QStringLiteral("achieved")).toBool(), true);
     QCOMPARE(goal.value(QStringLiteral("percent")).toInt(), 100);
 
@@ -5109,7 +5111,7 @@ void ServiceTests::deletingTaskKeepsCategorySnapshotForStatisticsAndGoals()
     QVERIFY(taskId > 0);
 
     GoalService* goals = GoalService::instance();
-    QVERIFY(goals->addGoal(QStringLiteral("快照目标"), categoryId, 1,
+    QVERIFY(goals->addGoal(QStringLiteral("快照目标"), categoryId, 5,
                            logicalToday(), QVariant()));
     const int goalId = goals->getGoals().first().toMap().value(QStringLiteral("id")).toInt();
 
@@ -5138,7 +5140,7 @@ void ServiceTests::deletingTaskKeepsCategorySnapshotForStatisticsAndGoals()
              QStringLiteral("历史快照科目"));
     QCOMPARE(categories.first().toMap().value(QStringLiteral("duration")).toInt(), 300);
 
-    QCOMPARE(goals->getGoal(goalId).value(QStringLiteral("doneCount")).toInt(), 1);
+    QCOMPARE(goals->getGoal(goalId).value(QStringLiteral("doneMinutes")).toInt(), 5);
 }
 
 void ServiceTests::isRoutineGeneratedTaskDistinguishesInstances()

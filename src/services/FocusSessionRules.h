@@ -34,6 +34,22 @@ inline QString validPomodoroCountExpr(const QString& tableAlias = QString())
         .arg(validPomodoroPredicate(tableAlias));
 }
 
+// “有效专注秒数”的唯一口径：对计时模式不敏感——番茄段和自由计时都算，
+// 只要单段达到有效专注门槛。任务的预计用时、长期目标进度都从这里取。
+//
+// 这一条与 validPomodoroCountExpr 的差别就是长期目标此前的缺陷所在：目标进度曾经
+// 只数完整番茄，用户用自由计时刷再久，目标也纹丝不动。两个口径都留着是因为它们
+// 回答的问题不同（“做了几个番茄”与“投入了多久”），但都必须只有这一份定义。
+inline QString focusedSecondsExpr(const QString& tableAlias = QString())
+{
+    const QString column = tableAlias.isEmpty()
+        ? QStringLiteral("duration")
+        : (tableAlias + QStringLiteral(".duration"));
+    return QStringLiteral("SUM(CASE WHEN %1 >= %2 THEN %1 ELSE 0 END)")
+        .arg(column)
+        .arg(kMinimumValidDurationSeconds);
+}
+
 }
 
 #endif // FOCUSSESSIONRULES_H

@@ -65,16 +65,11 @@ QString validPomodoroCountExpr(const QString& tableAlias = QString())
     return FocusSessionRules::validPomodoroCountExpr(tableAlias);
 }
 
-// 专注分钟对模式不敏感：番茄段和自由计时段都算，只要达到有效专注门槛。
+// “有效专注秒数”同样上移到 FocusSessionRules——长期目标进度也要用同一份定义。
+// 这里保留同名薄封装，只是为了让本文件原有调用点不必逐个改写。
 QString focusedSecondsExpr(const QString& tableAlias = QString())
 {
-    // 带别名的形式给子查询用（JOIN 场景下裸列名会有歧义）；不传别名时行为与原来一致。
-    const QString column = tableAlias.isEmpty()
-        ? QStringLiteral("duration")
-        : (tableAlias + QStringLiteral(".duration"));
-    return QStringLiteral("SUM(CASE WHEN %1 >= %2 THEN %1 ELSE 0 END)")
-        .arg(column)
-        .arg(FocusSessionRules::kMinimumValidDurationSeconds);
+    return FocusSessionRules::focusedSecondsExpr(tableAlias);
 }
 
 QString taskSelectSql()

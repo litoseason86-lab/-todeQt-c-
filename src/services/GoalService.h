@@ -22,30 +22,32 @@ class GoalService : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(int maxTitleLength READ maxTitleLength CONSTANT)
-    Q_PROPERTY(int maxTargetPomodoros READ maxTargetPomodoros CONSTANT)
+    Q_PROPERTY(int maxTargetMinutes READ maxTargetMinutes CONSTANT)
 
 public:
     // 与任务/例行标题共用同一上限，超长一律拒绝而非截断。
     static constexpr int kMaxTitleLength = 100;
     // 目标番茄数上限。按 25 分钟一个番茄算，9999 个约等于 4000 小时，
     // 足够覆盖“一万小时”级别的目标，同时挡住误输入的天文数字。
-    static constexpr int kMaxTargetPomodoros = 9999;
+    // 上限 60000 分钟 = 1000 小时。旧上限是 9999 个番茄（≈4166 小时），
+    // 那个量级对单个科目目标没有实际意义，收紧到一个仍然宽裕的整数。
+    static constexpr int kMaxTargetMinutes = 60000;
 
     static GoalService* instance();
 
     int maxTitleLength() const { return kMaxTitleLength; }
-    int maxTargetPomodoros() const { return kMaxTargetPomodoros; }
+    int maxTargetMinutes() const { return kMaxTargetMinutes; }
 
     // 增删改。startDate 传无效日期时取当前逻辑日；deadline 传无效日期表示长期目标。
     Q_INVOKABLE bool addGoal(const QString& title,
                              int categoryId,
-                             int targetPomodoros,
+                             int targetMinutes,
                              const QVariant& startDateValue,
                              const QVariant& deadlineValue);
     Q_INVOKABLE bool updateGoal(int goalId,
                                 const QString& title,
                                 int categoryId,
-                                int targetPomodoros,
+                                int targetMinutes,
                                 const QVariant& startDateValue,
                                 const QVariant& deadlineValue);
     Q_INVOKABLE bool deleteGoal(int goalId);
@@ -65,7 +67,7 @@ public:
 signals:
     void goalsChanged();
     // 进度较本进程上次刷新增加时发出；首次观察只播种缓存，避免启动时补发旧进度。
-    void goalProgressed(int goalId, const QString& title, int doneCount, int targetPomodoros);
+    void goalProgressed(int goalId, const QString& title, int doneMinutes, int targetMinutes);
     // 每档里程碑只会发一次。percent 取值为 25/50/75/100。
     void milestoneReached(int goalId, const QString& title, int percent);
     void operationFailed(const QString& message);
@@ -83,7 +85,7 @@ private:
     int forecastDaysFor(const LongGoal& goal, int activeDays) const;
     bool validateInput(const QString& title,
                        int categoryId,
-                       int targetPomodoros,
+                       int targetMinutes,
                        QString* normalizedTitle);
     QDate resolveStartDate(const QVariant& startDateValue) const;
     void reportFailure(const QString& message);
@@ -91,7 +93,7 @@ private:
     bool m_databaseReady = false;
     QString m_databaseName;
     // Toast 是瞬时反馈，不应持久化；回退会下调缓存，之后重新上涨仍会再次提示。
-    QHash<int, int> m_lastDoneCounts;
+    QHash<int, int> m_lastDoneMinutes;
 };
 
 #endif // GOALSERVICE_H

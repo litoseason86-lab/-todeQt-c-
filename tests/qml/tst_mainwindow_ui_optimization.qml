@@ -197,15 +197,15 @@ TestCase {
     QtObject {
         id: goalService
 
-        signal goalProgressed(int goalId, string title, int doneCount, int targetPomodoros)
+        signal goalProgressed(int goalId, string title, int doneMinutes, int targetMinutes)
         signal milestoneReached(int goalId, string title, int percent)
         signal goalsChanged
 
         property var detailData: ({
             id: 7,
             title: "英语精读",
-            doneCount: 50,
-            targetPomodoros: 100,
+            doneMinutes: 50,
+            targetMinutes: 100,
             percent: 50,
             achieved: false,
             forecastDays: 10
@@ -479,16 +479,17 @@ TestCase {
     }
 
     function test_goalProgressedShowsGlobalToast() {
-        goalService.goalProgressed(7, "英语精读", 3, 100)
+        goalService.goalProgressed(7, "英语精读", 95, 240)
         var toastText = findChild(mainWindow, "toastText")
         verify(toastText !== null)
-        tryCompare(toastText, "text", "英语精读 +1 · 3/100")
+        // 进度按分钟计后不再说「+1」：增量不固定，信号里也没带增量。
+        tryCompare(toastText, "text", "英语精读 · 1 小时 35 分 / 4 小时")
     }
 
     function test_milestoneCreatesPlainDialogOutsideImmersive() {
         appSettings.reduceMotion = true
         goalService.detailData = {
-            id: 7, title: "英语精读", doneCount: 50, targetPomodoros: 100,
+            id: 7, title: "英语精读", doneMinutes: 50, targetMinutes: 100,
             percent: 50, achieved: false, forecastDays: 10
         }
 
@@ -547,7 +548,7 @@ TestCase {
     function test_goalAchievementUsesAchievedDialogAndChime() {
         appSettings.reduceMotion = true
         goalService.detailData = {
-            id: 7, title: "英语精读", doneCount: 100, targetPomodoros: 100,
+            id: 7, title: "英语精读", doneMinutes: 100, targetMinutes: 100,
             percent: 100, achieved: true, forecastDays: 0
         }
 
