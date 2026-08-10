@@ -112,13 +112,21 @@ Item {
 
             Button {
                 id: addButton
+                objectName: "countdownAddButton"
                 text: "添加目标"
                 implicitWidth: 108
                 implicitHeight: 44
 
                 background: Rectangle {
+                    objectName: "countdownAddButtonBackground"
                     color: addButton.pressed ? Theme.accentFillStrong : (addButton.hovered ? Theme.accentFillStrong : Theme.accentFill)
                     radius: Theme.radiusLg
+                    // 与目标页「新建」同一处理：accentFill 压在七套壁纸上最好 1.26:1、
+                    // 暖色下 1.02:1，低于 WCAG 1.4.11 对界面组件边界要求的 3:1，
+                    // 按钮整个化进背景。描边用 accentFillInk——它本来就是这个按钮
+                    // 的文字色，日间 4.68:1、夜间 10.01:1。
+                    border.color: Theme.accentFillInk
+                    border.width: 1
                 }
 
                 contentItem: Text {

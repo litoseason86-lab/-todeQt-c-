@@ -334,12 +334,22 @@ Item {
 
                             // 选中态用暖色淡罩，不用 glassThumb——后者在浅色下接近纯白，
                             // 压在壁纸上就是一块突兀的白方框。淡罩与侧栏选中项是同一套语汇。
+                            //
+                            // 但只有淡罩不够：实测日间选中底与轨道只差 1.01:1，
+                            // 选中图标 accentFillInk 与未选 inkSoft 也只差 1.21:1——
+                            // 两条线索都失效，根本看不出当前是列表还是网格。
+                            // 试过把填充换成 accentFillStrong(1.21) 甚至纯 accent(1.78)，
+                            // 都到不了 WCAG 1.4.11 对「状态识别」要求的 3:1。
+                            // 唯一可行的是补描边：accentFillInk 对轨道日间 5.84:1、夜间 10.13:1，
+                            // 且仍是暖色语汇，不会变成白方块。
                             background: Item {
                                 Rectangle {
                                     objectName: "goalViewModeFill-" + modeButton.modelData
                                     anchors.fill: parent
                                     visible: modeButton.selected
                                     color: Theme.accentFill
+                                    border.color: Theme.accentFillInk
+                                    border.width: 1
                                     radius: Theme.radiusSm
                                 }
 

@@ -575,6 +575,11 @@ TestCase {
         // 曾用 glassThumb（浅色下接近纯白），压在壁纸上是一块突兀的白方框。
         compare(String(listFill.color), String(Theme.accentFill))
         verify(String(listFill.color) !== String(Theme.glassThumb))
+        // 淡罩本身与轨道只差 1.01:1，选中图标与未选图标也只差 1.21:1——
+        // 两条线索都失效时看不出当前是列表还是网格。描边是唯一能过
+        // WCAG 1.4.11「状态识别」3:1 的做法（日间 5.84:1、夜间 10.13:1）。
+        compare(listFill.border.width, 1)
+        compare(String(listFill.border.color), String(Theme.accentFillInk))
     }
 
     function test_primary_button_matches_countdown_page_metrics() {

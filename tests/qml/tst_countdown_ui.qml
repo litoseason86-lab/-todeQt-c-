@@ -295,4 +295,19 @@ TestCase {
         tryCompare(countdownView, "showingErrorState", true)
         compare(countdownView.loadError, "调整目标顺序失败，请重试")
     }
+
+    function test_add_button_has_a_visible_boundary_on_any_wallpaper() {
+        var button = findChild(countdownView, "countdownAddButton")
+        verify(!!button, "Object exists")
+        var bg = findChild(countdownView, "countdownAddButtonBackground")
+        verify(!!bg, "Object exists")
+
+        // 这个按钮直接浮在壁纸上。底色 accentFill 压在七套壁纸上最好只有 1.26:1、
+        // 暖色下 1.02:1，远低于 WCAG 1.4.11 对界面组件边界要求的 3:1——没有描边
+        // 时整个按钮化进背景里，用户找不到主操作在哪。描边用 accentFillInk
+        // （本来就是它的文字色），日间 4.68:1、夜间 10.01:1。
+        compare(String(bg.color), String(Theme.accentFill))
+        compare(bg.border.width, 1)
+        compare(String(bg.border.color), String(Theme.accentFillInk))
+    }
 }
