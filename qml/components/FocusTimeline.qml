@@ -11,12 +11,44 @@ Rectangle {
     id: root
 
     property var sessions: []
+    // 手工补录/修改/删除的入口。宿主不接这些信号时按钮不出现——
+    // 组件本身不该假定所有使用者都允许改历史。
+    property bool editable: false
+    signal addRequested()
+    signal editRequested(var session)
+    signal deleteRequested(var session)
     property int selectedDay: 0
     property int currentMonth: 0
     property int viewWidth: 0
     property var formatDurationFn: (function (s) { return "" })
 
     objectName: "focusTimelinePanel"
+
+    // 卡片上的小操作：纯文字 + 细描边，不喧宾夺主。
+    component TimelineTextButton: Button {
+        id: textButton
+        property bool danger: false
+
+        implicitWidth: Math.max(52, contentLabel.implicitWidth + Theme.space16)
+        implicitHeight: 26
+
+        background: Rectangle {
+            radius: Theme.radiusSm
+            color: textButton.hovered ? Theme.glassHover : Qt.rgba(0, 0, 0, 0)
+            border.color: textButton.danger ? Theme.dangerBorder : Theme.border
+            border.width: 1
+        }
+
+        contentItem: Text {
+            id: contentLabel
+            text: textButton.text
+            textFormat: Text.PlainText
+            color: textButton.danger ? Theme.danger : Theme.ink
+            font.pixelSize: Theme.fontXs
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
     radius: Theme.radiusLg
     color: Theme.glassCard
     border.color: Theme.glassBorder
@@ -54,6 +86,14 @@ Rectangle {
                 text: root.sessions.length + "次记录"
                 font.pixelSize: Theme.fontMd
                 color: Theme.inkSoft
+            }
+
+            TimelineTextButton {
+                objectName: "focusSessionAddButton"
+                visible: root.editable
+                text: qsTr("补录")
+                implicitHeight: 30
+                onClicked: root.addRequested()
             }
         }
 
@@ -144,7 +184,7 @@ Rectangle {
                             objectName: "focusSessionCard-" + sessionRow.index
                             x: 24
                             width: Math.max(1, parent.width - x)
-                            height: 86
+                            height: root.editable ? 112 : 86
                             radius: Theme.radiusMd
                             color: Theme.surfaceRaised
                             border.color: Theme.border
@@ -175,6 +215,24 @@ Rectangle {
                                         font.pixelSize: Theme.fontSm
                                         color: Theme.inkSoft
                                         elide: Text.ElideRight
+                                    }
+
+                                    RowLayout {
+                                        spacing: Theme.space8
+                                        visible: root.editable
+
+                                        TimelineTextButton {
+                                            objectName: "focusSessionEdit-" + sessionRow.index
+                                            text: qsTr("修改")
+                                            onClicked: root.editRequested(sessionRow.modelData)
+                                        }
+
+                                        TimelineTextButton {
+                                            objectName: "focusSessionDelete-" + sessionRow.index
+                                            text: qsTr("删除")
+                                            danger: true
+                                            onClicked: root.deleteRequested(sessionRow.modelData)
+                                        }
                                     }
                                 }
 

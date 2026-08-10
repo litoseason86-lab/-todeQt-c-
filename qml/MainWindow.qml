@@ -794,6 +794,7 @@ Item {
                 MonthGoalView {
                     pageActive: root.currentView === "month"
                     focusTimerRef: root.focusTimerRef
+                    taskManagerRef: root.taskManagerRef
                     focusHistoryServiceRef: root.focusHistoryServiceRef
                     logicalDayServiceRef: root.logicalDayServiceRef
                     settingsRef: root.appSettingsRef

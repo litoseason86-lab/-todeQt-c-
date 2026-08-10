@@ -30,6 +30,10 @@ Item {
     property string loadError: ""
     property var monthSessions: []
     property var selectedDaySessions: []
+    // 只有服务真的提供写接口时才露出补录入口——测试里的只读桩不该长出编辑按钮。
+    readonly property bool canEditHistory: root.hasFocusHistoryService()
+                                           && typeof root.focusHistoryServiceRef.addManualSession === "function"
+    property var taskManagerRef: null
     property var dailyTotals: ({})
     property int invalidSessionCount: 0
     property bool pageActive: true
@@ -196,6 +200,44 @@ Item {
     function dayTotalSeconds(day) {
         var total = root.dailyTotals[MgFmt.isoDate(root.dateForDay(day))];
         return Number(total) || 0;
+    }
+
+    function tasksForSelectedDay() {
+        // 补录的典型场景是「那天做了这个任务但忘了计时」，所以候选就取那天的任务。
+        if (!root.taskManagerRef || typeof root.taskManagerRef.getTasksByDate !== "function") {
+            return []
+        }
+        const rows = root.taskManagerRef.getTasksByDate(MgFmt.isoDate(root.dateForDay(root.selectedDay))) || []
+        const options = []
+        for (var i = 0; i < rows.length; ++i) {
+            options.push({ id: Number(rows[i].id), title: String(rows[i].title || "") })
+        }
+        return options
+    }
+
+    function submitManualSession(sessionId, startDateTime, durationMinutes, taskId) {
+        if (!root.canEditHistory) {
+            return "当前无法修改专注记录"
+        }
+        const ok = sessionId > 0
+                 ? root.focusHistoryServiceRef.updateSession(sessionId, startDateTime, durationMinutes)
+                 : root.focusHistoryServiceRef.addManualSession(taskId, startDateTime, durationMinutes) > 0
+        if (!ok) {
+            return String(root.focusHistoryServiceRef.lastError() || "保存失败")
+        }
+        root.refresh()
+        return ""
+    }
+
+    function deleteSession(sessionId) {
+        if (!root.canEditHistory || sessionId <= 0) {
+            return
+        }
+        if (!root.focusHistoryServiceRef.deleteSession(sessionId)) {
+            root.loadError = String(root.focusHistoryServiceRef.lastError() || "删除失败")
+            return
+        }
+        root.refresh()
     }
 
     function selectedDayTotalSeconds() {
@@ -671,7 +713,17 @@ Item {
                 }
 
                 FocusTimeline {
+                    id: focusTimeline
                     Layout.fillWidth: true
+                    editable: root.canEditHistory
+                    onAddRequested: manualSessionDialog.openForAdd(
+                                        MgFmt.isoDate(root.dateForDay(root.selectedDay)), root.tasksForSelectedDay())
+                    onEditRequested: function (session) {
+                        manualSessionDialog.openForEdit(session, root.tasksForSelectedDay())
+                    }
+                    onDeleteRequested: function (session) {
+                        root.deleteSession(Number(session.id || -1))
+                    }
                     Layout.minimumWidth: 360
                     Layout.minimumHeight: 260
                     Layout.preferredHeight: root.width >= 820 ? 560 : 360
@@ -682,6 +734,16 @@ Item {
                     formatDurationFn: root.formatDuration
                 }
             }
+        }
+    }
+
+    ManualSessionDialog {
+        id: manualSessionDialog
+        objectName: "manualSessionDialog"
+
+        parent: root
+        submitHandler: function (sessionId, startDateTime, durationMinutes, taskId) {
+            return root.submitManualSession(sessionId, startDateTime, durationMinutes, taskId)
         }
     }
 }

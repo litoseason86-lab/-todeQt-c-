@@ -687,6 +687,12 @@ private slots:
     void focusHistoryReturnsMonthSessionsWithinBoundaries();
     void focusHistoryReturnsDayTotalsAndFormattedDurations();
     void focusHistoryFallsBackWhenTaskWasDeleted();
+    void manualSessionCountsTowardMinutesButNotPomodoros();
+    void manualSessionRejectsOverlapWithExistingRecord();
+    void manualSessionRejectsFutureAndTooShort();
+    void updateSessionMovesItAndKeepsItsMode();
+    void deleteSessionRemovesItAndRollsStatsBack();
+    void manualWriteRefusesToTouchRunningSession();
     void focusHistoryDistinguishesEmptyResultFromQueryError();
     void focusHistorySkipsUnfinishedSessions();
     void focusHistorySkipsInvalidShortSessions();
@@ -5325,3 +5331,136 @@ void ServiceTests::weeklyReviewRejectsNonMonday()
 
 QTEST_MAIN(ServiceTests)
 #include "ServiceTests.moc"
+
+void ServiceTests::manualSessionCountsTowardMinutesButNotPomodoros()
+{
+    FocusHistoryService* history = FocusHistoryService::instance();
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("忘了开计时的任务"), today,
+                                     QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    // 补录一小时。开始时间取足够早的过去，避开"结束时间不能晚于现在"。
+    const QDateTime start = QDateTime(today, QTime(8, 0));
+    const int sessionId = history->addManualSession(taskId, start, 60);
+    QVERIFY2(sessionId > 0, qPrintable(history->lastError()));
+
+    // 计入专注分钟：这正是补录要解决的问题——时间不该因为忘了按开始就消失。
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 60);
+    // 但不伪装成番茄：它不是自然到点的番茄段，算进去会污染"有效番茄"口径。
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(taskId), 0);
+}
+
+void ServiceTests::manualSessionRejectsOverlapWithExistingRecord()
+{
+    FocusHistoryService* history = FocusHistoryService::instance();
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("重叠任务"), today, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    const QDateTime start = QDateTime(today, QTime(8, 0));
+    QVERIFY(history->addManualSession(taskId, start, 60) > 0);
+
+    // 与既有记录相交的一律拒绝：两条覆盖同一段时间会让统计凭空多出时长，
+    // 而且事后无从察觉。
+    QCOMPARE(history->addManualSession(taskId, start.addSecs(30 * 60), 60), -1);
+    QVERIFY(history->lastError().contains(QStringLiteral("已有专注记录")));
+    QCOMPARE(history->addManualSession(taskId, start.addSecs(-30 * 60), 60), -1);
+
+    // 首尾相接不算重叠：8:00–9:00 之后紧接 9:00 开始是合法的。
+    QVERIFY(history->addManualSession(taskId, start.addSecs(60 * 60), 30) > 0);
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 90);
+}
+
+void ServiceTests::manualSessionRejectsFutureAndTooShort()
+{
+    FocusHistoryService* history = FocusHistoryService::instance();
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("校验任务"), today, QStringLiteral("数学"));
+
+    // 低于有效门槛（3 分钟）的记录本来就不计入统计，存进去只是噪音。
+    QCOMPARE(history->addManualSession(taskId, QDateTime(today, QTime(8, 0)), 2), -1);
+    QVERIFY(history->lastError().contains(QStringLiteral("至少")));
+
+    // 结束时间落在未来：补录只能补已经发生的事。
+    QCOMPARE(history->addManualSession(taskId, QDateTime::currentDateTime().addSecs(3600), 30), -1);
+    QVERIFY(history->lastError().contains(QStringLiteral("不能晚于现在")));
+
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 0);
+}
+
+void ServiceTests::updateSessionMovesItAndKeepsItsMode()
+{
+    FocusHistoryService* history = FocusHistoryService::instance();
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("待修改"), today, QStringLiteral("数学"));
+
+    // 先造一条真正的番茄记录（番茄模式、自然到点）。这里直接写库而不用既有辅助，
+    // 因为需要同时指定 mode 与具体时刻。
+    {
+        QSqlQuery insert(DatabaseManager::instance()->database());
+        insert.prepare(QStringLiteral(
+            "INSERT INTO focus_sessions "
+            "(task_id, start_time, end_time, duration, mode, pomodoro_completed) "
+            "VALUES (:taskId, :start, :end, :duration, 1, 1)"));
+        insert.bindValue(QStringLiteral(":taskId"), taskId);
+        insert.bindValue(QStringLiteral(":start"),
+                         QDateTime(today, QTime(8, 0)).toString(Qt::ISODate));
+        insert.bindValue(QStringLiteral(":end"),
+                         QDateTime(today, QTime(8, 25)).toString(Qt::ISODate));
+        insert.bindValue(QStringLiteral(":duration"), 25 * 60);
+        QVERIFY(insert.exec());
+    }
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(taskId), 1);
+
+    const QVariantList sessions = history->getDaySessions(today);
+    QCOMPARE(sessions.size(), 1);
+    const int sessionId = sessions.first().toMap().value(QStringLiteral("id")).toInt();
+
+    QVERIFY2(history->updateSession(sessionId, QDateTime(today, QTime(10, 0)), 40),
+             qPrintable(history->lastError()));
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 40);
+    // 改时长不改性质：它仍然是那次自然到点的番茄，不该因为被编辑过就降级。
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(taskId), 1);
+}
+
+void ServiceTests::deleteSessionRemovesItAndRollsStatsBack()
+{
+    FocusHistoryService* history = FocusHistoryService::instance();
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("待删除"), today, QStringLiteral("数学"));
+
+    const int sessionId = history->addManualSession(taskId, QDateTime(today, QTime(8, 0)), 45);
+    QVERIFY(sessionId > 0);
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 45);
+
+    QVERIFY2(history->deleteSession(sessionId), qPrintable(history->lastError()));
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 0);
+    QCOMPARE(history->getDaySessions(today).size(), 0);
+
+    // 重复删除要如实失败，不能假装成功。
+    QVERIFY(!history->deleteSession(sessionId));
+}
+
+void ServiceTests::manualWriteRefusesToTouchRunningSession()
+{
+    FocusHistoryService* history = FocusHistoryService::instance();
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("进行中"), today, QStringLiteral("数学"));
+
+    // 正在进行的会话：end_time 为 NULL。删掉或改掉它会让 FocusTimer 结束时
+    // 找不到自己的行，当前这段计时直接丢失。
+    QSqlQuery insert(DatabaseManager::instance()->database());
+    insert.prepare(QStringLiteral(
+        "INSERT INTO focus_sessions (task_id, start_time, mode) "
+        "VALUES (:taskId, :start, 1)"));
+    insert.bindValue(QStringLiteral(":taskId"), taskId);
+    insert.bindValue(QStringLiteral(":start"),
+                     QDateTime(today, QTime(9, 0)).toString(Qt::ISODate));
+    QVERIFY(insert.exec());
+    const int runningId = insert.lastInsertId().toInt();
+
+    QVERIFY(!history->deleteSession(runningId));
+    QVERIFY(!history->updateSession(runningId, QDateTime(today, QTime(9, 0)), 30));
+}
+
