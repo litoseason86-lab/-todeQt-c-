@@ -1,7 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
@@ -112,12 +112,13 @@ Popup {
         }
     ]
 
-    signal taskAdded(string title, date date, var category, int estimatedMinutes)
+    signal taskAdded(string title, date date, var category, int estimatedMinutes, string notes)
 
     function resetFields() {
         titleField.text = "";
         categoryComboBox.currentIndex = root.categoryOptions.length > 0 ? 0 : -1;
         root.estimatedMinutes = 0;
+        notesField.text = "";
         estimateFields.reload();
         errorLabel.text = "";
     }
@@ -161,9 +162,9 @@ Popup {
         var categoryId = categoryComboBox.currentIndex >= 0 && categoryComboBox.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryComboBox.currentIndex].id || -1) : -1;
         var succeeded = true;
         if (root.taskSubmitter) {
-            succeeded = Boolean(root.taskSubmitter(title, root.selectedDate, categoryId, root.estimatedMinutes));
+            succeeded = Boolean(root.taskSubmitter(title, root.selectedDate, categoryId, root.estimatedMinutes, notesField.text.trim()));
         } else {
-            root.taskAdded(title, root.selectedDate, categoryId, root.estimatedMinutes);
+            root.taskAdded(title, root.selectedDate, categoryId, root.estimatedMinutes, notesField.text.trim());
         }
         if (!succeeded) {
             errorLabel.text = "保存失败，请检查数据库后重试";
@@ -480,6 +481,44 @@ Popup {
                 color: Theme.inkMuted
                 font.pixelSize: Theme.fontSm
                 verticalAlignment: Text.AlignVCenter
+            }
+        }
+
+
+        Label {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.topMargin: Theme.space4
+            text: "备注（可选）"
+            color: Theme.ink
+            font.pixelSize: Theme.fontLg
+        }
+
+        // 「第九讲复习」过两天就想不起指的是哪几页。备注就是给这种上下文留的位置。
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.preferredHeight: 64
+
+            TextArea {
+                id: notesField
+                objectName: "addNotesField"
+
+                placeholderText: "页码、题号、要点……"
+                placeholderTextColor: Theme.inkMuted
+                color: Theme.inkStrong
+                font.pixelSize: Theme.fontMd
+                wrapMode: TextArea.Wrap
+                selectByMouse: true
+
+                background: Rectangle {
+                    radius: Theme.radiusMd
+                    color: Theme.surfaceSunken
+                    border.width: notesField.activeFocus ? 2 : 1
+                    border.color: notesField.activeFocus ? Theme.accent : Theme.borderSubtle
+                }
             }
         }
 

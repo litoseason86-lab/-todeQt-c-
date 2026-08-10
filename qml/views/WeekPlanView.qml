@@ -28,6 +28,13 @@ Item {
     property var categoryManagerRef: null
     property int pendingDeleteTaskId: -1
     property string loadError: ""
+    // 拖动改期：拖动期间只记"悬停在哪一天"，松手才落库。
+    // 编辑弹窗此前只有今天/明天/后天三个按钮，最远只能挪两天；整块前后挪一周做不到。
+    property int draggingTaskId: -1
+    property int dropTargetIndex: -1
+    readonly property bool canMoveTasks: !!root.taskManagerRef
+                                         && typeof root.taskManagerRef.moveTaskToDate === "function"
+
     property date pendingAddDate: new Date()
     property bool completionRefreshDelayActive: false
     property bool pageActive: true
@@ -138,6 +145,56 @@ Item {
         var date = new Date(root.weekStart)
         date.setDate(date.getDate() + index)
         return date
+    }
+
+    function beginDrag(taskId) {
+        root.draggingTaskId = taskId
+        root.dropTargetIndex = -1
+    }
+
+    // 场景坐标 → 落在哪一天。逐个问每一行自己的场景矩形，而不是按行高等分：
+    // 每天的任务条数不同，行高本来就不相等。
+    function updateDrag(sceneY) {
+        if (root.draggingTaskId < 0) {
+            return
+        }
+        for (var i = 0; i < 7; ++i) {
+            var row = root.dayRowAt(i)
+            if (!row) {
+                continue
+            }
+            var top = row.mapToItem(null, 0, 0).y
+            if (sceneY >= top && sceneY <= top + row.height) {
+                root.dropTargetIndex = i
+                return
+            }
+        }
+        root.dropTargetIndex = -1
+    }
+
+    function dayRowAt(index) {
+        for (var i = 0; i < weekScroll.count; ++i) {
+            var item = weekScroll.itemAtIndex(i)
+            if (item && item.index === index) {
+                return item
+            }
+        }
+        return null
+    }
+
+    function commitDrag(taskId, currentIndex) {
+        const target = root.dropTargetIndex
+        root.draggingTaskId = -1
+        root.dropTargetIndex = -1
+        // 拖回原来那天不算改期：白写一次库还会把它挪到当天末尾。
+        if (!root.canMoveTasks || target < 0 || target === currentIndex) {
+            return
+        }
+        if (!root.taskManagerRef.moveTaskToDate(taskId, root.isoDate(root.dayDate(target)))) {
+            root.loadError = "任务改期失败，请重试"
+            return
+        }
+        root.refresh()
     }
 
     function tasksForDay(index) {
@@ -565,9 +622,16 @@ Item {
                                                      : (weekTaskRow.modelData.categoryText || ""))
                                     taskCompleted: weekTaskRow.modelData.completed
                                     estimatedMinutes: Number(weekTaskRow.modelData.estimatedMinutes || 0)
+                                    taskNotes: String(weekTaskRow.modelData.notes || "")
                                     focusedMinutes: Number(weekTaskRow.modelData.focusedMinutes || 0)
                                     startFocusAllowed: dayRow.isToday
                                     showStartFocus: dayRow.isToday
+                                    draggable: root.canMoveTasks && !weekTaskRow.modelData.completed
+                                    opacity: root.draggingTaskId === weekTaskRow.taskId ? 0.6 : 1
+
+                                    onDragStarted: root.beginDrag(weekTaskRow.taskId)
+                                    onDragMoved: function (sceneX, sceneY) { root.updateDrag(sceneY) }
+                                    onDragFinished: root.commitDrag(weekTaskRow.taskId, dayRow.index)
 
                                     onCompletionChanged: function(id, completed) {
                                         root.setTaskCompletedWithAnimationDelay(id, completed, weekTaskRow.modelData.title)
@@ -652,8 +716,8 @@ Item {
 
         selectedDate: root.pendingAddDate
         categoryManagerRef: root.categoryManagerRef
-        taskSubmitter: function(title, date, categoryId, estimatedMinutes) {
-            return root.taskManagerRef.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedMinutes))
+        taskSubmitter: function (title, date, categoryId, estimatedMinutes, notes) {
+            return root.taskManagerRef.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedMinutes), String(notes || ""))
         }
     }
 
@@ -663,9 +727,9 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedMinutes) {
+        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes, notes) {
             var succeeded = Boolean(root.taskManagerRef.updateTask(
-                taskId, title, categoryId, isoDate, Number(estimatedMinutes)))
+                taskId, title, categoryId, isoDate, Number(estimatedMinutes), String(notes || "")))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"
             }

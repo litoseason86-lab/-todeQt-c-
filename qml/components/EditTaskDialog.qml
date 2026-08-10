@@ -46,7 +46,7 @@ Popup {
     // 生产页面注入返回 bool 的写入函数；保留信号用于独立组件和兼容测试。
     property var taskSubmitter: null
 
-    signal taskEdited(int taskId, string title, int categoryId, var isoDate, int estimatedMinutes)
+    signal taskEdited(int taskId, string title, int categoryId, var isoDate, int estimatedMinutes, string notes)
 
     modal: true
     focus: true
@@ -110,6 +110,7 @@ Popup {
         titleField.text = String(task.title || "");
         root.estimatedMinutes = Number(task.estimatedMinutes || 0);
         estimateFields.reload();
+        notesField.text = String(task.notes || "");
         root.originalIsoDate = root.normalizedIso(task.date);
 
         root.refreshCategories();
@@ -161,10 +162,10 @@ Popup {
         if (root.taskSubmitter) {
             succeeded = Boolean(root.taskSubmitter(
                 root.editingTaskId, title, categoryId,
-                root.resultIsoDate(), root.estimatedMinutes))
+                root.resultIsoDate(), root.estimatedMinutes, notesField.text.trim()))
         } else {
             root.taskEdited(root.editingTaskId, title, categoryId,
-                            root.resultIsoDate(), root.estimatedMinutes)
+                            root.resultIsoDate(), root.estimatedMinutes, notesField.text.trim())
         }
         if (!succeeded) {
             root.errorText = "保存失败，请检查数据库后重试"
@@ -380,6 +381,44 @@ Popup {
                 color: Theme.inkMuted
                 font.pixelSize: Theme.fontSm
                 verticalAlignment: Text.AlignVCenter
+            }
+        }
+
+
+        Text {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            text: "备注"
+            textFormat: Text.PlainText
+            color: Theme.inkSoft
+            font.pixelSize: Theme.fontMd
+        }
+
+        // 「第九讲复习」过两天就想不起指的是哪几页。备注就是给这种上下文留的位置。
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.preferredHeight: 60
+
+            TextArea {
+                id: notesField
+                objectName: "editNotesField"
+
+                placeholderText: "页码、题号、要点……"
+                placeholderTextColor: Theme.inkMuted
+                color: Theme.inkStrong
+                font.pixelSize: Theme.fontMd
+                wrapMode: TextArea.Wrap
+                selectByMouse: true
+
+                background: Rectangle {
+                    radius: Theme.radiusMd
+                    color: Theme.surfaceSunken
+                    border.width: notesField.activeFocus ? 2 : 1
+                    border.color: notesField.activeFocus ? Theme.accent : Theme.borderSubtle
+                }
             }
         }
 

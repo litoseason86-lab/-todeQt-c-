@@ -684,6 +684,7 @@ Item {
                                         taskCategory: taskRow.modelData.category && taskRow.modelData.category.name ? taskRow.modelData.category : (taskRow.modelData.categoryData && taskRow.modelData.categoryData.name ? taskRow.modelData.categoryData : (taskRow.modelData.categoryText || ""))
                                         taskCompleted: taskRow.modelData.completed
                                         estimatedMinutes: Number(taskRow.modelData.estimatedMinutes || 0)
+                                        taskNotes: String(taskRow.modelData.notes || "")
                                         focusedMinutes: Number(taskRow.modelData.focusedMinutes || 0)
                                         // 已完成筛选：紧凑只读行 + 右侧「已完成」徽章，去掉编辑/删除/开始专注空洞。
                                         compact: root.doneFilter
@@ -926,9 +927,9 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes) {
+        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes, notes) {
             var succeeded = Boolean(root.taskManagerRef.updateTask(
-                taskId, title, categoryId, isoDate, Number(estimatedMinutes)))
+                taskId, title, categoryId, isoDate, Number(estimatedMinutes), String(notes || "")))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"
             }

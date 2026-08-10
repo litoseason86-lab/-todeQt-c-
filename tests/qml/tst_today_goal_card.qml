@@ -113,6 +113,9 @@ TestCase {
     }
 
     function init() {
+        // 桩数据也要逐条清：用例之间共享同一个 taskManager 实例，
+        // 不清会让后一条用例读到前一条排的任务。
+        taskManager.todayTasks = []
         appSettings.focusGoalDate = ""
         appSettings.focusGoalMinutes = 0
         appSettings.focusGoalSaveSucceeds = true
@@ -217,6 +220,17 @@ TestCase {
         compare(card.totalSeconds, 3600)
     }
 
+    // 目标日期必须按逻辑日算：dayStartHour = 4 时，凌晨 4 点前的"今天"是前一天。
+    // 直接用 new Date() 的日期会让用例在凌晨跑时读不到目标——这个项目里
+    // 每一处日期比较都得走同一套逻辑日规则。
+    function logicalTodayIso() {
+        var d = new Date()
+        if (d.getHours() < appSettings.dayStartHour) {
+            d.setDate(d.getDate() - 1)
+        }
+        return Qt.formatDate(d, "yyyy-MM-dd")
+    }
+
     function plannedTask(minutes) {
         return { id: Math.floor(Math.random() * 100000) + 1, title: "任务",
                  date: new Date(), completed: false, estimatedMinutes: minutes,
@@ -235,7 +249,7 @@ TestCase {
         // 任务有预计用时、目标也是分钟，但此前没有任何地方把两者对上——
         // 排完任务不知道是排多了还是排少了。这条守住这个对比。
         taskManager.todayTasks = row.plan.map(testCase.plannedTask)
-        appSettings.focusGoalDate = Qt.formatDate(new Date(), "yyyy-MM-dd")
+        appSettings.focusGoalDate = testCase.logicalTodayIso()
         appSettings.focusGoalMinutes = row.goal
 
         var view = createTemporaryObject(todayViewComponent, testCase)

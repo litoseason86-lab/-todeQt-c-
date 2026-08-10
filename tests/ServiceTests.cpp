@@ -693,6 +693,9 @@ private slots:
     void updateSessionMovesItAndKeepsItsMode();
     void deleteSessionRemovesItAndRollsStatsBack();
     void manualWriteRefusesToTouchRunningSession();
+    void notesRoundTripAndRenameDoesNotEraseThem();
+    void reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation();
+    void moveTaskToDateLandsAtTheEndOfTheTargetDay();
     void focusHistoryDistinguishesEmptyResultFromQueryError();
     void focusHistorySkipsUnfinishedSessions();
     void focusHistorySkipsInvalidShortSessions();
@@ -5462,5 +5465,98 @@ void ServiceTests::manualWriteRefusesToTouchRunningSession()
 
     QVERIFY(!history->deleteSession(runningId));
     QVERIFY(!history->updateSession(runningId, QDateTime(today, QTime(9, 0)), 30));
+}
+
+void ServiceTests::notesRoundTripAndRenameDoesNotEraseThem()
+{
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+
+    QVERIFY(tasks->addTask(QStringLiteral("第九讲复习"), today, -1, 60,
+                           QStringLiteral("P.128–P.146，重点看例 3.7")));
+    QVariantList rows = tasks->getTodayTasks();
+    QCOMPARE(rows.size(), 1);
+    const int taskId = rows.first().toMap().value(QStringLiteral("id")).toInt();
+    QCOMPARE(rows.first().toMap().value(QStringLiteral("notes")).toString(),
+             QStringLiteral("P.128–P.146，重点看例 3.7"));
+
+    // 不带备注的重命名不能把备注抹掉：五参重载传的是 null QString，语义是"保持不变"。
+    QVERIFY(tasks->updateTask(taskId, QStringLiteral("第九讲复习（改）"), -1, today, -1));
+    rows = tasks->getTodayTasks();
+    QCOMPARE(rows.first().toMap().value(QStringLiteral("notes")).toString(),
+             QStringLiteral("P.128–P.146，重点看例 3.7"));
+
+    // 显式传空串才是清空。空串与 null 的区别就是"清空"与"不动"的区别。
+    QVERIFY(tasks->updateTask(taskId, QStringLiteral("第九讲复习（改）"), -1, today, -1,
+                              QString(QLatin1String(""))));
+    rows = tasks->getTodayTasks();
+    QVERIFY(rows.first().toMap().value(QStringLiteral("notes")).toString().isEmpty());
+}
+
+void ServiceTests::reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation()
+{
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+
+    QVERIFY(tasks->addTask(QStringLiteral("甲"), today, -1, 0));
+    QVERIFY(tasks->addTask(QStringLiteral("乙"), today, -1, 0));
+    QVERIFY(tasks->addTask(QStringLiteral("丙"), today, -1, 0));
+
+    QVariantList rows = tasks->getTodayTasks();
+    QCOMPARE(rows.size(), 3);
+    // 新任务按创建顺序落在末尾，与改版前一致。
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("title")).toString(), QStringLiteral("甲"));
+    QCOMPARE(rows.at(2).toMap().value(QStringLiteral("title")).toString(), QStringLiteral("丙"));
+
+    const int first = rows.at(0).toMap().value(QStringLiteral("id")).toInt();
+    const int second = rows.at(1).toMap().value(QStringLiteral("id")).toInt();
+    const int third = rows.at(2).toMap().value(QStringLiteral("id")).toInt();
+
+    // 把丙拖到最前。
+    QVERIFY(tasks->reorderTasks(today, QVariantList{ third, first, second }));
+    rows = tasks->getTodayTasks();
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("title")).toString(), QStringLiteral("丙"));
+    QCOMPARE(rows.at(1).toMap().value(QStringLiteral("title")).toString(), QStringLiteral("甲"));
+    QCOMPARE(rows.at(2).toMap().value(QStringLiteral("title")).toString(), QStringLiteral("乙"));
+
+    // 排过序之后再建的任务落到末尾，不会插进已排好的序列中间。
+    QVERIFY(tasks->addTask(QStringLiteral("丁"), today, -1, 0));
+    rows = tasks->getTodayTasks();
+    QCOMPARE(rows.at(3).toMap().value(QStringLiteral("title")).toString(), QStringLiteral("丁"));
+}
+
+void ServiceTests::moveTaskToDateLandsAtTheEndOfTheTargetDay()
+{
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+    const QDate tomorrow = today.addDays(1);
+
+    QVERIFY(tasks->addTask(QStringLiteral("明天甲"), tomorrow, -1, 0));
+    QVERIFY(tasks->addTask(QStringLiteral("明天乙"), tomorrow, -1, 0));
+    QVERIFY(tasks->addTask(QStringLiteral("今天要挪走的"), today, -1, 0));
+
+    const int movingId = tasks->getTodayTasks().first().toMap()
+                              .value(QStringLiteral("id")).toInt();
+    QVERIFY(tasks->moveTaskToDate(movingId, tomorrow));
+
+    QCOMPARE(tasks->getTodayTasks().size(), 0);
+    const QVariantList moved = tasks->getTasksByDate(tomorrow);
+    QCOMPARE(moved.size(), 3);
+    // 落在目标日期末尾：插到中间会打乱那天已经排好的顺序。
+    QCOMPARE(moved.at(2).toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("今天要挪走的"));
+    // 而且要拿到一个真实的序号，不能是 0。0 表示"没排过"，虽然同样排在末尾，
+    // 但之后新建的任务会拿到 max+1 并插到它前面——挪进来的任务会莫名其妙往上跳。
+    QVERIFY(moved.at(2).toMap().value(QStringLiteral("displayOrder")).toInt() > 0);
+
+    QVERIFY(tasks->addTask(QStringLiteral("挪完之后新建的"), tomorrow, -1, 0));
+    const QVariantList afterAdd = tasks->getTasksByDate(tomorrow);
+    QCOMPARE(afterAdd.at(2).toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("今天要挪走的"));
+    QCOMPARE(afterAdd.at(3).toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("挪完之后新建的"));
+
+    // 不存在的任务要如实失败。
+    QVERIFY(!tasks->moveTaskToDate(999999, tomorrow));
 }
 

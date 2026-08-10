@@ -41,6 +41,8 @@ public:
     Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId);
     // 带预估番茄数的新增重载；QML 按参数个数选择，不依赖默认参数。
     Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId, int estimatedMinutes);
+    Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId,
+                             int estimatedMinutes, const QString& notes);
     // 完成、删除和查询任务后都会通过 tasksChanged 通知界面刷新。
     Q_INVOKABLE bool completeTask(int taskId);
     Q_INVOKABLE bool setTaskCompleted(int taskId, bool completed);
@@ -54,6 +56,20 @@ public:
     // 四参重载只改标题/科目/日期，保留原预估值（重命名走这里）；五参重载额外更新预估番茄数。
     Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue);
     Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue, int estimatedMinutes);
+    Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId,
+                                const QVariant& dateValue, int estimatedMinutes,
+                                const QString& notes);
+
+    // —— 手动排序与改期 ——
+    // 同一天里的任务此前只能按创建时间排，十几条并列时无法表达"先做哪个"。
+    // orderedTaskIds 是该日期下任务从上到下的完整顺序；服务按数组下标写
+    // display_order（从 1 开始，0 保留给"没排过"）。
+    Q_INVOKABLE bool reorderTasks(const QVariant& dateValue, const QVariantList& orderedTaskIds);
+    // 改期。编辑弹窗此前只有今天/明天/后天三个按钮，最远只能挪两天；
+    // 周计划里整块前后挪需要任意日期。
+    Q_INVOKABLE bool moveTaskToDate(int taskId, const QVariant& dateValue);
+
+    static constexpr int kMaxNotesLength = 2000;
     Q_INVOKABLE bool deleteTask(int taskId);
     // 删除撤销 UI 用来区分“例行生成的当日实例”与普通任务：删除实例只影响今天，
     // 例行规则本身在 routines 表中不受影响。据此给出更准确的撤销提示。

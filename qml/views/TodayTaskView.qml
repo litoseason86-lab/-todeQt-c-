@@ -48,6 +48,10 @@ Item {
     property bool pageActive: true
     // 当日专注目标（分钟）；0 = 今天尚未设置。设置/修改只在本页发生。
     property int dailyFocusGoalMinutes: 0
+    // 拖动排序：拖动期间只在本地数组里换位，松手才落库。
+    // 每次移动都写库会在一次拖动里产生几十次事务，而且中途松不开手就回不去。
+    property int draggingTaskId: -1
+    property var pendingOrder: []
     // 今天排了多少活（全部任务的预计用时之和，完成与否都算——问的是"排了多少"）。
     readonly property int plannedMinutesToday: {
         var sum = 0
@@ -252,6 +256,71 @@ Item {
             root.settingsRef.rolloverIgnoredDate = root.todayIsoDate();
         }
         root.rolloverBannerActive = false;
+    }
+
+    readonly property bool canReorderTasks: !!root.taskManagerRef
+                                           && typeof root.taskManagerRef.reorderTasks === "function"
+
+    function beginReorder(taskId) {
+        root.draggingTaskId = taskId
+        root.pendingOrder = root.tasks.slice()
+    }
+
+    // contentY 坐标 → 目标下标。用累积高度而不是「除以行高」：任务行高度会因为
+    // 有没有备注而不同，等分假设会让带备注的行拖起来跳位。
+    function updateReorder(taskId, listY) {
+        if (root.draggingTaskId !== taskId || root.pendingOrder.length === 0) {
+            return
+        }
+        var from = -1
+        for (var i = 0; i < root.pendingOrder.length; ++i) {
+            if (Number(root.pendingOrder[i].id) === taskId) {
+                from = i
+                break
+            }
+        }
+        if (from < 0) {
+            return
+        }
+
+        var target = 0
+        var accumulated = 0
+        for (var j = 0; j < todayTaskList.count; ++j) {
+            var item = todayTaskList.itemAtIndex(j)
+            var h = item ? item.height + todayTaskList.spacing : 0
+            if (listY < accumulated + h / 2) {
+                break
+            }
+            accumulated += h
+            target = j + 1
+        }
+        target = Math.max(0, Math.min(root.pendingOrder.length - 1, target))
+        if (target === from) {
+            return
+        }
+
+        var next = root.pendingOrder.slice()
+        next.splice(target, 0, next.splice(from, 1)[0])
+        root.pendingOrder = next
+    }
+
+    function commitReorder() {
+        if (root.draggingTaskId < 0) {
+            return
+        }
+        root.draggingTaskId = -1
+        if (!root.canReorderTasks || root.pendingOrder.length === 0) {
+            root.pendingOrder = []
+            return
+        }
+        var ids = []
+        for (var i = 0; i < root.pendingOrder.length; ++i) {
+            ids.push(Number(root.pendingOrder[i].id))
+        }
+        root.pendingOrder = []
+        if (!root.taskManagerRef.reorderTasks(root.todayIsoDate(), ids)) {
+            root.loadError = "任务排序保存失败，请重试"
+        }
     }
 
     function taskIsoDate(value) {
@@ -652,11 +721,12 @@ Item {
 
             ListView {
                 id: todayTaskList
+                objectName: "todayTaskList"
 
                 anchors.fill: parent
                 clip: true
                 visible: root.tasks.length > 0
-                model: root.tasks
+                model: root.pendingOrder.length > 0 ? root.pendingOrder : root.tasks
                 spacing: Theme.space8
                 boundsBehavior: Flickable.StopAtBounds
 
@@ -674,7 +744,20 @@ Item {
                             taskCategory: todayTaskRow.modelData.category && todayTaskRow.modelData.category.name ? todayTaskRow.modelData.category : (todayTaskRow.modelData.categoryData && todayTaskRow.modelData.categoryData.name ? todayTaskRow.modelData.categoryData : (todayTaskRow.modelData.categoryText || ""))
                             taskCompleted: todayTaskRow.modelData.completed
                             estimatedMinutes: Number(todayTaskRow.modelData.estimatedMinutes || 0)
+                            taskNotes: String(todayTaskRow.modelData.notes || "")
                             focusedMinutes: Number(todayTaskRow.modelData.focusedMinutes || 0)
+                            // 已完成的任务不参与排序：它们本来就被排到列表末尾，
+                            // 允许拖动只会让用户以为能把它插回未完成那一段。
+                            draggable: root.canReorderTasks && !todayTaskRow.modelData.completed
+                            opacity: root.draggingTaskId === todayTaskRow.taskId ? 0.6 : 1
+
+                            onDragStarted: root.beginReorder(todayTaskRow.taskId)
+                            onDragMoved: function (sceneX, sceneY) {
+                                root.updateReorder(todayTaskRow.taskId,
+                                                   todayTaskList.mapFromItem(null, sceneX, sceneY).y
+                                                   + todayTaskList.contentY)
+                            }
+                            onDragFinished: root.commitReorder()
 
                             onCompletionChanged: function (id, completed) {
                                 root.setTaskCompletedWithAnimationDelay(id, completed);
@@ -713,8 +796,8 @@ Item {
 
         categoryManagerRef: root.categoryManagerRef
         selectedDateProvider: function () { return root.currentLogicalTodayDate() }
-        taskSubmitter: function (title, date, categoryId, estimatedMinutes) {
-            return root.taskManagerRef.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedMinutes));
+        taskSubmitter: function (title, date, categoryId, estimatedMinutes, notes) {
+            return root.taskManagerRef.addTask(title, Qt.formatDate(date, "yyyy-MM-dd"), Number(categoryId), Number(estimatedMinutes), String(notes || ""));
         }
     }
 
@@ -724,9 +807,9 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes) {
+        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes, notes) {
             var succeeded = Boolean(root.taskManagerRef.updateTask(
-                taskId, title, categoryId, isoDate, Number(estimatedMinutes)))
+                taskId, title, categoryId, isoDate, Number(estimatedMinutes), String(notes || "")))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试";
             }

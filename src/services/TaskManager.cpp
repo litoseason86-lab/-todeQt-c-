@@ -81,7 +81,7 @@ QString taskSelectSql()
         "SELECT t.id, t.title, "
         "COALESCE(c.name, t.category) AS category, "
         "t.category_id, c.name AS category_name, c.color AS category_color, "
-        "t.date, t.completed, t.created_at, t.estimated_minutes, "
+        "t.date, t.completed, t.created_at, t.estimated_minutes, t.notes, t.display_order, "
         "COALESCE((SELECT %1 FROM focus_sessions fs "
         "WHERE fs.task_id = t.id AND fs.duration IS NOT NULL), 0) AS actual_pomodoros, "
         "COALESCE((SELECT %2 FROM focus_sessions fs "
@@ -196,7 +196,14 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int c
     return addTask(title, dateValue, categoryId, 0);
 }
 
-bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int categoryId, int estimatedMinutes)
+bool TaskManager::addTask(const QString& title, const QVariant& dateValue,
+                          int categoryId, int estimatedMinutes)
+{
+    return addTask(title, dateValue, categoryId, estimatedMinutes, QString());
+}
+
+bool TaskManager::addTask(const QString& title, const QVariant& dateValue,
+                          int categoryId, int estimatedMinutes, const QString& notes)
 {
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
@@ -232,13 +239,25 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue, int c
 
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "INSERT INTO tasks (title, category, category_id, date, completed, estimated_minutes) "
-        "VALUES (:title, :category, :categoryId, :date, 0, :estimated)"));
+        "INSERT INTO tasks (title, category, category_id, date, completed, "
+        "estimated_minutes, notes, display_order) "
+        // display_order 取当天最大值 +1：新任务排在末尾，不会插到用户排好的序列中间。
+        // 该日期还没有任务时 MAX 返回 NULL，COALESCE 回落到 0。
+        // 占位符不能重名：Qt 对同名具名占位符的处理依赖驱动，SQLite 下只会绑上第一处，
+        // 第二处留空导致整条 INSERT 失败。子查询里的日期单独取名。
+        "VALUES (:title, :category, :categoryId, :date, 0, :estimated, :notes, "
+        "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks WHERE date = :orderDate))"));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
     query.bindValue(QStringLiteral(":category"), categoryName);
     query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":orderDate"), date.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":estimated"), clampEstimatedMinutes(estimatedMinutes));
+    // 空 QString 是 null，直接绑会写成 NULL 并撞上 notes 的 NOT NULL 约束。
+    // 新建任务不带备注是常态，这里统一收敛成空串。
+    const QString trimmedNotes = notes.left(kMaxNotesLength);
+    query.bindValue(QStringLiteral(":notes"),
+                    trimmedNotes.isNull() ? QStringLiteral("") : trimmedNotes);
 
     if (!query.exec()) {
         qWarning() << "Failed to add task:" << query.lastError().text();
@@ -360,7 +379,16 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, c
     return updateTask(taskId, title, categoryId, dateValue, -1);
 }
 
-bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, const QVariant& dateValue, int estimatedMinutes)
+bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
+                             const QVariant& dateValue, int estimatedMinutes)
+{
+    // 五参路径不带备注：备注同样用「不传即保持不变」的语义，用空 QVariant 表达。
+    return updateTask(taskId, title, categoryId, dateValue, estimatedMinutes, QString());
+}
+
+bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
+                             const QVariant& dateValue, int estimatedMinutes,
+                             const QString& notes)
 {
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to update task: invalid task id" << taskId;
@@ -401,22 +429,32 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId, c
 
     // 预计用时为负视为“保持不变”，只有非负值才写入并夹紧到合法区间。
     const bool updateEstimate = estimatedMinutes >= 0;
+    // 只有传了 null QString 才是“保持不变”——五参重载走的正是这条路，
+    // 不能让一次不带备注的重命名把用户写的备注抹掉。空串是明确的“清空备注”，
+    // 从 QML 传 "" 即可。两者的区别就靠 isNull 与 isEmpty 分开。
+    const bool updateNotes = !notes.isNull();
+
+    QString assignments = QStringLiteral(
+        "title = :title, category = :category, category_id = :categoryId, date = :date");
+    if (updateEstimate) {
+        assignments += QStringLiteral(", estimated_minutes = :estimated");
+    }
+    if (updateNotes) {
+        assignments += QStringLiteral(", notes = :notes");
+    }
 
     QSqlQuery query(db);
     // category 文本仍要同步写入，保证旧导出和旧视图在 category_id 缺失时也能退回显示。
-    query.prepare(updateEstimate
-        ? QStringLiteral(
-            "UPDATE tasks SET title = :title, category = :category, category_id = :categoryId, "
-            "date = :date, estimated_minutes = :estimated WHERE id = :id")
-        : QStringLiteral(
-            "UPDATE tasks SET title = :title, category = :category, category_id = :categoryId, "
-            "date = :date WHERE id = :id"));
+    query.prepare(QStringLiteral("UPDATE tasks SET %1 WHERE id = :id").arg(assignments));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
     query.bindValue(QStringLiteral(":category"), categoryName);
     query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
     if (updateEstimate) {
         query.bindValue(QStringLiteral(":estimated"), clampEstimatedMinutes(estimatedMinutes));
+    }
+    if (updateNotes) {
+        query.bindValue(QStringLiteral(":notes"), notes.left(kMaxNotesLength));
     }
     query.bindValue(QStringLiteral(":id"), taskId);
 
@@ -513,7 +551,11 @@ QVariantList TaskManager::getTasksByDate(const QDate& date) const
 
     QSqlQuery query(db);
     query.prepare(taskSelectSql() + QStringLiteral(
-        "WHERE t.date = :date ORDER BY t.completed ASC, t.created_at ASC, t.id ASC"));
+        // 手动排序优先：display_order = 0 表示"没排过"，统一排到已排项之后，
+        // 再按创建时间保持与改版前一致的相对顺序。
+        "WHERE t.date = :date ORDER BY t.completed ASC, "
+        "CASE WHEN t.display_order = 0 THEN 1 ELSE 0 END ASC, "
+        "t.display_order ASC, t.created_at ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
 
     if (!query.exec()) {
@@ -551,7 +593,9 @@ QVariantList TaskManager::getWeekTasks(const QVariant& startDateValue) const
     QSqlQuery query(db);
     query.prepare(taskSelectSql() + QStringLiteral(
         "WHERE t.date >= :startDate AND t.date <= :endDate "
-        "ORDER BY t.date ASC, t.completed ASC, t.created_at ASC, t.id ASC"));
+        "ORDER BY t.date ASC, t.completed ASC, "
+        "CASE WHEN t.display_order = 0 THEN 1 ELSE 0 END ASC, "
+        "t.display_order ASC, t.created_at ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 
@@ -590,7 +634,9 @@ QVariantList TaskManager::getMonthTasks(int year, int month) const
     QSqlQuery query(db);
     query.prepare(taskSelectSql() + QStringLiteral(
         "WHERE t.date >= :startDate AND t.date <= :endDate "
-        "ORDER BY t.date ASC, t.completed ASC, t.created_at ASC, t.id ASC"));
+        "ORDER BY t.date ASC, t.completed ASC, "
+        "CASE WHEN t.display_order = 0 THEN 1 ELSE 0 END ASC, "
+        "t.display_order ASC, t.created_at ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
 
@@ -731,4 +777,99 @@ int TaskManager::getFocusedMinutesForTask(int taskId) const
         return 0;
     }
     return query.value(0).toInt() / 60;
+}
+
+bool TaskManager::reorderTasks(const QVariant& dateValue, const QVariantList& orderedTaskIds)
+{
+    const QDate date = normalizeDate(dateValue);
+    if (!date.isValid()) {
+        qWarning() << "Failed to reorder tasks: invalid date";
+        return false;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to reorder tasks: database is not open";
+        return false;
+    }
+    if (!db.transaction()) {
+        qWarning() << "Failed to start reorder transaction:" << db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "UPDATE tasks SET display_order = :order WHERE id = :id AND date = :date"));
+
+    for (int i = 0; i < orderedTaskIds.size(); ++i) {
+        const int taskId = orderedTaskIds.at(i).toInt();
+        if (!isValidTaskId(taskId)) {
+            qWarning() << "Failed to reorder tasks: invalid task id" << taskId;
+            db.rollback();
+            return false;
+        }
+        // 序号从 1 开始：0 留给“从未排过”的行，让它们在同序时回落到 created_at。
+        query.bindValue(QStringLiteral(":order"), i + 1);
+        query.bindValue(QStringLiteral(":id"), taskId);
+        query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+        if (!query.exec()) {
+            qWarning() << "Failed to reorder tasks:" << query.lastError().text();
+            db.rollback();
+            return false;
+        }
+        // 日期不匹配的 id 不算错误也不写入——顺序数组可能包含刚被改期走的任务。
+    }
+
+    if (!db.commit()) {
+        qWarning() << "Failed to commit reorder:" << db.lastError().text();
+        db.rollback();
+        return false;
+    }
+
+    emit tasksChanged();
+    return true;
+}
+
+bool TaskManager::moveTaskToDate(int taskId, const QVariant& dateValue)
+{
+    if (!isValidTaskId(taskId)) {
+        qWarning() << "Failed to move task: invalid task id" << taskId;
+        return false;
+    }
+    const QDate date = normalizeDate(dateValue);
+    if (!date.isValid()) {
+        qWarning() << "Failed to move task: invalid date";
+        return false;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to move task: database is not open";
+        return false;
+    }
+
+    QSqlQuery query(db);
+    // 落到新日期的末尾：插到中间会打乱目标日期上已排好的顺序。
+    query.prepare(QStringLiteral(
+        // 同上：占位符不重名。
+        "UPDATE tasks SET date = :date, "
+        "display_order = (SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks "
+        "                 WHERE date = :orderDate AND id <> :selfId) "
+        "WHERE id = :id"));
+    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":orderDate"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":selfId"), taskId);
+    query.bindValue(QStringLiteral(":id"), taskId);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to move task:" << query.lastError().text();
+        return false;
+    }
+    if (query.numRowsAffected() <= 0) {
+        qWarning() << "Failed to move task: task not found" << taskId;
+        return false;
+    }
+
+    emit tasksChanged();
+    return true;
 }

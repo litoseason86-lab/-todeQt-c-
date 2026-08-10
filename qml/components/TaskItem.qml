@@ -63,6 +63,10 @@ Rectangle {
     // 预计与实际用时（分钟）：实际值由服务层从专注记录聚合，刷新/重启后一致。
     property int estimatedMinutes: 0
     property int focusedMinutes: 0
+    // 任务备注。紧凑行（仪表盘已完成列表）不显示，避免把只读列表撑高。
+    property string taskNotes: ""
+    readonly property bool showsNotes: !root.compact && !root.titleEditing
+                                       && root.taskNotes.length > 0
     // 未设置预估时显示“已专注 N”，设置后显示“已用 / 预计”；都为 0 时不显示。
     readonly property string focusSummary: {
         if (root.estimatedMinutes > 0)
@@ -83,9 +87,48 @@ Rectangle {
     property bool showEditDelete: true
     // 紧凑只读行：标题单行省略、分类横排、行高更矮，专供仪表盘已完成列表等。
     property bool compact: false
+    // 拖拽：宿主开启后，按住任务行可以拖动。今日列表用它排序，周计划用它改期。
+    // 默认关闭——只读列表（仪表盘已完成）不该能被拖走。
+    property bool draggable: false
+    // 拖动中由宿主消费：谁在拖、拖到哪。
+    signal dragStarted()
+    signal dragMoved(real sceneX, real sceneY)
+    signal dragFinished(bool cancelled)
+
+    readonly property bool dragging: dragHandler.active
+
     // 显式记录指针状态，避免不同平台的 MouseArea/HoverHandler 事件差异影响 hover 视觉。
     property bool pointerInside: false
     property bool componentReady: false
+
+    DragHandler {
+        id: dragHandler
+
+        enabled: root.draggable && !root.titleEditing
+        // 拖动期间不改变自身位置：位置由宿主决定（列表里换位、周计划里换列），
+        // 让 delegate 自己乱跑会和 ListView 的布局打架。
+        target: null
+        // 需要按住一下再动，避免和普通点击抢事件。
+        acceptedButtons: Qt.LeftButton
+        dragThreshold: 8
+
+        onActiveChanged: {
+            if (dragHandler.active) {
+                root.dragStarted()
+            } else {
+                root.dragFinished(false)
+            }
+        }
+
+        onCentroidChanged: {
+            if (!dragHandler.active) {
+                return
+            }
+            const scenePos = root.mapToItem(null, dragHandler.centroid.position.x,
+                                            dragHandler.centroid.position.y)
+            root.dragMoved(scenePos.x, scenePos.y)
+        }
+    }
     property bool completionAnimationPlayed: false
     property real completionOffset: 0
     // 页面注入返回 bool 的重命名函数，失败时保留编辑态和用户输入。
@@ -475,6 +518,20 @@ Rectangle {
                     font.pixelSize: Theme.fontXs
                     color: Theme.inkMuted
                 }
+            }
+
+            // 备注：单行省略。写了不显示等于没写，但它是次要信息，
+            // 不能把任务行撑成两倍高——需要看全文去编辑弹窗。
+            Text {
+                objectName: "taskNotesLine"
+                Layout.fillWidth: true
+                visible: root.showsNotes
+                text: root.taskNotes
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontXs
+                color: Theme.inkSoft
+                elide: Text.ElideRight
+                maximumLineCount: 1
             }
 
             TextField {
