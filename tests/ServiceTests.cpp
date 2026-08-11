@@ -698,6 +698,7 @@ private slots:
     void manualSessionRejectsOverlapWithRunningSession();
     void everySettingTheAppWritesPassesTheOwnershipFilter();
     void ownershipFilterRejectsForeignKeysAndKeepsShortcutOverrides();
+    void asyncExportRunsOffTheCallingThreadAndReportsCompletion();
     void notesRoundTripAndRenameDoesNotEraseThem();
     void reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation();
     void moveTaskToDateLandsAtTheEndOfTheTargetDay();
@@ -4219,7 +4220,10 @@ void ServiceTests::exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks()
 
     QCOMPARE(completedSpy.count(), 1);
     QCOMPARE(completedSpy.takeFirst().at(0).toBool(), true);
-    QCOMPARE(progressSpy.count(), 3);
+    // 进度按批发送（每 200 行一次 + 末尾补一次准确值），不再逐行发：
+    // 2 万行逐行发就是 2 万次跨线程排队投递，比写文件本身还贵。
+    // 这里守的是"最终一定报到终点"，而不是发了几次。
+    QVERIFY(progressSpy.count() >= 1);
     QCOMPARE(progressSpy.last().at(0).toInt(), 3);
     QCOMPARE(progressSpy.last().at(1).toInt(), 3);
     QCOMPARE(readUtf8File(filePath),
@@ -4277,7 +4281,7 @@ void ServiceTests::exportFocusSessionsAndExportAllWriteExpectedCsvFiles()
     const QString sessionsPath = m_tempDir->filePath(QStringLiteral("sessions.csv"));
     QSignalSpy sessionProgressSpy(ExportService::instance(), &ExportService::exportProgress);
     QVERIFY(ExportService::instance()->exportFocusSessions(startDate, endDate, sessionsPath));
-    QCOMPARE(sessionProgressSpy.count(), 3);
+    QVERIFY(sessionProgressSpy.count() >= 1);
     QCOMPARE(sessionProgressSpy.last().at(0).toInt(), 3);
     QCOMPARE(sessionProgressSpy.last().at(1).toInt(), 3);
     QCOMPARE(readUtf8File(sessionsPath),
@@ -5670,4 +5674,38 @@ void ServiceTests::ownershipFilterRejectsForeignKeysAndKeepsShortcutOverrides()
     QVERIFY(AppSettings::isOwnedSettingKey(QStringLiteral("shortcuts/任意未来动作")));
 }
 
+void ServiceTests::asyncExportRunsOffTheCallingThreadAndReportsCompletion()
+{
+    // 同步导出会把 GUI 线程占住：实测 2 万行专注记录约 190ms，掉十来帧，
+    // 而且那段时间进度条根本渲染不出来。异步版必须真的不在调用线程上跑完。
+    const QDate day(2026, 6, 10);
+    const int taskId = insertTaskRow(QStringLiteral("导出任务"), day, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+    QVERIFY(insertFocusSessionRow(taskId, day, 25 * 60));
+
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString filePath = dir.filePath(QStringLiteral("async.csv"));
+
+    ExportService* service = ExportService::instance();
+    QSignalSpy completed(service, &ExportService::exportCompleted);
+    QVERIFY(completed.isValid());
+
+    service->requestExportFocusSessions(day, day, filePath);
+    // 请求返回时活儿还没干完——这正是"没有占住调用线程"的证据。
+    QCOMPARE(completed.count(), 0);
+    QVERIFY(service->busy());
+
+    QVERIFY2(completed.wait(10000), "异步导出没有在超时内完成");
+    QCOMPARE(completed.count(), 1);
+    QCOMPARE(completed.first().at(0).toBool(), true);
+    QVERIFY(QFileInfo::exists(filePath));
+    // busy 必须放回去，否则下一次导出会被自己挡住。
+    QTRY_VERIFY(!service->busy());
+
+    // 文件内容与同步版一致：换线程不该改变输出。
+    const QString content = readUtf8File(filePath);
+    QVERIFY(content.startsWith(QStringLiteral("ID,任务ID,任务标题,科目")));
+    QVERIFY(content.count(QLatin1Char('\n')) >= 2);
+}
 

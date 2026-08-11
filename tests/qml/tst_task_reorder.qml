@@ -97,8 +97,9 @@ TestCase {
         view.beginReorder(3)
         // 把丙拖到最上面。
         view.updateReorder(3, 0)
-        compare(view.pendingOrder.length, 3)
-        compare(Number(view.pendingOrder[0].id), 3)
+        compare(view.dropTargetIndex, 0)
+        // 拖动期间模型引用必须原样不动——换模型会让整片 delegate 连同阴影层重建。
+        compare(Number(view.tasks[0].id), 1)
         // 关键：拖动过程中一次都不写库。每次移动都落库会在一次拖动里产生几十次
         // 事务，中途松不开手还回不去。
         compare(testCase.reorderCalls.length, 0)
@@ -106,9 +107,9 @@ TestCase {
         view.commitReorder()
         compare(testCase.reorderCalls.length, 1)
         compare(testCase.reorderCalls[0].ids, [3, 1, 2])
-        // 提交后本地覆盖数组必须清空，否则列表会一直显示拖动期间的快照，
-        // 服务端的新顺序反而进不来。
-        compare(view.pendingOrder.length, 0)
+        // 落点状态必须复位，否则下一次拖动会带着上次的残留目标。
+        compare(view.dropTargetIndex, -1)
+        compare(view.draggingTaskId, -1)
     }
 
     function test_completed_tasks_do_not_participate() {
@@ -162,13 +163,6 @@ TestCase {
 
         view.beginReorder(1)
         view.updateReorder(1, probeY)
-        var landed = -1
-        for (var k = 0; k < view.pendingOrder.length; ++k) {
-            if (Number(view.pendingOrder[k].id) === 1) {
-                landed = k
-                break
-            }
-        }
-        compare(landed, expected, "滚动后落点算错")
+        compare(view.dropTargetIndex, expected, "滚动后落点算错")
     }
 }

@@ -156,6 +156,13 @@ plans/                 只有 README.md：执行状态索引与历次审计记�
   那比不过滤更糟。**新增一个设置分组时必须同步那份清单**，
   `everySettingTheAppWritesPassesTheOwnershipFilter` 会遍历应用真实写出的每个键做交叉验证，
   漏加当场转红并指名是哪个键。
+- **耗时操作不占 GUI 线程**：CSV 导出走线程池，工作线程开自己的**只读**连接
+  （`QSqlDatabase` 连接不能跨线程共享，只读也避免与主线程写事务抢锁）。
+  进度按批发（每 200 行 + 末尾一次准确值）——逐行发在 2 万行时就是 2 万次跨线程
+  排队投递，比写文件本身还贵。备份/恢复同理，走 `QtConcurrent` + `QFutureWatcher`。
+- **列表拖动期间不换模型**：给 `model` 赋一个新数组会让 ListView 认成全新模型、
+  整片重建 delegate，而 `TaskItem` 带 `layer.enabled` + MultiEffect 阴影，
+  每次重建都是新 FBO 加一遍阴影 pass。拖动只记落点，松手才重排落库。
 - **schema 迁移**：版本号在 `DatabaseManager::kCurrentSchemaVersion`，每一步除版本号外
   还带结构检查（列缺失时无论版本号都补），防御半迁移状态。
   **给 `tasks` 新增列时必须同步 `migrateToVersion5` 的 `knownColumns` 与建表语句**——

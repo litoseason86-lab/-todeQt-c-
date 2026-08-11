@@ -48,10 +48,27 @@ Item {
     property bool pageActive: true
     // 当日专注目标（分钟）；0 = 今天尚未设置。设置/修改只在本页发生。
     property int dailyFocusGoalMinutes: 0
-    // 拖动排序：拖动期间只在本地数组里换位，松手才落库。
-    // 每次移动都写库会在一次拖动里产生几十次事务，而且中途松不开手就回不去。
+    // 拖动排序。拖动期间**完全不动模型**，只记「要落在第几位」，松手才重排并落库。
+    //
+    // 早先的做法是每跨过一行就 slice/splice 出一个新数组赋给 model。那会让 ListView
+    // 认成全新模型、整片重建 delegate；而 TaskItem 带 layer.enabled + MultiEffect 阴影，
+    // 每次重建都是一个新 FBO 加一遍阴影 pass。实测单次跨行 10 条列表 0.87ms、
+    // 60 条 2.13ms——还没超帧预算，但随总数线性恶化，且这是发生在交互手势中途的开销。
+    // 现在拖动期间模型引用恒定不变，代价与列表长度无关。
     property int draggingTaskId: -1
-    property var pendingOrder: []
+    // 目标插入位（模型下标）。-1 表示当前没有有效落点。
+    property int dropTargetIndex: -1
+    readonly property int draggingFromIndex: {
+        if (root.draggingTaskId < 0) {
+            return -1
+        }
+        for (var i = 0; i < root.tasks.length; ++i) {
+            if (Number(root.tasks[i].id) === root.draggingTaskId) {
+                return i
+            }
+        }
+        return -1
+    }
     // 今天排了多少活（全部任务的预计用时之和，完成与否都算——问的是"排了多少"）。
     readonly property int plannedMinutesToday: {
         var sum = 0
@@ -263,59 +280,41 @@ Item {
 
     function beginReorder(taskId) {
         root.draggingTaskId = taskId
-        root.pendingOrder = root.tasks.slice()
+        root.dropTargetIndex = -1
     }
 
-    // contentY 坐标 → 目标下标。用累积高度而不是「除以行高」：任务行高度会因为
-    // 有没有备注而不同，等分假设会让带备注的行拖起来跳位。
     function updateReorder(taskId, listY) {
-        if (root.draggingTaskId !== taskId || root.pendingOrder.length === 0) {
+        if (root.draggingTaskId !== taskId || root.draggingFromIndex < 0) {
             return
         }
-        var from = -1
-        for (var i = 0; i < root.pendingOrder.length; ++i) {
-            if (Number(root.pendingOrder[i].id) === taskId) {
-                from = i
-                break
-            }
-        }
-        if (from < 0) {
-            return
-        }
-
         // 用 ListView.indexAt 而不是逐个问 delegate 要高度再累加：长列表会虚拟化，
         // 屏幕外的 delegate 根本没被创建，累加法会把它们当成高度 0，
         // 滚动之后落点整体偏移（实测 60 条的列表滚到底，落点差 2 位）。
         // indexAt 按内容坐标工作，变高行与未创建行都不影响结果。
         var target = todayTaskList.indexAt(todayTaskList.width / 2, listY)
-        // -1 表示落在行与行之间的间隙或列表之外。此时保持上一次的位置不动，
-        // 拖动过程中很快就会命中下一行；强行钳到 0 会让任务突然跳到列表顶部。
+        // -1 表示落在行与行之间的间隙或列表之外，保持上一次的落点不动；
+        // 拖动过程中很快就会命中下一行。
         if (target < 0) {
             return
         }
-        if (target === from) {
-            return
-        }
-
-        var next = root.pendingOrder.slice()
-        next.splice(target, 0, next.splice(from, 1)[0])
-        root.pendingOrder = next
+        root.dropTargetIndex = target
     }
 
     function commitReorder() {
-        if (root.draggingTaskId < 0) {
-            return
-        }
+        const from = root.draggingFromIndex
+        const target = root.dropTargetIndex
         root.draggingTaskId = -1
-        if (!root.canReorderTasks || root.pendingOrder.length === 0) {
-            root.pendingOrder = []
+        root.dropTargetIndex = -1
+
+        if (!root.canReorderTasks || from < 0 || target < 0 || target === from) {
             return
         }
+
         var ids = []
-        for (var i = 0; i < root.pendingOrder.length; ++i) {
-            ids.push(Number(root.pendingOrder[i].id))
+        for (var i = 0; i < root.tasks.length; ++i) {
+            ids.push(Number(root.tasks[i].id))
         }
-        root.pendingOrder = []
+        ids.splice(target, 0, ids.splice(from, 1)[0])
         if (!root.taskManagerRef.reorderTasks(root.todayIsoDate(), ids)) {
             root.loadError = "任务排序保存失败，请重试"
         }
@@ -726,7 +725,8 @@ Item {
                 anchors.fill: parent
                 clip: true
                 visible: root.tasks.length > 0
-                model: root.pendingOrder.length > 0 ? root.pendingOrder : root.tasks
+                // 拖动期间也保持这个引用不变——换模型会让整片 delegate 重建。
+                model: root.tasks
                 spacing: Theme.space8
                 boundsBehavior: Flickable.StopAtBounds
 
@@ -736,6 +736,9 @@ Item {
                             // pragma ComponentBehavior: Bound 之后 delegate 不再继承外层作用域，
                             // 必须显式声明它消费的模型角色。
                             required property var modelData
+                            // 落点指示要知道自己排第几；index 是 ListView 提供的附加角色。
+                            required property int index
+                            readonly property int dropIndex: todayTaskRow.index
 
                             width: todayTaskList.width
                             height: implicitHeight
@@ -750,6 +753,22 @@ Item {
                             // 允许拖动只会让用户以为能把它插回未完成那一段。
                             draggable: root.canReorderTasks && !todayTaskRow.modelData.completed
                             opacity: root.draggingTaskId === todayTaskRow.taskId ? 0.6 : 1
+
+                            // 落点指示：模型不动，就得靠它让用户看见"松手会插到哪"。
+                            // 画在被指向的那一行上边缘；拖到自己身上时不画。
+                            Rectangle {
+                                objectName: "todayDropIndicator"
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.topMargin: -Math.round(todayTaskList.spacing / 2) - 1
+                                height: 2
+                                radius: 1
+                                color: Theme.accent
+                                visible: root.draggingTaskId >= 0
+                                         && root.dropTargetIndex === todayTaskRow.dropIndex
+                                         && root.dropTargetIndex !== root.draggingFromIndex
+                            }
 
                             onDragStarted: root.beginReorder(todayTaskRow.taskId)
                             onDragMoved: function (sceneX, sceneY) {

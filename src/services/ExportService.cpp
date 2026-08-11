@@ -10,7 +10,12 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QCoreApplication>
+#include <QDateTime>
+#include <QFutureWatcher>
 #include <QSaveFile>
+#include <QThread>
+#include <QtConcurrent>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -59,6 +64,11 @@ QDate ExportService::normalizeDate(const QVariant& value) const
     }
 
     return QDate();
+}
+
+namespace {
+// 进度信号的批量粒度。逐行发在 2 万行时就是 2 万次跨线程排队投递。
+constexpr int kProgressBatchRows = 200;
 }
 
 QString ExportService::escapeCsvField(const QString& field) const
@@ -157,7 +167,13 @@ bool ExportService::exportTasksToFile(const QDate& startDate,
         return false;
     }
 
-    QSqlDatabase db = DatabaseManager::instance()->database();
+    QString ownedConnection;
+    QSqlDatabase db = acquireDatabase(&ownedConnection);
+    // 连接在本函数返回时释放；用 RAII 包一层避免每条错误分支都记得释放。
+    struct ConnectionGuard {
+        QString name;
+        ~ConnectionGuard() { ExportService::releaseDatabase(name); }
+    } guard{ownedConnection};
     if (!db.isOpen()) {
         emit exportCompleted(false, QStringLiteral("数据库未打开"));
         return false;
@@ -205,9 +221,14 @@ bool ExportService::exportTasksToFile(const QDate& startDate,
             << (query.value(4).toBool() ? QStringLiteral("已完成") : QStringLiteral("未完成")) << ','
             << formatDateTime(query.value(5)) << '\n';
         ++current;
-        emit exportProgress(current, total);
+        // 逐行发信号在 2 万行时就是 2 万次跨线程排队投递，比写文件本身还贵。
+        // 每 200 行报一次，末尾再补一次准确值。
+        if (current % kProgressBatchRows == 0) {
+            emit exportProgress(current, total);
+        }
     }
 
+    emit exportProgress(current, total);
     return finishCsvFile(file,
                          out,
                          QStringLiteral("成功导出 %1 条任务记录").arg(current),
@@ -233,7 +254,13 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
         return false;
     }
 
-    QSqlDatabase db = DatabaseManager::instance()->database();
+    QString ownedConnection;
+    QSqlDatabase db = acquireDatabase(&ownedConnection);
+    // 连接在本函数返回时释放；用 RAII 包一层避免每条错误分支都记得释放。
+    struct ConnectionGuard {
+        QString name;
+        ~ConnectionGuard() { ExportService::releaseDatabase(name); }
+    } guard{ownedConnection};
     if (!db.isOpen()) {
         emit exportCompleted(false, QStringLiteral("数据库未打开"));
         return false;
@@ -293,9 +320,14 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
             << formatDateTime(query.value(5)) << ','
             << durationMinutes << '\n';
         ++current;
-        emit exportProgress(current, total);
+        // 逐行发信号在 2 万行时就是 2 万次跨线程排队投递，比写文件本身还贵。
+        // 每 200 行报一次，末尾再补一次准确值。
+        if (current % kProgressBatchRows == 0) {
+            emit exportProgress(current, total);
+        }
     }
 
+    emit exportProgress(current, total);
     return finishCsvFile(file,
                          out,
                          QStringLiteral("成功导出 %1 条专注记录").arg(current),
@@ -432,4 +464,104 @@ bool ExportService::commitExportPair(const QString& stagedTasksPath,
         QFile::remove(sessionsBackup);
     }
     return true;
+}
+
+QSqlDatabase ExportService::acquireDatabase(QString* ownedConnectionName) const
+{
+    *ownedConnectionName = QString();
+    // 主线程直接复用现有连接。
+    if (QThread::currentThread() == qApp->thread()) {
+        return DatabaseManager::instance()->database();
+    }
+
+    // 工作线程：按线程开一条只读连接。名字带线程指针，避免并发导出撞名。
+    const QString path = DatabaseManager::instance()->database().databaseName();
+    if (path.isEmpty()) {
+        return QSqlDatabase();
+    }
+    const QString name = QStringLiteral("ExportWorker_%1_%2")
+                             .arg(reinterpret_cast<quintptr>(QThread::currentThread()))
+                             .arg(QDateTime::currentMSecsSinceEpoch());
+    QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
+    db.setDatabaseName(path);
+    // 只读：导出不写库，也就不会和主线程的写事务抢锁。
+    db.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
+    if (!db.open()) {
+        QSqlDatabase::removeDatabase(name);
+        return QSqlDatabase();
+    }
+    *ownedConnectionName = name;
+    return db;
+}
+
+void ExportService::releaseDatabase(const QString& ownedConnectionName)
+{
+    if (ownedConnectionName.isEmpty()) {
+        return;
+    }
+    {
+        QSqlDatabase db = QSqlDatabase::database(ownedConnectionName, false);
+        if (db.isValid()) {
+            db.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(ownedConnectionName);
+}
+
+void ExportService::setBusy(bool busy)
+{
+    if (m_busy == busy) {
+        return;
+    }
+    m_busy = busy;
+    emit busyChanged();
+}
+
+void ExportService::runAsync(const std::function<bool()>& work)
+{
+    if (m_busy) {
+        emit exportCompleted(false, QStringLiteral("已有导出任务正在执行"));
+        return;
+    }
+    setBusy(true);
+
+    auto* watcher = new QFutureWatcher<bool>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher]() {
+        watcher->deleteLater();
+        setBusy(false);
+        // 成功/失败的具体消息由 work 内部 emit exportCompleted 给出，
+        // 这里只负责把 busy 放回去——两处都发会让界面收到两次完成。
+    });
+    watcher->setFuture(QtConcurrent::run(work));
+}
+
+void ExportService::requestExportTasks(const QVariant& startDateValue,
+                                       const QVariant& endDateValue,
+                                       const QString& filePath)
+{
+    const QDate start = normalizeDate(startDateValue);
+    const QDate end = normalizeDate(endDateValue);
+    runAsync([this, start, end, filePath]() {
+        return exportTasksToFile(start, end, filePath, true);
+    });
+}
+
+void ExportService::requestExportFocusSessions(const QVariant& startDateValue,
+                                               const QVariant& endDateValue,
+                                               const QString& filePath)
+{
+    const QDate start = normalizeDate(startDateValue);
+    const QDate end = normalizeDate(endDateValue);
+    runAsync([this, start, end, filePath]() {
+        return exportFocusSessionsToFile(start, end, filePath, true);
+    });
+}
+
+void ExportService::requestExportAll(const QVariant& startDateValue,
+                                     const QVariant& endDateValue,
+                                     const QString& dirPath)
+{
+    runAsync([this, startDateValue, endDateValue, dirPath]() {
+        return exportAll(startDateValue, endDateValue, dirPath);
+    });
 }

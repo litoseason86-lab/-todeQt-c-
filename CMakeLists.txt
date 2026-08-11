@@ -262,6 +262,7 @@ add_executable(PomodoroTodoTests
 
 target_link_libraries(PomodoroTodoTests PRIVATE
     Qt6::Core
+    Qt6::Concurrent
     Qt6::Sql
     Qt6::Test
 )
@@ -299,6 +300,7 @@ add_executable(CoreLogicTests
 
 target_link_libraries(CoreLogicTests PRIVATE
     Qt6::Core
+    Qt6::Concurrent
     Qt6::Sql
     Qt6::Test
 )
@@ -335,6 +337,7 @@ add_executable(RobustnessTests
 
 target_link_libraries(RobustnessTests PRIVATE
     Qt6::Core
+    Qt6::Concurrent
     Qt6::Sql
     Qt6::Test
 )

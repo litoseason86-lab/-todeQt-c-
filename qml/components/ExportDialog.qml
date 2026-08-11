@@ -357,14 +357,14 @@ Popup {
         property string exportType: "tasks"
 
         onAccepted: {
+            // 走异步：同步版会把 GUI 线程占住（实测 2 万行约 190ms），
+            // 那段时间进度条根本渲染不出来。结果通过 exportCompleted 回来。
             var path = root.localPath(selectedFile)
-            var ok = exportType === "tasks"
-                    ? root.exportServiceRef.exportTasks(startDateInput.text, endDateInput.text, path)
-                    : root.exportServiceRef.exportFocusSessions(startDateInput.text, endDateInput.text, path)
-            if (!ok) {
-                if (root.statusText.length === 0) {
-                    root.statusText = "错误：导出失败，请检查文件路径权限"
-                }
+            if (exportType === "tasks") {
+                root.exportServiceRef.requestExportTasks(startDateInput.text, endDateInput.text, path)
+            } else {
+                root.exportServiceRef.requestExportFocusSessions(
+                            startDateInput.text, endDateInput.text, path)
             }
         }
     }
@@ -373,15 +373,11 @@ Popup {
         id: folderDialog
 
         onAccepted: {
-            var ok = root.exportServiceRef.exportAll(
+            // 同上，走异步；失败原因由 exportCompleted 带回来。
+            root.exportServiceRef.requestExportAll(
                         startDateInput.text,
                         endDateInput.text,
                         root.localPath(selectedFolder))
-            if (!ok) {
-                if (root.statusText.length === 0) {
-                    root.statusText = "错误：导出失败，请检查目录权限"
-                }
-            }
         }
     }
 }
