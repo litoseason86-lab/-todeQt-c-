@@ -193,6 +193,7 @@ Item {
 
                     anchors.centerIn: parent
                     text: root.viewText("pomodoroStageText")
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontLg
                     font.bold: true
                     color: Theme.inkStrong
@@ -233,6 +234,7 @@ Item {
                     Text {
                         Layout.alignment: Qt.AlignHCenter
                         text: root.viewText("ringCaptionText")
+                        textFormat: Text.PlainText
                         font.pixelSize: Theme.fontMd
                         color: Theme.inkSoft
                         horizontalAlignment: Text.AlignHCenter
@@ -259,6 +261,7 @@ Item {
 
                 Layout.fillWidth: true
                 text: root.viewText("taskTitle")
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontXl
                 font.bold: true
                 color: Theme.ink
@@ -274,6 +277,7 @@ Item {
                 text: root.projectedState === "free"
                       ? root.viewText("runningText")
                       : root.viewText("pomodoroStageText")
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontMd
                 color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter
@@ -284,6 +288,7 @@ Item {
 
                 Layout.fillWidth: true
                 text: root.focusViewRef ? String(root.focusViewRef.errorText) : ""
+                textFormat: Text.PlainText
                 visible: text.length > 0
                 font.pixelSize: Theme.fontMd
                 color: Theme.danger

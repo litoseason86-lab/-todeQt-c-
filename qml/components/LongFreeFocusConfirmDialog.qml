@@ -124,6 +124,7 @@ Popup {
 
                 contentItem: Text {
                     text: continueButton.text
+                    textFormat: Text.PlainText
                     color: Theme.ink
                     font.pixelSize: Theme.fontMd
                     horizontalAlignment: Text.AlignHCenter
@@ -152,6 +153,7 @@ Popup {
 
                 contentItem: Text {
                     text: discardButton.text
+                    textFormat: Text.PlainText
                     color: Theme.dangerSoft
                     font.pixelSize: Theme.fontMd
                     horizontalAlignment: Text.AlignHCenter
@@ -181,6 +183,7 @@ Popup {
 
                 contentItem: Text {
                     text: recordButton.text
+                    textFormat: Text.PlainText
                     color: Theme.accentFillInk
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium

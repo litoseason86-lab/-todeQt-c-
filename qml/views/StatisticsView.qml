@@ -415,7 +415,9 @@ Item {
                             Qt.formatDate(weekEnd, "yyyy-MM-dd"))
             } else if (root.currentTimeRange === "month") {
                 root.monthStats = root.statisticsServiceRef.getMonthStats(root.selectedYear, root.selectedMonth)
-                root.monthComparison = root.statisticsServiceRef.getMonthComparison(root.selectedYear, root.selectedMonth)
+                // 把刚算好的当月结果传进去，避免服务层把同一个月再查一遍。
+                root.monthComparison = root.statisticsServiceRef.getMonthComparison(
+                            root.selectedYear, root.selectedMonth, root.monthStats)
                 root.monthWeeklySummary = root.statisticsServiceRef.getMonthWeeklySummary(root.selectedYear, root.selectedMonth)
                 root.todayStats = {
                     effectiveDays: root.monthStats.effectiveDays || 0,
@@ -622,6 +624,7 @@ Item {
                             // 固定宽度让两侧箭头不随「今天/2026年12月」的长短跳动。
                             Layout.preferredWidth: 116
                             text: root.timeRangeDisplayText
+                            textFormat: Text.PlainText
                             font.pixelSize: Theme.fontLg
                             font.weight: Font.Medium
                             color: Theme.ink
@@ -681,6 +684,7 @@ Item {
                 Layout.fillWidth: true
                 visible: root.loadError.length > 0
                 text: root.loadError
+                textFormat: Text.PlainText
                 color: Theme.danger
                 font.pixelSize: Theme.fontMd
                 wrapMode: Text.WordWrap

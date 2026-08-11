@@ -64,6 +64,7 @@ Item {
                 required property string modelData
                 Layout.fillWidth: true
                 text: modelData
+                textFormat: Text.PlainText
                 color: Theme.inkSoft
                 font.pixelSize: Theme.fontXs
                 horizontalAlignment: Text.AlignHCenter
@@ -150,6 +151,7 @@ Item {
                 Text {
                     anchors.centerIn: parent
                     text: dayCell.inMonth ? dayCell.day : ""
+                    textFormat: Text.PlainText
                     color: dayCell.count > 0 && dayCell.intensity > 0.55
                            ? Theme.accentForeground : Theme.ink
                     font.pixelSize: Theme.fontSm

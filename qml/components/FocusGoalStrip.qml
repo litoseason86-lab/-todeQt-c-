@@ -106,6 +106,7 @@ GlassPanel {
         Label {
             objectName: "stripPlannedMinutes"
             text: Duration.format(root.plannedMinutes)
+            textFormat: Text.PlainText
             color: Theme.inkStrong
             font.pixelSize: Theme.fontLg
             font.family: Theme.fontFamilyData
@@ -116,6 +117,7 @@ GlassPanel {
             objectName: "stripPlannedDelta"
             // 没设目标时给空串而不是靠 visible 藏起来：这个项目的离屏环境里
             // visible 的级联判定不可靠，用文案本身表达"没有可说的"更稳。
+            textFormat: Text.PlainText
             text: {
                 if (!root.hasGoal)
                     return ""
@@ -152,6 +154,7 @@ GlassPanel {
         Label {
             objectName: "stripDoneCount"
             text: root.completedTasks + " / " + root.totalTasks
+            textFormat: Text.PlainText
             color: Theme.inkStrong
             font.pixelSize: Theme.fontLg
             font.family: Theme.fontFamilyData
@@ -192,6 +195,7 @@ GlassPanel {
             Label {
                 visible: root.saveError.length > 0
                 text: root.saveError
+                textFormat: Text.PlainText
                 color: Theme.danger
                 font.pixelSize: Theme.fontXs
                 elide: Text.ElideRight
@@ -223,6 +227,7 @@ GlassPanel {
 
                 contentItem: Text {
                     text: quickFillChip.text
+                    textFormat: Text.PlainText
                     leftPadding: Theme.space8
                     rightPadding: Theme.space8
                     color: Theme.accentInk
@@ -249,6 +254,7 @@ GlassPanel {
 
                 contentItem: Text {
                     text: setGoalButton.text
+                    textFormat: Text.PlainText
                     leftPadding: Theme.space12
                     rightPadding: Theme.space12
                     color: Theme.accentInk
@@ -321,6 +327,7 @@ GlassPanel {
 
                         objectName: clockSegment.modelData.colon ? "" : "focusGoalClockSegment"
                         text: clockSegment.modelData.value
+                        textFormat: Text.PlainText
                         font.pixelSize: 22
                         font.family: Theme.fontFamilyClock
                         font.weight: Font.Medium
@@ -340,6 +347,7 @@ GlassPanel {
 
                 contentItem: Text {
                     text: modifyGoalButton.text
+                    textFormat: Text.PlainText
                     color: modifyGoalButton.hovered ? Theme.accentInk : Theme.inkSoft
                     font.pixelSize: Theme.fontSm
                     horizontalAlignment: Text.AlignHCenter
@@ -414,6 +422,7 @@ GlassPanel {
                 objectName: "focusGoalPercent"
                 visible: !root.goalReached
                 text: root.percent + "%"
+                textFormat: Text.PlainText
                 color: Theme.accentInk
                 font.pixelSize: Theme.fontSm
                 font.family: Theme.fontFamilyData
@@ -423,6 +432,7 @@ GlassPanel {
             Label {
                 visible: root.saveError.length > 0
                 text: root.saveError
+                textFormat: Text.PlainText
                 color: Theme.danger
                 font.pixelSize: Theme.fontXs
                 elide: Text.ElideRight

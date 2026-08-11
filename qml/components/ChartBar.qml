@@ -100,6 +100,7 @@ Rectangle {
             Layout.fillWidth: true
             visible: root.title.length > 0
             text: root.title
+            textFormat: Text.PlainText
             font.pixelSize: Theme.fontLg
             font.bold: true
             color: Theme.ink
@@ -141,6 +142,7 @@ Rectangle {
                                 text: delegateItem.modelData.displayValue.length > 0
                                       ? delegateItem.modelData.displayValue
                                       : (delegateItem.modelData.value + root.valueSuffix)
+                                textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontXs
                                 color: Theme.inkSoft
                                 horizontalAlignment: Text.AlignHCenter
@@ -177,6 +179,7 @@ Rectangle {
                             Text {
                                 Layout.fillWidth: true
                                 text: delegateItem.modelData.label
+                                textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontSm
                                 color: Theme.ink
                                 horizontalAlignment: Text.AlignHCenter
@@ -195,6 +198,7 @@ Rectangle {
                 width: Math.min(parent.width - 24, 260)
                 visible: root.showEmptyState
                 text: root.emptyText
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontMd
                 color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter

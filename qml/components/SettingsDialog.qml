@@ -203,6 +203,7 @@ Popup {
                     Layout.fillWidth: true
                     Layout.bottomMargin: Theme.space4
                     text: root.sectionTitles[root.currentSection]
+                    textFormat: Text.PlainText
                     color: Theme.inkStrong
                     font.pixelSize: Theme.fontXl
                     font.weight: Font.DemiBold
@@ -271,6 +272,7 @@ Popup {
                         Layout.fillWidth: true
                         Layout.alignment: Qt.AlignVCenter
                         text: root.statusText
+                        textFormat: Text.PlainText
                         color: root.statusIsError ? Theme.danger : Theme.inkSoft
                         font.pixelSize: Theme.fontMd
                         elide: Text.ElideRight

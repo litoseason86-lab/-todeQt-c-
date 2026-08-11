@@ -239,6 +239,7 @@ Popup {
                 anchors.left: parent.left
                 anchors.leftMargin: Theme.space16
                 text: root.heading
+                textFormat: Text.PlainText
                 color: Theme.ink
                 font.pixelSize: Theme.fontLg
                 font.weight: Font.Bold
@@ -403,6 +404,7 @@ Popup {
                 Text {
                     Layout.fillWidth: true
                     text: categoryComboBox.displayText
+                    textFormat: Text.PlainText
                     color: Theme.ink
                     font.pixelSize: Theme.fontLg
                     verticalAlignment: Text.AlignVCenter
@@ -431,6 +433,7 @@ Popup {
                     Text {
                         Layout.fillWidth: true
                         text: categoryDelegate.modelData.name || ""
+                        textFormat: Text.PlainText
                         color: Theme.ink
                         font.pixelSize: Theme.fontMd
                         elide: Text.ElideRight
@@ -579,6 +582,7 @@ Popup {
                 contentItem: Text {
                     objectName: "cancelButtonLabel"
                     text: cancelButton.text
+                    textFormat: Text.PlainText
                     color: Theme.ink
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
@@ -631,6 +635,7 @@ Popup {
                 contentItem: Text {
                     objectName: "submitButtonLabel"
                     text: submitButton.text
+                    textFormat: Text.PlainText
                     color: Theme.accentFillInk
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium

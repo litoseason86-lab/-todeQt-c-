@@ -77,6 +77,7 @@ Rectangle {
                 objectName: "focusTimelineTitle"
                 Layout.fillWidth: true
                 text: root.currentMonth + "月" + root.selectedDay + "日 专注记录"
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontXl
                 font.weight: Font.Bold
                 color: Theme.ink
@@ -84,6 +85,7 @@ Rectangle {
 
             Text {
                 text: root.sessions.length + "次记录"
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontMd
                 color: Theme.inkSoft
             }
@@ -203,6 +205,7 @@ Rectangle {
                                     Text {
                                         Layout.fillWidth: true
                                         text: sessionRow.modelData.taskTitle && String(sessionRow.modelData.taskTitle).length > 0 ? sessionRow.modelData.taskTitle : "未知任务"
+                                        textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontLg
                                         font.weight: Font.Medium
                                         color: Theme.inkStrong
@@ -212,6 +215,7 @@ Rectangle {
                                     Text {
                                         Layout.fillWidth: true
                                         text: MgFmt.formatClock(sessionRow.modelData.startTime) + " - " + MgFmt.formatClock(sessionRow.modelData.endTime)
+                                        textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontSm
                                         color: Theme.inkSoft
                                         elide: Text.ElideRight
@@ -245,6 +249,7 @@ Rectangle {
                                     Text {
                                         Layout.fillWidth: true
                                         text: root.formatDurationFn(Number(sessionRow.modelData.durationSeconds) || 0)
+                                        textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontXl
                                         font.weight: Font.Bold
                                         color: Theme.accent

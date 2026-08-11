@@ -70,6 +70,7 @@ Item {
     Text {
         anchors.centerIn: parent
         text: root.clampedPercent + "%"
+        textFormat: Text.PlainText
         color: Theme.inkStrong
         font {
             pixelSize: root.labelPixelSize

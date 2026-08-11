@@ -308,6 +308,7 @@ Popup {
             Layout.rightMargin: Theme.space16
             visible: root.statusText.length > 0
             text: root.statusText
+            textFormat: Text.PlainText
             color: root.statusText.startsWith("错误") ? Theme.danger : Theme.ink
             font.pixelSize: Theme.fontSm
             wrapMode: Text.WordWrap

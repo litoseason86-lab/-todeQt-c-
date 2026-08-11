@@ -322,6 +322,7 @@ Item {
                             return range + " · 本周暂无任务"
                         return range + " · 本周 " + root.weekTasks.length + " 个任务 · 已完成 " + root.weekCompletedCount()
                     }
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
                     color: Theme.inkSoft
                 }
@@ -346,6 +347,7 @@ Item {
 
                 contentItem: Text {
                     text: prevWeekButton.text
+                    textFormat: Text.PlainText
                     color: Theme.ink
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
@@ -380,6 +382,7 @@ Item {
 
                 contentItem: Text {
                     text: thisWeekButton.text
+                    textFormat: Text.PlainText
                     color: Theme.ink
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
@@ -411,6 +414,7 @@ Item {
 
                 contentItem: Text {
                     text: nextWeekButton.text
+                    textFormat: Text.PlainText
                     color: Theme.ink
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
@@ -439,6 +443,7 @@ Item {
             Layout.rightMargin: Theme.space24
             visible: root.loadError.length > 0
             text: root.loadError
+            textFormat: Text.PlainText
             color: Theme.danger
             font.pixelSize: Theme.fontMd
             wrapMode: Text.WordWrap
@@ -506,6 +511,7 @@ Item {
                                 Text {
                                     Layout.alignment: Qt.AlignHCenter
                                     text: root.weekdayGlyphs[dayRow.index]
+                                    textFormat: Text.PlainText
                                     font.pixelSize: Theme.fontXl
                                     font.bold: true
                                     // 「今天」徽章底已从实心焦糖换成淡罩，近白的 surface 会消失，
@@ -518,6 +524,7 @@ Item {
                                     Layout.alignment: Qt.AlignHCenter
                                     // 日期数字走全应用统一的计时数字字体，与侧栏计时同一张脸。
                                     text: Qt.formatDate(root.dayDate(dayRow.index), "M/d")
+                                    textFormat: Text.PlainText
                                     font.family: Theme.fontFamilyClock
                                     font.pixelSize: Theme.fontXs
                                     color: dayRow.isToday ? Theme.accentFillInk : Theme.inkSoft
@@ -584,6 +591,7 @@ Item {
 
                                     contentItem: Text {
                                         text: emptyAddButton.text
+                                        textFormat: Text.PlainText
                                         color: emptyAddButton.enabled ? Theme.inkSoft : Theme.inkMuted
                                         font.pixelSize: Theme.fontSm
                                         font.weight: Font.Medium
@@ -691,6 +699,7 @@ Item {
 
                                     contentItem: Text {
                                         text: addDayButton.text
+                                        textFormat: Text.PlainText
                                         // 底是实心 accent：近白字只有 2.20:1，
                                         // 必须用为此定义的固定深色前景。禁用态维持 inkMuted。
                                         color: addDayButton.enabled ? Theme.accentForeground : Theme.inkMuted

@@ -50,6 +50,7 @@ Item {
             Layout.preferredWidth: 20
             Layout.alignment: Qt.AlignVCenter
             text: root.iconText
+            textFormat: Text.PlainText
             color: Theme.inkSoft
             font.pixelSize: Theme.fontLg
             font.weight: Font.DemiBold
@@ -67,6 +68,7 @@ Item {
             Text {
                 Layout.fillWidth: true
                 text: root.label
+                textFormat: Text.PlainText
                 color: Theme.ink
                 font.pixelSize: Theme.fontLg
                 wrapMode: Text.WordWrap
@@ -76,6 +78,7 @@ Item {
                 Layout.fillWidth: true
                 visible: root.caption.length > 0
                 text: root.caption
+                textFormat: Text.PlainText
                 color: Theme.inkSoft
                 font.pixelSize: Theme.fontMd
                 wrapMode: Text.WordWrap

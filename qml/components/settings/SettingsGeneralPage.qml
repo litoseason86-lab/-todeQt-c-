@@ -122,6 +122,7 @@ FocusScope {
                 Layout.fillWidth: true
                 text: "当前逻辑日从 %1:00 开始".arg(
                           root.appSettingsRef ? root.appSettingsRef.dayStartHour : 4)
+                textFormat: Text.PlainText
                 color: Theme.inkSoft
                 font.pixelSize: Theme.fontMd
                 wrapMode: Text.WordWrap

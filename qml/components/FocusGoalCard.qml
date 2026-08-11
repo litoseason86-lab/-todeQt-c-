@@ -89,6 +89,7 @@ GlassPanel {
         Label {
             text: root.editing ? qsTr("设置今日专注目标")
                                : (root.hasGoal ? qsTr("今日专注总时长") : qsTr("今日专注目标"))
+            textFormat: Text.PlainText
             color: Theme.inkSoft
             font.pixelSize: Theme.fontSm
         }
@@ -119,6 +120,7 @@ GlassPanel {
                 Layout.fillWidth: true
                 text: root.editable ? qsTr("为今天定一个清晰、可完成的目标。")
                                     : qsTr("目标在「今日任务」页设置。")
+                textFormat: Text.PlainText
                 color: Theme.inkSoft
                 font.pixelSize: Theme.fontXs
                 wrapMode: Text.WordWrap
@@ -143,6 +145,7 @@ GlassPanel {
 
                 contentItem: Text {
                     text: setGoalButton.text
+                    textFormat: Text.PlainText
                     color: Theme.accentInk
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Medium
@@ -173,6 +176,7 @@ GlassPanel {
 
                 contentItem: Text {
                     text: quickFillChip.text
+                    textFormat: Text.PlainText
                     leftPadding: Theme.space8
                     rightPadding: Theme.space8
                     color: Theme.accentInk
@@ -211,6 +215,7 @@ GlassPanel {
             Label {
                 objectName: "focusGoalClock"
                 text: root.clockText
+                textFormat: Text.PlainText
                 color: Theme.inkStrong
                 font.pixelSize: 28
                 font.family: Theme.fontFamilyClock
@@ -223,6 +228,7 @@ GlassPanel {
                 Label {
                     objectName: "focusGoalTarget"
                     text: qsTr("目标 %1").arg(root.targetText)
+                    textFormat: Text.PlainText
                     color: Theme.inkSoft
                     font.pixelSize: Theme.fontSm
                 }
@@ -240,6 +246,7 @@ GlassPanel {
 
                     contentItem: Text {
                         text: modifyGoalButton.text
+                        textFormat: Text.PlainText
                         color: Theme.accentInk
                         font.pixelSize: Theme.fontSm
                         horizontalAlignment: Text.AlignHCenter
@@ -291,6 +298,7 @@ GlassPanel {
                 Label {
                     objectName: "focusGoalPercent"
                     text: root.percent + "%"
+                    textFormat: Text.PlainText
                     color: root.goalReached ? Theme.focusBreakInk : Theme.accentInk
                     font.pixelSize: Theme.fontSm
                     font.family: Theme.fontFamilyData
@@ -323,6 +331,7 @@ GlassPanel {
             Layout.fillWidth: true
             visible: root.saveError.length > 0
             text: root.saveError
+            textFormat: Text.PlainText
             color: Theme.danger
             font.pixelSize: Theme.fontXs
             wrapMode: Text.WordWrap

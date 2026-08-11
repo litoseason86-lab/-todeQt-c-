@@ -328,6 +328,7 @@ Popup {
 
                 contentItem: Text {
                     text: cancelButton.text
+                    textFormat: Text.PlainText
                     color: Theme.ink
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
@@ -354,6 +355,7 @@ Popup {
 
                 contentItem: Text {
                     text: submitButton.text
+                    textFormat: Text.PlainText
                     color: Theme.accentFillInk
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium

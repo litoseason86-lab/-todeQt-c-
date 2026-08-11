@@ -74,6 +74,7 @@ Button {
         Text {
             Layout.fillWidth: true
             text: root.themeName
+            textFormat: Text.PlainText
             color: root.checked ? Theme.inkStrong : Theme.ink
             font.pixelSize: Theme.fontMd
             font.weight: root.checked ? Font.DemiBold : Font.Normal

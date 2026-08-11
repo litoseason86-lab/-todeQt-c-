@@ -198,6 +198,7 @@ FocusScope {
                 Text {
                     Layout.fillWidth: true
                     text: control.text
+                    textFormat: Text.PlainText
                     color: Theme.ink
                     font.pixelSize: Theme.fontLg
                 }
@@ -205,6 +206,7 @@ FocusScope {
                 Text {
                     Layout.fillWidth: true
                     text: control.caption
+                    textFormat: Text.PlainText
                     color: Theme.inkSoft
                     font.pixelSize: Theme.fontMd
                     elide: Text.ElideRight

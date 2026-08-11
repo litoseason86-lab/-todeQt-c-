@@ -156,6 +156,7 @@ FocusScope {
                 Layout.fillWidth: true
                 Layout.alignment: Qt.AlignVCenter
                 text: root.feedbackText
+                textFormat: Text.PlainText
                 color: root.feedbackIsError ? Theme.danger : Theme.inkSoft
                 font.pixelSize: Theme.fontMd
                 wrapMode: Text.WordWrap

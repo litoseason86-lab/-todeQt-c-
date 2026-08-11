@@ -82,6 +82,7 @@ Popup {
         Text {
             Layout.fillWidth: true
             text: root.achieved ? qsTr("目标达成") : qsTr("里程碑")
+            textFormat: Text.PlainText
             color: root.achieved ? Theme.accentFillInk : Theme.inkSoft
             font.pixelSize: Theme.fontSm
             font.weight: Font.DemiBold
@@ -92,6 +93,7 @@ Popup {
             objectName: "milestonePercentText"
             Layout.fillWidth: true
             text: root.percent + "%"
+            textFormat: Text.PlainText
             color: root.achieved ? Theme.accentFillInk : Theme.inkStrong
             font.pixelSize: root.achieved ? 60 : 52
             font.family: Theme.fontFamilyData
@@ -118,6 +120,7 @@ Popup {
                   : qsTr("%1 / %2 番茄，还剩 %3 个")
                     .arg(root.doneCount).arg(root.targetCount)
                     .arg(Math.max(0, root.targetCount - root.doneCount))
+            textFormat: Text.PlainText
             color: Theme.inkSoft
             font.pixelSize: Theme.fontMd
             horizontalAlignment: Text.AlignHCenter
@@ -163,6 +166,7 @@ Popup {
         }
         contentItem: Text {
             text: rewardButton.text
+            textFormat: Text.PlainText
             color: rewardButton.accentAction ? Theme.accentFillInk : Theme.ink
             font.pixelSize: Theme.fontMd
             font.weight: Font.Medium

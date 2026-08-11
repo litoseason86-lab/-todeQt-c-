@@ -18,6 +18,7 @@ ColumnLayout {
     Text {
         Layout.fillWidth: true
         text: root.title
+        textFormat: Text.PlainText
         color: Theme.inkStrong
         font.pixelSize: Theme.fontLg
         font.weight: Font.DemiBold
@@ -27,6 +28,7 @@ ColumnLayout {
         Layout.fillWidth: true
         visible: root.description.length > 0
         text: root.description
+        textFormat: Text.PlainText
         color: Theme.inkSoft
         font.pixelSize: Theme.fontMd
         wrapMode: Text.WordWrap

@@ -487,6 +487,7 @@ Item {
                 contentItem: Text {
                     objectName: "todayAddButtonLabel"
                     text: addButton.text
+                    textFormat: Text.PlainText
                     color: Theme.accentFillInk
                     font.pixelSize: Theme.fontLg
                     font.weight: Font.Medium
@@ -624,6 +625,7 @@ Item {
             Layout.fillWidth: true
             visible: root.loadError.length > 0
             text: root.loadError
+            textFormat: Text.PlainText
             color: Theme.danger
             font.pixelSize: Theme.fontMd
             wrapMode: Text.WordWrap

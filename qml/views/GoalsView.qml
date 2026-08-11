@@ -381,6 +381,7 @@ Item {
             // 否则这里始终占着一行行高 + 一档 spacing，把列表整体往下推。
             visible: root.errorText.length > 0
             text: root.errorText
+            textFormat: Text.PlainText
             color: Theme.danger
             font.pixelSize: Theme.fontSm
             wrapMode: Text.WordWrap
@@ -451,6 +452,7 @@ Item {
                     width: parent.width
                     text: root.filterMode === "active" ? qsTr("没有进行中的目标")
                                                        : qsTr("这里还没有目标")
+                    textFormat: Text.PlainText
                     color: Theme.inkStrong
                     font.pixelSize: Theme.fontXl
                     font.weight: Font.DemiBold
@@ -521,6 +523,7 @@ Item {
                     Text {
                         Layout.fillWidth: true
                         text: root.detailDateText()
+                        textFormat: Text.PlainText
                         color: Theme.inkSoft
                         font.pixelSize: Theme.fontMd
                         elide: Text.ElideRight
@@ -562,6 +565,7 @@ Item {
                             text: Duration.format(Number(root.detailGoal.doneMinutes || 0))
                                   + " / "
                                   + Duration.format(Number(root.detailGoal.targetMinutes || 0))
+                            textFormat: Text.PlainText
                             color: Theme.ink
                             font.pixelSize: Theme.fontMd
                         }
@@ -616,6 +620,7 @@ Item {
                         Item { Layout.fillWidth: true }
                         Text {
                             text: Number(root.detailGoal.percent || 0) + "%"
+                            textFormat: Text.PlainText
                             color: Theme.accentInk
                             font.pixelSize: Theme.fontLg
                             font.family: Theme.fontFamilyData
@@ -640,6 +645,7 @@ Item {
                         Layout.fillWidth: true
                         Layout.preferredHeight: text.length > 0 ? implicitHeight : 0
                         text: root.detailForecastText
+                        textFormat: Text.PlainText
                         color: Theme.accentInk
                         font.pixelSize: Theme.fontMd
                         horizontalAlignment: Text.AlignHCenter
@@ -669,6 +675,7 @@ Item {
 
                     Text {
                         text: qsTr("%1 年 %2 月投入").arg(root.detailYear).arg(root.detailMonth)
+                        textFormat: Text.PlainText
                         color: Theme.inkStrong
                         font.pixelSize: Theme.fontLg
                         font.weight: Font.DemiBold
@@ -750,6 +757,7 @@ Item {
             Text {
                 Layout.fillWidth: true
                 text: qsTr("删除“%1”？").arg(String(root.detailGoal.title || qsTr("该目标")))
+                textFormat: Text.PlainText
                 color: Theme.inkStrong
                 font.pixelSize: Theme.fontLg
                 font.weight: Font.DemiBold
@@ -760,6 +768,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: text.length > 0 ? implicitHeight : 0
                 text: root.deleteErrorText
+                textFormat: Text.PlainText
                 color: Theme.danger
                 font.pixelSize: Theme.fontSm
                 wrapMode: Text.WordWrap
@@ -814,6 +823,7 @@ Item {
         }
         contentItem: Text {
             text: actionButton.text
+            textFormat: Text.PlainText
             color: actionButton.dangerAction ? Theme.danger
                    : (actionButton.accentAction ? Theme.accentFillInk : Theme.ink)
             font.pixelSize: Theme.fontMd

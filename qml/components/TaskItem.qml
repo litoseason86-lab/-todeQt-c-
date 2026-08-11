@@ -448,6 +448,7 @@ Rectangle {
                     objectName: "taskTitleText"
                     Layout.fillWidth: true
                     text: root.taskTitle
+                    textFormat: Text.PlainText
                     font.pixelSize: root.compact ? Theme.fontMd : Theme.fontLg
                     font.weight: Font.Medium
                     lineHeight: root.compact ? 1.2 : 1.4
@@ -581,6 +582,7 @@ Rectangle {
                 Text {
                     Layout.fillWidth: true
                     text: root.categoryName
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontSm
                     color: Theme.inkSoft
                     elide: Text.ElideRight
@@ -630,6 +632,7 @@ Rectangle {
             contentItem: Text {
                 objectName: "focusButtonLabel"
                 text: focusButton.text
+                textFormat: Text.PlainText
                 // accentInk：浅/深主题下都可读的强调字色，配玻璃底而不是实心焦糖上的 surface 白字。
                 color: focusButton.enabled ? Theme.accentInk : Theme.inkMuted
                 font.pixelSize: Theme.fontMd
@@ -787,6 +790,7 @@ Rectangle {
             contentItem: Text {
                 objectName: "taskDeleteButtonLabel"
                 text: deleteButton.text
+                textFormat: Text.PlainText
                 color: Theme.dangerSoft
                 font.pixelSize: Theme.fontMd
                 font.weight: Font.Medium

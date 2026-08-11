@@ -81,6 +81,7 @@ FocusScope {
                 Text {
                     objectName: "settingsAboutVersion"
                     text: Qt.application.version
+                    textFormat: Text.PlainText
                     color: Theme.inkSoft
                     font.pixelSize: Theme.fontSm
                     Accessible.name: "版本 " + text

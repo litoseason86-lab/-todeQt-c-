@@ -51,6 +51,7 @@ GlassPanel {
 
             Text {
                 text: root.hasGoal ? root.primaryGoal.name : "+ 添加目标倒计时"
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontLg
                 font.weight: Font.Medium
                 color: Theme.ink
@@ -60,6 +61,7 @@ GlassPanel {
 
             Text {
                 text: root.hasGoal ? Qt.formatDate(root.primaryGoal.targetDate, "yyyy年MM月dd日") : "把最重要的日期固定在今天任务上方。"
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontXs
                 color: Theme.inkSoft
                 elide: Text.ElideRight
@@ -70,6 +72,7 @@ GlassPanel {
         Text {
             visible: root.hasGoal
             text: root.dayText()
+            textFormat: Text.PlainText
             font.pixelSize: Theme.fontXxl
             font.weight: Font.Bold
             color: Theme.accent

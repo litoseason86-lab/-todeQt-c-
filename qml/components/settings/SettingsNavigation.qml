@@ -139,6 +139,7 @@ Control {
                     Text {
                         Layout.fillWidth: true
                         text: categoryButton.text
+                        textFormat: Text.PlainText
                         color: categoryButton.checked ? Theme.accentFillInk : Theme.ink
                         font.pixelSize: Theme.fontLg
                         font.weight: categoryButton.checked ? Font.DemiBold : Font.Normal

@@ -283,6 +283,7 @@ Rectangle {
                     anchors.centerIn: parent
                     visible: item.iconName.length === 0
                     text: item.marker
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Bold
                     color: item.isActive ? Theme.accentFillInk : Theme.inkSoft
@@ -307,6 +308,7 @@ Rectangle {
             Text {
                 Layout.fillWidth: true
                 text: item.text
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontLg
                 font.weight: item.isActive ? Font.Medium : Font.Normal
                 color: item.isActive ? Theme.ink : Theme.inkSoft

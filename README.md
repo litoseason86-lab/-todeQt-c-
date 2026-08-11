@@ -141,6 +141,15 @@ plans/                 只有 README.md：执行状态索引与历次审计记�
   各弹窗再写一份是为了单独实例化时（离屏走查、QML 测试）也准确。
   `tests/qml/tst_contrast_audit.qml` 会遍历八个视图 × 明暗两套主题，按 WCAG 门槛
   实算每个文字项的对比度，零例外。
+- **每个非字面量的 `text:` 绑定都必须显式声明 `textFormat`**。Qt 的默认值是
+  `Text.AutoText`，它用 `mightBeRichText()` 猜——用户写的任务标题里带 `<b>` 就会被
+  当富文本解析（实测 AutoText 的 `contentWidth` 与 RichText 一致、与 PlainText 不同）。
+  这也是 CVE-2025-12385 的官方缓解措施。判据刻意不区分"是不是用户数据"——
+  那种判断已经错过一次；规则是机械的，由 ctest 的 `QmlTextFormatGate` 强制。
+- **备份里出现表和索引以外的数据库对象一律拒绝恢复**。恢复把外部文件整个复制成主库，
+  一个 Trigger 就能随备份永久活进用户库，之后每次增删改任务都静默执行，
+  而恢复前快照发现不了这种延迟破坏。本应用自己从不创建 Trigger / View / 虚拟表，
+  所以判据可以很硬。
 - **恢复备份只写回自己拥有的键**。备份文件是外部输入（可能来自别的版本、被手工改过、
   或者伪造）。过滤按 `AppSettings::ownedSettingGroups()` 的**顶层分组**做，不是逐键列举——
   快捷键覆盖是 `shortcuts/<actionId>` 这样的动态键，扁平白名单会把用户改过的键位全丢掉，

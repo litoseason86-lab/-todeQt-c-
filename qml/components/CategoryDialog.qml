@@ -262,6 +262,7 @@ Popup {
 
                         contentItem: Text {
                             text: addButton.text
+                            textFormat: Text.PlainText
                             color: Theme.accentFillInk
                             font.pixelSize: Theme.fontMd
                             horizontalAlignment: Text.AlignHCenter
@@ -278,6 +279,7 @@ Popup {
                 Layout.topMargin: Theme.space12
                 visible: root.errorText.length > 0
                 text: root.errorText
+                textFormat: Text.PlainText
                 color: Theme.danger
                 font.pixelSize: Theme.fontSm
                 wrapMode: Text.WordWrap
@@ -331,6 +333,7 @@ Popup {
                                 Text {
                                     Layout.fillWidth: true
                                     text: categoryRow.modelData.name || ""
+                                    textFormat: Text.PlainText
                                     font.pixelSize: Theme.fontLg
                                     font.bold: true
                                     color: Theme.ink
@@ -340,6 +343,7 @@ Popup {
                                 Text {
                                     Layout.fillWidth: true
                                     text: categoryRow.modelData.isPreset ? "预设科目" : "自定义科目"
+                                    textFormat: Text.PlainText
                                     font.pixelSize: Theme.fontXs
                                     color: Theme.inkSoft
                                     elide: Text.ElideRight
@@ -364,6 +368,7 @@ Popup {
 
                                 contentItem: Text {
                                     text: editButton.text
+                                    textFormat: Text.PlainText
                                     color: Theme.ink
                                     font.pixelSize: Theme.fontSm
                                     horizontalAlignment: Text.AlignHCenter
@@ -389,6 +394,7 @@ Popup {
 
                                 contentItem: Text {
                                     text: deleteButton.text
+                                    textFormat: Text.PlainText
                                     color: Theme.dangerSoft
                                     font.pixelSize: Theme.fontSm
                                     horizontalAlignment: Text.AlignHCenter
@@ -426,6 +432,7 @@ Popup {
 
                     contentItem: Text {
                         text: closeButton.text
+                        textFormat: Text.PlainText
                         color: Theme.ink
                         font.pixelSize: Theme.fontMd
                         horizontalAlignment: Text.AlignHCenter
@@ -453,6 +460,7 @@ Popup {
                 Text {
                     Layout.fillWidth: true
                     text: root.editingCategory ? "编辑科目" : "添加新科目"
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontXl
                     font.bold: true
                     color: Theme.ink
@@ -511,6 +519,7 @@ Popup {
 
                         contentItem: Text {
                             text: cancelAddButton.text
+                            textFormat: Text.PlainText
                             color: Theme.ink
                             font.pixelSize: Theme.fontMd
                             horizontalAlignment: Text.AlignHCenter
@@ -535,6 +544,7 @@ Popup {
 
                         contentItem: Text {
                             text: saveCategoryButton.text
+                            textFormat: Text.PlainText
                             color: saveCategoryButton.enabled ? Theme.accentFillInk : Theme.inkSoft
                             font.pixelSize: Theme.fontMd
                             horizontalAlignment: Text.AlignHCenter

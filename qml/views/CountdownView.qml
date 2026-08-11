@@ -131,6 +131,7 @@ Item {
 
                 contentItem: Text {
                     text: addButton.text
+                    textFormat: Text.PlainText
                     color: Theme.accentFillInk
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
@@ -176,6 +177,7 @@ Item {
                     objectName: "countdownErrorText"
                     Layout.fillWidth: true
                     text: root.loadError
+                    textFormat: Text.PlainText
                     color: Theme.ink
                     font.pixelSize: Theme.fontMd
                     wrapMode: Text.WordWrap
@@ -200,6 +202,7 @@ Item {
 
                     contentItem: Text {
                         text: bannerRetryButton.text
+                        textFormat: Text.PlainText
                         color: Theme.accentFillInk
                         font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
@@ -230,6 +233,7 @@ Item {
                 Text {
                     Layout.fillWidth: true
                     text: root.primaryGoal() ? root.primaryGoal().name : ""
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontXl
                     font.weight: Font.Medium
                     color: Theme.inkStrong
@@ -246,6 +250,7 @@ Item {
 
                         Layout.alignment: Qt.AlignBaseline
                         text: root.primaryGoal() ? Math.abs(Number(root.primaryGoal().daysRemaining || 0)) : "0"
+                        textFormat: Text.PlainText
                         font.pixelSize: Theme.fontDisplay
                         font.family: Theme.fontFamilyData
                         font.weight: Font.Bold
@@ -263,6 +268,7 @@ Item {
                 Text {
                     Layout.fillWidth: true
                     text: root.heroDateText()
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
                     color: Theme.inkSoft
                     horizontalAlignment: Text.AlignHCenter
@@ -457,6 +463,7 @@ Item {
                         objectName: "countdownLoadErrorText"
                         Layout.fillWidth: true
                         text: root.loadError
+                        textFormat: Text.PlainText
                         color: Theme.ink
                         font.pixelSize: Theme.fontMd
                         wrapMode: Text.WordWrap
@@ -483,6 +490,7 @@ Item {
 
                         contentItem: Text {
                             text: errorRetryButton.text
+                            textFormat: Text.PlainText
                             color: Theme.accentFillInk
                             font.pixelSize: Theme.fontMd
                             font.weight: Font.Medium

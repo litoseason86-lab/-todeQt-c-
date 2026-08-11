@@ -165,6 +165,19 @@ set_target_properties(PomodoroTodo PROPERTIES
 # 避免非正式构建悄悄覆盖固定启动入口。
 option(POMODORO_TODO_DEPLOY_LOCAL "构建后自动把应用同步到本机固定启动入口" ON)
 
+# 会被同步到 /Applications 的构建，不指定类型就默认 RelWithDebInfo。
+#
+# 空的 CMAKE_BUILD_TYPE 既没有 -O 也没有 -DNDEBUG。实测这个应用的耗时由 SQLite I/O
+# 和 Qt 框架（本就已优化）主导，测试套件在两种配置下跑不出差别，所以这里**不是**
+# 在追性能；理由是长期使用的那份不该是未指定类型的构建：断言语义、体积、
+# 以及"日常入口和临时试验构建用同一档"这件事本身都不对。
+# 显式传了 CMAKE_BUILD_TYPE 的（包括 Debug）一律尊重，不覆盖。
+if(POMODORO_TODO_DEPLOY_LOCAL AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING
+        "构建类型（部署构建默认 RelWithDebInfo）" FORCE)
+    message(STATUS "部署构建未指定 CMAKE_BUILD_TYPE，已默认为 RelWithDebInfo")
+endif()
+
 if(APPLE AND POMODORO_TODO_DEPLOY_LOCAL)
     set(POMODORO_TODO_LOCAL_APP_PATH "/Applications/番茄Todo.app" CACHE PATH
         "本机固定启动入口，构建后会用最新包覆盖这里"
@@ -669,6 +682,22 @@ if(POMODORO_TODO_QMLLINT)
 else()
     # 找不到就跳过而不是配置失败：qmllint 随 Qt SDK 提供，但不该让缺它挡住构建。
     message(WARNING "未找到 qmllint，跳过 QML 静态检查门禁")
+endif()
+
+# 文本格式门禁：非字面量的 text 绑定必须显式声明 textFormat。
+# Qt 的默认值是 AutoText，会用 mightBeRichText() 猜——用户写的任务标题里带
+# "<b>" 就会被当富文本解析。qmllint 不管这件事，所以单独一条。
+# 用 Python 而不是再写一个 C++ 目标：判据是纯文本模式匹配，不需要跑起应用。
+find_package(Python3 COMPONENTS Interpreter)
+if(Python3_FOUND)
+    add_test(NAME QmlTextFormatGate
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml_text_format_gate.py
+                     ${CMAKE_CURRENT_SOURCE_DIR}/qml)
+    set_tests_properties(QmlTextFormatGate PROPERTIES TIMEOUT 60)
+    message(STATUS "QML 文本格式门禁已启用")
+else()
+    message(WARNING "未找到 Python3，跳过 QML 文本格式门禁")
 endif()
 
 add_test(

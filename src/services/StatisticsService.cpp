@@ -630,6 +630,12 @@ QVariantMap StatisticsService::getMonthStats() const
 
 QVariantMap StatisticsService::getMonthComparison(int year, int month) const
 {
+    return getMonthComparison(year, month, QVariantMap());
+}
+
+QVariantMap StatisticsService::getMonthComparison(int year, int month,
+                                                  const QVariantMap& precomputedCurrent) const
+{
     if (!isValidStatsYearMonth(year, month, QStringLiteral("Failed to get month comparison:"))) {
         QVariantMap result;
         result.insert(QStringLiteral("hasData"), false);
@@ -644,7 +650,8 @@ QVariantMap StatisticsService::getMonthComparison(int year, int month) const
         --previousYear;
     }
 
-    const QVariantMap currentStats = getMonthStats(year, month);
+    const QVariantMap currentStats = precomputedCurrent.isEmpty()
+        ? getMonthStats(year, month) : precomputedCurrent;
     const QVariantMap previousStats = getMonthStats(previousYear, previousMonth);
 
     QVariantMap result;

@@ -95,6 +95,7 @@ Rectangle {
             Layout.fillWidth: true
             visible: root.title.length > 0
             text: root.title
+            textFormat: Text.PlainText
             font.pixelSize: Theme.fontLg
             font.bold: true
             color: Theme.ink
@@ -226,6 +227,7 @@ Rectangle {
                                     Text {
                                         Layout.fillWidth: true
                                         text: legendRow.modelData.label
+                                        textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontMd
                                         color: Theme.ink
                                         elide: Text.ElideRight
@@ -233,6 +235,7 @@ Rectangle {
 
                                     Text {
                                         text: root.percentage(legendRow.modelData.value)
+                                        textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontSm
                                         color: Theme.inkSoft
                                     }
@@ -243,6 +246,7 @@ Rectangle {
                                     text: legendRow.modelData.displayValue.length > 0
                                           ? legendRow.modelData.displayValue
                                           : String(legendRow.modelData.value)
+                                    textFormat: Text.PlainText
                                     font.pixelSize: Theme.fontXs
                                     color: Theme.inkSoft
                                     elide: Text.ElideRight
@@ -278,6 +282,7 @@ Rectangle {
                 width: Math.min(parent.width - 24, 260)
                 visible: root.showEmptyState
                 text: root.emptyText
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontMd
                 color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter

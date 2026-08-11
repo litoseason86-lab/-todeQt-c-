@@ -71,6 +71,7 @@ Rectangle {
 
         contentItem: Text {
             text: actionButton.text
+            textFormat: Text.PlainText
             color: actionButton.enabled ? Theme.inkSoft : Theme.inkMuted
             font.pixelSize: Theme.fontMd
             horizontalAlignment: Text.AlignHCenter
@@ -100,6 +101,7 @@ Rectangle {
 
             Text {
                 text: root.goalName
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontLg
                 font.weight: Font.Medium
                 color: Theme.ink
@@ -109,6 +111,7 @@ Rectangle {
 
             Text {
                 text: Qt.formatDate(root.targetDate, "yyyy年MM月dd日")
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontXs
                 color: Theme.inkSoft
                 elide: Text.ElideRight
@@ -127,6 +130,7 @@ Rectangle {
         Text {
             Layout.alignment: Qt.AlignBaseline
             text: Math.abs(Number(root.daysRemaining || 0))
+            textFormat: Text.PlainText
             font.pixelSize: Theme.fontXxl
             font.family: Theme.fontFamilyData
             font.weight: Font.Bold

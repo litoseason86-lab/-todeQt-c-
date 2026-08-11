@@ -672,6 +672,7 @@ Item {
                 Text {
                     Layout.fillWidth: true
                     text: root.taskTitle()
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontXl
                     font.bold: true
                     color: Theme.ink
@@ -685,6 +686,7 @@ Item {
                     text: root.state === "free"
                           ? (root.timerBool("hasActiveSession") ? qsTr("当前任务") : qsTr("自由专注待机"))
                           : root.pomodoroStageText()
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
                     color: Theme.inkSoft
                     horizontalAlignment: Text.AlignHCenter
@@ -713,6 +715,7 @@ Item {
                 Text {
                     anchors.centerIn: parent
                     text: root.state === "workDone" ? "专注完成" : "休息结束"
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontLg
                     font.bold: true
                     color: Theme.inkStrong
@@ -789,6 +792,7 @@ Item {
                         objectName: "ringCaptionText"
                         Layout.alignment: Qt.AlignHCenter
                         text: root.ringCaptionText()
+                        textFormat: Text.PlainText
                         font.pixelSize: Theme.fontMd
                         color: Theme.inkSoft
                         horizontalAlignment: Text.AlignHCenter
@@ -800,6 +804,7 @@ Item {
                 Layout.fillWidth: true
                 visible: root.state === "free"
                 text: root.runningText()
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontLg
                 color: Theme.inkSoft
                 horizontalAlignment: Text.AlignHCenter
@@ -985,6 +990,7 @@ Item {
                 Layout.fillWidth: true
                 visible: root.errorText.length > 0
                 text: root.errorText
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontMd
                 color: Theme.danger
                 horizontalAlignment: Text.AlignHCenter
@@ -1046,6 +1052,7 @@ Item {
 
                     contentItem: Text {
                         text: pauseButton.text
+                        textFormat: Text.PlainText
                         color: pauseButton.enabled ? Theme.surface : Theme.inkMuted
                         font.pixelSize: Theme.fontLg
                         horizontalAlignment: Text.AlignHCenter
@@ -1070,6 +1077,7 @@ Item {
 
                     contentItem: Text {
                         text: freeStopButton.text
+                        textFormat: Text.PlainText
                         color: freeStopButton.enabled ? Theme.surface : Theme.inkMuted
                         font.pixelSize: Theme.fontLg
                         horizontalAlignment: Text.AlignHCenter
@@ -1171,6 +1179,7 @@ Item {
 
                     contentItem: Text {
                         text: pomodoroStopButton.text
+                        textFormat: Text.PlainText
                         color: Theme.surface
                         font.pixelSize: Theme.fontLg
                         horizontalAlignment: Text.AlignHCenter

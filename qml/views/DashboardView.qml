@@ -484,6 +484,7 @@ Item {
                 Layout.fillWidth: true
                 visible: root.loadError.length > 0
                 text: root.loadError
+                textFormat: Text.PlainText
                 color: Theme.danger
                 font.pixelSize: Theme.fontMd
                 wrapMode: Text.WordWrap
@@ -630,6 +631,7 @@ Item {
                                   : (root.doneFilter
                                      ? "今天还没有已完成的任务。"
                                      : "这个筛选下没有任务。")
+                            textFormat: Text.PlainText
                             font.pixelSize: Theme.fontMd
                             color: Theme.inkSoft
                             horizontalAlignment: Text.AlignHCenter

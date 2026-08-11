@@ -318,6 +318,7 @@ Popup {
 
                     contentItem: Text {
                         text: closeButton.text
+                        textFormat: Text.PlainText
                         color: Theme.ink
                         font.pixelSize: Theme.fontMd
                         horizontalAlignment: Text.AlignHCenter
@@ -335,6 +336,7 @@ Popup {
             text: root.editingRoutine
                 ? "正在编辑例行任务；保存后会影响之后自动生成的任务。"
                 : "把每天都要做的任务加进来，以后自动出现在今日清单。"
+            textFormat: Text.PlainText
             color: Theme.inkSoft
             font.pixelSize: Theme.fontMd
             wrapMode: Text.WordWrap
@@ -428,6 +430,7 @@ Popup {
                     Text {
                         Layout.fillWidth: true
                         text: routineCategoryCombo.displayText
+                        textFormat: Text.PlainText
                         color: Theme.ink
                         font.pixelSize: Theme.fontMd
                         verticalAlignment: Text.AlignVCenter
@@ -456,6 +459,7 @@ Popup {
                         Text {
                             Layout.fillWidth: true
                             text: categoryDelegate.modelData.name || ""
+                            textFormat: Text.PlainText
                             color: Theme.ink
                             font.pixelSize: Theme.fontMd
                             elide: Text.ElideRight
@@ -487,6 +491,7 @@ Popup {
 
                 contentItem: Text {
                     text: routineAddButton.text
+                    textFormat: Text.PlainText
                     // 淡罩底上不能用近白的 surface 当字色，会直接消失。
                     color: Theme.accentFillInk
                     font.pixelSize: Theme.fontMd
@@ -511,6 +516,7 @@ Popup {
                 text: root.errorText.length > 0
                     ? root.errorText
                     : qsTr("保存后仅影响后续自动生成的任务。")
+                textFormat: Text.PlainText
                 color: root.errorText.length > 0 ? Theme.danger : Theme.inkSoft
                 font.pixelSize: Theme.fontSm
                 wrapMode: Text.WordWrap
@@ -540,6 +546,7 @@ Popup {
 
                 contentItem: Text {
                     text: routineCancelEditButton.text
+                    textFormat: Text.PlainText
                     color: Theme.ink
                     font.pixelSize: Theme.fontSm
                     horizontalAlignment: Text.AlignHCenter
@@ -606,6 +613,7 @@ Popup {
                             Text {
                                 Layout.fillWidth: true
                                 text: routineRow.modelData.title || ""
+                                textFormat: Text.PlainText
                                 color: routineRow.modelData.active === false ? Theme.inkMuted : Theme.ink
                                 font.pixelSize: Theme.fontLg
                                 elide: Text.ElideRight
@@ -614,6 +622,7 @@ Popup {
                             Text {
                                 Layout.fillWidth: true
                                 text: routineRow.modelData.categoryName && routineRow.modelData.categoryName.length > 0 ? routineRow.modelData.categoryName : "不设置科目"
+                                textFormat: Text.PlainText
                                 color: Theme.inkSoft
                                 font.pixelSize: Theme.fontSm
                                 elide: Text.ElideRight
@@ -664,6 +673,7 @@ Popup {
 
                             contentItem: Text {
                                 text: activeSwitch.text
+                                textFormat: Text.PlainText
                                 color: activeSwitch.checked ? Theme.ink : Theme.inkSoft
                                 font.pixelSize: Theme.fontSm
                                 verticalAlignment: Text.AlignVCenter
@@ -691,6 +701,7 @@ Popup {
 
                             contentItem: Text {
                                 text: editButton.text
+                                textFormat: Text.PlainText
                                 color: Theme.accentFillInk
                                 font.pixelSize: Theme.fontMd
                                 horizontalAlignment: Text.AlignHCenter
@@ -715,6 +726,7 @@ Popup {
 
                             contentItem: Text {
                                 text: deleteButton.text
+                                textFormat: Text.PlainText
                                 color: Theme.dangerSoft
                                 font.pixelSize: Theme.fontMd
                                 horizontalAlignment: Text.AlignHCenter

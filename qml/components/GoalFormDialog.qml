@@ -249,6 +249,7 @@ Popup {
                 Text {
                     Layout.fillWidth: true
                     text: root.editing ? qsTr("编辑目标") : qsTr("新建目标")
+                    textFormat: Text.PlainText
                     color: Theme.inkStrong
                     font.pixelSize: Theme.fontXl
                     font.weight: Font.Bold
@@ -402,6 +403,7 @@ Popup {
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
                 text: root.errorText
+                textFormat: Text.PlainText
                 color: Theme.danger
                 font.pixelSize: Theme.fontSm
                 wrapMode: Text.WordWrap
@@ -439,6 +441,7 @@ Popup {
         }
         contentItem: Text {
             text: formButton.text
+            textFormat: Text.PlainText
             color: formButton.accentAction ? Theme.accentFillInk : Theme.ink
             font.pixelSize: Theme.fontMd
             font.weight: Font.Medium

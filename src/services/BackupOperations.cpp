@@ -461,6 +461,40 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
                 reason = QStringLiteral("该备份由更高版本创建，当前版本无法恢复");
             }
 
+            // 备份是数据，不是可信的数据库程序。
+            //
+            // 恢复把外部文件整个复制成主库，此前只校验完整性、必要表、版本和条数——
+            // 一个 Trigger 就能随备份永久活进用户库里，之后每次增删改任务都静默执行，
+            // 而恢复前快照根本发现不了这种延迟触发的破坏。View 与虚拟表同理
+            // （虚拟表还能把模块名当作加载路径）。
+            //
+            // 本应用自己从不创建 Trigger / View / 虚拟表，所以判据可以很硬：
+            // sqlite_master 里出现表和索引以外的任何对象，一律拒绝恢复。
+            if (reason.isEmpty()) {
+                QSqlQuery objects(database);
+                if (!objects.exec(QStringLiteral(
+                        "SELECT type, name FROM sqlite_master "
+                        "WHERE type NOT IN ('table', 'index')"))) {
+                    reason = QStringLiteral("读取备份结构失败");
+                } else if (objects.next()) {
+                    reason = QStringLiteral("备份包含本应用不会创建的数据库对象（%1 %2），"
+                                            "出于安全考虑拒绝恢复")
+                                 .arg(objects.value(0).toString(), objects.value(1).toString());
+                }
+            }
+            // 虚拟表在 sqlite_master 里 type 也是 'table'，靠 SQL 文本识别。
+            if (reason.isEmpty()) {
+                QSqlQuery virtualTables(database);
+                if (!virtualTables.exec(QStringLiteral(
+                        "SELECT name FROM sqlite_master WHERE type = 'table' "
+                        "AND sql LIKE 'CREATE VIRTUAL%'"))) {
+                    reason = QStringLiteral("读取备份结构失败");
+                } else if (virtualTables.next()) {
+                    reason = QStringLiteral("备份包含虚拟表（%1），出于安全考虑拒绝恢复")
+                                 .arg(virtualTables.value(0).toString());
+                }
+            }
+
             if (reason.isEmpty()) {
                 for (auto it = metadata.constBegin(); it != metadata.constEnd(); ++it) {
                     result.insert(it.key(), it.value());

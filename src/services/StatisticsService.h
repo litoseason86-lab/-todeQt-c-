@@ -31,6 +31,10 @@ public:
     Q_INVOKABLE QVariantMap getMonthStats(int year, int month) const;
     Q_INVOKABLE QVariantMap getMonthStats() const;
     Q_INVOKABLE QVariantMap getMonthComparison(int year, int month) const;
+    // 调用方刚算过当月时用这个重载：界面总是先 getMonthStats 再 getMonthComparison，
+    // 无参版会把同一个月再整算一遍，占一次月刷新约四分之一的时间。
+    Q_INVOKABLE QVariantMap getMonthComparison(int year, int month,
+                                               const QVariantMap& precomputedCurrent) const;
     Q_INVOKABLE int getEffectiveDays(const QDate& startDate, const QDate& endDate) const;
     Q_INVOKABLE int getFocusSessionCount(const QDate& startDate, const QDate& endDate) const;
     Q_INVOKABLE int getValidPomodoroCount(const QDate& startDate, const QDate& endDate) const;

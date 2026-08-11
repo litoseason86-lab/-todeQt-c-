@@ -110,6 +110,7 @@ Button {
               : (root.sequenceDisplay.length > 0
                  ? root.sequenceDisplay
                  : (root.hasDefault ? "已停用" : "未设置"))
+        textFormat: Text.PlainText
         color: root.recording ? Theme.accentInk
                               : (root.sequenceDisplay.length > 0 ? Theme.ink : Theme.inkSoft)
         font.pixelSize: Theme.fontMd

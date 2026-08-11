@@ -44,6 +44,7 @@ Item {
             Text {
                 Layout.fillWidth: true
                 text: root.title
+                textFormat: Text.PlainText
                 color: Theme.ink
                 font.pixelSize: Theme.fontLg
                 elide: Text.ElideRight
@@ -54,6 +55,7 @@ Item {
                 Layout.fillWidth: true
                 visible: root.statusText.length > 0
                 text: root.statusText
+                textFormat: Text.PlainText
                 color: root.unregistered ? Theme.danger : Theme.inkSoft
                 font.pixelSize: Theme.fontSm
                 elide: Text.ElideRight

@@ -87,6 +87,7 @@ Rectangle {
         Text {
             Layout.fillWidth: true
             text: root.title
+            textFormat: Text.PlainText
             font.pixelSize: Theme.fontMd
             font.weight: Font.Bold
             color: Theme.inkSoft
@@ -109,6 +110,7 @@ Rectangle {
                         root.width - Theme.space12 * 2
                         - (unitText.visible ? unitText.implicitWidth + Theme.space4 : 0), 1)
                 text: root.value
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontXxl
                 font.family: Theme.fontFamilyData
                 font.weight: Font.Bold
@@ -151,6 +153,7 @@ Rectangle {
 
                 visible: root.unit.length > 0
                 text: root.unit
+                textFormat: Text.PlainText
                 font.pixelSize: Theme.fontMd
                 color: Theme.inkSoft
                 verticalAlignment: Text.AlignVCenter
@@ -167,6 +170,7 @@ Rectangle {
             Layout.fillWidth: true
             visible: root.subtitle.length > 0
             text: root.subtitle
+            textFormat: Text.PlainText
             font.pixelSize: Theme.fontSm
             color: Theme.inkSoft
             elide: Text.ElideRight
@@ -178,6 +182,7 @@ Rectangle {
             Layout.fillWidth: true
             visible: root.showComparison && root.comparisonText.length > 0
             text: root.comparisonText
+            textFormat: Text.PlainText
             font.pixelSize: Theme.fontMd
             color: {
                 if (root.comparisonTrend > 0) {

@@ -6,6 +6,7 @@
 #include <QSqlError>
 #include <QSignalSpy>
 #include <QSqlQuery>
+#include <QElapsedTimer>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QTimeZone>
@@ -845,6 +846,14 @@ void ServiceTests::setFocusElapsedSeconds(FocusTimer* timer, int seconds)
 
 void ServiceTests::init()
 {
+    // AppSettings 是进程单例，落在系统偏好目录里的一份 plist——它跨测试运行持久存在。
+    // 不清干净的话，用例的结果会取决于上一次运行留下的值：比如
+    // logicalDayServiceEmitsChangedOnDayStartHourChange 依赖"把 4 改成 5 会发信号"，
+    // 而写盘一旦失败（受限环境里很常见），值会停在上次的 5，改成 5 就不发信号了。
+    // 有人报过这条稳定失败而本机一直是绿的，差别就在这里。
+    AppSettings::instance()->clearAllShortcutOverrides();
+    AppSettings::instance()->setDayStartHour(4);
+
     m_tempDir = new QTemporaryDir();
     QVERIFY(m_tempDir->isValid());
     QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("test.sqlite")));
@@ -1518,6 +1527,10 @@ void ServiceTests::logicalDayServiceSchedulesTimerOnConstruction()
 void ServiceTests::logicalDayServiceEmitsChangedOnDayStartHourChange()
 {
     AppSettings::instance()->setDayStartHour(4);
+    // 先确认起点真的写进去了。写盘失败时值会停在别处，后面"改成 5"就可能是空操作，
+    // 用例会以"没收到信号"的形式失败，把一个环境问题伪装成产品缺陷。
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 4);
+
     LogicalDayService service;
     QSignalSpy spy(&service, &LogicalDayService::changed);
 
@@ -5656,4 +5669,5 @@ void ServiceTests::ownershipFilterRejectsForeignKeysAndKeepsShortcutOverrides()
     QVERIFY(AppSettings::isOwnedSettingKey(QStringLiteral("shortcuts/focus.start")));
     QVERIFY(AppSettings::isOwnedSettingKey(QStringLiteral("shortcuts/任意未来动作")));
 }
+
 

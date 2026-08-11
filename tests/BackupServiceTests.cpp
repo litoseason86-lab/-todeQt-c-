@@ -138,6 +138,7 @@ private slots:
     void restoreCreatesPreRestoreSnapshot();
     void restoreDropsForeignSettingKeysAndKeepsShortcutOverrides();
     void restoreRefusesOversizedSettingValue();
+    void restoreRefusesBackupCarryingTriggers();
     void repeatedRestoresCapPreRestoreSnapshots();
     void restoreMatchesTaskAndSessionCounts();
     void restorePreservesCountdownGoals();
@@ -771,5 +772,33 @@ void BackupServiceTests::restoreRefusesOversizedSettingValue()
     QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
     QVERIFY2(BackupService::instance()->lastError().contains(QStringLiteral("过大")),
              qPrintable(BackupService::instance()->lastError()));
+}
+
+void BackupServiceTests::restoreRefusesBackupCarryingTriggers()
+{
+    QVERIFY(insertTask(QStringLiteral("原始任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    // 往备份里植入一个 Trigger。恢复是把外部文件整个复制成主库，
+    // 如果不检查 sqlite_master，这个 Trigger 会永久活在用户库里，
+    // 之后每次新增任务都静默执行——恢复前快照也发现不了这种延迟破坏。
+    {
+        const QString connection = QStringLiteral("TriggerInject");
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+            db.setDatabaseName(backupFile());
+            QVERIFY(db.open());
+            QSqlQuery q(db);
+            QVERIFY2(q.exec(QStringLiteral(
+                "CREATE TRIGGER evil AFTER INSERT ON tasks BEGIN "
+                "DELETE FROM tasks WHERE id <> NEW.id; END")), qPrintable(q.lastError().text()));
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(connection);
+    }
+
+    // 期望：拒绝恢复。备份是数据，不是可信的数据库程序。
+    QVERIFY2(!BackupService::instance()->restoreBackup(backupFile()),
+             "带 Trigger 的备份被接受了");
 }
 

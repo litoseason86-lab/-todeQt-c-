@@ -304,6 +304,7 @@ Item {
 
                 Text {
                     text: root.currentYear + "年" + root.currentMonth + "月"
+                    textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
                     color: Theme.inkSoft
                 }
@@ -343,6 +344,7 @@ Item {
                     }
                     contentItem: Text {
                         text: previousMonthButton.text
+                        textFormat: Text.PlainText
                         color: Theme.ink
                         font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
@@ -387,6 +389,7 @@ Item {
                     }
                     contentItem: Text {
                         text: currentMonthButton.text
+                        textFormat: Text.PlainText
                         color: Theme.ink
                         font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
@@ -428,6 +431,7 @@ Item {
                     }
                     contentItem: Text {
                         text: nextMonthButton.text
+                        textFormat: Text.PlainText
                         color: Theme.ink
                         font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
@@ -500,6 +504,7 @@ Item {
 
                     contentItem: Text {
                         text: cleanupInvalidButton.text
+                        textFormat: Text.PlainText
                         color: Theme.inkSoft
                         font.pixelSize: Theme.fontMd
                         font.weight: Font.Medium
@@ -533,6 +538,7 @@ Item {
                 Layout.rightMargin: Theme.space24
                 visible: root.loadError.length > 0
                 text: root.loadError
+                textFormat: Text.PlainText
                 color: Theme.danger
                 font.pixelSize: Theme.fontMd
                 wrapMode: Text.WordWrap
@@ -592,6 +598,7 @@ Item {
 
                                     Layout.fillWidth: true
                                     text: weekdayHeader.modelData
+                                    textFormat: Text.PlainText
                                     font.pixelSize: Theme.fontSm
                                     font.weight: Font.Medium
                                     color: Theme.inkSoft
@@ -676,6 +683,7 @@ Item {
                                         Text {
                                             Layout.fillWidth: true
                                             text: calendarCell.dayNumber > 0 ? String(calendarCell.dayNumber) : ""
+                                            textFormat: Text.PlainText
                                             font.pixelSize: Theme.fontMd
                                             font.weight: calendarCell.dayNumber === root.selectedDay ? Font.Bold : Font.Normal
                                             color: Theme.ink
@@ -686,6 +694,7 @@ Item {
                                             objectName: calendarCell.dayNumber > 0 ? "monthDayDuration-" + calendarCell.dayNumber : "monthDayDuration-empty-" + calendarCell.index
                                             visible: calendarCell.dayNumber > 0 && calendarCell.dayDuration > 0
                                             text: root.formatDuration(calendarCell.dayDuration)
+                                            textFormat: Text.PlainText
                                             font.pixelSize: Theme.fontXs
                                             font.weight: Font.Medium
                                             // 今天那一格底是 accentFill 暖罩，accentInk 压上去只有

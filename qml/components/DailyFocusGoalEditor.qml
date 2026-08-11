@@ -92,6 +92,7 @@ FocusScope {
             Layout.fillWidth: true
             visible: root.horizontal || root.validationError.length > 0
             text: root.validationError
+            textFormat: Text.PlainText
             color: Theme.danger
             font.pixelSize: Theme.fontXs
             wrapMode: root.horizontal ? Text.NoWrap : Text.WordWrap
@@ -144,6 +145,7 @@ FocusScope {
 
                 contentItem: Text {
                     text: saveButton.text
+                    textFormat: Text.PlainText
                     color: Theme.accentFillInk
                     font.pixelSize: Theme.fontSm
                     font.weight: Font.Medium

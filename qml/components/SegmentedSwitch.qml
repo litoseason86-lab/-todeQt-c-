@@ -161,6 +161,7 @@ FocusScope {
 
                     contentItem: Text {
                         text: segment.modelData
+                        textFormat: Text.PlainText
                         font.pixelSize: Theme.fontMd
                         // 选中态不改字重：macOS 的分段控件靠胶囊本身表达选中，文字始终同一字重。
                         // 之前选中瞬间翻粗体、而胶囊还要滑 180ms 才到位，两者对不上；
