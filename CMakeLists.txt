@@ -14,6 +14,26 @@ set(CMAKE_AUTORCC ON)
 # 6.7 是 QDateTime::TransitionResolution 的引入版本（见 src/services/LogicalDay.h 的逻辑日边界计算）。
 # 不写下界的话，用更低版本的 Qt 也能配置成功，报错要推迟到编译期才出现。
 find_package(Qt6 6.7 REQUIRED COMPONENTS Concurrent Core Gui Network Quick QuickControls2 QuickLayouts QuickTest Sql Test)
+
+# CVE-2025-12385：Text 组件解析 <img> 时不校验尺寸，可导致无限制内存分配与界面失去响应。
+# 影响 5.0.0–6.5.10、6.6.0–6.8.5、6.9.0–6.10.0，修复于 6.5.11 / 6.8.6 / 6.10.1。
+#
+# 只警告不报错，两个理由：本项目已落实官方缓解措施（所有非字面量的 text 绑定显式
+# PlainText，由 QmlTextFormatGate 强制）；而发行版打包的 Qt 常把补丁向后移植却不动
+# 版本号，硬卡版本会把这些完全安全的构建也挡在外面。
+set(POMODORO_TODO_CVE_2025_12385_FIXED FALSE)
+if(Qt6_VERSION VERSION_GREATER_EQUAL "6.10.1"
+   OR (Qt6_VERSION VERSION_GREATER_EQUAL "6.8.6" AND Qt6_VERSION VERSION_LESS "6.9.0")
+   OR (Qt6_VERSION VERSION_GREATER_EQUAL "6.5.11" AND Qt6_VERSION VERSION_LESS "6.6.0"))
+    set(POMODORO_TODO_CVE_2025_12385_FIXED TRUE)
+endif()
+if(NOT POMODORO_TODO_CVE_2025_12385_FIXED)
+    message(WARNING
+        "当前 Qt ${Qt6_VERSION} 在 CVE-2025-12385 的影响范围内（Text 组件不校验 <img> 尺寸）。"
+        "本项目已落实官方缓解措施（全部非字面量 text 绑定显式 PlainText），"
+        "但仍建议升级到 6.10.1+ / 6.8.6+ / 6.5.11+。"
+        "若你用的是已向后移植补丁的发行版打包，可忽略本条。")
+endif()
 message(STATUS "使用的 Qt: ${Qt6_VERSION} @ ${Qt6_DIR}")
 
 if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)

@@ -47,7 +47,7 @@
 ## 构建
 
 需要先安装 Qt 6.7 或更高版本，并使用该 SDK 自带的 `qt-cmake`。
-本机已验证的工具是 `/Users/zerionlito/Qt/6.9.0/macos/bin/qt-cmake`；它会同步设置
+本机已验证的工具是 `/Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake`；它会同步设置
 Qt SDK 支持的 macOS 部署下界。不要用当前 Homebrew Qt 构建部署包：其 Qt Quick 框架最低要求
 macOS 26，会让应用二进制和链接框架的部署版本不一致。
 
@@ -56,18 +56,18 @@ macOS 26，会让应用二进制和链接框架的部署版本不一致。
 构建目录放在仓库外，并关闭自动部署，避免覆盖你正在用的 `/Applications/番茄Todo.app`：
 
 ```bash
-/Users/zerionlito/Qt/6.9.0/macos/bin/qt-cmake -B /tmp/pt-audit -S . -DPOMODORO_TODO_DEPLOY_LOCAL=OFF
-cmake --build /tmp/pt-audit -j8
+/Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake -B ~/pt-audit -S . -DPOMODORO_TODO_DEPLOY_LOCAL=OFF
+cmake --build ~/pt-audit -j8
 QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
-  ctest --test-dir /tmp/pt-audit --output-on-failure --timeout 240
+  ctest --test-dir ~/pt-audit --output-on-failure --timeout 240
 ```
 
-**两种构建必须用不同的构建目录**（这里是 `/tmp/pt-audit`，下面是 `/tmp/pt-build`）。
+**两种构建必须用不同的构建目录**（这里是 `~/pt-audit`，下面是 `~/pt-build`）。
 `POMODORO_TODO_DEPLOY_LOCAL` 是 CMake cache 变量，会持久化在构建目录里：在同一个目录先跑验证构建再跑部署构建，
 `OFF` 仍然生效，`deploy-local-app` 目标根本不会被创建，部署会静默失效。
 
-测试规模（2026-08-08 实测，Qt 6.9.0）：**18 个 ctest 目标全绿，约 68 秒**——
-16 个 C++ 目标共 329 个测试函数，`PomodoroTodoQmlTests` 覆盖 `tests/qml/` 的 36 个文件、476 条断言函数；
+测试规模（2026-08-11 实测，Qt 6.10.3）：**19 个 ctest 目标全绿，约 77 秒**——
+16 个 C++ 目标共 385 个测试函数，`PomodoroTodoQmlTests` 覆盖 `tests/qml/` 的 44 个文件、551 条断言函数；
 另有 `QmlLintGate` 一条 QML 静态检查门禁（unqualified 与 layout-positioning 零容忍）。
 单个目标的跑法与说明见 `docs/运行命令.md`。
 
@@ -80,8 +80,8 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
 ```
 
 ```bash
-/Users/zerionlito/Qt/6.9.0/macos/bin/qt-cmake -B /tmp/pt-build -S .
-cmake --build /tmp/pt-build -j8
+/Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake -B ~/pt-build -S .
+cmake --build ~/pt-build -j8
 ```
 
 固定入口的存在是为了避免 LaunchServices 在临时构建目录里的 `.app` 和旧的
@@ -95,7 +95,7 @@ cmake --build /tmp/pt-build -j8
 可选的 QML 静态检查（用目标 Qt SDK 自带的 `qmllint`，不要用 PySide6 工具链）：
 
 ```bash
-/Users/zerionlito/Qt/6.9.0/macos/bin/qmllint -I qml \
+/Users/zerionlito/Qt/6.10.3/macos/bin/qmllint -I qml \
   qml/*.qml qml/views/*.qml qml/components/*.qml qml/components/settings/*.qml
 ```
 
