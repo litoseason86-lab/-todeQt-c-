@@ -678,3 +678,30 @@ void AppSettings::recreateSettingsBackend()
         ? new QSettings(this)
         : new QSettings(m_settingsFilePath, QSettings::IniFormat, this);
 }
+
+QStringList AppSettings::ownedSettingGroups()
+{
+    // 与本文件顶部的键常量、以及 kShortcutGroup 保持一致。
+    // 新增一个分组时必须同步这里，否则该分组的设置在恢复备份后会丢失。
+    return {
+        QStringLiteral("focus"),
+        QStringLiteral("appearance"),
+        QStringLiteral("window"),
+        QStringLiteral("logic"),
+        QStringLiteral("profile"),
+        QStringLiteral("goals"),
+        QStringLiteral("rollover"),
+        QStringLiteral("migration"),
+        kShortcutGroup,
+    };
+}
+
+bool AppSettings::isOwnedSettingKey(const QString& key)
+{
+    if (key.isEmpty()) {
+        return false;
+    }
+    // 只看第一段：shortcuts/focusStart 这类动态键靠分组通过，不必逐个登记。
+    const QString group = key.section(QLatin1Char('/'), 0, 0);
+    return ownedSettingGroups().contains(group);
+}

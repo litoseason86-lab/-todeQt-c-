@@ -1,5 +1,7 @@
 #include "BackupOperations.h"
 
+#include "AppSettings.h"
+
 #include <QCoreApplication>
 #include <QDataStream>
 #include <QDateTime>
@@ -17,6 +19,11 @@
 #include <memory>
 
 namespace BackupOperations {
+
+// 未受信文件的解析上限。设置项都是标量或短字符串，这两个数留了几个数量级余量。
+constexpr int kMaxSettingValueBytes = 64 * 1024;
+constexpr int kMaxSettingEntries = 500;
+
 
 namespace {
 const auto kFormatVersion = QStringLiteral("1");
@@ -502,9 +509,28 @@ EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath)
                 result.error = QStringLiteral("读取备份偏好失败：") + rows.lastError().text();
             } else {
                 bool ok = true;
+                int skipped = 0;
                 while (rows.next()) {
                     const QString key = rows.value(0).toString();
+
+                    // 只恢复本应用拥有的键。备份文件是外部输入——可能来自别的版本、
+                    // 被手工改过、或者干脆是伪造的。写回陌生键既没有意义，
+                    // 又会在自己的偏好文件里留下永远不会被清理的垃圾。
+                    if (!AppSettings::isOwnedSettingKey(key)) {
+                        ++skipped;
+                        continue;
+                    }
+
                     QByteArray blob = rows.value(1).toByteArray();
+                    // 单个值的字节数上限。QDataStream 解 QVariant 时会先读出容器长度
+                    // 再按该长度预留空间，一个被篡改的长度字段能让这里试图分配几个 GB。
+                    // 正常设置值都是标量或短字符串，这个上限留了几个数量级的余量。
+                    if (blob.size() > kMaxSettingValueBytes) {
+                        result.error = QStringLiteral("备份偏好数据异常：%1 的值过大").arg(key);
+                        ok = false;
+                        break;
+                    }
+
                     QDataStream stream(&blob, QIODevice::ReadOnly);
                     QVariant value;
                     stream >> value;
@@ -514,6 +540,17 @@ EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath)
                         break;
                     }
                     result.values.insert(key, value);
+
+                    if (result.values.size() > kMaxSettingEntries) {
+                        result.error = QStringLiteral("备份偏好条目过多");
+                        ok = false;
+                        break;
+                    }
+                }
+                if (ok && skipped > 0) {
+                    // 不静默：丢了什么必须留下痕迹，否则用户只会发现"恢复后某项没回来"。
+                    qInfo() << "Restore skipped" << skipped
+                            << "unrecognised setting key(s) from backup";
                 }
                 result.success = ok;
             }

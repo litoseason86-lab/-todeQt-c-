@@ -4,6 +4,8 @@
 #include <QSignalSpy>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QDataStream>
+#include <QSqlDatabase>
 #include <QTemporaryDir>
 #include <QUuid>
 #include <QtTest>
@@ -134,6 +136,8 @@ private slots:
     void formatVersionMismatchIsRejected();
     void schemaMetadataMismatchIsRejected();
     void restoreCreatesPreRestoreSnapshot();
+    void restoreDropsForeignSettingKeysAndKeepsShortcutOverrides();
+    void restoreRefusesOversizedSettingValue();
     void repeatedRestoresCapPreRestoreSnapshots();
     void restoreMatchesTaskAndSessionCounts();
     void restorePreservesCountdownGoals();
@@ -677,3 +681,95 @@ void BackupServiceTests::shutdownWaitsForAsyncWorkers()
 
 QTEST_MAIN(BackupServiceTests)
 #include "BackupServiceTests.moc"
+
+void BackupServiceTests::restoreDropsForeignSettingKeysAndKeepsShortcutOverrides()
+{
+    // 备份文件是外部输入：可能来自别的版本、被手工改过、或者干脆是伪造的。
+    // 恢复只应写回本应用拥有的键。这条同时守住两侧——陌生键要丢，
+    // 而动态的快捷键覆盖必须留下（扁平白名单会把它们一起丢掉，那比不过滤更糟）。
+    // 直接写临时设置文件，与本文件其它用例一致：AppSettings::instance() 是进程单例，
+    // 指向真实的用户设置，而备份服务被 configure() 指到了临时路径。
+    {
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.setValue(QStringLiteral("shortcuts/focus.start"), QStringLiteral("Ctrl+Return"));
+        settings.setValue(QStringLiteral("profile/nickname"), QStringLiteral("备份前昵称"));
+        settings.sync();
+    }
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    // 往备份里塞一个本应用不认识的键，模拟被改过或来自别处的文件。
+    {
+        const QString connection = QStringLiteral("ForeignKeyInject");
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+            db.setDatabaseName(backupFile());
+            QVERIFY(db.open());
+            QByteArray blob;
+            QDataStream out(&blob, QIODevice::WriteOnly);
+            out << QVariant(QStringLiteral("payload"));
+            QSqlQuery insert(db);
+            insert.prepare(QStringLiteral(
+                "INSERT OR REPLACE INTO backup_settings (key, value) VALUES (:k, :v)"));
+            insert.bindValue(QStringLiteral(":k"), QStringLiteral("evil/payload"));
+            insert.bindValue(QStringLiteral(":v"), blob);
+            QVERIFY(insert.exec());
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(connection);
+    }
+
+    {
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.setValue(QStringLiteral("profile/nickname"), QStringLiteral("恢复前昵称"));
+        settings.sync();
+    }
+    QVERIFY2(BackupService::instance()->restoreBackup(backupFile()),
+             qPrintable(BackupService::instance()->lastError()));
+
+    QSettings restored(settingsPath(), QSettings::IniFormat);
+    // 陌生键不得落盘。
+    QVERIFY2(!restored.allKeys().contains(QStringLiteral("evil/payload")),
+             "备份里的陌生键被写进了本应用的偏好文件");
+    // 自己的键照常恢复。
+    QCOMPARE(restored.value(QStringLiteral("profile/nickname")).toString(),
+             QStringLiteral("备份前昵称"));
+    // 动态的快捷键覆盖必须活下来。
+    QCOMPARE(restored.value(QStringLiteral("shortcuts/focus.start")).toString(),
+             QStringLiteral("Ctrl+Return"));
+}
+
+void BackupServiceTests::restoreRefusesOversizedSettingValue()
+{
+    QVERIFY(insertTask(QStringLiteral("原始任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    // 塞一个超大的值。QDataStream 解 QVariant 时会先读容器长度再按该长度预留空间，
+    // 一个被篡改的长度字段能让解析侧试图分配远超文件大小的内存。
+    // 上限必须在解析之前生效——放到解析之后就来不及了。
+    {
+        const QString connection = QStringLiteral("OversizedInject");
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+            db.setDatabaseName(backupFile());
+            QVERIFY(db.open());
+            QByteArray blob;
+            QDataStream out(&blob, QIODevice::WriteOnly);
+            out << QVariant(QString(200000, QLatin1Char('x')));
+            QVERIFY(blob.size() > 64 * 1024);
+            QSqlQuery insert(db);
+            insert.prepare(QStringLiteral(
+                "INSERT OR REPLACE INTO backup_settings (key, value) VALUES (:k, :v)"));
+            insert.bindValue(QStringLiteral(":k"), QStringLiteral("profile/nickname"));
+            insert.bindValue(QStringLiteral(":v"), blob);
+            QVERIFY(insert.exec());
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(connection);
+    }
+
+    // 整份恢复必须失败并给出原因，而不是带着一个可疑的巨值继续。
+    QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+    QVERIFY2(BackupService::instance()->lastError().contains(QStringLiteral("过大")),
+             qPrintable(BackupService::instance()->lastError()));
+}
+

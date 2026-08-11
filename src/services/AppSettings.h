@@ -113,6 +113,17 @@ public:
     // 让 QML 绑定即时刷新，无需重启。
     Q_INVOKABLE void reload();
 
+    // —— 本应用拥有哪些设置键 ——
+    // 恢复备份时据此过滤：只写回自己拥有的键，陌生键一律丢弃。
+    //
+    // 按「顶层分组」而不是逐键列举，是因为快捷键覆盖是动态键
+    // （shortcuts/<actionId>，每个动作一个）。扁平键清单会在恢复时
+    // 静默丢掉用户全部的自定义快捷键——那比不过滤更糟。
+    // 分组的增加频率远低于键，而且新增分组时改这里是显眼的一步；
+    // tst 里有用例遍历真实写入的键做交叉验证，漏加分组会当场转红。
+    static QStringList ownedSettingGroups();
+    static bool isOwnedSettingKey(const QString& key);
+
 signals:
     void lastModeChanged();
     void workMinutesChanged();

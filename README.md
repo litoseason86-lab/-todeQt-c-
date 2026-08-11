@@ -141,6 +141,12 @@ plans/                 只有 README.md：执行状态索引与历次审计记�
   各弹窗再写一份是为了单独实例化时（离屏走查、QML 测试）也准确。
   `tests/qml/tst_contrast_audit.qml` 会遍历八个视图 × 明暗两套主题，按 WCAG 门槛
   实算每个文字项的对比度，零例外。
+- **恢复备份只写回自己拥有的键**。备份文件是外部输入（可能来自别的版本、被手工改过、
+  或者伪造）。过滤按 `AppSettings::ownedSettingGroups()` 的**顶层分组**做，不是逐键列举——
+  快捷键覆盖是 `shortcuts/<actionId>` 这样的动态键，扁平白名单会把用户改过的键位全丢掉，
+  那比不过滤更糟。**新增一个设置分组时必须同步那份清单**，
+  `everySettingTheAppWritesPassesTheOwnershipFilter` 会遍历应用真实写出的每个键做交叉验证，
+  漏加当场转红并指名是哪个键。
 - **schema 迁移**：版本号在 `DatabaseManager::kCurrentSchemaVersion`，每一步除版本号外
   还带结构检查（列缺失时无论版本号都补），防御半迁移状态。
   **给 `tasks` 新增列时必须同步 `migrateToVersion5` 的 `knownColumns` 与建表语句**——

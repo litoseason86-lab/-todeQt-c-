@@ -6,6 +6,7 @@
 #include <QSqlError>
 #include <QSignalSpy>
 #include <QSqlQuery>
+#include <QSettings>
 #include <QTemporaryDir>
 #include <QTimeZone>
 #include <QTimer>
@@ -694,6 +695,8 @@ private slots:
     void deleteSessionRemovesItAndRollsStatsBack();
     void manualWriteRefusesToTouchRunningSession();
     void manualSessionRejectsOverlapWithRunningSession();
+    void everySettingTheAppWritesPassesTheOwnershipFilter();
+    void ownershipFilterRejectsForeignKeysAndKeepsShortcutOverrides();
     void notesRoundTripAndRenameDoesNotEraseThem();
     void reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation();
     void moveTaskToDateLandsAtTheEndOfTheTargetDay();
@@ -5586,5 +5589,71 @@ void ServiceTests::manualSessionRejectsOverlapWithRunningSession()
     // 正在进行的那段**之前**不受影响，照常可以补。
     QVERIFY(history->addManualSession(taskId,
                                       QDateTime::currentDateTime().addSecs(-7200), 30) > 0);
+}
+
+void ServiceTests::everySettingTheAppWritesPassesTheOwnershipFilter()
+{
+    // 自维护守卫：把应用真实写得出来的设置全写一遍，再逐个问过滤器。
+    // 新增一个分组却忘了加进 ownedSettingGroups()，这条会当场转红——
+    // 否则那个分组的设置会在恢复备份时被静默丢掉，而用户只会发现"某项没回来"。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString iniPath = dir.filePath(QStringLiteral("ownership.ini"));
+
+    {
+        AppSettings settings(iniPath);
+        settings.setLastMode(1);
+        settings.setWorkMinutes(30);
+        settings.setBreakMinutes(7);
+        settings.setFreeTimerWarningHours(3);
+        settings.setSoundEnabled(false);
+        settings.setReduceMotion(true);
+        settings.setSlimClockFont(true);
+        settings.setBackgroundTheme(QStringLiteral("starry"));
+        settings.setDayStartHour(5);
+        settings.setNickname(QStringLiteral("同学"));
+        settings.setSidebarVisible(false);
+        settings.setDashboardTimerVisible(false);
+        settings.setGoalViewMode(QStringLiteral("grid"));
+        settings.setReduceTransparency(true);
+        settings.setRaiseOnPhaseComplete(false);
+        settings.setCloseToTray(true);
+        settings.setCloseToTrayHintShown(true);
+        settings.setNaturalCompletionNoticeShown(true);
+        settings.setAutoStartBreak(true);
+        settings.setAutoStartNextPomodoro(true);
+        settings.setLongBreakEnabled(false);
+        settings.setLongBreakMinutes(20);
+        settings.setLongBreakInterval(3);
+        settings.setRolloverIgnoredDate(QStringLiteral("2026-08-11"));
+        settings.setDailyFocusGoal(QStringLiteral("2026-08-11"), 180);
+        // 动态键：每个动作一条，正是扁平白名单会漏掉的那类。
+        settings.setShortcutOverride(QStringLiteral("focus.start"), QStringLiteral("Ctrl+Return"));
+    }
+
+    QSettings written(iniPath, QSettings::IniFormat);
+    const QStringList keys = written.allKeys();
+    QVERIFY2(keys.size() >= 25, qPrintable(QStringLiteral("只写出了 %1 个键，用例没覆盖到足够设置")
+                                               .arg(keys.size())));
+    for (const QString& key : keys) {
+        QVERIFY2(AppSettings::isOwnedSettingKey(key),
+                 qPrintable(QStringLiteral("键 %1 不被 ownedSettingGroups() 认领，"
+                                           "恢复备份时会被丢掉").arg(key)));
+    }
+}
+
+void ServiceTests::ownershipFilterRejectsForeignKeysAndKeepsShortcutOverrides()
+{
+    // 陌生键一律不认。
+    QVERIFY(!AppSettings::isOwnedSettingKey(QStringLiteral("evil/payload")));
+    QVERIFY(!AppSettings::isOwnedSettingKey(QStringLiteral("NSGlobalDomain")));
+    QVERIFY(!AppSettings::isOwnedSettingKey(QString()));
+    // 没有分组的裸键同样不认——本应用所有键都带分组。
+    QVERIFY(!AppSettings::isOwnedSettingKey(QStringLiteral("nickname")));
+
+    // 快捷键覆盖必须通过：它是动态键，扁平白名单会把用户改过的键位全丢掉，
+    // 那比不过滤更糟。
+    QVERIFY(AppSettings::isOwnedSettingKey(QStringLiteral("shortcuts/focus.start")));
+    QVERIFY(AppSettings::isOwnedSettingKey(QStringLiteral("shortcuts/任意未来动作")));
 }
 
