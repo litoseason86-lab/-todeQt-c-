@@ -273,15 +273,23 @@ bool FocusHistoryService::validateManualSession(const QDateTime& startTime,
     QSqlQuery query(db);
     // 重叠判定：两段区间相交当且仅当 A.start < B.end 且 B.start < A.end。
     // 不拦的话，同一段时间被两条记录覆盖，统计凭空多出时长，而且事后无从察觉。
+    //
+    // **正在进行的会话（end_time IS NULL）同样占用时间**，用「现在」当它的结束点。
+    // 这里最初写了 end_time IS NOT NULL——那是从"不许改动进行中的行"那条守卫抄来的，
+    // 两者要求正好相反：不许改它，但必须承认它占着那段时间。漏掉的后果不是当场出错，
+    // 而是等这次专注结束写入 end_time 之后，库里静静多出一对重叠记录。
+    //
+    // 「现在」由 C++ 绑入而不用 SQLite 的 datetime('now')：后者是 UTC，
+    // 而 start_time 存的是本地时间，混用会在非零时区整体错开。
     query.prepare(QStringLiteral(
         "SELECT COUNT(*) FROM focus_sessions "
         "WHERE id <> :excludeId "
-        "AND end_time IS NOT NULL "
         "AND datetime(start_time) < datetime(:endTime) "
-        "AND datetime(end_time) > datetime(:startTime)"));
+        "AND datetime(COALESCE(end_time, :now)) > datetime(:startTime)"));
     query.bindValue(QStringLiteral(":excludeId"), excludeSessionId);
     query.bindValue(QStringLiteral(":startTime"), startTime.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endTime"), endTime.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":now"), QDateTime::currentDateTime().toString(Qt::ISODate));
     if (!query.exec() || !query.next()) {
         m_lastError = query.lastError().text();
         qWarning() << "Failed to check session overlap:" << query.lastError().text();

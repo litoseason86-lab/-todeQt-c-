@@ -283,18 +283,16 @@ Item {
             return
         }
 
-        var target = 0
-        var accumulated = 0
-        for (var j = 0; j < todayTaskList.count; ++j) {
-            var item = todayTaskList.itemAtIndex(j)
-            var h = item ? item.height + todayTaskList.spacing : 0
-            if (listY < accumulated + h / 2) {
-                break
-            }
-            accumulated += h
-            target = j + 1
+        // 用 ListView.indexAt 而不是逐个问 delegate 要高度再累加：长列表会虚拟化，
+        // 屏幕外的 delegate 根本没被创建，累加法会把它们当成高度 0，
+        // 滚动之后落点整体偏移（实测 60 条的列表滚到底，落点差 2 位）。
+        // indexAt 按内容坐标工作，变高行与未创建行都不影响结果。
+        var target = todayTaskList.indexAt(todayTaskList.width / 2, listY)
+        // -1 表示落在行与行之间的间隙或列表之外。此时保持上一次的位置不动，
+        // 拖动过程中很快就会命中下一行；强行钳到 0 会让任务突然跳到列表顶部。
+        if (target < 0) {
+            return
         }
-        target = Math.max(0, Math.min(root.pendingOrder.length - 1, target))
         if (target === from) {
             return
         }

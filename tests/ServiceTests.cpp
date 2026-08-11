@@ -693,6 +693,7 @@ private slots:
     void updateSessionMovesItAndKeepsItsMode();
     void deleteSessionRemovesItAndRollsStatsBack();
     void manualWriteRefusesToTouchRunningSession();
+    void manualSessionRejectsOverlapWithRunningSession();
     void notesRoundTripAndRenameDoesNotEraseThem();
     void reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation();
     void moveTaskToDateLandsAtTheEndOfTheTargetDay();
@@ -5558,5 +5559,32 @@ void ServiceTests::moveTaskToDateLandsAtTheEndOfTheTargetDay()
 
     // 不存在的任务要如实失败。
     QVERIFY(!tasks->moveTaskToDate(999999, tomorrow));
+}
+
+void ServiceTests::manualSessionRejectsOverlapWithRunningSession()
+{
+    FocusHistoryService* history = FocusHistoryService::instance();
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("进行中重叠"), today, QStringLiteral("数学"));
+
+    // 一段正在进行的会话：end_time 为 NULL，它占用的是 [start, 现在]。
+    QSqlQuery insert(DatabaseManager::instance()->database());
+    insert.prepare(QStringLiteral(
+        "INSERT INTO focus_sessions (task_id, start_time, mode) VALUES (:taskId, :start, 1)"));
+    insert.bindValue(QStringLiteral(":taskId"), taskId);
+    insert.bindValue(QStringLiteral(":start"),
+                     QDateTime::currentDateTime().addSecs(-3600).toString(Qt::ISODate));
+    QVERIFY(insert.exec());
+
+    // 在这段时间里补录必须被拒。放过去的话，等这次专注结束写入 end_time，
+    // 库里就有两条覆盖同一段时间的记录——正是重叠守卫要防的事，只是延后发生。
+    QCOMPARE(history->addManualSession(taskId,
+                                       QDateTime::currentDateTime().addSecs(-1800), 20), -1);
+    QVERIFY2(history->lastError().contains(QStringLiteral("已有专注记录")),
+             qPrintable(history->lastError()));
+
+    // 正在进行的那段**之前**不受影响，照常可以补。
+    QVERIFY(history->addManualSession(taskId,
+                                      QDateTime::currentDateTime().addSecs(-7200), 30) > 0);
 }
 

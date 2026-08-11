@@ -133,4 +133,42 @@ TestCase {
         verify(!!view, "Component exists")
         compare(view.canReorderTasks, false)
     }
+
+    function test_drop_index_is_correct_after_scrolling_a_long_list() {
+        // 长列表会虚拟化：屏幕外的 delegate 根本没被创建。若按"逐个问 delegate 要高度"
+        // 累加位置，未创建的行会被当成高度 0，滚动之后算出的落点整体偏上。
+        var many = []
+        for (var i = 1; i <= 60; ++i) {
+            many.push(makeTask(i, "任务" + i))
+        }
+        taskManager.rows = many
+
+        var view = createTemporaryObject(viewComponent, testCase)
+        verify(!!view, "Component exists")
+        view.refresh()
+        wait(80)
+
+        var list = findChild(view, "todayTaskList")
+        verify(!!list, "Object exists")
+        list.contentY = list.contentHeight - list.height
+        wait(60)
+        verify(list.contentY > 0, "列表没有滚动，用例失去意义")
+
+        // 把第 1 条拖到当前可见区域的中间位置。用 indexAt 独立求出那里到底是第几条，
+        // 作为不依赖被测实现的参照。
+        var probeY = list.contentY + list.height / 2
+        var expected = list.indexAt(list.width / 2, probeY)
+        verify(expected >= 0, "参照点没有命中任何行")
+
+        view.beginReorder(1)
+        view.updateReorder(1, probeY)
+        var landed = -1
+        for (var k = 0; k < view.pendingOrder.length; ++k) {
+            if (Number(view.pendingOrder[k].id) === 1) {
+                landed = k
+                break
+            }
+        }
+        compare(landed, expected, "滚动后落点算错")
+    }
 }

@@ -8,6 +8,8 @@
 #include <QVariant>
 
 namespace {
+// 单实例激活协议只有一行短命令；留足余量即可，超出一律丢弃。
+constexpr int kMaxMessageBytes = 4096;
 const QByteArray kActivateCommand = QByteArrayLiteral("activate\n");
 constexpr int kIpcTimeoutMs = 500;
 }
@@ -103,6 +105,18 @@ void SingleInstanceGuard::consumeSocketMessage(QLocalSocket* socket)
 
     QByteArray message = socket->property("instanceMessage").toByteArray();
     message.append(socket->readAll());
+
+    // 上限。协议只有一行短命令，正常客户端几十字节就发完了。没有上限的话，
+    // 一个只连不发换行的进程能让这个 QByteArray 一直涨到内存耗尽——
+    // 恶意与写错的客户端都做得到，而且这里是本进程唯一接收外部字节的入口。
+    if (message.size() > kMaxMessageBytes) {
+        qWarning() << "Single instance message exceeds" << kMaxMessageBytes
+                   << "bytes, dropping connection";
+        socket->setProperty("activationHandled", true);
+        socket->disconnectFromServer();
+        return;
+    }
+
     socket->setProperty("instanceMessage", message);
     if (!message.contains('\n')) {
         return;
