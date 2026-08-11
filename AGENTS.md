@@ -42,8 +42,13 @@
 - 用户说“构建”“重新构建”或要求生成最新应用时，默认含部署步骤，不能只生成临时目录中的 `.app`。
 - 应用构建必须以 CMake 的 `deploy-local-app` 目标结束，将当前分支的最新应用部署到 `/Applications/番茄Todo.app`。
 - 部署实现在 `cmake/DeployLocalApp.cmake`，顺序固定为：复制到 `<目标>.staging-<token>` → 校验新包主二进制存在 → 把旧包 rename 成 `<目标>.previous-<token>` → 原子 rename 换上新包 → 删除备份并 `lsregister` 刷新系统索引。任一步失败都会把旧包放回原位。**禁止改回“先删旧包再复制新包”的顺序**：那样中途失败会让用户既没有旧包也没有新包。
-- 构建目录放在仓库外的临时目录，禁止修改仓库内 `build/` 生成物。
-- `POMODORO_TODO_DEPLOY_LOCAL` 是 CMake cache 变量，会持久化在构建目录里。审计/测试构建传 `=OFF` 时必须用**独立的构建目录**（约定：部署 `/tmp/pt-build`，审计 `/tmp/pt-audit`），否则后续部署构建会因为残留的 `OFF` 而静默不部署。
+- 构建目录放在仓库外，禁止修改仓库内 `build/` 生成物。**不要放在 `/tmp` 下**：
+  macOS 的 `/tmp` 是指向 `/private/tmp` 的符号链接，moc 生成的相对包含
+  （`../../../../Users/...`）按真实路径解析会落到不存在的 `/private/Users/...`。
+  Qt 6.9 之前能编过纯属偶然（它的 moc 调用带 `-I/usr/local/include`，那条搜索路径
+  拼上同一串相对路径恰好回到 `/Users/...`）；Qt 6.10 换了 include 标志集之后整个
+  构建直接失败。用 `~/pt-*` 这类没有符号链接的路径。
+- `POMODORO_TODO_DEPLOY_LOCAL` 是 CMake cache 变量，会持久化在构建目录里。审计/测试构建传 `=OFF` 时必须用**独立的构建目录**（约定：部署 `~/pt-build`，审计 `~/pt-audit`），否则后续部署构建会因为残留的 `OFF` 而静默不部署。
 - 部署完成后必须校验构建包与 `/Applications/番茄Todo.app` 主二进制一致，并报告部署结果。
 - 构建和部署不等于启动。未经用户本轮明确要求，禁止执行 `open`、直接运行应用二进制或以其他方式拉起 GUI。
 - 如果部署时已有番茄 Todo 进程运行，不得擅自结束进程；需要明确提醒用户退出并重新打开，才能加载新二进制。
