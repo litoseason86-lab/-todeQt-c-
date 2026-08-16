@@ -141,6 +141,8 @@ private slots:
     void restoreRefusesOversizedSettingValue();
     void restoreRefusesBackupCarryingTriggers();
     void repeatedRestoresCapPreRestoreSnapshots();
+    void failedAsyncPreflightKeepsAllPreRestoreSnapshots_data();
+    void failedAsyncPreflightKeepsAllPreRestoreSnapshots();
     void restoreMatchesTaskAndSessionCounts();
     void restoreUsesValidatedBytesWhenSourcePathChanges();
     void restorePreservesCountdownGoals();
@@ -428,6 +430,52 @@ void BackupServiceTests::repeatedRestoresCapPreRestoreSnapshots()
     const QStringList autos = dir.entryList(
         QStringList{QStringLiteral("auto-*.tomatobackup")}, QDir::Files);
     QVERIFY(autos.isEmpty());
+}
+
+void BackupServiceTests::failedAsyncPreflightKeepsAllPreRestoreSnapshots_data()
+{
+    QTest::addColumn<int>("snapshotCount");
+    QTest::newRow("at-retention") << BackupService::kBeforeRestoreRetention;
+    QTest::newRow("above-retention") << BackupService::kBeforeRestoreRetention + 2;
+}
+
+void BackupServiceTests::failedAsyncPreflightKeepsAllPreRestoreSnapshots()
+{
+    QFETCH(int, snapshotCount);
+
+    QDir dir(backupsDir());
+    QVERIFY(dir.mkpath(QStringLiteral(".")));
+
+    QStringList expectedSnapshots;
+    for (int i = 0; i < snapshotCount; ++i) {
+        const QString fileName = QStringLiteral(
+            "before-restore-2020010100000%1.tomatobackup").arg(i);
+        QFile snapshot(dir.filePath(fileName));
+        QVERIFY(snapshot.open(QIODevice::WriteOnly));
+        QVERIFY(snapshot.write("existing snapshot") > 0);
+        snapshot.close();
+        expectedSnapshots.append(fileName);
+    }
+    expectedSnapshots.sort();
+
+    const QString damagedSource =
+        m_tempDir->filePath(QStringLiteral("damaged-external.tomatobackup"));
+    QFile damaged(damagedSource);
+    QVERIFY(damaged.open(QIODevice::WriteOnly));
+    QVERIFY(damaged.write("not a sqlite backup") > 0);
+    damaged.close();
+
+    QSignalSpy restoredSpy(BackupService::instance(), &BackupService::restoreCompleted);
+    BackupService::instance()->requestRestore(damagedSource);
+    QVERIFY2(restoredSpy.wait(10000), "异步预检失败信号未在 10 秒内返回");
+    QCOMPARE(restoredSpy.last().at(0).toBool(), false);
+
+    // 预检失败没有创建新恢复点，因此旧快照集合必须逐个保持不变，不能顺手做配额清理。
+    const QStringList actualSnapshots = dir.entryList(
+        QStringList{QStringLiteral("before-restore-*.tomatobackup")},
+        QDir::Files,
+        QDir::Name);
+    QCOMPARE(actualSnapshots, expectedSnapshots);
 }
 
 void BackupServiceTests::restoreMatchesTaskAndSessionCounts()
