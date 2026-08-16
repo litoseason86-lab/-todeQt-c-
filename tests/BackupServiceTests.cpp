@@ -132,6 +132,7 @@ private slots:
     void backupWorksUnderWalMode();
     void corruptedBackupIsRejected();
     void backupMissingRequiredTableIsRejected();
+    void backupMissingRequiredColumnIsRejected();
     void higherSchemaVersionIsRejected();
     void formatVersionMismatchIsRejected();
     void schemaMetadataMismatchIsRejected();
@@ -141,6 +142,7 @@ private slots:
     void restoreRefusesBackupCarryingTriggers();
     void repeatedRestoresCapPreRestoreSnapshots();
     void restoreMatchesTaskAndSessionCounts();
+    void restoreUsesValidatedBytesWhenSourcePathChanges();
     void restorePreservesCountdownGoals();
     void restoreRestoresSettingsValue();
     void restoreRemovesSettingsMissingFromBackup();
@@ -173,6 +175,7 @@ void BackupServiceTests::init()
 
 void BackupServiceTests::cleanup()
 {
+    BackupService::instance()->m_afterRestoreValidationHookForTest = {};
     DatabaseManager::instance()->close();
     delete m_tempDir;
     m_tempDir = nullptr;
@@ -304,6 +307,35 @@ void BackupServiceTests::backupMissingRequiredTableIsRejected()
     QVERIFY(!BackupService::instance()->restoreBackup(path));
 }
 
+void BackupServiceTests::backupMissingRequiredColumnIsRejected()
+{
+    QVERIFY(insertTask(QStringLiteral("结构校验任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    // 表名和 user_version 都保持合法，只删除所有版本都依赖的基础列。
+    // CREATE TABLE IF NOT EXISTS 不会修复这种残缺表，若检查阶段放行，恢复会显示成功，
+    // 之后每一次任务查询才因缺少 title 失败。
+    const QString connectionName = QStringLiteral("MissingRequiredColumn");
+    {
+        QSqlDatabase database =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(backupFile());
+        QVERIFY(database.open());
+        QSqlQuery query(database);
+        QVERIFY2(query.exec(QStringLiteral("ALTER TABLE tasks DROP COLUMN title")),
+                 qPrintable(query.lastError().text()));
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+
+    const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
+    QCOMPARE(info.value(QStringLiteral("valid")).toBool(), false);
+    QVERIFY2(info.value(QStringLiteral("reason")).toString().contains(
+                 QStringLiteral("tasks.title")),
+             qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+}
+
 void BackupServiceTests::higherSchemaVersionIsRejected()
 {
     QVERIFY(insertTask(QStringLiteral("未来任务")) > 0);
@@ -424,6 +456,31 @@ void BackupServiceTests::restoreMatchesTaskAndSessionCounts()
     // 恢复后的库不残留备份专用表。
     QCOMPARE(scalarCount(QStringLiteral(
         "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('backup_meta','backup_settings')")), 0);
+}
+
+void BackupServiceTests::restoreUsesValidatedBytesWhenSourcePathChanges()
+{
+    QVERIFY(insertTask(QStringLiteral("已校验版本")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    QVERIFY(insertTask(QStringLiteral("替换版本多出的任务")) > 0);
+    const QString replacement =
+        m_tempDir->filePath(QStringLiteral("replacement.tomatobackup"));
+    QVERIFY(BackupService::instance()->createBackup(replacement));
+
+    // 在完整性校验结束后替换同一路径。旧实现会重新打开该路径读取设置并安装，
+    // 因而把“没有校验过”的两任务版本装进去；正确实现只能恢复已经暂存的一任务版本。
+    bool sourceReplaced = false;
+    BackupService::instance()->m_afterRestoreValidationHookForTest = [this,
+                                                                      replacement,
+                                                                      &sourceReplaced]() {
+        sourceReplaced = QFile::remove(backupFile())
+            && QFile::copy(replacement, backupFile());
+    };
+
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+    QVERIFY(sourceReplaced);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
 }
 
 void BackupServiceTests::restorePreservesCountdownGoals()
@@ -801,4 +858,3 @@ void BackupServiceTests::restoreRefusesBackupCarryingTriggers()
     QVERIFY2(!BackupService::instance()->restoreBackup(backupFile()),
              "带 Trigger 的备份被接受了");
 }
-

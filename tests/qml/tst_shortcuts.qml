@@ -24,6 +24,7 @@ TestCase {
         property int resetAllCount: 0
         // assign 的返回值：空串=成功，非空=给用户看的中文失败原因。
         property string assignResult: ""
+        property string resetResult: ""
 
         readonly property var actions: [
             {
@@ -72,8 +73,14 @@ TestCase {
             lastDisabledId = actionId
             return ""
         }
-        function resetToDefault(actionId) { lastResetId = actionId }
-        function resetAll() { resetAllCount += 1 }
+        function resetToDefault(actionId) {
+            lastResetId = actionId
+            return resetResult
+        }
+        function resetAll() {
+            resetAllCount += 1
+            return resetResult
+        }
         // 只实现测试用得到的最小规则：带修饰键才算数，与 C++ 侧语义一致。
         function normalize(key, modifiers) {
             if (key === Qt.Key_Control || key === Qt.Key_Shift || key === Qt.Key_Alt
@@ -127,6 +134,7 @@ TestCase {
         capturedSpy.clear()
         cancelledSpy.clear()
         registryMock.assignResult = ""
+        registryMock.resetResult = ""
         registryMock.lastAssignedId = ""
         registryMock.lastAssignedSequence = ""
         registryMock.lastDisabledId = ""
@@ -274,13 +282,29 @@ TestCase {
         compare(row.isDefault, false)
         row.resetRequested()
         compare(registryMock.lastResetId, "task.new")
+        compare(shortcutsPage.feedbackIsError, false)
+        compare(shortcutsPage.feedbackText, "已恢复默认键位")
+
+        registryMock.resetResult = "无法恢复默认键位，请检查设置文件权限后重试"
+        row.resetRequested()
+        compare(shortcutsPage.feedbackIsError, true)
+        compare(shortcutsPage.feedbackText,
+                "无法恢复默认键位，请检查设置文件权限后重试")
 
         var defaultRow = findChildByObjectName(shortcutsPage, "shortcutRow_view.dashboard")
         compare(defaultRow.isDefault, true)
 
         var resetAll = findChildByObjectName(shortcutsPage, "shortcutResetAll")
+        registryMock.resetResult = ""
         resetAll.clicked()
         compare(registryMock.resetAllCount, 1)
+        compare(shortcutsPage.feedbackIsError, false)
+
+        registryMock.resetResult = "无法恢复默认键位，请检查设置文件权限后重试"
+        resetAll.clicked()
+        compare(shortcutsPage.feedbackIsError, true)
+        compare(shortcutsPage.feedbackText,
+                "无法恢复默认键位，请检查设置文件权限后重试")
     }
 
     function test_page_marks_hotkey_the_system_refused() {

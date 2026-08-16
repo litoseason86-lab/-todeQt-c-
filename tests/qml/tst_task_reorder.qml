@@ -14,6 +14,7 @@ TestCase {
     visible: true
 
     property var reorderCalls: []
+    property int todayQueryCount: 0
 
     QtObject {
         id: taskManager
@@ -21,7 +22,10 @@ TestCase {
 
         property var rows: []
 
-        function getTodayTasks() { return taskManager.rows }
+        function getTodayTasks() {
+            testCase.todayQueryCount += 1
+            return taskManager.rows
+        }
         function getOverdueUncompletedTasks() { return [] }
         function setTaskCompleted(id, completed) { return true }
         function updateTask(id, title, categoryId, date) { return true }
@@ -85,6 +89,7 @@ TestCase {
 
     function init() {
         testCase.reorderCalls = []
+        testCase.todayQueryCount = 0
         taskManager.rows = [makeTask(1, "甲"), makeTask(2, "乙"), makeTask(3, "丙")]
     }
 
@@ -110,6 +115,71 @@ TestCase {
         // 落点状态必须复位，否则下一次拖动会带着上次的残留目标。
         compare(view.dropTargetIndex, -1)
         compare(view.draggingTaskId, -1)
+    }
+
+    function test_cancelled_drag_does_not_persist() {
+        var view = createTemporaryObject(viewComponent, testCase)
+        verify(!!view, "Component exists")
+        view.refresh()
+        wait(60)
+
+        view.beginReorder(3)
+        view.updateReorder(3, 0)
+        compare(view.dropTargetIndex, 0)
+        view.commitReorder(true)
+
+        // 窗口失焦、抓取被夺走或 delegate 被禁用都属于取消，不是一次 drop。
+        compare(testCase.reorderCalls.length, 0)
+        compare(view.dropTargetIndex, -1)
+        compare(view.draggingTaskId, -1)
+    }
+
+    function test_downward_drop_indicator_matches_final_slot() {
+        var view = createTemporaryObject(viewComponent, testCase)
+        verify(!!view, "Component exists")
+        view.refresh()
+        wait(60)
+
+        var list = findChild(view, "todayTaskList")
+        verify(!!list, "Object exists")
+        var targetRow = list.itemAtIndex(2)
+        verify(!!targetRow, "目标行 delegate 未就绪")
+
+        view.beginReorder(1)
+        view.dropTargetIndex = 2
+        compare(view.dropIndicatorAfterTarget, true)
+        compare(view.dropIndicatorContentY,
+                Math.min(list.contentHeight - 1,
+                         targetRow.y + targetRow.height + list.spacing / 2),
+                "向下拖时指示线必须落在目标行下方")
+
+        view.commitReorder(false)
+        compare(testCase.reorderCalls[0].ids, [2, 3, 1])
+
+        // 最后项上移到首位时，槽位仍须留在父级图层内部，不能落到负坐标被裁掉。
+        view.beginReorder(3)
+        view.dropTargetIndex = 0
+        compare(view.dropIndicatorAfterTarget, false)
+        compare(view.dropIndicatorContentY, 1)
+    }
+
+    function test_leaving_visible_list_clears_stale_target() {
+        var view = createTemporaryObject(viewComponent, testCase)
+        verify(!!view, "Component exists")
+        view.refresh()
+        wait(60)
+
+        var list = findChild(view, "todayTaskList")
+        verify(!!list, "Object exists")
+        view.beginReorder(3)
+        view.updateReorder(3, 0)
+        compare(view.dropTargetIndex, 0)
+
+        // 指针离开可见区域后，旧落点必须失效；否则在列表外松手仍会落库。
+        view.updateReorder(3, list.contentY - 1)
+        compare(view.dropTargetIndex, -1)
+        view.commitReorder(false)
+        compare(testCase.reorderCalls.length, 0)
     }
 
     function test_completed_tasks_do_not_participate() {

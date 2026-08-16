@@ -69,6 +69,25 @@ Item {
         }
         return -1
     }
+    // dropTargetIndex 表示最终下标。源项向下移动时会落在目标行之后，
+    // 向上移动时落在目标行之前；指示线必须和这条持久化语义完全一致。
+    readonly property bool dropIndicatorAfterTarget: root.draggingFromIndex >= 0
+                                                      && root.dropTargetIndex > root.draggingFromIndex
+    readonly property real dropIndicatorContentY: {
+        if (root.dropTargetIndex < 0 || root.dropTargetIndex === root.draggingFromIndex) {
+            return -1
+        }
+        var targetItem = todayTaskList.itemAtIndex(root.dropTargetIndex)
+        if (!targetItem) {
+            return -1
+        }
+        var slotY = root.dropIndicatorAfterTarget
+                ? targetItem.y + targetItem.height + todayTaskList.spacing / 2
+                : targetItem.y - todayTaskList.spacing / 2
+        // 列表容器本身也有离屏阴影图层。首行上方和末行下方不能越出它的纹理边界，
+        // 否则逻辑上可见、实际渲染仍被裁掉；留 1px 让 2px 指示线完整落在内部。
+        return Math.max(1, Math.min(todayTaskList.contentHeight - 1, slotY))
+    }
     // 今天排了多少活（全部任务的预计用时之和，完成与否都算——问的是"排了多少"）。
     readonly property int plannedMinutesToday: {
         var sum = 0
@@ -287,6 +306,13 @@ Item {
         if (root.draggingTaskId !== taskId || root.draggingFromIndex < 0) {
             return
         }
+        // listY 是内容坐标；离开当前可见区域就撤销落点。若继续保留旧值，
+        // 用户在列表外松手仍会按最后经过的那一行写库。
+        if (listY < todayTaskList.contentY
+                || listY >= todayTaskList.contentY + todayTaskList.height) {
+            root.dropTargetIndex = -1
+            return
+        }
         // 用 ListView.indexAt 而不是逐个问 delegate 要高度再累加：长列表会虚拟化，
         // 屏幕外的 delegate 根本没被创建，累加法会把它们当成高度 0，
         // 滚动之后落点整体偏移（实测 60 条的列表滚到底，落点差 2 位）。
@@ -300,13 +326,14 @@ Item {
         root.dropTargetIndex = target
     }
 
-    function commitReorder() {
+    function commitReorder(cancelled) {
         const from = root.draggingFromIndex
         const target = root.dropTargetIndex
         root.draggingTaskId = -1
         root.dropTargetIndex = -1
 
-        if (!root.canReorderTasks || from < 0 || target < 0 || target === from) {
+        if (cancelled === true || !root.canReorderTasks
+                || from < 0 || target < 0 || target === from) {
             return
         }
 
@@ -754,29 +781,15 @@ Item {
                             draggable: root.canReorderTasks && !todayTaskRow.modelData.completed
                             opacity: root.draggingTaskId === todayTaskRow.taskId ? 0.6 : 1
 
-                            // 落点指示：模型不动，就得靠它让用户看见"松手会插到哪"。
-                            // 画在被指向的那一行上边缘；拖到自己身上时不画。
-                            Rectangle {
-                                objectName: "todayDropIndicator"
-                                anchors.left: parent.left
-                                anchors.right: parent.right
-                                anchors.top: parent.top
-                                anchors.topMargin: -Math.round(todayTaskList.spacing / 2) - 1
-                                height: 2
-                                radius: 1
-                                color: Theme.accent
-                                visible: root.draggingTaskId >= 0
-                                         && root.dropTargetIndex === todayTaskRow.dropIndex
-                                         && root.dropTargetIndex !== root.draggingFromIndex
-                            }
-
                             onDragStarted: root.beginReorder(todayTaskRow.taskId)
                             onDragMoved: function (sceneX, sceneY) {
                                 root.updateReorder(todayTaskRow.taskId,
                                                    todayTaskList.mapFromItem(null, sceneX, sceneY).y
                                                    + todayTaskList.contentY)
                             }
-                            onDragFinished: root.commitReorder()
+                            onDragFinished: function (cancelled) {
+                                root.commitReorder(cancelled)
+                            }
 
                             onCompletionChanged: function (id, completed) {
                                 root.setTaskCompletedWithAnimationDelay(id, completed);
@@ -805,6 +818,21 @@ Item {
                                 editTaskDialog.openForTask(todayTaskRow.modelData);
                             }
                         }
+            }
+
+            // 指示线属于列表交互层，不属于任何带离屏阴影图层的 TaskItem。
+            // 放在 ListView 的同级上层既不会被 delegate 图层裁掉，也避免每行复制一条线。
+            Rectangle {
+                objectName: "todayDropIndicator"
+                x: 0
+                y: root.dropIndicatorContentY - todayTaskList.contentY - height / 2
+                width: parent.width
+                height: 2
+                radius: 1
+                z: 2
+                color: Theme.accent
+                visible: todayTaskList.visible && root.dropIndicatorContentY >= 0
+                Accessible.ignored: true
             }
         }
 

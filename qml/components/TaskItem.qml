@@ -100,6 +100,9 @@ Rectangle {
     // 显式记录指针状态，避免不同平台的 MouseArea/HoverHandler 事件差异影响 hover 视觉。
     property bool pointerInside: false
     property bool componentReady: false
+    property bool dragWasCancelled: false
+    property bool dragEndEmitted: false
+    property int dragSequence: 0
 
     DragHandler {
         id: dragHandler
@@ -114,11 +117,25 @@ Rectangle {
 
         onActiveChanged: {
             if (dragHandler.active) {
+                root.dragSequence += 1
+                root.dragWasCancelled = false
+                root.dragEndEmitted = false
                 root.dragStarted()
             } else {
-                root.dragFinished(false)
+                const endedSequence = root.dragSequence
+                // Qt 在不同取消路径上对 canceled 与 activeChanged 的发送先后没有稳定承诺。
+                // 延后一轮统一收口，确保 onCanceled 已有机会写入真实终止原因。
+                Qt.callLater(function () {
+                    if (root.dragSequence !== endedSequence || root.dragEndEmitted) {
+                        return
+                    }
+                    root.dragEndEmitted = true
+                    root.dragFinished(root.dragWasCancelled)
+                })
             }
         }
+
+        onCanceled: root.dragWasCancelled = true
 
         onCentroidChanged: {
             if (!dragHandler.active) {

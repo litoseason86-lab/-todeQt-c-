@@ -39,12 +39,14 @@ private:
     bool notifyPrimaryInstance() const;
     void acceptPendingConnections();
     void consumeSocketMessage(QLocalSocket* socket);
+    void closeClientSocket(QLocalSocket* socket);
 
     QString m_serverName;
     std::unique_ptr<QLockFile> m_lock;
     std::unique_ptr<QLocalServer> m_server;
     bool m_started = false;
     StartResult m_result = LockUnavailable;
+    int m_activeClientCount = 0;
 };
 
 #endif // SINGLEINSTANCEGUARD_H

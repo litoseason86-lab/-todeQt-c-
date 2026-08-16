@@ -18,14 +18,17 @@
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QUrl>
+#include <QUuid>
 #include <QtConcurrent>
 
 #include <memory>
+#include <utility>
 
 namespace {
 const auto kBackupExtension = QStringLiteral(".tomatobackup");
 const auto kAutoPrefix = QStringLiteral("auto-");
 const auto kBeforeRestorePrefix = QStringLiteral("before-restore-");
+const auto kRestoreStagingPrefix = QStringLiteral(".restore-staging-");
 const auto kAutoEnabledKey = QStringLiteral("backup/autoEnabled");
 const auto kLastBackupIsoKey = QStringLiteral("backup/lastBackupIso");
 
@@ -71,11 +74,19 @@ struct RestorePreflightResult
 
 struct BackupService::RestoreContext
 {
-    QString sourcePath;
+    QString stagedSourcePath;
     QString databasePath;
     QString preRestorePath;
     QVariantMap originalSettings;
     QVariantMap restoredSettings;
+
+    ~RestoreContext()
+    {
+        // 暂存文件只服务于一次恢复；成功、失败、回滚或退出等待完成后都必须删除。
+        if (!stagedSourcePath.isEmpty()) {
+            QFile::remove(stagedSourcePath);
+        }
+    }
 };
 
 BackupService::BackupService(QObject* parent)
@@ -433,11 +444,42 @@ bool BackupService::restoreBackup(const QString& srcPath)
         return false;
     }
 
-    const QVariantMap info = inspectBackup(srcPath);
+    if (!QDir().mkpath(autoBackupsDir())) {
+        setLastError(QStringLiteral("无法创建备份目录"));
+        emit restoreCompleted(false, m_lastError);
+        return false;
+    }
+
+    const QString stagedSourcePath = QDir(autoBackupsDir()).filePath(
+        kRestoreStagingPrefix
+        + QUuid::createUuid().toString(QUuid::WithoutBraces)
+        + QStringLiteral(".tmp"));
+    struct RestoreStagingGuard {
+        QString path;
+        ~RestoreStagingGuard() { QFile::remove(path); }
+    } stagingGuard{stagedSourcePath};
+
+    // 外部路径只读取这一次。后续完整性检查、设置解析和安装都使用应用控制的同一副本，
+    // 避免用户或同步软件在检查后替换源文件，使“实际安装内容”脱离已验证内容。
+    const BackupOperations::OperationResult staged =
+        BackupOperations::atomicCopy(srcPath, stagedSourcePath);
+    if (!staged.success) {
+        setLastError(staged.error);
+        emit restoreCompleted(false, m_lastError);
+        return false;
+    }
+
+    const QVariantMap info = inspectBackup(stagedSourcePath);
     if (!info.value(QStringLiteral("valid")).toBool()) {
         setLastError(info.value(QStringLiteral("reason")).toString());
         emit restoreCompleted(false, m_lastError);
         return false;
+    }
+
+    const std::function<void()> validationHook =
+        std::move(m_afterRestoreValidationHookForTest);
+    if (validationHook) {
+        validationHook();
     }
 
     const QString dbPath = databasePath();
@@ -456,18 +498,13 @@ bool BackupService::restoreBackup(const QString& srcPath)
     }
 
     const BackupOperations::EmbeddedSettingsResult restoredSettings =
-        BackupOperations::readEmbeddedSettings(srcPath);
+        BackupOperations::readEmbeddedSettings(stagedSourcePath);
     if (!restoredSettings.success) {
         setLastError(restoredSettings.error);
         emit restoreCompleted(false, m_lastError);
         return false;
     }
 
-    if (!QDir().mkpath(autoBackupsDir())) {
-        setLastError(QStringLiteral("无法创建备份目录"));
-        emit restoreCompleted(false, m_lastError);
-        return false;
-    }
     // 先清到 N-1 再写新的一份，恢复结束后恰好留 N 份。放在创建之前而不是之后，
     // 是因为异步恢复的快照是在工作线程里写的，成功/失败分支各有出口；
     // 统一在入口处清理只需要一个插入点，也始终跑在 GUI 线程上。
@@ -483,7 +520,7 @@ bool BackupService::restoreBackup(const QString& srcPath)
 
     DatabaseManager::instance()->close();
     const BackupOperations::OperationResult install =
-        BackupOperations::atomicCopy(srcPath, dbPath);
+        BackupOperations::atomicCopy(stagedSourcePath, dbPath);
     bool ok = install.success
         && DatabaseManager::instance()->initialize(dbPath)
         && verifyRestoredDatabase()
@@ -656,9 +693,17 @@ void BackupService::requestRestore(const QString& srcPath)
         return;
     }
 
+    if (!QDir().mkpath(autoBackupsDir())) {
+        emit restoreCompleted(false, QStringLiteral("无法创建备份目录"));
+        return;
+    }
+
     pruneBeforeRestoreBackups();
     auto context = QSharedPointer<RestoreContext>::create();
-    context->sourcePath = srcPath;
+    context->stagedSourcePath = QDir(autoBackupsDir()).filePath(
+        kRestoreStagingPrefix
+        + QUuid::createUuid().toString(QUuid::WithoutBraces)
+        + QStringLiteral(".tmp"));
     context->databasePath = dbPath;
     context->preRestorePath = QDir(autoBackupsDir()).filePath(
         kBeforeRestorePrefix + timestampToken() + kBackupExtension);
@@ -685,17 +730,23 @@ void BackupService::requestRestore(const QString& srcPath)
         context->restoredSettings = result.restoredSettings;
         installPreparedRestore(context);
     });
-    watcher->setFuture(QtConcurrent::run([srcPath]() {
+    watcher->setFuture(QtConcurrent::run([srcPath, context]() {
         RestorePreflightResult result;
+        const BackupOperations::OperationResult staged =
+            BackupOperations::atomicCopy(srcPath, context->stagedSourcePath);
+        if (!staged.success) {
+            result.error = staged.error;
+            return result;
+        }
         const QVariantMap info = BackupOperations::inspectBackup(
-            srcPath, DatabaseManager::kCurrentSchemaVersion);
+            context->stagedSourcePath, DatabaseManager::kCurrentSchemaVersion);
         if (!info.value(QStringLiteral("valid")).toBool()) {
             result.error = info.value(QStringLiteral("reason")).toString();
             return result;
         }
 
         const BackupOperations::EmbeddedSettingsResult settings =
-            BackupOperations::readEmbeddedSettings(srcPath);
+            BackupOperations::readEmbeddedSettings(context->stagedSourcePath);
         result.success = settings.success;
         result.error = settings.error;
         result.restoredSettings = settings.values;
@@ -775,7 +826,7 @@ void BackupService::installPreparedRestore(
                 return snapshot;
             }
             return BackupOperations::atomicCopy(
-                context->sourcePath, context->databasePath);
+                context->stagedSourcePath, context->databasePath);
         }));
 }
 

@@ -192,7 +192,11 @@ Rectangle {
                     }
 
                     Text {
-                        text: Number(parent.modelData.actual || 0) + " / " + Number(parent.modelData.planned || 0)
+                        objectName: "weeklyReviewSubjectComparison"
+                        // 计划和实际都以分钟为底层单位，再统一格式化成人类可读时长。
+                        // completedPomodoros 是独立事实，不能拿“个数”去除以“分钟”。
+                        text: Duration.format(Number(parent.modelData.focusedMinutes || 0))
+                              + " / " + Duration.format(Number(parent.modelData.planned || 0))
                         textFormat: Text.PlainText
                         color: Theme.inkSoft
                         font.pixelSize: Theme.fontMd

@@ -396,30 +396,40 @@ QString ShortcutRegistry::disable(const QString& actionId)
     return QString();
 }
 
-void ShortcutRegistry::resetToDefault(const QString& actionId)
+QString ShortcutRegistry::resetToDefault(const QString& actionId)
 {
     const ShortcutActionDefinition* definition = findDefinition(actionId);
-    if (!definition || !m_settings)
-        return;
+    if (!definition)
+        return QStringLiteral("未知的快捷键动作");
+    if (!m_settings)
+        return QStringLiteral("设置不可用，无法保存快捷键");
 
     m_writingOwnChange = true;
-    m_settings->clearShortcutOverride(actionId);
+    const bool saved = m_settings->clearShortcutOverride(actionId);
     m_writingOwnChange = false;
+    if (!saved)
+        return QStringLiteral("无法恢复默认键位，请检查设置文件权限后重试");
+
     if (definition->global)
         syncGlobalHotkey(*definition);
     emit actionsChanged();
+    return QString();
 }
 
-void ShortcutRegistry::resetAll()
+QString ShortcutRegistry::resetAll()
 {
     if (!m_settings)
-        return;
+        return QStringLiteral("设置不可用，无法保存快捷键");
 
     m_writingOwnChange = true;
-    m_settings->clearAllShortcutOverrides();
+    const bool saved = m_settings->clearAllShortcutOverrides();
     m_writingOwnChange = false;
+    if (!saved)
+        return QStringLiteral("无法恢复默认键位，请检查设置文件权限后重试");
+
     syncAllGlobalHotkeys();
     emit actionsChanged();
+    return QString();
 }
 
 void ShortcutRegistry::syncGlobalHotkey(const ShortcutActionDefinition& definition)

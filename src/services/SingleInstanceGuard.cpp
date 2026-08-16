@@ -5,11 +5,13 @@
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QLockFile>
+#include <QTimer>
 #include <QVariant>
 
 namespace {
 // 单实例激活协议只有一行短命令；留足余量即可，超出一律丢弃。
 constexpr int kMaxMessageBytes = 4096;
+constexpr int kMaxActiveClients = 16;
 const QByteArray kActivateCommand = QByteArrayLiteral("activate\n");
 constexpr int kIpcTimeoutMs = 500;
 }
@@ -84,11 +86,31 @@ bool SingleInstanceGuard::notifyPrimaryInstance() const
 void SingleInstanceGuard::acceptPendingConnections()
 {
     while (QLocalSocket* socket = m_server->nextPendingConnection()) {
+        // 单实例协议不需要并发长连接。限制已接收连接的数量，避免本机进程只连接不发消息，
+        // 在超时窗口内制造无上限的 QObject 和文件描述符。
+        if (m_activeClientCount >= kMaxActiveClients) {
+            qWarning() << "Too many single instance clients, dropping connection";
+            socket->abort();
+            socket->deleteLater();
+            continue;
+        }
+
         socket->setParent(this);
+        socket->setProperty("instanceConnectionCounted", true);
+        ++m_activeClientCount;
         connect(socket, &QLocalSocket::readyRead, this,
                 [this, socket]() { consumeSocketMessage(socket); });
-        connect(socket, &QLocalSocket::disconnected,
-                socket, &QObject::deleteLater);
+        connect(socket, &QLocalSocket::disconnected, this,
+                [this, socket]() { closeClientSocket(socket); });
+
+        // 正常的重复启动会立刻发完一行；500 ms 仍没有完整命令就视为坏客户端。
+        // 定时器以 socket 为上下文，连接若已释放，回调会自动取消，不会访问悬空指针。
+        QTimer::singleShot(kIpcTimeoutMs, socket, [this, socket]() {
+            if (!socket->property("activationHandled").toBool()) {
+                qWarning() << "Single instance client timed out, dropping connection";
+            }
+            closeClientSocket(socket);
+        });
 
         // 客户端可能在 newConnection 槽运行前已经写完，不能只等下一次 readyRead。
         if (socket->bytesAvailable() > 0) {
@@ -113,7 +135,7 @@ void SingleInstanceGuard::consumeSocketMessage(QLocalSocket* socket)
         qWarning() << "Single instance message exceeds" << kMaxMessageBytes
                    << "bytes, dropping connection";
         socket->setProperty("activationHandled", true);
-        socket->disconnectFromServer();
+        closeClientSocket(socket);
         return;
     }
 
@@ -126,5 +148,21 @@ void SingleInstanceGuard::consumeSocketMessage(QLocalSocket* socket)
     if (message.startsWith(kActivateCommand)) {
         emit activationRequested();
     }
-    socket->disconnectFromServer();
+    closeClientSocket(socket);
+}
+
+void SingleInstanceGuard::closeClientSocket(QLocalSocket* socket)
+{
+    if (!socket) {
+        return;
+    }
+
+    // 超时、协议完成和客户端主动断开可能在同一轮事件循环相遇。属性充当一次性令牌，
+    // 保证连接计数只归还一次，避免并发上限被错误放宽或降成负数。
+    if (socket->property("instanceConnectionCounted").toBool()) {
+        socket->setProperty("instanceConnectionCounted", false);
+        --m_activeClientCount;
+    }
+    socket->abort();
+    socket->deleteLater();
 }

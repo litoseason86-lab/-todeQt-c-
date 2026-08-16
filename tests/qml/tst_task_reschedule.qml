@@ -14,6 +14,7 @@ TestCase {
     visible: true
 
     property var moveCalls: []
+    property int weekQueryCount: 0
 
     QtObject {
         id: taskManager
@@ -21,12 +22,16 @@ TestCase {
 
         property var weekRows: []
 
-        function getWeekTasks(weekStartIso) { return taskManager.weekRows }
+        function getWeekTasks(weekStartIso) {
+            testCase.weekQueryCount += 1
+            return taskManager.weekRows
+        }
         function setTaskCompleted(id, completed) { return true }
         function updateTask(id, title, categoryId, date) { return true }
         function deleteTask(id) { return true }
         function moveTaskToDate(taskId, isoDate) {
             testCase.moveCalls.push({ taskId: taskId, date: isoDate })
+            tasksChanged()
             return true
         }
     }
@@ -72,6 +77,7 @@ TestCase {
 
     function init() {
         testCase.moveCalls = []
+        testCase.weekQueryCount = 0
         taskManager.weekRows = [makeTask(1, "待挪任务", testCase.logicalToday())]
     }
 
@@ -80,6 +86,7 @@ TestCase {
         verify(!!view, "Component exists")
         view.refresh()
         wait(80)
+        testCase.weekQueryCount = 0
 
         // 直接驱动状态机而不模拟真实指针：坐标命中依赖离屏布局，
         // 那部分不稳定；这里要守的是"落在第 N 天就改到第 N 天"这条规则。
@@ -90,6 +97,9 @@ TestCase {
         compare(testCase.moveCalls.length, 1)
         compare(testCase.moveCalls[0].taskId, 1)
         compare(testCase.moveCalls[0].date, view.isoDate(view.dayDate(4)))
+        // 生产服务在返回前同步发 tasksChanged；一次改期只能因此刷新一次。
+        // 显式 refresh 再叠加信号刷新，会在拖动回调栈里连续重建两轮 delegate。
+        tryCompare(testCase, "weekQueryCount", 1)
     }
 
     function test_dropping_back_on_the_same_day_is_not_a_move() {
@@ -117,6 +127,20 @@ TestCase {
         compare(testCase.moveCalls.length, 0)
         // 状态要复位，否则下一次拖动会带着上次的残留目标。
         compare(view.draggingTaskId, -1)
+    }
+
+    function test_cancelled_drag_does_not_move_task() {
+        var view = createTemporaryObject(viewComponent, testCase)
+        view.refresh()
+        wait(80)
+
+        view.beginDrag(1)
+        view.dropTargetIndex = 4
+        view.commitDrag(1, 0, true)
+
+        compare(testCase.moveCalls.length, 0)
+        compare(view.draggingTaskId, -1)
+        compare(view.dropTargetIndex, -1)
     }
 
     function test_completed_tasks_are_not_draggable() {

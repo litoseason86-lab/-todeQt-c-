@@ -190,6 +190,32 @@ bool insertFocusSessionRowAt(int taskId,
     return true;
 }
 
+bool insertFocusSessionWithSnapshot(int taskId,
+                                    const QDate& date,
+                                    const QString& startTime,
+                                    int duration,
+                                    const QString& categoryName,
+                                    const QString& categoryColor)
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO focus_sessions "
+        "(task_id, start_time, end_time, duration, pomodoro_completed, "
+        "category_name_snapshot, category_color_snapshot) "
+        "VALUES (:taskId, :startTime, :endTime, :duration, 1, :categoryName, :categoryColor)"));
+    query.bindValue(QStringLiteral(":taskId"), taskId);
+    query.bindValue(QStringLiteral(":startTime"), dateTimeText(date, startTime));
+    query.bindValue(QStringLiteral(":endTime"), dateTimeText(date, startTime));
+    query.bindValue(QStringLiteral(":duration"), duration);
+    query.bindValue(QStringLiteral(":categoryName"), categoryName);
+    query.bindValue(QStringLiteral(":categoryColor"), categoryColor);
+    if (!query.exec()) {
+        qWarning() << "Failed to insert snapshotted focus session:" << query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
 bool insertFocusSessionWithNullDuration(int taskId, const QDate& date)
 {
     QSqlQuery query(DatabaseManager::instance()->database());
@@ -729,6 +755,7 @@ private slots:
     void getCategoryStatsAggregatesDurationsAndPercentages();
     void statisticsIgnoresInvalidShortSessions();
     void getDayTaskStatsAggregatesPerTask();
+    void getDayTaskStatsUsesLatestValidCategorySnapshot();
     void getDayTaskStatsGroupsUnassignedFocus();
     void getDayTaskStatsPomodoroCountUsesValidRule();
     void getDayTaskStatsRespectsLogicalDayAndEmptyDate();
@@ -2778,6 +2805,26 @@ void ServiceTests::getDayTaskStatsAggregatesPerTask()
     QCOMPARE(second.value(QStringLiteral("taskId")).toInt(), engId);
     QCOMPARE(second.value(QStringLiteral("focusedSeconds")).toInt(), 600);
     QCOMPARE(second.value(QStringLiteral("pomodoros")).toInt(), 1);
+}
+
+void ServiceTests::getDayTaskStatsUsesLatestValidCategorySnapshot()
+{
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("跨科目任务"), today, QStringLiteral("当前科目"));
+    QVERIFY(taskId > 0);
+
+    QVERIFY(insertFocusSessionWithSnapshot(taskId, today, QStringLiteral("09:00:00"), 600,
+                                           QStringLiteral("上午科目"), QStringLiteral("#112233")));
+    QVERIFY(insertFocusSessionWithSnapshot(taskId, today, QStringLiteral("15:00:00"), 900,
+                                           QStringLiteral("下午科目"), QStringLiteral("#445566")));
+
+    const QVariantList tasks = StatisticsService::instance()->getDayTaskStats(today)
+                                   .value(QStringLiteral("tasks")).toList();
+    QCOMPARE(tasks.size(), 1);
+    const QVariantMap row = tasks.first().toMap();
+    QCOMPARE(row.value(QStringLiteral("focusedSeconds")).toInt(), 1500);
+    QCOMPARE(row.value(QStringLiteral("categoryName")).toString(), QStringLiteral("下午科目"));
+    QCOMPARE(row.value(QStringLiteral("color")).toString(), QStringLiteral("#445566"));
 }
 
 void ServiceTests::getDayTaskStatsGroupsUnassignedFocus()
@@ -5272,6 +5319,18 @@ void ServiceTests::weeklyReviewHandlesZeroPlanAndUnplannedSubjects()
     QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("unplanned")).toBool(), true);
     // 无计划但有实际时，建议引导设置预估。
     QVERIFY(review.value(QStringLiteral("suggestionText")).toString().contains(QStringLiteral("预计用时")));
+
+    // 纯自由计时同样是有效投入。它没有完整番茄，但不能因此被空状态吞掉。
+    QSqlQuery clear(DatabaseManager::instance()->database());
+    QVERIFY(clear.exec(QStringLiteral("DELETE FROM focus_sessions")));
+    QVERIFY(insertFocusSessionRowWithMode(task, weekday, 40 * 60, 0));
+
+    const QVariantMap freeOnlyReview =
+        StatisticsService::instance()->getWeeklyReview(weekStart);
+    QCOMPARE(freeOnlyReview.value(QStringLiteral("plannedMinutes")).toInt(), 0);
+    QCOMPARE(freeOnlyReview.value(QStringLiteral("completedPomodoros")).toInt(), 0);
+    QCOMPARE(freeOnlyReview.value(QStringLiteral("focusedMinutes")).toInt(), 40);
+    QCOMPARE(freeOnlyReview.value(QStringLiteral("hasData")).toBool(), true);
 }
 
 void ServiceTests::weeklyReviewComparesPreviousWeekAndBoundaries()
@@ -5691,6 +5750,11 @@ void ServiceTests::asyncExportRunsOffTheCallingThreadAndReportsCompletion()
     QSignalSpy completed(service, &ExportService::exportCompleted);
     QVERIFY(completed.isValid());
 
+    // Qt 要求 removeDatabase 前销毁该连接的全部句柄。把这条运行时警告升级为测试失败，
+    // 避免异步导出表面成功、实际留下悬空连接或让尚未销毁的查询失效。
+    QTest::failOnWarning(QRegularExpression(
+        QStringLiteral(".*QSqlDatabasePrivate::removeDatabase: connection .* is still in use.*")));
+
     service->requestExportFocusSessions(day, day, filePath);
     // 请求返回时活儿还没干完——这正是"没有占住调用线程"的证据。
     QCOMPARE(completed.count(), 0);
@@ -5708,4 +5772,3 @@ void ServiceTests::asyncExportRunsOffTheCallingThreadAndReportsCompletion()
     QVERIFY(content.startsWith(QStringLiteral("ID,任务ID,任务标题,科目")));
     QVERIFY(content.count(QLatin1Char('\n')) >= 2);
 }
-

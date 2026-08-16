@@ -66,8 +66,9 @@ public:
     Q_INVOKABLE QString assign(const QString& actionId, const QString& portableSequence);
     // 停用某个动作：写入空串覆盖值，与「恢复默认」是两件事。
     Q_INVOKABLE QString disable(const QString& actionId);
-    Q_INVOKABLE void resetToDefault(const QString& actionId);
-    Q_INVOKABLE void resetAll();
+    // 恢复操作同样需要确认设置已落盘。返回空串表示成功，否则返回可直接展示的原因。
+    Q_INVOKABLE QString resetToDefault(const QString& actionId);
+    Q_INVOKABLE QString resetAll();
 
     // 把 QML 按键事件的 key + modifiers 规范成 PortableText；无法接受的组合返回空串。
     Q_INVOKABLE QString normalize(int key, int modifiers) const;

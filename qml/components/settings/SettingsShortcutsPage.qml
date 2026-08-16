@@ -66,9 +66,9 @@ FocusScope {
         if (!root.shortcutRegistryRef) {
             return
         }
-        root.shortcutRegistryRef.resetToDefault(actionId)
-        root.feedbackIsError = false
-        root.feedbackText = "已恢复默认键位"
+        var message = String(root.shortcutRegistryRef.resetToDefault(actionId))
+        root.feedbackIsError = message.length > 0
+        root.feedbackText = root.feedbackIsError ? message : "已恢复默认键位"
     }
 
     Connections {
@@ -179,9 +179,10 @@ FocusScope {
                     if (!root.shortcutRegistryRef) {
                         return
                     }
-                    root.shortcutRegistryRef.resetAll()
-                    root.feedbackIsError = false
-                    root.feedbackText = "已全部恢复默认键位"
+                    var message = String(root.shortcutRegistryRef.resetAll())
+                    root.feedbackIsError = message.length > 0
+                    root.feedbackText = root.feedbackIsError
+                            ? message : "已全部恢复默认键位"
                 }
 
                 background: Rectangle {

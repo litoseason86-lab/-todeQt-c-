@@ -1,5 +1,6 @@
 #include <QDate>
 #include <QFile>
+#include <QLocalSocket>
 #include <QSignalSpy>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -101,6 +102,7 @@ private slots:
     void breakStateIsDistinguished();
     void showAndQuitEmitIntentSignals();
     void repeatedLaunchRequestsExistingWindow();
+    void silentInstanceConnectionsAreBoundedAndExpire();
     void unavailableInstanceLockFailsClosed();
     void restoredSessionIsReflectedInMenu();
     void detachedViewStopsReceivingUpdates();
@@ -287,6 +289,55 @@ void PlatformControlTests::repeatedLaunchRequestsExistingWindow()
     QCOMPARE(primary.start(), SingleInstanceGuard::PrimaryInstance);
     QSignalSpy activationSpy(&primary, &SingleInstanceGuard::activationRequested);
 
+    SingleInstanceGuard secondary(lockPath, serverName);
+    QCOMPARE(secondary.start(), SingleInstanceGuard::SecondaryInstanceNotified);
+    QTRY_COMPARE_WITH_TIMEOUT(activationSpy.count(), 1, 1000);
+}
+
+void PlatformControlTests::silentInstanceConnectionsAreBoundedAndExpire()
+{
+    const QString lockPath = m_tempDir->filePath(QStringLiteral("bounded-instance.lock"));
+    const QString serverName = uniqueShortServerName();
+
+    SingleInstanceGuard primary(lockPath, serverName);
+    QCOMPARE(primary.start(), SingleInstanceGuard::PrimaryInstance);
+
+    // 上限写死在测试里是有意的：它就是这条测试要钉住的契约，跟着实现走就测不出放宽。
+    constexpr int kExpectedCap = 16;
+
+    QObject clientOwner;
+    QVector<QLocalSocket*> clients;
+    for (int i = 0; i < kExpectedCap * 2; ++i) {
+        auto* client = new QLocalSocket(&clientOwner);
+        client->connectToServer(serverName, QIODevice::WriteOnly);
+        clients.append(client);
+        // 故意不写入也不主动断开，模拟卡死或恶意的本机客户端。
+    }
+    for (QLocalSocket* client : clients) {
+        QVERIFY(client->waitForConnected(200));
+    }
+
+    // 判据取「客户端仍处于连接态的数量」而不是服务端此刻持有的 socket 数：后者在
+    // 第一个连接刚被 accept 时就能满足 <= 上限，于是把上限调到 1024 也照样通过——
+    // 这条测试上一版正是这样自我欺骗的。超额连接会被立即 abort，客户端能看见。
+    const auto stillConnected = [&clients]() {
+        int count = 0;
+        for (QLocalSocket* client : clients) {
+            if (client->state() == QLocalSocket::ConnectedState) {
+                ++count;
+            }
+        }
+        return count;
+    };
+
+    // 必须在 500ms 超时回收开始之前收敛，否则测的就不是上限而是超时了。
+    QTRY_COMPARE_WITH_TIMEOUT(stillConnected(), kExpectedCap, 400);
+    // 应用层上限必须独立于操作系统的监听队列；否则一次连接洪泛就能线性吃光句柄。
+    QCOMPARE(primary.findChildren<QLocalSocket*>().size(), kExpectedCap);
+    QTRY_COMPARE_WITH_TIMEOUT(primary.findChildren<QLocalSocket*>().size(), 0, 1500);
+
+    // 连接全部超时回收后，合法的重复启动仍能召回主窗口，说明名额确实被归还。
+    QSignalSpy activationSpy(&primary, &SingleInstanceGuard::activationRequested);
     SingleInstanceGuard secondary(lockPath, serverName);
     QCOMPARE(secondary.start(), SingleInstanceGuard::SecondaryInstanceNotified);
     QTRY_COMPARE_WITH_TIMEOUT(activationSpy.count(), 1, 1000);

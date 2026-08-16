@@ -92,6 +92,74 @@ bool tableExists(const QSqlDatabase& database, const QString& tableName)
     return query.exec() && query.next();
 }
 
+bool validateRequiredTableStructure(const QSqlDatabase& database, QString* reason)
+{
+    struct TableContract {
+        QString name;
+        QStringList columns;
+    };
+
+    // 这里只校验所有历史版本都依赖、且迁移链无法补回的基础结构。
+    // estimated_minutes、mode 等版本列由 DatabaseManager 的防御性迁移补齐；
+    // title、start_time 这类基础列一旦缺失，CREATE TABLE IF NOT EXISTS 不会自愈。
+    const QList<TableContract> contracts = {
+        {QStringLiteral("tasks"),
+         {QStringLiteral("id"),
+          QStringLiteral("title"),
+          QStringLiteral("category"),
+          QStringLiteral("date"),
+          QStringLiteral("completed"),
+          QStringLiteral("created_at")}},
+        {QStringLiteral("focus_sessions"),
+         {QStringLiteral("id"),
+          QStringLiteral("task_id"),
+          QStringLiteral("start_time"),
+          QStringLiteral("end_time"),
+          QStringLiteral("duration")}},
+        {QStringLiteral("categories"),
+         {QStringLiteral("id"),
+          QStringLiteral("name"),
+          QStringLiteral("color"),
+          QStringLiteral("is_preset"),
+          QStringLiteral("display_order"),
+          QStringLiteral("created_at")}},
+    };
+
+    for (const TableContract& contract : contracts) {
+        QSqlQuery columns(database);
+        if (!columns.exec(
+                QStringLiteral("PRAGMA table_info(%1)").arg(contract.name))) {
+            *reason = QStringLiteral("读取备份表结构失败：%1").arg(contract.name);
+            return false;
+        }
+
+        QStringList names;
+        bool idIsPrimaryKey = false;
+        while (columns.next()) {
+            const QString columnName = columns.value(1).toString();
+            names.append(columnName);
+            if (columnName == QStringLiteral("id") && columns.value(5).toInt() > 0) {
+                idIsPrimaryKey = true;
+            }
+        }
+
+        for (const QString& requiredColumn : contract.columns) {
+            if (!names.contains(requiredColumn)) {
+                *reason = QStringLiteral("备份表结构不完整，缺少 %1.%2")
+                              .arg(contract.name, requiredColumn);
+                return false;
+            }
+        }
+        if (!idIsPrimaryKey) {
+            *reason = QStringLiteral("备份表结构不完整，%1.id 不是主键")
+                          .arg(contract.name);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 std::unique_ptr<QSettings> makeSettings(const QString& path)
 {
     if (path.isEmpty()) {
@@ -413,6 +481,10 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
                         break;
                     }
                 }
+            }
+
+            if (reason.isEmpty()) {
+                validateRequiredTableStructure(database, &reason);
             }
 
             if (reason.isEmpty()

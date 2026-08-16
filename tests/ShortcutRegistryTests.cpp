@@ -131,6 +131,7 @@ private slots:
     void assignRejectsSingleModifierGlobalHotkey();
     void disableIsDistinctFromResetToDefault();
     void resetAllRestoresEveryDefault();
+    void resetFailureIsReportedWithoutNotifyingSuccess();
     void normalizeDropsKeypadAndRejectsBareModifier();
     void settingBackendRegistersEveryGlobalAction();
     void reassigningGlobalActionReplacesRegistration();
@@ -331,7 +332,7 @@ void ShortcutRegistryTests::disableIsDistinctFromResetToDefault()
     // 停用状态必须跨实例保持，否则重启就「自己恢复」了。
     QVERIFY(ShortcutRegistry(m_settings).sequenceFor(QStringLiteral("task.new")).isEmpty());
 
-    registry.resetToDefault(QStringLiteral("task.new"));
+    QCOMPARE(registry.resetToDefault(QStringLiteral("task.new")), QString());
     QCOMPARE(registry.sequenceFor(QStringLiteral("task.new")), QStringLiteral("Ctrl+N"));
 
     // 停用的动作不占用键位，别的动作可以拿走它原来的键。
@@ -347,13 +348,38 @@ void ShortcutRegistryTests::resetAllRestoresEveryDefault()
              QString());
     QCOMPARE(registry.disable(QStringLiteral("view.goals")), QString());
 
-    registry.resetAll();
+    QCOMPARE(registry.resetAll(), QString());
 
     QCOMPARE(registry.sequenceFor(QStringLiteral("task.new")), QStringLiteral("Ctrl+N"));
     QCOMPARE(registry.sequenceFor(QStringLiteral("view.goals")), QStringLiteral("Ctrl+8"));
     for (const QVariant& entry : registry.actions()) {
         QVERIFY(entry.toMap().value(QStringLiteral("isDefault")).toBool());
     }
+}
+
+void ShortcutRegistryTests::resetFailureIsReportedWithoutNotifyingSuccess()
+{
+    ShortcutRegistry registry(m_settings);
+    QCOMPARE(registry.assign(QStringLiteral("task.new"), QStringLiteral("Ctrl+Shift+N")),
+             QString());
+
+    QSignalSpy actionsSpy(&registry, &ShortcutRegistry::actionsChanged);
+    actionsSpy.clear();
+
+    // 先让覆盖值真实落盘，再用同名目录占住 ini 路径，稳定模拟删除设置时的
+    // AccessError。失败后不能广播 actionsChanged，否则 QML 会把未落盘状态当成功。
+    const QString settingsPath = m_dir.filePath(
+        QStringLiteral("shortcuts-%1.ini").arg(QTest::currentTestFunction()));
+    QVERIFY(QFile::remove(settingsPath));
+    QVERIFY(QDir().mkpath(settingsPath));
+
+    const QString singleError = registry.resetToDefault(QStringLiteral("task.new"));
+    QVERIFY(singleError.contains(QStringLiteral("无法恢复")));
+    QCOMPARE(actionsSpy.count(), 0);
+
+    const QString allError = registry.resetAll();
+    QVERIFY(allError.contains(QStringLiteral("无法恢复")));
+    QCOMPARE(actionsSpy.count(), 0);
 }
 
 void ShortcutRegistryTests::normalizeDropsKeypadAndRejectsBareModifier()

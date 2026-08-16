@@ -8,6 +8,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <functional>
+
 class QFutureWatcherBase;
 
 namespace BackupOperations {
@@ -135,6 +137,8 @@ private:
     bool m_shutdownPrepared = false;
     // 仅供 BackupServiceTests 置位：强制下一次回滚的拷贝返回失败。生产代码永远不写它。
     bool m_forceRollbackCopyFailureForTest = false;
+    // 仅供测试在“校验完成、安装尚未开始”的窗口替换外部源路径，锁定恢复必须使用受控副本。
+    std::function<void()> m_afterRestoreValidationHookForTest;
 };
 
 #endif // BACKUPSERVICE_H

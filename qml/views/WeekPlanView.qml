@@ -49,6 +49,7 @@ Item {
             root.refresh()
     }
     onPageActiveChanged: {
+        refreshCoalescer.cancel()
         if (root.pageActive)
             root.refresh()
     }
@@ -65,12 +66,19 @@ Item {
         function onTasksChanged() {
             if (root.completionRefreshDelayActive)
                 return
-            root.refresh()
+            refreshCoalescer.request()
         }
 
         function onOperationFailed(message) {
             root.loadError = String(message || "本周计划加载失败")
         }
+    }
+
+    RefreshCoalescer {
+        id: refreshCoalescer
+
+        active: root.pageActive
+        onTriggered: root.refresh()
     }
 
     Timer {
@@ -182,19 +190,20 @@ Item {
         return null
     }
 
-    function commitDrag(taskId, currentIndex) {
+    function commitDrag(taskId, currentIndex, cancelled) {
         const target = root.dropTargetIndex
         root.draggingTaskId = -1
         root.dropTargetIndex = -1
         // 拖回原来那天不算改期：白写一次库还会把它挪到当天末尾。
-        if (!root.canMoveTasks || target < 0 || target === currentIndex) {
+        if (cancelled === true || !root.canMoveTasks
+                || target < 0 || target === currentIndex) {
             return
         }
         if (!root.taskManagerRef.moveTaskToDate(taskId, root.isoDate(root.dayDate(target)))) {
             root.loadError = "任务改期失败，请重试"
             return
         }
-        root.refresh()
+        // 成功路径由 TaskManager.tasksChanged 统一触发刷新；这里再查一次会同步重建两轮 delegate。
     }
 
     function tasksForDay(index) {
@@ -639,7 +648,11 @@ Item {
 
                                     onDragStarted: root.beginDrag(weekTaskRow.taskId)
                                     onDragMoved: function (sceneX, sceneY) { root.updateDrag(sceneY) }
-                                    onDragFinished: root.commitDrag(weekTaskRow.taskId, dayRow.index)
+                                    onDragFinished: function (cancelled) {
+                                        root.commitDrag(weekTaskRow.taskId,
+                                                        dayRow.index,
+                                                        cancelled)
+                                    }
 
                                     onCompletionChanged: function(id, completed) {
                                         root.setTaskCompletedWithAnimationDelay(id, completed, weekTaskRow.modelData.title)

@@ -508,33 +508,47 @@ QVariantMap StatisticsService::getDayTaskStats(const QDate& date) const
         return emptyTaskStats();
     }
 
-    // 按 task_id 分组：同一任务当天的多段专注累加成一行。GROUP BY f.task_id 会把所有
-    // task_id 为空的自由计时会话归入同一组，天然得到「未关联专注」单行。
-    // 专注时长对 mode 不敏感(番茄段+自由段都算)，番茄数走 FocusSessionRules 唯一口径。
-    // 科目名/色沿用 getCategoryStats 的快照优先 COALESCE 链，保证与饼图一致。
+    // 同一任务当天的多段专注累加成一行，task_id 为空的会话统一归入「未关联专注」。
+    // 一行只能展示一种科目颜色，而同一任务当天可能先后换过科目，因此明确取最后一段
+    // 有效专注的快照；同一时刻再按 id 取最后写入的一段。不能直接在 GROUP BY task_id 时
+    // 读取 f 的普通列，SQLite 会任意挑一行，结果会随索引和查询计划变化。
+    // 专注时长对 mode 不敏感（番茄段和自由段都算），番茄数走统一有效番茄口径。
     QSqlQuery query(db);
     const QString sql = QStringLiteral(
-        "SELECT "
-        "f.task_id AS task_id, "
-        "t.title AS task_title, "
-        "COALESCE(t.completed, 0) AS task_completed, "
-        "COALESCE(NULLIF(snapshot_category.name, ''), NULLIF(f.category_name_snapshot, ''), "
-        "NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), '') AS category_name, "
-        "COALESCE(NULLIF(snapshot_category.color, ''), NULLIF(f.category_color_snapshot, ''), "
-        "NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS category_color, "
-        "SUM(f.duration) AS focused_seconds, "
-        "%1 AS pomodoros "
-        "FROM focus_sessions f "
-        "LEFT JOIN tasks t ON f.task_id = t.id "
-        "LEFT JOIN categories snapshot_category ON f.category_id_snapshot = snapshot_category.id "
-        "LEFT JOIN categories c ON t.category_id = c.id "
-        "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
+        "WITH valid_sessions AS ("
+        "SELECT f.* FROM focus_sessions f "
         "WHERE date(f.start_time, :dayShift) = :date "
         "AND f.end_time IS NOT NULL "
         "AND f.duration IS NOT NULL "
-        "AND f.duration >= :minDuration "
-        "GROUP BY f.task_id "
-        "ORDER BY focused_seconds DESC, task_title ASC")
+        "AND f.duration >= :minDuration"
+        "), task_aggregates AS ("
+        "SELECT f.task_id, SUM(f.duration) AS focused_seconds, %1 AS pomodoros "
+        "FROM valid_sessions f GROUP BY f.task_id"
+        "), latest_sessions AS ("
+        "SELECT f.* FROM valid_sessions f "
+        "WHERE f.id = ("
+        "SELECT candidate.id FROM valid_sessions candidate "
+        "WHERE candidate.task_id IS f.task_id "
+        "ORDER BY candidate.start_time DESC, candidate.id DESC LIMIT 1"
+        ")"
+        ") "
+        "SELECT "
+        "totals.task_id AS task_id, "
+        "t.title AS task_title, "
+        "COALESCE(t.completed, 0) AS task_completed, "
+        "COALESCE(NULLIF(snapshot_category.name, ''), NULLIF(latest.category_name_snapshot, ''), "
+        "NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), '') AS category_name, "
+        "COALESCE(NULLIF(snapshot_category.color, ''), NULLIF(latest.category_color_snapshot, ''), "
+        "NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS category_color, "
+        "totals.focused_seconds, "
+        "totals.pomodoros "
+        "FROM task_aggregates totals "
+        "JOIN latest_sessions latest ON latest.task_id IS totals.task_id "
+        "LEFT JOIN tasks t ON totals.task_id = t.id "
+        "LEFT JOIN categories snapshot_category ON latest.category_id_snapshot = snapshot_category.id "
+        "LEFT JOIN categories c ON t.category_id = c.id "
+        "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
+        "ORDER BY totals.focused_seconds DESC, task_title ASC")
         .arg(FocusSessionRules::validPomodoroCountExpr(QStringLiteral("f")));
     query.prepare(sql);
     query.bindValue(QStringLiteral(":dayShift"),
@@ -1238,7 +1252,7 @@ QVariantMap StatisticsService::getWeeklyReview(const QDate& weekStart) const
         factText = QStringLiteral("本周计划与实际基本一致，当前估算较稳定。");
     }
 
-    if (planned == 0 && completed > 0) {
+    if (planned == 0 && focusedMinutes > 0) {
         suggestionText = QStringLiteral("为任务设置预计用时后，这里能给出计划完成率与偏差分析。");
     } else if (planned > 0 && rate < kReviewOverplannedRate) {
         // 规则二：总体高估。
@@ -1250,7 +1264,8 @@ QVariantMap StatisticsService::getWeeklyReview(const QDate& weekStart) const
 
     result[QStringLiteral("factText")] = factText;
     result[QStringLiteral("suggestionText")] = suggestionText;
-    result[QStringLiteral("hasData")] = planned > 0 || completed > 0;
+    // 自由计时不会产生完整番茄，但仍是有效投入；只看 completed 会把整周数据误判为空。
+    result[QStringLiteral("hasData")] = planned > 0 || focusedSeconds > 0;
     return result;
 }
 
