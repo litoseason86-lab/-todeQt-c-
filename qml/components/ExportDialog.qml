@@ -32,12 +32,13 @@ Popup {
     property string statusText: ""
     property int exportCurrent: 0
     property int exportTotal: 0
+    readonly property bool busy: !!root.exportServiceRef && root.exportServiceRef.busy
 
     modal: true
     focus: true
     // 导出跑在工作线程上，这个对话框是唯一的进度反馈。导出期间被 Esc 或点击外部关掉，
     // 用户就无从判断到底还在不在跑，只能靠再点一次导出去撞"已有导出任务正在执行"。
-    closePolicy: (root.exportServiceRef && root.exportServiceRef.busy)
+    closePolicy: root.busy
                  ? Popup.NoAutoClose
                  : (Popup.CloseOnEscape | Popup.CloseOnPressOutside)
     width: Math.min(500, parent ? Math.max(340, parent.width - 64) : 500)
@@ -338,7 +339,9 @@ Popup {
             spacing: Theme.space8
 
             Button {
+                objectName: "exportCancelButton"
                 text: "取消"
+                enabled: !root.busy
                 Layout.fillWidth: true
                 implicitHeight: 42
                 onClicked: root.close()
