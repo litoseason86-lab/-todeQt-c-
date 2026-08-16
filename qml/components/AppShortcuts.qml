@@ -10,8 +10,8 @@ Item {
 
     // C++ 的 ShortcutRegistry。为空时整棵树静默失效，独立组件测试可以不注入它。
     property var registryRef: null
-    // 录制新键位时必须整体停用：否则用户按下 ⌘1 会先被「切到仪表盘」吃掉，
-    // 录制框永远等不到那次按键。
+    // 宿主需要独占输入时必须整体停用：例如录制新键位或数据库恢复期间，
+    // 应用内 Shortcut 与 C++ 全局热键信号都不能穿过这个边界。
     property bool suspended: false
     // 焦点是否落在文本输入框上。应用内快捷键允许绑单个按键（空格、数字键这类），
     // 而单键会和正常打字直接冲突——绑了「N」就再也打不出这个字母。所以输入时
@@ -54,7 +54,8 @@ Item {
         ignoreUnknownSignals: true
 
         function onGlobalActionTriggered(actionId) {
-            root.actionTriggered(String(actionId))
+            if (!root.suspended)
+                root.actionTriggered(String(actionId))
         }
     }
 }

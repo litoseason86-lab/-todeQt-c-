@@ -84,6 +84,11 @@ Item {
                               root.focusTimerRef.elapsedSeconds)
         : "番茄Todo"
 
+    // 恢复期间会经过数据库校验、快照与原子替换；Shortcut 和系统全局热键
+    // 不经过鼠标命中测试，必须直接从服务的临界区事实状态派生输入守卫。
+    readonly property bool backupOperationBlocksInput: !!root.backupServiceRef
+                                                       && root.backupServiceRef.operationBlocksUi
+
     // 弹窗是否已经把输入焦点接管走。Qt 的 Shortcut 不受弹窗遮挡影响：不挡住的话，
     // 用户正在新建任务对话框里打字时按 ⌘1，页面会在弹窗背后被切走（已实测复现）。
     //
@@ -438,6 +443,11 @@ Item {
     // 应用内快捷键与全局热键最终都落到这里，按动作 id 分发。键位是什么、由谁触发，
     // 全部由 ShortcutRegistry 决定，这一层只关心「做什么」。
     function triggerShortcutAction(actionId) {
+        // 最终出口也要守住：测试或其他代码可能直接调用分发函数，
+        // 不能只依赖 AppShortcuts 的 enabled 状态。
+        if (root.backupOperationBlocksInput)
+            return
+
         switch (String(actionId)) {
         case "view.dashboard": root.switchToView("dashboard"); return
         case "view.today": root.switchToView("today"); return
@@ -1043,9 +1053,10 @@ Item {
         objectName: "appShortcuts"
 
         registryRef: root.shortcutRegistryRef
-        // 两种情况必须整体让路：设置页正在录制新键位（否则录不到已被占用的组合），
-        // 以及任何弹窗已经接管输入焦点（否则会在弹窗背后偷偷切页/开始专注）。
+        // 录制键位、弹窗接管焦点或数据库恢复占用临界区时，
+        // 都必须停用应用内与系统级快捷键，避免在遮罩后修改新数据库。
         suspended: settingsDialog.recordingShortcut || root.overlayHoldsFocus
+                   || root.backupOperationBlocksInput
         textInputFocused: root.textInputFocused
 
         onActionTriggered: function (actionId) {

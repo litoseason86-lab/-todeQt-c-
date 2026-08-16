@@ -221,6 +221,17 @@ TestCase {
         compare(triggerSpy.signalArguments[0][0], "global.focusToggle")
     }
 
+    function test_suspended_global_hotkey_signal_waits_until_resumed() {
+        shortcuts.suspended = true
+        registryMock.globalActionTriggered("global.focusToggle")
+        compare(triggerSpy.count, 0)
+
+        shortcuts.suspended = false
+        registryMock.globalActionTriggered("global.focusToggle")
+        compare(triggerSpy.count, 1)
+        compare(triggerSpy.signalArguments[0][0], "global.focusToggle")
+    }
+
     function test_recorder_ignores_bare_modifier_and_keeps_recording() {
         recorder.startRecording()
         compare(recorder.recording, true)
