@@ -807,6 +807,7 @@ private slots:
     void exportFocusSessionsUsesLogicalDayRange();
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
     void exportFocusSessionsAndExportAllWriteExpectedCsvFiles();
+    void exportAllUsesOneDatabaseSnapshot();
     void exportFocusSessionsIgnoresInvalidShortSessions();
     void exportRejectsInvalidDateRangeAndUnwritablePath();
     void exportFailurePreservesExistingFile();
@@ -892,6 +893,7 @@ void ServiceTests::cleanup()
     // FocusTimer 是进程级单例；失败用例可能没走到 stopFocus，必须在关闭测试数据库前清掉活动阶段。
     FocusTimer::instance()->resetSession();
     FocusTimer::instance()->resetPomodoroCount();
+    ExportService::instance()->m_betweenExportFilesHookForTest = {};
     AppSettings::instance()->setDayStartHour(4);
     DatabaseManager::instance()->close();
     delete m_tempDir;
@@ -4354,6 +4356,105 @@ void ServiceTests::exportFocusSessionsAndExportAllWriteExpectedCsvFiles()
     QVERIFY(QFile::exists(m_tempDir->filePath(sessionsFileName)));
     QVERIFY(readUtf8File(m_tempDir->filePath(tasksFileName)).startsWith(QStringLiteral("ID,标题,科目,日期,完成状态,创建时间\n")));
     QVERIFY(readUtf8File(m_tempDir->filePath(sessionsFileName)).startsWith(QStringLiteral("ID,任务ID,任务标题,科目,开始时间,结束时间,时长(分钟)\n")));
+}
+
+void ServiceTests::exportAllUsesOneDatabaseSnapshot()
+{
+    const QDate day(2026, 6, 10);
+    const QString databasePath = m_tempDir->filePath(QStringLiteral("test.sqlite"));
+    ExportService* service = ExportService::instance();
+
+    // WAL 只在这份临时测试库上开启：读事务持续时，第二连接仍能确定性提交。
+    // 生产库仍保持 rollback journal，不在这个修复里改变备份架构。
+    {
+        QSqlQuery journalMode(DatabaseManager::instance()->database());
+        QVERIFY2(journalMode.exec(QStringLiteral("PRAGMA journal_mode = WAL")),
+                 qPrintable(journalMode.lastError().text()));
+        QVERIFY(journalMode.next());
+        QCOMPARE(journalMode.value(0).toString().toLower(), QStringLiteral("wal"));
+        journalMode.finish();
+    }
+
+    const int taskId = insertTaskRow(QStringLiteral("快照内任务"), day, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+    const int initialSessionId = insertFocusSessionRowWithTimes(
+        taskId,
+        QStringLiteral("2026-06-10T09:00:00"),
+        QStringLiteral("2026-06-10T09:25:00"),
+        25 * 60);
+    QVERIFY(initialSessionId > 0);
+
+    const QString writerConnectionName = QStringLiteral("ExportSnapshotWriterForTest");
+    bool hookCommitted = false;
+    int laterSessionId = -1;
+    QString hookError;
+    service->m_betweenExportFilesHookForTest = [&, databasePath]() {
+        {
+            QSqlDatabase writer = QSqlDatabase::addDatabase(
+                QStringLiteral("QSQLITE"), writerConnectionName);
+            writer.setDatabaseName(databasePath);
+            if (!writer.open()) {
+                hookError = writer.lastError().text();
+            } else if (!writer.transaction()) {
+                hookError = writer.lastError().text();
+            } else {
+                bool insertSucceeded = false;
+                {
+                    QSqlQuery insert(writer);
+                    insert.prepare(QStringLiteral(
+                        "INSERT INTO focus_sessions "
+                        "(task_id, start_time, end_time, duration, pomodoro_completed) "
+                        "VALUES (:taskId, :startTime, :endTime, :duration, 1)"));
+                    insert.bindValue(QStringLiteral(":taskId"), taskId);
+                    insert.bindValue(QStringLiteral(":startTime"),
+                                     QStringLiteral("2026-06-10T15:00:00"));
+                    insert.bindValue(QStringLiteral(":endTime"),
+                                     QStringLiteral("2026-06-10T15:45:00"));
+                    insert.bindValue(QStringLiteral(":duration"), 45 * 60);
+                    insertSucceeded = insert.exec();
+                    if (insertSucceeded) {
+                        laterSessionId = insert.lastInsertId().toInt();
+                    } else {
+                        hookError = insert.lastError().text();
+                    }
+                    insert.finish();
+                }
+
+                if (insertSucceeded) {
+                    hookCommitted = writer.commit();
+                    if (!hookCommitted) {
+                        hookError = writer.lastError().text();
+                        writer.rollback();
+                    }
+                } else {
+                    writer.rollback();
+                }
+            }
+            writer.close();
+        }
+        // writer 和查询句柄都已离开作用域，此时才能安全移除命名连接。
+        QSqlDatabase::removeDatabase(writerConnectionName);
+    };
+
+    QVERIFY(service->exportAll(day, day, m_tempDir->path()));
+    QVERIFY2(hookCommitted, qPrintable(hookError));
+    QVERIFY(laterSessionId > 0);
+    QVERIFY(!service->m_betweenExportFilesHookForTest);
+
+    QSqlQuery count(DatabaseManager::instance()->database());
+    QVERIFY(count.exec(QStringLiteral("SELECT COUNT(*) FROM focus_sessions")));
+    QVERIFY(count.next());
+    QCOMPARE(count.value(0).toInt(), 2);
+    count.finish();
+
+    const QString tasksName = service->generateFileName(QStringLiteral("tasks"), day, day);
+    const QString sessionsName = service->generateFileName(
+        QStringLiteral("focus_sessions"), day, day);
+    const QString tasksCsv = readUtf8File(m_tempDir->filePath(tasksName));
+    const QString sessionsCsv = readUtf8File(m_tempDir->filePath(sessionsName));
+    QVERIFY(tasksCsv.contains(QStringLiteral("快照内任务")));
+    QVERIFY(sessionsCsv.contains(QStringLiteral("2026-06-10 09:00:00")));
+    QVERIFY(!sessionsCsv.contains(QStringLiteral("2026-06-10 15:00:00")));
 }
 
 void ServiceTests::exportFocusSessionsIgnoresInvalidShortSessions()

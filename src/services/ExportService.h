@@ -58,6 +58,8 @@ signals:
     void busyChanged();
 
 private:
+    friend class ServiceTests;
+
     explicit ExportService(QObject* parent = nullptr);
 
     // 工作线程要用自己的连接：QSqlDatabase 只能在创建它的线程上使用。
@@ -70,6 +72,9 @@ private:
     void runAsync(const std::function<bool()>& work);
 
     bool m_busy = false;
+    // 只供 ServiceTests 在两份 CSV 之间制造确定性并发写入；
+    // 生产默认为空，调用前会先清空，避免跨测试或重入污染。
+    std::function<void()> m_betweenExportFilesHookForTest;
 
     // 私有函数把日期、CSV 转义和实际写文件拆开，避免导出任务和专注记录互相复制大段代码。
     QDate normalizeDate(const QVariant& value) const;
@@ -86,12 +91,23 @@ private:
                            const QString& filePath,
                            bool emitSuccess,
                            const QString& workerDatabasePath);
+    bool exportTasksUsingDatabase(const QSqlDatabase& database,
+                                  const QDate& startDate,
+                                  const QDate& endDate,
+                                  const QString& filePath,
+                                  bool emitSuccess);
     bool exportFocusSessionsToFile(const QDate& startDate,
                                    const QDate& endDate,
                                    const QString& filePath,
                                    bool emitSuccess,
                                    const QString& workerDatabasePath,
                                    int dayStartHour);
+    bool exportFocusSessionsUsingDatabase(const QSqlDatabase& database,
+                                          const QDate& startDate,
+                                          const QDate& endDate,
+                                          const QString& filePath,
+                                          bool emitSuccess,
+                                          int dayStartHour);
     bool exportAllToDirectory(const QDate& startDate,
                               const QDate& endDate,
                               const QString& dirPath,

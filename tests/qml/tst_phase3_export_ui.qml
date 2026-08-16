@@ -16,6 +16,8 @@ TestCase {
         signal exportProgress(int current, int total)
         signal exportCompleted(bool success, string message)
 
+        property bool busy: false
+
         function generateFileName(type, startDate, endDate) {
             return type + "_test.csv"
         }
@@ -28,6 +30,26 @@ TestCase {
     ExportDialog {
         id: exportDialog
         exportServiceRef: fakeExportService
+    }
+
+    function test_cancelButtonCannotFakeCancellationWhileBusy() {
+        fakeExportService.busy = false
+        exportDialog.open()
+        tryCompare(exportDialog, "opened", true)
+
+        const cancelButton = findChild(exportDialog, "exportCancelButton")
+        verify(cancelButton !== null)
+        compare(cancelButton.enabled, true)
+
+        fakeExportService.busy = true
+        tryCompare(cancelButton, "enabled", false)
+        mouseClick(cancelButton)
+        compare(exportDialog.opened, true)
+
+        fakeExportService.busy = false
+        tryCompare(cancelButton, "enabled", true)
+        mouseClick(cancelButton)
+        tryCompare(exportDialog, "opened", false)
     }
 
     function test_quickDateRangeButtonsWriteIsoDates() {
