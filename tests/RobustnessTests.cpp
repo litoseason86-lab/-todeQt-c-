@@ -7,6 +7,10 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QTemporaryDir>
+#include <QThread>
+#include <QtConcurrent>
+
+#include <atomic>
 
 #include "../src/services/AppSettings.h"
 #include "../src/services/CategoryManager.h"
@@ -37,6 +41,7 @@ private slots:
     void reopenAfterCloseKeepsData();
     void databaseChangeInvalidatesRoutinesOnlyOnce();
     void largeDatasetQueriesStayFast();
+    void writeSucceedsWhileAnotherConnectionHoldsTheLock();
 
 private:
     QTemporaryDir* m_tempDir = nullptr;
@@ -323,6 +328,63 @@ void RobustnessTests::largeDatasetQueriesStayFast()
         QVERIFY2(elapsedMs < 1000,
                  qPrintable(QStringLiteral("%1 took %2 ms").arg(QLatin1String(timedQuery.name)).arg(elapsedMs)));
     }
+}
+
+void RobustnessTests::writeSucceedsWhileAnotherConnectionHoldsTheLock()
+{
+    // 导出被移到工作线程之后，应用第一次出现"两条连接同时访问一个库文件"的情形。
+    // 这里模拟的就是那一刻：另一条连接握着写锁，主线程此时提交一次真实写入。
+    // 没有 busy_timeout 时 SQLite 会立刻返回 SQLITE_BUSY，写入静默失败（调用方只有 qWarning）；
+    // 设了 timeout 就会等锁释放再继续。判据是"写入最终成功"，不是"没报错"。
+    const QString databasePath = DatabaseManager::instance()->database().databaseName();
+    QVERIFY(!databasePath.isEmpty());
+
+    std::atomic<bool> lockHeld{false};
+    std::atomic<bool> lockFailed{false};
+
+    // 锁必须在另一个线程里持有：QSqlDatabase 句柄不能跨线程使用，
+    // 而且同线程持锁的话主线程根本走不到写入那一步。
+    QFuture<void> holder = QtConcurrent::run([&]() {
+        const QString name = QStringLiteral("LockHolderConnection");
+        {
+            QSqlDatabase blocker = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
+            blocker.setDatabaseName(databasePath);
+            if (!blocker.open()) {
+                lockFailed = true;
+                return;
+            }
+            QSqlQuery query(blocker);
+            // BEGIN EXCLUSIVE 立刻拿到排他锁，不必真的写数据。
+            if (!query.exec(QStringLiteral("BEGIN EXCLUSIVE"))) {
+                lockFailed = true;
+                return;
+            }
+            lockHeld = true;
+            // 持锁 300ms：足够让主线程撞上，又不会把用例拖成秒级。
+            QThread::msleep(300);
+            query.exec(QStringLiteral("COMMIT"));
+            blocker.close();
+        }
+        QSqlDatabase::removeDatabase(name);
+    });
+
+    // 等锁真的被拿到再动手，不要用固定 sleep 去"大概同步"两个线程。
+    QTRY_VERIFY_WITH_TIMEOUT(lockHeld.load() || lockFailed.load(), 3000);
+    QVERIFY2(!lockFailed.load(), "辅助线程未能取得排他锁，用例前提不成立");
+
+    const QDate today = QDate::currentDate();
+    const bool added = TaskManager::instance()->addTask(
+        QStringLiteral("撞锁期间写入"), today.toString(Qt::ISODate), QString());
+
+    holder.waitForFinished();
+
+    // 核心断言：这次写入必须成功。没有 busy_timeout 时它会在毫秒级返回 false。
+    QVERIFY2(added, "主线程写入在另一条连接持锁期间失败——busy_timeout 未生效");
+
+    const QVariantList tasks = TaskManager::instance()->getTasksByDate(today);
+    QCOMPARE(tasks.size(), 1);
+    QCOMPARE(tasks.first().toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("撞锁期间写入"));
 }
 
 QTEST_MAIN(RobustnessTests)

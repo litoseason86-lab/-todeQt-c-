@@ -35,7 +35,11 @@ Popup {
 
     modal: true
     focus: true
-    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+    // 导出跑在工作线程上，这个对话框是唯一的进度反馈。导出期间被 Esc 或点击外部关掉，
+    // 用户就无从判断到底还在不在跑，只能靠再点一次导出去撞"已有导出任务正在执行"。
+    closePolicy: (root.exportServiceRef && root.exportServiceRef.busy)
+                 ? Popup.NoAutoClose
+                 : (Popup.CloseOnEscape | Popup.CloseOnPressOutside)
     width: Math.min(500, parent ? Math.max(340, parent.width - 64) : 500)
     height: Math.min(520, parent ? Math.max(420, parent.height - 64) : 520)
     x: parent ? Math.round((parent.width - width) / 2) : 0

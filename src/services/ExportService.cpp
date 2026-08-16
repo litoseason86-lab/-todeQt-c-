@@ -118,11 +118,12 @@ QString ExportService::sessionCategoryExpression() const
         "NULLIF(c.name, ''), NULLIF(t.category, ''), '未分类')");
 }
 
-int ExportService::countRows(const QString& fromAndWhereSql,
+int ExportService::countRows(const QSqlDatabase& database,
+                             const QString& fromAndWhereSql,
                              const QDate& startDate,
                              const QDate& endDate) const
 {
-    QSqlQuery query(DatabaseManager::instance()->database());
+    QSqlQuery query(database);
     query.prepare(QStringLiteral("SELECT COUNT(*) %1").arg(fromAndWhereSql));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
@@ -154,26 +155,27 @@ bool ExportService::exportTasks(const QVariant& startDateValue,
 {
     const QDate startDate = normalizeDate(startDateValue);
     const QDate endDate = normalizeDate(endDateValue);
-    return exportTasksToFile(startDate, endDate, filePath, true);
+    return exportTasksToFile(startDate, endDate, filePath, true, QString());
 }
 
 bool ExportService::exportTasksToFile(const QDate& startDate,
                                       const QDate& endDate,
                                       const QString& filePath,
-                                      bool emitSuccess)
+                                      bool emitSuccess,
+                                      const QString& workerDatabasePath)
 {
     if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
         emit exportCompleted(false, QStringLiteral("日期范围无效"));
         return false;
     }
 
-    QString ownedConnection;
-    QSqlDatabase db = acquireDatabase(&ownedConnection);
-    // 连接在本函数返回时释放；用 RAII 包一层避免每条错误分支都记得释放。
+    // 守卫必须先于 db 构造，C++ 才会先销毁 db，再调用 removeDatabase。
+    // 反过来会让 Qt 报“连接仍在使用”，并使尚存的句柄变成悬空引用。
     struct ConnectionGuard {
         QString name;
         ~ConnectionGuard() { ExportService::releaseDatabase(name); }
-    } guard{ownedConnection};
+    } guard;
+    QSqlDatabase db = acquireDatabase(workerDatabasePath, &guard.name);
     if (!db.isOpen()) {
         emit exportCompleted(false, QStringLiteral("数据库未打开"));
         return false;
@@ -195,7 +197,7 @@ bool ExportService::exportTasksToFile(const QDate& startDate,
         "LEFT JOIN categories c ON t.category_id = c.id "
         "WHERE t.date >= :startDate AND t.date <= :endDate");
     // 先统计总数，让 UI 可以显示确定进度，而不是只能显示加载状态。
-    const int total = countRows(fromAndWhere, startDate, endDate);
+    const int total = countRows(db, fromAndWhere, startDate, endDate);
 
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
@@ -241,26 +243,32 @@ bool ExportService::exportFocusSessions(const QVariant& startDateValue,
 {
     const QDate startDate = normalizeDate(startDateValue);
     const QDate endDate = normalizeDate(endDateValue);
-    return exportFocusSessionsToFile(startDate, endDate, filePath, true);
+    return exportFocusSessionsToFile(startDate,
+                                     endDate,
+                                     filePath,
+                                     true,
+                                     QString(),
+                                     AppSettings::instance()->dayStartHour());
 }
 
 bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
                                               const QDate& endDate,
                                               const QString& filePath,
-                                              bool emitSuccess)
+                                              bool emitSuccess,
+                                              const QString& workerDatabasePath,
+                                              int dayStartHour)
 {
     if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
         emit exportCompleted(false, QStringLiteral("日期范围无效"));
         return false;
     }
 
-    QString ownedConnection;
-    QSqlDatabase db = acquireDatabase(&ownedConnection);
-    // 连接在本函数返回时释放；用 RAII 包一层避免每条错误分支都记得释放。
+    // 与任务导出保持同一销毁顺序：db 和全部查询先销毁，最后才移除命名连接。
     struct ConnectionGuard {
         QString name;
         ~ConnectionGuard() { ExportService::releaseDatabase(name); }
-    } guard{ownedConnection};
+    } guard;
+    QSqlDatabase db = acquireDatabase(workerDatabasePath, &guard.name);
     if (!db.isOpen()) {
         emit exportCompleted(false, QStringLiteral("数据库未打开"));
         return false;
@@ -288,11 +296,10 @@ bool ExportService::exportFocusSessionsToFile(const QDate& startDate,
         "AND f.end_time IS NOT NULL "
         "AND f.duration IS NOT NULL "
         "AND f.duration >= %2")
-                                     .arg(LogicalDay::sqlShift(
-                                         AppSettings::instance()->dayStartHour()))
+                                     .arg(LogicalDay::sqlShift(dayStartHour))
                                      .arg(FocusSessionRules::kMinimumValidDurationSeconds);
     // 先统计总数，让 UI 可以显示确定进度，而不是只能显示加载状态。
-    const int total = countRows(fromAndWhere, startDate, endDate);
+    const int total = countRows(db, fromAndWhere, startDate, endDate);
 
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
@@ -340,6 +347,19 @@ bool ExportService::exportAll(const QVariant& startDateValue,
 {
     const QDate startDate = normalizeDate(startDateValue);
     const QDate endDate = normalizeDate(endDateValue);
+    return exportAllToDirectory(startDate,
+                                endDate,
+                                dirPath,
+                                QString(),
+                                AppSettings::instance()->dayStartHour());
+}
+
+bool ExportService::exportAllToDirectory(const QDate& startDate,
+                                         const QDate& endDate,
+                                         const QString& dirPath,
+                                         const QString& workerDatabasePath,
+                                         int dayStartHour)
+{
     if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
         emit exportCompleted(false, QStringLiteral("日期范围无效"));
         return false;
@@ -368,10 +388,16 @@ bool ExportService::exportAll(const QVariant& startDateValue,
     const QString stagedSessionsPath = sessionsPath + stagingSuffix;
 
     // 两份数据先全部写入暂存文件；任意查询或写入失败都不会碰现有导出结果。
-    if (!exportTasksToFile(startDate, endDate, stagedTasksPath, false)) {
+    if (!exportTasksToFile(
+            startDate, endDate, stagedTasksPath, false, workerDatabasePath)) {
         return false;
     }
-    if (!exportFocusSessionsToFile(startDate, endDate, stagedSessionsPath, false)) {
+    if (!exportFocusSessionsToFile(startDate,
+                                   endDate,
+                                   stagedSessionsPath,
+                                   false,
+                                   workerDatabasePath,
+                                   dayStartHour)) {
         QFile::remove(stagedTasksPath);
         return false;
     }
@@ -466,7 +492,8 @@ bool ExportService::commitExportPair(const QString& stagedTasksPath,
     return true;
 }
 
-QSqlDatabase ExportService::acquireDatabase(QString* ownedConnectionName) const
+QSqlDatabase ExportService::acquireDatabase(const QString& workerDatabasePath,
+                                            QString* ownedConnectionName) const
 {
     *ownedConnectionName = QString();
     // 主线程直接复用现有连接。
@@ -475,20 +502,39 @@ QSqlDatabase ExportService::acquireDatabase(QString* ownedConnectionName) const
     }
 
     // 工作线程：按线程开一条只读连接。名字带线程指针，避免并发导出撞名。
-    const QString path = DatabaseManager::instance()->database().databaseName();
-    if (path.isEmpty()) {
+    // 路径由 GUI 线程在投递任务前快照。工作线程不能为了读取 databaseName()
+    // 去碰主线程创建的 QSqlDatabase 句柄。
+    if (workerDatabasePath.isEmpty()) {
         return QSqlDatabase();
     }
     const QString name = QStringLiteral("ExportWorker_%1_%2")
                              .arg(reinterpret_cast<quintptr>(QThread::currentThread()))
                              .arg(QDateTime::currentMSecsSinceEpoch());
     QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), name);
-    db.setDatabaseName(path);
-    // 只读：导出不写库，也就不会和主线程的写事务抢锁。
+    db.setDatabaseName(workerDatabasePath);
+    // 只读：导出不写库，所以不会和主线程产生写-写冲突。但"不写"不等于"不抢锁"——
+    // 读连接同样持有 SHARED 锁，会挡住主线程提交时要拿的 EXCLUSIVE；反过来主线程提交期间
+    // 这条连接也读不进去。两侧都必须有 busy_timeout，否则任一方向撞上都是立即失败。
     db.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
     if (!db.open()) {
+        db = QSqlDatabase();
         QSqlDatabase::removeDatabase(name);
         return QSqlDatabase();
+    }
+    {
+        QSqlQuery timeoutQuery(db);
+        if (!timeoutQuery.exec(QStringLiteral("PRAGMA busy_timeout = 5000"))) {
+            // 拿不到超时设置就别硬跑：宁可这次导出失败，也好过在主线程写入时撞锁失败。
+            qWarning() << "Failed to set export busy timeout:" << timeoutQuery.lastError().text();
+            timeoutQuery.finish();
+            timeoutQuery = QSqlQuery();
+            db = QSqlDatabase();
+            QSqlDatabase::removeDatabase(name);
+            return QSqlDatabase();
+        }
+        // 这条 pragma 会返回一行；不收尾就等于让一条未完成的语句一直占着这条连接的读锁，
+        // 那正好是本次修复要消除的东西。
+        timeoutQuery.finish();
     }
     *ownedConnectionName = name;
     return db;
@@ -541,8 +587,9 @@ void ExportService::requestExportTasks(const QVariant& startDateValue,
 {
     const QDate start = normalizeDate(startDateValue);
     const QDate end = normalizeDate(endDateValue);
-    runAsync([this, start, end, filePath]() {
-        return exportTasksToFile(start, end, filePath, true);
+    const QString databasePath = DatabaseManager::instance()->database().databaseName();
+    runAsync([this, start, end, filePath, databasePath]() {
+        return exportTasksToFile(start, end, filePath, true, databasePath);
     });
 }
 
@@ -552,8 +599,11 @@ void ExportService::requestExportFocusSessions(const QVariant& startDateValue,
 {
     const QDate start = normalizeDate(startDateValue);
     const QDate end = normalizeDate(endDateValue);
-    runAsync([this, start, end, filePath]() {
-        return exportFocusSessionsToFile(start, end, filePath, true);
+    const QString databasePath = DatabaseManager::instance()->database().databaseName();
+    const int dayStartHour = AppSettings::instance()->dayStartHour();
+    runAsync([this, start, end, filePath, databasePath, dayStartHour]() {
+        return exportFocusSessionsToFile(
+            start, end, filePath, true, databasePath, dayStartHour);
     });
 }
 
@@ -561,7 +611,12 @@ void ExportService::requestExportAll(const QVariant& startDateValue,
                                      const QVariant& endDateValue,
                                      const QString& dirPath)
 {
-    runAsync([this, startDateValue, endDateValue, dirPath]() {
-        return exportAll(startDateValue, endDateValue, dirPath);
+    const QDate start = normalizeDate(startDateValue);
+    const QDate end = normalizeDate(endDateValue);
+    const QString databasePath = DatabaseManager::instance()->database().databaseName();
+    const int dayStartHour = AppSettings::instance()->dayStartHour();
+    runAsync([this, start, end, dirPath, databasePath, dayStartHour]() {
+        return exportAllToDirectory(
+            start, end, dirPath, databasePath, dayStartHour);
     });
 }

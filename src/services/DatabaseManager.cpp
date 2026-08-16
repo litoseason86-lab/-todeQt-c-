@@ -118,6 +118,20 @@ bool DatabaseManager::initialize(const QString& dbPath)
         return false;
     }
 
+    // 导出走工作线程，会对同一个库文件另开一条连接（见 ExportService::acquireDatabase）。
+    // SQLite 的 busy_timeout 默认是 0——撞上别的连接持锁就立刻返回 SQLITE_BUSY，
+    // 于是导出期间主线程的一次提交（结束番茄、存会话）会当场失败，而调用方只有 qWarning。
+    // 给足等待窗口，让并发访问退化成"慢一点"而不是"丢一次写入"。
+    // 数值与 BackupOperations 里那条保持一致：同一个库出现两个不同超时值会让人以为有特殊含义。
+    if (!pragmaQuery.exec(QStringLiteral("PRAGMA busy_timeout = 5000"))) {
+        qWarning() << "Failed to set SQLite busy timeout:" << pragmaQuery.lastError().text();
+        return false;
+    }
+    // busy_timeout 和 foreign_keys 不一样：它会**返回一行**（设置后的新值）。
+    // 不收尾的话这条语句一直挂在连接上，后面迁移快照的 VACUUM INTO 会报
+    // "cannot VACUUM - SQL statements in progress"，而且这条未完成的语句还会一直占着读锁。
+    pragmaQuery.finish();
+
     if (!createTables()) {
         return false;
     }

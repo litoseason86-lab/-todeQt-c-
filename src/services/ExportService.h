@@ -62,7 +62,8 @@ private:
 
     // 工作线程要用自己的连接：QSqlDatabase 只能在创建它的线程上使用。
     // 主线程上直接复用 DatabaseManager 的连接，不额外开。
-    QSqlDatabase acquireDatabase(QString* ownedConnectionName) const;
+    QSqlDatabase acquireDatabase(const QString& workerDatabasePath,
+                                 QString* ownedConnectionName) const;
     static void releaseDatabase(const QString& ownedConnectionName);
     void setBusy(bool busy);
     // 三种导出共用的异步外壳：占住 busy、丢到线程池、回到 GUI 线程报结果。
@@ -76,17 +77,26 @@ private:
     QString formatDateTime(const QVariant& value) const;
     QString categoryExpression() const;
     QString sessionCategoryExpression() const;
-    int countRows(const QString& fromAndWhereSql,
+    int countRows(const QSqlDatabase& database,
+                  const QString& fromAndWhereSql,
                   const QDate& startDate,
                   const QDate& endDate) const;
     bool exportTasksToFile(const QDate& startDate,
                            const QDate& endDate,
                            const QString& filePath,
-                           bool emitSuccess);
+                           bool emitSuccess,
+                           const QString& workerDatabasePath);
     bool exportFocusSessionsToFile(const QDate& startDate,
                                    const QDate& endDate,
                                    const QString& filePath,
-                                   bool emitSuccess);
+                                   bool emitSuccess,
+                                   const QString& workerDatabasePath,
+                                   int dayStartHour);
+    bool exportAllToDirectory(const QDate& startDate,
+                              const QDate& endDate,
+                              const QString& dirPath,
+                              const QString& workerDatabasePath,
+                              int dayStartHour);
     bool finishCsvFile(QSaveFile& file,
                        QTextStream& stream,
                        const QString& successMessage,

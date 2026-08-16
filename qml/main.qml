@@ -121,15 +121,13 @@ ApplicationWindow {
     }
 
     onClosing: function(close) {
-        // 数据库备份/恢复尚未结束时禁止关闭或退出，避免线程被销毁在原子替换中途。
-        // qmllint disable unqualified
-        if (typeof backupService !== "undefined" && backupService && backupService.busy) {
+        // 备份/恢复或导出尚未结束时禁止关闭，避免线程被销毁在原子替换或写文件中途。
+        const blockReason = root.shutdownBlockReason()
+        if (blockReason.length > 0) {
             close.accepted = false
-            mainContent.showToast((backupService.operationText || "数据操作正在进行")
-                                  + "，完成后再关闭")
+            mainContent.showToast(blockReason)
             return
         }
-        // qmllint enable unqualified
         // 撤销窗口尚未结束时关闭应用，必须先同步提交；失败则阻止退出，避免任务下次启动“复活”。
         if (!mainContent.commitPendingDelete()) {
             close.accepted = false
@@ -177,16 +175,15 @@ ApplicationWindow {
         }
 
         function onQuitRequested() {
-            // qmllint disable unqualified
-            if (typeof backupService !== "undefined" && backupService && backupService.busy) {
+            const blockReason = root.shutdownBlockReason()
+            if (blockReason.length > 0) {
+                // 窗口可能已隐藏到菜单栏，不先叫回前台用户看不到这条提示。
                 root.show()
                 root.raise()
                 root.requestActivate()
-                mainContent.showToast((backupService.operationText || "数据操作正在进行")
-                                      + "，完成后再退出")
+                mainContent.showToast(blockReason)
                 return
             }
-            // qmllint enable unqualified
             // 退出前仍要提交待删任务，避免下次启动“复活”；提交失败则不退出。
             if (mainContent.commitPendingDelete()) {
                 Qt.quit()
@@ -210,6 +207,23 @@ ApplicationWindow {
 
     ImmersionWindowSync {
         id: immersionSync
+    }
+
+    ShutdownGuard {
+        id: shutdownGuard
+    }
+
+    // 上下文属性在这里解包一次，两条退出路径（关窗、菜单栏退出）共用同一判据，
+    // 避免两处各写一份而漂移。
+    function shutdownBlockReason() {
+        // qmllint disable unqualified
+        const backupBusy = typeof backupService !== "undefined" && backupService
+                && backupService.busy
+        const backupText = backupBusy ? backupService.operationText : ""
+        const exportBusy = typeof exportService !== "undefined" && exportService
+                && exportService.busy
+        // qmllint enable unqualified
+        return shutdownGuard.blockReason(backupBusy, backupText, exportBusy)
     }
 
     Connections {
