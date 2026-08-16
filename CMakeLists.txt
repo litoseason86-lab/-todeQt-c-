@@ -723,17 +723,51 @@ else()
     message(WARNING "未找到 Python3，跳过 QML 文本格式门禁")
 endif()
 
-add_test(
-    NAME PomodoroTodoQmlTests
-    COMMAND Qt6::qmltestrunner -input ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml
-)
-set_tests_properties(PomodoroTodoQmlTests PROPERTIES
-    # 测试固定离屏平台与 Basic 风格，后台验证不得创建真实应用窗口。
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic"
+# QML 测试按文件拆成独立 ctest 条目。聚合成一条时 qmltestrunner 在单进程里串行跑完
+# 全部文件，`ctest -j` 对全量耗时最大的这一块完全无效——实测它占 -j4 全量 57s 中的 56s。
+# 拆开后同样的机器上并行跑约 25s。
+#
+# CONFIGURE_DEPENDS 是必须的：没有它，新增一个 tst_*.qml 之后 CMake 不会重新 glob，
+# 新测试会静默不被执行——那比不拆更危险。
+file(GLOB POMODORO_TODO_QML_TEST_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/qml/tst_*.qml")
+
+foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
+    get_filename_component(qml_test_name "${qml_test_file}" NAME_WE)
+    string(REGEX REPLACE "^tst_" "" qml_test_name "${qml_test_name}")
+    add_test(
+        NAME QmlTest.${qml_test_name}
+        COMMAND Qt6::qmltestrunner -input "${qml_test_file}"
+    )
+    set_tests_properties(QmlTest.${qml_test_name} PROPERTIES
+        # 测试固定离屏平台与 Basic 风格，后台验证不得创建真实应用窗口。
+        # 每条都要带：漏掉一条就会在无头环境里尝试拉起 cocoa 窗口并挂住。
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic"
+        # 单文件比聚合快得多，但最慢的 tst_ui_optimization 实测约 20s，留足慢机器余量。
+        TIMEOUT 120
+    )
+endforeach()
+
+# 依赖真实动画时序的用例必须独占跑。它们用 tryCompare 断言粒子数/悬停态在
+# 120–950ms 内到位，而 8 路并行下离屏渲染被 CPU 抢占，这些期限根本达不到——
+# 实测 ui_optimization 单独跑 20s，并行时超过 120s 的 watchdog。
+# 这不是把慢测试藏起来：RUN_SERIAL 让 ctest 在跑它时不并发其它条目，
+# 判据本身一点没放松。要让它变快得去掉那 26 处固定 wait()，那是另一件事。
+set(POMODORO_TODO_QML_SERIAL_TESTS
+    ui_optimization
+    sidebar_ui_optimization
 )
 
-# 每个 CTest 进程都需要 watchdog：QML runner 聚合全部文件，因此比单个业务/资产测试留出更宽余量。
-set_tests_properties(PomodoroTodoQmlTests PROPERTIES TIMEOUT 180)
+list(LENGTH POMODORO_TODO_QML_TEST_FILES POMODORO_TODO_QML_TEST_COUNT)
+foreach(serial_test IN LISTS POMODORO_TODO_QML_SERIAL_TESTS)
+    if(TEST QmlTest.${serial_test})
+        set_tests_properties(QmlTest.${serial_test} PROPERTIES RUN_SERIAL TRUE)
+    else()
+        message(WARNING "RUN_SERIAL 名单里的 QmlTest.${serial_test} 不存在，可能已改名")
+    endif()
+endforeach()
+
+message(STATUS "QML 测试已拆分为 ${POMODORO_TODO_QML_TEST_COUNT} 条独立 ctest 条目")
 set_tests_properties(
     PomodoroTodoTests
     CoreLogicTests
