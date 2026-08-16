@@ -116,6 +116,12 @@ Item {
             refresh()
     }
     onPendingDeleteTaskIdChanged: {
+        // 待删除窗口会把一行从 UI 模型隐藏，但数据库里的完整集合仍包含它。
+        // 立即清掉拖拽快照，避免松手把不完整数组提交给服务层。
+        if (root.pendingDeleteTaskId > 0) {
+            root.draggingTaskId = -1
+            root.dropTargetIndex = -1
+        }
         if (root.pageActive)
             refresh()
     }
@@ -296,8 +302,17 @@ Item {
 
     readonly property bool canReorderTasks: !!root.taskManagerRef
                                            && typeof root.taskManagerRef.reorderTasks === "function"
+                                           && root.pendingDeleteTaskId <= 0
 
     function beginReorder(taskId) {
+        if (!root.canReorderTasks) {
+            return
+        }
+        for (var i = 0; i < root.tasks.length; ++i) {
+            if (Number(root.tasks[i].id) === taskId && root.tasks[i].completed) {
+                return
+            }
+        }
         root.draggingTaskId = taskId
         root.dropTargetIndex = -1
     }
@@ -323,6 +338,20 @@ Item {
         if (target < 0) {
             return
         }
+        // 完成项由查询固定在末尾，不能成为未完成任务的落点。把指针进入完成区
+        // 解释为“未完成组末位”，这样指示线和最终可兑现的顺序保持一致。
+        var firstCompletedIndex = root.tasks.length
+        for (var i = 0; i < root.tasks.length; ++i) {
+            if (root.tasks[i].completed) {
+                firstCompletedIndex = i
+                break
+            }
+        }
+        if (firstCompletedIndex <= 0) {
+            root.dropTargetIndex = -1
+            return
+        }
+        target = Math.min(target, firstCompletedIndex - 1)
         root.dropTargetIndex = target
     }
 
