@@ -748,25 +748,7 @@ foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
     )
 endforeach()
 
-# 依赖真实动画时序的用例必须独占跑。它们用 tryCompare 断言粒子数/悬停态在
-# 120–950ms 内到位，而 8 路并行下离屏渲染被 CPU 抢占，这些期限根本达不到——
-# 实测 ui_optimization 单独跑 20s，并行时超过 120s 的 watchdog。
-# 这不是把慢测试藏起来：RUN_SERIAL 让 ctest 在跑它时不并发其它条目，
-# 判据本身一点没放松。要让它变快得去掉那 26 处固定 wait()，那是另一件事。
-set(POMODORO_TODO_QML_SERIAL_TESTS
-    ui_optimization
-    sidebar_ui_optimization
-)
-
 list(LENGTH POMODORO_TODO_QML_TEST_FILES POMODORO_TODO_QML_TEST_COUNT)
-foreach(serial_test IN LISTS POMODORO_TODO_QML_SERIAL_TESTS)
-    if(TEST QmlTest.${serial_test})
-        set_tests_properties(QmlTest.${serial_test} PROPERTIES RUN_SERIAL TRUE)
-    else()
-        message(WARNING "RUN_SERIAL 名单里的 QmlTest.${serial_test} 不存在，可能已改名")
-    endif()
-endforeach()
-
 message(STATUS "QML 测试已拆分为 ${POMODORO_TODO_QML_TEST_COUNT} 条独立 ctest 条目")
 set_tests_properties(
     PomodoroTodoTests

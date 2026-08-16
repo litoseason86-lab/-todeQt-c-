@@ -11,6 +11,26 @@ TestCase {
     width: 480
     height: 180
 
+    // 动画/状态到位的等待上限。取值要宽：tryCompare 与 tryVerify 一旦条件成立就立即返回，
+    // 所以放宽上限在通过时**不花任何时间**，只在真失败时多等一会儿。
+    // 反过来，写死 120–220ms 这种紧上限没有任何收益，只会在机器被并行任务抢占时
+    // 把"渲染慢了"误判成"行为错了"——这个文件曾因此在 ctest -j8 下整体超时。
+    readonly property int uiTimeout: 3000
+
+    // 等某个条件成立，而不是等一个固定时长。快机器上比 wait() 更快，负载高时又不会误判。
+    function settle(predicate, message) {
+        tryVerify(predicate, testCase.uiTimeout, message || "等待 UI 稳定超时");
+    }
+
+    // verifyWarmShadow 的谓词孪生：用于先等动画落位，再跑原来的断言拿到好的失败信息。
+    function warmShadowSettled(target, expectedOpacity, expectedBlur, expectedVerticalOffset) {
+        return target !== null
+                && typeof target.warmShadowOpacity !== "undefined"
+                && Math.abs(target.warmShadowOpacity - expectedOpacity) <= 0.015
+                && Math.abs(target.warmShadowBlur - expectedBlur) <= 0.015
+                && Math.abs(target.warmShadowVerticalOffset - expectedVerticalOffset) <= 0.15;
+    }
+
     TaskItem {
         id: taskItem
 
@@ -191,7 +211,7 @@ TestCase {
         taskManager.setTaskCompletedCallCount = 0;
         var container = findChild(taskItem, "completionParticleContainer");
         if (container !== null && container.particleCount > 0)
-            tryCompare(container, "particleCount", 0, 1000);
+            tryCompare(container, "particleCount", 0, testCase.uiTimeout);
 
         taskItem.taskCompleted = false;
         taskItem.opacity = 1.0;
@@ -208,7 +228,15 @@ TestCase {
             focusButton.down = false;
         if (deleteButton !== null)
             deleteButton.down = false;
-        wait(220);
+        // 这里原本是 wait(220)：28 个用例各睡一次，光 init 就 6.1 秒，而且睡够了也不保证
+        // 动画真回到常态——机器一慢就两头不讨好。改成等"常态"这个条件本身成立。
+        settle(function () {
+            return Math.abs(taskItem.opacity - 1.0) <= 0.02
+                    && !taskItem.itemHovered
+                    && (focusButton === null || !focusButton.down)
+                    && (deleteButton === null || !deleteButton.down)
+                    && testCase.warmShadowSettled(taskItem, 0.08, 0.18, 2);
+        }, "init: TaskItem 未回到常态");
     }
 
     function cleanup() {
@@ -225,7 +253,7 @@ TestCase {
             }];
         todayTaskView.visible = true;
         todayTaskView.refresh();
-        tryCompare(todayTaskView, "tasks", taskManager.fakeTodayTasks, 220);
+        tryCompare(todayTaskView, "tasks", taskManager.fakeTodayTasks, testCase.uiTimeout);
     }
 
     function configureSingleWeekTask(completed) {
@@ -238,7 +266,7 @@ TestCase {
             }];
         weekPlanView.visible = true;
         weekPlanView.refresh();
-        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 220);
+        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, testCase.uiTimeout);
     }
 
     function todayWeekIndex() {
@@ -305,22 +333,25 @@ TestCase {
         verifyWarmShadow(taskItem, 0.08, 0.18, 2, "TaskItem 普通状态");
 
         taskItem.setPointerInside(true);
-        tryCompare(taskItem, "itemHovered", true, 220);
-        wait(240);
-
+        tryCompare(taskItem, "itemHovered", true, testCase.uiTimeout);
+        settle(function () {
+            return testCase.warmShadowSettled(taskItem, 0.12, 0.25, 6);
+        }, "hover 阴影未落位");
         verifyWarmShadow(taskItem, 0.12, 0.25, 6, "TaskItem hover 状态");
 
         taskItem.setPointerInside(false);
-        tryCompare(taskItem, "itemHovered", false, 220);
-        wait(240);
-
+        tryCompare(taskItem, "itemHovered", false, testCase.uiTimeout);
+        settle(function () {
+            return testCase.warmShadowSettled(taskItem, 0.08, 0.18, 2);
+        }, "hover 离开后阴影未回位");
         verifyWarmShadow(taskItem, 0.08, 0.18, 2, "TaskItem hover 离开后");
     }
 
     function test_taskItemCompletedOpacityTargetIsSeventyPercent() {
         taskItem.taskCompleted = true;
-        wait(260);
-
+        settle(function () {
+            return Math.abs(taskItem.opacity - 0.70) <= 0.02;
+        }, "完成态透明度未落位");
         verify(Math.abs(taskItem.opacity - 0.70) <= 0.02);
     }
 
@@ -340,8 +371,9 @@ TestCase {
         compare(taskTitleText.lineHeight, 1.4);
 
         taskItem.taskCompleted = true;
-        wait(260);
-
+        settle(function () {
+            return taskCheckBox.checked && taskTitleText.font.strikeout;
+        }, "完成态勾选/删除线未落位");
         compare(taskCheckBox.checked, true);
         compare(taskTitleText.font.strikeout, true);
     }
@@ -382,7 +414,7 @@ TestCase {
         compare(container.particleCount, 0);
 
         taskItem.taskCompleted = true;
-        tryCompare(container, "particleCount", 6, 120);
+        tryCompare(container, "particleCount", 6, testCase.uiTimeout);
 
         var directions = [
             [-1, -1],
@@ -395,7 +427,7 @@ TestCase {
         for (var i = 0; i < directions.length; ++i)
             verifyCompletionParticle(container.children[i], i, directions[i][0], directions[i][1]);
 
-        tryCompare(container, "particleCount", 0, 950);
+        tryCompare(container, "particleCount", 0, testCase.uiTimeout);
     }
 
     function test_reduceMotionDoesNotCreateCompletionParticles() {
@@ -417,7 +449,7 @@ TestCase {
         verify(taskCheckIndicator !== null);
 
         taskItem.taskCompleted = true;
-        tryCompare(container, "particleCount", 6, 120);
+        tryCompare(container, "particleCount", 6, testCase.uiTimeout);
 
         var firstParticle = container.children[0];
         var indicatorPosition = taskCheckIndicator.mapToItem(taskItem, 0, 0);
@@ -426,7 +458,7 @@ TestCase {
 
         verifyNear(firstParticle.startX, expectedStartX, 0.5, "完成粒子起点 x 应对齐可见复选框中心");
         verifyNear(firstParticle.startY, expectedStartY, 0.5, "完成粒子起点 y 应对齐可见复选框中心");
-        tryCompare(container, "particleCount", 0, 950);
+        tryCompare(container, "particleCount", 0, testCase.uiTimeout);
     }
 
     function test_taskItemCompletionParticlesDoNotStackDuringRapidToggle() {
@@ -434,7 +466,7 @@ TestCase {
         verify(container !== null);
 
         taskItem.taskCompleted = true;
-        tryCompare(container, "particleCount", 6, 120);
+        tryCompare(container, "particleCount", 6, testCase.uiTimeout);
 
         taskItem.taskCompleted = false;
         wait(40);
@@ -442,13 +474,13 @@ TestCase {
         wait(120);
         compare(container.particleCount, 6);
 
-        tryCompare(container, "particleCount", 0, 950);
+        tryCompare(container, "particleCount", 0, testCase.uiTimeout);
 
         taskItem.taskCompleted = false;
         wait(220);
         taskItem.taskCompleted = true;
-        tryCompare(container, "particleCount", 6, 120);
-        tryCompare(container, "particleCount", 0, 950);
+        tryCompare(container, "particleCount", 6, testCase.uiTimeout);
+        tryCompare(container, "particleCount", 0, testCase.uiTimeout);
     }
 
     function test_taskItemInitialCompletedStateDoesNotPlayCompletionParticles() {
@@ -465,12 +497,18 @@ TestCase {
         verify(taskTitleText !== null);
 
         taskItem.taskCompleted = true;
-        wait(260);
+        settle(function () {
+            return Math.abs(taskItem.opacity - 0.70) <= 0.02
+                    && taskTitleText.font.strikeout;
+        }, "完成态未落位");
         verify(Math.abs(taskItem.opacity - 0.70) <= 0.02);
         compare(taskTitleText.font.strikeout, true);
 
         taskItem.taskCompleted = false;
-        wait(220);
+        settle(function () {
+            return Math.abs(taskItem.opacity - 1.0) <= 0.02
+                    && !taskTitleText.font.strikeout;
+        }, "取消完成后未回到常态");
         verify(Math.abs(taskItem.opacity - 1.0) <= 0.02);
         compare(taskTitleText.font.strikeout, false);
     }
@@ -480,16 +518,16 @@ TestCase {
         verify(container !== null);
 
         taskItem.taskCompleted = true;
-        tryCompare(container, "particleCount", 6, 120);
-        tryCompare(container, "particleCount", 0, 950);
+        tryCompare(container, "particleCount", 6, testCase.uiTimeout);
+        tryCompare(container, "particleCount", 0, testCase.uiTimeout);
 
         taskItem.taskCompleted = false;
         wait(120);
         compare(container.particleCount, 0);
 
         taskItem.taskCompleted = true;
-        tryCompare(container, "particleCount", 6, 120);
-        tryCompare(container, "particleCount", 0, 950);
+        tryCompare(container, "particleCount", 6, testCase.uiTimeout);
+        tryCompare(container, "particleCount", 0, testCase.uiTimeout);
     }
 
     function test_todayTaskViewRealClickKeepsCompletionParticlesAcrossSynchronousRefresh() {
@@ -506,10 +544,10 @@ TestCase {
 
         compare(taskManager.setTaskCompletedCallCount, 1);
         compare(taskManager.fakeTodayTasks[0].completed, true);
-        tryCompare(container, "particleCount", 6, 160);
+        tryCompare(container, "particleCount", 6, testCase.uiTimeout);
 
-        tryCompare(todayTaskView, "completionRefreshDelayActive", false, 1100);
-        tryCompare(todayTaskView, "tasks", taskManager.fakeTodayTasks, 1000);
+        tryCompare(todayTaskView, "completionRefreshDelayActive", false, testCase.uiTimeout);
+        tryCompare(todayTaskView, "tasks", taskManager.fakeTodayTasks, testCase.uiTimeout);
         compare(todayTaskView.tasks[0].completed, true);
         var refreshedContainer = findChild(todayTaskView, "completionParticleContainer");
         verify(refreshedContainer !== null);
@@ -551,10 +589,10 @@ TestCase {
 
         compare(taskManager.setTaskCompletedCallCount, 1);
         compare(taskManager.fakeWeekTasks[0].completed, true);
-        tryCompare(container, "particleCount", 6, 160);
+        tryCompare(container, "particleCount", 6, testCase.uiTimeout);
 
-        tryCompare(weekPlanView, "completionRefreshDelayActive", false, 1100);
-        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 1000);
+        tryCompare(weekPlanView, "completionRefreshDelayActive", false, testCase.uiTimeout);
+        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, testCase.uiTimeout);
         compare(weekPlanView.weekTasks[0].completed, true);
         var refreshedContainer = findChild(weekPlanView, "completionParticleContainer");
         verify(refreshedContainer !== null);
@@ -584,7 +622,7 @@ TestCase {
             }];
         weekPlanView.visible = true;
         weekPlanView.refresh();
-        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 220);
+        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, testCase.uiTimeout);
 
         var focusButton = findChild(weekPlanView, "focusButton");
         verify(focusButton !== null);
@@ -610,7 +648,7 @@ TestCase {
             }];
         weekPlanView.visible = true;
         weekPlanView.refresh();
-        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, 220);
+        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, testCase.uiTimeout);
         compare(weekPlanView.tasksForDay(futureIndex).length, 1);
 
         var focusButton = findChild(weekPlanView, "focusButton");
@@ -643,8 +681,9 @@ TestCase {
         compare(focusButtonLabel.font.weight, Font.Medium);
 
         taskItem.taskCompleted = true;
-        wait(260);
-
+        settle(function () {
+            return focusButton.text === "已完成" && !focusButton.enabled;
+        }, "完成后专注按钮未更新");
         compare(focusButton.text, "已完成");
         compare(focusButton.enabled, false);
     }
@@ -668,13 +707,17 @@ TestCase {
         verify(Qt.colorEqual(label.color, Theme.accentInk), "专注按钮字色应为 accentInk");
 
         button.down = true;
-        tryCompare(button, "down", true, 220);
-        wait(180);
+        tryCompare(button, "down", true, testCase.uiTimeout);
+        settle(function () {
+            return Qt.colorEqual(background.color, Theme.glassAccent);
+        }, "专注按钮按下配色未落位");
         verify(Qt.colorEqual(background.color, Theme.glassAccent), "专注按钮按下应使用 glassAccent");
 
         button.down = false;
-        tryCompare(button, "down", false, 220);
-        wait(180);
+        tryCompare(button, "down", false, testCase.uiTimeout);
+        settle(function () {
+            return Qt.colorEqual(background.color, Theme.glassCard);
+        }, "专注按钮释放后配色未回位");
         verify(Qt.colorEqual(background.color, Theme.glassCard), "专注按钮释放后应回到 glassCard");
     }
 
@@ -693,18 +736,22 @@ TestCase {
         verifyNear(label.scale, 1.0, 0.005, context + "普通状态文字缩放");
 
         button.down = true;
-        tryCompare(button, "down", true, 220);
-        tryCompare(background.layer, "enabled", true, 220);
-        wait(130);
-
+        tryCompare(button, "down", true, testCase.uiTimeout);
+        tryCompare(background.layer, "enabled", true, testCase.uiTimeout);
+        settle(function () {
+            return testCase.warmShadowSettled(background, 0.04, 0.10, 1)
+                    && Math.abs(background.y - 1) <= 0.05;
+        }, context + "按下态未落位");
         verifyWarmShadow(background, 0.04, 0.10, 1, context + "按下状态");
         verifyNear(background.y, 1, 0.05, context + "按下状态背景 y");
         verifyNear(label.scale, 0.98, 0.005, context + "按下状态文字缩放");
 
         button.down = false;
-        tryCompare(button, "down", false, 220);
-        wait(130);
-
+        tryCompare(button, "down", false, testCase.uiTimeout);
+        settle(function () {
+            return testCase.warmShadowSettled(background, 0.08, 0.14, 2)
+                    && Math.abs(background.y - 0) <= 0.05;
+        }, context + "释放态未落位");
         compare(background.layer.enabled, true);
         verifyWarmShadow(background, 0.08, 0.14, 2, context + "释放后");
         verifyNear(background.y, 0, 0.05, context + "释放后背景 y");

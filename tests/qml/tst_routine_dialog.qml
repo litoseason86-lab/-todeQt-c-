@@ -134,7 +134,7 @@ TestCase {
         dialog.categoryManagerRef = fakeCategoryManager
         dialog.close()
         // Popup 有退出过渡；等真正关闭后再开启，避免下个用例沿用上次列表模型。
-        tryCompare(dialog, "opened", false, 500)
+        tryCompare(dialog, "opened", false, 3000)
     }
 
     function test_addRoutineShowsInList() {
@@ -162,7 +162,7 @@ TestCase {
     function test_refreshFailureIsNotClearedWhenDialogOpens() {
         fakeRoutineManager.failLoad = true
         dialog.open()
-        tryCompare(dialog, "opened", true, 500)
+        tryCompare(dialog, "opened", true, 3000)
 
         compare(dialog.errorText, "例行数据库故障")
 
@@ -185,7 +185,7 @@ TestCase {
 
     function test_titleFieldUsesReadableSurface() {
         dialog.open()
-        tryCompare(dialog, "opened", true, 500)
+        tryCompare(dialog, "opened", true, 3000)
 
         var input = findChild(dialog, "routineTitleField")
         verify(input !== null)
@@ -257,7 +257,7 @@ TestCase {
             displayOrder: 1
         }]
         dialog.open()
-        tryCompare(dialog, "opened", true, 500)
+        tryCompare(dialog, "opened", true, 3000)
 
         var input = findChild(dialog, "routineTitleField")
         var categoryCombo = findChild(dialog, "routineCategoryCombo")
@@ -299,7 +299,7 @@ TestCase {
         }]
         testCase.updateResult = false
         dialog.open()
-        tryCompare(dialog, "opened", true, 500)
+        tryCompare(dialog, "opened", true, 3000)
 
         var input = findChild(dialog, "routineTitleField")
         verify(input !== null)
@@ -329,7 +329,7 @@ TestCase {
             displayOrder: 1
         }]
         dialog.open()
-        tryCompare(dialog, "opened", true, 500)
+        tryCompare(dialog, "opened", true, 3000)
 
         var input = findChild(dialog, "routineTitleField")
         var submitButton = findChild(dialog, "routineAddButton")
@@ -359,7 +359,7 @@ TestCase {
             displayOrder: 1
         }]
         dialog.open()
-        tryCompare(dialog, "opened", true, 500)
+        tryCompare(dialog, "opened", true, 3000)
 
         var input = findChild(dialog, "routineTitleField")
         verify(input !== null)

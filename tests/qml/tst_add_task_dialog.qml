@@ -155,7 +155,7 @@ TestCase {
     function test_failedSubmitKeepsInputAndDialogOpen() {
         wait(260)
         failingDialog.open()
-        tryCompare(failingDialog, "opened", true, 500)
+        tryCompare(failingDialog, "opened", true, 3000)
         var titleField = findChild(failingDialog, "titleField")
         var errorLabel = findChild(failingDialog, "addTaskErrorLabel")
         verify(titleField)
@@ -173,7 +173,7 @@ TestCase {
     function test_categoryFailureSurvivesOpenRefresh() {
         fakeCategoryManager.failLoad = true
         categoryDialog.open()
-        tryCompare(categoryDialog, "opened", true, 500)
+        tryCompare(categoryDialog, "opened", true, 3000)
 
         var errorLabel = findChild(categoryDialog, "addTaskErrorLabel")
         verify(errorLabel)
@@ -194,7 +194,7 @@ TestCase {
     function test_estimateIsSubmittedAsMinutes() {
         testCase.submittedMinutes = -1
         estimateDialog.open()
-        tryCompare(estimateDialog, "opened", true, 500)
+        tryCompare(estimateDialog, "opened", true, 3000)
         findChild(estimateDialog, "titleField").text = "高数复习"
 
         var fields = estimateFieldsOf(estimateDialog)
@@ -203,13 +203,13 @@ TestCase {
         fields.minute.text = "45"
         estimateDialog.submit()
         compare(testCase.submittedMinutes, 105)
-        tryCompare(estimateDialog, "opened", false, 500)
+        tryCompare(estimateDialog, "opened", false, 3000)
     }
 
     function test_estimateDefaultsToUnsetAndResetsBetweenOpens() {
         testCase.submittedMinutes = -1
         estimateDialog.open()
-        tryCompare(estimateDialog, "opened", true, 500)
+        tryCompare(estimateDialog, "opened", true, 3000)
         findChild(estimateDialog, "titleField").text = "留空预计"
 
         var fields = estimateFieldsOf(estimateDialog)
@@ -221,7 +221,7 @@ TestCase {
 
         // 上一次填过的值不能留到下一次打开——那会让用户在不知情下重复套用旧预估。
         estimateDialog.open()
-        tryCompare(estimateDialog, "opened", true, 500)
+        tryCompare(estimateDialog, "opened", true, 3000)
         findChild(estimateDialog, "titleField").text = "第二次"
         fields = estimateFieldsOf(estimateDialog)
         fields.hour.text = "2"
@@ -230,7 +230,7 @@ TestCase {
         compare(testCase.submittedMinutes, 120)
 
         estimateDialog.open()
-        tryCompare(estimateDialog, "opened", true, 500)
+        tryCompare(estimateDialog, "opened", true, 3000)
         fields = estimateFieldsOf(estimateDialog)
         compare(fields.hour.text, "0")
         compare(fields.minute.text, "0")
@@ -249,7 +249,7 @@ TestCase {
     function test_incompleteEstimateBlocksSubmit() {
         testCase.submittedMinutes = -1
         estimateDialog.open()
-        tryCompare(estimateDialog, "opened", true, 500)
+        tryCompare(estimateDialog, "opened", true, 3000)
         findChild(estimateDialog, "titleField").text = "清空分钟"
 
         var fields = estimateFieldsOf(estimateDialog)
@@ -265,15 +265,15 @@ TestCase {
     function test_selectedDateRefreshesEveryTimeDialogOpens() {
         testCase.providedDate = new Date(2026, 6, 25, 12, 0, 0)
         refreshedDateDialog.open()
-        tryCompare(refreshedDateDialog, "opened", true, 500)
+        tryCompare(refreshedDateDialog, "opened", true, 3000)
         compare(Qt.formatDate(refreshedDateDialog.selectedDate, "yyyy-MM-dd"), "2026-07-25")
         refreshedDateDialog.close()
-        tryCompare(refreshedDateDialog, "opened", false, 500)
+        tryCompare(refreshedDateDialog, "opened", false, 3000)
 
         // 模拟弹窗长时间未用后跨过逻辑日边界；再打开不得沿用上次日期。
         testCase.providedDate = new Date(2026, 6, 26, 12, 0, 0)
         refreshedDateDialog.open()
-        tryCompare(refreshedDateDialog, "opened", true, 500)
+        tryCompare(refreshedDateDialog, "opened", true, 3000)
         compare(Qt.formatDate(refreshedDateDialog.selectedDate, "yyyy-MM-dd"), "2026-07-26")
         refreshedDateDialog.close()
     }

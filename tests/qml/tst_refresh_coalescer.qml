@@ -45,7 +45,7 @@ TestCase {
         coalescer.request()
 
         compare(coalescer.scheduled, true)
-        tryCompare(spy, "count", 1, 1000)
+        tryCompare(spy, "count", 1, 3000)
         compare(coalescer.scheduled, false)
     }
 
@@ -54,10 +54,10 @@ TestCase {
         const spy = createTriggeredSpy(coalescer)
 
         coalescer.request()
-        tryCompare(spy, "count", 1, 1000)
+        tryCompare(spy, "count", 1, 3000)
 
         coalescer.request()
-        tryCompare(spy, "count", 2, 1000)
+        tryCompare(spy, "count", 2, 3000)
     }
 
     function test_inactive_coalescer_suppresses_trigger() {
@@ -66,12 +66,12 @@ TestCase {
 
         coalescer.request()
         coalescer.active = false
-        tryCompare(coalescer, "scheduled", false, 1000)
+        tryCompare(coalescer, "scheduled", false, 3000)
         compare(spy.count, 0)
 
         coalescer.active = true
         coalescer.request()
-        tryCompare(spy, "count", 1, 1000)
+        tryCompare(spy, "count", 1, 3000)
     }
 
     function test_cancel_invalidates_queued_callback_without_dropping_new_request() {
@@ -82,7 +82,7 @@ TestCase {
         coalescer.cancel()
         coalescer.request()
 
-        tryCompare(spy, "count", 1, 1000)
+        tryCompare(spy, "count", 1, 3000)
         compare(coalescer.scheduled, false)
     }
 }

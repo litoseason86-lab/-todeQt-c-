@@ -487,7 +487,7 @@ TestCase {
         var yesterday = addDays(todaySnapshot, -1)
         statisticsService.resetTracking()
         statisticsView.goToPreviousPeriod()
-        tryCompare(selectorText, "text", dayDisplay(yesterday), 1000)
+        tryCompare(selectorText, "text", dayDisplay(yesterday), 3000)
 
         compare(statisticsView.currentTimeRange, "today")
         compare(nextArea.enabled, true)
@@ -504,7 +504,7 @@ TestCase {
 
         statisticsService.resetTracking()
         statisticsView.goToNextPeriod()
-        tryCompare(selectorText, "text", "今天", 1000)
+        tryCompare(selectorText, "text", "今天", 3000)
 
         compare(nextArea.enabled, false)
         compare(secondCard.subtitle, "今日完成次数")
@@ -532,7 +532,7 @@ TestCase {
         statisticsService.resetTracking()
         statisticsView.refresh()
 
-        tryCompare(statisticsService, "dayComparisonCalls", 1, 1000)
+        tryCompare(statisticsService, "dayComparisonCalls", 1, 3000)
         compare(statisticsService.dayComparisonCalls, 1)
         compare(statisticsService.lastDayComparisonDate, isoDate(todaySnapshot))
         compare(firstCard.showComparison, true)
@@ -593,7 +593,7 @@ TestCase {
         var lastWeekEnd = addDays(lastWeekStart, 6)
         statisticsService.resetTracking()
         statisticsView.goToPreviousPeriod()
-        tryCompare(selectorText, "text", weekRangeDisplay(lastWeekStart), 1000)
+        tryCompare(selectorText, "text", weekRangeDisplay(lastWeekStart), 3000)
 
         compare(nextArea.enabled, true)
         compare(firstCard.subtitle, "所选周有记录天数")
@@ -624,7 +624,7 @@ TestCase {
         statisticsService.resetTracking()
         statisticsView.goToNextPeriod()
         statisticsView.goToNextPeriod()
-        tryCompare(selectorText, "text", "本周", 1000)
+        tryCompare(selectorText, "text", "本周", 3000)
 
         compare(nextArea.enabled, false)
         compare(firstCard.subtitle, "本周有记录天数")
@@ -648,7 +648,7 @@ TestCase {
         verify(secondCard !== null)
         verify(thirdCard !== null)
 
-        tryCompare(statisticsService, "weekComparisonCalls", 1, 1000)
+        tryCompare(statisticsService, "weekComparisonCalls", 1, 3000)
         compare(statisticsService.weekComparisonCalls, 1)
         compare(statisticsService.lastWeekComparisonStartDate, isoDate(mondayOf(todaySnapshot)))
         compare(firstCard.comparisonText, "↗ +20% vs 上周")
@@ -665,7 +665,7 @@ TestCase {
         statisticsService.resetTracking()
         selectTimeRange(2)
 
-        tryCompare(statisticsService, "monthComparisonCalls", 1, 1000)
+        tryCompare(statisticsService, "monthComparisonCalls", 1, 3000)
         compare(statisticsService.monthComparisonCalls, 1)
         compare(statisticsService.lastMonthComparisonYear, todaySnapshot.getFullYear())
         compare(statisticsService.lastMonthComparisonMonth, todaySnapshot.getMonth() + 1)
@@ -712,7 +712,7 @@ TestCase {
         var lastDay = new Date(expected.year, expected.month, 0)
         statisticsService.resetTracking()
         statisticsView.goToPreviousPeriod()
-        tryCompare(selectorText, "text", expected.year + "年" + expected.month + "月", 1000)
+        tryCompare(selectorText, "text", expected.year + "年" + expected.month + "月", 3000)
 
         compare(nextArea.enabled, true)
         compare(firstCard.subtitle, "所选月有记录天数")
@@ -739,7 +739,7 @@ TestCase {
         statisticsService.resetTracking()
         statisticsView.goToNextPeriod()
         statisticsView.goToNextPeriod()
-        tryCompare(selectorText, "text", "本月", 1000)
+        tryCompare(selectorText, "text", "本月", 3000)
 
         compare(nextArea.enabled, false)
         compare(firstCard.subtitle, "本月有记录天数")
@@ -775,7 +775,7 @@ TestCase {
         compare(selectorText.text, dayDisplay(addDays(todaySnapshot, -1)))
         statisticsService.resetTracking()
         todaySegment.clicked()
-        tryCompare(selectorText, "text", "今天", 1000)
+        tryCompare(selectorText, "text", "今天", 3000)
         compare(statisticsService.lastDayStatsDate, isoDate(todaySnapshot))
 
         selectTimeRange(1)
@@ -783,7 +783,7 @@ TestCase {
         compare(selectorText.text, weekRangeDisplay(addDays(mondayOf(todaySnapshot), -7)))
         statisticsService.resetTracking()
         weekSegment.clicked()
-        tryCompare(selectorText, "text", "本周", 1000)
+        tryCompare(selectorText, "text", "本周", 3000)
         compare(statisticsService.lastWeekStatsStartDate, isoDate(mondayOf(todaySnapshot)))
 
         selectTimeRange(2)
@@ -791,7 +791,7 @@ TestCase {
         verify(selectorText.text !== "本月")
         statisticsService.resetTracking()
         monthSegment.clicked()
-        tryCompare(selectorText, "text", "本月", 1000)
+        tryCompare(selectorText, "text", "本月", 3000)
         compare(statisticsService.lastMonthStatsYear, todaySnapshot.getFullYear())
         compare(statisticsService.lastMonthStatsMonth, todaySnapshot.getMonth() + 1)
     }
@@ -811,7 +811,7 @@ TestCase {
         statisticsService.resetTracking()
         statisticsView.currentDateOverride = noonOf(simulatedTomorrow)
         statisticsView.refresh()
-        tryCompare(selectorText, "text", "今天", 1000)
+        tryCompare(selectorText, "text", "今天", 3000)
         compare(statisticsService.lastDayStatsDate, isoDate(simulatedTomorrow))
 
         statisticsView.goToPreviousPeriod()
@@ -829,7 +829,7 @@ TestCase {
         statisticsService.resetTracking()
         statisticsView.currentDateOverride = noonOf(addDays(simulatedToday, 7))
         statisticsView.refresh()
-        tryCompare(selectorText, "text", "本周", 1000)
+        tryCompare(selectorText, "text", "本周", 3000)
         compare(statisticsService.lastWeekStatsStartDate, isoDate(mondayOf(addDays(simulatedToday, 7))))
 
         statisticsView.goToPreviousPeriod()
@@ -848,7 +848,7 @@ TestCase {
         statisticsService.resetTracking()
         statisticsView.currentDateOverride = noonOf(new Date(2026, 6, 1))
         statisticsView.refresh()
-        tryCompare(selectorText, "text", "本月", 1000)
+        tryCompare(selectorText, "text", "本月", 3000)
         compare(statisticsService.lastMonthStatsYear, 2026)
         compare(statisticsService.lastMonthStatsMonth, 7)
 

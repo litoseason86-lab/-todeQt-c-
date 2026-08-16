@@ -551,7 +551,7 @@ TestCase {
         verify(banner.blinkRunning === true, "常态下完成横幅应闪烁")
 
         appSettingsMock.reduceMotion = true
-        tryCompare(banner, "blinkRunning", false, 500)
+        tryCompare(banner, "blinkRunning", false, 3000)
         compare(banner.opacity, 1)
     }
 
@@ -871,14 +871,14 @@ TestCase {
         // 切到番茄页签同样会触发那个 150ms 的尺寸过渡，所以这里和下面两处一样要等收敛。
         // 原来是固定 wait(20) 后直接精确比对，实测在稍慢的环境下会读到动画中途的值
         // （例如 251.95 vs 252）而假红。
-        tryCompare(ring, "implicitWidth", 252, 1000)
+        tryCompare(ring, "implicitWidth", 252, 3000)
 
         view.panelExpanded = true
         // implicitWidth 带 150ms 过渡动画，等它收敛到目标值。
-        tryCompare(ring, "implicitWidth", 190, 1000)
+        tryCompare(ring, "implicitWidth", 190, 3000)
 
         view.panelExpanded = false
-        tryCompare(ring, "implicitWidth", 252, 1000)
+        tryCompare(ring, "implicitWidth", 252, 3000)
     }
 
     function test_durationPanelSteppersAlignToRightEdge() {

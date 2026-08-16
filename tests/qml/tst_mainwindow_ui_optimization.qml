@@ -326,15 +326,15 @@ TestCase {
         // 点侧栏内收起钮 → 布局收窄 + 设置落盘语义。
         appSettings.reduceMotion = true; // 瞬时，避免等动画
         mainWindow.setSidebarVisible(false);
-        tryCompare(mainWindow, "sidebarVisible", false, 300);
-        tryCompare(shell, "width", 0, 300);
+        tryCompare(mainWindow, "sidebarVisible", false, 3000);
+        tryCompare(shell, "width", 0, 3000);
         compare(appSettings.sidebarVisible, false);
-        tryCompare(revealBtn, "enabled", true, 300);
+        tryCompare(revealBtn, "enabled", true, 3000);
 
         // 点悬浮钮展开。
         mainWindow.setSidebarVisible(true);
-        tryCompare(mainWindow, "sidebarVisible", true, 300);
-        tryCompare(shell, "width", 208, 300);
+        tryCompare(mainWindow, "sidebarVisible", true, 3000);
+        tryCompare(shell, "width", 208, 3000);
         compare(appSettings.sidebarVisible, true);
         compare(revealBtn.enabled, false);
     }
@@ -420,7 +420,7 @@ TestCase {
 
         compare(routine.opened, false)
         settings.routineRequested()
-        tryCompare(routine, "opened", true, 500)
+        tryCompare(routine, "opened", true, 3000)
         routine.close()
     }
 

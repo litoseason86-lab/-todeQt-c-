@@ -56,8 +56,8 @@ TestCase {
         wait(20)
 
         statCard.value = "2"
-        tryCompare(statCard, "valuePulseRunning", true, 100)
-        tryCompare(statCard, "valuePulseRunning", false, 600)
+        tryCompare(statCard, "valuePulseRunning", true, 3000)
+        tryCompare(statCard, "valuePulseRunning", false, 3000)
 
         statCard.reduceMotionActive = true
         statCard.value = "3"

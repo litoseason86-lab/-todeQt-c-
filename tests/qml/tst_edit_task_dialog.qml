@@ -138,7 +138,7 @@ TestCase {
         failingDialog.openForTask({
             id: 11, title: "旧标题", categoryId: -1, date: isoWithOffset(0)
         })
-        tryCompare(failingDialog, "opened", true, 500)
+        tryCompare(failingDialog, "opened", true, 3000)
 
         const titleField = findChild(failingDialog, "editTitleField")
         verify(titleField)

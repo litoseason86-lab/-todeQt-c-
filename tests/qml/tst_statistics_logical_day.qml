@@ -104,7 +104,7 @@ TestCase {
     function test_changedFollowsCurrentPeriod() {
         compare(Qt.formatDate(view.selectedDate, "yyyy-MM-dd"), "2026-07-07")
         logicalDayService.changed()
-        tryCompare(testCase, "dayStatsCalls", 1, 1000)
+        tryCompare(testCase, "dayStatsCalls", 1, 3000)
         compare(Qt.formatDate(view.selectedDate, "yyyy-MM-dd"), "2026-07-07")
     }
 
@@ -117,17 +117,17 @@ TestCase {
         logicalDayService.changed()
 
         // 同一事件循环内的多条失效链只做一次整页查询。
-        tryCompare(testCase, "dayStatsCalls", callsBefore + 1, 1000)
+        tryCompare(testCase, "dayStatsCalls", callsBefore + 1, 3000)
     }
 
     function test_cross_event_loop_invalidations_are_not_swallowed() {
         var callsBefore = testCase.dayStatsCalls
 
         taskManager.tasksChanged()
-        tryCompare(testCase, "dayStatsCalls", callsBefore + 1, 1000)
+        tryCompare(testCase, "dayStatsCalls", callsBefore + 1, 3000)
 
         focusTimer.focusCompleted(1500)
-        tryCompare(testCase, "dayStatsCalls", callsBefore + 2, 1000)
+        tryCompare(testCase, "dayStatsCalls", callsBefore + 2, 3000)
     }
 
 }

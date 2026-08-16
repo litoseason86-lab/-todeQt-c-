@@ -358,7 +358,7 @@ TestCase {
         logicalDayService.changed()
 
         // 同一事件循环内的多条失效链只做一次整页查询。
-        tryCompare(taskManager, "todayTasksCalls", callsBefore + 1, 1000)
+        tryCompare(taskManager, "todayTasksCalls", callsBefore + 1, 3000)
     }
 
     function test_cross_event_loop_invalidations_are_not_swallowed() {
@@ -367,10 +367,10 @@ TestCase {
         var callsBefore = taskManager.todayTasksCalls
 
         taskManager.tasksChanged()
-        tryCompare(taskManager, "todayTasksCalls", callsBefore + 1, 1000)
+        tryCompare(taskManager, "todayTasksCalls", callsBefore + 1, 3000)
 
         focusTimer.focusCompleted(1500)
-        tryCompare(taskManager, "todayTasksCalls", callsBefore + 2, 1000)
+        tryCompare(taskManager, "todayTasksCalls", callsBefore + 2, 3000)
     }
 
     function test_page_activation_keeps_the_first_refresh_immediate() {
@@ -379,7 +379,7 @@ TestCase {
         compare(taskManager.todayTasksCalls, 0)
 
         view.pageActive = true
-        tryCompare(taskManager, "todayTasksCalls", 1, 1000)
+        tryCompare(taskManager, "todayTasksCalls", 1, 3000)
     }
 
     function test_completion_animation_still_defers_task_refresh() {
@@ -563,7 +563,7 @@ TestCase {
         // 没有待办任务时改为带用户去专注页，而不是静默失败。
         taskManager.todayTasksData = []
         taskManager.tasksChanged()
-        tryCompare(view, "tasks", taskManager.todayTasksData, 1000)
+        tryCompare(view, "tasks", taskManager.todayTasksData, 3000)
         var focusSpy = createTemporaryObject(spyComponent, testCase,
                                              { target: view, signalName: "focusPageRequested" })
         view.startFirstPendingTask()
@@ -631,7 +631,7 @@ TestCase {
         compare(card.editing, true)
         var loader = findChild(card, "focusGoalEditorLoader")
         verify(loader)
-        tryCompare(loader, "status", Loader.Ready, 300)
+        tryCompare(loader, "status", Loader.Ready, 3000)
         verify(loader.item)
 
         var hourField = findChild(loader.item, "focusGoalHourField")
@@ -677,8 +677,8 @@ TestCase {
         // 跨到下一个逻辑日后，昨天目标不继承。
         testCase.logicalNow = new Date(2026, 6, 13, 12, 0, 0)
         logicalDayService.changed()
-        tryCompare(view, "logicalTodayIso", "2026-07-13", 1000)
-        tryCompare(view, "dailyFocusGoalMinutes", 0, 1000)
+        tryCompare(view, "logicalTodayIso", "2026-07-13", 3000)
+        tryCompare(view, "dailyFocusGoalMinutes", 0, 3000)
 
         // 保存动作已移交今日任务页；仪表盘上的目标卡是只读实例。
         var card = findChild(view, "dashboardGoalCard")
@@ -848,8 +848,8 @@ TestCase {
         verify(Qt.colorEqual(fallback.color, Theme.glassSolidCard))
 
         Theme.glassBlurAllowed = true
-        tryCompare(loader, "active", true, 300)
-        tryCompare(loader, "status", Loader.Ready, 500)
+        tryCompare(loader, "active", true, 3000)
+        tryCompare(loader, "status", Loader.Ready, 3000)
         var refraction = findChild(backdrop, "liquidGlassRefraction")
         verify(refraction)
         verify(String(refraction.fragmentShader).indexOf("liquid_glass.frag.qsb") >= 0)
@@ -862,9 +862,9 @@ TestCase {
         }
 
         backdrop.refractionShader = Qt.resolvedUrl("missing-liquid-glass.frag.qsb")
-        tryCompare(backdrop, "shaderFailed", true, 1200)
+        tryCompare(backdrop, "shaderFailed", true, 3000)
         compare(backdrop.effectActive, false)
-        tryCompare(loader, "active", false, 100)
+        tryCompare(loader, "active", false, 3000)
         compare(backdrop.fallbackActive, true)
         verify(backdrop.shaderError.length > 0)
     }

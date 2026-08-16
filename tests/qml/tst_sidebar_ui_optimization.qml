@@ -189,7 +189,7 @@ TestCase {
         verify(inactiveItem !== null);
         // QtTest 在 macOS 上不稳定触发真实 hover，这里直接验证组件内部悬停状态。
         inactiveItem.setPointerInside(true);
-        tryCompare(inactiveItem, "visualHovered", true, 500);
+        tryCompare(inactiveItem, "visualHovered", true, 3000);
         wait(1200);
 
         verify(Qt.colorEqual(inactiveItem.color, sidebar.sidebarItemHoverColor));
@@ -202,9 +202,9 @@ TestCase {
 
         verify(inactiveItem !== null);
         inactiveItem.setPointerInside(true);
-        tryCompare(inactiveItem, "visualHovered", true, 500);
+        tryCompare(inactiveItem, "visualHovered", true, 3000);
         inactiveItem.setPointerInside(false);
-        tryCompare(inactiveItem, "visualHovered", false, 500);
+        tryCompare(inactiveItem, "visualHovered", false, 3000);
         wait(1200);
 
         // 退场目标色必须是白基透明，不用 Qt 的黑基 transparent，避免 hover 动画插出灰闪。
