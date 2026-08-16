@@ -95,8 +95,11 @@ Rectangle {
 
                 // 侧栏内嵌钮不需要再套一层 panel 阴影。
                 Component.onCompleted: {
+                    // background 的具体组件在运行时提供 panelShadowEnabled，静态类型只有 QQuickItem。
+                    // qmllint disable missing-property
                     if (background && background.panelShadowEnabled !== undefined)
                         background.panelShadowEnabled = false
+                    // qmllint enable missing-property
                 }
             }
         }

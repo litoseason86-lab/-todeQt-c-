@@ -87,6 +87,8 @@ Popup {
         var point = item.mapToItem(pageLoader, 0, 0)
         var top = point.y - Theme.space8
         var bottom = point.y + item.height + Theme.space8
+        // ScrollView.contentItem 运行时实际为 Flickable，静态类型 QQuickItem 不暴露滚动属性。
+        // qmllint disable missing-property
         if (top < flickable.contentY) {
             flickable.contentY = Math.max(0, top)
         } else if (bottom > flickable.contentY + flickable.height) {
@@ -94,6 +96,7 @@ Popup {
                         Math.max(0, flickable.contentHeight - flickable.height),
                         bottom - flickable.height)
         }
+        // qmllint enable missing-property
     }
 
     function requestClose() {

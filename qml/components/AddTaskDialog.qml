@@ -162,7 +162,10 @@ Popup {
         var categoryId = categoryComboBox.currentIndex >= 0 && categoryComboBox.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryComboBox.currentIndex].id || -1) : -1;
         var succeeded = true;
         if (root.taskSubmitter) {
+            // taskSubmitter 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
+            // qmllint disable use-proper-function
             succeeded = Boolean(root.taskSubmitter(title, root.selectedDate, categoryId, root.estimatedMinutes, notesField.text.trim()));
+            // qmllint enable use-proper-function
         } else {
             root.taskAdded(title, root.selectedDate, categoryId, root.estimatedMinutes, notesField.text.trim());
         }
@@ -188,7 +191,10 @@ Popup {
 
     onOpened: {
         if (root.selectedDateProvider) {
+            // selectedDateProvider 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
+            // qmllint disable use-proper-function
             var refreshedDate = root.selectedDateProvider()
+            // qmllint enable use-proper-function
             if (refreshedDate instanceof Date && !isNaN(refreshedDate.getTime())) {
                 root.selectedDate = refreshedDate
             }

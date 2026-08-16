@@ -248,7 +248,10 @@ Rectangle {
 
                                     Text {
                                         Layout.fillWidth: true
+                                        // formatDurationFn 由视图在运行时注入，静态工具只能看到 var 属性。
+                                        // qmllint disable use-proper-function
                                         text: root.formatDurationFn(Number(sessionRow.modelData.durationSeconds) || 0)
+                                        // qmllint enable use-proper-function
                                         textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontXl
                                         font.weight: Font.Bold

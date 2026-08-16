@@ -183,9 +183,12 @@ Item {
     function dayRowAt(index) {
         for (var i = 0; i < weekScroll.count; ++i) {
             var item = weekScroll.itemAtIndex(i)
+            // itemAtIndex 静态返回 QQuickItem，运行时对象是带 index 属性的 delegate。
+            // qmllint disable missing-property
             if (item && item.index === index) {
                 return item
             }
+            // qmllint enable missing-property
         }
         return null
     }
