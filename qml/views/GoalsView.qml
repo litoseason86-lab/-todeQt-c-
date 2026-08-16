@@ -123,13 +123,28 @@ Item {
     }
 
     function openGoal(goalId) {
-        var normalizedId = Number(goalId || -1)
+        const normalizedId = Number(goalId || -1)
         if (normalizedId <= 0)
             return false
+
+        const preserveCurrent = root.detailOpen
+                && Number(root.detailGoal.id || -1) === root.openGoalId
+                && normalizedId !== root.openGoalId
         root.syncDetailDateSnapshot()
-        root.openGoalId = normalizedId
-        root.refreshDetail()
-        return Number(root.detailGoal.id || -1) === normalizedId
+        const candidate = root.loadDetailCandidate(normalizedId)
+        if (!candidate.ok) {
+            if (candidate.missing) {
+                root.errorText = qsTr("目标不存在或已被删除")
+                // 从 A 切换到已消失的 B 时，用户仍在看 A；只有当前详情
+                // 本身消失时才关闭，不能让一次候选加载破坏已提交快照。
+                if (!preserveCurrent)
+                    root.closeGoal()
+            }
+            return false
+        }
+
+        root.commitDetailCandidate(normalizedId, candidate)
+        return true
     }
 
     function closeGoal() {
@@ -138,25 +153,52 @@ Item {
         root.dailyCounts = []
     }
 
-    function refreshDetail() {
-        if (!root.detailOpen || !root.goalServiceRef || !root.goalServiceRef.getGoal)
-            return
+    function loadDetailCandidate(goalId) {
+        if (!root.goalServiceRef || !root.goalServiceRef.getGoal)
+            return { ok: false, missing: false }
+
         root.errorText = ""
-        var loaded = root.goalServiceRef.getGoal(root.openGoalId)
-        if (!loaded || Number(loaded.id || -1) <= 0) {
-            // getGoal 对“已删除”和“查询失败”都返回空 map，只有后者会同步发
-            // operationFailed。数据库临时故障时保留详情页，不把用户踢回列表。
-            if (root.errorText.length > 0)
-                return
-            root.errorText = qsTr("目标不存在或已被删除")
-            root.closeGoal()
-            return
-        }
-        root.detailGoal = loaded
-        root.dailyCounts = root.goalServiceRef.getGoalDailyCounts
-                ? root.goalServiceRef.getGoalDailyCounts(root.openGoalId,
+        const loadedGoal = root.goalServiceRef.getGoal(goalId)
+        // getGoal 对“已删除”和“查询失败”都返回空 map，只有后者会在
+        // 返回前同步发 operationFailed，因此必须先判断错误文本。
+        if (root.errorText.length > 0)
+            return { ok: false, missing: false }
+        if (!loadedGoal || Number(loadedGoal.id || -1) !== goalId)
+            return { ok: false, missing: true }
+
+        const loadedCounts = root.goalServiceRef.getGoalDailyCounts
+                ? root.goalServiceRef.getGoalDailyCounts(goalId,
                                                          root.detailYear, root.detailMonth) || []
                 : []
+        if (root.errorText.length > 0)
+            return { ok: false, missing: false }
+        return { ok: true, missing: false, goal: loadedGoal, counts: loadedCounts }
+    }
+
+    function commitDetailCandidate(goalId, candidate) {
+        // 候选目标与热力数据都成功后才一起提交；否则弹窗标题与
+        // 删除主键可能分别属于旧、新目标。openGoalId 最后写入，避免初次打开时先显示空详情。
+        root.detailGoal = candidate.goal
+        root.dailyCounts = candidate.counts
+        root.openGoalId = goalId
+    }
+
+    function refreshDetail() {
+        if (!root.detailOpen)
+            return false
+
+        const goalId = root.openGoalId
+        const candidate = root.loadDetailCandidate(goalId)
+        if (!candidate.ok) {
+            if (candidate.missing) {
+                root.errorText = qsTr("目标不存在或已被删除")
+                root.closeGoal()
+            }
+            return false
+        }
+
+        root.commitDetailCandidate(goalId, candidate)
+        return true
     }
 
     function formatDate(value, pattern) {
@@ -183,8 +225,14 @@ Item {
     function confirmDeleteDetail() {
         if (!root.detailOpen || !root.goalServiceRef || !root.goalServiceRef.deleteGoal)
             return false
-        const goalId = root.openGoalId
+
+        const goalId = Number(root.detailGoal.id || -1)
         root.deleteErrorText = ""
+        if (goalId <= 0 || goalId !== root.openGoalId) {
+            root.deleteErrorText = qsTr("目标详情已变化，已停止删除，请关闭后重试")
+            return false
+        }
+
         root.deletingDetail = true
         if (!root.goalServiceRef.deleteGoal(goalId)) {
             root.deletingDetail = false

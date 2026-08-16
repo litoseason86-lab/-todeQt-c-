@@ -29,6 +29,7 @@ TestCase {
         property int updateCalls: 0
         property int lastUpdatedCategoryId: -1
         property int deleteCalls: 0
+        property int lastDeletedGoalId: -1
         property bool addSucceeds: true
         property bool deleteSucceeds: true
         property bool failGoalsQuery: false
@@ -72,6 +73,7 @@ TestCase {
             return [{ day: 3, count: 1 }, { day: 8, count: 3 }]
         }
         function deleteGoal(goalId) {
+            lastDeletedGoalId = goalId
             deleteCalls += 1
             if (!deleteSucceeds) {
                 operationFailed("删除目标失败")
@@ -188,6 +190,7 @@ TestCase {
         goalService.updateCalls = 0
         goalService.lastUpdatedCategoryId = -1
         goalService.deleteCalls = 0
+        goalService.lastDeletedGoalId = -1
         goalService.addSucceeds = true
         goalService.deleteSucceeds = true
         goalService.failGoalsQuery = false
@@ -333,6 +336,47 @@ TestCase {
         compare(Number(view.detailGoal.id), 1)
     }
 
+    function test_opening_other_goal_failure_keeps_displayed_goal_identity_for_delete() {
+        goalService.goalsData = [activeGoal(), achievedGoal()]
+        var view = createTemporaryObject(goalsComponent, testCase)
+        verify(view !== null)
+        compare(view.openGoal(1), true)
+        const originalCounts = JSON.stringify(view.dailyCounts)
+
+        goalService.failGoalQuery = true
+        compare(view.openGoal(2), false)
+
+        tryCompare(view, "errorText", "目标详情查询失败")
+        compare(view.openGoalId, 1)
+        compare(Number(view.detailGoal.id), 1)
+        compare(String(view.detailGoal.title), "完成课程")
+        compare(JSON.stringify(view.dailyCounts), originalCounts)
+
+        view.requestDeleteDetail()
+        const deletePopup = findChild(view, "goalDeleteConfirm")
+        verify(deletePopup !== null)
+        tryCompare(deletePopup, "opened", true)
+        compare(view.confirmDeleteDetail(), true)
+        compare(goalService.lastDeletedGoalId, 1)
+        verify(goalService.lastDeletedGoalId !== 2)
+    }
+
+    function test_opening_missing_other_goal_preserves_current_detail_snapshot() {
+        goalService.goalsData = [activeGoal()]
+        var view = createTemporaryObject(goalsComponent, testCase)
+        verify(view !== null)
+        compare(view.openGoal(1), true)
+        const originalCounts = JSON.stringify(view.dailyCounts)
+
+        compare(view.openGoal(2), false)
+
+        compare(view.errorText, "目标不存在或已被删除")
+        compare(view.openGoalId, 1)
+        compare(Number(view.detailGoal.id), 1)
+        compare(String(view.detailGoal.title), "完成课程")
+        compare(JSON.stringify(view.dailyCounts), originalCounts)
+    }
+
     function test_missing_goal_still_closes_detail_after_query_recovers() {
         goalService.goalsData = [activeGoal()]
         var view = createTemporaryObject(goalsComponent, testCase)
@@ -440,6 +484,30 @@ TestCase {
         tryCompare(view, "deleteErrorText", "删除目标失败")
         compare(findChild(view, "goalDeleteError").text, "删除目标失败")
         compare(view.openGoalId, 1)
+    }
+
+    function test_delete_rejects_mismatched_displayed_goal_identity() {
+        goalService.goalsData = [activeGoal(), achievedGoal()]
+        var view = createTemporaryObject(goalsComponent, testCase)
+        verify(view !== null)
+        compare(view.openGoal(1), true)
+
+        view.requestDeleteDetail()
+        const deletePopup = findChild(view, "goalDeleteConfirm")
+        verify(deletePopup !== null)
+        tryCompare(deletePopup, "opened", true)
+
+        // 直接制造旧缺陷的分裂状态：界面显示 A，导航主键却是 B。
+        view.openGoalId = 2
+        compare(view.confirmDeleteDetail(), false)
+
+        compare(goalService.deleteCalls, 0)
+        compare(goalService.lastDeletedGoalId, -1)
+        compare(view.deleteErrorText, "目标详情已变化，已停止删除，请关闭后重试")
+        compare(view.detailOpen, true)
+        compare(deletePopup.opened, true)
+        compare(Number(view.detailGoal.id), 1)
+        compare(view.openGoalId, 2)
     }
 
     function test_detail_month_and_today_follow_logical_day() {
