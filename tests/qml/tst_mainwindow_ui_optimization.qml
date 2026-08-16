@@ -232,6 +232,13 @@ TestCase {
         }
     }
 
+    QtObject {
+        id: backupService
+
+        property bool operationBlocksUi: false
+        property string operationText: ""
+    }
+
     // 最小快捷键注册表：只给一条应用内动作，够验证「弹窗打开时整体让路」这条接线。
     // 键位规则本身由 ShortcutRegistryTests 与 tst_shortcuts.qml 覆盖。
     QtObject {
@@ -272,6 +279,7 @@ TestCase {
         statisticsServiceRef: statisticsService
         appSettingsRef: appSettings
         focusTimerRef: focusTimer
+        backupServiceRef: backupService
         goalServiceRef: goalService
         phaseSoundServiceRef: phaseSoundService
         shortcutRegistryRef: shortcutRegistry
@@ -288,6 +296,8 @@ TestCase {
         appSettings.sidebarVisible = true;
         appSettings.reduceTransparency = false;
         appSettings.soundEnabled = true;
+        backupService.operationBlocksUi = false
+        backupService.operationText = ""
         phaseSoundService.milestoneCalls = 0
         phaseSoundService.achievedCalls = 0
         mainWindow.milestoneQueue = []
@@ -627,6 +637,37 @@ TestCase {
         dialog.close()
         tryCompare(appShortcuts, "suspended", false)
         tryCompare(instantiator.objectAt(0), "enabled", true)
+    }
+
+    function test_backupRestoreBlocksShortcutInputAndRestoresIt() {
+        appSettings.reduceMotion = true
+        const appShortcuts = findChild(mainWindow, "appShortcuts")
+        const instantiator = findChild(appShortcuts, "inAppShortcutInstantiator")
+        verify(appShortcuts)
+        verify(instantiator)
+        verify(instantiator.count > 0)
+
+        compare(mainWindow.backupOperationBlocksInput, false)
+        compare(appShortcuts.suspended, false)
+        mainWindow.triggerShortcutAction("view.week")
+        compare(mainWindow.currentView, "week")
+
+        backupService.operationText = "正在备份当前数据并恢复"
+        backupService.operationBlocksUi = true
+        tryCompare(mainWindow, "backupOperationBlocksInput", true)
+        tryCompare(appShortcuts, "suspended", true)
+        tryCompare(instantiator.objectAt(0), "enabled", false)
+
+        // 直接调用最终分发器来覆盖 AppShortcuts 以外的入口。
+        mainWindow.triggerShortcutAction("view.month")
+        compare(mainWindow.currentView, "week")
+
+        backupService.operationBlocksUi = false
+        tryCompare(mainWindow, "backupOperationBlocksInput", false)
+        tryCompare(appShortcuts, "suspended", false)
+        tryCompare(instantiator.objectAt(0), "enabled", true)
+        mainWindow.triggerShortcutAction("view.month")
+        compare(mainWindow.currentView, "month")
     }
 
     function test_bareKeyShortcutsStandDownWhileTypingOutsideAnyDialog() {
