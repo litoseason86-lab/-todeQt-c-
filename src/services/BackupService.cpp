@@ -70,6 +70,12 @@ struct RestorePreflightResult
     QVariantMap restoredSettings;
 };
 
+struct RestoreInstallResult
+{
+    BackupOperations::OperationResult operation;
+    bool snapshotCreated = false;
+};
+
 } // namespace
 
 struct BackupService::RestoreContext
@@ -505,10 +511,6 @@ bool BackupService::restoreBackup(const QString& srcPath)
         return false;
     }
 
-    // 先清到 N-1 再写新的一份，恢复结束后恰好留 N 份。放在创建之前而不是之后，
-    // 是因为异步恢复的快照是在工作线程里写的，成功/失败分支各有出口；
-    // 统一在入口处清理只需要一个插入点，也始终跑在 GUI 线程上。
-    pruneBeforeRestoreBackups();
     const QString preRestorePath = QDir(autoBackupsDir()).filePath(
         kBeforeRestorePrefix + timestampToken() + kBackupExtension);
     emit restoreStarted();
@@ -517,6 +519,8 @@ bool BackupService::restoreBackup(const QString& srcPath)
             false, QStringLiteral("恢复前备份当前数据失败，已中止：") + m_lastError);
         return false;
     }
+    // 只有新恢复点已经原子写成后，才允许清理旧快照；短暂多占一份磁盘优于失去回滚能力。
+    pruneBeforeRestoreBackups();
 
     DatabaseManager::instance()->close();
     const BackupOperations::OperationResult install =
@@ -698,7 +702,6 @@ void BackupService::requestRestore(const QString& srcPath)
         return;
     }
 
-    pruneBeforeRestoreBackups();
     auto context = QSharedPointer<RestoreContext>::create();
     context->stagedSourcePath = QDir(autoBackupsDir()).filePath(
         kRestoreStagingPrefix
@@ -764,22 +767,28 @@ void BackupService::installPreparedRestore(
     DatabaseManager::instance()->close();
     setBusy(true, QStringLiteral("正在备份当前数据并恢复"), true);
 
-    auto* watcher = new QFutureWatcher<BackupOperations::OperationResult>(this);
+    auto* watcher = new QFutureWatcher<RestoreInstallResult>(this);
     trackWorker(watcher);
     connect(watcher, &QFutureWatcherBase::finished, this,
             [this, watcher, context]() {
-        const BackupOperations::OperationResult result = watcher->result();
+        const RestoreInstallResult result = watcher->result();
         retireWorker(watcher);
         if (m_shutdownPrepared) {
             return;
         }
-        if (!result.success) {
+        if (result.snapshotCreated) {
+            // 布尔值来自本次 worker 的实际创建结果，不能用路径存在性猜测，
+            // 否则时间戳撞到旧文件时会误删仍然有效的历史快照。
+            pruneBeforeRestoreBackups();
+        }
+        if (!result.operation.success) {
             // 原子安装失败时旧数据库仍在原路径，只需重新打开；恢复前快照若已生成则继续保留。
             const bool reopened =
                 DatabaseManager::instance()->initialize(context->databasePath);
             const QString message = reopened
-                ? QStringLiteral("恢复失败，原数据未改动：") + result.error
-                : QStringLiteral("恢复失败且数据库重新打开失败：") + result.error;
+                ? QStringLiteral("恢复失败，原数据未改动：") + result.operation.error
+                : QStringLiteral("恢复失败且数据库重新打开失败：")
+                    + result.operation.error;
             setLastError(message);
             setBusy(false);
             emit restoreCompleted(false, message);
@@ -815,6 +824,7 @@ void BackupService::installPreparedRestore(
 
     watcher->setFuture(QtConcurrent::run(
         [context, settingsPath = m_settingsFilePath]() {
+            RestoreInstallResult result;
             const BackupOperations::OperationResult snapshot =
                 BackupOperations::createSnapshot(
                     context->databasePath,
@@ -823,10 +833,13 @@ void BackupService::installPreparedRestore(
                     QStringLiteral("before-restore"),
                     DatabaseManager::kCurrentSchemaVersion);
             if (!snapshot.success) {
-                return snapshot;
+                result.operation = snapshot;
+                return result;
             }
-            return BackupOperations::atomicCopy(
+            result.snapshotCreated = true;
+            result.operation = BackupOperations::atomicCopy(
                 context->stagedSourcePath, context->databasePath);
+            return result;
         }));
 }
 
@@ -964,8 +977,8 @@ void BackupService::pruneAutoBackups() const
 
 void BackupService::pruneBeforeRestoreBackups() const
 {
-    // 留 N-1 个位置给马上要写入的这一份，恢复结束后总数恰好是 kBeforeRestoreRetention。
-    pruneByPrefix(kBeforeRestorePrefix, kBeforeRestoreRetention - 1);
+    // 调用前新快照已经成功存在；此处只负责把临时多出的副本收敛到完整配额。
+    pruneByPrefix(kBeforeRestorePrefix, kBeforeRestoreRetention);
 }
 
 void BackupService::pruneByPrefix(const QString& prefix, int retention) const

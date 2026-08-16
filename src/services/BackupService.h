@@ -114,8 +114,8 @@ private:
     void rollbackAsyncRestore(const QSharedPointer<RestoreContext>& context,
                               const QString& reason);
     void pruneAutoBackups() const;
-    // 恢复前快照此前完全没有清理逻辑：pruneAutoBackups 只匹配 auto- 前缀，
-    // 而 before-restore- 快照写在同一目录，每恢复一次就永久多留一份完整数据库副本。
+    // 仅在本次恢复前快照已经原子创建成功后调用，把临时的 N+1 份收敛回 N 份；
+    // 创建失败时不能调用，否则会在没有新恢复点兜底的情况下删掉旧快照。
     void pruneBeforeRestoreBackups() const;
     // 两类快照共用的按前缀清理。files 按修改时间倒序，保留最新 retention 份。
     void pruneByPrefix(const QString& prefix, int retention) const;
