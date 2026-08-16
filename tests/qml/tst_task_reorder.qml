@@ -82,7 +82,7 @@ TestCase {
     }
 
     function makeTask(id, title, completed) {
-        return { id: id, title: title, completed: !!completed, date: new Date(),
+        return { id: id, title: title, completed: !!completed, date: "2026-08-16",
                  estimatedMinutes: 30, focusedMinutes: 0, notes: "",
                  categoryText: "", categoryId: -1 }
     }
@@ -196,6 +196,54 @@ TestCase {
         verify(!!first && !!second, "delegate 未就绪")
         compare(first.draggable, true)
         compare(second.draggable, false)
+    }
+
+    function test_pending_delete_disables_and_cancels_reorder() {
+        var view = createTemporaryObject(viewComponent, testCase)
+        verify(!!view, "Component exists")
+        view.refresh()
+        wait(60)
+
+        view.beginReorder(3)
+        view.updateReorder(3, 0)
+        compare(view.draggingTaskId, 3)
+        compare(view.dropTargetIndex, 0)
+
+        // 待删除行只从 UI 快照隐藏，数据库还没删；此时提交会违反服务的完整集合契约。
+        view.pendingDeleteTaskId = 2
+        compare(view.canReorderTasks, false)
+        compare(view.draggingTaskId, -1)
+        compare(view.dropTargetIndex, -1)
+        view.beginReorder(1)
+        view.commitReorder(false)
+        compare(testCase.reorderCalls.length, 0)
+    }
+
+    function test_drop_on_completed_row_clamps_to_pending_group() {
+        taskManager.rows = [makeTask(1, "甲"), makeTask(2, "乙"),
+                            makeTask(3, "已完成", true)]
+        var view = createTemporaryObject(viewComponent, testCase)
+        verify(!!view, "Component exists")
+        view.refresh()
+        wait(60)
+
+        var list = findChild(view, "todayTaskList")
+        verify(!!list, "Object exists")
+        var lastPendingRow = list.itemAtIndex(1)
+        var completedRow = list.itemAtIndex(2)
+        verify(!!lastPendingRow && !!completedRow, "delegate 未就绪")
+
+        view.beginReorder(1)
+        view.updateReorder(1, completedRow.y + completedRow.height / 2)
+        compare(view.dropTargetIndex, 1)
+        compare(view.dropIndicatorContentY,
+                Math.min(list.contentHeight - 1,
+                         lastPendingRow.y + lastPendingRow.height + list.spacing / 2),
+                "完成区的指针必须显示在未完成组最后一个可兑现槽位")
+
+        view.commitReorder(false)
+        compare(testCase.reorderCalls.length, 1)
+        compare(testCase.reorderCalls[0].ids, [2, 1, 3])
     }
 
     function test_reorder_is_disabled_without_service_support() {

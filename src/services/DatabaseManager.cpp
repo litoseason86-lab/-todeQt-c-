@@ -354,6 +354,27 @@ bool DatabaseManager::createTables()
         if (!migrateToVersion11()) {
             return false;
         }
+        version = 11;
+    }
+
+    // 即使 user_version 已经是 12，也要识别恢复中断或外部写入留下的半迁移数据。
+    // 查询失败与“不需要修复”是两种状态；前者必须让初始化失败，不能放过未知的不变量状态。
+    QSqlQuery taskOrderInvariantQuery(m_db);
+    if (!taskOrderInvariantQuery.exec(QStringLiteral(
+            "SELECT 1 FROM tasks GROUP BY date "
+            "HAVING MIN(display_order) <= 0 "
+            "OR COUNT(DISTINCT display_order) != COUNT(*) LIMIT 1"))) {
+        qWarning() << "Failed to inspect task display order invariant:"
+                   << taskOrderInvariantQuery.lastError().text();
+        return false;
+    }
+    const bool taskOrderNeedsNormalization = taskOrderInvariantQuery.next();
+    // VACUUM INTO 迁移快照要求连接上没有仍在取数的语句；拿到布尔结论后立即释放游标。
+    taskOrderInvariantQuery.finish();
+    if (version < 12 || taskOrderNeedsNormalization) {
+        if (!migrateToVersion12()) {
+            return false;
+        }
     }
 
     const QStringList indexes = {
@@ -1282,6 +1303,62 @@ bool DatabaseManager::migrateToVersion11()
     }
 
     qInfo() << "Database migrated to version 11";
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion12()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+    if (!backupDatabaseBeforeMigration()) {
+        return false;
+    }
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 12 migration:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    // ROW_NUMBER 按 v11 查询真正展示给用户的顺序编号。先完成/未完成分组，再把 0 放到
+    // 正序号后面；created_at 与 id 只负责稳定打破平局，因此迁移不会凭空改变可见顺序。
+    if (!query.exec(QStringLiteral(R"SQL(
+            WITH ranked_tasks AS (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY date
+                           ORDER BY completed ASC,
+                                    CASE WHEN display_order = 0 THEN 1 ELSE 0 END ASC,
+                                    display_order ASC,
+                                    created_at ASC,
+                                    id ASC
+                       ) AS normalized_order
+                FROM tasks
+            )
+            UPDATE tasks
+            SET display_order = (
+                SELECT normalized_order
+                FROM ranked_tasks
+                WHERE ranked_tasks.id = tasks.id
+            )
+        )SQL"))) {
+        qWarning() << "Failed to normalize task display order:" << query.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    if (!setDatabaseVersion(12)) {
+        m_db.rollback();
+        return false;
+    }
+    if (!m_db.commit()) {
+        qWarning() << "Failed to commit version 12 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 12";
     return true;
 }
 

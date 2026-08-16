@@ -8,6 +8,7 @@
 #include <QSqlQuery>
 #include <QElapsedTimer>
 #include <QSettings>
+#include <QSet>
 #include <QTemporaryDir>
 #include <QTimeZone>
 #include <QTimer>
@@ -726,7 +727,10 @@ private slots:
     void ownershipFilterRejectsForeignKeysAndKeepsShortcutOverrides();
     void asyncExportRunsOffTheCallingThreadAndReportsCompletion();
     void notesRoundTripAndRenameDoesNotEraseThem();
+    void mixedLegacyOrdersKeepNewTasksAtEnd();
+    void allTaskDateWritesAppendAfterLegacyRows();
     void reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation();
+    void reorderTasksRejectsInvalidSetsAtomically();
     void moveTaskToDateLandsAtTheEndOfTheTargetDay();
     void focusHistoryDistinguishesEmptyResultFromQueryError();
     void focusHistorySkipsUnfinishedSessions();
@@ -778,6 +782,7 @@ private slots:
     void migrationV6ClearsUntrustedRoutineLineage();
     void migrationV10ConvertsPomodoroEstimateToMinutes();
     void migrationV10IsIdempotentAndDoesNotLoop();
+    void migrationV12NormalizesVisibleOrderAndIsIdempotent();
     void migrationV5RebuildKeepsColumnsAddedAfterV5();
     void migrationV5RefusesToRebuildWhenTasksHasAnUnknownColumn();
     void freshDatabaseCreatesVersion4PresetCategories();
@@ -3462,6 +3467,106 @@ void ServiceTests::migrationV10IsIdempotentAndDoesNotLoop()
     QCOMPARE(versionQuery.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
 }
 
+void ServiceTests::migrationV12NormalizesVisibleOrderAndIsIdempotent()
+{
+    const QString date = QStringLiteral("2026-08-12");
+    QSqlQuery insert(DatabaseManager::instance()->database());
+    insert.prepare(QStringLiteral(
+        "INSERT INTO tasks (title, date, completed, created_at, display_order) "
+        "VALUES (:title, :date, :completed, :createdAt, :displayOrder)"));
+
+    auto insertLegacyTask = [&](const QString& title, bool completed,
+                                const QString& createdAt, int displayOrder) {
+        insert.bindValue(QStringLiteral(":title"), title);
+        insert.bindValue(QStringLiteral(":date"), date);
+        insert.bindValue(QStringLiteral(":completed"), completed ? 1 : 0);
+        insert.bindValue(QStringLiteral(":createdAt"), createdAt);
+        insert.bindValue(QStringLiteral(":displayOrder"), displayOrder);
+        return insert.exec();
+    };
+
+    // 正序号、0、重复序号、完成组和相同时间戳都出现，才能覆盖 v11 的完整可见顺序。
+    QVERIFY(insertLegacyTask(QStringLiteral("正序二"), false,
+                             QStringLiteral("2026-08-12T08:00:00"), 2));
+    QVERIFY(insertLegacyTask(QStringLiteral("零序"), false,
+                             QStringLiteral("2026-08-12T07:00:00"), 0));
+    QVERIFY(insertLegacyTask(QStringLiteral("正序一甲"), false,
+                             QStringLiteral("2026-08-12T09:00:00"), 1));
+    QVERIFY(insertLegacyTask(QStringLiteral("正序一乙"), false,
+                             QStringLiteral("2026-08-12T09:00:00"), 1));
+    QVERIFY(insertLegacyTask(QStringLiteral("已完成"), true,
+                             QStringLiteral("2026-08-12T06:00:00"), 0));
+
+    QSqlQuery legacyOrder(DatabaseManager::instance()->database());
+    legacyOrder.prepare(QStringLiteral(
+        "SELECT id, title FROM tasks WHERE date = :date "
+        "ORDER BY completed ASC, "
+        "CASE WHEN display_order = 0 THEN 1 ELSE 0 END ASC, "
+        "display_order ASC, created_at ASC, id ASC"));
+    legacyOrder.bindValue(QStringLiteral(":date"), date);
+    QVERIFY(legacyOrder.exec());
+    QList<int> expectedIds;
+    QStringList expectedTitles;
+    while (legacyOrder.next()) {
+        expectedIds.append(legacyOrder.value(0).toInt());
+        expectedTitles.append(legacyOrder.value(1).toString());
+    }
+    QCOMPARE(expectedTitles,
+             QStringList({QStringLiteral("正序一甲"), QStringLiteral("正序一乙"),
+                          QStringLiteral("正序二"), QStringLiteral("零序"),
+                          QStringLiteral("已完成")}));
+
+    QSqlQuery version(DatabaseManager::instance()->database());
+    QVERIFY(version.exec(QStringLiteral("PRAGMA user_version = 11")));
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    auto readNormalizedRows = [&]() {
+        QList<QPair<int, int>> rows;
+        QSqlQuery query(DatabaseManager::instance()->database());
+        query.prepare(QStringLiteral(
+            "SELECT id, display_order FROM tasks WHERE date = :date "
+            "ORDER BY completed ASC, display_order ASC"));
+        query.bindValue(QStringLiteral(":date"), date);
+        if (!query.exec()) {
+            return rows;
+        }
+        while (query.next()) {
+            rows.append({query.value(0).toInt(), query.value(1).toInt()});
+        }
+        return rows;
+    };
+
+    const QList<QPair<int, int>> migratedRows = readNormalizedRows();
+    QCOMPARE(migratedRows.size(), expectedIds.size());
+    for (int index = 0; index < migratedRows.size(); ++index) {
+        QCOMPARE(migratedRows.at(index).first, expectedIds.at(index));
+        QCOMPARE(migratedRows.at(index).second, index + 1);
+    }
+    QVERIFY(version.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(version.next());
+    QCOMPARE(version.value(0).toInt(), 12);
+    version.finish();
+
+    // 已归一的 v12 再次初始化不得重排，也不得重复跑迁移。
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QCOMPARE(readNormalizedRows(), migratedRows);
+
+    // 防御性重入不能只看 user_version：恢复中断留下 0 时也必须重新归一。
+    QSqlQuery corrupt(DatabaseManager::instance()->database());
+    corrupt.prepare(QStringLiteral("UPDATE tasks SET display_order = 0 WHERE id = :id"));
+    corrupt.bindValue(QStringLiteral(":id"), expectedIds.last());
+    QVERIFY(corrupt.exec());
+    QVERIFY(DatabaseManager::instance()->createTables());
+    const QList<QPair<int, int>> repairedRows = readNormalizedRows();
+    QCOMPARE(repairedRows.size(), expectedIds.size());
+    QSet<int> uniqueOrders;
+    for (const auto& row : repairedRows) {
+        QVERIFY(row.second > 0);
+        QVERIFY(!uniqueOrders.contains(row.second));
+        uniqueOrders.insert(row.second);
+    }
+}
+
 void ServiceTests::migrationV5RebuildKeepsColumnsAddedAfterV5()
 {
     // v5 迁移的触发条件是「version < 5 **或** tasks.routine_id 的外键动作不是 SET NULL」。
@@ -5573,6 +5678,69 @@ void ServiceTests::notesRoundTripAndRenameDoesNotEraseThem()
     QVERIFY(rows.first().toMap().value(QStringLiteral("notes")).toString().isEmpty());
 }
 
+void ServiceTests::mixedLegacyOrdersKeepNewTasksAtEnd()
+{
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+
+    QVERIFY(insertTaskRow(QStringLiteral("旧任务甲"), today) > 0);
+    QVERIFY(insertTaskRow(QStringLiteral("旧任务乙"), today) > 0);
+    QVERIFY(tasks->addTask(QStringLiteral("新任务"), today, -1, 0));
+
+    QCOMPARE(taskTitles(tasks->getTasksByDate(today)),
+             QStringList({QStringLiteral("旧任务甲"),
+                          QStringLiteral("旧任务乙"),
+                          QStringLiteral("新任务")}));
+}
+
+void ServiceTests::allTaskDateWritesAppendAfterLegacyRows()
+{
+    TaskManager* tasks = TaskManager::instance();
+    RoutineManager* routines = RoutineManager::instance();
+    const QDate today = logicalToday();
+
+    QVERIFY(insertTaskRow(QStringLiteral("目标旧任务甲"), today) > 0);
+    QVERIFY(insertTaskRow(QStringLiteral("目标旧任务乙"), today) > 0);
+    QVERIFY(tasks->addTask(QStringLiteral("文本科目新增"), today, QStringLiteral("数学")));
+    QVERIFY(tasks->addTask(QStringLiteral("编号科目新增"), today, -1, 0));
+    QVERIFY(routines->addRoutine(QStringLiteral("例行新增"), -1));
+    QCOMPARE(routines->materializeToday(), 1);
+    const int editedId = insertTaskRow(QStringLiteral("编辑改期"), today.addDays(-3));
+    const int movedId = insertTaskRow(QStringLiteral("单项改期"), today.addDays(-2));
+    const int rolledId = insertTaskRow(QStringLiteral("批量结转"), today.addDays(-1));
+    QVERIFY(editedId > 0);
+    QVERIFY(movedId > 0);
+    QVERIFY(rolledId > 0);
+
+    QVERIFY(tasks->updateTask(editedId, QStringLiteral("编辑改期"), -1, today));
+    QVERIFY(tasks->moveTaskToDate(movedId, today));
+    QVERIFY(tasks->moveTasksToToday(QVariantList{rolledId}));
+
+    const QVariantList rows = tasks->getTasksByDate(today);
+    QCOMPARE(taskTitles(rows),
+             QStringList({QStringLiteral("目标旧任务甲"),
+                          QStringLiteral("目标旧任务乙"),
+                          QStringLiteral("文本科目新增"),
+                          QStringLiteral("编号科目新增"),
+                          QStringLiteral("例行新增"),
+                          QStringLiteral("编辑改期"),
+                          QStringLiteral("单项改期"),
+                          QStringLiteral("批量结转")}));
+
+    QSet<int> positiveOrders;
+    for (const QVariant& rowValue : rows) {
+        const QVariantMap row = rowValue.toMap();
+        if (row.value(QStringLiteral("title")).toString().startsWith(QStringLiteral("目标旧任务"))) {
+            continue;
+        }
+        const int order = row.value(QStringLiteral("displayOrder")).toInt();
+        QVERIFY(order > 0);
+        QVERIFY(!positiveOrders.contains(order));
+        positiveOrders.insert(order);
+    }
+    QCOMPARE(positiveOrders.size(), 6);
+}
+
 void ServiceTests::reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation()
 {
     TaskManager* tasks = TaskManager::instance();
@@ -5603,6 +5771,50 @@ void ServiceTests::reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation()
     QVERIFY(tasks->addTask(QStringLiteral("丁"), today, -1, 0));
     rows = tasks->getTodayTasks();
     QCOMPARE(rows.at(3).toMap().value(QStringLiteral("title")).toString(), QStringLiteral("丁"));
+}
+
+void ServiceTests::reorderTasksRejectsInvalidSetsAtomically()
+{
+    TaskManager* tasks = TaskManager::instance();
+    const QDate date = logicalToday();
+    QVERIFY(tasks->addTask(QStringLiteral("甲"), date, -1, 0));
+    QVERIFY(tasks->addTask(QStringLiteral("乙"), date, -1, 0));
+    QVERIFY(tasks->addTask(QStringLiteral("丙"), date, -1, 0));
+    QVERIFY(tasks->addTask(QStringLiteral("跨日"), date.addDays(1), -1, 0));
+
+    const QVariantList todayRows = tasks->getTasksByDate(date);
+    const int first = todayRows.at(0).toMap().value(QStringLiteral("id")).toInt();
+    const int second = todayRows.at(1).toMap().value(QStringLiteral("id")).toInt();
+    const int third = todayRows.at(2).toMap().value(QStringLiteral("id")).toInt();
+    const int otherDateId = tasks->getTasksByDate(date.addDays(1)).first().toMap()
+                                .value(QStringLiteral("id")).toInt();
+
+    auto readAllOrders = [&]() {
+        QList<QPair<int, int>> rows;
+        QSqlQuery query(DatabaseManager::instance()->database());
+        if (!query.exec(QStringLiteral(
+                "SELECT id, display_order FROM tasks ORDER BY id ASC"))) {
+            return rows;
+        }
+        while (query.next()) {
+            rows.append({query.value(0).toInt(), query.value(1).toInt()});
+        }
+        return rows;
+    };
+
+    const QList<QPair<int, int>> original = readAllOrders();
+    QSignalSpy changedSpy(tasks, &TaskManager::tasksChanged);
+    const QList<QVariantList> rejectedOrders{
+        QVariantList{first, first, third},
+        QVariantList{first, second},
+        QVariantList{first, second, third, 999999},
+        QVariantList{first, second, third, otherDateId}
+    };
+    for (const QVariantList& order : rejectedOrders) {
+        QVERIFY(!tasks->reorderTasks(date, order));
+        QCOMPARE(readAllOrders(), original);
+        QCOMPARE(changedSpy.count(), 0);
+    }
 }
 
 void ServiceTests::moveTaskToDateLandsAtTheEndOfTheTargetDay()

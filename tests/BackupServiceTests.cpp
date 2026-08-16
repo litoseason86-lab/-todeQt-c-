@@ -664,10 +664,12 @@ void BackupServiceTests::asyncRestoreRollbackRestoresOriginalTaskCount()
 
 void BackupServiceTests::olderSchemaBackupRestoresAndMigrates()
 {
-    QVERIFY(insertTask(QStringLiteral("旧版任务")) > 0);
+    // 直接插入会沿用 v11 的 display_order=0，构造本应用自己产生过的合法旧备份。
+    // 恢复入口应接受它，再由正式初始化链迁到 v12，不能要求备份提前满足新不变量。
+    QVERIFY(insertTask(QStringLiteral("旧版任务甲")) > 0);
+    QVERIFY(insertTask(QStringLiteral("旧版任务乙")) > 0);
     QVERIFY(BackupService::instance()->createBackup(backupFile()));
-    // 伪造成较旧 schema 版本，恢复后应能被迁移链升级到当前版本。
-    setBackupSchemaVersion(backupFile(), 5);
+    setBackupSchemaVersion(backupFile(), 11);
 
     const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
     QCOMPARE(info.value(QStringLiteral("valid")).toBool(), true);
@@ -677,7 +679,22 @@ void BackupServiceTests::olderSchemaBackupRestoresAndMigrates()
     QSqlQuery version(DatabaseManager::instance()->database());
     QVERIFY(version.exec(QStringLiteral("PRAGMA user_version")) && version.next());
     QCOMPARE(version.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
-    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+    version.finish();
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+
+    QSqlQuery invariant(DatabaseManager::instance()->database());
+    QVERIFY(invariant.exec(QStringLiteral(
+        "SELECT MIN(display_order), COUNT(DISTINCT display_order), COUNT(*) FROM tasks")));
+    QVERIFY(invariant.next());
+    QVERIFY(invariant.value(0).toInt() > 0);
+    QCOMPARE(invariant.value(1).toInt(), invariant.value(2).toInt());
+
+    const QVariantList restored = TaskManager::instance()->getTasksByDate(QDate::currentDate());
+    QCOMPARE(restored.size(), 2);
+    QCOMPARE(restored.at(0).toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("旧版任务甲"));
+    QCOMPARE(restored.at(1).toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("旧版任务乙"));
 }
 
 void BackupServiceTests::autoBackupRespectsIntervalAndRetention()

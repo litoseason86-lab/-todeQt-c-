@@ -367,19 +367,22 @@ int RoutineManager::materializeToday()
 
         QSqlQuery insertTask(db);
         insertTask.prepare(QStringLiteral(
-            "INSERT INTO tasks (title, category, category_id, date, completed, routine_id, routine_generated) "
+            "INSERT INTO tasks (title, category, category_id, date, completed, routine_id, "
+            "routine_generated, display_order) "
             "VALUES (:title, COALESCE((SELECT name FROM categories WHERE id = :categoryId), ''), "
-            ":categoryId, :date, 0, :routineId, 1)"));
+            ":categoryId, :date, 0, :routineId, 1, "
+            "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks WHERE date = :orderDate))"));
         insertTask.bindValue(QStringLiteral(":title"), routine.title);
         insertTask.bindValue(QStringLiteral(":categoryId"), routine.categoryId);
         insertTask.bindValue(QStringLiteral(":date"), today);
+        insertTask.bindValue(QStringLiteral(":orderDate"), today);
         // routine_generated 是可信来源标记；routine_id 单独存在不能证明任务由规则生成。
         insertTask.bindValue(QStringLiteral(":routineId"), routine.id);
 
         // 这里刻意直接写 SQL，而不调用 TaskManager::addTask：
         // TaskManager 会发 tasksChanged，应用启动时生成例行任务再触发刷新，容易形成递归刷新链。
         // 事务把“抢占生成权”和“插入任务”绑定成一个原子动作，避免只完成一半后下次重复生成。
-        if (!insertTask.exec()) {
+        if (!insertTask.exec() || insertTask.numRowsAffected() != 1) {
             qWarning() << "Failed to materialize routine task:" << insertTask.lastError().text();
             reportFailure(QStringLiteral("每日例行生成失败: %1").arg(insertTask.lastError().text()));
             db.rollback();

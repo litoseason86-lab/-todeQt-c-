@@ -11,6 +11,7 @@
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QSet>
 #include <QVariant>
 
 namespace {
@@ -175,14 +176,16 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue, const
 
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "INSERT INTO tasks (title, category, category_id, date, completed) "
-        "VALUES (:title, :category, :categoryId, :date, 0)"));
+        "INSERT INTO tasks (title, category, category_id, date, completed, display_order) "
+        "VALUES (:title, :category, :categoryId, :date, 0, "
+        "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks WHERE date = :orderDate))"));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
     query.bindValue(QStringLiteral(":category"), normalizedCategory);
     query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":orderDate"), date.toString(Qt::ISODate));
 
-    if (!query.exec()) {
+    if (!query.exec() || query.numRowsAffected() != 1) {
         qWarning() << "Failed to add task:" << query.lastError().text();
         return false;
     }
@@ -259,7 +262,7 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue,
     query.bindValue(QStringLiteral(":notes"),
                     trimmedNotes.isNull() ? QStringLiteral("") : trimmedNotes);
 
-    if (!query.exec()) {
+    if (!query.exec() || query.numRowsAffected() != 1) {
         qWarning() << "Failed to add task:" << query.lastError().text();
         return false;
     }
@@ -435,7 +438,10 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
     const bool updateNotes = !notes.isNull();
 
     QString assignments = QStringLiteral(
-        "title = :title, category = :category, category_id = :categoryId, date = :date");
+        "title = :title, category = :category, category_id = :categoryId, date = :date, "
+        "display_order = CASE WHEN date = :comparisonDate THEN display_order ELSE "
+        "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks "
+        " WHERE date = :orderDate AND id <> :selfId) END");
     if (updateEstimate) {
         assignments += QStringLiteral(", estimated_minutes = :estimated");
     }
@@ -450,6 +456,9 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
     query.bindValue(QStringLiteral(":category"), categoryName);
     query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":comparisonDate"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":orderDate"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":selfId"), taskId);
     if (updateEstimate) {
         query.bindValue(QStringLiteral(":estimated"), clampEstimatedMinutes(estimatedMinutes));
     }
@@ -463,7 +472,7 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
         return false;
     }
 
-    if (query.numRowsAffected() == 0) {
+    if (query.numRowsAffected() != 1) {
         qWarning() << "Failed to update task: task not found" << taskId;
         return false;
     }
@@ -551,10 +560,7 @@ QVariantList TaskManager::getTasksByDate(const QDate& date) const
 
     QSqlQuery query(db);
     query.prepare(taskSelectSql() + QStringLiteral(
-        // 手动排序优先：display_order = 0 表示"没排过"，统一排到已排项之后，
-        // 再按创建时间保持与改版前一致的相对顺序。
         "WHERE t.date = :date ORDER BY t.completed ASC, "
-        "CASE WHEN t.display_order = 0 THEN 1 ELSE 0 END ASC, "
         "t.display_order ASC, t.created_at ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
 
@@ -594,7 +600,6 @@ QVariantList TaskManager::getWeekTasks(const QVariant& startDateValue) const
     query.prepare(taskSelectSql() + QStringLiteral(
         "WHERE t.date >= :startDate AND t.date <= :endDate "
         "ORDER BY t.date ASC, t.completed ASC, "
-        "CASE WHEN t.display_order = 0 THEN 1 ELSE 0 END ASC, "
         "t.display_order ASC, t.created_at ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
@@ -635,7 +640,6 @@ QVariantList TaskManager::getMonthTasks(int year, int month) const
     query.prepare(taskSelectSql() + QStringLiteral(
         "WHERE t.date >= :startDate AND t.date <= :endDate "
         "ORDER BY t.date ASC, t.completed ASC, "
-        "CASE WHEN t.display_order = 0 THEN 1 ELSE 0 END ASC, "
         "t.display_order ASC, t.created_at ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
@@ -666,7 +670,7 @@ QVariantList TaskManager::getOverdueUncompletedTasks() const
     QSqlQuery query(db);
     query.prepare(taskSelectSql() + QStringLiteral(
         "WHERE t.date < :today AND t.completed = 0 AND t.routine_generated = 0 "
-        "ORDER BY t.date ASC, t.id ASC"));
+        "ORDER BY t.date ASC, t.display_order ASC, t.id ASC"));
     query.bindValue(QStringLiteral(":today"),
                     LogicalDay::today(AppSettings::instance()->dayStartHour()).toString(Qt::ISODate));
 
@@ -711,12 +715,18 @@ bool TaskManager::moveTasksToToday(const QVariantList& taskIds)
         }
 
         QSqlQuery query(db);
-        query.prepare(QStringLiteral("UPDATE tasks SET date = :today WHERE id = :id"));
+        query.prepare(QStringLiteral(
+            "UPDATE tasks SET date = :today, "
+            "display_order = (SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks "
+            "                 WHERE date = :orderDate AND id <> :selfId) "
+            "WHERE id = :id"));
         query.bindValue(QStringLiteral(":today"), today);
+        query.bindValue(QStringLiteral(":orderDate"), today);
+        query.bindValue(QStringLiteral(":selfId"), taskId);
         query.bindValue(QStringLiteral(":id"), taskId);
 
         // 一键结转必须全成或全不成；部分成功会让提示数量和列表状态互相矛盾。
-        if (!query.exec() || query.numRowsAffected() <= 0) {
+        if (!query.exec() || query.numRowsAffected() != 1) {
             qWarning() << "Failed to move task" << taskId << ":" << query.lastError().text();
             db.rollback();
             return false;
@@ -784,16 +794,58 @@ bool TaskManager::reorderTasks(const QVariant& dateValue, const QVariantList& or
     const QDate date = normalizeDate(dateValue);
     if (!date.isValid()) {
         qWarning() << "Failed to reorder tasks: invalid date";
+        reportFailure(QStringLiteral("任务排序失败：日期无效"));
         return false;
+    }
+    if (orderedTaskIds.isEmpty()) {
+        qWarning() << "Failed to reorder tasks: task list is empty";
+        reportFailure(QStringLiteral("任务排序失败：顺序列表为空"));
+        return false;
+    }
+
+    QSet<int> requestedIds;
+    for (const QVariant& idValue : orderedTaskIds) {
+        const int taskId = idValue.toInt();
+        if (!isValidTaskId(taskId) || requestedIds.contains(taskId)) {
+            qWarning() << "Failed to reorder tasks: invalid or duplicate task id" << idValue;
+            reportFailure(QStringLiteral("任务排序失败：任务编号无效或重复"));
+            return false;
+        }
+        requestedIds.insert(taskId);
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to reorder tasks: database is not open";
+        reportFailure(QStringLiteral("任务排序失败：数据库未打开"));
         return false;
     }
     if (!db.transaction()) {
         qWarning() << "Failed to start reorder transaction:" << db.lastError().text();
+        reportFailure(QStringLiteral("任务排序失败：无法启动事务"));
+        return false;
+    }
+
+    // UI 快照可能在拖动期间过期。必须在写入同一事务里重新读取完整集合，
+    // 任何缺失、额外或跨日 ID 都拒绝，避免部分更新制造重复序号。
+    QSqlQuery actualQuery(db);
+    actualQuery.prepare(QStringLiteral("SELECT id FROM tasks WHERE date = :date"));
+    actualQuery.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    if (!actualQuery.exec()) {
+        qWarning() << "Failed to inspect tasks before reorder:" << actualQuery.lastError().text();
+        reportFailure(QStringLiteral("任务排序失败：无法校验当前任务集合"));
+        db.rollback();
+        return false;
+    }
+    QSet<int> actualIds;
+    while (actualQuery.next()) {
+        actualIds.insert(actualQuery.value(0).toInt());
+    }
+    actualQuery.finish();
+    if (actualIds != requestedIds) {
+        qWarning() << "Failed to reorder tasks: task set does not match date" << date;
+        reportFailure(QStringLiteral("任务排序失败：任务列表已经变化，请刷新后重试"));
+        db.rollback();
         return false;
     }
 
@@ -803,25 +855,20 @@ bool TaskManager::reorderTasks(const QVariant& dateValue, const QVariantList& or
 
     for (int i = 0; i < orderedTaskIds.size(); ++i) {
         const int taskId = orderedTaskIds.at(i).toInt();
-        if (!isValidTaskId(taskId)) {
-            qWarning() << "Failed to reorder tasks: invalid task id" << taskId;
-            db.rollback();
-            return false;
-        }
-        // 序号从 1 开始：0 留给“从未排过”的行，让它们在同序时回落到 created_at。
         query.bindValue(QStringLiteral(":order"), i + 1);
         query.bindValue(QStringLiteral(":id"), taskId);
         query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
-        if (!query.exec()) {
+        if (!query.exec() || query.numRowsAffected() != 1) {
             qWarning() << "Failed to reorder tasks:" << query.lastError().text();
+            reportFailure(QStringLiteral("任务排序失败：写入顺序失败"));
             db.rollback();
             return false;
         }
-        // 日期不匹配的 id 不算错误也不写入——顺序数组可能包含刚被改期走的任务。
     }
 
     if (!db.commit()) {
         qWarning() << "Failed to commit reorder:" << db.lastError().text();
+        reportFailure(QStringLiteral("任务排序失败：无法提交事务"));
         db.rollback();
         return false;
     }
@@ -865,7 +912,7 @@ bool TaskManager::moveTaskToDate(int taskId, const QVariant& dateValue)
         qWarning() << "Failed to move task:" << query.lastError().text();
         return false;
     }
-    if (query.numRowsAffected() <= 0) {
+    if (query.numRowsAffected() != 1) {
         qWarning() << "Failed to move task: task not found" << taskId;
         return false;
     }

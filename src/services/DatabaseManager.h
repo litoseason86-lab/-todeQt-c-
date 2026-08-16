@@ -13,7 +13,7 @@ class DatabaseManager : public QObject
 public:
     // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
-    static constexpr int kCurrentSchemaVersion = 11;
+    static constexpr int kCurrentSchemaVersion = 12;
 
     static DatabaseManager* instance();
 
@@ -63,6 +63,9 @@ private:
     //   tasks.notes                  （任务备注）
     //   tasks.display_order          （任务手动排序）
     bool migrateToVersion11();
+    // v12 将历史的 0 序号和同日重复序号按旧版可见顺序固化为正整数，
+    // 使后续所有任务写路径共享同一个排序不变量。
+    bool migrateToVersion12();
     bool createRoutinesTable();
     bool insertPresetCategories();
     bool migrateTaskCategories();
