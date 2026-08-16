@@ -675,14 +675,9 @@ add_test(NAME QmlResourceManifestTests COMMAND QmlResourceManifestTests)
 # QML 静态检查门禁。此前 qmllint 只是「可以手动跑一下」，输出 250 条 unqualified
 # 却退出码 0，等于没有门禁——那批告警也确实累积到了 250 条。
 #
-# 现在 unqualified 与 Quick.layout-positioning 都已清零，接成 ctest 条目把这个状态锁住。
-# 判据是「显式豁免两类已知项 + 其余零容忍」，而不是笼统设一个告警数量上限：
-# 后者会让「修好一条旧的、混进一条新的」蒙混过关。
-#
-# 两类豁免的理由：
-#   missing-property     —— qmllint 推导不到 ScrollView.contentItem 等运行时类型，属工具限制
-#   use-proper-function  —— 项目既定的回调注入模式（AddTaskDialog 的 taskSubmitter 等）
-# 任何一类将来被清干净，就把对应的 disable 去掉，门禁自动收紧。
+# 现在显式开启 missing-property 与 use-proper-function，已知静态推导限制只在
+# 具体表达式旁成对压制。其他位置新增任意一条告警都会因 max-warnings 0 失败；
+# ignore-settings 防止开发者本机配置改变 CI 和本地门禁的共同判据。
 find_program(POMODORO_TODO_QMLLINT
     NAMES qmllint
     HINTS "${QT6_INSTALL_PREFIX}/bin" "${Qt6_DIR}/../../../bin"
@@ -694,9 +689,10 @@ if(POMODORO_TODO_QMLLINT)
     add_test(
         NAME QmlLintGate
         COMMAND ${POMODORO_TODO_QMLLINT}
+            --ignore-settings
             -I "${CMAKE_CURRENT_SOURCE_DIR}/qml"
-            --missing-property disable
-            --use-proper-function disable
+            --missing-property warning
+            --use-proper-function warning
             --max-warnings 0
             ${POMODORO_TODO_QML_SOURCES}
     )

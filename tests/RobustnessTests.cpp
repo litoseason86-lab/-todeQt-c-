@@ -74,10 +74,9 @@ void RobustnessTests::initializeReportsFailureOnCorruptDatabaseFile()
         file.write(QByteArrayLiteral("THIS IS NOT A SQLITE DATABASE 中文垃圾数据 \x00\x01\x02\xff"));
     }
 
+    // 本用例只验证初始化明确拒绝腐坏库；失败后的连接释放由 cleanup() 调用 close() 兜底，
+    // 当前没有把内部连接状态定义成 DatabaseManager 的接口契约。
     QVERIFY(!DatabaseManager::instance()->initialize(corruptPath));
-    QVERIFY(!DatabaseManager::instance()->isOpen()
-            || !DatabaseManager::instance()->database().isOpen()
-            || true); // initialize 返回 false 即视为拒绝服务成功，连接状态由 close 兜底
 }
 
 void RobustnessTests::corruptDatabaseFileIsNotModifiedByFailedInitialize()

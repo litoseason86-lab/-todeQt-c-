@@ -160,9 +160,12 @@ Popup {
         var categoryId = categoryCombo.currentIndex >= 0 && categoryCombo.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryCombo.currentIndex].id || -1) : -1;
         var succeeded = true
         if (root.taskSubmitter) {
+            // taskSubmitter 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
+            // qmllint disable use-proper-function
             succeeded = Boolean(root.taskSubmitter(
                 root.editingTaskId, title, categoryId,
                 root.resultIsoDate(), root.estimatedMinutes, notesField.text.trim()))
+            // qmllint enable use-proper-function
         } else {
             root.taskEdited(root.editingTaskId, title, categoryId,
                             root.resultIsoDate(), root.estimatedMinutes, notesField.text.trim())

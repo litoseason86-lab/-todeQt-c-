@@ -75,7 +75,10 @@ Button {
             return
         }
 
+        // normalizer 由设置页在运行时注入为函数，静态工具只能看到 var 属性。
+        // qmllint disable use-proper-function
         var portable = root.normalizer ? root.normalizer(event.key, event.modifiers) : ""
+        // qmllint enable use-proper-function
         // 只按住修饰键时 normalize 返回空串：继续等真正的主键，不退出录制态。
         if (String(portable).length === 0) {
             return

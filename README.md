@@ -96,14 +96,18 @@ cmake --build ~/pt-build -j8
 可选的 QML 静态检查（用目标 Qt SDK 自带的 `qmllint`，不要用 PySide6 工具链）：
 
 ```bash
-/Users/zerionlito/Qt/6.10.3/macos/bin/qmllint -I qml \
-  qml/*.qml qml/views/*.qml qml/components/*.qml qml/components/settings/*.qml
+find qml -type f -name '*.qml' -print0 | sort -z | \
+  xargs -0 /Users/zerionlito/Qt/6.10.3/macos/bin/qmllint \
+    --ignore-settings -I qml \
+    --missing-property warning --use-proper-function warning \
+    --max-warnings 0
 ```
 
-**它现在是门禁**：ctest 条目 `QmlLintGate` 对 `unqualified` 与 `Quick.layout-positioning` 零容忍
-（两者均已清零），只显式豁免 `missing-property` 与 `use-proper-function` 两类——
-前者是 qmllint 推导不到运行时类型的工具限制，后者是项目既定的回调注入模式。
-上面那条手工命令用于查看全部告警；门禁判据以 CMake 里的 `QmlLintGate` 为准。
+**它现在是门禁**：在 `f8e3120` 修复前，官方 Qt 6.10.3 实测基线为
+`missing-property` 5 条、`use-proper-function` 7 条，旧文档的 4/6 计数已经失真。
+当前 CTest 显式启用这两类检查，已知静态推导限制只在具体表达式旁局部压制，
+所以本机 `QmlLintGate` 输出必须为 0。后续新增告警必须修复，或在具体位置写明压制原因，
+不能通过提高全局允许数量或关闭整个类别放行。
 
 ## 项目结构
 

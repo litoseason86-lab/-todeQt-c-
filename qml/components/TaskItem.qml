@@ -179,12 +179,15 @@ Rectangle {
             root.titleEditing = false;
             return;
         }
+        // renameSubmitter 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
+        // qmllint disable use-proper-function
         if (root.renameSubmitter
                 && !Boolean(root.renameSubmitter(root.taskId, newTitle))) {
             titleEditField.forceActiveFocus()
             titleEditField.selectAll()
             return
         }
+        // qmllint enable use-proper-function
         if (!root.renameSubmitter) {
             root.renameSubmitted(root.taskId, newTitle)
         }

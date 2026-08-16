@@ -138,8 +138,11 @@ Popup {
                      ? Number(root.taskOptions[taskCombo.currentIndex].id) : -1
 
         if (root.submitHandler) {
+            // submitHandler 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
+            // qmllint disable use-proper-function
             const failure = String(root.submitHandler(root.editingSessionId, start,
                                                       durationFields.enteredMinutes, taskId) || "")
+            // qmllint enable use-proper-function
             if (failure.length > 0) {
                 root.errorText = failure
                 return
