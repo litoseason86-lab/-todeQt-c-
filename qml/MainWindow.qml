@@ -52,6 +52,7 @@ Item {
     property var logicalDayServiceRef: null
     property var backupServiceRef: null
     property var goalServiceRef: null
+    property var scheduleServiceRef: null
     property var phaseSoundServiceRef: null
     property var shortcutRegistryRef: null
     // 「召回 / 隐藏主窗口」只能由 ApplicationWindow 落实；这里和菜单栏一样只发意图。
@@ -202,6 +203,9 @@ Item {
         case "todayFocus":
             // 独立记录页追加在栈尾，不能挪动既有索引，否则切页状态机会错页。
             return 8;
+        case "schedule":
+            // 课表页同样追加在栈尾，保持既有索引不变。
+            return 9;
         case "today":
         default:
             return 0;
@@ -926,6 +930,15 @@ Item {
                     logicalDayServiceRef: root.logicalDayServiceRef
                     settingsRef: root.appSettingsRef
                     taskManagerRef: root.taskManagerRef
+                }
+
+                SchedulePlanView {
+                    objectName: "schedulePlanViewPage"
+                    pageActive: root.currentView === "schedule"
+                    scheduleServiceRef: root.scheduleServiceRef
+                    settingsRef: root.appSettingsRef
+                    categoryManagerRef: root.categoryManagerRef
+                    logicalDayServiceRef: root.logicalDayServiceRef
                 }
             }
 

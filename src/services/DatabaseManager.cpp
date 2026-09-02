@@ -375,6 +375,18 @@ bool DatabaseManager::createTables()
         if (!migrateToVersion12()) {
             return false;
         }
+        version = 12;
+    }
+
+    // v13 引入课表两表。表缺失时无论版本号都要建，与前面几步同理防御半迁移状态。
+    // 注意这里不能只判 schedule_entries：节次表是独立的一张，
+    // 只建了课表项而节次表缺失时，「按节次」显示模式会没有任何行可画。
+    if (version < 13
+        || !tableExists(QStringLiteral("schedule_entries"))
+        || !tableExists(QStringLiteral("schedule_periods"))) {
+        if (!migrateToVersion13()) {
+            return false;
+        }
     }
 
     const QStringList indexes = {
@@ -385,7 +397,11 @@ bool DatabaseManager::createTables()
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_sessions_category_snapshot "
                        "ON focus_sessions(category_id_snapshot)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_sessions_start ON focus_sessions(start_time)"),
-        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_routines_active ON routines(active)")
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_routines_active ON routines(active)"),
+        // 课表网格每次渲染都按「星期几 + 开始时间」取数，这条复合索引让一周七列
+        // 各自的查询直接走索引顺序，省掉每次切周都要做的排序。
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_schedule_entries_weekday "
+                       "ON schedule_entries(weekday, start_minutes)")
     };
 
     for (const QString& indexSql : indexes) {
@@ -520,6 +536,106 @@ bool DatabaseManager::createRoutinesTable()
         )
     )SQL");
     return execSql(query, createRoutines, "Failed to create routines table:");
+}
+
+bool DatabaseManager::createScheduleTables()
+{
+    QSqlQuery query(m_db);
+
+    // 课表项：按「星期几 + 时段」循环，不锚定具体日期，因此没有 date 也没有 completed 列。
+    // week_start/week_end 是生效周次区间（如第 1–8 周），week_parity 是单双周规则。
+    // end_minutes > start_minutes 表示课表项不跨零点——课表场景不存在跨夜条目，
+    // 用 CHECK 在库层挡住，比在服务层每个写入路径重复判断更可靠。
+    const QString createEntries = QStringLiteral(R"SQL(
+        CREATE TABLE IF NOT EXISTS schedule_entries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+            location TEXT NOT NULL DEFAULT '',
+            weekday INTEGER NOT NULL CHECK(weekday BETWEEN 1 AND 7),
+            start_minutes INTEGER NOT NULL CHECK(start_minutes BETWEEN 0 AND 1439),
+            end_minutes INTEGER NOT NULL CHECK(end_minutes BETWEEN 1 AND 1440),
+            week_start INTEGER NOT NULL DEFAULT 1 CHECK(week_start >= 1),
+            week_end INTEGER NOT NULL DEFAULT 30 CHECK(week_end >= 1),
+            week_parity INTEGER NOT NULL DEFAULT 0 CHECK(week_parity IN (0, 1, 2)),
+            category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK(end_minutes > start_minutes),
+            CHECK(week_end >= week_start)
+        )
+    )SQL");
+    if (!execSql(query, createEntries, "Failed to create schedule_entries table:")) {
+        return false;
+    }
+
+    // 节次预设：课表录入时的快捷填充来源，也是「按节次」显示模式的行定义。
+    // period_index 唯一，保证「第 3 节」在全表只有一个时间定义。
+    const QString createPeriods = QStringLiteral(R"SQL(
+        CREATE TABLE IF NOT EXISTS schedule_periods (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            period_index INTEGER NOT NULL UNIQUE CHECK(period_index >= 1),
+            start_minutes INTEGER NOT NULL CHECK(start_minutes BETWEEN 0 AND 1439),
+            end_minutes INTEGER NOT NULL CHECK(end_minutes BETWEEN 1 AND 1440),
+            CHECK(end_minutes > start_minutes)
+        )
+    )SQL");
+    return execSql(query, createPeriods, "Failed to create schedule_periods table:");
+}
+
+bool DatabaseManager::insertDefaultSchedulePeriods()
+{
+    QSqlQuery probe(m_db);
+    if (!probe.exec(QStringLiteral("SELECT 1 FROM schedule_periods LIMIT 1"))) {
+        qWarning() << "Failed to inspect schedule periods:" << probe.lastError().text();
+        return false;
+    }
+    // 表里已经有节次就不再写默认值。用户把节次改过或清空后，
+    // 下次启动不能又被默认值填回来——那等于每次启动都撤销一次用户的编辑。
+    const bool alreadySeeded = probe.next();
+    probe.finish();
+    if (alreadySeeded) {
+        return true;
+    }
+
+    // 默认节次：上午 4 节、下午 4 节、晚上 3 节，每节 45 分钟。
+    // 这只是一份能直接用的起始值，用户可在「课表设置」里整表改写。
+    struct DefaultPeriod {
+        int index;
+        int startMinutes;
+        int endMinutes;
+    };
+    static constexpr DefaultPeriod kDefaults[] = {
+        { 1, 8 * 60, 8 * 60 + 45 },
+        { 2, 8 * 60 + 55, 9 * 60 + 40 },
+        { 3, 10 * 60, 10 * 60 + 45 },
+        { 4, 10 * 60 + 55, 11 * 60 + 40 },
+        { 5, 14 * 60, 14 * 60 + 45 },
+        { 6, 14 * 60 + 55, 15 * 60 + 40 },
+        { 7, 16 * 60, 16 * 60 + 45 },
+        { 8, 16 * 60 + 55, 17 * 60 + 40 },
+        { 9, 19 * 60, 19 * 60 + 45 },
+        { 10, 19 * 60 + 55, 20 * 60 + 40 },
+        { 11, 21 * 60, 21 * 60 + 45 }
+    };
+
+    QSqlQuery insert(m_db);
+    if (!insert.prepare(QStringLiteral(
+            "INSERT INTO schedule_periods (period_index, start_minutes, end_minutes) "
+            "VALUES (?, ?, ?)"))) {
+        qWarning() << "Failed to prepare default schedule period insert:"
+                   << insert.lastError().text();
+        return false;
+    }
+    for (const DefaultPeriod& period : kDefaults) {
+        insert.addBindValue(period.index);
+        insert.addBindValue(period.startMinutes);
+        insert.addBindValue(period.endMinutes);
+        if (!insert.exec()) {
+            qWarning() << "Failed to insert default schedule period:"
+                       << insert.lastError().text();
+            return false;
+        }
+    }
+    return true;
 }
 
 bool DatabaseManager::migrateToVersion3()
@@ -1359,6 +1475,39 @@ bool DatabaseManager::migrateToVersion12()
     }
 
     qInfo() << "Database migrated to version 12";
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion13()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+
+    // v13 只新增课表两表，不读也不写任何既有表，因此与 v3 一样不建迁移快照。
+    // 未来若课表迁移开始改动旧表（例如把某类任务转成课表项），必须重新评估备份策略。
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start database migration transaction:" << m_db.lastError().text();
+        return false;
+    }
+
+    // 建表与种默认节次放在同一个事务里：只建了空表却没有节次，
+    // 会让「按节次」显示模式打开就是一张空网格，看起来像功能坏了。
+    if (!createScheduleTables()
+        || !insertDefaultSchedulePeriods()
+        || !setDatabaseVersion(13)) {
+        m_db.rollback();
+        return false;
+    }
+
+    if (!m_db.commit()) {
+        qWarning() << "Failed to commit version 13 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 13";
     return true;
 }
 

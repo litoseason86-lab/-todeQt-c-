@@ -22,6 +22,7 @@
 #include "services/NotificationService.h"
 #include "services/PhaseSoundService.h"
 #include "services/RoutineManager.h"
+#include "services/ScheduleService.h"
 #include "services/ShortcutRegistry.h"
 #include "services/StatisticsService.h"
 #include "services/TaskManager.h"
@@ -153,6 +154,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("goalService"), GoalService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("routineManager"), RoutineManager::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("scheduleService"), ScheduleService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), AppSettings::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("logicalDayService"), LogicalDayService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("phaseSoundService"), PhaseSoundService::instance());

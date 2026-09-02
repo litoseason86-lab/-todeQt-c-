@@ -102,6 +102,8 @@ set(APP_SOURCES
     src/services/CountdownService.cpp
     src/services/GoalService.h
     src/services/GoalService.cpp
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
     src/services/TrayController.h
     src/services/TrayController.cpp
     src/services/NotificationService.h
@@ -418,6 +420,27 @@ target_link_libraries(GoalServiceTests PRIVATE
 
 pomodoro_todo_enable_warnings(GoalServiceTests)
 add_test(NAME GoalServiceTests COMMAND GoalServiceTests)
+
+# 课表：只验证存储与「按周次筛选」两件事。日期到周次的换算不在这里——
+# 它在 QML 侧的 ScheduleWeeks.js，由 QML 测试覆盖。
+# 不引入 TaskManager/FocusTimer：课表项与任务、专注记录之间没有任何写入关系，
+# 把它们连进来只会让「课表不影响统计」这条不变量变得难以断言。
+add_executable(ScheduleServiceTests
+    tests/ScheduleServiceTests.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
+)
+
+target_link_libraries(ScheduleServiceTests PRIVATE
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+pomodoro_todo_enable_warnings(ScheduleServiceTests)
+add_test(NAME ScheduleServiceTests COMMAND ScheduleServiceTests)
 
 # 菜单栏控制器与通知服务是平台无关层，测试不引入任何 .mm / AppKit 依赖，
 # 用假视图与假通知后端验证状态机与降级逻辑。

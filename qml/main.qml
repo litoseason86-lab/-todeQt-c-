@@ -64,6 +64,7 @@ ApplicationWindow {
         logicalDayServiceRef: typeof logicalDayService === "undefined" ? null : logicalDayService
         backupServiceRef: typeof backupService === "undefined" ? null : backupService
         goalServiceRef: typeof goalService === "undefined" ? null : goalService
+        scheduleServiceRef: typeof scheduleService === "undefined" ? null : scheduleService
         phaseSoundServiceRef: typeof phaseSoundService === "undefined" ? null : phaseSoundService
         shortcutRegistryRef: typeof shortcutRegistry === "undefined" ? null : shortcutRegistry
         // qmllint enable unqualified

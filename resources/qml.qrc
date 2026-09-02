@@ -5,12 +5,14 @@
         <file alias="qml/LogicalDay.js">../qml/LogicalDay.js</file>
         <file alias="qml/Duration.js">../qml/Duration.js</file>
         <file alias="qml/GoalForecast.js">../qml/GoalForecast.js</file>
+        <file alias="qml/ScheduleWeeks.js">../qml/ScheduleWeeks.js</file>
         <file alias="qml/main.qml">../qml/main.qml</file>
         <file alias="qml/MainWindow.qml">../qml/MainWindow.qml</file>
         <file alias="qml/views/TodayTaskView.qml">../qml/views/TodayTaskView.qml</file>
         <file alias="qml/views/TodayFocusView.qml">../qml/views/TodayFocusView.qml</file>
         <file alias="qml/views/FocusView.qml">../qml/views/FocusView.qml</file>
         <file alias="qml/views/WeekPlanView.qml">../qml/views/WeekPlanView.qml</file>
+        <file alias="qml/views/SchedulePlanView.qml">../qml/views/SchedulePlanView.qml</file>
         <file alias="qml/views/StatisticsView.qml">../qml/views/StatisticsView.qml</file>
         <file alias="qml/views/StatisticsFormat.js">../qml/views/StatisticsFormat.js</file>
         <file alias="qml/views/MonthGoalView.qml">../qml/views/MonthGoalView.qml</file>
@@ -66,6 +68,10 @@
         <file alias="qml/components/CompletionParticles.qml">../qml/components/CompletionParticles.qml</file>
         <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
         <file alias="qml/components/AddTaskDialog.qml">../qml/components/AddTaskDialog.qml</file>
+        <file alias="qml/components/ScheduleGrid.qml">../qml/components/ScheduleGrid.qml</file>
+        <file alias="qml/components/ScheduleEntryBlock.qml">../qml/components/ScheduleEntryBlock.qml</file>
+        <file alias="qml/components/ScheduleEntryDialog.qml">../qml/components/ScheduleEntryDialog.qml</file>
+        <file alias="qml/components/ScheduleSettingsDialog.qml">../qml/components/ScheduleSettingsDialog.qml</file>
         <file alias="qml/components/EditTaskDialog.qml">../qml/components/EditTaskDialog.qml</file>
         <file alias="qml/components/CountdownDialog.qml">../qml/components/CountdownDialog.qml</file>
         <file alias="qml/components/CountdownBanner.qml">../qml/components/CountdownBanner.qml</file>

@@ -44,6 +44,16 @@ class AppSettings : public QObject
     Q_PROPERTY(bool longBreakEnabled READ longBreakEnabled WRITE setLongBreakEnabled NOTIFY longBreakEnabledChanged)
     Q_PROPERTY(int longBreakMinutes READ longBreakMinutes WRITE setLongBreakMinutes NOTIFY longBreakMinutesChanged)
     Q_PROPERTY(int longBreakInterval READ longBreakInterval WRITE setLongBreakInterval NOTIFY longBreakIntervalChanged)
+    // —— 课表 ——
+    // 学期第 1 周的周一（ISO 日期）。课表按周次循环，没有这个锚点就算不出「今天是第几周」。
+    // 空字符串表示尚未设置；写入时会被规范化到所在周的周一。
+    Q_PROPERTY(QString semesterStartDate READ semesterStartDate WRITE setSemesterStartDate NOTIFY semesterStartDateChanged)
+    // 学期总周数，决定周次导航的右边界。
+    Q_PROPERTY(int semesterWeeks READ semesterWeeks WRITE setSemesterWeeks NOTIFY semesterWeeksChanged)
+    // 课表网格版式："time" 按真实时长成比例排布，"period" 按节次等高排布。
+    Q_PROPERTY(QString scheduleDisplayMode READ scheduleDisplayMode WRITE setScheduleDisplayMode NOTIFY scheduleDisplayModeChanged)
+    // 是否显示周六周日两列。工作日程通常只用周一到周五。
+    Q_PROPERTY(bool scheduleShowWeekend READ scheduleShowWeekend WRITE setScheduleShowWeekend NOTIFY scheduleShowWeekendChanged)
 
 public:
     static AppSettings* instance();
@@ -97,6 +107,14 @@ public:
     void setLongBreakMinutes(int minutes);
     int longBreakInterval() const;
     void setLongBreakInterval(int count);
+    QString semesterStartDate() const;
+    void setSemesterStartDate(const QString& isoDate);
+    int semesterWeeks() const;
+    void setSemesterWeeks(int weeks);
+    QString scheduleDisplayMode() const;
+    void setScheduleDisplayMode(const QString& mode);
+    bool scheduleShowWeekend() const;
+    void setScheduleShowWeekend(bool visible);
     Q_INVOKABLE int dailyFocusGoalMinutesForDate(const QString& isoDate) const;
     Q_INVOKABLE bool setDailyFocusGoal(const QString& isoDate, int minutes);
 
@@ -149,6 +167,10 @@ signals:
     void longBreakEnabledChanged();
     void longBreakMinutesChanged();
     void longBreakIntervalChanged();
+    void semesterStartDateChanged();
+    void semesterWeeksChanged();
+    void scheduleDisplayModeChanged();
+    void scheduleShowWeekendChanged();
     void dailyFocusGoalChanged();
     // 任意一处快捷键覆盖值变化（含批量恢复默认与数据恢复后的重读）。
     void shortcutOverridesChanged();
@@ -162,6 +184,10 @@ private:
     static int normalizeDayStartHour(int hour);
     static int normalizeLongBreakMinutes(int minutes);
     static int normalizeLongBreakInterval(int count);
+    // 学期起始日必须落在周一：周次是按「整周」推进的，锚点若停在周三，
+    // 同一周内的日期会被算成两个不同周次。空串表示未设置，原样保留。
+    static QString normalizeSemesterStartDate(const QString& isoDate);
+    static int normalizeSemesterWeeks(int weeks);
     static QString shortcutKey(const QString& actionId);
     void recreateSettingsBackend();
     bool writeValue(const QString& key, const QVariant& value);

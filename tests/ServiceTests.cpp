@@ -3552,7 +3552,9 @@ void ServiceTests::migrationV12NormalizesVisibleOrderAndIsIdempotent()
     }
     QVERIFY(version.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(version.next());
-    QCOMPARE(version.value(0).toInt(), 12);
+    // createTables 会把整条迁移链跑到头，不会停在 v12；断言的是「链跑完了」，
+    // 而不是「当前最高版本恰好是 12」——写死数字会让每次新增迁移都误伤这条用例。
+    QCOMPARE(version.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
     version.finish();
 
     // 已归一的 v12 再次初始化不得重排，也不得重复跑迁移。

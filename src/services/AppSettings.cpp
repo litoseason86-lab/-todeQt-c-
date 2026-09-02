@@ -30,8 +30,18 @@ const auto kLongBreakIntervalKey = QStringLiteral("focus/longBreakInterval");
 const auto kDailyFocusGoalDateKey = QStringLiteral("focus/dailyGoalDate");
 const auto kDailyFocusGoalMinutesKey = QStringLiteral("focus/dailyGoalMinutes");
 const auto kLegacyDailyFocusGoalHoursKey = QStringLiteral("focus/dailyGoalHours");
+const auto kSemesterStartDateKey = QStringLiteral("schedule/semesterStartDate");
+const auto kSemesterWeeksKey = QStringLiteral("schedule/semesterWeeks");
+const auto kScheduleDisplayModeKey = QStringLiteral("schedule/displayMode");
+const auto kScheduleShowWeekendKey = QStringLiteral("schedule/showWeekend");
 // 快捷键覆盖值统一放在这个分组下，「全部恢复默认」才能一次 remove 掉整组。
 const auto kShortcutGroup = QStringLiteral("shortcuts");
+
+// 学期总周数的取值范围。上界与 ScheduleService::kMaxWeekIndex 保持一致：
+// 课表项能填到第几周，学期就至少要能有多长，否则会出现「排了课却翻不到那一周」。
+constexpr int kMinSemesterWeeks = 1;
+constexpr int kMaxSemesterWeeks = 60;
+constexpr int kDefaultSemesterWeeks = 20;
 
 QString settingsErrorMessage(QSettings::Status status)
 {
@@ -88,6 +98,10 @@ void AppSettings::reload()
     emit longBreakEnabledChanged();
     emit longBreakMinutesChanged();
     emit longBreakIntervalChanged();
+    emit semesterStartDateChanged();
+    emit semesterWeeksChanged();
+    emit scheduleDisplayModeChanged();
+    emit scheduleShowWeekendChanged();
     emit dailyFocusGoalChanged();
     emit shortcutOverridesChanged();
 }
@@ -270,6 +284,105 @@ int AppSettings::normalizeLongBreakInterval(int count)
 {
     // 每 2–8 个番茄一次长休息；坏值回默认 4。
     return (count >= 2 && count <= 8) ? count : 4;
+}
+
+QString AppSettings::normalizeSemesterStartDate(const QString& isoDate)
+{
+    const QString trimmed = isoDate.trimmed();
+    if (trimmed.isEmpty()) {
+        // 空串是「尚未设置」这个合法状态，不要替换成今天：
+        // 课表页据此判断是否需要引导用户先定学期起始日。
+        return QString();
+    }
+
+    const QDate parsed = QDate::fromString(trimmed, Qt::ISODate);
+    if (!parsed.isValid()) {
+        return QString();
+    }
+
+    // 回退到所在周的周一。周次按整周推进，锚点若停在周三，
+    // 同一周里周一和周三会被算成相邻两个周次。
+    // Qt 的 dayOfWeek() 是 1(周一)–7(周日)，减去它再加一天正好落到本周周一。
+    return parsed.addDays(1 - parsed.dayOfWeek()).toString(Qt::ISODate);
+}
+
+int AppSettings::normalizeSemesterWeeks(int weeks)
+{
+    if (weeks < kMinSemesterWeeks || weeks > kMaxSemesterWeeks) {
+        return kDefaultSemesterWeeks;
+    }
+    return weeks;
+}
+
+QString AppSettings::semesterStartDate() const
+{
+    // 读取时也归一化，拦住旧版本或手工编辑遗留的非周一日期。
+    return normalizeSemesterStartDate(
+        m_settings->value(kSemesterStartDateKey, QString()).toString());
+}
+
+void AppSettings::setSemesterStartDate(const QString& isoDate)
+{
+    const QString normalized = normalizeSemesterStartDate(isoDate);
+    if (semesterStartDate() == normalized) {
+        return;
+    }
+    if (writeValue(kSemesterStartDateKey, normalized)) {
+        emit semesterStartDateChanged();
+    }
+}
+
+int AppSettings::semesterWeeks() const
+{
+    return normalizeSemesterWeeks(
+        m_settings->value(kSemesterWeeksKey, kDefaultSemesterWeeks).toInt());
+}
+
+void AppSettings::setSemesterWeeks(int weeks)
+{
+    const int normalized = normalizeSemesterWeeks(weeks);
+    if (semesterWeeks() == normalized) {
+        return;
+    }
+    if (writeValue(kSemesterWeeksKey, normalized)) {
+        emit semesterWeeksChanged();
+    }
+}
+
+QString AppSettings::scheduleDisplayMode() const
+{
+    // 只有两种可持久化版式；损坏配置和新增未知值都不能让课表进入空白态。
+    const QString stored = m_settings->value(kScheduleDisplayModeKey,
+                                             QStringLiteral("time")).toString();
+    return stored == QStringLiteral("period") ? stored : QStringLiteral("time");
+}
+
+void AppSettings::setScheduleDisplayMode(const QString& mode)
+{
+    const QString normalized = mode == QStringLiteral("period")
+        ? QStringLiteral("period")
+        : QStringLiteral("time");
+    if (scheduleDisplayMode() == normalized) {
+        return;
+    }
+    if (writeValue(kScheduleDisplayModeKey, normalized)) {
+        emit scheduleDisplayModeChanged();
+    }
+}
+
+bool AppSettings::scheduleShowWeekend() const
+{
+    return m_settings->value(kScheduleShowWeekendKey, true).toBool();
+}
+
+void AppSettings::setScheduleShowWeekend(bool visible)
+{
+    if (scheduleShowWeekend() == visible) {
+        return;
+    }
+    if (writeValue(kScheduleShowWeekendKey, visible)) {
+        emit scheduleShowWeekendChanged();
+    }
 }
 
 int AppSettings::dayStartHour() const
@@ -692,6 +805,7 @@ QStringList AppSettings::ownedSettingGroups()
         QStringLiteral("goals"),
         QStringLiteral("rollover"),
         QStringLiteral("migration"),
+        QStringLiteral("schedule"),
         kShortcutGroup,
     };
 }

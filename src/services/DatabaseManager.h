@@ -13,7 +13,7 @@ class DatabaseManager : public QObject
 public:
     // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
-    static constexpr int kCurrentSchemaVersion = 12;
+    static constexpr int kCurrentSchemaVersion = 13;
 
     static DatabaseManager* instance();
 
@@ -66,7 +66,16 @@ private:
     // v12 将历史的 0 序号和同日重复序号按旧版可见顺序固化为正整数，
     // 使后续所有任务写路径共享同一个排序不变量。
     bool migrateToVersion12();
+    // v13 新增课表两表（schedule_entries / schedule_periods）。纯新增，不触碰任何旧表：
+    // 课表项按「星期几 + 时段」循环，与按具体日期存储的 tasks 是两套互不相干的数据。
+    bool migrateToVersion13();
     bool createRoutinesTable();
+    // 课表项表与节次预设表。两者一起建：节次预设是课表录入的快捷填充来源，
+    // 缺了它课表页的「按节次」显示模式就没有行可画。
+    bool createScheduleTables();
+    // 首次建表时种入一套默认节次（上午/下午/晚上）。仅在节次表为空时写入，
+    // 避免用户清空或改写节次后，下次启动又被默认值填回来。
+    bool insertDefaultSchedulePeriods();
     bool insertPresetCategories();
     bool migrateTaskCategories();
     QString generateColorForCategory(int index) const;

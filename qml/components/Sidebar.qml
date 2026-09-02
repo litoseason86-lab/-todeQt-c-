@@ -158,6 +158,13 @@ Rectangle {
         }
 
         SidebarItem {
+            text: "待办"
+            marker: "待"
+            isActive: root.currentView === "schedule"
+            onClicked: root.itemClicked("schedule")
+        }
+
+        SidebarItem {
             text: "本周计划"
             marker: "周"
             isActive: root.currentView === "week"
