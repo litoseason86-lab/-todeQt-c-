@@ -172,20 +172,6 @@ Rectangle {
                         border.width: root.showInvalidData ? 0 : 1
                         visible: !root.showInvalidData
                     }
-
-                    Text {
-                        id: invalidDataLabel
-                        objectName: "invalidDataLabel"
-
-                        anchors.centerIn: parent
-                        width: Math.min(parent.width - 16, 150)
-                        visible: root.showInvalidData
-                        text: "暂无有效数据"
-                        font.pixelSize: Theme.fontSm
-                        color: Theme.inkSoft
-                        horizontalAlignment: Text.AlignHCenter
-                        wrapMode: Text.WordWrap
-                    }
                 }
 
                 ColumnLayout {

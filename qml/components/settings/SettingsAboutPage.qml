@@ -154,15 +154,5 @@ FocusScope {
                 }
             }
         }
-
-        Text {
-            Layout.fillWidth: true
-            Layout.topMargin: Theme.space4
-            text: "卸载应用前，请先在「数据与管理」中按需导出数据。"
-            color: Theme.inkMuted
-            font.pixelSize: Theme.fontSm
-            horizontalAlignment: Text.AlignHCenter
-            wrapMode: Text.WordWrap
-        }
     }
 }

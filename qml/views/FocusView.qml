@@ -725,9 +725,9 @@ Item {
                 Text {
                     objectName: "phaseStageText"
                     Layout.fillWidth: true
-                    text: root.state === "free"
-                          ? (root.timerBool("hasActiveSession") ? qsTr("当前任务") : qsTr("自由专注待机"))
-                          : root.pomodoroStageText()
+                    text: root.state === "free" ? "" : root.pomodoroStageText()
+                    // 空串时整行收起，否则会在标题下留出一条空白槽位。
+                    visible: text.length > 0
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
                     color: Theme.inkSoft
@@ -1229,21 +1229,6 @@ Item {
                     }
                 }
             }
-
-            Text {
-                objectName: "noTaskHint"
-                Layout.fillWidth: true
-                // 两种模式都从任务页带入待启动任务；没有任务时必须说明开始按钮为何不可用。
-                text: ((root.state === "free" && !root.timerBool("hasActiveSession")
-                        && !root.canStartFreeFocus())
-                       || (root.state === "pomoIdle" && !root.canStartPomodoro()))
-                      ? qsTr("到今日任务里点「开始专注」即可带任务进入") : ""
-                visible: text.length > 0
-                textFormat: Text.PlainText
-                font.pixelSize: Theme.fontXs
-                color: Theme.inkSoft
-                horizontalAlignment: Text.AlignHCenter
-            }
         }
 
         Loader {
@@ -1332,7 +1317,7 @@ Item {
         if (root.state === "breakDone") {
             return "休息结束"
         }
-        return "番茄待机"
+        return ""
     }
 
     function primaryTimeText() {
@@ -1422,23 +1407,11 @@ Item {
 
     function ringCaptionText() {
         var targetMinutes = Math.round(root.timerNumber("targetSeconds", 0) / 60)
-        if (root.state === "manualRest") {
-            return "休息时间不计入今日专注"
-        }
-        if (root.state === "pomoIdle") {
-            return root.canStartPomodoro() ? "准备开始" : "等待任务"
-        }
         if (root.state === "pomoWork") {
             return (root.ringDimmed() ? "已暂停 · 共 " : "剩余 · 共 ") + targetMinutes + " 分"
         }
         if (root.state === "pomoBreak") {
             return (root.ringDimmed() ? "已暂停 · 共 " : "休息 · 共 ") + targetMinutes + " 分"
-        }
-        if (root.state === "workDone") {
-            return "这一颗番茄已完成"
-        }
-        if (root.state === "breakDone") {
-            return "休息结束，可以继续专注了"
         }
         return ""
     }

@@ -895,7 +895,6 @@ TestCase {
     function test_todayTaskViewUsesOptimizedCardsAndControls() {
         wait(80);
 
-        var description = findChild(todayTaskView, "todayDescriptionText");
         var addButton = findChild(todayTaskView, "todayAddButton");
         var addButtonBackground = findChild(todayTaskView, "todayAddButtonBackground");
         var addButtonLabel = findChild(todayTaskView, "todayAddButtonLabel");
@@ -904,7 +903,8 @@ TestCase {
         var emptyStateCard = findChild(todayTaskView, "todayEmptyStateCard");
         var emptyStateIcon = findChild(todayTaskView, "todayEmptyStateIcon");
 
-        verify(description !== null);
+        // 标题下的一句话标语已移除，守住它不再回来。
+        compare(findChild(todayTaskView, "todayDescriptionText"), null);
         verify(addButton !== null);
         verify(addButtonBackground !== null);
         verify(addButtonLabel !== null);
@@ -913,7 +913,6 @@ TestCase {
         verify(emptyStateCard !== null);
         verify(emptyStateIcon !== null);
 
-        verify(Qt.colorEqual(description.color, Theme.ink));
         compare(addButtonBackground.radius, Theme.radiusLg);
         verify(Qt.colorEqual(addButtonBackground.color, Theme.accentFill));
         compare(addButtonBackground.border.width, 0);

@@ -321,7 +321,7 @@ TestCase {
         focusViewStub.timeText = "01:12:00"
         focusViewStub.titleText = "主动休息"
         focusViewStub.stageText = "主动休息中"
-        focusViewStub.captionText = "休息时间不计入今日专注"
+        focusViewStub.captionText = ""
         timerStub.isRunning = true
         timerStub.hasActiveSession = false
         timerStub.phase = 3

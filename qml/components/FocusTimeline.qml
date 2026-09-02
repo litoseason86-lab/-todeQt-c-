@@ -106,15 +106,6 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: root.sessions.length === 0
-
-            Text {
-                objectName: "focusHistoryEmptyState"
-                anchors.centerIn: parent
-                text: "这一天还没有专注记录"
-                font.pixelSize: Theme.fontMd
-                color: Theme.inkSoft
-                horizontalAlignment: Text.AlignHCenter
-            }
         }
 
         ScrollView {

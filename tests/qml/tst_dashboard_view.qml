@@ -541,9 +541,8 @@ TestCase {
         view.filterMode = "learning"
 
         compare(view.panelTaskCount, 0)
-        var empty = findChild(view, "todayLearningEmptyText")
-        verify(empty)
-        verify(empty.text.indexOf("还没有专注记录") >= 0)
+        // 空状态文案已移除；这里守住"没有数据时不渲染任何任务行"这条实际契约。
+        compare(findChild(view, "todayLearningEmptyText"), null)
         compare(countObjects(view, "todayLearningRow"), 0)
     }
 

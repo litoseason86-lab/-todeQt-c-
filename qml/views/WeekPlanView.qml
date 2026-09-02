@@ -572,13 +572,6 @@ Item {
                                 anchors.rightMargin: Theme.space8
                                 spacing: Theme.space8
 
-                                Text {
-                                    Layout.fillWidth: true
-                                    text: "暂无任务"
-                                    font.pixelSize: Theme.fontMd
-                                    color: Theme.inkSoft
-                                }
-
                                 Button {
                                     id: emptyAddButton
 

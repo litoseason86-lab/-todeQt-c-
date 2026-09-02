@@ -72,16 +72,6 @@ Item {
             horizontalAlignment: Text.AlignHCenter
         }
 
-        Text {
-            objectName: "manualRestAccountingNote"
-            Layout.fillWidth: true
-            text: qsTr("休息时间不会计入今日专注")
-            textFormat: Text.PlainText
-            color: Theme.inkSoft
-            font.pixelSize: Theme.fontLg
-            horizontalAlignment: Text.AlignHCenter
-        }
-
         RowLayout {
             Layout.alignment: Qt.AlignHCenter
             spacing: Theme.space16

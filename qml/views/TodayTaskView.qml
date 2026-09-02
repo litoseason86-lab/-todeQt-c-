@@ -513,13 +513,6 @@ Item {
                     font.weight: Font.Bold
                     color: Theme.ink
                 }
-
-                Text {
-                    objectName: "todayDescriptionText"
-                    text: "把今天的学习任务收拢到一个清单里。"
-                    font.pixelSize: Theme.fontMd
-                    color: Theme.ink
-                }
             }
 
             Button {
@@ -813,15 +806,6 @@ Item {
                             font.pixelSize: Theme.fontXl
                             font.weight: Font.Bold
                             color: Theme.ink
-                            horizontalAlignment: Text.AlignHCenter
-                        }
-
-                        Text {
-                            Layout.fillWidth: true
-                            text: "先添加一个明确到可执行的任务。空清单不是轻松，只是没有外化。"
-                            font.pixelSize: Theme.fontMd
-                            color: Theme.inkSoft
-                            wrapMode: Text.WordWrap
                             horizontalAlignment: Text.AlignHCenter
                         }
                     }

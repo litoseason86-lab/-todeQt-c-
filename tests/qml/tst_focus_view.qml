@@ -736,34 +736,28 @@ TestCase {
         compare(view.panelExpanded, false)
     }
 
-    function test_idleCaptionReflectsTaskReadiness() {
+    function test_idleStatesCarryNoDescriptiveText() {
         view.toPomodoroTab(true)
         wait(20)
 
+        // 待机态的解释性文案（环内「准备开始／等待任务」、标题下「番茄待机」、
+        // 底部「到今日任务里点开始专注」）已全部移除，守住它们不再回来。
         const caption = findChild(view, "ringCaptionText")
         verify(caption)
-        compare(caption.text, "准备开始")
+        compare(caption.text, "")
+
+        const stageText = findChild(view, "phaseStageText")
+        verify(stageText)
+        compare(stageText.text, "")
+
+        compare(findChild(view, "noTaskHint"), null)
 
         focusTimer.currentTaskId = -1
         focusTimer.currentTaskTitle = ""
         view.selectedTaskId = -1
         wait(20)
-        compare(caption.text, "等待任务")
-    }
-
-    function test_noTaskHintGuidesUser() {
-        view.toPomodoroTab(true)
-        wait(20)
-
-        const hint = findChild(view, "noTaskHint")
-        verify(hint)
-        compare(hint.text, "")
-
-        focusTimer.currentTaskId = -1
-        focusTimer.currentTaskTitle = ""
-        view.selectedTaskId = -1
-        wait(20)
-        compare(hint.text, "到今日任务里点「开始专注」即可带任务进入")
+        compare(caption.text, "")
+        compare(stageText.text, "")
     }
 
     function test_selectMinutesAcceptsRangeAndRejectsOutOfBounds() {
@@ -1138,7 +1132,8 @@ TestCase {
         compare(timeText.text, "01:01:01")
         // 主动休息沿用自由专注的大号计时层级，不应重新包成独立卡片风格。
         compare(timeText.font.pixelSize, Theme.fontDisplay)
-        compare(findChild(panel, "manualRestAccountingNote").text, "休息时间不会计入今日专注")
+        // 「休息时间不会计入今日专注」说明已移除。
+        compare(findChild(panel, "manualRestAccountingNote"), null)
 
         const pauseButton = findChild(panel, "manualRestPauseResumeButton")
         verify(pauseButton)
