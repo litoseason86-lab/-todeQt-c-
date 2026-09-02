@@ -127,6 +127,13 @@ Rectangle {
         }
 
         SidebarItem {
+            text: "今日专注"
+            marker: "记"
+            isActive: root.currentView === "todayFocus"
+            onClicked: root.itemClicked("todayFocus")
+        }
+
+        SidebarItem {
             text: "专注计时"
             marker: "专"
             isActive: root.currentView === "focus"

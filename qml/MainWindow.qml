@@ -199,6 +199,9 @@ Item {
         case "goals":
             // 目标页继续追加在栈尾，既有视图索引保持不变。
             return 7;
+        case "todayFocus":
+            // 独立记录页追加在栈尾，不能挪动既有索引，否则切页状态机会错页。
+            return 8;
         case "today":
         default:
             return 0;
@@ -709,6 +712,11 @@ Item {
                 }
 
                 onItemClicked: function (viewName) {
+                    // 左侧“今日专注”永远回到逻辑今天；历史月历跳转会直接指定日期，
+                    // 两条入口不能共用一个隐式的“上次查看日期”。
+                    if (viewName === "todayFocus") {
+                        todayFocusView.showToday();
+                    }
                     root.switchToView(viewName);
                 }
 
@@ -846,14 +854,14 @@ Item {
                 MonthGoalView {
                     pageActive: root.currentView === "month"
                     focusTimerRef: root.focusTimerRef
-                    taskManagerRef: root.taskManagerRef
                     focusHistoryServiceRef: root.focusHistoryServiceRef
                     logicalDayServiceRef: root.logicalDayServiceRef
                     settingsRef: root.appSettingsRef
                     categoryManagerRef: root.categoryManagerRef
 
-                    onStartFocus: function (taskId, taskTitle) {
-                        root.startFocusForTask(taskId, taskTitle);
+                    onFocusDateRequested: function (date) {
+                        todayFocusView.showDate(date)
+                        root.switchToView("todayFocus")
                     }
                 }
 
@@ -907,6 +915,17 @@ Item {
                     goalServiceRef: root.goalServiceRef
                     categoryManagerRef: root.categoryManagerRef
                     settingsRef: root.appSettingsRef
+                }
+
+                TodayFocusView {
+                    id: todayFocusView
+                    objectName: "todayFocusViewPage"
+                    pageActive: root.currentView === "todayFocus"
+                    focusTimerRef: root.focusTimerRef
+                    focusHistoryServiceRef: root.focusHistoryServiceRef
+                    logicalDayServiceRef: root.logicalDayServiceRef
+                    settingsRef: root.appSettingsRef
+                    taskManagerRef: root.taskManagerRef
                 }
             }
 

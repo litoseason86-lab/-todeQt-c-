@@ -14,6 +14,8 @@ Rectangle {
     // 手工补录/修改/删除的入口。宿主不接这些信号时按钮不出现——
     // 组件本身不该假定所有使用者都允许改历史。
     property bool editable: false
+    // 宿主页面自己有标题栏时（今日专注页），卡片内的表头就是重复信息，让宿主关掉它。
+    property bool headerVisible: true
     signal addRequested()
     signal editRequested(var session)
     signal deleteRequested(var session)
@@ -72,6 +74,7 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true
             spacing: Theme.space12
+            visible: root.headerVisible
 
             Text {
                 objectName: "focusTimelineTitle"

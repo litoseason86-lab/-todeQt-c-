@@ -5,15 +5,14 @@ import QtQuick.Controls
 import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
-import "../components"
 import "MonthGoalFormat.js" as MgFmt
 import "../LogicalDay.js" as LogicalDay
 
 Item {
     id: root
 
-    // MainWindow 仍绑定 onStartFocus。专注历史页不再触发它，只保留接口避免现有页面装配失败。
-    signal startFocus(int taskId, string taskTitle)
+    // 月历只选择和汇总日期；记录明细由今日专注页接管。
+    signal focusDateRequested(date selectedDate)
 
     property int currentYear: new Date().getFullYear()
     property int currentMonth: new Date().getMonth() + 1
@@ -29,11 +28,6 @@ Item {
     property var categoryManagerRef: null
     property string loadError: ""
     property var monthSessions: []
-    property var selectedDaySessions: []
-    // 只有服务真的提供写接口时才露出补录入口——测试里的只读桩不该长出编辑按钮。
-    readonly property bool canEditHistory: root.hasFocusHistoryService()
-                                           && typeof root.focusHistoryServiceRef.addManualSession === "function"
-    property var taskManagerRef: null
     property var dailyTotals: ({})
     property int invalidSessionCount: 0
     property bool pageActive: true
@@ -103,7 +97,6 @@ Item {
             if (!root.hasFocusHistoryService()) {
                 root.monthSessions = [];
                 root.dailyTotals = ({});
-                root.selectedDaySessions = [];
                 root.invalidSessionCount = 0;
                 return;
             }
@@ -116,11 +109,9 @@ Item {
                 root.loadError = "专注历史加载失败";
             }
             root.calculateDailyTotals();
-            root.updateSelectedDaySessions();
         } catch (error) {
             root.monthSessions = [];
             root.dailyTotals = ({});
-            root.selectedDaySessions = [];
             root.invalidSessionCount = 0;
             root.loadError = "专注历史加载失败";
         }
@@ -165,20 +156,6 @@ Item {
         root.dailyTotals = totals;
     }
 
-    function updateSelectedDaySessions() {
-        var selectedDate = root.selectedDateKey();
-        var filtered = [];
-
-        for (var i = 0; i < root.monthSessions.length; i++) {
-            var session = root.monthSessions[i];
-            if (session && session.date === selectedDate) {
-                filtered.push(session);
-            }
-        }
-
-        root.selectedDaySessions = filtered;
-    }
-
     function daysInMonth() {
         return new Date(root.currentYear, root.currentMonth, 0).getDate();
     }
@@ -193,55 +170,9 @@ Item {
         return new Date(root.currentYear, root.currentMonth - 1, Math.max(1, day));
     }
 
-    function selectedDateKey() {
-        return MgFmt.isoDate(root.dateForDay(root.selectedDay));
-    }
-
     function dayTotalSeconds(day) {
         var total = root.dailyTotals[MgFmt.isoDate(root.dateForDay(day))];
         return Number(total) || 0;
-    }
-
-    function tasksForSelectedDay() {
-        // 补录的典型场景是「那天做了这个任务但忘了计时」，所以候选就取那天的任务。
-        if (!root.taskManagerRef || typeof root.taskManagerRef.getTasksByDate !== "function") {
-            return []
-        }
-        const rows = root.taskManagerRef.getTasksByDate(MgFmt.isoDate(root.dateForDay(root.selectedDay))) || []
-        const options = []
-        for (var i = 0; i < rows.length; ++i) {
-            options.push({ id: Number(rows[i].id), title: String(rows[i].title || "") })
-        }
-        return options
-    }
-
-    function submitManualSession(sessionId, startDateTime, durationMinutes, taskId) {
-        if (!root.canEditHistory) {
-            return "当前无法修改专注记录"
-        }
-        const ok = sessionId > 0
-                 ? root.focusHistoryServiceRef.updateSession(sessionId, startDateTime, durationMinutes)
-                 : root.focusHistoryServiceRef.addManualSession(taskId, startDateTime, durationMinutes) > 0
-        if (!ok) {
-            return String(root.focusHistoryServiceRef.lastError() || "保存失败")
-        }
-        root.refresh()
-        return ""
-    }
-
-    function deleteSession(sessionId) {
-        if (!root.canEditHistory || sessionId <= 0) {
-            return
-        }
-        if (!root.focusHistoryServiceRef.deleteSession(sessionId)) {
-            root.loadError = String(root.focusHistoryServiceRef.lastError() || "删除失败")
-            return
-        }
-        root.refresh()
-    }
-
-    function selectedDayTotalSeconds() {
-        return root.dayTotalSeconds(root.selectedDay);
     }
 
     function formatDuration(seconds) {
@@ -546,8 +477,8 @@ Item {
 
             GridLayout {
                 objectName: "monthContentStack"
-                // 宽屏下左右并排，避免右侧空白；窄屏下自动堆叠，防止卡片被压到不可读。
-                columns: root.width >= 820 ? 2 : 1
+                // 记录明细移至独立的今日专注页；历史页只保留月度汇总月历。
+                columns: 1
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.space24
                 Layout.rightMargin: Theme.space24
@@ -557,10 +488,10 @@ Item {
 
                 Rectangle {
                     objectName: "monthCalendarContainer"
-                    Layout.fillWidth: root.width < 820
+                    Layout.fillWidth: true
                     Layout.minimumWidth: 360
-                    Layout.preferredWidth: 460
-                    Layout.maximumWidth: root.width < 820 ? 100000 : 520
+                    Layout.preferredWidth: 760
+                    Layout.maximumWidth: 100000
                     Layout.minimumHeight: 520
                     Layout.preferredHeight: 560
                     radius: Theme.radiusLg
@@ -706,13 +637,18 @@ Item {
 
                                     MouseArea {
                                         id: dayMouseArea
+                                        // 离屏测试里合成鼠标事件打不进来（父链 visible 为假），
+                                        // 用例靠这个名字直接触发点击，绕开可见性。
+                                        objectName: calendarCell.dayNumber > 0
+                                                    ? "monthDayMouseArea-" + calendarCell.dayNumber
+                                                    : "monthDayMouseArea-empty-" + calendarCell.index
                                         anchors.fill: parent
                                         enabled: parent.dayNumber > 0
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: {
                                             root.selectedDay = parent.dayNumber;
-                                            root.updateSelectedDaySessions();
+                                            root.focusDateRequested(root.dateForDay(parent.dayNumber));
                                         }
                                     }
                                 }
@@ -721,38 +657,7 @@ Item {
                     }
                 }
 
-                FocusTimeline {
-                    id: focusTimeline
-                    Layout.fillWidth: true
-                    editable: root.canEditHistory
-                    onAddRequested: manualSessionDialog.openForAdd(
-                                        MgFmt.isoDate(root.dateForDay(root.selectedDay)), root.tasksForSelectedDay())
-                    onEditRequested: function (session) {
-                        manualSessionDialog.openForEdit(session, root.tasksForSelectedDay())
-                    }
-                    onDeleteRequested: function (session) {
-                        root.deleteSession(Number(session.id || -1))
-                    }
-                    Layout.minimumWidth: 360
-                    Layout.minimumHeight: 260
-                    Layout.preferredHeight: root.width >= 820 ? 560 : 360
-                    sessions: root.selectedDaySessions
-                    selectedDay: root.selectedDay
-                    currentMonth: root.currentMonth
-                    viewWidth: root.width
-                    formatDurationFn: root.formatDuration
-                }
             }
-        }
-    }
-
-    ManualSessionDialog {
-        id: manualSessionDialog
-        objectName: "manualSessionDialog"
-
-        parent: root
-        submitHandler: function (sessionId, startDateTime, durationMinutes, taskId) {
-            return root.submitManualSession(sessionId, startDateTime, durationMinutes, taskId)
         }
     }
 }
