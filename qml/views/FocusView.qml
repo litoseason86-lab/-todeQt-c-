@@ -336,7 +336,9 @@ Item {
             return false
         }
         if (root.timer.hasActiveSession || root.timer.phase !== 0) {
-            root.errorText = "已有专注进行中"
+            // phase 非零现在也包含主动休息，说成“专注”会把休息误报成专注；
+            // 与 MainWindow 的同类冲突提示保持同一口径。
+            root.errorText = "已有计时进行中"
             return false
         }
         root.pomodoroModeSelected = false

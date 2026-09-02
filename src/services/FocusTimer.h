@@ -58,6 +58,7 @@ public:
     Q_INVOKABLE bool resumeFocus();
     Q_INVOKABLE bool stopFocus();
     // 超长自由计时经用户确认后，可用修正值结算。只允许当前自由会话调用，不能改写番茄或休息。
+    // 修正值必须落在 [最小有效时长, 实际已计时长] 之间：只能往下修，不能凭空放大。
     Q_INVOKABLE bool stopFreeFocusWithDuration(int durationSeconds);
     Q_INVOKABLE bool requiresFreeFocusStopConfirmation(int thresholdHours) const;
     // 用户在超长自由计时确认框选择“不记录”时，删除会话及活动快照，不进入统计。
@@ -119,7 +120,10 @@ private:
                               int correctedDurationSeconds = -1);
     bool hasActiveTimer() const;
     // 保存失败时调用方会保留当前会话状态，避免用户误以为记录已经落库。
-    bool saveFocusSession(int durationSeconds, bool naturalCompletion);
+    // durationWasCorrected 为真时 end_time 按 start_time + durationSeconds 写入，
+    // 让记录占用的区间与用户确认的时长一致，而不是继续横跨到「现在」。
+    bool saveFocusSession(int durationSeconds, bool naturalCompletion,
+                          bool durationWasCorrected = false);
     bool discardFocusSession();
     bool persistActiveState();
     bool writeActiveState(QSqlDatabase& db);

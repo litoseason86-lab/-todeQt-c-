@@ -60,6 +60,12 @@ Popup {
             root.errorText = "记录时长不能少于 3 分钟"
             return
         }
+        // 修正只能往下调。预填的就是实际计时分钟数，改大意味着用户手滑（09:01 打成 90:01），
+        // 而这条时长会直接进统计和长期目标进度，所以在这里就要拦住并说清上限。
+        if (durationFields.enteredMinutes * 60 > root.elapsedSeconds) {
+            root.errorText = "记录时长不能超过实际计时的 " + root.elapsedLabel()
+            return
+        }
         root.adjustedRecordRequested(durationFields.enteredMinutes * 60)
         root.close()
     }

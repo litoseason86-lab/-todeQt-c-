@@ -1080,6 +1080,45 @@ TestCase {
         tryCompare(focusEndedSpy, "count", 1)
     }
 
+    function test_longFreeFocusRejectsCorrectionAboveActualElapsed() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 9 * 60 * 60 + 60
+
+        view.endFreeFocus()
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        tryCompare(dialog, "opened", true)
+        const hourField = findChild(dialog, "longFreeFocusDurationHourField")
+        const minuteField = findChild(dialog, "longFreeFocusDurationMinuteField")
+        verify(hourField)
+        verify(minuteField)
+        // 预填是 09:01，用户把小时手滑打成 90——这条时长会直接进统计和长期目标进度。
+        hourField.text = "90"
+        minuteField.text = "1"
+        dialog.durationEdited = true
+
+        const recordButton = findChild(dialog, "longFreeFocusRecordButton")
+        verify(recordButton)
+        mouseClick(recordButton)
+
+        // 弹窗必须原地拦下并说明上限，不能把放大的时长交给服务层，也不能顺手结束会话。
+        compare(focusTimer.stopFreeFocusWithDurationCalls, 0)
+        compare(focusTimer.stopFocusCalls, 0)
+        compare(dialog.opened, true)
+        const errorLabel = findChild(dialog, "longFreeFocusAdjustmentError")
+        verify(errorLabel)
+        verify(errorLabel.text.indexOf("不能超过实际计时") >= 0)
+
+        // 改回不超过实际计时的值后可以正常记录。
+        hourField.text = "9"
+        minuteField.text = "0"
+        mouseClick(recordButton)
+        tryCompare(focusTimer, "stopFreeFocusWithDurationCalls", 1)
+        compare(focusTimer.correctedFreeFocusDurationSeconds, 9 * 60 * 60)
+    }
+
     function test_manualRestUsesSeparatePanelAndDoesNotRequireTask() {
         focusTimer.hasActiveSession = false
         focusTimer.isRunning = true

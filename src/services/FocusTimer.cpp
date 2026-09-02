@@ -371,6 +371,16 @@ bool FocusTimer::stopFreeFocusWithDuration(int durationSeconds)
                    << durationSeconds;
         return false;
     }
+    // 修正只能往下调：人不可能专注得比计时器实际跑过的时间更久。少了这条上限，
+    // 界面上把 09:01 手滑打成 90:01 就会静默写入一条 90 小时的专注记录，
+    // 而 duration 正是统计与长期目标进度的计算依据。前端有自己的提示，
+    // 但数据边界必须由服务层守住。
+    const int actualElapsedSeconds = static_cast<int>(currentElapsedMilliseconds() / 1000);
+    if (durationSeconds > actualElapsedSeconds) {
+        qWarning() << "Failed to correct free focus duration: duration exceeds elapsed time"
+                   << durationSeconds << ">" << actualElapsedSeconds;
+        return false;
+    }
 
     // 修正值只在用户主动确认超长计时时用于落库；运行中的单调时钟仍保留原值，
     // 直到本次会话成功结算，避免输入校验失败时把活动计时器改成半截状态。
@@ -467,7 +477,7 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion,
     }
 
     // 保存失败时恢复计时器，不假装会话已经正常结束。
-    if (!saveFocusSession(duration, naturalCompletion)) {
+    if (!saveFocusSession(duration, naturalCompletion, correctedDurationSeconds >= 0)) {
         if (wasRunning) {
             m_runSegmentStartNsecs = m_clock->nowNsecs();
             m_timer.start();
@@ -603,7 +613,8 @@ bool FocusTimer::hasActiveTimer() const
     return m_sessionId != -1 || m_isRunning || m_phase != NoPhase;
 }
 
-bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion)
+bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion,
+                                  bool durationWasCorrected)
 {
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
@@ -622,7 +633,15 @@ bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion)
     }
 
     // 保存单调时钟累计秒数，而不是墙钟时间差，这样暂停、系统改时钟和 GUI 卡顿都不会污染时长。
-    const QDateTime endTime = QDateTime::currentDateTime();
+    //
+    // 用户修正过时长时，记录占用的时间区间必须跟着缩短。end_time 仍写「现在」的话，
+    // 一条被改成 45 分钟的记录会继续横跨 9 小时：时间轴上画成「08:59 - 17:59 / 45分钟」
+    // 自相矛盾，更要命的是 FocusHistoryService 的重叠校验按 start_time…end_time 判定，
+    // 那整段窗口会被锁死，用户没法再补录这段时间里真实发生的其它专注——而「忘了停、
+    // 改完再补录」恰恰是这个修正功能最典型的下一步。区间只会收缩，不可能制造新的重叠。
+    const QDateTime endTime = (durationWasCorrected && m_startTime.isValid())
+        ? m_startTime.addSecs(durationSeconds)
+        : QDateTime::currentDateTime();
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "UPDATE focus_sessions SET end_time = :endTime, duration = :duration, "
