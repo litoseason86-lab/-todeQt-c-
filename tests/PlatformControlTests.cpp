@@ -100,6 +100,7 @@ private slots:
     void menuStopRequestsConfirmationForLongFreeFocus();
     void pausedStateOffersResumeAndKeepsTiming();
     void breakStateIsDistinguished();
+    void manualRestStateIsDistinguished();
     void showAndQuitEmitIntentSignals();
     void repeatedLaunchRequestsExistingWindow();
     void silentInstanceConnectionsAreBoundedAndExpire();
@@ -264,6 +265,19 @@ void PlatformControlTests::breakStateIsDistinguished()
     QVERIFY(FocusTimer::instance()->startBreak(5 * 60));
     const TrayDisplay display = controller.display();
     QVERIFY(display.stateLine.contains(QStringLiteral("休息中")));
+    QVERIFY(display.canStop);
+}
+
+void PlatformControlTests::manualRestStateIsDistinguished()
+{
+    TrayController controller(FocusTimer::instance());
+
+    QVERIFY(FocusTimer::instance()->startManualRest());
+    const TrayDisplay display = controller.display();
+    QVERIFY(display.stateLine.contains(QStringLiteral("休息中")));
+    QVERIFY(display.taskLine.contains(QStringLiteral("主动休息")));
+    QVERIFY(display.timeLine.startsWith(QStringLiteral("已休息：")));
+    QVERIFY(display.canPause);
     QVERIFY(display.canStop);
 }
 

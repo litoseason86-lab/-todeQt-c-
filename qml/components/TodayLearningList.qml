@@ -25,21 +25,6 @@ Item {
         return pomodoros > 0 ? base + " · " + pomodoros + " 个番茄" : base
     }
 
-    // 空状态：居中提示
-    Text {
-        objectName: "todayLearningEmptyText"
-        anchors.centerIn: parent
-        width: parent.width - Theme.space24
-        visible: root.taskCount === 0
-        text: "今天还没有专注记录。\n开始一次专注后，这里会按任务汇总时长。"
-        textFormat: Text.PlainText
-        color: Theme.inkSoft
-        font.pixelSize: Theme.fontMd
-        horizontalAlignment: Text.AlignHCenter
-        wrapMode: Text.WordWrap
-        lineHeight: 1.3
-    }
-
     // 有数据：摘要 + 滚动行列表
     ColumnLayout {
         anchors.fill: parent

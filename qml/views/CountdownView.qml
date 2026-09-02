@@ -96,12 +96,6 @@ Item {
                     font.weight: Font.Bold
                     color: Theme.ink
                 }
-
-                Text {
-                    text: "把关键日期放到每天都能看见的位置。"
-                    font.pixelSize: Theme.fontMd
-                    color: Theme.inkSoft
-                }
             }
 
             // 弹性占位把「添加目标」推到贴齐内容右缘；嵌套列的 fillWidth
@@ -421,15 +415,6 @@ Item {
                         font.pixelSize: Theme.fontXl
                         font.weight: Font.Bold
                         color: Theme.ink
-                        horizontalAlignment: Text.AlignHCenter
-                    }
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: "添加考试日或报名截止日，把最重要的日期放在每天都能看见的位置。"
-                        font.pixelSize: Theme.fontMd
-                        color: Theme.inkSoft
-                        wrapMode: Text.WordWrap
                         horizontalAlignment: Text.AlignHCenter
                     }
                 }

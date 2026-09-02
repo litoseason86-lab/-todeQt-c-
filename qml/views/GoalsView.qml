@@ -311,14 +311,6 @@ Item {
                     font.pixelSize: Theme.fontXxl
                     font.weight: Font.Bold
                 }
-
-                Text {
-                    Layout.fillWidth: true
-                    text: qsTr("把长期投入折成 100 格，看得见才坚持得下去")
-                    color: Theme.inkSoft
-                    font.pixelSize: Theme.fontMd
-                    elide: Text.ElideRight
-                }
             }
 
             // 尺寸与倒计时页的「添加目标」保持一致（108×44），两页的主操作按钮同款。
@@ -504,15 +496,6 @@ Item {
                     color: Theme.inkStrong
                     font.pixelSize: Theme.fontXl
                     font.weight: Font.DemiBold
-                    horizontalAlignment: Text.AlignHCenter
-                }
-
-                Text {
-                    width: parent.width
-                    text: qsTr("先定义一个可计数的长期投入，再让每次专注推动它。")
-                    color: Theme.inkSoft
-                    font.pixelSize: Theme.fontMd
-                    wrapMode: Text.WordWrap
                     horizontalAlignment: Text.AlignHCenter
                 }
 
@@ -819,13 +802,6 @@ Item {
                 textFormat: Text.PlainText
                 color: Theme.danger
                 font.pixelSize: Theme.fontSm
-                wrapMode: Text.WordWrap
-            }
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("专注记录不会被删除，但这个目标及其里程碑状态无法恢复。")
-                color: Theme.inkSoft
-                font.pixelSize: Theme.fontMd
                 wrapMode: Text.WordWrap
             }
             RowLayout {

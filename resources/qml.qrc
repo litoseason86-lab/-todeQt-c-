@@ -8,6 +8,7 @@
         <file alias="qml/main.qml">../qml/main.qml</file>
         <file alias="qml/MainWindow.qml">../qml/MainWindow.qml</file>
         <file alias="qml/views/TodayTaskView.qml">../qml/views/TodayTaskView.qml</file>
+        <file alias="qml/views/TodayFocusView.qml">../qml/views/TodayFocusView.qml</file>
         <file alias="qml/views/FocusView.qml">../qml/views/FocusView.qml</file>
         <file alias="qml/views/WeekPlanView.qml">../qml/views/WeekPlanView.qml</file>
         <file alias="qml/views/StatisticsView.qml">../qml/views/StatisticsView.qml</file>
@@ -57,6 +58,7 @@
         <file alias="qml/components/GoalHeatmap.qml">../qml/components/GoalHeatmap.qml</file>
         <file alias="qml/components/MilestoneDialog.qml">../qml/components/MilestoneDialog.qml</file>
         <file alias="qml/components/FocusRing.qml">../qml/components/FocusRing.qml</file>
+        <file alias="qml/components/ManualRestPanel.qml">../qml/components/ManualRestPanel.qml</file>
         <file alias="qml/components/FocusImmersiveOverlay.qml">../qml/components/FocusImmersiveOverlay.qml</file>
         <file alias="qml/components/ImmersionWindowSync.qml">../qml/components/ImmersionWindowSync.qml</file>
         <file alias="qml/components/ShutdownGuard.qml">../qml/components/ShutdownGuard.qml</file>

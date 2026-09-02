@@ -171,17 +171,6 @@ Popup {
             font.weight: Font.Bold
         }
 
-        Text {
-            Layout.fillWidth: true
-            Layout.leftMargin: Theme.space16
-            Layout.rightMargin: Theme.space16
-            text: qsTr("补录的记录计入专注时长，但不算作完整番茄。")
-            textFormat: Text.PlainText
-            color: Theme.inkSoft
-            font.pixelSize: Theme.fontSm
-            wrapMode: Text.WordWrap
-        }
-
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16

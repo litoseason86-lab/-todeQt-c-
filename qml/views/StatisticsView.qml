@@ -537,12 +537,6 @@ Item {
                         font.bold: true
                         color: Theme.ink
                     }
-
-                    Text {
-                        text: "看清时间流向，比靠感觉复盘可靠。"
-                        font.pixelSize: Theme.fontMd
-                        color: Theme.inkSoft
-                    }
                 }
 
                 // 两层：上为「日/周/月」分段控件（与专注页同构），下为周期导航。

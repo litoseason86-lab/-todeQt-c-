@@ -60,7 +60,8 @@ GlassPanel {
             }
 
             Text {
-                text: root.hasGoal ? Qt.formatDate(root.primaryGoal.targetDate, "yyyy年MM月dd日") : "把最重要的日期固定在今天任务上方。"
+                text: root.hasGoal ? Qt.formatDate(root.primaryGoal.targetDate, "yyyy年MM月dd日") : ""
+                visible: text.length > 0
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontXs
                 color: Theme.inkSoft

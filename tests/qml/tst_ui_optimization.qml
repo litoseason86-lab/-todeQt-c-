@@ -203,6 +203,70 @@ TestCase {
         visible: false
     }
 
+    // 记录明细已从月历页搬到今日专注页，玻璃与时间轴的守护断言跟着搬过来。
+    // 桩必须提供 addManualSession，否则 canEditHistory 为假、补录与卡片按钮都不会出现。
+    QtObject {
+        id: focusHistoryService
+
+        signal historyChanged()
+
+        function getDaySessions(date) {
+            return [
+                {
+                    id: 1,
+                    taskId: 11,
+                    taskTitle: "复盘",
+                    startTime: "2026-09-02T14:19:00",
+                    endTime: "2026-09-02T15:49:00",
+                    durationSeconds: 5400,
+                    date: "2026-09-02"
+                },
+                {
+                    id: 2,
+                    taskId: 12,
+                    taskTitle: "背单词",
+                    startTime: "2026-09-02T16:40:00",
+                    endTime: "2026-09-02T17:00:00",
+                    durationSeconds: 1200,
+                    date: "2026-09-02"
+                }
+            ];
+        }
+
+        function formatDuration(seconds) {
+            return Math.floor(Math.max(0, seconds) / 60) + "分钟";
+        }
+
+        function lastError() {
+            return "";
+        }
+
+        function addManualSession(taskId, startDateTime, durationMinutes) {
+            return 9;
+        }
+
+        function updateSession(sessionId, startDateTime, durationMinutes) {
+            return true;
+        }
+
+        function deleteSession(sessionId) {
+            return true;
+        }
+    }
+
+    TodayFocusView {
+        id: todayFocusView
+
+        focusTimerRef: focusTimer
+        focusHistoryServiceRef: focusHistoryService
+        taskManagerRef: taskManager
+        pageActive: true
+
+        width: 920
+        height: 620
+        visible: false
+    }
+
     function init() {
         Theme.reduceMotion = false;
         taskManager.fakeTodayTasks = [];
@@ -218,6 +282,7 @@ TestCase {
         todayTaskView.visible = false;
         weekPlanView.visible = false;
         monthGoalView.visible = false;
+        todayFocusView.visible = false;
         weekStartFocusSpy.clear();
         addTaskDialog.close();
         if (typeof taskItem.setPointerInside === "function")
@@ -830,7 +895,6 @@ TestCase {
     function test_todayTaskViewUsesOptimizedCardsAndControls() {
         wait(80);
 
-        var description = findChild(todayTaskView, "todayDescriptionText");
         var addButton = findChild(todayTaskView, "todayAddButton");
         var addButtonBackground = findChild(todayTaskView, "todayAddButtonBackground");
         var addButtonLabel = findChild(todayTaskView, "todayAddButtonLabel");
@@ -839,7 +903,8 @@ TestCase {
         var emptyStateCard = findChild(todayTaskView, "todayEmptyStateCard");
         var emptyStateIcon = findChild(todayTaskView, "todayEmptyStateIcon");
 
-        verify(description !== null);
+        // 标题下的一句话标语已移除，守住它不再回来。
+        compare(findChild(todayTaskView, "todayDescriptionText"), null);
         verify(addButton !== null);
         verify(addButtonBackground !== null);
         verify(addButtonLabel !== null);
@@ -848,7 +913,6 @@ TestCase {
         verify(emptyStateCard !== null);
         verify(emptyStateIcon !== null);
 
-        verify(Qt.colorEqual(description.color, Theme.ink));
         compare(addButtonBackground.radius, Theme.radiusLg);
         verify(Qt.colorEqual(addButtonBackground.color, Theme.accentFill));
         compare(addButtonBackground.border.width, 0);
@@ -876,10 +940,6 @@ TestCase {
         var nextButton = findChild(monthGoalView, "monthNextButton");
         var previousButtonBackground = findChild(monthGoalView, "monthPreviousButtonBackground");
         var calendarContainer = findChild(monthGoalView, "monthCalendarContainer");
-        var timelinePanel = findChild(monthGoalView, "focusTimelinePanel");
-        var timelineTitle = findChild(monthGoalView, "focusTimelineTitle");
-        var emptyState = findChild(monthGoalView, "focusHistoryEmptyState");
-        var timelineScrollView = findChild(monthGoalView, "focusTimelineScrollView");
         var monthContentStack = findChild(monthGoalView, "monthContentStack");
         var selectedDayCell = findChild(monthGoalView, "monthDayCell-" + monthGoalView.selectedDay);
         var selectedDayDuration = findChild(monthGoalView, "monthDayDuration-" + monthGoalView.selectedDay);
@@ -889,10 +949,6 @@ TestCase {
         verify(nextButton !== null);
         verify(previousButtonBackground !== null);
         verify(calendarContainer !== null);
-        verify(timelinePanel !== null);
-        verify(timelineTitle !== null);
-        verify(emptyState !== null);
-        verify(timelineScrollView !== null);
         verify(monthContentStack !== null);
         verify(selectedDayCell !== null);
         verify(selectedDayDuration !== null);
@@ -902,6 +958,11 @@ TestCase {
         compare(findChild(monthGoalView, "monthCompletedStatCard"), null);
         compare(findChild(monthGoalView, "monthRateStatCard"), null);
         compare(findChild(monthGoalView, "monthDetailAddButton"), null);
+        // 记录明细整体搬到今日专注页：月历页里不能再残留任何时间轴部件，
+        // 否则两份时间轴各自持有一份数据，补录之后必然只刷新其中一份。
+        compare(findChild(monthGoalView, "focusTimelinePanel"), null);
+        compare(findChild(monthGoalView, "focusTimelineScrollView"), null);
+        compare(findChild(monthGoalView, "manualSessionDialog"), null);
 
         compare(previousButtonBackground.radius, 8);
 
@@ -910,18 +971,9 @@ TestCase {
         verify(calendarContainer.layer.effect !== null);
         verify(calendarContainer.width > 0);
         verify(calendarContainer.height >= 520);
-        compare(timelinePanel.radius, 8);
-        compare(timelinePanel.layer.enabled, true);
-        verify(timelinePanel.layer.effect !== null);
-        // 宽屏下专注历史应使用左右布局，否则右侧空白、时间轴被挤到首屏之外。
-        verify(timelinePanel.x > calendarContainer.x + calendarContainer.width);
-        verify(Math.abs(timelinePanel.y - calendarContainer.y) <= 2);
-        verify(calendarContainer.width >= 360);
-        verify(timelinePanel.width >= 360);
-        verify(timelinePanel.height >= 260);
-        verify(timelineTitle.text.indexOf("专注记录") >= 0);
-        compare(emptyState.text, "这一天还没有专注记录");
-        compare(timelineScrollView.visible, monthGoalView.selectedDaySessions.length > 0);
+        // 时间轴让位之后月历独占整宽，不能再留出原先给右栏的空白。
+        compare(monthContentStack.columns, 1);
+        verify(calendarContainer.width >= monthContentStack.width - 1);
 
         compare(selectedDayCell.radius, 6);
         verify(selectedDayCell.border.width >= 2);
@@ -950,11 +1002,11 @@ TestCase {
         verify(track.color.a < 0.01)
     }
 
-    function test_monthTimelineScrollTrackTransparent() {
-        monthGoalView.visible = true
+    function test_todayFocusTimelineScrollTrackTransparent() {
+        todayFocusView.visible = true
         wait(80)
 
-        var track = findChild(monthGoalView, "monthTimelineScrollTrack")
+        var track = findChild(todayFocusView, "monthTimelineScrollTrack")
         verify(track)
         verify(track.color.a < 0.01)
     }
@@ -967,10 +1019,20 @@ TestCase {
         verify(calendar)
         verify(Qt.colorEqual(calendar.color, Theme.glassCard))
         verify(Qt.colorEqual(calendar.border.color, Theme.glassBorder))
+    }
 
-        var timeline = findChild(monthGoalView, "focusTimelinePanel")
+    function test_todayFocusTimelineIsGlass() {
+        todayFocusView.visible = true
+        wait(80)
+
+        var timeline = findChild(todayFocusView, "focusTimelinePanel")
         verify(timeline)
         verify(Qt.colorEqual(timeline.color, Theme.glassCard))
         verify(Qt.colorEqual(timeline.border.color, Theme.glassBorder))
+
+        // 页头已经承担日期与次数，卡片自带的表头必须收起，否则同一信息出现两遍。
+        compare(timeline.headerVisible, false)
+        // 补录入口相应提到页头，卡片内那颗不再出现。
+        verify(findChild(todayFocusView, "todayFocusAddButton"))
     }
 }

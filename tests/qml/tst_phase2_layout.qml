@@ -378,10 +378,11 @@ TestCase {
     function test_zeroPieChartShowsStableZeroState() {
         wait(50)
 
-        var invalidLabel = findChild(zeroPieChart, "invalidDataLabel")
-        verify(invalidLabel !== null)
+        // 「暂无有效数据」文案已移除；零值态仍必须由 showInvalidData 标志表达，
+        // 且扇区计算不得漏出 NaN。
+        compare(findChild(zeroPieChart, "invalidDataLabel"), null)
         verify(zeroPieChart.showInvalidData)
-        verify(invalidLabel.text.indexOf("NaN") === -1)
+        compare(zeroPieChart.segmentSweep(0), 0)
     }
 
     function test_statCardUsesWarmRestrainedShadow() {

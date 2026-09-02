@@ -26,13 +26,15 @@ Item {
     property string pendingLongFreeTaskTitle: ""
 
     signal focusEnded()
+    // 主动休息没有任务专注语义；结束后由 MainWindow 返回今日任务页。
+    signal manualRestEnded()
     signal immersiveRequested()
     // 自动衔接实际发生时发出；MainWindow 在用户不在专注页时用它弹提示。
     signal autoAdvanced(int phase)
 
     // 沉浸入口只在计时进行中（含暂停）开放：待机/完成/未开始要么需要配置面板，
     // 要么即将离开专注页，极简全屏没有意义。
-    readonly property bool immersiveAvailable: state === "pomoWork" || state === "pomoBreak"
+    readonly property bool immersiveAvailable: state === "manualRest" || state === "pomoWork" || state === "pomoBreak"
             || (state === "free" && timerBool("hasActiveSession"))
 
     state: root.computeState()
@@ -93,6 +95,9 @@ Item {
     }
 
     function taskTitle() {
+        if (root.state === "manualRest") {
+            return "主动休息"
+        }
         if (root.timerBool("hasActiveSession") && root.timerTitle().length > 0) {
             return root.timerTitle()
         }
@@ -148,8 +153,8 @@ Item {
         root.pendingLongFreeAction = action
         root.pendingLongFreeTaskId = Number(taskId || -1)
         root.pendingLongFreeTaskTitle = String(taskTitle || "")
-        longFreeFocusConfirmDialog.elapsedSeconds = Number(root.timer.elapsedSeconds || 0)
-        longFreeFocusConfirmDialog.thresholdHours = root.freeTimerWarningHours()
+        longFreeFocusConfirmDialog.prepare(Number(root.timer.elapsedSeconds || 0),
+                                            root.freeTimerWarningHours())
         longFreeFocusConfirmDialog.open()
     }
 
@@ -168,7 +173,7 @@ Item {
         }
     }
 
-    function finishLongFreeAction(recordSession) {
+    function finishLongFreeAction(recordSession, correctedDurationSeconds) {
         var action = root.pendingLongFreeAction
         var taskId = root.pendingLongFreeTaskId
         var taskTitle = root.pendingLongFreeTaskTitle
@@ -177,9 +182,15 @@ Item {
         if (!root.timer || action.length === 0) {
             return
         }
-        var succeeded = recordSession
-                ? root.timer.stopFocus()
-                : (typeof root.timer.discardFreeFocus === "function" && root.timer.discardFreeFocus())
+        var succeeded = false
+        if (recordSession) {
+            var hasCorrection = Number(correctedDurationSeconds || 0) > 0
+            succeeded = hasCorrection && typeof root.timer.stopFreeFocusWithDuration === "function"
+                    ? root.timer.stopFreeFocusWithDuration(correctedDurationSeconds)
+                    : root.timer.stopFocus()
+        } else {
+            succeeded = typeof root.timer.discardFreeFocus === "function" && root.timer.discardFreeFocus()
+        }
         if (!succeeded) {
             root.errorText = recordSession ? "专注保存失败，请重试" : "专注丢弃失败，请重试"
             return
@@ -189,6 +200,12 @@ Item {
 
     function syncToActiveTimer() {
         if (!root.timer || (!root.timer.hasActiveSession && root.timer.phase === 0)) {
+            return
+        }
+
+        if (root.timer.mode === 2 && root.timer.phase === 3) {
+            // 主动休息与番茄阶段没有继承关系；不能据 phase 非零把它误切成番茄模式。
+            root.justCompletedPhase = 0
             return
         }
 
@@ -215,6 +232,9 @@ Item {
             return "free"
         }
 
+        if (root.timerNumber("mode", 0) === 2 && root.timerNumber("phase", 0) === 3) {
+            return "manualRest"
+        }
         if (!root.pomodoroModeSelected) {
             return "free"
         }
@@ -238,6 +258,10 @@ Item {
         if (!root.timer) {
             root.pomodoroModeSelected = enabled
             root.justCompletedPhase = 0
+            return
+        }
+
+        if (root.timer.mode === 2 && root.timer.phase === 3) {
             return
         }
 
@@ -312,7 +336,9 @@ Item {
             return false
         }
         if (root.timer.hasActiveSession || root.timer.phase !== 0) {
-            root.errorText = "已有专注进行中"
+            // phase 非零现在也包含主动休息，说成“专注”会把休息误报成专注；
+            // 与 MainWindow 的同类冲突提示保持同一口径。
+            root.errorText = "已有计时进行中"
             return false
         }
         root.pomodoroModeSelected = false
@@ -494,6 +520,16 @@ Item {
         root.applyPostFreeStopAction("end", -1, "")
     }
 
+    function endManualRest() {
+        if (!root.timer || root.timer.mode !== 2 || root.timer.phase !== 3
+                || !root.timer.stopFocus()) {
+            root.errorText = "结束休息失败，请重试"
+            return
+        }
+        root.errorText = ""
+        root.manualRestEnded()
+    }
+
     Connections {
         target: root.timer
         ignoreUnknownSignals: true
@@ -589,8 +625,11 @@ Item {
         id: longFreeFocusConfirmDialog
 
         parent: root
-        onRecordRequested: root.finishLongFreeAction(true)
-        onDiscardRequested: root.finishLongFreeAction(false)
+        onRecordRequested: root.finishLongFreeAction(true, -1)
+        onAdjustedRecordRequested: function (durationSeconds) {
+            root.finishLongFreeAction(true, durationSeconds)
+        }
+        onDiscardRequested: root.finishLongFreeAction(false, -1)
         onContinueRequested: root.clearPendingLongFreeAction()
         onClosed: {
             // Escape 或窗口关闭都等价于“继续计时”；绝不能在没有明确选择时保存或丢弃。
@@ -602,6 +641,7 @@ Item {
 
     states: [
         State { name: "free" },
+        State { name: "manualRest" },
         State { name: "pomoIdle" },
         State { name: "pomoWork" },
         State { name: "workDone" },
@@ -630,6 +670,7 @@ Item {
             anchors.topMargin: Theme.space24
             anchors.horizontalCenter: parent.horizontalCenter
             segments: [qsTr("自由专注"), qsTr("番茄专注")]
+            visible: root.state !== "manualRest"
             // 选中态始终跟随业务状态：模式还会被任务页跳转、服务恢复会话等外部路径改写，
             // 控件不能自己记一份，否则两边会漂移。
             currentIndex: root.pomodoroModeSelected ? 1 : 0
@@ -656,6 +697,7 @@ Item {
         }
 
         ColumnLayout {
+            visible: root.state !== "manualRest"
             width: Math.min(parent.width - 96, 560)
             spacing: root.state === "pomoIdle" ? Theme.space16 : Theme.space24
 
@@ -683,9 +725,9 @@ Item {
                 Text {
                     objectName: "phaseStageText"
                     Layout.fillWidth: true
-                    text: root.state === "free"
-                          ? (root.timerBool("hasActiveSession") ? qsTr("当前任务") : qsTr("自由专注待机"))
-                          : root.pomodoroStageText()
+                    text: root.state === "free" ? "" : root.pomodoroStageText()
+                    // 空串时整行收起，否则会在标题下留出一条空白槽位。
+                    visible: text.length > 0
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
                     color: Theme.inkSoft
@@ -1187,20 +1229,42 @@ Item {
                     }
                 }
             }
+        }
 
-            Text {
-                objectName: "noTaskHint"
-                Layout.fillWidth: true
-                // 两种模式都从任务页带入待启动任务；没有任务时必须说明开始按钮为何不可用。
-                text: ((root.state === "free" && !root.timerBool("hasActiveSession")
-                        && !root.canStartFreeFocus())
-                       || (root.state === "pomoIdle" && !root.canStartPomodoro()))
-                      ? qsTr("到今日任务里点「开始专注」即可带任务进入") : ""
-                visible: text.length > 0
-                textFormat: Text.PlainText
-                font.pixelSize: Theme.fontXs
-                color: Theme.inkSoft
-                horizontalAlignment: Text.AlignHCenter
+        Loader {
+            id: manualRestPanelLoader
+            objectName: "manualRestPanelLoader"
+
+            anchors.fill: contentRegion
+            active: root.state === "manualRest"
+            // 独立加载可避免内联 Component 捕获外层作用域；离开休息态时 Loader 会卸载面板。
+            source: "../components/ManualRestPanel.qml"
+        }
+
+        Binding {
+            target: manualRestPanelLoader.item
+            property: "elapsedSeconds"
+            value: root.timerNumber("elapsedSeconds", 0)
+            when: manualRestPanelLoader.item !== null
+        }
+
+        Binding {
+            target: manualRestPanelLoader.item
+            property: "isRunning"
+            value: root.timerBool("isRunning")
+            when: manualRestPanelLoader.item !== null
+        }
+
+        Connections {
+            target: manualRestPanelLoader.item
+            enabled: manualRestPanelLoader.item !== null
+
+            function onPauseResumeRequested() {
+                root.togglePause()
+            }
+
+            function onEndRequested() {
+                root.endManualRest()
             }
         }
 
@@ -1238,6 +1302,9 @@ Item {
     function pomodoroStageText() {
         // 暂停态直接把 ⏸ 拼进文案里：环本身也会降透明度转灰，
         // 两条线索一起给，不用点开按钮读文字也能看出“停了”。
+        if (root.state === "manualRest") {
+            return root.timerBool("isRunning") ? "主动休息中" : "⏸ 主动休息已暂停"
+        }
         if (root.state === "pomoWork") {
             return root.timerBool("isRunning") ? "专注中" : "⏸ 专注已暂停"
         }
@@ -1250,10 +1317,13 @@ Item {
         if (root.state === "breakDone") {
             return "休息结束"
         }
-        return "番茄待机"
+        return ""
     }
 
     function primaryTimeText() {
+        if (root.state === "manualRest") {
+            return root.formatTime(root.timerNumber("elapsedSeconds", 0))
+        }
         if (root.state === "free") {
             return root.formatTime(root.timerNumber("elapsedSeconds", 0))
         }
@@ -1280,7 +1350,8 @@ Item {
 
     function ringDimmed() {
         // 暂停只会发生在番茄的专注/休息进行阶段；完成态和待机态谈不上“暂停”。
-        return (root.state === "pomoWork" || root.state === "pomoBreak") && !root.timerBool("isRunning")
+        return (root.state === "manualRest" || root.state === "pomoWork" || root.state === "pomoBreak")
+                && !root.timerBool("isRunning")
     }
 
     function ringProgressFraction() {
@@ -1300,7 +1371,7 @@ Item {
         if (root.state === "workDone" || root.state === "breakDone") {
             return Theme.success
         }
-        if (root.state === "pomoBreak") {
+        if (root.state === "manualRest" || root.state === "pomoBreak") {
             return Theme.focusBreakAccent
         }
         return Theme.accent
@@ -1313,7 +1384,7 @@ Item {
         if (root.ringDimmed()) {
             return Theme.inkMuted
         }
-        if (root.state === "pomoBreak") {
+        if (root.state === "manualRest" || root.state === "pomoBreak") {
             return Theme.focusBreakAccent
         }
         // 环内计时读数（番茄工作/自由专注运行态）：用可读文字色，别用低对比的 accent。
@@ -1336,20 +1407,11 @@ Item {
 
     function ringCaptionText() {
         var targetMinutes = Math.round(root.timerNumber("targetSeconds", 0) / 60)
-        if (root.state === "pomoIdle") {
-            return root.canStartPomodoro() ? "准备开始" : "等待任务"
-        }
         if (root.state === "pomoWork") {
             return (root.ringDimmed() ? "已暂停 · 共 " : "剩余 · 共 ") + targetMinutes + " 分"
         }
         if (root.state === "pomoBreak") {
             return (root.ringDimmed() ? "已暂停 · 共 " : "休息 · 共 ") + targetMinutes + " 分"
-        }
-        if (root.state === "workDone") {
-            return "这一颗番茄已完成"
-        }
-        if (root.state === "breakDone") {
-            return "休息结束，可以继续专注了"
         }
         return ""
     }

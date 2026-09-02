@@ -366,7 +366,7 @@ TestCase {
         verify(toast)
         compare(toast.shown, true)
         var label = findChild(mainWindow, "toastText")
-        compare(label.text, "已有专注进行中")
+        compare(label.text, "已有计时进行中")
     }
 
     function test_toastActionShowsAndFires() {

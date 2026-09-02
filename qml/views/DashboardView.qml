@@ -377,12 +377,6 @@ Item {
                         font.weight: Font.Bold
                         color: Theme.inkStrong
                     }
-
-                    Text {
-                        text: "专注的每一分钟，都是未来的自己在为你加分。"
-                        font.pixelSize: Theme.fontMd
-                        color: Theme.inkSoft
-                    }
                 }
 
                 GlassPanel {
@@ -618,25 +612,6 @@ Item {
                     Item {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-
-                        Text {
-                            objectName: "dashboardEmptyHint"
-
-                            anchors.centerIn: parent
-                            width: parent.width
-                            visible: root.filterMode !== "learning"
-                                     && root.filteredTasks.length === 0 && root.loadError.length === 0
-                            text: root.tasks.length === 0
-                                  ? "今天还没有任务，去「今日任务」页添加。"
-                                  : (root.doneFilter
-                                     ? "今天还没有已完成的任务。"
-                                     : "这个筛选下没有任务。")
-                            textFormat: Text.PlainText
-                            font.pixelSize: Theme.fontMd
-                            color: Theme.inkSoft
-                            horizontalAlignment: Text.AlignHCenter
-                            wrapMode: Text.WordWrap
-                        }
 
                         // 学习统计分段：任务清单换成「今日专注过的任务 + 各自时长」列表。
                         TodayLearningList {

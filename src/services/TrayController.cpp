@@ -61,6 +61,8 @@ void TrayController::refresh()
     } else {
         const bool running = m_timer->isRunning();
         const bool isBreak = m_timer->phase() == FocusTimer::BreakPhase;
+        const bool isManualRest = m_timer->mode() == FocusTimer::ManualRestMode
+            && m_timer->phase() == FocusTimer::ManualRestPhase;
         const bool isPomodoro = m_timer->mode() == FocusTimer::PomodoroMode;
         const QString task = m_timer->currentTaskTitle();
 
@@ -71,19 +73,20 @@ void TrayController::refresh()
             shownSeconds = m_timer->remainingSeconds();
             timePrefix = isBreak ? QStringLiteral("剩余休息：") : QStringLiteral("剩余：");
         } else {
-            // 自由计时是正计时，没有目标时长。
+            // 自由计时与主动休息都是正计时，没有目标时长。
             shownSeconds = m_timer->elapsedSeconds();
-            timePrefix = QStringLiteral("已专注：");
+            timePrefix = isManualRest ? QStringLiteral("已休息：") : QStringLiteral("已专注：");
         }
 
         const QString clock = formatClock(shownSeconds);
         // 暂停时标题加暂停符号，休息与专注在菜单状态行区分。
         next.title = running ? clock : (QStringLiteral("⏸ ") + clock);
-        next.taskLine = task.isEmpty() ? QStringLiteral("未选择任务")
-                                       : (QStringLiteral("当前任务：") + task);
+        next.taskLine = isManualRest ? QStringLiteral("主动休息")
+                      : (task.isEmpty() ? QStringLiteral("未选择任务")
+                                        : (QStringLiteral("当前任务：") + task));
         next.stateLine = QStringLiteral("状态：")
             + (!running ? QStringLiteral("已暂停")
-                        : isBreak ? QStringLiteral("休息中") : QStringLiteral("专注中"));
+                        : (isBreak || isManualRest) ? QStringLiteral("休息中") : QStringLiteral("专注中"));
         next.timeLine = timePrefix + clock;
         next.canPause = running;
         next.canResume = !running;

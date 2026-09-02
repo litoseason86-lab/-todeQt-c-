@@ -363,16 +363,6 @@ Popup {
                 }
             }
 
-            Text {
-                Layout.fillWidth: true
-                Layout.leftMargin: Theme.space16
-                Layout.rightMargin: Theme.space16
-                text: qsTr("填过去的日期可把已有专注记录计入进度")
-                color: Theme.inkSoft
-                font.pixelSize: Theme.fontSm
-                wrapMode: Text.WordWrap
-            }
-
             CheckBox {
                 id: longTermCheck
                 objectName: "goalLongTermCheck"

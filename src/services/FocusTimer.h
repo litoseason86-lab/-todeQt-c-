@@ -29,14 +29,18 @@ class FocusTimer : public QObject
 public:
     enum TimerMode : int {
         FreeMode = 0,
-        PomodoroMode = 1
+        PomodoroMode = 1,
+        // 主动休息是全局正计时，不绑定任务且不写入 focus_sessions。
+        ManualRestMode = 2
     };
     Q_ENUM(TimerMode)
 
     enum TimerPhase : int {
         NoPhase = 0,
         WorkPhase = 1,
-        BreakPhase = 2
+        BreakPhase = 2,
+        // 与番茄完成后的 BreakPhase 分开，避免自动衔接和倒计时规则误作用于主动休息。
+        ManualRestPhase = 3
     };
     Q_ENUM(TimerPhase)
 
@@ -48,9 +52,14 @@ public:
     Q_INVOKABLE bool startBreak(int breakSeconds);
     // QML 在番茄休息阶段继续携带任务上下文，应用重启后才能自动开始同一任务的下一轮。
     Q_INVOKABLE bool startBreakForTask(int breakSeconds, int taskId, const QString& taskTitle);
+    // 仅空闲时可启动。主动休息不属于任务专注，因此不会影响今日专注统计。
+    Q_INVOKABLE bool startManualRest();
     Q_INVOKABLE void pauseFocus();
     Q_INVOKABLE bool resumeFocus();
     Q_INVOKABLE bool stopFocus();
+    // 超长自由计时经用户确认后，可用修正值结算。只允许当前自由会话调用，不能改写番茄或休息。
+    // 修正值必须落在 [最小有效时长, 实际已计时长] 之间：只能往下修，不能凭空放大。
+    Q_INVOKABLE bool stopFreeFocusWithDuration(int durationSeconds);
     Q_INVOKABLE bool requiresFreeFocusStopConfirmation(int thresholdHours) const;
     // 用户在超长自由计时确认框选择“不记录”时，删除会话及活动快照，不进入统计。
     Q_INVOKABLE bool discardFreeFocus();
@@ -107,10 +116,14 @@ private:
     // 必须以它为准：到点结算里仍可能因为时长不足被整条丢弃，那种会话不该推进长休息节奏。
     // 此前计数只看「刚结束的是工作阶段」，与写入口径是两套判断，靠「UI 把时长下限锁在
     // 5 分钟」这个外部事实才不出错——而 startPomodoroWork 是 Q_INVOKABLE，边界并不在这里。
-    bool completeFocusSession(bool naturalCompletion, bool* countedAsPomodoro = nullptr);
+    bool completeFocusSession(bool naturalCompletion, bool* countedAsPomodoro = nullptr,
+                              int correctedDurationSeconds = -1);
     bool hasActiveTimer() const;
     // 保存失败时调用方会保留当前会话状态，避免用户误以为记录已经落库。
-    bool saveFocusSession(int durationSeconds, bool naturalCompletion);
+    // durationWasCorrected 为真时 end_time 按 start_time + durationSeconds 写入，
+    // 让记录占用的区间与用户确认的时长一致，而不是继续横跨到「现在」。
+    bool saveFocusSession(int durationSeconds, bool naturalCompletion,
+                          bool durationWasCorrected = false);
     bool discardFocusSession();
     bool persistActiveState();
     bool writeActiveState(QSqlDatabase& db);

@@ -56,7 +56,7 @@ Rectangle {
             return ""
         }
         var timeText = mode === 1 ? root.formatMinuteTime(remainingSeconds) : root.formatClockTime(elapsedSeconds)
-        return (isRunning ? "● " : "⏸ ") + timeText
+        return (isRunning ? "● " : "⏸ ") + (mode === 2 ? "休息 " : "") + timeText
     }
 
     ColumnLayout {
@@ -124,6 +124,13 @@ Rectangle {
             marker: "今"
             isActive: root.currentView === "today"
             onClicked: root.itemClicked("today")
+        }
+
+        SidebarItem {
+            text: "今日专注"
+            marker: "记"
+            isActive: root.currentView === "todayFocus"
+            onClicked: root.itemClicked("todayFocus")
         }
 
         SidebarItem {

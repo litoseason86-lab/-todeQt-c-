@@ -21,6 +21,7 @@
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/ExportService.h"
 #include "../src/services/FocusHistoryService.h"
+#include "../src/services/FocusSessionRules.h"
 // FocusTimer 声明了 friend class ServiceTests，测试可直接访问内部时钟状态。
 #include "../src/services/FocusTimer.h"
 #include "../src/services/GoalService.h"
@@ -819,6 +820,9 @@ private slots:
     void exportAllRejectsInvalidDestinationBeforeReplacingFiles();
     void freeFocusCountsTowardDurationEstimate();
     void discardFreeFocusRemovesLongSessionWithoutRecording();
+    void correctedFreeFocusDurationUsesUserConfirmedValue();
+    void correctedFreeFocusDurationShrinksRecordedSpanAndFreesWindow();
+    void correctedFreeFocusDurationRejectsValueAboveElapsed();
     void stopFocusUnderFiveMinutesKeepsTaskPending();
     void stopFocusUnderThreeMinutesDiscardsInvalidSession();
     void shortSessionEmitsSessionDiscarded();
@@ -831,6 +835,8 @@ private slots:
     void realPomodoroSessionAdvancesLongGoalAndFiresMilestone();
     void pomodoroBreakWritesNoSessionAndCompletes();
     void pomodoroBreakRestoresTaskContextAndCount();
+    void manualRestDoesNotCreateFocusSessionOrFinishAutomatically();
+    void manualRestRestoresPausedWithoutCountingAsFocus();
     void deletingActiveTaskDetachesTimerAndSuppressesAutoCompleteFailure();
     void pomodoroWorkStoppedUnderMinimumIsDiscarded();
     void freeFocusStillCountsUpUnchanged();
@@ -4707,6 +4713,94 @@ void ServiceTests::discardFreeFocusRemovesLongSessionWithoutRecording()
     QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 0);
 }
 
+void ServiceTests::correctedFreeFocusDurationUsesUserConfirmedValue()
+{
+    const int taskId = insertTaskRow(QStringLiteral("需要修正的超长自由计时"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("需要修正的超长自由计时")));
+    setFocusElapsedSeconds(timer, 9 * 60 * 60);
+
+    // 界面输入损坏或绕开前端校验时，服务层仍不能把无效短时长写成专注记录。
+    QVERIFY(!timer->stopFreeFocusWithDuration(
+        FocusSessionRules::kMinimumValidDurationSeconds - 1));
+    QVERIFY(timer->hasActiveSession());
+
+    QSignalSpy completedSpy(timer, &FocusTimer::focusCompleted);
+    const int correctedSeconds = 2 * 60 * 60 + 15 * 60;
+    QVERIFY(timer->stopFreeFocusWithDuration(correctedSeconds));
+    QCOMPARE(completedSpy.count(), 1);
+    QCOMPARE(completedSpy.first().at(0).toInt(), correctedSeconds);
+    QCOMPARE(timer->hasActiveSession(), false);
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT duration FROM focus_sessions WHERE end_time IS NOT NULL")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), correctedSeconds);
+    QVERIFY(!query.next());
+}
+
+void ServiceTests::correctedFreeFocusDurationShrinksRecordedSpanAndFreesWindow()
+{
+    const int taskId = insertTaskRow(QStringLiteral("忘记停的自由计时"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("忘记停的自由计时")));
+
+    // 复现真实场景：会话确实从 9 小时前开始，用户忘了停。把库里的 start_time 往前挪，
+    // 让墙钟跨度和单调计时都是 9 小时——只调 elapsed 的话两个时刻几乎重合，
+    // 区间是否被修正就完全观察不到。
+    const QDateTime realStart = QDateTime::currentDateTime().addSecs(-9 * 60 * 60);
+    QSqlQuery backdate(DatabaseManager::instance()->database());
+    backdate.prepare(QStringLiteral(
+        "UPDATE focus_sessions SET start_time = :startTime WHERE end_time IS NULL"));
+    backdate.bindValue(QStringLiteral(":startTime"), realStart.toString(Qt::ISODate));
+    QVERIFY(backdate.exec());
+    // 内存里的开始时刻必须跟着回拨：生产路径上两者恒等（startFocus 用同一个值写库和写内存，
+    // 恢复时又从行里读回内存），只改库会造出一个真实运行中不存在的状态。
+    timer->m_startTime = realStart;
+    setFocusElapsedSeconds(timer, 9 * 60 * 60);
+
+    const int correctedSeconds = 45 * 60;
+    QVERIFY(timer->stopFreeFocusWithDuration(correctedSeconds));
+
+    QSqlQuery row(DatabaseManager::instance()->database());
+    QVERIFY(row.exec(QStringLiteral(
+        "SELECT start_time, end_time, duration FROM focus_sessions WHERE end_time IS NOT NULL")));
+    QVERIFY(row.next());
+    const QDateTime savedStart = QDateTime::fromString(row.value(0).toString(), Qt::ISODate);
+    const QDateTime savedEnd = QDateTime::fromString(row.value(1).toString(), Qt::ISODate);
+    QCOMPARE(row.value(2).toInt(), correctedSeconds);
+    // 区间必须跟着时长一起缩短，否则时间轴会显示成"9 小时跨度 / 45 分钟"。
+    QCOMPARE(savedStart.secsTo(savedEnd), qint64(correctedSeconds));
+
+    // 而且被让出来的那段时间要能重新补录——"忘了停、改完再补录"是这个功能的典型下一步。
+    const int manualId = FocusHistoryService::instance()->addManualSession(
+        taskId, realStart.addSecs(3 * 60 * 60), 30);
+    QVERIFY2(manualId > 0,
+             qPrintable(QStringLiteral("窗口内补录被拒绝：")
+                        + FocusHistoryService::instance()->lastError()));
+}
+
+void ServiceTests::correctedFreeFocusDurationRejectsValueAboveElapsed()
+{
+    const int taskId = insertTaskRow(QStringLiteral("被放大的自由计时"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("被放大的自由计时")));
+    setFocusElapsedSeconds(timer, 9 * 60 * 60 + 60);
+
+    // 界面把 09:01 手滑打成 90:01：这条时长会直接进统计和长期目标进度，服务层必须拒绝。
+    QVERIFY(!timer->stopFreeFocusWithDuration(90 * 60 * 60 + 60));
+    QVERIFY(timer->hasActiveSession());
+    QCOMPARE(countFocusSessions(), 1);
+
+    // 等于实际计时是允许的边界：用户可以确认"就是这么久"。
+    QVERIFY(timer->stopFreeFocusWithDuration(9 * 60 * 60 + 60));
+    QCOMPARE(timer->hasActiveSession(), false);
+}
+
 void ServiceTests::stopFocusUnderFiveMinutesKeepsTaskPending()
 {
     QVERIFY(TaskManager::instance()->addTask(QStringLiteral("未满五分钟任务"), logicalToday(), QString()));
@@ -4986,6 +5080,59 @@ void ServiceTests::pomodoroBreakRestoresTaskContextAndCount()
     QCOMPARE(timer->completedPomodoros(), 3);
     QCOMPARE(timer->elapsedSeconds(), 120);
     QVERIFY(timer->stopFocus());
+}
+
+void ServiceTests::manualRestDoesNotCreateFocusSessionOrFinishAutomatically()
+{
+    FocusTimer* timer = FocusTimer::instance();
+    QSignalSpy focusCompletedSpy(timer, &FocusTimer::focusCompleted);
+    QSignalSpy phaseCompletedSpy(timer, &FocusTimer::phaseCompleted);
+
+    QVERIFY(timer->startManualRest());
+    QCOMPARE(timer->mode(), int(FocusTimer::ManualRestMode));
+    QCOMPARE(timer->phase(), int(FocusTimer::ManualRestPhase));
+    QVERIFY(!timer->hasActiveSession());
+    QCOMPARE(timer->currentTaskId(), -1);
+    QCOMPARE(timer->currentTaskTitle(), QString());
+    QCOMPARE(countFocusSessions(), 0);
+
+    // 主动休息没有目标时长；即使刷新计时器，也不能触发番茄完成或写入专注记录。
+    setFocusElapsedSeconds(timer, 45);
+    QVERIFY(QMetaObject::invokeMethod(&timer->m_timer, "timeout", Qt::DirectConnection));
+    QCOMPARE(timer->elapsedSeconds(), 45);
+    QCOMPARE(phaseCompletedSpy.count(), 0);
+    QCOMPARE(focusCompletedSpy.count(), 0);
+    QCOMPARE(countFocusSessions(), 0);
+
+    timer->pauseFocus();
+    QVERIFY(!timer->isRunning());
+    QVERIFY(timer->resumeFocus());
+    QVERIFY(timer->isRunning());
+    QVERIFY(timer->stopFocus());
+    QCOMPARE(timer->phase(), int(FocusTimer::NoPhase));
+    QCOMPARE(countFocusSessions(), 0);
+}
+
+void ServiceTests::manualRestRestoresPausedWithoutCountingAsFocus()
+{
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startManualRest());
+    setFocusElapsedSeconds(timer, 185);
+    timer->prepareForShutdown();
+    timer->resetSession();
+
+    QVERIFY(timer->restoreInterruptedSession());
+    QVERIFY(!timer->hasActiveSession());
+    QVERIFY(!timer->isRunning());
+    QCOMPARE(timer->mode(), int(FocusTimer::ManualRestMode));
+    QCOMPARE(timer->phase(), int(FocusTimer::ManualRestPhase));
+    QCOMPARE(timer->elapsedSeconds(), 185);
+    QCOMPARE(timer->currentTaskId(), -1);
+    QCOMPARE(timer->currentTaskTitle(), QString());
+
+    QVERIFY(timer->resumeFocus());
+    QVERIFY(timer->stopFocus());
+    QCOMPARE(countFocusSessions(), 0);
 }
 
 void ServiceTests::deletingActiveTaskDetachesTimerAndSuppressesAutoCompleteFailure()

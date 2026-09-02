@@ -69,19 +69,6 @@ Rectangle {
             }
         }
 
-        // 空状态
-        Text {
-            objectName: "weeklyReviewEmptyText"
-            Layout.fillWidth: true
-            visible: !root.hasData
-            text: "本周还没有足够的计划和专注数据。\n完成几个带预估的任务后，这里会生成计划偏差分析。"
-            textFormat: Text.PlainText
-            color: Theme.inkSoft
-            font.pixelSize: Theme.fontMd
-            wrapMode: Text.WordWrap
-            lineHeight: 1.3
-        }
-
         // 计划 / 实际 / 完成率
         RowLayout {
             Layout.fillWidth: true

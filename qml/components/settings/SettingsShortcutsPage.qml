@@ -88,18 +88,6 @@ FocusScope {
         width: root.width
         spacing: Theme.space16
 
-        // 操作说明放在最前：第一次进来需要先知道怎么改键，
-        // 而不是滚过 18 行之后才在最底下看到用法。
-        Text {
-            Layout.fillWidth: true
-            Layout.bottomMargin: Theme.space4
-            text: "点键位后按下新组合即可改键。可以只用一个键（如空格），"
-                  + "在输入框里打字时它们会自动让路；按 Delete 停用，按 Esc 取消录制。"
-            color: Theme.inkSoft
-            font.pixelSize: Theme.fontMd
-            wrapMode: Text.WordWrap
-        }
-
         Repeater {
             model: root.groupList
 
