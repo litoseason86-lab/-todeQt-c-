@@ -11,8 +11,12 @@ Popup {
 
     property int elapsedSeconds: 0
     property int thresholdHours: 8
+    property int suggestedDurationMinutes: 0
+    property bool durationEdited: false
+    property string errorText: ""
 
     signal recordRequested()
+    signal adjustedRecordRequested(int durationSeconds)
     signal discardRequested()
     signal continueRequested()
 
@@ -30,6 +34,34 @@ Popup {
         var hours = Math.floor(safeSeconds / 3600)
         var minutes = Math.floor((safeSeconds % 3600) / 60)
         return hours + " 小时" + (minutes > 0 ? " " + minutes + " 分钟" : "")
+    }
+
+    function prepare(elapsed, threshold) {
+        root.elapsedSeconds = Math.max(0, Number(elapsed || 0))
+        root.thresholdHours = Math.max(1, Number(threshold || 8))
+        // 输入框按分钟修正；未改动时仍走 recordRequested，保留实际秒数。
+        root.suggestedDurationMinutes = Math.max(3, Math.floor(root.elapsedSeconds / 60))
+        root.durationEdited = false
+        root.errorText = ""
+        durationFields.reload()
+    }
+
+    function record() {
+        if (!root.durationEdited) {
+            root.recordRequested()
+            root.close()
+            return
+        }
+        if (durationFields.validationError.length > 0) {
+            root.errorText = durationFields.validationError
+            return
+        }
+        if (durationFields.enteredMinutes < 3) {
+            root.errorText = "记录时长不能少于 3 分钟"
+            return
+        }
+        root.adjustedRecordRequested(durationFields.enteredMinutes * 60)
+        root.close()
     }
 
     Overlay.modal: Rectangle {
@@ -82,6 +114,63 @@ Popup {
             color: Theme.inkStrong
             font.pixelSize: Theme.fontMd
             wrapMode: Text.WordWrap
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            spacing: Theme.space8
+
+            Text {
+                text: "修正记录时长"
+                textFormat: Text.PlainText
+                color: Theme.ink
+                font.pixelSize: Theme.fontMd
+            }
+
+            DurationFieldPair {
+                id: durationFields
+                objectName: "longFreeFocusDurationFields"
+                namePrefix: "longFreeFocusDuration"
+                totalMinutes: root.suggestedDurationMinutes
+                maximumMinutes: 99 * 60 + 59
+                compact: true
+                accessiblePrefix: "修正记录时长"
+                tabTarget: continueButton
+                onUserEdited: {
+                    root.durationEdited = true
+                    root.errorText = ""
+                }
+                onAccepted: root.record()
+            }
+
+            Item { Layout.fillWidth: true }
+        }
+
+        Text {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            text: "不修改则保留精确计时；修改后将按整分钟记录。"
+            textFormat: Text.PlainText
+            color: Theme.inkSoft
+            font.pixelSize: Theme.fontSm
+            wrapMode: Text.WordWrap
+        }
+
+        Text {
+            objectName: "longFreeFocusAdjustmentError"
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            visible: root.errorText.length > 0
+            text: root.errorText
+            textFormat: Text.PlainText
+            color: Theme.danger
+            font.pixelSize: Theme.fontSm
+            wrapMode: Text.WordWrap
+            Accessible.role: Accessible.AlertMessage
         }
 
         Text {
@@ -169,10 +258,7 @@ Popup {
                 implicitHeight: 38
                 activeFocusOnTab: true
                 focus: true
-                onClicked: {
-                    root.recordRequested()
-                    root.close()
-                }
+                onClicked: root.record()
 
                 background: Rectangle {
                     color: recordButton.hovered ? Theme.accentFillStrong : Theme.accentFill

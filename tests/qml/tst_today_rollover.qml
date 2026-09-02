@@ -101,6 +101,7 @@ TestCase {
         property bool hasActiveSession: false
         property int currentTaskId: -1
         property string currentTaskTitle: ""
+        property int elapsedSeconds: 0
         property int mode: 0
         property int phase: 0
     }
@@ -133,6 +134,12 @@ TestCase {
         settingsRef: settingsMock
     }
 
+    Component {
+        id: viewSignalSpyComponent
+
+        SignalSpy { }
+    }
+
     function init() {
         taskManager.todayTasksData = []
         taskManager.overdueData = []
@@ -140,6 +147,11 @@ TestCase {
         taskManager.moveCalls = 0
         taskManager.todayCalls = 0
         settingsMock.rolloverIgnoredDate = ""
+        focusTimer.isRunning = false
+        focusTimer.hasActiveSession = false
+        focusTimer.mode = 0
+        focusTimer.phase = 0
+        focusTimer.elapsedSeconds = 0
         view.pendingDeleteTaskId = -1
         view.refresh()
         wait(20)
@@ -224,6 +236,32 @@ TestCase {
         verify(container)
         verify(Qt.colorEqual(container.color, Theme.glassCard))
         verify(Qt.colorEqual(container.border.color, Theme.glassBorder))
+    }
+
+    function test_manualRestEntryStartsOrReturnsToTheGlobalRestPage() {
+        const button = findChild(view, "todayManualRestButton")
+        verify(button)
+        compare(button.text, "开始休息")
+
+        const startSpy = createTemporaryObject(viewSignalSpyComponent, testCase, {
+            target: view,
+            signalName: "manualRestRequested"
+        })
+        const returnSpy = createTemporaryObject(viewSignalSpyComponent, testCase, {
+            target: view,
+            signalName: "manualRestPageRequested"
+        })
+        verify(startSpy)
+        verify(returnSpy)
+        button.clicked()
+        compare(startSpy.count, 1)
+
+        focusTimer.mode = 2
+        focusTimer.phase = 3
+        focusTimer.elapsedSeconds = 3661
+        tryCompare(button, "text", "休息 01:01:01")
+        button.clicked()
+        compare(returnSpy.count, 1)
     }
 
     function test_logicalDayChangedTriggersRefresh() {

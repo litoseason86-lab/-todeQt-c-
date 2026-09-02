@@ -21,6 +21,7 @@
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/ExportService.h"
 #include "../src/services/FocusHistoryService.h"
+#include "../src/services/FocusSessionRules.h"
 // FocusTimer 声明了 friend class ServiceTests，测试可直接访问内部时钟状态。
 #include "../src/services/FocusTimer.h"
 #include "../src/services/GoalService.h"
@@ -819,6 +820,7 @@ private slots:
     void exportAllRejectsInvalidDestinationBeforeReplacingFiles();
     void freeFocusCountsTowardDurationEstimate();
     void discardFreeFocusRemovesLongSessionWithoutRecording();
+    void correctedFreeFocusDurationUsesUserConfirmedValue();
     void stopFocusUnderFiveMinutesKeepsTaskPending();
     void stopFocusUnderThreeMinutesDiscardsInvalidSession();
     void shortSessionEmitsSessionDiscarded();
@@ -831,6 +833,8 @@ private slots:
     void realPomodoroSessionAdvancesLongGoalAndFiresMilestone();
     void pomodoroBreakWritesNoSessionAndCompletes();
     void pomodoroBreakRestoresTaskContextAndCount();
+    void manualRestDoesNotCreateFocusSessionOrFinishAutomatically();
+    void manualRestRestoresPausedWithoutCountingAsFocus();
     void deletingActiveTaskDetachesTimerAndSuppressesAutoCompleteFailure();
     void pomodoroWorkStoppedUnderMinimumIsDiscarded();
     void freeFocusStillCountsUpUnchanged();
@@ -4707,6 +4711,34 @@ void ServiceTests::discardFreeFocusRemovesLongSessionWithoutRecording()
     QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(taskId), 0);
 }
 
+void ServiceTests::correctedFreeFocusDurationUsesUserConfirmedValue()
+{
+    const int taskId = insertTaskRow(QStringLiteral("需要修正的超长自由计时"), QDate::currentDate());
+    QVERIFY(taskId > 0);
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startFocus(taskId, QStringLiteral("需要修正的超长自由计时")));
+    setFocusElapsedSeconds(timer, 9 * 60 * 60);
+
+    // 界面输入损坏或绕开前端校验时，服务层仍不能把无效短时长写成专注记录。
+    QVERIFY(!timer->stopFreeFocusWithDuration(
+        FocusSessionRules::kMinimumValidDurationSeconds - 1));
+    QVERIFY(timer->hasActiveSession());
+
+    QSignalSpy completedSpy(timer, &FocusTimer::focusCompleted);
+    const int correctedSeconds = 2 * 60 * 60 + 15 * 60;
+    QVERIFY(timer->stopFreeFocusWithDuration(correctedSeconds));
+    QCOMPARE(completedSpy.count(), 1);
+    QCOMPARE(completedSpy.first().at(0).toInt(), correctedSeconds);
+    QCOMPARE(timer->hasActiveSession(), false);
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT duration FROM focus_sessions WHERE end_time IS NOT NULL")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), correctedSeconds);
+    QVERIFY(!query.next());
+}
+
 void ServiceTests::stopFocusUnderFiveMinutesKeepsTaskPending()
 {
     QVERIFY(TaskManager::instance()->addTask(QStringLiteral("未满五分钟任务"), logicalToday(), QString()));
@@ -4986,6 +5018,59 @@ void ServiceTests::pomodoroBreakRestoresTaskContextAndCount()
     QCOMPARE(timer->completedPomodoros(), 3);
     QCOMPARE(timer->elapsedSeconds(), 120);
     QVERIFY(timer->stopFocus());
+}
+
+void ServiceTests::manualRestDoesNotCreateFocusSessionOrFinishAutomatically()
+{
+    FocusTimer* timer = FocusTimer::instance();
+    QSignalSpy focusCompletedSpy(timer, &FocusTimer::focusCompleted);
+    QSignalSpy phaseCompletedSpy(timer, &FocusTimer::phaseCompleted);
+
+    QVERIFY(timer->startManualRest());
+    QCOMPARE(timer->mode(), int(FocusTimer::ManualRestMode));
+    QCOMPARE(timer->phase(), int(FocusTimer::ManualRestPhase));
+    QVERIFY(!timer->hasActiveSession());
+    QCOMPARE(timer->currentTaskId(), -1);
+    QCOMPARE(timer->currentTaskTitle(), QString());
+    QCOMPARE(countFocusSessions(), 0);
+
+    // 主动休息没有目标时长；即使刷新计时器，也不能触发番茄完成或写入专注记录。
+    setFocusElapsedSeconds(timer, 45);
+    QVERIFY(QMetaObject::invokeMethod(&timer->m_timer, "timeout", Qt::DirectConnection));
+    QCOMPARE(timer->elapsedSeconds(), 45);
+    QCOMPARE(phaseCompletedSpy.count(), 0);
+    QCOMPARE(focusCompletedSpy.count(), 0);
+    QCOMPARE(countFocusSessions(), 0);
+
+    timer->pauseFocus();
+    QVERIFY(!timer->isRunning());
+    QVERIFY(timer->resumeFocus());
+    QVERIFY(timer->isRunning());
+    QVERIFY(timer->stopFocus());
+    QCOMPARE(timer->phase(), int(FocusTimer::NoPhase));
+    QCOMPARE(countFocusSessions(), 0);
+}
+
+void ServiceTests::manualRestRestoresPausedWithoutCountingAsFocus()
+{
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startManualRest());
+    setFocusElapsedSeconds(timer, 185);
+    timer->prepareForShutdown();
+    timer->resetSession();
+
+    QVERIFY(timer->restoreInterruptedSession());
+    QVERIFY(!timer->hasActiveSession());
+    QVERIFY(!timer->isRunning());
+    QCOMPARE(timer->mode(), int(FocusTimer::ManualRestMode));
+    QCOMPARE(timer->phase(), int(FocusTimer::ManualRestPhase));
+    QCOMPARE(timer->elapsedSeconds(), 185);
+    QCOMPARE(timer->currentTaskId(), -1);
+    QCOMPARE(timer->currentTaskTitle(), QString());
+
+    QVERIFY(timer->resumeFocus());
+    QVERIFY(timer->stopFocus());
+    QCOMPARE(countFocusSessions(), 0);
 }
 
 void ServiceTests::deletingActiveTaskDetachesTimerAndSuppressesAutoCompleteFailure()

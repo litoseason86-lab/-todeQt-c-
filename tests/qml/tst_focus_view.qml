@@ -31,6 +31,8 @@ TestCase {
         property string startPomodoroWorkTitle: ""
         property int startPomodoroWorkSeconds: 0
         property int stopFocusCalls: 0
+        property int stopFreeFocusWithDurationCalls: 0
+        property int correctedFreeFocusDurationSeconds: -1
         property int discardFreeFocusCalls: 0
         property bool stopFocusFails: false
         property int minimumValidMinutes: 3
@@ -75,6 +77,12 @@ TestCase {
             currentTaskId = 0
             currentTaskTitle = ""
             return true
+        }
+
+        function stopFreeFocusWithDuration(durationSeconds) {
+            stopFreeFocusWithDurationCalls += 1
+            correctedFreeFocusDurationSeconds = durationSeconds
+            return stopFocus()
         }
 
         function discardFreeFocus() {
@@ -207,6 +215,12 @@ TestCase {
     }
 
     SignalSpy {
+        id: manualRestEndedSpy
+        target: view
+        signalName: "manualRestEnded"
+    }
+
+    SignalSpy {
         id: immersiveSpy
         target: view
         signalName: "immersiveRequested"
@@ -229,6 +243,8 @@ TestCase {
         focusTimer.startPomodoroWorkTitle = ""
         focusTimer.startPomodoroWorkSeconds = 0
         focusTimer.stopFocusCalls = 0
+        focusTimer.stopFreeFocusWithDurationCalls = 0
+        focusTimer.correctedFreeFocusDurationSeconds = -1
         focusTimer.discardFreeFocusCalls = 0
         view.selectedTaskId = -1
         view.selectedTaskTitle = ""
@@ -261,6 +277,7 @@ TestCase {
             warningDialog.close()
         }
         focusEndedSpy.clear()
+        manualRestEndedSpy.clear()
         immersiveSpy.clear()
         wait(20)
     }
@@ -1032,6 +1049,70 @@ TestCase {
         tryCompare(focusTimer, "stopFocusCalls", 1)
         tryCompare(focusEndedSpy, "count", 1)
         compare(focusTimer.discardFreeFocusCalls, 0)
+    }
+
+    function test_longFreeFocusCanBeRecordedWithCorrectedDuration() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 9 * 60 * 60 + 45
+
+        view.endFreeFocus()
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        tryCompare(dialog, "opened", true)
+        const hourField = findChild(dialog, "longFreeFocusDurationHourField")
+        const minuteField = findChild(dialog, "longFreeFocusDurationMinuteField")
+        verify(hourField)
+        verify(minuteField)
+        hourField.text = "2"
+        minuteField.text = "15"
+        // 程序设值不会触发 TextField.textEdited；这里显式模拟用户已经修正过输入。
+        dialog.durationEdited = true
+
+        const recordButton = findChild(dialog, "longFreeFocusRecordButton")
+        verify(recordButton)
+        mouseClick(recordButton)
+
+        tryCompare(focusTimer, "stopFreeFocusWithDurationCalls", 1)
+        compare(focusTimer.correctedFreeFocusDurationSeconds, 2 * 60 * 60 + 15 * 60)
+        compare(focusTimer.discardFreeFocusCalls, 0)
+        tryCompare(focusEndedSpy, "count", 1)
+    }
+
+    function test_manualRestUsesSeparatePanelAndDoesNotRequireTask() {
+        focusTimer.hasActiveSession = false
+        focusTimer.isRunning = true
+        focusTimer.mode = 2
+        focusTimer.phase = 3
+        focusTimer.elapsedSeconds = 3661
+
+        tryCompare(view, "state", "manualRest")
+        compare(view.immersiveAvailable, true)
+        const modeSwitch = findChild(view, "focusModeSwitch")
+        verify(modeSwitch)
+        compare(modeSwitch.visible, false)
+        const panel = findChild(view, "manualRestPanel")
+        verify(panel)
+        const timeText = findChild(panel, "manualRestTime")
+        verify(timeText)
+        compare(timeText.text, "01:01:01")
+        // 主动休息沿用自由专注的大号计时层级，不应重新包成独立卡片风格。
+        compare(timeText.font.pixelSize, Theme.fontDisplay)
+        compare(findChild(panel, "manualRestAccountingNote").text, "休息时间不会计入今日专注")
+
+        const pauseButton = findChild(panel, "manualRestPauseResumeButton")
+        verify(pauseButton)
+        compare(pauseButton.implicitWidth, 104)
+        compare(pauseButton.implicitHeight, 40)
+        pauseButton.clicked()
+        compare(focusTimer.isRunning, false)
+
+        const endButton = findChild(panel, "manualRestEndButton")
+        verify(endButton)
+        endButton.clicked()
+        compare(focusTimer.phase, 0)
+        compare(manualRestEndedSpy.count, 1)
     }
 
     function test_longFreeFocusCanBeDiscardedAfterConfirmation() {

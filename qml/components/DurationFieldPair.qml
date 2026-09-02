@@ -64,6 +64,8 @@ RowLayout {
 
     // 在任一输入框里按下回车。宿主据此触发自己的提交动作。
     signal accepted()
+    // 只在用户实际输入时发出；程序灌入初值不能被误判为“用户修正过时长”。
+    signal userEdited()
 
     spacing: Theme.space8
 
@@ -104,6 +106,7 @@ RowLayout {
         KeyNavigation.tab: minuteField
         Keys.onReturnPressed: root.accepted()
         Keys.onEnterPressed: root.accepted()
+        onTextEdited: root.userEdited()
 
         background: Rectangle {
             radius: Theme.radiusMd
@@ -138,6 +141,7 @@ RowLayout {
         KeyNavigation.tab: root.tabTarget
         Keys.onReturnPressed: root.accepted()
         Keys.onEnterPressed: root.accepted()
+        onTextEdited: root.userEdited()
 
         background: Rectangle {
             radius: Theme.radiusMd

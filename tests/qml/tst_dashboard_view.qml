@@ -81,6 +81,7 @@ TestCase {
         signal focusCompleted(int duration)
 
         property int phase: 0
+        property int mode: 0
         property bool hasActiveSession: false
         property bool isRunning: false
         property int remainingSeconds: 0
@@ -220,6 +221,7 @@ TestCase {
         taskManager.todayTasksData = []
         taskManager.todayTasksCalls = 0
         focusTimer.phase = 0
+        focusTimer.mode = 0
         focusTimer.hasActiveSession = false
         focusTimer.isRunning = false
         focusTimer.sessionLogicalDate = "2026-07-12"
@@ -710,6 +712,11 @@ TestCase {
         focusTimer.phase = 2
         compare(panel.liveFocusSeconds, 600)
 
+        // 主动休息同样不能污染今日专注累计。
+        focusTimer.mode = 2
+        focusTimer.phase = 3
+        compare(panel.liveFocusSeconds, 600)
+
         // 只读目标卡：引导链接向上请求跳到今日任务页，面板不碰设置存储。
         var setupSpy = createTemporaryObject(spyComponent, testCase,
                                              { target: panel, signalName: "goalSetupRequested" })
@@ -775,6 +782,7 @@ TestCase {
         var panel = createTemporaryObject(timerPanelComponent, testCase)
         verify(panel)
 
+        focusTimer.mode = 1
         focusTimer.phase = 1
         focusTimer.targetSeconds = 1500
         focusTimer.remainingSeconds = 750
@@ -789,6 +797,15 @@ TestCase {
         focusTimer.phase = 2
         focusTimer.isRunning = true
         compare(panel.statusText, "休息中")
+
+        // 主动休息是正计时，不能沿用番茄休息的倒计时读数。
+        focusTimer.mode = 2
+        focusTimer.phase = 3
+        focusTimer.elapsedSeconds = 3661
+        focusTimer.hasActiveSession = false
+        compare(panel.statusText, "休息中")
+        compare(panel.timeText, "01:01:01")
+        compare(panel.ringProgress, 1)
     }
 
     function test_timer_panel_primary_action_routes() {
@@ -821,6 +838,7 @@ TestCase {
         verify(stopButton)
 
         // 番茄阶段的「结束」= 结束整轮循环：连续计数必须归零，与专注页同语义。
+        focusTimer.mode = 1
         focusTimer.phase = 1
         focusTimer.hasActiveSession = true
         stopButton.clicked()

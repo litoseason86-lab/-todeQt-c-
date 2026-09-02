@@ -229,7 +229,9 @@ Item {
             return "番茄Todo"
         }
         var timeText = mode === 1 ? root.formatMinuteTime(remainingSeconds) : root.formatClockTime(elapsedSeconds)
-        return (isRunning ? "" : "⏸ ") + timeText + " · 番茄Todo"
+        var manualRest = mode === 2 && phase === 3
+        return (isRunning ? "" : "⏸ ") + (manualRest ? "休息 " : "")
+                + timeText + " · 番茄Todo"
     }
 
     function showToast(message, actionText, actionCallback) {
@@ -426,7 +428,7 @@ Item {
         // 已有自由专注、番茄工作或休息阶段时，不启动第二个会话；直接带用户去专注页处理当前状态。
         if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
             focusView.syncToActiveTimer()
-            root.showToast("已有专注进行中");
+            root.showToast("已有计时进行中");
             root.switchToView("focus");
             return;
         }
@@ -437,6 +439,30 @@ Item {
         if (focusView.enterWithTask(taskId, taskTitle, usePomodoro)) {
             root.switchToView("focus");
         }
+    }
+
+    function isManualRestActive() {
+        return !!root.focusTimerRef && Number(root.focusTimerRef.mode) === 2
+                && Number(root.focusTimerRef.phase) === 3
+    }
+
+    function startManualRest() {
+        if (!root.focusTimerRef) {
+            root.showToast("休息计时不可用")
+            return
+        }
+        if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
+            focusView.syncToActiveTimer()
+            root.showToast(root.isManualRestActive() ? "正在休息" : "已有计时进行中")
+            root.switchToView("focus")
+            return
+        }
+        if (!root.focusTimerRef.startManualRest()) {
+            root.showToast("休息启动失败，请重试")
+            return
+        }
+        focusView.syncToActiveTimer()
+        root.switchToView("focus")
     }
 
     // —— 快捷键动作分发 ——
@@ -490,7 +516,10 @@ Item {
         if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
             focusView.togglePause()
             // togglePause 是同步的，这里读到的已经是切换之后的状态。
-            root.showToast(root.focusTimerRef.isRunning ? "已继续专注" : "已暂停专注")
+            var manualRest = root.isManualRestActive()
+            root.showToast(root.focusTimerRef.isRunning
+                           ? (manualRest ? "已继续休息" : "已继续专注")
+                           : (manualRest ? "已暂停休息" : "已暂停专注"))
             return
         }
 
@@ -513,7 +542,9 @@ Item {
         root.focusImmersiveActive = false
         root.switchToView("focus")
         Qt.callLater(function() {
-            if (focusView.pomodoroModeSelected) {
+            if (focusView.state === "manualRest") {
+                focusView.endManualRest()
+            } else if (focusView.pomodoroModeSelected) {
                 focusView.endPomodoro()
             } else {
                 focusView.endFreeFocus()
@@ -527,7 +558,7 @@ Item {
             return
         }
         if (!focusView.immersiveAvailable) {
-            root.showToast("沉浸模式只在番茄专注或休息进行中可用")
+            root.showToast("沉浸模式只在进行中的计时内可用")
             return
         }
         root.switchToView("focus")
@@ -748,6 +779,12 @@ Item {
                         root.startFocusForTask(taskId, taskTitle);
                     }
 
+                    onManualRestRequested: root.startManualRest()
+                    onManualRestPageRequested: {
+                        focusView.syncToActiveTimer()
+                        root.switchToView("focus")
+                    }
+
                     onCountdownRequested: root.switchToView("countdown")
                     onDeleteRequested: function(taskId, taskTitle) {
                         root.requestDeleteTask(taskId, taskTitle)
@@ -766,6 +803,11 @@ Item {
 
                     onFocusEnded: {
                         // 先退出沉浸再切页，今日页不能留在无侧栏的原生全屏状态。
+                        root.focusImmersiveActive = false;
+                        root.switchToView("today");
+                    }
+
+                    onManualRestEnded: {
                         root.focusImmersiveActive = false;
                         root.switchToView("today");
                     }

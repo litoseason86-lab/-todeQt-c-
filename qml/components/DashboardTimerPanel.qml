@@ -29,15 +29,20 @@ Item {
 
     // —— 计时状态派生（字段显式经过 timerRef 属性读取，tick 信号才能驱动刷新）——
     readonly property int phase: root.timerRef ? Number(root.timerRef.phase) : 0
+    readonly property int mode: root.timerRef ? Number(root.timerRef.mode) : 0
     readonly property bool hasSession: root.timerRef ? Boolean(root.timerRef.hasActiveSession) : false
     readonly property bool activeAny: root.phase !== 0 || root.hasSession
     readonly property bool running: root.timerRef ? Boolean(root.timerRef.isRunning) : false
+    readonly property bool manualRestActive: root.mode === 2 && root.phase === 3
 
     readonly property string statusText: root.activeAny
-            ? (root.running ? (root.phase === 2 ? "休息中" : "专注中") : "已暂停")
+            ? (root.running ? ((root.phase === 2 || root.manualRestActive) ? "休息中" : "专注中") : "已暂停")
             : "待机"
 
     readonly property string timeText: {
+        if (root.manualRestActive) {
+            return root.formatClockTime(root.timerRef.elapsedSeconds)
+        }
         if (root.phase !== 0) {
             return root.formatMinuteTime(root.timerRef.remainingSeconds)
         }
@@ -50,6 +55,9 @@ Item {
     }
 
     readonly property real ringProgress: {
+        if (root.manualRestActive) {
+            return 1
+        }
         if (root.phase !== 0 && root.timerRef && Number(root.timerRef.targetSeconds) > 0) {
             return Number(root.timerRef.remainingSeconds) / Number(root.timerRef.targetSeconds)
         }
@@ -200,7 +208,8 @@ Item {
                 progress: root.ringProgress
                 showPreview: !root.activeAny
                 dimmed: root.activeAny && !root.running
-                ringColor: root.phase === 2 ? Theme.focusBreakAccent : Theme.accent
+                ringColor: root.phase === 2 || root.manualRestActive
+                           ? Theme.focusBreakAccent : Theme.accent
             }
 
             ColumnLayout {
@@ -323,7 +332,7 @@ Item {
                     }
                     // 与专注页「结束」同语义：结束番茄循环时连续计数一并归零，
                     // 否则下一轮长休息节奏会被上一轮残留计数带偏；自由专注不涉及计数。
-                    var endsPomodoroCycle = root.phase !== 0
+                    var endsPomodoroCycle = root.mode === 1 && root.phase !== 0
                     if (root.timerRef.stopFocus() && endsPomodoroCycle
                             && root.timerRef.resetPomodoroCount) {
                         root.timerRef.resetPomodoroCount()

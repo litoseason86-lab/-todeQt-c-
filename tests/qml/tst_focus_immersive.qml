@@ -29,6 +29,7 @@ TestCase {
         property int startBreakCalls: 0
         property int startPomodoroCalls: 0
         property int endFreeFocusCalls: 0
+        property int endManualRestCalls: 0
 
         function primaryTimeText() { return timeText }
         function pomodoroStageText() { return stageText }
@@ -46,6 +47,7 @@ TestCase {
         function startBreak() { startBreakCalls += 1 }
         function startPomodoro() { startPomodoroCalls += 1 }
         function endFreeFocus() { endFreeFocusCalls += 1 }
+        function endManualRest() { endManualRestCalls += 1 }
     }
 
     QtObject {
@@ -95,6 +97,7 @@ TestCase {
         focusViewStub.startBreakCalls = 0
         focusViewStub.startPomodoroCalls = 0
         focusViewStub.endFreeFocusCalls = 0
+        focusViewStub.endManualRestCalls = 0
         timerStub.isRunning = true
         timerStub.hasActiveSession = true
         timerStub.phase = 1
@@ -311,6 +314,24 @@ TestCase {
         focusViewStub.state = "free"
         overlay.triggerSecondary()
         compare(focusViewStub.endFreeFocusCalls, 1)
+    }
+
+    function test_manualRestProjectsAndEndsWithItsOwnAction() {
+        focusViewStub.state = "manualRest"
+        focusViewStub.timeText = "01:12:00"
+        focusViewStub.titleText = "主动休息"
+        focusViewStub.stageText = "主动休息中"
+        focusViewStub.captionText = "休息时间不计入今日专注"
+        timerStub.isRunning = true
+        timerStub.hasActiveSession = false
+        timerStub.phase = 3
+        wait(20)
+
+        compare(overlay.projectable, true)
+        compare(overlay.secondaryButtonText, "结束休息")
+        overlay.triggerSecondary()
+        compare(focusViewStub.endManualRestCalls, 1)
+        compare(focusViewStub.endPomodoroCalls, 0)
     }
 
     function test_exitPathsEmitSignal() {

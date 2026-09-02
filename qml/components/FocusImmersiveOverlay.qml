@@ -22,7 +22,7 @@ Item {
         if (!timerRef || Boolean(timerRef.isRunning)) {
             return false
         }
-        if (projectedState === "pomoWork" || projectedState === "pomoBreak") {
+        if (projectedState === "manualRest" || projectedState === "pomoWork" || projectedState === "pomoBreak") {
             return true
         }
         return projectedState === "free" && Boolean(timerRef.hasActiveSession)
@@ -33,7 +33,8 @@ Item {
         if (!focusViewRef || !timerRef) {
             return false
         }
-        if (projectedState === "pomoWork" || projectedState === "pomoBreak" || completionState) {
+        if (projectedState === "manualRest" || projectedState === "pomoWork"
+                || projectedState === "pomoBreak" || completionState) {
             return true
         }
         return projectedState === "free" && Boolean(timerRef.hasActiveSession)
@@ -98,6 +99,9 @@ Item {
     }
 
     readonly property string secondaryButtonText: {
+        if (projectedState === "manualRest") {
+            return "结束休息"
+        }
         if (projectedState === "pomoBreak") {
             return "跳过休息"
         }
@@ -128,6 +132,10 @@ Item {
         }
         if (projectedState === "free") {
             focusViewRef.endFreeFocus()
+            return
+        }
+        if (projectedState === "manualRest") {
+            focusViewRef.endManualRest()
             return
         }
         focusViewRef.endPomodoro()

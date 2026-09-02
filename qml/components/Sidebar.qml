@@ -56,7 +56,7 @@ Rectangle {
             return ""
         }
         var timeText = mode === 1 ? root.formatMinuteTime(remainingSeconds) : root.formatClockTime(elapsedSeconds)
-        return (isRunning ? "● " : "⏸ ") + timeText
+        return (isRunning ? "● " : "⏸ ") + (mode === 2 ? "休息 " : "") + timeText
     }
 
     ColumnLayout {

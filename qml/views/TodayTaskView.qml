@@ -18,6 +18,9 @@ Item {
     }
 
     signal startFocus(int taskId, string taskTitle)
+    // 入口只属于今日页；实际计时由 MainWindow 交给全局 FocusTimer，避免页面持有业务状态。
+    signal manualRestRequested()
+    signal manualRestPageRequested()
     signal countdownRequested()
     signal deleteRequested(int taskId, string title)
     // 完成任务后向上冒泡，供 MainWindow 弹出“撤销完成”提示条。
@@ -98,6 +101,13 @@ Item {
     }
     // 昨天的目标分钟数：未设置态快捷 chip 的数据源（单键快照跨日后即昨天值）。
     property int yesterdayGoalMinutes: 0
+
+    readonly property bool manualRestActive: !!root.focusTimerRef
+                                            && Number(root.focusTimerRef.mode) === 2
+                                            && Number(root.focusTimerRef.phase) === 3
+    readonly property bool timerBusy: !!root.focusTimerRef
+                                     && (Boolean(root.focusTimerRef.hasActiveSession)
+                                         || Number(root.focusTimerRef.phase) !== 0)
 
     // 实时专注秒数统一口径（与仪表盘共用 FocusLiveSeconds，禁止各自拼接）。
     readonly property FocusLiveSeconds liveSecondsSource: FocusLiveSeconds {
@@ -474,6 +484,16 @@ Item {
         return minutes + "分钟";
     }
 
+    function formatClockTime(seconds) {
+        var safe = Math.max(0, Math.floor(Number(seconds || 0)))
+        var hours = Math.floor(safe / 3600)
+        var minutes = Math.floor((safe % 3600) / 60)
+        var secs = safe % 60
+        return (hours < 10 ? "0" : "") + hours + ":"
+                + (minutes < 10 ? "0" : "") + minutes + ":"
+                + (secs < 10 ? "0" : "") + secs
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: Theme.space24
@@ -499,6 +519,44 @@ Item {
                     text: "把今天的学习任务收拢到一个清单里。"
                     font.pixelSize: Theme.fontMd
                     color: Theme.ink
+                }
+            }
+
+            Button {
+                id: manualRestButton
+                objectName: "todayManualRestButton"
+
+                // 专注或番茄休息进行时不允许再开主动休息；主动休息本身则保留回到休息页的入口。
+                visible: !!root.focusTimerRef && (!root.timerBusy || root.manualRestActive)
+                text: root.manualRestActive
+                      ? "休息 " + root.formatClockTime(root.focusTimerRef.elapsedSeconds)
+                      : "开始休息"
+                implicitWidth: root.manualRestActive ? 156 : 112
+                implicitHeight: 44
+                activeFocusOnTab: true
+                onClicked: {
+                    if (root.manualRestActive) {
+                        root.manualRestPageRequested()
+                    } else {
+                        root.manualRestRequested()
+                    }
+                }
+
+                background: Rectangle {
+                    color: manualRestButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
+                    border.color: manualRestButton.activeFocus ? Theme.focusRing : Theme.border
+                    border.width: manualRestButton.activeFocus ? 2 : 1
+                    radius: Theme.radiusLg
+                }
+
+                contentItem: Text {
+                    text: manualRestButton.text
+                    textFormat: Text.PlainText
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontLg
+                    font.weight: Font.Medium
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
                 }
             }
 

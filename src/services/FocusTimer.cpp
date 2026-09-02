@@ -109,6 +109,44 @@ bool FocusTimer::startBreakForTask(int breakSeconds, int taskId, const QString& 
     return startBreakSession(breakSeconds, taskId, taskTitle);
 }
 
+bool FocusTimer::startManualRest()
+{
+    if (hasActiveTimer()) {
+        qWarning() << "Failed to start manual rest: focus timer already has an active session"
+                   << "sessionId=" << m_sessionId << "phase=" << m_phase;
+        return false;
+    }
+
+    // 主动休息只借用全局计时和恢复快照，不创建 focus_sessions。这样统计、历史和导出
+    // 都不会把休息误算为专注；任务字段必须留空，防止恢复后被误当成某个任务的上下文。
+    m_currentTaskId = -1;
+    m_currentTaskTitle.clear();
+    m_startTime = QDateTime::currentDateTime();
+    m_elapsedSeconds = 0;
+    m_accumulatedMilliseconds = 0;
+    m_lastCheckpointSeconds = 0;
+    m_isRunning = true;
+    m_sessionId = -1;
+    m_mode = ManualRestMode;
+    m_phase = ManualRestPhase;
+    m_targetSeconds = 0;
+    m_runSegmentStartNsecs = m_clock->nowNsecs();
+
+    if (!persistActiveState()) {
+        resetSession();
+        return false;
+    }
+    m_timer.start();
+
+    emit runningStateChanged();
+    emit currentTaskChanged();
+    emit sessionLogicalDateChanged();
+    emit modeChanged();
+    emit phaseChanged();
+    emit tick();
+    return true;
+}
+
 bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& taskTitle)
 {
     if (hasActiveTimer()) {
@@ -275,7 +313,8 @@ void FocusTimer::pauseFocus()
 bool FocusTimer::resumeFocus()
 {
     const bool canResumeBreak = m_mode == PomodoroMode && m_phase == BreakPhase;
-    if (m_sessionId == -1 && !canResumeBreak) {
+    const bool canResumeManualRest = m_mode == ManualRestMode && m_phase == ManualRestPhase;
+    if (m_sessionId == -1 && !canResumeBreak && !canResumeManualRest) {
         qWarning() << "Failed to resume focus: no active focus session";
         return false;
     }
@@ -293,8 +332,8 @@ bool FocusTimer::resumeFocus()
 
 bool FocusTimer::stopFocus()
 {
-    if (m_phase == BreakPhase) {
-        // 休息段没有数据库行，到点或手动停止都只复位；不能走专注段的保存/丢弃逻辑。
+    if (m_phase == BreakPhase || m_phase == ManualRestPhase) {
+        // 两类休息都没有数据库行，到点或手动停止只复位；不能走专注段的保存/丢弃逻辑。
         const bool wasRunning = m_isRunning;
         if (wasRunning) {
             freezeElapsedTime();
@@ -319,6 +358,23 @@ bool FocusTimer::stopFocus()
     }
 
     return completeFocusSession(false);
+}
+
+bool FocusTimer::stopFreeFocusWithDuration(int durationSeconds)
+{
+    if (m_sessionId == -1 || m_mode != FreeMode || m_phase != NoPhase) {
+        qWarning() << "Failed to correct free focus duration: no active free-focus session";
+        return false;
+    }
+    if (durationSeconds < FocusSessionRules::kMinimumValidDurationSeconds) {
+        qWarning() << "Failed to correct free focus duration: duration is below minimum"
+                   << durationSeconds;
+        return false;
+    }
+
+    // 修正值只在用户主动确认超长计时时用于落库；运行中的单调时钟仍保留原值，
+    // 直到本次会话成功结算，避免输入校验失败时把活动计时器改成半截状态。
+    return completeFocusSession(false, nullptr, durationSeconds);
 }
 
 bool FocusTimer::requiresFreeFocusStopConfirmation(int thresholdHours) const
@@ -363,7 +419,9 @@ bool FocusTimer::discardFreeFocus()
     return true;
 }
 
-bool FocusTimer::completeFocusSession(bool naturalCompletion, bool* countedAsPomodoro)
+bool FocusTimer::completeFocusSession(bool naturalCompletion,
+                                      bool* countedAsPomodoro,
+                                      int correctedDurationSeconds)
 {
     if (countedAsPomodoro) {
         *countedAsPomodoro = false;
@@ -378,7 +436,7 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion, bool* countedAsPom
         m_timer.stop();
     }
 
-    int duration = m_elapsedSeconds;
+    int duration = correctedDurationSeconds >= 0 ? correctedDurationSeconds : m_elapsedSeconds;
     if (naturalCompletion && m_mode == PomodoroMode && m_phase == WorkPhase
         && m_targetSeconds > 0) {
         // 单调时钟会把合盖期间一并计入；自然到点的番茄应记录配置目标，而不是
@@ -808,9 +866,12 @@ bool FocusTimer::restoreInterruptedSession()
         // 休息期间任务可能被删除，外键会把 task_id 置空但保留标题；休息计时仍应恢复，
         // 只是下一轮因缺少有效任务 id 而保持不可启动。
         && (restoredTaskId == -1 || !restoredTitle.isEmpty());
+    const bool isManualRest = restoredMode == ManualRestMode && restoredPhase == ManualRestPhase
+        && restoredSessionId == -1 && restoredTaskId == -1 && restoredTitle.isEmpty()
+        && restoredTarget == 0;
 
     QDateTime restoredStartTime;
-    bool sessionRowValid = isPomodoroBreak;
+    bool sessionRowValid = isPomodoroBreak || isManualRest;
     if (restoredSessionId > 0) {
         QSqlQuery sessionQuery(db);
         sessionQuery.prepare(QStringLiteral(
@@ -827,7 +888,7 @@ bool FocusTimer::restoreInterruptedSession()
         }
     }
 
-    if (!(isFreeFocus || isPomodoroWork || isPomodoroBreak) || !sessionRowValid) {
+    if (!(isFreeFocus || isPomodoroWork || isPomodoroBreak || isManualRest) || !sessionRowValid) {
         qWarning() << "Discarding invalid active focus state"
                    << "sessionId=" << restoredSessionId << "mode=" << restoredMode
                    << "phase=" << restoredPhase;
@@ -840,7 +901,8 @@ bool FocusTimer::restoreInterruptedSession()
     m_sessionId = restoredSessionId;
     m_currentTaskId = restoredTaskId;
     m_currentTaskTitle = restoredTitle;
-    m_startTime = isPomodoroBreak ? QDateTime::currentDateTime() : restoredStartTime;
+    // 休息不会落库开始时刻；恢复时仅需让内存状态完整，离线时段也不会被追加计算。
+    m_startTime = (isPomodoroBreak || isManualRest) ? QDateTime::currentDateTime() : restoredStartTime;
     m_elapsedSeconds = restoredElapsed;
     m_accumulatedMilliseconds = static_cast<qint64>(restoredElapsed) * 1000;
     m_lastCheckpointSeconds = restoredElapsed;
