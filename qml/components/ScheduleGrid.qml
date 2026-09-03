@@ -168,8 +168,19 @@ Item {
         return Math.max(0, Math.min(24 * 60 - 5, Math.round(minutes / 5) * 5))
     }
 
+    // 内容底板。课表是成片的信息，直接画在壁纸上时刻度线与山水画抢注意力、
+    // 课程块也没有可依托的背景。这里铺一层玻璃纸面把网格托住——
+    // 项目规则允许内容区用半透明色块透壁纸，只是不做实时模糊。
+    GlassPanel {
+        anchors.fill: parent
+        solidFallback: !Theme.glassBlurAllowed
+        panelShadowEnabled: false
+        bottomRimEnabled: true
+    }
+
     ColumnLayout {
         anchors.fill: parent
+        anchors.margins: Theme.space12
         spacing: 0
 
         // —— 列头：星期与日期，固定在顶部不随内容滚动 ——
@@ -205,9 +216,12 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     radius: Theme.radiusMd
-                    color: dayHeader.isToday ? Theme.accentFill : Theme.glassCard
-                    border.color: dayHeader.isToday ? Theme.accentStrong : Theme.glassBorder
-                    border.width: 1
+                    // 七张并排的描边卡片会在纸面上排出一条很吵的色带。
+                    // 平时留白，只有「今天」用一颗淡罩胶囊标出来——
+                    // 页面上同一时刻只该有一个视觉焦点。
+                    color: dayHeader.isToday ? Theme.accentFill : "transparent"
+                    border.color: dayHeader.isToday ? Theme.accentStrong : "transparent"
+                    border.width: dayHeader.isToday ? 1 : 0
 
                     Column {
                         anchors.centerIn: parent
@@ -237,6 +251,14 @@ Item {
                     }
                 }
             }
+        }
+
+        // 列头与网格主体之间的分隔线。原先靠每列各自描边来区分，
+        // 七条竖框加七条横框在壁纸上过密；一条横线足够交代层次。
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 1
+            color: Theme.border
         }
 
         Item {
@@ -292,7 +314,10 @@ Item {
                         width: Math.max(0, body.width - root.gutterWidth)
                         y: root.axisTopInset + Math.round(index * 60 * root.pixelsPerMinute)
                         height: 1
+                        // 刻度线是参考线不是内容，压到很淡；否则一屏十几条横线
+                        // 会比课程块本身还显眼。
                         color: Theme.borderSubtle
+                        opacity: 0.55
                     }
                 }
 
@@ -383,14 +408,27 @@ Item {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
 
-                            // 列底：周末用更弱的底色区分，同时不依赖颜色单独表意——
+                            // 列底：周末用极淡的暖色底区分，且不依赖颜色单独表意——
                             // 列头的星期字本身已经说明了是周六周日。
+                            // 不再描边：七条竖框叠在刻度横线上会织成一张网，
+                            // 列与列之间靠 spacing 和下面那条细分隔线就够分开了。
                             Rectangle {
                                 anchors.fill: parent
                                 radius: Theme.radiusMd
-                                color: dayColumn.weekday >= 6 ? Theme.glassCard : "transparent"
-                                border.color: Theme.borderSubtle
-                                border.width: 1
+                                color: dayColumn.weekday >= 6 ? Theme.surfaceSunken : "transparent"
+                                opacity: 0.45
+                            }
+
+                            // 列之间的细分隔线。只画在左侧且跳过第一列，
+                            // 避免和相邻列各画一条叠成双线。
+                            Rectangle {
+                                visible: dayColumn.index > 0
+                                x: -Math.round(Theme.space4 / 2)
+                                y: 0
+                                width: 1
+                                height: dayColumn.height
+                                color: Theme.borderSubtle
+                                opacity: 0.6
                             }
 
                             // 空白处点击 = 在该时段新增课程。

@@ -21,6 +21,12 @@ Rectangle {
     property string categoryColor: ""
     // 块太矮时（短课或节次行很窄）只留标题，避免文字挤成一团糊掉。
     readonly property bool compact: root.height < 46
+    // 块太窄时按优先级砍信息。七列平分一个默认窗口后每列只有约 95px，
+    // 四行内容会全部截断成「多媒体55(A1…」这种读不出东西的省略号。
+    // 保留顺序是 课程名 > 地点 > 时间 > 周次：
+    // 时间已经由块在纵轴上的位置表达了，周次可以在编辑弹窗里看，
+    // 而课程名和地点是「现在该去哪上什么」唯一的答案。
+    readonly property bool narrow: root.width < 120
 
     signal editRequested(int entryId)
     signal deleteRequested(int entryId, string title)
@@ -104,7 +110,7 @@ Rectangle {
 
         Text {
             width: parent.width
-            visible: !root.compact
+            visible: !root.compact && !root.narrow
             text: ScheduleWeeks.formatMinutes(root.startMinutes) + "–"
                   + ScheduleWeeks.formatMinutes(root.endMinutes)
             textFormat: Text.PlainText
@@ -117,9 +123,14 @@ Rectangle {
         Text {
             width: parent.width
             // 覆盖整学期且每周都上的课不显示这行，避免每块课都挂一句废话。
-            readonly property string rangeText: ScheduleWeeks.weekRangeLabel(
-                                                    root.weekStart, root.weekEnd,
-                                                    root.weekParity, root.semesterWeeks)
+            //
+            // 窄块退化成只写「单周 / 双周」：周次范围可以去编辑弹窗看，
+            // 但单双周不能省——不写的话，用户从第 1 周翻到第 2 周会发现
+            // 课变了却没有任何解释，只会以为课表出错了。两个字挤得下。
+            readonly property string rangeText: root.narrow
+                ? ScheduleWeeks.parityLabel(root.weekParity)
+                : ScheduleWeeks.weekRangeLabel(root.weekStart, root.weekEnd,
+                                               root.weekParity, root.semesterWeeks)
             visible: !root.compact && rangeText.length > 0
             text: rangeText
             textFormat: Text.PlainText

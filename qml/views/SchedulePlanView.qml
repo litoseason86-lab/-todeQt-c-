@@ -172,6 +172,9 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: false
                 Layout.alignment: Qt.AlignVCenter
+                // 必须允许压缩到很窄：副标题是一长串中文，它的 implicitWidth 会成为
+                // 整行的最小宽度，把右侧操作区顶出窗口右边缘（「添加」按钮被切掉）。
+                Layout.minimumWidth: 0
                 spacing: Theme.space4
 
                 Text {
@@ -205,6 +208,8 @@ Item {
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
                     color: Theme.inkSoft
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
                 }
             }
 
@@ -222,32 +227,51 @@ Item {
                 }
             }
 
-            OutlineButton {
-                objectName: "schedulePrevWeekButton"
-                text: "上一周"
-                enabled: root.semesterConfigured && root.weekIndex > 1
-                onClicked: root.goToWeek(root.weekIndex - 1)
-            }
+            // 周次导航收成「‹ 本周 ›」三联：三个全宽按钮（上一周/本周/下一周）
+            // 在 1024 宽的默认窗口里放不下，前后翻页用箭头表达同样清楚。
+            RowLayout {
+                Layout.fillHeight: false
+                spacing: 1
 
-            OutlineButton {
-                objectName: "scheduleThisWeekButton"
-                text: "本周"
-                enabled: root.semesterConfigured && root.currentWeekIndex >= 1
-                onClicked: root.goToWeek(root.currentWeekIndex)
-            }
+                OutlineButton {
+                    objectName: "schedulePrevWeekButton"
+                    text: "‹"
+                    implicitWidth: 36
+                    Accessible.name: "上一周"
+                    enabled: root.semesterConfigured && root.weekIndex > 1
+                    onClicked: root.goToWeek(root.weekIndex - 1)
+                }
 
-            OutlineButton {
-                objectName: "scheduleNextWeekButton"
-                text: "下一周"
-                enabled: root.semesterConfigured && root.weekIndex < root.semesterWeeks
-                onClicked: root.goToWeek(root.weekIndex + 1)
+                OutlineButton {
+                    objectName: "scheduleThisWeekButton"
+                    text: "本周"
+                    implicitWidth: 60
+                    enabled: root.semesterConfigured && root.currentWeekIndex >= 1
+                    onClicked: root.goToWeek(root.currentWeekIndex)
+                }
+
+                OutlineButton {
+                    objectName: "scheduleNextWeekButton"
+                    text: "›"
+                    implicitWidth: 36
+                    Accessible.name: "下一周"
+                    enabled: root.semesterConfigured && root.weekIndex < root.semesterWeeks
+                    onClicked: root.goToWeek(root.weekIndex + 1)
+                }
             }
 
             OutlineButton {
                 objectName: "scheduleSettingsButton"
-                text: "设置"
-                implicitWidth: 64
+                implicitWidth: 40
+                Accessible.name: "课表设置"
                 onClicked: settingsDialog.openDialog()
+
+                // 文字换成图标，省下一个中文按钮的宽度；语义靠 Accessible.name 保住。
+                contentItem: GlyphIcon {
+                    name: "general"
+                    size: 16
+                    color: Theme.ink
+                }
             }
 
             Button {
