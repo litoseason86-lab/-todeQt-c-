@@ -31,13 +31,17 @@ Item {
 
     readonly property var weekdayGlyphs: ["一", "二", "三", "四", "五", "六", "日"]
     readonly property int visibleDayCount: root.showWeekend ? 7 : 5
-    readonly property int gutterWidth: 52
+    // 刻度栏。52px 里真正装字的只有「08:00」那五个字符，其余是白吃的宽度；
+    // 七列平分之后每一像素都要还给课程块。
+    readonly property int gutterWidth: 44
     readonly property int headerHeight: 52
     // 时间轴模式下每分钟占多少像素。0.9 让一天 14 小时约 756 像素——
     // 比一屏略高，滚动一点点就能看全，同时 45 分钟的课仍有约 40 像素可读高度。
     readonly property real pixelsPerMinute: 0.9
     readonly property int periodRowHeight: 64
     readonly property int periodRowSpacing: Theme.space4
+    // 列间距。4px 时七列共吃掉 24px，压到 3px 换回 6px 给内容。
+    readonly property int columnSpacing: 3
     // 顶部留白。首个整点刻度的文字以刻度线为中心上下各占一半，
     // 不留这段空白它的上半截会被滚动区的上边缘切掉。
     readonly property int axisTopInset: 8
@@ -215,7 +219,7 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.space12
+        anchors.margins: 10
         spacing: 0
 
         // —— 列头：星期与日期，固定在顶部不随内容滚动 ——
@@ -226,7 +230,7 @@ Item {
             Layout.fillHeight: false
             Layout.preferredHeight: root.headerHeight
             Layout.maximumHeight: root.headerHeight
-            spacing: Theme.space4
+            spacing: root.columnSpacing
 
             Item {
                 Layout.preferredWidth: root.gutterWidth
@@ -359,7 +363,7 @@ Item {
                 RowLayout {
                     anchors.fill: parent
                     anchors.topMargin: root.axisTopInset
-                    spacing: Theme.space4
+                    spacing: root.columnSpacing
 
                     // 左侧刻度：时间轴模式显示整点，节次模式显示第几节与起止时间。
                     Item {
@@ -387,7 +391,10 @@ Item {
                         Repeater {
                             model: root.displayMode === "period" ? root.periods : []
 
-                            Rectangle {
+                            // 节次刻度与时间轴刻度是同一件事——「这一行是几点」——
+                            // 就该长得一样。原先每一节各画一张描边小卡，八节叠起来是
+                            // 左侧一条八格的框栏，比它标注的课程块还抢眼。
+                            Item {
                                 id: periodTick
 
                                 required property int index
@@ -397,10 +404,6 @@ Item {
                                 y: periodTick.index * (root.periodRowHeight + root.periodRowSpacing)
                                 width: root.gutterWidth - Theme.space4
                                 height: root.periodRowHeight
-                                radius: Theme.radiusSm
-                                color: Theme.glassCard
-                                border.color: Theme.glassBorder
-                                border.width: 1
 
                                 Column {
                                     anchors.centerIn: parent
@@ -410,9 +413,9 @@ Item {
                                         anchors.horizontalCenter: parent.horizontalCenter
                                         text: String(periodTick.modelData.index)
                                         textFormat: Text.PlainText
-                                        font.pixelSize: Theme.fontMd
-                                        font.bold: true
-                                        color: Theme.ink
+                                        font.pixelSize: Theme.fontSm
+                                        font.weight: Font.DemiBold
+                                        color: Theme.inkSoft
                                     }
 
                                     Text {
@@ -420,7 +423,8 @@ Item {
                                         text: ScheduleWeeks.formatMinutes(periodTick.modelData.startMinutes)
                                         textFormat: Text.PlainText
                                         font.family: Theme.fontFamilyClock
-                                        font.pixelSize: 9
+                                        // 与时间轴模式的整点刻度同字号，两种版式的刻度栏看起来才是一套。
+                                        font.pixelSize: Theme.fontXs
                                         color: Theme.inkSoft
                                     }
                                 }
@@ -451,14 +455,17 @@ Item {
                                 anchors.fill: parent
                                 radius: Theme.radiusMd
                                 color: dayColumn.weekday >= 6 ? Theme.surfaceSunken : "transparent"
-                                opacity: 0.45
+                                // 周末列多数时候是空的。原先 0.45 的底让两条空列的视觉重量
+                                // 和有课的列相当，眼睛会被拉到右边一片什么都没有的地方去。
+                                // 压到 0.22 仍能分出「这是周末」，但不再争注意力。
+                                opacity: 0.22
                             }
 
                             // 列之间的细分隔线。只画在左侧且跳过第一列，
                             // 避免和相邻列各画一条叠成双线。
                             Rectangle {
                                 visible: dayColumn.index > 0
-                                x: -Math.round(Theme.space4 / 2)
+                                x: -Math.round(root.columnSpacing / 2)
                                 y: 0
                                 width: 1
                                 height: dayColumn.height
@@ -485,11 +492,11 @@ Item {
                                     readonly property var entry: entryBlock.modelData.entry
                                     // 同一簇内重叠的课并排放，谁也不盖住谁。
                                     readonly property real laneWidth:
-                                        Math.max(1, (dayColumn.width - 4)
+                                        Math.max(1, (dayColumn.width - 2)
                                                  / Math.max(1, entryBlock.modelData.laneCount))
 
                                     visible: root.blockHeight(entryBlock.entry) > 0
-                                    x: 2 + entryBlock.modelData.lane * entryBlock.laneWidth
+                                    x: 1 + entryBlock.modelData.lane * entryBlock.laneWidth
                                     width: Math.max(1, entryBlock.laneWidth - 2)
                                     y: root.blockTop(entryBlock.entry)
                                     height: root.blockHeight(entryBlock.entry)

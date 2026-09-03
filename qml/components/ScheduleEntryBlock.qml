@@ -21,12 +21,42 @@ Rectangle {
     property string categoryColor: ""
     // 块太矮时（短课或节次行很窄）只留标题，避免文字挤成一团糊掉。
     readonly property bool compact: root.height < 46
-    // 块太窄时按优先级砍信息。七列平分一个默认窗口后每列只有约 95px，
-    // 四行内容会全部截断成「多媒体55(A1…」这种读不出东西的省略号。
+    // 块太窄时按优先级砍信息。七列平分一个 900 宽的窗口后每列只有约 110px，
+    // 四行内容会全部截断成「A1教学楼A151…」这种读不出东西的省略号。
     // 保留顺序是 课程名 > 地点 > 时间 > 周次：
     // 时间已经由块在纵轴上的位置表达了，周次可以在编辑弹窗里看，
     // 而课程名和地点是「现在该去哪上什么」唯一的答案。
-    readonly property bool narrow: root.width < 120
+    readonly property bool narrow: root.width < 150
+
+    // —— 块内纵向空间预算 ——
+    //
+    // 让 Column 自己溢出再被 clip 裁掉是不行的：地点换到第二行之后，
+    // 90px 高的块会把最后那行从中间切开，露出半个字——比不画还糟，
+    // 因为它看起来像渲染坏了。
+    //
+    // 按「行高 × 行数」估算过一版，结果算漏了 Column 的行间距、行高系数也偏小，
+    // 时间那行照样被切。所以改成读排版后的真实坐标：每一行只在
+    // 「它的底边还落在预算之内」时才画。Column 里靠前的行的 y 不受靠后的行影响，
+    // 因此这样引用不会形成绑定环。
+    readonly property int contentBudget: root.height - content.anchors.topMargin - 4
+    readonly property int metaLineHeight: Math.round(Theme.fontXs * 1.5)
+
+    // 附注行：时间 + 生效周次范围。单双周不在这里——它移到了右上角的角标，
+    // 因为窄块里第三行经常放不下，而单双周是唯一「不写出来就会让人以为课表出错」的信息
+    // （用户从第 1 周翻到第 2 周会发现课变了却没有任何解释）。
+    // 角标不占行高，于是它在任何尺寸下都能保住。
+    readonly property string metaText: {
+        if (root.narrow) {
+            return ""
+        }
+        var time = ScheduleWeeks.formatMinutes(root.startMinutes) + "–"
+                 + ScheduleWeeks.formatMinutes(root.endMinutes)
+        // 传 0 只取周次范围，单双周由角标表达，避免同一件事写两遍。
+        var range = ScheduleWeeks.weekRangeLabel(root.weekStart, root.weekEnd,
+                                                 0, root.semesterWeeks)
+        return range.length > 0 ? (time + " · " + range) : time
+    }
+    readonly property string parityBadge: ScheduleWeeks.parityLabel(root.weekParity)
 
     signal editRequested(int entryId)
     signal deleteRequested(int entryId, string title)
@@ -60,7 +90,9 @@ Rectangle {
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.margins: 1
-        width: 3
+        // 3px 的脊在一片米色里几乎看不出是根「脊」。加到 4px，它才真正起到
+        // 「一眼分出这是几门不同的课」的作用，也是块与纸面之间的分界。
+        width: 4
         radius: width / 2
         color: root.categoryColor.length > 0 ? root.categoryColor : Theme.accent
     }
@@ -79,19 +111,25 @@ Rectangle {
         id: content
 
         anchors.left: colorSpine.right
-        anchors.leftMargin: Theme.space8
+        anchors.leftMargin: 6
         anchors.right: parent.right
-        anchors.rightMargin: Theme.space4
+        anchors.rightMargin: 5
         anchors.top: parent.top
-        anchors.topMargin: root.compact ? 3 : Theme.space4
-        spacing: 1
+        anchors.topMargin: root.compact ? 3 : 5
+        spacing: 2
 
         Text {
+            id: titleText
+
             width: parent.width
             text: root.title
             textFormat: Text.PlainText
-            font.pixelSize: Theme.fontSm
-            font.weight: Font.Medium
+            // 课程名是这一格里唯一需要一眼认出的东西，靠字重与字色而不是字号称重：
+            // 窄列里 13px 会把「Java EE框架技术」断成「…技」+「术」，
+            // 一个孤字挂在第二行比小一号难读得多。宽列才升到 13px。
+            // 块内因此只有 12/11 或 13/11 两个字号，层级由 DemiBold + inkStrong 承担。
+            font.pixelSize: root.narrow ? Theme.fontSm : Theme.fontMd
+            font.weight: Font.DemiBold
             color: Theme.inkStrong
             elide: Text.ElideRight
             maximumLineCount: root.compact ? 1 : 2
@@ -99,44 +137,66 @@ Rectangle {
         }
 
         Text {
+            id: locationText
+
             width: parent.width
             visible: !root.compact && root.location.length > 0
             text: root.location
             textFormat: Text.PlainText
             font.pixelSize: Theme.fontXs
-            color: Theme.inkSoft
+            // 「上课在哪」和「上什么课」同等重要，用正文色而不是次要色；
+            // 次要色留给时间与周次这类可以扫过去的信息。
+            color: Theme.ink
+            // 换行而不是省略。一行装不下「A1教学楼A1514 程蓓蓓」，省略号一截，
+            // 这一格就再也回答不了「我该去哪」——而块内纵向本来就有富余空间。
+            wrapMode: Text.Wrap
+            // 第二行只在放得下整行时才要；locationText.y 只取决于标题，不取决于本行行数。
+            maximumLineCount: locationText.y + root.metaLineHeight * 2 <= root.contentBudget ? 2 : 1
             elide: Text.ElideRight
         }
 
         Text {
+            id: metaLine
+
             width: parent.width
-            visible: !root.compact && !root.narrow
-            text: ScheduleWeeks.formatMinutes(root.startMinutes) + "–"
-                  + ScheduleWeeks.formatMinutes(root.endMinutes)
+            // 底边超出预算就整行不画。半行字看起来像渲染坏了，比没有更糟。
+            visible: !root.compact && root.metaText.length > 0
+                     && metaLine.y + metaLine.implicitHeight <= root.contentBudget
+            text: root.metaText
             textFormat: Text.PlainText
             font.family: Theme.fontFamilyClock
             font.pixelSize: Theme.fontXs
             color: Theme.inkSoft
             elide: Text.ElideRight
         }
+    }
+
+    // 单双周角标。放在流式布局之外，因此不占任何行高，也不挤占任何一行的宽度——
+    // 这是它能在最窄的块里也活下来的原因。
+    //
+    // 贴右下角而不是右上角：右上角压着课程名的第一行，为它让出宽度会把
+    // 「Java EE框架技术」截成「Java EE…」，而课程名是这一格最不能丢的东西。
+    // 右下角对齐的是地点的最后一行，那一行通常只剩教师名这样的短尾巴。
+    Rectangle {
+        id: parityChip
+
+        anchors.bottom: parent.bottom
+        anchors.right: parent.right
+        anchors.margins: 3
+        width: parityLabel.implicitWidth + 8
+        height: parityLabel.implicitHeight + 2
+        radius: height / 2
+        color: Theme.accentFill
+        visible: root.parityBadge.length > 0 && !hoverHandler.hovered && !deleteHover.hovered
 
         Text {
-            width: parent.width
-            // 覆盖整学期且每周都上的课不显示这行，避免每块课都挂一句废话。
-            //
-            // 窄块退化成只写「单周 / 双周」：周次范围可以去编辑弹窗看，
-            // 但单双周不能省——不写的话，用户从第 1 周翻到第 2 周会发现
-            // 课变了却没有任何解释，只会以为课表出错了。两个字挤得下。
-            readonly property string rangeText: root.narrow
-                ? ScheduleWeeks.parityLabel(root.weekParity)
-                : ScheduleWeeks.weekRangeLabel(root.weekStart, root.weekEnd,
-                                               root.weekParity, root.semesterWeeks)
-            visible: !root.compact && rangeText.length > 0
-            text: rangeText
+            id: parityLabel
+
+            anchors.centerIn: parent
+            text: root.parityBadge
             textFormat: Text.PlainText
-            font.pixelSize: Theme.fontXs
-            color: Theme.accentInk
-            elide: Text.ElideRight
+            font.pixelSize: 10
+            color: Theme.accentFillInk
         }
     }
 

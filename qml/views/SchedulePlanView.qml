@@ -47,6 +47,9 @@ Item {
                                         ? Boolean(root.settingsRef.scheduleShowWeekend)
                                         : true
     readonly property bool semesterConfigured: root.semesterStartDate.length > 0
+    // 页头所有控件共用这一个高度。分段控件的 implicitHeight 就是 34，
+    // 其余控件原本是 40，两种高度并排是页头看起来乱的一半原因。
+    readonly property int controlHeight: 34
     // 今天落在第几周。学期锚点没设时为 0，表示算不出来。
     readonly property int currentWeekIndex: ScheduleWeeks.weekIndexForDate(root.semesterStartDate,
                                                                           root.logicalToday)
@@ -175,8 +178,10 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.space24
-        spacing: Theme.space16
+        // 页边距从 24 压到 16：七列平分时，边距每省 8px 就能还给每列 2px 多，
+        // 而这一页的瓶颈正是列宽。
+        anchors.margins: Theme.space16
+        spacing: Theme.space12
 
         // —— 页头：标题、周次概览与操作区 ——
         // fillHeight 必须显式关掉：布局类型嵌在另一个布局里时该属性默认为 true，
@@ -184,7 +189,7 @@ Item {
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: false
-            spacing: Theme.space12
+            spacing: Theme.space8
 
             ColumnLayout {
                 Layout.fillWidth: true
@@ -238,7 +243,7 @@ Item {
                 objectName: "scheduleModeSwitch"
                 segments: ["时间轴", "节次"]
                 currentIndex: root.displayMode === "period" ? 1 : 0
-                minSegmentWidth: 72
+                minSegmentWidth: 64
                 reduceMotion: Theme.reduceMotion
                 solidFallback: !Theme.glassBlurAllowed
                 onActivated: function (index) {
@@ -248,53 +253,91 @@ Item {
                 }
             }
 
-            // 周次导航收成「‹ 本周 ›」三联：三个全宽按钮（上一周/本周/下一周）
-            // 在 1024 宽的默认窗口里放不下，前后翻页用箭头表达同样清楚。
-            RowLayout {
+            // 周次导航是一个整体，就该长成一个整体。
+            // 原先是三颗各自带描边、间距 1px 的独立按钮，读起来像一个裂开的分段控件，
+            // 又刚好挨着真正的分段控件——两个相似却不同的东西并排，正是「乱」的来源。
+            // 现在收进一条与分段控件同款的凹槽轨道里，内部只用发丝线分隔：
+            // 页头于是只剩「凹槽轨道」和「实心按钮」两种形状语言。
+            Rectangle {
+                id: weekNav
+
                 Layout.fillHeight: false
-                spacing: 1
+                Layout.preferredHeight: root.controlHeight
+                Layout.preferredWidth: 140
+                radius: height / 2
+                color: Theme.glassBlurAllowed ? Theme.glassTrack : Theme.glassSolidTrack
 
-                OutlineButton {
-                    objectName: "schedulePrevWeekButton"
-                    text: "‹"
-                    implicitWidth: 36
-                    Accessible.name: "上一周"
-                    enabled: root.semesterConfigured && root.weekIndex > 1
-                    onClicked: root.goToWeek(root.weekIndex - 1)
-                }
+                Row {
+                    anchors.fill: parent
+                    anchors.margins: 1
 
-                OutlineButton {
-                    objectName: "scheduleThisWeekButton"
-                    text: "本周"
-                    implicitWidth: 60
-                    // 只判 currentWeekIndex >= 1 是不够的：学期只有 16 周而今天已经是第 20 周时，
-                    // 按钮仍然可点，但 goToWeek 会把 20 夹回 16，页面纹丝不动，
-                    // 也没有任何文字解释为什么。点了没反应的控件比灰掉的控件更让人困惑。
-                    enabled: root.semesterConfigured && root.currentWeekInSemester
-                    onClicked: root.goToWeek(root.currentWeekIndex)
-                }
+                    NavSegment {
+                        objectName: "schedulePrevWeekButton"
+                        width: 38
+                        height: parent.height
+                        glyph: "‹"
+                        Accessible.name: "上一周"
+                        enabled: root.semesterConfigured && root.weekIndex > 1
+                        onClicked: root.goToWeek(root.weekIndex - 1)
+                    }
 
-                OutlineButton {
-                    objectName: "scheduleNextWeekButton"
-                    text: "›"
-                    implicitWidth: 36
-                    Accessible.name: "下一周"
-                    enabled: root.semesterConfigured && root.weekIndex < root.semesterWeeks
-                    onClicked: root.goToWeek(root.weekIndex + 1)
+                    NavDivider { height: parent.height }
+
+                    NavSegment {
+                        objectName: "scheduleThisWeekButton"
+                        width: 60
+                        height: parent.height
+                        glyph: "本周"
+                        // 只判 currentWeekIndex >= 1 是不够的：学期只有 16 周而今天已经是第 20 周时，
+                        // 按钮仍然可点，但 goToWeek 会把 20 夹回 16，页面纹丝不动，
+                        // 也没有任何文字解释为什么。点了没反应的控件比灰掉的控件更让人困惑。
+                        enabled: root.semesterConfigured && root.currentWeekInSemester
+                        onClicked: root.goToWeek(root.currentWeekIndex)
+                    }
+
+                    NavDivider { height: parent.height }
+
+                    NavSegment {
+                        objectName: "scheduleNextWeekButton"
+                        width: 38
+                        height: parent.height
+                        glyph: "›"
+                        Accessible.name: "下一周"
+                        enabled: root.semesterConfigured && root.weekIndex < root.semesterWeeks
+                        onClicked: root.goToWeek(root.weekIndex + 1)
+                    }
                 }
             }
 
-            OutlineButton {
+            // 设置是这一行里最次级的动作，不该也顶着一个和主按钮同等重量的方框。
+            // 常态无底无框，只在悬停/聚焦时浮出一层底——重量由此排到主按钮之下。
+            Button {
+                id: settingsButton
+
                 objectName: "scheduleSettingsButton"
-                implicitWidth: 40
+                Layout.fillHeight: false
+                Layout.preferredWidth: root.controlHeight
+                Layout.preferredHeight: root.controlHeight
                 Accessible.name: "课表设置"
                 onClicked: settingsDialog.openDialog()
 
-                // 文字换成图标，省下一个中文按钮的宽度；语义靠 Accessible.name 保住。
+                background: Rectangle {
+                    radius: width / 2
+                    color: settingsButton.pressed || settingsButton.hovered
+                           ? (Theme.glassBlurAllowed ? Theme.glassHover : Theme.glassSolidHover)
+                           : "transparent"
+                    border.color: settingsButton.activeFocus ? Theme.focusRing : "transparent"
+                    border.width: settingsButton.activeFocus ? 2 : 0
+
+                    Behavior on color {
+                        ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad }
+                    }
+                }
+
                 contentItem: GlyphIcon {
                     name: "general"
                     size: 16
-                    color: Theme.ink
+                    color: settingsButton.hovered ? Theme.inkStrong : Theme.inkSoft
                 }
             }
 
@@ -304,13 +347,24 @@ Item {
                 objectName: "scheduleAddButton"
                 text: "添加"
                 enabled: root.semesterConfigured
-                implicitWidth: 72
-                implicitHeight: 40
+                Layout.fillHeight: false
+                Layout.preferredWidth: 68
+                Layout.preferredHeight: root.controlHeight
 
+                // 实心焦糖是这一页塑料感的主要来源，也和全仓的做法相左：
+                // Theme.qml 明确规定大面积色块走 Apple 的 tinted button——淡淡一层暖罩
+                // 配深焦糖文字，实心色只留给细线条（边框、进度环、滚动条）。
+                // 十余个弹窗的提交按钮与倒计时、目标、今日三页的主按钮都是暖罩，
+                // 唯独这里是实心，并排看就是一块塑料贴片。
                 background: Rectangle {
-                    color: !addButton.enabled ? Theme.border
-                           : (addButton.pressed || addButton.hovered ? Theme.accentStrong : Theme.accent)
-                    radius: Theme.radiusMd
+                    color: !addButton.enabled ? Theme.surfaceSunken
+                           : (addButton.pressed || addButton.hovered
+                              ? Theme.accentFillStrong : Theme.accentFill)
+                    border.color: !addButton.enabled ? Theme.border
+                                  : (addButton.pressed || addButton.hovered
+                                     ? Theme.accentStrong : Theme.accent)
+                    border.width: 1
+                    radius: height / 2
 
                     Behavior on color {
                         ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad }
@@ -320,8 +374,7 @@ Item {
                 contentItem: Text {
                     text: addButton.text
                     textFormat: Text.PlainText
-                    // 底是实心 accent：近白字对比度只有 2.20:1，必须用专用的深色前景。
-                    color: addButton.enabled ? Theme.accentForeground : Theme.inkMuted
+                    color: addButton.enabled ? Theme.accentFillInk : Theme.inkMuted
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter
@@ -663,7 +716,49 @@ Item {
         }
     }
 
-    // 页头与确认弹窗反复出现的次级描边按钮，抽成局部组件。
+    // 周次导航轨道里的一段。无底无框——分组感由外层轨道表达，
+    // 段自己再描边就又回到「三颗独立按钮」那个样子了。
+    component NavSegment: AbstractButton {
+        id: navSegment
+
+        property string glyph: ""
+
+        Accessible.role: Accessible.Button
+
+        background: Rectangle {
+            radius: height / 2
+            color: navSegment.enabled && (navSegment.pressed || navSegment.hovered)
+                   ? (Theme.glassBlurAllowed ? Theme.glassThumb : Theme.glassSolidThumb)
+                   : "transparent"
+            border.color: navSegment.activeFocus ? Theme.focusRing : "transparent"
+            border.width: navSegment.activeFocus ? 2 : 0
+
+            Behavior on color {
+                ColorAnimation { duration: Theme.reduceMotion ? 0 : 160; easing.type: Easing.OutQuad }
+            }
+        }
+
+        contentItem: Text {
+            text: navSegment.glyph
+            textFormat: Text.PlainText
+            // 轨道是压暗的凹槽，次要色在上面够不到正文 AA，常态就用 ink。
+            color: navSegment.enabled ? (navSegment.hovered ? Theme.inkStrong : Theme.ink)
+                                      : Theme.inkMuted
+            font.pixelSize: Theme.fontMd
+            font.weight: Font.Medium
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    // 段与段之间的发丝线。只用一条极淡的竖线交代分隔，不占视觉重量。
+    component NavDivider: Rectangle {
+        width: 1
+        color: Theme.borderSubtle
+        opacity: 0.7
+    }
+
+    // 确认弹窗里反复出现的次级描边按钮，抽成局部组件。
     component OutlineButton: Button {
         id: outlineButton
 
