@@ -66,7 +66,10 @@ public:
                                  int weekStart, int weekEnd, int weekParity);
     Q_INVOKABLE bool deleteEntry(int id);
 
-    // 全部课表项，按星期几和开始时间排序。课表设置页与导出用。
+    // 全部课表项（不按周次筛选），按星期几和开始时间排序。
+    // 注意：目前界面上没有任何调用方——原注释写的「课表设置页与导出用」
+    // 是两个并不存在的去处，会让人白找。它现在只被测试当作读取全表的断言助手，
+    // 保留是因为「导出课表」是这一页最自然的下一步。
     Q_INVOKABLE QVariantList getEntries() const;
     // 第 weekIndex 周实际生效的课表项。筛选判据是三段合取：
     // 周次落在 [week_start, week_end] 内、单双周奇偶命中、以及该项本身的 weekday。

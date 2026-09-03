@@ -61,6 +61,8 @@ private slots:
 
     void migrationCreatesTablesAndSeedsDefaultPeriods();
     void emptyPeriodTableIsReseededOnNextOpen();
+    void upgradingAPopulatedPreV13DatabaseKeepsDataAndAddsSchedule();
+    void missingScheduleTablesAreRebuiltEvenWhenVersionSaysV13();
     void setPeriodsRejectsOverlappingRows();
     void setPeriodsRejectsTooManyRows();
     void semesterWeekBoundMatchesServiceLimit();
@@ -109,6 +111,11 @@ void ScheduleServiceTests::cleanupTestCase()
 
 void ScheduleServiceTests::init()
 {
+    // 有几条用例会切到自己的临时库上验证迁移。把「切回共享库」放在这里，
+    // 而不是那些用例的末尾：断言一失败就会跳过末尾的还原，后面每一条都会在
+    // 错误的库上跑——一条真实失败因此扩散成十几条无关的红，
+    // 排查会被引到完全不相干的地方去（实测过一次，14 条同时转红）。
+    QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
     clearSchedule();
 }
 
@@ -154,8 +161,7 @@ void ScheduleServiceTests::migrationCreatesTablesAndSeedsDefaultPeriods()
         previousEnd = end;
     }
 
-    // 换回本类共享的库，后续用例仍在原来那个库上跑。
-    QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
+    // 不在这里切回共享库——那由 init() 统一负责，见那里的注释。
 }
 
 void ScheduleServiceTests::emptyPeriodTableIsReseededOnNextOpen()
@@ -170,6 +176,96 @@ void ScheduleServiceTests::emptyPeriodTableIsReseededOnNextOpen()
     // user_version 已经是最新，迁移分支不会再进；补种必须发生在版本判断之外。
     QVERIFY(DatabaseManager::instance()->createTables());
     QVERIFY(!ScheduleService::instance()->getPeriods().isEmpty());
+}
+
+void ScheduleServiceTests::upgradingAPopulatedPreV13DatabaseKeepsDataAndAddsSchedule()
+{
+    // 真实用户走的是这条路，而不是上面那条「全新库跑完整迁移链」：
+    // 库里已经有任务和科目，schema 停在 v12，课表两张表根本不存在。
+    // 恢复一份 v13 之前做的备份也会落到同一状态——备份是整库快照，
+    // 恢复后重开同一路径，由 createTables() 把迁移链补到头。
+    //
+    // 这条路径此前没有任何测试。它一旦坏掉，表现是老用户升级后
+    // 打开待办页看到一张空网格，而不是任何报错。
+    QTemporaryDir upgradeDir;
+    QVERIFY(upgradeDir.isValid());
+    const QString upgradePath = upgradeDir.filePath(QStringLiteral("upgrade.sqlite"));
+    QVERIFY(DatabaseManager::instance()->initialize(upgradePath));
+
+    // 造一点真实数据，用来验证迁移没有碰旧表。
+    {
+        QSqlQuery seed(DatabaseManager::instance()->database());
+        QVERIFY(seed.exec(QStringLiteral(
+            "INSERT INTO categories (name, color) VALUES ('课表升级测试科目', '#d4a574')")));
+        QVERIFY(seed.exec(QStringLiteral(
+            "INSERT INTO tasks (title, date) VALUES ('复习编译原理', '2026-09-03')")));
+    }
+
+    // 退回 v13 之前的状态：删掉课表两张表，版本号改回 12。
+    {
+        QSqlQuery downgrade(DatabaseManager::instance()->database());
+        QVERIFY(downgrade.exec(QStringLiteral("DROP TABLE IF EXISTS schedule_entries")));
+        QVERIFY(downgrade.exec(QStringLiteral("DROP TABLE IF EXISTS schedule_periods")));
+        QVERIFY(downgrade.exec(QStringLiteral("PRAGMA user_version = 12")));
+    }
+
+    // 重开同一路径即触发升级。
+    QVERIFY(DatabaseManager::instance()->initialize(upgradePath));
+
+    QSqlQuery check(DatabaseManager::instance()->database());
+    QVERIFY(check.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+    check.finish();
+
+    // 课表两张表都要补出来，并且节次不能是空的——空节次表会让「按节次」
+    // 版式打开就是一张没有任何行的网格，看起来和功能损坏没有区别。
+    QVERIFY(!ScheduleService::instance()->getPeriods().isEmpty());
+    QVERIFY(addEntry({}));
+    QCOMPARE(ScheduleService::instance()->getEntries().size(), 1);
+
+    // 旧数据必须原样还在：v13 只新增两张表，不该碰任何既有表。
+    QVERIFY(check.exec(QStringLiteral("SELECT COUNT(*) FROM tasks")));
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toInt(), 1);
+    check.finish();
+    QVERIFY(check.exec(QStringLiteral("SELECT name FROM categories WHERE name = '课表升级测试科目'")));
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toString(), QStringLiteral("课表升级测试科目"));
+    check.finish();
+
+    // 不在这里切回共享库——那由 init() 统一负责，见那里的注释。
+}
+
+void ScheduleServiceTests::missingScheduleTablesAreRebuiltEvenWhenVersionSaysV13()
+{
+    // 「版本号说已经是 v13，但表其实不在」是真实存在的坏状态：中断的恢复、
+    // 外部工具编辑过库、迁移写了版本号却在建表前崩掉，都会留下它。
+    // 只按版本号决定要不要迁移的话，这种库永远补不回那两张表——
+    // 而表现不是报错，是待办页一片空白。
+    //
+    // 这条守卫此前没有任何用例覆盖：把它删掉，其余 22 条全绿。
+    QTemporaryDir halfMigratedDir;
+    QVERIFY(halfMigratedDir.isValid());
+    const QString path = halfMigratedDir.filePath(QStringLiteral("half.sqlite"));
+    QVERIFY(DatabaseManager::instance()->initialize(path));
+
+    {
+        QSqlQuery breakIt(DatabaseManager::instance()->database());
+        QVERIFY(breakIt.exec(QStringLiteral("DROP TABLE IF EXISTS schedule_entries")));
+        QVERIFY(breakIt.exec(QStringLiteral("DROP TABLE IF EXISTS schedule_periods")));
+        // 关键差别：版本号**不**回退，仍然停在当前版本。
+        QVERIFY(breakIt.exec(QStringLiteral("PRAGMA user_version = %1")
+                                 .arg(DatabaseManager::kCurrentSchemaVersion)));
+    }
+
+    QVERIFY2(DatabaseManager::instance()->initialize(path),
+             "版本号已是 v13 但表缺失时，重开必须把两张表补回来");
+
+    // 两张表都要回来，而且节次不能是空的。
+    QVERIFY(!ScheduleService::instance()->getPeriods().isEmpty());
+    QVERIFY(addEntry({}));
+    QCOMPARE(ScheduleService::instance()->getEntries().size(), 1);
 }
 
 void ScheduleServiceTests::setPeriodsRejectsOverlappingRows()
