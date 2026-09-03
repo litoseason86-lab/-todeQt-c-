@@ -387,6 +387,15 @@ bool DatabaseManager::createTables()
         if (!migrateToVersion13()) {
             return false;
         }
+        version = 13;
+    }
+
+    // 节次表存在但一行都没有，同样是「按节次」版式画不出任何行的那种坏状态
+    // （中断的恢复、外部编辑都会留下它）。上面的守卫只看表在不在，治不了这种；
+    // 这里无条件补种一次。insertDefaultSchedulePeriods 自己按「表为空」加了守卫，
+    // 所以用户改过或删过节次之后再启动，不会被默认值覆盖回去。
+    if (!insertDefaultSchedulePeriods()) {
+        return false;
     }
 
     const QStringList indexes = {

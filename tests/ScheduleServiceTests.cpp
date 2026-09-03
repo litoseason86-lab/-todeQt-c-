@@ -6,6 +6,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include "../src/services/AppSettings.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/ScheduleService.h"
 
@@ -59,6 +60,11 @@ private slots:
     void init();
 
     void migrationCreatesTablesAndSeedsDefaultPeriods();
+    void emptyPeriodTableIsReseededOnNextOpen();
+    void setPeriodsRejectsOverlappingRows();
+    void setPeriodsRejectsTooManyRows();
+    void semesterWeekBoundMatchesServiceLimit();
+    void invalidSemesterStartDateDoesNotWipeExistingAnchor();
     void addEntryTrimsTextAndPersistsAllFields();
     void addEntryRejectsInvalidInput();
     void updateEntryRewritesFieldsAndRejectsMissingRow();
@@ -78,6 +84,7 @@ private:
 
     QTemporaryDir* m_tempDir = nullptr;
     QString m_databasePath;
+    QString m_settingsPath;
 };
 
 void ScheduleServiceTests::initTestCase()
@@ -88,6 +95,8 @@ void ScheduleServiceTests::initTestCase()
     QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTest"));
     QCoreApplication::setApplicationName(QStringLiteral("ScheduleServiceTests"));
     m_databasePath = m_tempDir->filePath(QStringLiteral("schedule-test.sqlite"));
+    // 设置用独立 ini，避免污染开发机上的真实偏好。
+    m_settingsPath = m_tempDir->filePath(QStringLiteral("schedule-test.ini"));
     QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
 }
 
@@ -114,10 +123,19 @@ void ScheduleServiceTests::clearSchedule()
 
 void ScheduleServiceTests::migrationCreatesTablesAndSeedsDefaultPeriods()
 {
+    // 必须在一个全新的库上断言，不能用共享库：本类里有用例会整表改写节次，
+    // 依赖「本用例恰好声明在它们前面」是假的隔离——往上插一个改节次的用例，
+    // 或者换个顺序执行，这条就会因为与迁移无关的原因转红。
+    QTemporaryDir freshDir;
+    QVERIFY(freshDir.isValid());
+    const QString freshPath = freshDir.filePath(QStringLiteral("fresh.sqlite"));
+    QVERIFY(DatabaseManager::instance()->initialize(freshPath));
+
     QSqlQuery version(DatabaseManager::instance()->database());
     QVERIFY(version.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(version.next());
     QCOMPARE(version.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+    version.finish();
 
     // 迁移必须同时建好两张表并种入默认节次：只建空表会让「按节次」模式
     // 打开就是一张没有任何行的网格。
@@ -135,6 +153,98 @@ void ScheduleServiceTests::migrationCreatesTablesAndSeedsDefaultPeriods()
         QVERIFY(start > previousEnd);
         previousEnd = end;
     }
+
+    // 换回本类共享的库，后续用例仍在原来那个库上跑。
+    QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
+}
+
+void ScheduleServiceTests::emptyPeriodTableIsReseededOnNextOpen()
+{
+    // 「表在但一行都没有」是中断的恢复或外部编辑会留下的状态。
+    // 只判断表存不存在的守卫治不了它，而它的表现正是守卫注释里写的那种
+    // 「按节次模式打开是一张空网格」。
+    QSqlQuery wipe(DatabaseManager::instance()->database());
+    QVERIFY(wipe.exec(QStringLiteral("DELETE FROM schedule_periods")));
+    QVERIFY(ScheduleService::instance()->getPeriods().isEmpty());
+
+    // user_version 已经是最新，迁移分支不会再进；补种必须发生在版本判断之外。
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QVERIFY(!ScheduleService::instance()->getPeriods().isEmpty());
+}
+
+void ScheduleServiceTests::setPeriodsRejectsOverlappingRows()
+{
+    ScheduleService* service = ScheduleService::instance();
+    QSignalSpy failureSpy(service, &ScheduleService::operationFailed);
+
+    const auto makePeriod = [](int start, int end) {
+        QVariantMap period;
+        period.insert(QStringLiteral("startMinutes"), start);
+        period.insert(QStringLiteral("endMinutes"), end);
+        return QVariant(period);
+    };
+
+    // 两节相交在现实里不存在，而网格按「与哪几节相交」决定块跨几行：
+    // 一条 30 分钟的课会同时命中两节，被画成两行高压到下一节上。
+    QVariantList overlapping;
+    overlapping.append(makePeriod(8 * 60, 9 * 60));
+    overlapping.append(makePeriod(8 * 60 + 30, 9 * 60 + 30));
+    QVERIFY(!service->setPeriods(overlapping));
+    QCOMPARE(failureSpy.count(), 1);
+
+    // 紧邻不算重叠：09:00 结束接 09:00 开始是连堂。
+    QVariantList touching;
+    touching.append(makePeriod(8 * 60, 9 * 60));
+    touching.append(makePeriod(9 * 60, 10 * 60));
+    QVERIFY(service->setPeriods(touching));
+}
+
+void ScheduleServiceTests::setPeriodsRejectsTooManyRows()
+{
+    ScheduleService* service = ScheduleService::instance();
+    QSignalSpy failureSpy(service, &ScheduleService::operationFailed);
+
+    // 网格高度是「节次数 × 行高」，没有上限时一次粘贴几百行会撑出
+    // 一张滚不到底的空网格。
+    QVariantList tooMany;
+    for (int i = 0; i < ScheduleService::kMaxPeriodCount + 1; ++i) {
+        QVariantMap period;
+        period.insert(QStringLiteral("startMinutes"), i * 20);
+        period.insert(QStringLiteral("endMinutes"), i * 20 + 10);
+        tooMany.append(period);
+    }
+    QVERIFY(!service->setPeriods(tooMany));
+    QCOMPARE(failureSpy.count(), 1);
+}
+
+void ScheduleServiceTests::semesterWeekBoundMatchesServiceLimit()
+{
+    // AppSettings 把学期总周数夹在 1..60，ScheduleService 允许课表项填到
+    // kMaxWeekIndex 周。两者必须相等，否则会出现「排了课却翻不到那一周」。
+    // AppSettings 不该反向依赖 ScheduleService，所以由这条用例把它们钉死。
+    AppSettings settings(m_settingsPath);
+    settings.setSemesterWeeks(ScheduleService::kMaxWeekIndex);
+    QCOMPARE(settings.semesterWeeks(), ScheduleService::kMaxWeekIndex);
+
+    // 超过一格就该被拒（夹回默认值），说明上界正好卡在 kMaxWeekIndex。
+    settings.setSemesterWeeks(ScheduleService::kMaxWeekIndex + 1);
+    QVERIFY(settings.semesterWeeks() != ScheduleService::kMaxWeekIndex + 1);
+}
+
+void ScheduleServiceTests::invalidSemesterStartDateDoesNotWipeExistingAnchor()
+{
+    AppSettings settings(m_settingsPath);
+    settings.setSemesterStartDate(QStringLiteral("2026-08-31"));
+    QCOMPARE(settings.semesterStartDate(), QStringLiteral("2026-08-31"));
+
+    // 手滑打出的非法日期不能把已设好的锚点抹掉——那会让整个课表页
+    // 退回首次使用的引导态，用户以为设置丢了。
+    settings.setSemesterStartDate(QStringLiteral("2026-13-45"));
+    QCOMPARE(settings.semesterStartDate(), QStringLiteral("2026-08-31"));
+
+    // 显式传空仍然是合法的「清除」。
+    settings.setSemesterStartDate(QString());
+    QVERIFY(settings.semesterStartDate().isEmpty());
 }
 
 void ScheduleServiceTests::addEntryTrimsTextAndPersistsAllFields()

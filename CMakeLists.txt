@@ -431,6 +431,10 @@ add_executable(ScheduleServiceTests
     src/services/DatabaseManager.cpp
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
+    # AppSettings 只为一条用例引入：它把「学期总周数上限」与
+    # ScheduleService::kMaxWeekIndex 钉死在一起，两处常量不能各改各的。
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
 )
 
 target_link_libraries(ScheduleServiceTests PRIVATE

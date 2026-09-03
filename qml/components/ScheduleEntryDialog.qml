@@ -41,6 +41,9 @@ Popup {
     property var periods: []
     property int editingEntryId: -1
     property string errorText: ""
+    // 出错的是哪个字段。只用 errorText.length > 0 驱动红框，会把「结束时间早于
+    // 开始时间」的红框画到课程名上——真正非法的那个框反而毫无标记。
+    property string errorField: ""
     property string conflictText: ""
     property var categoryOptions: [{ id: -1, name: "不设置科目", color: "" }]
 
@@ -66,6 +69,15 @@ Popup {
     readonly property var weekdayNames: ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
     readonly property var parityNames: ["每周", "仅单周", "仅双周"]
     readonly property bool editing: root.editingEntryId > 0
+    // 上限从服务的 CONSTANT 属性读，不在每个输入框里各写一遍 60。
+    // 写死的后果是：改了 ScheduleService::kMaxWeekIndex 之后，
+    // 用户能存进第 80 周的课，却在弹窗里填不到那一周，而且没有任何编译或测试报错。
+    readonly property int maxWeekIndex: root.scheduleServiceRef
+                                        ? Number(root.scheduleServiceRef.maxWeekIndex) || 60 : 60
+    readonly property int maxTitleLength: root.scheduleServiceRef
+                                          ? Number(root.scheduleServiceRef.maxTitleLength) || 60 : 60
+    readonly property int maxLocationLength: root.scheduleServiceRef
+                                             ? Number(root.scheduleServiceRef.maxLocationLength) || 60 : 60
 
     enter: Transition {
         ParallelAnimation {
@@ -137,6 +149,7 @@ Popup {
         parityCombo.currentIndex = 0
         categoryCombo.currentIndex = 0
         root.errorText = ""
+        root.errorField = ""
         root.conflictText = ""
         root.open()
     }
@@ -154,48 +167,54 @@ Popup {
         parityCombo.currentIndex = Math.max(0, Math.min(2, Number(entry.weekParity)))
         categoryCombo.currentIndex = root.categoryIndexForId(entry.categoryId)
         root.errorText = ""
+        root.errorField = ""
         root.conflictText = ""
         root.open()
     }
 
-    // 收集并校验表单。返回 null 表示校验未通过，errorText 已被写好。
-    function collectInput() {
+    // 收集并校验表单。返回 null 表示校验未通过。
+    //
+    // silent = true 时只做校验、不写错误态也不抢焦点：冲突提示需要一份合法输入，
+    // 但它是在用户还在填的过程中被调用的。带着副作用跑一遍的后果是——
+    // 用户从「按节次填充」选一节，焦点会被弹回还空着的课程名输入框。
+    function collectInput(silent) {
+        function fail(message, field) {
+            if (silent === true) {
+                return null
+            }
+            root.errorText = message
+            root.errorField = field
+            var target = root.fieldByName(field)
+            if (target) {
+                target.forceActiveFocus()
+            }
+            return null
+        }
+
         var title = titleField.text.trim()
         if (title.length === 0) {
-            root.errorText = "课程名称不能为空"
-            titleField.forceActiveFocus()
-            return null
+            return fail("课程名称不能为空", "title")
         }
 
         var startMinutes = ScheduleWeeks.parseMinutes(startField.text)
         if (startMinutes < 0) {
-            root.errorText = "开始时间格式应为 HH:mm"
-            startField.forceActiveFocus()
-            return null
+            return fail("开始时间格式应为 HH:mm", "start")
         }
         var endMinutes = ScheduleWeeks.parseMinutes(endField.text)
         if (endMinutes < 0) {
-            root.errorText = "结束时间格式应为 HH:mm"
-            endField.forceActiveFocus()
-            return null
+            return fail("结束时间格式应为 HH:mm", "end")
         }
         if (endMinutes <= startMinutes) {
-            root.errorText = "结束时间必须晚于开始时间"
-            endField.forceActiveFocus()
-            return null
+            return fail("结束时间必须晚于开始时间", "end")
         }
 
         var weekStart = parseInt(weekStartField.text, 10)
         var weekEnd = parseInt(weekEndField.text, 10)
         if (isNaN(weekStart) || isNaN(weekEnd) || weekStart < 1 || weekEnd < 1) {
-            root.errorText = "周次必须是大于 0 的整数"
-            weekStartField.forceActiveFocus()
-            return null
+            return fail("周次必须是大于 0 的整数", "weekStart")
         }
         if (weekEnd < weekStart) {
-            root.errorText = "结束周次不能早于开始周次"
-            weekEndField.forceActiveFocus()
-            return null
+            return fail("结束周次不能早于开始周次", "weekEnd")
         }
 
         var categoryId = -1
@@ -217,17 +236,25 @@ Popup {
         }
     }
 
+    function fieldByName(name) {
+        switch (name) {
+        case "title": return titleField
+        case "start": return startField
+        case "end": return endField
+        case "weekStart": return weekStartField
+        case "weekEnd": return weekEndField
+        }
+        return null
+    }
+
     // 冲突只提示不拦截：同一时段并列两门可选课是真实排法。
     function refreshConflictHint() {
         root.conflictText = ""
         if (!root.scheduleServiceRef) {
             return
         }
-        var input = null
-        // 校验失败时不提示冲突——那会在用户还没填完时先弹一条无关的话。
-        var savedError = root.errorText
-        input = root.collectInput()
-        root.errorText = savedError
+        // 安静校验：用户还没填完时不该弹错误，也不该被抢走焦点。
+        var input = root.collectInput(true)
         if (!input) {
             return
         }
@@ -240,7 +267,7 @@ Popup {
     }
 
     function submit() {
-        var input = root.collectInput()
+        var input = root.collectInput(false)
         if (!input) {
             return
         }
@@ -276,6 +303,8 @@ Popup {
 
         function onOperationFailed(message) {
             root.errorText = String(message || "操作失败")
+            // 服务端的失败不指向某个具体输入框，不要让红框乱落在课程名上。
+            root.errorField = ""
         }
     }
 
@@ -340,9 +369,14 @@ Popup {
 
                 objectName: "scheduleTitleField"
                 placeholderText: "例如：高等数学"
-                maximumLength: 60
-                hasError: root.errorText.length > 0
-                onTextEdited: if (text.trim().length > 0) root.errorText = ""
+                maximumLength: root.maxTitleLength
+                hasError: root.errorField === "title"
+                onTextEdited: {
+                    if (text.trim().length > 0 && root.errorField === "title") {
+                        root.errorText = ""
+                        root.errorField = ""
+                    }
+                }
                 Keys.onReturnPressed: root.submit()
                 Keys.onEnterPressed: root.submit()
             }
@@ -354,7 +388,7 @@ Popup {
 
                 objectName: "scheduleLocationField"
                 placeholderText: "例如：A101"
-                maximumLength: 60
+                maximumLength: root.maxLocationLength
             }
 
             FieldLabel { text: "星期与时间" }
@@ -378,6 +412,7 @@ Popup {
                     id: startField
 
                     objectName: "scheduleStartField"
+                    hasError: root.errorField === "start"
                     Layout.preferredWidth: 88
                     Layout.fillWidth: false
                     placeholderText: "08:00"
@@ -396,6 +431,7 @@ Popup {
                     id: endField
 
                     objectName: "scheduleEndField"
+                    hasError: root.errorField === "end"
                     Layout.preferredWidth: 88
                     Layout.fillWidth: false
                     placeholderText: "09:40"
@@ -464,9 +500,10 @@ Popup {
                     id: weekStartField
 
                     objectName: "scheduleWeekStartField"
+                    hasError: root.errorField === "weekStart"
                     Layout.preferredWidth: 64
                     Layout.fillWidth: false
-                    validator: IntValidator { bottom: 1; top: 60 }
+                    validator: IntValidator { bottom: 1; top: root.maxWeekIndex }
                     inputMethodHints: Qt.ImhDigitsOnly
                     onEditingFinished: root.refreshConflictHint()
                 }
@@ -482,9 +519,10 @@ Popup {
                     id: weekEndField
 
                     objectName: "scheduleWeekEndField"
+                    hasError: root.errorField === "weekEnd"
                     Layout.preferredWidth: 64
                     Layout.fillWidth: false
-                    validator: IntValidator { bottom: 1; top: 60 }
+                    validator: IntValidator { bottom: 1; top: root.maxWeekIndex }
                     inputMethodHints: Qt.ImhDigitsOnly
                     onEditingFinished: root.refreshConflictHint()
                 }

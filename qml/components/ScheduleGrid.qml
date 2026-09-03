@@ -85,6 +85,22 @@ Item {
         return result
     }
 
+    // 关掉「显示周末」之后落在周六周日的课表项。它们和下面 unplacedEntries
+    // 是同一类问题：网格里没有那一列，块就凭空消失，而页头还在说「本周 N 项」。
+    // 差别只在原因不同，所以必须一起报出来。
+    readonly property var hiddenWeekendEntries: {
+        if (root.showWeekend) {
+            return []
+        }
+        var hidden = []
+        for (var i = 0; i < root.entries.length; ++i) {
+            if (Number(root.entries[i].weekday) > root.visibleDayCount) {
+                hidden.push(root.entries[i])
+            }
+        }
+        return hidden
+    }
+
     // 节次模式下落不进任何一节的课表项。它们必须被显式说出来——
     // 一门 12:30 的会议在没有对应节次时会从网格里彻底消失，
     // 用户只会以为数据丢了，而不会想到是节次表没覆盖那个时段。

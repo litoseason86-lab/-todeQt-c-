@@ -42,6 +42,9 @@ public:
     static constexpr int kMaxWeekIndex = 60;
     // 一天的分钟总数。课表项的起止时间都以「当天第几分钟」存储。
     static constexpr int kMinutesPerDay = 24 * 60;
+    // 节次数量上限。网格按「节次数 × 行高」算内容高度，没有上限时
+    // 一次粘贴几百行就会撑出一张几万像素高、滚不到底的空网格。
+    static constexpr int kMaxPeriodCount = 24;
 
     static ScheduleService* instance();
 

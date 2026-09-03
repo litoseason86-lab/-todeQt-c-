@@ -35,6 +35,9 @@ Popup {
     property var scheduleServiceRef: null
     property var settingsRef: null
     property string errorText: ""
+    // 与弹窗同理：上限只有服务一个来源。
+    readonly property int maxWeekIndex: root.scheduleServiceRef
+                                        ? Number(root.scheduleServiceRef.maxWeekIndex) || 60 : 60
 
     signal saved()
 
@@ -63,6 +66,25 @@ Popup {
         root.open()
     }
 
+    // 草稿与库里现存的节次是否真的不同。逐项比对起止分钟数即可——
+    // 编号由服务按开始时间重排，不参与比较。
+    function periodsDifferFrom(draft) {
+        if (!root.scheduleServiceRef) {
+            return false
+        }
+        var current = root.scheduleServiceRef.getPeriods()
+        if (current.length !== draft.length) {
+            return true
+        }
+        for (var i = 0; i < current.length; ++i) {
+            if (Number(current[i].startMinutes) !== Number(draft[i].startMinutes)
+                    || Number(current[i].endMinutes) !== Number(draft[i].endMinutes)) {
+                return true
+            }
+        }
+        return false
+    }
+
     function save() {
         root.errorText = ""
 
@@ -76,8 +98,8 @@ Popup {
         }
 
         var weeks = parseInt(semesterWeeksField.text, 10)
-        if (isNaN(weeks) || weeks < 1 || weeks > 60) {
-            root.errorText = "学期总周数必须在 1 到 60 之间"
+        if (isNaN(weeks) || weeks < 1 || weeks > root.maxWeekIndex) {
+            root.errorText = "学期总周数必须在 1 到 " + root.maxWeekIndex + " 之间"
             semesterWeeksField.forceActiveFocus()
             return
         }
@@ -103,17 +125,22 @@ Popup {
             return
         }
 
-        if (root.scheduleServiceRef && !root.scheduleServiceRef.setPeriods(periods)) {
-            if (root.errorText.length === 0) {
-                root.errorText = "节次保存失败，请重试"
-            }
-            return
-        }
-
+        // 设置要先写：setPeriods 会发 periodsChanged，页面收到后立刻 refresh()。
+        // 反过来先写节次的话，那次刷新读到的还是旧的总周数和周末开关。
         if (root.settingsRef) {
             root.settingsRef.semesterStartDate = startText
             root.settingsRef.semesterWeeks = weeks
             root.settingsRef.scheduleShowWeekend = weekendCheck.checked
+        }
+
+        // 节次没动过就别写：setPeriods 是「整表删了重插」，会把每一行的 id
+        // 重新分配一遍。用户只是来关个「显示周末」，不该顺带重建整张节次表。
+        if (root.scheduleServiceRef && root.periodsDifferFrom(periods)
+                && !root.scheduleServiceRef.setPeriods(periods)) {
+            if (root.errorText.length === 0) {
+                root.errorText = "节次保存失败，请重试"
+            }
+            return
         }
 
         root.saved()
@@ -253,7 +280,7 @@ Popup {
                 objectName: "semesterWeeksField"
                 Layout.preferredWidth: 72
                 Layout.fillWidth: false
-                validator: IntValidator { bottom: 1; top: 60 }
+                validator: IntValidator { bottom: 1; top: root.maxWeekIndex }
                 inputMethodHints: Qt.ImhDigitsOnly
             }
 

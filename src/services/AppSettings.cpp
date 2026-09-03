@@ -37,8 +37,10 @@ const auto kScheduleShowWeekendKey = QStringLiteral("schedule/showWeekend");
 // 快捷键覆盖值统一放在这个分组下，「全部恢复默认」才能一次 remove 掉整组。
 const auto kShortcutGroup = QStringLiteral("shortcuts");
 
-// 学期总周数的取值范围。上界与 ScheduleService::kMaxWeekIndex 保持一致：
+// 学期总周数的取值范围。上界必须与 ScheduleService::kMaxWeekIndex 相等：
 // 课表项能填到第几周，学期就至少要能有多长，否则会出现「排了课却翻不到那一周」。
+// AppSettings 不该反向依赖 ScheduleService，所以这里独立定义，
+// 由 ScheduleServiceTests 里的一条用例把两个常量钉死在一起。
 constexpr int kMinSemesterWeeks = 1;
 constexpr int kMaxSemesterWeeks = 60;
 constexpr int kDefaultSemesterWeeks = 20;
@@ -323,7 +325,17 @@ QString AppSettings::semesterStartDate() const
 
 void AppSettings::setSemesterStartDate(const QString& isoDate)
 {
-    const QString normalized = normalizeSemesterStartDate(isoDate);
+    // normalizeSemesterStartDate 对「没设置」和「格式不对」都返回空串，
+    // 直接照写会让一个手滑的 "2026-13-45" 把用户已设好的学期锚点抹掉，
+    // 整个课表页退回首次使用的引导态。这里把两者分开：
+    // 只有显式传空才算清除，非空但解析不出来的一律拒绝写入。
+    const QString trimmed = isoDate.trimmed();
+    const QString normalized = normalizeSemesterStartDate(trimmed);
+    if (!trimmed.isEmpty() && normalized.isEmpty()) {
+        emit settingsWriteFailed(kSemesterStartDateKey,
+                                 QStringLiteral("学期起始日格式无效"));
+        return;
+    }
     if (semesterStartDate() == normalized) {
         return;
     }

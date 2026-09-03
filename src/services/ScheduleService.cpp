@@ -87,18 +87,12 @@ QVariantMap ScheduleService::entryFromQuery(const QSqlQuery& query) const
             : -1;
     const QString categoryName = valueByName(query, "category_name").toString();
     const QString categoryColor = valueByName(query, "category_color").toString();
+    // 课表格子只按 categoryColor 着色，不需要任务那种嵌套的 category 对象。
+    // 这里刻意只给扁平字段：多给一层没人读的子映射，等于每行多分配一个
+    // QVariantMap，还会让后来的人以为存在两套读法。
     map.insert(QStringLiteral("categoryId"), categoryId > 0 ? QVariant(categoryId) : QVariant());
     map.insert(QStringLiteral("categoryName"), categoryName);
     map.insert(QStringLiteral("categoryColor"), categoryColor);
-
-    // 与任务一致地额外给一个 category 对象，QML 侧的着色逻辑可以复用同一套读法。
-    QVariantMap categoryMap;
-    if (categoryId > 0 || !categoryName.isEmpty() || !categoryColor.isEmpty()) {
-        categoryMap.insert(QStringLiteral("id"), categoryId > 0 ? QVariant(categoryId) : QVariant());
-        categoryMap.insert(QStringLiteral("name"), categoryName);
-        categoryMap.insert(QStringLiteral("color"), categoryColor);
-    }
-    map.insert(QStringLiteral("category"), categoryMap);
     return map;
 }
 
@@ -483,6 +477,11 @@ bool ScheduleService::setPeriods(const QVariantList& periods)
         normalized.append({ startMinutes, endMinutes });
     }
 
+    if (normalized.size() > kMaxPeriodCount) {
+        reportFailure(QStringLiteral("节次最多 %1 节").arg(kMaxPeriodCount));
+        return false;
+    }
+
     // 按开始时间排序后重新编号。节次编号必须与时间顺序一致，
     // 否则「按节次」模式画出来的行会和用户心里的第 1、2、3 节对不上。
     std::sort(normalized.begin(), normalized.end(),
@@ -492,6 +491,16 @@ bool ScheduleService::setPeriods(const QVariantList& periods)
                   }
                   return lhs.endMinutes < rhs.endMinutes;
               });
+
+    // 排序之后再查重叠：节次是「一节接一节」的时间轴，区间相交在现实里不存在，
+    // 而网格按「课表项与哪几节相交」决定块跨几行——两节重叠时，
+    // 一条 30 分钟的课会同时命中两节，被画成两行高，压到下一节的行上。
+    for (int i = 1; i < normalized.size(); ++i) {
+        if (normalized.at(i).startMinutes < normalized.at(i - 1).endMinutes) {
+            reportFailure(QStringLiteral("第 %1 节与第 %2 节时间重叠").arg(i).arg(i + 1));
+            return false;
+        }
+    }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {

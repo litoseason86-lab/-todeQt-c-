@@ -145,6 +145,7 @@ Rectangle {
     }
 
     TapHandler {
+        gesturePolicy: TapHandler.ReleaseWithinBounds
         onTapped: root.editRequested(root.entryId)
     }
 
@@ -178,6 +179,7 @@ Rectangle {
         }
 
         TapHandler {
+            gesturePolicy: TapHandler.ReleaseWithinBounds
             onTapped: root.deleteRequested(root.entryId, root.title)
         }
     }

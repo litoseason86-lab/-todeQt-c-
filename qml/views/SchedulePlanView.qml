@@ -99,16 +99,22 @@ Item {
         root.refresh()
     }
 
+    // 周次下界是 1（学期开始之前没有「第 0 周」），上界跟随学期总周数
+    // （避免一直往后翻出一片永远空白的网格）。
+    // 所有给 weekIndex 赋值的地方都必须走这里：漏掉上界会让启动时停在
+    // 第 30 周而学期只有 20 周——「下一周」按钮变灰，按「本周」反而跳走。
+    function clampWeek(target) {
+        return Math.max(1, Math.min(root.semesterWeeks, Number(target) || 1))
+    }
+
     function goToWeek(target) {
-        // 周次下界是 1：学期开始之前没有「第 0 周」可言。
-        // 上界跟随学期总周数，避免一直往后翻出一片永远空白的网格。
-        root.weekIndex = Math.max(1, Math.min(root.semesterWeeks, target))
+        root.weekIndex = root.clampWeek(target)
         root.refresh()
     }
 
     Component.onCompleted: {
         root.logicalToday = root.computeLogicalToday()
-        root.weekIndex = Math.max(1, root.currentWeekIndex)
+        root.weekIndex = root.clampWeek(root.currentWeekIndex)
         if (root.pageActive) {
             root.refresh()
         }
@@ -149,7 +155,7 @@ Item {
             var wasFollowingCurrentWeek = root.viewingCurrentWeek
             root.logicalToday = root.computeLogicalToday()
             if (wasFollowingCurrentWeek) {
-                root.weekIndex = Math.max(1, root.currentWeekIndex)
+                root.weekIndex = root.clampWeek(root.currentWeekIndex)
             }
             root.refresh()
         }
@@ -406,11 +412,15 @@ Item {
             }
         }
 
-        // —— 节次模式下落不进任何一节的条目 ——
-        // 不说出来它们就会从网格里凭空消失，用户只会以为数据丢了。
+        // —— 本周有课表项没能画进网格 ——
+        // 不说出来它们就会凭空消失，而页头还在说「本周 N 项」，用户只会以为数据丢了。
+        // 两种原因合用一条横幅：节次表没覆盖那个时段，或者周末列被关掉了。
         Rectangle {
+            readonly property int unplacedCount: scheduleGrid.unplacedEntries.length
+            readonly property int weekendCount: scheduleGrid.hiddenWeekendEntries.length
+
             Layout.fillWidth: true
-            visible: root.semesterConfigured && scheduleGrid.unplacedEntries.length > 0
+            visible: root.semesterConfigured && (unplacedCount > 0 || weekendCount > 0)
             Layout.preferredHeight: 40
             radius: Theme.radiusMd
             color: Theme.accentFill
@@ -422,8 +432,18 @@ Item {
                 anchors.leftMargin: Theme.space12
                 anchors.rightMargin: Theme.space12
                 verticalAlignment: Text.AlignVCenter
-                text: "有 " + scheduleGrid.unplacedEntries.length
-                      + " 项不在任何节次内，切换到「时间轴」可以看到它们"
+                text: {
+                    var parts = []
+                    if (parent.weekendCount > 0) {
+                        parts.push("有 " + parent.weekendCount
+                                   + " 项在周末，去「设置」打开「显示周末」才能看到")
+                    }
+                    if (parent.unplacedCount > 0) {
+                        parts.push("有 " + parent.unplacedCount
+                                   + " 项不在任何节次内，切换到「时间轴」可以看到它们")
+                    }
+                    return parts.join("；")
+                }
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontSm
                 color: Theme.accentFillInk
@@ -485,6 +505,11 @@ Item {
         categoryManagerRef: root.categoryManagerRef
         semesterWeeks: root.semesterWeeks
         periods: root.periods
+
+        // 弹窗和页面都在听 operationFailed，弹窗里的失败会同时点亮页面顶部那条
+        // 红色横幅。用户按「取消」关掉弹窗后不会有 scheduleChanged，
+        // refresh() 也就不会跑，横幅会一直挂在那里说一个已经不存在的弹窗的事。
+        onClosed: root.loadError = ""
 
         onDeleteRequested: function (entryId, title) {
             deleteConfirm.pendingId = entryId
