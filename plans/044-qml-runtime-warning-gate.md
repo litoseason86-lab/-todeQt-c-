@@ -45,11 +45,28 @@ FAIL_REGULAR_EXPRESSION "Unable to assign;TypeError;is not a function;Binding lo
 
 某条测试确实需要故意触发告警时，单独覆盖它这一项属性。
 
-## 已知盲区
+## 盲区：已量化并收窄
 
-门禁只能看见**测试实际实例化过**的 QML。没有任何测试碰过的组件，
-其中的告警不会被发现。这不是门禁的缺陷，是测试覆盖的边界——
-但记在这里，免得以后误以为「门禁绿了就等于全仓没有运行时告警」。
+门禁只能看见**测试实际实例化过**的 QML。81 个组件里有 22 个没被任何测试直接提及，
+但多数是间接实例化的（如 `GlyphIcon` 有 6 处父级引用，父级一渲染它就构造）。
+
+真正的盲区是**从未被打开过的弹窗**——Popup 的绑定在 `open()` 之前根本不求值，
+静态的 qmllint 也看不到（它不执行绑定）。逐个用「残缺替身」打开实测过：
+`MilestoneDialog`、`RestoreConfirmDialog`、`LongFreeFocusConfirmDialog`、
+`NaturalCompletionNoticeDialog` 都干净；课表的两个弹窗也干净。
+**盲区存在，但目前没藏东西**——这是量出来的，不是假设。
+
+为把这块变成覆盖面，新增 `tests/qml/tst_dialog_smoke.qml`：真正打开课表的两个弹窗
+（它们此前从未被任何测试打开过，是这几轮改动里我自己留下的盲区）。
+断言刻意写得浅——只保证「打开得来、关得掉、关键内容在」，不重复各弹窗的业务用例；
+真正的价值来自本门禁：打开过程中任何告警都会让这条转红。已实测验证：
+人为在 `ScheduleEntryDialog` 里制造一处 undefined 赋值，ctest 报
+`Error regular expression found in output. Regex=[Unable to assign]`。
+
+写这条测试时踩到两个坑，记下来免得重复：
+- **`wait(120)` 短于弹窗 220ms 的入场动画**，断言时弹窗还没 `opened`。改用 `tryVerify` 轮询。
+- **`findChild(popup, name)` 找不到弹窗里的输入框**：Popup 的子项挂在 `contentItem` 下，
+  不在 Popup 自己的 QObject 树里。要从 `dialog.contentItem` 进去找。
 
 ## 验证
 

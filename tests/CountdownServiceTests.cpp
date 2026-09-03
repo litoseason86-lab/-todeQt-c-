@@ -84,6 +84,13 @@ void CountdownServiceTests::cleanupTestCase()
 
 void CountdownServiceTests::init()
 {
+    // 有用例（samePathReinitializeReloadsFreshDatabase）会把库切到自己的临时文件上
+    // 且不还原，之后每一条都跑在那个库上而不是 initTestCase 建的 fixture 库。
+    // 目前不致失败——后面几条恰好与具体是哪个库无关；但这是个陷阱：
+    // 将来任何一条依赖 fixture 种子数据的用例都会莫名其妙地坏，
+    // 而线索指向的是「那条切库的用例」，与新用例本身毫无关系。
+    // 本仓另外四个会切库的测试文件都在 init() 里复位，只有这里漏了。
+    QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
     clearGoals();
     AppSettings::instance()->setDayStartHour(4);
     CountdownService::instance()->syncReferenceDateTo(
