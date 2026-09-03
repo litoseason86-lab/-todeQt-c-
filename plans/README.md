@@ -77,6 +77,36 @@ v11 一次改三处（合并成一次迁移只建一份快照）：
 番茄完成后的休息，不写 `focus_sessions`、不计入今日专注；超过自由专注提醒阈值时，确认弹窗
 可手动修正写入时长。详见 `plans/042-rest-ui-non-counting.md`。
 
+**2026-09-03：待办课表页（schema v13）与运行时告警门禁。**
+043 与 044 已实施在 `feature/weekly-todo-view`。当前全量基线为 **70/70，`ctest -j4` 约 21 秒**。
+
+- **043 待办课表**：侧栏新增「待办」，放按「星期几 + 时段」循环的固定时间表。
+  它与「本周计划」是两套数据（时间锚点不同：日期 vs 星期+时段），课表项没有完成状态，
+  不写 `tasks` / `focus_sessions`，不参与统计与目标进度；既有 `routines` 也不能复用——
+  它没有星期几也没有时段。schema v13 纯新增两张表，不动任何旧表。
+  日期到周次的换算放在 `qml/ScheduleWeeks.js`，服务层因此不依赖 `AppSettings`。
+  详见 `plans/043-schedule-timetable.md`，其中记了四轮 review 各自找到什么。
+- **044 运行时告警门禁**：把全部 QML 测试跑一遍收 stderr，发现三处运行时告警——
+  它们不让任何断言转红，测试一直全绿，但每一条都是真缺陷。门禁以
+  `FAIL_REGULAR_EXPRESSION` 挂在已有条目上，零额外开销（串行重跑要 63 秒）。
+  详见 `plans/044-qml-runtime-warning-gate.md`。
+
+这几轮 review 里值得单独记的三条，都是「上报为已修但无人守着」或「照旧笔记动手」：
+
+1. **v13 的表存在性守卫此前没有任何测试**。删掉整段，当时 22 条用例全绿。
+   已补 `missingScheduleTablesAreRebuiltEvenWhenVersionSaysV13`。
+2. **老库升级这条真实路径没被测过**——此前只测「全新库跑完整迁移链」，
+   而真实用户走的是「已有任务与科目、schema 停在 v12」，恢复 v13 之前的备份也落到同一状态。
+   已补 `upgradingAPopulatedPreV13DatabaseKeepsDataAndAddsSchedule`。
+3. **同一个测试隔离缺陷修了 QML 侧却没回头查 C++ 侧**。用例体内切库、末尾才还原，
+   断言一失败就跳过还原——`ScheduleServiceTests` 实测一条真实失败扩散成 14 条无关的红。
+   `CountdownServiceTests` 也有（不致失败但是个陷阱），已一并改为在 `init()` 里统一复位。
+
+另有三条早先记下的「该重构」笔记，核实后全部推翻，**未改动**：
+`isOpen()` 检查重复（全仓 10 个服务共 100+ 处，是既定写法，只改一个反而制造异类）、
+add/update 各自绑定同一组字段（`TaskManager` 同样如此，全仓无共用绑定 helper）、
+设置弹窗的半提交（早已修好，校验全在写入之前——照过期笔记动手加重了已存在的代码，已撤回）。
+
 **2026-08-08 这一轮的变化（详见文末「2026-08-08 复核」）**：031 落地；接入 `-Wall -Wextra`
 门禁；清掉三条积压缺陷（恢复前快照无限累积、提示音重复释放、减少动效下遮罩失去存活信号）；
 删除 `docs/superpowers/plans/`（40 份）与 `docs/testing/`（3 份）。
