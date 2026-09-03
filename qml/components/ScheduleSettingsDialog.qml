@@ -38,6 +38,8 @@ Popup {
     // 与弹窗同理：上限只有服务一个来源。
     readonly property int maxWeekIndex: root.scheduleServiceRef
                                         ? Number(root.scheduleServiceRef.maxWeekIndex) || 60 : 60
+    readonly property int maxPeriodCount: root.scheduleServiceRef
+                                          ? Number(root.scheduleServiceRef.maxPeriodCount) || 24 : 24
 
     signal saved()
 
@@ -123,6 +125,32 @@ Popup {
         if (periods.length === 0) {
             root.errorText = "至少需要保留一节课时"
             return
+        }
+        if (periods.length > root.maxPeriodCount) {
+            root.errorText = "节次最多 " + root.maxPeriodCount + " 节"
+            return
+        }
+
+        // 数量与重叠这两条服务端也会查，但必须在这里先查一遍，原因有两个：
+        //
+        // 1. 下面写设置和写节次是两次独立的写入，不在同一个事务里。等服务端拒绝时，
+        //    学期起始日、总周数、周末开关已经落库了——用户看到「节次保存失败」，
+        //    以为整个保存都没生效，按「取消」离开，结果那三项其实已经改掉了。
+        // 2. 服务端排序后才比较相邻两节，报出来的「第 N 节」是重排后的编号，
+        //    与用户正在看的行号对不上。这里按用户填的顺序报，指得到具体那一行。
+        var sorted = periods.slice().sort(function (a, b) {
+            return a.startMinutes - b.startMinutes
+        })
+        for (var k = 1; k < sorted.length; ++k) {
+            if (ScheduleWeeks.overlaps(sorted[k - 1].startMinutes, sorted[k - 1].endMinutes,
+                                       sorted[k].startMinutes, sorted[k].endMinutes)) {
+                root.errorText = "节次时间不能重叠："
+                        + ScheduleWeeks.formatMinutes(sorted[k - 1].startMinutes) + "–"
+                        + ScheduleWeeks.formatMinutes(sorted[k - 1].endMinutes) + " 与 "
+                        + ScheduleWeeks.formatMinutes(sorted[k].startMinutes) + "–"
+                        + ScheduleWeeks.formatMinutes(sorted[k].endMinutes)
+                return
+            }
         }
 
         // 设置要先写：setPeriods 会发 periodsChanged，页面收到后立刻 refresh()。
@@ -248,7 +276,9 @@ Popup {
                 Layout.fillWidth: true
                 text: "第 1 周所在的那一周；填任意一天即可，会自动对齐到该周周一。"
                 textFormat: Text.PlainText
-                color: Theme.inkMuted
+                // 这是用户必须读懂才知道该填什么的说明，不是占位提示。
+                // Theme.inkMuted 按 Theme.qml 的定义只给「占位/禁用」，对比度不到 4.5:1。
+                color: Theme.inkSoft
                 font.pixelSize: Theme.fontXs
                 wrapMode: Text.WordWrap
             }
@@ -340,7 +370,8 @@ Popup {
                 Layout.fillWidth: true
                 text: "保存时按开始时间自动排序编号"
                 textFormat: Text.PlainText
-                color: Theme.inkMuted
+                // 同上：解释「为什么我填的顺序会变」的正文，必须达到正文对比度。
+                color: Theme.inkSoft
                 font.pixelSize: Theme.fontXs
             }
         }

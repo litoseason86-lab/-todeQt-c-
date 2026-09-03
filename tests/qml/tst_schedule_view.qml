@@ -48,7 +48,11 @@ TestCase {
         signal operationFailed(string message)
 
         // 每项都带全字段，视图读到的形状与真实服务返回的一致。
-        property var allEntries: [
+        // baseEntries 是基线，allEntries 是各条用例可以随意增删的工作副本；
+        // 每条用例开始前由 init() 从基线整体重置。
+        // 用例末尾「用完再改回去」那种写法看着也行，但断言一失败就跳过了还原，
+        // 一条真实失败会污染后面每一条，把排查引到完全无关的地方去。
+        property var baseEntries: [
             {
                 id: 1, title: "高等数学", location: "A101", weekday: 1,
                 startMinutes: 480, endMinutes: 580, durationMinutes: 100,
@@ -68,6 +72,8 @@ TestCase {
                 categoryId: undefined, categoryName: "", categoryColor: ""
             }
         ]
+
+        property var allEntries: scheduleService.baseEntries
 
         property int lastRequestedWeek: -1
         property int deletedId: -1
@@ -125,6 +131,7 @@ TestCase {
         appSettings.scheduleDisplayMode = "time"
         appSettings.scheduleShowWeekend = true
         scheduleService.deletedId = -1
+        scheduleService.allEntries = scheduleService.baseEntries
         view.logicalToday = view.computeLogicalToday()
         view.weekIndex = 1
         view.refresh()
@@ -246,6 +253,88 @@ TestCase {
         compare(view.weekIndex, 1)
 
         testCase.fakeNow = new Date(2026, 8, 2, 10, 0)
+    }
+
+    function test_thisWeekButtonIsDisabledOnceSemesterIsOver() {
+        view.anchorSemesterToThisWeek()
+        compare(view.currentWeekIndex, 1)
+        verify(view.currentWeekInSemester)
+
+        // 学期只有 16 周，把「今天」推到第 20 周（2027-01-11 那个周一）。
+        testCase.fakeNow = new Date(2027, 0, 11, 10, 0)
+        logicalDayService.changed()
+        compare(view.currentWeekIndex, 20)
+        verify(!view.currentWeekInSemester)
+
+        // 关键点：weekIndex 被夹在 16，怎么按「本周」都到不了第 20 周。
+        // 按钮必须灰掉——之前它是可点的，点下去页面纹丝不动，也没有任何解释。
+        var button = findChild(view, "scheduleThisWeekButton")
+        verify(button !== null)
+        verify(!button.enabled, "学期结束后「本周」按钮不能还是可点的")
+
+        view.goToWeek(view.currentWeekIndex)
+        compare(view.weekIndex, appSettings.semesterWeeks)
+        verify(!view.viewingCurrentWeek)
+
+        testCase.fakeNow = new Date(2026, 8, 2, 10, 0)
+    }
+
+    function test_weekendEntryIsReportedByExactlyOneReason() {
+        view.anchorSemesterToThisWeek()
+        // 周六 12:30 的一项：既落在被隐藏的周末列，又不在任何节次里。
+        scheduleService.allEntries = scheduleService.allEntries.concat([{
+            id: 4, title: "周六补习", location: "", weekday: 6,
+            startMinutes: 750, endMinutes: 780, durationMinutes: 30,
+            weekStart: 1, weekEnd: 16, weekParity: 0,
+            categoryId: undefined, categoryName: "", categoryColor: ""
+        }])
+        appSettings.scheduleDisplayMode = "period"
+        appSettings.scheduleShowWeekend = false
+        view.refresh()
+
+        var grid = findChild(view, "scheduleGrid")
+        verify(grid !== null)
+        compare(grid.hiddenWeekendEntries.length, 1)
+        compare(grid.hiddenWeekendEntries[0].title, "周六补习")
+        // 同一条目不能被两条理由各认领一次：否则横幅会同时说「有 1 项在周末」
+        // 和「有 1 项不在任何节次内」，用户会以为自己丢了两项。
+        for (var i = 0; i < grid.unplacedEntries.length; ++i) {
+            verify(grid.unplacedEntries[i].title !== "周六补习",
+                   "周末被隐藏的条目不该再计入「不在任何节次内」")
+        }
+
+        // 周末列打开后，它重新变成一个纯粹的「落不进节次」问题。
+        appSettings.scheduleShowWeekend = true
+        compare(grid.hiddenWeekendEntries.length, 0)
+        var found = false
+        for (var j = 0; j < grid.unplacedEntries.length; ++j) {
+            if (grid.unplacedEntries[j].title === "周六补习") {
+                found = true
+            }
+        }
+        verify(found, "周末列打开后它必须被「不在任何节次内」认领")
+
+    }
+
+    function test_hiddenWeekendEntriesDoNotStretchTheTimeAxis() {
+        view.anchorSemesterToThisWeek()
+        // 周六早上 6:00 的一项。周末列关掉时它一列都没有，
+        // 却不该让周一到周五凭空多出两小时无人认领的空白。
+        scheduleService.allEntries = scheduleService.allEntries.concat([{
+            id: 5, title: "周六晨练", location: "", weekday: 6,
+            startMinutes: 360, endMinutes: 420, durationMinutes: 60,
+            weekStart: 1, weekEnd: 16, weekParity: 0,
+            categoryId: undefined, categoryName: "", categoryColor: ""
+        }])
+        view.refresh()
+
+        var grid = findChild(view, "scheduleGrid")
+        verify(grid !== null)
+        compare(grid.axisStartMinutes, 360)
+
+        appSettings.scheduleShowWeekend = false
+        compare(grid.axisStartMinutes, 480)
+
     }
 
     function test_serviceFailureSurfacesLoadError() {

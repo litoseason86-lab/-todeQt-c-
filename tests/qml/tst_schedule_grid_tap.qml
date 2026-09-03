@@ -74,6 +74,62 @@ TestCase {
         compare(testCase.received[0], "edit:42")
     }
 
+    // 块右上角那颗 × 是「块的 TapHandler 里再套一个 TapHandler」，
+    // 结构与上面那条守的完全一样。目前行为是对的（内层独占抓取赢了外层），
+    // 但这条正确性只由 gesturePolicy 一个属性维持，删掉它不会有任何编译或断言报错——
+    // 表现只是「点 × 弹出编辑窗」。所以要有一条用例守住。
+    function test_tapping_delete_badge_does_not_also_edit() {
+        var block = blockForEntry(1, 42)
+        verify(block !== null, "找不到课程块")
+
+        // × 只在悬停时出现，先把指针移到块上。
+        var center = block.mapToItem(grid, block.width / 2, block.height / 2)
+        mouseMove(grid, center.x, center.y)
+        wait(120)
+
+        var badge = findChild(grid, "scheduleEntryDelete-42")
+        verify(badge !== null, "找不到删除按钮")
+        var point = badge.mapToItem(grid, badge.width / 2, badge.height / 2)
+        mouseClick(grid, point.x, point.y)
+        wait(120)
+
+        compare(testCase.received.length, 1,
+                "点删除按钮应只触发一个信号，实际：" + JSON.stringify(testCase.received))
+        compare(testCase.received[0], "delete:42")
+    }
+
+    // 键盘通路。悬停出现的 × 对只用键盘的人不存在，所以聚焦后的按键是唯一入口。
+    //
+    // 两颗键都要验：Keys.onDeletePressed 只认 Qt.Key_Delete，而 Mac 主键盘上
+    // 那颗写着 delete 的键发的是 Qt.Key_Backspace。同时这里也在验
+    // 通用的 Keys.onPressed 没有把 Delete 一起吞掉——它只该接管 Backspace。
+    function test_keyboard_delete_works_with_both_keys() {
+        var block = blockForEntry(1, 42)
+        verify(block !== null, "找不到课程块")
+        block.forceActiveFocus()
+        wait(60)
+
+        keyClick(Qt.Key_Backspace)
+        wait(60)
+        compare(testCase.received.length, 1, "Backspace 应触发删除，实际："
+                + JSON.stringify(testCase.received))
+        compare(testCase.received[0], "delete:42")
+
+        testCase.received = []
+        keyClick(Qt.Key_Delete)
+        wait(60)
+        compare(testCase.received.length, 1, "Delete 应仍然触发删除，实际："
+                + JSON.stringify(testCase.received))
+        compare(testCase.received[0], "delete:42")
+
+        // 回车走的是编辑，不能被上面两个处理器抢掉。
+        testCase.received = []
+        keyClick(Qt.Key_Return)
+        wait(60)
+        compare(testCase.received.length, 1)
+        compare(testCase.received[0], "edit:42")
+    }
+
     function test_tapping_empty_space_only_adds() {
         var column = findChild(grid, "scheduleDayColumn-3")
         verify(column !== null)

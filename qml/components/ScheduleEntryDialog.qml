@@ -213,6 +213,15 @@ Popup {
         if (isNaN(weekStart) || isNaN(weekEnd) || weekStart < 1 || weekEnd < 1) {
             return fail("周次必须是大于 0 的整数", "weekStart")
         }
+        // 上限也要在这里判。只靠输入框的 IntValidator 挡不住通过 openForEdit 或
+        // 程序化赋值进来的越界值，而漏到服务端之后，错误只会以一句通用文案落在
+        // 弹窗底部，红框不会指向真正越界的那个框。
+        if (weekStart > root.maxWeekIndex) {
+            return fail("周次不能超过第 " + root.maxWeekIndex + " 周", "weekStart")
+        }
+        if (weekEnd > root.maxWeekIndex) {
+            return fail("周次不能超过第 " + root.maxWeekIndex + " 周", "weekEnd")
+        }
         if (weekEnd < weekStart) {
             return fail("结束周次不能早于开始周次", "weekEnd")
         }

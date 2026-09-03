@@ -42,21 +42,37 @@ Item {
     // 不留这段空白它的上半截会被滚动区的上边缘切掉。
     readonly property int axisTopInset: 8
 
+    // 当前版式下真正会被画出来的条目。周末列关掉时，周六周日那几项一列都没有，
+    // 却仍然会把时间轴撑宽——一门周六 7:00 的课会让周一到周五凭空多出一小时空白，
+    // 而屏幕上找不到任何东西解释那段空白是谁占的。
+    readonly property var visibleEntries: {
+        if (root.showWeekend) {
+            return root.entries
+        }
+        var shown = []
+        for (var i = 0; i < root.entries.length; ++i) {
+            if (Number(root.entries[i].weekday) <= root.visibleDayCount) {
+                shown.push(root.entries[i])
+            }
+        }
+        return shown
+    }
+
     // —— 时间轴模式的纵向范围 ——
     // 按当天真实排课范围裁剪，而不是固定 0–24 点：没人愿意为了看两节课先滚过八小时空白。
     // 同时兜住 8:00–22:00，让空课表也有一张像样的网格而不是塌成一条线。
     readonly property int axisStartMinutes: {
         var earliest = 8 * 60
-        for (var i = 0; i < root.entries.length; ++i) {
-            earliest = Math.min(earliest, Number(root.entries[i].startMinutes))
+        for (var i = 0; i < root.visibleEntries.length; ++i) {
+            earliest = Math.min(earliest, Number(root.visibleEntries[i].startMinutes))
         }
         // 向下取整到整点，刻度线才落在 8:00 而不是 8:05 这种位置。
         return Math.max(0, Math.floor(earliest / 60) * 60)
     }
     readonly property int axisEndMinutes: {
         var latest = 22 * 60
-        for (var i = 0; i < root.entries.length; ++i) {
-            latest = Math.max(latest, Number(root.entries[i].endMinutes))
+        for (var i = 0; i < root.visibleEntries.length; ++i) {
+            latest = Math.max(latest, Number(root.visibleEntries[i].endMinutes))
         }
         return Math.min(24 * 60, Math.ceil(latest / 60) * 60)
     }
@@ -75,9 +91,9 @@ Item {
         var result = []
         for (var weekday = 1; weekday <= 7; ++weekday) {
             var dayEntries = []
-            for (var i = 0; i < root.entries.length; ++i) {
-                if (Number(root.entries[i].weekday) === weekday) {
-                    dayEntries.push(root.entries[i])
+            for (var i = 0; i < root.visibleEntries.length; ++i) {
+                if (Number(root.visibleEntries[i].weekday) === weekday) {
+                    dayEntries.push(root.visibleEntries[i])
                 }
             }
             result.push(ScheduleWeeks.layoutDayEntries(dayEntries))
@@ -104,18 +120,21 @@ Item {
     // 节次模式下落不进任何一节的课表项。它们必须被显式说出来——
     // 一门 12:30 的会议在没有对应节次时会从网格里彻底消失，
     // 用户只会以为数据丢了，而不会想到是节次表没覆盖那个时段。
+    // 只看 visibleEntries：一门周六的课在周末列关掉时已经由 hiddenWeekendEntries 报过一次，
+    // 这里再报一次的话，同一条目会让横幅同时说出「有 1 项在周末」和「有 1 项不在任何节次内」，
+    // 用户会以为自己丢了两项。每个条目只该由一条理由认领。
     readonly property var unplacedEntries: {
         if (root.displayMode !== "period") {
             return []
         }
         var unplaced = []
-        for (var i = 0; i < root.entries.length; ++i) {
-            var entry = root.entries[i]
+        for (var i = 0; i < root.visibleEntries.length; ++i) {
+            var entry = root.visibleEntries[i]
             var placed = false
             for (var j = 0; j < root.periods.length; ++j) {
                 var period = root.periods[j]
-                if (Number(entry.startMinutes) < Number(period.endMinutes)
-                        && Number(entry.endMinutes) > Number(period.startMinutes)) {
+                if (ScheduleWeeks.overlaps(entry.startMinutes, entry.endMinutes,
+                                           period.startMinutes, period.endMinutes)) {
                     placed = true
                     break
                 }
@@ -133,8 +152,8 @@ Item {
         var last = -1
         for (var i = 0; i < root.periods.length; ++i) {
             var period = root.periods[i]
-            if (Number(entry.startMinutes) < Number(period.endMinutes)
-                    && Number(entry.endMinutes) > Number(period.startMinutes)) {
+            if (ScheduleWeeks.overlaps(entry.startMinutes, entry.endMinutes,
+                                       period.startMinutes, period.endMinutes)) {
                 if (first < 0) {
                     first = i
                 }

@@ -23,6 +23,7 @@ class ScheduleService : public QObject
     Q_PROPERTY(int maxTitleLength READ maxTitleLength CONSTANT)
     Q_PROPERTY(int maxLocationLength READ maxLocationLength CONSTANT)
     Q_PROPERTY(int maxWeekIndex READ maxWeekIndex CONSTANT)
+    Q_PROPERTY(int maxPeriodCount READ maxPeriodCount CONSTANT)
 
 public:
     // 单双周规则。存库为整数，QML 侧按同一套取值传入。
@@ -51,6 +52,7 @@ public:
     int maxTitleLength() const { return kMaxTitleLength; }
     int maxLocationLength() const { return kMaxLocationLength; }
     int maxWeekIndex() const { return kMaxWeekIndex; }
+    int maxPeriodCount() const { return kMaxPeriodCount; }
 
     // —— 课表项增删改查 ——
     // weekday 取 1..7（1 = 周一）；startMinutes/endMinutes 是当天第几分钟，要求 start < end。

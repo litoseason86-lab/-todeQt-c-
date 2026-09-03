@@ -215,6 +215,14 @@ void ScheduleServiceTests::setPeriodsRejectsTooManyRows()
     }
     QVERIFY(!service->setPeriods(tooMany));
     QCOMPARE(failureSpy.count(), 1);
+
+    // 上限必须能被 QML 读到。课表设置弹窗在写库之前会先按这个值挡一道——
+    // 挡不住的话，设置项已经落库、节次却被服务端拒绝，用户看到「保存失败」
+    // 却不知道另外三项其实已经改掉了。属性名写错或忘了加 Q_PROPERTY 时，
+    // QML 侧只会安静地退回自己那份兜底常量，不会有任何报错。
+    const QVariant exposed = service->property("maxPeriodCount");
+    QVERIFY2(exposed.isValid(), "maxPeriodCount 必须是可从 QML 读取的属性");
+    QCOMPARE(exposed.toInt(), ScheduleService::kMaxPeriodCount);
 }
 
 void ScheduleServiceTests::semesterWeekBoundMatchesServiceLimit()

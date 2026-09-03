@@ -202,3 +202,12 @@ function weekRangeLabel(weekStart, weekEnd, parity, semesterWeeks) {
     }
     return parityText.length > 0 ? (rangeText + " · " + parityText) : rangeText
 }
+
+// 两个时间区间是否真的相交。半开区间：紧邻的 09:40 结束与 09:40 开始不算相交。
+//
+// 这个判据在课表里出现的地方不止一处（课程块落在哪几节、哪些条目一节都落不进、
+// 服务端的冲突查询），每处各写一遍迟早会有一处把 < 写成 <=，
+// 结果就是「相邻的两节课被判成冲突」这类只在边界上才现形、且很难复现的毛病。
+function overlaps(aStart, aEnd, bStart, bEnd) {
+    return Number(aStart) < Number(bEnd) && Number(aEnd) > Number(bStart)
+}

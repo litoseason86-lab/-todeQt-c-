@@ -186,5 +186,15 @@ Rectangle {
 
     Keys.onReturnPressed: root.editRequested(root.entryId)
     Keys.onEnterPressed: root.editRequested(root.entryId)
+    // Delete 与 Backspace 都要接。Keys.onDeletePressed 对应的是 Qt.Key_Delete，
+    // 而 Mac 笔记本主键盘上那颗写着 delete 的键发的是 Qt.Key_Backspace
+    // （Key_Delete 要按 fn+delete）。只接前者等于本机上根本删不掉，
+    // 而上面那句注释还在说「键盘用户可以聚焦后按 Delete」。
     Keys.onDeletePressed: root.deleteRequested(root.entryId, root.title)
+    Keys.onPressed: function (event) {
+        if (event.key === Qt.Key_Backspace) {
+            root.deleteRequested(root.entryId, root.title)
+            event.accepted = true
+        }
+    }
 }

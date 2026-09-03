@@ -114,6 +114,58 @@ TestCase {
         property int longBreakMinutes: 15
         property int longBreakInterval: 4
         property string nickname: ""
+        // 课表页要有学期锚点才画得出网格。停在首次引导态的话，
+        // 这一页真正有风险的那些文字（列头「今天」胶囊、刻度、课程块）一个都扫不到。
+        property string semesterStartDate: "2026-08-31"
+        property int semesterWeeks: 16
+        property string scheduleDisplayMode: "time"
+        property bool scheduleShowWeekend: true
+    }
+
+    // 课表服务替身。只需要够画出一屏内容：一门带科目色的课、一门不带的，
+    // 以及一套节次（切到「按节次」版式时的行定义）。
+    QtObject {
+        id: scheduleService
+
+        signal scheduleChanged
+        signal periodsChanged
+        signal operationFailed(string message)
+
+        readonly property int maxTitleLength: 60
+        readonly property int maxLocationLength: 60
+        readonly property int maxWeekIndex: 60
+        readonly property int maxPeriodCount: 24
+
+        function getEntriesForWeek(weekIndex) {
+            if (weekIndex < 1) {
+                return []
+            }
+            return [
+                {
+                    id: 1, title: "高等数学", location: "多媒体楼 A101", weekday: 1,
+                    startMinutes: 480, endMinutes: 580, durationMinutes: 100,
+                    weekStart: 1, weekEnd: 16, weekParity: 0,
+                    categoryId: 1, categoryName: "学习", categoryColor: "#c98a4b"
+                },
+                {
+                    id: 2, title: "大学英语", location: "B203", weekday: 3,
+                    startMinutes: 600, endMinutes: 700, durationMinutes: 100,
+                    weekStart: 1, weekEnd: 8, weekParity: 1,
+                    categoryId: undefined, categoryName: "", categoryColor: ""
+                }
+            ]
+        }
+
+        function getPeriods() {
+            return [
+                { index: 1, startMinutes: 480, endMinutes: 525 },
+                { index: 2, startMinutes: 535, endMinutes: 580 }
+            ]
+        }
+
+        function findConflicts() {
+            return []
+        }
     }
 
     QtObject {
@@ -308,6 +360,7 @@ TestCase {
         goalServiceRef: goalService
         phaseSoundServiceRef: phaseSoundService
         shortcutRegistryRef: shortcutRegistry
+        scheduleServiceRef: scheduleService
     }
 
     // 目前没有例外。加一条进来必须是一次明确的产品决定，并写清「为什么可以这样」
@@ -407,8 +460,11 @@ TestCase {
 
     function sweep(themeId, tag) {
         Theme.activeThemeId = themeId
+        // 这份清单必须与侧栏的入口一一对应。漏掉一页，那一页就完全在门禁之外——
+        // 课表页曾经就这样漏了一整轮：正文说明用了只给「占位/禁用」的 inkMuted，
+        // 全量测试照样全绿。
         var views = ["dashboard", "today", "focus", "week", "month",
-                     "statistics", "countdown", "goals"]
+                     "statistics", "countdown", "goals", "schedule"]
         for (var i = 0; i < views.length; ++i) {
             mainWindow.currentView = views[i]
             mainWindow.pendingView = views[i]

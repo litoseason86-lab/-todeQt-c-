@@ -168,4 +168,25 @@ TestCase {
         compare(ScheduleWeeks.layoutDayEntries([]).length, 0)
         compare(ScheduleWeeks.layoutDayEntries(null).length, 0)
     }
+
+    // overlaps 是课表里唯一的相交判据（课程块落在哪几节、哪些项一节都落不进、
+    // 节次表自身能不能重叠都用它）。它只有一行，出错也只会在边界上现形：
+    // 把 < 写成 <= 的话，08:00–08:45 与 08:45–09:30 这对紧邻的节次会被判成重叠，
+    // 而中间那些明显相交的用例照样通过。所以边界必须单独钉住。
+    function test_overlapsIsHalfOpen() {
+        // 紧邻不算相交，两个方向都要成立。
+        verify(!ScheduleWeeks.overlaps(480, 525, 525, 570))
+        verify(!ScheduleWeeks.overlaps(525, 570, 480, 525))
+        // 完全不挨着。
+        verify(!ScheduleWeeks.overlaps(480, 525, 600, 645))
+        // 只差一分钟也算相交。
+        verify(ScheduleWeeks.overlaps(480, 526, 525, 570))
+        // 包含关系两个方向都算相交。
+        verify(ScheduleWeeks.overlaps(480, 700, 540, 570))
+        verify(ScheduleWeeks.overlaps(540, 570, 480, 700))
+        // 完全重合。
+        verify(ScheduleWeeks.overlaps(480, 525, 480, 525))
+        // 字符串入参也要按数字比，绑定里传进来的常常是未转换的模型值。
+        verify(ScheduleWeeks.overlaps("480", "600", "540", "570"))
+    }
 }

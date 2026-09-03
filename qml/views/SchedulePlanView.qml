@@ -50,6 +50,10 @@ Item {
     // 今天落在第几周。学期锚点没设时为 0，表示算不出来。
     readonly property int currentWeekIndex: ScheduleWeeks.weekIndexForDate(root.semesterStartDate,
                                                                           root.logicalToday)
+    // 今天是否还落在学期范围内。学期结束（或起始日被设到未来）之后，
+    // currentWeekIndex 会越出 1..semesterWeeks，此时「本周」在这张表上根本不存在。
+    readonly property bool currentWeekInSemester: root.currentWeekIndex >= 1
+                                                  && root.currentWeekIndex <= root.semesterWeeks
     readonly property bool viewingCurrentWeek: root.weekIndex === root.currentWeekIndex
     // 只有正在看当前周时才高亮「今天」那一列；翻到别的周还高亮会误导。
     readonly property int highlightWeekday: {
@@ -110,6 +114,14 @@ Item {
     function goToWeek(target) {
         root.weekIndex = root.clampWeek(target)
         root.refresh()
+    }
+
+    // 删除入口有两个（网格里的 × 与编辑弹窗里的「删除」），都走同一段确认流程。
+    // 各自抄一遍的话，以后给确认框加字段就会漏掉其中一处。
+    function requestDelete(entryId, title) {
+        deleteConfirm.pendingId = Number(entryId)
+        deleteConfirm.pendingTitle = String(title || "")
+        deleteConfirm.open()
     }
 
     Component.onCompleted: {
@@ -205,6 +217,9 @@ Item {
                         var weekText = "第 " + root.weekIndex + " 周"
                         if (root.viewingCurrentWeek) {
                             weekText += "（本周）"
+                        } else if (root.currentWeekIndex > root.semesterWeeks) {
+                            // 不写这一句的话，用户只会看到「本周」按钮灰着而毫无缘由。
+                            weekText += "（学期已结束）"
                         }
                         var countText = root.entries.length === 0
                             ? "本周暂无安排"
@@ -252,7 +267,10 @@ Item {
                     objectName: "scheduleThisWeekButton"
                     text: "本周"
                     implicitWidth: 60
-                    enabled: root.semesterConfigured && root.currentWeekIndex >= 1
+                    // 只判 currentWeekIndex >= 1 是不够的：学期只有 16 周而今天已经是第 20 周时，
+                    // 按钮仍然可点，但 goToWeek 会把 20 夹回 16，页面纹丝不动，
+                    // 也没有任何文字解释为什么。点了没反应的控件比灰掉的控件更让人困惑。
+                    enabled: root.semesterConfigured && root.currentWeekInSemester
                     onClicked: root.goToWeek(root.currentWeekIndex)
                 }
 
@@ -482,9 +500,7 @@ Item {
             }
 
             onDeleteRequested: function (entryId, title) {
-                deleteConfirm.pendingId = entryId
-                deleteConfirm.pendingTitle = title
-                deleteConfirm.open()
+                root.requestDelete(entryId, title)
             }
         }
 
@@ -512,9 +528,7 @@ Item {
         onClosed: root.loadError = ""
 
         onDeleteRequested: function (entryId, title) {
-            deleteConfirm.pendingId = entryId
-            deleteConfirm.pendingTitle = title
-            deleteConfirm.open()
+            root.requestDelete(entryId, title)
         }
     }
 
@@ -547,6 +561,13 @@ Item {
         x: Math.round((root.width - width) / 2)
         y: Math.round((root.height - height) / 2)
         padding: 0
+
+        // 关掉就清空待删目标。留着上一次的 id 意味着：将来任何一条没有先赋值
+        // 就 open() 的路径，都会安静地删掉上一次那门课。
+        onClosed: {
+            deleteConfirm.pendingId = -1
+            deleteConfirm.pendingTitle = ""
+        }
 
         Overlay.modal: Rectangle {
             color: Theme.dialogScrim
