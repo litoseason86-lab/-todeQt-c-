@@ -337,6 +337,24 @@ TestCase {
 
     }
 
+    function test_headerControlsAllHaveAccessibleNames() {
+        view.anchorSemesterToThisWeek()
+        // 「‹」「›」这类符号按钮对读屏毫无意义，必须有显式名称；
+        // 「本周」曾经因为用了自定义属性而不是内建 text，成了一颗念不出名字的按钮。
+        var expected = {
+            "schedulePrevWeekButton": "上一周",
+            "scheduleThisWeekButton": "本周",
+            "scheduleNextWeekButton": "下一周",
+            "scheduleSettingsButton": "课表设置"
+        }
+        for (var name in expected) {
+            var button = findChild(view, name)
+            verify(button !== null, "找不到 " + name)
+            compare(String(button.Accessible.name), expected[name],
+                    name + " 缺少无障碍名称")
+        }
+    }
+
     function test_serviceFailureSurfacesLoadError() {
         view.anchorSemesterToThisWeek()
         compare(view.loadError, "")

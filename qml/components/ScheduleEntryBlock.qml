@@ -22,10 +22,10 @@ Rectangle {
     // 块太矮时（短课或节次行很窄）只留标题，避免文字挤成一团糊掉。
     readonly property bool compact: root.height < 46
     // 块太窄时按优先级砍信息。七列平分一个 900 宽的窗口后每列只有约 110px，
-    // 四行内容会全部截断成「A1教学楼A151…」这种读不出东西的省略号。
-    // 保留顺序是 课程名 > 地点 > 时间 > 周次：
-    // 时间已经由块在纵轴上的位置表达了，周次可以在编辑弹窗里看，
-    // 而课程名和地点是「现在该去哪上什么」唯一的答案。
+    // 一行装不下的内容会截断成「A1教学楼A151…」这种读不出东西的省略号。
+    // 保留顺序是 课程名 > 地点 > 时间：课程名和地点是「现在该去哪上什么」唯一的答案，
+    // 时间则已经由块在纵轴上的位置表达了，砍掉不丢信息。
+    // 单双周不在这个序列里——它由右下角的角标承载，不占行，因此不参与取舍。
     readonly property bool narrow: root.width < 150
 
     // —— 块内纵向空间预算 ——
@@ -39,12 +39,23 @@ Rectangle {
     // 「它的底边还落在预算之内」时才画。Column 里靠前的行的 y 不受靠后的行影响，
     // 因此这样引用不会形成绑定环。
     readonly property int contentBudget: root.height - content.anchors.topMargin - 4
-    readonly property int metaLineHeight: Math.round(Theme.fontXs * 1.5)
+    // 行高系数 1.7 是量出来的，不是估的：中文字形本身的行盒约为字号的 1.63–1.67 倍
+    // （11px 的地点行实测 18.4px）。此前按 1.5 估，每行少算 2px 多，
+    // 短块里累积起来就足以把最后一行切掉半个字。向上取整到 1.7 留一点余量。
+    readonly property int metaLineHeight: Math.round(Theme.fontXs * 1.7)
+    readonly property int titleLineHeight: Math.round((root.narrow ? Theme.fontSm : Theme.fontMd) * 1.7)
+    // 标题最多两行——但前提是两行标题之后还留得下一行地点。
+    // 只顾着把标题排满两行，会让 54px 的块（一节 60 分钟的课，最常见的一种）
+    // 只剩标题、地点被整行挤到预算之外画不出来。
+    // 优先级是「课程名 + 地点」这一对，而不是「课程名占满」。
+    readonly property int titleMaxLines: root.compact ? 1
+        : (root.contentBudget >= root.titleLineHeight * 2 + content.spacing + root.metaLineHeight
+           ? 2 : 1)
 
-    // 附注行：时间 + 生效周次范围。单双周不在这里——它移到了右上角的角标，
+    // 附注行：时间 + 生效周次范围。单双周不在这里——它在右下角的角标上，
     // 因为窄块里第三行经常放不下，而单双周是唯一「不写出来就会让人以为课表出错」的信息
     // （用户从第 1 周翻到第 2 周会发现课变了却没有任何解释）。
-    // 角标不占行高，于是它在任何尺寸下都能保住。
+    // 角标不占行高也不占行宽，于是它在任何尺寸下都能保住。
     readonly property string metaText: {
         if (root.narrow) {
             return ""
@@ -68,9 +79,12 @@ Rectangle {
     clip: true
 
     Accessible.role: Accessible.Button
+    // 单双周必须念出来。它在界面上只剩一个视觉角标，读屏用户拿不到任何其它线索，
+    // 而「这门课只在单周上」正是不知道就会跑错教室的那种信息。
     Accessible.name: root.title + " " + ScheduleWeeks.formatMinutes(root.startMinutes)
                      + " 到 " + ScheduleWeeks.formatMinutes(root.endMinutes)
                      + (root.location.length > 0 ? " 地点 " + root.location : "")
+                     + (root.parityBadge.length > 0 ? " " + root.parityBadge : "")
     activeFocusOnTab: true
 
     Behavior on color {
@@ -132,7 +146,7 @@ Rectangle {
             font.weight: Font.DemiBold
             color: Theme.inkStrong
             elide: Text.ElideRight
-            maximumLineCount: root.compact ? 1 : 2
+            maximumLineCount: root.titleMaxLines
             wrapMode: Text.Wrap
         }
 
@@ -140,7 +154,21 @@ Rectangle {
             id: locationText
 
             width: parent.width
+            // 既要判「几行」也要判「画不画」。只判行数的话，标题占满两行之后
+            // 地点会整行落在预算之外，被块的 clip 切成半个字。
+            //
+            // 这里用本行的实际高度而不是上面那个保守的估算值：
+            // 估算值按 1.7 倍取，比真实行高多约 3px，46px 的块（刚过 compact 门槛）
+            // 会因此被判成「放不下」而整行丢掉地点——守卫本该防的是半个字，
+            // 不是把信息也一起挡掉。implicitHeight 不依赖 visible，不会成环。
+            //
+            // 在当前字号下这条守卫不会真的触发：titleMaxLines 已经保证了标题之后
+            // 一定留得下一行地点（变异测试验证过，去掉它没有任何用例转红）。
+            // 保留是因为两者依据不同——titleMaxLines 用的是 1.7 这个**估算**系数，
+            // 这里用的是排版后的**实际**高度。换字体或改字号时估算会先失准，
+            // 那时这条守卫就是「宁可不画，也不出半个字」的最后一道。
             visible: !root.compact && root.location.length > 0
+                     && locationText.y + locationText.implicitHeight <= root.contentBudget
             text: root.location
             textFormat: Text.PlainText
             font.pixelSize: Theme.fontXs
@@ -180,6 +208,7 @@ Rectangle {
     Rectangle {
         id: parityChip
 
+        objectName: "scheduleParityChip"
         anchors.bottom: parent.bottom
         anchors.right: parent.right
         anchors.margins: 3
@@ -187,7 +216,9 @@ Rectangle {
         height: parityLabel.implicitHeight + 2
         radius: height / 2
         color: Theme.accentFill
-        visible: root.parityBadge.length > 0 && !hoverHandler.hovered && !deleteHover.hovered
+        // 角标在右下、删除按钮在右上，两者互不遮挡，所以不该一悬停就整个消失
+        // （那是它还放在右上角时留下的规则）。只有块矮到两者会叠在一起时才让位。
+        visible: root.parityBadge.length > 0 && !root.compact
 
         Text {
             id: parityLabel
@@ -195,7 +226,7 @@ Rectangle {
             anchors.centerIn: parent
             text: root.parityBadge
             textFormat: Text.PlainText
-            font.pixelSize: 10
+            font.pixelSize: Theme.fontXs
             color: Theme.accentFillInk
         }
     }

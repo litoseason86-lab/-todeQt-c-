@@ -275,7 +275,7 @@ Item {
                         objectName: "schedulePrevWeekButton"
                         width: 38
                         height: parent.height
-                        glyph: "‹"
+                        text: "‹"
                         Accessible.name: "上一周"
                         enabled: root.semesterConfigured && root.weekIndex > 1
                         onClicked: root.goToWeek(root.weekIndex - 1)
@@ -287,7 +287,7 @@ Item {
                         objectName: "scheduleThisWeekButton"
                         width: 60
                         height: parent.height
-                        glyph: "本周"
+                        text: "本周"
                         // 只判 currentWeekIndex >= 1 是不够的：学期只有 16 周而今天已经是第 20 周时，
                         // 按钮仍然可点，但 goToWeek 会把 20 夹回 16，页面纹丝不动，
                         // 也没有任何文字解释为什么。点了没反应的控件比灰掉的控件更让人困惑。
@@ -301,7 +301,7 @@ Item {
                         objectName: "scheduleNextWeekButton"
                         width: 38
                         height: parent.height
-                        glyph: "›"
+                        text: "›"
                         Accessible.name: "下一周"
                         enabled: root.semesterConfigured && root.weekIndex < root.semesterWeeks
                         onClicked: root.goToWeek(root.weekIndex + 1)
@@ -718,12 +718,16 @@ Item {
 
     // 周次导航轨道里的一段。无底无框——分组感由外层轨道表达，
     // 段自己再描边就又回到「三颗独立按钮」那个样子了。
+    // 用内建的 text 而不是自定义属性：AbstractButton 的 Accessible.name 会回落到 text，
+    // 自定义属性拿不到这个回落——实测「本周」因此成了一颗读屏念不出名字的按钮。
     component NavSegment: AbstractButton {
         id: navSegment
 
-        property string glyph: ""
-
         Accessible.role: Accessible.Button
+        // 显式写死而不是依赖「回落到 text」：那个回落发生在无障碍后端，
+        // QML 侧读到的始终是空串，也就无法用测试证明它真的有名字。
+        // 「‹」「›」这种符号对读屏毫无意义，两端的实例会各自覆盖成「上一周」「下一周」。
+        Accessible.name: navSegment.text
 
         background: Rectangle {
             radius: height / 2
@@ -739,7 +743,7 @@ Item {
         }
 
         contentItem: Text {
-            text: navSegment.glyph
+            text: navSegment.text
             textFormat: Text.PlainText
             // 轨道是压暗的凹槽，次要色在上面够不到正文 AA，常态就用 ink。
             color: navSegment.enabled ? (navSegment.hovered ? Theme.inkStrong : Theme.ink)
