@@ -214,7 +214,10 @@ FocusScope {
                     namePrefix: "settingsFreeTimerWarningHours"
                     accessibleName: "自由计时超时确认"
                     unit: "小时"
-                    value: root.appSettingsRef ? root.appSettingsRef.freeTimerWarningHours : 8
+                    // Number(...) || 8 兜住「对象在、但没有这个属性」：直接取值会把
+                    // undefined 赋给 int 属性并被运行时拒绝。与本仓其余数值兜底一致。
+                    value: Number(root.appSettingsRef
+                                  ? root.appSettingsRef.freeTimerWarningHours : 8) || 8
                     from: 1
                     to: 24
                     onAdjusted: newValue => {

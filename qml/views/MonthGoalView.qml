@@ -176,7 +176,13 @@ Item {
     }
 
     function formatDuration(seconds) {
-        if (root.hasFocusHistoryService()) {
+        // 必须连方法在不在一起判。只判对象非空的话，注入了一个没有 formatDuration
+        // 的对象时会抛 TypeError，**下面这段专门为「服务不可用」写的兜底反而跑不到**，
+        // 整个求值中断、标签变成空白。本文件另外三处（lastError / invalidSessionCount /
+        // cleanupInvalidSessions）以及 TodayFocusView 里同名的这个函数都是这么写的，
+        // 只有这里漏了。
+        if (root.hasFocusHistoryService()
+                && typeof root.focusHistoryServiceRef.formatDuration === "function") {
             return root.focusHistoryServiceRef.formatDuration(seconds);
         }
 

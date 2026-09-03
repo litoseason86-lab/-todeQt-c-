@@ -768,6 +768,19 @@ foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic"
         # 单文件比聚合快得多，但最慢的 tst_ui_optimization 实测约 20s，留足慢机器余量。
         TIMEOUT 120
+        # QML 运行时告警一律判失败。
+        #
+        # 这些告警不会让任何断言转红，测试照样全绿，但每一条都是真缺陷：
+        #   Unable to assign [undefined]  属性赋值被拒，绑定停在上一次的值
+        #   TypeError / is not a function 求值当场中断，后面的兜底逻辑根本跑不到
+        #   Binding loop                  绑定反复求值，界面可能停在中间态
+        # 实测本仓曾同时存在三处：ExportDialog 的 busy 决定导出期间能否关窗却停在旧值；
+        # MonthGoalView.formatDuration 抛 TypeError，跳过了它自己写的兜底格式化。
+        #
+        # 挂在已有条目上而不是新加一条门禁：串行重跑全部 QML 测试实测 63s，
+        # 会让全量从 22s 涨到三倍以上，而这里是零额外开销。
+        # 某条测试确实需要故意触发告警时，单独覆盖它的 FAIL_REGULAR_EXPRESSION。
+        FAIL_REGULAR_EXPRESSION "Unable to assign;TypeError;is not a function;Binding loop"
     )
 endforeach()
 

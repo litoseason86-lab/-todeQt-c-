@@ -32,7 +32,12 @@ Popup {
     property string statusText: ""
     property int exportCurrent: 0
     property int exportTotal: 0
-    readonly property bool busy: !!root.exportServiceRef && root.exportServiceRef.busy
+    // Boolean() 强制转换不能省：`a && b` 在 b 为 undefined 时整体就是 undefined，
+    // 赋给 bool 属性会被拒绝（运行时 "Unable to assign [undefined] to bool"），
+    // 属性保留上一次的值。这个属性决定导出期间能不能关掉对话框，
+    // 停在旧值意味着导出跑着却能被 Esc 关掉。全仓另外八处同类判断都用 Boolean()。
+    readonly property bool busy: root.exportServiceRef
+                                 ? Boolean(root.exportServiceRef.busy) : false
 
     modal: true
     focus: true
