@@ -82,12 +82,39 @@ Item {
     }
     readonly property int axisHourCount: Math.max(1, (root.axisEndMinutes - root.axisStartMinutes) / 60)
 
+    // 每个条目的最终屏幕几何只计算一次。节次扫描若散落在 visible/y/height
+    // 三个绑定里，一次刷新会对每项重复扫描整张节次表。
+    readonly property var entryGeometries: {
+        var geometries = []
+        for (var i = 0; i < root.visibleEntries.length; ++i) {
+            var entry = root.visibleEntries[i]
+            var geometry = root.geometryForEntry(entry)
+            geometries.push({
+                entry: entry,
+                top: geometry.top,
+                height: geometry.height,
+                layoutStart: geometry.top,
+                layoutEnd: geometry.top + geometry.height
+            })
+        }
+        return geometries
+    }
+
+    readonly property int timeContentHeight: {
+        var bottom = Math.round((root.axisEndMinutes - root.axisStartMinutes)
+                                * root.pixelsPerMinute)
+        for (var i = 0; i < root.entryGeometries.length; ++i) {
+            bottom = Math.max(bottom, root.entryGeometries[i].layoutEnd)
+        }
+        return Math.ceil(bottom)
+    }
+
     // 网格内容高度。两种模式各自算，滚动区据此决定要不要出现滚动条。
     readonly property int bodyHeight: root.displayMode === "period"
         ? Math.max(root.periodRowHeight,
                    root.periods.length * (root.periodRowHeight + root.periodRowSpacing)
                    - root.periodRowSpacing)
-        : Math.round((root.axisEndMinutes - root.axisStartMinutes) * root.pixelsPerMinute)
+        : root.timeContentHeight
 
     // 每一天的重叠排布结果，索引 0~6 对应周一~周日。
     // 一次性算好存进属性，避免每个 delegate 各自再跑一遍排布。
@@ -95,12 +122,13 @@ Item {
         var result = []
         for (var weekday = 1; weekday <= 7; ++weekday) {
             var dayEntries = []
-            for (var i = 0; i < root.visibleEntries.length; ++i) {
-                if (Number(root.visibleEntries[i].weekday) === weekday) {
-                    dayEntries.push(root.visibleEntries[i])
+            for (var i = 0; i < root.entryGeometries.length; ++i) {
+                var geometry = root.entryGeometries[i]
+                if (geometry.height > 0 && Number(geometry.entry.weekday) === weekday) {
+                    dayEntries.push(geometry)
                 }
             }
-            result.push(ScheduleWeeks.layoutDayEntries(dayEntries))
+            result.push(ScheduleWeeks.layoutVisualEntries(dayEntries))
         }
         return result
     }
@@ -132,19 +160,9 @@ Item {
             return []
         }
         var unplaced = []
-        for (var i = 0; i < root.visibleEntries.length; ++i) {
-            var entry = root.visibleEntries[i]
-            var placed = false
-            for (var j = 0; j < root.periods.length; ++j) {
-                var period = root.periods[j]
-                if (ScheduleWeeks.overlaps(entry.startMinutes, entry.endMinutes,
-                                           period.startMinutes, period.endMinutes)) {
-                    placed = true
-                    break
-                }
-            }
-            if (!placed) {
-                unplaced.push(entry)
+        for (var i = 0; i < root.entryGeometries.length; ++i) {
+            if (root.entryGeometries[i].height <= 0) {
+                unplaced.push(root.entryGeometries[i].entry)
             }
         }
         return unplaced
@@ -167,30 +185,28 @@ Item {
         return { first: first, last: last }
     }
 
-    function blockTop(entry) {
+    function geometryForEntry(entry) {
         if (root.displayMode === "period") {
             var range = root.periodRowRange(entry)
             if (range.first < 0) {
-                return 0
+                return { top: 0, height: 0 }
             }
-            return range.first * (root.periodRowHeight + root.periodRowSpacing)
-        }
-        return Math.round((Number(entry.startMinutes) - root.axisStartMinutes)
-                          * root.pixelsPerMinute)
-    }
-
-    function blockHeight(entry) {
-        if (root.displayMode === "period") {
-            var range = root.periodRowRange(entry)
-            if (range.first < 0) {
-                return 0
-            }
+            var top = range.first * (root.periodRowHeight + root.periodRowSpacing)
             var rows = range.last - range.first + 1
-            return rows * (root.periodRowHeight + root.periodRowSpacing) - root.periodRowSpacing
+            return {
+                top: top,
+                height: rows * (root.periodRowHeight + root.periodRowSpacing)
+                        - root.periodRowSpacing
+            }
         }
+        var timeTop = Math.round((Number(entry.startMinutes) - root.axisStartMinutes)
+                                 * root.pixelsPerMinute)
         // 极短的条目也要留出可点击的最小高度，否则 10 分钟的项几乎点不中。
-        return Math.max(24, Math.round((Number(entry.endMinutes) - Number(entry.startMinutes))
-                                       * root.pixelsPerMinute))
+        var timeHeight = Math.max(
+            24,
+            Math.round((Number(entry.endMinutes) - Number(entry.startMinutes))
+                       * root.pixelsPerMinute))
+        return { top: timeTop, height: timeHeight }
     }
 
     // 空白处点击新增时，用点击位置反推一个合理的起始时间。
@@ -495,11 +511,11 @@ Item {
                                         Math.max(1, (dayColumn.width - 2)
                                                  / Math.max(1, entryBlock.modelData.laneCount))
 
-                                    visible: root.blockHeight(entryBlock.entry) > 0
+                                    visible: entryBlock.modelData.height > 0
                                     x: 1 + entryBlock.modelData.lane * entryBlock.laneWidth
                                     width: Math.max(1, entryBlock.laneWidth - 2)
-                                    y: root.blockTop(entryBlock.entry)
-                                    height: root.blockHeight(entryBlock.entry)
+                                    y: entryBlock.modelData.top
+                                    height: entryBlock.modelData.height
 
                                     entryId: Number(entryBlock.entry.id)
                                     title: String(entryBlock.entry.title)

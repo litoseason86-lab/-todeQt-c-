@@ -474,8 +474,22 @@ Popup {
                     Layout.fillWidth: true
                     model: root.periodOptions
                     textRole: "label"
-                    currentIndex: -1
                     displayText: "选择节次…"
+
+                    Component.onCompleted: periodCombo.currentIndex = -1
+                    // ComboBox 的模型从空变为非空时会自动选中第 0 项。这里是
+                    // “一次性快填动作”而不是状态选择，模型变化后仍必须保持未选中。
+                    // 内建控件的自动选中发生在 countChanged 处理器之后，同步赋 -1 仍会被覆盖。
+                    onCountChanged: Qt.callLater(function () {
+                        periodCombo.currentIndex = -1
+                    })
+                    onCurrentIndexChanged: {
+                        if (periodCombo.currentIndex >= 0) {
+                            Qt.callLater(function () {
+                                periodCombo.currentIndex = -1
+                            })
+                        }
+                    }
 
                     onActivated: function (index) {
                         if (index < 0 || index >= root.periodOptions.length) {

@@ -27,10 +27,10 @@ class ScheduleService : public QObject
 
 public:
     // 单双周规则。存库为整数，QML 侧按同一套取值传入。
-    enum WeekParity {
+    enum WeekParity : int {
         EveryWeek = 0,
         OddWeeks = 1,
-        EvenWeeks = 2
+        EvenWeeks = 2,
     };
     Q_ENUM(WeekParity)
 
@@ -97,6 +97,7 @@ signals:
 
 private:
     explicit ScheduleService(QObject* parent = nullptr);
+    Q_DISABLE_COPY_MOVE(ScheduleService)
 
     void reportFailure(const QString& message) const;
     // 写入前的统一校验。normalizedTitle/normalizedLocation 回传去除首尾空白后的值，

@@ -115,6 +115,11 @@ public:
     void setScheduleDisplayMode(const QString& mode);
     bool scheduleShowWeekend() const;
     void setScheduleShowWeekend(bool visible);
+    // 课表设置弹窗一次修改三个键。单独走 Q_PROPERTY setter 会出现
+    // 前两个已落盘、第三个失败的伪“整体保存”，因此提供批量接口。
+    Q_INVOKABLE bool saveScheduleSettings(const QString& semesterStartDate,
+                                          int semesterWeeks,
+                                          bool showWeekend);
     Q_INVOKABLE int dailyFocusGoalMinutesForDate(const QString& isoDate) const;
     Q_INVOKABLE bool setDailyFocusGoal(const QString& isoDate, int minutes);
 

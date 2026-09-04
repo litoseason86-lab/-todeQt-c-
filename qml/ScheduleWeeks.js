@@ -121,12 +121,12 @@ function parseMinutes(text) {
 // 一旦两块直接叠在一起，上面那块会把下面那块完全遮死，用户根本看不到自己排了两门。
 //
 // 返回 [{ entry, lane, laneCount }]，调用方按 lane / laneCount 切分列宽。
-function layoutDayEntries(entries) {
+function layoutEntries(entries, startRole, endRole, visualGeometry) {
     var sorted = (entries || []).slice().sort(function (a, b) {
-        if (a.startMinutes !== b.startMinutes) {
-            return a.startMinutes - b.startMinutes
+        if (Number(a[startRole]) !== Number(b[startRole])) {
+            return Number(a[startRole]) - Number(b[startRole])
         }
-        return a.endMinutes - b.endMinutes
+        return Number(a[endRole]) - Number(b[endRole])
     })
 
     var result = []
@@ -139,8 +139,8 @@ function layoutDayEntries(entries) {
     function flushCluster() {
         for (var i = 0; i < cluster.length; ++i) {
             cluster[i].laneCount = laneEnds.length
+            result.push(cluster[i])
         }
-        result = result.concat(cluster)
         cluster = []
         laneEnds = []
         clusterEnd = -1
@@ -148,30 +148,49 @@ function layoutDayEntries(entries) {
 
     for (var i = 0; i < sorted.length; ++i) {
         var entry = sorted[i]
+        var entryStart = Number(entry[startRole])
+        var entryEnd = Number(entry[endRole])
         // 起点不早于当前簇的最晚结束时间，说明它与簇内任何一项都不重叠，另起一簇。
-        if (clusterEnd >= 0 && entry.startMinutes >= clusterEnd) {
+        if (clusterEnd >= 0 && entryStart >= clusterEnd) {
             flushCluster()
         }
 
         var lane = -1
         for (var j = 0; j < laneEnds.length; ++j) {
-            if (laneEnds[j] <= entry.startMinutes) {
+            if (laneEnds[j] <= entryStart) {
                 lane = j
                 break
             }
         }
         if (lane < 0) {
-            laneEnds.push(entry.endMinutes)
+            laneEnds.push(entryEnd)
             lane = laneEnds.length - 1
         } else {
-            laneEnds[lane] = entry.endMinutes
+            laneEnds[lane] = entryEnd
         }
 
-        cluster.push({ entry: entry, lane: lane, laneCount: 1 })
-        clusterEnd = Math.max(clusterEnd, entry.endMinutes)
+        cluster.push({
+            entry: visualGeometry ? entry.entry : entry,
+            top: visualGeometry ? entry.top : undefined,
+            height: visualGeometry ? entry.height : undefined,
+            lane: lane,
+            laneCount: 1
+        })
+        clusterEnd = Math.max(clusterEnd, entryEnd)
     }
     flushCluster()
     return result
+}
+
+function layoutDayEntries(entries) {
+    return layoutEntries(entries, "startMinutes", "endMinutes", false)
+}
+
+// 网格必须按最终绘制区间分泳道，不能再按原始分钟区间。
+// 极短课程会被扩到最小可点高度，节次模式也会把时间量化成整行；
+// 若泳道仍按原时间算，两个“逻辑上不重叠”的块会在屏幕上完全盖住。
+function layoutVisualEntries(entries) {
+    return layoutEntries(entries, "layoutStart", "layoutEnd", true)
 }
 
 // 单双周规则的可读文案。0=每周 1=单周 2=双周，与 ScheduleService::WeekParity 对应。

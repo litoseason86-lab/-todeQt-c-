@@ -49,6 +49,15 @@ Item {
     property string loadError: ""
     property bool completionRefreshDelayActive: false
     property bool pageActive: true
+    // 系统时间本身不是 QML 的可观察属性。把“当前时刻”保存成显式状态，
+    // 由逻辑日服务和页面刷新推进，避免应用跨过日界点后实时统计仍使用旧日期。
+    property var logicalNow: new Date()
+    // 测试可注入固定时钟；生产环境为空时读取系统时间。
+    property var nowProvider: null
+    readonly property string logicalTodayIso: {
+        var hour = root.settingsRef ? root.settingsRef.dayStartHour : 4
+        return LogicalDay.todayIso(hour, root.logicalNow)
+    }
     // 当日专注目标（分钟）；0 = 今天尚未设置。设置/修改只在本页发生。
     property int dailyFocusGoalMinutes: 0
     // 拖动排序。拖动期间**完全不动模型**，只记「要落在第几位」，松手才重排并落库。
@@ -113,7 +122,7 @@ Item {
     readonly property FocusLiveSeconds liveSecondsSource: FocusLiveSeconds {
         timerRef: root.focusTimerRef
         baseSeconds: Number(root.todayStats.totalDuration || 0)
-        logicalDate: root.todayIsoDate()
+        logicalDate: root.logicalTodayIso
     }
 
     Component.onCompleted: {
@@ -232,27 +241,31 @@ Item {
         ignoreUnknownSignals: true
 
         function onChanged() {
+            // 先推进日期状态，再安排数据重查。否则同一事件循环内开始的新会话
+            // 会被 FocusLiveSeconds 用昨天的日期过滤掉，界面只剩已落库累计值。
+            root.logicalNow = root.currentNow()
             refreshCoalescer.request()
         }
     }
 
+    function currentNow() {
+        // qmllint disable use-proper-function
+        return root.nowProvider ? root.nowProvider() : new Date()
+        // qmllint enable use-proper-function
+    }
+
     function todayIsoDate() {
-        // 结转忽略日期与 TaskManager 的逾期判定必须使用同一逻辑今天。
-        // settingsRef 就是 appSettings，没有理由再从动态作用域摸一次同一个对象。
-        var hour = root.settingsRef ? root.settingsRef.dayStartHour : 4
-        return LogicalDay.todayIso(hour, new Date());
+        return root.logicalTodayIso
     }
 
     function currentLogicalTodayDate() {
-        // settingsRef 就是 appSettings，没有理由再从动态作用域摸一次同一个对象。
         var hour = root.settingsRef ? root.settingsRef.dayStartHour : 4
-        return LogicalDay.todayDate(hour, new Date())
+        return LogicalDay.todayDate(hour, root.logicalNow)
     }
 
     function yesterdayIsoDate() {
-        // settingsRef 就是 appSettings，没有理由再从动态作用域摸一次同一个对象。
         var hour = root.settingsRef ? root.settingsRef.dayStartHour : 4
-        var today = LogicalDay.todayDate(hour, new Date())
+        var today = LogicalDay.todayDate(hour, root.logicalNow)
         var yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1)
         return Qt.formatDate(yesterday, "yyyy-MM-dd")
     }
@@ -394,6 +407,9 @@ Item {
     }
 
     function refresh() {
+        // refresh 也是恢复、任务变更等入口的兜底。即使平台漏发日界通知，
+        // 下一次刷新也会修正日期，不让错误状态一直活到应用重启。
+        root.logicalNow = root.currentNow()
         // 每次刷新前先确保当天真实任务行已生成；跨午夜后只要页面触发刷新就会补上当天例行项。
         // materializeToday 幂等且不发 tasksChanged，避免 refresh 递归。
         if (root.routineManagerRef && root.routineManagerRef.materializeToday) {

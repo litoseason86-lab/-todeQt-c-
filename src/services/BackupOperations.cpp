@@ -10,6 +10,7 @@
 #include <QFileInfo>
 #include <QSaveFile>
 #include <QSettings>
+#include <QRegularExpression>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -92,11 +93,25 @@ bool tableExists(const QSqlDatabase& database, const QString& tableName)
     return query.exec() && query.next();
 }
 
-bool validateRequiredTableStructure(const QSqlDatabase& database, QString* reason)
+QString normalizedCreateSql(QString sql)
+{
+    sql = sql.toLower();
+    sql.remove(QRegularExpression(QStringLiteral("\\s+")));
+    sql.remove(QLatin1Char('"'));
+    sql.remove(QLatin1Char('`'));
+    sql.remove(QLatin1Char('['));
+    sql.remove(QLatin1Char(']'));
+    return sql;
+}
+
+bool validateRequiredTableStructure(const QSqlDatabase& database,
+                                    bool requireScheduleTables,
+                                    QString* reason)
 {
     struct TableContract {
         QString name;
         QStringList columns;
+        QStringList sqlFragments;
     };
 
     // 这里只校验所有历史版本都依赖、且迁移链无法补回的基础结构。
@@ -109,23 +124,58 @@ bool validateRequiredTableStructure(const QSqlDatabase& database, QString* reaso
           QStringLiteral("category"),
           QStringLiteral("date"),
           QStringLiteral("completed"),
-          QStringLiteral("created_at")}},
+          QStringLiteral("created_at")}, {}},
         {QStringLiteral("focus_sessions"),
          {QStringLiteral("id"),
           QStringLiteral("task_id"),
           QStringLiteral("start_time"),
           QStringLiteral("end_time"),
-          QStringLiteral("duration")}},
+          QStringLiteral("duration")}, {}},
         {QStringLiteral("categories"),
          {QStringLiteral("id"),
           QStringLiteral("name"),
           QStringLiteral("color"),
           QStringLiteral("is_preset"),
           QStringLiteral("display_order"),
-          QStringLiteral("created_at")}},
+          QStringLiteral("created_at")}, {}},
     };
 
-    for (const TableContract& contract : contracts) {
+    QList<TableContract> versionedContracts = contracts;
+    if (requireScheduleTables) {
+        // v13 以后课表已是正式业务数据。不能像老版备份那样容忍表缺失，
+        // 否则恢复后迁移会创建一张空表，把“数据丢了”伪装成“恢复成功”。
+        versionedContracts.append(
+            {QStringLiteral("schedule_entries"),
+             {QStringLiteral("id"), QStringLiteral("title"), QStringLiteral("location"),
+              QStringLiteral("weekday"), QStringLiteral("start_minutes"),
+              QStringLiteral("end_minutes"), QStringLiteral("week_start"),
+              QStringLiteral("week_end"), QStringLiteral("week_parity"),
+              QStringLiteral("category_id"), QStringLiteral("created_at")},
+             {QStringLiteral("check(length(trim(title))>0)"),
+              QStringLiteral("check(weekdaybetween1and7)"),
+              QStringLiteral("check(start_minutesbetween0and1439)"),
+              QStringLiteral("check(end_minutesbetween1and1440)"),
+              QStringLiteral("check(week_start>=1)"),
+              QStringLiteral("check(week_end>=1)"),
+              QStringLiteral("check(week_parityin(0,1,2))"),
+              QStringLiteral("check(end_minutes>start_minutes)"),
+              QStringLiteral("check(week_end>=week_start)")}});
+        versionedContracts.append(
+            {QStringLiteral("schedule_periods"),
+             {QStringLiteral("id"), QStringLiteral("period_index"),
+              QStringLiteral("start_minutes"), QStringLiteral("end_minutes")},
+             {QStringLiteral("period_indexintegernotnullunique"),
+              QStringLiteral("check(period_index>=1)"),
+              QStringLiteral("check(start_minutesbetween0and1439)"),
+              QStringLiteral("check(end_minutesbetween1and1440)"),
+              QStringLiteral("check(end_minutes>start_minutes)")}});
+    }
+
+    for (const TableContract& contract : versionedContracts) {
+        if (!tableExists(database, contract.name)) {
+            *reason = QStringLiteral("备份缺少必要的数据表：%1").arg(contract.name);
+            return false;
+        }
         QSqlQuery columns(database);
         if (!columns.exec(
                 QStringLiteral("PRAGMA table_info(%1)").arg(contract.name))) {
@@ -153,6 +203,47 @@ bool validateRequiredTableStructure(const QSqlDatabase& database, QString* reaso
         if (!idIsPrimaryKey) {
             *reason = QStringLiteral("备份表结构不完整，%1.id 不是主键")
                           .arg(contract.name);
+            return false;
+        }
+
+        if (!contract.sqlFragments.isEmpty()) {
+            QSqlQuery sqlQuery(database);
+            sqlQuery.prepare(QStringLiteral(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = :name"));
+            sqlQuery.bindValue(QStringLiteral(":name"), contract.name);
+            if (!sqlQuery.exec() || !sqlQuery.next()) {
+                *reason = QStringLiteral("读取备份表约束失败：%1").arg(contract.name);
+                return false;
+            }
+            const QString createSql = normalizedCreateSql(sqlQuery.value(0).toString());
+            for (const QString& fragment : contract.sqlFragments) {
+                if (!createSql.contains(fragment)) {
+                    *reason = QStringLiteral("备份表约束不完整：%1").arg(contract.name);
+                    return false;
+                }
+            }
+        }
+    }
+
+    if (requireScheduleTables) {
+        QSqlQuery foreignKey(database);
+        if (!foreignKey.exec(QStringLiteral("PRAGMA foreign_key_list(schedule_entries)"))) {
+            *reason = QStringLiteral("读取课表外键失败");
+            return false;
+        }
+        bool categoryForeignKeyFound = false;
+        while (foreignKey.next()) {
+            if (foreignKey.value(2).toString() == QStringLiteral("categories")
+                && foreignKey.value(3).toString() == QStringLiteral("category_id")
+                && foreignKey.value(4).toString() == QStringLiteral("id")
+                && foreignKey.value(6).toString().compare(
+                       QStringLiteral("SET NULL"), Qt::CaseInsensitive) == 0) {
+                categoryForeignKeyFound = true;
+                break;
+            }
+        }
+        if (!categoryForeignKeyFound) {
+            *reason = QStringLiteral("备份课表外键不完整");
             return false;
         }
     }
@@ -483,10 +574,6 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
                 }
             }
 
-            if (reason.isEmpty()) {
-                validateRequiredTableStructure(database, &reason);
-            }
-
             if (reason.isEmpty()
                 && (!tableExists(database, QStringLiteral("backup_meta"))
                     || !tableExists(database, QStringLiteral("backup_settings")))) {
@@ -531,6 +618,9 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
             }
             if (reason.isEmpty() && pragmaVersion > currentSchemaVersion) {
                 reason = QStringLiteral("该备份由更高版本创建，当前版本无法恢复");
+            }
+            if (reason.isEmpty()) {
+                validateRequiredTableStructure(database, pragmaVersion >= 13, &reason);
             }
 
             // 备份是数据，不是可信的数据库程序。

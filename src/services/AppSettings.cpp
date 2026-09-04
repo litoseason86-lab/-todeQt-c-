@@ -397,6 +397,62 @@ void AppSettings::setScheduleShowWeekend(bool visible)
     }
 }
 
+bool AppSettings::saveScheduleSettings(const QString& semesterStartDateValue,
+                                       int semesterWeeksValue,
+                                       bool showWeekendValue)
+{
+    const QString trimmedStart = semesterStartDateValue.trimmed();
+    const QString normalizedStart = normalizeSemesterStartDate(trimmedStart);
+    if (!trimmedStart.isEmpty() && normalizedStart.isEmpty()) {
+        emit settingsWriteFailed(kSemesterStartDateKey,
+                                 QStringLiteral("学期起始日格式无效"));
+        return false;
+    }
+    if (semesterWeeksValue < kMinSemesterWeeks
+        || semesterWeeksValue > kMaxSemesterWeeks) {
+        emit settingsWriteFailed(kSemesterWeeksKey,
+                                 QStringLiteral("学期总周数无效"));
+        return false;
+    }
+
+    const QString oldStart = semesterStartDate();
+    const int oldWeeks = semesterWeeks();
+    const bool oldShowWeekend = scheduleShowWeekend();
+    if (oldStart == normalizedStart && oldWeeks == semesterWeeksValue
+        && oldShowWeekend == showWeekendValue) {
+        return true;
+    }
+
+    if (m_settings->status() != QSettings::NoError) {
+        recreateSettingsBackend();
+    }
+
+    // 三个值先进同一份缓存，只在一次 sync 成功后才对外发送 changed，
+    // 页面不会观察到半套课表设置；具体落盘方式由当前 QSettings 后端负责。
+    m_settings->setValue(kSemesterStartDateKey, normalizedStart);
+    m_settings->setValue(kSemesterWeeksKey, semesterWeeksValue);
+    m_settings->setValue(kScheduleShowWeekendKey, showWeekendValue);
+    m_settings->sync();
+    if (m_settings->status() != QSettings::NoError) {
+        const QString message = settingsErrorMessage(m_settings->status());
+        recreateSettingsBackend();
+        emit settingsWriteFailed(QStringLiteral("schedule"), message);
+        return false;
+    }
+
+    emit settingsWriteSucceeded(QStringLiteral("schedule"));
+    if (oldStart != normalizedStart) {
+        emit semesterStartDateChanged();
+    }
+    if (oldWeeks != semesterWeeksValue) {
+        emit semesterWeeksChanged();
+    }
+    if (oldShowWeekend != showWeekendValue) {
+        emit scheduleShowWeekendChanged();
+    }
+    return true;
+}
+
 int AppSettings::dayStartHour() const
 {
     // 读取时也归一化，拦住旧版本或手工编辑遗留的坏值。

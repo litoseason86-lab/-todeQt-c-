@@ -691,6 +691,8 @@ private slots:
     void appSettingsFocusDurationsNormalizeCorruptValues();
     void appSettingsFreeTimerWarningHoursDefaultsAndNormalizes();
     void appSettingsWriteFailureDoesNotEmitSuccess();
+    void appSettingsScheduleBatchReportsFailureWithoutChangingValues();
+    void appSettingsScheduleBatchPersistsBeforeEmittingChanges();
     void appSettingsCanRetryAfterWriteFailure();
     void appSettingsReduceTransparencyRoundTrip();
     void appSettingsRaiseOnPhaseCompleteDefaultsOnAndRoundTrips();
@@ -1305,6 +1307,53 @@ void ServiceTests::appSettingsWriteFailureDoesNotEmitSuccess()
     QCOMPARE(failureSpy.count(), 1);
     QCOMPARE(failureSpy.first().at(0).toString(), QStringLiteral("focus/soundEnabled"));
     QCOMPARE(settings.soundEnabled(), true);
+}
+
+void ServiceTests::appSettingsScheduleBatchReportsFailureWithoutChangingValues()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+
+    // 目录不能当 INI 文件写入，用它稳定触发 AccessError。
+    AppSettings settings(dir.path());
+    QSignalSpy failureSpy(&settings, &AppSettings::settingsWriteFailed);
+    QSignalSpy startSpy(&settings, &AppSettings::semesterStartDateChanged);
+    QSignalSpy weeksSpy(&settings, &AppSettings::semesterWeeksChanged);
+    QSignalSpy weekendSpy(&settings, &AppSettings::scheduleShowWeekendChanged);
+
+    QVERIFY(!settings.saveScheduleSettings(QStringLiteral("2026-08-31"), 16, false));
+    QCOMPARE(failureSpy.count(), 1);
+    QCOMPARE(startSpy.count(), 0);
+    QCOMPARE(weeksSpy.count(), 0);
+    QCOMPARE(weekendSpy.count(), 0);
+    QVERIFY(settings.semesterStartDate().isEmpty());
+    QCOMPARE(settings.semesterWeeks(), 20);
+    QCOMPARE(settings.scheduleShowWeekend(), true);
+}
+
+void ServiceTests::appSettingsScheduleBatchPersistsBeforeEmittingChanges()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+    AppSettings settings(path);
+
+    QSignalSpy successSpy(&settings, &AppSettings::settingsWriteSucceeded);
+    QSignalSpy startSpy(&settings, &AppSettings::semesterStartDateChanged);
+    QSignalSpy weeksSpy(&settings, &AppSettings::semesterWeeksChanged);
+    QSignalSpy weekendSpy(&settings, &AppSettings::scheduleShowWeekendChanged);
+
+    QVERIFY(settings.saveScheduleSettings(QStringLiteral("2026-09-02"), 16, false));
+    QCOMPARE(successSpy.count(), 1);
+    QCOMPARE(startSpy.count(), 1);
+    QCOMPARE(weeksSpy.count(), 1);
+    QCOMPARE(weekendSpy.count(), 1);
+
+    // 起始日在同一次批量写入中规范化到周一，新建对象能直接读到全套值。
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.semesterStartDate(), QStringLiteral("2026-08-31"));
+    QCOMPARE(reloaded.semesterWeeks(), 16);
+    QCOMPARE(reloaded.scheduleShowWeekend(), false);
 }
 
 void ServiceTests::appSettingsCanRetryAfterWriteFailure()

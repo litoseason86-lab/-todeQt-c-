@@ -64,17 +64,18 @@ Popup {
     }
 
     function openDialog() {
-        root.reload()
+        // getPeriods() 会同步发 operationFailed。先打开再读取，确保连接已启用，
+        // 否则损坏数据库只会打开一个空弹窗，错误信号已经被丢掉。
         root.open()
+        root.reload()
     }
 
     // 草稿与库里现存的节次是否真的不同。逐项比对起止分钟数即可——
     // 编号由服务按开始时间重排，不参与比较。
-    function periodsDifferFrom(draft) {
+    function periodsDifferFrom(draft, current) {
         if (!root.scheduleServiceRef) {
             return false
         }
-        var current = root.scheduleServiceRef.getPeriods()
         if (current.length !== draft.length) {
             return true
         }
@@ -153,21 +154,48 @@ Popup {
             }
         }
 
-        // 设置要先写：setPeriods 会发 periodsChanged，页面收到后立刻 refresh()。
-        // 反过来先写节次的话，那次刷新读到的还是旧的总周数和周末开关。
-        if (root.settingsRef) {
-            root.settingsRef.semesterStartDate = startText
-            root.settingsRef.semesterWeeks = weeks
-            root.settingsRef.scheduleShowWeekend = weekendCheck.checked
-        }
-
+        // 先保存可回滚的节次，再批量写设置；设置失败时恢复旧节次，
+        // 避免数据库与设置文件只成功一边，留下用户无法察觉的半保存状态。
         // 节次没动过就别写：setPeriods 是「整表删了重插」，会把每一行的 id
         // 重新分配一遍。用户只是来关个「显示周末」，不该顺带重建整张节次表。
-        if (root.scheduleServiceRef && root.periodsDifferFrom(periods)
-                && !root.scheduleServiceRef.setPeriods(periods)) {
+        var oldPeriods = root.scheduleServiceRef ? root.scheduleServiceRef.getPeriods() : []
+        if (root.errorText.length > 0) {
+            return
+        }
+        var periodsChanged = root.scheduleServiceRef
+                && root.periodsDifferFrom(periods, oldPeriods)
+        if (periodsChanged && !root.scheduleServiceRef.setPeriods(periods)) {
             if (root.errorText.length === 0) {
                 root.errorText = "节次保存失败，请重试"
             }
+            return
+        }
+
+        var settingsSaved = true
+        if (root.settingsRef) {
+            if (typeof root.settingsRef.saveScheduleSettings === "function") {
+                settingsSaved = root.settingsRef.saveScheduleSettings(
+                    startText, weeks, weekendCheck.checked)
+            } else {
+                // 仅供隔离的 QML 假对象使用；生产 AppSettings 始终走批量接口。
+                root.settingsRef.semesterStartDate = startText
+                root.settingsRef.semesterWeeks = weeks
+                root.settingsRef.scheduleShowWeekend = weekendCheck.checked
+            }
+        }
+        if (!settingsSaved) {
+            var settingsError = root.errorText.length > 0
+                    ? root.errorText : "课表设置保存失败，请重试"
+            // 设置落盘失败时把已写入的节次回滚，避免报失败却偷偷改掉一半数据。
+            var rollbackError = ""
+            if (periodsChanged && root.scheduleServiceRef) {
+                if (!root.scheduleServiceRef.setPeriods(oldPeriods)) {
+                    rollbackError = root.errorText.length > 0
+                            ? root.errorText : "节次回滚失败"
+                }
+            }
+            root.errorText = rollbackError.length > 0
+                    ? settingsError + "；" + rollbackError : settingsError
             return
         }
 
@@ -186,6 +214,16 @@ Popup {
 
         function onOperationFailed(message) {
             root.errorText = String(message || "操作失败")
+        }
+    }
+
+    Connections {
+        target: root.settingsRef
+        ignoreUnknownSignals: true
+        enabled: root.visible
+
+        function onSettingsWriteFailed(key, message) {
+            root.errorText = String(message || "课表设置保存失败")
         }
     }
 

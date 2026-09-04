@@ -26,6 +26,31 @@ int parityForWeek(int weekIndex)
     return (weekIndex % 2 == 1) ? ScheduleService::OddWeeks : ScheduleService::EvenWeeks;
 }
 
+bool hasCommonActiveWeek(int firstStart, int firstEnd, int firstParity,
+                         int secondStart, int secondEnd, int secondParity)
+{
+    const int overlapStart = std::max(firstStart, secondStart);
+    const int overlapEnd = std::min(firstEnd, secondEnd);
+    if (overlapStart > overlapEnd) {
+        return false;
+    }
+    if (firstParity == ScheduleService::EveryWeek
+        && secondParity == ScheduleService::EveryWeek) {
+        return true;
+    }
+    if (firstParity != ScheduleService::EveryWeek
+        && secondParity != ScheduleService::EveryWeek
+        && firstParity != secondParity) {
+        return false;
+    }
+
+    const int requiredParity = firstParity == ScheduleService::EveryWeek
+        ? secondParity : firstParity;
+    const bool overlapStartsOnRequiredParity = parityForWeek(overlapStart) == requiredParity;
+    // 交集起点奇偶不符时，只要还有下一周就会真正相遇。
+    return overlapStartsOnRequiredParity || overlapStart < overlapEnd;
+}
+
 } // namespace
 
 ScheduleService::ScheduleService(QObject* parent)
@@ -387,7 +412,6 @@ QVariantList ScheduleService::findConflicts(int weekday, int startMinutes, int e
         "WHERE s.weekday = :weekday "
         "AND s.start_minutes < :endMinutes AND s.end_minutes > :startMinutes "
         "AND s.week_start <= :weekEnd AND s.week_end >= :weekStart "
-        "AND (s.week_parity = :everyWeek OR :parity = :everyWeek OR s.week_parity = :parity) "
         "AND s.id != :excludeId "
         "ORDER BY s.start_minutes ASC, s.id ASC"));
     query.bindValue(QStringLiteral(":weekday"), weekday);
@@ -395,8 +419,6 @@ QVariantList ScheduleService::findConflicts(int weekday, int startMinutes, int e
     query.bindValue(QStringLiteral(":endMinutes"), endMinutes);
     query.bindValue(QStringLiteral(":weekStart"), weekStart);
     query.bindValue(QStringLiteral(":weekEnd"), weekEnd);
-    query.bindValue(QStringLiteral(":everyWeek"), static_cast<int>(EveryWeek));
-    query.bindValue(QStringLiteral(":parity"), weekParity);
     // 新增时传 -1，不会等于任何自增主键，等效于「不排除任何行」。
     query.bindValue(QStringLiteral(":excludeId"), excludeId);
 
@@ -406,7 +428,14 @@ QVariantList ScheduleService::findConflicts(int weekday, int startMinutes, int e
     }
 
     while (query.next()) {
-        conflicts.append(entryFromQuery(query));
+        const QVariantMap entry = entryFromQuery(query);
+        if (hasCommonActiveWeek(
+                entry.value(QStringLiteral("weekStart")).toInt(),
+                entry.value(QStringLiteral("weekEnd")).toInt(),
+                entry.value(QStringLiteral("weekParity")).toInt(),
+                weekStart, weekEnd, weekParity)) {
+            conflicts.append(entry);
+        }
     }
     return conflicts;
 }
@@ -450,6 +479,11 @@ bool ScheduleService::setPeriods(const QVariantList& periods)
         return false;
     }
 
+    if (periods.size() > kMaxPeriodCount) {
+        reportFailure(QStringLiteral("节次最多 %1 节").arg(kMaxPeriodCount));
+        return false;
+    }
+
     // 先全部校验并规范化，再整表写入。校验穿插在写入中间会留下半张节次表。
     struct NormalizedPeriod {
         int startMinutes;
@@ -475,11 +509,6 @@ bool ScheduleService::setPeriods(const QVariantList& periods)
             return false;
         }
         normalized.append({ startMinutes, endMinutes });
-    }
-
-    if (normalized.size() > kMaxPeriodCount) {
-        reportFailure(QStringLiteral("节次最多 %1 节").arg(kMaxPeriodCount));
-        return false;
     }
 
     // 按开始时间排序后重新编号。节次编号必须与时间顺序一致，

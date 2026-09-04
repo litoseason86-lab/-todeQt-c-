@@ -83,6 +83,9 @@ private:
     void pruneOldBackups(const QDir& databaseDir) const;
     bool tableExists(const QString& tableName) const;
     bool columnExists(const QString& tableName, const QString& columnName) const;
+    // v13 是首个会被备份整库恢复的课表版本。CREATE TABLE IF NOT EXISTS
+    // 不会修补已存在表的缺列、缺约束或错外键，所以必须显式验证。
+    bool scheduleSchemaIsValid() const;
     // 表的当前列名集合。v5 整表重建需要它来确认自己认识 tasks 的每一列——
     // 重建用的是写死的列清单，遇到不认识的列必须拒绝执行而不是把它连同数据丢掉。
     QStringList tableColumns(const QString& tableName) const;

@@ -169,6 +169,19 @@ TestCase {
         compare(ScheduleWeeks.layoutDayEntries(null).length, 0)
     }
 
+    function test_visualLayoutUsesFinalDrawnIntervals() {
+        var laid = ScheduleWeeks.layoutVisualEntries([
+            { entry: { id: 1 }, top: 0, height: 24, layoutStart: 0, layoutEnd: 24 },
+            { entry: { id: 2 }, top: 9, height: 24, layoutStart: 9, layoutEnd: 33 }
+        ])
+        compare(laid.length, 2)
+        compare(laid[0].laneCount, 2)
+        compare(laid[1].laneCount, 2)
+        verify(laid[0].lane !== laid[1].lane)
+        compare(laid[0].top, 0)
+        compare(laid[1].height, 24)
+    }
+
     // overlaps 是课表里唯一的相交判据（课程块落在哪几节、哪些项一节都落不进、
     // 节次表自身能不能重叠都用它）。它只有一行，出错也只会在边界上现形：
     // 把 < 写成 <= 的话，08:00–08:45 与 08:45–09:30 这对紧邻的节次会被判成重叠，

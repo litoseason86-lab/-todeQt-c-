@@ -357,7 +357,9 @@ bool BackupService::verifyRestoredDatabase() const
     for (const QString& table : {
              QStringLiteral("tasks"),
              QStringLiteral("focus_sessions"),
-             QStringLiteral("categories")}) {
+             QStringLiteral("categories"),
+             QStringLiteral("schedule_entries"),
+             QStringLiteral("schedule_periods")}) {
         QSqlQuery verify(database);
         if (!verify.exec(QStringLiteral("SELECT COUNT(*) FROM %1").arg(table))
             || !verify.next()) {

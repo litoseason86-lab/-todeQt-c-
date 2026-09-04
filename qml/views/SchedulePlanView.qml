@@ -94,6 +94,34 @@ Item {
         }
     }
 
+    function refreshEntries() {
+        if (!root.scheduleServiceRef) {
+            root.entries = []
+            return
+        }
+        try {
+            root.loadError = ""
+            root.entries = root.scheduleServiceRef.getEntriesForWeek(root.weekIndex)
+        } catch (error) {
+            root.entries = []
+            root.loadError = "课表加载失败"
+        }
+    }
+
+    function refreshPeriods() {
+        if (!root.scheduleServiceRef) {
+            root.periods = []
+            return
+        }
+        try {
+            root.loadError = ""
+            root.periods = root.scheduleServiceRef.getPeriods()
+        } catch (error) {
+            root.periods = []
+            root.loadError = "节次加载失败"
+        }
+    }
+
     // 把学期锚点设成本周周一，让「今天」立刻变成第 1 周。
     // 这是首次使用时最省事的入口：多数人只想先把课排进去，不关心学期第几周。
     function anchorSemesterToThisWeek() {
@@ -137,6 +165,14 @@ Item {
 
     onPageActiveChanged: {
         if (root.pageActive) {
+            // 页面隐藏时不处理逻辑日信号，重新显示时必须在查库前补一次时间快照。
+            var wasFollowingCurrentWeek = root.viewingCurrentWeek
+            root.logicalToday = root.computeLogicalToday()
+            if (wasFollowingCurrentWeek) {
+                root.weekIndex = root.clampWeek(root.currentWeekIndex)
+            } else {
+                root.weekIndex = root.clampWeek(root.weekIndex)
+            }
             root.refresh()
         }
     }
@@ -146,8 +182,8 @@ Item {
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
-        function onScheduleChanged() { root.refresh() }
-        function onPeriodsChanged() { root.refresh() }
+        function onScheduleChanged() { root.refreshEntries() }
+        function onPeriodsChanged() { root.refreshPeriods() }
         function onOperationFailed(message) {
             root.loadError = String(message || "课表操作失败")
         }
@@ -158,12 +194,13 @@ Item {
         ignoreUnknownSignals: true
         enabled: root.pageActive
 
-        function onCategoriesChanged() { root.refresh() }
+        function onCategoriesChanged() { root.refreshEntries() }
     }
 
     Connections {
         target: root.logicalDayServiceRef
         ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onChanged() {
             // 必须先按旧快照判断跟随关系，再读新时间；顺序反转会把历史周误判成当前周。
@@ -172,7 +209,20 @@ Item {
             if (wasFollowingCurrentWeek) {
                 root.weekIndex = root.clampWeek(root.currentWeekIndex)
             }
-            root.refresh()
+            root.refreshEntries()
+        }
+    }
+
+    Connections {
+        target: root.settingsRef
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
+
+        function onSemesterWeeksChanged() {
+            // 备份恢复时 databaseChanged 早于 AppSettings.reload。若总周数从 20
+            // 缩到 10，必须在设置信号到达时再夹紧并重查，否则页面停在第 20 周旧数据。
+            root.weekIndex = root.clampWeek(root.weekIndex)
+            root.refreshEntries()
         }
     }
 
@@ -578,7 +628,13 @@ Item {
         // 弹窗和页面都在听 operationFailed，弹窗里的失败会同时点亮页面顶部那条
         // 红色横幅。用户按「取消」关掉弹窗后不会有 scheduleChanged，
         // refresh() 也就不会跑，横幅会一直挂在那里说一个已经不存在的弹窗的事。
-        onClosed: root.loadError = ""
+        onClosed: {
+            // 从编辑弹窗发起删除时，确认框已经接管错误上下文。
+            // 此时清空会把快速失败的 deleteEntry 错误抹掉。
+            if (!deleteConfirm.opened) {
+                root.loadError = ""
+            }
+        }
 
         onDeleteRequested: function (entryId, title) {
             root.requestDelete(entryId, title)
@@ -588,13 +644,19 @@ Item {
     ScheduleSettingsDialog {
         id: settingsDialog
 
+        objectName: "scheduleSettingsDialog"
         parent: root
         scheduleServiceRef: root.scheduleServiceRef
         settingsRef: root.settingsRef
 
+        // 弹窗内的同步失败也会被页面级 operationFailed 捕到。
+        // 关闭弹窗后错误上下文已经消失，页头不应永久挂着它。
+        onClosed: root.loadError = ""
+
         onSaved: {
-            // 总周数调小后，当前浏览的周次可能已经越界，夹回有效范围。
-            root.goToWeek(root.weekIndex)
+            // semesterWeeksChanged 已负责夹紧与重查；这里只作最后的本地守卫，
+            // 不再把课程和节次各查一遍。
+            root.weekIndex = root.clampWeek(root.weekIndex)
         }
     }
 

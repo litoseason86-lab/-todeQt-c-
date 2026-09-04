@@ -133,6 +133,8 @@ private slots:
     void corruptedBackupIsRejected();
     void backupMissingRequiredTableIsRejected();
     void backupMissingRequiredColumnIsRejected();
+    void version13BackupMissingScheduleTableIsRejected();
+    void version13BackupMissingScheduleConstraintIsRejected();
     void higherSchemaVersionIsRejected();
     void formatVersionMismatchIsRejected();
     void schemaMetadataMismatchIsRejected();
@@ -335,6 +337,59 @@ void BackupServiceTests::backupMissingRequiredColumnIsRejected()
     QVERIFY2(info.value(QStringLiteral("reason")).toString().contains(
                  QStringLiteral("tasks.title")),
              qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+}
+
+void BackupServiceTests::version13BackupMissingScheduleTableIsRejected()
+{
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    const QString connectionName = QStringLiteral("MissingScheduleTable");
+    {
+        QSqlDatabase database =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(backupFile());
+        QVERIFY(database.open());
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE schedule_entries")));
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+
+    const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
+    QCOMPARE(info.value(QStringLiteral("valid")).toBool(), false);
+    QVERIFY(info.value(QStringLiteral("reason")).toString().contains(
+        QStringLiteral("schedule_entries")));
+    QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+}
+
+void BackupServiceTests::version13BackupMissingScheduleConstraintIsRejected()
+{
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    const QString connectionName = QStringLiteral("MissingScheduleConstraint");
+    {
+        QSqlDatabase database =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(backupFile());
+        QVERIFY(database.open());
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QStringLiteral("ALTER TABLE schedule_periods RENAME TO old_periods")));
+        QVERIFY(query.exec(QStringLiteral(
+            "CREATE TABLE schedule_periods ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, period_index INTEGER NOT NULL UNIQUE, "
+            "start_minutes INTEGER NOT NULL, end_minutes INTEGER NOT NULL)")));
+        QVERIFY(query.exec(QStringLiteral(
+            "INSERT INTO schedule_periods SELECT * FROM old_periods")));
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE old_periods")));
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+
+    const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
+    QCOMPARE(info.value(QStringLiteral("valid")).toBool(), false);
+    QVERIFY(info.value(QStringLiteral("reason")).toString().contains(
+        QStringLiteral("约束")));
     QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
 }
 

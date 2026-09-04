@@ -7,6 +7,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
@@ -38,6 +39,17 @@ const PresetCategory kPresetCategories[] = {
     {"专业课", "#b37562"},
     {"其他", "#a8655c"}
 };
+
+QString normalizedCreateSql(QString sql)
+{
+    sql = sql.toLower();
+    sql.remove(QRegularExpression(QStringLiteral("\\s+")));
+    sql.remove(QLatin1Char('"'));
+    sql.remove(QLatin1Char('`'));
+    sql.remove(QLatin1Char('['));
+    sql.remove(QLatin1Char(']'));
+    return sql;
+}
 }
 
 DatabaseManager::DatabaseManager(QObject* parent)
@@ -390,11 +402,26 @@ bool DatabaseManager::createTables()
         version = 13;
     }
 
+    // 仅判断表名存在是假安全：缺列的 v13 备份也会通过 IF NOT EXISTS，
+    // 随后恢复流程会报成功，直到用户真正打开课表才查询失败。
+    if (!scheduleSchemaIsValid()) {
+        qWarning() << "Schedule schema is incomplete or incompatible";
+        return false;
+    }
+
     // 节次表存在但一行都没有，同样是「按节次」版式画不出任何行的那种坏状态
     // （中断的恢复、外部编辑都会留下它）。上面的守卫只看表在不在，治不了这种；
     // 这里无条件补种一次。insertDefaultSchedulePeriods 自己按「表为空」加了守卫，
     // 所以用户改过或删过节次之后再启动，不会被默认值覆盖回去。
-    if (!insertDefaultSchedulePeriods()) {
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start default schedule period transaction:"
+                   << m_db.lastError().text();
+        return false;
+    }
+    if (!insertDefaultSchedulePeriods() || !m_db.commit()) {
+        qWarning() << "Failed to commit default schedule periods:"
+                   << m_db.lastError().text();
+        m_db.rollback();
         return false;
     }
 
@@ -645,6 +672,79 @@ bool DatabaseManager::insertDefaultSchedulePeriods()
         }
     }
     return true;
+}
+
+bool DatabaseManager::scheduleSchemaIsValid() const
+{
+    struct TableContract {
+        QString name;
+        QStringList columns;
+        QStringList sqlFragments;
+    };
+
+    const QList<TableContract> contracts = {
+        {QStringLiteral("schedule_entries"),
+         {QStringLiteral("id"), QStringLiteral("title"), QStringLiteral("location"),
+          QStringLiteral("weekday"), QStringLiteral("start_minutes"),
+          QStringLiteral("end_minutes"), QStringLiteral("week_start"),
+          QStringLiteral("week_end"), QStringLiteral("week_parity"),
+          QStringLiteral("category_id"), QStringLiteral("created_at")},
+         {QStringLiteral("check(length(trim(title))>0)"),
+          QStringLiteral("check(weekdaybetween1and7)"),
+          QStringLiteral("check(start_minutesbetween0and1439)"),
+          QStringLiteral("check(end_minutesbetween1and1440)"),
+          QStringLiteral("check(week_start>=1)"),
+          QStringLiteral("check(week_end>=1)"),
+          QStringLiteral("check(week_parityin(0,1,2))"),
+          QStringLiteral("check(end_minutes>start_minutes)"),
+          QStringLiteral("check(week_end>=week_start)")}},
+        {QStringLiteral("schedule_periods"),
+         {QStringLiteral("id"), QStringLiteral("period_index"),
+          QStringLiteral("start_minutes"), QStringLiteral("end_minutes")},
+         {QStringLiteral("period_indexintegernotnullunique"),
+          QStringLiteral("check(period_index>=1)"),
+          QStringLiteral("check(start_minutesbetween0and1439)"),
+          QStringLiteral("check(end_minutesbetween1and1440)"),
+          QStringLiteral("check(end_minutes>start_minutes)")}},
+    };
+
+    for (const TableContract& contract : contracts) {
+        const QStringList actualColumns = tableColumns(contract.name);
+        for (const QString& column : contract.columns) {
+            if (!actualColumns.contains(column)) {
+                return false;
+            }
+        }
+
+        QSqlQuery sqlQuery(m_db);
+        sqlQuery.prepare(QStringLiteral(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = :name"));
+        sqlQuery.bindValue(QStringLiteral(":name"), contract.name);
+        if (!sqlQuery.exec() || !sqlQuery.next()) {
+            return false;
+        }
+        const QString createSql = normalizedCreateSql(sqlQuery.value(0).toString());
+        for (const QString& fragment : contract.sqlFragments) {
+            if (!createSql.contains(fragment)) {
+                return false;
+            }
+        }
+    }
+
+    QSqlQuery foreignKey(m_db);
+    if (!foreignKey.exec(QStringLiteral("PRAGMA foreign_key_list(schedule_entries)"))) {
+        return false;
+    }
+    while (foreignKey.next()) {
+        if (foreignKey.value(2).toString() == QStringLiteral("categories")
+            && foreignKey.value(3).toString() == QStringLiteral("category_id")
+            && foreignKey.value(4).toString() == QStringLiteral("id")
+            && foreignKey.value(6).toString().compare(
+                   QStringLiteral("SET NULL"), Qt::CaseInsensitive) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool DatabaseManager::migrateToVersion3()

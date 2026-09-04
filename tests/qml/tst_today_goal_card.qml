@@ -11,6 +11,8 @@ TestCase {
     width: 900
     height: 640
 
+    property var logicalNow: new Date(2026, 6, 12, 12, 0, 0)
+
     QtObject {
         id: taskManager
 
@@ -54,6 +56,7 @@ TestCase {
         property int phase: 0
         property bool hasActiveSession: false
         property int elapsedSeconds: 0
+        property string sessionLogicalDate: "2026-07-12"
     }
 
     QtObject {
@@ -109,6 +112,9 @@ TestCase {
             width: 860
             height: 600
             settingsRef: appSettings
+            nowProvider: function() {
+                return new Date(testCase.logicalNow.getTime())
+            }
         }
     }
 
@@ -122,6 +128,8 @@ TestCase {
         focusTimer.phase = 0
         focusTimer.hasActiveSession = false
         focusTimer.elapsedSeconds = 0
+        focusTimer.sessionLogicalDate = "2026-07-12"
+        testCase.logicalNow = new Date(2026, 6, 12, 12, 0, 0)
     }
 
     function test_card_is_editable_and_starts_unset() {
@@ -220,11 +228,34 @@ TestCase {
         compare(card.totalSeconds, 3600)
     }
 
+    function test_live_seconds_use_new_date_after_logical_day_changes() {
+        var view = createTemporaryObject(todayViewComponent, testCase)
+        verify(view)
+
+        var card = findChild(view, "todayGoalCard")
+        verify(card)
+        focusTimer.hasActiveSession = true
+        focusTimer.elapsedSeconds = 120
+        compare(view.logicalTodayIso, "2026-07-12")
+        compare(card.totalSeconds, 3720)
+
+        // 模拟应用整夜不退出：新逻辑日开始了，随后用户启动当天第一段自由专注。
+        // 旧实现把 todayIsoDate() 的首次结果永久缓存，因日期不匹配只显示落库值。
+        testCase.logicalNow = new Date(2026, 6, 13, 12, 0, 0)
+        focusTimer.sessionLogicalDate = "2026-07-13"
+        compare(card.totalSeconds, 3600)
+
+        logicalDayService.changed()
+        tryCompare(view, "logicalTodayIso", "2026-07-13")
+        compare(card.totalSeconds, 3720)
+    }
+
     // 目标日期必须按逻辑日算：dayStartHour = 4 时，凌晨 4 点前的"今天"是前一天。
     // 直接用 new Date() 的日期会让用例在凌晨跑时读不到目标——这个项目里
     // 每一处日期比较都得走同一套逻辑日规则。
     function logicalTodayIso() {
-        var d = new Date()
+        // 与被测页面共用注入时钟，不能一边冻结在 2026-07-12、另一边读取测试机当天。
+        var d = new Date(testCase.logicalNow.getTime())
         if (d.getHours() < appSettings.dayStartHour) {
             d.setDate(d.getDate() - 1)
         }

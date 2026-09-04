@@ -6,6 +6,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include <utility>
+
 #include "../src/services/AppSettings.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/ScheduleService.h"
@@ -61,6 +63,8 @@ private slots:
 
     void migrationCreatesTablesAndSeedsDefaultPeriods();
     void emptyPeriodTableIsReseededOnNextOpen();
+    void defaultPeriodReseedRollsBackOnInsertFailure();
+    void malformedVersion13ScheduleSchemaIsRejected();
     void upgradingAPopulatedPreV13DatabaseKeepsDataAndAddsSchedule();
     void missingScheduleTablesAreRebuiltEvenWhenVersionSaysV13();
     void setPeriodsRejectsOverlappingRows();
@@ -76,9 +80,11 @@ private slots:
     void getEntriesForWeekRejectsNonPositiveWeekWithoutError();
     void findConflictsDetectsOverlapOnly();
     void findConflictsRespectsWeekRangeAndParity();
+    void findConflictsRequiresMatchingParityInsideIntersection();
     void findConflictsExcludesEditedEntry();
     void setPeriodsSortsAndRenumbers();
     void setPeriodsRejectsInvalidInputAndKeepsOldTable();
+    void setPeriodsRollsBackWhenInsertFails();
     void deletingCategoryClearsEntryCategory();
 
 private:
@@ -176,6 +182,49 @@ void ScheduleServiceTests::emptyPeriodTableIsReseededOnNextOpen()
     // user_version 已经是最新，迁移分支不会再进；补种必须发生在版本判断之外。
     QVERIFY(DatabaseManager::instance()->createTables());
     QVERIFY(!ScheduleService::instance()->getPeriods().isEmpty());
+}
+
+void ScheduleServiceTests::defaultPeriodReseedRollsBackOnInsertFailure()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("atomic-seed.sqlite"));
+    QVERIFY(DatabaseManager::instance()->initialize(path));
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("DELETE FROM schedule_periods")));
+    QVERIFY(query.exec(QStringLiteral(
+        "CREATE TRIGGER fail_second_default_period "
+        "BEFORE INSERT ON schedule_periods WHEN NEW.period_index = 2 "
+        "BEGIN SELECT RAISE(ABORT, 'injected failure'); END")));
+
+    QVERIFY(!DatabaseManager::instance()->createTables());
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM schedule_periods")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
+    query.finish();
+    QVERIFY(query.exec(QStringLiteral("DROP TRIGGER fail_second_default_period")));
+}
+
+void ScheduleServiceTests::malformedVersion13ScheduleSchemaIsRejected()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("malformed-v13.sqlite"));
+    QVERIFY(DatabaseManager::instance()->initialize(path));
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("ALTER TABLE schedule_periods RENAME TO old_periods")));
+    QVERIFY(query.exec(QStringLiteral(
+        "CREATE TABLE schedule_periods ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, period_index INTEGER NOT NULL UNIQUE, "
+        "start_minutes INTEGER NOT NULL, end_minutes INTEGER NOT NULL)")));
+    QVERIFY(query.exec(QStringLiteral(
+        "INSERT INTO schedule_periods SELECT * FROM old_periods")));
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE old_periods")));
+
+    QVERIFY2(!DatabaseManager::instance()->initialize(path),
+             "v13 表名存在但关键约束缺失时必须拒绝打开");
 }
 
 void ScheduleServiceTests::upgradingAPopulatedPreV13DatabaseKeepsDataAndAddsSchedule()
@@ -613,6 +662,26 @@ void ScheduleServiceTests::findConflictsRespectsWeekRangeAndParity()
                                     ScheduleService::EveryWeek, -1).size(), 1);
 }
 
+void ScheduleServiceTests::findConflictsRequiresMatchingParityInsideIntersection()
+{
+    ScheduleService* service = ScheduleService::instance();
+
+    EntryArgs existing;
+    existing.weekStart = 1;
+    existing.weekEnd = 2;
+    existing.weekParity = ScheduleService::OddWeeks;
+    QVERIFY(addEntry(existing));
+
+    // 两个区间只在第 2 周相交，但双方都只在单周生效，
+    // 因此现实中永远不会同时出现。只判断“区间相交 + 单双周相同”会误报。
+    QVERIFY(service->findConflicts(1, 8 * 60, 9 * 60 + 40, 2, 3,
+                                   ScheduleService::OddWeeks, -1).isEmpty());
+
+    // 交集扩到第 1 周后才真正冲突。
+    QCOMPARE(service->findConflicts(1, 8 * 60, 9 * 60 + 40, 1, 4,
+                                    ScheduleService::OddWeeks, -1).size(), 1);
+}
+
 void ScheduleServiceTests::findConflictsExcludesEditedEntry()
 {
     ScheduleService* service = ScheduleService::instance();
@@ -691,6 +760,35 @@ void ScheduleServiceTests::setPeriodsRejectsInvalidInputAndKeepsOldTable()
     const QVariantList periods = service->getPeriods();
     QCOMPARE(periods.size(), 1);
     QCOMPARE(periods.first().toMap().value(QStringLiteral("startMinutes")).toInt(), 8 * 60);
+}
+
+void ScheduleServiceTests::setPeriodsRollsBackWhenInsertFails()
+{
+    ScheduleService* service = ScheduleService::instance();
+    const QVariantList before = service->getPeriods();
+    QVERIFY(!before.isEmpty());
+
+    QSqlQuery trigger(DatabaseManager::instance()->database());
+    QVERIFY(trigger.exec(QStringLiteral(
+        "CREATE TRIGGER fail_second_period_insert "
+        "BEFORE INSERT ON schedule_periods WHEN NEW.period_index = 2 "
+        "BEGIN SELECT RAISE(ABORT, 'injected failure'); END")));
+
+    QVariantList replacement;
+    for (const auto [start, end] : {
+             std::pair{7 * 60, 7 * 60 + 45},
+             std::pair{8 * 60, 8 * 60 + 45}}) {
+        QVariantMap period;
+        period.insert(QStringLiteral("startMinutes"), start);
+        period.insert(QStringLiteral("endMinutes"), end);
+        replacement.append(period);
+    }
+    QVERIFY(!service->setPeriods(replacement));
+    QVERIFY(trigger.exec(QStringLiteral("DROP TRIGGER fail_second_period_insert")));
+
+    // DELETE 和第 1 行 INSERT 都已经执行后第 2 行才失败。旧表仍完整，
+    // 证明回滚覆盖的是真正的中途失败，而不只是写入前校验。
+    QCOMPARE(service->getPeriods(), before);
 }
 
 void ScheduleServiceTests::deletingCategoryClearsEntryCategory()

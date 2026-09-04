@@ -33,15 +33,35 @@ TestCase {
         readonly property int maxLocationLength: 60
         readonly property int maxWeekIndex: 60
         readonly property int maxPeriodCount: 24
+        property bool failPeriodLoad: false
+        property int setPeriodsCallCount: 0
+        property var currentPeriods: [
+            { index: 1, startMinutes: 480, endMinutes: 525 },
+            { index: 2, startMinutes: 535, endMinutes: 580 }
+        ]
 
         function getPeriods() {
-            return [
-                { index: 1, startMinutes: 480, endMinutes: 525 },
-                { index: 2, startMinutes: 535, endMinutes: 580 }
-            ]
+            if (scheduleService.failPeriodLoad) {
+                scheduleService.operationFailed("节次加载失败")
+                return []
+            }
+            return scheduleService.currentPeriods
         }
         function findConflicts() { return [] }
-        function setPeriods(periods) { return true }
+        function setPeriods(periods) {
+            scheduleService.setPeriodsCallCount += 1
+            var stored = []
+            for (var i = 0; i < periods.length; ++i) {
+                stored.push({
+                    index: i + 1,
+                    startMinutes: Number(periods[i].startMinutes),
+                    endMinutes: Number(periods[i].endMinutes)
+                })
+            }
+            scheduleService.currentPeriods = stored
+            scheduleService.periodsChanged()
+            return true
+        }
     }
 
     QtObject {
@@ -56,9 +76,23 @@ TestCase {
     QtObject {
         id: appSettings
 
+        signal settingsWriteFailed(string key, string message)
+
         property string semesterStartDate: "2026-08-31"
         property int semesterWeeks: 16
         property bool scheduleShowWeekend: true
+        property bool saveSucceeds: true
+
+        function saveScheduleSettings(startDate, weeks, showWeekend) {
+            if (!appSettings.saveSucceeds) {
+                appSettings.settingsWriteFailed("schedule", "设置文件不可写")
+                return false
+            }
+            appSettings.semesterStartDate = startDate
+            appSettings.semesterWeeks = weeks
+            appSettings.scheduleShowWeekend = showWeekend
+            return true
+        }
     }
 
     ScheduleEntryDialog {
@@ -83,6 +117,17 @@ TestCase {
         entryDialog.close()
         settingsDialog.close()
         wait(60)
+        scheduleService.failPeriodLoad = false
+        scheduleService.setPeriodsCallCount = 0
+        scheduleService.currentPeriods = [
+            { index: 1, startMinutes: 480, endMinutes: 525 },
+            { index: 2, startMinutes: 535, endMinutes: 580 }
+        ]
+        entryDialog.periods = scheduleService.currentPeriods
+        appSettings.saveSucceeds = true
+        appSettings.semesterStartDate = "2026-08-31"
+        appSettings.semesterWeeks = 16
+        appSettings.scheduleShowWeekend = true
     }
 
     // Popup 的子项挂在 contentItem 下，不在 Popup 自己的 QObject 树里，
@@ -98,6 +143,7 @@ TestCase {
         // 预填必须落到调用方点中的那一天与时段，否则「点空白新增」就没有意义。
         compare(testCase.fieldIn(entryDialog, "scheduleWeekdayCombo").currentIndex, 2)
         compare(testCase.fieldIn(entryDialog, "scheduleStartField").text, "10:00")
+        compare(testCase.fieldIn(entryDialog, "schedulePeriodCombo").currentIndex, -1)
         // 新增态不该出现删除入口。
         verify(!testCase.fieldIn(entryDialog, "scheduleDeleteButton").visible)
     }
@@ -116,6 +162,19 @@ TestCase {
         verify(testCase.fieldIn(entryDialog, "scheduleDeleteButton").visible)
     }
 
+    function test_schedulePeriodActionStaysUnselectedWhenModelAppears() {
+        entryDialog.periods = []
+        entryDialog.openForNew(1, 480)
+        tryVerify(function () { return entryDialog.opened }, 2000)
+        var combo = testCase.fieldIn(entryDialog, "schedulePeriodCombo")
+        compare(combo.currentIndex, -1)
+
+        entryDialog.periods = scheduleService.currentPeriods
+        tryCompare(combo, "count", 2)
+        tryCompare(combo, "currentIndex", -1, 1000,
+                   "节次模型从空变为非空时不得自动选中第 1 节")
+    }
+
     function test_scheduleSettingsDialogOpensAndLoadsPeriods() {
         settingsDialog.openDialog()
         tryVerify(function () { return settingsDialog.opened }, 2000)
@@ -123,5 +182,30 @@ TestCase {
         compare(testCase.fieldIn(settingsDialog, "semesterWeeksField").text, "16")
         // 节次草稿必须从服务读进来，否则保存会把用户现有的节次表整表清空。
         compare(testCase.fieldIn(settingsDialog, "schedulePeriodList").count, 2)
+    }
+
+    function test_scheduleSettingsLoadFailureIsVisibleOnFirstOpen() {
+        scheduleService.failPeriodLoad = true
+        settingsDialog.openDialog()
+        tryVerify(function () { return settingsDialog.opened }, 2000)
+        compare(settingsDialog.errorText, "节次加载失败")
+    }
+
+    function test_scheduleSettingsFailureRollsBackPeriodsAndStaysOpen() {
+        settingsDialog.openDialog()
+        tryVerify(function () { return settingsDialog.opened }, 2000)
+        var list = testCase.fieldIn(settingsDialog, "schedulePeriodList")
+        list.model.setProperty(0, "startText", "08:05")
+        appSettings.saveSucceeds = false
+
+        settingsDialog.save()
+
+        verify(settingsDialog.opened)
+        compare(settingsDialog.errorText, "设置文件不可写")
+        compare(scheduleService.setPeriodsCallCount, 2)
+        compare(scheduleService.currentPeriods[0].startMinutes, 480)
+        compare(appSettings.semesterStartDate, "2026-08-31")
+        compare(appSettings.semesterWeeks, 16)
+        compare(appSettings.scheduleShowWeekend, true)
     }
 }

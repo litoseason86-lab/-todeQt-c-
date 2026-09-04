@@ -76,9 +76,12 @@ TestCase {
         property var allEntries: scheduleService.baseEntries
 
         property int lastRequestedWeek: -1
+        property int entriesQueryCount: 0
+        property int periodsQueryCount: 0
         property int deletedId: -1
 
         function getEntriesForWeek(weekIndex) {
+            scheduleService.entriesQueryCount += 1
             scheduleService.lastRequestedWeek = weekIndex
             if (weekIndex < 1) {
                 return []
@@ -95,6 +98,7 @@ TestCase {
 
         // 只覆盖上午两节；12:30 的例会故意落在节次之外。
         function getPeriods() {
+            scheduleService.periodsQueryCount += 1
             return [
                 { index: 1, startMinutes: 480, endMinutes: 525 },
                 { index: 2, startMinutes: 600, endMinutes: 645 }
@@ -126,11 +130,14 @@ TestCase {
     }
 
     function init() {
+        view.pageActive = true
         appSettings.semesterStartDate = ""
         appSettings.semesterWeeks = 16
         appSettings.scheduleDisplayMode = "time"
         appSettings.scheduleShowWeekend = true
         scheduleService.deletedId = -1
+        scheduleService.entriesQueryCount = 0
+        scheduleService.periodsQueryCount = 0
         scheduleService.allEntries = scheduleService.baseEntries
         view.logicalToday = view.computeLogicalToday()
         view.weekIndex = 1
@@ -177,10 +184,10 @@ TestCase {
         view.goToWeek(999)
         compare(view.weekIndex, appSettings.semesterWeeks)
 
-        // 总周数调小后，当前周次要被夹回有效范围。
+        // 总周数调小后应由设置信号自动夹回，不能要求外部再手动 goToWeek。
         appSettings.semesterWeeks = 10
-        view.goToWeek(view.weekIndex)
         compare(view.weekIndex, 10)
+        compare(scheduleService.lastRequestedWeek, 10)
     }
 
     function test_weekIndexDrivesServiceQueryAndEntryCount() {
@@ -223,6 +230,77 @@ TestCase {
         // 轴按整点对齐，刻度线才落在 08:00 而不是 08:05。
         compare(grid.axisStartMinutes % 60, 0)
         compare(grid.axisEndMinutes % 60, 0)
+    }
+
+    function test_periodModeAllocatesLanesFromRenderedRows() {
+        view.anchorSemesterToThisWeek()
+        scheduleService.allEntries = [
+            {
+                id: 11, title: "A", location: "", weekday: 1,
+                startMinutes: 480, endMinutes: 500, durationMinutes: 20,
+                weekStart: 1, weekEnd: 16, weekParity: 0,
+                categoryId: undefined, categoryName: "", categoryColor: ""
+            },
+            {
+                id: 12, title: "B", location: "", weekday: 1,
+                startMinutes: 505, endMinutes: 525, durationMinutes: 20,
+                weekStart: 1, weekEnd: 16, weekParity: 0,
+                categoryId: undefined, categoryName: "", categoryColor: ""
+            }
+        ]
+        appSettings.scheduleDisplayMode = "period"
+        view.refresh()
+
+        var grid = findChild(view, "scheduleGrid")
+        var monday = grid.dayLayouts[0]
+        compare(monday.length, 2)
+        compare(monday[0].top, monday[1].top)
+        compare(monday[0].height, monday[1].height)
+        compare(monday[0].laneCount, 2)
+        verify(monday[0].lane !== monday[1].lane,
+               "同一节内的两个条目必须并排，不能完全相互覆盖")
+    }
+
+    function test_timeModeAllocatesLanesForMinimumHeightOverlap() {
+        view.anchorSemesterToThisWeek()
+        scheduleService.allEntries = [
+            {
+                id: 13, title: "A", location: "", weekday: 1,
+                startMinutes: 480, endMinutes: 485, durationMinutes: 5,
+                weekStart: 1, weekEnd: 16, weekParity: 0,
+                categoryId: undefined, categoryName: "", categoryColor: ""
+            },
+            {
+                id: 14, title: "B", location: "", weekday: 1,
+                startMinutes: 490, endMinutes: 495, durationMinutes: 5,
+                weekStart: 1, weekEnd: 16, weekParity: 0,
+                categoryId: undefined, categoryName: "", categoryColor: ""
+            }
+        ]
+        view.refresh()
+
+        var grid = findChild(view, "scheduleGrid")
+        var monday = grid.dayLayouts[0]
+        compare(monday.length, 2)
+        compare(monday[0].laneCount, 2)
+        verify(monday[0].lane !== monday[1].lane,
+               "最小 24px 高度造成视觉重叠时必须并排")
+    }
+
+    function test_timeModeBodyContainsMinimumHeightAtBottom() {
+        view.anchorSemesterToThisWeek()
+        scheduleService.allEntries = [{
+            id: 15, title: "晚间短课", location: "", weekday: 1,
+            startMinutes: 21 * 60 + 55, endMinutes: 22 * 60, durationMinutes: 5,
+            weekStart: 1, weekEnd: 16, weekParity: 0,
+            categoryId: undefined, categoryName: "", categoryColor: ""
+        }]
+        view.refresh()
+
+        var grid = findChild(view, "scheduleGrid")
+        var block = grid.dayLayouts[0][0]
+        verify(grid.bodyHeight >= block.top + block.height,
+               "时间轴底部必须包住被扩到最小高度的课程块")
     }
 
     function test_weekendColumnsFollowSetting() {
@@ -360,5 +438,52 @@ TestCase {
         compare(view.loadError, "")
         scheduleService.operationFailed("节次保存失败")
         compare(view.loadError, "节次保存失败")
+    }
+
+    function test_closingSettingsDialogClearsItsPageLevelError() {
+        view.anchorSemesterToThisWeek()
+        var dialog = findChild(view, "scheduleSettingsDialog")
+        verify(dialog !== null)
+        dialog.openDialog()
+        tryVerify(function () { return dialog.opened }, 2000)
+
+        scheduleService.operationFailed("节次保存失败")
+        compare(view.loadError, "节次保存失败")
+        dialog.close()
+        tryVerify(function () { return !dialog.opened }, 2000)
+        tryCompare(view, "loadError", "")
+    }
+
+    function test_specificSignalsOnlyReloadTheirOwnData() {
+        view.anchorSemesterToThisWeek()
+        scheduleService.entriesQueryCount = 0
+        scheduleService.periodsQueryCount = 0
+
+        scheduleService.scheduleChanged()
+        compare(scheduleService.entriesQueryCount, 1)
+        compare(scheduleService.periodsQueryCount, 0)
+
+        scheduleService.entriesQueryCount = 0
+        scheduleService.periodsQueryCount = 0
+        scheduleService.periodsChanged()
+        compare(scheduleService.entriesQueryCount, 0)
+        compare(scheduleService.periodsQueryCount, 1)
+    }
+
+    function test_hiddenPageIgnoresLogicalDayChanges() {
+        view.anchorSemesterToThisWeek()
+        view.pageActive = false
+        scheduleService.entriesQueryCount = 0
+        scheduleService.periodsQueryCount = 0
+
+        testCase.fakeNow = new Date(2026, 8, 9, 10, 0)
+        logicalDayService.changed()
+        compare(scheduleService.entriesQueryCount, 0)
+        compare(scheduleService.periodsQueryCount, 0)
+
+        view.pageActive = true
+        compare(view.currentWeekIndex, 2)
+        compare(view.weekIndex, 2)
+        testCase.fakeNow = new Date(2026, 8, 2, 10, 0)
     }
 }
