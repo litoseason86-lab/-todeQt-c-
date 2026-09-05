@@ -415,16 +415,20 @@ bool AppSettings::saveScheduleSettings(const QString& semesterStartDateValue,
         return false;
     }
 
+    if (m_settings->status() != QSettings::NoError) {
+        recreateSettingsBackend();
+    }
     const QString oldStart = semesterStartDate();
     const int oldWeeks = semesterWeeks();
     const bool oldShowWeekend = scheduleShowWeekend();
-    if (oldStart == normalizedStart && oldWeeks == semesterWeeksValue
-        && oldShowWeekend == showWeekendValue) {
-        return true;
-    }
-
-    if (m_settings->status() != QSettings::NoError) {
-        recreateSettingsBackend();
+    // 保留原始值及“键不存在”状态。QSettings 的文件缓存由多个实例共享，
+    // 重建对象不能撤销失败写入，必须显式恢复缓存，才能安全重试。
+    const QStringList keys = {kSemesterStartDateKey, kSemesterWeeksKey, kScheduleShowWeekendKey};
+    QVariantList previousValues;
+    QList<bool> previousPresence;
+    for (const QString& key : keys) {
+        previousValues.append(m_settings->value(key));
+        previousPresence.append(m_settings->contains(key));
     }
 
     // 三个值先进同一份缓存，只在一次 sync 成功后才对外发送 changed，
@@ -435,6 +439,13 @@ bool AppSettings::saveScheduleSettings(const QString& semesterStartDateValue,
     m_settings->sync();
     if (m_settings->status() != QSettings::NoError) {
         const QString message = settingsErrorMessage(m_settings->status());
+        for (qsizetype i = 0; i < keys.size(); ++i) {
+            if (previousPresence.at(i)) {
+                m_settings->setValue(keys.at(i), previousValues.at(i));
+            } else {
+                m_settings->remove(keys.at(i));
+            }
+        }
         recreateSettingsBackend();
         emit settingsWriteFailed(QStringLiteral("schedule"), message);
         return false;

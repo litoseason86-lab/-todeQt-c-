@@ -674,6 +674,41 @@ bool DatabaseManager::insertDefaultSchedulePeriods()
     return true;
 }
 
+bool DatabaseManager::hasGeneratedIntegerId(const QSqlDatabase& db, const QString& tableName)
+{
+    // 表名来自内部契约；仍转义标识符，避免未来调用方把外部输入拼进 SQL。
+    QString quotedName = tableName;
+    quotedName.replace(QLatin1Char('"'), QStringLiteral("\"\""));
+    quotedName = QLatin1Char('"') + quotedName + QLatin1Char('"');
+    QSqlQuery query(db);
+    if (!query.exec(QStringLiteral("PRAGMA table_info(%1)").arg(quotedName))) {
+        return false;
+    }
+    int primaryKeyColumns = 0;
+    bool integerId = false;
+    while (query.next()) {
+        if (query.value(5).toInt() > 0) {
+            ++primaryKeyColumns;
+            integerId = query.value(1).toString() == QStringLiteral("id")
+                && query.value(2).toString().compare(QStringLiteral("INTEGER"), Qt::CaseInsensitive) == 0;
+        }
+    }
+    if (primaryKeyColumns != 1 || !integerId) {
+        return false;
+    }
+    // INT PRIMARY KEY、复合主键、WITHOUT ROWID 和列级 PRIMARY KEY DESC
+    // 都不具备所需语义。后两种会创建独立主键索引，而 ROWID 别名不会。
+    if (!query.exec(QStringLiteral("PRAGMA index_list(%1)").arg(quotedName))) {
+        return false;
+    }
+    while (query.next()) {
+        if (query.value(3).toString() == QStringLiteral("pk")) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool DatabaseManager::scheduleSchemaIsValid() const
 {
     struct TableContract {
@@ -709,6 +744,9 @@ bool DatabaseManager::scheduleSchemaIsValid() const
     };
 
     for (const TableContract& contract : contracts) {
+        if (!hasGeneratedIntegerId(m_db, contract.name)) {
+            return false;
+        }
         const QStringList actualColumns = tableColumns(contract.name);
         for (const QString& column : contract.columns) {
             if (!actualColumns.contains(column)) {

@@ -1,6 +1,7 @@
 #include "BackupOperations.h"
 
 #include "AppSettings.h"
+#include "DatabaseManager.h"
 
 #include <QCoreApplication>
 #include <QDataStream>
@@ -174,6 +175,11 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
     for (const TableContract& contract : versionedContracts) {
         if (!tableExists(database, contract.name)) {
             *reason = QStringLiteral("备份缺少必要的数据表：%1").arg(contract.name);
+            return false;
+        }
+        if (contract.name.startsWith(QStringLiteral("schedule_"))
+            && !DatabaseManager::hasGeneratedIntegerId(database, contract.name)) {
+            *reason = QStringLiteral("备份表主键不能自动生成整数编号：%1").arg(contract.name);
             return false;
         }
         QSqlQuery columns(database);

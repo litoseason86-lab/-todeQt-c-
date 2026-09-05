@@ -693,6 +693,7 @@ private slots:
     void appSettingsWriteFailureDoesNotEmitSuccess();
     void appSettingsScheduleBatchReportsFailureWithoutChangingValues();
     void appSettingsScheduleBatchPersistsBeforeEmittingChanges();
+    void appSettingsScheduleBatchRetriesExistingReadOnlyFile();
     void appSettingsCanRetryAfterWriteFailure();
     void appSettingsReduceTransparencyRoundTrip();
     void appSettingsRaiseOnPhaseCompleteDefaultsOnAndRoundTrips();
@@ -1329,6 +1330,57 @@ void ServiceTests::appSettingsScheduleBatchReportsFailureWithoutChangingValues()
     QVERIFY(settings.semesterStartDate().isEmpty());
     QCOMPARE(settings.semesterWeeks(), 20);
     QCOMPARE(settings.scheduleShowWeekend(), true);
+}
+
+void ServiceTests::appSettingsScheduleBatchRetriesExistingReadOnlyFile()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+    AppSettings settings(path);
+    QVERIFY(settings.saveScheduleSettings(QStringLiteral("2026-08-31"), 20, true));
+    QFile disk(path);
+    QVERIFY(disk.open(QIODevice::ReadOnly));
+    const QByteArray originalBytes = disk.readAll();
+    disk.close();
+    QSignalSpy changes(&settings, &AppSettings::semesterWeeksChanged);
+
+    // 文件和父目录同时只读，阻断原地写入及 QSaveFile 的原子替换。
+    // 先恢复权限再断言，确保用例失败时临时目录也能正常清理。
+    const auto filePermissions = QFile::permissions(path);
+    const auto dirPermissions = QFile::permissions(dir.path());
+    QVERIFY(QFile::setPermissions(path, QFileDevice::ReadOwner));
+    const bool directoryLocked = QFile::setPermissions(dir.path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner);
+    if (!directoryLocked) {
+        QFile::setPermissions(path, filePermissions);
+        QFAIL("无法设置测试目录权限");
+    }
+    const bool saved = settings.saveScheduleSettings(QStringLiteral("2026-09-07"), 16, false);
+    const QString failedStart = settings.semesterStartDate();
+    const int failedWeeks = settings.semesterWeeks();
+    const bool failedWeekend = settings.scheduleShowWeekend();
+    const bool directoryRestored = QFile::setPermissions(dir.path(), dirPermissions);
+    const bool fileRestored = QFile::setPermissions(path, filePermissions);
+    QVERIFY(directoryRestored && fileRestored);
+    if (saved) {
+        QSKIP("当前账户可绕过文件权限，无法模拟写入失败");
+    }
+    QCOMPARE(changes.count(), 0);
+    QCOMPARE(failedStart, QStringLiteral("2026-08-31"));
+    QCOMPARE(failedWeeks, 20);
+    QCOMPARE(failedWeekend, true);
+    QVERIFY(disk.open(QIODevice::ReadOnly));
+    QCOMPARE(disk.readAll(), originalBytes);
+    disk.close();
+
+    QVERIFY(settings.saveScheduleSettings(QStringLiteral("2026-09-07"), 16, false));
+    QCOMPARE(changes.count(), 1);
+    // 直接读磁盘字节，不能再用共享同一缓存的 QSettings 来证明持久化成功。
+    QVERIFY(disk.open(QIODevice::ReadOnly));
+    const QByteArray newBytes = disk.readAll();
+    QVERIFY(newBytes.contains("semesterStartDate=2026-09-07"));
+    QVERIFY(newBytes.contains("semesterWeeks=16"));
+    QVERIFY(newBytes.contains("showWeekend=false"));
 }
 
 void ServiceTests::appSettingsScheduleBatchPersistsBeforeEmittingChanges()

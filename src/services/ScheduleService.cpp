@@ -179,6 +179,14 @@ bool ScheduleService::validateEntryInput(const QString& title, int weekday,
         return false;
     }
 
+    // 连续两周必有一单一双；只有单周范围可能与指定奇偶性完全不相交。
+    // 这类记录在所有周查询里都不可见，必须在新增和修改的共同边界拒绝。
+    if (weekStart == weekEnd && weekParity != EveryWeek
+        && weekStart % 2 != (weekParity == OddWeeks ? 1 : 0)) {
+        reportFailure(QStringLiteral("所选周次与单双周规则不匹配，课程没有生效周"));
+        return false;
+    }
+
     *normalizedTitle = trimmedTitle;
     *normalizedLocation = trimmedLocation;
     return true;

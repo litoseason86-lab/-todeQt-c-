@@ -225,6 +225,11 @@ Popup {
         if (weekEnd < weekStart) {
             return fail("结束周次不能早于开始周次", "weekEnd")
         }
+        // 单周范围可能被单双周筛选完全排除，保存后将没有任何入口能找回该课。
+        if (weekStart === weekEnd && parityCombo.currentIndex !== 0
+                && weekStart % 2 !== (parityCombo.currentIndex === 1 ? 1 : 0)) {
+            return fail("所选周次与单双周规则不匹配，课程没有生效周", "weekStart")
+        }
 
         var categoryId = -1
         if (categoryCombo.currentIndex >= 0

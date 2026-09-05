@@ -1,5 +1,7 @@
 # 逻辑日界点（凌晨归属前一天）设计文档
 
+> **归档状态（2026-09-05 核对）**：下文保留原设计与当时状态，不是当前待办清单。现行功能见 [项目总览](../../../README.md)，实施进度见 [计划索引](../../../plans/README.md)；与实现冲突时以当前代码为准。
+
 日期：2026-07-07
 状态：方向经问答确认（可配置、默认凌晨 4 点）；规格 v9（`logicalToday` 改命令式状态非持续绑定：computeLogicalToday() + onCompleted 显式赋值 + onChanged 六步固定顺序（prev→wasFollowing→next→赋值→移动→refresh）+ 测试固定 provider 读可变 fakeNow）
 

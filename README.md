@@ -2,6 +2,17 @@
 
 面向考研复习的本地桌面应用。核心流程是先创建任务，再从任务启动专注计时，最后沉淀本地统计数据。仅面向 macOS，使用原生菜单栏与通知能力，数据全部保存在本地、不联网。
 
+## 当前进度（2026-09-05）
+
+当前分支 `feature/weekly-todo-view`，数据库 schema v13。课表页、主动休息、超长自由专注时长修正与 QML 运行时告警门禁均已完成。
+
+- 课表冲突按实际共同生效周判断；拒绝周次范围被单双周规则完全排除的课程。
+- 时间轴短块与节次块按实际显示范围分配泳道，避免视觉重叠；读取失败明确报错，保留重试入口。
+- 课表设置先保存节次，再批量持久化学期设置；设置失败时补偿回滚节次，回滚失败单独报告。QSettings 写入失败会恢复旧缓存及缺省键状态，权限恢复后可重试。这是跨数据库与设置文件的补偿流程，不是跨文件原子事务。
+- 启动与备份检查校验 v13 课表表结构、约束及可自动生成整数编号的主键；旧版备份仍允许缺少课表表，由迁移补齐。空节次表在重新打开数据库时恢复默认节次。
+- 今日任务页在逻辑日变更时更新显式日期状态，保证正在进行的专注统计使用新日期。
+- 本轮 Qt 6.10.3 离屏验证：70/70 个 CTest 条目通过，`-j8` 耗时 15.79 秒。17 个 C++ 测试目标暴露 398 个测试函数（`-functions`，不含数据提供函数和生命周期钩子）；51 个 QML 测试文件含 545 个 `test_` 函数（包含数据提供函数，不等于展开后的执行次数）。
+
 ## 功能
 
 - **任务管理**：今日任务清单、本周计划、每日例行（可编辑、跨天自动生成）、逾期结转、分类管理。
@@ -31,7 +42,7 @@
   （沉浸模式压弹窗，`reduceMotion` 全程可降级）。
 - **目标倒计时**。
 - **外观**：7 套主题壁纸（暖色 / 粉色 / 烟雨江南 / 雪岭剑影 4 浅 + 星空 / 雨夜窗景 / 月夜山影 3 深），整套 UI 语义色板随主题切换；玻璃质感只用于导航栏、浮动工具栏与弹窗，内容卡保持清晰；全局 `reduceMotion` 可关闭动效。
-- **设置中心**：通用 / 专注 / 外观 / 数据 / 关于五页，含每日专注目标、逻辑日起始时间（`dayStartHour`，凌晨记账算前一天）。
+- **设置中心**：通用 / 专注 / 外观 / 快捷键 / 数据 / 关于六页，含每日专注目标、逻辑日起始时间（`dayStartHour`，凌晨记账算前一天）。
 - **计时健壮性**：跨系统休眠、锁屏、系统时间变化仍能正确计时（基于 `mach_continuous_time`）。
 - **macOS 原生集成**：菜单栏倒计时（`NSStatusItem`）+ 阶段完成系统通知（`UNUserNotificationCenter`）；关闭主窗口可最小化到菜单栏。
 - **快捷键**：18 个动作全部可自定义（设置中心「快捷键」分页录制改键、冲突检测、单行/整体恢复默认、可停用）。
@@ -78,9 +89,9 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
 `POMODORO_TODO_DEPLOY_LOCAL` 是 CMake cache 变量，会持久化在构建目录里：在同一个目录先跑验证构建再跑部署构建，
 `OFF` 仍然生效，`deploy-local-app` 目标根本不会被创建，部署会静默失效。
 
-测试规模（2026-09-03 实测，Qt 6.10.3）：**70 个 ctest 条目全绿，`ctest -j8` 约 16 秒**——
-17 个 C++ 测试文件共 405 个测试函数；`tests/qml/` 的 51 个文件**各占一条 ctest 条目**
-（共 533 个 `test_` 函数），这样 `ctest -j` 才能真正并行：合成一条时它单进程串行跑完
+测试规模（2026-09-05 实测，Qt 6.10.3）：**70 个 ctest 条目全绿，`ctest -j8` 约 16 秒**——
+17 个 C++ 测试目标共 398 个测试函数（不含数据提供函数和生命周期钩子）；`tests/qml/` 的 51 个文件**各占一条 ctest 条目**
+（共 545 个 `test_` 函数，包含数据提供函数），这样 `ctest -j` 才能真正并行：合成一条时它单进程串行跑完
 （实测 63 秒）。全量耗时现在已被最慢的单条卡住——`QmlTest.ui_optimization` 一条就 15.6 秒，
 再加测试条目基本不影响总时长。
 静态门禁两条：`QmlLintGate`、`QmlTextFormatGate`。
@@ -97,8 +108,8 @@ QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
 ```
 
 ```bash
-/Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake -B ~/pt-build -S .
-cmake --build ~/pt-build -j8
+/Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake -B ~/pt-build -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPOMODORO_TODO_DEPLOY_LOCAL=ON
+cmake --build ~/pt-build --target deploy-local-app -j8
 ```
 
 固定入口的存在是为了避免 LaunchServices 在临时构建目录里的 `.app` 和旧的
@@ -137,7 +148,7 @@ shaders/               预编译 Shader 资源
 cmake/                 构建脚本（DeployLocalApp.cmake：部署到 /Applications 的原子切换逻辑）
 tests/                 Qt Test 自动化测试（C++ 用例 + tests/qml/ 的 Qt Quick Test）
 docs/                  运行命令与专题方案；superpowers/ 为历史归档（只保留设计规格 specs/）
-plans/                 只有 README.md：执行状态索引与历次审计记录（编号计划正文已执行完毕并删除）
+plans/                 执行状态索引与历次审计记录，保留 032–040、042–044 正文（001–031 已归档删除）
 ```
 
 业务逻辑（标准 C++/Qt）与 macOS 原生代码（`.mm`）保持分离：`src/services` 只依赖平台无关抽象，原生实现放在 `src/platform/macos`。
@@ -154,8 +165,8 @@ plans/                 只有 README.md：执行状态索引与历次审计记�
 - **时长单位统一为分钟**，任务预计用时、今日专注目标、长期目标三处同一把尺子，
   输入控件也是同一个 `qml/components/DurationFieldPair.qml`，展示统一走 `qml/Duration.js`。
 - **逻辑日**：一天从 `dayStartHour`（默认 4 点）开始，凌晨记账算前一天。
-  任何日期比较都必须走 `LogicalDay`，包括测试——用 `new Date()` 的物理日期写用例，
-  白天跑碰巧过、凌晨必红。
+  专注记账与任务归属的日期比较必须走 `LogicalDay`，包括测试——用 `new Date()` 的物理日期写用例，
+  白天跑碰巧过、凌晨必红。课表锚定自然星期与学期周次，使用 `ScheduleWeeks.js`。
 - **控件颜色必须接管 palette**：Qt Quick Controls 从 `palette` 取输入框正文/占位/选区、
   下拉面板底与选项行、以及没显式写 `color` 的 `Label`，而 Basic 风格的默认值是写死的浅色，
   既不跟随本应用主题也不跟随 macOS 外观。窗口层（`main.qml`/`MainWindow.qml`）已兜底，
@@ -176,7 +187,7 @@ plans/                 只有 README.md：执行状态索引与历次审计记�
   取注入对象的属性要用 `Boolean(...)` / `Number(...) || 默认值` 强制转换
   （`a && b` 在 b 为 undefined 时整体是 undefined）。
   **门禁只看得见测试实际实例化过的 QML**；弹窗的绑定在 `open()` 之前不求值，
-  这块由 `tests/qml/tst_dialog_smoke.qml` 补上。详见 `plans/044`。
+  这块由 `tests/qml/tst_dialog_smoke.qml` 补上。详见 [044 运行时告警门禁](plans/044-qml-runtime-warning-gate.md)。
 - **备份里出现表和索引以外的数据库对象一律拒绝恢复**。恢复把外部文件整个复制成主库，
   一个 Trigger 就能随备份永久活进用户库，之后每次增删改任务都静默执行，
   而恢复前快照发现不了这种延迟破坏。本应用自己从不创建 Trigger / View / 虚拟表，

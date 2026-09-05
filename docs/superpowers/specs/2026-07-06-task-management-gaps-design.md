@@ -1,5 +1,7 @@
 # 任务管理补洞（结转 + 编辑 + 删除撤销）设计文档
 
+> **归档状态（2026-09-05 核对）**：下文保留原设计与当时状态，不是当前待办清单。现行功能见 [项目总览](../../../README.md)，实施进度见 [计划索引](../../../plans/README.md)；与实现冲突时以当前代码为准。
+
 日期：2026-07-06
 状态：三段设计已逐段确认
 
@@ -14,7 +16,7 @@
 
 ## 结构性决策：例行任务血缘（方案 A，已确认）
 
-`tasks` 表没有例行标记（[DatabaseManager.cpp](src/services/DatabaseManager.cpp) v1 建表），结转若不排除例行任务，昨天未完成的"背单词"会与今天 `materializeToday` 新生成的同名任务撞成两条。
+`tasks` 表没有例行标记（[DatabaseManager.cpp](../../../src/services/DatabaseManager.cpp) v1 建表），结转若不排除例行任务，昨天未完成的"背单词"会与今天 `materializeToday` 新生成的同名任务撞成两条。
 
 **Schema v4 迁移**（沿用 v2/v3 模式）：
 
@@ -60,7 +62,7 @@
 
 ## 删除撤销 + hover 化
 
-**为什么必须延迟删除**：`deleteTask` 先把 `focus_sessions.task_id` 置 NULL 再删任务行（[TaskManager.cpp:255-257](src/services/TaskManager.cpp#L255-L257)）——解绑不可逆，"删了再插回"会永久丢失任务↔专注记录关联。撤销窗口内不碰数据库。
+**为什么必须延迟删除**：`deleteTask` 先把 `focus_sessions.task_id` 置 NULL 再删任务行（[TaskManager.cpp:255-257](../../../src/services/TaskManager.cpp#L255-L257)）——解绑不可逆，"删了再插回"会永久丢失任务↔专注记录关联。撤销窗口内不碰数据库。
 
 **机制**（集中到 MainWindow，同 `startFocusForTask` 模式）：
 

@@ -135,6 +135,7 @@ private slots:
     void backupMissingRequiredColumnIsRejected();
     void version13BackupMissingScheduleTableIsRejected();
     void version13BackupMissingScheduleConstraintIsRejected();
+    void version13BackupInvalidPrimaryKeyIsRejected();
     void higherSchemaVersionIsRejected();
     void formatVersionMismatchIsRejected();
     void schemaMetadataMismatchIsRejected();
@@ -360,6 +361,31 @@ void BackupServiceTests::version13BackupMissingScheduleTableIsRejected()
     QCOMPARE(info.value(QStringLiteral("valid")).toBool(), false);
     QVERIFY(info.value(QStringLiteral("reason")).toString().contains(
         QStringLiteral("schedule_entries")));
+    QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+}
+
+void BackupServiceTests::version13BackupInvalidPrimaryKeyIsRejected()
+{
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    const QString connectionName = QStringLiteral("InvalidScheduleId");
+    {
+        auto database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(backupFile());
+        QVERIFY(database.open());
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QStringLiteral("SELECT sql FROM sqlite_master WHERE name='schedule_entries'")));
+        QVERIFY(query.next());
+        QString sql = query.value(0).toString();
+        query.finish();
+        sql.replace(QStringLiteral("INTEGER PRIMARY KEY AUTOINCREMENT"), QStringLiteral("INT PRIMARY KEY"));
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE schedule_entries")));
+        QVERIFY2(query.exec(sql), qPrintable(query.lastError().text()));
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    const auto info = BackupService::instance()->readBackupInfo(backupFile());
+    QVERIFY(!info.value(QStringLiteral("valid")).toBool());
+    QVERIFY(info.value(QStringLiteral("reason")).toString().contains(QStringLiteral("主键")));
     QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
 }
 

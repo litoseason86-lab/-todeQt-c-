@@ -162,6 +162,21 @@ TestCase {
         verify(testCase.fieldIn(entryDialog, "scheduleDeleteButton").visible)
     }
 
+    function test_scheduleEntryRejectsEmptyActiveWeeks() {
+        entryDialog.openForEdit({
+            id: 5, title: "高等数学", location: "A101", weekday: 2,
+            startMinutes: 480, endMinutes: 580,
+            weekStart: 1, weekEnd: 1, weekParity: 2, categoryId: 1
+        })
+        tryVerify(function () { return entryDialog.opened }, 2000)
+        compare(entryDialog.collectInput(false), null)
+        compare(entryDialog.errorField, "weekStart")
+        verify(entryDialog.errorText.indexOf("没有生效周") >= 0)
+        // 改成单周后同一份输入即可保存，无须关闭弹窗重新录入。
+        testCase.fieldIn(entryDialog, "scheduleParityCombo").currentIndex = 1
+        verify(entryDialog.collectInput(false) !== null)
+    }
+
     function test_schedulePeriodActionStaysUnselectedWhenModelAppears() {
         entryDialog.periods = []
         entryDialog.openForNew(1, 480)

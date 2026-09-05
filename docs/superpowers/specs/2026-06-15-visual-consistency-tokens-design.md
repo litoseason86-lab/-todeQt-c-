@@ -1,5 +1,7 @@
 # 整体视觉一致性 · 设计令牌化（Theme 单例）设计
 
+> **归档状态（2026-09-05 核对）**：下文保留原设计与当时状态，不是当前待办清单。现行功能见 [项目总览](../../../README.md)，实施进度见 [计划索引](../../../plans/README.md)；与实现冲突时以当前代码为准。
+
 - 日期：2026-06-15
 - 范围：UI 视觉一致性
 - 目标尺度：统一令牌 + 适度精调（不改暖纸主题风格，不重排布局）
@@ -63,7 +65,7 @@
 
 ### 数据色（不收敛，保留为数组 / 用户数据）
 
-- `chartColors`：`["#d4a574", "#8b7355", "#c46f5f", "#9aa66b", "#6f91a6", "#b58aa0"]`——饼图系列色（[ChartPie.qml:17](../../qml/components/ChartPie.qml)）。前两项可引用 `accent` / `inkSoft`，后四项为专用数据色。
+- `chartColors`：`["#d4a574", "#8b7355", "#c46f5f", "#9aa66b", "#6f91a6", "#b58aa0"]`——饼图系列色（[ChartPie.qml:17](../../../qml/components/ChartPie.qml)）。前两项可引用 `accent` / `inkSoft`，后四项为专用数据色。
 - 用户自定义**分类色**（存数据库）完全不动。
 
 ### 字号（6 档 + 1 特例）
@@ -102,7 +104,7 @@
 
 - 新建 `qml/Theme.qml`：`pragma Singleton` 的 `QtObject`，以 `readonly property` 暴露上述全部令牌及 `chartColors` 数组。
 - **注册**（计划阶段最终敲定）：新建 `qml/qmldir`，内容 `singleton Theme Theme.qml`，把 `qml/qmldir` 与 `qml/Theme.qml` 一并加入 `resources/qml.qrc`。各 qml 通过**相对目录导入**使用：组件/视图 `import ".."`、`qml/` 根下文件 `import "."`、测试 `import "../../qml"`。
-  - 之所以不用 `main.cpp` 里的 `qmlRegisterSingletonType`：QML 测试由 `qmltestrunner` 运行（见 [CMakeLists.txt](../../CMakeLists.txt) 的 `PomodoroTodoQmlTests`），不经过 `main.cpp`，C++ 注册对测试与被测组件不可见。相对导入 + qmldir 对应用（走 qrc）和测试（走文件系统）都生效，且 `main.cpp` 完全不用改。
+  - 之所以不用 `main.cpp` 里的 `qmlRegisterSingletonType`：QML 测试由 `qmltestrunner` 运行（见 [CMakeLists.txt](../../../CMakeLists.txt) 的 `PomodoroTodoQmlTests`），不经过 `main.cpp`，C++ 注册对测试与被测组件不可见。相对导入 + qmldir 对应用（走 qrc）和测试（走文件系统）都生效，且 `main.cpp` 完全不用改。
 - 使用方式：`color: Theme.accent`、`font.pixelSize: Theme.fontMd`、`radius: Theme.radiusMd`、`spacing: Theme.space16`。
 - 令牌全部是 UI 常量，留在 QML 层，**不进入 C++ 业务分层**。
 

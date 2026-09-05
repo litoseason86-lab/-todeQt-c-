@@ -17,6 +17,9 @@ public:
 
     static DatabaseManager* instance();
 
+    // 启动和备份检查共用：id 必须是 SQLite 自动生成编号的 INTEGER ROWID 别名。
+    static bool hasGeneratedIntegerId(const QSqlDatabase& db, const QString& tableName);
+
     // 初始化会打开数据库、建表并执行必要迁移；dbPath 为空时使用应用默认路径。
     Q_INVOKABLE bool initialize(const QString& dbPath = QString());
     QSqlDatabase database() const;
