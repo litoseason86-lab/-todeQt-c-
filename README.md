@@ -2,22 +2,18 @@
 
 面向考研复习的本地桌面应用。核心流程是先创建任务，再从任务启动专注计时，最后沉淀本地统计数据。仅面向 macOS，使用原生菜单栏与通知能力，数据全部保存在本地、不联网。
 
-## 当前进度（2026-09-05）
+## 文档入口
 
-当前分支 `feature/weekly-todo-view`，数据库 schema v13。课表页、主动休息、超长自由专注时长修正与 QML 运行时告警门禁均已完成。
-
-- 课表冲突按实际共同生效周判断；拒绝周次范围被单双周规则完全排除的课程。
-- 时间轴短块与节次块按实际显示范围分配泳道，避免视觉重叠；读取失败明确报错，保留重试入口。
-- 课表设置先保存节次，再批量持久化学期设置；设置失败时补偿回滚节次，回滚失败单独报告。QSettings 写入失败会恢复旧缓存及缺省键状态，权限恢复后可重试。这是跨数据库与设置文件的补偿流程，不是跨文件原子事务。
-- 启动与备份检查校验 v13 课表表结构、约束及可自动生成整数编号的主键；旧版备份仍允许缺少课表表，由迁移补齐。空节次表在重新打开数据库时恢复默认节次。
-- 今日任务页在逻辑日变更时更新显式日期状态，保证正在进行的专注统计使用新日期。
-- 本轮 Qt 6.10.3 离屏验证：70/70 个 CTest 条目通过，`-j8` 耗时 15.79 秒。17 个 C++ 测试目标暴露 398 个测试函数（`-functions`，不含数据提供函数和生命周期钩子）；51 个 QML 测试文件含 545 个 `test_` 函数（包含数据提供函数，不等于展开后的执行次数）。
+- [业务规则](docs/业务规则.md)：计时、任务、目标、课表、数据安全与界面约定。
+- [运行命令](docs/运行命令.md)：构建、部署、测试与排错。
+- [当前状态与待办](plans/README.md)：当前交付、未排期事项及未采纳决策。
+- [协作规则](AGENTS.md)：分层、注释、验证与部署要求。
 
 ## 功能
 
 - **任务管理**：今日任务清单、本周计划、每日例行（可编辑、跨天自动生成）、逾期结转、分类管理。
-  任务可写备注（页码、题号等上下文），任务行单行省略显示。今日列表内可拖动排序（手动序优先，
-  没排过的回落到创建时间）；本周计划里可把任务拖到另一天改期（落在目标日末尾），
+  任务可写备注（页码、题号等上下文），任务行单行省略显示。今日列表内可拖动排序（先按完成状态分组，
+  再按当天顺序排列）；本周计划里可把任务拖到另一天改期（落在目标日末尾），
   不再受编辑弹窗「今天/明天/后天」只能挪两天的限制。
 - **待办（课表）**：按「星期几 + 时段」循环的固定时间表，用来放工作或学习课表。
   它与「本周计划」是两套数据，差别在时间锚点：本周计划里的是锚定具体日期、做完就结束的任务；
@@ -27,6 +23,7 @@
   同一时段重叠的课分配泳道并排显示；节次模式下落不进任何一节、或周末列被关掉的条目，
   会被显式统计并提示——悄悄从网格消失会让人以为数据丢了。
 - **专注计时**：番茄工作法（工作—休息循环，支持长休息）与自由正向计时；沉浸模式；自由计时超过设定小时数后结束需确认记录或丢弃。
+- **主动休息**：今日任务页可在计时器空闲时开始，支持暂停、继续与结束；不写专注记录，不计统计和目标进度，重启后恢复为暂停。
 - **预计用时口径**：任务可设「预计用时」（小时+分钟，与今日专注目标同一个输入组件），实际投入由专注记录自动累计（不冗余存储）；专注时长达到预计用时可自动完成任务。累计时长对计时模式不敏感（番茄段与自由计时都算），番茄段另按「有效番茄」这一全局唯一口径计数。
   今日任务页的目标条同时给出「已排」（当天任务预计用时之和）与它跟今日目标的差额，
   排完就知道是排多了还是排少了；未设目标时只报总量，不做判断。
@@ -69,72 +66,15 @@
 
 ## 构建
 
-需要先安装 Qt 6.7 或更高版本，并使用该 SDK 自带的 `qt-cmake`。
-本机已验证的工具是 `/Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake`；它会同步设置
-Qt SDK 支持的 macOS 部署下界。不要用当前 Homebrew Qt 构建部署包：其 Qt Quick 框架最低要求
-macOS 26，会让应用二进制和链接框架的部署版本不一致。
-
-### 验证构建（只想跑测试时用这个）
-
-构建目录放在仓库外，并关闭自动部署，避免覆盖你正在用的 `/Applications/番茄Todo.app`：
+使用 Qt 6.7 或更高版本的 SDK；本机已验证 Qt 6.10.3。部署目录固定为 `~/pt-build`，验证目录固定为 `~/pt-audit`，不能混用。完整命令、环境要求和部署校验见 [运行命令](docs/运行命令.md)。
 
 ```bash
-/Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake -B ~/pt-audit -S . -DPOMODORO_TODO_DEPLOY_LOCAL=OFF
-cmake --build ~/pt-audit -j8
-QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
-  ctest --test-dir ~/pt-audit --output-on-failure --timeout 240
-```
-
-**两种构建必须用不同的构建目录**（这里是 `~/pt-audit`，下面是 `~/pt-build`）。
-`POMODORO_TODO_DEPLOY_LOCAL` 是 CMake cache 变量，会持久化在构建目录里：在同一个目录先跑验证构建再跑部署构建，
-`OFF` 仍然生效，`deploy-local-app` 目标根本不会被创建，部署会静默失效。
-
-测试规模（2026-09-05 实测，Qt 6.10.3）：**70 个 ctest 条目全绿，`ctest -j8` 约 16 秒**——
-17 个 C++ 测试目标共 398 个测试函数（不含数据提供函数和生命周期钩子）；`tests/qml/` 的 51 个文件**各占一条 ctest 条目**
-（共 545 个 `test_` 函数，包含数据提供函数），这样 `ctest -j` 才能真正并行：合成一条时它单进程串行跑完
-（实测 63 秒）。全量耗时现在已被最慢的单条卡住——`QmlTest.ui_optimization` 一条就 15.6 秒，
-再加测试条目基本不影响总时长。
-静态门禁两条：`QmlLintGate`、`QmlTextFormatGate`。
-另有一条**运行时**门禁不单独占条目——它以 `FAIL_REGULAR_EXPRESSION` 挂在每个 QML 测试上，
-把 `Unable to assign` / `TypeError` / `Binding loop` 这类运行时告警判为失败（见下节口径）。
-单个目标的跑法与说明见 `docs/运行命令.md`。
-
-### 构建并部署
-
-日常要更新本机应用时用这个。构建结束会自动把最新包同步到固定入口：
-
-```text
-/Applications/番茄Todo.app
-```
-
-```bash
-/Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake -B ~/pt-build -S . -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPOMODORO_TODO_DEPLOY_LOCAL=ON
+/Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake -B ~/pt-build -S . \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPOMODORO_TODO_DEPLOY_LOCAL=ON
 cmake --build ~/pt-build --target deploy-local-app -j8
 ```
 
-固定入口的存在是为了避免 LaunchServices 在临时构建目录里的 `.app` 和旧的
-`/Applications/番茄Todo.app` 之间选错包。日常启动统一使用 `/Applications/番茄Todo.app`。
-部署脚本（`cmake/DeployLocalApp.cmake`）的顺序是：复制到暂存目录 → 校验主二进制存在 →
-把旧包改名备份 → 原子 rename 换上新包 → 清理备份并刷新 `lsregister`；任一步失败都会把旧包放回原位。
-
-构建对应用与全部测试目标开启 `-Wall -Wextra`（`pomodoro_todo_enable_warnings`），
-当前实测 0 警告；没开 `-Werror`，单条告警不阻断本地开发。
-
-可选的 QML 静态检查（用目标 Qt SDK 自带的 `qmllint`，不要用 PySide6 工具链）：
-
-```bash
-find qml -type f -name '*.qml' -print0 | sort -z | \
-  xargs -0 /Users/zerionlito/Qt/6.10.3/macos/bin/qmllint \
-    --ignore-settings -I qml \
-    --missing-property warning --use-proper-function warning \
-    --max-warnings 0
-```
-
-**它现在是门禁**：在 `f8e3120` 修复前，官方 Qt 6.10.3 实测基线为
-`missing-property` 5 条、`use-proper-function` 7 条，旧文档的 4/6 计数已经失真。
-当前 CTest 显式启用这两类检查，已知静态推导限制只在具体表达式旁局部压制，
-所以本机 `QmlLintGate` 输出必须为 0。后续新增告警必须修复，或在具体位置写明压制原因，
-不能通过提高全局允许数量或关闭整个类别放行。
+部署入口为 `/Applications/番茄Todo.app`。部署不会启动应用；已有进程需手动退出并重新打开才能加载新版。
 
 ## 项目结构
 
@@ -147,69 +87,8 @@ resources/             Qt 资源文件（字体、壁纸、音效）
 shaders/               预编译 Shader 资源
 cmake/                 构建脚本（DeployLocalApp.cmake：部署到 /Applications 的原子切换逻辑）
 tests/                 Qt Test 自动化测试（C++ 用例 + tests/qml/ 的 Qt Quick Test）
-docs/                  运行命令与专题方案；superpowers/ 为历史归档（只保留设计规格 specs/）
-plans/                 执行状态索引与历次审计记录，保留 032–040、042–044 正文（001–031 已归档删除）
+docs/                  当前业务规则与运行命令
+plans/                 当前状态、待评估事项与未采纳决策
 ```
 
 业务逻辑（标准 C++/Qt）与 macOS 原生代码（`.mm`）保持分离：`src/services` 只依赖平台无关抽象，原生实现放在 `src/platform/macos`。
-
-## 几条贯穿全局的口径
-
-改动这些地方前先读这一节——它们每一条都有对应的测试守着，绕过去会在别处炸。
-
-- **有效专注的两个口径，定义只有一份**，都在 `src/services/FocusSessionRules.h`：
-  `validPomodoroCountExpr` 数「完整番茄」（番茄模式 + 自然到点 + 达到 3 分钟门槛），
-  `focusedSecondsExpr` 累「有效专注秒数」（对计时模式不敏感，两种计时都算）。
-  两者回答的问题不同，但都不允许在别处复制出第二套阈值或模式判断。
-  任务预计用时、长期目标进度、月历热力全部走后者。
-- **时长单位统一为分钟**，任务预计用时、今日专注目标、长期目标三处同一把尺子，
-  输入控件也是同一个 `qml/components/DurationFieldPair.qml`，展示统一走 `qml/Duration.js`。
-- **逻辑日**：一天从 `dayStartHour`（默认 4 点）开始，凌晨记账算前一天。
-  专注记账与任务归属的日期比较必须走 `LogicalDay`，包括测试——用 `new Date()` 的物理日期写用例，
-  白天跑碰巧过、凌晨必红。课表锚定自然星期与学期周次，使用 `ScheduleWeeks.js`。
-- **控件颜色必须接管 palette**：Qt Quick Controls 从 `palette` 取输入框正文/占位/选区、
-  下拉面板底与选项行、以及没显式写 `color` 的 `Label`，而 Basic 风格的默认值是写死的浅色，
-  既不跟随本应用主题也不跟随 macOS 外观。窗口层（`main.qml`/`MainWindow.qml`）已兜底，
-  各弹窗再写一份是为了单独实例化时（离屏走查、QML 测试）也准确。
-  `tests/qml/tst_contrast_audit.qml` 会遍历九个视图 × 明暗两套主题，按 WCAG 门槛
-  实算每个文字项的对比度，零例外。
-- **每个非字面量的 `text:` 绑定都必须显式声明 `textFormat`**。Qt 的默认值是
-  `Text.AutoText`，它用 `mightBeRichText()` 猜——用户写的任务标题里带 `<b>` 就会被
-  当富文本解析（实测 AutoText 的 `contentWidth` 与 RichText 一致、与 PlainText 不同）。
-  这也是 CVE-2025-12385 的官方缓解措施。判据刻意不区分"是不是用户数据"——
-  那种判断已经错过一次；规则是机械的，由 ctest 的 `QmlTextFormatGate` 强制。
-- **QML 运行时告警一律判失败**。这类告警不会让任何断言转红，测试照样全绿，
-  但每一条都是真缺陷：`Unable to assign [undefined]` 意味着赋值被拒、绑定**停在上一次的值**；
-  `TypeError` / `is not a function` 意味着求值当场中断、后面的兜底逻辑**根本跑不到**。
-  判据挂在每个 QML 测试条目的 `FAIL_REGULAR_EXPRESSION` 上，零额外运行时开销。
-  由此引出两条写法：调用注入进来的服务方法前先判 `typeof ref.method === "function"`
-  （只判对象非空不够，缺方法时抛的 TypeError 会跳过你写的兜底）；
-  取注入对象的属性要用 `Boolean(...)` / `Number(...) || 默认值` 强制转换
-  （`a && b` 在 b 为 undefined 时整体是 undefined）。
-  **门禁只看得见测试实际实例化过的 QML**；弹窗的绑定在 `open()` 之前不求值，
-  这块由 `tests/qml/tst_dialog_smoke.qml` 补上。详见 [044 运行时告警门禁](plans/044-qml-runtime-warning-gate.md)。
-- **备份里出现表和索引以外的数据库对象一律拒绝恢复**。恢复把外部文件整个复制成主库，
-  一个 Trigger 就能随备份永久活进用户库，之后每次增删改任务都静默执行，
-  而恢复前快照发现不了这种延迟破坏。本应用自己从不创建 Trigger / View / 虚拟表，
-  所以判据可以很硬。
-- **恢复备份只写回自己拥有的键**。备份文件是外部输入（可能来自别的版本、被手工改过、
-  或者伪造）。过滤按 `AppSettings::ownedSettingGroups()` 的**顶层分组**做，不是逐键列举——
-  快捷键覆盖是 `shortcuts/<actionId>` 这样的动态键，扁平白名单会把用户改过的键位全丢掉，
-  那比不过滤更糟。**新增一个设置分组时必须同步那份清单**，
-  `everySettingTheAppWritesPassesTheOwnershipFilter` 会遍历应用真实写出的每个键做交叉验证，
-  漏加当场转红并指名是哪个键。
-- **耗时操作不占 GUI 线程**：CSV 导出走线程池，工作线程开自己的**只读**连接
-  （`QSqlDatabase` 连接不能跨线程共享，只读也避免与主线程写事务抢锁）。
-  进度按批发（每 200 行 + 末尾一次准确值）——逐行发在 2 万行时就是 2 万次跨线程
-  排队投递，比写文件本身还贵。备份/恢复同理，走 `QtConcurrent` + `QFutureWatcher`。
-- **列表拖动期间不换模型**：给 `model` 赋一个新数组会让 ListView 认成全新模型、
-  整片重建 delegate，而 `TaskItem` 带 `layer.enabled` + MultiEffect 阴影，
-  每次重建都是新 FBO 加一遍阴影 pass。拖动只记落点，松手才重排落库。
-- **schema 迁移**：版本号在 `DatabaseManager::kCurrentSchemaVersion`（当前 **v13**），
-  每一步除版本号外还带结构检查（**列或表缺失时无论版本号都补**），防御半迁移状态——
-  中断的恢复、外部工具编辑过库、迁移写了版本号却在建表前崩掉，都会留下
-  「版本号说已经升级、结构其实不在」的库，而表现不是报错，是那一页一片空白。
-  这条守卫必须有测试钉住：它曾经存在却无人覆盖，删掉整段所有用例依然全绿
-  （现由 `missingScheduleTablesAreRebuiltEvenWhenVersionSaysV13` 守着）。
-  **给 `tasks` 新增列时必须同步 `migrateToVersion5` 的 `knownColumns` 与建表语句**——
-  那是整表重建，漏列会静默清空该列的用户数据（历史上已经栽过一次）。
