@@ -27,6 +27,7 @@ Item {
     property date selectedDate: new Date()
     property var sessions: []
     property int totalSeconds: 0
+    property int focusCount: 0
     property string loadError: ""
 
     readonly property bool canEditHistory: root.hasFocusHistoryService()
@@ -77,6 +78,10 @@ Item {
         target: root.focusTimerRef
         ignoreUnknownSignals: true
         enabled: root.pageActive
+
+        function onRestCompleted() {
+            root.refresh()
+        }
 
         function onFocusCompleted() {
             root.refresh()
@@ -149,15 +154,22 @@ Item {
         root.loadError = ""
         root.sessions = []
         root.totalSeconds = 0
+        root.focusCount = 0
         if (!root.hasFocusHistoryService()) {
             return
         }
 
         try {
-            var loaded = root.focusHistoryServiceRef.getDaySessions(root.selectedDate) || []
+            var loaded = (typeof root.focusHistoryServiceRef.getDayTimeline === "function"
+                          ? root.focusHistoryServiceRef.getDayTimeline(root.selectedDate)
+                          : root.focusHistoryServiceRef.getDaySessions(root.selectedDate)) || []
             root.sessions = loaded
             for (var i = 0; i < loaded.length; ++i) {
-                root.totalSeconds += Math.max(0, Number(loaded[i].durationSeconds) || 0)
+                // 时间轴包含休息，但页头次数和时长始终只统计专注。
+                if (!loaded[i].isRest) {
+                    root.totalSeconds += Math.max(0, Number(loaded[i].durationSeconds) || 0)
+                    ++root.focusCount
+                }
             }
             if (typeof root.focusHistoryServiceRef.lastError === "function"
                     && root.focusHistoryServiceRef.lastError().length > 0) {
@@ -166,6 +178,7 @@ Item {
         } catch (error) {
             root.sessions = []
             root.totalSeconds = 0
+            root.focusCount = 0
             root.loadError = qsTr("专注记录加载失败")
         }
     }
@@ -272,7 +285,7 @@ Item {
                         Layout.fillWidth: true
                         text: qsTr("%1 · 共 %2 次 · %3")
                                 .arg(root.dateLabel())
-                                .arg(root.sessions.length)
+                                .arg(root.focusCount)
                                 .arg(root.formatDuration(root.totalSeconds))
                         textFormat: Text.PlainText
                         color: Theme.inkSoft

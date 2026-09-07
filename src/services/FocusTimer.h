@@ -91,6 +91,7 @@ signals:
     void modeChanged();
     void phaseChanged();
     void focusCompleted(int duration);
+    void restCompleted();
     void phaseCompleted(int phase);
     void sessionDiscarded(int duration);
     void completedPomodorosChanged();

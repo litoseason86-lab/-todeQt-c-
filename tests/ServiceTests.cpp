@@ -840,6 +840,7 @@ private slots:
     void pomodoroBreakRestoresTaskContextAndCount();
     void manualRestDoesNotCreateFocusSessionOrFinishAutomatically();
     void manualRestRestoresPausedWithoutCountingAsFocus();
+    void restHistorySaveIsAtomicAndUsesLogicalDay();
     void deletingActiveTaskDetachesTimerAndSuppressesAutoCompleteFailure();
     void pomodoroWorkStoppedUnderMinimumIsDiscarded();
     void freeFocusStillCountsUpUnchanged();
@@ -5220,6 +5221,8 @@ void ServiceTests::manualRestRestoresPausedWithoutCountingAsFocus()
 {
     FocusTimer* timer = FocusTimer::instance();
     QVERIFY(timer->startManualRest());
+    const QDateTime originalStart = QDateTime::currentDateTime().addSecs(-600);
+    timer->m_startTime = originalStart;
     setFocusElapsedSeconds(timer, 185);
     timer->prepareForShutdown();
     timer->resetSession();
@@ -5230,12 +5233,70 @@ void ServiceTests::manualRestRestoresPausedWithoutCountingAsFocus()
     QCOMPARE(timer->mode(), int(FocusTimer::ManualRestMode));
     QCOMPARE(timer->phase(), int(FocusTimer::ManualRestPhase));
     QCOMPARE(timer->elapsedSeconds(), 185);
+    QCOMPARE(timer->m_startTime.toMSecsSinceEpoch(), originalStart.toMSecsSinceEpoch());
     QCOMPARE(timer->currentTaskId(), -1);
     QCOMPARE(timer->currentTaskTitle(), QString());
 
     QVERIFY(timer->resumeFocus());
     QVERIFY(timer->stopFocus());
     QCOMPARE(countFocusSessions(), 0);
+}
+
+void ServiceTests::restHistorySaveIsAtomicAndUsesLogicalDay()
+{
+    FocusTimer* timer = FocusTimer::instance();
+    FocusHistoryService* history = FocusHistoryService::instance();
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    QSqlQuery query(db);
+    QSignalSpy restSpy(timer, &FocusTimer::restCompleted);
+    AppSettings::instance()->setDayStartHour(4);
+
+    QVERIFY(timer->startManualRest());
+    // 固定在凌晨，验证记录仍归属上一逻辑日；注入计时避免真实等待。
+    timer->m_startTime = QDateTime(QDate(2026, 9, 7), QTime(3, 30));
+    setFocusElapsedSeconds(timer, 45);
+    timer->pauseFocus();
+    // 在清除快照时制造失败，确认前面的历史写入也被回滚。
+    QVERIFY(query.exec(QStringLiteral(
+        "CREATE TRIGGER reject_rest_stop BEFORE DELETE ON active_focus_state "
+        "BEGIN SELECT RAISE(ABORT, 'test failure'); END")));
+    QVERIFY(!timer->stopFocus());
+    QCOMPARE(timer->phase(), int(FocusTimer::ManualRestPhase));
+    QCOMPARE(restSpy.count(), 0);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM rest_sessions")) && query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
+    QVERIFY(query.exec(QStringLiteral("DROP TRIGGER reject_rest_stop")));
+    QVERIFY(timer->stopFocus());
+    QCOMPARE(restSpy.count(), 1);
+
+    const QDate day(2026, 9, 6);
+    const auto rows = history->getDayTimeline(day);
+    QCOMPARE(rows.size(), 1);
+    QVERIFY(rows.first().toMap().value(QStringLiteral("isRest")).toBool());
+    QCOMPARE(rows.first().toMap().value(QStringLiteral("durationSeconds")).toInt(), 45);
+    QVERIFY(history->getDayTimeline(day.addDays(1)).isEmpty());
+    QVERIFY(history->getDaySessions(day).isEmpty());
+    QCOMPARE(history->getDayTotalDuration(day), 0);
+    QCOMPARE(countFocusSessions(), 0);
+    QVERIFY(!timer->stopFocus());
+    QCOMPARE(history->getDayTimeline(day).size(), 1);
+
+    // 番茄休息自然到点也生成独立记录，超过目标的计时刷新延迟不能增加休息秒数。
+    QVERIFY(timer->startBreak(60));
+    timer->m_startTime = QDateTime(day, QTime(12, 0));
+    setFocusElapsedSeconds(timer, 70);
+    QVERIFY(QMetaObject::invokeMethod(&timer->m_timer, "timeout", Qt::DirectConnection));
+    const auto mixed = history->getDayTimeline(day);
+    QCOMPARE(mixed.size(), 2);
+    QCOMPARE(mixed.first().toMap().value(QStringLiteral("taskTitle")).toString(), QStringLiteral("番茄休息"));
+    QCOMPARE(mixed.first().toMap().value(QStringLiteral("durationSeconds")).toInt(), 60);
+    QCOMPARE(history->getDayTotalDuration(day), 0);
+
+    QVERIFY(timer->startManualRest());
+    timer->pauseFocus();
+    QVERIFY(timer->stopFocus());
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM rest_sessions")) && query.next());
+    QCOMPARE(query.value(0).toInt(), 2);
 }
 
 void ServiceTests::deletingActiveTaskDetachesTimerAndSuppressesAutoCompleteFailure()

@@ -19,6 +19,8 @@ public:
     // 返回给 QML 的列表项固定包含 id/taskId/taskTitle/startTime/endTime/durationSeconds/date。
     Q_INVOKABLE QVariantList getMonthSessions(int year, int month) const;
     Q_INVOKABLE QVariantList getDaySessions(const QDate& date) const;
+    // 时间轴混排休息和专注；原专注查询保持统计口径不变。
+    Q_INVOKABLE QVariantList getDayTimeline(const QDate& date) const;
     Q_INVOKABLE int getDayTotalDuration(const QDate& date) const;
     Q_INVOKABLE QString formatDuration(int seconds) const;
     Q_INVOKABLE QString lastError() const;

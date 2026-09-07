@@ -51,6 +51,10 @@ TestCase {
         property bool deleteResult: true
         property string errorText: ""
 
+        function getDayTimeline(date) {
+            return getDaySessions(date);
+        }
+
         function getDaySessions(date) {
             if (testCase.throwOnLoad)
                 throw new Error("数据库不可用");
@@ -202,6 +206,24 @@ TestCase {
         verify(label !== null);
         verify(label.text.indexOf("2026年9月2日") >= 0);
         verify(label.text.indexOf("2 次") >= 0);
+    }
+
+    function test_restRowsDoNotIncreaseFocusSummary() {
+        var rest = testCase.makeSession(1, "休息", "2026-09-02T16:00:00", "2026-09-02T16:10:00", 600, "2026-09-02");
+        rest.isRest = true;
+        testCase.sessionsByDate["2026-09-02"].splice(1, 0, rest);
+        view.refresh();
+        compare(view.sessions.length, 3);
+        compare(view.totalSeconds, 6600);
+        compare(view.focusCount, 2);
+        verify(!findChild(view, "focusSessionEdit-1").visible);
+        verify(!findChild(view, "focusSessionDelete-1").visible);
+
+        testCase.sessionsByDate["2026-09-02"] = [rest];
+        view.refresh();
+        compare(view.sessions.length, 1);
+        compare(view.totalSeconds, 0);
+        compare(view.focusCount, 0);
     }
 
     function test_showDateSwitchesToHistoryDay() {

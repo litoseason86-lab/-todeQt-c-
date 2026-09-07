@@ -73,7 +73,9 @@ FocusTimer::FocusTimer(QObject* parent)
             // 保存失败时计时器继续走并在下一次 tick 重试；这里只在进入失败状态的
             // 第一刻通知界面，避免每秒一条提示刷屏。
             m_completionFailureNotified = true;
-            emit operationFailed(QStringLiteral("专注记录保存失败，正在自动重试"));
+            emit operationFailed(completedPhase == BreakPhase
+                ? QStringLiteral("休息记录保存失败，正在自动重试")
+                : QStringLiteral("专注记录保存失败，正在自动重试"));
         }
     });
 }
@@ -118,7 +120,7 @@ bool FocusTimer::startManualRest()
     }
 
     // 主动休息只借用全局计时和恢复快照，不创建 focus_sessions。这样统计、历史和导出
-    // 都不会把休息误算为专注；任务字段必须留空，防止恢复后被误当成某个任务的上下文。
+    // 都不会把休息误算为专注；结束后另存休息历史，任务字段必须留空。
     m_currentTaskId = -1;
     m_currentTaskTitle.clear();
     m_startTime = QDateTime::currentDateTime();
@@ -160,7 +162,7 @@ bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& 
         return false;
     }
 
-    // 休息段只占用计时器状态，不创建 focus_sessions；否则历史、统计、导出都会把休息误当专注。
+    // 休息段不创建 focus_sessions，结束后写入独立休息历史，保持专注统计隔离。
     // 任务字段仅作为下一轮番茄的恢复上下文，不参与休息统计。
     const QString normalizedTitle = taskTitle.trimmed();
     const bool hasTaskContext = taskId > 0 && !normalizedTitle.isEmpty();
@@ -333,14 +335,38 @@ bool FocusTimer::resumeFocus()
 bool FocusTimer::stopFocus()
 {
     if (m_phase == BreakPhase || m_phase == ManualRestPhase) {
-        // 两类休息都没有数据库行，到点或手动停止只复位；不能走专注段的保存/丢弃逻辑。
+        // 休息保存和活动快照清理必须在同一事务内，否则失败重试可能重复生成记录。
         const bool wasRunning = m_isRunning;
         if (wasRunning) {
             freezeElapsedTime();
             m_timer.stop();
         }
         QSqlDatabase db = DatabaseManager::instance()->database();
-        if (!db.isOpen() || !clearActiveState(db)) {
+        bool saved = db.isOpen() && db.transaction();
+        if (saved) {
+            // 不套用专注最小时长门槛；仅忽略不足一秒的误触。
+            const int duration = m_phase == BreakPhase
+                ? qMin(m_elapsedSeconds, m_targetSeconds) : m_elapsedSeconds;
+            if (duration > 0) {
+                QSqlQuery query(db);
+                query.prepare(QStringLiteral(
+                    "INSERT INTO rest_sessions (start_time, end_time, duration, manual) "
+                    "VALUES (:start, :end, :duration, :manual)"));
+                query.bindValue(QStringLiteral(":start"), m_startTime.toString(Qt::ISODateWithMs));
+                query.bindValue(QStringLiteral(":end"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+                query.bindValue(QStringLiteral(":duration"), duration);
+                query.bindValue(QStringLiteral(":manual"), m_phase == ManualRestPhase ? 1 : 0);
+                saved = query.exec();
+                if (!saved) {
+                    qWarning() << "Failed to save rest session:" << query.lastError().text();
+                }
+            }
+            saved = saved && clearActiveState(db) && db.commit();
+            if (!saved) {
+                db.rollback();
+            }
+        }
+        if (!saved) {
             if (wasRunning) {
                 m_isRunning = true;
                 m_runSegmentStartNsecs = m_clock->nowNsecs();
@@ -354,6 +380,7 @@ bool FocusTimer::stopFocus()
         emit modeChanged();
         emit phaseChanged();
         emit tick();
+        emit restCompleted();
         return true;
     }
 
@@ -746,10 +773,10 @@ bool FocusTimer::writeActiveState(QSqlDatabase& db)
     query.prepare(QStringLiteral(R"SQL(
         INSERT INTO active_focus_state (
             singleton_id, session_id, task_id, task_title, elapsed_seconds,
-            mode, phase, target_seconds, completed_pomodoros, updated_at
+            mode, phase, target_seconds, completed_pomodoros, updated_at, start_time
         ) VALUES (
             1, :sessionId, :taskId, :taskTitle, :elapsedSeconds,
-            :mode, :phase, :targetSeconds, :completedPomodoros, :updatedAt
+            :mode, :phase, :targetSeconds, :completedPomodoros, :updatedAt, :startTime
         )
         ON CONFLICT(singleton_id) DO UPDATE SET
             session_id = excluded.session_id,
@@ -760,7 +787,8 @@ bool FocusTimer::writeActiveState(QSqlDatabase& db)
             phase = excluded.phase,
             target_seconds = excluded.target_seconds,
             completed_pomodoros = excluded.completed_pomodoros,
-            updated_at = excluded.updated_at
+            updated_at = excluded.updated_at,
+            start_time = excluded.start_time
     )SQL"));
     query.bindValue(QStringLiteral(":sessionId"), m_sessionId > 0 ? QVariant(m_sessionId) : QVariant());
     query.bindValue(QStringLiteral(":taskId"), m_currentTaskId > 0 ? QVariant(m_currentTaskId) : QVariant());
@@ -771,6 +799,7 @@ bool FocusTimer::writeActiveState(QSqlDatabase& db)
     query.bindValue(QStringLiteral(":phase"), static_cast<int>(m_phase));
     query.bindValue(QStringLiteral(":targetSeconds"), m_targetSeconds);
     query.bindValue(QStringLiteral(":completedPomodoros"), m_completedPomodoros);
+    query.bindValue(QStringLiteral(":startTime"), m_startTime.toString(Qt::ISODateWithMs));
     query.bindValue(QStringLiteral(":updatedAt"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
 
     if (!query.exec()) {
@@ -845,7 +874,7 @@ bool FocusTimer::restoreInterruptedSession()
     QSqlQuery stateQuery(db);
     if (!stateQuery.exec(QStringLiteral(R"SQL(
         SELECT session_id, task_id, task_title, elapsed_seconds, mode, phase, target_seconds,
-               completed_pomodoros
+               completed_pomodoros, start_time, updated_at
         FROM active_focus_state WHERE singleton_id = 1
     )SQL"))) {
         qWarning() << "Failed to read active focus state:" << stateQuery.lastError().text();
@@ -889,7 +918,15 @@ bool FocusTimer::restoreInterruptedSession()
         && restoredSessionId == -1 && restoredTaskId == -1 && restoredTitle.isEmpty()
         && restoredTarget == 0;
 
-    QDateTime restoredStartTime;
+    QDateTime restoredStartTime = QDateTime::fromString(stateQuery.value(8).toString(), Qt::ISODate);
+    if (!restoredStartTime.isValid()) {
+        // 旧版休息快照没有起点，只能以最后检查点减去有效秒数兼容恢复。
+        restoredStartTime = QDateTime::fromString(stateQuery.value(9).toString(), Qt::ISODate)
+                                .addSecs(-restoredElapsed);
+        if (!restoredStartTime.isValid()) {
+            restoredStartTime = QDateTime::currentDateTime().addSecs(-restoredElapsed);
+        }
+    }
     bool sessionRowValid = isPomodoroBreak || isManualRest;
     if (restoredSessionId > 0) {
         QSqlQuery sessionQuery(db);
@@ -920,8 +957,8 @@ bool FocusTimer::restoreInterruptedSession()
     m_sessionId = restoredSessionId;
     m_currentTaskId = restoredTaskId;
     m_currentTaskTitle = restoredTitle;
-    // 休息不会落库开始时刻；恢复时仅需让内存状态完整，离线时段也不会被追加计算。
-    m_startTime = (isPomodoroBreak || isManualRest) ? QDateTime::currentDateTime() : restoredStartTime;
+    // 保留原起点；累计时长仍只读取检查点，不追加离线时段。
+    m_startTime = restoredStartTime;
     m_elapsedSeconds = restoredElapsed;
     m_accumulatedMilliseconds = static_cast<qint64>(restoredElapsed) * 1000;
     m_lastCheckpointSeconds = restoredElapsed;

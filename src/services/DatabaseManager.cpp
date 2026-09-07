@@ -216,6 +216,20 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // 休息独立存储，避免现有专注统计、任务进度和导出误把休息累计进去。
+    // 纯新增表在每次初始化时幂等检查，旧数据库和旧备份无需改写专注数据。
+    if (!execSql(query, QStringLiteral(R"SQL(
+        CREATE TABLE IF NOT EXISTS rest_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            start_time TEXT NOT NULL,
+            end_time TEXT NOT NULL,
+            duration INTEGER NOT NULL CHECK(duration > 0),
+            manual INTEGER NOT NULL CHECK(manual IN (0, 1))
+        )
+    )SQL"), "Failed to create rest sessions table:")) {
+        return false;
+    }
+
     const QString createActiveFocusStateTable = QStringLiteral(R"SQL(
         CREATE TABLE IF NOT EXISTS active_focus_state (
             singleton_id INTEGER PRIMARY KEY CHECK(singleton_id = 1),
@@ -248,6 +262,14 @@ bool DatabaseManager::createTables()
                      "Failed to add active focus pomodoro count:")) {
             return false;
         }
+    }
+
+    // 休息没有专注行可回查开始时间；新增快照字段保留暂停和重启前的真实起点。
+    // 旧快照留空，由恢复逻辑使用最后检查点推算，不把升级后的离线时间计入休息。
+    if (!columnExists(QStringLiteral("active_focus_state"), QStringLiteral("start_time"))
+        && !execSql(query, QStringLiteral("ALTER TABLE active_focus_state ADD COLUMN start_time TEXT"),
+                    "Failed to add active state start time:")) {
+        return false;
     }
 
     // 版本 2 引入 categories/category_id，同时保留旧版文本科目。

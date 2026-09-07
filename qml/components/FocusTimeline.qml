@@ -149,6 +149,7 @@ Rectangle {
                         // delegate 显式声明消费的模型角色（pragma ComponentBehavior: Bound）。
                         required property var modelData
                         required property int index
+                        readonly property bool isRest: Boolean(sessionRow.modelData.isRest)
 
                         width: timelineColumn.width
                         height: sessionCard.height + (sessionRow.index < root.sessions.length - 1 ? 14 : 0)
@@ -169,7 +170,7 @@ Rectangle {
                             x: 3
                             y: 18
                             radius: 5
-                            color: Theme.accent
+                            color: sessionRow.isRest ? Theme.inkSoft : Theme.accent
                             border.color: Theme.surface
                             border.width: 2
                             z: 2
@@ -180,7 +181,7 @@ Rectangle {
                             objectName: "focusSessionCard-" + sessionRow.index
                             x: 24
                             width: Math.max(1, parent.width - x)
-                            height: root.editable ? 112 : 86
+                            height: root.editable && !sessionRow.isRest ? 112 : 86
                             radius: Theme.radiusMd
                             color: Theme.surfaceRaised
                             border.color: Theme.border
@@ -217,7 +218,8 @@ Rectangle {
 
                                     RowLayout {
                                         spacing: Theme.space8
-                                        visible: root.editable
+                                        // 休息记录不进入专注编辑接口，避免同号 ID 改写另一张表。
+                                        visible: root.editable && !sessionRow.isRest
 
                                         TimelineTextButton {
                                             objectName: "focusSessionEdit-" + sessionRow.index
@@ -244,22 +246,25 @@ Rectangle {
                                         Layout.fillWidth: true
                                         // formatDurationFn 由视图在运行时注入，静态工具只能看到 var 属性。
                                         // qmllint disable use-proper-function
-                                        text: root.formatDurationFn(Number(sessionRow.modelData.durationSeconds) || 0)
+                                        text: sessionRow.isRest && Number(sessionRow.modelData.durationSeconds) < 60
+                                              ? qsTr("%1秒").arg(Number(sessionRow.modelData.durationSeconds) || 0)
+                                              : root.formatDurationFn(Number(sessionRow.modelData.durationSeconds) || 0)
                                         // qmllint enable use-proper-function
                                         textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontXl
                                         font.weight: Font.Bold
-                                        color: Theme.accent
+                                        color: sessionRow.isRest ? Theme.inkSoft : Theme.accent
                                         horizontalAlignment: Text.AlignRight
                                         elide: Text.ElideRight
                                     }
 
                                     Text {
                                         Layout.fillWidth: true
-                                        text: "已完成"
+                                        text: sessionRow.isRest ? qsTr("不计入专注") : qsTr("已完成")
+                                        textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontXs
                                         font.weight: Font.Medium
-                                        color: Theme.success
+                                        color: sessionRow.isRest ? Theme.inkSoft : Theme.success
                                         horizontalAlignment: Text.AlignRight
                                     }
                                 }

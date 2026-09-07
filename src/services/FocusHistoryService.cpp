@@ -5,6 +5,8 @@
 #include "FocusSessionRules.h"
 #include "LogicalDay.h"
 
+#include <algorithm>
+
 #include <QDateTime>
 #include <QDebug>
 #include <QSqlDatabase>
@@ -64,6 +66,41 @@ QVariantList FocusHistoryService::getDaySessions(const QDate& date) const
 
     return querySessions(QStringLiteral("date(fs.start_time, :shift) = :date"),
                          QVariantMap{{QStringLiteral(":date"), date.toString(Qt::ISODate)}});
+}
+
+QVariantList FocusHistoryService::getDayTimeline(const QDate& date) const
+{
+    QVariantList sessions = getDaySessions(date);
+    if (!m_lastError.isEmpty()) {
+        return {};
+    }
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral(
+        "SELECT id, start_time, end_time, duration, manual FROM rest_sessions "
+        "WHERE date(start_time, :shift) = :date ORDER BY start_time, id"));
+    query.bindValue(QStringLiteral(":shift"), LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
+    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return {};
+    }
+    while (query.next()) {
+        sessions.append(QVariantMap{
+            {QStringLiteral("id"), query.value(0)},
+            {QStringLiteral("isRest"), true},
+            {QStringLiteral("taskTitle"), query.value(4).toBool() ? tr("休息") : tr("番茄休息")},
+            {QStringLiteral("startTime"), query.value(1)},
+            {QStringLiteral("endTime"), query.value(2)},
+            {QStringLiteral("durationSeconds"), query.value(3)},
+            {QStringLiteral("date"), date.toString(Qt::ISODate)}
+        });
+    }
+    // 按真实时间比较，避免带毫秒与不带毫秒的旧记录在字符串排序时错位。
+    std::stable_sort(sessions.begin(), sessions.end(), [](const QVariant& left, const QVariant& right) {
+        return QDateTime::fromString(left.toMap().value(QStringLiteral("startTime")).toString(), Qt::ISODate)
+            < QDateTime::fromString(right.toMap().value(QStringLiteral("startTime")).toString(), Qt::ISODate);
+    });
+    return sessions;
 }
 
 int FocusHistoryService::getDayTotalDuration(const QDate& date) const
