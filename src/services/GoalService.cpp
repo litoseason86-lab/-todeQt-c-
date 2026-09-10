@@ -150,7 +150,9 @@ QString GoalService::goalSelectSql() const
         "g.target_minutes, g.start_date, g.deadline, g.display_order, "
         "g.fired_milestones, g.achieved_at, g.created_at, "
         "COALESCE(SUM(v.duration), 0) / 60 AS done_minutes, "
-        "COUNT(DISTINCT v.logical_day) AS active_days "
+        "COUNT(DISTINCT v.logical_day) AS active_days, "
+        "COALESCE(SUM(CASE WHEN v.logical_day BETWEEN :windowStart AND :today THEN v.duration ELSE 0 END), 0) / 60 AS recent_minutes, "
+        "COUNT(DISTINCT CASE WHEN v.logical_day BETWEEN :windowStart AND :today THEN v.logical_day END) AS recent_active_days "
         "FROM long_goals g "
         "LEFT JOIN categories c ON g.category_id = c.id "
         "LEFT JOIN valid_sessions v ON v.category_id = g.category_id "
@@ -179,6 +181,9 @@ QList<LongGoal> GoalService::loadGoals(std::optional<int> singleGoalId, bool* ok
     QSqlQuery query(db);
     query.prepare(sql);
     query.bindValue(QStringLiteral(":dayShift"), dayShift());
+    const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
+    query.bindValue(QStringLiteral(":today"), today.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":windowStart"), today.addDays(-13).toString(Qt::ISODate));
     if (singleGoalId.has_value()) {
         query.bindValue(QStringLiteral(":goalId"), *singleGoalId);
     }
@@ -197,19 +202,18 @@ QList<LongGoal> GoalService::loadGoals(std::optional<int> singleGoalId, bool* ok
     return goals;
 }
 
-int GoalService::forecastDaysFor(const LongGoal& goal, int activeDays) const
+int GoalService::forecastDaysFor(const LongGoal& goal) const
 {
     const int remain = goal.targetMinutes - goal.doneMinutes;
     if (remain <= 0) {
         return 0;
     }
-    if (activeDays <= 0 || goal.doneMinutes <= 0) {
-        // 还没有任何有效番茄，无从推算速度。界面据此隐藏这一行，而不是显示一个编造的天数。
+    const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
+    const int windowDays = static_cast<int>(qMax(goal.startDate, today.addDays(-13)).daysTo(today)) + 1;
+    // 至少观察一周且有两天投入，避免一次突击就得出“来得及”。停学日也进入分母。
+    if (windowDays < 7 || goal.recentActiveDays < 2 || goal.recentMinutes <= 0)
         return -1;
-    }
-
-    const double rate = static_cast<double>(goal.doneMinutes) / static_cast<double>(activeDays);
-    return static_cast<int>(std::ceil(static_cast<double>(remain) / rate));
+    return static_cast<int>(std::ceil(static_cast<double>(remain) * windowDays / goal.recentMinutes));
 }
 
 QVariantList GoalService::getGoals()
@@ -222,7 +226,7 @@ QVariantList GoalService::getGoals()
     const QList<LongGoal> goals = loadGoals(std::nullopt);
     for (const LongGoal& goal : goals) {
         LongGoal filled = goal;
-        filled.forecastDays = forecastDaysFor(filled, filled.activeDays);
+        filled.forecastDays = forecastDaysFor(filled);
         result.append(filled.toVariantMap());
     }
     return result;
@@ -249,7 +253,7 @@ QVariantMap GoalService::getGoal(int goalId)
     }
 
     LongGoal filled = goals.first();
-    filled.forecastDays = forecastDaysFor(filled, filled.activeDays);
+    filled.forecastDays = forecastDaysFor(filled);
     return filled.toVariantMap();
 }
 

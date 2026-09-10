@@ -240,7 +240,7 @@ TestCase {
         var card = createTemporaryObject(cardComponent, testCase,
                                          { goal: goal, today: new Date(2026, 7, 10) })
         verify(card !== null)
-        verify(card.detailText.indexOf("照此速度 21 天完成") >= 0,
+        verify(card.detailText.indexOf("按近两周节奏约 21 个自然日完成") >= 0,
                "实际为：" + card.detailText)
         verify(card.detailText.indexOf("距截止 131 天") >= 0)
         compare(card.forecastVerdict.text, "来得及")

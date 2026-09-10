@@ -23,6 +23,7 @@
         <file alias="qml/views/GoalsView.qml">../qml/views/GoalsView.qml</file>
         <file alias="qml/components/GlassPanel.qml">../qml/components/GlassPanel.qml</file>
         <file alias="qml/components/GlassToolbarButton.qml">../qml/components/GlassToolbarButton.qml</file>
+        <file alias="qml/components/PageActionButton.qml">../qml/components/PageActionButton.qml</file>
         <file alias="qml/components/SegmentedSwitch.qml">../qml/components/SegmentedSwitch.qml</file>
         <file alias="qml/components/LiquidGlassBackdrop.qml">../qml/components/LiquidGlassBackdrop.qml</file>
         <file alias="qml/components/FocusGoalCard.qml">../qml/components/FocusGoalCard.qml</file>
@@ -95,5 +96,7 @@
         <file alias="sounds/phase-complete.wav">sounds/phase-complete.wav</file>
         <file alias="sounds/milestone.wav">sounds/milestone.wav</file>
         <file alias="sounds/goal-achieved.wav">sounds/goal-achieved.wav</file>
+        <file alias="qml/components/DateInput.qml">../qml/components/DateInput.qml</file>
+        <file alias="qml/components/TaskToolsDialog.qml">../qml/components/TaskToolsDialog.qml</file>
     </qresource>
 </RCC>

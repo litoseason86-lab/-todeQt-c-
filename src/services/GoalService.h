@@ -82,7 +82,7 @@ private:
     // 以下几个方法会在失败时发 operationFailed，所以不能是 const 成员。
     // ok 区分"查询失败"与"查询成功但没有匹配行"，避免把数据库错误误报为目标不存在。
     QList<LongGoal> loadGoals(std::optional<int> singleGoalId, bool* ok = nullptr);
-    int forecastDaysFor(const LongGoal& goal, int activeDays) const;
+    int forecastDaysFor(const LongGoal& goal) const;
     bool validateInput(const QString& title,
                        int categoryId,
                        int targetMinutes,

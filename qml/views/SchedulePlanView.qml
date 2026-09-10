@@ -8,7 +8,7 @@ import ".."
 import "../LogicalDay.js" as LogicalDay
 import "../ScheduleWeeks.js" as ScheduleWeeks
 
-// 待办（课表）页：按星期几循环的固定时间表。
+// 课表页：按星期几循环的固定时间表。
 //
 // 与「本周计划」的区别在数据本身，不只是版式：本周计划里的是锚定具体日期、
 // 做完就结束的任务；这里的是每周重复、按周次生效、没有完成状态的课程或日程。
@@ -251,7 +251,7 @@ Item {
                 spacing: Theme.space4
 
                 Text {
-                    text: "待办"
+                    text: "课表"
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontXxl
                     font.bold: true

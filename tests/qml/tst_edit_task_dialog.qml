@@ -98,9 +98,23 @@ TestCase {
         compare(dialog.dateOffsetSelection, -1)
         compare(dialog.resultIsoDate(), "2026-06-30")
 
-        const originalText = findChild(dialog, "editOriginalDateText")
+        const originalText = findChild(dialog, "editCustomDate")
         verify(originalText)
         verify(originalText.text.indexOf("2026-06-30") !== -1)
+    }
+
+    function test_arbitraryDateRejectsRollover() {
+        dialog.openForTask({ id: 8, title: "日期测试", date: "2026-06-30" })
+        var field = findChild(dialog, "editCustomDate")
+        field.text = "2026-02-31"
+        field.edited()
+        dialog.submit()
+        verify(dialog.visible)
+        verify(dialog.errorText.length > 0)
+        field.text = "2026-12-25"
+        field.edited()
+        compare(dialog.resultIsoDate(), "2026-12-25")
+        verify(field.valid)
     }
 
     function test_submitEmitsEditedValues() {

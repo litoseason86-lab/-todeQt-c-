@@ -689,56 +689,113 @@ QVariantList TaskManager::getOverdueUncompletedTasks() const
 
 bool TaskManager::moveTasksToToday(const QVariantList& taskIds)
 {
-    if (taskIds.isEmpty()) {
+    return moveTasksToDate(taskIds, LogicalDay::today(AppSettings::instance()->dayStartHour()));
+}
+
+bool TaskManager::moveTasksToDate(const QVariantList& taskIds, const QVariant& dateValue)
+{
+    const QDate date = normalizeDate(dateValue);
+    if (!date.isValid()) {
+        reportFailure(QStringLiteral("改期失败：日期无效"));
+        return false;
+    }
+    if (taskIds.isEmpty())
         return true;
-    }
-
     QSqlDatabase db = DatabaseManager::instance()->database();
-    if (!db.isOpen()) {
-        qWarning() << "Failed to move tasks: database is not open";
+    if (!db.isOpen() || !db.transaction()) {
+        reportFailure(QStringLiteral("改期失败：无法开始数据库事务"));
         return false;
     }
-
-    if (!db.transaction()) {
-        qWarning() << "Failed to start move tasks transaction:" << db.lastError().text();
-        return false;
-    }
-
-    const QString today = LogicalDay::today(
-                              AppSettings::instance()->dayStartHour()).toString(Qt::ISODate);
-    for (const QVariant& idValue : taskIds) {
-        const int taskId = idValue.toInt();
-        if (!isValidTaskId(taskId)) {
-            qWarning() << "Failed to move tasks: invalid task id" << idValue;
+    QSet<int> seen;
+    const QString iso = date.toString(Qt::ISODate);
+    for (const QVariant& value : taskIds) {
+        bool valid = false;
+        const int id = value.toInt(&valid);
+        if (!valid || id <= 0 || seen.contains(id)) {
             db.rollback();
+            reportFailure(QStringLiteral("改期失败：任务编号无效或重复"));
             return false;
         }
-
+        seen.insert(id);
         QSqlQuery query(db);
+        // 已在目标日期的任务保持原排序；跨日任务按选择顺序追加。失败回滚整个批次。
         query.prepare(QStringLiteral(
-            "UPDATE tasks SET date = :today, "
-            "display_order = (SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks "
-            "                 WHERE date = :orderDate AND id <> :selfId) "
-            "WHERE id = :id"));
-        query.bindValue(QStringLiteral(":today"), today);
-        query.bindValue(QStringLiteral(":orderDate"), today);
-        query.bindValue(QStringLiteral(":selfId"), taskId);
-        query.bindValue(QStringLiteral(":id"), taskId);
-
-        // 一键结转必须全成或全不成；部分成功会让提示数量和列表状态互相矛盾。
+            "UPDATE tasks SET display_order = CASE WHEN date = :date THEN display_order "
+            "ELSE (SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks WHERE date = :date) END, "
+            "date = :date WHERE id = :id"));
+        query.bindValue(QStringLiteral(":date"), iso);
+        query.bindValue(QStringLiteral(":id"), id);
         if (!query.exec() || query.numRowsAffected() != 1) {
-            qWarning() << "Failed to move task" << taskId << ":" << query.lastError().text();
             db.rollback();
+            reportFailure(QStringLiteral("改期失败：任务已变化，请刷新重试"));
             return false;
         }
     }
-
     if (!db.commit()) {
-        qWarning() << "Failed to commit move tasks:" << db.lastError().text();
         db.rollback();
+        reportFailure(QStringLiteral("改期失败：数据库提交失败"));
         return false;
     }
+    emit tasksChanged();
+    return true;
+}
 
+QVariantMap TaskManager::getTask(int taskId) const
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(taskSelectSql() + QStringLiteral("WHERE t.id = :id"));
+    query.bindValue(QStringLiteral(":id"), taskId);
+    if (!query.exec()) {
+        reportFailure(QStringLiteral("任务加载失败"));
+        return {};
+    }
+    return query.next() ? Task::fromQuery(query).toVariantMap() : QVariantMap();
+}
+
+QVariantList TaskManager::searchTasks(const QString& text, int status, int limit) const
+{
+    QVariantList result;
+    QSqlQuery query(DatabaseManager::instance()->database());
+    // instr 按字面匹配，用户输入 %、_ 不会变成 SQL 通配符；标题、备注、科目跨日期查询。
+    query.prepare(taskSelectSql() + QStringLiteral(
+        "WHERE (:status < 0 OR t.completed = :status) AND "
+        "(:text = '' OR instr(lower(t.title), lower(:text)) > 0 "
+        "OR instr(lower(t.notes), lower(:text)) > 0 "
+        "OR instr(lower(COALESCE(c.name, t.category)), lower(:text)) > 0) "
+        "ORDER BY t.date DESC, t.display_order ASC, t.id ASC LIMIT :limit"));
+    query.bindValue(QStringLiteral(":text"), text.trimmed());
+    query.bindValue(QStringLiteral(":status"), status == 0 || status == 1 ? status : -1);
+    query.bindValue(QStringLiteral(":limit"), qBound(1, limit, 10000));
+    if (!query.exec()) {
+        reportFailure(QStringLiteral("任务搜索失败"));
+        return result;
+    }
+    while (query.next())
+        result.append(Task::fromQuery(query).toVariantMap());
+    return result;
+}
+
+bool TaskManager::duplicateTask(int taskId, const QVariant& dateValue)
+{
+    const QDate date = normalizeDate(dateValue);
+    if (taskId <= 0 || !date.isValid()) {
+        reportFailure(QStringLiteral("复制失败：任务或日期无效"));
+        return false;
+    }
+    QSqlQuery query(DatabaseManager::instance()->database());
+    // 单条 INSERT SELECT 原子复制定义，兼容旧版纯文本科目；其他列取默认值，
+    // 不继承完成状态、专注记录或例行生成标记，也不改变原任务。
+    query.prepare(QStringLiteral(
+        "INSERT INTO tasks(title, category, category_id, date, estimated_minutes, notes, display_order) "
+        "SELECT title, category, category_id, :date, estimated_minutes, notes, "
+        "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks WHERE date = :date) "
+        "FROM tasks WHERE id = :id"));
+    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":id"), taskId);
+    if (!query.exec() || query.numRowsAffected() != 1) {
+        reportFailure(QStringLiteral("复制失败：原任务不存在或数据库写入失败"));
+        return false;
+    }
     emit tasksChanged();
     return true;
 }

@@ -515,117 +515,67 @@ Item {
         anchors.margins: Theme.space24
         spacing: Theme.space16
 
-        RowLayout {
+        GridLayout {
+            id: taskHeader
+            objectName: "todayTaskHeader"
             Layout.fillWidth: true
-            spacing: Theme.space12
+            // 让操作区按自身内容决定换行，休息计时变长时也不会挤压标题。
+            columns: width >= taskTitle.implicitWidth + taskActions.implicitWidth + Theme.space24 ? 2 : 1
+            columnSpacing: Theme.space24
+            rowSpacing: Theme.space12
 
-            ColumnLayout {
+            Text {
+                id: taskTitle
                 Layout.fillWidth: true
-                spacing: Theme.space4
-
-                Text {
-                    text: "今日任务"
-                    font.pixelSize: Theme.fontXxl
-                    font.weight: Font.Bold
-                    color: Theme.ink
-                }
+                text: qsTr("今日任务")
+                font.pixelSize: Theme.fontXxl
+                font.weight: Font.Bold
+                color: Theme.ink
             }
 
-            Button {
-                id: manualRestButton
-                objectName: "todayManualRestButton"
+            RowLayout {
+                id: taskActions
+                Layout.alignment: taskHeader.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+                spacing: Theme.space8
 
-                // 专注或番茄休息进行时不允许再开主动休息；主动休息本身则保留回到休息页的入口。
-                visible: !!root.focusTimerRef && (!root.timerBusy || root.manualRestActive)
-                text: root.manualRestActive
-                      ? "休息 " + root.formatClockTime(root.focusTimerRef.elapsedSeconds)
-                      : "开始休息"
-                implicitWidth: root.manualRestActive ? 156 : 112
-                implicitHeight: 44
-                activeFocusOnTab: true
-                onClicked: {
-                    if (root.manualRestActive) {
-                        root.manualRestPageRequested()
-                    } else {
-                        root.manualRestRequested()
-                    }
+                PageActionButton {
+                    objectName: "taskToolsButton"
+                    text: qsTr("搜索 / 批量改期")
+                    glyph: "search"
+                    onClicked: taskTools.open()
                 }
 
-                background: Rectangle {
-                    color: manualRestButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
-                    border.color: manualRestButton.activeFocus ? Theme.focusRing : Theme.border
-                    border.width: manualRestButton.activeFocus ? 2 : 1
-                    radius: Theme.radiusLg
-                }
-
-                contentItem: Text {
-                    text: manualRestButton.text
-                    textFormat: Text.PlainText
-                    color: Theme.ink
-                    font.pixelSize: Theme.fontLg
-                    font.weight: Font.Medium
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-            }
-
-            Button {
-                id: addButton
-                objectName: "todayAddButton"
-
-                text: "添加任务"
-                implicitWidth: 112
-                implicitHeight: 44
-
-                background: Rectangle {
-                    objectName: "todayAddButtonBackground"
-                    color: addButton.pressed ? Theme.accentFillStrong : (addButton.hovered ? Theme.accentFillStrong : Theme.accentFill)
-                    border.color: addButton.hovered ? Theme.accentStrong : "transparent"
-                    border.width: addButton.hovered ? 1 : 0
-                    radius: Theme.radiusLg
-
-                    Behavior on color {
-                        ColorAnimation {
-                            duration: Theme.reduceMotion ? 0 : 160
-                            easing.type: Easing.OutQuad
-                        }
-                    }
-
-                    Behavior on border.color {
-                        ColorAnimation {
-                            duration: Theme.reduceMotion ? 0 : 160
-                            easing.type: Easing.OutQuad
-                        }
-                    }
-
-                    Behavior on border.width {
-                        NumberAnimation {
-                            duration: Theme.reduceMotion ? 0 : 160
-                            easing.type: Easing.OutQuad
+                PageActionButton {
+                    id: manualRestButton
+                    objectName: "todayManualRestButton"
+                    // 专注或番茄休息进行时不允许再开主动休息；主动休息保留返回入口。
+                    visible: !!root.focusTimerRef && (!root.timerBusy || root.manualRestActive)
+                    text: root.manualRestActive
+                          ? qsTr("休息 %1").arg(root.formatClockTime(root.focusTimerRef.elapsedSeconds))
+                          : qsTr("开始休息")
+                    glyph: "pause"
+                    // 休息中文字每秒变化，比例数字会让按钮宽度抖动，把左侧按钮一起挤动；
+                    // 计时期间给一个足够放下 00:00:00 的下限宽度。
+                    implicitWidth: Math.max(root.manualRestActive ? 168 : 0,
+                                            manualRestButton.contentItem.implicitWidth
+                                            + manualRestButton.leftPadding + manualRestButton.rightPadding)
+                    onClicked: {
+                        if (root.manualRestActive) {
+                            root.manualRestPageRequested()
+                        } else {
+                            root.manualRestRequested()
                         }
                     }
                 }
 
-                contentItem: Text {
-                    objectName: "todayAddButtonLabel"
-                    text: addButton.text
-                    textFormat: Text.PlainText
-                    color: Theme.accentFillInk
-                    font.pixelSize: Theme.fontLg
-                    font.weight: Font.Medium
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    scale: addButton.pressed ? 0.96 : 1.0
-
-                    Behavior on scale {
-                        NumberAnimation {
-                            duration: Theme.reduceMotion ? 0 : 90
-                            easing.type: Easing.OutQuad
-                        }
-                    }
+                PageActionButton {
+                    id: addButton
+                    objectName: "todayAddButton"
+                    text: qsTr("添加任务")
+                    glyph: "plus"
+                    primary: true
+                    onClicked: addTaskDialog.open()
                 }
-
-                onClicked: addTaskDialog.open()
             }
         }
 
@@ -923,6 +873,16 @@ Item {
             }
         }
 
+    }
+
+    TaskToolsDialog {
+        id: taskTools
+        parent: root
+        taskManagerRef: root.taskManagerRef
+        categoryManagerRef: root.categoryManagerRef
+        todayIso: root.logicalTodayIso
+        pendingDeleteTaskId: root.pendingDeleteTaskId
+        onStartRequested: function(id, title) { root.startFocus(id, title) }
     }
 
     AddTaskDialog {

@@ -84,15 +84,15 @@ TestCase {
         var d = GoalForecast.detail(
                     goalWith({ forecastDays: 21, deadline: new Date(2026, 11, 19) }),
                     testCase.today)
-        compare(d, "照此速度 21 天完成 · 距截止 131 天")
+        compare(d, "按近两周节奏约 21 个自然日完成 · 距截止 131 天")
 
         compare(GoalForecast.detail(goalWith({ forecastDays: 68, deadline: undefined }),
                                     testCase.today),
-                "照此速度 68 天完成 · 未设截止日")
+                "按近两周节奏约 68 个自然日完成 · 未设截止日")
 
         compare(GoalForecast.detail(goalWith({ forecastDays: -1, deadline: undefined }),
                                     testCase.today),
-                "还没有专注记录，暂时无法预测 · 未设截止日")
+                "近期样本不足，暂不预测日期 · 未设截止日")
 
         compare(GoalForecast.detail(goalWith({ achieved: true,
                                                achievedAt: new Date(2026, 7, 1) }),

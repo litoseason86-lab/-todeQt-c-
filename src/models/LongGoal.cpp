@@ -99,6 +99,8 @@ LongGoal LongGoal::fromQuery(const QSqlQuery& query)
     // 不会破坏只读取目标本体的查询。
     goal.doneMinutes = valueByName(query, "done_minutes").toInt();
     goal.activeDays = valueByName(query, "active_days").toInt();
+    goal.recentMinutes = valueByName(query, "recent_minutes").toInt();
+    goal.recentActiveDays = valueByName(query, "recent_active_days").toInt();
     return goal;
 }
 
@@ -122,5 +124,9 @@ QVariantMap LongGoal::toVariantMap() const
     map.insert(QStringLiteral("percent"), percent());
     map.insert(QStringLiteral("achieved"), isAchieved());
     map.insert(QStringLiteral("forecastDays"), forecastDays);
+    const int remaining = qMax(0, targetMinutes - doneMinutes);
+    map.insert(QStringLiteral("forecastStudyDays"), remaining == 0 ? 0
+        : (activeDays > 0 && doneMinutes > 0
+           ? static_cast<int>(std::ceil(static_cast<double>(remaining) * activeDays / doneMinutes)) : -1));
     return map;
 }

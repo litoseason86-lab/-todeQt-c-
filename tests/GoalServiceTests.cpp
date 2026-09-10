@@ -16,6 +16,7 @@
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusSessionRules.h"
 #include "../src/services/GoalService.h"
+#include "../src/services/LogicalDay.h"
 
 namespace {
 
@@ -56,7 +57,7 @@ private slots:
 
     // 完成预测
     void forecastIsUnknownWithoutSessionsAndZeroWhenAchieved();
-    void forecastUsesActiveDaysNotCalendarDays();
+    void forecastSeparatesStudyDaysAndCalendarDays();
 
     // 里程碑去重（核心：修掉 TRACK 100 的可刷 bug）
     void milestoneFiresOnceAndNotAgainOnRefresh();
@@ -519,13 +520,13 @@ void GoalServiceTests::forecastIsUnknownWithoutSessionsAndZeroWhenAchieved()
     QCOMPARE(done.value(QStringLiteral("forecastDays")).toInt(), 0);
 }
 
-void GoalServiceTests::forecastUsesActiveDaysNotCalendarDays()
+void GoalServiceTests::forecastSeparatesStudyDaysAndCalendarDays()
 {
     GoalService* service = GoalService::instance();
     const int categoryId = addCategory(QStringLiteral("英语"));
     const int taskId = addTask(QStringLiteral("精读"), categoryId);
 
-    const QDateTime noon = QDateTime(QDate::currentDate(), QTime(12, 0));
+    const QDateTime noon = QDateTime(LogicalDay::today(AppSettings::instance()->dayStartHour()), QTime(12, 0));
     // 跨度 20 天，但只在其中 2 天真的学过，共 4 个番茄 → 速度是 2 个/活跃日。
     for (int i = 0; i < 2; ++i) {
         insertSession(taskId, noon.addDays(-20), kValidPomodoroSeconds,
@@ -540,7 +541,14 @@ void GoalServiceTests::forecastUsesActiveDaysNotCalendarDays()
     const QVariantMap goal = service->getGoal(goalId);
     QCOMPARE(goal.value(QStringLiteral("doneMinutes")).toInt(), 4 * kValidSessionMinutes);
     // 还差 6 个，速度 2 个/活跃日 → 3 天。若错用自然日 20 天当分母，结果会是 30 天。
-    QCOMPARE(goal.value(QStringLiteral("forecastDays")).toInt(), 3);
+    QCOMPARE(goal.value(QStringLiteral("forecastStudyDays")).toInt(), 3);
+    QCOMPARE(goal.value(QStringLiteral("forecastDays")).toInt(), -1);
+    // 再加一个近期学习日，近期有效投入成为 3 段，剩余 5 段；包含停学日的 14 天窗口得 24 天。
+    const QDate logicalToday = LogicalDay::today(AppSettings::instance()->dayStartHour());
+    insertSession(taskId, QDateTime(logicalToday.addDays(-2), QTime(12, 0)), kValidPomodoroSeconds,
+                  FocusSessionRules::kPomodoroMode);
+    const QVariantMap updated = service->getGoal(goalId);
+    QCOMPARE(updated.value(QStringLiteral("forecastDays")).toInt(), 24);
 }
 
 void GoalServiceTests::milestoneFiresOnceAndNotAgainOnRefresh()

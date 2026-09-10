@@ -61,6 +61,14 @@ Canvas {
         }
 
         switch (root.name) {
+        case "search":
+            circle(10.5, 10.5, 6.5)
+            line(15.5, 15.5, 21, 21)
+            break
+        case "plus":
+            line(12, 5, 12, 19)
+            line(5, 12, 19, 12)
+            break
         case "appearance": // 明暗对比圆
             circle(12, 12, 9)
             line(12, 3, 12, 21)

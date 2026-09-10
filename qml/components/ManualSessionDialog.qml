@@ -37,6 +37,12 @@ Popup {
     // 编辑中的记录 id；-1 表示新建。
     property int editingSessionId: -1
     property string errorText: ""
+    property var originalStart: null
+    property int originalDurationSeconds: 0
+    property bool durationEdited: false
+    property var editHandler: null
+    property bool originalIsRest: false
+    property int originalTaskId: -1
 
     readonly property bool editing: root.editingSessionId > 0
     // 第一项恒为「不关联任务」，对应统计里的「未关联专注」。
@@ -71,6 +77,10 @@ Popup {
 
     function openForAdd(isoDate, taskList) {
         root.editingSessionId = -1
+        root.originalIsRest = false
+        recordTypeCombo.currentIndex = 0
+        root.originalStart = null
+        root.durationEdited = false
         root.tasks = taskList || []
         root.errorText = ""
         dateField.text = String(isoDate || "")
@@ -83,12 +93,30 @@ Popup {
         dateField.forceActiveFocus()
     }
 
+    // 候选任务有条数上限，原归属任务未必在里面。缺了它下拉会停在「不关联任务」，
+    // 保存时就把这条记录静默改成了未关联。
+    function withOriginalTask(taskList, session) {
+        if (root.originalTaskId <= 0)
+            return taskList
+        for (var i = 0; i < taskList.length; ++i) {
+            if (Number(taskList[i].id) === root.originalTaskId)
+                return taskList
+        }
+        return [{ id: root.originalTaskId, title: String(session.taskTitle || "") }].concat(taskList)
+    }
+
     function openForEdit(session, taskList) {
         root.editingSessionId = Number(session.id || -1)
-        root.tasks = taskList || []
         root.errorText = ""
         // startTime 是 ISO 字符串（服务层原样返回），拆成日期与时分两段填。
         const start = new Date(String(session.startTime || ""))
+        root.originalIsRest = Boolean(session.isRest)
+        recordTypeCombo.currentIndex = root.originalIsRest ? 1 : 0
+        root.originalTaskId = Number(session.taskId) > 0 ? Number(session.taskId) : -1
+        root.tasks = root.withOriginalTask(taskList || [], session)
+        root.originalStart = start
+        root.originalDurationSeconds = Number(session.durationSeconds) || 0
+        root.durationEdited = false
         if (!isNaN(start.getTime())) {
             dateField.text = Qt.formatDate(start, "yyyy-MM-dd")
             hourField.text = ("0" + start.getHours()).slice(-2)
@@ -96,9 +124,13 @@ Popup {
         }
         durationFields.totalMinutes = Math.round(Number(session.durationSeconds || 0) / 60)
         durationFields.reload()
-        // 编辑时不改归属任务：改归属会让这段时间在统计和目标之间横向搬家，
-        // 属于另一件事，留给"删掉重记"。
         taskCombo.currentIndex = 0
+        for (var i = 0; i < root.taskOptions.length; ++i) {
+            if (Number(root.taskOptions[i].id) === root.originalTaskId) {
+                taskCombo.currentIndex = i
+                break
+            }
+        }
         root.open()
         dateField.forceActiveFocus()
     }
@@ -108,7 +140,8 @@ Popup {
         const year = Number(dateParts[0])
         const month = Number(dateParts[1])
         const day = Number(dateParts[2])
-        if (dateParts.length !== 3 || isNaN(year) || isNaN(month) || isNaN(day)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(dateField.text))
+                || year < 2000 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) {
             root.errorText = qsTr("日期格式应为 YYYY-MM-DD")
             dateField.forceActiveFocus()
             return
@@ -127,7 +160,9 @@ Popup {
 
         const start = new Date(year, month - 1, day,
                               Number(hourField.text), Number(minuteField.text), 0)
-        if (isNaN(start.getTime())) {
+        // Date 会把 2 月 31 日自动挪到 3 月，必须回读年月日，不能仅判断 NaN。
+        if (isNaN(start.getTime()) || start.getFullYear() !== year
+                || start.getMonth() !== month - 1 || start.getDate() !== day) {
             root.errorText = qsTr("日期无效")
             dateField.forceActiveFocus()
             return
@@ -136,6 +171,30 @@ Popup {
         const taskId = taskCombo.currentIndex >= 0
                        && taskCombo.currentIndex < root.taskOptions.length
                      ? Number(root.taskOptions[taskCombo.currentIndex].id) : -1
+
+        if (root.editing && root.editHandler) {
+            var changes = {}
+            if (!root.originalStart || Qt.formatDateTime(start, "yyyy-MM-dd hh:mm")
+                    !== Qt.formatDateTime(root.originalStart, "yyyy-MM-dd hh:mm")) {
+                changes.startTime = start
+            }
+            // 未触碰时长输入时不提交整数分钟，数据库保留原来的秒数。
+            if (root.durationEdited && durationFields.enteredMinutes !== Math.round(root.originalDurationSeconds / 60))
+                changes.durationSeconds = durationFields.enteredMinutes * 60
+            if ((recordTypeCombo.currentIndex === 1) !== root.originalIsRest)
+                changes.isRest = recordTypeCombo.currentIndex === 1
+            if (recordTypeCombo.currentIndex === 0 && taskId !== root.originalTaskId)
+                changes.taskId = taskId
+            // qmllint disable use-proper-function
+            const failure = String(root.editHandler(root.editingSessionId, changes) || "")
+            // qmllint enable use-proper-function
+            if (failure.length > 0) {
+                root.errorText = failure
+                return
+            }
+            root.close()
+            return
+        }
 
         if (root.submitHandler) {
             // submitHandler 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
@@ -164,11 +223,22 @@ Popup {
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
             Layout.topMargin: Theme.space16
-            text: root.editing ? qsTr("修改专注记录") : qsTr("补录专注记录")
+            text: root.editing ? qsTr("修改时间记录") : qsTr("补录专注记录")
             textFormat: Text.PlainText
             color: Theme.inkStrong
             font.pixelSize: Theme.fontXl
             font.weight: Font.Bold
+        }
+
+        ComboBox {
+            id: recordTypeCombo
+            objectName: "sessionRecordType"
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            visible: root.editing
+            model: [qsTr("专注 · 计入专注统计"), qsTr("休息 · 不计入专注统计")]
+            Accessible.name: qsTr("记录类型")
         }
 
         RowLayout {
@@ -278,9 +348,22 @@ Popup {
                 accessiblePrefix: qsTr("专注时长")
                 compact: true
                 onAccepted: root.submit()
+                onUserEdited: root.durationEdited = true
             }
 
             Item { Layout.fillWidth: true }
+        }
+
+        Text {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            visible: root.editing && root.originalDurationSeconds % 60 !== 0
+            text: qsTr("原计时 %1 秒，未修改时长时保留原值").arg(root.originalDurationSeconds)
+            textFormat: Text.PlainText
+            color: Theme.inkSoft
+            font.pixelSize: Theme.fontSm
+            wrapMode: Text.WordWrap
         }
 
         ColumnLayout {
@@ -288,7 +371,7 @@ Popup {
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
             spacing: Theme.space4
-            visible: !root.editing
+            visible: recordTypeCombo.currentIndex === 0
 
             Text {
                 text: qsTr("算在哪个任务上")

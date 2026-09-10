@@ -112,6 +112,7 @@ Popup {
         estimateFields.reload();
         notesField.text = String(task.notes || "");
         root.originalIsoDate = root.normalizedIso(task.date);
+        customDate.text = root.originalIsoDate;
 
         root.refreshCategories();
         var targetId = Number(task.categoryId || -1);
@@ -138,7 +139,7 @@ Popup {
     }
 
     function resultIsoDate() {
-        return root.dateOffsetSelection < 0 ? root.originalIsoDate : root.isoWithOffset(root.dateOffsetSelection);
+        return root.dateOffsetSelection < 0 ? customDate.text : root.isoWithOffset(root.dateOffsetSelection);
     }
 
     function submit() {
@@ -156,6 +157,11 @@ Popup {
             return;
         }
         root.estimatedMinutes = estimateFields.enteredMinutes;
+
+        if (!LogicalDay.parseIsoDate(root.resultIsoDate())) {
+            root.errorText = "日期无效，请输入 YYYY-MM-DD"
+            return
+        }
 
         var categoryId = categoryCombo.currentIndex >= 0 && categoryCombo.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryCombo.currentIndex].id || -1) : -1;
         var succeeded = true
@@ -189,7 +195,10 @@ Popup {
         implicitWidth: 72
         implicitHeight: 34
 
-        onClicked: root.dateOffsetSelection = chip.offset
+        onClicked: {
+            root.dateOffsetSelection = chip.offset
+            customDate.text = root.isoWithOffset(chip.offset)
+        }
 
         background: Rectangle {
             color: chip.checked ? Theme.accentFill : (chip.hovered ? Theme.surface : Theme.surfaceRaised)
@@ -456,18 +465,19 @@ Popup {
                 offset: 2
             }
 
-            Text {
-                objectName: "editOriginalDateText"
-                visible: root.dateOffsetSelection < 0
-                text: "保留 " + root.originalIsoDate
-                textFormat: Text.PlainText
-                color: Theme.inkMuted
-                font.pixelSize: Theme.fontSm
-            }
-
             Item {
                 Layout.fillWidth: true
             }
+        }
+
+        // 任意日期输入排在快捷项下方：它是同一组「日期」控件，不能插在备注和标签之间。
+        DateInput {
+            id: customDate
+            objectName: "editCustomDate"
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            onEdited: root.dateOffsetSelection = -1
         }
 
         Text {

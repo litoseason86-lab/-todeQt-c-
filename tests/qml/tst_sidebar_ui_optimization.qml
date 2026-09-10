@@ -91,6 +91,38 @@ TestCase {
         verify(Qt.colorEqual(sidebar.sidebarItemHoverColor, Qt.rgba(1, 1, 1, 0.45)), "hover 应为半透明白")
     }
 
+    function test_keyboardCanActivateSidebar() {
+        var item = sidebarItemForMarker("设")
+        verify(item.activeFocusOnTab)
+        item.forceActiveFocus()
+        tryCompare(item, "activeFocus", true)
+        settingsSpy.clear()
+        keyClick(Qt.Key_Return)
+        compare(settingsSpy.count, 1)
+        keyClick(Qt.Key_Space)
+        compare(settingsSpy.count, 2)
+    }
+
+    SignalSpy {
+        id: itemClickedSpy
+
+        target: sidebar
+        signalName: "itemClicked"
+    }
+
+    function test_focusRingOnlyAppearsForKeyboardFocus() {
+        var item = sidebarItemForMarker("今")
+        item.forceActiveFocus()
+        tryCompare(item, "showFocusRing", true)
+        // 直接触发命中区的 clicked：本文件的测试窗口没有显示，收不到真实鼠标事件。
+        // 鼠标点击同样会取焦点（Tab 要能从当前项继续），但不该留下焦点环。
+        itemClickedSpy.clear()
+        findChild(sidebar, "sidebarHitArea-今").clicked(null)
+        compare(itemClickedSpy.count, 1)
+        compare(item.showFocusRing, false)
+        compare(item.activeFocus, true)
+    }
+
     function test_settingsEntryEmitsSignal() {
         var item = findChild(sidebar, "sidebarItem-设")
         verify(item, "设置条目应存在")

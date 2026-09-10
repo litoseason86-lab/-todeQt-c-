@@ -158,8 +158,8 @@ Rectangle {
         }
 
         SidebarItem {
-            text: "待办"
-            marker: "待"
+            text: "课表"
+            marker: "课"
             isActive: root.currentView === "schedule"
             onClicked: root.itemClicked("schedule")
         }
@@ -231,6 +231,16 @@ Rectangle {
         property bool pointerInside: false
         readonly property bool visualHovered: item.enabled && item.pointerInside
         signal clicked
+        activeFocusOnTab: true
+        // 焦点环只在键盘导航时出现。点击也取焦点是为了让 Tab 能从当前项继续，
+        // 但 macOS 惯例里鼠标点击不该留下焦点环，否则每点一次侧栏就多一圈描边。
+        property bool showFocusRing: false
+        onActiveFocusChanged: item.showFocusRing = item.activeFocus
+        Accessible.role: Accessible.Button
+        Accessible.name: item.text + (item.statusText ? "，" + item.statusText : "")
+        Accessible.onPressAction: item.clicked()
+        Keys.onReturnPressed: item.clicked()
+        Keys.onSpacePressed: item.clicked()
 
         function setPointerInside(inside) {
             item.pointerInside = item.enabled && inside;
@@ -243,8 +253,8 @@ Rectangle {
         // 不能把非激活状态设为 transparent：Qt 的 transparent 是黑基透明，
         // hover 退场时 ColorAnimation 会插出灰色。白基透明只变化 alpha，能透出壁纸且不灰闪。
         color: item.isActive ? root.sidebarItemActiveColor : (item.visualHovered ? root.sidebarItemHoverColor : root.sidebarItemIdleColor)
-        border.color: item.isActive ? root.sidebarItemActiveBorderColor : (item.visualHovered ? root.sidebarItemHoverBorderColor : root.sidebarItemIdleBorderColor)
-        border.width: item.isActive || item.visualHovered ? 1 : 0
+        border.color: item.showFocusRing ? Theme.focusRing : item.isActive ? root.sidebarItemActiveBorderColor : (item.visualHovered ? root.sidebarItemHoverBorderColor : root.sidebarItemIdleBorderColor)
+        border.width: item.showFocusRing ? 2 : (item.isActive || item.visualHovered ? 1 : 0)
         opacity: item.enabled ? 1.0 : 0.55
         // 侧边栏只用颜色和边框反馈，避免悬浮或选中时先出现阴影造成顿挫。
         layer.enabled: false
@@ -322,77 +332,82 @@ Rectangle {
                 }
             }
 
-            Text {
+            ColumnLayout {
                 Layout.fillWidth: true
-                text: item.text
-                textFormat: Text.PlainText
-                font.pixelSize: Theme.fontLg
-                font.weight: item.isActive ? Font.Medium : Font.Normal
-                color: item.isActive ? Theme.ink : Theme.inkSoft
-                elide: Text.ElideRight
-            }
-
-            RowLayout {
-                spacing: Theme.space4
-
+                spacing: 2
                 Text {
-                    id: statusPulse
-                    objectName: "sidebarStatusPulse-" + item.marker
-
-                    property bool pulseRunning: item.statusGlyph === "●"
-                    readonly property bool pulseAnimationRunning: pulseAnimation.running
-
-                    text: item.statusGlyph
+                    Layout.fillWidth: true
+                    text: item.text
                     textFormat: Text.PlainText
-                    font.pixelSize: Theme.fontSm
-                    font.weight: Font.Medium
-                    color: Theme.accentInk
+                    font.pixelSize: Theme.fontLg
+                    font.weight: item.isActive ? Font.Medium : Font.Normal
+                    color: item.isActive ? Theme.ink : Theme.inkSoft
+                    elide: Text.ElideRight
+                }
 
-                    SequentialAnimation on opacity {
-                        id: pulseAnimation
+                RowLayout {
+                    visible: item.statusText.length > 0
+                    spacing: Theme.space4
 
-                        running: statusPulse.pulseRunning
-                                 && !root.reduceMotionActive
-                                 && !Theme.reduceMotion
-                        loops: Animation.Infinite
+                    Text {
+                        id: statusPulse
+                        objectName: "sidebarStatusPulse-" + item.marker
 
-                        NumberAnimation {
-                            from: 1.0
-                            to: 0.35
-                            duration: Theme.reduceMotion ? 0 : 620
-                            easing.type: Easing.InOutQuad
+                        property bool pulseRunning: item.statusGlyph === "●"
+                        readonly property bool pulseAnimationRunning: pulseAnimation.running
+
+                        text: item.statusGlyph
+                        textFormat: Text.PlainText
+                        font.pixelSize: Theme.fontSm
+                        font.weight: Font.Medium
+                        color: Theme.accentInk
+
+                        SequentialAnimation on opacity {
+                            id: pulseAnimation
+
+                            running: statusPulse.pulseRunning
+                                     && !root.reduceMotionActive
+                                     && !Theme.reduceMotion
+                            loops: Animation.Infinite
+
+                            NumberAnimation {
+                                from: 1.0
+                                to: 0.35
+                                duration: Theme.reduceMotion ? 0 : 620
+                                easing.type: Easing.InOutQuad
+                            }
+
+                            NumberAnimation {
+                                from: 0.35
+                                to: 1.0
+                                duration: Theme.reduceMotion ? 0 : 620
+                                easing.type: Easing.InOutQuad
+                            }
+
+                            onRunningChanged: {
+                                // 减少动效或状态变化都会停动画；停在半透明帧会像“禁用态”，所以回到不透明。
+                                if (!running) {
+                                    statusPulse.opacity = 1
+                                }
+                            }
                         }
 
-                        NumberAnimation {
-                            from: 0.35
-                            to: 1.0
-                            duration: Theme.reduceMotion ? 0 : 620
-                            easing.type: Easing.InOutQuad
-                        }
-
-                        onRunningChanged: {
-                            // 减少动效或状态变化都会停动画；停在半透明帧会像“禁用态”，所以回到不透明。
-                            if (!running) {
+                        onPulseRunningChanged: {
+                            if (!statusPulse.pulseRunning) {
                                 statusPulse.opacity = 1
                             }
                         }
                     }
 
-                    onPulseRunningChanged: {
-                        if (!statusPulse.pulseRunning) {
-                            statusPulse.opacity = 1
-                        }
+                    Text {
+                        objectName: "sidebarStatus-" + item.marker
+                        text: item.statusTimeText
+                        textFormat: Text.PlainText
+                        font.pixelSize: Theme.fontSm
+                        font.family: Theme.fontFamilyClock
+                        font.weight: Font.Medium
+                        color: Theme.accentInk
                     }
-                }
-
-                Text {
-                    objectName: "sidebarStatus-" + item.marker
-                    text: item.statusTimeText
-                    textFormat: Text.PlainText
-                    font.pixelSize: Theme.fontSm
-                    font.family: Theme.fontFamilyClock
-                    font.weight: Font.Medium
-                    color: Theme.accentInk
                 }
             }
         }
@@ -407,7 +422,7 @@ Rectangle {
             cursorShape: Qt.PointingHandCursor
             onEntered: item.setPointerInside(true)
             onExited: item.setPointerInside(false)
-            onClicked: item.clicked()
+            onClicked: { item.forceActiveFocus(); item.showFocusRing = false; item.clicked() }
         }
 
         HoverHandler {

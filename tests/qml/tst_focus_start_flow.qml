@@ -46,6 +46,8 @@ TestCase {
         property int elapsedSeconds: 0
         property int minimumValidMinutes: 3
         property int completedPomodoros: 0
+        property bool stopSucceeds: true
+        property int startPomodoroCalls: 0
         property int startFocusCalls: 0
         property int startFocusTaskId: 0
         property string startFocusTaskTitle: ""
@@ -66,7 +68,16 @@ TestCase {
             return true
         }
 
-        function startPomodoroWork(id, title, workSeconds) { return true }
+        function startPomodoroWork(id, title, workSeconds) {
+            startPomodoroCalls++
+            currentTaskId = id
+            currentTaskTitle = title
+            mode = 1
+            phase = 1
+            hasActiveSession = true
+            isRunning = true
+            return true
+        }
         function startBreak(breakSeconds) { return true }
         function startBreakForTask(breakSeconds, taskId, title) { return true }
         function resetPomodoroCount() { completedPomodoros = 0 }
@@ -74,6 +85,7 @@ TestCase {
         function resumeFocus() { return true }
 
         function stopFocus() {
+            if (!stopSucceeds) return false
             hasActiveSession = false
             isRunning = false
             mode = 0
@@ -166,11 +178,21 @@ TestCase {
         id: exportService
     }
 
+    QtObject {
+        id: historyService
+        property int deletedId: -1
+        property bool succeeds: true
+        function deleteSession(id) { if (succeeds) deletedId = id; return succeeds }
+        function getDayTimeline() { return [] }
+        function getMonthSessions() { return [] }
+        function lastError() { return "" }
+    }
     MainWindow {
         id: mainWindow
 
         width: testCase.width
         height: testCase.height
+        focusHistoryServiceRef: historyService
         taskManagerRef: taskManager
         categoryManagerRef: categoryManager
         exportServiceRef: exportService
@@ -199,13 +221,16 @@ TestCase {
         taskManager.deleteSucceeds = true
         var focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
+        findChild(focusView, "focusSwitchDialog").close()
+        focusTimer.stopSucceeds = true
+        focusTimer.startPomodoroCalls = 0
         focusView.toPomodoroTab(false)
         focusView.clearSelectedTask()
         mainWindow.cancelPendingDelete()
         wait(20)
     }
 
-    function test_freeModeEntersIdleWithoutStartingTimer() {
+    function test_freeModeStartsImmediately() {
         appSettings.lastMode = 0
 
         mainWindow.startFocusForTask(7, "自由任务")
@@ -213,13 +238,13 @@ TestCase {
 
         var focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
-        compare(focusTimer.startFocusCalls, 0)
+        compare(focusTimer.startFocusCalls, 1)
         compare(focusView.selectedTaskId, 7)
         compare(focusView.selectedTaskTitle, "自由任务")
         compare(focusView.taskTitle(), "自由任务")
         var startButton = findChild(focusView, "freeStartButton")
         verify(startButton)
-        compare(startButton.enabled, true)
+        compare(startButton.visible, false)
         compare(mainWindow.pendingView, "focus")
     }
 
@@ -236,7 +261,7 @@ TestCase {
         mainWindow.startFocusForTask(12, "操作系统")
         wait(20)
 
-        compare(focusTimer.startFocusCalls, 0)
+        compare(focusTimer.startFocusCalls, 1)
         compare(focusView.pomodoroModeSelected, false)
         compare(focusView.selectedTaskId, 12)
         compare(focusView.selectedTaskTitle, "操作系统")
@@ -244,7 +269,6 @@ TestCase {
 
         var startButton = findChild(focusView, "freeStartButton")
         verify(startButton)
-        startButton.clicked()
         wait(20)
         compare(focusTimer.startFocusTaskId, 12)
         compare(focusTimer.startFocusTaskTitle, "操作系统")
@@ -253,13 +277,14 @@ TestCase {
         compare(mainWindow.pendingView, "focus")
     }
 
-    function test_pomodoroModeEntersIdleWithTask() {
+    function test_pomodoroModeStartsImmediately() {
         appSettings.lastMode = 1
 
         mainWindow.startFocusForTask(9, "番茄任务")
         wait(20)
 
-        compare(focusTimer.startFocusCalls, 0)
+        compare(focusTimer.startPomodoroCalls, 1)
+        compare(focusTimer.phase, 1)
         var focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
         compare(focusView.pomodoroModeSelected, true)
@@ -288,17 +313,44 @@ TestCase {
         compare(mainWindow.pendingView, "focus")
     }
 
-    function test_explicitFreeStartWritesLastMode() {
+    function test_repeatedStartDoesNotCreateSecondSession() {
         appSettings.lastMode = 0
-
         mainWindow.startFocusForTask(7, "自由任务")
-        var focusView = findChild(mainWindow, "focusViewPage")
-        verify(focusView)
-        compare(focusTimer.startFocusCalls, 0)
-
-        verify(focusView.startFreeFocus())
-
+        mainWindow.startFocusForTask(7, "自由任务")
+        compare(focusTimer.startFocusCalls, 1)
         compare(appSettings.lastMode, 0)
+    }
+
+    function test_switchFailureKeepsOriginalTimer() {
+        mainWindow.startFocusForTask(7, "原任务")
+        focusTimer.stopSucceeds = false
+        mainWindow.startFocusForTask(8, "新任务")
+        var view = findChild(mainWindow, "focusViewPage")
+        findChild(view, "focusSwitchDialog").accept()
+        compare(focusTimer.currentTaskId, 7)
+        compare(focusTimer.startFocusCalls, 1)
+        verify(view.errorText.length > 0)
+    }
+
+    function test_switchStartsNewTaskAfterConfirmation() {
+        mainWindow.startFocusForTask(7, "原任务")
+        mainWindow.startFocusForTask(8, "新任务")
+        compare(focusTimer.currentTaskId, 7)
+        findChild(mainWindow, "focusSwitchDialog").accept()
+        compare(focusTimer.currentTaskId, 8)
+        compare(focusTimer.startFocusCalls, 2)
+    }
+
+    function test_modeSwitchWithoutTaskStillEndsCurrentTimer() {
+        mainWindow.startFocusForTask(7, "原任务")
+        var view = findChild(mainWindow, "focusViewPage")
+        // 活动任务被删除后计时器会解绑任务 ID；此时切模式不能变成点了没反应。
+        focusTimer.currentTaskId = -1
+        focusTimer.currentTaskTitle = ""
+        view.clearSelectedTask()
+        view.requestModeSwitch(true)
+        compare(view.pomodoroModeSelected, true)
+        compare(focusTimer.hasActiveSession, false)
     }
 
     function test_windowTitleReflectsTimerState() {
@@ -355,18 +407,15 @@ TestCase {
         compare(label.text, "本次专注不足 3 分钟，未计入记录")
     }
 
-    function test_conflictShowsToast() {
-        focusTimer.hasActiveSession = true
-        focusTimer.isRunning = true
-
+    function test_cancelSwitchLeavesTimerRunning() {
+        mainWindow.startFocusForTask(7, "原任务")
         mainWindow.startFocusForTask(11, "第二个任务")
-        wait(20)
-
-        var toast = findChild(mainWindow, "globalToast")
-        verify(toast)
-        compare(toast.shown, true)
-        var label = findChild(mainWindow, "toastText")
-        compare(label.text, "已有计时进行中")
+        var dialog = findChild(mainWindow, "focusSwitchDialog")
+        verify(dialog.visible)
+        dialog.reject()
+        compare(focusTimer.currentTaskId, 7)
+        compare(focusTimer.hasActiveSession, true)
+        compare(focusTimer.startFocusCalls, 1)
     }
 
     function test_toastActionShowsAndFires() {
@@ -390,6 +439,25 @@ TestCase {
         mainWindow.showToast("普通提示")
         compare(toast.shown, true)
         compare(toast.actionText, "")
+    }
+
+    function test_sessionDeleteCanUndoAndFailureRestoresState() {
+        historyService.deletedId = -1
+        historyService.succeeds = true
+        mainWindow.requestDeleteSession(12, "数学")
+        compare(historyService.deletedId, -1)
+        findChild(mainWindow, "globalToast").triggerAction()
+        compare(mainWindow.pendingDeleteSessionId, -1)
+        compare(historyService.deletedId, -1)
+        mainWindow.requestDeleteSession(12, "数学")
+        mainWindow.requestDeleteTask(30, "下一条")
+        compare(historyService.deletedId, 12)
+        mainWindow.cancelPendingDelete()
+        historyService.succeeds = false
+        mainWindow.requestDeleteSession(13, "失败记录")
+        verify(!mainWindow.commitPendingDelete())
+        compare(mainWindow.pendingDeleteSessionId, -1)
+        historyService.succeeds = true
     }
 
     function test_deleteIsDeferredAndUndoable() {

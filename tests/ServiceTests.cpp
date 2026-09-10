@@ -724,6 +724,11 @@ private slots:
     void manualSessionRejectsOverlapWithExistingRecord();
     void manualSessionRejectsFutureAndTooShort();
     void updateSessionMovesItAndKeepsItsMode();
+    void partialSessionEditPreservesPrecisionAndPause();
+    void timelineRecordCorrectionKeepsIdentityAndRollsBack();
+    void restOccupiesOnlyItsMeasuredDuration();
+    void attributionOnlyEditSkipsOverlapCheck();
+    void taskOptionsPreferSelectedDateAndAreCapped();
     void deleteSessionRemovesItAndRollsStatsBack();
     void manualWriteRefusesToTouchRunningSession();
     void manualSessionRejectsOverlapWithRunningSession();
@@ -813,6 +818,7 @@ private slots:
     void updateTaskRejectsBlankTitleAndInvalidId();
     void overdueQueryExcludesTodayCompletedAndTrustedRoutine();
     void moveTasksToTodayIsTransactional();
+    void batchRescheduleSearchAndCopy();
     void exportFocusSessionsUsesLogicalDayRange();
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
     void exportFocusSessionsAndExportAllWriteExpectedCsvFiles();
@@ -4403,7 +4409,6 @@ void ServiceTests::moveTasksToTodayIsTransactional()
     QVERIFY(second > 0);
 
     QSignalSpy changedSpy(manager, &TaskManager::tasksChanged);
-    QTest::ignoreMessage(QtWarningMsg, "Failed to move task 999999 : \"\"");
     QVERIFY(!manager->moveTasksToToday(QVariantList{first, 999999}));
     QCOMPARE(changedSpy.count(), 0);
     QCOMPARE(manager->getTasksByDate(yesterday).size(), 2);
@@ -4415,6 +4420,36 @@ void ServiceTests::moveTasksToTodayIsTransactional()
     QCOMPARE(manager->getOverdueUncompletedTasks().size(), 0);
 
     QVERIFY(manager->moveTasksToToday(QVariantList{}));
+}
+
+void ServiceTests::batchRescheduleSearchAndCopy()
+{
+    auto* manager = TaskManager::instance();
+    const QDate source(2026, 6, 1);
+    const QDate target(2026, 12, 25);
+    QVERIFY(manager->addTask(QStringLiteral("复制原件"), source, -1, 45, QStringLiteral("第 20 页 50%")));
+    const int first = manager->getTasksByDate(source).first().toMap().value(QStringLiteral("id")).toInt();
+    const int second = insertTaskRow(QStringLiteral("普通任务"), source);
+    QVERIFY(manager->setTaskCompleted(first, true));
+    QVERIFY(insertFocusSessionRow(first, source, 300));
+    QVERIFY(!manager->moveTasksToDate({first, 999999}, target));
+    QCOMPARE(manager->getTasksByDate(source).size(), 2);
+    QVERIFY(!manager->moveTasksToDate({first, first}, target));
+    QCOMPARE(manager->getTasksByDate(target).size(), 0);
+    QVERIFY(manager->moveTasksToDate({second, first}, target));
+    const QVariantMap before = manager->getTask(first);
+    QVERIFY(manager->moveTasksToDate({first}, target));
+    QCOMPARE(manager->getTask(first).value(QStringLiteral("displayOrder")), before.value(QStringLiteral("displayOrder")));
+    QCOMPARE(manager->searchTasks(QStringLiteral("50%"), -1, 200).size(), 1);
+    QCOMPARE(manager->searchTasks(QStringLiteral("50_"), -1, 200).size(), 0);
+    QCOMPARE(manager->searchTasks(QStringLiteral("第 20 页"), 0, 200).size(), 0);
+    QVERIFY(manager->duplicateTask(first, source));
+    const QVariantMap copy = manager->getTasksByDate(source).first().toMap();
+    QVERIFY(!copy.value(QStringLiteral("completed")).toBool());
+    QCOMPARE(copy.value(QStringLiteral("estimatedMinutes")).toInt(), 45);
+    QCOMPARE(copy.value(QStringLiteral("notes")).toString(), QStringLiteral("第 20 页 50%"));
+    QCOMPARE(copy.value(QStringLiteral("focusedMinutes")).toInt(), 0);
+    QVERIFY(copy.value(QStringLiteral("id")).toInt() != first);
 }
 
 void ServiceTests::exportFocusSessionsUsesLogicalDayRange()
@@ -6405,4 +6440,157 @@ void ServiceTests::asyncExportRunsOffTheCallingThreadAndReportsCompletion()
     const QString content = readUtf8File(filePath);
     QVERIFY(content.startsWith(QStringLiteral("ID,任务ID,任务标题,科目")));
     QVERIFY(content.count(QLatin1Char('\n')) >= 2);
+}
+
+void ServiceTests::partialSessionEditPreservesPrecisionAndPause()
+{
+    auto* history = FocusHistoryService::instance();
+    const QDateTime start = QDateTime::currentDateTime().addDays(-2);
+    const int id = history->addManualSession(-1, start, 60);
+    QVERIFY(id > 0);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral("UPDATE focus_sessions SET start_time = :start, end_time = :end, duration = 1859 WHERE id = :id"));
+    query.bindValue(":start", start.toString(Qt::ISODateWithMs));
+    query.bindValue(":end", start.addSecs(4000).toString(Qt::ISODateWithMs));
+    query.bindValue(":id", id);
+    QVERIFY(query.exec());
+    QVERIFY(history->updateSessionFields(id, {}));
+    QVERIFY(history->updateSessionFields(id, {{QStringLiteral("startTime"), start.addSecs(3600)}}));
+    query.prepare(QStringLiteral("SELECT start_time, end_time, duration FROM focus_sessions WHERE id = :id"));
+    query.bindValue(":id", id);
+    QVERIFY(query.exec() && query.next());
+    QCOMPARE(QDateTime::fromString(query.value(0).toString(), Qt::ISODate), start.addSecs(3600));
+    QCOMPARE(QDateTime::fromString(query.value(1).toString(), Qt::ISODate), start.addSecs(7600));
+    QCOMPARE(query.value(2).toInt(), 1859);
+    // 同一秒内的最后 1 毫秒也属于原记录；恰好相邻才允许新增，落库不能截掉毫秒。
+    const QDateTime boundary = start.addSecs(7600);
+    QCOMPARE(history->addManualSession(-1, boundary.addMSecs(-1), 3), -1);
+    const int adjacent = history->addManualSession(-1, boundary, 3);
+    QVERIFY(adjacent > 0);
+    query.prepare(QStringLiteral("SELECT start_time FROM focus_sessions WHERE id = :id"));
+    query.bindValue(":id", adjacent);
+    QVERIFY(query.exec() && query.next());
+    QCOMPARE(QDateTime::fromString(query.value(0).toString(), Qt::ISODate), boundary);
+    QVERIFY(!history->updateSessionFields(id, {{QStringLiteral("durationSeconds"), 100}}));
+    QVERIFY(!history->updateSessionFields(id, {{QStringLiteral("startTime"), QDateTime::currentDateTime().addDays(1)}}));
+}
+
+void ServiceTests::timelineRecordCorrectionKeepsIdentityAndRollsBack()
+{
+    auto* history = FocusHistoryService::instance();
+    const QDateTime start = QDateTime::currentDateTime().addDays(-3);
+    const int firstTask = insertTaskRow(QStringLiteral("原任务"), start.date(), QStringLiteral("数学"));
+    const int secondTask = insertTaskRow(QStringLiteral("新任务"), start.date(), QStringLiteral("英语"));
+    const int id = history->addManualSession(firstTask, start, 30);
+    QVERIFY(id > 0);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("UPDATE focus_sessions SET mode = 1, pomodoro_completed = 1")));
+    QVERIFY(history->updateSessionFields(id, {{QStringLiteral("taskId"), secondTask}}));
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(secondTask), 1);
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(firstTask), 0);
+    // 转换在删除原记录时失败，新增休息也必须回滚。
+    QVERIFY(query.exec(QStringLiteral("CREATE TRIGGER reject_conversion BEFORE DELETE ON focus_sessions BEGIN SELECT RAISE(ABORT, 'test'); END")));
+    QVERIFY(!history->updateSessionFields(id, {{QStringLiteral("isRest"), true}}));
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM rest_sessions")) && query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
+    QVERIFY(query.exec(QStringLiteral("DROP TRIGGER reject_conversion")));
+    QVERIFY(history->updateSessionFields(id, {{QStringLiteral("isRest"), true}}));
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(secondTask), 0);
+    QCOMPARE(history->addManualSession(firstTask, start, 30), -1);
+    QVERIFY(history->lastError().contains(QStringLiteral("休息")));
+    QVERIFY(query.exec(QStringLiteral("SELECT id FROM rest_sessions")) && query.next());
+    const int restId = query.value(0).toInt();
+    QVERIFY(history->updateRestSessionFields(restId, {{QStringLiteral("isRest"), false}, {QStringLiteral("taskId"), firstTask}}));
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(firstTask), 30);
+    QCOMPARE(TaskManager::instance()->getCompletedPomodorosForTask(firstTask), 0);
+}
+
+void ServiceTests::restOccupiesOnlyItsMeasuredDuration()
+{
+    auto* history = FocusHistoryService::instance();
+    QSqlQuery query(DatabaseManager::instance()->database());
+    const QDateTime restStart = QDateTime::currentDateTime().addDays(-1).addSecs(-6 * 3600);
+    // 暂停后忘了结束：区间横跨 6 小时，真正休息只有 5 分钟。
+    query.prepare(QStringLiteral(
+        "INSERT INTO rest_sessions (start_time, end_time, duration, manual) "
+        "VALUES (:start, :end, 300, 1)"));
+    query.bindValue(QStringLiteral(":start"), restStart.toString(Qt::ISODateWithMs));
+    query.bindValue(QStringLiteral(":end"), restStart.addSecs(6 * 3600).toString(Qt::ISODateWithMs));
+    QVERIFY(query.exec());
+
+    // 落在区间里、但在有效休息时长之后：这段时间用户其实在学习，必须允许补录。
+    QVERIFY(history->addManualSession(-1, restStart.addSecs(3600), 30) > 0);
+    // 真正压在休息上的补录仍要挡住。
+    QCOMPARE(history->addManualSession(-1, restStart.addSecs(60), 30), -1);
+    QVERIFY(history->lastError().contains(QStringLiteral("休息")));
+
+    // 进行中的休息同样按已计秒数占用：暂停 5 小时不该锁死之后的整段时间。
+    QVERIFY(query.exec(QStringLiteral("DELETE FROM rest_sessions")));
+    const QDateTime activeStart = QDateTime::currentDateTime().addSecs(-5 * 3600);
+    query.prepare(QStringLiteral(
+        "INSERT INTO active_focus_state (singleton_id, elapsed_seconds, mode, phase, target_seconds, "
+        "completed_pomodoros, updated_at, start_time) "
+        "VALUES (1, 120, 2, 3, 0, 0, :updatedAt, :startTime)"));
+    query.bindValue(QStringLiteral(":updatedAt"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+    query.bindValue(QStringLiteral(":startTime"), activeStart.toString(Qt::ISODateWithMs));
+    QVERIFY(query.exec());
+    QVERIFY(history->addManualSession(-1, activeStart.addSecs(3600), 30) > 0);
+    QCOMPARE(history->addManualSession(-1, activeStart.addSecs(30), 30), -1);
+    QVERIFY(history->lastError().contains(QStringLiteral("正在进行的休息")));
+}
+
+void ServiceTests::attributionOnlyEditSkipsOverlapCheck()
+{
+    auto* history = FocusHistoryService::instance();
+    const QDate day = QDate::currentDate().addDays(-2);
+    const int firstTask = insertTaskRow(QStringLiteral("原任务"), day, QStringLiteral("数学"));
+    const int secondTask = insertTaskRow(QStringLiteral("新任务"), day, QStringLiteral("英语"));
+    const QDateTime start = QDateTime(day, QTime(9, 0));
+    const int id = history->addManualSession(firstTask, start, 30);
+    QVERIFY(id > 0);
+
+    // 绕过服务层插入一条重叠记录，模拟旧数据或系统改钟留下的历史重叠。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode, pomodoro_completed) "
+        "VALUES (NULL, :start, :end, 1800, 0, 0)"));
+    query.bindValue(QStringLiteral(":start"), start.addSecs(600).toString(Qt::ISODateWithMs));
+    query.bindValue(QStringLiteral(":end"), start.addSecs(2400).toString(Qt::ISODateWithMs));
+    QVERIFY(query.exec());
+
+    // 区间没动，只改归属：不能被历史遗留的重叠挡住，否则连纠正归属都做不到。
+    QVERIFY(history->updateSessionFields(id, {{QStringLiteral("taskId"), secondTask}}));
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(secondTask), 30);
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(firstTask), 0);
+
+    // 一旦真的改动时间，重叠校验照常生效。
+    QVERIFY(!history->updateSessionFields(id, {{QStringLiteral("startTime"), start.addSecs(300)}}));
+    QVERIFY(history->lastError().contains(QStringLiteral("已有专注记录")));
+}
+
+void ServiceTests::taskOptionsPreferSelectedDateAndAreCapped()
+{
+    auto* history = FocusHistoryService::instance();
+    const QDate target(2026, 6, 15);
+    insertTaskRow(QStringLiteral("当天任务"), target);
+    insertTaskRow(QStringLiteral("前一天任务"), target.addDays(-1));
+    insertTaskRow(QStringLiteral("很久以后的任务"), target.addDays(200));
+
+    const QVariantList options = history->getTaskOptions(target);
+    QCOMPARE(options.size(), 3);
+    QVERIFY(options.first().toMap().value(QStringLiteral("title")).toString()
+                .startsWith(QStringLiteral("当天任务")));
+    QVERIFY(options.last().toMap().value(QStringLiteral("title")).toString()
+                .startsWith(QStringLiteral("很久以后的任务")));
+
+    // 上限保护：任务攒了几年之后，下拉不能退化成整库任务。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 260) "
+        "INSERT INTO tasks (title, date, completed, created_at) "
+        "SELECT '批量' || n, date('2026-06-15', '-' || n || ' days'), 0, '2026-06-15T09:00:00' FROM seq")));
+    QCOMPARE(history->getTaskOptions(target).size(), FocusHistoryService::kTaskOptionLimit);
+    // 就近排序不因数量变化而失效：当天任务仍排在最前。
+    QVERIFY(history->getTaskOptions(target).first().toMap().value(QStringLiteral("title")).toString()
+                .startsWith(QStringLiteral("当天任务")));
 }

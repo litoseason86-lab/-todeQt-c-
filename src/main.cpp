@@ -141,6 +141,12 @@ int main(int argc, char *argv[])
     QObject::connect(FocusTimer::instance(), &FocusTimer::focusCompleted,
                      GoalService::instance(), &GoalService::refreshMilestones);
 
+    // 历史编辑会改变任务累计时长和目标进度；在装配层广播刷新，避免服务互相依赖。
+    QObject::connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged,
+                     TaskManager::instance(), &TaskManager::tasksChanged);
+    QObject::connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged,
+                     GoalService::instance(), &GoalService::refreshMilestones);
+
     QQmlApplicationEngine engine;
     // QML 通过单例上下文对象访问服务，视图层保持声明式和轻量。
     engine.rootContext()->setContextProperty(QStringLiteral("categoryManager"), CategoryManager::instance());

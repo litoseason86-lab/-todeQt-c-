@@ -216,14 +216,29 @@ TestCase {
         compare(view.sessions.length, 3);
         compare(view.totalSeconds, 6600);
         compare(view.focusCount, 2);
-        verify(!findChild(view, "focusSessionEdit-1").visible);
-        verify(!findChild(view, "focusSessionDelete-1").visible);
+        verify(findChild(view, "focusSessionEdit-1") !== null);
+        verify(findChild(view, "focusSessionDelete-1") !== null);
+        // 休息行的删除必须带上记录类型：两张表编号独立，丢了类型就会删掉同号的专注记录。
+        deleteSpy.clear();
+        view.deleteSession(1, true);
+        compare(deleteSpy.count, 1);
+        compare(deleteSpy.signalArguments[0][0], 1);
+        compare(deleteSpy.signalArguments[0][2], true);
 
         testCase.sessionsByDate["2026-09-02"] = [rest];
         view.refresh();
         compare(view.sessions.length, 1);
         compare(view.totalSeconds, 0);
         compare(view.focusCount, 0);
+    }
+
+    SignalSpy { id: flushSpy; target: view; signalName: "pendingDeleteFlushRequested" }
+
+    function test_writesFlushPendingDeleteFirst() {
+        // 撤销窗口内记录仍在库里，不先落库就补录，会撞上用户已经看不见的那条记录的时间段。
+        flushSpy.clear()
+        view.submitManualSession(-1, new Date(2026, 8, 2, 10, 0), 30, -1)
+        compare(flushSpy.count, 1)
     }
 
     function test_showDateSwitchesToHistoryDay() {
@@ -274,24 +289,19 @@ TestCase {
         compare(view.sessions.length, 1);
     }
 
-    function test_deleteSessionRemovesRowAndReloads() {
-        view.deleteSession(1);
+    SignalSpy { id: deleteSpy; target: view; signalName: "deleteRequested" }
 
-        compare(historyService.deletedIds.length, 1);
-        compare(historyService.deletedIds[0], 1);
-        compare(view.sessions.length, 1);
-        compare(view.totalSeconds, 1200);
-        compare(view.loadError, "");
-    }
-
-    function test_deleteFailureSurfacesServiceError() {
-        historyService.deleteResult = false;
-        historyService.errorText = "记录已被其它窗口删除";
-
-        view.deleteSession(1);
-
-        compare(view.loadError, "记录已被其它窗口删除");
-        compare(view.sessions.length, 2);
+    function test_deleteRequestsHostAndUndoRestoresRow() {
+        deleteSpy.clear()
+        view.deleteSession(1)
+        compare(deleteSpy.count, 1)
+        compare(historyService.deletedIds.length, 0)
+        view.pendingDeleteSessionId = 1
+        compare(view.sessions.length, 1)
+        compare(view.totalSeconds, 1200)
+        view.pendingDeleteSessionId = -1
+        compare(view.sessions.length, 2)
+        compare(view.totalSeconds, 6600)
     }
 
     function test_loadFailureShowsMessageAndClearsRows() {

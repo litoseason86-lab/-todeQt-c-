@@ -10,6 +10,9 @@ Item {
     property var timer: null
     property var settings: null
     property string errorText: ""
+    property var pendingSwitch: null
+    property var taskManagerRef: null
+    property string taskNotes: ""
     property bool pomodoroModeSelected: false
     property int selectedWorkMinutes: 25
     property int selectedBreakMinutes: 5
@@ -58,6 +61,15 @@ Item {
     }
 
     onTimerChanged: Qt.callLater(root.syncToActiveTimer)
+
+    onSelectedTaskIdChanged: root.refreshTaskNotes()
+
+    // 专注页展示当前任务的备注。计时进行中以计时器绑定的任务为准，待机时用页面选中的任务。
+    function refreshTaskNotes() {
+        var id = root.timer && root.timer.hasActiveSession ? root.timer.currentTaskId : root.selectedTaskId
+        root.taskNotes = root.taskManagerRef && typeof root.taskManagerRef.getTask === "function" && id > 0
+                ? String(root.taskManagerRef.getTask(id).notes || "") : ""
+    }
 
     function safeSeconds(value) {
         // 计时显示只接受非负秒数，避免服务异常值污染 UI。
@@ -164,6 +176,8 @@ Item {
         if (action === "end") {
             root.clearSelectedTask()
             root.focusEnded()
+        } else if (action === "startPomodoro" || action === "startFree") {
+            root.startTask(taskId, taskTitle, action === "startPomodoro")
         } else if (action === "toPomodoro") {
             root.pomodoroModeSelected = true
         } else if (action === "enterPomodoro") {
@@ -350,10 +364,89 @@ Item {
     }
 
     function enterWithTask(taskId, title, usePomodoro) {
-        // 所有任务页统一走这一入口，只选择任务和模式；计时器只能由本页开始按钮启动。
+        // 准备待启动任务；列表的 startTask 随即启动，本页也可先选模式再手动启动。
         return usePomodoro
                 ? root.enterPomodoroWithTask(taskId, title)
                 : root.enterFreeWithTask(taskId, title)
+    }
+
+    // 从任务列表发起的是“开始”意图；只有当前计时会被截断时才要求确认。
+    function startTask(taskId, title, usePomodoro) {
+        if (!root.timer || taskId <= 0 || !String(title || "").trim()) {
+            // 静默返回会让任务页「开始」和分段控件都变成点了没反应；必须给出可见原因。
+            root.errorText = "任务信息无效，无法开始计时"
+            return false
+        }
+        var busy = root.timer.hasActiveSession || root.timer.phase !== 0
+        if (busy && root.timer.currentTaskId === taskId
+                && Number(root.timer.mode) === (usePomodoro ? 1 : 0)
+                && root.timer.hasActiveSession) {
+            root.syncToActiveTimer()
+            return true
+        }
+        if (busy) {
+            root.cancelAutoAdvance()
+            root.syncToActiveTimer()
+            root.pendingSwitch = { taskId: taskId, title: title, pomodoro: usePomodoro,
+                sourceId: root.timer.currentTaskId, sourceMode: root.timer.mode,
+                sourcePhase: root.timer.phase }
+            switchDialog.open()
+            return true
+        }
+        if (!root.enterWithTask(taskId, title, usePomodoro))
+            return false
+        return usePomodoro ? root.startPomodoro() : root.startFreeFocus()
+    }
+
+    // 被截断的是什么由当前阶段决定，不能对休息也说「专注不足 3 分钟不会保存」。
+    function switchConsequenceText() {
+        if (!root.timer)
+            return ""
+        var phase = root.timerNumber("phase", 0)
+        if (phase === 2 || phase === 3)
+            return qsTr("当前休息会保留在时间轴中。")
+        var minimum = root.timerNumber("minimumValidMinutes", 3)
+        return root.timerNumber("elapsedSeconds", 0) < minimum * 60
+                ? qsTr("当前专注不足 %1 分钟，不会保存。").arg(minimum)
+                : qsTr("当前专注会先保存。")
+    }
+
+    function confirmSwitch() {
+        var intent = root.pendingSwitch
+        root.pendingSwitch = null
+        if (!intent || !root.timer)
+            return
+        // 确认期间阶段可能自然结束；不能把确认误用于刚自动启动的下一段。
+        if (root.timer.currentTaskId !== intent.sourceId || root.timer.mode !== intent.sourceMode
+                || root.timer.phase !== intent.sourcePhase) {
+            root.errorText = "计时状态已变化，请重新选择任务"
+            return
+        }
+        if (root.shouldConfirmLongFreeStop()) {
+            root.requestLongFreeConfirmation(intent.pomodoro ? "startPomodoro" : "startFree",
+                                             intent.taskId, intent.title)
+            return
+        }
+        if (!root.timer.stopFocus()) {
+            root.errorText = "当前计时保存失败，未切换任务"
+            return
+        }
+        root.startTask(intent.taskId, intent.title, intent.pomodoro)
+    }
+
+    function requestModeSwitch(usePomodoro) {
+        if (usePomodoro === root.pomodoroModeSelected)
+            return
+        var busy = root.timer && (root.timer.hasActiveSession || root.timer.phase !== 0)
+        var taskId = root.timer && root.timer.currentTaskId > 0 ? root.timer.currentTaskId : root.selectedTaskId
+        var title = String((root.timer && root.timer.currentTaskTitle) || root.selectedTaskTitle || "").trim()
+        // 活动任务被删除后计时器会解绑任务 ID，此时按「切换任务」处理只会原地失败。
+        // 没有可继承的任务就退回页内切换：结束当前阶段并换模式，与改动前一致。
+        if (busy && taskId > 0 && title.length > 0) {
+            root.startTask(taskId, title, usePomodoro)
+        } else {
+            root.toPomodoroTab(usePomodoro)
+        }
     }
 
     function selectWorkMinutes(minutes) {
@@ -419,7 +512,7 @@ Item {
         var taskTitle = root.pomodoroTitle()
         if (!root.timer) {
             root.errorText = "番茄专注启动失败"
-            return
+            return false
         }
         if (taskId > 0 && root.timer.startPomodoroWork(taskId, taskTitle, root.selectedWorkMinutes * 60)) {
             root.errorText = ""
@@ -427,8 +520,10 @@ Item {
             if (root.settings) {
                 root.settings.lastMode = 1
             }
+            return true
         } else {
             root.errorText = "番茄专注启动失败"
+            return false
         }
     }
 
@@ -591,6 +686,15 @@ Item {
         }
     }
 
+    Connections {
+        target: root.taskManagerRef
+        ignoreUnknownSignals: true
+
+        function onTasksChanged() {
+            root.refreshTaskNotes()
+        }
+    }
+
     // 自动衔接的延迟切换：减少动效时立即切，否则留 0.9s 缓冲。
     Timer {
         id: autoAdvanceTimer
@@ -618,6 +722,45 @@ Item {
                     root.autoAdvanced(2)
                 }
             }
+        }
+    }
+
+    Dialog {
+        id: switchDialog
+        objectName: "focusSwitchDialog"
+        parent: root
+        anchors.centerIn: parent
+        width: Math.min(440, root.width - 32)
+        modal: true
+        title: qsTr("结束当前计时并切换？")
+        palette.text: Theme.ink
+        palette.windowText: Theme.ink
+        palette.window: Theme.surfaceRaised
+        palette.button: Theme.controlSurface
+        palette.buttonText: Theme.controlInk
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        Overlay.modal: Rectangle { color: Theme.dialogScrim }
+
+        background: Rectangle {
+            color: Theme.glassDialog
+            border.color: Theme.border
+            border.width: 1
+            radius: Theme.radiusLg
+        }
+
+        onOpened: {
+            standardButton(Dialog.Ok).text = qsTr("结束并开始")
+            standardButton(Dialog.Cancel).text = qsTr("继续当前计时")
+        }
+        onAccepted: root.confirmSwitch()
+        onClosed: root.pendingSwitch = null
+        Label {
+            width: parent.width
+            textFormat: Text.PlainText
+            text: root.pendingSwitch
+                  ? qsTr("将开始：%1。%2").arg(root.pendingSwitch.title).arg(root.switchConsequenceText())
+                  : ""
+            wrapMode: Text.WordWrap
         }
     }
 
@@ -679,7 +822,7 @@ Item {
             solidFallback: !Theme.glassBlurAllowed
             Accessible.name: qsTr("专注模式")
 
-            onActivated: function (index) { root.toPomodoroTab(index === 1) }
+            onActivated: function (index) { root.requestModeSwitch(index === 1) }
         }
 
         // 正文的居中参考系：切换器下方的剩余空间。
@@ -720,6 +863,25 @@ Item {
                     color: Theme.ink
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
+                }
+
+                ScrollView {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: Math.min(72, notesText.implicitHeight + 8)
+                    visible: root.taskNotes.length > 0
+                    clip: true
+                    TextArea {
+                        id: notesText
+                        objectName: "focusTaskNotes"
+                        text: root.taskNotes
+                        textFormat: Text.PlainText
+                        readOnly: true
+                        selectByMouse: true
+                        wrapMode: TextEdit.Wrap
+                        color: Theme.inkSoft
+                        font.pixelSize: Theme.fontMd
+                        Accessible.name: qsTr("任务备注")
+                    }
                 }
 
                 Text {

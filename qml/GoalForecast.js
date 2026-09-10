@@ -81,11 +81,13 @@ function detail(goal, today) {
     var parts = []
     var forecast = forecastOf(goal)
     if (forecast > 0) {
-        parts.push("照此速度 " + forecast + " 天完成")
+        parts.push("按近两周节奏约 " + forecast + " 个自然日完成")
     } else if (forecast < 0) {
-        parts.push("还没有专注记录，暂时无法预测")
+        parts.push("近期样本不足，暂不预测日期")
     }
 
+    if (goal.forecastStudyDays !== undefined && Number(goal.forecastStudyDays) > 0)
+        parts.push("约需 " + Number(goal.forecastStudyDays) + " 个学习日")
     var deadline = toDate(goal.deadline)
     if (!deadline) {
         parts.push("未设截止日")

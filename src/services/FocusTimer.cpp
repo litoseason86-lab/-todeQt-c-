@@ -348,12 +348,16 @@ bool FocusTimer::stopFocus()
             const int duration = m_phase == BreakPhase
                 ? qMin(m_elapsedSeconds, m_targetSeconds) : m_elapsedSeconds;
             if (duration > 0) {
+                // 结束点按「起点 + 实际计时」写入，而不是当前时刻：暂停和关机期间并没有在休息，
+                // 把它们记进区间会让时间轴显示一段远长于时长的休息，也会挡住这段时间的补录。
+                const QDateTime restStart = m_startTime.isValid()
+                    ? m_startTime : QDateTime::currentDateTime().addSecs(-duration);
                 QSqlQuery query(db);
                 query.prepare(QStringLiteral(
                     "INSERT INTO rest_sessions (start_time, end_time, duration, manual) "
                     "VALUES (:start, :end, :duration, :manual)"));
-                query.bindValue(QStringLiteral(":start"), m_startTime.toString(Qt::ISODateWithMs));
-                query.bindValue(QStringLiteral(":end"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+                query.bindValue(QStringLiteral(":start"), restStart.toString(Qt::ISODateWithMs));
+                query.bindValue(QStringLiteral(":end"), restStart.addSecs(duration).toString(Qt::ISODateWithMs));
                 query.bindValue(QStringLiteral(":duration"), duration);
                 query.bindValue(QStringLiteral(":manual"), m_phase == ManualRestPhase ? 1 : 0);
                 saved = query.exec();

@@ -93,6 +93,13 @@ Rectangle {
             color: Theme.accentSoft
             font.pixelSize: Theme.fontMd
             font.weight: Font.DemiBold
+            font.underline: activeFocus
+            activeFocusOnTab: root.shown && root.actionText.length > 0
+            Accessible.role: Accessible.Button
+            Accessible.name: root.actionText
+            Accessible.onPressAction: root.triggerAction()
+            Keys.onReturnPressed: root.triggerAction()
+            Keys.onSpacePressed: root.triggerAction()
 
             TapHandler {
                 enabled: root.shown && root.actionText.length > 0

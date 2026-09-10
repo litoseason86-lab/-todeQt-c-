@@ -37,6 +37,8 @@ Item {
     // 原生全屏、主内容显隐和沉浸覆盖层都从这一事实源派生，避免三处互相写状态。
     property bool focusImmersiveActive: false
     property int pendingDeleteTaskId: -1
+    property int pendingDeleteSessionId: -1
+    property bool pendingDeleteIsRest: false
     property string pendingDeleteTitle: ""
     property int deleteCommitDelayMs: 5000
     property string restoreInspectionPath: ""
@@ -244,7 +246,7 @@ Item {
     function showToast(message, actionText, actionCallback) {
         // 提示条是单槽：任何新提示都会顶掉撤销条。撤销入口一旦不可见就立即提交删除，
         // 不让“看不见的删除倒计时”在背后继续走完 5 秒。
-        if (root.pendingDeleteTaskId > 0) {
+        if (root.pendingDeleteTaskId > 0 || root.pendingDeleteSessionId > 0) {
             root.commitPendingDelete()
         }
         globalToast.show(message, actionText, actionCallback)
@@ -395,6 +397,20 @@ Item {
         return true
     }
 
+    function requestDeleteSession(sessionId, title, isRest) {
+        if (sessionId <= 0 || !root.commitPendingDelete())
+            return false
+        root.pendingDeleteIsRest = Boolean(isRest)
+        root.pendingDeleteSessionId = sessionId
+        root.pendingDeleteTitle = String(title || qsTr("专注记录"))
+        deleteCommitTimer.interval = root.deleteCommitDelayMs
+        deleteCommitTimer.restart()
+        globalToast.show(qsTr("已删除%1记录「%2」").arg(root.pendingDeleteIsRest ? qsTr("休息") : qsTr("专注")).arg(root.pendingDeleteTitle), qsTr("撤销"), function() {
+            root.cancelPendingDelete()
+        })
+        return true
+    }
+
     // 完成撤销：完成已即时写库，撤销时把完成态翻回。5 秒撤销条内点击即可恢复完成前状态，
     // 任务 ID、排序、字段都不变（只改了 completed 一列）。
     function showCompletionUndoToast(taskId, taskTitle) {
@@ -406,21 +422,29 @@ Item {
     }
 
     function commitPendingDelete() {
-        if (root.pendingDeleteTaskId <= 0) {
+        if (root.pendingDeleteTaskId <= 0 && root.pendingDeleteSessionId <= 0) {
             return true
         }
 
         deleteCommitTimer.stop()
         // 到这里才真正触库；撤销窗口内数据库没有被碰过，专注记录关联不会提前丢失。
         var deletedTitle = root.pendingDeleteTitle
-        if (!root.taskManagerRef || !root.taskManagerRef.deleteTask(root.pendingDeleteTaskId)) {
+        // 任务和专注记录共用单槽撤销及退出守卫，避免切页后遗失尚未提交的删除。
+        var deleted = root.pendingDeleteSessionId > 0
+                ? root.focusHistoryServiceRef && (root.pendingDeleteIsRest
+                    ? root.focusHistoryServiceRef.deleteRestSession(root.pendingDeleteSessionId)
+                    : root.focusHistoryServiceRef.deleteSession(root.pendingDeleteSessionId))
+                : root.taskManagerRef && root.taskManagerRef.deleteTask(root.pendingDeleteTaskId)
+        if (!deleted) {
             // 失败后立即解除隐藏，让任务重新出现；不能把数据库失败伪装成“已删除”。
             root.pendingDeleteTaskId = -1
+            root.pendingDeleteSessionId = -1
             root.pendingDeleteTitle = ""
             root.showToast("删除「" + deletedTitle + "」失败，请重试")
             return false
         }
         root.pendingDeleteTaskId = -1
+        root.pendingDeleteSessionId = -1
         root.pendingDeleteTitle = ""
         return true
     }
@@ -428,24 +452,14 @@ Item {
     function cancelPendingDelete() {
         deleteCommitTimer.stop()
         root.pendingDeleteTaskId = -1
+        root.pendingDeleteSessionId = -1
         root.pendingDeleteTitle = ""
     }
 
     function startFocusForTask(taskId, taskTitle) {
-        // 已有自由专注、番茄工作或休息阶段时，不启动第二个会话；直接带用户去专注页处理当前状态。
-        if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
-            focusView.syncToActiveTimer()
-            root.showToast("已有计时进行中");
-            root.switchToView("focus");
-            return;
-        }
-
-        // MainWindow 只传递任务和上次模式；FocusView 进入对应待机态。
-        // 真正创建计时会话必须等用户在专注页再次点击“开始专注”。
         var usePomodoro = root.appSettingsRef && root.appSettingsRef.lastMode === 1
-        if (focusView.enterWithTask(taskId, taskTitle, usePomodoro)) {
-            root.switchToView("focus");
-        }
+        root.switchToView("focus")
+        focusView.startTask(taskId, taskTitle, usePomodoro)
     }
 
     function isManualRestActive() {
@@ -810,6 +824,7 @@ Item {
                     id: focusView
                     objectName: "focusViewPage"
                     timer: root.focusTimerRef
+                    taskManagerRef: root.taskManagerRef
                     settings: root.appSettingsRef
                     pageActive: root.currentView === "focus"
 
@@ -924,6 +939,12 @@ Item {
                 TodayFocusView {
                     id: todayFocusView
                     objectName: "todayFocusViewPage"
+                    pendingDeleteSessionId: root.pendingDeleteSessionId
+                    pendingDeleteIsRest: root.pendingDeleteIsRest
+                    onDeleteRequested: function(sessionId, title, isRest) {
+                        root.requestDeleteSession(sessionId, title, isRest)
+                    }
+                    onPendingDeleteFlushRequested: root.commitPendingDelete()
                     pageActive: root.currentView === "todayFocus"
                     focusTimerRef: root.focusTimerRef
                     focusHistoryServiceRef: root.focusHistoryServiceRef
@@ -1265,7 +1286,7 @@ Item {
         fileMode: FileDialog.SaveFile
         nameFilters: ["番茄Todo 备份 (*.tomatobackup)"]
         onAccepted: {
-            if (root.backupServiceRef)
+            if (root.backupServiceRef && root.commitPendingDelete())
                 root.backupServiceRef.requestBackup(root.backupLocalPath(selectedFile))
         }
     }
@@ -1290,7 +1311,7 @@ Item {
 
         parent: root
         onConfirmed: function (path) {
-            if (root.backupServiceRef)
+            if (root.backupServiceRef && root.commitPendingDelete())
                 root.backupServiceRef.requestRestore(path)
         }
     }

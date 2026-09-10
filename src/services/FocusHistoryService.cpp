@@ -20,6 +20,34 @@ bool isValidHistoryYear(int year)
 {
     return year >= 2000 && year <= 2100;
 }
+
+// 记录改挂到别的任务时，科目快照要换成新任务此刻的科目。
+// 回退链与 FocusTimer、addManualSession 的写入路径保持一致：先看关联科目，再退回旧版文本科目。
+struct CategorySnapshot
+{
+    QVariant id;
+    QString name;
+    QString color;
+};
+
+bool loadCategorySnapshot(QSqlDatabase& db, int taskId, CategorySnapshot* snapshot, QString* error)
+{
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT COALESCE(t.category_id, legacy.id), COALESCE(c.name, legacy.name, t.category, ''), "
+        "COALESCE(c.color, legacy.color, '') FROM tasks t "
+        "LEFT JOIN categories c ON c.id = t.category_id "
+        "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category WHERE t.id = :id"));
+    query.bindValue(QStringLiteral(":id"), taskId);
+    if (!query.exec() || !query.next()) {
+        *error = QStringLiteral("任务不存在");
+        return false;
+    }
+    snapshot->id = query.value(0);
+    snapshot->name = query.value(1).toString();
+    snapshot->color = query.value(2).toString();
+    return true;
+}
 }
 
 FocusHistoryService::FocusHistoryService(QObject* parent)
@@ -285,25 +313,41 @@ bool FocusHistoryService::validateManualSession(const QDateTime& startTime,
                                                 int durationMinutes,
                                                 int excludeSessionId) const
 {
-    if (!startTime.isValid()) {
-        m_lastError = QStringLiteral("开始时间无效");
+    if (durationMinutes < 0 || durationMinutes > 24 * 60) {
+        m_lastError = QStringLiteral("单条记录时长应在 3 分钟到 24 小时之间");
         return false;
     }
-    // 低于有效门槛的记录本来就不计入统计，存进去只是噪音，还会被"清理无效记录"顺手删掉。
-    const int minimumMinutes = FocusSessionRules::kMinimumValidDurationSeconds / 60;
-    if (durationMinutes < minimumMinutes) {
-        m_lastError = QStringLiteral("时长至少 %1 分钟").arg(minimumMinutes);
+    return validateSessionInterval(startTime, startTime.addSecs(durationMinutes * 60),
+                                   durationMinutes * 60, excludeSessionId);
+}
+
+bool FocusHistoryService::validateSessionInterval(const QDateTime& startTime,
+                                                  const QDateTime& endTime,
+                                                  int durationSeconds,
+                                                  int excludeSessionId, bool sourceRest, bool targetRest,
+                                                  bool checkOverlap) const
+{
+    if (!startTime.isValid() || !endTime.isValid() || endTime <= startTime) {
+        m_lastError = QStringLiteral("开始或结束时间无效");
         return false;
     }
-    if (durationMinutes > 24 * 60) {
+    if (durationSeconds < (targetRest ? 1 : FocusSessionRules::kMinimumValidDurationSeconds)) {
+        m_lastError = targetRest ? QStringLiteral("休息时长至少 1 秒") : QStringLiteral("时长至少 3 分钟");
+        return false;
+    }
+    if (durationSeconds > 24 * 60 * 60) {
         m_lastError = QStringLiteral("单条记录不能超过 24 小时");
         return false;
     }
-
-    const QDateTime endTime = startTime.addSecs(durationMinutes * 60);
     if (endTime > QDateTime::currentDateTime()) {
         m_lastError = QStringLiteral("结束时间不能晚于现在");
         return false;
+    }
+
+    if (!checkOverlap) {
+        // 只改归属或类型时区间没动过，再跑一次重叠校验只会被历史遗留的重叠挡住，
+        // 让用户连纠正归属都做不到；此时这条记录占用的时间和校验前完全一致。
+        return true;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
@@ -321,12 +365,12 @@ bool FocusHistoryService::validateManualSession(const QDateTime& startTime,
     query.prepare(QStringLiteral(
         "SELECT COUNT(*) FROM focus_sessions "
         "WHERE id <> :excludeId "
-        "AND datetime(start_time) < datetime(:endTime) "
-        "AND datetime(COALESCE(end_time, :now)) > datetime(:startTime)"));
-    query.bindValue(QStringLiteral(":excludeId"), excludeSessionId);
-    query.bindValue(QStringLiteral(":startTime"), startTime.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":endTime"), endTime.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":now"), QDateTime::currentDateTime().toString(Qt::ISODate));
+        "AND julianday(start_time) < julianday(:endTime) "
+        "AND julianday(COALESCE(end_time, :now)) > julianday(:startTime)"));
+    query.bindValue(QStringLiteral(":excludeId"), sourceRest ? -1 : excludeSessionId);
+    query.bindValue(QStringLiteral(":startTime"), startTime.toString(Qt::ISODateWithMs));
+    query.bindValue(QStringLiteral(":endTime"), endTime.toString(Qt::ISODateWithMs));
+    query.bindValue(QStringLiteral(":now"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
     if (!query.exec() || !query.next()) {
         m_lastError = query.lastError().text();
         qWarning() << "Failed to check session overlap:" << query.lastError().text();
@@ -334,6 +378,43 @@ bool FocusHistoryService::validateManualSession(const QDateTime& startTime,
     }
     if (query.value(0).toInt() > 0) {
         m_lastError = QStringLiteral("这段时间已有专注记录");
+        return false;
+    }
+    // 两种记录占用同一条时间线，但 ID 来自不同表，必须分别排除被编辑的原记录。
+    //
+    // 休息的 end_time 可能包含暂停与关机时段（旧数据尤其如此），按它判定占用会让
+    // 一次忘记结束的休息锁死整段时间；这里一律按「起点 + 实际时长」算有效占用。
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*) FROM rest_sessions WHERE id <> :excludeId "
+        "AND julianday(start_time) < julianday(:end) "
+        "AND julianday(start_time) + duration / 86400.0 > julianday(:start)"));
+    query.bindValue(QStringLiteral(":excludeId"), sourceRest ? excludeSessionId : -1);
+    query.bindValue(QStringLiteral(":start"), startTime.toString(Qt::ISODateWithMs));
+    query.bindValue(QStringLiteral(":end"), endTime.toString(Qt::ISODateWithMs));
+    if (!query.exec() || !query.next()) {
+        m_lastError = query.lastError().text();
+        return false;
+    }
+    if (query.value(0).toInt() > 0) {
+        m_lastError = QStringLiteral("这段时间已有休息记录，请先调整该记录或直接修改其类型");
+        return false;
+    }
+    // 正在进行的休息同理按「起点 + 已计秒数」占用：暂停中的休息不该锁死它之后的整段时间。
+    // 旧快照没有起点，用最后检查点倒推，占用区间退化为 [updated_at - elapsed, updated_at]。
+    query.prepare(QStringLiteral(
+        "SELECT COUNT(*) FROM active_focus_state WHERE phase IN (2, 3) "
+        "AND COALESCE(julianday(start_time), julianday(updated_at) - elapsed_seconds / 86400.0) "
+        "    < julianday(:end) "
+        "AND COALESCE(julianday(start_time) + elapsed_seconds / 86400.0, julianday(updated_at)) "
+        "    > julianday(:start)"));
+    query.bindValue(QStringLiteral(":start"), startTime.toString(Qt::ISODateWithMs));
+    query.bindValue(QStringLiteral(":end"), endTime.toString(Qt::ISODateWithMs));
+    if (!query.exec() || !query.next()) {
+        m_lastError = query.lastError().text();
+        return false;
+    }
+    if (query.value(0).toInt() > 0) {
+        m_lastError = QStringLiteral("这段时间有正在进行的休息，请先结束休息");
         return false;
     }
     return true;
@@ -383,8 +464,9 @@ int FocusHistoryService::addManualSession(int taskId,
             "(task_id, start_time, end_time, duration, mode, pomodoro_completed) "
             "VALUES (NULL, :startTime, :endTime, :duration, 0, 0)"));
     }
-    query.bindValue(QStringLiteral(":startTime"), startTime.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":endTime"), endTime.toString(Qt::ISODate));
+    // 与重叠校验使用同样的毫秒精度；落库时截秒会把相邻记录变成重叠。
+    query.bindValue(QStringLiteral(":startTime"), startTime.toString(Qt::ISODateWithMs));
+    query.bindValue(QStringLiteral(":endTime"), endTime.toString(Qt::ISODateWithMs));
     query.bindValue(QStringLiteral(":duration"), durationMinutes * 60);
 
     if (!query.exec()) {
@@ -407,82 +489,187 @@ bool FocusHistoryService::updateSession(int sessionId,
                                         const QVariant& startDateTimeValue,
                                         int durationMinutes)
 {
-    m_lastError.clear();
+    if (durationMinutes < 0 || durationMinutes > 24 * 60) {
+        m_lastError = QStringLiteral("单条记录时长应在 3 分钟到 24 小时之间");
+        return false;
+    }
+    return updateSessionFields(sessionId, {
+        {QStringLiteral("startTime"), startDateTimeValue},
+        {QStringLiteral("durationSeconds"), durationMinutes * 60}
+    });
+}
 
+bool FocusHistoryService::updateSessionFields(int sessionId, const QVariantMap& changes)
+{
+    return updateTimelineRecord(sessionId, false, changes);
+}
+
+bool FocusHistoryService::updateRestSessionFields(int sessionId, const QVariantMap& changes)
+{
+    return updateTimelineRecord(sessionId, true, changes);
+}
+
+QVariantList FocusHistoryService::getTaskOptions(const QVariant& dateValue) const
+{
+    m_lastError.clear();
+    const QDate date = dateValue.toDate();
+    QSqlQuery query(DatabaseManager::instance()->database());
+    // 按与所选日期的距离排序并截断：补录哪天就先列哪天的任务。
+    // 不能无上限地返回整库任务——下拉没有搜索，用久了要翻上千条才能找到当天的任务。
+    query.prepare(QStringLiteral(
+        "SELECT id, title, date FROM tasks "
+        "ORDER BY ABS(julianday(date) - julianday(:date)) ASC, date DESC, display_order, id "
+        "LIMIT :limit"));
+    query.bindValue(QStringLiteral(":date"),
+                    (date.isValid() ? date : LogicalDay::today(AppSettings::instance()->dayStartHour()))
+                        .toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":limit"), kTaskOptionLimit);
+    if (!query.exec()) {
+        m_lastError = query.lastError().text();
+        return {};
+    }
+    QVariantList result;
+    while (query.next()) {
+        result.append(QVariantMap{{QStringLiteral("id"), query.value(0)},
+            {QStringLiteral("title"), query.value(1).toString() + QStringLiteral(" · ") + query.value(2).toString()}});
+    }
+    return result;
+}
+
+bool FocusHistoryService::updateTimelineRecord(int sessionId, bool sourceRest, const QVariantMap& changes)
+{
+    m_lastError.clear();
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         m_lastError = QStringLiteral("数据库未打开");
         return false;
     }
-    if (sessionId <= 0) {
-        m_lastError = QStringLiteral("记录编号无效");
-        return false;
+    for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
+        if (it.key() != QStringLiteral("startTime") && it.key() != QStringLiteral("durationSeconds")
+            && it.key() != QStringLiteral("taskId") && it.key() != QStringLiteral("isRest")) {
+            m_lastError = QStringLiteral("不支持的记录字段");
+            return false;
+        }
     }
-
-    const QDateTime startTime = startDateTimeValue.toDateTime();
-    if (!validateManualSession(startTime, durationMinutes, sessionId)) {
-        return false;
-    }
-
-    QSqlQuery query(db);
-    // 只改时间与时长，不动 mode/pomodoro_completed：一条原本自然到点的番茄被改过
-    // 时长后仍然是那次番茄，不该因为"被编辑过"就降级；反之补录出来的自由计时
-    // 也不会因为改了时长就升级成番茄。
-    // end_time IS NOT NULL 挡住正在进行的会话——改它会让当前计时对不上。
-    query.prepare(QStringLiteral(
-        "UPDATE focus_sessions SET start_time = :startTime, end_time = :endTime, "
-        "duration = :duration "
-        "WHERE id = :id AND end_time IS NOT NULL"));
-    query.bindValue(QStringLiteral(":id"), sessionId);
-    query.bindValue(QStringLiteral(":startTime"), startTime.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":endTime"),
-                    startTime.addSecs(durationMinutes * 60).toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":duration"), durationMinutes * 60);
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        qWarning() << "Failed to update focus session:" << query.lastError().text();
-        return false;
-    }
-    if (query.numRowsAffected() <= 0) {
+    // 表名完全由内部布尔值决定，外部输入只能通过绑定传入，不能成为 SQL 结构。
+    const QString sourceTable = sourceRest ? QStringLiteral("rest_sessions") : QStringLiteral("focus_sessions");
+    QSqlQuery original(db);
+    original.prepare(QStringLiteral("SELECT * FROM %1 WHERE id = :id AND end_time IS NOT NULL").arg(sourceTable));
+    original.bindValue(QStringLiteral(":id"), sessionId);
+    if (!original.exec() || !original.next()) {
         m_lastError = QStringLiteral("记录不存在或正在进行中");
         return false;
     }
-
+    if (changes.isEmpty())
+        return true;
+    const bool targetRest = changes.contains(QStringLiteral("isRest"))
+        ? changes.value(QStringLiteral("isRest")).toBool() : sourceRest;
+    const QDateTime oldStart = QDateTime::fromString(original.value("start_time").toString(), Qt::ISODate);
+    const QDateTime oldEnd = QDateTime::fromString(original.value("end_time").toString(), Qt::ISODate);
+    const QDateTime start = changes.contains(QStringLiteral("startTime"))
+        ? changes.value(QStringLiteral("startTime")).toDateTime() : oldStart;
+    bool durationOk = true;
+    const int duration = changes.contains(QStringLiteral("durationSeconds"))
+        ? changes.value(QStringLiteral("durationSeconds")).toInt(&durationOk) : original.value("duration").toInt();
+    const QDateTime end = changes.contains(QStringLiteral("durationSeconds"))
+        ? start.addSecs(duration) : oldEnd.addMSecs(oldStart.msecsTo(start));
+    // 仅改归属或类型时也保留精度和暂停跨度；类型转换与原记录删除必须一起提交。
+    const bool intervalChanged = changes.contains(QStringLiteral("startTime"))
+        || changes.contains(QStringLiteral("durationSeconds"));
+    // 休息转专注会把占用从「起点 + 时长」放大到整段区间（含暂停跨度），仍必须重新校验重叠。
+    const bool needsOverlapCheck = intervalChanged || (sourceRest && !targetRest);
+    if (!durationOk || !validateSessionInterval(start, end, duration, sessionId, sourceRest, targetRest,
+                                                needsOverlapCheck)) {
+        if (m_lastError.isEmpty()) m_lastError = QStringLiteral("时长无效");
+        return false;
+    }
+    QVariant taskId = sourceRest ? QVariant() : original.value("task_id");
+    CategorySnapshot snapshot{sourceRest ? QVariant() : original.value("category_id_snapshot"),
+                              sourceRest ? QStringLiteral("") : original.value("category_name_snapshot").toString(),
+                              sourceRest ? QStringLiteral("") : original.value("category_color_snapshot").toString()};
+    if (!targetRest && changes.contains(QStringLiteral("taskId"))) {
+        const int selectedId = changes.value(QStringLiteral("taskId")).toInt();
+        taskId = selectedId > 0 ? QVariant(selectedId) : QVariant();
+        snapshot = CategorySnapshot{};
+        if (selectedId > 0 && !loadCategorySnapshot(db, selectedId, &snapshot, &m_lastError)) {
+            return false;
+        }
+    }
+    if (!db.transaction()) {
+        m_lastError = db.lastError().text();
+        return false;
+    }
+    QSqlQuery write(db);
+    QStringList columns{QStringLiteral("start_time"), QStringLiteral("end_time"), QStringLiteral("duration")};
+    QVariantList values{
+        changes.contains(QStringLiteral("startTime")) ? start.toString(Qt::ISODateWithMs) : original.value("start_time"),
+        changes.contains(QStringLiteral("startTime")) || changes.contains(QStringLiteral("durationSeconds"))
+            ? end.toString(Qt::ISODateWithMs) : original.value("end_time"), duration};
+    if (targetRest) {
+        columns << QStringLiteral("manual");
+        values << (sourceRest ? original.value("manual") : QVariant(1));
+    } else {
+        columns << QStringLiteral("task_id") << QStringLiteral("category_id_snapshot")
+                << QStringLiteral("category_name_snapshot") << QStringLiteral("category_color_snapshot")
+                << QStringLiteral("mode") << QStringLiteral("pomodoro_completed");
+        // 修正原专注归属保留完成事实；从休息转为专注只能算自由补录，不能凭空产生番茄。
+        values << taskId << snapshot.id << snapshot.name << snapshot.color
+               << (sourceRest ? QVariant(0) : original.value("mode"))
+               << (sourceRest ? QVariant(0) : original.value("pomodoro_completed"));
+    }
+    const QString targetTable = targetRest ? QStringLiteral("rest_sessions") : QStringLiteral("focus_sessions");
+    QStringList fragments;
+    for (const QString& column : columns)
+        fragments << (sourceRest == targetRest ? column + QStringLiteral(" = ?") : QStringLiteral("?"));
+    write.prepare(sourceRest == targetRest
+        ? QStringLiteral("UPDATE %1 SET %2 WHERE id = ? AND end_time IS NOT NULL").arg(targetTable, fragments.join(", "))
+        : QStringLiteral("INSERT INTO %1 (%2) VALUES (%3)").arg(targetTable, columns.join(", "), fragments.join(", ")));
+    for (const QVariant& value : values) write.addBindValue(value);
+    if (sourceRest == targetRest) write.addBindValue(sessionId);
+    bool ok = write.exec() && write.numRowsAffected() == 1;
+    if (!ok) m_lastError = write.lastError().text();
+    if (ok && sourceRest != targetRest) {
+        QSqlQuery remove(db);
+        remove.prepare(QStringLiteral("DELETE FROM %1 WHERE id = :id").arg(sourceTable));
+        remove.bindValue(QStringLiteral(":id"), sessionId);
+        ok = remove.exec() && remove.numRowsAffected() == 1;
+        if (!ok) m_lastError = remove.lastError().text();
+    }
+    if (!ok || !db.commit()) {
+        db.rollback();
+        if (m_lastError.isEmpty()) m_lastError = QStringLiteral("保存记录失败");
+        return false;
+    }
     emit historyChanged();
     return true;
 }
 
 bool FocusHistoryService::deleteSession(int sessionId)
 {
-    m_lastError.clear();
+    return deleteTimelineRecord(sessionId, false);
+}
 
+bool FocusHistoryService::deleteRestSession(int sessionId)
+{
+    return deleteTimelineRecord(sessionId, true);
+}
+
+bool FocusHistoryService::deleteTimelineRecord(int sessionId, bool isRest)
+{
+    m_lastError.clear();
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         m_lastError = QStringLiteral("数据库未打开");
         return false;
     }
-    if (sessionId <= 0) {
-        m_lastError = QStringLiteral("记录编号无效");
-        return false;
-    }
-
     QSqlQuery query(db);
-    // 同样挡住正在进行的会话：删掉它会让 FocusTimer 结束时找不到自己的行。
-    query.prepare(QStringLiteral(
-        "DELETE FROM focus_sessions WHERE id = :id AND end_time IS NOT NULL"));
+    query.prepare(QStringLiteral("DELETE FROM %1 WHERE id = :id AND end_time IS NOT NULL")
+                  .arg(isRest ? QStringLiteral("rest_sessions") : QStringLiteral("focus_sessions")));
     query.bindValue(QStringLiteral(":id"), sessionId);
-
-    if (!query.exec()) {
-        m_lastError = query.lastError().text();
-        qWarning() << "Failed to delete focus session:" << query.lastError().text();
+    if (!query.exec() || query.numRowsAffected() != 1) {
+        m_lastError = QStringLiteral("记录不存在、正在进行中或删除失败");
         return false;
     }
-    if (query.numRowsAffected() <= 0) {
-        m_lastError = QStringLiteral("记录不存在或正在进行中");
-        return false;
-    }
-
     emit historyChanged();
     return true;
 }

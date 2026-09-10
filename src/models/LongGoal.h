@@ -54,8 +54,10 @@ public:
 
     // 以下三个字段不来自 long_goals 表，由 GoalService 聚合后填入，仅用于交给界面。
     int doneMinutes = 0;
-    // 预测分母只统计真正有有效专注的逻辑日，由同一条聚合查询计算，不暴露给界面。
+    // 活跃日用于估算学习日数量；自然日预测另用近期窗口，包含零投入日。
     int activeDays = 0;
+    int recentMinutes = 0;
+    int recentActiveDays = 0;
     // 照当前速度预计还需多少天；无法预测（尚无任何记录）时为 -1，已达成时为 0。
     int forecastDays = -1;
 

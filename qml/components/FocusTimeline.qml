@@ -81,7 +81,7 @@ Rectangle {
                 Layout.fillWidth: true
                 text: root.currentMonth + "月" + root.selectedDay + "日 专注记录"
                 textFormat: Text.PlainText
-                font.pixelSize: Theme.fontXl
+                font.pixelSize: Theme.fontLg
                 font.weight: Font.Bold
                 color: Theme.ink
             }
@@ -152,7 +152,7 @@ Rectangle {
                         readonly property bool isRest: Boolean(sessionRow.modelData.isRest)
 
                         width: timelineColumn.width
-                        height: sessionCard.height + (sessionRow.index < root.sessions.length - 1 ? 14 : 0)
+                        height: sessionCard.height
 
                         Rectangle {
                             visible: sessionRow.index < root.sessions.length - 1
@@ -181,7 +181,7 @@ Rectangle {
                             objectName: "focusSessionCard-" + sessionRow.index
                             x: 24
                             width: Math.max(1, parent.width - x)
-                            height: root.editable && !sessionRow.isRest ? 112 : 86
+                            height: 76
                             radius: Theme.radiusMd
                             color: Theme.surfaceRaised
                             border.color: Theme.border
@@ -215,24 +215,24 @@ Rectangle {
                                         color: Theme.inkSoft
                                         elide: Text.ElideRight
                                     }
+                                }
 
-                                    RowLayout {
-                                        spacing: Theme.space8
-                                        // 休息记录不进入专注编辑接口，避免同号 ID 改写另一张表。
-                                        visible: root.editable && !sessionRow.isRest
+                                RowLayout {
+                                    spacing: Theme.space8
+                                    // 模型携带记录类型，宿主按类型分发到对应服务接口。
+                                    visible: root.editable
 
-                                        TimelineTextButton {
-                                            objectName: "focusSessionEdit-" + sessionRow.index
-                                            text: qsTr("修改")
-                                            onClicked: root.editRequested(sessionRow.modelData)
-                                        }
+                                    TimelineTextButton {
+                                        objectName: "focusSessionEdit-" + sessionRow.index
+                                        text: qsTr("修改")
+                                        onClicked: root.editRequested(sessionRow.modelData)
+                                    }
 
-                                        TimelineTextButton {
-                                            objectName: "focusSessionDelete-" + sessionRow.index
-                                            text: qsTr("删除")
-                                            danger: true
-                                            onClicked: root.deleteRequested(sessionRow.modelData)
-                                        }
+                                    TimelineTextButton {
+                                        objectName: "focusSessionDelete-" + sessionRow.index
+                                        text: qsTr("删除")
+                                        danger: true
+                                        onClicked: root.deleteRequested(sessionRow.modelData)
                                     }
                                 }
 
@@ -251,7 +251,7 @@ Rectangle {
                                               : root.formatDurationFn(Number(sessionRow.modelData.durationSeconds) || 0)
                                         // qmllint enable use-proper-function
                                         textFormat: Text.PlainText
-                                        font.pixelSize: Theme.fontXl
+                                        font.pixelSize: Theme.fontLg
                                         font.weight: Font.Bold
                                         color: sessionRow.isRest ? Theme.inkSoft : Theme.accent
                                         horizontalAlignment: Text.AlignRight

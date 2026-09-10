@@ -67,6 +67,10 @@ public:
     Q_INVOKABLE bool reorderTasks(const QVariant& dateValue, const QVariantList& orderedTaskIds);
     // 改期。编辑弹窗此前只有今天/明天/后天三个按钮，最远只能挪两天；
     // 周计划里整块前后挪需要任意日期。
+    Q_INVOKABLE bool moveTasksToDate(const QVariantList& taskIds, const QVariant& dateValue);
+    Q_INVOKABLE QVariantMap getTask(int taskId) const;
+    Q_INVOKABLE QVariantList searchTasks(const QString& text, int status, int limit) const;
+    Q_INVOKABLE bool duplicateTask(int taskId, const QVariant& dateValue);
     Q_INVOKABLE bool moveTaskToDate(int taskId, const QVariant& dateValue);
 
     static constexpr int kMaxNotesLength = 2000;

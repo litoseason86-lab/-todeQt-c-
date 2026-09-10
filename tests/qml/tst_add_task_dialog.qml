@@ -79,6 +79,29 @@ TestCase {
         selectedDateProvider: function() { return testCase.providedDate }
     }
 
+    function test_continuousEntryRetainsOptionsAndFailureRetainsDraft() {
+        categoryDialog.open()
+        // 弹窗动画结束后才完成科目载入；等待可交互状态，避免测试抢跑。
+        tryCompare(categoryDialog, "opened", true)
+        findChild(categoryDialog, "categoryComboBox").currentIndex = 1
+        findChild(categoryDialog, "titleField").text = "第一项"
+        categoryDialog.submit(true)
+        verify(categoryDialog.visible)
+        compare(findChild(categoryDialog, "titleField").text, "")
+        compare(findChild(categoryDialog, "categoryComboBox").currentIndex, 1)
+        compare(testCase.lastCategoryId, 1)
+        findChild(categoryDialog, "titleField").text = "第二项"
+        categoryDialog.submit(true)
+        compare(testCase.lastCategoryId, 1)
+        categoryDialog.close()
+        failingDialog.open()
+        findChild(failingDialog, "titleField").text = "保留草稿"
+        failingDialog.submit(true)
+        compare(findChild(failingDialog, "titleField").text, "保留草稿")
+        verify(failingDialog.visible)
+        failingDialog.close()
+    }
+
     function verifyInsidePanel(popup: Popup, item: Item) {
         // 把控件坐标换算到弹窗面板内部，用来确认控件没有伸出边界。
         var local = popup.background.mapFromItem(item, 0, 0)

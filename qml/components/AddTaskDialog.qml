@@ -142,7 +142,9 @@ Popup {
         }
     }
 
-    function submit() {
+    property int continuousSavedCount: 0
+
+    function submit(keepOpen) {
         var title = titleField.text.trim();
         if (title.length === 0) {
             errorLabel.text = "任务标题不能为空";
@@ -174,8 +176,17 @@ Popup {
             titleField.forceActiveFocus();
             return;
         }
-        root.resetFields();
-        root.close();
+        if (keepOpen === true) {
+            // 连续录入只清空本条内容，保留日期、科目和预计用时，失败时不清草稿。
+            titleField.text = ""
+            notesField.text = ""
+            root.continuousSavedCount += 1
+            errorLabel.text = ""
+            titleField.forceActiveFocus()
+        } else {
+            root.resetFields()
+            root.close()
+        }
     }
 
     Connections {
@@ -204,7 +215,7 @@ Popup {
         titleField.forceActiveFocus();
     }
 
-    onClosed: root.resetFields()
+    onClosed: { root.resetFields(); root.continuousSavedCount = 0 }
 
     background: Rectangle {
         id: panel
@@ -244,7 +255,7 @@ Popup {
                 anchors.verticalCenter: parent.verticalCenter
                 anchors.left: parent.left
                 anchors.leftMargin: Theme.space16
-                text: root.heading
+                text: root.heading + (root.continuousSavedCount > 0 ? qsTr(" · 已添加 %1 项").arg(root.continuousSavedCount) : "")
                 textFormat: Text.PlainText
                 color: Theme.ink
                 font.pixelSize: Theme.fontLg
@@ -606,6 +617,43 @@ Popup {
                 }
 
                 onClicked: root.close()
+            }
+
+            Button {
+                id: saveAndContinueButton
+                objectName: "saveAndContinueButton"
+
+                text: qsTr("保存并继续")
+                implicitWidth: 108
+                implicitHeight: 44
+
+                background: Rectangle {
+                    objectName: "saveAndContinueButtonBackground"
+                    color: saveAndContinueButton.pressed || saveAndContinueButton.hovered ? Theme.glassHover : Theme.glassCard
+                    border.color: saveAndContinueButton.hovered || saveAndContinueButton.pressed ? Theme.accent : Theme.border
+                    border.width: 1
+                    radius: Theme.radiusMd
+
+                    Behavior on color {
+                        ColorAnimation {
+                            duration: Theme.reduceMotion ? 0 : 160
+                            easing.type: Easing.OutQuad
+                        }
+                    }
+                }
+
+                contentItem: Text {
+                    objectName: "saveAndContinueButtonLabel"
+                    text: saveAndContinueButton.text
+                    textFormat: Text.PlainText
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.Medium
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                onClicked: root.submit(true)
             }
 
             Button {
