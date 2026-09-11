@@ -1359,4 +1359,59 @@ TestCase {
         compare(focusTimer.startBreakTaskId, 7)
         compare(focusTimer.startBreakTaskTitle, "测试任务")
     }
+
+    function test_captureButtonDoesNotOverlapImmersiveButton() {
+        // 这两颗钮一度都锚在 focusPageBackdrop 的右上角，整个叠在一起。
+        //
+        // 之所以会发生：沉浸钮是个朴素的 `Button`，按 GlassToolbarButton /
+        // PageActionButton 这类组件名搜索时搜不到；离屏渲染那一轮也没覆盖专注页，
+        // 于是一路到了用户手上。专注页右上角只有这一个槽位，几何断言是唯一能在
+        // 代码评审和静态检查都看不出问题时挡住它的东西。
+        focusTimer.hasActiveSession = true
+        view.toPomodoroTab(true)
+        view.startPomodoro()
+        wait(20)
+
+        verify(view.immersiveAvailable, "番茄工作段里沉浸入口应当开放，否则这条断言测不到重叠")
+
+        var capture = findChild(view, "focusGapCaptureButton")
+        var immersive = findChild(view, "immersiveButton")
+        verify(capture)
+        verify(immersive)
+
+        var a = capture.mapToItem(view, 0, 0)
+        var b = immersive.mapToItem(view, 0, 0)
+        var overlapX = Math.min(a.x + capture.width, b.x + immersive.width) - Math.max(a.x, b.x)
+        var overlapY = Math.min(a.y + capture.height, b.y + immersive.height) - Math.max(a.y, b.y)
+        verify(overlapX <= 0 || overlapY <= 0,
+               "捕获钮与沉浸钮重叠 " + Math.round(overlapX) + "×" + Math.round(overlapY) + " px")
+
+        // 两颗钮顶边对齐，视觉上成一组；错开一两像素看起来像没放稳。
+        compare(Math.round(a.y), Math.round(b.y))
+        // 捕获钮在沉浸钮左侧，不是右侧跑到页面外。
+        verify(a.x + capture.width <= b.x)
+        verify(a.x >= 0)
+    }
+
+    function test_captureButtonKeepsItsSlotWhenImmersiveHides() {
+        // immersiveAvailable 随计时开始/结束翻转。捕获钮不跟着收缩到最右——
+        // 否则每次开始或结束专注，这颗钮都会在用户眼皮底下横跳一截。
+        focusTimer.hasActiveSession = true
+        view.toPomodoroTab(true)
+        view.startPomodoro()
+        wait(20)
+        var capture = findChild(view, "focusGapCaptureButton")
+        verify(capture)
+        var whileActive = capture.mapToItem(view, 0, 0)
+
+        view.endPomodoro()
+        focusTimer.hasActiveSession = false
+        focusTimer.phase = 0
+        wait(20)
+        verify(!view.immersiveAvailable)
+
+        var whileIdle = capture.mapToItem(view, 0, 0)
+        compare(Math.round(whileIdle.x), Math.round(whileActive.x))
+        compare(Math.round(whileIdle.y), Math.round(whileActive.y))
+    }
 }

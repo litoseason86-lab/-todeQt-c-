@@ -838,30 +838,47 @@ Item {
         // 两种模式下方的内容高度差很大（自由是一行大字时钟，番茄是圆环加时长面板），
         // 之前切换器跟正文一起居中，正文一变高就把切换器顶得上下跳。
         // macOS 的分段控件（日历的日/周/月/年、访达的视图切换）一律待在固定位置。
-        // 快速捕获钮单独锚在右上角。专注页没有页头行——modeSwitch 是单独钉在顶部居中的，
-        // 那个位置是专门定过的（正文一变高就会把它顶得上下跳），这里不去动它。
-        GlassToolbarButton {
+        // 快速捕获钮挂在沉浸钮左边的槽位上。
+        //
+        // 这里曾经直接锚 parent.top/right，和 immersiveButton 叠在了一起——那颗钮是个
+        // 朴素的 Button，按组件名搜索时搜不到。专注页右上角只有这一块地方，往这里放
+        // 东西必须先确认它是空的。
+        //
+        // 不做「沉浸钮隐藏时就贴到最右」那种收缩：immersiveAvailable 随计时开始/结束
+        // 翻转，收缩会让这颗钮在用户眼皮底下左右跳；右侧空出一个槽位只是留白。
+        Button {
             id: gapCaptureButton
             objectName: "focusGapCaptureButton"
 
-            anchors.top: parent.top
-            anchors.right: parent.right
-            anchors.topMargin: Theme.space24
-            anchors.rightMargin: Theme.space24
-            width: 36
-            height: 36
-            // 沉浸模式一贯压制弹窗；这里同样不开口子，沉浸就该是干净的。
-            visible: root.state !== "manualRest"
-            reduceMotion: Boolean(root.settings && root.settings.reduceMotion)
-            solidFallback: !Theme.glassBlurAllowed
+            // 内容是图标，读屏读不出用途，必须显式命名。
+            Accessible.role: Accessible.Button
             Accessible.name: qsTr("记一笔知识缺口")
+            Accessible.onPressAction: gapCaptureButton.clicked()
+
+            anchors.top: immersiveButton.top
+            anchors.right: immersiveButton.left
+            anchors.rightMargin: Theme.space4
+            implicitWidth: 40
+            implicitHeight: Theme.controlHeightMd
+            // 沉浸模式一贯压制弹窗；主动休息时也不出现，那段时间没有可记的上下文。
+            visible: root.state !== "manualRest"
+
             onClicked: root.openKnowledgeGapCapture()
+
+            // 与沉浸钮同一套处理：常态透明、悬停才出底。专注页要安静，
+            // 一块常驻的玻璃浮在这里会比紧挨着的那颗钮重一大截。
+            background: Rectangle {
+                color: gapCaptureButton.hovered ? Theme.surface : "transparent"
+                border.color: gapCaptureButton.hovered ? Theme.border : "transparent"
+                border.width: 1
+                radius: Theme.radiusMd
+            }
 
             GlyphIcon {
                 anchors.centerIn: parent
                 name: "gap"
                 size: 18
-                color: Theme.inkSoft
+                color: Theme.ink
             }
         }
 
