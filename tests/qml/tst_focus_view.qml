@@ -1138,7 +1138,8 @@ TestCase {
         const pauseButton = findChild(panel, "manualRestPauseResumeButton")
         verify(pauseButton)
         compare(pauseButton.implicitWidth, 104)
-        compare(pauseButton.implicitHeight, 40)
+        // 高度断言指向刻度而不是字面量：控件高度只有三档，改档要在 Theme 里改。
+        compare(pauseButton.implicitHeight, Theme.controlHeightMd)
         pauseButton.clicked()
         compare(focusTimer.isRunning, false)
 

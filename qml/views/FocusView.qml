@@ -1019,7 +1019,7 @@ Item {
                 objectName: "durationPill"
                 Layout.alignment: Qt.AlignHCenter
                 visible: root.state === "pomoIdle"
-                implicitHeight: 36
+                implicitHeight: Theme.controlHeightMd
                 implicitWidth: pillLabel.implicitWidth + Theme.space24 * 2
                 onClicked: root.panelExpanded = !root.panelExpanded
 
@@ -1213,7 +1213,7 @@ Item {
                     text: qsTr("开始专注")
                     enabled: root.canStartFreeFocus()
                     implicitWidth: 104
-                    implicitHeight: 34
+                    implicitHeight: Theme.controlHeightMd
                     onClicked: root.startFreeFocus()
 
                     background: GlassPanel {
@@ -1247,7 +1247,7 @@ Item {
                     text: root.timerBool("isRunning") ? "暂停" : "继续"
                     enabled: root.state === "free" ? root.timerBool("hasActiveSession") : root.timerNumber("phase", 0) !== 0
                     implicitWidth: 104
-                    implicitHeight: 40
+                    implicitHeight: Theme.controlHeightMd
 
                     background: Rectangle {
                         color: pauseButton.enabled ? Theme.inkSoft : Theme.border
@@ -1272,7 +1272,7 @@ Item {
                     text: "结束专注"
                     enabled: root.timerBool("hasActiveSession")
                     implicitWidth: 104
-                    implicitHeight: 40
+                    implicitHeight: Theme.controlHeightMd
 
                     background: Rectangle {
                         color: freeStopButton.enabled ? Theme.accent : Theme.border
@@ -1299,7 +1299,7 @@ Item {
                     enabled: root.canStartPomodoro()
                     // 与仪表盘/任务卡「开始专注」统一：104×34 + 玻璃基底。
                     implicitWidth: 104
-                    implicitHeight: 34
+                    implicitHeight: Theme.controlHeightMd
                     onClicked: root.startPomodoro()
 
                     // 玻璃主按钮：半透明 glass 色阶 + 受光棱边，不用实心焦糖。
@@ -1340,7 +1340,7 @@ Item {
                     text: "开始休息"
                     // 同主按钮规格，避免「开始休息」仍是实心焦糖块。
                     implicitWidth: 104
-                    implicitHeight: 34
+                    implicitHeight: Theme.controlHeightMd
                     onClicked: root.startBreak()
 
                     background: GlassPanel {
@@ -1373,7 +1373,7 @@ Item {
                     visible: root.state === "pomoWork" || root.state === "pomoBreak" || root.state === "workDone" || root.state === "breakDone"
                     text: root.state === "pomoBreak" ? "跳过休息" : "结束"
                     implicitWidth: 104
-                    implicitHeight: 40
+                    implicitHeight: Theme.controlHeightMd
                     onClicked: root.endPomodoro()
 
                     background: Rectangle {
@@ -1434,12 +1434,17 @@ Item {
             id: immersiveButton
             objectName: "immersiveButton"
 
+            // 内容是「⛶」这个符号，读屏读不出用途，必须显式命名。
+            Accessible.role: Accessible.Button
+            Accessible.name: qsTr("进入沉浸模式")
+            Accessible.onPressAction: immersiveButton.clicked()
+
             anchors.top: parent.top
             anchors.right: parent.right
             anchors.topMargin: Theme.space16
             anchors.rightMargin: Theme.space16
             implicitWidth: 40
-            implicitHeight: 32
+            implicitHeight: Theme.controlHeightMd
             visible: root.immersiveAvailable
 
             onClicked: root.immersiveRequested()

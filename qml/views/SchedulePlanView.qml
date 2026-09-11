@@ -372,10 +372,15 @@ Item {
                 onClicked: settingsDialog.openDialog()
 
                 background: Rectangle {
+                    // 静息态是「同色零透明」而不是 "transparent"（黑基）：
+                    // 否则 ColorAnimation 会经过半透明黑，悬停瞬间闪一道灰影。
+                    readonly property color hoverTint: Theme.glassBlurAllowed
+                                                       ? Theme.glassHover : Theme.glassSolidHover
+
                     radius: width / 2
                     color: settingsButton.pressed || settingsButton.hovered
-                           ? (Theme.glassBlurAllowed ? Theme.glassHover : Theme.glassSolidHover)
-                           : "transparent"
+                           ? hoverTint
+                           : Qt.rgba(hoverTint.r, hoverTint.g, hoverTint.b, 0)
                     border.color: settingsButton.activeFocus ? Theme.focusRing : "transparent"
                     border.width: settingsButton.activeFocus ? 2 : 0
 
@@ -499,7 +504,7 @@ Item {
                         objectName: "scheduleAnchorThisWeekButton"
                         text: "把本周设为第 1 周"
                         implicitWidth: 148
-                        implicitHeight: 40
+                        implicitHeight: Theme.controlHeightMd
 
                         background: Rectangle {
                             color: anchorButton.pressed || anchorButton.hovered
@@ -745,7 +750,7 @@ Item {
                     objectName: "scheduleConfirmDeleteButton"
                     text: "删除"
                     implicitWidth: 72
-                    implicitHeight: 40
+                    implicitHeight: Theme.controlHeightMd
 
                     background: Rectangle {
                         color: confirmDeleteButton.pressed || confirmDeleteButton.hovered
@@ -792,10 +797,14 @@ Item {
         Accessible.name: navSegment.text
 
         background: Rectangle {
+            // 同上：静息态必须与悬停色同色零透明，黑基透明会插值出灰影。
+            readonly property color hoverTint: Theme.glassBlurAllowed
+                                               ? Theme.glassThumb : Theme.glassSolidThumb
+
             radius: height / 2
             color: navSegment.enabled && (navSegment.pressed || navSegment.hovered)
-                   ? (Theme.glassBlurAllowed ? Theme.glassThumb : Theme.glassSolidThumb)
-                   : "transparent"
+                   ? hoverTint
+                   : Qt.rgba(hoverTint.r, hoverTint.g, hoverTint.b, 0)
             border.color: navSegment.activeFocus ? Theme.focusRing : "transparent"
             border.width: navSegment.activeFocus ? 2 : 0
 
@@ -829,7 +838,7 @@ Item {
         id: outlineButton
 
         implicitWidth: 76
-        implicitHeight: 40
+        implicitHeight: Theme.controlHeightMd
 
         background: Rectangle {
             color: !outlineButton.enabled ? Theme.surfaceSunken

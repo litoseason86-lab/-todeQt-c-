@@ -137,6 +137,13 @@ QtObject {
     readonly property int space12: 12
     readonly property int space16: 16
     readonly property int space24: 24
+
+    // 控件高度只有三档：行内次级操作 / 常规控件 / 主操作与弹窗按钮。
+    // 此前项目里散落着 13 种高度（20–44），新按钮只能"看着像"，
+    // 同一行里 36 与 40 混排就是这么来的。新增控件必须落在这三档之一。
+    readonly property int controlHeightSm: 28
+    readonly property int controlHeightMd: 36
+    readonly property int controlHeightLg: 44
     readonly property int space32: 32
 
     // —— 圆角 Radius ——
@@ -191,6 +198,12 @@ QtObject {
     readonly property color glassHover: darkMode
         ? Qt.rgba(48 / 255, 42 / 255, 32 / 255, 0.65)
         : Qt.rgba(1, 1, 250 / 255, 0.62)
+    // 悬停动画的起点：与 glassHover 同色、完全透明。
+    // 不能拿 Qt 的 "transparent" 当起点——它是黑基透明，ColorAnimation 会从它插值出一层灰，
+    // 看起来就是按钮下面闪过一道阴影；写死白基在夜间主题又会闪一层白雾。
+    // 只有同色零透明才是纯 alpha 变化，两种主题下都干净。
+    readonly property color glassHoverIdle: Qt.rgba(glassHover.r, glassHover.g, glassHover.b, 0)
+
     // 选中态/高亮底：夜间版为焦糖的半透明高光。
     readonly property color glassAccent: darkMode
         ? Qt.rgba(212 / 255, 165 / 255, 116 / 255, 0.28)

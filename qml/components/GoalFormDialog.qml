@@ -277,7 +277,7 @@ Popup {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
-                implicitHeight: 44
+                implicitHeight: Theme.controlHeightLg
                 maximumLength: root.maxTitleLength
                 placeholderText: qsTr("例如：完成 100 个算法番茄")
                 selectByMouse: true
@@ -298,7 +298,7 @@ Popup {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
-                implicitHeight: 44
+                implicitHeight: Theme.controlHeightLg
                 model: root.categories
                 textRole: "name"
                 displayText: currentIndex >= 0 && currentIndex < root.categories.length
@@ -356,7 +356,7 @@ Popup {
                         id: startDateField
                         objectName: "goalStartDateField"
                         Layout.fillWidth: true
-                        implicitHeight: 44
+                        implicitHeight: Theme.controlHeightLg
                         placeholderText: "YYYY-MM-DD"
                         inputMethodHints: Qt.ImhDate
                     }
@@ -379,7 +379,7 @@ Popup {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
-                implicitHeight: 44
+                implicitHeight: Theme.controlHeightLg
                 enabled: !root.longTerm
                 placeholderText: qsTr("截止日期 YYYY-MM-DD")
                 inputMethodHints: Qt.ImhDate

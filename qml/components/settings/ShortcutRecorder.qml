@@ -30,7 +30,7 @@ Button {
     signal recordingCancelled()
 
     implicitWidth: 104
-    implicitHeight: 30
+    implicitHeight: Theme.controlHeightSm
     activeFocusOnTab: true
     Accessible.name: root.accessibleTitle + "，当前快捷键 "
                      + (root.sequenceDisplay.length > 0

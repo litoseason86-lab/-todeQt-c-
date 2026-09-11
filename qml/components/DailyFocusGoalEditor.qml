@@ -113,7 +113,7 @@ FocusScope {
                 text: qsTr("取消")
                 activeFocusOnTab: true
                 implicitWidth: 64
-                implicitHeight: 32
+                implicitHeight: Theme.controlHeightMd
                 KeyNavigation.tab: saveButton
                 onClicked: root.cancelled()
 
@@ -132,7 +132,7 @@ FocusScope {
                 text: qsTr("保存")
                 activeFocusOnTab: true
                 implicitWidth: 64
-                implicitHeight: 32
+                implicitHeight: Theme.controlHeightMd
                 KeyNavigation.tab: durationFields.firstField
                 onClicked: root.submit()
 

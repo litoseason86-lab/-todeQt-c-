@@ -734,8 +734,9 @@ TestCase {
         verify(focusButtonBackground !== null);
         verify(focusButtonLabel !== null);
         compare(focusButton.implicitWidth, 104);
-        // 与仪表盘主按钮统一 34 高；圆角走 GlassPanel 的 radiusLg。
-        compare(focusButton.implicitHeight, 34);
+        // 与仪表盘主按钮同属常规档；圆角走 GlassPanel 的 radiusLg。
+        // 断言指向刻度而不是字面量：控件高度只有三档，改档要在 Theme 里改。
+        compare(focusButton.implicitHeight, Theme.controlHeightMd);
         compare(focusButtonBackground.radius, Theme.radiusLg);
         compare(focusButtonBackground.panelShadowEnabled, false);
         verify(Qt.colorEqual(focusButtonBackground.color, Theme.glassCard));

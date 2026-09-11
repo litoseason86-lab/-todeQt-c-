@@ -135,6 +135,7 @@ GlassPanel {
     }
 
     // 右端「任务完成」计数：未设置/展示两态共用。
+    // 它是状态不是操作，与左边的按钮之间留一档间距，否则整串读不出分组。
     component DoneCount: RowLayout {
         spacing: Theme.space8
 
@@ -213,7 +214,7 @@ GlassPanel {
 
                 text: root.quickFillLabel
                 activeFocusOnTab: true
-                implicitHeight: 26
+                implicitHeight: Theme.controlHeightSm
                 onClicked: root.goalSubmitted(root.quickFillValue)
 
                 background: Rectangle {
@@ -243,7 +244,7 @@ GlassPanel {
 
                 text: qsTr("设置今日目标")
                 activeFocusOnTab: true
-                implicitHeight: 30
+                implicitHeight: Theme.controlHeightSm
                 onClicked: root.beginEditing()
 
                 background: GlassPanel {

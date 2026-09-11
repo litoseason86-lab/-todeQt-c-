@@ -128,7 +128,7 @@ Popup {
                 objectName: "restoreCancelButton"
                 text: "取消"
                 implicitWidth: 80
-                implicitHeight: 36
+                implicitHeight: Theme.controlHeightMd
                 onClicked: root.close()
 
                 background: Rectangle {
@@ -152,7 +152,7 @@ Popup {
                 objectName: "restoreConfirmButton"
                 text: "恢复"
                 implicitWidth: 96
-                implicitHeight: 36
+                implicitHeight: Theme.controlHeightMd
                 onClicked: {
                     root.confirmed(root.backupPath)
                     root.close()

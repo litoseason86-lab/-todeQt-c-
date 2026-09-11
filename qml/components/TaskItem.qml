@@ -412,7 +412,11 @@ Rectangle {
                 x: checkbox.leftPadding
                 y: (checkbox.height - height) / 2
                 radius: Theme.radiusSm
-                color: checkbox.checked ? Theme.accent : "transparent"
+                // 未勾选态用「同色零透明」而不是 "transparent"（黑基）：
+                // 勾选动画会从起点插值，黑基会让方框先闪一层灰再变成焦糖色。
+                color: checkbox.checked
+                       ? Theme.accent
+                       : Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0)
                 border.color: checkbox.hovered ? Theme.accent : Theme.border
                 border.width: checkbox.hovered ? 2 : 1.5
 
@@ -619,7 +623,7 @@ Rectangle {
             enabled: !root.visualTaskCompleted && root.startFocusAllowed
             // 与仪表盘 DashboardTimerPanel 主按钮同尺寸，避免两处“开始专注”视觉规格漂移。
             implicitWidth: 104
-            implicitHeight: 34
+            implicitHeight: Theme.controlHeightMd
             // down 是 Qt Controls 的视觉按下态；真实点击会同步 pressed，测试可稳定驱动 down。
             readonly property bool pressFeedbackActive: focusButton.enabled && (focusButton.down || focusButton.pressed)
 
@@ -811,7 +815,9 @@ Rectangle {
                 objectName: "taskDeleteButtonLabel"
                 text: deleteButton.text
                 textFormat: Text.PlainText
-                color: Theme.dangerSoft
+                // 常红会让每一行任务都挂一个红字；破坏性操作只在指针真正指向它时才强调。
+                color: deleteButton.hovered || deleteButton.pressFeedbackActive
+                       ? Theme.dangerSoft : Theme.inkSoft
                 font.pixelSize: Theme.fontMd
                 font.weight: Font.Medium
                 horizontalAlignment: Text.AlignHCenter

@@ -280,7 +280,7 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
-            implicitHeight: 44
+            implicitHeight: Theme.controlHeightLg
             placeholderText: "输入任务内容..."
             // 与 TaskManager::kMaxTitleLength 保持一致；超长粘贴在输入端截断。
             maximumLength: 100
@@ -352,7 +352,7 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
-            implicitHeight: 44
+            implicitHeight: Theme.controlHeightLg
             // 统一左右内边距：左边让文字不贴框（无色点时也不顶边），右边给下拉箭头留位。
             leftPadding: Theme.space12
             rightPadding: 32
@@ -572,7 +572,7 @@ Popup {
 
                 text: "取消"
                 implicitWidth: 76
-                implicitHeight: 44
+                implicitHeight: Theme.controlHeightLg
 
                 background: Rectangle {
                     objectName: "cancelButtonBackground"
@@ -625,7 +625,7 @@ Popup {
 
                 text: qsTr("保存并继续")
                 implicitWidth: 108
-                implicitHeight: 44
+                implicitHeight: Theme.controlHeightLg
 
                 background: Rectangle {
                     objectName: "saveAndContinueButtonBackground"
@@ -662,7 +662,7 @@ Popup {
 
                 text: "添加"
                 implicitWidth: 76
-                implicitHeight: 44
+                implicitHeight: Theme.controlHeightLg
 
                 background: Rectangle {
                     objectName: "submitButtonBackground"

@@ -44,7 +44,7 @@ Rectangle {
         id: actionButton
 
         implicitWidth: 34
-        implicitHeight: 34
+        implicitHeight: Theme.controlHeightMd
 
         background: Rectangle {
             radius: Theme.radiusMd

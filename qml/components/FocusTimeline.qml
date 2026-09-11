@@ -31,24 +31,47 @@ Rectangle {
         id: textButton
         property bool danger: false
 
+        // 常态不画描边：一天的记录堆起来就是十几个小方框，比记录本身还抢眼。
+        // 破坏性操作也只在指针真正指向它时才转红——平时它不该是页面上最红的东西。
+        readonly property bool engaged: textButton.hovered || textButton.down
+        readonly property color tint: textButton.danger && textButton.engaged
+                                      ? Theme.danger
+                                      : (textButton.engaged ? Theme.ink : Theme.inkSoft)
+
         implicitWidth: Math.max(52, contentLabel.implicitWidth + Theme.space16)
-        implicitHeight: 26
+        implicitHeight: Theme.controlHeightSm
+        focusPolicy: Qt.StrongFocus
+        hoverEnabled: true
 
         background: Rectangle {
             radius: Theme.radiusSm
-            color: textButton.hovered ? Theme.glassHover : Qt.rgba(0, 0, 0, 0)
-            border.color: textButton.danger ? Theme.dangerBorder : Theme.border
-            border.width: 1
+            // 起点用同色零透明：黑基 transparent 会让悬停动画插值出一道灰影。
+            color: textButton.down ? Theme.surfaceSunken
+                                   : (textButton.hovered ? Theme.glassHover : Theme.glassHoverIdle)
+            // 按钮要有可见边界，否则一行文字看不出是可点的。
+            border.width: textButton.visualFocus ? 2 : 1
+            border.color: textButton.visualFocus
+                          ? Theme.focusRing
+                          : (textButton.danger && textButton.engaged ? Theme.dangerBorder : Theme.border)
+
+            Behavior on color {
+                ColorAnimation { duration: Theme.reduceMotion ? 0 : 120 }
+            }
         }
 
         contentItem: Text {
             id: contentLabel
             text: textButton.text
             textFormat: Text.PlainText
-            color: textButton.danger ? Theme.danger : Theme.ink
+            color: textButton.tint
             font.pixelSize: Theme.fontXs
+            font.weight: textButton.engaged ? Font.Medium : Font.Normal
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
+
+            Behavior on color {
+                ColorAnimation { duration: Theme.reduceMotion ? 0 : 120 }
+            }
         }
     }
     radius: Theme.radiusLg
@@ -97,7 +120,7 @@ Rectangle {
                 objectName: "focusSessionAddButton"
                 visible: root.editable
                 text: qsTr("补录")
-                implicitHeight: 30
+                implicitHeight: Theme.controlHeightSm
                 onClicked: root.addRequested()
             }
         }
@@ -217,25 +240,9 @@ Rectangle {
                                     }
                                 }
 
-                                RowLayout {
-                                    spacing: Theme.space8
-                                    // 模型携带记录类型，宿主按类型分发到对应服务接口。
-                                    visible: root.editable
-
-                                    TimelineTextButton {
-                                        objectName: "focusSessionEdit-" + sessionRow.index
-                                        text: qsTr("修改")
-                                        onClicked: root.editRequested(sessionRow.modelData)
-                                    }
-
-                                    TimelineTextButton {
-                                        objectName: "focusSessionDelete-" + sessionRow.index
-                                        text: qsTr("删除")
-                                        danger: true
-                                        onClicked: root.deleteRequested(sessionRow.modelData)
-                                    }
-                                }
-
+                                // 三列固定次序：内容 → 时长 → 操作。
+                                // 操作列夹在内容和时长之间时没有列宽约束，会浮在行中间；
+                                // 放到最右并给定宽度，各行的按钮、数字才会各自对齐成一列。
                                 ColumnLayout {
                                     Layout.preferredWidth: 116
                                     Layout.maximumWidth: 140
@@ -266,6 +273,30 @@ Rectangle {
                                         font.weight: Font.Medium
                                         color: sessionRow.isRest ? Theme.inkSoft : Theme.success
                                         horizontalAlignment: Text.AlignRight
+                                    }
+                                }
+
+                                RowLayout {
+                                    // 固定列宽，让每一行的两个按钮上下对齐。
+                                    Layout.preferredWidth: 112
+                                    // 与时长之间留出一档间距，数字和按钮才不会读成一坨。
+                                    Layout.leftMargin: Theme.space8
+                                    Layout.alignment: Qt.AlignVCenter
+                                    spacing: Theme.space8
+                                    // 模型携带记录类型，宿主按类型分发到对应服务接口。
+                                    visible: root.editable
+
+                                    TimelineTextButton {
+                                        objectName: "focusSessionEdit-" + sessionRow.index
+                                        text: qsTr("修改")
+                                        onClicked: root.editRequested(sessionRow.modelData)
+                                    }
+
+                                    TimelineTextButton {
+                                        objectName: "focusSessionDelete-" + sessionRow.index
+                                        text: qsTr("删除")
+                                        danger: true
+                                        onClicked: root.deleteRequested(sessionRow.modelData)
                                     }
                                 }
                             }

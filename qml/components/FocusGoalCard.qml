@@ -134,7 +134,7 @@ GlassPanel {
                 visible: root.editable
                 text: qsTr("设置今日目标")
                 activeFocusOnTab: true
-                implicitHeight: 34
+                implicitHeight: Theme.controlHeightMd
                 onClicked: root.beginEditing()
 
                 background: GlassPanel {
@@ -162,7 +162,7 @@ GlassPanel {
                 Layout.topMargin: 2
                 text: root.quickFillLabel
                 activeFocusOnTab: true
-                implicitHeight: 26
+                implicitHeight: Theme.controlHeightSm
                 // 快捷落库：保留"每天主动确认"的仪式，消掉重复输入。
                 onClicked: root.goalSubmitted(root.quickFillValue)
 

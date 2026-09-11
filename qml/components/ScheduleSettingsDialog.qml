@@ -486,7 +486,7 @@ Popup {
 
                     text: "×"
                     implicitWidth: 28
-                    implicitHeight: 28
+                    implicitHeight: Theme.controlHeightSm
 
                     background: Rectangle {
                         color: removePeriodButton.hovered ? Theme.dangerSoft : "transparent"
@@ -516,7 +516,7 @@ Popup {
             Layout.leftMargin: Theme.space16
             text: "+ 添加一节"
             implicitWidth: 100
-            implicitHeight: 32
+            implicitHeight: Theme.controlHeightMd
 
             background: Rectangle {
                 color: addPeriodButton.hovered ? Theme.glassHover : Theme.glassCard
@@ -578,7 +578,7 @@ Popup {
 
                 text: "取消"
                 implicitWidth: 76
-                implicitHeight: 40
+                implicitHeight: Theme.controlHeightMd
 
                 background: Rectangle {
                     color: cancelButton.hovered ? Theme.glassHover : Theme.glassCard
@@ -605,7 +605,7 @@ Popup {
                 objectName: "scheduleSettingsSaveButton"
                 text: "保存"
                 implicitWidth: 76
-                implicitHeight: 40
+                implicitHeight: Theme.controlHeightMd
 
                 background: Rectangle {
                     color: saveButton.hovered ? Theme.accentFillStrong : Theme.accentFill
@@ -633,7 +633,7 @@ Popup {
         id: settingsField
 
         Layout.fillWidth: true
-        implicitHeight: 36
+        implicitHeight: Theme.controlHeightMd
         selectByMouse: true
 
         background: Rectangle {

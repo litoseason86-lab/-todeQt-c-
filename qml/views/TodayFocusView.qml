@@ -45,13 +45,16 @@ Item {
     readonly property bool canEditHistory: root.hasFocusHistoryService()
                                            && typeof root.focusHistoryServiceRef.addManualSession === "function"
     readonly property bool showingToday: root.dateKey(root.selectedDate) === root.dateKey(root.logicalToday)
+    // 「回到今天」只有在真的能回去时才有意义：已经在今天就不显示，
+    // 但用户把日期输入改成半截无效内容时仍要留一条退路。
+    readonly property bool canReturnToToday: !root.showingToday || !historyDate.valid
 
     // 页头右侧的次级按钮：描边 + 半透明底，与全局玻璃卡片同一套语义色。
     component HeaderButton: Button {
         id: headerButton
 
         implicitWidth: Math.max(76, headerButtonLabel.implicitWidth + Theme.space24)
-        implicitHeight: 36
+        implicitHeight: Theme.controlHeightMd
 
         background: Rectangle {
             color: headerButton.pressed || headerButton.hovered ? Theme.glassHover : Theme.glassCard
@@ -258,13 +261,6 @@ Item {
                : qsTr("%1小时%2分").arg(hours).arg(remainingMinutes)
     }
 
-    function dateLabel() {
-        return qsTr("%1年%2月%3日")
-                .arg(root.selectedDate.getFullYear())
-                .arg(root.selectedDate.getMonth() + 1)
-                .arg(root.selectedDate.getDate())
-    }
-
     ScrollView {
         id: pageScrollView
 
@@ -286,7 +282,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.space24
                 Layout.rightMargin: Theme.space24
-                spacing: Theme.space12
+                spacing: Theme.space8
 
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -305,8 +301,8 @@ Item {
                     Text {
                         objectName: "todayFocusDateLabel"
                         Layout.fillWidth: true
-                        text: qsTr("%1 · 专注 %2 次 · %3")
-                                .arg(root.dateLabel())
+                        // 日期由右上角的日期控件承担，这里只留统计，避免同一信息两处两种格式。
+                        text: qsTr("专注 %1 次 · %2")
                                 .arg(root.focusCount)
                                 .arg(root.formatDuration(root.totalSeconds))
                         textFormat: Text.PlainText
@@ -316,27 +312,28 @@ Item {
                 }
 
 
-                HeaderButton {
-                    objectName: "todayFocusAddButton"
-                    visible: root.canEditHistory
-                    text: qsTr("补录")
-                    onClicked: manualSessionDialog.openForAdd(root.dateKey(root.selectedDate),
-                                                              root.taskOptionsForDialog())
+                // 日期导航属于页头的次级操作，和「补录」同组排在右上角；
+                // 单独占一行会在标题和内容卡之间横插一条带子，把两者的关系切断。
+                PageActionButton {
+                    objectName: "todayFocusReturnTodayButton"
+                    Layout.alignment: Qt.AlignVCenter
+                    translucent: true
+                    // 已经在今天时不留一个点不动的禁用按钮，直接收起；
+                    // 用户把日期改成半截无效内容时也要能退回来，所以那种情况仍然出现。
+                    visible: root.canReturnToToday
+                    text: qsTr("回到今天")
+                    onClicked: {
+                        root.showToday()
+                        // 日期没变时不会发出变更信号，也需要覆盖用户尚未输完的无效内容。
+                        historyDate.text = root.dateKey(root.selectedDate)
+                    }
                 }
-            }
-
-            Flow {
-                objectName: "todayFocusDateNavigation"
-                Layout.fillWidth: true
-                Layout.leftMargin: Theme.space24
-                Layout.rightMargin: Theme.space24
-                spacing: Theme.space8
 
                 DateInput {
                     id: historyDate
                     objectName: "historyDateInput"
-                    // 日期是短值，不随页面宽度拉伸；窄窗口中“回到今天”自然换行。
-                    width: implicitWidth
+                    Layout.alignment: Qt.AlignVCenter
+                    translucent: true
                     text: root.dateKey(root.selectedDate)
                     onEdited: {
                         var date = LogicalDay.parseIsoDate(text)
@@ -344,15 +341,13 @@ Item {
                     }
                 }
 
-                PageActionButton {
-                    objectName: "todayFocusReturnTodayButton"
-                    text: root.showingToday && historyDate.valid ? qsTr("今天") : qsTr("回到今天")
-                    enabled: !root.showingToday || !historyDate.valid
-                    onClicked: {
-                        root.showToday()
-                        // 日期没变时不会发出变更信号，也需要覆盖用户尚未输完的无效内容。
-                        historyDate.text = root.dateKey(root.selectedDate)
-                    }
+                HeaderButton {
+                    objectName: "todayFocusAddButton"
+                    Layout.alignment: Qt.AlignVCenter
+                    visible: root.canEditHistory
+                    text: qsTr("补录")
+                    onClicked: manualSessionDialog.openForAdd(root.dateKey(root.selectedDate),
+                                                              root.taskOptionsForDialog())
                 }
             }
 
@@ -375,7 +370,7 @@ Item {
                 Layout.leftMargin: Theme.space24
                 Layout.rightMargin: Theme.space24
                 Layout.minimumHeight: 360
-                Layout.preferredHeight: Math.max(420, root.height - 200)
+                Layout.preferredHeight: Math.max(420, root.height - 156)
                 editable: root.canEditHistory
                 // 表头（日期/次数/补录）已由页头承担，卡片再显示一遍就是重复信息。
                 headerVisible: false

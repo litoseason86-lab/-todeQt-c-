@@ -258,7 +258,7 @@ Popup {
                 id: dateField
                 objectName: "manualSessionDateField"
                 Layout.preferredWidth: 128
-                implicitHeight: 38
+                implicitHeight: Theme.controlHeightMd
                 color: Theme.inkStrong
                 placeholderText: "YYYY-MM-DD"
                 placeholderTextColor: Theme.inkMuted
@@ -283,7 +283,7 @@ Popup {
                 id: hourField
                 objectName: "manualSessionHourField"
                 Layout.preferredWidth: 48
-                implicitHeight: 38
+                implicitHeight: Theme.controlHeightMd
                 horizontalAlignment: TextInput.AlignHCenter
                 inputMethodHints: Qt.ImhDigitsOnly
                 maximumLength: 2
@@ -309,7 +309,7 @@ Popup {
                 id: minuteField
                 objectName: "manualSessionMinuteField"
                 Layout.preferredWidth: 48
-                implicitHeight: 38
+                implicitHeight: Theme.controlHeightMd
                 horizontalAlignment: TextInput.AlignHCenter
                 inputMethodHints: Qt.ImhDigitsOnly
                 maximumLength: 2
@@ -384,7 +384,7 @@ Popup {
                 id: taskCombo
                 objectName: "manualSessionTaskCombo"
                 Layout.fillWidth: true
-                implicitHeight: 40
+                implicitHeight: Theme.controlHeightMd
                 model: root.taskOptions
                 textRole: "title"
                 currentIndex: 0
@@ -418,7 +418,7 @@ Popup {
                 objectName: "manualSessionCancelButton"
                 text: qsTr("取消")
                 implicitWidth: 84
-                implicitHeight: 36
+                implicitHeight: Theme.controlHeightMd
                 onClicked: root.close()
 
                 background: Rectangle {
@@ -434,7 +434,7 @@ Popup {
                 objectName: "manualSessionConfirmButton"
                 text: root.editing ? qsTr("保存") : qsTr("补录")
                 implicitWidth: 84
-                implicitHeight: 36
+                implicitHeight: Theme.controlHeightMd
                 onClicked: root.submit()
 
                 background: Rectangle {

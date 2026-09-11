@@ -203,7 +203,7 @@ Popup {
                 objectName: "longFreeFocusContinueButton"
                 text: "继续计时"
                 implicitWidth: 88
-                implicitHeight: 38
+                implicitHeight: Theme.controlHeightMd
                 activeFocusOnTab: true
                 onClicked: {
                     root.continueRequested()
@@ -232,7 +232,7 @@ Popup {
                 objectName: "longFreeFocusDiscardButton"
                 text: "不记录"
                 implicitWidth: 80
-                implicitHeight: 38
+                implicitHeight: Theme.controlHeightMd
                 activeFocusOnTab: true
                 onClicked: {
                     root.discardRequested()
@@ -261,7 +261,7 @@ Popup {
                 objectName: "longFreeFocusRecordButton"
                 text: "记录计时"
                 implicitWidth: 96
-                implicitHeight: 38
+                implicitHeight: Theme.controlHeightMd
                 activeFocusOnTab: true
                 focus: true
                 onClicked: root.record()

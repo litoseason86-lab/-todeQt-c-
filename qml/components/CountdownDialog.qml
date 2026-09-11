@@ -240,7 +240,7 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
-            implicitHeight: 44
+            implicitHeight: Theme.controlHeightLg
             placeholderText: "例如：研究生初试"
             selectByMouse: true
 
@@ -273,7 +273,7 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
-            implicitHeight: 44
+            implicitHeight: Theme.controlHeightLg
             placeholderText: "YYYY-MM-DD"
             inputMask: "9999-99-99"
             selectByMouse: true
@@ -317,7 +317,7 @@ Popup {
                 id: cancelButton
                 text: "取消"
                 implicitWidth: 76
-                implicitHeight: 44
+                implicitHeight: Theme.controlHeightLg
 
                 background: Rectangle {
                     color: cancelButton.pressed ? Theme.glassHover : (cancelButton.hovered ? Theme.glassHover : Theme.glassCard)
@@ -344,7 +344,7 @@ Popup {
                 objectName: "countdownSubmitButton"
                 text: root.isEditMode ? "保存" : "添加"
                 implicitWidth: 76
-                implicitHeight: 44
+                implicitHeight: Theme.controlHeightLg
 
                 background: Rectangle {
                     color: submitButton.pressed ? Theme.accentFillStrong : (submitButton.hovered ? Theme.accentFillStrong : Theme.accentFill)

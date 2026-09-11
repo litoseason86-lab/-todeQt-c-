@@ -625,7 +625,7 @@ Popup {
                     text: "删除"
                     visible: root.editing
                     implicitWidth: 76
-                    implicitHeight: 44
+                    implicitHeight: Theme.controlHeightLg
 
                     background: Rectangle {
                         color: deleteButton.pressed || deleteButton.hovered
@@ -664,7 +664,7 @@ Popup {
                     objectName: "scheduleCancelButton"
                     text: "取消"
                     implicitWidth: 76
-                    implicitHeight: 44
+                    implicitHeight: Theme.controlHeightLg
 
                     background: Rectangle {
                         color: cancelButton.pressed || cancelButton.hovered
@@ -698,7 +698,7 @@ Popup {
                     objectName: "scheduleSubmitButton"
                     text: root.editing ? "保存" : "添加"
                     implicitWidth: 76
-                    implicitHeight: 44
+                    implicitHeight: Theme.controlHeightLg
 
                     background: Rectangle {
                         color: submitButton.pressed || submitButton.hovered
@@ -749,7 +749,7 @@ Popup {
         Layout.fillWidth: true
         Layout.leftMargin: Theme.space16
         Layout.rightMargin: Theme.space16
-        implicitHeight: 40
+        implicitHeight: Theme.controlHeightMd
         selectByMouse: true
 
         background: Rectangle {
@@ -768,7 +768,7 @@ Popup {
     component StyledCombo: ComboBox {
         id: styledCombo
 
-        implicitHeight: 40
+        implicitHeight: Theme.controlHeightMd
         leftPadding: Theme.space12
         rightPadding: 32
 

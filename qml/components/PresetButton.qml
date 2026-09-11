@@ -10,7 +10,7 @@ Button {
 
     checkable: true
     implicitWidth: 104
-    implicitHeight: 42
+    implicitHeight: Theme.controlHeightLg
 
     background: Rectangle {
         objectName: presetButton.backgroundObjectName

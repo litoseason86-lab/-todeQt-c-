@@ -287,7 +287,7 @@ Item {
 
                 text: root.activeAny ? (root.running ? "暂停" : "继续") : "开始专注"
                 implicitWidth: 104
-                implicitHeight: 34
+                implicitHeight: Theme.controlHeightMd
 
                 onClicked: root.primaryAction()
 
@@ -324,7 +324,7 @@ Item {
                 visible: root.activeAny
                 text: "结束"
                 implicitWidth: 60
-                implicitHeight: 34
+                implicitHeight: Theme.controlHeightMd
 
                 onClicked: {
                     if (!root.timerRef) {

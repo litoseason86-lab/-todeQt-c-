@@ -92,7 +92,7 @@ Popup {
             Layout.minimumWidth: 96
             Layout.minimumHeight: 44
             implicitWidth: 96
-            implicitHeight: 44
+            implicitHeight: Theme.controlHeightLg
             text: qsTr("知道了")
             activeFocusOnTab: true
             Accessible.name: text

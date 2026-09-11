@@ -193,7 +193,7 @@ Popup {
         checkable: false
         checked: root.dateOffsetSelection === chip.offset
         implicitWidth: 72
-        implicitHeight: 34
+        implicitHeight: Theme.controlHeightMd
 
         onClicked: {
             root.dateOffsetSelection = chip.offset
@@ -320,7 +320,7 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
-            implicitHeight: 44
+            implicitHeight: Theme.controlHeightLg
             placeholderText: "任务内容"
             // 与 TaskManager::kMaxTitleLength 保持一致；超长粘贴在输入端截断。
             maximumLength: 100
@@ -352,7 +352,7 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
-            implicitHeight: 40
+            implicitHeight: Theme.controlHeightMd
             model: root.categoryOptions
             textRole: "name"
         }
@@ -503,7 +503,7 @@ Popup {
 
                 text: "取消"
                 implicitWidth: 80
-                implicitHeight: 36
+                implicitHeight: Theme.controlHeightMd
 
                 onClicked: root.close()
 
@@ -530,7 +530,7 @@ Popup {
                 objectName: "editConfirmButton"
                 text: "保存"
                 implicitWidth: 80
-                implicitHeight: 36
+                implicitHeight: Theme.controlHeightMd
 
                 onClicked: root.submit()
 

@@ -306,7 +306,7 @@ Popup {
 
                     text: "关闭"
                     implicitWidth: 72
-                    implicitHeight: 36
+                    implicitHeight: Theme.controlHeightMd
                     onClicked: root.close()
 
                     background: Rectangle {
@@ -354,7 +354,7 @@ Popup {
                 objectName: "routineTitleField"
 
                 Layout.fillWidth: true
-                implicitHeight: 42
+                implicitHeight: Theme.controlHeightLg
                 placeholderText: "输入每天要做的事..."
                 color: Theme.ink
                 placeholderTextColor: Theme.inkMuted
@@ -388,7 +388,7 @@ Popup {
                 objectName: "routineCategoryCombo"
 
                 Layout.preferredWidth: 180
-                implicitHeight: 42
+                implicitHeight: Theme.controlHeightLg
                 // 统一左右内边距：左边让文字不贴框（无色点时也不顶边），右边给下拉箭头留位。
                 leftPadding: Theme.space12
                 rightPadding: 30
@@ -478,7 +478,7 @@ Popup {
 
                 text: root.editingRoutine ? qsTr("保存") : qsTr("添加")
                 implicitWidth: 76
-                implicitHeight: 42
+                implicitHeight: Theme.controlHeightLg
                 Accessible.name: root.editingRoutine ? qsTr("保存例行任务") : qsTr("添加例行任务")
                 onClicked: root.submit()
 
@@ -529,7 +529,7 @@ Popup {
                 visible: root.editingRoutine
                 text: qsTr("取消编辑")
                 implicitWidth: 76
-                implicitHeight: 34
+                implicitHeight: Theme.controlHeightMd
                 Accessible.name: qsTr("取消编辑例行任务")
                 onClicked: root.cancelEditing()
 
@@ -688,7 +688,7 @@ Popup {
 
                             text: qsTr("编辑")
                             implicitWidth: 64
-                            implicitHeight: 34
+                            implicitHeight: Theme.controlHeightMd
                             Accessible.name: qsTr("编辑例行任务")
                             onClicked: root.beginEditing(routineRow.modelData)
 
@@ -714,7 +714,7 @@ Popup {
 
                             text: "删除"
                             implicitWidth: 64
-                            implicitHeight: 34
+                            implicitHeight: Theme.controlHeightMd
                             onClicked: root.deleteRoutine(Number(routineRow.modelData.id))
 
                             background: Rectangle {

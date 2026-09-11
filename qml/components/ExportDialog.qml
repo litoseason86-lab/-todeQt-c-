@@ -348,7 +348,7 @@ Popup {
                 text: "取消"
                 enabled: !root.busy
                 Layout.fillWidth: true
-                implicitHeight: 42
+                implicitHeight: Theme.controlHeightLg
                 onClicked: root.close()
             }
 
@@ -356,7 +356,7 @@ Popup {
                 objectName: "exportButton"
                 text: "导出"
                 Layout.fillWidth: true
-                implicitHeight: 42
+                implicitHeight: Theme.controlHeightLg
                 onClicked: root.performExport()
             }
         }

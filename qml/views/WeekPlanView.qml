@@ -344,7 +344,7 @@ Item {
                 id: prevWeekButton
                 text: "上一周"
                 implicitWidth: 84
-                implicitHeight: 40
+                implicitHeight: Theme.controlHeightMd
 
                 // 次级暖色描边样式：低调、与卡片协调，避免满屏强调色块。
                 background: Rectangle {
@@ -380,7 +380,7 @@ Item {
                 objectName: "weekThisWeekButton"
                 text: "本周"
                 implicitWidth: 72
-                implicitHeight: 40
+                implicitHeight: Theme.controlHeightMd
 
                 background: Rectangle {
                     color: thisWeekButton.pressed ? Theme.glassHover : (thisWeekButton.hovered ? Theme.glassHover : Theme.glassCard)
@@ -412,7 +412,7 @@ Item {
                 id: nextWeekButton
                 text: "下一周"
                 implicitWidth: 84
-                implicitHeight: 40
+                implicitHeight: Theme.controlHeightMd
 
                 background: Rectangle {
                     color: nextWeekButton.pressed ? Theme.glassHover : (nextWeekButton.hovered ? Theme.glassHover : Theme.glassCard)
@@ -580,7 +580,7 @@ Item {
                                     visible: dayRow.canAddTask
                                     enabled: dayRow.canAddTask
                                     implicitWidth: 72
-                                    implicitHeight: 32
+                                    implicitHeight: Theme.controlHeightMd
 
                                     // 空日子用次级描边的添加，保持安静；强调色只留给有活动的日子。
                                     background: Rectangle {
@@ -693,7 +693,7 @@ Item {
                                     visible: dayRow.canAddTask
                                     enabled: dayRow.canAddTask
                                     implicitWidth: 72
-                                    implicitHeight: 36
+                                    implicitHeight: Theme.controlHeightMd
 
                                     // 主强调填充，与今日任务页的「添加」按钮保持一致。
                                     background: Rectangle {

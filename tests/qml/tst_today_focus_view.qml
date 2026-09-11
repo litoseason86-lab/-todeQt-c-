@@ -204,7 +204,9 @@ TestCase {
 
         var label = findChild(view, "todayFocusDateLabel");
         verify(label !== null);
-        verify(label.text.indexOf("2026年9月2日") >= 0);
+        // 日期由右上角的日期控件表达，副标题只承担统计，不再重复一遍同一个日期。
+        compare(findChild(view, "historyDateInput").text, "2026-09-02");
+        verify(label.text.indexOf("2026年9月2日") < 0);
         verify(label.text.indexOf("2 次") >= 0);
     }
 
@@ -251,7 +253,19 @@ TestCase {
 
         // 看的不是今天时标题要改口，否则“今日专注”会挂在 8 月的记录上面。
         compare(findChild(view, "todayFocusPageTitle").text, "专注记录");
-        verify(findChild(view, "todayFocusDateLabel").text.indexOf("2026年8月20日") >= 0);
+        // 日期已由右上角的日期控件表达，副标题只剩统计。
+        compare(findChild(view, "historyDateInput").text, "2026-08-20");
+        verify(findChild(view, "todayFocusDateLabel").text.indexOf("专注 1 次") >= 0);
+    }
+
+    function test_returnTodayAffordanceOnlyAppearsWhenNeeded() {
+        // 不断言 visible：离屏测试里父级链会让它恒为 false，等于没断言。
+        // 直接检查驱动它的条件——已经在今天就不该再留一个点不动的按钮。
+        view.showToday()
+        compare(view.canReturnToToday, false)
+        view.showDate(new Date(2026, 7, 20))
+        compare(view.canReturnToToday, true)
+        view.showToday()
     }
 
     function test_returnTodayButtonGoesBackToLogicalToday() {

@@ -85,7 +85,7 @@ Control {
 
                 objectName: modelData.objectName
                 Layout.fillWidth: true
-                implicitHeight: 44
+                implicitHeight: Theme.controlHeightLg
                 text: modelData.title
                 // currentIndex 是唯一选中源；当前项再次点击不能把自身切成未选中。
                 checkable: false

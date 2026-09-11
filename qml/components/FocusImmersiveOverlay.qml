@@ -325,7 +325,7 @@ Item {
                 objectName: "immersiveExitButton"
 
                 implicitWidth: 40
-                implicitHeight: 32
+                implicitHeight: Theme.controlHeightMd
 
                 onClicked: root.requestExit()
 
@@ -367,7 +367,7 @@ Item {
 
                 // 与页面内「开始专注」同尺寸；暂停/继续/开始休息也走同一玻璃主按钮。
                 implicitWidth: 104
-                implicitHeight: 34
+                implicitHeight: Theme.controlHeightMd
                 enabled: root.primaryButtonEnabled
 
                 onClicked: root.triggerPrimary()
@@ -408,7 +408,7 @@ Item {
                 objectName: "immersiveSecondaryButton"
 
                 implicitWidth: 104
-                implicitHeight: 34
+                implicitHeight: Theme.controlHeightMd
 
                 onClicked: root.triggerSecondary()
 

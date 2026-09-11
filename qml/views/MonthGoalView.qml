@@ -258,7 +258,7 @@ Item {
                     objectName: "monthPreviousButton"
                     text: "上月"
                     implicitWidth: 72
-                    implicitHeight: 40
+                    implicitHeight: Theme.controlHeightMd
                     background: Rectangle {
                         objectName: "monthPreviousButtonBackground"
                         color: previousMonthButton.pressed ? Theme.glassHover : (previousMonthButton.hovered ? Theme.glassHover : Theme.glassCard)
@@ -303,7 +303,7 @@ Item {
                     objectName: "monthCurrentButton"
                     text: "本月"
                     implicitWidth: 72
-                    implicitHeight: 40
+                    implicitHeight: Theme.controlHeightMd
                     background: Rectangle {
                         objectName: "monthCurrentButtonBackground"
                         color: currentMonthButton.pressed ? Theme.glassHover : (currentMonthButton.hovered ? Theme.glassHover : Theme.glassCard)
@@ -345,7 +345,7 @@ Item {
                     objectName: "monthNextButton"
                     text: "下月"
                     implicitWidth: 72
-                    implicitHeight: 40
+                    implicitHeight: Theme.controlHeightMd
                     background: Rectangle {
                         objectName: "monthNextButtonBackground"
                         color: nextMonthButton.pressed ? Theme.glassHover : (nextMonthButton.hovered ? Theme.glassHover : Theme.glassCard)
@@ -403,7 +403,7 @@ Item {
                           ? "确认删除 " + root.invalidSessionCount + " 条？"
                           : "清理无效记录"
                     implicitWidth: cleanupInvalidButton.confirming ? 168 : 132
-                    implicitHeight: 40
+                    implicitHeight: Theme.controlHeightMd
                     Accessible.description: cleanupInvalidButton.confirming
                         ? "再次点击将永久删除这些记录，无法撤销"
                         : "清理不足 3 分钟的已结束专注记录"

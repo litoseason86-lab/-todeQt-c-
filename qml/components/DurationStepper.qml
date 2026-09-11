@@ -25,7 +25,7 @@ RowLayout {
         objectName: stepper.namePrefix + "Minus"
         enabled: stepper.value > stepper.from
         implicitWidth: 44
-        implicitHeight: 44
+        implicitHeight: Theme.controlHeightLg
         activeFocusOnTab: true
         Accessible.name: "减少" + stepper.accessibleName
         onClicked: stepper.adjusted(stepper.value - 1)
@@ -73,7 +73,7 @@ RowLayout {
         objectName: stepper.namePrefix + "Plus"
         enabled: stepper.value < stepper.to
         implicitWidth: 44
-        implicitHeight: 44
+        implicitHeight: Theme.controlHeightLg
         activeFocusOnTab: true
         Accessible.name: "增加" + stepper.accessibleName
         onClicked: stepper.adjusted(stepper.value + 1)

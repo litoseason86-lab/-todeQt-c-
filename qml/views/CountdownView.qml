@@ -109,7 +109,7 @@ Item {
                 objectName: "countdownAddButton"
                 text: "添加目标"
                 implicitWidth: 108
-                implicitHeight: 44
+                implicitHeight: Theme.controlHeightLg
 
                 background: Rectangle {
                     objectName: "countdownAddButtonBackground"
@@ -183,7 +183,7 @@ Item {
                     text: qsTr("重试")
                     activeFocusOnTab: true
                     implicitWidth: 76
-                    implicitHeight: 44
+                    implicitHeight: Theme.controlHeightLg
                     Accessible.name: text
 
                     background: Rectangle {
@@ -462,7 +462,7 @@ Item {
                         text: qsTr("重试")
                         activeFocusOnTab: true
                         implicitWidth: 96
-                        implicitHeight: 44
+                        implicitHeight: Theme.controlHeightLg
                         Accessible.name: text
 
                         background: Rectangle {

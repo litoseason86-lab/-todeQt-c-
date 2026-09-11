@@ -252,7 +252,7 @@ Popup {
 
                         text: "添加科目"
                         implicitWidth: 92
-                        implicitHeight: 36
+                        implicitHeight: Theme.controlHeightMd
                         onClicked: root.beginAdd()
 
                         background: Rectangle {
@@ -356,7 +356,7 @@ Popup {
 
                                 text: "编辑"
                                 implicitWidth: 64
-                                implicitHeight: 34
+                                implicitHeight: Theme.controlHeightMd
                                 onClicked: root.beginEdit(categoryRow.modelData)
 
                                 background: Rectangle {
@@ -382,7 +382,7 @@ Popup {
                                 visible: !categoryRow.modelData.isPreset
                                 text: "删除"
                                 implicitWidth: 64
-                                implicitHeight: 34
+                                implicitHeight: Theme.controlHeightMd
                                 onClicked: root.deleteCategory(categoryRow.modelData.id)
 
                                 background: Rectangle {
@@ -422,7 +422,7 @@ Popup {
 
                     text: "关闭"
                     implicitWidth: 80
-                    implicitHeight: 40
+                    implicitHeight: Theme.controlHeightMd
                     onClicked: root.close()
 
                     background: Rectangle {
@@ -471,7 +471,7 @@ Popup {
                     objectName: "categoryNameInput"
 
                     Layout.fillWidth: true
-                    implicitHeight: 42
+                    implicitHeight: Theme.controlHeightLg
                     placeholderText: "科目名称"
                     selectByMouse: true
 
@@ -509,7 +509,7 @@ Popup {
 
                         Layout.fillWidth: true
                         text: "取消"
-                        implicitHeight: 42
+                        implicitHeight: Theme.controlHeightLg
                         onClicked: root.resetAddForm()
 
                         background: Rectangle {
@@ -534,7 +534,7 @@ Popup {
                         Layout.fillWidth: true
                         text: root.editingCategory ? "更新" : "保存"
                         enabled: categoryNameInput.text.trim().length > 0
-                        implicitHeight: 42
+                        implicitHeight: Theme.controlHeightLg
                         onClicked: root.saveCategory()
 
                         background: Rectangle {

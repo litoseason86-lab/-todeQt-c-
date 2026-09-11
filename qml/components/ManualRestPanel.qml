@@ -81,7 +81,7 @@ Item {
                 objectName: "manualRestPauseResumeButton"
                 text: root.isRunning ? qsTr("暂停") : qsTr("继续")
                 implicitWidth: 104
-                implicitHeight: 40
+                implicitHeight: Theme.controlHeightMd
                 activeFocusOnTab: true
                 onClicked: root.pauseResumeRequested()
 
@@ -105,7 +105,7 @@ Item {
                 objectName: "manualRestEndButton"
                 text: qsTr("结束休息")
                 implicitWidth: 104
-                implicitHeight: 40
+                implicitHeight: Theme.controlHeightMd
                 activeFocusOnTab: true
                 onClicked: root.endRequested()
 

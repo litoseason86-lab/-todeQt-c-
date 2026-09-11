@@ -289,7 +289,7 @@ Popup {
                         id: closeButton
 
                         objectName: "settingsCloseButton"
-                        implicitHeight: 44
+                        implicitHeight: Theme.controlHeightLg
                         activeFocusOnTab: true
                         Accessible.name: "关闭设置"
                         onClicked: root.requestClose()

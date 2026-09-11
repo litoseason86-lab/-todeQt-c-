@@ -13,7 +13,7 @@ Switch {
     signal changeRequested(bool enabled)
 
     implicitWidth: 48
-    implicitHeight: 44
+    implicitHeight: Theme.controlHeightLg
     activeFocusOnTab: true
     checked: persistedChecked
     Accessible.name: text

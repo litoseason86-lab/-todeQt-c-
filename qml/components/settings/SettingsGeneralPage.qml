@@ -74,7 +74,7 @@ FocusScope {
 
                     objectName: "settingsNicknameField"
                     implicitWidth: root.compact ? 150 : 190
-                    implicitHeight: 44
+                    implicitHeight: Theme.controlHeightLg
                     text: root.nicknameDraft
                     placeholderText: "例如：小番茄"
                     maximumLength: 24

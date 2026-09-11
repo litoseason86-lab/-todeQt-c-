@@ -742,8 +742,18 @@ if(Python3_FOUND)
                      ${CMAKE_CURRENT_SOURCE_DIR}/qml)
     set_tests_properties(QmlTextFormatGate PROPERTIES TIMEOUT 60)
     message(STATUS "QML 文本格式门禁已启用")
+
+    # 悬停过渡门禁：带 `Behavior on color` 的状态色不得回落到黑基透明。
+    # Qt 的 "transparent" / Qt.rgba(0,0,0,0) 是透明黑，ColorAnimation 会从它插值出灰色，
+    # 界面上就是「鼠标刚放上去，按钮下面闪过一道阴影」。同样是纯文本判据，跟着上面这条走。
+    add_test(NAME QmlHoverTransitionGate
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml_hover_transition_gate.py
+                     ${CMAKE_CURRENT_SOURCE_DIR}/qml)
+    set_tests_properties(QmlHoverTransitionGate PROPERTIES TIMEOUT 60)
+    message(STATUS "QML 悬停过渡门禁已启用")
 else()
-    message(WARNING "未找到 Python3，跳过 QML 文本格式门禁")
+    message(WARNING "未找到 Python3，跳过 QML 文本格式与悬停过渡门禁")
 endif()
 
 # QML 测试按文件拆成独立 ctest 条目。聚合成一条时 qmltestrunner 在单进程里串行跑完

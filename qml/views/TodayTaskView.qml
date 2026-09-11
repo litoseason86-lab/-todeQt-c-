@@ -553,7 +553,8 @@ Item {
                     text: root.manualRestActive
                           ? qsTr("休息 %1").arg(root.formatClockTime(root.focusTimerRef.elapsedSeconds))
                           : qsTr("开始休息")
-                    glyph: "pause"
+                    // 暂停符号读作「暂停」，与「开始休息」不符；月牙是这套图标里表示休息的那个。
+                    glyph: "moon"
                     // 休息中文字每秒变化，比例数字会让按钮宽度抖动，把左侧按钮一起挤动；
                     // 计时期间给一个足够放下 00:00:00 的下限宽度。
                     implicitWidth: Math.max(root.manualRestActive ? 168 : 0,
@@ -646,7 +647,7 @@ Item {
                     id: rolloverMoveButton
                     objectName: "rolloverMoveButton"
                     text: "全部移到今天"
-                    implicitHeight: 34
+                    implicitHeight: Theme.controlHeightMd
 
                     onClicked: root.moveOverdueToToday()
 
@@ -670,7 +671,7 @@ Item {
                     id: rolloverIgnoreButton
                     objectName: "rolloverIgnoreButton"
                     text: "忽略"
-                    implicitHeight: 34
+                    implicitHeight: Theme.controlHeightMd
 
                     onClicked: root.ignoreOverdueForToday()
 
