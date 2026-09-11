@@ -511,13 +511,24 @@ int KnowledgeGapService::convertToTask(int gapId, const QVariant& dateValue)
     }
     QSqlDatabase db = DatabaseManager::instance()->database();
 
+    // 读现状、建任务、置状态、记关联必须同进同退。「是否已有没做完的关联任务」这个判断
+    // 也放在事务里：判断和写入之间不能留出空隙，否则判断就不作数。
+    if (!db.transaction()) {
+        reportFailure(QStringLiteral("开始转任务失败：%1").arg(db.lastError().text()));
+        return -1;
+    }
+
     QSqlQuery gapQuery(db);
     gapQuery.prepare(QStringLiteral(
-        "SELECT g.title, g.detail, g.category_id, g.status, c.name "
-        "FROM knowledge_gaps g LEFT JOIN categories c ON c.id = g.category_id "
+        "SELECT g.title, g.detail, g.category_id, g.status, c.name, t.id, t.completed "
+        "FROM knowledge_gaps g "
+        "LEFT JOIN categories c ON c.id = g.category_id "
+        "LEFT JOIN tasks t ON t.id = g.linked_task_id "
         "WHERE g.id = :id"));
     gapQuery.bindValue(QStringLiteral(":id"), gapId);
     if (!gapQuery.exec() || !gapQuery.next()) {
+        gapQuery.finish();
+        db.rollback();
         reportFailure(QStringLiteral("这条记录已不存在"));
         return -1;
     }
@@ -526,16 +537,22 @@ int KnowledgeGapService::convertToTask(int gapId, const QVariant& dateValue)
     const QVariant gapCategoryId = gapQuery.value(2);
     const int gapStatus = gapQuery.value(3).toInt();
     const QString gapCategoryName = gapQuery.value(4).toString();
+    // 按 JOIN 到的任务行判断，不按 linked_task_id 判断：编号可能指向已经删掉的任务
+    // （外键未生效的旧库），那种情况等同于没有关联，应当允许重新转。
+    const bool linkedTaskOpen = !gapQuery.value(5).isNull() && gapQuery.value(6).toInt() == 0;
     gapQuery.finish();
 
     if (gapStatus == StatusResolved) {
+        db.rollback();
         reportFailure(QStringLiteral("已解决的条目不需要再安排任务"));
         return -1;
     }
-
-    // 建任务、置状态、记关联三件事必须同进同退。
-    if (!db.transaction()) {
-        reportFailure(QStringLiteral("开始转任务失败：%1").arg(db.lastError().text()));
+    // 已有一条没做完的关联任务：它已经在任务列表（或逾期任务区）里等着了。
+    // 再建一条只会得到两条同名任务，关联还会被改写到新任务上，旧任务从此没人认领。
+    // 关联任务做完了却还没想明白的，才允许再转一次。
+    if (linkedTaskOpen) {
+        db.rollback();
+        reportFailure(QStringLiteral("这条已经有一条没做完的任务"));
         return -1;
     }
 
@@ -573,12 +590,22 @@ int KnowledgeGapService::convertToTask(int gapId, const QVariant& dateValue)
     }
     const int newTaskId = insertTask.lastInsertId().toInt();
 
+    // 到期日取「原到期日」和「任务日期」里较早的那个，三种情况各有理由：
+    // - 原来已逾期：保持原日期。逾期不顺延，拖了多久是判断该不该停下来处理的唯一依据；
+    //   今日页的「全部加到今天」正是从逾期条目发起的，覆盖掉就等于每点一次抹掉一批逾期记录。
+    // - 原来未排期：补成任务日期。状态由到期日派生，「已安排」却没有到期日会让两者分家。
+    // - 原来排在以后：提前到任务日期。提前处理不抹掉任何拖延记录，
+    //   继续显示那个以后的日期反而和「今天就在做」矛盾。
+    // 到期日存的是 ISO 日期字符串，按字典序比较就是按日期比较。
     QSqlQuery updateGapQuery(db);
     updateGapQuery.prepare(QStringLiteral(
-        "UPDATE knowledge_gaps SET status = :status, due_date = :dueDate, "
+        "UPDATE knowledge_gaps SET status = :status, "
+        "due_date = CASE WHEN due_date IS NULL OR due_date > :taskDate THEN :taskDate2 ELSE due_date END, "
         "linked_task_id = :taskId, updated_at = :updatedAt WHERE id = :id"));
     updateGapQuery.bindValue(QStringLiteral(":status"), static_cast<int>(StatusScheduled));
-    updateGapQuery.bindValue(QStringLiteral(":dueDate"), date.toString(Qt::ISODate));
+    // 同名占位符只绑第一处，两处任务日期各取一个名字。
+    updateGapQuery.bindValue(QStringLiteral(":taskDate"), date.toString(Qt::ISODate));
+    updateGapQuery.bindValue(QStringLiteral(":taskDate2"), date.toString(Qt::ISODate));
     updateGapQuery.bindValue(QStringLiteral(":taskId"), newTaskId);
     updateGapQuery.bindValue(QStringLiteral(":updatedAt"), nowIso());
     updateGapQuery.bindValue(QStringLiteral(":id"), gapId);
@@ -640,6 +667,10 @@ QVariantMap KnowledgeGapService::rowToVariantMap(const QSqlQuery& query, const Q
     map.insert(QStringLiteral("linkedTaskId"), hasLinkedTask ? query.value(12).toInt() : 0);
     // 关联任务做完了不代表这条已经想明白，所以只把事实报给界面，由用户决定是否标记已解决。
     map.insert(QStringLiteral("linkedTaskCompleted"), hasLinkedTask && query.value(13).toInt() == 1);
+    // 关联任务还在且没做完：这条已经以任务的形式进了任务列表。按 JOIN 到的任务行判断，
+    // 与 convertToTask 的拒绝条件同一个口径；界面据此禁用「今天做」。
+    map.insert(QStringLiteral("linkedTaskOpen"),
+               !query.value(13).isNull() && query.value(13).toInt() == 0);
     map.insert(QStringLiteral("linkedTaskTitle"), query.value(14).toString());
     map.insert(QStringLiteral("createdAt"), query.value(15).toString());
     map.insert(QStringLiteral("updatedAt"), query.value(16).toString());
@@ -747,14 +778,25 @@ QVariantMap KnowledgeGapService::getReminderSummary() const
 
     const QDate today = logicalToday();
     QSqlQuery query(DatabaseManager::instance()->database());
+    // awaiting = 0 表示已有没做完的关联任务。这类条目不计入「今天到期 / 已逾期 / 最久逾期」：
+    // 它已经作为任务出现在今日页（或逾期任务区），提示条再催一遍只会诱导用户点
+    // 「全部加到今天」建出重复任务。关联任务做完而条目仍未解决时重新计入——做完不等于想明白。
+    // 未排期与总数照旧统计全部未解决条目：转成任务不等于解决。
     query.prepare(QStringLiteral(
         "SELECT "
-        " SUM(CASE WHEN due_date = :today1 THEN 1 ELSE 0 END), "
-        " SUM(CASE WHEN due_date IS NOT NULL AND due_date < :today2 THEN 1 ELSE 0 END), "
+        " SUM(CASE WHEN awaiting = 1 AND due_date = :today1 THEN 1 ELSE 0 END), "
+        " SUM(CASE WHEN awaiting = 1 AND due_date IS NOT NULL AND due_date < :today2 THEN 1 ELSE 0 END), "
         " SUM(CASE WHEN due_date IS NULL THEN 1 ELSE 0 END), "
         " COUNT(*), "
-        " MIN(CASE WHEN due_date IS NOT NULL AND due_date < :today3 THEN due_date ELSE NULL END) "
-        "FROM knowledge_gaps WHERE status != :resolvedStatus"));
+        " MIN(CASE WHEN awaiting = 1 AND due_date IS NOT NULL AND due_date < :today3 "
+        "          THEN due_date ELSE NULL END) "
+        "FROM ("
+        "  SELECT g.due_date AS due_date, "
+        "         CASE WHEN t.id IS NOT NULL AND t.completed = 0 THEN 0 ELSE 1 END AS awaiting "
+        "  FROM knowledge_gaps g "
+        "  LEFT JOIN tasks t ON t.id = g.linked_task_id "
+        "  WHERE g.status != :resolvedStatus"
+        ")"));
     // 同名占位符在 SQLite 驱动下只会绑上第一处，三处「今天」必须各取一个名字。
     const QString todayIso = today.toString(Qt::ISODate);
     query.bindValue(QStringLiteral(":today1"), todayIso);

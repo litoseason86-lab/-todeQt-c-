@@ -273,6 +273,13 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
         }
     }
 
+    // 与启动检查共用同一份外键契约。只看列和 CHECK 会放过 ON DELETE CASCADE 的表：
+    // 恢复成功、启动正常，直到删掉一条任务时，关联它的知识缺口被无声地连带删除。
+    if (requireKnowledgeGapTable && !DatabaseManager::knowledgeGapForeignKeysAreValid(database)) {
+        *reason = QStringLiteral("备份知识缺口外键不完整");
+        return false;
+    }
+
     return true;
 }
 

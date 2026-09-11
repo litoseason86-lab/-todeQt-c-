@@ -68,8 +68,11 @@ TestCase {
         id: categoryManager
 
         signal categoriesChanged()
+        // 可改写：知识缺口弹窗的用例要模拟「弹窗开着时科目被增删」。
+        // 不能叫 categories：属性自带 categoriesChanged 信号，和上面声明的信号重名。
+        property var categoryRows: [{ id: 1, name: "专业课", color: "#d4a574" }]
         function getAllCategories() {
-            return [{ id: 1, name: "专业课", color: "#d4a574" }]
+            return categoryManager.categoryRows
         }
     }
 
@@ -120,9 +123,14 @@ TestCase {
         signal operationFailed(string message)
 
         readonly property int maxTitleLength: 100
+        // 记下最近一次保存收到的优先级，用来核对「低」有没有被悄悄改成「中」。
+        property int lastUpdatedPriority: -1
 
         function addGap(title, categoryId, detail, priority, dueDate, sourceTaskId) { return 1 }
-        function updateGap(id, title, categoryId, detail, priority, dueDate) { return true }
+        function updateGap(id, title, categoryId, detail, priority, dueDate) {
+            knowledgeGapService.lastUpdatedPriority = priority
+            return true
+        }
         function resolveGap(id, resolution) { return true }
     }
 
@@ -148,6 +156,8 @@ TestCase {
         knowledgeGapDialog.close()
         knowledgeGapCapturePopup.close()
         wait(60)
+        categoryManager.categoryRows = [{ id: 1, name: "专业课", color: "#d4a574" }]
+        knowledgeGapService.lastUpdatedPriority = -1
         scheduleService.failPeriodLoad = false
         scheduleService.setPeriodsCallCount = 0
         scheduleService.currentPeriods = [
@@ -308,5 +318,90 @@ TestCase {
         tryVerify(function () { return knowledgeGapCapturePopup.opened }, 2000)
         compare(knowledgeGapCapturePopup.sourceTaskId, 3)
         compare(testCase.fieldIn(knowledgeGapCapturePopup, "knowledgeGapCaptureField").text, "")
+    }
+
+    function test_knowledgeGapDialogKeepsLowPriorityOnEdit() {
+        knowledgeGapDialog.openForEdit({
+            id: 8, title: "低优先级那条", detail: "", categoryId: 0,
+            priority: 0, status: 1, dueDate: "", resolution: ""
+        })
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        // 0（低）是合法值。写成 priority || 1 会把它当缺值回填成「中」，
+        // 用户只改个标题保存，优先级就被悄悄抬了一档。
+        compare(knowledgeGapDialog.selectedPriority, 0)
+        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapPrioritySwitch").currentIndex, 0)
+
+        testCase.fieldIn(knowledgeGapDialog, "knowledgeGapTitleField").text = "低优先级那条（改了标题）"
+        knowledgeGapDialog.submit()
+        compare(knowledgeGapService.lastUpdatedPriority, 0)
+    }
+
+    function test_knowledgeGapDialogControlsStayInsideAvailableWidth() {
+        knowledgeGapDialog.openForEdit({
+            id: 7, title: "边界", detail: "", categoryId: 1,
+            priority: 1, status: 1, dueDate: "2026-09-20", resolution: ""
+        })
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        var content = knowledgeGapDialog.contentItem
+        var limit = knowledgeGapDialog.availableWidth
+        // 布局的最小宽度一旦超过弹窗可用宽度，Layout 会按最小宽度排版，
+        // 整列控件一起越过右边界——日期、「未排期」和优先级挤在同一行时就是这样。
+        var names = ["knowledgeGapTitleField", "knowledgeGapDueField", "knowledgeGapClearDueButton",
+                     "knowledgeGapPrioritySwitch", "knowledgeGapCategoryBox"]
+        for (var i = 0; i < names.length; ++i) {
+            var item = testCase.fieldIn(knowledgeGapDialog, names[i])
+            verify(item, names[i])
+            var left = item.mapToItem(content, 0, 0).x
+            verify(left >= -0.5, names[i] + " 左缘越界：" + left)
+            verify(left + item.width <= limit + 0.5,
+                   names[i] + " 右缘 " + (left + item.width) + " 超出可用宽度 " + limit)
+        }
+    }
+
+    function test_knowledgeGapDialogFollowsCategoryChanges() {
+        knowledgeGapDialog.openForEdit({
+            id: 9, title: "科目会变", detail: "", categoryId: 1,
+            priority: 1, status: 1, dueDate: "", resolution: ""
+        })
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        var box = testCase.fieldIn(knowledgeGapDialog, "knowledgeGapCategoryBox")
+        compare(box.count, 2)
+
+        // 弹窗开着时在别处新建了科目：下拉必须跟着变，不能停在打开那一刻的快照上。
+        categoryManager.categoryRows = [
+            { id: 1, name: "专业课", color: "#d4a574" },
+            { id: 2, name: "英语", color: "#c9956e" }
+        ]
+        categoryManager.categoriesChanged()
+        compare(box.count, 3)
+        // 换了 model 选中项也要对得上原来的科目，不能被 ComboBox 自己重置回第一项。
+        compare(box.currentIndex, 1)
+
+        // 选中的科目被删掉：退回「不指定」。留着旧编号保存会撞外键，整条保存失败。
+        categoryManager.categoryRows = [{ id: 2, name: "英语", color: "#c9956e" }]
+        categoryManager.categoriesChanged()
+        compare(box.count, 2)
+        compare(knowledgeGapDialog.selectedCategoryId, 0)
+        compare(box.currentIndex, 0)
+
+        // 没收到变更信号也要在打开时重查：弹窗是复用的，上次打开时的快照早就过期了。
+        categoryManager.categoryRows = [
+            { id: 2, name: "英语", color: "#c9956e" },
+            { id: 3, name: "政治", color: "#be8568" }
+        ]
+        knowledgeGapDialog.openForAdd()
+        compare(box.count, 3)
+    }
+
+    function test_knowledgeGapDialogFooterButtonsLineUp() {
+        knowledgeGapDialog.openForAdd()
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        var footer = knowledgeGapDialog.footer
+        var cancel = findChild(footer, "knowledgeGapCancelButton")
+        var save = findChild(footer, "knowledgeGapSaveButton")
+        verify(cancel)
+        verify(save)
+        // 只给「保存」留底边距时，RowLayout 会把「取消」在加高的那一行里垂直居中，两个按钮上下错开。
+        compare(cancel.mapToItem(footer, 0, 0).y, save.mapToItem(footer, 0, 0).y)
     }
 }

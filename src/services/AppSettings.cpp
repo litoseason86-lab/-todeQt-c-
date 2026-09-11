@@ -89,6 +89,7 @@ void AppSettings::reload()
     emit dayStartHourChanged();
     emit nicknameChanged();
     emit sidebarVisibleChanged();
+    emit sidebarOrderChanged();
     emit dashboardTimerVisibleChanged();
     emit goalViewModeChanged();
     emit reduceTransparencyChanged();

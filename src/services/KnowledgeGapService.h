@@ -83,10 +83,13 @@ public:
     // 生成一条当天（或指定日期）的任务并把缺口置为已安排。
     // 三件事必须在同一个事务里：只成功一半会留下指向不存在任务的缺口，
     // 或者一条没人认领、用户不知道哪来的任务。返回新任务编号，失败返回 -1。
+    // 已有没做完的关联任务时拒绝，不会建出重复任务；到期日取原到期日与任务日期中较早的一个，
+    // 逾期记录不会因为转任务被清零。
     Q_INVOKABLE int convertToTask(int gapId, const QVariant& dateValue);
 
     // —— 查询 ——
     // statusFilter 取 Status、kFilterAll 或 kFilterUnresolved；categoryId <= 0 表示不筛科目。
+    // 每行带 linkedTaskOpen（关联任务还在且没做完），界面据此禁用「今天做」。
     Q_INVOKABLE QVariantList listGaps(int statusFilter,
                                       int categoryId,
                                       const QString& searchText,
@@ -94,6 +97,7 @@ public:
     Q_INVOKABLE QVariantMap getGap(int gapId) const;
     // 今日任务页提示条只读这一个结果，不在 QML 里算「今天」和「逾期」。
     // 返回 {dueToday, overdue, unscheduled, openTotal, oldestOverdueDays, valid}。
+    // dueToday / overdue / oldestOverdueDays 不计已有没做完关联任务的条目：它们已经由任务列表提醒。
     Q_INVOKABLE QVariantMap getReminderSummary() const;
 
 signals:

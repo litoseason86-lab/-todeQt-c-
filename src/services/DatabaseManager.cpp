@@ -1803,7 +1803,53 @@ bool DatabaseManager::knowledgeGapSchemaIsValid() const
             return false;
         }
     }
-    return true;
+    return knowledgeGapForeignKeysAreValid(m_db);
+}
+
+bool DatabaseManager::knowledgeGapForeignKeysAreValid(const QSqlDatabase& db)
+{
+    struct ForeignKeyContract {
+        QString fromColumn;
+        QString referencedTable;
+    };
+    const QList<ForeignKeyContract> contracts = {
+        {QStringLiteral("category_id"), QStringLiteral("categories")},
+        {QStringLiteral("source_task_id"), QStringLiteral("tasks")},
+        {QStringLiteral("linked_task_id"), QStringLiteral("tasks")},
+    };
+
+    QSqlQuery query(db);
+    // 每行依次是 id, seq, table, from, to, on_update, on_delete, match。
+    if (!query.exec(QStringLiteral("PRAGMA foreign_key_list(knowledge_gaps)"))) {
+        return false;
+    }
+
+    // 按「恰好等于」而不是「至少包含」校验：同一列再挂一条 CASCADE，或者别的列多一条
+    // 指向 tasks 的约束，都会让删除和写入出现契约之外的行为，同样要当作结构不合法。
+    QStringList matchedColumns;
+    while (query.next()) {
+        const QString referencedTable = query.value(2).toString();
+        const QString fromColumn = query.value(3).toString();
+        const QString toColumn = query.value(4).toString();
+        const QString onDelete = query.value(6).toString();
+
+        bool expected = false;
+        for (const ForeignKeyContract& contract : contracts) {
+            if (contract.fromColumn == fromColumn
+                && contract.referencedTable.compare(referencedTable, Qt::CaseInsensitive) == 0) {
+                expected = true;
+                break;
+            }
+        }
+        if (!expected
+            || toColumn != QStringLiteral("id")
+            || onDelete.compare(QStringLiteral("SET NULL"), Qt::CaseInsensitive) != 0
+            || matchedColumns.contains(fromColumn)) {
+            return false;
+        }
+        matchedColumns.append(fromColumn);
+    }
+    return matchedColumns.size() == contracts.size();
 }
 
 bool DatabaseManager::backupDatabaseBeforeMigration() const

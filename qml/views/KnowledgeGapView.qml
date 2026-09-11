@@ -35,7 +35,14 @@ Item {
     readonly property int statusResolved: 2
 
     function dayStartHour() {
-        return root.settingsRef ? Number(root.settingsRef.dayStartHour || 4) : 4
+        // 不能写成 dayStartHour || 4：0 点是合法日界，|| 会把它当成缺值改回 4，
+        // 凌晨 0–4 点「今天做」就会把任务排到前一天，和服务端的提醒口径分家。
+        if (!root.settingsRef || root.settingsRef.dayStartHour === undefined
+                || root.settingsRef.dayStartHour === null) {
+            return 4
+        }
+        var hour = Number(root.settingsRef.dayStartHour)
+        return isNaN(hour) ? 4 : hour
     }
 
     function refreshLogicalToday() {
@@ -420,15 +427,18 @@ Item {
                                             elide: Text.ElideRight
                                         }
 
-                                        // 关联任务做完了不代表这条已经想明白，所以只陈述事实，
-                                        // 不自动标记已解决。原来这里写的是一整句「如果确实想明白了，
+                                        // 关联任务的两种事实各给一行短字，都只陈述、不替用户做决定：
+                                        // 做完了不代表已经想明白，所以不自动标记已解决；没做完时说明
+                                        // 「今天做」为什么点不了。原来这里写过一整句「如果确实想明白了，
                                         // 标记已解决」——该点哪个按钮旁边就摆着，不必再教一遍。
                                         Text {
                                             Layout.fillWidth: true
                                             objectName: "knowledgeGapLinkedTaskHint-" + gapRow.modelData.id
-                                            visible: Boolean(gapRow.modelData.linkedTaskCompleted)
+                                            visible: (Boolean(gapRow.modelData.linkedTaskCompleted)
+                                                      || Boolean(gapRow.modelData.linkedTaskOpen))
                                                      && Number(gapRow.modelData.status) !== root.statusResolved
-                                            text: qsTr("关联任务已完成")
+                                            text: Boolean(gapRow.modelData.linkedTaskOpen)
+                                                  ? qsTr("已转成任务") : qsTr("关联任务已完成")
                                             textFormat: Text.PlainText
                                             font.pixelSize: Theme.fontXs
                                             color: Theme.accentInk
@@ -439,6 +449,8 @@ Item {
                                     PageActionButton {
                                         objectName: "knowledgeGapConvertButton-" + gapRow.modelData.id
                                         visible: Number(gapRow.modelData.status) !== root.statusResolved
+                                        // 已有没做完的任务时服务会拒绝再转，按钮不摆出注定失败的动作。
+                                        enabled: !Boolean(gapRow.modelData.linkedTaskOpen)
                                         text: qsTr("今天做")
                                         onClicked: root.convertToTask(gapRow.modelData)
                                     }

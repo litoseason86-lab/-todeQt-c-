@@ -11,8 +11,13 @@
 #include <QSet>
 #include <QTemporaryDir>
 #include <QTimeZone>
+#include <QMetaProperty>
 #include <QTimer>
 #include <QtTest>
+
+#include <memory>
+#include <utility>
+#include <vector>
 
 #include "../src/services/AppSettings.h"
 #include "../src/services/LogicalDay.h"
@@ -686,6 +691,7 @@ private slots:
     void appSettingsSidebarOrderRoundTripsAndResets();
     void appSettingsSidebarOrderKeepsNewPagesVisible();
     void appSettingsSidebarOrderDropsUnknownAndDuplicateIds();
+    void appSettingsReloadNotifiesEveryProperty();
     void appSettingsDashboardTimerVisibleRoundTrip();
     void appSettingsGoalViewModeNormalizesAndRoundTrips();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
@@ -810,6 +816,7 @@ private slots:
     void migrationV8DoesNotRewriteExistingCompletionFacts();
     void migrationV14CreatesKnowledgeGapsAndKeepsExistingData();
     void migrationV14RejectsStructurallyBrokenKnowledgeGapTable();
+    void migrationV14RejectsKnowledgeGapForeignKeyThatCascades();
     void multiStepMigrationKeepsOnlyThePreMigrationSnapshot();
     void customCategoryCrudValidatesAndEmitsChanges();
     void presetCategoriesCanBeEditedButNotDeleted();
@@ -1099,6 +1106,44 @@ void ServiceTests::appSettingsSidebarOrderRoundTripsAndResets()
     QStringList expected = defaults;
     expected.move(0, expected.size() - 1);
     QCOMPARE(reloaded.sidebarOrder(), expected);
+}
+
+void ServiceTests::appSettingsReloadNotifiesEveryProperty()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    AppSettings settings(path);
+    QStringList restoredOrder = AppSettings::defaultSidebarOrder();
+    restoredOrder.move(0, restoredOrder.size() - 1);
+    {
+        // 模拟恢复备份：另一个实例把设置文件整份改写，界面持有的这个对象毫不知情。
+        AppSettings restored(path);
+        restored.setSidebarOrder(restoredOrder);
+    }
+
+    // 逐个属性核对，而不是手抄一份信号清单：新增带 NOTIFY 的属性却忘了在 reload()
+    // 里补发时，这里会直接点名是哪一个。漏发的后果是恢复后 getter 已经是新值，
+    // 界面却一直显示旧值，直到重启。
+    const QMetaObject* meta = settings.metaObject();
+    std::vector<std::pair<QByteArray, std::unique_ptr<QSignalSpy>>> spies;
+    for (int i = meta->propertyOffset(); i < meta->propertyCount(); ++i) {
+        const QMetaProperty property = meta->property(i);
+        if (property.hasNotifySignal()) {
+            spies.emplace_back(QByteArray(property.name()),
+                               std::make_unique<QSignalSpy>(&settings, property.notifySignal()));
+        }
+    }
+    QVERIFY(!spies.empty());
+
+    settings.reload();
+
+    QCOMPARE(settings.sidebarOrder(), restoredOrder);
+    for (const auto& [name, spy] : spies) {
+        QVERIFY2(spy->count() > 0,
+                 qPrintable(QStringLiteral("reload() 没有通知属性 %1").arg(QString::fromLatin1(name))));
+    }
 }
 
 void ServiceTests::appSettingsSidebarOrderKeepsNewPagesVisible()
@@ -3587,6 +3632,33 @@ void ServiceTests::migrationV14RejectsStructurallyBrokenKnowledgeGapTable()
         "CREATE TABLE knowledge_gaps (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT)")));
     QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = %1")
                            .arg(DatabaseManager::kCurrentSchemaVersion)));
+
+    QVERIFY(!DatabaseManager::instance()->createTables());
+
+    // 收拾干净，避免这条用例把坏结构留给后面的用例。
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE knowledge_gaps")));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 13")));
+    QVERIFY(DatabaseManager::instance()->createTables());
+}
+
+void ServiceTests::migrationV14RejectsKnowledgeGapForeignKeyThatCascades()
+{
+    // 列和 CHECK 全对、只把外键动作写成 CASCADE 的表，只看前两样的结构校验会放行。
+    // 放行之后一切正常，直到用户删掉一条来源任务——手写的缺口被连带删除，没有任何报错。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_gaps'")));
+    QVERIFY(query.next());
+    QString createSql = query.value(0).toString();
+    query.finish();
+    const QString setNull =
+        QStringLiteral("source_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL");
+    QVERIFY(createSql.contains(setNull));
+    createSql.replace(setNull,
+                      QStringLiteral("source_task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE"));
+
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE knowledge_gaps")));
+    QVERIFY2(query.exec(createSql), qPrintable(query.lastError().text()));
 
     QVERIFY(!DatabaseManager::instance()->createTables());
 

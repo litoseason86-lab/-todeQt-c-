@@ -71,7 +71,10 @@ private slots:
     void convertToTaskCreatesTaskAndLinksGap();
     void convertToTaskLeavesGapUntouchedWhenTaskInsertFails();
     void convertToTaskReportsLinkedTaskCompletionWithoutResolving();
+    void convertToTaskRefusesWhileLinkedTaskIsOpen();
+    void convertToTaskKeepsOverdueDueDate();
     void reminderSummaryUsesLogicalDayBoundary();
+    void reminderSummarySkipsGapsWhoseTaskIsStillOpen();
     void operationsFailSafelyWhenDatabaseIsClosed();
 
 private:
@@ -568,6 +571,117 @@ void KnowledgeGapServiceTests::reminderSummaryUsesLogicalDayBoundary()
     QCOMPARE(shifted.value(QStringLiteral("oldestOverdueDays")).toInt(), 5 - shiftDays);
 
     AppSettings::instance()->setDayStartHour(4);
+}
+
+void KnowledgeGapServiceTests::convertToTaskRefusesWhileLinkedTaskIsOpen()
+{
+    KnowledgeGapService* service = KnowledgeGapService::instance();
+    const QDate today = logicalToday();
+    const int gapId = service->captureGap(QStringLiteral("重复点今天做"), 0, 0);
+    QVERIFY(gapId > 0);
+
+    const int firstTaskId = service->convertToTask(gapId, today);
+    QVERIFY(firstTaskId > 0);
+    QCOMPARE(service->getGap(gapId).value(QStringLiteral("linkedTaskOpen")).toBool(), true);
+
+    // 连点两次「今天做」、或提示条的「全部加到今天」点了又点，都不能建出第二条同名任务，
+    // 更不能把关联改写到新任务上，让第一条任务变成没人认领的孤儿。
+    QSignalSpy failureSpy(service, &KnowledgeGapService::operationFailed);
+    QSignalSpy tasksSpy(service, &KnowledgeGapService::tasksAffected);
+    QCOMPARE(service->convertToTask(gapId, today), -1);
+    QCOMPARE(failureSpy.count(), 1);
+    QCOMPARE(tasksSpy.count(), 0);
+    QCOMPARE(service->getGap(gapId).value(QStringLiteral("linkedTaskId")).toInt(), firstTaskId);
+
+    QSqlQuery count(DatabaseManager::instance()->database());
+    QVERIFY(count.exec(QStringLiteral("SELECT COUNT(*) FROM tasks")) && count.next());
+    QCOMPARE(count.value(0).toInt(), 1);
+    count.finish();
+
+    // 任务做完了但还没想明白，允许再排一次，关联挪到新任务上。
+    QVERIFY(TaskManager::instance()->completeTask(firstTaskId));
+    QCOMPARE(service->getGap(gapId).value(QStringLiteral("linkedTaskOpen")).toBool(), false);
+    const int secondTaskId = service->convertToTask(gapId, today);
+    QVERIFY(secondTaskId > 0);
+    QVERIFY(secondTaskId != firstTaskId);
+    QCOMPARE(service->getGap(gapId).value(QStringLiteral("linkedTaskId")).toInt(), secondTaskId);
+
+    // 关联任务被删掉同样等于没有关联，可以重新转。直接删行，走的是外键 SET NULL 那条路。
+    QSqlQuery removeTask(DatabaseManager::instance()->database());
+    removeTask.prepare(QStringLiteral("DELETE FROM tasks WHERE id = :id"));
+    removeTask.bindValue(QStringLiteral(":id"), secondTaskId);
+    QVERIFY(removeTask.exec());
+    removeTask.finish();
+    QCOMPARE(service->getGap(gapId).value(QStringLiteral("linkedTaskOpen")).toBool(), false);
+    QVERIFY(service->convertToTask(gapId, today) > 0);
+}
+
+void KnowledgeGapServiceTests::convertToTaskKeepsOverdueDueDate()
+{
+    KnowledgeGapService* service = KnowledgeGapService::instance();
+    const QDate today = logicalToday();
+
+    const int overdueId = service->addGap(QStringLiteral("拖了五天"), 0, QString(), 1, today.addDays(-5), 0);
+    const int unscheduledId = service->captureGap(QStringLiteral("还没排期"), 0, 0);
+    const int futureId = service->addGap(QStringLiteral("原定下周"), 0, QString(), 1, today.addDays(7), 0);
+    QVERIFY(overdueId > 0);
+    QVERIFY(unscheduledId > 0);
+    QVERIFY(futureId > 0);
+
+    QVERIFY(service->convertToTask(overdueId, today) > 0);
+    QVERIFY(service->convertToTask(unscheduledId, today) > 0);
+    QVERIFY(service->convertToTask(futureId, today) > 0);
+
+    // 逾期不顺延：转成今天的任务不能把「拖了五天」清零。今日页的「全部加到今天」
+    // 正是从逾期条目发起的，覆盖到期日等于每点一次就抹掉一批逾期记录。
+    const QVariantMap overdue = service->getGap(overdueId);
+    QCOMPARE(overdue.value(QStringLiteral("dueDate")).toString(),
+             today.addDays(-5).toString(Qt::ISODate));
+    QCOMPARE(overdue.value(QStringLiteral("overdue")).toBool(), true);
+    QCOMPARE(overdue.value(QStringLiteral("overdueDays")).toInt(), 5);
+
+    // 未排期补成任务日期：状态由到期日派生，「已安排」却没有到期日会让两者分家。
+    const QVariantMap unscheduled = service->getGap(unscheduledId);
+    QCOMPARE(unscheduled.value(QStringLiteral("dueDate")).toString(), today.toString(Qt::ISODate));
+    QCOMPARE(unscheduled.value(QStringLiteral("status")).toInt(),
+             static_cast<int>(KnowledgeGapService::StatusScheduled));
+
+    // 原定以后的提前到任务日期：提前处理不抹掉任何拖延记录。
+    QCOMPARE(service->getGap(futureId).value(QStringLiteral("dueDate")).toString(),
+             today.toString(Qt::ISODate));
+}
+
+void KnowledgeGapServiceTests::reminderSummarySkipsGapsWhoseTaskIsStillOpen()
+{
+    KnowledgeGapService* service = KnowledgeGapService::instance();
+    const QDate today = logicalToday();
+    const int overdueId = service->addGap(QStringLiteral("逾期三天"), 0, QString(), 1, today.addDays(-3), 0);
+    const int dueTodayId = service->addGap(QStringLiteral("今天到期"), 0, QString(), 1, today, 0);
+    QVERIFY(overdueId > 0);
+    QVERIFY(dueTodayId > 0);
+
+    QVariantMap summary = service->getReminderSummary();
+    QCOMPARE(summary.value(QStringLiteral("overdue")).toInt(), 1);
+    QCOMPARE(summary.value(QStringLiteral("dueToday")).toInt(), 1);
+
+    const int overdueTaskId = service->convertToTask(overdueId, today);
+    QVERIFY(overdueTaskId > 0);
+    QVERIFY(service->convertToTask(dueTodayId, today) > 0);
+
+    // 已经变成任务、还没做完的条目由任务列表负责提醒。提示条若继续算上它们，
+    // 「全部加到今天」就一直亮着，诱导用户一遍遍去点。
+    summary = service->getReminderSummary();
+    QCOMPARE(summary.value(QStringLiteral("overdue")).toInt(), 0);
+    QCOMPARE(summary.value(QStringLiteral("dueToday")).toInt(), 0);
+    QCOMPARE(summary.value(QStringLiteral("oldestOverdueDays")).toInt(), 0);
+    // 总数照旧统计全部未解决条目：转成任务不等于解决。
+    QCOMPARE(summary.value(QStringLiteral("openTotal")).toInt(), 2);
+
+    // 任务做完但条目没标记解决：做完不等于想明白，重新回到提醒里，拖延天数仍按原到期日算。
+    QVERIFY(TaskManager::instance()->completeTask(overdueTaskId));
+    summary = service->getReminderSummary();
+    QCOMPARE(summary.value(QStringLiteral("overdue")).toInt(), 1);
+    QCOMPARE(summary.value(QStringLiteral("oldestOverdueDays")).toInt(), 3);
 }
 
 void KnowledgeGapServiceTests::operationsFailSafelyWhenDatabaseIsClosed()

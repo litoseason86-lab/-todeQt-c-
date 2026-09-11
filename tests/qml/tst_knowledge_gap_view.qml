@@ -155,6 +155,7 @@ TestCase {
         testCase.deleteCalls = 0
         testCase.lastDeleteId = -1
         testCase.convertedSignals = 0
+        fakeSettings.dayStartHour = 4
     }
 
     function test_groupsFollowServiceFacts() {
@@ -265,6 +266,36 @@ TestCase {
         compare(testCase.resolveCalls, 0)
         var hint = findChild(view, "knowledgeGapLinkedTaskHint-6")
         verify(hint)
+        compare(hint.text, "关联任务已完成")
+    }
+
+    function test_convertIsDisabledWhileLinkedTaskIsOpen() {
+        var view = createView()
+        var arranged = Object.assign({}, testCase.allGaps[0],
+                                     { id: 7, title: "已经转成任务", linkedTaskId: 70, linkedTaskOpen: true })
+        view.gaps = [arranged]
+        // 这条已经有一条没做完的任务。服务端会拒绝再转，按钮就不该摆出一个注定失败的动作。
+        var button = findChild(view, "knowledgeGapConvertButton-7")
+        verify(button)
+        compare(button.enabled, false)
+        var hint = findChild(view, "knowledgeGapLinkedTaskHint-7")
+        verify(hint)
+        compare(hint.text, "已转成任务")
+    }
+
+    function test_convertStaysEnabledOnceLinkedTaskIsDone() {
+        var view = createView()
+        view.gaps = [testCase.allGaps[5]]
+        // 任务做完但还没想明白，允许再排一次。
+        compare(findChild(view, "knowledgeGapConvertButton-6").enabled, true)
+    }
+
+    function test_dayStartHourZeroIsNotReplacedByDefault() {
+        fakeSettings.dayStartHour = 0
+        var view = createView()
+        // 0 点日界是合法设置。写成 dayStartHour || 4 会把它当成缺值改回 4，
+        // 凌晨 0–4 点「今天做」就会把任务排到前一天，和服务端的提醒口径分家。
+        compare(view.dayStartHour(), 0)
     }
 
     function test_operationFailureSurfacesAndReloadClearsIt() {

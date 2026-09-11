@@ -137,6 +137,7 @@ private slots:
     void version13BackupMissingScheduleConstraintIsRejected();
     void version13BackupInvalidPrimaryKeyIsRejected();
     void version14BackupMissingKnowledgeGapTableIsRejected();
+    void version14BackupWithCascadingKnowledgeGapForeignKeyIsRejected();
     void olderBackupWithoutKnowledgeGapTableIsAccepted();
     void higherSchemaVersionIsRejected();
     void formatVersionMismatchIsRejected();
@@ -443,6 +444,42 @@ void BackupServiceTests::version14BackupMissingKnowledgeGapTableIsRejected()
     QCOMPARE(info.value(QStringLiteral("valid")).toBool(), false);
     QVERIFY2(info.value(QStringLiteral("reason")).toString().contains(
                  QStringLiteral("knowledge_gaps")),
+             qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+}
+
+void BackupServiceTests::version14BackupWithCascadingKnowledgeGapForeignKeyIsRejected()
+{
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    const QString connectionName = QStringLiteral("CascadingKnowledgeGapForeignKey");
+    {
+        QSqlDatabase database =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(backupFile());
+        QVERIFY(database.open());
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QStringLiteral(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_gaps'")));
+        QVERIFY(query.next());
+        QString sql = query.value(0).toString();
+        query.finish();
+        const QString setNull =
+            QStringLiteral("linked_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL");
+        QVERIFY(sql.contains(setNull));
+        sql.replace(setNull,
+                    QStringLiteral("linked_task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE"));
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE knowledge_gaps")));
+        QVERIFY2(query.exec(sql), qPrintable(query.lastError().text()));
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+
+    // 列和 CHECK 都在，只有删除动作不对：这样的备份恢复后能正常启动、正常使用，
+    // 直到某天删掉一条任务，关联它的知识缺口被连带删除。必须在恢复之前挡下。
+    const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
+    QCOMPARE(info.value(QStringLiteral("valid")).toBool(), false);
+    QVERIFY2(info.value(QStringLiteral("reason")).toString().contains(QStringLiteral("外键")),
              qPrintable(info.value(QStringLiteral("reason")).toString()));
     QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
 }

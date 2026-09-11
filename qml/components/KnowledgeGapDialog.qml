@@ -30,6 +30,14 @@ Dialog {
     property string errorText: ""
     readonly property bool editing: root.editingId > 0
 
+    property int selectedPriority: 1
+    property int selectedCategoryId: 0
+    property bool resolvedState: false
+    // 科目下拉的数据源。首项是「不指定」：知识缺口常常是在还没分清属于哪一科时记下的。
+    // 存成属性、由 refreshCategories 显式重查，而不是在 model 绑定里直接调 getAllCategories()：
+    // 那样只在创建时查一次，之后科目增删、弹窗重新打开都看不到变化。
+    property var categoryChoices: [{ id: 0, name: qsTr("不指定") }]
+
     signal saved()
 
     function categoryOptions() {
@@ -37,6 +45,46 @@ Dialog {
             return []
         }
         return root.categoryManagerRef.getAllCategories()
+    }
+
+    // 重查科目，并核对选中的科目是否还在。被删掉就退回「不指定」：
+    // 留着旧编号保存会撞外键，整条保存失败，用户却看不出是科目的问题。
+    function refreshCategories() {
+        var choices = [{ id: 0, name: qsTr("不指定") }].concat(root.categoryOptions())
+        var stillExists = false
+        for (var i = 0; i < choices.length; ++i) {
+            if (Number(choices[i].id) === root.selectedCategoryId) {
+                stillExists = true
+                break
+            }
+        }
+        if (!stillExists) {
+            root.selectedCategoryId = 0
+        }
+        root.categoryChoices = choices
+        root.syncCategoryBox()
+    }
+
+    // 下拉的选中项按科目编号显式同步。换 model 时 ComboBox 会自己重置 currentIndex，
+    // 声明式绑定未必在那之后重算；与 GoalFormDialog 一样由这里命令式地对齐。
+    function syncCategoryBox() {
+        for (var i = 0; i < root.categoryChoices.length; ++i) {
+            if (Number(root.categoryChoices[i].id) === root.selectedCategoryId) {
+                categoryBox.currentIndex = i
+                return
+            }
+        }
+        categoryBox.currentIndex = 0
+    }
+
+    // 优先级 0（低）是合法值。不能写成 value || 1：|| 会把 0 当成缺值回填成「中」，
+    // 用户只改个标题保存，优先级就被悄悄抬了一档。只有真的缺值才用默认。
+    function priorityOrDefault(value) {
+        if (value === undefined || value === null || value === "") {
+            return 1
+        }
+        var priority = Number(value)
+        return isNaN(priority) ? 1 : priority
     }
 
     function openForAdd() {
@@ -49,6 +97,8 @@ Dialog {
         root.selectedPriority = 1
         root.selectedCategoryId = 0
         root.resolvedState = false
+        // 弹窗是复用的，上次打开时的科目快照可能早已过期。
+        root.refreshCategories()
         root.open()
     }
 
@@ -59,16 +109,13 @@ Dialog {
         detailField.text = String(gap.detail || "")
         dueField.text = String(gap.dueDate || "")
         resolutionField.text = String(gap.resolution || "")
-        root.selectedPriority = Number(gap.priority || 1)
+        root.selectedPriority = root.priorityOrDefault(gap.priority)
         root.selectedCategoryId = Number(gap.categoryId || 0)
         // 已解决的条目才显示结论输入；未解决时写结论没有意义。
         root.resolvedState = Number(gap.status || 0) === 2
+        root.refreshCategories()
         root.open()
     }
-
-    property int selectedPriority: 1
-    property int selectedCategoryId: 0
-    property bool resolvedState: false
 
     function submit() {
         var title = titleField.text.trim()
@@ -118,10 +165,21 @@ Dialog {
         root.close()
     }
 
+    Connections {
+        target: root.categoryManagerRef
+        ignoreUnknownSignals: true
+
+        // 弹窗开着时在别处增删了科目，下拉要跟着变。
+        function onCategoriesChanged() {
+            root.refreshCategories()
+        }
+    }
+
     objectName: "knowledgeGapDialog"
     modal: true
     anchors.centerIn: parent
-    width: 460
+    // 与其它表单弹窗同一口径：窄窗口下跟着收，但不窄过 320。
+    width: Math.min(460, parent ? Math.max(320, parent.width - 64) : 460)
     padding: Theme.space24
     closePolicy: Popup.CloseOnEscape
     title: root.editing ? qsTr("编辑知识缺口") : qsTr("新增知识缺口")
@@ -206,42 +264,69 @@ Dialog {
             }
         }
 
+        // 日期单独占一行。原先日期、「未排期」和优先级挤在同一行，那一行的最小宽度是 464，
+        // 弹窗可用宽度只有 412：Layout 会按最小宽度排版，整列控件一起越过右边界。
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: Theme.space4
+
+            Text {
+                text: qsTr("计划处理日期")
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontSm
+                color: Theme.inkSoft
+            }
+
+            RowLayout {
+                spacing: Theme.space8
+
+                DateInput {
+                    id: dueField
+                    objectName: "knowledgeGapDueField"
+                    onEdited: if (root.errorText.length > 0) root.errorText = ""
+                }
+
+                // 留空是常态，所以「清空」必须是一个一眼能看到的动作，
+                // 而不是让用户自己去把输入框里的字删干净。
+                Button {
+                    objectName: "knowledgeGapClearDueButton"
+                    text: qsTr("未排期")
+                    implicitHeight: Theme.controlHeightMd
+                    enabled: dueField.text.length > 0
+                    onClicked: dueField.text = ""
+                }
+            }
+        }
+
+        // 科目和优先级同一行：科目下拉填满剩余宽度、可以收窄，优先级分段控件定宽。
         RowLayout {
             Layout.fillWidth: true
             spacing: Theme.space12
 
             ColumnLayout {
+                Layout.fillWidth: true
                 spacing: Theme.space4
 
                 Text {
-                    text: qsTr("计划处理日期")
+                    text: qsTr("科目")
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontSm
                     color: Theme.inkSoft
                 }
 
-                RowLayout {
-                    spacing: Theme.space8
-
-                    DateInput {
-                        id: dueField
-                        objectName: "knowledgeGapDueField"
-                        onEdited: if (root.errorText.length > 0) root.errorText = ""
-                    }
-
-                    // 留空是常态，所以「清空」必须是一个一眼能看到的动作，
-                    // 而不是让用户自己去把输入框里的字删干净。
-                    Button {
-                        objectName: "knowledgeGapClearDueButton"
-                        text: qsTr("未排期")
-                        implicitHeight: Theme.controlHeightMd
-                        enabled: dueField.text.length > 0
-                        onClicked: dueField.text = ""
+                ComboBox {
+                    id: categoryBox
+                    objectName: "knowledgeGapCategoryBox"
+                    Layout.fillWidth: true
+                    implicitHeight: Theme.controlHeightMd
+                    textRole: "name"
+                    valueRole: "id"
+                    model: root.categoryChoices
+                    onActivated: function (index) {
+                        root.selectedCategoryId = Number(root.categoryChoices[index].id || 0)
                     }
                 }
             }
-
-            Item { Layout.fillWidth: true }
 
             ColumnLayout {
                 spacing: Theme.space4
@@ -260,39 +345,6 @@ Dialog {
                     currentIndex: root.selectedPriority
                     reduceMotion: Theme.reduceMotion
                     onActivated: function (index) { root.selectedPriority = index }
-                }
-            }
-        }
-
-        ColumnLayout {
-            Layout.fillWidth: true
-            spacing: Theme.space4
-
-            Text {
-                text: qsTr("科目")
-                textFormat: Text.PlainText
-                font.pixelSize: Theme.fontSm
-                color: Theme.inkSoft
-            }
-
-            ComboBox {
-                id: categoryBox
-                objectName: "knowledgeGapCategoryBox"
-                Layout.fillWidth: true
-                implicitHeight: Theme.controlHeightMd
-                textRole: "name"
-                valueRole: "id"
-                // 首项是「不指定」：知识缺口常常是在还没分清属于哪一科时记下的。
-                model: [{ id: 0, name: qsTr("不指定") }].concat(root.categoryOptions())
-                currentIndex: {
-                    for (var i = 0; i < categoryBox.count; ++i) {
-                        if (Number(categoryBox.model[i].id) === root.selectedCategoryId)
-                            return i
-                    }
-                    return 0
-                }
-                onActivated: function (index) {
-                    root.selectedCategoryId = Number(categoryBox.model[index].id || 0)
                 }
             }
         }
@@ -351,6 +403,9 @@ Dialog {
         PageActionButton {
             objectName: "knowledgeGapCancelButton"
             text: qsTr("取消")
+            // 底边距两个按钮都要给：只给「保存」时这一行被加高，RowLayout 把「取消」
+            // 垂直居中，两个按钮会上下错开 12px。
+            Layout.bottomMargin: Theme.space24
             onClicked: root.close()
         }
 

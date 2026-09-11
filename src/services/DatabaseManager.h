@@ -19,6 +19,11 @@ public:
 
     // 启动和备份检查共用：id 必须是 SQLite 自动生成编号的 INTEGER ROWID 别名。
     static bool hasGeneratedIntegerId(const QSqlDatabase& db, const QString& tableName);
+    // 启动和备份检查共用：knowledge_gaps 的外键必须恰好是契约里的三条
+    // （category_id → categories，source_task_id / linked_task_id → tasks），删除动作一律 SET NULL。
+    // 只校验列和 CHECK 挡不住 ON DELETE CASCADE：那种表照样能用，直到用户删掉一条任务，
+    // 关联它的手写缺口被连带删除，而且没有任何报错。
+    static bool knowledgeGapForeignKeysAreValid(const QSqlDatabase& db);
 
     // 初始化会打开数据库、建表并执行必要迁移；dbPath 为空时使用应用默认路径。
     Q_INVOKABLE bool initialize(const QString& dbPath = QString());
