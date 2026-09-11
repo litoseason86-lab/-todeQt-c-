@@ -21,6 +21,50 @@ Rectangle {
 
     property string currentView: "today"
     property var focusTimerRef: null
+    // 顺序由设置决定；ref 缺失时退回本组件自带的出厂顺序，侧栏不能因为没注入设置就空掉。
+    property var settingsRef: null
+
+    // 条目的呈现定义：这张表只回答「这个 id 长什么样」，不回答顺序。
+    // 顺序的唯一定义处是 AppSettings::defaultSidebarOrder()，用户可在设置里重排。
+    // 新增页面要同时改这两处，QmlTest.sidebar_order 会在漏改时转红。
+    readonly property var entryPresentation: ({
+        "dashboard": { text: "仪表盘", marker: "仪", iconName: "" },
+        "today": { text: "今日任务", marker: "今", iconName: "" },
+        "todayFocus": { text: "今日专注", marker: "记", iconName: "" },
+        "focus": { text: "专注计时", marker: "专", iconName: "" },
+        "schedule": { text: "课表", marker: "课", iconName: "" },
+        "week": { text: "本周计划", marker: "周", iconName: "" },
+        "month": { text: "专注历史", marker: "月", iconName: "" },
+        "stats": { text: "数据统计", marker: "数", iconName: "" },
+        "countdown": { text: "目标倒计时", marker: "倒", iconName: "" },
+        "goals": { text: "目标", marker: "目", iconName: "target" },
+        "knowledgeGaps": { text: "知识缺口", marker: "补", iconName: "gap" }
+    })
+
+    // 出厂顺序的兜底副本。正常路径读 settingsRef.sidebarOrder；
+    // 离屏测试和预览场景常常只注入自己关心的那几个 ref，不能因此渲不出侧栏。
+    readonly property var fallbackOrder: [
+        "dashboard", "today", "todayFocus", "focus", "schedule", "week",
+        "month", "stats", "countdown", "goals", "knowledgeGaps"
+    ]
+
+    // 实际渲染用的有序 id 列表。这里再过滤一次不认识的 id：
+    // 设置层已经归一化过，但替身或旧配置仍可能塞进本组件没有呈现定义的 id，
+    // 那会让 delegate 读到 undefined 而整行空白。
+    readonly property var orderedEntryIds: {
+        var source = root.settingsRef && root.settingsRef.sidebarOrder
+                     && root.settingsRef.sidebarOrder.length > 0
+                ? root.settingsRef.sidebarOrder
+                : root.fallbackOrder
+        var result = []
+        for (var i = 0; i < source.length; ++i) {
+            var id = String(source[i])
+            if (root.entryPresentation[id] !== undefined && result.indexOf(id) < 0) {
+                result.push(id)
+            }
+        }
+        return result
+    }
     // 减少动效默认读全局 appSettings；测试可直接覆盖该属性，避免为了一个开关伪造整套上下文。
     // qmllint disable unqualified
     property bool reduceMotionActive: Theme.reduceMotion
@@ -104,108 +148,33 @@ Rectangle {
             }
         }
 
-        Text {
-            text: "时间视图"
-            font.pixelSize: Theme.fontSm
-            font.weight: Font.Bold
-            color: Theme.inkSoft
-            Layout.bottomMargin: Theme.space8
-        }
+        // 条目按用户设定的顺序渲染。原来这里是两组写死的 SidebarItem，中间夹一条
+        // 「时间视图」小标题和一条分隔线；顺序既然交给用户，分组就不再成立——
+        // 一个用户可以把「课表」排到「今日任务」前面，那条线也就失去了含义。
+        Repeater {
+            model: root.orderedEntryIds
 
-        SidebarItem {
-            text: "仪表盘"
-            marker: "仪"
-            isActive: root.currentView === "dashboard"
-            onClicked: root.itemClicked("dashboard")
-        }
+            SidebarItem {
+                id: entryItem
+                required property string modelData
 
-        SidebarItem {
-            text: "今日任务"
-            marker: "今"
-            isActive: root.currentView === "today"
-            onClicked: root.itemClicked("today")
-        }
+                readonly property var presentation: root.entryPresentation[entryItem.modelData]
 
-        SidebarItem {
-            text: "今日专注"
-            marker: "记"
-            isActive: root.currentView === "todayFocus"
-            onClicked: root.itemClicked("todayFocus")
-        }
-
-        SidebarItem {
-            text: "专注计时"
-            marker: "专"
-            isActive: root.currentView === "focus"
-            statusText: root.focusTimerRef
-                        ? root.focusStatusFor(root.focusTimerRef.hasActiveSession,
-                                              root.focusTimerRef.phase,
-                                              root.focusTimerRef.mode,
-                                              root.focusTimerRef.isRunning,
-                                              root.focusTimerRef.remainingSeconds,
-                                              root.focusTimerRef.elapsedSeconds)
-                        : ""
-            onClicked: root.itemClicked("focus")
-        }
-
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
-            color: Theme.border
-            Layout.topMargin: Theme.space16
-            Layout.bottomMargin: Theme.space16
-            opacity: 0.8
-        }
-
-        SidebarItem {
-            text: "课表"
-            marker: "课"
-            isActive: root.currentView === "schedule"
-            onClicked: root.itemClicked("schedule")
-        }
-
-        SidebarItem {
-            text: "本周计划"
-            marker: "周"
-            isActive: root.currentView === "week"
-            onClicked: root.itemClicked("week")
-        }
-
-        SidebarItem {
-            text: "专注历史"
-            marker: "月"
-            isActive: root.currentView === "month"
-            onClicked: root.itemClicked("month")
-        }
-
-        SidebarItem {
-            text: "数据统计"
-            marker: "数"
-            isActive: root.currentView === "stats"
-            onClicked: root.itemClicked("stats")
-        }
-
-        SidebarItem {
-            text: "目标倒计时"
-            marker: "倒"
-            isActive: root.currentView === "countdown"
-            onClicked: root.itemClicked("countdown")
-        }
-
-        SidebarItem {
-            text: "目标"
-            marker: "目"
-            iconName: "target"
-            isActive: root.currentView === "goals"
-            onClicked: root.itemClicked("goals")
-        }
-
-        SidebarItem {
-            text: "知识缺口"
-            marker: "补"
-            iconName: "gap"
-            isActive: root.currentView === "knowledgeGaps"
-            onClicked: root.itemClicked("knowledgeGaps")
+                text: entryItem.presentation ? entryItem.presentation.text : ""
+                marker: entryItem.presentation ? entryItem.presentation.marker : ""
+                iconName: entryItem.presentation ? entryItem.presentation.iconName : ""
+                isActive: root.currentView === entryItem.modelData
+                // 只有专注计时那一条带走秒状态；参数显式传入，tick 才能驱动文本每秒刷新。
+                statusText: entryItem.modelData === "focus" && root.focusTimerRef
+                            ? root.focusStatusFor(root.focusTimerRef.hasActiveSession,
+                                                  root.focusTimerRef.phase,
+                                                  root.focusTimerRef.mode,
+                                                  root.focusTimerRef.isRunning,
+                                                  root.focusTimerRef.remainingSeconds,
+                                                  root.focusTimerRef.elapsedSeconds)
+                            : ""
+                onClicked: root.itemClicked(entryItem.modelData)
+            }
         }
 
         Item {

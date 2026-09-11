@@ -61,16 +61,6 @@ TestCase {
         return null;
     }
 
-    function findDivider() {
-        var children = collectChildren(sidebar, []);
-        for (var i = 0; i < children.length; ++i) {
-            if (children[i].height === 1 && Qt.colorEqual(children[i].color, Theme.border)) {
-                return children[i];
-            }
-        }
-        return null;
-    }
-
     function sidebarItemForMarker(marker) {
         return findChild(sidebar, "sidebarItem-" + marker);
     }
@@ -150,18 +140,17 @@ TestCase {
         compare(collapseSpy.count, 1)
     }
 
-    function test_titleAndGroupFontWeightsUseFontWeight() {
+    function test_titleTypographyUsesFontWeight() {
         var title = findText("番茄Todo");
-        var groupTitle = findText("时间视图");
 
         verify(title !== null);
-        verify(groupTitle !== null);
         compare(title.font.pixelSize, Theme.fontXl);
         compare(title.font.weight, Font.Bold);
         verify(Qt.colorEqual(title.color, Theme.ink));
-        compare(groupTitle.font.pixelSize, Theme.fontSm);
-        compare(groupTitle.font.weight, Font.Bold);
-        verify(Qt.colorEqual(groupTitle.color, Theme.inkSoft));
+
+        // 「时间视图」分组标题已随可排序侧栏一起去掉：顺序交给用户之后，
+        // 固定的语义分组就不再成立——用户可以把「课表」排到「今日任务」前面。
+        verify(findText("时间视图") === null, "分组标题应已随可排序侧栏移除");
     }
 
     function test_activeSidebarItemHasVisualFeedback() {
@@ -247,15 +236,10 @@ TestCase {
         compare(inactiveItem.border.width, 0);
     }
 
-    function test_dividerStyleAndManagementRemoved() {
-        var divider = findDivider();
-
-        verify(divider !== null);
-        compare(divider.height, 1);
-        verify(Qt.colorEqual(divider.color, Theme.border));
-        compare(divider.opacity, 0.8);
-
-        // 管理项已迁入设置弹窗，“三阶段”孤儿标签已删。
+    function test_managementEntriesStayOutOfSidebar() {
+        // 原来这条还断言两组之间那根分隔线的样式。顺序可由用户重排之后，
+        // 分组本身没了，线也就跟着去掉；保留的是这条真正在守的东西——
+        // 管理类入口不许回流到侧栏。
         verify(findText("三阶段") === null, "三阶段标签应已删除");
         verify(findChild(sidebar, "sidebarItem-例") === null, "每日例行应已移出侧栏");
         verify(findChild(sidebar, "sidebarItem-科") === null, "科目管理应已移出侧栏");

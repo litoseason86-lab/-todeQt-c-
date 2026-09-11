@@ -15,6 +15,7 @@ const auto kBackgroundThemeKey = QStringLiteral("appearance/backgroundTheme");
 const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
 const auto kNicknameKey = QStringLiteral("profile/nickname");
 const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
+const auto kSidebarOrderKey = QStringLiteral("appearance/sidebarOrder");
 const auto kDashboardTimerVisibleKey = QStringLiteral("appearance/dashboardTimerVisible");
 const auto kGoalViewModeKey = QStringLiteral("goals/viewMode");
 const auto kReduceTransparencyKey = QStringLiteral("appearance/reduceTransparency");
@@ -498,6 +499,84 @@ void AppSettings::setNickname(const QString& name)
     if (writeValue(kNicknameKey, normalized)) {
         emit nicknameChanged();
     }
+}
+
+QStringList AppSettings::defaultSidebarOrder()
+{
+    // 出厂顺序，也是「当前版本有哪些可排序页面」的唯一清单。
+    // 新增一个页面时必须同步这里，否则它既不出现在侧栏，也不出现在设置的排序列表里。
+    // 「设置」不在其中：它不是视图，固定钉在侧栏底部。
+    return {
+        QStringLiteral("dashboard"),
+        QStringLiteral("today"),
+        QStringLiteral("todayFocus"),
+        QStringLiteral("focus"),
+        QStringLiteral("schedule"),
+        QStringLiteral("week"),
+        QStringLiteral("month"),
+        QStringLiteral("stats"),
+        QStringLiteral("countdown"),
+        QStringLiteral("goals"),
+        QStringLiteral("knowledgeGaps"),
+    };
+}
+
+QStringList AppSettings::normalizeSidebarOrder(const QStringList& stored)
+{
+    const QStringList known = defaultSidebarOrder();
+
+    QStringList result;
+    for (const QString& id : stored) {
+        // 丢掉不认识的 id（降级运行、手改配置文件、未来版本删掉的页面都会留下它们），
+        // 同时去重——重复的 id 会让同一个入口在侧栏里出现两次。
+        if (known.contains(id) && !result.contains(id)) {
+            result.append(id);
+        }
+    }
+
+    // 用户顺序里没有的页面补在末尾。这一步是整个函数存在的理由：
+    // 新版本加了页面时，旧的顺序记录里当然没有它，若就此不显示，
+    // 用户会认为这个版本没有这个功能，而且完全无从排查。
+    for (const QString& id : known) {
+        if (!result.contains(id)) {
+            result.append(id);
+        }
+    }
+    return result;
+}
+
+QStringList AppSettings::sidebarOrder() const
+{
+    // 以逗号分隔的单个字符串存储，而不是 QSettings 的 QStringList：
+    // INI 后端对列表的读写要做引号和逗号转义，跨版本行为不如一个纯字符串可预期。
+    // 视图 id 只含字母，不会和分隔符冲突。
+    const QString raw = m_settings->value(kSidebarOrderKey, QString()).toString();
+    const QStringList stored = raw.isEmpty()
+        ? QStringList()
+        : raw.split(QLatin1Char(','), Qt::SkipEmptyParts);
+    return normalizeSidebarOrder(stored);
+}
+
+bool AppSettings::sidebarOrderIsDefault() const
+{
+    return sidebarOrder() == defaultSidebarOrder();
+}
+
+void AppSettings::setSidebarOrder(const QStringList& order)
+{
+    const QStringList normalized = normalizeSidebarOrder(order);
+    if (sidebarOrder() == normalized) {
+        return;
+    }
+
+    if (writeValue(kSidebarOrderKey, normalized.join(QLatin1Char(',')))) {
+        emit sidebarOrderChanged();
+    }
+}
+
+void AppSettings::resetSidebarOrder()
+{
+    setSidebarOrder(defaultSidebarOrder());
 }
 
 bool AppSettings::sidebarVisible() const

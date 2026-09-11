@@ -724,6 +724,7 @@ Item {
                 opacity: root.sidebarVisible ? 1 : 0
                 currentView: root.currentView
                 focusTimerRef: root.focusTimerRef
+                settingsRef: root.appSettingsRef
 
                 Behavior on opacity {
                     enabled: !root.sidebarMotionReduced

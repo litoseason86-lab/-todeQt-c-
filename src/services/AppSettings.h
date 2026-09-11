@@ -23,6 +23,16 @@ class AppSettings : public QObject
     Q_PROPERTY(QString nickname READ nickname WRITE setNickname NOTIFY nicknameChanged)
     // 侧栏展开态：跨启动记忆，与 macOS 应用侧边栏习惯一致。
     Q_PROPERTY(bool sidebarVisible READ sidebarVisible WRITE setSidebarVisible NOTIFY sidebarVisibleChanged)
+    // 侧栏条目顺序，存的是视图 id 的有序列表。
+    //
+    // 只存顺序、不存条目本身：条目集合由应用版本决定，用户存下的顺序不能反过来
+    // 决定有哪些页面。新版本加了页面时，旧的顺序记录里没有它——必须补在末尾，
+    // 而不是让那一页从侧栏里消失，那种消失用户根本无从排查。
+    Q_PROPERTY(QStringList sidebarOrder READ sidebarOrder WRITE setSidebarOrder NOTIFY sidebarOrderChanged)
+    // 当前顺序是否就是出厂顺序，供设置页决定「恢复默认」按不按得动。
+    // 放在这里而不是让 QML 自己比：默认顺序只能有一个定义处，
+    // QML 再抄一份就等着两边慢慢对不上。
+    Q_PROPERTY(bool sidebarOrderIsDefault READ sidebarOrderIsDefault NOTIFY sidebarOrderChanged)
     // 仪表盘右侧专注计时面板的展开态：跨启动记忆，与侧栏同一套收起习惯。
     Q_PROPERTY(bool dashboardTimerVisible READ dashboardTimerVisible WRITE setDashboardTimerVisible NOTIFY dashboardTimerVisibleChanged)
     // 长期目标页的列表/网格偏好；非法值统一回退到列表。
@@ -82,7 +92,13 @@ public:
     QString nickname() const;
     void setNickname(const QString& name);
     bool sidebarVisible() const;
+    QStringList sidebarOrder() const;
+    bool sidebarOrderIsDefault() const;
     void setSidebarVisible(bool visible);
+    Q_INVOKABLE void setSidebarOrder(const QStringList& order);
+    // 恢复出厂顺序。写成独立入口而不是让界面自己传默认值，
+    // 是为了让「默认顺序是什么」只有一个定义处。
+    Q_INVOKABLE void resetSidebarOrder();
     bool dashboardTimerVisible() const;
     void setDashboardTimerVisible(bool visible);
     QString goalViewMode() const;
@@ -145,6 +161,12 @@ public:
     // 分组的增加频率远低于键，而且新增分组时改这里是显眼的一步；
     // tst 里有用例遍历真实写入的键做交叉验证，漏加分组会当场转红。
     static QStringList ownedSettingGroups();
+    // 侧栏条目的出厂顺序，也是「当前版本有哪些可排序页面」的唯一清单。
+    // 新增页面时必须同步这里，否则它不会出现在侧栏，也不会出现在设置的排序列表里。
+    static QStringList defaultSidebarOrder();
+    // 把存下来的顺序对齐到当前版本的页面清单：
+    // 保留认识的 id 并维持用户顺序，丢掉已不存在的 id，去重，最后把新页面补到末尾。
+    static QStringList normalizeSidebarOrder(const QStringList& stored);
     static bool isOwnedSettingKey(const QString& key);
 
 signals:
@@ -160,6 +182,7 @@ signals:
     void dayStartHourChanged();
     void nicknameChanged();
     void sidebarVisibleChanged();
+    void sidebarOrderChanged();
     void dashboardTimerVisibleChanged();
     void goalViewModeChanged();
     void reduceTransparencyChanged();

@@ -683,6 +683,9 @@ private slots:
     void appSettingsNicknameTrimsAndRoundTrips();
     void appSettingsDailyFocusGoalMinutesByDate();
     void appSettingsSidebarVisibleRoundTrip();
+    void appSettingsSidebarOrderRoundTripsAndResets();
+    void appSettingsSidebarOrderKeepsNewPagesVisible();
+    void appSettingsSidebarOrderDropsUnknownAndDuplicateIds();
     void appSettingsDashboardTimerVisibleRoundTrip();
     void appSettingsGoalViewModeNormalizesAndRoundTrips();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
@@ -1056,6 +1059,104 @@ void ServiceTests::appSettingsNicknameTrimsAndRoundTrips()
 
     AppSettings reloaded(path);
     QCOMPARE(reloaded.nickname(), QStringLiteral("zjk"));
+}
+
+void ServiceTests::appSettingsSidebarOrderRoundTripsAndResets()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    const QStringList defaults = AppSettings::defaultSidebarOrder();
+    QVERIFY(!defaults.isEmpty());
+
+    {
+        AppSettings settings(path);
+        QCOMPARE(settings.sidebarOrder(), defaults);
+
+        QSignalSpy spy(&settings, &AppSettings::sidebarOrderChanged);
+
+        QStringList reordered = defaults;
+        reordered.move(0, reordered.size() - 1);
+        settings.setSidebarOrder(reordered);
+        QCOMPARE(settings.sidebarOrder(), reordered);
+        QCOMPARE(spy.count(), 1);
+
+        // 同值重写不发信号，避免界面因为一次无意义的写入整体重建侧栏。
+        settings.setSidebarOrder(reordered);
+        QCOMPARE(spy.count(), 1);
+
+        settings.resetSidebarOrder();
+        QCOMPARE(settings.sidebarOrder(), defaults);
+        QCOMPARE(spy.count(), 2);
+
+        settings.setSidebarOrder(reordered);
+        QCOMPARE(spy.count(), 3);
+    }
+
+    // 跨进程持久化：重开一个实例仍是用户排好的顺序。
+    AppSettings reloaded(path);
+    QStringList expected = defaults;
+    expected.move(0, expected.size() - 1);
+    QCOMPARE(reloaded.sidebarOrder(), expected);
+}
+
+void ServiceTests::appSettingsSidebarOrderKeepsNewPagesVisible()
+{
+    // 这条守的是升级路径：用户在旧版本排好了顺序，新版本加了页面，
+    // 那一页在存下来的顺序里当然不存在。如果就此不显示，用户会以为
+    // 新版本没有这个功能，而且完全无从排查——所以必须补在末尾。
+    QStringList defaults = AppSettings::defaultSidebarOrder();
+    QVERIFY(defaults.size() >= 3);
+
+    QStringList staleOrder = defaults;
+    const QString droppedFirst = staleOrder.takeLast();
+    const QString droppedSecond = staleOrder.takeFirst();
+
+    const QStringList normalized = AppSettings::normalizeSidebarOrder(staleOrder);
+    QCOMPARE(normalized.size(), defaults.size());
+    // 用户排好的那部分保持原相对顺序。
+    for (int i = 0; i < staleOrder.size(); ++i) {
+        QCOMPARE(normalized.at(i), staleOrder.at(i));
+    }
+    // 缺的两页补在末尾，一个都不能少。
+    QVERIFY(normalized.contains(droppedFirst));
+    QVERIFY(normalized.contains(droppedSecond));
+    QVERIFY(normalized.indexOf(droppedFirst) >= staleOrder.size());
+    QVERIFY(normalized.indexOf(droppedSecond) >= staleOrder.size());
+
+    // 空记录（首次启动、配置被清空）直接回落到出厂顺序。
+    QCOMPARE(AppSettings::normalizeSidebarOrder(QStringList()), defaults);
+}
+
+void ServiceTests::appSettingsSidebarOrderDropsUnknownAndDuplicateIds()
+{
+    const QStringList defaults = AppSettings::defaultSidebarOrder();
+
+    QStringList corrupt;
+    corrupt << QStringLiteral("nonexistentPage")   // 降级运行或手改配置留下的
+            << defaults.at(1)
+            << defaults.at(1)                      // 重复：会让同一入口出现两次
+            << QStringLiteral("")
+            << defaults.at(0);
+
+    const QStringList normalized = AppSettings::normalizeSidebarOrder(corrupt);
+    QCOMPARE(normalized.size(), defaults.size());
+    QCOMPARE(normalized.at(0), defaults.at(1));
+    QCOMPARE(normalized.at(1), defaults.at(0));
+    QVERIFY(!normalized.contains(QStringLiteral("nonexistentPage")));
+    QVERIFY(!normalized.contains(QString()));
+    // 每个已知页面恰好出现一次。
+    for (const QString& id : defaults) {
+        QCOMPARE(normalized.count(id), 1);
+    }
+
+    // 写入损坏值也要被纠正，而不是原样存回去。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppSettings settings(dir.filePath(QStringLiteral("settings.ini")));
+    settings.setSidebarOrder(corrupt);
+    QCOMPARE(settings.sidebarOrder(), normalized);
 }
 
 void ServiceTests::appSettingsSidebarVisibleRoundTrip()
