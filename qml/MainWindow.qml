@@ -811,9 +811,9 @@ Item {
                     }
 
                     onKnowledgeGapsRequested: root.switchToView("knowledgeGaps")
-                    onKnowledgeGapCaptured: root.showToast(qsTr("已记入待补"))
+                    onKnowledgeGapCaptured: root.showToast(qsTr("已记入知识缺口"))
                     onKnowledgeGapsConverted: function (count) {
-                        root.showToast(qsTr("已把 %1 条待补加到今天的任务").arg(count))
+                        root.showToast(qsTr("已把 %1 条知识缺口加到今天的任务").arg(count))
                     }
 
                     onManualRestRequested: root.startManualRest()
@@ -840,7 +840,7 @@ Item {
                     settings: root.appSettingsRef
                     pageActive: root.currentView === "focus"
 
-                    onKnowledgeGapCaptured: root.showToast(qsTr("已记入待补"))
+                    onKnowledgeGapCaptured: root.showToast(qsTr("已记入知识缺口"))
 
                     onFocusEnded: {
                         // 先退出沉浸再切页，今日页不能留在无侧栏的原生全屏状态。

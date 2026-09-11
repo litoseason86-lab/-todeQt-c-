@@ -55,6 +55,20 @@ Rectangle {
     }
 
     QtObject {
+        id: knowledgeGapService
+
+        signal gapsChanged()
+        signal operationFailed(string message)
+
+        function getReminderSummary() {
+            return { valid: true, dueToday: 1, overdue: 2, unscheduled: 3,
+                     openTotal: 6, oldestOverdueDays: 12 }
+        }
+        function listGaps(statusFilter, categoryId, searchText, limit) { return [] }
+        function captureGap(title, categoryId, sourceTaskId) { return 1 }
+    }
+
+    QtObject {
         id: logicalDayService
 
         signal changed
@@ -92,6 +106,7 @@ Rectangle {
 
         anchors.fill: parent
         settingsRef: appSettings
+        knowledgeGapServiceRef: knowledgeGapService
     }
 
     function dumpGeometry(item, depth) {

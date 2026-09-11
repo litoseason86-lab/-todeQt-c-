@@ -79,7 +79,7 @@ Dialog {
         // 日期允许留空（= 未排期）；填了就必须是合法日期，不能静默退化成未排期。
         var due = dueField.text.trim()
         if (due.length > 0 && LogicalDay.parseIsoDate(due) === null) {
-            root.errorText = "日期格式应为 2026-09-11，且需在 2000–2100 年之间"
+            root.errorText = "日期需要形如 2026-09-11"
             return
         }
         if (!root.gapServiceRef) {
@@ -162,7 +162,7 @@ Dialog {
             objectName: "knowledgeGapTitleField"
             Layout.fillWidth: true
             implicitHeight: Theme.controlHeightLg
-            placeholderText: qsTr("一句话说清是什么没搞懂")
+            placeholderText: qsTr("要补什么？")
             maximumLength: root.gapServiceRef && root.gapServiceRef.maxTitleLength
                            ? root.gapServiceRef.maxTitleLength : 100
             selectByMouse: true
@@ -179,7 +179,7 @@ Dialog {
 
         Text {
             Layout.fillWidth: true
-            text: qsTr("上下文（页码、题号、当时的念头）")
+            text: qsTr("上下文")
             textFormat: Text.PlainText
             font.pixelSize: Theme.fontSm
             color: Theme.inkSoft
@@ -304,7 +304,7 @@ Dialog {
             visible: root.resolvedState
 
             Text {
-                text: qsTr("结论（后来想明白了什么）")
+                text: qsTr("结论")
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontSm
                 color: Theme.inkSoft

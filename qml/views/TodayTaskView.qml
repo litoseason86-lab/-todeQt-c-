@@ -790,13 +790,16 @@ Item {
                 Text {
                     objectName: "knowledgeGapBannerText"
                     Layout.fillWidth: true
-                    // 只报「还剩几条」不足以让人停下来；拖得最久的那条拖了多少天才是推力。
+                    // 只报「还剩几条」不足以让人停下来，拖得最久的那条拖了多少天才是推力。
+                    // 但也只报这三个数：原来写成「有 N 条待补到期，其中 M 条已逾期，最久的
+                    // 拖了 X 天」，一句话四个逗号，扫一眼反而抓不住重点。
+                    // 名字统一用「知识缺口」——侧栏、页面标题和这里曾经是两个叫法。
                     text: root.gapOverdue > 0
-                          ? qsTr("有 %1 条待补到期，其中 %2 条已逾期，最久的拖了 %3 天")
+                          ? qsTr("%1 条知识缺口到期 · %2 条已逾期 · 最久 %3 天")
                             .arg(root.gapDueToday + root.gapOverdue)
                             .arg(root.gapOverdue)
                             .arg(root.gapOldestOverdueDays)
-                          : qsTr("有 %1 条待补今天到期").arg(root.gapDueToday)
+                          : qsTr("%1 条知识缺口今天到期").arg(root.gapDueToday)
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium

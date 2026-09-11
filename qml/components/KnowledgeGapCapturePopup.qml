@@ -114,7 +114,7 @@ Popup {
 
             Layout.fillWidth: true
             implicitHeight: Theme.controlHeightLg
-            placeholderText: qsTr("现在不懂、之后要补的是什么？")
+            placeholderText: qsTr("要补什么？")
             // 与 KnowledgeGapService::kMaxTitleLength 保持一致；超长粘贴在输入端截断。
             maximumLength: root.gapServiceRef && root.gapServiceRef.maxTitleLength
                            ? root.gapServiceRef.maxTitleLength : 100
@@ -152,15 +152,11 @@ Popup {
             Layout.fillWidth: true
             spacing: Theme.space8
 
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("回车保存，之后在「知识缺口」里补日期")
-                textFormat: Text.PlainText
-                font.pixelSize: Theme.fontXs
-                color: Theme.inkMuted
-                elide: Text.ElideRight
-            }
+            Item { Layout.fillWidth: true }
 
+            // 原来这里还有一行「回车保存，之后在「知识缺口」里补日期」。
+            // 回车保存是输入框的通用行为，不需要教；后面能补什么，用户翻到那一页自然看得见。
+            // 这个框的全部价值是「快」，多一行字读就多一分打断。
             PageActionButton {
                 objectName: "knowledgeGapCaptureSaveButton"
                 text: qsTr("记下")

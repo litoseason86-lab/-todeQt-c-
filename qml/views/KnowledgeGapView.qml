@@ -87,14 +87,6 @@ Item {
 
     readonly property var groupKeys: ["overdue", "today", "future", "unscheduled", "resolved"]
 
-    function priorityText(priority) {
-        switch (Number(priority)) {
-        case 0: return qsTr("低")
-        case 2: return qsTr("高")
-        default: return qsTr("中")
-        }
-    }
-
     function metaTextFor(gap) {
         var parts = []
         if (gap.overdue) {
@@ -106,7 +98,11 @@ Item {
         } else {
             parts.push(qsTr("未排期"))
         }
-        parts.push(qsTr("优先级 %1").arg(root.priorityText(gap.priority)))
+        // 只有「高」值得占一格：中是默认值，低本来就不需要催，
+        // 把三档都写出来等于每行都挂一句废话。
+        if (Number(gap.priority) === 2) {
+            parts.push(qsTr("高优先级"))
+        }
         if (String(gap.categoryName || "").length > 0) {
             parts.push(String(gap.categoryName))
         }
@@ -218,6 +214,10 @@ Item {
 
         RowLayout {
             Layout.fillWidth: true
+            // ColumnLayout 里的子 Layout 默认 fillHeight 为 true（普通 Item 才是 false）。
+            // 列表为空时它会把整块剩余高度吃掉，页头被拉到页面中间、标题和搜索框之间
+            // 裂开一大段空白。这里必须显式关掉。
+            Layout.fillHeight: false
             spacing: Theme.space12
 
             Text {
@@ -258,7 +258,7 @@ Item {
             objectName: "knowledgeGapSearchField"
             Layout.fillWidth: true
             implicitHeight: Theme.controlHeightMd
-            placeholderText: qsTr("搜索内容、上下文或结论")
+            placeholderText: qsTr("搜索")
             selectByMouse: true
             color: Theme.inputInk
             // 输入框字色必须接管：Basic 风格默认 palette.text 写死深灰，夜间主题下看不见。
@@ -304,44 +304,22 @@ Item {
             }
         }
 
-        // 空状态：没有条目时不该只留一片空白，要说清这一页是干什么的。
-        Rectangle {
-            objectName: "knowledgeGapEmptyStateCard"
-            Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: Theme.space32
-            Layout.preferredWidth: 420
-            Layout.preferredHeight: 132
+        // 空状态只留一行弱色文字。这一页是干什么的，用户点进来之前就知道了；
+        // 在空页面上摆一张卡再讲一遍用法，是替看不懂的人操心，对真正的用户只是噪音。
+        Item {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             visible: root.gaps.length === 0 && root.loadError.length === 0
-            radius: Theme.radiusLg
-            color: Theme.surfaceRaised
-            border.color: Theme.border
-            border.width: 1
 
-            ColumnLayout {
+            Text {
+                objectName: "knowledgeGapEmptyStateText"
                 anchors.centerIn: parent
-                width: parent.width - 48
-                spacing: Theme.space8
-
-                Text {
-                    Layout.alignment: Qt.AlignHCenter
-                    text: root.statusFilter === root.statusResolved
-                          ? qsTr("还没有已解决的条目")
-                          : qsTr("这里还是空的")
-                    textFormat: Text.PlainText
-                    font.pixelSize: Theme.fontXl
-                    font.weight: Font.Bold
-                    color: Theme.ink
-                }
-
-                Text {
-                    Layout.fillWidth: true
-                    horizontalAlignment: Text.AlignHCenter
-                    text: qsTr("专注时发现哪块没搞懂，用专注页右上角的「记一笔」存下来，回头在这里排期处理。")
-                    textFormat: Text.PlainText
-                    font.pixelSize: Theme.fontSm
-                    color: Theme.inkSoft
-                    wrapMode: Text.WordWrap
-                }
+                text: root.searchText.length > 0 ? qsTr("没有匹配的条目") : qsTr("没有条目")
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontMd
+                // inkMuted 是占位/禁用级别的弱色，压在页面底色上只有 3.3:1（夜间 3.95:1），
+                // 达不到正文 4.5:1。空状态这行是正文，用 inkSoft。
+                color: Theme.inkSoft
             }
         }
 
@@ -402,14 +380,22 @@ Item {
                                     anchors.margins: Theme.space16
                                     spacing: Theme.space12
 
-                                    // 科目色点：没有科目时不占位，避免一排空圆点。
+                                    // 科目色点始终占位，没有科目时只是不上色。
+                                    // 用 visible 控制会让没有科目的那几行标题整体左移，
+                                    // 一列标题左缘参差不齐，比多几个空位难看得多。
+                                    //
+                                    // 对齐到标题首行而不是整行垂直居中：行高会随副文行数变化，
+                                    // 居中会让色点浮在标题和副文之间，看不出它在标注哪一行。
                                     Rectangle {
-                                        Layout.alignment: Qt.AlignVCenter
+                                        Layout.alignment: Qt.AlignTop
+                                        Layout.topMargin: 6
                                         Layout.preferredWidth: 8
                                         Layout.preferredHeight: 8
                                         radius: 4
-                                        visible: String(gapRow.modelData.categoryColor || "").length > 0
-                                        color: String(gapRow.modelData.categoryColor || Theme.accent)
+                                        // 静态 transparent，没有 Behavior on color，不会插值出灰色中间帧。
+                                        color: String(gapRow.modelData.categoryColor || "").length > 0
+                                               ? String(gapRow.modelData.categoryColor)
+                                               : "transparent"
                                     }
 
                                     ColumnLayout {
@@ -434,13 +420,15 @@ Item {
                                             elide: Text.ElideRight
                                         }
 
-                                        // 关联任务做完了不代表这条已经想明白，所以只提示，不自动标记已解决。
+                                        // 关联任务做完了不代表这条已经想明白，所以只陈述事实，
+                                        // 不自动标记已解决。原来这里写的是一整句「如果确实想明白了，
+                                        // 标记已解决」——该点哪个按钮旁边就摆着，不必再教一遍。
                                         Text {
                                             Layout.fillWidth: true
                                             objectName: "knowledgeGapLinkedTaskHint-" + gapRow.modelData.id
                                             visible: Boolean(gapRow.modelData.linkedTaskCompleted)
                                                      && Number(gapRow.modelData.status) !== root.statusResolved
-                                            text: qsTr("关联任务已完成 —— 如果确实想明白了，标记已解决")
+                                            text: qsTr("关联任务已完成")
                                             textFormat: Text.PlainText
                                             font.pixelSize: Theme.fontXs
                                             color: Theme.accentInk
