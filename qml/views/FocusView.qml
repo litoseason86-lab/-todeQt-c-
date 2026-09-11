@@ -12,6 +12,7 @@ Item {
     property string errorText: ""
     property var pendingSwitch: null
     property var taskManagerRef: null
+    property var knowledgeGapServiceRef: null
     property string taskNotes: ""
     property bool pomodoroModeSelected: false
     property int selectedWorkMinutes: 25
@@ -27,6 +28,9 @@ Item {
     property string pendingLongFreeAction: ""
     property int pendingLongFreeTaskId: -1
     property string pendingLongFreeTaskTitle: ""
+
+    // 捕获成功后由 MainWindow 统一弹 Toast：专注页自己不持有全局提示条。
+    signal knowledgeGapCaptured(string title)
 
     signal focusEnded()
     // 主动休息没有任务专注语义；结束后由 MainWindow 返回今日任务页。
@@ -69,6 +73,35 @@ Item {
         var id = root.timer && root.timer.hasActiveSession ? root.timer.currentTaskId : root.selectedTaskId
         root.taskNotes = root.taskManagerRef && typeof root.taskManagerRef.getTask === "function" && id > 0
                 ? String(root.taskManagerRef.getTask(id).notes || "") : ""
+    }
+
+    // 捕获知识缺口时带上的来源任务：计时进行中以计时器绑定的任务为准，
+    // 待机时退回页面选中的任务；都没有就记成无来源。
+    function activeSourceTaskId() {
+        var id = root.timerBool("hasActiveSession") ? root.timerNumber("currentTaskId", 0) : root.selectedTaskId
+        return id > 0 ? id : 0
+    }
+
+    function activeSourceTaskTitle() {
+        if (root.timerBool("hasActiveSession") && root.timerTitle().length > 0) {
+            return root.timerTitle()
+        }
+        return root.selectedTaskTitle
+    }
+
+    // 来源任务的科目直接继承过来：绝大多数情况下，做数学时发现的缺口就是数学的。
+    function activeSourceCategoryId() {
+        var id = root.activeSourceTaskId()
+        if (!(id > 0) || !root.taskManagerRef || typeof root.taskManagerRef.getTask !== "function") {
+            return 0
+        }
+        return Number(root.taskManagerRef.getTask(id).categoryId || 0)
+    }
+
+    function openKnowledgeGapCapture() {
+        gapCapturePopup.openWithSource(root.activeSourceTaskId(),
+                                       root.activeSourceTaskTitle(),
+                                       root.activeSourceCategoryId())
     }
 
     function safeSeconds(value) {
@@ -805,6 +838,45 @@ Item {
         // 两种模式下方的内容高度差很大（自由是一行大字时钟，番茄是圆环加时长面板），
         // 之前切换器跟正文一起居中，正文一变高就把切换器顶得上下跳。
         // macOS 的分段控件（日历的日/周/月/年、访达的视图切换）一律待在固定位置。
+        // 快速捕获钮单独锚在右上角。专注页没有页头行——modeSwitch 是单独钉在顶部居中的，
+        // 那个位置是专门定过的（正文一变高就会把它顶得上下跳），这里不去动它。
+        GlassToolbarButton {
+            id: gapCaptureButton
+            objectName: "focusGapCaptureButton"
+
+            anchors.top: parent.top
+            anchors.right: parent.right
+            anchors.topMargin: Theme.space24
+            anchors.rightMargin: Theme.space24
+            width: 36
+            height: 36
+            // 沉浸模式一贯压制弹窗；这里同样不开口子，沉浸就该是干净的。
+            visible: root.state !== "manualRest"
+            reduceMotion: Boolean(root.settings && root.settings.reduceMotion)
+            solidFallback: !Theme.glassBlurAllowed
+            Accessible.name: qsTr("记一笔知识缺口")
+            onClicked: root.openKnowledgeGapCapture()
+
+            GlyphIcon {
+                anchors.centerIn: parent
+                name: "gap"
+                size: 18
+                color: Theme.inkSoft
+            }
+        }
+
+        KnowledgeGapCapturePopup {
+            id: gapCapturePopup
+
+            // 挂在按钮下方，靠右对齐；非模态，底下的计时照常跑。
+            parent: gapCaptureButton
+            x: gapCaptureButton.width - width
+            y: gapCaptureButton.height + Theme.space8
+            gapServiceRef: root.knowledgeGapServiceRef
+
+            onCaptured: function (title) { root.knowledgeGapCaptured(title) }
+        }
+
         SegmentedSwitch {
             id: modeSwitch
             objectName: "focusModeSwitch"

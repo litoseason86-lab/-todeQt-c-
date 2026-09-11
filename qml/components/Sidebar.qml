@@ -200,6 +200,14 @@ Rectangle {
             onClicked: root.itemClicked("goals")
         }
 
+        SidebarItem {
+            text: "知识缺口"
+            marker: "补"
+            iconName: "gap"
+            isActive: root.currentView === "knowledgeGaps"
+            onClicked: root.itemClicked("knowledgeGaps")
+        }
+
         Item {
             Layout.fillHeight: true
         }

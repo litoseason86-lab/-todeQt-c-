@@ -805,6 +805,8 @@ private slots:
     void migrationV9PreservesSnapshotAfterCategoryDeletion();
     void migrationV8BackfillIsIndependentOfDayStartHour();
     void migrationV8DoesNotRewriteExistingCompletionFacts();
+    void migrationV14CreatesKnowledgeGapsAndKeepsExistingData();
+    void migrationV14RejectsStructurallyBrokenKnowledgeGapTable();
     void multiStepMigrationKeepsOnlyThePreMigrationSnapshot();
     void customCategoryCrudValidatesAndEmitsChanges();
     void presetCategoriesCanBeEditedButNotDeleted();
@@ -3446,6 +3448,51 @@ void ServiceTests::migrationV6ClearsUntrustedRoutineLineage()
     QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
     QVERIFY(query.next());
     QCOMPARE(query.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+}
+
+void ServiceTests::migrationV14CreatesKnowledgeGapsAndKeepsExistingData()
+{
+    // 带旧数据跑升级：迁移正确与否要看既有内容有没有被动过，光看版本号涨了不算数。
+    const int taskId = insertTaskRow(QStringLiteral("升级前就有的任务"), logicalToday());
+    QVERIFY(taskId > 0);
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE IF EXISTS knowledge_gaps")));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 13")));
+
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_gaps'")));
+    QVERIFY(query.next());
+
+    // v14 是纯新增表，不读也不写任何旧表；既有任务必须原封不动。
+    QVERIFY(query.exec(QStringLiteral("SELECT title FROM tasks WHERE id = %1").arg(taskId)));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toString(), QStringLiteral("升级前就有的任务"));
+}
+
+void ServiceTests::migrationV14RejectsStructurallyBrokenKnowledgeGapTable()
+{
+    // 只判表名存在是假安全：缺列的表照样能通过 CREATE TABLE IF NOT EXISTS，
+    // 随后一路报成功，直到用户真的打开知识缺口页才查询失败。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE IF EXISTS knowledge_gaps")));
+    QVERIFY(query.exec(QStringLiteral(
+        "CREATE TABLE knowledge_gaps (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT)")));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = %1")
+                           .arg(DatabaseManager::kCurrentSchemaVersion)));
+
+    QVERIFY(!DatabaseManager::instance()->createTables());
+
+    // 收拾干净，避免这条用例把坏结构留给后面的用例。
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE knowledge_gaps")));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 13")));
+    QVERIFY(DatabaseManager::instance()->createTables());
 }
 
 void ServiceTests::freshDatabaseCreatesVersion4PresetCategories()

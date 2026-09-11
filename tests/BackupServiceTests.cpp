@@ -136,6 +136,8 @@ private slots:
     void version13BackupMissingScheduleTableIsRejected();
     void version13BackupMissingScheduleConstraintIsRejected();
     void version13BackupInvalidPrimaryKeyIsRejected();
+    void version14BackupMissingKnowledgeGapTableIsRejected();
+    void olderBackupWithoutKnowledgeGapTableIsAccepted();
     void higherSchemaVersionIsRejected();
     void formatVersionMismatchIsRejected();
     void schemaMetadataMismatchIsRejected();
@@ -417,6 +419,69 @@ void BackupServiceTests::version13BackupMissingScheduleConstraintIsRejected()
     QVERIFY(info.value(QStringLiteral("reason")).toString().contains(
         QStringLiteral("约束")));
     QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+}
+
+void BackupServiceTests::version14BackupMissingKnowledgeGapTableIsRejected()
+{
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    const QString connectionName = QStringLiteral("MissingKnowledgeGapTable");
+    {
+        QSqlDatabase database =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(backupFile());
+        QVERIFY(database.open());
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE knowledge_gaps")));
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+
+    // v14 及以后的备份必须带着这张表。缺了就放行的话，恢复会建出一张空表并报成功，
+    // 用户手写的全部知识缺口就这么无声消失了——而那些内容不可再生。
+    const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
+    QCOMPARE(info.value(QStringLiteral("valid")).toBool(), false);
+    QVERIFY2(info.value(QStringLiteral("reason")).toString().contains(
+                 QStringLiteral("knowledge_gaps")),
+             qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+}
+
+void BackupServiceTests::olderBackupWithoutKnowledgeGapTableIsAccepted()
+{
+    QVERIFY(insertTask(QStringLiteral("旧备份里的任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    const QString connectionName = QStringLiteral("LegacyWithoutKnowledgeGaps");
+    {
+        QSqlDatabase database =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(backupFile());
+        QVERIFY(database.open());
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE knowledge_gaps")));
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    // 降回 v13：这正是升级前做的那些备份的样子。
+    setBackupSchemaVersion(backupFile(), 13);
+
+    // 新增表的必要性必须按备份自己的 schema 版本判断。把它无条件加进所有版本的
+    // 必需表清单，会让用户升级前做的每一个备份都被判成损坏，再也恢复不回来。
+    const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(),
+             qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+
+    // 恢复之后由迁移链把缺的表补齐，用户的旧任务照常还在。
+    QSqlQuery check(DatabaseManager::instance()->database());
+    QVERIFY(check.exec(QStringLiteral(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_gaps'")));
+    QVERIFY(check.next());
+    check.finish();
+    QVERIFY(check.exec(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '旧备份里的任务'")));
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toInt(), 1);
 }
 
 void BackupServiceTests::higherSchemaVersionIsRejected()

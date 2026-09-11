@@ -431,6 +431,21 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // v14 引入知识缺口表。与前面几步同理：表缺失时无论版本号都要建，防御半迁移状态。
+    if (version < 14 || !tableExists(QStringLiteral("knowledge_gaps"))) {
+        if (!migrateToVersion14()) {
+            return false;
+        }
+        version = 14;
+    }
+
+    // 同样不能只判表名存在：缺列的库也会通过 IF NOT EXISTS，
+    // 之后要等用户真的打开知识缺口页才查询失败，那时已经看不出是结构问题。
+    if (!knowledgeGapSchemaIsValid()) {
+        qWarning() << "Knowledge gap schema is incomplete or incompatible";
+        return false;
+    }
+
     // 节次表存在但一行都没有，同样是「按节次」版式画不出任何行的那种坏状态
     // （中断的恢复、外部编辑都会留下它）。上面的守卫只看表在不在，治不了这种；
     // 这里无条件补种一次。insertDefaultSchedulePeriods 自己按「表为空」加了守卫，
@@ -459,7 +474,11 @@ bool DatabaseManager::createTables()
         // 课表网格每次渲染都按「星期几 + 开始时间」取数，这条复合索引让一周七列
         // 各自的查询直接走索引顺序，省掉每次切周都要做的排序。
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_schedule_entries_weekday "
-                       "ON schedule_entries(weekday, start_minutes)")
+                       "ON schedule_entries(weekday, start_minutes)"),
+        // 知识缺口的每次查询都先按状态筛（待处理/已安排/已解决），再按到期日排；
+        // 提示条的「今天到期 / 已逾期」统计也走同一条路径，所以按这两列建复合索引。
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_knowledge_gaps_status_due "
+                       "ON knowledge_gaps(status, due_date)")
     };
 
     for (const QString& indexSql : indexes) {
@@ -1677,6 +1696,113 @@ bool DatabaseManager::migrateToVersion13()
     }
 
     qInfo() << "Database migrated to version 13";
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion14()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+
+    // v14 只新增知识缺口一张表，不读也不写任何既有表，因此与 v13 一样不建迁移快照。
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start database migration transaction:" << m_db.lastError().text();
+        return false;
+    }
+
+    if (!createKnowledgeGapTable() || !setDatabaseVersion(14)) {
+        m_db.rollback();
+        return false;
+    }
+
+    if (!m_db.commit()) {
+        qWarning() << "Failed to commit version 14 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 14";
+    return true;
+}
+
+bool DatabaseManager::createKnowledgeGapTable()
+{
+    QSqlQuery query(m_db);
+
+    // 知识缺口：专注过程中发现、当下没条件处理、之后要专门腾时间补的条目。
+    // 它和 tasks 的分界在于「有没有日期」：tasks.date 是 NOT NULL，而知识缺口的常态
+    // 恰恰是「现在还定不了什么时候处理」，所以 due_date 允许为 NULL（= 未排期）。
+    //
+    // source_task_title 存的是写这条时的现场快照。外键是 ON DELETE SET NULL，
+    // 任务被删后 source_task_id 会变空，但「这条是在复习线代第 3 章时记的」这个信息
+    // 属于当时的上下文，不该跟着任务一起消失——与 focus_sessions 存科目快照同理。
+    //
+    // detail 与 resolution 刻意分成两列：前者是「我当时遇到了什么」，后者是
+    // 「我后来想明白了什么」。混在一个字段里，回看时分不清哪句是问题哪句是答案。
+    const QString createKnowledgeGaps = QStringLiteral(R"SQL(
+        CREATE TABLE IF NOT EXISTS knowledge_gaps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+            detail TEXT NOT NULL DEFAULT '',
+            category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+            source_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+            source_task_title TEXT NOT NULL DEFAULT '',
+            priority INTEGER NOT NULL DEFAULT 1 CHECK(priority IN (0, 1, 2)),
+            status INTEGER NOT NULL DEFAULT 0 CHECK(status IN (0, 1, 2)),
+            due_date TEXT,
+            resolution TEXT NOT NULL DEFAULT '',
+            linked_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            resolved_at TEXT
+        )
+    )SQL");
+    return execSql(query, createKnowledgeGaps, "Failed to create knowledge_gaps table:");
+}
+
+bool DatabaseManager::knowledgeGapSchemaIsValid() const
+{
+    if (!hasGeneratedIntegerId(m_db, QStringLiteral("knowledge_gaps"))) {
+        return false;
+    }
+
+    const QStringList requiredColumns = {
+        QStringLiteral("id"), QStringLiteral("title"), QStringLiteral("detail"),
+        QStringLiteral("category_id"), QStringLiteral("source_task_id"),
+        QStringLiteral("source_task_title"), QStringLiteral("priority"),
+        QStringLiteral("status"), QStringLiteral("due_date"),
+        QStringLiteral("resolution"), QStringLiteral("linked_task_id"),
+        QStringLiteral("created_at"), QStringLiteral("updated_at"),
+        QStringLiteral("resolved_at")
+    };
+    const QStringList actualColumns = tableColumns(QStringLiteral("knowledge_gaps"));
+    for (const QString& column : requiredColumns) {
+        if (!actualColumns.contains(column)) {
+            return false;
+        }
+    }
+
+    QSqlQuery sqlQuery(m_db);
+    if (!sqlQuery.exec(QStringLiteral(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_gaps'"))
+        || !sqlQuery.next()) {
+        return false;
+    }
+    // 状态与优先级的取值域靠库层 CHECK 兜底：服务层虽然也校验，但外部编辑过的库
+    // 只有这里能挡住。缺了 CHECK 的表要当作结构不合法，而不是默默接受。
+    const QString createSql = normalizedCreateSql(sqlQuery.value(0).toString());
+    const QStringList requiredFragments = {
+        QStringLiteral("check(length(trim(title))>0)"),
+        QStringLiteral("check(priorityin(0,1,2))"),
+        QStringLiteral("check(statusin(0,1,2))")
+    };
+    for (const QString& fragment : requiredFragments) {
+        if (!createSql.contains(fragment)) {
+            return false;
+        }
+    }
     return true;
 }
 

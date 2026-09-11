@@ -22,6 +22,11 @@ Item {
     signal manualRestRequested()
     signal manualRestPageRequested()
     signal countdownRequested()
+    // 切到知识缺口清单页；页面自己不做路由。
+    signal knowledgeGapsRequested()
+    // 捕获成功后由 MainWindow 统一弹 Toast。
+    signal knowledgeGapCaptured(string title)
+    signal knowledgeGapsConverted(int count)
     signal deleteRequested(int taskId, string title)
     // 完成任务后向上冒泡，供 MainWindow 弹出“撤销完成”提示条。
     signal taskCompletionUndoable(int taskId, string title)
@@ -42,9 +47,20 @@ Item {
     property var logicalDayServiceRef: null
     property var categoryManagerRef: null
     property var countdownServiceRef: null
+    property var knowledgeGapServiceRef: null
     property var settingsRef: null
     property var overdueTasks: []
     property bool rolloverBannerActive: false
+    // 知识缺口提醒摘要。整份结果由服务算好，页面不自己比日期——
+    // 「今天」的口径只能有一份，在 C++ 侧。
+    property var knowledgeGapSummary: ({})
+    readonly property int gapDueToday: Number(root.knowledgeGapSummary.dueToday || 0)
+    readonly property int gapOverdue: Number(root.knowledgeGapSummary.overdue || 0)
+    readonly property int gapOldestOverdueDays: Number(root.knowledgeGapSummary.oldestOverdueDays || 0)
+    // 只在服务确认查询成功、且确实有到期条目时才提醒。读取失败时保持安静：
+    // 一条内容为「0 条」的提醒条比没有提醒更让人困惑。
+    readonly property bool knowledgeGapBannerActive: Boolean(root.knowledgeGapSummary.valid)
+                                                     && (root.gapDueToday + root.gapOverdue) > 0
     property int pendingDeleteTaskId: -1
     property string loadError: ""
     property bool completionRefreshDelayActive: false
@@ -152,6 +168,17 @@ Item {
 
         function onDailyFocusGoalChanged() {
             root.loadDailyFocusGoal()
+        }
+    }
+
+    Connections {
+        // 在别处记下或解决了缺口，今日页的提示条也要跟着变。
+        target: root.knowledgeGapServiceRef
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
+
+        function onGapsChanged() {
+            root.loadKnowledgeGapSummary()
         }
     }
 
@@ -421,6 +448,44 @@ Item {
         loadTasks();
         loadStats();
         loadDailyFocusGoal();
+        loadKnowledgeGapSummary();
+    }
+
+    function loadKnowledgeGapSummary() {
+        // 服务替身可能没有这个方法；先查可调用性，避免运行时 TypeError。
+        if (!root.knowledgeGapServiceRef
+                || typeof root.knowledgeGapServiceRef.getReminderSummary !== "function") {
+            root.knowledgeGapSummary = ({})
+            return
+        }
+        root.knowledgeGapSummary = root.knowledgeGapServiceRef.getReminderSummary()
+    }
+
+    // 把今天到期和已逾期的条目一次性变成今天的任务。逾期条目的日期保持原样不动——
+    // 顺延会把「这条拖了多久」抹掉，而拖了多久正是判断该不该现在停下来处理它的依据。
+    function convertDueGapsToTasks() {
+        if (!root.knowledgeGapServiceRef
+                || typeof root.knowledgeGapServiceRef.listGaps !== "function"
+                || typeof root.knowledgeGapServiceRef.convertToTask !== "function") {
+            root.loadError = "记录服务不可用"
+            return
+        }
+        // -2 是 kFilterUnresolved：待处理和已安排都要，已解决的不用再做。
+        var candidates = root.knowledgeGapServiceRef.listGaps(-2, 0, "", 0)
+        var converted = 0
+        for (var i = 0; i < candidates.length; ++i) {
+            var gap = candidates[i]
+            if (!gap.dueToday && !gap.overdue) {
+                continue
+            }
+            if (Number(root.knowledgeGapServiceRef.convertToTask(gap.id, root.logicalTodayIso)) > 0) {
+                converted += 1
+            }
+        }
+        root.loadKnowledgeGapSummary()
+        if (converted > 0) {
+            root.knowledgeGapsConverted(converted)
+        }
     }
 
     function setTaskCompletedWithAnimationDelay(id, completed) {
@@ -543,6 +608,16 @@ Item {
                     text: qsTr("搜索 / 批量改期")
                     glyph: "search"
                     onClicked: taskTools.open()
+                }
+
+                PageActionButton {
+                    id: gapCaptureButton
+                    objectName: "todayGapCaptureButton"
+                    text: qsTr("记一笔")
+                    glyph: "gap"
+                    // 今日任务页没有「当前任务」的概念，所以这里的捕获不带来源；
+                    // 带来源的那条路径在专注页上。
+                    onClicked: gapCapturePopup.openWithSource(0, "", 0)
                 }
 
                 PageActionButton {
@@ -684,6 +759,93 @@ Item {
 
                     contentItem: Text {
                         text: rolloverIgnoreButton.text
+                        textFormat: Text.PlainText
+                        color: Theme.inkSoft
+                        font.pixelSize: Theme.fontMd
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+        }
+
+        // 知识缺口提醒条。视觉与交互照搬上面的结转提示条：同一个位置、同一种分量，
+        // 用户不需要学第二套语言。区别只在逾期项不会被顺延，只会被摆到今天来做。
+        Rectangle {
+            objectName: "knowledgeGapBanner"
+            Layout.fillWidth: true
+            Layout.preferredHeight: 52
+            visible: root.knowledgeGapBannerActive
+            radius: Theme.radiusLg
+            color: Theme.glassAccent
+            border.color: Theme.accent
+            border.width: 1
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: Theme.space16
+                anchors.rightMargin: Theme.space12
+                spacing: Theme.space12
+
+                Text {
+                    objectName: "knowledgeGapBannerText"
+                    Layout.fillWidth: true
+                    // 只报「还剩几条」不足以让人停下来；拖得最久的那条拖了多少天才是推力。
+                    text: root.gapOverdue > 0
+                          ? qsTr("有 %1 条待补到期，其中 %2 条已逾期，最久的拖了 %3 天")
+                            .arg(root.gapDueToday + root.gapOverdue)
+                            .arg(root.gapOverdue)
+                            .arg(root.gapOldestOverdueDays)
+                          : qsTr("有 %1 条待补今天到期").arg(root.gapDueToday)
+                    textFormat: Text.PlainText
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.Medium
+                    color: Theme.inkStrong
+                    elide: Text.ElideRight
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                Button {
+                    id: gapConvertButton
+                    objectName: "knowledgeGapBannerConvertButton"
+                    text: qsTr("全部加到今天")
+                    implicitHeight: Theme.controlHeightMd
+
+                    onClicked: root.convertDueGapsToTasks()
+
+                    background: Rectangle {
+                        color: gapConvertButton.hovered ? Theme.accentFillStrong : Theme.accentFill
+                        radius: Theme.radiusMd
+                    }
+
+                    contentItem: Text {
+                        text: gapConvertButton.text
+                        textFormat: Text.PlainText
+                        color: Theme.accentFillInk
+                        font.pixelSize: Theme.fontMd
+                        font.weight: Font.Medium
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                Button {
+                    id: gapOpenButton
+                    objectName: "knowledgeGapBannerOpenButton"
+                    text: qsTr("去看看")
+                    implicitHeight: Theme.controlHeightMd
+
+                    onClicked: root.knowledgeGapsRequested()
+
+                    background: Rectangle {
+                        color: gapOpenButton.hovered ? Theme.surfaceSunken : "transparent"
+                        border.color: Theme.border
+                        border.width: 1
+                        radius: Theme.radiusMd
+                    }
+
+                    contentItem: Text {
+                        text: gapOpenButton.text
                         textFormat: Text.PlainText
                         color: Theme.inkSoft
                         font.pixelSize: Theme.fontMd
@@ -874,6 +1036,18 @@ Item {
             }
         }
 
+    }
+
+    KnowledgeGapCapturePopup {
+        id: gapCapturePopup
+
+        // 挂在页头的「记一笔」钮下方靠右；非模态，不挡住列表。
+        parent: gapCaptureButton
+        x: gapCaptureButton.width - width
+        y: gapCaptureButton.height + Theme.space8
+        gapServiceRef: root.knowledgeGapServiceRef
+
+        onCaptured: function (title) { root.knowledgeGapCaptured(title) }
     }
 
     TaskToolsDialog {

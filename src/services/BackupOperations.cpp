@@ -107,6 +107,7 @@ QString normalizedCreateSql(QString sql)
 
 bool validateRequiredTableStructure(const QSqlDatabase& database,
                                     bool requireScheduleTables,
+                                    bool requireKnowledgeGapTable,
                                     QString* reason)
 {
     struct TableContract {
@@ -171,13 +172,31 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
               QStringLiteral("check(end_minutesbetween1and1440)"),
               QStringLiteral("check(end_minutes>start_minutes)")}});
     }
+    if (requireKnowledgeGapTable) {
+        // v14 起知识缺口是正式业务数据，且内容全部是用户手写、丢了不可再生。
+        // 和课表一样只对 v14 及以后的备份要求这张表：更早的备份本来就没有它，
+        // 无条件要求会把全部历史备份判成损坏（业务规则明文禁止这么做）。
+        versionedContracts.append(
+            {QStringLiteral("knowledge_gaps"),
+             {QStringLiteral("id"), QStringLiteral("title"), QStringLiteral("detail"),
+              QStringLiteral("category_id"), QStringLiteral("source_task_id"),
+              QStringLiteral("source_task_title"), QStringLiteral("priority"),
+              QStringLiteral("status"), QStringLiteral("due_date"),
+              QStringLiteral("resolution"), QStringLiteral("linked_task_id"),
+              QStringLiteral("created_at"), QStringLiteral("updated_at"),
+              QStringLiteral("resolved_at")},
+             {QStringLiteral("check(length(trim(title))>0)"),
+              QStringLiteral("check(priorityin(0,1,2))"),
+              QStringLiteral("check(statusin(0,1,2))")}});
+    }
 
     for (const TableContract& contract : versionedContracts) {
         if (!tableExists(database, contract.name)) {
             *reason = QStringLiteral("备份缺少必要的数据表：%1").arg(contract.name);
             return false;
         }
-        if (contract.name.startsWith(QStringLiteral("schedule_"))
+        if ((contract.name.startsWith(QStringLiteral("schedule_"))
+             || contract.name == QStringLiteral("knowledge_gaps"))
             && !DatabaseManager::hasGeneratedIntegerId(database, contract.name)) {
             *reason = QStringLiteral("备份表主键不能自动生成整数编号：%1").arg(contract.name);
             return false;
@@ -626,7 +645,10 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
                 reason = QStringLiteral("该备份由更高版本创建，当前版本无法恢复");
             }
             if (reason.isEmpty()) {
-                validateRequiredTableStructure(database, pragmaVersion >= 13, &reason);
+                validateRequiredTableStructure(database,
+                                               pragmaVersion >= 13,
+                                               pragmaVersion >= 14,
+                                               &reason);
             }
 
             // 备份是数据，不是可信的数据库程序。

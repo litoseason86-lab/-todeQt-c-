@@ -13,7 +13,7 @@ class DatabaseManager : public QObject
 public:
     // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
-    static constexpr int kCurrentSchemaVersion = 13;
+    static constexpr int kCurrentSchemaVersion = 14;
 
     static DatabaseManager* instance();
 
@@ -72,6 +72,13 @@ private:
     // v13 新增课表两表（schedule_entries / schedule_periods）。纯新增，不触碰任何旧表：
     // 课表项按「星期几 + 时段」循环，与按具体日期存储的 tasks 是两套互不相干的数据。
     bool migrateToVersion13();
+    // v14 新增 knowledge_gaps（知识缺口）。同样是纯新增表，不触碰任何旧表。
+    //
+    // 这里刻意没有沿用 rest_sessions 那种「不升版本、每次建表时幂等补上」的省事做法：
+    // 那种表在恢复一个不含它的旧备份时会被建成空表，于是「数据丢了」会伪装成「恢复成功」。
+    // 休息记录丢了还能从别处推断，知识缺口全是用户手写的原创内容，丢了不可再生，
+    // 必须走版本链，让 BackupOperations 能按备份的 schema 版本要求这张表必须存在。
+    bool migrateToVersion14();
     bool createRoutinesTable();
     // 课表项表与节次预设表。两者一起建：节次预设是课表录入的快捷填充来源，
     // 缺了它课表页的「按节次」显示模式就没有行可画。
@@ -89,6 +96,10 @@ private:
     // v13 是首个会被备份整库恢复的课表版本。CREATE TABLE IF NOT EXISTS
     // 不会修补已存在表的缺列、缺约束或错外键，所以必须显式验证。
     bool scheduleSchemaIsValid() const;
+    // 知识缺口表。与课表同理：CREATE TABLE IF NOT EXISTS 不会修补已存在表的缺列，
+    // 所以建表之后必须显式验证一次结构。
+    bool createKnowledgeGapTable();
+    bool knowledgeGapSchemaIsValid() const;
     // 表的当前列名集合。v5 整表重建需要它来确认自己认识 tasks 的每一列——
     // 重建用的是写死的列清单，遇到不认识的列必须拒绝执行而不是把它连同数据丢掉。
     QStringList tableColumns(const QString& tableName) const;

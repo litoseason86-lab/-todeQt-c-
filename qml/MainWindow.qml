@@ -49,6 +49,7 @@ Item {
     property var statisticsServiceRef: null
     property var focusHistoryServiceRef: null
     property var countdownServiceRef: null
+    property var knowledgeGapServiceRef: null
     property var appSettingsRef: null
     property var focusTimerRef: null
     property var logicalDayServiceRef: null
@@ -208,6 +209,9 @@ Item {
         case "schedule":
             // 课表页同样追加在栈尾，保持既有索引不变。
             return 9;
+        case "knowledgeGaps":
+            // 知识缺口页继续追加在栈尾。既有索引一个都不能动，否则切页状态机会错页。
+            return 10;
         case "today":
         default:
             return 0;
@@ -798,11 +802,18 @@ Item {
                     logicalDayServiceRef: root.logicalDayServiceRef
                     categoryManagerRef: root.categoryManagerRef
                     countdownServiceRef: root.countdownServiceRef
+                    knowledgeGapServiceRef: root.knowledgeGapServiceRef
                     settingsRef: root.appSettingsRef
                     pendingDeleteTaskId: root.pendingDeleteTaskId
 
                     onStartFocus: function (taskId, taskTitle) {
                         root.startFocusForTask(taskId, taskTitle);
+                    }
+
+                    onKnowledgeGapsRequested: root.switchToView("knowledgeGaps")
+                    onKnowledgeGapCaptured: root.showToast(qsTr("已记入待补"))
+                    onKnowledgeGapsConverted: function (count) {
+                        root.showToast(qsTr("已把 %1 条待补加到今天的任务").arg(count))
                     }
 
                     onManualRestRequested: root.startManualRest()
@@ -825,8 +836,11 @@ Item {
                     objectName: "focusViewPage"
                     timer: root.focusTimerRef
                     taskManagerRef: root.taskManagerRef
+                    knowledgeGapServiceRef: root.knowledgeGapServiceRef
                     settings: root.appSettingsRef
                     pageActive: root.currentView === "focus"
+
+                    onKnowledgeGapCaptured: root.showToast(qsTr("已记入待补"))
 
                     onFocusEnded: {
                         // 先退出沉浸再切页，今日页不能留在无侧栏的原生全屏状态。
@@ -960,6 +974,19 @@ Item {
                     settingsRef: root.appSettingsRef
                     categoryManagerRef: root.categoryManagerRef
                     logicalDayServiceRef: root.logicalDayServiceRef
+                }
+
+                KnowledgeGapView {
+                    objectName: "knowledgeGapViewPage"
+                    pageActive: root.currentView === "knowledgeGaps"
+                    knowledgeGapServiceRef: root.knowledgeGapServiceRef
+                    categoryManagerRef: root.categoryManagerRef
+                    logicalDayServiceRef: root.logicalDayServiceRef
+                    settingsRef: root.appSettingsRef
+
+                    onGapConvertedToTask: function (title) {
+                        root.showToast(qsTr("已加到今天的任务：%1").arg(title))
+                    }
                 }
             }
 

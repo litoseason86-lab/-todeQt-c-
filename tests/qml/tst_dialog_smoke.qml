@@ -113,9 +113,40 @@ TestCase {
         settingsRef: appSettings
     }
 
+    QtObject {
+        id: knowledgeGapService
+
+        signal gapsChanged()
+        signal operationFailed(string message)
+
+        readonly property int maxTitleLength: 100
+
+        function addGap(title, categoryId, detail, priority, dueDate, sourceTaskId) { return 1 }
+        function updateGap(id, title, categoryId, detail, priority, dueDate) { return true }
+        function resolveGap(id, resolution) { return true }
+    }
+
+    KnowledgeGapDialog {
+        id: knowledgeGapDialog
+
+        parent: testCase
+        gapServiceRef: knowledgeGapService
+        categoryManagerRef: categoryManager
+        todayIso: "2026-09-11"
+    }
+
+    KnowledgeGapCapturePopup {
+        id: knowledgeGapCapturePopup
+
+        parent: testCase
+        gapServiceRef: knowledgeGapService
+    }
+
     function cleanup() {
         entryDialog.close()
         settingsDialog.close()
+        knowledgeGapDialog.close()
+        knowledgeGapCapturePopup.close()
         wait(60)
         scheduleService.failPeriodLoad = false
         scheduleService.setPeriodsCallCount = 0
@@ -222,5 +253,60 @@ TestCase {
         compare(appSettings.semesterStartDate, "2026-08-31")
         compare(appSettings.semesterWeeks, 16)
         compare(appSettings.scheduleShowWeekend, true)
+    }
+
+    function test_knowledgeGapDialogOpensForAdd() {
+        knowledgeGapDialog.openForAdd()
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        compare(knowledgeGapDialog.editing, false)
+        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapTitleField").text, "")
+        // 新增默认「中」优先级、不指定科目、未排期——捕获的常态就是这三样都还没想好。
+        compare(knowledgeGapDialog.selectedPriority, 1)
+        compare(knowledgeGapDialog.selectedCategoryId, 0)
+        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDueField").text, "")
+    }
+
+    function test_knowledgeGapDialogOpensForEdit() {
+        knowledgeGapDialog.openForEdit({
+            id: 7,
+            title: "相似对角化",
+            detail: "教材第 87 页",
+            categoryId: 1,
+            priority: 2,
+            status: 2,
+            dueDate: "2026-09-20",
+            resolution: "特征向量线性无关就可以"
+        })
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        compare(knowledgeGapDialog.editing, true)
+        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapTitleField").text, "相似对角化")
+        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDetailField").text, "教材第 87 页")
+        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDueField").text, "2026-09-20")
+        compare(knowledgeGapDialog.selectedPriority, 2)
+        // 已解决的条目才回填结论；未解决时那个输入框根本不该出现。
+        compare(knowledgeGapDialog.resolvedState, true)
+        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapResolutionField").text,
+                "特征向量线性无关就可以")
+    }
+
+    function test_knowledgeGapDialogRejectsMalformedDueDate() {
+        knowledgeGapDialog.openForAdd()
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        testCase.fieldIn(knowledgeGapDialog, "knowledgeGapTitleField").text = "日期填错"
+        testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDueField").text = "2026-02-31"
+
+        knowledgeGapDialog.submit()
+
+        // 2 月 31 日会被 JavaScript 的 Date 悄悄滚到 3 月 3 日；表单必须回查年月日再拒绝，
+        // 否则用户等提醒的那天和实际排期的那天不是同一天。
+        verify(knowledgeGapDialog.opened)
+        verify(knowledgeGapDialog.errorText.length > 0)
+    }
+
+    function test_knowledgeGapCapturePopupOpens() {
+        knowledgeGapCapturePopup.openWithSource(3, "复习线代第 3 章", 1)
+        tryVerify(function () { return knowledgeGapCapturePopup.opened }, 2000)
+        compare(knowledgeGapCapturePopup.sourceTaskId, 3)
+        compare(testCase.fieldIn(knowledgeGapCapturePopup, "knowledgeGapCaptureField").text, "")
     }
 }

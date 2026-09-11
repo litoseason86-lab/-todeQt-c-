@@ -117,6 +117,8 @@ set(APP_SOURCES
     src/services/GlobalHotkeyBackend.h
     src/services/ShortcutRegistry.h
     src/services/ShortcutRegistry.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
     src/platform/macos/MacStatusBarController.h
     src/platform/macos/MacStatusBarController.mm
     src/platform/macos/MacNotificationBackend.h
@@ -391,6 +393,37 @@ target_link_libraries(CountdownServiceTests PRIVATE
 
 pomodoro_todo_enable_warnings(CountdownServiceTests)
 add_test(NAME CountdownServiceTests COMMAND CountdownServiceTests)
+
+# 知识缺口：捕获、排期、状态流转与转任务事务。
+# 需要 TaskManager 是因为 convertToTask 会真的往 tasks 里插行，测试要能回查这条任务；
+# 不引入 FocusTimer——知识缺口本来就不接计时。
+add_executable(KnowledgeGapServiceTests
+    tests/KnowledgeGapServiceTests.cpp
+    src/models/Task.h
+    src/models/Task.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+)
+
+target_link_libraries(KnowledgeGapServiceTests PRIVATE
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+pomodoro_todo_enable_warnings(KnowledgeGapServiceTests)
+add_test(NAME KnowledgeGapServiceTests COMMAND KnowledgeGapServiceTests)
 
 # 长期目标：进度全部由 focus_sessions 现算，所以测试直接写入专注记录再断言聚合结果。
 # 不引入 FocusTimer——本目标验证的是聚合口径与里程碑去重，不是计时器状态机。

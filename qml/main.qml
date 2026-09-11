@@ -59,6 +59,7 @@ ApplicationWindow {
         statisticsServiceRef: typeof statisticsService === "undefined" ? null : statisticsService
         focusHistoryServiceRef: typeof focusHistoryService === "undefined" ? null : focusHistoryService
         countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
+        knowledgeGapServiceRef: typeof knowledgeGapService === "undefined" ? null : knowledgeGapService
         appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
         focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
         logicalDayServiceRef: typeof logicalDayService === "undefined" ? null : logicalDayService

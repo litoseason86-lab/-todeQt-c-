@@ -14,6 +14,7 @@
 #include "services/BackupService.h"
 #include "services/CategoryManager.h"
 #include "services/CountdownService.h"
+#include "services/KnowledgeGapService.h"
 #include "services/GoalService.h"
 #include "services/ExportService.h"
 #include "services/FocusHistoryService.h"
@@ -147,6 +148,11 @@ int main(int argc, char *argv[])
     QObject::connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged,
                      GoalService::instance(), &GoalService::refreshMilestones);
 
+    // 知识缺口转任务会往 tasks 里插一行。在装配层把它接到任务变更信号上，
+    // 任务列表就能立刻刷新，而不必让 KnowledgeGapService 反向依赖 TaskManager。
+    QObject::connect(KnowledgeGapService::instance(), &KnowledgeGapService::tasksAffected,
+                     TaskManager::instance(), &TaskManager::tasksChanged);
+
     QQmlApplicationEngine engine;
     // QML 通过单例上下文对象访问服务，视图层保持声明式和轻量。
     engine.rootContext()->setContextProperty(QStringLiteral("categoryManager"), CategoryManager::instance());
@@ -158,6 +164,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("statisticsService"), StatisticsService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("knowledgeGapService"), KnowledgeGapService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("goalService"), GoalService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("routineManager"), RoutineManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("scheduleService"), ScheduleService::instance());

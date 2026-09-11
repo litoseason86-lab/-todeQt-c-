@@ -21,7 +21,10 @@
         <file alias="qml/views/DashboardView.qml">../qml/views/DashboardView.qml</file>
         <file alias="qml/views/DashboardFormat.js">../qml/views/DashboardFormat.js</file>
         <file alias="qml/views/GoalsView.qml">../qml/views/GoalsView.qml</file>
+        <file alias="qml/views/KnowledgeGapView.qml">../qml/views/KnowledgeGapView.qml</file>
         <file alias="qml/components/GlassPanel.qml">../qml/components/GlassPanel.qml</file>
+        <file alias="qml/components/KnowledgeGapCapturePopup.qml">../qml/components/KnowledgeGapCapturePopup.qml</file>
+        <file alias="qml/components/KnowledgeGapDialog.qml">../qml/components/KnowledgeGapDialog.qml</file>
         <file alias="qml/components/GlassToolbarButton.qml">../qml/components/GlassToolbarButton.qml</file>
         <file alias="qml/components/PageActionButton.qml">../qml/components/PageActionButton.qml</file>
         <file alias="qml/components/SegmentedSwitch.qml">../qml/components/SegmentedSwitch.qml</file>

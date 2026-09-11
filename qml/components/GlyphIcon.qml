@@ -179,6 +179,15 @@ Canvas {
             dot(5, 7, 1.2); dot(5, 12, 1.2); dot(5, 17, 1.2)
             line(9, 7, 20, 7); line(9, 12, 20, 12); line(9, 17, 20, 17)
             break
+        case "gap": // 知识缺口：圆圈里一个问号——「这块我还没搞懂」
+            circle(12, 12, 9)
+            // 问号的弯钩用两段圆弧接一条竖线画；底部圆点单独点，避免和竖线连成感叹号。
+            begin()
+            ctx.arc(12, 9.6, 2.9, Math.PI, Math.PI * 2)
+            ctx.lineTo(12, 14)
+            stroke()
+            dot(12, 16.8, 0.95)
+            break
         case "export": // 数据导出
             begin(); ctx.moveTo(12, 4); ctx.lineTo(12, 15); stroke()
             poly([8, 8, 12, 4, 16, 8], false)
