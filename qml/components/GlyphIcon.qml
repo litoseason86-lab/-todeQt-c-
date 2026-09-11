@@ -179,14 +179,35 @@ Canvas {
             dot(5, 7, 1.2); dot(5, 12, 1.2); dot(5, 17, 1.2)
             line(9, 7, 20, 7); line(9, 12, 20, 12); line(9, 17, 20, 17)
             break
-        case "gap": // 知识缺口：圆圈里一个问号——「这块我还没搞懂」
-            circle(12, 12, 9)
-            // 问号的弯钩用两段圆弧接一条竖线画；底部圆点单独点，避免和竖线连成感叹号。
+        case "gap": // 知识缺口：便签加笔——「随手记一笔，回头再补」
+            // 2026-09-11 看过灯泡、书签加号、问号气泡的对比稿后选定，原先的圆圈问号被嫌丑。
+            // 方框右上角留出缺口给笔尖，和 SF Symbols 的 square.and.pencil 同一种构图。
             begin()
-            ctx.arc(12, 9.6, 2.9, Math.PI, Math.PI * 2)
-            ctx.lineTo(12, 14)
+            ctx.moveTo(12.5, 4.5)
+            ctx.lineTo(7.2, 4.5)
+            ctx.arcTo(4.5, 4.5, 4.5, 7.2, 2.7)
+            ctx.lineTo(4.5, 16.8)
+            ctx.arcTo(4.5, 19.5, 7.2, 19.5, 2.7)
+            ctx.lineTo(16.8, 19.5)
+            ctx.arcTo(19.5, 19.5, 19.5, 16.8, 2.7)
+            ctx.lineTo(19.5, 11.5)
             stroke()
-            dot(12, 16.8, 0.95)
+            // 笔身画成窄长的闭合轮廓：小尺寸下两条边被描边合成一根实心笔杆，顶端圆头、底端尖头。
+            begin()
+            ctx.moveTo(11.36, 11.36)
+            ctx.lineTo(18.36, 4.36)
+            ctx.arc(19, 5, 0.9, Math.PI * 1.25, Math.PI * 2.25, false)
+            ctx.lineTo(12.64, 12.64)
+            ctx.lineTo(10.44, 13.56)
+            ctx.closePath()
+            stroke()
+            break
+        case "expand": // 沉浸模式：两支朝外的箭头，取代原来的「⛶」字符
+            // 字符的笔画粗细跟字体走，和旁边的线性图标放在一起一粗一细，所以改成同一族画法。
+            line(5, 5, 10.2, 10.2)
+            poly([5, 9.8, 5, 5, 9.8, 5], false)
+            line(19, 19, 13.8, 13.8)
+            poly([19, 14.2, 19, 19, 14.2, 19], false)
             break
         case "export": // 数据导出
             begin(); ctx.moveTo(12, 4); ctx.lineTo(12, 15); stroke()

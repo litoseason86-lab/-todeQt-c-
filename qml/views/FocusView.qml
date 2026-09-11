@@ -858,20 +858,31 @@ Item {
             anchors.top: immersiveButton.top
             anchors.right: immersiveButton.left
             anchors.rightMargin: Theme.space4
-            implicitWidth: 40
+            implicitWidth: Theme.controlHeightMd
             implicitHeight: Theme.controlHeightMd
             // 沉浸模式一贯压制弹窗；主动休息时也不出现，那段时间没有可记的上下文。
             visible: root.state !== "manualRest"
+            // 按下要有第二档反馈：悬停已经出底，按下若只靠颜色就和悬停分不开。
+            scale: gapCaptureButton.down ? 0.94 : 1.0
+
+            Behavior on scale {
+                NumberAnimation { duration: Theme.reduceMotion ? 0 : 90; easing.type: Easing.OutQuad }
+            }
 
             onClicked: root.openKnowledgeGapCapture()
 
-            // 与沉浸钮同一套处理：常态透明、悬停才出底。专注页要安静，
-            // 一块常驻的玻璃浮在这里会比紧挨着的那颗钮重一大截。
+            // 与沉浸钮同一套外观：常态透明、悬停才出圆形玻璃底。2026-09-11 对比过常驻玻璃圆钮
+            // 和两钮合成胶囊后选定——专注页要安静，常驻的玻璃会比计时本身还抢眼。
             background: Rectangle {
-                color: gapCaptureButton.hovered ? Theme.surface : "transparent"
-                border.color: gapCaptureButton.hovered ? Theme.border : "transparent"
+                radius: height / 2
+                // 起点用 glassHoverIdle（与 glassHover 同色、全透明），渐变时不会插出灰影。
+                color: gapCaptureButton.hovered ? Theme.glassHover : Theme.glassHoverIdle
+                border.color: gapCaptureButton.hovered ? Theme.glassBorder : "transparent"
                 border.width: 1
-                radius: Theme.radiusMd
+
+                Behavior on color {
+                    ColorAnimation { duration: Theme.reduceMotion ? 0 : 120 }
+                }
             }
 
             GlyphIcon {
@@ -1523,7 +1534,7 @@ Item {
             id: immersiveButton
             objectName: "immersiveButton"
 
-            // 内容是「⛶」这个符号，读屏读不出用途，必须显式命名。
+            // 内容是图标，读屏读不出用途，必须显式命名。
             Accessible.role: Accessible.Button
             Accessible.name: qsTr("进入沉浸模式")
             Accessible.onPressAction: immersiveButton.clicked()
@@ -1532,25 +1543,37 @@ Item {
             anchors.right: parent.right
             anchors.topMargin: Theme.space16
             anchors.rightMargin: Theme.space16
-            implicitWidth: 40
+            implicitWidth: Theme.controlHeightMd
             implicitHeight: Theme.controlHeightMd
             visible: root.immersiveAvailable
+            scale: immersiveButton.down ? 0.94 : 1.0
+
+            Behavior on scale {
+                NumberAnimation { duration: Theme.reduceMotion ? 0 : 90; easing.type: Easing.OutQuad }
+            }
 
             onClicked: root.immersiveRequested()
 
+            // 外观与记一笔钮保持一致，理由见那颗钮的注释。
             background: Rectangle {
-                color: immersiveButton.hovered ? Theme.surface : "transparent"
-                border.color: immersiveButton.hovered ? Theme.border : "transparent"
+                radius: height / 2
+                color: immersiveButton.hovered ? Theme.glassHover : Theme.glassHoverIdle
+                border.color: immersiveButton.hovered ? Theme.glassBorder : "transparent"
                 border.width: 1
-                radius: Theme.radiusMd
+
+                Behavior on color {
+                    ColorAnimation { duration: Theme.reduceMotion ? 0 : 120 }
+                }
             }
 
-            contentItem: Text {
-                text: "⛶"
-                font.pixelSize: Theme.fontLg
-                color: Theme.ink
-                horizontalAlignment: Text.AlignHCenter
-                verticalAlignment: Text.AlignVCenter
+            // 原先是「⛶」字符：笔画粗细跟字体走，和旁边的线性图标放在一起一粗一细。
+            contentItem: Item {
+                GlyphIcon {
+                    anchors.centerIn: parent
+                    name: "expand"
+                    size: 18
+                    color: Theme.ink
+                }
             }
         }
     }

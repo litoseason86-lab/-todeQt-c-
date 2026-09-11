@@ -1414,4 +1414,28 @@ TestCase {
         compare(Math.round(whileIdle.x), Math.round(whileActive.x))
         compare(Math.round(whileIdle.y), Math.round(whileActive.y))
     }
+
+    function test_topRightButtonsShareCircularChrome() {
+        // 2026-09-11 两颗钮换成同一套外观：同尺寸的正圆、常态透明、悬停才出玻璃底。
+        // 只改一颗、另一颗留着旧的圆角矩形或「⛶」字符，放在一起就是一方一圆、一粗一细。
+        focusTimer.hasActiveSession = true
+        view.toPomodoroTab(true)
+        view.startPomodoro()
+        wait(20)
+
+        var capture = findChild(view, "focusGapCaptureButton")
+        var immersive = findChild(view, "immersiveButton")
+        verify(capture)
+        verify(immersive)
+        compare(capture.width, immersive.width)
+        compare(capture.height, immersive.height)
+        compare(capture.width, capture.height)
+        compare(capture.background.radius, capture.height / 2)
+        compare(immersive.background.radius, immersive.height / 2)
+        // 常态必须完全透明：专注页要安静，常驻的底会比计时本身还抢眼。
+        compare(capture.background.color.a, 0)
+        compare(immersive.background.color.a, 0)
+        // 沉浸钮不再用字符：字符的笔画粗细跟字体走，和线性图标放在一起一粗一细。
+        compare(immersive.contentItem.text, undefined)
+    }
 }
