@@ -223,6 +223,11 @@ Popup {
                     clip: true
                     contentWidth: availableWidth
                     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+                    // Basic 风格的竖向滚动条贴着 ScrollView 右缘浮在内容上面，ScrollView 并不给它让位：
+                    // 页面最右一列控件（侧栏顺序的 ↓ 按钮、各行开关）会被滚动条压住。
+                    // 右侧固定留出滚动条宽度再加一点间距。不绑 effectiveScrollBarWidth：
+                    // 它随「内容是否超出一屏」变化，而内容高度又受可用宽度（文字换行）影响，会绕成绑定循环。
+                    rightPadding: ScrollBar.vertical.width + Theme.space4
 
                     Loader {
                         id: pageLoader

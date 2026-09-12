@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtTest
 import "../../qml/components"
 
@@ -204,5 +205,26 @@ TestCase {
 
         dialog.requestSection(0)
         tryCompare(pageScroll.contentItem, "contentY", 0)
+    }
+
+    function test_verticalScrollBarDoesNotCoverPageContent() {
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        dialog.requestSection(0)
+
+        var pageLoader = findChild(dialog, "settingsPageLoader")
+        var pageScroll = findChild(dialog, "settingsPageScroll")
+        verify(pageLoader)
+        verify(pageScroll)
+        tryCompare(pageLoader, "status", Loader.Ready)
+
+        // Basic 风格的竖向滚动条浮在 ScrollView 右缘；页面内容的右边界必须落在它左侧，
+        // 否则最右一列控件（侧栏顺序的 ↓ 按钮、各行开关）会被滚动条压住。
+        var bar = pageScroll.ScrollBar.vertical
+        verify(bar)
+        verify(bar.width > 0)
+        var contentRight = pageLoader.mapToItem(pageScroll, pageLoader.width, 0).x
+        verify(contentRight <= bar.x,
+               "页面内容右缘 " + contentRight + " 越过了滚动条左缘 " + bar.x)
     }
 }

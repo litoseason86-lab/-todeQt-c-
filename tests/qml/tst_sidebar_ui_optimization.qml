@@ -54,7 +54,9 @@ TestCase {
     function findText(value) {
         var children = collectChildren(sidebar, []);
         for (var i = 0; i < children.length; ++i) {
-            if (children[i].text === value && children[i].font !== undefined) {
+            // 用 textFormat 认 Text，不用 font：侧栏条目根是 Control，本身就带 text 和 font，
+            // 按 font 判断会把整条条目当成它里面的那行字。
+            if (children[i].text === value && children[i].textFormat !== undefined) {
                 return children[i];
             }
         }
@@ -100,9 +102,36 @@ TestCase {
         signalName: "itemClicked"
     }
 
+    function test_focusComingBackWithoutKeyboardDoesNotShowRing() {
+        // 用户截图里的 bug：鼠标点过「今日任务」后切到专注计时，切走应用再切回来时
+        // 焦点被还给那一项。旧实现只看 activeFocus，于是它亮起焦点环，
+        // 和当前选中项一起在侧栏出现两个框。
+        var item = sidebarItemForMarker("今")
+        var other = sidebarItemForMarker("专")
+
+        item.forceActiveFocus(Qt.TabFocusReason)
+        tryCompare(item, "showFocusRing", true)
+
+        // 窗口重新激活：焦点回到原来那一项，但这不是键盘导航。
+        other.forceActiveFocus(Qt.MouseFocusReason)
+        item.forceActiveFocus(Qt.ActiveWindowFocusReason)
+        tryCompare(item, "activeFocus", true)
+        compare(item.showFocusRing, false)
+
+        // 弹窗关闭把焦点还回来，同样不该画环。
+        other.forceActiveFocus(Qt.MouseFocusReason)
+        item.forceActiveFocus(Qt.PopupFocusReason)
+        tryCompare(item, "activeFocus", true)
+        compare(item.showFocusRing, false)
+    }
+
     function test_focusRingOnlyAppearsForKeyboardFocus() {
         var item = sidebarItemForMarker("今")
-        item.forceActiveFocus()
+        // 先把焦点移到别处：对已经有焦点的项再调 forceActiveFocus 不会重新派发焦点事件，
+        // 焦点原因还停在上一次，测到的就不是「Tab 进来」这条路径。
+        sidebarItemForMarker("设").forceActiveFocus(Qt.MouseFocusReason)
+        // Tab 把焦点送进来才画焦点环。
+        item.forceActiveFocus(Qt.TabFocusReason)
         tryCompare(item, "showFocusRing", true)
         // 直接触发命中区的 clicked：本文件的测试窗口没有显示，收不到真实鼠标事件。
         // 鼠标点击同样会取焦点（Tab 要能从当前项继续），但不该留下焦点环。

@@ -273,7 +273,8 @@ TestCase {
         // 新增默认「中」优先级、不指定科目、未排期——捕获的常态就是这三样都还没想好。
         compare(knowledgeGapDialog.selectedPriority, 1)
         compare(knowledgeGapDialog.selectedCategoryId, 0)
-        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDueField").text, "")
+        compare(knowledgeGapDialog.dueIso, "")
+        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDuePicker").labelText, "未排期")
     }
 
     function test_knowledgeGapDialogOpensForEdit() {
@@ -291,7 +292,9 @@ TestCase {
         compare(knowledgeGapDialog.editing, true)
         compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapTitleField").text, "相似对角化")
         compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDetailField").text, "教材第 87 页")
-        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDueField").text, "2026-09-20")
+        compare(knowledgeGapDialog.dueIso, "2026-09-20")
+        // 胶囊按传入的逻辑今天说话：2026-09-11 那天看 9 月 20 日就是「9月20日 周日」。
+        compare(testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDuePicker").labelText, "9月20日 周日")
         compare(knowledgeGapDialog.selectedPriority, 2)
         // 已解决的条目才回填结论；未解决时那个输入框根本不该出现。
         compare(knowledgeGapDialog.resolvedState, true)
@@ -303,7 +306,9 @@ TestCase {
         knowledgeGapDialog.openForAdd()
         tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
         testCase.fieldIn(knowledgeGapDialog, "knowledgeGapTitleField").text = "日期填错"
-        testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDueField").text = "2026-02-31"
+        // 胶囊本身只产出合法日期；这条守的是「外面塞进来一个坏日期」时表单仍然拦得住，
+        // 比如打开一条日期被外部写坏的旧记录。
+        knowledgeGapDialog.dueIso = "2026-02-31"
 
         knowledgeGapDialog.submit()
 
@@ -311,6 +316,23 @@ TestCase {
         // 否则用户等提醒的那天和实际排期的那天不是同一天。
         verify(knowledgeGapDialog.opened)
         verify(knowledgeGapDialog.errorText.length > 0)
+    }
+
+    function test_knowledgeGapDialogTakesDateFromThePill() {
+        knowledgeGapDialog.openForAdd()
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        var pill = testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDuePicker")
+        verify(pill)
+
+        // 胶囊是受控组件：它只发 dateSelected，写回由弹窗做。
+        pill.pick("2026-09-20")
+        compare(knowledgeGapDialog.dueIso, "2026-09-20")
+        compare(pill.labelText, "9月20日 周日")
+
+        // 清除回到未排期——留空是这个字段的常态。
+        pill.pick("")
+        compare(knowledgeGapDialog.dueIso, "")
+        compare(pill.labelText, "未排期")
     }
 
     function test_knowledgeGapCapturePopupOpens() {
@@ -346,7 +368,7 @@ TestCase {
         var limit = knowledgeGapDialog.availableWidth
         // 布局的最小宽度一旦超过弹窗可用宽度，Layout 会按最小宽度排版，
         // 整列控件一起越过右边界——日期、「未排期」和优先级挤在同一行时就是这样。
-        var names = ["knowledgeGapTitleField", "knowledgeGapDueField", "knowledgeGapClearDueButton",
+        var names = ["knowledgeGapTitleField", "knowledgeGapDuePicker",
                      "knowledgeGapPrioritySwitch", "knowledgeGapCategoryBox"]
         for (var i = 0; i < names.length; ++i) {
             var item = testCase.fieldIn(knowledgeGapDialog, names[i])

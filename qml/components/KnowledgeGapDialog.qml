@@ -23,7 +23,7 @@ Dialog {
 
     property var gapServiceRef: null
     property var categoryManagerRef: null
-    // 未排期时日期输入留空；空是合法输入，表示「还没想好什么时候处理」。
+    // 未排期时日期留空；空是合法输入，表示「还没想好什么时候处理」。
     property string todayIso: ""
 
     property int editingId: -1
@@ -33,6 +33,9 @@ Dialog {
     property int selectedPriority: 1
     property int selectedCategoryId: 0
     property bool resolvedState: false
+    // 计划处理日期（yyyy-MM-dd，空串表示未排期）。日期胶囊是受控组件，
+    // 选中的日期存在这里，由本弹窗写回。
+    property string dueIso: ""
     // 科目下拉的数据源。首项是「不指定」：知识缺口常常是在还没分清属于哪一科时记下的。
     // 存成属性、由 refreshCategories 显式重查，而不是在 model 绑定里直接调 getAllCategories()：
     // 那样只在创建时查一次，之后科目增删、弹窗重新打开都看不到变化。
@@ -92,7 +95,7 @@ Dialog {
         root.errorText = ""
         titleField.text = ""
         detailField.text = ""
-        dueField.text = ""
+        root.dueIso = ""
         resolutionField.text = ""
         root.selectedPriority = 1
         root.selectedCategoryId = 0
@@ -107,7 +110,7 @@ Dialog {
         root.errorText = ""
         titleField.text = String(gap.title || "")
         detailField.text = String(gap.detail || "")
-        dueField.text = String(gap.dueDate || "")
+        root.dueIso = String(gap.dueDate || "")
         resolutionField.text = String(gap.resolution || "")
         root.selectedPriority = root.priorityOrDefault(gap.priority)
         root.selectedCategoryId = Number(gap.categoryId || 0)
@@ -123,8 +126,9 @@ Dialog {
             root.errorText = "请先填写要记录的内容"
             return
         }
-        // 日期允许留空（= 未排期）；填了就必须是合法日期，不能静默退化成未排期。
-        var due = dueField.text.trim()
+        // 日期允许留空（= 未排期）。胶囊本身只产出合法日期，这里仍然回查一次：
+        // 编辑一条外部写坏了日期的旧记录时，坏日期不能顺着保存下去。
+        var due = root.dueIso.trim()
         if (due.length > 0 && LogicalDay.parseIsoDate(due) === null) {
             root.errorText = "日期需要形如 2026-09-11"
             return
@@ -277,23 +281,18 @@ Dialog {
                 color: Theme.inkSoft
             }
 
-            RowLayout {
-                spacing: Theme.space8
-
-                DateInput {
-                    id: dueField
-                    objectName: "knowledgeGapDueField"
-                    onEdited: if (root.errorText.length > 0) root.errorText = ""
-                }
-
-                // 留空是常态，所以「清空」必须是一个一眼能看到的动作，
-                // 而不是让用户自己去把输入框里的字删干净。
-                Button {
-                    objectName: "knowledgeGapClearDueButton"
-                    text: qsTr("未排期")
-                    implicitHeight: Theme.controlHeightMd
-                    enabled: dueField.text.length > 0
-                    onClicked: dueField.text = ""
+            // 日期胶囊：点开挑日子，不用手打。未排期是它的常态文案，清除也做在胶囊上，
+            // 原先那个常驻的「未排期」灰方块与会标红的空输入框一起去掉了。
+            DatePill {
+                objectName: "knowledgeGapDuePicker"
+                Layout.alignment: Qt.AlignLeft
+                dateIso: root.dueIso
+                todayIso: root.todayIso
+                onDateSelected: function (iso) {
+                    root.dueIso = iso
+                    if (root.errorText.length > 0) {
+                        root.errorText = ""
+                    }
                 }
             }
         }

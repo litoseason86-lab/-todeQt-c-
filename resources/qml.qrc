@@ -100,6 +100,7 @@
         <file alias="sounds/milestone.wav">sounds/milestone.wav</file>
         <file alias="sounds/goal-achieved.wav">sounds/goal-achieved.wav</file>
         <file alias="qml/components/DateInput.qml">../qml/components/DateInput.qml</file>
+        <file alias="qml/components/DatePill.qml">../qml/components/DatePill.qml</file>
         <file alias="qml/components/TaskToolsDialog.qml">../qml/components/TaskToolsDialog.qml</file>
     </qresource>
 </RCC>

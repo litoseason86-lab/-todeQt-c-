@@ -67,7 +67,141 @@ FocusScope {
         }
     }
 
+    // —— 拖动排序 ——
+    // 2026-09-11 用户看过设计稿后选定「只留拖动，去掉 ↑↓」：行更干净，接受键盘无法调整顺序。
+    //
+    // 拖动期间完全不动模型，只记「谁在拖、要落在第几位」，松手才整份提交：
+    // 中途改模型会让 Repeater 重建全部行，正在拖的那一行连同它的 DragHandler 一起被销毁。
+    property string draggingEntryId: ""
+    // 松手后的最终下标；-1 表示当前没有有效落点。
+    property int dropTargetIndex: -1
+    readonly property int draggingFromIndex: root.draggingEntryId.length > 0
+                                             ? root.sidebarOrder.indexOf(root.draggingEntryId) : -1
+    // 设置页自己不持有滚动区（ScrollView 在 SettingsDialog 里），拖动开始时沿父链找最近的 Flickable。
+    property var dragScroller: null
+    property real lastDragSceneY: 0
+
+    // 指示线的 y（相对列表宿主）；-1 表示不画。
+    // 往下拖落在目标行之后，往上拖落在目标行之前——与松手后的真实位置一致。
+    readonly property real dropIndicatorY: {
+        if (root.draggingFromIndex < 0 || root.dropTargetIndex < 0
+                || root.dropTargetIndex === root.draggingFromIndex) {
+            return -1
+        }
+        var targetRow = orderRepeater.itemAt(root.dropTargetIndex)
+        if (!targetRow) {
+            return -1
+        }
+        var slotY = root.dropTargetIndex > root.draggingFromIndex
+                ? targetRow.y + targetRow.height + orderList.spacing / 2
+                : targetRow.y - orderList.spacing / 2
+        // 首行上方、末行下方各留 1px，2px 的线不越出宿主。
+        return Math.max(1, Math.min(orderList.height - 1, slotY))
+    }
+
+    function findScrollFlickable() {
+        var candidate = root.parent
+        while (candidate) {
+            // 沿父链按属性认 Flickable：这条链的静态类型只有 QQuickItem，滚动区的这三个属性
+            // 只有运行时才看得到。就地压制这一处类型推导告警，不放宽整类检查。
+            // qmllint disable missing-property
+            if (candidate.contentY !== undefined && candidate.contentHeight !== undefined
+                    && candidate.flickableDirection !== undefined) {
+                return candidate
+            }
+            // qmllint enable missing-property
+            candidate = candidate.parent
+        }
+        // 测试或预览里直接摆着页面时没有滚动区：不自动滚动，拖动本身照常工作。
+        return null
+    }
+
+    // 落点按指针所在的行算。指针在列表之上或之下时夹到首行或末行：
+    // 拖到列表顶端松手就是「放到第一个」，不能因为指针稍微出界就判成无效。
+    function targetIndexAtSceneY(sceneY) {
+        var count = orderRepeater.count
+        if (count === 0) {
+            return -1
+        }
+        var listY = orderList.mapFromItem(null, 0, sceneY).y
+        for (var i = 0; i < count; ++i) {
+            var row = orderRepeater.itemAt(i)
+            if (row && listY < row.y + row.height + orderList.spacing / 2) {
+                return i
+            }
+        }
+        return count - 1
+    }
+
+    function beginDrag(entryId) {
+        if (root.sidebarOrder.indexOf(entryId) < 0) {
+            return
+        }
+        root.draggingEntryId = entryId
+        root.dropTargetIndex = -1
+        root.dragScroller = root.findScrollFlickable()
+    }
+
+    function updateDrag(entryId, sceneX, sceneY) {
+        if (root.draggingEntryId !== entryId || root.draggingFromIndex < 0) {
+            return
+        }
+        root.lastDragSceneY = sceneY
+        root.dropTargetIndex = root.targetIndexAtSceneY(sceneY)
+    }
+
+    function finishDrag(entryId, cancelled) {
+        if (root.draggingEntryId !== entryId) {
+            return
+        }
+        var from = root.draggingFromIndex
+        var target = root.dropTargetIndex
+        root.draggingEntryId = ""
+        root.dropTargetIndex = -1
+        root.dragScroller = null
+        if (cancelled === true || from < 0 || target < 0 || target === from) {
+            return
+        }
+        root.moveEntry(from, target)
+    }
+
+    // 指针进入滚动区上下边缘 40px 时按贴边程度加速滚动，并用最后的指针位置重算落点：
+    // 内容在动、指针没动，不重算的话指示线会停在旧位置。
+    function autoScrollStep() {
+        var flickable = root.dragScroller
+        if (!flickable || root.draggingEntryId.length === 0) {
+            return
+        }
+        var edge = 40
+        var localY = flickable.mapFromItem(null, 0, root.lastDragSceneY).y
+        var delta = 0
+        if (localY < edge) {
+            delta = -Math.ceil((edge - Math.max(0, localY)) / 4)
+        } else if (localY > flickable.height - edge) {
+            delta = Math.ceil((Math.min(flickable.height, localY) - (flickable.height - edge)) / 4)
+        }
+        if (delta === 0) {
+            return
+        }
+        var maxY = Math.max(0, flickable.contentHeight - flickable.height)
+        var nextY = Math.max(0, Math.min(maxY, flickable.contentY + delta))
+        if (nextY === flickable.contentY) {
+            return
+        }
+        flickable.contentY = nextY
+        root.dropTargetIndex = root.targetIndexAtSceneY(root.lastDragSceneY)
+    }
+
     implicitHeight: contentColumn.implicitHeight
+
+    Timer {
+        id: autoScrollTimer
+
+        interval: 16
+        repeat: true
+        running: root.draggingEntryId.length > 0 && root.dragScroller !== null
+        onTriggered: root.autoScrollStep()
+    }
 
     ColumnLayout {
         id: contentColumn
@@ -179,63 +313,141 @@ FocusScope {
 
         SettingsSection {
             title: "侧栏顺序"
-            description: "调整左侧入口的排列。「设置」固定在底部，不参与排序。"
+            description: "拖动调整左侧入口的排列。「设置」固定在底部，不参与排序。"
             card: false
 
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: Theme.space4
+                spacing: Theme.space8
 
-                Repeater {
-                    objectName: "settingsSidebarOrderRepeater"
-                    model: root.sidebarOrder
+                // 行列表与指示线叠在同一个宿主里：指示线不属于任何一行，
+                // 放在列表同级上层，既不会被行的圆角裁掉，也不用每行复制一条线。
+                Item {
+                    id: orderListHost
 
-                    Rectangle {
-                        id: orderRow
-                        required property string modelData
-                        required property int index
+                    Layout.fillWidth: true
+                    implicitHeight: orderList.implicitHeight
 
-                        objectName: "settingsSidebarOrderRow-" + orderRow.modelData
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Theme.controlHeightLg
-                        radius: Theme.radiusMd
-                        color: Theme.surfaceRaised
-                        border.color: Theme.border
-                        border.width: 1
+                    ColumnLayout {
+                        id: orderList
 
-                        RowLayout {
-                            anchors.fill: parent
-                            anchors.leftMargin: Theme.space12
-                            anchors.rightMargin: Theme.space8
-                            spacing: Theme.space8
+                        width: parent.width
+                        spacing: Theme.space4
 
-                            Text {
+                        Repeater {
+                            id: orderRepeater
+
+                            objectName: "settingsSidebarOrderRepeater"
+                            model: root.sidebarOrder
+
+                            Rectangle {
+                                id: orderRow
+
+                                required property string modelData
+
+                                objectName: "settingsSidebarOrderRow-" + orderRow.modelData
                                 Layout.fillWidth: true
-                                text: root.entryLabel(orderRow.modelData)
-                                textFormat: Text.PlainText
-                                font.pixelSize: Theme.fontMd
-                                color: Theme.ink
-                                elide: Text.ElideRight
-                            }
+                                Layout.preferredHeight: Theme.controlHeightLg
+                                radius: Theme.radiusMd
+                                color: Theme.surfaceRaised
+                                border.color: Theme.border
+                                border.width: 1
+                                // 拖动期间原位置变淡，和今日任务列表的拖动反馈一致。
+                                opacity: root.draggingEntryId === orderRow.modelData ? 0.5 : 1
+                                Accessible.role: Accessible.ListItem
+                                Accessible.name: root.entryLabel(orderRow.modelData)
 
-                            // 上下移动而不是拖拽：这份列表只有十来项，拖拽要额外处理
-                            // 按住、越界、松手回弹一整套状态，而且键盘用户完全用不了。
-                            MoveButton {
-                                objectName: "settingsSidebarMoveUp-" + orderRow.modelData
-                                text: "↑"
-                                accessibleName: "上移 " + root.entryLabel(orderRow.modelData)
-                                enabled: orderRow.index > 0
-                                onClicked: root.moveEntry(orderRow.index, orderRow.index - 1)
-                            }
+                                // 把手：六个点，提示「这一行可以拖」。整行都能按住拖，把手只是视觉提示。
+                                Grid {
+                                    x: Theme.space12
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    columns: 2
+                                    rowSpacing: 3
+                                    columnSpacing: 3
+                                    Accessible.ignored: true
 
-                            MoveButton {
-                                objectName: "settingsSidebarMoveDown-" + orderRow.modelData
-                                text: "↓"
-                                accessibleName: "下移 " + root.entryLabel(orderRow.modelData)
-                                enabled: orderRow.index < root.sidebarOrder.length - 1
-                                onClicked: root.moveEntry(orderRow.index, orderRow.index + 1)
+                                    Repeater {
+                                        model: 6
+
+                                        Rectangle {
+                                            width: 3
+                                            height: 3
+                                            radius: 1.5
+                                            color: Theme.inkSoft
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: Theme.space12 + Theme.space16
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: Theme.space12
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: root.entryLabel(orderRow.modelData)
+                                    textFormat: Text.PlainText
+                                    font.pixelSize: Theme.fontMd
+                                    color: Theme.ink
+                                    elide: Text.ElideRight
+                                }
+
+                                HoverHandler {
+                                    cursorShape: root.draggingEntryId.length > 0 ? Qt.ClosedHandCursor
+                                                                                 : Qt.OpenHandCursor
+                                }
+
+                                DragHandler {
+                                    id: rowDrag
+
+                                    // 行本身不跟着指针走：位置由松手后的整份新顺序决定，
+                                    // 让行自己移动会和 ColumnLayout 的排版打架。
+                                    target: null
+                                    acceptedButtons: Qt.LeftButton
+                                    dragThreshold: 6
+
+                                    property bool wasCancelled: false
+
+                                    onActiveChanged: {
+                                        if (rowDrag.active) {
+                                            rowDrag.wasCancelled = false
+                                            root.beginDrag(orderRow.modelData)
+                                            return
+                                        }
+                                        const entryId = orderRow.modelData
+                                        // Qt 在不同取消路径上对 canceled 与 activeChanged 的发送先后没有稳定承诺，
+                                        // 延后一轮再收口，确保 onCanceled 已写入真实终止原因（同 TaskItem）。
+                                        Qt.callLater(function () {
+                                            root.finishDrag(entryId, rowDrag ? rowDrag.wasCancelled : true)
+                                        })
+                                    }
+
+                                    onCanceled: rowDrag.wasCancelled = true
+
+                                    onCentroidChanged: {
+                                        if (!rowDrag.active) {
+                                            return
+                                        }
+                                        const scenePos = orderRow.mapToItem(null, rowDrag.centroid.position.x,
+                                                                            rowDrag.centroid.position.y)
+                                        root.updateDrag(orderRow.modelData, scenePos.x, scenePos.y)
+                                    }
+                                }
                             }
                         }
+                    }
+
+                    Rectangle {
+                        objectName: "settingsSidebarDropIndicator"
+
+                        x: 0
+                        y: root.dropIndicatorY - height / 2
+                        z: 2
+                        width: parent.width
+                        height: 2
+                        radius: 1
+                        color: Theme.accent
+                        visible: root.dropIndicatorY >= 0
+                        Accessible.ignored: true
                     }
                 }
 
@@ -276,36 +488,6 @@ FocusScope {
                     }
                 }
             }
-        }
-    }
-
-    component MoveButton: Button {
-        id: moveButton
-
-        property string accessibleName: ""
-
-        implicitWidth: 32
-        implicitHeight: Theme.controlHeightSm
-        Accessible.role: Accessible.Button
-        Accessible.name: moveButton.accessibleName
-        Accessible.onPressAction: moveButton.clicked()
-
-        background: Rectangle {
-            radius: Theme.radiusSm
-            color: moveButton.down ? Theme.surfaceSunken
-                                   : (moveButton.hovered ? Theme.glassHover : Theme.controlSurface)
-            border.color: Theme.border
-            border.width: 1
-            opacity: moveButton.enabled ? 1 : 0.4
-        }
-
-        contentItem: Text {
-            text: moveButton.text
-            textFormat: Text.PlainText
-            color: Theme.controlInk
-            font.pixelSize: Theme.fontMd
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
         }
     }
 }

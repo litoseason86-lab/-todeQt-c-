@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import ".."
 
@@ -189,7 +190,11 @@ Rectangle {
         }
     }
 
-    component SidebarItem: Rectangle {
+    // 条目根用 Control 而不是 Rectangle：焦点环要区分「键盘把焦点送进来」和「别的原因让焦点回来」，
+    // 而只有 Control 带 visualFocus（焦点原因是 Tab / Backtab / 快捷键时才为真）。
+    // 纯 Rectangle 只看得到 activeFocus：窗口切走再切回、弹窗关闭把焦点还回来时它同样从假变真，
+    // 于是鼠标点过的那一项会在窗口重新激活后亮起焦点环，和当前选中项一起出现两个框。
+    component SidebarItem: Control {
         id: item
 
         property string text: ""
@@ -207,12 +212,15 @@ Rectangle {
         // 显式状态能抵消 MouseArea 和 HoverHandler 在不同设备上的悬停事件差异。
         property bool pointerInside: false
         readonly property bool visualHovered: item.enabled && item.pointerInside
+        // 外观读数仍留在条目自身：调用方和测试一直按 Rectangle 那几个属性名读它们。
+        property alias color: itemBackground.color
+        property alias border: itemBackground.border
+        property alias radius: itemBackground.radius
         signal clicked
         activeFocusOnTab: true
         // 焦点环只在键盘导航时出现。点击也取焦点是为了让 Tab 能从当前项继续，
         // 但 macOS 惯例里鼠标点击不该留下焦点环，否则每点一次侧栏就多一圈描边。
-        property bool showFocusRing: false
-        onActiveFocusChanged: item.showFocusRing = item.activeFocus
+        readonly property bool showFocusRing: item.visualFocus
         Accessible.role: Accessible.Button
         Accessible.name: item.text + (item.statusText ? "，" + item.statusText : "")
         Accessible.onPressAction: item.clicked()
@@ -226,34 +234,40 @@ Rectangle {
         objectName: "sidebarItem-" + item.marker
         Layout.fillWidth: true
         Layout.preferredHeight: 44
-        radius: Theme.radiusMd
-        // 不能把非激活状态设为 transparent：Qt 的 transparent 是黑基透明，
-        // hover 退场时 ColorAnimation 会插出灰色。白基透明只变化 alpha，能透出壁纸且不灰闪。
-        color: item.isActive ? root.sidebarItemActiveColor : (item.visualHovered ? root.sidebarItemHoverColor : root.sidebarItemIdleColor)
-        border.color: item.showFocusRing ? Theme.focusRing : item.isActive ? root.sidebarItemActiveBorderColor : (item.visualHovered ? root.sidebarItemHoverBorderColor : root.sidebarItemIdleBorderColor)
-        border.width: item.showFocusRing ? 2 : (item.isActive || item.visualHovered ? 1 : 0)
+        padding: 0
         opacity: item.enabled ? 1.0 : 0.55
         // 侧边栏只用颜色和边框反馈，避免悬浮或选中时先出现阴影造成顿挫。
         layer.enabled: false
 
-        Behavior on color {
-            ColorAnimation {
-                duration: Theme.reduceMotion ? 0 : 70
-                easing.type: Easing.OutQuad
-            }
-        }
+        background: Rectangle {
+            id: itemBackground
 
-        Behavior on border.color {
-            ColorAnimation {
-                duration: Theme.reduceMotion ? 0 : 70
-                easing.type: Easing.OutQuad
-            }
-        }
+            radius: Theme.radiusMd
+            // 不能把非激活状态设为 transparent：Qt 的 transparent 是黑基透明，
+            // hover 退场时 ColorAnimation 会插出灰色。白基透明只变化 alpha，能透出壁纸且不灰闪。
+            color: item.isActive ? root.sidebarItemActiveColor : (item.visualHovered ? root.sidebarItemHoverColor : root.sidebarItemIdleColor)
+            border.color: item.showFocusRing ? Theme.focusRing : item.isActive ? root.sidebarItemActiveBorderColor : (item.visualHovered ? root.sidebarItemHoverBorderColor : root.sidebarItemIdleBorderColor)
+            border.width: item.showFocusRing ? 2 : (item.isActive || item.visualHovered ? 1 : 0)
 
-        Behavior on border.width {
-            NumberAnimation {
-                duration: Theme.reduceMotion ? 0 : 70
-                easing.type: Easing.OutQuad
+            Behavior on color {
+                ColorAnimation {
+                    duration: Theme.reduceMotion ? 0 : 70
+                    easing.type: Easing.OutQuad
+                }
+            }
+
+            Behavior on border.color {
+                ColorAnimation {
+                    duration: Theme.reduceMotion ? 0 : 70
+                    easing.type: Easing.OutQuad
+                }
+            }
+
+            Behavior on border.width {
+                NumberAnimation {
+                    duration: Theme.reduceMotion ? 0 : 70
+                    easing.type: Easing.OutQuad
+                }
             }
         }
 
@@ -399,7 +413,15 @@ Rectangle {
             cursorShape: Qt.PointingHandCursor
             onEntered: item.setPointerInside(true)
             onExited: item.setPointerInside(false)
-            onClicked: { item.forceActiveFocus(); item.showFocusRing = false; item.clicked() }
+            // 点击也取焦点，Tab 才能从当前项继续。焦点原因记成鼠标，visualFocus 随之为假，
+            // 于是不会留下焦点环。
+            // focusReason 要显式再写一次：对已经有焦点的项调 forceActiveFocus 是空操作，
+            // 不会派发焦点事件，原因会停在上一次（比如先用 Tab 选中、再用鼠标点同一项）。
+            onClicked: {
+                item.forceActiveFocus(Qt.MouseFocusReason);
+                item.focusReason = Qt.MouseFocusReason;
+                item.clicked();
+            }
         }
 
         HoverHandler {

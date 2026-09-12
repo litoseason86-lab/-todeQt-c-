@@ -430,8 +430,11 @@ TestCase {
     function walk(item, tag, fallback, depth) {
         if (!item || depth > 40) return
         // 必须真的是文字渲染类型：委托根节点常常同时有 text 属性和背景 color，
-        // 不加 font 这一判据会把「带标题属性的背景矩形」当成低对比文字。
+        // 不加判据会把「带标题属性的背景矩形」当成低对比文字。
+        // 光看 font 还不够：Control 自带 font 与 text，再给它一个背景色 alias（侧栏条目就是这样），
+        // 整条条目就会被当成文字，量到的其实是它的背景色。textFormat 只有真正的文字类型才有。
         if (item.font !== undefined && item.text !== undefined && item.color !== undefined
+                && item.textFormat !== undefined
                 && String(item.text).length > 0 && item.opacity > 0.05
                 && item.width > 0 && item.height > 0
                 && item.color.a > 0.15

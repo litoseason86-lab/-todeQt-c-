@@ -11,6 +11,8 @@ TestCase {
     when: windowShown
     width: 320
     height: 640
+    // 窗口必须真的显示：拖动排序那条用例要发真实鼠标事件，窗口没显示时收不到。
+    visible: true
 
     property var storedOrder: []
     property int resetCalls: 0
@@ -245,5 +247,177 @@ TestCase {
         // 呈现表漏了某个 id 时，显示 id 本身也好过一行空白——至少看得出是哪条坏了。
         compare(appearancePage.entryLabel("somePageFromTheFuture"), "somePageFromTheFuture")
         compare(appearancePage.entryLabel("today"), "今日任务")
+    }
+
+    // —— 拖动排序 ——
+    // 放在 Flickable 里的第二个页面实例，专门验证拖到边缘时的自动滚动。
+    // 摆在窗口之外，免得挡住其它用例的命中区。
+    Flickable {
+        id: scroller
+
+        x: 1000
+        y: 0
+        width: 420
+        height: 240
+        contentHeight: scrolledPage.implicitHeight
+        clip: true
+
+        SettingsAppearancePage {
+            id: scrolledPage
+
+            width: 420
+            appSettingsRef: settingsMock
+        }
+    }
+
+    function rowIn(page, entryId) {
+        return findChild(page, "settingsSidebarOrderRow-" + entryId)
+    }
+
+    function rowCenterScene(entryId) {
+        var row = testCase.rowIn(appearancePage, entryId)
+        return row.mapToItem(null, row.width / 2, row.height / 2)
+    }
+
+    function test_sidebarOrderRowsHaveNoMoveButtons() {
+        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        wait(20)
+        // 2026-09-11 用户看过设计稿后选定「只留拖动，去掉 ↑↓」。
+        compare(findChild(appearancePage, "settingsSidebarMoveUp-goals"), null)
+        compare(findChild(appearancePage, "settingsSidebarMoveDown-goals"), null)
+    }
+
+    function test_dragDownDropsAfterTargetAndCommitsWholeOrder() {
+        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        wait(20)
+
+        appearancePage.beginDrag("goals")
+        var target = testCase.rowCenterScene("focus")
+        appearancePage.updateDrag("goals", target.x, target.y)
+        compare(appearancePage.dropTargetIndex, 2)
+        // 拖动期间不动模型：松手之前存储里还是原顺序。中途改模型会重建全部行，
+        // 正在拖的那一行连同它的 DragHandler 一起被销毁。
+        compare(settingsMock.sidebarOrder[0], "goals")
+
+        var indicator = findChild(appearancePage, "settingsSidebarDropIndicator")
+        verify(indicator)
+        var focusRow = testCase.rowIn(appearancePage, "focus")
+        // 往下拖：指示线落在目标行下方，和松手后的真实位置一致。
+        verify(indicator.y > focusRow.y + focusRow.height / 2,
+               "指示线 " + indicator.y + " 应在目标行下方")
+
+        appearancePage.finishDrag("goals", false)
+        compare(settingsMock.sidebarOrder[0], "today")
+        compare(settingsMock.sidebarOrder[1], "focus")
+        compare(settingsMock.sidebarOrder[2], "goals")
+        compare(appearancePage.draggingEntryId, "")
+        compare(appearancePage.dropTargetIndex, -1)
+
+        // 整份提交，侧栏跟着变。
+        wait(20)
+        compare(sidebar.orderedEntryIds[2], "goals")
+    }
+
+    function test_dragUpDropsBeforeTarget() {
+        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        wait(20)
+
+        appearancePage.beginDrag("focus")
+        var target = testCase.rowCenterScene("goals")
+        appearancePage.updateDrag("focus", target.x, target.y)
+        compare(appearancePage.dropTargetIndex, 0)
+
+        var indicator = findChild(appearancePage, "settingsSidebarDropIndicator")
+        var goalsRow = testCase.rowIn(appearancePage, "goals")
+        verify(indicator.y < goalsRow.y + goalsRow.height / 2,
+               "指示线 " + indicator.y + " 应在目标行上方")
+
+        appearancePage.finishDrag("focus", false)
+        compare(settingsMock.sidebarOrder[0], "focus")
+        compare(settingsMock.sidebarOrder[1], "goals")
+        compare(settingsMock.sidebarOrder[2], "today")
+    }
+
+    function test_cancelledOrUnmovedDragWritesNothing() {
+        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        wait(20)
+
+        appearancePage.beginDrag("goals")
+        var target = testCase.rowCenterScene("focus")
+        appearancePage.updateDrag("goals", target.x, target.y)
+        appearancePage.finishDrag("goals", true)
+        compare(settingsMock.sidebarOrder[0], "goals")
+
+        // 放回原位也不提交：同样的顺序整份写回去，只会让侧栏白重建一次。
+        appearancePage.beginDrag("today")
+        var ownSlot = testCase.rowCenterScene("today")
+        appearancePage.updateDrag("today", ownSlot.x, ownSlot.y)
+        compare(findChild(appearancePage, "settingsSidebarDropIndicator").visible, false)
+        appearancePage.finishDrag("today", false)
+        compare(settingsMock.sidebarOrder[1], "today")
+    }
+
+    function test_pointerOutsideListClampsToFirstOrLastSlot() {
+        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        wait(20)
+
+        appearancePage.beginDrag("today")
+        // 拖到列表上方松手就是「放到第一个」，不能因为指针出界就判成无效落点。
+        var top = testCase.rowCenterScene("goals")
+        appearancePage.updateDrag("today", top.x, top.y - 400)
+        compare(appearancePage.dropTargetIndex, 0)
+
+        var bottom = testCase.rowCenterScene("focus")
+        appearancePage.updateDrag("today", bottom.x, bottom.y + 400)
+        compare(appearancePage.dropTargetIndex, 2)
+        appearancePage.finishDrag("today", true)
+    }
+
+    function test_mouseDragReordersThroughDragHandler() {
+        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        wait(20)
+
+        var row = testCase.rowIn(appearancePage, "goals")
+        var lastRow = testCase.rowIn(appearancePage, "focus")
+        verify(row)
+        verify(lastRow)
+        // 侧栏顺序在页面底部，默认落在窗口之外；先把页面上移，让这几行进到窗口里，
+        // 否则收不到真实鼠标事件。
+        var originalY = appearancePage.y
+        appearancePage.y = originalY - row.mapToItem(appearancePage, 0, 0).y + 40
+        wait(20)
+
+        var dropY = lastRow.mapToItem(row, 0, lastRow.height / 2).y
+        mousePress(row, 60, row.height / 2)
+        for (var step = 1; step <= 6; ++step) {
+            mouseMove(row, 60, row.height / 2 + (dropY - row.height / 2) * step / 6, 16, Qt.LeftButton)
+        }
+        mouseRelease(row, 60, dropY, Qt.LeftButton)
+
+        tryVerify(function () { return settingsMock.sidebarOrder[2] === "goals" }, 2000)
+        appearancePage.y = originalY
+    }
+
+    function test_dragNearViewportEdgeAutoScrolls() {
+        settingsMock.sidebarOrder = testCase.defaultOrder()
+        wait(20)
+
+        var firstRow = testCase.rowIn(scrolledPage, "dashboard")
+        verify(firstRow)
+        // 先滚到侧栏顺序那一段的开头。
+        scroller.contentY = Math.max(0, firstRow.mapToItem(scrolledPage, 0, 0).y - 20)
+        wait(20)
+        var before = scroller.contentY
+
+        scrolledPage.beginDrag("dashboard")
+        // 设置页自己不持有滚动区（ScrollView 在 SettingsDialog 里），拖动开始时沿父链找到它。
+        compare(scrolledPage.dragScroller, scroller)
+
+        var bottomEdge = scroller.mapToItem(null, 10, scroller.height - 6)
+        scrolledPage.updateDrag("dashboard", bottomEdge.x, bottomEdge.y)
+        tryVerify(function () { return scroller.contentY > before + 20 }, 2000)
+
+        scrolledPage.finishDrag("dashboard", true)
+        compare(scrolledPage.dragScroller, null)
     }
 }
