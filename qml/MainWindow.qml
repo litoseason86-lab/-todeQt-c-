@@ -984,6 +984,7 @@ Item {
                     categoryManagerRef: root.categoryManagerRef
                     logicalDayServiceRef: root.logicalDayServiceRef
                     settingsRef: root.appSettingsRef
+                    taskManagerRef: root.taskManagerRef
 
                     onGapConvertedToTask: function (title) {
                         root.showToast(qsTr("已加到今天的任务：%1").arg(title))

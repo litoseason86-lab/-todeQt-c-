@@ -133,6 +133,19 @@ Button {
         }
         root.shownYear = year
         root.shownMonth = monthIndex - year * 12
+        root.syncCursorToShownMonth()
+    }
+
+    // 翻月之后把光标带进正在显示的月份。少了这一步，鼠标翻到 10 月、键盘按回车，
+    // 提交的仍是 9 月那天——屏幕上根本看不见它；按方向键又会把月历弹回 9 月。
+    // 日号在新月份里不存在时夹到月末（1 月 31 日翻到 2 月是 2 月 28 日，不是 3 月 3 日）。
+    function syncCursorToShownMonth() {
+        var cursor = LogicalDay.parseIsoDate(root.cursorIso)
+        var day = cursor === null ? 1 : cursor.getDate()
+        // 这里用 Date 只为取新月份的天数（下个月的第 0 天就是本月最后一天），
+        // 不拿它拼日期：拼日期仍然走 isoOf 的三个整数，避开时区换算。
+        var lastDay = new Date(root.shownYear, root.shownMonth + 1, 0).getDate()
+        root.cursorIso = root.isoOf(root.shownYear, root.shownMonth, Math.min(day, lastDay))
     }
 
     // 光标跨月时月历跟着翻页，光标不会落到看不见的地方。

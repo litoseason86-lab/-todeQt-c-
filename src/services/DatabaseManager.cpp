@@ -1820,14 +1820,26 @@ bool DatabaseManager::knowledgeGapForeignKeysAreValid(const QSqlDatabase& db)
 
     QSqlQuery query(db);
     // 每行依次是 id, seq, table, from, to, on_update, on_delete, match。
+    // id 是约束编号，seq 是该约束内部的列序号：一条复合外键会用同一个 id 排出 seq 0、1、2……
     if (!query.exec(QStringLiteral("PRAGMA foreign_key_list(knowledge_gaps)"))) {
         return false;
     }
 
     // 按「恰好等于」而不是「至少包含」校验：同一列再挂一条 CASCADE，或者别的列多一条
     // 指向 tasks 的约束，都会让删除和写入出现契约之外的行为，同样要当作结构不合法。
+    //
+    // 逐行看 from/to/on_delete 还不够。把两列并成一条
+    // FOREIGN KEY (source_task_id, linked_task_id) REFERENCES tasks(id, id) ON DELETE SET NULL，
+    // PRAGMA 排出来的每一行都「对」——目标表、目标列、删除动作全部符合契约，只有 id 和 seq
+    // 能看出它们其实是同一条约束。代价不是理论上的：tasks 上没有 (id, id) 的复合唯一索引，
+    // 这样的库能通过备份校验、能正常启动，但用户新增任何一条知识缺口都会被 SQLite 以
+    // foreign key mismatch 拒绝。所以还要求每条约束只管一列（seq 恒为 0）、约束编号互不重复，
+    // 也就是三条互相独立的单列外键。
     QStringList matchedColumns;
+    QList<int> constraintIds;
     while (query.next()) {
+        const int constraintId = query.value(0).toInt();
+        const int columnSeq = query.value(1).toInt();
         const QString referencedTable = query.value(2).toString();
         const QString fromColumn = query.value(3).toString();
         const QString toColumn = query.value(4).toString();
@@ -1842,11 +1854,14 @@ bool DatabaseManager::knowledgeGapForeignKeysAreValid(const QSqlDatabase& db)
             }
         }
         if (!expected
+            || columnSeq != 0
+            || constraintIds.contains(constraintId)
             || toColumn != QStringLiteral("id")
             || onDelete.compare(QStringLiteral("SET NULL"), Qt::CaseInsensitive) != 0
             || matchedColumns.contains(fromColumn)) {
             return false;
         }
+        constraintIds.append(constraintId);
         matchedColumns.append(fromColumn);
     }
     return matchedColumns.size() == contracts.size();

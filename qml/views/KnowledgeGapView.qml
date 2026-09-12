@@ -18,6 +18,9 @@ Item {
     property var categoryManagerRef: null
     property var logicalDayServiceRef: null
     property var settingsRef: null
+    // 关联任务是「还在没做完」「已完成」还是「已经被删掉」，决定行里那句提示和
+    // 「今天做」能不能点。这些变化几乎都发生在别的页面，只能靠任务信号传过来。
+    property var taskManagerRef: null
     // 页面容器显式声明是否当前页；不能依赖 effective visible，离屏测试和窗口层级会污染该值。
     property bool pageActive: true
 
@@ -211,6 +214,27 @@ Item {
         function onDayStartHourChanged() {
             root.refreshLogicalToday()
             root.reload()
+        }
+    }
+
+    RefreshCoalescer {
+        id: refreshCoalescer
+
+        active: root.pageActive
+        onTriggered: root.reload()
+    }
+
+    Connections {
+        // 任务被删除、完成或撤销恢复都不会让缺口服务发 gapsChanged——变的是 tasks 那张表。
+        // 不接这个信号，停在本页的用户会一直对着一个禁用的「今天做」：删除任务后在 5 秒
+        // 撤销窗口内切过来，删除随后真正提交，库里的关联早就清了，页面却还显示「已转成任务」。
+        // 后台专注自动完成任务也是同一类。
+        target: root.taskManagerRef
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
+
+        function onTasksChanged() {
+            refreshCoalescer.request()
         }
     }
 

@@ -23,6 +23,9 @@ TestCase {
     property int deleteCalls: 0
     property int lastDeleteId: -1
     property int convertedSignals: 0
+    // 非空时 listGaps 只返回它。用来验证重查之后拿到的是新事实，
+    // 而不只是「重查被调用过」——后者用固定数据集根本看不出区别。
+    property var overrideRows: []
 
     // 固定数据集：逾期、今天、之后、未排期、已解决各一条，正好盖满五个分组。
     // overdue / dueToday / scheduled 都由服务算好，页面不许自己比日期。
@@ -62,6 +65,13 @@ TestCase {
     }
 
     QtObject {
+        id: fakeTaskManager
+
+        // 任务变化只走信号：页面收到之后必须自己重查，不能等切页。
+        signal tasksChanged()
+    }
+
+    QtObject {
         id: fakeCategoryManager
 
         function getAllCategories() {
@@ -81,6 +91,9 @@ TestCase {
             testCase.listCalls += 1
             testCase.lastStatusFilter = statusFilter
             testCase.lastSearchText = searchText
+            if (testCase.overrideRows.length > 0) {
+                return testCase.overrideRows
+            }
             var rows = []
             for (var i = 0; i < testCase.allGaps.length; ++i) {
                 var gap = testCase.allGaps[i]
@@ -119,6 +132,7 @@ TestCase {
             knowledgeGapServiceRef: fakeGapService
             categoryManagerRef: fakeCategoryManager
             settingsRef: fakeSettings
+            taskManagerRef: fakeTaskManager
             pageActive: true
 
             onGapConvertedToTask: function (title) { testCase.convertedSignals += 1 }
@@ -155,6 +169,7 @@ TestCase {
         testCase.deleteCalls = 0
         testCase.lastDeleteId = -1
         testCase.convertedSignals = 0
+        testCase.overrideRows = []
         fakeSettings.dayStartHour = 4
     }
 
@@ -305,6 +320,36 @@ TestCase {
         // 只有服务确认数据已经变了才清错，不能靠任意界面操作掩盖失败。
         fakeGapService.gapsChanged()
         compare(view.loadError, "")
+    }
+
+    function test_taskChangeRefreshesLinkedTaskState() {
+        var linkedOpen = Object.assign({}, testCase.allGaps[0],
+                                       { id: 7, title: "已经转成任务", linkedTaskId: 70,
+                                         linkedTaskOpen: true })
+        testCase.overrideRows = [linkedOpen]
+        var view = createView()
+
+        var button = null
+        tryVerify(function () {
+            button = findChild(view, "knowledgeGapConvertButton-7")
+            return button !== null
+        })
+        compare(button.enabled, false)
+
+        // 关联任务被删掉（撤销窗口结束、删除真正提交）或者被后台专注自动完成之后，
+        // 库里的关联已经没了。这两件事都发生在别的页面，缺口服务也不会因此发 gapsChanged，
+        // 本页只能靠任务信号知道。收不到就一直显示「已转成任务」、按钮一直点不了，
+        // 直到用户切一次页面才恢复。
+        testCase.overrideRows = [Object.assign({}, linkedOpen,
+                                               { linkedTaskId: 0, linkedTaskOpen: false })]
+        var before = testCase.listCalls
+        fakeTaskManager.tasksChanged()
+        tryVerify(function () { return testCase.listCalls > before })
+        // 重新查找而不是复用上面那个引用：重查会重建委托。
+        tryVerify(function () {
+            var refreshed = findChild(view, "knowledgeGapConvertButton-7")
+            return refreshed !== null && refreshed.enabled
+        })
     }
 
     function test_missingServiceLeavesEmptyListInsteadOfThrowing() {

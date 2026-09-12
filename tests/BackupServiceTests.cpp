@@ -138,6 +138,7 @@ private slots:
     void version13BackupInvalidPrimaryKeyIsRejected();
     void version14BackupMissingKnowledgeGapTableIsRejected();
     void version14BackupWithCascadingKnowledgeGapForeignKeyIsRejected();
+    void version14BackupWithCompositeKnowledgeGapForeignKeyIsRejected();
     void olderBackupWithoutKnowledgeGapTableIsAccepted();
     void higherSchemaVersionIsRejected();
     void formatVersionMismatchIsRejected();
@@ -477,6 +478,51 @@ void BackupServiceTests::version14BackupWithCascadingKnowledgeGapForeignKeyIsRej
 
     // 列和 CHECK 都在，只有删除动作不对：这样的备份恢复后能正常启动、正常使用，
     // 直到某天删掉一条任务，关联它的知识缺口被连带删除。必须在恢复之前挡下。
+    const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
+    QCOMPARE(info.value(QStringLiteral("valid")).toBool(), false);
+    QVERIFY2(info.value(QStringLiteral("reason")).toString().contains(QStringLiteral("外键")),
+             qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+}
+
+void BackupServiceTests::version14BackupWithCompositeKnowledgeGapForeignKeyIsRejected()
+{
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    const QString connectionName = QStringLiteral("CompositeKnowledgeGapForeignKey");
+    {
+        QSqlDatabase database =
+            QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(backupFile());
+        QVERIFY(database.open());
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QStringLiteral(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_gaps'")));
+        QVERIFY(query.next());
+        QString sql = query.value(0).toString();
+        query.finish();
+        const QString sourceColumn =
+            QStringLiteral("source_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL");
+        const QString linkedColumn =
+            QStringLiteral("linked_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL");
+        QVERIFY(sql.contains(sourceColumn));
+        QVERIFY(sql.contains(linkedColumn));
+        sql.replace(sourceColumn, QStringLiteral("source_task_id INTEGER"));
+        sql.replace(linkedColumn, QStringLiteral("linked_task_id INTEGER"));
+        const int closingParen = sql.lastIndexOf(QLatin1Char(')'));
+        QVERIFY(closingParen > 0);
+        sql.insert(closingParen,
+                   QStringLiteral(", FOREIGN KEY (source_task_id, linked_task_id) "
+                                  "REFERENCES tasks(id, id) ON DELETE SET NULL\n        "));
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE knowledge_gaps")));
+        QVERIFY2(query.exec(sql), qPrintable(query.lastError().text()));
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+
+    // 外部改过的备份不会只坏成一种样子。这一份逐行看外键完全合规，合起来却是一条复合约束：
+    // 恢复之后能正常启动，但知识缺口一条也存不进去（tasks 上没有 (id, id) 复合唯一索引，
+    // SQLite 直接报 foreign key mismatch）。恢复之前就得挡下来。
     const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
     QCOMPARE(info.value(QStringLiteral("valid")).toBool(), false);
     QVERIFY2(info.value(QStringLiteral("reason")).toString().contains(QStringLiteral("外键")),

@@ -817,6 +817,7 @@ private slots:
     void migrationV14CreatesKnowledgeGapsAndKeepsExistingData();
     void migrationV14RejectsStructurallyBrokenKnowledgeGapTable();
     void migrationV14RejectsKnowledgeGapForeignKeyThatCascades();
+    void migrationV14RejectsCompositeKnowledgeGapForeignKey();
     void multiStepMigrationKeepsOnlyThePreMigrationSnapshot();
     void customCategoryCrudValidatesAndEmitsChanges();
     void presetCategoriesCanBeEditedButNotDeleted();
@@ -3656,6 +3657,45 @@ void ServiceTests::migrationV14RejectsKnowledgeGapForeignKeyThatCascades()
     QVERIFY(createSql.contains(setNull));
     createSql.replace(setNull,
                       QStringLiteral("source_task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE"));
+
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE knowledge_gaps")));
+    QVERIFY2(query.exec(createSql), qPrintable(query.lastError().text()));
+
+    QVERIFY(!DatabaseManager::instance()->createTables());
+
+    // 收拾干净，避免这条用例把坏结构留给后面的用例。
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE knowledge_gaps")));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 13")));
+    QVERIFY(DatabaseManager::instance()->createTables());
+}
+
+void ServiceTests::migrationV14RejectsCompositeKnowledgeGapForeignKey()
+{
+    // 把两列并成一条复合外键：PRAGMA foreign_key_list 排出来的每一行，目标表、目标列、
+    // 删除动作都符合契约，只有约束编号和列序号能看出它们其实是同一条约束。
+    // 放行的代价不是理论上的：tasks 上没有 (id, id) 的复合唯一索引，这样的库能正常启动，
+    // 但用户新增任何一条知识缺口都会被 SQLite 以 foreign key mismatch 拒绝——
+    // 界面只会说保存失败，看不出是结构问题。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_gaps'")));
+    QVERIFY(query.next());
+    QString createSql = query.value(0).toString();
+    query.finish();
+
+    const QString sourceColumn =
+        QStringLiteral("source_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL");
+    const QString linkedColumn =
+        QStringLiteral("linked_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL");
+    QVERIFY(createSql.contains(sourceColumn));
+    QVERIFY(createSql.contains(linkedColumn));
+    createSql.replace(sourceColumn, QStringLiteral("source_task_id INTEGER"));
+    createSql.replace(linkedColumn, QStringLiteral("linked_task_id INTEGER"));
+    const int closingParen = createSql.lastIndexOf(QLatin1Char(')'));
+    QVERIFY(closingParen > 0);
+    createSql.insert(closingParen,
+                     QStringLiteral(", FOREIGN KEY (source_task_id, linked_task_id) "
+                                    "REFERENCES tasks(id, id) ON DELETE SET NULL\n        "));
 
     QVERIFY(query.exec(QStringLiteral("DROP TABLE knowledge_gaps")));
     QVERIFY2(query.exec(createSql), qPrintable(query.lastError().text()));

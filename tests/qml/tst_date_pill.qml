@@ -181,6 +181,41 @@ TestCase {
         tryCompare(pill, "calendarOpened", false)
     }
 
+    function test_mouseMonthFlipCarriesCursorIntoShownMonth() {
+        pill.dateIso = "2026-09-20"
+        testCase.openCalendar()
+        tryVerify(function () { return pill.popup.contentItem.activeFocus })
+        compare(pill.cursorIso, "2026-09-20")
+
+        popupChild("datePillNextMonthButton").clicked()
+        compare(pill.shownMonth, 9)
+        // 光标必须跟着翻到 10 月。停在 9 月的话，回车提交的是屏幕上根本看不见的那天，
+        // 按方向键又会把月历弹回 9 月。
+        compare(pill.cursorIso, "2026-10-20")
+
+        keyClick(Qt.Key_Return)
+        compare(testCase.selections.length, 1)
+        compare(testCase.selections[0], "2026-10-20")
+        tryCompare(pill, "calendarOpened", false)
+    }
+
+    function test_monthFlipClampsCursorToShorterMonth() {
+        pill.dateIso = "2026-01-31"
+        testCase.openCalendar()
+        tryVerify(function () { return pill.popup.contentItem.activeFocus })
+        compare(pill.cursorIso, "2026-01-31")
+
+        popupChild("datePillNextMonthButton").clicked()
+        // 2026 年 2 月没有 31 日：夹到月末，不能溢出成 3 月 3 日。
+        compare(pill.shownMonth, 1)
+        compare(pill.cursorIso, "2026-02-28")
+
+        // 夹过之后方向键从新位置继续走，不会跳回原来那个月。
+        keyClick(Qt.Key_Right)
+        compare(pill.cursorIso, "2026-03-01")
+        compare(pill.shownMonth, 2)
+    }
+
     function test_outOfRangeDatesAreIgnored() {
         // 与服务端同一口径：2000–2100 年之外的日期不外发。
         pill.pick("1999-12-31")
