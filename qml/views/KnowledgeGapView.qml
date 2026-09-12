@@ -25,7 +25,11 @@ Item {
     property bool pageActive: true
 
     property var gaps: []
-    property int statusFilter: 0
+    // 默认「未解决」而不是某一个具体状态：服务端只要填了到期日就把状态推到「已安排」
+    // （statusForDueDate），所以按「待处理」筛出来的条目一定没有到期日——逾期、今天、之后
+    // 这三个分组在那一页里永远是空的。今日页提示条说「3 条到期」、点「去看看」却一条
+    // 都看不到，就是这个口径分家造成的。
+    property int statusFilter: root.filterUnresolved
     property string searchText: ""
     property string loadError: ""
     // 逻辑今天必须是可观察状态：日界变化时要重算分组，不能依赖 new Date() 触发绑定重算。
@@ -36,6 +40,8 @@ Item {
     readonly property int statusOpen: 0
     readonly property int statusScheduled: 1
     readonly property int statusResolved: 2
+    // 与 KnowledgeGapService::kFilterUnresolved 同值：待处理 + 已安排，不含已解决。
+    readonly property int filterUnresolved: -2
 
     function dayStartHour() {
         // 不能写成 dayStartHour || 4：0 点是合法日界，|| 会把它当成缺值改回 4，
@@ -57,6 +63,12 @@ Item {
             root.gaps = []
             return
         }
+        // 先清错、再查询。查询失败时服务会在 listGaps 调用过程中同步发 operationFailed
+        // 把错误重新写回来，所以这个顺序不能倒过来——查完再清会把刚报的失败抹掉。
+        //
+        // 清错的职责集中在这里：换筛选、改搜索词、重新进页面都要经过 reload()，
+        // 查询成功就说明页面上的内容是新的，一条描述旧失败的红条不该继续挂着。
+        root.loadError = ""
         root.gaps = root.knowledgeGapServiceRef.listGaps(root.statusFilter, 0, root.searchText, 0)
     }
 
@@ -184,11 +196,16 @@ Item {
     onPageActiveChanged: if (root.pageActive) root.reload()
 
     Connections {
+        // 必须跟着页面可见性开关：缺口页是 StackLayout 的直接子项，从启动起就一直存在。
+        // 没有门禁的话，今日页轮询 getReminderSummary 撞上自动备份的 VACUUM INTO
+        // （database is locked）时，失败被今日页自己吞掉，却会在这里留下一条红条，
+        // 等用户某次切过来才看到——那条错误和他当时的操作毫无关系，还会把空状态压掉。
         target: root.knowledgeGapServiceRef
         ignoreUnknownSignals: true
+        enabled: root.pageActive
 
         function onGapsChanged() {
-            root.loadError = ""
+            // 不在这里单独清错：清除职责统一在 reload() 里，避免两处各清一次而口径分家。
             root.reload()
         }
 
@@ -264,13 +281,16 @@ Item {
 
             SegmentedSwitch {
                 objectName: "knowledgeGapStatusSwitch"
-                segments: [qsTr("待处理"), qsTr("已安排"), qsTr("已解决")]
+                // 两段而不是三段：「待处理 / 已安排」的差别只是有没有到期日，
+                // 而列表已经按 逾期 / 今天 / 之后 / 未排期 分好组，用标签页再表达一遍，
+                // 结果是四个分组里有三个永远打不开。筛选只管「解没解决」。
+                segments: [qsTr("未解决"), qsTr("已解决")]
                 minSegmentWidth: 76
-                currentIndex: root.statusFilter
+                currentIndex: root.statusFilter === root.statusResolved ? 1 : 0
                 reduceMotion: Theme.reduceMotion
                 solidFallback: !Theme.glassBlurAllowed
                 onActivated: function (index) {
-                    root.statusFilter = index
+                    root.statusFilter = index === 1 ? root.statusResolved : root.filterUnresolved
                     root.reload()
                 }
             }

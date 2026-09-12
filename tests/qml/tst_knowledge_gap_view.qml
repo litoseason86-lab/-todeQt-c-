@@ -218,6 +218,41 @@ TestCase {
         compare(view.gaps[0].title, "已解决那条")
     }
 
+    function test_defaultFilterReachesEveryActionableGroup() {
+        var view = createView()
+        // 服务端只要填了到期日就把状态推到「已安排」，所以按「待处理」(0) 筛选时，
+        // 逾期 / 今天 / 之后 三个分组永远是空的：今日页提示条说有几条到期、
+        // 点「去看看」却一条都看不到，就是这么来的。默认口径必须是「未解决」。
+        compare(view.statusFilter, -2)
+        compare(testCase.lastStatusFilter, -2)
+
+        compare(view.gapsInGroup("overdue").length, 1)
+        compare(view.gapsInGroup("today").length, 2)
+        compare(view.gapsInGroup("future").length, 1)
+        compare(view.gapsInGroup("unscheduled").length, 1)
+        // 已解决的条目被筛掉，不占「未解决」这一页。
+        compare(view.gapsInGroup("resolved").length, 0)
+    }
+
+    function test_resolvedSegmentSwitchesFilter() {
+        var view = createView()
+        var statusSwitch = findChild(view, "knowledgeGapStatusSwitch")
+        verify(statusSwitch)
+        compare(statusSwitch.currentIndex, 0)
+
+        statusSwitch.activated(1)
+        compare(view.statusFilter, 2)
+        compare(testCase.lastStatusFilter, 2)
+        compare(statusSwitch.currentIndex, 1)
+        compare(view.gapsInGroup("resolved").length, 1)
+
+        // 切回来必须回到「未解决」这个合并口径，不能落回某个具体状态。
+        statusSwitch.activated(0)
+        compare(view.statusFilter, -2)
+        compare(testCase.lastStatusFilter, -2)
+        compare(statusSwitch.currentIndex, 0)
+    }
+
     function test_searchTextIsPassedThrough() {
         var view = createView()
         view.searchText = "对角化"
@@ -350,6 +385,26 @@ TestCase {
             var refreshed = findChild(view, "knowledgeGapConvertButton-7")
             return refreshed !== null && refreshed.enabled
         })
+    }
+
+    function test_inactivePageIgnoresFailuresRaisedElsewhere() {
+        var view = createTemporaryObject(viewComponent, testCase, { pageActive: false })
+        verify(view)
+        // 今日页轮询提醒摘要失败（自动备份 VACUUM INTO 期间 database is locked）时，
+        // 今日页自己吞掉了，但信号是服务发的，而缺口页从启动起就一直存在。
+        // 没有门禁就会在这里攒下一条红条，用户某次切过来才看到，且与当时操作无关。
+        fakeGapService.operationFailed("读取待补提醒失败")
+        compare(view.loadError, "")
+    }
+
+    function test_reloadClearsStaleErrorOnSuccess() {
+        var view = createView()
+        fakeGapService.operationFailed("写入失败")
+        compare(view.loadError, "写入失败")
+        // 换筛选、改搜索词、重新进页面都会走 reload()。查询成功就说明页面内容是新的，
+        // 描述旧失败的红条不能继续挂着——它还会把空状态压掉。
+        view.reload()
+        compare(view.loadError, "")
     }
 
     function test_missingServiceLeavesEmptyListInsteadOfThrowing() {
