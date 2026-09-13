@@ -26,6 +26,9 @@ TestCase {
     // 非空时 listGaps 只返回它。用来验证重查之后拿到的是新事实，
     // 而不只是「重查被调用过」——后者用固定数据集根本看不出区别。
     property var overrideRows: []
+    // 置真时下一次 listGaps 会「同步」发一次失败再返回空列表。真实服务就是在调用过程中
+    // 同步发 operationFailed 的——异步发根本暴露不出这个 bug。
+    property bool failNextList: false
 
     // 固定数据集：逾期、今天、之后、未排期、已解决各一条，正好盖满五个分组。
     // overdue / dueToday / scheduled 都由服务算好，页面不许自己比日期。
@@ -91,6 +94,11 @@ TestCase {
             testCase.listCalls += 1
             testCase.lastStatusFilter = statusFilter
             testCase.lastSearchText = searchText
+            if (testCase.failNextList) {
+                testCase.failNextList = false
+                fakeGapService.operationFailed("读取知识缺口失败")
+                return []
+            }
             if (testCase.overrideRows.length > 0) {
                 return testCase.overrideRows
             }
@@ -170,6 +178,7 @@ TestCase {
         testCase.lastDeleteId = -1
         testCase.convertedSignals = 0
         testCase.overrideRows = []
+        testCase.failNextList = false
         fakeSettings.dayStartHour = 4
     }
 
@@ -405,6 +414,19 @@ TestCase {
         // 描述旧失败的红条不能继续挂着——它还会把空状态压掉。
         view.reload()
         compare(view.loadError, "")
+    }
+
+    function test_activationFailureShowsErrorInsteadOfEmptyState() {
+        var view = createTemporaryObject(viewComponent, testCase, { pageActive: false })
+        verify(view)
+
+        testCase.failNextList = true
+        view.pageActive = true
+        // 切进来的第一次查询失败必须变成一条错误，而不是「没有条目」。
+        // 门禁写成 enabled 绑定时，pageActive 刚变 true 的那一次同步查询里绑定还没重算，
+        // 失败信号会被整个丢掉——用户看到的是一个若无其事的空页面。
+        compare(view.loadError, "读取知识缺口失败")
+        compare(view.gaps.length, 0)
     }
 
     function test_missingServiceLeavesEmptyListInsteadOfThrowing() {

@@ -196,20 +196,29 @@ Item {
     onPageActiveChanged: if (root.pageActive) root.reload()
 
     Connections {
-        // 必须跟着页面可见性开关：缺口页是 StackLayout 的直接子项，从启动起就一直存在。
-        // 没有门禁的话，今日页轮询 getReminderSummary 撞上自动备份的 VACUUM INTO
-        // （database is locked）时，失败被今日页自己吞掉，却会在这里留下一条红条，
-        // 等用户某次切过来才看到——那条错误和他当时的操作毫无关系，还会把空状态压掉。
+        // 门禁写在处理函数里面，不能用 enabled: root.pageActive。
+        // enabled 是绑定：pageActive 变 true 时 onPageActiveChanged 立刻同步 reload()，
+        // 而查询失败时服务是在这次 listGaps 调用过程中就同步发 operationFailed 的——
+        // 那一刻 enabled 的绑定还没重算，信号会被整个丢掉，切进来第一次查询失败就被
+        // 显示成「没有条目」。处理函数里读 root.pageActive，读到的是已经更新过的属性值。
+        //
+        // 需要门禁的理由不变：缺口页是 StackLayout 的直接子项，从启动起就一直存在。
+        // 今日页轮询 getReminderSummary 撞上自动备份的 VACUUM INTO（database is locked）时，
+        // 失败被今日页自己吞掉，却会在这里留下一条红条，等用户某次切过来才看到——
+        // 那条错误和他当时的操作毫无关系，还会把空状态压掉。
         target: root.knowledgeGapServiceRef
         ignoreUnknownSignals: true
-        enabled: root.pageActive
 
         function onGapsChanged() {
+            if (!root.pageActive)
+                return
             // 不在这里单独清错：清除职责统一在 reload() 里，避免两处各清一次而口径分家。
             root.reload()
         }
 
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             root.loadError = String(message || qsTr("知识缺口操作失败"))
         }
     }

@@ -126,6 +126,20 @@ Dialog {
             root.errorText = "请先填写要记录的内容"
             return
         }
+        // 超长在这里就拦下，并说清是哪一栏。服务端同样会拒绝（它才是权威口径），
+        // 但走到那一步只能给出一句笼统的「保存失败」，用户不知道该去删哪里。
+        // 正文用不上 maximumLength：那是 TextField 的属性，TextArea 没有。
+        var maxDetail = root.gapServiceRef && root.gapServiceRef.maxDetailLength
+                        ? Number(root.gapServiceRef.maxDetailLength) : 2000
+        if (detailField.text.length > maxDetail) {
+            root.errorText = "正文太长了，请控制在 " + maxDetail + " 字以内"
+            return
+        }
+        // 结论只在勾了「已解决」时才提交，没勾就不必拦：那段文字根本不会写库。
+        if (root.resolvedState && resolutionField.text.length > maxDetail) {
+            root.errorText = "结论太长了，请控制在 " + maxDetail + " 字以内"
+            return
+        }
         // 日期允许留空（= 未排期）。胶囊本身只产出合法日期，这里仍然回查一次：
         // 编辑一条外部写坏了日期的旧记录时，坏日期不能顺着保存下去。
         var due = root.dueIso.trim()

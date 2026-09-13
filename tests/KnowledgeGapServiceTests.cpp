@@ -58,6 +58,7 @@ private slots:
 
     void captureStoresTrimmedTitleWithoutSchedule();
     void rejectsEmptyAndOverlongTitles();
+    void rejectsOverlongDetailAndResolutionInsteadOfTruncating();
     void rejectsMalformedAndOutOfRangeDueDates();
     void clampsPriorityInsteadOfRejecting();
     void dueDatePresenceDrivesStatus();
@@ -185,6 +186,49 @@ void KnowledgeGapServiceTests::rejectsEmptyAndOverlongTitles()
     QVERIFY(service->captureGap(atLimit, 0, 0) > 0);
 
     QCOMPARE(failureSpy.count(), 3);
+}
+
+void KnowledgeGapServiceTests::rejectsOverlongDetailAndResolutionInsteadOfTruncating()
+{
+    KnowledgeGapService* service = KnowledgeGapService::instance();
+    QSignalSpy failureSpy(service, &KnowledgeGapService::operationFailed);
+
+    // size() 数的是 UTF-16 码元，汉字在 BMP 内同样是一个码元，所以这里用 ASCII 填充
+    // 与用汉字是同一个边界。
+    const QString atLimit(KnowledgeGapService::kMaxDetailLength, QLatin1Char('a'));
+    const QString overLimit(KnowledgeGapService::kMaxDetailLength + 1, QLatin1Char('a'));
+
+    const int gapId = service->addGap(QStringLiteral("正文刚好到上限"), 0, atLimit, 1, QVariant(), 0);
+    QVERIFY(gapId > 0);
+    QCOMPARE(service->getGap(gapId).value(QStringLiteral("detail")).toString().size(),
+             KnowledgeGapService::kMaxDetailLength);
+
+    // 超一个字就必须拒绝，而不是截断后报成功。静默截断是最糟的失败方式：界面说「已保存」，
+    // 用户重新打开才发现末尾几句不见了，而那几句往往正是他最想留下的部分。
+    failureSpy.clear();
+    QCOMPARE(service->addGap(QStringLiteral("正文超一个字"), 0, overLimit, 1, QVariant(), 0), -1);
+    QCOMPARE(failureSpy.count(), 1);
+
+    failureSpy.clear();
+    QVERIFY(!service->updateGap(gapId, QStringLiteral("改过的标题"), 0, overLimit, 1, QVariant()));
+    QCOMPARE(failureSpy.count(), 1);
+    // 被拒绝的编辑不能留下任何痕迹：原正文和原标题都得原样在。
+    const QVariantMap unchanged = service->getGap(gapId);
+    QCOMPARE(unchanged.value(QStringLiteral("detail")).toString().size(),
+             KnowledgeGapService::kMaxDetailLength);
+    QCOMPARE(unchanged.value(QStringLiteral("title")).toString(), QStringLiteral("正文刚好到上限"));
+
+    failureSpy.clear();
+    QVERIFY(!service->resolveGap(gapId, overLimit));
+    QCOMPARE(failureSpy.count(), 1);
+    // 结论被拒绝时，状态也不能顺手变成已解决。
+    QCOMPARE(service->getGap(gapId).value(QStringLiteral("status")).toInt(),
+             static_cast<int>(KnowledgeGapService::StatusOpen));
+
+    // 正好到上限的结论照常保存，证明拒绝的是「超出」而不是「接近上限」。
+    QVERIFY(service->resolveGap(gapId, atLimit));
+    QCOMPARE(service->getGap(gapId).value(QStringLiteral("resolution")).toString().size(),
+             KnowledgeGapService::kMaxDetailLength);
 }
 
 void KnowledgeGapServiceTests::rejectsMalformedAndOutOfRangeDueDates()

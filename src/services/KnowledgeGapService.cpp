@@ -119,7 +119,11 @@ bool parseOptionalDueDate(const QVariant& value, QDate* outDate, QString* error)
 
 // 空 QString 是 null，直接绑会写成 SQL NULL，撞上 detail / source_task_title /
 // resolution 这三列的 NOT NULL 约束——而「没写正文」恰恰是最常见的情况。
-// 所有文本列统一走这里截断并收敛成空串。
+// 所有文本列统一走这里收敛成空串。
+//
+// 这里的 left() 只是对派生快照 source_task_title 的兜底（任务标题本身已受 100 字限制，
+// 正常触发不到）。用户直接输入的正文和结论在写库之前就按 kMaxDetailLength 拒绝掉了，
+// 绝不能靠这里截断：静默截断会让用户看到「保存成功」，重新打开才发现末尾几句没了。
 QString boundedText(const QString& value, int maxLength)
 {
     const QString clipped = value.left(maxLength);
@@ -203,6 +207,12 @@ int KnowledgeGapService::addGap(const QString& title,
         reportFailure(QStringLiteral("内容太长了，请控制在 %1 字以内").arg(kMaxTitleLength));
         return -1;
     }
+    // 超长一律拒绝，不截断。截断之后返回成功是最糟的失败方式：界面报「已保存」，
+    // 用户重新打开才发现末尾几句不见了，而丢掉的往往正是他最想留下的那部分。
+    if (detail.size() > kMaxDetailLength) {
+        reportFailure(QStringLiteral("正文太长了，请控制在 %1 字以内").arg(kMaxDetailLength));
+        return -1;
+    }
 
     QDate dueDate;
     QString dateError;
@@ -280,6 +290,9 @@ bool KnowledgeGapService::updateGap(int gapId,
     }
     if (normalizedTitle.size() > kMaxTitleLength) {
         return reportFailure(QStringLiteral("内容太长了，请控制在 %1 字以内").arg(kMaxTitleLength));
+    }
+    if (detail.size() > kMaxDetailLength) {
+        return reportFailure(QStringLiteral("正文太长了，请控制在 %1 字以内").arg(kMaxDetailLength));
     }
 
     QDate dueDate;
@@ -404,6 +417,11 @@ bool KnowledgeGapService::resolveGap(int gapId, const QString& resolution)
 {
     if (!isValidGapId(gapId)) {
         return reportFailure(QStringLiteral("条目编号无效"));
+    }
+    // 结论与正文同一把尺子。这里拒绝而不是截断的理由更硬：结论是用户想明白之后
+    // 专门写下来的那段话，截掉末尾等于把结论最后的落点悄悄删掉。
+    if (resolution.size() > kMaxDetailLength) {
+        return reportFailure(QStringLiteral("结论太长了，请控制在 %1 字以内").arg(kMaxDetailLength));
     }
     if (!databaseReady()) {
         return false;

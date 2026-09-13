@@ -123,10 +123,16 @@ TestCase {
         signal operationFailed(string message)
 
         readonly property int maxTitleLength: 100
+        readonly property int maxDetailLength: 2000
+        // 记下调用次数：用来证明超长输入在弹窗里就被拦住了，根本没走到服务。
+        property int addCalls: 0
         // 记下最近一次保存收到的优先级，用来核对「低」有没有被悄悄改成「中」。
         property int lastUpdatedPriority: -1
 
-        function addGap(title, categoryId, detail, priority, dueDate, sourceTaskId) { return 1 }
+        function addGap(title, categoryId, detail, priority, dueDate, sourceTaskId) {
+            knowledgeGapService.addCalls += 1
+            return 1
+        }
         function updateGap(id, title, categoryId, detail, priority, dueDate) {
             knowledgeGapService.lastUpdatedPriority = priority
             return true
@@ -158,6 +164,7 @@ TestCase {
         wait(60)
         categoryManager.categoryRows = [{ id: 1, name: "专业课", color: "#d4a574" }]
         knowledgeGapService.lastUpdatedPriority = -1
+        knowledgeGapService.addCalls = 0
         scheduleService.failPeriodLoad = false
         scheduleService.setPeriodsCallCount = 0
         scheduleService.currentPeriods = [
@@ -263,6 +270,30 @@ TestCase {
         compare(appSettings.semesterStartDate, "2026-08-31")
         compare(appSettings.semesterWeeks, 16)
         compare(appSettings.scheduleShowWeekend, true)
+    }
+
+    function test_knowledgeGapDialogRefusesOverlongDetail() {
+        knowledgeGapDialog.openForAdd()
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        testCase.fieldIn(knowledgeGapDialog, "knowledgeGapTitleField").text = "相似对角化"
+        var detail = testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDetailField")
+        verify(detail)
+        detail.text = "补".repeat(knowledgeGapService.maxDetailLength + 1)
+
+        knowledgeGapDialog.submit()
+
+        // 超长必须在这里就拦下：服务端从前是截断之后报成功，界面照常关闭，
+        // 用户重新打开才发现末尾几句没了。所以既不能调服务，也不能关弹窗。
+        compare(knowledgeGapService.addCalls, 0)
+        verify(knowledgeGapDialog.opened)
+        verify(knowledgeGapDialog.errorText.indexOf("正文太长") >= 0)
+        // 草稿一个字都不能少——让用户自己决定删哪里。
+        compare(detail.text.length, knowledgeGapService.maxDetailLength + 1)
+
+        // 正好到上限就该存得下去，证明拦的是「超出」而不是「接近上限」。
+        detail.text = "补".repeat(knowledgeGapService.maxDetailLength)
+        knowledgeGapDialog.submit()
+        compare(knowledgeGapService.addCalls, 1)
     }
 
     function test_knowledgeGapDialogOpensForAdd() {
