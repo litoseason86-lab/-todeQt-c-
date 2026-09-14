@@ -32,17 +32,38 @@ TestCase {
         id: fakeCategoryManager
 
         signal operationFailed(string message)
+        signal categoriesChanged()
         property bool failLoad: false
+        // 内联新建用。0 表示服务拒绝（重名等）。
+        property int nextNewId: 7
+        property int addCategoryCalls: 0
+        property string addCategoryName: ""
+        property string addCategoryColor: ""
+        property var extraCategories: []
+        // 基础科目。用例可以换掉它，模拟两次打开之间科目被删或被重排。
+        property var baseCategories: [
+            { id: 1, name: "数学", color: "#d4a574" },
+            { id: 2, name: "英语", color: "#c9956e" }
+        ]
 
         function getAllCategories() {
             if (failLoad) {
                 operationFailed("科目数据库故障")
                 return []
             }
-            return [
-                { id: 1, name: "数学", color: "#d4a574" },
-                { id: 2, name: "英语", color: "#c9956e" }
-            ]
+            return baseCategories.concat(extraCategories)
+        }
+
+        function addCategory(name, color) {
+            addCategoryCalls += 1
+            addCategoryName = String(name)
+            addCategoryColor = String(color)
+            if (nextNewId <= 0)
+                return 0
+            var next = extraCategories.slice()
+            next.push({ id: nextNewId, name: String(name), color: String(color) })
+            extraCategories = next
+            return nextNewId
         }
     }
 
@@ -299,5 +320,248 @@ TestCase {
         tryCompare(refreshedDateDialog, "opened", true, 3000)
         compare(Qt.formatDate(refreshedDateDialog.selectedDate, "yyyy-MM-dd"), "2026-07-26")
         refreshedDateDialog.close()
+    }
+
+    // —— 科目下拉的内联新建 ——
+    //
+    // 此前建任务建到一半想起要分个新科目，只能放下手里的事去开
+    //「设置 → 数据 → 科目管理」。这一组盯住三件事：
+    // 哨兵不会被当成科目提交、取消后下拉不会停在哨兵上、建完自动选中。
+
+    // 复位写在 init 而不是用例末尾：一条用例中途失败就跳过还原的话，
+    // 被改过的科目列表和没关的弹窗会把后面的用例一起带红。
+    function init() {
+        fakeCategoryManager.baseCategories = [
+            { id: 1, name: "数学", color: "#d4a574" },
+            { id: 2, name: "英语", color: "#c9956e" }
+        ]
+        fakeCategoryManager.extraCategories = []
+        fakeCategoryManager.failLoad = false
+        if (categoryDialog.visible) {
+            categoryDialog.close()
+            tryCompare(categoryDialog, "visible", false, 2000)
+        }
+    }
+
+    function resetCategoryFixture() {
+        fakeCategoryManager.failLoad = false
+        fakeCategoryManager.nextNewId = 7
+        fakeCategoryManager.addCategoryCalls = 0
+        fakeCategoryManager.addCategoryName = ""
+        fakeCategoryManager.addCategoryColor = ""
+        fakeCategoryManager.extraCategories = []
+        fakeCategoryManager.baseCategories = [
+            { id: 1, name: "数学", color: "#d4a574" },
+            { id: 2, name: "英语", color: "#c9956e" }
+        ]
+        categoryDialog.close()
+        categoryDialog.refreshCategories()
+    }
+
+    // onOpened / onClosed 要等进出场动画结束才触发，刷新科目、复位下拉都在里面。
+    // 不等就操作，测到的是上一次打开留下的列表。
+    function openDialog(dialog) {
+        dialog.open()
+        tryCompare(dialog, "opened", true, 2000)
+    }
+
+    function closeDialog(dialog) {
+        dialog.close()
+        tryCompare(dialog, "visible", false, 2000)
+    }
+
+    function selectedOptionId(dialog) {
+        var combo = findChild(dialog, "categoryComboBox")
+        verify(combo)
+        verify(combo.currentIndex >= 0 && combo.currentIndex < dialog.categoryOptions.length,
+               "下拉停在了越界位置：" + combo.currentIndex)
+        return Number(dialog.categoryOptions[combo.currentIndex].id)
+    }
+
+    function indexOfOption(dialog, id) {
+        for (var i = 0; i < dialog.categoryOptions.length; ++i) {
+            if (Number(dialog.categoryOptions[i].id) === id)
+                return i
+        }
+        return -1
+    }
+
+    function test_optionsEndWithNewCategorySentinel() {
+        resetCategoryFixture()
+
+        var options = categoryDialog.categoryOptions
+        // 不设置科目 + 数学 + 英语 + 哨兵
+        compare(options.length, 4)
+        compare(Number(options[0].id), -1)
+        compare(Number(options[options.length - 1].id), categoryDialog.newCategorySentinelId)
+    }
+
+    function test_choosingSentinelRevertsSelectionAndOpensPrompt() {
+        resetCategoryFixture()
+        var combo = findChild(categoryDialog, "categoryComboBox")
+        verify(combo)
+        var prompt = findChild(categoryDialog, "addTaskNewCategoryPrompt")
+        verify(prompt)
+
+        // 先停在「英语」上，再去点哨兵。
+        combo.currentIndex = 2
+        categoryDialog.handleCategoryActivated(2)
+        compare(categoryDialog.lastRealCategoryId, 2)
+
+        categoryDialog.handleCategoryActivated(3)
+
+        // 下拉必须退回「英语」——停在「+ 新建科目…」上不是一个合法的科目归属。
+        compare(combo.currentIndex, 2)
+        compare(prompt.opened, true)
+        prompt.close()
+    }
+
+    function test_createdCategoryIsSelectedAutomatically() {
+        resetCategoryFixture()
+        var combo = findChild(categoryDialog, "categoryComboBox")
+        verify(combo)
+        var prompt = findChild(categoryDialog, "addTaskNewCategoryPrompt")
+        verify(prompt)
+
+        prompt.openPrompt()
+        var field = findChild(prompt, "newCategoryPromptField")
+        verify(field)
+        field.text = "专业课"
+        prompt.submit()
+
+        compare(fakeCategoryManager.addCategoryCalls, 1)
+        compare(fakeCategoryManager.addCategoryName, "专业课")
+        // 颜色自动取，不再问用户一次。
+        verify(fakeCategoryManager.addCategoryColor.length > 0)
+        // 建完直接选中它——用户此刻要的就是拿它去归类眼前这条任务。
+        compare(Number(categoryDialog.categoryOptions[combo.currentIndex].id), 7)
+    }
+
+    function test_duplicateNameKeepsInputAndReportsError() {
+        resetCategoryFixture()
+        fakeCategoryManager.nextNewId = 0
+        var prompt = findChild(categoryDialog, "addTaskNewCategoryPrompt")
+        verify(prompt)
+
+        prompt.openPrompt()
+        var field = findChild(prompt, "newCategoryPromptField")
+        verify(field)
+        field.text = "数学"
+        prompt.submit()
+
+        // 失败时输入不能被清掉——让用户直接改，而不是重打一遍。
+        compare(field.text, "数学")
+        verify(prompt.errorText.length > 0)
+        compare(prompt.opened, true)
+        prompt.close()
+    }
+
+    function test_sentinelIsNeverSubmittedAsCategoryId() {
+        resetCategoryFixture()
+        var combo = findChild(categoryDialog, "categoryComboBox")
+        verify(combo)
+        var titleField = findChild(categoryDialog, "titleField")
+        verify(titleField)
+
+        // 绕过 handleCategoryActivated 的退回，直接把下拉按在哨兵上，
+        // 模拟"某条路径漏了退回"。最后一道闸必须把 -2 收敛成 -1。
+        combo.currentIndex = 3
+        compare(Number(categoryDialog.categoryOptions[3].id), categoryDialog.newCategorySentinelId)
+
+        testCase.lastCategoryId = -999
+        titleField.text = "哨兵不能被当成科目"
+        categoryDialog.submit()
+
+        compare(testCase.lastCategoryId, -1)
+    }
+
+    // —— 审查修复：取消新建科目后的恢复（2026-09-14）——
+    // 恢复按科目编号，不按下标：下标会随列表增删与重排变化，而弹窗关掉再开时
+    // 上一次记下的位置也不再属于这一次。
+
+    function test_cancelNewCategoryAfterReopenDoesNotRestoreLastSessionsCategory() {
+        resetCategoryFixture()
+        var combo = findChild(categoryDialog, "categoryComboBox")
+
+        // 上一次打开：选了「英语」。
+        openDialog(categoryDialog)
+        combo.currentIndex = indexOfOption(categoryDialog, 2)
+        categoryDialog.handleCategoryActivated(combo.currentIndex)
+        closeDialog(categoryDialog)
+
+        // 这一次打开：下拉复位在「不设置科目」，用户点哨兵又取消。
+        openDialog(categoryDialog)
+        compare(selectedOptionId(categoryDialog), -1)
+        var prompt = findChild(categoryDialog, "addTaskNewCategoryPrompt")
+        categoryDialog.handleCategoryActivated(indexOfOption(categoryDialog, categoryDialog.newCategorySentinelId))
+        prompt.close()
+
+        // 必须退回这一次的「不设置科目」，不能变成用户这次根本没选过的「英语」。
+        compare(selectedOptionId(categoryDialog), -1)
+        closeDialog(categoryDialog)
+    }
+
+    function test_cancelNewCategoryNeverLandsOnSentinelAfterCategoryRemoved() {
+        resetCategoryFixture()
+        var combo = findChild(categoryDialog, "categoryComboBox")
+
+        openDialog(categoryDialog)
+        combo.currentIndex = indexOfOption(categoryDialog, 2)
+        categoryDialog.handleCategoryActivated(combo.currentIndex)
+        closeDialog(categoryDialog)
+
+        // 两次打开之间「英语」被删了：选项变成 [不设置科目, 数学, 哨兵]，
+        // 旧的下标 2 正好指着哨兵本身。
+        fakeCategoryManager.baseCategories = [ { id: 1, name: "数学", color: "#d4a574" } ]
+        openDialog(categoryDialog)
+        var prompt = findChild(categoryDialog, "addTaskNewCategoryPrompt")
+        categoryDialog.handleCategoryActivated(indexOfOption(categoryDialog, categoryDialog.newCategorySentinelId))
+        prompt.close()
+
+        verify(selectedOptionId(categoryDialog) !== categoryDialog.newCategorySentinelId,
+               "取消后下拉停在了「+ 新建科目…」上")
+        closeDialog(categoryDialog)
+    }
+
+    function test_cancelRestoresSameCategoryWhenListIsReordered() {
+        resetCategoryFixture()
+        var combo = findChild(categoryDialog, "categoryComboBox")
+
+        openDialog(categoryDialog)
+        combo.currentIndex = indexOfOption(categoryDialog, 2)
+        categoryDialog.handleCategoryActivated(combo.currentIndex)
+
+        // 打开期间列表被重排（科目按 display_order、name 排序，别处改了顺序或插进一条）。
+        // 「英语」挪到了别的下标上；取消新建后要回到「英语」本身，而不是回到原来那个位置上的别的科目。
+        // 「英语」从下标 2 挪到下标 1，原来的下标 2 上换成了「政治」。
+        fakeCategoryManager.baseCategories = [
+            { id: 2, name: "英语", color: "#c9956e" },
+            { id: 3, name: "政治", color: "#aaaaaa" },
+            { id: 1, name: "数学", color: "#d4a574" }
+        ]
+        categoryDialog.refreshCategories()
+        combo.currentIndex = indexOfOption(categoryDialog, 2)
+        compare(combo.currentIndex, 1)
+
+        var prompt = findChild(categoryDialog, "addTaskNewCategoryPrompt")
+        categoryDialog.handleCategoryActivated(indexOfOption(categoryDialog, categoryDialog.newCategorySentinelId))
+        prompt.close()
+
+        compare(selectedOptionId(categoryDialog), 2)
+        closeDialog(categoryDialog)
+    }
+
+    function test_openingSyncsTheRestorePointToTheInitialSelection() {
+        resetCategoryFixture()
+        var combo = findChild(categoryDialog, "categoryComboBox")
+        openDialog(categoryDialog)
+        combo.currentIndex = indexOfOption(categoryDialog, 1)
+        categoryDialog.handleCategoryActivated(combo.currentIndex)
+        closeDialog(categoryDialog)
+
+        openDialog(categoryDialog)
+        // 每次打开，恢复点都要跟这一次的初始选中同步。
+        compare(categoryDialog.lastRealCategoryId, selectedOptionId(categoryDialog))
+        closeDialog(categoryDialog)
     }
 }

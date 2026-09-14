@@ -596,7 +596,8 @@ TestCase {
     }
 
     // 投入量原本只由色块深浅表达，色觉障碍与读屏用户拿不到任何数量信息。
-    // 这条锁住非颜色通道：每个当月格子都要能播报出具体番茄数。
+    // 这条锁住非颜色通道：每个当月格子都要能播报出具体投入。
+    // count 是分钟（GoalService 按 SUM(duration)/60 汇总），不是番茄数。
     function test_heatmap_exposes_count_without_relying_on_color() {
         const heatmap = createTemporaryObject(heatmapComponent, testCase, {
             year: 2026,
@@ -608,7 +609,7 @@ TestCase {
 
         const busyDay = findChild(heatmap, "goalHeatmapDay-9")
         verify(!!busyDay, "Object exists")
-        verify(busyDay.Accessible.name.indexOf("5") >= 0)
+        verify(busyDay.Accessible.name.indexOf("5 分钟") >= 0, busyDay.Accessible.name)
         verify(busyDay.Accessible.name.indexOf("9") >= 0)
 
         const idleDay = findChild(heatmap, "goalHeatmapDay-10")
@@ -618,7 +619,8 @@ TestCase {
 
         const todayCell = findChild(heatmap, "goalHeatmapDay-27")
         verify(!!todayCell, "Object exists")
-        verify(todayCell.Accessible.name.indexOf("今天") >= 0)
+        // 今日零投入的语义是「今日暂无投入」，不是「无投入」——今天还没过完。
+        verify(todayCell.Accessible.name.indexOf("今日暂无投入") >= 0, todayCell.Accessible.name)
     }
 
     // 三条视觉修复此前零覆盖，回归了不会有任何提示：

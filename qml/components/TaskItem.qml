@@ -32,8 +32,12 @@ Rectangle {
     implicitHeight: Math.max(root.compact ? 48 : 76, content.implicitHeight + (root.compact ? 16 : 28))
     radius: Theme.radiusLg
     color: root.itemHovered ? Theme.glassHover : Theme.glassCard
-    border.color: root.itemHovered ? Theme.accent : Theme.border
-    border.width: root.itemHovered ? 1.5 : 1
+    // 键盘游标停在这一行。与悬停共用同一套描边语言，但更重一档——
+    // 悬停是「鼠标路过」，游标是「当前选中，按空格就会完成它」，两者可能同时出现。
+    property bool keyboardFocused: false
+
+    border.color: root.keyboardFocused || root.itemHovered ? Theme.accent : Theme.border
+    border.width: root.keyboardFocused ? 2 : (root.itemHovered ? 1.5 : 1)
     // MultiEffect 的阴影参数不直接承载动画，先放到 root 属性上过渡，再绑定给效果。
     property color warmShadowColor: Theme.ink
     // compact 行阴影压轻一档，列表密排时不互相发灰。

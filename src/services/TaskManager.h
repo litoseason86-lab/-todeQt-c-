@@ -43,6 +43,13 @@ public:
     Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId, int estimatedMinutes);
     Q_INVOKABLE bool addTask(const QString& title, const QVariant& dateValue, int categoryId,
                              int estimatedMinutes, const QString& notes);
+    // 新建任务并返回新任务编号，失败返回 -1；上面那组 addTask 都以它为实现。
+    //
+    // 调用方建完立刻就要操作这条任务时（专注页的「新建今日任务并开始」），必须用这个重载。
+    // 按标题加 display_order 反查不是身份契约：同一天允许同名任务，反查会取错人，
+    // 而「查不到就报错」只防漏查、防不了误匹配——错在选了一个本就不唯一的键。
+    Q_INVOKABLE int createTask(const QString& title, const QVariant& dateValue, int categoryId,
+                               int estimatedMinutes, const QString& notes);
     // 完成、删除和查询任务后都会通过 tasksChanged 通知界面刷新。
     Q_INVOKABLE bool completeTask(int taskId);
     Q_INVOKABLE bool setTaskCompleted(int taskId, bool completed);

@@ -6,6 +6,7 @@ import QtQuick.Layouts
 import "../components"
 import ".."
 import "../LogicalDay.js" as LogicalDay
+import "../Duration.js" as Duration
 
 Item {
     id: root
@@ -211,14 +212,47 @@ Item {
 
     function tasksForDay(index) {
         // weekTasks 一次性加载，按列在前端过滤，避免每个日期重复查库。
+        //
+        // 已完成的沉到这一天的末尾，与今日任务页的排序口径对齐——此前周计划页
+        // 不做这一步，做完的两条会占满行高排在最前，得先滑过它们才看到没做的那条。
+        //
+        // 用两趟稳定分区而不是 sort：要求是「同一完成状态内保持原有顺序」
+        // （服务层已按 display_order、创建时间、编号排好），
+        // 而 sort 的比较函数一旦写成返回 0 之外的值就会悄悄改变同组内的相对位置。
         var target = root.isoDate(root.dayDate(index))
-        var result = []
+        var pending = []
+        var done = []
         for (var i = 0; i < root.weekTasks.length; i++) {
-            if (Qt.formatDate(root.weekTasks[i].date, "yyyy-MM-dd") === target) {
-                result.push(root.weekTasks[i])
+            var task = root.weekTasks[i]
+            if (Qt.formatDate(task.date, "yyyy-MM-dd") !== target) {
+                continue
+            }
+            if (task.completed) {
+                done.push(task)
+            } else {
+                pending.push(task)
             }
         }
-        return result
+        return pending.concat(done)
+    }
+
+    // 这一天排了多少活：当天全部任务的预计用时之和，完成与否都算——
+    // 问的是「排了多少」，与今日任务页 plannedMinutesToday 同一口径。
+    function plannedMinutesForDay(index) {
+        var tasks = root.tasksForDay(index)
+        var sum = 0
+        for (var i = 0; i < tasks.length; i++) {
+            sum += Math.max(0, Number(tasks[i].estimatedMinutes || 0))
+        }
+        return sum
+    }
+
+    function plannedMinutesForWeek() {
+        var sum = 0
+        for (var i = 0; i < root.weekTasks.length; i++) {
+            sum += Math.max(0, Number(root.weekTasks[i].estimatedMinutes || 0))
+        }
+        return sum
     }
 
     function isTodayIndex(index) {
@@ -251,6 +285,284 @@ Item {
         return n
     }
 
+
+    // —— 键盘导航 ——
+    //
+    // 外层 ListView 的 model 是 7（一项一天），任务在内层 Repeater 里，
+    // 所以 ListView.currentIndex 选中的是**天**不是任务，不能直接拿来当游标。
+    //
+    // 游标记的是**任务编号**而不是下标：下标在任务增删、以及完成后沉底重排之后
+    // 指向的就是另一条任务了。按编号记，完成一条之后焦点自然跟着它挪到当天末尾。
+    property int cursorTaskId: -1
+
+    // 全周按「天序 + 天内序」摊平后的任务编号。空日子不产生任何条目，
+    // 因此 ↑↓ 天然跳过它们，不需要另写判断。
+    readonly property var flatTaskIds: {
+        var ids = []
+        for (var d = 0; d < 7; ++d) {
+            var dayTasks = root.tasksForDay(d)
+            for (var i = 0; i < dayTasks.length; ++i) {
+                ids.push(Number(dayTasks[i].id))
+            }
+        }
+        return ids
+    }
+
+    function dayIndexOfTask(taskId) {
+        for (var d = 0; d < 7; ++d) {
+            var dayTasks = root.tasksForDay(d)
+            for (var i = 0; i < dayTasks.length; ++i) {
+                if (Number(dayTasks[i].id) === Number(taskId)) {
+                    return d
+                }
+            }
+        }
+        return -1
+    }
+
+    function taskById(taskId) {
+        for (var i = 0; i < root.weekTasks.length; ++i) {
+            if (Number(root.weekTasks[i].id) === Number(taskId)) {
+                return root.weekTasks[i]
+            }
+        }
+        return null
+    }
+
+    function setCursor(taskId) {
+        root.cursorTaskId = Number(taskId)
+        if (root.cursorTaskId <= 0) {
+            return
+        }
+        // 游标移出可视区就把它滚进来。外层是虚拟化列表（cacheBuffer 有限），
+        // 屏幕外的 delegate 根本没被创建，不能靠累加 delegate 高度定位；
+        // positionViewAtIndex 按天索引工作，不受未创建行影响。
+        var dayIndex = root.dayIndexOfTask(root.cursorTaskId)
+        if (dayIndex < 0) {
+            return
+        }
+        weekScroll.positionViewAtIndex(dayIndex, ListView.Contain)
+        // 只按天定位不够：一天比视口高时 Contain 会把这一天顶到视口上沿，
+        // 当天靠后的任务仍在视口外（12 条的一天，第 12 条落在 562px 视口的 957px 处）。
+        // 这一天的 delegate 此刻已被创建，再按任务行在内容坐标里的位置补一段日内偏移。
+        root.scrollTaskRowIntoView(weekScroll.itemAtIndex(dayIndex), root.cursorTaskId)
+    }
+
+    function taskRowInDay(dayItem, taskId) {
+        var stack = [dayItem]
+        while (stack.length > 0) {
+            var item = stack.pop()
+            if (item && item.taskTitle !== undefined && Number(item.taskId) === Number(taskId)) {
+                return item
+            }
+            var kids = item ? item.children : []
+            for (var i = 0; i < kids.length; ++i) {
+                stack.push(kids[i])
+            }
+        }
+        return null
+    }
+
+    // 只需往下补：Contain 之后，比视口高的一天上沿贴着视口上沿，比视口矮的一天整个在视口内，
+    // 所以任务行不会落到视口上沿之外，只可能压出下沿。
+    function scrollTaskRowIntoView(dayItem, taskId) {
+        var row = dayItem ? root.taskRowInDay(dayItem, taskId) : null
+        if (!row) {
+            return
+        }
+        var bottom = row.mapToItem(weekScroll.contentItem, 0, 0).y + row.height
+        if (bottom > weekScroll.contentY + weekScroll.height) {
+            weekScroll.contentY = bottom - weekScroll.height
+        }
+    }
+
+    // delta 为正向下、为负向上。到头就停，不循环——
+    // 一路按下去从周日绕回周一会让人彻底失去「我在这周的哪里」的位置感。
+    function moveCursor(delta) {
+        var ids = root.flatTaskIds
+        if (ids.length === 0) {
+            root.cursorTaskId = -1
+            return
+        }
+        var index = ids.indexOf(root.cursorTaskId)
+        if (index < 0) {
+            root.setCursor(delta >= 0 ? ids[0] : ids[ids.length - 1])
+            return
+        }
+        var next = index + delta
+        if (next < 0 || next >= ids.length) {
+            return
+        }
+        root.setCursor(ids[next])
+    }
+
+    // 删掉 taskId 之后游标该落在哪。逐级尝试，取第一个命中的：
+    //   当天后继 → 当天前驱 → 后续非空日首条 → 前序非空日末条 → 清空。
+    // 中间两级最容易漏：删掉当天最后一条但当天还有前序任务时应落到前驱（而不是跳去别的一天），
+    // 删掉全周最后一条但前几天还有任务时应落到前序非空日末条（而不是直接清空）。
+    function cursorLandingAfterRemoving(taskId) {
+        var dayIndex = root.dayIndexOfTask(taskId)
+        if (dayIndex < 0) {
+            return -1
+        }
+        var dayTasks = root.tasksForDay(dayIndex)
+        var within = -1
+        for (var i = 0; i < dayTasks.length; ++i) {
+            if (Number(dayTasks[i].id) === Number(taskId)) {
+                within = i
+                break
+            }
+        }
+        if (within < 0) {
+            return -1
+        }
+        if (within + 1 < dayTasks.length) {
+            return Number(dayTasks[within + 1].id)
+        }
+        if (within > 0) {
+            return Number(dayTasks[within - 1].id)
+        }
+        for (var later = dayIndex + 1; later < 7; ++later) {
+            var laterTasks = root.tasksForDay(later)
+            if (laterTasks.length > 0) {
+                return Number(laterTasks[0].id)
+            }
+        }
+        for (var earlier = dayIndex - 1; earlier >= 0; --earlier) {
+            var earlierTasks = root.tasksForDay(earlier)
+            if (earlierTasks.length > 0) {
+                return Number(earlierTasks[earlierTasks.length - 1].id)
+            }
+        }
+        return -1
+    }
+
+    // 空格：完成 / 取消完成当前游标那条。游标按编号记，因此完成后它沉到当天末尾时焦点跟着走。
+    function toggleCursorCompletion() {
+        var task = root.taskById(root.cursorTaskId)
+        if (!task) {
+            return false
+        }
+        root.setTaskCompletedWithAnimationDelay(Number(task.id), !task.completed, String(task.title || ""))
+        return true
+    }
+
+    // 回车：从游标那条开始专注。可不可以启动只由 canStartFocusFor 决定，
+    // 行内「开始」按钮读的是同一个函数——此前两边各写一份，回车漏判了已完成。
+    function startCursorFocus() {
+        if (!root.canStartFocusFor(root.cursorTaskId)) {
+            return false
+        }
+        var task = root.taskById(root.cursorTaskId)
+        root.startFocus(Number(task.id), String(task.title || ""))
+        return true
+    }
+
+    // 完成后到列表重载之间（完成动画要播完，重载推迟约 850ms），模型里的 completed 还是旧值，
+    // 行内按钮却已随完成态隐藏。这里记下用户刚改过的完成态，重载后清空。
+    property var completionOverrides: ({})
+
+    function effectiveCompleted(task) {
+        var id = Number(task.id)
+        return root.completionOverrides[id] !== undefined
+                ? Boolean(root.completionOverrides[id]) : Boolean(task.completed)
+    }
+
+    // 本周页「能不能从这条开始专注」的唯一口径：键盘回车与行内「开始」按钮共用。
+    // 只有今天那一行、且没完成的任务可以。
+    function canStartFocusFor(taskId) {
+        var task = root.taskById(taskId)
+        if (!task) {
+            return false
+        }
+        return root.isTodayIndex(root.dayIndexOfTask(taskId)) && !root.effectiveCompleted(task)
+    }
+
+    // —— 键盘入口 ——
+    //
+    // 列表的 focus: true 只在所在焦点域拿到焦点时才生效。鼠标点侧栏切页时，
+    // 侧栏条目会把焦点留在自己身上（见 Sidebar.qml），于是 ↑↓ 等按键全部落空，
+    // 点任务行也拿不回来——此前的用例都直接调 moveCursor，从没发过真实按键。
+    // 进入本页、或点了任务行，都把键盘入口交给列表。
+
+    function isTextInputItem(item) {
+        // 与 MainWindow.isTextInputItem 同一套鸭子类型：TextInput / TextEdit 系独有的两个属性。
+        return !!item
+                && typeof item.selectedText !== "undefined"
+                && typeof item.inputMethodComposing !== "undefined"
+    }
+
+    function itemInsideOverlay(item) {
+        var overlay = root.Overlay.overlay
+        var current = item
+        while (overlay && current) {
+            if (current === overlay)
+                return true
+            current = current.parent
+        }
+        return false
+    }
+
+    function currentFocusItem() {
+        return root.Window.window ? root.Window.window.activeFocusItem : null
+    }
+
+    // 页面可见且激活时才交接；输入框正在编辑、或弹窗占着焦点时不抢。
+    readonly property bool keyboardEntryReady: root.pageActive && root.visible
+
+    onKeyboardEntryReadyChanged: {
+        if (root.keyboardEntryReady)
+            Qt.callLater(root.takeKeyboardEntry)
+    }
+
+    function takeKeyboardEntry() {
+        if (!root.keyboardEntryReady)
+            return
+        var current = root.currentFocusItem()
+        if (root.isTextInputItem(current) || root.itemInsideOverlay(current))
+            return
+        weekScroll.forceActiveFocus(Qt.OtherFocusReason)
+    }
+
+    // 点任务行：游标落到这一行，键盘入口交给列表，接着 ↑↓ 从这里继续。
+    // 双击标题进入改名时，输入框已经拿到焦点，这里不能再抢回来。
+    function focusListOnTask(taskId) {
+        if (root.isTextInputItem(root.currentFocusItem()))
+            return
+        root.setCursor(taskId)
+        weekScroll.forceActiveFocus(Qt.MouseFocusReason)
+    }
+
+    function editCursorTask() {
+        var task = root.taskById(root.cursorTaskId)
+        if (!task) {
+            return false
+        }
+        editTaskDialog.openForTask(task)
+        return true
+    }
+
+    // 删除：落点必须在发出请求**之前**算好。请求一发出宿主就会把这一行从模型里藏起来，
+    // 那时再算，当前行已经不在 tasksForDay 里了，落点会退化成"找不到"。
+    function deleteCursorTask() {
+        var task = root.taskById(root.cursorTaskId)
+        if (!task) {
+            return false
+        }
+        var landing = root.cursorLandingAfterRemoving(Number(task.id))
+        root.deleteRequested(Number(task.id), String(task.title || ""))
+        root.cursorTaskId = landing
+        return true
+    }
+
+    // 刷新后按编号恢复游标：任务增删之后同一个下标指向的是另一条任务。
+    // 目标任务已经不在了（被删掉、改期到别的周）就清空，不要留一个指向空气的游标。
+    function restoreCursorAfterRefresh() {
+        if (root.cursorTaskId > 0 && root.flatTaskIds.indexOf(root.cursorTaskId) < 0) {
+            root.cursorTaskId = -1
+        }
+    }
+
     function refresh() {
         try {
             root.loadError = ""
@@ -265,9 +577,15 @@ Item {
             root.weekTasks = []
             root.loadError = "本周计划加载失败"
         }
+        // 模型已经是数据库里的最新值，完成态覆盖不再需要。
+        root.completionOverrides = ({})
+        root.restoreCursorAfterRefresh()
     }
 
     function setTaskCompletedWithAnimationDelay(id, completed, title) {
+        var overrides = Object.assign({}, root.completionOverrides)
+        overrides[Number(id)] = Boolean(completed)
+        root.completionOverrides = overrides
         if (completed) {
             // 完成动画依附在当前 TaskItem delegate 上；TaskManager 会同步发 tasksChanged，
             // 如果立即刷新 Repeater，delegate 会被销毁，粒子动画看不到结束。
@@ -327,12 +645,17 @@ Item {
                 }
 
                 Text {
+                    objectName: "weekSummaryText"
                     // 副标题升级为周概览：日期区间 + 本周任务量与完成数，一眼读出这一周的负载。
                     text: {
                         var range = Qt.formatDate(root.weekStart, "M.d") + " – " + Qt.formatDate(root.dayDate(6), "M.d")
                         if (root.weekTasks.length === 0)
                             return range + " · 本周暂无任务"
-                        return range + " · 本周 " + root.weekTasks.length + " 个任务 · 已完成 " + root.weekCompletedCount()
+                        // 只数条目个数答不了排期页最该回答的那个问题——这一周到底排了多少小时。
+                        // 每条的预计用时本来就画在行里，缺的只是一个加法。
+                        return range + " · 本周 " + root.weekTasks.length + " 个任务 · 已完成 "
+                                + root.weekCompletedCount() + " · 共排 "
+                                + Duration.format(root.plannedMinutesForWeek())
                     }
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
@@ -463,10 +786,58 @@ Item {
 
         ListView {
             id: weekScroll
+            objectName: "weekScroll"
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
             model: 7
+
+            // 键盘导航的接收点。列表本身可聚焦，Tab 能进来。
+            focus: true
+            activeFocusOnTab: true
+            Accessible.role: Accessible.List
+            Accessible.name: qsTr("本周任务列表")
+
+            // 内联重命名的输入框在 delegate 里，它拿到焦点时会自己消费按键，
+            // 事件不会冒到这里，所以无修饰键的空格与 E 天然让路。
+            // 拖动中不接受键盘操作：此时模型正被按住不动，改游标只会和落点算不到一起。
+            Keys.onPressed: function (event) {
+                if (root.draggingTaskId > 0) {
+                    return
+                }
+                switch (event.key) {
+                case Qt.Key_Down:
+                    root.moveCursor(1)
+                    event.accepted = true
+                    return
+                case Qt.Key_Up:
+                    root.moveCursor(-1)
+                    event.accepted = true
+                    return
+                case Qt.Key_Space:
+                    event.accepted = root.toggleCursorCompletion()
+                    return
+                case Qt.Key_Return:
+                case Qt.Key_Enter:
+                    event.accepted = root.startCursorFocus()
+                    return
+                case Qt.Key_E:
+                    if (event.modifiers === Qt.NoModifier) {
+                        event.accepted = root.editCursorTask()
+                    }
+                    return
+                case Qt.Key_Backspace:
+                case Qt.Key_Delete:
+                    // macOS 笔记本主键盘上写着 delete 的那颗发的是 Backspace，
+                    // 只认 Key_Delete 等于这条通路在本应用的唯一目标平台上不存在。
+                    if (event.modifiers & Qt.ControlModifier) {
+                        event.accepted = root.deleteCursorTask()
+                    }
+                    return
+                default:
+                    return
+                }
+            }
             spacing: Theme.space12
             boundsBehavior: Flickable.StopAtBounds
             cacheBuffer: 180
@@ -638,7 +1009,8 @@ Item {
                                     taskNotes: String(weekTaskRow.modelData.notes || "")
                                     focusedMinutes: Number(weekTaskRow.modelData.focusedMinutes || 0)
                                     startFocusAllowed: dayRow.isToday
-                                    showStartFocus: dayRow.isToday
+                                    showStartFocus: root.canStartFocusFor(weekTaskRow.taskId)
+                                    keyboardFocused: root.cursorTaskId === weekTaskRow.taskId
                                     draggable: root.canMoveTasks && !weekTaskRow.modelData.completed
                                     opacity: root.draggingTaskId === weekTaskRow.taskId ? 0.6 : 1
 
@@ -655,8 +1027,15 @@ Item {
                                     }
 
                                     onStartFocusClicked: function(id, title) {
-                                        if (dayRow.isToday)
+                                        if (root.canStartFocusFor(id))
                                             root.startFocus(id, title)
+                                    }
+
+                                    // 点行把键盘入口交给列表。挂在本页的实例上，不改 TaskItem 本身——
+                                    // 今日任务页也用它，而那一页本轮不动。
+                                    TapHandler {
+                                        acceptedButtons: Qt.LeftButton
+                                        onTapped: root.focusListOnTask(weekTaskRow.taskId)
                                     }
 
                                     onDeleteClicked: function(id, title) {
@@ -682,6 +1061,24 @@ Item {
 
                             RowLayout {
                                 Layout.fillWidth: true
+
+                                Text {
+                                    objectName: "weekDayPlannedTotal-" + dayRow.index
+
+                                    // 这一天排了多少。排期页最该回答的就是这个，
+                                    // 而此前整页一个分钟数都没有，只能靠数条目个数猜。
+                                    readonly property int plannedMinutes: root.plannedMinutesForDay(dayRow.index)
+                                    // 一条都没排时间的日子不显示「0 分钟」——那不是信息，是噪音。
+                                    // 单独暴露成属性：测试断言它，而不是断言会沿父链级联的 visible。
+                                    readonly property bool showsTotal: plannedMinutes > 0
+
+                                    Layout.alignment: Qt.AlignVCenter
+                                    visible: showsTotal
+                                    text: qsTr("已排 %1").arg(Duration.format(plannedMinutes))
+                                    textFormat: Text.PlainText
+                                    font.pixelSize: Theme.fontSm
+                                    color: Theme.inkSoft
+                                }
 
                                 Item { Layout.fillWidth: true }
 

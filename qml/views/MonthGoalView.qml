@@ -7,6 +7,7 @@ import QtQuick.Layouts
 import ".."
 import "MonthGoalFormat.js" as MgFmt
 import "../LogicalDay.js" as LogicalDay
+import "../HeatmapBands.js" as HeatmapBands
 
 Item {
     id: root
@@ -573,7 +574,21 @@ Item {
                                         var today = root.logicalToday;
                                         return dayNumber > 0 && root.currentYear === today.getFullYear() && root.currentMonth === today.getMonth() + 1 && dayNumber === today.getDate();
                                     }
+                                    // 按逻辑今日逐格判断是否尚未到来；跨月翻到将来整月都是未来，翻回过去整月都不是。
+                                    // 用年月日拼整数比，不比 Date：logicalToday 带时区换算，直接比时间戳可能差出一天。
+                                    readonly property bool futureCell: {
+                                        var today = root.logicalToday;
+                                        var todayKey = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
+                                        return dayNumber > 0 && root.currentYear * 10000 + root.currentMonth * 100 + dayNumber > todayKey;
+                                    }
                                     // qmllint enable unqualified
+                                    // 投入强度只由格底投入条表达，底色继续归选中 / 悬停状态。
+                                    // 整格铺色会被选中态的 accentSoft 整个盖掉（4 档那天反而成了全月最浅的一格），
+                                    // 且 119×78 的大格铺满色阶会压过整页。见 docs/业务规则.md「热力取档与专注历史月历的投入条」。
+                                    // 传 seconds / 60 不取整：30 秒是有投入，不能画成零投入。
+                                    readonly property int heatBand: HeatmapBands.bandForMinutes(dayDuration / 60)
+                                    // 未来不画条（「尚未发生」），零投入画空轨道（「这天没学」），本月之外什么都没有。
+                                    readonly property bool showsInvestmentBar: dayNumber > 0 && !futureCell
 
                                     objectName: dayNumber > 0 ? "monthDayCell-" + dayNumber : "monthDayCell-empty-" + calendarCell.index
                                     radius: Theme.radiusMd
@@ -612,8 +627,15 @@ Item {
                                         }
                                     }
 
+                                    // 日期与时长靠顶排，不铺满整格：铺满时 ColumnLayout 会把两行纵向摊开，
+                                    // 时长那行被推到格底、贴住投入条，而且有无时长的格子日期高度会跳。
                                     ColumnLayout {
-                                        anchors.fill: parent
+                                        objectName: calendarCell.dayNumber > 0
+                                                    ? "monthDayText-" + calendarCell.dayNumber
+                                                    : "monthDayText-empty-" + calendarCell.index
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
                                         anchors.margins: Theme.space8
                                         spacing: Theme.hairline
 
@@ -639,6 +661,22 @@ Item {
                                             color: Theme.accentFillInk
                                             elide: Text.ElideRight
                                         }
+                                    }
+
+                                    Rectangle {
+                                        objectName: calendarCell.dayNumber > 0
+                                                    ? "monthDayBar-" + calendarCell.dayNumber
+                                                    : "monthDayBar-empty-" + calendarCell.index
+                                        visible: calendarCell.showsInvestmentBar
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.bottom: parent.bottom
+                                        anchors.margins: Theme.space8
+                                        height: 8
+                                        radius: height / 2
+                                        color: calendarCell.heatBand === HeatmapBands.NONE
+                                               ? Theme.heatmapEmptyTrack
+                                               : Theme.heatmapBandColors[calendarCell.heatBand]
                                     }
 
                                     MouseArea {

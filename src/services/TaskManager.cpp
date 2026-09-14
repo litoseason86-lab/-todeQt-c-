@@ -208,26 +208,32 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue,
 bool TaskManager::addTask(const QString& title, const QVariant& dateValue,
                           int categoryId, int estimatedMinutes, const QString& notes)
 {
+    return createTask(title, dateValue, categoryId, estimatedMinutes, notes) > 0;
+}
+
+int TaskManager::createTask(const QString& title, const QVariant& dateValue,
+                            int categoryId, int estimatedMinutes, const QString& notes)
+{
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
         qWarning() << "Failed to add task: title is empty after trimming";
-        return false;
+        return -1;
     }
     if (normalizedTitle.size() > kMaxTitleLength) {
         qWarning() << "Failed to add task: title exceeds" << kMaxTitleLength << "characters";
-        return false;
+        return -1;
     }
 
     const QDate date = normalizeDate(dateValue);
     if (!date.isValid()) {
         qWarning() << "Failed to add task: invalid date";
-        return false;
+        return -1;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to add task: database is not open";
-        return false;
+        return -1;
     }
 
     QString categoryName;
@@ -235,7 +241,7 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue,
     if (categoryId > 0) {
         QSqlQuery categoryQuery(db);
         if (!bindCategoryTextFromId(categoryQuery, categoryId, &categoryName)) {
-            return false;
+            return -1;
         }
         categoryIdValue = categoryId;
     }
@@ -264,11 +270,20 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue,
 
     if (!query.exec() || query.numRowsAffected() != 1) {
         qWarning() << "Failed to add task:" << query.lastError().text();
-        return false;
+        return -1;
     }
 
+    // id 是 INTEGER PRIMARY KEY AUTOINCREMENT，即 rowid 别名，SQLite 驱动据此给出新编号。
+    // 取不到就当失败报给调用方：行确实已经写进去了（所以照常发 tasksChanged 让界面刷新），
+    // 但这里绝不返回一个猜来的编号——调用方拿它去开专注会绑错任务。
+    bool idOk = false;
+    const int insertedId = query.lastInsertId().toInt(&idOk);
     emit tasksChanged();
-    return true;
+    if (!idOk || insertedId <= 0) {
+        qWarning() << "Task inserted but the new id is unavailable";
+        return -1;
+    }
+    return insertedId;
 }
 
 bool TaskManager::completeTask(int taskId)

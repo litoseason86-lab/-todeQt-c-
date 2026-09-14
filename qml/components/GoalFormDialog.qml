@@ -33,6 +33,11 @@ Popup {
     property int editingGoalId: -1
     property string errorText: ""
     property var categories: []
+    // categories 末尾挂了一条「+ 新建科目…」哨兵，因此"有几条真科目"要单独记。
+    property int realCategoryCount: 0
+    readonly property int newCategorySentinelId: -2
+    // 恢复点记科目编号（-1 = 未选），不记下标——列表在打开期间会随 categoriesChanged 重排。
+    property int lastRealCategoryId: -1
     // 编辑期间科目可能被另一个窗口删除。单独保存 id，不能只从 ComboBox 的旧索引推断，
     // 否则模型刷新后会把用户未确认的“第一项”误写回目标。
     property int selectedCategoryId: -1
@@ -86,20 +91,58 @@ Popup {
 
     function refreshCategories(desiredCategoryId, selectFirstWhenMissing) {
         root.refreshingCategorySelection = true
-        root.categories = root.categoryManagerRef && root.categoryManagerRef.getAllCategories
+        var loaded = root.categoryManagerRef && root.categoryManagerRef.getAllCategories
                 ? root.categoryManagerRef.getAllCategories() : []
+        // realCategoryCount 是"前多少条是真科目"。下拉模型末尾多挂一条
+        // 「+ 新建科目…」哨兵，所有"选中的是不是合法科目"的判断一律拿它比，
+        // 不能再用 categories.length——那个长度现在含哨兵。
+        root.realCategoryCount = loaded.length
+        root.categories = loaded.concat([{
+            id: root.newCategorySentinelId,
+            name: qsTr("+ 新建科目…"),
+            color: ""
+        }])
         categoryCombo.currentIndex = -1
-        for (var i = 0; i < root.categories.length; ++i) {
+        for (var i = 0; i < root.realCategoryCount; ++i) {
             if (Number(root.categories[i].id) === Number(desiredCategoryId)) {
                 categoryCombo.currentIndex = i
                 break
             }
         }
-        if (categoryCombo.currentIndex < 0 && selectFirstWhenMissing && root.categories.length > 0)
+        if (categoryCombo.currentIndex < 0 && selectFirstWhenMissing && root.realCategoryCount > 0)
             categoryCombo.currentIndex = 0
-        root.selectedCategoryId = categoryCombo.currentIndex >= 0
+        root.selectedCategoryId = root.hasRealCategorySelected()
+                ? Number(root.categories[categoryCombo.currentIndex].id) : -1
+        root.lastRealCategoryId = root.hasRealCategorySelected()
                 ? Number(root.categories[categoryCombo.currentIndex].id) : -1
         root.refreshingCategorySelection = false
+    }
+
+    // 当前选中的是不是一条真科目（既不是未选，也不是末尾那条哨兵）。
+    function hasRealCategorySelected() {
+        return categoryCombo.currentIndex >= 0 && categoryCombo.currentIndex < root.realCategoryCount
+    }
+
+    // 选中哨兵后开新建框，并把下拉退回选之前那一项——
+    // 弹框被取消时下拉不能停在「+ 新建科目…」上，那不是一个合法的科目归属。
+    function handleCategoryActivated(index) {
+        if (index < 0 || index >= root.categories.length) {
+            return
+        }
+        if (index < root.realCategoryCount) {
+            root.lastRealCategoryId = Number(root.categories[index].id)
+            return
+        }
+        var restored = -1
+        for (var i = 0; i < root.realCategoryCount; ++i) {
+            if (Number(root.categories[i].id) === root.lastRealCategoryId) {
+                restored = i
+                break
+            }
+        }
+        // 恢复点那个科目不在了就回到「未选」，绝不停在哨兵上。
+        categoryCombo.currentIndex = restored
+        newCategoryPrompt.openPrompt()
     }
 
     function openForAdd() {
@@ -139,7 +182,7 @@ Popup {
             titleField.forceActiveFocus()
             return false
         }
-        if (categoryCombo.currentIndex < 0 || categoryCombo.currentIndex >= root.categories.length) {
+        if (!root.hasRealCategorySelected()) {
             root.errorText = qsTr("请先为目标选择科目")
             categoryCombo.forceActiveFocus()
             return false
@@ -307,11 +350,14 @@ Popup {
                 Accessible.description: root.editing && currentIndex < 0
                                         ? qsTr("原科目已删除，请重新选择") : ""
                 onCurrentIndexChanged: {
-                    if (!root.refreshingCategorySelection && currentIndex >= 0
-                            && currentIndex < root.categories.length) {
+                    // 只认真科目区间。末尾那条是「+ 新建科目…」哨兵，
+                    // 它被短暂选中时不能把 -2 写进 selectedCategoryId。
+                    if (!root.refreshingCategorySelection && root.hasRealCategorySelected()) {
                         root.selectedCategoryId = Number(root.categories[currentIndex].id)
                     }
                 }
+
+                onActivated: function (index) { root.handleCategoryActivated(index) }
             }
 
             Text {
@@ -437,6 +483,22 @@ Popup {
             font.weight: Font.Medium
             horizontalAlignment: Text.AlignHCenter
             verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    NewCategoryPrompt {
+        id: newCategoryPrompt
+        objectName: "goalNewCategoryPrompt"
+
+        // Popup 渲染在窗口 overlay 层，不能把另一个 Popup 当父项；
+        // 直接挂同一层并居中，才能盖在宿主对话框之上。
+        parent: root.Overlay.overlay
+        anchors.centerIn: parent
+        categoryManagerRef: root.categoryManagerRef
+
+        onCreated: function (categoryId, name) {
+            // 建完直接选中它——用户此刻要的就是拿它去建目标。
+            root.refreshCategories(categoryId, false)
         }
     }
 }

@@ -8,6 +8,16 @@
 
 namespace {
 
+// 「随便换一个键位」类用例统一用这一组：三修饰符 + 字母，不在默认表里，
+// 也不会成为任何产品默认值（应用内默认一律 ⌘ 或 ⌘⇧ 打头）。
+//
+// 这里不用真实产品键位是有原因的：用例只是需要「一个和现状不同的键」，
+// 可一旦借用了某个真键，以后给新动作定默认键位撞上它，红的是这些用例，
+// 看起来却像「那个键不能用」——测试反过来绑架了产品决策，方向是错的。
+// 冲突与默认值本身由 assignRejectsConflictWithAnotherActionInAnyScope
+// 和 resetAllRestoresEveryDefault 专门覆盖，不靠这里的样本键。
+const QString kSpareSequence = QStringLiteral("Ctrl+Alt+Shift+Y");
+
 // 假全局热键后端：不碰系统 API，只记录注册请求，并可以按需让某组键「被占用」。
 // 有了它，全局热键的注册/注销/失败上报三条路径都能在后台无窗口地验证。
 class FakeHotkeyBackend : public GlobalHotkeyBackend
@@ -122,6 +132,7 @@ private slots:
     void cleanup();
 
     void defaultsAreUsedWhenNothingOverridden();
+    void knowledgeGapCaptureActionsExistInBothScopes();
     void inAppAndGlobalListsPartitionAllActions();
     void assignPersistsAndNotifies();
     void corruptOverrideFallsBackToTheDefault();
@@ -187,6 +198,36 @@ void ShortcutRegistryTests::defaultsAreUsedWhenNothingOverridden()
              false);
 }
 
+void ShortcutRegistryTests::knowledgeGapCaptureActionsExistInBothScopes()
+{
+    ShortcutRegistry registry(m_settings);
+    const QVariantList actions = registry.actions();
+
+    // 捕获框此前只有两颗鼠标按钮能打开，其中专注页那颗按既定决策常态透明。
+    // 设置页的「快捷键」分页列的就是这张动作表——表里没有的动作，
+    // 用户连改键位都做不到，所以这两条必须在表里。
+    QCOMPARE(fieldOf(actions, QStringLiteral("gap.capture"), QStringLiteral("isGlobal")).toBool(),
+             false);
+    QCOMPARE(fieldOf(actions, QStringLiteral("global.captureGap"), QStringLiteral("isGlobal")).toBool(),
+             true);
+
+    // 应用内有出厂键位，全局的一律留空——全局热键抢的是整个系统的按键，
+    // 任何预设都可能和用户已装的其他应用撞车，而撞车表现是「别的应用那个键失灵」。
+    QVERIFY(!registry.sequenceFor(QStringLiteral("gap.capture")).isEmpty());
+    QVERIFY(registry.sequenceFor(QStringLiteral("global.captureGap")).isEmpty());
+
+    // 出厂键位不得与任何既有动作冲突。直接拿注册表自己的冲突判据来验，
+    // 而不是人工比对一遍表——人工比对会随着表增长而失效。
+    const QString captureSequence = registry.sequenceFor(QStringLiteral("gap.capture"));
+    int sameSequenceCount = 0;
+    for (const QVariant& entry : actions) {
+        if (entry.toMap().value(QStringLiteral("sequence")).toString() == captureSequence) {
+            ++sameSequenceCount;
+        }
+    }
+    QCOMPARE(sameSequenceCount, 1);
+}
+
 void ShortcutRegistryTests::inAppAndGlobalListsPartitionAllActions()
 {
     ShortcutRegistry registry(m_settings);
@@ -210,14 +251,13 @@ void ShortcutRegistryTests::assignPersistsAndNotifies()
     ShortcutRegistry registry(m_settings);
     QSignalSpy spy(&registry, &ShortcutRegistry::actionsChanged);
 
-    QCOMPARE(registry.assign(QStringLiteral("task.new"), QStringLiteral("Ctrl+Shift+N")),
-             QString());
-    QCOMPARE(registry.sequenceFor(QStringLiteral("task.new")), QStringLiteral("Ctrl+Shift+N"));
+    QCOMPARE(registry.assign(QStringLiteral("task.new"), kSpareSequence), QString());
+    QCOMPARE(registry.sequenceFor(QStringLiteral("task.new")), kSpareSequence);
     QVERIFY(spy.count() >= 1);
 
     // 覆盖值必须真的落盘：换一个只读同一份 ini 的实例仍应读到新键位。
     ShortcutRegistry reopened(m_settings);
-    QCOMPARE(reopened.sequenceFor(QStringLiteral("task.new")), QStringLiteral("Ctrl+Shift+N"));
+    QCOMPARE(reopened.sequenceFor(QStringLiteral("task.new")), kSpareSequence);
     QCOMPARE(fieldOf(reopened.actions(), QStringLiteral("task.new"),
                      QStringLiteral("isDefault")).toBool(), false);
 }
@@ -344,8 +384,7 @@ void ShortcutRegistryTests::resetAllRestoresEveryDefault()
 {
     ShortcutRegistry registry(m_settings);
 
-    QCOMPARE(registry.assign(QStringLiteral("task.new"), QStringLiteral("Ctrl+Shift+N")),
-             QString());
+    QCOMPARE(registry.assign(QStringLiteral("task.new"), kSpareSequence), QString());
     QCOMPARE(registry.disable(QStringLiteral("view.goals")), QString());
 
     QCOMPARE(registry.resetAll(), QString());
@@ -360,8 +399,7 @@ void ShortcutRegistryTests::resetAllRestoresEveryDefault()
 void ShortcutRegistryTests::resetFailureIsReportedWithoutNotifyingSuccess()
 {
     ShortcutRegistry registry(m_settings);
-    QCOMPARE(registry.assign(QStringLiteral("task.new"), QStringLiteral("Ctrl+Shift+N")),
-             QString());
+    QCOMPARE(registry.assign(QStringLiteral("task.new"), kSpareSequence), QString());
 
     QSignalSpy actionsSpy(&registry, &ShortcutRegistry::actionsChanged);
     actionsSpy.clear();

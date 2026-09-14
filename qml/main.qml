@@ -50,6 +50,9 @@ ApplicationWindow {
         id: mainContent
 
         anchors.fill: parent
+        // 窗口是否已激活。捕获框要靠它决定「现在能不能开」——
+        // 窗口没激活时键盘焦点还在别的应用里，这时开框，用户打的字会落到别处。
+        windowActive: root.active
         // 上下文属性只在应用入口解包，业务组件内部全部消费显式引用，避免动态作用域漂移。
         // qmllint disable unqualified
         taskManagerRef: typeof taskManager === "undefined" ? null : taskManager
@@ -243,6 +246,15 @@ ApplicationWindow {
                 root.hide()
                 return
             }
+            root.show()
+            root.raise()
+            root.requestActivate()
+        }
+
+        // 全局热键在后台触发「记一笔」时，MainWindow 只表达「我要窗口前置」，
+        // 窗口操作留在这一层。前置完成后 root.active 变真，
+        // MainWindow 的 onWindowActiveChanged 才真正把捕获框打开。
+        function onWindowActivationRequested() {
             root.show()
             root.raise()
             root.requestActivate()

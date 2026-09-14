@@ -103,6 +103,13 @@ Popup {
     // 生产页面注入返回 bool 的提交函数；信号保留给独立组件和旧测试使用。
     property var taskSubmitter: null
     property var categories: []
+    // 下拉末尾「+ 新建科目…」那一项的编号。负数且不与 -1（不设置科目）相同，
+    // 因此永远不会被误当成真实的 category_id 提交。
+    readonly property int newCategorySentinelId: -2
+    // 上一次选中的真实项的**科目编号**（-1 = 不设置科目）。哨兵被选中时用它把下拉退回去。
+    // 记编号不记下标：下标会随科目增删、重排而指向别的科目，甚至正好指着哨兵本身；
+    // 弹窗关掉再开时，上一次的位置也不属于这一次。
+    property int lastRealCategoryId: -1
     // 第一个选项是特殊占位项，表示"不设置科目"，数据库里的 category_id 保持为空。
     property var categoryOptions: [
         {
@@ -117,6 +124,7 @@ Popup {
     function resetFields() {
         titleField.text = "";
         categoryComboBox.currentIndex = root.categoryOptions.length > 0 ? 0 : -1;
+        root.lastRealCategoryId = -1;
         root.estimatedMinutes = 0;
         notesField.text = "";
         estimateFields.reload();
@@ -130,16 +138,65 @@ Popup {
         } else {
             root.categories = [];
         }
+        // 末尾那条是哨兵，不是科目：选中它表示「我要现在建一个」。
+        // 建任务建到一半想起要分个新科目，此前得放下手里的事去开「设置 → 数据 → 科目管理」。
         root.categoryOptions = [
             {
                 id: -1,
                 name: "不设置科目",
                 color: ""
             }
-        ].concat(root.categories);
+        ].concat(root.categories).concat([
+            {
+                id: root.newCategorySentinelId,
+                name: "+ 新建科目…",
+                color: ""
+            }
+        ]);
         if (categoryComboBox.currentIndex < 0 && root.categoryOptions.length > 0) {
             categoryComboBox.currentIndex = 0;
         }
+    }
+
+    // 选中哨兵后开新建框，并把下拉退回选之前那一项——
+    // 弹框被取消时下拉不能停在「+ 新建科目…」上，那不是一个合法的科目归属。
+    function handleCategoryActivated(index) {
+        if (index < 0 || index >= root.categoryOptions.length) {
+            return;
+        }
+        if (Number(root.categoryOptions[index].id) !== root.newCategorySentinelId) {
+            root.lastRealCategoryId = Number(root.categoryOptions[index].id);
+            return;
+        }
+        // 恢复点那个科目可能已经不在了：退回「不设置科目」，绝不停在哨兵上。
+        if (!root.selectCategoryById(root.lastRealCategoryId)) {
+            root.selectCategoryById(-1);
+        }
+        newCategoryPrompt.openPrompt();
+    }
+
+    function selectCategoryById(categoryId) {
+        for (var i = 0; i < root.categoryOptions.length; ++i) {
+            if (Number(root.categoryOptions[i].id) === Number(categoryId)
+                    && Number(categoryId) !== root.newCategorySentinelId) {
+                categoryComboBox.currentIndex = i;
+                root.lastRealCategoryId = Number(categoryId);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // 每次打开把恢复点同步成这一次的初始选中，不继承上一次打开时记下的科目。
+    function syncCategoryRestorePoint() {
+        var index = categoryComboBox.currentIndex;
+        var valid = index >= 0 && index < root.categoryOptions.length
+                && Number(root.categoryOptions[index].id) !== root.newCategorySentinelId;
+        if (!valid) {
+            root.selectCategoryById(-1);
+            return;
+        }
+        root.lastRealCategoryId = Number(root.categoryOptions[index].id);
     }
 
     property int continuousSavedCount: 0
@@ -162,6 +219,11 @@ Popup {
 
         // 这里只传科目 id，由 TaskManager 写入数据库关联字段和兼容旧数据的文本字段。
         var categoryId = categoryComboBox.currentIndex >= 0 && categoryComboBox.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryComboBox.currentIndex].id || -1) : -1;
+        // 哨兵不是科目。正常路径下它选中后立刻被退回，这里是最后一道闸——
+        // 万一哪条路径漏了退回，也不能把 -2 当成 category_id 写进库。
+        if (categoryId === root.newCategorySentinelId) {
+            categoryId = -1;
+        }
         var succeeded = true;
         if (root.taskSubmitter) {
             // taskSubmitter 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
@@ -189,12 +251,31 @@ Popup {
         }
     }
 
+    // 弹窗开着时科目在别处变了：刷新下拉，按科目编号保住原选中；原科目被删了就回到「不设置科目」。
+    // 下标会随增删、重排指向别的科目，所以先记编号再重建。
+    function syncCategoriesWhileOpen() {
+        var index = categoryComboBox.currentIndex;
+        var selectedId = index >= 0 && index < root.categoryOptions.length
+                ? Number(root.categoryOptions[index].id) : -1;
+        root.refreshCategories();
+        if (!root.selectCategoryById(selectedId)) {
+            root.selectCategoryById(-1);
+        }
+    }
+
     Connections {
         target: root.categoryManagerRef
         ignoreUnknownSignals: true
 
         function onOperationFailed(message) {
             errorLabel.text = String(message || "科目加载失败")
+        }
+        // 门禁写在处理函数里，不用 enabled 绑定：信号是同步发出的，
+        // enabled 的重算可能晚于它，会漏掉刚打开那一刻的变化。关着时不必刷，打开时本来就会刷。
+        function onCategoriesChanged() {
+            if (root.visible) {
+                root.syncCategoriesWhileOpen()
+            }
         }
     }
 
@@ -212,6 +293,7 @@ Popup {
         }
         errorLabel.text = "";
         root.refreshCategories();
+        root.syncCategoryRestorePoint();
         titleField.forceActiveFocus();
     }
 
@@ -360,6 +442,8 @@ Popup {
             textRole: "name"
             currentIndex: root.categoryOptions.length > 0 ? 0 : -1
             displayText: currentIndex >= 0 && currentIndex < root.categoryOptions.length ? root.categoryOptions[currentIndex].name : "选择科目"
+
+            onActivated: function (index) { root.handleCategoryActivated(index) }
 
             background: Rectangle {
                 objectName: "categoryComboBackground"
@@ -708,6 +792,24 @@ Popup {
 
                 onClicked: root.submit()
             }
+        }
+    }
+
+    NewCategoryPrompt {
+        id: newCategoryPrompt
+        objectName: "addTaskNewCategoryPrompt"
+
+        // 挂在对话框自身上并居中：它是这个对话框内部的一步，不是另一个页面级弹窗。
+        // Popup 渲染在窗口 overlay 层，不能把另一个 Popup 当父项；
+        // 直接挂同一层并居中，才能盖在宿主对话框之上。
+        parent: root.Overlay.overlay
+        anchors.centerIn: parent
+        categoryManagerRef: root.categoryManagerRef
+
+        onCreated: function (categoryId, name) {
+            // 先重建选项再选中：新科目此刻还不在 categoryOptions 里。
+            root.refreshCategories();
+            root.selectCategoryById(categoryId);
         }
     }
 }

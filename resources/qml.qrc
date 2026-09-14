@@ -6,6 +6,7 @@
         <file alias="qml/Duration.js">../qml/Duration.js</file>
         <file alias="qml/GoalForecast.js">../qml/GoalForecast.js</file>
         <file alias="qml/ScheduleWeeks.js">../qml/ScheduleWeeks.js</file>
+        <file alias="qml/HeatmapBands.js">../qml/HeatmapBands.js</file>
         <file alias="qml/main.qml">../qml/main.qml</file>
         <file alias="qml/MainWindow.qml">../qml/MainWindow.qml</file>
         <file alias="qml/views/TodayTaskView.qml">../qml/views/TodayTaskView.qml</file>
@@ -69,6 +70,8 @@
         <file alias="qml/components/ImmersionWindowSync.qml">../qml/components/ImmersionWindowSync.qml</file>
         <file alias="qml/components/ShutdownGuard.qml">../qml/components/ShutdownGuard.qml</file>
         <file alias="qml/components/FocusTimeline.qml">../qml/components/FocusTimeline.qml</file>
+        <file alias="qml/components/FocusTaskPicker.qml">../qml/components/FocusTaskPicker.qml</file>
+        <file alias="qml/components/NewCategoryPrompt.qml">../qml/components/NewCategoryPrompt.qml</file>
         <file alias="qml/components/CompletionParticles.qml">../qml/components/CompletionParticles.qml</file>
         <file alias="qml/components/TaskItem.qml">../qml/components/TaskItem.qml</file>
         <file alias="qml/components/AddTaskDialog.qml">../qml/components/AddTaskDialog.qml</file>

@@ -518,6 +518,8 @@ Item {
         case "focus.stop":
         case "global.focusStop": root.stopFocusFromShortcut(); return
         case "focus.immersive": root.toggleImmersiveFromShortcut(); return
+        case "gap.capture":
+        case "global.captureGap": root.captureKnowledgeGapFromShortcut(); return
         case "global.toggleWindow": root.windowToggleRequested(); return
         }
     }
@@ -548,9 +550,19 @@ Item {
             return
         }
 
-        // 没有会话时不能凭空开始：番茄和自由计时都要先绑定任务，交回专注页由用户选。
+        // 没有会话时按当前模式直接开始。取哪一条由专注页的 startFromShortcut 决定：
+        // 已有选中项优先，否则取今日第一个未完成任务。
+        //
+        // 取不到时它会展开任务选择器（今日零任务、今日任务全部已完成，两种情况同等对待），
+        // 用户可以挑一条已完成的再练一轮，也可以直接敲一个新任务。
+        // 此前这里只弹一句「请先选择要专注的任务」，而专注页当时并没有选择器，
+        // 于是快捷键把人送到一个做不到该动作的页面——那是一条死路。
         root.switchToView("focus")
-        root.showToast("请先选择要专注的任务")
+        Qt.callLater(function () {
+            if (!focusView.startFromShortcut() && focusView.shortcutOpenedSelector) {
+                root.showToast("今天还没有可以开始的任务，挑一条或新建一个")
+            }
+        })
     }
 
     function stopFocusFromShortcut() {
@@ -575,6 +587,82 @@ Item {
                 focusView.endFreeFocus()
             }
         })
+    }
+
+    // 由 main.qml 绑定到窗口的 active。默认真：嵌入式组件测试和旧上下文没有窗口概念，
+    // 那里捕获框照常直接打开。
+    property bool windowActive: true
+    // 窗口还没激活时收到的捕获请求。等它真激活了再开框。
+    property bool pendingGapCapture: false
+
+    // 请求把主窗口叫到前台。main.qml 负责 show/raise/requestActivate——
+    // 窗口操作属于窗口那一层，MainWindow 只表达意图。
+    signal windowActivationRequested()
+
+    // 记一笔的键盘入口（应用内 gap.capture 与全局 global.captureGap 落到这里）。
+    //
+    // 窗口在后台时**不能直接开框**：此时键盘焦点还在原来那个应用里，
+    // 框开出来了用户打的字会落到别处。所以先请求前置，等 windowActive 真的变真再开。
+    // 挂起的后台捕获请求多久作废。窗口激活正常在一瞬间完成；等不到说明系统拒绝了前置，
+    // 这时请求必须作废——否则用户过一小时随手打开应用，捕获框会莫名其妙弹出来。
+    property int gapCaptureRequestTimeoutMs: 3000
+
+    // 捕获此刻是否被阻断：弹窗占着焦点、正在录快捷键，或备份/恢复正处在数据库临界区。
+    // 与应用内快捷键整体让路（AppShortcuts.suspended）的条件一致；全局热键不经过 suspended，
+    // 挂起请求又是在激活时才执行——triggerShortcutAction 入口的数据库守卫管不到那一刻，
+    // 所以三项必须在这一处一起判。捕获框挂在 overlay 上，会盖过恢复遮罩并接收键盘。
+    function gapCaptureBlocked() {
+        return root.overlayHoldsFocus || settingsDialog.recordingShortcut
+                || root.backupOperationBlocksInput
+    }
+
+    function captureKnowledgeGapFromShortcut() {
+        if (root.gapCaptureBlocked()) {
+            return
+        }
+        if (root.windowActive) {
+            root.openKnowledgeGapCapture()
+            return
+        }
+        root.pendingGapCapture = true
+        gapCaptureRequestExpiry.restart()
+        root.windowActivationRequested()
+    }
+
+    function cancelPendingGapCapture() {
+        gapCaptureRequestExpiry.stop()
+        root.pendingGapCapture = false
+    }
+
+    Timer {
+        id: gapCaptureRequestExpiry
+        interval: root.gapCaptureRequestTimeoutMs
+        repeat: false
+        onTriggered: root.pendingGapCapture = false
+    }
+
+    onWindowActiveChanged: {
+        if (!root.windowActive || !root.pendingGapCapture) {
+            return
+        }
+        // 先作废请求再判阻断：被挡住的请求不留到下一次激活。
+        // 挂起期间可能开了弹窗或进入了快捷键录制，执行前必须再判一次。
+        root.cancelPendingGapCapture()
+        if (root.gapCaptureBlocked()) {
+            return
+        }
+        root.openKnowledgeGapCapture()
+    }
+
+    // 在专注页、且专注页自己的入口可用时，用那个入口——它带来源任务与科目。
+    // 其它页面没有「当前任务」；主动休息时专注页入口隐藏、也没有任务上下文。
+    // 这两种情况都走窗口级的无来源捕获：没有上下文只意味着不附带任务和科目，不是禁止捕获。
+    function openKnowledgeGapCapture() {
+        if (root.currentView === "focus" && focusView.knowledgeGapEntryAvailable) {
+            focusView.openKnowledgeGapCapture()
+            return
+        }
+        globalGapCapturePopup.openWithSource(0, "", 0)
     }
 
     function toggleImmersiveFromShortcut() {
@@ -1249,6 +1337,18 @@ Item {
         function onOperationFailed(message) {
             root.showToast(String(message || "专注操作失败"))
         }
+    }
+
+    KnowledgeGapCapturePopup {
+        id: globalGapCapturePopup
+        objectName: "globalKnowledgeGapCapturePopup"
+
+        // Popup 渲染在窗口 overlay 层，挂同一层并居中，才不会被页面内容盖住。
+        parent: root.Overlay.overlay
+        anchors.centerIn: parent
+        gapServiceRef: root.knowledgeGapServiceRef
+
+        onCaptured: root.showToast(qsTr("已记入知识缺口"))
     }
 
     CategoryDialog {

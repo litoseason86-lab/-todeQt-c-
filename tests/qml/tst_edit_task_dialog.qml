@@ -22,11 +22,13 @@ TestCase {
 
         // 必须与 CategoryManager 的真实接口同名（getAllCategories）：此前 mock 提供了
         // 不存在的 getActiveCategories，测试全绿但真机下拉是空的——mock 名称错配会骗过测试。
+        property var categories: [
+            { id: 3, name: "数学", color: "#d4a574" },
+            { id: 5, name: "英语", color: "#8b7355" }
+        ]
+
         function getAllCategories() {
-            return [
-                { id: 3, name: "数学", color: "#d4a574" },
-                { id: 5, name: "英语", color: "#8b7355" }
-            ]
+            return categories
         }
     }
 
@@ -237,6 +239,43 @@ TestCase {
         compare(testCase.submittedMinutes, -1)
         verify(estimateDialog.errorText.length > 0)
         estimateDialog.close()
+    }
+
+    // —— 审查修复：取消新建科目按编号恢复（2026-09-14）——
+
+    function test_cancelNewCategoryRestoresSameCategoryAfterReorder() {
+        categoryManagerMock.categories = [
+            { id: 3, name: "数学", color: "#d4a574" },
+            { id: 5, name: "英语", color: "#8b7355" }
+        ]
+        dialog.openForTask({ id: 9, title: "单词", categoryId: 5, date: new Date(),
+                             estimatedMinutes: 0, notes: "" })
+        var combo = findChild(dialog, "editCategoryCombo")
+        verify(combo)
+        compare(dialog.lastRealCategoryId, 5)
+
+        // 列表重排：「英语」从下标 2 挪到下标 1，原位置换成别的科目。
+        // 这个弹窗目前只在打开和建完科目时刷新列表，重排本身在界面上走不到；
+        // 这条守的是「恢复点是科目编号」这个约定，防止将来加了刷新时又退回按下标。
+        categoryManagerMock.categories = [
+            { id: 5, name: "英语", color: "#8b7355" },
+            { id: 7, name: "政治", color: "#aaaaaa" },
+            { id: 3, name: "数学", color: "#d4a574" }
+        ]
+        dialog.refreshCategories()
+        dialog.selectCategoryById(5)
+        compare(combo.currentIndex, 1)
+
+        var sentinelIndex = dialog.categoryOptions.length - 1
+        dialog.handleCategoryActivated(sentinelIndex)
+        findChild(dialog, "editTaskNewCategoryPrompt").close()
+
+        compare(Number(dialog.categoryOptions[combo.currentIndex].id), 5)
+        dialog.close()
+        categoryManagerMock.categories = [
+            { id: 3, name: "数学", color: "#d4a574" },
+            { id: 5, name: "英语", color: "#8b7355" }
+        ]
     }
 }
 

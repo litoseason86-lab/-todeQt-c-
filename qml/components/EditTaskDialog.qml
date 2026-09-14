@@ -30,6 +30,12 @@ Popup {
     palette.windowText: Theme.controlInk
 
     property var categoryManagerRef: null
+    // 下拉末尾「+ 新建科目…」那一项的编号。负数且不与 -1（不设置科目）相同，
+    // 因此永远不会被误当成真实的 category_id 提交。
+    readonly property int newCategorySentinelId: -2
+    // 上一次选中的真实项。哨兵被选中时用它把下拉退回去。
+    // 恢复点记科目编号（-1 = 不设置科目），不记下标——下标会随科目增删、重排而指向别的科目。
+    property int lastRealCategoryId: -1
     property var categoryOptions: [
         {
             id: -1,
@@ -92,7 +98,53 @@ Popup {
                 options.push(actives[i]);
             }
         }
+        // 末尾那条是哨兵，不是科目：选中它表示「我要现在建一个」。
+        options.push({
+            id: root.newCategorySentinelId,
+            name: "+ 新建科目…",
+            color: ""
+        });
         root.categoryOptions = options;
+    }
+
+    // 选中哨兵后开新建框，并把下拉退回选之前那一项——
+    // 弹框被取消时下拉不能停在「+ 新建科目…」上，那不是一个合法的科目归属。
+    function handleCategoryActivated(index) {
+        if (index < 0 || index >= root.categoryOptions.length) {
+            return;
+        }
+        if (Number(root.categoryOptions[index].id) !== root.newCategorySentinelId) {
+            root.lastRealCategoryId = Number(root.categoryOptions[index].id);
+            return;
+        }
+        if (!root.selectCategoryById(root.lastRealCategoryId)) {
+            root.selectCategoryById(-1);
+        }
+        newCategoryPrompt.openPrompt();
+    }
+
+    function selectCategoryById(categoryId) {
+        for (var i = 0; i < root.categoryOptions.length; ++i) {
+            if (Number(root.categoryOptions[i].id) === Number(categoryId)
+                    && Number(categoryId) !== root.newCategorySentinelId) {
+                categoryCombo.currentIndex = i;
+                root.lastRealCategoryId = Number(categoryId);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // 弹窗开着时科目在别处变了：刷新下拉，按科目编号保住原选中；原科目被删了就回到「不设置科目」。
+    // 下标会随增删、重排指向别的科目，所以先记编号再重建。
+    function syncCategoriesWhileOpen() {
+        var index = categoryCombo.currentIndex;
+        var selectedId = index >= 0 && index < root.categoryOptions.length
+                ? Number(root.categoryOptions[index].id) : -1;
+        root.refreshCategories();
+        if (!root.selectCategoryById(selectedId)) {
+            root.selectCategoryById(-1);
+        }
     }
 
     Connections {
@@ -101,6 +153,13 @@ Popup {
 
         function onOperationFailed(message) {
             root.errorText = String(message || "科目加载失败")
+        }
+        // 门禁写在处理函数里，不用 enabled 绑定：信号是同步发出的，
+        // enabled 的重算可能晚于它。关着时不必刷，openForTask 本来就会刷。
+        function onCategoriesChanged() {
+            if (root.visible) {
+                root.syncCategoriesWhileOpen()
+            }
         }
     }
 
@@ -124,6 +183,7 @@ Popup {
             }
         }
         categoryCombo.currentIndex = index;
+        root.lastRealCategoryId = Number(root.categoryOptions[index].id || -1);
 
         root.dateOffsetSelection = -1;
         for (var offset = 0; offset <= 2; offset++) {
@@ -164,6 +224,10 @@ Popup {
         }
 
         var categoryId = categoryCombo.currentIndex >= 0 && categoryCombo.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryCombo.currentIndex].id || -1) : -1;
+        // 哨兵不是科目。正常路径下它选中后立刻被退回，这里是最后一道闸。
+        if (categoryId === root.newCategorySentinelId) {
+            categoryId = -1;
+        }
         var succeeded = true
         if (root.taskSubmitter) {
             // taskSubmitter 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
@@ -355,6 +419,8 @@ Popup {
             implicitHeight: Theme.controlHeightMd
             model: root.categoryOptions
             textRole: "name"
+
+            onActivated: function (index) { root.handleCategoryActivated(index) }
         }
 
         RowLayout {
@@ -549,6 +615,23 @@ Popup {
                     verticalAlignment: Text.AlignVCenter
                 }
             }
+        }
+    }
+
+    NewCategoryPrompt {
+        id: newCategoryPrompt
+        objectName: "editTaskNewCategoryPrompt"
+
+        // Popup 渲染在窗口 overlay 层，不能把另一个 Popup 当父项；
+        // 直接挂同一层并居中，才能盖在宿主对话框之上。
+        parent: root.Overlay.overlay
+        anchors.centerIn: parent
+        categoryManagerRef: root.categoryManagerRef
+
+        onCreated: function (categoryId, name) {
+            // 先重建选项再选中：新科目此刻还不在 categoryOptions 里。
+            root.refreshCategories();
+            root.selectCategoryById(categoryId);
         }
     }
 }

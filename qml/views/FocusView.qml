@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import ".."
 import "../components"
+import "../LogicalDay.js" as LogicalDay
 
 Item {
     id: root
@@ -62,11 +63,150 @@ Item {
         }
         // C++ 在 QML 加载前恢复会话时不会重放旧信号；首次构造必须主动读取服务现态。
         root.syncToActiveTimer()
+        root.reloadTodayTasks()
     }
 
     onTimerChanged: Qt.callLater(root.syncToActiveTimer)
 
+    onPageActiveChanged: {
+        // 切回本页时重读：在今日页新建、完成或删掉的任务必须反映到选择器里，
+        // 否则用户会从一份过期清单里选中一条已经不存在的任务。
+        if (root.pageActive) {
+            root.reloadTodayTasks()
+        }
+    }
+
+    Connections {
+        target: root.taskManagerRef
+        ignoreUnknownSignals: true
+        enabled: root.pageActive
+
+        function onTasksChanged() {
+            root.reloadTodayTasks()
+        }
+    }
+
     onSelectedTaskIdChanged: root.refreshTaskNotes()
+
+    // —— 任务选择 ——
+    //
+    // 选择器只在真正空闲时出现（没有进行中的会话、也不在主动休息里）。
+    // 计时中任务由计时器说了算，换任务要走 requestTaskSwitch 的确认流程，
+    // 这一行退化成静态标题。
+    // 专注页自己的「记一笔」入口此刻是否可用（带来源任务与科目）。
+    // 主动休息时没有任务上下文，入口隐藏；这不等于禁止捕获——
+    // MainWindow 此时改走窗口级、不带来源的捕获，休息计时不受影响。
+    readonly property bool knowledgeGapEntryAvailable: root.state !== "manualRest"
+
+    readonly property bool taskSelectorActive: (root.state === "free" && !root.timerBool("hasActiveSession"))
+                                               || root.state === "pomoIdle"
+
+    // 今日任务，顺序沿用 getTodayTasks()：未完成在前、当天 display_order 升序。
+    property var todayTasks: []
+
+    function reloadTodayTasks() {
+        if (!root.taskManagerRef || typeof root.taskManagerRef.getTodayTasks !== "function") {
+            root.todayTasks = []
+            return
+        }
+        root.todayTasks = root.taskManagerRef.getTodayTasks()
+    }
+
+    // 可自动启动的那条：已有有效选中项优先——用户刚在今日页点过某条，
+    // 按 ⌘↩ 不该被换成别的任务；否则取今日第一个未完成的
+    // （getTodayTasks 已按未完成在前、display_order 升序排好）。
+    // 取不到时返回 null，由调用方落到选择器，不要在这里兜底成"随便挑一条"。
+    function autoStartCandidate() {
+        if (root.selectedTaskId > 0 && root.selectedTaskTitle.length > 0) {
+            if (root.selectedTaskStillExists()) {
+                return { id: root.selectedTaskId, title: root.selectedTaskTitle }
+            }
+            // 失效了就清掉，继续找今日候选；不清的话下次按键还会再撞一次。
+            root.clearSelectedTask()
+        }
+        root.reloadTodayTasks()
+        for (var i = 0; i < root.todayTasks.length; ++i) {
+            var task = root.todayTasks[i]
+            if (!task.completed) {
+                return { id: Number(task.id), title: String(task.title || "") }
+            }
+        }
+        return null
+    }
+
+    // 选中项是否仍指向一条存在的任务。
+    //
+    // 选中项只在少数几条路径里清空（结束番茄、选择「结束」等），在今日页删掉任务不会清它。
+    // 拿一个已删除的编号去启动，服务端 INSERT … SELECT … WHERE t.id = :taskId 插入 0 行而失败——
+    // 快捷键于是既没启动、也没展开选择器。启动前按编号回查一次。
+    // 注入的服务没有 getTask 时无从验证，保持信任，不因为验证不了就丢掉用户的选择。
+    function selectedTaskStillExists() {
+        if (!root.taskManagerRef || typeof root.taskManagerRef.getTask !== "function") {
+            return true
+        }
+        var task = root.taskManagerRef.getTask(root.selectedTaskId)
+        return !!task && Number(task.id) === root.selectedTaskId
+    }
+
+    function startCurrentMode() {
+        return root.pomodoroModeSelected ? root.startPomodoro() : root.startFreeFocus()
+    }
+
+    // ⌘↩ 与全局热键在空闲时的入口。
+    //
+    // 取得到可自动启动的任务就直接开始；取不到就展开选择器。
+    // **不按「今天有没有任务」分叉，只按「有没有可自动启动的任务」分叉**——
+    // 今日任务全部已完成时既没有未完成任务可启动、也不满足「零任务」，
+    // 按前一种写法会掉进一条没有规则覆盖的空分支，表现为按了键什么都不发生。
+    // 上一次 startFromShortcut 是否以「展开选择器」收场。调用方只在这种结果下
+    // 提示「今天还没有可以开始的任务」；取到了任务但启动失败时，错误由 errorText 说明，
+    // 不能被报成「没有任务」。
+    property bool shortcutOpenedSelector: false
+
+    function startFromShortcut() {
+        root.shortcutOpenedSelector = false
+        var candidate = root.autoStartCandidate()
+        if (!candidate) {
+            root.openTaskSelector()
+            root.shortcutOpenedSelector = true
+            return false
+        }
+        root.selectedTaskId = candidate.id
+        root.selectedTaskTitle = candidate.title
+        return root.startCurrentMode()
+    }
+
+    function openTaskSelector() {
+        root.reloadTodayTasks()
+        taskPicker.expand()
+    }
+
+    // 选择器里直接新建今日任务并开始。
+    //
+    // 用 createTask 拿新任务编号，不按标题反查：同一天允许同名任务，
+    // 「标题相同 + display_order 最大」不是唯一键，反查可能绑到另一条任务上，
+    // 而绑错任务的后果是这段专注记到了别人头上，用户看不出来。
+    function createTaskAndStart(title) {
+        if (!root.taskManagerRef || typeof root.taskManagerRef.createTask !== "function") {
+            root.errorText = "任务服务不可用"
+            return false
+        }
+        var startHour = root.settings ? Number(root.settings.dayStartHour) : 4
+        var iso = LogicalDay.todayIso(startHour, new Date())
+        // 与服务端一致地去掉首尾空白：入库的是 trim 过的标题，
+        // 页面上显示的当前任务必须是同一个串，否则两处对不上。
+        var safeTitle = String(title || "").trim()
+        var newId = Number(root.taskManagerRef.createTask(safeTitle, iso, -1, 0, ""))
+        if (!(newId > 0)) {
+            root.errorText = "新建任务失败，请重试"
+            return false
+        }
+
+        root.reloadTodayTasks()
+        root.selectedTaskId = newId
+        root.selectedTaskTitle = safeTitle
+        return root.startCurrentMode()
+    }
 
     // 专注页展示当前任务的备注。计时进行中以计时器绑定的任务为准，待机时用页面选中的任务。
     function refreshTaskNotes() {
@@ -861,7 +1001,8 @@ Item {
             implicitWidth: Theme.controlHeightMd
             implicitHeight: Theme.controlHeightMd
             // 沉浸模式一贯压制弹窗；主动休息时也不出现，那段时间没有可记的上下文。
-            visible: root.state !== "manualRest"
+            // 快捷键读同一个条件：入口不可用时走窗口级的无来源捕获。
+            visible: root.knowledgeGapEntryAvailable
             // 按下要有第二档反馈：悬停已经出底，按下若只靠颜色就和悬停分不开。
             scale: gapCaptureButton.down ? 0.94 : 1.0
 
@@ -956,6 +1097,8 @@ Item {
 
                 Text {
                     Layout.fillWidth: true
+                    // 计时中、休息中、刚完成一段：任务由计时器说了算，这里只读。
+                    visible: !root.taskSelectorActive
                     text: root.taskTitle()
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontXl
@@ -963,6 +1106,31 @@ Item {
                     color: Theme.ink
                     horizontalAlignment: Text.AlignHCenter
                     wrapMode: Text.WordWrap
+                }
+
+                FocusTaskPicker {
+                    id: taskPicker
+                    objectName: "focusTaskPicker"
+
+                    Layout.fillWidth: true
+                    visible: root.taskSelectorActive
+                    tasks: root.todayTasks
+                    currentTaskId: root.selectedTaskId
+                    currentTitle: root.selectedTaskTitle
+                    placeholderText: qsTr("选择要专注的任务")
+                    maxTitleLength: root.taskManagerRef && root.taskManagerRef.maxTitleLength
+                                    ? root.taskManagerRef.maxTitleLength : 100
+                    reduceMotion: Boolean(root.settings && root.settings.reduceMotion)
+
+                    onTaskChosen: function (taskId, title) {
+                        root.selectedTaskId = taskId
+                        root.selectedTaskTitle = title
+                        root.errorText = ""
+                    }
+
+                    onNewTaskRequested: function (title) {
+                        root.createTaskAndStart(title)
+                    }
                 }
 
                 ScrollView {

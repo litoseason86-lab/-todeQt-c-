@@ -719,6 +719,9 @@ private slots:
     void addTaskRejectsBlankTitle();
     void addTaskPersistsTrimmedTitleAndEmitsChange();
     void addTaskAcceptsIsoDateStringFromQml();
+    void createTaskReturnsTheIdOfTheRowItJustInserted();
+    void createTaskDistinguishesSameTitleTasksOnTheSameDay();
+    void createTaskReportsFailureWithNegativeId();
     void deleteTaskPreservesFocusSessionHistory();
     void statisticsReturnsTodayCompletionAndDuration();
     void statisticsBucketsSessionsByLogicalDay();
@@ -1924,6 +1927,66 @@ void ServiceTests::addTaskAcceptsIsoDateStringFromQml()
     const QVariantList tasks = TaskManager::instance()->getTodayTasks();
     QCOMPARE(tasks.size(), 1);
     QCOMPARE(tasks.first().toMap().value("title").toString(), QString("政治选择题"));
+}
+
+void ServiceTests::createTaskReturnsTheIdOfTheRowItJustInserted()
+{
+    QSignalSpy spy(TaskManager::instance(), &TaskManager::tasksChanged);
+
+    const int newId = TaskManager::instance()->createTask(
+        QStringLiteral("  线代第四章  "), QVariant(logicalToday()), -1, 45, QStringLiteral("例题 3"));
+
+    QVERIFY(newId > 0);
+    QCOMPARE(spy.count(), 1);
+
+    // 返回的编号必须指向刚插入的那一行本身，不是"某条标题相同的任务"。
+    const QVariantMap task = TaskManager::instance()->getTask(newId);
+    QCOMPARE(task.value("id").toInt(), newId);
+    QCOMPARE(task.value("title").toString(), QStringLiteral("线代第四章"));
+    QCOMPARE(task.value("estimatedMinutes").toInt(), 45);
+    QCOMPARE(task.value("notes").toString(), QStringLiteral("例题 3"));
+}
+
+void ServiceTests::createTaskDistinguishesSameTitleTasksOnTheSameDay()
+{
+    // 标题不是身份。同一天允许两条同名任务，调用方必须能分清自己刚建的是哪一条——
+    // 这正是"按标题反查"给不出的保证：它只能在一堆同名任务里挑一个，挑错也没人知道。
+    const QDate today = logicalToday();
+    const int firstId = TaskManager::instance()->createTask(
+        QStringLiteral("英语真题"), QVariant(today), -1, 0, QString());
+    const int secondId = TaskManager::instance()->createTask(
+        QStringLiteral("英语真题"), QVariant(today), -1, 0, QString());
+
+    QVERIFY(firstId > 0);
+    QVERIFY(secondId > 0);
+    QVERIFY(firstId != secondId);
+
+    // 两条都真实存在，后建的那条排在后面。
+    QCOMPARE(TaskManager::instance()->getTodayTasks().size(), 2);
+    QSqlQuery order(DatabaseManager::instance()->database());
+    order.prepare(QStringLiteral("SELECT display_order FROM tasks WHERE id = :id"));
+    order.bindValue(QStringLiteral(":id"), firstId);
+    QVERIFY(order.exec());
+    QVERIFY(order.next());
+    const int firstOrder = order.value(0).toInt();
+    order.bindValue(QStringLiteral(":id"), secondId);
+    QVERIFY(order.exec());
+    QVERIFY(order.next());
+    QVERIFY(order.value(0).toInt() > firstOrder);
+}
+
+void ServiceTests::createTaskReportsFailureWithNegativeId()
+{
+    QSignalSpy spy(TaskManager::instance(), &TaskManager::tasksChanged);
+
+    // 失败一律返回 -1，不返回 0：调用方统一按 id > 0 判成功。
+    QCOMPARE(TaskManager::instance()->createTask(
+                 QStringLiteral("   "), QVariant(logicalToday()), -1, 0, QString()), -1);
+    QCOMPARE(TaskManager::instance()->createTask(
+                 QStringLiteral("日期非法"), QVariant(QStringLiteral("不是日期")), -1, 0, QString()), -1);
+
+    QCOMPARE(spy.count(), 0);
+    QCOMPARE(TaskManager::instance()->getTodayTasks().size(), 0);
 }
 
 void ServiceTests::deleteTaskPreservesFocusSessionHistory()

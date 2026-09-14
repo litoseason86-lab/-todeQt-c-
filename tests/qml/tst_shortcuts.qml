@@ -271,9 +271,11 @@ TestCase {
         var row = findChildByObjectName(shortcutsPage, "shortcutRow_task.new")
         verify(row !== null)
 
-        row.captured("Ctrl+Shift+K")
+        // 样本键取一个永远不会成为产品默认值的组合（同 ShortcutRegistryTests 的 kSpareSequence）。
+        // 这里用的是假注册表、不会真冲突，但借真键当样本同样会误导读者。
+        row.captured("Ctrl+Alt+Shift+Y")
         compare(registryMock.lastAssignedId, "task.new")
-        compare(registryMock.lastAssignedSequence, "Ctrl+Shift+K")
+        compare(registryMock.lastAssignedSequence, "Ctrl+Alt+Shift+Y")
         compare(shortcutsPage.feedbackIsError, false)
 
         // 失败原因必须原样呈现给用户，不能被吞成一句泛泛的「保存失败」。

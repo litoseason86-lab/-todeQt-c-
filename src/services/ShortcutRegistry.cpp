@@ -87,6 +87,17 @@ const QVector<ShortcutActionDefinition>& ShortcutRegistry::definitions()
         { QStringLiteral("focus.immersive"), QStringLiteral("进入 / 退出沉浸模式"),
           QStringLiteral("专注"), QStringLiteral("Ctrl+Shift+F"), false },
 
+        // 知识缺口捕获。它不是切页动作，与 2026-09-03「切页快捷键只覆盖 8 页」那条决策无关。
+        // 捕获框自己做得很轻（非模态、一行字、回车即存），但此前只有两颗鼠标按钮能打开它，
+        // 其中专注页那颗按既定决策常态透明。真实场景是「在别的窗口做题，发现一块不懂」，
+        // 此刻应用在后台——没有键盘入口，这个功能的代价就超过了「算了回头再说」。
+        //
+        // 默认键位不用 ⌘⇧N：那是「新建任务」的近邻，而两者的产物完全不同
+        // （任务必须有日期，知识缺口的常态恰恰是还定不了什么时候处理），
+        // 挨在一起反而诱导按错。⌘⇧K 空着，K 取自 knowledge。
+        { QStringLiteral("gap.capture"), QStringLiteral("记一笔（知识缺口）"),
+          QStringLiteral("任务"), QStringLiteral("Ctrl+Shift+K"), false },
+
         { QStringLiteral("window.toggleSidebar"), QStringLiteral("显示 / 隐藏侧栏"),
           QStringLiteral("窗口"), QStringLiteral("Ctrl+\\"), false },
         { QStringLiteral("window.settings"), QStringLiteral("打开设置"),
@@ -99,6 +110,8 @@ const QVector<ShortcutActionDefinition>& ShortcutRegistry::definitions()
         { QStringLiteral("global.focusStop"), QStringLiteral("结束当前专注（全局）"),
           QStringLiteral("全局"), QString(), true },
         { QStringLiteral("global.toggleWindow"), QStringLiteral("召回 / 隐藏主窗口（全局）"),
+          QStringLiteral("全局"), QString(), true },
+        { QStringLiteral("global.captureGap"), QStringLiteral("记一笔（全局）"),
           QStringLiteral("全局"), QString(), true },
     };
     return table;
