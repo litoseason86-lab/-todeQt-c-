@@ -139,9 +139,22 @@ Rectangle {
             visible: root.sessions.length > 0
             clip: true
             contentWidth: availableWidth
+            // 滚动条浮在 ScrollView 右缘之上，availableWidth 只扣 padding、不扣滚动条。
+            // 不留通道的话滑块正压在会话卡右缘和圆角上。
+            rightPadding: timelineVerticalScrollBar.width + Theme.space4
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
             ScrollBar.vertical: ScrollBar {
                 id: timelineVerticalScrollBar
+
+                objectName: "focusTimelineVerticalScrollBar"
+                // ScrollView 只会摆放它自己创建的那条滚动条。这里换成了自定义样式的替身，
+                // 就必须自己声明 parent 和几何：漏掉时它会缩成 8x4 停在左上角，
+                // 时间线等于完全没有滚动条，左上角还多出一个小色块。
+                // 写法取自 Qt 文档「Customizing ScrollView」。
+                parent: timelineScrollView
+                x: timelineScrollView.mirrored ? 0 : timelineScrollView.width - width
+                y: timelineScrollView.topPadding
+                height: timelineScrollView.availableHeight
                 policy: ScrollBar.AsNeeded
                 width: 8
 

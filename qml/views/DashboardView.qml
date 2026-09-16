@@ -468,12 +468,18 @@ Item {
             GridLayout {
                 objectName: "dashboardStatsGrid"
                 Layout.fillWidth: true
-                columns: dashboardMainColumn.width >= 790 ? 4 : 2
+                // 四张卡摊成两行要吃掉 220 高，今日任务面板只剩两行多一点。
+                // 卡片改紧凑态后单张高 86、内容最窄约 115，门槛从 790 降到 560：
+                // 默认窗口（主列 735）、收起侧栏（628）、最小窗口（571）都能一行装下，
+                // 省出的 130+ 高度全部给下面的任务清单。再窄才退回两行。
+                columns: dashboardMainColumn.width >= 560 ? 4 : 2
                 columnSpacing: Theme.space12
                 rowSpacing: Theme.space12
 
                 StatCard {
                     objectName: "todayFocusDurationCard"
+
+                    compact: true
                     Layout.fillWidth: true
                     title: "今日专注时长"
                     value: DashboardFormat.totalHoursText(root.todayStats.totalDuration)
@@ -484,6 +490,7 @@ Item {
                 StatCard {
                     objectName: "dashboardTaskCompletionCard"
 
+                    compact: true
                     Layout.fillWidth: true
                     title: "今日任务完成"
                     value: Number(root.todayStats.completedTasks || 0) + " / " + Number(root.todayStats.totalTasks || 0)
@@ -494,6 +501,7 @@ Item {
                 StatCard {
                     objectName: "dashboardStreakCard"
 
+                    compact: true
                     Layout.fillWidth: true
                     title: "专注连续天数"
                     value: String(root.streakDays)
@@ -505,6 +513,7 @@ Item {
                 StatCard {
                     objectName: "dashboardTotalCard"
 
+                    compact: true
                     Layout.fillWidth: true
                     title: "累计专注时长"
                     value: DashboardFormat.totalHoursText(root.totalFocusSeconds)
@@ -668,10 +677,19 @@ Item {
                             anchors.fill: parent
                             clip: true
                             visible: root.filterMode !== "learning" && root.filteredTasks.length > 0
-                            // 内容宽度锁死在可用宽度（= 视口宽 - 纵向滚动条），横向永不溢出。
+                            // 内容宽度锁死在可用宽度，横向永不溢出。
                             contentWidth: availableWidth
+                            // 竖向滚动条浮在 ScrollView 右缘之上，ScrollView 并不替它让位：
+                            // availableWidth 只扣 padding、不扣滚动条，任务行会一直铺到条底下，
+                            // 滑块正压在卡片右缘和圆角上。右侧固定留出滚动条宽度再加一点间距。
+                            // 不绑「滚动条是否可见」：它随内容是否超出一屏变化，而内容高度又受
+                            // 可用宽度影响，会绕成绑定循环（设置页 settingsPageScroll 同样取舍）。
+                            // 这里必须用 ScrollView 自建的那个竖向条：在 ScrollView 上改写
+                            // ScrollBar.vertical，替身不会被摆到右缘，会缩成 10x10 停在左上角。
+                            rightPadding: ScrollBar.vertical.width + Theme.space4
                             // 显式建横向滚动条再关闭：离屏测试里 attached 实例可能尚未创建，
                             // 直接给 ScrollBar.horizontal.policy 赋值会打到 null 上。
+                            // 横向条恒不可见，所以不受上面那条「不能改写」的影响。
                             ScrollBar.horizontal: ScrollBar {
                                 objectName: "dashboardTaskHorizontalScrollBar"
                                 policy: ScrollBar.AlwaysOff

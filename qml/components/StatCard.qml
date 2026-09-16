@@ -13,6 +13,9 @@ Rectangle {
     property string unit: ""
     property string subtitle: ""
     property int animationDelay: 0
+    // 紧凑态：仪表盘四张卡要和今日任务面板抢同一屏高度，收字号与行距，
+    // 统计页仍走常规态，两处版式互不牵连。
+    property bool compact: false
     property string comparisonText: ""
     property int comparisonTrend: 0
     property bool showComparison: false
@@ -34,8 +37,10 @@ Rectangle {
         fadeInAnimation.restart();
     }
 
-    implicitWidth: 190
-    implicitHeight: root.showComparison && root.comparisonText.length > 0 ? 126 : 104
+    implicitWidth: root.compact ? 150 : 190
+    implicitHeight: root.showComparison && root.comparisonText.length > 0
+                    ? (root.compact ? 108 : 126)
+                    : (root.compact ? 86 : 104)
     radius: Theme.radiusLg
     color: Theme.glassCard
     border.color: Theme.glassBorder
@@ -81,14 +86,17 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: Theme.space12
-        spacing: Theme.space8
+        anchors.leftMargin: Theme.space12
+        anchors.rightMargin: Theme.space12
+        anchors.topMargin: root.compact ? 10 : Theme.space12
+        anchors.bottomMargin: root.compact ? 10 : Theme.space12
+        spacing: root.compact ? Theme.space4 : Theme.space8
 
         Text {
             Layout.fillWidth: true
             text: root.title
             textFormat: Text.PlainText
-            font.pixelSize: Theme.fontMd
+            font.pixelSize: root.compact ? Theme.fontSm : Theme.fontMd
             font.weight: Font.Bold
             color: Theme.inkSoft
             elide: Text.ElideRight
@@ -111,11 +119,11 @@ Rectangle {
                         - (unitText.visible ? unitText.implicitWidth + Theme.space4 : 0), 1)
                 text: root.value
                 textFormat: Text.PlainText
-                font.pixelSize: Theme.fontXxl
+                font.pixelSize: root.compact ? Theme.fontXl : Theme.fontXxl
                 font.family: Theme.fontFamilyData
                 font.weight: Font.Bold
                 fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: 18
+                minimumPixelSize: root.compact ? 14 : 18
                 color: Theme.ink
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
@@ -154,7 +162,7 @@ Rectangle {
                 visible: root.unit.length > 0
                 text: root.unit
                 textFormat: Text.PlainText
-                font.pixelSize: Theme.fontMd
+                font.pixelSize: root.compact ? Theme.fontSm : Theme.fontMd
                 color: Theme.inkSoft
                 verticalAlignment: Text.AlignVCenter
                 elide: Text.ElideRight
@@ -171,7 +179,7 @@ Rectangle {
             visible: root.subtitle.length > 0
             text: root.subtitle
             textFormat: Text.PlainText
-            font.pixelSize: Theme.fontSm
+            font.pixelSize: root.compact ? Theme.fontXs : Theme.fontSm
             color: Theme.inkSoft
             elide: Text.ElideRight
         }
@@ -183,7 +191,7 @@ Rectangle {
             visible: root.showComparison && root.comparisonText.length > 0
             text: root.comparisonText
             textFormat: Text.PlainText
-            font.pixelSize: Theme.fontMd
+            font.pixelSize: root.compact ? Theme.fontSm : Theme.fontMd
             color: {
                 if (root.comparisonTrend > 0) {
                     return Theme.success

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtTest
 import "../../qml/views"
 import "../../qml/components"
@@ -369,6 +370,59 @@ TestCase {
         verify(scrollView)
         verify(scrollView.availableWidth > 0)
         compare(scrollView.contentWidth, scrollView.availableWidth)
+    }
+
+    // 竖向滚动条是浮在 ScrollView 右缘之上的，ScrollView 不会自动替它让位：
+    // availableWidth 只扣 padding，不扣滚动条。不留右侧通道时任务行一直铺到条底下，
+    // 滑块正压在卡片右缘和圆角上（「已完成」筛选下压的是「已完成」徽章）。
+    function test_taskListLeavesRoomForVerticalScrollBar() {
+        var many = []
+        for (var i = 0; i < 12; i++) {
+            many.push({ id: i + 1, title: "任务 " + (i + 1), completed: false })
+        }
+        taskManager.todayTasksData = many
+
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+
+        var scrollView = findChild(view, "dashboardTaskScrollView")
+        verify(scrollView)
+        var verticalBar = scrollView.ScrollBar.vertical
+        verify(verticalBar)
+        verify(verticalBar.width > 0)
+
+        // 内容确实超出一屏，滚动条才有意义。contentHeight 由布局 polish 阶段回填，
+        // 创建后先是 -1，所以轮询等它就位。
+        tryVerify(function () { return scrollView.contentHeight > scrollView.height })
+        // 右侧通道 = 滚动条宽 + 一点间距，内容宽度相应变窄。
+        compare(scrollView.rightPadding, verticalBar.width + Theme.space4)
+        verify(scrollView.availableWidth < scrollView.width)
+        // 内容右缘不许越过滚动条左缘。
+        verify(scrollView.leftPadding + scrollView.availableWidth <= verticalBar.x)
+    }
+
+    // 四张统计卡摊成两行要吃掉 220 高，今日任务面板在默认窗口里只剩两行多一点。
+    // 默认窗口 1024 宽、侧栏展开时仪表盘拿到 815：这里必须排成一行。
+    function test_statCardsStayOnOneRowAtDefaultWindowWidth() {
+        var view = createTemporaryObject(dashboardComponent, testCase, { width: 815, height: 740 })
+        verify(view)
+        wait(50)
+
+        var grid = findChild(view, "dashboardStatsGrid")
+        verify(grid)
+        compare(grid.columns, 4)
+
+        var card = findChild(view, "todayFocusDurationCard")
+        verify(card)
+        // 仪表盘走紧凑态；统计页不设这个属性，两处版式互不牵连。
+        compare(card.compact, true)
+        // 一行：整块高度装不下第二张卡。
+        verify(grid.height < card.height * 2)
+
+        // 省出来的高度归任务面板，它应当比统计区高出一截。
+        var panel = findChild(view, "dashboardTaskPanel")
+        verify(panel)
+        verify(panel.height > grid.height * 3)
     }
 
     function test_serviceFailuresAreShownInsteadOfEmptyState() {

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Controls
 import QtTest
 import "../../qml/components"
 import "../../qml"
@@ -86,6 +87,40 @@ TestCase {
         // 时长由组件自己按 durationSeconds 格式化，这里只断言「有非空时长文本」，
         // 不把格式化规则复制进测试——那样改文案就要改两处。
         verify(texts.some(function (t) { return /\d/.test(t) }), "应渲染出含数字的时长/时间文本")
+    }
+
+    // ScrollView 只摆放它自己创建的滚动条。这条时间线换了自定义样式的替身，
+    // 一度漏了 parent/x/y/height，滚动条缩成 8x4 停在左上角——整条时间线没有滚动条，
+    // 左上角还多出一个小色块，而全套测试没有一条发现它。
+    function test_verticalScrollBarIsPlacedAlongTheRightEdge() {
+        var many = []
+        for (var i = 0; i < 10; i++) {
+            many.push({ startTime: "2026-08-08T09:00:00", endTime: "2026-08-08T09:25:00",
+                        durationSeconds: 1500, taskTitle: "第 " + (i + 1) + " 段",
+                        categoryName: "英语", categoryColor: "#c9956e", mode: 1 })
+        }
+
+        var timeline = createTemporaryObject(timelineComponent, testCase, { sessions: many })
+        verify(timeline)
+        wait(50)
+
+        var scrollView = findChildByObjectName(timeline, "focusTimelineScrollView")
+        verify(scrollView)
+        var verticalBar = findChildByObjectName(timeline, "focusTimelineVerticalScrollBar")
+        verify(verticalBar)
+
+        // 内容确实超出一屏，滚动条才有意义。contentHeight 由布局 polish 阶段回填，
+        // 创建后先是 -1，所以轮询等它就位。
+        tryVerify(function () { return scrollView.contentHeight > scrollView.height })
+
+        // 贴住右缘、占满整个视口高度——漏掉几何声明时这两条都会是 0/8x4。
+        compare(verticalBar.x, scrollView.width - verticalBar.width)
+        compare(verticalBar.y, scrollView.topPadding)
+        compare(verticalBar.height, scrollView.availableHeight)
+
+        // 会话卡不许铺到滚动条底下。
+        compare(scrollView.rightPadding, verticalBar.width + Theme.space4)
+        verify(scrollView.leftPadding + scrollView.availableWidth <= verticalBar.x)
     }
 
     function test_empty_sessions_render_without_error() {
