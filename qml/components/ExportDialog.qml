@@ -29,6 +29,7 @@ Popup {
 
     property var exportServiceRef: null
     property date currentDate: new Date()
+    property bool statusIsError: false
     property string statusText: ""
     property int exportCurrent: 0
     property int exportTotal: 0
@@ -93,6 +94,7 @@ Popup {
 
     onOpened: {
         setDateRangeThisMonth()
+        root.statusIsError = false
         root.statusText = ""
         root.exportCurrent = 0
         root.exportTotal = 0
@@ -103,6 +105,7 @@ Popup {
         ignoreUnknownSignals: true
 
         function onExportCompleted(success, message) {
+            root.statusIsError = !success
             root.statusText = success ? message : "错误：" + message
         }
 
@@ -166,10 +169,12 @@ Popup {
         var start = parsedDate(startDateInput.text)
         var end = parsedDate(endDateInput.text)
         if (!start || !end) {
+            root.statusIsError = true
             root.statusText = "日期格式必须是 yyyy-MM-dd"
             return false
         }
         if (start > end) {
+            root.statusIsError = true
             root.statusText = "开始日期不能晚于结束日期"
             return false
         }
@@ -178,6 +183,7 @@ Popup {
 
     function performExport() {
         if (!root.exportServiceRef) {
+            root.statusIsError = true
             root.statusText = "导出服务不可用"
             return
         }
@@ -185,6 +191,7 @@ Popup {
             return
         }
 
+        root.statusIsError = false
         root.statusText = ""
         root.exportCurrent = 0
         root.exportTotal = 0
@@ -319,7 +326,7 @@ Popup {
             visible: root.statusText.length > 0
             text: root.statusText
             textFormat: Text.PlainText
-            color: root.statusText.startsWith("错误") ? Theme.danger : Theme.ink
+            color: root.statusIsError ? Theme.danger : Theme.ink
             font.pixelSize: Theme.fontSm
             wrapMode: Text.WordWrap
         }

@@ -222,7 +222,7 @@ GlassPanel {
                     color: quickFillChip.pressed ? Theme.glassAccent
                            : (quickFillChip.hovered ? Theme.glassHover : Theme.glassAccent)
                     border.color: quickFillChip.hovered || quickFillChip.visualFocus
-                                  ? Theme.accent : Theme.glassBorder
+                                  ? Theme.focusRing : Theme.glassBorder
                     border.width: 1
                 }
 

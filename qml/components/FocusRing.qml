@@ -10,14 +10,20 @@ Canvas {
     property real progress: 1.0       // 剩余时间占比：1=刚开始/已合拢，0=时间耗尽
     property color ringColor: Theme.accent
     property bool showPreview: false  // 待机态：只画一圈虚线预览，不画进度弧
-    property bool dimmed: false       // 暂停态：整体降低不透明度，转由灰色轨道提示
+    property bool dimmed: false       // 暂停态：只压暗盘面绘图，内部文字保持可读
     readonly property real strokeWidth: 14
 
-    opacity: dimmed ? 0.38 : 1
+    // 只压暗盘面绘图，不能降低整个 Canvas 的 opacity；内部的计时文字是业务内容，
+    // 随父项一起变透明会让暂停时的读数失去对比度。
+    readonly property real drawingOpacity: dimmed ? 0.38 : 1
     antialiasing: true
 
-    Behavior on opacity {
-        NumberAnimation { duration: Theme.reduceMotion ? 0 : 150 }
+    onDimmedChanged: requestPaint()
+
+    // Canvas 的绘制函数不会建立颜色绑定；主题改变时必须显式重画整个盘面。
+    Connections {
+        target: Theme
+        function onActiveThemeIdChanged() { ring.requestPaint() }
     }
 
     onProgressChanged: requestPaint()
@@ -29,6 +35,7 @@ Canvas {
     onPaint: {
         var ctx = getContext("2d")
         ctx.clearRect(0, 0, width, height)
+        ctx.globalAlpha = ring.drawingOpacity
         if (width <= 0 || height <= 0) {
             return
         }
@@ -81,11 +88,11 @@ Canvas {
 
             // 顶部约 15° 的强调弧：暗示正式计时会从正上方开始消退。
             ctx.beginPath()
-            ctx.globalAlpha = 0.45
+            ctx.globalAlpha = 0.45 * ring.drawingOpacity
             ctx.strokeStyle = Theme.accent
             ctx.arc(centerX, centerY, radius, -Math.PI / 2, -Math.PI / 2 + Math.PI / 12, false)
             ctx.stroke()
-            ctx.globalAlpha = 1
+            ctx.globalAlpha = ring.drawingOpacity
             return
         }
 
@@ -120,7 +127,7 @@ Canvas {
 
         // 辉光底：用加宽低透明描边模拟发光，不使用 shadow，避免状态泄漏到后续绘制。
         ctx.save()
-        ctx.globalAlpha = 0.35
+        ctx.globalAlpha = 0.35 * ring.drawingOpacity
         ctx.beginPath()
         ctx.lineWidth = ring.strokeWidth + 6
         ctx.strokeStyle = arcStroke

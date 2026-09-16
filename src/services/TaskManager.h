@@ -12,8 +12,10 @@ class TaskManager : public QObject
     Q_OBJECT
     // 输入框 maximumLength 与服务端校验共用同一上限；QML 侧读取该常量属性。
     Q_PROPERTY(int maxTitleLength READ maxTitleLength CONSTANT)
-    // 预估番茄数上限；输入控件与服务端校验共用，QML 读取该常量属性。
+    // 预计用时上限；输入控件与服务端校验共用，QML 读取该常量属性。
     Q_PROPERTY(int maxEstimatedMinutes READ maxEstimatedMinutes CONSTANT)
+    // 备注长度上限。弹窗提交前按它拦下并指明是备注，服务端同样拒绝（不截断）。
+    Q_PROPERTY(int maxNotesLength READ maxNotesLength CONSTANT)
 
 public:
     enum class TargetCompletionResult {
@@ -34,6 +36,7 @@ public:
 
     int maxTitleLength() const { return kMaxTitleLength; }
     int maxEstimatedMinutes() const { return kMaxEstimatedMinutes; }
+    int maxNotesLength() const { return kMaxNotesLength; }
 
     // Q_INVOKABLE 表示 QML 可以直接调用这些方法。
     // 新增任务支持旧版文本科目，也支持新版 category_id 科目编号。
@@ -80,6 +83,8 @@ public:
     Q_INVOKABLE bool duplicateTask(int taskId, const QVariant& dateValue);
     Q_INVOKABLE bool moveTaskToDate(int taskId, const QVariant& dateValue);
 
+    // 备注长度上限（QChar 计数）。超长一律拒绝而不是截断：截断会让保存照常「成功」，
+    // 用户重新打开才发现末尾没了，而丢掉的往往正是最想留下的那段。
     static constexpr int kMaxNotesLength = 2000;
     Q_INVOKABLE bool deleteTask(int taskId);
     // 删除撤销 UI 用来区分“例行生成的当日实例”与普通任务：删除实例只影响今天，

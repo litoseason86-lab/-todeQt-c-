@@ -13,6 +13,7 @@ Popup {
     property int goalId: -1
     property string goalTitle: ""
     property int percent: 0
+    // 服务层传入分钟；字段沿用旧接口名，展示必须交给统一时长格式化。
     property int doneCount: 0
     property int targetCount: 0
     property bool achieved: false
@@ -117,9 +118,9 @@ Popup {
             Layout.fillWidth: true
             text: root.achieved
                   ? qsTr("累计投入 %1").arg(Duration.format(root.doneCount))
-                  : qsTr("%1 / %2 番茄，还剩 %3 个")
-                    .arg(root.doneCount).arg(root.targetCount)
-                    .arg(Math.max(0, root.targetCount - root.doneCount))
+                  : qsTr("%1 / %2，还剩 %3")
+                    .arg(Duration.format(root.doneCount)).arg(Duration.format(root.targetCount))
+                    .arg(Duration.format(Math.max(0, root.targetCount - root.doneCount)))
             textFormat: Text.PlainText
             color: Theme.inkSoft
             font.pixelSize: Theme.fontMd

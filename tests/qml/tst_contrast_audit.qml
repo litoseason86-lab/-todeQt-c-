@@ -346,11 +346,37 @@ TestCase {
     }
 
 
+    // 今日专注明细页的记录源。不注入的话这页只渲染空状态，
+    // 时间轴行、休息行、时长读数这些真正的文字全都进不了体检。
+    QtObject {
+        id: focusHistoryService
+
+        signal historyChanged()
+
+        function getDayTimeline(date) {
+            return [
+                { id: 1, taskId: 1, taskTitle: "对比度检查任务", isRest: false,
+                  startTime: "09:00", endTime: "09:25", durationSeconds: 1500 },
+                { id: 2, taskId: -1, taskTitle: "", isRest: true,
+                  startTime: "09:25", endTime: "09:30", durationSeconds: 300 }
+            ]
+        }
+        function getDaySessions(date) { return focusHistoryService.getDayTimeline(date) }
+        function getTaskOptions(date) { return [ { id: 1, title: "对比度检查任务" } ] }
+        function formatDuration(seconds) { return Math.floor(seconds / 60) + " 分钟" }
+        function lastError() { return "" }
+        // 有这个函数页面才认为历史可编辑，补录/编辑入口的文字才会渲染出来。
+        function addManualSession(taskId, startDateTime, durationMinutes) { return 9 }
+        function updateSession(sessionId, startDateTime, durationMinutes) { return true }
+        function deleteSession(sessionId) { return true }
+    }
+
     MainWindow {
         id: mainWindow
 
         width: testCase.width
         height: testCase.height
+        focusHistoryServiceRef: focusHistoryService
         taskManagerRef: taskManager
         categoryManagerRef: categoryManager
         exportServiceRef: exportService
@@ -466,14 +492,37 @@ TestCase {
         // 这份清单必须与侧栏的入口一一对应。漏掉一页，那一页就完全在门禁之外——
         // 课表页曾经就这样漏了一整轮：正文说明用了只给「占位/禁用」的 inkMuted，
         // 全量测试照样全绿。
+        // todayFocus 不在侧栏里，是从仪表盘/统计页跳进去的今日专注明细页；
+        // 没有入口图标不代表不用体检，它同样是用户天天看的一整页文字。
         var views = ["dashboard", "today", "focus", "week", "month",
-                     "statistics", "countdown", "goals", "schedule"]
+                     "stats", "countdown", "goals", "schedule", "knowledgeGaps",
+                     "todayFocus"]
         for (var i = 0; i < views.length; ++i) {
             mainWindow.currentView = views[i]
             mainWindow.pendingView = views[i]
             wait(200)
             walk(mainWindow, tag, Theme.surface, 0)
         }
+        // 结束专注/结束休息只在计时态出现，单扫空闲页面永远测不到这些按钮。
+        mainWindow.currentView = "focus"
+        mainWindow.pendingView = "focus"
+        focusTimer.currentTaskId = 1
+        focusTimer.currentTaskTitle = "对比度检查任务"
+        for (var mode = 0; mode <= 2; ++mode) {
+            focusTimer.mode = mode
+            focusTimer.phase = mode === 0 ? 0 : mode === 1 ? 1 : 3
+            focusTimer.hasActiveSession = mode !== 2
+            focusTimer.isRunning = true
+            wait(100)
+            walk(mainWindow, tag + "计时模式" + mode, Theme.surface, 0)
+            focusTimer.isRunning = false
+            wait(100)
+            walk(mainWindow, tag + "暂停模式" + mode, Theme.surface, 0)
+        }
+        focusTimer.hasActiveSession = false
+        focusTimer.isRunning = false
+        focusTimer.mode = 0
+        focusTimer.phase = 0
     }
 
     function cleanupTestCase() {

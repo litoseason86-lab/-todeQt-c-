@@ -4,6 +4,7 @@
 #include "BackupOperations.h"
 #include "DatabaseManager.h"
 #include "FocusTimer.h"
+#include "SnapshotRetention.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -35,14 +36,6 @@ const auto kLastBackupIsoKey = QStringLiteral("backup/lastBackupIso");
 QString timestampToken()
 {
     return QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz"));
-}
-
-std::unique_ptr<QSettings> makeSettings(const QString& path)
-{
-    if (path.isEmpty()) {
-        return std::make_unique<QSettings>();
-    }
-    return std::make_unique<QSettings>(path, QSettings::IniFormat);
 }
 
 QVariantMap settingsWithLocalBackupPolicy(const QVariantMap& restored,
@@ -252,7 +245,7 @@ QString BackupService::suggestedBackupFileName() const
 
 bool BackupService::autoBackupEnabled() const
 {
-    std::unique_ptr<QSettings> settings = makeSettings(m_settingsFilePath);
+    std::unique_ptr<QSettings> settings = BackupOperations::openSettings(m_settingsFilePath);
     return settings->value(kAutoEnabledKey, true).toBool();
 }
 
@@ -262,7 +255,7 @@ void BackupService::setAutoBackupEnabled(bool enabled)
         return;
     }
 
-    std::unique_ptr<QSettings> settings = makeSettings(m_settingsFilePath);
+    std::unique_ptr<QSettings> settings = BackupOperations::openSettings(m_settingsFilePath);
     settings->setValue(kAutoEnabledKey, enabled);
     settings->sync();
     if (settings->status() != QSettings::NoError) {
@@ -274,7 +267,7 @@ void BackupService::setAutoBackupEnabled(bool enabled)
 
 QString BackupService::lastBackupTimeIso() const
 {
-    std::unique_ptr<QSettings> settings = makeSettings(m_settingsFilePath);
+    std::unique_ptr<QSettings> settings = BackupOperations::openSettings(m_settingsFilePath);
     return settings->value(kLastBackupIsoKey).toString();
 }
 
@@ -318,7 +311,7 @@ QVariantMap BackupService::readBackupInfo(const QString& srcPath) const
 QVariantMap BackupService::currentSettingsSnapshot(bool* ok) const
 {
     QVariantMap result;
-    std::unique_ptr<QSettings> settings = makeSettings(m_settingsFilePath);
+    std::unique_ptr<QSettings> settings = BackupOperations::openSettings(m_settingsFilePath);
     settings->sync();
     if (settings->status() != QSettings::NoError) {
         if (ok) {
@@ -328,7 +321,11 @@ QVariantMap BackupService::currentSettingsSnapshot(bool* ok) const
     }
 
     for (const QString& key : settings->allKeys()) {
-        result.insert(key, settings->value(key));
+        // 快照用于回滚与保留本机备份策略，只收本机该管的键；
+        // 收进别的键，回滚时就会把它们写进应用自己的偏好。
+        if (BackupOperations::isLocalSettingKey(key)) {
+            result.insert(key, settings->value(key));
+        }
     }
     if (ok) {
         *ok = true;
@@ -338,10 +335,18 @@ QVariantMap BackupService::currentSettingsSnapshot(bool* ok) const
 
 bool BackupService::applySettingsSnapshot(const QVariantMap& values) const
 {
-    std::unique_ptr<QSettings> settings = makeSettings(m_settingsFilePath);
-    settings->clear();
+    std::unique_ptr<QSettings> settings = BackupOperations::openSettings(m_settingsFilePath);
+    // 先删掉本机该管的旧键，让备份里没有的设置回到默认；不用 clear()——
+    // 原生偏好域里还有 Cocoa 自己记的窗口位置等键，清空整个域会把它们一起抹掉。
+    for (const QString& key : settings->allKeys()) {
+        if (BackupOperations::isLocalSettingKey(key)) {
+            settings->remove(key);
+        }
+    }
     for (auto it = values.constBegin(); it != values.constEnd(); ++it) {
-        settings->setValue(it.key(), it.value());
+        if (BackupOperations::isLocalSettingKey(it.key())) {
+            settings->setValue(it.key(), it.value());
+        }
     }
     settings->sync();
     return settings->status() == QSettings::NoError;
@@ -522,7 +527,7 @@ bool BackupService::restoreBackup(const QString& srcPath)
         return false;
     }
     // 只有新恢复点已经原子写成后，才允许清理旧快照；短暂多占一份磁盘优于失去回滚能力。
-    pruneBeforeRestoreBackups();
+    pruneBeforeRestoreBackups(preRestorePath);
 
     DatabaseManager::instance()->close();
     const BackupOperations::OperationResult install =
@@ -588,7 +593,7 @@ void BackupService::startBackupJob(const QString& destinationPath,
     auto* watcher = new QFutureWatcher<BackupOperations::OperationResult>(this);
     trackWorker(watcher);
     connect(watcher, &QFutureWatcherBase::finished, this,
-            [this, watcher, automatic]() {
+            [this, watcher, automatic, destinationPath]() {
         const BackupOperations::OperationResult result = watcher->result();
         retireWorker(watcher);
         if (m_shutdownPrepared) {
@@ -596,12 +601,12 @@ void BackupService::startBackupJob(const QString& destinationPath,
         }
 
         if (automatic && result.success) {
-            std::unique_ptr<QSettings> settings = makeSettings(m_settingsFilePath);
+            std::unique_ptr<QSettings> settings = BackupOperations::openSettings(m_settingsFilePath);
             settings->setValue(
                 kLastBackupIsoKey, QDateTime::currentDateTime().toString(Qt::ISODate));
             settings->sync();
             if (settings->status() == QSettings::NoError) {
-                pruneAutoBackups();
+                pruneAutoBackups(destinationPath);
                 emit lastBackupTimeChanged();
             } else {
                 qWarning() << "自动备份完成，但时间记录保存失败";
@@ -781,7 +786,7 @@ void BackupService::installPreparedRestore(
         if (result.snapshotCreated) {
             // 布尔值来自本次 worker 的实际创建结果，不能用路径存在性猜测，
             // 否则时间戳撞到旧文件时会误删仍然有效的历史快照。
-            pruneBeforeRestoreBackups();
+            pruneBeforeRestoreBackups(context->preRestorePath);
         }
         if (!result.operation.success) {
             // 原子安装失败时旧数据库仍在原路径，只需重新打开；恢复前快照若已生成则继续保留。
@@ -948,7 +953,7 @@ bool BackupService::runAutoBackupIfDue()
         return false;
     }
 
-    std::unique_ptr<QSettings> settings = makeSettings(m_settingsFilePath);
+    std::unique_ptr<QSettings> settings = BackupOperations::openSettings(m_settingsFilePath);
     settings->setValue(
         kLastBackupIsoKey, QDateTime::currentDateTime().toString(Qt::ISODate));
     settings->sync();
@@ -957,7 +962,7 @@ bool BackupService::runAutoBackupIfDue()
         return false;
     }
 
-    pruneAutoBackups();
+    pruneAutoBackups(path);
     emit lastBackupTimeChanged();
     return true;
 }
@@ -972,30 +977,23 @@ void BackupService::requestAutoBackupIfDue()
     startBackupJob(path, QStringLiteral("auto"), true);
 }
 
-void BackupService::pruneAutoBackups() const
+void BackupService::pruneAutoBackups(const QString& keepPath) const
 {
-    pruneByPrefix(kAutoPrefix, kAutoBackupRetention);
+    pruneByPrefix(kAutoPrefix, kAutoBackupRetention, keepPath);
 }
 
-void BackupService::pruneBeforeRestoreBackups() const
+void BackupService::pruneBeforeRestoreBackups(const QString& keepPath) const
 {
     // 调用前新快照已经成功存在；此处只负责把临时多出的副本收敛到完整配额。
-    pruneByPrefix(kBeforeRestorePrefix, kBeforeRestoreRetention);
+    pruneByPrefix(kBeforeRestorePrefix, kBeforeRestoreRetention, keepPath);
 }
 
-void BackupService::pruneByPrefix(const QString& prefix, int retention) const
+void BackupService::pruneByPrefix(const QString& prefix, int retention, const QString& keepPath) const
 {
-    QDir dir(autoBackupsDir());
-    // QDir::Time 是修改时间倒序，所以下标 [0, retention) 就是要保留的最新几份。
-    const QFileInfoList files = dir.entryInfoList(
-        QStringList{prefix + QStringLiteral("*") + kBackupExtension},
-        QDir::Files,
-        QDir::Time);
-    for (int index = retention; index < files.size(); ++index) {
-        if (!QFile::remove(files.at(index).absoluteFilePath())) {
-            qWarning() << "删除过期备份失败:" << files.at(index).absoluteFilePath();
-        }
-    }
+    SnapshotRetention::prune(QDir(autoBackupsDir()),
+                             prefix + QStringLiteral("*") + kBackupExtension,
+                             retention,
+                             keepPath);
 }
 
 QVariantList BackupService::listBackups() const

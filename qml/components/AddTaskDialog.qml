@@ -10,6 +10,11 @@ import "../LogicalDay.js" as LogicalDay
 Popup {
     id: root
 
+    // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
+
     // 输入框字色必须接管：Basic 风格默认 palette.text 写死深灰，夜间主题下看不见。
     palette.text: Theme.inputInk
     palette.placeholderText: Theme.inputPlaceholderInk
@@ -102,6 +107,9 @@ Popup {
     property var categoryManagerRef: null
     // 生产页面注入返回 bool 的提交函数；信号保留给独立组件和旧测试使用。
     property var taskSubmitter: null
+    // 备注长度上限，与 TaskManager::kMaxNotesLength 同一口径；宿主从 taskManager.maxNotesLength 注入。
+    // TextArea 没有 maximumLength，只能在提交时拦下——服务端超长会直接拒绝，不再截断。
+    property int maxNotesLength: 2000
     property var categories: []
     // 下拉末尾「+ 新建科目…」那一项的编号。负数且不与 -1（不设置科目）相同，
     // 因此永远不会被误当成真实的 category_id 提交。
@@ -202,6 +210,8 @@ Popup {
     property int continuousSavedCount: 0
 
     function submit(keepOpen) {
+        if (root.submissionClosed)
+            return false
         var title = titleField.text.trim();
         if (title.length === 0) {
             errorLabel.text = "任务标题不能为空";
@@ -216,6 +226,14 @@ Popup {
             return;
         }
         root.estimatedMinutes = estimateFields.enteredMinutes;
+
+        // 超长备注当场拦下并指明是备注。服务端同样会拒绝，但那边只能换来一句笼统的「保存失败」。
+        if (notesField.text.trim().length > root.maxNotesLength) {
+            errorLabel.text = "备注太长了，请控制在 " + root.maxNotesLength + " 字以内（当前 "
+                    + notesField.text.trim().length + " 字）";
+            notesField.forceActiveFocus();
+            return;
+        }
 
         // 这里只传科目 id，由 TaskManager 写入数据库关联字段和兼容旧数据的文本字段。
         var categoryId = categoryComboBox.currentIndex >= 0 && categoryComboBox.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryComboBox.currentIndex].id || -1) : -1;
@@ -371,7 +389,7 @@ Popup {
             background: Rectangle {
                 objectName: "titleFieldBackground"
                 color: Theme.surfaceRaised
-                border.color: errorLabel.text.length > 0 ? Theme.dangerBorder : (titleField.activeFocus ? Theme.accent : Theme.border)
+                border.color: errorLabel.text.length > 0 ? Theme.dangerBorder : (titleField.activeFocus ? Theme.focusRing : Theme.border)
                 border.width: errorLabel.text.length > 0 || titleField.activeFocus ? 2 : 1
                 radius: Theme.radiusMd
                 layer.enabled: titleField.activeFocus && errorLabel.text.length === 0
@@ -599,6 +617,20 @@ Popup {
             font.pixelSize: Theme.fontLg
         }
 
+        // 接近上限才出现的字数提示：平时不占视线，快写满时提前知道还剩多少。
+        Label {
+            objectName: "addNotesCounter"
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            visible: notesField.text.length > root.maxNotesLength * 0.9
+            text: notesField.text.length + " / " + root.maxNotesLength
+            textFormat: Text.PlainText
+            horizontalAlignment: Text.AlignRight
+            color: notesField.text.length > root.maxNotesLength ? Theme.danger : Theme.inkSoft
+            font.pixelSize: Theme.fontSm
+        }
+
         // 「第九讲复习」过两天就想不起指的是哪几页。备注就是给这种上下文留的位置。
         ScrollView {
             Layout.fillWidth: true
@@ -621,7 +653,7 @@ Popup {
                     radius: Theme.radiusMd
                     color: Theme.surfaceSunken
                     border.width: notesField.activeFocus ? 2 : 1
-                    border.color: notesField.activeFocus ? Theme.accent : Theme.borderSubtle
+                    border.color: notesField.activeFocus ? Theme.focusRing : Theme.borderSubtle
                 }
             }
         }

@@ -1,4 +1,6 @@
 #include "DatabaseManager.h"
+
+#include "SnapshotRetention.h"
 #include "FocusSessionRules.h"
 
 #include <QDebug>
@@ -69,16 +71,24 @@ DatabaseManager* DatabaseManager::instance()
     return &manager;
 }
 
+QString DatabaseManager::defaultDatabasePath()
+{
+    const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    if (dataDir.isEmpty()) {
+        return QString();
+    }
+    return QDir(dataDir).absoluteFilePath(QStringLiteral("pomodoro.db"));
+}
+
 bool DatabaseManager::initialize(const QString& dbPath)
 {
     QString path = dbPath.trimmed();
     if (path.isEmpty()) {
-        const QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        if (dataDir.isEmpty()) {
-            qWarning() << "Failed to prepare application data directory:" << dataDir;
+        path = defaultDatabasePath();
+        if (path.isEmpty()) {
+            qWarning() << "Failed to prepare application data directory";
             return false;
         }
-        path = QDir(dataDir).absoluteFilePath(QStringLiteral("pomodoro.db"));
     } else {
         path = QFileInfo(path).absoluteFilePath();
     }
@@ -962,6 +972,7 @@ bool DatabaseManager::migrateToVersion5()
         if (!knownColumns.contains(column)) {
             qCritical() << "拒绝执行 v5 重建：tasks 存在重建清单未覆盖的列" << column
                         << "——请把它加进 migrateToVersion5 的 knownColumns 与建表语句";
+            m_db.rollback();
             restoreForeignKeys();
             return false;
         }
@@ -1906,23 +1917,14 @@ bool DatabaseManager::backupDatabaseBeforeMigration() const
     // 一次启动可能连跨多级迁移。若每级都 VACUUM INTO，保留最近三份的策略
     // 会删掉唯一早于所有破坏性回填的原始快照，还会无意义地逐页重建整库多次。
     m_migrationSnapshotTaken = true;
-    pruneOldBackups(databaseDir);
+    pruneOldBackups(databaseDir, backupPath);
     return true;
 }
 
-void DatabaseManager::pruneOldBackups(const QDir& databaseDir) const
+void DatabaseManager::pruneOldBackups(const QDir& databaseDir, const QString& keepPath) const
 {
     // 只保留最近三个迁移备份，避免反复测试或启动应用时悄悄塞满数据目录。
-    const QFileInfoList backups = databaseDir.entryInfoList(
-        QStringList{QStringLiteral("pomodoro_backup_*.db")},
-        QDir::Files,
-        QDir::Time);
-
-    for (int index = 3; index < backups.size(); ++index) {
-        if (!QFile::remove(backups.at(index).absoluteFilePath())) {
-            qWarning() << "Failed to remove old database backup:" << backups.at(index).absoluteFilePath();
-        }
-    }
+    SnapshotRetention::prune(databaseDir, QStringLiteral("pomodoro_backup_*.db"), 3, keepPath);
 }
 
 bool DatabaseManager::tableExists(const QString& tableName) const

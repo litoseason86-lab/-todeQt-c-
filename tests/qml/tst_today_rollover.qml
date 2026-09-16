@@ -81,13 +81,16 @@ TestCase {
     QtObject {
         id: statisticsService
 
+        // 数据库口径的今日统计，用例可改写以模拟「库里还在、界面已隐藏」。
+        property var todayStatsData: ({
+            totalDuration: 0,
+            completedTasks: 0,
+            totalTasks: 0,
+            completionRate: 0
+        })
+
         function getTodayStats() {
-            return {
-                totalDuration: 0,
-                completedTasks: 0,
-                totalTasks: 0,
-                completionRate: 0
-            }
+            return statisticsService.todayStatsData
         }
     }
 
@@ -229,6 +232,38 @@ TestCase {
         view.pendingDeleteTaskId = -1
         wait(20)
         compare(view.tasks.length, 2)
+    }
+
+    function test_pendingDeletePreviewsTaskCountsButKeepsFocusTime() {
+        // 撤销窗口内被删的行已从列表消失，「任务完成」计数必须跟着走，
+        // 否则用户看到列表里 1 条、计数却说 2 条。专注时长是既成事实，不跟着减。
+        taskManager.todayTasksData = [
+            { id: 41, title: "已完成的", completed: true, date: "2026-07-06", categoryId: -1 },
+            { id: 42, title: "待删的已完成", completed: true, date: "2026-07-06", categoryId: -1 },
+            { id: 43, title: "没做完的", completed: false, date: "2026-07-06", categoryId: -1 }
+        ]
+        statisticsService.todayStatsData = {
+            totalDuration: 3600, completedTasks: 2, totalTasks: 3, completionRate: 2 / 3
+        }
+        view.pendingDeleteTaskId = -1
+        view.refresh()
+        wait(20)
+        compare(Number(view.todayStats.totalTasks), 3)
+        compare(Number(view.todayStats.completedTasks), 2)
+
+        view.pendingDeleteTaskId = 42
+        view.refresh()
+        wait(20)
+        compare(Number(view.todayStats.totalTasks), 2)
+        compare(Number(view.todayStats.completedTasks), 1)
+        compare(Number(view.todayStats.completionRate), 0.5)
+        compare(Number(view.todayStats.totalDuration), 3600)
+
+        view.pendingDeleteTaskId = -1
+        view.refresh()
+        wait(20)
+        compare(Number(view.todayStats.totalTasks), 3)
+        compare(Number(view.todayStats.completedTasks), 2)
     }
 
     function test_taskListContainerIsGlass() {

@@ -73,13 +73,19 @@ constexpr int kProgressBatchRows = 200;
 
 QString ExportService::escapeCsvField(const QString& field) const
 {
-    // 按 CSV 的通用规则处理：只在必要时加引号，并把内部引号写成两个引号。
-    if (!field.contains(QLatin1Char(',')) && !field.contains(QLatin1Char('"'))
-        && !field.contains(QLatin1Char('\n')) && !field.contains(QLatin1Char('\r'))) {
-        return field;
-    }
-
     QString escaped = field;
+    // 表格软件会把公式前缀当指令；引号只能转义 CSV，不能阻止公式执行。
+    // 检查忽略前导空白后的首字符，并保留原文，以单引号强制按文本打开。
+    const QString trimmed = field.trimmed();
+    if ((!trimmed.isEmpty() && QStringLiteral("=+-@").contains(trimmed.front()))
+        || field.startsWith(QLatin1Char('\t')) || field.startsWith(QLatin1Char('\r'))
+        || field.startsWith(QLatin1Char('\n'))) {
+        escaped.prepend(QLatin1Char('\''));
+    }
+    if (!escaped.contains(QLatin1Char(',')) && !escaped.contains(QLatin1Char('"'))
+        && !escaped.contains(QLatin1Char('\n')) && !escaped.contains(QLatin1Char('\r'))) {
+        return escaped;
+    }
     escaped.replace(QLatin1Char('"'), QStringLiteral("\"\""));
     return QStringLiteral("\"%1\"").arg(escaped);
 }
@@ -202,6 +208,8 @@ bool ExportService::exportTasksUsingDatabase(const QSqlDatabase& database,
 
     QTextStream out(&file);
     out.setEncoding(QStringConverter::Utf8);
+    // Excel 依靠字节序标记识别 UTF-8，否则中文可能按本地编码读取。
+    out.setGenerateByteOrderMark(true);
     out << QStringLiteral("ID,标题,科目,日期,完成状态,创建时间\n");
 
     const QString fromAndWhere = QStringLiteral(
@@ -308,6 +316,8 @@ bool ExportService::exportFocusSessionsUsingDatabase(const QSqlDatabase& databas
 
     QTextStream out(&file);
     out.setEncoding(QStringConverter::Utf8);
+    // Excel 依靠字节序标记识别 UTF-8，否则中文可能按本地编码读取。
+    out.setGenerateByteOrderMark(true);
     out << QStringLiteral("ID,任务ID,任务标题,科目,开始时间,结束时间,时长(分钟)\n");
 
     // countRows 与主查询复用同一 SQL 片段。shift 由 0-6 的归一化整数生成，

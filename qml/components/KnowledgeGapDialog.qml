@@ -11,6 +11,11 @@ import "../LogicalDay.js" as LogicalDay
 Dialog {
     id: root
 
+    // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
+
     // 输入框字色必须接管：Basic 风格默认 palette.text 写死深灰，夜间主题下看不见。
     palette.text: Theme.inputInk
     palette.placeholderText: Theme.inputPlaceholderInk
@@ -121,6 +126,8 @@ Dialog {
     }
 
     function submit() {
+        if (root.submissionClosed)
+            return false
         var title = titleField.text.trim()
         if (title.length === 0) {
             root.errorText = "请先填写要记录的内容"
@@ -248,7 +255,7 @@ Dialog {
             background: Rectangle {
                 color: Theme.surfaceRaised
                 radius: Theme.radiusMd
-                border.color: titleField.activeFocus ? Theme.accent : Theme.border
+                border.color: titleField.activeFocus ? Theme.focusRing : Theme.border
                 border.width: titleField.activeFocus ? 2 : 1
             }
         }
@@ -276,7 +283,7 @@ Dialog {
                 background: Rectangle {
                     color: Theme.surfaceRaised
                     radius: Theme.radiusMd
-                    border.color: detailField.activeFocus ? Theme.accent : Theme.border
+                    border.color: detailField.activeFocus ? Theme.focusRing : Theme.border
                     border.width: detailField.activeFocus ? 2 : 1
                 }
             }
@@ -389,7 +396,7 @@ Dialog {
                     background: Rectangle {
                         color: Theme.surfaceRaised
                         radius: Theme.radiusMd
-                        border.color: resolutionField.activeFocus ? Theme.accent : Theme.border
+                        border.color: resolutionField.activeFocus ? Theme.focusRing : Theme.border
                         border.width: resolutionField.activeFocus ? 2 : 1
                     }
                 }

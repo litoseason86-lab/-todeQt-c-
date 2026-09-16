@@ -13,6 +13,11 @@ import "../ScheduleWeeks.js" as ScheduleWeeks
 Popup {
     id: root
 
+    // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
+
     palette.text: Theme.inputInk
     palette.placeholderText: Theme.inputPlaceholderInk
     palette.highlight: Theme.inputSelection
@@ -89,6 +94,8 @@ Popup {
     }
 
     function save() {
+        if (root.submissionClosed)
+            return false
         root.errorText = ""
 
         // 学期起始日允许留空：未设置时课表页会引导用户先定锚点，
@@ -638,7 +645,7 @@ Popup {
 
         background: Rectangle {
             color: Theme.surfaceRaised
-            border.color: settingsField.activeFocus ? Theme.accent : Theme.border
+            border.color: settingsField.activeFocus ? Theme.focusRing : Theme.border
             border.width: settingsField.activeFocus ? 2 : 1
             radius: Theme.radiusMd
 

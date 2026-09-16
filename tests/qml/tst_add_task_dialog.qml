@@ -235,6 +235,36 @@ TestCase {
         return { hour: hour, minute: minute }
     }
 
+    function test_overlongNotesBlockSubmitAndKeepDraft() {
+        // 服务端对超长备注拒绝（不再截断）。弹窗要当场拦下并指明是备注，
+        // 否则用户只看到一句笼统的「保存失败」，不知道该删哪里。
+        testCase.submittedMinutes = -1
+        estimateDialog.open()
+        tryCompare(estimateDialog, "opened", true, 3000)
+        findChild(estimateDialog, "titleField").text = "整理讲义"
+        var fields = estimateFieldsOf(estimateDialog)
+        fields.hour.text = "0"
+        fields.minute.text = "30"
+        var notes = findChild(estimateDialog, "addNotesField")
+        var longNotes = new Array(estimateDialog.maxNotesLength + 2).join("x")
+        compare(longNotes.length, estimateDialog.maxNotesLength + 1)
+        notes.text = longNotes
+
+        estimateDialog.submit()
+
+        compare(testCase.submittedMinutes, -1)
+        compare(estimateDialog.opened, true)
+        compare(notes.text, longNotes)
+        var errorLabel = findChild(estimateDialog, "addTaskErrorLabel")
+        verify(errorLabel.text.indexOf("备注") >= 0, errorLabel.text)
+
+        // 删到上限以内就能保存。
+        notes.text = longNotes.slice(0, estimateDialog.maxNotesLength)
+        estimateDialog.submit()
+        compare(testCase.submittedMinutes, 30)
+        tryCompare(estimateDialog, "opened", false, 3000)
+    }
+
     function test_estimateIsSubmittedAsMinutes() {
         testCase.submittedMinutes = -1
         estimateDialog.open()
@@ -458,6 +488,9 @@ TestCase {
 
     function test_sentinelIsNeverSubmittedAsCategoryId() {
         resetCategoryFixture()
+        // 提交必须来自打开的表单，关闭中的弹窗不再允许写入。
+        categoryDialog.open()
+        tryCompare(categoryDialog, "opened", true)
         var combo = findChild(categoryDialog, "categoryComboBox")
         verify(combo)
         var titleField = findChild(categoryDialog, "titleField")

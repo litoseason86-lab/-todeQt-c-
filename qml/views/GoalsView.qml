@@ -259,15 +259,21 @@ Item {
     }
 
     Connections {
+        // 门禁写在每个处理函数里，不能用 enabled: root.pageActive：enabled 是绑定，重算晚于
+        // onPageActiveChanged 里的同步查询，而服务在查询过程中就同步发 operationFailed——
+        // 那一刻绑定还是旧值，切进页面第一次查询的失败会被整个丢掉、显示成空页面。
         target: root.goalServiceRef
-        enabled: root.pageActive
         ignoreUnknownSignals: true
 
         function onGoalsChanged() {
+            if (!root.pageActive)
+                return
             if (!root.deletingDetail)
                 root.refresh()
         }
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             const text = String(message || qsTr("目标数据加载失败"))
             if (root.deletingDetail)
                 root.deleteErrorText = text

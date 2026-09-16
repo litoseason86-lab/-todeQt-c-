@@ -356,7 +356,7 @@ Rectangle {
                         SequentialAnimation on opacity {
                             id: pulseAnimation
 
-                            running: statusPulse.pulseRunning
+                            running: statusPulse.visible && statusPulse.pulseRunning
                                      && !root.reduceMotionActive
                                      && !Theme.reduceMotion
                             loops: Animation.Infinite

@@ -121,6 +121,24 @@ QVariant fieldOf(const QVariantList& actions, const QString& actionId, const QSt
     return QVariant();
 }
 
+// 生效键位不能有重复：两个同键的应用内 Shortcut 在 Qt 里判为歧义，两个都不触发；
+// 和全局热键撞车时，按键在系统层就被全局热键吃掉。任何状态下都要守住这条。
+void verifyEffectiveSequencesAreUnique(const QVariantList& actions)
+{
+    QStringList seen;
+    for (const QVariant& entry : actions) {
+        const QVariantMap map = entry.toMap();
+        const QString sequence = map.value(QStringLiteral("sequence")).toString();
+        if (sequence.isEmpty()) {
+            continue;
+        }
+        QVERIFY2(!seen.contains(sequence),
+                 qPrintable(QStringLiteral("生效键位重复：%1（%2）")
+                                .arg(sequence, map.value(QStringLiteral("id")).toString())));
+        seen.append(sequence);
+    }
+}
+
 } // namespace
 
 class ShortcutRegistryTests : public QObject
@@ -150,6 +168,11 @@ private slots:
     void clearingBackendUnregistersEverything();
     void backendTriggerIsForwardedForKnownActionsOnly();
     void settingsReloadReRegistersGlobalHotkeys();
+    void resetToDefaultRefusesWhenTheDefaultKeyIsTaken();
+    void restoredGlobalOverrideWithOneModifierIsIgnored();
+    void newDefaultKeyYieldsToAnExistingInAppOverride();
+    void globalOverrideCollidingWithInAppOverrideIsNotRegistered();
+    void duplicateOverridesKeepOnlyTheEarlierAction();
 
 private:
     QTemporaryDir m_dir;
@@ -561,6 +584,97 @@ void ShortcutRegistryTests::settingsReloadReRegistersGlobalHotkeys()
 
     QCOMPARE(backend.sequenceOf(QStringLiteral("global.toggleWindow")),
              QStringLiteral("Meta+Alt+W"));
+}
+
+// —— 键位规则在所有来源上同口径（2026-09-15 审查修复）——
+// 冲突检测、全局热键至少两个修饰键，原先只在 assign（设置页改键）里执行；
+// 「恢复默认」、从备份恢复的覆盖值、升级后新增的默认键都绕过了它们。
+
+void ShortcutRegistryTests::resetToDefaultRefusesWhenTheDefaultKeyIsTaken()
+{
+    ShortcutRegistry registry(m_settings);
+
+    // 停用「新建任务」后把它的默认键 ⌘N 让给「长期目标」——此刻没有冲突，保存成功。
+    QCOMPARE(registry.disable(QStringLiteral("task.new")), QString());
+    QCOMPARE(registry.assign(QStringLiteral("view.goals"), QStringLiteral("Ctrl+N")), QString());
+
+    // 再把「新建任务」恢复默认：⌘N 已经有主，必须拒绝并说清是谁占着。
+    const QString error = registry.resetToDefault(QStringLiteral("task.new"));
+    QVERIFY2(error.contains(QStringLiteral("长期目标")), qPrintable(error));
+    QVERIFY(registry.sequenceFor(QStringLiteral("task.new")).isEmpty());
+    QCOMPARE(registry.sequenceFor(QStringLiteral("view.goals")), QStringLiteral("Ctrl+N"));
+    verifyEffectiveSequencesAreUnique(registry.actions());
+}
+
+void ShortcutRegistryTests::restoredGlobalOverrideWithOneModifierIsIgnored()
+{
+    // 恢复备份走的是「读取」：直接把覆盖值写进设置，模拟被改过的备份。
+    // ⌘C 注册成全局热键会吞掉所有应用里的复制。
+    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("global.focusToggle"),
+                                            QStringLiteral("Ctrl+C")));
+
+    FakeHotkeyBackend backend;
+    ShortcutRegistry registry(m_settings);
+    registry.setGlobalBackend(&backend);
+
+    QVERIFY(registry.sequenceFor(QStringLiteral("global.focusToggle")).isEmpty());
+    QVERIFY2(!backend.hasRegistration(QStringLiteral("global.focusToggle")),
+             "单修饰键的全局热键绕过保存校验被注册进了系统");
+}
+
+void ShortcutRegistryTests::newDefaultKeyYieldsToAnExistingInAppOverride()
+{
+    // 旧版本没有「记一笔」，用户把 ⌘⇧K 改给了「新建任务」。升级后记一笔的默认键也是 ⌘⇧K。
+    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("task.new"),
+                                            QStringLiteral("Ctrl+Shift+K")));
+    ShortcutRegistry registry(m_settings);
+
+    // 用户亲手选的键优先：新动作的默认键让路（视为暂未设置），并标明被谁占着。
+    QCOMPARE(registry.sequenceFor(QStringLiteral("task.new")), QStringLiteral("Ctrl+Shift+K"));
+    QVERIFY(registry.sequenceFor(QStringLiteral("gap.capture")).isEmpty());
+    QCOMPARE(fieldOf(registry.actions(), QStringLiteral("gap.capture"),
+                     QStringLiteral("conflictTitle")).toString(),
+             QStringLiteral("新建任务"));
+    verifyEffectiveSequencesAreUnique(registry.inAppActions());
+    verifyEffectiveSequencesAreUnique(registry.actions());
+}
+
+void ShortcutRegistryTests::globalOverrideCollidingWithInAppOverrideIsNotRegistered()
+{
+    // 全局热键要至少两个强修饰键，应用内默认键都只带一个，所以全局覆盖撞不上任何出厂默认；
+    // 但两边的「覆盖值」可以撞（手工改过的配置或备份）。清单里应用内动作在前，先到先得。
+    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("task.new"),
+                                            QStringLiteral("Ctrl+Alt+K")));
+    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("global.captureGap"),
+                                            QStringLiteral("Ctrl+Alt+K")));
+    FakeHotkeyBackend backend;
+    ShortcutRegistry registry(m_settings);
+    registry.setGlobalBackend(&backend);
+
+    QCOMPARE(registry.sequenceFor(QStringLiteral("task.new")), QStringLiteral("Ctrl+Alt+K"));
+    // 注册进系统的话，按键在系统层就被吃掉，应用内那个动作永远收不到。
+    QVERIFY2(!backend.hasRegistration(QStringLiteral("global.captureGap")),
+             "与应用内快捷键同键的全局热键被注册进了系统");
+    QCOMPARE(fieldOf(registry.actions(), QStringLiteral("global.captureGap"),
+                     QStringLiteral("conflictTitle")).toString(),
+             QStringLiteral("新建任务"));
+    verifyEffectiveSequencesAreUnique(registry.actions());
+}
+
+void ShortcutRegistryTests::duplicateOverridesKeepOnlyTheEarlierAction()
+{
+    // 两个覆盖值同键只可能来自手工改过的配置或备份。按动作清单顺序保留前一个，
+    // 结果确定，且不会让两个都失灵。
+    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("view.goals"), kSpareSequence));
+    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("task.new"), kSpareSequence));
+    ShortcutRegistry registry(m_settings);
+
+    QCOMPARE(registry.sequenceFor(QStringLiteral("view.goals")), kSpareSequence);
+    QVERIFY(registry.sequenceFor(QStringLiteral("task.new")).isEmpty());
+    QCOMPARE(fieldOf(registry.actions(), QStringLiteral("task.new"),
+                     QStringLiteral("conflictTitle")).toString(),
+             QStringLiteral("长期目标"));
+    verifyEffectiveSequencesAreUnique(registry.actions());
 }
 
 QTEST_MAIN(ShortcutRegistryTests)

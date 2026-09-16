@@ -98,6 +98,7 @@ private slots:
     void startingFocusDrivesMenuState();
     void menuActionsForwardToTimer();
     void menuStopRequestsConfirmationForLongFreeFocus();
+    void menuStopKeepsPomodoroStreakOutsidePomodoroMode();
     void pausedStateOffersResumeAndKeepsTiming();
     void breakStateIsDistinguished();
     void manualRestStateIsDistinguished();
@@ -211,7 +212,9 @@ void PlatformControlTests::menuActionsForwardToTimer()
     controller.requestResume();
     QVERIFY(FocusTimer::instance()->isRunning());
 
+    FocusTimer::instance()->m_completedPomodoros = 3;
     controller.requestStop();
+    QCOMPARE(FocusTimer::instance()->completedPomodoros(), 0);
     QVERIFY(!FocusTimer::instance()->hasActiveSession());
     QCOMPARE(FocusTimer::instance()->phase(), int(FocusTimer::NoPhase));
 }
@@ -236,6 +239,36 @@ void PlatformControlTests::menuStopRequestsConfirmationForLongFreeFocus()
     QCOMPARE(showSpy.count(), 1);
     QCOMPARE(confirmationSpy.count(), 1);
     QCOMPARE(FocusTimer::instance()->hasActiveSession(), true);
+}
+
+void PlatformControlTests::menuStopKeepsPomodoroStreakOutsidePomodoroMode()
+{
+    TrayController controller(FocusTimer::instance());
+
+    // 自由专注：菜单栏结束只收尾这一段，不能把攒下的番茄轮次清零——
+    // 专注页的 endFreeFocus 和仪表盘都只在番茄模式下才调 resetPomodoroCount()，
+    // 菜单栏是同一个「结束」动作的第三个入口，口径必须一致。
+    const int freeTaskId = insertTaskRow(QStringLiteral("自由看论文"));
+    QVERIFY(freeTaskId > 0);
+    QVERIFY(FocusTimer::instance()->startFocus(freeTaskId, QStringLiteral("自由看论文")));
+    FocusTimer::instance()->m_completedPomodoros = 3;
+
+    controller.requestStop();
+    QVERIFY(!FocusTimer::instance()->hasActiveSession());
+    QCOMPARE(FocusTimer::instance()->completedPomodoros(), 3);
+
+    // 主动休息同理：休息不是番茄循环的终点，回来还该接着走长休息节奏。
+    QVERIFY(FocusTimer::instance()->startManualRest());
+    controller.requestStop();
+    QCOMPARE(FocusTimer::instance()->phase(), int(FocusTimer::NoPhase));
+    QCOMPARE(FocusTimer::instance()->completedPomodoros(), 3);
+
+    // 对照组：番茄模式下结束仍然归零。
+    const int pomodoroTaskId = insertTaskRow(QStringLiteral("番茄任务"));
+    QVERIFY(FocusTimer::instance()->startPomodoroWork(
+        pomodoroTaskId, QStringLiteral("番茄任务"), 25 * 60));
+    controller.requestStop();
+    QCOMPARE(FocusTimer::instance()->completedPomodoros(), 0);
 }
 
 void PlatformControlTests::pausedStateOffersResumeAndKeepsTiming()

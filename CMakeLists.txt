@@ -114,6 +114,7 @@ set(APP_SOURCES
     src/services/BackupOperations.cpp
     src/services/BackupService.h
     src/services/BackupService.cpp
+    src/services/SnapshotRetention.h
     src/services/GlobalHotkeyBackend.h
     src/services/ShortcutRegistry.h
     src/services/ShortcutRegistry.cpp
@@ -125,6 +126,8 @@ set(APP_SOURCES
     src/platform/macos/MacNotificationBackend.mm
     src/platform/macos/MacGlobalHotkeyBackend.h
     src/platform/macos/MacGlobalHotkeyBackend.mm
+    src/platform/macos/MacPreferencesCleanup.h
+    src/platform/macos/MacPreferencesCleanup.mm
     resources/qml.qrc
     resources/wallpapers.qrc
     resources/fonts.qrc
@@ -145,6 +148,7 @@ set_source_files_properties(
     src/platform/macos/MacStatusBarController.mm
     src/platform/macos/MacNotificationBackend.mm
     src/platform/macos/MacGlobalHotkeyBackend.mm
+    src/platform/macos/MacPreferencesCleanup.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
 )
 
@@ -537,6 +541,23 @@ target_link_libraries(MacNotificationBackendTests PRIVATE
 pomodoro_todo_enable_warnings(MacNotificationBackendTests)
 add_test(NAME MacNotificationBackendTests COMMAND MacNotificationBackendTests)
 
+# 偏好清理直接读写 CoreFoundation 偏好：用例只写按进程号命名的临时偏好域，结束时删掉，
+# 系统全局域只读不写。
+add_executable(MacPreferencesCleanupTests
+    tests/MacPreferencesCleanupTests.cpp
+    src/platform/macos/MacPreferencesCleanup.h
+    src/platform/macos/MacPreferencesCleanup.mm
+)
+
+target_link_libraries(MacPreferencesCleanupTests PRIVATE
+    Qt6::Core
+    Qt6::Test
+    "-framework CoreFoundation"
+)
+
+pomodoro_todo_enable_warnings(MacPreferencesCleanupTests)
+add_test(NAME MacPreferencesCleanupTests COMMAND MacPreferencesCleanupTests)
+
 # 快捷键注册表是平台无关层：默认键位、用户覆盖、冲突判定与全局热键装配全在这里，
 # 用假热键后端验证，不向系统注册任何真实热键。
 add_executable(ShortcutRegistryTests
@@ -848,6 +869,7 @@ set_tests_properties(
     SoundAssetsTests
     QmlResourceManifestTests
     MacNotificationBackendTests
+    MacPreferencesCleanupTests
     MacGlobalHotkeyTests
     PROPERTIES TIMEOUT 30
 )

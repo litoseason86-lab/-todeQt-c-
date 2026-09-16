@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import ".."
 
@@ -395,7 +395,8 @@ Item {
                 contentItem: Text {
                     text: root.primaryButtonText
                     textFormat: Text.PlainText
-                    color: immersivePrimaryButton.enabled ? Theme.accentInk : Theme.inkMuted
+                    // 从禁用底色过渡到玻璃底色时也要可读，不能只满足动画结束后的对比度。
+                    color: immersivePrimaryButton.enabled ? Theme.inkStrong : Theme.inkMuted
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
                     horizontalAlignment: Text.AlignHCenter

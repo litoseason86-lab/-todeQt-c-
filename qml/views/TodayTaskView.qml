@@ -185,17 +185,23 @@ Item {
     }
 
     Connections {
+        // 门禁写在每个处理函数里，不能用 enabled: root.pageActive：enabled 是绑定，重算晚于
+        // onPageActiveChanged 里的同步查询，而服务在查询过程中就同步发 operationFailed——
+        // 那一刻绑定还是旧值，切进页面第一次查询的失败会被整个丢掉、显示成空页面。
         // 在别处记下或解决了缺口，今日页的提示条也要跟着变。
         target: root.knowledgeGapServiceRef
         ignoreUnknownSignals: true
-        enabled: root.pageActive
 
         function onGapsChanged() {
+            if (!root.pageActive)
+                return
             root.loadKnowledgeGapSummary()
         }
 
         // 只在批量转任务期间记下原因；别处的失败（比如提醒摘要读取失败）按约定保持安静。
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             if (root.gapBatchConverting) {
                 root.gapBatchFailureReason = String(message || "")
             }
@@ -203,17 +209,23 @@ Item {
     }
 
     Connections {
+        // 门禁写在每个处理函数里，不能用 enabled: root.pageActive：enabled 是绑定，重算晚于
+        // onPageActiveChanged 里的同步查询，而服务在查询过程中就同步发 operationFailed——
+        // 那一刻绑定还是旧值，切进页面第一次查询的失败会被整个丢掉、显示成空页面。
         target: root.taskManagerRef
         ignoreUnknownSignals: true
-        enabled: root.pageActive
 
         function onTasksChanged() {
+            if (!root.pageActive)
+                return
             if (root.completionRefreshDelayActive)
                 return;
             refreshCoalescer.request();
         }
 
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             root.loadError = String(message || "任务加载失败")
         }
     }
@@ -258,25 +270,35 @@ Item {
     }
 
     Connections {
+        // 门禁写在每个处理函数里，不能用 enabled: root.pageActive：enabled 是绑定，重算晚于
+        // onPageActiveChanged 里的同步查询，而服务在查询过程中就同步发 operationFailed——
+        // 那一刻绑定还是旧值，切进页面第一次查询的失败会被整个丢掉、显示成空页面。
         target: root.statisticsServiceRef
         ignoreUnknownSignals: true
-        enabled: root.pageActive
 
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             root.loadError = String(message || "统计数据加载失败")
         }
     }
 
     Connections {
+        // 门禁写在每个处理函数里，不能用 enabled: root.pageActive：enabled 是绑定，重算晚于
+        // onPageActiveChanged 里的同步查询，而服务在查询过程中就同步发 operationFailed——
+        // 那一刻绑定还是旧值，切进页面第一次查询的失败会被整个丢掉、显示成空页面。
         target: root.routineManagerRef
         ignoreUnknownSignals: true
-        enabled: root.pageActive
 
         function onRoutinesChanged() {
+            if (!root.pageActive)
+                return
             refreshCoalescer.request();
         }
 
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             root.loadError = String(message || "每日例行生成失败")
         }
     }
@@ -454,6 +476,8 @@ Item {
     }
 
     function refresh() {
+        // 一轮组合查询只在起点清错；后续成功查询不能抹掉前面刚发生的失败。
+        root.loadError = ""
         // refresh 也是恢复、任务变更等入口的兜底。即使平台漏发日界通知，
         // 下一次刷新也会修正日期，不让错误状态一直活到应用重启。
         root.logicalNow = root.currentNow()
@@ -564,7 +588,6 @@ Item {
 
     function loadTasks() {
         try {
-            root.loadError = "";
             var loaded = root.taskManagerRef.getTodayTasks();
             // 待删除行先在界面消失；撤销时 pendingDeleteTaskId 回到 -1，刷新后自然恢复。
             root.tasks = root.pendingDeleteTaskId > 0
@@ -581,6 +604,14 @@ Item {
     function loadStats() {
         try {
             root.todayStats = root.statisticsServiceRef.getTodayStats();
+            // 撤销窗口内行已隐藏，任务数也按当前列表预览；专注时长仍来自已保存的历史。
+            if (root.pendingDeleteTaskId > 0) {
+                var preview = Object.assign({}, root.todayStats)
+                preview.totalTasks = root.tasks.length
+                preview.completedTasks = root.tasks.filter(function(task) { return Boolean(task.completed) }).length
+                preview.completionRate = preview.totalTasks > 0 ? preview.completedTasks / preview.totalTasks : 0
+                root.todayStats = preview
+            }
         } catch (error) {
             root.todayStats = {
                 totalDuration: 0,
@@ -1117,6 +1148,7 @@ Item {
 
     AddTaskDialog {
         id: addTaskDialog
+        maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 
         categoryManagerRef: root.categoryManagerRef
         selectedDateProvider: function () { return root.currentLogicalTodayDate() }
@@ -1127,6 +1159,7 @@ Item {
 
     EditTaskDialog {
         id: editTaskDialog
+        maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 
         parent: root
         categoryManagerRef: root.categoryManagerRef

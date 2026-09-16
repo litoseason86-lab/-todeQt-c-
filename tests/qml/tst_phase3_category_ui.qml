@@ -178,4 +178,32 @@ TestCase {
         compare(categoryDialog.editingCategoryId, -1)
         categoryDialog.close()
     }
+
+    function test_categoryDeletionRequiresConfirmation() {
+        categoryDialog.open()
+        tryCompare(categoryDialog, "opened", true)
+        categoryDialog.deleteCategory(6)
+        var confirmation = findChild(categoryDialog, "categoryDeleteConfirmation")
+        verify(confirmation)
+        tryCompare(confirmation, "opened", true)
+        compare(fakeCategoryManager.deletedId, -1)
+        confirmation.close()
+        compare(fakeCategoryManager.deletedId, -1)
+        categoryDialog.deleteCategory(6)
+        tryCompare(confirmation, "opened", true)
+        findChild(categoryDialog, "confirmCategoryDeleteButton").clicked()
+        compare(fakeCategoryManager.deletedId, 6)
+    }
+
+    function test_editorShowsServiceFailureAboveItsPanel() {
+        categoryDialog.open()
+        tryCompare(categoryDialog, "opened", true)
+        categoryDialog.beginEdit(categoryDialog.categories[1])
+        categoryDialog.errorText = "科目名称已存在"
+        var error = findChild(categoryDialog, "categoryEditorError")
+        verify(error)
+        compare(error.text, "科目名称已存在")
+        verify(error.parent.parent.visible)
+    }
+
 }

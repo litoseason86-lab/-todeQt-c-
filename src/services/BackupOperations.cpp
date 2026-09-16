@@ -26,6 +26,22 @@ namespace BackupOperations {
 constexpr int kMaxSettingValueBytes = 64 * 1024;
 constexpr int kMaxSettingEntries = 500;
 
+std::unique_ptr<QSettings> openSettings(const QString& settingsFilePath)
+{
+    auto settings = settingsFilePath.isEmpty()
+        ? std::make_unique<QSettings>()
+        : std::make_unique<QSettings>(settingsFilePath, QSettings::IniFormat);
+    // 回退 = 本应用域里找不到时再去组织域、系统全局域找。备份和回滚要的是
+    // 「本应用存了什么」，开着回退时 allKeys() 会把全局域的个人信息一并列出。
+    settings->setFallbacksEnabled(false);
+    return settings;
+}
+
+bool isLocalSettingKey(const QString& key)
+{
+    return AppSettings::isOwnedSettingKey(key) || key.startsWith(QStringLiteral("backup/"));
+}
+
 
 namespace {
 const auto kFormatVersion = QStringLiteral("1");
@@ -34,6 +50,44 @@ const QStringList kRequiredTables = {
     QStringLiteral("focus_sessions"),
     QStringLiteral("categories")
 };
+
+// QVariant 的通用解码会递归创建容器，也会相信字符串声明的长度。
+// 本应用偏好只有标量：先检查类型与实际负载长度，再交给 Qt 解码，避免在校验前耗尽栈或内存。
+bool hasSafeSettingEncoding(const QByteArray& blob)
+{
+    QDataStream header(blob);
+    quint32 type = 0;
+    quint8 nullFlag = 0;
+    header >> type >> nullFlag;
+    if (header.status() != QDataStream::Ok || nullFlag > 1) {
+        return false;
+    }
+    qsizetype payloadSize = 0;
+    switch (type) {
+    case QMetaType::Bool: payloadSize = 1; break;
+    case QMetaType::Int:
+    case QMetaType::UInt: payloadSize = 4; break;
+    case QMetaType::LongLong:
+    case QMetaType::ULongLong:
+    case QMetaType::Double: payloadSize = 8; break;
+    case QMetaType::QString: {
+        quint32 byteCount = 0;
+        header >> byteCount;
+        if (header.status() != QDataStream::Ok) {
+            return false;
+        }
+        // 0xffffffff 表示空字符串；扩展长度标记及超过文件剩余量的长度一律拒绝。
+        if (byteCount == 0xffffffffU) {
+            return blob.size() == 9;
+        }
+        return byteCount <= kMaxSettingValueBytes && byteCount % 2 == 0
+            && blob.size() == 9 + static_cast<qsizetype>(byteCount);
+    }
+    default:
+        return false;
+    }
+    return blob.size() == 5 + payloadSize;
+}
 
 QString uniqueConnectionName(const QString& prefix)
 {
@@ -283,14 +337,6 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
     return true;
 }
 
-std::unique_ptr<QSettings> makeSettings(const QString& path)
-{
-    if (path.isEmpty()) {
-        return std::make_unique<QSettings>();
-    }
-    return std::make_unique<QSettings>(path, QSettings::IniFormat);
-}
-
 OperationResult embedMetadataAndSettings(const QString& snapshotPath,
                                          const QString& settingsFilePath,
                                          const QString& kind,
@@ -358,7 +404,7 @@ OperationResult embedMetadataAndSettings(const QString& snapshotPath,
 
             std::unique_ptr<QSettings> settings;
             if (ok) {
-                settings = makeSettings(settingsFilePath);
+                settings = openSettings(settingsFilePath);
                 settings->sync();
                 if (settings->status() != QSettings::NoError) {
                     result.error = QStringLiteral("读取当前偏好失败");
@@ -368,6 +414,11 @@ OperationResult embedMetadataAndSettings(const QString& snapshotPath,
 
             if (ok) {
                 for (const QString& key : settings->allKeys()) {
+                    // 只带走本应用拥有的键：恢复时也只认这些键，别的键带进备份文件
+                    // 只会泄露信息。backup/ 是本机策略，恢复时按设计保留本机值，同样不带。
+                    if (!AppSettings::isOwnedSettingKey(key)) {
+                        continue;
+                    }
                     QByteArray blob;
                     QDataStream stream(&blob, QIODevice::WriteOnly);
                     stream << settings->value(key);
@@ -483,7 +534,7 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
 
     // SQLite 的 WAL/SHM/journal 和 QSettings 锁文件都可能在运行时被写入；即使目标文件
     // 还不存在，也必须按规范化路径拒绝，避免快照的原子替换破坏当前进程的数据或偏好。
-    const QString effectiveSettingsPath = makeSettings(settingsFilePath)->fileName();
+    const QString effectiveSettingsPath = openSettings(settingsFilePath)->fileName();
     QStringList protectedRuntimeFiles = {
         sourceDatabasePath + QStringLiteral("-wal"),
         sourceDatabasePath + QStringLiteral("-shm"),
@@ -679,12 +730,12 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
                                  .arg(objects.value(0).toString(), objects.value(1).toString());
                 }
             }
-            // 虚拟表在 sqlite_master 里 type 也是 'table'，靠 SQL 文本识别。
+            // 让 SQLite 返回解析后的表类型，SQL 中的空白和注释不能绕过此检查。
             if (reason.isEmpty()) {
                 QSqlQuery virtualTables(database);
                 if (!virtualTables.exec(QStringLiteral(
-                        "SELECT name FROM sqlite_master WHERE type = 'table' "
-                        "AND sql LIKE 'CREATE VIRTUAL%'"))) {
+                        "SELECT name FROM pragma_table_list "
+                        "WHERE type IN ('virtual', 'shadow')"))) {
                     reason = QStringLiteral("读取备份结构失败");
                 } else if (virtualTables.next()) {
                     reason = QStringLiteral("备份包含虚拟表（%1），出于安全考虑拒绝恢复")
@@ -762,10 +813,15 @@ EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath)
                         break;
                     }
 
+                    if (!hasSafeSettingEncoding(blob)) {
+                        result.error = QStringLiteral("备份偏好类型或长度不合法：") + key;
+                        ok = false;
+                        break;
+                    }
                     QDataStream stream(&blob, QIODevice::ReadOnly);
                     QVariant value;
                     stream >> value;
-                    if (stream.status() != QDataStream::Ok) {
+                    if (stream.status() != QDataStream::Ok || !stream.atEnd()) {
                         result.error = QStringLiteral("备份偏好数据已损坏：") + key;
                         ok = false;
                         break;

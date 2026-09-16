@@ -7,14 +7,61 @@
 
 #include <utility>
 
+// 通知中心委托：只处理「应用在前台时收到通知」这一种情况。
+// 没有委托时，系统对前台应用的通知一律不弹横幅、不响声音，但投递回调照样报成功，
+// 于是本地提示音降级也不会触发。阶段结束时应用默认先把窗口拉到前台再发通知，
+// 等于每次番茄到点都悄无声息，所以前台也必须明确要求横幅和声音。
+@interface PomodoroNotificationCenterDelegate : NSObject <UNUserNotificationCenterDelegate>
+@end
+
+@implementation PomodoroNotificationCenterDelegate
+
+- (void)userNotificationCenter:(UNUserNotificationCenter*)center
+       willPresentNotification:(UNNotification*)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions options))completionHandler
+{
+    Q_UNUSED(center);
+    Q_UNUSED(notification);
+    // 声音选项只是「允许响」：用户关掉提示音时通知内容里本就没有声音，这里不会凭空出声。
+    completionHandler(UNNotificationPresentationOptionBanner
+                      | UNNotificationPresentationOptionList
+                      | UNNotificationPresentationOptionSound);
+}
+
+@end
+
 namespace {
 MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery();
 MacNotificationBackend::NotificationSubmitter makeNotificationSubmitter();
+void installForegroundPresentationDelegate();
 }
 
 MacNotificationBackend::MacNotificationBackend()
     : MacNotificationBackend(makeAuthorizationQuery(), makeNotificationSubmitter())
 {
+    // 只有生产用的默认构造才接管系统通知中心；注入假实现的测试构造不碰系统对象。
+    installForegroundPresentationDelegate();
+}
+
+MacNotificationBackend::ForegroundPresentation MacNotificationBackend::foregroundPresentationForTesting()
+{
+    // __block：block 默认按值捕获局部变量，不加这个修饰就写不回 result。
+    __block ForegroundPresentation result;
+    PomodoroNotificationCenterDelegate* delegate = [[PomodoroNotificationCenterDelegate alloc] init];
+    // 系统通知对象无法手工构造（测试进程也拿不到通知中心），这里传 nil。
+    // 委托实现不读这两个参数，所以只屏蔽这一处的 nonnull 警告，照常调用真实方法。
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wnonnull"
+    [delegate userNotificationCenter:nil
+             willPresentNotification:nil
+               withCompletionHandler:^(UNNotificationPresentationOptions options) {
+        result.handled = true;
+        result.banner = (options & UNNotificationPresentationOptionBanner) != 0;
+        result.list = (options & UNNotificationPresentationOptionList) != 0;
+        result.sound = (options & UNNotificationPresentationOptionSound) != 0;
+    }];
+#pragma clang diagnostic pop
+    return result;
 }
 
 MacNotificationBackend::MacNotificationBackend(AuthorizationQuery authorizationQuery,
@@ -41,6 +88,19 @@ UNUserNotificationCenter* safeNotificationCenter()
     } @catch (NSException* exception) {
         return nil;
     }
+}
+
+void installForegroundPresentationDelegate()
+{
+    UNUserNotificationCenter* center = safeNotificationCenter();
+    if (center == nil) {
+        return;
+    }
+    // 通知中心对 delegate 只做弱引用，委托对象必须由我们自己一直持有到进程结束。
+    // Apple 要求在应用完成启动前设置：main 在 app.exec() 之前构造本后端，满足这个时机。
+    static PomodoroNotificationCenterDelegate* delegate =
+        [[PomodoroNotificationCenterDelegate alloc] init];
+    center.delegate = delegate;
 }
 
 MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery()

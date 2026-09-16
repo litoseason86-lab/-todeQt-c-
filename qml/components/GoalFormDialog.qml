@@ -9,6 +9,11 @@ import "../LogicalDay.js" as LogicalDay
 Popup {
     id: root
 
+    // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
+
     // 输入框字色必须接管：Basic 风格默认 palette.text 写死深灰，夜间主题下看不见。
     palette.text: Theme.inputInk
     palette.placeholderText: Theme.inputPlaceholderInk
@@ -152,6 +157,8 @@ Popup {
         // 默认 100 分钟：与旧版默认「100 个番茄」不是一回事，旧默认按 25 分钟折算是
         // 2500 分钟（≈42 小时），对新建目标来说过大。100 分钟是个能当天推进的起点。
         targetField.totalMinutes = 100
+        // 默认值可能没有变化，必须主动刷新上一次编辑过的输入文本。
+        targetField.reload()
         startDateField.text = root.todayIso()
         deadlineField.text = ""
         longTermCheck.checked = true
@@ -175,6 +182,8 @@ Popup {
     }
 
     function submit() {
+        if (root.submissionClosed)
+            return false
         root.errorText = ""
         var title = titleField.text.trim()
         if (title.length === 0) {
@@ -322,7 +331,7 @@ Popup {
                 Layout.rightMargin: Theme.space16
                 implicitHeight: Theme.controlHeightLg
                 maximumLength: root.maxTitleLength
-                placeholderText: qsTr("例如：完成 100 个算法番茄")
+                placeholderText: qsTr("例如：算法练习累计 50 小时")
                 selectByMouse: true
             }
 

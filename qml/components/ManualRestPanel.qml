@@ -110,14 +110,14 @@ Item {
                 onClicked: root.endRequested()
 
                 background: Rectangle {
-                    color: Theme.accent
+                    color: Theme.accentFill
                     radius: Theme.radiusMd
                 }
 
                 contentItem: Text {
                     text: endButton.text
                     textFormat: Text.PlainText
-                    color: Theme.surface
+                    color: Theme.accentFillInk
                     font.pixelSize: Theme.fontLg
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter

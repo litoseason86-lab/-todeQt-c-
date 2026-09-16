@@ -748,6 +748,7 @@ private slots:
     void ownershipFilterRejectsForeignKeysAndKeepsShortcutOverrides();
     void asyncExportRunsOffTheCallingThreadAndReportsCompletion();
     void notesRoundTripAndRenameDoesNotEraseThem();
+    void overlongNotesAreRejectedInsteadOfTruncated();
     void mixedLegacyOrdersKeepNewTasksAtEnd();
     void allTaskDateWritesAppendAfterLegacyRows();
     void reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation();
@@ -837,6 +838,8 @@ private slots:
     void batchRescheduleSearchAndCopy();
     void exportFocusSessionsUsesLogicalDayRange();
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
+    void exportNeutralizesFormulaPrefixesAndWritesBom();
+    void weeklySubjectMinutesAddUpToTotal();
     void exportFocusSessionsAndExportAllWriteExpectedCsvFiles();
     void exportAllUsesOneDatabaseSnapshot();
     void exportFocusSessionsIgnoresInvalidShortSessions();
@@ -6458,6 +6461,34 @@ void ServiceTests::notesRoundTripAndRenameDoesNotEraseThem()
     QVERIFY(rows.first().toMap().value(QStringLiteral("notes")).toString().isEmpty());
 }
 
+void ServiceTests::overlongNotesAreRejectedInsteadOfTruncated()
+{
+    // 备注曾被 left(2000) 静默截断，新建和编辑都照常返回成功：用户看到「已保存」，
+    // 重新打开才发现末尾没了。知识缺口在 81bdb74 已改成拒绝，任务备注没跟上。
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+    const QString atLimit(TaskManager::kMaxNotesLength, QLatin1Char('a'));
+    const QString overLimit(TaskManager::kMaxNotesLength + 1, QLatin1Char('b'));
+    QCOMPARE(tasks->property("maxNotesLength").toInt(), TaskManager::kMaxNotesLength);
+
+    // 上限内存得下，一个字都不少。
+    const int taskId = tasks->createTask(QStringLiteral("长备注"), today, -1, 0, atLimit);
+    QVERIFY(taskId > 0);
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("notes")).toString(), atLimit);
+
+    // 超一个字就拒绝，而且不能留下任何痕迹。
+    QSignalSpy changed(tasks, &TaskManager::tasksChanged);
+    QCOMPARE(tasks->createTask(QStringLiteral("超长备注"), today, -1, 0, overLimit), -1);
+    QVERIFY(!tasks->addTask(QStringLiteral("超长备注"), today, -1, 0, overLimit));
+    QCOMPARE(tasks->getTodayTasks().size(), 1);
+
+    QVERIFY(!tasks->updateTask(taskId, QStringLiteral("改过的标题"), -1, today, 30, overLimit));
+    const QVariantMap unchanged = tasks->getTask(taskId);
+    QCOMPARE(unchanged.value(QStringLiteral("title")).toString(), QStringLiteral("长备注"));
+    QCOMPARE(unchanged.value(QStringLiteral("notes")).toString(), atLimit);
+    QCOMPARE(changed.count(), 0);
+}
+
 void ServiceTests::mixedLegacyOrdersKeepNewTasksAtEnd()
 {
     TaskManager* tasks = TaskManager::instance();
@@ -6916,4 +6947,47 @@ void ServiceTests::taskOptionsPreferSelectedDateAndAreCapped()
     // 就近排序不因数量变化而失效：当天任务仍排在最前。
     QVERIFY(history->getTaskOptions(target).first().toMap().value(QStringLiteral("title")).toString()
                 .startsWith(QStringLiteral("当天任务")));
+}
+
+void ServiceTests::exportNeutralizesFormulaPrefixesAndWritesBom()
+{
+    const QDate day(2026, 6, 10);
+    for (const QString& title : {QStringLiteral("=1+1"), QStringLiteral(" +SUM(1)"),
+                                 QStringLiteral("-1+2"), QStringLiteral("@SUM(1)"),
+                                 QStringLiteral("\t=1+1")}) {
+        QVERIFY(insertTaskRowWithCategoryId(title, day, -1, QStringLiteral("=2+2"), false,
+                                           QStringLiteral("2026-06-10T08:00:00")) > 0);
+    }
+    const QString path = m_tempDir->filePath(QStringLiteral("safe-export.csv"));
+    QVERIFY(ExportService::instance()->exportTasks(day, day, path));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray bytes = file.readAll();
+    QVERIFY(bytes.startsWith(QByteArray::fromHex("efbbbf")));
+    const QString csv = QString::fromUtf8(bytes);
+    QVERIFY(csv.contains(QStringLiteral(",'=1+1,'=2+2,")));
+    QVERIFY(csv.contains(QStringLiteral(",' +SUM(1),")));
+    QVERIFY(csv.contains(QStringLiteral(",'-1+2,")));
+    QVERIFY(csv.contains(QStringLiteral(",'@SUM(1),")));
+    QVERIFY(csv.contains(QStringLiteral(",'\t=1+1,")));
+}
+
+void ServiceTests::weeklySubjectMinutesAddUpToTotal()
+{
+    const QDate monday(2026, 7, 13);
+    const int mathTask = insertPlannedTask(QStringLiteral("数学余秒"), monday,
+                                         categoryIdByName(QStringLiteral("数学")), 10);
+    const int politicsTask = insertPlannedTask(QStringLiteral("政治余秒"), monday,
+                                             categoryIdByName(QStringLiteral("政治")), 10);
+    QVERIFY(mathTask > 0 && politicsTask > 0);
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, monday, 211, 0));
+    QVERIFY(insertFocusSessionRowWithMode(politicsTask, monday, 230, 0));
+    const QVariantMap review = StatisticsService::instance()->getWeeklyReview(monday);
+    const QVariantList subjects = review.value(QStringLiteral("subjects")).toList();
+    int sum = 0;
+    for (const QVariant& subject : subjects)
+        sum += subject.toMap().value(QStringLiteral("focusedMinutes")).toInt();
+    QCOMPARE(sum, 7);
+    QCOMPARE(sum, review.value(QStringLiteral("focusedMinutes")).toInt());
+    QCOMPARE(subjectByName(subjects, QStringLiteral("政治")).value(QStringLiteral("focusedMinutes")).toInt(), 4);
 }

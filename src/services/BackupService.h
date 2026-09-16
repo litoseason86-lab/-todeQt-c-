@@ -113,12 +113,13 @@ private:
     void installPreparedRestore(const QSharedPointer<RestoreContext>& context);
     void rollbackAsyncRestore(const QSharedPointer<RestoreContext>& context,
                               const QString& reason);
-    void pruneAutoBackups() const;
+    // keepPath 是刚建好的那份，无条件保留（见 SnapshotRetention::prune）。
+    void pruneAutoBackups(const QString& keepPath) const;
     // 仅在本次恢复前快照已经原子创建成功后调用，把临时的 N+1 份收敛回 N 份；
     // 创建失败时不能调用，否则会在没有新恢复点兜底的情况下删掉旧快照。
-    void pruneBeforeRestoreBackups() const;
+    void pruneBeforeRestoreBackups(const QString& keepPath) const;
     // 两类快照共用的按前缀清理。files 按修改时间倒序，保留最新 retention 份。
-    void pruneByPrefix(const QString& prefix, int retention) const;
+    void pruneByPrefix(const QString& prefix, int retention, const QString& keepPath) const;
     void setLastError(const QString& message) const;
     void setBusy(bool busy,
                  const QString& operationText = QString(),

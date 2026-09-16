@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import QtTest
 import "../../qml/components"
 
@@ -8,6 +9,7 @@ TestCase {
 
     name: "SettingsDialog"
     when: windowShown
+    visible: true
     width: 1000
     height: 760
 
@@ -227,4 +229,31 @@ TestCase {
         verify(contentRight <= bar.x,
                "页面内容右缘 " + contentRight + " 越过了滚动条左缘 " + bar.x)
     }
+
+    function test_escapeClosesImmediatelyAfterOpening() {
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+
+        // closePolicy 是 NoAutoClose，Escape 全靠 contentItem 上的 Keys.onEscapePressed，
+        // 而按键只沿 activeFocusItem 的父链冒泡。刚打开、还没点过任何控件时，
+        // 焦点必须已经落在 contentItem 或它的后代上，否则 Escape 直接丢掉，
+        // 对话框按不掉——这正是 onOpened 里 forceActiveFocus() 要保证的前提。
+        verify(focusIsInsideContent(), "刚打开时焦点不在对话框内容里，Escape 不会冒泡到关闭处理函数")
+
+        keyClick(Qt.Key_Escape)
+        tryCompare(dialog, "visible", false)
+    }
+
+    // 沿父链回溯，判断当前焦点项是否在对话框 contentItem 的子树内。
+    function focusIsInsideContent() {
+        var item = testCase.Window.activeFocusItem
+        while (item) {
+            if (item === dialog.contentItem) {
+                return true
+            }
+            item = item.parent
+        }
+        return false
+    }
+
 }

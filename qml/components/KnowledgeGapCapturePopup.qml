@@ -127,7 +127,7 @@ Popup {
                 radius: Theme.radiusMd
                 border.color: root.errorText.length > 0
                               ? Theme.dangerBorder
-                              : (inputField.activeFocus ? Theme.accent : Theme.border)
+                              : (inputField.activeFocus ? Theme.focusRing : Theme.border)
                 border.width: root.errorText.length > 0 || inputField.activeFocus ? 2 : 1
             }
 

@@ -395,9 +395,10 @@ Item {
                 ? "已删除今天的例行任务「" + root.pendingDeleteTitle + "」"
                 : "已删除「" + root.pendingDeleteTitle + "」"
         // 直接走 globalToast：showToast 会把“已有待删任务”先提交，撤销条自己不能触发这条规则。
-        globalToast.show(deleteMessage, "撤销", function() {
+        root.pendingDeleteUndoAction = function() {
             root.cancelPendingDelete()
-        })
+        }
+        globalToast.show(deleteMessage, "撤销", root.pendingDeleteUndoAction)
         return true
     }
 
@@ -409,9 +410,10 @@ Item {
         root.pendingDeleteTitle = String(title || qsTr("专注记录"))
         deleteCommitTimer.interval = root.deleteCommitDelayMs
         deleteCommitTimer.restart()
-        globalToast.show(qsTr("已删除%1记录「%2」").arg(root.pendingDeleteIsRest ? qsTr("休息") : qsTr("专注")).arg(root.pendingDeleteTitle), qsTr("撤销"), function() {
+        root.pendingDeleteUndoAction = function() {
             root.cancelPendingDelete()
-        })
+        }
+        globalToast.show(qsTr("已删除%1记录「%2」").arg(root.pendingDeleteIsRest ? qsTr("休息") : qsTr("专注")).arg(root.pendingDeleteTitle), qsTr("撤销"), root.pendingDeleteUndoAction)
         return true
     }
 
@@ -425,12 +427,20 @@ Item {
         })
     }
 
+    // 当前待删除项的「撤销」回调。提前提交后要凭它收起那条撤销条（见 commitPendingDelete）。
+    property var pendingDeleteUndoAction: null
+
     function commitPendingDelete() {
         if (root.pendingDeleteTaskId <= 0 && root.pendingDeleteSessionId <= 0) {
             return true
         }
 
         deleteCommitTimer.stop()
+        // 删除一旦触库就不能撤销了。补录、备份、恢复、关窗等路径会提前提交，
+        // 此时撤销条可能还在剩余的几秒里挂着：用户点「撤销」提示条会消失、看起来像撤销成功，
+        // 记录却已经永久删除。所以不论成败，先收起属于这次删除的撤销条。
+        globalToast.dismissAction(root.pendingDeleteUndoAction)
+        root.pendingDeleteUndoAction = null
         // 到这里才真正触库；撤销窗口内数据库没有被碰过，专注记录关联不会提前丢失。
         var deletedTitle = root.pendingDeleteTitle
         // 任务和专注记录共用单槽撤销及退出守卫，避免切页后遗失尚未提交的删除。
@@ -455,6 +465,7 @@ Item {
 
     function cancelPendingDelete() {
         deleteCommitTimer.stop()
+        root.pendingDeleteUndoAction = null
         root.pendingDeleteTaskId = -1
         root.pendingDeleteSessionId = -1
         root.pendingDeleteTitle = ""
@@ -683,6 +694,43 @@ Item {
         root.switchToView("focus")
         // 弹窗状态属于 FocusView；菜单栏只传递“用户要结束”这一意图。
         Qt.callLater(focusView.endFreeFocus)
+    }
+
+    // 仪表盘在原地结束专注期间为真。专注页的结束入口会同步发 focusEnded / manualRestEnded，
+    // 那两个处理函数据此跳过「回今日页」：那条规则针对的是从专注页结束，
+    // 用户在仪表盘点「结束」就该留在仪表盘。
+    property bool endingFocusInPlace: false
+
+    // 仪表盘「结束」。规则不在这里复制：超长自由专注确认、番茄循环计数归零、
+    // 主动休息收尾都走专注页的单点入口，与专注页按钮、菜单栏、快捷键同口径。
+    function endFocusFromDashboard() {
+        var timer = root.focusTimerRef
+        if (!timer || (!timer.hasActiveSession && Number(timer.phase) === 0)) {
+            return
+        }
+        if (focusView.shouldConfirmLongFreeStop()) {
+            // 确认弹窗属于专注页，要切过去才看得见；记录、丢弃或修正由弹窗走完。
+            root.requestLongFreeFocusStop()
+            return
+        }
+
+        // 按计时器的真实模式分发，不看专注页本地的模式选择：
+        // 用户可能从没打开过专注页，本地选择未必和计时器一致。
+        // 模式取值：0 = 自由专注，1 = 番茄，2 = 主动休息（阶段 3）。
+        root.endingFocusInPlace = true
+        if (Number(timer.mode) === 2 && Number(timer.phase) === 3) {
+            focusView.endManualRest()
+        } else if (Number(timer.mode) === 1) {
+            focusView.endPomodoro()
+        } else {
+            focusView.endFreeFocus()
+        }
+        root.endingFocusInPlace = false
+
+        // 结束入口失败时只写专注页的 errorText，仪表盘上看不见，得转成提示条。
+        if (focusView.errorText.length > 0) {
+            root.showToast(focusView.errorText)
+        }
     }
 
     Component.onCompleted: {
@@ -934,12 +982,14 @@ Item {
                     onFocusEnded: {
                         // 先退出沉浸再切页，今日页不能留在无侧栏的原生全屏状态。
                         root.focusImmersiveActive = false;
-                        root.switchToView("today");
+                        if (!root.endingFocusInPlace)
+                            root.switchToView("today");
                     }
 
                     onManualRestEnded: {
                         root.focusImmersiveActive = false;
-                        root.switchToView("today");
+                        if (!root.endingFocusInPlace)
+                            root.switchToView("today");
                     }
 
                     onImmersiveRequested: root.focusImmersiveActive = true
@@ -1022,6 +1072,7 @@ Item {
                     onCountdownRequested: root.switchToView("countdown")
                     onFocusPageRequested: root.switchToView("focus")
                     onTodayPageRequested: root.switchToView("today")
+                    onStopFocusRequested: root.endFocusFromDashboard()
                     onDeleteRequested: function(taskId, taskTitle) {
                         root.requestDeleteTask(taskId, taskTitle)
                     }
@@ -1470,6 +1521,10 @@ Item {
             restoreConfirmDialog.open()
         }
         function onRestoreStarted() {
+            // 不同数据库可以有相同任务编号，换库前清理选择及所有待续动作，不能按旧编号重新绑定。
+            focusView.clearSelectedTask()
+            focusView.pendingSwitch = null
+            focusView.cancelAutoAdvance()
             // 旧库的撤销删除命令不能跨过数据库整体替换边界，否则相同主键会删错恢复数据。
             root.cancelPendingDelete()
         }

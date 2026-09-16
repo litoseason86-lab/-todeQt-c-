@@ -25,6 +25,11 @@ public:
     // 关联它的手写缺口被连带删除，而且没有任何报错。
     static bool knowledgeGapForeignKeysAreValid(const QSqlDatabase& db);
 
+    // 应用默认数据库路径。迁移快照（pomodoro_backup_*.db）与它同目录，
+    // 所以启动失败时把这条路径给用户，就等于同时指出了数据库和快照的位置。
+    // 可写位置拿不到时返回空串。
+    static QString defaultDatabasePath();
+
     // 初始化会打开数据库、建表并执行必要迁移；dbPath 为空时使用应用默认路径。
     Q_INVOKABLE bool initialize(const QString& dbPath = QString());
     QSqlDatabase database() const;
@@ -95,7 +100,8 @@ private:
     bool migrateTaskCategories();
     QString generateColorForCategory(int index) const;
     bool backupDatabaseBeforeMigration() const;
-    void pruneOldBackups(const QDir& databaseDir) const;
+    // keepPath 是本次迁移前刚拍的快照，无条件保留（见 SnapshotRetention::prune）。
+    void pruneOldBackups(const QDir& databaseDir, const QString& keepPath) const;
     bool tableExists(const QString& tableName) const;
     bool columnExists(const QString& tableName, const QString& columnName) const;
     // v13 是首个会被备份整库恢复的课表版本。CREATE TABLE IF NOT EXISTS

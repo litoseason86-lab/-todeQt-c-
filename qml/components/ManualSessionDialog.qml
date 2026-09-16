@@ -15,6 +15,11 @@ import ".."
 Popup {
     id: root
 
+    // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
+
     // 输入框字色必须接管：Basic 风格默认 palette.text 写死深灰，夜间主题下看不见。
     palette.text: Theme.inputInk
     palette.placeholderText: Theme.inputPlaceholderInk
@@ -136,6 +141,8 @@ Popup {
     }
 
     function submit() {
+        if (root.submissionClosed)
+            return false
         const dateParts = String(dateField.text).split("-")
         const year = Number(dateParts[0])
         const month = Number(dateParts[1])
@@ -268,7 +275,7 @@ Popup {
                     radius: Theme.radiusMd
                     color: Theme.surfaceSunken
                     border.width: dateField.activeFocus ? 2 : 1
-                    border.color: dateField.activeFocus ? Theme.accent : Theme.borderSubtle
+                    border.color: dateField.activeFocus ? Theme.focusRing : Theme.borderSubtle
                 }
             }
 
@@ -294,7 +301,7 @@ Popup {
                     radius: Theme.radiusMd
                     color: Theme.surfaceSunken
                     border.width: hourField.activeFocus ? 2 : 1
-                    border.color: hourField.activeFocus ? Theme.accent : Theme.borderSubtle
+                    border.color: hourField.activeFocus ? Theme.focusRing : Theme.borderSubtle
                 }
             }
 
@@ -320,7 +327,7 @@ Popup {
                     radius: Theme.radiusMd
                     color: Theme.surfaceSunken
                     border.width: minuteField.activeFocus ? 2 : 1
-                    border.color: minuteField.activeFocus ? Theme.accent : Theme.borderSubtle
+                    border.color: minuteField.activeFocus ? Theme.focusRing : Theme.borderSubtle
                 }
             }
 

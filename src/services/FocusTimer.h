@@ -123,8 +123,10 @@ private:
     // 保存失败时调用方会保留当前会话状态，避免用户误以为记录已经落库。
     // durationWasCorrected 为真时 end_time 按 start_time + durationSeconds 写入，
     // 让记录占用的区间与用户确认的时长一致，而不是继续横跨到「现在」。
+    // overshootSeconds 是自然到点时被截掉的超额（合盖跨过到点），结束时刻往回推这么多。
     bool saveFocusSession(int durationSeconds, bool naturalCompletion,
-                          bool durationWasCorrected = false);
+                          bool durationWasCorrected = false,
+                          int overshootSeconds = 0);
     bool discardFocusSession();
     bool persistActiveState();
     bool writeActiveState(QSqlDatabase& db);

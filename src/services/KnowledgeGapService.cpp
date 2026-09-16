@@ -3,6 +3,7 @@
 #include "AppSettings.h"
 #include "DatabaseManager.h"
 #include "LogicalDay.h"
+#include "TaskManager.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -582,6 +583,13 @@ int KnowledgeGapService::convertToTask(int gapId, const QVariant& dateValue)
         notes += gapDetail;
     }
 
+    // 来源说明也占任务备注长度；无法完整保存时整体回滚，不截断用户原文。
+    if (notes.size() > TaskManager::kMaxNotesLength) {
+        db.rollback();
+        reportFailure(QStringLiteral("正文加来源说明超过任务备注上限，请缩短正文后再转为任务"));
+        return -1;
+    }
+
     QSqlQuery insertTask(db);
     insertTask.prepare(QStringLiteral(
         "INSERT INTO tasks (title, category, category_id, date, completed, "
@@ -596,7 +604,7 @@ int KnowledgeGapService::convertToTask(int gapId, const QVariant& dateValue)
     insertTask.bindValue(QStringLiteral(":categoryId"), gapCategoryId);
     insertTask.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
     insertTask.bindValue(QStringLiteral(":orderDate"), date.toString(Qt::ISODate));
-    insertTask.bindValue(QStringLiteral(":notes"), boundedText(notes, 2000));
+    insertTask.bindValue(QStringLiteral(":notes"), notes);
 
     if (!insertTask.exec() || insertTask.numRowsAffected() != 1) {
         const QString error = insertTask.lastError().text();
@@ -621,7 +629,7 @@ int KnowledgeGapService::convertToTask(int gapId, const QVariant& dateValue)
         "due_date = CASE WHEN due_date IS NULL OR due_date > :taskDate THEN :taskDate2 ELSE due_date END, "
         "linked_task_id = :taskId, updated_at = :updatedAt WHERE id = :id"));
     updateGapQuery.bindValue(QStringLiteral(":status"), static_cast<int>(StatusScheduled));
-    // 同名占位符只绑第一处，两处任务日期各取一个名字。
+    // 两个条件分别命名，绑定时明确各自使用同一个任务日期。
     updateGapQuery.bindValue(QStringLiteral(":taskDate"), date.toString(Qt::ISODate));
     updateGapQuery.bindValue(QStringLiteral(":taskDate2"), date.toString(Qt::ISODate));
     updateGapQuery.bindValue(QStringLiteral(":taskId"), newTaskId);
@@ -720,7 +728,7 @@ QVariantList KnowledgeGapService::listGaps(int statusFilter,
         // 标题、正文和结论一起搜：想找回一条旧记录时，记得住的往往是当时写的细节
         // 或者后来写下的答案，而不是标题那几个字。
         whereSql += QStringLiteral(
-            "AND (g.title LIKE :search OR g.detail LIKE :search2 OR g.resolution LIKE :search3) ");
+            "AND (g.title LIKE :search ESCAPE '!' OR g.detail LIKE :search2 ESCAPE '!' OR g.resolution LIKE :search3 ESCAPE '!') ");
     }
 
     // limit <= 0 视为不限制，但仍给一个硬上限，避免界面一次拿到上万行。
@@ -738,8 +746,12 @@ QVariantList KnowledgeGapService::listGaps(int statusFilter,
         query.bindValue(QStringLiteral(":categoryId"), categoryId);
     }
     if (!trimmedSearch.isEmpty()) {
-        // SQLite 对同名具名占位符只绑第一处，三个 LIKE 必须用三个不同的名字。
-        const QString pattern = QStringLiteral("%%%1%%").arg(trimmedSearch);
+        // 用户输入按字面搜索；先转义转义符自身，再转义 LIKE 的通配符。
+        QString literalSearch = trimmedSearch;
+        literalSearch.replace(QStringLiteral("!"), QStringLiteral("!!"));
+        literalSearch.replace(QStringLiteral("%"), QStringLiteral("!%"));
+        literalSearch.replace(QStringLiteral("_"), QStringLiteral("!_"));
+        const QString pattern = QStringLiteral("%%%1%%").arg(literalSearch);
         query.bindValue(QStringLiteral(":search"), pattern);
         query.bindValue(QStringLiteral(":search2"), pattern);
         query.bindValue(QStringLiteral(":search3"), pattern);
@@ -815,7 +827,7 @@ QVariantMap KnowledgeGapService::getReminderSummary() const
         "  LEFT JOIN tasks t ON t.id = g.linked_task_id "
         "  WHERE g.status != :resolvedStatus"
         ")"));
-    // 同名占位符在 SQLite 驱动下只会绑上第一处，三处「今天」必须各取一个名字。
+    // 三处日期条件分别命名，绑定同一个逻辑日，便于检查每个统计分支。
     const QString todayIso = today.toString(Qt::ISODate);
     query.bindValue(QStringLiteral(":today1"), todayIso);
     query.bindValue(QStringLiteral(":today2"), todayIso);

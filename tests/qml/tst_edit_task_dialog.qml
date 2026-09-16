@@ -215,6 +215,23 @@ TestCase {
         estimateDialog.close()
     }
 
+    function test_overlongNotesBlockEditSubmit() {
+        testCase.submittedMinutes = -1
+        estimateDialog.openForTask({ id: 14, title: "高数", categoryId: 3,
+                                     date: isoWithOffset(0), estimatedMinutes: 60,
+                                     notes: "原备注" })
+        wait(20)
+
+        var notes = findChild(estimateDialog, "editNotesField")
+        var longNotes = new Array(estimateDialog.maxNotesLength + 2).join("y")
+        notes.text = longNotes
+        estimateDialog.submit()
+
+        compare(testCase.submittedMinutes, -1)
+        compare(notes.text, longNotes)
+        verify(estimateDialog.errorText.indexOf("备注") >= 0, estimateDialog.errorText)
+    }
+
     function test_editedEstimateIsSubmittedAsMinutes() {
         estimateDialog.openForTask({ id: 13, title: "高数", categoryId: 3,
                                      date: isoWithOffset(0), estimatedMinutes: 60 })

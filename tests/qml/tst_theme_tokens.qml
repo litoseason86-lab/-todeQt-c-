@@ -29,7 +29,7 @@ TestCase {
         verify(Qt.colorEqual(Theme.border, "#e8dfc8"), "border 取值不对")
         verify(Qt.colorEqual(Theme.ink, "#5d4e37"), "ink 取值不对")
         verify(Qt.colorEqual(Theme.danger, "#b24f3d"), "danger 取值不对")
-        verify(Qt.colorEqual(Theme.dangerSoft, "#b37562"), "dangerSoft 取值不对")
+        verify(Qt.colorEqual(Theme.dangerSoft, "#9b5544"), "dangerSoft 取值不对")
     }
 
     function test_scaleTokens() {
@@ -95,5 +95,19 @@ TestCase {
         Theme.activeThemeId = "pink"
         verify(!Theme.darkMode, "pink 应为日间版")
         verify(Qt.colorEqual(Theme.ink, "#5d4e37"), "日间版 ink 应复原")
+    }
+
+    function test_semanticTextAndKeyboardFocusHaveEnoughContrast() {
+        for (var theme of ["warm", "starry"]) {
+            Theme.activeThemeId = theme
+            for (var background of [Theme.surface, Theme.surfaceRaised, Theme.surfaceSunken]) {
+                verify(Theme.contrastRatio(Theme.dangerSoft, background) >= 4.5,
+                       "删除文字不能退回低对比色")
+                verify(Theme.contrastRatio(Theme.successInk, background) >= 4.5,
+                       "完成态文字必须可读")
+                verify(Theme.contrastRatio(Theme.focusRing, background) >= 3,
+                       "键盘焦点必须能和背景区分")
+            }
+        }
     }
 }

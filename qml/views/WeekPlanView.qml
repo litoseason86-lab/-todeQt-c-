@@ -60,17 +60,23 @@ Item {
     }
 
     Connections {
+        // 门禁写在每个处理函数里，不能用 enabled: root.pageActive：enabled 是绑定，重算晚于
+        // onPageActiveChanged 里的同步查询，而服务在查询过程中就同步发 operationFailed——
+        // 那一刻绑定还是旧值，切进页面第一次查询的失败会被整个丢掉、显示成空页面。
         target: root.taskManagerRef
         ignoreUnknownSignals: true
-        enabled: root.pageActive
 
         function onTasksChanged() {
+            if (!root.pageActive)
+                return
             if (root.completionRefreshDelayActive)
                 return
             refreshCoalescer.request()
         }
 
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             root.loadError = String(message || "本周计划加载失败")
         }
     }
@@ -443,7 +449,7 @@ Item {
         if (!task) {
             return false
         }
-        root.setTaskCompletedWithAnimationDelay(Number(task.id), !task.completed, String(task.title || ""))
+        root.setTaskCompletedWithAnimationDelay(Number(task.id), !root.effectiveCompleted(task), String(task.title || ""))
         return true
     }
 
@@ -654,8 +660,9 @@ Item {
                         // 只数条目个数答不了排期页最该回答的那个问题——这一周到底排了多少小时。
                         // 每条的预计用时本来就画在行里，缺的只是一个加法。
                         return range + " · 本周 " + root.weekTasks.length + " 个任务 · 已完成 "
-                                + root.weekCompletedCount() + " · 共排 "
-                                + Duration.format(root.plannedMinutesForWeek())
+                                + root.weekCompletedCount()
+                                + (root.plannedMinutesForWeek() > 0 ? " · 共排 "
+                                   + Duration.format(root.plannedMinutesForWeek()) : " · 未设置预计用时")
                     }
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
@@ -1128,6 +1135,7 @@ Item {
 
     AddTaskDialog {
         id: addTaskDialog
+        maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 
         selectedDate: root.pendingAddDate
         categoryManagerRef: root.categoryManagerRef
@@ -1138,6 +1146,7 @@ Item {
 
     EditTaskDialog {
         id: editTaskDialog
+        maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 
         parent: root
         categoryManagerRef: root.categoryManagerRef

@@ -20,6 +20,7 @@ Item {
 
     signal openFocusRequested()
     signal startRequested()
+    signal stopRequested()
     // 仪表盘目标卡只读；未设置时用户点引导链接，向上请求跳到今日任务页。
     signal goalSetupRequested()
     // 用户点「隐藏」：面板自己不改布局，向上请求由 DashboardView 收起并持久化。
@@ -84,6 +85,13 @@ Item {
         }
         var depend = root.x + root.y + root.width + root.height
                 + root.wallpaperRef.width + root.wallpaperRef.height
+        // mapToItem 本身不订阅祖先位移。侧栏动画移动的是祖先容器，
+        // 必须显式读取整条祖先链的几何属性，否则局部 x 不变时采样仍停在旧位置。
+        var ancestor = root.parent
+        while (ancestor) {
+            depend += ancestor.x + ancestor.y + ancestor.width + ancestor.height
+            ancestor = ancestor.parent
+        }
         var pos = root.mapToItem(root.wallpaperRef, 0, 0)
         return Qt.rect(pos.x, pos.y, root.width, root.height)
     }
@@ -326,18 +334,10 @@ Item {
                 implicitWidth: 60
                 implicitHeight: Theme.controlHeightMd
 
-                onClicked: {
-                    if (!root.timerRef) {
-                        return
-                    }
-                    // 与专注页「结束」同语义：结束番茄循环时连续计数一并归零，
-                    // 否则下一轮长休息节奏会被上一轮残留计数带偏；自由专注不涉及计数。
-                    var endsPomodoroCycle = root.mode === 1 && root.phase !== 0
-                    if (root.timerRef.stopFocus() && endsPomodoroCycle
-                            && root.timerRef.resetPomodoroCount) {
-                        root.timerRef.resetPomodoroCount()
-                    }
-                }
+                // 面板只表达「用户要结束」。结束规则（超长自由专注先确认、番茄循环计数归零、
+                // 主动休息收尾、失败提示）全在专注页的单点入口里，由 MainWindow 分发过去；
+                // 这里直接调 stopFocus() 会绕过超长确认，把忘了停的几个小时原样记进统计。
+                onClicked: root.stopRequested()
 
                 background: GlassPanel {
                     color: stopButton.hovered ? Theme.glassHover : Qt.rgba(1, 1, 1, 0)

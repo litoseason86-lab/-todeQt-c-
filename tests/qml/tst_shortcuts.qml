@@ -336,6 +336,21 @@ TestCase {
         verify(shortcutsPage.feedbackText.indexOf("其他应用") >= 0)
     }
 
+    function test_page_explains_key_taken_by_another_action() {
+        // 升级新增的默认键撞上老用户的自定义键、或配置里两个动作同键时，C++ 让后者让路
+        // 并给出占用者。这一行不能显示成「已停用」——用户从没关过它，只是键被占了。
+        var text = shortcutsPage.statusTextFor({
+            isDisabled: true, hasDefault: true, registered: true, conflictTitle: "新建任务"
+        })
+        verify(text.indexOf("新建任务") >= 0, text)
+        verify(text.indexOf("已停用") < 0, text)
+
+        // 用户主动停用的行照旧。
+        compare(shortcutsPage.statusTextFor({
+            isDisabled: true, hasDefault: true, registered: true, conflictTitle: ""
+        }), "已停用")
+    }
+
     function test_page_recording_state_bubbles_up() {
         var row = findChildByObjectName(shortcutsPage, "shortcutRow_task.new")
         compare(shortcutsPage.recording, false)

@@ -22,6 +22,8 @@ TestCase {
 
         // 选择器的候选来源。用例按需替换，默认空——保持原有用例的行为不变。
         property var todayTasks: []
+        // getTask 查询全库，不能把“移出今天”伪装成“任务已删除”。
+        property var otherDateTasks: []
         property int maxTitleLength: 100
         property int createTaskCalls: 0
         property string createTaskTitle: ""
@@ -33,9 +35,9 @@ TestCase {
         function getWeekTasks(weekStart) { return [] }
         function getMonthTasks(year, month) { return [] }
         function getTask(id) {
-            for (var i = 0; i < todayTasks.length; ++i) {
-                if (Number(todayTasks[i].id) === Number(id))
-                    return todayTasks[i]
+            for (var task of todayTasks.concat(otherDateTasks)) {
+                if (Number(task.id) === Number(id))
+                    return task
             }
             return {}
         }
@@ -237,6 +239,8 @@ TestCase {
     QtObject {
         id: backupService
 
+        signal restoreStarted()
+
         // 与 BackupService 同名：备份/恢复临界区期间为真，界面整体阻断输入。
         property bool operationBlocksUi: false
         property string operationText: ""
@@ -275,6 +279,8 @@ TestCase {
     }
 
     function init() {
+        // 上一用例可能刚触发切页动画，先等它收尾再重置状态，防止延迟 ScriptAction 串入下一用例。
+        tryCompare(mainWindow, "isSwitching", false, 2000)
         mainWindow.currentView = "today"
         mainWindow.pendingView = "today"
         mainWindow.queuedView = ""
@@ -294,6 +300,7 @@ TestCase {
         taskManager.deleteSucceeds = true
         // 复位写在 init 而不是用例末尾：断言一失败就跳过还原的话，
         // 一条真实失败会污染后面每一条（docs/业务规则.md「界面与验证约定」记过这个坑）。
+        taskManager.otherDateTasks = []
         taskManager.todayTasks = []
         taskManager.createTaskCalls = 0
         taskManager.createTaskTitle = ""
@@ -323,6 +330,9 @@ TestCase {
         focusTimer.pauseFocusCalls = 0
         focusTimer.stopFocusCalls = 0
         focusTimer.startPomodoroCalls = 0
+        focusTimer.elapsedSeconds = 0
+        focusTimer.completedPomodoros = 0
+        findChild(focusView, "longFreeFocusConfirmDialog").close()
         focusView.toPomodoroTab(false)
         focusView.clearSelectedTask()
         mainWindow.cancelPendingDelete()
@@ -577,6 +587,35 @@ TestCase {
         compare(taskManager.deleteTaskCalls, 0)
 
         mainWindow.deleteCommitDelayMs = 5000
+    }
+
+    function test_earlyCommitRetiresTheUndoToast() {
+        // 补录或修改记录、备份、恢复、关窗之前都会先提交待删除项。提交之后撤销条若还挂着，
+        // 用户点「撤销」时提示条照常消失、看起来像撤销成功，记录其实已经永久删除。
+        mainWindow.deleteCommitDelayMs = 5000
+        var toast = findChild(mainWindow, "globalToast")
+
+        mainWindow.requestDeleteTask(26, "提前落库的任务")
+        compare(toast.actionText, "撤销")
+
+        verify(mainWindow.commitPendingDelete())
+        compare(taskManager.deleteTaskCalls, 1)
+        compare(toast.actionText, "")
+        compare(toast.shown, false)
+    }
+
+    function test_earlyCommitLeavesUnrelatedToastAlone() {
+        // 只收起属于这次删除的撤销条；提示条已经被别的提示顶掉时不能误关。
+        mainWindow.deleteCommitDelayMs = 5000
+        var toast = findChild(mainWindow, "globalToast")
+
+        mainWindow.requestDeleteTask(27, "待删任务")
+        // 直接走 globalToast，模拟不经 showToast、不会触发提交的另一条带动作提示。
+        toast.show("另一条提示", "查看", function() {})
+
+        verify(mainWindow.commitPendingDelete())
+        compare(toast.shown, true)
+        compare(toast.actionText, "查看")
     }
 
     function test_deleteCommitsAfterTimeout() {
@@ -934,6 +973,7 @@ TestCase {
         var picker = findChild(view, "focusTaskPicker")
         picker.taskChosen(84, "要改期的")
 
+        taskManager.otherDateTasks = [{ id: 84, title: "要改期的", completed: false }]
         taskManager.todayTasks = [
             { id: 83, title: "今天的", completed: false, displayOrder: 1 }
         ]
@@ -1229,4 +1269,95 @@ TestCase {
         compare(focusTimer.stopFocusCalls, 0)
         globalPopup.close()
     }
+
+    // —— 仪表盘「结束」与其它结束入口同口径（2026-09-15 审查修复）——
+    // 仪表盘面板曾直接调 stopFocus()：忘了停的 8 小时自由专注被原样写进统计和目标进度，
+    // 没有专注页、菜单栏都有的「记录 / 丢弃 / 向下修正」确认。
+
+    function dashboardStopButton() {
+        var dashboard = findChild(mainWindow, "dashboardViewPage")
+        verify(dashboard)
+        var button = findChild(dashboard, "dashboardTimerStopButton")
+        verify(button)
+        return button
+    }
+
+    function test_dashboardStopOnOverlongFreeFocusAsksForConfirmation() {
+        mainWindow.currentView = "dashboard"
+        focusTimer.mode = 0
+        focusTimer.phase = 0
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.currentTaskId = 7
+        focusTimer.currentTaskTitle = "忘了停的任务"
+        // 默认提醒阈值 8 小时，超过才需要确认。
+        focusTimer.elapsedSeconds = 9 * 60 * 60
+
+        dashboardStopButton().clicked()
+
+        compare(focusTimer.stopFocusCalls, 0)
+        var focusView = findChild(mainWindow, "focusViewPage")
+        var dialog = findChild(focusView, "longFreeFocusConfirmDialog")
+        tryCompare(dialog, "opened", true, 2000)
+        // 确认弹窗属于专注页，要切过去它才看得见。
+        tryCompare(mainWindow, "currentView", "focus", 2000)
+    }
+
+    function test_dashboardStopEndsPomodoroCycleAndStaysOnDashboard() {
+        mainWindow.currentView = "dashboard"
+        focusTimer.mode = 1
+        focusTimer.phase = 1
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.completedPomodoros = 3
+
+        dashboardStopButton().clicked()
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusTimer.completedPomodoros, 0)
+        wait(40)
+        // 从仪表盘结束就留在仪表盘；「结束后回今日页」只针对从专注页结束。
+        compare(mainWindow.currentView, "dashboard")
+    }
+
+    function test_dashboardStopFailureIsVisible() {
+        mainWindow.currentView = "dashboard"
+        focusTimer.mode = 0
+        focusTimer.phase = 0
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 600
+        focusTimer.stopSucceeds = false
+
+        dashboardStopButton().clicked()
+
+        compare(focusTimer.stopFocusCalls, 1)
+        var toast = findChild(mainWindow, "globalToast")
+        compare(toast.shown, true)
+        compare(findChild(mainWindow, "toastText").text, "专注保存失败，请重试")
+    }
+
+    function test_deletingSelectedIdleTaskClearsSelection() {
+        taskManager.todayTasks = [{ id: 84, title: "待删除", completed: false }]
+        var view = focusPage()
+        view.selectedTaskId = 84
+        view.selectedTaskTitle = "待删除"
+        mainWindow.currentView = "today"
+        taskManager.todayTasks = []
+        taskManager.tasksChanged()
+        compare(view.selectedTaskId, -1)
+        compare(view.selectedTaskTitle, "")
+    }
+
+    function test_restoreClearsOldDatabaseTaskIdentity() {
+        var view = focusPage()
+        view.selectedTaskId = 84
+        view.selectedTaskTitle = "旧库任务"
+        backupService.restoreStarted()
+        compare(view.selectedTaskId, -1)
+        taskManager.todayTasks = [{ id: 84, title: "新库同号任务", completed: false }]
+        taskManager.tasksChanged()
+        compare(view.selectedTaskId, -1)
+    }
+
 }

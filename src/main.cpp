@@ -1,11 +1,13 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QDir>
+#include <QFileInfo>
 #include <QFontDatabase>
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QUrl>
 
@@ -32,6 +34,7 @@
 
 #include "platform/macos/MacGlobalHotkeyBackend.h"
 #include "platform/macos/MacNotificationBackend.h"
+#include "platform/macos/MacPreferencesCleanup.h"
 #include "platform/macos/MacStatusBarController.h"
 
 int main(int argc, char *argv[])
@@ -60,6 +63,27 @@ int main(int argc, char *argv[])
     // 关于页直接读取 Qt.application.version；由 CMake 项目版本注入，避免 UI 手写两份版本号。
     QCoreApplication::setApplicationVersion(QStringLiteral(POMODORO_TODO_VERSION));
 
+    // 旧版恢复失败回滚时会把系统全局偏好（语言、地区等）钉进本应用的偏好域，
+    // 之后改系统设置本应用也不跟着变。回滚已经改为只写本应用的键，这里把以前钉进来的清掉。
+    // 只清与全局域值完全相同的键，读到的值不变，所以只需做一次，用迁移标记记住。
+    {
+        const auto kPinnedPreferencesCleanupKey =
+            QStringLiteral("migration/globalPreferencesUnpinned");
+        QString preferencesDomain;
+        {
+            QSettings settings;
+            if (!settings.value(kPinnedPreferencesCleanupKey).toBool()) {
+                // 原生偏好的 fileName() 是 ~/Library/Preferences/<域名>.plist。
+                preferencesDomain = QFileInfo(settings.fileName()).completeBaseName();
+            }
+        }
+        if (!preferencesDomain.isEmpty()) {
+            MacPreferencesCleanup::removeValuesPinnedFromGlobalDomain(preferencesDomain);
+            QSettings settings;
+            settings.setValue(kPinnedPreferencesCleanupKey, true);
+        }
+    }
+
     // 单实例守卫：两个进程共享同一数据库时会互相覆盖 active_focus_state 检查点。
     // 重复启动不再静默退出，而是通过本地 IPC 召回现有窗口。
     const QString instanceLockDir =
@@ -83,6 +107,23 @@ int main(int argc, char *argv[])
     }
 
     if (!DatabaseManager::instance()->initialize()) {
+        qCritical() << "数据库初始化失败，停止加载业务界面";
+        // 失败窗口独立于所有业务服务，避免在坏库上继续触发查询或备份。
+        // 离屏自动验证只写日志，不进入等待用户操作的界面事件循环。
+        if (QGuiApplication::platformName() != QStringLiteral("offscreen")) {
+            QQmlApplicationEngine failureEngine;
+            // 用户第一步总是要找数据库和迁移快照在哪；这里直接把目录给出来，
+            // 免得他们去猜 macOS 的 Application Support 路径。
+            const QString defaultDbPath = DatabaseManager::defaultDatabasePath();
+            failureEngine.setInitialProperties(
+                {{QStringLiteral("dataDirectory"),
+                  defaultDbPath.isEmpty() ? QString()
+                                          : QFileInfo(defaultDbPath).absolutePath()}});
+            failureEngine.load(QUrl(QStringLiteral("qrc:/qml/StartupErrorWindow.qml")));
+            if (!failureEngine.rootObjects().isEmpty()) {
+                app.exec();
+            }
+        }
         return -1;
     }
     // v8 历史回填与新版本自然到点规则口径不同；只在本次启动原本就有数据库且

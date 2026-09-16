@@ -260,7 +260,9 @@ Rectangle {
                                         textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontLg
                                         font.weight: Font.Bold
-                                        color: sessionRow.isRest ? Theme.inkSoft : Theme.accent
+                                        // accent 是填充/描边用的品牌色，压在浅底上只有 2.07:1。
+                                        // 时长读数是这一行最该看清的数字，用可读文字版。
+                                        color: sessionRow.isRest ? Theme.inkSoft : Theme.accentInk
                                         horizontalAlignment: Text.AlignRight
                                         elide: Text.ElideRight
                                     }
@@ -271,7 +273,8 @@ Rectangle {
                                         textFormat: Text.PlainText
                                         font.pixelSize: Theme.fontXs
                                         font.weight: Font.Medium
-                                        color: sessionRow.isRest ? Theme.inkSoft : Theme.success
+                                        // 同理：success 是状态色，作文字用 successInk。
+                                        color: sessionRow.isRest ? Theme.inkSoft : Theme.successInk
                                         horizontalAlignment: Text.AlignRight
                                     }
                                 }

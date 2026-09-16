@@ -94,6 +94,9 @@ private:
     QString m_databaseName;
     // Toast 是瞬时反馈，不应持久化；回退会下调缓存，之后重新上涨仍会再次提示。
     QHash<int, int> m_lastDoneMinutes;
+    // 按当前数据重建「上一次投入分钟」基线，不发任何信号。缓存失效（启动、换库、科目变化、
+    // 改日界起点）时当场调用：只清不补的话，失效后的第一段专注只会被当成建基线，Toast 就没了。
+    void rebuildProgressBaseline();
 };
 
 #endif // GOALSERVICE_H

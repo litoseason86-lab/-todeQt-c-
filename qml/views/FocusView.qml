@@ -104,7 +104,21 @@ Item {
     // 今日任务，顺序沿用 getTodayTasks()：未完成在前、当天 display_order 升序。
     property var todayTasks: []
 
+    function reconcileSelectedTask() {
+        // 活动会话由计时器持有；这里只校验待启动的选择，删除或改名后不能留下失效编号。
+        if (root.timerBool("hasActiveSession") || root.selectedTaskId <= 0
+                || !root.taskManagerRef || typeof root.taskManagerRef.getTask !== "function")
+            return
+        var task = root.taskManagerRef.getTask(root.selectedTaskId)
+        if (!task || Number(task.id) !== root.selectedTaskId) {
+            root.clearSelectedTask()
+        } else {
+            root.selectedTaskTitle = String(task.title || "")
+        }
+    }
+
     function reloadTodayTasks() {
+        root.reconcileSelectedTask()
         if (!root.taskManagerRef || typeof root.taskManagerRef.getTodayTasks !== "function") {
             root.todayTasks = []
             return
@@ -864,6 +878,7 @@ Item {
         ignoreUnknownSignals: true
 
         function onTasksChanged() {
+            root.reconcileSelectedTask()
             root.refreshTaskNotes()
         }
     }
@@ -1543,14 +1558,14 @@ Item {
                     implicitHeight: Theme.controlHeightMd
 
                     background: Rectangle {
-                        color: freeStopButton.enabled ? Theme.accent : Theme.border
+                        color: freeStopButton.enabled ? Theme.accentFill : Theme.border
                         radius: Theme.radiusMd
                     }
 
                     contentItem: Text {
                         text: freeStopButton.text
                         textFormat: Text.PlainText
-                        color: freeStopButton.enabled ? Theme.surface : Theme.inkMuted
+                        color: freeStopButton.enabled ? Theme.accentFillInk : Theme.inkMuted
                         font.pixelSize: Theme.fontLg
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
@@ -1826,13 +1841,13 @@ Item {
 
     function primaryTimeColor() {
         if (root.state === "workDone" || root.state === "breakDone") {
-            return Theme.success
+            return Theme.successInk
         }
         if (root.ringDimmed()) {
-            return Theme.inkMuted
+            return Theme.inkSoft
         }
         if (root.state === "manualRest" || root.state === "pomoBreak") {
-            return Theme.focusBreakAccent
+            return Theme.focusBreakInk
         }
         // 环内计时读数（番茄工作/自由专注运行态）：用可读文字色，别用低对比的 accent。
         return Theme.accentInk

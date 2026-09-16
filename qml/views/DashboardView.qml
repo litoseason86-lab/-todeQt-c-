@@ -18,6 +18,8 @@ Item {
     signal countdownRequested()
     signal deleteRequested(int taskId, string title)
     signal focusPageRequested()
+    // 专注面板点了「结束」。仪表盘不自己停计时器，交给 MainWindow 走专注页的结束入口。
+    signal stopFocusRequested()
     signal todayPageRequested()
     // 完成任务后向上冒泡，供 MainWindow 弹出“撤销完成”提示条。
     signal taskCompletionUndoable(int taskId, string title)
@@ -55,13 +57,19 @@ Item {
     property var nowProvider: null
 
     // 专注计时面板展开态：持久化在设置里跨启动记忆，与侧栏同一套收起习惯。
-    readonly property bool timerPanelVisible: root.settingsRef
+    readonly property bool compactLayout: root.width < 900
+    readonly property bool timerPanelVisible: !root.compactLayout && root.timerPanelPreferredVisible
+    readonly property bool timerPanelPreferredVisible: root.settingsRef
             && root.settingsRef.dashboardTimerVisible !== undefined
             ? Boolean(root.settingsRef.dashboardTimerVisible) : true
     readonly property bool timerMotionReduced: root.settingsRef
             ? Boolean(root.settingsRef.reduceMotion) : false
 
     function setTimerPanelVisible(visible) {
+        if (visible && root.compactLayout) {
+            root.focusPageRequested()
+            return
+        }
         if (root.settingsRef) {
             root.settingsRef.dashboardTimerVisible = visible
         }
@@ -129,27 +137,37 @@ Item {
     }
 
     Connections {
+        // 门禁写在每个处理函数里，不能用 enabled: root.pageActive：enabled 是绑定，重算晚于
+        // onPageActiveChanged 里的同步查询，而服务在查询过程中就同步发 operationFailed——
+        // 那一刻绑定还是旧值，切进页面第一次查询的失败会被整个丢掉、显示成空页面。
         target: root.taskManagerRef
         ignoreUnknownSignals: true
-        enabled: root.pageActive
 
         function onTasksChanged() {
+            if (!root.pageActive)
+                return
             if (root.completionRefreshDelayActive)
                 return
             refreshCoalescer.request()
         }
 
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             root.loadError = String(message || "任务加载失败")
         }
     }
 
     Connections {
+        // 门禁写在每个处理函数里，不能用 enabled: root.pageActive：enabled 是绑定，重算晚于
+        // onPageActiveChanged 里的同步查询，而服务在查询过程中就同步发 operationFailed——
+        // 那一刻绑定还是旧值，切进页面第一次查询的失败会被整个丢掉、显示成空页面。
         target: root.statisticsServiceRef
         ignoreUnknownSignals: true
-        enabled: root.pageActive
 
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             root.loadError = String(message || "统计数据加载失败")
         }
     }
@@ -183,15 +201,21 @@ Item {
     }
 
     Connections {
+        // 门禁写在每个处理函数里，不能用 enabled: root.pageActive：enabled 是绑定，重算晚于
+        // onPageActiveChanged 里的同步查询，而服务在查询过程中就同步发 operationFailed——
+        // 那一刻绑定还是旧值，切进页面第一次查询的失败会被整个丢掉、显示成空页面。
         target: root.routineManagerRef
         ignoreUnknownSignals: true
-        enabled: root.pageActive
 
         function onRoutinesChanged() {
+            if (!root.pageActive)
+                return
             refreshCoalescer.request()
         }
 
         function onOperationFailed(message) {
+            if (!root.pageActive)
+                return
             root.loadError = String(message || "每日例行生成失败")
         }
     }
@@ -224,6 +248,8 @@ Item {
     }
 
     function refresh() {
+        // 一轮组合查询只在起点清错；后续成功查询不能抹掉前面刚发生的失败。
+        root.loadError = ""
         // 先幂等补齐当天例行任务，再分别加载任务与统计，互不拖垮。
         if (root.routineManagerRef && root.routineManagerRef.materializeToday) {
             root.routineManagerRef.materializeToday()
@@ -242,7 +268,6 @@ Item {
 
     function loadTasks() {
         try {
-            root.loadError = ""
             var loaded = root.taskManagerRef.getTodayTasks()
             root.tasks = root.pendingDeleteTaskId > 0
                     ? loaded.filter(function(task) {
@@ -258,6 +283,14 @@ Item {
     function loadStats() {
         try {
             root.todayStats = root.statisticsServiceRef.getTodayStats()
+            // 撤销窗口内行已隐藏，任务数也按当前列表预览；专注时长仍来自已保存的历史。
+            if (root.pendingDeleteTaskId > 0) {
+                var preview = Object.assign({}, root.todayStats)
+                preview.totalTasks = root.tasks.length
+                preview.completedTasks = root.tasks.filter(function(task) { return Boolean(task.completed) }).length
+                preview.completionRate = preview.totalTasks > 0 ? preview.completedTasks / preview.totalTasks : 0
+                root.todayStats = preview
+            }
             root.streakDays = Number(root.statisticsServiceRef.getStreakDays() || 0)
             root.totalFocusSeconds = Number(root.statisticsServiceRef.getTotalFocusDuration() || 0)
         } catch (error) {
@@ -351,6 +384,8 @@ Item {
         spacing: Theme.space16
 
         ColumnLayout {
+            id: dashboardMainColumn
+            Layout.minimumWidth: 0
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: Theme.space16
@@ -430,9 +465,12 @@ Item {
                 onAddRequested: countdownDialog.openForAdd()
             }
 
-            RowLayout {
+            GridLayout {
+                objectName: "dashboardStatsGrid"
                 Layout.fillWidth: true
-                spacing: Theme.space12
+                columns: dashboardMainColumn.width >= 790 ? 4 : 2
+                columnSpacing: Theme.space12
+                rowSpacing: Theme.space12
 
                 StatCard {
                     objectName: "todayFocusDurationCard"
@@ -444,6 +482,8 @@ Item {
                 }
 
                 StatCard {
+                    objectName: "dashboardTaskCompletionCard"
+
                     Layout.fillWidth: true
                     title: "今日任务完成"
                     value: Number(root.todayStats.completedTasks || 0) + " / " + Number(root.todayStats.totalTasks || 0)
@@ -758,6 +798,7 @@ Item {
 
                 onOpenFocusRequested: root.focusPageRequested()
                 onStartRequested: root.startFirstPendingTask()
+                onStopRequested: root.stopFocusRequested()
                 // 仪表盘不承担目标设置：引导链接直接送用户去今日任务页。
                 onGoalSetupRequested: root.todayPageRequested()
                 onHideRequested: root.setTimerPanelVisible(false)
@@ -900,6 +941,7 @@ Item {
 
     EditTaskDialog {
         id: editTaskDialog
+        maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 
         parent: root
         categoryManagerRef: root.categoryManagerRef

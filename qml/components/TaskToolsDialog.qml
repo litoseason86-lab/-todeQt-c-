@@ -201,6 +201,7 @@ Dialog {
     }
     EditTaskDialog {
         id: taskEditor
+        maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
         parent: root.parent
         categoryManagerRef: root.categoryManagerRef
         taskSubmitter: function(id, title, category, date, minutes, notes) {

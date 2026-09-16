@@ -10,6 +10,11 @@ import "../LogicalDay.js" as LogicalDay
 Popup {
     id: root
 
+    // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
+
     // 输入框字色必须接管：Basic 风格默认 palette.text 写死深灰，夜间主题下看不见。
     palette.text: Theme.inputInk
     palette.placeholderText: Theme.inputPlaceholderInk
@@ -95,6 +100,8 @@ Popup {
     }
 
     function submit() {
+        if (root.submissionClosed)
+            return false
         var name = nameField.text.trim();
         if (name.length === 0 || name.length > 50) {
             errorLabel.text = "目标名称长度必须在1-50字符之间";
@@ -246,7 +253,7 @@ Popup {
 
             background: Rectangle {
                 color: Theme.surfaceRaised
-                border.color: errorLabel.text.length > 0 && nameField.activeFocus ? Theme.dangerBorder : (nameField.activeFocus ? Theme.accent : Theme.border)
+                border.color: errorLabel.text.length > 0 && nameField.activeFocus ? Theme.dangerBorder : (nameField.activeFocus ? Theme.focusRing : Theme.border)
                 border.width: nameField.activeFocus ? 2 : 1
                 radius: Theme.radiusMd
             }
@@ -280,7 +287,7 @@ Popup {
 
             background: Rectangle {
                 color: Theme.surfaceRaised
-                border.color: errorLabel.text.length > 0 && dateField.activeFocus ? Theme.dangerBorder : (dateField.activeFocus ? Theme.accent : Theme.border)
+                border.color: errorLabel.text.length > 0 && dateField.activeFocus ? Theme.dangerBorder : (dateField.activeFocus ? Theme.focusRing : Theme.border)
                 border.width: dateField.activeFocus ? 2 : 1
                 radius: Theme.radiusMd
             }

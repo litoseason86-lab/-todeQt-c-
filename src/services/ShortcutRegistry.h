@@ -1,6 +1,7 @@
 #ifndef SHORTCUTREGISTRY_H
 #define SHORTCUTREGISTRY_H
 
+#include <QHash>
 #include <QKeySequence>
 #include <QObject>
 #include <QString>
@@ -86,12 +87,28 @@ signals:
     void globalRegistrationFailed(const QString& actionId, const QString& title);
 
 private:
+    // 一个动作最终生效的键位。conflictTitle 非空表示它想用的键被那个动作占着，
+    // 只好让路（此时 sequence 为空）；设置页据此说明原因，而不是显示成「已停用」。
+    struct Resolution
+    {
+        QString sequence;
+        QString conflictTitle;
+    };
+
     static const QVector<ShortcutActionDefinition>& definitions();
     const ShortcutActionDefinition* findDefinition(const QString& actionId) const;
-    QVariantMap describe(const ShortcutActionDefinition& definition) const;
+    QVariantMap describe(const ShortcutActionDefinition& definition,
+                         const Resolution& resolution) const;
+    // 所有动作一起算生效键位。键位规则只在这一处落实，读取、保存、恢复默认、
+    // 从备份恢复、升级新增默认键都走它，不会再出现「保存时挡住、读取时放行」。
+    QHash<QString, Resolution> resolveAll() const;
+    // 这个动作「想用」的键位：合法的用户覆盖值，否则出厂默认。explicitChoice 标记是不是用户亲手选的。
+    QString requestedSequence(const ShortcutActionDefinition& definition, bool* explicitChoice) const;
     // 校验一组键能不能作为快捷键：必须带 ⌘/⌃/⌥ 之一，且主键不能是修饰键本身。
     // 返回空串表示合法，否则是中文原因。
     static QString validate(const QKeySequence& sequence);
+    // 在 validate 之上再加动作自身的要求：全局热键至少两个修饰键。
+    static QString validateFor(const ShortcutActionDefinition& definition, const QKeySequence& sequence);
     // 全局动作的注册/注销收敛在这里；后端缺席时是安全的空操作。
     void syncGlobalHotkey(const ShortcutActionDefinition& definition);
     void syncAllGlobalHotkeys();

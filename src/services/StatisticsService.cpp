@@ -1159,6 +1159,25 @@ QVariantMap StatisticsService::weeklyAggregates(const QDate& weekStart, const QD
                      planned > 0 ? static_cast<double>(focusedMinutes) * 100.0 / planned : 0.0);
         subjectList.append(entry);
     }
+    // 分科目取整会丢掉不足一分钟的余数。按余数从大到小分配合计差额，
+    // 保证各科目显示分钟之和等于总分钟，最多给每科目补一分钟，原始秒数不变。
+    int displayedMinutes = 0;
+    for (const QVariant& subject : subjectList) {
+        displayedMinutes += subject.toMap().value(QStringLiteral("focusedMinutes")).toInt();
+    }
+    std::stable_sort(subjectList.begin(), subjectList.end(), [](const QVariant& a, const QVariant& b) {
+        return a.toMap().value(QStringLiteral("focusedSeconds")).toInt() % 60
+            > b.toMap().value(QStringLiteral("focusedSeconds")).toInt() % 60;
+    });
+    const int remainder = focusedSeconds / 60 - displayedMinutes;
+    for (int index = 0; index < remainder && index < subjectList.size(); ++index) {
+        QVariantMap entry = subjectList.at(index).toMap();
+        const int minutes = entry.value(QStringLiteral("focusedMinutes")).toInt() + 1;
+        const int planned = entry.value(QStringLiteral("planned")).toInt();
+        entry[QStringLiteral("focusedMinutes")] = minutes;
+        entry[QStringLiteral("rate")] = planned > 0 ? minutes * 100.0 / planned : 0.0;
+        subjectList[index] = entry;
+    }
     // 计划多的科目排前，便于对账阅读。
     std::sort(subjectList.begin(), subjectList.end(), [](const QVariant& a, const QVariant& b) {
         const QVariantMap ma = a.toMap();

@@ -305,6 +305,43 @@ TestCase {
         compare(timerPomodoroText.text, "今日已专注 2 个番茄")
     }
 
+    function test_undoWindowPreviewsTaskCountsWithoutTouchingFocusTime() {
+        // 删除后有 5 秒撤销窗口，这段时间里行已经从列表消失，但数据库里还在。
+        // 「今日任务完成」若继续读数据库的 7/10，用户就会看到「列表里 2 条、卡片说 3 条」
+        // 这种对不上的数——所以撤销窗口内任务数按当前可见列表预览。
+        // 专注时长是另一回事：那是已经发生的历史，不能因为删了个任务就往回减。
+        taskManager.todayTasksData = [
+            { id: 1, title: "背单词", completed: true },
+            { id: 2, title: "刷题", completed: true },
+            { id: 3, title: "看论文", completed: false }
+        ]
+        statisticsService.todayStatsData = {
+            totalDuration: 9180, completedTasks: 2, totalTasks: 3,
+            completionRate: 2 / 3, sessionCount: 5, pomodoroCount: 2
+        }
+
+        var view = createTemporaryObject(dashboardComponent, testCase)
+        verify(view)
+        var card = findChild(view, "dashboardTaskCompletionCard")
+        verify(card)
+        compare(card.value, "2 / 3")
+        compare(card.subtitle, "完成率 67%")
+
+        // 删掉一条已完成的任务：撤销窗口内应当按 1/2 预览。
+        view.pendingDeleteTaskId = 2
+        view.refresh()
+        compare(card.value, "1 / 2")
+        compare(card.subtitle, "完成率 50%")
+        // 专注时长仍来自已保存的记录，不随撤销窗口变化。
+        compare(findChild(view, "todayFocusDurationCard").value, "2.6")
+
+        // 撤销：数字回到数据库口径。
+        view.pendingDeleteTaskId = -1
+        view.refresh()
+        compare(card.value, "2 / 3")
+        compare(card.subtitle, "完成率 67%")
+    }
+
     // 星期名必须是中文。Qt.formatDate 传格式字符串时不查区域设置，"dddd" 恒定输出
     // "Sunday"，会拼出「2026年7月12日 Sunday」；这条用例把中文星期钉死。
     function test_dateTextUsesChineseWeekday() {
@@ -830,25 +867,24 @@ TestCase {
         compare(startSpy.count, 1)
     }
 
-    function test_timer_panel_stop_resets_pomodoro_cycle() {
+    function test_timer_panel_stop_only_requests_and_never_stops_timer_itself() {
         var panel = createTemporaryObject(timerPanelComponent, testCase)
         verify(panel)
         var stopButton = findChild(panel, "dashboardTimerStopButton")
         verify(stopButton)
+        var stopSpy = createTemporaryObject(spyComponent, testCase,
+                                            { target: panel, signalName: "stopRequested" })
 
-        // 番茄阶段的「结束」= 结束整轮循环：连续计数必须归零，与专注页同语义。
-        focusTimer.mode = 1
-        focusTimer.phase = 1
+        // 面板曾直接调 stopFocus()，绕过了超长自由专注的确认。现在它只发意图，
+        // 结束规则（确认、番茄计数归零、失败提示）由 MainWindow 交给专注页的单点入口，
+        // 那条动线在 tst_focus_start_flow 的 test_dashboardStop* 里验证。
+        focusTimer.mode = 0
+        focusTimer.phase = 0
         focusTimer.hasActiveSession = true
         stopButton.clicked()
-        compare(focusTimer.stopCalls, 1)
-        compare(focusTimer.resetCountCalls, 1)
-
-        // 自由专注不涉及番茄计数，结束时不应触碰。
-        focusTimer.phase = 0
-        stopButton.clicked()
-        compare(focusTimer.stopCalls, 2)
-        compare(focusTimer.resetCountCalls, 1)
+        compare(stopSpy.count, 1)
+        compare(focusTimer.stopCalls, 0)
+        compare(focusTimer.resetCountCalls, 0)
     }
 
     function test_liquid_glass_effect_and_solid_fallback() {
@@ -884,6 +920,36 @@ TestCase {
         tryCompare(loader, "active", false, 3000)
         compare(backdrop.fallbackActive, true)
         verify(backdrop.shaderError.length > 0)
+    }
+
+
+    Component { id: geometryParentComponent; Item {} }
+
+    function test_frostCoordinatesFollowAncestorMovement() {
+        var container = createTemporaryObject(geometryParentComponent, testCase, { x: 10, y: 20 })
+        var panel = createTemporaryObject(timerPanelComponent, container, { wallpaperRef: wallpaperSample })
+        // QML 的 rect 包装对象会跟随原属性更新；复制数值才能拿到移动前的快照。
+        var beforeX = Number(panel.frostRect.x)
+        var beforeY = Number(panel.frostRect.y)
+        container.x += 120
+        container.y += 35
+        compare(panel.frostRect.x, beforeX + 120)
+        compare(panel.frostRect.y, beforeY + 35)
+    }
+
+    function test_narrowDashboardKeepsTaskAndStatCardsInside() {
+        var view = createTemporaryObject(dashboardComponent, testCase, { width: 620 })
+        verify(view)
+        wait(50)
+        compare(view.compactLayout, true)
+        compare(view.timerPanelVisible, false)
+        var grid = findChild(view, "dashboardStatsGrid")
+        compare(grid.columns, 2)
+        var taskPanel = findChild(view, "dashboardTaskPanel")
+        verify(taskPanel.width >= 500)
+        var card = findChild(view, "todayFocusDurationCard")
+        verify(card.width >= 190)
+        verify(card.mapToItem(view, card.width, 0).x <= view.width)
     }
 
 }

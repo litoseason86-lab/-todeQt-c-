@@ -482,4 +482,17 @@ TestCase {
         verify(sawDrag, "按住拖动没有进入拖动态")
         compare(view.cursorTaskId, -1)
     }
+
+    function test_twoSpacePressesUndoDuringCompletionAnimation() {
+        clickSidebar("周", "week")
+        var view = weekView()
+        findChild(mainWindow, "weekScroll").forceActiveFocus()
+        view.setCursor(501)
+        keyClick(Qt.Key_Space)
+        keyClick(Qt.Key_Space)
+        compare(taskManager.setCompletedCalls, 2)
+        compare(Boolean(taskManager.weekRows[0].completed), false)
+        compare(view.effectiveCompleted(view.taskById(501)), false)
+    }
+
 }

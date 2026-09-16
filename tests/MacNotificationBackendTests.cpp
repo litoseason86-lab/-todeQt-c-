@@ -10,6 +10,7 @@ private slots:
     void deniedThenReauthorizedQueriesAgainAndDelivers();
     void authorizationQueryFailureDoesNotSubmit();
     void submitFailureKeepsObservedAuthorization();
+    void foregroundNotificationsStillShowBannerAndPlaySound();
 };
 
 void MacNotificationBackendTests::deniedThenReauthorizedQueriesAgainAndDelivers()
@@ -104,6 +105,19 @@ void MacNotificationBackendTests::submitFailureKeepsObservedAuthorization()
     QVERIFY(!success);
     QCOMPARE(reason, QStringLiteral("投递失败"));
     QVERIFY(backend.isAuthorized());
+}
+
+void MacNotificationBackendTests::foregroundNotificationsStillShowBannerAndPlaySound()
+{
+    // 阶段结束时应用默认会先把窗口拉到前台再发通知。系统对前台应用的通知默认静默，
+    // 而投递回调照样报成功、本地提示音也就不补——整个提醒无声无息。
+    // 这里直接调用委托的 willPresent 方法，确认前台也要求横幅和声音。
+    const MacNotificationBackend::ForegroundPresentation presentation =
+        MacNotificationBackend::foregroundPresentationForTesting();
+    QVERIFY(presentation.handled);
+    QVERIFY(presentation.banner);
+    QVERIFY(presentation.list);
+    QVERIFY(presentation.sound);
 }
 
 QTEST_APPLESS_MAIN(MacNotificationBackendTests)

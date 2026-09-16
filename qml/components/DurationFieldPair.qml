@@ -98,7 +98,9 @@ RowLayout {
         selectByMouse: true
         horizontalAlignment: TextInput.AlignHCenter
         inputMethodHints: Qt.ImhDigitsOnly
-        maximumLength: 2
+        // 位数跟着上限走，不能写死两位：目标上限是 1000 小时，写死两位时
+        // reload() 灌进 "416" 会被输入框截成 "41"，用户只改标题保存就把目标量改小了。
+        maximumLength: Math.max(1, String(root.maximumHours).length)
         font.pixelSize: Theme.fontMd
         color: Theme.inkStrong
         Accessible.name: root.accessiblePrefix + qsTr("小时")
@@ -112,7 +114,7 @@ RowLayout {
             radius: Theme.radiusMd
             color: Theme.surfaceSunken
             border.width: hourField.activeFocus ? 2 : 1
-            border.color: hourField.activeFocus ? Theme.accent : Theme.borderSubtle
+            border.color: hourField.activeFocus ? Theme.focusRing : Theme.borderSubtle
         }
     }
 
@@ -147,7 +149,7 @@ RowLayout {
             radius: Theme.radiusMd
             color: Theme.surfaceSunken
             border.width: minuteField.activeFocus ? 2 : 1
-            border.color: minuteField.activeFocus ? Theme.accent : Theme.borderSubtle
+            border.color: minuteField.activeFocus ? Theme.focusRing : Theme.borderSubtle
         }
     }
 

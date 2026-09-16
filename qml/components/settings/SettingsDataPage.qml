@@ -171,7 +171,7 @@ FocusScope {
 
         background: Rectangle {
             color: control.hovered ? Theme.surfaceSunken : "transparent"
-            border.color: control.activeFocus ? Theme.accentInk : "transparent"
+            border.color: control.activeFocus ? Theme.focusRing : "transparent"
             border.width: control.activeFocus ? 2 : 0
             radius: Theme.radiusMd
         }

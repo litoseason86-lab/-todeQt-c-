@@ -1,7 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import ".."
 
@@ -187,6 +187,12 @@ Popup {
     }
 
     function deleteCategory(categoryId) {
+        root.errorText = ""
+        deleteConfirmation.categoryId = Number(categoryId)
+        deleteConfirmation.open()
+    }
+
+    function commitCategoryDeletion(categoryId) {
         if (!root.manager || !root.manager.canDeleteCategory || !root.manager.deleteCategory) {
             root.errorText = "科目服务不可用"
             return
@@ -197,7 +203,7 @@ Popup {
             return
         }
 
-        // 服务层会先解除任务关联，所以自定义科目可以安全删除。
+        // 用户已确认解除科目关联；服务层在事务中同步更新所有关联表。
         if (!root.manager.deleteCategory(categoryId)) {
             root.errorText = "科目删除失败"
             return
@@ -205,6 +211,59 @@ Popup {
 
         root.errorText = ""
         root.refresh()
+        deleteConfirmation.close()
+    }
+
+    Popup {
+        id: deleteConfirmation
+        objectName: "categoryDeleteConfirmation"
+        property int categoryId: -1
+        parent: root.Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(420, parent ? parent.width - Theme.space32 : 420)
+        padding: Theme.space16
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape
+        background: Rectangle {
+            radius: Theme.radiusMd
+            color: Theme.surfaceRaised
+            border.color: Theme.border
+        }
+        contentItem: ColumnLayout {
+            spacing: Theme.space16
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("删除科目？")
+                textFormat: Text.PlainText
+                color: Theme.inkStrong
+                font.pixelSize: Theme.fontXl
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("任务、目标、例行和课表将失去这个科目关联。记录本身保留，此操作无法撤销。")
+                textFormat: Text.PlainText
+                color: Theme.ink
+                wrapMode: Text.WordWrap
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: root.errorText.length > 0
+                text: root.errorText
+                textFormat: Text.PlainText
+                color: Theme.danger
+                wrapMode: Text.WordWrap
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                PageActionButton { text: qsTr("取消"); onClicked: deleteConfirmation.close() }
+                PageActionButton {
+                    objectName: "confirmCategoryDeleteButton"
+                    text: qsTr("确认删除")
+                    onClicked: root.commitCategoryDeletion(deleteConfirmation.categoryId)
+                }
+            }
+        }
     }
 
     background: Rectangle {
@@ -478,12 +537,22 @@ Popup {
                     background: Rectangle {
                         radius: Theme.radiusSm
                         color: Theme.surface
-                        border.color: categoryNameInput.activeFocus ? Theme.accent : Theme.border
+                        border.color: categoryNameInput.activeFocus ? Theme.focusRing : Theme.border
                         border.width: 1
                     }
 
                     Keys.onReturnPressed: root.saveCategory()
                     Keys.onEnterPressed: root.saveCategory()
+                }
+
+                Label {
+                    objectName: "categoryEditorError"
+                    Layout.fillWidth: true
+                    visible: root.errorText.length > 0
+                    text: root.errorText
+                    textFormat: Text.PlainText
+                    color: Theme.danger
+                    wrapMode: Text.WordWrap
                 }
 
                 ColorPicker {

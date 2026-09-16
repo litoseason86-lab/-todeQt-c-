@@ -24,6 +24,18 @@ Rectangle {
         hideTimer.restart()
     }
 
+    // 只在提示条当前挂着的正是这个动作时收起。发起方的动作已经失效（比如删除已经落库、
+    // 撤销不再可能），但提示条可能早被别的提示顶掉——那时不能把无关的提示误关。
+    function dismissAction(callback) {
+        if (!callback || root.actionCallback !== callback) {
+            return
+        }
+        root.actionCallback = null
+        root.actionText = ""
+        root.shown = false
+        hideTimer.stop()
+    }
+
     function triggerAction() {
         // 先取出回调再关闭提示，避免关闭过程里的外部状态更新把回调清掉。
         var callback = root.actionCallback

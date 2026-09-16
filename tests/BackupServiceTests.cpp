@@ -11,6 +11,7 @@
 #include <QtTest>
 
 #include "../src/services/AppSettings.h"
+#include "../src/services/BackupOperations.h"
 #include "../src/services/BackupService.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusTimer.h"
@@ -145,9 +146,16 @@ private slots:
     void schemaMetadataMismatchIsRejected();
     void restoreCreatesPreRestoreSnapshot();
     void restoreDropsForeignSettingKeysAndKeepsShortcutOverrides();
+    void backupEmbedsOnlyOwnedSettingKeys();
+    void settingsSnapshotSkipsForeignKeysAndApplyLeavesThemAlone();
+    void nativeSettingsDoNotFallBackToGlobalDomain();
     void restoreRefusesOversizedSettingValue();
+    void asyncRestoreRejectsUnsafeSettings_data();
+    void asyncRestoreRejectsUnsafeSettings();
+    void commentedVirtualTableIsRejected();
     void restoreRefusesBackupCarryingTriggers();
     void repeatedRestoresCapPreRestoreSnapshots();
+    void newPreRestoreSnapshotSurvivesOlderSnapshotsWithFutureTimes();
     void failedAsyncPreflightKeepsAllPreRestoreSnapshots_data();
     void failedAsyncPreflightKeepsAllPreRestoreSnapshots();
     void restoreMatchesTaskAndSessionCounts();
@@ -661,6 +669,46 @@ void BackupServiceTests::repeatedRestoresCapPreRestoreSnapshots()
     QVERIFY(autos.isEmpty());
 }
 
+void BackupServiceTests::newPreRestoreSnapshotSurvivesOlderSnapshotsWithFutureTimes()
+{
+    // 以前系统时钟偏快时留下的快照，修改时间和文件名都在「未来」。清理曾按修改时间倒序
+    // 保留前 N 份，刚写好的恢复前快照反而排到最后、当场被删——这次恢复要是失败，
+    // 回滚去拷一个已经不存在的文件，恢复前的数据就彻底没了。
+    QVERIFY(insertTask(QStringLiteral("原始任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    QDir dir(backupsDir());
+    QVERIFY(dir.mkpath(QStringLiteral(".")));
+    const QDateTime future = QDateTime::currentDateTime().addDays(30);
+    QStringList staleNames;
+    for (int i = 0; i < BackupService::kBeforeRestoreRetention; ++i) {
+        const QString name = QStringLiteral("before-restore-20991231-23595%1-000.tomatobackup").arg(i);
+        QFile stale(dir.filePath(name));
+        QVERIFY(stale.open(QIODevice::WriteOnly));
+        stale.write("stale");
+        // 先把缓冲写进磁盘再改时间：否则 close() 时才真正写入，修改时间又被刷回「现在」。
+        QVERIFY(stale.flush());
+        QVERIFY(stale.setFileTime(future.addSecs(i), QFileDevice::FileModificationTime));
+        stale.close();
+        staleNames.append(name);
+    }
+
+    QVERIFY2(BackupService::instance()->restoreBackup(backupFile()),
+             qPrintable(BackupService::instance()->lastError()));
+
+    const QStringList snapshots = dir.entryList(
+        QStringList{QStringLiteral("before-restore-*.tomatobackup")}, QDir::Files);
+    QStringList fresh;
+    for (const QString& name : snapshots) {
+        if (!staleNames.contains(name)) {
+            fresh.append(name);
+        }
+    }
+    QVERIFY2(fresh.size() == 1,
+             qPrintable(QStringLiteral("本次恢复的恢复前快照被清理掉了：%1").arg(snapshots.join(u','))));
+    QCOMPARE(snapshots.size(), BackupService::kBeforeRestoreRetention);
+}
+
 void BackupServiceTests::failedAsyncPreflightKeepsAllPreRestoreSnapshots_data()
 {
     QTest::addColumn<int>("snapshotCount");
@@ -1090,6 +1138,93 @@ void BackupServiceTests::restoreDropsForeignSettingKeysAndKeepsShortcutOverrides
              QStringLiteral("Ctrl+Return"));
 }
 
+// —— 偏好快照只涉及本应用的键（2026-09-15 审查修复）——
+// 生产用的是 macOS 原生偏好，默认开启回退：allKeys() 会把系统全局域的键一起列出来，
+// 文本替换词典、语言、地区……每份备份都夹带了这些个人信息，恢复失败回滚时
+// 还会把它们原样写进应用自己的偏好，从此本应用不再跟随系统设置变化。
+// 测试走 ini 文件碰不到原生回退，所以直接把「外来键」写进 ini 来模拟那份列表。
+
+void BackupServiceTests::backupEmbedsOnlyOwnedSettingKeys()
+{
+    {
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.setValue(QStringLiteral("focus/workMinutes"), 42);
+        settings.setValue(QStringLiteral("shortcuts/focus.start"), QStringLiteral("Ctrl+Return"));
+        settings.setValue(QStringLiteral("AppleLocale"), QStringLiteral("zh_CN"));
+        settings.setValue(QStringLiteral("NSUserDictionaryReplacementItems"),
+                          QStringLiteral("私人文本替换"));
+        settings.setValue(QStringLiteral("backup/autoEnabled"), true);
+        settings.sync();
+    }
+    QVERIFY(insertTask(QStringLiteral("偏好过滤任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    QStringList embeddedKeys;
+    const QString connection = QStringLiteral("EmbeddedKeysProbe");
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery rows(db);
+        QVERIFY(rows.exec(QStringLiteral("SELECT key FROM backup_settings")));
+        while (rows.next()) {
+            embeddedKeys.append(rows.value(0).toString());
+        }
+        rows.finish();
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+
+    QVERIFY(embeddedKeys.contains(QStringLiteral("focus/workMinutes")));
+    QVERIFY(embeddedKeys.contains(QStringLiteral("shortcuts/focus.start")));
+    QVERIFY2(!embeddedKeys.contains(QStringLiteral("AppleLocale")),
+             "系统全局域的键被嵌进了备份文件");
+    QVERIFY2(!embeddedKeys.contains(QStringLiteral("NSUserDictionaryReplacementItems")),
+             "用户的文本替换词典被嵌进了备份文件");
+    // 自动备份策略属于本机，恢复时本来就不用它，不必随备份带走。
+    QVERIFY(!embeddedKeys.contains(QStringLiteral("backup/autoEnabled")));
+}
+
+void BackupServiceTests::settingsSnapshotSkipsForeignKeysAndApplyLeavesThemAlone()
+{
+    {
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.setValue(QStringLiteral("focus/workMinutes"), 42);
+        settings.setValue(QStringLiteral("backup/autoEnabled"), false);
+        settings.setValue(QStringLiteral("AppleLanguages"), QStringLiteral("zh-Hans"));
+        settings.sync();
+    }
+
+    bool ok = false;
+    const QVariantMap snapshot = BackupService::instance()->currentSettingsSnapshot(&ok);
+    QVERIFY(ok);
+    QCOMPARE(snapshot.value(QStringLiteral("focus/workMinutes")).toInt(), 42);
+    // 回滚要用它恢复本机的自动备份策略，所以 backup/ 要留在快照里。
+    QVERIFY(snapshot.contains(QStringLiteral("backup/autoEnabled")));
+    QVERIFY2(!snapshot.contains(QStringLiteral("AppleLanguages")),
+             "设置快照带上了外来键，回滚时会被写进应用自己的偏好");
+
+    // 写回快照只替换本应用的键：不认识的键既不写入，也不删除——
+    // 原生偏好里还有 Cocoa 自己记的窗口位置之类，清空整个域会把它们一起抹掉。
+    QVariantMap values;
+    values.insert(QStringLiteral("focus/workMinutes"), 25);
+    QVERIFY(BackupService::instance()->applySettingsSnapshot(values));
+
+    QSettings after(settingsPath(), QSettings::IniFormat);
+    QCOMPARE(after.value(QStringLiteral("focus/workMinutes")).toInt(), 25);
+    QVERIFY(!after.contains(QStringLiteral("backup/autoEnabled")));
+    QCOMPARE(after.value(QStringLiteral("AppleLanguages")).toString(), QStringLiteral("zh-Hans"));
+}
+
+void BackupServiceTests::nativeSettingsDoNotFallBackToGlobalDomain()
+{
+    // 空路径 = 生产用的原生偏好。只检查回退开关，不读写任何真实偏好。
+    const std::unique_ptr<QSettings> settings = BackupOperations::openSettings(QString());
+    QVERIFY(settings);
+    QVERIFY2(!settings->fallbacksEnabled(),
+             "原生偏好开着回退，allKeys() 会列出系统全局域的键");
+}
+
 void BackupServiceTests::restoreRefusesOversizedSettingValue()
 {
     QVERIFY(insertTask(QStringLiteral("原始任务")) > 0);
@@ -1151,4 +1286,65 @@ void BackupServiceTests::restoreRefusesBackupCarryingTriggers()
     // 期望：拒绝恢复。备份是数据，不是可信的数据库程序。
     QVERIFY2(!BackupService::instance()->restoreBackup(backupFile()),
              "带 Trigger 的备份被接受了");
+}
+
+void BackupServiceTests::asyncRestoreRejectsUnsafeSettings_data()
+{
+    QTest::addColumn<QByteArray>("blob");
+    QByteArray nested;
+    QDataStream stream(&nested, QIODevice::WriteOnly);
+    // 直接构造线性字节，测试本身也不递归创建或销毁深层 QVariant。
+    for (int i = 0; i < 6000; ++i) {
+        stream << quint32(QMetaType::QVariantList) << quint8(0) << quint32(1);
+    }
+    stream << QVariant(1);
+    QTest::newRow("deep-list") << nested;
+    QByteArray hugeString;
+    QDataStream header(&hugeString, QIODevice::WriteOnly);
+    header << quint32(QMetaType::QString) << quint8(0) << quint32(0x7ffffff0);
+    QTest::newRow("forged-string-length") << hugeString;
+    QByteArray scalar;
+    QDataStream scalarStream(&scalar, QIODevice::WriteOnly);
+    scalarStream << QVariant(42);
+    QTest::newRow("trailing-bytes") << (scalar + QByteArray("garbage"));
+}
+
+void BackupServiceTests::asyncRestoreRejectsUnsafeSettings()
+{
+    QFETCH(QByteArray, blob);
+    QVERIFY(insertTask(QStringLiteral("安全保留")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    const QString connection = QStringLiteral("UnsafeSettingsInject");
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery query(db);
+        query.prepare(QStringLiteral("INSERT OR REPLACE INTO backup_settings VALUES (:key, :value)"));
+        query.bindValue(QStringLiteral(":key"), QStringLiteral("profile/nickname"));
+        query.bindValue(QStringLiteral(":value"), blob);
+        QVERIFY(query.exec());
+    }
+    QSqlDatabase::removeDatabase(connection);
+    QSignalSpy completed(BackupService::instance(), &BackupService::restoreCompleted);
+    BackupService::instance()->requestRestore(backupFile());
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(!completed.first().at(0).toBool());
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+}
+
+void BackupServiceTests::commentedVirtualTableIsRejected()
+{
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    const QString connection = QStringLiteral("VirtualTableInject");
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery query(db);
+        QVERIFY2(query.exec(QStringLiteral("CREATE VIRTUAL /* comment */ TABLE extra USING fts5(body)")),
+                 qPrintable(query.lastError().text()));
+    }
+    QSqlDatabase::removeDatabase(connection);
+    QVERIFY(!BackupService::instance()->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool());
 }

@@ -122,7 +122,14 @@ void TrayController::requestStop()
         emit longFreeFocusStopRequested();
         return;
     }
-    m_timer->stopFocus();
+    // stopFocus() 会把模式复位，判断轮次要用收尾前的模式。
+    const bool wasPomodoro = m_timer->mode() == FocusTimer::PomodoroMode;
+    // 只有收尾成功才重置轮次；失败时仍保留原会话，允许重试。
+    // 口径与专注页、仪表盘一致：只有结束番茄循环才归零连续计数，
+    // 自由专注与主动休息不打断已攒下的番茄轮次。
+    if (m_timer->stopFocus() && wasPomodoro) {
+        m_timer->resetPomodoroCount();
+    }
 }
 
 void TrayController::requestShowWindow()

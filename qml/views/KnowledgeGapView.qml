@@ -243,6 +243,16 @@ Item {
         }
     }
 
+    Connections {
+        target: root.categoryManagerRef
+        ignoreUnknownSignals: true
+
+        function onCategoriesChanged() {
+            if (root.pageActive)
+                root.reload()
+        }
+    }
+
     RefreshCoalescer {
         id: refreshCoalescer
 
@@ -331,7 +341,7 @@ Item {
             background: Rectangle {
                 color: Theme.surfaceRaised
                 radius: Theme.radiusMd
-                border.color: searchField.activeFocus ? Theme.accent : Theme.border
+                border.color: searchField.activeFocus ? Theme.focusRing : Theme.border
                 border.width: searchField.activeFocus ? 2 : 1
             }
 

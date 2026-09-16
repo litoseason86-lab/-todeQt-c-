@@ -2,8 +2,11 @@
 
 #include <QDate>
 #include <QDir>
+#include <QFileInfo>
+#include <QStandardPaths>
 #include <QFile>
 #include <QSignalSpy>
+#include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QTemporaryDir>
 
@@ -35,8 +38,10 @@ private slots:
 
     // —— DatabaseManager ——
     void databaseChangedSignalFiresOnEveryInitialize();
+    void defaultDatabasePathIsTheOneInitializeActuallyOpens();
     void futureSchemaIsRejectedBeforeAnyMutation();
     void migrationBackupsArePrunedToThree();
+    void newMigrationSnapshotSurvivesOlderSnapshotsWithFutureTimes();
 
     // —— CategoryManager：输入校验矩阵与重复数据 ——
     void categoryColorValidationMatrix();
@@ -204,6 +209,57 @@ void CoreLogicTests::countdownModelReferenceDateChangeSignalsDaysRemainingOnly()
     QCOMPARE(model.data(model.index(0), CountdownModel::DaysRemainingRole).toInt(), 9);
 }
 
+namespace {
+
+// QStandardPaths 的测试模式是进程级全局开关：开着时 AppDataLocation 指向
+// ~/.qttest 下的沙箱目录。断言失败会直接从用例返回，必须用析构函数保证关掉，
+// 否则后面的用例会在沙箱路径上跑，症状还离现场很远。
+class StandardPathsTestMode
+{
+public:
+    StandardPathsTestMode() { QStandardPaths::setTestModeEnabled(true); }
+    ~StandardPathsTestMode() { QStandardPaths::setTestModeEnabled(false); }
+};
+
+} // namespace
+
+void CoreLogicTests::defaultDatabasePathIsTheOneInitializeActuallyOpens()
+{
+    // 启动失败窗口靠 defaultDatabasePath() 告诉用户数据在哪。只断言它「长得像」
+    // 应用数据目录下的 pomodoro.db 不够：initialize() 哪天换条路径，窗口就会指向
+    // 一个空目录，而这种断言照样绿。所以这里真的用无参 initialize() 打开一次，
+    // 再回读实际连接的数据库文件，把两者钉成同一个。
+    // 迁移快照 pomodoro_backup_*.db 与数据库同目录，给出目录即同时指出两者位置。
+    StandardPathsTestMode testMode;
+
+    // init() 已经在临时目录上打开了一个库，先让开。
+    DatabaseManager::instance()->close();
+
+    const QString expected = DatabaseManager::defaultDatabasePath();
+    QVERIFY(!expected.isEmpty());
+    QCOMPARE(QFileInfo(expected).fileName(), QStringLiteral("pomodoro.db"));
+    // 测试模式下这条路径必须落在沙箱里，绝不能碰用户真实的数据库。
+    QVERIFY2(expected.contains(QStringLiteral(".qttest")),
+             qPrintable(QStringLiteral("测试模式没有生效，路径是 ") + expected));
+
+    // 上一次运行的残留会让「文件存在」失去意义，先清干净。
+    const QDir dataDir = QFileInfo(expected).absoluteDir();
+    if (dataDir.exists()) {
+        QVERIFY(QDir(dataDir).removeRecursively());
+    }
+    QVERIFY(!QFileInfo::exists(expected));
+
+    QVERIFY(DatabaseManager::instance()->initialize());
+
+    // 回读实际连接的文件：无参 initialize() 打开的必须正是这条路径。
+    QCOMPARE(QFileInfo(DatabaseManager::instance()->database().databaseName()).absoluteFilePath(),
+             QFileInfo(expected).absoluteFilePath());
+    QVERIFY(QFileInfo::exists(expected));
+
+    DatabaseManager::instance()->close();
+    QVERIFY(QDir(dataDir).removeRecursively());
+}
+
 void CoreLogicTests::databaseChangedSignalFiresOnEveryInitialize()
 {
     QSignalSpy changedSpy(DatabaseManager::instance(), &DatabaseManager::databaseChanged);
@@ -285,6 +341,42 @@ void CoreLogicTests::migrationBackupsArePrunedToThree()
     const QStringList backups = dir.entryList(
         QStringList{QStringLiteral("pomodoro_backup_*.db")}, QDir::Files);
     // 清理策略：任何时刻最多保留最近 3 份迁移备份，防止数据目录被悄悄塞满。
+    QCOMPARE(backups.size(), 3);
+}
+
+void CoreLogicTests::newMigrationSnapshotSurvivesOlderSnapshotsWithFutureTimes()
+{
+    DatabaseManager::instance()->close();
+
+    // 时钟偏快时留下的迁移快照，修改时间在「未来」。按修改时间保留最近三份时，
+    // 本次迁移前刚拍的快照会排在最后被删，迁移若出问题就没有原始数据可以找回。
+    const QDir dir(m_tempDir->path());
+    const QDateTime future = QDateTime::currentDateTime().addDays(30);
+    QStringList staleNames;
+    for (int i = 0; i < 3; ++i) {
+        const QString name = QStringLiteral("pomodoro_backup_20991231_23595%1_000.db").arg(i);
+        QFile fake(dir.filePath(name));
+        QVERIFY(fake.open(QIODevice::WriteOnly));
+        fake.write("legacy backup");
+        // 先把缓冲写进磁盘再改时间：否则 close() 时才真正写入，修改时间又被刷回「现在」。
+        QVERIFY(fake.flush());
+        QVERIFY(fake.setFileTime(future.addSecs(i), QFileDevice::FileModificationTime));
+        fake.close();
+        staleNames.append(name);
+    }
+
+    QVERIFY(DatabaseManager::instance()->initialize(dir.filePath(QStringLiteral("future.sqlite"))));
+
+    const QStringList backups = dir.entryList(
+        QStringList{QStringLiteral("pomodoro_backup_*.db")}, QDir::Files);
+    QStringList fresh;
+    for (const QString& name : backups) {
+        if (!staleNames.contains(name)) {
+            fresh.append(name);
+        }
+    }
+    QVERIFY2(fresh.size() == 1,
+             qPrintable(QStringLiteral("本次迁移前的快照被清理掉了：%1").arg(backups.join(u','))));
     QCOMPARE(backups.size(), 3);
 }
 

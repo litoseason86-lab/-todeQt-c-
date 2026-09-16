@@ -7,6 +7,7 @@ TestCase {
     id: testCase
     name: "SidebarUiOptimization"
     when: windowShown
+    visible: true
     width: 260
     height: 520
 
@@ -309,6 +310,10 @@ TestCase {
 
         sidebar.reduceMotionActive = true
         verify(pulse.pulseAnimationRunning === false, "减动效下状态圆点应停")
+        sidebar.reduceMotionActive = false
+        sidebar.visible = false
+        verify(!pulse.pulseAnimationRunning, "隐藏侧栏必须停动画")
+        sidebar.visible = true
     }
 
     function test_focusStatusShowsFreeElapsedAndPause() {

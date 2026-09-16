@@ -93,11 +93,13 @@ QtObject {
 
     // —— 语义 Semantic（夜间版提亮一档保对比）——
     readonly property color success: darkMode ? "#6fcf73" : "#4caf50"
+    readonly property color successInk: darkMode ? "#6fcf73" : "#347638"
     // 夜间原为 #e0705a，压在 surfaceRaised(#332c22) 上 4.35:1，差一点点不达正文 AA
     // （倒计时错误横幅的「!」实测踩到）。同色相提亮到 #e1745e 后最差 4.50:1。
     readonly property color danger: darkMode ? "#e1745e" : "#b24f3d"
     readonly property color dangerBorder: darkMode ? "#d97f6c" : "#c46f5f"
-    readonly property color dangerSoft: darkMode ? "#cc8a76" : "#b37562"
+    // 删除链接也使用此色作为正文，浅色值需能在纸面背景上保持可读对比。
+    readonly property color dangerSoft: darkMode ? "#cc8a76" : "#9b5544"
 
     // —— 投影 ——（纯黑；透明度由各效果自身属性控制）
     readonly property color shadow: "#000000"

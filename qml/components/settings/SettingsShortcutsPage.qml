@@ -41,6 +41,11 @@ FocusScope {
     // 一行的状态说明。正常行返回空串，这样它保持单行高度——18 个动作里多数是正常的，
     // 让每行都预留说明位会白白多占一屏。
     function statusTextFor(action) {
+        // 想用的键被别的动作占着，只好让路（比如升级新增的默认键撞上已有的自定义键）。
+        // 用户从没关过它，不能说成「已停用」；点「恢复默认」会被拒绝并说明占用者。
+        if (String(action.conflictTitle || "").length > 0) {
+            return "键位与「" + action.conflictTitle + "」重复，暂未生效"
+        }
         if (!action.isDisabled) {
             return action.registered ? "" : "系统未接受这组键，可能已被其他应用占用"
         }

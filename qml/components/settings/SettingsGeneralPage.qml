@@ -86,7 +86,7 @@ FocusScope {
 
                     background: Rectangle {
                         color: Theme.surfaceSunken
-                        border.color: nicknameField.activeFocus ? Theme.accent : Theme.border
+                        border.color: nicknameField.activeFocus ? Theme.focusRing : Theme.border
                         border.width: nicknameField.activeFocus ? 2 : 1
                         radius: Theme.radiusMd
                     }

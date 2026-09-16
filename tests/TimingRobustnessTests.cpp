@@ -157,6 +157,20 @@ void TimingRobustnessTests::sleepPastEndCompletesExactlyOnce()
     // 合盖超过目标后自然完成，落库时长必须是目标 5 分钟而不是实际跨越的 10 分钟。
     QCOMPARE(savedSession.value(0).toInt(), 5 * 60);
     QCOMPARE(savedSession.value(1).toInt(), 1);
+    savedSession.finish();
+
+    // 时长截成了目标，占用的区间也必须跟着收：结束时间写成唤醒时刻的话，记录会画成
+    // 「14:00–17:00 · 25 分钟」，而补录按区间判重叠，这 3 小时里的专注全都补不进去。
+    // 这里的假单调时钟走了 10 分钟、墙钟几乎没动，区间只能靠「开始 + 时长」撑起来。
+    QSqlQuery interval(DatabaseManager::instance()->database());
+    QVERIFY(interval.exec(QStringLiteral("SELECT start_time, end_time FROM focus_sessions")));
+    QVERIFY(interval.next());
+    const QDateTime start = QDateTime::fromString(interval.value(0).toString(), Qt::ISODate);
+    const QDateTime end = QDateTime::fromString(interval.value(1).toString(), Qt::ISODate);
+    QVERIFY(start.isValid() && end.isValid());
+    QVERIFY2(qAbs(start.secsTo(end) - 5 * 60) <= 1,
+             qPrintable(QStringLiteral("区间 %1 秒与时长 300 秒不一致").arg(start.secsTo(end))));
+    interval.finish();
 
     // 再次 tick 不得二次完成（会话已复位，守卫拦截）。
     m_clock.advanceSecs(60);

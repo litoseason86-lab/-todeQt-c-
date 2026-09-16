@@ -62,9 +62,12 @@ private slots:
     // 里程碑去重（核心：修掉 TRACK 100 的可刷 bug）
     void milestoneFiresOnceAndNotAgainOnRefresh();
     void progressRollbackThenRegainDoesNotRefire();
-    void firstRefreshSeedsProgressCacheWithoutEmitting();
+    void existingHistoryDoesNotEmitProgress();
     void progressRollbackThenRegainEmitsProgressAgain();
     void databaseChangeClearsProgressCache();
+    void firstSessionAfterReloadStillEmitsProgress();
+    void firstSessionAfterDayStartChangeStillEmitsProgress();
+    void firstSessionOnNewGoalEmitsProgress();
     void categoryChangeInvalidatesGoalsExactlyOnce();
     void crossingSeveralMilestonesAtOnceReportsOnlyHighest();
     void newGoalWithBackfilledHistoryDoesNotCelebrate();
@@ -612,18 +615,19 @@ void GoalServiceTests::progressRollbackThenRegainDoesNotRefire()
     QCOMPARE(spy.count(), 1);
 }
 
-void GoalServiceTests::firstRefreshSeedsProgressCacheWithoutEmitting()
+void GoalServiceTests::existingHistoryDoesNotEmitProgress()
 {
+    // 建目标之前就有的投入（起始日回填进来的历史）属于基线，不是这次刚推进的。
+    // 基线在建目标时就写好，不靠「第一次刷新先预热」——真实运行时没有那一步。
     GoalService* service = GoalService::instance();
     const int categoryId = addCategory(QStringLiteral("英语"));
     const int taskId = addTask(QStringLiteral("精读"), categoryId);
-    const int goalId = addGoalReturningId(QStringLiteral("英语精读"), categoryId, 100,
-                                          QDate::currentDate().addDays(-1));
-    QVERIFY(goalId > 0);
-
     const QDateTime now = QDateTime::currentDateTime();
     insertSession(taskId, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
     insertSession(taskId, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
+    const int goalId = addGoalReturningId(QStringLiteral("英语精读"), categoryId, 100,
+                                          QDate::currentDate().addDays(-1));
+    QVERIFY(goalId > 0);
 
     QSignalSpy spy(service, &GoalService::goalProgressed);
     service->refreshMilestones();
@@ -643,11 +647,12 @@ void GoalServiceTests::progressRollbackThenRegainEmitsProgressAgain()
     GoalService* service = GoalService::instance();
     const int categoryId = addCategory(QStringLiteral("英语"));
     const int taskId = addTask(QStringLiteral("精读"), categoryId);
+    const QDateTime now = QDateTime::currentDateTime();
+    // 第一段是建目标之前的历史，算进基线。
+    insertSession(taskId, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
     const int goalId = addGoalReturningId(QStringLiteral("英语精读"), categoryId, 100,
                                           QDate::currentDate().addDays(-1));
     QVERIFY(goalId > 0);
-    const QDateTime now = QDateTime::currentDateTime();
-    insertSession(taskId, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
 
     QSignalSpy spy(service, &GoalService::goalProgressed);
     service->refreshMilestones();
@@ -688,6 +693,69 @@ void GoalServiceTests::databaseChangeClearsProgressCache()
     DatabaseManager::instance()->databaseChanged();
     service->refreshMilestones();
     QCOMPARE(spy.count(), 0);
+}
+
+// —— 缓存失效后当场重建基线（2026-09-15 审查修复）——
+// 进度 Toast 要「上一次的投入分钟」才能比较。缓存曾经只清不补：启动、恢复备份、
+// 科目变化、改日界起点之后，第一段专注只会被当成建基线，这一段的 Toast 就没了。
+// 旧用例先手动调一次 refreshMilestones 预热缓存，把问题盖住了——真实运行时没有这一步。
+
+void GoalServiceTests::firstSessionAfterReloadStillEmitsProgress()
+{
+    GoalService* service = GoalService::instance();
+    const int categoryId = addCategory(QStringLiteral("英语"));
+    const int taskId = addTask(QStringLiteral("精读"), categoryId);
+    const QDateTime now = QDateTime::currentDateTime();
+    insertSession(taskId, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
+    const int goalId = addGoalReturningId(QStringLiteral("英语精读"), categoryId, 100,
+                                          QDate::currentDate().addDays(-1));
+    QVERIFY(goalId > 0);
+
+    // 模拟启动或恢复备份：换库广播之后，不做任何预热。
+    DatabaseManager::instance()->databaseChanged();
+
+    QSignalSpy spy(service, &GoalService::goalProgressed);
+    insertSession(taskId, now, kValidPomodoroSeconds, FocusSessionRules::kPomodoroMode);
+    service->refreshMilestones();
+    QCOMPARE(spy.count(), 1);
+    // 存量的那一段已经在基线里，只报这次推进后的累计值。
+    QCOMPARE(spy.first().at(2).toInt(), 2 * kValidSessionMinutes);
+}
+
+void GoalServiceTests::firstSessionAfterDayStartChangeStillEmitsProgress()
+{
+    GoalService* service = GoalService::instance();
+    const int categoryId = addCategory(QStringLiteral("英语"));
+    const int taskId = addTask(QStringLiteral("精读"), categoryId);
+    const int goalId = addGoalReturningId(QStringLiteral("英语精读"), categoryId, 100,
+                                          QDate::currentDate().addDays(-1));
+    QVERIFY(goalId > 0);
+
+    AppSettings::instance()->setDayStartHour(1);
+
+    QSignalSpy spy(service, &GoalService::goalProgressed);
+    insertSession(taskId, QDateTime::currentDateTime(), kValidPomodoroSeconds,
+                  FocusSessionRules::kPomodoroMode);
+    service->refreshMilestones();
+    QCOMPARE(spy.count(), 1);
+}
+
+void GoalServiceTests::firstSessionOnNewGoalEmitsProgress()
+{
+    GoalService* service = GoalService::instance();
+    const int categoryId = addCategory(QStringLiteral("英语"));
+    const int taskId = addTask(QStringLiteral("精读"), categoryId);
+    const int goalId = addGoalReturningId(QStringLiteral("英语精读"), categoryId, 100,
+                                          QDate::currentDate().addDays(-1));
+    QVERIFY(goalId > 0);
+
+    // 建完目标就去专注，中间没有任何刷新。
+    QSignalSpy spy(service, &GoalService::goalProgressed);
+    insertSession(taskId, QDateTime::currentDateTime(), kValidPomodoroSeconds,
+                  FocusSessionRules::kPomodoroMode);
+    service->refreshMilestones();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().at(0).toInt(), goalId);
 }
 
 void GoalServiceTests::categoryChangeInvalidatesGoalsExactlyOnce()

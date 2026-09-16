@@ -176,30 +176,81 @@ const ShortcutActionDefinition* ShortcutRegistry::findDefinition(const QString& 
     return nullptr;
 }
 
-QString ShortcutRegistry::sequenceFor(const QString& actionId) const
+QString ShortcutRegistry::requestedSequence(const ShortcutActionDefinition& definition,
+                                            bool* explicitChoice) const
 {
-    const ShortcutActionDefinition* definition = findDefinition(actionId);
-    if (!definition)
-        return QString();
-
+    *explicitChoice = false;
     // 「有覆盖键」才读覆盖值——空串是合法覆盖，表示用户主动停用了这个动作，
     // 和「从没改过、用默认」是两种不同的状态。
-    if (m_settings && m_settings->hasShortcutOverride(actionId)) {
-        const QString override = m_settings->shortcutOverride(actionId);
-        // 空串就是「已停用」，原样返回。
-        if (override.isEmpty())
+    if (m_settings && m_settings->hasShortcutOverride(definition.id)) {
+        const QString override = m_settings->shortcutOverride(definition.id);
+        if (override.isEmpty()) {
+            *explicitChoice = true;
             return QString();
-        // 非空但解析不出合法组合 = 配置损坏（手工编辑过，或来自格式不同的版本）。
-        // 与 AppSettings 里所有数值项一致：读取时就挡住坏值，回退到默认键位而不是
-        // 把它交给 QML —— 那样会得到一个既显示不出键位、又不算「已停用」的行。
+        }
+        // 非空但不合规 = 配置损坏（手工编辑过、来自格式不同的版本，或被改过的备份）。
+        // 与 AppSettings 里所有数值项一致：读取时就挡住坏值，回退到默认键位，
+        // 而不是把它交给 QML 或注册进系统——保存时拦下的组合，读取时同样不能放行。
         const QKeySequence parsed =
             QKeySequence::fromString(override, QKeySequence::PortableText);
-        if (validate(parsed).isEmpty())
+        const QString invalidReason = validateFor(definition, parsed);
+        if (invalidReason.isEmpty()) {
+            *explicitChoice = true;
             return portableTextOf(parsed);
-        qWarning() << "忽略损坏的快捷键配置:" << actionId << override;
+        }
+        qWarning() << "忽略不合规的快捷键配置:" << definition.id << override << invalidReason;
+    }
+    return definition.defaultSequence;
+}
+
+QHash<QString, ShortcutRegistry::Resolution> ShortcutRegistry::resolveAll() const
+{
+    struct Request
+    {
+        const ShortcutActionDefinition* definition;
+        QString sequence;
+        bool explicitChoice;
+    };
+
+    QVector<Request> requests;
+    QHash<QString, Resolution> result;
+    for (const ShortcutActionDefinition& definition : definitions()) {
+        bool explicitChoice = false;
+        const QString sequence = requestedSequence(definition, &explicitChoice);
+        requests.append({ &definition, sequence, explicitChoice });
+        result.insert(definition.id, Resolution());
     }
 
-    return definition->defaultSequence;
+    // 生效键位不能重复：两个同键的应用内 Shortcut 在 Qt 里判为歧义，两个都不触发；
+    // 和全局热键撞车时，按键在系统层就被全局热键吃掉。所以按两轮分配：
+    // 先分用户亲手选的键，再分出厂默认——升级新增的默认键撞上老用户的自定义键时，
+    // 让路的是默认键。同一轮里按动作清单顺序先到先得，结果与读取顺序无关、每次都一样。
+    // 比较用规范化后的键位（同一组键可能有不同写法），返回值仍保持原来的文本。
+    QHash<QString, QString> ownerTitles;
+    for (const bool explicitPass : { true, false }) {
+        for (const Request& request : requests) {
+            if (request.explicitChoice != explicitPass || request.sequence.isEmpty()) {
+                continue;
+            }
+            const QString identity = portableTextOf(
+                QKeySequence::fromString(request.sequence, QKeySequence::PortableText));
+            const auto owner = ownerTitles.constFind(identity);
+            if (owner != ownerTitles.constEnd()) {
+                result[request.definition->id].conflictTitle = owner.value();
+                continue;
+            }
+            ownerTitles.insert(identity, request.definition->title);
+            result[request.definition->id].sequence = request.sequence;
+        }
+    }
+    return result;
+}
+
+QString ShortcutRegistry::sequenceFor(const QString& actionId) const
+{
+    if (!findDefinition(actionId))
+        return QString();
+    return resolveAll().value(actionId).sequence;
 }
 
 QString ShortcutRegistry::displaySequenceFor(const QString& actionId) const
@@ -211,9 +262,10 @@ QString ShortcutRegistry::displaySequenceFor(const QString& actionId) const
         .toString(QKeySequence::NativeText);
 }
 
-QVariantMap ShortcutRegistry::describe(const ShortcutActionDefinition& definition) const
+QVariantMap ShortcutRegistry::describe(const ShortcutActionDefinition& definition,
+                                       const Resolution& resolution) const
 {
-    const QString portable = sequenceFor(definition.id);
+    const QString portable = resolution.sequence;
     const QKeySequence sequence = QKeySequence::fromString(portable, QKeySequence::PortableText);
     const QKeySequence defaultSequence =
         QKeySequence::fromString(definition.defaultSequence, QKeySequence::PortableText);
@@ -238,6 +290,8 @@ QVariantMap ShortcutRegistry::describe(const ShortcutActionDefinition& definitio
                !portable.isEmpty() && sequence.count() == 1
                    && strongModifierCount(sequence[0].keyboardModifiers()) > 0);
     map.insert(QStringLiteral("isGlobal"), definition.global);
+    // 想用的键被别的动作占着而让路。界面要说「被谁占用」，不能显示成用户自己停用的。
+    map.insert(QStringLiteral("conflictTitle"), resolution.conflictTitle);
     map.insert(QStringLiteral("isDisabled"), portable.isEmpty());
     // 只有全局动作才可能「已保存但系统没接受」；应用内快捷键由 Qt 自己派发，不存在这一状态。
     map.insert(QStringLiteral("registered"),
@@ -248,28 +302,31 @@ QVariantMap ShortcutRegistry::describe(const ShortcutActionDefinition& definitio
 
 QVariantList ShortcutRegistry::actions() const
 {
+    const QHash<QString, Resolution> resolved = resolveAll();
     QVariantList list;
     for (const ShortcutActionDefinition& definition : definitions())
-        list.append(describe(definition));
+        list.append(describe(definition, resolved.value(definition.id)));
     return list;
 }
 
 QVariantList ShortcutRegistry::inAppActions() const
 {
+    const QHash<QString, Resolution> resolved = resolveAll();
     QVariantList list;
     for (const ShortcutActionDefinition& definition : definitions()) {
         if (!definition.global)
-            list.append(describe(definition));
+            list.append(describe(definition, resolved.value(definition.id)));
     }
     return list;
 }
 
 QVariantList ShortcutRegistry::globalActions() const
 {
+    const QHash<QString, Resolution> resolved = resolveAll();
     QVariantList list;
     for (const ShortcutActionDefinition& definition : definitions()) {
         if (definition.global)
-            list.append(describe(definition));
+            list.append(describe(definition, resolved.value(definition.id)));
     }
     return list;
 }
@@ -314,6 +371,19 @@ QString ShortcutRegistry::validate(const QKeySequence& sequence)
     return QString();
 }
 
+QString ShortcutRegistry::validateFor(const ShortcutActionDefinition& definition,
+                                      const QKeySequence& sequence)
+{
+    const QString invalidReason = validate(sequence);
+    if (!invalidReason.isEmpty())
+        return invalidReason;
+    // 全局热键抢的是整个系统的按键，而且没有「焦点在输入框就让路」这层保护——
+    // 单修饰键组合（如 ⌘E、⌘C）会让别的应用里那个键直接失灵。
+    if (definition.global && strongModifierCount(sequence[0].keyboardModifiers()) < 2)
+        return QStringLiteral("全局快捷键至少要两个修饰键（如 ⌃⌥P），避免抢走其他应用的常用按键");
+    return QString();
+}
+
 QString ShortcutRegistry::normalize(int key, int modifiers) const
 {
     // 小键盘位与输入法组切换位不参与快捷键身份：同一个「1」不该因为按的是小键盘就变成另一组键。
@@ -338,10 +408,11 @@ QString ShortcutRegistry::conflictTitleFor(const QString& actionId,
     // 根本收不到事件，所以「全局」和「应用内」不能各自成一套命名空间。
     const QKeySequence candidate =
         QKeySequence::fromString(portableSequence, QKeySequence::PortableText);
+    const QHash<QString, Resolution> resolved = resolveAll();
     for (const ShortcutActionDefinition& definition : definitions()) {
         if (definition.id == actionId)
             continue;
-        const QString existing = sequenceFor(definition.id);
+        const QString existing = resolved.value(definition.id).sequence;
         if (existing.isEmpty())
             continue;
         if (QKeySequence::fromString(existing, QKeySequence::PortableText) == candidate)
@@ -360,15 +431,9 @@ QString ShortcutRegistry::assign(const QString& actionId, const QString& portabl
 
     const QKeySequence sequence =
         QKeySequence::fromString(portableSequence, QKeySequence::PortableText);
-    const QString invalidReason = validate(sequence);
+    const QString invalidReason = validateFor(*definition, sequence);
     if (!invalidReason.isEmpty())
         return invalidReason;
-
-    // 全局热键抢的是整个系统的按键，单修饰键组合（如 ⌘E）会让别的应用彻底用不了那个键。
-    // 全局热键不能用单键，也不能只带一个修饰键：它抢的是整个系统的按键，
-    // 而且没有「焦点在输入框就让路」这层保护——别的应用里那个键会直接失灵。
-    if (definition->global && strongModifierCount(sequence[0].keyboardModifiers()) < 2)
-        return QStringLiteral("全局快捷键至少要两个修饰键（如 ⌃⌥P），避免抢走其他应用的常用按键");
 
     const QString conflict = conflictTitleFor(actionId, portableTextOf(sequence));
     if (!conflict.isEmpty())
@@ -416,6 +481,12 @@ QString ShortcutRegistry::resetToDefault(const QString& actionId)
         return QStringLiteral("未知的快捷键动作");
     if (!m_settings)
         return QStringLiteral("设置不可用，无法保存快捷键");
+
+    // 出厂键可能早被别的动作占用（用户停用本动作后把这组键改给了别人）。
+    // 照样清掉覆盖值的话，本动作会因让路而变成「暂未设置」——提示「已恢复默认」却按不出来。
+    const QString conflict = conflictTitleFor(actionId, definition->defaultSequence);
+    if (!conflict.isEmpty())
+        return QStringLiteral("出厂键位已分配给「") + conflict + QStringLiteral("」，请先修改那一项");
 
     m_writingOwnChange = true;
     const bool saved = m_settings->clearShortcutOverride(actionId);

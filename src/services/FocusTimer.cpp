@@ -485,6 +485,9 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion,
         // 仍完整保留用户实际专注时长。
         duration = qMin(duration, m_targetSeconds);
     }
+    // 截断掉的那段（合盖、卡顿造成的超额）不在专注里：结束时刻要往回推这么多，
+    // 否则记录占用的区间比时长长出一大截。
+    const int overshootSeconds = qMax(0, m_elapsedSeconds - duration);
     if (duration < FocusSessionRules::kMinimumValidDurationSeconds) {
         // 低于 3 分钟的会话视为无效，直接删除 startFocus 预先插入的占位记录，避免历史页出现 0 分钟噪音。
         if (!discardFocusSession()) {
@@ -508,7 +511,8 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion,
     }
 
     // 保存失败时恢复计时器，不假装会话已经正常结束。
-    if (!saveFocusSession(duration, naturalCompletion, correctedDurationSeconds >= 0)) {
+    if (!saveFocusSession(duration, naturalCompletion, correctedDurationSeconds >= 0,
+                          correctedDurationSeconds >= 0 ? 0 : overshootSeconds)) {
         if (wasRunning) {
             m_runSegmentStartNsecs = m_clock->nowNsecs();
             m_timer.start();
@@ -645,7 +649,8 @@ bool FocusTimer::hasActiveTimer() const
 }
 
 bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion,
-                                  bool durationWasCorrected)
+                                  bool durationWasCorrected,
+                                  int overshootSeconds)
 {
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
@@ -670,9 +675,19 @@ bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion,
     // 自相矛盾，更要命的是 FocusHistoryService 的重叠校验按 start_time…end_time 判定，
     // 那整段窗口会被锁死，用户没法再补录这段时间里真实发生的其它专注——而「忘了停、
     // 改完再补录」恰恰是这个修正功能最典型的下一步。区间只会收缩，不可能制造新的重叠。
-    const QDateTime endTime = (durationWasCorrected && m_startTime.isValid())
+    //
+    // 自然到点时被截掉的超额（overshootSeconds）同理：结束时刻取「到点的那一刻」，
+    // 也就是现在往回推超额秒数，不是唤醒后才处理到点的时刻。
+    //
+    // 最后再兜一层：结束时刻不早于「开始 + 时长」。时长来自单调时钟，不受改系统时钟影响，
+    // 起止却是墙钟；计时中把时钟往回拨，写出来的结束会早于开始——这种倒置的记录不再占用
+    // 时间线，之后连改归属都会被「开始或结束时间无效」挡住。
+    QDateTime endTime = (durationWasCorrected && m_startTime.isValid())
         ? m_startTime.addSecs(durationSeconds)
-        : QDateTime::currentDateTime();
+        : QDateTime::currentDateTime().addSecs(-overshootSeconds);
+    if (m_startTime.isValid() && endTime < m_startTime.addSecs(durationSeconds)) {
+        endTime = m_startTime.addSecs(durationSeconds);
+    }
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "UPDATE focus_sessions SET end_time = :endTime, duration = :duration, "

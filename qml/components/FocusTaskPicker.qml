@@ -43,6 +43,14 @@ Item {
         listPopup.open()
     }
 
+    function chooseCurrent() {
+        if (taskList.currentIndex < 0 || taskList.currentIndex >= root.candidates.length)
+            return
+        var task = root.candidates[taskList.currentIndex]
+        listPopup.close()
+        root.taskChosen(Number(task.id), String(task.title || ""))
+    }
+
     function collapse() {
         listPopup.close()
     }
@@ -88,7 +96,7 @@ Item {
             visible: root.interactive && (titleButton.hovered || titleButton.visualFocus || listPopup.opened)
             radius: Theme.radiusMd
             color: Theme.glassHover
-            border.color: titleButton.visualFocus ? Theme.accent : Theme.glassBorder
+            border.color: titleButton.visualFocus ? Theme.focusRing : Theme.glassBorder
             border.width: 1
         }
 
@@ -130,6 +138,13 @@ Item {
             // 聚焦一个什么都选不了的列表等于把死路换个地方。
             if (root.candidates.length === 0) {
                 newTaskField.forceActiveFocus()
+            } else {
+                taskList.currentIndex = 0
+                for (var i = 0; i < root.candidates.length; ++i) {
+                    if (Number(root.candidates[i].id) === root.currentTaskId)
+                        taskList.currentIndex = i
+                }
+                taskList.forceActiveFocus()
             }
         }
 
@@ -161,6 +176,12 @@ Item {
                 visible: root.candidates.length > 0
                 clip: true
                 model: root.candidates
+                activeFocusOnTab: true
+                keyNavigationEnabled: true
+                KeyNavigation.tab: newTaskField
+                Keys.onReturnPressed: root.chooseCurrent()
+                Keys.onEnterPressed: root.chooseCurrent()
+                Keys.onSpacePressed: root.chooseCurrent()
                 spacing: 2
                 boundsBehavior: Flickable.StopAtBounds
 
@@ -168,6 +189,7 @@ Item {
                     id: taskRow
 
                     required property var modelData
+                    required property int index
 
                     readonly property int taskId: Number(taskRow.modelData.id)
                     readonly property bool taskCompleted: Boolean(taskRow.modelData.completed)
@@ -186,6 +208,8 @@ Item {
 
                     background: Rectangle {
                         radius: Theme.radiusSm
+                        border.width: taskList.activeFocus && taskList.currentIndex === taskRow.index ? 2 : 0
+                        border.color: Theme.focusRing
                         color: taskRow.taskId === root.currentTaskId ? Theme.accentFill
                                : (taskRow.hovered ? Theme.glassHover : "transparent")
                     }
@@ -245,7 +269,7 @@ Item {
                     objectName: "focusTaskPickerNewFieldBackground"
                     radius: Theme.radiusMd
                     color: Theme.surfaceRaised
-                    border.color: newTaskField.activeFocus ? Theme.accent : Theme.border
+                    border.color: newTaskField.activeFocus ? Theme.focusRing : Theme.border
                     border.width: newTaskField.activeFocus ? 2 : 1
                 }
 

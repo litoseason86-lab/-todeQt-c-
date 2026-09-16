@@ -70,6 +70,7 @@ private slots:
     void schedulingResolvedGapIsRejected();
     void batchMoveRollsBackWholeSelectionOnBadId();
     void convertToTaskCreatesTaskAndLinksGap();
+    void conversionRejectsOverlongNotesAndSearchIsLiteral();
     void convertToTaskLeavesGapUntouchedWhenTaskInsertFails();
     void convertToTaskReportsLinkedTaskCompletionWithoutResolving();
     void convertToTaskRefusesWhileLinkedTaskIsOpen();
@@ -757,3 +758,24 @@ void KnowledgeGapServiceTests::operationsFailSafelyWhenDatabaseIsClosed()
 
 QTEST_MAIN(KnowledgeGapServiceTests)
 #include "KnowledgeGapServiceTests.moc"
+
+void KnowledgeGapServiceTests::conversionRejectsOverlongNotesAndSearchIsLiteral()
+{
+    auto* service = KnowledgeGapService::instance();
+    const int id = service->captureGap(QStringLiteral("百分号%与下划线_!"), 0, 0);
+    QVERIFY(id > 0);
+    QVERIFY(service->captureGap(QStringLiteral("普通条目"), 0, 0) > 0);
+    for (const QString& needle : {QStringLiteral("%"), QStringLiteral("_"), QStringLiteral("!")}) {
+        const QVariantList rows = service->listGaps(KnowledgeGapService::kFilterAll, 0, needle, 0);
+        QCOMPARE(rows.size(), 1);
+        QCOMPARE(rows.first().toMap().value(QStringLiteral("id")).toInt(), id);
+    }
+    const QString detail(2000, QChar(0x6587));
+    QVERIFY(service->updateGap(id, QStringLiteral("完整原文"), 0, detail, 1, QVariant()));
+    QVERIFY(service->convertToTask(id, logicalToday()) < 0);
+    QCOMPARE(service->getGap(id).value(QStringLiteral("detail")).toString(), detail);
+    QSqlQuery count(DatabaseManager::instance()->database());
+    QVERIFY(count.exec(QStringLiteral("SELECT COUNT(*) FROM tasks")));
+    QVERIFY(count.next());
+    QCOMPARE(count.value(0).toInt(), 0);
+}

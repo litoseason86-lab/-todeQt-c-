@@ -12,6 +12,11 @@ import "../ScheduleWeeks.js" as ScheduleWeeks
 Popup {
     id: root
 
+    // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
+    property bool submissionClosed: false
+    onAboutToShow: root.submissionClosed = false
+    onAboutToHide: root.submissionClosed = true
+
     // 输入框字色必须接管：Basic 风格默认 palette.text 写死深灰，夜间主题下看不见。
     palette.text: Theme.inputInk
     palette.placeholderText: Theme.inputPlaceholderInk
@@ -281,6 +286,8 @@ Popup {
     }
 
     function submit() {
+        if (root.submissionClosed)
+            return false
         var input = root.collectInput(false)
         if (!input) {
             return
@@ -755,7 +762,7 @@ Popup {
         background: Rectangle {
             color: Theme.surfaceRaised
             border.color: styledField.hasError ? Theme.dangerBorder
-                          : (styledField.activeFocus ? Theme.accent : Theme.border)
+                          : (styledField.activeFocus ? Theme.focusRing : Theme.border)
             border.width: styledField.hasError || styledField.activeFocus ? 2 : 1
             radius: Theme.radiusMd
 

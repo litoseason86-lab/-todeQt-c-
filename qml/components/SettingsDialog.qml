@@ -106,7 +106,11 @@ Popup {
         close()
     }
 
-    onOpened: resetPageScroll()
+    onOpened: {
+        resetPageScroll()
+        // 没有子控件获得焦点时，Esc 必须仍进入统一的草稿提交/关闭入口。
+        root.contentItem.forceActiveFocus()
+    }
 
     enter: Transition {
         ParallelAnimation {

@@ -223,6 +223,10 @@ int TaskManager::createTask(const QString& title, const QVariant& dateValue,
         qWarning() << "Failed to add task: title exceeds" << kMaxTitleLength << "characters";
         return -1;
     }
+    if (notes.size() > kMaxNotesLength) {
+        qWarning() << "Failed to add task: notes exceed" << kMaxNotesLength << "characters";
+        return -1;
+    }
 
     const QDate date = normalizeDate(dateValue);
     if (!date.isValid()) {
@@ -264,9 +268,7 @@ int TaskManager::createTask(const QString& title, const QVariant& dateValue,
     query.bindValue(QStringLiteral(":estimated"), clampEstimatedMinutes(estimatedMinutes));
     // 空 QString 是 null，直接绑会写成 NULL 并撞上 notes 的 NOT NULL 约束。
     // 新建任务不带备注是常态，这里统一收敛成空串。
-    const QString trimmedNotes = notes.left(kMaxNotesLength);
-    query.bindValue(QStringLiteral(":notes"),
-                    trimmedNotes.isNull() ? QStringLiteral("") : trimmedNotes);
+    query.bindValue(QStringLiteral(":notes"), notes.isNull() ? QStringLiteral("") : notes);
 
     if (!query.exec() || query.numRowsAffected() != 1) {
         qWarning() << "Failed to add task:" << query.lastError().text();
@@ -451,6 +453,10 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
     // 不能让一次不带备注的重命名把用户写的备注抹掉。空串是明确的“清空备注”，
     // 从 QML 传 "" 即可。两者的区别就靠 isNull 与 isEmpty 分开。
     const bool updateNotes = !notes.isNull();
+    if (updateNotes && notes.size() > kMaxNotesLength) {
+        qWarning() << "Failed to update task: notes exceed" << kMaxNotesLength << "characters";
+        return false;
+    }
 
     QString assignments = QStringLiteral(
         "title = :title, category = :category, category_id = :categoryId, date = :date, "
@@ -478,7 +484,7 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
         query.bindValue(QStringLiteral(":estimated"), clampEstimatedMinutes(estimatedMinutes));
     }
     if (updateNotes) {
-        query.bindValue(QStringLiteral(":notes"), notes.left(kMaxNotesLength));
+        query.bindValue(QStringLiteral(":notes"), notes);
     }
     query.bindValue(QStringLiteral(":id"), taskId);
 

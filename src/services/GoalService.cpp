@@ -39,22 +39,39 @@ GoalService::GoalService(QObject* parent)
     // 避免换库时从两条链路重复发 goalsChanged，导致目标页无意义重查两次。
     connect(CategoryManager::instance(), &CategoryManager::categoriesChanged, this, [this]() {
         m_databaseReady = false;
-        // 科目变化或换库后，目标 id 与进度缓存都可能失效，不能跨状态比较。
+        // 科目变化或换库后，目标 id 与进度缓存都可能失效，不能跨状态比较；
+        // 按新数据当场重建基线，恢复备份后的存量进度不会被当成新增，下一段专注也照常弹 Toast。
         m_lastDoneMinutes.clear();
         if (initializeDatabase()) {
+            rebuildProgressBaseline();
             emit goalsChanged();
         }
     });
     connect(AppSettings::instance(), &AppSettings::dayStartHourChanged, this, [this]() {
         // 逻辑日起点参与所有进度 SQL。口径变化后旧缓存不能继续比较，
-        // 否则下一次专注可能凭空出现 +1，或被旧的较大计数吞掉。
-        m_lastDoneMinutes.clear();
+        // 否则下一次专注可能凭空出现 +1，或被旧的较大计数吞掉；按新口径重建基线。
+        rebuildProgressBaseline();
         emit goalsChanged();
     });
 
     const QSqlDatabase db = DatabaseManager::instance()->database();
-    if (db.isOpen()) {
-        initializeDatabase();
+    if (db.isOpen() && initializeDatabase()) {
+        // 启动时的存量进度就是基线，第一段专注才能和它比出「推进了」。
+        rebuildProgressBaseline();
+    }
+}
+
+void GoalService::rebuildProgressBaseline()
+{
+    m_lastDoneMinutes.clear();
+    bool loadOk = false;
+    const QList<LongGoal> goals = loadGoals(std::nullopt, &loadOk);
+    if (!loadOk) {
+        // 读失败就保持空缓存：下一次刷新只建基线、不会误报，代价只是少弹一次 Toast。
+        return;
+    }
+    for (const LongGoal& goal : goals) {
+        m_lastDoneMinutes.insert(goal.id, goal.doneMinutes);
     }
 }
 
@@ -474,6 +491,8 @@ bool GoalService::addGoal(const QString& title,
         return false;
     }
 
+    // 新目标以建好那一刻的投入为基线（含起始日回填的历史），建完直接去专注也能弹 Toast。
+    m_lastDoneMinutes.insert(newId, goal.doneMinutes);
     emit goalsChanged();
     return true;
 }
