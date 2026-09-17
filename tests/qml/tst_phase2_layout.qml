@@ -121,16 +121,29 @@ TestCase {
             ]
         }
 
-        function getWeekComparison(weekStart) {
+        function getWeekComparison(weekStart, logicalTodayIso) {
             weekComparisonCalls += 1
             lastWeekComparisonStartDate = testCase.isoDateOrEmpty(weekStart)
+            // 与服务契约一致：逻辑今天落在所选周内（当前周）时三项指标都不给涨跌。
+            var start = testCase.isoDateOrEmpty(weekStart)
+            var end = testCase.isoDate(testCase.addDays(weekStart, 6))
+            if (logicalTodayIso >= start && logicalTodayIso <= end) {
+                var none = { hasData: false, displayText: "", trend: 0 }
+                return { periodState: "current", effectiveDays: none, sessionCount: none, duration: none }
+            }
             return {
+                periodState: "ended",
                 effectiveDays: makeComparison("↗ +20% vs 上周", 1),
                 sessionCount: makeComparison("→ 0% vs 上周", 0),
                 duration: makeComparison("↘ -25% vs 上周", -1)
             }
         }
 
+        // 复盘接口是统计页契约的一部分，替身必须提供；这里返回没有可展示内容的成功结果。
+        function getWeeklyReview(weekStart, logicalTodayIso) {
+            return { loadState: "ready", periodState: "current", hasData: false, hasDisplayContent: false,
+                     goal: ({}), todayGoal: ({}), subjects: [], plannedTasks: ({}), facts: [] }
+        }
         function getCategoryStats(startDate, endDate) {
             lastCategoryStartDate = String(startDate)
             lastCategoryEndDate = String(endDate)
@@ -652,11 +665,20 @@ TestCase {
         tryCompare(statisticsService, "weekComparisonCalls", 1, 3000)
         compare(statisticsService.weekComparisonCalls, 1)
         compare(statisticsService.lastWeekComparisonStartDate, isoDate(mondayOf(todaySnapshot)))
-        compare(firstCard.comparisonText, "↗ +20% vs 上周")
+        // 当前周还没过完，拿去比上一整周窗口不一致：三张卡都不显示涨跌。
+        compare(firstCard.showComparison, false)
+        compare(secondCard.showComparison, false)
+        compare(thirdCard.showComparison, false)
+
+        // 上一周已经结束，保留整周比较。
+        statisticsService.resetTracking()
+        statisticsView.goToPreviousPeriod()
+        compare(statisticsService.weekComparisonCalls, 1)
+        compare(firstCard.comparisonText, "↗ +20% vs 上上周")
         compare(firstCard.comparisonTrend, 1)
-        compare(secondCard.comparisonText, "→ 0% vs 上周")
+        compare(secondCard.comparisonText, "→ 0% vs 上上周")
         compare(secondCard.comparisonTrend, 0)
-        compare(thirdCard.comparisonText, "↘ -25% vs 上周")
+        compare(thirdCard.comparisonText, "↘ -25% vs 上上周")
         compare(thirdCard.comparisonTrend, -1)
 
         var weekComparisonText = findChild(thirdCard, "statCardComparisonText")

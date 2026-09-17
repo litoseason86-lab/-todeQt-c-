@@ -205,6 +205,11 @@ TestCase {
             }
         }
 
+        // 复盘接口是统计页契约的一部分，替身必须提供；这里返回没有可展示内容的成功结果。
+        function getWeeklyReview(weekStart, logicalTodayIso) {
+            return { loadState: "ready", periodState: "current", hasData: false, hasDisplayContent: false,
+                     goal: ({}), todayGoal: ({}), subjects: [], plannedTasks: ({}), facts: [] }
+        }
         function getCategoryStats(startDate, endDate) { return [] }
 
         function getMonthStats(year, month) {

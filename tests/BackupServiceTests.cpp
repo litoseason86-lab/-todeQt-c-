@@ -163,6 +163,8 @@ private slots:
     void restorePreservesCountdownGoals();
     void restoreRestoresSettingsValue();
     void restoreRemovesSettingsMissingFromBackup();
+    void restoreBringsBackDailyGoalHistorySnapshot();
+    void restoreOldBackupWithoutGoalHistoryImportsLegacyDateOnly();
     void restoreFailureKeepsOriginalDatabaseIntact();
     void activeTimerBlocksRestore();
     void asyncRestoreReloadsTaskSnapshots();
@@ -865,6 +867,75 @@ void BackupServiceTests::restoreRemovesSettingsMissingFromBackup()
     QSettings restored(settingsPath(), QSettings::IniFormat);
     QVERIFY(!restored.contains(QStringLiteral("appearance/temporaryFutureKey")));
     QCOMPARE(restored.value(QStringLiteral("focus/workMinutes")).toInt(), 42);
+}
+
+void BackupServiceTests::restoreBringsBackDailyGoalHistorySnapshot()
+{
+    {
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.setValue(QStringLiteral("focus/dailyGoalDate"), QStringLiteral("2026-07-20"));
+        settings.setValue(QStringLiteral("focus/dailyGoalMinutes"), 300);
+        settings.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-19"), 240);
+        settings.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-20"), 300);
+        settings.sync();
+    }
+    QVERIFY(insertTask(QStringLiteral("目标历史任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    {
+        // 备份之后本机又设了两天目标。
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.setValue(QStringLiteral("focus/dailyGoalDate"), QStringLiteral("2026-07-22"));
+        settings.setValue(QStringLiteral("focus/dailyGoalMinutes"), 180);
+        settings.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-21"), 200);
+        settings.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-22"), 180);
+        settings.sync();
+    }
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+
+    // 恢复先清掉本机自有键再写回快照：备份之后新增的历史消失，快照里的历史回来，
+    // 与恢复后的专注记录取自同一时刻。
+    QSettings restored(settingsPath(), QSettings::IniFormat);
+    QVERIFY(!restored.contains(QStringLiteral("focus/dailyGoalHistory/2026-07-21")));
+    QVERIFY(!restored.contains(QStringLiteral("focus/dailyGoalHistory/2026-07-22")));
+    QCOMPARE(restored.value(QStringLiteral("focus/dailyGoalHistory/2026-07-19")).toInt(), 240);
+    QCOMPARE(restored.value(QStringLiteral("focus/dailyGoalHistory/2026-07-20")).toInt(), 300);
+
+    // 恢复后重载会发出目标变更信号，统计页据此刷新。
+    AppSettings settings(settingsPath());
+    QSignalSpy changed(&settings, &AppSettings::dailyFocusGoalChanged);
+    settings.reload();
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-22")), 0);
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20")), 300);
+}
+
+void BackupServiceTests::restoreOldBackupWithoutGoalHistoryImportsLegacyDateOnly()
+{
+    {
+        // 旧版本做的备份：只有那一对键，没有按日期的历史。
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.setValue(QStringLiteral("focus/dailyGoalDate"), QStringLiteral("2026-07-20"));
+        settings.setValue(QStringLiteral("focus/dailyGoalMinutes"), 300);
+        settings.sync();
+    }
+    QVERIFY(insertTask(QStringLiteral("旧备份任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    {
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-18"), 100);
+        settings.sync();
+    }
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+
+    // 启动（构造）时只导入旧键明确对应的那一天，不推测补齐其它日期。
+    AppSettings settings(settingsPath());
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20")), 300);
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-18")), 0);
+    QSettings after(settingsPath(), QSettings::IniFormat);
+    QCOMPARE(after.value(QStringLiteral("focus/dailyGoalHistory/2026-07-20")).toInt(), 300);
+    QVERIFY(!after.contains(QStringLiteral("focus/dailyGoalHistory/2026-07-18")));
 }
 
 void BackupServiceTests::restoreFailureKeepsOriginalDatabaseIntact()

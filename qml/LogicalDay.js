@@ -11,7 +11,12 @@ function todayDate(dayStartHour, nowDate) {
 }
 
 function todayIso(dayStartHour, nowDate) {
-    var date = todayDate(dayStartHour, nowDate)
+    return isoOf(todayDate(dayStartHour, nowDate))
+}
+
+// 已经换算好的逻辑日（本地午夜的 Date）转成 yyyy-MM-dd：只取年、月、日三个整数拼接，
+// 不经过 Qt.formatDate 与时区换算，也不再减一次日界。
+function isoOf(date) {
     var month = date.getMonth() + 1
     var day = date.getDate()
     return date.getFullYear() + "-" + (month < 10 ? "0" : "") + month

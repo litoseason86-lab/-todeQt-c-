@@ -1,8 +1,13 @@
 #ifndef APPSETTINGS_H
 #define APPSETTINGS_H
 
+#include <QDate>
+#include <QList>
+#include <QMap>
 #include <QObject>
+#include <QPair>
 #include <QSettings>
+#include <QVariant>
 
 // 用户偏好的唯一入口：QSettings 薄封装。
 // 测试传入独立 ini 文件路径实现隔离；应用运行时用默认构造，读取 main.cpp 设置的组织名和应用名。
@@ -138,6 +143,9 @@ public:
                                           bool showWeekend);
     Q_INVOKABLE int dailyFocusGoalMinutesForDate(const QString& isoDate) const;
     Q_INVOKABLE bool setDailyFocusGoal(const QString& isoDate, int minutes);
+    // 统计层按日期区间读取每日目标（不暴露给 QML）。只返回有合法目标的日期，
+    // 值为该日期最后成功保存的分钟数。
+    QMap<QDate, int> dailyFocusGoalsBetween(const QDate& startDate, const QDate& endDate) const;
 
     // 快捷键自定义：按动作 id 存 QKeySequence 的 PortableText（如 "Ctrl+1"）。
     // 三种状态必须能区分开：键不存在 = 用代码里的默认键位；键存在且非空 = 用户改过；
@@ -219,6 +227,15 @@ private:
     static QString shortcutKey(const QString& actionId);
     void recreateSettingsBackend();
     bool writeValue(const QString& key, const QVariant& value);
+    // 多个键作为一次保存：记下原值与存在性，写入后只 sync 一次；失败时恢复缓存、重建后端、
+    // 发 settingsWriteFailed(errorKey)。成功时不发任何信号，由调用方决定。
+    bool commitSettingsBatch(const QString& errorKey,
+                             const QList<QPair<QString, QVariant>>& writes,
+                             const QStringList& removals);
+    // 旧的一对键合法、而它对应日期的历史键缺失或不同时，把补写项追加到 writes。
+    void appendPendingLegacyGoalSync(QList<QPair<QString, QVariant>>& writes) const;
+    // 启动与 reload() 时执行；值一致时不写盘，失败只发 settingsWriteFailed。
+    void syncLegacyDailyGoalIntoHistory();
     // 删除同样要检查落盘状态：权限问题下 remove 也会静默失败，
     // 「恢复默认」不能在设置文件没变的情况下告诉用户已经改回去了。
     bool removeValue(const QString& key);

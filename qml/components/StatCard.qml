@@ -19,6 +19,10 @@ Rectangle {
     property string comparisonText: ""
     property int comparisonTrend: 0
     property bool showComparison: false
+    // 预留比较行高度：统计页三张卡在今日、本周、本月之间切换，当前周不显示涨跌。
+    // 不预留时卡片在 126 与 104 之间跳，下面的趋势图和饼图会跟着上下移动。
+    property bool reserveComparisonSpace: false
+    readonly property bool comparisonLineShown: root.showComparison && root.comparisonText.length > 0
     // 减少动效默认读全局 appSettings；测试可直接覆盖该属性，不需要构造完整应用上下文。
     // qmllint disable unqualified
     property bool reduceMotionActive: Theme.reduceMotion
@@ -38,7 +42,7 @@ Rectangle {
     }
 
     implicitWidth: root.compact ? 150 : 190
-    implicitHeight: root.showComparison && root.comparisonText.length > 0
+    implicitHeight: root.comparisonLineShown || root.reserveComparisonSpace
                     ? (root.compact ? 108 : 126)
                     : (root.compact ? 86 : 104)
     radius: Theme.radiusLg
@@ -188,8 +192,9 @@ Rectangle {
             objectName: "statCardComparisonText"
 
             Layout.fillWidth: true
-            visible: root.showComparison && root.comparisonText.length > 0
-            text: root.comparisonText
+            // 预留时比较行照常占位、只是文字为空，其余三行的位置与有涨跌时完全一致。
+            visible: root.comparisonLineShown || root.reserveComparisonSpace
+            text: root.comparisonLineShown ? root.comparisonText : ""
             textFormat: Text.PlainText
             font.pixelSize: root.compact ? Theme.fontSm : Theme.fontMd
             color: {

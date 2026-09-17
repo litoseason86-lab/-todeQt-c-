@@ -69,7 +69,8 @@ Item {
     property var monthStats: ({ totalDuration: 0, effectiveDays: 0, sessionCount: 0, completedTasks: 0, totalTasks: 0 })
     property var monthWeeklySummary: []
     property var weekStats: []
-    // 每周复盘数据（仅 week 范围加载）：计划/实际番茄、科目对账、事实与建议。
+    // 每周复盘（仅 week 范围加载）。字段由 StatisticsService.getWeeklyReview 决定，页面只按 loadState
+    // 与 hasDisplayContent 决定卡片出不出现。
     property var weeklyReview: ({})
     property var categoryStats: ({ categories: [], totalDuration: 0 })
     property var taskManagerRef: null
@@ -143,6 +144,19 @@ Item {
             if (!root.pageActive)
                 return
             root.loadError = String(message || "统计数据加载失败")
+        }
+    }
+
+    Connections {
+        // 今日目标改了（今日任务页保存、恢复备份后重载）要重算周复盘的目标块。
+        // 门禁写在处理函数里；页面不活跃时不查询，重新激活时整页刷新。
+        target: root.appSettingsRef
+        ignoreUnknownSignals: true
+
+        function onDailyFocusGoalChanged() {
+            if (!root.pageActive)
+                return
+            refreshCoalescer.request()
         }
     }
 
@@ -382,6 +396,22 @@ Item {
         return root.comparisonForMetric("duration")
     }
 
+    function weeklyReviewError(message) {
+        // 与服务返回的错误结果同形：统计模块一律为空，卡片只显示错误，不能当成空周藏起来。
+        return {
+            loadState: "error",
+            errorMessage: String(message || ""),
+            periodState: "",
+            hasData: false,
+            hasDisplayContent: false,
+            goal: ({}),
+            todayGoal: ({}),
+            subjects: [],
+            plannedTasks: ({}),
+            facts: []
+        }
+    }
+
     function refresh() {
         try {
             root.loadError = ""
@@ -398,11 +428,15 @@ Item {
             } else if (root.currentTimeRange === "week") {
                 var weekStart = new Date(root.selectedWeekStart)
                 var weekEnd = StatFmt.endOfWeek(weekStart)
+                // 本次刷新只生成一个逻辑今天：页面快照已按日界换算过，周比较与复盘收到同一个日期，
+                // 由服务判断当前周／已结束周。导航与标题继续用这份快照，两边不会各读一次时钟而分歧。
+                var logicalTodayIso = LogicalDay.isoOf(root.currentDateSnapshot)
                 root.weekStats = root.statisticsServiceRef.getWeekStats(weekStart)
-                root.weekComparison = root.statisticsServiceRef.getWeekComparison(weekStart)
-                // 测试桩或旧上下文可能未提供复盘接口；缺失时按空复盘处理，不拖垮周统计加载。
-                root.weeklyReview = root.statisticsServiceRef.getWeeklyReview
-                        ? root.statisticsServiceRef.getWeeklyReview(weekStart) : ({})
+                root.weekComparison = root.statisticsServiceRef.getWeekComparison(weekStart, logicalTodayIso)
+                // 复盘接口是契约的一部分：缺失说明接线错了，按错误显示，不当作空复盘隐藏。
+                root.weeklyReview = typeof root.statisticsServiceRef.getWeeklyReview === "function"
+                        ? root.statisticsServiceRef.getWeeklyReview(weekStart, logicalTodayIso)
+                        : root.weeklyReviewError("复盘接口缺失")
                 var weekTotal = root.weekTotalDuration()
 
                 // 多范围卡片复用 todayStats 这个绑定入口，避免 UI 层维护三套重复卡片状态。
@@ -449,7 +483,8 @@ Item {
             root.weekComparison = {}
             root.monthComparison = {}
             root.monthWeeklySummary = []
-            root.weeklyReview = {}
+            // 页面整体刷新异常时复盘同样是错误，不能赋空对象，否则会被当成空周隐藏。
+            root.weeklyReview = root.weeklyReviewError("统计数据加载失败")
             root.categoryStats = { categories: [], totalDuration: 0 }
         }
     }
@@ -699,6 +734,8 @@ Item {
                     objectName: "statisticsPrimaryStatCard"
 
                     Layout.fillWidth: true
+                    // 三种范围、当前周隐藏涨跌时卡片都保持同一高度，下面的图表不跟着跳。
+                    reserveComparisonSpace: true
                     animationDelay: 0
                     showComparison: root.comparisonVisible(root.primaryCardComparison())
                     comparisonText: root.comparisonDisplayText(root.primaryCardComparison())
@@ -729,6 +766,8 @@ Item {
                     objectName: "statisticsSessionCountStatCard"
 
                     Layout.fillWidth: true
+                    // 三种范围、当前周隐藏涨跌时卡片都保持同一高度，下面的图表不跟着跳。
+                    reserveComparisonSpace: true
                     animationDelay: 70
                     showComparison: root.comparisonVisible(root.sessionCountComparison())
                     comparisonText: root.comparisonDisplayText(root.sessionCountComparison())
@@ -752,6 +791,8 @@ Item {
                     objectName: "statisticsTotalDurationStatCard"
 
                     Layout.fillWidth: true
+                    // 三种范围、当前周隐藏涨跌时卡片都保持同一高度，下面的图表不跟着跳。
+                    reserveComparisonSpace: true
                     animationDelay: 140
                     showComparison: root.comparisonVisible(root.durationComparison())
                     comparisonText: root.comparisonDisplayText(root.durationComparison())
@@ -810,10 +851,12 @@ Item {
                 objectName: "statisticsWeeklyReviewCard"
 
                 Layout.fillWidth: true
-                // 复盘只在周视图出现，避免新增一级导航；数据由服务层聚合。
+                // 复盘只在周视图出现。错误态必须显示；加载成功但没有可展示的块时整卡隐藏，
+                // ColumnLayout 不为不可见项留位置，趋势图与饼图之间保持统一列间距。
                 visible: root.currentTimeRange === "week"
+                         && (root.weeklyReview.loadState === "error"
+                             || root.weeklyReview.hasDisplayContent === true)
                 review: root.weeklyReview
-                isCurrentPeriod: root.isCurrentSelectedPeriod
             }
 
             ChartPie {

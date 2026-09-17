@@ -213,6 +213,27 @@ TestCase {
             };
         }
 
+        // 周视图刷新还要这几项；缺了会在刷新里抛异常，被页面捕获后整页显示成加载失败，
+        // 扫到的就不是真实的周视图。
+        function getDayStats(date) {
+            return getTodayStats();
+        }
+
+        function getEffectiveDays(startDate, endDate) {
+            return 0;
+        }
+
+        function getFocusSessionCount(startDate, endDate) {
+            return 0;
+        }
+
+        // 周复盘结果由扫描过程逐个换成不同状态；默认没有可展示内容，不影响其它页面。
+        property var weeklyReviewData: ({ loadState: "ready", hasDisplayContent: false })
+
+        function getWeeklyReview(weekStart, logicalTodayIso) {
+            return weeklyReviewData;
+        }
+
         function getCategoryStats(startDate, endDate) {
             return [];
         }
@@ -394,6 +415,64 @@ TestCase {
     // 已在 2026-08-09 按两套主题对称的做法修掉，不再需要豁免。
     readonly property var knownExceptions: []
 
+    function statisticsViewOf(root) {
+        var chart = findChild(root, "statisticsTrendChart")
+        var node = chart ? chart.parent : null, guard = 0
+        while (node && guard++ < 30) {
+            if (node.currentTimeRange !== undefined && node.weeklyReview !== undefined) {
+                return node
+            }
+            node = node.parent
+        }
+        return null
+    }
+
+    // 复盘卡的三种形态：当前周概览（目标、今日进度、进行中的预计用时任务）、
+    // 已结束周（四种事实都出现）、加载失败。
+    function weeklyReviewStates() {
+        var planned = {
+            inProgress: true,
+            totalPlannedMinutes: 150,
+            totalActualSeconds: 7200,
+            totalActualDisplayMinutes: 120,
+            totalDifferenceDisplayMinutes: -30,
+            totalInvestmentRatioPercent: 80,
+            rows: [
+                { subject: "数学", color: "#d4a574", plannedMinutes: 100, actualSeconds: 3000,
+                  actualDisplayMinutes: 50, differenceDisplayMinutes: -50, investmentRatioPercent: 50 },
+                { subject: "英语", color: "#c9956e", plannedMinutes: 50, actualSeconds: 4200,
+                  actualDisplayMinutes: 70, differenceDisplayMinutes: 20, investmentRatioPercent: 140 }
+            ]
+        }
+        var ended = JSON.parse(JSON.stringify(planned))
+        ended.inProgress = false
+        return [
+            { name: "当前周概览", review: {
+                loadState: "ready", periodState: "current", weekStart: "2026-07-13", weekEnd: "2026-07-19",
+                hasData: true, hasDisplayContent: true,
+                goal: { goalDays: 3, metDays: 2, goalMinutesTotal: 360, actualSecondsTotal: 18000, days: [] },
+                todayGoal: { date: "2026-07-16", goalMinutes: 120, actualSeconds: 3600, progressPercent: 50 },
+                subjects: [], plannedTasks: planned, facts: [] } },
+            { name: "已结束周", review: {
+                loadState: "ready", periodState: "ended", weekStart: "2026-07-06", weekEnd: "2026-07-12",
+                hasData: true, hasDisplayContent: true,
+                goal: { goalDays: 5, metDays: 3, goalMinutesTotal: 600, actualSecondsTotal: 30000, days: [] },
+                todayGoal: {}, subjects: [], plannedTasks: ended,
+                facts: [
+                    { type: "goalShortfall", date: "2026-07-08", goalMinutes: 120, actualSeconds: 3600, ratioPercent: 50 },
+                    { type: "subjectShareChange", subject: "数学", currentSeconds: 36000, previousSeconds: 21600,
+                      currentSharePercent: 60, deltaPoints: 15 },
+                    { type: "estimateShortfall", subject: "数学", plannedMinutes: 100,
+                      actualDisplayMinutes: 50, shortfallDisplayMinutes: 50 },
+                    { type: "estimateOnTrack", ratioPercent: 100 }
+                ] } },
+            { name: "加载失败", review: {
+                loadState: "error", errorMessage: "no such table: focus_sessions", periodState: "ended",
+                hasData: false, hasDisplayContent: false,
+                goal: {}, todayGoal: {}, subjects: [], plannedTasks: {}, facts: [] } }
+        ]
+    }
+
     function isExempt(item) {
         for (var i = 0; i < testCase.knownExceptions.length; ++i) {
             if (String(item.text) === testCase.knownExceptions[i].text) {
@@ -503,6 +582,29 @@ TestCase {
             wait(200)
             walk(mainWindow, tag, Theme.surface, 0)
         }
+        // 统计页默认停在「今日」，复盘卡只在「本周」出现：必须真的切进周视图，
+        // 把当前周概览、已结束周的事实、错误态各扫一遍，否则目标、事实、对账与错误文字全在门禁之外。
+        mainWindow.currentView = "stats"
+        mainWindow.pendingView = "stats"
+        wait(100)
+        var statsView = statisticsViewOf(mainWindow)
+        verify(statsView, "找不到统计页")
+        var reviewCard = findChild(statsView, "statisticsWeeklyReviewCard")
+        verify(reviewCard, "找不到复盘卡")
+        statsView.currentTimeRange = "week"
+        var reviewStates = weeklyReviewStates()
+        for (var r = 0; r < reviewStates.length; ++r) {
+            statisticsService.weeklyReviewData = reviewStates[r].review
+            statsView.refresh()
+            wait(100)
+            // 防止空扫：卡片确实带着这组内容。
+            verify(reviewCard.implicitHeight > 100, reviewStates[r].name)
+            compare(reviewCard.errorState, reviewStates[r].review.loadState === "error", reviewStates[r].name)
+            walk(mainWindow, tag + "周复盘·" + reviewStates[r].name, Theme.surface, 0)
+        }
+        statsView.currentTimeRange = "today"
+        statisticsService.weeklyReviewData = ({ loadState: "ready", hasDisplayContent: false })
+
         // 结束专注/结束休息只在计时态出现，单扫空闲页面永远测不到这些按钮。
         mainWindow.currentView = "focus"
         mainWindow.pendingView = "focus"

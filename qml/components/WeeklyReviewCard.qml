@@ -1,40 +1,91 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Layouts
 import "../Duration.js" as Duration
 import ".."
 
-// 每周复盘卡片：计划 vs 实际、与上周对比、科目对账、确定性事实+建议。
-// 只展示 StatisticsService.getWeeklyReview 给出的数据，不在 QML 里做任何统计计算。
+// 每周复盘卡片。当前周只看概览（已结束日的目标达成、今日进度、进行中的预计用时任务），
+// 已结束周再给最多两条事实。命中哪条规则、选哪天哪科、比例与展示分钟都由
+// StatisticsService.getWeeklyReview 决定；这里只按字段格式化与展示：不算比例、不挑事实、不含阈值。
 Rectangle {
     id: root
 
     property var review: ({})
-    property bool isCurrentPeriod: true
 
-    readonly property bool hasData: root.review && root.review.hasData === true
-    // 分钟转「N 小时 M 分」，与今日专注目标同一种读法。
-    readonly property int planned: root.review ? Number(root.review.plannedMinutes || 0) : 0
-    readonly property int completed: root.review ? Number(root.review.completedPomodoros || 0) : 0
-    readonly property real rate: root.review ? Number(root.review.completionRate || 0) : 0
-    readonly property var subjects: root.review && root.review.subjects ? root.review.subjects : []
-    readonly property string factText: root.review && root.review.factText ? root.review.factText : ""
-    readonly property string suggestion: root.review && root.review.suggestionText ? root.review.suggestionText : ""
+    readonly property bool errorState: root.review.loadState === "error"
+    readonly property bool currentWeek: root.review.periodState === "current"
+    readonly property var goal: root.review.goal || ({})
+    readonly property var todayGoal: root.review.todayGoal || ({})
+    readonly property var plannedTasks: root.review.plannedTasks || ({})
+    readonly property var plannedRows: root.plannedTasks.rows || []
+    readonly property bool showGoal: !root.errorState && Number(root.goal.goalDays || 0) > 0
+    readonly property bool showToday: !root.errorState && Number(root.todayGoal.goalMinutes || 0) > 0
+    readonly property bool showPlanned: !root.errorState && root.plannedRows.length > 0
+    // 事实按类型套固定句式；未登记的类型得到空串，不渲染。
+    readonly property var factLines: {
+        var lines = []
+        var facts = root.errorState ? [] : (root.review.facts || [])
+        for (var i = 0; i < facts.length; i++) {
+            var line = root.factText(facts[i])
+            if (line.length > 0) {
+                lines.push(line)
+            }
+        }
+        return lines
+    }
+    readonly property bool showFacts: root.factLines.length > 0
 
-    Layout.fillWidth: true
-    Layout.bottomMargin: Theme.space24
     implicitHeight: content.implicitHeight + Theme.space24 * 2
     radius: Theme.radiusLg
     color: Theme.glassCard
     border.color: Theme.glassBorder
     border.width: 1
 
-    function signedInt(value) {
-        return (value >= 0 ? "+" : "") + value
+    function percentText(value) {
+        return Math.round(Number(value || 0)) + "%"
     }
 
-    function signedHours(minutes) {
-        var h = minutes / 60
-        return (h >= 0 ? "+" : "") + h.toFixed(1) + " 小时"
+    function signedMinutes(minutes) {
+        var value = Number(minutes || 0)
+        if (value === 0) {
+            return Duration.format(0)
+        }
+        return (value > 0 ? "+" : "-") + Duration.format(Math.abs(value))
+    }
+
+    // 服务给的是 yyyy-MM-dd，直接取月日两个整数，不构造 Date，避免时区换算。
+    function dateText(isoDate) {
+        var parts = String(isoDate || "").split("-")
+        return parts.length === 3 ? Number(parts[1]) + " 月 " + Number(parts[2]) + " 日" : ""
+    }
+
+    function factText(fact) {
+        if (!fact) {
+            return ""
+        }
+        switch (fact.type) {
+        case "goalShortfall":
+            return root.dateText(fact.date) + "：目标 " + Duration.format(fact.goalMinutes)
+                    + "，实际 " + Duration.formatSeconds(fact.actualSeconds)
+                    + "，投入为目标的 " + root.percentText(fact.ratioPercent) + "。"
+        case "subjectShareChange": {
+            var delta = Number(fact.deltaPoints || 0)
+            return String(fact.subject || "") + "：当周 " + Duration.formatSeconds(fact.currentSeconds)
+                    + "，前一周 " + Duration.formatSeconds(fact.previousSeconds)
+                    + "，占比 " + root.percentText(fact.currentSharePercent)
+                    + "，比前一周" + (delta >= 0 ? "增加 " : "减少 ")
+                    + Math.round(Math.abs(delta)) + " 个百分点。"
+        }
+        case "estimateShortfall":
+            return String(fact.subject || "") + "：计划 " + Duration.format(fact.plannedMinutes)
+                    + "，实际 " + Duration.format(fact.actualDisplayMinutes)
+                    + "，差 " + Duration.format(fact.shortfallDisplayMinutes) + "。"
+        case "estimateOnTrack":
+            return "当周有预计用时的任务，其总投入接近计划。"
+        default:
+            return ""
+        }
     }
 
     ColumnLayout {
@@ -46,13 +97,13 @@ Rectangle {
         anchors.margins: Theme.space24
         spacing: Theme.space16
 
-        // 标题 + 日期范围
         ColumnLayout {
             Layout.fillWidth: true
             spacing: 2
 
             Text {
-                text: root.isCurrentPeriod ? "本周复盘" : "所选周复盘"
+                objectName: "weeklyReviewTitle"
+                text: root.currentWeek ? "本周概览" : "所选周复盘"
                 textFormat: Text.PlainText
                 color: Theme.inkStrong
                 font.pixelSize: Theme.fontXl
@@ -60,105 +111,170 @@ Rectangle {
             }
 
             Text {
-                visible: Boolean(root.review && root.review.weekStart)
-                text: (root.review && root.review.weekStart ? root.review.weekStart : "") + " 至 "
-                      + (root.review && root.review.weekEnd ? root.review.weekEnd : "")
+                visible: text.length > 0
+                text: root.review.weekStart && root.review.weekEnd
+                      ? root.review.weekStart + " 至 " + root.review.weekEnd : ""
                 textFormat: Text.PlainText
                 color: Theme.inkSoft
                 font.pixelSize: Theme.fontSm
             }
         }
 
-        // 计划 / 实际 / 完成率
-        RowLayout {
-            Layout.fillWidth: true
-            visible: root.hasData
-            spacing: Theme.space24
-
-            Repeater {
-                model: [
-                    { label: "计划用时", value: root.planned > 0 ? Duration.format(root.planned) : "未设置" },
-                    { label: "实际投入", value: Duration.format(Number(root.review ? root.review.focusedMinutes || 0 : 0)) },
-                    { label: "计划完成率", value: root.planned > 0 ? Math.round(root.rate) + "%" : "未设置" }
-                ]
-
-                ColumnLayout {
-                    required property var modelData
-                    spacing: 2
-
-                    Text {
-                        text: parent.modelData.value
-                        textFormat: Text.PlainText
-                        color: Theme.accentInk
-                        font.pixelSize: Theme.fontXxl
-                        font.weight: Font.Bold
-                        font.family: Theme.fontFamilyData
-                    }
-
-                    Text {
-                        text: parent.modelData.label
-                        textFormat: Text.PlainText
-                        color: Theme.inkSoft
-                        font.pixelSize: Theme.fontSm
-                    }
-                }
-            }
-        }
-
-        // 与上周对比
-        RowLayout {
-            Layout.fillWidth: true
-            visible: root.hasData
-            spacing: Theme.space16
-
-            Text {
-                text: "比上周："
-                textFormat: Text.PlainText
-                color: Theme.inkSoft
-                font.pixelSize: Theme.fontMd
-            }
-
-            Text {
-                text: "专注时长 " + root.signedHours(Number(root.review.focusedMinutes || 0) - Number(root.review.previousFocusedMinutes || 0))
-                textFormat: Text.PlainText
-                color: Theme.ink
-                font.pixelSize: Theme.fontMd
-            }
-
-            Text {
-                text: "有效番茄 " + root.signedInt(root.completed - Number(root.review.previousCompletedPomodoros || 0))
-                textFormat: Text.PlainText
-                color: Theme.ink
-                font.pixelSize: Theme.fontMd
-            }
-
-            Text {
-                text: "活跃天数 " + root.signedInt(Number(root.review.activeDays || 0) - Number(root.review.previousActiveDays || 0))
-                textFormat: Text.PlainText
-                color: Theme.ink
-                font.pixelSize: Theme.fontMd
-            }
-
-            Item { Layout.fillWidth: true }
-        }
-
-        // 科目对账
         ColumnLayout {
             Layout.fillWidth: true
-            visible: root.hasData && root.subjects.length > 0
+            visible: root.errorState
+            spacing: Theme.space4
+
+            Text {
+                objectName: "weeklyReviewErrorTitle"
+                text: "周统计加载失败"
+                textFormat: Text.PlainText
+                color: Theme.danger
+                font.pixelSize: Theme.fontMd
+                font.weight: Font.Medium
+            }
+
+            Text {
+                objectName: "weeklyReviewErrorMessage"
+                Layout.fillWidth: true
+                visible: text.length > 0
+                text: String(root.review.errorMessage || "")
+                textFormat: Text.PlainText
+                color: Theme.inkSoft
+                font.pixelSize: Theme.fontSm
+                wrapMode: Text.WordWrap
+            }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            visible: root.showGoal || root.showToday
+            spacing: Theme.space32
+
+            ColumnLayout {
+                visible: root.showGoal
+                spacing: 2
+
+                Text {
+                    objectName: "weeklyReviewGoalValue"
+                    text: Number(root.goal.metDays || 0) + " / " + Number(root.goal.goalDays || 0) + " 天"
+                    textFormat: Text.PlainText
+                    color: Theme.accentInk
+                    font.pixelSize: Theme.fontXxl
+                    font.weight: Font.Bold
+                    font.family: Theme.fontFamilyData
+                }
+
+                Text {
+                    text: "目标达成"
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontSm
+                }
+
+                Text {
+                    objectName: "weeklyReviewGoalTotals"
+                    text: "目标 " + Duration.format(root.goal.goalMinutesTotal)
+                          + " · 实际 " + Duration.formatSeconds(root.goal.actualSecondsTotal)
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontSm
+                }
+            }
+
+            ColumnLayout {
+                visible: root.showToday
+                spacing: 2
+
+                Text {
+                    objectName: "weeklyReviewTodayValue"
+                    text: root.percentText(root.todayGoal.progressPercent)
+                    textFormat: Text.PlainText
+                    color: Theme.accentInk
+                    font.pixelSize: Theme.fontXxl
+                    font.weight: Font.Bold
+                    font.family: Theme.fontFamilyData
+                }
+
+                Text {
+                    text: "今日进度"
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontSm
+                }
+
+                Text {
+                    objectName: "weeklyReviewTodayTotals"
+                    text: "目标 " + Duration.format(root.todayGoal.goalMinutes)
+                          + " · 实际 " + Duration.formatSeconds(root.todayGoal.actualSeconds)
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontSm
+                }
+            }
+
+            Item {
+                Layout.fillWidth: true
+            }
+        }
+
+        ColumnLayout {
+            Layout.fillWidth: true
+            visible: root.showPlanned
             spacing: Theme.space8
 
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 1
                 color: Theme.borderSubtle
+                Accessible.ignored: true
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.space8
+
+                Text {
+                    text: "预计用时任务"
+                    textFormat: Text.PlainText
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.Medium
+                }
+
+                Text {
+                    objectName: "weeklyReviewPlannedInProgress"
+                    visible: root.plannedTasks.inProgress === true
+                    text: "进行中"
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontSm
+                }
+
+                Item {
+                    Layout.fillWidth: true
+                }
+
+                Text {
+                    objectName: "weeklyReviewPlannedTotal"
+                    text: Duration.format(root.plannedTasks.totalActualDisplayMinutes)
+                          + " / " + Duration.format(root.plannedTasks.totalPlannedMinutes)
+                          + " · " + root.percentText(root.plannedTasks.totalInvestmentRatioPercent)
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontSm
+                    font.family: Theme.fontFamilyData
+                }
             }
 
             Repeater {
-                model: root.subjects
+                model: root.plannedRows
 
                 RowLayout {
+                    id: plannedRow
+
                     required property var modelData
+
                     Layout.fillWidth: true
                     spacing: Theme.space8
 
@@ -166,12 +282,13 @@ Rectangle {
                         Layout.preferredWidth: 10
                         Layout.preferredHeight: 10
                         radius: 5
-                        color: parent.modelData.color || Theme.accent
+                        color: plannedRow.modelData.color || Theme.accent
+                        Accessible.ignored: true
                     }
 
                     Text {
                         Layout.fillWidth: true
-                        text: parent.modelData.name || "未分类"
+                        text: String(plannedRow.modelData.subject || "")
                         textFormat: Text.PlainText
                         color: Theme.ink
                         font.pixelSize: Theme.fontMd
@@ -179,11 +296,9 @@ Rectangle {
                     }
 
                     Text {
-                        objectName: "weeklyReviewSubjectComparison"
-                        // 计划和实际都以分钟为底层单位，再统一格式化成人类可读时长。
-                        // completedPomodoros 是独立事实，不能拿“个数”去除以“分钟”。
-                        text: Duration.format(Number(parent.modelData.focusedMinutes || 0))
-                              + " / " + Duration.format(Number(parent.modelData.planned || 0))
+                        objectName: "weeklyReviewPlannedRowAmount"
+                        text: Duration.format(plannedRow.modelData.actualDisplayMinutes)
+                              + " / " + Duration.format(plannedRow.modelData.plannedMinutes)
                         textFormat: Text.PlainText
                         color: Theme.inkSoft
                         font.pixelSize: Theme.fontMd
@@ -191,63 +306,55 @@ Rectangle {
                     }
 
                     Text {
-                        Layout.preferredWidth: 88
+                        objectName: "weeklyReviewPlannedRowDifference"
+                        Layout.preferredWidth: 96
                         horizontalAlignment: Text.AlignRight
-                        text: parent.modelData.unplanned === true
-                              ? "未计划投入"
-                              : (Math.round(Number(parent.modelData.rate || 0)) + "%")
+                        text: root.signedMinutes(plannedRow.modelData.differenceDisplayMinutes)
                         textFormat: Text.PlainText
-                        color: parent.modelData.unplanned === true ? Theme.inkMuted : Theme.accentInk
+                        color: Theme.inkSoft
                         font.pixelSize: Theme.fontSm
+                        font.family: Theme.fontFamilyData
+                    }
+
+                    Text {
+                        objectName: "weeklyReviewPlannedRowRatio"
+                        Layout.preferredWidth: 56
+                        horizontalAlignment: Text.AlignRight
+                        text: root.percentText(plannedRow.modelData.investmentRatioPercent)
+                        textFormat: Text.PlainText
+                        color: Theme.accentInk
+                        font.pixelSize: Theme.fontSm
+                        font.family: Theme.fontFamilyData
                     }
                 }
             }
         }
 
-        // 事实结论 + 建议
         ColumnLayout {
             Layout.fillWidth: true
-            visible: root.hasData && (root.factText.length > 0 || root.suggestion.length > 0)
+            visible: root.showFacts
             spacing: Theme.space8
 
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 1
                 color: Theme.borderSubtle
+                Accessible.ignored: true
             }
 
-            Text {
-                objectName: "weeklyReviewFactText"
-                Layout.fillWidth: true
-                visible: root.factText.length > 0
-                text: root.factText
-                textFormat: Text.PlainText
-                color: Theme.inkStrong
-                font.pixelSize: Theme.fontMd
-                font.weight: Font.Medium
-                wrapMode: Text.WordWrap
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                visible: root.suggestion.length > 0
-                spacing: Theme.space8
-
-                Rectangle {
-                    Layout.preferredWidth: 3
-                    Layout.fillHeight: true
-                    Layout.topMargin: 2
-                    Layout.bottomMargin: 2
-                    radius: 1.5
-                    color: Theme.accent
-                }
+            Repeater {
+                model: root.factLines
 
                 Text {
-                    objectName: "weeklyReviewSuggestionText"
+                    id: factLine
+
+                    required property string modelData
+
+                    objectName: "weeklyReviewFact"
                     Layout.fillWidth: true
-                    text: root.suggestion
+                    text: factLine.modelData
                     textFormat: Text.PlainText
-                    color: Theme.inkSoft
+                    color: Theme.inkStrong
                     font.pixelSize: Theme.fontMd
                     wrapMode: Text.WordWrap
                     lineHeight: 1.3

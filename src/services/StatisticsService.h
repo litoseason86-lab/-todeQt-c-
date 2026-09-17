@@ -22,7 +22,11 @@ public:
     Q_INVOKABLE QVariantMap getDayComparison(const QDate& date) const;
     Q_INVOKABLE QVariantList getWeekStats(const QDate& weekStart) const;
     Q_INVOKABLE QVariantList getWeekStats() const;
-    Q_INVOKABLE QVariantMap getWeekComparison(const QDate& weekStart) const;
+    // logicalTodayIso 是页面本次刷新生成的「逻辑今天」（yyyy-MM-dd，已按 dayStartHour 换算过），
+    // 周比较与复盘收到同一个值，据此判断当前周／已结束周。服务不再对它做日界换算；
+    // 当前周不做周际比较，三项指标 hasData 为假，结果里带 periodState。
+    Q_INVOKABLE QVariantMap getWeekComparison(const QDate& weekStart,
+                                              const QString& logicalTodayIso) const;
     Q_INVOKABLE QVariantMap getCategoryStats(const QVariant& startDateValue, const QVariant& endDateValue) const;
     // 今日学习统计：按 task_id 分组聚合指定逻辑日的专注时长与有效番茄数。
     // task_id 为空(自由计时未选任务)会归为单行 unassigned=true。无参版取当前逻辑日。
@@ -42,9 +46,14 @@ public:
     Q_INVOKABLE int getTotalFocusDuration() const;
     Q_INVOKABLE QVariantList getMonthWeeklySummary(int year, int month) const;
     Q_INVOKABLE QVariantList getMonthWeeklySummary() const;
-    // 每周复盘：计划 vs 实际番茄、科目对账、与上周对比，以及确定性事实/建议。
-    // weekStart 必须是周一；无参版取当前逻辑周。全部走批量聚合 SQL，不遍历原始记录。
-    Q_INVOKABLE QVariantMap getWeeklyReview(const QDate& weekStart) const;
+    // 每周复盘。weekStart 必须是周一，logicalTodayIso 同 getWeekComparison。
+    // 结果字段固定：周期（periodState）、加载状态（loadState / errorMessage）、
+    // 可选模块（goal / todayGoal / plannedTasks）、F2 用的整体科目（subjects）与结构化事实（facts）。
+    // 统计判断全部在这里完成，界面只格式化与展示。全部走批量聚合 SQL，不按任务逐条取会话。
+    // 复盘专用查询失败不发 operationFailed，只通过 loadState = error 返回，不带任何半份统计。
+    Q_INVOKABLE QVariantMap getWeeklyReview(const QDate& weekStart,
+                                            const QString& logicalTodayIso) const;
+    // 无参版取当前逻辑周，只读一次逻辑今天。
     Q_INVOKABLE QVariantMap getWeeklyReview() const;
 
 signals:
@@ -60,9 +69,8 @@ private:
     QList<QDate> getUniqueFocusDates(const QDate& startDate, const QDate& endDate) const;
     QPair<QDate, QDate> getWeekRange(const QDate& mondayOfWeek) const;
     QVariantMap buildComparisonResult(int currentValue, int previousValue, const QString& label) const;
-    // 某周的计划/实际聚合：{plannedTotal, completedTotal, focusedSeconds, activeDays, subjects[]}。
-    // subjects 按科目名合并计划与实际番茄，供复盘对账与结论规则使用。
-    QVariantMap weeklyAggregates(const QDate& weekStart, const QDate& weekEnd) const;
+    // 整周对整周的比较，只给已结束周用；不判断周期，所以不对界面开放。
+    QVariantMap getWeekComparison(const QDate& weekStart) const;
 };
 
 #endif // STATISTICSSERVICE_H

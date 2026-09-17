@@ -19,14 +19,26 @@
 #include <algorithm>
 
 namespace {
-// 科目要进入「投入明显低于计划」的判定，至少得有这么多计划用时。
-// 单位随 v10 从「番茄个数」改为「分钟」，取 60 分钟以保持与原来 3 个番茄相当的量级。
-constexpr int kReviewMinimumSubjectPlan = 60;
-constexpr double kReviewSubjectGapPoints = 20.0;
-constexpr double kReviewStableRateMinimum = 85.0;
-constexpr double kReviewStableRateMaximum = 115.0;
-constexpr double kReviewOverplannedRate = 60.0;
-constexpr double kReviewUnderplannedRate = 120.0;
+// —— 周复盘事实规则（046）——
+// 阈值是首版展示默认值，集中定义在这里；真实数据回放只检查适用性，不据此宣称统计显著性。
+// 判断一律用整数秒交叉相乘，不走浮点：浮点误差会让「刚好 60%」「刚好 10 个百分点」落到错误一侧。
+// F1 目标差额：已结束的目标日里，实际 < 目标 × 60%。
+constexpr qint64 kGoalShortfallPercent = 60;
+// F2 科目变化：两周总投入各不少于 60 分钟，占比变化不少于 10 个百分点，且该科投入变化不少于 60 分钟。
+// 最后一条防小样本：两周各一小时时，10 个百分点只对应 6 分钟，不值得下结论。
+constexpr qint64 kShareChangeMinimumWeekSeconds = 60 * 60;
+constexpr qint64 kShareChangeMinimumPoints = 10;
+constexpr qint64 kShareChangeMinimumSubjectSeconds = 60 * 60;
+// F3 预计用时差额：科目计划不少于 60 分钟，同一任务集合内的实际 < 计划 × 60%。
+constexpr qint64 kEstimateMinimumPlanMinutes = 60;
+constexpr qint64 kEstimateShortfallPercent = 60;
+// F3 补充：没有科目差额时，集合总投入落在计划的 85%～115%（含端点）。
+constexpr qint64 kEstimateOnTrackMinimumPercent = 85;
+constexpr qint64 kEstimateOnTrackMaximumPercent = 115;
+
+// 科目名兜底值，与下面各条 SQL 里的字面量保持一致。它们不是真实科目，不能成为 F2 的点名对象。
+const auto kUnlinkedSubjectName = QStringLiteral("未关联任务");
+const auto kUncategorizedSubjectName = QStringLiteral("未分类");
 
 void reportStatisticsFailure(const QString& detail)
 {
@@ -45,6 +57,66 @@ QVariantMap noComparisonData()
     result.insert(QStringLiteral("trend"), 0);
     result.insert(QStringLiteral("displayText"), QString());
     return result;
+}
+
+// 「逻辑今天」由页面按年、月、日拼成 yyyy-MM-dd 传入。只认严格的 ISO 日期：
+// 2026-9-1 这类能被宽松解析的写法说明调用方拼错了，按参数错误处理，不替它猜。
+QDate parseStrictIsoDate(const QString& text)
+{
+    const QDate date = QDate::fromString(text, Qt::ISODate);
+    return date.isValid() && date.toString(Qt::ISODate) == text ? date : QDate();
+}
+
+// 周期状态只看逻辑日期：进入下周一逻辑日后本周才算结束。logicalToday 已经是
+// 按 dayStartHour 换算过的日期，这里不能再减一次日界。
+QString weekPeriodState(const QDate& weekStart, const QDate& logicalToday)
+{
+    if (logicalToday < weekStart) {
+        return QStringLiteral("future");
+    }
+    if (logicalToday > weekStart.addDays(6)) {
+        return QStringLiteral("ended");
+    }
+    return QStringLiteral("current");
+}
+
+// 复盘结果的固定形状。界面按 loadState 先分出错误态，再按各模块是否有内容决定显示，
+// 所以即使没有数据，字段也都在，只是为空。
+QVariantMap weeklyReviewSkeleton(const QDate& weekStart, const QString& logicalTodayIso)
+{
+    QVariantMap review;
+    review.insert(QStringLiteral("weekStart"),
+                  weekStart.isValid() ? weekStart.toString(Qt::ISODate) : QString());
+    review.insert(QStringLiteral("weekEnd"),
+                  weekStart.isValid() ? weekStart.addDays(6).toString(Qt::ISODate) : QString());
+    review.insert(QStringLiteral("logicalTodayIso"), logicalTodayIso);
+    review.insert(QStringLiteral("periodState"), QString());
+    review.insert(QStringLiteral("loadState"), QStringLiteral("ready"));
+    review.insert(QStringLiteral("errorMessage"), QString());
+    review.insert(QStringLiteral("hasData"), false);
+    review.insert(QStringLiteral("hasDisplayContent"), false);
+    review.insert(QStringLiteral("goal"), QVariantMap());
+    review.insert(QStringLiteral("todayGoal"), QVariantMap());
+    review.insert(QStringLiteral("subjects"), QVariantList());
+    review.insert(QStringLiteral("plannedTasks"), QVariantMap());
+    review.insert(QStringLiteral("facts"), QVariantList());
+    return review;
+}
+
+// 失败时整份复盘作废：只保留周期上下文与错误信息，统计模块一律清空，
+// 不能让界面拿着半份统计去下结论。
+QVariantMap weeklyReviewError(QVariantMap review, const QString& message)
+{
+    review.insert(QStringLiteral("loadState"), QStringLiteral("error"));
+    review.insert(QStringLiteral("errorMessage"), message);
+    review.insert(QStringLiteral("hasData"), false);
+    review.insert(QStringLiteral("hasDisplayContent"), false);
+    review.insert(QStringLiteral("goal"), QVariantMap());
+    review.insert(QStringLiteral("todayGoal"), QVariantMap());
+    review.insert(QStringLiteral("subjects"), QVariantList());
+    review.insert(QStringLiteral("plannedTasks"), QVariantMap());
+    review.insert(QStringLiteral("facts"), QVariantList());
+    return review;
 }
 
 QDate normalizeDate(const QVariant& value)
@@ -145,21 +217,18 @@ bool isValidStatsYearMonth(int year, int month, const QString& context)
 //
 // 刻意不去动 date() 谓词本身：改成裸范围比较还能再快一个量级，但要把逻辑日边界
 // 从 SQL 挪进 C++、牵涉夏令时，而收益只剩 0.8ms，不值当。
-QHash<QString, int> queryDurationsByLogicalDay(const QDate& startDate,
-                                               const QDate& endDate,
-                                               const QString& context)
+// 本函数是这条 SQL 的唯一定义，不发 operationFailed：周复盘的错误只通过返回值交给卡片，
+// 趋势图等其他接口经 queryDurationsByLogicalDay 包装后照旧发信号。
+// 复盘里某一天的投入与趋势图那一天的柱子因此是同一个数。
+bool runDurationsByLogicalDay(const QDate& startDate,
+                              const QDate& endDate,
+                              QHash<QString, int>* durations,
+                              QString* error)
 {
-    QHash<QString, int> durations;
-    if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
-        qWarning() << "Failed to calculate daily durations:" << context << "invalid date range";
-        return durations;
-    }
-
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
-        qWarning() << "Failed to calculate daily durations:" << context << "database is not open";
-        reportStatisticsFailure(QStringLiteral("数据库未打开"));
-        return durations;
+        *error = QStringLiteral("数据库未打开");
+        return false;
     }
 
     QSqlQuery query(db);
@@ -179,15 +248,195 @@ QHash<QString, int> queryDurationsByLogicalDay(const QDate& startDate,
     query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
 
     if (!query.exec()) {
-        qWarning() << "Failed to calculate daily durations:" << context << query.lastError().text();
-        reportStatisticsFailure(query.lastError().text());
-        return durations;
+        *error = query.lastError().text();
+        return false;
     }
 
     while (query.next()) {
-        durations.insert(query.value(0).toString(), query.value(1).toInt());
+        durations->insert(query.value(0).toString(), query.value(1).toInt());
+    }
+    return true;
+}
+
+QHash<QString, int> queryDurationsByLogicalDay(const QDate& startDate,
+                                               const QDate& endDate,
+                                               const QString& context)
+{
+    QHash<QString, int> durations;
+    if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
+        qWarning() << "Failed to calculate daily durations:" << context << "invalid date range";
+        return durations;
+    }
+
+    QString error;
+    if (!runDurationsByLogicalDay(startDate, endDate, &durations, &error)) {
+        qWarning() << "Failed to calculate daily durations:" << context << error;
+        reportStatisticsFailure(error);
+        return QHash<QString, int>();
     }
     return durations;
+}
+
+// 科目时间分配的一行：会话快照优先归类，旧记录回退到任务当前科目。
+struct SubjectDuration
+{
+    QString name;
+    QString color;
+    int seconds = 0;
+};
+
+// 科目归类 SQL 的唯一定义：统计页饼图（getCategoryStats）与周复盘的 F2 共用，
+// 所以 F2 里某科的秒数与同周饼图该科的时长一定一致。本函数不发 operationFailed。
+bool runCategoryDurations(const QDate& startDate,
+                          const QDate& endDate,
+                          QList<SubjectDuration>* rows,
+                          QString* error)
+{
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        *error = QStringLiteral("数据库未打开");
+        return false;
+    }
+
+    // 会话快照优先；对迁移前的旧记录才回退到当前任务科目。
+    // 因此删任务或删科目只会解除当前对象，不会把历史专注重写成“未关联任务”。
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT "
+        "COALESCE(NULLIF(snapshot_category.name, ''), NULLIF(f.category_name_snapshot, ''), "
+        "NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), "
+        "CASE WHEN t.id IS NULL THEN '未关联任务' ELSE '未分类' END) AS category_name, "
+        "COALESCE(NULLIF(snapshot_category.color, ''), NULLIF(f.category_color_snapshot, ''), "
+        "NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS category_color, "
+        "SUM(f.duration) AS total_duration "
+        "FROM focus_sessions f "
+        "LEFT JOIN tasks t ON f.task_id = t.id "
+        "LEFT JOIN categories snapshot_category ON f.category_id_snapshot = snapshot_category.id "
+        "LEFT JOIN categories c ON t.category_id = c.id "
+        "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
+        "WHERE date(f.start_time, :dayShift) >= :startDate "
+        "AND date(f.start_time, :dayShift) <= :endDate "
+        "AND f.end_time IS NOT NULL "
+        "AND f.duration IS NOT NULL "
+        "AND f.duration >= :minDuration "
+        "GROUP BY category_name, category_color "
+        "ORDER BY total_duration DESC, category_name ASC"));
+    query.bindValue(QStringLiteral(":dayShift"),
+                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
+    query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
+
+    if (!query.exec()) {
+        *error = query.lastError().text();
+        return false;
+    }
+
+    while (query.next()) {
+        SubjectDuration row;
+        row.name = query.value(0).toString();
+        row.color = query.value(1).toString();
+        row.seconds = query.value(2).toInt();
+        rows->append(row);
+    }
+    return true;
+}
+
+// 预计用时对账集合里的一条任务：所选周计划日期内、预计用时大于零。
+struct PlannedTask
+{
+    int taskId = 0;
+    int plannedMinutes = 0;
+    QString subject;
+    QString color;
+};
+
+// 对账集合只读 tasks，不碰专注记录；复盘先跑它，再跑专注查询。
+// 科目按任务当前所属科目归组（与计划同源），不看会话快照，避免分子分母落在不同科目里。
+bool runPlannedTasks(const QDate& weekStart,
+                     const QDate& weekEnd,
+                     QList<PlannedTask>* tasks,
+                     QString* error)
+{
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        *error = QStringLiteral("数据库未打开");
+        return false;
+    }
+
+    // 别名避开真实列名 color/name：categories 联表两次，引用裸名会出现歧义列。
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT t.id, t.estimated_minutes, "
+        "COALESCE(NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), '未分类') "
+        "AS subject_name, "
+        "COALESCE(NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS subject_color "
+        "FROM tasks t "
+        "LEFT JOIN categories c ON t.category_id = c.id "
+        "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
+        "WHERE t.date >= :startDate AND t.date <= :endDate AND t.estimated_minutes > 0"));
+    query.bindValue(QStringLiteral(":startDate"), weekStart.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":endDate"), weekEnd.toString(Qt::ISODate));
+
+    if (!query.exec()) {
+        *error = query.lastError().text();
+        return false;
+    }
+
+    while (query.next()) {
+        PlannedTask task;
+        task.taskId = query.value(0).toInt();
+        task.plannedMinutes = query.value(1).toInt();
+        task.subject = query.value(2).toString();
+        task.color = query.value(3).toString();
+        tasks->append(task);
+    }
+    return true;
+}
+
+// 对账实际：只统计所选逻辑周内、挂在对账集合任务上的有效专注秒数。
+// 没填预计用时的任务、计划日期在别的周的任务、未关联任务的会话都不进来。
+// 集合按整周计划日期取；会话只取到 sessionEnd（当前周为逻辑今天），分母是整周计划、分子是已产生的投入。
+bool runPlannedTaskSeconds(const QDate& weekStart,
+                           const QDate& weekEnd,
+                           const QDate& sessionEnd,
+                           QHash<int, qint64>* seconds,
+                           QString* error)
+{
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        *error = QStringLiteral("数据库未打开");
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "SELECT f.task_id, SUM(f.duration) "
+        "FROM focus_sessions f "
+        "JOIN tasks t ON t.id = f.task_id "
+        "WHERE t.date >= :startDate AND t.date <= :endDate AND t.estimated_minutes > 0 "
+        "AND date(f.start_time, :dayShift) >= :startDate "
+        "AND date(f.start_time, :dayShift) <= :sessionEnd "
+        "AND f.end_time IS NOT NULL "
+        "AND f.duration IS NOT NULL "
+        "AND f.duration >= :minDuration "
+        "GROUP BY f.task_id"));
+    query.bindValue(QStringLiteral(":dayShift"),
+                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
+    query.bindValue(QStringLiteral(":startDate"), weekStart.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":endDate"), weekEnd.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":sessionEnd"), sessionEnd.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
+
+    if (!query.exec()) {
+        *error = query.lastError().text();
+        return false;
+    }
+
+    while (query.next()) {
+        seconds->insert(query.value(0).toInt(), query.value(1).toLongLong());
+    }
+    return true;
 }
 
 int queryTotalDurationForRange(const QDate& startDate, const QDate& endDate, const QString& context)
@@ -415,6 +664,34 @@ QVariantMap StatisticsService::getWeekComparison(const QDate& weekStart) const
     return result;
 }
 
+QVariantMap StatisticsService::getWeekComparison(const QDate& weekStart,
+                                                 const QString& logicalTodayIso) const
+{
+    const QDate logicalToday = parseStrictIsoDate(logicalTodayIso);
+    if (!weekStart.isValid() || weekStart.dayOfWeek() != Qt::Monday || !logicalToday.isValid()) {
+        QVariantMap result;
+        result.insert(QStringLiteral("hasData"), false);
+        result.insert(QStringLiteral("periodState"), QString());
+        return result;
+    }
+
+    const QString periodState = weekPeriodState(weekStart, logicalToday);
+    if (periodState != QStringLiteral("ended")) {
+        // 进行中的周拿去比上一整周，窗口不一致，周三看几乎总是「下跌」。
+        // 当前周（以及界面到不了的未来周）不给涨跌，三项指标都按无数据返回。
+        QVariantMap result;
+        result.insert(QStringLiteral("periodState"), periodState);
+        result.insert(QStringLiteral("duration"), noComparisonData());
+        result.insert(QStringLiteral("effectiveDays"), noComparisonData());
+        result.insert(QStringLiteral("sessionCount"), noComparisonData());
+        return result;
+    }
+
+    QVariantMap result = getWeekComparison(weekStart);
+    result.insert(QStringLiteral("periodState"), periodState);
+    return result;
+}
+
 QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, const QVariant& endDateValue) const
 {
     const QDate startDate = normalizeDate(startDateValue);
@@ -424,59 +701,23 @@ QVariantMap StatisticsService::getCategoryStats(const QVariant& startDateValue, 
         return emptyCategoryStats();
     }
 
-    QSqlDatabase db = DatabaseManager::instance()->database();
-    if (!db.isOpen()) {
-        qWarning() << "Failed to get category stats: database is not open";
-        reportStatisticsFailure(QStringLiteral("数据库未打开"));
+    QList<SubjectDuration> rows;
+    QString error;
+    if (!runCategoryDurations(startDate, endDate, &rows, &error)) {
+        qWarning() << "Failed to get category stats:" << error;
+        reportStatisticsFailure(error);
         return emptyCategoryStats();
     }
-
-    // 会话快照优先；对迁移前的旧记录才回退到当前任务科目。
-    // 因此删任务或删科目只会解除当前对象，不会把历史专注重写成“未关联任务”。
-    QSqlQuery query(db);
-    query.prepare(QStringLiteral(
-        "SELECT "
-        "COALESCE(NULLIF(snapshot_category.name, ''), NULLIF(f.category_name_snapshot, ''), "
-        "NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), "
-        "CASE WHEN t.id IS NULL THEN '未关联任务' ELSE '未分类' END) AS category_name, "
-        "COALESCE(NULLIF(snapshot_category.color, ''), NULLIF(f.category_color_snapshot, ''), "
-        "NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS category_color, "
-        "SUM(f.duration) AS total_duration "
-        "FROM focus_sessions f "
-        "LEFT JOIN tasks t ON f.task_id = t.id "
-        "LEFT JOIN categories snapshot_category ON f.category_id_snapshot = snapshot_category.id "
-        "LEFT JOIN categories c ON t.category_id = c.id "
-        "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
-        "WHERE date(f.start_time, :dayShift) >= :startDate "
-        "AND date(f.start_time, :dayShift) <= :endDate "
-        "AND f.end_time IS NOT NULL "
-        "AND f.duration IS NOT NULL "
-        "AND f.duration >= :minDuration "
-        "GROUP BY category_name, category_color "
-        "ORDER BY total_duration DESC, category_name ASC"));
-    query.bindValue(QStringLiteral(":dayShift"),
-                    LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
-    query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":endDate"), endDate.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
 
     QVariantList categories;
     int totalDuration = 0;
-
-    if (!query.exec()) {
-        qWarning() << "Failed to get category stats:" << query.lastError().text();
-        reportStatisticsFailure(query.lastError().text());
-        return emptyCategoryStats();
-    }
-
-    while (query.next()) {
-        const int duration = query.value(2).toInt();
+    for (const SubjectDuration& row : std::as_const(rows)) {
         QVariantMap category;
-        category.insert(QStringLiteral("name"), query.value(0).toString());
-        category.insert(QStringLiteral("color"), query.value(1).toString());
-        category.insert(QStringLiteral("duration"), duration);
+        category.insert(QStringLiteral("name"), row.name);
+        category.insert(QStringLiteral("color"), row.color);
+        category.insert(QStringLiteral("duration"), row.seconds);
         categories.append(category);
-        totalDuration += duration;
+        totalDuration += row.seconds;
     }
 
     // 百分比依赖总时长，必须等所有行累计完之后再计算。
@@ -1002,294 +1243,401 @@ QPair<QDate, QDate> StatisticsService::getWeekRange(const QDate& mondayOfWeek) c
     return qMakePair(mondayOfWeek, mondayOfWeek.addDays(6));
 }
 
-QVariantMap StatisticsService::weeklyAggregates(const QDate& weekStart, const QDate& weekEnd) const
+QVariantMap StatisticsService::getWeeklyReview(const QDate& weekStart,
+                                               const QString& logicalTodayIso) const
 {
-    QVariantMap result;
-    result.insert(QStringLiteral("plannedTotal"), 0);
-    result.insert(QStringLiteral("completedTotal"), 0);
-    result.insert(QStringLiteral("focusedSeconds"), 0);
-    result.insert(QStringLiteral("activeDays"), 0);
-    result.insert(QStringLiteral("subjects"), QVariantList());
-
-    QSqlDatabase db = DatabaseManager::instance()->database();
-    if (!db.isOpen()) {
-        reportStatisticsFailure(QStringLiteral("数据库未打开"));
-        return result;
+    QVariantMap review = weeklyReviewSkeleton(weekStart, logicalTodayIso);
+    if (!weekStart.isValid() || weekStart.dayOfWeek() != Qt::Monday) {
+        return weeklyReviewError(review, QStringLiteral("周起始日无效"));
+    }
+    const QDate logicalToday = parseStrictIsoDate(logicalTodayIso);
+    if (!logicalToday.isValid()) {
+        return weeklyReviewError(review, QStringLiteral("逻辑日期无效"));
     }
 
-    const int dayStartHour = AppSettings::instance()->dayStartHour();
-    const QString dayShift = LogicalDay::sqlShift(dayStartHour);
-    const QString startIso = weekStart.toString(Qt::ISODate);
-    const QString endIso = weekEnd.toString(Qt::ISODate);
-    // start_time 以 ISO 日期时间存储；使用真实半开边界让 idx_sessions_start 可用于范围扫描。
-    // 边界不带时区后缀，兼容历史无偏移字符串和当前带偏移字符串的共同日期时间前缀。
-    const QString startAt =
-        QDateTime(weekStart, QTime(dayStartHour, 0)).toString(
-            QStringLiteral("yyyy-MM-ddTHH:mm:ss"));
-    const QString endAt =
-        QDateTime(weekEnd.addDays(1), QTime(dayStartHour, 0)).toString(
-            QStringLiteral("yyyy-MM-ddTHH:mm:ss"));
+    const QString periodState = weekPeriodState(weekStart, logicalToday);
+    review.insert(QStringLiteral("periodState"), periodState);
+    if (periodState == QStringLiteral("future")) {
+        // 页面导航到不了未来周，这里按空周返回，不查询。
+        return review;
+    }
 
-    // 按科目名合并计划与实际；科目名的解析口径与 getCategoryStats 一致，保证两侧能对齐。
-    QMap<QString, QVariantMap> subjects;
-    auto ensureSubject = [&subjects](const QString& name, const QString& color) -> QVariantMap& {
-        if (!subjects.contains(name)) {
-            QVariantMap entry;
-            entry.insert(QStringLiteral("name"), name);
-            entry.insert(QStringLiteral("color"), color);
-            entry.insert(QStringLiteral("planned"), 0);
-            entry.insert(QStringLiteral("actual"), 0);
-            entry.insert(QStringLiteral("focusedSeconds"), 0);
-            subjects.insert(name, entry);
+    const bool ended = periodState == QStringLiteral("ended");
+    const QDate weekEnd = weekStart.addDays(6);
+    // 当前周只汇总已经产生的记录：专注查询截到逻辑今天。正常情况下今天之后本来就没有记录，
+    // 但系统时钟被往前拨过时会留下「未来」的会话，不能让它们混进进行中的周。
+    const QDate sessionEnd = ended ? weekEnd : logicalToday;
+    QString error;
+
+    // 查询顺序固定：先只读 tasks 的对账集合，再读专注记录。任何一步失败，整份复盘作废，
+    // 不能拿前面已经查到的半份统计去组装结果。
+    QList<PlannedTask> plannedTasks;
+    if (!runPlannedTasks(weekStart, weekEnd, &plannedTasks, &error)) {
+        return weeklyReviewError(review, error);
+    }
+    QHash<int, qint64> plannedTaskSeconds;
+    if (!plannedTasks.isEmpty()
+        && !runPlannedTaskSeconds(weekStart, weekEnd, sessionEnd, &plannedTaskSeconds, &error)) {
+        return weeklyReviewError(review, error);
+    }
+    QHash<QString, int> dailySeconds;
+    if (!runDurationsByLogicalDay(weekStart, sessionEnd, &dailySeconds, &error)) {
+        return weeklyReviewError(review, error);
+    }
+    QList<SubjectDuration> currentSubjectRows;
+    if (!runCategoryDurations(weekStart, sessionEnd, &currentSubjectRows, &error)) {
+        return weeklyReviewError(review, error);
+    }
+    // 前一周只在已结束周需要：当前周不做任何周际比较。
+    QList<SubjectDuration> previousSubjectRows;
+    if (ended
+        && !runCategoryDurations(weekStart.addDays(-7), weekStart.addDays(-1),
+                                 &previousSubjectRows, &error)) {
+        return weeklyReviewError(review, error);
+    }
+
+    const QMap<QDate, int> goals = AppSettings::instance()->dailyFocusGoalsBetween(weekStart, weekEnd);
+
+    // —— 目标：只统计已经结束、且有有效目标的逻辑日 ——
+    // 今天无论是否达标都不进 K、N 与两项合计：进行中的一天算不上达标或未达标，单独给进度。
+    const QDate lastEndedDay = ended ? weekEnd : logicalToday.addDays(-1);
+    qint64 goalDays = 0;
+    qint64 metDays = 0;
+    qint64 goalMinutesTotal = 0;
+    qint64 goalActualSecondsTotal = 0;
+    QVariantList goalDayList;
+    // F1 候选：比例最低的一天；比例相同保留较早日期（按日期升序遍历，只在严格更低时替换）。
+    QDate shortfallDate;
+    qint64 shortfallGoalMinutes = 0;
+    qint64 shortfallActualSeconds = 0;
+    for (auto it = goals.constBegin(); it != goals.constEnd(); ++it) {
+        if (it.key() > lastEndedDay) {
+            break;
         }
-        return subjects[name];
+        const qint64 goalMinutes = it.value();
+        const qint64 actualSeconds = dailySeconds.value(it.key().toString(Qt::ISODate), 0);
+        // 用原始秒数与目标分钟 × 60 比较，展示时的分钟取整不能改变达标判断。
+        const bool met = actualSeconds >= goalMinutes * 60;
+        ++goalDays;
+        metDays += met ? 1 : 0;
+        goalMinutesTotal += goalMinutes;
+        goalActualSecondsTotal += actualSeconds;
+
+        QVariantMap day;
+        day.insert(QStringLiteral("date"), it.key().toString(Qt::ISODate));
+        day.insert(QStringLiteral("goalMinutes"), goalMinutes);
+        day.insert(QStringLiteral("actualSeconds"), actualSeconds);
+        day.insert(QStringLiteral("met"), met);
+        goalDayList.append(day);
+
+        const bool belowThreshold = actualSeconds * 100 < goalMinutes * 60 * kGoalShortfallPercent;
+        // actual / goal 更低 ⇔ actual × 已选目标 < 已选实际 × goal（都是正整数，交叉相乘不失真）。
+        if (belowThreshold
+            && (!shortfallDate.isValid()
+                || actualSeconds * shortfallGoalMinutes < shortfallActualSeconds * goalMinutes)) {
+            shortfallDate = it.key();
+            shortfallGoalMinutes = goalMinutes;
+            shortfallActualSeconds = actualSeconds;
+        }
+    }
+    QVariantMap goal;
+    goal.insert(QStringLiteral("goalDays"), goalDays);
+    goal.insert(QStringLiteral("metDays"), metDays);
+    goal.insert(QStringLiteral("goalMinutesTotal"), goalMinutesTotal);
+    goal.insert(QStringLiteral("actualSecondsTotal"), goalActualSecondsTotal);
+    goal.insert(QStringLiteral("days"), goalDayList);
+    review.insert(QStringLiteral("goal"), goal);
+
+    QVariantMap todayGoal;
+    if (!ended) {
+        const qint64 goalMinutes = goals.value(logicalToday, 0);
+        if (goalMinutes > 0) {
+            const qint64 actualSeconds = dailySeconds.value(logicalTodayIso, 0);
+            todayGoal.insert(QStringLiteral("date"), logicalTodayIso);
+            todayGoal.insert(QStringLiteral("goalMinutes"), goalMinutes);
+            todayGoal.insert(QStringLiteral("actualSeconds"), actualSeconds);
+            todayGoal.insert(QStringLiteral("progressPercent"),
+                             static_cast<double>(actualSeconds) * 100.0 / (goalMinutes * 60));
+        }
+    }
+    review.insert(QStringLiteral("todayGoal"), todayGoal);
+
+    // —— 整体科目（供 F2）：同名科目可能因快照颜色不同分成多行，按名称合并 ——
+    struct SubjectTotal
+    {
+        QString color;
+        qint64 seconds = 0;
+        qint64 colorSeconds = -1;
     };
-
-    int plannedTotal = 0;
-    // 计划番茄：按任务的计划日期归入本周（tasks.date 为 yyyy-MM-dd，字典序即日期序）。
-    {
-        QSqlQuery query(db);
-        // 别名避开真实列名 color/name，否则 GROUP BY 会因 categories 联表出现歧义列而报错。
-        query.prepare(QStringLiteral(
-            "SELECT COALESCE(NULLIF(c.name,''), NULLIF(legacy.name,''), NULLIF(t.category,''), '未分类') AS subject_name, "
-            "COALESCE(NULLIF(c.color,''), NULLIF(legacy.color,''), '#d4a574') AS subject_color, "
-            "SUM(t.estimated_minutes) AS planned "
-            "FROM tasks t "
-            "LEFT JOIN categories c ON t.category_id = c.id "
-            "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
-            "WHERE t.date >= :startDate AND t.date <= :endDate AND t.estimated_minutes > 0 "
-            "GROUP BY subject_name, subject_color"));
-        query.bindValue(QStringLiteral(":startDate"), startIso);
-        query.bindValue(QStringLiteral(":endDate"), endIso);
-        if (!query.exec()) {
-            reportStatisticsFailure(query.lastError().text());
-            return result;
-        }
-        while (query.next()) {
-            const int planned = query.value(2).toInt();
-            QVariantMap& entry = ensureSubject(query.value(0).toString(), query.value(1).toString());
-            entry[QStringLiteral("planned")] = entry.value(QStringLiteral("planned")).toInt() + planned;
-            plannedTotal += planned;
-        }
-    }
-
-    int completedTotal = 0;
-    int focusedSeconds = 0;
-    // 实际番茄：只计自然到点的有效番茄工作段；专注秒数含两种模式的有效会话。
-    // 有效口径复用 kMinimumValidDurationSeconds，与任务实际番茄聚合完全一致。
-    {
-        QSqlQuery query(db);
-        query.prepare(QStringLiteral(R"SQL(
-            WITH filtered AS (
-                SELECT task_id, mode, pomodoro_completed, duration,
-                       category_id_snapshot, category_name_snapshot, category_color_snapshot,
-                       date(start_time, :dayShift) AS logical_date
-                FROM focus_sessions
-                WHERE start_time >= :startAt AND start_time < :endAt
-                  AND end_time IS NOT NULL
-                  AND duration IS NOT NULL
-                  AND duration >= :minDuration
-            ),
-            grouped AS (
-                SELECT COALESCE(NULLIF(snapshot_category.name,''),
-                                NULLIF(f.category_name_snapshot,''), NULLIF(c.name,''),
-                                NULLIF(legacy.name,''), NULLIF(t.category,''),
-                                CASE WHEN t.id IS NULL THEN '未关联任务'
-                                     ELSE '未分类' END) AS subject_name,
-                       COALESCE(NULLIF(snapshot_category.color,''),
-                                NULLIF(f.category_color_snapshot,''), NULLIF(c.color,''),
-                                NULLIF(legacy.color,''), '#d4a574')
-                           AS subject_color,
-                       SUM(CASE WHEN %1
-                                THEN 1 ELSE 0 END) AS actual_pomodoros,
-                       SUM(f.duration) AS focused_seconds
-                FROM filtered f
-                LEFT JOIN tasks t ON f.task_id = t.id
-                LEFT JOIN categories snapshot_category
-                       ON f.category_id_snapshot = snapshot_category.id
-                LEFT JOIN categories c ON t.category_id = c.id
-                LEFT JOIN categories legacy
-                       ON t.category_id IS NULL AND legacy.name = t.category
-                GROUP BY subject_name, subject_color
-            )
-            SELECT 0 AS row_kind, subject_name, subject_color,
-                   actual_pomodoros, focused_seconds, 0 AS active_days
-            FROM grouped
-            UNION ALL
-            SELECT 1, '', '', 0, 0, COUNT(DISTINCT logical_date)
-            FROM filtered
-        )SQL").arg(FocusSessionRules::validPomodoroPredicate(QStringLiteral("f"))));
-        query.bindValue(QStringLiteral(":dayShift"), dayShift);
-        query.bindValue(QStringLiteral(":startAt"), startAt);
-        query.bindValue(QStringLiteral(":endAt"), endAt);
-        query.bindValue(QStringLiteral(":minDuration"), FocusSessionRules::kMinimumValidDurationSeconds);
-        if (!query.exec()) {
-            reportStatisticsFailure(query.lastError().text());
-            return result;
-        }
-        while (query.next()) {
-            if (query.value(0).toInt() == 1) {
-                result[QStringLiteral("activeDays")] = query.value(5).toInt();
-                continue;
+    auto mergeSubjects = [](const QList<SubjectDuration>& rows, qint64* total) {
+        QMap<QString, SubjectTotal> merged;
+        *total = 0;
+        for (const SubjectDuration& row : rows) {
+            SubjectTotal& entry = merged[row.name];
+            entry.seconds += row.seconds;
+            // 颜色取该科里投入最多的那一行。
+            if (row.seconds > entry.colorSeconds) {
+                entry.color = row.color;
+                entry.colorSeconds = row.seconds;
             }
-            const int actual = query.value(3).toInt();
-            const int focused = query.value(4).toInt();
-            QVariantMap& entry =
-                ensureSubject(query.value(1).toString(), query.value(2).toString());
-            entry[QStringLiteral("actual")] = entry.value(QStringLiteral("actual")).toInt() + actual;
-            entry[QStringLiteral("focusedSeconds")] =
-                entry.value(QStringLiteral("focusedSeconds")).toInt() + focused;
-            completedTotal += actual;
-            focusedSeconds += focused;
+            *total += row.seconds;
+        }
+        return merged;
+    };
+    qint64 currentTotalSeconds = 0;
+    qint64 previousTotalSeconds = 0;
+    const QMap<QString, SubjectTotal> currentSubjects =
+        mergeSubjects(currentSubjectRows, &currentTotalSeconds);
+    const QMap<QString, SubjectTotal> previousSubjects =
+        mergeSubjects(previousSubjectRows, &previousTotalSeconds);
+    // 两周都有投入才谈得上占比变化；当前周不做周际比较。
+    const bool sharesComparable = ended && currentTotalSeconds > 0 && previousTotalSeconds > 0;
+
+    QStringList subjectNames = currentSubjects.keys();
+    for (const QString& name : previousSubjects.keys()) {
+        if (!currentSubjects.contains(name)) {
+            subjectNames.append(name);
         }
     }
+    // 展示顺序：本周投入多的在前，同投入按名称（QString 比较与系统区域设置无关）。
+    std::sort(subjectNames.begin(), subjectNames.end(),
+              [&currentSubjects](const QString& a, const QString& b) {
+                  const qint64 sa = currentSubjects.value(a).seconds;
+                  const qint64 sb = currentSubjects.value(b).seconds;
+                  if (sa != sb) {
+                      return sa > sb;
+                  }
+                  return a < b;
+              });
 
     QVariantList subjectList;
-    for (auto it = subjects.constBegin(); it != subjects.constEnd(); ++it) {
-        QVariantMap entry = it.value();
-        const int planned = entry.value(QStringLiteral("planned")).toInt();
-        const int actual = entry.value(QStringLiteral("actual")).toInt();
-        // 计划单位已改为「预计用时（分钟）」，完成率必须拿同单位的实际投入去比，
-        // 否则是「分钟 ÷ 番茄个数」这种没有意义的数。
-        const int focusedMinutes = entry.value(QStringLiteral("focusedSeconds")).toInt() / 60;
-        entry.insert(QStringLiteral("focusedMinutes"), focusedMinutes);
-        // 只有实际没计划标记“未计划投入”；只有计划没实际则完成率 0%。
-        entry.insert(QStringLiteral("unplanned"), planned == 0 && (actual > 0 || focusedMinutes > 0));
-        entry.insert(QStringLiteral("rate"),
-                     planned > 0 ? static_cast<double>(focusedMinutes) * 100.0 / planned : 0.0);
-        subjectList.append(entry);
-    }
-    // 分科目取整会丢掉不足一分钟的余数。按余数从大到小分配合计差额，
-    // 保证各科目显示分钟之和等于总分钟，最多给每科目补一分钟，原始秒数不变。
-    int displayedMinutes = 0;
-    for (const QVariant& subject : subjectList) {
-        displayedMinutes += subject.toMap().value(QStringLiteral("focusedMinutes")).toInt();
-    }
-    std::stable_sort(subjectList.begin(), subjectList.end(), [](const QVariant& a, const QVariant& b) {
-        return a.toMap().value(QStringLiteral("focusedSeconds")).toInt() % 60
-            > b.toMap().value(QStringLiteral("focusedSeconds")).toInt() % 60;
-    });
-    const int remainder = focusedSeconds / 60 - displayedMinutes;
-    for (int index = 0; index < remainder && index < subjectList.size(); ++index) {
-        QVariantMap entry = subjectList.at(index).toMap();
-        const int minutes = entry.value(QStringLiteral("focusedMinutes")).toInt() + 1;
-        const int planned = entry.value(QStringLiteral("planned")).toInt();
-        entry[QStringLiteral("focusedMinutes")] = minutes;
-        entry[QStringLiteral("rate")] = planned > 0 ? minutes * 100.0 / planned : 0.0;
-        subjectList[index] = entry;
-    }
-    // 计划多的科目排前，便于对账阅读。
-    std::sort(subjectList.begin(), subjectList.end(), [](const QVariant& a, const QVariant& b) {
-        const QVariantMap ma = a.toMap();
-        const QVariantMap mb = b.toMap();
-        if (ma.value(QStringLiteral("planned")).toInt() != mb.value(QStringLiteral("planned")).toInt()) {
-            return ma.value(QStringLiteral("planned")).toInt() > mb.value(QStringLiteral("planned")).toInt();
+    QString shareChangeSubject;
+    qint64 shareChangeNumerator = -1;
+    for (const QString& name : std::as_const(subjectNames)) {
+        const qint64 current = currentSubjects.value(name).seconds;
+        const qint64 previous = previousSubjects.value(name).seconds;
+        const QString color = currentSubjects.contains(name) ? currentSubjects.value(name).color
+                                                             : previousSubjects.value(name).color;
+        const bool pseudoSubject = name == kUnlinkedSubjectName || name == kUncategorizedSubjectName;
+
+        QVariantMap subject;
+        subject.insert(QStringLiteral("name"), name);
+        subject.insert(QStringLiteral("color"), color);
+        subject.insert(QStringLiteral("currentSeconds"), current);
+        subject.insert(QStringLiteral("currentSharePercent"),
+                       currentTotalSeconds > 0
+                           ? static_cast<double>(current) * 100.0 / currentTotalSeconds : 0.0);
+        subject.insert(QStringLiteral("pseudoSubject"), pseudoSubject);
+        if (ended) {
+            subject.insert(QStringLiteral("previousSeconds"), previous);
+            subject.insert(QStringLiteral("deltaSeconds"), current - previous);
+        } else {
+            subject.insert(QStringLiteral("previousSeconds"), QVariant());
+            subject.insert(QStringLiteral("deltaSeconds"), QVariant());
         }
-        if (ma.value(QStringLiteral("actual")).toInt()
-            != mb.value(QStringLiteral("actual")).toInt()) {
-            return ma.value(QStringLiteral("actual")).toInt()
-                > mb.value(QStringLiteral("actual")).toInt();
+        if (sharesComparable) {
+            const double currentShare = static_cast<double>(current) * 100.0 / currentTotalSeconds;
+            const double previousShare = static_cast<double>(previous) * 100.0 / previousTotalSeconds;
+            subject.insert(QStringLiteral("previousSharePercent"), previousShare);
+            subject.insert(QStringLiteral("deltaPoints"), currentShare - previousShare);
+        } else {
+            subject.insert(QStringLiteral("previousSharePercent"), QVariant());
+            subject.insert(QStringLiteral("deltaPoints"), QVariant());
         }
-        return ma.value(QStringLiteral("name")).toString()
-            < mb.value(QStringLiteral("name")).toString();
-    });
+        subjectList.append(subject);
 
-    result[QStringLiteral("plannedTotal")] = plannedTotal;
-    result[QStringLiteral("completedTotal")] = completedTotal;
-    result[QStringLiteral("focusedSeconds")] = focusedSeconds;
-    result[QStringLiteral("subjects")] = subjectList;
-    return result;
-}
-
-QVariantMap StatisticsService::getWeeklyReview(const QDate& weekStart) const
-{
-    QVariantMap result;
-    result.insert(QStringLiteral("hasData"), false);
-    result.insert(QStringLiteral("subjects"), QVariantList());
-    result.insert(QStringLiteral("factText"), QString());
-    result.insert(QStringLiteral("suggestionText"), QString());
-
-    if (!weekStart.isValid() || weekStart.dayOfWeek() != Qt::Monday) {
-        qWarning() << "Failed to build weekly review: weekStart is not Monday" << weekStart;
-        return result;
-    }
-
-    const QDate weekEnd = weekStart.addDays(6);
-    const QVariantMap current = weeklyAggregates(weekStart, weekEnd);
-    const QVariantMap previous = weeklyAggregates(weekStart.addDays(-7), weekStart.addDays(-1));
-
-    const int planned = current.value(QStringLiteral("plannedTotal")).toInt();
-    const int completed = current.value(QStringLiteral("completedTotal")).toInt();
-    const int focusedSeconds = current.value(QStringLiteral("focusedSeconds")).toInt();
-    const QVariantList subjects = current.value(QStringLiteral("subjects")).toList();
-    const int focusedMinutes = focusedSeconds / 60;
-    // 计划单位已是分钟，完成率 = 实际专注分钟 / 计划用时分钟。
-    // 计划为 0 时不除零：完成率视为无（0），由 UI 与结论规则单独处理“未计划”。
-    const double rate = planned > 0 ? static_cast<double>(focusedMinutes) * 100.0 / planned : 0.0;
-
-    result[QStringLiteral("weekStart")] = weekStart.toString(Qt::ISODate);
-    result[QStringLiteral("weekEnd")] = weekEnd.toString(Qt::ISODate);
-    result[QStringLiteral("plannedMinutes")] = planned;
-    result[QStringLiteral("completedPomodoros")] = completed;
-    result[QStringLiteral("completionRate")] = rate;
-    result[QStringLiteral("focusedMinutes")] = focusedMinutes;
-    result[QStringLiteral("activeDays")] = current.value(QStringLiteral("activeDays")).toInt();
-    result[QStringLiteral("previousCompletedPomodoros")] = previous.value(QStringLiteral("completedTotal")).toInt();
-    result[QStringLiteral("previousFocusedMinutes")] = previous.value(QStringLiteral("focusedSeconds")).toInt() / 60;
-    result[QStringLiteral("previousActiveDays")] = previous.value(QStringLiteral("activeDays")).toInt();
-    result[QStringLiteral("subjects")] = subjects;
-
-    // 确定性结论：最多一条事实 + 一条建议。用词只陈述事实、不评价人格。
-    QString factText;
-    QString suggestionText;
-
-    // 规则一：找出计划≥3 且完成率比总体低至少 20 个百分点、最低的那个科目。
-    double worstGap = -1.0;
-    QString worstSubject;
-    for (const QVariant& value : subjects) {
-        const QVariantMap subject = value.toMap();
-        const int subjectPlanned = subject.value(QStringLiteral("planned")).toInt();
-        if (subjectPlanned < kReviewMinimumSubjectPlan) {
+        // F2：占比差 = (本周 × 前周总 − 前周 × 本周总) / (本周总 × 前周总)。
+        // 所有候选分母相同，比较分子绝对值即可；门槛同样交叉相乘，不经过浮点。
+        if (!sharesComparable || pseudoSubject
+            || currentTotalSeconds < kShareChangeMinimumWeekSeconds
+            || previousTotalSeconds < kShareChangeMinimumWeekSeconds) {
             continue;
         }
-        const double subjectRate = subject.value(QStringLiteral("rate")).toDouble();
-        if (subjectRate <= rate - kReviewSubjectGapPoints) {
-            const double gap = rate - subjectRate;
-            if (gap > worstGap) {
-                worstGap = gap;
-                worstSubject = subject.value(QStringLiteral("name")).toString();
-            }
+        const qint64 numerator =
+            qAbs(current * previousTotalSeconds - previous * currentTotalSeconds);
+        const bool enoughPoints = numerator * 100
+            >= kShareChangeMinimumPoints * currentTotalSeconds * previousTotalSeconds;
+        const bool enoughSeconds = qAbs(current - previous) >= kShareChangeMinimumSubjectSeconds;
+        if (!enoughPoints || !enoughSeconds) {
+            continue;
+        }
+        if (numerator > shareChangeNumerator
+            || (numerator == shareChangeNumerator && name < shareChangeSubject)) {
+            shareChangeNumerator = numerator;
+            shareChangeSubject = name;
         }
     }
+    review.insert(QStringLiteral("subjects"), subjectList);
 
-    if (!worstSubject.isEmpty()) {
-        factText = worstSubject + QStringLiteral("的实际投入明显低于计划。");
-    } else if (planned > 0
-               && rate >= kReviewStableRateMinimum
-               && rate <= kReviewStableRateMaximum) {
-        // 规则四：计划基本准确。
-        factText = QStringLiteral("本周计划与实际基本一致，当前估算较稳定。");
+    // —— 预计用时对账：同一任务集合，按任务当前科目归组 ——
+    struct ReconciliationRow
+    {
+        QString subject;
+        QString color;
+        qint64 plannedMinutes = 0;
+        qint64 actualSeconds = 0;
+        qint64 actualDisplayMinutes = 0;
+    };
+    QMap<QString, ReconciliationRow> rowsBySubject;
+    for (const PlannedTask& task : std::as_const(plannedTasks)) {
+        ReconciliationRow& row = rowsBySubject[task.subject];
+        row.subject = task.subject;
+        if (row.color.isEmpty()) {
+            row.color = task.color;
+        }
+        row.plannedMinutes += task.plannedMinutes;
+        row.actualSeconds += plannedTaskSeconds.value(task.taskId, 0);
     }
+    // QMap 已按名称升序；下面的排序都用稳定排序，名称就是并列时的次序。
+    QList<ReconciliationRow> rows = rowsBySubject.values();
 
-    if (planned == 0 && focusedMinutes > 0) {
-        suggestionText = QStringLiteral("为任务设置预计用时后，这里能给出计划完成率与偏差分析。");
-    } else if (planned > 0 && rate < kReviewOverplannedRate) {
-        // 规则二：总体高估。
-        suggestionText = QStringLiteral("下周总计划量可以先下调 15%～25%，避免继续累积无法完成的任务。");
-    } else if (planned > 0 && rate > kReviewUnderplannedRate) {
-        // 规则三：总体低估。
-        suggestionText = QStringLiteral("本周实际投入明显高于预估，可以适当提高下周计划量，或重新校准任务预估。");
+    // 展示分钟：各行先向下取整，再把「合计向下取整 − 各行之和」的差额按余秒从大到小逐行补 1 分钟，
+    // 保证各行之和等于合计展示分钟。比例与规则判断始终用原始秒数。
+    qint64 totalPlannedMinutes = 0;
+    qint64 totalActualSeconds = 0;
+    qint64 flooredSum = 0;
+    for (ReconciliationRow& row : rows) {
+        row.actualDisplayMinutes = row.actualSeconds / 60;
+        flooredSum += row.actualDisplayMinutes;
+        totalPlannedMinutes += row.plannedMinutes;
+        totalActualSeconds += row.actualSeconds;
     }
+    const qint64 totalActualDisplayMinutes = totalActualSeconds / 60;
+    QList<qsizetype> remainderOrder;
+    for (qsizetype i = 0; i < rows.size(); ++i) {
+        remainderOrder.append(i);
+    }
+    std::stable_sort(remainderOrder.begin(), remainderOrder.end(), [&rows](qsizetype a, qsizetype b) {
+        return rows.at(a).actualSeconds % 60 > rows.at(b).actualSeconds % 60;
+    });
+    for (qint64 i = 0; i < totalActualDisplayMinutes - flooredSum && i < remainderOrder.size(); ++i) {
+        rows[remainderOrder.at(i)].actualDisplayMinutes += 1;
+    }
+    std::stable_sort(rows.begin(), rows.end(), [](const ReconciliationRow& a, const ReconciliationRow& b) {
+        return a.plannedMinutes > b.plannedMinutes;
+    });
 
-    result[QStringLiteral("factText")] = factText;
-    result[QStringLiteral("suggestionText")] = suggestionText;
-    // 自由计时不会产生完整番茄，但仍是有效投入；只看 completed 会把整周数据误判为空。
-    result[QStringLiteral("hasData")] = planned > 0 || focusedSeconds > 0;
-    return result;
+    QVariantList rowList;
+    QString estimateShortfallSubject;
+    qint64 estimateShortfallSeconds = -1;
+    qint64 estimateShortfallPlanned = 0;
+    qint64 estimateShortfallDisplayActual = 0;
+    for (const ReconciliationRow& row : std::as_const(rows)) {
+        QVariantMap item;
+        item.insert(QStringLiteral("subject"), row.subject);
+        item.insert(QStringLiteral("color"), row.color);
+        item.insert(QStringLiteral("plannedMinutes"), row.plannedMinutes);
+        item.insert(QStringLiteral("actualSeconds"), row.actualSeconds);
+        item.insert(QStringLiteral("actualDisplayMinutes"), row.actualDisplayMinutes);
+        item.insert(QStringLiteral("differenceDisplayMinutes"),
+                    row.actualDisplayMinutes - row.plannedMinutes);
+        // 投入／计划比，允许超过 100%，不代表任务完成率。
+        item.insert(QStringLiteral("investmentRatioPercent"),
+                    static_cast<double>(row.actualSeconds) * 100.0 / (row.plannedMinutes * 60));
+        rowList.append(item);
+
+        // F3：计划够量、且实际低于自身计划的 60%；取短缺秒数最多的科目，同短缺按名称。
+        if (row.plannedMinutes < kEstimateMinimumPlanMinutes
+            || row.actualSeconds * 100 >= row.plannedMinutes * 60 * kEstimateShortfallPercent) {
+            continue;
+        }
+        const qint64 shortfall = row.plannedMinutes * 60 - row.actualSeconds;
+        if (shortfall > estimateShortfallSeconds
+            || (shortfall == estimateShortfallSeconds && row.subject < estimateShortfallSubject)) {
+            estimateShortfallSeconds = shortfall;
+            estimateShortfallSubject = row.subject;
+            estimateShortfallPlanned = row.plannedMinutes;
+            estimateShortfallDisplayActual = row.actualDisplayMinutes;
+        }
+    }
+    QVariantMap planned;
+    planned.insert(QStringLiteral("rows"), rowList);
+    planned.insert(QStringLiteral("inProgress"), !ended);
+    planned.insert(QStringLiteral("totalPlannedMinutes"), totalPlannedMinutes);
+    planned.insert(QStringLiteral("totalActualSeconds"), totalActualSeconds);
+    planned.insert(QStringLiteral("totalActualDisplayMinutes"), totalActualDisplayMinutes);
+    planned.insert(QStringLiteral("totalDifferenceDisplayMinutes"),
+                   totalActualDisplayMinutes - totalPlannedMinutes);
+    // 计划为零时比例为空，不伪造 0%。
+    planned.insert(QStringLiteral("totalInvestmentRatioPercent"),
+                   totalPlannedMinutes > 0
+                       ? QVariant(static_cast<double>(totalActualSeconds) * 100.0
+                                  / (totalPlannedMinutes * 60))
+                       : QVariant());
+    review.insert(QStringLiteral("plannedTasks"), planned);
+
+    // —— 事实：只给已结束周，按 F1 → F2 → F3 取前两条，每类最多一句，不给建议 ——
+    QVariantList facts;
+    if (ended) {
+        if (shortfallDate.isValid()) {
+            QVariantMap fact;
+            fact.insert(QStringLiteral("type"), QStringLiteral("goalShortfall"));
+            fact.insert(QStringLiteral("date"), shortfallDate.toString(Qt::ISODate));
+            fact.insert(QStringLiteral("goalMinutes"), shortfallGoalMinutes);
+            fact.insert(QStringLiteral("actualSeconds"), shortfallActualSeconds);
+            fact.insert(QStringLiteral("ratioPercent"),
+                        static_cast<double>(shortfallActualSeconds) * 100.0
+                            / (shortfallGoalMinutes * 60));
+            facts.append(fact);
+        }
+        if (!shareChangeSubject.isEmpty()) {
+            const qint64 current = currentSubjects.value(shareChangeSubject).seconds;
+            const qint64 previous = previousSubjects.value(shareChangeSubject).seconds;
+            const double currentShare = static_cast<double>(current) * 100.0 / currentTotalSeconds;
+            const double previousShare = static_cast<double>(previous) * 100.0 / previousTotalSeconds;
+            QVariantMap fact;
+            fact.insert(QStringLiteral("type"), QStringLiteral("subjectShareChange"));
+            fact.insert(QStringLiteral("subject"), shareChangeSubject);
+            // 用原始秒数：界面按秒向下取整显示，与同页饼图逐项取整的数值一致。
+            fact.insert(QStringLiteral("currentSeconds"), current);
+            fact.insert(QStringLiteral("previousSeconds"), previous);
+            fact.insert(QStringLiteral("currentSharePercent"), currentShare);
+            fact.insert(QStringLiteral("deltaPoints"), currentShare - previousShare);
+            facts.append(fact);
+        }
+        if (!estimateShortfallSubject.isEmpty()) {
+            QVariantMap fact;
+            fact.insert(QStringLiteral("type"), QStringLiteral("estimateShortfall"));
+            fact.insert(QStringLiteral("subject"), estimateShortfallSubject);
+            fact.insert(QStringLiteral("plannedMinutes"), estimateShortfallPlanned);
+            fact.insert(QStringLiteral("actualDisplayMinutes"), estimateShortfallDisplayActual);
+            // 用展示分钟相减，句子里「计划 = 实际 + 差」按显示的数也成立。
+            fact.insert(QStringLiteral("shortfallDisplayMinutes"),
+                        estimateShortfallPlanned - estimateShortfallDisplayActual);
+            facts.append(fact);
+        } else if (totalPlannedMinutes > 0
+                   && totalActualSeconds * 100
+                          >= totalPlannedMinutes * 60 * kEstimateOnTrackMinimumPercent
+                   && totalActualSeconds * 100
+                          <= totalPlannedMinutes * 60 * kEstimateOnTrackMaximumPercent) {
+            QVariantMap fact;
+            fact.insert(QStringLiteral("type"), QStringLiteral("estimateOnTrack"));
+            fact.insert(QStringLiteral("ratioPercent"),
+                        static_cast<double>(totalActualSeconds) * 100.0 / (totalPlannedMinutes * 60));
+            facts.append(fact);
+        }
+        while (facts.size() > 2) {
+            facts.removeLast();
+        }
+    }
+    review.insert(QStringLiteral("facts"), facts);
+
+    qint64 weekSeconds = 0;
+    for (auto it = dailySeconds.constBegin(); it != dailySeconds.constEnd(); ++it) {
+        weekSeconds += it.value();
+    }
+    // hasData：本周有有效专注、有效目标或计划。目标只看已结束的日子与今天，未来日期的目标不算。
+    review.insert(QStringLiteral("hasData"),
+                  weekSeconds > 0 || goalDays > 0 || !todayGoal.isEmpty() || !plannedTasks.isEmpty());
+    // hasDisplayContent 由可展示块决定：只有专注记录而没有目标、计划、事实时，卡片没有可说的。
+    review.insert(QStringLiteral("hasDisplayContent"),
+                  goalDays > 0 || !todayGoal.isEmpty() || !rowList.isEmpty() || !facts.isEmpty());
+    return review;
 }
 
 QVariantMap StatisticsService::getWeeklyReview() const
 {
+    // 便捷入口：只取一次逻辑今天，同一个日期既定周、又判断周期。
     const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
-    return getWeeklyReview(today.addDays(1 - today.dayOfWeek()));
+    return getWeeklyReview(today.addDays(1 - today.dayOfWeek()), today.toString(Qt::ISODate));
 }

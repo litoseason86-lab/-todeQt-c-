@@ -2,6 +2,8 @@
 
 #include <QDate>
 
+#include <cmath>
+
 namespace {
 const auto kLastModeKey = QStringLiteral("focus/lastMode");
 const auto kWorkMinutesKey = QStringLiteral("focus/workMinutes");
@@ -31,6 +33,11 @@ const auto kLongBreakIntervalKey = QStringLiteral("focus/longBreakInterval");
 const auto kDailyFocusGoalDateKey = QStringLiteral("focus/dailyGoalDate");
 const auto kDailyFocusGoalMinutesKey = QStringLiteral("focus/dailyGoalMinutes");
 const auto kLegacyDailyFocusGoalHoursKey = QStringLiteral("focus/dailyGoalHours");
+// 每日目标按日期留存：focus/dailyGoalHistory/<yyyy-MM-dd> = 分钟。
+// 旧的一对键（日期 + 分钟）只存最后一天，第二天就被覆盖，周复盘拿不到历史。
+// 放在 focus 分组下，沿用现有自有分组进入备份与恢复，不新增数据库表。
+const auto kDailyFocusGoalHistoryGroup = QStringLiteral("focus/dailyGoalHistory");
+constexpr int kMaxDailyFocusGoalMinutes = 24 * 60;
 const auto kSemesterStartDateKey = QStringLiteral("schedule/semesterStartDate");
 const auto kSemesterWeeksKey = QStringLiteral("schedule/semesterWeeks");
 const auto kScheduleDisplayModeKey = QStringLiteral("schedule/displayMode");
@@ -45,6 +52,62 @@ const auto kShortcutGroup = QStringLiteral("shortcuts");
 constexpr int kMinSemesterWeeks = 1;
 constexpr int kMaxSemesterWeeks = 60;
 constexpr int kDefaultSemesterWeeks = 20;
+
+QString dailyGoalHistoryKey(const QString& isoDate)
+{
+    return kDailyFocusGoalHistoryGroup + QLatin1Char('/') + isoDate;
+}
+
+bool isStrictIsoDate(const QString& isoDate)
+{
+    const QDate date = QDate::fromString(isoDate, Qt::ISODate);
+    return date.isValid() && date.toString(Qt::ISODate) == isoDate;
+}
+
+// 从存储里读出的目标分钟数，只认 1～1440 的整数，其余一律按「没有有效目标」返回 0。
+// 不能直接 toInt：小数会被截断成整数、"480abc" 这类坏值也可能被部分接受，
+// 损坏配置就会冒充成一个真实目标进入达标判断。
+// INI 后端从磁盘读回的是字符串，原生偏好与进程内缓存里是数值，几种类型都要按同一规则判。
+int strictGoalMinutes(const QVariant& value)
+{
+    qint64 minutes = 0;
+    switch (value.typeId()) {
+    case QMetaType::Int:
+    case QMetaType::UInt:
+    case QMetaType::LongLong:
+    case QMetaType::ULongLong:
+        minutes = value.toLongLong();
+        break;
+    case QMetaType::Double:
+    case QMetaType::Float: {
+        const double number = value.toDouble();
+        if (!std::isfinite(number) || std::floor(number) != number
+            || number < 1 || number > kMaxDailyFocusGoalMinutes) {
+            return 0;
+        }
+        minutes = static_cast<qint64>(number);
+        break;
+    }
+    case QMetaType::QString:
+    case QMetaType::QByteArray: {
+        const QString text = value.toString().trimmed();
+        // 1440 最多四位；只接受 ASCII 数字，"+480"、"4e2"、全角数字都不算。
+        if (text.isEmpty() || text.size() > 4) {
+            return 0;
+        }
+        for (const QChar ch : text) {
+            if (ch < QLatin1Char('0') || ch > QLatin1Char('9')) {
+                return 0;
+            }
+        }
+        minutes = text.toLongLong();
+        break;
+    }
+    default:
+        return 0;
+    }
+    return (minutes >= 1 && minutes <= kMaxDailyFocusGoalMinutes) ? static_cast<int>(minutes) : 0;
+}
 
 QString settingsErrorMessage(QSettings::Status status)
 {
@@ -71,12 +134,18 @@ AppSettings::AppSettings(const QString& settingsFilePath, QObject* parent)
     , m_settingsFilePath(settingsFilePath)
 {
     recreateSettingsBackend();
+    // 旧版本只写那一对键；升级后第一次启动把它对应的日期补进历史。
+    // 构造时还没有人连接信号，失败会在下一次 reload() 或保存目标时重试。
+    syncLegacyDailyGoalIntoHistory();
 }
 
 void AppSettings::reload()
 {
     // 重新绑定磁盘存储（恢复流程刚覆盖过设置文件），再广播全部变更让 QML 绑定刷新。
     recreateSettingsBackend();
+    // 恢复旧备份、或旧版本改过当天目标之后，旧的一对键对应日期以旧值为准同步进历史。
+    // 必须在广播之前做完，收到 dailyFocusGoalChanged 的统计页才能读到同步后的值。
+    syncLegacyDailyGoalIntoHistory();
     emit lastModeChanged();
     emit workMinutesChanged();
     emit breakMinutesChanged();
@@ -790,25 +859,42 @@ void AppSettings::setLongBreakInterval(int count)
 
 int AppSettings::dailyFocusGoalMinutesForDate(const QString& isoDate) const
 {
-    const QDate requestedDate = QDate::fromString(isoDate, Qt::ISODate);
-    if (!requestedDate.isValid() || requestedDate.toString(Qt::ISODate) != isoDate) {
+    if (!isStrictIsoDate(isoDate)) {
         return 0;
     }
 
-    if (m_settings->value(kDailyFocusGoalDateKey).toString() != isoDate) {
-        return 0;
+    // 旧的一对键对应的日期以旧值为准：旧版本只写这一对键，用旧版改过当天目标后，
+    // 那一天的历史键可能还是过期值。新版本保存时两处写同一个值，正常情况下两种读法一致；
+    // 只有启动同步没写成功时二者才会不同，这时读取也要以旧值为准。
+    // 旧键分钟数不合法时不能挡住有效历史，继续往下读历史键。
+    if (m_settings->value(kDailyFocusGoalDateKey).toString() == isoDate) {
+        const int legacyMinutes = strictGoalMinutes(m_settings->value(kDailyFocusGoalMinutesKey));
+        if (legacyMinutes > 0) {
+            return legacyMinutes;
+        }
     }
+    // 损坏配置按“当天未设置”处理，不能把异常值带进达标判断。
+    return strictGoalMinutes(m_settings->value(dailyGoalHistoryKey(isoDate)));
+}
 
-    const int minutes = m_settings->value(kDailyFocusGoalMinutesKey, 0).toInt();
-    // 损坏配置按“当天未设置”处理，不能把异常值带进百分比计算。
-    return (minutes >= 1 && minutes <= 24 * 60) ? minutes : 0;
+QMap<QDate, int> AppSettings::dailyFocusGoalsBetween(const QDate& startDate, const QDate& endDate) const
+{
+    QMap<QDate, int> goals;
+    if (!startDate.isValid() || !endDate.isValid() || startDate > endDate) {
+        return goals;
+    }
+    for (QDate date = startDate; date <= endDate; date = date.addDays(1)) {
+        const int minutes = dailyFocusGoalMinutesForDate(date.toString(Qt::ISODate));
+        if (minutes > 0) {
+            goals.insert(date, minutes);
+        }
+    }
+    return goals;
 }
 
 bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)
 {
-    const QDate requestedDate = QDate::fromString(isoDate, Qt::ISODate);
-    if (!requestedDate.isValid() || requestedDate.toString(Qt::ISODate) != isoDate
-            || minutes < 1 || minutes > 24 * 60) {
+    if (!isStrictIsoDate(isoDate) || minutes < 1 || minutes > kMaxDailyFocusGoalMinutes) {
         return false;
     }
 
@@ -816,28 +902,113 @@ bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)
         recreateSettingsBackend();
     }
 
+    const QString historyKey = dailyGoalHistoryKey(isoDate);
+    // 同值提前返回必须旧键与历史键都已完整一致、也没有待清理的旧整小时键。
+    // 只比旧键会漏掉「升级前就是这个值、历史键还没写」的情况，那一天就永远没有历史。
     if (m_settings->value(kDailyFocusGoalDateKey).toString() == isoDate
-            && m_settings->value(kDailyFocusGoalMinutesKey).toInt() == minutes) {
+        && strictGoalMinutes(m_settings->value(kDailyFocusGoalMinutesKey)) == minutes
+        && strictGoalMinutes(m_settings->value(historyKey)) == minutes
+        && !m_settings->contains(kLegacyDailyFocusGoalHoursKey)) {
         return true;
     }
 
-    // 日期与分钟必须作为一项设置写入；旧整小时值没有日期语义，成功保存新目标后清理。
-    m_settings->setValue(kDailyFocusGoalDateKey, isoDate);
-    m_settings->setValue(kDailyFocusGoalMinutesKey, minutes);
-    m_settings->remove(kLegacyDailyFocusGoalHoursKey);
-    m_settings->sync();
-    if (m_settings->status() != QSettings::NoError) {
-        const QString message = settingsErrorMessage(m_settings->status());
-        // QSettings::status 是粘滞状态：一次 AccessError 后，即使路径恢复可写，同一对象仍会继续报错。
-        // 重建后端既丢弃未落盘缓存，也允许用户修复权限后在本次进程内直接重试。
-        recreateSettingsBackend();
-        emit settingsWriteFailed(QStringLiteral("focus/dailyGoal"), message);
+    QList<QPair<QString, QVariant>> writes;
+    // 旧的一对键马上要被这次保存覆盖。它记着的若是另一天、且还没同步进历史
+    // （比如启动同步因设置不可写而失败），这次一并补上，否则那一天的目标会随旧键覆盖而永久丢失。
+    if (m_settings->value(kDailyFocusGoalDateKey).toString() != isoDate) {
+        appendPendingLegacyGoalSync(writes);
+    }
+    // 日期、分钟与历史键作为一次保存写入；旧整小时值没有日期语义，同一次保存里清理。
+    writes.append({kDailyFocusGoalDateKey, isoDate});
+    writes.append({kDailyFocusGoalMinutesKey, minutes});
+    writes.append({historyKey, minutes});
+    if (!commitSettingsBatch(QStringLiteral("focus/dailyGoal"), writes,
+                             {kLegacyDailyFocusGoalHoursKey})) {
         return false;
     }
 
     emit dailyFocusGoalChanged();
     emit settingsWriteSucceeded(QStringLiteral("focus/dailyGoal"));
     return true;
+}
+
+void AppSettings::appendPendingLegacyGoalSync(QList<QPair<QString, QVariant>>& writes) const
+{
+    const QString legacyDate = m_settings->value(kDailyFocusGoalDateKey).toString();
+    if (!isStrictIsoDate(legacyDate)) {
+        return;
+    }
+    const int legacyMinutes = strictGoalMinutes(m_settings->value(kDailyFocusGoalMinutesKey));
+    // 旧键不合法时什么都不做：无效旧键不能覆盖有效历史。
+    if (legacyMinutes <= 0) {
+        return;
+    }
+    const QString historyKey = dailyGoalHistoryKey(legacyDate);
+    // 值一致时不重复写入，也就不会去碰（可能只读的）设置文件。
+    if (strictGoalMinutes(m_settings->value(historyKey)) == legacyMinutes) {
+        return;
+    }
+    writes.append({historyKey, legacyMinutes});
+}
+
+void AppSettings::syncLegacyDailyGoalIntoHistory()
+{
+    QList<QPair<QString, QVariant>> writes;
+    appendPendingLegacyGoalSync(writes);
+    if (writes.isEmpty()) {
+        return;
+    }
+    // 只发失败信号：同步是启动与重载时的后台动作，成功时不应让设置页显示「已保存」。
+    // 失败后读取对该日期仍以旧键为准，显示不受影响；下次 reload()、启动或保存目标时重试。
+    commitSettingsBatch(QStringLiteral("focus/dailyGoalHistory"), writes, {});
+}
+
+bool AppSettings::commitSettingsBatch(const QString& errorKey,
+                                      const QList<QPair<QString, QVariant>>& writes,
+                                      const QStringList& removals)
+{
+    if (m_settings->status() != QSettings::NoError) {
+        recreateSettingsBackend();
+    }
+
+    // 与 saveScheduleSettings 同一模式：先记下每个受影响键的原值与存在性，写入缓存后只 sync 一次。
+    // QSettings 的文件缓存由多个实例共享，重建后端撤销不了失败写入，
+    // 必须先把缓存恢复原状，否则进程里读到的会是没落盘的值，后续重试也会被它污染。
+    QStringList keys;
+    for (const auto& write : writes) {
+        keys.append(write.first);
+    }
+    keys.append(removals);
+    keys.removeDuplicates();
+    QVariantList previousValues;
+    QList<bool> previousPresence;
+    for (const QString& key : keys) {
+        previousValues.append(m_settings->value(key));
+        previousPresence.append(m_settings->contains(key));
+    }
+
+    for (const auto& write : writes) {
+        m_settings->setValue(write.first, write.second);
+    }
+    for (const QString& key : removals) {
+        m_settings->remove(key);
+    }
+    m_settings->sync();
+    if (m_settings->status() == QSettings::NoError) {
+        return true;
+    }
+
+    const QString message = settingsErrorMessage(m_settings->status());
+    for (qsizetype i = 0; i < keys.size(); ++i) {
+        if (previousPresence.at(i)) {
+            m_settings->setValue(keys.at(i), previousValues.at(i));
+        } else {
+            m_settings->remove(keys.at(i));
+        }
+    }
+    recreateSettingsBackend();
+    emit settingsWriteFailed(errorKey, message);
+    return false;
 }
 
 QString AppSettings::shortcutKey(const QString& actionId)

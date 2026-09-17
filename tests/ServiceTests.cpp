@@ -115,9 +115,17 @@ bool insertFocusSessionRowWithMode(int taskId, const QDate& date, int duration, 
     return true;
 }
 
-QDate mondayOf(const QDate& anchor)
+// AppSettings 单例落在系统偏好里，跨测试运行持久；复盘用例写进去的每日目标
+// （旧的一对键与按日期的历史键）不清掉，就会串到后面的用例和下一次运行。
+// 同进程里同一份设置的 QSettings 共享缓存，这里删掉后单例立刻读不到。
+void clearDailyGoalSettingsForTest()
 {
-    return anchor.addDays(1 - anchor.dayOfWeek());
+    QSettings settings;
+    settings.remove(QStringLiteral("focus/dailyGoalHistory"));
+    settings.remove(QStringLiteral("focus/dailyGoalDate"));
+    settings.remove(QStringLiteral("focus/dailyGoalMinutes"));
+    settings.remove(QStringLiteral("focus/dailyGoalHours"));
+    settings.sync();
 }
 
 int categoryIdByName(const QString& name)
@@ -157,6 +165,41 @@ QVariantMap subjectByName(const QVariantList& subjects, const QString& name)
         }
     }
     return QVariantMap();
+}
+
+QVariantMap rowBySubject(const QVariantList& rows, const QString& subject)
+{
+    for (const QVariant& value : rows) {
+        const QVariantMap row = value.toMap();
+        if (row.value(QStringLiteral("subject")).toString() == subject) {
+            return row;
+        }
+    }
+    return QVariantMap();
+}
+
+QVariantMap factOfType(const QVariantList& facts, const QString& type)
+{
+    for (const QVariant& value : facts) {
+        const QVariantMap fact = value.toMap();
+        if (fact.value(QStringLiteral("type")).toString() == type) {
+            return fact;
+        }
+    }
+    return QVariantMap();
+}
+
+// 同一条用例里切换多组场景时清空记录。专注记录外键指向任务（ON DELETE SET NULL），先删记录再删任务。
+bool clearFocusSessionsForTest()
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    return query.exec(QStringLiteral("DELETE FROM focus_sessions"));
+}
+
+bool clearTasksForTest()
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    return clearFocusSessionsForTest() && query.exec(QStringLiteral("DELETE FROM tasks"));
 }
 
 QVariantMap taskMapById(const QVariantList& tasks, int taskId)
@@ -687,6 +730,14 @@ private slots:
     void appSettingsRolloverIgnoredDateRoundTrip();
     void appSettingsNicknameTrimsAndRoundTrips();
     void appSettingsDailyFocusGoalMinutesByDate();
+    void appSettingsDailyGoalHistoryKeepsLastSavedValuePerDate();
+    void appSettingsDailyGoalRejectsCorruptStoredValues();
+    void appSettingsDailyGoalLegacyPairSyncsIntoHistory();
+    void appSettingsDailyGoalConsistentSyncDoesNotWrite();
+    void appSettingsDailyGoalSameValueSaveRepairsMissingHistory();
+    void appSettingsDailyGoalSaveFailureRestoresCacheAndRetries();
+    void appSettingsDailyGoalSyncFailureIsReportedAndRetried();
+    void appSettingsDailyGoalOldVersionRoundTrip();
     void appSettingsSidebarVisibleRoundTrip();
     void appSettingsSidebarOrderRoundTripsAndResets();
     void appSettingsSidebarOrderKeepsNewPagesVisible();
@@ -888,12 +939,16 @@ private slots:
     void deletingTaskKeepsCategorySnapshotForStatisticsAndGoals();
     void isRoutineGeneratedTaskDistinguishesInstances();
     void completeUndoRestoresPriorStateWithoutTouchingFields();
-    void weeklyReviewAggregatesPlannedActualAndSeparatesFreeTime();
-    void weeklyReviewHandlesZeroPlanAndUnplannedSubjects();
-    void weeklyReviewComparesPreviousWeekAndBoundaries();
-    void weeklyReviewLowestSubjectRuleAndSingleSuggestion();
-    void weeklyReviewBalancedPlanGivesSteadyConclusion();
-    void weeklyReviewRejectsNonMonday();
+    void weeklyReviewPeriodStateUsesLogicalTodayAsGiven();
+    void weeklyReviewAssignsSessionsByDayStartHour();
+    void weeklyReviewGoalSummaryExcludesToday();
+    void weeklyReviewReconciliationUsesSameTaskSet();
+    void weeklyReviewGoalShortfallFact();
+    void weeklyReviewSubjectShareChangeFactGuards();
+    void weeklyReviewEstimateFacts();
+    void weeklyReviewFactsPriorityAndCurrentWeekSuppression();
+    void weeklyReviewErrorsAreReturnedWithoutSignals();
+    void weeklyReviewContentFlags();
 
 private:
     // 需要访问 FocusTimer 私有时钟状态，必须挂在 friend 类下而不是自由函数里。
@@ -922,6 +977,7 @@ void ServiceTests::init()
     // 有人报过这条稳定失败而本机一直是绿的，差别就在这里。
     AppSettings::instance()->clearAllShortcutOverrides();
     AppSettings::instance()->setDayStartHour(4);
+    clearDailyGoalSettingsForTest();
 
     m_tempDir = new QTemporaryDir();
     QVERIFY(m_tempDir->isValid());
@@ -935,6 +991,7 @@ void ServiceTests::cleanup()
     FocusTimer::instance()->resetPomodoroCount();
     ExportService::instance()->m_betweenExportFilesHookForTest = {};
     AppSettings::instance()->setDayStartHour(4);
+    clearDailyGoalSettingsForTest();
     DatabaseManager::instance()->close();
     delete m_tempDir;
     m_tempDir = nullptr;
@@ -1311,15 +1368,346 @@ void ServiceTests::appSettingsDailyFocusGoalMinutesByDate()
         QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 140);
         QCOMPARE(spy.count(), 1);
 
-        // 新逻辑日目标替换当前记录，24 小时整是合法上界。
+        // 新逻辑日的目标另存一条历史，前一天的目标仍按日期读得到；24 小时整是合法上界。
         QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-13"), 1440));
-        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 0);
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 140);
         QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-13")), 1440);
         QCOMPARE(spy.count(), 2);
     }
 
     AppSettings reloaded(path);
+    QCOMPARE(reloaded.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-12")), 140);
     QCOMPARE(reloaded.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-13")), 1440);
+}
+
+namespace {
+QByteArray settingsFileBytes(const QString& path)
+{
+    // 直接读磁盘字节，不能用共享同一缓存的 QSettings 来证明持久化结果。
+    QFile disk(path);
+    return disk.open(QIODevice::ReadOnly) ? disk.readAll() : QByteArray();
+}
+
+// 文件与父目录同时只读，阻断原地写入及 QSaveFile 的原子替换（与课表批量保存用例同一做法）。
+bool lockSettingsForTest(const QString& path, const QString& dirPath,
+                         QFileDevice::Permissions& filePermissions,
+                         QFileDevice::Permissions& dirPermissions)
+{
+    filePermissions = QFile::permissions(path);
+    dirPermissions = QFile::permissions(dirPath);
+    if (!QFile::setPermissions(path, QFileDevice::ReadOwner)) {
+        return false;
+    }
+    if (!QFile::setPermissions(dirPath, QFileDevice::ReadOwner | QFileDevice::ExeOwner)) {
+        QFile::setPermissions(path, filePermissions);
+        return false;
+    }
+    return true;
+}
+
+bool unlockSettingsForTest(const QString& path, const QString& dirPath,
+                           QFileDevice::Permissions filePermissions,
+                           QFileDevice::Permissions dirPermissions)
+{
+    const bool directoryRestored = QFile::setPermissions(dirPath, dirPermissions);
+    const bool fileRestored = QFile::setPermissions(path, filePermissions);
+    return directoryRestored && fileRestored;
+}
+
+// 某些账户（如 root）能绕过文件权限，锁了也写得进去；这时写入失败类用例按现有做法跳过。
+bool settingsStillWritable(const QString& path)
+{
+    QFile probe(path);
+    const bool writable = probe.open(QIODevice::WriteOnly | QIODevice::Append);
+    probe.close();
+    return writable;
+}
+}
+
+void ServiceTests::appSettingsDailyGoalHistoryKeepsLastSavedValuePerDate()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-20"), 300));
+        // 同一天改目标只留下最后成功保存的值，不记录修改轨迹。
+        QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-20"), 360));
+        QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-21"), 240));
+        // 「沿用昨天」读的是前一天：今天已经设过目标也照样读得到。
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20")), 360);
+        QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-21")), 240);
+
+        const QMap<QDate, int> goals =
+            settings.dailyFocusGoalsBetween(QDate(2026, 7, 19), QDate(2026, 7, 22));
+        QCOMPARE(goals.size(), 2);
+        QCOMPARE(goals.value(QDate(2026, 7, 20)), 360);
+        QCOMPARE(goals.value(QDate(2026, 7, 21)), 240);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20")), 360);
+    QCOMPARE(reloaded.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-21")), 240);
+}
+
+void ServiceTests::appSettingsDailyGoalRejectsCorruptStoredValues()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        QSettings raw(path, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-01"), QStringLiteral("abc"));
+        raw.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-02"), QStringLiteral("480.5"));
+        raw.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-03"), 0);
+        raw.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-04"), 1441);
+        raw.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-05"), 480.5);
+        raw.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-06"), QStringLiteral("+480"));
+        raw.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-07"), 1);
+        raw.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-08"), QStringLiteral("1440"));
+        raw.sync();
+    }
+
+    AppSettings settings(path);
+    // 小数不截断、越界不夹取、带符号或非数字一律不认：损坏值不能冒充真实目标。
+    for (int day = 1; day <= 6; ++day) {
+        const QString iso = QDate(2026, 7, day).toString(Qt::ISODate);
+        QVERIFY2(settings.dailyFocusGoalMinutesForDate(iso) == 0, qPrintable(iso));
+    }
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-07")), 1);
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-08")), 1440);
+    // 非严格 ISO 日期不认。
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-7-8")), 0);
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-08T00:00:00")), 0);
+
+    const QMap<QDate, int> goals =
+        settings.dailyFocusGoalsBetween(QDate(2026, 7, 1), QDate(2026, 7, 8));
+    QCOMPARE(goals.keys(), QList<QDate>({QDate(2026, 7, 7), QDate(2026, 7, 8)}));
+}
+
+void ServiceTests::appSettingsDailyGoalLegacyPairSyncsIntoHistory()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        // 模拟升级前：旧版本只写那一对键，历史里只有别的日期。
+        QSettings raw(path, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("focus/dailyGoalDate"), QStringLiteral("2026-07-20"));
+        raw.setValue(QStringLiteral("focus/dailyGoalMinutes"), 300);
+        raw.setValue(QStringLiteral("focus/dailyGoalHistory/2026-07-19"), 100);
+        raw.sync();
+    }
+
+    AppSettings settings(path);
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20")), 300);
+    // 启动时已把旧键对应的日期同步进历史并落盘。
+    QVERIFY(settingsFileBytes(path).contains("2026-07-20=300"));
+
+    {
+        // 旧版本又把同一天改成 480：旧键与历史冲突时以旧值为准。
+        QSettings raw(path, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("focus/dailyGoalMinutes"), 480);
+        raw.sync();
+    }
+    QSignalSpy changed(&settings, &AppSettings::dailyFocusGoalChanged);
+    settings.reload();
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20")), 480);
+    QVERIFY(settingsFileBytes(path).contains("2026-07-20=480"));
+    // 只处理旧键明确对应的日期，其余历史保留。
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-19")), 100);
+
+    {
+        // 无效旧键：日期指向 07-19、分钟数损坏。它不能覆盖 07-19 的有效历史。
+        QSettings raw(path, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("focus/dailyGoalDate"), QStringLiteral("2026-07-19"));
+        raw.setValue(QStringLiteral("focus/dailyGoalMinutes"), QStringLiteral("abc"));
+        raw.sync();
+    }
+    settings.reload();
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-19")), 100);
+    QVERIFY(settingsFileBytes(path).contains("2026-07-19=100"));
+}
+
+void ServiceTests::appSettingsDailyGoalConsistentSyncDoesNotWrite()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+    {
+        AppSettings seed(path);
+        QVERIFY(seed.setDailyFocusGoal(QStringLiteral("2026-07-20"), 300));
+    }
+
+    AppSettings settings(path);
+    QSignalSpy failures(&settings, &AppSettings::settingsWriteFailed);
+    QFileDevice::Permissions filePermissions;
+    QFileDevice::Permissions dirPermissions;
+    QVERIFY(lockSettingsForTest(path, dir.path(), filePermissions, dirPermissions));
+    const bool bypassed = settingsStillWritable(path);
+    // 旧键与历史已经一致：重载时不写盘，只读的设置文件也就不会报写入失败。
+    settings.reload();
+    QVERIFY(unlockSettingsForTest(path, dir.path(), filePermissions, dirPermissions));
+    if (bypassed) {
+        QSKIP("当前账户可绕过文件权限，无法证明重载没有写盘");
+    }
+    QCOMPARE(failures.count(), 0);
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20")), 300);
+}
+
+void ServiceTests::appSettingsDailyGoalSameValueSaveRepairsMissingHistory()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    AppSettings settings(path);
+    QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-20"), 480));
+    {
+        // 模拟升级前就是这个值：旧键已是 480，历史键却不存在。
+        // 同一进程里同一份 ini 的 QSettings 共享缓存，删掉后 settings 立刻看不到这个键。
+        QSettings raw(path, QSettings::IniFormat);
+        raw.remove(QStringLiteral("focus/dailyGoalHistory/2026-07-20"));
+        raw.sync();
+    }
+    QVERIFY(!settingsFileBytes(path).contains("2026-07-20=480"));
+
+    // 同值保存不能只比旧键就提前返回，缺失的历史必须补写。
+    QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-20"), 480));
+    QVERIFY(settingsFileBytes(path).contains("2026-07-20=480"));
+}
+
+void ServiceTests::appSettingsDailyGoalSaveFailureRestoresCacheAndRetries()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    AppSettings settings(path);
+    QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-20"), 300));
+    const QByteArray originalBytes = settingsFileBytes(path);
+    QVERIFY(!originalBytes.isEmpty());
+    QSignalSpy failures(&settings, &AppSettings::settingsWriteFailed);
+    QSignalSpy successes(&settings, &AppSettings::settingsWriteSucceeded);
+    QSignalSpy changes(&settings, &AppSettings::dailyFocusGoalChanged);
+
+    QFileDevice::Permissions filePermissions;
+    QFileDevice::Permissions dirPermissions;
+    QVERIFY(lockSettingsForTest(path, dir.path(), filePermissions, dirPermissions));
+    const bool saved = settings.setDailyFocusGoal(QStringLiteral("2026-07-21"), 480);
+    const int failedToday = settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-21"));
+    const int failedYesterday = settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20"));
+    const bool leakedHistoryKey = QSettings(path, QSettings::IniFormat)
+                                      .contains(QStringLiteral("focus/dailyGoalHistory/2026-07-21"));
+    // 先恢复权限再断言，确保用例失败时临时目录也能正常清理。
+    QVERIFY(unlockSettingsForTest(path, dir.path(), filePermissions, dirPermissions));
+    if (saved) {
+        QSKIP("当前账户可绕过文件权限，无法模拟写入失败");
+    }
+
+    // 失败后缓存回到原值：没落盘的目标不能成为「最后成功保存」的值。
+    QCOMPARE(failedToday, 0);
+    QCOMPARE(failedYesterday, 300);
+    QVERIFY(!leakedHistoryKey);
+    QCOMPARE(settingsFileBytes(path), originalBytes);
+    QCOMPARE(failures.count(), 1);
+    QCOMPARE(successes.count(), 0);
+    QCOMPARE(changes.count(), 0);
+
+    // 恢复写入条件后，同一个对象直接重试成功。
+    QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-21"), 480));
+    QCOMPARE(changes.count(), 1);
+    const QByteArray newBytes = settingsFileBytes(path);
+    QVERIFY(newBytes.contains("2026-07-21=480"));
+    QVERIFY(newBytes.contains("2026-07-20=300"));
+}
+
+void ServiceTests::appSettingsDailyGoalSyncFailureIsReportedAndRetried()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    AppSettings settings(path);
+    QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-20"), 300));
+    {
+        // 旧版本把同一天改成 480，只写旧键。
+        QSettings raw(path, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("focus/dailyGoalMinutes"), 480);
+        raw.sync();
+    }
+
+    QSignalSpy failures(&settings, &AppSettings::settingsWriteFailed);
+    QFileDevice::Permissions filePermissions;
+    QFileDevice::Permissions dirPermissions;
+    QVERIFY(lockSettingsForTest(path, dir.path(), filePermissions, dirPermissions));
+    settings.reload();
+    const int duringFailure = settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20"));
+    QVERIFY(unlockSettingsForTest(path, dir.path(), filePermissions, dirPermissions));
+    if (failures.count() == 0) {
+        QSKIP("当前账户可绕过文件权限，无法模拟同步失败");
+    }
+
+    // 同步失败必须可见；没写成期间，读取对该日期仍以旧值为准。
+    QCOMPARE(failures.count(), 1);
+    QCOMPARE(duringFailure, 480);
+    QVERIFY(settingsFileBytes(path).contains("2026-07-20=300"));
+
+    // 重试一：恢复权限后再次重载完成同步。
+    settings.reload();
+    QCOMPARE(failures.count(), 1);
+    QVERIFY(settingsFileBytes(path).contains("2026-07-20=480"));
+
+    // 重试二：同步又失败时，保存另一天的目标会把旧键记着的那一天一并补上，
+    // 否则旧键一被今天覆盖，那一天的目标就永久丢失。
+    {
+        QSettings raw(path, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("focus/dailyGoalMinutes"), 500);
+        raw.sync();
+    }
+    QVERIFY(lockSettingsForTest(path, dir.path(), filePermissions, dirPermissions));
+    settings.reload();
+    QVERIFY(unlockSettingsForTest(path, dir.path(), filePermissions, dirPermissions));
+    QCOMPARE(failures.count(), 2);
+    QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-21"), 240));
+    const QByteArray bytes = settingsFileBytes(path);
+    QVERIFY(bytes.contains("2026-07-20=500"));
+    QVERIFY(bytes.contains("2026-07-21=240"));
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20")), 500);
+}
+
+void ServiceTests::appSettingsDailyGoalOldVersionRoundTrip()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    AppSettings settings(path);
+    QVERIFY(settings.setDailyFocusGoal(QStringLiteral("2026-07-20"), 300));
+    {
+        // 旧版本连续用了两天：只写旧的一对键，第二天把第一天覆盖掉。
+        QSettings raw(path, QSettings::IniFormat);
+        raw.setValue(QStringLiteral("focus/dailyGoalDate"), QStringLiteral("2026-07-21"));
+        raw.setValue(QStringLiteral("focus/dailyGoalMinutes"), 200);
+        raw.sync();
+        raw.setValue(QStringLiteral("focus/dailyGoalDate"), QStringLiteral("2026-07-22"));
+        raw.setValue(QStringLiteral("focus/dailyGoalMinutes"), 250);
+        raw.sync();
+    }
+
+    settings.reload();
+    // 新版本留下的历史保留；旧版本最后留下的日期同步进来；中间被覆盖的那一天无法恢复，不补造。
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-20")), 300);
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-21")), 0);
+    QCOMPARE(settings.dailyFocusGoalMinutesForDate(QStringLiteral("2026-07-22")), 250);
+    const QByteArray bytes = settingsFileBytes(path);
+    QVERIFY(bytes.contains("2026-07-22=250"));
+    QVERIFY(!bytes.contains("2026-07-21="));
 }
 
 void ServiceTests::appSettingsBackgroundThemeDefaultAndRoundTrip()
@@ -2523,7 +2911,9 @@ void ServiceTests::weekComparisonRangeQueryEqualsPerDaySum()
         perDaySum += dayStats.value(QStringLiteral("totalDuration")).toInt();
     }
 
-    const QVariantMap comparison = StatisticsService::instance()->getWeekComparison(weekStart);
+    // 传一个晚于所测周的逻辑今天：已结束周才做整周比较。
+    const QVariantMap comparison =
+        StatisticsService::instance()->getWeekComparison(weekStart, QStringLiteral("2026-03-09"));
     const QVariantMap duration = comparison.value(QStringLiteral("duration")).toMap();
     QCOMPARE(duration.value(QStringLiteral("currentValue")).toInt(), perDaySum);
     // 1+2+...+7 = 28 倍门槛；不足门槛的那条被两边一致地排除。
@@ -2541,7 +2931,8 @@ void ServiceTests::getWeekComparisonSumsNaturalWeeksAndRejectsInvalidStart()
     QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(6), kTestMinimumValidDurationSeconds * 8));
     QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(3), kTestMinimumValidDurationSeconds));
 
-    const QVariantMap comparison = StatisticsService::instance()->getWeekComparison(weekStart);
+    const QVariantMap comparison =
+        StatisticsService::instance()->getWeekComparison(weekStart, QStringLiteral("2026-06-15"));
     const QVariantMap duration = comparison.value(QStringLiteral("duration")).toMap();
     QCOMPARE(duration.value(QStringLiteral("currentValue")).toInt(),
              kTestMinimumValidDurationSeconds * 13);
@@ -2568,10 +2959,12 @@ void ServiceTests::getWeekComparisonSumsNaturalWeeksAndRejectsInvalidStart()
     QCOMPARE(effectiveDays.value(QStringLiteral("displayText")).toString(), QStringLiteral("↗ +50% vs 上周"));
     QVERIFY(effectiveDays.value(QStringLiteral("hasData")).toBool());
 
-    const QVariantMap invalidDate = StatisticsService::instance()->getWeekComparison(QDate());
+    const QVariantMap invalidDate =
+        StatisticsService::instance()->getWeekComparison(QDate(), QStringLiteral("2026-06-15"));
     QCOMPARE(invalidDate.value(QStringLiteral("hasData")).toBool(), false);
 
-    const QVariantMap invalidWeekStart = StatisticsService::instance()->getWeekComparison(weekStart.addDays(1));
+    const QVariantMap invalidWeekStart =
+        StatisticsService::instance()->getWeekComparison(weekStart.addDays(1), QStringLiteral("2026-06-15"));
     QCOMPARE(invalidWeekStart.value(QStringLiteral("hasData")).toBool(), false);
 }
 
@@ -6138,156 +6531,590 @@ void ServiceTests::completeUndoRestoresPriorStateWithoutTouchingFields()
     QCOMPARE(after.value(QStringLiteral("estimatedMinutes")).toInt(), 3);
 }
 
-void ServiceTests::weeklyReviewAggregatesPlannedActualAndSeparatesFreeTime()
+void ServiceTests::weeklyReviewPeriodStateUsesLogicalTodayAsGiven()
 {
-    const QDate weekStart = mondayOf(QDate(2026, 7, 15));
-    const QDate weekday = weekStart.addDays(1);
-    const int mathId = categoryIdByName(QStringLiteral("数学"));
-    const int polId = categoryIdByName(QStringLiteral("政治"));
-    QVERIFY(mathId > 0 && polId > 0);
+    const QDate weekStart(2026, 7, 13);
+    StatisticsService* stats = StatisticsService::instance();
 
-    // v10 起「计划」的单位是分钟：数学 100 分钟、政治 150 分钟，合计 250。
-    const int mathTask = insertPlannedTask(QStringLiteral("数学任务"), weekday, mathId, 100);
-    const int polTask = insertPlannedTask(QStringLiteral("政治任务"), weekday, polId, 150);
-    QVERIFY(mathTask > 0 && polTask > 0);
+    // 进入下周一逻辑日后，本周才算结束。
+    QCOMPARE(stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-19"))
+                 .value(QStringLiteral("periodState")).toString(),
+             QStringLiteral("current"));
+    QCOMPARE(stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"))
+                 .value(QStringLiteral("periodState")).toString(),
+             QStringLiteral("ended"));
+    const QVariantMap future = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-12"));
+    QCOMPARE(future.value(QStringLiteral("periodState")).toString(), QStringLiteral("future"));
+    QCOMPARE(future.value(QStringLiteral("loadState")).toString(), QStringLiteral("ready"));
+    QCOMPARE(future.value(QStringLiteral("hasDisplayContent")).toBool(), false);
 
-    // 有效番茄工作段（mode 默认 1）：数学 3 个、政治 2 个。
-    for (int i = 0; i < 3; ++i) QVERIFY(insertFocusSessionRow(mathTask, weekday, 25 * 60));
-    for (int i = 0; i < 2; ++i) QVERIFY(insertFocusSessionRow(polTask, weekday, 25 * 60));
-    // 自由计时段（mode 0）30 分钟：不折算番茄，但**计入专注时长**，
-    // 而完成率现在就是按时长算的，所以它会进完成率——这正是 v10 的语义变化。
-    QVERIFY(insertFocusSessionRowWithMode(mathTask, weekday, 30 * 60, 0));
+    // 传进来的已经是逻辑日期：换日界不能让服务对它再换算一次。
+    AppSettings::instance()->setDayStartHour(0);
+    QCOMPARE(stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-19"))
+                 .value(QStringLiteral("periodState")).toString(),
+             QStringLiteral("current"));
+    QCOMPARE(stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"))
+                 .value(QStringLiteral("periodState")).toString(),
+             QStringLiteral("ended"));
+    AppSettings::instance()->setDayStartHour(4);
 
-    const QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart);
-    QCOMPARE(review.value(QStringLiteral("hasData")).toBool(), true);
-    QCOMPARE(review.value(QStringLiteral("plannedMinutes")).toInt(), 250);
-    // 完整番茄仍是独立口径，不因计划改成分钟而变。
-    QCOMPARE(review.value(QStringLiteral("completedPomodoros")).toInt(), 5);
-    // 专注时长含两种模式的有效会话：5×25 + 30 = 155 分钟。
-    QCOMPARE(review.value(QStringLiteral("focusedMinutes")).toInt(), 155);
-    // 完成率 = 实际专注分钟 / 计划分钟 = 155 / 250 = 62%。
-    QCOMPARE(qRound(review.value(QStringLiteral("completionRate")).toDouble()), 62);
+    // 参数错误返回 error，不能混作空周或未来周隐藏掉。
+    const QVariantMap badToday = stats->getWeeklyReview(weekStart, QStringLiteral("2026-7-20"));
+    QCOMPARE(badToday.value(QStringLiteral("loadState")).toString(), QStringLiteral("error"));
+    QVERIFY(!badToday.value(QStringLiteral("errorMessage")).toString().isEmpty());
+    QCOMPARE(badToday.value(QStringLiteral("hasDisplayContent")).toBool(), false);
+    QCOMPARE(stats->getWeeklyReview(weekStart.addDays(2), QStringLiteral("2026-07-20"))
+                 .value(QStringLiteral("loadState")).toString(),
+             QStringLiteral("error"));
+    QCOMPARE(stats->getWeeklyReview(QDate(), QStringLiteral("2026-07-20"))
+                 .value(QStringLiteral("loadState")).toString(),
+             QStringLiteral("error"));
 
-    const QVariantList subjects = review.value(QStringLiteral("subjects")).toList();
-    QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("actual")).toInt(), 3);
-    QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("planned")).toInt(), 100);
-    // 数学：3×25 + 30 自由 = 105 分钟。
-    QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("focusedMinutes")).toInt(), 105);
-    QCOMPARE(subjectByName(subjects, QStringLiteral("政治")).value(QStringLiteral("actual")).toInt(), 2);
+    // 周比较收到同一个逻辑今天：当前周三项指标都不给涨跌；已结束周与整周比较一致。
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(-7), 30 * 60));
+    QVERIFY(insertFocusSessionRow(-1, weekStart.addDays(1), 45 * 60));
+    const QVariantMap currentComparison =
+        stats->getWeekComparison(weekStart, QStringLiteral("2026-07-15"));
+    QCOMPARE(currentComparison.value(QStringLiteral("periodState")).toString(), QStringLiteral("current"));
+    for (const QString& metric : {QStringLiteral("duration"), QStringLiteral("effectiveDays"),
+                                  QStringLiteral("sessionCount")}) {
+        QVERIFY2(!currentComparison.value(metric).toMap().value(QStringLiteral("hasData")).toBool(),
+                 qPrintable(metric));
+    }
+    const QVariantMap endedComparison = stats->getWeekComparison(weekStart, QStringLiteral("2026-07-20"));
+    QCOMPARE(endedComparison.value(QStringLiteral("periodState")).toString(), QStringLiteral("ended"));
+    const QVariantMap duration = endedComparison.value(QStringLiteral("duration")).toMap();
+    QVERIFY(duration.value(QStringLiteral("hasData")).toBool());
+    QCOMPARE(duration.value(QStringLiteral("currentValue")).toInt(), 45 * 60);
+    QCOMPARE(duration.value(QStringLiteral("previousValue")).toInt(), 30 * 60);
+    QCOMPARE(stats->getWeekComparison(weekStart, QStringLiteral("2026-7-20"))
+                 .value(QStringLiteral("hasData")).toBool(),
+             false);
 }
 
-void ServiceTests::weeklyReviewHandlesZeroPlanAndUnplannedSubjects()
+void ServiceTests::weeklyReviewAssignsSessionsByDayStartHour()
 {
-    const QDate weekStart = mondayOf(QDate(2026, 7, 15));
-    const QDate weekday = weekStart.addDays(1);
-    const int mathId = categoryIdByName(QStringLiteral("数学"));
+    StatisticsService* stats = StatisticsService::instance();
+    AppSettings* settings = AppSettings::instance();
 
-    // 完全没有预估，只有实际投入：完成率不除零，标记为“未计划投入”。
-    const int task = insertPlannedTask(QStringLiteral("无预估任务"), weekday, mathId, 0);
-    QVERIFY(insertFocusSessionRow(task, weekday, 25 * 60));
-    QVERIFY(insertFocusSessionRow(task, weekday, 25 * 60));
+    // 周一 03:30 开始的会话：日界 04:00 下属于上周日，日界 00:00 下属于本周一。
+    QVERIFY(insertFocusSessionRowAt(-1, QDate(2026, 7, 20), QStringLiteral("03:30:00"),
+                                    QStringLiteral("04:30:00"), 60 * 60));
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-19"), 60));
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-20"), 60));
 
-    const QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart);
-    QCOMPARE(review.value(QStringLiteral("plannedMinutes")).toInt(), 0);
-    QCOMPARE(review.value(QStringLiteral("completedPomodoros")).toInt(), 2);
-    QCOMPARE(review.value(QStringLiteral("completionRate")).toDouble(), 0.0);
-    QCOMPARE(review.value(QStringLiteral("hasData")).toBool(), true);
+    auto goalDay = [](const QVariantMap& review) {
+        const QVariantList days =
+            review.value(QStringLiteral("goal")).toMap().value(QStringLiteral("days")).toList();
+        return days.size() == 1 ? days.first().toMap() : QVariantMap();
+    };
 
-    const QVariantList subjects = review.value(QStringLiteral("subjects")).toList();
-    QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("unplanned")).toBool(), true);
-    // 无计划但有实际时，建议引导设置预估。
-    QVERIFY(review.value(QStringLiteral("suggestionText")).toString().contains(QStringLiteral("预计用时")));
+    QVariantMap sunday = goalDay(stats->getWeeklyReview(QDate(2026, 7, 13), QStringLiteral("2026-07-22")));
+    QCOMPARE(sunday.value(QStringLiteral("date")).toString(), QStringLiteral("2026-07-19"));
+    QCOMPARE(sunday.value(QStringLiteral("actualSeconds")).toInt(), 60 * 60);
+    QCOMPARE(sunday.value(QStringLiteral("met")).toBool(), true);
+    QVariantMap monday = goalDay(stats->getWeeklyReview(QDate(2026, 7, 20), QStringLiteral("2026-07-22")));
+    QCOMPARE(monday.value(QStringLiteral("date")).toString(), QStringLiteral("2026-07-20"));
+    QCOMPARE(monday.value(QStringLiteral("actualSeconds")).toInt(), 0);
 
-    // 纯自由计时同样是有效投入。它没有完整番茄，但不能因此被空状态吞掉。
-    QSqlQuery clear(DatabaseManager::instance()->database());
-    QVERIFY(clear.exec(QStringLiteral("DELETE FROM focus_sessions")));
-    QVERIFY(insertFocusSessionRowWithMode(task, weekday, 40 * 60, 0));
+    settings->setDayStartHour(0);
+    sunday = goalDay(stats->getWeeklyReview(QDate(2026, 7, 13), QStringLiteral("2026-07-22")));
+    QCOMPARE(sunday.value(QStringLiteral("actualSeconds")).toInt(), 0);
+    monday = goalDay(stats->getWeeklyReview(QDate(2026, 7, 20), QStringLiteral("2026-07-22")));
+    QCOMPARE(monday.value(QStringLiteral("actualSeconds")).toInt(), 60 * 60);
+    QCOMPARE(monday.value(QStringLiteral("met")).toBool(), true);
+    settings->setDayStartHour(4);
 
-    const QVariantMap freeOnlyReview =
-        StatisticsService::instance()->getWeeklyReview(weekStart);
-    QCOMPARE(freeOnlyReview.value(QStringLiteral("plannedMinutes")).toInt(), 0);
-    QCOMPARE(freeOnlyReview.value(QStringLiteral("completedPomodoros")).toInt(), 0);
-    QCOMPARE(freeOnlyReview.value(QStringLiteral("focusedMinutes")).toInt(), 40);
-    QCOMPARE(freeOnlyReview.value(QStringLiteral("hasData")).toBool(), true);
+    // 跨年周按日期范围归属：2026-12-28（周一）～ 2027-01-03（周日）。
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2027, 1, 2), 40 * 60, 0));
+    const QVariantMap crossYear = stats->getWeeklyReview(QDate(2026, 12, 28), QStringLiteral("2027-01-04"));
+    QCOMPARE(crossYear.value(QStringLiteral("periodState")).toString(), QStringLiteral("ended"));
+    const QVariantList subjects = crossYear.value(QStringLiteral("subjects")).toList();
+    QCOMPARE(subjects.size(), 1);
+    QCOMPARE(subjects.first().toMap().value(QStringLiteral("name")).toString(), QStringLiteral("未关联任务"));
+    QCOMPARE(subjects.first().toMap().value(QStringLiteral("currentSeconds")).toInt(), 40 * 60);
+    const QVariantMap nextWeek = stats->getWeeklyReview(QDate(2027, 1, 4), QStringLiteral("2027-01-05"));
+    QVERIFY(nextWeek.value(QStringLiteral("subjects")).toList().isEmpty());
 }
 
-void ServiceTests::weeklyReviewComparesPreviousWeekAndBoundaries()
+void ServiceTests::weeklyReviewGoalSummaryExcludesToday()
 {
-    const QDate weekStart = mondayOf(QDate(2026, 7, 15));
-    const int mathId = categoryIdByName(QStringLiteral("数学"));
+    const QDate weekStart(2026, 7, 13);
+    StatisticsService* stats = StatisticsService::instance();
+    AppSettings* settings = AppSettings::instance();
+    const int task = insertPlannedTask(QStringLiteral("数学练习"), weekStart,
+                                       categoryIdByName(QStringLiteral("数学")), 0);
+    QVERIFY(task > 0);
 
-    // 本周 2 个有效番茄。
-    const int thisTask = insertPlannedTask(QStringLiteral("本周任务"), weekStart.addDays(1), mathId, 5);
-    QVERIFY(insertFocusSessionRow(thisTask, weekStart.addDays(1), 25 * 60));
-    QVERIFY(insertFocusSessionRow(thisTask, weekStart.addDays(1), 25 * 60));
-    // 上周 1 个有效番茄。
-    const int prevTask = insertPlannedTask(QStringLiteral("上周任务"), weekStart.addDays(-6), mathId, 5);
-    QVERIFY(insertFocusSessionRow(prevTask, weekStart.addDays(-6), 25 * 60));
-    // 逻辑日边界：周日之后一天 02:00 的会话（日界 4 点）应归入本周最后一天。
-    const int boundaryTask = insertPlannedTask(QStringLiteral("边界任务"), weekStart.addDays(6), mathId, 0);
-    QVERIFY(insertFocusSessionRowAt(boundaryTask, weekStart.addDays(7),
-                                    QStringLiteral("02:00:00"), QStringLiteral("02:25:00"), 25 * 60));
+    // 周一：纯自由计时、未关联任务，刚好达标（3600 秒 = 60 分钟）。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-13"), 60));
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2026, 7, 13), 60 * 60, 0));
+    // 周二：差 1 秒——按原始秒数判断不达标，不按取整后的分钟。不足 3 分钟的会话不算有效投入。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-14"), 60));
+    QVERIFY(insertFocusSessionRowWithMode(task, QDate(2026, 7, 14), 60 * 60 - 1, 1));
+    QVERIFY(insertFocusSessionRowWithMode(task, QDate(2026, 7, 14), 179, 0));
+    // 周三是今天：超过目标也不进 K、N 与两项合计，单独给进度。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-15"), 30));
+    QVERIFY(insertFocusSessionRowWithMode(task, QDate(2026, 7, 15), 45 * 60, 0));
+    // 周四是未来日期：有目标也不计入。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-16"), 90));
 
-    const QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart);
-    QCOMPARE(review.value(QStringLiteral("completedPomodoros")).toInt(), 3); // 2 本周 + 1 边界
-    QCOMPARE(review.value(QStringLiteral("previousCompletedPomodoros")).toInt(), 1);
+    QVariantMap review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-15"));
+    QCOMPARE(review.value(QStringLiteral("loadState")).toString(), QStringLiteral("ready"));
+    QCOMPARE(review.value(QStringLiteral("periodState")).toString(), QStringLiteral("current"));
+    QVariantMap goal = review.value(QStringLiteral("goal")).toMap();
+    QCOMPARE(goal.value(QStringLiteral("goalDays")).toInt(), 2);
+    QCOMPARE(goal.value(QStringLiteral("metDays")).toInt(), 1);
+    QCOMPARE(goal.value(QStringLiteral("goalMinutesTotal")).toInt(), 120);
+    QCOMPARE(goal.value(QStringLiteral("actualSecondsTotal")).toInt(), 2 * 60 * 60 - 1);
+    QVariantMap todayGoal = review.value(QStringLiteral("todayGoal")).toMap();
+    QCOMPARE(todayGoal.value(QStringLiteral("date")).toString(), QStringLiteral("2026-07-15"));
+    QCOMPARE(todayGoal.value(QStringLiteral("goalMinutes")).toInt(), 30);
+    QCOMPARE(todayGoal.value(QStringLiteral("actualSeconds")).toInt(), 45 * 60);
+    QCOMPARE(todayGoal.value(QStringLiteral("progressPercent")).toDouble(), 150.0);
+    // 当前周不产出事实。
+    QVERIFY(review.value(QStringLiteral("facts")).toList().isEmpty());
+    QCOMPARE(review.value(QStringLiteral("hasDisplayContent")).toBool(), true);
 
-    // 更早、无任何数据的周：与上周对比为 0，空状态。
-    const QVariantMap empty = StatisticsService::instance()->getWeeklyReview(weekStart.addDays(-28));
-    QCOMPARE(empty.value(QStringLiteral("hasData")).toBool(), false);
-    QCOMPARE(empty.value(QStringLiteral("previousCompletedPomodoros")).toInt(), 0);
+    // 今天刚好达标、未达标同样不进分母。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-15"), 45));
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-15"));
+    goal = review.value(QStringLiteral("goal")).toMap();
+    QCOMPARE(goal.value(QStringLiteral("goalDays")).toInt(), 2);
+    QCOMPARE(goal.value(QStringLiteral("metDays")).toInt(), 1);
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-15"), 90));
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-15"));
+    goal = review.value(QStringLiteral("goal")).toMap();
+    QCOMPARE(goal.value(QStringLiteral("goalDays")).toInt(), 2);
+    QCOMPARE(goal.value(QStringLiteral("metDays")).toInt(), 1);
+    todayGoal = review.value(QStringLiteral("todayGoal")).toMap();
+    QCOMPARE(todayGoal.value(QStringLiteral("progressPercent")).toDouble(), 50.0);
+
+    // 同一周结束后，今天变成已结束的一天，才进入 K、N。
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"));
+    goal = review.value(QStringLiteral("goal")).toMap();
+    QCOMPARE(goal.value(QStringLiteral("goalDays")).toInt(), 4);
+    QVERIFY(review.value(QStringLiteral("todayGoal")).toMap().isEmpty());
 }
 
-void ServiceTests::weeklyReviewLowestSubjectRuleAndSingleSuggestion()
+void ServiceTests::weeklyReviewReconciliationUsesSameTaskSet()
 {
-    const QDate weekStart = mondayOf(QDate(2026, 7, 15));
-    const QDate weekday = weekStart.addDays(1);
+    const QDate weekStart(2026, 7, 13);
+    StatisticsService* stats = StatisticsService::instance();
     const int mathId = categoryIdByName(QStringLiteral("数学"));
-    const int polId = categoryIdByName(QStringLiteral("政治"));
-    const int engId = categoryIdByName(QStringLiteral("英语"));
+    const int politicsId = categoryIdByName(QStringLiteral("政治"));
+    const int englishId = categoryIdByName(QStringLiteral("英语"));
+    QVERIFY(mathId > 0 && politicsId > 0 && englishId > 0);
 
-    // 计划单位是分钟（v10）。数学 250 计划 / 200 实际 = 80%，
-    // 政治 250 计划 / 25 实际 = 10%，英语 50 计划 / 0 实际（计划 < 60 分钟，不参与规则一）。
-    // 总体 225/550≈41%；政治 10% 比总体低 31pp(≥20) 且计划≥60 → 被规则一点名。
-    const int mathTask = insertPlannedTask(QStringLiteral("数学"), weekday, mathId, 250);
-    for (int i = 0; i < 8; ++i) QVERIFY(insertFocusSessionRow(mathTask, weekday, 25 * 60));
-    const int polTask = insertPlannedTask(QStringLiteral("政治"), weekday, polId, 250);
-    QVERIFY(insertFocusSessionRow(polTask, weekday, 25 * 60));
-    insertPlannedTask(QStringLiteral("英语"), weekday, engId, 50); // 有计划无实际，且低于规则一门槛
+    // 集合内：数学计划 100 分钟，周内投入 3000 秒；下周补做的 1200 秒不算这一周。
+    const int mathTask = insertPlannedTask(QStringLiteral("数学计划"), QDate(2026, 7, 14), mathId, 100);
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, QDate(2026, 7, 14), 3000, 0));
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, QDate(2026, 7, 21), 1200, 0));
+    // 同科目、没填预计用时的任务：不进对账。
+    const int mathFree = insertPlannedTask(QStringLiteral("数学自由"), QDate(2026, 7, 14), mathId, 0);
+    QVERIFY(insertFocusSessionRowWithMode(mathFree, QDate(2026, 7, 14), 6000, 0));
+    // 计划日期在上周的任务，本周做了也不进本周对账。
+    const int lastWeekTask = insertPlannedTask(QStringLiteral("上周英语"), QDate(2026, 7, 8), englishId, 60);
+    QVERIFY(insertFocusSessionRowWithMode(lastWeekTask, QDate(2026, 7, 15), 1800, 0));
+    // 未关联任务的会话不进对账。
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2026, 7, 15), 2400, 0));
+    // 任务当前科目是政治、会话快照记的是英语：对账按任务当前科目归组。
+    const int politicsTask = insertPlannedTask(QStringLiteral("政治计划"), QDate(2026, 7, 16), politicsId, 50);
+    QVERIFY(insertFocusSessionWithSnapshot(politicsTask, QDate(2026, 7, 16), QStringLiteral("12:00:00"),
+                                           1500, QStringLiteral("英语"), QStringLiteral("#c9956e")));
 
-    const QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart);
-    // 规则一：偏差最大且计划≥3 的政治被点名。
-    QVERIFY(review.value(QStringLiteral("factText")).toString().contains(QStringLiteral("政治")));
-    // 总体 <60%：给出下调计划的单条建议。
-    QVERIFY(review.value(QStringLiteral("suggestionText")).toString().contains(QStringLiteral("下调")));
+    QVariantMap review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"));
+    QVariantMap planned = review.value(QStringLiteral("plannedTasks")).toMap();
+    QVariantList rows = planned.value(QStringLiteral("rows")).toList();
+    QCOMPARE(rows.size(), 2);
+    // 计划多的在前。
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("subject")).toString(), QStringLiteral("数学"));
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("plannedMinutes")).toInt(), 100);
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("actualSeconds")).toInt(), 3000);
+    QCOMPARE(rows.at(0).toMap().value(QStringLiteral("investmentRatioPercent")).toDouble(), 50.0);
+    QCOMPARE(rows.at(1).toMap().value(QStringLiteral("subject")).toString(), QStringLiteral("政治"));
+    QCOMPARE(rows.at(1).toMap().value(QStringLiteral("actualSeconds")).toInt(), 1500);
+    QCOMPARE(planned.value(QStringLiteral("totalPlannedMinutes")).toInt(), 150);
+    QCOMPARE(planned.value(QStringLiteral("totalActualSeconds")).toInt(), 4500);
+    QCOMPARE(planned.value(QStringLiteral("totalInvestmentRatioPercent")).toDouble(), 50.0);
+    QCOMPARE(planned.value(QStringLiteral("inProgress")).toBool(), false);
 
-    // 有计划无实际的科目完成率为 0。
-    const QVariantList subjects = review.value(QStringLiteral("subjects")).toList();
-    QCOMPARE(subjectByName(subjects, QStringLiteral("英语")).value(QStringLiteral("rate")).toDouble(), 0.0);
+    // 集合外的投入再多，也不改变已有对账比例。
+    QVERIFY(insertFocusSessionRowWithMode(mathFree, QDate(2026, 7, 17), 9000, 0));
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2026, 7, 17), 9000, 0));
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"));
+    planned = review.value(QStringLiteral("plannedTasks")).toMap();
+    QCOMPARE(planned.value(QStringLiteral("totalActualSeconds")).toInt(), 4500);
+    QCOMPARE(planned.value(QStringLiteral("totalInvestmentRatioPercent")).toDouble(), 50.0);
+
+    // 投入／计划比可以超过 100%。
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, QDate(2026, 7, 18), 6000, 0));
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"));
+    rows = review.value(QStringLiteral("plannedTasks")).toMap().value(QStringLiteral("rows")).toList();
+    QCOMPARE(rowBySubject(rows, QStringLiteral("数学")).value(QStringLiteral("investmentRatioPercent")).toDouble(),
+             150.0);
+
+    // 当前周：分母是整周计划，分子只算到逻辑今天为止已经产生的投入，并标为进行中。
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-15"));
+    planned = review.value(QStringLiteral("plannedTasks")).toMap();
+    QCOMPARE(planned.value(QStringLiteral("inProgress")).toBool(), true);
+    QCOMPARE(planned.value(QStringLiteral("totalPlannedMinutes")).toInt(), 150);
+    QCOMPARE(rowBySubject(planned.value(QStringLiteral("rows")).toList(), QStringLiteral("数学"))
+                 .value(QStringLiteral("actualSeconds")).toInt(),
+             3000);
+
+    // 没有计划任务的周：没有对账行，合计比例为空，不除零。
+    const QVariantMap noPlan = stats->getWeeklyReview(QDate(2026, 6, 29), QStringLiteral("2026-07-20"));
+    const QVariantMap noPlanTasks = noPlan.value(QStringLiteral("plannedTasks")).toMap();
+    QVERIFY(noPlanTasks.value(QStringLiteral("rows")).toList().isEmpty());
+    QVERIFY(noPlanTasks.value(QStringLiteral("totalInvestmentRatioPercent")).isNull());
 }
 
-void ServiceTests::weeklyReviewBalancedPlanGivesSteadyConclusion()
+void ServiceTests::weeklyReviewGoalShortfallFact()
 {
-    const QDate weekStart = mondayOf(QDate(2026, 7, 15));
-    const QDate weekday = weekStart.addDays(1);
-    const int mathId = categoryIdByName(QStringLiteral("数学"));
+    const QDate weekStart(2026, 7, 13);
+    AppSettings* settings = AppSettings::instance();
 
-    // 计划 250 分钟、实际 225 分钟 → 90%，落在 85–115 区间：
-    // 结论“基本一致”，不给下调/上调建议。
-    const int task = insertPlannedTask(QStringLiteral("稳定任务"), weekday, mathId, 250);
-    for (int i = 0; i < 9; ++i) QVERIFY(insertFocusSessionRow(task, weekday, 25 * 60));
+    // 周一：刚好 60%（3600 / 6000 秒），严格小于才算差额。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-13"), 100));
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2026, 7, 13), 3600, 0));
+    // 周二：59.98%，是候选。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-14"), 100));
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2026, 7, 14), 3599, 0));
+    // 周三：50%，更低，入选。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-15"), 50));
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2026, 7, 15), 1500, 0));
+    // 周四：同样 50%，并列保留较早的周三。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-16"), 50));
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2026, 7, 16), 1500, 0));
+    // 周五：高于 60%，而且达标。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-17"), 10));
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2026, 7, 17), 3600, 0));
 
-    const QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart);
-    QCOMPARE(qRound(review.value(QStringLiteral("completionRate")).toDouble()), 90);
-    QVERIFY(review.value(QStringLiteral("factText")).toString().contains(QStringLiteral("基本一致")));
-    QCOMPARE(review.value(QStringLiteral("suggestionText")).toString(), QString());
+    QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"));
+    QVariantList facts = review.value(QStringLiteral("facts")).toList();
+    QCOMPARE(facts.size(), 1);
+    const QVariantMap fact = facts.first().toMap();
+    QCOMPARE(fact.value(QStringLiteral("type")).toString(), QStringLiteral("goalShortfall"));
+    QCOMPARE(fact.value(QStringLiteral("date")).toString(), QStringLiteral("2026-07-15"));
+    QCOMPARE(fact.value(QStringLiteral("goalMinutes")).toInt(), 50);
+    QCOMPARE(fact.value(QStringLiteral("actualSeconds")).toInt(), 1500);
+    QCOMPARE(fact.value(QStringLiteral("ratioPercent")).toDouble(), 50.0);
+    const QVariantMap goal = review.value(QStringLiteral("goal")).toMap();
+    QCOMPARE(goal.value(QStringLiteral("goalDays")).toInt(), 5);
+    QCOMPARE(goal.value(QStringLiteral("metDays")).toInt(), 1);
+
+    // 把低于 60% 的几天目标调低到能达标后，就没有目标事实。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-14"), 1));
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-15"), 1));
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-16"), 1));
+    review = StatisticsService::instance()->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"));
+    QVERIFY(factOfType(review.value(QStringLiteral("facts")).toList(), QStringLiteral("goalShortfall")).isEmpty());
 }
 
-void ServiceTests::weeklyReviewRejectsNonMonday()
+void ServiceTests::weeklyReviewSubjectShareChangeFactGuards()
 {
-    const QDate weekStart = mondayOf(QDate(2026, 7, 15));
-    const QVariantMap review = StatisticsService::instance()->getWeeklyReview(weekStart.addDays(2));
+    const QDate weekStart(2026, 7, 13);
+    const QDate previousDay(2026, 7, 7);
+    const QDate currentDay(2026, 7, 14);
+    StatisticsService* stats = StatisticsService::instance();
+    const int mathTask = insertPlannedTask(QStringLiteral("数学"), currentDay,
+                                           categoryIdByName(QStringLiteral("数学")), 0);
+    const int englishTask = insertPlannedTask(QStringLiteral("英语"), currentDay,
+                                              categoryIdByName(QStringLiteral("英语")), 0);
+    const int uncategorizedTask = insertPlannedTask(QStringLiteral("无科目"), currentDay, -1, 0);
+    QVERIFY(mathTask > 0 && englishTask > 0 && uncategorizedTask > 0);
+
+    auto shareFact = [stats, weekStart]() {
+        return factOfType(stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"))
+                              .value(QStringLiteral("facts")).toList(),
+                          QStringLiteral("subjectShareChange"));
+    };
+
+    // 数学 50% → 75%、英语 50% → 25%，变化同为 25 个百分点、3600 秒：并列按名称选数学。
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, previousDay, 7200, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, previousDay, 7200, 0));
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, currentDay, 10800, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, currentDay, 3600, 0));
+    QVariantMap fact = shareFact();
+    QCOMPARE(fact.value(QStringLiteral("subject")).toString(), QStringLiteral("数学"));
+    QCOMPARE(fact.value(QStringLiteral("currentSeconds")).toInt(), 10800);
+    QCOMPARE(fact.value(QStringLiteral("previousSeconds")).toInt(), 7200);
+    QCOMPARE(fact.value(QStringLiteral("currentSharePercent")).toDouble(), 75.0);
+    QCOMPARE(fact.value(QStringLiteral("deltaPoints")).toDouble(), 25.0);
+    // F2 的秒数与同周饼图（getCategoryStats）该科时长同源。
+    const QVariantList categories = stats->getCategoryStats(QStringLiteral("2026-07-13"), QStringLiteral("2026-07-19"))
+                                        .value(QStringLiteral("categories")).toList();
+    QCOMPARE(subjectByName(categories, QStringLiteral("数学")).value(QStringLiteral("duration")).toInt(), 10800);
+
+    // 边界刚好满足：+10 个百分点、+3600 秒。
+    QVERIFY(clearFocusSessionsForTest());
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, previousDay, 18000, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, previousDay, 18000, 0));
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, currentDay, 21600, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, currentDay, 14400, 0));
+    fact = shareFact();
+    QCOMPARE(fact.value(QStringLiteral("subject")).toString(), QStringLiteral("数学"));
+    QCOMPARE(fact.value(QStringLiteral("deltaPoints")).toDouble(), 10.0);
+
+    // 占比变化差一点不到 10 个百分点（投入变化足够）：不输出。
+    QVERIFY(clearFocusSessionsForTest());
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, previousDay, 36000, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, previousDay, 36000, 0));
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, currentDay, 43199, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, currentDay, 28801, 0));
+    QVERIFY(shareFact().isEmpty());
+
+    // 两周各 60 分钟，科目占比刚好变 10 个百分点，但只差 6 分钟：小样本不下结论。
+    QVERIFY(clearFocusSessionsForTest());
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, previousDay, 1800, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, previousDay, 1800, 0));
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, currentDay, 2160, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, currentDay, 1440, 0));
+    QVERIFY(shareFact().isEmpty());
+
+    // 前一周总投入不足 60 分钟：不比较。
+    QVERIFY(clearFocusSessionsForTest());
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, previousDay, 1770, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, previousDay, 1770, 0));
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, currentDay, 10800, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, currentDay, 3600, 0));
+    QVERIFY(shareFact().isEmpty());
+
+    // 前一周为零：不比较。
+    QVERIFY(clearFocusSessionsForTest());
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, currentDay, 10800, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, currentDay, 3600, 0));
+    QVERIFY(shareFact().isEmpty());
+
+    // 只有「未关联任务」满足条件：它参与分母，但不是真实科目，不能被点名。
+    QVERIFY(clearFocusSessionsForTest());
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, previousDay, 3600, 0));
+    QVERIFY(insertFocusSessionRowWithMode(-1, previousDay, 3600, 0));
+    QVERIFY(insertFocusSessionRowWithMode(mathTask, currentDay, 3600, 0));
+    QVERIFY(insertFocusSessionRowWithMode(-1, currentDay, 14400, 0));
+    QVERIFY(shareFact().isEmpty());
+    const QVariantList subjects = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"))
+                                      .value(QStringLiteral("subjects")).toList();
+    QCOMPARE(subjectByName(subjects, QStringLiteral("未关联任务")).value(QStringLiteral("pseudoSubject")).toBool(), true);
+    QCOMPARE(subjectByName(subjects, QStringLiteral("数学")).value(QStringLiteral("previousSharePercent")).toDouble(), 50.0);
+
+    // 「未分类」同理。
+    QVERIFY(clearFocusSessionsForTest());
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, previousDay, 3600, 0));
+    QVERIFY(insertFocusSessionRowWithMode(uncategorizedTask, previousDay, 3600, 0));
+    QVERIFY(insertFocusSessionRowWithMode(englishTask, currentDay, 3600, 0));
+    QVERIFY(insertFocusSessionRowWithMode(uncategorizedTask, currentDay, 14400, 0));
+    QVERIFY(shareFact().isEmpty());
+}
+
+void ServiceTests::weeklyReviewEstimateFacts()
+{
+    const QDate weekStart(2026, 7, 13);
+    const QDate day(2026, 7, 14);
+    StatisticsService* stats = StatisticsService::instance();
+    const int mathId = categoryIdByName(QStringLiteral("数学"));
+    const int englishId = categoryIdByName(QStringLiteral("英语"));
+    const int politicsId = categoryIdByName(QStringLiteral("政治"));
+
+    auto facts = [stats, weekStart]() {
+        return stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"))
+            .value(QStringLiteral("facts")).toList();
+    };
+
+    // 数学 59.98%（短缺 2401 秒）、英语 58.33%（短缺 5000 秒）→ 取短缺最多的英语；
+    // 政治计划只有 59 分钟，不够 60 分钟门槛，不参与。
+    int math = insertPlannedTask(QStringLiteral("数学"), day, mathId, 100);
+    int english = insertPlannedTask(QStringLiteral("英语"), day, englishId, 200);
+    QVERIFY(insertPlannedTask(QStringLiteral("政治"), day, politicsId, 59) > 0);
+    QVERIFY(insertFocusSessionRowWithMode(math, day, 3599, 0));
+    QVERIFY(insertFocusSessionRowWithMode(english, day, 7000, 0));
+    QVariantList list = facts();
+    QVariantMap shortfall = factOfType(list, QStringLiteral("estimateShortfall"));
+    QCOMPARE(shortfall.value(QStringLiteral("subject")).toString(), QStringLiteral("英语"));
+    QCOMPARE(shortfall.value(QStringLiteral("plannedMinutes")).toInt(), 200);
+    // 展示分钟在对账集合内分配：合计 10599 秒 → 176 分钟，余秒最多的数学补 1 分钟，英语仍是 116。
+    QCOMPARE(shortfall.value(QStringLiteral("actualDisplayMinutes")).toInt(), 116);
+    QCOMPARE(shortfall.value(QStringLiteral("shortfallDisplayMinutes")).toInt(), 84);
+    QVERIFY(factOfType(list, QStringLiteral("estimateOnTrack")).isEmpty());
+
+    // 短缺相同：按名称选数学。
+    QVERIFY(clearTasksForTest());
+    math = insertPlannedTask(QStringLiteral("数学"), day, mathId, 100);
+    english = insertPlannedTask(QStringLiteral("英语"), day, englishId, 100);
+    QVERIFY(insertFocusSessionRowWithMode(math, day, 3000, 0));
+    QVERIFY(insertFocusSessionRowWithMode(english, day, 3000, 0));
+    QCOMPARE(factOfType(facts(), QStringLiteral("estimateShortfall")).value(QStringLiteral("subject")).toString(),
+             QStringLiteral("数学"));
+
+    // 刚好 60%：严格小于才算短缺；总体 60% 也不在 85%～115%，没有事实。
+    QVERIFY(clearTasksForTest());
+    math = insertPlannedTask(QStringLiteral("数学"), day, mathId, 100);
+    QVERIFY(insertFocusSessionRowWithMode(math, day, 3600, 0));
+    QVERIFY(facts().isEmpty());
+
+    // 85% 与 115% 两个端点算「接近计划」，区间外不算。
+    const QList<QPair<int, bool>> onTrackCases = {
+        {5100, true}, {6900, true}, {5099, false}, {6901, false}};
+    for (const auto& onTrackCase : onTrackCases) {
+        QVERIFY(clearTasksForTest());
+        math = insertPlannedTask(QStringLiteral("数学"), day, mathId, 100);
+        QVERIFY(insertFocusSessionRowWithMode(math, day, onTrackCase.first, 0));
+        const QVariantMap onTrack = factOfType(facts(), QStringLiteral("estimateOnTrack"));
+        QVERIFY2(onTrack.isEmpty() != onTrackCase.second,
+                 qPrintable(QStringLiteral("实际 %1 秒").arg(onTrackCase.first)));
+    }
+
+    // 总体 180%、某科 150%：两科都超出自己的计划，不能说任何一科低于计划。
+    QVERIFY(clearTasksForTest());
+    math = insertPlannedTask(QStringLiteral("数学"), day, mathId, 100);
+    english = insertPlannedTask(QStringLiteral("英语"), day, englishId, 100);
+    QVERIFY(insertFocusSessionRowWithMode(math, day, 9000, 0));
+    QVERIFY(insertFocusSessionRowWithMode(english, day, 12600, 0));
+    QVERIFY(facts().isEmpty());
+
+    // 有科目短缺时，即使总投入落在 85%～115%，也不再补一句「接近计划」。
+    QVERIFY(clearTasksForTest());
+    math = insertPlannedTask(QStringLiteral("数学"), day, mathId, 100);
+    english = insertPlannedTask(QStringLiteral("英语"), day, englishId, 400);
+    QVERIFY(insertFocusSessionRowWithMode(math, day, 3000, 0));
+    QVERIFY(insertFocusSessionRowWithMode(english, day, 24600, 0));
+    list = facts();
+    QCOMPARE(list.size(), 1);
+    QCOMPARE(list.first().toMap().value(QStringLiteral("type")).toString(), QStringLiteral("estimateShortfall"));
+}
+
+void ServiceTests::weeklyReviewFactsPriorityAndCurrentWeekSuppression()
+{
+    const QDate weekStart(2026, 7, 13);
+    const QDate previousDay(2026, 7, 7);
+    const QDate day(2026, 7, 14);
+    StatisticsService* stats = StatisticsService::instance();
+    const int mathId = categoryIdByName(QStringLiteral("数学"));
+    const int englishId = categoryIdByName(QStringLiteral("英语"));
+
+    // F1：周二目标 480 分钟，实际 240 分钟（50%）。
+    QVERIFY(AppSettings::instance()->setDailyFocusGoal(QStringLiteral("2026-07-14"), 480));
+    // F2：数学 50% → 75%，+3600 秒。
+    const int mathFree = insertPlannedTask(QStringLiteral("数学"), day, mathId, 0);
+    const int english = insertPlannedTask(QStringLiteral("英语"), day, englishId, 0);
+    QVERIFY(insertFocusSessionRowWithMode(mathFree, previousDay, 7200, 0));
+    QVERIFY(insertFocusSessionRowWithMode(english, previousDay, 7200, 0));
+    QVERIFY(insertFocusSessionRowWithMode(mathFree, day, 7200, 0));
+    QVERIFY(insertFocusSessionRowWithMode(english, day, 3600, 0));
+    // F3：数学计划 300 分钟，集合内只投入 3600 秒（20%）。
+    const int mathPlanned = insertPlannedTask(QStringLiteral("数学计划"), day, mathId, 300);
+    QVERIFY(insertFocusSessionRowWithMode(mathPlanned, day, 3600, 0));
+
+    QVariantMap review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"));
+    QVariantList facts = review.value(QStringLiteral("facts")).toList();
+    // 三条都命中时按 F1 → F2 → F3 只取前两条。
+    QCOMPARE(facts.size(), 2);
+    QCOMPARE(facts.at(0).toMap().value(QStringLiteral("type")).toString(), QStringLiteral("goalShortfall"));
+    QCOMPARE(facts.at(1).toMap().value(QStringLiteral("type")).toString(), QStringLiteral("subjectShareChange"));
+
+    // 同样的数据，周还没结束：一条事实都不给。
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-16"));
+    QVERIFY(review.value(QStringLiteral("facts")).toList().isEmpty());
+
+    // 没有目标、没有计划的历史周，F2 仍可独立出现并撑起卡片。
+    clearDailyGoalSettingsForTest();
+    QSqlQuery unplan(DatabaseManager::instance()->database());
+    QVERIFY(unplan.exec(QStringLiteral("UPDATE tasks SET estimated_minutes = 0")));
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"));
+    facts = review.value(QStringLiteral("facts")).toList();
+    QCOMPARE(facts.size(), 1);
+    QCOMPARE(facts.first().toMap().value(QStringLiteral("type")).toString(), QStringLiteral("subjectShareChange"));
+    QCOMPARE(review.value(QStringLiteral("hasDisplayContent")).toBool(), true);
+    QCOMPARE(review.value(QStringLiteral("goal")).toMap().value(QStringLiteral("goalDays")).toInt(), 0);
+    QVERIFY(review.value(QStringLiteral("plannedTasks")).toMap().value(QStringLiteral("rows")).toList().isEmpty());
+}
+
+void ServiceTests::weeklyReviewErrorsAreReturnedWithoutSignals()
+{
+    const QDate weekStart(2026, 7, 13);
+    StatisticsService* stats = StatisticsService::instance();
+    QSignalSpy failures(stats, &StatisticsService::operationFailed);
+
+    // 计划任务查询只读 tasks，会先成功；删掉专注表后，紧接着的专注查询失败。
+    // 结果必须整体作废，不能带着已经查到的计划去组装半份统计。
+    QVERIFY(insertPlannedTask(QStringLiteral("计划任务"), QDate(2026, 7, 14),
+                              categoryIdByName(QStringLiteral("数学")), 60) > 0);
+    QVERIFY(AppSettings::instance()->setDailyFocusGoal(QStringLiteral("2026-07-14"), 60));
+    QSqlQuery drop(DatabaseManager::instance()->database());
+    QVERIFY(drop.exec(QStringLiteral("DROP TABLE focus_sessions")));
+
+    const QVariantMap review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"));
+    QCOMPARE(review.value(QStringLiteral("loadState")).toString(), QStringLiteral("error"));
+    QVERIFY(!review.value(QStringLiteral("errorMessage")).toString().isEmpty());
+    QCOMPARE(review.value(QStringLiteral("periodState")).toString(), QStringLiteral("ended"));
     QCOMPARE(review.value(QStringLiteral("hasData")).toBool(), false);
+    QCOMPARE(review.value(QStringLiteral("hasDisplayContent")).toBool(), false);
+    QVERIFY(review.value(QStringLiteral("goal")).toMap().isEmpty());
+    QVERIFY(review.value(QStringLiteral("todayGoal")).toMap().isEmpty());
+    QVERIFY(review.value(QStringLiteral("plannedTasks")).toMap().isEmpty());
+    QVERIFY(review.value(QStringLiteral("subjects")).toList().isEmpty());
+    QVERIFY(review.value(QStringLiteral("facts")).toList().isEmpty());
+    // 复盘专用查询只通过返回值报错，不发 operationFailed。
+    QCOMPARE(failures.count(), 0);
+
+    // 数据库未打开同样只通过返回值报告。
+    DatabaseManager::instance()->close();
+    const QVariantMap closed = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-20"));
+    QCOMPARE(closed.value(QStringLiteral("loadState")).toString(), QStringLiteral("error"));
+    QCOMPARE(closed.value(QStringLiteral("errorMessage")).toString(), QStringLiteral("数据库未打开"));
+    QCOMPARE(failures.count(), 0);
+    QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath(QStringLiteral("reopened.sqlite"))));
+}
+
+void ServiceTests::weeklyReviewContentFlags()
+{
+    const QDate weekStart(2026, 7, 13);
+    StatisticsService* stats = StatisticsService::instance();
+    AppSettings* settings = AppSettings::instance();
+
+    // 空周：没有专注、目标、计划。
+    QVariantMap review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-15"));
+    QCOMPARE(review.value(QStringLiteral("loadState")).toString(), QStringLiteral("ready"));
+    QCOMPARE(review.value(QStringLiteral("hasData")).toBool(), false);
+    QCOMPARE(review.value(QStringLiteral("hasDisplayContent")).toBool(), false);
+
+    // 当前周只有专注记录：有数据，但卡片没有可展示的块。
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2026, 7, 13), 3600, 0));
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-15"));
+    QCOMPARE(review.value(QStringLiteral("hasData")).toBool(), true);
+    QCOMPARE(review.value(QStringLiteral("hasDisplayContent")).toBool(), false);
+
+    // 目标只设在未来日期：不展示，也不撑起卡片。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-16"), 60));
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-15"));
+    QCOMPARE(review.value(QStringLiteral("hasDisplayContent")).toBool(), false);
+    QCOMPARE(review.value(QStringLiteral("goal")).toMap().value(QStringLiteral("goalDays")).toInt(), 0);
+    QVERIFY(review.value(QStringLiteral("todayGoal")).toMap().isEmpty());
+
+    // 已结束的目标日即使实际为零，也有可展示内容。
+    QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2026-07-14"), 60));
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-15"));
+    QCOMPARE(review.value(QStringLiteral("hasDisplayContent")).toBool(), true);
+    QCOMPARE(review.value(QStringLiteral("goal")).toMap().value(QStringLiteral("goalDays")).toInt(), 1);
+    QCOMPARE(review.value(QStringLiteral("goal")).toMap().value(QStringLiteral("actualSecondsTotal")).toInt(), 0);
+
+    // 只有计划、实际为零：对账块照样出现。
+    clearDailyGoalSettingsForTest();
+    QVERIFY(insertPlannedTask(QStringLiteral("只有计划"), QDate(2026, 7, 17),
+                              categoryIdByName(QStringLiteral("数学")), 45) > 0);
+    review = stats->getWeeklyReview(weekStart, QStringLiteral("2026-07-15"));
+    const QVariantList rows =
+        review.value(QStringLiteral("plannedTasks")).toMap().value(QStringLiteral("rows")).toList();
+    QCOMPARE(rows.size(), 1);
+    QCOMPARE(rows.first().toMap().value(QStringLiteral("actualSeconds")).toInt(), 0);
+    QCOMPARE(review.value(QStringLiteral("hasDisplayContent")).toBool(), true);
+
+    // 已结束周只有专注记录、F2 不成立：卡片同样没有内容。
+    QVERIFY(insertFocusSessionRowWithMode(-1, QDate(2026, 7, 7), 3600, 0));
+    review = stats->getWeeklyReview(QDate(2026, 7, 6), QStringLiteral("2026-07-20"));
+    QCOMPARE(review.value(QStringLiteral("hasData")).toBool(), true);
+    QCOMPARE(review.value(QStringLiteral("hasDisplayContent")).toBool(), false);
 }
 
 QTEST_MAIN(ServiceTests)
@@ -6974,6 +7801,7 @@ void ServiceTests::exportNeutralizesFormulaPrefixesAndWritesBom()
 
 void ServiceTests::weeklySubjectMinutesAddUpToTotal()
 {
+    // 分钟分配规则迁移到预计用时对账：各行展示分钟之和必须等于对账合计。
     const QDate monday(2026, 7, 13);
     const int mathTask = insertPlannedTask(QStringLiteral("数学余秒"), monday,
                                          categoryIdByName(QStringLiteral("数学")), 10);
@@ -6982,12 +7810,24 @@ void ServiceTests::weeklySubjectMinutesAddUpToTotal()
     QVERIFY(mathTask > 0 && politicsTask > 0);
     QVERIFY(insertFocusSessionRowWithMode(mathTask, monday, 211, 0));
     QVERIFY(insertFocusSessionRowWithMode(politicsTask, monday, 230, 0));
-    const QVariantMap review = StatisticsService::instance()->getWeeklyReview(monday);
-    const QVariantList subjects = review.value(QStringLiteral("subjects")).toList();
+    const QVariantMap review =
+        StatisticsService::instance()->getWeeklyReview(monday, QStringLiteral("2026-07-20"));
+    const QVariantMap planned = review.value(QStringLiteral("plannedTasks")).toMap();
+    const QVariantList rows = planned.value(QStringLiteral("rows")).toList();
     int sum = 0;
-    for (const QVariant& subject : subjects)
-        sum += subject.toMap().value(QStringLiteral("focusedMinutes")).toInt();
+    for (const QVariant& row : rows)
+        sum += row.toMap().value(QStringLiteral("actualDisplayMinutes")).toInt();
+    // 211 + 230 = 441 秒 → 合计 7 分钟；各行向下取整只有 3 + 3，余秒多的政治（50 秒）补 1 分钟。
     QCOMPARE(sum, 7);
-    QCOMPARE(sum, review.value(QStringLiteral("focusedMinutes")).toInt());
-    QCOMPARE(subjectByName(subjects, QStringLiteral("政治")).value(QStringLiteral("focusedMinutes")).toInt(), 4);
+    QCOMPARE(sum, planned.value(QStringLiteral("totalActualDisplayMinutes")).toInt());
+    QCOMPARE(rowBySubject(rows, QStringLiteral("政治")).value(QStringLiteral("actualDisplayMinutes")).toInt(), 4);
+    QCOMPARE(rowBySubject(rows, QStringLiteral("数学")).value(QStringLiteral("actualDisplayMinutes")).toInt(), 3);
+    // 差额按展示分钟算（3 − 10），比例仍按原始秒数（211 / 600）。
+    QCOMPARE(rowBySubject(rows, QStringLiteral("数学")).value(QStringLiteral("differenceDisplayMinutes")).toInt(), -7);
+    QCOMPARE(rowBySubject(rows, QStringLiteral("数学")).value(QStringLiteral("investmentRatioPercent")).toDouble(),
+             211.0 * 100.0 / 600.0);
+    // 整体科目不做分配，保留原始秒数，与饼图逐项取整同源。
+    QCOMPARE(subjectByName(review.value(QStringLiteral("subjects")).toList(), QStringLiteral("政治"))
+                 .value(QStringLiteral("currentSeconds")).toInt(),
+             230);
 }
