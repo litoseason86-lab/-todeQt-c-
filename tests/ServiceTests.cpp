@@ -760,6 +760,7 @@ private slots:
     void appSettingsCloseToTrayDefaultsOffAndRoundTrips();
     void appSettingsNaturalCompletionNoticeRoundTripsAndReloads();
     void appSettingsAutoStartDefaultsOffAndRoundTrips();
+    void appSettingsQuickStartDefaultsOffAndRoundTrips();
     void appSettingsLongBreakDefaultsAndNormalizes();
     void logicalDayDateOfBoundaries();
     void logicalDayMsUntilNextBoundary();
@@ -2102,6 +2103,31 @@ void ServiceTests::appSettingsAutoStartDefaultsOffAndRoundTrips()
     AppSettings reloaded(path);
     QCOMPARE(reloaded.autoStartBreak(), true);
     QCOMPARE(reloaded.autoStartNextPomodoro(), true);
+}
+
+void ServiceTests::appSettingsQuickStartDefaultsOffAndRoundTrips()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString path = dir.filePath(QStringLiteral("settings.ini"));
+
+    {
+        AppSettings settings(path);
+        // 默认关闭：从任务点「开始专注」先进入待机，由用户确认模式和时长。
+        QCOMPARE(settings.quickStartEnabled(), false);
+
+        QSignalSpy spy(&settings, &AppSettings::quickStartEnabledChanged);
+        settings.setQuickStartEnabled(true);
+        QCOMPARE(spy.count(), 1);
+        // 值没变不重复通知，避免设置页开关来回抖动。
+        settings.setQuickStartEnabled(true);
+        QCOMPARE(spy.count(), 1);
+    }
+
+    AppSettings reloaded(path);
+    QCOMPARE(reloaded.quickStartEnabled(), true);
+    // 放在 focus 分组下，才会跟着备份与恢复一起走。
+    QVERIFY(AppSettings::isOwnedSettingKey(QStringLiteral("focus/quickStartEnabled")));
 }
 
 void ServiceTests::appSettingsLongBreakDefaultsAndNormalizes()

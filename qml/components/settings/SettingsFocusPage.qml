@@ -153,6 +153,29 @@ FocusScope {
         }
 
         SettingsSection {
+            title: "开始方式"
+
+            SettingsRow {
+                label: "快速开始"
+                caption: "点任务的「开始专注」直接按上次模式计时；关闭则先到专注页确认"
+                iconName: "bolt"
+                compact: root.compact
+
+                SettingsSwitch {
+                    objectName: "settingsQuickStartSwitch"
+                    text: "快速开始"
+                    persistedChecked: root.appSettingsRef ? root.appSettingsRef.quickStartEnabled : false
+                    reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
+                    onChangeRequested: enabled => {
+                        if (root.appSettingsRef) {
+                            root.appSettingsRef.quickStartEnabled = enabled
+                        }
+                    }
+                }
+            }
+        }
+
+        SettingsSection {
             title: "自动衔接"
             description: "开启后阶段结束会自动进入下一段，不必手动点击。"
 

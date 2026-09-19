@@ -29,6 +29,7 @@ TestCase {
         property bool raiseOnPhaseComplete: true
         property bool autoStartBreak: false
         property bool autoStartNextPomodoro: false
+        property bool quickStartEnabled: false
         property bool longBreakEnabled: true
         property int longBreakMinutes: 15
         property int longBreakInterval: 4
@@ -251,6 +252,17 @@ TestCase {
         nextSwitch.click()
         compare(appSettingsMock.autoStartBreak, true)
         compare(appSettingsMock.autoStartNextPomodoro, true)
+    }
+
+    function test_quickStartSwitchWritesSetting() {
+        appSettingsMock.quickStartEnabled = false
+        var sw = findChild(focusPage, "settingsQuickStartSwitch")
+        verify(sw)
+        compare(sw.checked, false)
+        sw.click()
+        compare(appSettingsMock.quickStartEnabled, true)
+        sw.click()
+        compare(appSettingsMock.quickStartEnabled, false)
     }
 
     function test_longBreakControlsWriteSettings() {

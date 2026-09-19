@@ -27,6 +27,7 @@ const auto kCloseToTrayHintShownKey = QStringLiteral("window/closeToTrayHintShow
 const auto kNaturalCompletionNoticeShownKey = QStringLiteral("migration/v8NaturalCompletionNoticeShown");
 const auto kAutoStartBreakKey = QStringLiteral("focus/autoStartBreak");
 const auto kAutoStartNextPomodoroKey = QStringLiteral("focus/autoStartNextPomodoro");
+const auto kQuickStartEnabledKey = QStringLiteral("focus/quickStartEnabled");
 const auto kLongBreakEnabledKey = QStringLiteral("focus/longBreakEnabled");
 const auto kLongBreakMinutesKey = QStringLiteral("focus/longBreakMinutes");
 const auto kLongBreakIntervalKey = QStringLiteral("focus/longBreakInterval");
@@ -168,6 +169,7 @@ void AppSettings::reload()
     emit naturalCompletionNoticeShownChanged();
     emit autoStartBreakChanged();
     emit autoStartNextPomodoroChanged();
+    emit quickStartEnabledChanged();
     emit longBreakEnabledChanged();
     emit longBreakMinutesChanged();
     emit longBreakIntervalChanged();
@@ -806,6 +808,22 @@ void AppSettings::setAutoStartNextPomodoro(bool enabled)
     }
     if (writeValue(kAutoStartNextPomodoroKey, enabled)) {
         emit autoStartNextPomodoroChanged();
+    }
+}
+
+bool AppSettings::quickStartEnabled() const
+{
+    // 默认关闭，老用户升级后也一样：此前的「点了就开始」让人来不及选模式和时长。
+    return m_settings->value(kQuickStartEnabledKey, false).toBool();
+}
+
+void AppSettings::setQuickStartEnabled(bool enabled)
+{
+    if (quickStartEnabled() == enabled) {
+        return;
+    }
+    if (writeValue(kQuickStartEnabledKey, enabled)) {
+        emit quickStartEnabledChanged();
     }
 }
 

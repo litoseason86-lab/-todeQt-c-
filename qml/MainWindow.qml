@@ -480,10 +480,16 @@ Item {
         root.pendingDeleteTitle = ""
     }
 
+    // 今日任务、本周计划、仪表盘三个任务入口都从这里分流。
+    // 开启「快速开始」：沿用上次模式立即计时；关闭（默认）：只进入专注页待机，
+    // 预选上次的模式，由用户确认模式和时长后再点开始。
     function startFocusForTask(taskId, taskTitle) {
         var usePomodoro = root.appSettingsRef && root.appSettingsRef.lastMode === 1
         root.switchToView("focus")
-        focusView.startTask(taskId, taskTitle, usePomodoro)
+        if (root.appSettingsRef && root.appSettingsRef.quickStartEnabled)
+            focusView.startTask(taskId, taskTitle, usePomodoro)
+        else
+            focusView.prepareTask(taskId, taskTitle, usePomodoro)
     }
 
     function isManualRestActive() {

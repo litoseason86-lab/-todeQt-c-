@@ -168,6 +168,9 @@ TestCase {
         property bool raiseOnPhaseComplete: true
         property bool autoStartBreak: false
         property bool autoStartNextPomodoro: false
+        // 开着快速开始，「回车不启动已完成任务」才真正测到门禁；
+        // 关着的话任务入口本来就不启动，断言会白白通过。
+        property bool quickStartEnabled: true
         property bool longBreakEnabled: true
         property int longBreakMinutes: 15
         property int longBreakInterval: 4

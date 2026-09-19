@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Controls
 import QtTest
 import "../../qml"
 
@@ -85,6 +86,7 @@ TestCase {
         property int startFocusCalls: 0
         property int startFocusTaskId: 0
         property string startFocusTaskTitle: ""
+        property int lastWorkSeconds: 0
 
         signal focusCompleted(int duration)
         signal phaseCompleted(int phase)
@@ -106,6 +108,7 @@ TestCase {
 
         function startPomodoroWork(id, title, workSeconds) {
             startPomodoroCalls++
+            lastWorkSeconds = workSeconds
             currentTaskId = id
             currentTaskTitle = title
             mode = 1
@@ -148,6 +151,9 @@ TestCase {
         property bool raiseOnPhaseComplete: true
         property bool autoStartBreak: false
         property bool autoStartNextPomodoro: false
+        // 本文件多数用例验证的是「点了就开始」那条路径，替身默认开启快速开始；
+        // 关闭时的待机路径由专门的用例显式关掉再测。
+        property bool quickStartEnabled: true
         property bool longBreakEnabled: true
         property int longBreakMinutes: 15
         property int longBreakInterval: 4
@@ -300,6 +306,8 @@ TestCase {
         focusTimer.mode = 0
         focusTimer.phase = 0
         appSettings.lastMode = 0
+        appSettings.quickStartEnabled = true
+        appSettings.workMinutes = 25
         taskManager.deleteTaskCalls = 0
         taskManager.lastDeletedTaskId = -1
         taskManager.deleteSucceeds = true
@@ -335,6 +343,7 @@ TestCase {
         focusTimer.pauseFocusCalls = 0
         focusTimer.stopFocusCalls = 0
         focusTimer.startPomodoroCalls = 0
+        focusTimer.lastWorkSeconds = 0
         focusTimer.elapsedSeconds = 0
         focusTimer.completedPomodoros = 0
         findChild(focusView, "longFreeFocusConfirmDialog").close()
@@ -530,6 +539,238 @@ TestCase {
         compare(focusTimer.currentTaskId, 7)
         compare(focusTimer.hasActiveSession, true)
         compare(focusTimer.startFocusCalls, 1)
+    }
+
+    // —— 快速开始关闭（默认）：任务入口只进入待机，用户确认模式和时长后再开始 ——
+
+    function test_quickStartOffEntersFreeStandbyWithoutStarting() {
+        appSettings.quickStartEnabled = false
+        appSettings.lastMode = 0
+
+        mainWindow.startFocusForTask(7, "自由任务")
+
+        var view = findChild(mainWindow, "focusViewPage")
+        compare(mainWindow.pendingView, "focus")
+        compare(focusTimer.startFocusCalls, 0)
+        compare(focusTimer.hasActiveSession, false)
+        compare(view.state, "free")
+        compare(view.selectedTaskId, 7)
+        compare(view.selectedTaskTitle, "自由任务")
+        // 只做准备，不改偏好：上次模式要等真正开始后才记。
+        compare(appSettings.lastMode, 0)
+
+        // 待机之后由用户点开始，走的是专注页原有的开始逻辑。
+        verify(view.canStartFreeFocus())
+        verify(view.startFreeFocus())
+        compare(focusTimer.startFocusCalls, 1)
+        compare(focusTimer.startFocusTaskId, 7)
+    }
+
+    function test_quickStartOffPomodoroOpensDurationPanelAndUsesChosenMinutes() {
+        appSettings.quickStartEnabled = false
+        appSettings.lastMode = 1
+
+        mainWindow.startFocusForTask(9, "番茄任务")
+
+        var view = findChild(mainWindow, "focusViewPage")
+        compare(focusTimer.startPomodoroCalls, 0)
+        compare(focusTimer.phase, 0)
+        compare(view.state, "pomoIdle")
+        compare(view.panelExpanded, true)
+        compare(view.selectedTaskId, 9)
+
+        // 待机时调的时长就是本轮实际倒计时。
+        view.selectWorkMinutes(40)
+        verify(view.startPomodoro())
+        compare(focusTimer.startPomodoroCalls, 1)
+        compare(focusTimer.lastWorkSeconds, 40 * 60)
+        compare(focusTimer.currentTaskId, 9)
+    }
+
+    function test_quickStartOffRepeatedClicksDoNotStartAnything() {
+        appSettings.quickStartEnabled = false
+        mainWindow.startFocusForTask(7, "自由任务")
+        mainWindow.startFocusForTask(7, "自由任务")
+        mainWindow.startFocusForTask(8, "另一个任务")
+
+        var view = findChild(mainWindow, "focusViewPage")
+        compare(focusTimer.startFocusCalls + focusTimer.startPomodoroCalls, 0)
+        compare(focusTimer.stopFocusCalls, 0)
+        compare(view.selectedTaskId, 8)
+        compare(findChild(view, "focusSwitchDialog").visible, false)
+    }
+
+    function test_quickStartOffConflictEndsOldTimerThenWaits() {
+        mainWindow.startFocusForTask(7, "原任务")
+        compare(focusTimer.startFocusCalls, 1)
+        appSettings.quickStartEnabled = false
+
+        mainWindow.startFocusForTask(8, "新任务")
+
+        var view = findChild(mainWindow, "focusViewPage")
+        var dialog = findChild(view, "focusSwitchDialog")
+        tryCompare(dialog, "opened", true, 2000)
+        compare(dialog.standardButton(Dialog.Ok).text, "结束并切换")
+        verify(view.switchDialogText().indexOf("不会自动开始") >= 0)
+        // 确认之前旧计时原封不动。
+        compare(focusTimer.stopFocusCalls, 0)
+
+        dialog.accept()
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusTimer.startFocusCalls, 1)
+        compare(focusTimer.hasActiveSession, false)
+        compare(view.selectedTaskId, 8)
+        compare(view.selectedTaskTitle, "新任务")
+        compare(view.state, "free")
+    }
+
+    function test_quickStartOnConflictStillAsksAndSaysStart() {
+        mainWindow.startFocusForTask(7, "原任务")
+        mainWindow.startFocusForTask(8, "新任务")
+
+        var view = findChild(mainWindow, "focusViewPage")
+        var dialog = findChild(view, "focusSwitchDialog")
+        tryCompare(dialog, "opened", true, 2000)
+        // 快速开始也不能绕过「结束当前计时」的确认。
+        compare(dialog.standardButton(Dialog.Ok).text, "结束并开始")
+        compare(focusTimer.stopFocusCalls, 0)
+    }
+
+    function test_clickingRunningTaskReturnsToItRegardlessOfRememberedMode() {
+        appSettings.lastMode = 0
+        mainWindow.startFocusForTask(7, "正在做的")
+        // 记住的模式是下一次的偏好，不能拿它去结束正在进行的同一任务。
+        appSettings.lastMode = 1
+
+        mainWindow.startFocusForTask(7, "正在做的")
+        appSettings.quickStartEnabled = false
+        mainWindow.startFocusForTask(7, "正在做的")
+
+        var view = findChild(mainWindow, "focusViewPage")
+        compare(findChild(view, "focusSwitchDialog").visible, false)
+        compare(focusTimer.stopFocusCalls, 0)
+        compare(focusTimer.startPomodoroCalls, 0)
+        compare(focusTimer.hasActiveSession, true)
+        compare(view.pomodoroModeSelected, false)
+    }
+
+    // —— 计时中切换模式：确认结束后停在新模式待机，快速开始开着也不自动开始 ——
+
+    function test_modeSwitchWhileRunningEndsThenWaitsInPomodoroStandby() {
+        appSettings.lastMode = 0
+        mainWindow.startFocusForTask(7, "原任务")
+        var view = findChild(mainWindow, "focusViewPage")
+
+        view.requestModeSwitch(true)
+
+        var dialog = findChild(view, "focusSwitchDialog")
+        tryCompare(dialog, "opened", true, 2000)
+        compare(dialog.standardButton(Dialog.Ok).text, "结束并切换")
+        verify(view.switchDialogText().indexOf("番茄专注") >= 0)
+        compare(focusTimer.stopFocusCalls, 0)
+
+        dialog.accept()
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusTimer.startPomodoroCalls, 0)
+        compare(focusTimer.hasActiveSession, false)
+        compare(view.state, "pomoIdle")
+        compare(view.panelExpanded, true)
+        compare(view.selectedTaskId, 7)
+
+        view.selectWorkMinutes(50)
+        verify(view.startPomodoro())
+        compare(focusTimer.lastWorkSeconds, 50 * 60)
+        compare(focusTimer.currentTaskId, 7)
+    }
+
+    function test_pausedPomodoroSwitchToFreeEndsThenWaits() {
+        appSettings.lastMode = 1
+        mainWindow.startFocusForTask(9, "番茄任务")
+        focusTimer.isRunning = false
+        var view = findChild(mainWindow, "focusViewPage")
+
+        view.requestModeSwitch(false)
+        var dialog = findChild(view, "focusSwitchDialog")
+        tryCompare(dialog, "opened", true, 2000)
+        dialog.accept()
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusTimer.startFocusCalls, 0)
+        compare(view.state, "free")
+        compare(view.selectedTaskId, 9)
+        verify(view.canStartFreeFocus())
+    }
+
+    function test_breakSwitchToFreeKeepsTaskAndWaits() {
+        focusTimer.mode = 1
+        focusTimer.phase = 2
+        focusTimer.hasActiveSession = false
+        focusTimer.isRunning = true
+        focusTimer.currentTaskId = 9
+        focusTimer.currentTaskTitle = "番茄任务"
+        var view = findChild(mainWindow, "focusViewPage")
+        view.syncToActiveTimer()
+        compare(view.state, "pomoBreak")
+
+        view.requestModeSwitch(false)
+        // 休息段不是专注，提示不能说「专注不足 3 分钟」。
+        verify(view.switchDialogText().indexOf("休息") >= 0)
+        findChild(view, "focusSwitchDialog").accept()
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusTimer.startFocusCalls, 0)
+        compare(view.state, "free")
+        compare(view.selectedTaskId, 9)
+    }
+
+    function test_modeSwitchCancelKeepsTimerAndMode() {
+        mainWindow.startFocusForTask(7, "原任务")
+        var view = findChild(mainWindow, "focusViewPage")
+
+        view.requestModeSwitch(true)
+        findChild(view, "focusSwitchDialog").reject()
+
+        compare(focusTimer.stopFocusCalls, 0)
+        compare(focusTimer.hasActiveSession, true)
+        compare(focusTimer.mode, 0)
+        compare(view.pomodoroModeSelected, false)
+    }
+
+    function test_modeSwitchStopFailureKeepsOriginalTimer() {
+        mainWindow.startFocusForTask(7, "原任务")
+        focusTimer.stopSucceeds = false
+        var view = findChild(mainWindow, "focusViewPage")
+
+        view.requestModeSwitch(true)
+        findChild(view, "focusSwitchDialog").accept()
+
+        compare(focusTimer.hasActiveSession, true)
+        compare(focusTimer.currentTaskId, 7)
+        compare(focusTimer.startPomodoroCalls, 0)
+        compare(view.pomodoroModeSelected, false)
+        verify(view.errorText.length > 0)
+    }
+
+    function test_overlongFreeModeSwitchRecordsThenWaits() {
+        mainWindow.startFocusForTask(7, "忘了停的任务")
+        focusTimer.elapsedSeconds = 9 * 60 * 60
+        var view = findChild(mainWindow, "focusViewPage")
+
+        view.requestModeSwitch(true)
+        findChild(view, "focusSwitchDialog").accept()
+        // 超长自由计时先要确认记录还是丢弃，此时还不能结束。
+        tryCompare(findChild(view, "longFreeFocusConfirmDialog"), "opened", true, 2000)
+        compare(focusTimer.stopFocusCalls, 0)
+
+        view.finishLongFreeAction(true, -1)
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusTimer.startPomodoroCalls, 0)
+        compare(view.state, "pomoIdle")
+        compare(view.selectedTaskId, 7)
+        compare(view.panelExpanded, true)
     }
 
     function test_toastActionShowsAndFires() {

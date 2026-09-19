@@ -139,6 +139,9 @@ Canvas {
             poly([6, 6.5, 14, 12, 6, 17.5], true)
             line(16.5, 6.5, 16.5, 17.5)
             break
+        case "bolt": // 快速开始：闪电
+            poly([13.5, 3.5, 6.5, 13, 11.5, 13, 10.5, 20.5, 17.5, 11, 12.5, 11], true)
+            break
         case "bell": // 提示音：铃铛
             ctx.beginPath()
             ctx.moveTo(7, 16.5)

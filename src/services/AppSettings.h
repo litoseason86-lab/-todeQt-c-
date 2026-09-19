@@ -55,6 +55,9 @@ class AppSettings : public QObject
     // 番茄自动衔接：专注结束自动进入休息、休息结束自动开始下一个番茄（默认关，避免打断）。
     Q_PROPERTY(bool autoStartBreak READ autoStartBreak WRITE setAutoStartBreak NOTIFY autoStartBreakChanged)
     Q_PROPERTY(bool autoStartNextPomodoro READ autoStartNextPomodoro WRITE setAutoStartNextPomodoro NOTIFY autoStartNextPomodoroChanged)
+    // 快速开始：从任务点「开始专注」时直接按上次的模式和时长计时。
+    // 默认关闭，此时只进入专注页待机，由用户确认模式和时长后再开始。
+    Q_PROPERTY(bool quickStartEnabled READ quickStartEnabled WRITE setQuickStartEnabled NOTIFY quickStartEnabledChanged)
     // 长休息：每完成 N 个番茄后休息更久。
     Q_PROPERTY(bool longBreakEnabled READ longBreakEnabled WRITE setLongBreakEnabled NOTIFY longBreakEnabledChanged)
     Q_PROPERTY(int longBreakMinutes READ longBreakMinutes WRITE setLongBreakMinutes NOTIFY longBreakMinutesChanged)
@@ -122,6 +125,8 @@ public:
     void setAutoStartBreak(bool enabled);
     bool autoStartNextPomodoro() const;
     void setAutoStartNextPomodoro(bool enabled);
+    bool quickStartEnabled() const;
+    void setQuickStartEnabled(bool enabled);
     bool longBreakEnabled() const;
     void setLongBreakEnabled(bool enabled);
     int longBreakMinutes() const;
@@ -200,6 +205,7 @@ signals:
     void naturalCompletionNoticeShownChanged();
     void autoStartBreakChanged();
     void autoStartNextPomodoroChanged();
+    void quickStartEnabledChanged();
     void longBreakEnabledChanged();
     void longBreakMinutesChanged();
     void longBreakIntervalChanged();

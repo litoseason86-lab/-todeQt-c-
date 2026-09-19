@@ -364,13 +364,12 @@ Item {
             root.clearSelectedTask()
             root.focusEnded()
         } else if (action === "startPomodoro" || action === "startFree") {
-            root.startTask(taskId, taskTitle, action === "startPomodoro")
+            root.applyTask(taskId, taskTitle, action === "startPomodoro", true)
         } else if (action === "toPomodoro") {
             root.pomodoroModeSelected = true
-        } else if (action === "enterPomodoro") {
-            root.pomodoroModeSelected = true
-            root.selectedTaskId = taskId
-            root.selectedTaskTitle = taskTitle
+        } else if (action === "enterPomodoro" || action === "enterFree") {
+            // 多走了一道超时确认，意图仍是「切过去待机」，不能因此变成自动开始。
+            root.applyTask(taskId, taskTitle, action === "enterPomodoro", false)
         }
     }
 
@@ -551,38 +550,61 @@ Item {
     }
 
     function enterWithTask(taskId, title, usePomodoro) {
-        // 准备待启动任务；列表的 startTask 随即启动，本页也可先选模式再手动启动。
+        // 只准备待启动的任务和模式，不启动计时；开不开始由 applyTask 的调用方决定。
         return usePomodoro
                 ? root.enterPomodoroWithTask(taskId, title)
                 : root.enterFreeWithTask(taskId, title)
     }
 
-    // 从任务列表发起的是“开始”意图；只有当前计时会被截断时才要求确认。
-    function startTask(taskId, title, usePomodoro) {
+    // 把任务和模式落到本页。调用前计时器必须已经空闲。
+    // autoStart 为假时停在待机：番茄模式顺带展开时长面板，让用户确认本轮时长后再手动开始。
+    function applyTask(taskId, title, usePomodoro, autoStart) {
+        if (!root.enterWithTask(taskId, title, usePomodoro))
+            return false
+        if (autoStart)
+            return usePomodoro ? root.startPomodoro() : root.startFreeFocus()
+        // 必须放在切模式之后：状态离开 pomoIdle 时 onStateChanged 会把面板收起。
+        root.panelExpanded = usePomodoro
+        return true
+    }
+
+    // 当前计时会被截断：先记下「结束之后做什么」再弹确认框，确认之前不动计时器。
+    function requestEndThen(taskId, title, usePomodoro, autoStart) {
+        root.cancelAutoAdvance()
+        root.syncToActiveTimer()
+        root.pendingSwitch = { taskId: taskId, title: title, pomodoro: usePomodoro, autoStart: autoStart,
+            sourceId: root.timer.currentTaskId, sourceMode: root.timer.mode,
+            sourcePhase: root.timer.phase }
+        switchDialog.open()
+        return true
+    }
+
+    // 任务入口（今日、仪表盘、本周）的统一落点。
+    // autoStart 为真对应设置里的「快速开始」：直接按给定模式计时；
+    // 为假只进入待机，由用户确认模式和时长后再点开始。
+    function openTask(taskId, title, usePomodoro, autoStart) {
         if (!root.timer || taskId <= 0 || !String(title || "").trim()) {
             // 静默返回会让任务页「开始」和分段控件都变成点了没反应；必须给出可见原因。
             root.errorText = "任务信息无效，无法开始计时"
             return false
         }
-        var busy = root.timer.hasActiveSession || root.timer.phase !== 0
-        if (busy && root.timer.currentTaskId === taskId
-                && Number(root.timer.mode) === (usePomodoro ? 1 : 0)
-                && root.timer.hasActiveSession) {
+        // 点的正是正在计时的任务：回到当前专注即可。不看记住的模式——
+        // 那是「下一次」的偏好，拿它去结束正在进行的同一任务只会让人丢掉这段计时。
+        if (root.timer.hasActiveSession && root.timer.currentTaskId === taskId) {
             root.syncToActiveTimer()
             return true
         }
-        if (busy) {
-            root.cancelAutoAdvance()
-            root.syncToActiveTimer()
-            root.pendingSwitch = { taskId: taskId, title: title, pomodoro: usePomodoro,
-                sourceId: root.timer.currentTaskId, sourceMode: root.timer.mode,
-                sourcePhase: root.timer.phase }
-            switchDialog.open()
-            return true
-        }
-        if (!root.enterWithTask(taskId, title, usePomodoro))
-            return false
-        return usePomodoro ? root.startPomodoro() : root.startFreeFocus()
+        if (root.timer.hasActiveSession || root.timer.phase !== 0)
+            return root.requestEndThen(taskId, title, usePomodoro, autoStart)
+        return root.applyTask(taskId, title, usePomodoro, autoStart)
+    }
+
+    function startTask(taskId, title, usePomodoro) {
+        return root.openTask(taskId, title, usePomodoro, true)
+    }
+
+    function prepareTask(taskId, title, usePomodoro) {
+        return root.openTask(taskId, title, usePomodoro, false)
     }
 
     // 被截断的是什么由当前阶段决定，不能对休息也说「专注不足 3 分钟不会保存」。
@@ -598,6 +620,18 @@ Item {
                 : qsTr("当前专注会先保存。")
     }
 
+    function switchDialogText() {
+        var intent = root.pendingSwitch
+        if (!intent)
+            return ""
+        if (intent.autoStart)
+            return qsTr("将开始：%1。%2").arg(intent.title).arg(root.switchConsequenceText())
+        return qsTr("将切换到%1：%2，切换后不会自动开始。%3")
+                .arg(intent.pomodoro ? qsTr("番茄专注") : qsTr("自由专注"))
+                .arg(intent.title)
+                .arg(root.switchConsequenceText())
+    }
+
     function confirmSwitch() {
         var intent = root.pendingSwitch
         root.pendingSwitch = null
@@ -610,15 +644,16 @@ Item {
             return
         }
         if (root.shouldConfirmLongFreeStop()) {
-            root.requestLongFreeConfirmation(intent.pomodoro ? "startPomodoro" : "startFree",
-                                             intent.taskId, intent.title)
+            var action = intent.autoStart ? (intent.pomodoro ? "startPomodoro" : "startFree")
+                                          : (intent.pomodoro ? "enterPomodoro" : "enterFree")
+            root.requestLongFreeConfirmation(action, intent.taskId, intent.title)
             return
         }
         if (!root.timer.stopFocus()) {
-            root.errorText = "当前计时保存失败，未切换任务"
+            root.errorText = "当前计时保存失败，未切换"
             return
         }
-        root.startTask(intent.taskId, intent.title, intent.pomodoro)
+        root.applyTask(intent.taskId, intent.title, intent.pomodoro, intent.autoStart)
     }
 
     function requestModeSwitch(usePomodoro) {
@@ -630,7 +665,10 @@ Item {
         // 活动任务被删除后计时器会解绑任务 ID，此时按「切换任务」处理只会原地失败。
         // 没有可继承的任务就退回页内切换：结束当前阶段并换模式，与改动前一致。
         if (busy && taskId > 0 && title.length > 0) {
-            root.startTask(taskId, title, usePomodoro)
+            // 切模式只换计时方式：确认结束后停在新模式待机，番茄模式可先调时长。
+            // 快速开始只管任务入口，这里即使开着也不自动开始。
+            // 直接走确认框而不经 openTask：同一任务正在计时会被它当成「回到当前专注」。
+            root.requestEndThen(taskId, title, usePomodoro, false)
         } else {
             root.toPomodoroTab(usePomodoro)
         }
@@ -937,7 +975,8 @@ Item {
         }
 
         onOpened: {
-            standardButton(Dialog.Ok).text = qsTr("结束并开始")
+            var autoStart = !!(root.pendingSwitch && root.pendingSwitch.autoStart)
+            standardButton(Dialog.Ok).text = autoStart ? qsTr("结束并开始") : qsTr("结束并切换")
             standardButton(Dialog.Cancel).text = qsTr("继续当前计时")
         }
         onAccepted: root.confirmSwitch()
@@ -945,9 +984,7 @@ Item {
         Label {
             width: parent.width
             textFormat: Text.PlainText
-            text: root.pendingSwitch
-                  ? qsTr("将开始：%1。%2").arg(root.pendingSwitch.title).arg(root.switchConsequenceText())
-                  : ""
+            text: root.switchDialogText()
             wrapMode: Text.WordWrap
         }
     }

@@ -110,6 +110,7 @@ TestCase {
         property bool raiseOnPhaseComplete: true
         property bool autoStartBreak: false
         property bool autoStartNextPomodoro: false
+        property bool quickStartEnabled: false
         property bool longBreakEnabled: true
         property int longBreakMinutes: 15
         property int longBreakInterval: 4
