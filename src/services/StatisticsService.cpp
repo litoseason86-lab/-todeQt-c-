@@ -287,6 +287,15 @@ struct SubjectDuration
 
 // 科目归类 SQL 的唯一定义：统计页饼图（getCategoryStats）与周复盘的 F2 共用，
 // 所以 F2 里某科的秒数与同周饼图该科的时长一定一致。本函数不发 operationFailed。
+// MCP 汇总与现有饼图共用历史科目回退顺序，避免删除/改名后两边给出不同统计归属。
+QString historicalCategoryNameSql()
+{
+    return QStringLiteral(
+        "COALESCE(NULLIF(snapshot_category.name, ''), NULLIF(f.category_name_snapshot, ''), "
+        "NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), "
+        "CASE WHEN t.id IS NULL THEN '未关联任务' ELSE '未分类' END)");
+}
+
 bool runCategoryDurations(const QDate& startDate,
                           const QDate& endDate,
                           QList<SubjectDuration>* rows,
@@ -303,9 +312,7 @@ bool runCategoryDurations(const QDate& startDate,
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
         "SELECT "
-        "COALESCE(NULLIF(snapshot_category.name, ''), NULLIF(f.category_name_snapshot, ''), "
-        "NULLIF(c.name, ''), NULLIF(legacy.name, ''), NULLIF(t.category, ''), "
-        "CASE WHEN t.id IS NULL THEN '未关联任务' ELSE '未分类' END) AS category_name, "
+        "%1 AS category_name, "
         "COALESCE(NULLIF(snapshot_category.color, ''), NULLIF(f.category_color_snapshot, ''), "
         "NULLIF(c.color, ''), NULLIF(legacy.color, ''), '#d4a574') AS category_color, "
         "SUM(f.duration) AS total_duration "
@@ -320,7 +327,7 @@ bool runCategoryDurations(const QDate& startDate,
         "AND f.duration IS NOT NULL "
         "AND f.duration >= :minDuration "
         "GROUP BY category_name, category_color "
-        "ORDER BY total_duration DESC, category_name ASC"));
+        "ORDER BY total_duration DESC, category_name ASC").arg(historicalCategoryNameSql()));
     query.bindValue(QStringLiteral(":dayShift"),
                     LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
     query.bindValue(QStringLiteral(":startDate"), startDate.toString(Qt::ISODate));
@@ -1640,4 +1647,63 @@ QVariantMap StatisticsService::getWeeklyReview() const
     // 便捷入口：只取一次逻辑今天，同一个日期既定周、又判断周期。
     const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
     return getWeeklyReview(today.addDays(1 - today.dayOfWeek()), today.toString(Qt::ISODate));
+}
+
+ServiceReadResult<QVariantMap> StatisticsService::readFocusSummary(const QDate& from, const QDate& to, int dayStartHour) const
+{
+    if (!from.isValid() || !to.isValid() || from > to || from.daysTo(to) >= 31 || dayStartHour < 0 || dayStartHour > 6)
+        return {{}, ServiceReadError::InvalidArgument};
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) return {{}, ServiceReadError::Database};
+    QSqlQuery query(db);
+    // 单条聚合同时形成每日与科目分布，不加载逐条会话；日界由调用方一次取值后传入。
+    query.prepare(QStringLiteral(
+        "SELECT date(f.start_time, :shift) AS logical_day, "
+        "COALESCE(snapshot_category.id, CASE WHEN NULLIF(f.category_name_snapshot, '') IS NULL "
+        "THEN COALESCE(c.id, legacy.id) END, 0) AS category_id, %1 AS category_name, "
+        "SUM(f.duration), %2 FROM focus_sessions f "
+        "LEFT JOIN tasks t ON f.task_id = t.id "
+        "LEFT JOIN categories snapshot_category ON f.category_id_snapshot = snapshot_category.id "
+        "LEFT JOIN categories c ON t.category_id = c.id "
+        "LEFT JOIN categories legacy ON t.category_id IS NULL AND legacy.name = t.category "
+        "WHERE date(f.start_time, :shift) BETWEEN :from AND :to "
+        "AND f.end_time IS NOT NULL AND f.duration >= :minimum "
+        "GROUP BY logical_day, 2, 3 ORDER BY logical_day, 2, 3 LIMIT 10001")
+        .arg(historicalCategoryNameSql(), FocusSessionRules::validPomodoroCountExpr(QStringLiteral("f"))));
+    query.bindValue(QStringLiteral(":shift"), LogicalDay::sqlShift(dayStartHour));
+    query.bindValue(QStringLiteral(":from"), from.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":to"), to.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minimum"), FocusSessionRules::kMinimumValidDurationSeconds);
+    if (!query.exec()) return {{}, ServiceReadError::Database};
+    QMap<QString, QVariantMap> days, categories;
+    qint64 total = 0, pomodoros = 0;
+    int count = 0;
+    while (query.next()) {
+        if (++count > 10000) return {{}, ServiceReadError::LimitExceeded};
+        const QString date = query.value(0).toString();
+        const int categoryId = query.value(1).toInt();
+        const QString categoryName = query.value(2).toString();
+        const qint64 seconds = query.value(3).toLongLong(), valid = query.value(4).toLongLong();
+        auto& day = days[date];
+        day[QStringLiteral("date")] = date;
+        day[QStringLiteral("seconds")] = day.value(QStringLiteral("seconds")).toLongLong() + seconds;
+        day[QStringLiteral("pomodoros")] = day.value(QStringLiteral("pomodoros")).toLongLong() + valid;
+        // 编号前缀带分隔符，名称再长也不会与另一编号发生键碰撞。
+        auto& category = categories[QString::number(categoryId) + QLatin1Char(':') + categoryName];
+        category[QStringLiteral("id")] = categoryId;
+        category[QStringLiteral("name")] = categoryName;
+        category[QStringLiteral("seconds")] = category.value(QStringLiteral("seconds")).toLongLong() + seconds;
+        total += seconds;
+        pomodoros += valid;
+    }
+    if (query.lastError().isValid()) return {{}, ServiceReadError::Database};
+    QVariantList dayRows, categoryRows;
+    for (QDate date = from; date <= to; date = date.addDays(1)) {
+        auto row = days.value(date.toString(Qt::ISODate));
+        row[QStringLiteral("date")] = date.toString(Qt::ISODate);
+        dayRows.append(row);
+    }
+    for (const auto& row : categories) categoryRows.append(row);
+    return {QVariantMap{{QStringLiteral("seconds"), total}, {QStringLiteral("pomodoros"), pomodoros},
+                        {QStringLiteral("days"), dayRows}, {QStringLiteral("categories"), categoryRows}}};
 }

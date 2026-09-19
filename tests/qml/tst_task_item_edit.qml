@@ -17,6 +17,18 @@ TestCase {
         taskCompleted: false
     }
 
+    QtObject {
+        id: coordinator
+        property bool refreshBlocked: false
+        signal changed()
+        function beginEdit(owner, id, source) {
+            refreshBlocked = true
+            changed()
+            return {id: id, title: "数据库最新标题"}
+        }
+        function end(owner) { refreshBlocked = false; changed() }
+    }
+
     SignalSpy {
         id: renameSpy
         target: item
@@ -30,6 +42,8 @@ TestCase {
     }
 
     function init() {
+        item.interactionCoordinatorRef = null
+        item.interactionActive = true
         item.taskTitle = "原始标题"
         item.taskCompleted = false
         item.titleEditing = false
@@ -40,6 +54,21 @@ TestCase {
         renameSpy.clear()
         editSpy.clear()
         wait(20)
+    }
+
+    function test_coordinatorFreshReadAndPageExit() {
+        item.interactionCoordinatorRef = coordinator
+        item.beginTitleEdit()
+        compare(coordinator.refreshBlocked, true)
+        const field = findChild(item, "taskTitleEditField")
+        compare(field.text, "数据库最新标题")
+        field.text = "未提交草稿"
+        item.interactionActive = false
+        compare(item.titleEditing, false)
+        compare(coordinator.refreshBlocked, false)
+        compare(renameSpy.count, 0)
+        item.beginTitleEdit()
+        compare(item.titleEditing, false)
     }
 
     function test_beginEditPrefillsAndCommitEmits() {

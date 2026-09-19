@@ -3,6 +3,7 @@
 
 #include <QDate>
 #include <QObject>
+#include "ServiceReadResult.h"
 #include <QString>
 #include <QVariant>
 #include <QVariantList>
@@ -99,6 +100,18 @@ public:
     // 返回 {dueToday, overdue, unscheduled, openTotal, oldestOverdueDays, valid}。
     // dueToday / overdue / oldestOverdueDays 不计已有没做完关联任务的条目：它们已经由任务列表提醒。
     Q_INVOKABLE QVariantMap getReminderSummary() const;
+
+    // 有界、无共享失败信号的读取入口，供后台调用及交互前同步重读。
+    struct ReadFilter {
+        int status = kFilterAll;
+        int categoryId = 0;
+        QString searchText;
+        QString dueState;
+        QDate dueFrom, dueTo;
+        int afterId = 0;
+        int limit = 50;
+    };
+    ServiceReadResult<QVariantList> readGaps(const ReadFilter& filter, const QDate& today) const;
 
 signals:
     void gapsChanged();

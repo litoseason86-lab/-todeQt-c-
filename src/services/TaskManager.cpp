@@ -82,7 +82,7 @@ QString taskSelectSql()
         "SELECT t.id, t.title, "
         "COALESCE(c.name, t.category) AS category, "
         "t.category_id, c.name AS category_name, c.color AS category_color, "
-        "t.date, t.completed, t.created_at, t.estimated_minutes, t.notes, t.display_order, "
+        "t.date, t.completed, t.created_at, t.estimated_minutes, t.notes, t.display_order, t.category AS persisted_category, "
         "COALESCE((SELECT %1 FROM focus_sessions fs "
         "WHERE fs.task_id = t.id AND fs.duration IS NOT NULL), 0) AS actual_pomodoros, "
         "COALESCE((SELECT %2 FROM focus_sessions fs "
@@ -214,6 +214,13 @@ bool TaskManager::addTask(const QString& title, const QVariant& dateValue,
 int TaskManager::createTask(const QString& title, const QVariant& dateValue,
                             int categoryId, int estimatedMinutes, const QString& notes)
 {
+    return createTaskWithOutcome(title, dateValue, categoryId, estimatedMinutes, notes, nullptr);
+}
+
+int TaskManager::createTaskWithOutcome(const QString& title, const QVariant& dateValue,
+                                      int categoryId, int estimatedMinutes, const QString& notes, bool* committed)
+{
+    if (committed) *committed = false;
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
         qWarning() << "Failed to add task: title is empty after trimming";
@@ -274,6 +281,8 @@ int TaskManager::createTask(const QString& title, const QVariant& dateValue,
         qWarning() << "Failed to add task:" << query.lastError().text();
         return -1;
     }
+
+    if (committed) *committed = true;
 
     // id 是 INTEGER PRIMARY KEY AUTOINCREMENT，即 rowid 别名，SQLite 驱动据此给出新编号。
     // 取不到就当失败报给调用方：行确实已经写进去了（所以照常发 tasksChanged 让界面刷新），
@@ -410,6 +419,13 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
                              const QVariant& dateValue, int estimatedMinutes,
                              const QString& notes)
 {
+    return updateTaskFields(taskId, title, categoryId, dateValue, estimatedMinutes, notes, false);
+}
+
+bool TaskManager::updateTaskFields(int taskId, const QString& title, int categoryId,
+                                    const QVariant& dateValue, int estimatedMinutes,
+                                    const QString& notes, bool preserveCategory)
+{
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to update task: invalid task id" << taskId;
         return false;
@@ -439,7 +455,7 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
 
     QString categoryName;
     QVariant categoryIdValue;
-    if (categoryId > 0) {
+    if (!preserveCategory && categoryId > 0) {
         QSqlQuery categoryQuery(db);
         if (!bindCategoryTextFromId(categoryQuery, categoryId, &categoryName)) {
             return false;
@@ -459,10 +475,11 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
     }
 
     QString assignments = QStringLiteral(
-        "title = :title, category = :category, category_id = :categoryId, date = :date, "
+        "title = :title, date = :date, "
         "display_order = CASE WHEN date = :comparisonDate THEN display_order ELSE "
         "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks "
         " WHERE date = :orderDate AND id <> :selfId) END");
+    if (!preserveCategory) assignments += QStringLiteral(", category = :category, category_id = :categoryId");
     if (updateEstimate) {
         assignments += QStringLiteral(", estimated_minutes = :estimated");
     }
@@ -474,8 +491,10 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
     // category 文本仍要同步写入，保证旧导出和旧视图在 category_id 缺失时也能退回显示。
     query.prepare(QStringLiteral("UPDATE tasks SET %1 WHERE id = :id").arg(assignments));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
-    query.bindValue(QStringLiteral(":category"), categoryName);
-    query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
+    if (!preserveCategory) {
+        query.bindValue(QStringLiteral(":category"), categoryName);
+        query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
+    }
     query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":comparisonDate"), date.toString(Qt::ISODate));
     query.bindValue(QStringLiteral(":orderDate"), date.toString(Qt::ISODate));
@@ -763,14 +782,9 @@ bool TaskManager::moveTasksToDate(const QVariantList& taskIds, const QVariant& d
 
 QVariantMap TaskManager::getTask(int taskId) const
 {
-    QSqlQuery query(DatabaseManager::instance()->database());
-    query.prepare(taskSelectSql() + QStringLiteral("WHERE t.id = :id"));
-    query.bindValue(QStringLiteral(":id"), taskId);
-    if (!query.exec()) {
-        reportFailure(QStringLiteral("任务加载失败"));
-        return {};
-    }
-    return query.next() ? Task::fromQuery(query).toVariantMap() : QVariantMap();
+    const auto result = readTask(taskId);
+    if (result.error == ServiceReadError::Database) reportFailure(QStringLiteral("任务加载失败"));
+    return result.value;
 }
 
 QVariantList TaskManager::searchTasks(const QString& text, int status, int limit) const
@@ -997,4 +1011,53 @@ bool TaskManager::moveTaskToDate(int taskId, const QVariant& dateValue)
 
     emit tasksChanged();
     return true;
+}
+
+ServiceReadResult<QVariantMap> TaskManager::readTask(int taskId) const
+{
+    if (taskId <= 0) return {{}, ServiceReadError::InvalidArgument};
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) return {{}, ServiceReadError::Database};
+    QSqlQuery query(db);
+    query.prepare(taskSelectSql() + QStringLiteral("WHERE t.id = :id"));
+    query.bindValue(QStringLiteral(":id"), taskId);
+    if (!query.exec()) return {{}, ServiceReadError::Database};
+    if (!query.next()) return {{}, query.lastError().isValid() ? ServiceReadError::Database : ServiceReadError::NotFound};
+    auto row = Task::fromQuery(query).toVariantMap();
+    row.insert(QStringLiteral("persistedCategory"), query.value(QStringLiteral("persisted_category")));
+    return {row};
+}
+
+ServiceReadResult<QVariantList> TaskManager::readTasks(const QDate& from, const QDate& to,
+                                                       int completed, int limit, const QSet<int>& excluded) const
+{
+    if (!from.isValid() || !to.isValid() || from > to || from.daysTo(to) >= 31
+        || completed < -1 || completed > 1 || limit < 1 || limit > 100)
+        return {{}, ServiceReadError::InvalidArgument};
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) return {{}, ServiceReadError::Database};
+    QStringList placeholders;
+    for (int i = 0; i < excluded.size(); ++i) placeholders.append(QStringLiteral(":excluded%1").arg(i));
+    QString sql = taskSelectSql() + QStringLiteral("WHERE t.date BETWEEN :from AND :to AND (:completed < 0 OR t.completed = :completed) ");
+    // 必须先排除撤销窗口里的任务再限量，不能把隐藏行占用的名额误报成查询溢出。
+    if (!placeholders.isEmpty()) sql += QStringLiteral("AND t.id NOT IN (%1) ").arg(placeholders.join(','));
+    sql += QStringLiteral("ORDER BY t.date, t.display_order, t.id LIMIT :limit");
+    QSqlQuery query(db);
+    query.prepare(sql);
+    query.bindValue(QStringLiteral(":from"), from.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":to"), to.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":completed"), completed);
+    query.bindValue(QStringLiteral(":limit"), limit + 1);
+    int index = 0;
+    for (int id : excluded) query.bindValue(placeholders.at(index++), id);
+    if (!query.exec()) return {{}, ServiceReadError::Database};
+    QVariantList rows;
+    while (query.next()) {
+        if (rows.size() == limit) return {{}, ServiceReadError::LimitExceeded};
+        auto row = Task::fromQuery(query).toVariantMap();
+        row.insert(QStringLiteral("persistedCategory"), query.value(QStringLiteral("persisted_category")));
+        rows.append(row);
+    }
+    if (query.lastError().isValid()) return {{}, ServiceReadError::Database};
+    return {rows};
 }

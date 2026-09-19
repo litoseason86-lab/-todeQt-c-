@@ -57,8 +57,26 @@ TestCase {
         appSettingsRef: appSettingsMock
     }
 
+    QtObject {
+        id: mcpMock
+        property bool enabled: false
+        property bool writeEnabled: false
+        property bool listening: false
+        property int connectionCount: 0
+        property string lastError: ""
+        property string blockSummary: "编辑中：测试弹窗"
+        property string lastOperation: ""
+        property string helperPath: "/Applications/番茄Todo.app/Contents/MacOS/PomodoroTodoMcp"
+        property bool rejectSave: false
+        property int copies: 0
+        function setEnabled(value) { if (!rejectSave) { enabled = value; listening = value } }
+        function setWriteEnabled(value) { if (!rejectSave) writeEnabled = value }
+        function copyHelperPath() { copies += 1 }
+    }
+
     SettingsDataPage {
         id: dataPage
+        mcpAccessRef: mcpMock
         width: 520
         appSettingsRef: appSettingsMock
     }
@@ -70,6 +88,34 @@ TestCase {
 
     SettingsSwitch {
         id: settingsSwitch
+    }
+
+    function test_mcpPolicyAndStatus() {
+        const access = findChild(dataPage, "settingsMcpEnabled")
+        const write = findChild(dataPage, "settingsMcpWriteEnabled")
+        const status = findChild(dataPage, "settingsMcpStatus")
+        verify(access && write && status)
+        verify(!write.enabled)
+        mcpMock.rejectSave = true
+        access.click()
+        tryCompare(access, "checked", false)
+        mcpMock.rejectSave = false
+        access.click()
+        tryCompare(access, "checked", true)
+        verify(write.enabled)
+        write.click()
+        tryCompare(write, "checked", true)
+        mcpMock.connectionCount = 2
+        mcpMock.lastOperation = "新建任务 · 成功"
+        verify(status.text.indexOf("连接数 2") >= 0)
+        verify(status.text.indexOf("编辑中：测试弹窗") >= 0)
+        verify(status.text.indexOf("新建任务 · 成功") >= 0)
+        findChild(dataPage, "settingsMcpCopyPath").click()
+        compare(mcpMock.copies, 1)
+        access.click()
+        tryCompare(access, "checked", false)
+        verify(!write.enabled)
+        mcpMock.writeEnabled = false
     }
 
     function test_publicInterfacesExist() {

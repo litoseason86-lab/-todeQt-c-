@@ -4,6 +4,7 @@
 #include <QDate>
 #include <QList>
 #include <QObject>
+#include "ServiceReadResult.h"
 #include <QPair>
 #include <QVariant>
 #include <QVariantList>
@@ -55,6 +56,10 @@ public:
                                             const QString& logicalTodayIso) const;
     // 无参版取当前逻辑周，只读一次逻辑今天。
     Q_INVOKABLE QVariantMap getWeeklyReview() const;
+
+    // 有界、无共享失败信号的读取入口，供后台调用及交互前同步重读。
+    ServiceReadResult<QVariantMap> readFocusSummary(const QDate& from, const QDate& to,
+                                                   int dayStartHour) const;
 
 signals:
     void operationFailed(const QString& message);

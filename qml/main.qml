@@ -55,6 +55,7 @@ ApplicationWindow {
         windowActive: root.active
         // 上下文属性只在应用入口解包，业务组件内部全部消费显式引用，避免动态作用域漂移。
         // qmllint disable unqualified
+        interactionCoordinatorRef: typeof taskInteractionCoordinator === "undefined" ? null : taskInteractionCoordinator
         taskManagerRef: typeof taskManager === "undefined" ? null : taskManager
         categoryManagerRef: typeof categoryManager === "undefined" ? null : categoryManager
         routineManagerRef: typeof routineManager === "undefined" ? null : routineManager
@@ -66,6 +67,7 @@ ApplicationWindow {
         appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
         focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
         logicalDayServiceRef: typeof logicalDayService === "undefined" ? null : logicalDayService
+        mcpAccessRef: typeof mcpAccessController === "undefined" ? null : mcpAccessController
         backupServiceRef: typeof backupService === "undefined" ? null : backupService
         goalServiceRef: typeof goalService === "undefined" ? null : goalService
         scheduleServiceRef: typeof scheduleService === "undefined" ? null : scheduleService

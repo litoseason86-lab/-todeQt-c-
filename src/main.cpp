@@ -32,6 +32,13 @@
 #include "services/TrayController.h"
 #include "services/SingleInstanceGuard.h"
 
+#include "mcp/common/McpPaths.h"
+#include "mcp/bridge/McpAccessController.h"
+#include <QClipboard>
+#include "mcp/bridge/McpToolDispatcher.h"
+#include "services/TaskInteractionCoordinator.h"
+#include "services/LogicalDay.h"
+
 #include "platform/macos/MacGlobalHotkeyBackend.h"
 #include "platform/macos/MacNotificationBackend.h"
 #include "platform/macos/MacPreferencesCleanup.h"
@@ -58,8 +65,9 @@ int main(int argc, char *argv[])
         }
     }
 
-    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodo"));
-    QCoreApplication::setApplicationName(QStringLiteral("PomodoroTodo"));
+    // 应用身份决定偏好域与 AppDataLocation。外部 AI 辅助程序要按同一组名字找接入目录，
+    // 所以两个进程共用 McpPaths 里的定义，不各写一份字面量。
+    McpPaths::applyApplicationIdentity();
     // 关于页直接读取 Qt.application.version；由 CMake 项目版本注入，避免 UI 手写两份版本号。
     QCoreApplication::setApplicationVersion(QStringLiteral(POMODORO_TODO_VERSION));
 
@@ -135,6 +143,48 @@ int main(int argc, char *argv[])
     if (!FocusTimer::instance()->restoreInterruptedSession()) {
         qWarning() << "活动专注会话恢复失败";
     }
+    // 显式装配接入生命周期；默认关闭，设置页显式授权后才启动端点。
+    // 先于数据库关闭注册退出处理，避免队列在数据库关闭以后继续执行。
+    QSettings mcpSettings;
+    McpAccessController mcpAccess(McpPaths::resolveProduction(), mcpSettings, [] {
+        const int dayStartHour = AppSettings::instance()->dayStartHour();
+        return QJsonObject{{"app_version", QCoreApplication::applicationVersion()},
+                           {"logical_today", LogicalDay::today(dayStartHour).toString(Qt::ISODate)},
+                           {"time_zone", QString::fromUtf8(QTimeZone::systemTimeZoneId())},
+                           {"day_start_hour", dayStartHour}};
+    });
+    QObject::connect(BackupService::instance(), &BackupService::restoreStarted,
+                     &mcpAccess, &McpAccessController::beginRestore);
+    QObject::connect(BackupService::instance(), &BackupService::operationBlocksUiChanged,
+                     &mcpAccess, [&mcpAccess] {
+        mcpAccess.setRestoreBlocked(BackupService::instance()->operationBlocksUi());
+    });
+    QObject::connect(BackupService::instance(), &BackupService::restoreCompleted,
+                     &mcpAccess, [&mcpAccess](bool, const QString&) {
+        // 同步恢复可能没有 operationBlocksUi 的状态变化，完成信号也必须释放阻断。
+        mcpAccess.setRestoreBlocked(BackupService::instance()->operationBlocksUi());
+    });
+    QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                     &mcpAccess, &McpAccessController::shutdown);
+    TaskInteractionCoordinator taskInteractions(TaskManager::instance());
+    McpToolDispatcher mcpDispatcher(TaskManager::instance(), CategoryManager::instance(),
+        StatisticsService::instance(), KnowledgeGapService::instance(), &taskInteractions, [&mcpAccess] {
+            return McpToolDispatcher::Context{mcpAccess.sessionId(), QDateTime::currentDateTime(),
+                                              AppSettings::instance()->dayStartHour()};
+        });
+    QObject::connect(&mcpAccess, &McpAccessController::sessionChanged,
+                     &mcpDispatcher, &McpToolDispatcher::resetCreationSession);
+    mcpAccess.setDataHandler([&mcpDispatcher](McpContracts::Tool tool, const QJsonObject& arguments) {
+        return mcpDispatcher.dispatch(tool, arguments);
+    });
+    mcpAccess.setBlockProvider([&mcpDispatcher] { return mcpDispatcher.blocks(); });
+    QObject::connect(&taskInteractions, &TaskInteractionCoordinator::changed,
+                     &mcpAccess, &McpAccessController::stateChanged);
+    QObject::connect(&mcpAccess, &McpAccessController::copyRequested, &app, [](const QString& text) {
+        QGuiApplication::clipboard()->setText(text);
+    });
+    mcpAccess.start();
+
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
                      FocusTimer::instance(), &FocusTimer::prepareForShutdown);
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
@@ -201,6 +251,8 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("exportService"), ExportService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("ExportService"), ExportService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("taskManager"), TaskManager::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("taskInteractionCoordinator"), &taskInteractions);
+    engine.rootContext()->setContextProperty(QStringLiteral("mcpAccessController"), &mcpAccess);
     engine.rootContext()->setContextProperty(QStringLiteral("focusTimer"), FocusTimer::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("statisticsService"), StatisticsService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());

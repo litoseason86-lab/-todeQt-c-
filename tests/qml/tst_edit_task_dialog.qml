@@ -56,6 +56,20 @@ TestCase {
         }
     }
 
+    QtObject {
+        id: coordinator
+        property bool refreshBlocked: false
+        property bool failRead: false
+        property string lastError: "任务已不存在"
+        signal changed()
+        function beginEdit(owner, id, source) {
+            refreshBlocked = !failRead
+            changed()
+            return failRead ? ({}) : ({id: id, title: "最新数据", categoryId: 3, date: "2026-09-18", notes: "最新备注", estimatedMinutes: 60})
+        }
+        function end(owner) { refreshBlocked = false; changed() }
+    }
+
     SignalSpy {
         id: editedSpy
         target: dialog
@@ -63,6 +77,9 @@ TestCase {
     }
 
     function init() {
+        dialog.finishEditing()
+        dialog.interactionCoordinatorRef = null
+        coordinator.failRead = false
         editedSpy.clear()
         dialog.close()
         failingDialog.close()
@@ -76,6 +93,20 @@ TestCase {
         var d = LogicalDay.todayDate(appSettings.dayStartHour, new Date())
         d.setDate(d.getDate() + offset)
         return Qt.formatDate(d, "yyyy-MM-dd")
+    }
+
+    function test_registrationRereadsAndExplicitlyReleases() {
+        dialog.interactionCoordinatorRef = coordinator
+        dialog.openForTask({id: 7, title: "旧缓存", categoryId: 5, date: "2026-09-17"})
+        compare(findChild(dialog, "editTitleField").text, "最新数据")
+        compare(coordinator.refreshBlocked, true)
+        // 离屏环境不依赖 Popup 关闭信号，直接验证公共结束入口。
+        dialog.finishEditing()
+        dialog.finishEditing()
+        compare(coordinator.refreshBlocked, false)
+        coordinator.failRead = true
+        compare(dialog.openForTask({id: 7}), false)
+        compare(coordinator.refreshBlocked, false)
     }
 
     function test_openPrefillsFields() {

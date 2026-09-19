@@ -47,6 +47,21 @@ function(pomodoro_todo_deploy_local_app)
         message(FATAL_ERROR "新应用包缺少主二进制，旧应用未改动：${staging_executable}")
     endif()
 
+    # 辅助程序与主程序必须一起交付；在挪走旧包以前验证两者存在且可执行。
+    set(required_executables "${BUNDLE_EXECUTABLE}")
+    if(DEFINED HELPER_EXECUTABLE)
+        list(APPEND required_executables "${HELPER_EXECUTABLE}")
+    endif()
+    foreach(executable IN LISTS required_executables)
+        set(candidate "${staging_app}/Contents/MacOS/${executable}")
+        execute_process(COMMAND /bin/test -f "${candidate}" RESULT_VARIABLE file_result)
+        execute_process(COMMAND /bin/test -x "${candidate}" RESULT_VARIABLE executable_result)
+        if(NOT file_result EQUAL 0 OR NOT executable_result EQUAL 0)
+            execute_process(COMMAND "${CMAKE_COMMAND}" -E rm -rf "${staging_app}")
+            message(FATAL_ERROR "新应用包缺少可执行文件，旧应用未改动：${candidate}")
+        endif()
+    endforeach()
+
     set(had_previous_app FALSE)
     if(EXISTS "${destination_app}")
         execute_process(

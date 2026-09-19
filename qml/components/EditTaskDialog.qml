@@ -15,7 +15,15 @@ Popup {
     // 退出动画期间 Popup 仍可见，已结束的表单不能再次写库；重新打开才允许新提交。
     property bool submissionClosed: false
     onAboutToShow: root.submissionClosed = false
-    onAboutToHide: root.submissionClosed = true
+    onAboutToHide: root.finishEditing()
+    property var interactionCoordinatorRef: null
+    property string interactionSource: "edit_task_dialog"
+    signal openFailed(string message)
+    function finishEditing() {
+        root.submissionClosed = true
+        if (root.interactionCoordinatorRef) root.interactionCoordinatorRef.end(root)
+    }
+    Component.onDestruction: root.finishEditing()
 
     // 输入框字色必须接管：Basic 风格默认 palette.text 写死深灰，夜间主题下看不见。
     palette.text: Theme.inputInk
@@ -173,6 +181,14 @@ Popup {
 
     function openForTask(task) {
         root.errorText = "";
+        if (root.interactionCoordinatorRef) {
+            task = root.interactionCoordinatorRef.beginEdit(root, Number(task.id), root.interactionSource)
+            if (!task || !task.id) {
+                root.errorText = root.interactionCoordinatorRef.lastError
+                root.openFailed(root.errorText)
+                return false
+            }
+        }
         root.editingTaskId = Number(task.id);
         titleField.text = String(task.title || "");
         root.estimatedMinutes = Number(task.estimatedMinutes || 0);
@@ -264,6 +280,7 @@ Popup {
             titleField.selectAll()
             return
         }
+        root.finishEditing();
         root.close();
     }
 

@@ -3,6 +3,8 @@
 
 #include <QDate>
 #include <QObject>
+#include "ServiceReadResult.h"
+#include <QSet>
 #include <QString>
 #include <QVariant>
 #include <QVariantList>
@@ -101,6 +103,18 @@ public:
     // 结转只排除具有可信生成标记的例行任务；旧版仅按标题猜出的 routine_id 不可信。
     Q_INVOKABLE QVariantList getOverdueUncompletedTasks() const;
     Q_INVOKABLE bool moveTasksToToday(const QVariantList& taskIds);
+
+    // 有界、无共享失败信号的读取入口，供后台调用及交互前同步重读。
+    ServiceReadResult<QVariantMap> readTask(int taskId) const;
+    ServiceReadResult<QVariantList> readTasks(const QDate& from, const QDate& to,
+                                             int completed, int limit, const QSet<int>& excluded) const;
+
+    // 字段级编辑可保留历史科目文本；UI 全量表单仍使用原 updateTask 接口。
+    bool updateTaskFields(int taskId, const QString& title, int categoryId, const QVariant& dateValue,
+                          int estimatedMinutes, const QString& notes, bool preserveCategory);
+    // 返回提交事实，让后台调用区分“未创建”和“已提交但无法取得编号”。
+    int createTaskWithOutcome(const QString& title, const QVariant& dateValue, int categoryId,
+                              int estimatedMinutes, const QString& notes, bool* committed);
 
 signals:
     void tasksChanged();

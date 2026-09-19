@@ -23,6 +23,8 @@ Item {
     property var logicalNowProvider: null
     property var weekTasks: []
     // 上下文属性只在 main.qml 解包，视图内部一律消费显式引用。
+    property var interactionCoordinatorRef: null
+    property bool interactionRefreshPending: false
     property var taskManagerRef: null
     property var logicalDayServiceRef: null
     property var settingsRef: null
@@ -43,6 +45,16 @@ Item {
     // 周一起点对应的星期字，索引 0~6 = 周一~周日。
     readonly property var weekdayGlyphs: ["一", "二", "三", "四", "五", "六", "日"]
 
+    Connections {
+        target: root.interactionCoordinatorRef
+        function onChanged() {
+            if (!root.interactionCoordinatorRef.refreshBlocked && root.interactionRefreshPending) {
+                root.interactionRefreshPending = false
+                refreshCoalescer.request()
+            }
+        }
+    }
+
     Component.onCompleted: {
         root.logicalToday = root.computeLogicalToday()
         root.weekStart = root.mondayOf(root.logicalToday)
@@ -50,11 +62,17 @@ Item {
             root.refresh()
     }
     onPageActiveChanged: {
+        if (!root.pageActive) {
+            editTaskDialog.finishEditing()
+            editTaskDialog.close()
+            root.commitDrag(-1, -1, true)
+        }
         refreshCoalescer.cancel()
         if (root.pageActive)
             root.refresh()
     }
     onPendingDeleteTaskIdChanged: {
+        if (root.pendingDeleteTaskId > 0) root.commitDrag(-1, -1, true)
         if (root.pageActive)
             refresh()
     }
@@ -163,6 +181,7 @@ Item {
     }
 
     function beginDrag(taskId) {
+        if (root.interactionCoordinatorRef && !root.interactionCoordinatorRef.beginDrag(root, taskId, "WeekPlanView.drag")) return
         root.draggingTaskId = taskId
         root.dropTargetIndex = -1
     }
@@ -201,19 +220,23 @@ Item {
     }
 
     function commitDrag(taskId, currentIndex, cancelled) {
-        const target = root.dropTargetIndex
-        root.draggingTaskId = -1
-        root.dropTargetIndex = -1
-        // 拖回原来那天不算改期：白写一次库还会把它挪到当天末尾。
-        if (cancelled === true || !root.canMoveTasks
-                || target < 0 || target === currentIndex) {
-            return
+        try {
+            const target = root.dropTargetIndex
+            root.draggingTaskId = -1
+            root.dropTargetIndex = -1
+            // 拖回原来那天不算改期：白写一次库还会把它挪到当天末尾。
+            if (cancelled === true || !root.canMoveTasks
+                    || target < 0 || target === currentIndex) {
+                return
+            }
+            if (!root.taskManagerRef.moveTaskToDate(taskId, root.isoDate(root.dayDate(target)))) {
+                root.loadError = "任务改期失败，请重试"
+                return
+            }
+            // 成功路径由 TaskManager.tasksChanged 统一触发刷新；这里再查一次会同步重建两轮 delegate。
+        } finally {
+            if (root.interactionCoordinatorRef) root.interactionCoordinatorRef.end(root)
         }
-        if (!root.taskManagerRef.moveTaskToDate(taskId, root.isoDate(root.dayDate(target)))) {
-            root.loadError = "任务改期失败，请重试"
-            return
-        }
-        // 成功路径由 TaskManager.tasksChanged 统一触发刷新；这里再查一次会同步重建两轮 delegate。
     }
 
     function tasksForDay(index) {
@@ -570,6 +593,11 @@ Item {
     }
 
     function refresh() {
+        // 已排队的刷新、完成动画和日界刷新都走同一闸口，不重建正在输入或拖动的行。
+        if (root.interactionCoordinatorRef && root.interactionCoordinatorRef.refreshBlocked) {
+            root.interactionRefreshPending = true
+            return
+        }
         try {
             root.loadError = ""
             var loaded = root.taskManagerRef.getWeekTasks(root.isoDate(root.weekStart))
@@ -997,6 +1025,9 @@ Item {
                                 model: dayRow.dayTasks
 
                                 TaskItem {
+                                    interactionCoordinatorRef: root.interactionCoordinatorRef
+                                    interactionSource: "WeekPlanView.inline_edit"
+                                    interactionActive: root.pageActive
                                     id: weekTaskRow
 
                                     // pragma ComponentBehavior: Bound 之后 delegate 不再继承
@@ -1050,8 +1081,10 @@ Item {
                                     }
 
                                     renameSubmitter: function(id, newTitle) {
-                                        var originalCategoryId = Number(weekTaskRow.modelData.categoryId || -1)
-                                        var originalDate = root.taskIsoDate(weekTaskRow.modelData.date)
+                                        var latest = root.taskManagerRef.getTask(id)
+                                        if (!latest || !latest.id) return false
+                                        var originalCategoryId = Number(latest.categoryId || -1)
+                                        var originalDate = root.isoDate(latest.date)
                                         var succeeded = Boolean(root.taskManagerRef.updateTask(
                                             id, newTitle, originalCategoryId, originalDate))
                                         if (!succeeded) {
@@ -1145,6 +1178,9 @@ Item {
     }
 
     EditTaskDialog {
+        interactionCoordinatorRef: root.interactionCoordinatorRef
+        interactionSource: "WeekPlanView.edit_dialog"
+        onOpenFailed: function(message) { root.loadError = message }
         id: editTaskDialog
         maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 

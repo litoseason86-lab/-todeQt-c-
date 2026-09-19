@@ -17,6 +17,14 @@ TestCase {
     property int weekQueryCount: 0
 
     QtObject {
+        id: coordinator
+        property bool refreshBlocked: false
+        signal changed()
+        function beginDrag(owner, id, source) { refreshBlocked = true; changed(); return true }
+        function end(owner) { refreshBlocked = false; changed() }
+    }
+
+    QtObject {
         id: taskManager
         signal tasksChanged()
 
@@ -30,6 +38,7 @@ TestCase {
         function updateTask(id, title, categoryId, date) { return true }
         function deleteTask(id) { return true }
         function moveTaskToDate(taskId, isoDate) {
+            testCase.verify(coordinator.refreshBlocked, "写库结束前不得释放拖动登记")
             testCase.moveCalls.push({ taskId: taskId, date: isoDate })
             tasksChanged()
             return true
@@ -53,6 +62,7 @@ TestCase {
         id: viewComponent
 
         WeekPlanView {
+            interactionCoordinatorRef: coordinator
             taskManagerRef: taskManager
             logicalDayServiceRef: logicalDayService
             settingsRef: appSettings
@@ -76,6 +86,7 @@ TestCase {
     }
 
     function init() {
+        coordinator.end(null)
         testCase.moveCalls = []
         testCase.weekQueryCount = 0
         taskManager.weekRows = [makeTask(1, "待挪任务", testCase.logicalToday())]

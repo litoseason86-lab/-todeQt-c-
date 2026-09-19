@@ -23,3 +23,6 @@ compile_commands.json
 # Local database files
 *.db
 *.sqlite
+
+# MCP SDK 兼容验证工作区：只提交 package.json、锁文件与脚本，安装出的依赖目录不入库
+/tests/mcp-sdk/node_modules/

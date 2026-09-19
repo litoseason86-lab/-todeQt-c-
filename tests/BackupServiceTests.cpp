@@ -162,6 +162,8 @@ private slots:
     void restoreUsesValidatedBytesWhenSourcePathChanges();
     void restorePreservesCountdownGoals();
     void restoreRestoresSettingsValue();
+    void restoreKeepsMcpPolicy_data();
+    void restoreKeepsMcpPolicy();
     void restoreRemovesSettingsMissingFromBackup();
     void restoreBringsBackDailyGoalHistorySnapshot();
     void restoreOldBackupWithoutGoalHistoryImportsLegacyDateOnly();
@@ -823,6 +825,39 @@ void BackupServiceTests::restorePreservesCountdownGoals()
     QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM countdown_goals")), 1);
 }
 
+void BackupServiceTests::restoreKeepsMcpPolicy_data()
+{
+    QTest::addColumn<bool>("localEnabled");
+    QTest::newRow("keep-disabled") << false;
+    QTest::newRow("keep-enabled") << true;
+}
+
+void BackupServiceTests::restoreKeepsMcpPolicy()
+{
+    QFETCH(bool, localEnabled);
+    {
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.setValue(QStringLiteral("mcp/enabled"), !localEnabled);
+        settings.setValue(QStringLiteral("mcp/writeEnabled"), !localEnabled);
+        settings.sync();
+    }
+    QVERIFY(insertTask(QStringLiteral("接入策略隔离")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    {
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.setValue(QStringLiteral("mcp/enabled"), localEnabled);
+        settings.setValue(QStringLiteral("mcp/writeEnabled"), localEnabled);
+        settings.sync();
+    }
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    // 开着和关着都必须保留，不能借恢复备份偷偷重新授权或关闭本机接入。
+    QCOMPARE(settings.value(QStringLiteral("mcp/enabled")).toBool(), localEnabled);
+    QCOMPARE(settings.value(QStringLiteral("mcp/writeEnabled")).toBool(), localEnabled);
+    QVERIFY(!AppSettings::ownedSettingGroups().contains(QStringLiteral("mcp")));
+    QVERIFY(!BackupOperations::isLocalSettingKey(QStringLiteral("mcp/enabled")));
+}
+
 void BackupServiceTests::restoreRestoresSettingsValue()
 {
     // 通过与 BackupService 相同的 ini 存储写入一个偏好。
@@ -1037,6 +1072,14 @@ void BackupServiceTests::asyncRestoreRollbackRestoresOriginalTaskCount()
     QVERIFY(insertTask(QStringLiteral("恢复前新增")) > 0);
     QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
 
+    {
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        // 必须有一个会被恢复删除的自有键，否则仅有 mcp/ 时恢复根本不写偏好，无法注入写失败。
+        settings.setValue(QStringLiteral("backup/seed"), 1);
+        settings.setValue(QStringLiteral("mcp/enabled"), true);
+        settings.setValue(QStringLiteral("mcp/writeEnabled"), false);
+        settings.sync();
+    }
     QFile settingsFile(settingsPath());
     if (!settingsFile.exists()) {
         QSettings seed(settingsPath(), QSettings::IniFormat);
@@ -1056,6 +1099,9 @@ void BackupServiceTests::asyncRestoreRollbackRestoresOriginalTaskCount()
 
     QVERIFY(QFile::setPermissions(settingsPath(),
                                   QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    QCOMPARE(settings.value(QStringLiteral("mcp/enabled")).toBool(), true);
+    QCOMPARE(settings.value(QStringLiteral("mcp/writeEnabled")).toBool(), false);
 }
 
 void BackupServiceTests::olderSchemaBackupRestoresAndMigrates()
@@ -1225,6 +1271,8 @@ void BackupServiceTests::backupEmbedsOnlyOwnedSettingKeys()
         settings.setValue(QStringLiteral("NSUserDictionaryReplacementItems"),
                           QStringLiteral("私人文本替换"));
         settings.setValue(QStringLiteral("backup/autoEnabled"), true);
+        settings.setValue(QStringLiteral("mcp/enabled"), true);
+        settings.setValue(QStringLiteral("mcp/writeEnabled"), true);
         settings.sync();
     }
     QVERIFY(insertTask(QStringLiteral("偏好过滤任务")) > 0);
@@ -1254,6 +1302,7 @@ void BackupServiceTests::backupEmbedsOnlyOwnedSettingKeys()
              "用户的文本替换词典被嵌进了备份文件");
     // 自动备份策略属于本机，恢复时本来就不用它，不必随备份带走。
     QVERIFY(!embeddedKeys.contains(QStringLiteral("backup/autoEnabled")));
+    for (const QString& key : embeddedKeys) QVERIFY(!key.startsWith(QStringLiteral("mcp/")));
 }
 
 void BackupServiceTests::settingsSnapshotSkipsForeignKeysAndApplyLeavesThemAlone()

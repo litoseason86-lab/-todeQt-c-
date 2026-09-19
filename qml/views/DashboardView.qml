@@ -28,6 +28,8 @@ Item {
     // 直接写 root.taskManagerRef / root.statisticsServiceRef 这类裸名字依赖 QML 的动态作用域：
     // 解析结果取决于运行时的作用域链，测试里靠「同名 id」也能撞上，
     // 于是视图对外部的真实依赖既看不出来、也换不掉。
+    property var interactionCoordinatorRef: null
+    property bool interactionRefreshPending: false
     property var taskManagerRef: null
     property var statisticsServiceRef: null
     property var routineManagerRef: null
@@ -106,12 +108,26 @@ Item {
         return LogicalDay.todayIso(hour, root.now)
     }
 
+    Connections {
+        target: root.interactionCoordinatorRef
+        function onChanged() {
+            if (!root.interactionCoordinatorRef.refreshBlocked && root.interactionRefreshPending) {
+                root.interactionRefreshPending = false
+                refreshCoalescer.request()
+            }
+        }
+    }
+
     Component.onCompleted: {
         root.now = root.currentNow()
         if (root.pageActive)
             refresh()
     }
     onPageActiveChanged: {
+        if (!root.pageActive) {
+            editTaskDialog.finishEditing()
+            editTaskDialog.close()
+        }
         refreshCoalescer.cancel()
         if (root.pageActive)
             refresh()
@@ -248,6 +264,11 @@ Item {
     }
 
     function refresh() {
+        // 已排队的刷新、完成动画和日界刷新都走同一闸口，不重建正在输入或拖动的行。
+        if (root.interactionCoordinatorRef && root.interactionCoordinatorRef.refreshBlocked) {
+            root.interactionRefreshPending = true
+            return
+        }
         // 一轮组合查询只在起点清错；后续成功查询不能抹掉前面刚发生的失败。
         root.loadError = ""
         // 先幂等补齐当天例行任务，再分别加载任务与统计，互不拖垮。
@@ -267,6 +288,11 @@ Item {
     }
 
     function loadTasks() {
+        // 已排队的刷新、完成动画和日界刷新都走同一闸口，不重建正在输入或拖动的行。
+        if (root.interactionCoordinatorRef && root.interactionCoordinatorRef.refreshBlocked) {
+            root.interactionRefreshPending = true
+            return
+        }
         try {
             var loaded = root.taskManagerRef.getTodayTasks()
             root.tasks = root.pendingDeleteTaskId > 0
@@ -707,6 +733,9 @@ Item {
                                     model: root.filteredTasks
 
                                     TaskItem {
+                                        interactionCoordinatorRef: root.interactionCoordinatorRef
+                                        interactionSource: "DashboardView.inline_edit"
+                                        interactionActive: root.pageActive
                                         id: taskRow
 
                                         // Repeater 的 delegate 必须显式声明它消费的模型角色：
@@ -739,8 +768,10 @@ Item {
                                         }
 
                                         renameSubmitter: function (id, newTitle) {
-                                            var originalCategoryId = Number(taskRow.modelData.categoryId || -1)
-                                            var originalDate = root.taskIsoDate(taskRow.modelData.date)
+                                            var latest = root.taskManagerRef.getTask(id)
+                                            if (!latest || !latest.id) return false
+                                            var originalCategoryId = Number(latest.categoryId || -1)
+                                            var originalDate = root.taskIsoDate(latest.date)
                                             var succeeded = Boolean(root.taskManagerRef.updateTask(
                                                 id, newTitle, originalCategoryId, originalDate))
                                             if (!succeeded) {
@@ -958,6 +989,9 @@ Item {
     }
 
     EditTaskDialog {
+        interactionCoordinatorRef: root.interactionCoordinatorRef
+        interactionSource: "DashboardView.edit_dialog"
+        onOpenFailed: function(message) { root.loadError = message }
         id: editTaskDialog
         maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 

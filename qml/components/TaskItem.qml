@@ -153,6 +153,20 @@ Rectangle {
     property bool completionAnimationPlayed: false
     property real completionOffset: 0
     // 页面注入返回 bool 的重命名函数，失败时保留编辑态和用户输入。
+    property var interactionCoordinatorRef: null
+    property string editInitialTitle: ""
+    property bool interactionActive: true
+    onInteractionActiveChanged: { if (!root.interactionActive) root.cancelTitleEdit() }
+    property string interactionSource: "task_item.inline_edit"
+    onTitleEditingChanged: {
+        if (!root.titleEditing && root.interactionCoordinatorRef) root.interactionCoordinatorRef.end(root)
+    }
+    onVisibleChanged: {
+        if (!root.visible) root.cancelTitleEdit()
+    }
+    Component.onDestruction: {
+        if (root.interactionCoordinatorRef) root.interactionCoordinatorRef.end(root)
+    }
     property var renameSubmitter: null
     readonly property bool itemHovered: root.pointerInside
     // 视图可能传入标准化科目对象，也可能传入旧版字符串科目。
@@ -170,8 +184,16 @@ Rectangle {
     }
 
     function beginTitleEdit() {
+        if (!root.interactionActive) return
+        var latestTitle = root.taskTitle
+        if (root.interactionCoordinatorRef) {
+            var latest = root.interactionCoordinatorRef.beginEdit(root, root.taskId, root.interactionSource)
+            if (!latest || !latest.id) return
+            latestTitle = String(latest.title)
+        }
+        root.editInitialTitle = latestTitle
         root.titleEditing = true;
-        titleEditField.text = root.taskTitle;
+        titleEditField.text = latestTitle;
         titleEditField.forceActiveFocus();
         titleEditField.selectAll();
     }
@@ -179,7 +201,7 @@ Rectangle {
     function commitTitleEdit() {
         var newTitle = titleEditField.text.trim();
         // 空标题或未修改都当作取消，避免无意义刷新和空标题打到服务层。
-        if (newTitle.length === 0 || newTitle === root.taskTitle) {
+        if (newTitle.length === 0 || newTitle === root.editInitialTitle) {
             root.titleEditing = false;
             return;
         }

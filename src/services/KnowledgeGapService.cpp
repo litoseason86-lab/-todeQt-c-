@@ -850,3 +850,39 @@ QVariantMap KnowledgeGapService::getReminderSummary() const
     summary.insert(QStringLiteral("valid"), true);
     return summary;
 }
+
+ServiceReadResult<QVariantList> KnowledgeGapService::readGaps(const ReadFilter& filter, const QDate& today) const
+{
+    if (filter.limit < 1 || filter.limit > 100 || filter.afterId < 0 || !today.isValid()
+        || filter.status < kFilterUnresolved || filter.status > StatusResolved
+        || (filter.dueFrom.isValid() && filter.dueTo.isValid() && filter.dueFrom > filter.dueTo)
+        || (filter.dueState == QStringLiteral("unscheduled") && (filter.dueFrom.isValid() || filter.dueTo.isValid())))
+        return {{}, ServiceReadError::InvalidArgument};
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) return {{}, ServiceReadError::Database};
+    QString where = QStringLiteral("WHERE g.id > :after ");
+    if (filter.status == kFilterUnresolved) where += QStringLiteral("AND g.status != 2 ");
+    else if (filter.status >= 0) where += QStringLiteral("AND g.status = :status ");
+    if (filter.categoryId > 0) where += QStringLiteral("AND g.category_id = :category ");
+    if (filter.dueState == QStringLiteral("scheduled")) where += QStringLiteral("AND g.due_date IS NOT NULL ");
+    if (filter.dueState == QStringLiteral("unscheduled")) where += QStringLiteral("AND g.due_date IS NULL ");
+    if (filter.dueFrom.isValid()) where += QStringLiteral("AND g.due_date >= :from ");
+    if (filter.dueTo.isValid()) where += QStringLiteral("AND g.due_date <= :to ");
+    // instr 不解释 SQL 通配符，正文只参与筛选；固定输出不会把长详情发给模型。
+    where += QStringLiteral("AND (:text = '' OR instr(lower(g.title), lower(:text)) > 0 "
+                            "OR instr(lower(g.detail), lower(:text)) > 0 OR instr(lower(g.resolution), lower(:text)) > 0) ");
+    QSqlQuery query(db);
+    query.prepare(QLatin1String(kGapSelectSql) + where + QStringLiteral("ORDER BY g.id LIMIT :limit"));
+    query.bindValue(QStringLiteral(":after"), filter.afterId);
+    query.bindValue(QStringLiteral(":limit"), filter.limit + 1);
+    query.bindValue(QStringLiteral(":text"), filter.searchText.trimmed().isNull() ? QStringLiteral("") : filter.searchText.trimmed());
+    if (filter.status >= 0) query.bindValue(QStringLiteral(":status"), filter.status);
+    if (filter.categoryId > 0) query.bindValue(QStringLiteral(":category"), filter.categoryId);
+    if (filter.dueFrom.isValid()) query.bindValue(QStringLiteral(":from"), filter.dueFrom.toString(Qt::ISODate));
+    if (filter.dueTo.isValid()) query.bindValue(QStringLiteral(":to"), filter.dueTo.toString(Qt::ISODate));
+    if (!query.exec()) return {{}, ServiceReadError::Database};
+    QVariantList rows;
+    while (query.next()) rows.append(rowToVariantMap(query, today));
+    if (query.lastError().isValid()) return {{}, ServiceReadError::Database};
+    return {rows};
+}

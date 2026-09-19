@@ -2,6 +2,7 @@
 #define CATEGORYMANAGER_H
 
 #include <QObject>
+#include "ServiceReadResult.h"
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
@@ -29,6 +30,10 @@ public:
     // canDeleteCategory 只表示 UI 是否显示删除入口；真正删除时仍会再次校验。
     Q_INVOKABLE bool canDeleteCategory(int id) const;
     Q_INVOKABLE bool categoryNameExists(const QString& name, int excludeId = -1) const;
+
+    // 有界、无共享失败信号的读取入口，供后台调用及交互前同步重读。
+    ServiceReadResult<QVariantList> readCategories(int limit = 10000) const;
+    ServiceReadResult<QVariantMap> readCategory(int id) const;
 
 signals:
     void categoriesChanged();

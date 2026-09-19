@@ -12,6 +12,7 @@ Popup {
 
     property var appSettingsRef: null
     property var backupServiceRef: null
+    property var mcpAccessRef: null
     property var shortcutRegistryRef: null
     property int currentSection: 0
     // 静息态留空：「设置将自动保存到本机」是一句永远为真的话，占一整行却零信息量。
@@ -248,6 +249,9 @@ Popup {
                             if (item) {
                                 item.appSettingsRef = Qt.binding(function() { return root.appSettingsRef })
                                 item.compact = Qt.binding(function() { return root.compact })
+                                if (item.hasOwnProperty("mcpAccessRef")) {
+                                    item.mcpAccessRef = Qt.binding(function() { return root.mcpAccessRef })
+                                }
                                 // 数据页需要备份服务引用；其余页面没有该属性，跳过即可。
                                 if (item.hasOwnProperty("backupServiceRef")) {
                                     item.backupServiceRef = Qt.binding(function() { return root.backupServiceRef })

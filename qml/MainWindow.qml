@@ -42,6 +42,14 @@ Item {
     property string pendingDeleteTitle: ""
     property int deleteCommitDelayMs: 5000
     property string restoreInspectionPath: ""
+    property var interactionCoordinatorRef: null
+    onPendingDeleteTaskIdChanged: {
+        if (root.interactionCoordinatorRef)
+            root.interactionCoordinatorRef.setPendingDelete(root, root.pendingDeleteTaskId)
+    }
+    Component.onDestruction: {
+        if (root.interactionCoordinatorRef) root.interactionCoordinatorRef.end(root)
+    }
     property var taskManagerRef: null
     property var categoryManagerRef: null
     property var routineManagerRef: null
@@ -54,6 +62,7 @@ Item {
     property var focusTimerRef: null
     property var logicalDayServiceRef: null
     property var backupServiceRef: null
+    property var mcpAccessRef: null
     property var goalServiceRef: null
     property var scheduleServiceRef: null
     property var phaseSoundServiceRef: null
@@ -932,6 +941,7 @@ Item {
                     id: todayTaskView
                     objectName: "todayTaskViewPage"
                     pageActive: root.currentView === "today"
+                    interactionCoordinatorRef: root.interactionCoordinatorRef
                     taskManagerRef: root.taskManagerRef
                     statisticsServiceRef: root.statisticsServiceRef
                     routineManagerRef: root.routineManagerRef
@@ -1005,6 +1015,7 @@ Item {
 
                 WeekPlanView {
                     pageActive: root.currentView === "week"
+                    interactionCoordinatorRef: root.interactionCoordinatorRef
                     taskManagerRef: root.taskManagerRef
                     logicalDayServiceRef: root.logicalDayServiceRef
                     settingsRef: root.appSettingsRef
@@ -1055,6 +1066,7 @@ Item {
                     objectName: "dashboardViewPage"
                     pageActive: root.currentView === "dashboard"
 
+                    interactionCoordinatorRef: root.interactionCoordinatorRef
                     taskManagerRef: root.taskManagerRef
                     statisticsServiceRef: root.statisticsServiceRef
                     routineManagerRef: root.routineManagerRef
@@ -1431,6 +1443,7 @@ Item {
 
         parent: root
         appSettingsRef: root.appSettingsRef
+        mcpAccessRef: root.mcpAccessRef
         backupServiceRef: root.backupServiceRef
         shortcutRegistryRef: root.shortcutRegistryRef
 

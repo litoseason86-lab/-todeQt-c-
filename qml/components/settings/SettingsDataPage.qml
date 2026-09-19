@@ -12,6 +12,7 @@ FocusScope {
     objectName: "settingsDataPage"
     property var appSettingsRef: null
     property var backupServiceRef: null
+    property var mcpAccessRef: null
     property bool compact: false
     readonly property bool backupBusy: root.backupServiceRef
                                        ? root.backupServiceRef.busy : false
@@ -41,6 +42,69 @@ FocusScope {
 
         width: root.width
         spacing: Theme.space24
+
+        SettingsSection {
+            title: "外部 AI 接入"
+            description: "通过本机 MCP 客户端读取任务、专注统计和知识缺口。应用需保持运行；同一 macOS 账户内的进程共享接入权限。"
+
+            SettingsRow {
+                label: "允许外部 AI 接入"
+                caption: "默认关闭；关闭后立即断开连接并使旧会话失效"
+                iconName: "layers"
+                compact: root.compact
+                SettingsSwitch {
+                    objectName: "settingsMcpEnabled"
+                    text: "允许外部 AI 接入"
+                    persistedChecked: root.mcpAccessRef ? root.mcpAccessRef.enabled : false
+                    enabled: Boolean(root.mcpAccessRef)
+                    reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
+                    onChangeRequested: value => { if (root.mcpAccessRef) root.mcpAccessRef.setEnabled(value) }
+                }
+            }
+            SettingsRow {
+                label: "允许 AI 修改任务"
+                caption: "开启后可新建、编辑、改期和设置完成状态，不逐条确认"
+                iconName: "edit"
+                compact: root.compact
+                SettingsSwitch {
+                    objectName: "settingsMcpWriteEnabled"
+                    text: "允许 AI 修改任务"
+                    persistedChecked: root.mcpAccessRef ? root.mcpAccessRef.writeEnabled : false
+                    enabled: Boolean(root.mcpAccessRef && root.mcpAccessRef.enabled)
+                    reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
+                    onChangeRequested: value => { if (root.mcpAccessRef) root.mcpAccessRef.setWriteEnabled(value) }
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
+                color: Theme.inkMuted
+                font.pixelSize: Theme.fontSm
+                text: "备注和知识缺口可能含有外部粘贴的指令。AI 可能误信这些内容并修改任务；仅向可信客户端开放写权限。接入策略只保存在本机，不随备份恢复。"
+            }
+            Label {
+                objectName: "settingsMcpStatus"
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                textFormat: Text.PlainText
+                color: Theme.ink
+                font.pixelSize: Theme.fontSm
+                text: root.mcpAccessRef ? ((root.mcpAccessRef.listening ? "正在监听 · 连接数 " + root.mcpAccessRef.connectionCount : "未监听")
+                       + "\n" + root.mcpAccessRef.blockSummary
+                       + (root.mcpAccessRef.lastOperation ? "\n最近操作：" + root.mcpAccessRef.lastOperation : "")
+                       + (root.mcpAccessRef.lastError ? "\n" + root.mcpAccessRef.lastError : "")) : "接入服务未装配"
+                Accessible.name: text
+            }
+            ManageButton {
+                objectName: "settingsMcpCopyPath"
+                text: "复制 MCP 辅助程序路径"
+                caption: root.mcpAccessRef ? root.mcpAccessRef.helperPath : "接入服务未装配"
+                iconName: "data"
+                enabled: Boolean(root.mcpAccessRef)
+                onClicked: { if (root.mcpAccessRef) root.mcpAccessRef.copyHelperPath() }
+            }
+        }
 
         SettingsSection {
             title: "管理"

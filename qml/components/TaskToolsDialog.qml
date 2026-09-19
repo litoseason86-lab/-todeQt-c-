@@ -8,6 +8,31 @@ import "../LogicalDay.js" as LogicalDay
 
 Dialog {
     id: root
+    property var interactionCoordinatorRef: null
+    property bool interactionRefreshPending: false
+    property bool interactionClearPending: false
+    Connections {
+        target: root.interactionCoordinatorRef
+        function onChanged() {
+            if (!root.interactionCoordinatorRef.refreshBlocked && root.interactionRefreshPending) {
+                root.interactionRefreshPending = false
+                interactionRefresh.request()
+            }
+        }
+    }
+    RefreshCoalescer {
+        id: interactionRefresh
+        onTriggered: {
+            var clear = root.interactionClearPending
+            root.interactionClearPending = false
+            root.refresh(clear)
+        }
+    }
+    onAboutToHide: root.finishInteraction()
+    function finishInteraction() {
+        taskEditor.finishEditing()
+        taskEditor.close()
+    }
     property var taskManagerRef: null
     property var categoryManagerRef: null
     property string todayIso: ""
@@ -43,6 +68,11 @@ Dialog {
     }
     onPendingDeleteTaskIdChanged: { if (root.opened) root.refresh(false) }
     function refresh(clearSelection) {
+        if (root.interactionCoordinatorRef && root.interactionCoordinatorRef.refreshBlocked) {
+            root.interactionRefreshPending = true
+            root.interactionClearPending = root.interactionClearPending || Boolean(clearSelection)
+            return
+        }
         if (clearSelection) root.selectedIds = []
         if (root.taskManagerRef && typeof root.taskManagerRef.searchTasks === "function") {
             var result = root.taskManagerRef.searchTasks(search.text, status.currentIndex - 1, root.resultLimit)
@@ -200,6 +230,9 @@ Dialog {
         Label { Layout.fillWidth: true; text: root.message; textFormat: Text.PlainText; wrapMode: Text.WordWrap; color: Theme.inkSoft }
     }
     EditTaskDialog {
+        interactionCoordinatorRef: root.interactionCoordinatorRef
+        interactionSource: "task_tools.edit_dialog"
+        onOpenFailed: function(message) { root.message = message }
         id: taskEditor
         maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
         parent: root.parent

@@ -120,6 +120,28 @@ set(APP_SOURCES
     src/services/ShortcutRegistry.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
+    src/services/TaskInteractionCoordinator.h
+    src/services/TaskInteractionCoordinator.cpp
+    # 外部 AI 接入（plans/047）：common 是与辅助程序共用的契约与路径，bridge 只编入主应用。
+    src/mcp/common/McpContracts.h
+    src/mcp/common/McpContracts.cpp
+    src/mcp/common/McpPaths.h
+    src/mcp/common/McpPaths.cpp
+    src/mcp/common/McpJsonStream.h
+    src/mcp/common/McpJsonStream.cpp
+    src/mcp/common/McpEndpointFiles.h
+    src/mcp/common/McpEndpointFiles.cpp
+    src/mcp/bridge/McpAccessController.h
+    src/mcp/bridge/McpAccessController.cpp
+    src/mcp/bridge/McpLocalServer.h
+    src/mcp/bridge/McpLocalServer.cpp
+    src/platform/macos/MacLocalPeerIdentity.h
+    src/platform/macos/MacLocalPeerIdentity.cpp
+    src/mcp/bridge/McpToolDispatcher.h
+    src/mcp/bridge/McpToolDispatcher.cpp
+    src/mcp/bridge/McpTaskWrites.cpp
+    src/mcp/bridge/McpCreateRegistry.h
+    src/mcp/bridge/McpCreateRegistry.cpp
     src/platform/macos/MacStatusBarController.h
     src/platform/macos/MacStatusBarController.mm
     src/platform/macos/MacNotificationBackend.h
@@ -229,6 +251,7 @@ if(APPLE AND POMODORO_TODO_DEPLOY_LOCAL)
             "-DSOURCE_APP=$<TARGET_BUNDLE_DIR:PomodoroTodo>"
             "-DDESTINATION_APP=${POMODORO_TODO_LOCAL_APP_PATH}"
             "-DBUNDLE_EXECUTABLE=PomodoroTodo"
+            "-DHELPER_EXECUTABLE=PomodoroTodoMcp"
             "-DLSREGISTER=${POMODORO_TODO_LSREGISTER}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeployLocalApp.cmake"
         DEPENDS PomodoroTodo
@@ -252,6 +275,54 @@ function(pomodoro_todo_enable_warnings target)
 endfunction()
 
 pomodoro_todo_enable_warnings(PomodoroTodo)
+
+# 外部 AI 接入的无界面辅助程序：AI 客户端以 stdio 方式拉起它，它只负责 MCP 协议与转发。
+# 源码清单只列 helper 与 common，业务服务、SQL 与 QML 一律不编入——辅助程序不直接碰数据库，
+# 权限判断与读写都在主应用内完成。McpHelperLinkGate 会检查它确实没有链接这些模块。
+# 下面的 bundle-mcp-helper 将产物复制到应用包 Contents/MacOS/。
+qt_add_executable(PomodoroTodoMcp
+    src/mcp/helper/main.cpp
+    src/mcp/helper/McpStdioServer.h
+    src/mcp/helper/McpStdioServer.cpp
+    src/mcp/helper/McpStdioDevice.h
+    src/mcp/helper/McpStdioDevice.cpp
+    src/mcp/helper/McpBridgeClient.h
+    src/mcp/helper/McpBridgeClient.cpp
+    src/mcp/common/McpContracts.h
+    src/mcp/common/McpContracts.cpp
+    src/mcp/common/McpPaths.h
+    src/mcp/common/McpPaths.cpp
+    src/mcp/common/McpJsonStream.h
+    src/mcp/common/McpJsonStream.cpp
+    src/mcp/common/McpEndpointFiles.h
+    src/mcp/common/McpEndpointFiles.cpp
+)
+
+target_compile_definitions(PomodoroTodoMcp PRIVATE
+    POMODORO_TODO_VERSION="${PROJECT_VERSION}"
+)
+
+target_link_libraries(PomodoroTodoMcp PRIVATE
+    Qt6::Core
+    Qt6::Network
+)
+
+pomodoro_todo_enable_warnings(PomodoroTodoMcp)
+
+if(APPLE)
+    # 单独的打包目标每次核对复制；helper 改动即使主程序无需重链也会进入新包。
+    add_custom_target(bundle-mcp-helper ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:PomodoroTodoMcp>"
+            "$<TARGET_BUNDLE_DIR:PomodoroTodo>/Contents/MacOS/PomodoroTodoMcp"
+        DEPENDS PomodoroTodo PomodoroTodoMcp
+        VERBATIM
+    )
+    if(TARGET deploy-local-app)
+        add_dependencies(deploy-local-app bundle-mcp-helper)
+    endif()
+endif()
+
 
 enable_testing()
 
@@ -753,6 +824,95 @@ target_link_libraries(QmlResourceManifestTests PRIVATE
 pomodoro_todo_enable_warnings(QmlResourceManifestTests)
 add_test(NAME QmlResourceManifestTests COMMAND QmlResourceManifestTests)
 
+# 外部 AI 接入的共享契约与本机路径：纯函数测试，不启动辅助程序、不连接端点、不创建目录。
+qt_add_executable(McpProtocolTests
+    tests/McpProtocolTests.cpp
+    src/mcp/common/McpContracts.h
+    src/mcp/common/McpContracts.cpp
+    src/mcp/common/McpPaths.h
+    src/mcp/common/McpPaths.cpp
+)
+
+target_link_libraries(McpProtocolTests PRIVATE
+    Qt6::Core
+    Qt6::Test
+)
+
+pomodoro_todo_enable_warnings(McpProtocolTests)
+add_test(NAME McpProtocolTests COMMAND McpProtocolTests)
+
+# 与生产 helper 共用入口和传输实现，测试入口仅接受显式临时目录，不能回退到生产端点。
+get_target_property(POMODORO_MCP_HELPER_SOURCES PomodoroTodoMcp SOURCES)
+qt_add_executable(McpTestHelper ${POMODORO_MCP_HELPER_SOURCES})
+target_compile_definitions(McpTestHelper PRIVATE MCP_TEST_HOST POMODORO_TODO_VERSION="${PROJECT_VERSION}")
+target_link_libraries(McpTestHelper PRIVATE Qt6::Core Qt6::Network)
+pomodoro_todo_enable_warnings(McpTestHelper)
+
+qt_add_executable(McpIntegrationTests
+    tests/McpIntegrationTests.cpp
+    src/mcp/common/McpContracts.h src/mcp/common/McpContracts.cpp
+    src/mcp/common/McpPaths.h src/mcp/common/McpPaths.cpp
+    src/mcp/common/McpJsonStream.h src/mcp/common/McpJsonStream.cpp
+    src/mcp/common/McpEndpointFiles.h src/mcp/common/McpEndpointFiles.cpp
+    src/mcp/helper/McpBridgeClient.h src/mcp/helper/McpBridgeClient.cpp
+    src/mcp/bridge/McpAccessController.h src/mcp/bridge/McpAccessController.cpp
+    src/mcp/bridge/McpLocalServer.h src/mcp/bridge/McpLocalServer.cpp
+    src/platform/macos/MacLocalPeerIdentity.h src/platform/macos/MacLocalPeerIdentity.cpp
+)
+target_link_libraries(McpIntegrationTests PRIVATE Qt6::Core Qt6::Network Qt6::Test)
+target_compile_definitions(McpIntegrationTests PRIVATE MCP_TEST_HELPER="$<TARGET_FILE:McpTestHelper>")
+add_dependencies(McpIntegrationTests McpTestHelper)
+pomodoro_todo_enable_warnings(McpIntegrationTests)
+add_test(NAME McpIntegrationTests COMMAND McpIntegrationTests)
+set_tests_properties(McpIntegrationTests PROPERTIES TIMEOUT 120)
+
+# 只读工具与真实服务共用隔离数据库，辅助程序目标仍不链接这些业务依赖。
+qt_add_executable(McpServiceTests
+    tests/McpServiceTests.cpp
+    src/models/Task.h src/models/Task.cpp
+    src/services/ServiceReadResult.h
+    src/services/DatabaseManager.h src/services/DatabaseManager.cpp
+    src/services/AppSettings.h src/services/AppSettings.cpp
+    src/services/TaskManager.h src/services/TaskManager.cpp
+    src/services/CategoryManager.h src/services/CategoryManager.cpp
+    src/services/StatisticsService.h src/services/StatisticsService.cpp
+    src/services/KnowledgeGapService.h src/services/KnowledgeGapService.cpp
+    src/services/TaskInteractionCoordinator.h src/services/TaskInteractionCoordinator.cpp
+    src/mcp/common/McpContracts.h src/mcp/common/McpContracts.cpp
+    src/mcp/bridge/McpToolDispatcher.h src/mcp/bridge/McpToolDispatcher.cpp
+    src/mcp/bridge/McpTaskWrites.cpp
+    src/mcp/bridge/McpCreateRegistry.h src/mcp/bridge/McpCreateRegistry.cpp
+)
+target_link_libraries(McpServiceTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
+pomodoro_todo_enable_warnings(McpServiceTests)
+add_test(NAME McpServiceTests COMMAND McpServiceTests)
+
+# SDK / 实际客户端联调的隔离宿主，不注册默认 CTest，不依赖 Node。
+get_target_property(POMODORO_MCP_SERVICE_TEST_SOURCES McpServiceTests SOURCES)
+list(FILTER POMODORO_MCP_SERVICE_TEST_SOURCES EXCLUDE REGEX "tests/McpServiceTests[.]cpp$")
+qt_add_executable(McpSdkHost
+    tests/McpSdkHost.cpp
+    ${POMODORO_MCP_SERVICE_TEST_SOURCES}
+    src/mcp/common/McpPaths.h src/mcp/common/McpPaths.cpp
+    src/mcp/common/McpJsonStream.h src/mcp/common/McpJsonStream.cpp
+    src/mcp/common/McpEndpointFiles.h src/mcp/common/McpEndpointFiles.cpp
+    src/mcp/bridge/McpAccessController.h src/mcp/bridge/McpAccessController.cpp
+    src/mcp/bridge/McpLocalServer.h src/mcp/bridge/McpLocalServer.cpp
+    src/mcp/helper/McpStdioDevice.h src/mcp/helper/McpStdioDevice.cpp
+    src/platform/macos/MacLocalPeerIdentity.h src/platform/macos/MacLocalPeerIdentity.cpp
+)
+target_link_libraries(McpSdkHost PRIVATE Qt6::Core Qt6::Sql Qt6::Network)
+pomodoro_todo_enable_warnings(McpSdkHost)
+
+# 辅助程序链接门禁：只允许 Qt Core/Network。源码清单写对了还不够——
+# 以后有人在 helper 里顺手 include 一个服务头文件、再补一行链接库，清单看不出来，链接结果看得出来。
+add_test(
+    NAME McpHelperLinkGate
+    COMMAND ${CMAKE_COMMAND}
+        "-DHELPER_BINARY=$<TARGET_FILE:PomodoroTodoMcp>"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CheckMcpHelperLinks.cmake"
+)
+
 # QML 静态检查门禁。此前 qmllint 只是「可以手动跑一下」，输出 250 条 unqualified
 # 却退出码 0，等于没有门禁——那批告警也确实累积到了 250 条。
 #
@@ -790,6 +950,13 @@ endif()
 # 用 Python 而不是再写一个 C++ 目标：判据是纯文本模式匹配，不需要跑起应用。
 find_package(Python3 COMPONENTS Interpreter)
 if(Python3_FOUND)
+    if(APPLE)
+        add_test(NAME McpBundleSmoke
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_mcp_bundle.py"
+                "$<TARGET_BUNDLE_DIR:PomodoroTodo>/Contents/MacOS/PomodoroTodoMcp")
+        add_test(NAME DeployLocalAppTests
+            COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/DeployLocalAppTests.py")
+    endif()
     add_test(NAME QmlTextFormatGate
              COMMAND ${Python3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml_text_format_gate.py
@@ -868,6 +1035,8 @@ set_tests_properties(
     ShaderAssetsTests
     SoundAssetsTests
     QmlResourceManifestTests
+    McpProtocolTests
+    McpHelperLinkGate
     MacNotificationBackendTests
     MacPreferencesCleanupTests
     MacGlobalHotkeyTests

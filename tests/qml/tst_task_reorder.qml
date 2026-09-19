@@ -17,6 +17,14 @@ TestCase {
     property int todayQueryCount: 0
 
     QtObject {
+        id: coordinator
+        property bool refreshBlocked: false
+        signal changed()
+        function beginDrag(owner, id, source) { refreshBlocked = true; changed(); return true }
+        function end(owner) { refreshBlocked = false; changed() }
+    }
+
+    QtObject {
         id: taskManager
         signal tasksChanged()
 
@@ -31,6 +39,7 @@ TestCase {
         function updateTask(id, title, categoryId, date) { return true }
         function deleteTask(id) { return true }
         function reorderTasks(isoDate, ids) {
+            testCase.verify(coordinator.refreshBlocked, "写库结束前不得释放拖动登记")
             testCase.reorderCalls.push({ date: isoDate, ids: ids })
             return true
         }
@@ -70,6 +79,7 @@ TestCase {
         id: viewComponent
 
         TodayTaskView {
+            interactionCoordinatorRef: coordinator
             taskManagerRef: taskManager
             statisticsServiceRef: statisticsService
             routineManagerRef: routineManager
@@ -88,9 +98,28 @@ TestCase {
     }
 
     function init() {
+        coordinator.end(null)
         testCase.reorderCalls = []
         testCase.todayQueryCount = 0
         taskManager.rows = [makeTask(1, "甲"), makeTask(2, "乙"), makeTask(3, "丙")]
+    }
+
+    function test_queuedRefreshWaitsForDragEnd() {
+        const view = createTemporaryObject(viewComponent, testCase)
+        view.refresh()
+        wait(60)
+        view.beginReorder(3)
+        const reads = testCase.todayQueryCount
+        taskManager.tasksChanged()
+        wait(30)
+        compare(testCase.todayQueryCount, reads)
+        verify(coordinator.refreshBlocked)
+        view.commitReorder(true)
+        verify(!coordinator.refreshBlocked)
+        tryVerify(function() { return testCase.todayQueryCount > reads })
+        view.beginReorder(3)
+        view.pageActive = false
+        verify(!coordinator.refreshBlocked)
     }
 
     function test_drag_only_reorders_locally_until_released() {

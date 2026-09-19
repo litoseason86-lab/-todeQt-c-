@@ -331,3 +331,35 @@ bool CategoryManager::isValidColor(const QString& color) const
     static const QRegularExpression hexColorPattern(QStringLiteral("^#[0-9A-Fa-f]{6}$"));
     return hexColorPattern.match(color.trimmed()).hasMatch();
 }
+
+ServiceReadResult<QVariantList> CategoryManager::readCategories(int limit) const
+{
+    if (limit < 1 || limit > 10000) return {{}, ServiceReadError::InvalidArgument};
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) return {{}, ServiceReadError::Database};
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT id, name, color, is_preset, display_order, created_at "
+                                 "FROM categories ORDER BY display_order, name, id LIMIT :limit"));
+    query.bindValue(QStringLiteral(":limit"), limit + 1);
+    if (!query.exec()) return {{}, ServiceReadError::Database};
+    QVariantList rows;
+    while (query.next()) {
+        if (rows.size() == limit) return {{}, ServiceReadError::LimitExceeded};
+        rows.append(categoryFromQuery(query));
+    }
+    if (query.lastError().isValid()) return {{}, ServiceReadError::Database};
+    return {rows};
+}
+
+ServiceReadResult<QVariantMap> CategoryManager::readCategory(int id) const
+{
+    if (id <= 0) return {{}, ServiceReadError::InvalidArgument};
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) return {{}, ServiceReadError::Database};
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT id, name, color, is_preset, display_order, created_at FROM categories WHERE id = :id"));
+    query.bindValue(QStringLiteral(":id"), id);
+    if (!query.exec()) return {{}, ServiceReadError::Database};
+    if (!query.next()) return {{}, query.lastError().isValid() ? ServiceReadError::Database : ServiceReadError::NotFound};
+    return {categoryFromQuery(query)};
+}

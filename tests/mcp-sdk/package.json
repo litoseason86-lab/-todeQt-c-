@@ -1,0 +1,9 @@
+{
+  "name": "pomodoro-mcp-compatibility",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=20"},
+  "scripts": {"test": "node verify.mjs"},
+  "dependencies": {"@modelcontextprotocol/sdk": "1.29.0"}
+}

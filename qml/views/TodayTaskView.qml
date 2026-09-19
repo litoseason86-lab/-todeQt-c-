@@ -40,6 +40,8 @@ Item {
     })
     // 上下文属性只在 main.qml 解包，视图内部一律消费显式引用。
     // 裸名字依赖 QML 的动态作用域，视图对外部的真实依赖既看不出来也换不掉。
+    property var interactionCoordinatorRef: null
+    property bool interactionRefreshPending: false
     property var taskManagerRef: null
     property var statisticsServiceRef: null
     property var routineManagerRef: null
@@ -154,11 +156,28 @@ Item {
         logicalDate: root.logicalTodayIso
     }
 
+    Connections {
+        target: root.interactionCoordinatorRef
+        function onChanged() {
+            if (!root.interactionCoordinatorRef.refreshBlocked && root.interactionRefreshPending) {
+                root.interactionRefreshPending = false
+                refreshCoalescer.request()
+            }
+        }
+    }
+
     Component.onCompleted: {
         if (root.pageActive)
             refresh()
     }
     onPageActiveChanged: {
+        if (!root.pageActive) {
+            editTaskDialog.finishEditing()
+            editTaskDialog.close()
+            root.commitReorder(true)
+            taskTools.finishInteraction()
+            taskTools.close()
+        }
         refreshCoalescer.cancel()
         if (root.pageActive)
             refresh()
@@ -166,10 +185,7 @@ Item {
     onPendingDeleteTaskIdChanged: {
         // 待删除窗口会把一行从 UI 模型隐藏，但数据库里的完整集合仍包含它。
         // 立即清掉拖拽快照，避免松手把不完整数组提交给服务层。
-        if (root.pendingDeleteTaskId > 0) {
-            root.draggingTaskId = -1
-            root.dropTargetIndex = -1
-        }
+        if (root.pendingDeleteTaskId > 0) root.commitReorder(true)
         if (root.pageActive)
             refresh()
     }
@@ -405,6 +421,7 @@ Item {
                 return
             }
         }
+        if (root.interactionCoordinatorRef && !root.interactionCoordinatorRef.beginDrag(root, taskId, "TodayTaskView.drag")) return
         root.draggingTaskId = taskId
         root.dropTargetIndex = -1
     }
@@ -448,23 +465,27 @@ Item {
     }
 
     function commitReorder(cancelled) {
-        const from = root.draggingFromIndex
-        const target = root.dropTargetIndex
-        root.draggingTaskId = -1
-        root.dropTargetIndex = -1
+        try {
+            const from = root.draggingFromIndex
+            const target = root.dropTargetIndex
+            root.draggingTaskId = -1
+            root.dropTargetIndex = -1
 
-        if (cancelled === true || !root.canReorderTasks
-                || from < 0 || target < 0 || target === from) {
-            return
-        }
+            if (cancelled === true || !root.canReorderTasks
+                    || from < 0 || target < 0 || target === from) {
+                return
+            }
 
-        var ids = []
-        for (var i = 0; i < root.tasks.length; ++i) {
-            ids.push(Number(root.tasks[i].id))
-        }
-        ids.splice(target, 0, ids.splice(from, 1)[0])
-        if (!root.taskManagerRef.reorderTasks(root.todayIsoDate(), ids)) {
-            root.loadError = "任务排序保存失败，请重试"
+            var ids = []
+            for (var i = 0; i < root.tasks.length; ++i) {
+                ids.push(Number(root.tasks[i].id))
+            }
+            ids.splice(target, 0, ids.splice(from, 1)[0])
+            if (!root.taskManagerRef.reorderTasks(root.todayIsoDate(), ids)) {
+                root.loadError = "任务排序保存失败，请重试"
+            }
+        } finally {
+            if (root.interactionCoordinatorRef) root.interactionCoordinatorRef.end(root)
         }
     }
 
@@ -476,6 +497,11 @@ Item {
     }
 
     function refresh() {
+        // 已排队的刷新、完成动画和日界刷新都走同一闸口，不重建正在输入或拖动的行。
+        if (root.interactionCoordinatorRef && root.interactionCoordinatorRef.refreshBlocked) {
+            root.interactionRefreshPending = true
+            return
+        }
         // 一轮组合查询只在起点清错；后续成功查询不能抹掉前面刚发生的失败。
         root.loadError = ""
         // refresh 也是恢复、任务变更等入口的兜底。即使平台漏发日界通知，
@@ -587,6 +613,11 @@ Item {
     }
 
     function loadTasks() {
+        // 已排队的刷新、完成动画和日界刷新都走同一闸口，不重建正在输入或拖动的行。
+        if (root.interactionCoordinatorRef && root.interactionCoordinatorRef.refreshBlocked) {
+            root.interactionRefreshPending = true
+            return
+        }
         try {
             var loaded = root.taskManagerRef.getTodayTasks();
             // 待删除行先在界面消失；撤销时 pendingDeleteTaskId 回到 -1，刷新后自然恢复。
@@ -1044,6 +1075,9 @@ Item {
                 boundsBehavior: Flickable.StopAtBounds
 
                 delegate: TaskItem {
+                    interactionCoordinatorRef: root.interactionCoordinatorRef
+                    interactionSource: "TodayTaskView.inline_edit"
+                    interactionActive: root.pageActive
                             id: todayTaskRow
 
                             // pragma ComponentBehavior: Bound 之后 delegate 不再继承外层作用域，
@@ -1090,8 +1124,10 @@ Item {
                             }
 
                             renameSubmitter: function (id, newTitle) {
-                                var originalCategoryId = Number(todayTaskRow.modelData.categoryId || -1);
-                                var originalDate = root.taskIsoDate(todayTaskRow.modelData.date);
+                                var latest = root.taskManagerRef.getTask(id)
+                                if (!latest || !latest.id) return false
+                                var originalCategoryId = Number(latest.categoryId || -1)
+                                var originalDate = root.taskIsoDate(latest.date)
                                 var succeeded = Boolean(root.taskManagerRef.updateTask(
                                     id, newTitle, originalCategoryId, originalDate))
                                 if (!succeeded) {
@@ -1137,6 +1173,7 @@ Item {
     }
 
     TaskToolsDialog {
+        interactionCoordinatorRef: root.interactionCoordinatorRef
         id: taskTools
         parent: root
         taskManagerRef: root.taskManagerRef
@@ -1158,6 +1195,9 @@ Item {
     }
 
     EditTaskDialog {
+        interactionCoordinatorRef: root.interactionCoordinatorRef
+        interactionSource: "TodayTaskView.edit_dialog"
+        onOpenFailed: function(message) { root.loadError = message }
         id: editTaskDialog
         maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 
