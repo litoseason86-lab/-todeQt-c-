@@ -820,6 +820,8 @@ TestCase {
 
         mainWindow.requestDeleteTask(21, "误删任务")
         compare(mainWindow.pendingDeleteTaskId, 21)
+        // 今日专注页的补录候选也要知道待删任务，否则用户能在撤销窗口内选中它去补录。
+        compare(findChild(mainWindow, "todayFocusViewPage").pendingDeleteTaskId, 21)
         compare(taskManager.deleteTaskCalls, 0)
 
         var toast = findChild(mainWindow, "globalToast")
@@ -829,6 +831,7 @@ TestCase {
 
         toast.triggerAction()
         compare(mainWindow.pendingDeleteTaskId, -1)
+        compare(findChild(mainWindow, "todayFocusViewPage").pendingDeleteTaskId, -1)
         wait(120)
         compare(taskManager.deleteTaskCalls, 0)
 
@@ -1593,6 +1596,86 @@ TestCase {
         taskManager.tasksChanged()
         compare(view.selectedTaskId, -1)
         compare(view.selectedTaskTitle, "")
+    }
+
+    // 删除有 5 秒撤销窗口，窗口内任务仍在库里（getTodayTasks 照样返回它）。
+    // 专注页若不藏掉它，对它开始的计时会在窗口结束、任务真正删除后变成「未关联」。
+    function test_pendingDeleteTaskIsHiddenFromFocusPickerUntilUndo() {
+        taskManager.todayTasks = [
+            { id: 61, title: "刚删的", completed: false, displayOrder: 1 },
+            { id: 62, title: "下一条", completed: false, displayOrder: 2 }
+        ]
+        mainWindow.currentView = "focus"
+        var view = focusPage()
+        compare(view.todayTasks.length, 2)
+
+        mainWindow.requestDeleteTask(61, "刚删的")
+        compare(view.pendingDeleteTaskId, 61)
+        compare(view.todayTasks.length, 1)
+        compare(Number(view.todayTasks[0].id), 62)
+
+        // 撤销后任务回到选择器。
+        mainWindow.cancelPendingDelete()
+        compare(view.todayTasks.length, 2)
+    }
+
+    function test_shortcutSkipsPendingDeleteTask() {
+        taskManager.todayTasks = [
+            { id: 61, title: "刚删的", completed: false, displayOrder: 1 },
+            { id: 62, title: "下一条", completed: false, displayOrder: 2 }
+        ]
+        appSettings.lastMode = 0
+        mainWindow.requestDeleteTask(61, "刚删的")
+
+        compare(focusPage().startFromShortcut(), true)
+        compare(focusTimer.startFocusTaskId, 62)
+    }
+
+    function test_pendingDeleteOfSelectedTaskHidesSelectionAndUndoRestoresIt() {
+        taskManager.todayTasks = [{ id: 63, title: "选中的", completed: false, displayOrder: 1 }]
+        var view = focusPage()
+        view.selectedTaskId = 63
+        view.selectedTaskTitle = "选中的"
+
+        // 选择器会把选中项强行补进候选，所以待删时选中项本身也要收起来。
+        mainWindow.requestDeleteTask(63, "选中的")
+        compare(view.selectedTaskId, -1)
+        compare(view.selectedTaskTitle, "")
+
+        mainWindow.cancelPendingDelete()
+        compare(view.selectedTaskId, 63)
+        compare(view.selectedTaskTitle, "选中的")
+    }
+
+    function test_committedDeleteOfSelectedTaskIsNotRestored() {
+        taskManager.todayTasks = [{ id: 64, title: "真删的", completed: false, displayOrder: 1 }]
+        var view = focusPage()
+        view.selectedTaskId = 64
+        view.selectedTaskTitle = "真删的"
+
+        mainWindow.requestDeleteTask(64, "真删的")
+        // 桩的 deleteTask 不改列表，这里手动把任务移出库，模拟删除真正落库。
+        taskManager.todayTasks = []
+        verify(mainWindow.commitPendingDelete())
+        compare(view.selectedTaskId, -1)
+        compare(view.selectionHeldForPendingDelete, null)
+    }
+
+    function test_undoDoesNotOverrideSelectionChosenDuringUndoWindow() {
+        taskManager.todayTasks = [
+            { id: 65, title: "被删的", completed: false, displayOrder: 1 },
+            { id: 66, title: "另选的", completed: false, displayOrder: 2 }
+        ]
+        var view = focusPage()
+        view.selectedTaskId = 65
+        view.selectedTaskTitle = "被删的"
+        mainWindow.requestDeleteTask(65, "被删的")
+
+        view.selectedTaskId = 66
+        view.selectedTaskTitle = "另选的"
+        mainWindow.cancelPendingDelete()
+        compare(view.selectedTaskId, 66)
+        compare(view.selectedTaskTitle, "另选的")
     }
 
     function test_restoreClearsOldDatabaseTaskIdentity() {

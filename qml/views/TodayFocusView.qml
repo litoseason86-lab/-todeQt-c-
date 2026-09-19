@@ -31,6 +31,9 @@ Item {
     property int focusCount: 0
     property int pendingDeleteSessionId: -1
     property bool pendingDeleteIsRest: false
+    // 撤销窗口内任务仍在库里；候选列表若不藏掉它，用户能选中，
+    // 提交时宿主先把删除落库，保存就会报「任务不存在」。
+    property int pendingDeleteTaskId: -1
     signal deleteRequested(int sessionId, string title, bool isRest)
     // 撤销窗口内记录仍在库里，补录或修改会撞上「已经看不见」的那条记录的时间段。
     // 宿主收到这个信号后立即把待删除项落库，校验才和用户看到的列表一致。
@@ -204,15 +207,22 @@ Item {
 
     // 候选任务由服务层按所选日期就近排序并截断，不再是「当天任务」，故不沿用旧名。
     function taskOptionsForDialog() {
-        if (root.hasFocusHistoryService() && typeof root.focusHistoryServiceRef.getTaskOptions === "function")
-            return root.focusHistoryServiceRef.getTaskOptions(root.selectedDate) || []
-        if (!root.taskManagerRef || typeof root.taskManagerRef.getTasksByDate !== "function") {
+        var options
+        if (root.hasFocusHistoryService() && typeof root.focusHistoryServiceRef.getTaskOptions === "function") {
+            options = root.focusHistoryServiceRef.getTaskOptions(root.selectedDate) || []
+        } else if (!root.taskManagerRef || typeof root.taskManagerRef.getTasksByDate !== "function") {
             return []
+        } else {
+            var rows = root.taskManagerRef.getTasksByDate(root.dateKey(root.selectedDate)) || []
+            options = []
+            for (var i = 0; i < rows.length; ++i) {
+                options.push({ id: Number(rows[i].id), title: String(rows[i].title || "") })
+            }
         }
-        var rows = root.taskManagerRef.getTasksByDate(root.dateKey(root.selectedDate)) || []
-        var options = []
-        for (var i = 0; i < rows.length; ++i) {
-            options.push({ id: Number(rows[i].id), title: String(rows[i].title || "") })
+        // 撤销窗口内被删的任务仍在数据库里，两条取候选的路径都要把它滤掉，
+        // 否则用户能选中它，提交时宿主先落库删除，保存就会报「任务不存在」。
+        if (root.pendingDeleteTaskId > 0) {
+            options = options.filter(function(option) { return Number(option.id) !== root.pendingDeleteTaskId })
         }
         return options
     }

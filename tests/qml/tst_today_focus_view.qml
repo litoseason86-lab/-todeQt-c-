@@ -55,6 +55,11 @@ TestCase {
             return getDaySessions(date);
         }
 
+        // 补录候选桩：固定返回两条任务，用来验证撤销窗口内的任务会被过滤掉。
+        function getTaskOptions(date) {
+            return [{ id: 11, title: "复盘第十讲 · 2026-09-02" }, { id: 12, title: "背单词 · 2026-09-02" }];
+        }
+
         function getDaySessions(date) {
             if (testCase.throwOnLoad)
                 throw new Error("数据库不可用");
@@ -181,6 +186,7 @@ TestCase {
         historyService.deletedIds = [];
         historyService.deleteResult = true;
         historyService.errorText = "";
+        view.pendingDeleteTaskId = -1;
         testCase.sessionsByDate = {
             "2026-09-02": [testCase.makeSession(1, "复盘第十讲", "2026-09-02T14:19:00", "2026-09-02T15:49:00", 5400, "2026-09-02"), testCase.makeSession(2, "170词", "2026-09-02T16:40:00", "2026-09-02T17:00:00", 1200, "2026-09-02")],
             "2026-08-20": [testCase.makeSession(3, "旧记录", "2026-08-20T09:00:00", "2026-08-20T09:30:00", 1800, "2026-08-20")],
@@ -241,6 +247,25 @@ TestCase {
         flushSpy.clear()
         view.submitManualSession(-1, new Date(2026, 8, 2, 10, 0), 30, -1)
         compare(flushSpy.count, 1)
+    }
+
+    function test_taskOptionsHidePendingDeleteTask() {
+        // 撤销窗口内被删的任务不能出现在补录候选里，否则选中它保存会报「任务不存在」。
+        compare(view.pendingDeleteTaskId, -1);
+        var options = view.taskOptionsForDialog();
+        compare(options.length, 2);
+
+        view.pendingDeleteTaskId = 12;
+        options = view.taskOptionsForDialog();
+        compare(options.length, 1);
+        compare(Number(options[0].id), 11);
+
+        // 待删 id 在候选里找不到匹配项时，不应该误伤其他任务。
+        view.pendingDeleteTaskId = 99;
+        options = view.taskOptionsForDialog();
+        compare(options.length, 2);
+
+        view.pendingDeleteTaskId = -1;
     }
 
     function test_showDateSwitchesToHistoryDay() {

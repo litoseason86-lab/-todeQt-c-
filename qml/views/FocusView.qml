@@ -21,6 +21,12 @@ Item {
     // 任务页传入的待启动任务由专注页暂存；真正点击开始后，活动任务以 timer 为准。
     property int selectedTaskId: -1
     property string selectedTaskTitle: ""
+    // 删除任务有 5 秒撤销窗口，窗口内任务仍在库里。今日页等视图都把它藏起来，专注页必须一致：
+    // 否则选择器或快捷键会对它开始计时，窗口一到任务被真正删除，这段专注就变成「未关联」。
+    property int pendingDeleteTaskId: -1
+    // 选中项恰好是待删任务时先收起暂存（选择器会把选中项强行补进候选，不收起就藏不住），
+    // 撤销后还给用户；任务真的删掉了就丢弃。形如 { id, title }，没有暂存时为 null。
+    property var selectionHeldForPendingDelete: null
     property int justCompletedPhase: 0
     property bool panelExpanded: false
     // 页面容器显式声明是否当前页；不能依赖 effective visible，离屏测试和窗口层级会污染该值。
@@ -88,6 +94,29 @@ Item {
 
     onSelectedTaskIdChanged: root.refreshTaskNotes()
 
+    onPendingDeleteTaskIdChanged: {
+        // 待删编号离开了暂存的那条：撤销或删除失败时任务还在，把选中还回去；
+        // 已真正删除、期间用户另选了任务或已开始计时，就不再还原。
+        var held = root.selectionHeldForPendingDelete
+        if (held && held.id !== root.pendingDeleteTaskId) {
+            root.selectionHeldForPendingDelete = null
+            if (root.selectedTaskId <= 0 && !root.timerBool("hasActiveSession") && root.taskExists(held.id)) {
+                root.selectedTaskId = held.id
+                root.selectedTaskTitle = held.title
+            }
+        }
+        // 计时进行中任务由计时器说了算，这里只处理待启动的选中项（与 reconcileSelectedTask 同一边界）。
+        if (root.pendingDeleteTaskId > 0 && root.selectedTaskId === root.pendingDeleteTaskId
+                && !root.timerBool("hasActiveSession")) {
+            var hidden = { id: root.selectedTaskId, title: root.selectedTaskTitle }
+            root.clearSelectedTask()
+            root.selectionHeldForPendingDelete = hidden
+        }
+        // 不在本页时不必立即重读：切回本页、快捷键挑候选、展开选择器前都会先重读。
+        if (root.pageActive)
+            root.reloadTodayTasks()
+    }
+
     // —— 任务选择 ——
     //
     // 选择器只在真正空闲时出现（没有进行中的会话、也不在主动休息里）。
@@ -123,7 +152,10 @@ Item {
             root.todayTasks = []
             return
         }
-        root.todayTasks = root.taskManagerRef.getTodayTasks()
+        var loaded = root.taskManagerRef.getTodayTasks() || []
+        root.todayTasks = root.pendingDeleteTaskId > 0
+                ? loaded.filter(function(task) { return Number(task.id) !== root.pendingDeleteTaskId })
+                : loaded
     }
 
     // 可自动启动的那条：已有有效选中项优先——用户刚在今日页点过某条，
@@ -155,11 +187,15 @@ Item {
     // 快捷键于是既没启动、也没展开选择器。启动前按编号回查一次。
     // 注入的服务没有 getTask 时无从验证，保持信任，不因为验证不了就丢掉用户的选择。
     function selectedTaskStillExists() {
+        return root.taskExists(root.selectedTaskId)
+    }
+
+    function taskExists(taskId) {
         if (!root.taskManagerRef || typeof root.taskManagerRef.getTask !== "function") {
             return true
         }
-        var task = root.taskManagerRef.getTask(root.selectedTaskId)
-        return !!task && Number(task.id) === root.selectedTaskId
+        var task = root.taskManagerRef.getTask(taskId)
+        return !!task && Number(task.id) === taskId
     }
 
     function startCurrentMode() {
@@ -319,6 +355,8 @@ Item {
     function clearSelectedTask() {
         root.selectedTaskId = -1
         root.selectedTaskTitle = ""
+        // 显式清空（结束、选中项失效等）意味着撤销后也不该再把它还回来。
+        root.selectionHeldForPendingDelete = null
     }
 
     function cancelAutoAdvance() {

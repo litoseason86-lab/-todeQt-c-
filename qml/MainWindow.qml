@@ -992,6 +992,7 @@ Item {
                     knowledgeGapServiceRef: root.knowledgeGapServiceRef
                     settings: root.appSettingsRef
                     pageActive: root.currentView === "focus"
+                    pendingDeleteTaskId: root.pendingDeleteTaskId
 
                     onKnowledgeGapCaptured: root.showToast(qsTr("已记入知识缺口"))
 
@@ -1113,6 +1114,7 @@ Item {
                     objectName: "todayFocusViewPage"
                     pendingDeleteSessionId: root.pendingDeleteSessionId
                     pendingDeleteIsRest: root.pendingDeleteIsRest
+                    pendingDeleteTaskId: root.pendingDeleteTaskId
                     onDeleteRequested: function(sessionId, title, isRest) {
                         root.requestDeleteSession(sessionId, title, isRest)
                     }
