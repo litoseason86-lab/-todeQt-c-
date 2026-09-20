@@ -48,30 +48,62 @@ QList<BusyBlock> McpToolDispatcher::blocks() const
     }
     return result;
 }
-QJsonObject McpToolDispatcher::failure(ServiceReadError error) const
+namespace {
+// 编号与汉字之间留一个空格：“任务 #12 不存在”比“任务 #12不存在”好读。
+QString joinPhrase(const QString& subject, const QString& predicate)
 {
-    ErrorCode code = ErrorCode::DatabaseError;
-    if (error == ServiceReadError::InvalidArgument) code = ErrorCode::ValidationError;
-    else if (error == ServiceReadError::NotFound) code = ErrorCode::NotFound;
-    else if (error == ServiceReadError::LimitExceeded) code = ErrorCode::ResultLimitExceeded;
-    return makeToolErrorResult(makeError(code, code == ErrorCode::DatabaseError
-        ? QStringLiteral("读取数据失败") : errorNextAction(code)));
+    const bool endsWithAscii = !subject.isEmpty() && subject.back().unicode() < 0x80 && subject.back().isLetterOrNumber();
+    return endsWithAscii ? subject + QLatin1Char(' ') + predicate : subject + predicate;
+}
+}
+QJsonObject McpToolDispatcher::failure(ServiceReadError error, const QString& subject) const
+{
+    switch (error) {
+    case ServiceReadError::InvalidArgument:
+        return makeToolErrorResult(makeError(ErrorCode::ValidationError, joinPhrase(subject, QStringLiteral("的查询参数不符合要求"))));
+    case ServiceReadError::NotFound:
+        return makeToolErrorResult(makeError(ErrorCode::NotFound, joinPhrase(subject, QStringLiteral("不存在"))));
+    case ServiceReadError::LimitExceeded:
+        return makeToolErrorResult(makeError(ErrorCode::ResultLimitExceeded, joinPhrase(subject, QStringLiteral("超过返回上限"))));
+    case ServiceReadError::None:
+    case ServiceReadError::Database:
+        break;
+    }
+    return makeToolErrorResult(makeError(ErrorCode::DatabaseError, QStringLiteral("读取") + joinPhrase(subject, QStringLiteral("失败"))));
 }
 QJsonObject McpToolDispatcher::success(Tool tool, const QJsonObject& output) const
 {
-    if (!validateAgainstSchema(output, contract(tool).outputSchema).ok()) return failure(ServiceReadError::Database);
+    const auto validation = validateAgainstSchema(output, contract(tool).outputSchema);
+    if (!validation.ok()) {
+        // 库里的数据本身超出了对外约定（例如旧备份或手工改库带回的非法日期）。整条拒绝而不是悄悄丢行，
+        // 但要指出是哪几个字段：笼统的“读取失败”会让人以为数据库坏了，也没法去修。
+        QJsonArray fields;
+        for (const auto& fieldError : validation.errors) {
+            if (!fields.contains(fieldError.field) && fields.size() < 5) fields.append(fieldError.field);
+        }
+        QStringList names;
+        for (const auto& field : fields) names.append(field.toString());
+        QJsonObject error = makeError(ErrorCode::DatabaseError,
+            QStringLiteral("库中数据超出工具约定，无法按约定返回（%1）").arg(names.join(QStringLiteral("、"))),
+            {{"reason", "stored_data_out_of_contract"}, {"fields", fields}});
+        error.insert(QStringLiteral("next_action"),
+                     QStringLiteral("数据库本身可用：请用户在番茄Todo 中检查并修正这些数据，不要反复重试同一查询。"));
+        return makeToolErrorResult(error);
+    }
     const auto result = makeToolSuccessResult(output);
     // 包含 JSON 文本副本；为外部编号和内部信封预留最坏 64 KiB，避免临界响应在转发时才超限。
     if (QJsonDocument(result).toJson(QJsonDocument::Compact).size() > kMaxResponseBytes - kMaxRequestBytes)
-        return failure(ServiceReadError::LimitExceeded);
+        return failure(ServiceReadError::LimitExceeded, QStringLiteral("这次结果"));
     return result;
 }
 QJsonObject McpToolDispatcher::taskOutput(const QVariantMap& row, const QString& session) const
 {
+    // 负的预计用时只可能来自旧备份或手工改库；服务层的写入口径本来就把负数当“未设置”，
+    // 对外同样报 0，不能让一行旧数据违反输出约定、拖垮整页查询。
     QJsonObject task{{"task_id", row.value("id").toInt()}, {"title", row.value("title").toString()},
         {"date", row.value("date").toDate().toString(Qt::ISODate)}, {"completed", row.value("completed").toBool()},
         {"category_id", row.value("categoryId").toInt()}, {"category_name", row.value("categoryName").toString()},
-        {"estimated_minutes", row.value("estimatedMinutes").toInt()}, {"notes", row.value("notes").toString()},
+        {"estimated_minutes", qMax(0, row.value("estimatedMinutes").toInt())}, {"notes", row.value("notes").toString()},
         {"display_order", row.value("displayOrder").toInt()}, {"focused_seconds", row.value("focusedSeconds").toLongLong()},
         {"focused_minutes", row.value("focusedMinutes").toLongLong()}, {"valid_pomodoros", row.value("actualPomodoros").toInt()}};
     // 令牌只覆盖可编辑持久字段；实际投入随计时增长不制造编辑冲突，预计分钟必须参与。
@@ -98,7 +130,7 @@ QJsonObject McpToolDispatcher::dispatch(Tool tool, const QJsonObject& arguments)
     const QDate to = QDate::fromString(args.value("end_date").toString(), Qt::ISODate);
     if (tool == Tool::ListCategories) {
         const auto result = m_categories->readCategories();
-        if (!result.ok()) return failure(result.error);
+        if (!result.ok()) return failure(result.error, QStringLiteral("科目列表"));
         QJsonArray categories;
         for (const auto& value : result.value) {
             const auto row = value.toMap();
@@ -108,14 +140,16 @@ QJsonObject McpToolDispatcher::dispatch(Tool tool, const QJsonObject& arguments)
         return success(tool, {{"categories", categories}});
     }
     if (tool == Tool::GetTask) {
-        const auto result = m_tasks->readTask(args.value("task_id").toInt());
-        return result.ok() ? success(tool, {{"task", taskOutput(result.value, context.sessionId)}}) : failure(result.error);
+        const int id = args.value("task_id").toInt();
+        const auto result = m_tasks->readTask(id);
+        return result.ok() ? success(tool, {{"task", taskOutput(result.value, context.sessionId)}})
+                           : failure(result.error, QStringLiteral("任务 #%1").arg(id));
     }
     if (tool == Tool::ListTasks) {
         const QString completion = args.value("completion_state").toString();
         const auto result = m_tasks->readTasks(from, to, completion == "any" ? -1 : completion == "completed" ? 1 : 0,
                                              args.value("limit").toInt(), m_interactions->pendingTaskIds());
-        if (!result.ok()) return failure(result.error);
+        if (!result.ok()) return failure(result.error, QStringLiteral("该范围内的任务"));
         QJsonArray tasks;
         for (const auto& value : result.value) tasks.append(taskOutput(value.toMap(), context.sessionId));
         return success(tool, {{"start_date", from.toString(Qt::ISODate)}, {"end_date", to.toString(Qt::ISODate)},
@@ -124,7 +158,7 @@ QJsonObject McpToolDispatcher::dispatch(Tool tool, const QJsonObject& arguments)
     }
     if (tool == Tool::GetFocusSummary) {
         const auto result = m_statistics->readFocusSummary(from, to, context.dayStartHour);
-        if (!result.ok()) return failure(result.error);
+        if (!result.ok()) return failure(result.error, QStringLiteral("专注统计"));
         QJsonArray days, categories;
         for (const auto& value : result.value.value("days").toList()) {
             const auto row = value.toMap();
@@ -152,7 +186,7 @@ QJsonObject McpToolDispatcher::dispatch(Tool tool, const QJsonObject& arguments)
         filter.categoryId = args.value("category_id").toInt();
         if (filter.categoryId > 0) {
             const auto category = m_categories->readCategory(filter.categoryId);
-            if (!category.ok()) return failure(category.error);
+            if (!category.ok()) return failure(category.error, QStringLiteral("科目 #%1").arg(filter.categoryId));
         }
         filter.searchText = args.value("search_text").toString();
         filter.dueState = args.value("due_state").toString();
@@ -161,7 +195,7 @@ QJsonObject McpToolDispatcher::dispatch(Tool tool, const QJsonObject& arguments)
         filter.afterId = args.value("after_id").toInt();
         filter.limit = args.value("limit").toInt();
         const auto result = m_gaps->readGaps(filter, today);
-        if (!result.ok()) return failure(result.error);
+        if (!result.ok()) return failure(result.error, QStringLiteral("知识缺口"));
         QJsonArray gaps;
         for (int i = 0; i < qMin(filter.limit, int(result.value.size())); ++i) {
             const auto row = result.value.at(i).toMap();

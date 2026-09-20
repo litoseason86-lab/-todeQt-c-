@@ -27,7 +27,11 @@ int main(int argc, char* argv[])
     McpStdioServer server(&device, &bridge);
     bool ending = false;
     QObject::connect(&device, &McpStdioDevice::inputClosed, &server, &McpStdioServer::endInput);
-    QObject::connect(&device, &McpStdioDevice::transportFailed, &app, [&app] { app.exit(2); });
+    QObject::connect(&device, &McpStdioDevice::transportFailed, &app, [&app] {
+        // 退出原因写 stderr（stdout 只能有协议消息），客户端日志里才查得到为什么断开。
+        qWarning().noquote() << QStringLiteral("番茄Todo MCP 辅助程序：标准输入输出读写失败，退出");
+        app.exit(2);
+    });
     QObject::connect(&server, &McpStdioServer::finished, &app, [&] {
         ending = true;
         if (device.bytesToWrite() == 0) app.quit();

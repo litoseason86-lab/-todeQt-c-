@@ -30,9 +30,13 @@ QJsonObject McpToolDispatcher::createdResult(qint64 id, bool replayed, const Con
     }
     const auto result = success(Tool::CreateTask, {{"created_task_id", id}, {"current_state", state}, {"replayed", replayed}, {"task", task}});
     if (!result.value("isError").toBool()) return result;
-    // 原任务后来被导入超大内容时，重放也可能超出预算；仍须说明原创建已提交。
+    // 原任务后来被导入超大内容、或库中数据超出约定时，重放也可能返回不了；仍须说明原创建已提交。
+    // 在原有 details 上补充，不覆盖掉“是哪个字段出了问题”之类的诊断。
     auto error = QJsonDocument::fromJson(result.value("content").toArray().first().toObject().value("text").toString().toUtf8()).object();
-    error.insert("details", QJsonObject{{"created_task_id", id}, {"creation_committed", true}});
+    QJsonObject details = error.value("details").toObject();
+    details.insert("created_task_id", id);
+    details.insert("creation_committed", true);
+    error.insert("details", details);
     error.insert("next_action", QStringLiteral("原创建已成功，请核实原任务内容；需要重试时沿用原键，不要换新键"));
     return makeToolErrorResult(error);
 }
@@ -40,7 +44,8 @@ QJsonObject McpToolDispatcher::createdResult(qint64 id, bool replayed, const Con
 QJsonObject McpToolDispatcher::writeTask(Tool tool, const QJsonObject& args, const Context& context)
 {
     // 控制器是权限入口；此处再次核对会话，防止内部误装配绕过并发边界。
-    if (args.value("app_session_id").toString() != context.sessionId)
+    // 按 UUID 比较：大写的同一会话编号不能被当成过期。之后的登记表和状态令牌一律用规范写法的会话。
+    if (!sameUuid(args.value("app_session_id").toString(), context.sessionId))
         return makeToolErrorResult(makeError(ErrorCode::SessionExpired, QStringLiteral("应用会话已改变")));
     m_created.beginSession(context.sessionId);
     QByteArray key, digest;
@@ -67,8 +72,9 @@ QJsonObject McpToolDispatcher::writeTask(Tool tool, const QJsonObject& args, con
     if (!blocked.isEmpty()) return makeToolErrorResult(makeBusyError(blocked));
     QString requestedCategoryName;
     if (args.contains("category_id") && args.value("category_id").toInt() > 0) {
-        const auto category = m_categories->readCategory(args.value("category_id").toInt());
-        if (!category.ok()) return failure(category.error);
+        const int categoryId = args.value("category_id").toInt();
+        const auto category = m_categories->readCategory(categoryId);
+        if (!category.ok()) return failure(category.error, QStringLiteral("科目 #%1").arg(categoryId));
         requestedCategoryName = category.value.value("name").toString();
     }
     if (tool == Tool::CreateTask) {
@@ -91,14 +97,14 @@ QJsonObject McpToolDispatcher::writeTask(Tool tool, const QJsonObject& args, con
         if (id <= 0) {
             if (!committed) m_created.remove(key);
             return committed ? makeToolErrorResult(makeError(ErrorCode::OutcomeUnknown, QStringLiteral("任务已提交但无法取得编号，请先查询核实")))
-                             : failure(ServiceReadError::Database);
+                             : makeToolErrorResult(makeError(ErrorCode::DatabaseError, QStringLiteral("任务未创建：番茄Todo 没能写入数据库")));
         }
         m_created.commit(key, id);
         return createdResult(id, false, context);
     }
     const int id = args.value("task_id").toInt();
     const auto current = m_tasks->readTask(id);
-    if (!current.ok()) return failure(current.error);
+    if (!current.ok()) return failure(current.error, QStringLiteral("任务 #%1").arg(id));
     auto task = taskOutput(current.value, context.sessionId);
     bool changed = false;
     auto target = task;
@@ -125,13 +131,43 @@ QJsonObject McpToolDispatcher::writeTask(Tool tool, const QJsonObject& args, con
     if (preview.value("isError").toBool()) return preview;
     bool ok = false;
     if (tool == Tool::UpdateTask) {
-        // 缺省预计和备注必须传服务层“不改”哨兵，避免把旧版 2475 分钟夹成 1440。
+        // 只写被要求修改的字段：缺省预计和备注传服务层“不改”哨兵，避免把旧版 2475 分钟夹成 1440；
+        // 没要求改标题时连标题也不碰——2026-07-19 之前的旧标题可能超过 100 字，重写会整次失败，
+        // 也会顺手把它的首尾空白规整掉，悄悄改动用户数据。
         ok = m_tasks->updateTaskFields(id, target.value("title").toString(), target.value("category_id").toInt(), target.value("date").toString(),
             args.contains("estimated_minutes") ? args.value("estimated_minutes").toInt() : -1,
-            args.contains("notes") ? args.value("notes").toString(QStringLiteral("")) : QString(), !args.contains("category_id"));
+            args.contains("notes") ? args.value("notes").toString(QStringLiteral("")) : QString(), !args.contains("category_id"),
+            !args.contains("title"));
     } else if (tool == Tool::RescheduleTask) ok = m_tasks->moveTaskToDate(id, args.value("date").toString());
     else ok = m_tasks->setTaskCompleted(id, args.value("completed").toBool());
-    if (!ok) return failure(ServiceReadError::Database);
+    // 服务层的单条 UPDATE 失败时整条不生效，可以明确告诉模型任务没被改动。
+    if (!ok) return makeToolErrorResult(makeError(ErrorCode::DatabaseError, QStringLiteral("保存失败，任务 #%1 未被修改").arg(id),
+                                                  {{"task_id", id}}));
     const auto result = m_tasks->readTask(id);
-    return result.ok() ? success(tool, {{"changed", true}, {"task", taskOutput(result.value, context.sessionId)}}) : failure(result.error);
+    if (result.ok()) {
+        const auto payload = success(tool, {{"changed", true}, {"task", taskOutput(result.value, context.sessionId)}});
+        // 重读成功不等于答得出来：写入之后排序号变长、库里另有超约定的数据，都可能让响应生成失败。
+        // 这条路径同样是“已经写进去了”，必须带上提交事实。
+        if (!payload.value("isError").toBool()) return payload;
+        return committedWriteFailure(payload, id);
+    }
+    // 写入已经提交、只是重读失败。
+    return committedWriteFailure(makeToolErrorResult(makeError(ErrorCode::DatabaseError,
+        QStringLiteral("读取任务 #%1 的最新数据失败").arg(id))), id);
+}
+
+// 写入已经生效、只是没能按契约把结果交出去：保留原错误码与诊断，补上提交事实和正确的核实指引。
+// 少了这一步，客户端只会看到一个普通错误，以为没改成，于是再改一次。
+QJsonObject McpToolDispatcher::committedWriteFailure(const QJsonObject& result, int taskId) const
+{
+    auto error = QJsonDocument::fromJson(result.value("content").toArray().first().toObject()
+                                             .value("text").toString().toUtf8()).object();
+    QJsonObject details = error.value("details").toObject();
+    details.insert("task_id", taskId);
+    details.insert("write_committed", true);
+    error.insert("details", details);
+    error.insert("message", QStringLiteral("修改已保存，但未能返回最新数据：") + error.value("message").toString());
+    error.insert("next_action", QStringLiteral("修改已经生效：确认数据库可用后用 pomodoro_get_task 重新读取核实，"
+                                               "不要当作失败再改一次。"));
+    return makeToolErrorResult(error);
 }

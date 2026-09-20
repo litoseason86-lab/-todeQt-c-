@@ -23,7 +23,11 @@ protected:
 private:
     void receive();
     void flushOutput();
+    // 背压：stdout 积压过多时暂停读 stdin，客户端读走以后再恢复。
+    void updateInputPause();
     QByteArray m_input, m_output;
     std::unique_ptr<QSocketNotifier> m_reader, m_writer;
     int m_inputFlags = -1, m_outputFlags = -1;
+    // stdin 已到 EOF 或读失败：之后无论积压怎样变化都不能再打开读通知。
+    bool m_inputOpen = true;
 };

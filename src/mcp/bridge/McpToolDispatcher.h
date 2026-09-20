@@ -30,8 +30,12 @@ private:
     QJsonObject writeTask(McpContracts::Tool tool, const QJsonObject& args, const Context& context);
     QJsonObject createdResult(qint64 id, bool replayed, const Context& context);
     QJsonObject taskOutput(const QVariantMap& row, const QString& session) const;
-    QJsonObject failure(ServiceReadError error) const;
+    // 读取类失败按原因转成错误码；subject 写清读的是什么（如“任务 #12”“科目列表”），
+    // 让模型和用户知道到底是哪一项不存在或没读出来。
+    QJsonObject failure(ServiceReadError error, const QString& subject) const;
     QJsonObject success(McpContracts::Tool tool, const QJsonObject& output) const;
+    // 写入已生效但结果发不出去时，补上 task_id 与 write_committed，并给出核实指引。
+    QJsonObject committedWriteFailure(const QJsonObject& result, int taskId) const;
     TaskManager* m_tasks;
     CategoryManager* m_categories;
     StatisticsService* m_statistics;

@@ -24,6 +24,25 @@ TestCase {
         function end(owner) { refreshBlocked = false; changed() }
     }
 
+    // 按登记对象逐条记账的桩，行为贴近 C++ 协调器：谁登记的只能由谁（或它的销毁）释放。
+    // 上面的简化桩不分对象，任何 end() 都会清空，照不出“登记挂错对象、永远释放不掉”。
+    QtObject {
+        id: trackingCoordinator
+        property var owners: []
+        readonly property bool refreshBlocked: owners.length > 0
+        signal changed()
+        function beginDrag(owner, id, source) { owners = owners.concat([owner]); changed(); return true }
+        function end(owner) {
+            const index = owners.indexOf(owner)
+            if (index < 0)
+                return
+            const remaining = owners.slice()
+            remaining.splice(index, 1)
+            owners = remaining
+            changed()
+        }
+    }
+
     QtObject {
         id: taskManager
         signal tasksChanged()
@@ -39,7 +58,8 @@ TestCase {
         function updateTask(id, title, categoryId, date) { return true }
         function deleteTask(id) { return true }
         function reorderTasks(isoDate, ids) {
-            testCase.verify(coordinator.refreshBlocked, "写库结束前不得释放拖动登记")
+            testCase.verify(coordinator.refreshBlocked || trackingCoordinator.refreshBlocked,
+                            "写库结束前不得释放拖动登记")
             testCase.reorderCalls.push({ date: isoDate, ids: ids })
             return true
         }
@@ -91,6 +111,22 @@ TestCase {
         }
     }
 
+    Component {
+        id: trackedViewComponent
+
+        TodayTaskView {
+            interactionCoordinatorRef: trackingCoordinator
+            taskManagerRef: taskManager
+            statisticsServiceRef: statisticsService
+            routineManagerRef: routineManager
+            focusTimerRef: focusTimer
+            logicalDayServiceRef: logicalDayService
+            settingsRef: appSettings
+            width: 860
+            height: 640
+        }
+    }
+
     function makeTask(id, title, completed) {
         return { id: id, title: title, completed: !!completed, date: "2026-08-16",
                  estimatedMinutes: 30, focusedMinutes: 0, notes: "",
@@ -99,6 +135,7 @@ TestCase {
 
     function init() {
         coordinator.end(null)
+        trackingCoordinator.owners = []
         testCase.reorderCalls = []
         testCase.todayQueryCount = 0
         taskManager.rows = [makeTask(1, "甲"), makeTask(2, "乙"), makeTask(3, "丙")]
@@ -120,6 +157,46 @@ TestCase {
         view.beginReorder(3)
         view.pageActive = false
         verify(!coordinator.refreshBlocked)
+    }
+
+    function test_dragRegistrationFollowsRowLifetime() {
+        const view = createTemporaryObject(trackedViewComponent, testCase)
+        verify(!!view, "Component exists")
+        view.refresh()
+        wait(60)
+        const list = findChild(view, "todayTaskList")
+        const row = list.itemAtIndex(2)
+        verify(!!row, "丙这一行的 delegate 未就绪")
+
+        // 走真实入口：由行发出 dragStarted，页面据此登记拖动。
+        row.dragStarted()
+        compare(trackingCoordinator.owners.length, 1)
+        verify(trackingCoordinator.owners[0] === row, "拖动登记必须挂在发起拖动的行上")
+        compare(view.draggingTaskId, 3)
+
+        // 行在拖动中途被销毁（例如跨日重建列表），延后的 dragFinished 再也收不到：
+        // 登记要随行一起释放，否则刷新和外部写入会一直被挡住；界面上的拖动残留也要清掉。
+        view.tasks = []
+        tryVerify(function() { return !trackingCoordinator.refreshBlocked }, 1000,
+                  "行销毁后拖动登记仍残留")
+        compare(view.draggingTaskId, -1)
+        compare(view.dropTargetIndex, -1)
+        compare(testCase.reorderCalls.length, 0)
+    }
+
+    function test_releasedDragEndsTheRowRegistration() {
+        const view = createTemporaryObject(trackedViewComponent, testCase)
+        view.refresh()
+        wait(60)
+        const row = findChild(view, "todayTaskList").itemAtIndex(2)
+        verify(!!row)
+        row.dragStarted()
+        view.updateReorder(3, 0)
+        // 正常松手：先落库再释放，释放的正是这一行的登记。
+        row.dragFinished(false)
+        compare(testCase.reorderCalls.length, 1)
+        compare(trackingCoordinator.owners.length, 0)
+        compare(view.draggingTaskId, -1)
     }
 
     function test_drag_only_reorders_locally_until_released() {

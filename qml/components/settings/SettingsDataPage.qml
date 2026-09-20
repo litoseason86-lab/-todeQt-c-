@@ -49,7 +49,7 @@ FocusScope {
 
             SettingsRow {
                 label: "允许外部 AI 接入"
-                caption: "默认关闭；关闭后立即断开连接并使旧会话失效"
+                caption: "默认关闭；关闭后立即断开连接、使旧会话失效，并一并撤销任务写入权限"
                 iconName: "layers"
                 compact: root.compact
                 SettingsSwitch {

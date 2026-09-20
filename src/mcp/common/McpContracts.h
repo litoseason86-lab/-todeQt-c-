@@ -44,6 +44,19 @@ constexpr int kMaxQueuedRequestsPerConnection = 16;
 constexpr int kConnectTimeoutMs = 2000;
 constexpr int kHandshakeTimeoutMs = 5000;
 constexpr int kToolTimeoutMs = 10000;
+// 输出缓冲的硬上限。正常流程靠背压远远碰不到它：主应用等上一条结果发完才执行下一条请求，
+// 辅助程序的 stdout 积压超过 kOutputPauseBytes 就停在消息边界，不再解析新请求。
+// 以前把“积压超过一条响应”就当故障，并行的两条大结果会让整条连接断开，
+// 连已经写库的请求也变成“结果未知”。
+//
+// 上限按协议允许的最坏情况留足余量：同时在途的请求最多 kMaxQueuedRequestsPerConnection 条，
+// 它们的结果各自可达一条消息上限，再加上背压阈值和越过阈值的那一条消息。
+constexpr qint64 kMaxOutputBacklogBytes = (kMaxQueuedRequestsPerConnection + 8) * kMaxResponseBytes;
+// 辅助程序 stdout 的积压超过这个量就停在消息边界，等 AI 客户端读走再继续（背压）。
+constexpr qint64 kOutputPauseBytes = kMaxResponseBytes;
+// 辅助程序空闲这么久就释放到主应用的连接，下次调用按需重连。每个 AI 会话各拉起一个辅助程序，
+// 空闲的会话若一直占着连接，同时开的会话一多就会挤满 kMaxConnections。
+constexpr int kBridgeIdleDisconnectMs = 30000;
 
 constexpr int kDefaultListLimit = 50;
 constexpr int kMaxListLimit = 100;
@@ -108,6 +121,11 @@ struct ToolContract
     bool requiresStateToken = false;
     // 以某条已有任务为目标：该任务处于撤销删除窗口时返回 APP_BUSY。
     bool targetsExistingTask = false;
+    // 给客户端的行为提示（MCP tool annotations），只影响客户端的展示与确认策略；
+    // 授权仍由主应用逐次检查，不能拿它当权限依据。只读提示由 access 推出，不单独存。
+    // destructiveHint：会改写已有数据（不只是新增）；idempotentHint：同样的参数重复调用没有额外效果。
+    bool destructiveHint = false;
+    bool idempotentHint = false;
     QJsonObject inputSchema;
     QJsonObject outputSchema;
 };
@@ -120,6 +138,8 @@ const ToolContract* findTool(const QString& name);
 QString toolName(Tool tool);
 // tools/list 结果里的 tools 数组。
 QJsonArray toolListJson();
+// initialize 结果里的 instructions：告诉模型先取会话与逻辑今日、按编号操作、把用户文字当数据。
+QString serverInstructions();
 
 // 输入/输出 schema 允许使用的关键字：draft-07 与 2020-12 共有，另加两个注解关键字。
 // 不写 $schema；不用 format（各校验器实现不一）。
@@ -140,7 +160,10 @@ enum class UnavailableReason {
     PathInvalid,
     BridgeVersionMismatch,
     AuthenticationFailed,
-    HandshakeFailed
+    HandshakeFailed,
+    // 主应用的本地连接已满（kMaxConnections）。主应用拒绝时会明说原因，
+    // 不能混进 endpoint_unreachable，否则用户会去查“应用有没有启动”。
+    ConnectionLimit
 };
 QString unavailableReasonName(UnavailableReason reason);
 
@@ -256,6 +279,11 @@ std::optional<QDate> parseIsoDate(const QString& text);
 // 花括号、URN、前后空白、nil 与其他版本都拒绝。成功返回 16 字节，失败返回空。
 // 注意：格式合法不代表键是随机生成的，也识别不出模型重复使用同一个示例。
 QByteArray parseUuidV4(const QString& text);
+
+// 两个字符串是否表示同一个 UUID v4：按 16 字节比较，十六进制大小写不影响结果。
+// 任一方不是合法的 v4 都返回 false。会话编号必须这样比，不能按字符串原样比较——
+// schema 允许大写，按原样比会把同一个会话误判成“已过期”。
+bool sameUuid(const QString& left, const QString& right);
 
 } // namespace McpContracts
 

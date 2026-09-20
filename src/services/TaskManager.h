@@ -110,8 +110,11 @@ public:
                                              int completed, int limit, const QSet<int>& excluded) const;
 
     // 字段级编辑可保留历史科目文本；UI 全量表单仍使用原 updateTask 接口。
+    // preserveTitle 为真时既不校验也不改写标题（title 参数被忽略）：外部只改备注、预计用时时，
+    // 不能因为没要求修改的旧标题（上限出现之前可能超过 100 字）而整次失败。
     bool updateTaskFields(int taskId, const QString& title, int categoryId, const QVariant& dateValue,
-                          int estimatedMinutes, const QString& notes, bool preserveCategory);
+                          int estimatedMinutes, const QString& notes, bool preserveCategory,
+                          bool preserveTitle = false);
     // 返回提交事实，让后台调用区分“未创建”和“已提交但无法取得编号”。
     int createTaskWithOutcome(const QString& title, const QVariant& dateValue, int categoryId,
                               int estimatedMinutes, const QString& notes, bool* committed);

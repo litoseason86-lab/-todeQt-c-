@@ -159,6 +159,14 @@ Item {
     Connections {
         target: root.interactionCoordinatorRef
         function onChanged() {
+            // 发起拖动的那一行在拖动中途被销毁（例如跨日重建列表）：它的登记已随对象销毁释放，
+            // 延后的 dragFinished 也不会再来，这里把页面上的拖动残留一并清掉。正常松手时
+            // commitReorder 先清状态再释放登记，走到这里时 draggingTaskId 已是 -1。
+            if (root.draggingTaskId > 0 && !root.interactionCoordinatorRef.refreshBlocked) {
+                root.draggingTaskId = -1
+                root.dropTargetIndex = -1
+                root.dragOwner = null
+            }
             if (!root.interactionCoordinatorRef.refreshBlocked && root.interactionRefreshPending) {
                 root.interactionRefreshPending = false
                 refreshCoalescer.request()
@@ -412,7 +420,10 @@ Item {
                                            && typeof root.taskManagerRef.reorderTasks === "function"
                                            && root.pendingDeleteTaskId <= 0
 
-    function beginReorder(taskId) {
+    // 本次拖动的登记挂在哪个对象上：正常是发起拖动的那一行（delegate）。
+    property var dragOwner: null
+
+    function beginReorder(taskId, owner) {
         if (!root.canReorderTasks) {
             return
         }
@@ -421,7 +432,12 @@ Item {
                 return
             }
         }
-        if (root.interactionCoordinatorRef && !root.interactionCoordinatorRef.beginDrag(root, taskId, "TodayTaskView.drag")) return
+        // 登记挂在发起拖动的行上：行在拖动中途被销毁时，协调器随对象销毁释放登记，
+        // 不会因为收不到延后的 dragFinished 而让列表刷新和外部写入一直被挡住。
+        // 没传行（直接调用的旧入口）时退回本页，释放仍由 commitReorder 负责。
+        const dragOwner = owner ? owner : root
+        if (root.interactionCoordinatorRef && !root.interactionCoordinatorRef.beginDrag(dragOwner, taskId, "TodayTaskView.drag")) return
+        root.dragOwner = dragOwner
         root.draggingTaskId = taskId
         root.dropTargetIndex = -1
     }
@@ -465,6 +481,9 @@ Item {
     }
 
     function commitReorder(cancelled) {
+        // 先取出本次拖动的登记对象：落库结束后释放的必须是它。
+        const dragOwner = root.dragOwner
+        root.dragOwner = null
         try {
             const from = root.draggingFromIndex
             const target = root.dropTargetIndex
@@ -485,7 +504,7 @@ Item {
                 root.loadError = "任务排序保存失败，请重试"
             }
         } finally {
-            if (root.interactionCoordinatorRef) root.interactionCoordinatorRef.end(root)
+            if (root.interactionCoordinatorRef && dragOwner) root.interactionCoordinatorRef.end(dragOwner)
         }
     }
 
@@ -1101,7 +1120,7 @@ Item {
                             draggable: root.canReorderTasks && !todayTaskRow.modelData.completed
                             opacity: root.draggingTaskId === todayTaskRow.taskId ? 0.6 : 1
 
-                            onDragStarted: root.beginReorder(todayTaskRow.taskId)
+                            onDragStarted: root.beginReorder(todayTaskRow.taskId, todayTaskRow)
                             onDragMoved: function (sceneX, sceneY) {
                                 root.updateReorder(todayTaskRow.taskId,
                                                    todayTaskList.mapFromItem(null, sceneX, sceneY).y

@@ -48,6 +48,14 @@ Item {
     Connections {
         target: root.interactionCoordinatorRef
         function onChanged() {
+            // 发起拖动的那一行在拖动中途被销毁（例如跨周日界重建各天的行）：它的登记已随对象销毁释放，
+            // 延后的 dragFinished 也不会再来，这里把页面上的拖动残留一并清掉。正常松手时
+            // commitDrag 先清状态再释放登记，走到这里时 draggingTaskId 已是 -1。
+            if (root.draggingTaskId > 0 && !root.interactionCoordinatorRef.refreshBlocked) {
+                root.draggingTaskId = -1
+                root.dropTargetIndex = -1
+                root.dragOwner = null
+            }
             if (!root.interactionCoordinatorRef.refreshBlocked && root.interactionRefreshPending) {
                 root.interactionRefreshPending = false
                 refreshCoalescer.request()
@@ -180,8 +188,16 @@ Item {
         return date
     }
 
-    function beginDrag(taskId) {
-        if (root.interactionCoordinatorRef && !root.interactionCoordinatorRef.beginDrag(root, taskId, "WeekPlanView.drag")) return
+    // 本次拖动的登记挂在哪个对象上：正常是发起拖动的那一行（delegate）。
+    property var dragOwner: null
+
+    function beginDrag(taskId, owner) {
+        // 登记挂在发起拖动的行上：行在拖动中途被销毁时，协调器随对象销毁释放登记，
+        // 不会因为收不到延后的 dragFinished 而让列表刷新和外部写入一直被挡住。
+        // 没传行（直接调用的旧入口）时退回本页，释放仍由 commitDrag 负责。
+        const dragOwner = owner ? owner : root
+        if (root.interactionCoordinatorRef && !root.interactionCoordinatorRef.beginDrag(dragOwner, taskId, "WeekPlanView.drag")) return
+        root.dragOwner = dragOwner
         root.draggingTaskId = taskId
         root.dropTargetIndex = -1
     }
@@ -220,6 +236,9 @@ Item {
     }
 
     function commitDrag(taskId, currentIndex, cancelled) {
+        // 先取出本次拖动的登记对象：落库结束后释放的必须是它。
+        const dragOwner = root.dragOwner
+        root.dragOwner = null
         try {
             const target = root.dropTargetIndex
             root.draggingTaskId = -1
@@ -235,7 +254,7 @@ Item {
             }
             // 成功路径由 TaskManager.tasksChanged 统一触发刷新；这里再查一次会同步重建两轮 delegate。
         } finally {
-            if (root.interactionCoordinatorRef) root.interactionCoordinatorRef.end(root)
+            if (root.interactionCoordinatorRef && dragOwner) root.interactionCoordinatorRef.end(dragOwner)
         }
     }
 
@@ -1052,7 +1071,7 @@ Item {
                                     draggable: root.canMoveTasks && !weekTaskRow.modelData.completed
                                     opacity: root.draggingTaskId === weekTaskRow.taskId ? 0.6 : 1
 
-                                    onDragStarted: root.beginDrag(weekTaskRow.taskId)
+                                    onDragStarted: root.beginDrag(weekTaskRow.taskId, weekTaskRow)
                                     onDragMoved: function (sceneX, sceneY) { root.updateDrag(sceneY) }
                                     onDragFinished: function (cancelled) {
                                         root.commitDrag(weekTaskRow.taskId,

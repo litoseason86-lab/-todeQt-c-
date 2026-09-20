@@ -1,6 +1,7 @@
 #include "McpAccessController.h"
 #include "../common/McpEndpointFiles.h"
 #include <QDir>
+#include <QHash>
 #include <QJsonArray>
 #include <QFileInfo>
 #include <QLockFile>
@@ -21,6 +22,12 @@ McpAccessController::McpAccessController(const McpPaths::Resolution& endpoint, Q
     m_settings.setFallbacksEnabled(false);
     m_enabled = m_settings.value(QStringLiteral("mcp/enabled"), false).toBool();
     m_writeEnabled = m_settings.value(QStringLiteral("mcp/writeEnabled"), false).toBool();
+    // 接入关闭时不该留着写授权。旧版本关闭接入并不撤销写权限，升级上来的本机可能正是这个状态；
+    // 不在这里清掉，第一次重新打开接入就会把 AI 修改任务的权限悄悄带回来。
+    if (!m_enabled && m_writeEnabled) {
+        m_writeEnabled = false;
+        savePolicy(QStringLiteral("mcp/writeEnabled"), false, true);
+    }
     rotateSession();
 }
 McpAccessController::~McpAccessController() { stop(); }
@@ -129,11 +136,20 @@ bool McpAccessController::setEnabled(bool value)
     const bool saved = savePolicy(QStringLiteral("mcp/enabled"), value, m_enabled);
     // 保存失败不能新增授权；撤销则立即生效，即使磁盘暂时不可写也不能保留活动连接。
     if (saved || !value) m_enabled = value;
-    if (!value) { stop(); rotateSession(); }
-    const bool success = saved && (!value || start());
+    bool writeRevokeSaved = true;
+    if (!value) {
+        stop();
+        rotateSession();
+        // 关闭接入同时撤销写权限：之后重新打开只恢复读取，AI 修改任务要用户再单独打开，
+        // 不能随“关了再开”悄悄回来。与撤销接入一样，保存失败也立即生效。
+        writeRevokeSaved = savePolicy(QStringLiteral("mcp/writeEnabled"), false, m_writeEnabled);
+        m_writeEnabled = false;
+    }
+    const bool success = saved && writeRevokeSaved && (!value || start());
     if (!saved) m_error = value
         ? QStringLiteral("保存本机接入设置失败，未新增授权；请检查设置文件权限")
         : QStringLiteral("本次接入已关闭，但设置保存失败；重启前请检查设置文件权限");
+    else if (!writeRevokeSaved) m_error = QStringLiteral("接入已关闭，任务写入权限也已撤销，但设置保存失败；重启前请检查设置文件权限");
     else if (!value) m_error.clear();
     emit stateChanged();
     return success;
@@ -174,8 +190,9 @@ void McpAccessController::shutdown()
 QJsonObject McpAccessController::busyError() const
 {
     QList<BusyBlock> blocks = m_blockProvider ? m_blockProvider() : QList<BusyBlock>{};
-    if (m_shuttingDown) blocks.append({BusyReason::ShuttingDown, QStringLiteral("应用退出"), 0});
-    else if (m_restoreBlocked) blocks.append({BusyReason::BackupRestore, QStringLiteral("备份恢复"), 0});
+    // 来源是给模型看的稳定英文键，与界面登记的来源同一种写法；给人看的说明见 blockSummary()。
+    if (m_shuttingDown) blocks.append({BusyReason::ShuttingDown, QStringLiteral("app.shutdown"), 0});
+    else if (m_restoreBlocked) blocks.append({BusyReason::BackupRestore, QStringLiteral("backup.restore"), 0});
     return blocks.isEmpty() ? QJsonObject{} : makeBusyError(blocks);
 }
 QJsonObject McpAccessController::appStatus() const
@@ -198,7 +215,8 @@ QJsonObject McpAccessController::dispatchImpl(Tool tool, const QJsonObject& argu
     if (m_shuttingDown || m_restoreBlocked) return makeToolErrorResult(busyError());
     if (contract(tool).access == ToolAccess::Write) {
         if (!writeEnabled()) return makeToolErrorResult(makeError(ErrorCode::PermissionDenied, QStringLiteral("未允许 AI 修改任务")));
-        if (arguments.value("app_session_id").toString() != m_session)
+        // 按 UUID 比较而不是按字符串：schema 接受大写十六进制，同一个会话写成大写不能被当成过期。
+        if (!sameUuid(arguments.value("app_session_id").toString(), m_session))
             return makeToolErrorResult(makeError(ErrorCode::SessionExpired, QStringLiteral("应用会话已改变，请重新查询状态")));
     }
     if (m_dataHandler) return m_dataHandler(tool, arguments);
@@ -216,19 +234,59 @@ QString McpAccessController::helperPath() const
     return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("PomodoroTodoMcp"));
 }
 void McpAccessController::copyHelperPath() { emit copyRequested(helperPath()); }
+namespace {
+// 界面登记的来源标识 → 给人看的说明。来源标识是给模型的稳定英文键，不能直接摆到设置页上；
+// 以后新增入口忘了补这张表时，按阻断原因退回通用说法，也不会把内部标识露给用户。
+QString sourceDescription(const QString& source)
+{
+    static const QHash<QString, QString> descriptions{
+        {QStringLiteral("TodayTaskView.edit_dialog"), QStringLiteral("今日任务的编辑弹窗开着")},
+        {QStringLiteral("TodayTaskView.inline_edit"), QStringLiteral("今日任务正在行内改名")},
+        {QStringLiteral("TodayTaskView.drag"), QStringLiteral("今日任务正在拖动排序")},
+        {QStringLiteral("WeekPlanView.edit_dialog"), QStringLiteral("本周计划的编辑弹窗开着")},
+        {QStringLiteral("WeekPlanView.inline_edit"), QStringLiteral("本周计划正在行内改名")},
+        {QStringLiteral("WeekPlanView.drag"), QStringLiteral("本周计划正在拖动改期")},
+        {QStringLiteral("DashboardView.edit_dialog"), QStringLiteral("仪表盘的编辑弹窗开着")},
+        {QStringLiteral("DashboardView.inline_edit"), QStringLiteral("仪表盘正在行内改名")},
+        {QStringLiteral("task_tools.edit_dialog"), QStringLiteral("任务工具里的编辑弹窗开着")},
+        {QStringLiteral("edit_task_dialog"), QStringLiteral("任务编辑弹窗开着")},
+        {QStringLiteral("task_item.inline_edit"), QStringLiteral("有任务正在行内改名")},
+    };
+    return descriptions.value(source);
+}
+}
+
 QString McpAccessController::blockSummary() const
 {
     const auto error = busyError();
-    if (error.isEmpty()) return QStringLiteral("当前无交互阻断");
+    if (error.isEmpty()) return QStringLiteral("当前没有进行中的编辑或拖动");
+    // 这段文字给设置页里的人看：写清是哪里在编辑、会有什么影响。错误里的 next_action 是写给模型的
+    // 指令（“按 details.blocks 处理”之类），不能原样搬到界面上。
     QStringList descriptions;
+    bool waitsForUser = false;
     for (const auto& entry : error.value("details").toObject().value("blocks").toArray()) {
         const auto block = entry.toObject();
         const QString reason = block.value("reason").toString();
-        const QString caption = reason == "editing" ? QStringLiteral("编辑中") : reason == "dragging" ? QStringLiteral("拖动中")
-            : reason == "pending_delete" ? QStringLiteral("等待删除") : reason == "backup_restore" ? QStringLiteral("备份恢复中") : QStringLiteral("正在退出");
-        descriptions.append(caption + QStringLiteral("：") + block.value("source").toString());
+        const QString described = sourceDescription(block.value("source").toString());
+        if (reason == QStringLiteral("editing")) {
+            waitsForUser = true;
+            descriptions.append(described.isEmpty() ? QStringLiteral("有任务正在编辑") : described);
+        } else if (reason == QStringLiteral("dragging")) {
+            waitsForUser = true;
+            descriptions.append(described.isEmpty() ? QStringLiteral("有任务正在拖动") : described);
+        } else if (reason == QStringLiteral("pending_delete")) {
+            descriptions.append(QStringLiteral("任务 #%1 处于撤销删除窗口，AI 暂时不能读取或修改它")
+                                    .arg(block.value("task_id").toInteger()));
+        } else if (reason == QStringLiteral("backup_restore")) {
+            descriptions.append(QStringLiteral("正在恢复备份，AI 的读写暂停"));
+        } else {
+            descriptions.append(QStringLiteral("应用正在退出"));
+        }
     }
-    return descriptions.join(QStringLiteral("；")) + QStringLiteral("。") + error.value("next_action").toString();
+    QString summary = descriptions.join(QStringLiteral("；")) + QStringLiteral("。");
+    if (waitsForUser)
+        summary += QStringLiteral("编辑或拖动期间 AI 的修改会被拒绝，保存或取消后自动恢复。");
+    return summary;
 }
 QJsonObject McpAccessController::dispatch(Tool tool, const QJsonObject& arguments)
 {

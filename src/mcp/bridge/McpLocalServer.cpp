@@ -15,8 +15,10 @@ class McpLocalServer::Peer : public QObject
 {
 public:
     struct Request { QString id; Tool tool; QJsonObject arguments; QDeadlineTimer deadline; };
-    Peer(QLocalSocket* connection, McpLocalServer* server)
-        : QObject(server), socket(connection), owner(server), stream(connection, kMaxRequestBytes, this)
+    // atCapacity 为真时这条连接只用来回一句“连接已满”：不占用连接名额，也不执行任何请求。
+    Peer(QLocalSocket* connection, McpLocalServer* server, bool capacity = false)
+        : QObject(server), socket(connection), owner(server), stream(connection, kMaxRequestBytes, this),
+          atCapacity(capacity)
     {
         socket->setParent(this);
         socket->setReadBufferSize(kMaxRequestBytes + 1);
@@ -32,6 +34,8 @@ public:
             deleteLater();
         });
         connect(&stream, &McpJsonStream::received, this, [this](const QJsonObject& frame) { receive(frame); });
+        // 上一条结果写空后再执行下一条排队请求（背压），见 schedule()。
+        connect(socket, &QLocalSocket::bytesWritten, this, [this] { schedule(); });
     }
     void reject(const QJsonObject& error)
     {
@@ -51,7 +55,10 @@ public:
         if (!authenticated) {
             if (kind != QStringLiteral("hello")) { socket->abort(); return; }
             QString reason;
-            if (frame.value("version") != QJsonValue(kBridgeProtocolVersion)) reason = QStringLiteral("bridge_version_mismatch");
+            // 等对方先发握手帧再回拒绝原因：连上就立刻写一帧然后关闭的话，对方的握手帧会撞上
+            // 已关闭的连接（EPIPE），它只能报成“连不上”，看不到真正的原因。
+            if (atCapacity) reason = QStringLiteral("connection_limit");
+            else if (frame.value("version") != QJsonValue(kBridgeProtocolVersion)) reason = QStringLiteral("bridge_version_mismatch");
             else if (frame.value("token").toString().toLatin1() != owner->m_credential) reason = QStringLiteral("authentication_failed");
             stream.send({{"kind", "hello"}, {"version", kBridgeProtocolVersion}, {"accepted", reason.isEmpty()}, {"reason", reason}});
             if (!reason.isEmpty()) { socket->disconnectFromServer(); return; }
@@ -79,15 +86,23 @@ public:
             || milliseconds < 1 || milliseconds > kToolTimeoutMs) { socket->abort(); return; }
         queue.append({id, definition->tool, frame.value("arguments").toObject(), QDeadlineTimer(milliseconds)});
         // 不在读帧回调里执行：同批取消先入队，再在主线程依次检查权限、期限并调用业务层。
-        if (!scheduled) {
-            scheduled = true;
-            QTimer::singleShot(0, this, [this] { execute(); });
-        }
+        schedule();
+    }
+    void schedule()
+    {
+        // 背压：上一条结果还没写进内核就先不执行下一条。否则并行的两条大结果会叠在发送缓冲里，
+        // 以前这会越过上限把整条连接断开，连已经写库的请求也变成“结果未知”。
+        // 等待期间请求的截止时间照常计算，执行前仍会检查是否已过期。
+        if (scheduled || queue.isEmpty() || socket->bytesToWrite() > 0) return;
+        scheduled = true;
+        QTimer::singleShot(0, this, [this] { execute(); });
     }
     void execute()
     {
         scheduled = false;
         if (queue.isEmpty() || socket->state() != QLocalSocket::ConnectedState) return;
+        // 排队期间可能有 reject() 等其它输出写进缓冲，这里再确认一次缓冲已空。
+        if (socket->bytesToWrite() > 0) return;
         const Request request = queue.takeFirst();
         QJsonObject result;
         if (request.deadline.hasExpired()) {
@@ -99,10 +114,7 @@ public:
         }
         if (socket->state() != QLocalSocket::ConnectedState) return;
         send(request.id, result);
-        if (!queue.isEmpty()) {
-            scheduled = true;
-            QTimer::singleShot(0, this, [this] { execute(); });
-        }
+        schedule();
     }
     QLocalSocket* socket;
     McpLocalServer* owner;
@@ -111,6 +123,7 @@ public:
     QList<Request> queue;
     bool authenticated = false;
     bool scheduled = false;
+    bool atCapacity = false;
 };
 
 McpLocalServer::McpLocalServer(const McpPaths::PathSet& paths, QObject* parent)
@@ -123,15 +136,34 @@ McpLocalServer::McpLocalServer(const McpPaths::PathSet& paths, QObject* parent)
     connect(&m_server, &QLocalServer::newConnection, this, [this] {
         while (m_server.hasPendingConnections()) {
             QLocalSocket* socket = m_server.nextPendingConnection();
-            if (m_peers.size() >= kMaxConnections || !MacLocalPeerIdentity::isCurrentUser(socket->socketDescriptor())) {
+            if (!MacLocalPeerIdentity::isCurrentUser(socket->socketDescriptor())) {
                 socket->abort();
                 socket->deleteLater();
+                continue;
+            }
+            if (m_peers.size() >= kMaxConnections) {
+                rejectAtCapacity(socket);
                 continue;
             }
             m_peers.append(new Peer(socket, this));
             emit connectionsChanged();
         }
     });
+}
+void McpLocalServer::rejectAtCapacity(QLocalSocket* socket)
+{
+    // 满员时也要说清原因：辅助程序据此报“连接已满”，而不是误报成应用没启动或接入没开。
+    // 这条连接不进 m_peers（不占名额、不执行请求），收到对方的握手帧后回一句拒绝就断开；
+    // 迟迟不发握手的由 Peer 自己的握手期限断开。
+    // 同时在等回复的拒绝连接也有上限，免得满员时被大量连接反复占用资源。
+    if (m_rejecting >= kMaxConnections) {
+        socket->abort();
+        socket->deleteLater();
+        return;
+    }
+    ++m_rejecting;
+    auto* peer = new Peer(socket, this, true);
+    connect(peer, &QObject::destroyed, this, [this] { --m_rejecting; });
 }
 McpLocalServer::~McpLocalServer() { close(); }
 bool McpLocalServer::listen(const QByteArray& credential, Handler handler)

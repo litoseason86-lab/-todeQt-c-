@@ -24,6 +24,24 @@ TestCase {
         function end(owner) { refreshBlocked = false; changed() }
     }
 
+    // 按登记对象逐条记账的桩，行为贴近 C++ 协调器：谁登记的只能由谁（或它的销毁）释放。
+    QtObject {
+        id: trackingCoordinator
+        property var owners: []
+        readonly property bool refreshBlocked: owners.length > 0
+        signal changed()
+        function beginDrag(owner, id, source) { owners = owners.concat([owner]); changed(); return true }
+        function end(owner) {
+            const index = owners.indexOf(owner)
+            if (index < 0)
+                return
+            const remaining = owners.slice()
+            remaining.splice(index, 1)
+            owners = remaining
+            changed()
+        }
+    }
+
     QtObject {
         id: taskManager
         signal tasksChanged()
@@ -38,7 +56,8 @@ TestCase {
         function updateTask(id, title, categoryId, date) { return true }
         function deleteTask(id) { return true }
         function moveTaskToDate(taskId, isoDate) {
-            testCase.verify(coordinator.refreshBlocked, "写库结束前不得释放拖动登记")
+            testCase.verify(coordinator.refreshBlocked || trackingCoordinator.refreshBlocked,
+                            "写库结束前不得释放拖动登记")
             testCase.moveCalls.push({ taskId: taskId, date: isoDate })
             tasksChanged()
             return true
@@ -71,6 +90,33 @@ TestCase {
         }
     }
 
+    Component {
+        id: trackedViewComponent
+
+        WeekPlanView {
+            interactionCoordinatorRef: trackingCoordinator
+            taskManagerRef: taskManager
+            logicalDayServiceRef: logicalDayService
+            settingsRef: appSettings
+            width: 960
+            height: 700
+        }
+    }
+
+    // 周视图的行由各天的 Repeater 生成，没有列表索引可取；按任务编号在子树里找那一行。
+    function findTaskRow(item, taskId) {
+        if (!item)
+            return null
+        if (item.taskId === taskId && item.dragStarted !== undefined)
+            return item
+        for (var i = 0; i < item.children.length; ++i) {
+            var found = findTaskRow(item.children[i], taskId)
+            if (found)
+                return found
+        }
+        return null
+    }
+
     function logicalToday() {
         var d = new Date()
         if (d.getHours() < appSettings.dayStartHour) {
@@ -87,9 +133,34 @@ TestCase {
 
     function init() {
         coordinator.end(null)
+        trackingCoordinator.owners = []
         testCase.moveCalls = []
         testCase.weekQueryCount = 0
         taskManager.weekRows = [makeTask(1, "待挪任务", testCase.logicalToday())]
+    }
+
+    function test_dragRegistrationFollowsRowLifetime() {
+        var view = createTemporaryObject(trackedViewComponent, testCase)
+        verify(!!view, "Component exists")
+        view.refresh()
+        wait(80)
+        var row = testCase.findTaskRow(view, 1)
+        verify(!!row, "待挪任务这一行未就绪")
+
+        // 走真实入口：由行发出 dragStarted，页面据此登记拖动。
+        row.dragStarted()
+        compare(trackingCoordinator.owners.length, 1)
+        verify(trackingCoordinator.owners[0] === row, "拖动登记必须挂在发起拖动的行上")
+        compare(view.draggingTaskId, 1)
+
+        // 跨周日界等情况会在拖动中途重建各天的行，延后的 dragFinished 收不到：
+        // 登记随行一起释放，界面上的拖动残留也要清掉，不能让刷新和外部写入一直被挡住。
+        view.weekTasks = []
+        tryVerify(function() { return !trackingCoordinator.refreshBlocked }, 1000,
+                  "行销毁后拖动登记仍残留")
+        compare(view.draggingTaskId, -1)
+        compare(view.dropTargetIndex, -1)
+        compare(testCase.moveCalls.length, 0)
     }
 
     function test_drop_on_another_day_moves_the_task_there() {

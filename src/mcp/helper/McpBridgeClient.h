@@ -20,6 +20,8 @@ public:
     void call(const QString& id, McpContracts::Tool tool, const QJsonObject& arguments);
     void cancel(const QString& id);
     void cancelAll();
+    // 空闲多久释放连接；只供测试缩短等待，生产沿用 kBridgeIdleDisconnectMs。
+    void setIdleDisconnectMs(int milliseconds);
 signals:
     void completed(const QString& id, const QJsonObject& result);
 private:
@@ -28,19 +30,26 @@ private:
         QJsonObject arguments;
         QDeadlineTimer deadline;
         bool sent = false;
+        // 提交顺序。握手完成前排队的请求要按先来后到转发，不能按哈希表的遍历顺序。
+        quint64 order = 0;
     };
     void connectEndpoint();
     void sendPending();
     void receive(const QJsonObject& frame);
     void fail(McpContracts::UnavailableReason reason);
+    // 没有在途请求时开始计空闲，有请求就停表；空闲到点主动断开，把连接名额让给别的会话。
+    void updateIdleTimer();
+    void releaseIdleConnection();
     QJsonObject unavailable(McpContracts::Tool tool, McpContracts::UnavailableReason reason, bool sent) const;
     QJsonObject status(const QJsonValue& app, McpContracts::UnavailableReason reason) const;
     McpPaths::Resolution m_endpoint;
     QLocalSocket m_socket;
     std::unique_ptr<McpJsonStream> m_stream;
     QHash<QString, Pending> m_pending;
-    QTimer m_connectionTimer, m_deadlineTimer;
+    QTimer m_connectionTimer, m_deadlineTimer, m_idleTimer;
     QByteArray m_credential;
+    int m_idleDisconnectMs = McpContracts::kBridgeIdleDisconnectMs;
+    quint64 m_nextOrder = 0;
     bool m_ready = false;
     bool m_failing = false;
 };

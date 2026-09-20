@@ -424,19 +424,20 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
 
 bool TaskManager::updateTaskFields(int taskId, const QString& title, int categoryId,
                                     const QVariant& dateValue, int estimatedMinutes,
-                                    const QString& notes, bool preserveCategory)
+                                    const QString& notes, bool preserveCategory, bool preserveTitle)
 {
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to update task: invalid task id" << taskId;
         return false;
     }
 
+    // 保留标题时整句 SQL 都不碰 title 列，所以也不校验传进来的标题。
     const QString normalizedTitle = title.trimmed();
-    if (normalizedTitle.isEmpty()) {
+    if (!preserveTitle && normalizedTitle.isEmpty()) {
         qWarning() << "Failed to update task: title is empty after trimming";
         return false;
     }
-    if (normalizedTitle.size() > kMaxTitleLength) {
+    if (!preserveTitle && normalizedTitle.size() > kMaxTitleLength) {
         qWarning() << "Failed to update task: title exceeds" << kMaxTitleLength << "characters";
         return false;
     }
@@ -475,10 +476,11 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
     }
 
     QString assignments = QStringLiteral(
-        "title = :title, date = :date, "
+        "date = :date, "
         "display_order = CASE WHEN date = :comparisonDate THEN display_order ELSE "
         "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks "
         " WHERE date = :orderDate AND id <> :selfId) END");
+    if (!preserveTitle) assignments += QStringLiteral(", title = :title");
     if (!preserveCategory) assignments += QStringLiteral(", category = :category, category_id = :categoryId");
     if (updateEstimate) {
         assignments += QStringLiteral(", estimated_minutes = :estimated");
@@ -490,7 +492,7 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
     QSqlQuery query(db);
     // category 文本仍要同步写入，保证旧导出和旧视图在 category_id 缺失时也能退回显示。
     query.prepare(QStringLiteral("UPDATE tasks SET %1 WHERE id = :id").arg(assignments));
-    query.bindValue(QStringLiteral(":title"), normalizedTitle);
+    if (!preserveTitle) query.bindValue(QStringLiteral(":title"), normalizedTitle);
     if (!preserveCategory) {
         query.bindValue(QStringLiteral(":category"), categoryName);
         query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);

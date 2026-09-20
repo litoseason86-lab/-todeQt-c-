@@ -22,7 +22,6 @@ private:
     static QString idKey(const QJsonValue& id);
     McpJsonStream m_stream;
     McpBridgeClient* m_bridge;
-    QTimer m_initializationTimer;
     QHash<QString, QJsonValue> m_inflight;
     bool m_initialized = false;
     bool m_ready = false;

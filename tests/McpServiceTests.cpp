@@ -26,9 +26,10 @@ class McpServiceTests : public QObject
     QString session;
     QJsonObject run(Tool tool, QJsonObject arguments = {}) { return dispatcher->dispatch(tool, arguments); }
     QJsonObject output(const QJsonObject& result) { return result.value("structuredContent").toObject(); }
-    QString code(const QJsonObject& result) {
-        return QJsonDocument::fromJson(result.value("content").toArray().first().toObject().value("text").toString().toUtf8()).object().value("code").toString();
+    QJsonObject body(const QJsonObject& result) {
+        return QJsonDocument::fromJson(result.value("content").toArray().first().toObject().value("text").toString().toUtf8()).object();
     }
+    QString code(const QJsonObject& result) { return body(result).value("code").toString(); }
     QJsonObject range(int limit = 100) { return {{"start_date", "2026-09-17"}, {"end_date", "2026-09-17"}, {"limit", limit}}; }
     int task(const QString& title = QStringLiteral("同名任务")) {
         return TaskManager::instance()->createTask(title, QStringLiteral("2026-09-17"), 0, 30, QStringLiteral("备注"));
@@ -288,6 +289,105 @@ private slots:
         QCOMPARE(result.value("gaps").toArray().size(), 1); QCOMPARE(result.value("gaps").toArray()[0].toObject().value("gap_id").toInt(), scheduled);
         QVERIFY(!result.value("gaps").toArray()[0].toObject().contains("detail"));
         QCOMPARE(code(run(Tool::ListKnowledgeGaps, {{"status", "all"}, {"category_id", 999999}})), QStringLiteral("NOT_FOUND"));
+    }
+    void uppercaseSessionAccepted()
+    {
+        // 会话编号按 UUID 比较，十六进制大小写不改变身份；状态令牌仍按规范会话计算。
+        auto args = createArgs(); args.insert("app_session_id", session.toUpper());
+        const auto created = run(Tool::CreateTask, args);
+        QVERIFY2(!created.value("isError").toBool(), qPrintable(code(created)));
+        const int id = output(created).value("created_task_id").toInt(); QVERIFY(id > 0);
+        auto edit = editArgs(id); edit.insert("app_session_id", session.toUpper()); edit.insert("completed", true);
+        const auto completed = run(Tool::SetTaskCompleted, edit);
+        QVERIFY2(!completed.value("isError").toBool(), qPrintable(code(completed)));
+        QVERIFY(output(completed).value("changed").toBool());
+    }
+    void legacyRowsStayUsable()
+    {
+        // 2026-07-19 之前的任务标题没有 100 字上限，也可能从旧备份带回负的预计用时。
+        QSqlQuery query(DatabaseManager::instance()->database());
+        // 末尾带空白：没要求改标题时连这点空白也不能被“顺手规整”掉。
+        const QString longTitle = QString(120, QChar(u'旧')) + QStringLiteral("  ");
+        query.prepare("INSERT INTO tasks(title,date,display_order,estimated_minutes) VALUES(?,'2026-09-17',1,-25)");
+        query.addBindValue(longTitle);
+        QVERIFY(query.exec());
+        const int id = query.lastInsertId().toInt(); QVERIFY(id > 0);
+        // 服务层把负数当“未设置”，对外同样报 0；一行旧数据不能让整页查询失败。
+        const auto listed = run(Tool::ListTasks, range());
+        QVERIFY2(!listed.value("isError").toBool(), qPrintable(code(listed)));
+        QCOMPARE(output(listed).value("tasks").toArray().first().toObject().value("estimated_minutes").toInt(), 0);
+        // 只改备注时不碰没要求修改的旧标题，更不能因为它超长而整次失败。
+        auto args = editArgs(id); args.insert("notes", QStringLiteral("补充备注"));
+        const auto updated = run(Tool::UpdateTask, args);
+        QVERIFY2(!updated.value("isError").toBool(), qPrintable(body(updated).value("message").toString()));
+        const auto stored = TaskManager::instance()->readTask(id).value;
+        QCOMPARE(stored.value("title").toString(), longTitle);
+        QCOMPARE(stored.value("notes").toString(), QStringLiteral("补充备注"));
+        // 明确要改标题时仍按上限校验，超长的新标题照样拒绝。
+        args = editArgs(id); args.insert("title", QString(101, QChar(u'新')));
+        QCOMPARE(code(run(Tool::UpdateTask, args)), QStringLiteral("VALIDATION_ERROR"));
+    }
+    void errorsNameTheRealProblem()
+    {
+        const int id = task();
+        // 科目不存在就说科目，不能套用“不要按同名任务替换目标”的下一步。
+        auto args = editArgs(id); args.insert("category_id", 999999);
+        auto error = body(run(Tool::UpdateTask, args));
+        QCOMPARE(error.value("code").toString(), QStringLiteral("NOT_FOUND"));
+        QVERIFY2(error.value("message").toString().contains(QStringLiteral("科目")), qPrintable(error.value("message").toString()));
+        // 写入被数据库拒绝：如实说“没保存、任务未改动”，不能说成“读取数据失败”。
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec("CREATE TRIGGER reject_task_update BEFORE UPDATE ON tasks BEGIN SELECT RAISE(ABORT, 'blocked'); END"));
+        args = editArgs(id); args.insert("completed", true);
+        error = body(run(Tool::SetTaskCompleted, args));
+        QCOMPARE(error.value("code").toString(), QStringLiteral("DATABASE_ERROR"));
+        QVERIFY2(error.value("message").toString().contains(QStringLiteral("未被修改")), qPrintable(error.value("message").toString()));
+        QVERIFY(!error.value("message").toString().contains(QStringLiteral("读取")));
+        QVERIFY(!TaskManager::instance()->readTask(id).value.value("completed").toBool());
+        QVERIFY(query.exec("DROP TRIGGER reject_task_update"));
+        // 写入已提交、只是重读失败：必须说明修改已经保存，模型才不会以为没改成。
+        const auto connection = connect(TaskManager::instance(), &TaskManager::tasksChanged, this, [] {
+            DatabaseManager::instance()->close();
+        });
+        args = editArgs(id); args.insert("completed", true);
+        const auto committed = run(Tool::SetTaskCompleted, args);
+        disconnect(connection);
+        error = body(committed);
+        QCOMPARE(error.value("code").toString(), QStringLiteral("DATABASE_ERROR"));
+        QVERIFY2(error.value("message").toString().contains(QStringLiteral("已保存")), qPrintable(error.value("message").toString()));
+        QVERIFY(error.value("details").toObject().value("write_committed").toBool());
+        QCOMPARE(error.value("details").toObject().value("task_id").toInt(), id);
+        QVERIFY(DatabaseManager::instance()->initialize(data->filePath("test.sqlite")));
+        QVERIFY(TaskManager::instance()->readTask(id).value.value("completed").toBool());
+        // 库里的数据本身超出工具约定时，要指出是哪条数据的哪个字段，而不是笼统的“读取失败”。
+        QSqlQuery corrupt(DatabaseManager::instance()->database());
+        // 注意不能用 2026/09/17：Qt 的 ISO 日期解析接受任意标点作分隔符，那样的值其实读得出来。
+        QVERIFY(corrupt.exec(QStringLiteral("UPDATE tasks SET date='not-a-date' WHERE id=%1").arg(id)));
+        error = body(run(Tool::GetTask, {{"task_id", id}}));
+        QCOMPARE(error.value("code").toString(), QStringLiteral("DATABASE_ERROR"));
+        QCOMPARE(error.value("details").toObject().value("reason").toString(), QStringLiteral("stored_data_out_of_contract"));
+        QVERIFY(error.value("details").toObject().value("fields").toArray().contains(QStringLiteral("task/date")));
+    }
+    void committedWriteThatCannotBeReported()
+    {
+        // 写入已经提交，但随后按契约生成响应失败（真实场景：改期后排序号变长，
+        // 响应刚好超出预算；这里用触发器把重读数据改成非法日期，确定性地走同一条路径）。
+        // 这时绝不能只报一个普通错误：客户端会以为没改成，再改一次。
+        const int id = task();
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec("CREATE TRIGGER break_after_update AFTER UPDATE ON tasks "
+                           "BEGIN UPDATE tasks SET date='not-a-date' WHERE id=NEW.id; END"));
+        auto args = editArgs(id); args.insert("completed", true);
+        const auto result = run(Tool::SetTaskCompleted, args);
+        QVERIFY(result.value("isError").toBool());
+        const auto error = body(result);
+        QVERIFY2(error.value("details").toObject().value("write_committed").toBool(), qPrintable(QString::fromUtf8(QJsonDocument(error).toJson())));
+        QCOMPARE(error.value("details").toObject().value("task_id").toInt(), id);
+        QVERIFY(error.value("next_action").toString().contains(QStringLiteral("已经生效")));
+        QVERIFY(query.exec("DROP TRIGGER break_after_update"));
+        QVERIFY(query.exec(QStringLiteral("UPDATE tasks SET date='2026-09-17' WHERE id=%1").arg(id)));
+        // 数据库里的修改确实生效了，模型按指引核实即可，不该重复提交。
+        QVERIFY(TaskManager::instance()->readTask(id).value.value("completed").toBool());
     }
     void focusRulesAndPartialDay()
     {

@@ -345,9 +345,9 @@ void McpProtocolTests::toolListJsonCarriesBothSchemas()
     const QJsonArray tools = McpContracts::toolListJson();
     const QList<McpContracts::ToolContract>& contracts = McpContracts::toolContracts();
     QCOMPARE(tools.size(), contracts.size());
-    const QStringList expectedKeys{QStringLiteral("description"), QStringLiteral("inputSchema"),
-                                   QStringLiteral("name"), QStringLiteral("outputSchema"),
-                                   QStringLiteral("title")};
+    const QStringList expectedKeys{QStringLiteral("annotations"), QStringLiteral("description"),
+                                   QStringLiteral("inputSchema"), QStringLiteral("name"),
+                                   QStringLiteral("outputSchema"), QStringLiteral("title")};
     for (qsizetype index = 0; index < tools.size(); ++index) {
         const QJsonObject tool = tools.at(index).toObject();
         const McpContracts::ToolContract& item = contracts.at(index);
@@ -355,6 +355,23 @@ void McpProtocolTests::toolListJsonCarriesBothSchemas()
         QCOMPARE(tool.value(QStringLiteral("name")).toString(), item.name);
         QCOMPARE(tool.value(QStringLiteral("inputSchema")).toObject(), item.inputSchema);
         QCOMPARE(tool.value(QStringLiteral("outputSchema")).toObject(), item.outputSchema);
+
+        // 注解只是给客户端的提示（例如只读工具可少问一次确认），授权仍由主应用逐次检查。
+        // 提示必须与真实能力一致：写工具不能自称只读，全部只访问本机应用、不接触外部世界。
+        const QJsonObject annotations = tool.value(QStringLiteral("annotations")).toObject();
+        const bool isWrite = item.access == McpContracts::ToolAccess::Write;
+        QCOMPARE(annotations.value(QStringLiteral("readOnlyHint")), QJsonValue(!isWrite));
+        QCOMPARE(annotations.value(QStringLiteral("openWorldHint")), QJsonValue(false));
+        if (isWrite) {
+            // 四个写工具都按幂等键或目标状态执行，同样的参数重复调用不会产生额外效果。
+            QCOMPARE(annotations.value(QStringLiteral("idempotentHint")), QJsonValue(true));
+            // 只有新建是纯增加；另外三个会改写已有任务的字段。
+            QCOMPARE(annotations.value(QStringLiteral("destructiveHint")),
+                     QJsonValue(item.tool != Tool::CreateTask));
+        } else {
+            QVERIFY(!annotations.contains(QStringLiteral("destructiveHint")));
+            QVERIFY(!annotations.contains(QStringLiteral("idempotentHint")));
+        }
     }
 }
 
