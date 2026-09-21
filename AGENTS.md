@@ -32,7 +32,8 @@
 
 ## 代码质量规则
 
-- 保持当前项目分层：`src/services`、`src/models`、`qml`、`tests` 的职责不要混杂。
+- 保持当前项目分层：`src/services`、`src/models`、`src/mcp`、`src/platform/macos`、`qml`、`tests` 的职责不要混杂。
+- 外部 AI 接入的辅助程序（`src/mcp/helper`）只做协议与转发，不得链接业务服务、SQL 或 QML；权限判断与读写都在主应用内完成，`McpHelperLinkGate` 会检查链接结果。
 - 修改功能后要运行相关构建和测试，再报告结果。
 - 后台测试和自动验证不得弹出应用窗口；Qt/QML 测试默认使用 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic`。不要在自动流程里执行 `open /Applications/番茄Todo.app`、`open build/*.app` 或其他会拉起 GUI 窗口的命令，除非用户本轮明确要求做人工真机视觉验收。
 - 不要改动 `build/` 生成物。
@@ -75,3 +76,11 @@
 ## Git 提交规则
 
 - Git 提交说明必须使用中文，清楚描述本次提交解决的问题或完成的功能。
+
+## Qt Skill 维护规则
+
+- `.agents/skills/` 中的七个 Qt skill 由本项目维护；构建、部署、无显示验证、目录分层等项目事实只在本文件维护，skill 不复制另一套配置。
+- 普通 QML 修改使用编码与界面规则；完整 review 仅在用户明确要求审查时触发，profiler 仅用于性能调查。按实际改动选择检查范围，不固定启动多个代理。
+- Qt Quick Test 的编写、执行和诊断统一使用 `qt-qml-test`，原 `qt-qml-test-run` 已合并。
+- 文档与 Figma 四个低频 skill 位于 `.agents/skills-archive/`，不在普通任务中读取；需要恢复时按该目录说明操作。
+- Qt skill 的原始来源及哈希保存在 `.agents/skills-archive/upstream-lock.json`，本地定制不再列入根目录 `skills-lock.json` 的上游安装集合。更新时人工核对差异，避免覆盖项目规则。

@@ -1,37 +1,9 @@
 ---
 trigger: model_decision
-description: "Apply Qt6 QML best practices when writing or modifying QML code"
+description: 编写、修改或调试 Qt 6 QML 源码时使用，检查绑定、布局和对象生命周期。普通概念问答不触发；不自动启动全面审查、性能采集或测试生成。
 ---
 
-# QML Best Practices
+# qt-qml 平台入口
 
-**Imports (Qt 6)**: No version numbers. No QtQuick.Window when
-QtQuick is imported. Use style-specific import for control
-customization. Qt 5 code requires version numbers.
-
-**Bindings**: Prefer declarative `prop: expr` over imperative `=`.
-Imperative `=` permanently destroys bindings. Cache expensive
-expressions in `readonly property`. No circular dependencies.
-
-**Layouts**: Never mix anchors + Layout.* on same item. Size Layout
-children with Layout.* only -- bare width/height breaks negotiation.
-Do not anchor to invisible items or across tree branches.
-
-**Loader**: Use for conditional UI. Guard item with status check.
-No Qt.createComponent(url) strings -- use inline Component {}.
-createObject() only when parent is dynamic.
-
-**Delegates**: Use `required property` for roles. Keep delegates
-minimal. reuseItems: true (Qt 6.7+), reset in onPooled. No mutable
-JS vars in delegates.
-
-**States**: No `target` in PropertyChanges (Qt 6); use
-`id.prop: val`. Target transitions with from/to.
-
-**Images**: Always set sourceSize. asynchronous: true for network
-or large files. Check Image.status.
-
-**Pitfalls**: `parent` in delegates is the internal container, not
-ListView -- use ListView.view. Dynamic scope is fragile -- use
-explicit id refs. Timer.running defaults to false. Connections
-targets one object -- use multiple blocks for multiple sources.
+仅在任务符合 [SKILL.md](../SKILL.md) 的触发条件时读取并执行该文件。
+使用该文件及其按需参考，不另维护平台专属的规则副本；项目指令优先。

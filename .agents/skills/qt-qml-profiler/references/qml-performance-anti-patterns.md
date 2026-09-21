@@ -1,119 +1,24 @@
-# QML Performance Anti-Pattern Reference
+# QML 性能检查点
 
-Use this reference when analyzing hotspots from a qmlprofiler trace.
-Match the event type and code pattern to identify the root cause.
+按事件类型查找可能原因，再回到源码验证。以下不是自动优化指令。原理可核对 [Qt Quick 性能文档](https://doc.qt.io/qt-6/qtquick-performance.html)。
 
-## Binding (frequent re-evaluation)
+| 事件或现象 | 需要核实的原因 | 验证方向 |
+|---|---|---|
+| Binding 次数多 | 高频输入、通知范围过大、依赖链重复求值 | 对照通知来源与相关属性更新次数 |
+| JavaScript 单次耗时高 | 大数组处理、重复排序、同步 I/O、频繁跨层调用 | 用相同数据规模定位具体函数 |
+| HandlingSignal 密集 | 重复连接、信号反馈循环、一次操作触发多层更新 | 追踪连接生命周期和发射次数 |
+| Creating/Compiling 高 | 委托重复创建、页面反复加载、动态组件编译 | 对照对象数量、复用与 Loader 状态 |
+| SceneGraph/Painting 高 | 图片上传、纹理尺寸、过多效果 pass、过度绘制 | 核实真实渲染后端及场景图证据 |
+| MemoryAllocation 增长 | 重复分配、缓存保留、未释放对象 | 区分临时峰值、持久缓存和可复现泄漏 |
+| PixmapCache 频繁变化 | source/sourceSize 反复改变、图片尺寸过大 | 检查同一操作是否不断重新解码 |
+| 页面隐藏仍有事件 | 计时器、动画、连接、后台加载仍运行 | 对比可见与隐藏状态的同类事件 |
 
-**Symptom:** A `Binding` event with high count and moderate total time.
+## 避免无证据优化
 
-**Common causes:**
-- Binding depends on a property that changes every frame (e.g. animation
-  progress, scroll position)
-- Complex expression in a binding that could be simplified
-- Binding on a property that triggers cascading changes to other bindings
-- Using JavaScript expressions where simple property bindings suffice
-
-**Fixes:**
-- Use `Behavior` or `SmoothedAnimation` instead of re-evaluating each frame
-- Cache computed values in a property and bind to that
-- Break complex bindings into intermediate properties
-- Use `readonly property` for values that don't change after creation
-
-## Javascript (expensive execution)
-
-**Symptom:** A `Javascript` event with high total time, often paired with
-`HandlingSignal`.
-
-**Common causes:**
-- Heavy computation in a signal handler (e.g. rebuilding a model,
-  recalculating layout)
-- Array/object manipulation in JavaScript instead of C++
-- Calling functions that trigger many property changes in sequence
-- String concatenation or formatting in hot paths
-
-**Fixes:**
-- Move heavy computation to C++ (exposed via Q_INVOKABLE or properties)
-- Batch property updates to avoid cascading re-evaluations
-- Use WorkerScript for heavy async computation
-- Cache results instead of recomputing
-
-## HandlingSignal (expensive signal handlers)
-
-**Symptom:** High time in `HandlingSignal`, often with matching `Javascript`
-events at the same location.
-
-**Common causes:**
-- `onCompleted`, `onWidthChanged`, `onHeightChanged` doing too much work
-- Signal handlers that modify many properties, triggering binding cascades
-- Timer-driven handlers running expensive logic every tick
-
-**Fixes:**
-- Debounce frequent signals (e.g. resize) using a short Timer
-- Move logic to C++ if it involves data processing
-- Avoid modifying multiple properties individually — use a single state
-  property that bindings read from
-
-## Creating (slow component instantiation)
-
-**Symptom:** High time in `Creating` events, especially during startup or
-when navigating to new views.
-
-**Common causes:**
-- Large component trees created synchronously
-- Components with many bindings evaluated at creation time
-- Repeater/ListView delegates that are too complex
-- Loading all views upfront instead of on demand
-
-**Fixes:**
-- Use `Loader` with `asynchronous: true` for heavy components
-- Simplify delegates — extract sub-components, reduce binding count
-- Use `StackView` for lazy loading of views
-- Set `visible: false` does NOT prevent creation — use Loader instead
-
-## Compiling (slow QML/JS compilation)
-
-**Symptom:** High time in `Compiling` events, typically at startup.
-
-**Common causes:**
-- Large QML files compiled at first use
-- Files not covered by ahead-of-time compilation (qmlcachegen)
-
-**Fixes:**
-- Ensure qmlcachegen/qmlsc is enabled in the build
-- Split large QML files into smaller components (compiled separately)
-- Preload critical components during splash screen
-
-## SceneGraph / Painting / Animations (rendering bottlenecks)
-
-**Symptom:** High time in `SceneGraph` render/sync phases or `Painting`.
-
-**Common causes:**
-- Too many nodes in the scene graph
-- Frequent clip region changes
-- Large or unoptimized images
-- Overlapping semi-transparent layers causing over-draw
-- Using Canvas/QPainter where scene graph items would suffice
-
-**Fixes:**
-- Reduce node count (combine elements, use `layer.enabled` sparingly)
-- Use `sourceSize` on Image to load at display resolution
-- Avoid `clip: true` on frequently changing items
-- Replace Canvas with Shape or custom QQuickItem if possible
-- Use `OpacityMask` instead of nested transparency
-
-## Memory / PixmapCache
-
-**Symptom:** High memory allocation events or pixmap cache misses.
-
-**Common causes:**
-- Loading full-resolution images when thumbnails suffice
-- Creating and destroying many temporary objects
-- Not setting `sourceSize` on Image elements
-- Cache thrashing from too many unique images
-
-**Fixes:**
-- Set `sourceSize` to the display size on all Image elements
-- Use `asynchronous: true` on Image for off-thread loading
-- Reuse components via `reuseItems: true` in ListView
-- Monitor with `QSG_RENDERER_DEBUG=render` environment variable
+- 增加缓存需要可靠的失效规则；缓存过期数据会把性能改动变成功能缺陷。
+- 拆分组件不必然更快，Loader 延迟创建也可能把成本移到首次交互。
+- 开启委托复用前确认局部状态、计时器和异步回调可以正确重置。
+- 裁剪、透明和 layer 的代价取决于场景；不要把任何 `clip: true` 都解释成离屏渲染。
+- 隐藏对象未必停止计算；销毁效果层也有重建成本，按页面切换频率决定。
+- 仅有平均帧率可能掩盖长尾卡顿；脚本估算的百分位仍需说明采样方法与限制。
+- 修改前后保持构建类型、设备、数据和操作尽量一致，不把冷启动与暖缓存结果直接比较。

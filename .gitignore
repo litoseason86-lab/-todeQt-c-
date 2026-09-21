@@ -20,6 +20,9 @@ CMakeFiles/
 CMakeCache.txt
 compile_commands.json
 
+# 编辑器/语言服务器索引（clangd）
+.cache/
+
 # Local database files
 *.db
 *.sqlite

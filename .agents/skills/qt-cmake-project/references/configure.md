@@ -1,37 +1,11 @@
-# Configure & Build Project
+# 配置与构建诊断
 
-Covers trying out the project by locating framework and tool requirements,
-configuring and building the project.
-
-## Locating Requirements
-
-**Locate cmake and ninja-build** tools so they can be called from command line by using the
-commands `cmake` and `ninja`.
-
-**Locate the installed Qt SDK** by determining the host OS first and then searching for typical
-locations of the framework on that specific OS.
-Keep in mind that in case of development environments, a local Qt installation can reside in the
-user's folder instead of being installed on the system.
-The goal is to find the framework's installation folder which contains toolchain commands in the
-`bin` folder and under it, locate `bin/qt-cmake` command. Use this `qt-cmake` command below for
-all configuration activities.
-If not found or unsure, ask the user.
-
-## Configuring the project for the first time
-
-We prefer doing out-of-tree builds where the build folder is separate outside of the project folder.
-In case of the sample project located in `MyApp` folder, on Unix-like platforms this looks like:
-
-```bash
-mkdir MyApp-build
-cd MyApp-build
-qt-cmake -S ../MyApp -B . -G Ninja
-ninja
-```
-
-## Building from the command line
-
-```bash
-cd MyApp-build
-ninja
-```
+- 先读取项目规则、presets、CMakeCache 和工具链，确认当前源目录、构建目录、Qt 路径与构建类型。
+- 已有 cache 可能持久化测试、部署和调试开关；配置前核对，不把目录名当成配置已正确的证据。
+- 遵守项目指定的构建目录，不直接复制教程中的 `cmake -B build`。
+- 多配置生成器区分 configure 与 build 的配置参数；单配置生成器核对 CMAKE_BUILD_TYPE。
+- Qt 工具、头文件和库应来自匹配安装；换工具链时不要混用旧 cache。
+- 配置失败先处理首个实际错误，构建失败不继续运行或部署旧产物。
+- 修改只影响少量目标时先构建相关目标，必要时再扩大范围。
+- 验证构建与部署构建依项目规则区分；不得因临时验证改变后续部署的持久选项。
+- 报告实际配置和目标结果；应用是否启动另按本轮授权处理。

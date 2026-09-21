@@ -107,6 +107,7 @@ cmake --build ~/pt-build --target deploy-local-app -j8
 ```text
 src/models/            数据模型
 src/services/          C++ 服务层（跨平台业务逻辑）
+src/mcp/               外部 AI 接入（common/ 协议与契约、bridge/ 主应用内的权限与工具分派、helper/ 包内 stdio 辅助程序）
 src/platform/macos/    macOS 原生层（菜单栏 NSStatusItem、通知 UNUserNotificationCenter、全局热键 Carbon，Objective-C++）
 qml/                   QML 界面（views/ 页面、components/ 组件、components/settings/ 设置面板）
 resources/             Qt 资源文件（字体、壁纸、音效）
@@ -115,6 +116,9 @@ cmake/                 构建脚本（DeployLocalApp.cmake：部署到 /Applicat
 tests/                 Qt Test 自动化测试（C++ 用例 + tests/qml/ 的 Qt Quick Test）
 docs/                  当前业务规则与运行命令
 plans/                 当前状态、待评估事项与未采纳决策
+.agents/               协作用 skill（skills/ 活动目录、skills-archive/ 归档与上游来源，规则见 AGENTS.md）
 ```
 
 业务逻辑（标准 C++/Qt）与 macOS 原生代码（`.mm`）保持分离：`src/services` 只依赖平台无关抽象，原生实现放在 `src/platform/macos`。
+
+外部 AI 接入按同样的方式分层：包内辅助程序只编译 `src/mcp/helper` 与 `src/mcp/common`，不链接业务服务与数据库，权限判断和读写一律在主应用内完成（由 `McpHelperLinkGate` 这条测试守门）。
