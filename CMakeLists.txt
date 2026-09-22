@@ -78,6 +78,7 @@ set(APP_SOURCES
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
     src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
     src/services/ExportService.h
     src/services/ExportService.cpp
     src/services/TaskManager.h
@@ -340,6 +341,7 @@ add_executable(PomodoroTodoTests
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
     src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
     src/services/ExportService.h
     src/services/ExportService.cpp
     src/services/TaskManager.h
@@ -417,6 +419,7 @@ add_executable(RobustnessTests
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
     src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
     src/services/TaskManager.h
     src/services/TaskManager.cpp
     src/services/FocusTimer.h

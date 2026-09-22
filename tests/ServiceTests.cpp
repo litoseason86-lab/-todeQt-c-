@@ -32,6 +32,7 @@
 #include "../src/services/GoalService.h"
 #include "../src/services/MonotonicClock.h"
 #include "../src/services/RoutineManager.h"
+#include "../src/services/RoutineRules.h"
 #include "../src/services/StatisticsService.h"
 #include "../src/services/TaskManager.h"
 
@@ -851,6 +852,10 @@ private slots:
     void materializeTodayRollsBackClaimWhenTaskInsertFails();
     void materializeTodayDoesNotResurrectDeletedTask();
     void materializeTodaySkipsInactiveRoutines();
+    void routineWeekdayMaskMatchesIsoWeekdayNumbers();
+    void routineWeekdaysDefaultToEveryDayAndRejectInvalidMask();
+    void materializeTodayOnlyGeneratesOnSelectedWeekdays();
+    void migrationV15AddsRoutineWeekdaysAndKeepsExistingRoutines();
     void freshDatabaseHasRoutineIdColumn();
     void migrationV4DoesNotGuessRoutineLineage();
     void migrationV6ClearsUntrustedRoutineLineage();
@@ -4022,6 +4027,216 @@ void ServiceTests::materializeTodaySkipsInactiveRoutines()
 
     QCOMPARE(manager->materializeToday(), 0);
     QVERIFY(TaskManager::instance()->getTasksByDate(logicalToday()).isEmpty());
+}
+
+void ServiceTests::routineWeekdayMaskMatchesIsoWeekdayNumbers()
+{
+    // 这条用例钉的是整条链路的锚点：界面上的「一」是第 0 位，第 0 位必须是 ISO 的周一。
+    // 其余用例都用 maskForDayOfWeek 自己算今天那一位，等号两边用的是同一个函数——
+    // 整体平移一天（比如写成 1 << dayOfWeek）它们照样全绿，用户却会发现设了周一三五
+    // 任务落在周日二四。所以这里只写字面量，不调用被测函数去解释被测函数。
+    QCOMPARE(RoutineRules::kEveryDayMask, 0b1111111);
+    QCOMPARE(RoutineRules::maskForDayOfWeek(1), 0b0000001);
+    QCOMPARE(RoutineRules::maskForDayOfWeek(2), 0b0000010);
+    QCOMPARE(RoutineRules::maskForDayOfWeek(3), 0b0000100);
+    QCOMPARE(RoutineRules::maskForDayOfWeek(4), 0b0001000);
+    QCOMPARE(RoutineRules::maskForDayOfWeek(5), 0b0010000);
+    QCOMPARE(RoutineRules::maskForDayOfWeek(6), 0b0100000);
+    QCOMPARE(RoutineRules::maskForDayOfWeek(7), 0b1000000);
+
+    // 越界返回 0：与任何合法掩码相与都是 0，调用方据此判定「今天不生成」。
+    QCOMPARE(RoutineRules::maskForDayOfWeek(0), 0);
+    QCOMPARE(RoutineRules::maskForDayOfWeek(8), 0);
+    QCOMPARE(RoutineRules::maskForDayOfWeek(-1), 0);
+
+    // 再用两个确定的日历日把编号焊到真实星期上，防止「1 号位」本身被理解成周日。
+    QCOMPARE(QDate(2026, 9, 21).dayOfWeek(), 1);   // 2026-09-21 是周一
+    QCOMPARE(QDate(2026, 9, 27).dayOfWeek(), 7);   // 2026-09-27 是周日
+    QCOMPARE(RoutineRules::maskForDayOfWeek(QDate(2026, 9, 21).dayOfWeek()), 0b0000001);
+    QCOMPARE(RoutineRules::maskForDayOfWeek(QDate(2026, 9, 27).dayOfWeek()), 0b1000000);
+}
+
+void ServiceTests::routineWeekdaysDefaultToEveryDayAndRejectInvalidMask()
+{
+    RoutineManager* manager = RoutineManager::instance();
+
+    // 省略 weekdays 即「每天」：不传这个参数的老调用方语义必须和加功能之前完全一样。
+    QVERIFY(manager->addRoutine(QStringLiteral("每天例行"), -1));
+    QVariantList routines = manager->getRoutines();
+    QCOMPARE(routines.size(), 1);
+    QCOMPARE(routines.first().toMap().value(QStringLiteral("weekdays")).toInt(),
+             RoutineRules::kEveryDayMask);
+
+    // 掩码 0 是「一天都不选」这种合法零值：类型、范围检查都拦不住它，
+    // 存下去却会让这条例行永远不生成任务，只能靠专门的校验拒绝。
+    QTest::ignoreMessage(QtWarningMsg, "Failed to add routine: invalid weekday mask 0");
+    QVERIFY(!manager->addRoutine(QStringLiteral("空掩码"), -1, 0));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to add routine: invalid weekday mask 128");
+    QVERIFY(!manager->addRoutine(QStringLiteral("越界掩码"), -1, 128));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to add routine: invalid weekday mask -1");
+    QVERIFY(!manager->addRoutine(QStringLiteral("负掩码"), -1, -1));
+    QCOMPARE(manager->getRoutines().size(), 1);
+
+    // 周一、周三、周五 = 1 + 4 + 16。
+    const int monWedFri = 0b0010101;
+    QVERIFY(manager->addRoutine(QStringLiteral("周一三五"), -1, monWedFri));
+    routines = manager->getRoutines();
+    QCOMPARE(routines.size(), 2);
+    const QVariantMap weekly = routines.at(1).toMap();
+    QCOMPARE(weekly.value(QStringLiteral("weekdays")).toInt(), monWedFri);
+
+    const int weeklyId = weekly.value(QStringLiteral("id")).toInt();
+    QVERIFY(weeklyId > 0);
+
+    // 重复日走单独的入口，非法掩码在那里也必须被拒绝。
+    QTest::ignoreMessage(QtWarningMsg, "Failed to set weekdays of routine: invalid weekday mask 0");
+    QVERIFY(!manager->setRoutineWeekdays(weeklyId, 0));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to set weekdays of routine: invalid weekday mask 128");
+    QVERIFY(!manager->setRoutineWeekdays(weeklyId, 128));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to set routine weekdays: routine not found 999999");
+    QVERIFY(!manager->setRoutineWeekdays(999999, monWedFri));
+    const QVariantMap unchanged = manager->getRoutines().at(1).toMap();
+    QCOMPARE(unchanged.value(QStringLiteral("weekdays")).toInt(), monWedFri);
+
+    // 改标题/科目绝不能顺手动重复日：两者是两个入口，SQL 里也各写各的列。
+    // 合成一条语句覆盖写时，少传一个参数就会把「周一三五」静默改回「每天」。
+    QVERIFY(manager->updateRoutine(weeklyId, QStringLiteral("周一三五改名"), -1));
+    const QVariantMap renamed = manager->getRoutines().at(1).toMap();
+    QCOMPARE(renamed.value(QStringLiteral("title")).toString(), QStringLiteral("周一三五改名"));
+    QCOMPARE(renamed.value(QStringLiteral("weekdays")).toInt(), monWedFri);
+
+    // 服务层校验之外，库层也必须挡住非法掩码：以后新增的写路径、外部编辑、损坏的备份
+    // 都不走服务层，只有 CHECK 是最后一道。
+    QSqlQuery rawInsert(DatabaseManager::instance()->database());
+    QVERIFY(rawInsert.prepare(QStringLiteral(
+        "INSERT INTO routines (title, weekdays) VALUES ('库层零掩码', 0)")));
+    QVERIFY(!rawInsert.exec());
+    QSqlQuery rawUpdate(DatabaseManager::instance()->database());
+    QVERIFY(rawUpdate.prepare(QStringLiteral("UPDATE routines SET weekdays = 128")));
+    QVERIFY(!rawUpdate.exec());
+
+    // 周六、周日 = 32 + 64。改重复日同样不该动标题。
+    const int weekend = 0b1100000;
+    QSignalSpy weekdaySpy(manager, &RoutineManager::routinesChanged);
+    QVERIFY(weekdaySpy.isValid());
+    QVERIFY(manager->setRoutineWeekdays(weeklyId, weekend));
+    QCOMPARE(weekdaySpy.count(), 1);
+    const QVariantMap updated = manager->getRoutines().at(1).toMap();
+    QCOMPARE(updated.value(QStringLiteral("title")).toString(), QStringLiteral("周一三五改名"));
+    QCOMPARE(updated.value(QStringLiteral("weekdays")).toInt(), weekend);
+}
+
+void ServiceTests::materializeTodayOnlyGeneratesOnSelectedWeekdays()
+{
+    RoutineManager* manager = RoutineManager::instance();
+
+    // 用例不能假设今天是周几，否则一周里只有一天能通过。按逻辑日算出今天那一位，
+    // 再分别构造「命中今天」和「刚好避开今天」的掩码。
+    const int todayBit = RoutineRules::maskForDayOfWeek(logicalToday().dayOfWeek());
+    QVERIFY(todayBit > 0);
+    const int withoutToday = RoutineRules::kEveryDayMask & ~todayBit;
+
+    QVERIFY(manager->addRoutine(QStringLiteral("今天要做"), -1, todayBit));
+    QVERIFY(manager->addRoutine(QStringLiteral("今天不做"), -1, withoutToday));
+
+    QCOMPARE(manager->materializeToday(), 1);
+    const QVariantList tasks = TaskManager::instance()->getTasksByDate(logicalToday());
+    QCOMPARE(tasks.size(), 1);
+    QCOMPARE(tasks.first().toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("今天要做"));
+
+    // 今天不命中的例行不能被盖上今天的生成戳。盖了的话它照样「今天已生成」，
+    // 真正该出现的那天反而会被当成重复而跳过——错误只会晚几天才显形。
+    QSqlQuery stamp(DatabaseManager::instance()->database());
+    stamp.prepare(QStringLiteral("SELECT last_generated_date FROM routines WHERE title = :title"));
+    stamp.bindValue(QStringLiteral(":title"), QStringLiteral("今天不做"));
+    QVERIFY2(stamp.exec(), qPrintable(stamp.lastError().text()));
+    QVERIFY(stamp.next());
+    QVERIFY(stamp.value(0).isNull());
+
+    // 重复日改成每天之后，同一天再刷新就应该补出来：生成按当前设置算，不看改之前的设置。
+    const int skippedId = manager->getRoutines().at(1).toMap().value(QStringLiteral("id")).toInt();
+    QVERIFY(skippedId > 0);
+QVERIFY(manager->setRoutineWeekdays(skippedId, RoutineRules::kEveryDayMask));
+    QCOMPARE(manager->materializeToday(), 1);
+    QCOMPARE(TaskManager::instance()->getTasksByDate(logicalToday()).size(), 2);
+
+    // 幂等性不能因为加了星期条件而破掉：同一天再跑一次仍然是 0 条。
+    QCOMPARE(manager->materializeToday(), 0);
+    QCOMPARE(TaskManager::instance()->getTasksByDate(logicalToday()).size(), 2);
+}
+
+void ServiceTests::migrationV15AddsRoutineWeekdaysAndKeepsExistingRoutines()
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+
+    // 把 routines 换回 v14 形态（没有 weekdays 列）。外键开关要在事务外关掉，
+    // 否则 DROP 旧表会触发 tasks 上的级联动作；重建完立刻恢复。
+    QVERIFY2(query.exec(QStringLiteral("PRAGMA foreign_keys = OFF")),
+             qPrintable(query.lastError().text()));
+    QVERIFY2(query.exec(QStringLiteral(R"SQL(
+        CREATE TABLE routines_v14 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+            category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            display_order INTEGER NOT NULL DEFAULT 0,
+            last_generated_date TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    )SQL")),
+             qPrintable(query.lastError().text()));
+    QVERIFY2(query.exec(QStringLiteral(
+                 "INSERT INTO routines_v14 (title, active, display_order, last_generated_date) "
+                 "VALUES ('升级前的例行', 1, 3, '2026-06-10')")),
+             qPrintable(query.lastError().text()));
+    QVERIFY2(query.exec(QStringLiteral("DROP TABLE routines")),
+             qPrintable(query.lastError().text()));
+    QVERIFY2(query.exec(QStringLiteral("ALTER TABLE routines_v14 RENAME TO routines")),
+             qPrintable(query.lastError().text()));
+    QVERIFY2(query.exec(QStringLiteral("PRAGMA foreign_keys = ON")),
+             qPrintable(query.lastError().text()));
+    QVERIFY2(query.exec(QStringLiteral("PRAGMA user_version = 14")),
+             qPrintable(query.lastError().text()));
+
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    // 既有例行原样保留，并按「每天」回落：升级前它天天生成，升级后也必须天天生成。
+    QVERIFY2(query.exec(QStringLiteral(
+                 "SELECT title, active, display_order, last_generated_date, weekdays FROM routines")),
+             qPrintable(query.lastError().text()));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toString(), QStringLiteral("升级前的例行"));
+    QCOMPARE(query.value(1).toInt(), 1);
+    QCOMPARE(query.value(2).toInt(), 3);
+    QCOMPARE(query.value(3).toString(), QStringLiteral("2026-06-10"));
+    QCOMPARE(query.value(4).toInt(), RoutineRules::kEveryDayMask);
+    QVERIFY(!query.next());
+
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+
+    // DROP TABLE 会把表上的索引一起带走；建表收尾那一步必须把它重新建回来。
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_routines_active'")));
+    QVERIFY(query.next());
+
+    // ALTER TABLE ADD COLUMN 带的 CHECK 是否真的生效，必须在迁移出来的库上验一次：
+    // 只验新建库的话，旧用户升上来的那张表可能没有任何库层约束，而那正是最需要兜底的一张。
+    QSqlQuery rawInsert(DatabaseManager::instance()->database());
+    QVERIFY(rawInsert.prepare(QStringLiteral(
+        "INSERT INTO routines (title, weekdays) VALUES ('迁移后零掩码', 0)")));
+    QVERIFY(!rawInsert.exec());
+    QSqlQuery rawUpdate(DatabaseManager::instance()->database());
+    QVERIFY(rawUpdate.prepare(QStringLiteral("UPDATE routines SET weekdays = -1")));
+    QVERIFY(!rawUpdate.exec());
+
+    // 重跑一次不应再改动任何东西：结构守卫看的是列在不在，不是版本号。
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QVERIFY(query.exec(QStringLiteral("SELECT weekdays FROM routines")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), RoutineRules::kEveryDayMask);
 }
 
 void ServiceTests::freshDatabaseHasRoutineIdColumn()

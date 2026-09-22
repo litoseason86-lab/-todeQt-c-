@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../qml/components"
 import "../../qml"
+import "../../qml/RoutineWeekdays.js" as Weekdays
 
 TestCase {
     id: testCase
@@ -17,6 +18,11 @@ TestCase {
     property int updatedRoutineId: -1
     property string updatedTitle: ""
     property int updatedCategoryId: -999
+    property var lastWeekdays: -999
+    property var updatedWeekdays: -999
+    property int weekdaysCalls: 0
+    property int weekdaysRoutineId: -1
+    property bool weekdaysResult: true
     property int deletedId: -1
     property bool addResult: true
     property bool updateResult: true
@@ -36,9 +42,11 @@ TestCase {
             return testCase.added
         }
 
-        function addRoutine(title, categoryId) {
+        function addRoutine(title, categoryId, weekdays) {
             testCase.addCalls += 1
             testCase.lastCategoryId = categoryId
+            // 弹窗不再传重复日；留着这个形参是为了记录「确实没传」（undefined）。
+            testCase.lastWeekdays = weekdays
             if (!testCase.addResult) {
                 return false
             }
@@ -49,7 +57,9 @@ TestCase {
                 categoryName: categoryId === 7 ? "数学" : "",
                 categoryColor: categoryId === 7 ? "#d4a574" : "",
                 active: true,
-                displayOrder: 0
+                displayOrder: 0,
+                // 服务层对省略的 weekdays 按「每天」落地，替身照做。
+                weekdays: weekdays === undefined ? 0x7F : weekdays
             }])
             routinesChanged()
             return true
@@ -62,11 +72,13 @@ TestCase {
             return true
         }
 
-        function updateRoutine(id, title, categoryId) {
+        function updateRoutine(id, title, categoryId, weekdays) {
             testCase.updateCalls += 1
             testCase.updatedRoutineId = id
             testCase.updatedTitle = title
             testCase.updatedCategoryId = categoryId
+            // 改标题/科目不该带重复日过来；记下来好断言它确实是 undefined。
+            testCase.updatedWeekdays = weekdays
             if (!testCase.updateResult) {
                 return false
             }
@@ -82,7 +94,9 @@ TestCase {
                     categoryName: categoryId === 7 ? "数学" : "",
                     categoryColor: categoryId === 7 ? "#d4a574" : "",
                     active: item.active,
-                    displayOrder: item.displayOrder
+                    displayOrder: item.displayOrder,
+                    // 重复日由 setRoutineWeekdays 单独写，更新标题时原样保留。
+                    weekdays: item.weekdays
                 }
             })
             routinesChanged()
@@ -90,6 +104,27 @@ TestCase {
         }
 
         function setRoutineActive(id, active) {
+            return true
+        }
+
+        function setRoutineWeekdays(id, weekdays) {
+            testCase.weekdaysCalls += 1
+            testCase.weekdaysRoutineId = id
+            testCase.lastWeekdays = weekdays
+            if (!testCase.weekdaysResult) {
+                return false
+            }
+            testCase.added = testCase.added.map(function(item) {
+                if (item.id !== id) {
+                    return item
+                }
+                return {
+                    id: item.id, title: item.title, categoryId: item.categoryId,
+                    categoryName: item.categoryName, categoryColor: item.categoryColor,
+                    active: item.active, displayOrder: item.displayOrder, weekdays: weekdays
+                }
+            })
+            routinesChanged()
             return true
         }
     }
@@ -125,6 +160,11 @@ TestCase {
         testCase.updatedRoutineId = -1
         testCase.updatedTitle = ""
         testCase.updatedCategoryId = -999
+        testCase.lastWeekdays = -999
+        testCase.updatedWeekdays = -999
+        testCase.weekdaysCalls = 0
+        testCase.weekdaysRoutineId = -1
+        testCase.weekdaysResult = true
         testCase.deletedId = -1
         testCase.addResult = true
         testCase.updateResult = true
@@ -132,9 +172,35 @@ TestCase {
         fakeCategoryManager.failLoad = false
         dialog.routineManagerRef = fakeRoutineManager
         dialog.categoryManagerRef = fakeCategoryManager
+        // 重复弹窗是套在本弹窗上的第二层 Popup：上一条用例开着它离开，
+        // 会挡住后面用例的点击（用例按函数名字母序跑，不是书写顺序）。
+        dialog.weekdayDialogRef.close()
+        // 切过主题的用例若中途失败就来不及还原；每条用例开始前统一回到暖色主题。
+        Theme.activeThemeId = "warm"
         dialog.close()
         // Popup 有退出过渡；等真正关闭后再开启，避免下个用例沿用上次列表模型。
         tryCompare(dialog, "opened", false, 3000)
+    }
+
+    // 列表行由 ListView 生成，和 Repeater 委托一样从弹窗根 findChild 找不到；
+    // 只能从 contentItem 的子项里按业务属性挑出想要的那一行。
+    function routineRowWith(activeState) {
+        var list = findChild(dialog, "routineListView")
+        verify(list !== null)
+        // 委托不是 open() 一返回就有的。刚打开就直接取，机器被并行任务抢占时会取到空，
+        // 于是「布局还没铺开」被误判成「行不存在」。等它出现，条件成立就立刻返回，不浪费时间。
+        var found = null
+        tryVerify(function() {
+            var kids = list.contentItem.children
+            for (var i = 0; i < kids.length; ++i) {
+                if (kids[i].routineActive === activeState) {
+                    found = kids[i]
+                    return true
+                }
+            }
+            return false
+        }, 3000, "等不到 active=" + activeState + " 的例行行")
+        return found
     }
 
     function test_addRoutineShowsInList() {
@@ -345,6 +411,144 @@ TestCase {
         tryCompare(dialog, "editingRoutineId", -1)
         compare(input.text, "")
         tryCompare(submitButton, "text", "添加")
+        dialog.close()
+    }
+
+    function test_addAndEditNeverTouchWeekdays() {
+        // 新增表单不再有星期控件：重复日交给服务层的默认值（每天），
+        // 改标题/科目也不该顺手把它带过去覆盖掉。这两件事各由一个入口负责。
+        dialog.open()
+        tryCompare(dialog, "opened", true, 3000)
+
+        var input = findChild(dialog, "routineTitleField")
+        verify(input !== null)
+        input.text = "背单词"
+        dialog.submit()
+
+        compare(testCase.addCalls, 1)
+        compare(testCase.lastWeekdays, undefined)
+        compare(testCase.added[0].weekdays, 0x7F)
+
+        // 把它改成周一三五，再改标题，重复日必须原样还在。
+        verify(fakeRoutineManager.setRoutineWeekdays(testCase.added[0].id, 0x15))
+        dialog.beginEditing(dialog.routines[0])
+        tryCompare(dialog, "editingRoutineId", testCase.added[0].id)
+        input.text = "背单词 2"
+        dialog.submit()
+
+        compare(testCase.updateCalls, 1)
+        compare(testCase.updatedWeekdays, undefined)
+        compare(testCase.added[0].weekdays, 0x15)
+        dialog.close()
+    }
+
+    function test_weekdayStripLightsExactlyTheSelectedDays() {
+        // 列表行里没有文字了，这七个点就是唯一能看出「哪几天」的东西：
+        // 点亮的位置必须和掩码逐位一致，第 i 个点对应第 i 位（0 = 周一）。
+        // 整排画反或错位一天，界面照样好看，用户却会按错误的节奏安排一整周。
+        var masks = [0x7F, 0x1F, 0x60, 0x01, 0x15, 0x2B, 0x3B, 0x5F]
+        dialog.open()
+        tryCompare(dialog, "opened", true, 3000)
+
+        for (var i = 0; i < masks.length; ++i) {
+            var mask = masks[i]
+            testCase.added = [{
+                id: 1, title: "例行", categoryId: -1, categoryName: "", categoryColor: "",
+                active: true, displayOrder: 1, weekdays: mask
+            }]
+            fakeRoutineManager.routinesChanged()
+
+            // 等到这一行的点阵换成当前掩码再断言，避免读到上一轮还没被替换掉的委托。
+            var strip = null
+            tryVerify(function() {
+                var row = testCase.routineRowWith(true)
+                if (row === null) {
+                    return false
+                }
+                var candidate = findChild(row, "routineWeekdayStrip")
+                if (candidate === null || candidate.weekdaysMask !== mask) {
+                    return false
+                }
+                strip = candidate
+                return true
+            }, 3000, "等不到掩码 " + mask + " 的点阵")
+
+            for (var day = 0; day < 7; ++day) {
+                var mark = findChild(strip.contentItem, "routineWeekdayMark" + day)
+                verify(mark !== null, "缺第 " + day + " 个点")
+                compare(mark.lit, (mask & (1 << day)) !== 0,
+                        "掩码 " + mask + " 的第 " + day + " 个点亮灭不对")
+            }
+        }
+        dialog.close()
+    }
+
+    function test_weekdayStripKeepsTextInAccessibleNameAndTooltip() {
+        // 点阵没有文字，读屏和悬停提示就是唯一的文字出口，不能只剩一个没名字的按钮。
+        testCase.added = [{
+            id: 1, title: "计算机网络", categoryId: -1, categoryName: "", categoryColor: "",
+            active: true, displayOrder: 1, weekdays: 0x15
+        }]
+        dialog.open()
+        tryCompare(dialog, "opened", true, 3000)
+
+        var strip = findChild(testCase.routineRowWith(true), "routineWeekdayStrip")
+        verify(strip !== null)
+        // 悬停提示在源码里就绑到 Accessible.name，断言这一处即可覆盖两者的文案；
+        // ToolTip 是附加属性，从对象外部读到的是 undefined，测不了。
+        compare(strip.Accessible.name, "重复：周一三五，点击修改")
+        dialog.close()
+    }
+
+    function test_weekdayPillOpensDialogForThatRoutine() {
+        testCase.added = [
+            { id: 42, title: "计算机网络", categoryId: -1, categoryName: "", categoryColor: "",
+              active: true, displayOrder: 1, weekdays: 0x15 }
+        ]
+        dialog.open()
+        tryCompare(dialog, "opened", true, 3000)
+
+        var strip = findChild(testCase.routineRowWith(true), "routineWeekdayStrip")
+        verify(strip !== null)
+        compare(dialog.weekdayDialogRef.opened, false)
+
+        mouseClick(strip)
+        tryCompare(dialog.weekdayDialogRef, "opened", true, 3000)
+        // 打开的必须是这一行对应的那条例行，并带着它当前的重复日。
+        compare(dialog.weekdayDialogRef.routineId, 42)
+        compare(dialog.weekdayDialogRef.routineTitle, "计算机网络")
+        compare(dialog.weekdayDialogRef.selectedWeekdays, 0x15)
+
+        dialog.weekdayDialogRef.close()
+        dialog.close()
+    }
+
+    function test_disabledRoutineRowRecedesInBothThemes() {
+        testCase.added = [
+            { id: 1, title: "启用的", categoryId: -1, categoryName: "", categoryColor: "",
+              active: true, displayOrder: 1, weekdays: 0x7F },
+            { id: 2, title: "停用的", categoryId: -1, categoryName: "", categoryColor: "",
+              active: false, displayOrder: 2, weekdays: 0x7F }
+        ]
+        dialog.open()
+        tryCompare(dialog, "opened", true, 3000)
+
+        // 「停用」靠整行沉下去来表达，而这件事必须在明暗两套主题下同时成立。
+        // surfaceRaised 在浅色下比 surface 深、在夜间主题下却比它亮：拿它做停用底色，
+        // 白天没问题，夜里停用行反而是整列最亮最扎眼的一条，而且不会有任何测试变红。
+        var themes = ["warm", "starry"]
+        for (var i = 0; i < themes.length; ++i) {
+            Theme.activeThemeId = themes[i]
+            var activeRow = testCase.routineRowWith(true)
+            var inactiveRow = testCase.routineRowWith(false)
+            verify(activeRow !== null)
+            verify(inactiveRow !== null)
+            verify(Theme.relativeLuminance(inactiveRow.color)
+                   < Theme.relativeLuminance(activeRow.color),
+                   themes[i] + " 主题下停用行底色必须比正常行更暗")
+        }
+
+        Theme.activeThemeId = "warm"
         dialog.close()
     }
 

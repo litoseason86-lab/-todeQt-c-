@@ -4,6 +4,7 @@
 #include "CategoryManager.h"
 #include "DatabaseManager.h"
 #include "LogicalDay.h"
+#include "RoutineRules.h"
 #include "TaskManager.h"
 
 #include <QDate>
@@ -26,6 +27,19 @@ QVariant nullableCategoryId(int categoryId)
     // categoryId <= 0 是 QML 层传入的“未选择科目”哨兵值，数据库里必须落成 NULL，
     // 这样删除科目和左连接查询都能保持统一语义。
     return categoryId > 0 ? QVariant(categoryId) : QVariant();
+}
+
+bool routineWeekdaysAreValid(int weekdays, const char* action)
+{
+    // 掩码越界（含 0「一天都不选」）一律拒绝：存下去的话这条例行再也不会生成任务，
+    // 用户只会看到「保存成功但任务没出现」，查不出原因。
+    if (!RoutineRules::isValidWeekdayMask(weekdays)) {
+        qWarning().noquote() << QStringLiteral("Failed to %1 routine: invalid weekday mask")
+                                    .arg(QString::fromLatin1(action))
+                             << weekdays;
+        return false;
+    }
+    return true;
 }
 
 bool routineCategoryExists(QSqlDatabase& db, int categoryId, const char* action)
@@ -73,7 +87,7 @@ void RoutineManager::reportFailure(const QString& message) const
     emit const_cast<RoutineManager*>(this)->operationFailed(message);
 }
 
-bool RoutineManager::addRoutine(const QString& title, int categoryId)
+bool RoutineManager::addRoutine(const QString& title, int categoryId, int weekdays)
 {
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
@@ -84,6 +98,10 @@ bool RoutineManager::addRoutine(const QString& title, int categoryId)
     if (normalizedTitle.size() > TaskManager::kMaxTitleLength) {
         qWarning() << "Failed to add routine: title exceeds"
                    << TaskManager::kMaxTitleLength << "characters";
+        return false;
+    }
+
+    if (!routineWeekdaysAreValid(weekdays, "add")) {
         return false;
     }
 
@@ -105,11 +123,12 @@ bool RoutineManager::addRoutine(const QString& title, int categoryId)
 
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "INSERT INTO routines (title, category_id, display_order) "
-        "VALUES (:title, :categoryId, :displayOrder)"));
+        "INSERT INTO routines (title, category_id, display_order, weekdays) "
+        "VALUES (:title, :categoryId, :displayOrder, :weekdays)"));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
     query.bindValue(QStringLiteral(":categoryId"), nullableCategoryId(categoryId));
     query.bindValue(QStringLiteral(":displayOrder"), orderQuery.value(0).toInt());
+    query.bindValue(QStringLiteral(":weekdays"), weekdays);
 
     if (!query.exec()) {
         qWarning() << "Failed to add routine:" << query.lastError().text();
@@ -148,6 +167,8 @@ bool RoutineManager::updateRoutine(int id, const QString& title, int categoryId)
     }
 
     QSqlQuery query(db);
+    // 这条语句刻意不出现 weekdays：改标题/科目与改重复日是两个独立入口，
+    // 谁也不该顺手覆盖对方。重复日走 setRoutineWeekdays。
     query.prepare(QStringLiteral(
         "UPDATE routines SET title = :title, category_id = :categoryId WHERE id = :id"));
     query.bindValue(QStringLiteral(":title"), normalizedTitle);
@@ -257,6 +278,44 @@ bool RoutineManager::setRoutineActive(int id, bool active)
     return true;
 }
 
+bool RoutineManager::setRoutineWeekdays(int id, int weekdays)
+{
+    if (id <= 0) {
+        qWarning() << "Failed to set routine weekdays: invalid id" << id;
+        return false;
+    }
+
+    if (!routineWeekdaysAreValid(weekdays, "set weekdays of")) {
+        return false;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to set routine weekdays: database is not open";
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("UPDATE routines SET weekdays = :weekdays WHERE id = :id"));
+    query.bindValue(QStringLiteral(":weekdays"), weekdays);
+    query.bindValue(QStringLiteral(":id"), id);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to set routine weekdays:" << query.lastError().text();
+        return false;
+    }
+
+    if (query.numRowsAffected() == 0) {
+        qWarning() << "Failed to set routine weekdays: routine not found" << id;
+        return false;
+    }
+
+    // 改重复日不回收也不补发已经生成的任务，只影响之后的生成；
+    // 列表要立刻显示新的重复日，所以照常发变更信号。
+    emit routinesChanged();
+    return true;
+}
+
 QVariantList RoutineManager::getRoutines() const
 {
     QVariantList routines;
@@ -269,7 +328,8 @@ QVariantList RoutineManager::getRoutines() const
 
     QSqlQuery query(db);
     if (!query.exec(QStringLiteral(
-            "SELECT r.id, r.title, r.category_id, c.name, c.color, r.active, r.display_order "
+            "SELECT r.id, r.title, r.category_id, c.name, c.color, r.active, r.display_order, "
+            "r.weekdays "
             "FROM routines r "
             "LEFT JOIN categories c ON c.id = r.category_id "
             "ORDER BY r.display_order ASC, r.id ASC"))) {
@@ -287,6 +347,8 @@ QVariantList RoutineManager::getRoutines() const
         routine.insert(QStringLiteral("categoryColor"), query.value(4));
         routine.insert(QStringLiteral("active"), query.value(5).toBool());
         routine.insert(QStringLiteral("displayOrder"), query.value(6).toInt());
+        // 重复日只把位掩码原样交给 QML；星期文案由界面层拼，服务层不生产展示字符串。
+        routine.insert(QStringLiteral("weekdays"), query.value(7).toInt());
         routines.append(routine);
     }
 
@@ -303,8 +365,11 @@ int RoutineManager::materializeToday()
     }
 
     // 例行任务属于逻辑日；凌晨日界点前生成时仍应落在前一天。
-    const QString today = LogicalDay::today(
-                              AppSettings::instance()->dayStartHour()).toString(Qt::ISODate);
+    const QDate todayDate = LogicalDay::today(AppSettings::instance()->dayStartHour());
+    const QString today = todayDate.toString(Qt::ISODate);
+    // 星期同样按逻辑日取：凌晨 2 点（默认日界前）做的例行属于昨天那一档，
+    // 若改用自然日的星期，周一凌晨会错按「周一」去生成周日的例行。
+    const int todayWeekdayMask = RoutineRules::maskForDayOfWeek(todayDate.dayOfWeek());
 
     QList<DueRoutine> dueRoutines;
     QSqlQuery dueQuery(db);
@@ -312,9 +377,11 @@ int RoutineManager::materializeToday()
         "SELECT id, title, category_id "
         "FROM routines "
         "WHERE active = 1 "
+        "AND (weekdays & :weekdayMask) != 0 "
         "AND (last_generated_date IS NULL OR last_generated_date < :today) "
         "ORDER BY display_order ASC, id ASC"));
     dueQuery.bindValue(QStringLiteral(":today"), today);
+    dueQuery.bindValue(QStringLiteral(":weekdayMask"), todayWeekdayMask);
 
     if (!dueQuery.exec()) {
         qWarning() << "Failed to materialize routines:" << dueQuery.lastError().text();
@@ -349,8 +416,10 @@ int RoutineManager::materializeToday()
             "SET last_generated_date = :today "
             "WHERE id = :id "
             "AND active = 1 "
+            "AND (weekdays & :weekdayMask) != 0 "
             "AND (last_generated_date IS NULL OR last_generated_date < :today)"));
         claimRoutine.bindValue(QStringLiteral(":today"), today);
+        claimRoutine.bindValue(QStringLiteral(":weekdayMask"), todayWeekdayMask);
         claimRoutine.bindValue(QStringLiteral(":id"), routine.id);
 
         // 先用条件 UPDATE 抢占本次生成权。即使多个实例同时读到同一个 due routine，

@@ -2,6 +2,7 @@
 
 #include "SnapshotRetention.h"
 #include "FocusSessionRules.h"
+#include "RoutineRules.h"
 
 #include <QDebug>
 #include <QCoreApplication>
@@ -456,6 +457,15 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // v15 给 routines 增加重复日位掩码。列缺失时无论版本号都要补，与前面几步同理防御半迁移状态：
+    // 缺了这一列，例行生成查询会直接报错，整张今日清单都不再自动补例行任务。
+    if (version < 15 || !columnExists(QStringLiteral("routines"), QStringLiteral("weekdays"))) {
+        if (!migrateToVersion15()) {
+            return false;
+        }
+        version = 15;
+    }
+
     // 节次表存在但一行都没有，同样是「按节次」版式画不出任何行的那种坏状态
     // （中断的恢复、外部编辑都会留下它）。上面的守卫只看表在不在，治不了这种；
     // 这里无条件补种一次。insertDefaultSchedulePeriods 自己按「表为空」加了守卫，
@@ -611,6 +621,9 @@ bool DatabaseManager::createCategoriesTable()
 bool DatabaseManager::createRoutinesTable()
 {
     QSqlQuery query(m_db);
+    // weekdays 是重复日位掩码（第 0 位周一 … 第 6 位周日），默认「每天」。
+    // 它写在 created_at 之后，是为了和 v15 用 ALTER TABLE ADD COLUMN 追加的位置一致：
+    // 新建库与升级库的列顺序必须相同，否则任何按位置取值的读法都会在两条路径上分叉。
     const QString createRoutines = QStringLiteral(R"SQL(
         CREATE TABLE IF NOT EXISTS routines (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -619,9 +632,13 @@ bool DatabaseManager::createRoutinesTable()
             active INTEGER NOT NULL DEFAULT 1,
             display_order INTEGER NOT NULL DEFAULT 0,
             last_generated_date TEXT,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            weekdays INTEGER NOT NULL DEFAULT %1 CHECK(weekdays BETWEEN %2 AND %3)
         )
-    )SQL");
+    )SQL")
+                                       .arg(RoutineRules::kEveryDayMask)
+                                       .arg(RoutineRules::kMinWeekdayMask)
+                                       .arg(RoutineRules::kMaxWeekdayMask);
     return execSql(query, createRoutines, "Failed to create routines table:");
 }
 
@@ -1735,6 +1752,46 @@ bool DatabaseManager::migrateToVersion14()
     }
 
     qInfo() << "Database migrated to version 14";
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion15()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+
+    // v15 只给 routines 追加一列，既有行一律取默认值「每天」，升级前后的生成行为完全一致；
+    // 不读也不写任何其它表，因此与 v3/v13/v14 一样不建迁移快照。
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start database migration transaction:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    // 列可能已经存在：全新库在 v3 建表时就带上了这一列，走到这里只需要把版本号推上去。
+    if (!columnExists(QStringLiteral("routines"), QStringLiteral("weekdays"))) {
+        const QString addColumn =
+            QStringLiteral("ALTER TABLE routines ADD COLUMN weekdays INTEGER NOT NULL "
+                           "DEFAULT %1 CHECK(weekdays BETWEEN %2 AND %3)")
+                .arg(RoutineRules::kEveryDayMask)
+                .arg(RoutineRules::kMinWeekdayMask)
+                .arg(RoutineRules::kMaxWeekdayMask);
+        if (!query.exec(addColumn)) {
+            qWarning() << "Failed to add routines.weekdays column:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    if (!setDatabaseVersion(15) || !m_db.commit()) {
+        qWarning() << "Failed to commit version 15 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 15";
     return true;
 }
 

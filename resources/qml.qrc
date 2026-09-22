@@ -7,6 +7,7 @@
         <file alias="qml/GoalForecast.js">../qml/GoalForecast.js</file>
         <file alias="qml/ScheduleWeeks.js">../qml/ScheduleWeeks.js</file>
         <file alias="qml/HeatmapBands.js">../qml/HeatmapBands.js</file>
+        <file alias="qml/RoutineWeekdays.js">../qml/RoutineWeekdays.js</file>
         <file alias="qml/StartupErrorWindow.qml">../qml/StartupErrorWindow.qml</file>
         <file alias="qml/main.qml">../qml/main.qml</file>
         <file alias="qml/MainWindow.qml">../qml/MainWindow.qml</file>
@@ -90,6 +91,7 @@
         <file alias="qml/components/ColorPicker.qml">../qml/components/ColorPicker.qml</file>
         <file alias="qml/components/CategoryDialog.qml">../qml/components/CategoryDialog.qml</file>
         <file alias="qml/components/RoutineDialog.qml">../qml/components/RoutineDialog.qml</file>
+        <file alias="qml/components/RoutineWeekdayDialog.qml">../qml/components/RoutineWeekdayDialog.qml</file>
         <file alias="qml/components/ExportDialog.qml">../qml/components/ExportDialog.qml</file>
         <file alias="qml/components/BackupOperationOverlay.qml">../qml/components/BackupOperationOverlay.qml</file>
         <file alias="qml/components/PhaseCompletionCoordinator.qml">../qml/components/PhaseCompletionCoordinator.qml</file>
