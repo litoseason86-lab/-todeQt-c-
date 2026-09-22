@@ -84,20 +84,50 @@ TestCase {
         compare(pair.enteredMinutes, 180)
     }
 
-    function test_empty_field_is_not_acceptable() {
-        var pair = makePair({ namePrefix: "probe" })
+    function test_blank_field_counts_as_zero_when_the_other_has_a_value() {
+        var pair = makePair({ totalMinutes: 90, namePrefix: "probe" })
         var hour = findChildByObjectName(pair, "probeHourField")
         var minute = findChildByObjectName(pair, "probeMinuteField")
 
+        // 把分钟删掉的意思是「整点」，不是「没填」——这是用户真会做的动作：
+        // 填了 1 小时，就懒得再去分钟框里打个 0。以前这里会弹「请输入有效的小时和分钟」。
+        minute.text = ""
+        compare(pair.acceptable, true)
+        compare(pair.validationError, "")
+        compare(pair.enteredMinutes, 60)
+
+        // 反过来同理：只填分钟，小时留空。
+        minute.text = "30"
+        hour.text = ""
+        compare(pair.acceptable, true)
+        compare(pair.validationError, "")
+        compare(pair.enteredMinutes, 30)
+    }
+
+    function test_blank_cannot_be_used_to_reach_zero() {
+        var pair = makePair({ totalMinutes: 90, namePrefix: "probe" })
+        var hour = findChildByObjectName(pair, "probeHourField")
+        var minute = findChildByObjectName(pair, "probeMinuteField")
+
+        // 两个都空：什么都没填。
+        hour.text = ""
         minute.text = ""
         compare(pair.acceptable, false)
-        // 空串必须报错而不是静默按 0 处理——否则用户清空后一提交就把预计用时抹掉了。
         compare(pair.enteredMinutes, 0)
         verify(pair.validationError.length > 0)
 
-        minute.text = "30"
-        hour.text = ""
+        // 0 小时 + 空分钟：算出来也是 0。这一侧同样要挡——静默存成 0 就等于把
+        // 已设好的预计用时抹掉了，而用户可能只是清空准备重打。
+        hour.text = "0"
+        minute.text = ""
         compare(pair.acceptable, false)
+        verify(pair.validationError.length > 0)
+
+        // 要归零必须明确写 0：两个框都填 0 是合法的「不设预计用时」。
+        minute.text = "0"
+        compare(pair.acceptable, true)
+        compare(pair.validationError, "")
+        compare(pair.enteredMinutes, 0)
     }
 
     function test_upper_bound_message_distinguishes_the_cap_hour() {

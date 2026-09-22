@@ -12,17 +12,48 @@ TestCase {
 
     property var submittedChanges: null
     property int addCalls: 0
+    property int submittedMinutes: -1
     ManualSessionDialog {
         id: dialog
         parent: testCase
         editHandler: function(id, changes) { testCase.submittedChanges = changes; return "" }
-        submitHandler: function() { testCase.addCalls++; return "" }
+        submitHandler: function(id, start, minutes, taskId) {
+            testCase.addCalls++
+            testCase.submittedMinutes = minutes
+            return ""
+        }
     }
     function init() {
         submittedChanges = null
         addCalls = 0
+        submittedMinutes = -1
     }
     function cleanup() { dialog.close() }
+    function test_blankMinuteFieldMeansZeroMinutes() {
+        // 用户真会做的动作：填「1 小时」，分钟框直接删空就提交。
+        // 以前这里弹的是「请输入有效的小时和分钟」，必须回去补一个 0 才录得进去。
+        dialog.openForAdd("2026-09-22", [])
+        findChild(dialog, "manualSessionDurationHourField").text = "1"
+        findChild(dialog, "manualSessionDurationMinuteField").text = ""
+        dialog.submit()
+
+        compare(dialog.errorText, "")
+        compare(addCalls, 1)
+        compare(submittedMinutes, 60)
+    }
+
+    function test_bothDurationFieldsBlankStillReportsError() {
+        // 两个框都空是「什么都没填」：这时不能静默按 0 提交，否则用户只是清空准备重打，
+        // 手一滑就录进一条时长为 0 的记录。
+        dialog.openForAdd("2026-09-22", [])
+        findChild(dialog, "manualSessionDurationHourField").text = ""
+        findChild(dialog, "manualSessionDurationMinuteField").text = ""
+        dialog.submit()
+
+        compare(addCalls, 0)
+        verify(dialog.errorText.length > 0)
+    }
+
     function test_invalidDateIsNotNormalized() {
         dialog.openForAdd("2026-02-31", [])
         dialog.submit()

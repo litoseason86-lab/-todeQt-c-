@@ -14,6 +14,7 @@ import ".."
 //
 // 校验分工：这里只管形式合法性（能不能解析、有没有超过上限），
 // 语义下限（目标至少 1 分钟 / 预计用时允许留空）留给宿主，因为文案和含义都不同。
+// 空框按 0 算，但不能靠留空把总时长变成 0——详见 acceptable 的说明。
 RowLayout {
     id: root
 
@@ -32,26 +33,34 @@ RowLayout {
     readonly property alias firstField: hourField
 
     readonly property int maximumHours: Math.floor(root.maximumMinutes / 60)
-    // 两个框都填了且各自通过 validator。空串不算合法输入。
+    readonly property bool hourBlank: hourField.text.length === 0
+    readonly property bool minuteBlank: minuteField.text.length === 0
+    // 字面总分钟数，空框按 0 算：把分钟删掉的意思是「整点」，不是「没填」。
+    // 用于给出「超过上限」这种具体提示。
+    readonly property int rawMinutes: (root.hourBlank ? 0 : Number(hourField.text)) * 60
+                                      + (root.minuteBlank ? 0 : Number(minuteField.text))
+    // 空框算 0，但**不能靠留空把总时长变成 0**：归零必须明确输入 0。
+    // 两者的差别是用户能不能看出自己干了什么——「1 小时 + 空分钟」屏幕上写着 1，
+    // 存成 60 分钟没有歧义；而「0 小时 + 空分钟」静默存成 0，等于清空了预计用时，
+    // 用户可能只是清空准备重打，手一滑提交就把原来的值抹掉了，而且事后看不出发生过什么。
+    //
     // 注意 QIntValidator 的行为：位数与上限相同的越界值（上限 2 小时时输入 9）算
     // Intermediate，输入框会照收，只是 acceptableInput 为假——所以越界必须由下面
     // 的 validationError 兜住，不能指望 validator 拦在输入那一步。
-    readonly property bool acceptable: hourField.acceptableInput && minuteField.acceptableInput
-                                       && hourField.text.length > 0 && minuteField.text.length > 0
-    // 两个框都非空时的字面总分钟数；用于给出「超过上限」这种具体提示。空框时为 -1。
-    readonly property int rawMinutes: (hourField.text.length > 0 && minuteField.text.length > 0)
-                                      ? Number(hourField.text) * 60 + Number(minuteField.text)
-                                      : -1
+    readonly property bool acceptable: (root.hourBlank || hourField.acceptableInput)
+                                       && (root.minuteBlank || minuteField.acceptableInput)
+                                       && !((root.hourBlank || root.minuteBlank)
+                                            && root.rawMinutes === 0)
     // 当前输入的总分钟数；输入不合法时为 0。
     readonly property int enteredMinutes: root.acceptable ? root.rawMinutes : 0
     // 形式校验结果。空串表示可以提交。
     readonly property string validationError: {
-        if (root.rawMinutes < 0 || isNaN(root.rawMinutes)) {
+        if (isNaN(root.rawMinutes)) {
             return qsTr("请输入有效的小时和分钟")
         }
         if (root.rawMinutes > root.maximumMinutes) {
             // 卡在整点上限时单独提示，否则用户只会反复试分钟数。
-            if (Number(hourField.text) === root.maximumHours) {
+            if (!root.hourBlank && Number(hourField.text) === root.maximumHours) {
                 return qsTr("%1 小时是上限，分钟必须为 0").arg(root.maximumHours)
             }
             return qsTr("不能超过 %1 小时").arg(root.maximumHours)
