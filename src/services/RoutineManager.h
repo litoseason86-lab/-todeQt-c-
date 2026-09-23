@@ -3,6 +3,7 @@
 
 #include "RoutineRules.h"
 
+#include <QList>
 #include <QObject>
 #include <QString>
 #include <QVariantList>
@@ -18,6 +19,12 @@ public:
     // weekdays 是重复日位掩码（见 RoutineRules）：省略即每天，至少要选中一天。
     Q_INVOKABLE bool addRoutine(const QString& title, int categoryId,
                                 int weekdays = RoutineRules::kEveryDayMask);
+    // 以下四个写入口都会连带处理「今天已经生成的那条实例」，改规则不能只改明天的：
+    //   - updateRoutine：把当日实例的标题和科目同步成新值（已完成的也同步，改名不破坏数据）。
+    //   - deleteRoutine / setRoutineActive(false) / 把今天从 setRoutineWeekdays 中去掉：
+    //     收回当日实例，但只收「未完成且一次专注都没开始过」的那种，其余保留成普通任务。
+    // 收回时会把生成戳退回 NULL，因此「停用后又启用」「取消今天后又勾回今天」能把任务补回来。
+
     // 更新只覆盖标题和科目，不碰重复日：重复日在单独的弹窗里改，
     // 两件事从不在同一次提交里发生。放在一条语句里覆盖写，少传一个参数就会把用户设好的
     // 「周一三五」静默改回「每天」——拆开之后这种错根本没有机会发生。
@@ -39,6 +46,9 @@ signals:
 private:
     explicit RoutineManager(QObject* parent = nullptr);
     void reportFailure(const QString& message) const;
+    // 收回当日实例后广播任务侧的变更。规则变化本身走 routinesChanged，
+    // 但被删掉的任务属于 TaskManager 的事实，必须按它的信号约定通知出去。
+    void notifyTasksReclaimed(const QList<int>& taskIds) const;
 };
 
 #endif // ROUTINEMANAGER_H

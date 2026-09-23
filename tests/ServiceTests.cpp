@@ -710,6 +710,17 @@ QStringList taskTitles(const QVariantList& tasks)
     return titles;
 }
 
+int taskIdByTitle(const QVariantList& tasks, const QString& title)
+{
+    for (const QVariant& taskValue : tasks) {
+        const QVariantMap task = taskValue.toMap();
+        if (task.value(QStringLiteral("title")).toString() == title) {
+            return task.value(QStringLiteral("id")).toInt();
+        }
+    }
+    return -1;
+}
+
 QDate logicalToday()
 {
     // 测试里所有“服务的今天”都必须与生产设置使用同一口径。
@@ -843,7 +854,12 @@ private slots:
     void version2MigrationAddsRoutinesSchemaAndIndex();
     void routinesCategoryForeignKeyClearsWhenCategoryDeleted();
     void routineCrudAddsGetsUpdatesDeletes();
-    void deletingMaterializedRoutineDetachesExistingTask();
+    void deletingRoutineReclaimsUntouchedTodayTask();
+    void deletingRoutineKeepsTouchedTodayTask();
+    void updatingRoutineSyncsTodayTask();
+    void deactivatingRoutineReclaimsTodayTaskAndRestoresOnReactivate();
+    void removingTodayFromWeekdaysReclaimsTodayTask();
+    void reclaimingTodayTaskDoesNotResurrectManuallyDeletedTask();
     void databaseCloseRemovesNamedConnection();
     void databaseOpenedExistingFlagTracksSuccessfulStartupOnly();
     void materializeTodayIsIdempotentAndDoesNotBackfill();
@@ -3832,10 +3848,10 @@ void ServiceTests::routineCrudAddsGetsUpdatesDeletes()
     QVERIFY(manager->getRoutines().isEmpty());
 }
 
-void ServiceTests::deletingMaterializedRoutineDetachesExistingTask()
+void ServiceTests::deletingRoutineReclaimsUntouchedTodayTask()
 {
     RoutineManager* manager = RoutineManager::instance();
-    QVERIFY(manager->addRoutine(QStringLiteral("删除后保留任务"), -1));
+    QVERIFY(manager->addRoutine(QStringLiteral("删除后收回任务"), -1));
     const int routineId = manager->getRoutines().first().toMap().value(QStringLiteral("id")).toInt();
     QVERIFY(routineId > 0);
     QCOMPARE(manager->materializeToday(), 1);
@@ -3844,15 +3860,172 @@ void ServiceTests::deletingMaterializedRoutineDetachesExistingTask()
     QCOMPARE(tasks.size(), 1);
     const int taskId = tasks.first().toMap().value(QStringLiteral("id")).toInt();
 
+    // 删除的事实要按 TaskManager 的信号约定广播：计时器这类持有任务编号的服务靠 taskDeleted
+    // 解绑，只订阅 tasksChanged 的页面靠后一个信号刷新。少发任何一个都会留下不一致的界面。
+    QSignalSpy deletedSpy(TaskManager::instance(), &TaskManager::taskDeleted);
+    QSignalSpy changedSpy(TaskManager::instance(), &TaskManager::tasksChanged);
+    QVERIFY(deletedSpy.isValid());
+    QVERIFY(changedSpy.isValid());
+
     QVERIFY(manager->deleteRoutine(routineId));
 
+    QVERIFY(TaskManager::instance()->getTasksByDate(logicalToday()).isEmpty());
+    QCOMPARE(deletedSpy.count(), 1);
+    QCOMPARE(deletedSpy.first().first().toInt(), taskId);
+    QCOMPARE(changedSpy.count(), 1);
+}
+
+void ServiceTests::deletingRoutineKeepsTouchedTodayTask()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    QVERIFY(manager->addRoutine(QStringLiteral("已完成例行"), -1));
+    QVERIFY(manager->addRoutine(QStringLiteral("专注过的例行"), -1));
+    const QVariantList routines = manager->getRoutines();
+    QCOMPARE(routines.size(), 2);
+    const int completedRoutineId = routines.at(0).toMap().value(QStringLiteral("id")).toInt();
+    const int focusedRoutineId = routines.at(1).toMap().value(QStringLiteral("id")).toInt();
+    QCOMPARE(manager->materializeToday(), 2);
+
+    const QVariantList tasks = TaskManager::instance()->getTasksByDate(logicalToday());
+    const int completedTaskId = taskIdByTitle(tasks, QStringLiteral("已完成例行"));
+    const int focusedTaskId = taskIdByTitle(tasks, QStringLiteral("专注过的例行"));
+    QVERIFY(completedTaskId > 0);
+    QVERIFY(focusedTaskId > 0);
+
+    QVERIFY(TaskManager::instance()->completeTask(completedTaskId));
+    // 专注记录在「开始专注」那一刻就落库，所以这一条同时代表「专注过」和「正在专注」两种情况。
+    QSqlQuery insertSession(DatabaseManager::instance()->database());
+    insertSession.prepare(QStringLiteral(
+        "INSERT INTO focus_sessions (task_id, start_time, mode) VALUES (:taskId, :startTime, 0)"));
+    insertSession.bindValue(QStringLiteral(":taskId"), focusedTaskId);
+    insertSession.bindValue(QStringLiteral(":startTime"), dateTimeText(logicalToday()));
+    QVERIFY2(insertSession.exec(), qPrintable(insertSession.lastError().text()));
+
+    QSignalSpy deletedSpy(TaskManager::instance(), &TaskManager::taskDeleted);
+    QVERIFY(deletedSpy.isValid());
+
+    QVERIFY(manager->deleteRoutine(completedRoutineId));
+    QVERIFY(manager->deleteRoutine(focusedRoutineId));
+
+    // 碰过的实例一条都不能删：已完成代表今天确实做过，有专注记录代表时间已经花出去了。
+    // 它们退化成普通任务——只清 routine_id 而留着 routine_generated=1 的话，
+    // 逾期结转仍会把它们当成受规则管理的任务，最终变成看不见的黑洞。
     QSqlQuery query(DatabaseManager::instance()->database());
-    query.prepare(QStringLiteral("SELECT routine_id, routine_generated FROM tasks WHERE id = :id"));
+    query.prepare(QStringLiteral(
+        "SELECT routine_id, routine_generated FROM tasks WHERE id IN (:completedId, :focusedId)"));
+    query.bindValue(QStringLiteral(":completedId"), completedTaskId);
+    query.bindValue(QStringLiteral(":focusedId"), focusedTaskId);
+    QVERIFY(query.exec());
+    int survivors = 0;
+    while (query.next()) {
+        QVERIFY(query.value(0).isNull());
+        QCOMPARE(query.value(1).toInt(), 0);
+        ++survivors;
+    }
+    QCOMPARE(survivors, 2);
+    QCOMPARE(deletedSpy.count(), 0);
+}
+
+void ServiceTests::updatingRoutineSyncsTodayTask()
+{
+    const int categoryId = CategoryManager::instance()->addCategory(QStringLiteral("同步科目"),
+                                                                    QStringLiteral("#abcdef"));
+    QVERIFY(categoryId > 0);
+
+    RoutineManager* manager = RoutineManager::instance();
+    QVERIFY(manager->addRoutine(QStringLiteral("旧标题"), -1));
+    const int routineId = manager->getRoutines().first().toMap().value(QStringLiteral("id")).toInt();
+    QCOMPARE(manager->materializeToday(), 1);
+    const int taskId = TaskManager::instance()->getTasksByDate(logicalToday())
+                           .first().toMap().value(QStringLiteral("id")).toInt();
+
+    QSignalSpy changedSpy(TaskManager::instance(), &TaskManager::tasksChanged);
+    QVERIFY(changedSpy.isValid());
+    QVERIFY(manager->updateRoutine(routineId, QStringLiteral("新标题"), categoryId));
+    QCOMPARE(changedSpy.count(), 1);
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral("SELECT title, category_id, category FROM tasks WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), taskId);
     QVERIFY(query.exec());
     QVERIFY(query.next());
-    QVERIFY(query.value(0).isNull());
-    QCOMPARE(query.value(1).toInt(), 0);
+    QCOMPARE(query.value(0).toString(), QStringLiteral("新标题"));
+    QCOMPARE(query.value(1).toInt(), categoryId);
+    // category 是科目名快照。漏掉它的话只有 category_id 变了，任务卡上的科目标签还是旧名字。
+    QCOMPARE(query.value(2).toString(), QStringLiteral("同步科目"));
+
+    // 已完成的当日实例同样跟着改：改名不破坏任何数据，列表上留着旧名字才是用户看到的问题。
+    QVERIFY(TaskManager::instance()->completeTask(taskId));
+    QVERIFY(manager->updateRoutine(routineId, QStringLiteral("再改一次"), -1));
+
+    QSqlQuery recheck(DatabaseManager::instance()->database());
+    recheck.prepare(QStringLiteral("SELECT title, category_id, category FROM tasks WHERE id = :id"));
+    recheck.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY(recheck.exec());
+    QVERIFY(recheck.next());
+    QCOMPARE(recheck.value(0).toString(), QStringLiteral("再改一次"));
+    QVERIFY(recheck.value(1).isNull());
+    QCOMPARE(recheck.value(2).toString(), QString());
+}
+
+void ServiceTests::deactivatingRoutineReclaimsTodayTaskAndRestoresOnReactivate()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    QVERIFY(manager->addRoutine(QStringLiteral("停用收回"), -1));
+    const int routineId = manager->getRoutines().first().toMap().value(QStringLiteral("id")).toInt();
+    QCOMPARE(manager->materializeToday(), 1);
+
+    QVERIFY(manager->setRoutineActive(routineId, false));
+    QVERIFY(TaskManager::instance()->getTasksByDate(logicalToday()).isEmpty());
+    // 停着的时候不会被任何一次刷新重新生成。
+    QCOMPARE(manager->materializeToday(), 0);
+
+    // 回收时把生成戳退回了 NULL，所以重新启用当天就能补回来；
+    // 不退回的话用户误点一下开关，今天这件事就再也回不来了，还看不出原因。
+    QVERIFY(manager->setRoutineActive(routineId, true));
+    QCOMPARE(manager->materializeToday(), 1);
+    QCOMPARE(TaskManager::instance()->getTasksByDate(logicalToday()).size(), 1);
+}
+
+void ServiceTests::removingTodayFromWeekdaysReclaimsTodayTask()
+{
+    // 用例不能假设今天是周几：按逻辑日算出今天那一位，再构造「只有今天」和「刚好避开今天」。
+    const int todayBit = RoutineRules::maskForDayOfWeek(logicalToday().dayOfWeek());
+    QVERIFY(todayBit > 0);
+    const int withoutToday = RoutineRules::kEveryDayMask & ~todayBit;
+
+    RoutineManager* manager = RoutineManager::instance();
+    QVERIFY(manager->addRoutine(QStringLiteral("重复日收回"), -1, todayBit));
+    const int routineId = manager->getRoutines().first().toMap().value(QStringLiteral("id")).toInt();
+    QCOMPARE(manager->materializeToday(), 1);
+
+    QVERIFY(manager->setRoutineWeekdays(routineId, withoutToday));
+    QVERIFY(TaskManager::instance()->getTasksByDate(logicalToday()).isEmpty());
+    QCOMPARE(manager->materializeToday(), 0);
+
+    // 两个方向必须对称：把今天勾回来，下一次刷新就该把任务补出来。
+    QVERIFY(manager->setRoutineWeekdays(routineId, RoutineRules::kEveryDayMask));
+    QCOMPARE(manager->materializeToday(), 1);
+    QCOMPARE(TaskManager::instance()->getTasksByDate(logicalToday()).size(), 1);
+}
+
+void ServiceTests::reclaimingTodayTaskDoesNotResurrectManuallyDeletedTask()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    QVERIFY(manager->addRoutine(QStringLiteral("手删不复活"), -1));
+    const int routineId = manager->getRoutines().first().toMap().value(QStringLiteral("id")).toInt();
+    QCOMPARE(manager->materializeToday(), 1);
+    const int taskId = TaskManager::instance()->getTasksByDate(logicalToday())
+                           .first().toMap().value(QStringLiteral("id")).toInt();
+
+    // 用户自己删掉了今天这条实例：此时已经没有可回收的任务，停用就不该退回生成戳。
+    // 退回了的话，「停用→启用」会把用户刚刚亲手删掉的任务又送回来，破坏「删不复活」。
+    QVERIFY(TaskManager::instance()->deleteTask(taskId));
+    QVERIFY(manager->setRoutineActive(routineId, false));
+    QVERIFY(manager->setRoutineActive(routineId, true));
+
+    QCOMPARE(manager->materializeToday(), 0);
+    QVERIFY(TaskManager::instance()->getTasksByDate(logicalToday()).isEmpty());
 }
 
 void ServiceTests::databaseCloseRemovesNamedConnection()

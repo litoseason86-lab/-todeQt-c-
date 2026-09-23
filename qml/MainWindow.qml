@@ -1375,6 +1375,28 @@ Item {
     }
 
     Connections {
+        // 待删任务可能被别的路径先删掉：删除、停用每日例行会顺带收回今天那条还没动过的实例，
+        // 外部 AI 接入也能删任务。这时既没有东西可提交，也没有东西可撤销。
+        // 不清掉单槽的话，窗口到期再删一次必然失败，弹出一条假的「删除失败，请重试」；
+        // 撤销条留着，也会让用户以为还能把任务找回来。
+        // taskDeleted 只在删除提交之后才发出，按它解绑不需要再去查询任务是否还在。
+        target: root.taskManagerRef
+        ignoreUnknownSignals: true
+
+        function onTaskDeleted(taskId) {
+            if (Number(taskId) !== root.pendingDeleteTaskId)
+                return
+            // commitPendingDelete 自己调用 deleteTask 时也会同步走到这里。那时计时器已停、
+            // 撤销条已收、回调已清空，下面几步再执行一遍没有副作用，提交流程照常收尾。
+            deleteCommitTimer.stop()
+            globalToast.dismissAction(root.pendingDeleteUndoAction)
+            root.pendingDeleteUndoAction = null
+            root.pendingDeleteTaskId = -1
+            root.pendingDeleteTitle = ""
+        }
+    }
+
+    Connections {
         // 奖励回路挂在全局壳层，目标页开不开着都能收到推进与里程碑事件。
         target: root.goalServiceRef
         ignoreUnknownSignals: true

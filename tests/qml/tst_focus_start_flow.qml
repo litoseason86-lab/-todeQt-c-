@@ -16,6 +16,7 @@ TestCase {
         id: taskManager
 
         signal tasksChanged
+        signal taskDeleted(int taskId)
 
         property int deleteTaskCalls: 0
         property int lastDeletedTaskId: -1
@@ -59,6 +60,10 @@ TestCase {
         function deleteTask(id) {
             deleteTaskCalls += 1
             lastDeletedTaskId = id
+            // 与 TaskManager::deleteTask 同契约：提交成功后、返回之前同步发出删除事实。
+            // 这样既有的撤销用例也会走到主窗口处理函数在提交途中重入的那条路径。
+            if (deleteSucceeds)
+                taskDeleted(id)
             return deleteSucceeds
         }
     }
@@ -889,6 +894,48 @@ TestCase {
         compare(mainWindow.pendingDeleteTaskId, 24)
 
         mainWindow.cancelPendingDelete()
+    }
+
+    function test_pendingTaskDeletedElsewhereRetiresUndoSlot() {
+        // 待删任务被别的路径先删掉（删除每日例行时会顺带收回今天那条没动过的实例）：
+        // 窗口到期后不能再删一次——那必然失败，会弹出一条假的「删除失败，请重试」；
+        // 撤销条也要收起，否则用户点「撤销」只会看到提示消失，任务却回不来。
+        mainWindow.deleteCommitDelayMs = 60
+        var toast = findChild(mainWindow, "globalToast")
+        verify(toast)
+
+        mainWindow.requestDeleteTask(28, "随例行收回的任务")
+        compare(toast.actionText, "撤销")
+
+        taskManager.taskDeleted(28)
+        compare(mainWindow.pendingDeleteTaskId, -1)
+        compare(findChild(mainWindow, "todayFocusViewPage").pendingDeleteTaskId, -1)
+        compare(toast.actionText, "")
+        compare(toast.shown, false)
+
+        // 「没有再删一次」只能等过原定的提交时刻才能观察到。
+        wait(120)
+        compare(taskManager.deleteTaskCalls, 0)
+
+        mainWindow.deleteCommitDelayMs = 5000
+    }
+
+    function test_unrelatedTaskDeletionKeepsUndoWindow() {
+        // 只认待删的那一条：别的任务被删掉时，撤销窗口和撤销条都必须原样保留。
+        mainWindow.deleteCommitDelayMs = 5000
+        var toast = findChild(mainWindow, "globalToast")
+        verify(toast)
+
+        mainWindow.requestDeleteTask(29, "仍可撤销的任务")
+        taskManager.taskDeleted(999)
+
+        compare(mainWindow.pendingDeleteTaskId, 29)
+        compare(toast.actionText, "撤销")
+        compare(toast.shown, true)
+
+        toast.triggerAction()
+        compare(mainWindow.pendingDeleteTaskId, -1)
+        compare(taskManager.deleteTaskCalls, 0)
     }
 
     function test_deleteFailureRestoresHiddenTaskAndReportsError() {
