@@ -1,11 +1,11 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
-import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
 
-Rectangle {
+// 玻璃卡的底色、白色描边、圆角、顶部高光和落影都由 GlassPanel 统一提供，与各页面的玻璃框同一套。
+GlassPanel {
     id: root
 
     property string title: ""
@@ -30,11 +30,6 @@ Rectangle {
                                           && appSettings && appSettings.reduceMotion)
     // qmllint enable unqualified
     readonly property bool valuePulseRunning: valuePulse.running
-    readonly property color cardShadowColor: Theme.ink
-    readonly property real cardShadowOpacity: 0.08
-    readonly property real cardShadowBlur: 0.18
-    readonly property real cardShadowHorizontalOffset: 0
-    readonly property real cardShadowVerticalOffset: 2
 
     function restartIntro() {
         // 视图重新显示时重播入场动画，数据刷新不会显得突兀。
@@ -45,20 +40,6 @@ Rectangle {
     implicitHeight: root.comparisonLineShown || root.reserveComparisonSpace
                     ? (root.compact ? 108 : 126)
                     : (root.compact ? 86 : 104)
-    radius: Theme.radiusLg
-    color: Theme.glassCard
-    border.color: Theme.glassBorder
-    border.width: 1
-    layer.enabled: true
-    layer.effect: MultiEffect {
-        autoPaddingEnabled: true
-        shadowEnabled: true
-        shadowColor: root.cardShadowColor
-        shadowOpacity: root.cardShadowOpacity
-        shadowBlur: root.cardShadowBlur
-        shadowHorizontalOffset: root.cardShadowHorizontalOffset
-        shadowVerticalOffset: root.cardShadowVerticalOffset
-    }
     opacity: 0
 
     Component.onCompleted: fadeInAnimation.start()

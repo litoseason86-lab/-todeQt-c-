@@ -56,6 +56,19 @@ TestCase {
         }
     }
 
+    // 完成记录用例的提交记录：带上实参个数，区分「第 7 个参数传了 undefined」和「根本没传」。
+    property var lastSubmission: null
+
+    EditTaskDialog {
+        id: completionDialog
+        categoryManagerRef: categoryManagerMock
+        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedMinutes, notes, completionNote) {
+            testCase.lastSubmission = { taskId: taskId, notes: notes, completionNote: completionNote,
+                                        argCount: arguments.length }
+            return true
+        }
+    }
+
     QtObject {
         id: coordinator
         property bool refreshBlocked: false
@@ -85,6 +98,9 @@ TestCase {
         failingDialog.close()
         estimateDialog.close()
         testCase.submittedMinutes = -1
+        completionDialog.close()
+        completionDialog.maxNotesLength = 2000
+        testCase.lastSubmission = null
         wait(20)
     }
 
@@ -324,6 +340,60 @@ TestCase {
             { id: 3, name: "数学", color: "#d4a574" },
             { id: 5, name: "英语", color: "#8b7355" }
         ]
+    }
+
+    // —— 完成记录 ——
+
+    function test_completedTaskEditsCompletionNote() {
+        completionDialog.openForTask({ id: 8, title: "数据结构", categoryId: -1, date: isoWithOffset(0),
+                                       completed: true, notes: "第三章", completionNote: "做完 1–10 题" })
+        wait(20)
+        compare(completionDialog.editingCompleted, true)
+        const field = findChild(completionDialog, "editCompletionNoteField")
+        verify(field)
+        compare(field.text, "做完 1–10 题")
+
+        field.text = "  做完 1–15 题  "
+        completionDialog.submit()
+        verify(testCase.lastSubmission !== null, completionDialog.errorText)
+        compare(testCase.lastSubmission.taskId, 8)
+        compare(testCase.lastSubmission.completionNote, "做完 1–15 题")
+        // 两栏分开：计划备注原样交回，不能被完成记录顶掉。
+        compare(testCase.lastSubmission.notes, "第三章")
+    }
+
+    function test_uncompletedTaskLeavesCompletionNoteUntouched() {
+        // 未完成任务不显示完成记录栏，提交时第 7 个参数必须是 undefined：宿主原样交给 TaskManager，
+        // 它据此保持旧记录不变。若这里传空串，取消完成前写的记录就会被悄悄清空。
+        completionDialog.openForTask({ id: 9, title: "高等数学", categoryId: -1, date: isoWithOffset(0),
+                                       completed: false, completionNote: "取消完成前写的" })
+        wait(20)
+        compare(completionDialog.editingCompleted, false)
+        completionDialog.submit()
+        verify(testCase.lastSubmission !== null, completionDialog.errorText)
+        compare(testCase.lastSubmission.argCount, 7)
+        compare(typeof testCase.lastSubmission.completionNote, "undefined")
+    }
+
+    function test_completionNoteLengthBoundary() {
+        completionDialog.maxNotesLength = 10
+        completionDialog.openForTask({ id: 8, title: "数据结构", categoryId: -1, date: isoWithOffset(0),
+                                       completed: true, completionNote: "" })
+        wait(20)
+        const field = findChild(completionDialog, "editCompletionNoteField")
+
+        // 超一个字：拦下、指明是完成记录，草稿原样保留。
+        field.text = "一二三四五六七八九十十"
+        completionDialog.submit()
+        compare(testCase.lastSubmission, null)
+        verify(completionDialog.errorText.indexOf("完成记录太长了") === 0, completionDialog.errorText)
+        compare(field.text, "一二三四五六七八九十十")
+
+        // 正好在上限：放行。
+        field.text = "一二三四五六七八九十"
+        completionDialog.submit()
+        verify(testCase.lastSubmission !== null, completionDialog.errorText)
+        compare(testCase.lastSubmission.completionNote, "一二三四五六七八九十")
     }
 }
 

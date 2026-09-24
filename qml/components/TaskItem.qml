@@ -71,6 +71,14 @@ Rectangle {
     property string taskNotes: ""
     readonly property bool showsNotes: !root.compact && !root.titleEditing
                                        && root.taskNotes.length > 0
+    // 完成记录：点「完成」时写下的这次做完了什么。只在已完成时显示，紧凑行同样不显示。
+    // 取消完成后记录还留在库里（再次完成时预填），但未完成的卡片上不该出现「完成：……」。
+    property string completionNote: ""
+    readonly property bool showsCompletionNote: !root.compact && !root.titleEditing
+                                                && root.visualTaskCompleted
+                                                && root.completionNote.length > 0
+    // 卡片上的一行摘要：多行记录并成一行，省略号之前能多看到一点；全文在编辑弹窗里。
+    readonly property string completionNoteSummary: root.completionNote.replace(/\s*\n+\s*/g, " · ")
     // 未设置预估时显示“已专注 N”，设置后显示“已用 / 预计”；都为 0 时不显示。
     readonly property string focusSummary: {
         if (root.estimatedMinutes > 0)
@@ -89,6 +97,9 @@ Rectangle {
     property bool showStartFocus: true
     // 父视图控制编辑/删除入口；仪表盘已完成筛选为纯查看，关掉后右侧改放状态徽章。
     property bool showEditDelete: true
+    // 父视图决定是否露出「完成」按钮（带完成记录的完成）。默认关闭：目前只有今日任务页接了弹窗，
+    // 其它页面露出按钮却没有弹窗接住，点了没反应。
+    property bool showCompleteWithNote: false
     // 紧凑只读行：标题单行省略、分类横排、行高更矮，专供仪表盘已完成列表等。
     property bool compact: false
     // 拖拽：宿主开启后，按住任务行可以拖动。今日列表用它排序，周计划用它改期。
@@ -178,6 +189,9 @@ Rectangle {
     signal deleteClicked(int taskId, string title)
     signal renameSubmitted(int taskId, string newTitle)
     signal editClicked(int taskId)
+    // 只报告「用户想带记录完成」，弹窗和写库都归父视图：卡片是列表委托，随时可能被刷新销毁，
+    // 不适合持有一个要等用户输入的弹窗。
+    signal completeWithNoteClicked(int taskId)
 
     function setPointerInside(inside) {
         root.pointerInside = inside;
@@ -237,6 +251,13 @@ Rectangle {
         var startX = indicatorPosition.x + checkIndicator.width / 2 - 2.5;
         var startY = indicatorPosition.y + checkIndicator.height / 2 - 2.5;
         completionParticles.burst(startX, startY);
+    }
+
+    // 弹窗完成成功后由父视图调用：与点复选框同一套视觉反馈（勾上、变淡、粒子）。
+    // 数据此时已经写库，模型要等动画放完才刷新，所以先把视觉态切过去。
+    function playCompletedFeedback() {
+        root.visualTaskCompleted = true;
+        root.playCompletionAnimation();
     }
 
     onTaskCompletedChanged: {
@@ -585,6 +606,19 @@ Rectangle {
                 maximumLineCount: 1
             }
 
+            // 完成记录：与备注同一分量的单行小字，用「完成：」前缀和计划备注区分开，不另加徽章或图标。
+            Text {
+                objectName: "taskCompletionNoteLine"
+                Layout.fillWidth: true
+                visible: root.showsCompletionNote
+                text: "完成：" + root.completionNoteSummary
+                textFormat: Text.PlainText
+                font.pixelSize: Theme.fontXs
+                color: Theme.inkSoft
+                elide: Text.ElideRight
+                maximumLineCount: 1
+            }
+
             TextField {
                 id: titleEditField
 
@@ -695,6 +729,38 @@ Rectangle {
                 if (root.startFocusAllowed)
                     root.startFocusClicked(root.taskId, root.taskTitle)
             }
+        }
+
+        // 带记录的完成：点了由父视图弹出完成记录框。样式与编辑/删除同一档，
+        // 一行里只留「开始专注」一个主按钮。完成后隐藏，改记录走「编辑」。
+        Button {
+            id: completeButton
+
+            objectName: "taskCompleteButton"
+            text: "完成"
+            visible: root.showCompleteWithNote && !root.visualTaskCompleted
+            implicitWidth: 48
+            implicitHeight: root.compact ? 30 : 36
+            Accessible.description: "写下这次完成了什么，再把任务标为完成"
+
+            background: Rectangle {
+                radius: Theme.radiusMd
+                color: completeButton.hovered ? Theme.surfaceSunken : "transparent"
+                border.color: completeButton.hovered ? Theme.accent : Theme.border
+                border.width: 1
+            }
+
+            contentItem: Text {
+                text: completeButton.text
+                textFormat: Text.PlainText
+                color: Theme.inkSoft
+                font.pixelSize: Theme.fontMd
+                font.weight: Font.Medium
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+
+            onClicked: root.completeWithNoteClicked(root.taskId)
         }
 
         // 纯查看完成态：右侧固定「已完成」玻璃徽章，填补开始专注/编辑/删除腾出的空洞。

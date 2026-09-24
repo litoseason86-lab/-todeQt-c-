@@ -2,6 +2,7 @@
 #include <QDate>
 #include <QDir>
 #include <QFile>
+#include <QJSEngine>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSignalSpy>
@@ -813,6 +814,12 @@ private slots:
     void asyncExportRunsOffTheCallingThreadAndReportsCompletion();
     void notesRoundTripAndRenameDoesNotEraseThem();
     void overlongNotesAreRejectedInsteadOfTruncated();
+    void completeTaskWithNoteStoresNoteAndCompletesInOneWrite();
+    void completionNoteSurvivesUndoAndCanBeRewritten();
+    void overlongCompletionNoteIsRejectedWithoutSideEffects();
+    void editingKeepsCompletionNoteUnlessExplicitlyGiven();
+    void scriptCallPathKeepsOrWritesCompletionNote();
+    void duplicateTaskDoesNotInheritCompletionNote();
     void mixedLegacyOrdersKeepNewTasksAtEnd();
     void allTaskDateWritesAppendAfterLegacyRows();
     void reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation();
@@ -872,6 +879,8 @@ private slots:
     void routineWeekdaysDefaultToEveryDayAndRejectInvalidMask();
     void materializeTodayOnlyGeneratesOnSelectedWeekdays();
     void migrationV15AddsRoutineWeekdaysAndKeepsExistingRoutines();
+    void migrationV16AddsCompletionNoteAndKeepsExistingTasks();
+    void migrationV5RebuildKeepsCompletionNote();
     void freshDatabaseHasRoutineIdColumn();
     void migrationV4DoesNotGuessRoutineLineage();
     void migrationV6ClearsUntrustedRoutineLineage();
@@ -4412,6 +4421,128 @@ void ServiceTests::migrationV15AddsRoutineWeekdaysAndKeepsExistingRoutines()
     QCOMPARE(query.value(0).toInt(), RoutineRules::kEveryDayMask);
 }
 
+void ServiceTests::migrationV16AddsCompletionNoteAndKeepsExistingTasks()
+{
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("升级前的任务"), today, QString(), true);
+    QVERIFY(taskId > 0);
+
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.prepare(QStringLiteral("UPDATE tasks SET notes = '升级前的备注' WHERE id = :id")));
+    query.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY2(query.exec(), qPrintable(query.lastError().text()));
+
+    // 把 tasks 退回 v15 形态：删掉完成记录列，版本号改回 15。
+    QVERIFY2(query.exec(QStringLiteral("ALTER TABLE tasks DROP COLUMN completion_note")),
+             qPrintable(query.lastError().text()));
+    QVERIFY2(query.exec(QStringLiteral("PRAGMA user_version = 15")),
+             qPrintable(query.lastError().text()));
+
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    // 既有任务原样保留，完成记录按「没写」回落——是空串，不是 NULL。
+    QVERIFY(query.prepare(QStringLiteral(
+        "SELECT title, completed, notes, completion_note FROM tasks WHERE id = :id")));
+    query.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY2(query.exec(), qPrintable(query.lastError().text()));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toString(), QStringLiteral("升级前的任务"));
+    QCOMPARE(query.value(1).toInt(), 1);
+    QCOMPARE(query.value(2).toString(), QStringLiteral("升级前的备注"));
+    QVERIFY(!query.value(3).isNull());
+    QVERIFY(query.value(3).toString().isEmpty());
+
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+
+    // ALTER TABLE ADD COLUMN 带的 NOT NULL 要在迁移出来的表上真的生效，
+    // 只验新建库的话，旧用户升上来的那张表可能没有这道库层约束。
+    QSqlQuery rawUpdate(DatabaseManager::instance()->database());
+    QVERIFY(rawUpdate.prepare(QStringLiteral("UPDATE tasks SET completion_note = NULL")));
+    QVERIFY(!rawUpdate.exec());
+
+    // 迁移后服务层能直接写读这一列。
+    TaskManager* tasks = TaskManager::instance();
+    QVERIFY(tasks->completeTaskWithNote(taskId, QStringLiteral("升级后补的记录")));
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("升级后补的记录"));
+
+    // 重跑一次不再改动任何东西：结构守卫看的是列在不在，不是版本号。
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("升级后补的记录"));
+
+    // 半迁移状态：版本号已经是当前版本，列却不在（中断的恢复、外部改库都会留下这种库）。
+    // 守卫只看版本号的话这一列永远补不回来，每次打开任务页都查询失败。
+    QVERIFY2(query.exec(QStringLiteral("ALTER TABLE tasks DROP COLUMN completion_note")),
+             qPrintable(query.lastError().text()));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), DatabaseManager::kCurrentSchemaVersion);
+    query.finish();
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QVERIFY(tasks->getTask(taskId).value(QStringLiteral("id")).toInt() == taskId);
+    QVERIFY(tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString().isEmpty());
+}
+
+void ServiceTests::migrationV5RebuildKeepsCompletionNote()
+{
+    // v5 整表重建用的是写死的列清单。完成记录是 v16 才加的列，
+    // 漏进清单的话，一次外键修复就会把所有完成记录静默抹掉。
+    const QDate today = logicalToday();
+    const int taskId = insertTaskRow(QStringLiteral("写过记录的任务"), today, QString(), true);
+    QVERIFY(taskId > 0);
+
+    QSqlQuery seed(DatabaseManager::instance()->database());
+    QVERIFY(seed.prepare(QStringLiteral(
+        "UPDATE tasks SET completion_note = '做完第二章' WHERE id = :id")));
+    seed.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY2(seed.exec(), qPrintable(seed.lastError().text()));
+
+    // 同样用「外键动作不对」把 v5 重建逼出来；user_version 保持当前版本，
+    // 模拟一个已经迁移完成、只是外键被外部改坏的库。
+    QSqlQuery rebuild(DatabaseManager::instance()->database());
+    QVERIFY(rebuild.exec(QStringLiteral("PRAGMA foreign_keys = OFF")));
+    const QStringList breakForeignKey = {
+        QStringLiteral(R"SQL(
+            CREATE TABLE tasks_broken (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL CHECK(length(trim(title)) > 0),
+                category TEXT,
+                category_id INTEGER REFERENCES categories(id),
+                routine_id INTEGER REFERENCES routines(id) ON DELETE CASCADE,
+                routine_generated INTEGER NOT NULL DEFAULT 0 CHECK(routine_generated IN (0, 1)),
+                date TEXT NOT NULL,
+                completed INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                estimated_minutes INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                display_order INTEGER NOT NULL DEFAULT 0,
+                completion_note TEXT NOT NULL DEFAULT ''
+            )
+        )SQL"),
+        QStringLiteral("INSERT INTO tasks_broken SELECT id, title, category, category_id, "
+                       "routine_id, routine_generated, date, completed, created_at, "
+                       "estimated_minutes, notes, display_order, completion_note FROM tasks"),
+        QStringLiteral("DROP TABLE tasks"),
+        QStringLiteral("ALTER TABLE tasks_broken RENAME TO tasks")
+    };
+    for (const QString& statement : breakForeignKey) {
+        QVERIFY2(rebuild.exec(statement), qPrintable(rebuild.lastError().text()));
+    }
+    QVERIFY(rebuild.exec(QStringLiteral("PRAGMA foreign_keys = ON")));
+
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    QSqlQuery check(DatabaseManager::instance()->database());
+    QVERIFY(check.prepare(QStringLiteral("SELECT completion_note FROM tasks WHERE id = :id")));
+    check.bindValue(QStringLiteral(":id"), taskId);
+    QVERIFY2(check.exec(), qPrintable(check.lastError().text()));
+    QVERIFY(check.next());
+    QCOMPARE(check.value(0).toString(), QStringLiteral("做完第二章"));
+}
+
 void ServiceTests::freshDatabaseHasRoutineIdColumn()
 {
     // 新库直建路径必须同时带关联和可信来源列，不能再靠 routine_id 猜任务来源。
@@ -7728,6 +7859,243 @@ void ServiceTests::overlongNotesAreRejectedInsteadOfTruncated()
     QCOMPARE(unchanged.value(QStringLiteral("title")).toString(), QStringLiteral("长备注"));
     QCOMPARE(unchanged.value(QStringLiteral("notes")).toString(), atLimit);
     QCOMPARE(changed.count(), 0);
+}
+
+void ServiceTests::completeTaskWithNoteStoresNoteAndCompletesInOneWrite()
+{
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+    const int taskId = tasks->createTask(QStringLiteral("数据结构"), today, -1, 0,
+                                         QStringLiteral("第三章习题"));
+    QVERIFY(taskId > 0);
+
+    QSignalSpy changed(tasks, &TaskManager::tasksChanged);
+    QVERIFY(tasks->completeTaskWithNote(taskId, QStringLiteral("做完 1–15 题，递归还不熟")));
+    QCOMPARE(changed.count(), 1);
+
+    const QVariantMap row = tasks->getTask(taskId);
+    QVERIFY(row.value(QStringLiteral("completed")).toBool());
+    QCOMPARE(row.value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("做完 1–15 题，递归还不熟"));
+    // 完成记录另起一列：做之前写的备注原样还在，两者不能互相覆盖。
+    QCOMPARE(row.value(QStringLiteral("notes")).toString(), QStringLiteral("第三章习题"));
+
+    // 今日页的数据源是列表查询，它同样要带出这一列，否则卡片上看不到刚写的记录。
+    const QVariantList todayRows = tasks->getTodayTasks();
+    QCOMPARE(todayRows.size(), 1);
+    QCOMPARE(todayRows.first().toMap().value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("做完 1–15 题，递归还不熟"));
+
+    // 不写记录也能完成。空串和 null QString 都是合法的「没写」，都不能撞上 NOT NULL 约束。
+    const int emptyId = tasks->createTask(QStringLiteral("复习单词"), today, -1, 0, QString());
+    QVERIFY(tasks->completeTaskWithNote(emptyId, QString(QLatin1String(""))));
+    QVERIFY(tasks->getTask(emptyId).value(QStringLiteral("completed")).toBool());
+    QVERIFY(tasks->getTask(emptyId).value(QStringLiteral("completionNote")).toString().isEmpty());
+
+    const int nullId = tasks->createTask(QStringLiteral("高等数学"), today, -1, 0, QString());
+    QVERIFY(tasks->completeTaskWithNote(nullId, QString()));
+    QVERIFY(tasks->getTask(nullId).value(QStringLiteral("completed")).toBool());
+    QVERIFY(tasks->getTask(nullId).value(QStringLiteral("completionNote")).toString().isEmpty());
+}
+
+void ServiceTests::completionNoteSurvivesUndoAndCanBeRewritten()
+{
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+    const int taskId = tasks->createTask(QStringLiteral("计算机网络"), today, -1, 0, QString());
+    QVERIFY(taskId > 0);
+    QVERIFY(tasks->completeTaskWithNote(taskId, QStringLiteral("看完 TCP 三次握手")));
+
+    // 撤销条走的是 setTaskCompleted(false)：只翻回完成态，刚写的记录不能跟着丢。
+    QVERIFY(tasks->setTaskCompleted(taskId, false));
+    QVariantMap row = tasks->getTask(taskId);
+    QVERIFY(!row.value(QStringLiteral("completed")).toBool());
+    QCOMPARE(row.value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("看完 TCP 三次握手"));
+
+    // 之后改用复选框快速完成，记录依旧在。
+    QVERIFY(tasks->setTaskCompleted(taskId, true));
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("看完 TCP 三次握手"));
+
+    // 对已完成任务再次提交等于改写记录，完成态保持不变。
+    QVERIFY(tasks->completeTaskWithNote(taskId, QStringLiteral("看完三次握手和四次挥手")));
+    row = tasks->getTask(taskId);
+    QVERIFY(row.value(QStringLiteral("completed")).toBool());
+    QCOMPARE(row.value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("看完三次握手和四次挥手"));
+}
+
+void ServiceTests::overlongCompletionNoteIsRejectedWithoutSideEffects()
+{
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+    const QString atLimit(TaskManager::kMaxNotesLength, QLatin1Char('a'));
+    const QString overLimit(TaskManager::kMaxNotesLength + 1, QLatin1Char('b'));
+
+    // 上限内存得下，一个字都不少。
+    const int limitId = tasks->createTask(QStringLiteral("上限内"), today, -1, 0, QString());
+    QVERIFY(limitId > 0);
+    QVERIFY(tasks->completeTaskWithNote(limitId, atLimit));
+    QCOMPARE(tasks->getTask(limitId).value(QStringLiteral("completionNote")).toString(), atLimit);
+
+    const int taskId = tasks->createTask(QStringLiteral("超一个字"), today, -1, 0, QString());
+    QVERIFY(taskId > 0);
+    QSignalSpy changed(tasks, &TaskManager::tasksChanged);
+
+    // 超一个字就拒绝，而且不能留下任何痕迹：既没被标成完成，记录也没写进去。
+    QVERIFY(!tasks->completeTaskWithNote(taskId, overLimit));
+    const QVariantMap rejected = tasks->getTask(taskId);
+    QVERIFY(!rejected.value(QStringLiteral("completed")).toBool());
+    QVERIFY(rejected.value(QStringLiteral("completionNote")).toString().isEmpty());
+
+    // 改写已完成任务的记录时超长，原记录同样原样保留。
+    QVERIFY(!tasks->completeTaskWithNote(limitId, overLimit));
+    QCOMPARE(tasks->getTask(limitId).value(QStringLiteral("completionNote")).toString(), atLimit);
+
+    // 编号无效或任务不存在都返回失败。
+    QVERIFY(!tasks->completeTaskWithNote(0, QStringLiteral("x")));
+    QVERIFY(!tasks->completeTaskWithNote(-1, QStringLiteral("x")));
+    QVERIFY(!tasks->completeTaskWithNote(taskId + 1000, QStringLiteral("x")));
+    QCOMPARE(changed.count(), 0);
+}
+
+void ServiceTests::editingKeepsCompletionNoteUnlessExplicitlyGiven()
+{
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+    const int taskId = tasks->createTask(QStringLiteral("英语阅读"), today, -1, 30,
+                                         QStringLiteral("真题 2019"));
+    QVERIFY(taskId > 0);
+    QVERIFY(tasks->completeTaskWithNote(taskId, QStringLiteral("做完 Text 1、2")));
+
+    // 编辑弹窗原有的六参保存、重命名的四参路径都不认识完成记录，不能把它抹掉。
+    QVERIFY(tasks->updateTask(taskId, QStringLiteral("英语阅读（改）"), -1, today, 45,
+                              QStringLiteral("真题 2020")));
+    QVERIFY(tasks->updateTask(taskId, QStringLiteral("英语阅读（再改）"), -1, today));
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("做完 Text 1、2"));
+
+    // 外部 AI 接入走 updateTaskFields 的默认参数，同样不碰完成记录。
+    QVERIFY(tasks->updateTaskFields(taskId, QString(), -1, today, -1,
+                                    QStringLiteral("外部改的备注"), true, true));
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("做完 Text 1、2"));
+
+    // 七参重载：QML 传 undefined（无效 QVariant）或 null 都表示保持不变。
+    QVERIFY(tasks->updateTask(taskId, QStringLiteral("英语阅读"), -1, today, 45,
+                              QStringLiteral("真题 2020"), QVariant()));
+    QVERIFY(tasks->updateTask(taskId, QStringLiteral("英语阅读"), -1, today, 45,
+                              QStringLiteral("真题 2020"), QVariant::fromValue(nullptr)));
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("做完 Text 1、2"));
+
+    // 传了字符串才改写。
+    QVERIFY(tasks->updateTask(taskId, QStringLiteral("英语阅读"), -1, today, 45,
+                              QStringLiteral("真题 2020"), QVariant(QStringLiteral("做完 Text 1–4"))));
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("做完 Text 1–4"));
+
+    // 超长记录让整次保存失败：标题等其它字段也不能落库。
+    const QString overLimit(TaskManager::kMaxNotesLength + 1, QLatin1Char('c'));
+    QSignalSpy changed(tasks, &TaskManager::tasksChanged);
+    QVERIFY(!tasks->updateTask(taskId, QStringLiteral("不该生效的标题"), -1, today, 45,
+                               QStringLiteral("真题 2020"), QVariant(overLimit)));
+    QCOMPARE(changed.count(), 0);
+    QVariantMap row = tasks->getTask(taskId);
+    QCOMPARE(row.value(QStringLiteral("title")).toString(), QStringLiteral("英语阅读"));
+    QCOMPARE(row.value(QStringLiteral("completionNote")).toString(), QStringLiteral("做完 Text 1–4"));
+
+    // 空串是明确的「清空」。QML 的空串到 C++ 可能是 null QString，两种都必须清空而不是报错。
+    QVERIFY(tasks->updateTask(taskId, QStringLiteral("英语阅读"), -1, today, 45,
+                              QStringLiteral("真题 2020"), QVariant(QString())));
+    row = tasks->getTask(taskId);
+    QVERIFY(row.value(QStringLiteral("completionNote")).toString().isEmpty());
+    QVERIFY(tasks->completeTaskWithNote(taskId, QStringLiteral("临时记录")));
+    QVERIFY(tasks->updateTask(taskId, QStringLiteral("英语阅读"), -1, today, 45,
+                              QStringLiteral("真题 2020"), QVariant(QString(QLatin1String("")))));
+    row = tasks->getTask(taskId);
+    QVERIFY(row.value(QStringLiteral("completionNote")).toString().isEmpty());
+    // 改记录不改完成态。
+    QVERIFY(row.value(QStringLiteral("completed")).toBool());
+}
+
+void ServiceTests::scriptCallPathKeepsOrWritesCompletionNote()
+{
+    // 编辑弹窗从 QML 调七参 updateTask：未完成任务传 undefined（保持不变），已完成任务传字符串。
+    // 「保持不变」成不成立，取决于脚本引擎怎么在四个 updateTask 重载里挑、怎么把
+    // undefined / null / 空串转成 QVariant——上面那条用例直接从 C++ 构造 QVariant，测不到这一层。
+    // QJSEngine 调 Q_INVOKABLE 与界面走的是同一套方法调用机制。
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+    const int taskId = tasks->createTask(QStringLiteral("线性代数"), today, -1, 0, QString());
+    QVERIFY(taskId > 0);
+    QVERIFY(tasks->completeTaskWithNote(taskId, QStringLiteral("做完行列式")));
+
+    QJSEngine engine;
+    // TaskManager 是进程单例，不能让脚本引擎在析构时顺手把它回收掉。
+    QJSEngine::setObjectOwnership(tasks, QJSEngine::CppOwnership);
+    engine.globalObject().setProperty(QStringLiteral("taskManager"), engine.newQObject(tasks));
+    engine.globalObject().setProperty(QStringLiteral("taskId"), taskId);
+    engine.globalObject().setProperty(QStringLiteral("isoDate"), today.toString(Qt::ISODate));
+
+    const auto updateWith = [&engine](const QString& completionArgument, int minutes) {
+        const QJSValue result = engine.evaluate(
+            QStringLiteral("taskManager.updateTask(taskId, '线性代数', -1, isoDate, %1, '第二章', %2)")
+                .arg(minutes)
+                .arg(completionArgument));
+        if (result.isError()) {
+            qWarning() << "脚本调用失败:" << result.toString();
+        }
+        return result.toBool();
+    };
+    const auto completionNote = [tasks, taskId]() {
+        return tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString();
+    };
+
+    // undefined：编辑未完成任务时的真实传参。记录不动，其它字段照常写入。
+    QVERIFY(updateWith(QStringLiteral("undefined"), 30));
+    QCOMPARE(completionNote(), QStringLiteral("做完行列式"));
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("estimatedMinutes")).toInt(), 30);
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("notes")).toString(), QStringLiteral("第二章"));
+
+    QVERIFY(updateWith(QStringLiteral("null"), 35));
+    QCOMPARE(completionNote(), QStringLiteral("做完行列式"));
+
+    // 字符串才改写。若引擎挑中了六参重载，这一步会静默丢掉新记录。
+    QVERIFY(updateWith(QStringLiteral("'做完行列式和矩阵'"), 40));
+    QCOMPARE(completionNote(), QStringLiteral("做完行列式和矩阵"));
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("estimatedMinutes")).toInt(), 40);
+
+    // 空串是清空，不能被当成「没传」，也不能撞上 NOT NULL 约束。
+    QVERIFY(updateWith(QStringLiteral("''"), 40));
+    QVERIFY(completionNote().isEmpty());
+
+    // 完成弹窗入口：脚本传空串同样合法。
+    QVERIFY(tasks->setTaskCompleted(taskId, false));
+    const QJSValue completed = engine.evaluate(QStringLiteral("taskManager.completeTaskWithNote(taskId, '')"));
+    QVERIFY2(!completed.isError(), qPrintable(completed.toString()));
+    QVERIFY(completed.toBool());
+    QVERIFY(tasks->getTask(taskId).value(QStringLiteral("completed")).toBool());
+}
+
+void ServiceTests::duplicateTaskDoesNotInheritCompletionNote()
+{
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+    const int taskId = tasks->createTask(QStringLiteral("政治选择题"), today, -1, 0,
+                                         QStringLiteral("1000 题第一章"));
+    QVERIFY(taskId > 0);
+    QVERIFY(tasks->completeTaskWithNote(taskId, QStringLiteral("做完马原前 40 题")));
+
+    QVERIFY(tasks->duplicateTask(taskId, today.addDays(1)));
+    const QVariantList copies = tasks->getTasksByDate(today.addDays(1));
+    QCOMPARE(copies.size(), 1);
+    const QVariantMap copy = copies.first().toMap();
+    // 复制的是「要做什么」，不是「做完了什么」：新任务未完成，也不带完成记录。
+    QVERIFY(!copy.value(QStringLiteral("completed")).toBool());
+    QVERIFY(copy.value(QStringLiteral("completionNote")).toString().isEmpty());
+    QCOMPARE(copy.value(QStringLiteral("notes")).toString(), QStringLiteral("1000 题第一章"));
 }
 
 void ServiceTests::mixedLegacyOrdersKeepNewTasksAtEnd()

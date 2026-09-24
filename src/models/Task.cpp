@@ -31,6 +31,7 @@ Task Task::fromQuery(const QSqlQuery& query)
     // 缺列时 valueByName 返回无效 QVariant，toInt() 得 0，不会破坏不含这些列的旧查询。
     task.estimatedMinutes = valueByName(query, "estimated_minutes").toInt();
     task.notes = valueByName(query, "notes").toString();
+    task.completionNote = valueByName(query, "completion_note").toString();
     task.displayOrder = valueByName(query, "display_order").toInt();
     task.actualPomodoros = valueByName(query, "actual_pomodoros").toInt();
     task.focusedSeconds = valueByName(query, "focused_seconds").toInt();
@@ -78,6 +79,7 @@ QVariantMap Task::toVariantMap() const
     map.insert(QStringLiteral("createdAt"), createdAt);
     map.insert(QStringLiteral("estimatedMinutes"), estimatedMinutes);
     map.insert(QStringLiteral("notes"), notes);
+    map.insert(QStringLiteral("completionNote"), completionNote);
     map.insert(QStringLiteral("displayOrder"), displayOrder);
     map.insert(QStringLiteral("actualPomodoros"), actualPomodoros);
     map.insert(QStringLiteral("focusedSeconds"), focusedSeconds);

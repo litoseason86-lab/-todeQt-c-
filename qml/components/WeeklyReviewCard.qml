@@ -8,7 +8,8 @@ import ".."
 // 每周复盘卡片。当前周只看概览（已结束日的目标达成、今日进度、进行中的预计用时任务），
 // 已结束周再给最多两条事实。命中哪条规则、选哪天哪科、比例与展示分钟都由
 // StatisticsService.getWeeklyReview 决定；这里只按字段格式化与展示：不算比例、不挑事实、不含阈值。
-Rectangle {
+// 玻璃卡的底色、白色描边、圆角、顶部高光和落影都由 GlassPanel 统一提供，与各页面的玻璃框同一套。
+GlassPanel {
     id: root
 
     property var review: ({})
@@ -37,10 +38,6 @@ Rectangle {
     readonly property bool showFacts: root.factLines.length > 0
 
     implicitHeight: content.implicitHeight + Theme.space24 * 2
-    radius: Theme.radiusLg
-    color: Theme.glassCard
-    border.color: Theme.glassBorder
-    border.width: 1
 
     function percentText(value) {
         return Math.round(Number(value || 0)) + "%"

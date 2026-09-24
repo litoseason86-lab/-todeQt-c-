@@ -29,6 +29,13 @@ Item {
     signal editRequested(int entryId)
     signal deleteRequested(int entryId, string title)
 
+    // 网格主体的竖向滚动条由宿主提供并摆放：课表页把它放在玻璃底板外、贴窗口右缘。
+    // 这里只把它接到网格主体上，并报出主体在本组件里的纵向范围，供宿主对齐。
+    property ScrollBar verticalScrollBar: null
+    readonly property real scrollAreaY: gridColumn.y + bodyFlickable.y
+    readonly property real scrollAreaHeight: bodyFlickable.height
+    readonly property bool scrollAreaVisible: root.visible && bodyFlickable.visible
+
     readonly property var weekdayGlyphs: ["一", "二", "三", "四", "五", "六", "日"]
     readonly property int visibleDayCount: root.showWeekend ? 7 : 5
     // 刻度栏。52px 里真正装字的只有「08:00」那五个字符，其余是白吃的宽度；
@@ -226,14 +233,16 @@ Item {
     // 内容底板。课表是成片的信息，直接画在壁纸上时刻度线与山水画抢注意力、
     // 课程块也没有可依托的背景。这里铺一层玻璃纸面把网格托住——
     // 项目规则允许内容区用半透明色块透壁纸，只是不做实时模糊。
+    // 描边、落影、顶部高光与其它页面的玻璃框一致；网格内容是它的兄弟项，不进它的阴影图层。
     GlassPanel {
+        objectName: "scheduleGridGlass"
         anchors.fill: parent
         solidFallback: !Theme.glassBlurAllowed
-        panelShadowEnabled: false
-        bottomRimEnabled: true
     }
 
     ColumnLayout {
+        id: gridColumn
+
         anchors.fill: parent
         anchors.margins: 10
         spacing: 0
@@ -324,6 +333,7 @@ Item {
         // —— 网格主体：纵向滚动，刻度与列一起滚 ——
         Flickable {
             id: bodyFlickable
+            objectName: "scheduleGridBody"
 
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -332,23 +342,8 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             clip: true
 
-            ScrollBar.vertical: ScrollBar {
-                id: gridScrollBar
-
-                policy: ScrollBar.AsNeeded
-                width: 8
-
-                contentItem: Rectangle {
-                    implicitWidth: 4
-                    radius: Theme.radiusSm
-                    color: gridScrollBar.pressed || gridScrollBar.hovered ? Theme.accent : Theme.border
-                }
-
-                background: Rectangle {
-                    // 主容器透明后轨道必须跟着透明，否则是一条压在壁纸上的白带。
-                    color: "transparent"
-                }
-            }
+            // 滚动条在玻璃底板外（宿主提供），不再压着最右一列的课程块。
+            ScrollBar.vertical: root.verticalScrollBar
 
             Item {
                 id: body

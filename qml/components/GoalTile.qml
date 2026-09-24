@@ -61,7 +61,7 @@ AbstractButton {
             return root.down || root.hovered ? Theme.glassHover : Theme.glassCard
         }
         border.color: root.activeFocus ? Theme.focusRing
-                                       : (root.hovered ? Theme.accent : Theme.glassBorderContrast)
+                                       : (root.hovered ? Theme.accent : Theme.glassBorder)
         border.width: root.activeFocus ? 2 : 1
         bottomRimEnabled: true
         // 与列表卡同理：delegate 不用落影，避免逐格 FBO 与效果失败时整块消失。

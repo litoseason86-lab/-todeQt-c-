@@ -271,130 +271,118 @@ Item {
                : qsTr("%1小时%2分").arg(hours).arg(remainingMinutes)
     }
 
-    ScrollView {
-        id: pageScrollView
+    // 整页不再套 ScrollView：时间轴卡片自己滚动，卡片底边和其它页面一样落在距窗口底 24 处。
+    // 原先整页包一层滚动、卡片高度写死成「页面高 - 156」，卡片底边悬在 59px 处，
+    // 页面和卡片还各有一条滚动条。窗口最矮 620，页头加卡片最小高度 360 放得下。
+    ColumnLayout {
+        id: pageColumn
 
         anchors.fill: parent
-        clip: true
-        contentWidth: availableWidth
-        ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+        anchors.margins: Theme.space24
+        spacing: Theme.space16
 
-        ColumnLayout {
-            width: Math.max(1, pageScrollView.availableWidth)
-            spacing: Theme.space16
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: Theme.space8
 
-            Item {
+            ColumnLayout {
                 Layout.fillWidth: true
-                Layout.preferredHeight: Theme.space8
-            }
+                spacing: Theme.space4
 
-            RowLayout {
-                Layout.fillWidth: true
-                Layout.leftMargin: Theme.space24
-                Layout.rightMargin: Theme.space24
-                spacing: Theme.space8
-
-                ColumnLayout {
+                Text {
+                    objectName: "todayFocusPageTitle"
                     Layout.fillWidth: true
-                    spacing: Theme.space4
-
-                    Text {
-                        objectName: "todayFocusPageTitle"
-                        Layout.fillWidth: true
-                        text: root.showingToday ? qsTr("今日专注") : qsTr("专注记录")
-                        textFormat: Text.PlainText
-                        color: Theme.ink
-                        font.pixelSize: Theme.fontXxl
-                        font.weight: Font.Bold
-                    }
-
-                    Text {
-                        objectName: "todayFocusDateLabel"
-                        Layout.fillWidth: true
-                        // 日期由右上角的日期控件承担，这里只留统计，避免同一信息两处两种格式。
-                        text: qsTr("专注 %1 次 · %2")
-                                .arg(root.focusCount)
-                                .arg(root.formatDuration(root.totalSeconds))
-                        textFormat: Text.PlainText
-                        color: Theme.inkSoft
-                        font.pixelSize: Theme.fontMd
-                    }
+                    text: root.showingToday ? qsTr("今日专注") : qsTr("专注记录")
+                    textFormat: Text.PlainText
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontXxl
+                    font.weight: Font.Bold
                 }
 
-
-                // 日期导航属于页头的次级操作，和「补录」同组排在右上角；
-                // 单独占一行会在标题和内容卡之间横插一条带子，把两者的关系切断。
-                PageActionButton {
-                    objectName: "todayFocusReturnTodayButton"
-                    Layout.alignment: Qt.AlignVCenter
-                    translucent: true
-                    // 已经在今天时不留一个点不动的禁用按钮，直接收起；
-                    // 用户把日期改成半截无效内容时也要能退回来，所以那种情况仍然出现。
-                    visible: root.canReturnToToday
-                    text: qsTr("回到今天")
-                    onClicked: {
-                        root.showToday()
-                        // 日期没变时不会发出变更信号，也需要覆盖用户尚未输完的无效内容。
-                        historyDate.text = root.dateKey(root.selectedDate)
-                    }
-                }
-
-                DateInput {
-                    id: historyDate
-                    objectName: "historyDateInput"
-                    Layout.alignment: Qt.AlignVCenter
-                    translucent: true
-                    text: root.dateKey(root.selectedDate)
-                    onEdited: {
-                        var date = LogicalDay.parseIsoDate(text)
-                        if (date) root.showDate(date)
-                    }
-                }
-
-                HeaderButton {
-                    objectName: "todayFocusAddButton"
-                    Layout.alignment: Qt.AlignVCenter
-                    visible: root.canEditHistory
-                    text: qsTr("补录")
-                    onClicked: manualSessionDialog.openForAdd(root.dateKey(root.selectedDate),
-                                                              root.taskOptionsForDialog())
+                Text {
+                    objectName: "todayFocusDateLabel"
+                    Layout.fillWidth: true
+                    // 日期由右上角的日期控件承担，这里只留统计，避免同一信息两处两种格式。
+                    text: qsTr("专注 %1 次 · %2")
+                            .arg(root.focusCount)
+                            .arg(root.formatDuration(root.totalSeconds))
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontMd
                 }
             }
 
-            Text {
-                objectName: "todayFocusLoadError"
-                Layout.fillWidth: true
-                Layout.leftMargin: Theme.space24
-                Layout.rightMargin: Theme.space24
-                visible: root.loadError.length > 0
-                text: root.loadError
-                textFormat: Text.PlainText
-                color: Theme.danger
-                font.pixelSize: Theme.fontMd
-                wrapMode: Text.WordWrap
+
+            // 日期导航属于页头的次级操作，和「补录」同组排在右上角；
+            // 单独占一行会在标题和内容卡之间横插一条带子，把两者的关系切断。
+            PageActionButton {
+                objectName: "todayFocusReturnTodayButton"
+                Layout.alignment: Qt.AlignVCenter
+                translucent: true
+                // 已经在今天时不留一个点不动的禁用按钮，直接收起；
+                // 用户把日期改成半截无效内容时也要能退回来，所以那种情况仍然出现。
+                visible: root.canReturnToToday
+                text: qsTr("回到今天")
+                onClicked: {
+                    root.showToday()
+                    // 日期没变时不会发出变更信号，也需要覆盖用户尚未输完的无效内容。
+                    historyDate.text = root.dateKey(root.selectedDate)
+                }
             }
 
-            FocusTimeline {
-                id: focusTimeline
-                Layout.fillWidth: true
-                Layout.leftMargin: Theme.space24
-                Layout.rightMargin: Theme.space24
-                Layout.minimumHeight: 360
-                Layout.preferredHeight: Math.max(420, root.height - 156)
-                editable: root.canEditHistory
-                // 表头（日期/次数/补录）已由页头承担，卡片再显示一遍就是重复信息。
-                headerVisible: false
-                sessions: root.sessions
-                selectedDay: root.selectedDate.getDate()
-                currentMonth: root.selectedDate.getMonth() + 1
-                viewWidth: root.width
-                formatDurationFn: root.formatDuration
-                onEditRequested: function (session) {
-                    manualSessionDialog.openForEdit(session, root.taskOptionsForDialog())
+            DateInput {
+                id: historyDate
+                objectName: "historyDateInput"
+                Layout.alignment: Qt.AlignVCenter
+                translucent: true
+                text: root.dateKey(root.selectedDate)
+                onEdited: {
+                    var date = LogicalDay.parseIsoDate(text)
+                    if (date) root.showDate(date)
                 }
-                onDeleteRequested: function (session) {
-                    root.deleteSession(Number(session.id || -1), Boolean(session.isRest))
-                }
+            }
+
+            HeaderButton {
+                objectName: "todayFocusAddButton"
+                Layout.alignment: Qt.AlignVCenter
+                visible: root.canEditHistory
+                text: qsTr("补录")
+                onClicked: manualSessionDialog.openForAdd(root.dateKey(root.selectedDate),
+                                                          root.taskOptionsForDialog())
+            }
+        }
+
+        Text {
+            objectName: "todayFocusLoadError"
+            Layout.fillWidth: true
+            visible: root.loadError.length > 0
+            text: root.loadError
+            textFormat: Text.PlainText
+            color: Theme.danger
+            font.pixelSize: Theme.fontMd
+            wrapMode: Text.WordWrap
+        }
+
+        FocusTimeline {
+            id: focusTimeline
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            Layout.minimumHeight: 360
+            editable: root.canEditHistory
+            // 时间轴的滚动条伸到卡片外的页边里、贴窗口右缘，和其它页面同一个位置。
+            scrollBarOverhang: Theme.space24
+            // 表头（日期/次数/补录）已由页头承担，卡片再显示一遍就是重复信息。
+            headerVisible: false
+            sessions: root.sessions
+            selectedDay: root.selectedDate.getDate()
+            currentMonth: root.selectedDate.getMonth() + 1
+            viewWidth: root.width
+            formatDurationFn: root.formatDuration
+            onEditRequested: function (session) {
+                manualSessionDialog.openForEdit(session, root.taskOptionsForDialog())
+            }
+            onDeleteRequested: function (session) {
+                root.deleteSession(Number(session.id || -1), Boolean(session.isRest))
             }
         }
     }

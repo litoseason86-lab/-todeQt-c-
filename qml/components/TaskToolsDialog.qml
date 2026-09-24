@@ -237,8 +237,9 @@ Dialog {
         maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
         parent: root.parent
         categoryManagerRef: root.categoryManagerRef
-        taskSubmitter: function(id, title, category, date, minutes, notes) {
-            return root.taskManagerRef.updateTask(id, title, category, date, minutes, notes)
+        // completionNote 原样转交（未完成任务是 undefined = 保持不变）。
+        taskSubmitter: function(id, title, category, date, minutes, notes, completionNote) {
+            return root.taskManagerRef.updateTask(id, title, category, date, minutes, notes, completionNote)
         }
     }
 }

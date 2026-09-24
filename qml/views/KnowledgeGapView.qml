@@ -275,6 +275,8 @@ Item {
     }
 
     ColumnLayout {
+        id: pageColumn
+
         anchors.fill: parent
         anchors.margins: Theme.space24
         spacing: Theme.space16
@@ -394,12 +396,26 @@ Item {
         }
 
         ScrollView {
+            id: gapScrollView
+
             objectName: "knowledgeGapScrollView"
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: root.gaps.length > 0
             clip: true
             contentWidth: availableWidth
+            // 向右伸进页边距、一直到窗口右缘，再用同样宽的右内边距把卡片收回原位：
+            // ScrollView 自己的滚动条就贴窗口右缘，和其它页面同一个位置，不再压着卡片右端的按钮。
+            Layout.rightMargin: -Theme.space24
+            rightPadding: Theme.space24
+            // 在 ScrollView 上换掉自建滚动条后要自己声明 parent 和几何，否则它会缩在左上角。
+            ScrollBar.vertical: PageScrollBar {
+                objectName: "knowledgeGapScrollBar"
+                parent: gapScrollView
+                x: gapScrollView.width - width
+                y: gapScrollView.topPadding
+                height: gapScrollView.availableHeight
+            }
 
             ColumnLayout {
                 width: parent ? parent.width : 0

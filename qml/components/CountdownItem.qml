@@ -1,10 +1,10 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
 
-Rectangle {
+// 玻璃卡的底色、白色描边、圆角、顶部高光和落影都由 GlassPanel 统一提供，与各页面的玻璃框同一套。
+GlassPanel {
     id: root
 
     property int goalId: -1
@@ -20,23 +20,11 @@ Rectangle {
     signal moveDownRequested()
 
     height: 62
-    radius: Theme.radiusLg
     // 悬停反馈靠“边框变色”表达：底色 idle/hover 都用玻璃卡片材质，
     // 悬停时由 border 从玻璃描边变为 Theme.accent 来提示，所以底色不随悬停变化不是笔误。
-    color: Theme.glassCard
+    // 落影图层的开关（GlassPanel.layer.enabled）只看可见性和透明度，悬停不会让它重建：
+    // 悬停事件分发期间重建效果层，Qt Quick 的 hover 命中树可能留下失效项指针。
     border.color: hitArea.containsMouse ? Theme.accent : Theme.glassBorder
-    border.width: 1
-    // 悬停事件分发期间不重建效果层，避免 Qt Quick 的 hover 命中树留下失效项指针。
-    layer.enabled: true
-    layer.effect: MultiEffect {
-        autoPaddingEnabled: true
-        shadowEnabled: true
-        shadowColor: Theme.shadow
-        shadowOpacity: 0.08
-        shadowBlur: 0.14
-        shadowHorizontalOffset: 0
-        shadowVerticalOffset: 2
-    }
 
     // 上移/下移/删除共用的安静描边样式：默认玻璃底，悬停才转强调色，
     // 避免每行三颗按钮把列表变成按钮墙。

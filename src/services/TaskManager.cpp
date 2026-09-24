@@ -82,7 +82,8 @@ QString taskSelectSql()
         "SELECT t.id, t.title, "
         "COALESCE(c.name, t.category) AS category, "
         "t.category_id, c.name AS category_name, c.color AS category_color, "
-        "t.date, t.completed, t.created_at, t.estimated_minutes, t.notes, t.display_order, t.category AS persisted_category, "
+        "t.date, t.completed, t.created_at, t.estimated_minutes, t.notes, t.completion_note, "
+        "t.display_order, t.category AS persisted_category, "
         "COALESCE((SELECT %1 FROM focus_sessions fs "
         "WHERE fs.task_id = t.id AND fs.duration IS NOT NULL), 0) AS actual_pomodoros, "
         "COALESCE((SELECT %2 FROM focus_sessions fs "
@@ -316,6 +317,9 @@ bool TaskManager::setTaskCompleted(int taskId, bool completed)
     }
 
     QSqlQuery query(db);
+    // 只改 completed 一列，完成记录原样保留：取消完成（包括撤销条）多半是点错了，
+    // 把用户刚写的记录一并抹掉就找不回来了。任务未完成时界面不显示这条记录，
+    // 再次完成时弹窗会把它预填回来。
     query.prepare(QStringLiteral("UPDATE tasks SET completed = :completed WHERE id = :id"));
     query.bindValue(QStringLiteral(":completed"), completed ? 1 : 0);
     query.bindValue(QStringLiteral(":id"), taskId);
@@ -327,6 +331,47 @@ bool TaskManager::setTaskCompleted(int taskId, bool completed)
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to update task completion: task not found" << taskId;
+        return false;
+    }
+
+    emit tasksChanged();
+    return true;
+}
+
+bool TaskManager::completeTaskWithNote(int taskId, const QString& note)
+{
+    if (!isValidTaskId(taskId)) {
+        qWarning() << "Failed to complete task with note: invalid task id" << taskId;
+        return false;
+    }
+    // 超长拒绝而不是截断，理由与备注相同：截断会让保存照常「成功」，丢的往往是结论那段。
+    if (note.size() > kMaxNotesLength) {
+        qWarning() << "Failed to complete task with note: note exceeds" << kMaxNotesLength
+                   << "characters";
+        return false;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to complete task with note: database is not open";
+        return false;
+    }
+
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral(
+        "UPDATE tasks SET completed = 1, completion_note = :note WHERE id = :id"));
+    // QML 传来的空串可能是 null QString，直接绑会写成 NULL 并撞上 NOT NULL 约束；
+    // 「没写记录」是合法的常态，统一收敛成空串。
+    query.bindValue(QStringLiteral(":note"), note.isNull() ? QStringLiteral("") : note);
+    query.bindValue(QStringLiteral(":id"), taskId);
+
+    if (!query.exec()) {
+        qWarning() << "Failed to complete task with note:" << query.lastError().text();
+        return false;
+    }
+
+    if (query.numRowsAffected() == 0) {
+        qWarning() << "Failed to complete task with note: task not found" << taskId;
         return false;
     }
 
@@ -422,9 +467,27 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
     return updateTaskFields(taskId, title, categoryId, dateValue, estimatedMinutes, notes, false);
 }
 
+bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
+                             const QVariant& dateValue, int estimatedMinutes,
+                             const QString& notes, const QVariant& completionNote)
+{
+    // 按值的类型判断「写不写」，不按内容：QML 的 undefined 到这里是无效 QVariant，
+    // null 是 nullptr 类型，只有真的传了字符串（哪怕是空串）才算要改。
+    // 不能用 isNull 判断：Qt 6 里装着空 QString 的 QVariant 也不算 null。
+    std::optional<QString> completionNoteValue;
+    if (completionNote.typeId() == QMetaType::QString) {
+        const QString text = completionNote.toString();
+        // 空串同样要收敛成非 null，否则后面会被当成 NULL 绑定。
+        completionNoteValue = text.isNull() ? QStringLiteral("") : text;
+    }
+    return updateTaskFields(taskId, title, categoryId, dateValue, estimatedMinutes, notes, false,
+                            false, completionNoteValue);
+}
+
 bool TaskManager::updateTaskFields(int taskId, const QString& title, int categoryId,
                                     const QVariant& dateValue, int estimatedMinutes,
-                                    const QString& notes, bool preserveCategory, bool preserveTitle)
+                                    const QString& notes, bool preserveCategory, bool preserveTitle,
+                                    const std::optional<QString>& completionNote)
 {
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to update task: invalid task id" << taskId;
@@ -474,6 +537,12 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
         qWarning() << "Failed to update task: notes exceed" << kMaxNotesLength << "characters";
         return false;
     }
+    // 完成记录与备注共用同一上限，超长同样整次拒绝，其它字段也不落库。
+    if (completionNote && completionNote->size() > kMaxNotesLength) {
+        qWarning() << "Failed to update task: completion note exceeds" << kMaxNotesLength
+                   << "characters";
+        return false;
+    }
 
     QString assignments = QStringLiteral(
         "date = :date, "
@@ -487,6 +556,9 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
     }
     if (updateNotes) {
         assignments += QStringLiteral(", notes = :notes");
+    }
+    if (completionNote) {
+        assignments += QStringLiteral(", completion_note = :completionNote");
     }
 
     QSqlQuery query(db);
@@ -506,6 +578,11 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
     }
     if (updateNotes) {
         query.bindValue(QStringLiteral(":notes"), notes);
+    }
+    if (completionNote) {
+        // C++ 调用方可能传进 null QString；同样收敛成空串，免得撞上 NOT NULL 约束。
+        query.bindValue(QStringLiteral(":completionNote"),
+                        completionNote->isNull() ? QStringLiteral("") : *completionNote);
     }
     query.bindValue(QStringLiteral(":id"), taskId);
 
@@ -821,7 +898,7 @@ bool TaskManager::duplicateTask(int taskId, const QVariant& dateValue)
     }
     QSqlQuery query(DatabaseManager::instance()->database());
     // 单条 INSERT SELECT 原子复制定义，兼容旧版纯文本科目；其他列取默认值，
-    // 不继承完成状态、专注记录或例行生成标记，也不改变原任务。
+    // 不继承完成状态、完成记录、专注记录或例行生成标记，也不改变原任务。
     query.prepare(QStringLiteral(
         "INSERT INTO tasks(title, category, category_id, date, estimated_minutes, notes, display_order) "
         "SELECT title, category, category_id, :date, estimated_minutes, notes, "

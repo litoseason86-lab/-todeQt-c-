@@ -30,6 +30,7 @@
         <file alias="qml/components/KnowledgeGapDialog.qml">../qml/components/KnowledgeGapDialog.qml</file>
         <file alias="qml/components/GlassToolbarButton.qml">../qml/components/GlassToolbarButton.qml</file>
         <file alias="qml/components/PageActionButton.qml">../qml/components/PageActionButton.qml</file>
+        <file alias="qml/components/PageScrollBar.qml">../qml/components/PageScrollBar.qml</file>
         <file alias="qml/components/SegmentedSwitch.qml">../qml/components/SegmentedSwitch.qml</file>
         <file alias="qml/components/LiquidGlassBackdrop.qml">../qml/components/LiquidGlassBackdrop.qml</file>
         <file alias="qml/components/FocusGoalCard.qml">../qml/components/FocusGoalCard.qml</file>
@@ -82,6 +83,7 @@
         <file alias="qml/components/ScheduleEntryDialog.qml">../qml/components/ScheduleEntryDialog.qml</file>
         <file alias="qml/components/ScheduleSettingsDialog.qml">../qml/components/ScheduleSettingsDialog.qml</file>
         <file alias="qml/components/EditTaskDialog.qml">../qml/components/EditTaskDialog.qml</file>
+        <file alias="qml/components/CompleteTaskDialog.qml">../qml/components/CompleteTaskDialog.qml</file>
         <file alias="qml/components/CountdownDialog.qml">../qml/components/CountdownDialog.qml</file>
         <file alias="qml/components/CountdownBanner.qml">../qml/components/CountdownBanner.qml</file>
         <file alias="qml/components/CountdownItem.qml">../qml/components/CountdownItem.qml</file>

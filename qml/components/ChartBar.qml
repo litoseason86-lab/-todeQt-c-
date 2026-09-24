@@ -4,7 +4,8 @@ import QtQuick
 import QtQuick.Layouts
 import ".."
 
-Rectangle {
+// 玻璃卡的底色、白色描边、圆角、顶部高光和落影都由 GlassPanel 统一提供，与各页面的玻璃框同一套。
+GlassPanel {
     id: root
 
     property var dataPoints: []
@@ -19,10 +20,6 @@ Rectangle {
 
     implicitWidth: 560
     implicitHeight: 260
-    radius: Theme.radiusMd
-    color: Theme.glassCard
-    border.color: Theme.glassBorder
-    border.width: 1
 
     function sourceData() {
         // dataPoints 是新接口，weekData 保留给旧调用方。

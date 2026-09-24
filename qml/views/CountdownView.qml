@@ -79,6 +79,8 @@ Item {
     }
 
     ColumnLayout {
+        id: pageColumn
+
         anchors.fill: parent
         anchors.margins: Theme.space24
         spacing: Theme.space16
@@ -299,6 +301,8 @@ Item {
         // 不会发出 visibleChanged，布局便永远不给它分配几何。列表和空状态卡
         // 都放进这个恒可见的包装里，各自的 visible 只控制绘制、不参与布局。
         Item {
+            id: secondaryListArea
+
             Layout.fillWidth: true
             Layout.fillHeight: true
             // 窗口很矮时布局会优先压缩无最小高度的项；这里保住两行的可视高度，
@@ -314,6 +318,7 @@ Item {
                 spacing: 0
                 clip: true
                 model: root.countdownServiceRef ? root.countdownServiceRef.model : null
+                ScrollBar.vertical: countdownScrollBar
 
                 delegate: Loader {
                     id: secondaryGoalLoader
@@ -488,5 +493,17 @@ Item {
                 }
             }
         }
+    }
+
+    // 次要目标多了会滚动，原先没有滚动条。摆在页边里、贴窗口右缘，和其它页面同一个位置；
+    // 竖向只覆盖次要目标列表那一段。
+    PageScrollBar {
+        id: countdownScrollBar
+
+        objectName: "countdownScrollBar"
+        scrollAreaVisible: countdownListView.visible
+        x: root.width - width
+        y: pageColumn.y + secondaryListArea.y
+        height: secondaryListArea.height
     }
 }

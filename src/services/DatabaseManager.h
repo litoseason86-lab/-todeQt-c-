@@ -13,7 +13,7 @@ class DatabaseManager : public QObject
 public:
     // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
-    static constexpr int kCurrentSchemaVersion = 15;
+    static constexpr int kCurrentSchemaVersion = 16;
 
     static DatabaseManager* instance();
 
@@ -92,6 +92,9 @@ private:
     // v15 给 routines 增加重复日位掩码 weekdays：例行不再必须每天生成，
     // 可以只落在选中的星期。既有例行补默认值「每天」，行为与升级前一致。
     bool migrateToVersion15();
+    // v16 给 tasks 增加完成记录 completion_note：用户点「完成」时写下这次具体做完了什么。
+    // 它和 notes（做之前写的页码、要点）是两回事，分开存才不会互相覆盖。
+    bool migrateToVersion16();
     bool createRoutinesTable();
     // 课表项表与节次预设表。两者一起建：节次预设是课表录入的快捷填充来源，
     // 缺了它课表页的「按节次」显示模式就没有行可画。

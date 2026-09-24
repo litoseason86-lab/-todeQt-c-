@@ -895,24 +895,10 @@ Item {
             spacing: Theme.space12
             boundsBehavior: Flickable.StopAtBounds
             cacheBuffer: 180
-            // 主题化竖向滚动条：细、暖色，悬停/按下转 accent，与其它滚动页面一致。
-            ScrollBar.vertical: ScrollBar {
-                id: weekVerticalScrollBar
-                policy: ScrollBar.AsNeeded
-                width: 8
-
-                contentItem: Rectangle {
-                    implicitWidth: 4
-                    radius: Theme.radiusSm
-                    color: weekVerticalScrollBar.pressed || weekVerticalScrollBar.hovered ? Theme.accent : Theme.border
-                }
-
-                background: Rectangle {
-                    objectName: "weekScrollTrack"
-
-                    // 主容器透明后轨道必须跟着透明，否则是一条压在壁纸上的白带。
-                    color: "transparent"
-                }
+            // 全应用统一的页面滚动条。列表本身一直延伸到视图右缘，不指定 parent 时
+            // Qt 会把它放进列表并贴右缘摆好，所以这里不用写几何。
+            ScrollBar.vertical: PageScrollBar {
+                objectName: "weekScrollBar"
             }
 
             // 以“日”为虚拟化单位；屏幕外日期的任务组件不会常驻，避免整周任务一次性全部创建。
@@ -1064,6 +1050,7 @@ Item {
                                     taskCompleted: weekTaskRow.modelData.completed
                                     estimatedMinutes: Number(weekTaskRow.modelData.estimatedMinutes || 0)
                                     taskNotes: String(weekTaskRow.modelData.notes || "")
+                                    completionNote: String(weekTaskRow.modelData.completionNote || "")
                                     focusedMinutes: Number(weekTaskRow.modelData.focusedMinutes || 0)
                                     startFocusAllowed: dayRow.isToday
                                     showStartFocus: root.canStartFocusFor(weekTaskRow.taskId)
@@ -1206,9 +1193,11 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes, notes) {
+        // completionNote 原样转交（未完成任务是 undefined = 保持不变），不能用 String() 包一层。
+        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes, notes, completionNote) {
             var succeeded = Boolean(root.taskManagerRef.updateTask(
-                taskId, title, categoryId, isoDate, Number(estimatedMinutes), String(notes || "")))
+                taskId, title, categoryId, isoDate, Number(estimatedMinutes), String(notes || ""),
+                completionNote))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"
             }

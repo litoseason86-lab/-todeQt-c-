@@ -13,7 +13,7 @@ set(CMAKE_AUTORCC ON)
 
 # 6.7 是 QDateTime::TransitionResolution 的引入版本（见 src/services/LogicalDay.h 的逻辑日边界计算）。
 # 不写下界的话，用更低版本的 Qt 也能配置成功，报错要推迟到编译期才出现。
-find_package(Qt6 6.7 REQUIRED COMPONENTS Concurrent Core Gui Network Quick QuickControls2 QuickLayouts QuickTest Sql Test)
+find_package(Qt6 6.7 REQUIRED COMPONENTS Concurrent Core Gui Network Qml Quick QuickControls2 QuickLayouts QuickTest Sql Test)
 
 # CVE-2025-12385：Text 组件解析 <img> 时不校验尺寸，可导致无限制内存分配与界面失去响应。
 # 影响 5.0.0–6.5.10、6.6.0–6.8.5、6.9.0–6.10.0，修复于 6.5.11 / 6.8.6 / 6.10.1。
@@ -361,9 +361,12 @@ add_executable(PomodoroTodoTests
     src/services/LogicalDayService.cpp
 )
 
+# Qml 只给服务测试用：用 QJSEngine 走一遍界面调用 Q_INVOKABLE 的真实路径（重载选择、
+# undefined/null/空串的转换），C++ 直接调用测不到这一层。
 target_link_libraries(PomodoroTodoTests PRIVATE
     Qt6::Core
     Qt6::Concurrent
+    Qt6::Qml
     Qt6::Sql
     Qt6::Test
 )

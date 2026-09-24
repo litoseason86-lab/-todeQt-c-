@@ -398,18 +398,21 @@ TestCase {
         compare(zeroPieChart.segmentSweep(0), 0)
     }
 
-    function test_statCardUsesWarmRestrainedShadow() {
-        var effect = warmShadowCard.layer.effect
-
-        verify(effect !== null)
-        compare(warmShadowCard.layer.enabled, true)
-        verify(warmShadowCard.cardShadowColor !== undefined)
-        verify(warmShadowCard.cardShadowBlur !== undefined)
-        verify(Qt.colorEqual(warmShadowCard.cardShadowColor, Theme.ink))
-        verify(Math.abs(warmShadowCard.cardShadowBlur - 0.18) < 0.001)
-        compare(warmShadowCard.cardShadowOpacity, 0.08)
-        compare(warmShadowCard.cardShadowHorizontalOffset, 0)
-        compare(warmShadowCard.cardShadowVerticalOffset, 2)
+    // 统计卡的底色、描边、圆角、顶部高光和落影都来自 GlassPanel，与各页面的玻璃框同一套。
+    // 原先它自带一份落影（Theme.ink 色：夜间是浅米色，落影变成一圈浅色光晕），
+    // 同一页的柱图、饼图又完全没有落影、圆角也小一号。
+    function test_statCardUsesUnifiedGlassPanel() {
+        verify(warmShadowCard.layer.effect !== null)
+        compare(warmShadowCard.panelShadowEnabled, true)
+        compare(warmShadowCard.radius, Theme.radiusLg)
+        verify(Qt.colorEqual(warmShadowCard.color, Theme.glassCard))
+        verify(Qt.colorEqual(warmShadowCard.border.color, Theme.glassBorder))
+        verify(findChild(warmShadowCard, "glassSpecularRim") !== null)
+        // 自带的那一套落影参数已经删掉，不能再有第二套。
+        compare(warmShadowCard.cardShadowOpacity, undefined)
+        // GlassPanel 的约定：不可见时不开图层，不让离屏缓冲常驻。
+        compare(warmShadowCard.visible, false)
+        compare(warmShadowCard.layer.enabled, false)
     }
 
     function test_statisticsDurationFormatsSubMinuteSessions() {

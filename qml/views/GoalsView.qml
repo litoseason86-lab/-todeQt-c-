@@ -295,12 +295,12 @@ Item {
     }
 
     ColumnLayout {
+        id: listPageColumn
+
         visible: !root.detailOpen
         anchors.fill: parent
-        anchors.leftMargin: Theme.space32
-        anchors.rightMargin: Theme.space32
-        anchors.topMargin: Theme.space24
-        anchors.bottomMargin: Theme.space24
+        // 页边距与其它页面统一为 24（原为左右 32），切页时卡片的左右边不再跳动。
+        anchors.margins: Theme.space24
         spacing: Theme.space16
 
         RowLayout {
@@ -435,6 +435,8 @@ Item {
         }
 
         Item {
+            id: goalsListArea
+
             Layout.fillWidth: true
             Layout.fillHeight: true
 
@@ -448,6 +450,7 @@ Item {
                 spacing: Theme.space12
                 model: root.filteredGoals
                 reuseItems: true
+                ScrollBar.vertical: goalsListScrollBar
 
                 delegate: GoalCard {
                     required property var modelData
@@ -468,12 +471,16 @@ Item {
                 readonly property int columnCount: width >= 560 ? 3 : (width >= 360 ? 2 : 1)
 
                 anchors.fill: parent
+                // 每格右侧留 12 的间隔（卡片宽 = 格宽 - 12），最后一列的间隔落在页边距里：
+                // 网格向右多伸出一个间隔，卡片右边才和页头、列表视图一样对齐到页边距。
+                anchors.rightMargin: -Theme.space12
                 visible: root.viewMode === "grid" && root.goalsCount > 0
                 clip: true
                 cellWidth: Math.floor(width / columnCount)
                 cellHeight: 208
                 model: root.filteredGoals
                 reuseItems: true
+                ScrollBar.vertical: goalsGridScrollBar
 
                 delegate: GoalTile {
                     required property var modelData
@@ -516,6 +523,28 @@ Item {
         }
     }
 
+    // 列表与网格两种视图各有一个滚动区，各配一条页边滚动条，同一时刻只出现正在显示的那条。
+    // 摆在页边里、贴窗口右缘，和其它页面同一个位置；竖向只覆盖列表区那一段。
+    PageScrollBar {
+        id: goalsListScrollBar
+
+        objectName: "goalsListScrollBar"
+        scrollAreaVisible: listView.visible
+        x: root.width - width
+        y: listPageColumn.y + goalsListArea.y
+        height: goalsListArea.height
+    }
+
+    PageScrollBar {
+        id: goalsGridScrollBar
+
+        objectName: "goalsGridScrollBar"
+        scrollAreaVisible: gridView.visible
+        x: root.width - width
+        y: listPageColumn.y + goalsListArea.y
+        height: goalsListArea.height
+    }
+
     ScrollView {
         id: detailScroll
 
@@ -523,6 +552,15 @@ Item {
         visible: root.detailOpen
         clip: true
         contentWidth: availableWidth
+        // 详情页整页滚动，滚动条本来就在窗口右缘；换成统一样式的那一条。
+        // 在 ScrollView 上换掉自建滚动条后要自己声明 parent 和几何，否则它会缩在左上角。
+        ScrollBar.vertical: PageScrollBar {
+            objectName: "goalDetailScrollBar"
+            parent: detailScroll
+            x: detailScroll.width - width
+            y: detailScroll.topPadding
+            height: detailScroll.availableHeight
+        }
 
         ColumnLayout {
             width: Math.max(detailScroll.availableWidth, 1)
@@ -530,8 +568,8 @@ Item {
 
             RowLayout {
                 Layout.fillWidth: true
-                Layout.leftMargin: Theme.space32
-                Layout.rightMargin: Theme.space32
+                Layout.leftMargin: Theme.space24
+                Layout.rightMargin: Theme.space24
                 Layout.topMargin: Theme.space24
                 spacing: Theme.space12
 
@@ -575,9 +613,6 @@ Item {
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
                 implicitHeight: progressContent.implicitHeight + Theme.space32
-                border.color: Theme.glassBorderContrast
-                border.width: 1
-                radius: Theme.radiusLg
                 bottomRimEnabled: true
                 panelShadowEnabled: false
                 solidFallback: !Theme.glassBlurAllowed
@@ -633,9 +668,6 @@ Item {
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
                 implicitHeight: gridContent.implicitHeight + Theme.space32
-                border.color: Theme.glassBorderContrast
-                border.width: 1
-                radius: Theme.radiusLg
                 bottomRimEnabled: true
                 panelShadowEnabled: false
                 solidFallback: !Theme.glassBlurAllowed
@@ -697,9 +729,6 @@ Item {
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
                 implicitHeight: heatmapContent.implicitHeight + Theme.space32
-                border.color: Theme.glassBorderContrast
-                border.width: 1
-                radius: Theme.radiusLg
                 bottomRimEnabled: true
                 panelShadowEnabled: false
                 solidFallback: !Theme.glassBlurAllowed

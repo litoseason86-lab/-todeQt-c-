@@ -2,7 +2,6 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Effects
 import QtQuick.Layouts
 import "../components"
 import ".."
@@ -127,8 +126,8 @@ Item {
         var slotY = root.dropIndicatorAfterTarget
                 ? targetItem.y + targetItem.height + todayTaskList.spacing / 2
                 : targetItem.y - todayTaskList.spacing / 2
-        // 列表容器本身也有离屏阴影图层。首行上方和末行下方不能越出它的纹理边界，
-        // 否则逻辑上可见、实际渲染仍被裁掉；留 1px 让 2px 指示线完整落在内部。
+        // 夹在列表内容范围里：首行上方和末行下方的指示线贴着列表边缘画，
+        // 不跑进框的内边距或框外；留 1px 让 2px 指示线完整落在内部。
         return Math.max(1, Math.min(todayTaskList.contentHeight - 1, slotY))
     }
     // 今天排了多少活（全部任务的预计用时之和，完成与否都算——问的是"排了多少"）。
@@ -182,6 +181,8 @@ Item {
         if (!root.pageActive) {
             editTaskDialog.finishEditing()
             editTaskDialog.close()
+            completeTaskDialog.finishEditing()
+            completeTaskDialog.close()
             root.commitReorder(true)
             taskTools.finishInteraction()
             taskTools.close()
@@ -289,6 +290,10 @@ Item {
         enabled: root.pageActive
 
         function onFocusCompleted(duration) {
+            // 完成正在计时的任务时，专注会在同一次点击里结束（见 MainWindow.handleTaskCompletedByUser），
+            // 这时正等完成动画播完：立即刷新会销毁那一行。延迟结束时的整页刷新会一并重读专注数据。
+            if (root.completionRefreshDelayActive)
+                return;
             refreshCoalescer.request();
         }
     }
@@ -620,6 +625,40 @@ Item {
         if (completed) {
             root.taskCompletionUndoable(id, root.taskTitleById(id));
         }
+    }
+
+    // 「完成」弹窗的提交。与复选框共用同一套延迟刷新和撤销提示，区别只在写入时带上完成记录。
+    // 返回 false 时弹窗留着并提示重试；此前列表行没有被切成完成态，所以不需要像复选框那样重建模型。
+    function completeTaskWithNote(id, note) {
+        if (!root.taskManagerRef || typeof root.taskManagerRef.completeTaskWithNote !== "function") {
+            return false
+        }
+        // 必须在写库之前打开延迟：TaskManager 会同步发 tasksChanged，
+        // 立即重建列表会销毁接下来要播放完成动画的那一行。
+        root.completionRefreshDelayActive = true
+        completionRefreshTimer.restart()
+        if (!Boolean(root.taskManagerRef.completeTaskWithNote(id, note))) {
+            completionRefreshTimer.stop()
+            root.completionRefreshDelayActive = false
+            return false
+        }
+        // 行不在屏幕上时 ListView 不会创建它，拿不到就只是少一段动画，数据已经写好。
+        var row = root.taskRowById(id)
+        if (row) {
+            row.playCompletedFeedback()
+        }
+        root.taskCompletionUndoable(id, root.taskTitleById(id))
+        return true
+    }
+
+    // 按任务编号找当前这一行。每次现查下标，不缓存：刷新会重建模型，旧下标可能已指向别的任务。
+    function taskRowById(id) {
+        for (var i = 0; i < root.tasks.length; i++) {
+            if (Number(root.tasks[i].id) === id) {
+                return todayTaskList.itemAtIndex(i) as TaskItem
+            }
+        }
+        return null
     }
 
     function taskTitleById(id) {
@@ -1002,23 +1041,17 @@ Item {
             wrapMode: Text.WordWrap
         }
 
-        Rectangle {
-            objectName: "todayTaskListContainer"
+        // 列表框：玻璃只做底板，任务行和滚动条画在它上面，不进它的阴影图层。
+        // 进了图层会被裁在框的边界里，滚动条就没法摆到框外的页边上。
+        Item {
+            id: todayTaskListFrame
+
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: Theme.glassCard
-            radius: Theme.radiusLg
-            border.color: Theme.glassBorder
-            border.width: 1
-            layer.enabled: true
-            layer.effect: MultiEffect {
-                autoPaddingEnabled: true
-                shadowEnabled: true
-                shadowColor: Theme.shadow
-                shadowOpacity: 0.08
-                shadowBlur: 0.14
-                shadowHorizontalOffset: 0
-                shadowVerticalOffset: 2
+
+            GlassPanel {
+                objectName: "todayTaskListContainer"
+                anchors.fill: parent
             }
 
             ColumnLayout {
@@ -1086,12 +1119,15 @@ Item {
                 objectName: "todayTaskList"
 
                 anchors.fill: parent
+                // 与仪表盘任务面板同一档框内边距，任务行不再和框的描边叠在一起。
+                anchors.margins: Theme.space16
                 clip: true
                 visible: root.tasks.length > 0
                 // 拖动期间也保持这个引用不变——换模型会让整片 delegate 重建。
                 model: root.tasks
                 spacing: Theme.space8
                 boundsBehavior: Flickable.StopAtBounds
+                ScrollBar.vertical: todayTaskScrollBar
 
                 delegate: TaskItem {
                     interactionCoordinatorRef: root.interactionCoordinatorRef
@@ -1114,6 +1150,8 @@ Item {
                             taskCompleted: todayTaskRow.modelData.completed
                             estimatedMinutes: Number(todayTaskRow.modelData.estimatedMinutes || 0)
                             taskNotes: String(todayTaskRow.modelData.notes || "")
+                            completionNote: String(todayTaskRow.modelData.completionNote || "")
+                            showCompleteWithNote: true
                             focusedMinutes: Number(todayTaskRow.modelData.focusedMinutes || 0)
                             // 已完成的任务不参与排序：它们本来就被排到列表末尾，
                             // 允许拖动只会让用户以为能把它插回未完成那一段。
@@ -1158,22 +1196,38 @@ Item {
                             onEditClicked: function (id) {
                                 editTaskDialog.openForTask(todayTaskRow.modelData);
                             }
+
+                            onCompleteWithNoteClicked: function (id) {
+                                completeTaskDialog.openForTask(todayTaskRow.modelData);
+                            }
                         }
             }
 
             // 指示线属于列表交互层，不属于任何带离屏阴影图层的 TaskItem。
             // 放在 ListView 的同级上层既不会被 delegate 图层裁掉，也避免每行复制一条线。
+            // 列表在框内缩进了一圈，指示线跟着列表的位置和宽度走。
             Rectangle {
                 objectName: "todayDropIndicator"
-                x: 0
-                y: root.dropIndicatorContentY - todayTaskList.contentY - height / 2
-                width: parent.width
+                x: todayTaskList.x
+                y: todayTaskList.y + root.dropIndicatorContentY - todayTaskList.contentY - height / 2
+                width: todayTaskList.width
                 height: 2
                 radius: 1
                 z: 2
                 color: Theme.accent
                 visible: todayTaskList.visible && root.dropIndicatorContentY >= 0
                 Accessible.ignored: true
+            }
+
+            // 滚动条摆在框外右侧的页边里、贴窗口右缘，和其它页面同一个位置；
+            // 竖向只覆盖列表那一段。框外这 24px 就是页边距（外层布局的 anchors.margins）。
+            PageScrollBar {
+                id: todayTaskScrollBar
+
+                objectName: "todayTaskScrollBar"
+                x: todayTaskListFrame.width + Theme.space24 - width
+                y: todayTaskList.y
+                height: todayTaskList.height
             }
         }
 
@@ -1218,18 +1272,37 @@ Item {
         interactionSource: "TodayTaskView.edit_dialog"
         onOpenFailed: function(message) { root.loadError = message }
         id: editTaskDialog
+        objectName: "todayEditTaskDialog"
         maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes, notes) {
+        // completionNote 原样转交（未完成任务是 undefined = 保持不变），不能在这里用 String() 包一层，
+        // 否则 undefined 会变成字符串 "undefined" 写进记录。
+        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes, notes, completionNote) {
             var succeeded = Boolean(root.taskManagerRef.updateTask(
-                taskId, title, categoryId, isoDate, Number(estimatedMinutes), String(notes || "")))
+                taskId, title, categoryId, isoDate, Number(estimatedMinutes), String(notes || ""),
+                completionNote))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试";
             }
             return succeeded
+        }
+    }
+
+    CompleteTaskDialog {
+        id: completeTaskDialog
+        objectName: "todayCompleteTaskDialog"
+
+        interactionCoordinatorRef: root.interactionCoordinatorRef
+        interactionSource: "TodayTaskView.complete_dialog"
+        // 完成记录与备注共用同一长度上限。
+        maxNoteLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
+        parent: root
+        onOpenFailed: function (message) { root.loadError = message }
+        noteSubmitter: function (taskId, note) {
+            return root.completeTaskWithNote(taskId, note)
         }
     }
 

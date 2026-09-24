@@ -65,10 +65,16 @@ Popup {
     property int maxNotesLength: 2000
     // 预计用时（分钟），0 表示未设置；openForTask 从任务数据回填。
     property int estimatedMinutes: 0
+    // 正在编辑的任务是否已完成。已完成才显示「完成记录」一栏：未完成的任务还谈不上做完了什么，
+    // 它残留的旧记录（取消完成时保留下来的）也不该在这里被改动。
+    property bool editingCompleted: false
     // 生产页面注入返回 bool 的写入函数；保留信号用于独立组件和兼容测试。
+    // 第 7 个参数是完成记录：已完成任务传字符串（空串 = 清空），未完成任务传 undefined，
+    // 宿主原样转给 TaskManager 七参 updateTask，由它按「不是字符串就保持不变」处理。
     property var taskSubmitter: null
 
-    signal taskEdited(int taskId, string title, int categoryId, var isoDate, int estimatedMinutes, string notes)
+    signal taskEdited(int taskId, string title, int categoryId, var isoDate, int estimatedMinutes, string notes,
+                      var completionNote)
 
     modal: true
     focus: true
@@ -194,6 +200,8 @@ Popup {
         root.estimatedMinutes = Number(task.estimatedMinutes || 0);
         estimateFields.reload();
         notesField.text = String(task.notes || "");
+        root.editingCompleted = Boolean(task.completed);
+        completionNoteField.text = String(task.completionNote || "");
         root.originalIsoDate = root.normalizedIso(task.date);
         customDate.text = root.originalIsoDate;
 
@@ -257,6 +265,15 @@ Popup {
             return
         }
 
+        // 完成记录同一口径：超长当场拦下，说清楚是哪一栏。
+        var completionNote = root.editingCompleted ? completionNoteField.text.trim() : undefined
+        if (root.editingCompleted && completionNote.length > root.maxNotesLength) {
+            root.errorText = "完成记录太长了，请控制在 " + root.maxNotesLength + " 字以内（当前 "
+                    + completionNote.length + " 字）"
+            completionNoteField.forceActiveFocus()
+            return
+        }
+
         var categoryId = categoryCombo.currentIndex >= 0 && categoryCombo.currentIndex < root.categoryOptions.length ? Number(root.categoryOptions[categoryCombo.currentIndex].id || -1) : -1;
         // 哨兵不是科目。正常路径下它选中后立刻被退回，这里是最后一道闸。
         if (categoryId === root.newCategorySentinelId) {
@@ -268,11 +285,11 @@ Popup {
             // qmllint disable use-proper-function
             succeeded = Boolean(root.taskSubmitter(
                 root.editingTaskId, title, categoryId,
-                root.resultIsoDate(), root.estimatedMinutes, notesField.text.trim()))
+                root.resultIsoDate(), root.estimatedMinutes, notesField.text.trim(), completionNote))
             // qmllint enable use-proper-function
         } else {
             root.taskEdited(root.editingTaskId, title, categoryId,
-                            root.resultIsoDate(), root.estimatedMinutes, notesField.text.trim())
+                            root.resultIsoDate(), root.estimatedMinutes, notesField.text.trim(), completionNote)
         }
         if (!succeeded) {
             root.errorText = "保存失败，请检查数据库后重试"
@@ -545,6 +562,61 @@ Popup {
                     color: Theme.surfaceSunken
                     border.width: notesField.activeFocus ? 2 : 1
                     border.color: notesField.activeFocus ? Theme.focusRing : Theme.borderSubtle
+                }
+            }
+        }
+
+        // 完成记录：只在编辑已完成任务时出现，与任务卡「完成」弹窗写下的是同一份内容。
+        // 备注是做之前写的计划，这里是做完之后的结果，两栏分开，不互相覆盖。
+        Text {
+            objectName: "editCompletionNoteLabel"
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            visible: root.editingCompleted
+            text: "完成记录"
+            textFormat: Text.PlainText
+            color: Theme.inkSoft
+            font.pixelSize: Theme.fontMd
+        }
+
+        Label {
+            objectName: "editCompletionNoteCounter"
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            visible: root.editingCompleted && completionNoteField.text.length > root.maxNotesLength * 0.9
+            text: completionNoteField.text.length + " / " + root.maxNotesLength
+            textFormat: Text.PlainText
+            horizontalAlignment: Text.AlignRight
+            color: completionNoteField.text.length > root.maxNotesLength ? Theme.danger : Theme.inkSoft
+            font.pixelSize: Theme.fontSm
+        }
+
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            Layout.preferredHeight: 60
+            visible: root.editingCompleted
+
+            TextArea {
+                id: completionNoteField
+                objectName: "editCompletionNoteField"
+
+                placeholderText: "这次具体完成了哪些内容……"
+                placeholderTextColor: Theme.inkMuted
+                color: Theme.inkStrong
+                font.pixelSize: Theme.fontMd
+                wrapMode: TextArea.Wrap
+                selectByMouse: true
+                Accessible.name: "完成记录"
+
+                background: Rectangle {
+                    radius: Theme.radiusMd
+                    color: Theme.surfaceSunken
+                    border.width: completionNoteField.activeFocus ? 2 : 1
+                    border.color: completionNoteField.activeFocus ? Theme.focusRing : Theme.borderSubtle
                 }
             }
         }

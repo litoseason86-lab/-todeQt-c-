@@ -8,6 +8,7 @@
 #include <QString>
 #include <QVariant>
 #include <QVariantList>
+#include <optional>
 
 class TaskManager : public QObject
 {
@@ -58,6 +59,10 @@ public:
     // 完成、删除和查询任务后都会通过 tasksChanged 通知界面刷新。
     Q_INVOKABLE bool completeTask(int taskId);
     Q_INVOKABLE bool setTaskCompleted(int taskId, bool completed);
+    // 任务卡「完成」弹窗的提交入口：同一条 UPDATE 里标记完成并写下完成记录，
+    // 不会出现「完成了但记录没存上」的半状态。note 可以为空（用户没写也允许完成）；
+    // 长度上限与备注共用 kMaxNotesLength，超长拒绝、不截断。对已完成任务调用等于改写记录。
+    Q_INVOKABLE bool completeTaskWithNote(int taskId, const QString& note);
     // 只在一颗有效番茄刚入账后调用；用单条 SQL 按实际数恰好等于计划数完成任务，避免检查与更新之间漂移。
     // 本次会话结束后，若累计专注时长刚跨过任务的预计用时就自动完成它。
     //
@@ -71,6 +76,12 @@ public:
     Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId,
                                 const QVariant& dateValue, int estimatedMinutes,
                                 const QString& notes);
+    // 七参重载供编辑弹窗使用，额外带完成记录。completionNote 只有是字符串时才写入
+    // （空串 = 清空记录）；QML 传 undefined 或 null 表示保持不变——编辑未完成任务时
+    // 弹窗不显示完成记录，就走这条，不能顺手把旧记录抹掉。
+    Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId,
+                                const QVariant& dateValue, int estimatedMinutes,
+                                const QString& notes, const QVariant& completionNote);
 
     // —— 手动排序与改期 ——
     // 同一天里的任务此前只能按创建时间排，十几条并列时无法表达"先做哪个"。
@@ -112,9 +123,11 @@ public:
     // 字段级编辑可保留历史科目文本；UI 全量表单仍使用原 updateTask 接口。
     // preserveTitle 为真时既不校验也不改写标题（title 参数被忽略）：外部只改备注、预计用时时，
     // 不能因为没要求修改的旧标题（上限出现之前可能超过 100 字）而整次失败。
+    // completionNote 为 nullopt 时不碰完成记录；外部 AI 接入走的正是这条默认路径。
     bool updateTaskFields(int taskId, const QString& title, int categoryId, const QVariant& dateValue,
                           int estimatedMinutes, const QString& notes, bool preserveCategory,
-                          bool preserveTitle = false);
+                          bool preserveTitle = false,
+                          const std::optional<QString>& completionNote = std::nullopt);
     // 返回提交事实，让后台调用区分“未创建”和“已提交但无法取得编号”。
     int createTaskWithOutcome(const QString& title, const QVariant& dateValue, int categoryId,
                               int estimatedMinutes, const QString& notes, bool* committed);

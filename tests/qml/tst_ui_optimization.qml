@@ -926,7 +926,8 @@ TestCase {
         verify(doneCount !== null);
 
         compare(taskListContainer.radius, 8);
-        compare(taskListContainer.layer.enabled, true);
+        // 列表框就是 GlassPanel：落影图层随可见性开关，这里只断言它带着落影效果。
+        compare(taskListContainer.panelShadowEnabled, true);
         verify(taskListContainer.layer.effect !== null);
         compare(emptyStateCard.radius, 8);
         compare(emptyStateIcon.radius, 8);
@@ -968,7 +969,8 @@ TestCase {
         compare(previousButtonBackground.radius, 8);
 
         compare(calendarContainer.radius, 8);
-        compare(calendarContainer.layer.enabled, true);
+        // 月历框就是 GlassPanel：落影图层随可见性开关，这里只断言它带着落影效果。
+        compare(calendarContainer.panelShadowEnabled, true);
         verify(calendarContainer.layer.effect !== null);
         verify(calendarContainer.width > 0);
         verify(calendarContainer.height >= 520);
@@ -997,19 +999,19 @@ TestCase {
         weekPlanView.visible = true
         wait(80)
 
-        var track = findChild(weekPlanView, "weekScrollTrack")
-        verify(track)
+        var bar = findChild(weekPlanView, "weekScrollBar")
+        verify(bar)
         // 主容器透明后，不透明轨道会变成压在壁纸上的白条。
-        verify(track.color.a < 0.01)
+        verify(bar.background.color.a < 0.01)
     }
 
     function test_todayFocusTimelineScrollTrackTransparent() {
         todayFocusView.visible = true
         wait(80)
 
-        var track = findChild(todayFocusView, "monthTimelineScrollTrack")
-        verify(track)
-        verify(track.color.a < 0.01)
+        var bar = findChild(todayFocusView, "focusTimelineVerticalScrollBar")
+        verify(bar)
+        verify(bar.background.color.a < 0.01)
     }
 
     function test_monthContainersAreGlass() {
@@ -1028,8 +1030,11 @@ TestCase {
 
         var timeline = findChild(todayFocusView, "focusTimelinePanel")
         verify(timeline)
-        verify(Qt.colorEqual(timeline.color, Theme.glassCard))
-        verify(Qt.colorEqual(timeline.border.color, Theme.glassBorder))
+        // 卡片的玻璃是垫在记录列表下面的一块底板，列表不进它的阴影图层。
+        var glass = findChild(timeline, "focusTimelineGlass")
+        verify(glass)
+        verify(Qt.colorEqual(glass.color, Theme.glassCard))
+        verify(Qt.colorEqual(glass.border.color, Theme.glassBorder))
 
         // 页头已经承担日期与次数，卡片自带的表头必须收起，否则同一信息出现两遍。
         compare(timeline.headerVisible, false)

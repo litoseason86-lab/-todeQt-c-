@@ -201,7 +201,8 @@ bool DatabaseManager::createTables()
             display_order INTEGER NOT NULL DEFAULT 0,
             date TEXT NOT NULL,
             completed INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            completion_note TEXT NOT NULL DEFAULT ''
         )
     )SQL");
     if (!execSql(query, createTasksTable, "Failed to create tasks table:")) {
@@ -464,6 +465,15 @@ bool DatabaseManager::createTables()
             return false;
         }
         version = 15;
+    }
+
+    // v16 给 tasks 增加完成记录列。与前面几步同理，列缺失时无论版本号都要补：
+    // 任务查询会直接读这一列，缺了它今日任务、周计划整页都加载失败。
+    if (version < 16 || !columnExists(QStringLiteral("tasks"), QStringLiteral("completion_note"))) {
+        if (!migrateToVersion16()) {
+            return false;
+        }
+        version = 16;
     }
 
     // 节次表存在但一行都没有，同样是「按节次」版式画不出任何行的那种坏状态
@@ -980,6 +990,7 @@ bool DatabaseManager::migrateToVersion5()
         QStringLiteral("estimated_minutes"),
         QStringLiteral("notes"),
         QStringLiteral("display_order"),
+        QStringLiteral("completion_note"),
     };
 
     // 遇到不认识的列就拒绝重建。宁可让迁移失败并留下明确日志，
@@ -1009,6 +1020,10 @@ bool DatabaseManager::migrateToVersion5()
     const QString orderExpression =
         currentColumns.contains(QStringLiteral("display_order"))
         ? QStringLiteral("display_order") : QStringLiteral("0");
+    // v16 的完成记录同理：v16 之前的库没有这一列，按空记录落地。
+    const QString completionNoteExpression =
+        currentColumns.contains(QStringLiteral("completion_note"))
+        ? QStringLiteral("completion_note") : QStringLiteral("''");
 
     QSqlQuery query(m_db);
     const QStringList statements = {
@@ -1025,16 +1040,18 @@ bool DatabaseManager::migrateToVersion5()
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 estimated_minutes INTEGER NOT NULL DEFAULT 0,
                 notes TEXT NOT NULL DEFAULT '',
-                display_order INTEGER NOT NULL DEFAULT 0
+                display_order INTEGER NOT NULL DEFAULT 0,
+                completion_note TEXT NOT NULL DEFAULT ''
             )
         )SQL"),
         QStringLiteral(
             "INSERT INTO tasks_v5 (id, title, category, category_id, routine_id, "
             "routine_generated, date, completed, created_at, estimated_minutes, "
-            "notes, display_order) "
+            "notes, display_order, completion_note) "
             "SELECT id, title, category, category_id, routine_id, %1, date, completed, "
-            "created_at, %2, %3, %4 FROM tasks")
-            .arg(provenanceExpression, estimateExpression, notesExpression, orderExpression),
+            "created_at, %2, %3, %4, %5 FROM tasks")
+            .arg(provenanceExpression, estimateExpression, notesExpression, orderExpression,
+                 completionNoteExpression),
         QStringLiteral("DROP TABLE tasks"),
         QStringLiteral("ALTER TABLE tasks_v5 RENAME TO tasks")
     };
@@ -1792,6 +1809,42 @@ bool DatabaseManager::migrateToVersion15()
     }
 
     qInfo() << "Database migrated to version 15";
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion16()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+
+    // v16 只给 tasks 追加一列，既有任务一律取默认值「没有完成记录」，不改写任何已有数据；
+    // 与 v15 一样不建迁移快照。
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start database migration transaction:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    // 列可能已经存在：全新库建表时就带上了这一列，v5 整表重建也会把它建出来，
+    // 走到这里只需要把版本号推上去。
+    if (!columnExists(QStringLiteral("tasks"), QStringLiteral("completion_note"))) {
+        if (!query.exec(QStringLiteral(
+                "ALTER TABLE tasks ADD COLUMN completion_note TEXT NOT NULL DEFAULT ''"))) {
+            qWarning() << "Failed to add tasks.completion_note:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+
+    if (!setDatabaseVersion(16) || !m_db.commit()) {
+        qWarning() << "Failed to commit version 16 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 16";
     return true;
 }
 

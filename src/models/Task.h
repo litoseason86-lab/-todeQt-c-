@@ -24,6 +24,8 @@ public:
     // 只读派生值，不落在 tasks 表里，避免与专注记录产生第二份可能不一致的真相。
     int estimatedMinutes = 0;
     QString notes;
+    // 完成记录：点「完成」时写下的这次具体做完了什么。notes 是做之前写的计划，两者分开存。
+    QString completionNote;
     int displayOrder = 0;
     int actualPomodoros = 0;
     int focusedSeconds = 0;

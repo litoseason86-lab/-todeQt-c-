@@ -66,6 +66,13 @@ Item {
             ? Boolean(root.settingsRef.dashboardTimerVisible) : true
     readonly property bool timerMotionReduced: root.settingsRef
             ? Boolean(root.settingsRef.reduceMotion) : false
+    // 任务清单的滚动条位置，由滚动区向右伸出多少决定（伸出去的部分用右内边距收回，任务行不动）：
+    // - 专注面板收起：和其它页面一样贴窗口最右缘，伸出「面板内边距 16 + 页边距 24」= 40；
+    // - 专注面板展开：窗口最右缘是专注面板，滚动条居中落在两块面板之间那条 16px 缝里，
+    //   伸出「面板内边距 16 + 缝宽的一半 + 滚动条宽的一半」= 28。
+    readonly property int taskScrollBarOverhang: root.timerPanelVisible
+                                                 ? Theme.space16 + (Theme.space16 + 8) / 2
+                                                 : Theme.space16 + Theme.space24
 
     function setTimerPanelVisible(visible) {
         if (visible && root.compactLayout) {
@@ -127,6 +134,8 @@ Item {
         if (!root.pageActive) {
             editTaskDialog.finishEditing()
             editTaskDialog.close()
+            completeTaskDialog.finishEditing()
+            completeTaskDialog.close()
         }
         refreshCoalescer.cancel()
         if (root.pageActive)
@@ -212,6 +221,10 @@ Item {
         enabled: root.pageActive
 
         function onFocusCompleted(duration) {
+            // 完成正在计时的任务时，专注会在同一次点击里结束（见 MainWindow.handleTaskCompletedByUser），
+            // 这时正等完成动画播完：立即刷新会销毁那一行。延迟结束时的整页刷新会一并重读专注数据。
+            if (root.completionRefreshDelayActive)
+                return
             refreshCoalescer.request()
         }
     }
@@ -363,6 +376,40 @@ Item {
         }
     }
 
+    // 「完成」弹窗的提交，与今日任务页同一套：写入时带上完成记录，其余沿用复选框的延迟刷新与撤销提示。
+    // 返回 false 时弹窗留着并提示重试；此前任务行没有被切成完成态，所以不需要像复选框那样重建模型。
+    function completeTaskWithNote(id, note) {
+        if (!root.taskManagerRef || typeof root.taskManagerRef.completeTaskWithNote !== "function") {
+            return false
+        }
+        // 必须在写库之前打开延迟：TaskManager 会同步发 tasksChanged，
+        // 立即重建列表会销毁接下来要播放完成动画的那一行。
+        root.completionRefreshDelayActive = true
+        completionRefreshTimer.restart()
+        if (!Boolean(root.taskManagerRef.completeTaskWithNote(id, note))) {
+            completionRefreshTimer.stop()
+            root.completionRefreshDelayActive = false
+            return false
+        }
+        var row = root.taskRowById(id)
+        if (row) {
+            row.playCompletedFeedback()
+        }
+        root.taskCompletionUndoable(id, root.taskTitleById(id))
+        return true
+    }
+
+    // 按任务编号找当前这一行。Repeater 的下标对应 filteredTasks（不是 tasks），
+    // 每次现查不缓存：刷新会重建模型，旧下标可能已指向别的任务。
+    function taskRowById(id) {
+        for (var i = 0; i < root.filteredTasks.length; i++) {
+            if (Number(root.filteredTasks[i].id) === id) {
+                return dashboardTaskRepeater.itemAt(i) as TaskItem
+            }
+        }
+        return null
+    }
+
     function taskTitleById(id) {
         for (var i = 0; i < root.tasks.length; i++) {
             if (Number(root.tasks[i].id) === id) {
@@ -405,9 +452,13 @@ Item {
     }
 
     RowLayout {
+        id: dashboardRow
+
         anchors.fill: parent
         anchors.margins: Theme.space24
-        spacing: Theme.space16
+        // 两块面板之间的 16px 缝算在专注面板的壳里（见 timerPanelShell），
+        // 收起动画才是一段连续的宽度变化，不会在收尾时因为行距消失跳一下。
+        spacing: 0
 
         ColumnLayout {
             id: dashboardMainColumn
@@ -559,11 +610,18 @@ Item {
                 wrapMode: Text.WordWrap
             }
 
-            GlassPanel {
-                objectName: "dashboardTaskPanel"
+            // 任务面板：玻璃只做底板，任务行和滚动条画在它上面、不进它的阴影图层。
+            // 进了图层会被裁在面板边界里，滚动条就没法摆到面板外侧。
+            Item {
+                id: dashboardTaskFrame
 
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+
+                GlassPanel {
+                    objectName: "dashboardTaskPanel"
+                    anchors.fill: parent
+                }
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -694,6 +752,7 @@ Item {
                             anchors.fill: parent
                             visible: root.filterMode === "learning"
                             stats: root.todayTaskStats
+                            scrollBarOverhang: root.taskScrollBarOverhang
                         }
 
                         ScrollView {
@@ -701,18 +760,23 @@ Item {
                             objectName: "dashboardTaskScrollView"
 
                             anchors.fill: parent
+                            // 向右伸出面板，再用同样宽的右内边距把任务行收回原位（见 taskScrollBarOverhang）。
+                            // 不能把滚动条挂到 ScrollView 外面：ScrollView 会把挂上来的滚动条收为自己的子项，
+                            // 而它又按自身边界裁剪子项，摆在外面的部分画不出来。
+                            anchors.rightMargin: -root.taskScrollBarOverhang
+                            rightPadding: root.taskScrollBarOverhang
                             clip: true
                             visible: root.filterMode !== "learning" && root.filteredTasks.length > 0
                             // 内容宽度锁死在可用宽度，横向永不溢出。
                             contentWidth: availableWidth
-                            // 竖向滚动条浮在 ScrollView 右缘之上，ScrollView 并不替它让位：
-                            // availableWidth 只扣 padding、不扣滚动条，任务行会一直铺到条底下，
-                            // 滑块正压在卡片右缘和圆角上。右侧固定留出滚动条宽度再加一点间距。
-                            // 不绑「滚动条是否可见」：它随内容是否超出一屏变化，而内容高度又受
-                            // 可用宽度影响，会绕成绑定循环（设置页 settingsPageScroll 同样取舍）。
-                            // 这里必须用 ScrollView 自建的那个竖向条：在 ScrollView 上改写
-                            // ScrollBar.vertical，替身不会被摆到右缘，会缩成 10x10 停在左上角。
-                            rightPadding: ScrollBar.vertical.width + Theme.space4
+                            // 在 ScrollView 上换掉自建滚动条后要自己声明 parent 和几何，否则它会缩在左上角。
+                            ScrollBar.vertical: PageScrollBar {
+                                objectName: "dashboardTaskScrollBar"
+                                parent: taskScrollView
+                                x: taskScrollView.width - width
+                                y: taskScrollView.topPadding
+                                height: taskScrollView.availableHeight
+                            }
                             // 显式建横向滚动条再关闭：离屏测试里 attached 实例可能尚未创建，
                             // 直接给 ScrollBar.horizontal.policy 赋值会打到 null 上。
                             // 横向条恒不可见，所以不受上面那条「不能改写」的影响。
@@ -730,6 +794,8 @@ Item {
                                 spacing: root.doneFilter ? Theme.space4 : Theme.space8
 
                                 Repeater {
+                                    id: dashboardTaskRepeater
+
                                     model: root.filteredTasks
 
                                     TaskItem {
@@ -749,11 +815,14 @@ Item {
                                         taskCompleted: taskRow.modelData.completed
                                         estimatedMinutes: Number(taskRow.modelData.estimatedMinutes || 0)
                                         taskNotes: String(taskRow.modelData.notes || "")
+                                        completionNote: String(taskRow.modelData.completionNote || "")
                                         focusedMinutes: Number(taskRow.modelData.focusedMinutes || 0)
                                         // 已完成筛选：紧凑只读行 + 右侧「已完成」徽章，去掉编辑/删除/开始专注空洞。
                                         compact: root.doneFilter
                                         showStartFocus: !root.doneFilter
                                         showEditDelete: !root.doneFilter
+                                        // 「已完成」筛选下全是只读紧凑行，不需要再完成一次。
+                                        showCompleteWithNote: !root.doneFilter
 
                                         onCompletionChanged: function (id, completed) {
                                             root.setTaskCompletedWithAnimationDelay(id, completed)
@@ -783,6 +852,10 @@ Item {
                                         onEditClicked: function (id) {
                                             editTaskDialog.openForTask(taskRow.modelData)
                                         }
+
+                                        onCompleteWithNoteClicked: function (id) {
+                                            completeTaskDialog.openForTask(taskRow.modelData)
+                                        }
                                     }
                                 }
                             }
@@ -801,7 +874,7 @@ Item {
             // 布局才是 width 的所有者，反过来让 Layout.preferredWidth 去读 width
             // 会形成循环，qmllint 直接判为 undefined behavior。
             // MainWindow 的侧栏收起是同一个场景，用的就是下面这种写法。
-            Layout.preferredWidth: root.timerPanelVisible ? 300 : 0
+            Layout.preferredWidth: root.timerPanelVisible ? 300 + Theme.space16 : 0
             Layout.minimumWidth: Layout.preferredWidth
             Layout.maximumWidth: Layout.preferredWidth
             Layout.fillHeight: true
@@ -824,9 +897,11 @@ Item {
                 objectName: "dashboardTimerPanel"
 
                 // 收起时面板贴左缘滑出（壳从右往左收），避免内容随壳宽挤扁。
+                // 左侧空出的 16px 就是与任务面板之间的缝，任务清单的滚动条落在这里。
                 width: 300
                 height: parent.height
                 anchors.left: parent.left
+                anchors.leftMargin: Theme.space16
                 opacity: root.timerPanelVisible ? 1 : 0
                 timerRef: root.focusTimerRef
                 settingsRef: root.settingsRef
@@ -853,39 +928,21 @@ Item {
                 onHideRequested: root.setTimerPanelVisible(false)
             }
         }
-
-        // 收起态预留通道：让内容右侧总留白 = 行距16 + 通道16 + 页边距24 = 56，
-        // 与 MainWindow 左侧「把手通道32 + 页边距24」对齐，左右留白一致。
-        Item {
-            objectName: "dashboardTimerRevealGutter"
-
-            Layout.preferredWidth: root.timerPanelVisible ? 0 : 16
-            Layout.minimumWidth: Layout.preferredWidth
-            Layout.maximumWidth: Layout.preferredWidth
-            Layout.fillHeight: true
-            // 同上：这条通道的意图与面板相反，展开时才该消失。
-            visible: !root.timerPanelVisible || width > 0.5
-
-            Behavior on Layout.preferredWidth {
-                enabled: !root.timerMotionReduced
-                NumberAnimation {
-                    duration: Theme.reduceMotion ? 0 : 320
-                    easing.type: Easing.OutCubic
-                }
-            }
-        }
     }
 
-    // 面板收起后：右缘 32px 通道整条是感应区，箭头把手默认隐身，
-    // 指针进入通道才淡入滑出（自动隐藏，界面静置时零噪音）；镜像侧栏把手。
+    // 面板收起后：右缘 32px 是感应区，箭头把手默认隐身，
+    // 指针进入才淡入滑出（自动隐藏，界面静置时零噪音）；镜像侧栏把手。
+    // 不再为它在布局里预留通道：显形的把手只露出 22px，落在 24px 页边距里，不压内容。
+    // 感应区只到任务面板上沿为止：再往下的窗口右缘是任务清单的滚动条，
+    // 两者叠在一起时，想拖滚动条会先把把手招出来，点下去就成了「展开专注面板」。
     Item {
         id: timerRevealButton
         objectName: "dashboardTimerRevealButton"
 
         enabled: !root.timerPanelVisible
         width: 32
+        height: dashboardRow.y + dashboardMainColumn.y + dashboardTaskFrame.y
         anchors.top: parent.top
-        anchors.bottom: parent.bottom
         anchors.right: parent.right
         z: 40
 
@@ -998,13 +1055,30 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes, notes) {
+        // completionNote 原样转交（未完成任务是 undefined = 保持不变），不能用 String() 包一层。
+        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes, notes, completionNote) {
             var succeeded = Boolean(root.taskManagerRef.updateTask(
-                taskId, title, categoryId, isoDate, Number(estimatedMinutes), String(notes || "")))
+                taskId, title, categoryId, isoDate, Number(estimatedMinutes), String(notes || ""),
+                completionNote))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"
             }
             return succeeded
+        }
+    }
+
+    CompleteTaskDialog {
+        id: completeTaskDialog
+        objectName: "dashboardCompleteTaskDialog"
+
+        interactionCoordinatorRef: root.interactionCoordinatorRef
+        interactionSource: "DashboardView.complete_dialog"
+        // 完成记录与备注共用同一长度上限。
+        maxNoteLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
+        parent: root
+        onOpenFailed: function (message) { root.loadError = message }
+        noteSubmitter: function (taskId, note) {
+            return root.completeTaskWithNote(taskId, note)
         }
     }
 

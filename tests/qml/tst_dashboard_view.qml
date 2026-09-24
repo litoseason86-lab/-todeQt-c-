@@ -372,10 +372,10 @@ TestCase {
         compare(scrollView.contentWidth, scrollView.availableWidth)
     }
 
-    // 竖向滚动条是浮在 ScrollView 右缘之上的，ScrollView 不会自动替它让位：
-    // availableWidth 只扣 padding，不扣滚动条。不留右侧通道时任务行一直铺到条底下，
-    // 滑块正压在卡片右缘和圆角上（「已完成」筛选下压的是「已完成」徽章）。
-    function test_taskListLeavesRoomForVerticalScrollBar() {
+    // 竖向滚动条摆在任务面板右边线外侧（面板右边那条 16px 行距里）：
+    // 仪表盘右侧还有专注面板或它的把手通道，窗口最右缘不属于任务清单。
+    // 条在面板外，任务行不用再给它留通道，也就不会被滑块压住。
+    function test_taskScrollBarSitsOutsideThePanel() {
         var many = []
         for (var i = 0; i < 12; i++) {
             many.push({ id: i + 1, title: "任务 " + (i + 1), completed: false })
@@ -386,19 +386,35 @@ TestCase {
         verify(view)
 
         var scrollView = findChild(view, "dashboardTaskScrollView")
+        var panel = findChild(view, "dashboardTaskPanel")
+        var verticalBar = findChild(view, "dashboardTaskScrollBar")
         verify(scrollView)
-        var verticalBar = scrollView.ScrollBar.vertical
+        verify(panel)
         verify(verticalBar)
-        verify(verticalBar.width > 0)
+        // 挂在任务清单上的正是这一条统一样式的滚动条。
+        verify(scrollView.ScrollBar.vertical === verticalBar)
 
         // 内容确实超出一屏，滚动条才有意义。contentHeight 由布局 polish 阶段回填，
         // 创建后先是 -1，所以轮询等它就位。
         tryVerify(function () { return scrollView.contentHeight > scrollView.height })
-        // 右侧通道 = 滚动条宽 + 一点间距，内容宽度相应变窄。
-        compare(scrollView.rightPadding, verticalBar.width + Theme.space4)
-        verify(scrollView.availableWidth < scrollView.width)
-        // 内容右缘不许越过滚动条左缘。
-        verify(scrollView.leftPadding + scrollView.availableWidth <= verticalBar.x)
+        tryVerify(function () { return verticalBar.size < 1 })
+
+        var panelBox = panel.mapToItem(view, 0, 0)
+        var barBox = verticalBar.mapToItem(view, 0, 0)
+        var scrollBox = scrollView.mapToItem(view, 0, 0)
+        // 整条落在面板右边线与右侧 16px 行距之间。
+        verify(barBox.x >= panelBox.x + panel.width)
+        verify(barBox.x + verticalBar.width <= panelBox.x + panel.width + Theme.space16)
+        // 竖向只覆盖任务清单那一段。
+        compare(Math.round(barBox.y), Math.round(scrollBox.y))
+        compare(Math.round(verticalBar.height), Math.round(scrollView.height))
+        // 滚动区为了放滚动条向右伸出了面板，任务行仍收在面板内边距以内，不许跟着伸出去。
+        var rowsRight = scrollBox.x + scrollView.leftPadding + scrollView.availableWidth
+        compare(Math.round(rowsRight), Math.round(panelBox.x + panel.width - Theme.space16))
+
+        // 拖滚动条要真的带动清单：它不是清单的子项，这条连接是 ScrollBar.vertical 建的。
+        verticalBar.position = 0.3
+        tryVerify(function () { return scrollView.contentItem.contentY > 0 })
     }
 
     // 四张统计卡摊成两行要吃掉 220 高，今日任务面板在默认窗口里只剩两行多一点。
@@ -834,11 +850,11 @@ TestCase {
         verify(panel)
         verify(hideLink)
 
-        // 展开态：壳全宽，恢复把手不可交互。
+        // 展开态：壳全宽（面板 300 + 与任务面板之间的 16px 缝），恢复把手不可交互。
         // 宽度现在由布局协商产出（Layout.preferredWidth 驱动），需要一次布局 pass；
         // 此前是直接写 item 的 width 才能紧跟创建就读到值，但那种写法是
         // qmllint 判定的 undefined behavior。同用例后面几处本来就用 tryCompare。
-        tryCompare(shell, "width", 300)
+        tryCompare(shell, "width", 300 + Theme.space16)
         compare(reveal.enabled, false)
 
         // 「隐藏」链接向上发信号：写回设置并收起（mock 关了动效，宽度立即归零）。
@@ -847,15 +863,21 @@ TestCase {
         tryCompare(shell, "width", 0)
         tryCompare(reveal, "enabled", true)
 
-        // 收起后右侧留出把手通道：行距16+通道16+页边距24 与左侧 32+24 对齐。
-        var gutter = findChild(view, "dashboardTimerRevealGutter")
-        verify(gutter)
-        tryCompare(gutter, "width", 16)
+        // 收起后不再为把手预留通道：任务面板右边距与其它页面同为 24。
+        // 原先留出「行距16 + 通道16 + 页边距24」= 56，右侧平白多一条空白，和其它页面对不齐。
+        compare(findChild(view, "dashboardTimerRevealGutter"), null)
+        var taskPanel = findChild(view, "dashboardTaskPanel")
+        verify(taskPanel)
+        tryVerify(function () {
+            return Math.round(view.width - (taskPanel.mapToItem(view, 0, 0).x + taskPanel.width)) === Theme.space24
+        })
+        // 把手的感应区只到任务面板上沿：下面那段右缘归任务清单的滚动条。
+        verify(reveal.height <= taskPanel.mapToItem(view, 0, 0).y)
 
         // 恢复把手的无障碍动作与点击共用同一入口：重新展开。
         view.setTimerPanelVisible(true)
         compare(appSettings.dashboardTimerVisible, true)
-        tryCompare(shell, "width", 300)
+        tryCompare(shell, "width", 300 + Theme.space16)
         appSettings.dashboardTimerVisible = true
     }
 
@@ -991,8 +1013,11 @@ TestCase {
         compare(panel.frostRect.y, beforeY + 35)
     }
 
+    // 窄到统计卡只能排两列时，卡片与任务面板都不许伸出视图。
+    // 两列的门槛是主列宽 < 560；仪表盘右侧不再预留把手通道后主列 = 视图宽 - 48，
+    // 所以取 590（主列 542）。原先用 620 是因为那时右侧还多扣 32。
     function test_narrowDashboardKeepsTaskAndStatCardsInside() {
-        var view = createTemporaryObject(dashboardComponent, testCase, { width: 620 })
+        var view = createTemporaryObject(dashboardComponent, testCase, { width: 590 })
         verify(view)
         wait(50)
         compare(view.compactLayout, true)

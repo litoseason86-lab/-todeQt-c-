@@ -2,9 +2,9 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Effects
 import QtQuick.Layouts
 import ".."
+import "../components"
 import "MonthGoalFormat.js" as MgFmt
 import "../LogicalDay.js" as LogicalDay
 import "../HeatmapBands.js" as HeatmapBands
@@ -213,10 +213,20 @@ Item {
 
     ScrollView {
         id: pageScrollView
+        objectName: "monthPageScrollView"
 
         anchors.fill: parent
         clip: true
         contentWidth: availableWidth
+        // 整页滚动，滚动条本来就贴窗口右缘；换成全应用统一样式的那一条。
+        // 在 ScrollView 上换掉自建滚动条后要自己声明 parent 和几何，否则它会缩在左上角。
+        ScrollBar.vertical: PageScrollBar {
+            objectName: "monthPageScrollBar"
+            parent: pageScrollView
+            x: pageScrollView.width - width
+            y: pageScrollView.topPadding
+            height: pageScrollView.availableHeight
+        }
 
         ColumnLayout {
             width: Math.max(pageScrollView.availableWidth, 1)
@@ -493,7 +503,8 @@ Item {
                 columnSpacing: Theme.space16
                 rowSpacing: Theme.space16
 
-                Rectangle {
+                // 月历框与其它页面的玻璃框同一套（GlassPanel）：描边、圆角、顶部高光、落影。
+                GlassPanel {
                     objectName: "monthCalendarContainer"
                     Layout.fillWidth: true
                     Layout.minimumWidth: 360
@@ -501,20 +512,6 @@ Item {
                     Layout.maximumWidth: 100000
                     Layout.minimumHeight: 520
                     Layout.preferredHeight: 560
-                    radius: Theme.radiusLg
-                    color: Theme.glassCard
-                    border.color: Theme.glassBorder
-                    border.width: 1
-                    layer.enabled: true
-                    layer.effect: MultiEffect {
-                        autoPaddingEnabled: true
-                        shadowEnabled: true
-                        shadowColor: Theme.shadow
-                        shadowOpacity: 0.08
-                        shadowBlur: 0.14
-                        shadowHorizontalOffset: 0
-                        shadowVerticalOffset: 2
-                    }
 
                     ColumnLayout {
                         anchors.fill: parent

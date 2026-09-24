@@ -67,7 +67,7 @@ AbstractButton {
             return root.down || root.hovered ? Theme.glassHover : Theme.glassCard
         }
         border.color: root.activeFocus ? Theme.focusRing
-                                       : (root.hovered ? Theme.accent : Theme.glassBorderContrast)
+                                       : (root.hovered ? Theme.accent : Theme.glassBorder)
         border.width: root.activeFocus ? 2 : 1
         bottomRimEnabled: true
         panelShadowEnabled: false

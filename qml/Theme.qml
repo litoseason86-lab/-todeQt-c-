@@ -239,16 +239,13 @@ QtObject {
     readonly property color glassDialogSoft: darkMode
         ? Qt.rgba(42 / 255, 36 / 255, 28 / 255, 0.94)
         : Qt.rgba(1, 254 / 255, 249 / 255, 0.94)
+    // 全应用玻璃框与玻璃卡的描边，GlassPanel 的默认值。
+    // 2026-09 统一各页面玻璃边界时，用户在「白色描边」与「淡深色细线」之间选了白色描边，
+    // 原先只有目标页用的深色细线令牌随之删除。已知取舍：浅色版是白的，压在雪岭、樱粉这类
+    // 近白壁纸上边界偏弱，靠顶部受光棱边和落影把卡片从背景里分出来。
     readonly property color glassBorder: darkMode
         ? Qt.rgba(1, 1, 1, 0.18)
         : Qt.rgba(1, 1, 1, 0.65)
-    // 内容卡专用分隔描边。glassBorder 浅色版是白的，压在亮壁纸（雪岭/樱粉这类近白图）
-    // 上会和近白的 glassCard 一起消失，卡片边界整个看不见。
-    // Apple 的浅色材质同样不用白边：顶部留一道白高光表现受光，四周则是一道很淡的深色
-    // 细线来切断背景。这里照此处理——夜间版沿用提亮的白线（暗底上深线才是隐形的）。
-    readonly property color glassBorderContrast: darkMode
-        ? Qt.rgba(1, 1, 1, 0.20)
-        : Qt.rgba(90 / 255, 72 / 255, 48 / 255, 0.22)
     // 凹槽底（分段控件轨道这类"嵌进面板里"的容器）：比周围玻璃暗一档。
     // 浅色下用暖褐色而不是中性灰，避免在焦糖配色里透出脏灰。
     // 单独立一个令牌是因为 glassCard/glassHover 都是"浮起"语义，

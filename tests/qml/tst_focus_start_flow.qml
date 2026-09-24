@@ -56,7 +56,16 @@ TestCase {
             todayTasks = next
             return createTaskResultId
         }
-        function setTaskCompleted(id, completed) {}
+        property int setCompletedCalls: 0
+        property int lastSetCompletedId: -1
+        property var lastSetCompletedValue: undefined
+        // 与 TaskManager::setTaskCompleted 同契约：成功返回 true。完成用例要走到页面的成功分支。
+        function setTaskCompleted(id, completed) {
+            setCompletedCalls += 1
+            lastSetCompletedId = id
+            lastSetCompletedValue = completed
+            return true
+        }
         function deleteTask(id) {
             deleteTaskCalls += 1
             lastDeletedTaskId = id
@@ -83,6 +92,8 @@ TestCase {
         property int minimumValidMinutes: 3
         property int completedPomodoros: 0
         property bool stopSucceeds: true
+        // 模拟不足 3 分钟：真实 FocusTimer 会丢弃这段会话、照常返回成功，并同步发 sessionDiscarded。
+        property bool stopDiscards: false
         // 服务端对已删除任务会插入 0 行而失败；用例按需置假模拟。
         property bool startFocusSucceeds: true
         property int pauseFocusCalls: 0
@@ -135,6 +146,8 @@ TestCase {
             isRunning = false
             mode = 0
             phase = 0
+            if (stopDiscards)
+                sessionDiscarded(elapsedSeconds)
             return true
         }
     }
@@ -344,6 +357,10 @@ TestCase {
         // 留着它开着，后面的捕获用例会被 overlayHoldsFocus 挡住。
         findChild(focusView, "focusTaskPicker").collapse()
         focusTimer.stopSucceeds = true
+        focusTimer.stopDiscards = false
+        taskManager.setCompletedCalls = 0
+        taskManager.lastSetCompletedId = -1
+        taskManager.lastSetCompletedValue = undefined
         focusTimer.startFocusSucceeds = true
         focusTimer.pauseFocusCalls = 0
         focusTimer.stopFocusCalls = 0
@@ -1736,4 +1753,172 @@ TestCase {
         compare(view.selectedTaskId, -1)
     }
 
+    // ---- 完成正在计时的任务时结束专注 ----
+    // 用户反馈：计时中在今日任务页或仪表盘点「完成」，任务变成已完成，计时却还在走，
+    // 得专门去专注页点「结束专注」。完成的正是在计时的任务时，这一下要把专注一并结束。
+
+    function completionTask(id, title) {
+        return { id: id, title: title, completed: false, displayOrder: id, estimatedMinutes: 0, notes: "" }
+    }
+
+    // 只把计时器替身摆成「正在给某任务计时」，不走开始流程：这里测的是完成那一下，开始流程另有用例。
+    function runFocusOn(taskId, title, mode) {
+        focusTimer.currentTaskId = taskId
+        focusTimer.currentTaskTitle = title
+        focusTimer.mode = mode
+        focusTimer.phase = mode === 1 ? 1 : 0
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+    }
+
+    // 今日页走真实的完成函数（任务卡复选框调的就是它）：写库成功后页面发撤销信号，主窗口接着处理。
+    function completeOnTodayPage(taskId) {
+        var todayView = findChild(mainWindow, "todayTaskViewPage")
+        verify(todayView)
+        taskManager.todayTasks = [completionTask(7, "英语"), completionTask(8, "高等数学")]
+        todayView.refresh()
+        todayView.setTaskCompletedWithAnimationDelay(taskId, true)
+    }
+
+    function toastText() {
+        return findChild(mainWindow, "toastText").text
+    }
+
+    function test_completingTheRunningTaskEndsItsFocus() {
+        runFocusOn(7, "英语", 0)
+
+        completeOnTodayPage(7)
+
+        compare(taskManager.lastSetCompletedId, 7)
+        compare(taskManager.lastSetCompletedValue, true)
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusTimer.hasActiveSession, false)
+        compare(mainWindow.currentView, "today")
+        compare(toastText(), "已完成「英语」，专注已结束")
+
+        // 撤销只翻回任务的完成态，不会把已经结束的专注再开起来。
+        var toast = findChild(mainWindow, "globalToast")
+        compare(toast.actionText, "撤销")
+        toast.triggerAction()
+        compare(taskManager.lastSetCompletedId, 7)
+        compare(taskManager.lastSetCompletedValue, false)
+        compare(focusTimer.startFocusCalls, 0)
+        compare(focusTimer.hasActiveSession, false)
+    }
+
+    function test_completingAnotherTaskLeavesTheTimerRunning() {
+        runFocusOn(7, "英语", 0)
+
+        completeOnTodayPage(8)
+
+        compare(taskManager.lastSetCompletedId, 8)
+        compare(focusTimer.stopFocusCalls, 0)
+        compare(focusTimer.hasActiveSession, true)
+        compare(focusTimer.currentTaskId, 7)
+        compare(toastText(), "已完成「高等数学」")
+    }
+
+    function test_completionDoesNotInterruptAPomodoroBreak() {
+        // 番茄休息阶段计时器仍带着刚才那个任务，但没有专注会话：休息不是专注，不该被完成打断。
+        focusTimer.currentTaskId = 7
+        focusTimer.currentTaskTitle = "英语"
+        focusTimer.mode = 1
+        focusTimer.phase = 2
+        focusTimer.hasActiveSession = false
+        focusTimer.isRunning = true
+
+        completeOnTodayPage(7)
+
+        compare(focusTimer.stopFocusCalls, 0)
+        compare(focusTimer.phase, 2)
+        compare(toastText(), "已完成「英语」")
+    }
+
+    function test_completingThePausedPomodoroTaskEndsTheWholeCycle() {
+        // 暂停中的番茄也是进行中的专注；结束走番茄入口，连续计数跟着归零。
+        runFocusOn(7, "英语", 1)
+        focusTimer.isRunning = false
+        focusTimer.completedPomodoros = 2
+
+        completeOnTodayPage(7)
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusTimer.hasActiveSession, false)
+        compare(focusTimer.completedPomodoros, 0)
+        compare(toastText(), "已完成「英语」，专注已结束")
+    }
+
+    function test_shortFocusEndedByCompletionIsExplainedInTheUndoToast() {
+        runFocusOn(7, "英语", 0)
+        focusTimer.elapsedSeconds = 90
+        focusTimer.stopDiscards = true
+
+        completeOnTodayPage(7)
+
+        // 提示条只有一个槽：「未计入」并进完成提示，撤销入口也还在。
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(toastText(), "已完成「英语」，专注不足 3 分钟，未计入记录")
+        compare(findChild(mainWindow, "globalToast").actionText, "撤销")
+
+        // 与完成无关的丢弃照旧单独提示，说明合并只作用于完成那一下。
+        focusTimer.sessionDiscarded(60)
+        compare(toastText(), "本次专注不足 3 分钟，未计入记录")
+    }
+
+    function test_failedStopKeepsTheTimerAndSaysSo() {
+        runFocusOn(7, "英语", 0)
+        focusTimer.stopSucceeds = false
+
+        completeOnTodayPage(7)
+
+        // 任务照样完成；计时没能结束就如实说，原因留在专注页的错误行里供用户重试。
+        compare(taskManager.lastSetCompletedValue, true)
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusTimer.hasActiveSession, true)
+        compare(toastText(), "已完成「英语」，但结束专注失败，计时仍在继续")
+        compare(focusPage().errorText, "专注保存失败，请重试")
+    }
+
+    function test_overlongFreeFocusGoesToTheConfirmationInsteadOfStopping() {
+        // 自由计时超过提醒时长（默认 8 小时）可能是忘了停，不能直接原样记进统计：
+        // 与仪表盘「结束」一样转去专注页，由确认框决定记录、修正还是丢弃。
+        runFocusOn(7, "英语", 0)
+        focusTimer.elapsedSeconds = 9 * 60 * 60
+
+        completeOnTodayPage(7)
+
+        compare(focusTimer.stopFocusCalls, 0)
+        compare(toastText(), "已完成「英语」")
+        tryCompare(mainWindow, "currentView", "focus", 3000)
+        tryCompare(findChild(focusPage(), "longFreeFocusConfirmDialog"), "opened", true, 3000)
+    }
+
+    function test_everyTaskPageEndsTheRunningFocusInPlace_data() {
+        return [
+            { tag: "今日任务", page: "today", objectName: "todayTaskViewPage" },
+            { tag: "仪表盘", page: "dashboard", objectName: "dashboardViewPage" },
+            { tag: "本周计划", page: "week", objectName: "weekPlanViewPage" }
+        ]
+    }
+
+    // 各页面何时发撤销信号由页面级用例（tst_today/dashboard_complete_with_note 等）测过；
+    // 这里只验证三个页面都接到了同一个处理函数，并且结束后留在原页，不被带回今日页。
+    function test_everyTaskPageEndsTheRunningFocusInPlace(data) {
+        mainWindow.currentView = data.page
+        mainWindow.pendingView = data.page
+        var view = findChild(mainWindow, data.objectName)
+        verify(view)
+        runFocusOn(7, "英语", 0)
+
+        view.taskCompletionUndoable(7, "英语")
+
+        compare(focusTimer.stopFocusCalls, 1)
+        compare(focusTimer.hasActiveSession, false)
+        // 切页带淡出动画，currentView 要等动画放完才变；switchToView 同步改的是这两个，
+        // 所以看它们才能当场发现「被带回今日页」。
+        compare(mainWindow.isSwitching, false)
+        compare(mainWindow.pendingView, data.page)
+        compare(mainWindow.currentView, data.page)
+        compare(toastText(), "已完成「英语」，专注已结束")
+    }
 }

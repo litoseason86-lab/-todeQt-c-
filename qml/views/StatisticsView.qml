@@ -535,6 +535,7 @@ Item {
 
     ScrollView {
         id: statisticsScrollView
+        objectName: "statisticsScrollView"
 
         anchors.fill: parent
         clip: true
@@ -543,6 +544,15 @@ Item {
         ScrollBar.horizontal: ScrollBar {
             objectName: "statisticsHorizontalScrollBar"
             policy: ScrollBar.AlwaysOff
+        }
+        // 整页滚动，滚动条本来就贴窗口右缘；换成全应用统一样式的那一条。
+        // 在 ScrollView 上换掉自建滚动条后要自己声明 parent 和几何，否则它会缩在左上角。
+        ScrollBar.vertical: PageScrollBar {
+            objectName: "statisticsScrollBar"
+            parent: statisticsScrollView
+            x: statisticsScrollView.width - width
+            y: statisticsScrollView.topPadding
+            height: statisticsScrollView.availableHeight
         }
 
         ColumnLayout {

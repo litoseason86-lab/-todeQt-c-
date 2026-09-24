@@ -428,8 +428,11 @@ Item {
 
     // 完成撤销：完成已即时写库，撤销时把完成态翻回。5 秒撤销条内点击即可恢复完成前状态，
     // 任务 ID、排序、字段都不变（只改了 completed 一列）。
-    function showCompletionUndoToast(taskId, taskTitle) {
-        showToast("已完成「" + String(taskTitle || "") + "」", "撤销", function() {
+    // 例外是「完成」弹窗写下的完成记录：撤销不清除它——未完成的卡片不显示记录，
+    // 再次完成时弹窗会预填回来，免得一次误触就把刚写的内容丢掉。
+    // 完成时顺带结束的专注也不恢复：那段记录已经按正常结束保存，撤销只管任务的完成态。
+    function showCompletionUndoToast(taskId, message) {
+        showToast(message, "撤销", function() {
             if (!root.taskManagerRef || !root.taskManagerRef.setTaskCompleted(taskId, false)) {
                 root.showToast("撤销完成失败，请重试")
             }
@@ -711,22 +714,27 @@ Item {
         Qt.callLater(focusView.endFreeFocus)
     }
 
-    // 仪表盘在原地结束专注期间为真。专注页的结束入口会同步发 focusEnded / manualRestEnded，
-    // 那两个处理函数据此跳过「回今日页」：那条规则针对的是从专注页结束，
-    // 用户在仪表盘点「结束」就该留在仪表盘。
+    // 在其它页面原地结束计时期间为真（仪表盘「结束」、完成正在计时的任务）。
+    // 专注页的结束入口会同步发 focusEnded / manualRestEnded，那两个处理函数据此跳过「回今日页」：
+    // 那条规则针对的是从专注页结束，用户在仪表盘或今日页操作就该留在原页。
     property bool endingFocusInPlace: false
 
-    // 仪表盘「结束」。规则不在这里复制：超长自由专注确认、番茄循环计数归零、
+    // 在当前页原地结束计时。规则不在这里复制：超长自由专注确认、番茄循环计数归零、
     // 主动休息收尾都走专注页的单点入口，与专注页按钮、菜单栏、快捷键同口径。
-    function endFocusFromDashboard() {
+    // 返回结果，提示怎么写由调用方决定：
+    //   "none"       没有进行中的计时；
+    //   "confirming" 自由专注超过提醒时长，已转去专注页弹确认框，此刻还没有结束；
+    //   "ended"      已结束（包括不足 3 分钟被丢弃的情况）；
+    //   "failed"     结束失败，计时仍在继续，原因写在 focusView.errorText。
+    function endFocusInPlace() {
         var timer = root.focusTimerRef
         if (!timer || (!timer.hasActiveSession && Number(timer.phase) === 0)) {
-            return
+            return "none"
         }
         if (focusView.shouldConfirmLongFreeStop()) {
             // 确认弹窗属于专注页，要切过去才看得见；记录、丢弃或修正由弹窗走完。
             root.requestLongFreeFocusStop()
-            return
+            return "confirming"
         }
 
         // 按计时器的真实模式分发，不看专注页本地的模式选择：
@@ -741,11 +749,49 @@ Item {
             focusView.endFreeFocus()
         }
         root.endingFocusInPlace = false
+        // 三个结束入口成功时都会清空 errorText、失败时写入原因，所以调用之后读到的就是这一次的结果。
+        return focusView.errorText.length > 0 ? "failed" : "ended"
+    }
 
+    // 仪表盘「结束」。
+    function endFocusFromDashboard() {
         // 结束入口失败时只写专注页的 errorText，仪表盘上看不见，得转成提示条。
-        if (focusView.errorText.length > 0) {
+        if (root.endFocusInPlace() === "failed") {
             root.showToast(focusView.errorText)
         }
+    }
+
+    // 为完成任务而结束专注期间为真。这段时间计时器同步发出的「不足 3 分钟未计入」
+    // 不单独弹提示，改由完成提示一并说明：提示条只有一个槽，单独弹会被紧跟着的撤销条顶掉；
+    // 反过来先弹撤销条，又会被它顶掉撤销入口。
+    property bool endingFocusForCompletion: false
+    property bool completionFocusDiscarded: false
+
+    // 用户在今日、仪表盘或本周页亲手完成了任务（复选框或「完成」弹窗），写库已经成功。
+    // 完成的正是正在计时的任务时，顺带结束这段专注：任务已经做完，计时再走下去
+    // 只会把之后的时间也记到它头上，此前用户得专门去专注页再点一次「结束专注」。
+    function handleTaskCompletedByUser(taskId, taskTitle) {
+        var timer = root.focusTimerRef
+        var focusResult = "none"
+        // 只认「此刻正在给这个任务计时」时的这一下完成，不能写成「任务已完成就停表」：
+        // 已完成的任务允许再练一轮（专注页选择器里可以挑），那种计时不该被打断。
+        // 番茄休息阶段没有专注会话（hasActiveSession 为假），休息照常进行。
+        if (timer && timer.hasActiveSession && Number(timer.currentTaskId) === Number(taskId)) {
+            root.completionFocusDiscarded = false
+            root.endingFocusForCompletion = true
+            focusResult = root.endFocusInPlace()
+            root.endingFocusForCompletion = false
+        }
+
+        var message = "已完成「" + String(taskTitle || "") + "」"
+        if (focusResult === "ended") {
+            message += root.completionFocusDiscarded ? "，专注不足 3 分钟，未计入记录" : "，专注已结束"
+        } else if (focusResult === "failed") {
+            // 失败原因同时留在专注页的错误行里，用户去专注页还能再点「结束专注」。
+            message += "，但结束专注失败，计时仍在继续"
+        }
+        // "confirming" 不加说明：页面已切到专注页，确认框自己会讲清楚这段专注怎么记。
+        root.showCompletionUndoToast(taskId, message)
     }
 
     Component.onCompleted: {
@@ -980,7 +1026,7 @@ Item {
                         root.requestDeleteTask(taskId, taskTitle)
                     }
                     onTaskCompletionUndoable: function(taskId, title) {
-                        root.showCompletionUndoToast(taskId, title)
+                        root.handleTaskCompletedByUser(taskId, title)
                     }
                 }
 
@@ -1021,6 +1067,7 @@ Item {
                 }
 
                 WeekPlanView {
+                    objectName: "weekPlanViewPage"
                     pageActive: root.currentView === "week"
                     interactionCoordinatorRef: root.interactionCoordinatorRef
                     taskManagerRef: root.taskManagerRef
@@ -1037,7 +1084,7 @@ Item {
                         root.requestDeleteTask(taskId, taskTitle)
                     }
                     onTaskCompletionUndoable: function(taskId, title) {
-                        root.showCompletionUndoToast(taskId, title)
+                        root.handleTaskCompletedByUser(taskId, title)
                     }
                 }
 
@@ -1096,7 +1143,7 @@ Item {
                         root.requestDeleteTask(taskId, taskTitle)
                     }
                     onTaskCompletionUndoable: function(taskId, title) {
-                        root.showCompletionUndoToast(taskId, title)
+                        root.handleTaskCompletedByUser(taskId, title)
                     }
                 }
 
@@ -1420,6 +1467,10 @@ Item {
         ignoreUnknownSignals: true
 
         function onSessionDiscarded(duration) {
+            if (root.endingFocusForCompletion) {
+                root.completionFocusDiscarded = true
+                return
+            }
             root.showToast("本次专注不足 3 分钟，未计入记录")
         }
 

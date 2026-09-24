@@ -3,11 +3,13 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import QtQuick.Effects
 import ".."
 import "../views/MonthGoalFormat.js" as MgFmt
 
-Rectangle {
+// 时间轴卡片。玻璃只做底板（GlassPanel：描边、圆角、顶部高光和落影与其它页面的玻璃框同一套），
+// 会话列表画在它上面、不进它的阴影图层：进了图层会被裁在卡片边界里，
+// 滚动区就没法伸到卡片外的页边上。
+Item {
     id: root
 
     property var sessions: []
@@ -23,8 +25,16 @@ Rectangle {
     property int currentMonth: 0
     property int viewWidth: 0
     property var formatDurationFn: (function (s) { return "" })
+    // 滚动条落在卡片右边线外多远处。今日专注页传页边距，让它贴窗口右缘、和其它页面同一个位置；
+    // 为 0 时贴卡片右边线内侧。
+    property real scrollBarOverhang: 0
 
     objectName: "focusTimelinePanel"
+
+    GlassPanel {
+        objectName: "focusTimelineGlass"
+        anchors.fill: parent
+    }
 
     // 卡片上的小操作：纯文字 + 细描边，不喧宾夺主。
     component TimelineTextButton: Button {
@@ -74,21 +84,6 @@ Rectangle {
             }
         }
     }
-    radius: Theme.radiusLg
-    color: Theme.glassCard
-    border.color: Theme.glassBorder
-    border.width: 1
-    layer.enabled: true
-    layer.effect: MultiEffect {
-        autoPaddingEnabled: true
-        shadowEnabled: true
-        shadowColor: Theme.shadow
-        shadowOpacity: 0.08
-        shadowBlur: 0.14
-        shadowHorizontalOffset: 0
-        shadowVerticalOffset: 2
-    }
-
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: Theme.space16
@@ -139,36 +134,20 @@ Rectangle {
             visible: root.sessions.length > 0
             clip: true
             contentWidth: availableWidth
-            // 滚动条浮在 ScrollView 右缘之上，availableWidth 只扣 padding、不扣滚动条。
-            // 不留通道的话滑块正压在会话卡右缘和圆角上。
-            rightPadding: timelineVerticalScrollBar.width + Theme.space4
+            // 滚动区向右伸出卡片内边距和 scrollBarOverhang，再用同样宽的右内边距把会话卡收回原位，
+            // ScrollView 自己的滚动条就落在伸出去那一段的最右边，不压会话卡。
+            // 不能把滚动条挂到 ScrollView 外面：ScrollView 会把挂上来的滚动条收为自己的子项，
+            // 而它又按自身边界裁剪子项，摆在外面的部分画不出来。
+            Layout.rightMargin: -(Theme.space16 + root.scrollBarOverhang)
+            rightPadding: Theme.space16 + root.scrollBarOverhang
             ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
-            ScrollBar.vertical: ScrollBar {
-                id: timelineVerticalScrollBar
-
+            // 在 ScrollView 上换掉自建滚动条后要自己声明 parent 和几何，否则它会缩在左上角。
+            ScrollBar.vertical: PageScrollBar {
                 objectName: "focusTimelineVerticalScrollBar"
-                // ScrollView 只会摆放它自己创建的那条滚动条。这里换成了自定义样式的替身，
-                // 就必须自己声明 parent 和几何：漏掉时它会缩成 8x4 停在左上角，
-                // 时间线等于完全没有滚动条，左上角还多出一个小色块。
-                // 写法取自 Qt 文档「Customizing ScrollView」。
                 parent: timelineScrollView
-                x: timelineScrollView.mirrored ? 0 : timelineScrollView.width - width
+                x: timelineScrollView.width - width
                 y: timelineScrollView.topPadding
                 height: timelineScrollView.availableHeight
-                policy: ScrollBar.AsNeeded
-                width: 8
-
-                contentItem: Rectangle {
-                    implicitWidth: 4
-                    radius: Theme.radiusSm
-                    color: timelineVerticalScrollBar.pressed || timelineVerticalScrollBar.hovered ? Theme.accent : Theme.border
-                }
-
-                background: Rectangle {
-                    objectName: "monthTimelineScrollTrack"
-
-                    color: "transparent"
-                }
             }
 
             Column {

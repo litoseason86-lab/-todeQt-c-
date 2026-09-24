@@ -13,6 +13,9 @@ Item {
     id: root
 
     property var stats: ({})
+    // 滚动条落在本组件右缘外多远处。仪表盘传「面板内边距 + 面板右侧行距的一半」，
+    // 让它和任务清单那条同在任务面板右边线外侧；为 0 时在右侧留一条通道放它。
+    property real scrollBarOverhang: 0
 
     readonly property var tasks: root.stats && root.stats.tasks ? root.stats.tasks : []
     readonly property int totalDuration: root.stats ? Number(root.stats.totalDuration || 0) : 0
@@ -49,9 +52,19 @@ Item {
             clip: true
             // 内容宽度锁死在可用宽度，横向永不溢出。
             contentWidth: availableWidth
-            // 与任务清单同一处理：ScrollView 不替竖向滚动条让位，右侧固定留出它的宽度，
-            // 否则滑块会压在右侧时长列上。
-            rightPadding: ScrollBar.vertical.width + Theme.space4
+            // 滚动区向右伸出 scrollBarOverhang，再用同样宽的右内边距把行收回原位，
+            // ScrollView 自己的滚动条就落在伸出去那一段的最右边，不压右侧时长列。
+            // 不能把滚动条挂到 ScrollView 外面：ScrollView 会把它收为自己的子项并按自身边界裁剪。
+            Layout.rightMargin: -root.scrollBarOverhang
+            rightPadding: root.scrollBarOverhang > 0 ? root.scrollBarOverhang : Theme.space12
+            // 在 ScrollView 上换掉自建滚动条后要自己声明 parent 和几何，否则它会缩在左上角。
+            ScrollBar.vertical: PageScrollBar {
+                objectName: "todayLearningScrollBar"
+                parent: rowScrollView
+                x: rowScrollView.width - width
+                y: rowScrollView.topPadding
+                height: rowScrollView.availableHeight
+            }
             // 显式建横向滚动条再关闭：离屏测试里 attached 实例可能尚未创建，
             // 直接给 ScrollBar.horizontal.policy 赋值会打到 null 上。
             ScrollBar.horizontal: ScrollBar {

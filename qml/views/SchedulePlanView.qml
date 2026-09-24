@@ -231,10 +231,14 @@ Item {
     }
 
     ColumnLayout {
+        id: pageColumn
+
         anchors.fill: parent
-        // 页边距从 24 压到 16：七列平分时，边距每省 8px 就能还给每列 2px 多，
-        // 而这一页的瓶颈正是列宽。
-        anchors.margins: Theme.space16
+        // 页边距与其它页面统一为 24，切页时玻璃框的左右下边不再跳动。
+        // 这里曾为给七列腾宽度压到 16（每省 8px 每列多 2px 多）。按真实课表离屏对比：
+        // 默认窗口宽度下改回 24 后地点仍能两行显示完整；最小窗口宽度下长课名和长地点会省略，
+        // 而压到 16 时省略的是同样几条——边距不是那一档的决定因素。
+        anchors.margins: Theme.space24
         spacing: Theme.space12
 
         // —— 页头：标题、周次概览与操作区 ——
@@ -462,14 +466,11 @@ Item {
         }
 
         // —— 首次使用引导：没有学期锚点就算不出周次，整张网格无从画起 ——
-        Rectangle {
+        // 与其它页面的玻璃框同一套（GlassPanel）。
+        GlassPanel {
             Layout.fillWidth: true
             visible: !root.semesterConfigured
             Layout.preferredHeight: guideColumn.implicitHeight + Theme.space24 * 2
-            radius: Theme.radiusLg
-            color: Theme.glassCard
-            border.color: Theme.glassBorder
-            border.width: 1
 
             ColumnLayout {
                 id: guideColumn
@@ -588,6 +589,7 @@ Item {
             visible: root.semesterConfigured
             Layout.fillWidth: true
             Layout.fillHeight: true
+            verticalScrollBar: scheduleScrollBar
 
             entries: root.entries
             periods: root.periods
@@ -623,6 +625,18 @@ Item {
             Layout.fillHeight: true
             visible: !root.semesterConfigured
         }
+    }
+
+    // 网格的滚动条摆在玻璃底板外、贴窗口右缘，和其它页面同一个位置；
+    // 竖向只覆盖网格主体（列头固定不滚，不在它的范围里）。原先挂在网格里，压着最右一列。
+    PageScrollBar {
+        id: scheduleScrollBar
+
+        objectName: "scheduleScrollBar"
+        scrollAreaVisible: scheduleGrid.scrollAreaVisible
+        x: root.width - width
+        y: pageColumn.y + scheduleGrid.y + scheduleGrid.scrollAreaY
+        height: scheduleGrid.scrollAreaHeight
     }
 
     ScheduleEntryDialog {
