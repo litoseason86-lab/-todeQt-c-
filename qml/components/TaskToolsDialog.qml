@@ -88,7 +88,8 @@ Dialog {
         for (var i = 0; i < rows.length; ++i) visible[Number(rows[i].id)] = true
         return ids.filter(function(id) { return visible[Number(id)] === true })
     }
-    // 逾期口径以服务层为准：它排除了例行生成的实例。那些实例不参与结转，
+    // 逾期口径以服务层为准：只算结转窗口（最近 7 天，TaskManager::kOverdueRolloverDays）以内的，
+    // 更早的已放弃追踪，仍留在结果里，要改期就手动勾。并且排除了例行生成的实例：那些实例不参与结转，
     // 批量搬到今天会和当天新生成的实例重复。
     function selectOverdue() {
         if (!root.taskManagerRef || typeof root.taskManagerRef.getOverdueUncompletedTasks !== "function")

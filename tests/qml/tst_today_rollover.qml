@@ -17,6 +17,8 @@ TestCase {
 
         property var todayTasksData: []
         property var overdueData: []
+        // 与 TaskManager::kOverdueRolloverDays 同值；置 0 模拟没有这个属性的旧上下文。
+        property int overdueRolloverDays: 7
         property var movedIds: []
         property int moveCalls: 0
         property int todayCalls: 0
@@ -146,6 +148,7 @@ TestCase {
     function init() {
         taskManager.todayTasksData = []
         taskManager.overdueData = []
+        taskManager.overdueRolloverDays = 7
         taskManager.movedIds = []
         taskManager.moveCalls = 0
         taskManager.todayCalls = 0
@@ -181,6 +184,18 @@ TestCase {
         const text = findChild(view, "rolloverBannerText")
         verify(text)
         verify(text.text.indexOf("2") !== -1)
+    }
+
+    // 更早的未完成任务已放弃追踪，提示条要说清回看了几天，否则数字对不上用户的印象。
+    function test_bannerSaysHowFarBackItLooks() {
+        taskManager.overdueData = [makeOverdue(11, "上周残留"), makeOverdue(12, "昨天残留")]
+        view.refresh()
+        wait(20)
+        compare(findChild(view, "rolloverBannerText").text, "最近 7 天还有 2 个未完成任务")
+
+        // 服务上下文没有提供天数时不编一个数，退回不带天数的说法。
+        taskManager.overdueRolloverDays = 0
+        compare(findChild(view, "rolloverBannerText").text, "之前还有 2 个未完成任务")
     }
 
     function test_moveAllSendsIdsAndHidesBanner() {

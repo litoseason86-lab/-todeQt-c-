@@ -786,12 +786,17 @@ QVariantList TaskManager::getOverdueUncompletedTasks() const
         return tasks;
     }
 
+    // 回看窗口按逻辑日算：凌晨日界点前仍属于前一天，窗口的两端跟着一起挪。
+    // 日期列存的是 ISO 字符串（yyyy-MM-dd），按字符串比较就是按日期先后比较。
+    const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
     QSqlQuery query(db);
     query.prepare(taskSelectSql() + QStringLiteral(
-        "WHERE t.date < :today AND t.completed = 0 AND t.routine_generated = 0 "
+        "WHERE t.date >= :earliest AND t.date < :today "
+        "AND t.completed = 0 AND t.routine_generated = 0 "
         "ORDER BY t.date ASC, t.display_order ASC, t.id ASC"));
-    query.bindValue(QStringLiteral(":today"),
-                    LogicalDay::today(AppSettings::instance()->dayStartHour()).toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":earliest"),
+                    today.addDays(-kOverdueRolloverDays).toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":today"), today.toString(Qt::ISODate));
 
     if (!query.exec()) {
         qWarning() << "Failed to get overdue tasks:" << query.lastError().text();

@@ -916,6 +916,7 @@ private slots:
     void updateTaskChangesTitleCategoryAndDate();
     void updateTaskRejectsBlankTitleAndInvalidId();
     void overdueQueryExcludesTodayCompletedAndTrustedRoutine();
+    void overdueQueryOnlyLooksBackTheRolloverWindow();
     void moveTasksToTodayIsTransactional();
     void batchRescheduleSearchAndCopy();
     void exportFocusSessionsUsesLogicalDayRange();
@@ -5661,6 +5662,41 @@ void ServiceTests::overdueQueryExcludesTodayCompletedAndTrustedRoutine()
     QCOMPARE(overdue.at(0).toMap().value(QStringLiteral("id")).toInt(), oldPending);
     QCOMPARE(overdue.at(1).toMap().value(QStringLiteral("id")).toInt(), yesterdayPending);
     QCOMPARE(overdue.at(2).toMap().value(QStringLiteral("id")).toInt(), ambiguousSameTitle);
+}
+
+// 结转只回看最近 kOverdueRolloverDays 天：用户实测攒到 41 条，39 条是一个多月前每天一条的背词任务。
+// 窗口两端都要钉住：今天往前第 7 天仍算，第 8 天起放弃追踪；更早的任务本身不动，只是不再被提示。
+void ServiceTests::overdueQueryOnlyLooksBackTheRolloverWindow()
+{
+    TaskManager* manager = TaskManager::instance();
+    const QDate today = logicalToday();
+    QCOMPARE(TaskManager::kOverdueRolloverDays, 7);
+    // QML 的提示条文案读的是这个常量属性，必须与服务端口径是同一个数。
+    QCOMPARE(manager->property("overdueRolloverDays").toInt(), TaskManager::kOverdueRolloverDays);
+
+    const int yesterday = insertTaskRow(QStringLiteral("昨天没做完"), today.addDays(-1));
+    const int edge = insertTaskRow(QStringLiteral("整一周前"),
+                                   today.addDays(-TaskManager::kOverdueRolloverDays));
+    const int justOutside = insertTaskRow(QStringLiteral("八天前"),
+                                          today.addDays(-TaskManager::kOverdueRolloverDays - 1));
+    const int monthAgo = insertTaskRow(QStringLiteral("一个多月前"), today.addDays(-40));
+    QVERIFY(yesterday > 0);
+    QVERIFY(edge > 0);
+    QVERIFY(justOutside > 0);
+    QVERIFY(monthAgo > 0);
+
+    const QVariantList overdue = manager->getOverdueUncompletedTasks();
+    QCOMPARE(overdue.size(), 2);
+    // 按日期升序：窗口最早那天在前。
+    QCOMPARE(overdue.at(0).toMap().value(QStringLiteral("id")).toInt(), edge);
+    QCOMPARE(overdue.at(1).toMap().value(QStringLiteral("id")).toInt(), yesterday);
+
+    // 放弃追踪不是删除：窗口外的任务原样留在原来的日期上，未完成状态也不变。
+    const QVariantList oldDay = manager->getTasksByDate(today.addDays(-40));
+    QCOMPARE(oldDay.size(), 1);
+    QCOMPARE(oldDay.first().toMap().value(QStringLiteral("id")).toInt(), monthAgo);
+    QCOMPARE(oldDay.first().toMap().value(QStringLiteral("completed")).toBool(), false);
+    QCOMPARE(manager->getTasksByDate(today.addDays(-TaskManager::kOverdueRolloverDays - 1)).size(), 1);
 }
 
 void ServiceTests::moveTasksToTodayIsTransactional()

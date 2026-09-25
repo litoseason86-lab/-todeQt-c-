@@ -19,6 +19,8 @@ class TaskManager : public QObject
     Q_PROPERTY(int maxEstimatedMinutes READ maxEstimatedMinutes CONSTANT)
     // 备注长度上限。弹窗提交前按它拦下并指明是备注，服务端同样拒绝（不截断）。
     Q_PROPERTY(int maxNotesLength READ maxNotesLength CONSTANT)
+    // 逾期结转回看的天数；今日页结转提示条的文案读它，不在 QML 里另写一个 7。
+    Q_PROPERTY(int overdueRolloverDays READ overdueRolloverDays CONSTANT)
 
 public:
     enum class TargetCompletionResult {
@@ -34,12 +36,18 @@ public:
     // 避免界面因一个预估值填错就无法保存任务本体。
     // 预计用时上限 24 小时，与「今日专注目标」同一上界；0 表示未设置。
     static constexpr int kMaxEstimatedMinutes = 24 * 60;
+    // 逾期结转的回看窗口（天）：只有日期落在「今天往前这么多天」以内、还没做完的任务才算待结转。
+    // 更早的视为放弃追踪——任务原样留在原来的日期上（历史统计照旧、任务工具里仍能搜到并手动改期），
+    // 只是不再出现在「最近 N 天还有 M 个未完成任务」里。不设窗口时实测攒到 41 条，
+    // 其中 39 条是一个多月前每天一条的背词任务，「全部移到今天」对它们毫无意义。
+    static constexpr int kOverdueRolloverDays = 7;
 
     static TaskManager* instance();
 
     int maxTitleLength() const { return kMaxTitleLength; }
     int maxEstimatedMinutes() const { return kMaxEstimatedMinutes; }
     int maxNotesLength() const { return kMaxNotesLength; }
+    int overdueRolloverDays() const { return kOverdueRolloverDays; }
 
     // Q_INVOKABLE 表示 QML 可以直接调用这些方法。
     // 新增任务支持旧版文本科目，也支持新版 category_id 科目编号。
@@ -111,6 +119,7 @@ public:
     Q_INVOKABLE QVariantList getTasksByDate(const QDate& date) const;
     Q_INVOKABLE QVariantList getWeekTasks(const QVariant& startDateValue) const;
     Q_INVOKABLE QVariantList getMonthTasks(int year, int month) const;
+    // 待结转的逾期任务：日期在 [逻辑今天 - kOverdueRolloverDays, 逻辑今天) 之间、未完成。
     // 结转只排除具有可信生成标记的例行任务；旧版仅按标题猜出的 routine_id 不可信。
     Q_INVOKABLE QVariantList getOverdueUncompletedTasks() const;
     Q_INVOKABLE bool moveTasksToToday(const QVariantList& taskIds);

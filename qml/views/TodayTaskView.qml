@@ -869,7 +869,12 @@ Item {
                 Text {
                     objectName: "rolloverBannerText"
                     Layout.fillWidth: true
-                    text: "之前还有 " + root.overdueTasks.length + " 个未完成任务"
+                    // 说清回看了几天：更早的未完成任务已放弃追踪，不写明的话数字对不上用户的印象。
+                    // 天数取服务层常量；旧测试桩没有这个属性时退回不带天数的说法。
+                    text: Number(root.taskManagerRef ? root.taskManagerRef.overdueRolloverDays : 0) > 0
+                          ? "最近 " + root.taskManagerRef.overdueRolloverDays + " 天还有 "
+                            + root.overdueTasks.length + " 个未完成任务"
+                          : "之前还有 " + root.overdueTasks.length + " 个未完成任务"
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontMd
                     font.weight: Font.Medium
