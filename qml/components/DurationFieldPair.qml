@@ -13,7 +13,7 @@ import ".."
 // 双向绑定只会让「什么时候写回」变得含糊。
 //
 // 校验分工：这里只管形式合法性（能不能解析、有没有超过上限），
-// 语义下限（目标至少 1 分钟 / 预计用时允许留空）留给宿主，因为文案和含义都不同。
+// 语义下限（今日专注目标至少 1 分钟 / 预计用时允许留空）留给宿主，因为文案和含义都不同。
 // 空框按 0 算，但不能靠留空把总时长变成 0——详见 acceptable 的说明。
 RowLayout {
     id: root
@@ -107,8 +107,9 @@ RowLayout {
         selectByMouse: true
         horizontalAlignment: TextInput.AlignHCenter
         inputMethodHints: Qt.ImhDigitsOnly
-        // 位数跟着上限走，不能写死两位：目标上限是 1000 小时，写死两位时
-        // reload() 灌进 "416" 会被输入框截成 "41"，用户只改标题保存就把目标量改小了。
+        // 位数跟着上限走，不写死两位。现有宿主的上限都在 99 小时以内（预计用时 24 小时、
+        // 超长专注修正 99 小时 59 分），但曾经的目标表单上限是 1000 小时：写死两位时
+        // reload() 灌进 "416" 会被截成 "41"，用户只改标题保存就把数值改小了。哪个宿主再放宽也不会被截。
         maximumLength: Math.max(1, String(root.maximumHours).length)
         font.pixelSize: Theme.fontMd
         color: Theme.inkStrong

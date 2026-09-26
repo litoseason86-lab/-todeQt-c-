@@ -13,7 +13,7 @@ class DatabaseManager : public QObject
 public:
     // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
-    static constexpr int kCurrentSchemaVersion = 16;
+    static constexpr int kCurrentSchemaVersion = 17;
 
     static DatabaseManager* instance();
 
@@ -67,14 +67,14 @@ private:
     bool migrateToVersion7();
     // v8 持久化“自然到点”事实，手动停止的番茄段不再被误算为完整番茄。
     bool migrateToVersion8();
-    // v9 把会话开始时的科目写入历史快照，任务删除后统计与长期目标仍有归属。
+    // v9 把会话开始时的科目写入历史快照，任务删除后统计仍有归属。
     bool migrateToVersion9();
     // v10：任务的「预估番茄数」改为「预计用时（分钟）」。
     bool migrateToVersion10();
-    // v11 一次做三件事，合并成一次迁移是为了只建一份迁移快照、只重入一次：
-    //   long_goals.target_pomodoros → target_minutes（长期目标与任务统一到分钟）
+    // v11 给 tasks 增加两列，合并成一次迁移是为了只建一份迁移快照、只重入一次：
     //   tasks.notes                  （任务备注）
     //   tasks.display_order          （任务手动排序）
+    // 当年它还把长期目标的番茄数折成分钟；v17 删掉了长期目标表，那一步随之去掉。
     bool migrateToVersion11();
     // v12 将历史的 0 序号和同日重复序号按旧版可见顺序固化为正整数，
     // 使后续所有任务写路径共享同一个排序不变量。
@@ -95,6 +95,10 @@ private:
     // v16 给 tasks 增加完成记录 completion_note：用户点「完成」时写下这次具体做完了什么。
     // 它和 notes（做之前写的页码、要点）是两回事，分开存才不会互相覆盖。
     bool migrateToVersion16();
+    // v17 删除长期目标表 long_goals：2026-09「目标」页连同数据一起删掉。
+    // 删表会丢掉用户写下的目标，所以表存在时先走迁移快照；从来没用过目标页的库里本来就没有这张表，
+    // 那种库只推版本号，不建快照。
+    bool migrateToVersion17();
     bool createRoutinesTable();
     // 课表项表与节次预设表。两者一起建：节次预设是课表录入的快捷填充来源，
     // 缺了它课表页的「按节次」显示模式就没有行可画。

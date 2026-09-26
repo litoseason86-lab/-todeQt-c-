@@ -201,44 +201,6 @@ TestCase {
     }
 
     QtObject {
-        id: goalService
-
-        signal goalProgressed(int goalId, string title, int doneMinutes, int targetMinutes)
-        signal milestoneReached(int goalId, string title, int percent)
-        signal goalsChanged
-
-        property var detailData: ({
-            id: 7,
-            title: "英语精读",
-            doneMinutes: 50,
-            targetMinutes: 100,
-            percent: 50,
-            achieved: false,
-            forecastDays: 10
-        })
-
-        function getGoals() { return [] }
-        function getGoal(goalId) { return detailData }
-        function getGoalDailyCounts(goalId, year, month) { return [] }
-    }
-
-    QtObject {
-        id: phaseSoundService
-
-        property int milestoneCalls: 0
-        property int achievedCalls: 0
-
-        function playMilestoneChime() {
-            milestoneCalls += 1
-            return true
-        }
-        function playGoalAchievedChime() {
-            achievedCalls += 1
-            return true
-        }
-    }
-
-    QtObject {
         id: backupService
 
         property bool operationBlocksUi: false
@@ -286,8 +248,6 @@ TestCase {
         appSettingsRef: appSettings
         focusTimerRef: focusTimer
         backupServiceRef: backupService
-        goalServiceRef: goalService
-        phaseSoundServiceRef: phaseSoundService
         shortcutRegistryRef: shortcutRegistry
     }
 
@@ -304,12 +264,6 @@ TestCase {
         appSettings.soundEnabled = true;
         backupService.operationBlocksUi = false
         backupService.operationText = ""
-        phaseSoundService.milestoneCalls = 0
-        phaseSoundService.achievedCalls = 0
-        mainWindow.milestoneQueue = []
-        mainWindow.suppressedMilestones = []
-        mainWindow.milestonePresentationScheduled = false
-        mainWindow.disposeActiveMilestoneDialog()
         wait(20);
     }
 
@@ -374,6 +328,42 @@ TestCase {
         // 只断言 width 不断言 visible：本项目的 QML 测试沙箱里 visible 的级联不可靠。
         tryCompare(divider, "width", 1);
         compare(stackLayout.currentIndex, mainWindow.viewIndex(mainWindow.currentView));
+    }
+
+    // 页面编号必须与 StackLayout 里页面的书写顺序一一对应，切页状态机按编号取页。
+    // 2026-09 删掉「目标」页（原第 7 页）后，排在它后面的三页各前移一位；这条逐页核对
+    // 「按名字切过去，栈里显示的正是那一页」，而不只是「currentIndex 等于映射出来的数」。
+    function test_everyViewNameMapsToItsOwnPage_data() {
+        return [
+            { tag: "today", page: "todayTaskViewPage" },
+            { tag: "focus", page: "focusViewPage" },
+            { tag: "week", page: "weekPlanViewPage" },
+            { tag: "month", page: "monthGoalViewPage" },
+            { tag: "stats", page: "statisticsViewPage" },
+            { tag: "countdown", page: "countdownViewPage" },
+            { tag: "dashboard", page: "dashboardViewPage" },
+            { tag: "todayFocus", page: "todayFocusViewPage" },
+            { tag: "schedule", page: "schedulePlanViewPage" },
+            { tag: "knowledgeGaps", page: "knowledgeGapViewPage" }
+        ]
+    }
+
+    function test_everyViewNameMapsToItsOwnPage(data) {
+        const stack = findChild(mainWindow, "mainViewStack")
+        verify(stack !== null)
+        const index = mainWindow.viewIndex(data.tag)
+        verify(index >= 0 && index < stack.children.length, data.tag + " 映射到 " + index)
+        compare(stack.children[index].objectName, data.page)
+    }
+
+    function test_removedGoalsViewHasNoPageOfItsOwn() {
+        const stack = findChild(mainWindow, "mainViewStack")
+        verify(stack !== null)
+        // 栈里正好是上面那十页：多一页或少一页，编号就会整体错位。
+        compare(stack.children.length, 10)
+        // 旧配置、旧快捷键里残留的 "goals" 落到默认的今日页，不能落到别的页上。
+        compare(mainWindow.viewIndex("goals"), mainWindow.viewIndex("today"))
+        verify(findChild(mainWindow, "goalsViewPage") === null)
     }
 
     function test_wallpaperLayerFollowsSettings() {
@@ -492,117 +482,6 @@ TestCase {
 
         focusTimer.hasActiveSession = false
         focusTimer.isRunning = false
-    }
-
-    function test_goalProgressedShowsGlobalToast() {
-        goalService.goalProgressed(7, "英语精读", 95, 240)
-        var toastText = findChild(mainWindow, "toastText")
-        verify(toastText !== null)
-        // 进度按分钟计后不再说「+1」：增量不固定，信号里也没带增量。
-        tryCompare(toastText, "text", "英语精读 · 1 小时 35 分 / 4 小时")
-    }
-
-    function test_milestoneCreatesPlainDialogOutsideImmersive() {
-        appSettings.reduceMotion = true
-        goalService.detailData = {
-            id: 7, title: "英语精读", doneMinutes: 50, targetMinutes: 100,
-            percent: 50, achieved: false, forecastDays: 10
-        }
-
-        goalService.milestoneReached(7, "英语精读", 50)
-        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
-        compare(mainWindow.activeMilestoneDialog.percent, 50)
-        compare(mainWindow.activeMilestoneDialog.achieved, false)
-        compare(phaseSoundService.milestoneCalls, 1)
-        compare(phaseSoundService.achievedCalls, 0)
-    }
-
-    function test_immersiveSuppressesDialogButKeepsSoundAndAddsExitToast() {
-        appSettings.reduceMotion = true
-        focusTimer.hasActiveSession = true
-        focusTimer.isRunning = true
-        wait(20)
-        var focusView = findChild(mainWindow, "focusViewPage")
-        verify(focusView !== null)
-        focusView.immersiveRequested()
-        tryCompare(mainWindow, "focusImmersiveActive", true)
-
-        goalService.milestoneReached(7, "英语精读", 50)
-        tryCompare(phaseSoundService, "milestoneCalls", 1)
-        compare(mainWindow.activeMilestoneDialog, null)
-        verify(mainWindow.suppressedMilestone !== null)
-
-        mainWindow.focusImmersiveActive = false
-        var toastText = findChild(mainWindow, "toastText")
-        verify(toastText !== null)
-        tryVerify(function() { return toastText.text.indexOf("50%") >= 0 })
-        compare(mainWindow.suppressedMilestone, null)
-        focusTimer.hasActiveSession = false
-        focusTimer.isRunning = false
-    }
-
-    function test_reduceMotionCreatesNoRewardParticles() {
-        appSettings.reduceMotion = true
-        goalService.milestoneReached(7, "英语精读", 50)
-        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
-        tryCompare(mainWindow, "rewardParticleCount", 0)
-    }
-
-    function test_milestoneParticlesAreVisibleAboveDialog() {
-        // 反面用例只能证明减少动效时不创建粒子；这里同时锁住数量和宿主层级，
-        // 避免动画对象正常运行，却被 Popup 所在的 overlay 整层遮住。
-        appSettings.reduceMotion = false
-        goalService.milestoneReached(7, "英语精读", 50)
-        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
-        tryVerify(function() { return mainWindow.rewardParticleCount > 0 })
-
-        const particles = findChild(mainWindow, "goalRewardParticles")
-        verify(particles !== null)
-        compare(particles.parent, Overlay.overlay)
-    }
-
-    function test_goalAchievementUsesAchievedDialogAndChime() {
-        appSettings.reduceMotion = true
-        goalService.detailData = {
-            id: 7, title: "英语精读", doneMinutes: 100, targetMinutes: 100,
-            percent: 100, achieved: true, forecastDays: 0
-        }
-
-        goalService.milestoneReached(7, "英语精读", 100)
-        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
-        compare(mainWindow.activeMilestoneDialog.achieved, true)
-        compare(mainWindow.activeMilestoneDialog.percent, 100)
-        compare(phaseSoundService.milestoneCalls, 0)
-        compare(phaseSoundService.achievedCalls, 1)
-    }
-
-    function test_backToBackMilestonesArePresentedInOrder() {
-        appSettings.reduceMotion = true
-
-        goalService.milestoneReached(7, "英语精读", 50)
-        goalService.milestoneReached(8, "写作训练", 100)
-
-        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
-        compare(mainWindow.activeMilestoneDialog.goalId, 7)
-        compare(mainWindow.pendingMilestone.goalId, 8)
-
-        mainWindow.activeMilestoneDialog.dismiss()
-        tryVerify(function() {
-            return mainWindow.activeMilestoneDialog !== null
-                    && mainWindow.activeMilestoneDialog.goalId === 8
-        })
-        compare(mainWindow.pendingMilestone, null)
-        compare(phaseSoundService.milestoneCalls, 1)
-        compare(phaseSoundService.achievedCalls, 1)
-    }
-
-    function test_escapeClosesMilestoneAndReleasesLifecycle() {
-        appSettings.reduceMotion = true
-        goalService.milestoneReached(7, "英语精读", 50)
-        tryVerify(function() { return mainWindow.activeMilestoneDialog !== null })
-
-        keyClick(Qt.Key_Escape)
-        tryCompare(mainWindow, "activeMilestoneDialog", null)
     }
 
     function test_unprojectableAutoExitsViaOverlay() {

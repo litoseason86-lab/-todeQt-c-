@@ -30,7 +30,6 @@
 #include "../src/services/FocusSessionRules.h"
 // FocusTimer 声明了 friend class ServiceTests，测试可直接访问内部时钟状态。
 #include "../src/services/FocusTimer.h"
-#include "../src/services/GoalService.h"
 #include "../src/services/MonotonicClock.h"
 #include "../src/services/RoutineManager.h"
 #include "../src/services/RoutineRules.h"
@@ -757,7 +756,7 @@ private slots:
     void appSettingsSidebarOrderDropsUnknownAndDuplicateIds();
     void appSettingsReloadNotifiesEveryProperty();
     void appSettingsDashboardTimerVisibleRoundTrip();
-    void appSettingsGoalViewModeNormalizesAndRoundTrips();
+    void appSettingsRemovesRetiredGoalSettings();
     void appSettingsBackgroundThemeDefaultAndRoundTrip();
     void appSettingsDayStartHourNormalizeAndPersist();
     void appSettingsDayStartHourRejectsCorruptIniValue();
@@ -880,6 +879,7 @@ private slots:
     void materializeTodayOnlyGeneratesOnSelectedWeekdays();
     void migrationV15AddsRoutineWeekdaysAndKeepsExistingRoutines();
     void migrationV16AddsCompletionNoteAndKeepsExistingTasks();
+    void migrationV17DropsLongGoalsAfterSnapshot();
     void migrationV5RebuildKeepsCompletionNote();
     void freshDatabaseHasRoutineIdColumn();
     void migrationV4DoesNotGuessRoutineLineage();
@@ -943,7 +943,6 @@ private slots:
     void pomodoroWorkRequiresPositiveExactPlan();
     void pomodoroTargetCompletionFailureKeepsSession();
     void manuallyStoppedPomodoroDoesNotCountAsCompleted();
-    void realPomodoroSessionAdvancesLongGoalAndFiresMilestone();
     void pomodoroBreakWritesNoSessionAndCompletes();
     void pomodoroBreakRestoresTaskContextAndCount();
     void manualRestDoesNotCreateFocusSessionOrFinishAutomatically();
@@ -968,7 +967,7 @@ private slots:
     void pomodoroAggregationDoesNotCrossTasksOrLeakUnbound();
     void recoveredPomodoroStillCountsForOriginalTask();
     void deletingTaskDetachesButKeepsPomodoroHistory();
-    void deletingTaskKeepsCategorySnapshotForStatisticsAndGoals();
+    void deletingTaskKeepsCategorySnapshotForStatistics();
     void isRoutineGeneratedTaskDistinguishesInstances();
     void completeUndoRestoresPriorStateWithoutTouchingFields();
     void weeklyReviewPeriodStateUsesLogicalTodayAsGiven();
@@ -1348,28 +1347,54 @@ void ServiceTests::appSettingsDashboardTimerVisibleRoundTrip()
     QCOMPARE(reloaded.dashboardTimerVisible(), false);
 }
 
-void ServiceTests::appSettingsGoalViewModeNormalizesAndRoundTrips()
+// 删掉「目标」页后，它留下的两个设置键再也没有读取方：构造时清掉，恢复备份后的 reload() 也清。
+// 同在 shortcuts/ 分组里的其它快捷键覆盖不能被连带删掉。
+void ServiceTests::appSettingsRemovesRetiredGoalSettings()
 {
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     const QString path = dir.filePath(QStringLiteral("settings.ini"));
-
     {
-        AppSettings settings(path);
-        QCOMPARE(settings.goalViewMode(), QStringLiteral("list"));
-
-        QSignalSpy spy(&settings, &AppSettings::goalViewModeChanged);
-        settings.setGoalViewMode(QStringLiteral("grid"));
-        QCOMPARE(settings.goalViewMode(), QStringLiteral("grid"));
-        QCOMPARE(spy.count(), 1);
-
-        settings.setGoalViewMode(QStringLiteral("masonry"));
-        QCOMPARE(settings.goalViewMode(), QStringLiteral("list"));
-        QCOMPARE(spy.count(), 2);
+        // 升级前的配置文件：目标页的版式偏好、改过的「切到长期目标」键位，以及一条无关的覆盖。
+        QSettings legacy(path, QSettings::IniFormat);
+        legacy.setValue(QStringLiteral("goals/viewMode"), QStringLiteral("grid"));
+        legacy.setValue(QStringLiteral("shortcuts/view.goals"), QStringLiteral("Ctrl+Shift+8"));
+        legacy.setValue(QStringLiteral("shortcuts/view.stats"), QStringLiteral("Ctrl+Shift+6"));
+        legacy.setValue(QStringLiteral("appearance/sidebarOrder"),
+                        QStringLiteral("goals,today,dashboard"));
+        legacy.sync();
     }
 
-    AppSettings reloaded(path);
-    QCOMPARE(reloaded.goalViewMode(), QStringLiteral("list"));
+    AppSettings settings(path);
+    {
+        QSettings onDisk(path, QSettings::IniFormat);
+        QVERIFY(!onDisk.contains(QStringLiteral("goals/viewMode")));
+        QVERIFY(!onDisk.contains(QStringLiteral("shortcuts/view.goals")));
+        QCOMPARE(onDisk.value(QStringLiteral("shortcuts/view.stats")).toString(),
+                 QStringLiteral("Ctrl+Shift+6"));
+    }
+    // 旧的侧栏顺序里的 goals 被丢掉：用户排过的在前，没排过的按出厂顺序补在后面。
+    const QStringList order = settings.sidebarOrder();
+    QVERIFY(!order.contains(QStringLiteral("goals")));
+    QCOMPARE(order.mid(0, 2), QStringList({QStringLiteral("today"), QStringLiteral("dashboard")}));
+    QCOMPARE(order.size(), AppSettings::defaultSidebarOrder().size());
+    QVERIFY(!AppSettings::defaultSidebarOrder().contains(QStringLiteral("goals")));
+    // goals/ 分组不再属于本应用：新备份不带它，恢复旧备份时直接跳过。
+    QVERIFY(!AppSettings::isOwnedSettingKey(QStringLiteral("goals/viewMode")));
+
+    // 恢复旧备份时 shortcuts/ 分组照常写回（它仍属于本应用），view.goals 会跟着回来。
+    {
+        QSettings restored(path, QSettings::IniFormat);
+        restored.setValue(QStringLiteral("shortcuts/view.goals"), QStringLiteral("Ctrl+Shift+8"));
+        restored.sync();
+    }
+    settings.reload();
+    {
+        QSettings onDisk(path, QSettings::IniFormat);
+        QVERIFY(!onDisk.contains(QStringLiteral("shortcuts/view.goals")));
+        QCOMPARE(onDisk.value(QStringLiteral("shortcuts/view.stats")).toString(),
+                 QStringLiteral("Ctrl+Shift+6"));
+    }
 }
 
 void ServiceTests::appSettingsDailyFocusGoalMinutesByDate()
@@ -4487,6 +4512,117 @@ void ServiceTests::migrationV16AddsCompletionNoteAndKeepsExistingTasks()
     QVERIFY(tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString().isEmpty());
 }
 
+// 2026-09「目标」页连同数据一起删掉：v17 删 long_goals 表。
+// 删表丢的是用户写下的目标，所以表在的时候，删之前必须先有一份迁移快照，而且快照里真有那条目标。
+// 从来没有这张表的库只推版本号，不为此重建整库副本（会挤掉更早的快照）。
+void ServiceTests::migrationV17DropsLongGoalsAfterSnapshot()
+{
+    DatabaseManager::instance()->close();
+
+    // 迁移快照写在数据库同目录。用独立子目录，免得数到 init() 给默认测试库留下的快照。
+    const QString dirPath = m_tempDir->filePath(QStringLiteral("v17-drop-goals"));
+    QVERIFY(QDir().mkpath(dirPath));
+    const QDir dir(dirPath);
+    const QStringList snapshotPattern{QStringLiteral("pomodoro_backup_*.db")};
+    const QString dbPath = dir.filePath(QStringLiteral("before-v17.sqlite"));
+
+    // 先用当前代码建一份完整的库，再退回 v16：补上旧版目标服务懒建的那张表、它的索引和一条目标。
+    // 任务必须走 createTask：直接 INSERT 的行排序号是 0，会触发 v12 的排序自愈，
+    // 那一步自己就会建迁移快照——下面数到的就不是 v17 建的那份了，断言等于没验。
+    QVERIFY(DatabaseManager::instance()->initialize(dbPath));
+    const int taskId = TaskManager::instance()->createTask(
+        QStringLiteral("升级前的任务"), QVariant(logicalToday()), -1, 0, QString());
+    QVERIFY(taskId > 0);
+    const QString createGoalTable = QStringLiteral(
+        "CREATE TABLE long_goals ("
+        " id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,"
+        " category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,"
+        " start_date TEXT NOT NULL, deadline TEXT,"
+        " display_order INTEGER NOT NULL DEFAULT 0,"
+        " fired_milestones INTEGER NOT NULL DEFAULT 0, achieved_at TEXT,"
+        " created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+        " target_minutes INTEGER NOT NULL DEFAULT 0)");
+    const auto goalObjectCount = [] {
+        QSqlQuery count(DatabaseManager::instance()->database());
+        if (!count.exec(QStringLiteral(
+                "SELECT COUNT(*) FROM sqlite_master "
+                "WHERE name IN ('long_goals', 'idx_long_goals_order')"))
+            || !count.next()) {
+            return -1;
+        }
+        return count.value(0).toInt();
+    };
+    const auto schemaVersion = [] {
+        QSqlQuery version(DatabaseManager::instance()->database());
+        return version.exec(QStringLiteral("PRAGMA user_version")) && version.next()
+            ? version.value(0).toInt() : -1;
+    };
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY2(query.exec(createGoalTable), qPrintable(query.lastError().text()));
+        QVERIFY(query.exec(QStringLiteral(
+            "CREATE INDEX idx_long_goals_order ON long_goals(display_order)")));
+        QVERIFY(query.exec(QStringLiteral(
+            "INSERT INTO long_goals (title, start_date, target_minutes, achieved_at) "
+            "VALUES ('升级前的目标', '2026-08-01', 600, '2026-08-20T21:00:00')")));
+        QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 16")));
+    }
+    QCOMPARE(goalObjectCount(), 2);
+
+    const QStringList snapshotsBefore = dir.entryList(snapshotPattern, QDir::Files);
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    // 表和索引都没了，其它数据原样，版本号推到当前版本。
+    QCOMPARE(goalObjectCount(), 0);
+    QCOMPARE(TaskManager::instance()->getTask(taskId).value(QStringLiteral("title")).toString(),
+             QStringLiteral("升级前的任务"));
+    QCOMPARE(schemaVersion(), DatabaseManager::kCurrentSchemaVersion);
+    QCOMPARE(DatabaseManager::kCurrentSchemaVersion, 17);
+
+    // 删之前留了一份快照，里面那条目标还在：用户真想找回，数据目录里有。
+    QStringList newSnapshots = dir.entryList(snapshotPattern, QDir::Files);
+    for (const QString& name : snapshotsBefore) {
+        newSnapshots.removeAll(name);
+    }
+    QCOMPARE(newSnapshots.size(), 1);
+    const QString verificationConnection = QStringLiteral("V17SnapshotVerificationConnection");
+    {
+        QSqlDatabase snapshot = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"),
+                                                          verificationConnection);
+        snapshot.setDatabaseName(dir.filePath(newSnapshots.constFirst()));
+        QVERIFY(snapshot.open());
+        QSqlQuery goalQuery(snapshot);
+        QVERIFY(goalQuery.exec(QStringLiteral("SELECT title, target_minutes FROM long_goals")));
+        QVERIFY(goalQuery.next());
+        QCOMPARE(goalQuery.value(0).toString(), QStringLiteral("升级前的目标"));
+        QCOMPARE(goalQuery.value(1).toInt(), 600);
+        QVERIFY(!goalQuery.next());
+        goalQuery.finish();
+        snapshot.close();
+    }
+    QSqlDatabase::removeDatabase(verificationConnection);
+
+    // 从没用过目标页的 v16 库（没有这张表）升上来：v17 照样执行、推版本号，但不为此新建快照。
+    const int snapshotCountAfterDrop = dir.entryList(snapshotPattern, QDir::Files).size();
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 16")));
+    }
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QCOMPARE(schemaVersion(), DatabaseManager::kCurrentSchemaVersion);
+    QCOMPARE(dir.entryList(snapshotPattern, QDir::Files).size(), snapshotCountAfterDrop);
+
+    // 半迁移：版本号已经是当前版本，表却在（外部改库、恢复中途被打断）。守卫只看版本号的话，
+    // 这张表会一直留着；这里要照样删掉。
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY2(query.exec(createGoalTable), qPrintable(query.lastError().text()));
+    }
+    QCOMPARE(schemaVersion(), DatabaseManager::kCurrentSchemaVersion);
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QCOMPARE(goalObjectCount(), 0);
+}
+
 void ServiceTests::migrationV5RebuildKeepsCompletionNote()
 {
     // v5 整表重建用的是写死的列清单。完成记录是 v16 才加的列，
@@ -6420,61 +6556,6 @@ void ServiceTests::manuallyStoppedPomodoroDoesNotCountAsCompleted()
     QCOMPARE(query.value(1).toInt(), 0);
 }
 
-void ServiceTests::realPomodoroSessionAdvancesLongGoalAndFiresMilestone()
-{
-    // 端到端用例：GoalServiceTests 里的专注记录是手工 INSERT 的，若 FocusTimer 实际写入的
-    // mode / duration / task_id 与那边的假设不一致，单测照样全绿而线上进度恒为 0。
-    // 这里让 FocusTimer 真的跑完一个番茄，验证聚合口径在两端确实对得上。
-    AppSettings::instance()->setDayStartHour(0);
-
-    QSqlQuery categoryQuery(DatabaseManager::instance()->database());
-    QVERIFY(categoryQuery.exec(QStringLiteral(
-        "INSERT INTO categories (name, color) VALUES ('长期目标科目', '#d4a574')")));
-    const int categoryId = categoryQuery.lastInsertId().toInt();
-    QVERIFY(categoryId > 0);
-
-    const int taskId = insertTaskRowWithCategoryId(QStringLiteral("目标推进任务"),
-                                                   QDate::currentDate(),
-                                                   categoryId,
-                                                   QString(),
-                                                   false,
-                                                   QDateTime::currentDateTime().toString(Qt::ISODate));
-    QVERIFY(taskId > 0);
-
-    GoalService* goals = GoalService::instance();
-    // 目标定成 1 个番茄，跑完一轮就直接跨到 100%，一次覆盖进度聚合与里程碑两条链路。
-    // 目标 5 分钟：下面那次专注是 300 秒，刚好达成。v11 前这里是「1 个番茄」，
-    // 换算基准变了但用例意图没变。
-    QVERIFY(goals->addGoal(QStringLiteral("端到端目标"), categoryId, 5,
-                           QDate::currentDate(), QVariant()));
-    const QVariantList created = goals->getGoals();
-    QCOMPARE(created.size(), 1);
-    const int goalId = created.first().toMap().value(QStringLiteral("id")).toInt();
-    QCOMPARE(goals->getGoal(goalId).value(QStringLiteral("doneMinutes")).toInt(), 0);
-
-    QSignalSpy milestoneSpy(goals, &GoalService::milestoneReached);
-
-    // 与 main.cpp 中的装配保持一致：专注结束后重算里程碑。
-    QVERIFY(QObject::connect(FocusTimer::instance(), &FocusTimer::focusCompleted,
-                             goals, &GoalService::refreshMilestones));
-
-    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("目标推进任务"), 300));
-    setFocusElapsedSeconds(FocusTimer::instance(), 300);
-    QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection));
-
-    const QVariantMap goal = goals->getGoal(goalId);
-    QCOMPARE(goal.value(QStringLiteral("doneMinutes")).toInt(), 5);
-    QCOMPARE(goal.value(QStringLiteral("achieved")).toBool(), true);
-    QCOMPARE(goal.value(QStringLiteral("percent")).toInt(), 100);
-
-    QCOMPARE(milestoneSpy.count(), 1);
-    QCOMPARE(milestoneSpy.first().at(0).toInt(), goalId);
-    QCOMPARE(milestoneSpy.first().at(2).toInt(), 100);
-
-    QObject::disconnect(FocusTimer::instance(), &FocusTimer::focusCompleted,
-                        goals, &GoalService::refreshMilestones);
-}
-
 void ServiceTests::pomodoroBreakWritesNoSessionAndCompletes()
 {
     QSignalSpy phaseCompletedSpy(FocusTimer::instance(), &FocusTimer::phaseCompleted);
@@ -7025,7 +7106,7 @@ void ServiceTests::deletingTaskDetachesButKeepsPomodoroHistory()
     QCOMPARE(query.value(2).toInt(), 25 * 60);
 }
 
-void ServiceTests::deletingTaskKeepsCategorySnapshotForStatisticsAndGoals()
+void ServiceTests::deletingTaskKeepsCategorySnapshotForStatistics()
 {
     AppSettings::instance()->setDayStartHour(0);
     QSqlQuery categoryQuery(DatabaseManager::instance()->database());
@@ -7038,11 +7119,6 @@ void ServiceTests::deletingTaskKeepsCategorySnapshotForStatisticsAndGoals()
         QStringLiteral("会被删除的快照任务"), logicalToday(), categoryId,
         QString(), false, QDateTime::currentDateTime().toString(Qt::ISODate));
     QVERIFY(taskId > 0);
-
-    GoalService* goals = GoalService::instance();
-    QVERIFY(goals->addGoal(QStringLiteral("快照目标"), categoryId, 5,
-                           logicalToday(), QVariant()));
-    const int goalId = goals->getGoals().first().toMap().value(QStringLiteral("id")).toInt();
 
     FocusTimer* timer = FocusTimer::instance();
     QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("会被删除的快照任务"), 300));
@@ -7068,8 +7144,6 @@ void ServiceTests::deletingTaskKeepsCategorySnapshotForStatisticsAndGoals()
     QCOMPARE(categories.first().toMap().value(QStringLiteral("name")).toString(),
              QStringLiteral("历史快照科目"));
     QCOMPARE(categories.first().toMap().value(QStringLiteral("duration")).toInt(), 300);
-
-    QCOMPARE(goals->getGoal(goalId).value(QStringLiteral("doneMinutes")).toInt(), 5);
 }
 
 void ServiceTests::isRoutineGeneratedTaskDistinguishesInstances()
@@ -8358,7 +8432,6 @@ void ServiceTests::everySettingTheAppWritesPassesTheOwnershipFilter()
         settings.setNickname(QStringLiteral("同学"));
         settings.setSidebarVisible(false);
         settings.setDashboardTimerVisible(false);
-        settings.setGoalViewMode(QStringLiteral("grid"));
         settings.setReduceTransparency(true);
         settings.setRaiseOnPhaseComplete(false);
         settings.setCloseToTray(true);

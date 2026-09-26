@@ -5,7 +5,6 @@ import QtQuick.Controls.Basic
 import QtQuick.Dialogs
 import QtQuick.Effects
 import QtQuick.Layouts
-import "Duration.js" as Duration
 import "."
 import "components"
 import "views"
@@ -63,22 +62,10 @@ Item {
     property var logicalDayServiceRef: null
     property var backupServiceRef: null
     property var mcpAccessRef: null
-    property var goalServiceRef: null
     property var scheduleServiceRef: null
-    property var phaseSoundServiceRef: null
     property var shortcutRegistryRef: null
     // 「召回 / 隐藏主窗口」只能由 ApplicationWindow 落实；这里和菜单栏一样只发意图。
     signal windowToggleRequested()
-    property var milestoneQueue: []
-    property var suppressedMilestones: []
-    property bool milestonePresentationScheduled: false
-    readonly property var pendingMilestone: root.milestoneQueue.length > 0
-                                            ? root.milestoneQueue[0] : null
-    readonly property var suppressedMilestone: root.suppressedMilestones.length > 0
-                                               ? root.suppressedMilestones[root.suppressedMilestones.length - 1]
-                                               : null
-    property var activeMilestoneDialog: null
-    readonly property int rewardParticleCount: rewardParticles.particleCount
     // 侧栏展开态：优先读设置；测试未注入 settings 时本地默认真。
     property bool sidebarVisible: root.appSettingsRef
                                   ? root.appSettingsRef.sidebarVisible
@@ -106,8 +93,9 @@ Item {
     // 用户正在新建任务对话框里打字时按 ⌘1，页面会在弹窗背后被切走（已实测复现）。
     //
     // 判据用「焦点是否落进 overlay」而不是「overlay 上有没有子项」：本应用的弹窗
-    // 全部是 modal + focus，而目标热力图的悬停 ToolTip 同样挂在 overlay 上却不取焦，
-    // 按子项判断会让鼠标划过热力图时快捷键整体失灵。
+    // 全部是 modal + focus，而悬停 ToolTip 这类子项同样挂在 overlay 上却不取焦
+    // （当初撞上的是目标页热力图的格子提示，那一页已删除），按子项判断会让鼠标划过
+    // 带提示的控件时快捷键整体失灵。
     readonly property bool overlayHoldsFocus: root.itemInsideOverlay(
         root.Window.window ? root.Window.window.activeFocusItem : null)
 
@@ -209,18 +197,15 @@ Item {
         case "dashboard":
             // 仪表盘追加在栈尾，避免挪动既有视图索引影响测试与切页逻辑。
             return 6;
-        case "goals":
-            // 目标页继续追加在栈尾，既有视图索引保持不变。
-            return 7;
         case "todayFocus":
-            // 独立记录页追加在栈尾，不能挪动既有索引，否则切页状态机会错页。
-            return 8;
+            // 这里的数字必须与下方 StackLayout 里页面的书写顺序一一对应，切页状态机按它取页，
+            // 新页面一律追加在栈尾。2026-09 删除了原第 7 页「目标」，排在它后面的三页各前移一位；
+            // 页面编号没有写进任何设置，只在这里和 StackLayout 之间对应。
+            return 7;
         case "schedule":
-            // 课表页同样追加在栈尾，保持既有索引不变。
-            return 9;
+            return 8;
         case "knowledgeGaps":
-            // 知识缺口页继续追加在栈尾。既有索引一个都不能动，否则切页状态机会错页。
-            return 10;
+            return 9;
         case "today":
         default:
             return 0;
@@ -263,127 +248,6 @@ Item {
             root.commitPendingDelete()
         }
         globalToast.show(message, actionText, actionCallback)
-    }
-
-    function scheduleMilestonePresentation() {
-        if (root.milestonePresentationScheduled || root.activeMilestoneDialog
-                || root.milestoneQueue.length === 0) {
-            return
-        }
-
-        root.milestonePresentationScheduled = true
-        Qt.callLater(root.presentPendingMilestone)
-    }
-
-    function enqueueMilestone(goalId, title, percent) {
-        // 同一个同步信号链可能连续跨过多个目标的阈值。数组每次复制后再赋值，确保 QML 发出属性变更。
-        const queued = root.milestoneQueue.slice()
-        queued.push({ goalId: goalId, title: title, percent: percent })
-        root.milestoneQueue = queued
-        root.scheduleMilestonePresentation()
-    }
-
-    function presentPendingMilestone() {
-        root.milestonePresentationScheduled = false
-        if (root.activeMilestoneDialog || root.milestoneQueue.length === 0)
-            return
-
-        const queued = root.milestoneQueue.slice()
-        const milestone = queued.shift()
-        root.milestoneQueue = queued
-
-        // 声音不依赖当前页面，也不被沉浸层压制；它是专注完成后的第一层即时反馈。
-        const soundAllowed = !root.appSettingsRef || Boolean(root.appSettingsRef.soundEnabled)
-        if (soundAllowed && root.phaseSoundServiceRef) {
-            if (Number(milestone.percent) === 100
-                    && root.phaseSoundServiceRef.playGoalAchievedChime)
-                root.phaseSoundServiceRef.playGoalAchievedChime()
-            else if (root.phaseSoundServiceRef.playMilestoneChime)
-                root.phaseSoundServiceRef.playMilestoneChime()
-        }
-
-        if (root.focusImmersiveActive) {
-            // 沉浸时保留每个稀有事件，但不盖住全屏专注；退出后合并为一条补告知 Toast。
-            const suppressed = root.suppressedMilestones.slice()
-            suppressed.push(milestone)
-            root.suppressedMilestones = suppressed
-            root.scheduleMilestonePresentation()
-            return
-        }
-
-        const goal = root.goalServiceRef && root.goalServiceRef.getGoal
-                ? root.goalServiceRef.getGoal(Number(milestone.goalId)) : ({})
-        const dialog = milestoneDialogComponent.createObject(root, {
-            goalId: Number(milestone.goalId),
-            goalTitle: String(milestone.title || ""),
-            percent: Number(milestone.percent || 0),
-            doneCount: Number(goal.doneMinutes || 0),
-            targetCount: Number(goal.targetMinutes || 0),
-            achieved: Number(milestone.percent) === 100,
-            reduceMotion: Theme.reduceMotion
-                          || Boolean(root.appSettingsRef && root.appSettingsRef.reduceMotion)
-        })
-        if (!dialog) {
-            root.showToast(String(milestone.title || "") + " 已达成 "
-                           + Number(milestone.percent || 0) + "%")
-            root.scheduleMilestonePresentation()
-            return
-        }
-        root.activeMilestoneDialog = dialog
-        dialog.closed.connect(function() { root.finalizeMilestoneDialog(dialog) })
-        dialog.viewGoalRequested.connect(function() { root.openRewardGoal(dialog.goalId) })
-        dialog.open()
-
-        if (!Theme.reduceMotion
-                && !(root.appSettingsRef && root.appSettingsRef.reduceMotion)) {
-            Qt.callLater(function() {
-                if (root.activeMilestoneDialog === dialog) {
-                    // Popup 的视觉项会被 Controls 重挂到 overlay，因此用坐标映射取得
-                    // 真实屏幕中心，不依赖 Popup 逻辑 parent 的 x/y 语义。
-                    const center = dialog.contentItem.mapToItem(
-                                rewardParticles,
-                                dialog.contentItem.width / 2,
-                                dialog.contentItem.height / 2)
-                    rewardParticles.burst(center.x, center.y)
-                }
-            })
-        }
-    }
-
-    function finalizeMilestoneDialog(dialog) {
-        if (root.activeMilestoneDialog === dialog)
-            root.activeMilestoneDialog = null
-        dialog.destroy()
-        root.scheduleMilestonePresentation()
-    }
-
-    function disposeActiveMilestoneDialog() {
-        const dialog = root.activeMilestoneDialog
-        if (!dialog)
-            return
-        // Popup.closed 在退出动画完成后统一销毁，避免提前 destroy 截断动画或漏接 Escape 关闭。
-        dialog.close()
-    }
-
-    function openRewardGoal(goalId) {
-        root.disposeActiveMilestoneDialog()
-        root.switchToView("goals")
-        // 切页由既有淡入淡出状态机管理；详情子状态可先写入，页面出现时已经是正确目标。
-        Qt.callLater(function() { goalsView.openGoal(goalId) })
-    }
-
-    onFocusImmersiveActiveChanged: {
-        if (!root.focusImmersiveActive && root.suppressedMilestones.length > 0) {
-            const suppressed = root.suppressedMilestones.slice()
-            root.suppressedMilestones = []
-            const messages = []
-            for (let i = 0; i < suppressed.length; ++i) {
-                const milestone = suppressed[i]
-                messages.push(String(milestone.title || "") + " "
-                              + Number(milestone.percent || 0) + "%")
-            }
-            root.showToast("✦ " + messages.join("；"))
-        }
     }
 
     function requestDeleteTask(taskId, taskTitle) {
@@ -536,7 +400,6 @@ Item {
         case "view.month": root.switchToView("month"); return
         case "view.stats": root.switchToView("stats"); return
         case "view.countdown": root.switchToView("countdown"); return
-        case "view.goals": root.switchToView("goals"); return
         case "task.new": root.newTaskFromShortcut(); return
         case "window.toggleSidebar": root.toggleSidebar(); return
         case "window.settings": settingsDialog.open(); return
@@ -1089,6 +952,7 @@ Item {
                 }
 
                 MonthGoalView {
+                    objectName: "monthGoalViewPage"
                     pageActive: root.currentView === "month"
                     focusTimerRef: root.focusTimerRef
                     focusHistoryServiceRef: root.focusHistoryServiceRef
@@ -1103,6 +967,7 @@ Item {
                 }
 
                 StatisticsView {
+                    objectName: "statisticsViewPage"
                     pageActive: root.currentView === "stats"
                     taskManagerRef: root.taskManagerRef
                     statisticsServiceRef: root.statisticsServiceRef
@@ -1113,6 +978,7 @@ Item {
                 }
 
                 CountdownView {
+                    objectName: "countdownViewPage"
                     countdownServiceRef: root.countdownServiceRef
                 }
 
@@ -1145,15 +1011,6 @@ Item {
                     onTaskCompletionUndoable: function(taskId, title) {
                         root.handleTaskCompletedByUser(taskId, title)
                     }
-                }
-
-                GoalsView {
-                    id: goalsView
-                    objectName: "goalsViewPage"
-                    pageActive: root.currentView === "goals"
-                    goalServiceRef: root.goalServiceRef
-                    categoryManagerRef: root.categoryManagerRef
-                    settingsRef: root.appSettingsRef
                 }
 
                 TodayFocusView {
@@ -1360,24 +1217,6 @@ Item {
         onExitRequested: root.focusImmersiveActive = false
     }
 
-    CompletionParticles {
-        id: rewardParticles
-        objectName: "goalRewardParticles"
-        // Popup 渲染在窗口 overlay 层，该层整体高于 contentItem；MainWindow 内部
-        // 的 z 值再高也跨不过这个边界，所以奖励粒子必须直接挂在同一 overlay。
-        parent: root.Overlay.overlay
-        anchors.fill: parent
-        z: 110
-    }
-
-    Component {
-        id: milestoneDialogComponent
-
-        MilestoneDialog {
-            parent: root
-        }
-    }
-
     AppShortcuts {
         id: appShortcuts
         objectName: "appShortcuts"
@@ -1440,25 +1279,6 @@ Item {
             root.pendingDeleteUndoAction = null
             root.pendingDeleteTaskId = -1
             root.pendingDeleteTitle = ""
-        }
-    }
-
-    Connections {
-        // 奖励回路挂在全局壳层，目标页开不开着都能收到推进与里程碑事件。
-        target: root.goalServiceRef
-        ignoreUnknownSignals: true
-
-        function onGoalProgressed(goalId, title, doneMinutes, targetMinutes) {
-            // 旧文案是「+1」——那是番茄单位下「又完成一个」的意思。进度改成分钟后
-            // 每次推进的增量不固定，信号里也没带增量，只如实报当前进度。
-            root.showToast(String(title || "") + " · "
-                           + Duration.format(Number(doneMinutes))
-                           + " / " + Duration.format(Number(targetMinutes)))
-        }
-
-        function onMilestoneReached(goalId, title, percent) {
-            // C++ 的 focusCompleted 信号链仍在同步收尾；这里只记录参数，把 UI 和声音推迟到下一轮事件循环。
-            root.enqueueMilestone(goalId, title, percent)
         }
     }
 

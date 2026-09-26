@@ -3,7 +3,7 @@ import QtQuick.Controls
 import QtTest
 import "../../qml/components"
 
-// 关闭动画期间的重复提交：9 个写入表单的统一门禁。
+// 关闭动画期间的重复提交：8 个写入表单的统一门禁。
 //
 // Popup 的退出动画有 180~220ms，这段时间里弹窗还在响应键盘。用户按下回车（或 ⌘↩）
 // 保存后，习惯性再按一次，第二次按键仍然打进同一个还没消失的表单里——没有门禁时
@@ -11,7 +11,7 @@ import "../../qml/components"
 //
 // 每个弹窗自己的用例只覆盖它自己的业务分支，这条把「开始关闭后不得再写入」
 // 当成横向不变量集中放一处：新增写入表单时应当在这里补一行，
-// 不然 9 个弹窗里漏掉的那个不会有任何测试发现。
+// 不然 8 个弹窗里漏掉的那个不会有任何测试发现。
 //
 // 写法统一为：打开 → 填合法数据 → close() → 再 submit()。
 // 必须填合法数据，否则校验本身就会挡住第二次提交，门禁被摘掉也照样绿。
@@ -308,44 +308,7 @@ TestCase {
             function() { scheduleSettingsDialog.save() })
     }
 
-    // ---- 8. 目标表单 ----
-
-    QtObject {
-        id: goalService
-
-        signal operationFailed(string message)
-
-        readonly property int maxTitleLength: 100
-        readonly property int maxTargetMinutes: 60000
-
-        function addGoal(title, categoryId, targetMinutes, startDate, deadline) {
-            return testCase.countWrite()
-        }
-        function updateGoal(goalId, title, categoryId, targetMinutes, startDate, deadline) {
-            return testCase.countWrite()
-        }
-    }
-
-    GoalFormDialog {
-        id: goalFormDialog
-
-        parent: testCase
-        categoryManagerRef: categoryManager
-        goalServiceRef: goalService
-    }
-
-    function test_goalFormDialogBlocksSubmitWhileClosing() {
-        assertClosingBlocksSubmit(
-            goalFormDialog,
-            function() { goalFormDialog.openForAdd() },
-            function() {
-                findChild(goalFormDialog, "goalTitleField").text = "刷完真题"
-                goalFormDialog.submit()
-            },
-            function() { goalFormDialog.submit() })
-    }
-
-    // ---- 9. 完成任务（带完成记录） ----
+    // ---- 8. 完成任务（带完成记录） ----
 
     CompleteTaskDialog {
         id: completeTaskDialog

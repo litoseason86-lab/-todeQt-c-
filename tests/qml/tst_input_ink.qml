@@ -33,7 +33,6 @@ TestCase {
     Component { id: routineComponent; RoutineDialog {} }
     Component { id: countdownComponent; CountdownDialog {} }
     Component { id: exportComponent; ExportDialog {} }
-    Component { id: goalFormComponent; GoalFormDialog {} }
     Component { id: taskItemComponent; TaskItem { width: 400 } }
     Component { id: settingsGeneralComponent; SettingsGeneralPage {} }
 
@@ -61,7 +60,6 @@ TestCase {
             { name: "RoutineDialog", comp: routineComponent },
             { name: "CountdownDialog", comp: countdownComponent },
             { name: "ExportDialog", comp: exportComponent },
-            { name: "GoalFormDialog", comp: goalFormComponent },
             { name: "TaskItem", comp: taskItemComponent },
             { name: "SettingsGeneralPage", comp: settingsGeneralComponent }
         ]

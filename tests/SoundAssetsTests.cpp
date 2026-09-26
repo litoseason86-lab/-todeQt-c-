@@ -11,8 +11,6 @@ class SoundAssetsTests : public QObject
 private:
     const QStringList m_soundPaths{
         QStringLiteral(":/sounds/phase-complete.wav"),
-        QStringLiteral(":/sounds/milestone.wav"),
-        QStringLiteral(":/sounds/goal-achieved.wav"),
     };
 
     void verifyPackagedSound(int index)
@@ -27,8 +25,13 @@ private:
 
 private slots:
     void phaseCompleteSoundIsPackaged() { verifyPackagedSound(0); }
-    void milestoneSoundIsPackaged() { verifyPackagedSound(1); }
-    void goalAchievedSoundIsPackaged() { verifyPackagedSound(2); }
+
+    // 里程碑与达成音随「目标」页一起删掉了（2026-09），不能还留在资源里白占包体积。
+    void retiredGoalSoundsAreNotPackaged()
+    {
+        QVERIFY(!QFile::exists(QStringLiteral(":/sounds/milestone.wav")));
+        QVERIFY(!QFile::exists(QStringLiteral(":/sounds/goal-achieved.wav")));
+    }
 
     void allSoundsAreValidWavContainers()
     {

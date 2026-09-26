@@ -17,7 +17,6 @@
 #include "services/CategoryManager.h"
 #include "services/CountdownService.h"
 #include "services/KnowledgeGapService.h"
-#include "services/GoalService.h"
 #include "services/ExportService.h"
 #include "services/FocusHistoryService.h"
 #include "services/FocusTimer.h"
@@ -222,22 +221,9 @@ int main(int argc, char *argv[])
     QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed,
                      RoutineManager::instance(), &RoutineManager::materializeToday);
 
-    // 长期目标的里程碑判定必须在 C++ 侧完成：目标页大概率没打开，甚至可能正处在专注沉浸态，
-    // 放到 QML 里比较前后进度必然漏触发。这里接在专注结束之后重算，跨页面都能拿到庆祝信号。
-    //
-    // focusCompleted 在“已保存”和“时长不足被丢弃”两个分支都会发，
-    // 但 refreshMilestones 是幂等的（只按当前进度补位掩码），无效会话不会产生任何副作用。
-    //
-    // 连接写在这里而不是 GoalService 构造函数里，是为了不让目标服务反向依赖 FocusTimer；
-    // 与上面 LogicalDayService → RoutineManager 是同一种装配方式。
-    QObject::connect(FocusTimer::instance(), &FocusTimer::focusCompleted,
-                     GoalService::instance(), &GoalService::refreshMilestones);
-
-    // 历史编辑会改变任务累计时长和目标进度；在装配层广播刷新，避免服务互相依赖。
+    // 历史编辑会改变任务累计时长；在装配层广播刷新，避免服务互相依赖。
     QObject::connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged,
                      TaskManager::instance(), &TaskManager::tasksChanged);
-    QObject::connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged,
-                     GoalService::instance(), &GoalService::refreshMilestones);
 
     // 知识缺口转任务会往 tasks 里插一行。在装配层把它接到任务变更信号上，
     // 任务列表就能立刻刷新，而不必让 KnowledgeGapService 反向依赖 TaskManager。
@@ -258,7 +244,6 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("knowledgeGapService"), KnowledgeGapService::instance());
-    engine.rootContext()->setContextProperty(QStringLiteral("goalService"), GoalService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("routineManager"), RoutineManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("scheduleService"), ScheduleService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), AppSettings::instance());

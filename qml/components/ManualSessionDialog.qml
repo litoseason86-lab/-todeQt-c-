@@ -7,8 +7,8 @@ import ".."
 
 // 手工补录 / 修改一条专注记录。
 //
-// 忘记开计时、中途强退、计时器绑错任务——这些时间此前永久丢失，而且连带影响统计、
-// 周复盘和长期目标。这个弹窗是那块缺失底板的入口。
+// 忘记开计时、中途强退、计时器绑错任务——这些时间此前永久丢失，而且连带影响统计和
+// 周复盘。这个弹窗是那块缺失底板的入口。
 //
 // 补录出来的记录一律记为自由计时，不伪装成番茄（判定在 FocusHistoryService）。
 // 这里只负责把「哪天、几点开始、多久、算在哪个任务上」问清楚。
@@ -347,7 +347,7 @@ Popup {
                 font.pixelSize: Theme.fontMd
             }
 
-            // 与任务预计用时、今日专注目标、长期目标同一个输入组件。
+            // 与任务预计用时、今日专注目标同一个输入组件。
             DurationFieldPair {
                 id: durationFields
                 objectName: "manualSessionDurationFields"
@@ -447,7 +447,7 @@ Popup {
                 background: Rectangle {
                     radius: Theme.radiusMd
                     color: confirmButton.pressed ? Theme.accentFillStrong : Theme.accentFill
-                    // 与目标页「新建」同理：淡罩压在弹窗面上没有边界，补一圈同色描边。
+                    // 淡罩压在弹窗面上没有边界，补一圈同色描边。
                     border.color: Theme.accentFillInk
                     border.width: 1
                 }

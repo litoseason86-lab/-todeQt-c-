@@ -74,8 +74,6 @@ const QVector<ShortcutActionDefinition>& ShortcutRegistry::definitions()
           QStringLiteral("导航"), QStringLiteral("Ctrl+6"), false },
         { QStringLiteral("view.countdown"), QStringLiteral("倒计时"),
           QStringLiteral("导航"), QStringLiteral("Ctrl+7"), false },
-        { QStringLiteral("view.goals"), QStringLiteral("长期目标"),
-          QStringLiteral("导航"), QStringLiteral("Ctrl+8"), false },
 
         { QStringLiteral("task.new"), QStringLiteral("新建任务"),
           QStringLiteral("任务"), QStringLiteral("Ctrl+N"), false },
@@ -87,7 +85,8 @@ const QVector<ShortcutActionDefinition>& ShortcutRegistry::definitions()
         { QStringLiteral("focus.immersive"), QStringLiteral("进入 / 退出沉浸模式"),
           QStringLiteral("专注"), QStringLiteral("Ctrl+Shift+F"), false },
 
-        // 知识缺口捕获。它不是切页动作，与 2026-09-03「切页快捷键只覆盖 8 页」那条决策无关。
+        // 知识缺口捕获。它不是切页动作，与 2026-09-03「切页快捷键只覆盖固定几页」那条决策无关
+        // （当时是 8 页；2026-09 删掉「目标」页后剩 ⌘1–⌘7，⌘8 空出来）。
         // 捕获框自己做得很轻（非模态、一行字、回车即存），但此前只有两颗鼠标按钮能打开它，
         // 其中专注页那颗按既定决策常态透明。真实场景是「在别的窗口做题，发现一块不懂」，
         // 此刻应用在后台——没有键盘入口，这个功能的代价就超过了「算了回头再说」。

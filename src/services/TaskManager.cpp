@@ -59,14 +59,14 @@ int clampEstimatedMinutes(int value)
     return qBound(0, value, TaskManager::kMaxEstimatedMinutes);
 }
 
-// “有效番茄”的口径已上移到 FocusSessionRules，长期目标进度要复用同一份定义。
+// “有效番茄”的口径已上移到 FocusSessionRules，统计服务复用同一份定义。
 // 这里保留一个同名薄封装，只是为了让本文件原有调用点不必逐个改写。
 QString validPomodoroCountExpr(const QString& tableAlias = QString())
 {
     return FocusSessionRules::validPomodoroCountExpr(tableAlias);
 }
 
-// “有效专注秒数”同样上移到 FocusSessionRules——长期目标进度也要用同一份定义。
+// “有效专注秒数”同样上移到 FocusSessionRules，口径只有这一份定义。
 // 这里保留同名薄封装，只是为了让本文件原有调用点不必逐个改写。
 QString focusedSecondsExpr(const QString& tableAlias = QString())
 {

@@ -4,7 +4,6 @@
         <file alias="qml/Theme.qml">../qml/Theme.qml</file>
         <file alias="qml/LogicalDay.js">../qml/LogicalDay.js</file>
         <file alias="qml/Duration.js">../qml/Duration.js</file>
-        <file alias="qml/GoalForecast.js">../qml/GoalForecast.js</file>
         <file alias="qml/ScheduleWeeks.js">../qml/ScheduleWeeks.js</file>
         <file alias="qml/HeatmapBands.js">../qml/HeatmapBands.js</file>
         <file alias="qml/RoutineWeekdays.js">../qml/RoutineWeekdays.js</file>
@@ -23,7 +22,6 @@
         <file alias="qml/views/CountdownView.qml">../qml/views/CountdownView.qml</file>
         <file alias="qml/views/DashboardView.qml">../qml/views/DashboardView.qml</file>
         <file alias="qml/views/DashboardFormat.js">../qml/views/DashboardFormat.js</file>
-        <file alias="qml/views/GoalsView.qml">../qml/views/GoalsView.qml</file>
         <file alias="qml/views/KnowledgeGapView.qml">../qml/views/KnowledgeGapView.qml</file>
         <file alias="qml/components/GlassPanel.qml">../qml/components/GlassPanel.qml</file>
         <file alias="qml/components/KnowledgeGapCapturePopup.qml">../qml/components/KnowledgeGapCapturePopup.qml</file>
@@ -60,13 +58,6 @@
         <file alias="qml/components/PresetButton.qml">../qml/components/PresetButton.qml</file>
         <file alias="qml/components/DurationStepper.qml">../qml/components/DurationStepper.qml</file>
         <file alias="qml/components/GlyphIcon.qml">../qml/components/GlyphIcon.qml</file>
-        <file alias="qml/components/GoalCard.qml">../qml/components/GoalCard.qml</file>
-        <file alias="qml/components/GoalProgressRing.qml">../qml/components/GoalProgressRing.qml</file>
-        <file alias="qml/components/GoalTile.qml">../qml/components/GoalTile.qml</file>
-        <file alias="qml/components/GoalFormDialog.qml">../qml/components/GoalFormDialog.qml</file>
-        <file alias="qml/components/Grid100.qml">../qml/components/Grid100.qml</file>
-        <file alias="qml/components/GoalHeatmap.qml">../qml/components/GoalHeatmap.qml</file>
-        <file alias="qml/components/MilestoneDialog.qml">../qml/components/MilestoneDialog.qml</file>
         <file alias="qml/components/FocusRing.qml">../qml/components/FocusRing.qml</file>
         <file alias="qml/components/ManualRestPanel.qml">../qml/components/ManualRestPanel.qml</file>
         <file alias="qml/components/FocusImmersiveOverlay.qml">../qml/components/FocusImmersiveOverlay.qml</file>
@@ -105,8 +96,6 @@
         <file alias="qml/components/TodayLearningList.qml">../qml/components/TodayLearningList.qml</file>
         <file alias="qml/components/Toast.qml">../qml/components/Toast.qml</file>
         <file alias="sounds/phase-complete.wav">sounds/phase-complete.wav</file>
-        <file alias="sounds/milestone.wav">sounds/milestone.wav</file>
-        <file alias="sounds/goal-achieved.wav">sounds/goal-achieved.wav</file>
         <file alias="qml/components/DateInput.qml">../qml/components/DateInput.qml</file>
         <file alias="qml/components/DatePill.qml">../qml/components/DatePill.qml</file>
         <file alias="qml/components/TaskToolsDialog.qml">../qml/components/TaskToolsDialog.qml</file>

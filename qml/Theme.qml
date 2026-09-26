@@ -166,13 +166,6 @@ QtObject {
     readonly property var heatmapBandColors: darkMode
         ? ["#5e4123", "#825b34", "#d09459", "#edccaf"]
         : ["#f1d9c4", "#e1a161", "#855d36", "#52381e"]
-    // 逐档字色：目标详情热力图把色阶铺满整格，日期数字压在底色上。
-    // 只在两种字色里取，所以中间一段亮度两种都不达标，这是色阶非等距的原因（仅对这组字色成立）。
-    // 每档 ≥ 4.5:1，由 tst_heatmap_bands 断言。写死色值而不引用 inkStrong / surface：
-    // 定稿量的就是这几个值，那两个令牌将来改了不能悄悄把热力文字带到不达标。
-    readonly property var heatmapBandInkColors: darkMode
-        ? ["#f3ead9", "#f3ead9", "#2a241c", "#2a241c"]
-        : ["#3d3327", "#3d3327", "#fffef9", "#fffef9"]
     // 零投入的空轨道（专注历史月历格底那条）。热力专用令牌，不复用 border：
     // border 压在选中底 accentSoft 上 ΔE00 只有 2.2（夜间 3.2），被选中的零投入日
     // 会被读成「没有轨道」即未来——而本月内的未来日同样能点选，两态会同时出现。

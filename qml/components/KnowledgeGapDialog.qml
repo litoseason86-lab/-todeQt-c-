@@ -74,7 +74,7 @@ Dialog {
     }
 
     // 下拉的选中项按科目编号显式同步。换 model 时 ComboBox 会自己重置 currentIndex，
-    // 声明式绑定未必在那之后重算；与 GoalFormDialog 一样由这里命令式地对齐。
+    // 声明式绑定未必在那之后重算，所以由这里命令式地对齐。
     function syncCategoryBox() {
         for (var i = 0; i < root.categoryChoices.length; ++i) {
             if (Number(root.categoryChoices[i].id) === root.selectedCategoryId) {

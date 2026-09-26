@@ -75,7 +75,7 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space24
             Layout.rightMargin: Theme.space24
-            text: qsTr("升级后，只有自然计时到点的番茄会计入番茄数量、长期目标和相关统计。手动提前停止仍会保留专注时长，但不计为完整番茄。历史记录已按兼容规则保留，因此升级日前后的数字口径可能不同。")
+            text: qsTr("升级后，只有自然计时到点的番茄会计入番茄数量和相关统计。手动提前停止仍会保留专注时长，但不计为完整番茄。历史记录已按兼容规则保留，因此升级日前后的数字口径可能不同。")
             textFormat: Text.PlainText
             color: Theme.ink
             font.pixelSize: Theme.fontMd

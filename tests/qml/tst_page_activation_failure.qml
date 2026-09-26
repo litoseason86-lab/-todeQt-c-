@@ -8,7 +8,7 @@ import "../../qml/views"
 // `Connections { enabled: root.pageActive }`。enabled 是绑定，重算晚于 onPageActiveChanged：
 // 页面在处理函数里同步查询，服务又是在这次调用过程中同步发 operationFailed 的——
 // 那一刻绑定还是旧值 false，信号被整个丢掉。KnowledgeGapView 在 81bdb74 修过，
-// 另外几页原样保留：目标页因此显示「没有进行中的目标」并引导重复新建。
+// 另外几页原样保留：当时的目标页（2026-09 已删除）因此显示「没有进行中的目标」并引导重复新建。
 //
 // 替身一律在查询函数「内部」同步发失败；改成异步发就暴露不出这个问题。
 // 断言用替身给出的原文：页面对替身缺方法抛出的异常会兜成通用文案，只断言「非空」会误判通过。
@@ -112,25 +112,6 @@ TestCase {
     }
 
     QtObject {
-        id: goalService
-
-        signal goalsChanged()
-        signal operationFailed(string message)
-
-        property bool failGoals: false
-        property var goalsData: []
-
-        function getGoals() {
-            if (failGoals) {
-                operationFailed("目标列表查询失败")
-                return []
-            }
-            return goalsData
-        }
-        function getGoal(goalId) { return ({}) }
-    }
-
-    QtObject {
         id: scheduleService
 
         signal scheduleChanged()
@@ -206,27 +187,12 @@ TestCase {
         property int lastMode: 0
         property string nickname: ""
         property string rolloverIgnoredDate: ""
-        property string goalViewMode: "list"
         property string semesterStartDate: ""
         property int semesterWeeks: 16
         property string scheduleDisplayMode: "time"
         property bool scheduleShowWeekend: true
 
         function dailyFocusGoalMinutesForDate(isoDate) { return 0 }
-    }
-
-    Component {
-        id: goalsComponent
-
-        GoalsView {
-            width: 900
-            height: 660
-            pageActive: false
-            goalServiceRef: goalService
-            categoryManagerRef: categoryManager
-            settingsRef: settings
-            logicalDayServiceRef: logicalDayService
-        }
     }
 
     Component {
@@ -317,25 +283,7 @@ TestCase {
         taskManager.failWeekTasks = false
         statisticsService.failStats = false
         routineManager.failMaterialize = false
-        goalService.failGoals = false
-        goalService.goalsData = []
         scheduleService.failEntries = false
-    }
-
-    function test_goalsActivationFailureKeepsGoalsAndShowsError() {
-        goalService.goalsData = [{ id: 1, title: "完成课程", categoryId: 7, targetMinutes: 100,
-                                   doneMinutes: 62, percent: 62, achieved: false, forecastDays: 21 }]
-        var view = createTemporaryObject(goalsComponent, testCase)
-        verify(view)
-        view.pageActive = true
-        compare(view.goals.length, 1)
-        view.pageActive = false
-
-        goalService.failGoals = true
-        view.pageActive = true
-        compare(view.errorText, "目标列表查询失败")
-        // 查询失败不能伪装成「用户没有目标」，否则空状态会引导他重复新建。
-        compare(view.goals.length, 1)
     }
 
     function test_dashboardActivationTaskFailureIsShown() {

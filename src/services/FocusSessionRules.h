@@ -14,7 +14,7 @@ inline constexpr int kPomodoroMode = 1;
 // 一条专注记录计入“实际番茄”，当且仅当：番茄工作模式、自然到点，
 // 且时长达到有效专注门槛。手动停止只保留专注时长，不伪装成完整番茄。
 // 自由计时只累计专注分钟，不折算番茄。这是“有效番茄”的唯一口径，任务列表聚合、
-// 单任务查询和长期目标进度都从这里取；不允许在别处复制出第二套阈值或模式判断。
+// 单任务查询和统计都从这里取；不允许在别处复制出第二套阈值或模式判断。
 // 放在本头文件而不是某个服务的匿名命名空间里，就是为了让多个服务能共享同一份定义。
 inline QString validPomodoroPredicate(const QString& tableAlias = QString())
 {
@@ -35,11 +35,11 @@ inline QString validPomodoroCountExpr(const QString& tableAlias = QString())
 }
 
 // “有效专注秒数”的唯一口径：对计时模式不敏感——番茄段和自由计时都算，
-// 只要单段达到有效专注门槛。任务的预计用时、长期目标进度都从这里取。
+// 只要单段达到有效专注门槛。任务的累计用时（与预计用时比较）从这里取。
 //
-// 这一条与 validPomodoroCountExpr 的差别就是长期目标此前的缺陷所在：目标进度曾经
-// 只数完整番茄，用户用自由计时刷再久，目标也纹丝不动。两个口径都留着是因为它们
-// 回答的问题不同（“做了几个番茄”与“投入了多久”），但都必须只有这一份定义。
+// 这一条与 validPomodoroCountExpr 不能混用：拿“只数完整番茄”去算投入时长，
+// 用户用自由计时专注再久也算不进去。两个口径都留着是因为它们回答的问题不同
+// （“做了几个番茄”与“投入了多久”），但都必须只有这一份定义。
 inline QString focusedSecondsExpr(const QString& tableAlias = QString())
 {
     const QString column = tableAlias.isEmpty()

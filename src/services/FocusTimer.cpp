@@ -404,7 +404,7 @@ bool FocusTimer::stopFreeFocusWithDuration(int durationSeconds)
     }
     // 修正只能往下调：人不可能专注得比计时器实际跑过的时间更久。少了这条上限，
     // 界面上把 09:01 手滑打成 90:01 就会静默写入一条 90 小时的专注记录，
-    // 而 duration 正是统计与长期目标进度的计算依据。前端有自己的提示，
+    // 而 duration 正是统计的计算依据。前端有自己的提示，
     // 但数据边界必须由服务层守住。
     const int actualElapsedSeconds = static_cast<int>(currentElapsedMilliseconds() / 1000);
     if (durationSeconds > actualElapsedSeconds) {

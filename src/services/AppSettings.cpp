@@ -19,7 +19,6 @@ const auto kNicknameKey = QStringLiteral("profile/nickname");
 const auto kSidebarVisibleKey = QStringLiteral("appearance/sidebarVisible");
 const auto kSidebarOrderKey = QStringLiteral("appearance/sidebarOrder");
 const auto kDashboardTimerVisibleKey = QStringLiteral("appearance/dashboardTimerVisible");
-const auto kGoalViewModeKey = QStringLiteral("goals/viewMode");
 const auto kReduceTransparencyKey = QStringLiteral("appearance/reduceTransparency");
 const auto kRaiseOnPhaseCompleteKey = QStringLiteral("focus/raiseOnPhaseComplete");
 const auto kCloseToTrayKey = QStringLiteral("window/closeToTray");
@@ -138,6 +137,7 @@ AppSettings::AppSettings(const QString& settingsFilePath, QObject* parent)
     // 旧版本只写那一对键；升级后第一次启动把它对应的日期补进历史。
     // 构造时还没有人连接信号，失败会在下一次 reload() 或保存目标时重试。
     syncLegacyDailyGoalIntoHistory();
+    removeRetiredSettings();
 }
 
 void AppSettings::reload()
@@ -147,6 +147,8 @@ void AppSettings::reload()
     // 恢复旧备份、或旧版本改过当天目标之后，旧的一对键对应日期以旧值为准同步进历史。
     // 必须在广播之前做完，收到 dailyFocusGoalChanged 的统计页才能读到同步后的值。
     syncLegacyDailyGoalIntoHistory();
+    // 恢复的若是旧备份，shortcuts/ 分组里可能又带回了已删除功能的键位，这里再清一次。
+    removeRetiredSettings();
     emit lastModeChanged();
     emit workMinutesChanged();
     emit breakMinutesChanged();
@@ -161,7 +163,6 @@ void AppSettings::reload()
     emit sidebarVisibleChanged();
     emit sidebarOrderChanged();
     emit dashboardTimerVisibleChanged();
-    emit goalViewModeChanged();
     emit reduceTransparencyChanged();
     emit raiseOnPhaseCompleteChanged();
     emit closeToTrayChanged();
@@ -588,7 +589,6 @@ QStringList AppSettings::defaultSidebarOrder()
         QStringLiteral("month"),
         QStringLiteral("stats"),
         QStringLiteral("countdown"),
-        QStringLiteral("goals"),
         QStringLiteral("knowledgeGaps"),
     };
 }
@@ -680,26 +680,6 @@ void AppSettings::setDashboardTimerVisible(bool visible)
 
     if (writeValue(kDashboardTimerVisibleKey, visible)) {
         emit dashboardTimerVisibleChanged();
-    }
-}
-
-QString AppSettings::goalViewMode() const
-{
-    const QString stored = m_settings->value(kGoalViewModeKey, QStringLiteral("list")).toString();
-    return stored == QStringLiteral("grid") ? stored : QStringLiteral("list");
-}
-
-void AppSettings::setGoalViewMode(const QString& mode)
-{
-    // 只有两种可持久化版式；损坏配置和新增未知值都不能让 QML 进入空白态。
-    const QString normalized = mode == QStringLiteral("grid")
-        ? QStringLiteral("grid")
-        : QStringLiteral("list");
-    if (goalViewMode() == normalized) {
-        return;
-    }
-    if (writeValue(kGoalViewModeKey, normalized)) {
-        emit goalViewModeChanged();
     }
 }
 
@@ -981,6 +961,32 @@ void AppSettings::syncLegacyDailyGoalIntoHistory()
     commitSettingsBatch(QStringLiteral("focus/dailyGoalHistory"), writes, {});
 }
 
+void AppSettings::removeRetiredSettings()
+{
+    // 2026-09 删除了「目标」页，留下两个再也没有读取方的键：
+    //   goals/viewMode        目标页的列表/网格偏好（整个 goals/ 分组只有这一个键）
+    //   shortcuts/view.goals  用户给「切到长期目标」改过的键位
+    // goals/ 已不属于本应用拥有的分组，旧备份里的它在恢复时直接跳过；
+    // shortcuts/ 仍然属于本应用，旧备份会把 view.goals 原样写回，所以 reload() 也要清。
+    // 留着不会出错（快捷键表里已经没有这个动作），清掉只是不让配置文件里长期留着垃圾。
+    const QStringList retiredKeys = {
+        QStringLiteral("goals/viewMode"),
+        kShortcutGroup + QStringLiteral("/view.goals"),
+    };
+    bool removedAny = false;
+    for (const QString& key : retiredKeys) {
+        if (m_settings->contains(key)) {
+            m_settings->remove(key);
+            removedAny = true;
+        }
+    }
+    // 不走 removeValue：那条路径失败时会发 settingsWriteFailed，界面随之弹「设置保存失败」，
+    // 而清旧键失败对用户没有任何影响，下次启动再清即可。键本来就不在时一次都不写盘。
+    if (removedAny) {
+        m_settings->sync();
+    }
+}
+
 bool AppSettings::commitSettingsBatch(const QString& errorKey,
                                       const QList<QPair<QString, QVariant>>& writes,
                                       const QStringList& removals)
@@ -1150,7 +1156,6 @@ QStringList AppSettings::ownedSettingGroups()
         QStringLiteral("window"),
         QStringLiteral("logic"),
         QStringLiteral("profile"),
-        QStringLiteral("goals"),
         QStringLiteral("rollover"),
         QStringLiteral("migration"),
         QStringLiteral("schedule"),

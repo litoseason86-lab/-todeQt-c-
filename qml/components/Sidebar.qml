@@ -38,7 +38,6 @@ Rectangle {
         "month": { text: "专注历史", marker: "月", iconName: "" },
         "stats": { text: "数据统计", marker: "数", iconName: "" },
         "countdown": { text: "目标倒计时", marker: "倒", iconName: "" },
-        "goals": { text: "目标", marker: "目", iconName: "target" },
         "knowledgeGaps": { text: "知识缺口", marker: "补", iconName: "gap" }
     })
 
@@ -46,7 +45,7 @@ Rectangle {
     // 离屏测试和预览场景常常只注入自己关心的那几个 ref，不能因此渲不出侧栏。
     readonly property var fallbackOrder: [
         "dashboard", "today", "todayFocus", "focus", "schedule", "week",
-        "month", "stats", "countdown", "goals", "knowledgeGaps"
+        "month", "stats", "countdown", "knowledgeGaps"
     ]
 
     // 实际渲染用的有序 id 列表。这里再过滤一次不认识的 id：

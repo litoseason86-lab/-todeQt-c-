@@ -24,7 +24,6 @@ FocusScope {
         "month": "专注历史",
         "stats": "数据统计",
         "countdown": "目标倒计时",
-        "goals": "目标",
         "knowledgeGaps": "知识缺口"
     })
 

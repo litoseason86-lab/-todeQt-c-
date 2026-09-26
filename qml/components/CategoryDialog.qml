@@ -241,7 +241,7 @@ Popup {
             }
             Label {
                 Layout.fillWidth: true
-                text: qsTr("任务、目标、例行和课表将失去这个科目关联。记录本身保留，此操作无法撤销。")
+                text: qsTr("任务、例行、课表和知识缺口将失去这个科目关联。记录本身保留，此操作无法撤销。")
                 textFormat: Text.PlainText
                 color: Theme.ink
                 wrapMode: Text.WordWrap

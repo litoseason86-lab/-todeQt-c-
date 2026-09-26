@@ -185,31 +185,6 @@ TestCase {
     }
 
     QtObject {
-        id: goalService
-
-        signal goalProgressed(int goalId, string title, int doneMinutes, int targetMinutes)
-        signal milestoneReached(int goalId, string title, int percent)
-        signal goalsChanged
-        signal operationFailed(string message)
-
-        readonly property int maxTitleLength: 60
-        readonly property int maxTargetMinutes: 100000
-
-        // 12 个目标：网格 3 列 × 4 行、列表 12 行，都超出列表区。
-        readonly property var goalsData: {
-            var rows = []
-            for (var i = 0; i < 12; ++i) {
-                rows.push({ id: i + 1, title: "目标 " + (i + 1), categoryId: 7, targetMinutes: 600,
-                            doneMinutes: 60 * i, percent: 10 * i, achieved: false, forecastDays: 20 })
-            }
-            return rows
-        }
-        function getGoals() { return goalsData }
-        function getGoal(goalId) { return goalsData[0] }
-        function getGoalDailyCounts(goalId, year, month) { return [] }
-    }
-
-    QtObject {
         id: scheduleService
 
         signal scheduleChanged()
@@ -291,7 +266,6 @@ TestCase {
         property string nickname: ""
         property bool dashboardTimerVisible: true
         property int freeTimerWarningHours: 3
-        property string goalViewMode: "grid"
         property var sidebarOrder: []
         property bool sidebarOrderIsDefault: true
         property string semesterStartDate: "2026-08-31"
@@ -341,7 +315,6 @@ TestCase {
         focusTimerRef: focusTimer
         logicalDayServiceRef: logicalDayService
         backupServiceRef: backupService
-        goalServiceRef: goalService
         scheduleServiceRef: scheduleService
         shortcutRegistryRef: shortcutRegistry
     }
@@ -370,15 +343,11 @@ TestCase {
             { tag: "专注历史", view: "month", bar: "monthPageScrollBar", scroll: "monthPageScrollView" },
             { tag: "数据统计", view: "stats", bar: "statisticsScrollBar", scroll: "statisticsScrollView" },
             { tag: "知识缺口", view: "knowledgeGaps", bar: "knowledgeGapScrollBar", scroll: "knowledgeGapScrollView" },
-            { tag: "目标网格", view: "goals", goalMode: "grid", bar: "goalsGridScrollBar", scroll: "goalsGridView" },
-            { tag: "目标列表", view: "goals", goalMode: "list", bar: "goalsListScrollBar", scroll: "goalsListView" },
             { tag: "目标倒计时", view: "countdown", bar: "countdownScrollBar", scroll: "countdownSecondaryList" }
         ]
     }
 
     function test_scrollBarHugsWindowEdge(data) {
-        if (data.goalMode)
-            appSettings.goalViewMode = data.goalMode
         testCase.showPage(data.view)
 
         const bar = findChild(mainWindow, data.bar)
@@ -443,15 +412,11 @@ TestCase {
             { tag: "课表", view: "schedule", frame: "scheduleGridGlass", right: 24, fillsPage: true },
             { tag: "仪表盘", view: "dashboard", frame: "dashboardTaskPanel", right: 24, fillsPage: true },
             { tag: "专注历史", view: "month", frame: "monthCalendarContainer", right: 24, fillsPage: false },
-            { tag: "目标倒计时", view: "countdown", frame: "countdownHeroCard", right: 24, fillsPage: false },
-            // 目标页原先左右边距是 32；列表模式下每张目标卡占满整行，最能看出边距。
-            { tag: "目标列表", view: "goals", goalMode: "list", frame: "goalCardBackground", right: 24, fillsPage: false }
+            { tag: "目标倒计时", view: "countdown", frame: "countdownHeroCard", right: 24, fillsPage: false }
         ]
     }
 
     function test_glassFrameMargins(data) {
-        if (data.goalMode)
-            appSettings.goalViewMode = data.goalMode
         testCase.showPage(data.view)
 
         const frame = findChild(mainWindow, data.frame)

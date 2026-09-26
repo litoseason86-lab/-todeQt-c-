@@ -41,7 +41,7 @@ TestCase {
         verify(body)
         verify(acknowledgeButton)
         compare(title.text, "完整番茄计数规则已更新")
-        compare(body.text, "升级后，只有自然计时到点的番茄会计入番茄数量、长期目标和相关统计。手动提前停止仍会保留专注时长，但不计为完整番茄。历史记录已按兼容规则保留，因此升级日前后的数字口径可能不同。")
+        compare(body.text, "升级后，只有自然计时到点的番茄会计入番茄数量和相关统计。手动提前停止仍会保留专注时长，但不计为完整番茄。历史记录已按兼容规则保留，因此升级日前后的数字口径可能不同。")
         verify(acknowledgeButton.implicitHeight >= 44)
         verify(acknowledgeButton.activeFocusOnTab)
         var bodyPosition = dialog.background.mapFromItem(body, 0, 0)

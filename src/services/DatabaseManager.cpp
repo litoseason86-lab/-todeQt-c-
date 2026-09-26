@@ -385,16 +385,8 @@ bool DatabaseManager::createTables()
         version = 10;
     }
 
-    // v11：长期目标改用分钟、任务加备注与手动排序。三列缺任意一列都要补，
-    // 与前面几步同理防御半迁移状态。
-    // long_goals 由 GoalService 懒建：全新库跑到这里时它还不存在，那就没有要迁的东西
-    // （建表语句本身已经是 target_minutes）。不加这个判断，结构守卫会认为列永远缺失，
-    // 每次启动都重跑一遍 v11。
-    const bool goalTableNeedsMigration =
-        tableExists(QStringLiteral("long_goals"))
-        && !columnExists(QStringLiteral("long_goals"), QStringLiteral("target_minutes"));
+    // v11：任务加备注与手动排序。两列缺任意一列都要补，与前面几步同理防御半迁移状态。
     if (version < 11
-        || goalTableNeedsMigration
         || !columnExists(QStringLiteral("tasks"), QStringLiteral("notes"))
         || !columnExists(QStringLiteral("tasks"), QStringLiteral("display_order"))) {
         if (!migrateToVersion11()) {
@@ -474,6 +466,17 @@ bool DatabaseManager::createTables()
             return false;
         }
         version = 16;
+    }
+
+    // v17 删除长期目标表。表还在时无论版本号都要删，与前面几步同理防御半迁移状态。
+    // 恢复 v16 及更早的备份会把表带回来，那时版本号本来就小于 17；版本号已是 17 而表还在，
+    // 只可能是外部改过库或恢复中途被打断。旧版本不会把表重新建出来：它打不开 v17 的库
+    // （见本函数开头对未来 schema 的拒绝），目标服务也就没有机会按「懒建」再建一张。
+    if (version < 17 || tableExists(QStringLiteral("long_goals"))) {
+        if (!migrateToVersion17()) {
+            return false;
+        }
+        version = 17;
     }
 
     // 节次表存在但一行都没有，同样是「按节次」版式画不出任何行的那种坏状态
@@ -1587,36 +1590,6 @@ bool DatabaseManager::migrateToVersion11()
 
     QSqlQuery query(m_db);
 
-    // ── 长期目标：番茄数 → 分钟 ──
-    // 换算基准与 v10 同样取 25 分钟，理由也一样：旧库只存了番茄个数，没存用户当时的
-    // 专注时长设置。两次迁移必须用同一个基准，否则同一个用户的任务预估和目标预估
-    // 会按不同尺子折算，长期目标看起来永远比任务"贵"或"便宜"。
-    if (tableExists(QStringLiteral("long_goals"))
-        && !columnExists(QStringLiteral("long_goals"), QStringLiteral("target_minutes"))) {
-        if (!query.exec(QStringLiteral(
-                "ALTER TABLE long_goals ADD COLUMN target_minutes INTEGER NOT NULL DEFAULT 0"))) {
-            qWarning() << "Failed to add long_goals.target_minutes:" << query.lastError().text();
-            m_db.rollback();
-            return false;
-        }
-    }
-    if (tableExists(QStringLiteral("long_goals"))
-        && columnExists(QStringLiteral("long_goals"), QStringLiteral("target_pomodoros"))) {
-        // 守卫 target_minutes = 0：迁移重入不会把已折算的值二次放大。
-        if (!query.exec(QStringLiteral(
-                "UPDATE long_goals SET target_minutes = target_pomodoros * 25 "
-                "WHERE target_minutes = 0 AND target_pomodoros > 0"))) {
-            qWarning() << "Failed to backfill target_minutes:" << query.lastError().text();
-            m_db.rollback();
-            return false;
-        }
-        // 删除失败不算迁移失败：回填已成功、新列可用，旧列留着只是整洁性问题。
-        if (!query.exec(QStringLiteral("ALTER TABLE long_goals DROP COLUMN target_pomodoros"))) {
-            qWarning() << "Failed to drop long_goals.target_pomodoros (non-fatal):"
-                       << query.lastError().text();
-        }
-    }
-
     // ── 任务备注 ──
     if (!columnExists(QStringLiteral("tasks"), QStringLiteral("notes"))) {
         if (!query.exec(QStringLiteral(
@@ -1845,6 +1818,42 @@ bool DatabaseManager::migrateToVersion16()
     }
 
     qInfo() << "Database migrated to version 16";
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion17()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+
+    // 删表会丢掉用户写下的目标，所以表存在时先建迁移快照（整库副本留在数据目录，保留最近三份）。
+    // 表不存在就只推版本号：为这个重建一份整库副本，会挤掉更早、更有用的那份快照。
+    const bool hasGoalTable = tableExists(QStringLiteral("long_goals"));
+    if (hasGoalTable && !backupDatabaseBeforeMigration()) {
+        return false;
+    }
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 17 migration:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    // 表上的索引 idx_long_goals_order 随表一起删除；没有别的表引用 long_goals。
+    if (hasGoalTable && !query.exec(QStringLiteral("DROP TABLE IF EXISTS long_goals"))) {
+        qWarning() << "Failed to drop long_goals:" << query.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    if (!setDatabaseVersion(17) || !m_db.commit()) {
+        qWarning() << "Failed to commit version 17 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 17";
     return true;
 }
 

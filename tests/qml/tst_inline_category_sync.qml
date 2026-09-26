@@ -3,9 +3,11 @@ import QtTest
 import "../../qml/components"
 
 // 科目下拉内联新建的两条验收（2026-09-14 统一验收补测，规则见 docs/业务规则.md「科目下拉的内联新建」）：
-// 1. 新建任务、编辑任务弹窗与目标表单里就地建完科目，下拉自动选中新科目；
-// 2. 新建后 categoriesChanged 到达，其它开着的弹窗下拉同步刷新——四个带科目下拉的弹窗
-//    （新建任务、编辑任务、目标表单、知识缺口）都订阅，并按科目编号保住原选中。
+// 1. 新建任务、编辑任务弹窗里就地建完科目，下拉自动选中新科目；
+// 2. 新建后 categoriesChanged 到达，其它开着的弹窗下拉同步刷新——三个带科目下拉的弹窗
+//    （新建任务、编辑任务、知识缺口）都订阅，并按科目编号保住原选中。
+// 2026-09 删掉「目标」页时目标表单一并删除；原先借它在「别处」建科目的用例，
+// 改由另一个任务弹窗的内联入口来建，走的仍是真实的「另一个弹窗里建科目」路径。
 //
 // 替身按 CategoryManager::addCategory 的真实时序写：先发 categoriesChanged，再返回新编号。
 // 顺序反过来的替身会让「收到信号时新科目还查不到」这类问题在测试里消失。
@@ -46,11 +48,6 @@ TestCase {
         categoryManagerRef: categoryManager
     }
 
-    GoalFormDialog {
-        id: goalForm
-        categoryManagerRef: categoryManager
-    }
-
     KnowledgeGapDialog {
         id: gapDialog
         categoryManagerRef: categoryManager
@@ -62,7 +59,7 @@ TestCase {
             { id: 2, name: "英语", color: "#c9956e" }
         ]
         categoryManager.nextId = 30
-        var dialogs = [addDialog, editDialog, goalForm, gapDialog]
+        var dialogs = [addDialog, editDialog, gapDialog]
         for (var i = 0; i < dialogs.length; ++i) {
             if (dialogs[i].visible) {
                 dialogs[i].close()
@@ -109,27 +106,13 @@ TestCase {
         compare(addDialog.lastRealCategoryId, 30)
     }
 
-    function test_goalFormSelectsTheCategoryItJustCreated() {
-        goalForm.openForAdd()
-        tryCompare(goalForm, "opened", true, 2000)
-        var combo = findChild(goalForm, "goalCategoryCombo")
-        verify(combo !== null)
-
-        createThroughPrompt(goalForm, "goalNewCategoryPrompt", "专业课")
-
-        compare(goalForm.selectedCategoryId, 30)
-        compare(Number(goalForm.categories[combo.currentIndex].id), 30)
-    }
-
     function test_openKnowledgeGapDialogPicksUpCategoryCreatedElsewhere() {
         gapDialog.openForAdd()
         tryCompare(gapDialog, "opened", true, 2000)
         gapDialog.selectedCategoryId = 2
         gapDialog.syncCategoryBox()
 
-        goalForm.openForAdd()
-        tryCompare(goalForm, "opened", true, 2000)
-        createThroughPrompt(goalForm, "goalNewCategoryPrompt", "政治")
+        createElsewhereThroughEditDialog("政治")
 
         var ids = gapDialog.categoryChoices.map(function (c) { return Number(c.id) })
         verify(ids.indexOf(30) >= 0, "开着的知识缺口弹窗没刷出新科目：" + JSON.stringify(ids))
@@ -160,6 +143,14 @@ TestCase {
         compare(selectedId(addDialog, "categoryComboBox"), 2)
     }
 
+    // 在编辑任务弹窗的内联入口里建科目，充当「另一个弹窗里建了科目」。
+    function createElsewhereThroughEditDialog(name) {
+        editDialog.openForTask({ id: 9, title: "单词", categoryId: 1, date: new Date(),
+                                 estimatedMinutes: 0, notes: "" })
+        tryCompare(editDialog, "opened", true, 2000)
+        createThroughPrompt(editDialog, "editTaskNewCategoryPrompt", name)
+    }
+
     function openEditDialogOnEnglish() {
         editDialog.openForTask({ id: 9, title: "单词", categoryId: 2, date: new Date(),
                                  estimatedMinutes: 0, notes: "" })
@@ -170,9 +161,7 @@ TestCase {
     function test_openAddTaskDialogPicksUpCategoryCreatedElsewhere() {
         openAddDialogOnEnglish()
 
-        goalForm.openForAdd()
-        tryCompare(goalForm, "opened", true, 2000)
-        createThroughPrompt(goalForm, "goalNewCategoryPrompt", "政治")
+        createElsewhereThroughEditDialog("政治")
 
         verify(optionIds(addDialog).indexOf(30) >= 0,
                "开着的新建任务弹窗没刷出新科目：" + JSON.stringify(optionIds(addDialog)))
@@ -213,9 +202,9 @@ TestCase {
     function test_openEditTaskDialogPicksUpCategoryCreatedElsewhere() {
         openEditDialogOnEnglish()
 
-        goalForm.openForAdd()
-        tryCompare(goalForm, "opened", true, 2000)
-        createThroughPrompt(goalForm, "goalNewCategoryPrompt", "政治")
+        addDialog.open()
+        tryCompare(addDialog, "opened", true, 2000)
+        createThroughPrompt(addDialog, "addTaskNewCategoryPrompt", "政治")
 
         verify(optionIds(editDialog).indexOf(30) >= 0,
                "开着的编辑任务弹窗没刷出新科目：" + JSON.stringify(optionIds(editDialog)))
@@ -250,22 +239,4 @@ TestCase {
         compare(editDialog.lastRealCategoryId, -1)
     }
 
-    function test_openGoalFormPicksUpCategoryCreatedElsewhereAndKeepsSelection() {
-        goalForm.openForAdd()
-        tryCompare(goalForm, "opened", true, 2000)
-        var combo = findChild(goalForm, "goalCategoryCombo")
-        combo.currentIndex = 1
-        goalForm.handleCategoryActivated(1)
-        var chosen = Number(goalForm.categories[1].id)
-
-        editDialog.openForTask({ id: 9, title: "单词", categoryId: 1, date: new Date(),
-                                 estimatedMinutes: 0, notes: "" })
-        tryCompare(editDialog, "opened", true, 2000)
-        createThroughPrompt(editDialog, "editTaskNewCategoryPrompt", "政治")
-
-        var ids = goalForm.categories.map(function (c) { return Number(c.id) })
-        verify(ids.indexOf(30) >= 0, "开着的目标表单没刷出新科目：" + JSON.stringify(ids))
-        compare(goalForm.selectedCategoryId, chosen)
-        compare(Number(goalForm.categories[combo.currentIndex].id), chosen)
-    }
 }

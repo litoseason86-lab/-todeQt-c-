@@ -280,64 +280,6 @@ TestCase {
         id: exportService
     }
 
-    QtObject {
-        id: goalService
-
-        signal goalProgressed(int goalId, string title, int doneCount, int targetPomodoros)
-        signal milestoneReached(int goalId, string title, int percent)
-        signal goalsChanged
-
-        property var detailData: ({
-            id: 7,
-            title: "英语精读",
-            doneMinutes: 50,
-            targetMinutes: 100,
-            percent: 50,
-            achieved: false,
-            forecastDays: 10
-        })
-
-        // 目标页的卡片必须真的渲染出来才会被走查到。四条样本刻意覆盖结论的
-        // 四种取值（来得及/长期/已达成/偏慢），它们各用一种颜色。
-        function getGoals() {
-            return [
-                { id: 1, title: "考研数学 一轮复习", categoryName: "数学",
-                  categoryColor: "#d4a574", targetMinutes: 200, doneMinutes: 148,
-                  percent: 74, achieved: false, forecastDays: 21,
-                  deadline: new Date(2099, 11, 19) },
-                { id: 2, title: "英语真题精练", categoryName: "英语",
-                  categoryColor: "#c9956e", targetMinutes: 150, doneMinutes: 39,
-                  percent: 26, achieved: false, forecastDays: 68 },
-                { id: 3, title: "政治强化背诵", categoryName: "政治",
-                  categoryColor: "#cc8a76", targetMinutes: 100, doneMinutes: 100,
-                  percent: 100, achieved: true, achievedAt: new Date(2026, 7, 1),
-                  forecastDays: 0 },
-                { id: 4, title: "专业课 408 数据结构", categoryName: "专业课",
-                  categoryColor: "#b86b58", targetMinutes: 300, doneMinutes: 12,
-                  percent: 4, achieved: false, forecastDays: 240,
-                  deadline: new Date(2026, 11, 19) }
-            ]
-        }
-        function getGoal(goalId) { return detailData }
-        function getGoalDailyCounts(goalId, year, month) { return [] }
-    }
-
-    QtObject {
-        id: phaseSoundService
-
-        property int milestoneCalls: 0
-        property int achievedCalls: 0
-
-        function playMilestoneChime() {
-            milestoneCalls += 1
-            return true
-        }
-        function playGoalAchievedChime() {
-            achievedCalls += 1
-            return true
-        }
-    }
-
     // 最小快捷键注册表：只给一条应用内动作，够验证「弹窗打开时整体让路」这条接线。
     // 键位规则本身由 ShortcutRegistryTests 与 tst_shortcuts.qml 覆盖。
     QtObject {
@@ -405,8 +347,6 @@ TestCase {
         statisticsServiceRef: statisticsService
         appSettingsRef: appSettings
         focusTimerRef: focusTimer
-        goalServiceRef: goalService
-        phaseSoundServiceRef: phaseSoundService
         shortcutRegistryRef: shortcutRegistry
         scheduleServiceRef: scheduleService
     }
@@ -575,7 +515,7 @@ TestCase {
         // todayFocus 不在侧栏里，是从仪表盘/统计页跳进去的今日专注明细页；
         // 没有入口图标不代表不用体检，它同样是用户天天看的一整页文字。
         var views = ["dashboard", "today", "focus", "week", "month",
-                     "stats", "countdown", "goals", "schedule", "knowledgeGaps",
+                     "stats", "countdown", "schedule", "knowledgeGaps",
                      "todayFocus"]
         for (var i = 0; i < views.length; ++i) {
             mainWindow.currentView = views[i]

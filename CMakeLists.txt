@@ -68,8 +68,6 @@ set(APP_SOURCES
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/models/CountdownGoal.cpp
-    src/models/LongGoal.h
-    src/models/LongGoal.cpp
     src/models/CountdownModel.h
     src/models/CountdownModel.cpp
     src/services/DatabaseManager.h
@@ -101,8 +99,6 @@ set(APP_SOURCES
     src/services/PhaseSoundService.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
-    src/services/GoalService.h
-    src/services/GoalService.cpp
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
     src/services/TrayController.h
@@ -331,10 +327,6 @@ add_executable(PomodoroTodoTests
     tests/ServiceTests.cpp
     src/models/Task.cpp
     src/models/FocusSession.cpp
-    src/models/LongGoal.h
-    src/models/LongGoal.cpp
-    src/services/GoalService.h
-    src/services/GoalService.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
     src/services/CategoryManager.h
@@ -505,35 +497,6 @@ target_link_libraries(KnowledgeGapServiceTests PRIVATE
 
 pomodoro_todo_enable_warnings(KnowledgeGapServiceTests)
 add_test(NAME KnowledgeGapServiceTests COMMAND KnowledgeGapServiceTests)
-
-# 长期目标：进度全部由 focus_sessions 现算，所以测试直接写入专注记录再断言聚合结果。
-# 不引入 FocusTimer——本目标验证的是聚合口径与里程碑去重，不是计时器状态机。
-add_executable(GoalServiceTests
-    tests/GoalServiceTests.cpp
-    src/models/LongGoal.h
-    src/models/LongGoal.cpp
-    src/services/DatabaseManager.h
-    src/services/DatabaseManager.cpp
-    src/services/CategoryManager.h
-    src/services/CategoryManager.cpp
-    src/services/GoalService.h
-    src/services/GoalService.cpp
-    src/services/FocusSessionRules.h
-    src/services/AppSettings.h
-    src/services/AppSettings.cpp
-    src/services/LogicalDay.h
-    src/services/LogicalDayService.h
-    src/services/LogicalDayService.cpp
-)
-
-target_link_libraries(GoalServiceTests PRIVATE
-    Qt6::Core
-    Qt6::Sql
-    Qt6::Test
-)
-
-pomodoro_todo_enable_warnings(GoalServiceTests)
-add_test(NAME GoalServiceTests COMMAND GoalServiceTests)
 
 # 课表：只验证存储与「按周次筛选」两件事。日期到周次的换算不在这里——
 # 它在 QML 侧的 ScheduleWeeks.js，由 QML 测试覆盖。
@@ -1028,7 +991,6 @@ set_tests_properties(
     CoreLogicTests
     RobustnessTests
     CountdownServiceTests
-    GoalServiceTests
     PlatformControlTests
     BackupServiceTests
     TimingRobustnessTests

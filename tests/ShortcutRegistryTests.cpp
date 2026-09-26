@@ -173,6 +173,7 @@ private slots:
     void newDefaultKeyYieldsToAnExistingInAppOverride();
     void globalOverrideCollidingWithInAppOverrideIsNotRegistered();
     void duplicateOverridesKeepOnlyTheEarlierAction();
+    void retiredGoalsActionIsGoneAndItsOldOverrideIsIgnored();
 
 private:
     QTemporaryDir m_dir;
@@ -400,7 +401,7 @@ void ShortcutRegistryTests::disableIsDistinctFromResetToDefault()
 
     // 停用的动作不占用键位，别的动作可以拿走它原来的键。
     QCOMPARE(registry.disable(QStringLiteral("task.new")), QString());
-    QCOMPARE(registry.assign(QStringLiteral("view.goals"), QStringLiteral("Ctrl+N")), QString());
+    QCOMPARE(registry.assign(QStringLiteral("view.countdown"), QStringLiteral("Ctrl+N")), QString());
 }
 
 void ShortcutRegistryTests::resetAllRestoresEveryDefault()
@@ -408,12 +409,12 @@ void ShortcutRegistryTests::resetAllRestoresEveryDefault()
     ShortcutRegistry registry(m_settings);
 
     QCOMPARE(registry.assign(QStringLiteral("task.new"), kSpareSequence), QString());
-    QCOMPARE(registry.disable(QStringLiteral("view.goals")), QString());
+    QCOMPARE(registry.disable(QStringLiteral("view.countdown")), QString());
 
     QCOMPARE(registry.resetAll(), QString());
 
     QCOMPARE(registry.sequenceFor(QStringLiteral("task.new")), QStringLiteral("Ctrl+N"));
-    QCOMPARE(registry.sequenceFor(QStringLiteral("view.goals")), QStringLiteral("Ctrl+8"));
+    QCOMPARE(registry.sequenceFor(QStringLiteral("view.countdown")), QStringLiteral("Ctrl+7"));
     for (const QVariant& entry : registry.actions()) {
         QVERIFY(entry.toMap().value(QStringLiteral("isDefault")).toBool());
     }
@@ -594,15 +595,15 @@ void ShortcutRegistryTests::resetToDefaultRefusesWhenTheDefaultKeyIsTaken()
 {
     ShortcutRegistry registry(m_settings);
 
-    // 停用「新建任务」后把它的默认键 ⌘N 让给「长期目标」——此刻没有冲突，保存成功。
+    // 停用「新建任务」后把它的默认键 ⌘N 让给「倒计时」——此刻没有冲突，保存成功。
     QCOMPARE(registry.disable(QStringLiteral("task.new")), QString());
-    QCOMPARE(registry.assign(QStringLiteral("view.goals"), QStringLiteral("Ctrl+N")), QString());
+    QCOMPARE(registry.assign(QStringLiteral("view.countdown"), QStringLiteral("Ctrl+N")), QString());
 
     // 再把「新建任务」恢复默认：⌘N 已经有主，必须拒绝并说清是谁占着。
     const QString error = registry.resetToDefault(QStringLiteral("task.new"));
-    QVERIFY2(error.contains(QStringLiteral("长期目标")), qPrintable(error));
+    QVERIFY2(error.contains(QStringLiteral("倒计时")), qPrintable(error));
     QVERIFY(registry.sequenceFor(QStringLiteral("task.new")).isEmpty());
-    QCOMPARE(registry.sequenceFor(QStringLiteral("view.goals")), QStringLiteral("Ctrl+N"));
+    QCOMPARE(registry.sequenceFor(QStringLiteral("view.countdown")), QStringLiteral("Ctrl+N"));
     verifyEffectiveSequencesAreUnique(registry.actions());
 }
 
@@ -665,15 +666,35 @@ void ShortcutRegistryTests::duplicateOverridesKeepOnlyTheEarlierAction()
 {
     // 两个覆盖值同键只可能来自手工改过的配置或备份。按动作清单顺序保留前一个，
     // 结果确定，且不会让两个都失灵。
-    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("view.goals"), kSpareSequence));
+    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("view.countdown"), kSpareSequence));
     QVERIFY(m_settings->setShortcutOverride(QStringLiteral("task.new"), kSpareSequence));
     ShortcutRegistry registry(m_settings);
 
-    QCOMPARE(registry.sequenceFor(QStringLiteral("view.goals")), kSpareSequence);
+    QCOMPARE(registry.sequenceFor(QStringLiteral("view.countdown")), kSpareSequence);
     QVERIFY(registry.sequenceFor(QStringLiteral("task.new")).isEmpty());
     QCOMPARE(fieldOf(registry.actions(), QStringLiteral("task.new"),
                      QStringLiteral("conflictTitle")).toString(),
-             QStringLiteral("长期目标"));
+             QStringLiteral("倒计时"));
+    verifyEffectiveSequencesAreUnique(registry.actions());
+}
+
+void ShortcutRegistryTests::retiredGoalsActionIsGoneAndItsOldOverrideIsIgnored()
+{
+    // 2026-09 删掉了「目标」页：动作表里不再有 view.goals，它的默认键 ⌘8 空了出来。
+    // 旧配置或旧备份里残留的 view.goals 覆盖值没有对应动作，既不能占键，
+    // 也不能让持有同一个键的动作被判成冲突而失灵。
+    QVERIFY(m_settings->setShortcutOverride(QStringLiteral("view.goals"), QStringLiteral("Ctrl+N")));
+    ShortcutRegistry registry(m_settings);
+
+    for (const QVariant& entry : registry.actions()) {
+        const QVariantMap action = entry.toMap();
+        QVERIFY(action.value(QStringLiteral("id")).toString() != QStringLiteral("view.goals"));
+        QVERIFY2(action.value(QStringLiteral("sequence")).toString() != QStringLiteral("Ctrl+8"),
+                 qPrintable(action.value(QStringLiteral("id")).toString()));
+    }
+    QCOMPARE(registry.sequenceFor(QStringLiteral("task.new")), QStringLiteral("Ctrl+N"));
+    QVERIFY(fieldOf(registry.actions(), QStringLiteral("task.new"),
+                    QStringLiteral("conflictTitle")).toString().isEmpty());
     verifyEffectiveSequencesAreUnique(registry.actions());
 }
 

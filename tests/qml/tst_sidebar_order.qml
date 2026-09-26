@@ -44,7 +44,7 @@ TestCase {
 
     function defaultOrder() {
         return ["dashboard", "today", "todayFocus", "focus", "schedule", "week",
-                "month", "stats", "countdown", "goals", "knowledgeGaps"]
+                "month", "stats", "countdown", "knowledgeGaps"]
     }
 
     Sidebar {
@@ -94,7 +94,7 @@ TestCase {
 
     function test_renderOrderFollowsSettings() {
         var custom = ["knowledgeGaps", "today", "dashboard", "todayFocus", "focus",
-                      "schedule", "week", "month", "stats", "countdown", "goals"]
+                      "schedule", "week", "month", "stats", "countdown"]
         settingsMock.sidebarOrder = custom
         wait(20)
 
@@ -194,21 +194,21 @@ TestCase {
     }
 
     function test_settingsPageListsEntriesInCurrentOrder() {
-        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        settingsMock.sidebarOrder = ["countdown", "today", "focus"]
         wait(20)
         compare(appearancePage.sidebarOrder.length, 3)
-        verify(findChild(appearancePage, "settingsSidebarOrderRow-goals") !== null)
+        verify(findChild(appearancePage, "settingsSidebarOrderRow-countdown") !== null)
         verify(findChild(appearancePage, "settingsSidebarOrderRow-today") !== null)
     }
 
     function test_moveEntryWritesWholeOrderBack() {
-        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        settingsMock.sidebarOrder = ["countdown", "today", "focus"]
         wait(20)
 
         appearancePage.moveEntry(2, 0)
         compare(settingsMock.sidebarOrder.length, 3)
         compare(settingsMock.sidebarOrder[0], "focus")
-        compare(settingsMock.sidebarOrder[1], "goals")
+        compare(settingsMock.sidebarOrder[1], "countdown")
         compare(settingsMock.sidebarOrder[2], "today")
 
         // 整份提交而不是就地改副本：侧栏必须跟着变，否则界面和存储会悄悄分家。
@@ -217,13 +217,13 @@ TestCase {
     }
 
     function test_moveEntryIgnoresOutOfRangeAndNoOp() {
-        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        settingsMock.sidebarOrder = ["countdown", "today", "focus"]
         wait(20)
 
         appearancePage.moveEntry(0, 0)
         appearancePage.moveEntry(-1, 1)
         appearancePage.moveEntry(0, 99)
-        compare(settingsMock.sidebarOrder[0], "goals")
+        compare(settingsMock.sidebarOrder[0], "countdown")
         compare(settingsMock.sidebarOrder[2], "focus")
     }
 
@@ -280,24 +280,24 @@ TestCase {
     }
 
     function test_sidebarOrderRowsHaveNoMoveButtons() {
-        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        settingsMock.sidebarOrder = ["countdown", "today", "focus"]
         wait(20)
         // 2026-09-11 用户看过设计稿后选定「只留拖动，去掉 ↑↓」。
-        compare(findChild(appearancePage, "settingsSidebarMoveUp-goals"), null)
-        compare(findChild(appearancePage, "settingsSidebarMoveDown-goals"), null)
+        compare(findChild(appearancePage, "settingsSidebarMoveUp-countdown"), null)
+        compare(findChild(appearancePage, "settingsSidebarMoveDown-countdown"), null)
     }
 
     function test_dragDownDropsAfterTargetAndCommitsWholeOrder() {
-        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        settingsMock.sidebarOrder = ["countdown", "today", "focus"]
         wait(20)
 
-        appearancePage.beginDrag("goals")
+        appearancePage.beginDrag("countdown")
         var target = testCase.rowCenterScene("focus")
-        appearancePage.updateDrag("goals", target.x, target.y)
+        appearancePage.updateDrag("countdown", target.x, target.y)
         compare(appearancePage.dropTargetIndex, 2)
         // 拖动期间不动模型：松手之前存储里还是原顺序。中途改模型会重建全部行，
         // 正在拖的那一行连同它的 DragHandler 一起被销毁。
-        compare(settingsMock.sidebarOrder[0], "goals")
+        compare(settingsMock.sidebarOrder[0], "countdown")
 
         var indicator = findChild(appearancePage, "settingsSidebarDropIndicator")
         verify(indicator)
@@ -306,47 +306,47 @@ TestCase {
         verify(indicator.y > focusRow.y + focusRow.height / 2,
                "指示线 " + indicator.y + " 应在目标行下方")
 
-        appearancePage.finishDrag("goals", false)
+        appearancePage.finishDrag("countdown", false)
         compare(settingsMock.sidebarOrder[0], "today")
         compare(settingsMock.sidebarOrder[1], "focus")
-        compare(settingsMock.sidebarOrder[2], "goals")
+        compare(settingsMock.sidebarOrder[2], "countdown")
         compare(appearancePage.draggingEntryId, "")
         compare(appearancePage.dropTargetIndex, -1)
 
         // 整份提交，侧栏跟着变。
         wait(20)
-        compare(sidebar.orderedEntryIds[2], "goals")
+        compare(sidebar.orderedEntryIds[2], "countdown")
     }
 
     function test_dragUpDropsBeforeTarget() {
-        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        settingsMock.sidebarOrder = ["countdown", "today", "focus"]
         wait(20)
 
         appearancePage.beginDrag("focus")
-        var target = testCase.rowCenterScene("goals")
+        var target = testCase.rowCenterScene("countdown")
         appearancePage.updateDrag("focus", target.x, target.y)
         compare(appearancePage.dropTargetIndex, 0)
 
         var indicator = findChild(appearancePage, "settingsSidebarDropIndicator")
-        var goalsRow = testCase.rowIn(appearancePage, "goals")
-        verify(indicator.y < goalsRow.y + goalsRow.height / 2,
+        var countdownRow = testCase.rowIn(appearancePage, "countdown")
+        verify(indicator.y < countdownRow.y + countdownRow.height / 2,
                "指示线 " + indicator.y + " 应在目标行上方")
 
         appearancePage.finishDrag("focus", false)
         compare(settingsMock.sidebarOrder[0], "focus")
-        compare(settingsMock.sidebarOrder[1], "goals")
+        compare(settingsMock.sidebarOrder[1], "countdown")
         compare(settingsMock.sidebarOrder[2], "today")
     }
 
     function test_cancelledOrUnmovedDragWritesNothing() {
-        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        settingsMock.sidebarOrder = ["countdown", "today", "focus"]
         wait(20)
 
-        appearancePage.beginDrag("goals")
+        appearancePage.beginDrag("countdown")
         var target = testCase.rowCenterScene("focus")
-        appearancePage.updateDrag("goals", target.x, target.y)
-        appearancePage.finishDrag("goals", true)
-        compare(settingsMock.sidebarOrder[0], "goals")
+        appearancePage.updateDrag("countdown", target.x, target.y)
+        appearancePage.finishDrag("countdown", true)
+        compare(settingsMock.sidebarOrder[0], "countdown")
 
         // 放回原位也不提交：同样的顺序整份写回去，只会让侧栏白重建一次。
         appearancePage.beginDrag("today")
@@ -358,12 +358,12 @@ TestCase {
     }
 
     function test_pointerOutsideListClampsToFirstOrLastSlot() {
-        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        settingsMock.sidebarOrder = ["countdown", "today", "focus"]
         wait(20)
 
         appearancePage.beginDrag("today")
         // 拖到列表上方松手就是「放到第一个」，不能因为指针出界就判成无效落点。
-        var top = testCase.rowCenterScene("goals")
+        var top = testCase.rowCenterScene("countdown")
         appearancePage.updateDrag("today", top.x, top.y - 400)
         compare(appearancePage.dropTargetIndex, 0)
 
@@ -374,10 +374,10 @@ TestCase {
     }
 
     function test_mouseDragReordersThroughDragHandler() {
-        settingsMock.sidebarOrder = ["goals", "today", "focus"]
+        settingsMock.sidebarOrder = ["countdown", "today", "focus"]
         wait(20)
 
-        var row = testCase.rowIn(appearancePage, "goals")
+        var row = testCase.rowIn(appearancePage, "countdown")
         var lastRow = testCase.rowIn(appearancePage, "focus")
         verify(row)
         verify(lastRow)
@@ -394,7 +394,7 @@ TestCase {
         }
         mouseRelease(row, 60, dropY, Qt.LeftButton)
 
-        tryVerify(function () { return settingsMock.sidebarOrder[2] === "goals" }, 2000)
+        tryVerify(function () { return settingsMock.sidebarOrder[2] === "countdown" }, 2000)
         appearancePage.y = originalY
     }
 

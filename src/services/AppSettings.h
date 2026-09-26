@@ -40,8 +40,6 @@ class AppSettings : public QObject
     Q_PROPERTY(bool sidebarOrderIsDefault READ sidebarOrderIsDefault NOTIFY sidebarOrderChanged)
     // 仪表盘右侧专注计时面板的展开态：跨启动记忆，与侧栏同一套收起习惯。
     Q_PROPERTY(bool dashboardTimerVisible READ dashboardTimerVisible WRITE setDashboardTimerVisible NOTIFY dashboardTimerVisibleChanged)
-    // 长期目标页的列表/网格偏好；非法值统一回退到列表。
-    Q_PROPERTY(QString goalViewMode READ goalViewMode WRITE setGoalViewMode NOTIFY goalViewModeChanged)
     // 关闭毛玻璃、改用不透明面板（省电/更清晰，呼应 macOS “减少透明度”）。
     Q_PROPERTY(bool reduceTransparency READ reduceTransparency WRITE setReduceTransparency NOTIFY reduceTransparencyChanged)
     // 阶段结束时把窗口带到最前；关掉后仅靠提示音提醒，不打断当前操作。
@@ -109,8 +107,6 @@ public:
     Q_INVOKABLE void resetSidebarOrder();
     bool dashboardTimerVisible() const;
     void setDashboardTimerVisible(bool visible);
-    QString goalViewMode() const;
-    void setGoalViewMode(const QString& mode);
     bool reduceTransparency() const;
     void setReduceTransparency(bool enabled);
     bool raiseOnPhaseComplete() const;
@@ -197,7 +193,6 @@ signals:
     void sidebarVisibleChanged();
     void sidebarOrderChanged();
     void dashboardTimerVisibleChanged();
-    void goalViewModeChanged();
     void reduceTransparencyChanged();
     void raiseOnPhaseCompleteChanged();
     void closeToTrayChanged();
@@ -242,6 +237,8 @@ private:
     void appendPendingLegacyGoalSync(QList<QPair<QString, QVariant>>& writes) const;
     // 启动与 reload() 时执行；值一致时不写盘，失败只发 settingsWriteFailed。
     void syncLegacyDailyGoalIntoHistory();
+    // 清掉已删除功能留下、再也没有读取方的设置键。启动与 reload()（恢复备份后）各执行一次。
+    void removeRetiredSettings();
     // 删除同样要检查落盘状态：权限问题下 remove 也会静默失败，
     // 「恢复默认」不能在设置文件没变的情况下告诉用户已经改回去了。
     bool removeValue(const QString& key);

@@ -170,62 +170,10 @@ TestCase {
         checkEmptyTrackOnEveryCellGround()
     }
 
-    // —— 目标详情热力图（阶段五）——
-    // 那张图把色阶铺满整格，日期数字就压在底色上，每档要有自己的字色。
-
-    function test_lightBandInkIsTheSignedOffValues() {
-        compare(Theme.heatmapBandInkColors.length, HeatmapBands.BAND_COUNT)
-        var expected = ["#3d3327", "#3d3327", "#fffef9", "#fffef9"]
-        for (var i = 0; i < expected.length; ++i)
-            verify(Qt.colorEqual(Theme.heatmapBandInkColors[i], expected[i]),
-                   "第 " + (i + 1) + " 档字色不对：" + Theme.heatmapBandInkColors[i])
-    }
-
-    function test_darkBandInkIsTheSignedOffValues() {
-        Theme.activeThemeId = "starry"
-        compare(Theme.heatmapBandInkColors.length, HeatmapBands.BAND_COUNT)
-        var expected = ["#f3ead9", "#f3ead9", "#2a241c", "#2a241c"]
-        for (var i = 0; i < expected.length; ++i)
-            verify(Qt.colorEqual(Theme.heatmapBandInkColors[i], expected[i]),
-                   "第 " + (i + 1) + " 档字色不对：" + Theme.heatmapBandInkColors[i])
-    }
-
-    function checkBandInkContrast() {
-        for (var i = 0; i < HeatmapBands.BAND_COUNT; ++i) {
-            var ratio = Theme.contrastRatio(Theme.heatmapBandInkColors[i], Theme.heatmapBandColors[i])
-            verify(ratio >= 4.5, "第 " + (i + 1) + " 档文字对比度只有 " + ratio.toFixed(2) + ":1")
-        }
-    }
-
-    function test_bandInkMeetsTextContrastLight() {
-        checkBandInkContrast()
-    }
-
-    function test_bandInkMeetsTextContrastDark() {
-        Theme.activeThemeId = "starry"
-        checkBandInkContrast()
-    }
-
-    // 「学了一点」和「完全没学」看起来一样，比档位少更严重，所以单列，不混在相邻档遍历里。
-    function checkZeroFillIsDistinguishableFromFirstBand() {
-        var d = deltaE00(Theme.surfaceSunken, Theme.heatmapBandColors[0])
-        verify(d >= 7, "零值底色与第 1 档 ΔE00 只有 " + d.toFixed(1) + "，低于 7")
-    }
-
-    function test_zeroFillIsDistinguishableFromFirstBandLight() {
-        checkZeroFillIsDistinguishableFromFirstBand()
-    }
-
-    function test_zeroFillIsDistinguishableFromFirstBandDark() {
-        Theme.activeThemeId = "starry"
-        checkZeroFillIsDistinguishableFromFirstBand()
-    }
-
-    // 零投入与未来格的日期沿用 Theme.ink，不降成 inkMuted：
-    // inkMuted 在零值底上日间只有 2.88:1、在页面底上 3.31:1，读不出来。
+    // 专注历史月历里未来日期的数字沿用 Theme.ink，不降成 inkMuted：inkMuted 在页面底上只有 3.31:1，读不出来。
+    // （原先还核对目标详情热力图的零值底 surfaceSunken，那张图已随「目标」页删除。）
     function checkNonBandDateInkContrast() {
         var grounds = [
-            { name: "零值底 surfaceSunken", color: Theme.surfaceSunken },
             { name: "页面底 surface", color: Theme.surface },
             { name: "卡片底 surfaceRaised", color: Theme.surfaceRaised }
         ]
