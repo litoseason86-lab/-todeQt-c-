@@ -2,9 +2,14 @@
 
 #include <QDir>
 #include <QFile>
-#include <QProcess>
 #include <QStandardPaths>
 #include <QStringList>
+
+// iOS 没有子进程能力，Qt 的 iOS 版本也不提供 QProcess 类；只在 macOS 包含它，
+// 否则 iOS 构建会在这里直接报错。
+#ifdef Q_OS_MACOS
+#include <QProcess>
+#endif
 
 namespace {
 const auto kPhaseCompleteResource = QStringLiteral(":/sounds/phase-complete.wav");
@@ -39,6 +44,9 @@ bool PhaseSoundService::playSound(const QString& resourcePath, const QString& fi
     // 播放失败只影响声音提醒，不能阻断窗口置前和计时状态机。
     return QProcess::startDetached(QStringLiteral("/usr/bin/afplay"), QStringList{soundFilePath});
 #else
+    // 其它平台（目前是 iOS）还没有提示音后端，返回 false 让调用方按"未播放"处理。
+    Q_UNUSED(resourcePath);
+    Q_UNUSED(fileName);
     return false;
 #endif
 }

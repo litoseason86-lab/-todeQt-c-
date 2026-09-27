@@ -3,7 +3,8 @@ cmake_minimum_required(VERSION 3.16)
 project(PomodoroTodo VERSION 0.1.0 LANGUAGES CXX)
 
 # 菜单栏与系统通知走 macOS 原生 API（NSStatusItem / UNUserNotificationCenter），
-# 需要 Objective-C++ 编译能力。本项目只面向 macOS，不做其它平台分支。
+# 需要 Objective-C++ 编译能力。平台只有 macOS 与 iOS 两个：iOS 构建只产出应用本体，
+# 菜单栏、全局热键、外部 AI 接入、测试与本机部署都只属于 macOS（见下方 if(IOS) 分支）。
 enable_language(OBJCXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -13,7 +14,11 @@ set(CMAKE_AUTORCC ON)
 
 # 6.7 是 QDateTime::TransitionResolution 的引入版本（见 src/services/LogicalDay.h 的逻辑日边界计算）。
 # 不写下界的话，用更低版本的 Qt 也能配置成功，报错要推迟到编译期才出现。
-find_package(Qt6 6.7 REQUIRED COMPONENTS Concurrent Core Gui Network Qml Quick QuickControls2 QuickLayouts QuickTest Sql Test)
+find_package(Qt6 6.7 REQUIRED COMPONENTS Concurrent Core Gui Network Qml Quick QuickControls2 QuickLayouts Sql)
+if(NOT IOS)
+    # 测试只在 macOS 上离屏运行；iOS 构建不注册任何测试，也就不要求 iOS 套件带测试模块。
+    find_package(Qt6 6.7 REQUIRED COMPONENTS QuickTest Test)
+endif()
 
 # CVE-2025-12385：Text 组件解析 <img> 时不校验尺寸，可导致无限制内存分配与界面失去响应。
 # 影响 5.0.0–6.5.10、6.6.0–6.8.5、6.9.0–6.10.0，修复于 6.5.11 / 6.8.6 / 6.10.1。
@@ -36,7 +41,7 @@ if(NOT POMODORO_TODO_CVE_2025_12385_FIXED)
 endif()
 message(STATUS "使用的 Qt: ${Qt6_VERSION} @ ${Qt6_DIR}")
 
-if(APPLE AND TARGET WrapOpenGL::WrapOpenGL)
+if(APPLE AND NOT IOS AND TARGET WrapOpenGL::WrapOpenGL)
     # AGL.framework 是旧版 OpenGL 框架，新版 macOS SDK 已经移除；
     # Qt 的 WrapOpenGL 导入目标可能仍引用它。
     # 当前 SDK 不再提供该框架时，需要移除这个过期链接项。
@@ -105,8 +110,6 @@ set(APP_SOURCES
     src/services/TrayController.cpp
     src/services/NotificationService.h
     src/services/NotificationService.cpp
-    src/services/SingleInstanceGuard.h
-    src/services/SingleInstanceGuard.cpp
     src/services/BackupOperations.h
     src/services/BackupOperations.cpp
     src/services/BackupService.h
@@ -128,48 +131,68 @@ set(APP_SOURCES
     src/mcp/common/McpJsonStream.cpp
     src/mcp/common/McpEndpointFiles.h
     src/mcp/common/McpEndpointFiles.cpp
-    src/mcp/bridge/McpAccessController.h
-    src/mcp/bridge/McpAccessController.cpp
-    src/mcp/bridge/McpLocalServer.h
-    src/mcp/bridge/McpLocalServer.cpp
-    src/platform/macos/MacLocalPeerIdentity.h
-    src/platform/macos/MacLocalPeerIdentity.cpp
-    src/mcp/bridge/McpToolDispatcher.h
-    src/mcp/bridge/McpToolDispatcher.cpp
-    src/mcp/bridge/McpTaskWrites.cpp
-    src/mcp/bridge/McpCreateRegistry.h
-    src/mcp/bridge/McpCreateRegistry.cpp
-    src/platform/macos/MacStatusBarController.h
-    src/platform/macos/MacStatusBarController.mm
-    src/platform/macos/MacNotificationBackend.h
-    src/platform/macos/MacNotificationBackend.mm
-    src/platform/macos/MacGlobalHotkeyBackend.h
-    src/platform/macos/MacGlobalHotkeyBackend.mm
-    src/platform/macos/MacPreferencesCleanup.h
-    src/platform/macos/MacPreferencesCleanup.mm
     resources/qml.qrc
     resources/wallpapers.qrc
     resources/fonts.qrc
     resources/shaders.qrc
 )
 
-set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app-icons/PomodoroTodo.icns")
-set_source_files_properties("${APP_ICON}" PROPERTIES
-    MACOSX_PACKAGE_LOCATION "Resources"
-)
-list(APPEND APP_SOURCES "${APP_ICON}")
+if(NOT IOS)
+    # 只在 macOS 存在的能力：单实例守卫（本地 socket 召回窗口）、外部 AI 接入的主应用侧、
+    # 菜单栏、系统通知后端、全局热键与偏好域清理。iOS 由系统保证单实例，
+    # 也没有外部进程能连进来，这些源码整体不编入；main.cpp 里的装配用 Q_OS_MACOS 同步圈住。
+    list(APPEND APP_SOURCES
+        src/services/SingleInstanceGuard.h
+        src/services/SingleInstanceGuard.cpp
+        src/mcp/bridge/McpAccessController.h
+        src/mcp/bridge/McpAccessController.cpp
+        src/mcp/bridge/McpLocalServer.h
+        src/mcp/bridge/McpLocalServer.cpp
+        src/platform/macos/MacLocalPeerIdentity.h
+        src/platform/macos/MacLocalPeerIdentity.cpp
+        src/mcp/bridge/McpToolDispatcher.h
+        src/mcp/bridge/McpToolDispatcher.cpp
+        src/mcp/bridge/McpTaskWrites.cpp
+        src/mcp/bridge/McpCreateRegistry.h
+        src/mcp/bridge/McpCreateRegistry.cpp
+        src/platform/macos/MacStatusBarController.h
+        src/platform/macos/MacStatusBarController.mm
+        src/platform/macos/MacNotificationBackend.h
+        src/platform/macos/MacNotificationBackend.mm
+        src/platform/macos/MacGlobalHotkeyBackend.h
+        src/platform/macos/MacGlobalHotkeyBackend.mm
+        src/platform/macos/MacPreferencesCleanup.h
+        src/platform/macos/MacPreferencesCleanup.mm
+    )
 
-add_executable(PomodoroTodo ${APP_SOURCES})
+    set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app-icons/PomodoroTodo.icns")
+    set_source_files_properties("${APP_ICON}" PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources"
+    )
+    list(APPEND APP_SOURCES "${APP_ICON}")
+endif()
+
+if(IOS)
+    # iOS 上的 Qt 是静态库：平台插件和 QML 插件要靠 Qt 的收尾步骤扫描导入并链接进来，
+    # 所以必须用 qt_add_executable。MANUAL_FINALIZATION 让收尾在下方 iOS 属性全部设好之后
+    # 才执行（见 qt_finalize_target）。macOS 保持原来的 add_executable，避免 Qt 的收尾步骤
+    # 改写 Mac 包的 Info.plist 等既有产物。
+    qt_add_executable(PomodoroTodo MANUAL_FINALIZATION ${APP_SOURCES})
+else()
+    add_executable(PomodoroTodo ${APP_SOURCES})
+endif()
 
 # 菜单栏/通知的 ObjC++ 后端用 ARC 管理 Cocoa 对象生命周期。
 # 全局热键后端只调 Carbon 的 C 接口、不持有 ObjC 对象，一并开 ARC 保持编译选项一致。
-set_source_files_properties(
-    src/platform/macos/MacStatusBarController.mm
-    src/platform/macos/MacNotificationBackend.mm
-    src/platform/macos/MacGlobalHotkeyBackend.mm
-    src/platform/macos/MacPreferencesCleanup.mm
-    PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
-)
+if(NOT IOS)
+    set_source_files_properties(
+        src/platform/macos/MacStatusBarController.mm
+        src/platform/macos/MacNotificationBackend.mm
+        src/platform/macos/MacGlobalHotkeyBackend.mm
+        src/platform/macos/MacPreferencesCleanup.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+    )
+endif()
 
 target_compile_definitions(PomodoroTodo PRIVATE
     POMODORO_TODO_VERSION="${PROJECT_VERSION}"
@@ -189,24 +212,32 @@ target_link_libraries(PomodoroTodo PRIVATE
     Qt6::QuickControls2
     Qt6::QuickLayouts
     Qt6::Sql
-    # 菜单栏、通知与窗口/Dock 行为所需的 macOS 系统框架。
-    "-framework AppKit"
-    "-framework Foundation"
-    "-framework UserNotifications"
-    # 全局快捷键走 Carbon 的 RegisterEventHotKey：它不需要辅助功能授权，
-    # 而 NSEvent 全局监听需要，对一个本地番茄钟来说索要那个权限并不合理。
-    "-framework Carbon"
 )
+
+if(NOT IOS)
+    target_link_libraries(PomodoroTodo PRIVATE
+        # 菜单栏、通知与窗口/Dock 行为所需的 macOS 系统框架。
+        "-framework AppKit"
+        "-framework Foundation"
+        "-framework UserNotifications"
+        # 全局快捷键走 Carbon 的 RegisterEventHotKey：它不需要辅助功能授权，
+        # 而 NSEvent 全局监听需要，对一个本地番茄钟来说索要那个权限并不合理。
+        "-framework Carbon"
+    )
+endif()
 
 set_target_properties(PomodoroTodo PROPERTIES
     MACOSX_BUNDLE TRUE
-    MACOSX_BUNDLE_ICON_FILE "PomodoroTodo.icns"
     MACOSX_BUNDLE_BUNDLE_NAME "番茄Todo"
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.zerionlito.pomodorotodo"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     WIN32_EXECUTABLE TRUE
 )
+if(NOT IOS)
+    # .icns 只有 macOS 认；iOS 图标要用资源目录（asset catalog），验证阶段先用系统默认图标。
+    set_target_properties(PomodoroTodo PROPERTIES MACOSX_BUNDLE_ICON_FILE "PomodoroTodo.icns")
+endif()
 
 # 日常开发目录保持自动同步；审计/CI/临时构建传 -DPOMODORO_TODO_DEPLOY_LOCAL=OFF，
 # 避免非正式构建悄悄覆盖固定启动入口。
@@ -225,7 +256,7 @@ if(POMODORO_TODO_DEPLOY_LOCAL AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATI
     message(STATUS "部署构建未指定 CMAKE_BUILD_TYPE，已默认为 RelWithDebInfo")
 endif()
 
-if(APPLE AND POMODORO_TODO_DEPLOY_LOCAL)
+if(APPLE AND NOT IOS AND POMODORO_TODO_DEPLOY_LOCAL)
     set(POMODORO_TODO_LOCAL_APP_PATH "/Applications/番茄Todo.app" CACHE PATH
         "本机固定启动入口，构建后会用最新包覆盖这里"
     )
@@ -272,6 +303,41 @@ function(pomodoro_todo_enable_warnings target)
 endfunction()
 
 pomodoro_todo_enable_warnings(PomodoroTodo)
+
+if(IOS)
+    # 免费个人团队注册包标识时要求全局唯一；若 Xcode 提示已被占用，改这个缓存变量即可。
+    set(POMODORO_TODO_IOS_BUNDLE_ID "com.zerionlito.pomodorotodo" CACHE STRING
+        "iOS 包标识")
+    # 开发团队 ID 在 Xcode 的 Settings → Accounts 里查看；留空时交给 Qt 从 Xcode 偏好里自动探测。
+    set(POMODORO_TODO_IOS_DEVELOPMENT_TEAM "" CACHE STRING
+        "iOS 签名使用的开发团队 ID")
+
+    set_target_properties(PomodoroTodo PROPERTIES
+        # Xcode 生成器会把 Info.plist 的 CFBundleIdentifier 写成 PRODUCT_BUNDLE_IDENTIFIER 的引用，
+        # 所以改这一处就够了，签名与包内标识自动保持一致。
+        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${POMODORO_TODO_IOS_BUNDLE_ID}"
+        # 1 = iPhone，2 = iPad：同一个包同时装到两种设备上。
+        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+        # 静态 Qt 需要扫描 QML 的 import 语句来决定链接哪些 QML 插件。
+        # 只扫应用自己的 qml/ 目录：tests/qml 里的 QtTest 导入不属于应用，扫进来会白白链接测试模块。
+        QT_QML_ROOT_PATH "${CMAKE_CURRENT_SOURCE_DIR}/qml"
+        # 自带 Info.plist 模板：Qt 默认把主屏幕显示名写成目标名 PomodoroTodo，这里改用中文包名。
+        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ios/Info.plist.in"
+    )
+    if(POMODORO_TODO_IOS_DEVELOPMENT_TEAM)
+        set_target_properties(PomodoroTodo PROPERTIES
+            XCODE_ATTRIBUTE_DEVELOPMENT_TEAM "${POMODORO_TODO_IOS_DEVELOPMENT_TEAM}"
+            XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
+        )
+    endif()
+
+    qt_finalize_target(PomodoroTodo)
+
+    # iOS 构建到此为止：下方的外部 AI 辅助程序、测试与门禁都只在 macOS 上构建和运行，
+    # 本机部署目标也已在上方按平台排除。这个目录（约定 ~/pt-ios）永不部署。
+    message(STATUS "iOS 构建：只产出应用本体，不注册测试、不部署")
+    return()
+endif()
 
 # 外部 AI 接入的无界面辅助程序：AI 客户端以 stdio 方式拉起它，它只负责 MCP 协议与转发。
 # 源码清单只列 helper 与 common，业务服务、SQL 与 QML 一律不编入——辅助程序不直接碰数据库，

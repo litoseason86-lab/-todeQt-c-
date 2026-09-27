@@ -29,19 +29,25 @@
 #include "services/StatisticsService.h"
 #include "services/TaskManager.h"
 #include "services/TrayController.h"
-#include "services/SingleInstanceGuard.h"
 
 #include "mcp/common/McpPaths.h"
+#include "services/TaskInteractionCoordinator.h"
+#include "services/LogicalDay.h"
+
+// 以下能力只在 macOS 存在：单实例守卫、外部 AI 接入、菜单栏、全局热键、系统通知后端。
+// iOS 由系统保证单实例，也没有外部进程能连进来；这些源码在 iOS 构建里由 CMake 整体排除，
+// 所以包含与装配都要一起圈在同一个平台条件里，漏一处就会在 iOS 上找不到头文件。
+#if defined(Q_OS_MACOS)
+#include "services/SingleInstanceGuard.h"
 #include "mcp/bridge/McpAccessController.h"
 #include <QClipboard>
 #include "mcp/bridge/McpToolDispatcher.h"
-#include "services/TaskInteractionCoordinator.h"
-#include "services/LogicalDay.h"
 
 #include "platform/macos/MacGlobalHotkeyBackend.h"
 #include "platform/macos/MacNotificationBackend.h"
 #include "platform/macos/MacPreferencesCleanup.h"
 #include "platform/macos/MacStatusBarController.h"
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -70,6 +76,9 @@ int main(int argc, char *argv[])
     // 关于页直接读取 Qt.application.version；由 CMake 项目版本注入，避免 UI 手写两份版本号。
     QCoreApplication::setApplicationVersion(QStringLiteral(POMODORO_TODO_VERSION));
 
+#if defined(Q_OS_MACOS)
+    // 偏好域清理和单实例锁只在 macOS 需要：iOS 的偏好存放在应用沙盒里，不会被钉进全局域；
+    // 系统也保证同一应用只有一个进程，不存在两个进程争用同一数据库的问题。
     // 旧版恢复失败回滚时会把系统全局偏好（语言、地区等）钉进本应用的偏好域，
     // 之后改系统设置本应用也不跟着变。回滚已经改为只写本应用的键，这里把以前钉进来的清掉。
     // 只清与全局域值完全相同的键，读到的值不变，所以只需做一次，用迁移标记记住。
@@ -112,6 +121,7 @@ int main(int argc, char *argv[])
         qCritical() << "无法创建单实例锁，拒绝启动:" << instanceLockDir;
         return -1;
     }
+#endif
 
     if (!DatabaseManager::instance()->initialize()) {
         qCritical() << "数据库初始化失败，停止加载业务界面";
@@ -142,6 +152,11 @@ int main(int argc, char *argv[])
     if (!FocusTimer::instance()->restoreInterruptedSession()) {
         qWarning() << "活动专注会话恢复失败";
     }
+    // 任务交互协调器与平台无关（iOS 界面同样通过它串起完成、删除等交互），
+    // 所以放在外部 AI 接入之前创建；接入层只是它的一个监听者。
+    TaskInteractionCoordinator taskInteractions(TaskManager::instance());
+
+#if defined(Q_OS_MACOS)
     // 显式装配接入生命周期；默认关闭，设置页显式授权后才启动端点。
     // 先于数据库关闭注册退出处理，避免队列在数据库关闭以后继续执行。
     QSettings mcpSettings;
@@ -165,7 +180,6 @@ int main(int argc, char *argv[])
     });
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
                      &mcpAccess, &McpAccessController::shutdown);
-    TaskInteractionCoordinator taskInteractions(TaskManager::instance());
     McpToolDispatcher mcpDispatcher(TaskManager::instance(), CategoryManager::instance(),
         StatisticsService::instance(), KnowledgeGapService::instance(), &taskInteractions, [&mcpAccess] {
             return McpToolDispatcher::Context{mcpAccess.sessionId(), QDateTime::currentDateTime(),
@@ -183,6 +197,7 @@ int main(int argc, char *argv[])
         QGuiApplication::clipboard()->setText(text);
     });
     mcpAccess.start();
+#endif
 
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
                      FocusTimer::instance(), &FocusTimer::prepareForShutdown);
@@ -198,6 +213,7 @@ int main(int argc, char *argv[])
     // macOS 后端负责 NSStatusItem 与 UNUserNotificationCenter。全部在 app 之后创建，
     // 生命周期与 main 同长；showWindow/quit 意图交给 QML 落实（复用窗口与待删提交逻辑）。
     TrayController trayController(FocusTimer::instance());
+#if defined(Q_OS_MACOS)
     QObject::connect(&instanceGuard, &SingleInstanceGuard::activationRequested,
                      &trayController, &TrayController::requestShowWindow);
     MacStatusBarController statusBar(&trayController);
@@ -205,13 +221,17 @@ int main(int argc, char *argv[])
 
     MacNotificationBackend notificationBackend;
     NotificationService::instance()->setBackend(&notificationBackend);
+#endif
+    // iOS 暂未接通知后端：没有后端时申请授权是空操作，阶段结束通知按投递失败走现有降级。
     NotificationService::instance()->requestAuthorization();
 
     // 快捷键：应用内键位由 QML 的 Shortcut 直接消费 ShortcutRegistry 的清单；
     // 全局热键交给 Carbon 后端向系统注册。后端是 main 的栈对象，事件循环结束后
     // 显式解绑（见函数末尾），不依赖栈上声明顺序来保证注销先于析构。
+#if defined(Q_OS_MACOS)
     MacGlobalHotkeyBackend globalHotkeyBackend;
     ShortcutRegistry::instance()->setGlobalBackend(&globalHotkeyBackend);
+#endif
 
     // 启动即生成今天的例行任务，保证 QML 首次读取今日任务时已经能看到它们。
     RoutineManager::instance()->materializeToday();
@@ -238,7 +258,9 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("ExportService"), ExportService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("taskManager"), TaskManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("taskInteractionCoordinator"), &taskInteractions);
+#if defined(Q_OS_MACOS)
     engine.rootContext()->setContextProperty(QStringLiteral("mcpAccessController"), &mcpAccess);
+#endif
     engine.rootContext()->setContextProperty(QStringLiteral("focusTimer"), FocusTimer::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("statisticsService"), StatisticsService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());
@@ -268,6 +290,7 @@ int main(int argc, char *argv[])
     // 自动备份放到后台线程。退出时不再重复执行重 I/O，避免应用长时间卡在关闭阶段。
     BackupService::instance()->requestAutoBackupIfDue();
     const int exitCode = app.exec();
+#if defined(Q_OS_MACOS)
     // 平台后端是 main 栈对象；事件循环结束后先清空非拥有指针，再进入局部对象析构。
     NotificationService::instance()->setBackend(nullptr);
     // 同理：解绑会先把已注册的系统热键全部注销，避免进程退出后系统里残留热键登记。
@@ -277,5 +300,6 @@ int main(int argc, char *argv[])
     // 而代码里没有任何地方写着这件事——挪一行声明就会变成悬垂指针。
     trayController.setView(nullptr);
     statusBar.detachController();
+#endif
     return exitCode;
 }
