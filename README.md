@@ -89,7 +89,7 @@
 
 ## 构建
 
-使用 Qt 6.7 或更高版本的 SDK；本机已验证 Qt 6.10.3。部署目录固定为 `~/pt-build`，验证目录固定为 `~/pt-audit`，不能混用；iPad / iPhone 版本处于技术验证阶段，iOS 构建另用 `~/pt-ios`，永不部署。完整命令、环境要求和部署校验见 [运行命令](docs/运行命令.md)。
+使用 Qt 6.7 或更高版本的 SDK；本机已验证 Qt 6.10.3。部署目录固定为 `~/pt-build`，验证目录固定为 `~/pt-audit`，不能混用；移动端技术验证已结束（iPad 单机使用，不做多设备同步，见 [plans/README](plans/README.md)），iOS 构建另用 `~/pt-ios`，永不部署。完整命令、环境要求和部署校验见 [运行命令](docs/运行命令.md)。
 
 ```bash
 /Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake -B ~/pt-build -S . \
