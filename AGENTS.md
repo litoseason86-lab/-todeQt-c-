@@ -32,7 +32,8 @@
 
 ## 代码质量规则
 
-- 保持当前项目分层：`src/services`、`src/models`、`src/mcp`、`src/platform/macos`、`qml`、`tests` 的职责不要混杂。
+- 保持当前项目分层：`src/services`、`src/models`、`src/mcp`、`src/platform/macos`、`src/platform/ios`、`qml`、`tests` 的职责不要混杂。
+- iOS 专属代码（系统框架调用、生命周期、打包配置）放 `src/platform/ios`；菜单栏、全局热键、外部 AI 接入这些只在 macOS 存在的能力，优先由 `CMakeLists.txt` 按平台排除源码，业务服务里尽量不新增平台判断（`PhaseSoundService` 的提示音分支是既有例外）。
 - 外部 AI 接入的辅助程序（`src/mcp/helper`）只做协议与转发，不得链接业务服务、SQL 或 QML；权限判断与读写都在主应用内完成，`McpHelperLinkGate` 会检查链接结果。
 - 修改功能后要运行相关构建和测试，再报告结果。
 - 后台测试和自动验证不得弹出应用窗口；Qt/QML 测试默认使用 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic`。不要在自动流程里执行 `open /Applications/番茄Todo.app`、`open build/*.app` 或其他会拉起 GUI 窗口的命令，除非用户本轮明确要求做人工真机视觉验收。
@@ -50,12 +51,26 @@
   拼上同一串相对路径恰好回到 `/Users/...`）；Qt 6.10 换了 include 标志集之后整个
   构建直接失败。用 `~/pt-*` 这类没有符号链接的路径。
 - `POMODORO_TODO_DEPLOY_LOCAL` 是 CMake cache 变量，会持久化在构建目录里。审计/测试构建传 `=OFF` 时必须用**独立的构建目录**（约定：部署 `~/pt-build`，审计 `~/pt-audit`），否则后续部署构建会因为残留的 `OFF` 而静默不部署。
-- **构建目录只允许这两个**：`~/pt-build`（部署）与 `~/pt-audit`（验证）。不要按用途另建
+- **Mac 构建目录只允许这两个**：`~/pt-build`（部署）与 `~/pt-audit`（验证）。不要按用途另建
   `pt-warn3`、`pt-gate`、`pt-c1` 这类一次性目录——它们每个 300–450M，只增不减，
   一次就攒到过 3.3G。此前放在 `/tmp` 时系统重启还能捡回来一点，改到 `~` 之后
   再也没有任何自动清理，只能靠人记得。
   临时验证就在这两个里跑；确实需要隔离的（比如换 Qt 版本、开消毒器），
   **用完当场 `rm -rf`，不留到下一轮**。
+- iOS 构建只用 `~/pt-ios`，这个目录**永不部署**，也不接 `deploy-local-app`。命令（均先
+  `export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` 指定 Xcode，不依赖 `xcode-select` 的全局设置）：
+  - 配置：`~/Qt/6.10.3/ios/bin/qt-cmake -S <源码目录> -B ~/pt-ios -G Xcode -DQT_HOST_PATH=$HOME/Qt/6.10.3/macos`
+    （iOS 套件是交叉编译的，必须用 `QT_HOST_PATH` 指向本机的 macOS 版 Qt，否则配置阶段就失败）；
+  - 自动流程只做不签名的编译检查：`cmake --build ~/pt-ios --config Debug -- -sdk iphoneos CODE_SIGNING_ALLOWED=NO`；
+  - 签名编译必须直接用 `xcodebuild` 并带 `-scheme`：`xcodebuild -project ~/pt-ios/PomodoroTodo.xcodeproj -scheme PomodoroTodo
+    -configuration Debug -destination id=<设备 UDID> -allowProvisioningUpdates -allowProvisioningDeviceRegistration build`。
+    `cmake --build` 不传 scheme，xcodebuild 会忽略目标设备，免费个人团队就登记不上设备、生成不了描述文件。
+    开发团队 ID 用缓存变量 `POMODORO_TODO_IOS_DEVELOPMENT_TEAM` 传入（`defaults read com.apple.dt.Xcode | grep teamID` 可查）。
+  - 设备 UDID 用 `xcrun devicectl list devices` 查；安装 `xcrun devicectl device install app --device <UDID> <.app 路径>`，
+    启动并接收日志 `xcrun devicectl device process launch --device <UDID> --console --terminate-existing <包标识>`，
+    截图 `xcrun devicectl device capture screenshot`，取回沙盒文件 `xcrun devicectl device copy from --domain-type appDataContainer`。
+- 往真机安装、启动应用，**必须用户本轮明确同意**；否则自动流程只编译 `~/pt-ios`。任何情况下都不启动模拟器。
+  第一次安装免费团队签名的应用后，要由用户在设备的"设置 → 通用 → VPN 与设备管理"里信任开发者，应用才能启动。
 - 部署完成后必须校验构建包与 `/Applications/番茄Todo.app` 主二进制一致，并报告部署结果。
 - 构建和部署不等于启动。未经用户本轮明确要求，禁止执行 `open`、直接运行应用二进制或以其他方式拉起 GUI。
 - 如果部署时已有番茄 Todo 进程运行，不得擅自结束进程；需要明确提醒用户退出并重新打开，才能加载新二进制。
@@ -85,7 +100,7 @@
   - 计划文件沿用现有留档约定：正文先随功能提交入库，删除后在 `plans/README.md` 用
     `git show <提交>:<路径>` 指回留档提交，不能跳过入库直接删。
   - 不是副产物、不得删除：源码、测试、`docs/` 下的正式文档、`plans/README.md` 索引、
-    `~/pt-build` 与 `~/pt-audit` 构建目录、仓库内 `build/` 生成物（本来就禁止改动）、
+    `~/pt-build`、`~/pt-audit`、`~/pt-ios` 构建目录、仓库内 `build/` 生成物（本来就禁止改动）、
     `.cache/` 语言服务器索引、`tests/mcp-sdk/node_modules/` 测试依赖、个人本地配置。
   - 删除前先列出清单核对。不是本分支产生的旧遗留，列出来询问用户，不擅自删除。
 
