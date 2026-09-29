@@ -55,11 +55,15 @@ TestCase {
         function getTodayTasks() { return testCase.todayTasks }
         function getOverdueUncompletedTasks() { return [] }
         function getWeekTasks(weekStart) {
+            // 任务日期必须落在页面请求的这一周（weekStart 是 yyyy-MM-dd 的周一）。
+            // 曾写死 2026-09-21 那一周：真实日期一跨周，本周计划就变空、内容不满一屏，
+            // 滚动条断言随之失败。按本地年月日构造，不用 new Date("yyyy-MM-dd")——那会按 UTC 解析，差出一天。
+            var parts = String(weekStart).split("-")
             var rows = []
             for (var d = 0; d < 7; ++d) {
                 for (var k = 0; k < 3; ++k) {
                     var row = testCase.task(100 + d * 10 + k, "周任务 " + d + "-" + k, false)
-                    row.date = new Date(2026, 8, 21 + d)
+                    row.date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]) + d)
                     rows.push(row)
                 }
             }

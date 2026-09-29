@@ -44,9 +44,42 @@
 #include "mcp/bridge/McpToolDispatcher.h"
 
 #include "platform/macos/MacGlobalHotkeyBackend.h"
-#include "platform/macos/MacNotificationBackend.h"
 #include "platform/macos/MacPreferencesCleanup.h"
 #include "platform/macos/MacStatusBarController.h"
+#endif
+
+// 系统通知后端两个平台共用：UserNotifications 在 macOS 与 iOS 上是同一套接口。
+#include "platform/apple/AppleNotificationBackend.h"
+
+// iOS：计时恢复策略、前后台来源与系统预约通知。
+#if defined(Q_OS_IOS)
+#include <QScreen>
+#include "services/ApplicationActivity.h"
+#include "services/MonotonicClock.h"
+#include "services/PhaseAlarmCoordinator.h"
+
+namespace {
+// 手机用随身伴侣页，平板用完整界面。启动时还没有窗口，只能按屏幕判定：
+// 可用区域的短边小于 600pt 视为手机（横竖屏都一样）。iPad 的分屏与窗口模式里窗口可能更窄，
+// 本期不在验证范围内，一律按屏幕走完整界面。
+// 环境变量 POMODORO_TODO_LAYOUT=companion / full 可强制指定，便于在 iPad 上验证伴侣页。
+bool useCompanionLayout()
+{
+    const QByteArray forced = qgetenv("POMODORO_TODO_LAYOUT");
+    if (forced == "companion") {
+        return true;
+    }
+    if (forced == "full") {
+        return false;
+    }
+    const QScreen* screen = QGuiApplication::primaryScreen();
+    if (!screen) {
+        return false;
+    }
+    const QSize available = screen->availableGeometry().size();
+    return qMin(available.width(), available.height()) < 600;
+}
+}
 #endif
 
 int main(int argc, char *argv[])
@@ -149,6 +182,20 @@ int main(int argc, char *argv[])
         DatabaseManager::instance()->openedExistingDatabase()
         && !AppSettings::instance()->naturalCompletionNoticeShown();
 
+#if defined(Q_OS_IOS)
+    // 必须在恢复之前设置：恢复逻辑按策略决定是否补回离线时段。
+    // 移动端的进程常在后台被系统结束，并非用户想暂停，同一次开机内按单调时钟补算；
+    // 番茄段在后台到期时只做离线结算（不自动衔接、不补发提醒）。
+    FocusTimer::instance()->setRecoveryPolicy(FocusTimer::RecoveryPolicy::CatchUpOffline);
+    // iPad 开放自由计时（用户的主要用法），被系统结束后同样按上面的策略补回离线时段。
+    // 主动休息暂不开放：050 计划没有这个需求，入口隐藏、服务层拒绝。
+    FocusTimer::instance()->setManualRestAllowed(false);
+    GuiApplicationActivity applicationActivity(SystemMonotonicClock::instance());
+    FocusTimer::instance()->setApplicationActivity(&applicationActivity);
+    // 离开前台时补写一次检查点。锚点在开始、暂停、继续时已经落盘，这里只是让最后的进度更新鲜。
+    QObject::connect(&applicationActivity, &GuiApplicationActivity::leftForeground,
+                     FocusTimer::instance(), &FocusTimer::checkpoint);
+#endif
     if (!FocusTimer::instance()->restoreInterruptedSession()) {
         qWarning() << "活动专注会话恢复失败";
     }
@@ -219,11 +266,24 @@ int main(int argc, char *argv[])
     MacStatusBarController statusBar(&trayController);
     trayController.setView(&statusBar);
 
-    MacNotificationBackend notificationBackend;
+#endif
+#if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
+    AppleNotificationBackend notificationBackend;
     NotificationService::instance()->setBackend(&notificationBackend);
 #endif
-    // iOS 暂未接通知后端：没有后端时申请授权是空操作，阶段结束通知按投递失败走现有降级。
+#if defined(Q_OS_IOS)
+    // 番茄到点提醒交给系统预约：进程被挂起时进程内的计时器不会运行，只有预约的通知能按时响。
+    // 预约成功时，到点那一刻进程内不再即时投递第二条（由协调器回答「是否已覆盖」）。
+    PhaseAlarmCoordinator phaseAlarms(FocusTimer::instance(), NotificationService::instance());
+    NotificationService::instance()->setPhaseAlarmCoverage([&phaseAlarms](int phase) {
+        return phaseAlarms.coversPhase(phase);
+    });
+#endif
     NotificationService::instance()->requestAuthorization();
+#if defined(Q_OS_IOS)
+    // 恢复已经完成：先撤销上个进程遗留的预约，再按当前计时状态重新预约。
+    phaseAlarms.start();
+#endif
 
     // 快捷键：应用内键位由 QML 的 Shortcut 直接消费 ShortcutRegistry 的清单；
     // 全局热键交给 Carbon 后端向系统注册。后端是 main 的栈对象，事件循环结束后
@@ -233,6 +293,7 @@ int main(int argc, char *argv[])
     ShortcutRegistry::instance()->setGlobalBackend(&globalHotkeyBackend);
 #endif
 
+#if !defined(Q_OS_IOS)
     // 启动即生成今天的例行任务，保证 QML 首次读取今日任务时已经能看到它们。
     RoutineManager::instance()->materializeToday();
 
@@ -240,6 +301,8 @@ int main(int argc, char *argv[])
     // 连接必须早于 engine.load，否则视图槽可能先看到尚未补齐的数据。
     QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed,
                      RoutineManager::instance(), &RoutineManager::materializeToday);
+#endif
+    // iOS 暂不生成每日例行：以后接入同步时，Mac 与移动端各自生成会让同一天出现两份。
 
     // 历史编辑会改变任务累计时长；在装配层广播刷新，避免服务互相依赖。
     QObject::connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged,
@@ -275,10 +338,18 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("notificationService"), NotificationService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("backupService"), BackupService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("shortcutRegistry"), ShortcutRegistry::instance());
+#if defined(Q_OS_IOS)
+    engine.rootContext()->setContextProperty(QStringLiteral("phaseAlarmCoordinator"), &phaseAlarms);
+#endif
     engine.rootContext()->setContextProperty(QStringLiteral("naturalCompletionNoticeRequired"),
                                              naturalCompletionNoticeRequired);
 
+#if defined(Q_OS_IOS)
+    const QUrl url(useCompanionLayout() ? QStringLiteral("qrc:/qml/mobile/CompanionMain.qml")
+                                        : QStringLiteral("qrc:/qml/main.qml"));
+#else
     const QUrl url(QStringLiteral("qrc:/qml/main.qml"));
+#endif
     QObject::connect(&engine, &QQmlApplicationEngine::objectCreated,
                      &app, [url](QObject *object, const QUrl &objectUrl) {
         if (!object && url == objectUrl) {
@@ -290,6 +361,12 @@ int main(int argc, char *argv[])
     // 自动备份放到后台线程。退出时不再重复执行重 I/O，避免应用长时间卡在关闭阶段。
     BackupService::instance()->requestAutoBackupIfDue();
     const int exitCode = app.exec();
+#if defined(Q_OS_IOS)
+    // 这些对象都是 main 的栈对象，事件循环结束后先解开单例对它们的引用，再进入析构。
+    NotificationService::instance()->setPhaseAlarmCoverage({});
+    NotificationService::instance()->setBackend(nullptr);
+    FocusTimer::instance()->setApplicationActivity(nullptr);
+#endif
 #if defined(Q_OS_MACOS)
     // 平台后端是 main 栈对象；事件循环结束后先清空非拥有指针，再进入局部对象析构。
     NotificationService::instance()->setBackend(nullptr);

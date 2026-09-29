@@ -141,6 +141,9 @@ Item {
     // 昨天的目标分钟数：未设置态快捷 chip 的数据源（单键快照跨日后即昨天值）。
     property int yesterdayGoalMinutes: 0
 
+    // 平台是否支持主动休息（iPad 目前不开放）。它有自己的开关，不跟自由计时绑在一起。
+    // 测试桩没有这个属性时按支持处理（=== false 才算关闭）。
+    readonly property bool manualRestAvailable: !(root.focusTimerRef && root.focusTimerRef.manualRestAllowed === false)
     readonly property bool manualRestActive: !!root.focusTimerRef
                                             && Number(root.focusTimerRef.mode) === 2
                                             && Number(root.focusTimerRef.phase) === 3
@@ -784,7 +787,9 @@ Item {
                     id: manualRestButton
                     objectName: "todayManualRestButton"
                     // 专注或番茄休息进行时不允许再开主动休息；主动休息保留返回入口。
-                    visible: !!root.focusTimerRef && (!root.timerBusy || root.manualRestActive)
+                    // 平台不支持主动休息时不给开始入口，但已在进行的（例如旧数据恢复出来的）仍能回去结束。
+                    visible: !!root.focusTimerRef
+                             && ((root.manualRestAvailable && !root.timerBusy) || root.manualRestActive)
                     text: root.manualRestActive
                           ? qsTr("休息 %1").arg(root.formatClockTime(root.focusTimerRef.elapsedSeconds))
                           : qsTr("开始休息")

@@ -15,7 +15,12 @@ Item {
     property var taskManagerRef: null
     property var knowledgeGapServiceRef: null
     property string taskNotes: ""
-    property bool pomodoroModeSelected: false
+    // 平台是否支持自由计时。平台关闭它时服务层会拒绝自由计时，
+    // 这里把所有「选模式」的入口都落到番茄，并隐藏模式切换，界面不出现点了必失败的选项。
+    // 测试桩没有这个属性时按支持处理（=== false 才算关闭）。
+    readonly property bool freeModeAvailable: !(root.timer && root.timer.freeTimingAllowed === false)
+    // 初值随平台：不支持自由计时就从番茄模式开始。之后的命令式赋值会替换这个绑定，属预期行为。
+    property bool pomodoroModeSelected: !root.freeModeAvailable
     property int selectedWorkMinutes: 25
     property int selectedBreakMinutes: 5
     // 任务页传入的待启动任务由专注页暂存；真正点击开始后，活动任务以 timer 为准。
@@ -492,6 +497,7 @@ Item {
     }
 
     function toPomodoroTab(enabled) {
+        enabled = enabled || !root.freeModeAvailable
         root.cancelAutoAdvance()
         if (!root.timer) {
             root.pomodoroModeSelected = enabled
@@ -567,6 +573,9 @@ Item {
     }
 
     function enterFreeWithTask(taskId, title) {
+        if (!root.freeModeAvailable) {
+            return root.enterPomodoroWithTask(taskId, title)
+        }
         root.cancelAutoAdvance()
         var safeTitle = String(title || "").trim()
         if (!root.timer || taskId <= 0 || safeTitle.length === 0) {
@@ -597,6 +606,8 @@ Item {
     // 把任务和模式落到本页。调用前计时器必须已经空闲。
     // autoStart 为假时停在待机：番茄模式顺带展开时长面板，让用户确认本轮时长后再手动开始。
     function applyTask(taskId, title, usePomodoro, autoStart) {
+        // 任务入口都经过这里：平台不支持自由计时时一律按番茄处理（任务页可能按记住的「自由」传进来）。
+        usePomodoro = usePomodoro || !root.freeModeAvailable
         if (!root.enterWithTask(taskId, title, usePomodoro))
             return false
         if (autoStart)
@@ -751,6 +762,10 @@ Item {
 
     function startFreeFocus() {
         root.cancelAutoAdvance()
+        if (!root.freeModeAvailable) {
+            root.errorText = "这台设备暂时只支持番茄专注"
+            return false
+        }
         if (!root.canStartFreeFocus()) {
             root.errorText = "请先选择要专注的任务"
             return false
@@ -1144,7 +1159,7 @@ Item {
             anchors.topMargin: Theme.space24
             anchors.horizontalCenter: parent.horizontalCenter
             segments: [qsTr("自由专注"), qsTr("番茄专注")]
-            visible: root.state !== "manualRest"
+            visible: root.state !== "manualRest" && root.freeModeAvailable
             // 选中态始终跟随业务状态：模式还会被任务页跳转、服务恢复会话等外部路径改写，
             // 控件不能自己记一份，否则两边会漂移。
             currentIndex: root.pomodoroModeSelected ? 1 : 0

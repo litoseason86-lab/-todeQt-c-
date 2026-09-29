@@ -1,4 +1,4 @@
-#import "MacNotificationBackend.h"
+#import "AppleNotificationBackend.h"
 
 #import <Foundation/Foundation.h>
 #import <UserNotifications/UserNotifications.h>
@@ -31,19 +31,19 @@
 @end
 
 namespace {
-MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery();
-MacNotificationBackend::NotificationSubmitter makeNotificationSubmitter();
+AppleNotificationBackend::AuthorizationQuery makeAuthorizationQuery();
+AppleNotificationBackend::NotificationSubmitter makeNotificationSubmitter();
 void installForegroundPresentationDelegate();
 }
 
-MacNotificationBackend::MacNotificationBackend()
-    : MacNotificationBackend(makeAuthorizationQuery(), makeNotificationSubmitter())
+AppleNotificationBackend::AppleNotificationBackend()
+    : AppleNotificationBackend(makeAuthorizationQuery(), makeNotificationSubmitter())
 {
     // 只有生产用的默认构造才接管系统通知中心；注入假实现的测试构造不碰系统对象。
     installForegroundPresentationDelegate();
 }
 
-MacNotificationBackend::ForegroundPresentation MacNotificationBackend::foregroundPresentationForTesting()
+AppleNotificationBackend::ForegroundPresentation AppleNotificationBackend::foregroundPresentationForTesting()
 {
     // __block：block 默认按值捕获局部变量，不加这个修饰就写不回 result。
     __block ForegroundPresentation result;
@@ -64,7 +64,7 @@ MacNotificationBackend::ForegroundPresentation MacNotificationBackend::foregroun
     return result;
 }
 
-MacNotificationBackend::MacNotificationBackend(AuthorizationQuery authorizationQuery,
+AppleNotificationBackend::AppleNotificationBackend(AuthorizationQuery authorizationQuery,
                                                NotificationSubmitter notificationSubmitter)
     : m_authState(std::make_shared<std::atomic<int>>(0))
     , m_authorizationQuery(std::move(authorizationQuery))
@@ -72,7 +72,7 @@ MacNotificationBackend::MacNotificationBackend(AuthorizationQuery authorizationQ
 {
 }
 
-MacNotificationBackend::~MacNotificationBackend() = default;
+AppleNotificationBackend::~AppleNotificationBackend() = default;
 
 namespace {
 // UNUserNotificationCenter 只在有合法 bundle 标识（正常打包/签名）时可用；否则
@@ -103,9 +103,9 @@ void installForegroundPresentationDelegate()
     center.delegate = delegate;
 }
 
-MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery()
+AppleNotificationBackend::AuthorizationQuery makeAuthorizationQuery()
 {
-    return [](MacNotificationBackend::AuthorizationResultCallback callback) {
+    return [](AppleNotificationBackend::AuthorizationResultCallback callback) {
         UNUserNotificationCenter* center = safeNotificationCenter();
         if (center == nil) {
             callback(false, QStringLiteral("系统通知中心不可用"));
@@ -113,7 +113,7 @@ MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery()
         }
 
         const auto completion =
-            std::make_shared<MacNotificationBackend::AuthorizationResultCallback>(std::move(callback));
+            std::make_shared<AppleNotificationBackend::AuthorizationResultCallback>(std::move(callback));
         [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings* settings) {
             const bool allowed = settings.authorizationStatus == UNAuthorizationStatusAuthorized
                 || settings.authorizationStatus == UNAuthorizationStatusProvisional;
@@ -122,7 +122,7 @@ MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery()
     };
 }
 
-MacNotificationBackend::NotificationSubmitter makeNotificationSubmitter()
+AppleNotificationBackend::NotificationSubmitter makeNotificationSubmitter()
 {
     return [](const QString& title,
               const QString& body,
@@ -162,7 +162,7 @@ MacNotificationBackend::NotificationSubmitter makeNotificationSubmitter()
 }
 }
 
-void MacNotificationBackend::requestAuthorization()
+void AppleNotificationBackend::requestAuthorization()
 {
     UNUserNotificationCenter* center = safeNotificationCenter();
     if (center == nil) {
@@ -182,12 +182,12 @@ void MacNotificationBackend::requestAuthorization()
     }];
 }
 
-bool MacNotificationBackend::isAuthorized() const
+bool AppleNotificationBackend::isAuthorized() const
 {
     return m_authState->load() != 2;
 }
 
-void MacNotificationBackend::deliver(const QString& title,
+void AppleNotificationBackend::deliver(const QString& title,
                                      const QString& body,
                                      bool playSound,
                                      DeliveryCallback callback)
@@ -221,4 +221,130 @@ void MacNotificationBackend::deliver(const QString& title,
             (*completion)(success, reason);
         });
     });
+}
+
+void AppleNotificationBackend::schedule(const QString& id,
+                                      int fireAfterSeconds,
+                                      const QString& title,
+                                      const QString& body,
+                                      bool playSound,
+                                      ScheduleCallback callback)
+{
+    UNUserNotificationCenter* center = safeNotificationCenter();
+    if (center == nil) {
+        callback(false, QStringLiteral("系统通知中心不可用"));
+        return;
+    }
+
+    NSString* identifier = [id.toNSString() copy];
+    NSString* notificationTitle = [title.toNSString() copy];
+    NSString* notificationBody = [body.toNSString() copy];
+    // 系统要求触发间隔大于 0；到点已过的段不会走到这里（协调器只预约剩余时间大于 0 的段）。
+    const NSTimeInterval interval = static_cast<NSTimeInterval>(qMax(1, fireAfterSeconds));
+    const std::shared_ptr<std::atomic<int>> state = m_authState;
+    const auto completion = std::make_shared<ScheduleCallback>(std::move(callback));
+
+    // 先查权限再预约：权限被拒时系统照样接受预约请求、只是到点不显示。若把那当成成功，
+    // 进程内会以为「已由预约覆盖」而不再即时提醒，用户最后什么提醒都收不到。
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings* settings) {
+        const bool allowed = settings.authorizationStatus == UNAuthorizationStatusAuthorized
+            || settings.authorizationStatus == UNAuthorizationStatusProvisional;
+        state->store(allowed ? 1 : 2);
+        if (!allowed) {
+            (*completion)(false, QStringLiteral("系统通知权限不可用"));
+            return;
+        }
+
+        UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
+        content.title = notificationTitle;
+        content.body = notificationBody;
+        content.sound = playSound ? [UNNotificationSound defaultSound] : nil;
+        UNTimeIntervalNotificationTrigger* trigger =
+            [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:interval repeats:NO];
+        UNNotificationRequest* request =
+            [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
+        [center addNotificationRequest:request
+                 withCompletionHandler:^(NSError* _Nullable error) {
+            if (error != nil) {
+                qWarning() << "预约通知失败:" << QString::fromNSString(error.localizedDescription);
+                (*completion)(false, QString::fromNSString(error.localizedDescription));
+                return;
+            }
+            (*completion)(true, QString());
+        }];
+    }];
+}
+
+void AppleNotificationBackend::cancelScheduled(const QString& prefix,
+                                             const QString& keepId,
+                                             ScheduleCallback callback)
+{
+    UNUserNotificationCenter* center = safeNotificationCenter();
+    if (center == nil) {
+        callback(false, QStringLiteral("系统通知中心不可用"));
+        return;
+    }
+
+    NSString* idPrefix = [prefix.toNSString() copy];
+    NSString* keep = keepId.isEmpty() ? nil : [keepId.toNSString() copy];
+    const auto completion = std::make_shared<ScheduleCallback>(std::move(callback));
+    // 系统只提供「按 id 删除」，所以先取待投递列表、按前缀挑出自己的，再一次性删除。
+    // 调用方保证上一步预约的完成回调已经返回，那条预约此时一定在列表里。
+    [center getPendingNotificationRequestsWithCompletionHandler:^(NSArray<UNNotificationRequest*>* requests) {
+        NSMutableArray<NSString*>* identifiers = [NSMutableArray array];
+        for (UNNotificationRequest* request in requests) {
+            if ([request.identifier hasPrefix:idPrefix]
+                && (keep == nil || ![request.identifier isEqualToString:keep])) {
+                [identifiers addObject:request.identifier];
+            }
+        }
+        if (identifiers.count > 0) {
+            [center removePendingNotificationRequestsWithIdentifiers:identifiers];
+        }
+        (*completion)(true, QString());
+    }];
+}
+
+void AppleNotificationBackend::logScheduledNotifications(const QString& prefix)
+{
+    UNUserNotificationCenter* center = safeNotificationCenter();
+    if (center == nil) {
+        qInfo().noquote() << "[通知诊断] 系统通知中心不可用";
+        return;
+    }
+    NSString* idPrefix = [prefix.toNSString() copy];
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings* settings) {
+        qInfo().noquote() << "[通知诊断] 授权状态" << static_cast<int>(settings.authorizationStatus)
+                          << "（2=已授权，1=已拒绝，0=未决定）";
+    }];
+    [center getPendingNotificationRequestsWithCompletionHandler:^(NSArray<UNNotificationRequest*>* requests) {
+        int count = 0;
+        for (UNNotificationRequest* request in requests) {
+            if (![request.identifier hasPrefix:idPrefix]) {
+                continue;
+            }
+            ++count;
+            UNTimeIntervalNotificationTrigger* trigger =
+                (UNTimeIntervalNotificationTrigger*)request.trigger;
+            NSDate* fireDate = [trigger nextTriggerDate];
+            qInfo().noquote() << "[通知诊断] 待投递" << QString::fromNSString(request.identifier)
+                              << QString::fromNSString(request.content.title)
+                              << QString::fromNSString([fireDate description]);
+        }
+        qInfo().noquote() << "[通知诊断] 待投递合计" << count;
+    }];
+    [center getDeliveredNotificationsWithCompletionHandler:^(NSArray<UNNotification*>* notifications) {
+        int count = 0;
+        for (UNNotification* notification in notifications) {
+            NSString* identifier = notification.request.identifier;
+            if (![identifier hasPrefix:idPrefix]) {
+                continue;
+            }
+            ++count;
+            qInfo().noquote() << "[通知诊断] 已投递" << QString::fromNSString(identifier)
+                              << QString::fromNSString(notification.request.content.title)
+                              << QString::fromNSString([notification.date description]);
+        }
+        qInfo().noquote() << "[通知诊断] 已投递合计" << count;
+    }];
 }

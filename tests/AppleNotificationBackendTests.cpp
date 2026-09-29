@@ -1,8 +1,8 @@
 #include <QtTest>
 
-#include "../src/platform/macos/MacNotificationBackend.h"
+#include "../src/platform/apple/AppleNotificationBackend.h"
 
-class MacNotificationBackendTests : public QObject
+class AppleNotificationBackendTests : public QObject
 {
     Q_OBJECT
 
@@ -13,12 +13,12 @@ private slots:
     void foregroundNotificationsStillShowBannerAndPlaySound();
 };
 
-void MacNotificationBackendTests::deniedThenReauthorizedQueriesAgainAndDelivers()
+void AppleNotificationBackendTests::deniedThenReauthorizedQueriesAgainAndDelivers()
 {
     int queryCount = 0;
     int submitCount = 0;
-    MacNotificationBackend backend(
-        [&queryCount](MacNotificationBackend::AuthorizationResultCallback callback) {
+    AppleNotificationBackend backend(
+        [&queryCount](AppleNotificationBackend::AuthorizationResultCallback callback) {
             ++queryCount;
             callback(queryCount > 1, QStringLiteral("系统通知权限不可用"));
         },
@@ -54,11 +54,11 @@ void MacNotificationBackendTests::deniedThenReauthorizedQueriesAgainAndDelivers(
     QVERIFY(backend.isAuthorized());
 }
 
-void MacNotificationBackendTests::authorizationQueryFailureDoesNotSubmit()
+void AppleNotificationBackendTests::authorizationQueryFailureDoesNotSubmit()
 {
     int submitCount = 0;
-    MacNotificationBackend backend(
-        [](MacNotificationBackend::AuthorizationResultCallback callback) {
+    AppleNotificationBackend backend(
+        [](AppleNotificationBackend::AuthorizationResultCallback callback) {
             callback(false, QStringLiteral("授权查询失败"));
         },
         [&submitCount](const QString&, const QString&, bool,
@@ -81,10 +81,10 @@ void MacNotificationBackendTests::authorizationQueryFailureDoesNotSubmit()
     QVERIFY(!backend.isAuthorized());
 }
 
-void MacNotificationBackendTests::submitFailureKeepsObservedAuthorization()
+void AppleNotificationBackendTests::submitFailureKeepsObservedAuthorization()
 {
-    MacNotificationBackend backend(
-        [](MacNotificationBackend::AuthorizationResultCallback callback) {
+    AppleNotificationBackend backend(
+        [](AppleNotificationBackend::AuthorizationResultCallback callback) {
             callback(true, QString());
         },
         [](const QString&, const QString&, bool, NotificationBackend::DeliveryCallback callback) {
@@ -107,18 +107,18 @@ void MacNotificationBackendTests::submitFailureKeepsObservedAuthorization()
     QVERIFY(backend.isAuthorized());
 }
 
-void MacNotificationBackendTests::foregroundNotificationsStillShowBannerAndPlaySound()
+void AppleNotificationBackendTests::foregroundNotificationsStillShowBannerAndPlaySound()
 {
     // 阶段结束时应用默认会先把窗口拉到前台再发通知。系统对前台应用的通知默认静默，
     // 而投递回调照样报成功、本地提示音也就不补——整个提醒无声无息。
     // 这里直接调用委托的 willPresent 方法，确认前台也要求横幅和声音。
-    const MacNotificationBackend::ForegroundPresentation presentation =
-        MacNotificationBackend::foregroundPresentationForTesting();
+    const AppleNotificationBackend::ForegroundPresentation presentation =
+        AppleNotificationBackend::foregroundPresentationForTesting();
     QVERIFY(presentation.handled);
     QVERIFY(presentation.banner);
     QVERIFY(presentation.list);
     QVERIFY(presentation.sound);
 }
 
-QTEST_APPLESS_MAIN(MacNotificationBackendTests)
-#include "MacNotificationBackendTests.moc"
+QTEST_APPLESS_MAIN(AppleNotificationBackendTests)
+#include "AppleNotificationBackendTests.moc"
