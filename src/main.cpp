@@ -187,8 +187,9 @@ int main(int argc, char *argv[])
     // 移动端的进程常在后台被系统结束，并非用户想暂停，同一次开机内按单调时钟补算；
     // 番茄段在后台到期时只做离线结算（不自动衔接、不补发提醒）。
     FocusTimer::instance()->setRecoveryPolicy(FocusTimer::RecoveryPolicy::CatchUpOffline);
-    // 自由计时与主动休息没有到点时刻，后台无法预约提醒，验证期只开放番茄。
-    FocusTimer::instance()->setFreeTimingAllowed(false);
+    // iPad 开放自由计时（用户的主要用法），被系统结束后同样按上面的策略补回离线时段。
+    // 主动休息暂不开放：050 计划没有这个需求，入口隐藏、服务层拒绝。
+    FocusTimer::instance()->setManualRestAllowed(false);
     GuiApplicationActivity applicationActivity(SystemMonotonicClock::instance());
     FocusTimer::instance()->setApplicationActivity(&applicationActivity);
     // 离开前台时补写一次检查点。锚点在开始、暂停、继续时已经落盘，这里只是让最后的进度更新鲜。

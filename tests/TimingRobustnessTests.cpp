@@ -112,11 +112,14 @@ private slots:
     void relaunchWithoutBootIdCatchesUpWhenClocksAgree();
     void rebootWithoutBootIdIsDetectedByClockDisagreement();
     void wallClockChangedWhileAwayRestoresPaused();
-    void freeFocusIsNotCaughtUpAfterRelaunch();
+    void freeFocusIsCaughtUpAfterRelaunch();
+    void freeFocusAfterRebootRestoresPaused();
+    void manualRestIsNotCaughtUpAfterRelaunch();
     void shutdownOnCatchUpKeepsRunningAnchor();
     void pausePersistFailureKeepsRunningAndAnchor();
     void resumePersistFailureStaysPaused();
-    void freeTimingDisallowedRejectsFreeAndManualRest();
+    void freeTimingDisallowedRejectsOnlyFreeFocus();
+    void manualRestDisallowedRejectsOnlyManualRest();
 
 private:
     void tick() { QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection)); }
@@ -158,6 +161,7 @@ void TimingRobustnessTests::cleanup()
     FocusTimer::instance()->setRecoveryPolicy(FocusTimer::RecoveryPolicy::PauseOnRestore);
     FocusTimer::instance()->setApplicationActivity(nullptr);
     FocusTimer::instance()->setFreeTimingAllowed(true);
+    FocusTimer::instance()->setManualRestAllowed(true);
     DatabaseManager::instance()->close();
     delete m_tempDir;
     m_tempDir = nullptr;
@@ -577,18 +581,62 @@ void TimingRobustnessTests::wallClockChangedWhileAwayRestoresPaused()
     QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 5 * 60);
 }
 
-void TimingRobustnessTests::freeFocusIsNotCaughtUpAfterRelaunch()
+void TimingRobustnessTests::freeFocusIsCaughtUpAfterRelaunch()
 {
     useMobilePolicy();
-    const int taskId = insertTask(QStringLiteral("自由计时不补算"));
-    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("自由计时不补算")));
+    const int taskId = insertTask(QStringLiteral("自由计时补算"));
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("自由计时补算")));
+    m_clock.advanceSecs(4 * 60);
+    tick();
+
+    // 开着自由计时切到别的应用学习，期间系统回收了进程。
+    m_activity.goBackground();
+    simulateProcessKilled();
+    m_clock.advanceSecs(8 * 60 * 60);
+    m_activity.comeForeground();
+    QVERIFY(FocusTimer::instance()->restoreInterruptedSession());
+    // 被系统结束不等于用户想停：同一次开机内补回离开的 8 小时并继续计时，
+    // 与应用只被挂起时的结果一致。
+    QCOMPARE(FocusTimer::instance()->isRunning(), true);
+    QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 4 * 60 + 8 * 60 * 60);
+    // 忘了停表的兜底：超过默认 8 小时，结束前界面会要求确认或改短。
+    QVERIFY(FocusTimer::instance()->requiresFreeFocusStopConfirmation(8));
+
+    m_clock.advanceSecs(60);
+    tick();
+    QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 4 * 60 + 8 * 60 * 60 + 60);
+}
+
+void TimingRobustnessTests::freeFocusAfterRebootRestoresPaused()
+{
+    useMobilePolicy();
+    m_clock.boot.clear();
+    const int taskId = insertTask(QStringLiteral("自由计时遇重启"));
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("自由计时遇重启")));
+    m_clock.advanceSecs(6 * 60);
+    tick();
+
+    simulateProcessKilled();
+    // 设备重启：墙钟照常过了 20 分钟，单调时钟却从零开始，只走了开机后的 40 秒。
+    // 离开期间的时长算不准，与番茄一样只会少补、不会多记：恢复为暂停。
+    m_clock.utcMs += 20 * 60 * 1000;
+    m_clock.ns = 40LL * 1000000000LL;
+    QVERIFY(FocusTimer::instance()->restoreInterruptedSession());
+    QCOMPARE(FocusTimer::instance()->isRunning(), false);
+    QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 6 * 60);
+}
+
+void TimingRobustnessTests::manualRestIsNotCaughtUpAfterRelaunch()
+{
+    useMobilePolicy();
+    QVERIFY(FocusTimer::instance()->startManualRest());
     m_clock.advanceSecs(4 * 60);
     tick();
 
     simulateProcessKilled();
     m_clock.advanceSecs(8 * 60 * 60);
     QVERIFY(FocusTimer::instance()->restoreInterruptedSession());
-    // 自由计时没有上限：补算会把忘了停表的一整晚都记进去，仍恢复为暂停。
+    // 主动休息不补算，仍按原语义恢复为暂停：这条规则只对番茄与自由计时放开。
     QCOMPARE(FocusTimer::instance()->isRunning(), false);
     QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 4 * 60);
 }
@@ -672,20 +720,34 @@ void TimingRobustnessTests::resumePersistFailureStaysPaused()
     QVERIFY(trigger.exec(QStringLiteral("DROP TRIGGER reject_state_update")));
 }
 
-void TimingRobustnessTests::freeTimingDisallowedRejectsFreeAndManualRest()
+void TimingRobustnessTests::freeTimingDisallowedRejectsOnlyFreeFocus()
 {
     FocusTimer::instance()->setFreeTimingAllowed(false);
-    const int taskId = insertTask(QStringLiteral("只开放番茄"));
+    const int taskId = insertTask(QStringLiteral("只关自由计时"));
     QSignalSpy failedSpy(FocusTimer::instance(), &FocusTimer::operationFailed);
 
-    QVERIFY(!FocusTimer::instance()->startFocus(taskId, QStringLiteral("只开放番茄")));
-    QVERIFY(!FocusTimer::instance()->startManualRest());
-    QCOMPARE(failedSpy.count(), 2);
+    QVERIFY(!FocusTimer::instance()->startFocus(taskId, QStringLiteral("只关自由计时")));
+    QCOMPARE(failedSpy.count(), 1);
     QCOMPARE(countFocusSessions(), 0);
     QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM active_focus_state")), 0);
 
-    // 番茄不受影响。
-    QVERIFY(FocusTimer::instance()->startPomodoroWork(taskId, QStringLiteral("只开放番茄"), 25 * 60));
+    // 主动休息有自己的开关，不受影响（两者曾共用一个开关）。
+    QVERIFY(FocusTimer::instance()->startManualRest());
+}
+
+void TimingRobustnessTests::manualRestDisallowedRejectsOnlyManualRest()
+{
+    // iPad 的配置：主动休息关、自由计时开。
+    FocusTimer::instance()->setManualRestAllowed(false);
+    const int taskId = insertTask(QStringLiteral("只关主动休息"));
+    QSignalSpy failedSpy(FocusTimer::instance(), &FocusTimer::operationFailed);
+
+    QVERIFY(!FocusTimer::instance()->startManualRest());
+    QCOMPARE(failedSpy.count(), 1);
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM active_focus_state")), 0);
+
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("只关主动休息")));
+    QCOMPARE(failedSpy.count(), 1);
 }
 
 QTEST_MAIN(TimingRobustnessTests)

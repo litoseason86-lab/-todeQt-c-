@@ -5,7 +5,8 @@ import "../../qml/views"
 import "../../qml/mobile"
 
 // 移动端的界面规则：
-//   · 平台不支持自由计时时，任何「开始」入口都落到番茄；
+//   · 平台不支持自由计时时，任何「开始」入口都落到番茄；支持时照常走自由计时（iPad 现在的配置）；
+//   · 主动休息有自己的开关：iPad 开着自由计时，主动休息入口仍隐藏；
 //   · 离线结算（phaseSettledOffline）只结算这一段，打开「自动开始休息」也不会自动衔接；
 //   · 伴侣页完成正在计时的任务时顺带结束专注。
 // 每条「不会自动衔接」都配一条「正常到点会自动衔接」的对照，证明测试确实能测出差别。
@@ -152,7 +153,74 @@ TestCase {
         }
     }
 
+    // 今日任务页只要这几个桩就能加载，这里只用它核对主动休息入口看的是哪个开关。
+    QtObject {
+        id: todayTaskManagerStub
+        signal tasksChanged
+        function getTodayTasks() { return [] }
+        function getOverdueUncompletedTasks() { return [] }
+    }
+
+    QtObject {
+        id: todayStatisticsStub
+        function getTodayStats() {
+            return { totalDuration: 0, completedTasks: 0, totalTasks: 0, completionRate: 0 }
+        }
+    }
+
+    QtObject {
+        id: todayTimerStub
+        signal focusCompleted(int duration)
+        property int mode: 0
+        property int phase: 0
+        property bool hasActiveSession: false
+        property bool isRunning: false
+        property int elapsedSeconds: 0
+        property string sessionLogicalDate: ""
+        property bool freeTimingAllowed: true
+        property bool manualRestAllowed: false
+    }
+
+    QtObject {
+        id: todayRoutineStub
+        signal routinesChanged
+        function materializeToday() {}
+    }
+
+    QtObject {
+        id: todayLogicalDayStub
+        signal changed
+    }
+
+    QtObject {
+        id: todaySettingsStub
+        signal dailyFocusGoalChanged
+        property int dayStartHour: 4
+        property bool reduceMotion: true
+        property string rolloverIgnoredDate: ""
+        function dailyFocusGoalMinutesForDate(isoDate) { return 0 }
+    }
+
+    Component {
+        id: todayViewComponent
+
+        TodayTaskView {
+            width: 860
+            height: 600
+            taskManagerRef: todayTaskManagerStub
+            statisticsServiceRef: todayStatisticsStub
+            routineManagerRef: todayRoutineStub
+            focusTimerRef: todayTimerStub
+            logicalDayServiceRef: todayLogicalDayStub
+            settingsRef: todaySettingsStub
+        }
+    }
+
     function init() {
+        // 默认按「平台不支持自由计时」布置；需要开放的用例自己打开，下一条用例开始前复位。
+        timerStub.freeTimingAllowed = false
+        todayTimerStub.freeTimingAllowed = true
+        todayTimerStub.manualRestAllowed = false
         timerStub.isRunning = false
         timerStub.hasActiveSession = false
         timerStub.currentTaskId = -1
@@ -185,6 +253,32 @@ TestCase {
         timerStub.stopFocus()
         view.toPomodoroTab(false)
         compare(view.pomodoroModeSelected, true)
+    }
+
+    // 对照：平台开放自由计时（iPad 现在的配置）时，记住的「自由」模式照常走自由计时，
+    // 证明上一条用例测出的是开关的作用，而不是专注页总会落到番茄。
+    function test_focusViewStartsFreeFocusWhenFreeTimingAllowed() {
+        timerStub.freeTimingAllowed = true
+        var view = createTemporaryObject(focusViewComponent, testCase)
+        verify(view !== null)
+        compare(view.freeModeAvailable, true)
+        compare(view.pomodoroModeSelected, false)
+
+        view.openTask(7, "验收自由计时", false, true)
+        compare(timerStub.startFocusCalls, 1)
+        compare(timerStub.startPomodoroCalls, 0)
+    }
+
+    // iPad 的配置：自由计时开着、主动休息关着。主动休息入口必须看它自己的开关，
+    // 不能因为自由计时开放了就跟着出现（两者曾共用一个开关）。
+    function test_todayManualRestFollowsItsOwnSwitch() {
+        var view = createTemporaryObject(todayViewComponent, testCase)
+        verify(view !== null)
+        compare(view.manualRestAvailable, false)
+
+        // 对照：只打开主动休息的开关，入口随之可用。
+        todayTimerStub.manualRestAllowed = true
+        compare(view.manualRestAvailable, true)
     }
 
     function test_focusViewDoesNotAutoAdvanceAfterOfflineSettlement() {

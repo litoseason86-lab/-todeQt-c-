@@ -15,7 +15,7 @@ Item {
     property var taskManagerRef: null
     property var knowledgeGapServiceRef: null
     property string taskNotes: ""
-    // 平台是否支持自由计时。移动端验证期只开放番茄：服务层会拒绝自由计时，
+    // 平台是否支持自由计时。平台关闭它时服务层会拒绝自由计时，
     // 这里把所有「选模式」的入口都落到番茄，并隐藏模式切换，界面不出现点了必失败的选项。
     // 测试桩没有这个属性时按支持处理（=== false 才算关闭）。
     readonly property bool freeModeAvailable: !(root.timer && root.timer.freeTimingAllowed === false)

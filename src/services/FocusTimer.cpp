@@ -149,6 +149,20 @@ bool FocusTimer::freeTimingAllowed() const
     return m_freeTimingAllowed;
 }
 
+void FocusTimer::setManualRestAllowed(bool allowed)
+{
+    if (m_manualRestAllowed == allowed) {
+        return;
+    }
+    m_manualRestAllowed = allowed;
+    emit manualRestAllowedChanged();
+}
+
+bool FocusTimer::manualRestAllowed() const
+{
+    return m_manualRestAllowed;
+}
+
 quint64 FocusTimer::runSegmentSerial() const
 {
     return m_runSegmentSerial;
@@ -193,8 +207,8 @@ bool FocusTimer::startBreakForTask(int breakSeconds, int taskId, const QString& 
 
 bool FocusTimer::startManualRest()
 {
-    // 主动休息是没有目标的正计时，移动端在后台无法预约到点提醒，验证期不开放。
-    if (!m_freeTimingAllowed) {
+    // 平台不开放主动休息时（目前是 iPad）服务层兜底拒绝，与界面隐藏入口同一个开关。
+    if (!m_manualRestAllowed) {
         qWarning() << "Failed to start manual rest: free timing is disabled on this platform";
         emit operationFailed(QStringLiteral("这台设备暂时不支持主动休息"));
         return false;
@@ -1133,10 +1147,12 @@ bool FocusTimer::restoreInterruptedSession()
     m_runSegmentStartUtcMs = -1;
     m_timer.stop();
 
-    // 移动端：同一次开机内被结束的番茄段，按单调时钟补回离线时段并继续计时。
-    // 已经到期的段由第一次 tick 走离线结算——与「挂起后回到前台」是同一条路径。
-    // 只有番茄（专注与休息）补算：它有到点时刻、有系统预约的提醒；自由计时与主动休息
-    // 没有上限，补算会把忘了停表的一整晚都记进去，仍按原语义恢复为暂停。
+    // 移动端：同一次开机内被结束的番茄段与自由计时，按单调时钟补回离线时段并继续计时。
+    // 已经到期的番茄段由第一次 tick 走离线结算——与「挂起后回到前台」是同一条路径。
+    // 自由计时也补算：应用只是被挂起时，离开的时间本来就照算（单调时钟一直在走）；
+    // 被系统结束后若不补，同一段学习时间会因为系统回收了进程而丢掉，两种情况结果不一致。
+    // 忘了停表记进去的长时间，由结束时的超长确认兜底（默认超过 8 小时先确认或改短）。
+    // 主动休息不补算，仍按原语义恢复为暂停（它在 iPad 上也不开放）。
     //
     // 「是不是同一次开机」怎么判断：单调时钟的读数只在同一次开机内可比。iOS 沙盒不允许读取
     // 开机会话标识（真机实测 sysctl kern.bootsessionuuid 返回失败），所以改为对账——
@@ -1146,7 +1162,7 @@ bool FocusTimer::restoreInterruptedSession()
     // 两边都读得到开机标识（例如 macOS）时，标识不同同样视为换过开机。
     bool resumedRunning = false;
     if (m_recoveryPolicy == RecoveryPolicy::CatchUpOffline
-        && (isPomodoroWork || isPomodoroBreak)
+        && (isPomodoroWork || isPomodoroBreak || isFreeFocus)
         && restoredRunning && restoredHasSegmentStart && restoredHasWallStart
         && restoredAccumulatedMs >= 0) {
         const QString currentBootId = m_clock->bootSessionId();

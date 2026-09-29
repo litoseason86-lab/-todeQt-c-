@@ -26,8 +26,10 @@ class FocusTimer : public QObject
     Q_PROPERTY(int completedPomodoros READ completedPomodoros NOTIFY completedPomodorosChanged)
     // 会话归属日由开始时刻与当前逻辑日边界共同决定，页面用它避免跨日重复累加。
     Q_PROPERTY(QString sessionLogicalDate READ sessionLogicalDate NOTIFY sessionLogicalDateChanged)
-    // 自由计时与主动休息是否可用。移动端验证期只开放番茄，界面据此隐藏入口。
+    // 平台是否开放自由计时、主动休息。两者分开控制：iPad 开放自由计时，主动休息暂不开放。
+    // 界面据此隐藏点了必失败的入口，服务层另有兜底拒绝。
     Q_PROPERTY(bool freeTimingAllowed READ freeTimingAllowed NOTIFY freeTimingAllowedChanged)
+    Q_PROPERTY(bool manualRestAllowed READ manualRestAllowed NOTIFY manualRestAllowedChanged)
 
 public:
     enum TimerMode : int {
@@ -52,7 +54,7 @@ public:
         // 桌面：退出是用户的选择，恢复为暂停、不补离线时段（原有语义）。
         PauseOnRestore,
         // 移动端：进程常在后台被系统结束，并非用户想暂停。同一次开机内按单调时钟
-        // 补回离线时段并继续计时；番茄段若已在后台到期，只做离线结算。
+        // 补回离线时段并继续计时（番茄与自由计时）；番茄段若已在后台到期，只做离线结算。
         CatchUpOffline
     };
 
@@ -65,6 +67,8 @@ public:
     void setApplicationActivity(const ApplicationActivity* activity);
     void setFreeTimingAllowed(bool allowed);
     bool freeTimingAllowed() const;
+    void setManualRestAllowed(bool allowed);
+    bool manualRestAllowed() const;
     // 每开始一段新的运行（开始、继续、恢复为运行）加一。系统通知预约据此判断
     // 「还是不是同一段运行」：段变了，到点时刻就变了，旧预约必须作废。
     quint64 runSegmentSerial() const;
@@ -91,7 +95,7 @@ public:
     Q_INVOKABLE void resetPomodoroCount();
 
     // 数据库初始化后调用。默认（桌面）把中断的会话恢复为暂停状态，关闭应用期间不会被误算为专注时间；
-    // CatchUpOffline 策略下，同一次开机内被结束的番茄段改为按单调时钟补回离线时段并继续计时。
+    // CatchUpOffline 策略下，同一次开机内被结束的番茄段与自由计时改为按单调时钟补回离线时段并继续计时。
     bool restoreInterruptedSession();
     // 应用退出前同步单调时钟到数据库；不结束会话，下一次启动仍可继续。
     void prepareForShutdown();
@@ -125,6 +129,7 @@ signals:
     // 只结算这一段：界面不得据此自动开始下一阶段，也不补发系统通知（预约的通知已按时投递）。
     void phaseSettledOffline(int phase);
     void freeTimingAllowedChanged();
+    void manualRestAllowedChanged();
     void sessionDiscarded(int duration);
     void completedPomodorosChanged();
     void sessionLogicalDateChanged();
@@ -205,6 +210,7 @@ private:
     RecoveryPolicy m_recoveryPolicy = RecoveryPolicy::PauseOnRestore;
     const ApplicationActivity* m_activity = nullptr;
     bool m_freeTimingAllowed = true;
+    bool m_manualRestAllowed = true;
     quint64 m_runSegmentSerial = 0;
 };
 
