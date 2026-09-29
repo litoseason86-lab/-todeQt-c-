@@ -1,5 +1,5 @@
-#ifndef MACNOTIFICATIONBACKEND_H
-#define MACNOTIFICATIONBACKEND_H
+#ifndef APPLENOTIFICATIONBACKEND_H
+#define APPLENOTIFICATIONBACKEND_H
 
 #include "../../services/NotificationService.h"
 
@@ -9,7 +9,7 @@
 
 // UNUserNotificationCenter 后端。头文件保持纯 C++，可被 main.cpp 直接包含；
 // ObjC 细节都在 .mm 里。授权状态由异步回调写入、投递时读取，故用原子量。
-class MacNotificationBackend : public NotificationBackend
+class AppleNotificationBackend : public NotificationBackend
 {
 public:
     using AuthorizationResultCallback = std::function<void(bool allowed, const QString& error)>;
@@ -20,10 +20,10 @@ public:
                                                       bool playSound,
                                                       DeliveryCallback callback)>;
 
-    MacNotificationBackend();
-    MacNotificationBackend(AuthorizationQuery authorizationQuery,
+    AppleNotificationBackend();
+    AppleNotificationBackend(AuthorizationQuery authorizationQuery,
                            NotificationSubmitter notificationSubmitter);
-    ~MacNotificationBackend() override;
+    ~AppleNotificationBackend() override;
 
     void deliver(const QString& title,
                  const QString& body,
@@ -61,4 +61,4 @@ private:
     NotificationSubmitter m_notificationSubmitter;
 };
 
-#endif // MACNOTIFICATIONBACKEND_H
+#endif // APPLENOTIFICATIONBACKEND_H

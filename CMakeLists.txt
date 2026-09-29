@@ -143,7 +143,7 @@ set(APP_SOURCES
 
 if(NOT IOS)
     # 只在 macOS 存在的能力：单实例守卫（本地 socket 召回窗口）、外部 AI 接入的主应用侧、
-    # 菜单栏、系统通知后端、全局热键与偏好域清理。iOS 由系统保证单实例，
+    # 菜单栏、全局热键与偏好域清理。iOS 由系统保证单实例，
     # 也没有外部进程能连进来，这些源码整体不编入；main.cpp 里的装配用 Q_OS_MACOS 同步圈住。
     list(APPEND APP_SOURCES
         src/services/SingleInstanceGuard.h
@@ -161,8 +161,6 @@ if(NOT IOS)
         src/mcp/bridge/McpCreateRegistry.cpp
         src/platform/macos/MacStatusBarController.h
         src/platform/macos/MacStatusBarController.mm
-        src/platform/macos/MacNotificationBackend.h
-        src/platform/macos/MacNotificationBackend.mm
         src/platform/macos/MacGlobalHotkeyBackend.h
         src/platform/macos/MacGlobalHotkeyBackend.mm
         src/platform/macos/MacPreferencesCleanup.h
@@ -176,16 +174,15 @@ if(NOT IOS)
     list(APPEND APP_SOURCES "${APP_ICON}")
 endif()
 
-if(IOS)
-    # UserNotifications 在 iOS 上是同一套接口，通知后端直接复用 macOS 目录里的实现。
-    list(APPEND APP_SOURCES
-        src/platform/macos/MacNotificationBackend.h
-        src/platform/macos/MacNotificationBackend.mm
-    )
-    set_source_files_properties(src/platform/macos/MacNotificationBackend.mm
-        PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
-    )
-endif()
+# macOS 与 iOS 共用的 Apple 框架实现放在 src/platform/apple：UserNotifications 在两个平台上
+# 是同一套接口，系统通知后端只写一份。它的 ObjC++ 部分用 ARC 管理 Cocoa 对象的生命周期。
+list(APPEND APP_SOURCES
+    src/platform/apple/AppleNotificationBackend.h
+    src/platform/apple/AppleNotificationBackend.mm
+)
+set_source_files_properties(src/platform/apple/AppleNotificationBackend.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+)
 
 if(IOS)
     # iOS 上的 Qt 是静态库：平台插件和 QML 插件要靠 Qt 的收尾步骤扫描导入并链接进来，
@@ -197,12 +194,11 @@ else()
     add_executable(PomodoroTodo ${APP_SOURCES})
 endif()
 
-# 菜单栏/通知的 ObjC++ 后端用 ARC 管理 Cocoa 对象生命周期。
+# 菜单栏的 ObjC++ 后端用 ARC 管理 Cocoa 对象生命周期（通知后端在上方共用清单里设置）。
 # 全局热键后端只调 Carbon 的 C 接口、不持有 ObjC 对象，一并开 ARC 保持编译选项一致。
 if(NOT IOS)
     set_source_files_properties(
         src/platform/macos/MacStatusBarController.mm
-        src/platform/macos/MacNotificationBackend.mm
         src/platform/macos/MacGlobalHotkeyBackend.mm
         src/platform/macos/MacPreferencesCleanup.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
@@ -651,23 +647,23 @@ pomodoro_todo_enable_warnings(PlatformControlTests)
 add_test(NAME PlatformControlTests COMMAND PlatformControlTests)
 
 # 原生通知授权的状态查询可由 fake 注入，测试不访问系统通知中心或弹授权框。
-add_executable(MacNotificationBackendTests
-    tests/MacNotificationBackendTests.cpp
+add_executable(AppleNotificationBackendTests
+    tests/AppleNotificationBackendTests.cpp
     src/services/NotificationService.h
     src/services/NotificationService.cpp
-    src/platform/macos/MacNotificationBackend.h
-    src/platform/macos/MacNotificationBackend.mm
+    src/platform/apple/AppleNotificationBackend.h
+    src/platform/apple/AppleNotificationBackend.mm
 )
 
-target_link_libraries(MacNotificationBackendTests PRIVATE
+target_link_libraries(AppleNotificationBackendTests PRIVATE
     Qt6::Core
     Qt6::Test
     "-framework Foundation"
     "-framework UserNotifications"
 )
 
-pomodoro_todo_enable_warnings(MacNotificationBackendTests)
-add_test(NAME MacNotificationBackendTests COMMAND MacNotificationBackendTests)
+pomodoro_todo_enable_warnings(AppleNotificationBackendTests)
+add_test(NAME AppleNotificationBackendTests COMMAND AppleNotificationBackendTests)
 
 # 偏好清理直接读写 CoreFoundation 偏好：用例只写按进程号命名的临时偏好域，结束时删掉，
 # 系统全局域只读不写。
@@ -1130,7 +1126,7 @@ set_tests_properties(
     QmlResourceManifestTests
     McpProtocolTests
     McpHelperLinkGate
-    MacNotificationBackendTests
+    AppleNotificationBackendTests
     MacPreferencesCleanupTests
     MacGlobalHotkeyTests
     PROPERTIES TIMEOUT 30

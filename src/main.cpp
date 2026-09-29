@@ -44,19 +44,19 @@
 #include "mcp/bridge/McpToolDispatcher.h"
 
 #include "platform/macos/MacGlobalHotkeyBackend.h"
-#include "platform/macos/MacNotificationBackend.h"
 #include "platform/macos/MacPreferencesCleanup.h"
 #include "platform/macos/MacStatusBarController.h"
 #endif
 
+// 系统通知后端两个平台共用：UserNotifications 在 macOS 与 iOS 上是同一套接口。
+#include "platform/apple/AppleNotificationBackend.h"
+
 // iOS：计时恢复策略、前后台来源与系统预约通知。
-// UserNotifications 在 iOS 上是同一套接口，通知后端直接复用 macOS 目录里的实现。
 #if defined(Q_OS_IOS)
 #include <QScreen>
 #include "services/ApplicationActivity.h"
 #include "services/MonotonicClock.h"
 #include "services/PhaseAlarmCoordinator.h"
-#include "platform/macos/MacNotificationBackend.h"
 
 namespace {
 // 手机用随身伴侣页，平板用完整界面。启动时还没有窗口，只能按屏幕判定：
@@ -267,7 +267,7 @@ int main(int argc, char *argv[])
 
 #endif
 #if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
-    MacNotificationBackend notificationBackend;
+    AppleNotificationBackend notificationBackend;
     NotificationService::instance()->setBackend(&notificationBackend);
 #endif
 #if defined(Q_OS_IOS)

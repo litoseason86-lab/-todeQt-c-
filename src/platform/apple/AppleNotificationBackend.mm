@@ -1,4 +1,4 @@
-#import "MacNotificationBackend.h"
+#import "AppleNotificationBackend.h"
 
 #import <Foundation/Foundation.h>
 #import <UserNotifications/UserNotifications.h>
@@ -31,19 +31,19 @@
 @end
 
 namespace {
-MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery();
-MacNotificationBackend::NotificationSubmitter makeNotificationSubmitter();
+AppleNotificationBackend::AuthorizationQuery makeAuthorizationQuery();
+AppleNotificationBackend::NotificationSubmitter makeNotificationSubmitter();
 void installForegroundPresentationDelegate();
 }
 
-MacNotificationBackend::MacNotificationBackend()
-    : MacNotificationBackend(makeAuthorizationQuery(), makeNotificationSubmitter())
+AppleNotificationBackend::AppleNotificationBackend()
+    : AppleNotificationBackend(makeAuthorizationQuery(), makeNotificationSubmitter())
 {
     // 只有生产用的默认构造才接管系统通知中心；注入假实现的测试构造不碰系统对象。
     installForegroundPresentationDelegate();
 }
 
-MacNotificationBackend::ForegroundPresentation MacNotificationBackend::foregroundPresentationForTesting()
+AppleNotificationBackend::ForegroundPresentation AppleNotificationBackend::foregroundPresentationForTesting()
 {
     // __block：block 默认按值捕获局部变量，不加这个修饰就写不回 result。
     __block ForegroundPresentation result;
@@ -64,7 +64,7 @@ MacNotificationBackend::ForegroundPresentation MacNotificationBackend::foregroun
     return result;
 }
 
-MacNotificationBackend::MacNotificationBackend(AuthorizationQuery authorizationQuery,
+AppleNotificationBackend::AppleNotificationBackend(AuthorizationQuery authorizationQuery,
                                                NotificationSubmitter notificationSubmitter)
     : m_authState(std::make_shared<std::atomic<int>>(0))
     , m_authorizationQuery(std::move(authorizationQuery))
@@ -72,7 +72,7 @@ MacNotificationBackend::MacNotificationBackend(AuthorizationQuery authorizationQ
 {
 }
 
-MacNotificationBackend::~MacNotificationBackend() = default;
+AppleNotificationBackend::~AppleNotificationBackend() = default;
 
 namespace {
 // UNUserNotificationCenter 只在有合法 bundle 标识（正常打包/签名）时可用；否则
@@ -103,9 +103,9 @@ void installForegroundPresentationDelegate()
     center.delegate = delegate;
 }
 
-MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery()
+AppleNotificationBackend::AuthorizationQuery makeAuthorizationQuery()
 {
-    return [](MacNotificationBackend::AuthorizationResultCallback callback) {
+    return [](AppleNotificationBackend::AuthorizationResultCallback callback) {
         UNUserNotificationCenter* center = safeNotificationCenter();
         if (center == nil) {
             callback(false, QStringLiteral("系统通知中心不可用"));
@@ -113,7 +113,7 @@ MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery()
         }
 
         const auto completion =
-            std::make_shared<MacNotificationBackend::AuthorizationResultCallback>(std::move(callback));
+            std::make_shared<AppleNotificationBackend::AuthorizationResultCallback>(std::move(callback));
         [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings* settings) {
             const bool allowed = settings.authorizationStatus == UNAuthorizationStatusAuthorized
                 || settings.authorizationStatus == UNAuthorizationStatusProvisional;
@@ -122,7 +122,7 @@ MacNotificationBackend::AuthorizationQuery makeAuthorizationQuery()
     };
 }
 
-MacNotificationBackend::NotificationSubmitter makeNotificationSubmitter()
+AppleNotificationBackend::NotificationSubmitter makeNotificationSubmitter()
 {
     return [](const QString& title,
               const QString& body,
@@ -162,7 +162,7 @@ MacNotificationBackend::NotificationSubmitter makeNotificationSubmitter()
 }
 }
 
-void MacNotificationBackend::requestAuthorization()
+void AppleNotificationBackend::requestAuthorization()
 {
     UNUserNotificationCenter* center = safeNotificationCenter();
     if (center == nil) {
@@ -182,12 +182,12 @@ void MacNotificationBackend::requestAuthorization()
     }];
 }
 
-bool MacNotificationBackend::isAuthorized() const
+bool AppleNotificationBackend::isAuthorized() const
 {
     return m_authState->load() != 2;
 }
 
-void MacNotificationBackend::deliver(const QString& title,
+void AppleNotificationBackend::deliver(const QString& title,
                                      const QString& body,
                                      bool playSound,
                                      DeliveryCallback callback)
@@ -223,7 +223,7 @@ void MacNotificationBackend::deliver(const QString& title,
     });
 }
 
-void MacNotificationBackend::schedule(const QString& id,
+void AppleNotificationBackend::schedule(const QString& id,
                                       int fireAfterSeconds,
                                       const QString& title,
                                       const QString& body,
@@ -275,7 +275,7 @@ void MacNotificationBackend::schedule(const QString& id,
     }];
 }
 
-void MacNotificationBackend::cancelScheduled(const QString& prefix,
+void AppleNotificationBackend::cancelScheduled(const QString& prefix,
                                              const QString& keepId,
                                              ScheduleCallback callback)
 {
@@ -305,7 +305,7 @@ void MacNotificationBackend::cancelScheduled(const QString& prefix,
     }];
 }
 
-void MacNotificationBackend::logScheduledNotifications(const QString& prefix)
+void AppleNotificationBackend::logScheduledNotifications(const QString& prefix)
 {
     UNUserNotificationCenter* center = safeNotificationCenter();
     if (center == nil) {

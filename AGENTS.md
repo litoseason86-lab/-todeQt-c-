@@ -32,8 +32,8 @@
 
 ## 代码质量规则
 
-- 保持当前项目分层：`src/services`、`src/models`、`src/mcp`、`src/platform/macos`、`src/platform/ios`、`qml`、`tests` 的职责不要混杂。
-- iOS 专属代码（系统框架调用、生命周期、打包配置）放 `src/platform/ios`；菜单栏、全局热键、外部 AI 接入这些只在 macOS 存在的能力，优先由 `CMakeLists.txt` 按平台排除源码，业务服务里尽量不新增平台判断（`PhaseSoundService` 的提示音分支是既有例外）。
+- 保持当前项目分层：`src/services`、`src/models`、`src/mcp`、`src/platform/macos`、`src/platform/ios`、`src/platform/apple`、`qml`、`tests` 的职责不要混杂。
+- iOS 专属代码（系统框架调用、生命周期、打包配置）放 `src/platform/ios`；macOS 与 iOS 共用、接口相同的 Apple 框架实现（目前是系统通知后端）放 `src/platform/apple`，不从另一个平台的目录里借用源码；菜单栏、全局热键、外部 AI 接入这些只在 macOS 存在的能力，优先由 `CMakeLists.txt` 按平台排除源码，业务服务里尽量不新增平台判断（`PhaseSoundService` 的提示音分支是既有例外）。
 - 外部 AI 接入的辅助程序（`src/mcp/helper`）只做协议与转发，不得链接业务服务、SQL 或 QML；权限判断与读写都在主应用内完成，`McpHelperLinkGate` 会检查链接结果。
 - 修改功能后要运行相关构建和测试，再报告结果。
 - 后台测试和自动验证不得弹出应用窗口；Qt/QML 测试默认使用 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic`。不要在自动流程里执行 `open /Applications/番茄Todo.app`、`open build/*.app` 或其他会拉起 GUI 窗口的命令，除非用户本轮明确要求做人工真机视觉验收。
