@@ -45,6 +45,9 @@ ApplicationWindow {
     minimumHeight: 620
     title: mainContent.windowTitleText
     color: Theme.surface
+    // iOS：让窗口延伸到状态栏与底部横条之下，壁纸铺满整屏，内容由 MainWindow 按 SafeArea 让开。
+    // 不加这个标志时系统把窗口限制在安全区内，屏幕上下会各留一条黑边。桌面保持默认的 Qt.Window。
+    flags: Qt.platform.os === "ios" ? (Qt.Window | Qt.ExpandedClientAreaHint) : Qt.Window
 
     MainWindow {
         id: mainContent
@@ -270,6 +273,33 @@ ApplicationWindow {
         }
     }
 
+    // 移动端：番茄在后台到期、回来后才结算。只说明发生了什么，不自动开始下一阶段，
+    // 也不再弹系统通知（预约的通知已经按时提醒过）。
+    Connections {
+        // qmllint disable unqualified
+        target: typeof focusTimer === "undefined" ? null : focusTimer
+        // qmllint enable unqualified
+        ignoreUnknownSignals: true
+
+        function onPhaseSettledOffline(phase) {
+            mainContent.showToast(phase === 1 ? qsTr("离开期间番茄已到点，已记为完成")
+                                              : qsTr("离开期间休息已结束"))
+        }
+    }
+
+    // 移动端：到点提醒没能交给系统预约（多半是没开通知权限）。应用不在前台时就不会有任何提醒，
+    // 必须在前台说清楚。桌面没有这个对象，连接为空。
+    Connections {
+        // qmllint disable unqualified
+        target: typeof phaseAlarmCoordinator === "undefined" ? null : phaseAlarmCoordinator
+        // qmllint enable unqualified
+        ignoreUnknownSignals: true
+
+        function onAlarmUnavailable(reason) {
+            mainContent.showToast(qsTr("到点提醒没有预约成功（%1），离开应用后不会提醒").arg(reason))
+        }
+    }
+
     PhaseCompletionCoordinator {
         windowRef: root
         // 运行时上下文属性由 main.cpp 注入，独立协调器只消费引用，不持有服务生命周期。
@@ -288,6 +318,14 @@ ApplicationWindow {
         target: typeof notificationService === "undefined" ? null : notificationService
         // qmllint enable unqualified
         ignoreUnknownSignals: true
+
+        // 移动端没有提示音后端，系统通知又发不出去时，只能在前台给出可见提示。
+        // 桌面照旧由 PhaseCompletionCoordinator 播放提示音降级，不重复弹提示条。
+        function onNotificationDeliveryFailed(reason) {
+            if (Qt.platform.os === "ios") {
+                mainContent.showToast(qsTr("系统通知没有发出（%1）").arg(reason))
+            }
+        }
 
         function onNotificationDelivered(title) {
             // 只有系统真正接收了首次隐藏通知，才永久关闭这条教育提示。

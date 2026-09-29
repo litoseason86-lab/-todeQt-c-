@@ -222,3 +222,129 @@ void MacNotificationBackend::deliver(const QString& title,
         });
     });
 }
+
+void MacNotificationBackend::schedule(const QString& id,
+                                      int fireAfterSeconds,
+                                      const QString& title,
+                                      const QString& body,
+                                      bool playSound,
+                                      ScheduleCallback callback)
+{
+    UNUserNotificationCenter* center = safeNotificationCenter();
+    if (center == nil) {
+        callback(false, QStringLiteral("系统通知中心不可用"));
+        return;
+    }
+
+    NSString* identifier = [id.toNSString() copy];
+    NSString* notificationTitle = [title.toNSString() copy];
+    NSString* notificationBody = [body.toNSString() copy];
+    // 系统要求触发间隔大于 0；到点已过的段不会走到这里（协调器只预约剩余时间大于 0 的段）。
+    const NSTimeInterval interval = static_cast<NSTimeInterval>(qMax(1, fireAfterSeconds));
+    const std::shared_ptr<std::atomic<int>> state = m_authState;
+    const auto completion = std::make_shared<ScheduleCallback>(std::move(callback));
+
+    // 先查权限再预约：权限被拒时系统照样接受预约请求、只是到点不显示。若把那当成成功，
+    // 进程内会以为「已由预约覆盖」而不再即时提醒，用户最后什么提醒都收不到。
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings* settings) {
+        const bool allowed = settings.authorizationStatus == UNAuthorizationStatusAuthorized
+            || settings.authorizationStatus == UNAuthorizationStatusProvisional;
+        state->store(allowed ? 1 : 2);
+        if (!allowed) {
+            (*completion)(false, QStringLiteral("系统通知权限不可用"));
+            return;
+        }
+
+        UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
+        content.title = notificationTitle;
+        content.body = notificationBody;
+        content.sound = playSound ? [UNNotificationSound defaultSound] : nil;
+        UNTimeIntervalNotificationTrigger* trigger =
+            [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:interval repeats:NO];
+        UNNotificationRequest* request =
+            [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger];
+        [center addNotificationRequest:request
+                 withCompletionHandler:^(NSError* _Nullable error) {
+            if (error != nil) {
+                qWarning() << "预约通知失败:" << QString::fromNSString(error.localizedDescription);
+                (*completion)(false, QString::fromNSString(error.localizedDescription));
+                return;
+            }
+            (*completion)(true, QString());
+        }];
+    }];
+}
+
+void MacNotificationBackend::cancelScheduled(const QString& prefix,
+                                             const QString& keepId,
+                                             ScheduleCallback callback)
+{
+    UNUserNotificationCenter* center = safeNotificationCenter();
+    if (center == nil) {
+        callback(false, QStringLiteral("系统通知中心不可用"));
+        return;
+    }
+
+    NSString* idPrefix = [prefix.toNSString() copy];
+    NSString* keep = keepId.isEmpty() ? nil : [keepId.toNSString() copy];
+    const auto completion = std::make_shared<ScheduleCallback>(std::move(callback));
+    // 系统只提供「按 id 删除」，所以先取待投递列表、按前缀挑出自己的，再一次性删除。
+    // 调用方保证上一步预约的完成回调已经返回，那条预约此时一定在列表里。
+    [center getPendingNotificationRequestsWithCompletionHandler:^(NSArray<UNNotificationRequest*>* requests) {
+        NSMutableArray<NSString*>* identifiers = [NSMutableArray array];
+        for (UNNotificationRequest* request in requests) {
+            if ([request.identifier hasPrefix:idPrefix]
+                && (keep == nil || ![request.identifier isEqualToString:keep])) {
+                [identifiers addObject:request.identifier];
+            }
+        }
+        if (identifiers.count > 0) {
+            [center removePendingNotificationRequestsWithIdentifiers:identifiers];
+        }
+        (*completion)(true, QString());
+    }];
+}
+
+void MacNotificationBackend::logScheduledNotifications(const QString& prefix)
+{
+    UNUserNotificationCenter* center = safeNotificationCenter();
+    if (center == nil) {
+        qInfo().noquote() << "[通知诊断] 系统通知中心不可用";
+        return;
+    }
+    NSString* idPrefix = [prefix.toNSString() copy];
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings* settings) {
+        qInfo().noquote() << "[通知诊断] 授权状态" << static_cast<int>(settings.authorizationStatus)
+                          << "（2=已授权，1=已拒绝，0=未决定）";
+    }];
+    [center getPendingNotificationRequestsWithCompletionHandler:^(NSArray<UNNotificationRequest*>* requests) {
+        int count = 0;
+        for (UNNotificationRequest* request in requests) {
+            if (![request.identifier hasPrefix:idPrefix]) {
+                continue;
+            }
+            ++count;
+            UNTimeIntervalNotificationTrigger* trigger =
+                (UNTimeIntervalNotificationTrigger*)request.trigger;
+            NSDate* fireDate = [trigger nextTriggerDate];
+            qInfo().noquote() << "[通知诊断] 待投递" << QString::fromNSString(request.identifier)
+                              << QString::fromNSString(request.content.title)
+                              << QString::fromNSString([fireDate description]);
+        }
+        qInfo().noquote() << "[通知诊断] 待投递合计" << count;
+    }];
+    [center getDeliveredNotificationsWithCompletionHandler:^(NSArray<UNNotification*>* notifications) {
+        int count = 0;
+        for (UNNotification* notification in notifications) {
+            NSString* identifier = notification.request.identifier;
+            if (![identifier hasPrefix:idPrefix]) {
+                continue;
+            }
+            ++count;
+            qInfo().noquote() << "[通知诊断] 已投递" << QString::fromNSString(identifier)
+                              << QString::fromNSString(notification.request.content.title)
+                              << QString::fromNSString([notification.date description]);
+        }
+        qInfo().noquote() << "[通知诊断] 已投递合计" << count;
+    }];
+}

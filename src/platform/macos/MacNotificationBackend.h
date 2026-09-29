@@ -31,6 +31,16 @@ public:
                  DeliveryCallback callback) override;
     bool isAuthorized() const override;
     void requestAuthorization() override;
+    // 用 UNTimeIntervalNotificationTrigger 预约；macOS 与 iOS 共用同一套 UserNotifications 接口。
+    void schedule(const QString& id,
+                  int fireAfterSeconds,
+                  const QString& title,
+                  const QString& body,
+                  bool playSound,
+                  ScheduleCallback callback) override;
+    void cancelScheduled(const QString& prefix, const QString& keepId, ScheduleCallback callback) override;
+    // 验证用诊断：把 id 以 prefix 开头的待投递与已投递通知打印到日志，供真机验收取证。
+    static void logScheduledNotifications(const QString& prefix);
 
     // 应用在前台时系统收到通知的展示方式（由通知中心委托决定）。
     // handled=false 表示委托没有调用完成回调，系统会按默认规则把前台通知静默掉。

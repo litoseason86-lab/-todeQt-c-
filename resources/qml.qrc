@@ -10,6 +10,11 @@
         <file alias="qml/StartupErrorWindow.qml">../qml/StartupErrorWindow.qml</file>
         <file alias="qml/main.qml">../qml/main.qml</file>
         <file alias="qml/MainWindow.qml">../qml/MainWindow.qml</file>
+        <file alias="qml/mobile/CompanionMain.qml">../qml/mobile/CompanionMain.qml</file>
+        <file alias="qml/mobile/CompanionWindow.qml">../qml/mobile/CompanionWindow.qml</file>
+        <file alias="qml/mobile/CompanionTimerCard.qml">../qml/mobile/CompanionTimerCard.qml</file>
+        <file alias="qml/mobile/CompanionTaskRow.qml">../qml/mobile/CompanionTaskRow.qml</file>
+        <file alias="qml/mobile/CompanionButton.qml">../qml/mobile/CompanionButton.qml</file>
         <file alias="qml/views/TodayTaskView.qml">../qml/views/TodayTaskView.qml</file>
         <file alias="qml/views/TodayFocusView.qml">../qml/views/TodayFocusView.qml</file>
         <file alias="qml/views/FocusView.qml">../qml/views/FocusView.qml</file>

@@ -734,6 +734,12 @@ Item {
         objectName: "mainContentRow"
 
         anchors.fill: parent
+        // 移动端窗口延伸到状态栏与底部横条之下（见 main.qml 的 ExpandedClientAreaHint）：
+        // 只让内容让开系统区域，壁纸与侧栏玻璃仍铺满整个窗口。桌面上这些边距恒为 0。
+        anchors.topMargin: root.SafeArea.margins.top
+        anchors.bottomMargin: root.SafeArea.margins.bottom
+        anchors.leftMargin: root.SafeArea.margins.left
+        anchors.rightMargin: root.SafeArea.margins.right
         spacing: 0
         visible: !root.focusImmersiveActive
 
@@ -1250,7 +1256,7 @@ Item {
         z: 100
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
-        anchors.bottomMargin: Theme.space32
+        anchors.bottomMargin: Theme.space32 + root.SafeArea.margins.bottom
     }
 
     Timer {

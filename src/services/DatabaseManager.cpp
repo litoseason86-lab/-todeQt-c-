@@ -284,6 +284,34 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // 恢复锚点：进程在后台被系统结束后，靠这几列把离线时段按单调时钟补回来。
+    //   running          写入时是否在计时；
+    //   accumulated_ms   本段运行之前已累计的毫秒数；
+    //   segment_start_ns 本段开始时的单调时钟读数（暂停时为空）；
+    //   segment_start_wall_ms 同一时刻的墙钟（UTC 毫秒），恢复时与单调时钟对账，
+    //                    确认是同一次开机、期间没人改钟（iOS 读不到开机标识，靠它判断）；
+    //   boot_id          写入时的开机会话标识，读得到时（macOS）作为额外的核对。
+    // 旧快照补列后 running 为 0，恢复时按原语义「恢复为暂停」，不会凭空补算时间。
+    const struct {
+        const char* name;
+        const char* definition;
+    } anchorColumns[] = {
+        {"running", "running INTEGER NOT NULL DEFAULT 0 CHECK(running IN (0, 1))"},
+        {"accumulated_ms", "accumulated_ms INTEGER NOT NULL DEFAULT 0"},
+        {"segment_start_ns", "segment_start_ns INTEGER"},
+        {"segment_start_wall_ms", "segment_start_wall_ms INTEGER"},
+        {"boot_id", "boot_id TEXT"},
+    };
+    for (const auto& column : anchorColumns) {
+        if (!columnExists(QStringLiteral("active_focus_state"), QString::fromLatin1(column.name))
+            && !execSql(query,
+                        QStringLiteral("ALTER TABLE active_focus_state ADD COLUMN %1")
+                            .arg(QString::fromLatin1(column.definition)),
+                        "Failed to add active state recovery anchor:")) {
+            return false;
+        }
+    }
+
     // 版本 2 引入 categories/category_id，同时保留旧版文本科目。
     if (version < 2
         || !tableExists(QStringLiteral("categories"))

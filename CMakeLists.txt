@@ -90,6 +90,8 @@ set(APP_SOURCES
     src/services/FocusTimer.cpp
     src/services/MonotonicClock.h
     src/services/MonotonicClock.cpp
+    src/services/ApplicationActivity.h
+    src/services/ApplicationActivity.cpp
     src/services/StatisticsService.h
     src/services/StatisticsService.cpp
     src/services/LogicalDay.h
@@ -110,6 +112,8 @@ set(APP_SOURCES
     src/services/TrayController.cpp
     src/services/NotificationService.h
     src/services/NotificationService.cpp
+    src/services/PhaseAlarmCoordinator.h
+    src/services/PhaseAlarmCoordinator.cpp
     src/services/BackupOperations.h
     src/services/BackupOperations.cpp
     src/services/BackupService.h
@@ -173,6 +177,17 @@ if(NOT IOS)
 endif()
 
 if(IOS)
+    # UserNotifications 在 iOS 上是同一套接口，通知后端直接复用 macOS 目录里的实现。
+    list(APPEND APP_SOURCES
+        src/platform/macos/MacNotificationBackend.h
+        src/platform/macos/MacNotificationBackend.mm
+    )
+    set_source_files_properties(src/platform/macos/MacNotificationBackend.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+    )
+endif()
+
+if(IOS)
     # iOS 上的 Qt 是静态库：平台插件和 QML 插件要靠 Qt 的收尾步骤扫描导入并链接进来，
     # 所以必须用 qt_add_executable。MANUAL_FINALIZATION 让收尾在下方 iOS 属性全部设好之后
     # 才执行（见 qt_finalize_target）。macOS 保持原来的 add_executable，避免 Qt 的收尾步骤
@@ -213,6 +228,13 @@ target_link_libraries(PomodoroTodo PRIVATE
     Qt6::QuickLayouts
     Qt6::Sql
 )
+
+if(IOS)
+    target_link_libraries(PomodoroTodo PRIVATE
+        "-framework Foundation"
+        "-framework UserNotifications"
+    )
+endif()
 
 if(NOT IOS)
     target_link_libraries(PomodoroTodo PRIVATE
@@ -782,6 +804,42 @@ target_link_libraries(TimingRobustnessTests PRIVATE
 pomodoro_todo_enable_warnings(TimingRobustnessTests)
 add_test(NAME TimingRobustnessTests COMMAND TimingRobustnessTests)
 
+# 番茄到点提醒的系统预约：用假通知后端手动控制系统回调的先后，
+# 验证串行执行、代次防迟到回调、自然到点不撤销、失败时退回即时提醒。
+add_executable(PhaseAlarmCoordinatorTests
+    tests/PhaseAlarmCoordinatorTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+    src/services/NotificationService.h
+    src/services/NotificationService.cpp
+    src/services/PhaseAlarmCoordinator.h
+    src/services/PhaseAlarmCoordinator.cpp
+)
+
+target_link_libraries(PhaseAlarmCoordinatorTests PRIVATE
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+pomodoro_todo_enable_warnings(PhaseAlarmCoordinatorTests)
+add_test(NAME PhaseAlarmCoordinatorTests COMMAND PhaseAlarmCoordinatorTests)
+
 add_executable(FontAssetsTests
     tests/FontAssetsTests.cpp
     resources/fonts.qrc
@@ -1060,6 +1118,7 @@ set_tests_properties(
     PlatformControlTests
     BackupServiceTests
     TimingRobustnessTests
+    PhaseAlarmCoordinatorTests
     ShortcutRegistryTests
     PROPERTIES TIMEOUT 90
 )
