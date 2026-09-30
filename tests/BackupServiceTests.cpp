@@ -154,6 +154,7 @@ private slots:
     void asyncRestoreRejectsUnsafeSettings();
     void commentedVirtualTableIsRejected();
     void restoreRefusesBackupCarryingTriggers();
+    void restoreAcceptsOwnSyncTriggersButNotForgedOnes();
     void repeatedRestoresCapPreRestoreSnapshots();
     void newPreRestoreSnapshotSurvivesOlderSnapshotsWithFutureTimes();
     void failedAsyncPreflightKeepsAllPreRestoreSnapshots_data();
@@ -343,6 +344,10 @@ void BackupServiceTests::backupMissingRequiredColumnIsRejected()
         database.setDatabaseName(backupFile());
         QVERIFY(database.open());
         QSqlQuery query(database);
+        // 同步触发器引用着 title，SQLite 会因此拒绝删列。它们挂在 tasks 上，本用例只关心缺列，先拆掉。
+        QVERIFY2(query.exec(QStringLiteral("DROP TRIGGER tasks_sync_ai")), qPrintable(query.lastError().text()));
+        QVERIFY2(query.exec(QStringLiteral("DROP TRIGGER tasks_sync_au")), qPrintable(query.lastError().text()));
+        QVERIFY2(query.exec(QStringLiteral("DROP TRIGGER tasks_sync_ad")), qPrintable(query.lastError().text()));
         QVERIFY2(query.exec(QStringLiteral("ALTER TABLE tasks DROP COLUMN title")),
                  qPrintable(query.lastError().text()));
         database.close();
@@ -1406,6 +1411,36 @@ void BackupServiceTests::restoreRefusesBackupCarryingTriggers()
     // 期望：拒绝恢复。备份是数据，不是可信的数据库程序。
     QVERIFY2(!BackupService::instance()->restoreBackup(backupFile()),
              "带 Trigger 的备份被接受了");
+}
+
+void BackupServiceTests::restoreAcceptsOwnSyncTriggersButNotForgedOnes()
+{
+    // v18 起库里本来就有维护同步版本的触发器，备份自然带着它们；这样的备份必须能恢复。
+    QVERIFY(insertTask(QStringLiteral("原始任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    QVERIFY2(BackupService::instance()->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool(),
+             qPrintable(BackupService::instance()->lastError()));
+
+    // 名字照抄本应用的触发器、换掉触发器体：只按名字放行的话，这个触发器会随恢复永久活在库里，
+    // 之后用户每删一条任务，它就清空全部科目。
+    {
+        const QString connection = QStringLiteral("ForgedSyncTrigger");
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+            db.setDatabaseName(backupFile());
+            QVERIFY(db.open());
+            QSqlQuery q(db);
+            QVERIFY2(q.exec(QStringLiteral("DROP TRIGGER tasks_sync_ad")), qPrintable(q.lastError().text()));
+            QVERIFY2(q.exec(QStringLiteral(
+                "CREATE TRIGGER tasks_sync_ad AFTER DELETE ON tasks BEGIN DELETE FROM categories; END")),
+                qPrintable(q.lastError().text()));
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(connection);
+    }
+
+    QVERIFY(!BackupService::instance()->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool());
+    QVERIFY2(!BackupService::instance()->restoreBackup(backupFile()), "伪造的同名同步触发器被接受了");
 }
 
 void BackupServiceTests::asyncRestoreRejectsUnsafeSettings_data()

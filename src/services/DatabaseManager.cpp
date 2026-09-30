@@ -3,6 +3,7 @@
 #include "SnapshotRetention.h"
 #include "FocusSessionRules.h"
 #include "RoutineRules.h"
+#include "SyncSchema.h"
 
 #include <QDebug>
 #include <QCoreApplication>
@@ -185,6 +186,10 @@ bool DatabaseManager::createTables()
 
     // createTables 是一条完整迁移链的边界；每次进入都重置，使结构缺列触发的防御性迁移也能正确备份。
     m_migrationSnapshotTaken = false;
+
+    if (version >= 18 && !dropSyncTriggersIfSchemaIncomplete()) {
+        return false;
+    }
 
     QSqlQuery query(m_db);
 
@@ -505,6 +510,18 @@ bool DatabaseManager::createTables()
             return false;
         }
         version = 17;
+    }
+
+    // v18 设备间同步。缺任何一部分（半迁移、外部改库、v5 整表重建带走了唯一索引）都重跑一遍，
+    // 迁移本身可以重复执行，已经有的身份和版本保持不动。
+    if (version < 18 || !syncSchemaIsComplete()) {
+        if (!migrateToVersion18()) {
+            return false;
+        }
+        version = 18;
+    }
+    if (!ensureSyncInfrastructure()) {
+        return false;
     }
 
     // 节次表存在但一行都没有，同样是「按节次」版式画不出任何行的那种坏状态
@@ -1022,6 +1039,9 @@ bool DatabaseManager::migrateToVersion5()
         QStringLiteral("notes"),
         QStringLiteral("display_order"),
         QStringLiteral("completion_note"),
+        // v18 的同步身份。版本号被拨回、重跑 v5 时必须原样搬过去，否则同一条任务
+        // 在另一台设备上会变成两条。
+        QStringLiteral("sync_id"),
     };
 
     // 遇到不认识的列就拒绝重建。宁可让迁移失败并留下明确日志，
@@ -1055,6 +1075,10 @@ bool DatabaseManager::migrateToVersion5()
     const QString completionNoteExpression =
         currentColumns.contains(QStringLiteral("completion_note"))
         ? QStringLiteral("completion_note") : QStringLiteral("''");
+    // v18 之前的库还没有同步身份，落成 NULL，之后由 v18 迁移回填。
+    const QString syncIdExpression =
+        currentColumns.contains(QStringLiteral("sync_id"))
+        ? QStringLiteral("sync_id") : QStringLiteral("NULL");
 
     QSqlQuery query(m_db);
     const QStringList statements = {
@@ -1072,17 +1096,20 @@ bool DatabaseManager::migrateToVersion5()
                 estimated_minutes INTEGER NOT NULL DEFAULT 0,
                 notes TEXT NOT NULL DEFAULT '',
                 display_order INTEGER NOT NULL DEFAULT 0,
-                completion_note TEXT NOT NULL DEFAULT ''
+                completion_note TEXT NOT NULL DEFAULT '',
+                sync_id TEXT
             )
         )SQL"),
+        // 整表重建会把 tasks 上的同步触发器和 sync_id 唯一索引一起删掉；
+        // createTables 随后的 v18 检查发现索引缺失会重跑 v18，启动时也总会补齐触发器。
         QStringLiteral(
             "INSERT INTO tasks_v5 (id, title, category, category_id, routine_id, "
             "routine_generated, date, completed, created_at, estimated_minutes, "
-            "notes, display_order, completion_note) "
+            "notes, display_order, completion_note, sync_id) "
             "SELECT id, title, category, category_id, routine_id, %1, date, completed, "
-            "created_at, %2, %3, %4, %5 FROM tasks")
+            "created_at, %2, %3, %4, %5, %6 FROM tasks")
             .arg(provenanceExpression, estimateExpression, notesExpression, orderExpression,
-                 completionNoteExpression),
+                 completionNoteExpression, syncIdExpression),
         QStringLiteral("DROP TABLE tasks"),
         QStringLiteral("ALTER TABLE tasks_v5 RENAME TO tasks")
     };
@@ -1885,6 +1912,280 @@ bool DatabaseManager::migrateToVersion17()
     return true;
 }
 
+namespace {
+// 预置科目的出厂值写成 SQL 的 (VALUES (位置, 名称, 颜色), ...)，v18 回填版本时据此判断预置科目改没改过。
+QString presetDefaultsValuesSql()
+{
+    QStringList rows;
+    for (int index = 0; index < int(std::size(kPresetCategories)); ++index) {
+        rows.append(QStringLiteral("(%1, '%2', '%3')")
+                        .arg(index + 1)
+                        .arg(QString::fromUtf8(kPresetCategories[index].name),
+                             QString::fromLatin1(kPresetCategories[index].color)));
+    }
+    return QStringLiteral("(VALUES %1)").arg(rows.join(QStringLiteral(", ")));
+}
+}
+
+bool DatabaseManager::migrateToVersion18()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+
+    // 升到 v18 之后，旧版本应用打不开这个库（createTables 开头拒绝未来版本），所以升级前留一份迁移快照。
+    // 同步结构已经完整、只是版本号偏低（重跑、外部改过版本号）时不再建：这个库早就是 v18，
+    // 没有新的不可回退；多建一份反而会把更早、更有用的快照挤掉（只保留最近三份）。
+    if (!syncSchemaIsComplete() && !backupDatabaseBeforeMigration()) {
+        return false;
+    }
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 18 migration:" << m_db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    const auto run = [this, &query](const QString& sql, const char* context) {
+        if (query.exec(sql)) {
+            return true;
+        }
+        qWarning() << context << query.lastError().text();
+        m_db.rollback();
+        return false;
+    };
+
+    for (const SyncSchema::Table& table : SyncSchema::tables()) {
+        if (!columnExists(table.name, QStringLiteral("sync_id"))
+            && !run(QStringLiteral("ALTER TABLE %1 ADD COLUMN sync_id TEXT").arg(table.name),
+                    "Failed to add sync_id column:")) {
+            return false;
+        }
+    }
+    for (const QString& sql : SyncSchema::tableStatements() + SyncSchema::seedStatements()) {
+        if (!run(sql, "Failed to prepare sync tables:")) {
+            return false;
+        }
+    }
+
+    // 回填身份，只填还没有的。例行要先有 sync_id：例行实例的身份由它和日期算出来。
+    const QString random = QStringLiteral("lower(hex(randomblob(16)))");
+    const QString instanceId = SyncSchema::routineInstanceSyncIdSql(QStringLiteral("r.sync_id"),
+                                                                    QStringLiteral("tasks.date"));
+    const QStringList backfill = {
+        QStringLiteral("UPDATE routines SET sync_id = %1 WHERE sync_id IS NULL OR sync_id = ''").arg(random),
+        // 预置科目按位置取固定身份。同一位置有多行（外部改过库）时只给编号最小的那行，其余走随机。
+        QStringLiteral(
+            "UPDATE categories SET sync_id = 'preset-' || display_order "
+            "WHERE is_preset = 1 AND (sync_id IS NULL OR sync_id = '') "
+            "AND id = (SELECT MIN(c2.id) FROM categories c2 "
+            "          WHERE c2.is_preset = 1 AND c2.display_order = categories.display_order) "
+            "AND NOT EXISTS (SELECT 1 FROM categories c3 "
+            "                WHERE c3.sync_id = 'preset-' || categories.display_order)"),
+        QStringLiteral("UPDATE categories SET sync_id = %1 WHERE sync_id IS NULL OR sync_id = ''").arg(random),
+        // 例行生成的实例：同一例行同一天只认编号最小的那条（正常情况下本来就只有一条）。
+        QStringLiteral(
+            "UPDATE tasks SET sync_id = (SELECT %1 FROM routines r WHERE r.id = tasks.routine_id) "
+            "WHERE (sync_id IS NULL OR sync_id = '') AND routine_generated = 1 AND routine_id IS NOT NULL "
+            "AND id = (SELECT MIN(t2.id) FROM tasks t2 WHERE t2.routine_generated = 1 "
+            "          AND t2.routine_id = tasks.routine_id AND t2.date = tasks.date) "
+            "AND NOT EXISTS (SELECT 1 FROM tasks t3 "
+            "                WHERE t3.sync_id = (SELECT %1 FROM routines r WHERE r.id = tasks.routine_id))")
+            .arg(instanceId),
+        QStringLiteral("UPDATE tasks SET sync_id = %1 WHERE sync_id IS NULL OR sync_id = ''").arg(random),
+        QStringLiteral("UPDATE focus_sessions SET sync_id = %1 WHERE sync_id IS NULL OR sync_id = ''").arg(random),
+        QStringLiteral("UPDATE rest_sessions SET sync_id = %1 WHERE sync_id IS NULL OR sync_id = ''").arg(random),
+    };
+    for (const QString& sql : backfill + SyncSchema::indexStatements()) {
+        if (!run(sql, "Failed to backfill sync ids:")) {
+            return false;
+        }
+    }
+
+    // 已有记录的初始版本统一取本机此刻的逻辑时间，并放进待发送队列（首次全量发送）。
+    // 只处理还没有任何版本的记录：重跑迁移（例如 v5 重建之后）不会把整库重新排一遍队，
+    // 已有的版本也保持不动（ON CONFLICT DO NOTHING）。
+    if (!run(SyncSchema::sqlAdvanceClock(), "Failed to advance sync clock:")) {
+        return false;
+    }
+    const QString clock = SyncSchema::sqlCurrentClock();
+    const QString device = SyncSchema::sqlDeviceId();
+    const QString defaults = presetDefaultsValuesSql();
+    for (const SyncSchema::Table& table : SyncSchema::tables()) {
+        const QString published = SyncSchema::publishConditionFor(table, QStringLiteral("r"));
+        // 入队要在写版本之前：判据「还没有版本」得在版本写进去之前取。
+        const QString enqueue = QStringLiteral(
+            "INSERT INTO sync_outbox (tbl, sync_id, change_time) "
+            "SELECT '%1', r.sync_id, %2 FROM %1 r "
+            "WHERE r.sync_id IS NOT NULL AND %3 "
+            "AND NOT EXISTS (SELECT 1 FROM sync_field_versions v WHERE v.tbl = '%1' AND v.sync_id = r.sync_id) "
+            "ON CONFLICT(tbl, sync_id) DO NOTHING")
+            .arg(table.name, clock, published);
+        // 预置科目的版本取最小值（输给任何一次真实修改）的情况：名称、颜色仍是出厂值，
+        // 以及位置、预置标记、创建时间这些两台设备各自生成、谁的都行的列。改过的名称、颜色用真实版本，
+        // 否则 iPad 上没改过的默认名会在同步时盖掉你在 Mac 上改的名字。
+        const QString minimal = table.name == QLatin1String("categories")
+            ? QStringLiteral(
+                  "(r.is_preset = 1 AND r.sync_id = 'preset-' || r.display_order AND ("
+                  "f.column1 NOT IN ('name', 'color') "
+                  "OR (f.column1 = 'name' AND r.name = (SELECT d.column2 FROM %1 d WHERE d.column1 = r.display_order)) "
+                  "OR (f.column1 = 'color' AND r.color = (SELECT d.column3 FROM %1 d WHERE d.column1 = r.display_order))))")
+                  .arg(defaults)
+            : QStringLiteral("0");
+        const QString versions = QStringLiteral(
+            "INSERT INTO sync_field_versions (tbl, sync_id, field, v_time, v_device, base_time, base_device, pending) "
+            "SELECT '%1', r.sync_id, f.column1, CASE WHEN %2 THEN 0 ELSE %3 END, "
+            "CASE WHEN %2 THEN '' ELSE %4 END, 0, '', 1 "
+            "FROM %1 r, %5 f WHERE r.sync_id IS NOT NULL AND %6 "
+            "ON CONFLICT(tbl, sync_id, field) DO NOTHING")
+            .arg(table.name, minimal, clock, device, SyncSchema::fieldValuesSql(table), published);
+        if (!run(enqueue, "Failed to queue existing records for sync:")
+            || !run(versions, "Failed to backfill sync field versions:")) {
+            return false;
+        }
+    }
+
+    if (!ensureSyncTriggers() || !setDatabaseVersion(18)) {
+        m_db.rollback();
+        return false;
+    }
+    if (!m_db.commit()) {
+        qWarning() << "Failed to commit version 18 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+
+    qInfo() << "Database migrated to version 18";
+    return true;
+}
+
+bool DatabaseManager::syncSchemaIsComplete() const
+{
+    for (const SyncSchema::Table& table : SyncSchema::tables()) {
+        if (!columnExists(table.name, QStringLiteral("sync_id"))
+            || !indexExists(QStringLiteral("idx_%1_sync_id").arg(table.name))) {
+            return false;
+        }
+    }
+    for (const QString& name : SyncSchema::infrastructureTableNames()) {
+        if (!tableExists(name)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool DatabaseManager::ensureSyncInfrastructure()
+{
+    // 平时这里全是空操作（行已存在、索引已存在、触发器与规范一致）；放在一个事务里，
+    // 真要重建触发器时「删旧的、建新的」要么都成、要么都不成。
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start sync infrastructure check:" << m_db.lastError().text();
+        return false;
+    }
+    QSqlQuery query(m_db);
+    for (const QString& sql : SyncSchema::seedStatements() + SyncSchema::indexStatements()) {
+        if (!query.exec(sql)) {
+            qWarning() << "Failed to ensure sync infrastructure:" << query.lastError().text();
+            m_db.rollback();
+            return false;
+        }
+    }
+    if (!ensureSyncTriggers() || !m_db.commit()) {
+        qWarning() << "Failed to commit sync infrastructure check:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    return true;
+}
+
+bool DatabaseManager::ensureSyncTriggers()
+{
+    const QHash<QString, QString> canonical = SyncSchema::canonicalTriggerSql();
+    const QList<QPair<QString, QString>> triggers = SyncSchema::triggers();
+    // 规范文本是在临时内存库里建一遍得来的；数目对不上说明那一步失败了，这时宁可启动失败，
+    // 也不能拿一份不完整的清单去删、建触发器。
+    if (canonical.size() != triggers.size()) {
+        qWarning() << "Failed to prepare canonical sync triggers:" << canonical.size() << "of" << triggers.size();
+        return false;
+    }
+
+    QHash<QString, QString> existing;
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"))) {
+        qWarning() << "Failed to inspect sync triggers:" << query.lastError().text();
+        return false;
+    }
+    while (query.next()) {
+        existing.insert(query.value(0).toString(), query.value(1).toString());
+    }
+    query.finish();
+
+    // 旧版本留下、现在已经不用的同步触发器一并删掉；别人建的触发器（名字不符合约定）不碰。
+    for (auto it = existing.cbegin(); it != existing.cend(); ++it) {
+        if (SyncSchema::isSyncTriggerName(it.key()) && !canonical.contains(it.key())
+            && !query.exec(QStringLiteral("DROP TRIGGER IF EXISTS \"%1\"").arg(it.key()))) {
+            qWarning() << "Failed to drop obsolete sync trigger:" << query.lastError().text();
+            return false;
+        }
+    }
+    for (const auto& trigger : triggers) {
+        if (existing.value(trigger.first) == canonical.value(trigger.first)) {
+            continue;
+        }
+        // 缺失或内容不一致（旧版本、外部改过）：删掉重建。
+        if (!query.exec(QStringLiteral("DROP TRIGGER IF EXISTS \"%1\"").arg(trigger.first))
+            || !query.exec(trigger.second)) {
+            qWarning() << "Failed to create sync trigger" << trigger.first << query.lastError().text();
+            return false;
+        }
+    }
+    return true;
+}
+
+bool DatabaseManager::dropSyncTriggersIfSchemaIncomplete()
+{
+    bool missing = false;
+    for (const QString& name : SyncSchema::infrastructureTableNames()) {
+        missing = missing || !tableExists(name);
+    }
+    for (const SyncSchema::Table& table : SyncSchema::tables()) {
+        if (missing || !tableExists(table.name)) {
+            continue;
+        }
+        const QStringList columns = tableColumns(table.name);
+        missing = !columns.contains(QStringLiteral("sync_id"));
+        for (const SyncSchema::Field& field : table.fields) {
+            missing = missing || !columns.contains(field.column);
+        }
+    }
+    if (!missing) {
+        return true;
+    }
+
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral("SELECT name FROM sqlite_master WHERE type = 'trigger'"))) {
+        qWarning() << "Failed to inspect sync triggers:" << query.lastError().text();
+        return false;
+    }
+    QStringList names;
+    while (query.next()) {
+        const QString name = query.value(0).toString();
+        if (SyncSchema::isSyncTriggerName(name)) {
+            names.append(name);
+        }
+    }
+    query.finish();
+    for (const QString& name : names) {
+        if (!query.exec(QStringLiteral("DROP TRIGGER IF EXISTS \"%1\"").arg(name))) {
+            qWarning() << "Failed to drop sync trigger:" << query.lastError().text();
+            return false;
+        }
+    }
+    qWarning() << "同步结构不完整，已先拆掉同步触发器，随后由迁移补齐";
+    return true;
+}
+
 bool DatabaseManager::createKnowledgeGapTable()
 {
     QSqlQuery query(m_db);
@@ -2072,6 +2373,22 @@ void DatabaseManager::pruneOldBackups(const QDir& databaseDir, const QString& ke
 {
     // 只保留最近三个迁移备份，避免反复测试或启动应用时悄悄塞满数据目录。
     SnapshotRetention::prune(databaseDir, QStringLiteral("pomodoro_backup_*.db"), 3, keepPath);
+}
+
+bool DatabaseManager::indexExists(const QString& indexName) const
+{
+    if (!m_db.isOpen()) {
+        return false;
+    }
+
+    QSqlQuery query(m_db);
+    query.prepare(QStringLiteral("SELECT name FROM sqlite_master WHERE type = 'index' AND name = :name"));
+    query.bindValue(QStringLiteral(":name"), indexName);
+    if (!query.exec()) {
+        qWarning() << "Failed to inspect database index:" << query.lastError().text();
+        return false;
+    }
+    return query.next();
 }
 
 bool DatabaseManager::tableExists(const QString& tableName) const

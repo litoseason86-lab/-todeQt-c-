@@ -2,6 +2,7 @@
 
 #include "AppSettings.h"
 #include "DatabaseManager.h"
+#include "SyncSchema.h"
 
 #include <QCoreApplication>
 #include <QDataStream>
@@ -716,18 +717,30 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
             // 而恢复前快照根本发现不了这种延迟触发的破坏。View 与虚拟表同理
             // （虚拟表还能把模块名当作加载路径）。
             //
-            // 本应用自己从不创建 Trigger / View / 虚拟表，所以判据可以很硬：
-            // sqlite_master 里出现表和索引以外的任何对象，一律拒绝恢复。
+            // 本应用自己从不创建 View / 虚拟表；触发器只有 v18 起维护同步版本的那一组（见 SyncSchema）。
+            // 判据仍然很硬：sqlite_master 里表和索引以外的对象，只放行与应用生成的同步触发器
+            // 逐字一致的那些（SQLite 保存触发器时会改写语句开头，双方都取经它处理后的文本再比），
+            // 其余一律拒绝恢复。只按名字放行不够：伪造一个同名触发器挂到别的表上、或换掉触发器体，照样能植入。
             if (reason.isEmpty()) {
+                const QHash<QString, QString> allowedTriggers = SyncSchema::canonicalTriggerSql();
                 QSqlQuery objects(database);
                 if (!objects.exec(QStringLiteral(
-                        "SELECT type, name FROM sqlite_master "
+                        "SELECT type, name, sql FROM sqlite_master "
                         "WHERE type NOT IN ('table', 'index')"))) {
                     reason = QStringLiteral("读取备份结构失败");
-                } else if (objects.next()) {
-                    reason = QStringLiteral("备份包含本应用不会创建的数据库对象（%1 %2），"
-                                            "出于安全考虑拒绝恢复")
-                                 .arg(objects.value(0).toString(), objects.value(1).toString());
+                } else {
+                    while (reason.isEmpty() && objects.next()) {
+                        const QString type = objects.value(0).toString();
+                        const QString name = objects.value(1).toString();
+                        const bool isOwnSyncTrigger = type == QLatin1String("trigger")
+                            && allowedTriggers.contains(name)
+                            && allowedTriggers.value(name) == objects.value(2).toString();
+                        if (!isOwnSyncTrigger) {
+                            reason = QStringLiteral("备份包含本应用不会创建的数据库对象（%1 %2），"
+                                                    "出于安全考虑拒绝恢复")
+                                         .arg(type, name);
+                        }
+                    }
                 }
             }
             // 让 SQLite 返回解析后的表类型，SQL 中的空白和注释不能绕过此检查。

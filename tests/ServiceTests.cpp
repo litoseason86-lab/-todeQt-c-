@@ -34,10 +34,34 @@
 #include "../src/services/RoutineManager.h"
 #include "../src/services/RoutineRules.h"
 #include "../src/services/StatisticsService.h"
+#include "../src/services/SyncSchema.h"
 #include "../src/services/TaskManager.h"
 
 namespace {
 constexpr int kTestMinimumValidDurationSeconds = 3 * 60;
+
+// 迁移用例拿当前代码建好的库「退回」旧版本（删列、换表）。真实的旧库里没有同步触发器，
+// 而触发器引用着这些列和表，SQLite 会因此拒绝删列、改表名。先拆掉，库才像真的旧库。
+bool dropSyncTriggers(const QSqlDatabase& db)
+{
+    QSqlQuery query(db);
+    if (!query.exec(QStringLiteral("SELECT name FROM sqlite_master WHERE type = 'trigger'"))) {
+        return false;
+    }
+    QStringList names;
+    while (query.next()) {
+        if (SyncSchema::isSyncTriggerName(query.value(0).toString())) {
+            names.append(query.value(0).toString());
+        }
+    }
+    query.finish();
+    for (const QString& name : names) {
+        if (!query.exec(QStringLiteral("DROP TRIGGER \"%1\"").arg(name))) {
+            return false;
+        }
+    }
+    return true;
+}
 
 QString dateTimeText(const QDate& date, const QString& time = QStringLiteral("12:00:00"))
 {
@@ -4380,6 +4404,7 @@ void ServiceTests::migrationV15AddsRoutineWeekdaysAndKeepsExistingRoutines()
 
     // 把 routines 换回 v14 形态（没有 weekdays 列）。外键开关要在事务外关掉，
     // 否则 DROP 旧表会触发 tasks 上的级联动作；重建完立刻恢复。
+    QVERIFY(dropSyncTriggers(DatabaseManager::instance()->database()));
     QVERIFY2(query.exec(QStringLiteral("PRAGMA foreign_keys = OFF")),
              qPrintable(query.lastError().text()));
     QVERIFY2(query.exec(QStringLiteral(R"SQL(
@@ -4459,6 +4484,7 @@ void ServiceTests::migrationV16AddsCompletionNoteAndKeepsExistingTasks()
     QVERIFY2(query.exec(), qPrintable(query.lastError().text()));
 
     // 把 tasks 退回 v15 形态：删掉完成记录列，版本号改回 15。
+    QVERIFY(dropSyncTriggers(DatabaseManager::instance()->database()));
     QVERIFY2(query.exec(QStringLiteral("ALTER TABLE tasks DROP COLUMN completion_note")),
              qPrintable(query.lastError().text()));
     QVERIFY2(query.exec(QStringLiteral("PRAGMA user_version = 15")),
@@ -4501,6 +4527,8 @@ void ServiceTests::migrationV16AddsCompletionNoteAndKeepsExistingTasks()
 
     // 半迁移状态：版本号已经是当前版本，列却不在（中断的恢复、外部改库都会留下这种库）。
     // 守卫只看版本号的话这一列永远补不回来，每次打开任务页都查询失败。
+    // 上面的 createTables 又装回了同步触发器，外部删列之前同样得先拆掉它们。
+    QVERIFY(dropSyncTriggers(DatabaseManager::instance()->database()));
     QVERIFY2(query.exec(QStringLiteral("ALTER TABLE tasks DROP COLUMN completion_note")),
              qPrintable(query.lastError().text()));
     QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
@@ -4577,7 +4605,9 @@ void ServiceTests::migrationV17DropsLongGoalsAfterSnapshot()
     QCOMPARE(TaskManager::instance()->getTask(taskId).value(QStringLiteral("title")).toString(),
              QStringLiteral("升级前的任务"));
     QCOMPARE(schemaVersion(), DatabaseManager::kCurrentSchemaVersion);
-    QCOMPARE(DatabaseManager::kCurrentSchemaVersion, 17);
+    // 版本号变了就回来复核本用例。v18 复核过：v17 这一步照旧建快照，紧接着的 v18 迁移
+    // 发现本轮已经建过快照就不再建，所以下面「新增快照恰好一份」仍然成立。
+    QCOMPARE(DatabaseManager::kCurrentSchemaVersion, 18);
 
     // 删之前留了一份快照，里面那条目标还在：用户真想找回，数据目录里有。
     QStringList newSnapshots = dir.entryList(snapshotPattern, QDir::Files);

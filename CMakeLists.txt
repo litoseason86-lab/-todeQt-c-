@@ -77,6 +77,8 @@ set(APP_SOURCES
     src/models/CountdownModel.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -413,6 +415,8 @@ add_executable(PomodoroTodoTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -459,6 +463,8 @@ add_executable(CoreLogicTests
     src/models/CountdownModel.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -494,6 +500,8 @@ add_executable(RobustnessTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -533,6 +541,8 @@ add_executable(CountdownServiceTests
     src/models/CountdownModel.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     src/services/AppSettings.h
@@ -560,6 +570,8 @@ add_executable(KnowledgeGapServiceTests
     src/models/Task.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
     src/services/TaskManager.h
@@ -590,6 +602,8 @@ add_executable(ScheduleServiceTests
     tests/ScheduleServiceTests.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
     # AppSettings 只为一条用例引入：它把「学期总周数上限」与
@@ -615,6 +629,8 @@ add_executable(PlatformControlTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -735,6 +751,8 @@ add_executable(BackupServiceTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -776,6 +794,8 @@ add_executable(TimingRobustnessTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -808,6 +828,8 @@ add_executable(PhaseAlarmCoordinatorTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -835,6 +857,40 @@ target_link_libraries(PhaseAlarmCoordinatorTests PRIVATE
 
 pomodoro_todo_enable_warnings(PhaseAlarmCoordinatorTests)
 add_test(NAME PhaseAlarmCoordinatorTests COMMAND PhaseAlarmCoordinatorTests)
+
+# 设备间同步（050）：v18 结构与触发器、两台设备各用一个临时库的合并场景。
+# 用真实的建表逻辑（DatabaseManager），不手写简化表：简化表会漏掉真实约束。
+add_executable(SyncTests
+    tests/SyncTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/RoutineManager.h
+    src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+    src/services/FocusSessionRules.h
+)
+
+target_link_libraries(SyncTests PRIVATE
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+pomodoro_todo_enable_warnings(SyncTests)
+add_test(NAME SyncTests COMMAND SyncTests)
 
 add_executable(FontAssetsTests
     tests/FontAssetsTests.cpp
@@ -961,6 +1017,7 @@ qt_add_executable(McpServiceTests
     src/models/Task.h src/models/Task.cpp
     src/services/ServiceReadResult.h
     src/services/DatabaseManager.h src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h src/services/SyncSchema.cpp
     src/services/AppSettings.h src/services/AppSettings.cpp
     src/services/TaskManager.h src/services/TaskManager.cpp
     src/services/CategoryManager.h src/services/CategoryManager.cpp

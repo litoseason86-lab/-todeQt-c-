@@ -13,7 +13,8 @@ class DatabaseManager : public QObject
 public:
     // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
-    static constexpr int kCurrentSchemaVersion = 17;
+    // v18 加入设备间同步的结构（见 SyncSchema）；升级后 v17 的应用打不开这个库。
+    static constexpr int kCurrentSchemaVersion = 18;
 
     static DatabaseManager* instance();
 
@@ -99,6 +100,19 @@ private:
     // 删表会丢掉用户写下的目标，所以表存在时先走迁移快照；从来没用过目标页的库里本来就没有这张表，
     // 那种库只推版本号，不建快照。
     bool migrateToVersion17();
+    // v18 设备间同步：五张业务表加 sync_id，新建字段版本、待发送队列、删除记录等附属表，
+    // 给已有记录回填身份与初始版本、放进待发送队列，再装上维护它们的触发器。可以重复执行，
+    // 半迁移或外部改库留下的缺口，下次启动会补齐。
+    bool migrateToVersion18();
+    bool syncSchemaIsComplete() const;
+    // 每次启动都执行：补附属表的初始行、sync_id 唯一索引，并让同步触发器与规范文本一致。
+    // 触发器随业务表存在，整表重建（v5）会把它们一起删掉，所以不能只在迁移时建一次。
+    bool ensureSyncInfrastructure();
+    bool ensureSyncTriggers();
+    // 库已是 v18、附属表或业务表上的同步列却缺了（外部改过库、恢复被打断）：先拆掉同步触发器。
+    // 触发器引用的表或列不存在时，迁移链前面几步对业务表的写入会全部报错，应用就启动不了。
+    // 随后的迁移会把缺的列补回来，v18 步骤再把触发器装上。
+    bool dropSyncTriggersIfSchemaIncomplete();
     bool createRoutinesTable();
     // 课表项表与节次预设表。两者一起建：节次预设是课表录入的快捷填充来源，
     // 缺了它课表页的「按节次」显示模式就没有行可画。
@@ -113,6 +127,7 @@ private:
     // keepPath 是本次迁移前刚拍的快照，无条件保留（见 SnapshotRetention::prune）。
     void pruneOldBackups(const QDir& databaseDir, const QString& keepPath) const;
     bool tableExists(const QString& tableName) const;
+    bool indexExists(const QString& indexName) const;
     bool columnExists(const QString& tableName, const QString& columnName) const;
     // v13 是首个会被备份整库恢复的课表版本。CREATE TABLE IF NOT EXISTS
     // 不会修补已存在表的缺列、缺约束或错外键，所以必须显式验证。
