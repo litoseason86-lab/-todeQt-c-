@@ -87,6 +87,9 @@ set(APP_SOURCES
     src/services/SyncNotifier.cpp
     src/services/SyncFiles.h
     src/services/SyncFiles.cpp
+    src/services/SyncFolder.h
+    src/services/LocalSyncFolder.h
+    src/services/LocalSyncFolder.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -920,6 +923,9 @@ add_executable(SyncTransportTests
     src/services/SyncRecord.cpp
     src/services/SyncFiles.h
     src/services/SyncFiles.cpp
+    src/services/SyncFolder.h
+    src/services/LocalSyncFolder.h
+    src/services/LocalSyncFolder.cpp
 )
 
 target_link_libraries(SyncTransportTests PRIVATE

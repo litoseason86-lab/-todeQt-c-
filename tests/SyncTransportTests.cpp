@@ -1,9 +1,13 @@
+#include <QDir>
+#include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTemporaryDir>
 #include <QtTest>
 
 #include <functional>
 
+#include "../src/services/LocalSyncFolder.h"
 #include "../src/services/SyncFiles.h"
 #include "../src/services/SyncRecord.h"
 
@@ -11,6 +15,7 @@
 //
 // 3a 只看文件本身：文件名和位置的互转、四种文件的内容，以及坏文件、新版本文件能不能被认出来。
 // 这一层不碰磁盘，所以直接比较字节与结构。
+// 3b 看本地目录的读写：原子替换、错误归类（不存在、不可用）。
 namespace {
 
 const QString kDeviceA = QStringLiteral("0123456789abcdef0123456789abcdef");
@@ -68,6 +73,11 @@ private slots:
     void newerFormatsAreNotTreatedAsCorrupt();
     void wrongFolderHints_data();
     void wrongFolderHints();
+
+    // 3b：文件夹读写
+    void localFolderReadsWritesListsAndRemoves();
+    void localFolderReplacesFilesAtomically();
+    void localFolderClassifiesMissingAndUnavailable();
 };
 
 void SyncTransportTests::fileNamesRoundTripAndRejectForeignNames()
@@ -308,6 +318,86 @@ void SyncTransportTests::wrongFolderHints()
     QFETCH(QString, expected);
     const QString hint = SyncFiles::wrongFolderHint(folderName, entries);
     QVERIFY2(hint.contains(expected), qPrintable(hint));
+}
+
+// ── 3b：文件夹读写 ──
+
+void SyncTransportTests::localFolderReadsWritesListsAndRemoves()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    // 根目录还不存在（Mac 第一次开启同步）：能打开，列根目录报不存在，第一次写入时连目录一起建出来。
+    LocalSyncFolder folder(temp.filePath(QStringLiteral("番茄Todo同步")));
+    SyncFolder::Error error;
+    QVERIFY(folder.open(&error));
+    QCOMPARE(folder.name(), QStringLiteral("番茄Todo同步"));
+    QVERIFY(folder.list(QString(), &error).isEmpty());
+    QCOMPARE(error.kind, SyncFolder::ErrorKind::NotFound);
+
+    const QString path = SyncFiles::changesDirectory(kDeviceA) + QLatin1Char('/') + SyncFiles::changeFileName({0, 1});
+    QVERIFY(folder.write(path, QByteArray("第一批"), &error));
+    QVERIFY(error.ok());
+    QByteArray data;
+    QVERIFY(folder.read(path, &data, &error));
+    QCOMPARE(data, QByteArray("第一批"));
+    QCOMPARE(folder.list(SyncFiles::devicesDirectory(), &error), QStringList{kDeviceA});
+    QVERIFY(error.ok());
+    QCOMPARE(folder.list(SyncFiles::changesDirectory(kDeviceA), &error), QStringList{SyncFiles::changeFileName({0, 1})});
+
+    // 隐藏文件也要列出来：清理本机目录、判断文件夹是不是空的都要看到它们。
+    QFile hidden(temp.filePath(QStringLiteral("番茄Todo同步/.DS_Store")));
+    QVERIFY(hidden.open(QIODevice::WriteOnly));
+    hidden.close();
+    QVERIFY(folder.list(QString(), &error).contains(QStringLiteral(".DS_Store")));
+
+    QVERIFY(folder.remove(path, &error));
+    QVERIFY(folder.list(SyncFiles::changesDirectory(kDeviceA), &error).isEmpty());
+    QVERIFY(error.ok());
+    // 本来就不存在也算删除成功：清理时对方可能已经删过，不能因此报错。
+    QVERIFY(folder.remove(path, &error));
+    QVERIFY(!folder.read(path, &data, &error));
+    QCOMPARE(error.kind, SyncFolder::ErrorKind::NotFound);
+}
+
+void SyncTransportTests::localFolderReplacesFilesAtomically()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    LocalSyncFolder folder(temp.path());
+    SyncFolder::Error error;
+    QVERIFY(folder.open(&error));
+    const QString path = SyncFiles::deviceDirectory(kDeviceA) + QLatin1Char('/') + SyncFiles::cursorFileName();
+    QVERIFY(folder.write(path, QByteArray(4096, 'a'), &error));
+    QVERIFY(folder.write(path, QByteArray("短"), &error));
+    QByteArray data;
+    QVERIFY(folder.read(path, &data, &error));
+    // 新内容整体换上，不是在旧文件上覆盖开头（那样会留下旧内容的尾巴）。
+    QCOMPARE(data, QByteArray("短"));
+    // 写完不留临时文件：对方的目录里只该出现完整的文件。
+    QCOMPARE(folder.list(SyncFiles::deviceDirectory(kDeviceA), &error), QStringList{SyncFiles::cursorFileName()});
+}
+
+void SyncTransportTests::localFolderClassifiesMissingAndUnavailable()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SyncFolder::Error error;
+    // 上一级都不存在：相当于 Mac 上没有 iCloud 云盘目录（没登录或关了云盘），整个位置不可用。
+    LocalSyncFolder missingParent(temp.filePath(QStringLiteral("没有这一层/番茄Todo同步")));
+    QVERIFY(!missingParent.open(&error));
+    QCOMPARE(error.kind, SyncFolder::ErrorKind::Unavailable);
+
+    LocalSyncFolder folder(temp.filePath(QStringLiteral("root")));
+    QVERIFY(folder.write(QStringLiteral("devices/x.json"), QByteArray("x"), &error));
+    QVERIFY(folder.list(QStringLiteral("devices/没有的目录"), &error).isEmpty());
+    QCOMPARE(error.kind, SyncFolder::ErrorKind::NotFound);
+
+    // 没有权限：同步要暂停等它恢复，而不是当成「目录是空的」继续走下去。
+    const QString devices = temp.filePath(QStringLiteral("root/devices"));
+    QVERIFY(QFile::setPermissions(devices, QFileDevice::Permissions()));
+    QVERIFY(folder.list(QStringLiteral("devices"), &error).isEmpty());
+    QFile::setPermissions(devices, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
+    QCOMPARE(error.kind, SyncFolder::ErrorKind::Unavailable);
 }
 
 QTEST_GUILESS_MAIN(SyncTransportTests)
