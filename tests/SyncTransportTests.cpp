@@ -2,20 +2,29 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QSettings>
+#include <QSqlDatabase>
+#include <QSqlError>
+#include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QtTest>
 
 #include <functional>
+#include <memory>
 
+#include "../src/services/AppSettings.h"
+#include "../src/services/DatabaseManager.h"
 #include "../src/services/LocalSyncFolder.h"
 #include "../src/services/SyncFiles.h"
 #include "../src/services/SyncRecord.h"
+#include "../src/services/SyncStore.h"
 
 // 设备间同步的云盘传输（050 阶段 3）的测试。
 //
 // 3a 只看文件本身：文件名和位置的互转、四种文件的内容，以及坏文件、新版本文件能不能被认出来。
 // 这一层不碰磁盘，所以直接比较字节与结构。
 // 3b 看本地目录的读写：原子替换、错误归类（不存在、不可用）。
+// 3c 看传输记账：读到哪、写到哪都记在库里，重开之后还在。
 namespace {
 
 const QString kDeviceA = QStringLiteral("0123456789abcdef0123456789abcdef");
@@ -49,6 +58,39 @@ SyncBatch sampleBatch(const QString& device, qint64 epoch)
     return batch;
 }
 
+// 一台「设备」：用应用自己的初始化建出完整结构的临时库（含 v18 同步表与触发器，各自一个设备标识），
+// 再单独开一条连接当作这台设备。和 SyncTests 的做法一致：测试一律用真实的建表逻辑。
+struct Device {
+    QString path;
+    QString connection;
+    QString id;
+};
+
+QSqlDatabase deviceDb(const Device& device)
+{
+    return QSqlDatabase::database(device.connection);
+}
+
+bool exec(const Device& device, const QString& sql)
+{
+    QSqlQuery query(deviceDb(device));
+    if (!query.exec(sql)) {
+        qWarning() << sql << query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QVariant scalar(const Device& device, const QString& sql)
+{
+    QSqlQuery query(deviceDb(device));
+    if (!query.exec(sql)) {
+        qWarning() << sql << query.lastError().text();
+        return {};
+    }
+    return query.next() ? query.value(0) : QVariant();
+}
+
 // 把一个 JSON 对象改一处再编码回去，用来造各种坏文件。
 QByteArray tamper(const QByteArray& bytes, const std::function<void(QJsonObject&)>& change)
 {
@@ -64,6 +106,10 @@ class SyncTransportTests : public QObject
     Q_OBJECT
 
 private slots:
+    void initTestCase();
+    void init();
+    void cleanup();
+
     // 3a：文件格式
     void fileNamesRoundTripAndRejectForeignNames();
     void deviceIdsTemporaryNamesAndEmptyFolders();
@@ -78,6 +124,19 @@ private slots:
     void localFolderReadsWritesListsAndRemoves();
     void localFolderReplacesFilesAtomically();
     void localFolderClassifiesMissingAndUnavailable();
+
+    // 3c：传输记账
+    void transportProgressIsKeptInDatabase();
+    void pendingCountFollowsOutboxAndSettings();
+    void fileProblemsGoToSyncLog();
+
+private:
+    Device openDevice(const QString& name);
+    void reopen(Device& device);
+
+    QTemporaryDir m_preferences;
+    std::unique_ptr<QTemporaryDir> m_data;
+    QStringList m_connections;
 };
 
 void SyncTransportTests::fileNamesRoundTripAndRejectForeignNames()
@@ -398,6 +457,149 @@ void SyncTransportTests::localFolderClassifiesMissingAndUnavailable()
     QVERIFY(folder.list(QStringLiteral("devices"), &error).isEmpty());
     QFile::setPermissions(devices, QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner);
     QCOMPARE(error.kind, SyncFolder::ErrorKind::Unavailable);
+}
+
+// ── 3c：传输记账 ──
+
+void SyncTransportTests::initTestCase()
+{
+    QVERIFY(m_preferences.isValid());
+    // AppSettings 单例只落到临时 INI：例行生成、设置写回都不能碰真实偏好。
+    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoSyncTransportTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("SyncTransportTests"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+    AppSettings::instance()->setDayStartHour(4);
+}
+
+void SyncTransportTests::init()
+{
+    m_data = std::make_unique<QTemporaryDir>();
+    QVERIFY(m_data->isValid());
+}
+
+void SyncTransportTests::cleanup()
+{
+    DatabaseManager::instance()->close();
+    for (const QString& connection : std::as_const(m_connections)) {
+        {
+            QSqlDatabase database = QSqlDatabase::database(connection, false);
+            database.close();
+        }
+        QSqlDatabase::removeDatabase(connection);
+    }
+    m_connections.clear();
+    m_data.reset();
+}
+
+Device SyncTransportTests::openDevice(const QString& name)
+{
+    Device device;
+    device.path = m_data->filePath(name + QStringLiteral(".sqlite"));
+    if (!DatabaseManager::instance()->initialize(device.path)) {
+        qWarning() << "initialize failed" << device.path;
+    }
+    DatabaseManager::instance()->close();
+    device.connection = QStringLiteral("transport-device-") + name;
+    QSqlDatabase database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), device.connection);
+    database.setDatabaseName(device.path);
+    database.open();
+    QSqlQuery(database).exec(QStringLiteral("PRAGMA foreign_keys = ON"));
+    QSqlQuery(database).exec(QStringLiteral("PRAGMA busy_timeout = 5000"));
+    m_connections.append(device.connection);
+    device.id = SyncStore(device.connection).deviceId();
+    return device;
+}
+
+// 关掉再打开同一个库：记账要落在库文件里，不能只在连接的内存里。
+void SyncTransportTests::reopen(Device& device)
+{
+    {
+        QSqlDatabase database = QSqlDatabase::database(device.connection, false);
+        database.close();
+    }
+    QVERIFY(QSqlDatabase::database(device.connection).isOpen());
+}
+
+void SyncTransportTests::transportProgressIsKeptInDatabase()
+{
+    Device device = openDevice(QStringLiteral("a"));
+    SyncStore store(device.connection);
+    // 新库：没加入过文件夹、没读过任何设备、一批都没写过。
+    QVERIFY(store.folderId().isEmpty());
+    QVERIFY(store.peerCursors().isEmpty());
+    QCOMPARE(store.outboundPosition(), (SyncPosition{0, 0}));
+    QCOMPARE(store.snapshotPosition(), (SyncPosition{0, 0}));
+    QVERIFY(store.snapshotRequests().isEmpty());
+    QVERIFY(!store.lastSyncedAt().isValid());
+
+    const QDateTime synced = QDateTime::fromString(QStringLiteral("2026-09-30T10:11:12.345"), Qt::ISODateWithMs);
+    QVERIFY(store.setFolderId(QStringLiteral("folder-1")));
+    QVERIFY(store.setPeerCursor(kDeviceA, {2, 40}));
+    QVERIFY(store.setPeerCursor(kDeviceB, {2, 7}));
+    QVERIFY(store.setOutboundPosition({2, 12}));
+    QVERIFY(store.setSnapshotPosition({2, 10}));
+    QVERIFY(store.setSnapshotRequest(kDeviceB, {2, 8}));
+    QVERIFY(store.setLastSyncedAt(synced));
+
+    reopen(device);
+    SyncStore reopened(device.connection);
+    QCOMPARE(reopened.folderId(), QStringLiteral("folder-1"));
+    QCOMPARE(reopened.peerCursors().size(), 2);
+    QCOMPARE(reopened.peerCursors().value(kDeviceA), (SyncPosition{2, 40}));
+    QCOMPARE(reopened.outboundPosition(), (SyncPosition{2, 12}));
+    QCOMPARE(reopened.snapshotPosition(), (SyncPosition{2, 10}));
+    QCOMPARE(reopened.snapshotRequests().value(kDeviceB), (SyncPosition{2, 8}));
+    QCOMPARE(reopened.lastSyncedAt(), synced);
+
+    // 整体换掉游标：旧的一个不留（首次加入后按快照重新起步，旧纪元的进度作废）。
+    QVERIFY(reopened.replacePeerCursors({{kDeviceB, {3, 0}}}));
+    QCOMPARE(reopened.peerCursors().size(), 1);
+    QCOMPARE(reopened.peerCursors().value(kDeviceB), (SyncPosition{3, 0}));
+    QVERIFY(reopened.clearSnapshotRequest(kDeviceB));
+    QVERIFY(reopened.snapshotRequests().isEmpty());
+    QVERIFY(reopened.setFolderId(QString()));
+    QVERIFY(reopened.folderId().isEmpty());
+    // 记账不碰同步本身的状态：设备标识和纪元都还在。
+    QCOMPARE(reopened.deviceId(), device.id);
+
+    // 外部改坏的进度按「一批都没有」处理：宁可重读，不能跳过没读过的。
+    QVERIFY(exec(device, QStringLiteral("UPDATE sync_state SET value = 'x:y' WHERE key = 'outbound'")));
+    QCOMPARE(reopened.outboundPosition(), (SyncPosition{0, 0}));
+}
+
+void SyncTransportTests::pendingCountFollowsOutboxAndSettings()
+{
+    Device device = openDevice(QStringLiteral("a"));
+    SyncStore store(device.connection);
+    // 新库里预置科目已经在待发送队列里（迁移时把已有数据全部入队）。发出并确认之后就没有了。
+    QVERIFY(store.hasPending());
+    QVERIFY(store.acknowledge(store.collectPending()));
+    QVERIFY(!store.hasPending());
+    QCOMPARE(store.pendingCount(), 0);
+
+    QVERIFY(exec(device, QStringLiteral("INSERT INTO tasks (title, date, completed, display_order) "
+                                        "VALUES ('背单词', '2026-09-30', 0, 1)")));
+    QVERIFY(store.hasPending());
+    QCOMPARE(store.pendingCount(), 1);
+    QVERIFY(store.recordLocalSetting(QStringLiteral("logic/dayStartHour"), QStringLiteral("5"), false));
+    QCOMPARE(store.pendingCount(), 2);
+    QVERIFY(store.acknowledge(store.collectPending()));
+    QVERIFY(!store.hasPending());
+}
+
+void SyncTransportTests::fileProblemsGoToSyncLog()
+{
+    Device device = openDevice(QStringLiteral("a"));
+    SyncStore store(device.connection);
+    const QString file = SyncFiles::changesDirectory(kDeviceB) + QLatin1Char('/') + SyncFiles::changeFileName({0, 3});
+    QVERIFY(store.logFileProblem(kDeviceB, file, QStringLiteral("文件内容不是完整的 JSON")));
+    QCOMPARE(scalar(device, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE kind = 'file'")).toInt(), 1);
+    QCOMPARE(scalar(device, QStringLiteral("SELECT sync_id FROM sync_conflict_log")).toString(), file);
+    QCOMPARE(scalar(device, QStringLiteral("SELECT record_label FROM sync_conflict_log")).toString(),
+             SyncFiles::changeFileName({0, 3}));
+    QCOMPARE(scalar(device, QStringLiteral("SELECT lost_device FROM sync_conflict_log")).toString(), kDeviceB);
+    QVERIFY(scalar(device, QStringLiteral("SELECT detail FROM sync_conflict_log")).toString().contains(QStringLiteral("JSON")));
 }
 
 QTEST_GUILESS_MAIN(SyncTransportTests)

@@ -3,6 +3,7 @@
 
 #include "SyncRecord.h"
 
+#include <QDateTime>
 #include <QHash>
 #include <QList>
 #include <QSet>
@@ -71,6 +72,39 @@ public:
     // （备份可能来自另一台设备，两台共用一个标识会把合并搅乱）；清空待发送；置「需要发布快照」。
     bool beginEpochAfterRestore(qint64 previousEpoch, const QString& previousDeviceId);
     bool needsSnapshot() const;
+
+    // ── 传输记账（050 阶段 3）──
+    // 云盘传输读到哪、写到哪，都记在 sync_state 里，和数据放在同一个库：恢复备份时它们跟着数据一起回到
+    // 备份那一刻，「应用到对方第几批」就不会和库里实际有的数据对不上。传输层（SyncEngine）调用。
+    // 每一步都只在对应的数据已经提交之后再记：先记后提交的话，中途失败就会漏掉一批；
+    // 反过来最多是重读一批，而重复应用不改变任何东西。
+
+    // 有没有等着发出的改动（待发送队列里的记录，或待发送的设置项）。
+    bool hasPending() const;
+    int pendingCount() const;
+    // 本机加入的同步文件夹（标记文件里的文件夹身份）。没加入过时为空。
+    QString folderId() const;
+    bool setFolderId(const QString& folderId);
+    // 本机已经应用到各台设备第几批。
+    QHash<QString, SyncPosition> peerCursors() const;
+    bool setPeerCursor(const QString& device, const SyncPosition& position);
+    // 整体换掉：首次加入、采用了对方的新纪元之后，按快照里记的进度重新起步。
+    bool replacePeerCursors(const QHash<QString, SyncPosition>& cursors);
+    // 本机写到第几批改动。
+    SyncPosition outboundPosition() const;
+    bool setOutboundPosition(const SyncPosition& position);
+    // 本机最近一份快照覆盖到第几批。只删它覆盖到的旧改动文件：之后才加入、或落后太久的设备还能从快照起步。
+    SyncPosition snapshotPosition() const;
+    bool setSnapshotPosition(const SyncPosition& position);
+    // 本机请别的设备补一份至少覆盖到这一批的快照：读到它的坏文件，或者它的某一批一直没传到。
+    QHash<QString, SyncPosition> snapshotRequests() const;
+    bool setSnapshotRequest(const QString& device, const SyncPosition& position);
+    bool clearSnapshotRequest(const QString& device);
+    // 上一次完整同步完的时刻（给人看的状态）。从没同步过时无效。
+    QDateTime lastSyncedAt() const;
+    bool setLastSyncedAt(const QDateTime& time);
+    // 文件层面的问题（坏文件、读不懂的新版本文件）记进同步日志，和冲突记录放在一起，设置页可以查。
+    bool logFileProblem(const QString& device, const QString& file, const QString& detail);
 
 private:
     QSqlDatabase database() const;

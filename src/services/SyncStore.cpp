@@ -2120,3 +2120,205 @@ SyncStore::ApplyResult SyncStore::applyRemote(const SyncBatch& batch)
     result.ok = true;
     return result;
 }
+
+// ── 传输记账 ──
+
+namespace {
+
+// sync_state 的键：传输层的进度都以文本存，「纪元:序号」这种写法读的时候再拆开。
+const QString kFolderIdKey = QStringLiteral("folder_id");
+const QString kOutboundKey = QStringLiteral("outbound");
+const QString kSnapshotPositionKey = QStringLiteral("snapshot_position");
+const QString kLastSyncedKey = QStringLiteral("last_synced_at");
+const QString kCursorPrefix = QStringLiteral("cursor/");
+const QString kRequestPrefix = QStringLiteral("request/");
+
+QString positionText(const SyncPosition& position)
+{
+    return QStringLiteral("%1:%2").arg(position.epoch).arg(position.seq);
+}
+
+// 拆不开的（外部改过库）按「一批都没有」处理：宁可多读一遍对方的文件，也不能跳过没读过的。
+SyncPosition parsePosition(const QString& text)
+{
+    const QStringList parts = text.split(QLatin1Char(':'));
+    bool epochOk = false;
+    bool seqOk = false;
+    const qint64 epoch = parts.size() == 2 ? parts.at(0).toLongLong(&epochOk) : 0;
+    const qint64 seq = parts.size() == 2 ? parts.at(1).toLongLong(&seqOk) : 0;
+    return epochOk && seqOk && epoch >= 0 && seq >= 0 ? SyncPosition{epoch, seq} : SyncPosition{};
+}
+
+QString stateValue(QSqlDatabase db, const QString& key)
+{
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT value FROM sync_state WHERE key = :key"));
+    query.bindValue(QStringLiteral(":key"), key);
+    return query.exec() && query.next() ? query.value(0).toString() : QString();
+}
+
+bool setStateValue(QSqlDatabase db, const QString& key, const QString& value)
+{
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("INSERT OR REPLACE INTO sync_state (key, value) VALUES (:key, :value)"));
+    query.bindValue(QStringLiteral(":key"), key);
+    query.bindValue(QStringLiteral(":value"), nonNull(value));
+    if (!query.exec()) {
+        qWarning() << "Failed to write sync state" << key << query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool removeStateValue(QSqlDatabase db, const QString& key)
+{
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("DELETE FROM sync_state WHERE key = :key"));
+    query.bindValue(QStringLiteral(":key"), key);
+    return query.exec();
+}
+
+// 某个前缀下的全部位置（设备 → 位置）。键里带设备标识，前缀之后的部分就是设备。
+QHash<QString, SyncPosition> statePositions(QSqlDatabase db, const QString& prefix)
+{
+    QHash<QString, SyncPosition> positions;
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT key, value FROM sync_state WHERE substr(key, 1, :length) = :prefix"));
+    query.bindValue(QStringLiteral(":length"), prefix.size());
+    query.bindValue(QStringLiteral(":prefix"), prefix);
+    if (query.exec()) {
+        while (query.next()) {
+            positions.insert(query.value(0).toString().mid(prefix.size()), parsePosition(query.value(1).toString()));
+        }
+    }
+    return positions;
+}
+
+} // namespace
+
+bool SyncStore::hasPending() const
+{
+    QSqlQuery query(database());
+    return query.exec(QStringLiteral("SELECT EXISTS (SELECT 1 FROM sync_outbox) "
+                                     "OR EXISTS (SELECT 1 FROM sync_settings WHERE pending = 1)"))
+        && query.next() && query.value(0).toInt() != 0;
+}
+
+int SyncStore::pendingCount() const
+{
+    QSqlQuery query(database());
+    return query.exec(QStringLiteral("SELECT (SELECT COUNT(*) FROM sync_outbox) "
+                                     "+ (SELECT COUNT(*) FROM sync_settings WHERE pending = 1)"))
+            && query.next()
+        ? query.value(0).toInt() : 0;
+}
+
+QString SyncStore::folderId() const
+{
+    return stateValue(database(), kFolderIdKey);
+}
+
+bool SyncStore::setFolderId(const QString& folderId)
+{
+    return folderId.isEmpty() ? removeStateValue(database(), kFolderIdKey)
+                              : setStateValue(database(), kFolderIdKey, folderId);
+}
+
+QHash<QString, SyncPosition> SyncStore::peerCursors() const
+{
+    return statePositions(database(), kCursorPrefix);
+}
+
+bool SyncStore::setPeerCursor(const QString& device, const SyncPosition& position)
+{
+    return setStateValue(database(), kCursorPrefix + device, positionText(position));
+}
+
+bool SyncStore::replacePeerCursors(const QHash<QString, SyncPosition>& cursors)
+{
+    QSqlDatabase db = database();
+    if (!db.transaction()) {
+        return false;
+    }
+    QSqlQuery clear(db);
+    clear.prepare(QStringLiteral("DELETE FROM sync_state WHERE substr(key, 1, :length) = :prefix"));
+    clear.bindValue(QStringLiteral(":length"), kCursorPrefix.size());
+    clear.bindValue(QStringLiteral(":prefix"), kCursorPrefix);
+    bool ok = clear.exec();
+    for (auto it = cursors.cbegin(); ok && it != cursors.cend(); ++it) {
+        ok = setStateValue(db, kCursorPrefix + it.key(), positionText(it.value()));
+    }
+    if (!ok || !db.commit()) {
+        db.rollback();
+        return false;
+    }
+    return true;
+}
+
+SyncPosition SyncStore::outboundPosition() const
+{
+    return parsePosition(stateValue(database(), kOutboundKey));
+}
+
+bool SyncStore::setOutboundPosition(const SyncPosition& position)
+{
+    return setStateValue(database(), kOutboundKey, positionText(position));
+}
+
+SyncPosition SyncStore::snapshotPosition() const
+{
+    return parsePosition(stateValue(database(), kSnapshotPositionKey));
+}
+
+bool SyncStore::setSnapshotPosition(const SyncPosition& position)
+{
+    return setStateValue(database(), kSnapshotPositionKey, positionText(position));
+}
+
+QHash<QString, SyncPosition> SyncStore::snapshotRequests() const
+{
+    return statePositions(database(), kRequestPrefix);
+}
+
+bool SyncStore::setSnapshotRequest(const QString& device, const SyncPosition& position)
+{
+    return setStateValue(database(), kRequestPrefix + device, positionText(position));
+}
+
+bool SyncStore::clearSnapshotRequest(const QString& device)
+{
+    return removeStateValue(database(), kRequestPrefix + device);
+}
+
+QDateTime SyncStore::lastSyncedAt() const
+{
+    return QDateTime::fromString(stateValue(database(), kLastSyncedKey), Qt::ISODateWithMs);
+}
+
+bool SyncStore::setLastSyncedAt(const QDateTime& time)
+{
+    return setStateValue(database(), kLastSyncedKey, time.toString(Qt::ISODateWithMs));
+}
+
+bool SyncStore::logFileProblem(const QString& device, const QString& file, const QString& detail)
+{
+    QSqlDatabase db = database();
+    QSqlQuery query(db);
+    // 表名留空、身份一栏放文件路径：这条记的是一个文件，不是某一条数据。
+    query.prepare(QStringLiteral(
+        "INSERT INTO sync_conflict_log (logged_at, kind, tbl, sync_id, record_label, lost_device, detail) "
+        "VALUES (:at, 'file', '', :file, :label, :device, :detail)"));
+    query.bindValue(QStringLiteral(":at"), QDateTime::currentDateTime().toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":file"), nonNull(file));
+    query.bindValue(QStringLiteral(":label"), nonNull(file.section(QLatin1Char('/'), -1)));
+    query.bindValue(QStringLiteral(":device"), nonNull(device));
+    query.bindValue(QStringLiteral(":detail"), nonNull(truncated(detail)));
+    if (!query.exec()) {
+        qWarning() << "Failed to log sync file problem:" << query.lastError().text();
+        return false;
+    }
+    QSqlQuery prune(db);
+    prune.exec(QStringLiteral("DELETE FROM sync_conflict_log WHERE id <= "
+                              "(SELECT MAX(id) - %1 FROM sync_conflict_log)").arg(kConflictLogLimit));
+    return true;
+}
