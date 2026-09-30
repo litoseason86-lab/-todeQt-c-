@@ -248,6 +248,8 @@ SyncWorker::ScanResult SyncWorker::scan(const ScanRequest& request)
                 continue;
             }
             --budget;
+            // 位置先记下：读不出来时 SyncEngine 要据此记日志、请对方写一份新的。
+            peer.snapshotPosition = snapshot;
             peer.snapshotStatus = readSnapshot(device, snapshot, &peer.snapshot, &peer.snapshotError, &peer.readError);
             if (!peer.readError.ok()) {
                 result.peers.append(peer);
@@ -255,7 +257,6 @@ SyncWorker::ScanResult SyncWorker::scan(const ScanRequest& request)
             }
             if (peer.snapshotStatus == SyncFiles::ParseStatus::Ok) {
                 peer.hasSnapshot = true;
-                peer.snapshotPosition = snapshot;
                 expected = std::max(applied, snapshot.seq) + 1;
             }
         }
@@ -292,7 +293,8 @@ SyncWorker::ScanResult SyncWorker::scan(const ScanRequest& request)
                                                                           : IncomingFile::Kind::Corrupt;
             }
             peer.files.append(file);
-            if (file.kind != IncomingFile::Kind::Batch) {
+            // 更新版本写的文件停在这里（跳过就丢了）；坏文件由 SyncEngine 跳过，接着读后面的批次。
+            if (file.kind == IncomingFile::Kind::Newer) {
                 break;
             }
             ++expected;

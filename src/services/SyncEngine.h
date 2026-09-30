@@ -9,6 +9,7 @@
 #include <QElapsedTimer>
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <QString>
 #include <QTimer>
 
@@ -203,6 +204,8 @@ private:
     qint64 m_lastMaintenanceMs = -1;
     // 对方某一批从什么时候开始一直没到（设备 → 时刻）。
     QHash<QString, qint64> m_gapSinceMs;
+    // 已经记过日志的坏快照：同一份每轮都会读到，只记一次。
+    QSet<QString> m_loggedBadFiles;
     qint64 m_lastPublishMs = -1;
     qint64 m_lastScanMs = -1;
     qint64 m_retryAtMs = 0;

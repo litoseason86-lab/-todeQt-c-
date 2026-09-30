@@ -577,16 +577,35 @@ void SyncEngine::afterScan(const SyncWorker::ScanResult& result)
     SyncStore s = store();
     const qint64 epoch = s.epoch();
     const qint64 now = nowMs();
-    const QHash<QString, SyncPosition> requests = s.snapshotRequests();
+    QHash<QString, SyncPosition> requests = s.snapshotRequests();
     const QHash<QString, SyncPosition> cursors = s.peerCursors();
+    // 请对方补一份至少覆盖到 seq 的快照。只往后推、不往前退：覆盖得更远的快照也覆盖了前面的。
+    const auto requestSnapshot = [&](const QString& device, qint64 seq) {
+        const SyncPosition current = requests.value(device);
+        if (current.epoch == epoch && current.seq >= seq) {
+            return;
+        }
+        requests.insert(device, {epoch, seq});
+        s.setSnapshotRequest(device, {epoch, seq});
+        m_cursorDirty = true;
+    };
     SyncStore::ApplyResult total;
     for (const SyncWorker::PeerScan& peer : result.peers) {
         const SyncPosition cursor = cursors.value(peer.device);
         qint64 applied = cursor.epoch == epoch ? cursor.seq : 0;
         if (peer.snapshotStatus == SyncFiles::ParseStatus::NewerFormat) {
             warn(Status::NewerVersion, peer.snapshotError);
-        } else if (peer.snapshotStatus == SyncFiles::ParseStatus::Corrupt && !peer.snapshotError.isEmpty()) {
-            warn(Status::Error, QStringLiteral("对方的快照读不懂：%1").arg(peer.snapshotError));
+        } else if (peer.snapshotStatus == SyncFiles::ParseStatus::Corrupt && peer.readError.ok()) {
+            // 需要的快照坏了：记一笔日志（同一份只记一次），再请对方写一份新的。对方只在写过更新的一批之后
+            // 才会重写快照，所以请求推到它下一批；它下次同步时就会写出来。
+            const QString path = SyncFiles::deviceDirectory(peer.device) + QLatin1Char('/')
+                + SyncFiles::snapshotFileName(peer.snapshotPosition);
+            if (!m_loggedBadFiles.contains(path)) {
+                m_loggedBadFiles.insert(path);
+                s.logFileProblem(peer.device, path, peer.snapshotError);
+            }
+            requestSnapshot(peer.device, peer.snapshotPosition.seq + 1);
+            warn(Status::Error, QStringLiteral("%1 读不懂：%2").arg(path, peer.snapshotError));
         }
         bool stopped = false;
         if (peer.hasSnapshot) {
@@ -602,6 +621,7 @@ void SyncEngine::afterScan(const SyncWorker::ScanResult& result)
                 m_cursorDirty = true;
                 const SyncPosition request = requests.value(peer.device);
                 if (request.epoch != epoch || request.seq <= peer.snapshotPosition.seq) {
+                    requests.remove(peer.device);
                     s.clearSnapshotRequest(peer.device);
                 }
             }
@@ -615,8 +635,17 @@ void SyncEngine::afterScan(const SyncWorker::ScanResult& result)
                 break;
             }
             if (file.kind == SyncWorker::IncomingFile::Kind::Corrupt) {
-                warn(Status::Error, QStringLiteral("%1 读不懂：%2").arg(file.path, file.error));
-                break;
+                // 坏文件：写完整了还是坏的，重读也不会变好。跳过它、记进同步日志，并请对方补一份
+                // 覆盖到这一批的快照，把这批里的改动带回来。停在这里等的话，一个坏文件就会让同步永远卡住。
+                s.logFileProblem(peer.device, file.path, file.error);
+                requestSnapshot(peer.device, file.seq);
+                if (!s.setPeerCursor(peer.device, {epoch, file.seq})) {
+                    warn(Status::Error, QStringLiteral("记不下读取进度"));
+                    break;
+                }
+                m_cursorDirty = true;
+                warn(Status::Error, QStringLiteral("%1 读不懂，已跳过并请对方补发：%2").arg(file.path, file.error));
+                continue;
             }
             // 每批一个事务；提交之后才记「读到了第几批」。先记后提交的话，中途失败就会漏掉这一批。
             const SyncStore::ApplyResult appliedBatch = s.applyRemote(file.batch);
@@ -639,11 +668,8 @@ void SyncEngine::afterScan(const SyncWorker::ScanResult& result)
         if (peer.waitingFor > 0) {
             const qint64 since = m_gapSinceMs.value(peer.device, now);
             m_gapSinceMs.insert(peer.device, since);
-            const SyncPosition request = requests.value(peer.device);
-            if (now - since >= m_options.gapRequestAfterMs
-                && (request.epoch != epoch || request.seq < peer.waitingFor)) {
-                s.setSnapshotRequest(peer.device, {epoch, peer.waitingFor});
-                m_cursorDirty = true;
+            if (now - since >= m_options.gapRequestAfterMs) {
+                requestSnapshot(peer.device, peer.waitingFor);
             }
         } else {
             m_gapSinceMs.remove(peer.device);

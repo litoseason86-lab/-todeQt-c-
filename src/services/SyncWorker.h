@@ -108,6 +108,7 @@ public:
         // 要先合并的快照：对方的旧改动已经清理掉了（本机落后太久）、本机落后太多批，
         // 或者本机请它补的快照到了。合并快照和逐批应用结果相同：记录都带着字段版本，重复的不改变任何东西。
         bool hasSnapshot = false;
+        // 读了哪一份快照（读成功与否都记下）。
         SyncPosition snapshotPosition;
         SyncFiles::SnapshotFile snapshot;
         // 需要快照却读不出来（坏了、版本更新）。
