@@ -15,9 +15,13 @@
 #include "../src/services/AppSettings.h"
 #include "../src/services/CategoryManager.h"
 #include "../src/services/DatabaseManager.h"
+#include "../src/services/FocusHistoryService.h"
+// FocusTimer 声明 friend class SyncTests，用例之间据此复位单例计时器。
+#include "../src/services/FocusTimer.h"
 #include "../src/services/LogicalDay.h"
 #include "../src/services/RoutineManager.h"
 #include "../src/services/RoutineRules.h"
+#include "../src/services/SyncNotifier.h"
 #include "../src/services/SyncRecord.h"
 #include "../src/services/SyncSchema.h"
 #include "../src/services/SyncStore.h"
@@ -338,6 +342,41 @@ SyncBatch throughJson(const SyncBatch& batch)
     return parsed;
 }
 
+// 按发生顺序记下各服务发出的刷新信号。它是连接的上下文对象，析构时连接自动断开，不会漏到别的用例。
+class SignalRecorder : public QObject
+{
+public:
+    QStringList events;
+
+    SignalRecorder()
+    {
+        connect(TaskManager::instance(), &TaskManager::taskDeleted, this,
+                [this](int taskId) { events << QStringLiteral("taskDeleted:%1").arg(taskId); });
+        connect(TaskManager::instance(), &TaskManager::tasksChanged, this,
+                [this] { events << QStringLiteral("tasksChanged"); });
+        connect(CategoryManager::instance(), &CategoryManager::categoriesChanged, this,
+                [this] { events << QStringLiteral("categoriesChanged"); });
+        connect(RoutineManager::instance(), &RoutineManager::routinesChanged, this,
+                [this] { events << QStringLiteral("routinesChanged"); });
+        connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged, this,
+                [this] { events << QStringLiteral("historyChanged"); });
+        connect(AppSettings::instance(), &AppSettings::dayStartHourChanged, this,
+                [this] { events << QStringLiteral("dayStartHourChanged"); });
+    }
+};
+
+// 对方（另一台设备）发来的一条删除记录。
+SyncRecord remoteDeletion(const QString& table, const QString& syncId, const SyncVersion& version)
+{
+    SyncRecord record;
+    record.table = table;
+    record.syncId = syncId;
+    record.deleted = true;
+    record.deleteVersion = version;
+    record.deleteKind = QStringLiteral("delete");
+    return record;
+}
+
 int logCount(const Device& device, const QString& kind = QString())
 {
     return kind.isEmpty() ? count(device, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log"))
@@ -489,6 +528,11 @@ private slots:
     void globalRollbackReplacesOtherDeviceAndRejectsOldEpoch();
     void publishedSnapshotAcknowledgesQueuedChanges();
 
+    // 2f：提交后的精确通知
+    void notificationsFollowChangedTablesInOrder();
+    void failedApplyPublishesNothing();
+    void remoteDeletionUnbindsRunningTimer();
+
 private:
     Device openDevice(const QString& name);
     // 临时把服务层（TaskManager 等单例）切到这台设备的库上执行一段操作，用完关掉。
@@ -521,6 +565,9 @@ void SyncTests::init()
 
 void SyncTests::cleanup()
 {
+    // 单例计时器与设置跨用例共享：复位，免得上一条用例的计时或逻辑日起点漏到下一条。
+    FocusTimer::instance()->resetSession();
+    AppSettings::instance()->setDayStartHour(4);
     DatabaseManager::instance()->close();
     for (const QString& connection : m_connections) {
         {
@@ -1995,6 +2042,111 @@ void SyncTests::publishedSnapshotAcknowledgesQueuedChanges()
     QCOMPARE(pending.records.first().syncId, first);
     QCOMPARE(pending.records.first().fields.value(QStringLiteral("title")).value.toString(),
              QStringLiteral("快照之后改的"));
+}
+
+// ── 2f：提交后的精确通知 ──
+//
+// 这几条用单例库当「本机」：各服务的信号挂在单例上，计时器也只认单例库。
+
+void SyncTests::notificationsFollowChangedTablesInOrder()
+{
+    RoutineManager::instance();  // 先建出例行管理器：它会把 categoriesChanged 转成 routinesChanged
+    const int taskId = TaskManager::instance()->createTask(QStringLiteral("要被远端删的"), today(), -1, 0, QString());
+    const int categoryId = CategoryManager::instance()->addCategory(QStringLiteral("编程"), QStringLiteral("#123456"));
+    QVERIFY(taskId > 0 && categoryId > 0);
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const SyncVersion version{kFuture, remote};
+
+    SyncBatch batch;
+    batch.device = remote;
+    batch.records.append(remoteDeletion(QStringLiteral("tasks"), syncIdOf(QStringLiteral("tasks"), taskId), version));
+    SyncRecord renamed;
+    renamed.table = QStringLiteral("categories");
+    renamed.syncId = syncIdOf(QStringLiteral("categories"), categoryId);
+    renamed.fields.insert(QStringLiteral("name"), {QStringLiteral("计算机"), version, {}});
+    batch.records.append(renamed);
+    SyncRecord session;
+    session.table = QStringLiteral("focus_sessions");
+    session.syncId = QStringLiteral("remote-session");
+    session.fields.insert(QStringLiteral("start_time"), {QStringLiteral("2026-09-30T09:00:00"), version, {}});
+    session.fields.insert(QStringLiteral("end_time"), {QStringLiteral("2026-09-30T09:25:00"), version, {}});
+    session.fields.insert(QStringLiteral("duration"), {qint64(1500), version, {}});
+    batch.records.append(session);
+    batch.settings.append({QStringLiteral("logic/dayStartHour"), QStringLiteral("5"), version, {}});
+
+    SignalRecorder recorder;
+    const SyncStore::ApplyResult result = SyncStore().applyRemote(batch);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    // 应用过程本身一个信号都不发：事务提交之前发出去，失败回滚时就收不回来了。
+    QVERIFY(recorder.events.isEmpty());
+
+    SyncNotifier::publish(result);
+    const QString deleted = QStringLiteral("taskDeleted:%1").arg(taskId);
+    // 先删除事实、后列表刷新：计时器这类持有任务编号的服务先解绑。
+    QCOMPARE(recorder.events.first(), deleted);
+    QVERIFY(recorder.events.indexOf(QStringLiteral("tasksChanged")) > recorder.events.indexOf(deleted));
+    for (const char* expected : {"categoriesChanged", "routinesChanged", "historyChanged", "dayStartHourChanged"}) {
+        QVERIFY2(recorder.events.contains(QString::fromLatin1(expected)), expected);
+    }
+    // 逻辑日起点写回了 AppSettings。
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 5);
+
+    // 只动了专注记录的一批：不发科目、例行的信号，也不整库重载。
+    SignalRecorder onlyHistory;
+    SyncBatch sessionsOnly;
+    sessionsOnly.device = remote;
+    SyncRecord longer = session;
+    longer.fields.insert(QStringLiteral("duration"), {qint64(1200), {kFuture + 1, remote}, {}});
+    sessionsOnly.records.append(longer);
+    const SyncStore::ApplyResult second = SyncStore().applyRemote(sessionsOnly);
+    QVERIFY(second.ok);
+    SyncNotifier::publish(second);
+    QVERIFY(!onlyHistory.events.contains(QStringLiteral("categoriesChanged")));
+    QVERIFY(!onlyHistory.events.contains(QStringLiteral("routinesChanged")));
+    QVERIFY(onlyHistory.events.contains(QStringLiteral("historyChanged")));
+}
+
+void SyncTests::failedApplyPublishesNothing()
+{
+    RoutineManager::instance();
+    const int taskId = TaskManager::instance()->createTask(QStringLiteral("还在的任务"), today(), -1, 0, QString());
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    SyncBatch batch;
+    batch.device = remote;
+    batch.epoch = 7;  // 纪元不对：整批拒绝
+    batch.records.append(remoteDeletion(QStringLiteral("tasks"), syncIdOf(QStringLiteral("tasks"), taskId),
+                                        {kFuture, remote}));
+
+    SignalRecorder recorder;
+    const SyncStore::ApplyResult result = SyncStore().applyRemote(batch);
+    QVERIFY(!result.ok);
+    SyncNotifier::publish(result);
+    QVERIFY(recorder.events.isEmpty());
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE id = %1").arg(taskId)), 1);
+}
+
+void SyncTests::remoteDeletionUnbindsRunningTimer()
+{
+    // 另一台删掉了本机正在计时的任务：计时照常继续，只是不再挂在这条任务上，
+    // 活动状态里也不能留着旧编号，否则重启恢复时会带回一个已经不存在的任务。
+    const int taskId = TaskManager::instance()->createTask(QStringLiteral("正在计时的"), today(), -1, 0, QString());
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("正在计时的")));
+    QCOMPARE(FocusTimer::instance()->currentTaskId(), taskId);
+
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    SyncBatch batch;
+    batch.device = remote;
+    batch.records.append(remoteDeletion(QStringLiteral("tasks"), syncIdOf(QStringLiteral("tasks"), taskId),
+                                        {kFuture, remote}));
+    const SyncStore::ApplyResult result = SyncStore().applyRemote(batch);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(result.deletedTaskIds.contains(taskId));
+    SyncNotifier::publish(result);
+
+    QCOMPARE(FocusTimer::instance()->currentTaskId(), -1);
+    QVERIFY(FocusTimer::instance()->hasActiveSession());
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE end_time IS NULL AND task_id IS NULL")), 1);
+    QVERIFY(scalar(QStringLiteral("SELECT task_id FROM active_focus_state")).isNull());
 }
 
 QTEST_MAIN(SyncTests)

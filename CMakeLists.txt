@@ -83,6 +83,8 @@ set(APP_SOURCES
     src/services/SyncRecord.cpp
     src/services/SyncStore.h
     src/services/SyncStore.cpp
+    src/services/SyncNotifier.h
+    src/services/SyncNotifier.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -876,6 +878,14 @@ add_executable(SyncTests
     src/services/SyncRecord.cpp
     src/services/SyncStore.h
     src/services/SyncStore.cpp
+    src/services/SyncNotifier.h
+    src/services/SyncNotifier.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/FocusHistoryService.h
+    src/services/FocusHistoryService.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
