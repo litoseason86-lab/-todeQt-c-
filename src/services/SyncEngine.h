@@ -111,6 +111,9 @@ public:
     void setChangeNotifier(std::function<void(const SyncStore::ApplyResult&)> notifier);
     // 换一个同步文件夹（iPad 重新选了文件夹）。正在进行的一轮作废，下一轮用新的。
     void setFolder(std::unique_ptr<SyncFolder> folder);
+    // 切到后台时向系统要一点时间把改动写完（iPad 用 UIApplication 的后台任务；Mac 不需要，不设置）。
+    // provider 开始一个后台任务，返回结束它的函数：写完、引擎停下或回到前台时调用。
+    void setBackgroundTaskProvider(std::function<std::function<void()>()> provider);
 
     void start();
     void stop();
@@ -164,6 +167,7 @@ private:
                              QString* error);
     void notify(const SyncStore::ApplyResult& result);
     void warn(Status status, const QString& detail);
+    void endBackgroundTask();
     void onTick();
     void updateTimer();
     void refreshPending();
@@ -182,6 +186,9 @@ private:
     std::shared_ptr<QThreadPool> m_pool;
     std::function<bool(QString*)> m_safetyBackup;
     std::function<void(const SyncStore::ApplyResult&)> m_notifier;
+    std::function<std::function<void()>()> m_backgroundTaskProvider;
+    // 正在进行的后台任务的结束函数；没有时为空。
+    std::function<void()> m_endBackgroundTask;
 
     QTimer m_tick;
     QElapsedTimer m_clock;
@@ -192,9 +199,13 @@ private:
     // 每次停下、换文件夹都加一：还在路上的旧结果据此认出来丢掉。
     quint64 m_generation = 0;
     bool m_joinConfirmed = false;
-    // 这一轮不管攒批间隔，有改动就写（切到后台、手动同步）；只写不读（切到后台时时间有限）。
+    // 下一次写出不管攒批间隔，有改动就写（切到后台、手动同步）。
     bool m_flushRequested = false;
-    bool m_flushOnly = false;
+    // 切到后台了，要来一轮「只写不读」（后台时间有限）。一轮开始时据此定下这一轮的做法：
+    // 切到后台时恰好有一轮在进行，要等它做完再来这一轮，不能让它顺手把标记清掉。
+    bool m_backgroundFlushPending = false;
+    // 这一轮只写不读。
+    bool m_cycleFlushOnly = false;
     // 游标变了还没写进游标文件。
     bool m_cursorDirty = false;
     // 上次写游标文件的时刻（墙上时间）：没变化也每天写一次，对方据此知道本机还在用，不会把本机当成不再使用的设备。

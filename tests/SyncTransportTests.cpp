@@ -24,6 +24,7 @@
 #include "../src/services/SyncRecord.h"
 #include "../src/services/SyncStore.h"
 #include "../src/services/SyncWorker.h"
+#include "../src/platform/macos/MacSyncFolder.h"
 
 // 设备间同步的云盘传输（050 阶段 3）的测试。
 //
@@ -366,6 +367,7 @@ private slots:
     void wrongFolderIsReportedWithHint();
     void joinWaitsWhileSnapshotIsStillUploading();
     void batchingWaitsUntilIntervalOrBackground();
+    void backgroundTaskCoversFlushAfterCycleInProgress();
     void flushBeforeExitWritesPendingChanges();
     void fileWorkRunsOffTheMainThread();
 
@@ -386,6 +388,10 @@ private slots:
     void uploadProblemIsShown();
     void strayFilesAreIgnoredAndOwnLeftoversCleaned();
     void missingMarkerAfterJoinIsNotRecreated();
+
+    // 3g：平台层（Mac）
+    void macFolderLivesInsideICloudDrive();
+    void macFolderIsUnavailableWithoutICloudDrive();
 
 private:
     Device openDevice(const QString& name);
@@ -1220,6 +1226,50 @@ void SyncTransportTests::batchingWaitsUntilIntervalOrBackground()
     QCOMPARE(SyncStore(ipad->device.connection).pendingCount(), 1);
 }
 
+void SyncTransportTests::backgroundTaskCoversFlushAfterCycleInProgress()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+    SyncEngine::Options options = testOptions();
+    options.publishIntervalMs = 60 * 60 * 1000;
+    options.runInBackground = false;
+    SyncEngine engine(std::make_unique<LocalSyncFolder>(cloud.replica(ipad->device)), options,
+                      ipad->device.connection);
+    engine.setChangeNotifier([](const SyncStore::ApplyResult&) {});
+    ipad->engine->stop();
+    engine.start();
+    QVERIFY(waitIdle(engine));
+    QSignalSpy finished(&engine, &SyncEngine::cycleFinished);
+    int begun = 0;
+    QList<qsizetype> endedAfterFinishes;
+    engine.setBackgroundTaskProvider([&begun, &endedAfterFinishes, &finished] {
+        ++begun;
+        return [&endedAfterFinishes, &finished] { endedAfterFinishes.append(finished.count()); };
+    });
+    QVERIFY(!addTask(ipad->device, QStringLiteral("切后台前记的")).isEmpty());
+
+    // 切到后台时，定时的那一轮正在进行（这里用手动同步代替）：后台任务要一直保留到后面那一轮「只写」做完，
+    // 不能在正在进行的那一轮收尾时就还给系统。
+    engine.syncNow();
+    QVERIFY(engine.isBusy());
+    engine.setForeground(false);
+    QVERIFY(waitIdle(engine));
+    QCOMPARE(begun, 1);
+    QCOMPARE(endedAfterFinishes, QList<qsizetype>{1});
+    QCOMPARE(finished.count(), 2);
+    QCOMPARE(SyncStore(ipad->device.connection).pendingCount(), 0);
+
+    // 回到前台再切后台：再要一次；停下时还没用完的也要还。
+    engine.setForeground(true);
+    QVERIFY(waitIdle(engine));
+    engine.setForeground(false);
+    engine.stop();
+    QCOMPARE(begun, 2);
+    QCOMPARE(endedAfterFinishes.size(), 2);
+}
+
 void SyncTransportTests::flushBeforeExitWritesPendingChanges()
 {
     FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
@@ -1884,6 +1934,50 @@ void SyncTransportTests::missingMarkerAfterJoinIsNotRecreated()
     QVERIFY(!fileExists(cloud.path(mac->device, SyncFiles::markerFileName())));
     QCOMPARE(SyncStore(mac->device.connection).folderId(), folderId);
     QCOMPARE(SyncStore(mac->device.connection).pendingCount(), 1);
+}
+
+// ── 3g：平台层（Mac） ──
+
+void SyncTransportTests::macFolderLivesInsideICloudDrive()
+{
+    // 用临时目录代替 iCloud 云盘，不碰真实的云盘。
+    const QString drive = m_data->filePath(QStringLiteral("CloudDocs"));
+    QVERIFY(QDir().mkpath(drive));
+    MacSyncFolder folder(drive);
+    SyncFolder::Error error;
+    QVERIFY(folder.open(&error));
+    QCOMPARE(folder.name(), SyncFiles::defaultFolderName());
+    QVERIFY(folder.displayPath().endsWith(QStringLiteral("CloudDocs/番茄Todo同步")));
+    // 第一次写入时连「番茄Todo同步」这一层一起建出来。
+    QVERIFY(folder.write(SyncFiles::markerFileName(), QByteArray("marker"), &error));
+    QVERIFY(fileExists(drive + QStringLiteral("/番茄Todo同步/") + SyncFiles::markerFileName()));
+    // 不在 iCloud 里的文件查不到上传状态：返回空，不当成出错。
+    QVERIFY(folder.uploadProblem(SyncFiles::markerFileName()).isEmpty());
+    QVERIFY(MacSyncFolder::defaultICloudDriveRoot().endsWith(QStringLiteral("/Library/Mobile Documents/com~apple~CloudDocs")));
+}
+
+void SyncTransportTests::macFolderIsUnavailableWithoutICloudDrive()
+{
+    // 没登录 Apple ID、关了 iCloud 云盘：云盘目录不在。报「不可用」并说明原因，也不自己建一个出来
+    // ——建出来的只是本机普通文件夹，写进去的东西永远到不了 iPad。
+    const QString drive = m_data->filePath(QStringLiteral("没有的云盘"));
+    MacSyncFolder folder(drive);
+    SyncFolder::Error error;
+    QVERIFY(!folder.open(&error));
+    QCOMPARE(error.kind, SyncFolder::ErrorKind::Unavailable);
+    QVERIFY(error.message.contains(QStringLiteral("Apple ID")));
+    QVERIFY(!fileExists(drive));
+
+    Device device = openDevice(QStringLiteral("mac"));
+    SyncEngine::Options options = testOptions();
+    options.mayCreateFolder = true;
+    SyncEngine engine(std::make_unique<MacSyncFolder>(drive), options, device.connection);
+    engine.setChangeNotifier([](const SyncStore::ApplyResult&) {});
+    engine.start();
+    QVERIFY(waitIdle(engine));
+    QCOMPARE(engine.status(), SyncEngine::Status::FolderUnavailable);
+    QVERIFY(!fileExists(drive));
+    QVERIFY(SyncStore(device.connection).folderId().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(SyncTransportTests)

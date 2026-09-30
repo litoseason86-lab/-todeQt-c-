@@ -110,6 +110,7 @@ SyncEngine::~SyncEngine()
 {
     ++m_generation;
     m_tick.stop();
+    endBackgroundTask();
     m_worker->cancelPendingIo();
     // 工作线程可能正卡在等 iCloud 下载。最多等 5 秒，等不到就放手：进程马上要退出了，
     // 而线程池的析构会一直等到任务做完，退出就会卡住。所以故意留下一份引用，不让它析构。
@@ -127,6 +128,11 @@ void SyncEngine::setSafetyBackup(std::function<bool(QString* error)> backup)
 void SyncEngine::setChangeNotifier(std::function<void(const SyncStore::ApplyResult&)> notifier)
 {
     m_notifier = std::move(notifier);
+}
+
+void SyncEngine::setBackgroundTaskProvider(std::function<std::function<void()>()> provider)
+{
+    m_backgroundTaskProvider = std::move(provider);
 }
 
 void SyncEngine::setFolder(std::unique_ptr<SyncFolder> folder)
@@ -171,7 +177,9 @@ void SyncEngine::stop()
     m_inCycle = false;
     m_cycleRequested = false;
     m_joinConfirmed = false;
-    m_flushOnly = false;
+    m_cycleFlushOnly = false;
+    m_backgroundFlushPending = false;
+    endBackgroundTask();
     updateTimer();
     m_status = Status::Stopped;
     m_detail.clear();
@@ -206,13 +214,19 @@ void SyncEngine::setForeground(bool foreground)
         return;
     }
     if (foreground) {
-        m_flushOnly = false;
+        // 回到前台：不再怕被挂起，后台任务可以还给系统了。
+        m_backgroundFlushPending = false;
+        endBackgroundTask();
         m_retryAtMs = 0;
         m_retryDelayMs = 0;
     } else {
-        // 进了后台时间有限（iPad 几秒后就会被挂起）：只写出攒下的改动，不读对方的。
+        // 进了后台时间有限（iPad 几秒后就会被挂起）：只写出攒下的改动，不读对方的；
+        // 先向系统要一点时间，免得写到一半被挂起。
         m_flushRequested = true;
-        m_flushOnly = true;
+        m_backgroundFlushPending = true;
+        if (m_backgroundTaskProvider && !m_endBackgroundTask) {
+            m_endBackgroundTask = m_backgroundTaskProvider();
+        }
     }
     requestCycle();
 }
@@ -319,6 +333,8 @@ void SyncEngine::startCycle()
 {
     m_inCycle = true;
     m_cycleRequested = false;
+    m_cycleFlushOnly = m_backgroundFlushPending && !m_foreground;
+    m_backgroundFlushPending = false;
     m_warnings.clear();
     emit statusChanged();
     const QString lastWritten = m_lastWrittenPath;
@@ -481,7 +497,7 @@ void SyncEngine::publishStep()
     }
     // 要求立即写、但没有东西可写：标记清掉，免得之后某一轮绕过攒批间隔提前写。
     m_flushRequested = false;
-    if (m_flushOnly) {
+    if (m_cycleFlushOnly) {
         return finishCycle();
     }
     scanStep();
@@ -510,7 +526,7 @@ void SyncEngine::publishFullSnapshot()
             }
             m_lastWrittenPath = written.path;
             m_lastPublishMs = nowMs();
-            if (m_flushOnly) {
+            if (m_cycleFlushOnly) {
                 return finishCycle();
             }
             scanStep();
@@ -523,7 +539,7 @@ void SyncEngine::publishChanges()
     const SyncBatch batch = s.collectPending();
     // 队列里只剩读不出来的记录（外部改过库），没有东西可写。
     if (batch.isEmpty()) {
-        return m_flushOnly ? finishCycle() : scanStep();
+        return m_cycleFlushOnly ? finishCycle() : scanStep();
     }
     const SyncPosition outbound = s.outboundPosition();
     const qint64 lastSeq = outbound.epoch == batch.epoch ? outbound.seq : 0;
@@ -543,7 +559,7 @@ void SyncEngine::publishChanges()
             m_lastWrittenPath = written.path;
             m_lastPublishMs = nowMs();
             m_flushRequested = false;
-            if (m_flushOnly) {
+            if (m_cycleFlushOnly) {
                 return finishCycle();
             }
             scanStep();
@@ -844,7 +860,11 @@ void SyncEngine::cleanupStep(const SyncWorker::Survey& survey)
 void SyncEngine::finishCycle(Status failure, const QString& detail)
 {
     m_inCycle = false;
-    m_flushOnly = false;
+    // 后台那一轮写完了（成不成都一样，失败的改动还留在本机）：把后台时间还给系统。
+    if (m_cycleFlushOnly) {
+        endBackgroundTask();
+    }
+    m_cycleFlushOnly = false;
     Status status = failure;
     QString text = detail;
     const bool completed = failure == Status::UpToDate;
@@ -896,6 +916,15 @@ void SyncEngine::notify(const SyncStore::ApplyResult& result)
 void SyncEngine::warn(Status status, const QString& detail)
 {
     m_warnings.append({status, detail});
+}
+
+void SyncEngine::endBackgroundTask()
+{
+    if (m_endBackgroundTask) {
+        const std::function<void()> end = std::move(m_endBackgroundTask);
+        m_endBackgroundTask = nullptr;
+        end();
+    }
 }
 
 void SyncEngine::onTick()

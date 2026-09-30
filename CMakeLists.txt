@@ -182,6 +182,9 @@ if(NOT IOS)
         src/platform/macos/MacGlobalHotkeyBackend.mm
         src/platform/macos/MacPreferencesCleanup.h
         src/platform/macos/MacPreferencesCleanup.mm
+        # 设备间同步：Mac 直接读写 iCloud 云盘里的同步文件夹。
+        src/platform/macos/MacSyncFolder.h
+        src/platform/macos/MacSyncFolder.cpp
     )
 
     set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app-icons/PomodoroTodo.icns")
@@ -196,10 +199,34 @@ endif()
 list(APPEND APP_SOURCES
     src/platform/apple/AppleNotificationBackend.h
     src/platform/apple/AppleNotificationBackend.mm
+    # iCloud 云盘里单个文件的上传状态（同步时提示「iCloud 空间已满」这类问题），两个平台同一套接口。
+    src/platform/apple/AppleUbiquitousItem.h
+    src/platform/apple/AppleUbiquitousItem.mm
 )
-set_source_files_properties(src/platform/apple/AppleNotificationBackend.mm
+set_source_files_properties(
+    src/platform/apple/AppleNotificationBackend.mm
+    src/platform/apple/AppleUbiquitousItem.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
 )
+
+if(IOS)
+    # iPad 的同步文件夹：用「文件」选择器选中的 iCloud 云盘文件夹（安全作用域书签 + 文件协调），
+    # 以及切到后台时向系统要时间把改动写完。
+    list(APPEND APP_SOURCES
+        src/platform/ios/IosSyncFolder.h
+        src/platform/ios/IosSyncFolder.mm
+        src/platform/ios/IosFolderPicker.h
+        src/platform/ios/IosFolderPicker.mm
+        src/platform/ios/IosBackgroundTask.h
+        src/platform/ios/IosBackgroundTask.mm
+    )
+    set_source_files_properties(
+        src/platform/ios/IosSyncFolder.mm
+        src/platform/ios/IosFolderPicker.mm
+        src/platform/ios/IosBackgroundTask.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+    )
+endif()
 
 if(IOS)
     # iOS 上的 Qt 是静态库：平台插件和 QML 插件要靠 Qt 的收尾步骤扫描导入并链接进来，
@@ -246,6 +273,9 @@ if(IOS)
     target_link_libraries(PomodoroTodo PRIVATE
         "-framework Foundation"
         "-framework UserNotifications"
+        # 文件选择器、后台任务与选择器里的「文件夹」类型。
+        "-framework UIKit"
+        "-framework UniformTypeIdentifiers"
     )
 endif()
 
@@ -944,6 +974,10 @@ add_executable(SyncTransportTests
     src/services/SyncWorker.cpp
     src/services/SyncEngine.h
     src/services/SyncEngine.cpp
+    src/platform/macos/MacSyncFolder.h
+    src/platform/macos/MacSyncFolder.cpp
+    src/platform/apple/AppleUbiquitousItem.h
+    src/platform/apple/AppleUbiquitousItem.mm
     src/services/FocusTimer.h
     src/services/FocusTimer.cpp
     src/services/MonotonicClock.h
@@ -970,6 +1004,7 @@ target_link_libraries(SyncTransportTests PRIVATE
     Qt6::Core
     Qt6::Sql
     Qt6::Test
+    "-framework Foundation"
 )
 
 pomodoro_todo_enable_warnings(SyncTransportTests)
