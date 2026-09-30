@@ -5,6 +5,7 @@
 #include "DatabaseManager.h"
 #include "LogicalDay.h"
 #include "RoutineRules.h"
+#include "SyncSchema.h"
 #include "TaskManager.h"
 
 #include <QDate>
@@ -137,6 +138,17 @@ bool reclaimTodayTask(QSqlDatabase& db, int routineId, const QString& today,
     }
     candidates.finish();
 
+    // 同步：这些删除要记成「收回」，而不是用户删除。用户删掉的实例删除优先、永不复活；
+    // 收回的实例在重新启用后还要能再生成出来，另一台设备收到时也按「收回」处理（没动过才删）。
+    // 同步触发器读 sync_runtime.delete_kind 决定删除记录的类别；在调用方的事务里置位、删完立刻复位，
+    // 中途失败整个事务回滚，标记也随之复原。
+    QSqlQuery mark(db);
+    if (!ids.isEmpty()
+        && !mark.exec(QStringLiteral("UPDATE sync_runtime SET delete_kind = 'reclaim' WHERE singleton_id = 1"))) {
+        qWarning() << "Failed to mark routine reclaim:" << mark.lastError().text();
+        return false;
+    }
+
     // 编号要先取出来，是因为删除之后得逐条广播 taskDeleted；一条 DELETE 带判据虽然也能删干净，
     // 却拿不到删掉了谁。专注记录不用解绑：判据已经保证这些任务一条专注记录都没有。
     for (int taskId : ids) {
@@ -152,6 +164,11 @@ bool reclaimTodayTask(QSqlDatabase& db, int routineId, const QString& today,
         }
     }
 
+    if (!ids.isEmpty()
+        && !mark.exec(QStringLiteral("UPDATE sync_runtime SET delete_kind = NULL WHERE singleton_id = 1"))) {
+        qWarning() << "Failed to clear routine reclaim mark:" << mark.lastError().text();
+        return false;
+    }
     return true;
 }
 
@@ -659,13 +676,50 @@ int RoutineManager::materializeToday()
             continue;
         }
 
+        // 同步：同一例行同一天的实例在所有设备上是同一条记录，身份是「例行的 sync_id + 日期」。
+        // 另一台设备已经生成并同步过来了，就不再生成一份；用户删掉过的（普通删除）删除优先，不复活。
+        // 「收回」过的（停用后又启用、取消今天后又勾回）照常重新生成，触发器会用真实版本取代那条收回记录。
+        // 生成权照样抢占（上面的戳已经写成今天），今天不会再来一遍。
+        QSqlQuery identity(db);
+        identity.prepare(QStringLiteral("SELECT sync_id FROM routines WHERE id = :id"));
+        identity.bindValue(QStringLiteral(":id"), routine.id);
+        if (!identity.exec() || !identity.next()) {
+            qWarning() << "Failed to read routine sync id:" << identity.lastError().text();
+            reportFailure(QStringLiteral("每日例行生成失败: %1").arg(identity.lastError().text()));
+            db.rollback();
+            return 0;
+        }
+        const QString routineSyncId = identity.value(0).toString();
+        identity.finish();
+        const QString instanceId = routineSyncId.isEmpty()
+            ? QString() : SyncSchema::routineInstanceSyncId(routineSyncId, today);
+        if (!instanceId.isEmpty()) {
+            QSqlQuery existing(db);
+            existing.prepare(QStringLiteral(
+                "SELECT EXISTS (SELECT 1 FROM tasks WHERE sync_id = :id) "
+                "OR EXISTS (SELECT 1 FROM sync_tombstones WHERE tbl = 'tasks' AND sync_id = :id2 "
+                "AND kind <> 'reclaim')"));
+            existing.bindValue(QStringLiteral(":id"), instanceId);
+            existing.bindValue(QStringLiteral(":id2"), instanceId);
+            if (!existing.exec() || !existing.next()) {
+                qWarning() << "Failed to check routine instance:" << existing.lastError().text();
+                reportFailure(QStringLiteral("每日例行生成失败: %1").arg(existing.lastError().text()));
+                db.rollback();
+                return 0;
+            }
+            if (existing.value(0).toInt() == 1) {
+                continue;
+            }
+        }
+
         QSqlQuery insertTask(db);
         insertTask.prepare(QStringLiteral(
             "INSERT INTO tasks (title, category, category_id, date, completed, routine_id, "
-            "routine_generated, display_order) "
+            "routine_generated, display_order, sync_id) "
             "VALUES (:title, COALESCE((SELECT name FROM categories WHERE id = :categoryId), ''), "
             ":categoryId, :date, 0, :routineId, 1, "
-            "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks WHERE date = :orderDate))"));
+            "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks WHERE date = :orderDate), :syncId)"));
+        insertTask.bindValue(QStringLiteral(":syncId"), instanceId.isEmpty() ? QVariant() : QVariant(instanceId));
         insertTask.bindValue(QStringLiteral(":title"), routine.title);
         insertTask.bindValue(QStringLiteral(":categoryId"), routine.categoryId);
         insertTask.bindValue(QStringLiteral(":date"), today);

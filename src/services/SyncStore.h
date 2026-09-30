@@ -49,6 +49,13 @@ public:
     // 纪元更高要走快照替换（全局回滚），更低的是回滚之前的旧改动，不能再合进来。
     ApplyResult applyRemote(const SyncBatch& batch);
 
+    // 设置项（第一期只有 logic/dayStartHour；值本身由 AppSettings 存在 QSettings 里，这里只记同步看到的值与版本）。
+    // 本机改了设置之后调用：值与上次记下的不同，就记一个新版本、等着发出。
+    // isDefault 表示这是出厂默认值：第一次记下默认值时用最小版本，两台设备各自的默认值不会盖掉对方改过的设置。
+    bool recordLocalSetting(const QString& key, const QString& value, bool isDefault);
+    // 同步记下的值；从没记过时返回空的 QString。
+    QString syncedSetting(const QString& key) const;
+
 private:
     QSqlDatabase database() const;
 

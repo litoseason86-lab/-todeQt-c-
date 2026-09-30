@@ -293,16 +293,15 @@ int main(int argc, char *argv[])
     ShortcutRegistry::instance()->setGlobalBackend(&globalHotkeyBackend);
 #endif
 
-#if !defined(Q_OS_IOS)
     // 启动即生成今天的例行任务，保证 QML 首次读取今日任务时已经能看到它们。
+    // 两个平台都生成：同一例行同一天的实例在所有设备上是同一条记录（身份 = 例行 sync_id + 日期），
+    // 同步过来的不会再生成一份，见 RoutineManager::materializeToday。
     RoutineManager::instance()->materializeToday();
 
     // 失效信号同步派发时先补新逻辑日例行，再由后接入的 QML 视图重查。
     // 连接必须早于 engine.load，否则视图槽可能先看到尚未补齐的数据。
     QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed,
                      RoutineManager::instance(), &RoutineManager::materializeToday);
-#endif
-    // iOS 暂不生成每日例行：以后接入同步时，Mac 与移动端各自生成会让同一天出现两份。
 
     // 历史编辑会改变任务累计时长；在装配层广播刷新，避免服务互相依赖。
     QObject::connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged,

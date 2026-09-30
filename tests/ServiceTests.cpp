@@ -4132,16 +4132,28 @@ void ServiceTests::materializeTodayIsIdempotentAndDoesNotBackfill()
     QCOMPARE(manager->materializeToday(), 0);
     QCOMPARE(TaskManager::instance()->getTasksByDate(logicalToday()).size(), 1);
 
+    // 生成戳被退回很早以前，而今天的实例已经在：不再生成第二条。同一例行同一天的实例有固定身份
+    // （例行 sync_id + 日期），另一台设备同步过来的那条也靠这一点不会重复。生成戳照样推到今天。
     QSqlQuery upd(DatabaseManager::instance()->database());
     QVERIFY2(upd.exec(QStringLiteral("UPDATE routines SET last_generated_date = '2000-01-01'")),
              qPrintable(upd.lastError().text()));
+    QCOMPARE(manager->materializeToday(), 0);
+    QCOMPARE(TaskManager::instance()->getTasksByDate(logicalToday()).size(), 1);
+
+    // 不补历史：隔了很久才打开，只生成今天这一条，不会把中间每一天都补出来。
+    QVERIFY(manager->addRoutine(QStringLiteral("做真题"), -1));
+    QVERIFY2(upd.exec(QStringLiteral("UPDATE routines SET last_generated_date = '2000-01-01' "
+                                     "WHERE title = '做真题'")),
+             qPrintable(upd.lastError().text()));
     QCOMPARE(manager->materializeToday(), 1);
+    QCOMPARE(TaskManager::instance()->getTasksByDate(logicalToday()).size(), 2);
 
     QSqlQuery check(DatabaseManager::instance()->database());
-    QVERIFY2(check.exec(QStringLiteral("SELECT last_generated_date FROM routines")),
+    QVERIFY2(check.exec(QStringLiteral("SELECT DISTINCT last_generated_date FROM routines")),
              qPrintable(check.lastError().text()));
     QVERIFY(check.next());
     QCOMPARE(check.value(0).toString(), today);
+    QVERIFY(!check.next());
 }
 
 void ServiceTests::materializeTodayPreservesCategoryAndDoesNotEmitSignals()

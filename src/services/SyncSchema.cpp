@@ -358,7 +358,7 @@ QStringList infrastructureTableNames()
     return {QStringLiteral("sync_state"), QStringLiteral("sync_runtime"),
             QStringLiteral("sync_field_versions"), QStringLiteral("sync_outbox"),
             QStringLiteral("sync_tombstones"), QStringLiteral("sync_settings"),
-            QStringLiteral("sync_conflict_log")};
+            QStringLiteral("sync_conflict_log"), QStringLiteral("sync_pending_refs")};
 }
 
 QStringList tableStatements()
@@ -404,6 +404,13 @@ QStringList tableStatements()
                        "v_time INTEGER NOT NULL, v_device TEXT NOT NULL, "
                        "base_time INTEGER NOT NULL DEFAULT 0, base_device TEXT NOT NULL DEFAULT '', "
                        "pending INTEGER NOT NULL DEFAULT 0 CHECK(pending IN (0, 1)))"),
+        // 待解析的引用：收到的记录指向一条本机暂时没有的记录（还没收到，或被例行「收回」、之后可能补回来），
+        // 引用列先落空值，并在这里记下目标。目标落地时按这里把引用接回去；记下时的版本对不上
+        // （这一列后来又被改过）就作废，不去覆盖更新的值。
+        QStringLiteral("CREATE TABLE IF NOT EXISTS sync_pending_refs ("
+                       "tbl TEXT NOT NULL, sync_id TEXT NOT NULL, field TEXT NOT NULL, "
+                       "target_sync_id TEXT NOT NULL, v_time INTEGER NOT NULL, v_device TEXT NOT NULL, "
+                       "PRIMARY KEY (tbl, sync_id, field)) WITHOUT ROWID"),
         // 冲突日志：自动处理掉的冲突留一笔，设置页可以查。只存给人看的文字，不存原始编码。
         QStringLiteral("CREATE TABLE IF NOT EXISTS sync_conflict_log ("
                        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
