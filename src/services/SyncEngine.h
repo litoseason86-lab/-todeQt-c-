@@ -84,6 +84,17 @@ public:
         int retryMaxMs = 5 * 60 * 1000;
         // 一轮最多读多少个文件，读不完的紧接着下一轮继续。
         int maxFilesPerScan = 30;
+        // 落后对方这么多批、而它的快照覆盖得到时，直接合并快照，不再一个个下载改动文件。
+        int catchUpViaSnapshot = 30;
+        // 自上一份快照以来本机又写了这么多批，就写一份新快照；旧改动文件要有快照兜底才能删。
+        int compactAfterFiles = 50;
+        // 维护（看各设备读到了哪里、写快照、删旧文件）的间隔。
+        int maintenanceIntervalMs = 5 * 60 * 1000;
+        // 对方某一批迟迟不到（它后面的已经到了）超过这么久，就请它补一份快照。
+        int gapRequestAfterMs = 2 * 60 * 1000;
+        // 对方的游标文件这么多天没更新，就当它不再使用，不再为它保留旧改动文件（它回来时从快照追上）。
+        // iPad 的免费签名每 7 天到期，一两周不开很正常，所以取 14 天。
+        int peerStaleDays = 14;
     };
 
     // folder：同步文件夹的访问对象。构造要轻，真正取访问权在工作线程里做。
@@ -139,7 +150,12 @@ private:
     void publishChanges();
     void scanStep();
     void afterScan(const SyncWorker::ScanResult& result);
+    // 另一台设备恢复了备份：本机整体换成它的新纪元快照（先自动备份）。
+    void adopt(const SyncWorker::Adoption& adoption);
     void writeCursorStep();
+    void maintenanceStep();
+    void afterSurvey(const SyncWorker::Survey& survey);
+    void cleanupStep(const SyncWorker::Survey& survey);
     void finishCycle(Status failure = Status::UpToDate, const QString& detail = QString());
 
     // 用一份快照整体换掉本机数据：先自动备份，再替换，再按快照里记的进度重设游标。
@@ -180,6 +196,13 @@ private:
     bool m_flushOnly = false;
     // 游标变了还没写进游标文件。
     bool m_cursorDirty = false;
+    // 上次写游标文件的时刻（墙上时间）：没变化也每天写一次，对方据此知道本机还在用，不会把本机当成不再使用的设备。
+    qint64 m_lastCursorWrittenMs = -1;
+    // 刚整体替换过（加入、采用新纪元）或刚写了快照：本轮就做一次维护，把用不上的旧文件清掉。
+    bool m_maintenanceDue = false;
+    qint64 m_lastMaintenanceMs = -1;
+    // 对方某一批从什么时候开始一直没到（设备 → 时刻）。
+    QHash<QString, qint64> m_gapSinceMs;
     qint64 m_lastPublishMs = -1;
     qint64 m_lastScanMs = -1;
     qint64 m_retryAtMs = 0;

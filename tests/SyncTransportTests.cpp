@@ -369,13 +369,24 @@ private slots:
     void flushBeforeExitWritesPendingChanges();
     void fileWorkRunsOffTheMainThread();
 
+    // 3e：快照、清理与全局回滚
+    void oldFilesAreDeletedOnlyAfterEveryoneReadThem();
+    void lateDeviceCatchesUpFromSnapshotAfterCleanup();
+    void farBehindDeviceReadsSnapshotInsteadOfManyFiles();
+    void restoringBackupRollsBackTheOtherDevice();
+    void rollbackWaitsForSnapshotAndForBackup();
+    void lostFileIsRecoveredThroughSnapshotRequest();
+
 private:
     Device openDevice(const QString& name);
     void reopen(Device& device);
     std::unique_ptr<Node> makeNode(const QString& name, bool mayCreateFolder, FakeICloud& cloud,
                                    SyncEngine::Options options = testOptions());
-    // Mac 建好文件夹、iPad 确认加入，两台都同步完，返回之前的准备都做好了。
-    void setUpPair(FakeICloud& cloud, std::unique_ptr<Node>* mac, std::unique_ptr<Node>* ipad);
+    // Mac 建好文件夹、iPad 确认加入，iPad 的游标文件也送到了 Mac：两台都进入日常同步的状态。
+    void setUpPair(FakeICloud& cloud, std::unique_ptr<Node>* mac, std::unique_ptr<Node>* ipad,
+                   const SyncEngine::Options& options = testOptions());
+    // 模拟一台设备恢复备份：换回备份时的库文件，开新纪元（设备标识保持恢复前的）。
+    void restoreBackup(Node& node, const QString& backupPath);
 
     QTemporaryDir m_preferences;
     std::unique_ptr<QTemporaryDir> m_data;
@@ -868,10 +879,11 @@ std::unique_ptr<Node> SyncTransportTests::makeNode(const QString& name, bool may
     return node;
 }
 
-void SyncTransportTests::setUpPair(FakeICloud& cloud, std::unique_ptr<Node>* mac, std::unique_ptr<Node>* ipad)
+void SyncTransportTests::setUpPair(FakeICloud& cloud, std::unique_ptr<Node>* mac, std::unique_ptr<Node>* ipad,
+                                   const SyncEngine::Options& options)
 {
-    *mac = makeNode(QStringLiteral("mac"), true, cloud);
-    *ipad = makeNode(QStringLiteral("ipad"), false, cloud);
+    *mac = makeNode(QStringLiteral("mac"), true, cloud, options);
+    *ipad = makeNode(QStringLiteral("ipad"), false, cloud, options);
     (*mac)->engine->start();
     QVERIFY(waitIdle(*(*mac)->engine));
     QCOMPARE((*mac)->engine->status(), SyncEngine::Status::UpToDate);
@@ -881,6 +893,24 @@ void SyncTransportTests::setUpPair(FakeICloud& cloud, std::unique_ptr<Node>* mac
     (*ipad)->engine->confirmJoin();
     QVERIFY(waitIdle(*(*ipad)->engine));
     QCOMPARE((*ipad)->engine->status(), SyncEngine::Status::UpToDate);
+    cloud.deliver((*ipad)->device, (*mac)->device);
+    QVERIFY(syncOnce(**mac));
+}
+
+void SyncTransportTests::restoreBackup(Node& node, const QString& backupPath)
+{
+    node.engine->stop();
+    const qint64 epochBefore = SyncStore(node.device.connection).epoch();
+    {
+        QSqlDatabase database = QSqlDatabase::database(node.device.connection, false);
+        database.close();
+    }
+    QVERIFY(QFile::remove(node.device.path));
+    QVERIFY(QFile::copy(backupPath, node.device.path));
+    QVERIFY(QSqlDatabase::database(node.device.connection).isOpen());
+    QVERIFY(exec(node.device, QStringLiteral("PRAGMA foreign_keys = ON")));
+    QVERIFY(SyncStore(node.device.connection).beginEpochAfterRestore(epochBefore, node.device.id));
+    QVERIFY(SyncStore(node.device.connection).needsSnapshot());
 }
 
 void SyncTransportTests::macCreatesFolderWithMarkerAndSnapshot()
@@ -1246,6 +1276,265 @@ void SyncTransportTests::fileWorkRunsOffTheMainThread()
     // 读写云盘可能要等上一两秒（下载），一律不在界面线程里做。
     QVERIFY(!threads.isEmpty());
     QVERIFY(!threads.contains(QThread::currentThread()));
+}
+
+// ── 3e：快照、清理与全局回滚 ──
+
+// 记下读过哪些文件：检查落后很多的设备是不是只下载了快照。
+class CountingFolder : public LocalSyncFolder
+{
+public:
+    CountingFolder(const QString& root, QStringList* reads) : LocalSyncFolder(root), m_reads(reads) {}
+    bool read(const QString& path, QByteArray* data, Error* error) override
+    {
+        m_reads->append(path);
+        return LocalSyncFolder::read(path, data, error);
+    }
+
+private:
+    QStringList* m_reads;
+};
+
+void SyncTransportTests::oldFilesAreDeletedOnlyAfterEveryoneReadThem()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    SyncEngine::Options options = testOptions();
+    options.compactAfterFiles = 3;
+    options.maintenanceIntervalMs = 0;
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad, options);
+
+    for (int batch = 1; batch <= 3; ++batch) {
+        QVERIFY(!addTask(mac->device, QStringLiteral("第 %1 批").arg(batch)).isEmpty());
+        QVERIFY(syncOnce(*mac));
+    }
+    // 写满三批：写一份覆盖到第 3 批的新快照，旧快照删掉；iPad 一批都还没读，改动文件一个不删。
+    QCOMPARE(cloud.snapshotFiles(mac->device, mac->device), QStringList{SyncFiles::snapshotFileName({0, 3})});
+    QCOMPARE(cloud.changeFiles(mac->device, mac->device).size(), 3);
+    QCOMPARE(SyncStore(mac->device.connection).snapshotPosition(), (SyncPosition{0, 3}));
+
+    // iPad 读了前两批：Mac 只删这两批。
+    const QString third = SyncFiles::changesDirectory(mac->device.id) + QLatin1Char('/') + SyncFiles::changeFileName({0, 3});
+    cloud.deliver(mac->device, ipad->device, [&third](const QString& path) { return path == third; });
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 2}));
+    cloud.deliver(ipad->device, mac->device);
+    QVERIFY(syncOnce(*mac));
+    QCOMPARE(cloud.changeFiles(mac->device, mac->device), QStringList{SyncFiles::changeFileName({0, 3})});
+
+    // 第三批也读了：全部删掉，只留快照给以后加入的设备起步。
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad));
+    cloud.deliver(ipad->device, mac->device);
+    QVERIFY(syncOnce(*mac));
+    QVERIFY(cloud.changeFiles(mac->device, mac->device).isEmpty());
+    QCOMPARE(cloud.snapshotFiles(mac->device, mac->device), QStringList{SyncFiles::snapshotFileName({0, 3})});
+    QCOMPARE(describe(ipad->device), describe(mac->device));
+}
+
+void SyncTransportTests::lateDeviceCatchesUpFromSnapshotAfterCleanup()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    SyncEngine::Options options = testOptions();
+    options.compactAfterFiles = 2;
+    options.maintenanceIntervalMs = 0;
+    // 游标文件多旧都算「不再使用」：Mac 不等 iPad，写了快照就删。
+    options.peerStaleDays = 0;
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad, options);
+
+    // iPad 很久没开：Mac 写了三批，前两批已经有快照兜底、被删掉了。
+    for (int batch = 1; batch <= 3; ++batch) {
+        QVERIFY(!addTask(mac->device, QStringLiteral("第 %1 批").arg(batch)).isEmpty());
+        QVERIFY(syncOnce(*mac));
+    }
+    QCOMPARE(cloud.changeFiles(mac->device, mac->device), QStringList{SyncFiles::changeFileName({0, 3})});
+    QCOMPARE(cloud.snapshotFiles(mac->device, mac->device), QStringList{SyncFiles::snapshotFileName({0, 2})});
+
+    // iPad 回来：缺了第 1、2 批，从快照补上，再接着读第 3 批。
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(taskTitles(ipad->device),
+             (QStringList{QStringLiteral("第 1 批"), QStringLiteral("第 2 批"), QStringLiteral("第 3 批")}));
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 3}));
+    QCOMPARE(describe(ipad->device), describe(mac->device));
+}
+
+void SyncTransportTests::farBehindDeviceReadsSnapshotInsteadOfManyFiles()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    SyncEngine::Options options = testOptions();
+    options.compactAfterFiles = 4;
+    options.catchUpViaSnapshot = 3;
+    options.maintenanceIntervalMs = 0;
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad, options);
+    for (int batch = 1; batch <= 5; ++batch) {
+        QVERIFY(!addTask(mac->device, QStringLiteral("第 %1 批").arg(batch)).isEmpty());
+        QVERIFY(syncOnce(*mac));
+    }
+    // iPad 还在用（游标文件是新的），它没读过的改动文件都留着；快照覆盖到第 4 批。
+    QCOMPARE(cloud.changeFiles(mac->device, mac->device).size(), 5);
+    QCOMPARE(cloud.snapshotFiles(mac->device, mac->device), QStringList{SyncFiles::snapshotFileName({0, 4})});
+
+    QStringList reads;
+    ipad->engine->setFolder(std::make_unique<CountingFolder>(cloud.replica(ipad->device), &reads));
+    QVERIFY(waitIdle(*ipad->engine));
+    cloud.deliver(mac->device, ipad->device);
+    reads.clear();
+    QVERIFY(syncOnce(*ipad));
+    // 落后 4 批、快照覆盖得到：下载一份快照加第 5 批，不去逐个下载前 4 批（每个约 1 秒）。
+    const QString changes = SyncFiles::changesDirectory(mac->device.id) + QLatin1Char('/');
+    QVERIFY(reads.contains(SyncFiles::deviceDirectory(mac->device.id) + QLatin1Char('/') + SyncFiles::snapshotFileName({0, 4})));
+    QVERIFY(reads.contains(changes + SyncFiles::changeFileName({0, 5})));
+    for (int seq = 1; seq <= 4; ++seq) {
+        QVERIFY2(!reads.contains(changes + SyncFiles::changeFileName({0, seq})), qPrintable(QString::number(seq)));
+    }
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 5}));
+    QCOMPARE(describe(ipad->device), describe(mac->device));
+}
+
+void SyncTransportTests::restoringBackupRollsBackTheOtherDevice()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    SyncEngine::Options options = testOptions();
+    options.maintenanceIntervalMs = 0;
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad, options);
+    const QString kept = addTask(mac->device, QStringLiteral("备份之前就有"));
+    QVERIFY(syncOnce(*mac));
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad));
+    const QString backupPath = m_data->filePath(QStringLiteral("mac-backup.sqlite"));
+    QVERIFY(QFile::copy(mac->device.path, backupPath));
+
+    // 备份之后两台都记了东西，也都同步过。
+    QVERIFY(!addTask(mac->device, QStringLiteral("Mac 备份之后加的")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 备份之后加的")).isEmpty());
+    QVERIFY(syncOnce(*ipad));
+    cloud.exchange(mac->device, ipad->device);
+    QVERIFY(syncOnce(*mac));
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(taskTitles(ipad->device).size(), 3);
+    const int backupsBefore = int(ipad->backups.size());
+
+    // Mac 恢复备份（你定了：恢复备份 = 全局回滚）。Mac 开新纪元，写一份给所有设备的快照，旧纪元的文件删掉。
+    restoreBackup(*mac, backupPath);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(SyncStore(mac->device.connection).epoch(), 1);
+    // 新纪元里还一批都没写，快照覆盖到第 0 批。
+    QCOMPARE(cloud.snapshotFiles(mac->device, mac->device), QStringList{SyncFiles::snapshotFileName({1, 0})});
+    QVERIFY(cloud.changeFiles(mac->device, mac->device).isEmpty());
+
+    // iPad 读到更高的纪元：先自动备份（备份里有它回滚前的全部数据），再整体换成 Mac 的快照。
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(ipad->backups.size(), backupsBefore + 1);
+    QCOMPARE(ipad->backups.last().size(), 3);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("备份之前就有")});
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 1);
+    QCOMPARE(describe(ipad->device), describe(mac->device));
+    // iPad 旧纪元的改动文件都删了：谁都用不上了。
+    for (const QString& name : cloud.changeFiles(ipad->device, ipad->device)) {
+        SyncPosition position;
+        QVERIFY(SyncFiles::parseChangeFileName(name, &position));
+        QCOMPARE(position.epoch, 1);
+    }
+
+    // 回滚之后的新改动照常同步。
+    QVERIFY(exec(ipad->device, QStringLiteral("UPDATE tasks SET notes = '回滚后补的' WHERE sync_id = '%1'").arg(kept)));
+    QVERIFY(syncOnce(*ipad));
+    cloud.exchange(ipad->device, mac->device);
+    QVERIFY(syncOnce(*mac));
+    QCOMPARE(scalar(mac->device, QStringLiteral("SELECT notes FROM tasks WHERE sync_id = '%1'").arg(kept)).toString(),
+             QStringLiteral("回滚后补的"));
+    QCOMPARE(taskTitles(mac->device), QStringList{QStringLiteral("备份之前就有")});
+}
+
+void SyncTransportTests::rollbackWaitsForSnapshotAndForBackup()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 的任务")).isEmpty());
+    QVERIFY(syncOnce(*ipad));
+    const QString backupPath = m_data->filePath(QStringLiteral("mac-backup.sqlite"));
+    QVERIFY(QFile::copy(mac->device.path, backupPath));
+    restoreBackup(*mac, backupPath);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QVERIFY(!addTask(mac->device, QStringLiteral("回滚之后记的")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+
+    // 新纪元的改动先到了、快照还在路上：什么都不应用，也不备份。
+    cloud.deliver(mac->device, ipad->device, [](const QString& path) { return path.contains(QStringLiteral("snapshot-")); });
+    const int backupsBefore = int(ipad->backups.size());
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::WaitingForSnapshot);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("iPad 的任务")});
+    QCOMPARE(ipad->backups.size(), backupsBefore);
+
+    // 快照到了，但自动备份失败：不替换。被换掉的数据只能从这份备份里找回，没有备份就不换。
+    cloud.deliver(mac->device, ipad->device);
+    ipad->backupSucceeds = false;
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::BackupFailed);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("iPad 的任务")});
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 0);
+
+    // 备份恢复正常之后再换。
+    ipad->backupSucceeds = true;
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("回滚之后记的")});
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 1);
+}
+
+void SyncTransportTests::lostFileIsRecoveredThroughSnapshotRequest()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    SyncEngine::Options options = testOptions();
+    options.gapRequestAfterMs = 0;
+    options.maintenanceIntervalMs = 0;
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad, options);
+    for (int batch = 1; batch <= 3; ++batch) {
+        QVERIFY(!addTask(mac->device, QStringLiteral("第 %1 批").arg(batch)).isEmpty());
+        QVERIFY(syncOnce(*mac));
+    }
+    // 第 1 批在 iCloud 里丢了，一直送不到。
+    const QString lost = SyncFiles::changesDirectory(mac->device.id) + QLatin1Char('/') + SyncFiles::changeFileName({0, 1});
+    const auto holdLost = [&lost](const QString& path) { return path == lost; };
+    cloud.deliver(mac->device, ipad->device, holdLost);
+    QVERIFY(syncOnce(*ipad));
+    QVERIFY(taskTitles(ipad->device).isEmpty());
+    // 等得太久（测试里拨成 0）：请 Mac 补一份覆盖到第 1 批的快照，写进游标文件。
+    QCOMPARE(SyncStore(ipad->device.connection).snapshotRequests().value(mac->device.id), (SyncPosition{0, 1}));
+
+    // Mac 维护时看到请求，写一份新快照（覆盖到第 3 批）。
+    cloud.deliver(ipad->device, mac->device);
+    QVERIFY(syncOnce(*mac));
+    QCOMPARE(cloud.snapshotFiles(mac->device, mac->device), QStringList{SyncFiles::snapshotFileName({0, 3})});
+
+    // iPad 合并快照，把丢了的那一批补回来；请求撤掉。
+    cloud.deliver(mac->device, ipad->device, holdLost);
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(taskTitles(ipad->device),
+             (QStringList{QStringLiteral("第 1 批"), QStringLiteral("第 2 批"), QStringLiteral("第 3 批")}));
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 3}));
+    QVERIFY(SyncStore(ipad->device.connection).snapshotRequests().isEmpty());
+    QCOMPARE(describe(ipad->device), describe(mac->device));
 }
 
 QTEST_GUILESS_MAIN(SyncTransportTests)

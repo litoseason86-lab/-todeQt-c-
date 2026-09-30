@@ -82,8 +82,12 @@ public:
         qint64 epoch = 0;
         // 本机已经应用到各台设备第几批（只有纪元与本机相同的才算数）。
         QHash<QString, SyncPosition> cursors;
+        // 本机请各台设备补的快照（至少覆盖到哪一批）。对方的快照覆盖到了，就读来合并。
+        QHash<QString, SyncPosition> requests;
         // 这一轮最多读多少个文件：刚同步来的文件每个约 1 秒，读不完的留到紧接着的下一轮。
         int maxFiles = 30;
+        // 落后对方这么多批、而它的快照正好覆盖得到时，合并快照，不再一个个下载改动文件。
+        int catchUpViaSnapshot = 30;
     };
     struct IncomingFile {
         enum class Kind {
@@ -101,24 +105,80 @@ public:
     };
     struct PeerScan {
         QString device;
-        // 从游标之后连续的一段，按序号排好。
+        // 要先合并的快照：对方的旧改动已经清理掉了（本机落后太久）、本机落后太多批，
+        // 或者本机请它补的快照到了。合并快照和逐批应用结果相同：记录都带着字段版本，重复的不改变任何东西。
+        bool hasSnapshot = false;
+        SyncPosition snapshotPosition;
+        SyncFiles::SnapshotFile snapshot;
+        // 需要快照却读不出来（坏了、版本更新）。
+        SyncFiles::ParseStatus snapshotStatus = SyncFiles::ParseStatus::Ok;
+        QString snapshotError;
+        // 从游标（或快照）之后连续的一段，按序号排好。
         QList<IncomingFile> files;
         // 这一批还没到、它后面的倒先到了（iCloud 不保证按写出的顺序送到）。0 表示没在等。
         qint64 waitingFor = 0;
         // 读某个文件失败：停在它前面，下一轮再试。
         SyncFolder::Error readError;
     };
+    // 有设备的纪元比本机高：它恢复了备份（全局回滚），本机要整体换成它的快照。
+    struct Adoption {
+        bool needed = false;
+        // 新纪元的快照已经到了、读出来了。还没到时等着，这一轮什么都不应用。
+        bool ready = false;
+        QString device;
+        SyncPosition position;
+        SyncFiles::ParseStatus status = SyncFiles::ParseStatus::Ok;
+        QString error;
+        SyncFiles::SnapshotFile snapshot;
+    };
     struct ScanResult {
         SyncFolder::Error error;
         QList<PeerScan> peers;
+        Adoption adoption;
         // 这一轮读满了上限，还有没读的。
         bool more = false;
     };
     ScanResult scan(const ScanRequest& request);
 
+    // ── 维护：看各设备读到了哪里，决定写不写快照、删哪些旧文件 ──
+    struct PeerCursor {
+        QString device;
+        bool present = false;
+        SyncFiles::ParseStatus status = SyncFiles::ParseStatus::Ok;
+        SyncFiles::CursorFile cursor;
+    };
+    struct Survey {
+        SyncFolder::Error error;
+        QList<PeerCursor> peers;
+        // 本机目录里现有的改动文件与快照（所有纪元）。
+        QList<SyncPosition> ownChanges;
+        QList<SyncPosition> ownSnapshots;
+    };
+    Survey survey(const QString& me);
+    struct CleanupResult {
+        SyncFolder::Error error;
+        int removed = 0;
+    };
+    // 只动本机自己的目录：删掉旧纪元的全部文件、本纪元里序号不超过 deleteUpToSeq 的改动文件、
+    // keepSnapshot 以外的快照，以及写到一半留下的临时文件。别的设备的文件由它自己清理。
+    CleanupResult cleanup(const QString& me, qint64 epoch, qint64 deleteUpToSeq, const SyncPosition& keepSnapshot,
+                          bool keepAnySnapshot);
+
 private:
+    // 一台设备目录里现有的改动文件与快照（所有纪元）。目录不存在当作什么都没有。
+    struct DeviceFiles {
+        QList<SyncPosition> changes;
+        QList<SyncPosition> snapshots;
+        // 所有文件里最高的纪元；什么都没有时为 -1。
+        qint64 latestEpoch = -1;
+    };
+    DeviceFiles inspect(const QString& device, SyncFolder::Error* error);
     // 设备目录下最新的快照（纪元最大、同纪元序号最大）。没有时返回 false。
     bool latestSnapshot(const QString& device, SyncPosition* position, SyncFolder::Error* error);
+    // 读一份快照并解析。
+    SyncFiles::ParseStatus readSnapshot(const QString& device, const SyncPosition& position,
+                                        SyncFiles::SnapshotFile* snapshot, QString* parseError,
+                                        SyncFolder::Error* error);
     // 某台设备在某个纪元里已经写出的改动序号（升序）。目录不存在当作一批都没有。
     QList<qint64> changeSequences(const QString& device, qint64 epoch, SyncFolder::Error* error);
     // devices 下的设备（合法的设备标识，不含本机），按标识排序：所有设备以同样的顺序处理。
