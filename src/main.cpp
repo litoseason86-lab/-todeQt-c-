@@ -27,6 +27,7 @@
 #include "services/ScheduleService.h"
 #include "services/ShortcutRegistry.h"
 #include "services/StatisticsService.h"
+#include "services/SyncController.h"
 #include "services/TaskManager.h"
 #include "services/TrayController.h"
 
@@ -46,6 +47,7 @@
 #include "platform/macos/MacGlobalHotkeyBackend.h"
 #include "platform/macos/MacPreferencesCleanup.h"
 #include "platform/macos/MacStatusBarController.h"
+#include "platform/macos/MacSyncFolder.h"
 #endif
 
 // 系统通知后端两个平台共用：UserNotifications 在 macOS 与 iOS 上是同一套接口。
@@ -57,6 +59,9 @@
 #include "services/ApplicationActivity.h"
 #include "services/MonotonicClock.h"
 #include "services/PhaseAlarmCoordinator.h"
+#include "platform/ios/IosBackgroundTask.h"
+#include "platform/ios/IosFolderPicker.h"
+#include "platform/ios/IosSyncFolder.h"
 
 namespace {
 // 手机用随身伴侣页，平板用完整界面。启动时还没有窗口，只能按屏幕判定：
@@ -246,10 +251,59 @@ int main(int argc, char *argv[])
     mcpAccess.start();
 #endif
 
+    // 设备间同步（050）：Mac 与 iPad 的差别在这里注入，SyncController 与同步核心不做平台判断。
+    // Mac 直接读写 iCloud 云盘里固定位置的「番茄Todo同步」，可以新建，常驻菜单栏所以后台照常同步；
+    // iPad 要在「文件」里选文件夹、凭书签取得访问权，只在前台定时同步，切到后台时向系统要一点时间把改动写完。
+    SyncController::Platform syncPlatform;
+#if defined(Q_OS_MACOS)
+    syncPlatform.makeFolder = [](const QByteArray&, std::function<void(const QByteArray&)>) {
+        return std::unique_ptr<SyncFolder>(std::make_unique<MacSyncFolder>());
+    };
+    syncPlatform.fixedFolderDisplayPath = QStringLiteral("iCloud 云盘/番茄Todo同步");
+    syncPlatform.engine.mayCreateFolder = true;
+    syncPlatform.engine.runInBackground = true;
+#elif defined(Q_OS_IOS)
+    syncPlatform.makeFolder = [](const QByteArray& bookmark,
+                                 std::function<void(const QByteArray&)> bookmarkRefreshed) {
+        return std::unique_ptr<SyncFolder>(std::make_unique<IosSyncFolder>(bookmark, std::move(bookmarkRefreshed)));
+    };
+    syncPlatform.pickFolder = [](std::function<void(const QByteArray&, const QString&)> done) {
+        presentSyncFolderPicker(std::move(done));
+    };
+    syncPlatform.backgroundTask = [] { return beginIosBackgroundTask(QStringLiteral("番茄Todo同步")); };
+    syncPlatform.engine.mayCreateFolder = false;
+    syncPlatform.engine.runInBackground = false;
+#endif
+    SyncController syncController(std::move(syncPlatform));
+    // 第一次加入、另一台设备恢复了备份时，本机数据会被整体换掉：先做一份单独计数的自动备份，写成了才换。
+    syncController.setSafetyBackup([](QString* error) {
+        return BackupService::instance()->backupBeforeSyncReplace(error);
+    });
+    // 恢复备份 = 全局回滚：开始前停下同步并记下恢复前的纪元与设备标识，结束后开新纪元、给所有设备写全量快照。
+    QObject::connect(BackupService::instance(), &BackupService::restoreStarted,
+                     &syncController, &SyncController::prepareForRestore);
+    QObject::connect(BackupService::instance(), &BackupService::restoreCompleted,
+                     &syncController, [&syncController](bool success, const QString&) {
+        syncController.finishRestore(success);
+    });
+#if defined(Q_OS_IOS)
+    // 只有 iPad 接前后台：回到前台立即同步一轮，离开前台立即写出攒下的改动。
+    // Mac 不接：切到别的应用很频繁，每次都立即写会拆出很多小文件，而 iPad 每读一个要约 1 秒。
+    QObject::connect(&app, &QGuiApplication::applicationStateChanged, &syncController,
+                     [&syncController](Qt::ApplicationState state) {
+        syncController.setForeground(state == Qt::ApplicationActive);
+    });
+#endif
+
+    // 退出顺序：计时器先落盘（它结束的记录要随这次写出），备份的后台任务收尾，同步把攒下的改动写出去，最后关库。
+    // 同一个信号的槽按连接先后调用，所以同步这一条必须连在 DatabaseManager::close 之前。
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
                      FocusTimer::instance(), &FocusTimer::prepareForShutdown);
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
                      BackupService::instance(), &BackupService::prepareForShutdown);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &syncController, [&syncController] {
+        syncController.shutdown(3000);
+    });
     QObject::connect(&app, &QCoreApplication::aboutToQuit,
                      DatabaseManager::instance(), &DatabaseManager::close);
 
@@ -292,6 +346,10 @@ int main(int argc, char *argv[])
     MacGlobalHotkeyBackend globalHotkeyBackend;
     ShortcutRegistry::instance()->setGlobalBackend(&globalHotkeyBackend);
 #endif
+
+    // 同步的启动核对放在生成例行之前：同步记下的逻辑日起点若和本机设置不一致，要先写回，
+    // 「今天」是哪天才是对的。上次开着同步的话，这里接着开始（第一轮在事件循环里异步进行）。
+    syncController.initialize();
 
     // 启动即生成今天的例行任务，保证 QML 首次读取今日任务时已经能看到它们。
     // 两个平台都生成：同一例行同一天的实例在所有设备上是同一条记录（身份 = 例行 sync_id + 日期），
@@ -337,6 +395,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("notificationService"), NotificationService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("backupService"), BackupService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("shortcutRegistry"), ShortcutRegistry::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("syncController"), &syncController);
 #if defined(Q_OS_IOS)
     engine.rootContext()->setContextProperty(QStringLiteral("phaseAlarmCoordinator"), &phaseAlarms);
 #endif

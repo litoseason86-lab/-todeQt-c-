@@ -109,6 +109,32 @@ public:
     // 文件层面的问题（坏文件、读不懂的新版本文件）记进同步日志，和冲突记录放在一起，设置页可以查。
     bool logFileProblem(const QString& device, const QString& file, const QString& detail);
 
+    // ── 同步日志（给设置页看，050 阶段 4）──
+    // 表名、字段名已经换成给人看的名字；设备只分「这台」和「另一台」（第一期只有 Mac 和 iPad 两台）。
+    struct LogEntry {
+        qint64 id = 0;
+        QDateTime loggedAt;
+        // edit 两台同时改了同一项；delete 删除优先；merge 两个同名科目合并；skipped 这条没能应用；file 文件读不懂。
+        QString kind;
+        // 任务、科目、设置……；文件问题为空。
+        QString tableLabel;
+        // 那条记录叫什么（任务标题、科目名、设置名）；文件问题是文件名。
+        QString recordLabel;
+        // 具体哪一项（标题、完成状态……）；没有具体到某一项时为空。
+        QString fieldLabel;
+        QString lostValue;
+        QString keptValue;
+        // 输掉、留下的值是不是这台设备的。
+        bool lostHere = false;
+        bool keptHere = false;
+        QString detail;
+    };
+    // 新的在前，最多 limit 条。
+    QList<LogEntry> syncLog(int limit) const;
+    int syncLogCount() const;
+    // 最新一条的编号（没有时为 0）：变了才需要让界面重新读。
+    qint64 latestSyncLogId() const;
+
 private:
     QSqlDatabase database() const;
 

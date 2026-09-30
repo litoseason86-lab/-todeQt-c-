@@ -29,6 +29,7 @@ namespace {
 const auto kBackupExtension = QStringLiteral(".tomatobackup");
 const auto kAutoPrefix = QStringLiteral("auto-");
 const auto kBeforeRestorePrefix = QStringLiteral("before-restore-");
+const auto kBeforeSyncPrefix = QStringLiteral("before-sync-");
 const auto kRestoreStagingPrefix = QStringLiteral(".restore-staging-");
 const auto kAutoEnabledKey = QStringLiteral("backup/autoEnabled");
 const auto kLastBackupIsoKey = QStringLiteral("backup/lastBackupIso");
@@ -964,6 +965,35 @@ bool BackupService::runAutoBackupIfDue()
 
     pruneAutoBackups(path);
     emit lastBackupTimeChanged();
+    return true;
+}
+
+bool BackupService::backupBeforeSyncReplace(QString* error)
+{
+    const auto fail = [this, error](const QString& message) {
+        setLastError(message);
+        if (error) {
+            *error = message;
+        }
+        return false;
+    };
+    if (m_shutdownPrepared) {
+        return fail(QStringLiteral("应用正在退出，暂不替换"));
+    }
+    // 自动备份在后台线程里读库，恢复会把库文件整个换掉：和它们撞在一起，这份备份可能备到的是错的库。
+    if (m_busy) {
+        return fail(QStringLiteral("另一项备份或恢复正在进行，稍后再替换"));
+    }
+    if (!QDir().mkpath(autoBackupsDir())) {
+        return fail(QStringLiteral("无法创建备份目录"));
+    }
+    const QString path = QDir(autoBackupsDir()).filePath(
+        kBeforeSyncPrefix + timestampToken() + kBackupExtension);
+    if (!writeSnapshot(path, QStringLiteral("before-sync"))) {
+        return fail(QStringLiteral("替换前备份失败：") + m_lastError);
+    }
+    // 新的一份写成之后才清理旧的：短暂多占一份磁盘，好过失去这次替换的退路（与恢复前快照同理）。
+    pruneByPrefix(kBeforeSyncPrefix, kBeforeSyncRetention, path);
     return true;
 }
 

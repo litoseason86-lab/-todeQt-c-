@@ -93,6 +93,9 @@ public:
     void setRolloverIgnoredDate(const QString& date);
     QString backgroundTheme() const;
     void setBackgroundTheme(const QString& themeId);
+    // 出厂的逻辑日起点（凌晨 4 点）。同步据此判断本机记下的是不是还没改过的默认值：
+    // 两台设备各自的默认值不能盖掉对方改过的设置。
+    static constexpr int kDefaultDayStartHour = 4;
     int dayStartHour() const;
     void setDayStartHour(int hour);
     QString nickname() const;

@@ -2328,3 +2328,59 @@ bool SyncStore::logFileProblem(const QString& device, const QString& file, const
                               "(SELECT MAX(id) - %1 FROM sync_conflict_log)").arg(kConflictLogLimit));
     return true;
 }
+
+QList<SyncStore::LogEntry> SyncStore::syncLog(int limit) const
+{
+    QList<LogEntry> entries;
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral(
+        "SELECT id, logged_at, kind, tbl, record_label, field, lost_value, kept_value, lost_device, kept_device, "
+        "detail FROM sync_conflict_log ORDER BY id DESC LIMIT :limit"));
+    query.bindValue(QStringLiteral(":limit"), qMax(0, limit));
+    if (!query.exec()) {
+        qWarning() << "Failed to read sync log:" << query.lastError().text();
+        return entries;
+    }
+    const QString me = deviceId();
+    while (query.next()) {
+        LogEntry entry;
+        entry.id = query.value(0).toLongLong();
+        entry.loggedAt = QDateTime::fromString(query.value(1).toString(), Qt::ISODate);
+        entry.kind = query.value(2).toString();
+        const QString table = query.value(3).toString();
+        entry.recordLabel = query.value(4).toString();
+        const QString field = query.value(5).toString();
+        entry.lostValue = query.value(6).toString();
+        entry.keptValue = query.value(7).toString();
+        const QString lostDevice = query.value(8).toString();
+        const QString keptDevice = query.value(9).toString();
+        entry.detail = query.value(10).toString();
+        // 表名、字段名换成给人看的名字。设置项不在同步表里：它的「字段」就是设置键。
+        if (table == QLatin1String("settings")) {
+            entry.tableLabel = QStringLiteral("设置");
+            entry.fieldLabel = settingLabel(field);
+        } else if (const SyncSchema::Table* spec = SyncSchema::table(table)) {
+            entry.tableLabel = spec->label;
+            const SyncSchema::Field* column = SyncSchema::field(table, field);
+            entry.fieldLabel = column ? column->label : field;
+        }
+        entry.lostHere = !lostDevice.isEmpty() && lostDevice == me;
+        entry.keptHere = !keptDevice.isEmpty() && keptDevice == me;
+        entries.append(entry);
+    }
+    return entries;
+}
+
+int SyncStore::syncLogCount() const
+{
+    QSqlQuery query(database());
+    return query.exec(QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log")) && query.next()
+        ? query.value(0).toInt() : 0;
+}
+
+qint64 SyncStore::latestSyncLogId() const
+{
+    QSqlQuery query(database());
+    return query.exec(QStringLiteral("SELECT COALESCE(MAX(id), 0) FROM sync_conflict_log")) && query.next()
+        ? query.value(0).toLongLong() : 0;
+}

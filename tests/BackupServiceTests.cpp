@@ -176,6 +176,7 @@ private slots:
     void olderSchemaBackupRestoresAndMigrates();
     void autoBackupRespectsIntervalAndRetention();
     void autoBackupDisabledDoesNothing();
+    void beforeSyncBackupHasItsOwnQuotaAndYieldsToOtherJobs();
     void shutdownWaitsForAsyncWorkers();
 
 private:
@@ -1178,6 +1179,56 @@ void BackupServiceTests::autoBackupDisabledDoesNothing()
     const QStringList autos = dir.entryList(
         QStringList{QStringLiteral("auto-*.tomatobackup")}, QDir::Files);
     QVERIFY(autos.isEmpty());
+}
+
+void BackupServiceTests::beforeSyncBackupHasItsOwnQuotaAndYieldsToOtherJobs()
+{
+    QVERIFY(insertTask(QStringLiteral("同步替换前的任务")) > 0);
+    // 先铺好几份旧的替换前备份，以及另外两类快照：文件名带秒级时间戳，不靠连做很多次来造。
+    QDir dir(backupsDir());
+    QVERIFY(dir.mkpath(QStringLiteral(".")));
+    const QStringList others = {QStringLiteral("auto-20200101-000000-000.tomatobackup"),
+                                QStringLiteral("before-restore-20200101-000000-000.tomatobackup")};
+    QStringList stale = others;
+    for (int i = 0; i < BackupService::kBeforeSyncRetention + 2; ++i) {
+        stale.append(QStringLiteral("before-sync-2020010100000%1.tomatobackup").arg(i));
+    }
+    for (const QString& name : std::as_const(stale)) {
+        QFile file(dir.filePath(name));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("stale");
+    }
+
+    // 同步整体替换本机数据之前：写一份完整的备份，旧的替换前备份收敛到配额，另外两类一份不动。
+    QString error;
+    QVERIFY(BackupService::instance()->backupBeforeSyncReplace(&error));
+    QVERIFY(error.isEmpty());
+    const QStringList kept = dir.entryList({QStringLiteral("before-sync-*.tomatobackup")}, QDir::Files);
+    QCOMPARE(kept.size(), BackupService::kBeforeSyncRetention);
+    QString fresh;
+    for (const QString& name : kept) {
+        if (!stale.contains(name)) {
+            fresh = name;
+        }
+    }
+    QVERIFY(!fresh.isEmpty());
+    const QVariantMap info = BackupService::instance()->readBackupInfo(dir.filePath(fresh));
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QCOMPARE(info.value(QStringLiteral("taskCount")).toInt(), 1);
+    for (const QString& name : others) {
+        QVERIFY(QFileInfo::exists(dir.filePath(name)));
+    }
+
+    // 另一项备份正在后台进行：不和它撞在一起，拒绝并说明原因，同步稍后会再试。
+    BackupService* service = BackupService::instance();
+    service->requestBackup(backupFile());
+    QVERIFY(service->busy());
+    error.clear();
+    QVERIFY(!service->backupBeforeSyncReplace(&error));
+    QVERIFY(error.contains(QStringLiteral("正在进行")));
+    QCOMPARE(dir.entryList({QStringLiteral("before-sync-*.tomatobackup")}, QDir::Files).size(),
+             BackupService::kBeforeSyncRetention);
+    QTRY_VERIFY(!service->busy());
 }
 
 void BackupServiceTests::shutdownWaitsForAsyncWorkers()

@@ -72,7 +72,8 @@ void presentSyncFolderPicker(std::function<void(const QByteArray& bookmark, cons
     g_pickerDelegate = [[PomodoroSyncFolderPickerDelegate alloc] init];
     g_pickerDelegate.completion = ^(NSURL* _Nullable url) {
         if (url == nil) {
-            (*callback)(QByteArray(), QStringLiteral("已取消"));
+            // 取消：书签和说明都为空，调用方据此不提示。
+            (*callback)(QByteArray(), QString());
             return;
         }
         // 先取得访问权再生成书签；之后由同步的工作线程凭书签重新取得访问权。

@@ -94,6 +94,8 @@ set(APP_SOURCES
     src/services/SyncWorker.cpp
     src/services/SyncEngine.h
     src/services/SyncEngine.cpp
+    src/services/SyncController.h
+    src/services/SyncController.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -1010,6 +1012,64 @@ target_link_libraries(SyncTransportTests PRIVATE
 pomodoro_todo_enable_warnings(SyncTransportTests)
 add_test(NAME SyncTransportTests COMMAND SyncTransportTests)
 
+# 设备间同步接进应用（050 阶段 4）：开关与书签、恢复备份与逻辑日起点的衔接、iPad 选文件夹、同步日志。
+# 平台差异（文件夹怎么建、怎么选）由测试注入，同步文件夹用临时目录，不碰真实的 iCloud 云盘。
+add_executable(SyncControllerTests
+    tests/SyncControllerTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncStore.h
+    src/services/SyncStore.cpp
+    src/services/SyncNotifier.h
+    src/services/SyncNotifier.cpp
+    src/services/SyncFiles.h
+    src/services/SyncFiles.cpp
+    src/services/SyncFolder.h
+    src/services/LocalSyncFolder.h
+    src/services/LocalSyncFolder.cpp
+    src/services/SyncWorker.h
+    src/services/SyncWorker.cpp
+    src/services/SyncEngine.h
+    src/services/SyncEngine.cpp
+    src/services/SyncController.h
+    src/services/SyncController.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/FocusHistoryService.h
+    src/services/FocusHistoryService.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/RoutineManager.h
+    src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+    src/services/FocusSessionRules.h
+)
+
+target_link_libraries(SyncControllerTests PRIVATE
+    Qt6::Concurrent
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+pomodoro_todo_enable_warnings(SyncControllerTests)
+add_test(NAME SyncControllerTests COMMAND SyncControllerTests)
+
 add_executable(FontAssetsTests
     tests/FontAssetsTests.cpp
     resources/fonts.qrc
@@ -1294,6 +1354,7 @@ set_tests_properties(
     SyncTests
     # 同步引擎在工作线程里读写文件：万一卡死，到点就报出来，不让全套一直挂着。
     SyncTransportTests
+    SyncControllerTests
     PROPERTIES TIMEOUT 90
 )
 set_tests_properties(
