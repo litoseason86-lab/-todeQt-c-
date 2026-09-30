@@ -72,6 +72,7 @@ ApplicationWindow {
         logicalDayServiceRef: typeof logicalDayService === "undefined" ? null : logicalDayService
         mcpAccessRef: typeof mcpAccessController === "undefined" ? null : mcpAccessController
         backupServiceRef: typeof backupService === "undefined" ? null : backupService
+        syncControllerRef: typeof syncController === "undefined" ? null : syncController
         scheduleServiceRef: typeof scheduleService === "undefined" ? null : scheduleService
         shortcutRegistryRef: typeof shortcutRegistry === "undefined" ? null : shortcutRegistry
         // qmllint enable unqualified

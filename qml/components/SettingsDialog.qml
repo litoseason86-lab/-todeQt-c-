@@ -13,6 +13,7 @@ Popup {
     property var appSettingsRef: null
     property var backupServiceRef: null
     property var mcpAccessRef: null
+    property var syncControllerRef: null
     property var shortcutRegistryRef: null
     property int currentSection: 0
     // 静息态留空：「设置将自动保存到本机」是一句永远为真的话，占一整行却零信息量。
@@ -36,6 +37,7 @@ Popup {
     signal exportRequested
     signal backupRequested
     signal restoreRequested
+    signal syncLogRequested
 
     modal: true
     focus: true
@@ -256,6 +258,10 @@ Popup {
                                 if (item.hasOwnProperty("backupServiceRef")) {
                                     item.backupServiceRef = Qt.binding(function() { return root.backupServiceRef })
                                 }
+                                // 数据页里的设备间同步；其余页面没有该属性，跳过即可。
+                                if (item.hasOwnProperty("syncControllerRef")) {
+                                    item.syncControllerRef = Qt.binding(function() { return root.syncControllerRef })
+                                }
                                 // 快捷键页需要注册表引用；其余页面没有该属性，跳过即可。
                                 if (item.hasOwnProperty("shortcutRegistryRef")) {
                                     item.shortcutRegistryRef = Qt.binding(function() { return root.shortcutRegistryRef })
@@ -351,6 +357,10 @@ Popup {
         function onRestoreRequested() {
             root.close()
             root.restoreRequested()
+        }
+        function onSyncLogRequested() {
+            root.close()
+            root.syncLogRequested()
         }
     }
 

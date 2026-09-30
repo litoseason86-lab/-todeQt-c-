@@ -269,6 +269,7 @@ TestCase {
         id: backupService
 
         signal restoreStarted()
+        signal backupInfoReady(string sourcePath, var info)
 
         // 与 BackupService 同名：备份/恢复临界区期间为真，界面整体阻断输入。
         property bool operationBlocksUi: false
@@ -284,6 +285,32 @@ TestCase {
         function getMonthSessions() { return [] }
         function lastError() { return "" }
     }
+    // 设备间同步的替身：主窗口只接它的提示、日志入口和「开没开」。
+    QtObject {
+        id: syncController
+
+        property bool enabled: false
+        property string statusKey: "stopped"
+        property bool hasProblem: false
+        property string summaryText: ""
+        property string statusText: ""
+        property string statusDetail: ""
+        property int pendingCount: 0
+        property bool busy: false
+        property bool choosesFolder: false
+        property bool hasFolder: true
+        property string folderDisplayPath: ""
+        property bool choosingFolder: false
+        property string folderProblem: ""
+        property int logRevision: 0
+        property int logCount: 0
+
+        signal notice(string message)
+        signal logChanged()
+
+        function syncLog(limit) { return [] }
+    }
+
     MainWindow {
         id: mainWindow
 
@@ -298,6 +325,7 @@ TestCase {
         focusTimerRef: focusTimer
         knowledgeGapServiceRef: knowledgeGapService
         backupServiceRef: backupService
+        syncControllerRef: syncController
     }
 
     SignalSpy {
@@ -1920,5 +1948,45 @@ TestCase {
         compare(mainWindow.pendingView, data.page)
         compare(mainWindow.currentView, data.page)
         compare(toastText(), "已完成「英语」，专注已结束")
+    }
+
+    // 设备间同步（050 阶段 4）在主窗口上的三处接线。
+    function test_syncNoticeShowsAsToast() {
+        // 已经加入、建好了文件夹、另一台设备恢复了备份：这些事用提示条告诉你。
+        syncController.notice("已加入同步：本机数据已换成同步文件夹里的，原来的数据已自动备份。")
+        compare(toastText(), "已加入同步：本机数据已换成同步文件夹里的，原来的数据已自动备份。")
+    }
+
+    function test_syncLogOpensFromSettings() {
+        var settings = findChild(mainWindow, "settingsDialog")
+        var log = findChild(mainWindow, "syncLogDialog")
+        verify(settings)
+        verify(log)
+        // 设置页的「同步日志」入口：设置先关掉，再由主窗口打开日志弹窗（与其它管理入口一致）。
+        settings.syncLogRequested()
+        tryCompare(log, "opened", true)
+        log.close()
+        tryCompare(log, "opened", false)
+    }
+
+    function test_restoreConfirmationKnowsSyncIsOn() {
+        var dialog = findChild(mainWindow, "restoreConfirmDialog")
+        verify(dialog)
+        // 开着同步时恢复就是全局回滚：确认弹窗必须拿到「开着」，才会说明另一台也会回到这份备份。
+        syncController.enabled = true
+        mainWindow.restoreInspectionPath = "/tmp/测试备份.tomatobackup"
+        backupService.backupInfoReady("/tmp/测试备份.tomatobackup", { valid: true })
+        tryCompare(dialog, "opened", true)
+        compare(dialog.syncEnabled, true)
+        dialog.close()
+        tryCompare(dialog, "opened", false)
+
+        syncController.enabled = false
+        mainWindow.restoreInspectionPath = "/tmp/测试备份.tomatobackup"
+        backupService.backupInfoReady("/tmp/测试备份.tomatobackup", { valid: true })
+        tryCompare(dialog, "opened", true)
+        compare(dialog.syncEnabled, false)
+        dialog.close()
+        tryCompare(dialog, "opened", false)
     }
 }
