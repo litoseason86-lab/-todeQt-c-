@@ -1291,6 +1291,9 @@ set_tests_properties(
     TimingRobustnessTests
     PhaseAlarmCoordinatorTests
     ShortcutRegistryTests
+    SyncTests
+    # 同步引擎在工作线程里读写文件：万一卡死，到点就报出来，不让全套一直挂着。
+    SyncTransportTests
     PROPERTIES TIMEOUT 90
 )
 set_tests_properties(
