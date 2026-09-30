@@ -1,12 +1,16 @@
 #include <QDir>
+#include <QDirIterator>
 #include <QFile>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMutex>
+#include <QSaveFile>
 #include <QSettings>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QTemporaryDir>
+#include <QThread>
 #include <QtTest>
 
 #include <functional>
@@ -15,9 +19,11 @@
 #include "../src/services/AppSettings.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/LocalSyncFolder.h"
+#include "../src/services/SyncEngine.h"
 #include "../src/services/SyncFiles.h"
 #include "../src/services/SyncRecord.h"
 #include "../src/services/SyncStore.h"
+#include "../src/services/SyncWorker.h"
 
 // 设备间同步的云盘传输（050 阶段 3）的测试。
 //
@@ -25,6 +31,10 @@
 // 这一层不碰磁盘，所以直接比较字节与结构。
 // 3b 看本地目录的读写：原子替换、错误归类（不存在、不可用）。
 // 3c 看传输记账：读到哪、写到哪都记在库里，重开之后还在。
+// 3d 起是两台设备的场景：每台设备一个真实结构的临时库、一个 SyncEngine，加一份自己的「云盘副本」
+// （相当于它看到的 iCloud 云盘文件夹）。设备只读写自己的副本，测试用 FakeICloud::deliver 把一台写的文件
+// 送到另一台的副本里：可以只送一部分、调换顺序、晚一点送，模拟 iCloud 的延迟与乱序。
+// 引擎的定时器在测试里拨到一小时，一轮同步只在调用 syncOnce 时发生，结果不受跑测试时的快慢影响。
 namespace {
 
 const QString kDeviceA = QStringLiteral("0123456789abcdef0123456789abcdef");
@@ -91,6 +101,222 @@ QVariant scalar(const Device& device, const QString& sql)
     return query.next() ? query.value(0) : QVariant();
 }
 
+// 新建一条任务（排在当天末尾，与服务层一致），返回它的 sync_id。
+QString addTask(const Device& device, const QString& title, const QString& date = QStringLiteral("2026-09-30"))
+{
+    QSqlQuery query(deviceDb(device));
+    query.prepare(QStringLiteral(
+        "INSERT INTO tasks (title, date, completed, display_order) VALUES (:title, :date, 0, "
+        "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks WHERE date = :orderDate))"));
+    query.bindValue(QStringLiteral(":title"), title);
+    query.bindValue(QStringLiteral(":date"), date);
+    query.bindValue(QStringLiteral(":orderDate"), date);
+    if (!query.exec()) {
+        qWarning() << query.lastError().text();
+        return {};
+    }
+    return scalar(device, QStringLiteral("SELECT sync_id FROM tasks WHERE id = %1")
+                              .arg(query.lastInsertId().toLongLong())).toString();
+}
+
+QStringList taskTitles(const Device& device)
+{
+    QStringList titles;
+    QSqlQuery query(deviceDb(device));
+    query.exec(QStringLiteral("SELECT title FROM tasks ORDER BY title, id"));
+    while (query.next()) {
+        titles.append(query.value(0).toString());
+    }
+    return titles;
+}
+
+// 把一份快照写成可比较的文字：每条记录一行，字段按名字排序，带上值和版本。
+// 两台设备导出的快照文字相同，就说明它们的同步数据完全一致。
+QStringList describe(const SyncBatch& snapshot)
+{
+    QStringList lines;
+    for (const SyncRecord& record : snapshot.records) {
+        QStringList parts{record.table, record.syncId};
+        if (record.deleted) {
+            parts << QStringLiteral("deleted:%1@%2/%3").arg(record.deleteKind).arg(record.deleteVersion.time)
+                         .arg(record.deleteVersion.device);
+        }
+        QStringList fields = record.fields.keys();
+        fields.sort();
+        for (const QString& field : fields) {
+            const SyncFieldValue value = record.fields.value(field);
+            parts << QStringLiteral("%1=%2@%3/%4").arg(field, SyncJson::canonicalValue(value.value))
+                         .arg(value.version.time).arg(value.version.device);
+        }
+        lines << parts.join(QLatin1Char('|'));
+    }
+    for (const SyncSettingRecord& setting : snapshot.settings) {
+        lines << QStringLiteral("setting|%1=%2@%3/%4").arg(setting.key, setting.value).arg(setting.version.time)
+                     .arg(setting.version.device);
+    }
+    lines.sort();
+    return lines;
+}
+
+QStringList describe(const Device& device)
+{
+    return describe(SyncStore(device.connection).exportSnapshot());
+}
+
+bool copyIfDifferent(const QString& source, const QString& target)
+{
+    QFile in(source);
+    if (!in.open(QIODevice::ReadOnly)) {
+        return false;
+    }
+    const QByteArray data = in.readAll();
+    QFile existing(target);
+    if (existing.open(QIODevice::ReadOnly) && existing.readAll() == data) {
+        return true;
+    }
+    QDir().mkpath(QFileInfo(target).absolutePath());
+    QSaveFile out(target);
+    return out.open(QIODevice::WriteOnly) && out.write(data) == data.size() && out.commit();
+}
+
+// 假 iCloud：每台设备一份本地副本，设备只读写自己的那一份。deliver 把一台设备写的文件
+// （它自己的设备目录，以及它建的标记文件）送到另一台的副本里：新增、更新，以及删除它那边已经删掉的。
+// hold 返回 true 的文件这次先扣下不送，模拟还在路上。
+class FakeICloud
+{
+public:
+    explicit FakeICloud(QString root) : m_root(std::move(root)) {}
+
+    QString replica(const Device& device) const
+    {
+        const QString base = m_root + QLatin1Char('/') + device.connection;
+        QDir().mkpath(base);
+        return base + QStringLiteral("/番茄Todo同步");
+    }
+
+    void deliver(const Device& from, const Device& to, const std::function<bool(const QString&)>& hold = {})
+    {
+        const QString source = replica(from);
+        const QString target = replica(to);
+        const QString own = SyncFiles::deviceDirectory(from.id);
+        QSet<QString> present;
+        QDirIterator files(source + QLatin1Char('/') + own, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+        while (files.hasNext()) {
+            const QString path = files.next();
+            // 写到一半的临时文件不会被 iCloud 送出去：它很快就被改名换掉了。
+            if (SyncFiles::isTemporaryFileName(QFileInfo(path).fileName())) {
+                continue;
+            }
+            const QString relative = QDir(source).relativeFilePath(path);
+            present.insert(relative);
+            if (hold && hold(relative)) {
+                continue;
+            }
+            copyIfDifferent(path, target + QLatin1Char('/') + relative);
+        }
+        QDirIterator delivered(target + QLatin1Char('/') + own, QDir::Files | QDir::Hidden, QDirIterator::Subdirectories);
+        while (delivered.hasNext()) {
+            const QString path = delivered.next();
+            const QString relative = QDir(target).relativeFilePath(path);
+            if (!present.contains(relative) && !(hold && hold(relative))) {
+                QFile::remove(path);
+            }
+        }
+        const QString marker = source + QLatin1Char('/') + SyncFiles::markerFileName();
+        QFile markerFile(marker);
+        SyncFiles::Marker parsed;
+        QString error;
+        if (markerFile.open(QIODevice::ReadOnly)
+            && SyncFiles::decodeMarker(markerFile.readAll(), &parsed, &error) == SyncFiles::ParseStatus::Ok
+            && parsed.createdBy == from.id && !(hold && hold(SyncFiles::markerFileName()))) {
+            copyIfDifferent(marker, target + QLatin1Char('/') + SyncFiles::markerFileName());
+        }
+    }
+
+    // 两个方向都送一遍。
+    void exchange(const Device& a, const Device& b)
+    {
+        deliver(a, b);
+        deliver(b, a);
+    }
+
+    QString path(const Device& device, const QString& relative) const
+    {
+        return replica(device) + QLatin1Char('/') + relative;
+    }
+
+    // 某台设备的副本里，owner 写的改动文件（文件名，升序）。
+    QStringList changeFiles(const Device& replicaOf, const Device& owner) const
+    {
+        QStringList names = QDir(path(replicaOf, SyncFiles::changesDirectory(owner.id))).entryList(QDir::Files, QDir::Name);
+        return names;
+    }
+
+    QStringList snapshotFiles(const Device& replicaOf, const Device& owner) const
+    {
+        return QDir(path(replicaOf, SyncFiles::deviceDirectory(owner.id)))
+            .entryList({QStringLiteral("snapshot-*.json")}, QDir::Files, QDir::Name);
+    }
+
+private:
+    QString m_root;
+};
+
+// 一台设备：库、引擎，以及它收到的界面通知与自动备份。
+struct Node {
+    Device device;
+    std::unique_ptr<SyncEngine> engine;
+    QList<SyncStore::ApplyResult> notified;
+    // 每次自动备份时本机有哪些任务：用来确认备份发生在替换之前。
+    QList<QStringList> backups;
+    bool backupSucceeds = true;
+};
+
+SyncEngine::Options testOptions()
+{
+    SyncEngine::Options options;
+    // 定时器拨到一小时：一轮同步只在测试调用 syncOnce 时发生。
+    options.tickMs = 60 * 60 * 1000;
+    options.publishIntervalMs = 0;
+    options.scanIntervalMs = 0;
+    options.retryMinMs = 0;
+    options.retryMaxMs = 0;
+    return options;
+}
+
+// 同步一轮并等它（以及它要求紧接着做的几轮）做完。
+bool syncOnce(Node& node, int timeoutMs = 10000)
+{
+    node.engine->syncNow();
+    QElapsedTimer timer;
+    timer.start();
+    while (!node.engine->isIdle()) {
+        if (timer.elapsed() > timeoutMs) {
+            return false;
+        }
+        QTest::qWait(1);
+    }
+    return true;
+}
+
+bool waitIdle(SyncEngine& engine, int timeoutMs = 10000)
+{
+    QElapsedTimer timer;
+    timer.start();
+    while (!engine.isIdle()) {
+        if (timer.elapsed() > timeoutMs) {
+            return false;
+        }
+        QTest::qWait(1);
+    }
+    return true;
+}
+
+bool fileExists(const QString& path)
+{
+    return QFileInfo::exists(path);
+}
+
 // 把一个 JSON 对象改一处再编码回去，用来造各种坏文件。
 QByteArray tamper(const QByteArray& bytes, const std::function<void(QJsonObject&)>& change)
 {
@@ -130,9 +356,26 @@ private slots:
     void pendingCountFollowsOutboxAndSettings();
     void fileProblemsGoToSyncLog();
 
+    // 3d：引擎主循环
+    void macCreatesFolderWithMarkerAndSnapshot();
+    void joiningNeedsConfirmationAndBacksUpFirst();
+    void changesTravelBothWaysInBatches();
+    void filesArrivingOutOfOrderWaitForTheGap();
+    void redeliveredFilesChangeNothing();
+    void sequenceIsNotReusedAfterUnacknowledgedWrite();
+    void wrongFolderIsReportedWithHint();
+    void joinWaitsWhileSnapshotIsStillUploading();
+    void batchingWaitsUntilIntervalOrBackground();
+    void flushBeforeExitWritesPendingChanges();
+    void fileWorkRunsOffTheMainThread();
+
 private:
     Device openDevice(const QString& name);
     void reopen(Device& device);
+    std::unique_ptr<Node> makeNode(const QString& name, bool mayCreateFolder, FakeICloud& cloud,
+                                   SyncEngine::Options options = testOptions());
+    // Mac 建好文件夹、iPad 确认加入，两台都同步完，返回之前的准备都做好了。
+    void setUpPair(FakeICloud& cloud, std::unique_ptr<Node>* mac, std::unique_ptr<Node>* ipad);
 
     QTemporaryDir m_preferences;
     std::unique_ptr<QTemporaryDir> m_data;
@@ -600,6 +843,409 @@ void SyncTransportTests::fileProblemsGoToSyncLog()
              SyncFiles::changeFileName({0, 3}));
     QCOMPARE(scalar(device, QStringLiteral("SELECT lost_device FROM sync_conflict_log")).toString(), kDeviceB);
     QVERIFY(scalar(device, QStringLiteral("SELECT detail FROM sync_conflict_log")).toString().contains(QStringLiteral("JSON")));
+}
+
+// ── 3d：引擎主循环 ──
+
+std::unique_ptr<Node> SyncTransportTests::makeNode(const QString& name, bool mayCreateFolder, FakeICloud& cloud,
+                                                  SyncEngine::Options options)
+{
+    auto node = std::make_unique<Node>();
+    node->device = openDevice(name);
+    options.mayCreateFolder = mayCreateFolder;
+    node->engine = std::make_unique<SyncEngine>(std::make_unique<LocalSyncFolder>(cloud.replica(node->device)),
+                                                options, node->device.connection);
+    Node* raw = node.get();
+    // 两台设备不共用单例服务：界面通知只记下来，不去碰单例。
+    node->engine->setChangeNotifier([raw](const SyncStore::ApplyResult& result) { raw->notified.append(result); });
+    node->engine->setSafetyBackup([raw](QString* error) {
+        raw->backups.append(taskTitles(raw->device));
+        if (!raw->backupSucceeds) {
+            *error = QStringLiteral("备份目录写不进去");
+        }
+        return raw->backupSucceeds;
+    });
+    return node;
+}
+
+void SyncTransportTests::setUpPair(FakeICloud& cloud, std::unique_ptr<Node>* mac, std::unique_ptr<Node>* ipad)
+{
+    *mac = makeNode(QStringLiteral("mac"), true, cloud);
+    *ipad = makeNode(QStringLiteral("ipad"), false, cloud);
+    (*mac)->engine->start();
+    QVERIFY(waitIdle(*(*mac)->engine));
+    QCOMPARE((*mac)->engine->status(), SyncEngine::Status::UpToDate);
+    cloud.deliver((*mac)->device, (*ipad)->device);
+    (*ipad)->engine->start();
+    QVERIFY(waitIdle(*(*ipad)->engine));
+    (*ipad)->engine->confirmJoin();
+    QVERIFY(waitIdle(*(*ipad)->engine));
+    QCOMPARE((*ipad)->engine->status(), SyncEngine::Status::UpToDate);
+}
+
+void SyncTransportTests::macCreatesFolderWithMarkerAndSnapshot()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    auto mac = makeNode(QStringLiteral("mac"), true, cloud);
+    QVERIFY(!addTask(mac->device, QStringLiteral("写代码")).isEmpty());
+    // 根目录还不存在（第一次开启同步）：Mac 新建文件夹，写标记文件和第一份快照。
+    mac->engine->start();
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::Starting);
+    QVERIFY(waitIdle(*mac->engine));
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::UpToDate);
+
+    QFile markerFile(cloud.path(mac->device, SyncFiles::markerFileName()));
+    QVERIFY(markerFile.open(QIODevice::ReadOnly));
+    SyncFiles::Marker marker;
+    QString error;
+    QCOMPARE(SyncFiles::decodeMarker(markerFile.readAll(), &marker, &error), SyncFiles::ParseStatus::Ok);
+    QCOMPARE(marker.createdBy, mac->device.id);
+    SyncStore store(mac->device.connection);
+    QCOMPARE(store.folderId(), marker.folderId);
+    QCOMPARE(cloud.snapshotFiles(mac->device, mac->device), QStringList{SyncFiles::snapshotFileName({0, 0})});
+    // 快照给所有设备起步用，它已经带上的改动不必再单独发：待发送清空，也没有写改动文件。
+    QVERIFY(!store.needsSnapshot());
+    QCOMPARE(store.pendingCount(), 0);
+    QVERIFY(cloud.changeFiles(mac->device, mac->device).isEmpty());
+    QVERIFY(mac->engine->lastSyncedAt().isValid());
+
+    // 已经加入过的文件夹：再开一次直接接上，不会另建一个。
+    mac->engine->stop();
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QCOMPARE(store.folderId(), marker.folderId);
+}
+
+void SyncTransportTests::joiningNeedsConfirmationAndBacksUpFirst()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    auto mac = makeNode(QStringLiteral("mac"), true, cloud);
+    auto ipad = makeNode(QStringLiteral("ipad"), false, cloud);
+    QVERIFY(!addTask(mac->device, QStringLiteral("Mac 的任务")).isEmpty());
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 的测试任务")).isEmpty());
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    cloud.deliver(mac->device, ipad->device);
+
+    // 没确认之前：什么都不动，也不往文件夹里写任何东西。
+    ipad->engine->start();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::NeedsConfirmation);
+    QVERIFY(!ipad->engine->statusText().isEmpty());
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("iPad 的测试任务")});
+    QVERIFY(ipad->backups.isEmpty());
+    QVERIFY(!fileExists(cloud.path(ipad->device, SyncFiles::deviceDirectory(ipad->device.id))));
+    QVERIFY(SyncStore(ipad->device.connection).folderId().isEmpty());
+
+    // 确认之后：先备份（备份时本机数据还在），再整体换成 Mac 的。你定了首次加入完全以 Mac 为准。
+    ipad->engine->confirmJoin();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(ipad->backups.size(), 1);
+    QCOMPARE(ipad->backups.first(), QStringList{QStringLiteral("iPad 的测试任务")});
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("Mac 的任务")});
+    QCOMPARE(describe(ipad->device), describe(mac->device));
+    SyncStore ipadStore(ipad->device.connection);
+    QCOMPARE(ipadStore.folderId(), SyncStore(mac->device.connection).folderId());
+    QCOMPARE(ipadStore.peerCursors().value(mac->device.id), (SyncPosition{0, 0}));
+    // 被换掉的任务交给界面：计时器据此解绑，列表刷新。
+    QCOMPARE(ipad->notified.size(), 1);
+    QVERIFY(!ipad->notified.first().deletedTaskIds.isEmpty());
+
+    // 加入只做一次：之后再同步不会再备份、再替换。
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->backups.size(), 1);
+}
+
+void SyncTransportTests::changesTravelBothWaysInBatches()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    // Mac 上连着改了三处：攒成一批、只写一个文件。
+    const QString first = addTask(mac->device, QStringLiteral("背单词"));
+    QVERIFY(!addTask(mac->device, QStringLiteral("刷题")).isEmpty());
+    QVERIFY(exec(mac->device, QStringLiteral("UPDATE tasks SET notes = '第 3 单元' WHERE sync_id = '%1'").arg(first)));
+    QVERIFY(syncOnce(*mac));
+    QCOMPARE(cloud.changeFiles(mac->device, mac->device), QStringList{SyncFiles::changeFileName({0, 1})});
+    QCOMPARE(SyncStore(mac->device.connection).pendingCount(), 0);
+
+    cloud.deliver(mac->device, ipad->device);
+    ipad->notified.clear();
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(taskTitles(ipad->device), (QStringList{QStringLiteral("刷题"), QStringLiteral("背单词")}));
+    QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT notes FROM tasks WHERE sync_id = '%1'").arg(first)).toString(),
+             QStringLiteral("第 3 单元"));
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 1}));
+    // 界面只刷新一次，且只刷新任务。
+    QCOMPARE(ipad->notified.size(), 1);
+    QVERIFY(ipad->notified.first().changedTables.contains(QStringLiteral("tasks")));
+    // iPad 把读到哪写进自己的游标文件，Mac 据此才能清理旧文件。
+    QFile cursorFile(cloud.path(ipad->device, SyncFiles::deviceDirectory(ipad->device.id) + QLatin1Char('/')
+                                                  + SyncFiles::cursorFileName()));
+    QVERIFY(cursorFile.open(QIODevice::ReadOnly));
+    SyncFiles::CursorFile cursor;
+    QString error;
+    QCOMPARE(SyncFiles::decodeCursor(cursorFile.readAll(), ipad->device.id, &cursor, &error), SyncFiles::ParseStatus::Ok);
+    QCOMPARE(cursor.applied.value(mac->device.id), (SyncPosition{0, 1}));
+
+    // 反方向：iPad 完成了一条，Mac 收到。
+    QVERIFY(exec(ipad->device, QStringLiteral("UPDATE tasks SET completed = 1 WHERE sync_id = '%1'").arg(first)));
+    QVERIFY(syncOnce(*ipad));
+    cloud.deliver(ipad->device, mac->device);
+    QVERIFY(syncOnce(*mac));
+    QCOMPARE(scalar(mac->device, QStringLiteral("SELECT completed FROM tasks WHERE sync_id = '%1'").arg(first)).toInt(), 1);
+    QCOMPARE(describe(mac->device), describe(ipad->device));
+}
+
+void SyncTransportTests::filesArrivingOutOfOrderWaitForTheGap()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    QVERIFY(!addTask(mac->device, QStringLiteral("第一批")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+    QVERIFY(!addTask(mac->device, QStringLiteral("第二批")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+    const QString firstFile = SyncFiles::changesDirectory(mac->device.id) + QLatin1Char('/')
+        + SyncFiles::changeFileName({0, 1});
+
+    // iCloud 先送到了第二批：等第一批，一批都不应用。
+    cloud.deliver(mac->device, ipad->device, [&firstFile](const QString& path) { return path == firstFile; });
+    QVERIFY(syncOnce(*ipad));
+    QVERIFY(taskTitles(ipad->device).isEmpty());
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 0}));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+
+    // 第一批到了：两批按顺序应用。
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(taskTitles(ipad->device), (QStringList{QStringLiteral("第一批"), QStringLiteral("第二批")}));
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 2}));
+}
+
+void SyncTransportTests::redeliveredFilesChangeNothing()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+    const QString task = addTask(mac->device, QStringLiteral("背单词"));
+    QVERIFY(exec(mac->device, QStringLiteral("UPDATE tasks SET notes = '一' WHERE sync_id = '%1'").arg(task)));
+    QVERIFY(syncOnce(*mac));
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad));
+    const QStringList before = describe(ipad->device);
+
+    // 应用了、但「读到第几批」没记下（被系统结束）：下次把这些文件再读一遍，什么都不该变。
+    QVERIFY(SyncStore(ipad->device.connection).setPeerCursor(mac->device.id, {0, 0}));
+    ipad->notified.clear();
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(describe(ipad->device), before);
+    QVERIFY(ipad->notified.isEmpty());
+    QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log")).toInt(), 0);
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 1}));
+}
+
+void SyncTransportTests::sequenceIsNotReusedAfterUnacknowledgedWrite()
+{
+    QTemporaryDir temp;
+    QVERIFY(temp.isValid());
+    SyncWorker worker(std::make_unique<LocalSyncFolder>(temp.path()));
+    SyncBatch batch = sampleBatch(kDeviceA, 2);
+    const SyncWorker::WriteResult first = worker.writeChanges(batch, 0, 1790000000000);
+    QVERIFY(first.error.ok());
+    QCOMPARE(first.position, (SyncPosition{2, 1}));
+    // 写完文件、还没来得及记下序号就被结束：下次仍以为写到第 0 批。不能再用 1 号覆盖对方可能已经读过的文件。
+    const SyncWorker::WriteResult again = worker.writeChanges(batch, 0, 1790000000001);
+    QVERIFY(again.error.ok());
+    QCOMPARE(again.position, (SyncPosition{2, 2}));
+    // 别的纪元的旧文件不占这个纪元的号。
+    batch.epoch = 3;
+    QCOMPARE(worker.writeChanges(batch, 0, 1790000000002).position, (SyncPosition{3, 1}));
+    // 本机记的比目录里的大（旧文件已被清理）：按本机记的往后排。
+    QCOMPARE(worker.writeChanges(batch, 9, 1790000000003).position, (SyncPosition{3, 10}));
+}
+
+void SyncTransportTests::wrongFolderIsReportedWithHint()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    // iPad 选成了里面的 devices 子文件夹：提示回到上一层，不写任何东西。
+    Device other = openDevice(QStringLiteral("other"));
+    SyncEngine inner(std::make_unique<LocalSyncFolder>(cloud.path(ipad->device, SyncFiles::devicesDirectory())),
+                     testOptions(), other.connection);
+    inner.setChangeNotifier([](const SyncStore::ApplyResult&) {});
+    inner.start();
+    QVERIFY(waitIdle(inner));
+    QCOMPARE(inner.status(), SyncEngine::Status::WrongFolder);
+    QVERIFY2(inner.statusText().contains(QStringLiteral("回到上一层")), qPrintable(inner.statusText()));
+
+    // iPad 选了一个空文件夹：iPad 不能新建同步文件夹，只提示先在 Mac 上开启。
+    const QString empty = m_data->filePath(QStringLiteral("empty"));
+    QVERIFY(QDir().mkpath(empty));
+    inner.setFolder(std::make_unique<LocalSyncFolder>(empty));
+    QVERIFY(waitIdle(inner));
+    QCOMPARE(inner.status(), SyncEngine::Status::WrongFolder);
+    QVERIFY2(inner.statusText().contains(QStringLiteral("Mac 上开启同步")), qPrintable(inner.statusText()));
+    QVERIFY(QDir(empty).entryList(QDir::NoDotAndDotDot | QDir::AllEntries | QDir::Hidden).isEmpty());
+
+    // Mac 不会在一个有别的东西的文件夹里新建：那可能是用户自己的文件夹。
+    const QString occupied = m_data->filePath(QStringLiteral("occupied"));
+    QVERIFY(QDir().mkpath(occupied + QStringLiteral("/论文")));
+    Device another = openDevice(QStringLiteral("another-mac"));
+    SyncEngine::Options options = testOptions();
+    options.mayCreateFolder = true;
+    SyncEngine creator(std::make_unique<LocalSyncFolder>(occupied), options, another.connection);
+    creator.setChangeNotifier([](const SyncStore::ApplyResult&) {});
+    creator.start();
+    QVERIFY(waitIdle(creator));
+    QCOMPARE(creator.status(), SyncEngine::Status::WrongFolder);
+    QVERIFY(!fileExists(occupied + QLatin1Char('/') + SyncFiles::markerFileName()));
+}
+
+void SyncTransportTests::joinWaitsWhileSnapshotIsStillUploading()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    auto mac = makeNode(QStringLiteral("mac"), true, cloud);
+    auto ipad = makeNode(QStringLiteral("ipad"), false, cloud);
+    QVERIFY(!addTask(mac->device, QStringLiteral("Mac 的任务")).isEmpty());
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 的测试任务")).isEmpty());
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+
+    // 标记文件先到了，快照还在路上：等着，不动本机数据，也不备份。
+    cloud.deliver(mac->device, ipad->device, [](const QString& path) { return path.contains(QStringLiteral("snapshot-")); });
+    ipad->engine->start();
+    QVERIFY(waitIdle(*ipad->engine));
+    ipad->engine->confirmJoin();
+    QVERIFY(waitIdle(*ipad->engine));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::WaitingForSnapshot);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("iPad 的测试任务")});
+    QVERIFY(ipad->backups.isEmpty());
+
+    // 快照到了：接着加入（确认一次就够，不用再点）。
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("Mac 的任务")});
+}
+
+void SyncTransportTests::batchingWaitsUntilIntervalOrBackground()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    // 换成真实的节拍：每 10 毫秒检查一次、随时可以扫描，但两次写出至少隔一小时。
+    SyncEngine::Options options = testOptions();
+    options.tickMs = 10;
+    options.publishIntervalMs = 60 * 60 * 1000;
+    options.runInBackground = false;
+    SyncEngine engine(std::make_unique<LocalSyncFolder>(cloud.replica(ipad->device)), options,
+                      ipad->device.connection);
+    engine.setChangeNotifier([](const SyncStore::ApplyResult&) {});
+    ipad->engine->stop();
+    // 空闲了一阵之后的第一处改动立即写出，不必干等攒批间隔。
+    QVERIFY(!addTask(ipad->device, QStringLiteral("先记的")).isEmpty());
+    engine.start();
+    QVERIFY(waitIdle(engine));
+    const QStringList written = cloud.changeFiles(ipad->device, ipad->device);
+    QCOMPARE(written.size(), 1);
+    QVERIFY(!addTask(ipad->device, QStringLiteral("刚记下的")).isEmpty());
+    QVERIFY(!addTask(ipad->device, QStringLiteral("又记一条")).isEmpty());
+    QTest::qWait(200);
+    QVERIFY(waitIdle(engine));
+    // 之后的改动攒着：定时扫描照做，但一小时之内不再写出。
+    QCOMPARE(cloud.changeFiles(ipad->device, ipad->device), written);
+    QCOMPARE(SyncStore(ipad->device.connection).pendingCount(), 2);
+    QCOMPARE(engine.pendingCount(), 2);
+
+    // 切到后台：立即写出攒下的改动，一批写完。
+    engine.setForeground(false);
+    QVERIFY(waitIdle(engine));
+    QCOMPARE(cloud.changeFiles(ipad->device, ipad->device).size(), written.size() + 1);
+    QCOMPARE(SyncStore(ipad->device.connection).pendingCount(), 0);
+    // iPad 在后台不再定时同步（进程很快会被系统挂起）。
+    QVERIFY(!addTask(ipad->device, QStringLiteral("后台时记的")).isEmpty());
+    QTest::qWait(100);
+    QCOMPARE(SyncStore(ipad->device.connection).pendingCount(), 1);
+}
+
+void SyncTransportTests::flushBeforeExitWritesPendingChanges()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+    QVERIFY(!addTask(mac->device, QStringLiteral("退出前记的")).isEmpty());
+    const int before = int(cloud.changeFiles(mac->device, mac->device).size());
+    QVERIFY(mac->engine->flushBeforeExit(5000));
+    QCOMPARE(cloud.changeFiles(mac->device, mac->device).size(), before + 1);
+    QCOMPARE(SyncStore(mac->device.connection).pendingCount(), 0);
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::Stopped);
+
+    // 文件夹已经不是加入的那一个（被删掉重建了）：不往里写，改动留在本机。
+    QVERIFY(!addTask(ipad->device, QStringLiteral("文件夹换了之后记的")).isEmpty());
+    QVERIFY(QFile::remove(cloud.path(ipad->device, SyncFiles::markerFileName())));
+    QVERIFY(!ipad->engine->flushBeforeExit(5000));
+    QCOMPARE(SyncStore(ipad->device.connection).pendingCount(), 1);
+}
+
+// 记下每个操作在哪个线程上执行。
+class ThreadRecordingFolder : public LocalSyncFolder
+{
+public:
+    ThreadRecordingFolder(const QString& root, QSet<QThread*>* threads) : LocalSyncFolder(root), m_threads(threads) {}
+    bool open(Error* error) override { note(); return LocalSyncFolder::open(error); }
+    QStringList list(const QString& dir, Error* error) override { note(); return LocalSyncFolder::list(dir, error); }
+    bool read(const QString& path, QByteArray* data, Error* error) override
+    {
+        note();
+        return LocalSyncFolder::read(path, data, error);
+    }
+    bool write(const QString& path, const QByteArray& data, Error* error) override
+    {
+        note();
+        return LocalSyncFolder::write(path, data, error);
+    }
+
+private:
+    void note()
+    {
+        const QMutexLocker locker(&m_mutex);
+        m_threads->insert(QThread::currentThread());
+    }
+    QSet<QThread*>* m_threads;
+    QMutex m_mutex;
+};
+
+void SyncTransportTests::fileWorkRunsOffTheMainThread()
+{
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    Device device = openDevice(QStringLiteral("mac"));
+    QSet<QThread*> threads;
+    SyncEngine::Options options = testOptions();
+    options.mayCreateFolder = true;
+    {
+        SyncEngine engine(std::make_unique<ThreadRecordingFolder>(cloud.replica(device), &threads), options,
+                          device.connection);
+        engine.setChangeNotifier([](const SyncStore::ApplyResult&) {});
+        engine.start();
+        QVERIFY(waitIdle(engine));
+        QCOMPARE(engine.status(), SyncEngine::Status::UpToDate);
+    }
+    // 读写云盘可能要等上一两秒（下载），一律不在界面线程里做。
+    QVERIFY(!threads.isEmpty());
+    QVERIFY(!threads.contains(QThread::currentThread()));
 }
 
 QTEST_GUILESS_MAIN(SyncTransportTests)

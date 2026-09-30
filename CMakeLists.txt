@@ -90,6 +90,10 @@ set(APP_SOURCES
     src/services/SyncFolder.h
     src/services/LocalSyncFolder.h
     src/services/LocalSyncFolder.cpp
+    src/services/SyncWorker.h
+    src/services/SyncWorker.cpp
+    src/services/SyncEngine.h
+    src/services/SyncEngine.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -936,6 +940,10 @@ add_executable(SyncTransportTests
     src/services/SyncFolder.h
     src/services/LocalSyncFolder.h
     src/services/LocalSyncFolder.cpp
+    src/services/SyncWorker.h
+    src/services/SyncWorker.cpp
+    src/services/SyncEngine.h
+    src/services/SyncEngine.cpp
     src/services/FocusTimer.h
     src/services/FocusTimer.cpp
     src/services/MonotonicClock.h
@@ -958,6 +966,7 @@ add_executable(SyncTransportTests
 )
 
 target_link_libraries(SyncTransportTests PRIVATE
+    Qt6::Concurrent
     Qt6::Core
     Qt6::Sql
     Qt6::Test

@@ -72,6 +72,9 @@ public:
     // （备份可能来自另一台设备，两台共用一个标识会把合并搅乱）；清空待发送；置「需要发布快照」。
     bool beginEpochAfterRestore(qint64 previousEpoch, const QString& previousDeviceId);
     bool needsSnapshot() const;
+    // 下一轮要给所有设备写一份全量快照：新建了同步文件夹时用，和恢复备份之后走同一条路。
+    // 标记记在库里，写出之前应用被结束，下次启动照样会写。
+    bool requestFullSnapshot();
 
     // ── 传输记账（050 阶段 3）──
     // 云盘传输读到哪、写到哪，都记在 sync_state 里，和数据放在同一个库：恢复备份时它们跟着数据一起回到

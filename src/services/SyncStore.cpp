@@ -1939,6 +1939,12 @@ bool SyncStore::beginEpochAfterRestore(qint64 previousEpoch, const QString& prev
     return true;
 }
 
+bool SyncStore::requestFullSnapshot()
+{
+    QSqlQuery query(database());
+    return query.exec(QStringLiteral("INSERT OR REPLACE INTO sync_state (key, value) VALUES ('snapshot_needed', '1')"));
+}
+
 bool SyncStore::needsSnapshot() const
 {
     QSqlQuery query(database());
