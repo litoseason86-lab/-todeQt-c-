@@ -65,6 +65,19 @@ struct SyncBatch {
     bool isEmpty() const { return records.isEmpty() && settings.isEmpty(); }
 };
 
+// 云盘里的一个位置：某台设备在某个纪元里写出的第几批改动（从 1 开始数，0 表示一批都还没有）。
+// 「已经应用到对方第几批」「本机写到第几批」「快照覆盖到第几批」都用它表示。
+// 纪元换了（有设备恢复了备份），序号从头数，旧纪元的位置一律作废。
+struct SyncPosition {
+    qint64 epoch = 0;
+    qint64 seq = 0;
+};
+inline bool operator==(const SyncPosition& a, const SyncPosition& b)
+{
+    return a.epoch == b.epoch && a.seq == b.seq;
+}
+inline bool operator!=(const SyncPosition& a, const SyncPosition& b) { return !(a == b); }
+
 namespace SyncJson {
 // 格式版本：以后改了字段含义就加一，读到更高版本的文件时拒绝，而不是按旧含义猜。
 constexpr int kFormatVersion = 1;

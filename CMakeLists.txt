@@ -85,6 +85,8 @@ set(APP_SOURCES
     src/services/SyncStore.cpp
     src/services/SyncNotifier.h
     src/services/SyncNotifier.cpp
+    src/services/SyncFiles.h
+    src/services/SyncFiles.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -909,6 +911,24 @@ target_link_libraries(SyncTests PRIVATE
 
 pomodoro_todo_enable_warnings(SyncTests)
 add_test(NAME SyncTests COMMAND SyncTests)
+
+# 设备间同步的云盘传输（050 阶段 3）：文件格式、文件夹读写、同步引擎。
+# 两台设备各用一个真实结构的临时库，云盘用临时文件夹模拟，可以注入延迟、乱序、坏文件和读写失败。
+add_executable(SyncTransportTests
+    tests/SyncTransportTests.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncFiles.h
+    src/services/SyncFiles.cpp
+)
+
+target_link_libraries(SyncTransportTests PRIVATE
+    Qt6::Core
+    Qt6::Test
+)
+
+pomodoro_todo_enable_warnings(SyncTransportTests)
+add_test(NAME SyncTransportTests COMMAND SyncTransportTests)
 
 add_executable(FontAssetsTests
     tests/FontAssetsTests.cpp
