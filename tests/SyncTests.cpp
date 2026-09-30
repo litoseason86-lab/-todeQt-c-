@@ -292,6 +292,52 @@ QStringList dayOrder(const Device& device, const QString& date)
     return ids;
 }
 
+// 把一份快照写成可比较的文字：每条记录一行，字段按名字排序，带上值和版本（不带 base，它只影响日志）。
+// 两台设备导出的快照文字相同，就说明它们的同步数据完全一致。
+QStringList describe(const SyncBatch& snapshot)
+{
+    QStringList lines;
+    for (const SyncRecord& record : snapshot.records) {
+        QStringList parts{record.table, record.syncId};
+        if (record.deleted) {
+            parts << QStringLiteral("deleted:%1:%2@%3/%4")
+                         .arg(record.deleteKind, record.mergedInto)
+                         .arg(record.deleteVersion.time)
+                         .arg(record.deleteVersion.device);
+        }
+        QStringList fields = record.fields.keys();
+        fields.sort();
+        for (const QString& field : fields) {
+            const SyncFieldValue value = record.fields.value(field);
+            parts << QStringLiteral("%1=%2@%3/%4")
+                         .arg(field, SyncJson::canonicalValue(value.value))
+                         .arg(value.version.time)
+                         .arg(value.version.device);
+        }
+        lines << parts.join(QLatin1Char('|'));
+    }
+    for (const SyncSettingRecord& setting : snapshot.settings) {
+        lines << QStringLiteral("setting|%1=%2@%3/%4")
+                     .arg(setting.key, setting.value)
+                     .arg(setting.version.time)
+                     .arg(setting.version.device);
+    }
+    lines.sort();
+    return lines;
+}
+
+// 快照经过一次 JSON：写进云盘文件再读回来，确认文件格式带得全。
+SyncBatch throughJson(const SyncBatch& batch)
+{
+    SyncBatch parsed;
+    QString error;
+    const QByteArray bytes = QJsonDocument(SyncJson::toJson(batch)).toJson(QJsonDocument::Compact);
+    if (!SyncJson::fromJson(QJsonDocument::fromJson(bytes).object(), &parsed, &error)) {
+        qWarning() << "snapshot json failed:" << error;
+    }
+    return parsed;
+}
+
 int logCount(const Device& device, const QString& kind = QString())
 {
     return kind.isEmpty() ? count(device, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log"))
@@ -437,6 +483,11 @@ private slots:
     void userDeletedInstanceStaysDeletedOnBothDevices();
     void dayStartHourSyncsWithDefaultsAndLatestWins();
     void referenceArrivingBeforeItsTargetIsRelinked();
+
+    // 2e：快照、首次加入与全局回滚
+    void firstJoinReplacesJoiningDeviceWithSnapshot();
+    void globalRollbackReplacesOtherDeviceAndRejectsOldEpoch();
+    void publishedSnapshotAcknowledgesQueuedChanges();
 
 private:
     Device openDevice(const QString& name);
@@ -1804,6 +1855,146 @@ void SyncTests::referenceArrivingBeforeItsTargetIsRelinked()
     QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM focus_sessions fs JOIN tasks t ON t.id = fs.task_id "
                                      "WHERE fs.sync_id = 'early-session' AND t.sync_id = 'late-task'")), 1);
     QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs")), 0);
+}
+
+// ── 2e：快照、首次加入与全局回滚 ──
+
+void SyncTests::firstJoinReplacesJoiningDeviceWithSnapshot()
+{
+    // 你定了：iPad 第一次加入时完全以 Mac 为准，iPad 上的都是测试数据，不用保留。
+    Device mac = openDevice(QStringLiteral("mac"));
+    Device ipad = openDevice(QStringLiteral("ipad"));
+    const QString date = today().toString(Qt::ISODate);
+
+    // Mac：自定义科目和它下面的任务、改过名的预置科目、例行与当天实例、专注与休息、改过的逻辑日起点。
+    const QString programming = addCategory(mac, QStringLiteral("编程"));
+    const QString macTask = addTask(mac, QStringLiteral("写代码"), date);
+    QVERIFY(setTaskCategory(mac, macTask, programming));
+    QVERIFY(exec(mac, QStringLiteral("UPDATE categories SET name = '英语阅读' WHERE sync_id = 'preset-2'")));
+    withServices(mac, [] {
+        QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("背单词"), -1, RoutineRules::kEveryDayMask));
+        QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
+    });
+    QVERIFY(exec(mac, QStringLiteral("INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) "
+                                     "VALUES (%1, '%2T09:00:00', '%2T09:25:00', 1500, 1)")
+                          .arg(localIdOf(mac, QStringLiteral("tasks"), macTask)).arg(date)));
+    QVERIFY(exec(mac, QStringLiteral("INSERT INTO rest_sessions (start_time, end_time, duration, manual) "
+                                     "VALUES ('%1T09:25:00', '%1T09:30:00', 300, 0)").arg(date)));
+    QVERIFY(exec(mac, QStringLiteral("DELETE FROM tasks WHERE sync_id = '%1'").arg(addTask(mac, QStringLiteral("删掉的")))));
+    QVERIFY(SyncStore(mac.connection).recordLocalSetting(QStringLiteral("logic/dayStartHour"), QStringLiteral("5"), false));
+
+    // iPad：自己的测试数据、正在计时的专注、一条知识缺口（本机独有、不同步的表）。
+    const QString ipadCategory = addCategory(ipad, QStringLiteral("iPad 科目"));
+    const QString ipadTask = addTask(ipad, QStringLiteral("iPad 的测试任务"), date);
+    QVERIFY(setTaskCategory(ipad, ipadTask, ipadCategory));
+    const qint64 ipadTaskId = localIdOf(ipad, QStringLiteral("tasks"), ipadTask);
+    QVERIFY(exec(ipad, QStringLiteral("INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) "
+                                      "VALUES (%1, '%2T08:00:00', '%2T08:25:00', 1500, 1)").arg(ipadTaskId).arg(date)));
+    QVERIFY(exec(ipad, QStringLiteral("INSERT INTO focus_sessions (task_id, start_time, mode) "
+                                      "VALUES (%1, '%2T10:00:00', 1)").arg(ipadTaskId).arg(date)));
+    const qint64 mathId = localIdOf(ipad, QStringLiteral("categories"), QStringLiteral("preset-1"));
+    QVERIFY(exec(ipad, QStringLiteral("INSERT INTO knowledge_gaps (title, category_id, source_task_id, created_at, "
+                                      "updated_at) VALUES ('极限的定义', %1, %2, '%3', '%3')")
+                           .arg(mathId).arg(ipadTaskId).arg(date)));
+    QVERIFY(SyncStore(ipad.connection).recordLocalSetting(QStringLiteral("logic/dayStartHour"), QStringLiteral("4"), true));
+
+    const SyncBatch snapshot = throughJson(SyncStore(mac.connection).exportSnapshot());
+    const SyncStore::ApplyResult result = SyncStore(ipad.connection).replaceWithSnapshot(snapshot);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    // iPad 自己的任务被换掉了；计时器据此解绑（提交后逐个发 taskDeleted）。逻辑日起点交给调用方写回。
+    QVERIFY(result.deletedTaskIds.contains(int(ipadTaskId)));
+    QCOMPARE(result.changedSettings.value(QStringLiteral("logic/dayStartHour")), QStringLiteral("5"));
+
+    // 两台的同步数据逐字段、逐版本一致（导出的快照完全相同）。
+    QCOMPARE(describe(SyncStore(ipad.connection).exportSnapshot()), describe(SyncStore(mac.connection).exportSnapshot()));
+    QCOMPARE(SyncStore(ipad.connection).epoch(), SyncStore(mac.connection).epoch());
+    QCOMPARE(count(ipad, QStringLiteral("SELECT COUNT(*) FROM sync_outbox")), 0);
+    // 正在计时的那一行不受影响（只是它的任务没了，按删除任务的做法解除关联）。
+    QCOMPARE(count(ipad, QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE end_time IS NULL AND task_id IS NULL")), 1);
+    // 不同步的知识缺口：指向预置科目的引用原样保留（预置科目没被删、本机编号没变），指向被换掉的任务的置空。
+    QCOMPARE(scalar(ipad, QStringLiteral("SELECT category_id FROM knowledge_gaps")).toLongLong(), mathId);
+    QVERIFY(scalar(ipad, QStringLiteral("SELECT source_task_id FROM knowledge_gaps")).isNull());
+    QCOMPARE(logCount(ipad, QStringLiteral("skipped")), 0);
+
+    // 之后照常增量同步。
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    QVERIFY(SyncStore(mac.connection).markSnapshotPublished(SyncStore(mac.connection).exportSnapshot()));
+    QVERIFY(exec(ipad, QStringLiteral("UPDATE tasks SET notes = 'iPad 上补的备注' WHERE sync_id = '%1'").arg(macTask)));
+    QVERIFY(exec(mac, QStringLiteral("UPDATE tasks SET title = '写代码（Mac 改）' WHERE sync_id = '%1'").arg(macTask)));
+    syncAll(cloud, {mac, ipad});
+    for (const Device& device : {mac, ipad}) {
+        QCOMPARE(taskValue(device, macTask, QStringLiteral("notes")).toString(), QStringLiteral("iPad 上补的备注"));
+        QCOMPARE(taskValue(device, macTask, QStringLiteral("title")).toString(), QStringLiteral("写代码（Mac 改）"));
+    }
+}
+
+void SyncTests::globalRollbackReplacesOtherDeviceAndRejectsOldEpoch()
+{
+    // D1：恢复备份 = 全局回滚。两台一起回到备份的状态，另一台在回滚前没同步过来的改动被换掉
+    // （调用方事先做了自动备份，能从那里找回）。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString kept = addTask(a, QStringLiteral("备份之前就有"));
+    syncAll(cloud, {a, b});
+    const QString backupPath = m_data->filePath(QStringLiteral("a-backup.sqlite"));
+    QVERIFY(QFile::copy(a.path, backupPath));
+
+    // 备份之后两台都继续记了东西；B 还有一条没发出去的。
+    QVERIFY(!addTask(a, QStringLiteral("A 备份之后加的")).isEmpty());
+    QVERIFY(!addTask(b, QStringLiteral("B 备份之后加的")).isEmpty());
+    syncAll(cloud, {a, b});
+    QVERIFY(!addTask(b, QStringLiteral("B 还没发的")).isEmpty());
+    const SyncBatch staleFromB = SyncStore(b.connection).collectPending();
+
+    // A 恢复备份：换回旧库文件，开新纪元（设备标识保持恢复前的），发一份全量快照。
+    const qint64 epochBefore = SyncStore(a.connection).epoch();
+    QSqlDatabase::database(a.connection, false).close();
+    QVERIFY(QFile::remove(a.path));
+    QVERIFY(QFile::copy(backupPath, a.path));
+    QVERIFY(QSqlDatabase::database(a.connection).isOpen());
+    QVERIFY(exec(a, QStringLiteral("PRAGMA foreign_keys = ON")));
+    QVERIFY(SyncStore(a.connection).beginEpochAfterRestore(epochBefore, a.id));
+    QCOMPARE(SyncStore(a.connection).epoch(), epochBefore + 1);
+    QVERIFY(SyncStore(a.connection).needsSnapshot());
+    const SyncBatch snapshot = throughJson(SyncStore(a.connection).exportSnapshot());
+    QVERIFY(SyncStore(a.connection).markSnapshotPublished(snapshot));
+    QVERIFY(!SyncStore(a.connection).needsSnapshot());
+
+    // 回滚之前的旧改动（旧纪元）不能再合进来。
+    QVERIFY(!SyncStore(a.connection).applyRemote(staleFromB).ok);
+    // B 读到纪元更高的快照：不能当普通改动合并，要整体替换。
+    QVERIFY(!SyncStore(b.connection).applyRemote(snapshot).ok);
+    const SyncStore::ApplyResult replaced = SyncStore(b.connection).replaceWithSnapshot(snapshot);
+    QVERIFY2(replaced.ok, qPrintable(replaced.error));
+    QCOMPARE(SyncStore(b.connection).epoch(), epochBefore + 1);
+    for (const Device& device : {a, b}) {
+        QCOMPARE(taskTitles(device), QStringList{QStringLiteral("备份之前就有")});
+    }
+    QCOMPARE(describe(SyncStore(b.connection).exportSnapshot()), describe(SyncStore(a.connection).exportSnapshot()));
+
+    // 回滚之后的新改动照常同步（新纪元）。旧纪元的文件不再读：换一个云盘文件夹，相当于传输层只读新纪元的文件。
+    FakeCloud fresh(m_data->filePath(QStringLiteral("cloud-epoch-1")));
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET notes = '回滚后补的' WHERE sync_id = '%1'").arg(kept)));
+    syncAll(fresh, {a, b});
+    QCOMPARE(taskValue(a, kept, QStringLiteral("notes")).toString(), QStringLiteral("回滚后补的"));
+}
+
+void SyncTests::publishedSnapshotAcknowledgesQueuedChanges()
+{
+    // Mac 第一次开启同步：写出快照，快照已经带上的改动不必再单独发；快照导出之后才改的仍然待发送。
+    Device a = openDevice(QStringLiteral("a"));
+    const QString first = addTask(a, QStringLiteral("第一条"));
+    QVERIFY(!SyncStore(a.connection).collectPending().isEmpty());
+    const SyncBatch snapshot = SyncStore(a.connection).exportSnapshot();
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = '快照之后改的' WHERE sync_id = '%1'").arg(first)));
+    QVERIFY(SyncStore(a.connection).markSnapshotPublished(snapshot));
+
+    const SyncBatch pending = SyncStore(a.connection).collectPending();
+    QCOMPARE(pending.records.size(), 1);
+    QCOMPARE(pending.records.first().syncId, first);
+    QCOMPARE(pending.records.first().fields.value(QStringLiteral("title")).value.toString(),
+             QStringLiteral("快照之后改的"));
 }
 
 QTEST_MAIN(SyncTests)

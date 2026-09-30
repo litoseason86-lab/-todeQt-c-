@@ -56,6 +56,22 @@ public:
     // 同步记下的值；从没记过时返回空的 QString。
     QString syncedSetting(const QString& key) const;
 
+    // ── 全量快照：首次加入与全局回滚（计划 050「首次加入与恢复备份」） ──
+    // 本机全部已发布的记录（带字段版本）、全部删除记录与全部设置。给新加入的设备起步用；
+    // 本机恢复备份做全局回滚之后，另一台也靠它整体换成这份状态。
+    SyncBatch exportSnapshot() const;
+    // 快照已经写进同步文件：待发送队列里快照已经带上的改动出队（与 acknowledge 相同），并清掉「需要发布快照」标记。
+    bool markSnapshotPublished(const SyncBatch& snapshot);
+    // 用快照整体替换本机的同步数据，并采用快照的纪元：首次加入（你定了以 Mac 为准）、另一台做了全局回滚时用。
+    // 快照里没有的记录按本机删除的做法删掉（预置科目例外，它们不能删）；快照里的记录原样落地，
+    // 已有的保留本机编号，课表、知识缺口这些不同步的表里的引用不会断。本机进行中的专注不受影响。
+    // 调用前由调用方先做自动备份：被换掉的本机数据只能从那份备份里找回。
+    ApplyResult replaceWithSnapshot(const SyncBatch& snapshot);
+    // 本机恢复了备份（全局回滚）之后调用：纪元在恢复前与备份里两者较大的基础上加一；设备标识改回恢复前的
+    // （备份可能来自另一台设备，两台共用一个标识会把合并搅乱）；清空待发送；置「需要发布快照」。
+    bool beginEpochAfterRestore(qint64 previousEpoch, const QString& previousDeviceId);
+    bool needsSnapshot() const;
+
 private:
     QSqlDatabase database() const;
 
