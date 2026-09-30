@@ -522,6 +522,7 @@ private slots:
     void userDeletedInstanceStaysDeletedOnBothDevices();
     void dayStartHourSyncsWithDefaultsAndLatestWins();
     void referenceArrivingBeforeItsTargetIsRelinked();
+    void derivedEmptyReferenceIsNotSentBack();
 
     // 2e：快照、首次加入与全局回滚
     void firstJoinReplacesJoiningDeviceWithSnapshot();
@@ -1902,6 +1903,44 @@ void SyncTests::referenceArrivingBeforeItsTargetIsRelinked()
     QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM focus_sessions fs JOIN tasks t ON t.id = fs.task_id "
                                      "WHERE fs.sync_id = 'early-session' AND t.sync_id = 'late-task'")), 1);
     QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs")), 0);
+}
+
+void SyncTests::derivedEmptyReferenceIsNotSentBack()
+{
+    // A 因为引用的目标暂时没有而把引用置空，这个空值的版本还是 B 那一版。之后 A 改了这条记录的别的字段，
+    // 整条记录（连同这个推出来的空值）发回 B：B 不能按「版本相同就比大小」把自己正常的引用也清掉。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    const QString task = addTask(b, QStringLiteral("B 的任务"));
+    QVERIFY(exec(b, QStringLiteral("INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) "
+                                   "VALUES (%1, '2026-09-30T09:00:00', '2026-09-30T09:25:00', 1500, 1)")
+                        .arg(localIdOf(b, QStringLiteral("tasks"), task))));
+    const QString session = scalar(b, QStringLiteral("SELECT sync_id FROM focus_sessions")).toString();
+
+    // A 只收到了专注记录、没收到它的任务（例如任务那条被收回、之后才补回来）。
+    const SyncBatch fromB = SyncStore(b.connection).collectPending();
+    SyncBatch onlySession;
+    onlySession.device = fromB.device;
+    onlySession.epoch = fromB.epoch;
+    for (const SyncRecord& record : fromB.records) {
+        if (record.table == QLatin1String("focus_sessions")) {
+            onlySession.records.append(record);
+        }
+    }
+    QVERIFY(SyncStore(a.connection).applyRemote(onlySession).ok);
+    QVERIFY(SyncStore(b.connection).acknowledge(fromB));
+    QVERIFY(scalar(a, QStringLiteral("SELECT task_id FROM focus_sessions WHERE sync_id = '%1'").arg(session)).isNull());
+
+    // A 在这条专注记录上改了时长，于是整条记录被发回 B。
+    QVERIFY(exec(a, QStringLiteral("UPDATE focus_sessions SET duration = 1200 WHERE sync_id = '%1'").arg(session)));
+    const SyncStore::ApplyResult result = SyncStore(b.connection).applyRemote(SyncStore(a.connection).collectPending());
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    // B 只收下了时长，仍然挂着自己的任务。
+    QCOMPARE(scalar(b, QStringLiteral("SELECT duration FROM focus_sessions WHERE sync_id = '%1'").arg(session)).toInt(),
+             1200);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM focus_sessions fs JOIN tasks t ON t.id = fs.task_id "
+                                     "WHERE fs.sync_id = '%1' AND t.sync_id = '%2'").arg(session, task)), 1);
 }
 
 // ── 2e：快照、首次加入与全局回滚 ──

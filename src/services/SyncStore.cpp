@@ -46,10 +46,10 @@ struct Tombstone {
     QString mergedInto;
 };
 
-int tableOrder(const QString& table)
+qsizetype tableOrder(const QString& table)
 {
     const QList<SyncSchema::Table>& tables = SyncSchema::tables();
-    for (int index = 0; index < tables.size(); ++index) {
+    for (qsizetype index = 0; index < tables.size(); ++index) {
         if (tables.at(index).name == table) {
             return index;
         }
@@ -529,17 +529,17 @@ bool Applier::insertRow(const SyncSchema::Table& table, const SyncRecord& record
     }
     // 引用的目标已经删除：按本机删除它时的做法落地。
     if (table.name == QLatin1String("tasks")) {
-        const int categoryText = columns.indexOf(QStringLiteral("category"));
+        const qsizetype categoryText = columns.indexOf(QStringLiteral("category"));
         if (categoryDangling && categoryText >= 0) {
             values[categoryText] = QVariant();
         }
-        const int generated = columns.indexOf(QStringLiteral("routine_generated"));
+        const qsizetype generated = columns.indexOf(QStringLiteral("routine_generated"));
         if (routineDangling && generated >= 0) {
             values[generated] = 0;
         }
     }
     // 科目名先落临时名，整批应用完再换成最终名（见 finalizeCategoryNames）。
-    const int nameColumn = table.name == QLatin1String("categories") ? columns.indexOf(QStringLiteral("name")) : -1;
+    const qsizetype nameColumn = table.name == QLatin1String("categories") ? columns.indexOf(QStringLiteral("name")) : -1;
     const QString finalName = nameColumn >= 0 ? values.at(nameColumn).toString() : QString();
     if (nameColumn >= 0) {
         values[nameColumn] = temporaryCategoryName(record.syncId);
@@ -1650,8 +1650,8 @@ SyncBatch SyncStore::collectPending() const
     }
     // 按表的依赖顺序、同表内按改动先后。对方反正也会按依赖顺序应用，这里排好只是让文件读起来顺。
     std::stable_sort(pending.begin(), pending.end(), [](const Pending& a, const Pending& b) {
-        const int orderA = tableOrder(a.table);
-        const int orderB = tableOrder(b.table);
+        const qsizetype orderA = tableOrder(a.table);
+        const qsizetype orderB = tableOrder(b.table);
         return orderA != orderB ? orderA < orderB : a.changeTime < b.changeTime;
     });
 
