@@ -518,6 +518,7 @@ private slots:
     void reclaimedInstanceIsSoftDeletedAndRegenerates();
     void bothDevicesGenerateOneInstanceAndKeepCompletion();
     void remoteReclaimKeepsTouchedInstanceOnBothSides();
+    void republishedInstanceOutranksAFastClocksReclaim();
     void regeneratedInstanceReachesOtherDevice();
     void userDeletedInstanceStaysDeletedOnBothDevices();
     void dayStartHourSyncsWithDefaultsAndLatestWins();
@@ -1763,6 +1764,44 @@ void SyncTests::remoteReclaimKeepsTouchedInstanceOnBothSides()
         QCOMPARE(scalar(device, QStringLiteral("SELECT active FROM routines")).toInt(), 0);
         QCOMPARE(logCount(device, QStringLiteral("skipped")), 0);
     }
+}
+
+void SyncTests::republishedInstanceOutranksAFastClocksReclaim()
+{
+    // 上一条的确定版：A 的时钟快（连着做几件事会把逻辑时间推到墙钟前面，两台设备的时钟也本来就有偏差），
+    // 它收回实例的版本比 B 此刻的墙钟还新。B 收到时发现实例专注过，重新发布它——这个新版本必须排在
+    // A 的收回记录之后，A 才会把实例补回来。曾经在全套并行时偶发失败：重新发布取的是「此刻与本机时钟 + 1」，
+    // 这一批里 A 的版本要到整批收尾才并进时钟，于是新版本可能比收回记录还旧，两边从此不一致。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    QVERIFY(setClock(a, kFuture));
+    withServices(a, [] {
+        QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("背单词"), -1, RoutineRules::kEveryDayMask));
+        QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
+    });
+    syncAll(cloud, {a, b});
+    const QString routine = scalar(a, QStringLiteral("SELECT sync_id FROM routines")).toString();
+    const QString instance = SyncSchema::routineInstanceSyncId(routine, today().toString(Qt::ISODate));
+    QVERIFY(exec(b, QStringLiteral("INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) "
+                                   "VALUES (%1, '2026-09-30T09:00:00', '2026-09-30T09:25:00', 1500, 1)")
+                        .arg(localIdOf(b, QStringLiteral("tasks"), instance))));
+    // A 又连着做了几件事（每件都让逻辑时间加一），再停用例行、收回实例。
+    for (int i = 0; i < 5; ++i) {
+        QVERIFY(!addTask(a, QStringLiteral("A 的任务 %1").arg(i)).isEmpty());
+    }
+    withServices(a, [&] {
+        QVERIFY(RoutineManager::instance()->setRoutineActive(int(localIdOf(a, QStringLiteral("routines"), routine)),
+                                                             false));
+    });
+    syncAll(cloud, {a, b});
+
+    for (const Device& device : {a, b}) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(instance)), 1);
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM focus_sessions fs JOIN tasks t ON t.id = fs.task_id "
+                                              "WHERE t.sync_id = '%1'").arg(instance)), 1);
+    }
+    QCOMPARE(describe(SyncStore(b.connection).exportSnapshot()), describe(SyncStore(a.connection).exportSnapshot()));
 }
 
 void SyncTests::regeneratedInstanceReachesOtherDevice()

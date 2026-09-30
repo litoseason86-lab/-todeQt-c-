@@ -1160,8 +1160,15 @@ bool Applier::setApplying(bool applying, QString* error)
 
 bool Applier::advanceClock(SyncVersion* version, QString* error)
 {
+    // 应用对方改动的中途生成的本机版本（例如重新发布一条被收回、其实专注过的实例），是「看过这批之后」的改动，
+    // 必须排在这批里已经见过的所有版本之后。整批的最大时间要到收尾前才并进时钟，这里先并进去：
+    // 不这样的话，对方的时钟稍快（连着做几件事就会把逻辑时间推到墙钟前面），新版本可能比它的收回记录还旧，
+    // 它收到后不会把实例补回来，两边从此不一致。并进去的时间和这批数据在同一个事务里，失败时一起回滚。
     QSqlQuery query(m_db);
-    if (!query.exec(SyncSchema::sqlAdvanceClock())
+    query.prepare(QStringLiteral(
+        "UPDATE sync_state SET value = CAST(MAX(CAST(value AS INTEGER), :seen) AS TEXT) WHERE key = 'hlc'"));
+    query.bindValue(QStringLiteral(":seen"), m_maxSeenTime);
+    if (!query.exec() || !query.exec(SyncSchema::sqlAdvanceClock())
         || !query.exec(QStringLiteral("SELECT %1, %2").arg(SyncSchema::sqlCurrentClock(), SyncSchema::sqlDeviceId()))
         || !query.next()) {
         if (error) {
