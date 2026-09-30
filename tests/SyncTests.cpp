@@ -1,4 +1,6 @@
 #include <QDir>
+#include <QFile>
+#include <QJsonDocument>
 #include <QRegularExpression>
 #include <QSettings>
 #include <QSqlDatabase>
@@ -7,6 +9,7 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <functional>
 #include <memory>
 
 #include "../src/services/AppSettings.h"
@@ -15,7 +18,9 @@
 #include "../src/services/LogicalDay.h"
 #include "../src/services/RoutineManager.h"
 #include "../src/services/RoutineRules.h"
+#include "../src/services/SyncRecord.h"
 #include "../src/services/SyncSchema.h"
+#include "../src/services/SyncStore.h"
 #include "../src/services/TaskManager.h"
 
 // 设备间同步（050 阶段 2）的测试。
@@ -146,6 +151,230 @@ QDate today()
     return LogicalDay::today(AppSettings::instance()->dayStartHour());
 }
 
+// ── 两台设备（2b 起） ──
+//
+// 每台设备一个临时库：先用应用自己的初始化建出完整结构（含 v18 同步表与触发器，各自一个设备标识），
+// 再单独开一条连接当作这台设备。本机的增删改大多直接写 SQL：同步只依赖数据库里的触发器，
+// 任何写入路径都会被它兜住。需要服务层语义（删除科目、收回例行……）的用例用 withServices 临时切过去。
+struct Device {
+    QString path;
+    QString connection;
+    QString id;
+};
+
+QSqlDatabase deviceDb(const Device& device)
+{
+    return QSqlDatabase::database(device.connection);
+}
+
+bool exec(const Device& device, const QString& sql)
+{
+    QSqlQuery query(deviceDb(device));
+    if (!query.exec(sql)) {
+        qWarning() << sql << query.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+QVariant scalar(const Device& device, const QString& sql)
+{
+    QSqlQuery query(deviceDb(device));
+    if (!query.exec(sql)) {
+        qWarning() << sql << query.lastError().text();
+        return {};
+    }
+    return query.next() ? query.value(0) : QVariant();
+}
+
+int count(const Device& device, const QString& sql)
+{
+    return scalar(device, sql).toInt();
+}
+
+bool setClock(const Device& device, qint64 nowMs)
+{
+    return exec(device, QStringLiteral("UPDATE sync_runtime SET test_now_ms = %1 WHERE singleton_id = 1").arg(nowMs));
+}
+
+// 新建一条任务（排在当天末尾，与服务层一致），返回它的 sync_id。
+QString addTask(const Device& device, const QString& title, const QString& date = QStringLiteral("2026-09-30"))
+{
+    QSqlQuery query(deviceDb(device));
+    query.prepare(QStringLiteral(
+        "INSERT INTO tasks (title, date, completed, display_order) VALUES (:title, :date, 0, "
+        "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks WHERE date = :orderDate))"));
+    query.bindValue(QStringLiteral(":title"), title);
+    query.bindValue(QStringLiteral(":date"), date);
+    query.bindValue(QStringLiteral(":orderDate"), date);
+    if (!query.exec()) {
+        qWarning() << query.lastError().text();
+        return {};
+    }
+    return scalar(device, QStringLiteral("SELECT sync_id FROM tasks WHERE id = %1")
+                              .arg(query.lastInsertId().toLongLong())).toString();
+}
+
+QVariant taskValue(const Device& device, const QString& syncId, const QString& column)
+{
+    return scalar(device, QStringLiteral("SELECT %1 FROM tasks WHERE sync_id = '%2'").arg(column, syncId));
+}
+
+QStringList taskTitles(const Device& device)
+{
+    QStringList titles;
+    QSqlQuery query(deviceDb(device));
+    query.exec(QStringLiteral("SELECT title FROM tasks ORDER BY title, id"));
+    while (query.next()) {
+        titles.append(query.value(0).toString());
+    }
+    return titles;
+}
+
+// syncId 为空时由触发器分配随机身份；需要固定「谁并进谁」的用例自己指定身份。
+QString addCategory(const Device& device, const QString& name, const QString& syncId = QString())
+{
+    QSqlQuery query(deviceDb(device));
+    query.prepare(QStringLiteral(
+        "INSERT INTO categories (name, color, is_preset, display_order, sync_id) "
+        "VALUES (:name, '#123456', 0, (SELECT COALESCE(MAX(display_order), 0) + 1 FROM categories), :syncId)"));
+    query.bindValue(QStringLiteral(":name"), name);
+    query.bindValue(QStringLiteral(":syncId"), syncId.isEmpty() ? QVariant() : QVariant(syncId));
+    if (!query.exec()) {
+        qWarning() << query.lastError().text();
+        return {};
+    }
+    return scalar(device, QStringLiteral("SELECT sync_id FROM categories WHERE id = %1")
+                              .arg(query.lastInsertId().toLongLong())).toString();
+}
+
+qint64 localIdOf(const Device& device, const QString& table, const QString& syncId)
+{
+    return scalar(device, QStringLiteral("SELECT id FROM %1 WHERE sync_id = '%2'").arg(table, syncId)).toLongLong();
+}
+
+// 把任务挂到某个科目下（按服务层的写法，同时写科目名文本）。
+bool setTaskCategory(const Device& device, const QString& taskSyncId, const QString& categorySyncId)
+{
+    return exec(device, QStringLiteral(
+        "UPDATE tasks SET category_id = c.id, category = c.name FROM categories c "
+        "WHERE c.sync_id = '%1' AND tasks.sync_id = '%2'").arg(categorySyncId, taskSyncId));
+}
+
+// 任务所属科目的 sync_id（没有科目时为空）。
+QString taskCategory(const Device& device, const QString& taskSyncId)
+{
+    return scalar(device, QStringLiteral("SELECT c.sync_id FROM tasks t LEFT JOIN categories c ON c.id = t.category_id "
+                                         "WHERE t.sync_id = '%1'").arg(taskSyncId)).toString();
+}
+
+QStringList customCategoryNames(const Device& device)
+{
+    QStringList names;
+    QSqlQuery query(deviceDb(device));
+    query.exec(QStringLiteral("SELECT name FROM categories WHERE is_preset = 0 ORDER BY name"));
+    while (query.next()) {
+        names.append(query.value(0).toString());
+    }
+    return names;
+}
+
+// 一天里的任务按显示顺序排出来的 sync_id，比较两台设备的顺序是否一致。
+QStringList dayOrder(const Device& device, const QString& date)
+{
+    QStringList ids;
+    QSqlQuery query(deviceDb(device));
+    query.exec(QStringLiteral("SELECT sync_id FROM tasks WHERE date = '%1' ORDER BY completed, display_order, id")
+                   .arg(date));
+    while (query.next()) {
+        ids.append(query.value(0).toString());
+    }
+    return ids;
+}
+
+int logCount(const Device& device, const QString& kind = QString())
+{
+    return kind.isEmpty() ? count(device, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log"))
+                          : count(device, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE kind = '%1'")
+                                              .arg(kind));
+}
+
+// 假云盘：临时文件夹。每台设备只写自己的子目录 devices/<设备>/changes/<序号>.json（与正式方案同一布局），
+// 读对方目录里本机还没应用过的文件。游标记在内存里，改它就能模拟「确认丢了、再读一遍」。
+class FakeCloud
+{
+public:
+    explicit FakeCloud(QString root) : m_root(std::move(root)) {}
+
+    // 把这台设备的待发送改动写成一个文件并确认发送，返回写出的记录数。
+    int publish(const Device& device)
+    {
+        SyncStore store(device.connection);
+        const SyncBatch batch = store.collectPending();
+        if (batch.isEmpty()) {
+            return 0;
+        }
+        const QString dir = QStringLiteral("%1/devices/%2/changes").arg(m_root, batch.device);
+        QDir().mkpath(dir);
+        const int sequence = ++m_sequence[batch.device];
+        QFile file(QStringLiteral("%1/%2.json").arg(dir).arg(sequence, 8, 10, QLatin1Char('0')));
+        if (!file.open(QIODevice::WriteOnly)) {
+            return -1;
+        }
+        file.write(QJsonDocument(SyncJson::toJson(batch)).toJson(QJsonDocument::Compact));
+        file.close();
+        return store.acknowledge(batch) ? int(batch.records.size() + batch.settings.size()) : -1;
+    }
+
+    // 按序应用对方写出、本机还没应用过的文件。某个文件应用失败就停在那里，下次从它重试。
+    QList<SyncStore::ApplyResult> pull(const Device& device)
+    {
+        SyncStore store(device.connection);
+        QList<SyncStore::ApplyResult> results;
+        const QDir devices(m_root + QStringLiteral("/devices"));
+        for (const QString& source : devices.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name)) {
+            if (source == device.id) {
+                continue;
+            }
+            const QDir changes(devices.filePath(source + QStringLiteral("/changes")));
+            for (const QString& name : changes.entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name)) {
+                const int sequence = name.section(QLatin1Char('.'), 0, 0).toInt();
+                if (sequence <= m_cursor[device.id].value(source)) {
+                    continue;
+                }
+                QFile file(changes.filePath(name));
+                SyncBatch batch;
+                QString error = QStringLiteral("读不开同步文件");
+                if (!file.open(QIODevice::ReadOnly)
+                    || !SyncJson::fromJson(QJsonDocument::fromJson(file.readAll()).object(), &batch, &error)) {
+                    SyncStore::ApplyResult failed;
+                    failed.error = error;
+                    results.append(failed);
+                    break;
+                }
+                const SyncStore::ApplyResult result = store.applyRemote(batch);
+                results.append(result);
+                if (!result.ok) {
+                    break;
+                }
+                m_cursor[device.id][source] = sequence;
+            }
+        }
+        return results;
+    }
+
+    // 模拟「应用了但确认丢了」（断线、被系统挂起）：把 reader 对 source 的游标退回，下次会重读这些文件。
+    void rewind(const Device& reader, const Device& source, int sequence = 0)
+    {
+        m_cursor[reader.id][source.id] = sequence;
+    }
+
+private:
+    QString m_root;
+    QHash<QString, int> m_sequence;
+    QHash<QString, QHash<QString, int>> m_cursor;
+};
+
 } // namespace
 
 class SyncTests : public QObject
@@ -170,9 +399,46 @@ private slots:
     void tamperedTriggerIsRebuiltOnStartup();
     void missingSyncTableDoesNotBlockStartup();
 
+    // 2b：读出与应用（两台设备）
+    void batchSurvivesJsonRoundTrip();
+    void insertUpdateDeleteReachOtherDevice();
+    void editsOfDifferentFieldsAreBothKept();
+    void concurrentEditsOfSameFieldConvergeAndAreLogged();
+    void sequentialEditsAcrossDevicesAreNotConflicts();
+    void deleteWinsOverConcurrentEdit_deleteArrivesFirst();
+    void deleteWinsOverConcurrentEdit_editArrivesFirst();
+    void concurrentCreatesStayTwoRecords();
+    void redeliveredBatchesChangeNothing();
+    void editDuringSendIsNotLost();
+    void causalEditWinsDespiteClockSkew();
+    void sameLogicalTimeConvergesByDevice();
+    void badRecordIsSkippedWithoutBlockingBatch();
+    void remoteTaskDeletionKeepsItsSessions();
+    void runningSessionIsNeverSent();
+    void batchFromOtherEpochOrSameDeviceIsRejected();
+
+    // 2c：引用与去重（sol6 审查复现过的卡死、冲突场景）
+    void sessionOnRemotelyDeletedTaskIsKeptDetached();
+    void taskUnderRemotelyDeletedCategoryBecomesUncategorized();
+    void renamedCategoryThenRecreatedNameSyncs();
+    void renameCollidingWithOtherSidesNewCategoryMerges();
+    void sameNameCategoriesCreatedOnBothSidesMerge();
+    void swappedCategoryNamesAreNotMerged();
+    void mergeReachesSideThatDidNotCollide();
+    void presetsRenamedToSameNameGetSuffix();
+    void sameDayTasksAreRenumberedWithoutMigration();
+    void corruptMergeChainDoesNotHang();
+
 private:
+    Device openDevice(const QString& name);
+    // 临时把服务层（TaskManager 等单例）切到这台设备的库上执行一段操作，用完关掉。
+    void withServices(const Device& device, const std::function<void()>& action);
+    // 两台设备来回同步，直到一轮下来谁也没有新改动要发。
+    void syncAll(FakeCloud& cloud, const QList<Device>& devices);
+
     QTemporaryDir m_preferences;
     std::unique_ptr<QTemporaryDir> m_data;
+    QStringList m_connections;
 };
 
 void SyncTests::initTestCase()
@@ -196,7 +462,61 @@ void SyncTests::init()
 void SyncTests::cleanup()
 {
     DatabaseManager::instance()->close();
+    for (const QString& connection : m_connections) {
+        {
+            QSqlDatabase database = QSqlDatabase::database(connection);
+            database.close();
+        }
+        QSqlDatabase::removeDatabase(connection);
+    }
+    m_connections.clear();
     m_data.reset();
+}
+
+Device SyncTests::openDevice(const QString& name)
+{
+    Device device;
+    device.path = m_data->filePath(name + QStringLiteral(".sqlite"));
+    if (!DatabaseManager::instance()->initialize(device.path)) {
+        qWarning() << "initialize failed" << device.path;
+    }
+    DatabaseManager::instance()->close();
+    device.connection = QStringLiteral("sync-device-") + name;
+    QSqlDatabase database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), device.connection);
+    database.setDatabaseName(device.path);
+    database.open();
+    QSqlQuery(database).exec(QStringLiteral("PRAGMA foreign_keys = ON"));
+    QSqlQuery(database).exec(QStringLiteral("PRAGMA busy_timeout = 5000"));
+    m_connections.append(device.connection);
+    device.id = SyncStore(device.connection).deviceId();
+    return device;
+}
+
+void SyncTests::withServices(const Device& device, const std::function<void()>& action)
+{
+    QVERIFY(DatabaseManager::instance()->initialize(device.path));
+    action();
+    DatabaseManager::instance()->close();
+}
+
+void SyncTests::syncAll(FakeCloud& cloud, const QList<Device>& devices)
+{
+    // 应用对方的改动之后本机可能产生新的改动（例如排序归一），所以要来回几轮，直到安静下来。
+    for (int round = 0; round < 6; ++round) {
+        int published = 0;
+        for (const Device& device : devices) {
+            published += cloud.publish(device);
+        }
+        for (const Device& device : devices) {
+            for (const SyncStore::ApplyResult& result : cloud.pull(device)) {
+                QVERIFY2(result.ok, qPrintable(result.error));
+            }
+        }
+        if (published == 0) {
+            return;
+        }
+    }
+    QFAIL("来回同步六轮后仍有新改动，没有收敛");
 }
 
 void SyncTests::freshDatabaseHasSyncInfrastructure()
@@ -561,12 +881,680 @@ void SyncTests::missingSyncTableDoesNotBlockStartup()
     QVERIFY(exec(QStringLiteral("UPDATE sync_runtime SET applying = 0 WHERE singleton_id = 1")));
     QVERIFY(exec(QStringLiteral("DROP TABLE sync_outbox")));
 
+    QTest::ignoreMessage(QtWarningMsg, "同步结构不完整，已先拆掉同步触发器，随后由迁移补齐");
     QVERIFY(DatabaseManager::instance()->createTables());
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM categories WHERE sync_id = 'preset-5'")), 1);
     QCOMPARE(triggerSql(), SyncSchema::canonicalTriggerSql());
     // 补回来的预置科目仍按默认值处理：版本取最小值，并照常入队。
     QCOMPARE(versionOf(QStringLiteral("categories"), QStringLiteral("preset-5"), QStringLiteral("name")).time, 0);
     QVERIFY(queued(QStringLiteral("categories"), QStringLiteral("preset-5")));
+}
+
+// ── 2b：读出与应用 ──
+//
+// 需要决定「谁的修改更晚」的用例，把时钟拨到远超真实时间的值（约 2096 年）：
+// 逻辑时间取 max(此刻, 上一次 + 1)，拨得足够大，版本就完全由用例决定。
+namespace {
+constexpr qint64 kFuture = 4000000000000LL;
+}
+
+void SyncTests::batchSurvivesJsonRoundTrip()
+{
+    SyncBatch batch;
+    batch.device = QStringLiteral("device-a");
+    batch.epoch = 3;
+    SyncRecord live;
+    live.table = QStringLiteral("tasks");
+    live.syncId = QStringLiteral("task-1");
+    live.fields.insert(QStringLiteral("title"),
+                       {QStringLiteral("写论文"), {1000, QStringLiteral("device-a")}, {500, QStringLiteral("device-b")}});
+    live.fields.insert(QStringLiteral("completed"), {qint64(1), {1001, QStringLiteral("device-a")}, {}});
+    live.fields.insert(QStringLiteral("category_id"), {QVariant(), {1002, QStringLiteral("device-a")}, {}});
+    SyncRecord gone;
+    gone.table = QStringLiteral("categories");
+    gone.syncId = QStringLiteral("category-1");
+    gone.deleted = true;
+    gone.deleteVersion = {2000, QStringLiteral("device-a")};
+    gone.deleteKind = QStringLiteral("merge");
+    gone.mergedInto = QStringLiteral("category-0");
+    batch.records = {live, gone};
+    batch.settings = {{QStringLiteral("logic/dayStartHour"), QStringLiteral("5"), {3000, QStringLiteral("device-a")}, {}}};
+
+    const QByteArray bytes = QJsonDocument(SyncJson::toJson(batch)).toJson();
+    SyncBatch parsed;
+    QString error;
+    QVERIFY2(SyncJson::fromJson(QJsonDocument::fromJson(bytes).object(), &parsed, &error), qPrintable(error));
+    QCOMPARE(parsed.device, batch.device);
+    QCOMPARE(parsed.epoch, qint64(3));
+    QCOMPARE(parsed.records.size(), 2);
+    const SyncRecord& task = parsed.records.at(0);
+    QCOMPARE(task.fields.size(), 3);
+    for (const QString& field : {QStringLiteral("title"), QStringLiteral("completed"), QStringLiteral("category_id")}) {
+        QCOMPARE(SyncJson::canonicalValue(task.fields.value(field).value),
+                 SyncJson::canonicalValue(live.fields.value(field).value));
+        QVERIFY(task.fields.value(field).version == live.fields.value(field).version);
+    }
+    QVERIFY(task.fields.value(QStringLiteral("title")).base == live.fields.value(QStringLiteral("title")).base);
+    const SyncRecord& category = parsed.records.at(1);
+    QVERIFY(category.deleted);
+    QVERIFY(category.deleteVersion == gone.deleteVersion);
+    QCOMPARE(category.deleteKind, QStringLiteral("merge"));
+    QCOMPARE(category.mergedInto, QStringLiteral("category-0"));
+    QCOMPARE(parsed.settings.size(), 1);
+    QCOMPARE(parsed.settings.first().value, QStringLiteral("5"));
+
+    // 更新的版本写出的文件：拒绝，而不是按旧含义去猜。
+    QJsonObject future = SyncJson::toJson(batch);
+    future.insert(QStringLiteral("format"), SyncJson::kFormatVersion + 1);
+    QVERIFY(!SyncJson::fromJson(future, &parsed, &error));
+    QVERIFY(!error.isEmpty());
+}
+
+void SyncTests::insertUpdateDeleteReachOtherDevice()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    syncAll(cloud, {a, b});
+
+    const QString id = addTask(a, QStringLiteral("买菜"));
+    syncAll(cloud, {a, b});
+    QCOMPARE(taskValue(b, id, QStringLiteral("title")).toString(), QStringLiteral("买菜"));
+    // 应用收到的改动不会反过来进 B 的待发送队列（触发器在应用期间跳过）。
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_outbox")), 0);
+
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = '买菜和水果' WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+    QCOMPARE(taskValue(b, id, QStringLiteral("title")).toString(), QStringLiteral("买菜和水果"));
+
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM tasks WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(id)), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_tombstones WHERE sync_id = '%1'").arg(id)), 1);
+    QCOMPARE(logCount(a) + logCount(b), 0);
+}
+
+void SyncTests::editsOfDifferentFieldsAreBothKept()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("写论文"));
+    syncAll(cloud, {a, b});
+
+    // 两台都离线，各改一个字段：合并后两处修改都在，而且不算冲突。
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = '写论文（第二稿）' WHERE sync_id = '%1'").arg(id)));
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET notes = '第三章' WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+    for (const Device& device : {a, b}) {
+        QCOMPARE(taskValue(device, id, QStringLiteral("title")).toString(), QStringLiteral("写论文（第二稿）"));
+        QCOMPARE(taskValue(device, id, QStringLiteral("notes")).toString(), QStringLiteral("第三章"));
+    }
+    QCOMPARE(logCount(a) + logCount(b), 0);
+}
+
+void SyncTests::concurrentEditsOfSameFieldConvergeAndAreLogged()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("标题"));
+    syncAll(cloud, {a, b});
+
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(setClock(b, kFuture + 1000));
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = 'A 改的' WHERE sync_id = '%1'").arg(id)));
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET title = 'B 改的' WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+
+    // 同一字段两边同时改：后改的（B）为准，两台设备结果一致。
+    QCOMPARE(taskValue(a, id, QStringLiteral("title")).toString(), QStringLiteral("B 改的"));
+    QCOMPARE(taskValue(b, id, QStringLiteral("title")).toString(), QStringLiteral("B 改的"));
+    // 输掉的值两边都记了一笔，而且是给人看的文字：哪条任务、哪一项、丢了什么、留下什么。
+    for (const Device& device : {a, b}) {
+        QCOMPARE(logCount(device, QStringLiteral("edit")), 1);
+        QSqlQuery log(deviceDb(device));
+        QVERIFY(log.exec(QStringLiteral("SELECT record_label, field, lost_value, kept_value FROM sync_conflict_log")));
+        QVERIFY(log.next());
+        QCOMPARE(log.value(1).toString(), QStringLiteral("title"));
+        QCOMPARE(log.value(2).toString(), QStringLiteral("A 改的"));
+        QCOMPARE(log.value(3).toString(), QStringLiteral("B 改的"));
+    }
+}
+
+void SyncTests::sequentialEditsAcrossDevicesAreNotConflicts()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("标题"));
+    syncAll(cloud, {a, b});
+
+    // 看过对方的修改再改：这是先后修改，不是冲突，一条日志都不该有。
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET title = 'B 改的' WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = 'A 接着改' WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET title = 'B 再改' WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+
+    QCOMPARE(taskValue(a, id, QStringLiteral("title")).toString(), QStringLiteral("B 再改"));
+    QCOMPARE(logCount(a) + logCount(b), 0);
+}
+
+void SyncTests::deleteWinsOverConcurrentEdit_deleteArrivesFirst()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("复习"));
+    syncAll(cloud, {a, b});
+
+    // A 离线删除；B 离线修改，时间上更晚。删除仍然优先。
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(setClock(b, kFuture + 1000));
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM tasks WHERE sync_id = '%1'").arg(id)));
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET title = '复习第二章' WHERE sync_id = '%1'").arg(id)));
+    QVERIFY(cloud.publish(a) > 0);
+    cloud.pull(b);
+    syncAll(cloud, {a, b});
+
+    for (const Device& device : {a, b}) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(id)), 0);
+    }
+    // B 那次没发出去的修改随删除作废，记在 B 的日志里。
+    QCOMPARE(logCount(b, QStringLiteral("delete")), 1);
+    QCOMPARE(scalar(b, QStringLiteral("SELECT lost_value FROM sync_conflict_log")).toString(),
+             QStringLiteral("复习第二章"));
+}
+
+void SyncTests::deleteWinsOverConcurrentEdit_editArrivesFirst()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("复习"));
+    syncAll(cloud, {a, b});
+
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(setClock(b, kFuture + 1000));
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM tasks WHERE sync_id = '%1'").arg(id)));
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET title = '复习第二章' WHERE sync_id = '%1'").arg(id)));
+    // 这次 B 的修改先到 A：A 已经删了，修改被忽略（不复活），并记下这次作废的修改。
+    QVERIFY(cloud.publish(b) > 0);
+    cloud.pull(a);
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(id)), 0);
+    syncAll(cloud, {a, b});
+
+    for (const Device& device : {a, b}) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(id)), 0);
+    }
+    QCOMPARE(logCount(a, QStringLiteral("delete")), 1);
+}
+
+void SyncTests::concurrentCreatesStayTwoRecords()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    // 两台离线各建一条同名任务：身份不同，就是两条任务，不会互相覆盖。
+    QVERIFY(!addTask(a, QStringLiteral("买菜")).isEmpty());
+    QVERIFY(!addTask(b, QStringLiteral("买菜")).isEmpty());
+    syncAll(cloud, {a, b});
+    QCOMPARE(taskTitles(a), QStringList({QStringLiteral("买菜"), QStringLiteral("买菜")}));
+    QCOMPARE(taskTitles(b), QStringList({QStringLiteral("买菜"), QStringLiteral("买菜")}));
+}
+
+void SyncTests::redeliveredBatchesChangeNothing()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("任务"));
+    syncAll(cloud, {a, b});
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = '改过', notes = '备注' WHERE sync_id = '%1'").arg(id)));
+    QVERIFY(cloud.publish(a) > 0);
+    cloud.pull(b);
+
+    // sol6 审查第 4 条：已经写入、却没收到确认（断线、被挂起），连续两次之后全部变成冲突。
+    // 这里 B 把 A 的全部文件从头再读两遍，其间 B 自己又改了别的列：什么都不该变，也不该有冲突。
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET completed = 1 WHERE sync_id = '%1'").arg(id)));
+    for (int round = 0; round < 2; ++round) {
+        cloud.rewind(b, a);
+        for (const SyncStore::ApplyResult& result : cloud.pull(b)) {
+            QVERIFY2(result.ok, qPrintable(result.error));
+        }
+    }
+    QCOMPARE(taskValue(b, id, QStringLiteral("title")).toString(), QStringLiteral("改过"));
+    QCOMPARE(taskValue(b, id, QStringLiteral("notes")).toString(), QStringLiteral("备注"));
+    QCOMPARE(taskValue(b, id, QStringLiteral("completed")).toInt(), 1);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+    QCOMPARE(logCount(b), 0);
+}
+
+void SyncTests::editDuringSendIsNotLost()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    const QString id = addTask(a, QStringLiteral("任务"));
+    SyncStore store(a.connection);
+    QVERIFY(store.acknowledge(store.collectPending()));
+
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = '第一次' WHERE sync_id = '%1'").arg(id)));
+    const SyncBatch sent = store.collectPending();
+    QCOMPARE(sent.records.size(), 1);
+    // 正在写同步文件的时候又改了一次，然后才确认刚才那批。
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = '第二次' WHERE sync_id = '%1'").arg(id)));
+    QVERIFY(store.acknowledge(sent));
+
+    // 第二次的修改还在队列里，下一批带的是它；base 改成刚发出去的那一版（对方马上就会见到它）。
+    const SyncBatch next = store.collectPending();
+    QCOMPARE(next.records.size(), 1);
+    const SyncFieldValue title = next.records.first().fields.value(QStringLiteral("title"));
+    QCOMPARE(title.value.toString(), QStringLiteral("第二次"));
+    QVERIFY(title.base == sent.records.first().fields.value(QStringLiteral("title")).version);
+    QVERIFY(store.acknowledge(next));
+    QVERIFY(store.collectPending().isEmpty());
+}
+
+void SyncTests::causalEditWinsDespiteClockSkew()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("任务"));
+    syncAll(cloud, {a, b});
+
+    // B 的时钟快很多；A 看过 B 的修改之后再改，即使 A 的时钟慢，A 这次也一定排在后面。
+    QVERIFY(setClock(b, kFuture * 2));
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET title = 'B 改的' WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = 'A 看过之后又改' WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+
+    QCOMPARE(taskValue(a, id, QStringLiteral("title")).toString(), QStringLiteral("A 看过之后又改"));
+    QCOMPARE(taskValue(b, id, QStringLiteral("title")).toString(), QStringLiteral("A 看过之后又改"));
+    QCOMPARE(logCount(a) + logCount(b), 0);
+}
+
+void SyncTests::sameLogicalTimeConvergesByDevice()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("任务"));
+    syncAll(cloud, {a, b});
+
+    // 两台设备恰好给出同一逻辑时间：再比设备标识，所有设备选出同一个结果。
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(setClock(b, kFuture));
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title = '甲' WHERE sync_id = '%1'").arg(id)));
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET title = '乙' WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+
+    const QString expected = a.id > b.id ? QStringLiteral("甲") : QStringLiteral("乙");
+    QCOMPARE(taskValue(a, id, QStringLiteral("title")).toString(), expected);
+    QCOMPARE(taskValue(b, id, QStringLiteral("title")).toString(), expected);
+}
+
+void SyncTests::badRecordIsSkippedWithoutBlockingBatch()
+{
+    Device b = openDevice(QStringLiteral("b"));
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const SyncVersion version{kFuture, remote};
+    SyncBatch batch;
+    batch.device = remote;
+    // 空标题撞上表上的约束；另一条来自不认识的表（更新的版本多同步了一张表）；中间夹一条正常的。
+    SyncRecord bad;
+    bad.table = QStringLiteral("tasks");
+    bad.syncId = QStringLiteral("bad-task");
+    bad.fields.insert(QStringLiteral("title"), {QString(QStringLiteral("")), version, {}});
+    bad.fields.insert(QStringLiteral("date"), {QStringLiteral("2026-09-30"), version, {}});
+    SyncRecord unknown;
+    unknown.table = QStringLiteral("future_table");
+    unknown.syncId = QStringLiteral("future-1");
+    unknown.fields.insert(QStringLiteral("x"), {qint64(1), version, {}});
+    SyncRecord good;
+    good.table = QStringLiteral("tasks");
+    good.syncId = QStringLiteral("good-task");
+    good.fields.insert(QStringLiteral("title"), {QStringLiteral("正常的任务"), version, {}});
+    good.fields.insert(QStringLiteral("date"), {QStringLiteral("2026-09-30"), version, {}});
+    good.fields.insert(QStringLiteral("display_order"), {qint64(1), version, {}});
+    batch.records = {bad, unknown, good};
+
+    // 跳过的每一条都会在运行日志里留一行，真机排查时靠它；这里预期正好两行。
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("^Skipped sync record \"tasks\" \"bad-task\"")));
+    QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("^Skipped sync record \"future_table\"")));
+    const SyncStore::ApplyResult result = SyncStore(b.connection).applyRemote(batch);
+    // 整批照常提交：坏的两条跳过并记日志，正常的那条落地。
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.skippedRecords, 2);
+    QCOMPARE(logCount(b, QStringLiteral("skipped")), 2);
+    QCOMPARE(taskValue(b, QStringLiteral("good-task"), QStringLiteral("title")).toString(), QStringLiteral("正常的任务"));
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = 'bad-task'")), 0);
+}
+
+void SyncTests::remoteTaskDeletionKeepsItsSessions()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("任务"));
+    const qint64 localId = scalar(a, QStringLiteral("SELECT id FROM tasks WHERE sync_id = '%1'").arg(id)).toLongLong();
+    QVERIFY(exec(a, QStringLiteral("INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) "
+                                   "VALUES (%1, '2026-09-30T09:00:00', '2026-09-30T09:25:00', 1500, 1)").arg(localId)));
+    syncAll(cloud, {a, b});
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM focus_sessions fs JOIN tasks t ON t.id = fs.task_id "
+                                     "WHERE t.sync_id = '%1'").arg(id)), 1);
+
+    // 在 A 上走服务层删任务（先解除专注记录的关联再删）。B 上任务消失，专注记录作为历史留下，只是不再关联任务。
+    withServices(a, [&] { QVERIFY(TaskManager::instance()->deleteTask(int(localId))); });
+    syncAll(cloud, {a, b});
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(id)), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE task_id IS NULL AND duration = 1500")), 1);
+}
+
+void SyncTests::runningSessionIsNeverSent()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("任务"));
+    syncAll(cloud, {a, b});
+    const qint64 localId = scalar(a, QStringLiteral("SELECT id FROM tasks WHERE sync_id = '%1'").arg(id)).toLongLong();
+    QVERIFY(exec(a, QStringLiteral("INSERT INTO focus_sessions (task_id, start_time, mode) "
+                                   "VALUES (%1, '2026-09-30T10:00:00', 1)").arg(localId)));
+
+    for (const SyncRecord& record : SyncStore(a.connection).collectPending().records) {
+        QVERIFY(record.table != QLatin1String("focus_sessions"));
+    }
+    syncAll(cloud, {a, b});
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM focus_sessions")), 0);
+}
+
+void SyncTests::batchFromOtherEpochOrSameDeviceIsRejected()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    QVERIFY(!addTask(a, QStringLiteral("任务")).isEmpty());
+    SyncBatch batch = SyncStore(a.connection).collectPending();
+    QVERIFY(!batch.isEmpty());
+
+    // 纪元不同：属于全局回滚前（或之后）的改动，不能直接合并。
+    batch.epoch = 1;
+    SyncStore::ApplyResult result = SyncStore(b.connection).applyRemote(batch);
+    QVERIFY(!result.ok);
+    QVERIFY(!result.error.isEmpty());
+    // 设备标识与本机相同：多半是两台设备恢复了同一份备份，合并会把两边搅乱。
+    batch.epoch = 0;
+    batch.device = b.id;
+    result = SyncStore(b.connection).applyRemote(batch);
+    QVERIFY(!result.ok);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM tasks")), 0);
+}
+
+// ── 2c：引用与去重 ──
+//
+// 每条都对应 sol6 局域网方案审查时用真实表结构复现过的问题：在那个方案里，这些情况要么让同步永久卡住，
+// 要么冒出一堆看不懂的冲突。这里要求：整批照常提交（syncAll 里逐批断言 ok），两台设备结果一致。
+
+void SyncTests::sessionOnRemotelyDeletedTaskIsKeptDetached()
+{
+    // 审查第 1 条：Mac 删了一条任务，iPad 离线时在这条任务上做了专注——当年报「外键目标不存在」，永久卡死。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString task = addTask(a, QStringLiteral("复习"));
+    syncAll(cloud, {a, b});
+
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM tasks WHERE sync_id = '%1'").arg(task)));
+    QVERIFY(exec(b, QStringLiteral(
+        "INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode, category_name_snapshot) "
+        "VALUES (%1, '2026-09-30T09:00:00', '2026-09-30T09:25:00', 1500, 1, '数学')")
+                        .arg(localIdOf(b, QStringLiteral("tasks"), task))));
+    syncAll(cloud, {a, b});
+
+    // 任务按删除优先消失；专注记录作为历史留下，只是不再关联任务，科目快照还在，统计照样有归属。
+    for (const Device& device : {a, b}) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(task)), 0);
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE task_id IS NULL "
+                                              "AND duration = 1500 AND category_name_snapshot = '数学'")), 1);
+        QCOMPARE(logCount(device, QStringLiteral("skipped")), 0);
+    }
+}
+
+void SyncTests::taskUnderRemotelyDeletedCategoryBecomesUncategorized()
+{
+    // 审查第 1 条的另一种：删科目，而另一台离线时在这个科目下建了任务。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString category = addCategory(a, QStringLiteral("编程"));
+    syncAll(cloud, {a, b});
+
+    withServices(a, [&] {
+        QVERIFY(CategoryManager::instance()->deleteCategory(int(localIdOf(a, QStringLiteral("categories"), category))));
+    });
+    const QString task = addTask(b, QStringLiteral("写代码"));
+    QVERIFY(setTaskCategory(b, task, category));
+    syncAll(cloud, {a, b});
+
+    // 与本机删除科目的做法一致：任务留着，科目和旧的科目名文本一起清空，变成未分类。
+    for (const Device& device : {a, b}) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM categories WHERE sync_id = '%1'").arg(category)), 0);
+        QVERIFY(taskValue(device, task, QStringLiteral("category_id")).isNull());
+        QVERIFY(taskValue(device, task, QStringLiteral("category")).isNull());
+        QCOMPARE(taskValue(device, task, QStringLiteral("title")).toString(), QStringLiteral("写代码"));
+    }
+}
+
+void SyncTests::renamedCategoryThenRecreatedNameSyncs()
+{
+    // 审查第 3 条：把「编程」改名后再新建一个「编程」——按名字认科目的方案里，对方连读取都失败。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString old = addCategory(a, QStringLiteral("编程"));
+    const QString first = addTask(a, QStringLiteral("旧任务"));
+    QVERIFY(setTaskCategory(a, first, old));
+    syncAll(cloud, {a, b});
+
+    QVERIFY(exec(a, QStringLiteral("UPDATE categories SET name = '计算机' WHERE sync_id = '%1'").arg(old)));
+    const QString recreated = addCategory(a, QStringLiteral("编程"));
+    const QString second = addTask(a, QStringLiteral("新任务"));
+    QVERIFY(setTaskCategory(a, second, recreated));
+    syncAll(cloud, {a, b});
+
+    QCOMPARE(customCategoryNames(b), QStringList({QStringLiteral("编程"), QStringLiteral("计算机")}));
+    QCOMPARE(taskCategory(b, first), old);
+    QCOMPARE(taskCategory(b, second), recreated);
+    QCOMPARE(logCount(a) + logCount(b), 0);
+}
+
+void SyncTests::renameCollidingWithOtherSidesNewCategoryMerges()
+{
+    // 审查第 3 条：A 把「编程」改成「计算机」，B 同时新建了「计算机」——当年撞上名称唯一约束，写入失败。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString renamed = addCategory(a, QStringLiteral("编程"));
+    syncAll(cloud, {a, b});
+
+    QVERIFY(exec(a, QStringLiteral("UPDATE categories SET name = '计算机' WHERE sync_id = '%1'").arg(renamed)));
+    const QString onA = addTask(a, QStringLiteral("A 的任务"));
+    QVERIFY(setTaskCategory(a, onA, renamed));
+    const QString created = addCategory(b, QStringLiteral("计算机"));
+    const QString onB = addTask(b, QStringLiteral("B 的任务"));
+    QVERIFY(setTaskCategory(b, onB, created));
+    syncAll(cloud, {a, b});
+
+    // 合并成一个：留身份较小的那个，两边的任务都指向它，另一个留下「合并」删除记录。
+    const QString winner = qMin(renamed, created);
+    const QString loser = qMax(renamed, created);
+    for (const Device& device : {a, b}) {
+        QCOMPARE(customCategoryNames(device), QStringList{QStringLiteral("计算机")});
+        QCOMPARE(taskCategory(device, onA), winner);
+        QCOMPARE(taskCategory(device, onB), winner);
+        QCOMPARE(taskValue(device, onB, QStringLiteral("category")).toString(), QStringLiteral("计算机"));
+        QCOMPARE(scalar(device, QStringLiteral("SELECT kind || ':' || merged_into FROM sync_tombstones "
+                                               "WHERE sync_id = '%1'").arg(loser)).toString(),
+                 QStringLiteral("merge:") + winner);
+        QCOMPARE(logCount(device, QStringLiteral("skipped")), 0);
+    }
+}
+
+void SyncTests::sameNameCategoriesCreatedOnBothSidesMerge()
+{
+    // 审查第 5 条：两边各建一个同名科目，只因为创建时间不同就一定冲突，要人去选。这里自动合并，不算冲突。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString x = addCategory(a, QStringLiteral("英语阅读"));
+    const QString y = addCategory(b, QStringLiteral("英语阅读"));
+    const QString taskA = addTask(a, QStringLiteral("精读"));
+    const QString taskB = addTask(b, QStringLiteral("泛读"));
+    QVERIFY(setTaskCategory(a, taskA, x));
+    QVERIFY(setTaskCategory(b, taskB, y));
+    syncAll(cloud, {a, b});
+
+    for (const Device& device : {a, b}) {
+        QCOMPARE(customCategoryNames(device), QStringList{QStringLiteral("英语阅读")});
+        QCOMPARE(taskCategory(device, taskA), qMin(x, y));
+        QCOMPARE(taskCategory(device, taskB), qMin(x, y));
+        // 只有一条「已合并」的说明，没有要人处理的冲突。
+        QCOMPARE(logCount(device, QStringLiteral("edit")), 0);
+        QCOMPARE(logCount(device, QStringLiteral("skipped")), 0);
+    }
+}
+
+void SyncTests::swappedCategoryNamesAreNotMerged()
+{
+    // 两个科目互换名字：逐条应用时中途会撞名，但最终并没有重名，不能被误判成要合并。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString first = addCategory(a, QStringLiteral("甲"));
+    const QString second = addCategory(a, QStringLiteral("乙"));
+    syncAll(cloud, {a, b});
+
+    QVERIFY(exec(a, QStringLiteral("UPDATE categories SET name = '临时' WHERE sync_id = '%1'").arg(first)));
+    QVERIFY(exec(a, QStringLiteral("UPDATE categories SET name = '甲' WHERE sync_id = '%1'").arg(second)));
+    QVERIFY(exec(a, QStringLiteral("UPDATE categories SET name = '乙' WHERE sync_id = '%1'").arg(first)));
+    syncAll(cloud, {a, b});
+
+    QCOMPARE(scalar(b, QStringLiteral("SELECT name FROM categories WHERE sync_id = '%1'").arg(first)).toString(),
+             QStringLiteral("乙"));
+    QCOMPARE(scalar(b, QStringLiteral("SELECT name FROM categories WHERE sync_id = '%1'").arg(second)).toString(),
+             QStringLiteral("甲"));
+    QCOMPARE(logCount(a) + logCount(b), 0);
+}
+
+void SyncTests::mergeReachesSideThatDidNotCollide()
+{
+    // A 看到撞名、做了合并；B 却在这之前把自己那个科目改成了别的名字，本机没有撞名。
+    // 合并记录必须发给 B，否则 B 会一直留着 A 已经并掉的那个科目。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    // 固定身份：A 的较小，撞名时 B 的并进 A 的。换成随机身份，一半的情况下合并方向相反，
+    // 那种方向即使合并没发出去，两边也碰巧一致，这条用例就测不出问题了。
+    const QString x = addCategory(a, QStringLiteral("编程"), QStringLiteral("aaaa-category"));
+    const QString y = addCategory(b, QStringLiteral("编程"), QStringLiteral("bbbb-category"));
+    const QString task = addTask(b, QStringLiteral("B 的任务"));
+    QVERIFY(setTaskCategory(b, task, y));
+    QVERIFY(cloud.publish(b) > 0);
+    QVERIFY(exec(b, QStringLiteral("UPDATE categories SET name = '编程基础' WHERE sync_id = '%1'").arg(y)));
+    cloud.pull(a);  // A 只看到 B 改名之前的那一批：撞名，把 B 的并进自己的
+    QCOMPARE(scalar(a, QStringLiteral("SELECT kind FROM sync_tombstones WHERE sync_id = '%1'").arg(y)).toString(),
+             QStringLiteral("merge"));
+    syncAll(cloud, {a, b});
+
+    // 两台设备最终一致：只剩 A 的那个科目，B 的任务也挂到它下面；B 那次改名随合并作废（记了日志）。
+    for (const Device& device : {a, b}) {
+        QCOMPARE(customCategoryNames(device), QStringList{QStringLiteral("编程")});
+        QCOMPARE(taskCategory(device, task), x);
+        QCOMPARE(logCount(device, QStringLiteral("skipped")), 0);
+    }
+    QCOMPARE(logCount(a, QStringLiteral("merge")), 2);
+}
+
+void SyncTests::presetsRenamedToSameNameGetSuffix()
+{
+    // 预置科目不能删，也就不能合并：两边把不同的预置科目改成同一个名字时，后改的留下名字，另一个加后缀。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    syncAll(cloud, {a, b});
+
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(setClock(b, kFuture + 1000));
+    QVERIFY(exec(a, QStringLiteral("UPDATE categories SET name = '数理' WHERE sync_id = 'preset-1'")));
+    QVERIFY(exec(b, QStringLiteral("UPDATE categories SET name = '数理' WHERE sync_id = 'preset-2'")));
+    syncAll(cloud, {a, b});
+
+    for (const Device& device : {a, b}) {
+        QCOMPARE(scalar(device, QStringLiteral("SELECT name FROM categories WHERE sync_id = 'preset-2'")).toString(),
+                 QStringLiteral("数理"));
+        QCOMPARE(scalar(device, QStringLiteral("SELECT name FROM categories WHERE sync_id = 'preset-1'")).toString(),
+                 QStringLiteral("数理（2）"));
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM categories WHERE is_preset = 1")), 5);
+    }
+}
+
+void SyncTests::sameDayTasksAreRenumberedWithoutMigration()
+{
+    // 审查第 7 条：两端同一天各加任务，排序号撞了；当年每次同步后启动都要走 v12 修一遍并生成迁移快照，
+    // 快照只留三份，真正升级前的那几份很快被挤掉。这里在同步的同一个事务里按确定规则重排，两边顺序一致。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString date = QStringLiteral("2026-09-30");
+    for (const QString& title : {QStringLiteral("A1"), QStringLiteral("A2")}) {
+        QVERIFY(!addTask(a, title, date).isEmpty());
+    }
+    for (const QString& title : {QStringLiteral("B1"), QStringLiteral("B2")}) {
+        QVERIFY(!addTask(b, title, date).isEmpty());
+    }
+    const QDir dataDir(m_data->path());
+    const QStringList pattern{QStringLiteral("pomodoro_backup_*.db")};
+    const int snapshotsBefore = dataDir.entryList(pattern, QDir::Files).size();
+    syncAll(cloud, {a, b});
+
+    for (const Device& device : {a, b}) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(DISTINCT display_order) FROM tasks WHERE date = '%1'")
+                                   .arg(date)), 4);
+        QCOMPARE(count(device, QStringLiteral("SELECT MIN(display_order) FROM tasks WHERE date = '%1'").arg(date)), 1);
+    }
+    QCOMPARE(dayOrder(a, date), dayOrder(b, date));
+
+    // 重新打开两台设备的库：启动检查看不到任何需要修复的排序，不会走 v12，也就不会多出迁移快照。
+    withServices(a, [] {});
+    withServices(b, [] {});
+    QCOMPARE(dataDir.entryList(pattern, QDir::Files).size(), snapshotsBefore);
+}
+
+void SyncTests::corruptMergeChainDoesNotHang()
+{
+    // 合并总是并向身份较小的一方，正常不会成环；外部改坏的数据里出现环，也只追有限步，然后当作找不到。
+    Device b = openDevice(QStringLiteral("b"));
+    QVERIFY(exec(b, QStringLiteral("INSERT INTO sync_tombstones (tbl, sync_id, v_time, v_device, kind, merged_into, "
+                                   "deleted_at) VALUES ('categories', 'loop-x', 1, 'd', 'merge', 'loop-y', 1), "
+                                   "('categories', 'loop-y', 1, 'd', 'merge', 'loop-x', 1)")));
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const SyncVersion version{kFuture, remote};
+    SyncRecord task;
+    task.table = QStringLiteral("tasks");
+    task.syncId = QStringLiteral("task-in-loop");
+    task.fields.insert(QStringLiteral("title"), {QStringLiteral("环里的任务"), version, {}});
+    task.fields.insert(QStringLiteral("date"), {QStringLiteral("2026-09-30"), version, {}});
+    task.fields.insert(QStringLiteral("category_id"), {QStringLiteral("loop-x"), version, {}});
+    task.fields.insert(QStringLiteral("category"), {QStringLiteral("环"), version, {}});
+    SyncBatch batch;
+    batch.device = remote;
+    batch.records = {task};
+    const SyncStore::ApplyResult result = SyncStore(b.connection).applyRemote(batch);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QVERIFY(taskValue(b, QStringLiteral("task-in-loop"), QStringLiteral("category_id")).isNull());
 }
 
 QTEST_MAIN(SyncTests)

@@ -79,6 +79,10 @@ set(APP_SOURCES
     src/services/DatabaseManager.cpp
     src/services/SyncSchema.h
     src/services/SyncSchema.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncStore.h
+    src/services/SyncStore.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -868,6 +872,10 @@ add_executable(SyncTests
     src/services/DatabaseManager.cpp
     src/services/SyncSchema.h
     src/services/SyncSchema.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncStore.h
+    src/services/SyncStore.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
