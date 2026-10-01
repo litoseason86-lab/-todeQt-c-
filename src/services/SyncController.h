@@ -140,8 +140,10 @@ private:
     void onBookmarkRefreshed(quint64 folderGeneration, const QByteArray& bookmark);
     void onCycleFinished();
     void refreshLog();
-    void recordDayStartHour();
-    void reconcileDayStartHour();
+    // 本机改了跟着同步的设置：逐项和库里记下的比，变了的记一个新版本、等着发出。
+    void recordSettings();
+    // 启动时（和恢复备份之后）核对：库里记下的和本机设置不一致的，以库里的为准写回；库里还没有的，记下本机的。
+    void reconcileSettings();
 
     Platform m_platform;
     std::function<bool(QString*)> m_safetyBackup;

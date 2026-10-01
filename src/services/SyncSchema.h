@@ -87,6 +87,20 @@ QString sqlDeviceId();
 // 收到的改动不会被当成本机修改再发回去。
 QString sqlNotApplyingRemote();
 
+// ── 跟着同步的设置（计划 050 的逻辑日起点，加上 051 的 D1 选定的内容类设置）──
+// 值在同步里一律是文本。这里只管「哪些键、叫什么、怎么显示」；读出、写回本机的值在 SyncedSettings。
+// 「这台设备怎么显示、怎么提醒」的设置（外观、提示音、窗口、自动开始、快捷键、课表显示方式……）不在其中。
+// 固定的几项（不含按日期的今日目标）。课表节次的键 schedule/periods 不在 QSettings 里：整张节次表序列化成一项。
+QStringList syncedSettingKeys();
+// 今日目标按日期各算一项：focus/dailyGoalHistory/yyyy-MM-dd，与 AppSettings 存它的键相同。
+QString dailyGoalSettingKey(const QString& isoDate);
+// 是今日目标的键时返回日期，否则返回空。
+QString dailyGoalDateOf(const QString& key);
+bool isSyncedSettingKey(const QString& key);
+// 同步日志里给人看的名字与取值。
+QString settingLabel(const QString& key);
+QString settingDisplay(const QString& key, const QString& value);
+
 // 预置科目的固定身份：按预置位置（display_order 1..5）。两台设备各自建库时预置的是同一组科目，
 // 用位置当身份才不会同步成两份「数学」。
 QString presetCategorySyncId(int slot);

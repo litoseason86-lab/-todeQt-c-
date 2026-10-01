@@ -41,8 +41,11 @@ public:
         QSet<QString> changedTables;
         // 本机因远端删除而删掉的任务编号：提交成功后逐个发 taskDeleted，计时器据此解绑。
         QList<int> deletedTaskIds;
-        // 本批改变了的设置项（键 → 新值），由调用方写回 AppSettings。
+        // 本批改变了的设置项（键 → 新值），由调用方写回本机（见 SyncedSettings）。
         QHash<QString, QString> changedSettings;
+        // 整体替换时快照里没有、本机却记着的设置项（例如 iPad 上测试用的某一天的今日目标）。
+        // 以快照为准，由调用方从本机删掉；增量应用不会产生这一项。
+        QSet<QString> removedSettings;
         int conflictsLogged = 0;
         int skippedRecords = 0;
     };
@@ -56,6 +59,8 @@ public:
     bool recordLocalSetting(const QString& key, const QString& value, bool isDefault);
     // 同步记下的值；从没记过时返回空的 QString。
     QString syncedSetting(const QString& key) const;
+    // 同步记下的全部设置项（键 → 值）。启动时与本机设置逐项核对。
+    QHash<QString, QString> syncedSettings() const;
 
     // ── 全量快照：首次加入与全局回滚（计划 050「首次加入与恢复备份」） ──
     // 本机全部已发布的记录（带字段版本）、全部删除记录与全部设置。给新加入的设备起步用；

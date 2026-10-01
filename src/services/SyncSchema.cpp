@@ -1,5 +1,8 @@
 #include "SyncSchema.h"
 
+#include <QDate>
+#include <QJsonArray>
+#include <QJsonDocument>
 #include <QSqlDatabase>
 #include <QSqlQuery>
 #include <QUuid>
@@ -531,6 +534,112 @@ QString sqlNotApplyingRemote()
 {
     // 标记行缺失时按「不是在应用远端改动」处理：宁可多记一笔本机改动，也不能静默漏记。
     return QStringLiteral("COALESCE((SELECT applying FROM sync_runtime WHERE singleton_id = 1), 0) = 0");
+}
+
+namespace {
+
+const auto kDailyGoalPrefix = QStringLiteral("focus/dailyGoalHistory/");
+
+QString clockText(int minutes)
+{
+    return QStringLiteral("%1:%2").arg(minutes / 60, 2, 10, QLatin1Char('0')).arg(minutes % 60, 2, 10, QLatin1Char('0'));
+}
+
+} // namespace
+
+QStringList syncedSettingKeys()
+{
+    return {
+        QStringLiteral("logic/dayStartHour"),
+        QStringLiteral("focus/workMinutes"),
+        QStringLiteral("focus/breakMinutes"),
+        QStringLiteral("focus/longBreakEnabled"),
+        QStringLiteral("focus/longBreakMinutes"),
+        QStringLiteral("focus/longBreakInterval"),
+        QStringLiteral("focus/freeTimerWarningHours"),
+        QStringLiteral("profile/nickname"),
+        QStringLiteral("schedule/semesterStartDate"),
+        QStringLiteral("schedule/semesterWeeks"),
+        QStringLiteral("schedule/periods"),
+    };
+}
+
+QString dailyGoalSettingKey(const QString& isoDate)
+{
+    return kDailyGoalPrefix + isoDate;
+}
+
+QString dailyGoalDateOf(const QString& key)
+{
+    if (!key.startsWith(kDailyGoalPrefix)) {
+        return QString();
+    }
+    const QString date = key.mid(kDailyGoalPrefix.size());
+    return QDate::fromString(date, Qt::ISODate).isValid() && date.size() == 10 ? date : QString();
+}
+
+bool isSyncedSettingKey(const QString& key)
+{
+    return syncedSettingKeys().contains(key) || !dailyGoalDateOf(key).isEmpty();
+}
+
+QString settingLabel(const QString& key)
+{
+    static const QHash<QString, QString> labels{
+        {QStringLiteral("logic/dayStartHour"), QStringLiteral("逻辑日起点")},
+        {QStringLiteral("focus/workMinutes"), QStringLiteral("番茄时长")},
+        {QStringLiteral("focus/breakMinutes"), QStringLiteral("休息时长")},
+        {QStringLiteral("focus/longBreakEnabled"), QStringLiteral("长休息")},
+        {QStringLiteral("focus/longBreakMinutes"), QStringLiteral("长休息时长")},
+        {QStringLiteral("focus/longBreakInterval"), QStringLiteral("长休息间隔")},
+        {QStringLiteral("focus/freeTimerWarningHours"), QStringLiteral("超长计时提醒")},
+        {QStringLiteral("profile/nickname"), QStringLiteral("昵称")},
+        {QStringLiteral("schedule/semesterStartDate"), QStringLiteral("学期起始日")},
+        {QStringLiteral("schedule/semesterWeeks"), QStringLiteral("学期周数")},
+        {QStringLiteral("schedule/periods"), QStringLiteral("课表节次")},
+    };
+    const QString date = dailyGoalDateOf(key);
+    if (!date.isEmpty()) {
+        return QStringLiteral("今日目标（%1）").arg(QDate::fromString(date, Qt::ISODate).toString(QStringLiteral("M月d日")));
+    }
+    return labels.value(key, key);
+}
+
+QString settingDisplay(const QString& key, const QString& value)
+{
+    if (key == QLatin1String("logic/dayStartHour")) {
+        return QStringLiteral("%1 点").arg(value);
+    }
+    if (key == QLatin1String("focus/workMinutes") || key == QLatin1String("focus/breakMinutes")
+        || key == QLatin1String("focus/longBreakMinutes") || !dailyGoalDateOf(key).isEmpty()) {
+        return QStringLiteral("%1 分钟").arg(value);
+    }
+    if (key == QLatin1String("focus/longBreakEnabled")) {
+        return value == QLatin1String("1") ? QStringLiteral("开") : QStringLiteral("关");
+    }
+    if (key == QLatin1String("focus/longBreakInterval")) {
+        return QStringLiteral("每 %1 个番茄").arg(value);
+    }
+    if (key == QLatin1String("focus/freeTimerWarningHours")) {
+        return QStringLiteral("%1 小时").arg(value);
+    }
+    if (key == QLatin1String("schedule/semesterWeeks")) {
+        return QStringLiteral("%1 周").arg(value);
+    }
+    if (key == QLatin1String("schedule/semesterStartDate")) {
+        return value.isEmpty() ? QStringLiteral("（未设置）") : value;
+    }
+    if (key == QLatin1String("schedule/periods")) {
+        // 整张节次表：写出共几节、从几点到几点，够你认出是哪一份。
+        const QJsonArray periods = QJsonDocument::fromJson(value.toUtf8()).array();
+        if (periods.isEmpty()) {
+            return QStringLiteral("（空）");
+        }
+        const int first = periods.first().toArray().at(0).toInt();
+        const int last = periods.last().toArray().at(1).toInt();
+        return QStringLiteral("%1 节，%2–%3").arg(periods.size()).arg(clockText(first), clockText(last));
+    }
+    return value.isEmpty() ? QStringLiteral("（空）") : value;
 }
 
 QString presetCategorySyncId(int slot)

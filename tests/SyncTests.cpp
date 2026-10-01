@@ -632,6 +632,10 @@ private slots:
     void phaseTwoNotificationsRefreshOnlyTheirServices();
     void migrationFromV18QueuesPhaseTwoRows();
 
+    // 051 阶段 2：设置
+    void snapshotReplacementReportsSettingsItLacks();
+    void settingConflictsReadAsPlainText();
+
 private:
     Device openDevice(const QString& name);
     // 临时把服务层（TaskManager 等单例）切到这台设备的库上执行一段操作，用完关掉。
@@ -2599,6 +2603,65 @@ void SyncTests::migrationFromV18QueuesPhaseTwoRows()
     QVERIFY(exec(QStringLiteral("INSERT INTO countdown_goals (name, target_date, display_order, created_at, updated_at) "
                                 "VALUES ('期末', '2027-01-10', 0, '2026-09-30T08:00:00', '2026-09-30T08:00:00')")));
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE tbl = 'countdown_goals'")), 1);
+}
+
+// ── 051 阶段 2：设置 ──
+
+void SyncTests::snapshotReplacementReportsSettingsItLacks()
+{
+    Device mac = openDevice(QStringLiteral("mac"));
+    Device ipad = openDevice(QStringLiteral("ipad"));
+    const QString key = QStringLiteral("logic/dayStartHour");
+    const QString macGoal = SyncSchema::dailyGoalSettingKey(QStringLiteral("2026-09-30"));
+    const QString ipadGoal = SyncSchema::dailyGoalSettingKey(QStringLiteral("2026-09-01"));
+    QVERIFY(SyncStore(mac.connection).recordLocalSetting(key, QStringLiteral("5"), false));
+    QVERIFY(SyncStore(mac.connection).recordLocalSetting(macGoal, QStringLiteral("120"), false));
+    // iPad 上测试时设过的另一天的目标：Mac 的快照里没有这一天。
+    QVERIFY(SyncStore(ipad.connection).recordLocalSetting(key, QStringLiteral("4"), true));
+    QVERIFY(SyncStore(ipad.connection).recordLocalSetting(ipadGoal, QStringLiteral("30"), false));
+
+    const SyncStore::ApplyResult result =
+        SyncStore(ipad.connection).replaceWithSnapshot(throughJson(SyncStore(mac.connection).exportSnapshot()));
+    QVERIFY2(result.ok, qPrintable(result.error));
+    // 以快照为准：快照里有的写回，快照里没有的那一天交给调用方从本机删掉（只从库里删，下次启动又会被当成本机改动发回去）。
+    QCOMPARE(result.changedSettings.value(key), QStringLiteral("5"));
+    QCOMPARE(result.changedSettings.value(macGoal), QStringLiteral("120"));
+    QCOMPARE(result.removedSettings, QSet<QString>{ipadGoal});
+    QVERIFY(SyncStore(ipad.connection).syncedSetting(ipadGoal).isEmpty());
+}
+
+void SyncTests::settingConflictsReadAsPlainText()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString work = QStringLiteral("focus/workMinutes");
+    const QString periods = QStringLiteral("schedule/periods");
+    QVERIFY(SyncStore(a.connection).recordLocalSetting(work, QStringLiteral("25"), true));
+    QVERIFY(SyncStore(b.connection).recordLocalSetting(work, QStringLiteral("25"), true));
+    syncAll(cloud, {a, b});
+
+    // 两边同时改番茄时长和整张节次表：后改的 B 为准，A 输掉的值记进日志，名字和取值都是给人看的说法。
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(setClock(b, kFuture + 1000));
+    QVERIFY(SyncStore(a.connection).recordLocalSetting(work, QStringLiteral("50"), false));
+    QVERIFY(SyncStore(b.connection).recordLocalSetting(work, QStringLiteral("40"), false));
+    QVERIFY(SyncStore(a.connection).recordLocalSetting(periods, QStringLiteral("[[480,525],[535,580]]"), false));
+    QVERIFY(SyncStore(b.connection).recordLocalSetting(periods, QStringLiteral("[[490,535]]"), false));
+    syncAll(cloud, {a, b});
+    for (const Device& device : {a, b}) {
+        QCOMPARE(SyncStore(device.connection).syncedSetting(work), QStringLiteral("40"));
+        QCOMPARE(SyncStore(device.connection).syncedSetting(periods), QStringLiteral("[[490,535]]"));
+    }
+    QHash<QString, SyncStore::LogEntry> byField;
+    for (const SyncStore::LogEntry& entry : SyncStore(a.connection).syncLog(10)) {
+        byField.insert(entry.fieldLabel, entry);
+    }
+    QCOMPARE(byField.size(), 2);
+    QCOMPARE(byField.value(QStringLiteral("番茄时长")).lostValue, QStringLiteral("50 分钟"));
+    QCOMPARE(byField.value(QStringLiteral("番茄时长")).keptValue, QStringLiteral("40 分钟"));
+    QCOMPARE(byField.value(QStringLiteral("课表节次")).lostValue, QStringLiteral("2 节，08:00–09:40"));
+    QCOMPARE(byField.value(QStringLiteral("课表节次")).keptValue, QStringLiteral("1 节，08:10–08:55"));
 }
 
 QTEST_MAIN(SyncTests)

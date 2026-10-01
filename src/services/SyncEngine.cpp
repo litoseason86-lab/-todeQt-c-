@@ -26,6 +26,12 @@ void mergeResult(SyncStore::ApplyResult* total, const SyncStore::ApplyResult& pa
     // 同一个设置在后一批里又变了，以后一批为准。
     for (auto it = part.changedSettings.cbegin(); it != part.changedSettings.cend(); ++it) {
         total->changedSettings.insert(it.key(), it.value());
+        total->removedSettings.remove(it.key());
+    }
+    // 后一批删掉了前一批改过的项：以后一批为准。
+    for (const QString& key : part.removedSettings) {
+        total->changedSettings.remove(key);
+        total->removedSettings.insert(key);
     }
     total->conflictsLogged += part.conflictsLogged;
     total->skippedRecords += part.skippedRecords;
@@ -33,7 +39,8 @@ void mergeResult(SyncStore::ApplyResult* total, const SyncStore::ApplyResult& pa
 
 bool hasVisibleChanges(const SyncStore::ApplyResult& result)
 {
-    return !result.changedTables.isEmpty() || !result.deletedTaskIds.isEmpty() || !result.changedSettings.isEmpty();
+    return !result.changedTables.isEmpty() || !result.deletedTaskIds.isEmpty() || !result.changedSettings.isEmpty()
+        || !result.removedSettings.isEmpty();
 }
 
 SyncEngine::Status statusFor(const SyncFolder::Error& error)

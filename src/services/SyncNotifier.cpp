@@ -7,6 +7,7 @@
 #include "KnowledgeGapService.h"
 #include "RoutineManager.h"
 #include "ScheduleService.h"
+#include "SyncedSettings.h"
 #include "TaskManager.h"
 
 namespace SyncNotifier {
@@ -26,13 +27,23 @@ void publish(const SyncStore::ApplyResult& result)
 
     // 设置先写回：逻辑日起点变了，「今天」是哪天随之改变，后面刷新的列表要按新的日期取数。
     // 写回会发 dayStartHourChanged，LogicalDayService 据此让「今天」失效并补生成新一天的例行。
-    const auto dayStart = result.changedSettings.constFind(QStringLiteral("logic/dayStartHour"));
+    // 写回期间各设置发出的变更信号不是本机改动，记录方据此跳过（见 SyncedSettings::WriteBackScope）。
+    const SyncedSettings::WriteBackScope writingBack;
+    const QString dayStartKey = QStringLiteral("logic/dayStartHour");
+    const auto dayStart = result.changedSettings.constFind(dayStartKey);
     if (dayStart != result.changedSettings.constEnd()) {
-        bool valid = false;
-        const int hour = dayStart.value().toInt(&valid);
-        if (valid) {
-            AppSettings::instance()->setDayStartHour(hour);
+        SyncedSettings::apply(dayStartKey, dayStart.value());
+    }
+    // 其余设置（番茄时长、今日目标、课表节次……）逐项写回，各自发出自己的变更信号。
+    // 不认识的键（更新版本加的设置）写不回去，留在库里，等本机更新后启动核对时再写回。
+    for (auto it = result.changedSettings.cbegin(); it != result.changedSettings.cend(); ++it) {
+        if (it.key() != dayStartKey) {
+            SyncedSettings::apply(it.key(), it.value());
         }
+    }
+    // 整体替换时快照里没有的项（某一天的今日目标）：以快照为准，从本机删掉。
+    for (const QString& key : result.removedSettings) {
+        SyncedSettings::remove(key);
     }
 
     // 科目变了会连带例行列表（RoutineManager 把 categoriesChanged 转成 routinesChanged），不必再单独发一次。

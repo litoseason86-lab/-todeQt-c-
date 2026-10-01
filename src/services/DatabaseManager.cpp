@@ -770,27 +770,6 @@ bool DatabaseManager::insertDefaultSchedulePeriods()
         return true;
     }
 
-    // 默认节次：上午 4 节、下午 4 节、晚上 3 节，每节 45 分钟。
-    // 这只是一份能直接用的起始值，用户可在「课表设置」里整表改写。
-    struct DefaultPeriod {
-        int index;
-        int startMinutes;
-        int endMinutes;
-    };
-    static constexpr DefaultPeriod kDefaults[] = {
-        { 1, 8 * 60, 8 * 60 + 45 },
-        { 2, 8 * 60 + 55, 9 * 60 + 40 },
-        { 3, 10 * 60, 10 * 60 + 45 },
-        { 4, 10 * 60 + 55, 11 * 60 + 40 },
-        { 5, 14 * 60, 14 * 60 + 45 },
-        { 6, 14 * 60 + 55, 15 * 60 + 40 },
-        { 7, 16 * 60, 16 * 60 + 45 },
-        { 8, 16 * 60 + 55, 17 * 60 + 40 },
-        { 9, 19 * 60, 19 * 60 + 45 },
-        { 10, 19 * 60 + 55, 20 * 60 + 40 },
-        { 11, 21 * 60, 21 * 60 + 45 }
-    };
-
     QSqlQuery insert(m_db);
     if (!insert.prepare(QStringLiteral(
             "INSERT INTO schedule_periods (period_index, start_minutes, end_minutes) "
@@ -799,10 +778,11 @@ bool DatabaseManager::insertDefaultSchedulePeriods()
                    << insert.lastError().text();
         return false;
     }
-    for (const DefaultPeriod& period : kDefaults) {
-        insert.addBindValue(period.index);
-        insert.addBindValue(period.startMinutes);
-        insert.addBindValue(period.endMinutes);
+    const QList<QPair<int, int>> defaults = defaultSchedulePeriods();
+    for (qsizetype index = 0; index < defaults.size(); ++index) {
+        insert.addBindValue(int(index) + 1);
+        insert.addBindValue(defaults.at(index).first);
+        insert.addBindValue(defaults.at(index).second);
         if (!insert.exec()) {
             qWarning() << "Failed to insert default schedule period:"
                        << insert.lastError().text();
@@ -810,6 +790,18 @@ bool DatabaseManager::insertDefaultSchedulePeriods()
         }
     }
     return true;
+}
+
+QList<QPair<int, int>> DatabaseManager::defaultSchedulePeriods()
+{
+    // 默认节次：上午 4 节、下午 4 节、晚上 3 节，每节 45 分钟。
+    // 这只是一份能直接用的起始值，用户可在「课表设置」里整表改写。
+    return {
+        {8 * 60, 8 * 60 + 45},   {8 * 60 + 55, 9 * 60 + 40},   {10 * 60, 10 * 60 + 45},
+        {10 * 60 + 55, 11 * 60 + 40}, {14 * 60, 14 * 60 + 45},  {14 * 60 + 55, 15 * 60 + 40},
+        {16 * 60, 16 * 60 + 45}, {16 * 60 + 55, 17 * 60 + 40}, {19 * 60, 19 * 60 + 45},
+        {19 * 60 + 55, 20 * 60 + 40}, {21 * 60, 21 * 60 + 45},
+    };
 }
 
 bool DatabaseManager::hasGeneratedIntegerId(const QSqlDatabase& db, const QString& tableName)

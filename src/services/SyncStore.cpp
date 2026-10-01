@@ -882,15 +882,6 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
 
 namespace {
 // 设置项在冲突日志里显示的名字与值。
-QString settingLabel(const QString& key)
-{
-    return key == QLatin1String("logic/dayStartHour") ? QStringLiteral("逻辑日起点") : key;
-}
-
-QString settingDisplay(const QString& key, const QString& value)
-{
-    return key == QLatin1String("logic/dayStartHour") ? QStringLiteral("%1 点").arg(value) : value;
-}
 }
 
 bool Applier::applySetting(const SyncSettingRecord& incoming, QString* error)
@@ -923,16 +914,18 @@ bool Applier::applySetting(const SyncSettingRecord& incoming, QString* error)
             }
         } else if (local < incoming.version) {
             if (!same && local.device == m_me && !local.isMinimal() && incoming.base != local) {
-                logConflict(QStringLiteral("edit"), settings, incoming.key, settingLabel(incoming.key), incoming.key,
-                            settingDisplay(incoming.key, localValue), settingDisplay(incoming.key, incoming.value),
-                            m_me, incoming.version.device, detail);
+                logConflict(QStringLiteral("edit"), settings, incoming.key, SyncSchema::settingLabel(incoming.key),
+                            incoming.key, SyncSchema::settingDisplay(incoming.key, localValue),
+                            SyncSchema::settingDisplay(incoming.key, incoming.value), m_me, incoming.version.device,
+                            detail);
             }
         } else {
             if (!same && local.device == m_me && localBase != incoming.version && incoming.version.device != m_me
                 && !incoming.version.isMinimal()) {
-                logConflict(QStringLiteral("edit"), settings, incoming.key, settingLabel(incoming.key), incoming.key,
-                            settingDisplay(incoming.key, incoming.value), settingDisplay(incoming.key, localValue),
-                            incoming.version.device, m_me, detail);
+                logConflict(QStringLiteral("edit"), settings, incoming.key, SyncSchema::settingLabel(incoming.key),
+                            incoming.key, SyncSchema::settingDisplay(incoming.key, incoming.value),
+                            SyncSchema::settingDisplay(incoming.key, localValue), incoming.version.device, m_me,
+                            detail);
             }
             return true;
         }
@@ -945,7 +938,7 @@ bool Applier::applySetting(const SyncSettingRecord& incoming, QString* error)
         if (same) {
             // 值相同、只是版本更新：照抄版本，不算设置变了。
             write.bindValue(QStringLiteral(":key"), incoming.key);
-            write.bindValue(QStringLiteral(":value"), incoming.value);
+            write.bindValue(QStringLiteral(":value"), nonNull(incoming.value));
             write.bindValue(QStringLiteral(":t"), incoming.version.time);
             write.bindValue(QStringLiteral(":d"), nonNull(incoming.version.device));
             write.bindValue(QStringLiteral(":bt"), incoming.base.time);
@@ -954,7 +947,7 @@ bool Applier::applySetting(const SyncSettingRecord& incoming, QString* error)
         }
     }
     write.bindValue(QStringLiteral(":key"), incoming.key);
-    write.bindValue(QStringLiteral(":value"), incoming.value);
+    write.bindValue(QStringLiteral(":value"), nonNull(incoming.value));
     write.bindValue(QStringLiteral(":t"), incoming.version.time);
     write.bindValue(QStringLiteral(":d"), nonNull(incoming.version.device));
     write.bindValue(QStringLiteral(":bt"), incoming.base.time);
@@ -1140,7 +1133,7 @@ bool Applier::replaceSettings(const QList<SyncSettingRecord>& settings, QString*
             "INSERT INTO sync_settings (key, value, v_time, v_device, base_time, base_device, pending) "
             "VALUES (:key, :value, :t, :d, :bt, :bd, 0)"));
         insert.bindValue(QStringLiteral(":key"), setting.key);
-        insert.bindValue(QStringLiteral(":value"), setting.value);
+        insert.bindValue(QStringLiteral(":value"), nonNull(setting.value));
         insert.bindValue(QStringLiteral(":t"), setting.version.time);
         insert.bindValue(QStringLiteral(":d"), nonNull(setting.version.device));
         insert.bindValue(QStringLiteral(":bt"), setting.base.time);
@@ -1151,6 +1144,12 @@ bool Applier::replaceSettings(const QList<SyncSettingRecord>& settings, QString*
         if (previous.value(setting.key) != setting.value) {
             m_result->changedSettings.insert(setting.key, setting.value);
         }
+        previous.remove(setting.key);
+    }
+    // 快照里没有的项也要让调用方知道：今日目标是按日期一项一项记的，快照里没有那一天，
+    // 本机就该删掉那一天的目标；只从这张表里删、本机设置不动的话，下次启动它又会被当成本机改动发回去。
+    for (auto it = previous.cbegin(); it != previous.cend(); ++it) {
+        m_result->removedSettings.insert(it.key());
     }
     return true;
 }
@@ -1814,7 +1813,8 @@ bool SyncStore::recordLocalSetting(const QString& key, const QString& value, boo
         : QStringLiteral("INSERT INTO sync_settings (key, value, v_time, v_device, base_time, base_device, pending) "
                          "VALUES (:key, :value, :t, :d, 0, '', 1)"));
     write.bindValue(QStringLiteral(":key"), key);
-    write.bindValue(QStringLiteral(":value"), value);
+    // 空值（昵称没填、学期起始日没设）多半是空的 QString，直接绑定会写成 NULL、撞上非空约束，这一项就永远记不下来。
+    write.bindValue(QStringLiteral(":value"), nonNull(value));
     write.bindValue(QStringLiteral(":t"), version.time);
     write.bindValue(QStringLiteral(":d"), nonNull(version.device));
     if (!write.exec() || !db.commit()) {
@@ -1823,6 +1823,18 @@ bool SyncStore::recordLocalSetting(const QString& key, const QString& value, boo
         return false;
     }
     return true;
+}
+
+QHash<QString, QString> SyncStore::syncedSettings() const
+{
+    QHash<QString, QString> settings;
+    QSqlQuery query(database());
+    if (query.exec(QStringLiteral("SELECT key, value FROM sync_settings"))) {
+        while (query.next()) {
+            settings.insert(query.value(0).toString(), query.value(1).toString());
+        }
+    }
+    return settings;
 }
 
 QString SyncStore::syncedSetting(const QString& key) const
@@ -2451,7 +2463,7 @@ QList<SyncStore::LogEntry> SyncStore::syncLog(int limit) const
         // 表名、字段名换成给人看的名字。设置项不在同步表里：它的「字段」就是设置键。
         if (table == QLatin1String("settings")) {
             entry.tableLabel = QStringLiteral("设置");
-            entry.fieldLabel = settingLabel(field);
+            entry.fieldLabel = SyncSchema::settingLabel(field);
         } else if (const SyncSchema::Table* spec = SyncSchema::table(table)) {
             entry.tableLabel = spec->label;
             const SyncSchema::Field* column = SyncSchema::field(table, field);

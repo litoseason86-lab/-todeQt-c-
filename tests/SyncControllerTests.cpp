@@ -16,9 +16,12 @@
 #include "../src/services/AppSettings.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/LocalSyncFolder.h"
+#include "../src/services/ScheduleService.h"
 #include "../src/services/SyncController.h"
 #include "../src/services/SyncEngine.h"
 #include "../src/services/SyncFiles.h"
+#include "../src/services/SyncNotifier.h"
+#include "../src/services/SyncSchema.h"
 #include "../src/services/SyncStore.h"
 
 // 设备间同步接进应用（050 阶段 4）的测试：SyncController 怎么开关同步、怎么和恢复备份、逻辑日起点、
@@ -216,6 +219,12 @@ private slots:
     void syncLogReadsAsPlainSentencesNewestFirst();
     void logChangesAreAnnouncedOnlyWhenSomethingWasLogged();
 
+    // 051 阶段 2：设置
+    void contentSettingsAreRecordedButDeviceSettingsAreNot();
+    void remoteSettingsAreWrittenBackAndSnapshotGapsRemoved();
+    void invalidRemoteSettingsAreNotWrittenBack();
+    void startupWritesBackSeveralSettingsWithoutReRecordingThem();
+
 private:
     QString cloudFolder() const { return m_data->filePath(QStringLiteral("cloud/番茄Todo同步")); }
 
@@ -246,11 +255,12 @@ void SyncControllerTests::init()
 {
     m_data = std::make_unique<QTemporaryDir>();
     QVERIFY(m_data->isValid());
-    // 每条测试从「没开过同步」开始：清掉上一条留下的开关与书签，逻辑日起点回到出厂的 4 点。
+    // 每条测试从「没开过同步」、全部设置都是出厂值开始：清掉上一条留下的开关、书签、番茄时长、今日目标……
+    // reload 让设置单例重新读这份空的偏好文件。
     QSettings settings;
-    settings.remove(QStringLiteral("sync"));
+    settings.clear();
     settings.sync();
-    AppSettings::instance()->setDayStartHour(4);
+    AppSettings::instance()->reload();
     QVERIFY(DatabaseManager::instance()->initialize(m_data->filePath(QStringLiteral("this.sqlite"))));
     // 同步文件夹的上一级（相当于 iCloud 云盘）要先在；同步文件夹本身由 Mac 第一次开启同步时建。
     QVERIFY(QDir().mkpath(m_data->filePath(QStringLiteral("cloud"))));
@@ -546,7 +556,11 @@ void SyncControllerTests::dayStartHourIsRecordedOnceAsDefaultThenAsChanges()
     QCOMPARE(SyncStore().syncedSetting(key), QStringLiteral("5"));
     QVERIFY(scalar(QStringLiteral("SELECT v_time FROM sync_settings WHERE key = 'logic/dayStartHour'")).toLongLong()
             > 0);
-    QCOMPARE(SyncStore().collectPending().settings.size(), 1);
+    bool pending = false;
+    for (const SyncSettingRecord& setting : SyncStore().collectPending().settings) {
+        pending = pending || (setting.key == key && setting.value == QStringLiteral("5"));
+    }
+    QVERIFY(pending);
 
     // 改回默认值也是一次真正的修改（已经记过这一项了），不能退回最小版本、被对方的旧值盖回去。
     AppSettings::instance()->setDayStartHour(4);
@@ -571,10 +585,12 @@ void SyncControllerTests::startupTrustsTheSyncedDayStartHour()
 
     SyncController relaunched(macPlatform(cloudFolder()));
     relaunched.initialize();
-    // 以库里记下的为准写回设置；这不是本机的新改动，不会当成本机修改再发回去。
+    // 以库里记下的为准写回设置；这不是本机的新改动，不会当成本机修改再发回去（版本、待发送标记都不变）。
     QCOMPARE(AppSettings::instance()->dayStartHour(), 6);
     QCOMPARE(SyncStore().syncedSetting(key), QStringLiteral("6"));
-    QVERIFY(SyncStore().collectPending().settings.isEmpty());
+    QCOMPARE(scalar(QStringLiteral("SELECT pending FROM sync_settings WHERE key = 'logic/dayStartHour'")).toInt(), 0);
+    QCOMPARE(scalar(QStringLiteral("SELECT v_time FROM sync_settings WHERE key = 'logic/dayStartHour'")).toLongLong(),
+             1790000000000LL);
 }
 
 void SyncControllerTests::iPadJoinsOnlyAfterPickingTheRightFolderAndConfirming()
@@ -976,6 +992,190 @@ void SyncControllerTests::logChangesAreAnnouncedOnlyWhenSomethingWasLogged()
     controller.syncNow();
     QVERIFY(waitIdle(controller.engine()));
     QCOMPARE(changed.size(), 1);
+}
+
+namespace {
+
+// 库里记下的某一项设置：值、版本时间、记它的设备、还待不待发送。
+struct SettingRow {
+    bool exists = false;
+    QString value;
+    qint64 time = 0;
+    QString device;
+    bool pending = false;
+};
+
+SettingRow settingRow(const QString& key)
+{
+    SettingRow row;
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral("SELECT value, v_time, v_device, pending FROM sync_settings WHERE key = :key"));
+    query.bindValue(QStringLiteral(":key"), key);
+    if (query.exec() && query.next()) {
+        row = {true, query.value(0).toString(), query.value(1).toLongLong(), query.value(2).toString(),
+               query.value(3).toInt() != 0};
+    }
+    return row;
+}
+
+QStringList syncedKeysInDatabase()
+{
+    QStringList keys;
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.exec(QStringLiteral("SELECT key FROM sync_settings ORDER BY key"));
+    while (query.next()) {
+        keys.append(query.value(0).toString());
+    }
+    return keys;
+}
+
+} // namespace
+
+void SyncControllerTests::contentSettingsAreRecordedButDeviceSettingsAreNot()
+{
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    // 启动时把每一项内容类设置都记下来（昵称、学期起始日这种空值也算）。全是出厂值，用最小版本：
+    // 另一台设备改过的会盖过它们。
+    QStringList expected = SyncSchema::syncedSettingKeys();
+    expected.sort();
+    QCOMPARE(syncedKeysInDatabase(), expected);
+    for (const QString& key : expected) {
+        QVERIFY2(settingRow(key).time == 0, qPrintable(key));
+    }
+    QCOMPARE(settingRow(QStringLiteral("profile/nickname")).value, QString());
+
+    // 「这台设备怎么显示、怎么提醒」的设置改了，不记：外观、动效、自动开始、快速开始各台设备各自设。
+    AppSettings::instance()->setReduceMotion(true);
+    AppSettings::instance()->setBackgroundTheme(QStringLiteral("starry"));
+    AppSettings::instance()->setAutoStartBreak(true);
+    AppSettings::instance()->setQuickStartEnabled(true);
+    QCOMPARE(syncedKeysInDatabase(), expected);
+
+    // 内容类设置改了：记一个真正的版本，等着发出。今日目标按日期各是一项，整张节次表是一项。
+    AppSettings::instance()->setWorkMinutes(50);
+    QCOMPARE(settingRow(QStringLiteral("focus/workMinutes")).value, QStringLiteral("50"));
+    QVERIFY(settingRow(QStringLiteral("focus/workMinutes")).time > 0);
+    QVERIFY(settingRow(QStringLiteral("focus/workMinutes")).pending);
+    AppSettings::instance()->setNickname(QStringLiteral("小番茄"));
+    QCOMPARE(settingRow(QStringLiteral("profile/nickname")).value, QStringLiteral("小番茄"));
+    QVERIFY(AppSettings::instance()->setDailyFocusGoal(QStringLiteral("2026-09-30"), 90));
+    QCOMPARE(settingRow(SyncSchema::dailyGoalSettingKey(QStringLiteral("2026-09-30"))).value, QStringLiteral("90"));
+    QVERIFY(ScheduleService::instance()->setPeriods(
+        {QVariantMap{{QStringLiteral("startMinutes"), 480}, {QStringLiteral("endMinutes"), 525}},
+         QVariantMap{{QStringLiteral("startMinutes"), 535}, {QStringLiteral("endMinutes"), 580}}}));
+    QCOMPARE(settingRow(QStringLiteral("schedule/periods")).value, QStringLiteral("[[480,525],[535,580]]"));
+    QVERIFY(settingRow(QStringLiteral("schedule/periods")).time > 0);
+}
+
+void SyncControllerTests::remoteSettingsAreWrittenBackAndSnapshotGapsRemoved()
+{
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    const QString remote = QStringLiteral("fedcba9876543210fedcba9876543210");
+    const SyncVersion version{1790000000000, remote};
+    const QString goal = SyncSchema::dailyGoalSettingKey(QStringLiteral("2026-09-29"));
+    SyncBatch batch;
+    batch.device = remote;
+    batch.epoch = SyncStore().epoch();
+    batch.settings = {
+        {QStringLiteral("focus/workMinutes"), QStringLiteral("45"), version, {}},
+        {QStringLiteral("focus/longBreakEnabled"), QStringLiteral("0"), version, {}},
+        {QStringLiteral("profile/nickname"), QStringLiteral("小番茄"), version, {}},
+        {goal, QStringLiteral("120"), version, {}},
+        {QStringLiteral("schedule/periods"), QStringLiteral("[[480,525],[535,580]]"), version, {}},
+    };
+    const SyncStore::ApplyResult result = SyncStore().applyRemote(batch);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    SyncNotifier::publish(result);
+
+    // 写回本机：各自的设置页、计时器、课表照常读到新值。
+    QCOMPARE(AppSettings::instance()->workMinutes(), 45);
+    QVERIFY(!AppSettings::instance()->longBreakEnabled());
+    QCOMPARE(AppSettings::instance()->nickname(), QStringLiteral("小番茄"));
+    QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(QStringLiteral("2026-09-29")), 120);
+    const QVariantList periods = ScheduleService::instance()->getPeriods();
+    QCOMPARE(periods.size(), 2);
+    QCOMPARE(periods.at(1).toMap().value(QStringLiteral("startMinutes")).toInt(), 535);
+    // 写回不是本机改动：库里还是对方的版本，不待发送，不会再发回去。
+    for (const SyncSettingRecord& setting : batch.settings) {
+        QCOMPARE(settingRow(setting.key).device, remote);
+        QVERIFY2(!settingRow(setting.key).pending, qPrintable(setting.key));
+    }
+
+    // 另一台设备恢复了备份：本机整体换成它的快照，快照里没有 9 月 29 日的目标。以快照为准，本机删掉这一天，
+    // 下次启动也不会把它当成本机改动再发出去。
+    SyncBatch snapshot = SyncStore().exportSnapshot();
+    snapshot.device = remote;
+    snapshot.settings.erase(std::remove_if(snapshot.settings.begin(), snapshot.settings.end(),
+                                           [&goal](const SyncSettingRecord& setting) { return setting.key == goal; }),
+                            snapshot.settings.end());
+    const SyncStore::ApplyResult replaced = SyncStore().replaceWithSnapshot(snapshot);
+    QVERIFY2(replaced.ok, qPrintable(replaced.error));
+    QVERIFY(replaced.removedSettings.contains(goal));
+    SyncNotifier::publish(replaced);
+    QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(QStringLiteral("2026-09-29")), 0);
+    SyncController relaunched(macPlatform(cloudFolder()));
+    relaunched.initialize();
+    QVERIFY(!settingRow(goal).exists);
+}
+
+void SyncControllerTests::invalidRemoteSettingsAreNotWrittenBack()
+{
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    const QString remote = QStringLiteral("fedcba9876543210fedcba9876543210");
+    const SyncVersion version{1790000000000, remote};
+    SyncBatch batch;
+    batch.device = remote;
+    batch.epoch = SyncStore().epoch();
+    // 外部改坏的、或更新版本才有的取值：写不回本机就不写，本机设置保持原样，也不崩。
+    batch.settings = {
+        {QStringLiteral("focus/workMinutes"), QStringLiteral("很长"), version, {}},
+        {QStringLiteral("focus/longBreakEnabled"), QStringLiteral("也许"), version, {}},
+        {QStringLiteral("schedule/periods"), QStringLiteral("不是节次表"), version, {}},
+    };
+    const SyncStore::ApplyResult result = SyncStore().applyRemote(batch);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    SyncNotifier::publish(result);
+    QCOMPARE(AppSettings::instance()->workMinutes(), AppSettings::kDefaultWorkMinutes);
+    QVERIFY(AppSettings::instance()->longBreakEnabled());
+    QCOMPARE(ScheduleService::instance()->getPeriods().size(), DatabaseManager::defaultSchedulePeriods().size());
+}
+
+void SyncControllerTests::startupWritesBackSeveralSettingsWithoutReRecordingThem()
+{
+    {
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+    }
+    // 上次把对方改的几项写进了库，还没来得及写回设置就被结束了。
+    const QString remote = QStringLiteral("fedcba9876543210fedcba9876543210");
+    const QString goal = SyncSchema::dailyGoalSettingKey(QStringLiteral("2026-09-29"));
+    QSqlQuery query(DatabaseManager::instance()->database());
+    for (const auto& item : QList<QPair<QString, QString>>{{QStringLiteral("focus/workMinutes"), QStringLiteral("45")},
+                                                           {QStringLiteral("profile/nickname"), QStringLiteral("小番茄")},
+                                                           {goal, QStringLiteral("120")}}) {
+        query.prepare(QStringLiteral(
+            "INSERT OR REPLACE INTO sync_settings (key, value, v_time, v_device, base_time, base_device, pending) "
+            "VALUES (:key, :value, 1790000000000, :device, 0, '', 0)"));
+        query.bindValue(QStringLiteral(":key"), item.first);
+        query.bindValue(QStringLiteral(":value"), item.second);
+        query.bindValue(QStringLiteral(":device"), remote);
+        QVERIFY(query.exec());
+    }
+
+    SyncController relaunched(macPlatform(cloudFolder()));
+    relaunched.initialize();
+    // 三项都以库里的为准写回；先写回的那一项发出的变更信号，不能让后面还没写回的被当成本机改动重记一遍。
+    QCOMPARE(AppSettings::instance()->workMinutes(), 45);
+    QCOMPARE(AppSettings::instance()->nickname(), QStringLiteral("小番茄"));
+    QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(QStringLiteral("2026-09-29")), 120);
+    for (const QString& key : {QStringLiteral("focus/workMinutes"), QStringLiteral("profile/nickname"), goal}) {
+        QCOMPARE(settingRow(key).device, remote);
+        QCOMPARE(settingRow(key).time, 1790000000000LL);
+        QVERIFY2(!settingRow(key).pending, qPrintable(key));
+    }
 }
 
 QTEST_GUILESS_MAIN(SyncControllerTests)

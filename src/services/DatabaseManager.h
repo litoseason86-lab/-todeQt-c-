@@ -18,6 +18,8 @@ public:
     static constexpr int kCurrentSchemaVersion = 19;
 
     static DatabaseManager* instance();
+    // 出厂的课表节次（开始、结束的分钟数，按节次先后）。建库时种入；同步据此判断节次是不是还没改过的默认值。
+    static QList<QPair<int, int>> defaultSchedulePeriods();
 
     // 启动和备份检查共用：id 必须是 SQLite 自动生成编号的 INTEGER ROWID 别名。
     static bool hasGeneratedIntegerId(const QSqlDatabase& db, const QString& tableName);

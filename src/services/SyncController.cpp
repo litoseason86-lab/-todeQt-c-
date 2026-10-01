@@ -3,8 +3,11 @@
 #include "AppSettings.h"
 #include "DatabaseManager.h"
 #include "SyncFiles.h"
+#include "ScheduleService.h"
+#include "SyncSchema.h"
 #include "SyncStore.h"
 #include "SyncWorker.h"
+#include "SyncedSettings.h"
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -21,8 +24,6 @@ namespace {
 const auto kEnabledKey = QStringLiteral("sync/enabled");
 const auto kBookmarkKey = QStringLiteral("sync/bookmark");
 const auto kFolderPathKey = QStringLiteral("sync/folderPath");
-// 第一期同步的设置只有这一项（计划 050「范围」）。值本身存在 AppSettings 里，库里只记同步看到的值与版本。
-const auto kDayStartHourKey = QStringLiteral("logic/dayStartHour");
 
 bool isProblem(SyncEngine::Status status)
 {
@@ -93,8 +94,18 @@ SyncController::SyncController(Platform platform, QObject* parent)
     , m_platform(std::move(platform))
 {
     m_enabled = QSettings().value(kEnabledKey, false).toBool();
-    // 本机改了逻辑日起点，记进库等着发出。同步写回对方的改动时它也会发这个信号，那时值与库里的相同，不会再记一次。
-    connect(AppSettings::instance(), &AppSettings::dayStartHourChanged, this, &SyncController::recordDayStartHour);
+    // 本机改了跟着同步的设置（SyncSchema::syncedSettingKeys 与每一天的今日目标），记进库等着发出。
+    // 同步写回对方的改动时这些信号也会发出，那时值与库里记下的相同，不会再记一次。
+    AppSettings* settings = AppSettings::instance();
+    for (const auto signal : {&AppSettings::dayStartHourChanged, &AppSettings::workMinutesChanged,
+                              &AppSettings::breakMinutesChanged, &AppSettings::longBreakEnabledChanged,
+                              &AppSettings::longBreakMinutesChanged, &AppSettings::longBreakIntervalChanged,
+                              &AppSettings::freeTimerWarningHoursChanged, &AppSettings::nicknameChanged,
+                              &AppSettings::semesterStartDateChanged, &AppSettings::semesterWeeksChanged,
+                              &AppSettings::dailyFocusGoalChanged}) {
+        connect(settings, signal, this, &SyncController::recordSettings);
+    }
+    connect(ScheduleService::instance(), &ScheduleService::periodsChanged, this, &SyncController::recordSettings);
 }
 
 SyncController::~SyncController()
@@ -112,7 +123,7 @@ void SyncController::setSafetyBackup(std::function<bool(QString* error)> backup)
 void SyncController::initialize()
 {
     m_initialized = true;
-    reconcileDayStartHour();
+    reconcileSettings();
     refreshLog();
     SyncStore store;
     m_knownEpoch = store.epoch();
@@ -172,6 +183,9 @@ void SyncController::finishRestore(bool success)
         if (store.folderId() != before.folderId && !store.setFolderId(before.folderId)) {
             qWarning() << "Failed to keep the joined sync folder after restoring a backup";
         }
+        // 恢复的若是更早版本的备份，库里没记过第二期的设置：把恢复出来的本机设置记进去，
+        // 下一轮写出的全量快照才带得上它们。
+        reconcileSettings();
         m_knownEpoch = store.epoch();
         m_knownFolderId = store.folderId();
     }
@@ -680,41 +694,53 @@ void SyncController::refreshLog()
     }
 }
 
-void SyncController::recordDayStartHour()
+void SyncController::recordSettings()
 {
     // 启动核对之前不记：initialize 会按库里记下的和本机设置一起核对一遍。
-    if (!m_initialized || !DatabaseManager::instance()->isOpen()) {
+    // 同步正在把对方的值写回本机时也不记：那时的变更信号不是本机改动（见 SyncedSettings::WriteBackScope）。
+    if (!m_initialized || SyncedSettings::isWritingBack() || !DatabaseManager::instance()->isOpen()) {
         return;
     }
-    const int hour = AppSettings::instance()->dayStartHour();
-    if (!SyncStore().recordLocalSetting(kDayStartHourKey, QString::number(hour),
-                                        hour == AppSettings::kDefaultDayStartHour)) {
-        qWarning() << "Failed to record the day start hour for sync";
+    SyncStore store;
+    const QHash<QString, QString> synced = store.syncedSettings();
+    const QHash<QString, QString> local = SyncedSettings::currentValues();
+    for (auto it = local.cbegin(); it != local.cend(); ++it) {
+        // 先和库里的比：今日目标一天一项，每次都逐项开事务去比太浪费。值没变的不是本机改动。
+        const auto known = synced.constFind(it.key());
+        if (known != synced.constEnd() && known.value() == it.value()) {
+            continue;
+        }
+        if (!store.recordLocalSetting(it.key(), it.value(), SyncedSettings::isFactoryDefault(it.key(), it.value()))) {
+            qWarning() << "Failed to record a synced setting:" << it.key();
+        }
     }
 }
 
-void SyncController::reconcileDayStartHour()
+void SyncController::reconcileSettings()
 {
     if (!DatabaseManager::instance()->isOpen()) {
         return;
     }
     SyncStore store;
-    const QString synced = store.syncedSetting(kDayStartHourKey);
-    const int local = AppSettings::instance()->dayStartHour();
-    if (synced.isEmpty()) {
-        // 从没记过（刚升级到 v18、新装）：记下本机现在的值。还是出厂默认值时用最小版本，
-        // 另一台设备改过的设置会盖过它，而不是反过来被这个默认值盖掉。
-        if (!store.recordLocalSetting(kDayStartHourKey, QString::number(local),
-                                      local == AppSettings::kDefaultDayStartHour)) {
-            qWarning() << "Failed to record the day start hour for sync";
-        }
-        return;
-    }
+    const QHash<QString, QString> synced = store.syncedSettings();
+    const QHash<QString, QString> local = SyncedSettings::currentValues();
     // 库里记下的和本机设置不一致：本机改设置时会立刻记进库，所以只可能是上次把对方的改动写进库之后、
-    // 还没来得及写回设置就被结束了。以库里的为准写回设置，「今天」是哪天才和另一台设备一致。
-    bool valid = false;
-    const int hour = synced.toInt(&valid);
-    if (valid && hour != local) {
-        AppSettings::instance()->setDayStartHour(hour);
+    // 还没来得及写回设置就被结束了。以库里的为准写回（「今天」是哪天、番茄多长，才和另一台设备一致）。
+    {
+        const SyncedSettings::WriteBackScope writingBack;
+        for (auto it = synced.cbegin(); it != synced.cend(); ++it) {
+            if (SyncSchema::isSyncedSettingKey(it.key()) && local.value(it.key()) != it.value()
+                && !SyncedSettings::apply(it.key(), it.value())) {
+                qWarning() << "Failed to write back a synced setting:" << it.key();
+            }
+        }
+    }
+    // 库里还没有的（刚升级、新装、恢复了更早版本的备份）：记下本机现在的值。还是出厂默认值的用最小版本，
+    // 另一台设备改过的设置会盖过它，而不是反过来被这个默认值盖掉。
+    for (auto it = local.cbegin(); it != local.cend(); ++it) {
+        if (!synced.contains(it.key())
+            && !store.recordLocalSetting(it.key(), it.value(), SyncedSettings::isFactoryDefault(it.key(), it.value()))) {
+            qWarning() << "Failed to record a synced setting:" << it.key();
+        }
     }
 }

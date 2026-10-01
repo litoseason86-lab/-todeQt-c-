@@ -96,6 +96,8 @@ set(APP_SOURCES
     src/services/SyncEngine.cpp
     src/services/SyncController.h
     src/services/SyncController.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -921,6 +923,8 @@ add_executable(SyncTests
     src/services/SyncStore.cpp
     src/services/SyncNotifier.h
     src/services/SyncNotifier.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
     src/services/FocusTimer.h
     src/services/FocusTimer.cpp
     src/services/MonotonicClock.h
@@ -976,6 +980,8 @@ add_executable(SyncTransportTests
     src/services/SyncStore.cpp
     src/services/SyncNotifier.h
     src/services/SyncNotifier.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
     src/services/SyncFiles.h
     src/services/SyncFiles.cpp
     src/services/SyncFolder.h
@@ -1046,6 +1052,8 @@ add_executable(SyncControllerTests
     src/services/SyncStore.cpp
     src/services/SyncNotifier.h
     src/services/SyncNotifier.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
     src/services/SyncFiles.h
     src/services/SyncFiles.cpp
     src/services/SyncFolder.h
