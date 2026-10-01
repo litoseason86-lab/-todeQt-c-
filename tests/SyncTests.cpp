@@ -1158,6 +1158,17 @@ void SyncTests::batchSurvivesJsonRoundTrip()
     future.insert(QStringLiteral("format"), SyncJson::kFormatVersion + 1);
     QVERIFY(!SyncJson::fromJson(future, &parsed, &error));
     QVERIFY(!error.isEmpty());
+
+    // 第二期（051）写出格式 2：v18 的应用读到会停下等更新，不会把新表当成坏记录跳过。
+    // 第一期写的格式 1（同步文件夹里可能已经有了）照样读得懂；比它更旧的不认识。
+    QCOMPARE(SyncJson::toJson(batch).value(QStringLiteral("format")).toInt(), 2);
+    QJsonObject firstPhase = SyncJson::toJson(batch);
+    firstPhase.insert(QStringLiteral("format"), 1);
+    SyncBatch old;
+    QVERIFY2(SyncJson::fromJson(firstPhase, &old, &error), qPrintable(error));
+    QCOMPARE(old.records.size(), 2);
+    firstPhase.insert(QStringLiteral("format"), 0);
+    QVERIFY(!SyncJson::fromJson(firstPhase, &old, &error));
 }
 
 void SyncTests::insertUpdateDeleteReachOtherDevice()
@@ -2422,11 +2433,12 @@ void SyncTests::deletedTaskDetachesKnowledgeGaps()
     Device b = openDevice(QStringLiteral("b"));
     FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
     const QString task = addTask(a, QStringLiteral("写代码"));
-    const QString gap = addGap(a, QStringLiteral("闭包是什么"), QString(), task, task);
     syncAll(cloud, {a, b});
+    // B 上记了一条指向这个任务的知识缺口，还没同步出去；A 这时删掉了任务。
+    const QString gap = addGap(b, QStringLiteral("闭包是什么"), QString(), task, task);
 
-    // A 删掉任务：B 上的知识缺口留着，来源任务和关联任务置空（与本机删任务时的外键规则一致），
-    // 记下的来源任务名称还在；这一批也算动过知识缺口，界面要刷新。
+    // B 收到删除：知识缺口留着，来源任务和关联任务由外键置空（与本机删任务时一致），记下的来源任务名称还在。
+    // A 那一批里只有任务的删除记录、没有这条缺口，界面要刷新知识缺口，只能靠删任务时把它算进「变了的表」。
     QVERIFY(exec(a, QStringLiteral("DELETE FROM tasks WHERE sync_id = '%1'").arg(task)));
     QVERIFY(cloud.publish(a) > 0);
     bool gapsTouched = false;
@@ -2452,11 +2464,13 @@ void SyncTests::deletedCategoryClearsScheduleAndGapCategories()
     Device b = openDevice(QStringLiteral("b"));
     FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
     const QString programming = addCategory(a, QStringLiteral("编程"));
+    syncAll(cloud, {a, b});
+    // A 上新建了用这个科目的课表项和知识缺口，还没同步出去；B 这时删掉了科目。
     const QString entry = addScheduleEntry(a, QStringLiteral("数据结构"), programming);
     const QString gap = addGap(a, QStringLiteral("红黑树"), programming);
-    syncAll(cloud, {a, b});
 
-    // B 删掉科目：A 上的课表项和知识缺口变成未分类，不跟着删；这一批两张表都要刷新。
+    // A 收到删除：课表项和知识缺口变成未分类，不跟着删。B 那一批里只有科目的删除记录，
+    // 两张表都要刷新，只能靠删科目时把它们算进「变了的表」。
     QVERIFY(exec(b, QStringLiteral("DELETE FROM categories WHERE sync_id = '%1'").arg(programming)));
     QVERIFY(cloud.publish(b) > 0);
     QSet<QString> touched;

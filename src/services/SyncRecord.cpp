@@ -144,7 +144,7 @@ bool fromJson(const QJsonObject& object, SyncBatch* batch, QString* error)
     };
 
     const int format = object.value(QStringLiteral("format")).toInt(-1);
-    if (format != kFormatVersion) {
+    if (format < kOldestReadableFormat || format > kFormatVersion) {
         return fail(format > kFormatVersion ? QStringLiteral("同步文件由更新的版本写出，当前版本读不懂")
                                             : QStringLiteral("同步文件格式不认识"));
     }

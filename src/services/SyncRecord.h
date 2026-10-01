@@ -80,7 +80,11 @@ inline bool operator!=(const SyncPosition& a, const SyncPosition& b) { return !(
 
 namespace SyncJson {
 // 格式版本：以后改了字段含义就加一，读到更高版本的文件时拒绝，而不是按旧含义猜。
-constexpr int kFormatVersion = 1;
+// 2（计划 051）：批次里多了课表、知识缺口、倒计时三张表和更多设置项。v18 的应用读到 2 会停下、提示更新，
+// 而不是把不认识的表当成坏记录跳过——跳过之后读取进度已经往前走了，更新应用也补不回来。
+constexpr int kFormatVersion = 2;
+// 还读得懂的最旧格式：1 是第一期写的，内容是 2 的子集，照常读。
+constexpr int kOldestReadableFormat = 1;
 
 QJsonObject toJson(const SyncBatch& batch);
 // 解析失败（格式不认识、必需字段缺失、类型不对）返回 false，并在 error 里说明原因。
