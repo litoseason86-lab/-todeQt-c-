@@ -108,6 +108,9 @@ public:
     // 2. 本批动过的日期如果出现重复或非正的任务排序号，按确定规则重排。重排作为本机改动照常发出，
     //    不走 v12 迁移那条修复路径——那条路径每次都会生成一份迁移快照（sol6 审查第 7 条）。
     bool normalizeTaskOrders(QString* error);
+    // 3. 倒计时的排序号撞了（两台设备各自新建，都排在末尾）：按「排序号、创建时间、sync_id」重排，
+    //    同样作为本机改动发出。两台设备拿到同样的倒计时集合后算出同样的顺序。
+    bool normalizeCountdownOrders(QString* error);
 
 private:
     bool applyDeletion(const SyncSchema::Table& table, const SyncRecord& record, const LocalRow& row,
@@ -538,6 +541,11 @@ bool Applier::insertRow(const SyncSchema::Table& table, const SyncRecord& record
             values[generated] = 0;
         }
     }
+    // 只属于本机、不同步却不许为空的列（知识缺口、倒计时的 updated_at）：按本机此刻补上，和本机新建时一样。
+    for (const QString& column : table.stampOnInsert) {
+        columns.append(column);
+        values.append(QDateTime::currentDateTime().toString(Qt::ISODate));
+    }
     // 科目名先落临时名，整批应用完再换成最终名（见 finalizeCategoryNames）。
     const qsizetype nameColumn = table.name == QLatin1String("categories") ? columns.indexOf(QStringLiteral("name")) : -1;
     const QString finalName = nameColumn >= 0 ? values.at(nameColumn).toString() : QString();
@@ -836,6 +844,10 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
             }
             m_result->changedTables.insert(QStringLiteral("tasks"));
             m_result->changedTables.insert(QStringLiteral("routines"));
+            // 课表、知识缺口第二期起也同步：两台设备收到同一条合并记录，改指得一样，不用当成本机改动再发。
+            // 界面上显示的科目变了，照样要刷新。
+            m_result->changedTables.insert(QStringLiteral("schedule_entries"));
+            m_result->changedTables.insert(QStringLiteral("knowledge_gaps"));
         } else {
             // 与 CategoryManager::deleteCategory 一致：任务不删，外键和旧的科目名文本一起清空，变成未分类。
             // 例行、课表、知识缺口的外键是 ON DELETE SET NULL，删行时自动置空。
@@ -846,6 +858,9 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
             }
             m_result->changedTables.insert(QStringLiteral("tasks"));
             m_result->changedTables.insert(QStringLiteral("routines"));
+            // 课表项、知识缺口的科目由外键置空：界面要刷新。
+            m_result->changedTables.insert(QStringLiteral("schedule_entries"));
+            m_result->changedTables.insert(QStringLiteral("knowledge_gaps"));
         }
     } else if (table.name == QLatin1String("routines")) {
         // 与 RoutineManager::deleteRoutine 一致：历史任务退化成普通任务，生成标记一起清掉。
@@ -860,6 +875,7 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
         m_result->deletedTaskIds.append(int(row.id));
         touchTaskDate(row.values.value(QStringLiteral("date")));
         m_result->changedTables.insert(QStringLiteral("focus_sessions"));
+        m_result->changedTables.insert(QStringLiteral("knowledge_gaps"));
     }
     return run(QStringLiteral("DELETE FROM %1 WHERE id = ?").arg(table.name), {row.id});
 }
@@ -1409,6 +1425,44 @@ bool Applier::normalizeTaskOrders(QString* error)
     return setApplying(true, error);
 }
 
+bool Applier::normalizeCountdownOrders(QString* error)
+{
+    // 只有这一批动过倒计时才查：重排要读整张表，不能每批都做一遍。
+    if (!m_result->changedTables.contains(QStringLiteral("countdown_goals"))) {
+        return true;
+    }
+    QSqlQuery check(m_db);
+    if (!check.exec(QStringLiteral("SELECT COUNT(*) - COUNT(DISTINCT display_order) FROM countdown_goals"))
+        || !check.next()) {
+        if (error) {
+            *error = check.lastError().text();
+        }
+        return false;
+    }
+    const bool duplicated = check.value(0).toInt() > 0;
+    check.finish();
+    if (!duplicated) {
+        return true;
+    }
+    // 重排是本机改动：放开触发器，让它们照常记版本、入队（与任务的同日重排同一个道理）。
+    // 倒计时服务的排序号从 0 起；最后用 sync_id 打破平局——两台设备上它相同，本机编号却不同。只写真的变了的行。
+    if (!setApplying(false, error)) {
+        return false;
+    }
+    QSqlQuery renumber(m_db);
+    if (!renumber.exec(QStringLiteral(
+            "WITH ranked AS (SELECT id, ROW_NUMBER() OVER (ORDER BY display_order ASC, created_at ASC, sync_id ASC) - 1 AS n "
+            "FROM countdown_goals) "
+            "UPDATE countdown_goals SET display_order = (SELECT n FROM ranked WHERE ranked.id = countdown_goals.id) "
+            "WHERE display_order <> (SELECT n FROM ranked WHERE ranked.id = countdown_goals.id)"))) {
+        if (error) {
+            *error = renumber.lastError().text();
+        }
+        return false;
+    }
+    return setApplying(true, error);
+}
+
 bool Applier::logSkipped(const SyncRecord& record, const QString& reason)
 {
     const SyncSchema::Table* table = SyncSchema::table(record.table);
@@ -1465,8 +1519,12 @@ QString Applier::recordLabel(const SyncSchema::Table& table, const QHash<QString
     if (table.name == QLatin1String("categories")) {
         return values.value(QStringLiteral("name")).toString();
     }
-    if (table.name == QLatin1String("routines") || table.name == QLatin1String("tasks")) {
+    if (table.name == QLatin1String("routines") || table.name == QLatin1String("tasks")
+        || table.name == QLatin1String("schedule_entries") || table.name == QLatin1String("knowledge_gaps")) {
         return values.value(QStringLiteral("title")).toString();
+    }
+    if (table.name == QLatin1String("countdown_goals")) {
+        return values.value(QStringLiteral("name")).toString();
     }
     // 专注和休息没有标题：用「几月几日几点、多长」让人认出是哪一条。
     const QDateTime start = QDateTime::fromString(values.value(QStringLiteral("start_time")).toString(), Qt::ISODate);
@@ -1538,6 +1596,33 @@ QString Applier::displayValue(const SyncSchema::Field& field, const QVariant& lo
             }
         }
         return days.join(QStringLiteral("、"));
+    }
+    // 第二期的几张表：课表的星期、时刻、周次、单双周，知识缺口的优先级与状态，换成界面上的说法。
+    if (column == QLatin1String("weekday")) {
+        static const QStringList names{QStringLiteral("周一"), QStringLiteral("周二"), QStringLiteral("周三"),
+                                       QStringLiteral("周四"), QStringLiteral("周五"), QStringLiteral("周六"),
+                                       QStringLiteral("周日")};
+        const int day = localValue.toInt();
+        return day >= 1 && day <= 7 ? names.at(day - 1) : localValue.toString();
+    }
+    if (column == QLatin1String("start_minutes") || column == QLatin1String("end_minutes")) {
+        const int minutes = localValue.toInt();
+        return QStringLiteral("%1:%2").arg(minutes / 60, 2, 10, QLatin1Char('0')).arg(minutes % 60, 2, 10, QLatin1Char('0'));
+    }
+    if (column == QLatin1String("week_start") || column == QLatin1String("week_end")) {
+        return QStringLiteral("第 %1 周").arg(localValue.toInt());
+    }
+    if (column == QLatin1String("week_parity")) {
+        const int parity = localValue.toInt();
+        return parity == 1 ? QStringLiteral("单周") : parity == 2 ? QStringLiteral("双周") : QStringLiteral("每周");
+    }
+    if (column == QLatin1String("priority")) {
+        const int priority = localValue.toInt();
+        return priority == 2 ? QStringLiteral("高") : priority == 0 ? QStringLiteral("低") : QStringLiteral("中");
+    }
+    if (column == QLatin1String("status")) {
+        const int status = localValue.toInt();
+        return status == 2 ? QStringLiteral("已解决") : status == 1 ? QStringLiteral("已安排") : QStringLiteral("待处理");
     }
     const QString text = localValue.toString();
     return text.isEmpty() ? QStringLiteral("（空）") : text;
@@ -2121,7 +2206,8 @@ SyncStore::ApplyResult SyncStore::applyRemote(const SyncBatch& batch)
     }
     // 收尾失败只可能是数据库本身出错（磁盘满之类），整批回滚，下次再试；不会因为某条数据卡住。
     QString finishError;
-    if (!applier.finalizeCategoryNames(&finishError) || !applier.normalizeTaskOrders(&finishError)) {
+    if (!applier.finalizeCategoryNames(&finishError) || !applier.normalizeTaskOrders(&finishError)
+        || !applier.normalizeCountdownOrders(&finishError)) {
         return fail(finishError);
     }
     if (!query.exec(QStringLiteral("UPDATE sync_runtime SET applying = 0 WHERE singleton_id = 1"))) {

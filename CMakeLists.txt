@@ -940,6 +940,15 @@ add_executable(SyncTests
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
     src/services/FocusSessionRules.h
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
+    src/services/CountdownService.h
+    src/services/CountdownService.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
+    src/models/CountdownModel.cpp
 )
 
 target_link_libraries(SyncTests PRIVATE
@@ -999,6 +1008,15 @@ add_executable(SyncTransportTests
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
     src/services/FocusSessionRules.h
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
+    src/services/CountdownService.h
+    src/services/CountdownService.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
+    src/models/CountdownModel.cpp
 )
 
 target_link_libraries(SyncTransportTests PRIVATE
@@ -1058,6 +1076,15 @@ add_executable(SyncControllerTests
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
     src/services/FocusSessionRules.h
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
+    src/services/CountdownService.h
+    src/services/CountdownService.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
+    src/models/CountdownModel.cpp
 )
 
 target_link_libraries(SyncControllerTests PRIVATE

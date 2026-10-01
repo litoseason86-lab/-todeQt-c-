@@ -348,17 +348,18 @@ void CountdownServiceTests::databaseChangeInitializationFailureReportsOperationF
     CountdownService* service = CountdownService::instance();
     QSqlDatabase db = DatabaseManager::instance()->database();
     QSqlQuery replaceTable(db);
-    QVERIFY(replaceTable.exec(QStringLiteral("DROP TABLE countdown_goals")));
-    // 用同名 view 模拟不破坏主库的局部结构故障：CREATE TABLE IF NOT EXISTS 会明确失败，
-    // 从而验证 databaseChanged 路径不会静默吞掉初始化错误。
-    QVERIFY(replaceTable.exec(QStringLiteral(
-        "CREATE VIEW countdown_goals AS SELECT 1 AS id")));
+    // 模拟只坏在倒计时服务自己那一步、不挡住主库打开的局部结构故障：用同名的表占住它要建的排序索引的名字，
+    // CREATE INDEX IF NOT EXISTS 会明确失败，从而验证 databaseChanged 路径不会静默吞掉初始化错误。
+    // （051 起倒计时表参与同步，由主库建表并加同步列；从前用同名 view 顶替整张表的做法，
+    // 现在会让整个库打不开——那已经是核心表损坏，不再是倒计时自己的事。）
+    QVERIFY(replaceTable.exec(QStringLiteral("DROP INDEX idx_display_order")));
+    QVERIFY(replaceTable.exec(QStringLiteral("CREATE TABLE idx_display_order (x)")));
 
     QSignalSpy failureSpy(service, &CountdownService::operationFailed);
     QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
     QCOMPARE(failureSpy.count(), 1);
 
-    QVERIFY(replaceTable.exec(QStringLiteral("DROP VIEW countdown_goals")));
+    QVERIFY(replaceTable.exec(QStringLiteral("DROP TABLE idx_display_order")));
     // 上一步失败会清除就绪标记；显式 reload 应重建表，供后续测试继续使用同一临时库。
     QVERIFY(service->reload());
 }

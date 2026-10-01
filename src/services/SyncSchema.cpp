@@ -53,6 +53,28 @@ QList<Table> buildTables()
          {makeField("start_time", "开始时间"), makeField("end_time", "结束时间"),
           makeField("duration", "时长"), makeField("manual", "主动休息")},
          QString()},
+        // 第二期（计划 051）：课表、知识缺口、目标倒计时，引用科目与任务，所以排在它们后面。
+        // updated_at 刻意不同步：它只是本机的记账，界面和排序都不用它；同步它的话，两台设备改了同一条的
+        // 不同地方，也会在同步日志里多出一条「更新时间」的冲突。对方新建的行插进本机时由 stampOnInsert 补上。
+        // 课表节次不在这里：改节次是整表删掉再按时间重新编号写回，按条目同步会被「删除优先」打乱，
+        // 它整张表作为一个设置项同步（见 SyncedSettings）。
+        {QStringLiteral("schedule_entries"), QStringLiteral("课表"),
+         {makeField("title", "课程"), makeField("location", "地点"), makeField("weekday", "星期"),
+          makeField("start_minutes", "开始时间"), makeField("end_minutes", "结束时间"),
+          makeField("week_start", "起始周"), makeField("week_end", "结束周"), makeField("week_parity", "单双周"),
+          makeField("category_id", "科目", "categories"), makeField("created_at", "创建时间")},
+         QString()},
+        {QStringLiteral("knowledge_gaps"), QStringLiteral("知识缺口"),
+         {makeField("title", "标题"), makeField("detail", "详情"), makeField("category_id", "科目", "categories"),
+          makeField("source_task_id", "来源任务", "tasks"), makeField("source_task_title", "来源任务名称"),
+          makeField("priority", "优先级"), makeField("status", "状态"), makeField("due_date", "计划日期"),
+          makeField("resolution", "结论"), makeField("linked_task_id", "关联任务", "tasks"),
+          makeField("created_at", "创建时间"), makeField("resolved_at", "解决时间")},
+         QString(), {QStringLiteral("updated_at")}},
+        {QStringLiteral("countdown_goals"), QStringLiteral("倒计时"),
+         {makeField("name", "名称"), makeField("target_date", "目标日期"), makeField("display_order", "排序"),
+          makeField("created_at", "创建时间")},
+         QString(), {QStringLiteral("updated_at")}},
     };
 }
 

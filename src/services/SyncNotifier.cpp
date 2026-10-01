@@ -2,8 +2,11 @@
 
 #include "AppSettings.h"
 #include "CategoryManager.h"
+#include "CountdownService.h"
 #include "FocusHistoryService.h"
+#include "KnowledgeGapService.h"
 #include "RoutineManager.h"
+#include "ScheduleService.h"
 #include "TaskManager.h"
 
 namespace SyncNotifier {
@@ -46,6 +49,17 @@ void publish(const SyncStore::ApplyResult& result)
     if (changed.contains(QStringLiteral("tasks")) || changed.contains(QStringLiteral("focus_sessions"))
         || !result.deletedTaskIds.isEmpty()) {
         emit TaskManager::instance()->tasksChanged();
+    }
+    // 第二期（计划 051）的三张表，各自发自己的刷新信号。倒计时服务把目标缓存在列表模型里，要重新读一遍库，
+    // 它读完会发 goalsReloaded；另外两个服务的页面收到信号后自己重查。
+    if (changed.contains(QStringLiteral("schedule_entries"))) {
+        emit ScheduleService::instance()->scheduleChanged();
+    }
+    if (changed.contains(QStringLiteral("knowledge_gaps"))) {
+        emit KnowledgeGapService::instance()->gapsChanged();
+    }
+    if (changed.contains(QStringLiteral("countdown_goals"))) {
+        CountdownService::instance()->reload();
     }
 }
 

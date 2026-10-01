@@ -14,13 +14,16 @@
 
 #include "../src/services/AppSettings.h"
 #include "../src/services/CategoryManager.h"
+#include "../src/services/CountdownService.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusHistoryService.h"
 // FocusTimer 声明 friend class SyncTests，用例之间据此复位单例计时器。
 #include "../src/services/FocusTimer.h"
+#include "../src/services/KnowledgeGapService.h"
 #include "../src/services/LogicalDay.h"
 #include "../src/services/RoutineManager.h"
 #include "../src/services/RoutineRules.h"
+#include "../src/services/ScheduleService.h"
 #include "../src/services/SyncNotifier.h"
 #include "../src/services/SyncRecord.h"
 #include "../src/services/SyncSchema.h"
@@ -272,6 +275,85 @@ QString taskCategory(const Device& device, const QString& taskSyncId)
                                          "WHERE t.sync_id = '%1'").arg(taskSyncId)).toString();
 }
 
+// ── 第二期（051）的三张表 ──
+
+// 新建一条课表项（周一 08:00–08:45，第 1–16 周），返回它的 sync_id。
+QString addScheduleEntry(const Device& device, const QString& title, const QString& categorySyncId = QString())
+{
+    QSqlQuery query(deviceDb(device));
+    query.prepare(QStringLiteral(
+        "INSERT INTO schedule_entries (title, location, weekday, start_minutes, end_minutes, week_start, week_end, "
+        "week_parity, category_id) VALUES (:title, '教一 101', 1, 480, 525, 1, 16, 0, "
+        "(SELECT id FROM categories WHERE sync_id = :category))"));
+    query.bindValue(QStringLiteral(":title"), title);
+    query.bindValue(QStringLiteral(":category"), categorySyncId);
+    if (!query.exec()) {
+        qWarning() << query.lastError().text();
+        return {};
+    }
+    return scalar(device, QStringLiteral("SELECT sync_id FROM schedule_entries WHERE id = %1")
+                              .arg(query.lastInsertId().toLongLong())).toString();
+}
+
+// 新建一条知识缺口，返回它的 sync_id。科目、来源任务、关联任务都按 sync_id 指定，空串表示不指。
+QString addGap(const Device& device, const QString& title, const QString& categorySyncId = QString(),
+               const QString& sourceTaskSyncId = QString(), const QString& linkedTaskSyncId = QString())
+{
+    QSqlQuery query(deviceDb(device));
+    query.prepare(QStringLiteral(
+        "INSERT INTO knowledge_gaps (title, category_id, source_task_id, source_task_title, linked_task_id, "
+        "created_at, updated_at) VALUES (:title, (SELECT id FROM categories WHERE sync_id = :category), "
+        "(SELECT id FROM tasks WHERE sync_id = :source), "
+        "COALESCE((SELECT title FROM tasks WHERE sync_id = :sourceTitle), ''), "
+        "(SELECT id FROM tasks WHERE sync_id = :linked), '2026-09-30T08:00:00', '2026-09-30T08:00:00')"));
+    query.bindValue(QStringLiteral(":title"), title);
+    query.bindValue(QStringLiteral(":category"), categorySyncId);
+    query.bindValue(QStringLiteral(":source"), sourceTaskSyncId);
+    query.bindValue(QStringLiteral(":sourceTitle"), sourceTaskSyncId);
+    query.bindValue(QStringLiteral(":linked"), linkedTaskSyncId);
+    if (!query.exec()) {
+        qWarning() << query.lastError().text();
+        return {};
+    }
+    return scalar(device, QStringLiteral("SELECT sync_id FROM knowledge_gaps WHERE id = %1")
+                              .arg(query.lastInsertId().toLongLong())).toString();
+}
+
+// 新建一个倒计时，返回它的 sync_id。
+QString addCountdown(const Device& device, const QString& name, int displayOrder, const QString& createdAt)
+{
+    QSqlQuery query(deviceDb(device));
+    query.prepare(QStringLiteral(
+        "INSERT INTO countdown_goals (name, target_date, display_order, created_at, updated_at) "
+        "VALUES (:name, '2027-01-10', :order, :created, :created)"));
+    query.bindValue(QStringLiteral(":name"), name);
+    query.bindValue(QStringLiteral(":order"), displayOrder);
+    query.bindValue(QStringLiteral(":created"), createdAt);
+    if (!query.exec()) {
+        qWarning() << query.lastError().text();
+        return {};
+    }
+    return scalar(device, QStringLiteral("SELECT sync_id FROM countdown_goals WHERE id = %1")
+                              .arg(query.lastInsertId().toLongLong())).toString();
+}
+
+QVariant valueOf(const Device& device, const QString& table, const QString& syncId, const QString& column)
+{
+    return scalar(device, QStringLiteral("SELECT %1 FROM %2 WHERE sync_id = '%3'").arg(column, table, syncId));
+}
+
+// 倒计时按界面的顺序（排序号、本机编号）排出来的名字与排序号。
+QStringList countdownOrder(const Device& device)
+{
+    QStringList order;
+    QSqlQuery query(deviceDb(device));
+    query.exec(QStringLiteral("SELECT name, display_order FROM countdown_goals ORDER BY display_order, id"));
+    while (query.next()) {
+        order.append(QStringLiteral("%1:%2").arg(query.value(1).toInt()).arg(query.value(0).toString()));
+    }
+    return order;
+}
+
 QStringList customCategoryNames(const Device& device)
 {
     QStringList names;
@@ -362,6 +444,12 @@ public:
                 [this] { events << QStringLiteral("historyChanged"); });
         connect(AppSettings::instance(), &AppSettings::dayStartHourChanged, this,
                 [this] { events << QStringLiteral("dayStartHourChanged"); });
+        connect(ScheduleService::instance(), &ScheduleService::scheduleChanged, this,
+                [this] { events << QStringLiteral("scheduleChanged"); });
+        connect(KnowledgeGapService::instance(), &KnowledgeGapService::gapsChanged, this,
+                [this] { events << QStringLiteral("gapsChanged"); });
+        connect(CountdownService::instance(), &CountdownService::goalsReloaded, this,
+                [this] { events << QStringLiteral("goalsReloaded"); });
     }
 };
 
@@ -535,6 +623,15 @@ private slots:
     void failedApplyPublishesNothing();
     void remoteDeletionUnbindsRunningTimer();
 
+    // 051 阶段 1：课表、知识缺口、目标倒计时按条目同步
+    void phaseTwoTablesTravelWithLocalReferences();
+    void phaseTwoConcurrentEditsMergeFieldByField();
+    void deletedTaskDetachesKnowledgeGaps();
+    void deletedCategoryClearsScheduleAndGapCategories();
+    void countdownOrderConvergesAfterConcurrentInserts();
+    void phaseTwoNotificationsRefreshOnlyTheirServices();
+    void migrationFromV18QueuesPhaseTwoRows();
+
 private:
     Device openDevice(const QString& name);
     // 临时把服务层（TaskManager 等单例）切到这台设备的库上执行一段操作，用完关掉。
@@ -630,7 +727,7 @@ void SyncTests::syncAll(FakeCloud& cloud, const QList<Device>& devices)
 
 void SyncTests::freshDatabaseHasSyncInfrastructure()
 {
-    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 18);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 19);
     for (const SyncSchema::Table& table : SyncSchema::tables()) {
         QVERIFY2(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('%1') WHERE name = 'sync_id'")
                            .arg(table.name)) == 1, qPrintable(table.name));
@@ -892,9 +989,9 @@ void SyncTests::migrationFromV17BackfillsIdentitiesAndQueuesRecords()
     const int snapshotsBefore = dir.entryList(pattern, QDir::Files).size();
     QVERIFY(DatabaseManager::instance()->createTables());
 
-    // 升级前留了一份快照：v18 之后旧版本应用打不开这个库，想退回只能靠它。
+    // 升级前留了一份快照：v18 之后旧版本应用打不开这个库，想退回只能靠它。一路升到当前的 v19。
     QCOMPARE(dir.entryList(pattern, QDir::Files).size(), snapshotsBefore + 1);
-    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 18);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 19);
     QCOMPARE(triggerSql(), SyncSchema::canonicalTriggerSql());
 
     // 每一行都有身份，且互不相同。
@@ -2022,6 +2119,12 @@ void SyncTests::firstJoinReplacesJoiningDeviceWithSnapshot()
                                       "updated_at) VALUES ('极限的定义', %1, %2, '%3', '%3')")
                            .arg(mathId).arg(ipadTaskId).arg(date)));
     QVERIFY(SyncStore(ipad.connection).recordLocalSetting(QStringLiteral("logic/dayStartHour"), QStringLiteral("4"), true));
+    // 第二期起知识缺口也同步：Mac 上一条指向预置科目和 Mac 任务的缺口。
+    QVERIFY(exec(mac, QStringLiteral("INSERT INTO knowledge_gaps (title, category_id, source_task_id, created_at, "
+                                     "updated_at) VALUES ('Mac 的缺口', %1, %2, '%3', '%3')")
+                          .arg(localIdOf(mac, QStringLiteral("categories"), QStringLiteral("preset-1")))
+                          .arg(localIdOf(mac, QStringLiteral("tasks"), macTask))
+                          .arg(date)));
 
     const SyncBatch snapshot = throughJson(SyncStore(mac.connection).exportSnapshot());
     const SyncStore::ApplyResult result = SyncStore(ipad.connection).replaceWithSnapshot(snapshot);
@@ -2036,9 +2139,15 @@ void SyncTests::firstJoinReplacesJoiningDeviceWithSnapshot()
     QCOMPARE(count(ipad, QStringLiteral("SELECT COUNT(*) FROM sync_outbox")), 0);
     // 正在计时的那一行不受影响（只是它的任务没了，按删除任务的做法解除关联）。
     QCOMPARE(count(ipad, QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE end_time IS NULL AND task_id IS NULL")), 1);
-    // 不同步的知识缺口：指向预置科目的引用原样保留（预置科目没被删、本机编号没变），指向被换掉的任务的置空。
-    QCOMPARE(scalar(ipad, QStringLiteral("SELECT category_id FROM knowledge_gaps")).toLongLong(), mathId);
-    QVERIFY(scalar(ipad, QStringLiteral("SELECT source_task_id FROM knowledge_gaps")).isNull());
+    // 知识缺口第二期起也同步：iPad 自己的测试缺口随加入换掉；Mac 的那条带过来，引用换成 iPad 本机的编号
+    // （预置科目没被删，本机编号不变）。updated_at 不同步，插进来时按本机此刻补上。
+    QCOMPARE(count(ipad, QStringLiteral("SELECT COUNT(*) FROM knowledge_gaps WHERE title = '极限的定义'")), 0);
+    QCOMPARE(scalar(ipad, QStringLiteral("SELECT category_id FROM knowledge_gaps WHERE title = 'Mac 的缺口'"))
+                 .toLongLong(), mathId);
+    QCOMPARE(scalar(ipad, QStringLiteral("SELECT source_task_id FROM knowledge_gaps WHERE title = 'Mac 的缺口'"))
+                 .toLongLong(), localIdOf(ipad, QStringLiteral("tasks"), macTask));
+    QVERIFY(!scalar(ipad, QStringLiteral("SELECT updated_at FROM knowledge_gaps WHERE title = 'Mac 的缺口'"))
+                 .toString().isEmpty());
     QCOMPARE(logCount(ipad, QStringLiteral("skipped")), 0);
 
     // 之后照常增量同步。
@@ -2225,6 +2334,271 @@ void SyncTests::remoteDeletionUnbindsRunningTimer()
     QVERIFY(FocusTimer::instance()->hasActiveSession());
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE end_time IS NULL AND task_id IS NULL")), 1);
     QVERIFY(scalar(QStringLiteral("SELECT task_id FROM active_focus_state")).isNull());
+}
+
+// ── 051 阶段 1：课表、知识缺口、目标倒计时 ──
+
+void SyncTests::phaseTwoTablesTravelWithLocalReferences()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    // B 先有几条自己的，两台设备的本机编号就错开了：引用必须按身份换成 B 本机的编号，而不是照抄 A 的数字。
+    QVERIFY(!addCategory(b, QStringLiteral("B 的科目")).isEmpty());
+    QVERIFY(!addTask(b, QStringLiteral("B 的任务")).isEmpty());
+    QVERIFY(!addTask(b, QStringLiteral("B 的另一条任务")).isEmpty());
+
+    const QString programming = addCategory(a, QStringLiteral("编程"));
+    const QString task = addTask(a, QStringLiteral("写代码"));
+    const QString entry = addScheduleEntry(a, QStringLiteral("高等数学"), programming);
+    const QString gap = addGap(a, QStringLiteral("极限的定义"), programming, task, task);
+    const QString goal = addCountdown(a, QStringLiteral("期末考试"), 0, QStringLiteral("2026-09-30T08:00:00"));
+    QVERIFY(!entry.isEmpty() && !gap.isEmpty() && !goal.isEmpty());
+    syncAll(cloud, {a, b});
+
+    const qint64 categoryOnB = localIdOf(b, QStringLiteral("categories"), programming);
+    const qint64 taskOnB = localIdOf(b, QStringLiteral("tasks"), task);
+    QVERIFY(categoryOnB != localIdOf(a, QStringLiteral("categories"), programming));
+    QVERIFY(taskOnB != localIdOf(a, QStringLiteral("tasks"), task));
+    QCOMPARE(valueOf(b, QStringLiteral("schedule_entries"), entry, QStringLiteral("title")).toString(),
+             QStringLiteral("高等数学"));
+    QCOMPARE(valueOf(b, QStringLiteral("schedule_entries"), entry, QStringLiteral("category_id")).toLongLong(),
+             categoryOnB);
+    QCOMPARE(valueOf(b, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("category_id")).toLongLong(), categoryOnB);
+    QCOMPARE(valueOf(b, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("source_task_id")).toLongLong(), taskOnB);
+    QCOMPARE(valueOf(b, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("linked_task_id")).toLongLong(), taskOnB);
+    QCOMPARE(valueOf(b, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("source_task_title")).toString(),
+             QStringLiteral("写代码"));
+    QCOMPARE(valueOf(b, QStringLiteral("countdown_goals"), goal, QStringLiteral("name")).toString(),
+             QStringLiteral("期末考试"));
+    // updated_at 不同步：插进 B 时按 B 此刻补上，不为空。
+    QVERIFY(!valueOf(b, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("updated_at")).toString().isEmpty());
+    QVERIFY(!valueOf(b, QStringLiteral("countdown_goals"), goal, QStringLiteral("updated_at")).toString().isEmpty());
+    QCOMPARE(describe(SyncStore(b.connection).exportSnapshot()), describe(SyncStore(a.connection).exportSnapshot()));
+}
+
+void SyncTests::phaseTwoConcurrentEditsMergeFieldByField()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString entry = addScheduleEntry(a, QStringLiteral("高等数学"));
+    const QString gap = addGap(a, QStringLiteral("极限的定义"));
+    syncAll(cloud, {a, b});
+
+    // 两边同时改：知识缺口改的是不同字段（都保留），课表改的是同一字段（后改的 B 为准，A 的记进日志）。
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(setClock(b, kFuture + 1000));
+    QVERIFY(exec(a, QStringLiteral("UPDATE knowledge_gaps SET status = 1 WHERE sync_id = '%1'").arg(gap)));
+    QVERIFY(exec(b, QStringLiteral("UPDATE knowledge_gaps SET title = '极限的严格定义' WHERE sync_id = '%1'").arg(gap)));
+    QVERIFY(exec(a, QStringLiteral("UPDATE schedule_entries SET location = 'A 楼' WHERE sync_id = '%1'").arg(entry)));
+    QVERIFY(exec(b, QStringLiteral("UPDATE schedule_entries SET location = 'B 楼' WHERE sync_id = '%1'").arg(entry)));
+    syncAll(cloud, {a, b});
+
+    for (const Device& device : {a, b}) {
+        QCOMPARE(valueOf(device, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("status")).toInt(), 1);
+        QCOMPARE(valueOf(device, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("title")).toString(),
+                 QStringLiteral("极限的严格定义"));
+        QCOMPARE(valueOf(device, QStringLiteral("schedule_entries"), entry, QStringLiteral("location")).toString(),
+                 QStringLiteral("B 楼"));
+    }
+    // 冲突日志写得出人话：哪张表、哪一项、留下谁的。
+    const QList<SyncStore::LogEntry> log = SyncStore(a.connection).syncLog(10);
+    QCOMPARE(log.size(), 1);
+    QCOMPARE(log.first().tableLabel, QStringLiteral("课表"));
+    QCOMPARE(log.first().recordLabel, QStringLiteral("高等数学"));
+    QCOMPARE(log.first().fieldLabel, QStringLiteral("地点"));
+    QCOMPARE(log.first().lostValue, QStringLiteral("A 楼"));
+    QCOMPARE(log.first().keptValue, QStringLiteral("B 楼"));
+}
+
+void SyncTests::deletedTaskDetachesKnowledgeGaps()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString task = addTask(a, QStringLiteral("写代码"));
+    const QString gap = addGap(a, QStringLiteral("闭包是什么"), QString(), task, task);
+    syncAll(cloud, {a, b});
+
+    // A 删掉任务：B 上的知识缺口留着，来源任务和关联任务置空（与本机删任务时的外键规则一致），
+    // 记下的来源任务名称还在；这一批也算动过知识缺口，界面要刷新。
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM tasks WHERE sync_id = '%1'").arg(task)));
+    QVERIFY(cloud.publish(a) > 0);
+    bool gapsTouched = false;
+    for (const SyncStore::ApplyResult& result : cloud.pull(b)) {
+        QVERIFY2(result.ok, qPrintable(result.error));
+        gapsTouched = gapsTouched || result.changedTables.contains(QStringLiteral("knowledge_gaps"));
+    }
+    QVERIFY(gapsTouched);
+    syncAll(cloud, {a, b});
+    for (const Device& device : {a, b}) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM knowledge_gaps WHERE sync_id = '%1'").arg(gap)), 1);
+        QVERIFY(valueOf(device, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("source_task_id")).isNull());
+        QVERIFY(valueOf(device, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("linked_task_id")).isNull());
+        QCOMPARE(valueOf(device, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("source_task_title")).toString(),
+                 QStringLiteral("写代码"));
+    }
+    QCOMPARE(describe(SyncStore(b.connection).exportSnapshot()), describe(SyncStore(a.connection).exportSnapshot()));
+}
+
+void SyncTests::deletedCategoryClearsScheduleAndGapCategories()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString programming = addCategory(a, QStringLiteral("编程"));
+    const QString entry = addScheduleEntry(a, QStringLiteral("数据结构"), programming);
+    const QString gap = addGap(a, QStringLiteral("红黑树"), programming);
+    syncAll(cloud, {a, b});
+
+    // B 删掉科目：A 上的课表项和知识缺口变成未分类，不跟着删；这一批两张表都要刷新。
+    QVERIFY(exec(b, QStringLiteral("DELETE FROM categories WHERE sync_id = '%1'").arg(programming)));
+    QVERIFY(cloud.publish(b) > 0);
+    QSet<QString> touched;
+    for (const SyncStore::ApplyResult& result : cloud.pull(a)) {
+        QVERIFY2(result.ok, qPrintable(result.error));
+        touched.unite(result.changedTables);
+    }
+    QVERIFY(touched.contains(QStringLiteral("schedule_entries")));
+    QVERIFY(touched.contains(QStringLiteral("knowledge_gaps")));
+    syncAll(cloud, {a, b});
+    for (const Device& device : {a, b}) {
+        QVERIFY(valueOf(device, QStringLiteral("schedule_entries"), entry, QStringLiteral("category_id")).isNull());
+        QVERIFY(valueOf(device, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("category_id")).isNull());
+    }
+    QCOMPARE(describe(SyncStore(b.connection).exportSnapshot()), describe(SyncStore(a.connection).exportSnapshot()));
+}
+
+void SyncTests::countdownOrderConvergesAfterConcurrentInserts()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    // 两台各自新建一个倒计时，都排在第一位（排序号 0）：同步后排序号不能撞，两台的顺序要一样。
+    // 排序号相同按创建时间先后，期中考试在前。
+    QVERIFY(!addCountdown(b, QStringLiteral("四级考试"), 0, QStringLiteral("2026-09-02T08:00:00")).isEmpty());
+    QVERIFY(!addCountdown(a, QStringLiteral("期中考试"), 0, QStringLiteral("2026-09-01T08:00:00")).isEmpty());
+    syncAll(cloud, {a, b});
+    const QStringList expected{QStringLiteral("0:期中考试"), QStringLiteral("1:四级考试")};
+    QCOMPARE(countdownOrder(a), expected);
+    QCOMPARE(countdownOrder(b), expected);
+    QCOMPARE(describe(SyncStore(b.connection).exportSnapshot()), describe(SyncStore(a.connection).exportSnapshot()));
+}
+
+void SyncTests::phaseTwoNotificationsRefreshOnlyTheirServices()
+{
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const SyncVersion version{kFuture, remote};
+    const auto batchWith = [&](const SyncRecord& record) {
+        SyncBatch batch;
+        batch.device = remote;
+        batch.records.append(record);
+        return batch;
+    };
+    SyncRecord entry;
+    entry.table = QStringLiteral("schedule_entries");
+    entry.syncId = QStringLiteral("remote-entry");
+    for (const auto& field : QList<QPair<QString, QVariant>>{
+             {QStringLiteral("title"), QStringLiteral("线性代数")}, {QStringLiteral("location"), QStringLiteral("")},
+             {QStringLiteral("weekday"), 2}, {QStringLiteral("start_minutes"), 600}, {QStringLiteral("end_minutes"), 645},
+             {QStringLiteral("week_start"), 1}, {QStringLiteral("week_end"), 16}, {QStringLiteral("week_parity"), 0},
+             {QStringLiteral("created_at"), QStringLiteral("2026-09-30 08:00:00")}}) {
+        entry.fields.insert(field.first, {field.second, version, {}});
+    }
+    SyncRecord gap;
+    gap.table = QStringLiteral("knowledge_gaps");
+    gap.syncId = QStringLiteral("remote-gap");
+    for (const auto& field : QList<QPair<QString, QVariant>>{
+             {QStringLiteral("title"), QStringLiteral("特征值")}, {QStringLiteral("priority"), 1},
+             {QStringLiteral("status"), 0}, {QStringLiteral("created_at"), QStringLiteral("2026-09-30T08:00:00")}}) {
+        gap.fields.insert(field.first, {field.second, version, {}});
+    }
+    SyncRecord goal;
+    goal.table = QStringLiteral("countdown_goals");
+    goal.syncId = QStringLiteral("remote-goal");
+    for (const auto& field : QList<QPair<QString, QVariant>>{
+             {QStringLiteral("name"), QStringLiteral("期末考试")}, {QStringLiteral("target_date"), QStringLiteral("2027-01-10")},
+             {QStringLiteral("display_order"), 0}, {QStringLiteral("created_at"), QStringLiteral("2026-09-30T08:00:00")}}) {
+        goal.fields.insert(field.first, {field.second, version, {}});
+    }
+
+    // 只动了哪张表，就只刷新那个服务：课表、知识缺口、倒计时互不牵连，也不整库重载。
+    const QList<QPair<SyncRecord, QString>> cases{{entry, QStringLiteral("scheduleChanged")},
+                                                  {gap, QStringLiteral("gapsChanged")},
+                                                  {goal, QStringLiteral("goalsReloaded")}};
+    const QStringList all{QStringLiteral("scheduleChanged"), QStringLiteral("gapsChanged"),
+                          QStringLiteral("goalsReloaded"), QStringLiteral("tasksChanged"),
+                          QStringLiteral("categoriesChanged")};
+    for (const auto& item : cases) {
+        const SyncStore::ApplyResult result = SyncStore().applyRemote(batchWith(item.first));
+        QVERIFY2(result.ok, qPrintable(result.error));
+        SignalRecorder recorder;
+        SyncNotifier::publish(result);
+        for (const QString& event : all) {
+            QVERIFY2(recorder.events.contains(event) == (event == item.second),
+                     qPrintable(item.second + QStringLiteral(" / ") + event));
+        }
+    }
+    // 倒计时服务真的重新读了库：远端新建的那个出现在它的列表里。
+    QCOMPARE(CountdownService::instance()->model()->rowCount(), 1);
+}
+
+void SyncTests::migrationFromV18QueuesPhaseTwoRows()
+{
+    // 用当前代码建出数据，再把第二期三张表的同步结构拆掉、版本号退回 18，就是一份 v18 的库。
+    // 倒计时表整个删掉：倒计时服务懒建这张表，从没打开过倒计时的 v18 库里本来就没有它。
+    const int taskId = TaskManager::instance()->createTask(QStringLiteral("写代码"), today(), -1, 0, QString());
+    QVERIFY(taskId > 0);
+    QVERIFY(exec(QStringLiteral("INSERT INTO schedule_entries (title, weekday, start_minutes, end_minutes) "
+                                "VALUES ('高等数学', 1, 480, 525)")));
+    QVERIFY(exec(QStringLiteral("INSERT INTO knowledge_gaps (title, source_task_id, created_at, updated_at) "
+                                "VALUES ('极限', %1, '2026-09-30T08:00:00', '2026-09-30T08:00:00')").arg(taskId)));
+    QVERIFY(markEverythingSent());
+    const QStringList phaseTwo{QStringLiteral("schedule_entries"), QStringLiteral("knowledge_gaps"),
+                               QStringLiteral("countdown_goals")};
+    for (const auto& trigger : SyncSchema::triggers()) {
+        for (const QString& table : phaseTwo) {
+            if (trigger.first.startsWith(table + QStringLiteral("_sync_"))) {
+                QVERIFY(exec(QStringLiteral("DROP TRIGGER %1").arg(trigger.first)));
+            }
+        }
+    }
+    for (const QString& table : phaseTwo) {
+        QVERIFY(exec(QStringLiteral("DELETE FROM sync_field_versions WHERE tbl = '%1'").arg(table)));
+        QVERIFY(exec(QStringLiteral("DROP INDEX idx_%1_sync_id").arg(table)));
+    }
+    QVERIFY(exec(QStringLiteral("ALTER TABLE schedule_entries DROP COLUMN sync_id")));
+    QVERIFY(exec(QStringLiteral("ALTER TABLE knowledge_gaps DROP COLUMN sync_id")));
+    QVERIFY(exec(QStringLiteral("DROP TABLE countdown_goals")));
+    QVERIFY(exec(QStringLiteral("PRAGMA user_version = 18")));
+
+    const QDir dir = QFileInfo(db().databaseName()).absoluteDir();
+    const QStringList pattern{QStringLiteral("pomodoro_backup_*.db")};
+    const int snapshotsBefore = dir.entryList(pattern, QDir::Files).size();
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    // 升级前留了一份迁移快照（升到 v19 之后 v18 的应用打不开这个库）；版本推到 19；触发器全部装好。
+    QCOMPARE(dir.entryList(pattern, QDir::Files).size(), snapshotsBefore + 1);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 19);
+    QCOMPARE(triggerSql(), SyncSchema::canonicalTriggerSql());
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('countdown_goals') WHERE name = 'sync_id'")), 1);
+
+    // 已有的课表项和知识缺口有了身份、放进待发送；第一期的记录早就发过了，不重新排队。
+    for (const QString& table : phaseTwo) {
+        QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM %1 WHERE sync_id IS NULL OR sync_id = ''").arg(table)), 0);
+    }
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE tbl = 'schedule_entries'")), 1);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE tbl = 'knowledge_gaps'")), 1);
+    QVERIFY(!queued(QStringLiteral("tasks"), syncIdOf(QStringLiteral("tasks"), taskId)));
+
+    // 升级后本机的修改照常记版本。
+    QVERIFY(markEverythingSent());
+    QVERIFY(exec(QStringLiteral("UPDATE knowledge_gaps SET status = 2")));
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE tbl = 'knowledge_gaps'")), 1);
+    QVERIFY(exec(QStringLiteral("INSERT INTO countdown_goals (name, target_date, display_order, created_at, updated_at) "
+                                "VALUES ('期末', '2027-01-10', 0, '2026-09-30T08:00:00', '2026-09-30T08:00:00')")));
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE tbl = 'countdown_goals'")), 1);
 }
 
 QTEST_MAIN(SyncTests)

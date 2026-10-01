@@ -512,13 +512,25 @@ bool DatabaseManager::createTables()
         version = 17;
     }
 
+    // 倒计时表要参与同步，下面的同步迁移要给它加列、回填、装触发器，所以先确保它在。
+    if (!createCountdownGoalsTable()) {
+        return false;
+    }
+
     // v18 设备间同步。缺任何一部分（半迁移、外部改库、v5 整表重建带走了唯一索引）都重跑一遍，
-    // 迁移本身可以重复执行，已经有的身份和版本保持不动。
+    // 迁移本身可以重复执行，已经有的身份和版本保持不动。第二期加进同步清单的三张表也由这一步补齐：
+    // v18 的库里它们还没有 sync_id，结构判为不完整，这一步就会给它们加列、回填并放进待发送队列。
     if (version < 18 || !syncSchemaIsComplete()) {
         if (!migrateToVersion18()) {
             return false;
         }
         version = 18;
+    }
+    if (version < 19) {
+        if (!migrateToVersion19()) {
+            return false;
+        }
+        version = 19;
     }
     if (!ensureSyncInfrastructure()) {
         return false;
@@ -1993,10 +2005,15 @@ bool DatabaseManager::migrateToVersion18()
             "                WHERE t3.sync_id = (SELECT %1 FROM routines r WHERE r.id = tasks.routine_id))")
             .arg(instanceId),
         QStringLiteral("UPDATE tasks SET sync_id = %1 WHERE sync_id IS NULL OR sync_id = ''").arg(random),
-        QStringLiteral("UPDATE focus_sessions SET sync_id = %1 WHERE sync_id IS NULL OR sync_id = ''").arg(random),
-        QStringLiteral("UPDATE rest_sessions SET sync_id = %1 WHERE sync_id IS NULL OR sync_id = ''").arg(random),
     };
-    for (const QString& sql : backfill + SyncSchema::indexStatements()) {
+    // 其余的表（专注、休息，以及第二期的课表、知识缺口、倒计时）没有固定身份，一律随机。
+    // 按表清单生成，以后再加同步表也不会漏掉回填；上面几张已经填过的，这里是空操作。
+    QStringList randomBackfill;
+    for (const SyncSchema::Table& table : SyncSchema::tables()) {
+        randomBackfill.append(
+            QStringLiteral("UPDATE %1 SET sync_id = %2 WHERE sync_id IS NULL OR sync_id = ''").arg(table.name, random));
+    }
+    for (const QString& sql : backfill + randomBackfill + SyncSchema::indexStatements()) {
         if (!run(sql, "Failed to backfill sync ids:")) {
             return false;
         }
@@ -2057,6 +2074,43 @@ bool DatabaseManager::migrateToVersion18()
 
     qInfo() << "Database migrated to version 18";
     return true;
+}
+
+bool DatabaseManager::migrateToVersion19()
+{
+    if (!m_db.isOpen()) {
+        qWarning() << "Cannot migrate database: database is not open";
+        return false;
+    }
+    // 走到这里时第二期的三张表已经由 v18 那一步补齐了同步结构（加列、回填、入队、触发器），
+    // 那一步开头也已经按「结构不完整」存过迁移快照；这里只推版本号，让 v18 的应用拒绝打开。
+    if (!m_db.transaction()) {
+        qWarning() << "Failed to start version 19 migration:" << m_db.lastError().text();
+        return false;
+    }
+    if (!setDatabaseVersion(19) || !m_db.commit()) {
+        qWarning() << "Failed to commit version 19 migration:" << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    qInfo() << "Database migrated to version 19";
+    return true;
+}
+
+bool DatabaseManager::createCountdownGoalsTable()
+{
+    QSqlQuery query(m_db);
+    // 与 CountdownService::initializeDatabase 的结构一致；两边都是 IF NOT EXISTS，谁先建都一样。
+    // 只建表：同步迁移要的只是这张表在。排序索引仍由倒计时服务自己建，它坏了只影响倒计时，不挡住整个库打开。
+    return execSql(query,
+                   QStringLiteral("CREATE TABLE IF NOT EXISTS countdown_goals ("
+                                  "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                                  "name TEXT NOT NULL, "
+                                  "target_date TEXT NOT NULL, "
+                                  "display_order INTEGER NOT NULL, "
+                                  "created_at TEXT NOT NULL, "
+                                  "updated_at TEXT NOT NULL)"),
+                   "Failed to create countdown_goals table:");
 }
 
 bool DatabaseManager::syncSchemaIsComplete() const
