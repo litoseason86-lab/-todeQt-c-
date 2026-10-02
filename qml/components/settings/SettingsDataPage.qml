@@ -13,6 +13,7 @@ FocusScope {
     property var appSettingsRef: null
     property var backupServiceRef: null
     property var mcpAccessRef: null
+    property var syncControllerRef: null
     property bool compact: false
     readonly property bool backupBusy: root.backupServiceRef
                                        ? root.backupServiceRef.busy : false
@@ -21,6 +22,20 @@ FocusScope {
     signal exportRequested
     signal backupRequested
     signal restoreRequested
+    signal syncLogRequested
+
+    // 同步的几个派生状态。控制器可能没装配（独立实例化的测试），这时一律按「关着」处理。
+    readonly property bool syncEnabled: root.syncControllerRef ? root.syncControllerRef.enabled : false
+    readonly property string syncStatusKey: root.syncControllerRef ? root.syncControllerRef.statusKey : "stopped"
+    readonly property bool syncHasProblem: root.syncControllerRef ? root.syncControllerRef.hasProblem : false
+    readonly property bool syncChoosesFolder: root.syncControllerRef ? root.syncControllerRef.choosesFolder : false
+    readonly property bool syncChoosingFolder: root.syncControllerRef ? root.syncControllerRef.choosingFolder : false
+    // 需要把完整说明摆出来的时候：等你确认加入、还在等数据传过来，以及各种没走通的情况。
+    // 已同步、已关闭这些，设置行里的一句话就够了。
+    readonly property bool syncShowsExplanation: root.syncEnabled
+                                                 && (root.syncStatusKey === "needsConfirmation"
+                                                     || root.syncStatusKey === "waitingForSnapshot"
+                                                     || root.syncHasProblem)
 
     // 最近备份时间说明；无备份服务或从未备份时给出中性文案。
     readonly property string lastBackupCaption: {
@@ -42,6 +57,195 @@ FocusScope {
 
         width: root.width
         spacing: Theme.space24
+
+        SettingsSection {
+            objectName: "settingsSyncSection"
+            title: "设备间同步"
+            description: "通过 iCloud 云盘里的「番茄Todo同步」文件夹，让这台设备和另一台设备的任务、科目、每日例行、专注与休息记录、课表、知识缺口和倒计时保持一致，番茄时长、今日目标、学期与节次这些设置也跟着同步；外观、提醒和快捷键各台设备各自设。两边改了同一处时，以较晚的修改为准，被覆盖的内容记在同步日志里。"
+
+            SettingsRow {
+                label: "同步"
+                caption: root.syncControllerRef ? root.syncControllerRef.summaryText : "同步服务未装配"
+                iconName: "sync"
+                compact: root.compact
+
+                SettingsSwitch {
+                    objectName: "settingsSyncSwitch"
+                    text: "同步"
+                    persistedChecked: root.syncEnabled
+                    // 正在选文件夹或校验时不让再点：iPad 上打开同步就是先去选文件夹。
+                    enabled: Boolean(root.syncControllerRef) && !root.syncChoosingFolder
+                    reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
+                    onChangeRequested: value => { if (root.syncControllerRef) root.syncControllerRef.setEnabled(value) }
+                }
+            }
+
+            // 完整说明与要你做的决定。放在开关正下方：打开同步之后第一眼就能看到还差哪一步。
+            ColumnLayout {
+                objectName: "settingsSyncExplanation"
+                Layout.fillWidth: true
+                Layout.leftMargin: 20 + Theme.space12
+                Layout.bottomMargin: Theme.space12
+                visible: root.syncShowsExplanation
+                spacing: Theme.space8
+
+                Text {
+                    objectName: "settingsSyncStatusText"
+                    Layout.fillWidth: true
+                    text: root.syncControllerRef ? root.syncControllerRef.statusText : ""
+                    textFormat: Text.PlainText
+                    // 出了问题用提醒色；说明文字本身写清楚发生了什么，不只靠颜色。
+                    color: root.syncHasProblem ? Theme.danger : Theme.ink
+                    font.pixelSize: Theme.fontMd
+                    wrapMode: Text.Wrap
+                    Accessible.role: root.syncHasProblem ? Accessible.AlertMessage : Accessible.StaticText
+                    Accessible.name: text
+                }
+
+                Text {
+                    objectName: "settingsSyncStatusDetail"
+                    Layout.fillWidth: true
+                    visible: text.length > 0
+                    text: root.syncControllerRef ? root.syncControllerRef.statusDetail : ""
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontSm
+                    wrapMode: Text.Wrap
+                }
+
+                RowLayout {
+                    visible: root.syncStatusKey === "needsConfirmation"
+                    spacing: Theme.space12
+
+                    SyncActionButton {
+                        objectName: "settingsSyncConfirmJoin"
+                        text: "确认加入"
+                        primary: true
+                        Accessible.description: "本机数据先自动备份，再换成同步文件夹里的数据"
+                        onClicked: { if (root.syncControllerRef) root.syncControllerRef.confirmJoin() }
+                    }
+                    SyncActionButton {
+                        objectName: "settingsSyncDeclineJoin"
+                        text: "暂不加入"
+                        Accessible.description: "关闭同步，本机数据不变"
+                        onClicked: { if (root.syncControllerRef) root.syncControllerRef.setEnabled(false) }
+                    }
+                }
+
+                SyncActionButton {
+                    objectName: "settingsSyncRebuild"
+                    visible: root.syncStatusKey === "folderMissing"
+                    text: root.syncChoosesFolder ? "重新选择文件夹" : "重新建立同步文件夹"
+                    primary: true
+                    Accessible.description: root.syncChoosesFolder
+                                            ? "在「文件」里重新选 iCloud 云盘里的「番茄Todo同步」"
+                                            : "在 iCloud 云盘里建一个新的同步文件夹，另一台设备要重新选择它"
+                    onClicked: { if (root.syncControllerRef) root.syncControllerRef.rebuildFolder() }
+                }
+
+                Text {
+                    Layout.fillWidth: true
+                    visible: root.syncStatusKey === "folderMissing" && !root.syncChoosesFolder
+                    text: "重新建立后是一个新的同步文件夹，iPad 要在设置里重新选择它，并确认加入。"
+                    textFormat: Text.PlainText
+                    color: Theme.inkSoft
+                    font.pixelSize: Theme.fontSm
+                    wrapMode: Text.Wrap
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Theme.borderSubtle
+            }
+
+            // iPad 要自己在「文件」里选同步文件夹；Mac 的位置固定，只显示在哪。
+            ManageButton {
+                objectName: "settingsSyncChooseFolder"
+                visible: root.syncChoosesFolder
+                text: "同步文件夹"
+                caption: {
+                    if (!root.syncControllerRef)
+                        return ""
+                    if (root.syncChoosingFolder)
+                        return "正在检查选中的文件夹…"
+                    return root.syncControllerRef.hasFolder
+                            ? root.syncControllerRef.folderDisplayPath
+                            : "还没有选择：请选 iCloud 云盘里 Mac 建好的「番茄Todo同步」"
+                }
+                iconName: "folder"
+                enabled: Boolean(root.syncControllerRef) && !root.syncChoosingFolder
+                onClicked: { if (root.syncControllerRef) root.syncControllerRef.chooseFolder() }
+            }
+
+            SettingsRow {
+                visible: !root.syncChoosesFolder
+                label: "同步文件夹"
+                caption: root.syncControllerRef ? root.syncControllerRef.folderDisplayPath : ""
+                iconName: "folder"
+                compact: root.compact
+            }
+
+            // 选中的文件夹没用上（选错了哪一层、读不了）：就地说明，原来的文件夹照常用。
+            // 只在 iPad 出现，紧跟在「同步文件夹」按钮下面，和按钮里的文字对齐：
+            // 按钮左内边距 8 + 图标缩进 4 + 图标 20 + 间距 12。
+            Text {
+                objectName: "settingsSyncFolderProblem"
+                Layout.fillWidth: true
+                Layout.leftMargin: 8 + Theme.space4 + 20 + Theme.space12
+                Layout.bottomMargin: Theme.space8
+                visible: text.length > 0
+                text: root.syncControllerRef ? root.syncControllerRef.folderProblem : ""
+                textFormat: Text.PlainText
+                color: Theme.danger
+                font.pixelSize: Theme.fontMd
+                wrapMode: Text.Wrap
+                Accessible.role: Accessible.AlertMessage
+                Accessible.name: text
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Theme.borderSubtle
+            }
+
+            ManageButton {
+                objectName: "settingsSyncNow"
+                text: "立即同步"
+                // 不显示「正在同步」：Mac 每 20 秒在后台同步一轮，这行字会跟着来回闪。
+                // 点了之后，设置行里「已同步 · 时刻」会更新，那就是反馈。
+                caption: {
+                    if (!root.syncEnabled || !root.syncControllerRef)
+                        return "打开同步后才能用"
+                    var pending = root.syncControllerRef.pendingCount
+                    return pending > 0 ? "还有 " + pending + " 条改动等着发出" : "没有等着发出的改动"
+                }
+                iconName: "sync"
+                enabled: root.syncEnabled && !root.syncChoosingFolder
+                onClicked: { if (root.syncControllerRef) root.syncControllerRef.syncNow() }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Theme.borderSubtle
+            }
+
+            ManageButton {
+                objectName: "settingsSyncLog"
+                text: "同步日志"
+                caption: {
+                    var count = root.syncControllerRef ? root.syncControllerRef.logCount : 0
+                    return count > 0 ? count + " 条：两边同时修改、删除优先和读不懂的文件"
+                                     : "还没有记录"
+                }
+                iconName: "list"
+                enabled: Boolean(root.syncControllerRef)
+                onClicked: root.syncLogRequested()
+            }
+        }
 
         SettingsSection {
             title: "外部 AI 接入"
@@ -217,6 +421,39 @@ FocusScope {
                     }
                 }
             }
+        }
+    }
+
+    // 同步说明里的操作按钮：主操作用强调色填充，次要操作用描边；两者都有文字，不只靠颜色区分。
+    component SyncActionButton: Button {
+        id: action
+
+        property bool primary: false
+
+        implicitHeight: Theme.controlHeightMd
+        leftPadding: Theme.space16
+        rightPadding: Theme.space16
+        activeFocusOnTab: true
+        Accessible.name: text
+
+        background: Rectangle {
+            implicitWidth: 96
+            color: action.primary ? (action.hovered ? Theme.accentFillStrong : Theme.accentFill)
+                                  : (action.hovered ? Theme.surfaceSunken : Theme.surfaceRaised)
+            border.color: action.activeFocus ? Theme.focusRing : (action.primary ? "transparent" : Theme.border)
+            border.width: action.activeFocus ? 2 : 1
+            radius: Theme.radiusMd
+            opacity: action.enabled ? 1 : 0.5
+        }
+
+        contentItem: Text {
+            text: action.text
+            textFormat: Text.PlainText
+            color: action.primary ? Theme.accentFillInk : Theme.ink
+            font.pixelSize: Theme.fontMd
+            font.weight: action.primary ? Font.Medium : Font.Normal
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
         }
     }
 

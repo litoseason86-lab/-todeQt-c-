@@ -94,6 +94,7 @@
         <file alias="qml/components/BackupOperationOverlay.qml">../qml/components/BackupOperationOverlay.qml</file>
         <file alias="qml/components/PhaseCompletionCoordinator.qml">../qml/components/PhaseCompletionCoordinator.qml</file>
         <file alias="qml/components/RestoreConfirmDialog.qml">../qml/components/RestoreConfirmDialog.qml</file>
+        <file alias="qml/components/SyncLogDialog.qml">../qml/components/SyncLogDialog.qml</file>
         <file alias="qml/components/ManualSessionDialog.qml">../qml/components/ManualSessionDialog.qml</file>
         <file alias="qml/components/LongFreeFocusConfirmDialog.qml">../qml/components/LongFreeFocusConfirmDialog.qml</file>
         <file alias="qml/components/NaturalCompletionNoticeDialog.qml">../qml/components/NaturalCompletionNoticeDialog.qml</file>

@@ -15,6 +15,7 @@
 #include "../src/services/BackupService.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusTimer.h"
+#include "../src/services/SyncSchema.h"
 #include "../src/services/TaskManager.h"
 
 namespace {
@@ -154,6 +155,7 @@ private slots:
     void asyncRestoreRejectsUnsafeSettings();
     void commentedVirtualTableIsRejected();
     void restoreRefusesBackupCarryingTriggers();
+    void restoreReplacesSyncTriggersWithTheAppsOwn();
     void repeatedRestoresCapPreRestoreSnapshots();
     void newPreRestoreSnapshotSurvivesOlderSnapshotsWithFutureTimes();
     void failedAsyncPreflightKeepsAllPreRestoreSnapshots_data();
@@ -175,6 +177,7 @@ private slots:
     void olderSchemaBackupRestoresAndMigrates();
     void autoBackupRespectsIntervalAndRetention();
     void autoBackupDisabledDoesNothing();
+    void beforeSyncBackupHasItsOwnQuotaAndYieldsToOtherJobs();
     void shutdownWaitsForAsyncWorkers();
 
 private:
@@ -343,6 +346,10 @@ void BackupServiceTests::backupMissingRequiredColumnIsRejected()
         database.setDatabaseName(backupFile());
         QVERIFY(database.open());
         QSqlQuery query(database);
+        // 同步触发器引用着 title，SQLite 会因此拒绝删列。它们挂在 tasks 上，本用例只关心缺列，先拆掉。
+        QVERIFY2(query.exec(QStringLiteral("DROP TRIGGER tasks_sync_ai")), qPrintable(query.lastError().text()));
+        QVERIFY2(query.exec(QStringLiteral("DROP TRIGGER tasks_sync_au")), qPrintable(query.lastError().text()));
+        QVERIFY2(query.exec(QStringLiteral("DROP TRIGGER tasks_sync_ad")), qPrintable(query.lastError().text()));
         QVERIFY2(query.exec(QStringLiteral("ALTER TABLE tasks DROP COLUMN title")),
                  qPrintable(query.lastError().text()));
         database.close();
@@ -1175,6 +1182,56 @@ void BackupServiceTests::autoBackupDisabledDoesNothing()
     QVERIFY(autos.isEmpty());
 }
 
+void BackupServiceTests::beforeSyncBackupHasItsOwnQuotaAndYieldsToOtherJobs()
+{
+    QVERIFY(insertTask(QStringLiteral("同步替换前的任务")) > 0);
+    // 先铺好几份旧的替换前备份，以及另外两类快照：文件名带秒级时间戳，不靠连做很多次来造。
+    QDir dir(backupsDir());
+    QVERIFY(dir.mkpath(QStringLiteral(".")));
+    const QStringList others = {QStringLiteral("auto-20200101-000000-000.tomatobackup"),
+                                QStringLiteral("before-restore-20200101-000000-000.tomatobackup")};
+    QStringList stale = others;
+    for (int i = 0; i < BackupService::kBeforeSyncRetention + 2; ++i) {
+        stale.append(QStringLiteral("before-sync-2020010100000%1.tomatobackup").arg(i));
+    }
+    for (const QString& name : std::as_const(stale)) {
+        QFile file(dir.filePath(name));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("stale");
+    }
+
+    // 同步整体替换本机数据之前：写一份完整的备份，旧的替换前备份收敛到配额，另外两类一份不动。
+    QString error;
+    QVERIFY(BackupService::instance()->backupBeforeSyncReplace(&error));
+    QVERIFY(error.isEmpty());
+    const QStringList kept = dir.entryList({QStringLiteral("before-sync-*.tomatobackup")}, QDir::Files);
+    QCOMPARE(kept.size(), BackupService::kBeforeSyncRetention);
+    QString fresh;
+    for (const QString& name : kept) {
+        if (!stale.contains(name)) {
+            fresh = name;
+        }
+    }
+    QVERIFY(!fresh.isEmpty());
+    const QVariantMap info = BackupService::instance()->readBackupInfo(dir.filePath(fresh));
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QCOMPARE(info.value(QStringLiteral("taskCount")).toInt(), 1);
+    for (const QString& name : others) {
+        QVERIFY(QFileInfo::exists(dir.filePath(name)));
+    }
+
+    // 另一项备份正在后台进行：不和它撞在一起，拒绝并说明原因，同步稍后会再试。
+    BackupService* service = BackupService::instance();
+    service->requestBackup(backupFile());
+    QVERIFY(service->busy());
+    error.clear();
+    QVERIFY(!service->backupBeforeSyncReplace(&error));
+    QVERIFY(error.contains(QStringLiteral("正在进行")));
+    QCOMPARE(dir.entryList({QStringLiteral("before-sync-*.tomatobackup")}, QDir::Files).size(),
+             BackupService::kBeforeSyncRetention);
+    QTRY_VERIFY(!service->busy());
+}
+
 void BackupServiceTests::shutdownWaitsForAsyncWorkers()
 {
     QVERIFY(insertTask(QStringLiteral("退出时的异步备份任务")) > 0);
@@ -1406,6 +1463,60 @@ void BackupServiceTests::restoreRefusesBackupCarryingTriggers()
     // 期望：拒绝恢复。备份是数据，不是可信的数据库程序。
     QVERIFY2(!BackupService::instance()->restoreBackup(backupFile()),
              "带 Trigger 的备份被接受了");
+}
+
+void BackupServiceTests::restoreReplacesSyncTriggersWithTheAppsOwn()
+{
+    // v18 起库里本来就有维护同步版本的触发器，备份自然带着它们；这样的备份必须能恢复。
+    const int taskId = insertTask(QStringLiteral("原始任务"));
+    QVERIFY(taskId > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    QVERIFY2(BackupService::instance()->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool(),
+             qPrintable(BackupService::instance()->lastError()));
+
+    // 以后改了同步表或触发器写法，更早版本的备份里的同步触发器文本就和这一版不同（这里换掉一个当作旧版本）；
+    // 名字照抄、内容伪造的也一样（删一条任务就清空全部科目）。旧备份不能因此恢复不了，
+    // 伪造的也不能活进库里：打开恢复后的库时，在任何写入之前就被拆掉，换成本应用这一版的。
+    {
+        const QString connection = QStringLiteral("ForgedSyncTrigger");
+        {
+            QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+            db.setDatabaseName(backupFile());
+            QVERIFY(db.open());
+            QSqlQuery q(db);
+            QVERIFY2(q.exec(QStringLiteral("DROP TRIGGER tasks_sync_au")), qPrintable(q.lastError().text()));
+            QVERIFY2(q.exec(QStringLiteral(
+                "CREATE TRIGGER tasks_sync_au AFTER UPDATE OF title ON tasks BEGIN SELECT 1; END")),
+                qPrintable(q.lastError().text()));
+            QVERIFY2(q.exec(QStringLiteral("DROP TRIGGER tasks_sync_ad")), qPrintable(q.lastError().text()));
+            QVERIFY2(q.exec(QStringLiteral(
+                "CREATE TRIGGER tasks_sync_ad AFTER DELETE ON tasks BEGIN DELETE FROM categories; END")),
+                qPrintable(q.lastError().text()));
+            db.close();
+        }
+        QSqlDatabase::removeDatabase(connection);
+    }
+
+    QVERIFY2(BackupService::instance()->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool(),
+             qPrintable(BackupService::instance()->lastError()));
+    QVERIFY2(BackupService::instance()->restoreBackup(backupFile()), qPrintable(BackupService::instance()->lastError()));
+
+    // 库里的同步触发器恰好是本应用这一版的那一组；删一条任务不会清掉科目。
+    QHash<QString, QString> triggers;
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")));
+    while (query.next()) {
+        triggers.insert(query.value(0).toString(), query.value(1).toString());
+    }
+    query.finish();
+    QCOMPARE(triggers, SyncSchema::canonicalTriggerSql());
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM categories")) && query.next());
+    const int categories = query.value(0).toInt();
+    query.finish();
+    QVERIFY(categories > 0);
+    QVERIFY(query.exec(QStringLiteral("DELETE FROM tasks WHERE id = %1").arg(taskId)));
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM categories")) && query.next());
+    QCOMPARE(query.value(0).toInt(), categories);
 }
 
 void BackupServiceTests::asyncRestoreRejectsUnsafeSettings_data()

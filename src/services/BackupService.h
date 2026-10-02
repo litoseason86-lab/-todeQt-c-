@@ -35,6 +35,9 @@ public:
     // 自动备份是周期性存档，恢复前快照是「这次恢复搞砸了还能退回去」的保险。
     // 混在一起算的话，连续几次恢复就会把周期存档全挤掉，反之亦然。
     static constexpr int kBeforeRestoreRetention = 3;
+    // 设备间同步要整体换掉本机数据之前（第一次加入、另一台设备恢复了备份）的自动备份，同样单独计数：
+    // 两台设备来回恢复几次就会连着替换好几次，不能因此挤掉周期存档和恢复前快照。
+    static constexpr int kBeforeSyncRetention = 3;
 
     static BackupService* instance();
     explicit BackupService(QObject* parent = nullptr);
@@ -50,6 +53,9 @@ public:
     Q_INVOKABLE bool restoreBackup(const QString& srcPath);
     // 应用启动/退出时调用：到期才创建自动备份，保留最近 N 份；失败不阻断启动/退出。
     Q_INVOKABLE bool runAutoBackupIfDue();
+    // 同步整体替换本机数据之前调用（主线程，同步执行）：备份写成了才允许替换，被换掉的数据只能从这份里找回。
+    // 另一项备份或恢复正在进行时拒绝（error 说明原因），同步稍后会再试。
+    bool backupBeforeSyncReplace(QString* error);
     // QML 使用异步入口，避免完整性检查、VACUUM、复制和恢复阻塞 GUI 事件循环。
     Q_INVOKABLE void requestBackup(const QString& destPath);
     Q_INVOKABLE void requestBackupInfo(const QString& srcPath);

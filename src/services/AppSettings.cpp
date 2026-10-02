@@ -51,7 +51,6 @@ const auto kShortcutGroup = QStringLiteral("shortcuts");
 // 由 ScheduleServiceTests 里的一条用例把两个常量钉死在一起。
 constexpr int kMinSemesterWeeks = 1;
 constexpr int kMaxSemesterWeeks = 60;
-constexpr int kDefaultSemesterWeeks = 20;
 
 QString dailyGoalHistoryKey(const QString& isoDate)
 {
@@ -199,7 +198,7 @@ void AppSettings::setLastMode(int mode)
 
 int AppSettings::workMinutes() const
 {
-    return normalizeWorkMinutes(m_settings->value(kWorkMinutesKey, 25).toInt());
+    return normalizeWorkMinutes(m_settings->value(kWorkMinutesKey, kDefaultWorkMinutes).toInt());
 }
 
 void AppSettings::setWorkMinutes(int minutes)
@@ -215,7 +214,7 @@ void AppSettings::setWorkMinutes(int minutes)
 
 int AppSettings::breakMinutes() const
 {
-    return normalizeBreakMinutes(m_settings->value(kBreakMinutesKey, 5).toInt());
+    return normalizeBreakMinutes(m_settings->value(kBreakMinutesKey, kDefaultBreakMinutes).toInt());
 }
 
 void AppSettings::setBreakMinutes(int minutes)
@@ -232,7 +231,7 @@ void AppSettings::setBreakMinutes(int minutes)
 int AppSettings::freeTimerWarningHours() const
 {
     return normalizeFreeTimerWarningHours(
-        m_settings->value(kFreeTimerWarningHoursKey, 8).toInt());
+        m_settings->value(kFreeTimerWarningHoursKey, kDefaultFreeTimerWarningHours).toInt());
 }
 
 void AppSettings::setFreeTimerWarningHours(int hours)
@@ -330,36 +329,36 @@ void AppSettings::setBackgroundTheme(const QString& themeId)
 int AppSettings::normalizeWorkMinutes(int minutes)
 {
     // 专注时长与界面步进器使用同一边界；坏配置回默认值，不能悄悄夹到极端值。
-    return (minutes >= 5 && minutes <= 180) ? minutes : 25;
+    return (minutes >= 5 && minutes <= 180) ? minutes : kDefaultWorkMinutes;
 }
 
 int AppSettings::normalizeBreakMinutes(int minutes)
 {
-    return (minutes >= 1 && minutes <= 60) ? minutes : 5;
+    return (minutes >= 1 && minutes <= 60) ? minutes : kDefaultBreakMinutes;
 }
 
 int AppSettings::normalizeFreeTimerWarningHours(int hours)
 {
     // 1–24 小时足以覆盖正常长时专注；坏配置回默认 8，不夹到边界制造意外提醒。
-    return (hours >= 1 && hours <= 24) ? hours : 8;
+    return (hours >= 1 && hours <= 24) ? hours : kDefaultFreeTimerWarningHours;
 }
 
 int AppSettings::normalizeDayStartHour(int hour)
 {
     // 越界值代表配置损坏，统一回默认值；不能 clamp 成 0 或 6 改变用户的日期口径。
-    return (hour >= 0 && hour <= 6) ? hour : 4;
+    return (hour >= 0 && hour <= 6) ? hour : kDefaultDayStartHour;
 }
 
 int AppSettings::normalizeLongBreakMinutes(int minutes)
 {
     // 长休息 5–60 分钟；坏值回默认 15，不静默夹到极端值。
-    return (minutes >= 5 && minutes <= 60) ? minutes : 15;
+    return (minutes >= 5 && minutes <= 60) ? minutes : kDefaultLongBreakMinutes;
 }
 
 int AppSettings::normalizeLongBreakInterval(int count)
 {
     // 每 2–8 个番茄一次长休息；坏值回默认 4。
-    return (count >= 2 && count <= 8) ? count : 4;
+    return (count >= 2 && count <= 8) ? count : kDefaultLongBreakInterval;
 }
 
 QString AppSettings::normalizeSemesterStartDate(const QString& isoDate)
@@ -541,7 +540,7 @@ bool AppSettings::saveScheduleSettings(const QString& semesterStartDateValue,
 int AppSettings::dayStartHour() const
 {
     // 读取时也归一化，拦住旧版本或手工编辑遗留的坏值。
-    return normalizeDayStartHour(m_settings->value(kDayStartHourKey, 4).toInt());
+    return normalizeDayStartHour(m_settings->value(kDayStartHourKey, kDefaultDayStartHour).toInt());
 }
 
 void AppSettings::setDayStartHour(int hour)
@@ -810,7 +809,7 @@ void AppSettings::setQuickStartEnabled(bool enabled)
 bool AppSettings::longBreakEnabled() const
 {
     // 默认开启：契合番茄工作法“每 4 个后长休息”的经典节奏，用户可关闭。
-    return m_settings->value(kLongBreakEnabledKey, true).toBool();
+    return m_settings->value(kLongBreakEnabledKey, kDefaultLongBreakEnabled).toBool();
 }
 
 void AppSettings::setLongBreakEnabled(bool enabled)
@@ -825,7 +824,7 @@ void AppSettings::setLongBreakEnabled(bool enabled)
 
 int AppSettings::longBreakMinutes() const
 {
-    return normalizeLongBreakMinutes(m_settings->value(kLongBreakMinutesKey, 15).toInt());
+    return normalizeLongBreakMinutes(m_settings->value(kLongBreakMinutesKey, kDefaultLongBreakMinutes).toInt());
 }
 
 void AppSettings::setLongBreakMinutes(int minutes)
@@ -841,7 +840,7 @@ void AppSettings::setLongBreakMinutes(int minutes)
 
 int AppSettings::longBreakInterval() const
 {
-    return normalizeLongBreakInterval(m_settings->value(kLongBreakIntervalKey, 4).toInt());
+    return normalizeLongBreakInterval(m_settings->value(kLongBreakIntervalKey, kDefaultLongBreakInterval).toInt());
 }
 
 void AppSettings::setLongBreakInterval(int count)
@@ -888,6 +887,52 @@ QMap<QDate, int> AppSettings::dailyFocusGoalsBetween(const QDate& startDate, con
         }
     }
     return goals;
+}
+
+QMap<QString, int> AppSettings::dailyFocusGoals() const
+{
+    // 历史分组里的每一天，加上旧的一对键记着的那一天（升级前只存在旧键里的那一天）。
+    m_settings->beginGroup(kDailyFocusGoalHistoryGroup);
+    QStringList dates = m_settings->childKeys();
+    m_settings->endGroup();
+    const QString legacyDate = m_settings->value(kDailyFocusGoalDateKey).toString();
+    if (isStrictIsoDate(legacyDate) && !dates.contains(legacyDate)) {
+        dates.append(legacyDate);
+    }
+    QMap<QString, int> goals;
+    for (const QString& date : std::as_const(dates)) {
+        // 读法与界面相同（同一天旧键优先、坏值当未设置），同步出去的就是界面上看到的。
+        const int minutes = isStrictIsoDate(date) ? dailyFocusGoalMinutesForDate(date) : 0;
+        if (minutes > 0) {
+            goals.insert(date, minutes);
+        }
+    }
+    return goals;
+}
+
+bool AppSettings::removeDailyFocusGoal(const QString& isoDate)
+{
+    if (!isStrictIsoDate(isoDate)) {
+        return false;
+    }
+    QStringList removals;
+    const QString historyKey = dailyGoalHistoryKey(isoDate);
+    if (m_settings->contains(historyKey)) {
+        removals.append(historyKey);
+    }
+    // 旧的一对键记着的若正是这一天，一并删掉：读这一天时旧键优先，留着它这一天的目标就删不掉。
+    if (m_settings->value(kDailyFocusGoalDateKey).toString() == isoDate) {
+        removals.append(kDailyFocusGoalDateKey);
+        removals.append(kDailyFocusGoalMinutesKey);
+    }
+    if (removals.isEmpty()) {
+        return true;
+    }
+    if (!commitSettingsBatch(QStringLiteral("focus/dailyGoal"), {}, removals)) {
+        return false;
+    }
+    emit dailyFocusGoalChanged();
+    return true;
 }
 
 bool AppSettings::setDailyFocusGoal(const QString& isoDate, int minutes)

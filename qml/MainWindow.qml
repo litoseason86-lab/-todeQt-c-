@@ -62,6 +62,7 @@ Item {
     property var logicalDayServiceRef: null
     property var backupServiceRef: null
     property var mcpAccessRef: null
+    property var syncControllerRef: null
     property var scheduleServiceRef: null
     property var shortcutRegistryRef: null
     // 「召回 / 隐藏主窗口」只能由 ApplicationWindow 落实；这里和菜单栏一样只发意图。
@@ -1352,6 +1353,7 @@ Item {
         appSettingsRef: root.appSettingsRef
         mcpAccessRef: root.mcpAccessRef
         backupServiceRef: root.backupServiceRef
+        syncControllerRef: root.syncControllerRef
         shortcutRegistryRef: root.shortcutRegistryRef
 
         onRoutineRequested: routineDialog.open()
@@ -1359,6 +1361,25 @@ Item {
         onExportRequested: exportDialog.open()
         onBackupRequested: root.openBackupSaveDialog()
         onRestoreRequested: restoreOpenDialog.open()
+        onSyncLogRequested: syncLogDialog.open()
+    }
+
+    SyncLogDialog {
+        id: syncLogDialog
+
+        parent: root
+        syncControllerRef: root.syncControllerRef
+    }
+
+    Connections {
+        // 同步里值得告诉你的事（已经加入、建好了文件夹、另一台设备恢复了备份）用提示条说。
+        // 需要你处理的问题不走这里：它们一直显示在设置页的同步状态里，提示条几秒就消失了。
+        target: root.syncControllerRef
+        ignoreUnknownSignals: true
+
+        function onNotice(message) {
+            root.showToast(String(message))
+        }
     }
 
     function openBackupSaveDialog() {
@@ -1408,6 +1429,7 @@ Item {
 
     RestoreConfirmDialog {
         id: restoreConfirmDialog
+        objectName: "restoreConfirmDialog"
 
         parent: root
         onConfirmed: function (path) {
@@ -1438,6 +1460,9 @@ Item {
             // qmllint enable missing-property
             restoreConfirmDialog.backupPath = String(sourcePath)
             restoreConfirmDialog.info = info
+            // 打开确认框这一刻取一次提醒：弹窗是模态的，确认之前同步开关和加入状态不会再变。
+            restoreConfirmDialog.syncWarning = root.syncControllerRef
+                    ? String(root.syncControllerRef.restoreWarning()) : ""
             restoreConfirmDialog.open()
         }
         function onRestoreStarted() {

@@ -217,6 +217,16 @@ Canvas {
             poly([8, 8, 12, 4, 16, 8], false)
             begin(); ctx.moveTo(4.5, 14); ctx.lineTo(4.5, 19); ctx.lineTo(19.5, 19); ctx.lineTo(19.5, 14); stroke()
             break
+        case "sync": // 设备间同步：上下两段圆弧，各带一个转角箭头，表示两边互相送
+            // 画布的角度从正右方起、顺时针增大：上半弧从左侧绕过顶部到右上，下半弧从右侧绕过底部到左下。
+            begin(); ctx.arc(12, 12, 7, Math.PI * 200 / 180, Math.PI * 330 / 180); stroke()
+            poly([18.6, 4.4, 18.6, 8.8, 14.2, 8.8], false)
+            begin(); ctx.arc(12, 12, 7, Math.PI * 20 / 180, Math.PI * 150 / 180); stroke()
+            poly([5.4, 19.6, 5.4, 15.2, 9.8, 15.2], false)
+            break
+        case "folder": // 同步文件夹：带页签的文件夹轮廓
+            poly([3.5, 6.5, 9.2, 6.5, 11, 8.5, 20.5, 8.5, 20.5, 18.5, 3.5, 18.5], true)
+            break
         default:
             break
         }

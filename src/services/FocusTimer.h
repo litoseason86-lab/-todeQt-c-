@@ -147,6 +147,8 @@ private:
     friend class TimingRobustnessTests;
     // 到点提醒预约的测试同样需要注入时钟并直接触发 tick。
     friend class PhaseAlarmCoordinatorTests;
+    // 同步测试在用例之间复位计时器（远端删除正在计时的任务）。
+    friend class SyncTests;
 
     explicit FocusTimer(QObject* parent = nullptr);
 

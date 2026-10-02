@@ -13,9 +13,13 @@ class DatabaseManager : public QObject
 public:
     // 当前 schema 版本（user_version 迁移链的最高版本）。备份/恢复据此判断兼容性：
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
-    static constexpr int kCurrentSchemaVersion = 17;
+    // v18 加入设备间同步的结构（见 SyncSchema）；升级后 v17 的应用打不开这个库。
+    // v19 同步第二期（计划 051）：课表、知识缺口、目标倒计时也参与同步；升级后 v18 的应用打不开这个库。
+    static constexpr int kCurrentSchemaVersion = 19;
 
     static DatabaseManager* instance();
+    // 出厂的课表节次（开始、结束的分钟数，按节次先后）。建库时种入；同步据此判断节次是不是还没改过的默认值。
+    static QList<QPair<int, int>> defaultSchedulePeriods();
 
     // 启动和备份检查共用：id 必须是 SQLite 自动生成编号的 INTEGER ROWID 别名。
     static bool hasGeneratedIntegerId(const QSqlDatabase& db, const QString& tableName);
@@ -99,6 +103,31 @@ private:
     // 删表会丢掉用户写下的目标，所以表存在时先走迁移快照；从来没用过目标页的库里本来就没有这张表，
     // 那种库只推版本号，不建快照。
     bool migrateToVersion17();
+    // v18 设备间同步：同步表清单（SyncSchema::tables，第一期五张、第二期又加三张）里的业务表加 sync_id，
+    // 新建字段版本、待发送队列、删除记录等附属表，给已有记录回填身份与初始版本、放进待发送队列，
+    // 再装上维护它们的触发器。可以重复执行，半迁移、外部改库或清单里新加的表留下的缺口，下次启动会补齐。
+    bool migrateToVersion18();
+    // v19：结构上的活都在 v18 那一步里（它按 SyncSchema 的表清单处理，第二期的三张表加进清单后一并补齐），
+    // 这一步只把版本号推到 19。必须推：v18 的应用不认识这三张表，打开库时会把它们的同步触发器当成
+    // 过时的删掉，之后在 v18 里改的课表、知识缺口、倒计时就不会被记下来、永远发不出去。
+    bool migrateToVersion19();
+    // 目标倒计时表原来由倒计时服务第一次用到时才建（CountdownService::initializeDatabase）。
+    // 它要参与同步，迁移时表必须已经在，所以建表流程里也建一次，结构与服务里的相同。
+    bool createCountdownGoalsTable();
+    bool syncSchemaIsComplete() const;
+    // 每次启动都执行：补附属表的初始行、sync_id 唯一索引，并让同步触发器与规范文本一致。
+    // 触发器随业务表存在，整表重建（v5）会把它们一起删掉，所以不能只在迁移时建一次。
+    bool ensureSyncInfrastructure();
+    bool ensureSyncTriggers();
+    // 每次打开库、在任何迁移写入之前调用：名字是同步触发器、内容却与本版本生成的规范文本不一致的
+    // （更早版本留下的、外部改过的、随备份带进来的伪造品），一律先拆掉，打开库的最后一步按规范重建。
+    // 迁移链会写业务表（例如排序号坏了要重排），这些触发器若还挂着，就会带着不明的内容跑一遍。
+    // 恢复备份因此可以放行任何内容的同步触发器，以后改了同步表或触发器写法，旧备份也照样能恢复。
+    bool dropForeignSyncTriggers();
+    // 库已是 v18、附属表或业务表上的同步列却缺了（外部改过库、恢复被打断）：先拆掉同步触发器。
+    // 触发器引用的表或列不存在时，迁移链前面几步对业务表的写入会全部报错，应用就启动不了。
+    // 随后的迁移会把缺的列补回来，v18 步骤再把触发器装上。
+    bool dropSyncTriggersIfSchemaIncomplete();
     bool createRoutinesTable();
     // 课表项表与节次预设表。两者一起建：节次预设是课表录入的快捷填充来源，
     // 缺了它课表页的「按节次」显示模式就没有行可画。
@@ -113,6 +142,7 @@ private:
     // keepPath 是本次迁移前刚拍的快照，无条件保留（见 SnapshotRetention::prune）。
     void pruneOldBackups(const QDir& databaseDir, const QString& keepPath) const;
     bool tableExists(const QString& tableName) const;
+    bool indexExists(const QString& indexName) const;
     bool columnExists(const QString& tableName, const QString& columnName) const;
     // v13 是首个会被备份整库恢复的课表版本。CREATE TABLE IF NOT EXISTS
     // 不会修补已存在表的缺列、缺约束或错外键，所以必须显式验证。

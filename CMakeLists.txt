@@ -77,6 +77,27 @@ set(APP_SOURCES
     src/models/CountdownModel.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncStore.h
+    src/services/SyncStore.cpp
+    src/services/SyncNotifier.h
+    src/services/SyncNotifier.cpp
+    src/services/SyncFiles.h
+    src/services/SyncFiles.cpp
+    src/services/SyncFolder.h
+    src/services/LocalSyncFolder.h
+    src/services/LocalSyncFolder.cpp
+    src/services/SyncWorker.h
+    src/services/SyncWorker.cpp
+    src/services/SyncEngine.h
+    src/services/SyncEngine.cpp
+    src/services/SyncController.h
+    src/services/SyncController.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -165,6 +186,9 @@ if(NOT IOS)
         src/platform/macos/MacGlobalHotkeyBackend.mm
         src/platform/macos/MacPreferencesCleanup.h
         src/platform/macos/MacPreferencesCleanup.mm
+        # 设备间同步：Mac 直接读写 iCloud 云盘里的同步文件夹。
+        src/platform/macos/MacSyncFolder.h
+        src/platform/macos/MacSyncFolder.cpp
     )
 
     set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app-icons/PomodoroTodo.icns")
@@ -179,10 +203,34 @@ endif()
 list(APPEND APP_SOURCES
     src/platform/apple/AppleNotificationBackend.h
     src/platform/apple/AppleNotificationBackend.mm
+    # iCloud 云盘里单个文件的上传状态（同步时提示「iCloud 空间已满」这类问题），两个平台同一套接口。
+    src/platform/apple/AppleUbiquitousItem.h
+    src/platform/apple/AppleUbiquitousItem.mm
 )
-set_source_files_properties(src/platform/apple/AppleNotificationBackend.mm
+set_source_files_properties(
+    src/platform/apple/AppleNotificationBackend.mm
+    src/platform/apple/AppleUbiquitousItem.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
 )
+
+if(IOS)
+    # iPad 的同步文件夹：用「文件」选择器选中的 iCloud 云盘文件夹（安全作用域书签 + 文件协调），
+    # 以及切到后台时向系统要时间把改动写完。
+    list(APPEND APP_SOURCES
+        src/platform/ios/IosSyncFolder.h
+        src/platform/ios/IosSyncFolder.mm
+        src/platform/ios/IosFolderPicker.h
+        src/platform/ios/IosFolderPicker.mm
+        src/platform/ios/IosBackgroundTask.h
+        src/platform/ios/IosBackgroundTask.mm
+    )
+    set_source_files_properties(
+        src/platform/ios/IosSyncFolder.mm
+        src/platform/ios/IosFolderPicker.mm
+        src/platform/ios/IosBackgroundTask.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+    )
+endif()
 
 if(IOS)
     # iOS 上的 Qt 是静态库：平台插件和 QML 插件要靠 Qt 的收尾步骤扫描导入并链接进来，
@@ -229,6 +277,9 @@ if(IOS)
     target_link_libraries(PomodoroTodo PRIVATE
         "-framework Foundation"
         "-framework UserNotifications"
+        # 文件选择器、后台任务与选择器里的「文件夹」类型。
+        "-framework UIKit"
+        "-framework UniformTypeIdentifiers"
     )
 endif()
 
@@ -413,6 +464,8 @@ add_executable(PomodoroTodoTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -459,6 +512,8 @@ add_executable(CoreLogicTests
     src/models/CountdownModel.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -494,6 +549,8 @@ add_executable(RobustnessTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/RoutineManager.h
@@ -533,6 +590,8 @@ add_executable(CountdownServiceTests
     src/models/CountdownModel.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     src/services/AppSettings.h
@@ -560,6 +619,8 @@ add_executable(KnowledgeGapServiceTests
     src/models/Task.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
     src/services/TaskManager.h
@@ -590,6 +651,8 @@ add_executable(ScheduleServiceTests
     tests/ScheduleServiceTests.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
     # AppSettings 只为一条用例引入：它把「学期总周数上限」与
@@ -615,6 +678,8 @@ add_executable(PlatformControlTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -735,6 +800,8 @@ add_executable(BackupServiceTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -776,6 +843,8 @@ add_executable(TimingRobustnessTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -808,6 +877,8 @@ add_executable(PhaseAlarmCoordinatorTests
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
     src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -835,6 +906,204 @@ target_link_libraries(PhaseAlarmCoordinatorTests PRIVATE
 
 pomodoro_todo_enable_warnings(PhaseAlarmCoordinatorTests)
 add_test(NAME PhaseAlarmCoordinatorTests COMMAND PhaseAlarmCoordinatorTests)
+
+# 设备间同步（050）：v18 结构与触发器、两台设备各用一个临时库的合并场景。
+# 用真实的建表逻辑（DatabaseManager），不手写简化表：简化表会漏掉真实约束。
+add_executable(SyncTests
+    tests/SyncTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncStore.h
+    src/services/SyncStore.cpp
+    src/services/SyncNotifier.h
+    src/services/SyncNotifier.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/FocusHistoryService.h
+    src/services/FocusHistoryService.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/RoutineManager.h
+    src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+    src/services/FocusSessionRules.h
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
+    src/services/CountdownService.h
+    src/services/CountdownService.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
+    src/models/CountdownModel.cpp
+)
+
+target_link_libraries(SyncTests PRIVATE
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+pomodoro_todo_enable_warnings(SyncTests)
+add_test(NAME SyncTests COMMAND SyncTests)
+
+# 设备间同步的云盘传输（050 阶段 3）：文件格式、文件夹读写、同步引擎。
+# 两台设备各用一个真实结构的临时库，云盘用临时文件夹模拟，可以注入延迟、乱序、坏文件和读写失败。
+add_executable(SyncTransportTests
+    tests/SyncTransportTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncStore.h
+    src/services/SyncStore.cpp
+    src/services/SyncNotifier.h
+    src/services/SyncNotifier.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
+    src/services/SyncFiles.h
+    src/services/SyncFiles.cpp
+    src/services/SyncFolder.h
+    src/services/LocalSyncFolder.h
+    src/services/LocalSyncFolder.cpp
+    src/services/SyncWorker.h
+    src/services/SyncWorker.cpp
+    src/services/SyncEngine.h
+    src/services/SyncEngine.cpp
+    src/platform/macos/MacSyncFolder.h
+    src/platform/macos/MacSyncFolder.cpp
+    src/platform/apple/AppleUbiquitousItem.h
+    src/platform/apple/AppleUbiquitousItem.mm
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/FocusHistoryService.h
+    src/services/FocusHistoryService.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/RoutineManager.h
+    src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+    src/services/FocusSessionRules.h
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
+    src/services/CountdownService.h
+    src/services/CountdownService.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
+    src/models/CountdownModel.cpp
+)
+
+target_link_libraries(SyncTransportTests PRIVATE
+    Qt6::Concurrent
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+    "-framework Foundation"
+)
+
+pomodoro_todo_enable_warnings(SyncTransportTests)
+add_test(NAME SyncTransportTests COMMAND SyncTransportTests)
+
+# 设备间同步接进应用（050 阶段 4）：开关与书签、恢复备份与逻辑日起点的衔接、iPad 选文件夹、同步日志。
+# 平台差异（文件夹怎么建、怎么选）由测试注入，同步文件夹用临时目录，不碰真实的 iCloud 云盘。
+add_executable(SyncControllerTests
+    tests/SyncControllerTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncStore.h
+    src/services/SyncStore.cpp
+    src/services/SyncNotifier.h
+    src/services/SyncNotifier.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
+    src/services/SyncFiles.h
+    src/services/SyncFiles.cpp
+    src/services/SyncFolder.h
+    src/services/LocalSyncFolder.h
+    src/services/LocalSyncFolder.cpp
+    src/services/SyncWorker.h
+    src/services/SyncWorker.cpp
+    src/services/SyncEngine.h
+    src/services/SyncEngine.cpp
+    src/services/SyncController.h
+    src/services/SyncController.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/FocusHistoryService.h
+    src/services/FocusHistoryService.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/RoutineManager.h
+    src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+    src/services/FocusSessionRules.h
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
+    src/services/CountdownService.h
+    src/services/CountdownService.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
+    src/models/CountdownModel.cpp
+)
+
+target_link_libraries(SyncControllerTests PRIVATE
+    Qt6::Concurrent
+    Qt6::Core
+    Qt6::Sql
+    Qt6::Test
+)
+
+pomodoro_todo_enable_warnings(SyncControllerTests)
+add_test(NAME SyncControllerTests COMMAND SyncControllerTests)
 
 add_executable(FontAssetsTests
     tests/FontAssetsTests.cpp
@@ -961,6 +1230,7 @@ qt_add_executable(McpServiceTests
     src/models/Task.h src/models/Task.cpp
     src/services/ServiceReadResult.h
     src/services/DatabaseManager.h src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h src/services/SyncSchema.cpp
     src/services/AppSettings.h src/services/AppSettings.cpp
     src/services/TaskManager.h src/services/TaskManager.cpp
     src/services/CategoryManager.h src/services/CategoryManager.cpp
@@ -1116,6 +1386,10 @@ set_tests_properties(
     TimingRobustnessTests
     PhaseAlarmCoordinatorTests
     ShortcutRegistryTests
+    SyncTests
+    # 同步引擎在工作线程里读写文件：万一卡死，到点就报出来，不让全套一直挂着。
+    SyncTransportTests
+    SyncControllerTests
     PROPERTIES TIMEOUT 90
 )
 set_tests_properties(

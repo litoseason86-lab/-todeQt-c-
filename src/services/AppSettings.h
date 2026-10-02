@@ -93,6 +93,16 @@ public:
     void setRolloverIgnoredDate(const QString& date);
     QString backgroundTheme() const;
     void setBackgroundTheme(const QString& themeId);
+    // 出厂默认值。同步据此判断本机记下的是不是还没改过的默认值：两台设备各自的默认值
+    // 不能盖掉对方改过的设置（见 SyncedSettings）。读取时遇到坏值也回到这些默认值。
+    static constexpr int kDefaultDayStartHour = 4;
+    static constexpr int kDefaultWorkMinutes = 25;
+    static constexpr int kDefaultBreakMinutes = 5;
+    static constexpr int kDefaultFreeTimerWarningHours = 8;
+    static constexpr bool kDefaultLongBreakEnabled = true;
+    static constexpr int kDefaultLongBreakMinutes = 15;
+    static constexpr int kDefaultLongBreakInterval = 4;
+    static constexpr int kDefaultSemesterWeeks = 20;
     int dayStartHour() const;
     void setDayStartHour(int hour);
     QString nickname() const;
@@ -147,6 +157,11 @@ public:
     // 统计层按日期区间读取每日目标（不暴露给 QML）。只返回有合法目标的日期，
     // 值为该日期最后成功保存的分钟数。
     QMap<QDate, int> dailyFocusGoalsBetween(const QDate& startDate, const QDate& endDate) const;
+    // 全部有目标的日期（yyyy-MM-dd → 分钟），每一天的读法与 dailyFocusGoalMinutesForDate 相同。
+    // 设备间同步按日期逐项发出今日目标。
+    QMap<QString, int> dailyFocusGoals() const;
+    // 删掉某一天的目标。只给同步用：另一台设备的快照里没有这一天，以快照为准。界面上目标只能改、不能删。
+    bool removeDailyFocusGoal(const QString& isoDate);
 
     // 快捷键自定义：按动作 id 存 QKeySequence 的 PortableText（如 "Ctrl+1"）。
     // 三种状态必须能区分开：键不存在 = 用代码里的默认键位；键存在且非空 = 用户改过；
