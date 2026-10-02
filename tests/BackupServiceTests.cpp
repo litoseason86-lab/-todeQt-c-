@@ -142,6 +142,10 @@ private slots:
     void version14BackupWithCascadingKnowledgeGapForeignKeyIsRejected();
     void version14BackupWithCompositeKnowledgeGapForeignKeyIsRejected();
     void olderBackupWithoutKnowledgeGapTableIsAccepted();
+    void version20BackupBrokenMemoSchemaIsRejected_data();
+    void version20BackupBrokenMemoSchemaIsRejected();
+    void version19BackupWithoutMemosRestoresAndMigrates();
+    void version20BackupRestoresAllMemoFields();
     void higherSchemaVersionIsRejected();
     void formatVersionMismatchIsRejected();
     void schemaMetadataMismatchIsRejected();
@@ -261,7 +265,7 @@ void BackupServiceTests::backupCapturesAllBusinessTables()
         QVERIFY(db.open());
         const QStringList expected = {
             QStringLiteral("tasks"), QStringLiteral("categories"), QStringLiteral("routines"),
-            QStringLiteral("focus_sessions"), QStringLiteral("countdown_goals")
+            QStringLiteral("focus_sessions"), QStringLiteral("countdown_goals"), QStringLiteral("memos")
         };
         for (const QString& table : expected) {
             QSqlQuery q(db);
@@ -1251,6 +1255,112 @@ void BackupServiceTests::shutdownWaitsForAsyncWorkers()
     service->requestBackup(ignoredPath);
     QVERIFY(!service->busy());
     QVERIFY(!QFileInfo::exists(ignoredPath));
+}
+
+void BackupServiceTests::version20BackupBrokenMemoSchemaIsRejected_data()
+{
+    QTest::addColumn<QString>("oldText");
+    QTest::addColumn<QString>("replacement");
+    QTest::newRow("missing-table") << QString() << QString();
+    QTest::newRow("missing-column") << QStringLiteral("body TEXT NOT NULL DEFAULT '' CHECK(length(body) <= 10000),") << QString();
+    QTest::newRow("cascade") << QStringLiteral("SET NULL") << QStringLiteral("CASCADE");
+    QTest::newRow("invalid-primary-key") << QStringLiteral("INTEGER PRIMARY KEY AUTOINCREMENT") << QStringLiteral("INT PRIMARY KEY");
+    QTest::newRow("missing-length-limit") << QStringLiteral("CHECK(length(title) <= 60)") << QString();
+    QTest::newRow("nullable-text") << QStringLiteral("body TEXT NOT NULL") << QStringLiteral("body TEXT");
+    QTest::newRow("wrong-column-type") << QStringLiteral("body TEXT") << QStringLiteral("body INTEGER");
+}
+
+void BackupServiceTests::version20BackupBrokenMemoSchemaIsRejected()
+{
+    QFETCH(QString, oldText);
+    QFETCH(QString, replacement);
+    QVERIFY(insertTask(QStringLiteral("正式库保留")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    const QString connection = QStringLiteral("BrokenMemoBackup");
+    {
+        auto db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery query(db);
+        QVERIFY(query.exec(QStringLiteral("SELECT sql FROM sqlite_master WHERE name = 'memos'")) && query.next());
+        QString sql = query.value(0).toString();
+        query.finish();
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE memos")));
+        if (!oldText.isEmpty()) {
+            QVERIFY(sql.contains(oldText));
+            sql.replace(oldText, replacement);
+            QVERIFY2(query.exec(sql), qPrintable(query.lastError().text()));
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+    const auto info = BackupService::instance()->readBackupInfo(backupFile());
+    QVERIFY(!info.value(QStringLiteral("valid")).toBool());
+    QVERIFY(info.value(QStringLiteral("reason")).toString().contains(QStringLiteral("memos")));
+    QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '正式库保留'")), 1);
+    QVERIFY(DatabaseManager::memoSchemaIsValid(DatabaseManager::instance()->database()));
+}
+
+void BackupServiceTests::version19BackupWithoutMemosRestoresAndMigrates()
+{
+    QVERIFY(insertTask(QStringLiteral("v19 旧任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    const QString connection = QStringLiteral("Version19MemoBackup");
+    {
+        auto db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery query(db);
+        // 真实 v19 没有 memos，不能只调低版本号而继续带着新表来冒充旧备份。
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE memos")));
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+    setBackupSchemaVersion(backupFile(), 19);
+    const auto info = BackupService::instance()->readBackupInfo(backupFile());
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+    QCOMPARE(scalarCount(QStringLiteral("PRAGMA user_version")), 20);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = 'v19 旧任务'")), 1);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM memos")), 0);
+    QVERIFY(DatabaseManager::memoSchemaIsValid(DatabaseManager::instance()->database()));
+}
+
+void BackupServiceTests::version20BackupRestoresAllMemoFields()
+{
+    int id = 0;
+    int category = 0;
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral("SELECT id FROM categories ORDER BY display_order LIMIT 1")) && query.next());
+        category = query.value(0).toInt();
+        query.finish();
+        query.prepare(QStringLiteral("INSERT INTO memos (title, body, category_id, sort_order, created_at, updated_at) "
+                                     "VALUES ('数学进度', :body, :category, 7, '2026-10-01T08:00:00.000Z', '2026-10-02T09:00:00.000Z')"));
+        query.bindValue(QStringLiteral(":body"), QStringLiteral("  第 8 讲\n第 3 章\n"));
+        query.bindValue(QStringLiteral(":category"), category);
+        QVERIFY(query.exec());
+        id = query.lastInsertId().toInt();
+    }
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral("DELETE FROM memos")));
+    }
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+    QSqlQuery check(DatabaseManager::instance()->database());
+    check.prepare(QStringLiteral("SELECT id, title, body, category_id, sort_order, created_at, updated_at FROM memos WHERE id = :id"));
+    check.bindValue(QStringLiteral(":id"), id);
+    QVERIFY(check.exec() && check.next());
+    QCOMPARE(check.value(0).toInt(), id);
+    QCOMPARE(check.value(1).toString(), QStringLiteral("数学进度"));
+    QCOMPARE(check.value(2).toString(), QStringLiteral("  第 8 讲\n第 3 章\n"));
+    QCOMPARE(check.value(3).toInt(), category);
+    QCOMPARE(check.value(4).toInt(), 7);
+    QCOMPARE(check.value(5).toString(), QStringLiteral("2026-10-01T08:00:00.000Z"));
+    QCOMPARE(check.value(6).toString(), QStringLiteral("2026-10-02T09:00:00.000Z"));
+    QVERIFY(!check.next());
 }
 
 QTEST_MAIN(BackupServiceTests)

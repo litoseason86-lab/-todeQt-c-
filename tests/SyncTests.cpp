@@ -736,7 +736,7 @@ void SyncTests::syncAll(FakeCloud& cloud, const QList<Device>& devices)
 
 void SyncTests::freshDatabaseHasSyncInfrastructure()
 {
-    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 19);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), DatabaseManager::kCurrentSchemaVersion);
     for (const SyncSchema::Table& table : SyncSchema::tables()) {
         QVERIFY2(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('%1') WHERE name = 'sync_id'")
                            .arg(table.name)) == 1, qPrintable(table.name));
@@ -998,9 +998,9 @@ void SyncTests::migrationFromV17BackfillsIdentitiesAndQueuesRecords()
     const int snapshotsBefore = dir.entryList(pattern, QDir::Files).size();
     QVERIFY(DatabaseManager::instance()->createTables());
 
-    // 升级前留了一份快照：v18 之后旧版本应用打不开这个库，想退回只能靠它。一路升到当前的 v19。
+    // 升级前留了一份快照：v18 之后旧版本应用打不开这个库，想退回只能靠它。一路升到当前版本。
     QCOMPARE(dir.entryList(pattern, QDir::Files).size(), snapshotsBefore + 1);
-    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 19);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), DatabaseManager::kCurrentSchemaVersion);
     QCOMPARE(triggerSql(), SyncSchema::canonicalTriggerSql());
 
     // 每一行都有身份，且互不相同。
@@ -2799,9 +2799,9 @@ void SyncTests::migrationFromV18QueuesPhaseTwoRows()
     const int snapshotsBefore = dir.entryList(pattern, QDir::Files).size();
     QVERIFY(DatabaseManager::instance()->createTables());
 
-    // 升级前留了一份迁移快照（升到 v19 之后 v18 的应用打不开这个库）；版本推到 19；触发器全部装好。
+    // 升级前留了一份迁移快照（升到 v19 之后 v18 的应用打不开这个库）；版本推到当前版本；触发器全部装好。
     QCOMPARE(dir.entryList(pattern, QDir::Files).size(), snapshotsBefore + 1);
-    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 19);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), DatabaseManager::kCurrentSchemaVersion);
     QCOMPARE(triggerSql(), SyncSchema::canonicalTriggerSql());
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('countdown_goals') WHERE name = 'sync_id'")), 1);
 

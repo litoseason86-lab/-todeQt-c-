@@ -15,7 +15,8 @@ public:
     // 高于此值的备份由更高版本应用创建，拒绝恢复。
     // v18 加入设备间同步的结构（见 SyncSchema）；升级后 v17 的应用打不开这个库。
     // v19 同步第二期（计划 051）：课表、知识缺口、目标倒计时也参与同步；升级后 v18 的应用打不开这个库。
-    static constexpr int kCurrentSchemaVersion = 19;
+    // v20 新增备忘录。旧应用不认识这张表，必须拒绝打开已经升级的数据库。
+    static constexpr int kCurrentSchemaVersion = 20;
 
     static DatabaseManager* instance();
     // 出厂的课表节次（开始、结束的分钟数，按节次先后）。建库时种入；同步据此判断节次是不是还没改过的默认值。
@@ -28,6 +29,9 @@ public:
     // 只校验列和 CHECK 挡不住 ON DELETE CASCADE：那种表照样能用，直到用户删掉一条任务，
     // 关联它的手写缺口被连带删除，而且没有任何报错。
     static bool knowledgeGapForeignKeysAreValid(const QSqlDatabase& db);
+    // 启动与备份共用备忘录契约：删科目只能归到未分类，不能连带删除正文。
+    static bool memoForeignKeysAreValid(const QSqlDatabase& db);
+    static bool memoSchemaIsValid(const QSqlDatabase& db);
 
     // 应用默认数据库路径。迁移快照（pomodoro_backup_*.db）与它同目录，
     // 所以启动失败时把这条路径给用户，就等于同时指出了数据库和快照的位置。
@@ -111,6 +115,9 @@ private:
     // 这一步只把版本号推到 19。必须推：v18 的应用不认识这三张表，打开库时会把它们的同步触发器当成
     // 过时的删掉，之后在 v18 里改的课表、知识缺口、倒计时就不会被记下来、永远发不出去。
     bool migrateToVersion19();
+    // 先建备忘录表，再运行可重入的同步迁移，最后才推进版本号。
+    bool createMemoTable();
+    bool migrateToVersion20();
     // 目标倒计时表原来由倒计时服务第一次用到时才建（CountdownService::initializeDatabase）。
     // 它要参与同步，迁移时表必须已经在，所以建表流程里也建一次，结构与服务里的相同。
     bool createCountdownGoalsTable();

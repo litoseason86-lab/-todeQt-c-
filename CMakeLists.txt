@@ -145,6 +145,8 @@ set(APP_SOURCES
     src/services/ShortcutRegistry.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
     src/services/TaskInteractionCoordinator.h
     src/services/TaskInteractionCoordinator.cpp
     # 外部 AI 接入（plans/047）：common 是与辅助程序共用的契约与路径，bridge 只编入主应用。
@@ -642,6 +644,18 @@ target_link_libraries(KnowledgeGapServiceTests PRIVATE
 
 pomodoro_todo_enable_warnings(KnowledgeGapServiceTests)
 add_test(NAME KnowledgeGapServiceTests COMMAND KnowledgeGapServiceTests)
+
+# 备忘录只依赖数据库，不引入任务或计时服务，保证纯文本记录不影响专注统计。
+add_executable(MemoServiceTests
+    tests/MemoServiceTests.cpp
+    src/services/DatabaseManager.h src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h src/services/SyncSchema.cpp
+    src/services/MemoService.h src/services/MemoService.cpp
+)
+target_link_libraries(MemoServiceTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
+pomodoro_todo_enable_warnings(MemoServiceTests)
+add_test(NAME MemoServiceTests COMMAND MemoServiceTests)
+set_tests_properties(MemoServiceTests PROPERTIES TIMEOUT 90)
 
 # 课表：只验证存储与「按周次筛选」两件事。日期到周次的换算不在这里——
 # 它在 QML 侧的 ScheduleWeeks.js，由 QML 测试覆盖。
