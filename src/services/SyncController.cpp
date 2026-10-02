@@ -14,6 +14,7 @@
 #include <QFutureWatcher>
 #include <QPointer>
 #include <QSettings>
+#include <QTimer>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <utility>
@@ -140,6 +141,13 @@ void SyncController::setForeground(bool foreground)
     if (m_engine) {
         m_engine->setForeground(foreground);
     }
+}
+
+void SyncController::setApplicationState(Qt::ApplicationState state)
+{
+    // 进了后台之后，系统随时可能把应用挂起：这时才立即写出攒下的改动、向系统要一点后台时间。
+    // 从应用切换器里直接划掉也不会丢改动：它们留在本机的待发送里，下次启动照常写出。
+    setForeground(state != Qt::ApplicationSuspended && state != Qt::ApplicationHidden);
 }
 
 void SyncController::prepareForRestore()
@@ -507,6 +515,20 @@ QVariantList SyncController::syncLog(int limit) const
     return result;
 }
 
+QString SyncController::restoreWarning() const
+{
+    // 判据是「加入过同步文件夹」而不是开关：恢复之后开新纪元、写全量快照，是在下次同步时发生的，
+    // 开关只决定这件事是马上发生、还是等你下次打开同步。
+    if (!DatabaseManager::instance()->isOpen() || SyncStore().folderId().isEmpty()) {
+        return QString();
+    }
+    return m_enabled
+        ? QStringLiteral("已开启设备间同步：恢复之后，另一台设备也会回到这份备份的状态。"
+                         "它会先自动备份自己的数据，这之后才换掉。")
+        : QStringLiteral("这台设备加入过设备间同步（现在关着）：恢复之后，下次打开同步时，"
+                         "另一台设备也会回到这份备份的状态。它会先自动备份自己的数据，这之后才换掉。");
+}
+
 void SyncController::ensureEngine()
 {
     if (m_engine) {
@@ -573,8 +595,13 @@ void SyncController::checkChosenFolder(const QByteArray& bookmark, const QString
     }
     const auto worker = std::make_shared<SyncWorker>(m_platform.makeFolder(bookmark, [](const QByteArray&) {}));
     auto* watcher = new QFutureWatcher<SyncWorker::OpenResult>(this);
-    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, bookmark, displayPath] {
+    const quint64 attempt = ++m_folderCheckAttempt;
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, bookmark, displayPath, attempt] {
         watcher->deleteLater();
+        // 超时作废之后才回来的结果：那一次已经告诉你没响应了，你可能已经重新选了别的，不再用它。
+        if (attempt != m_folderCheckAttempt || !m_choosingFolder) {
+            return;
+        }
         const SyncWorker::OpenResult result = watcher->result();
         if (!result.error.ok()) {
             setChoosingFolder(false, QStringLiteral("打不开选中的文件夹：%1").arg(result.error.message));
@@ -597,6 +624,19 @@ void SyncController::checkChosenFolder(const QByteArray& bookmark, const QString
             setChoosingFolder(false, QStringLiteral("这个同步文件夹是更新版本的番茄Todo 建的，请先更新这台设备上的应用。"));
             return;
         }
+    });
+    // 选中的文件夹迟迟读不出来（例如断网时在等 iCloud 下载标记文件）：不能让设置页一直停在「正在检查」、
+    // 按钮也一直点不了。时限与同步引擎的看门狗相同；到点就取消正在等的读、作废这一次，请你稍后再选。
+    const int timeoutMs = m_platform.engine.stallTimeoutMs;
+    QTimer::singleShot(timeoutMs, this, [this, worker, attempt, timeoutMs] {
+        if (attempt != m_folderCheckAttempt || !m_choosingFolder) {
+            return;
+        }
+        ++m_folderCheckAttempt;
+        worker->cancelPendingIo();
+        setChoosingFolder(false, QStringLiteral("读选中的文件夹超过 %1 秒没有响应（可能在等 iCloud 下载，或者网络不通），"
+                                                "请稍后再选一次。原来的文件夹照常使用。")
+                                     .arg(qMax(1, timeoutMs / 1000)));
     });
     watcher->setFuture(QtConcurrent::run([worker] { return worker->open(QString()); }));
 }
@@ -723,23 +763,55 @@ void SyncController::reconcileSettings()
     }
     SyncStore store;
     const QHash<QString, QString> synced = store.syncedSettings();
-    const QHash<QString, QString> local = SyncedSettings::currentValues();
-    // 库里记下的和本机设置不一致：本机改设置时会立刻记进库，所以只可能是上次把对方的改动写进库之后、
-    // 还没来得及写回设置就被结束了。以库里的为准写回（「今天」是哪天、番茄多长，才和另一台设备一致）。
+    const QHash<QString, QString> pending = store.pendingSettingWriteBacks();
+    QHash<QString, QString> local = SyncedSettings::currentValues();
+    const auto isRemoval = [](const QString& kind) { return kind == QLatin1String("remove"); };
+    // 库里记的和本机设置不一致，有两种来由，靠「待写回」标记分辨（标记和对方的值在同一个事务里进库）：
+    // - 有标记：对方的改动进了库、还没写回本机就被结束了。以库为准写回（「今天」是哪天、番茄多长才和另一台一致）。
+    // - 没有标记：本机改了设置，却没记进库（记录失败：库被别的连接长时间占着而等待超时、磁盘满……）。
+    //   这时以本机为准，下面补记一个新版本；以前一律以库为准，会把你的改动在下次启动时悄悄改回去。
+    // 库里有、本机却没有的项（例如某一天的今日目标）没有本机的值可留，同样以库为准。
     {
         const SyncedSettings::WriteBackScope writingBack;
+        for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
+            if (isRemoval(it.value())) {
+                SyncedSettings::remove(it.key());
+            } else if (synced.contains(it.key()) && local.value(it.key()) != synced.value(it.key())
+                       && !SyncedSettings::apply(it.key(), synced.value(it.key()))) {
+                qWarning() << "Failed to write back a synced setting:" << it.key();
+            }
+        }
         for (auto it = synced.cbegin(); it != synced.cend(); ++it) {
-            if (SyncSchema::isSyncedSettingKey(it.key()) && local.value(it.key()) != it.value()
+            if (!pending.contains(it.key()) && SyncSchema::isSyncedSettingKey(it.key()) && !local.contains(it.key())
                 && !SyncedSettings::apply(it.key(), it.value())) {
                 qWarning() << "Failed to write back a synced setting:" << it.key();
             }
         }
     }
-    // 库里还没有的（刚升级、新装、恢复了更早版本的备份）：记下本机现在的值。还是出厂默认值的用最小版本，
+    local = SyncedSettings::currentValues();
+    // 写回真的成了的，清掉标记；没成的（取值写不回本机、偏好文件写不进去）留着，下次启动再试，
+    // 也不拿本机的值去盖它——那多半是对方的取值本机认不得（例如更新版本的写法），不能反过来把它改掉。
+    QSet<QString> unresolved;
+    for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
+        const bool done = isRemoval(it.value())
+            // 固定的几项不删（保留本机的值，下面按本机的记进库）；今日目标要确认真的删掉了。
+            ? (SyncSchema::dailyGoalDateOf(it.key()).isEmpty() || !local.contains(it.key()))
+            : (!synced.contains(it.key()) || local.value(it.key()) == synced.value(it.key()));
+        if (done) {
+            store.finishSettingWriteBack(it.key());
+        } else {
+            unresolved.insert(it.key());
+        }
+    }
+    // 本机的值库里没记、或记的不一样（又不是在等写回的）：以本机为准记一个新版本、等着发出。
+    // 库里还没有的（刚升级、新装、恢复了更早版本的备份）也走这里。还是出厂默认值的用最小版本，
     // 另一台设备改过的设置会盖过它，而不是反过来被这个默认值盖掉。
     for (auto it = local.cbegin(); it != local.cend(); ++it) {
-        if (!synced.contains(it.key())
-            && !store.recordLocalSetting(it.key(), it.value(), SyncedSettings::isFactoryDefault(it.key(), it.value()))) {
+        const auto known = synced.constFind(it.key());
+        if (unresolved.contains(it.key()) || (known != synced.constEnd() && known.value() == it.value())) {
+            continue;
+        }
+        if (!store.recordLocalSetting(it.key(), it.value(), SyncedSettings::isFactoryDefault(it.key(), it.value()))) {
             qWarning() << "Failed to record a synced setting:" << it.key();
         }
     }

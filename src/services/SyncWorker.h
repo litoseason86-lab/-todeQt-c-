@@ -8,6 +8,7 @@
 #include <QList>
 #include <QString>
 
+#include <atomic>
 #include <memory>
 
 // 同步文件夹上的文件操作（050 阶段 3），在同步的工作线程里执行。
@@ -22,6 +23,9 @@ public:
 
     // 放弃正在等待的读写。可以从别的线程调用：退出时工作线程可能正卡在等 iCloud 下载。
     void cancelPendingIo();
+    // 已经做完的文件操作次数（打开、列目录、读、写、删）。可以从别的线程读：同步引擎据此判断工作线程是不是卡住了。
+    // 一直有进展的慢操作（刚同步来的文件每读一个约 1 秒）不算卡住，长时间一次操作都没做完才算。
+    quint64 progress() const;
 
     // ── 每一轮开始：打开文件夹、读标记文件 ──
     enum class MarkerState {
@@ -185,6 +189,8 @@ private:
     // devices 下的设备（合法的设备标识，不含本机），按标识排序：所有设备以同样的顺序处理。
     QStringList peerDevices(const QString& me, SyncFolder::Error* error);
 
+    // 先于 m_folder 声明：m_folder 是记进展的包装，构造时要用到它。
+    std::shared_ptr<std::atomic<quint64>> m_progress;
     std::unique_ptr<SyncFolder> m_folder;
 };
 

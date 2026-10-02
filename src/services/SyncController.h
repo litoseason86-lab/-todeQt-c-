@@ -81,6 +81,11 @@ public:
     void initialize();
     // 前后台切换。只有 iPad 接：Mac 常驻，后台照常同步。
     void setForeground(bool foreground);
+    // 应用状态变了（iPad 接 QGuiApplication::applicationStateChanged）：只有真的进了后台（Suspended、Hidden）
+    // 才算离开前台。「非活动」是窗口仍然可见、只是不在最前面（台前调度或分屏里点了别的窗口、下拉控制中心、
+    // 来电横幅）：以前把它也当成后台，每切一下就单独写一批小文件（另一台每读一个约 1 秒），
+    // 窗口还看得见时也停止读取对方的改动。
+    void setApplicationState(Qt::ApplicationState state);
     // 恢复备份开始前、结束后（接 BackupService 的 restoreStarted、restoreCompleted）。
     void prepareForRestore();
     void finishRestore(bool success);
@@ -118,6 +123,10 @@ public:
     Q_INVOKABLE void rebuildFolder();
     // 同步日志，新的在前。每一项是给界面直接显示的文字。
     Q_INVOKABLE QVariantList syncLog(int limit = 200) const;
+    // 恢复确认框里的提醒。这台设备加入过同步文件夹，恢复就是全局回滚：开着同步，另一台马上跟着回到这份备份；
+    // 关着的，下次打开同步时才发生。关着的时候更要说清楚——过几天打开同步，另一台被整个换掉，事先却没有任何提示。
+    // 没加入过（或库没打开）时为空：恢复只影响这台设备。
+    Q_INVOKABLE QString restoreWarning() const;
 
 signals:
     void enabledChanged();
@@ -154,6 +163,8 @@ private:
     QString m_folderProblem;
     // 每换一次文件夹加一：旧文件夹在工作线程里刷新的书签，回来时已经不是现在用的了，不能存。
     quint64 m_folderGeneration = 0;
+    // 每检查一次选中的文件夹加一：超时作废、或者又重新选了之后，晚回来的旧检查结果据此丢掉。
+    quint64 m_folderCheckAttempt = 0;
     // 你刚确认了加入：这一轮做完时告诉你本机数据已经换成同步文件夹里的。
     bool m_joinRequested = false;
     // 上一轮结束时本机的纪元与加入的文件夹：纪元变了、文件夹没换，说明另一台设备恢复了备份、本机跟着换了数据；

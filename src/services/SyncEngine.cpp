@@ -110,6 +110,8 @@ SyncEngine::SyncEngine(std::unique_ptr<SyncFolder> folder, const Options& option
     m_clock.start();
     m_tick.setInterval(m_options.tickMs);
     connect(&m_tick, &QTimer::timeout, this, &SyncEngine::onTick);
+    m_stallTimer.setSingleShot(true);
+    connect(&m_stallTimer, &QTimer::timeout, this, &SyncEngine::onStallCheck);
     m_lastSyncedAt = store().lastSyncedAt();
 }
 
@@ -147,6 +149,8 @@ void SyncEngine::setFolder(std::unique_ptr<SyncFolder> folder)
     // 旧文件夹上还在跑的操作照样跑完（排在同一个队里），结果按代数丢掉；新的一轮用新文件夹。
     ++m_generation;
     m_inCycle = false;
+    m_stallTimer.stop();
+    m_stallWorker.reset();
     m_worker->cancelPendingIo();
     m_worker = std::make_shared<SyncWorker>(std::move(folder));
     m_lastWrittenPath.clear();
@@ -182,6 +186,8 @@ void SyncEngine::stop()
     m_running = false;
     ++m_generation;
     m_inCycle = false;
+    m_stallTimer.stop();
+    m_stallWorker.reset();
     m_cycleRequested = false;
     m_joinConfirmed = false;
     m_cycleFlushOnly = false;
@@ -314,13 +320,22 @@ void SyncEngine::runOnWorker(Job job, Done done)
     const quint64 generation = m_generation;
     connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, done, generation] {
         watcher->deleteLater();
-        // 引擎停下、换了文件夹之后回来的旧结果：这一轮已经作废，丢掉。
+        // 引擎停下、换了文件夹、或者看门狗判定卡住而放弃之后回来的旧结果：这一轮已经作废，丢掉。
+        // 这时也不能动看门狗：它可能已经在看守新的一轮。
         if (generation != m_generation) {
             return;
         }
+        // 这一步做完了，先撤掉看门狗；done 里交出下一步时会重新开始看守。
+        m_stallTimer.stop();
+        m_stallWorker.reset();
         done(watcher->result());
     });
     const std::shared_ptr<SyncWorker> worker = m_worker;
+    // 看守这一步：记下交出去时的进展计数，到点时还没变就是卡住了。
+    m_stallWorker = worker;
+    m_stallGeneration = generation;
+    m_stallMark = worker->progress();
+    m_stallTimer.start(m_options.stallTimeoutMs);
     watcher->setFuture(QtConcurrent::run(m_pool.get(), [worker, job] { return job(*worker); }));
 }
 
@@ -343,6 +358,12 @@ void SyncEngine::startCycle()
     m_cycleFlushOnly = m_backgroundFlushPending && !m_foreground;
     m_backgroundFlushPending = false;
     m_warnings.clear();
+    // 每一轮开始先把目标已经在本机的「待接回引用」接上：目标可能是本机自己生成回来的
+    // （例行实例收回后当天又启用），这时不一定等得到对方的批次。只动本机库，与同步文件夹无关。
+    const SyncStore::ApplyResult relinked = store().resolvePendingReferences();
+    if (relinked.ok && hasVisibleChanges(relinked)) {
+        notify(relinked);
+    }
     emit statusChanged();
     const QString lastWritten = m_lastWrittenPath;
     runOnWorker<SyncWorker::OpenResult>(
@@ -932,6 +953,32 @@ void SyncEngine::endBackgroundTask()
         m_endBackgroundTask = nullptr;
         end();
     }
+}
+
+void SyncEngine::onStallCheck()
+{
+    // 已经不是交出这一步的那一轮（停下了、换了文件夹）：与这一轮无关。
+    if (!m_inCycle || !m_stallWorker || m_stallGeneration != m_generation) {
+        return;
+    }
+    const quint64 progress = m_stallWorker->progress();
+    if (progress != m_stallMark) {
+        // 慢，但一直在做（例如一轮要读几十个刚同步来的文件，每个约 1 秒）：接着等，从现在重新计时。
+        // 只看总时长的话，慢网络下读满一轮要超时，每一轮都被放弃，就永远读不完。
+        m_stallMark = progress;
+        m_stallTimer.start(m_options.stallTimeoutMs);
+        return;
+    }
+    // 卡住了：取消正在等的读写（iPad 的文件协调可以取消；Mac 上取消不了的，那一步做完时结果按代数丢掉），
+    // 放弃这一轮，显示出错，按出错的间隔重试。下一轮的文件操作排在卡住的那一步后面：它要是还没回来，
+    // 下一轮同样会被判定卡住、继续显示出错，而不是悄悄停住、界面还显示上次的「已同步」。
+    const std::shared_ptr<SyncWorker> stuck = std::move(m_stallWorker);
+    m_stallWorker.reset();
+    stuck->cancelPendingIo();
+    ++m_generation;
+    finishCycle(Status::Error, QStringLiteral("读写同步文件夹超过 %1 秒没有进展（可能在等 iCloud 下载，或者网络不通），"
+                                              "这一轮已放弃，稍后自动重试。")
+                                   .arg(qMax(1, m_options.stallTimeoutMs / 1000)));
 }
 
 void SyncEngine::onTick()

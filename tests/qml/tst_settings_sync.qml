@@ -271,12 +271,24 @@ TestCase {
     function test_restoreWarnsThatTheOtherDeviceRollsBackToo() {
         var warning = findChild(restoreDialog.contentItem, "restoreSyncWarning")
         verify(warning)
-        restoreDialog.syncEnabled = false
+        // 没有提醒（这台没加入过同步）：这一行不占地方。
+        restoreDialog.syncWarning = ""
         restoreDialog.open()
         tryCompare(restoreDialog, "opened", true)
         compare(warning.visible, false)
-        verify(warning.text.indexOf("另一台设备也会回到这份备份") >= 0)
         restoreDialog.close()
+        tryCompare(restoreDialog, "opened", false)
+
+        // 有提醒：原样显示控制器给的那句（关着同步时也要说清楚另一台会回到这份备份）。
+        var text = "这台设备加入过设备间同步（现在关着）：恢复之后，下次打开同步时，另一台设备也会回到这份备份的状态。"
+        restoreDialog.syncWarning = text
+        restoreDialog.open()
+        tryCompare(restoreDialog, "opened", true)
+        compare(warning.text, text)
+        compare(warning.Accessible.name, text)
+        restoreDialog.close()
+        tryCompare(restoreDialog, "opened", false)
+        restoreDialog.syncWarning = ""
     }
 
     function test_settingsDialogHandsTheControllerToTheDataPage() {

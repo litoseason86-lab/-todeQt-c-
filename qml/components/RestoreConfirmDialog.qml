@@ -9,8 +9,9 @@ Popup {
 
     property string backupPath: ""
     property var info: ({})
-    // 开着设备间同步时，恢复是全局回滚（计划 050 的 D1）：另一台设备也会回到这份备份。必须事先说清楚。
-    property bool syncEnabled: false
+    // 这台设备加入过设备间同步时，恢复是全局回滚（计划 050 的 D1）：另一台设备也会回到这份备份，
+    // 同步关着的话是在下次打开同步时发生。文字由同步控制器给（restoreWarning），为空表示恢复只影响这台。
+    property string syncWarning: ""
 
     signal confirmed(string path)
 
@@ -83,8 +84,8 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
-            visible: root.syncEnabled
-            text: "已开启设备间同步：恢复之后，另一台设备也会回到这份备份的状态。它会先自动备份自己的数据，这之后才换掉。"
+            visible: root.syncWarning.length > 0
+            text: root.syncWarning
             textFormat: Text.PlainText
             color: Theme.danger
             font.pixelSize: Theme.fontMd

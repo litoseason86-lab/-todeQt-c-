@@ -187,6 +187,10 @@ bool DatabaseManager::createTables()
     // createTables 是一条完整迁移链的边界；每次进入都重置，使结构缺列触发的防御性迁移也能正确备份。
     m_migrationSnapshotTaken = false;
 
+    // 不论版本，先拆掉内容与本版本规范不一致的同步触发器，再开始任何迁移写入（见 dropForeignSyncTriggers）。
+    if (!dropForeignSyncTriggers()) {
+        return false;
+    }
     if (version >= 18 && !dropSyncTriggersIfSchemaIncomplete()) {
         return false;
     }
@@ -2185,6 +2189,41 @@ bool DatabaseManager::ensureSyncTriggers()
             qWarning() << "Failed to create sync trigger" << trigger.first << query.lastError().text();
             return false;
         }
+    }
+    return true;
+}
+
+bool DatabaseManager::dropForeignSyncTriggers()
+{
+    const QHash<QString, QString> canonical = SyncSchema::canonicalTriggerSql();
+    // 规范文本是在临时内存库里建一遍得来的；数目对不上说明那一步失败了，这时宁可打不开库，
+    // 也不能把正常的触发器当成外来的拆掉、或者放过外来的。
+    if (canonical.size() != SyncSchema::triggers().size()) {
+        qWarning() << "Failed to prepare canonical sync triggers:" << canonical.size() << "of"
+                   << SyncSchema::triggers().size();
+        return false;
+    }
+    QSqlQuery query(m_db);
+    if (!query.exec(QStringLiteral("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'"))) {
+        qWarning() << "Failed to inspect sync triggers:" << query.lastError().text();
+        return false;
+    }
+    QStringList foreign;
+    while (query.next()) {
+        const QString name = query.value(0).toString();
+        if (SyncSchema::isSyncTriggerName(name) && canonical.value(name) != query.value(1).toString()) {
+            foreign.append(name);
+        }
+    }
+    query.finish();
+    for (const QString& name : std::as_const(foreign)) {
+        if (!query.exec(QStringLiteral("DROP TRIGGER IF EXISTS \"%1\"").arg(name))) {
+            qWarning() << "Failed to drop foreign sync trigger:" << query.lastError().text();
+            return false;
+        }
+    }
+    if (!foreign.isEmpty()) {
+        qWarning() << "已拆掉内容与本版本不一致的同步触发器，打开库的最后一步会重建：" << foreign;
     }
     return true;
 }

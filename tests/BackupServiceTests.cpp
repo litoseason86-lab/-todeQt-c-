@@ -15,6 +15,7 @@
 #include "../src/services/BackupService.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusTimer.h"
+#include "../src/services/SyncSchema.h"
 #include "../src/services/TaskManager.h"
 
 namespace {
@@ -154,7 +155,7 @@ private slots:
     void asyncRestoreRejectsUnsafeSettings();
     void commentedVirtualTableIsRejected();
     void restoreRefusesBackupCarryingTriggers();
-    void restoreAcceptsOwnSyncTriggersButNotForgedOnes();
+    void restoreReplacesSyncTriggersWithTheAppsOwn();
     void repeatedRestoresCapPreRestoreSnapshots();
     void newPreRestoreSnapshotSurvivesOlderSnapshotsWithFutureTimes();
     void failedAsyncPreflightKeepsAllPreRestoreSnapshots_data();
@@ -1464,16 +1465,18 @@ void BackupServiceTests::restoreRefusesBackupCarryingTriggers()
              "带 Trigger 的备份被接受了");
 }
 
-void BackupServiceTests::restoreAcceptsOwnSyncTriggersButNotForgedOnes()
+void BackupServiceTests::restoreReplacesSyncTriggersWithTheAppsOwn()
 {
     // v18 起库里本来就有维护同步版本的触发器，备份自然带着它们；这样的备份必须能恢复。
-    QVERIFY(insertTask(QStringLiteral("原始任务")) > 0);
+    const int taskId = insertTask(QStringLiteral("原始任务"));
+    QVERIFY(taskId > 0);
     QVERIFY(BackupService::instance()->createBackup(backupFile()));
     QVERIFY2(BackupService::instance()->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool(),
              qPrintable(BackupService::instance()->lastError()));
 
-    // 名字照抄本应用的触发器、换掉触发器体：只按名字放行的话，这个触发器会随恢复永久活在库里，
-    // 之后用户每删一条任务，它就清空全部科目。
+    // 以后改了同步表或触发器写法，更早版本的备份里的同步触发器文本就和这一版不同（这里换掉一个当作旧版本）；
+    // 名字照抄、内容伪造的也一样（删一条任务就清空全部科目）。旧备份不能因此恢复不了，
+    // 伪造的也不能活进库里：打开恢复后的库时，在任何写入之前就被拆掉，换成本应用这一版的。
     {
         const QString connection = QStringLiteral("ForgedSyncTrigger");
         {
@@ -1481,6 +1484,10 @@ void BackupServiceTests::restoreAcceptsOwnSyncTriggersButNotForgedOnes()
             db.setDatabaseName(backupFile());
             QVERIFY(db.open());
             QSqlQuery q(db);
+            QVERIFY2(q.exec(QStringLiteral("DROP TRIGGER tasks_sync_au")), qPrintable(q.lastError().text()));
+            QVERIFY2(q.exec(QStringLiteral(
+                "CREATE TRIGGER tasks_sync_au AFTER UPDATE OF title ON tasks BEGIN SELECT 1; END")),
+                qPrintable(q.lastError().text()));
             QVERIFY2(q.exec(QStringLiteral("DROP TRIGGER tasks_sync_ad")), qPrintable(q.lastError().text()));
             QVERIFY2(q.exec(QStringLiteral(
                 "CREATE TRIGGER tasks_sync_ad AFTER DELETE ON tasks BEGIN DELETE FROM categories; END")),
@@ -1490,8 +1497,26 @@ void BackupServiceTests::restoreAcceptsOwnSyncTriggersButNotForgedOnes()
         QSqlDatabase::removeDatabase(connection);
     }
 
-    QVERIFY(!BackupService::instance()->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool());
-    QVERIFY2(!BackupService::instance()->restoreBackup(backupFile()), "伪造的同名同步触发器被接受了");
+    QVERIFY2(BackupService::instance()->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool(),
+             qPrintable(BackupService::instance()->lastError()));
+    QVERIFY2(BackupService::instance()->restoreBackup(backupFile()), qPrintable(BackupService::instance()->lastError()));
+
+    // 库里的同步触发器恰好是本应用这一版的那一组；删一条任务不会清掉科目。
+    QHash<QString, QString> triggers;
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")));
+    while (query.next()) {
+        triggers.insert(query.value(0).toString(), query.value(1).toString());
+    }
+    query.finish();
+    QCOMPARE(triggers, SyncSchema::canonicalTriggerSql());
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM categories")) && query.next());
+    const int categories = query.value(0).toInt();
+    query.finish();
+    QVERIFY(categories > 0);
+    QVERIFY(query.exec(QStringLiteral("DELETE FROM tasks WHERE id = %1").arg(taskId)));
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM categories")) && query.next());
+    QCOMPARE(query.value(0).toInt(), categories);
 }
 
 void BackupServiceTests::asyncRestoreRejectsUnsafeSettings_data()

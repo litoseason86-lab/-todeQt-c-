@@ -112,6 +112,12 @@ public:
     //    同样作为本机改动发出。两台设备拿到同样的倒计时集合后算出同样的顺序。
     bool normalizeCountdownOrders(QString* error);
 
+    // 把目标已经在本机的「待接回引用」全部接上（调用方保证触发器跳过：接回不是本机改动）。
+    // 目标可能不是从同步收到的：例行实例被收回后，本机当天重新启用、自己又生成了同一个身份的实例；
+    // 或者目标同步到达时本机已经有这一行（走的是合并而不是插入）。只靠「插入时接回」的话，
+    // 这种引用会一直空着，而另一台挂着它，版本又相同，之后谁也不会纠正谁。
+    bool resolveAllPendingRefs(QString* error);
+
 private:
     bool applyDeletion(const SyncSchema::Table& table, const SyncRecord& record, const LocalRow& row,
                        const Tombstone& local, QString* error);
@@ -139,11 +145,18 @@ private:
     // 一条记录落地之后调用：之前指向它、只能先置空的引用，现在接回来。
     bool resolvePendingRefsTo(const QString& targetTable, const QString& targetSyncId, qint64 localId,
                               QString* error);
+    // 对方的设置值进库了、还没写回本机：在同一个事务里记下（见 SyncStore::pendingSettingWriteBacks）。
+    bool markSettingWriteBack(const QString& key, const QString& kind, QString* error);
+    // 对方「收回」了一条任务、本机删它之前调用：指向它的引用随后会被外键置空（应用远端改动时触发器跳过，
+    // 不记版本），先把它们记成「待接回」。发起收回的那台对这些引用也是「待接回」（它收到时目标已经没了），
+    // 两边记得一样，实例补回来时两边一起接上；只记一边的话，接回之后两边就一边挂着、一边空着。
+    bool notePendingRefsToReclaimed(const QString& targetSyncId, qint64 localId, QString* error);
 
     bool writeTombstone(const QString& table, const QString& syncId, const Tombstone& tombstone, QString* error);
     bool writeVersion(const QString& table, const QString& syncId, const QString& field,
                       const SyncFieldValue& value, QString* error);
-    bool clearLocalSyncState(const QString& table, const QString& syncId, QString* error);
+    // 记录已删除：清掉它的字段版本；dequeue 为真时连待发送也一并清掉（本机的删除记录不用再发的时候）。
+    bool clearLocalSyncState(const QString& table, const QString& syncId, bool dequeue, QString* error);
     bool exec(QSqlQuery& query, QString* error);
 
     // 冲突日志。
@@ -342,17 +355,23 @@ bool Applier::writeVersion(const QString& table, const QString& syncId, const QS
     return exec(query, error);
 }
 
-bool Applier::clearLocalSyncState(const QString& table, const QString& syncId, QString* error)
+bool Applier::clearLocalSyncState(const QString& table, const QString& syncId, bool dequeue, QString* error)
 {
     QSqlQuery versions(m_db);
     versions.prepare(QStringLiteral("DELETE FROM sync_field_versions WHERE tbl = :tbl AND sync_id = :id"));
     versions.bindValue(QStringLiteral(":tbl"), table);
     versions.bindValue(QStringLiteral(":id"), syncId);
+    if (!exec(versions, error)) {
+        return false;
+    }
+    if (!dequeue) {
+        return true;
+    }
     QSqlQuery outbox(m_db);
     outbox.prepare(QStringLiteral("DELETE FROM sync_outbox WHERE tbl = :tbl AND sync_id = :id"));
     outbox.bindValue(QStringLiteral(":tbl"), table);
     outbox.bindValue(QStringLiteral(":id"), syncId);
-    return exec(versions, error) && exec(outbox, error);
+    return exec(outbox, error);
 }
 
 void Applier::touchTaskDate(const QVariant& date)
@@ -454,17 +473,26 @@ bool Applier::applyDeletion(const SyncSchema::Table& table, const SyncRecord& re
                                                   : QStringLiteral("另一台设备删除了这条记录"));
         }
 
+        if (winner.kind == kKindReclaim && table.name == QLatin1String("tasks")
+            && !notePendingRefsToReclaimed(record.syncId, row.id, error)) {
+            return false;
+        }
         if (!deleteLocalRow(table, row, winner, error)) {
             return false;
         }
         m_result->changedTables.insert(table.name);
     }
 
-    if ((!local.exists || !(winner.version == local.version && winner.kind == local.kind))
-        && !writeTombstone(table.name, record.syncId, winner, error)) {
+    const bool localWins = local.exists && winner.version == local.version && winner.kind == local.kind;
+    if (!localWins && !writeTombstone(table.name, record.syncId, winner, error)) {
         return false;
     }
-    return clearLocalSyncState(table.name, record.syncId, error);
+    // 本机的删除记录压过了对方发来的那条（用户删除压过收回，或同类里本机的更新）：对方手里还是较弱的那条，
+    // 本机这条若还在待发送里，就得留着发出去。以前在这里一并出队，对方永远只有「收回」，
+    // 它当天重新启用例行、生成回这条实例后，本机按删除优先忽略，两边从此一边有、一边没有。
+    // 两条完全相同（对方本来就有这一条）时不必再发。
+    const bool sameAsIncoming = winner.version == incoming.version && winner.kind == incoming.kind;
+    return clearLocalSyncState(table.name, record.syncId, !(localWins && !sameAsIncoming), error);
 }
 
 bool Applier::applyToDeleted(const SyncSchema::Table& table, const SyncRecord& record, const Tombstone& local,
@@ -668,6 +696,109 @@ bool Applier::resolvePendingRefsTo(const QString& targetTable, const QString& ta
         relink.prepare(QStringLiteral("UPDATE %1 SET %2 = :target WHERE sync_id = :id AND %2 IS NULL")
                            .arg(item.table, item.field));
         relink.bindValue(QStringLiteral(":target"), localId);
+        relink.bindValue(QStringLiteral(":id"), item.syncId);
+        if (!exec(relink, error)) {
+            return false;
+        }
+        if (relink.numRowsAffected() > 0) {
+            m_result->changedTables.insert(item.table);
+        }
+    }
+    return true;
+}
+
+bool Applier::notePendingRefsToReclaimed(const QString& targetSyncId, qint64 localId, QString* error)
+{
+    // 按同步表清单找出所有指向任务的引用列（目前是知识缺口的来源任务、关联任务；专注过的实例不会被收回，
+    // 所以专注记录不会走到这里，但照清单处理，以后加了引用任务的列也不会漏）。
+    // 版本取这一列现在的版本：之后这一列再被改过（任何一边），就以后来的为准，不去接回。
+    for (const SyncSchema::Table& table : SyncSchema::tables()) {
+        for (const SyncSchema::Field& field : table.fields) {
+            if (field.refTable != QLatin1String("tasks")) {
+                continue;
+            }
+            QSqlQuery note(m_db);
+            note.prepare(QStringLiteral(
+                "INSERT INTO sync_pending_refs (tbl, sync_id, field, target_sync_id, v_time, v_device) "
+                "SELECT '%1', r.sync_id, '%2', :target, COALESCE(v.v_time, 0), COALESCE(v.v_device, '') "
+                "FROM %1 r LEFT JOIN sync_field_versions v "
+                "ON v.tbl = '%1' AND v.sync_id = r.sync_id AND v.field = '%2' "
+                "WHERE r.%2 = :id AND r.sync_id IS NOT NULL "
+                "ON CONFLICT(tbl, sync_id, field) DO UPDATE SET target_sync_id = excluded.target_sync_id, "
+                "v_time = excluded.v_time, v_device = excluded.v_device")
+                             .arg(table.name, field.column));
+            note.bindValue(QStringLiteral(":target"), targetSyncId);
+            note.bindValue(QStringLiteral(":id"), localId);
+            if (!exec(note, error)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool Applier::resolveAllPendingRefs(QString* error)
+{
+    struct Pending {
+        QString table;
+        QString syncId;
+        QString field;
+        QString target;
+        SyncVersion version;
+    };
+    QList<Pending> pending;
+    QSqlQuery find(m_db);
+    find.prepare(QStringLiteral(
+        "SELECT tbl, sync_id, field, target_sync_id, v_time, v_device FROM sync_pending_refs"));
+    if (!exec(find, error)) {
+        return false;
+    }
+    while (find.next()) {
+        pending.append({find.value(0).toString(), find.value(1).toString(), find.value(2).toString(),
+                        find.value(3).toString(), {find.value(4).toLongLong(), find.value(5).toString()}});
+    }
+    find.finish();
+
+    const auto forget = [this, error](const Pending& item) {
+        QSqlQuery remove(m_db);
+        remove.prepare(QStringLiteral(
+            "DELETE FROM sync_pending_refs WHERE tbl = :tbl AND sync_id = :id AND field = :field"));
+        remove.bindValue(QStringLiteral(":tbl"), item.table);
+        remove.bindValue(QStringLiteral(":id"), item.syncId);
+        remove.bindValue(QStringLiteral(":field"), item.field);
+        return exec(remove, error);
+    };
+    for (const Pending& item : pending) {
+        const SyncSchema::Field* field = SyncSchema::field(item.table, item.field);
+        if (!field || field->refTable.isEmpty()) {
+            // 不是引用列（外部改过库）：留着也永远接不上。
+            if (!forget(item)) {
+                return false;
+            }
+            continue;
+        }
+        bool dangling = false;
+        const QVariant target = resolveLocal(field->refTable, item.target, &dangling);
+        if (dangling) {
+            // 目标还没有：被永久删除（用户删除、合并后追不到）的不用再等，置空就是最终结果；
+            // 还没收到、或被收回、之后可能补回来的，接着等。
+            const Tombstone tombstone = readTombstone(field->refTable, item.target);
+            if (tombstone.exists && tombstone.kind != kKindReclaim && !forget(item)) {
+                return false;
+            }
+            continue;
+        }
+        if (!forget(item)) {
+            return false;
+        }
+        // 只接回「还是当初那次写入」的引用：这一列后来被改过，就以后来的为准。
+        if (fieldVersion(item.table, item.syncId, item.field) != item.version) {
+            continue;
+        }
+        QSqlQuery relink(m_db);
+        relink.prepare(QStringLiteral("UPDATE %1 SET %2 = :target WHERE sync_id = :id AND %2 IS NULL")
+                           .arg(item.table, item.field));
+        relink.bindValue(QStringLiteral(":target"), target);
         relink.bindValue(QStringLiteral(":id"), item.syncId);
         if (!exec(relink, error)) {
             return false;
@@ -952,11 +1083,21 @@ bool Applier::applySetting(const SyncSettingRecord& incoming, QString* error)
     write.bindValue(QStringLiteral(":d"), nonNull(incoming.version.device));
     write.bindValue(QStringLiteral(":bt"), incoming.base.time);
     write.bindValue(QStringLiteral(":bd"), nonNull(incoming.base.device));
-    if (!exec(write, error)) {
+    if (!exec(write, error) || !markSettingWriteBack(incoming.key, QStringLiteral("set"), error)) {
         return false;
     }
     m_result->changedSettings.insert(incoming.key, incoming.value);
     return true;
+}
+
+bool Applier::markSettingWriteBack(const QString& key, const QString& kind, QString* error)
+{
+    // 和库里的新值在同一个事务里落盘：要么都在、要么都不在。之后写回本机之前被结束，下次启动据此先把它写回。
+    QSqlQuery mark(m_db);
+    mark.prepare(QStringLiteral("INSERT OR REPLACE INTO sync_state (key, value) VALUES (:key, :kind)"));
+    mark.bindValue(QStringLiteral(":key"), QStringLiteral("writeback/") + key);
+    mark.bindValue(QStringLiteral(":kind"), kind);
+    return exec(mark, error);
 }
 
 bool Applier::dropRecordsMissingFrom(const SyncBatch& snapshot, QString* error)
@@ -1138,17 +1279,22 @@ bool Applier::replaceSettings(const QList<SyncSettingRecord>& settings, QString*
         insert.bindValue(QStringLiteral(":d"), nonNull(setting.version.device));
         insert.bindValue(QStringLiteral(":bt"), setting.base.time);
         insert.bindValue(QStringLiteral(":bd"), nonNull(setting.base.device));
-        if (!exec(insert, error)) {
+        // 整体替换以快照为准：每一项都写回本机并记「待写回」，不只是和库里原来记的不同的那几项。
+        // 本机设置与库里记的本来就可能不一致（本机改了没记上），只写「变了的」会把这种不一致留下来，
+        // 下次启动时它会被当成本机改动，反过来盖掉快照的值。
+        if (!exec(insert, error) || !markSettingWriteBack(setting.key, QStringLiteral("set"), error)) {
             return false;
         }
-        if (previous.value(setting.key) != setting.value) {
-            m_result->changedSettings.insert(setting.key, setting.value);
-        }
+        m_result->changedSettings.insert(setting.key, setting.value);
         previous.remove(setting.key);
     }
     // 快照里没有的项也要让调用方知道：今日目标是按日期一项一项记的，快照里没有那一天，
     // 本机就该删掉那一天的目标；只从这张表里删、本机设置不动的话，下次启动它又会被当成本机改动发回去。
+    // 同样记「待写回」：删之前被结束，下次启动先把它删掉。
     for (auto it = previous.cbegin(); it != previous.cend(); ++it) {
+        if (!markSettingWriteBack(it.key(), QStringLiteral("remove"), error)) {
+            return false;
+        }
         m_result->removedSettings.insert(it.key());
     }
     return true;
@@ -1659,17 +1805,33 @@ bool readRecord(QSqlDatabase db, const SyncSchema::Table& table, const QString& 
             const SyncSchema::Field& field = table.fields.at(index);
             SyncFieldValue value;
             value.value = row.value(index);
+            // 没有版本行的列（理论上不会有）按最小版本发，谁有真实修改都会赢过它。
+            const auto version = known.value(field.column);
+            value.version = version.first;
+            value.base = version.second;
             if (!field.refTable.isEmpty() && !value.value.isNull()) {
                 // 引用列换成对方能认的 sync_id；本机编号指向的记录已经不在时发空值。
                 QSqlQuery ref(db);
                 ref.prepare(QStringLiteral("SELECT sync_id FROM %1 WHERE id = :id").arg(field.refTable));
                 ref.bindValue(QStringLiteral(":id"), value.value);
                 value.value = ref.exec() && ref.next() ? ref.value(0) : QVariant();
+            } else if (!field.refTable.isEmpty()) {
+                // 本机暂时置空、等着接回的引用：发出去的是它本来指向的身份，而不是本机推出来的空值。
+                // 快照靠这一点把「待接回」带给从它起步的设备；否则那台设备拿到的是空值，目标补回来时也接不上。
+                // 版本必须对得上：这一列后来改过，等着的那条就作废了，发现在的值。
+                QSqlQuery pending(db);
+                pending.prepare(QStringLiteral(
+                    "SELECT target_sync_id FROM sync_pending_refs WHERE tbl = :tbl AND sync_id = :id "
+                    "AND field = :field AND v_time = :t AND v_device = :d"));
+                pending.bindValue(QStringLiteral(":tbl"), table.name);
+                pending.bindValue(QStringLiteral(":id"), syncId);
+                pending.bindValue(QStringLiteral(":field"), field.column);
+                pending.bindValue(QStringLiteral(":t"), value.version.time);
+                pending.bindValue(QStringLiteral(":d"), nonNull(value.version.device));
+                if (pending.exec() && pending.next()) {
+                    value.value = pending.value(0).toString();
+                }
             }
-            // 没有版本行的列（理论上不会有）按最小版本发，谁有真实修改都会赢过它。
-            const auto version = known.value(field.column);
-            value.version = version.first;
-            value.base = version.second;
             record->fields.insert(field.column, value);
         }
         return true;
@@ -1837,6 +1999,34 @@ QHash<QString, QString> SyncStore::syncedSettings() const
     return settings;
 }
 
+QHash<QString, QString> SyncStore::pendingSettingWriteBacks() const
+{
+    QHash<QString, QString> pending;
+    const QString prefix = QStringLiteral("writeback/");
+    QSqlQuery query(database());
+    query.prepare(QStringLiteral("SELECT key, value FROM sync_state WHERE substr(key, 1, :length) = :prefix"));
+    query.bindValue(QStringLiteral(":length"), prefix.size());
+    query.bindValue(QStringLiteral(":prefix"), prefix);
+    if (query.exec()) {
+        while (query.next()) {
+            pending.insert(query.value(0).toString().mid(prefix.size()), query.value(1).toString());
+        }
+    }
+    return pending;
+}
+
+bool SyncStore::finishSettingWriteBack(const QString& key)
+{
+    QSqlDatabase db = database();
+    if (!db.isOpen()) {
+        return false;
+    }
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("DELETE FROM sync_state WHERE key = :key"));
+    query.bindValue(QStringLiteral(":key"), QStringLiteral("writeback/") + key);
+    return query.exec();
+}
+
 QString SyncStore::syncedSetting(const QString& key) const
 {
     QSqlQuery query(database());
@@ -1995,7 +2185,7 @@ SyncStore::ApplyResult SyncStore::replaceWithSnapshot(const SyncBatch& snapshot)
     if (!query.exec()) {
         return fail(query.lastError().text());
     }
-    if (!applier.finalizeCategoryNames(&error)) {
+    if (!applier.finalizeCategoryNames(&error) || !applier.resolveAllPendingRefs(&error)) {
         return fail(error);
     }
     if (!query.exec(QStringLiteral("DELETE FROM sync_state WHERE key = 'snapshot_needed'"))
@@ -2217,10 +2407,63 @@ SyncStore::ApplyResult SyncStore::applyRemote(const SyncBatch& batch)
         return fail(query.lastError().text());
     }
     // 收尾失败只可能是数据库本身出错（磁盘满之类），整批回滚，下次再试；不会因为某条数据卡住。
+    // 接回引用要在重排之前：重排会临时放开触发器，而接回不是本机改动，不能被记成新版本。
     QString finishError;
-    if (!applier.finalizeCategoryNames(&finishError) || !applier.normalizeTaskOrders(&finishError)
-        || !applier.normalizeCountdownOrders(&finishError)) {
+    if (!applier.finalizeCategoryNames(&finishError) || !applier.resolveAllPendingRefs(&finishError)
+        || !applier.normalizeTaskOrders(&finishError) || !applier.normalizeCountdownOrders(&finishError)) {
         return fail(finishError);
+    }
+    if (!query.exec(QStringLiteral("UPDATE sync_runtime SET applying = 0 WHERE singleton_id = 1"))) {
+        return fail(query.lastError().text());
+    }
+    if (!db.commit()) {
+        return fail(db.lastError().text());
+    }
+    result.ok = true;
+    return result;
+}
+
+SyncStore::ApplyResult SyncStore::resolvePendingReferences()
+{
+    ApplyResult result;
+    QSqlDatabase db = database();
+    if (!db.isOpen()) {
+        result.error = QStringLiteral("数据库未打开");
+        return result;
+    }
+    // 平时没有待接回的引用：先看一眼，免得每一轮都开一个写事务。
+    {
+        QSqlQuery any(db);
+        if (!any.exec(QStringLiteral("SELECT EXISTS (SELECT 1 FROM sync_pending_refs)")) || !any.next()) {
+            result.error = any.lastError().text();
+            return result;
+        }
+        if (any.value(0).toInt() == 0) {
+            result.ok = true;
+            return result;
+        }
+    }
+    if (!db.transaction()) {
+        result.error = db.lastError().text();
+        return result;
+    }
+    const auto fail = [&db, &result](const QString& error) {
+        db.rollback();
+        ApplyResult failed;
+        failed.error = error;
+        qWarning() << "Failed to resolve pending sync references:" << error;
+        result = failed;
+        return result;
+    };
+    // 接回不是本机改动：和应用远端改动一样，期间让触发器跳过，复位也在同一个事务里。
+    QSqlQuery query(db);
+    if (!query.exec(QStringLiteral("UPDATE sync_runtime SET applying = 1 WHERE singleton_id = 1"))) {
+        return fail(query.lastError().text());
+    }
+    Applier applier(db, deviceId(), &result);
+    QString error;
+    if (!applier.resolveAllPendingRefs(&error)) {
+        return fail(error);
     }
     if (!query.exec(QStringLiteral("UPDATE sync_runtime SET applying = 0 WHERE singleton_id = 1"))) {
         return fail(query.lastError().text());

@@ -570,6 +570,7 @@ private slots:
     void migrationFromV17BackfillsIdentitiesAndQueuesRecords();
     void v5RebuildKeepsSyncIdsAndDoesNotRequeue();
     void tamperedTriggerIsRebuiltOnStartup();
+    void foreignSyncTriggerIsDroppedBeforeMigrationsWrite();
     void missingSyncTableDoesNotBlockStartup();
 
     // 2b：读出与应用（两台设备）
@@ -609,9 +610,13 @@ private slots:
     void republishedInstanceOutranksAFastClocksReclaim();
     void regeneratedInstanceReachesOtherDevice();
     void userDeletedInstanceStaysDeletedOnBothDevices();
+    void userDeletionOutranksConcurrentReclaimOnBothDevices();
     void dayStartHourSyncsWithDefaultsAndLatestWins();
     void referenceArrivingBeforeItsTargetIsRelinked();
     void derivedEmptyReferenceIsNotSentBack();
+    void pendingReferenceRelinksWhenTargetIsRegeneratedLocally();
+    void gapLinkToReclaimedInstanceComesBackOnBothDevices();
+    void pendingReferenceTravelsAsItsTarget();
 
     // 2e：快照、首次加入与全局回滚
     void firstJoinReplacesJoiningDeviceWithSnapshot();
@@ -1078,6 +1083,26 @@ void SyncTests::tamperedTriggerIsRebuiltOnStartup()
     QVERIFY(markEverythingSent());
     QVERIFY(TaskManager::instance()->setTaskCompleted(taskId, true));
     QVERIFY(queued(QStringLiteral("tasks"), syncIdOf(QStringLiteral("tasks"), taskId)));
+}
+
+void SyncTests::foreignSyncTriggerIsDroppedBeforeMigrationsWrite()
+{
+    // 恢复备份时，名字是同步触发器、内容却不是本应用这一版的（更早版本写的，或伪造的）不再整份拒绝，
+    // 打开库时换成本应用自己的。前提是它在被换掉之前不能执行：迁移链会写业务表（例如排序号坏了要重排），
+    // 那时它若还挂着，就会带着伪造的内容跑一遍。所以必须在任何迁移写入之前先拆掉它。
+    QVERIFY(exec(QStringLiteral("INSERT INTO categories (name, color, is_preset, display_order) "
+                                "VALUES ('物理', '#123456', 0, 6)")));
+    // 同一天两条任务排序号相同：打开库时迁移链会重跑 v12，把任务表重排一遍（会触发更新触发器）。
+    QVERIFY(exec(QStringLiteral("INSERT INTO tasks (title, date, completed, display_order) "
+                                "VALUES ('甲', '2026-09-30', 0, 1), ('乙', '2026-09-30', 0, 1)")));
+    QVERIFY(exec(QStringLiteral("DROP TRIGGER tasks_sync_au")));
+    QVERIFY(exec(QStringLiteral("CREATE TRIGGER tasks_sync_au AFTER UPDATE ON tasks "
+                                "BEGIN DELETE FROM categories WHERE is_preset = 0; END")));
+
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM categories WHERE name = '物理'")), 1);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(DISTINCT display_order) FROM tasks WHERE date = '2026-09-30'")), 2);
+    QCOMPARE(triggerSql(), SyncSchema::canonicalTriggerSql());
 }
 
 void SyncTests::missingSyncTableDoesNotBlockStartup()
@@ -1974,6 +1999,54 @@ void SyncTests::userDeletedInstanceStaysDeletedOnBothDevices()
     }
 }
 
+void SyncTests::userDeletionOutranksConcurrentReclaimOnBothDevices()
+{
+    // 审查（10-01）复现的不一致：A 手动删掉今天的实例，B 同时停用例行、收回了同一条。B 的改动先到 A：
+    // A 的删除记录压过收回，以前却随之被移出待发送，B 永远只有「收回」。B 当天重新启用例行、生成回这条实例后，
+    // A 按删除优先忽略它，两边从此一边有、一边没有。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    withServices(a, [] {
+        QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("背单词"), -1, RoutineRules::kEveryDayMask));
+        QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
+    });
+    syncAll(cloud, {a, b});
+    const QString instance = SyncSchema::routineInstanceSyncId(
+        scalar(a, QStringLiteral("SELECT sync_id FROM routines")).toString(), today().toString(Qt::ISODate));
+    const int routineOnB = scalar(b, QStringLiteral("SELECT id FROM routines")).toInt();
+
+    withServices(a, [&] {
+        QVERIFY(TaskManager::instance()->deleteTask(int(localIdOf(a, QStringLiteral("tasks"), instance))));
+    });
+    withServices(b, [&] { QVERIFY(RoutineManager::instance()->setRoutineActive(routineOnB, false)); });
+    QCOMPARE(scalar(b, QStringLiteral("SELECT kind FROM sync_tombstones WHERE sync_id = '%1'").arg(instance)).toString(),
+             QStringLiteral("reclaim"));
+
+    // B 的那批先到 A：A 的删除记录赢了，而且必须还等着发出去。
+    QVERIFY(cloud.publish(b) > 0);
+    for (const SyncStore::ApplyResult& result : cloud.pull(a)) {
+        QVERIFY2(result.ok, qPrintable(result.error));
+    }
+    QCOMPARE(scalar(a, QStringLiteral("SELECT kind FROM sync_tombstones WHERE sync_id = '%1'").arg(instance)).toString(),
+             QStringLiteral("delete"));
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE sync_id = '%1'").arg(instance)), 1);
+    syncAll(cloud, {a, b});
+    QCOMPARE(scalar(b, QStringLiteral("SELECT kind FROM sync_tombstones WHERE sync_id = '%1'").arg(instance)).toString(),
+             QStringLiteral("delete"));
+
+    // B 当天重新启用例行：B 已经知道这条是你删掉的，不再生成；两边都没有它。
+    withServices(b, [&] {
+        QVERIFY(RoutineManager::instance()->setRoutineActive(routineOnB, true));
+        QCOMPARE(RoutineManager::instance()->materializeToday(), 0);
+    });
+    syncAll(cloud, {a, b});
+    for (const Device& device : {a, b}) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(instance)), 0);
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM sync_outbox")), 0);
+    }
+}
+
 void SyncTests::dayStartHourSyncsWithDefaultsAndLatestWins()
 {
     Device a = openDevice(QStringLiteral("a"));
@@ -2092,6 +2165,136 @@ void SyncTests::derivedEmptyReferenceIsNotSentBack()
              1200);
     QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM focus_sessions fs JOIN tasks t ON t.id = fs.task_id "
                                      "WHERE fs.sync_id = '%1' AND t.sync_id = '%2'").arg(session, task)), 1);
+}
+
+void SyncTests::pendingReferenceRelinksWhenTargetIsRegeneratedLocally()
+{
+    // 审查（10-01）复现的不一致：B 在今天的实例上专注过；A 同时停用例行、收回了这条实例。B 的专注记录先到 A，
+    // 任务先置空、等着接回。A 当天又重新启用例行，自己生成回这条实例。以前只有「从同步插入目标」时才接回，
+    // A 上这条专注记录从此空着，B 上挂着，两边版本相同，谁也不纠正谁。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    withServices(a, [] {
+        QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("背单词"), -1, RoutineRules::kEveryDayMask));
+        QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
+    });
+    syncAll(cloud, {a, b});
+    const QString instance = SyncSchema::routineInstanceSyncId(
+        scalar(a, QStringLiteral("SELECT sync_id FROM routines")).toString(), today().toString(Qt::ISODate));
+    const int routineOnA = scalar(a, QStringLiteral("SELECT id FROM routines")).toInt();
+    QVERIFY(exec(b, QStringLiteral("INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) "
+                                   "VALUES (%1, '2026-09-30T09:00:00', '2026-09-30T09:25:00', 1500, 1)")
+                        .arg(localIdOf(b, QStringLiteral("tasks"), instance))));
+    const QString session = scalar(b, QStringLiteral("SELECT sync_id FROM focus_sessions")).toString();
+    withServices(a, [&] { QVERIFY(RoutineManager::instance()->setRoutineActive(routineOnA, false)); });
+
+    // B 的专注记录先到 A：任务先置空，记下等着接回。
+    QVERIFY(cloud.publish(b) > 0);
+    for (const SyncStore::ApplyResult& result : cloud.pull(a)) {
+        QVERIFY2(result.ok, qPrintable(result.error));
+    }
+    QVERIFY(scalar(a, QStringLiteral("SELECT task_id FROM focus_sessions WHERE sync_id = '%1'").arg(session)).isNull());
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs")), 1);
+
+    // A 当天重新启用例行、自己生成回这条实例：同步引擎下一轮开始时就接上，不必等对方的批次。
+    withServices(a, [&] {
+        QVERIFY(RoutineManager::instance()->setRoutineActive(routineOnA, true));
+        QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
+    });
+    const SyncStore::ApplyResult relinked = SyncStore(a.connection).resolvePendingReferences();
+    QVERIFY2(relinked.ok, qPrintable(relinked.error));
+    QVERIFY(relinked.changedTables.contains(QStringLiteral("focus_sessions")));
+    // 接回不是本机改动，不会被当成新版本发出去。
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE tbl = 'focus_sessions'")), 0);
+
+    syncAll(cloud, {a, b});
+    const QString linkedTask = QStringLiteral(
+        "SELECT t.sync_id FROM focus_sessions f JOIN tasks t ON t.id = f.task_id WHERE f.sync_id = '%1'");
+    for (const Device& device : {a, b}) {
+        QCOMPARE(scalar(device, linkedTask.arg(session)).toString(), instance);
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs")), 0);
+    }
+}
+
+void SyncTests::gapLinkToReclaimedInstanceComesBackOnBothDevices()
+{
+    // 知识缺口指向的今日实例被另一台收回：收到收回的这台删实例时，外键把缺口的来源任务置空（应用远端改动时
+    // 触发器跳过、不记版本）；发起收回的那台收到这条缺口时目标已经没了，也是空着、等着接回。
+    // 两边都得记成「待接回」，实例补回来时一起接上；只有一边记着，接回之后就一边挂着、一边空着。
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    withServices(a, [] {
+        QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("背单词"), -1, RoutineRules::kEveryDayMask));
+        QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
+    });
+    syncAll(cloud, {a, b});
+    const QString instance = SyncSchema::routineInstanceSyncId(
+        scalar(a, QStringLiteral("SELECT sync_id FROM routines")).toString(), today().toString(Qt::ISODate));
+    const int routineOnA = scalar(a, QStringLiteral("SELECT id FROM routines")).toInt();
+    const QString gap = addGap(b, QStringLiteral("词根总记混"), QString(), instance);
+    QVERIFY(!gap.isEmpty());
+    withServices(a, [&] { QVERIFY(RoutineManager::instance()->setRoutineActive(routineOnA, false)); });
+    syncAll(cloud, {a, b});
+    for (const Device& device : {a, b}) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(instance)), 0);
+        QVERIFY(valueOf(device, QStringLiteral("knowledge_gaps"), gap, QStringLiteral("source_task_id")).isNull());
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs")), 1);
+    }
+
+    // A 当天又启用例行、生成回实例：各自一轮同步之后，两边的缺口都接回到这条实例上。
+    withServices(a, [&] {
+        QVERIFY(RoutineManager::instance()->setRoutineActive(routineOnA, true));
+        QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
+    });
+    syncAll(cloud, {a, b});
+    for (const Device& device : {a, b}) {
+        QVERIFY(SyncStore(device.connection).resolvePendingReferences().ok);
+    }
+    syncAll(cloud, {a, b});
+    const QString source = QStringLiteral(
+        "SELECT t.sync_id FROM knowledge_gaps g JOIN tasks t ON t.id = g.source_task_id WHERE g.sync_id = '%1'");
+    for (const Device& device : {a, b}) {
+        QCOMPARE(scalar(device, source.arg(gap)).toString(), instance);
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs")), 0);
+    }
+}
+
+void SyncTests::pendingReferenceTravelsAsItsTarget()
+{
+    // 等着接回的引用，本机列里是空值；发出去的（尤其是快照）必须是它本来指向的身份：从这份快照起步的设备
+    // 才会同样记下「待接回」，目标补回来时一起接上，而不是拿到一个推出来的空值、从此接不回。
+    Device b = openDevice(QStringLiteral("b"));
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const SyncVersion version{kFuture, remote};
+    SyncRecord session;
+    session.table = QStringLiteral("focus_sessions");
+    session.syncId = QStringLiteral("early-session");
+    session.fields.insert(QStringLiteral("task_id"), {QStringLiteral("late-task"), version, {}});
+    session.fields.insert(QStringLiteral("start_time"), {QStringLiteral("2026-09-30T09:00:00"), version, {}});
+    session.fields.insert(QStringLiteral("end_time"), {QStringLiteral("2026-09-30T09:25:00"), version, {}});
+    session.fields.insert(QStringLiteral("duration"), {qint64(1500), version, {}});
+    session.fields.insert(QStringLiteral("mode"), {qint64(1), version, {}});
+    SyncBatch batch;
+    batch.device = remote;
+    batch.records = {session};
+    QVERIFY(SyncStore(b.connection).applyRemote(batch).ok);
+    QVERIFY(scalar(b, QStringLiteral("SELECT task_id FROM focus_sessions WHERE sync_id = 'early-session'")).isNull());
+
+    const auto exportedTarget = [&b] {
+        for (const SyncRecord& record : SyncStore(b.connection).exportSnapshot().records) {
+            if (record.syncId == QLatin1String("early-session")) {
+                return record.fields.value(QStringLiteral("task_id")).value;
+            }
+        }
+        return QVariant(QStringLiteral("(没有这条记录)"));
+    };
+    QCOMPARE(exportedTarget().toString(), QStringLiteral("late-task"));
+
+    // 这一列后来被改过（版本对不上）：等着的那条作废，发出去的是现在的值。
+    QVERIFY(exec(b, QStringLiteral("UPDATE sync_pending_refs SET v_time = v_time - 1")));
+    QVERIFY(exportedTarget().isNull());
 }
 
 // ── 2e：快照、首次加入与全局回滚 ──

@@ -1,5 +1,7 @@
 #include <QDir>
 #include <QFile>
+#include <QMutex>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSqlDatabase>
@@ -8,6 +10,7 @@
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
+#include <QWaitCondition>
 #include <QtTest>
 
 #include <functional>
@@ -89,6 +92,66 @@ SyncController::Platform ipadPlatform(FakePicker* picker,
     platform.engine.mayCreateFolder = false;
     platform.engine.runInBackground = false;
     return platform;
+}
+
+// 读某些文件会一直卡住的文件夹（断网时在等 iCloud 下载）：放行或取消之前一直等着，取消后以错误返回。
+// 与 SyncTransportTests 的同名替身同一个做法；设置由测试（主线程）改、工作线程读，所以加锁。
+struct Stall {
+    QMutex mutex;
+    QWaitCondition changed;
+    QSet<QString> hangingReads;
+    bool cancelRequested = false;
+    int cancels = 0;
+};
+
+class StallingFolder : public LocalSyncFolder
+{
+public:
+    StallingFolder(const QString& root, std::shared_ptr<Stall> stall) : LocalSyncFolder(root), m_stall(std::move(stall)) {}
+
+    bool read(const QString& path, QByteArray* data, Error* error) override
+    {
+        {
+            QMutexLocker locker(&m_stall->mutex);
+            while (m_stall->hangingReads.contains(path)) {
+                if (m_stall->cancelRequested) {
+                    m_stall->cancelRequested = false;
+                    *error = {ErrorKind::Io, QStringLiteral("读取已取消：%1").arg(path)};
+                    return false;
+                }
+                m_stall->changed.wait(&m_stall->mutex);
+            }
+        }
+        return LocalSyncFolder::read(path, data, error);
+    }
+    void cancelPendingIo() override
+    {
+        QMutexLocker locker(&m_stall->mutex);
+        ++m_stall->cancels;
+        m_stall->cancelRequested = true;
+        m_stall->changed.wakeAll();
+    }
+
+private:
+    std::shared_ptr<Stall> m_stall;
+};
+
+// 模拟「对方改的设置进了库、还没写回本机就被结束了」：走真实的应用路径（同一个事务里记下「待写回」标记），
+// 只是不调用写回（SyncNotifier::publish）。直接改 sync_settings 不带标记，表示的是另一件事：本机改了没记上。
+bool applyRemoteSettingsWithoutWritingBack(const QList<QPair<QString, QString>>& items, qint64 time)
+{
+    const QString remote = QStringLiteral("fedcba9876543210fedcba9876543210");
+    SyncBatch batch;
+    batch.device = remote;
+    batch.epoch = SyncStore().epoch();
+    for (const auto& item : items) {
+        batch.settings.append({item.first, item.second, {time, remote}, {}});
+    }
+    const SyncStore::ApplyResult result = SyncStore().applyRemote(batch);
+    if (!result.ok) {
+        qWarning() << result.error;
+    }
+    return result.ok;
 }
 
 bool waitIdle(SyncEngine* engine, int timeoutMs = 10000)
@@ -198,17 +261,22 @@ private slots:
     void enablingBeforeInitializeWaitsForTheDatabase();
     void shutdownWritesPendingChangesBeforeTheDatabaseCloses();
     void leavingTheForegroundWritesRightAway();
+    void inactiveWindowIsNotTreatedAsBackground();
 
     // 4b：与恢复备份、逻辑日起点的衔接
     void restoringStartsANewEpochAndKeepsThisDevicesIdentity();
     void restoringAnotherDevicesBackupKeepsThisDevicesMembership();
     void failedRestoreResumesWithoutANewEpoch();
+    void restoreWarningCoversAJoinedDeviceEvenWithSyncOff();
     void dayStartHourIsRecordedOnceAsDefaultThenAsChanges();
     void startupTrustsTheSyncedDayStartHour();
+    void startupKeepsALocalChangeThatWasNeverRecorded();
+    void interruptedSnapshotRemovalFinishesAtStartup();
 
     // 4c：iPad 选文件夹、Mac 重新建立
     void iPadJoinsOnlyAfterPickingTheRightFolderAndConfirming();
     void pickingAWrongFolderKeepsTheCurrentOne();
+    void hangingFolderCheckGivesUpAndExplains();
     void cancellingThePickerChangesNothing();
     void refreshedBookmarkIsSavedOnlyForTheFolderInUse();
     void macRebuildsAMissingFolder();
@@ -433,6 +501,44 @@ void SyncControllerTests::leavingTheForegroundWritesRightAway()
     QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
 }
 
+void SyncControllerTests::inactiveWindowIsNotTreatedAsBackground()
+{
+    // 审查（10-01）指出：iPad 的「非活动」是窗口仍然可见、只是不在最前面（台前调度里点了别的窗口、
+    // 下拉控制中心）。以前把它当成后台，每切一下就单独写一批小文件、要一次后台时间。只有真的进了后台才这样做。
+    SyncController::Platform platform = macPlatform(cloudFolder());
+    platform.engine.runInBackground = false;
+    platform.engine.publishIntervalMs = 30 * 60 * 1000;
+    int begun = 0;
+    platform.backgroundTask = [&begun] {
+        ++begun;
+        return std::function<void()>([] {});
+    };
+    SyncController controller(std::move(platform));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    const QString me = SyncStore().deviceId();
+    const qsizetype filesBefore = changeFiles(cloudFolder(), me).size();
+    QVERIFY(!addTask(QStringLiteral("切窗口之前记下的")).isEmpty());
+
+    controller.setApplicationState(Qt::ApplicationInactive);
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(begun, 0);
+    QCOMPARE(changeFiles(cloudFolder(), me).size(), filesBefore);
+    QVERIFY(SyncStore().hasPending());
+    controller.setApplicationState(Qt::ApplicationActive);
+    QVERIFY(waitIdle(controller.engine()));
+
+    // 真的进了后台：立即写出，并向系统要一点后台时间。
+    controller.setApplicationState(Qt::ApplicationSuspended);
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(begun, 1);
+    QCOMPARE(changeFiles(cloudFolder(), me).size(), filesBefore + 1);
+    QVERIFY(!SyncStore().hasPending());
+    controller.setApplicationState(Qt::ApplicationActive);
+    QVERIFY(waitIdle(controller.engine()));
+}
+
 void SyncControllerTests::restoringStartsANewEpochAndKeepsThisDevicesIdentity()
 {
     SyncController controller(macPlatform(cloudFolder()));
@@ -539,6 +645,41 @@ void SyncControllerTests::failedRestoreResumesWithoutANewEpoch()
     QCOMPARE(controller.statusKey(), QStringLiteral("stopped"));
 }
 
+void SyncControllerTests::restoreWarningCoversAJoinedDeviceEvenWithSyncOff()
+{
+    // 审查（10-01）复现：关着同步时恢复备份，照样开了新纪元；过几天打开同步，另一台被整体回滚，
+    // 而恢复确认框只在开关打开时才提醒。判据改成「加入过同步文件夹」，关着的时候说清楚是下次打开同步时发生。
+    {
+        // 别的设备建了文件夹、这台还在等你确认加入：恢复只影响这台，不提醒。
+        std::unique_ptr<Peer> other = openMacPeer();
+        other->engine->start();
+        QVERIFY(waitIdle(other->engine.get()));
+        SyncController waiting(macPlatform(cloudFolder()));
+        waiting.initialize();
+        QVERIFY(waiting.restoreWarning().isEmpty());
+        waiting.setEnabled(true);
+        QVERIFY(waitIdle(waiting.engine()));
+        QCOMPARE(waiting.statusKey(), QStringLiteral("needsConfirmation"));
+        QVERIFY(waiting.restoreWarning().isEmpty());
+        waiting.setEnabled(false);
+    }
+
+    // 这台在自己建的文件夹里：开着，另一台马上跟着回到备份；关掉之后照样提醒，说明是下次打开同步时。
+    QVERIFY(QDir(cloudFolder()).removeRecursively());
+    SyncController controller(macPlatform(m_data->filePath(QStringLiteral("cloud/另一个同步"))));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
+    const QString whileOn = controller.restoreWarning();
+    QVERIFY2(whileOn.contains(QStringLiteral("另一台设备也会回到这份备份的状态")), qPrintable(whileOn));
+    QVERIFY(!whileOn.contains(QStringLiteral("下次打开同步")));
+    controller.setEnabled(false);
+    const QString whileOff = controller.restoreWarning();
+    QVERIFY2(whileOff.contains(QStringLiteral("下次打开同步时")), qPrintable(whileOff));
+    QVERIFY(whileOff.contains(QStringLiteral("另一台设备也会回到这份备份的状态")));
+}
+
 void SyncControllerTests::dayStartHourIsRecordedOnceAsDefaultThenAsChanges()
 {
     const QString key = QStringLiteral("logic/dayStartHour");
@@ -577,11 +718,9 @@ void SyncControllerTests::startupTrustsTheSyncedDayStartHour()
         controller.initialize();
     }
     // 上次把另一台设备改成的 6 点写进了库，还没来得及写回设置就被结束了。
-    QSqlQuery update(DatabaseManager::instance()->database());
-    QVERIFY(update.exec(QStringLiteral("UPDATE sync_settings SET value = '6', v_time = 1790000000000, "
-                                       "v_device = 'fedcba9876543210fedcba9876543210', pending = 0 "
-                                       "WHERE key = 'logic/dayStartHour'")));
+    QVERIFY(applyRemoteSettingsWithoutWritingBack({{key, QStringLiteral("6")}}, 1790000000000LL));
     QCOMPARE(AppSettings::instance()->dayStartHour(), 4);
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().value(key), QStringLiteral("set"));
 
     SyncController relaunched(macPlatform(cloudFolder()));
     relaunched.initialize();
@@ -591,6 +730,8 @@ void SyncControllerTests::startupTrustsTheSyncedDayStartHour()
     QCOMPARE(scalar(QStringLiteral("SELECT pending FROM sync_settings WHERE key = 'logic/dayStartHour'")).toInt(), 0);
     QCOMPARE(scalar(QStringLiteral("SELECT v_time FROM sync_settings WHERE key = 'logic/dayStartHour'")).toLongLong(),
              1790000000000LL);
+    // 写回做完了，标记清掉。
+    QVERIFY(SyncStore().pendingSettingWriteBacks().isEmpty());
 }
 
 void SyncControllerTests::iPadJoinsOnlyAfterPickingTheRightFolderAndConfirming()
@@ -711,6 +852,60 @@ void SyncControllerTests::pickingAWrongFolderKeepsTheCurrentOne()
     QVERIFY(controller.folderProblem().isEmpty());
     QVERIFY(waitIdle(controller.engine()));
     QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
+}
+
+void SyncControllerTests::hangingFolderCheckGivesUpAndExplains()
+{
+    // iPad 选中文件夹后要先读它的标记文件；断网时这一步可能一直等着。以前设置页就一直停在「正在检查」、
+    // 按钮也一直点不了；现在到点取消、作废这一次，就地说明，同步仍关着，可以再选一次。
+    std::unique_ptr<Peer> mac = openMacPeer();
+    mac->engine->start();
+    QVERIFY(waitIdle(mac->engine.get()));
+    auto stall = std::make_shared<Stall>();
+    {
+        const QMutexLocker locker(&stall->mutex);
+        stall->hangingReads.insert(SyncFiles::markerFileName());
+    }
+    // 用例无论在哪一步失败都要放行卡住的读：那次检查跑在全局线程池里，不放行的话进程退出时会一直等它，
+    // 功能退化时整个测试就卡死，而不是干净地报失败。
+    const auto releaseOnExit = qScopeGuard([stall] {
+        const QMutexLocker locker(&stall->mutex);
+        stall->hangingReads.clear();
+        stall->changed.wakeAll();
+    });
+    FakePicker picker;
+    picker.bookmark = cloudFolder().toUtf8();
+    picker.message = QStringLiteral("iCloud 云盘/番茄Todo同步");
+    SyncController::Platform platform = ipadPlatform(&picker);
+    platform.engine.stallTimeoutMs = 300;
+    platform.makeFolder = [stall](const QByteArray& bookmark, std::function<void(const QByteArray&)>) {
+        return std::unique_ptr<SyncFolder>(std::make_unique<StallingFolder>(QString::fromUtf8(bookmark), stall));
+    };
+    SyncController controller(platform);
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(controller.isChoosingFolder());
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.isChoosingFolder(), 5000);
+    QVERIFY2(controller.folderProblem().contains(QStringLiteral("没有响应")), qPrintable(controller.folderProblem()));
+    QVERIFY(!controller.isEnabled());
+    QVERIFY(!controller.hasFolder());
+    {
+        const QMutexLocker locker(&stall->mutex);
+        QVERIFY(stall->cancels >= 1);
+    }
+
+    // 网络回来了，再选一次：照常校验通过、打开同步，停在「等你确认加入」。
+    {
+        const QMutexLocker locker(&stall->mutex);
+        stall->hangingReads.clear();
+        stall->changed.wakeAll();
+    }
+    controller.chooseFolder();
+    QTRY_VERIFY(!controller.isChoosingFolder());
+    QVERIFY(controller.folderProblem().isEmpty());
+    QTRY_VERIFY(controller.isEnabled());
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(controller.statusKey(), QStringLiteral("needsConfirmation"));
 }
 
 void SyncControllerTests::cancellingThePickerChangesNothing()
@@ -1102,6 +1297,8 @@ void SyncControllerTests::remoteSettingsAreWrittenBackAndSnapshotGapsRemoved()
         QCOMPARE(settingRow(setting.key).device, remote);
         QVERIFY2(!settingRow(setting.key).pending, qPrintable(setting.key));
     }
+    // 都写回成了：「待写回」标记全部清掉。
+    QVERIFY(SyncStore().pendingSettingWriteBacks().isEmpty());
 
     // 另一台设备恢复了备份：本机整体换成它的快照，快照里没有 9 月 29 日的目标。以快照为准，本机删掉这一天，
     // 下次启动也不会把它当成本机改动再发出去。
@@ -1115,6 +1312,7 @@ void SyncControllerTests::remoteSettingsAreWrittenBackAndSnapshotGapsRemoved()
     QVERIFY(replaced.removedSettings.contains(goal));
     SyncNotifier::publish(replaced);
     QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(QStringLiteral("2026-09-29")), 0);
+    QVERIFY(SyncStore().pendingSettingWriteBacks().isEmpty());
     SyncController relaunched(macPlatform(cloudFolder()));
     relaunched.initialize();
     QVERIFY(!settingRow(goal).exists);
@@ -1141,6 +1339,12 @@ void SyncControllerTests::invalidRemoteSettingsAreNotWrittenBack()
     QCOMPARE(AppSettings::instance()->workMinutes(), AppSettings::kDefaultWorkMinutes);
     QVERIFY(AppSettings::instance()->longBreakEnabled());
     QCOMPARE(ScheduleService::instance()->getPeriods().size(), DatabaseManager::defaultSchedulePeriods().size());
+    // 写不回本机的「待写回」留着：下次启动再试，也不拿本机的值去盖它（可能是更新版本的取值，本机认不得）。
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().size(), batch.settings.size());
+    SyncController relaunched(macPlatform(cloudFolder()));
+    relaunched.initialize();
+    QCOMPARE(SyncStore().syncedSetting(QStringLiteral("focus/workMinutes")), QStringLiteral("很长"));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().size(), batch.settings.size());
 }
 
 void SyncControllerTests::startupWritesBackSeveralSettingsWithoutReRecordingThem()
@@ -1152,18 +1356,11 @@ void SyncControllerTests::startupWritesBackSeveralSettingsWithoutReRecordingThem
     // 上次把对方改的几项写进了库，还没来得及写回设置就被结束了。
     const QString remote = QStringLiteral("fedcba9876543210fedcba9876543210");
     const QString goal = SyncSchema::dailyGoalSettingKey(QStringLiteral("2026-09-29"));
-    QSqlQuery query(DatabaseManager::instance()->database());
-    for (const auto& item : QList<QPair<QString, QString>>{{QStringLiteral("focus/workMinutes"), QStringLiteral("45")},
-                                                           {QStringLiteral("profile/nickname"), QStringLiteral("小番茄")},
-                                                           {goal, QStringLiteral("120")}}) {
-        query.prepare(QStringLiteral(
-            "INSERT OR REPLACE INTO sync_settings (key, value, v_time, v_device, base_time, base_device, pending) "
-            "VALUES (:key, :value, 1790000000000, :device, 0, '', 0)"));
-        query.bindValue(QStringLiteral(":key"), item.first);
-        query.bindValue(QStringLiteral(":value"), item.second);
-        query.bindValue(QStringLiteral(":device"), remote);
-        QVERIFY(query.exec());
-    }
+    QVERIFY(applyRemoteSettingsWithoutWritingBack({{QStringLiteral("focus/workMinutes"), QStringLiteral("45")},
+                                                   {QStringLiteral("profile/nickname"), QStringLiteral("小番茄")},
+                                                   {goal, QStringLiteral("120")}},
+                                                  1790000000000LL));
+    QCOMPARE(SyncStore().pendingSettingWriteBacks().size(), 3);
 
     SyncController relaunched(macPlatform(cloudFolder()));
     relaunched.initialize();
@@ -1176,6 +1373,59 @@ void SyncControllerTests::startupWritesBackSeveralSettingsWithoutReRecordingThem
         QCOMPARE(settingRow(key).time, 1790000000000LL);
         QVERIFY2(!settingRow(key).pending, qPrintable(key));
     }
+    QVERIFY(SyncStore().pendingSettingWriteBacks().isEmpty());
+}
+
+void SyncControllerTests::startupKeepsALocalChangeThatWasNeverRecorded()
+{
+    // 审查（10-01）指出：启动核对以前一律以库为准写回。本机改了设置却没记进库（记录失败：库被别的连接长时间
+    // 占着而等待超时、磁盘满……）时，下次启动你的改动就被悄悄改回去。没有「待写回」标记的不一致，以本机为准。
+    const QString key = QStringLiteral("focus/workMinutes");
+    {
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+    }
+    QCOMPARE(SyncStore().syncedSetting(key), QStringLiteral("25"));
+    // 这时没有控制器在记：相当于这次改动没能记进库。
+    AppSettings::instance()->setWorkMinutes(50);
+    QCOMPARE(SyncStore().syncedSetting(key), QStringLiteral("25"));
+
+    SyncController relaunched(macPlatform(cloudFolder()));
+    relaunched.initialize();
+    QCOMPARE(AppSettings::instance()->workMinutes(), 50);
+    QCOMPARE(SyncStore().syncedSetting(key), QStringLiteral("50"));
+    // 补记成本机的新改动，等着发出去。
+    QVERIFY(settingRow(key).pending);
+    QCOMPARE(settingRow(key).device, SyncStore().deviceId());
+}
+
+void SyncControllerTests::interruptedSnapshotRemovalFinishesAtStartup()
+{
+    // 整体替换时快照里没有某一天的今日目标：以快照为准，本机要删掉这一天。进库之后、删掉之前被结束的话，
+    // 以前下次启动会把本机还留着的这一天当成本机改动记回去、再发给另一台，把快照里没有的目标带回来。
+    const QString goal = SyncSchema::dailyGoalSettingKey(QStringLiteral("2026-09-20"));
+    {
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+        QVERIFY(AppSettings::instance()->setDailyFocusGoal(QStringLiteral("2026-09-20"), 90));
+        QCOMPARE(SyncStore().syncedSetting(goal), QStringLiteral("90"));
+    }
+    SyncBatch snapshot = SyncStore().exportSnapshot();
+    snapshot.device = QStringLiteral("fedcba9876543210fedcba9876543210");
+    snapshot.settings.erase(std::remove_if(snapshot.settings.begin(), snapshot.settings.end(),
+                                           [&goal](const SyncSettingRecord& setting) { return setting.key == goal; }),
+                            snapshot.settings.end());
+    const SyncStore::ApplyResult replaced = SyncStore().replaceWithSnapshot(snapshot);
+    QVERIFY2(replaced.ok, qPrintable(replaced.error));
+    QVERIFY(replaced.removedSettings.contains(goal));
+    // 没有写回（被结束了）：本机还留着这一天。
+    QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(QStringLiteral("2026-09-20")), 90);
+
+    SyncController relaunched(macPlatform(cloudFolder()));
+    relaunched.initialize();
+    QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(QStringLiteral("2026-09-20")), 0);
+    QVERIFY(!settingRow(goal).exists);
+    QVERIFY(SyncStore().pendingSettingWriteBacks().isEmpty());
 }
 
 QTEST_GUILESS_MAIN(SyncControllerTests)

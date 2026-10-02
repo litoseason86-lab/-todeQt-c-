@@ -5,12 +5,14 @@
 #include <QJsonObject>
 #include <QMutex>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QWaitCondition>
 #include <QtTest>
 
 #include <functional>
@@ -370,6 +372,7 @@ private slots:
     void backgroundTaskCoversFlushAfterCycleInProgress();
     void flushBeforeExitWritesPendingChanges();
     void fileWorkRunsOffTheMainThread();
+    void everyCycleRelinksReferencesWhoseTargetIsBack();
 
     // 3e：快照、清理与全局回滚
     void oldFilesAreDeletedOnlyAfterEveryoneReadThem();
@@ -384,6 +387,8 @@ private slots:
     void corruptFileIsSkippedLoggedAndHealedBySnapshot();
     void newerFormatFileStopsWithoutSkipping();
     void readFailureIsRetriedNotSkipped();
+    void stuckFolderOperationIsAbandonedAndRetried();
+    void slowButSteadyFolderIsNotAbandoned();
     void noSpaceKeepsChangesUntilSpaceReturns();
     void unavailableFolderPausesAndResumes();
     void uploadProblemIsShown();
@@ -1341,6 +1346,37 @@ void SyncTransportTests::fileWorkRunsOffTheMainThread()
     QVERIFY(!threads.contains(QThread::currentThread()));
 }
 
+void SyncTransportTests::everyCycleRelinksReferencesWhoseTargetIsBack()
+{
+    // 「待接回」的目标可能是本机自己生成回来的（例行实例收回后当天又启用），那时不一定有对方的批次到来：
+    // 引擎每一轮开始都先把目标已经在本机的引用接上，并通知界面刷新；接回不是本机改动，不进待发送。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    auto mac = makeNode(QStringLiteral("mac"), true, cloud);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    const QString task = addTask(mac->device, QStringLiteral("背单词"));
+    QVERIFY(exec(mac->device, QStringLiteral("INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode) "
+                                             "VALUES (NULL, '2026-09-30T09:00:00', '2026-09-30T09:25:00', 1500, 1)")));
+    const QString session = scalar(mac->device, QStringLiteral("SELECT sync_id FROM focus_sessions")).toString();
+    QVERIFY(syncOnce(*mac));
+    QCOMPARE(SyncStore(mac->device.connection).pendingCount(), 0);
+    // 专注记录的任务置空、等着接回这条任务（版本取这一列现在的版本，和收到时记下的一样）。
+    QVERIFY(exec(mac->device, QStringLiteral(
+        "INSERT INTO sync_pending_refs (tbl, sync_id, field, target_sync_id, v_time, v_device) "
+        "SELECT 'focus_sessions', sync_id, field, '%1', v_time, v_device FROM sync_field_versions "
+        "WHERE tbl = 'focus_sessions' AND sync_id = '%2' AND field = 'task_id'").arg(task, session)));
+    mac->notified.clear();
+
+    QVERIFY(syncOnce(*mac));
+    QCOMPARE(scalar(mac->device, QStringLiteral("SELECT t.sync_id FROM focus_sessions f JOIN tasks t ON t.id = f.task_id "
+                                                "WHERE f.sync_id = '%1'").arg(session)).toString(),
+             task);
+    QCOMPARE(scalar(mac->device, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs")).toInt(), 0);
+    QCOMPARE(SyncStore(mac->device.connection).pendingCount(), 0);
+    QVERIFY(!mac->notified.isEmpty());
+    QVERIFY(mac->notified.first().changedTables.contains(QStringLiteral("focus_sessions")));
+}
+
 // ── 3e：快照、清理与全局回滚 ──
 
 // 记下读过哪些文件：检查落后很多的设备是不是只下载了快照。
@@ -1730,6 +1766,56 @@ private:
     std::shared_ptr<Faults> m_faults;
 };
 
+// 读某些文件会一直卡住的文件夹（断网时在等 iCloud 下载）：放行或取消之前一直等着。
+// 取消能不能让它返回由 honorCancel 决定：iPad 的文件协调能取消，Mac 直接读文件取消不了。
+// readDelayMs 让每次读先停一会儿，模拟慢、但一直在进行的下载。设置由测试（主线程）改、工作线程读，所以加锁。
+struct Stall {
+    QMutex mutex;
+    QWaitCondition changed;
+    QSet<QString> hangingReads;
+    bool honorCancel = true;
+    bool cancelRequested = false;
+    int cancels = 0;
+    int readDelayMs = 0;
+};
+
+class StallingFolder : public LocalSyncFolder
+{
+public:
+    StallingFolder(const QString& root, std::shared_ptr<Stall> stall) : LocalSyncFolder(root), m_stall(std::move(stall)) {}
+
+    bool read(const QString& path, QByteArray* data, Error* error) override
+    {
+        int delayMs = 0;
+        {
+            QMutexLocker locker(&m_stall->mutex);
+            delayMs = m_stall->readDelayMs;
+            while (m_stall->hangingReads.contains(path)) {
+                if (m_stall->honorCancel && m_stall->cancelRequested) {
+                    m_stall->cancelRequested = false;
+                    *error = {ErrorKind::Io, QStringLiteral("读取已取消：%1").arg(path)};
+                    return false;
+                }
+                m_stall->changed.wait(&m_stall->mutex);
+            }
+        }
+        if (delayMs > 0) {
+            QThread::msleep(delayMs);
+        }
+        return LocalSyncFolder::read(path, data, error);
+    }
+    void cancelPendingIo() override
+    {
+        QMutexLocker locker(&m_stall->mutex);
+        ++m_stall->cancels;
+        m_stall->cancelRequested = true;
+        m_stall->changed.wakeAll();
+    }
+
+private:
+    std::shared_ptr<Stall> m_stall;
+};
+
 void SyncTransportTests::corruptFileIsSkippedLoggedAndHealedBySnapshot()
 {
     FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
@@ -1844,6 +1930,101 @@ void SyncTransportTests::readFailureIsRetriedNotSkipped()
     QVERIFY(syncOnce(*ipad));
     QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
     QCOMPARE(taskTitles(ipad->device), (QStringList{QStringLiteral("第 1 批"), QStringLiteral("第 2 批")}));
+}
+
+void SyncTransportTests::stuckFolderOperationIsAbandonedAndRetried()
+{
+    // 断网时读一个还没下载的文件可能一直等着。以前这一轮永远结束不了：之后不再同步，连本机的改动也发不出去，
+    // 界面却还显示上次的「已同步」。看门狗到点就取消正在等的读、放弃这一轮、显示出错，按出错的间隔重试。
+    SyncEngine::Options options = testOptions();
+    options.stallTimeoutMs = 300;
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad, options);
+    auto stall = std::make_shared<Stall>();
+    ipad->engine->setFolder(std::make_unique<StallingFolder>(cloud.replica(ipad->device), stall));
+    QVERIFY(waitIdle(*ipad->engine));
+    QVERIFY(!addTask(mac->device, QStringLiteral("Mac 上记的")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+    cloud.deliver(mac->device, ipad->device);
+    const QString first = SyncFiles::changesDirectory(mac->device.id) + QLatin1Char('/') + SyncFiles::changeFileName({0, 1});
+    {
+        const QMutexLocker locker(&stall->mutex);
+        stall->hangingReads.insert(first);
+    }
+    // 用例无论在哪一步失败都要放行卡住的读，免得工作线程一直被占着、拖慢后面的用例。
+    const auto releaseOnExit = qScopeGuard([stall] {
+        const QMutexLocker locker(&stall->mutex);
+        stall->hangingReads.clear();
+        stall->changed.wakeAll();
+    });
+
+    // iPad 那样能取消的读：到点取消，这一轮放弃，显示出错；下一轮再试。
+    QVERIFY(syncOnce(*ipad, 5000));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::Error);
+    QVERIFY2(ipad->engine->statusDetail().contains(QStringLiteral("没有进展")), qPrintable(ipad->engine->statusDetail()));
+    {
+        const QMutexLocker locker(&stall->mutex);
+        QVERIFY(stall->cancels >= 1);
+    }
+    QVERIFY(taskTitles(ipad->device).isEmpty());
+
+    // Mac 那样取消不了的读：卡住的那一步一直不回来，后面每一轮的文件操作都排在它后面，
+    // 每一轮同样到点放弃、显示出错，而不是悄悄停住。
+    {
+        const QMutexLocker locker(&stall->mutex);
+        stall->honorCancel = false;
+        stall->cancelRequested = false;
+    }
+    for (int round = 0; round < 2; ++round) {
+        QVERIFY(syncOnce(*ipad, 5000));
+        QCOMPARE(ipad->engine->status(), SyncEngine::Status::Error);
+    }
+
+    // 下载终于回来了：排着的旧操作做完（结果按代数丢掉），下一轮正常把改动读进来。
+    {
+        const QMutexLocker locker(&stall->mutex);
+        stall->hangingReads.clear();
+        stall->changed.wakeAll();
+    }
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("Mac 上记的")});
+}
+
+void SyncTransportTests::slowButSteadyFolderIsNotAbandoned()
+{
+    // 慢、但一直有进展（每读一个刚同步来的文件都要等一会儿）不算卡住。只看一步的总时长的话，
+    // 慢网络下读满一轮就会超时，每一轮都被放弃，永远读不完。
+    SyncEngine::Options options = testOptions();
+    options.stallTimeoutMs = 400;
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad, options);
+    auto stall = std::make_shared<Stall>();
+    ipad->engine->setFolder(std::make_unique<StallingFolder>(cloud.replica(ipad->device), stall));
+    QVERIFY(waitIdle(*ipad->engine));
+    QStringList expected;
+    for (int batch = 1; batch <= 5; ++batch) {
+        expected.append(QStringLiteral("第 %1 批").arg(batch));
+        QVERIFY(!addTask(mac->device, expected.last()).isEmpty());
+        QVERIFY(syncOnce(*mac));
+    }
+    cloud.deliver(mac->device, ipad->device);
+    {
+        const QMutexLocker locker(&stall->mutex);
+        // 一轮要读 5 个文件，每个 100 毫秒，合计超过 400 毫秒；但每 100 毫秒就有一次进展。
+        stall->readDelayMs = 100;
+    }
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(taskTitles(ipad->device), expected);
+    {
+        const QMutexLocker locker(&stall->mutex);
+        QCOMPARE(stall->cancels, 0);
+    }
 }
 
 void SyncTransportTests::noSpaceKeepsChangesUntilSpaceReturns()

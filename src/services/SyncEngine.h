@@ -96,6 +96,10 @@ public:
         // 对方的游标文件这么多天没更新，就当它不再使用，不再为它保留旧改动文件（它回来时从快照追上）。
         // iPad 的免费签名每 7 天到期，一两周不开很正常，所以取 14 天。
         int peerStaleDays = 14;
+        // 工作线程这么久一次文件操作都没做完，就当它卡住了（例如断网时在等 iCloud 下载）：取消正在等的读写、
+        // 放弃这一轮、显示出错，按出错的间隔重试。不设上限的话，一次卡住，这次运行里同步就全停了
+        // （本机的改动也发不出去），界面却还显示上次的「已同步」。慢但一直有进展的不算卡住。
+        int stallTimeoutMs = 90 * 1000;
     };
 
     // folder：同步文件夹的访问对象。构造要轻，真正取访问权在工作线程里做。
@@ -169,6 +173,8 @@ private:
     void warn(Status status, const QString& detail);
     void endBackgroundTask();
     void onTick();
+    // 看门狗到点：交给工作线程的那一步有没有进展，没有就放弃这一轮（见 Options::stallTimeoutMs）。
+    void onStallCheck();
     void updateTimer();
     void refreshPending();
     qint64 nowMs() const { return m_clock.elapsed(); }
@@ -191,6 +197,11 @@ private:
     std::function<void()> m_endBackgroundTask;
 
     QTimer m_tick;
+    // 看门狗：正在等的那一步、它属于哪一代、上次看到的进展计数。
+    QTimer m_stallTimer;
+    std::shared_ptr<SyncWorker> m_stallWorker;
+    quint64 m_stallGeneration = 0;
+    quint64 m_stallMark = 0;
     QElapsedTimer m_clock;
     bool m_running = false;
     bool m_foreground = true;

@@ -1460,7 +1460,9 @@ Item {
             // qmllint enable missing-property
             restoreConfirmDialog.backupPath = String(sourcePath)
             restoreConfirmDialog.info = info
-            restoreConfirmDialog.syncEnabled = Boolean(root.syncControllerRef && root.syncControllerRef.enabled)
+            // 打开确认框这一刻取一次提醒：弹窗是模态的，确认之前同步开关和加入状态不会再变。
+            restoreConfirmDialog.syncWarning = root.syncControllerRef
+                    ? String(root.syncControllerRef.restoreWarning()) : ""
             restoreConfirmDialog.open()
         }
         function onRestoreStarted() {

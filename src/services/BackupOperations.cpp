@@ -718,14 +718,15 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
             // （虚拟表还能把模块名当作加载路径）。
             //
             // 本应用自己从不创建 View / 虚拟表；触发器只有 v18 起维护同步版本的那一组（见 SyncSchema）。
-            // 判据仍然很硬：sqlite_master 里表和索引以外的对象，只放行与应用生成的同步触发器
-            // 逐字一致的那些（SQLite 保存触发器时会改写语句开头，双方都取经它处理后的文本再比），
-            // 其余一律拒绝恢复。只按名字放行不够：伪造一个同名触发器挂到别的表上、或换掉触发器体，照样能植入。
+            // sqlite_master 里表和索引以外的对象，只放行名字属于同步触发器的，其余一律拒绝恢复。
+            // 同步触发器不比内容：以后改了同步表或触发器写法，更早版本的备份里的触发器文本必然不同，
+            // 逐字比较会让旧备份全部恢复不了。内容也不必信它——打开恢复后的库时，内容与本版本不一致的
+            // 同步触发器会在任何迁移写入之前被拆掉，最后按规范重建（DatabaseManager::dropForeignSyncTriggers），
+            // 伪造的同名触发器没有机会执行。
             if (reason.isEmpty()) {
-                const QHash<QString, QString> allowedTriggers = SyncSchema::canonicalTriggerSql();
                 QSqlQuery objects(database);
                 if (!objects.exec(QStringLiteral(
-                        "SELECT type, name, sql FROM sqlite_master "
+                        "SELECT type, name FROM sqlite_master "
                         "WHERE type NOT IN ('table', 'index')"))) {
                     reason = QStringLiteral("读取备份结构失败");
                 } else {
@@ -733,8 +734,7 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
                         const QString type = objects.value(0).toString();
                         const QString name = objects.value(1).toString();
                         const bool isOwnSyncTrigger = type == QLatin1String("trigger")
-                            && allowedTriggers.contains(name)
-                            && allowedTriggers.value(name) == objects.value(2).toString();
+                            && SyncSchema::isSyncTriggerName(name);
                         if (!isOwnSyncTrigger) {
                             reason = QStringLiteral("备份包含本应用不会创建的数据库对象（%1 %2），"
                                                     "出于安全考虑拒绝恢复")

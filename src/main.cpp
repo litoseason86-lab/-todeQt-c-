@@ -287,11 +287,11 @@ int main(int argc, char *argv[])
         syncController.finishRestore(success);
     });
 #if defined(Q_OS_IOS)
-    // 只有 iPad 接前后台：回到前台立即同步一轮，离开前台立即写出攒下的改动。
+    // 只有 iPad 接前后台：回到前台立即同步一轮，进了后台立即写出攒下的改动（哪些状态算后台见 setApplicationState）。
     // Mac 不接：切到别的应用很频繁，每次都立即写会拆出很多小文件，而 iPad 每读一个要约 1 秒。
     QObject::connect(&app, &QGuiApplication::applicationStateChanged, &syncController,
                      [&syncController](Qt::ApplicationState state) {
-        syncController.setForeground(state == Qt::ApplicationActive);
+        syncController.setApplicationState(state);
     });
 #endif
 

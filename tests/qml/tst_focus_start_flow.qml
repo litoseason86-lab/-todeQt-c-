@@ -304,11 +304,14 @@ TestCase {
         property string folderProblem: ""
         property int logRevision: 0
         property int logCount: 0
+        // 恢复确认框里的提醒，由测试决定这一次控制器给什么。
+        property string restoreWarningText: ""
 
         signal notice(string message)
         signal logChanged()
 
         function syncLog(limit) { return [] }
+        function restoreWarning() { return restoreWarningText }
     }
 
     MainWindow {
@@ -1969,24 +1972,29 @@ TestCase {
         tryCompare(log, "opened", false)
     }
 
-    function test_restoreConfirmationKnowsSyncIsOn() {
+    function test_restoreConfirmationShowsTheSyncWarning() {
         var dialog = findChild(mainWindow, "restoreConfirmDialog")
         verify(dialog)
-        // 开着同步时恢复就是全局回滚：确认弹窗必须拿到「开着」，才会说明另一台也会回到这份备份。
-        syncController.enabled = true
-        mainWindow.restoreInspectionPath = "/tmp/测试备份.tomatobackup"
-        backupService.backupInfoReady("/tmp/测试备份.tomatobackup", { valid: true })
-        tryCompare(dialog, "opened", true)
-        compare(dialog.syncEnabled, true)
-        dialog.close()
-        tryCompare(dialog, "opened", false)
-
+        // 加入过同步时恢复就是全局回滚（关着同步也一样，只是等下次打开同步时发生）：
+        // 打开确认框时向控制器要这句提醒，原样交给弹窗；控制器给空，就是恢复只影响这台设备。
         syncController.enabled = false
+        syncController.restoreWarningText = "这台设备加入过设备间同步（现在关着）：恢复之后，下次打开同步时，另一台设备也会回到这份备份的状态。"
         mainWindow.restoreInspectionPath = "/tmp/测试备份.tomatobackup"
         backupService.backupInfoReady("/tmp/测试备份.tomatobackup", { valid: true })
         tryCompare(dialog, "opened", true)
-        compare(dialog.syncEnabled, false)
+        // 先取值、关掉模态弹窗再比较：比较失败时弹窗不会留在屏幕上，连带后面的用例一起失败。
+        var shown = dialog.syncWarning
         dialog.close()
         tryCompare(dialog, "opened", false)
+        compare(shown, syncController.restoreWarningText)
+
+        syncController.restoreWarningText = ""
+        mainWindow.restoreInspectionPath = "/tmp/测试备份.tomatobackup"
+        backupService.backupInfoReady("/tmp/测试备份.tomatobackup", { valid: true })
+        tryCompare(dialog, "opened", true)
+        shown = dialog.syncWarning
+        dialog.close()
+        tryCompare(dialog, "opened", false)
+        compare(shown, "")
     }
 }

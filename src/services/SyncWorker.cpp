@@ -16,16 +16,72 @@ QString joinPath(const QString& directory, const QString& name)
     return directory + QLatin1Char('/') + name;
 }
 
+// 包在真正的文件夹外面，每做完一次文件操作（不论成败）就把计数加一。
+// 同步引擎在主线程里看这个数有没有在涨，来区分「慢，但一直在做」和「卡住了」。
+class ProgressFolder final : public SyncFolder
+{
+public:
+    ProgressFolder(std::unique_ptr<SyncFolder> inner, std::shared_ptr<std::atomic<quint64>> progress)
+        : m_inner(std::move(inner)), m_progress(std::move(progress))
+    {
+    }
+
+    bool open(Error* error) override { return counted(m_inner->open(error)); }
+    QString name() const override { return m_inner->name(); }
+    QString displayPath() const override { return m_inner->displayPath(); }
+    QStringList list(const QString& relativeDir, Error* error) override
+    {
+        QStringList names = m_inner->list(relativeDir, error);
+        ++*m_progress;
+        return names;
+    }
+    bool read(const QString& relativePath, QByteArray* data, Error* error) override
+    {
+        return counted(m_inner->read(relativePath, data, error));
+    }
+    bool write(const QString& relativePath, const QByteArray& data, Error* error) override
+    {
+        return counted(m_inner->write(relativePath, data, error));
+    }
+    bool remove(const QString& relativePath, Error* error) override
+    {
+        return counted(m_inner->remove(relativePath, error));
+    }
+    QString uploadProblem(const QString& relativePath) override
+    {
+        QString problem = m_inner->uploadProblem(relativePath);
+        ++*m_progress;
+        return problem;
+    }
+    void cancelPendingIo() override { m_inner->cancelPendingIo(); }
+
+private:
+    bool counted(bool result)
+    {
+        ++*m_progress;
+        return result;
+    }
+
+    std::unique_ptr<SyncFolder> m_inner;
+    std::shared_ptr<std::atomic<quint64>> m_progress;
+};
+
 } // namespace
 
 SyncWorker::SyncWorker(std::unique_ptr<SyncFolder> folder)
-    : m_folder(std::move(folder))
+    : m_progress(std::make_shared<std::atomic<quint64>>(0))
+    , m_folder(std::make_unique<ProgressFolder>(std::move(folder), m_progress))
 {
 }
 
 void SyncWorker::cancelPendingIo()
 {
     m_folder->cancelPendingIo();
+}
+
+quint64 SyncWorker::progress() const
+{
+    return m_progress->load();
 }
 
 SyncWorker::OpenResult SyncWorker::open(const QString& lastWrittenPath)

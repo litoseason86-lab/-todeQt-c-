@@ -52,6 +52,10 @@ public:
     // 在一个事务里应用对方的一批改动。纪元与本机不同的批次整批拒绝：
     // 纪元更高要走快照替换（全局回滚），更低的是回滚之前的旧改动，不能再合进来。
     ApplyResult applyRemote(const SyncBatch& batch);
+    // 把目标已经在本机的「待接回引用」接上（不算本机改动，不发出去）。应用一批改动时会顺带做；
+    // 同步引擎每一轮开始时也调一次：目标可能是本机自己生成回来的（例行实例收回后当天又启用），
+    // 那时不一定有对方的批次到来。结果里的 changedTables 是真的接上了引用的表，界面据此刷新。
+    ApplyResult resolvePendingReferences();
 
     // 设置项（第一期只有 logic/dayStartHour；值本身由 AppSettings 存在 QSettings 里，这里只记同步看到的值与版本）。
     // 本机改了设置之后调用：值与上次记下的不同，就记一个新版本、等着发出。
@@ -61,6 +65,12 @@ public:
     QString syncedSetting(const QString& key) const;
     // 同步记下的全部设置项（键 → 值）。启动时与本机设置逐项核对。
     QHash<QString, QString> syncedSettings() const;
+    // 设置的「待写回」标记（键 → set / remove）。对方改的设置进库时（applyRemote、整体替换），同一个事务里记下：
+    // set 是要把库里的值写回本机，remove 是快照里没有、要从本机删掉。写回成功后由写回方清掉。
+    // 启动核对据此分辨方向：有标记的，是对方的改动还没写回（进库之后、写回之前被结束了），以库为准；
+    // 没有标记却不一致的，是本机改了却没记进库（记录失败），以本机为准。
+    QHash<QString, QString> pendingSettingWriteBacks() const;
+    bool finishSettingWriteBack(const QString& key);
 
     // ── 全量快照：首次加入与全局回滚（计划 050「首次加入与恢复备份」） ──
     // 本机全部已发布的记录（带字段版本）、全部删除记录与全部设置。给新加入的设备起步用；

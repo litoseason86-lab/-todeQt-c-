@@ -7,6 +7,7 @@
 #include "KnowledgeGapService.h"
 #include "RoutineManager.h"
 #include "ScheduleService.h"
+#include "SyncSchema.h"
 #include "SyncedSettings.h"
 #include "TaskManager.h"
 
@@ -44,6 +45,24 @@ void publish(const SyncStore::ApplyResult& result)
     // 整体替换时快照里没有的项（某一天的今日目标）：以快照为准，从本机删掉。
     for (const QString& key : result.removedSettings) {
         SyncedSettings::remove(key);
+    }
+    // 真的写回成了的，清掉「待写回」标记（见 SyncStore::pendingSettingWriteBacks）。按本机现在的值核对：
+    // setter 会把越界值归一、偏好文件也可能写不进去，「调用过写回」不等于「本机已经是这个值」。
+    // 没写成的留着，下次启动以库为准再写一次，而不是被当成本机改动、反过来盖掉对方的值。
+    if (!result.changedSettings.isEmpty() || !result.removedSettings.isEmpty()) {
+        SyncStore store;
+        const QHash<QString, QString> now = SyncedSettings::currentValues();
+        for (auto it = result.changedSettings.cbegin(); it != result.changedSettings.cend(); ++it) {
+            if (now.contains(it.key()) && now.value(it.key()) == it.value()) {
+                store.finishSettingWriteBack(it.key());
+            }
+        }
+        for (const QString& key : result.removedSettings) {
+            // 固定的几项不删（保留本机的值，下次启动按本机的记进库），标记直接清掉；今日目标要确认真的没了。
+            if (SyncSchema::dailyGoalDateOf(key).isEmpty() || !now.contains(key)) {
+                store.finishSettingWriteBack(key);
+            }
+        }
     }
 
     // 科目变了会连带例行列表（RoutineManager 把 categoriesChanged 转成 routinesChanged），不必再单独发一次。
