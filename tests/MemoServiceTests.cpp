@@ -28,6 +28,7 @@ private slots:
     void reorderRollsBackAfterRealSqlFailure();
     void failedInsertAndUpdateLeaveDataAndSignalsIntact();
     void unchangedSaveAndReorderDoNotChangeTimestamp();
+    void movingMemosKeepsTheirUpdatedTime();
     void databaseReopenNotifiesAndClosedDatabaseFails();
     void version19MigrationPreservesDataAndSnapshot();
     void brokenMemoSchemaIsRejected_data();
@@ -320,6 +321,29 @@ void MemoServiceTests::unchangedSaveAndReorderDoNotChangeTimestamp()
     QVERIFY(service->updateMemo(id, {{QStringLiteral("body"), QStringLiteral("真的修改")}}));
     QCOMPARE(changed.count(), 1);
     QVERIFY(service->getMemo(id).value(QStringLiteral("updatedAt")).toString() != QStringLiteral("2020-01-01T00:00:00Z"));
+}
+
+void MemoServiceTests::movingMemosKeepsTheirUpdatedTime()
+{
+    // 上一条用例里只有一条备忘、位置没变，排序根本不会写库。这里两条真的互换位置：
+    // 更新时间表示内容最后一次修改，被挪动的备忘也不能因此显示成「刚刚更新」。
+    auto* service = MemoService::instance();
+    const int first = service->createMemo(QStringLiteral("第一条"), QString());
+    const int second = service->createMemo(QStringLiteral("第二条"), QString());
+    QVERIFY(first > 0 && second > 0);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("UPDATE memos SET updated_at = '2020-01-01T00:00:00Z'")));
+    QSignalSpy changed(service, &MemoService::memosChanged);
+
+    QVERIFY(service->reorderMemos(0, {second, first}));
+
+    // 位置确实换了，也通知了界面重读，否则这条用例测不到任何东西。
+    QCOMPARE(changed.count(), 1);
+    const QVariantList memos = service->listMemos(0);
+    QCOMPARE(idsOf(memos), QVariantList({second, first}));
+    for (const QVariant& memo : memos) {
+        QCOMPARE(memo.toMap().value(QStringLiteral("updatedAt")).toString(), QStringLiteral("2020-01-01T00:00:00Z"));
+    }
 }
 
 void MemoServiceTests::databaseReopenNotifiesAndClosedDatabaseFails()

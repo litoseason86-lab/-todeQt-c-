@@ -32,6 +32,7 @@ public:
     Q_INVOKABLE bool updateMemo(int memoId, const QVariantMap& changes);
     Q_INVOKABLE bool deleteMemo(int memoId);
     // 必须传该科目的完整编号列表；遗漏、重复、跨科目都拒绝，整批排序在一个事务内完成。
+    // 只改顺序，不改更新时间（更新时间只表示内容最后一次修改）。
     Q_INVOKABLE bool reorderMemos(int categoryId, const QVariantList& memoIds);
 
 signals:

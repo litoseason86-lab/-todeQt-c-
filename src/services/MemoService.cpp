@@ -384,16 +384,16 @@ bool MemoService::reorderMemos(int categoryId, const QVariantList& memoIds)
         db.rollback();
         return reportFailure(QStringLiteral("备忘录列表已变化，请刷新后重排"));
     }
-    const QString now = timestamp();
     bool changed = false;
     for (qsizetype index = 0; index < ids.size(); ++index) {
         const int order = static_cast<int>(index) + 1;
         if (current.value(ids.at(index)) == order) {
             continue;
         }
-        query.prepare(QStringLiteral("UPDATE memos SET sort_order = :order, updated_at = :now WHERE id = :id"));
+        // 只改位置，不动更新时间：界面上的「更新时间」表示内容最后一次修改，拖动排序不算改内容。
+        // 否则挪一下顺序，被挪动的几条都会显示成「刚刚更新」。
+        query.prepare(QStringLiteral("UPDATE memos SET sort_order = :order WHERE id = :id"));
         query.bindValue(QStringLiteral(":order"), order);
-        query.bindValue(QStringLiteral(":now"), now);
         query.bindValue(QStringLiteral(":id"), ids.at(index));
         const bool saved = query.exec() && query.numRowsAffected() == 1;
         const QString error = query.lastError().text();
