@@ -1329,6 +1329,7 @@ void BackupServiceTests::version19BackupWithoutMemosRestoresAndMigrates()
 
 void BackupServiceTests::version20BackupRestoresAllMemoFields()
 {
+    // 产品保证：备份恢复完整保留备忘的业务字段，包括已存入库的内容更新时间。
     int id = 0;
     int category = 0;
     {
@@ -1336,6 +1337,10 @@ void BackupServiceTests::version20BackupRestoresAllMemoFields()
         QVERIFY(query.exec(QStringLiteral("SELECT id FROM categories ORDER BY display_order LIMIT 1")) && query.next());
         category = query.value(0).toInt();
         query.finish();
+        // 同步触发器按内容版本生成更新时间，固定时钟后才能得到下方指定的源数据。
+        QVERIFY(query.exec(QStringLiteral("UPDATE sync_runtime SET test_now_ms=%1 WHERE singleton_id=1")
+                               .arg(QDateTime::fromString(QStringLiteral("2026-10-02T09:00:00.000Z"), Qt::ISODateWithMs).toMSecsSinceEpoch())));
+        QVERIFY(query.exec(QStringLiteral("UPDATE sync_state SET value='0' WHERE key='hlc'")));
         query.prepare(QStringLiteral("INSERT INTO memos (title, body, category_id, sort_order, created_at, updated_at) "
                                      "VALUES ('数学进度', :body, :category, 7, '2026-10-01T08:00:00.000Z', '2026-10-02T09:00:00.000Z')"));
         query.bindValue(QStringLiteral(":body"), QStringLiteral("  第 8 讲\n第 3 章\n"));
@@ -1549,12 +1554,13 @@ void BackupServiceTests::restoreRefusesOversizedSettingValue()
 
 void BackupServiceTests::restoreRefusesBackupCarryingTriggers()
 {
+    // 产品保证：备忘录上的外来触发器也不能随备份恢复，只有清单里的同步触发器获准。
     QVERIFY(insertTask(QStringLiteral("原始任务")) > 0);
     QVERIFY(BackupService::instance()->createBackup(backupFile()));
 
     // 往备份里植入一个 Trigger。恢复是把外部文件整个复制成主库，
     // 如果不检查 sqlite_master，这个 Trigger 会永久活在用户库里，
-    // 之后每次新增任务都静默执行——恢复前快照也发现不了这种延迟破坏。
+    // 之后每次新增备忘都静默执行——恢复前快照也发现不了这种延迟破坏。
     {
         const QString connection = QStringLiteral("TriggerInject");
         {
@@ -1563,7 +1569,7 @@ void BackupServiceTests::restoreRefusesBackupCarryingTriggers()
             QVERIFY(db.open());
             QSqlQuery q(db);
             QVERIFY2(q.exec(QStringLiteral(
-                "CREATE TRIGGER evil AFTER INSERT ON tasks BEGIN "
+                "CREATE TRIGGER evil AFTER INSERT ON memos BEGIN "
                 "DELETE FROM tasks WHERE id <> NEW.id; END")), qPrintable(q.lastError().text()));
             db.close();
         }
@@ -1577,6 +1583,12 @@ void BackupServiceTests::restoreRefusesBackupCarryingTriggers()
 
 void BackupServiceTests::restoreReplacesSyncTriggersWithTheAppsOwn()
 {
+    // 产品保证：带备忘录同步触发器的备份可恢复，伪造的同名触发器在第一次业务写入前被换掉。
+    QSqlQuery memo(DatabaseManager::instance()->database());
+    QVERIFY(memo.exec(QStringLiteral("INSERT INTO memos(title,body,sort_order,created_at,updated_at) "
+                                    "VALUES('备忘备份','完整正文',1,'2026-10-02T12:51:46.728Z','2026-10-02T12:51:46.728Z')")));
+    const int memoId = memo.lastInsertId().toInt();
+    memo.finish();
     // v18 起库里本来就有维护同步版本的触发器，备份自然带着它们；这样的备份必须能恢复。
     const int taskId = insertTask(QStringLiteral("原始任务"));
     QVERIFY(taskId > 0);
@@ -1594,6 +1606,9 @@ void BackupServiceTests::restoreReplacesSyncTriggersWithTheAppsOwn()
             db.setDatabaseName(backupFile());
             QVERIFY(db.open());
             QSqlQuery q(db);
+            QVERIFY2(q.exec(QStringLiteral("DROP TRIGGER memos_sync_ad")), qPrintable(q.lastError().text()));
+            QVERIFY2(q.exec(QStringLiteral("CREATE TRIGGER memos_sync_ad AFTER DELETE ON memos BEGIN DELETE FROM categories; END")),
+                     qPrintable(q.lastError().text()));
             QVERIFY2(q.exec(QStringLiteral("DROP TRIGGER tasks_sync_au")), qPrintable(q.lastError().text()));
             QVERIFY2(q.exec(QStringLiteral(
                 "CREATE TRIGGER tasks_sync_au AFTER UPDATE OF title ON tasks BEGIN SELECT 1; END")),
@@ -1624,6 +1639,10 @@ void BackupServiceTests::restoreReplacesSyncTriggersWithTheAppsOwn()
     const int categories = query.value(0).toInt();
     query.finish();
     QVERIFY(categories > 0);
+    QVERIFY(query.exec(QStringLiteral("SELECT body FROM memos WHERE id=%1").arg(memoId)) && query.next());
+    QCOMPARE(query.value(0).toString(), QStringLiteral("完整正文"));
+    query.finish();
+    QVERIFY(query.exec(QStringLiteral("DELETE FROM memos WHERE id=%1").arg(memoId)));
     QVERIFY(query.exec(QStringLiteral("DELETE FROM tasks WHERE id = %1").arg(taskId)));
     QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM categories")) && query.next());
     QCOMPARE(query.value(0).toInt(), categories);

@@ -78,6 +78,11 @@ QList<Table> buildTables()
          {makeField("name", "名称"), makeField("target_date", "目标日期"), makeField("display_order", "排序"),
           makeField("created_at", "创建时间")},
          QString(), {QStringLiteral("updated_at")}},
+        {QStringLiteral("memos"), QStringLiteral("备忘录"),
+         {makeField("title", "标题"), makeField("body", "正文"), makeField("category_id", "科目", "categories"),
+          makeField("sort_order", "顺序"), makeField("created_at", "创建时间")},
+         QString(), {}, {QStringLiteral("updated_at"),
+                         {QStringLiteral("title"), QStringLiteral("body"), QStringLiteral("category_id")}}},
     };
 }
 
@@ -148,6 +153,25 @@ QString minimalVersionCondition(const Table& table)
     return QStringLiteral("0");
 }
 
+QString versionStampUpdate(const Table& table, bool inserting)
+{
+    if (table.versionStamp.column.isEmpty()) {
+        return {};
+    }
+    QString condition;
+    if (!inserting) {
+        QStringList changed;
+        for (const QString& field : table.versionStamp.fields) {
+            changed.append(QStringLiteral("OLD.%1 IS NOT NEW.%1").arg(field));
+        }
+        condition = QStringLiteral(" AND (%1)").arg(changed.join(QStringLiteral(" OR ")));
+    }
+    // 服务取时间与 SQL 落库可能跨毫秒，逻辑时钟还可能比墙上时间快。
+    // 本机也使用真正记录的版本时间，才能与对方显示的更新时间逐毫秒一致。
+    return QStringLiteral("UPDATE %1 SET %2 = %3 WHERE id = NEW.id%4; ")
+        .arg(table.name, table.versionStamp.column, sqlVersionTimestamp(sqlCurrentClock()), condition);
+}
+
 QPair<QString, QString> insertTrigger(const Table& table)
 {
     const QString name = table.name + QStringLiteral("_sync_ai");
@@ -170,7 +194,7 @@ QPair<QString, QString> insertTrigger(const Table& table)
         "SELECT '{TBL}', r.sync_id, {CLOCK} FROM {TBL} r "
         "WHERE r.id = NEW.id AND r.sync_id IS NOT NULL AND {PUBLISH} "
         "ON CONFLICT(tbl, sync_id) DO UPDATE SET change_time = excluded.change_time; "
-        "{CLEAR_RECLAIM}"
+        "{STAMP}{CLEAR_RECLAIM}"
         "END"),
         {{QStringLiteral("{NAME}"), name},
          {QStringLiteral("{TBL}"), table.name},
@@ -182,6 +206,7 @@ QPair<QString, QString> insertTrigger(const Table& table)
          {QStringLiteral("{DEVICE}"), sqlDeviceId()},
          {QStringLiteral("{FIELDS}"), fieldValuesSql(table)},
          {QStringLiteral("{PUBLISH}"), publishConditionFor(table, QStringLiteral("r"))},
+         {QStringLiteral("{STAMP}"), versionStampUpdate(table, true)},
          {QStringLiteral("{CLEAR_RECLAIM}"), clearReclaim}});
     return {name, sql};
 }
@@ -213,6 +238,7 @@ QPair<QString, QString> updateTrigger(const Table& table)
         "AND ({CHANGED}) BEGIN "
         "{ADVANCE} "
         "{PER_FIELD} "
+        "{STAMP}"
         "INSERT INTO sync_outbox (tbl, sync_id, change_time) VALUES ('{TBL}', NEW.sync_id, {CLOCK}) "
         "ON CONFLICT(tbl, sync_id) DO UPDATE SET change_time = excluded.change_time; "
         "END"),
@@ -225,6 +251,7 @@ QPair<QString, QString> updateTrigger(const Table& table)
          {QStringLiteral("{CHANGED}"), changed.join(QStringLiteral(" OR "))},
          {QStringLiteral("{ADVANCE}"), sqlAdvanceClock()},
          {QStringLiteral("{PER_FIELD}"), perField.join(QLatin1Char(' '))},
+         {QStringLiteral("{STAMP}"), versionStampUpdate(table, false)},
          {QStringLiteral("{CLOCK}"), sqlCurrentClock()}});
     return {name, sql};
 }
@@ -304,8 +331,15 @@ QHash<QString, QString> computeCanonicalTriggerSql()
             // 附属表直接用真实的建表语句。
             QStringList scaffold;
             for (const Table& table : tables()) {
+                QStringList columns;
+                for (const Field& field : table.fields) {
+                    columns.append(field.column);
+                }
+                if (!table.versionStamp.column.isEmpty()) {
+                    columns.append(table.versionStamp.column);
+                }
                 scaffold.append(QStringLiteral("CREATE TABLE %1 (id INTEGER PRIMARY KEY, sync_id, %2)")
-                                    .arg(table.name, columnList(table)));
+                                    .arg(table.name, columns.join(QStringLiteral(", "))));
             }
             bool ok = true;
             for (const QString& sql : scaffold + tableStatements()) {
@@ -523,6 +557,11 @@ QString sqlCurrentClock()
     // 状态行缺失（外部改过库）时退回此刻，不能让版本写成 NULL 撞上约束，把用户的写入一起挡掉。
     return QStringLiteral("COALESCE((SELECT CAST(value AS INTEGER) FROM sync_state WHERE key = 'hlc'), %1)")
         .arg(sqlNowMs());
+}
+
+QString sqlVersionTimestamp(const QString& milliseconds)
+{
+    return QStringLiteral("strftime('%Y-%m-%dT%H:%M:%fZ', (%1) / 1000.0, 'unixepoch')").arg(milliseconds);
 }
 
 QString sqlDeviceId()

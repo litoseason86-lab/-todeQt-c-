@@ -2065,13 +2065,18 @@ bool DatabaseManager::migrateToVersion18()
                   "OR (f.column1 = 'color' AND r.color = (SELECT d.column3 FROM %1 d WHERE d.column1 = r.display_order))))")
                   .arg(defaults)
             : QStringLiteral("0");
+        // 阶段 1 已写下的备忘录首次加入同步时，内容版本取原来的更新时间。
+        // 直接取迁移此刻会让另一台显示“刚刚更新”，两台时间也会不一致；解析失败才退回迁移时间。
+        const QString initialClock = table.versionStamp.column.isEmpty() ? clock
+            : QStringLiteral("COALESCE(CAST(ROUND((julianday(r.%1) - 2440587.5) * 86400000) AS INTEGER), %2)")
+                  .arg(table.versionStamp.column, clock);
         const QString versions = QStringLiteral(
             "INSERT INTO sync_field_versions (tbl, sync_id, field, v_time, v_device, base_time, base_device, pending) "
             "SELECT '%1', r.sync_id, f.column1, CASE WHEN %2 THEN 0 ELSE %3 END, "
             "CASE WHEN %2 THEN '' ELSE %4 END, 0, '', 1 "
             "FROM %1 r, %5 f WHERE r.sync_id IS NOT NULL AND %6 "
             "ON CONFLICT(tbl, sync_id, field) DO NOTHING")
-            .arg(table.name, minimal, clock, device, SyncSchema::fieldValuesSql(table), published);
+            .arg(table.name, minimal, initialClock, device, SyncSchema::fieldValuesSql(table), published);
         if (!run(enqueue, "Failed to queue existing records for sync:")
             || !run(versions, "Failed to backfill sync field versions:")) {
             return false;

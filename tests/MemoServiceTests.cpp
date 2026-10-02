@@ -82,6 +82,7 @@ int MemoServiceTests::seedCategory(const QString& name, int order)
 
 void MemoServiceTests::createReadUpdateDeletePreservePlainText()
 {
+    // 产品保证：备忘的空标题和正文原样保存，创建时间有效，内容更新时间与同步版本一致。
     auto* service = MemoService::instance();
     QSignalSpy changed(service, &MemoService::memosChanged);
     const QString body = QStringLiteral("  第 8 讲做完\r\n1000 题第 3 章\n\n");
@@ -91,7 +92,16 @@ void MemoServiceTests::createReadUpdateDeletePreservePlainText()
     auto memo = service->getMemo(id);
     QCOMPARE(memo.value(QStringLiteral("body")).toString(), body);
     QCOMPARE(memo.value(QStringLiteral("displayTitle")).toString(), QStringLiteral("  第 8 讲做完"));
-    QCOMPARE(memo.value(QStringLiteral("createdAt")), memo.value(QStringLiteral("updatedAt")));
+    // 创建时间保留服务写下的实际时刻；更新时间会由同步触发器对齐到内容版本时间，可能相差毫秒。
+    QVERIFY(QDateTime::fromString(memo.value(QStringLiteral("updatedAt")).toString(), Qt::ISODateWithMs).isValid());
+    QSqlQuery version(DatabaseManager::instance()->database());
+    version.prepare(QStringLiteral("SELECT v_time FROM sync_field_versions WHERE tbl='memos' "
+                                   "AND field='body' AND sync_id=(SELECT sync_id FROM memos WHERE id=:id)"));
+    version.bindValue(QStringLiteral(":id"), id);
+    QVERIFY(version.exec() && version.next());
+    QCOMPARE(QDateTime::fromString(memo.value(QStringLiteral("updatedAt")).toString(), Qt::ISODateWithMs).toMSecsSinceEpoch(),
+             version.value(0).toLongLong());
+    version.finish();
     QVERIFY(QDateTime::fromString(memo.value(QStringLiteral("createdAt")).toString(), Qt::ISODateWithMs).isValid());
     const QVariant createdAt = memo.value(QStringLiteral("createdAt"));
     QVERIFY(service->updateMemo(id, {{QStringLiteral("title"), QStringLiteral(" 数学 ")}}));

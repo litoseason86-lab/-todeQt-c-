@@ -42,9 +42,16 @@ struct Table {
     QString publishCondition;
     // 只属于本机、不同步却不许为空的列（各表的 updated_at）：对方新建的行插进本机时，用本机此刻的时间补上。
     QStringList stampOnInsert = {};
+    // 派生的内容更新时间不参与同步；本机触发器与远端应用都从这些内容字段的版本时间计算。
+    // 空列名表示不用这条规则。排序列不列在下面的驱动字段清单内，拖动不会伪装成内容更新。
+    struct VersionStamp {
+        QString column;
+        QStringList fields;
+    };
+    VersionStamp versionStamp = {};
 };
 
-// 参与同步的表，按依赖顺序排列：被引用的在前（科目 → 例行 → 任务 → 专注 → 休息 → 课表、知识缺口、倒计时）。
+// 参与同步的表，按依赖顺序排列：被引用的在前（科目 → 例行 → 任务 → 专注 → 休息 → 课表、知识缺口、倒计时、备忘录）。
 // 应用远端改动时也按这个顺序，先有科目，任务才能指向它。
 const QList<Table>& tables();
 // 按表名查规格；不是同步表时返回 nullptr。
@@ -83,6 +90,8 @@ QString sqlAdvanceClock();
 // 当前逻辑时间与本设备标识（表达式）。
 QString sqlCurrentClock();
 QString sqlDeviceId();
+// 版本毫秒时间转换为与 MemoService 相同的 UTC、带毫秒文本。
+QString sqlVersionTimestamp(const QString& milliseconds);
 // 「现在不是在应用远端改动」（表达式）。应用远端改动时同一事务里置位，触发器全部跳过，
 // 收到的改动不会被当成本机修改再发回去。
 QString sqlNotApplyingRemote();

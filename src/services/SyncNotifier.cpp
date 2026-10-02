@@ -5,6 +5,7 @@
 #include "CountdownService.h"
 #include "FocusHistoryService.h"
 #include "KnowledgeGapService.h"
+#include "MemoService.h"
 #include "RoutineManager.h"
 #include "ScheduleService.h"
 #include "SyncSchema.h"
@@ -87,6 +88,9 @@ void publish(const SyncStore::ApplyResult& result)
     }
     if (changed.contains(QStringLiteral("knowledge_gaps"))) {
         emit KnowledgeGapService::instance()->gapsChanged();
+    }
+    if (changed.contains(QStringLiteral("memos"))) {
+        emit MemoService::instance()->memosChanged();
     }
     if (changed.contains(QStringLiteral("countdown_goals"))) {
         CountdownService::instance()->reload();

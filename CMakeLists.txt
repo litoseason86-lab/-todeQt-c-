@@ -962,6 +962,8 @@ add_executable(SyncTests
     src/services/ScheduleService.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     src/models/CountdownGoal.cpp
@@ -1032,6 +1034,8 @@ add_executable(SyncTransportTests
     src/services/ScheduleService.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     src/models/CountdownGoal.cpp
@@ -1102,6 +1106,8 @@ add_executable(SyncControllerTests
     src/services/ScheduleService.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     src/models/CountdownGoal.cpp

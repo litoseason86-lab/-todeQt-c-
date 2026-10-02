@@ -78,6 +78,23 @@ QString deviceLabel(bool here)
     return here ? QStringLiteral("这台设备") : QStringLiteral("另一台设备");
 }
 
+QString logValueSummary(const QString& value)
+{
+    // 摘要有界，原文另放在日志条目的 lostValue / keptValue，阶段 3 的复制按钮直接取原文。
+    constexpr qsizetype limit = 40;
+    qsizetype end = 0;
+    qsizetype count = 0;
+    // UTF-16 中一个表情可能占两个单元，不能把摘要截在代理对中间。
+    while (end < value.size() && count < limit) {
+        const bool pair = value.at(end).isHighSurrogate() && end + 1 < value.size()
+            && value.at(end + 1).isLowSurrogate();
+        end += pair ? 2 : 1;
+        ++count;
+    }
+    return end == value.size() ? value
+        : value.left(end) + QStringLiteral("…（共 %1 字）").arg(value.toUcs4().size());
+}
+
 // 「上次同步」的时刻：今天的只写几点几分，更早的带上日期。
 QString syncedAtText(const QDateTime& time)
 {
@@ -501,15 +518,22 @@ QVariantList SyncController::syncLog(int limit) const
         QString summary = entry.detail;
         if (entry.kind == QLatin1String("edit") && !entry.fieldLabel.isEmpty()) {
             summary = QStringLiteral("「%1」保留了%2的「%3」，%4的「%5」没有生效。")
-                          .arg(entry.fieldLabel, deviceLabel(entry.keptHere), entry.keptValue,
-                               deviceLabel(entry.lostHere), entry.lostValue);
+                          .arg(entry.fieldLabel, deviceLabel(entry.keptHere), logValueSummary(entry.keptValue),
+                               deviceLabel(entry.lostHere), logValueSummary(entry.lostValue));
         } else if (entry.kind == QLatin1String("delete") && !entry.fieldLabel.isEmpty()) {
             // 删除赢了本机还没发出去的修改：把被丢掉的那一项写出来，需要的话可以手动补回。
             summary = QStringLiteral("%1。%2对「%3」的修改「%4」没有生效。")
-                          .arg(entry.detail, deviceLabel(entry.lostHere), entry.fieldLabel, entry.lostValue);
+                          .arg(entry.detail, deviceLabel(entry.lostHere), entry.fieldLabel, logValueSummary(entry.lostValue));
         }
         item.insert(QStringLiteral("summary"), summary);
         item.insert(QStringLiteral("detail"), entry.detail);
+        item.insert(QStringLiteral("fieldLabel"), entry.fieldLabel);
+        item.insert(QStringLiteral("lostValue"), entry.lostValue);
+        item.insert(QStringLiteral("keptValue"), entry.keptValue);
+        item.insert(QStringLiteral("canCopyLostValue"), entry.tableLabel == QStringLiteral("备忘录")
+                    && (entry.kind == QLatin1String("edit") || entry.kind == QLatin1String("delete"))
+                    && (entry.fieldLabel == QStringLiteral("标题") || entry.fieldLabel == QStringLiteral("正文"))
+                    && !entry.lostValue.isEmpty());
         result.append(item);
     }
     return result;

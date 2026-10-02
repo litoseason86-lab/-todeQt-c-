@@ -386,6 +386,8 @@ private slots:
     // 3f：异常与暂停
     void corruptFileIsSkippedLoggedAndHealedBySnapshot();
     void newerFormatFileStopsWithoutSkipping();
+    void memoFormatThreeWritesAndReadsVersionsOneThroughThree();
+    void newerBatchFormatStopsWithoutAdvancingMemoCursor();
     void readFailureIsRetriedNotSkipped();
     void stuckFolderOperationIsAbandonedAndRetried();
     void slowButSteadyFolderIsNotAbandoned();
@@ -2225,6 +2227,79 @@ void SyncTransportTests::macFolderIsUnavailableWithoutICloudDrive()
     QCOMPARE(engine.status(), SyncEngine::Status::FolderUnavailable);
     QVERIFY(!fileExists(drive));
     QVERIFY(SyncStore(device.connection).folderId().isEmpty());
+}
+
+void SyncTransportTests::memoFormatThreeWritesAndReadsVersionsOneThroughThree()
+{
+    // 产品保证：增量与快照都写格式 3，并兼容格式 1、2、3；不能以格式 2 发送旧应用会跳过的备忘。
+    SyncBatch batch = sampleBatch(kDeviceA, 0);
+    SyncRecord memo;
+    memo.table = QStringLiteral("memos"); memo.syncId = QStringLiteral("memo-format");
+    const SyncVersion version{1900000000728, kDeviceA};
+    memo.fields = {{QStringLiteral("title"), {QStringLiteral("格式"), version, {}}},
+                   {QStringLiteral("body"), {QStringLiteral("完整正文"), version, {}}},
+                   {QStringLiteral("category_id"), {QVariant(), version, {}}},
+                   {QStringLiteral("sort_order"), {1, version, {}}},
+                   {QStringLiteral("created_at"), {QStringLiteral("2026-10-02T12:51:46.728Z"), version, {}}}};
+    batch.records = {memo};
+    const QByteArray bytes = SyncFiles::encodeChanges({1, 1900000000728, batch});
+    QCOMPARE(QJsonDocument::fromJson(bytes).object().value(QStringLiteral("batch")).toObject()
+                 .value(QStringLiteral("format")).toInt(), 3);
+    SyncFiles::SnapshotFile snapshot; snapshot.coveredSeq = 1; snapshot.batch = batch;
+    const QByteArray snapshotBytes = SyncFiles::encodeSnapshot(snapshot);
+    QCOMPARE(QJsonDocument::fromJson(snapshotBytes).object().value(QStringLiteral("batch")).toObject()
+                 .value(QStringLiteral("format")).toInt(), 3);
+    for (const int format : {1, 2, 3}) {
+        const auto changeFormat = [format](QJsonObject& outer) {
+            auto inner = outer.value(QStringLiteral("batch")).toObject();
+            inner.insert(QStringLiteral("format"), format); outer.insert(QStringLiteral("batch"), inner);
+        };
+        QString error;
+        SyncFiles::ChangeFile decoded;
+        QCOMPARE(SyncFiles::decodeChanges(tamper(bytes, changeFormat), kDeviceA, {0, 1}, &decoded, &error),
+                 SyncFiles::ParseStatus::Ok);
+        QCOMPARE(decoded.batch.records.first().table, QStringLiteral("memos"));
+        QCOMPARE(decoded.batch.records.first().fields.value(QStringLiteral("body")).value.toString(), QStringLiteral("完整正文"));
+        SyncFiles::SnapshotFile readSnapshot;
+        QCOMPARE(SyncFiles::decodeSnapshot(tamper(snapshotBytes, changeFormat), kDeviceA, {0, 1}, &readSnapshot, &error),
+                 SyncFiles::ParseStatus::Ok);
+    }
+}
+
+void SyncTransportTests::newerBatchFormatStopsWithoutAdvancingMemoCursor()
+{
+    // 产品保证：读到更高的内部批次格式就停住，更新后从原位置补齐备忘，不能跳过后推进游标。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac, ipad;
+    setUpPair(cloud, &mac, &ipad);
+    QVERIFY(exec(mac->device, QStringLiteral(
+        "INSERT INTO memos(title,body,sort_order,created_at,updated_at) "
+        "VALUES('待升级备忘','不能跳过',1,'2026-10-02T12:51:46.728Z','2026-10-02T12:51:46.728Z')")));
+    QVERIFY(syncOnce(*mac));
+    cloud.deliver(mac->device, ipad->device);
+    const QString path = SyncFiles::changesDirectory(mac->device.id) + QLatin1Char('/') + SyncFiles::changeFileName({0, 1});
+    QFile file(cloud.path(ipad->device, path));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray original = file.readAll(); file.close();
+    const auto outer = QJsonDocument::fromJson(original).object();
+    QCOMPARE(outer.value(QStringLiteral("format")).toInt(), 1); // 外壳仍为 1，检查的是内部协议。
+    QCOMPARE(outer.value(QStringLiteral("batch")).toObject().value(QStringLiteral("format")).toInt(), SyncJson::kFormatVersion);
+    const auto newer = tamper(original, [](QJsonObject& o) {
+        auto batch = o.value(QStringLiteral("batch")).toObject();
+        // 编译为旧版读取能力 2 时，这里发格式 3；当前能力 3 则发 4，验证同一道停读边界。
+        batch.insert(QStringLiteral("format"), SyncJson::kFormatVersion + 1); o.insert(QStringLiteral("batch"), batch);
+    });
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate)); file.write(newer); file.close();
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::NewerVersion);
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 0}));
+    QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT COUNT(*) FROM memos")).toInt(), 0);
+    QVERIFY(SyncStore(ipad->device.connection).snapshotRequests().isEmpty());
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate)); file.write(original); file.close();
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 1}));
+    QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT body FROM memos")).toString(), QStringLiteral("不能跳过"));
 }
 
 QTEST_GUILESS_MAIN(SyncTransportTests)

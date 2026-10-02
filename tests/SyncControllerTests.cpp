@@ -19,6 +19,7 @@
 #include "../src/services/AppSettings.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/LocalSyncFolder.h"
+#include "../src/services/MemoService.h"
 #include "../src/services/ScheduleService.h"
 #include "../src/services/SyncController.h"
 #include "../src/services/SyncEngine.h"
@@ -286,6 +287,7 @@ private slots:
     // 4d：同步日志
     void syncLogReadsAsPlainSentencesNewestFirst();
     void logChangesAreAnnouncedOnlyWhenSomethingWasLogged();
+    void longMemoConflictsHaveShortSummariesAndCopyableOriginals();
 
     // 051 阶段 2：设置
     void contentSettingsAreRecordedButDeviceSettingsAreNot();
@@ -1426,6 +1428,47 @@ void SyncControllerTests::interruptedSnapshotRemovalFinishesAtStartup()
     QCOMPARE(AppSettings::instance()->dailyFocusGoalMinutesForDate(QStringLiteral("2026-09-20")), 0);
     QVERIFY(!settingRow(goal).exists);
     QVERIFY(SyncStore().pendingSettingWriteBacks().isEmpty());
+}
+
+void SyncControllerTests::longMemoConflictsHaveShortSummariesAndCopyableOriginals()
+{
+    // 产品保证：长正文冲突摘要有界，日志及复制数据保留完整输掉的一版；空标题用正文首行识别。
+    // 第 40 个字符是占两个 UTF-16 单元的表情，摘要不能截掉半个字符。
+    const QString emoji = QString::fromUcs4(U"🙂");
+    const QString lost = QStringLiteral("正文首行\r\n") + QString(33, QChar(0x7532)) + emoji
+        + QString(3000, QChar(0x7532)) + QStringLiteral("\n被覆盖的独有末尾");
+    const QString kept = QStringLiteral("另一版\n") + QString(3100, QChar(0x4e59)) + QStringLiteral("\n保留的独有末尾");
+    const int id = MemoService::instance()->createMemo(QString(), lost);
+    QVERIFY(id > 0);
+    SyncRecord record;
+    for (const auto& candidate : SyncStore().collectPending().records) {
+        if (candidate.table == QLatin1String("memos")) { record = candidate; }
+    }
+    QVERIFY(!record.syncId.isEmpty());
+    const auto local = record.fields.value(QStringLiteral("body"));
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    QVERIFY(local.version.device != remote && local.value.toString() == lost && lost.size() > 200);
+    record.fields.clear();
+    record.fields.insert(QStringLiteral("body"), {kept, {local.version.time + 100, remote}, {}});
+    SyncBatch incoming; incoming.device = remote; incoming.records = {record};
+    const auto result = SyncStore().applyRemote(incoming);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.conflictsLogged, 1);
+    QCOMPARE(SyncStore().syncLog(10).first().lostValue, lost);
+    SyncController controller(macPlatform(cloudFolder()));
+    const QVariantList logs = controller.syncLog(10);
+    QCOMPARE(logs.size(), 1);
+    const QVariantMap log = logs.first().toMap();
+    QCOMPARE(log.value(QStringLiteral("title")).toString(), QStringLiteral("备忘录「正文首行」"));
+    QCOMPARE(log.value(QStringLiteral("fieldLabel")).toString(), QStringLiteral("正文"));
+    QCOMPARE(log.value(QStringLiteral("lostValue")).toString(), lost);
+    QCOMPARE(log.value(QStringLiteral("keptValue")).toString(), kept);
+    QVERIFY(log.value(QStringLiteral("canCopyLostValue")).toBool());
+    const QString summary = log.value(QStringLiteral("summary")).toString();
+    QVERIFY(summary.size() < 200);
+    QVERIFY(summary.contains(emoji));
+    QVERIFY(summary.contains(QStringLiteral("…（共 %1 字）").arg(lost.toUcs4().size())));
+    QVERIFY(!summary.contains(QStringLiteral("独有末尾")));
 }
 
 QTEST_GUILESS_MAIN(SyncControllerTests)
