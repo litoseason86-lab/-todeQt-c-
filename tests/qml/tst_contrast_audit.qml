@@ -568,8 +568,21 @@ TestCase {
         focusTimer.phase = 0
     }
 
+    // 门禁量的是每个文字最终停下来的颜色，必须关掉颜色渐变。
+    // 切主题时文字和底色都会用 120–280 毫秒渐变过去；开着渐变时，扫描量到的可能是半路上的颜色。
+    // 单独跑时固定等待来得及，8 个测试并行时机器忙，渲染跟不上，渐变就没走完：
+    // 2026-10-02 并行复现 24 次全部失败，失败全在夜间切到日间之后，量到的都是两套主题之间的过渡色。
+    // 全部颜色动画的时长都写成「reduceMotion 时为 0」，打开后一切换就是最终颜色，最终颜色本身不变。
+    // Theme.reduceMotion 只有真实应用入口（main.qml）会绑定，测试要自己设；
+    // 侧栏、统计卡等直接读设置里的 reduceMotion，所以替身 appSettings 也一并打开。
+    function initTestCase() {
+        Theme.reduceMotion = true
+        appSettings.reduceMotion = true
+    }
+
     function cleanupTestCase() {
         Theme.activeThemeId = "warm"
+        Theme.reduceMotion = false
     }
 
     function test_no_unreadable_text_in_any_view() {
