@@ -694,6 +694,7 @@ private slots:
     void memoSortingAndLosingEditsKeepContentTime();
     void memoCategoryEditsAdvanceContentTime();
     void memoDeletionWinsAndPreservesLosingBody();
+    void memoDeletedElsewhereKeepsCopyWithoutCallingItConflict();
     void memoOrderCollisionsConverge_data();
     void memoOrderCollisionsConverge();
     void memoCategoryDeletionKeepsConcurrentContent();
@@ -3097,7 +3098,8 @@ void SyncTests::memoCategoryEditsAdvanceContentTime()
 
 void SyncTests::memoDeletionWinsAndPreservesLosingBody()
 {
-    // 产品保证：一台删除、一台写长正文，两种接收路径都删除优先，完整被覆盖内容留下来。
+    // 产品保证：一台删除、一台写长正文，两种接收路径都删除优先，完整被覆盖内容留下来；
+    // 空标题没有可找回的内容，哪台都不记。
     const Device a = openDevice(QStringLiteral("memo-a"));
     const Device b = openDevice(QStringLiteral("memo-b"));
     constexpr qint64 time = 1900000000728;
@@ -3114,20 +3116,75 @@ void SyncTests::memoDeletionWinsAndPreservesLosingBody()
     QVERIFY(q.exec());
     QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM memos")), 0);
     QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM memos")), 1);
+    // 空标题那一项确实会随记录发出去：A 收到这条修改时要面对一个空的标题，测「空的不记」才有意义。
+    const auto outgoing = memoRecord(SyncStore(b.connection).collectPending(), id).fields;
+    QVERIFY(outgoing.contains(QStringLiteral("title")));
+    QVERIFY(outgoing.value(QStringLiteral("title")).value.toString().isEmpty());
     // 删除到达还在编辑的一台，以及编辑到达已删的一台，分别经过不同的应用分支。
+    // 编辑的一台先发出修改还是先收到删除取决于读写顺序，记成「删除优先」或「已删除」都对，关键是正文完整留下。
     syncAll(cloud, {a, b});
     for (const Device& d : {a, b}) {
         QCOMPARE(count(d, QStringLiteral("SELECT COUNT(*) FROM memos")), 0);
         bool found = false;
         for (const auto& log : SyncStore(d.connection).syncLog(10)) {
-            if (log.kind == QLatin1String("delete") && log.fieldLabel == QStringLiteral("正文")) {
+            if ((log.kind == QLatin1String("delete") || log.kind == QLatin1String("removed"))
+                && log.field == QLatin1String("body")) {
                 QCOMPARE(log.lostValue, body);
                 QCOMPARE(log.recordLabel, QStringLiteral("正文首行"));
                 found = true;
             }
         }
         QVERIFY(found);
+        QCOMPARE(count(d, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE tbl = 'memos' AND field = 'title'")),
+                 0);
     }
+}
+
+void SyncTests::memoDeletedElsewhereKeepsCopyWithoutCallingItConflict()
+{
+    // 产品保证：另一台正常删掉备忘录时，这台在日志里留一份删除前的内容，记成「已删除」而不是冲突，
+    // 空标题、空正文不记；只有本机还没发出去的修改被删除盖掉，才记成「删除优先」的冲突。
+    const Device a = openDevice(QStringLiteral("memo-copy-a"));
+    const Device b = openDevice(QStringLiteral("memo-copy-b"));
+    const QString titled = addMemo(a, QStringLiteral("张宇 36 讲"), QStringLiteral("第 8 讲做完"));
+    const QString untitled = addMemo(a, QString(), QStringLiteral("只有正文"));
+    const QString editing = addMemo(a, QStringLiteral("1000 题"), QStringLiteral("第 3 章"));
+    QVERIFY(!titled.isEmpty() && !untitled.isEmpty() && !editing.isEmpty());
+    FakeCloud cloud(m_data->filePath(QStringLiteral("memo-copy-cloud")));
+    syncAll(cloud, {a, b});
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM memos")), 3);
+
+    // A 又改了第三条的正文，还没发出去；其余内容都已经发出去了。
+    QVERIFY(exec(a, QStringLiteral("UPDATE memos SET body = '第 4 章' WHERE sync_id = '%1'").arg(editing)));
+    const QString pendingSql = QStringLiteral(
+        "SELECT COUNT(*) FROM sync_field_versions WHERE tbl = 'memos' AND pending = 1 AND sync_id = '%1' AND field = '%2'");
+    QCOMPARE(count(a, pendingSql.arg(titled, QStringLiteral("body"))), 0);
+    QCOMPARE(count(a, pendingSql.arg(editing, QStringLiteral("title"))), 0);
+    QCOMPARE(count(a, pendingSql.arg(editing, QStringLiteral("body"))), 1);
+
+    // B 看过三条之后全删了。删除直接交给 A，不让 A 先把手上的修改发出去，两种情况才能都出现。
+    QVERIFY(exec(b, QStringLiteral("DELETE FROM memos")));
+    const SyncStore::ApplyResult result =
+        SyncStore(a.connection).applyRemote(throughJson(SyncStore(b.connection).collectPending()));
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM memos")), 0);
+
+    const QString entrySql = QStringLiteral(
+        "SELECT COUNT(*) FROM sync_conflict_log WHERE kind = '%1' AND sync_id = '%2' AND field = '%3' AND lost_value = '%4'");
+    // 已经发出去的内容：记成「已删除」，留着删除前的原文。
+    QCOMPARE(count(a, entrySql.arg(QStringLiteral("removed"), titled, QStringLiteral("title"), QStringLiteral("张宇 36 讲"))), 1);
+    QCOMPARE(count(a, entrySql.arg(QStringLiteral("removed"), titled, QStringLiteral("body"), QStringLiteral("第 8 讲做完"))), 1);
+    QCOMPARE(count(a, entrySql.arg(QStringLiteral("removed"), untitled, QStringLiteral("body"), QStringLiteral("只有正文"))), 1);
+    QCOMPARE(count(a, entrySql.arg(QStringLiteral("removed"), editing, QStringLiteral("title"), QStringLiteral("1000 题"))), 1);
+    // 空标题不记。
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE sync_id = '%1' AND field = 'title'")
+                          .arg(untitled)), 0);
+    // 本机还没发出去的修改被删除盖掉：这才是冲突。
+    QCOMPARE(count(a, entrySql.arg(QStringLiteral("delete"), editing, QStringLiteral("body"), QStringLiteral("第 4 章"))), 1);
+    QCOMPARE(logCount(a, QStringLiteral("removed")), 4);
+    QCOMPARE(logCount(a, QStringLiteral("delete")), 1);
+    // 删除的一台什么都没丢，不记。
+    QCOMPARE(logCount(b), 0);
 }
 
 void SyncTests::memoOrderCollisionsConverge_data()

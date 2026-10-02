@@ -288,6 +288,7 @@ private slots:
     void syncLogReadsAsPlainSentencesNewestFirst();
     void logChangesAreAnnouncedOnlyWhenSomethingWasLogged();
     void longMemoConflictsHaveShortSummariesAndCopyableOriginals();
+    void memoDeletedElsewhereShowsCopyNotConflict();
 
     // 051 阶段 2：设置
     void contentSettingsAreRecordedButDeviceSettingsAreNot();
@@ -1469,6 +1470,52 @@ void SyncControllerTests::longMemoConflictsHaveShortSummariesAndCopyableOriginal
     QVERIFY(summary.contains(emoji));
     QVERIFY(summary.contains(QStringLiteral("…（共 %1 字）").arg(lost.toUcs4().size())));
     QVERIFY(!summary.contains(QStringLiteral("独有末尾")));
+}
+
+void SyncControllerTests::memoDeletedElsewhereShowsCopyNotConflict()
+{
+    // 产品保证：另一台删掉一条备忘录后，日志写的是「已删除」和删除前的内容，不说「修改没有生效」，
+    // 并且可以复制找回；空的不出现。
+    const int id = MemoService::instance()->createMemo(QStringLiteral("张宇 36 讲"), QStringLiteral("第 8 讲做完"));
+    QVERIFY(id > 0);
+    SyncStore store;
+    const SyncBatch sent = store.collectPending();
+    SyncRecord memo;
+    for (const auto& candidate : sent.records) {
+        if (candidate.table == QLatin1String("memos")) { memo = candidate; }
+    }
+    QVERIFY(!memo.syncId.isEmpty());
+    // 内容已经发出去了：这正是「不知道对方删之前看没看到」的情形。
+    QVERIFY(store.acknowledge(sent));
+    QVERIFY(store.collectPending().records.isEmpty());
+
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    SyncRecord gone;
+    gone.table = QStringLiteral("memos");
+    gone.syncId = memo.syncId;
+    gone.deleted = true;
+    gone.deleteVersion = {memo.fields.value(QStringLiteral("body")).version.time + 100, remote};
+    gone.deleteKind = QStringLiteral("delete");
+    SyncBatch incoming; incoming.device = remote; incoming.records = {gone};
+    const auto result = store.applyRemote(incoming);
+    QVERIFY2(result.ok, qPrintable(result.error));
+
+    SyncController controller(macPlatform(cloudFolder()));
+    const QVariantList logs = controller.syncLog(10);
+    QCOMPARE(logs.size(), 2);
+    QStringList copied;
+    for (const QVariant& value : logs) {
+        const QVariantMap log = value.toMap();
+        QCOMPARE(log.value(QStringLiteral("kindLabel")).toString(), QStringLiteral("已删除"));
+        const QString summary = log.value(QStringLiteral("summary")).toString();
+        QVERIFY2(summary.contains(QStringLiteral("删除前的「%1」").arg(log.value(QStringLiteral("fieldLabel")).toString())),
+                 qPrintable(summary));
+        QVERIFY2(!summary.contains(QStringLiteral("没有生效")), qPrintable(summary));
+        QVERIFY(log.value(QStringLiteral("canCopyLostValue")).toBool());
+        copied.append(log.value(QStringLiteral("lostValue")).toString());
+    }
+    copied.sort();
+    QCOMPARE(copied, QStringList({QStringLiteral("张宇 36 讲"), QStringLiteral("第 8 讲做完")}));
 }
 
 QTEST_GUILESS_MAIN(SyncControllerTests)

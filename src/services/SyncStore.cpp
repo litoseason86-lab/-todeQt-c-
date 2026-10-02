@@ -26,6 +26,9 @@ constexpr int kMaxMergeHops = 16;
 const QString kKindDelete = QStringLiteral("delete");
 const QString kKindReclaim = QStringLiteral("reclaim");
 const QString kKindMerge = QStringLiteral("merge");
+// 日志里的「已删除」：另一台删掉了一条备忘录，这台留一份删除前的内容，方便误删后找回。
+// 它不是冲突：这台的内容早已发出去，无从知道对方删之前看没看到，所以不能说成「修改没有生效」。
+const QString kKindRemoved = QStringLiteral("removed");
 
 struct LocalRow {
     bool exists = false;
@@ -476,6 +479,20 @@ bool Applier::applyDeletion(const SyncSchema::Table& table, const SyncRecord& re
                 || it.value().version.device != m_me) {
                 continue;
             }
+            // 备忘录的空标题、空正文没有可找回的东西，不记，免得日志里出现一条什么都没有的条目。
+            // 要看原值：显示值会把空串写成「（空）」，拿它判断永远不为空。
+            if (memoContent && row.values.value(field->column).toString().isEmpty()) {
+                continue;
+            }
+            if (!it.value().pending) {
+                // 已经发出去的内容：只留一份删除前的内容，记成「已删除」，不说成冲突。
+                // 正常的删除（对方看过内容才删）也会走到这里，说「修改没有生效」就是错的。
+                logConflict(kKindRemoved, table, record.syncId, label, field->column,
+                            displayValue(*field, row.values.value(field->column)), QStringLiteral("（已删除）"),
+                            m_me, winner.version.device,
+                            QStringLiteral("另一台设备删除了这条备忘录，这里保留删除前的内容"));
+                continue;
+            }
             logConflict(winner.kind == kKindMerge ? kKindMerge : kKindDelete, table, record.syncId, label,
                         field->column, displayValue(*field, row.values.value(field->column)),
                         QStringLiteral("（已删除）"), m_me, winner.version.device,
@@ -542,6 +559,10 @@ bool Applier::applyToDeleted(const SyncSchema::Table& table, const SyncRecord& r
             for (const QString& column : {QStringLiteral("title"), QStringLiteral("body")}) {
                 if (record.fields.contains(column)) {
                     const SyncSchema::Field* field = SyncSchema::field(table.name, column);
+                    // 空的标题或正文没有可找回的内容，不记。看原值，显示值会把空串写成「（空）」。
+                    if (record.fields.value(column).value.toString().isEmpty()) {
+                        continue;
+                    }
                     logConflict(kKindDelete, table, record.syncId, recordLabel(table, values), column,
                                 displayValue(*field, record.fields.value(column).value), QStringLiteral("（已删除）"),
                                 incomingLatest.device, local.version.device,
@@ -2820,6 +2841,8 @@ QList<SyncStore::LogEntry> SyncStore::syncLog(int limit) const
         const QString lostDevice = query.value(8).toString();
         const QString keptDevice = query.value(9).toString();
         entry.detail = query.value(10).toString();
+        entry.table = table;
+        entry.field = field;
         // 表名、字段名换成给人看的名字。设置项不在同步表里：它的「字段」就是设置键。
         if (table == QLatin1String("settings")) {
             entry.tableLabel = QStringLiteral("设置");

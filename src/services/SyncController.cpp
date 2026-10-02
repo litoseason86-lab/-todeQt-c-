@@ -52,6 +52,9 @@ QString logKindLabel(const QString& kind)
     if (kind == QLatin1String("delete")) {
         return QStringLiteral("删除优先");
     }
+    if (kind == QLatin1String("removed")) {
+        return QStringLiteral("已删除");
+    }
     if (kind == QLatin1String("merge")) {
         return QStringLiteral("科目合并");
     }
@@ -524,15 +527,22 @@ QVariantList SyncController::syncLog(int limit) const
             // 删除赢了本机还没发出去的修改：把被丢掉的那一项写出来，需要的话可以手动补回。
             summary = QStringLiteral("%1。%2对「%3」的修改「%4」没有生效。")
                           .arg(entry.detail, deviceLabel(entry.lostHere), entry.fieldLabel, logValueSummary(entry.lostValue));
+        } else if (entry.kind == QLatin1String("removed") && !entry.fieldLabel.isEmpty()) {
+            // 另一台删掉了备忘录，这里留的是删除前的内容：只陈述内容，不说谁的修改没有生效，
+            // 因为无从知道对方删之前看没看到。
+            summary = QStringLiteral("%1。删除前的「%2」：「%3」")
+                          .arg(entry.detail, entry.fieldLabel, logValueSummary(entry.lostValue));
         }
         item.insert(QStringLiteral("summary"), summary);
         item.insert(QStringLiteral("detail"), entry.detail);
         item.insert(QStringLiteral("fieldLabel"), entry.fieldLabel);
         item.insert(QStringLiteral("lostValue"), entry.lostValue);
         item.insert(QStringLiteral("keptValue"), entry.keptValue);
-        item.insert(QStringLiteral("canCopyLostValue"), entry.tableLabel == QStringLiteral("备忘录")
-                    && (entry.kind == QLatin1String("edit") || entry.kind == QLatin1String("delete"))
-                    && (entry.fieldLabel == QStringLiteral("标题") || entry.fieldLabel == QStringLiteral("正文"))
+        // 只有备忘录的标题、正文提供「复制被覆盖的内容」。用原始表名、列名判断，不用显示名。
+        item.insert(QStringLiteral("canCopyLostValue"), entry.table == QLatin1String("memos")
+                    && (entry.kind == QLatin1String("edit") || entry.kind == QLatin1String("delete")
+                        || entry.kind == QLatin1String("removed"))
+                    && (entry.field == QLatin1String("title") || entry.field == QLatin1String("body"))
                     && !entry.lostValue.isEmpty());
         result.append(item);
     }
