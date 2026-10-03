@@ -788,4 +788,170 @@ TestCase {
         compare(bodyChanges.count, 1, "模型只变一次：直接从上一条换成这一条");
         compare(view.dirty, false);
     }
+    function yIn(item, target) {
+        return item.mapToItem(target, 0, 0).y;
+    }
+    // 产品保证：列表按定稿排版——行内上下左右各留 12，标题行与摘要相距 4；组头文字比行缩进 8，
+    // 第一个组头贴着列表顶，组头下方 8，组与组之间空 16。
+    // 抓住的错误实现：行写死 66 高、内边距 8（多出的高度被摊进两行之间）；组头写死 30 高、不缩进。
+    function test_listMatchesDesignRhythm() {
+        var list = child("memoList");
+        var row = child("memoRow11");
+        var heading = findChild(row, "memoRowHeading");
+        var preview = findChild(row, "memoRowPreview");
+        compare(findChild(row, "memoRowDot").mapToItem(row, 0, 0).x, Theme.space12);
+        compare(yIn(heading, row), Theme.space12);
+        compare(yIn(preview, row) - (yIn(heading, row) + heading.height), Theme.space4);
+        compare(row.height - (yIn(preview, row) + preview.height), Theme.space12);
+        var first = child("memoGroup1");
+        compare(first.mapToItem(list, 0, 0).x, Theme.space8);
+        compare(yIn(first, list), 0, "第一个组头贴着列表顶");
+        compare(yIn(row, list) - (yIn(first, list) + first.height), Theme.space8);
+        var lastOfFirst = child("memoRow12");
+        var second = child("memoGroup2");
+        compare(yIn(second, list) - (yIn(lastOfFirst, list) + lastOfFirst.height), Theme.space16, "组与组之间空 16");
+    }
+    // 产品保证：编辑卡按定稿留 24 的内边距，科目按钮、标题文字、正文文字的左边对齐在同一条线上。
+    // 抓住的错误实现：内边距 16；输入框沿用 Basic 样式「padding + 4」的左内边距，文字比科目按钮多缩进。
+    function test_editorTextAlignedWithCategoryButton() {
+        var paper = child("memoPaper");
+        verify(paper.width >= 380, "前置：宽编辑卡，内边距应为 24");
+        var chip = child("memoCategoryButton");
+        var title = child("memoTitleInput");
+        var body = child("memoBodyInput");
+        compare(chip.mapToItem(paper, 0, 0).x, Theme.space24);
+        compare(title.mapToItem(paper, title.leftPadding, 0).x, Theme.space24);
+        compare(body.mapToItem(paper, body.leftPadding, 0).x, Theme.space24);
+    }
+    // 产品保证：没选科目时，科目按钮里不留空圆点的位置，「不选科目」靠左；选了科目时圆点在前、文字在后。
+    // 抓住的错误实现：圆点一直占位，没科目时文字前面空着一块，看起来是歪的。
+    function test_categoryButtonWithoutDot() {
+        var chip = child("memoCategoryButton");
+        var label = child("memoCategoryLabel");
+        compare(label.mapToItem(chip, 0, 0).x, Theme.space12 + 8 + Theme.space8, "前置：有科目时文字排在圆点后面");
+        view.startDraft();
+        compare(view.editorCategoryId, 0, "前置：在「全部」里新建，不选科目");
+        compare(label.text, "不选科目");
+        // 圆点隐藏后布局在下一次排版时才更新，等它到位再看位置。
+        tryVerify(function () {
+            return label.mapToItem(chip, 0, 0).x === Theme.space12;
+        }, 3000, "「不选科目」靠左，前面不留空圆点的位置");
+    }
+    // 产品保证：一条备忘都没有时，只在整个框的正中显示一行「还没有备忘录」，不摆孤零零的「全部」和分隔线；点「新建」后回到两栏。
+    // 抓住的错误实现：照样摆出左栏和分隔线，那行字只在右边一栏里居中。
+    function test_emptyLibraryCentersSingleLine() {
+        service.records = [];
+        service.memosChanged();
+        tryCompare(view, "libraryEmpty", true, 3000);
+        var hint = child("memoEmptyHint");
+        verify(Math.abs(hint.mapToItem(view, hint.width / 2, 0).x - view.width / 2) <= 1, "那一行字在整页水平居中");
+        view.startDraft();
+        compare(view.libraryEmpty, false);
+        compare(view.hasEditor, true);
+    }
+    // 产品保证：编辑区的科目选择是应用自己的主题弹层；打开时停在当前科目，上下键移动、回车选定，
+    // Esc 关闭且不改科目；选「新建科目…」打开新建框。
+    // 抓住的错误实现：Qt 自带的白底 Menu（夜间刺眼，打开时也不停在当前科目）。
+    function test_categoryPickerThemedAndKeyboard() {
+        var chip = child("memoCategoryButton");
+        var popup = child("memoCategoryPopup");
+        compare(view.editorCategoryId, 1, "前置：当前备忘在第一个科目");
+        mouseClick(chip);
+        tryVerify(function () {
+            return popup.opened;
+        }, 3000);
+        compare(popup.background.objectName, "memoCategoryPopupBackground");
+        var list = popup.contentItem;
+        compare(list.objectName, "memoCategoryList");
+        compare(list.currentIndex, 0);
+        compare(popup.options[list.currentIndex].id, view.editorCategoryId);
+        keyClick(Qt.Key_Down);
+        compare(list.currentIndex, 1);
+        keyClick(Qt.Key_Return);
+        tryVerify(function () {
+            return !popup.opened;
+        }, 3000);
+        compare(view.editorCategoryId, 2);
+        mouseClick(chip);
+        tryVerify(function () {
+            return popup.opened;
+        }, 3000);
+        // 当前科目这次是第二项：打开时要停在它上面，而不是总停在第一项。
+        compare(list.currentIndex, 1);
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !popup.opened;
+        }, 3000);
+        compare(view.editorCategoryId, 2);
+        mouseClick(chip);
+        tryVerify(function () {
+            return popup.opened;
+        }, 3000);
+        compare(popup.options[popup.options.length - 1].id, -2, "前置：最后一项是「新建科目…」");
+        popup.choose(popup.options.length - 1);
+        tryVerify(function () {
+            return child("newCategoryPrompt").opened;
+        }, 3000);
+        compare(view.editorCategoryId, 2, "新建框打开时不改当前科目");
+        child("newCategoryPrompt").close();
+    }
+    // 产品保证：删除确认框打开后焦点在「取消」上，按 Esc 关闭、不删除；回车或空格不会误删。
+    // 抓住的错误实现：弹窗不拿焦点，Esc 送不到，只能用鼠标点取消。
+    function test_deleteConfirmKeyboard() {
+        view.requestDelete();
+        var confirm = child("memoDeleteConfirm");
+        tryVerify(function () {
+            return confirm.opened;
+        }, 3000);
+        tryVerify(function () {
+            return child("memoDeleteCancel").activeFocus;
+        }, 3000);
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !confirm.opened;
+        }, 3000);
+        compare(service.deletes.length, 0);
+        compare(view.pendingDeleteId, -1);
+    }
+    // 产品保证：用键盘在列表里选（上下键）时，选中行画焦点环；用鼠标点选不画。
+    // 抓住的错误实现：从不画（键盘用户不知道焦点在哪），或者鼠标点一下也套一圈。
+    function test_listFocusRingOnlyFromKeyboard() {
+        var row = child("memoRow12");
+        mouseClick(row, row.width / 2, row.height / 2);
+        tryCompare(view, "selectedId", 12, 3000);
+        verify(child("memoList").activeFocus, "前置：列表拿到了焦点");
+        compare(findChild(row, "memoRowBackground").border.width, 0);
+        keyClick(Qt.Key_Down);
+        tryCompare(view, "selectedId", 21, 3000);
+        compare(findChild(child("memoRow21"), "memoRowBackground").border.width, 2);
+    }
+    // 产品保证：Mac 上鼠标停在列表行、分类胶囊上有一层淡高光，看得出能点。
+    // 抓住的错误实现：没有悬停态（静息色和悬停色一样）。
+    function test_hoverHighlightsRowAndCapsule() {
+        var row = child("memoRow12");
+        verify(row.hoverEnabled, "前置：桌面打开了悬停");
+        mouseMove(row, row.width / 2, row.height / 2);
+        tryCompare(findChild(row, "memoRowBackground"), "color", Theme.glassHover, 3000);
+        var pill = child("memoFilter2");
+        mouseMove(pill, pill.width / 2, pill.height / 2);
+        tryCompare(findChild(pill, "memoFilterBackground"), "color", Theme.glassHover, 3000);
+    }
+    // 产品保证：拖动时被拖的那一行变淡，落点线用实色 accent，在淡焦糖选中底上也看得清。
+    // 抓住的错误实现：被拖的行和别的行一样；落点线用淡焦糖，压在选中底上几乎看不见。
+    function test_dragFeedback() {
+        view.beginDrag(11);
+        verify(child("memoRow11").opacity < 1);
+        view.setDropTarget(12);
+        compare(findChild(view, "memoDropIndicator12").color, Theme.accent);
+        view.finishDrag(true);
+        compare(child("memoRow11").opacity, 1);
+    }
+    // 产品保证：点「新建」后可以直接打标题，但标题框不画焦点环（焦点环只给键盘 Tab）。
+    // 抓住的错误实现：用 Tab 的焦点理由聚焦，鼠标点一下新建也套一圈紧贴文字的焦点环。
+    function test_newDraftFocusWithoutRing() {
+        view.startDraft();
+        var title = child("memoTitleInput");
+        verify(title.activeFocus);
+        compare(title.visualFocus, false);
+    }
 }

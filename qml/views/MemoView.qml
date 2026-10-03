@@ -59,6 +59,19 @@ FocusScope {
     }
     readonly property bool dirty: editorTitle !== baselineTitle || editorBody !== baselineBody || editorCategoryId !== baselineCategoryId
     readonly property bool hasEditor: drafting || selectedId > 0
+    // 一条备忘都没有、也没在新建：只在框中间留一行字，不摆一个孤零零的「全部」和分隔线。
+    readonly property bool libraryEmpty: allMemos.length === 0 && !drafting
+    // 列表里第一个分组的科目。组头上方的 16 间距只放在组与组之间，第一个组头贴着列表顶。
+    property string firstGroupKey: ""
+    // 列表焦点是鼠标或触屏点出来的。键盘（Tab 进来、方向键移动）选择时才给选中行画焦点环，
+    // Qt 6.10 的 Item 没有 focusReason，只能自己记。焦点离开列表就清掉。
+    property bool listFocusFromPointer: false
+    readonly property bool listVisualFocus: memoList.activeFocus && !listFocusFromPointer
+    // 编辑卡内边距：定稿是 24；iPad 竖屏且侧栏展开时卡片很窄，退到 16 给正文留宽度。
+    readonly property int paperPadding: paper.width >= 380 ? Theme.space24 : Theme.space16
+    // 标题、正文输入框的内边距。焦点环画在框边上，离文字留 4；框再用同样大小的负边距伸出去，
+    // 文字仍和科目按钮左对齐。改这个数要连同负边距一起看。
+    readonly property int inputInset: 6
     readonly property int capsuleMaxWidth: Theme.fontSm * 7 + Theme.space16
     readonly property int titleLimit: memoServiceRef ? memoServiceRef.maxTitleLength : 60
     readonly property int bodyLimit: memoServiceRef ? memoServiceRef.maxBodyLength : 10000
@@ -148,6 +161,7 @@ FocusScope {
                 updatedAt: String(entry.updatedAt)
             });
         }
+        root.firstGroupKey = rows.count > 0 ? rows.get(0).groupKey : "";
     }
     function reload() {
         if (root.saving || !root.memoServiceRef)
@@ -321,7 +335,8 @@ FocusScope {
         root.draftReturnId = back;
         root.editorCategoryId = Math.max(0, root.filterCategoryId);
         root.baselineCategoryId = root.editorCategoryId;
-        titleInput.forceActiveFocus(Qt.TabFocusReason);
+        // 点「新建」后直接能打标题；焦点环只给键盘 Tab 用，这里只要闪烁的光标。
+        titleInput.forceActiveFocus(Qt.OtherFocusReason);
     }
     function selectMemo(id) {
         if (id === root.selectedId && !root.drafting)
@@ -563,6 +578,7 @@ FocusScope {
         anchors.margins: Theme.space16
         Item {
             id: leftPane
+            visible: !root.libraryEmpty
             width: 256
             anchors {
                 left: parent.left
@@ -587,24 +603,35 @@ FocusScope {
                         leftPadding: 0
                         rightPadding: 0
                         focusPolicy: Qt.StrongFocus
+                        // 触屏没有悬停；Mac 上显式打开，不跟随样式提示（离屏测试里样式提示是关的）。
+                        hoverEnabled: !root.touchUi
                         Accessible.name: modelData.name
                         ToolTip.visible: hovered || visualFocus
                         ToolTip.text: modelData.name
                         ToolTip.delay: 500
+                        // 与仪表盘筛选胶囊同一套：选中实心淡焦糖、不描边、字重加一级；没选中的只留描边，悬停时一层淡高光。
                         background: Rectangle {
+                            objectName: "memoFilterBackground"
                             anchors.verticalCenter: parent.verticalCenter
                             width: parent.width
                             height: 26
                             radius: 13
-                            color: capsule.selected ? Theme.accentFill : Qt.rgba(1, 1, 1, 0)
-                            border.width: capsule.visualFocus ? 2 : 1
+                            color: capsule.selected ? Theme.accentFill : (capsule.hovered ? Theme.glassHover : Theme.glassHoverIdle)
+                            border.width: capsule.visualFocus ? 2 : (capsule.selected ? 0 : 1)
                             border.color: capsule.visualFocus ? Theme.focusRing : Theme.borderSubtle
+                            Behavior on color {
+                                ColorAnimation {
+                                    duration: Theme.reduceMotion ? 0 : 120
+                                    easing.type: Easing.OutQuad
+                                }
+                            }
                         }
                         contentItem: Text {
                             id: label
                             text: capsule.modelData.name
                             textFormat: Text.PlainText
                             font.pixelSize: Theme.fontSm
+                            font.weight: capsule.selected ? Font.Medium : Font.Normal
                             color: capsule.selected ? Theme.accentFillInk : Theme.inkSoft
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
@@ -613,6 +640,9 @@ FocusScope {
                             rightPadding: Theme.space8
                         }
                         onClicked: root.selectFilter(Number(modelData.id))
+                        HoverHandler {
+                            cursorShape: Qt.PointingHandCursor
+                        }
                     }
                 }
             }
@@ -640,41 +670,63 @@ FocusScope {
                 section.delegate: Loader {
                     id: groupLoader
                     required property string section
+                    // 第一个组头贴着列表顶；后面的组头上方留 12，加上列表的行距 4，组与组之间正好空 16（定稿）。
+                    readonly property bool leading: groupLoader.section === root.firstGroupKey
                     width: memoList.width
-                    height: active ? 30 : 0
+                    // Loader 的隐式高度跟随装进来的组头；卸载（选了单科）时为 0。
+                    height: active ? implicitHeight : 0
                     active: root.filterCategoryId < 0
-                    // 组头写成「科目 · 条数」：名字按自身宽度排、条数紧跟其后，多出来的宽度留在行尾。
-                    // 名字太长放不下时只压缩名字（省略号），条数始终完整。
-                    sourceComponent: RowLayout {
-                        objectName: "memoGroup" + groupLoader.section
-                        spacing: 0
-                        Text {
-                            id: groupName
-                            objectName: "memoGroupName"
-                            Layout.fillWidth: true
-                            Layout.maximumWidth: groupName.implicitWidth
-                            text: root.category(Number(groupLoader.section)).name
-                            textFormat: Text.PlainText
-                            font.pixelSize: Theme.fontSm
-                            font.bold: true
-                            color: Theme.inkSoft
-                            elide: Text.ElideRight
-                        }
-                        Text {
-                            objectName: "memoGroupCount"
-                            text: " · " + root.groupCount(groupLoader.section)
-                            textFormat: Text.PlainText
-                            font.pixelSize: Theme.fontSm
-                            font.bold: true
-                            color: Theme.inkSoft
-                        }
-                        Item {
-                            Layout.fillWidth: true
+                    sourceComponent: Item {
+                        implicitHeight: (groupLoader.leading ? 0 : Theme.space12) + groupRow.implicitHeight + Theme.space8
+                        // 组头写成「科目 · 条数」：名字按自身宽度排、条数紧跟其后，多出来的宽度留在行尾。
+                        // 名字太长放不下时只压缩名字（省略号），条数始终完整。文字比列表行往里缩 8，与定稿一致。
+                        RowLayout {
+                            id: groupRow
+                            objectName: "memoGroup" + groupLoader.section
+                            x: Theme.space8
+                            y: groupLoader.leading ? 0 : Theme.space12
+                            width: parent.width - Theme.space8 * 2
+                            spacing: 0
+                            Text {
+                                id: groupName
+                                objectName: "memoGroupName"
+                                Layout.fillWidth: true
+                                Layout.maximumWidth: groupName.implicitWidth
+                                text: root.category(Number(groupLoader.section)).name
+                                textFormat: Text.PlainText
+                                font.pixelSize: Theme.fontSm
+                                font.bold: true
+                                color: Theme.inkSoft
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                objectName: "memoGroupCount"
+                                text: " · " + root.groupCount(groupLoader.section)
+                                textFormat: Text.PlainText
+                                font.pixelSize: Theme.fontSm
+                                font.bold: true
+                                color: Theme.inkSoft
+                            }
+                            Item {
+                                Layout.fillWidth: true
+                            }
                         }
                     }
                 }
-                Keys.onUpPressed: root.stepSelection(-1)
-                Keys.onDownPressed: root.stepSelection(1)
+                // 键盘可以 Tab 进列表、用上下键换备忘；这时选中行画焦点环（见 listVisualFocus）。
+                activeFocusOnTab: true
+                onActiveFocusChanged: {
+                    if (!activeFocus)
+                        root.listFocusFromPointer = false;
+                }
+                Keys.onUpPressed: {
+                    root.listFocusFromPointer = false;
+                    root.stepSelection(-1);
+                }
+                Keys.onDownPressed: {
+                    root.listFocusFromPointer = false;
+                    root.stepSelection(1);
+                }
                 ScrollBar.vertical: PageScrollBar {
                     parent: leftPane
                     x: leftPane.width + 4
@@ -696,19 +748,35 @@ FocusScope {
                     Accessible.name: memoTitle
                     readonly property bool selected: root.selectedId === memoId && !root.drafting
                     width: memoList.width
-                    height: 66
-                    padding: Theme.space8
+                    // 行高随内容：上下各留 12，标题行与摘要之间 4，两行在行内上下居中（定稿）。
+                    // 写死行高会让多出来的高度被布局摊进两行之间，标题和摘要被拉开。
+                    height: implicitHeight
+                    padding: Theme.space12
+                    hoverEnabled: !root.touchUi
+                    // 拖动中的这一行变淡，看得出「正在挪的是哪一条」。
+                    opacity: root.draggingId === row.memoId ? 0.55 : 1
+                    // 选中、悬停、键盘焦点与设置页左侧导航同一套：淡焦糖底 + 深字，悬停一层淡高光，键盘选中时加焦点环。
                     background: Rectangle {
                         objectName: "memoRowBackground"
                         radius: Theme.radiusMd
-                        color: row.selected ? Theme.accentFill : Qt.rgba(1, 1, 1, 0)
+                        color: row.selected ? Theme.accentFill : (row.hovered ? Theme.glassHover : Theme.glassHoverIdle)
+                        border.width: row.selected && root.listVisualFocus ? 2 : 0
+                        border.color: Theme.focusRing
+                        Behavior on color {
+                            ColorAnimation {
+                                duration: Theme.reduceMotion ? 0 : 120
+                                easing.type: Easing.OutQuad
+                            }
+                        }
                     }
                     contentItem: ColumnLayout {
                         spacing: Theme.space4
                         RowLayout {
+                            objectName: "memoRowHeading"
                             Layout.fillWidth: true
                             spacing: Theme.space8
                             Rectangle {
+                                objectName: "memoRowDot"
                                 implicitWidth: 8
                                 implicitHeight: 8
                                 radius: 4
@@ -720,6 +788,7 @@ FocusScope {
                                 text: row.memoTitle
                                 textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontMd
+                                font.weight: row.selected ? Font.Medium : Font.Normal
                                 color: row.selected ? Theme.accentFillInk : Theme.ink
                                 elide: Text.ElideRight
                             }
@@ -744,6 +813,8 @@ FocusScope {
                     }
                     TapHandler {
                         onTapped: {
+                            // 先记「焦点来自点选」，再拿焦点：点选不画焦点环。
+                            root.listFocusFromPointer = true;
                             root.selectMemo(row.memoId);
                             memoList.forceActiveFocus(Qt.MouseFocusReason);
                         }
@@ -824,13 +895,16 @@ FocusScope {
                             root.updateDrag(p.x, p.y);
                         }
                     }
+                    // 落点线：淡焦糖底色上看不清，用实色 accent；左右收进 8，不顶到圆角外。
                     Rectangle {
                         objectName: "memoDropIndicator" + row.memoId
                         visible: root.draggingId >= 0 && root.dropTargetId === row.memoId
-                        width: parent.width
+                        x: Theme.space8
+                        width: parent.width - Theme.space8 * 2
                         height: 2
+                        radius: 1
                         y: root.idsForCategory(row.categoryId).indexOf(root.draggingId) < root.idsForCategory(row.categoryId).indexOf(row.memoId) ? parent.height - height : 0
-                        color: Theme.accentFill
+                        color: Theme.accent
                         z: 5
                     }
                 }
@@ -838,6 +912,7 @@ FocusScope {
         }
         Rectangle {
             id: divider
+            visible: !root.libraryEmpty
             anchors {
                 left: leftPane.right
                 leftMargin: Theme.space16
@@ -865,18 +940,48 @@ FocusScope {
             ColumnLayout {
                 id: editorColumn
                 anchors.fill: parent
-                anchors.margins: Theme.space16
-                anchors.bottomMargin: Theme.space16 + root.floatingKeyboardInset
+                anchors.margins: root.paperPadding
+                anchors.bottomMargin: root.paperPadding + root.floatingKeyboardInset
                 spacing: Theme.space12
-                Text {
-                    objectName: "memoError"
+                // 保存失败、另一台删除等情况的提示条，和倒计时页的错误横幅同一套：危险色描边加「!」，
+                // 不只靠红色表达出错；说明文字用正文色，读得清楚。
+                Rectangle {
+                    objectName: "memoErrorBanner"
                     Layout.fillWidth: true
                     visible: root.errorMessage.length > 0
-                    text: root.errorMessage
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                    color: Theme.danger
-                    font.pixelSize: Theme.fontSm
+                    implicitHeight: errorRow.implicitHeight + Theme.space8 * 2
+                    radius: Theme.radiusMd
+                    // 底色和倒计时页的错误横幅一样用 surfaceRaised：危险色的「!」压在沉底色上日间只有 4.44:1，不达正文 4.5:1。
+                    color: Theme.surfaceRaised
+                    border.color: Theme.dangerBorder
+                    border.width: 1
+                    RowLayout {
+                        id: errorRow
+                        anchors.fill: parent
+                        anchors.leftMargin: Theme.space12
+                        anchors.rightMargin: Theme.space12
+                        anchors.topMargin: Theme.space8
+                        anchors.bottomMargin: Theme.space8
+                        spacing: Theme.space8
+                        Text {
+                            Layout.alignment: Qt.AlignTop
+                            text: "!"
+                            textFormat: Text.PlainText
+                            color: Theme.danger
+                            font.pixelSize: Theme.fontMd
+                            font.weight: Font.Bold
+                            Accessible.ignored: true
+                        }
+                        Text {
+                            objectName: "memoError"
+                            Layout.fillWidth: true
+                            text: root.errorMessage
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            color: Theme.ink
+                            font.pixelSize: Theme.fontSm
+                        }
+                    }
                 }
                 // 另一台删掉了正在编辑的这条：两个出口都要用户明确选，不会悄悄复活记录，也不会悄悄丢字。
                 RowLayout {
@@ -908,30 +1013,45 @@ FocusScope {
                         objectName: "memoCategoryButton"
                         width: Math.min(parent.chipWidth, parent.width)
                         height: root.touchUi ? 44 : 36
+                        // Basic 样式按钮的横向内边距默认是 padding + 2，也要清零，宽度才和定稿一致。
                         padding: 0
-                        Accessible.name: root.category(root.editorCategoryId).name
-                        onClicked: categoryMenu.open()
+                        horizontalPadding: 0
+                        hoverEnabled: !root.touchUi
+                        Accessible.name: qsTr("科目：%1").arg(categoryLabel.text)
+                        onClicked: categoryPopup.opened ? categoryPopup.close() : categoryPopup.open()
+                        // 定稿里的小胶囊：沉底色加描边。悬停、按下或弹层展开时逐级加深，看得出能点。
                         background: Rectangle {
+                            objectName: "memoCategoryButtonBackground"
                             anchors.verticalCenter: parent.verticalCenter
                             width: parent.width
                             height: 28
                             radius: 14
-                            color: Theme.surfaceSunken
+                            color: categoryChoice.down || categoryPopup.opened ? Theme.accentFillStrong : (categoryChoice.hovered ? Theme.accentSoft : Theme.surfaceSunken)
                             border.color: categoryChoice.visualFocus ? Theme.focusRing : Theme.border
                             border.width: categoryChoice.visualFocus ? 2 : 1
+                            Behavior on color {
+                                ColorAnimation {
+                                    duration: Theme.reduceMotion ? 0 : 120
+                                    easing.type: Easing.OutQuad
+                                }
+                            }
                         }
                         contentItem: RowLayout {
                             spacing: Theme.space8
+                            // 没选科目时不留空圆点的位置，「不选科目」直接靠左，不显得歪。
                             Rectangle {
-                                Layout.leftMargin: Theme.space8
+                                Layout.leftMargin: Theme.space12
+                                visible: root.editorCategoryId !== 0
                                 implicitWidth: 8
                                 implicitHeight: 8
                                 radius: 4
                                 color: root.category(root.editorCategoryId).color || Qt.rgba(1, 1, 1, 0)
                             }
                             Text {
+                                id: categoryLabel
                                 objectName: "memoCategoryLabel"
                                 Layout.fillWidth: true
+                                Layout.leftMargin: root.editorCategoryId === 0 ? Theme.space12 : 0
                                 text: root.editorCategoryId === 0 ? qsTr("不选科目") : root.category(root.editorCategoryId).name
                                 textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontSm
@@ -939,48 +1059,191 @@ FocusScope {
                                 elide: Text.ElideRight
                             }
                             Text {
-                                Layout.rightMargin: Theme.space8
+                                Layout.rightMargin: Theme.space12
                                 text: "▾"
                                 textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontSm
-                                color: Theme.inkSoft
+                                color: Theme.ink
+                                rotation: categoryPopup.opened ? 180 : 0
+                                Behavior on rotation {
+                                    NumberAnimation {
+                                        duration: Theme.reduceMotion ? 0 : 120
+                                        easing.type: Easing.OutQuad
+                                    }
+                                }
                             }
                         }
-                        Menu {
-                            id: categoryMenu
-                            y: categoryChoice.height
-                            Instantiator {
-                                model: root.categories
-                                delegate: MenuItem {
-                                    required property var modelData
-                                    implicitHeight: root.touchUi ? 44 : 36
-                                    text: modelData.name
-                                    onTriggered: root.chooseCategory(Number(modelData.id))
-                                }
-                                onObjectAdded: function (index, object) {
-                                    categoryMenu.insertItem(index, object);
-                                }
-                                onObjectRemoved: function (index, object) {
-                                    categoryMenu.removeItem(object);
-                                }
+                        HoverHandler {
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                    }
+                    // 科目弹层：和专注页的任务选择同一套——玻璃底（不能模糊时退回实色）、选中项淡焦糖、悬停一层淡高光；
+                    // 打开时停在当前科目，上下键移动、回车或空格选定、Esc 关闭。Qt 自带的 Menu 是写死的白底，夜间很刺眼。
+                    Popup {
+                        id: categoryPopup
+                        objectName: "memoCategoryPopup"
+                        // 选项：现有科目（按科目管理里的顺序）、不选科目，最后是新建。编号 -2 只是「新建科目…」的标记，不是科目。
+                        readonly property var options: root.categories.map(function (entry) {
+                            return {
+                                id: Number(entry.id),
+                                name: String(entry.name),
+                                color: String(entry.color || "")
+                            };
+                        }).concat([
+                            {
+                                id: 0,
+                                name: qsTr("不选科目"),
+                                color: ""
+                            },
+                            {
+                                id: -2,
+                                name: qsTr("新建科目…"),
+                                color: ""
                             }
-                            MenuItem {
-                                implicitHeight: root.touchUi ? 44 : 36
-                                text: qsTr("不选科目")
-                                onTriggered: root.chooseCategory(0)
+                        ])
+                        // 用方向键移动过才给当前项画焦点环；鼠标点开时只靠淡焦糖底标出当前科目，不再套一圈。
+                        property bool keyboardNavigated: false
+                        function choose(index) {
+                            var option = categoryPopup.options[index];
+                            if (!option)
+                                return;
+                            categoryPopup.close();
+                            if (option.id === -2)
+                                categoryPrompt.openPrompt();
+                            else
+                                root.chooseCategory(option.id);
+                        }
+                        parent: categoryChoice
+                        x: 0
+                        y: Math.round(categoryChoice.height / 2 + 14 + Theme.space4)
+                        width: Math.max(220, categoryChoice.width)
+                        margins: Theme.space8
+                        padding: Theme.space8
+                        modal: false
+                        dim: false
+                        focus: true
+                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+                        onOpened: {
+                            categoryPopup.keyboardNavigated = false;
+                            var index = categoryPopup.options.findIndex(function (option) {
+                                return option.id === root.editorCategoryId;
+                            });
+                            categoryList.currentIndex = Math.max(0, index);
+                            categoryList.positionViewAtIndex(categoryList.currentIndex, ListView.Contain);
+                            categoryList.forceActiveFocus(Qt.PopupFocusReason);
+                        }
+                        // 关掉后焦点回到科目按钮，键盘用户接着往下走；新建科目的输入框打开时不抢它的焦点。
+                        onClosed: {
+                            if (!categoryPrompt.opened)
+                                categoryChoice.forceActiveFocus(Qt.PopupFocusReason);
+                        }
+                        background: GlassPanel {
+                            objectName: "memoCategoryPopupBackground"
+                            radius: Theme.radiusLg
+                            color: Theme.glassBlurAllowed ? Theme.glassDialog : Theme.glassSolidCard
+                            solidFallback: !Theme.glassBlurAllowed
+                            panelShadowEnabled: true
+                        }
+                        contentItem: ListView {
+                            id: categoryList
+                            objectName: "memoCategoryList"
+                            implicitHeight: Math.min(contentHeight, 320)
+                            clip: true
+                            model: categoryPopup.options
+                            spacing: 2
+                            boundsBehavior: Flickable.StopAtBounds
+                            keyNavigationEnabled: true
+                            Accessible.role: Accessible.List
+                            Accessible.name: qsTr("选择科目")
+                            Keys.onUpPressed: {
+                                categoryPopup.keyboardNavigated = true;
+                                categoryList.decrementCurrentIndex();
                             }
-                            MenuSeparator {}
-                            MenuItem {
-                                implicitHeight: root.touchUi ? 44 : 36
-                                text: qsTr("新建科目…")
-                                onTriggered: categoryPrompt.openPrompt()
+                            Keys.onDownPressed: {
+                                categoryPopup.keyboardNavigated = true;
+                                categoryList.incrementCurrentIndex();
+                            }
+                            Keys.onReturnPressed: categoryPopup.choose(categoryList.currentIndex)
+                            Keys.onEnterPressed: categoryPopup.choose(categoryList.currentIndex)
+                            Keys.onSpacePressed: categoryPopup.choose(categoryList.currentIndex)
+                            ScrollBar.vertical: PageScrollBar {}
+                            delegate: ItemDelegate {
+                                id: option
+                                required property var modelData
+                                required property int index
+                                // 「新建科目…」上方有一条分隔线，和科目列表分开。
+                                readonly property bool isAction: option.modelData.id === -2
+                                readonly property bool current: option.modelData.id === root.editorCategoryId
+                                objectName: "memoCategoryOption" + option.modelData.id
+                                width: ListView.view.width
+                                topInset: option.isAction ? Theme.space8 + 1 : 0
+                                topPadding: option.topInset
+                                implicitHeight: (root.touchUi ? 44 : Theme.controlHeightMd) + option.topInset
+                                leftPadding: Theme.space12
+                                rightPadding: Theme.space12
+                                hoverEnabled: !root.touchUi
+                                Accessible.name: option.modelData.name
+                                onClicked: categoryPopup.choose(option.index)
+                                background: Rectangle {
+                                    radius: Theme.radiusSm
+                                    color: option.current ? Theme.accentFill : (option.hovered ? Theme.glassHover : Theme.glassHoverIdle)
+                                    border.width: categoryList.activeFocus && categoryPopup.keyboardNavigated && categoryList.currentIndex === option.index ? 2 : 0
+                                    border.color: Theme.focusRing
+                                    Behavior on color {
+                                        ColorAnimation {
+                                            duration: Theme.reduceMotion ? 0 : 120
+                                            easing.type: Easing.OutQuad
+                                        }
+                                    }
+                                }
+                                Rectangle {
+                                    visible: option.isAction
+                                    x: Theme.space4
+                                    y: Math.round(Theme.space8 / 2)
+                                    width: option.width - Theme.space4 * 2
+                                    height: 1
+                                    color: Theme.borderSubtle
+                                }
+                                contentItem: RowLayout {
+                                    spacing: Theme.space8
+                                    Item {
+                                        implicitWidth: 12
+                                        implicitHeight: 12
+                                        Rectangle {
+                                            visible: !option.isAction
+                                            anchors.centerIn: parent
+                                            width: 8
+                                            height: 8
+                                            radius: 4
+                                            color: option.modelData.color.length > 0 ? option.modelData.color : Qt.rgba(1, 1, 1, 0)
+                                        }
+                                        GlyphIcon {
+                                            visible: option.isAction
+                                            anchors.centerIn: parent
+                                            name: "plus"
+                                            size: 12
+                                            color: Theme.inkSoft
+                                            Accessible.ignored: true
+                                        }
+                                    }
+                                    Text {
+                                        Layout.fillWidth: true
+                                        text: option.modelData.name
+                                        textFormat: Text.PlainText
+                                        font.pixelSize: Theme.fontMd
+                                        font.weight: option.current ? Font.Medium : Font.Normal
+                                        color: option.current ? Theme.accentFillInk : (option.isAction ? Theme.inkSoft : Theme.ink)
+                                        elide: Text.ElideRight
+                                    }
+                                }
                             }
                         }
                     }
                     RowLayout {
                         id: actions
                         anchors.right: parent.right
-                        y: parent.narrow ? parent.toolHeight : 0
+                        // 在工具行里上下居中，和左边科目按钮的中线对齐。
+                        y: (parent.narrow ? parent.toolHeight : 0) + Math.round((parent.toolHeight - height) / 2)
                         spacing: Theme.space8
                         Text {
                             text: root.updatedAt.length > 0 ? MemoFormat.formatUpdatedAt(root.updatedAt, root.displayNow) + qsTr(" 更新") : ""
@@ -1005,6 +1268,12 @@ FocusScope {
                     // TextField/TextArea 不继承 Control，补齐与 Control 相同的键盘焦点判据。
                     readonly property bool visualFocus: activeFocus && (focusReason === Qt.TabFocusReason || focusReason === Qt.BacktabFocusReason || focusReason === Qt.ShortcutFocusReason)
                     Layout.fillWidth: true
+                    // 输入框有 inputInset 的内边距（焦点环画在边上）。左右各伸出同样的距离，文字就和上面的科目按钮左边对齐（定稿），
+                    // 焦点环落在纸面内边距里，不压字。上下同理，标题和正文之间的距离与定稿一致。
+                    Layout.leftMargin: -root.inputInset
+                    Layout.rightMargin: -root.inputInset
+                    Layout.topMargin: Theme.space8 - root.inputInset
+                    Layout.bottomMargin: -root.inputInset
                     Accessible.name: qsTr("备忘录标题")
                     text: root.editorTitle
                     placeholderText: qsTr("标题")
@@ -1013,7 +1282,9 @@ FocusScope {
                     palette.text: Theme.inputInk
                     font.pixelSize: Theme.fontXl
                     font.bold: true
-                    padding: Theme.space4
+                    // Basic 样式的左内边距默认是 padding + 4，显式写死，文字才和上面的科目按钮对齐。
+                    padding: root.inputInset
+                    leftPadding: root.inputInset
                     // UTF-16 最大长度留给表情；真正的 60 字边界按服务一致的字符数限制。
                     maximumLength: root.titleLimit * 2
                     background: Rectangle {
@@ -1037,6 +1308,10 @@ FocusScope {
                     objectName: "memoBodyScroll"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    // 与标题同理：伸出正文框的内边距，正文文字和科目按钮、标题左对齐；上方也抵掉。
+                    Layout.leftMargin: -root.inputInset
+                    Layout.rightMargin: -root.inputInset
+                    Layout.topMargin: -root.inputInset
                     contentWidth: width
                     contentHeight: Math.max(height, bodyInput.contentHeight + Theme.space16)
                     clip: true
@@ -1054,7 +1329,8 @@ FocusScope {
                         palette.text: Theme.inputInk
                         placeholderText: qsTr("写下现在的进度…")
                         placeholderTextColor: Theme.inkSoft
-                        padding: Theme.space4
+                        padding: root.inputInset
+                        leftPadding: root.inputInset
                         background: Rectangle {
                             color: Qt.rgba(1, 1, 1, 0)
                             radius: Theme.radiusSm
@@ -1093,8 +1369,11 @@ FocusScope {
                 }
             }
         }
+        // 空状态只留一行弱色文字，和知识缺口页同一个取舍：这一页做什么，点进来之前就知道了。
+        // 放在整个框的正中；inkSoft 而不是 inkMuted，这一行是正文，要够 4.5:1 的对比度。
         Text {
-            anchors.centerIn: paper
+            objectName: "memoEmptyHint"
+            anchors.centerIn: root.libraryEmpty ? parent : paper
             visible: !root.hasEditor
             text: qsTr("还没有备忘录")
             textFormat: Text.PlainText
@@ -1120,8 +1399,15 @@ FocusScope {
         width: Math.min(360, root.width - Theme.space24 * 2)
         padding: Theme.space24
         modal: true
+        // 弹窗要拿到焦点 Esc 才生效；焦点先落在「取消」上，回车、空格都不会误删。
+        // 用弹窗自己的焦点理由，鼠标打开时不画焦点环，按 Tab 才出现。
+        focus: true
         closePolicy: Popup.CloseOnEscape
+        onOpened: deleteCancelButton.forceActiveFocus(Qt.PopupFocusReason)
         onAboutToHide: pendingId = -1
+        Overlay.modal: Rectangle {
+            color: Theme.dialogScrim
+        }
         background: Rectangle {
             color: Theme.surface
             radius: Theme.radiusLg
@@ -1151,6 +1437,7 @@ FocusScope {
                     Layout.fillWidth: true
                 }
                 PageActionButton {
+                    id: deleteCancelButton
                     implicitHeight: root.touchUi ? 44 : Theme.controlHeightMd
                     objectName: "memoDeleteCancel"
                     text: qsTr("取消")
