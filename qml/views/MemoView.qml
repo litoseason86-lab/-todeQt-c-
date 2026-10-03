@@ -628,6 +628,7 @@ FocusScope {
                         }
                         contentItem: Text {
                             id: label
+                            objectName: "memoFilterLabel"
                             text: capsule.modelData.name
                             textFormat: Text.PlainText
                             font.pixelSize: Theme.fontSm
@@ -691,7 +692,9 @@ FocusScope {
                                 id: groupName
                                 objectName: "memoGroupName"
                                 Layout.fillWidth: true
-                                Layout.maximumWidth: groupName.implicitWidth
+                                // 上限向上取整：布局分给它的是整数宽度，字宽带小数时（系统界面字体常见）
+                                // 正好等于自然宽度也会被省略，「数学」就成了「数…」。
+                                Layout.maximumWidth: Math.ceil(groupName.implicitWidth)
                                 text: root.category(Number(groupLoader.section)).name
                                 textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontSm

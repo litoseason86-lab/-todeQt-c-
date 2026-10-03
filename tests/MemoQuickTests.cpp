@@ -1,4 +1,5 @@
 #include <QCoreApplication>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <QInputMethodEvent>
 #include <QQmlContext>
@@ -49,6 +50,9 @@ class MemoTestSetup : public QObject
 public slots:
     void qmlEngineAvailable(QQmlEngine* engine)
     {
+        // 用真机同款的系统界面字体排版。Qt Quick Test 默认的字族在这台机器上找不到，会回退成字宽全是整数的字体，
+        // 测不出「字宽带小数、版面取整后被省略」这类只在真机出现的问题（组头「数学」曾显示成「数…」）。
+        QGuiApplication::setFont(QFontDatabase::systemFont(QFontDatabase::GeneralFont));
         engine->rootContext()->setContextProperty(QStringLiteral("memoTextLayout"), new PlainTextLayout(engine));
         engine->rootContext()->setContextProperty(QStringLiteral("inputMethodProbe"), new InputMethodProbe(engine));
     }

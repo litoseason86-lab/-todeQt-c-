@@ -946,6 +946,46 @@ TestCase {
         view.finishDrag(true);
         compare(child("memoRow11").opacity, 1);
     }
+    // 产品保证：放得下的科目名在组头、分类胶囊、编辑区科目按钮里都完整显示，不会被省略成「数…」。
+    // 抓住的错误实现：拿带小数的自然宽度直接当宽度上限，布局把宽度取整后比自然宽度小一点点，短名字也被省略（真机出现过）。
+    function test_shortNamesNotElided() {
+        categories.records = [
+            {
+                id: 1,
+                name: "数学",
+                color: "#98753c"
+            },
+            {
+                id: 2,
+                name: "专业课",
+                color: "#a35f44"
+            },
+            {
+                id: 3,
+                name: "408",
+                color: "#467c7c"
+            }
+        ];
+        service.records = [service.makeRecord(11, "数学进度", "正文", 1), service.makeRecord(21, "专业课进度", "正文", 2), service.makeRecord(31, "408 进度", "正文", 3)];
+        service.memosChanged();
+        tryVerify(function () {
+            return findChild(view, "memoGroup3") !== null && findChild(view, "memoFilter3") !== null;
+        }, 3000);
+        var names = [child("memoGroup1"), child("memoGroup2"), child("memoGroup3")].map(function (group) {
+            return findChild(group, "memoGroupName");
+        });
+        verify(names.some(function (name) {
+            return name.implicitWidth % 1 !== 0;
+        }), "前置：系统界面字体下字宽带小数，布局会把宽度取整");
+        for (var name of names)
+            compare(name.truncated, false, "组头 " + name.text);
+        for (var id of [1, 2, 3])
+            compare(findChild(child("memoFilter" + id), "memoFilterLabel").truncated, false, "胶囊 " + id);
+        view.selectMemo(21);
+        tryCompare(child("memoCategoryLabel"), "text", "专业课", 3000);
+        // 名字换了以后，按钮宽度在下一次排版才更新；等排版到位再看有没有被省略。
+        tryCompare(child("memoCategoryLabel"), "truncated", false, 3000, "编辑区科目按钮");
+    }
     // 产品保证：点「新建」后可以直接打标题，但标题框不画焦点环（焦点环只给键盘 Tab）。
     // 抓住的错误实现：用 Tab 的焦点理由聚焦，鼠标点一下新建也套一圈紧贴文字的焦点环。
     function test_newDraftFocusWithoutRing() {
