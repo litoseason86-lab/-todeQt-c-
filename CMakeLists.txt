@@ -70,6 +70,8 @@ endif()
 
 set(APP_SOURCES
     src/main.cpp
+    src/models/PlainTextLayout.h
+    src/models/PlainTextLayout.cpp
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/models/CountdownGoal.cpp
@@ -1356,6 +1358,10 @@ else()
     message(WARNING "未找到 Python3，跳过 QML 文本格式与悬停过渡门禁")
 endif()
 
+add_executable(MemoQuickTests tests/MemoQuickTests.cpp src/models/PlainTextLayout.h src/models/PlainTextLayout.cpp)
+target_link_libraries(MemoQuickTests PRIVATE Qt6::QuickTest Qt6::Quick)
+pomodoro_todo_enable_warnings(MemoQuickTests)
+
 # QML 测试按文件拆成独立 ctest 条目。聚合成一条时 qmltestrunner 在单进程里串行跑完
 # 全部文件，`ctest -j` 对全量耗时最大的这一块完全无效——实测它占 -j4 全量 57s 中的 56s。
 # 拆开后同样的机器上并行跑约 25s。
@@ -1368,9 +1374,13 @@ file(GLOB POMODORO_TODO_QML_TEST_FILES CONFIGURE_DEPENDS
 foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
     get_filename_component(qml_test_name "${qml_test_file}" NAME_WE)
     string(REGEX REPLACE "^tst_" "" qml_test_name "${qml_test_name}")
+    set(qml_test_runner Qt6::qmltestrunner)
+    if(qml_test_name STREQUAL "memo_view")
+        set(qml_test_runner MemoQuickTests)
+    endif()
     add_test(
         NAME QmlTest.${qml_test_name}
-        COMMAND Qt6::qmltestrunner -input "${qml_test_file}"
+        COMMAND ${qml_test_runner} -input "${qml_test_file}"
     )
     set_tests_properties(QmlTest.${qml_test_name} PROPERTIES
         # 测试固定离屏平台与 Basic 风格，后台验证不得创建真实应用窗口。

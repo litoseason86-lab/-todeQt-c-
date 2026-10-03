@@ -285,6 +285,7 @@ private slots:
     void rebuildDoesNothingWhileTheJoinedFolderIsFine();
 
     // 4d：同步日志
+    void copyLostValueEmitsCompleteText();
     void syncLogReadsAsPlainSentencesNewestFirst();
     void logChangesAreAnnouncedOnlyWhenSomethingWasLogged();
     void longMemoConflictsHaveShortSummariesAndCopyableOriginals();
@@ -1084,6 +1085,18 @@ void SyncControllerTests::rebuildDoesNothingWhileTheJoinedFolderIsFine()
     QVERIFY(waitIdle(controller.engine()));
     QCOMPARE(SyncStore().folderId(), folderId);
     QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
+}
+
+void SyncControllerTests::copyLostValueEmitsCompleteText()
+{
+    // 产品保证：日志复制传递完整原文，正文再长也不能复制摘要；测试不碰真实剪贴板。
+    SyncController controller(macPlatform(cloudFolder()));
+    QSignalSpy copied(&controller, &SyncController::copyRequested);
+    const QString text = QStringLiteral("被覆盖的正文\n") + QString(9000, QChar(u'文')) + QStringLiteral("\n最后一行🙂");
+    QVERIFY(text.size() > 9000);
+    controller.copyLostValue(text);
+    QCOMPARE(copied.count(), 1);
+    QCOMPARE(copied.first().first().toString(), text);
 }
 
 void SyncControllerTests::syncLogReadsAsPlainSentencesNewestFirst()

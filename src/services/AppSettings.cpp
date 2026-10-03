@@ -589,6 +589,7 @@ QStringList AppSettings::defaultSidebarOrder()
         QStringLiteral("stats"),
         QStringLiteral("countdown"),
         QStringLiteral("knowledgeGaps"),
+        QStringLiteral("memo"),
     };
 }
 

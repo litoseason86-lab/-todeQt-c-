@@ -66,6 +66,8 @@ ApplicationWindow {
         statisticsServiceRef: typeof statisticsService === "undefined" ? null : statisticsService
         focusHistoryServiceRef: typeof focusHistoryService === "undefined" ? null : focusHistoryService
         countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
+        memoServiceRef: typeof memoService === "undefined" ? null : memoService
+        memoTextLayoutRef: typeof memoTextLayout === "undefined" ? null : memoTextLayout
         knowledgeGapServiceRef: typeof knowledgeGapService === "undefined" ? null : knowledgeGapService
         appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
         focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
@@ -129,6 +131,9 @@ ApplicationWindow {
         }
     }
 
+    // 系统退出的兜底由装配层在关闭数据库之前调用；常规退出会先检查保存结果。
+    function flushMemoEdits() { return mainContent.flushMemoEdits() }
+
     onClosing: function(close) {
         // 备份/恢复或导出尚未结束时禁止关闭，避免线程被销毁在原子替换或写文件中途。
         const blockReason = root.shutdownBlockReason()
@@ -138,7 +143,7 @@ ApplicationWindow {
             return
         }
         // 撤销窗口尚未结束时关闭应用，必须先同步提交；失败则阻止退出，避免任务下次启动“复活”。
-        if (!mainContent.commitPendingDelete()) {
+        if (!mainContent.flushMemoEdits() || !mainContent.commitPendingDelete()) {
             close.accepted = false
             return
         }
@@ -194,8 +199,12 @@ ApplicationWindow {
                 return
             }
             // 退出前仍要提交待删任务，避免下次启动“复活”；提交失败则不退出。
-            if (mainContent.commitPendingDelete()) {
+            if (mainContent.flushMemoEdits() && mainContent.commitPendingDelete()) {
                 Qt.quit()
+            } else {
+                root.show()
+                root.raise()
+                root.requestActivate()
             }
         }
     }

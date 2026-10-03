@@ -850,3 +850,8 @@ void SyncController::reconcileSettings()
         }
     }
 }
+
+void SyncController::copyLostValue(const QString& text)
+{
+    emit copyRequested(text);
+}

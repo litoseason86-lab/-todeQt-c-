@@ -35,6 +35,15 @@ Popup {
         closeButton.forceActiveFocus()
     }
 
+    readonly property bool copyNoticeShown: copyToast.shown
+    Toast {
+        id: copyToast
+        // Popup 默认会把子项送进内容布局；提示条放到覆盖层，避免挤占日志列表。
+        parent: Overlay.overlay
+        x: parent ? (parent.width - width) / 2 : 0
+        z: 1000
+    }
+
     Connections {
         target: root.syncControllerRef
         ignoreUnknownSignals: true
@@ -112,7 +121,7 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
-            text: "两台设备同时改了同一处时，以较晚的修改为准；删除优先于修改。没有生效的内容记在这里，需要的话可以手动补回去。只保留最近 500 条。"
+            text: "两台设备同时改了同一处时，以较晚的修改为准；删除优先于修改。被覆盖或被删除的备忘录文字可复制找回。只保留最近 500 条。"
             textFormat: Text.PlainText
             color: Theme.inkSoft
             font.pixelSize: Theme.fontSm
@@ -214,6 +223,21 @@ Popup {
                             color: Theme.ink
                             font.pixelSize: Theme.fontMd
                             wrapMode: Text.Wrap
+                        }
+
+                        Loader {
+                            Layout.fillWidth: true
+                            active: Boolean(entry.modelData.canCopyLostValue)
+                            sourceComponent: PageActionButton {
+                                objectName: "syncLogCopyLostValue" + entry.index
+                                text: qsTr("复制被覆盖的内容")
+                                onClicked: {
+                                    if (root.syncControllerRef) {
+                                        root.syncControllerRef.copyLostValue(String(entry.modelData.lostValue))
+                                        copyToast.show(qsTr("已复制"))
+                                    }
+                                }
+                            }
                         }
                     }
                 }

@@ -44,7 +44,7 @@ TestCase {
 
     function defaultOrder() {
         return ["dashboard", "today", "todayFocus", "focus", "schedule", "week",
-                "month", "stats", "countdown", "knowledgeGaps"]
+                "month", "stats", "countdown", "knowledgeGaps", "memo"]
     }
 
     Sidebar {
