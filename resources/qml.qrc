@@ -103,6 +103,7 @@
         <file alias="qml/components/WeeklyReviewCard.qml">../qml/components/WeeklyReviewCard.qml</file>
         <file alias="qml/components/TodayLearningList.qml">../qml/components/TodayLearningList.qml</file>
         <file alias="qml/components/Toast.qml">../qml/components/Toast.qml</file>
+        <file alias="qml/components/ThemedToolTip.qml">../qml/components/ThemedToolTip.qml</file>
         <file alias="sounds/phase-complete.wav">sounds/phase-complete.wav</file>
         <file alias="qml/components/DateInput.qml">../qml/components/DateInput.qml</file>
         <file alias="qml/components/DatePill.qml">../qml/components/DatePill.qml</file>

@@ -139,7 +139,7 @@ TestCase {
         verify(categories.records[0].name.length > 7);
         verify(pill.width <= view.capsuleMaxWidth);
         compare(pill.Accessible.name, categories.records[0].name);
-        compare(pill.ToolTip.text, categories.records[0].name);
+        compare(findChild(pill, "memoFilterToolTip").text, categories.records[0].name);
         compare(pill.y, all.y);
         var x = other.x, y = other.y;
         categories.records = [
@@ -935,6 +935,63 @@ TestCase {
         var pill = child("memoFilter2");
         mouseMove(pill, pill.width / 2, pill.height / 2);
         tryCompare(findChild(pill, "memoFilterBackground"), "color", Theme.glassHover, 3000);
+    }
+    // 产品保证：分类胶囊的名字完整显示时，鼠标停留、键盘聚焦都不弹提示；名字被省略时才弹，
+    // 提示写完整科目名，样子跟随主题（浮起面底色、主题描边、正文色字），鼠标移开就收起。
+    // 抓住的错误实现：不管省没省略都弹（真机上「全部」上方冒出一个「全部」）；用 Basic 自带的白底黑框提示。
+    function test_capsuleToolTipOnlyWhenElided() {
+        // 名字比提示的宽度上限还长（科目名最多 30 字），才看得出提示有没有折行。
+        categories.records = [
+            {
+                id: 1,
+                name: "高等数学与概率统计特别长的科目名称再增加十个字",
+                color: "#98753c"
+            },
+            categories.records[1], categories.records[2]];
+        categories.categoriesChanged();
+        tryCompare(findChild(child("memoFilter1"), "memoFilterLabel"), "text", categories.records[0].name, 3000);
+        // 改名会重建全部胶囊，Flow 要到下一帧才给新胶囊排位置；排好之前按坐标移鼠标，会落在「全部」上。
+        verify(waitForItemPolished(child("memoFilters")), "前置：分类胶囊排好了位置");
+        var shortPill = child("memoFilter2");
+        var longPill = child("memoFilter1");
+        var shortTip = findChild(shortPill, "memoFilterToolTip");
+        var longTip = findChild(longPill, "memoFilterToolTip");
+        verify(shortTip !== null && longTip !== null, "前置：每个胶囊都带自己的提示");
+        compare(findChild(shortPill, "memoFilterLabel").truncated, false, "前置：「物理」完整显示");
+        verify(findChild(longPill, "memoFilterLabel").truncated, "前置：超长科目名被省略");
+        verify(longTip.implicitWidth > 240, "前置：完整名字排成一行比提示的宽度上限还宽");
+        mouseMove(shortPill, shortPill.width / 2, shortPill.height / 2);
+        tryVerify(function () {
+            return shortPill.hovered;
+        }, 3000, "前置：鼠标停在「物理」上");
+        // 提示要停留 delay 毫秒才出现，多等一会儿再看，确认不是还没到时间。
+        wait(shortTip.delay + 300);
+        verify(!shortTip.visible && !shortTip.opened, "名字完整时不弹提示");
+        // 对照：同样的停留，被省略的名字会弹出提示，说明上面没弹不是因为悬停没生效。
+        mouseMove(longPill, longPill.width / 2, longPill.height / 2);
+        tryVerify(function () {
+            return longTip.opened;
+        }, 3000, "鼠标停在被省略的名字上，弹出完整名字");
+        compare(longTip.text, categories.records[0].name);
+        compare(longTip.background.color, Theme.surfaceRaised);
+        compare(longTip.background.border.color, Theme.border);
+        compare(longTip.contentItem.color, Theme.ink);
+        compare(longTip.width, 240, "长名字不把提示撑得横跨窗口");
+        verify(longTip.contentItem.lineCount > 1, "折行显示完整名字，而不是省略");
+        compare(longTip.x + longTip.width / 2, longPill.width / 2, "折行后仍居中在胶囊上方");
+        var body = child("memoBodyInput");
+        mouseMove(body, body.width / 2, 10);
+        tryVerify(function () {
+            return !longTip.visible;
+        }, 3000, "鼠标移开就收起");
+        shortPill.forceActiveFocus(Qt.TabFocusReason);
+        verify(shortPill.visualFocus, "前置：键盘焦点在「物理」上");
+        wait(shortTip.delay + 300);
+        verify(!shortTip.visible && !shortTip.opened, "键盘聚焦到完整名字也不弹");
+        longPill.forceActiveFocus(Qt.TabFocusReason);
+        tryVerify(function () {
+            return longTip.opened;
+        }, 3000, "键盘聚焦到被省略的名字时弹出完整名字");
     }
     // 产品保证：拖动时被拖的那一行变淡，落点线用实色 accent，在淡焦糖选中底上也看得清。
     // 抓住的错误实现：被拖的行和别的行一样；落点线用淡焦糖，压在选中底上几乎看不见。

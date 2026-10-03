@@ -606,9 +606,6 @@ FocusScope {
                         // 触屏没有悬停；Mac 上显式打开，不跟随样式提示（离屏测试里样式提示是关的）。
                         hoverEnabled: !root.touchUi
                         Accessible.name: modelData.name
-                        ToolTip.visible: hovered || visualFocus
-                        ToolTip.text: modelData.name
-                        ToolTip.delay: 500
                         // 与仪表盘筛选胶囊同一套：选中实心淡焦糖、不描边、字重加一级；没选中的只留描边，悬停时一层淡高光。
                         background: Rectangle {
                             objectName: "memoFilterBackground"
@@ -643,6 +640,12 @@ FocusScope {
                         onClicked: root.selectFilter(Number(modelData.id))
                         HoverHandler {
                             cursorShape: Qt.PointingHandCursor
+                        }
+                        // 名字被省略时才提示完整科目名；「全部」「数学」这种完整显示的再弹一遍是多余的。
+                        ThemedToolTip {
+                            objectName: "memoFilterToolTip"
+                            visible: label.truncated && (capsule.hovered || capsule.visualFocus)
+                            text: capsule.modelData.name
                         }
                     }
                 }
