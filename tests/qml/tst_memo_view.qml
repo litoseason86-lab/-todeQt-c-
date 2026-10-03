@@ -850,7 +850,7 @@ TestCase {
         compare(view.hasEditor, true);
     }
     // 产品保证：编辑区的科目选择是应用自己的主题弹层；打开时停在当前科目，上下键移动、回车选定，
-    // Esc 关闭且不改科目；选「新建科目…」打开新建框。
+    // Esc 关闭且不改科目；选「新建分类…」再选「新建科目…」打开新建框。
     // 抓住的错误实现：Qt 自带的白底 Menu（夜间刺眼，打开时也不停在当前科目）。
     function test_categoryPickerThemedAndKeyboard() {
         var chip = child("memoCategoryButton");
@@ -887,13 +887,234 @@ TestCase {
         tryVerify(function () {
             return popup.opened;
         }, 3000);
-        compare(popup.options[popup.options.length - 1].id, -2, "前置：最后一项是「新建科目…」");
+        compare(popup.options[popup.options.length - 1].id, -3, "前置：最后一项是「新建分类…」");
         popup.choose(popup.options.length - 1);
+        var picker = child("memoSubjectPicker");
+        tryVerify(function () {
+            return picker.opened;
+        }, 3000);
+        compare(picker.options[picker.options.length - 1].id, -2, "前置：挑科目的最后一项是「新建科目…」");
+        picker.choose(picker.options.length - 1);
         tryVerify(function () {
             return child("newCategoryPrompt").opened;
         }, 3000);
         compare(view.editorCategoryId, 2, "新建框打开时不改当前科目");
         child("newCategoryPrompt").close();
+    }
+    // 产品保证：编辑区的科目下拉只列写过备忘的科目（就是左边的分类），没写过备忘的科目不出现，当前科目带对勾；
+    // 「新建分类…」列出还没写过备忘的科目，挑一个就把这条换过去，左边随之多出这个分类，下拉里也有了它。
+    // 抓住的错误实现：下拉把全部科目都列出来（真机上没写过备忘的数学、政治、其他也在里面）。
+    function test_categoryDropdownListsOnlyMemoCategories() {
+        verify(categories.records.some(function (c) {
+            return c.id === 3;
+        }), "前置：有一个科目");
+        verify(findChild(view, "memoFilter3") === null, "前置：它还没写过备忘，不在左边的分类里");
+        var popup = child("memoCategoryPopup");
+        var chip = child("memoCategoryButton");
+        mouseClick(chip);
+        tryVerify(function () {
+            return popup.opened;
+        }, 3000);
+        compare(popup.options.map(function (o) {
+            return o.id;
+        }).join(","), "1,2,0,-3");
+        verify(findChild(popup.contentItem, "memoCategoryOption1").current, "当前科目带对勾");
+        verify(!findChild(popup.contentItem, "memoCategoryOption2").current);
+        popup.choose(popup.options.length - 1);
+        var picker = child("memoSubjectPicker");
+        tryVerify(function () {
+            return picker.opened;
+        }, 3000);
+        compare(picker.parent, chip, "从下拉进来时挂在科目按钮下");
+        compare(picker.options.map(function (o) {
+            return o.id;
+        }).join(","), "3,-2");
+        picker.choose(0);
+        tryCompare(view, "editorCategoryId", 3, 3000);
+        view.saveNow();
+        compare(service.updates[service.updates.length - 1].changes.categoryId, 3);
+        tryVerify(function () {
+            return findChild(view, "memoFilter3") !== null;
+        }, 3000, "换过去以后左边多出这个分类");
+        tryVerify(function () {
+            return !picker.visible;
+        }, 3000);
+        mouseClick(chip);
+        tryVerify(function () {
+            return popup.opened;
+        }, 3000);
+        compare(popup.options.map(function (o) {
+            return o.id;
+        }).join(","), "1,2,3,0,-3");
+        verify(findChild(popup.contentItem, "memoCategoryOption3").current);
+        keyClick(Qt.Key_Escape);
+    }
+    // 产品保证：点「新建」弹出菜单。「新建备忘录」照旧开空白草稿；「新建分类…」挑一个还没写过备忘的科目，
+    // 直接在这一科开一条草稿，光标在标题里、打字直接进标题；正筛着别的科目时回到「全部」，
+    // 写下内容后这条出现在列表里，左边多出这个分类。科目都写过备忘以后，「新建分类…」直接打开新建科目框，
+    // 建好的科目同样开一条草稿。
+    // 抓住的错误实现：「新建」只能开备忘、建不了分类；挑完科目草稿不在那一科；焦点留在菜单按钮上，打字进不了标题。
+    function test_newMenuCreatesMemoOrCategory() {
+        var newButton = child("memoNewButton");
+        var menu = child("memoNewMenu");
+        var title = child("memoTitleInput");
+        view.selectFilter(2);
+        mouseClick(newButton);
+        tryVerify(function () {
+            return menu.opened;
+        }, 3000);
+        compare(menu.options.map(function (o) {
+            return o.id;
+        }).join(","), "memo,category");
+        menu.choose(0);
+        tryVerify(function () {
+            return view.drafting && title.activeFocus;
+        }, 3000, "新建备忘录：开草稿，光标在标题里");
+        compare(view.editorCategoryId, 2, "新建备忘录跟着当前筛选的科目");
+        mouseClick(newButton);
+        tryVerify(function () {
+            return menu.opened;
+        }, 3000);
+        menu.choose(1);
+        var picker = child("memoSubjectPicker");
+        tryVerify(function () {
+            return picker.opened;
+        }, 3000);
+        compare(picker.parent, newButton, "从「新建」进来时挂在「新建」按钮下");
+        compare(picker.options.map(function (o) {
+            return o.id;
+        }).join(","), "3,-2");
+        picker.choose(0);
+        tryVerify(function () {
+            return view.drafting && view.editorCategoryId === 3 && !picker.visible;
+        }, 3000);
+        compare(view.filterCategoryId, -1, "回到「全部」，新分类的第一条存下后看得到");
+        verify(title.activeFocus, "挑完科目，光标在标题里");
+        keyClick("x");
+        compare(view.editorTitle, "x", "直接打字就进了标题");
+        view.saveNow();
+        compare(service.creates[service.creates.length - 1].categoryId, 3);
+        tryVerify(function () {
+            return findChild(view, "memoFilter3") !== null && findChild(view, "memoRow" + view.selectedId) !== null;
+        }, 3000, "左边多出这个分类，列表里有这一条");
+        compare(view.unusedCategoryOptions.length, 0, "前置：每个科目都写过备忘了");
+        mouseClick(newButton);
+        tryVerify(function () {
+            return menu.opened;
+        }, 3000);
+        menu.choose(1);
+        var prompt = child("newCategoryPrompt");
+        tryVerify(function () {
+            return prompt.opened;
+        }, 3000, "没有可挑的科目，直接打开新建科目框");
+        child("newCategoryPromptField").text = "线性代数";
+        mouseClick(child("newCategoryPromptConfirm"));
+        tryVerify(function () {
+            return view.drafting && view.category(view.editorCategoryId).name === "线性代数";
+        }, 3000, "建好的科目开一条草稿");
+    }
+    // 产品保证：在标题里按回车（不在拼音组合中）跳到正文开头接着写：标题不变、正文不多出空行，也不画焦点环；
+    // iPad 软键盘的回车键显示「下一项」。拼音还在组合时回车归输入法，不跳走。
+    // 抓住的错误实现：回车没反应（标题是单行框，真机上按回车什么都不发生）；组合拼音时一按回车就跳到正文。
+    function test_titleEnterContinuesInBody() {
+        var title = child("memoTitleInput");
+        var body = child("memoBodyInput");
+        var oldTitle = view.editorTitle;
+        var oldBody = view.editorBody;
+        verify(oldTitle.length > 0 && oldBody.length > 0, "前置：标题、正文都有字，看得出有没有被改动");
+        compare(title.EnterKey.type, Qt.EnterKeyNext);
+        body.cursorPosition = body.length;
+        verify(body.cursorPosition > 0, "前置：正文的光标原本不在开头");
+        title.forceActiveFocus(Qt.MouseFocusReason);
+        title.cursorPosition = title.length;
+        keyClick(Qt.Key_Return);
+        verify(body.activeFocus, "回车后到了正文");
+        compare(body.cursorPosition, 0);
+        compare(body.visualFocus, false);
+        compare(view.editorTitle, oldTitle);
+        compare(view.editorBody, oldBody);
+        title.forceActiveFocus(Qt.MouseFocusReason);
+        title.cursorPosition = title.length;
+        // qmllint disable unqualified
+        verify(inputMethodProbe.compose(title, "shu"), "前置：输入法事件送到了标题框");
+        // qmllint enable unqualified
+        verify(title.inputMethodComposing, "前置：标题框正在组合拼音");
+        keyClick(Qt.Key_Return);
+        verify(title.activeFocus, "组合中的回车归输入法，不跳到正文");
+    }
+    // 产品保证：科目下拉打开时停在当前科目；鼠标移到哪行，哪行亮起焦糖底（看得出点下去会选哪个），
+    // 当前科目的对勾不跟着走；开着时再点科目按钮就收起；打开、收起有淡入淡出和轻微缩放，开了「减少动效」就没有。
+    // 抓住的错误实现：悬停色和弹层底几乎一样（真机上看不出鼠标指着哪行）；按下按钮时弹层先关、松手又打开，收不起来；弹层一下子冒出来。
+    function test_categoryPopupHighlightAndAnimation() {
+        var popup = child("memoCategoryPopup");
+        var chip = child("memoCategoryButton");
+        mouseClick(chip);
+        tryVerify(function () {
+            return popup.opened;
+        }, 3000);
+        var first = findChild(popup.contentItem, "memoCategoryOption1");
+        var second = findChild(popup.contentItem, "memoCategoryOption2");
+        verify(first.current && !second.current, "前置：当前科目是第一项");
+        compare(findChild(first, "memoCategoryOptionBackground1").color, Theme.inputPopupHighlight, "打开时当前科目亮着");
+        // 文字在亮起的底色里上下居中（Basic 样式的选项行下边默认还留 8，文字会偏上）。
+        var firstBackground = findChild(first, "memoCategoryOptionBackground1");
+        compare(first.contentItem.y + first.contentItem.height / 2, firstBackground.y + firstBackground.height / 2);
+        mouseMove(second, second.width / 2, second.height / 2);
+        tryCompare(popup.list, "currentIndex", 1, 3000);
+        tryCompare(findChild(second, "memoCategoryOptionBackground2"), "color", Theme.inputPopupHighlight, 3000);
+        tryVerify(function () {
+            return findChild(first, "memoCategoryOptionBackground1").color.a === 0;
+        }, 3000, "指针移走后第一行不再亮");
+        verify(first.current && !second.current, "对勾留在当前科目上");
+        mouseClick(chip);
+        tryVerify(function () {
+            return !popup.visible;
+        }, 3000);
+        wait(200);
+        verify(!popup.visible, "再点科目按钮就收起，不会又弹出来");
+        compare(view.editorCategoryId, 1, "只是指了一下，没有选");
+        Theme.reduceMotion = false;
+        try {
+            popup.open();
+            tryVerify(function () {
+                return popup.scale < 1 && popup.opacity < 1;
+            }, 1000, "打开时从略小、半透明展开");
+            tryCompare(popup, "scale", 1, 3000);
+            tryCompare(popup, "opacity", 1, 3000);
+            tryVerify(function () {
+                return popup.opened;
+            }, 3000);
+            popup.close();
+            tryVerify(function () {
+                return popup.opacity < 1;
+            }, 1000, "收起时淡出");
+            tryVerify(function () {
+                return !popup.visible;
+            }, 3000);
+        } finally {
+            Theme.reduceMotion = true;
+        }
+    }
+    // 产品保证：「新建」菜单开着时直接点进标题，菜单收起，光标留在标题里（不被收起的菜单抢回按钮上）。
+    // 抓住的错误实现：菜单关掉后不看焦点有没有去处，一律交回「新建」按钮。
+    function test_dismissedMenuKeepsClickedFocus() {
+        var menu = child("memoNewMenu");
+        var title = child("memoTitleInput");
+        Theme.reduceMotion = false;
+        try {
+            mouseClick(child("memoNewButton"));
+            tryVerify(function () {
+                return menu.opened;
+            }, 3000);
+            mouseClick(title, 20, title.height / 2);
+            tryVerify(function () {
+                return !menu.visible;
+            }, 3000);
+            wait(50);
+            verify(title.activeFocus, "光标留在标题里");
+        } finally {
+            Theme.reduceMotion = true;
+        }
     }
     // 产品保证：删除确认框打开后焦点在「取消」上，按 Esc 关闭、不删除；回车或空格不会误删。
     // 抓住的错误实现：弹窗不拿焦点，Esc 送不到，只能用鼠标点取消。

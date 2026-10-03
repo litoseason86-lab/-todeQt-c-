@@ -35,6 +35,13 @@ FocusScope {
     property var allMemos: []
     property var categories: []
     property var capsules: []
+    // 新建科目框建好科目以后做什么："assign" 把正在编辑的这条换过去，"draft" 用它开一条新备忘。
+    property string promptPurpose: "assign"
+    // 编辑区科目下拉里的分类：写过备忘的科目，按科目管理里的顺序。正在编辑的这条所在的科目也算——
+    // 用「新建分类」开的第一条还没保存时，那一科还没有备忘。
+    readonly property var memoCategoryOptions: root.categoryOptions(true)
+    // 还没写过备忘的科目：「新建分类」从这里挑。
+    readonly property var unusedCategoryOptions: root.categoryOptions(false)
     property bool saving: false
     property bool reading: false
     property string readFailure: ""
@@ -118,6 +125,19 @@ FocusScope {
     }
     function groupCount(id) {
         return root.idsForCategory(Number(id)).length;
+    }
+    // inUse 为真：写过备忘的科目，加上正在编辑的这条所在的科目；为假：其余的科目。
+    function categoryOptions(inUse) {
+        return root.categories.filter(function (entry) {
+            var id = Number(entry.id);
+            return (id === root.editorCategoryId || root.idsForCategory(id).length > 0) === inUse;
+        }).map(function (entry) {
+            return {
+                id: Number(entry.id),
+                name: String(entry.name),
+                color: String(entry.color || "")
+            };
+        });
     }
     function readEditor(entry) {
         root.loadingEditor = true;
@@ -325,18 +345,65 @@ FocusScope {
             root.readEditor(root.memo(root.selectedId));
         }
     }
-    function startDraft() {
+    // 开一条新草稿。categoryId 给了（「新建分类」挑好的科目）就放在那一科，没给就跟着当前筛选。
+    function startDraft(categoryId) {
         if (!root.saveNow())
             return;
         // 连续点「新建」时，空草稿不会被保存，回去的目标仍是最初选中的那条。
         var back = root.drafting ? root.draftReturnId : root.selectedId;
+        var target = categoryId === undefined ? Math.max(0, root.filterCategoryId) : Number(categoryId);
+        // 正筛着别的科目时回到「全部」：新分类的第一条存下来以后，列表里要看得到它。
+        if (root.filterCategoryId >= 0 && root.filterCategoryId !== target) {
+            root.filterCategoryId = -1;
+            root.rebuildRows();
+        }
         root.clearEditor();
         root.drafting = true;
         root.draftReturnId = back;
-        root.editorCategoryId = Math.max(0, root.filterCategoryId);
-        root.baselineCategoryId = root.editorCategoryId;
+        root.editorCategoryId = target;
+        root.baselineCategoryId = target;
         // 点「新建」后直接能打标题；焦点环只给键盘 Tab 用，这里只要闪烁的光标。
         titleInput.forceActiveFocus(Qt.OtherFocusReason);
+    }
+    // 「新建分类」：从还没写过备忘的科目里挑一个，一个都不剩就直接新建科目。
+    // purpose 为 "assign" 时把正在编辑的这条换过去，为 "draft" 时用挑好的科目开一条新备忘。
+    function addCategory(purpose) {
+        subjectPicker.purpose = purpose;
+        if (root.unusedCategoryOptions.length === 0)
+            root.openCategoryPrompt(purpose);
+        else
+            subjectPicker.open();
+    }
+    function openCategoryPrompt(purpose) {
+        root.promptPurpose = purpose;
+        categoryPrompt.openPrompt();
+    }
+    // 弹层被 Esc 或点外面关掉后，把焦点还给打开它的按钮，键盘用户接着往下走。
+    // 点外面时正好点进了输入框、或点开了另一个弹层，焦点已经有了去处，就不抢。
+    function returnFocus(opener, popup) {
+        var focusItem = root.Window.activeFocusItem;
+        for (var item = focusItem; item; item = item.parent) {
+            if (item === popup.contentItem) {
+                focusItem = null;
+                break;
+            }
+        }
+        if (focusItem && focusItem !== root.Window.contentItem)
+            return;
+        opener.forceActiveFocus(Qt.PopupFocusReason);
+    }
+    // 标题里按回车：到正文开头接着写，标题不变。在按键这一步接住、不交给标题框：
+    // 单行输入框收到回车会收起 iPad 软键盘，跳到正文又得再弹起来。
+    // 输入法还在组合拼音时回车归输入法（Mac 拼音按回车是把字母原样上屏），不跳。
+    function continueInBody(event) {
+        if (titleInput.inputMethodComposing) {
+            event.accepted = false;
+            return;
+        }
+        event.accepted = true;
+        bodyInput.cursorPosition = 0;
+        bodyInput.forceActiveFocus(Qt.OtherFocusReason);
+        root.ensureBodyCursorVisible();
     }
     function selectMemo(id) {
         if (id === root.selectedId && !root.drafting)
@@ -550,12 +617,21 @@ FocusScope {
             Layout.fillWidth: true
         }
         PageActionButton {
+            id: newButton
             implicitHeight: root.touchUi ? 44 : Theme.controlHeightMd
             objectName: "memoNewButton"
             text: qsTr("新建")
             glyph: "plus"
             primary: true
-            onClicked: root.startDraft()
+            // 点开是一个小菜单：新建备忘录，或新建分类。菜单（或从它打开的挑科目）开着时再点就收起。
+            onClicked: {
+                if (newMenu.visible || (subjectPicker.visible && subjectPicker.purpose === "draft")) {
+                    newMenu.close();
+                    subjectPicker.close();
+                } else {
+                    newMenu.open();
+                }
+            }
         }
     }
     GlassPanel {
@@ -1024,7 +1100,15 @@ FocusScope {
                         horizontalPadding: 0
                         hoverEnabled: !root.touchUi
                         Accessible.name: qsTr("科目：%1").arg(categoryLabel.text)
-                        onClicked: categoryPopup.opened ? categoryPopup.close() : categoryPopup.open()
+                        // 下拉（或从它打开的挑科目）开着时再点就收起。
+                        onClicked: {
+                            if (categoryPopup.visible || (subjectPicker.visible && subjectPicker.purpose === "assign")) {
+                                categoryPopup.close();
+                                subjectPicker.close();
+                            } else {
+                                categoryPopup.open();
+                            }
+                        }
                         // 定稿里的小胶囊：沉底色加描边。悬停、按下或弹层展开时逐级加深，看得出能点。
                         background: Rectangle {
                             objectName: "memoCategoryButtonBackground"
@@ -1032,7 +1116,7 @@ FocusScope {
                             width: parent.width
                             height: 28
                             radius: 14
-                            color: categoryChoice.down || categoryPopup.opened ? Theme.accentFillStrong : (categoryChoice.hovered ? Theme.accentSoft : Theme.surfaceSunken)
+                            color: categoryChoice.down || categoryPopup.visible ? Theme.accentFillStrong : (categoryChoice.hovered ? Theme.accentSoft : Theme.surfaceSunken)
                             border.color: categoryChoice.visualFocus ? Theme.focusRing : Theme.border
                             border.width: categoryChoice.visualFocus ? 2 : 1
                             Behavior on color {
@@ -1070,7 +1154,7 @@ FocusScope {
                                 textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontSm
                                 color: Theme.ink
-                                rotation: categoryPopup.opened ? 180 : 0
+                                rotation: categoryPopup.visible ? 180 : 0
                                 Behavior on rotation {
                                     NumberAnimation {
                                         duration: Theme.reduceMotion ? 0 : 120
@@ -1081,168 +1165,6 @@ FocusScope {
                         }
                         HoverHandler {
                             cursorShape: Qt.PointingHandCursor
-                        }
-                    }
-                    // 科目弹层：和专注页的任务选择同一套——玻璃底（不能模糊时退回实色）、选中项淡焦糖、悬停一层淡高光；
-                    // 打开时停在当前科目，上下键移动、回车或空格选定、Esc 关闭。Qt 自带的 Menu 是写死的白底，夜间很刺眼。
-                    Popup {
-                        id: categoryPopup
-                        objectName: "memoCategoryPopup"
-                        // 选项：现有科目（按科目管理里的顺序）、不选科目，最后是新建。编号 -2 只是「新建科目…」的标记，不是科目。
-                        readonly property var options: root.categories.map(function (entry) {
-                            return {
-                                id: Number(entry.id),
-                                name: String(entry.name),
-                                color: String(entry.color || "")
-                            };
-                        }).concat([
-                            {
-                                id: 0,
-                                name: qsTr("不选科目"),
-                                color: ""
-                            },
-                            {
-                                id: -2,
-                                name: qsTr("新建科目…"),
-                                color: ""
-                            }
-                        ])
-                        // 用方向键移动过才给当前项画焦点环；鼠标点开时只靠淡焦糖底标出当前科目，不再套一圈。
-                        property bool keyboardNavigated: false
-                        function choose(index) {
-                            var option = categoryPopup.options[index];
-                            if (!option)
-                                return;
-                            categoryPopup.close();
-                            if (option.id === -2)
-                                categoryPrompt.openPrompt();
-                            else
-                                root.chooseCategory(option.id);
-                        }
-                        parent: categoryChoice
-                        x: 0
-                        y: Math.round(categoryChoice.height / 2 + 14 + Theme.space4)
-                        width: Math.max(220, categoryChoice.width)
-                        margins: Theme.space8
-                        padding: Theme.space8
-                        modal: false
-                        dim: false
-                        focus: true
-                        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-                        onOpened: {
-                            categoryPopup.keyboardNavigated = false;
-                            var index = categoryPopup.options.findIndex(function (option) {
-                                return option.id === root.editorCategoryId;
-                            });
-                            categoryList.currentIndex = Math.max(0, index);
-                            categoryList.positionViewAtIndex(categoryList.currentIndex, ListView.Contain);
-                            categoryList.forceActiveFocus(Qt.PopupFocusReason);
-                        }
-                        // 关掉后焦点回到科目按钮，键盘用户接着往下走；新建科目的输入框打开时不抢它的焦点。
-                        onClosed: {
-                            if (!categoryPrompt.opened)
-                                categoryChoice.forceActiveFocus(Qt.PopupFocusReason);
-                        }
-                        background: GlassPanel {
-                            objectName: "memoCategoryPopupBackground"
-                            radius: Theme.radiusLg
-                            color: Theme.glassBlurAllowed ? Theme.glassDialog : Theme.glassSolidCard
-                            solidFallback: !Theme.glassBlurAllowed
-                            panelShadowEnabled: true
-                        }
-                        contentItem: ListView {
-                            id: categoryList
-                            objectName: "memoCategoryList"
-                            implicitHeight: Math.min(contentHeight, 320)
-                            clip: true
-                            model: categoryPopup.options
-                            spacing: 2
-                            boundsBehavior: Flickable.StopAtBounds
-                            keyNavigationEnabled: true
-                            Accessible.role: Accessible.List
-                            Accessible.name: qsTr("选择科目")
-                            Keys.onUpPressed: {
-                                categoryPopup.keyboardNavigated = true;
-                                categoryList.decrementCurrentIndex();
-                            }
-                            Keys.onDownPressed: {
-                                categoryPopup.keyboardNavigated = true;
-                                categoryList.incrementCurrentIndex();
-                            }
-                            Keys.onReturnPressed: categoryPopup.choose(categoryList.currentIndex)
-                            Keys.onEnterPressed: categoryPopup.choose(categoryList.currentIndex)
-                            Keys.onSpacePressed: categoryPopup.choose(categoryList.currentIndex)
-                            ScrollBar.vertical: PageScrollBar {}
-                            delegate: ItemDelegate {
-                                id: option
-                                required property var modelData
-                                required property int index
-                                // 「新建科目…」上方有一条分隔线，和科目列表分开。
-                                readonly property bool isAction: option.modelData.id === -2
-                                readonly property bool current: option.modelData.id === root.editorCategoryId
-                                objectName: "memoCategoryOption" + option.modelData.id
-                                width: ListView.view.width
-                                topInset: option.isAction ? Theme.space8 + 1 : 0
-                                topPadding: option.topInset
-                                implicitHeight: (root.touchUi ? 44 : Theme.controlHeightMd) + option.topInset
-                                leftPadding: Theme.space12
-                                rightPadding: Theme.space12
-                                hoverEnabled: !root.touchUi
-                                Accessible.name: option.modelData.name
-                                onClicked: categoryPopup.choose(option.index)
-                                background: Rectangle {
-                                    radius: Theme.radiusSm
-                                    color: option.current ? Theme.accentFill : (option.hovered ? Theme.glassHover : Theme.glassHoverIdle)
-                                    border.width: categoryList.activeFocus && categoryPopup.keyboardNavigated && categoryList.currentIndex === option.index ? 2 : 0
-                                    border.color: Theme.focusRing
-                                    Behavior on color {
-                                        ColorAnimation {
-                                            duration: Theme.reduceMotion ? 0 : 120
-                                            easing.type: Easing.OutQuad
-                                        }
-                                    }
-                                }
-                                Rectangle {
-                                    visible: option.isAction
-                                    x: Theme.space4
-                                    y: Math.round(Theme.space8 / 2)
-                                    width: option.width - Theme.space4 * 2
-                                    height: 1
-                                    color: Theme.borderSubtle
-                                }
-                                contentItem: RowLayout {
-                                    spacing: Theme.space8
-                                    Item {
-                                        implicitWidth: 12
-                                        implicitHeight: 12
-                                        Rectangle {
-                                            visible: !option.isAction
-                                            anchors.centerIn: parent
-                                            width: 8
-                                            height: 8
-                                            radius: 4
-                                            color: option.modelData.color.length > 0 ? option.modelData.color : Qt.rgba(1, 1, 1, 0)
-                                        }
-                                        GlyphIcon {
-                                            visible: option.isAction
-                                            anchors.centerIn: parent
-                                            name: "plus"
-                                            size: 12
-                                            color: Theme.inkSoft
-                                            Accessible.ignored: true
-                                        }
-                                    }
-                                    Text {
-                                        Layout.fillWidth: true
-                                        text: option.modelData.name
-                                        textFormat: Text.PlainText
-                                        font.pixelSize: Theme.fontMd
-                                        font.weight: option.current ? Font.Medium : Font.Normal
-                                        color: option.current ? Theme.accentFillInk : (option.isAction ? Theme.inkSoft : Theme.ink)
-                                        elide: Text.ElideRight
-                                    }
-                                }
-                            }
                         }
                     }
                     RowLayout {
@@ -1293,6 +1215,14 @@ FocusScope {
                     leftPadding: root.inputInset
                     // UTF-16 最大长度留给表情；真正的 60 字边界按服务一致的字符数限制。
                     maximumLength: root.titleLimit * 2
+                    // 回车接着到正文开头写（见 continueInBody）；iPad 软键盘上的回车键显示成「下一项」。
+                    EnterKey.type: Qt.EnterKeyNext
+                    Keys.onReturnPressed: function (event) {
+                        root.continueInBody(event);
+                    }
+                    Keys.onEnterPressed: function (event) {
+                        root.continueInBody(event);
+                    }
                     background: Rectangle {
                         color: Qt.rgba(1, 1, 1, 0)
                         radius: Theme.radiusSm
@@ -1387,13 +1317,130 @@ FocusScope {
             font.pixelSize: Theme.fontMd
         }
     }
+    // 编辑区的科目下拉：只列写过备忘的科目（左边那几个分类），再加「不选科目」和「新建分类…」。
+    // 编号 -3 只是「新建分类…」的标记，不是科目。
+    ChoicePopup {
+        id: categoryPopup
+        objectName: "memoCategoryPopup"
+        namePrefix: "memoCategory"
+        accessibleName: qsTr("选择科目")
+        touchUi: root.touchUi
+        parent: categoryChoice
+        x: 0
+        // 落在按钮可见的胶囊（高 28，在按钮里上下居中）下方 4。
+        y: Math.round(categoryChoice.height / 2 + 14 + Theme.space4)
+        width: Math.max(220, categoryChoice.width)
+        transformOrigin: Popup.TopLeft
+        currentId: root.editorCategoryId
+        options: root.memoCategoryOptions.concat([
+            {
+                id: 0,
+                name: qsTr("不选科目"),
+                color: ""
+            },
+            {
+                id: -3,
+                name: qsTr("新建分类…"),
+                color: "",
+                action: true
+            }
+        ])
+        onPicked: function (option) {
+            if (option.id >= 0)
+                root.chooseCategory(option.id);
+        }
+        onFinished: function (option) {
+            if (option && option.id === -3)
+                root.addCategory("assign");
+            else if (option)
+                categoryChoice.forceActiveFocus(Qt.PopupFocusReason);
+            else
+                root.returnFocus(categoryChoice, categoryPopup);
+        }
+    }
+    // 「新建分类」挑科目：还没写过备忘的科目，最后是「新建科目…」（编号 -2 只是标记）。
+    // 从科目下拉进来时挂在科目按钮下，从「新建」菜单进来时挂在「新建」按钮下。
+    ChoicePopup {
+        id: subjectPicker
+        objectName: "memoSubjectPicker"
+        namePrefix: "memoSubject"
+        // "assign"：把正在编辑的这条换到挑中的科目；"draft"：用挑中的科目开一条新备忘。
+        property string purpose: "assign"
+        readonly property bool fromNewButton: subjectPicker.purpose === "draft"
+        accessibleName: qsTr("选一个科目作为分类")
+        caption: qsTr("选一个科目作为分类")
+        touchUi: root.touchUi
+        parent: subjectPicker.fromNewButton ? newButton : categoryChoice
+        x: subjectPicker.fromNewButton ? newButton.width - width : 0
+        y: subjectPicker.fromNewButton ? newButton.height + Theme.space4 : Math.round(categoryChoice.height / 2 + 14 + Theme.space4)
+        width: 220
+        transformOrigin: subjectPicker.fromNewButton ? Popup.TopRight : Popup.TopLeft
+        options: root.unusedCategoryOptions.concat([
+            {
+                id: -2,
+                name: qsTr("新建科目…"),
+                color: "",
+                action: true
+            }
+        ])
+        onPicked: function (option) {
+            if (option.id > 0 && !subjectPicker.fromNewButton)
+                root.chooseCategory(option.id);
+        }
+        onFinished: function (option) {
+            var opener = subjectPicker.fromNewButton ? newButton : categoryChoice;
+            if (!option)
+                root.returnFocus(opener, subjectPicker);
+            else if (option.id === -2)
+                root.openCategoryPrompt(subjectPicker.purpose);
+            else if (subjectPicker.fromNewButton)
+                root.startDraft(option.id);
+            else
+                categoryChoice.forceActiveFocus(Qt.PopupFocusReason);
+        }
+    }
+    // 右上角「新建」的菜单。两项都等菜单收起（finished）再做：「新建分类…」接着要在同一位置打开挑科目的弹层。
+    ChoicePopup {
+        id: newMenu
+        objectName: "memoNewMenu"
+        namePrefix: "memoNewMenu"
+        accessibleName: qsTr("新建")
+        touchUi: root.touchUi
+        showLeading: false
+        parent: newButton
+        x: newButton.width - width
+        y: newButton.height + Theme.space4
+        width: 180
+        transformOrigin: Popup.TopRight
+        options: [
+            {
+                id: "memo",
+                name: qsTr("新建备忘录")
+            },
+            {
+                id: "category",
+                name: qsTr("新建分类…")
+            }
+        ]
+        onFinished: function (option) {
+            if (!option)
+                root.returnFocus(newButton, newMenu);
+            else if (option.id === "memo")
+                root.startDraft();
+            else
+                root.addCategory("draft");
+        }
+    }
     NewCategoryPrompt {
         id: categoryPrompt
         parent: root
         categoryManagerRef: root.categoryManagerRef
         onCreated: function (categoryId, name) {
             root.reload();
-            root.chooseCategory(categoryId);
+            if (root.promptPurpose === "draft")
+                root.startDraft(categoryId);
+            else
+                root.chooseCategory(categoryId);
         }
     }
     Popup {
