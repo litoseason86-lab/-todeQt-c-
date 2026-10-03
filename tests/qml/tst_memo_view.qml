@@ -345,10 +345,12 @@ TestCase {
         compare(view.saveNow(), false);
         compare(service.updates.length, 0);
     }
-    // 产品保证：删除必须先确认；取消不动数据，确认只删所选条目。
+    // 产品保证：删除必须先确认，确认框写出要删的是哪一条（标题，没有标题就用正文第一行）；取消不动数据，确认只删所选条目。
+    // 抓住的错误实现：确认框只问「删除这条备忘录？」，看不出删的是哪一条。
     function test_deleteRequiresConfirmation() {
         mouseClick(child("memoDeleteButton"));
         tryCompare(view, "pendingDeleteId", 11, 3000);
+        compare(child("memoDeleteConfirmText").text, "数学进度", "写出要删的是哪一条");
         compare(service.deletes.length, 0);
         mouseClick(child("memoDeleteCancel"));
         compare(service.deletes.length, 0);
@@ -358,6 +360,11 @@ TestCase {
         }, 3000);
         mouseClick(child("memoDeleteConfirmButton"));
         tryCompare(service, "deletes", [11], 3000);
+        view.selectMemo(31);
+        compare(view.editorTitle, "", "前置：这一条没有标题");
+        view.requestDelete();
+        compare(child("memoDeleteConfirmText").text, "没有科目的记录", "没有标题就写正文第一行");
+        view.cancelDelete();
     }
     // 产品保证：拖动期间模型不改，松手以同科完整列表重排；跨科目不能落下。
     function test_dragFullListAndRejectOtherCategory() {
@@ -629,19 +636,35 @@ TestCase {
         tryCompare(bar, "y", body.mapToItem(view, 0, 0).y, 3000);
         compare(bar.height, body.height);
     }
-    // 产品保证：新建后什么都没写就点「删除」，草稿直接丢掉，回到新建前选中的那条；列表里有备忘时右侧不会变成「还没有备忘录」。
-    // 抓住的错误实现：只清空编辑区、不恢复选中，右侧落到空状态。
+    // 产品保证：点「删除」一律先弹确认，新建了还没写字的草稿也一样：取消就留在草稿里；确认后丢掉草稿，
+    // 回到新建前选中的那条，列表里有备忘时右侧不会变成「还没有备忘录」。
+    // 抓住的错误实现：空草稿一点「删除」就直接没了，不弹确认（真机上用户以为删除没有确认）；确认后只清空编辑区、不恢复选中。
     function test_discardEmptyDraftReturnsToPreviousMemo() {
         view.selectMemo(12);
         view.startDraft();
         verify(view.drafting);
         compare(view.selectedId, -1, "前置：草稿状态下没有选中任何一条");
+        verify(view.editorTitle.length === 0 && view.editorBody.length === 0, "前置：草稿一个字都没写");
+        var confirm = child("memoDeleteConfirm");
         mouseClick(child("memoDeleteButton"));
-        compare(view.drafting, false);
+        tryVerify(function () {
+            return confirm.opened;
+        }, 3000, "空草稿点「删除」也先弹确认");
+        compare(view.pendingDeleteId, 0);
+        mouseClick(child("memoDeleteCancel"));
+        tryVerify(function () {
+            return !confirm.visible;
+        }, 3000);
+        verify(view.drafting, "取消后还在草稿里");
+        mouseClick(child("memoDeleteButton"));
+        tryVerify(function () {
+            return confirm.opened;
+        }, 3000);
+        mouseClick(child("memoDeleteConfirmButton"));
+        tryCompare(view, "drafting", false, 3000);
         compare(view.selectedId, 12);
         compare(view.hasEditor, true);
         compare(view.editorTitle, "第二条");
-        compare(view.pendingDeleteId, -1, "空草稿不弹确认");
         compare(service.creates.length, 0);
         compare(service.deletes.length, 0);
     }

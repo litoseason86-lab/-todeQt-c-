@@ -461,14 +461,13 @@ FocusScope {
             root.reload();
         }
     }
+    // 点「删除」一律先确认，新建了还没写字的草稿也一样（确认后只丢草稿，回到新建前那条）。
     function requestDelete() {
-        if (root.drafting && root.editorTitle.trim().length === 0 && root.editorBody.trim().length === 0) {
-            // 什么都没写的草稿没有内容可丢，直接放弃，不弹确认。
-            root.discardDraft();
-            return;
-        }
-        // 写了字的草稿和普通备忘一样先确认。草稿可能还没进数据库，编号先记 0，确认时再看它有没有被自动保存。
+        // 草稿可能还没进数据库，编号先记 0，确认时再看它有没有被自动保存。
         deleteConfirm.pendingId = root.drafting ? 0 : root.selectedId;
+        // 确认框里写出要删的是哪一条：标题，没有标题就用正文第一行，和列表里显示的一致。
+        var title = root.editorTitle.trim();
+        deleteConfirm.pendingTitle = title.length > 0 ? title : root.editorBody.split("\n")[0].trim();
         deleteConfirm.open();
     }
     function cancelDelete() {
@@ -1418,6 +1417,7 @@ FocusScope {
         id: deleteConfirm
         objectName: "memoDeleteConfirm"
         property int pendingId: -1
+        property string pendingTitle: ""
         parent: root
         anchors.centerIn: parent
         width: Math.min(360, root.width - Theme.space24 * 2)
@@ -1447,6 +1447,19 @@ FocusScope {
                 color: Theme.inkStrong
                 font.pixelSize: Theme.fontLg
                 font.bold: true
+            }
+            // 和知识缺口的删除确认一样写出是哪一条；还没写字的草稿没有可写的，这一行不占位置。
+            Text {
+                objectName: "memoDeleteConfirmText"
+                Layout.fillWidth: true
+                visible: text.length > 0
+                text: deleteConfirm.pendingTitle
+                textFormat: Text.PlainText
+                color: Theme.inkSoft
+                font.pixelSize: Theme.fontSm
+                wrapMode: Text.Wrap
+                maximumLineCount: 2
+                elide: Text.ElideRight
             }
             Text {
                 Layout.fillWidth: true
