@@ -695,21 +695,30 @@ TestCase {
         verify(Math.abs(count.x - (name.x + name.width)) <= 1, "条数紧跟名字");
         verify(count.x + count.width < group.width / 2, "条数没被推到行尾");
     }
-    // 产品保证：编辑区左上角的科目按名字宽度显示，最宽 220；名字太长时在 220 内省略。
-    // 抓住的错误实现：科目按钮固定占满 220，短名字后面拖一大段空白（和定稿不一致）。
-    function test_categoryChipHugsName() {
-        var chip = child("memoCategoryButton");
+    // 产品保证：编辑区左上角的分类按名字宽度显示，最宽 220；名字太长时在 220 内省略。
+    // 抓住的错误实现：分类固定占满 220，短名字后面拖一大段空白（和定稿不一致）。
+    function test_categoryTagHugsName() {
+        var tag = child("memoCategoryTag");
+        var label = child("memoCategoryLabel");
         view.selectMemo(21);
         tryVerify(function () {
-            return chip.implicitWidth < 160;
+            return tag.implicitWidth < 160;
         }, 3000, "前置：「物理」的自然宽度远小于 220");
-        compare(chip.width, chip.implicitWidth);
+        compare(tag.width, tag.implicitWidth);
+        categories.records = [
+            {
+                id: 1,
+                name: "高等数学与概率统计特别长的科目名称再增加十个字",
+                color: "#98753c"
+            },
+            categories.records[1], categories.records[2]];
+        categories.categoriesChanged();
         view.selectMemo(11);
         tryVerify(function () {
-            return chip.implicitWidth > 220;
+            return tag.textOffset + label.implicitWidth > 220;
         }, 3000, "前置：超长科目名放不下");
-        compare(chip.width, 220);
-        verify(findChild(chip, "memoCategoryLabel").truncated);
+        compare(tag.width, 220);
+        verify(label.truncated);
     }
     // 产品保证：离开备忘录页一段时间再回来，「今天」「昨天」按回来时的时间算，不沿用离开时的时间。
     // 抓住的错误实现：只靠每分钟一次、页面不可见时停走的定时器刷新。
@@ -811,31 +820,30 @@ TestCase {
         var second = child("memoGroup2");
         compare(yIn(second, list) - (yIn(lastOfFirst, list) + lastOfFirst.height), Theme.space16, "组与组之间空 16");
     }
-    // 产品保证：编辑卡按定稿留 24 的内边距，科目按钮、标题文字、正文文字的左边对齐在同一条线上。
-    // 抓住的错误实现：内边距 16；输入框沿用 Basic 样式「padding + 4」的左内边距，文字比科目按钮多缩进。
-    function test_editorTextAlignedWithCategoryButton() {
+    // 产品保证：编辑卡按定稿留 24 的内边距，分类、标题文字、正文文字的左边对齐在同一条线上。
+    // 抓住的错误实现：内边距 16；输入框沿用 Basic 样式「padding + 4」的左内边距，文字比分类多缩进。
+    function test_editorTextAlignedWithCategoryTag() {
         var paper = child("memoPaper");
         verify(paper.width >= 380, "前置：宽编辑卡，内边距应为 24");
-        var chip = child("memoCategoryButton");
+        var tag = child("memoCategoryTag");
         var title = child("memoTitleInput");
         var body = child("memoBodyInput");
-        compare(chip.mapToItem(paper, 0, 0).x, Theme.space24);
+        compare(tag.mapToItem(paper, 0, 0).x, Theme.space24);
         compare(title.mapToItem(paper, title.leftPadding, 0).x, Theme.space24);
         compare(body.mapToItem(paper, body.leftPadding, 0).x, Theme.space24);
     }
-    // 产品保证：没选科目时，科目按钮里不留空圆点的位置，「不选科目」靠左；选了科目时圆点在前、文字在后。
-    // 抓住的错误实现：圆点一直占位，没科目时文字前面空着一块，看起来是歪的。
-    function test_categoryButtonWithoutDot() {
-        var chip = child("memoCategoryButton");
+    // 产品保证：没有分类时，编辑区的分类不留空圆点的位置，「未分类」靠左；有分类时圆点在前、文字在后。
+    // 抓住的错误实现：圆点一直占位，没分类时文字前面空着一块，看起来是歪的。
+    function test_categoryTagWithoutDot() {
+        var tag = child("memoCategoryTag");
         var label = child("memoCategoryLabel");
-        compare(label.mapToItem(chip, 0, 0).x, Theme.space12 + 8 + Theme.space8, "前置：有科目时文字排在圆点后面");
+        compare(label.mapToItem(tag, 0, 0).x, 8 + Theme.space8, "前置：有分类时文字排在圆点后面");
         view.startDraft();
-        compare(view.editorCategoryId, 0, "前置：在「全部」里新建，不选科目");
-        compare(label.text, "不选科目");
-        // 圆点隐藏后布局在下一次排版时才更新，等它到位再看位置。
+        compare(view.editorCategoryId, 0, "前置：在「全部」里新建，没有分类");
+        compare(label.text, "未分类");
         tryVerify(function () {
-            return label.mapToItem(chip, 0, 0).x === Theme.space12;
-        }, 3000, "「不选科目」靠左，前面不留空圆点的位置");
+            return label.mapToItem(tag, 0, 0).x === 0;
+        }, 3000, "「未分类」靠左，前面不留空圆点的位置");
     }
     // 产品保证：一条备忘都没有时，只在整个框的正中显示一行「还没有备忘录」，不摆孤零零的「全部」和分隔线；点「新建」后回到两栏。
     // 抓住的错误实现：照样摆出左栏和分隔线，那行字只在右边一栏里居中。
@@ -849,105 +857,114 @@ TestCase {
         compare(view.libraryEmpty, false);
         compare(view.hasEditor, true);
     }
-    // 产品保证：编辑区的科目选择是应用自己的主题弹层；打开时停在当前科目，上下键移动、回车选定，
-    // Esc 关闭且不改科目；选「新建分类…」再选「新建科目…」打开新建框。
-    // 抓住的错误实现：Qt 自带的白底 Menu（夜间刺眼，打开时也不停在当前科目）。
-    function test_categoryPickerThemedAndKeyboard() {
-        var chip = child("memoCategoryButton");
-        var popup = child("memoCategoryPopup");
-        compare(view.editorCategoryId, 1, "前置：当前备忘在第一个科目");
-        mouseClick(chip);
+    // 产品保证：改分类用应用自己的主题弹层：右键一条备忘时在指针处弹出，打开时停在它现在的分类，
+    // 上下键移动、回车选定并马上保存，Esc 关闭且不改分类，关掉后焦点回到列表；键盘在列表里按 Shift+F10 也能打开。
+    // 抓住的错误实现：Qt 自带的白底 Menu（夜间刺眼，打开时也不停在当前分类）；选完要等一秒自动保存，列表才重新分组。
+    function test_moveCategoryPopupThemedAndKeyboard() {
+        var popup = child("memoMovePopup");
+        var row = child("memoRow11");
+        mouseClick(row, row.width / 2, row.height / 2, Qt.RightButton);
         tryVerify(function () {
             return popup.opened;
-        }, 3000);
-        compare(popup.background.objectName, "memoCategoryPopupBackground");
+        }, 3000, "右键一条备忘，弹出改分类");
+        compare(view.selectedId, 11);
+        compare(popup.background.objectName, "memoMovePopupBackground");
         var list = popup.contentItem;
-        compare(list.objectName, "memoCategoryList");
-        compare(list.currentIndex, 0);
-        compare(popup.options[list.currentIndex].id, view.editorCategoryId);
+        compare(list.objectName, "memoMoveList");
+        compare(popup.options[list.currentIndex].id, view.editorCategoryId, "打开时停在它现在的分类");
         keyClick(Qt.Key_Down);
-        compare(list.currentIndex, 1);
+        compare(popup.options[list.currentIndex].id, 2);
         keyClick(Qt.Key_Return);
         tryVerify(function () {
-            return !popup.opened;
+            return !popup.visible;
         }, 3000);
         compare(view.editorCategoryId, 2);
-        mouseClick(chip);
+        var last = service.updates[service.updates.length - 1];
+        compare(last.id, 11);
+        compare(last.changes.categoryId, 2, "选完马上保存");
+        var memoList = child("memoList");
+        tryVerify(function () {
+            return memoList.activeFocus;
+        }, 3000, "关掉后焦点回到列表");
+        keyClick(Qt.Key_F10, Qt.ShiftModifier);
         tryVerify(function () {
             return popup.opened;
-        }, 3000);
-        // 当前科目这次是第二项：打开时要停在它上面，而不是总停在第一项。
-        compare(list.currentIndex, 1);
+        }, 3000, "Shift+F10 打开改分类");
+        compare(popup.options[list.currentIndex].id, 2);
         keyClick(Qt.Key_Escape);
         tryVerify(function () {
-            return !popup.opened;
+            return !popup.visible;
         }, 3000);
-        compare(view.editorCategoryId, 2);
-        mouseClick(chip);
+        compare(view.editorCategoryId, 2, "Esc 不改分类");
         tryVerify(function () {
-            return popup.opened;
-        }, 3000);
-        compare(popup.options[popup.options.length - 1].id, -3, "前置：最后一项是「新建分类…」");
-        popup.choose(popup.options.length - 1);
-        var picker = child("memoSubjectPicker");
-        tryVerify(function () {
-            return picker.opened;
-        }, 3000);
-        compare(picker.options[picker.options.length - 1].id, -2, "前置：挑科目的最后一项是「新建科目…」");
-        picker.choose(picker.options.length - 1);
-        tryVerify(function () {
-            return child("newCategoryPrompt").opened;
-        }, 3000);
-        compare(view.editorCategoryId, 2, "新建框打开时不改当前科目");
-        child("newCategoryPrompt").close();
+            return memoList.activeFocus;
+        }, 3000, "Esc 后焦点也回到列表");
     }
-    // 产品保证：编辑区的科目下拉只列写过备忘的科目（就是左边的分类），没写过备忘的科目不出现，当前科目带对勾；
-    // 「新建分类…」列出还没写过备忘的科目，挑一个就把这条换过去，左边随之多出这个分类，下拉里也有了它。
-    // 抓住的错误实现：下拉把全部科目都列出来（真机上没写过备忘的数学、政治、其他也在里面）。
-    function test_categoryDropdownListsOnlyMemoCategories() {
+    // 产品保证：改分类只能在已有的分类（写过备忘的科目）和「未分类」之间选，没写过备忘的科目不出现，
+    // 也没有新建的入口（新分类只从右上角「新建」建）；当前分类带对勾。编辑区只显示分类，点它什么都不弹。
+    // 抓住的错误实现：把全部科目都列出来，或者在这里放「新建分类…」；编辑区的分类还能点开下拉来改。
+    function test_moveCategoryOnlyExistingCategories() {
         verify(categories.records.some(function (c) {
             return c.id === 3;
         }), "前置：有一个科目");
-        verify(findChild(view, "memoFilter3") === null, "前置：它还没写过备忘，不在左边的分类里");
-        var popup = child("memoCategoryPopup");
-        var chip = child("memoCategoryButton");
-        mouseClick(chip);
+        verify(findChild(view, "memoFilter3") === null, "前置：它还没写过备忘");
+        var popup = child("memoMovePopup");
+        var row = child("memoRow21");
+        mouseClick(row, row.width / 2, row.height / 2, Qt.RightButton);
         tryVerify(function () {
             return popup.opened;
         }, 3000);
+        verify(waitForItemPolished(popup.contentItem));
         compare(popup.options.map(function (o) {
             return o.id;
-        }).join(","), "1,2,0,-3");
-        verify(findChild(popup.contentItem, "memoCategoryOption1").current, "当前科目带对勾");
-        verify(!findChild(popup.contentItem, "memoCategoryOption2").current);
-        popup.choose(popup.options.length - 1);
-        var picker = child("memoSubjectPicker");
-        tryVerify(function () {
-            return picker.opened;
-        }, 3000);
-        compare(picker.parent, chip, "从下拉进来时挂在科目按钮下");
-        compare(picker.options.map(function (o) {
-            return o.id;
-        }).join(","), "3,-2");
-        picker.choose(0);
-        tryCompare(view, "editorCategoryId", 3, 3000);
-        view.saveNow();
-        compare(service.updates[service.updates.length - 1].changes.categoryId, 3);
-        tryVerify(function () {
-            return findChild(view, "memoFilter3") !== null;
-        }, 3000, "换过去以后左边多出这个分类");
-        tryVerify(function () {
-            return !picker.visible;
-        }, 3000);
-        mouseClick(chip);
-        tryVerify(function () {
-            return popup.opened;
-        }, 3000);
-        compare(popup.options.map(function (o) {
-            return o.id;
-        }).join(","), "1,2,3,0,-3");
-        verify(findChild(popup.contentItem, "memoCategoryOption3").current);
+        }).join(","), "1,2,0");
+        verify(!popup.options.some(function (o) {
+            return !!o.action;
+        }), "没有新建一类的动作项");
+        verify(findChild(popup.contentItem, "memoMoveOption2").current, "当前分类带对勾");
+        verify(!findChild(popup.contentItem, "memoMoveOption1").current);
         keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !popup.visible;
+        }, 3000);
+        var tag = child("memoCategoryTag");
+        mouseClick(tag, 4, tag.height / 2);
+        wait(300);
+        verify(!popup.visible && !child("memoSubjectPicker").visible && !child("memoNewMenu").visible, "点编辑区的分类什么都不弹");
+        compare(view.editorCategoryId, 2);
+    }
+    // 产品保证：iPad 上长按一条备忘、不拖直接松手，弹出改分类（相当于 Mac 的右键）；长按后拖动仍是排序，不弹。
+    // 抓住的错误实现：触屏没有改分类的入口；或者拖完松手也弹出来。
+    function test_touchLongPressReleaseOpensMoveCategory() {
+        var popup = child("memoMovePopup");
+        var row = child("memoRow12");
+        var touch = touchEvent(row);
+        touch.press(0, row, 80, row.height / 2).commit();
+        tryCompare(view, "touchArmedId", 12, 3000);
+        touch.release(0, row, 80, row.height / 2).commit();
+        tryVerify(function () {
+            return popup.opened;
+        }, 3000, "长按后没拖就松手，弹出改分类");
+        compare(view.selectedId, 12);
+        compare(view.draggingId, -1, "不是在排序");
+        compare(service.reorders.length, 0);
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !popup.visible;
+        }, 3000);
+        row = child("memoRow11");
+        var second = child("memoRow12");
+        touch = touchEvent(row);
+        touch.press(0, row, 80, row.height / 2).commit();
+        tryCompare(view, "touchArmedId", 11, 3000);
+        var p = second.mapToItem(row, 80, second.height / 2);
+        touch.move(0, row, 80, p.y).commit();
+        touch.release(0, row, 80, p.y).commit();
+        tryVerify(function () {
+            return service.reorders.length === 1;
+        }, 3000, "长按后拖动照常排序");
+        wait(100);
+        verify(!popup.visible, "拖完松手不弹改分类");
     }
     // 产品保证：点「新建」弹出菜单。「新建备忘录」照旧开空白草稿；「新建分类…」挑一个还没写过备忘的科目，
     // 直接在这一科开一条草稿，光标在标题里、打字直接进标题；正筛着别的科目时回到「全部」，
@@ -1042,37 +1059,51 @@ TestCase {
         keyClick(Qt.Key_Return);
         verify(title.activeFocus, "组合中的回车归输入法，不跳到正文");
     }
-    // 产品保证：科目下拉打开时停在当前科目；鼠标移到哪行，哪行亮起焦糖底（看得出点下去会选哪个），
-    // 当前科目的对勾不跟着走；开着时再点科目按钮就收起；打开、收起有淡入淡出和轻微缩放，开了「减少动效」就没有。
-    // 抓住的错误实现：悬停色和弹层底几乎一样（真机上看不出鼠标指着哪行）；按下按钮时弹层先关、松手又打开，收不起来；弹层一下子冒出来。
-    function test_categoryPopupHighlightAndAnimation() {
-        var popup = child("memoCategoryPopup");
-        var chip = child("memoCategoryButton");
-        mouseClick(chip);
+    // 产品保证：改分类的弹层打开时停在当前分类；鼠标移到哪行，哪行亮起焦糖底（看得出点下去会选哪个），
+    // 当前分类的对勾不跟着走；文字在亮起的底色里上下居中；点弹层外面就收起；「新建」菜单开着时再点「新建」就收起；
+    // 打开、收起有淡入淡出和轻微缩放，开了「减少动效」就没有。
+    // 抓住的错误实现：悬停色和弹层底几乎一样（真机上看不出鼠标指着哪行）；当前项只靠底色标出，一悬停就分不清；
+    // 按下按钮时菜单先关、松手又打开，收不起来；挂在整页上的弹层点外面关不掉；弹层一下子冒出来。
+    function test_choicePopupHighlightAndAnimation() {
+        var popup = child("memoMovePopup");
+        var row = child("memoRow11");
+        mouseClick(row, row.width / 2, row.height / 2, Qt.RightButton);
         tryVerify(function () {
             return popup.opened;
         }, 3000);
-        var first = findChild(popup.contentItem, "memoCategoryOption1");
-        var second = findChild(popup.contentItem, "memoCategoryOption2");
-        verify(first.current && !second.current, "前置：当前科目是第一项");
-        compare(findChild(first, "memoCategoryOptionBackground1").color, Theme.inputPopupHighlight, "打开时当前科目亮着");
-        // 文字在亮起的底色里上下居中（Basic 样式的选项行下边默认还留 8，文字会偏上）。
-        var firstBackground = findChild(first, "memoCategoryOptionBackground1");
-        compare(first.contentItem.y + first.contentItem.height / 2, firstBackground.y + firstBackground.height / 2);
+        verify(waitForItemPolished(popup.contentItem));
+        var first = findChild(popup.contentItem, "memoMoveOption1");
+        var second = findChild(popup.contentItem, "memoMoveOption2");
+        verify(first.current && !second.current, "前置：当前分类是第一项");
+        var firstBackground = findChild(first, "memoMoveOptionBackground1");
+        compare(firstBackground.color, Theme.inputPopupHighlight, "打开时当前分类亮着");
+        // Basic 样式的选项行下边默认还留 8，文字会偏上。
+        compare(first.contentItem.y + first.contentItem.height / 2, firstBackground.y + firstBackground.height / 2, "文字在亮起的底色里上下居中");
         mouseMove(second, second.width / 2, second.height / 2);
         tryCompare(popup.list, "currentIndex", 1, 3000);
-        tryCompare(findChild(second, "memoCategoryOptionBackground2"), "color", Theme.inputPopupHighlight, 3000);
+        tryCompare(findChild(second, "memoMoveOptionBackground2"), "color", Theme.inputPopupHighlight, 3000);
         tryVerify(function () {
-            return findChild(first, "memoCategoryOptionBackground1").color.a === 0;
+            return firstBackground.color.a === 0;
         }, 3000, "指针移走后第一行不再亮");
-        verify(first.current && !second.current, "对勾留在当前科目上");
-        mouseClick(chip);
+        verify(first.current && !second.current, "对勾留在当前分类上");
+        var body = child("memoBodyInput");
+        mouseClick(body, body.width / 2, 10);
         tryVerify(function () {
             return !popup.visible;
+        }, 3000, "点弹层外面就收起");
+        compare(view.editorCategoryId, 1, "只是指了一下，没有选");
+        var newButton = child("memoNewButton");
+        var menu = child("memoNewMenu");
+        mouseClick(newButton);
+        tryVerify(function () {
+            return menu.opened;
+        }, 3000);
+        mouseClick(newButton);
+        tryVerify(function () {
+            return !menu.visible;
         }, 3000);
         wait(200);
-        verify(!popup.visible, "再点科目按钮就收起，不会又弹出来");
-        compare(view.editorCategoryId, 1, "只是指了一下，没有选");
+        verify(!menu.visible, "再点「新建」就收起，不会又弹出来");
         Theme.reduceMotion = false;
         try {
             popup.open();
@@ -1095,14 +1126,25 @@ TestCase {
             Theme.reduceMotion = true;
         }
     }
-    // 产品保证：「新建」菜单开着时直接点进标题，菜单收起，光标留在标题里（不被收起的菜单抢回按钮上）。
-    // 抓住的错误实现：菜单关掉后不看焦点有没有去处，一律交回「新建」按钮。
+    // 产品保证：「新建」菜单按 Esc 收起后，焦点回到「新建」按钮，键盘接着用；菜单开着时直接点进标题，
+    // 菜单收起，光标留在标题里（不被收起的菜单抢回按钮上）。
+    // 抓住的错误实现：菜单关掉后不看焦点有没有去处，一律交回「新建」按钮；或者 Esc 后焦点哪儿都不在。
     function test_dismissedMenuKeepsClickedFocus() {
         var menu = child("memoNewMenu");
         var title = child("memoTitleInput");
+        var newButton = child("memoNewButton");
+        mouseClick(newButton);
+        tryVerify(function () {
+            return menu.opened;
+        }, 3000);
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !menu.visible;
+        }, 3000);
+        verify(newButton.activeFocus, "Esc 后焦点回到「新建」按钮");
         Theme.reduceMotion = false;
         try {
-            mouseClick(child("memoNewButton"));
+            mouseClick(newButton);
             tryVerify(function () {
                 return menu.opened;
             }, 3000);

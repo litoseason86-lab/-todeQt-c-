@@ -35,10 +35,8 @@ FocusScope {
     property var allMemos: []
     property var categories: []
     property var capsules: []
-    // 新建科目框建好科目以后做什么："assign" 把正在编辑的这条换过去，"draft" 用它开一条新备忘。
-    property string promptPurpose: "assign"
-    // 编辑区科目下拉里的分类：写过备忘的科目，按科目管理里的顺序。正在编辑的这条所在的科目也算——
-    // 用「新建分类」开的第一条还没保存时，那一科还没有备忘。
+    // 已有的分类：写过备忘的科目，按科目管理里的顺序。正在编辑的这条所在的科目也算——
+    // 用「新建分类」开的第一条还没保存时，那一科还没有备忘。右键改分类只在这些里面选。
     readonly property var memoCategoryOptions: root.categoryOptions(true)
     // 还没写过备忘的科目：「新建分类」从这里挑。
     readonly property var unusedCategoryOptions: root.categoryOptions(false)
@@ -87,6 +85,10 @@ FocusScope {
     property int dragCategoryId: 0
     property int dropTargetId: -1
     property int touchArmedId: -1
+    // 长按之后手指有没有拖动过：拖过是排序，没拖就松手是改分类（和 Mac 右键一样）。
+    property bool touchDragMoved: false
+    // 长按的位置（窗口坐标）：没拖就松手时，改分类的弹层在这里弹出。
+    property point touchArmedPoint: Qt.point(0, 0)
     property real dragSceneX: 0
     property real dragSceneY: 0
     readonly property int pendingDeleteId: deleteConfirm.pendingId
@@ -365,32 +367,36 @@ FocusScope {
         // 点「新建」后直接能打标题；焦点环只给键盘 Tab 用，这里只要闪烁的光标。
         titleInput.forceActiveFocus(Qt.OtherFocusReason);
     }
-    // 「新建分类」：从还没写过备忘的科目里挑一个，一个都不剩就直接新建科目。
-    // purpose 为 "assign" 时把正在编辑的这条换过去，为 "draft" 时用挑好的科目开一条新备忘。
-    function addCategory(purpose) {
-        subjectPicker.purpose = purpose;
+    // 「新建 → 新建分类」：从还没写过备忘的科目里挑一个，一个都不剩就直接新建科目；挑好或建好后在那一科开一条草稿。
+    function addCategory() {
         if (root.unusedCategoryOptions.length === 0)
-            root.openCategoryPrompt(purpose);
+            categoryPrompt.openPrompt();
         else
             subjectPicker.open();
     }
-    function openCategoryPrompt(purpose) {
-        root.promptPurpose = purpose;
-        categoryPrompt.openPrompt();
-    }
-    // 弹层被 Esc 或点外面关掉后，把焦点还给打开它的按钮，键盘用户接着往下走。
-    // 点外面时正好点进了输入框、或点开了另一个弹层，焦点已经有了去处，就不抢。
-    function returnFocus(opener, popup) {
-        var focusItem = root.Window.activeFocusItem;
-        for (var item = focusItem; item; item = item.parent) {
-            if (item === popup.contentItem) {
-                focusItem = null;
-                break;
-            }
-        }
-        if (focusItem && focusItem !== root.Window.contentItem)
+    // 改一条备忘的分类（列表里右键、iPad 长按后松手、键盘 Shift+F10）：先选中它（切走前照常保存当前这条），
+    // 再在指针处弹出已有的分类。只能在已有的分类之间换，新分类从右上角「新建」建。
+    function requestMoveCategory(id, sceneX, sceneY) {
+        root.selectMemo(id);
+        if (root.selectedId !== id || root.drafting)
             return;
-        opener.forceActiveFocus(Qt.PopupFocusReason);
+        var p = root.mapFromItem(null, sceneX, sceneY);
+        moveCategoryPopup.x = p.x;
+        moveCategoryPopup.y = p.y;
+        moveCategoryPopup.open();
+    }
+    // 键盘入口：在选中行的左下方弹出。
+    function moveSelectedFromKeyboard() {
+        for (var i = 0; i < rows.count; ++i) {
+            if (rows.get(i).memoId !== root.selectedId)
+                continue;
+            var item = memoList.itemAtIndex(i);
+            if (!item)
+                return;
+            var p = item.mapToItem(null, Theme.space16, item.height);
+            root.requestMoveCategory(root.selectedId, p.x, p.y);
+            return;
+        }
     }
     // 标题里按回车：到正文开头接着写，标题不变。在按键这一步接住、不交给标题框：
     // 单行输入框收到回车会收起 iPad 软键盘，跳到正文又得再弹起来。
@@ -625,7 +631,7 @@ FocusScope {
             primary: true
             // 点开是一个小菜单：新建备忘录，或新建分类。菜单（或从它打开的挑科目）开着时再点就收起。
             onClicked: {
-                if (newMenu.visible || (subjectPicker.visible && subjectPicker.purpose === "draft")) {
+                if (newMenu.visible || subjectPicker.visible) {
                     newMenu.close();
                     subjectPicker.close();
                 } else {
@@ -809,6 +815,14 @@ FocusScope {
                     root.listFocusFromPointer = false;
                     root.stepSelection(1);
                 }
+                // 键盘改分类：Shift+F10 或菜单键，在选中行下方弹出（和右键同一个弹层）。
+                Keys.onPressed: function (event) {
+                    if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
+                        event.accepted = true;
+                        root.listFocusFromPointer = false;
+                        root.moveSelectedFromKeyboard();
+                    }
+                }
                 ScrollBar.vertical: PageScrollBar {
                     parent: leftPane
                     x: leftPane.width + 4
@@ -901,14 +915,26 @@ FocusScope {
                             memoList.forceActiveFocus(Qt.MouseFocusReason);
                         }
                     }
+                    // 右键：改这一条的分类（见 requestMoveCategory）。
+                    TapHandler {
+                        acceptedButtons: Qt.RightButton
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                        onTapped: function (eventPoint, button) {
+                            root.listFocusFromPointer = true;
+                            var p = row.mapToItem(null, eventPoint.position.x, eventPoint.position.y);
+                            root.requestMoveCategory(row.memoId, p.x, p.y);
+                        }
+                    }
                     TapHandler {
                         acceptedDevices: PointerDevice.TouchScreen
                         onLongPressed: {
                             if (!root.beginDrag(row.memoId))
                                 return;
                             touchDrag.cancelled = false;
+                            root.touchDragMoved = false;
                             root.touchArmedId = row.memoId;
                             var p = row.mapToItem(null, point.position.x, point.position.y);
+                            root.touchArmedPoint = p;
                             root.updateDrag(p.x, p.y);
                         }
                         onPressedChanged: {
@@ -916,8 +942,15 @@ FocusScope {
                                 return;
                             var id = row.memoId;
                             Qt.callLater(function () {
-                                if (root && root.touchArmedId === id && (!touchDrag || !touchDrag.active))
+                                if (!root || root.touchArmedId !== id || (touchDrag && touchDrag.active))
+                                    return;
+                                // 长按后拖过：照常结束排序。长按后没拖就松手：和 Mac 上右键一样，弹出改分类。
+                                if (root.touchDragMoved) {
                                     root.finishDrag(touchDrag ? touchDrag.cancelled : true);
+                                    return;
+                                }
+                                root.finishDrag(true);
+                                root.requestMoveCategory(id, root.touchArmedPoint.x, root.touchArmedPoint.y);
                             });
                         }
                     }
@@ -960,6 +993,7 @@ FocusScope {
                         onActiveChanged: {
                             if (active) {
                                 cancelled = false;
+                                root.touchDragMoved = true;
                                 var p = row.mapToItem(null, centroid.position.x, centroid.position.y);
                                 root.updateDrag(p.x, p.y);
                             } else {
@@ -1082,89 +1116,45 @@ FocusScope {
                         onClicked: root.discardDeleted()
                     }
                 }
-                // 竖屏仍保留两栏；编辑卡窄时只把卡内工具分成两行，避免按钮挤掉科目名。
+                // 竖屏仍保留两栏；编辑卡窄时只把卡内工具分成两行，避免更新时间和按钮挤掉分类名。
                 Item {
                     Layout.fillWidth: true
                     implicitHeight: narrow ? toolHeight * 2 : toolHeight
                     readonly property int toolHeight: root.touchUi ? 44 : 36
-                    // 科目按名字宽度显示，最宽 220（定稿）；名字更长就在 220 内省略。
-                    readonly property real chipWidth: Math.min(categoryChoice.implicitWidth, 220)
-                    readonly property bool narrow: width < chipWidth + actions.implicitWidth + Theme.space8
-                    Button {
-                        id: categoryChoice
-                        objectName: "memoCategoryButton"
-                        width: Math.min(parent.chipWidth, parent.width)
-                        height: root.touchUi ? 44 : 36
-                        // Basic 样式按钮的横向内边距默认是 padding + 2，也要清零，宽度才和定稿一致。
-                        padding: 0
-                        horizontalPadding: 0
-                        hoverEnabled: !root.touchUi
-                        Accessible.name: qsTr("科目：%1").arg(categoryLabel.text)
-                        // 下拉（或从它打开的挑科目）开着时再点就收起。
-                        onClicked: {
-                            if (categoryPopup.visible || (subjectPicker.visible && subjectPicker.purpose === "assign")) {
-                                categoryPopup.close();
-                                subjectPicker.close();
-                            } else {
-                                categoryPopup.open();
-                            }
-                        }
-                        // 定稿里的小胶囊：沉底色加描边。悬停、按下或弹层展开时逐级加深，看得出能点。
-                        background: Rectangle {
-                            objectName: "memoCategoryButtonBackground"
+                    readonly property bool narrow: width < categoryTag.implicitWidth + actions.implicitWidth + Theme.space8
+                    // 这条备忘所在的分类，只显示、不能点：改分类在左边列表里右键这一条（iPad 长按后松手）。
+                    // 按名字宽度显示，最宽 220（定稿），更长就在 220 内省略。宽度直接赋值、不经过布局取整，
+                    // 放得下的名字不会因为字宽带小数被省略（见组头的同类问题）。
+                    Item {
+                        id: categoryTag
+                        objectName: "memoCategoryTag"
+                        readonly property bool hasCategory: root.editorCategoryId !== 0
+                        // 圆点 8 加间距 8；没有分类时不留圆点的位置，「未分类」直接靠左。
+                        readonly property int textOffset: hasCategory ? 8 + Theme.space8 : 0
+                        implicitWidth: Math.min(220, textOffset + categoryLabel.implicitWidth)
+                        width: Math.min(implicitWidth, parent.width)
+                        height: parent.toolHeight
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: qsTr("分类：%1").arg(categoryLabel.text)
+                        Rectangle {
+                            visible: categoryTag.hasCategory
                             anchors.verticalCenter: parent.verticalCenter
-                            width: parent.width
-                            height: 28
-                            radius: 14
-                            color: categoryChoice.down || categoryPopup.visible ? Theme.accentFillStrong : (categoryChoice.hovered ? Theme.accentSoft : Theme.surfaceSunken)
-                            border.color: categoryChoice.visualFocus ? Theme.focusRing : Theme.border
-                            border.width: categoryChoice.visualFocus ? 2 : 1
-                            Behavior on color {
-                                ColorAnimation {
-                                    duration: Theme.reduceMotion ? 0 : 120
-                                    easing.type: Easing.OutQuad
-                                }
-                            }
+                            width: 8
+                            height: 8
+                            radius: 4
+                            color: root.category(root.editorCategoryId).color || Qt.rgba(1, 1, 1, 0)
                         }
-                        contentItem: RowLayout {
-                            spacing: Theme.space8
-                            // 没选科目时不留空圆点的位置，「不选科目」直接靠左，不显得歪。
-                            Rectangle {
-                                Layout.leftMargin: Theme.space12
-                                visible: root.editorCategoryId !== 0
-                                implicitWidth: 8
-                                implicitHeight: 8
-                                radius: 4
-                                color: root.category(root.editorCategoryId).color || Qt.rgba(1, 1, 1, 0)
-                            }
-                            Text {
-                                id: categoryLabel
-                                objectName: "memoCategoryLabel"
-                                Layout.fillWidth: true
-                                Layout.leftMargin: root.editorCategoryId === 0 ? Theme.space12 : 0
-                                text: root.editorCategoryId === 0 ? qsTr("不选科目") : root.category(root.editorCategoryId).name
-                                textFormat: Text.PlainText
-                                font.pixelSize: Theme.fontSm
-                                color: Theme.ink
-                                elide: Text.ElideRight
-                            }
-                            Text {
-                                Layout.rightMargin: Theme.space12
-                                text: "▾"
-                                textFormat: Text.PlainText
-                                font.pixelSize: Theme.fontSm
-                                color: Theme.ink
-                                rotation: categoryPopup.visible ? 180 : 0
-                                Behavior on rotation {
-                                    NumberAnimation {
-                                        duration: Theme.reduceMotion ? 0 : 120
-                                        easing.type: Easing.OutQuad
-                                    }
-                                }
-                            }
-                        }
-                        HoverHandler {
-                            cursorShape: Qt.PointingHandCursor
+                        Text {
+                            id: categoryLabel
+                            objectName: "memoCategoryLabel"
+                            x: categoryTag.textOffset
+                            width: categoryTag.width - x
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: categoryTag.hasCategory ? root.category(root.editorCategoryId).name : qsTr("未分类")
+                            textFormat: Text.PlainText
+                            font.pixelSize: Theme.fontSm
+                            color: Theme.inkSoft
+                            elide: Text.ElideRight
                         }
                     }
                     RowLayout {
@@ -1317,64 +1307,54 @@ FocusScope {
             font.pixelSize: Theme.fontMd
         }
     }
-    // 编辑区的科目下拉：只列写过备忘的科目（左边那几个分类），再加「不选科目」和「新建分类…」。
-    // 编号 -3 只是「新建分类…」的标记，不是科目。
+    // 改分类的弹层：列表里右键一条备忘（iPad 长按后不拖、直接松手；键盘 Shift+F10）时在指针处弹出。
+    // 只列已有的分类（写过备忘的科目）和「未分类」，不在这里新建——新分类从右上角「新建」建。
     ChoicePopup {
-        id: categoryPopup
-        objectName: "memoCategoryPopup"
-        namePrefix: "memoCategory"
-        accessibleName: qsTr("选择科目")
+        id: moveCategoryPopup
+        objectName: "memoMovePopup"
+        namePrefix: "memoMove"
+        caption: qsTr("更改分类")
+        accessibleName: qsTr("更改分类")
         touchUi: root.touchUi
-        parent: categoryChoice
-        x: 0
-        // 落在按钮可见的胶囊（高 28，在按钮里上下居中）下方 4。
-        y: Math.round(categoryChoice.height / 2 + 14 + Theme.space4)
-        width: Math.max(220, categoryChoice.width)
+        parent: root
+        width: 220
         transformOrigin: Popup.TopLeft
+        // 挂在整页上，没有专属的按钮可以再点一次收起：点弹层外面任何地方都收起。
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         currentId: root.editorCategoryId
         options: root.memoCategoryOptions.concat([
             {
                 id: 0,
-                name: qsTr("不选科目"),
+                name: qsTr("未分类"),
                 color: ""
-            },
-            {
-                id: -3,
-                name: qsTr("新建分类…"),
-                color: "",
-                action: true
             }
         ])
+        // 选完立刻保存：列表马上按新分类重新分组，不等一秒后的自动保存。
         onPicked: function (option) {
-            if (option.id >= 0)
-                root.chooseCategory(option.id);
+            root.chooseCategory(option.id);
+            root.saveNow();
         }
+        // 选了分类就把焦点交给列表，键盘可以接着上下换备忘。Esc、点外面关掉时不用管：
+        // Qt 会把焦点还给弹层打开前拿着焦点的控件（测试里覆盖了这两种情况）。
         onFinished: function (option) {
-            if (option && option.id === -3)
-                root.addCategory("assign");
-            else if (option)
-                categoryChoice.forceActiveFocus(Qt.PopupFocusReason);
-            else
-                root.returnFocus(categoryChoice, categoryPopup);
+            if (option)
+                memoList.forceActiveFocus(Qt.PopupFocusReason);
         }
     }
-    // 「新建分类」挑科目：还没写过备忘的科目，最后是「新建科目…」（编号 -2 只是标记）。
-    // 从科目下拉进来时挂在科目按钮下，从「新建」菜单进来时挂在「新建」按钮下。
+    // 「新建 → 新建分类」挑科目：还没写过备忘的科目，最后是「新建科目…」（编号 -2 只是标记，不是科目）。
+    // 挑好或建好后在那一科开一条草稿。
     ChoicePopup {
         id: subjectPicker
         objectName: "memoSubjectPicker"
         namePrefix: "memoSubject"
-        // "assign"：把正在编辑的这条换到挑中的科目；"draft"：用挑中的科目开一条新备忘。
-        property string purpose: "assign"
-        readonly property bool fromNewButton: subjectPicker.purpose === "draft"
         accessibleName: qsTr("选一个科目作为分类")
         caption: qsTr("选一个科目作为分类")
         touchUi: root.touchUi
-        parent: subjectPicker.fromNewButton ? newButton : categoryChoice
-        x: subjectPicker.fromNewButton ? newButton.width - width : 0
-        y: subjectPicker.fromNewButton ? newButton.height + Theme.space4 : Math.round(categoryChoice.height / 2 + 14 + Theme.space4)
+        parent: newButton
+        x: newButton.width - width
+        y: newButton.height + Theme.space4
         width: 220
-        transformOrigin: subjectPicker.fromNewButton ? Popup.TopRight : Popup.TopLeft
+        transformOrigin: Popup.TopRight
         options: root.unusedCategoryOptions.concat([
             {
                 id: -2,
@@ -1383,20 +1363,13 @@ FocusScope {
                 action: true
             }
         ])
-        onPicked: function (option) {
-            if (option.id > 0 && !subjectPicker.fromNewButton)
-                root.chooseCategory(option.id);
-        }
         onFinished: function (option) {
-            var opener = subjectPicker.fromNewButton ? newButton : categoryChoice;
             if (!option)
-                root.returnFocus(opener, subjectPicker);
-            else if (option.id === -2)
-                root.openCategoryPrompt(subjectPicker.purpose);
-            else if (subjectPicker.fromNewButton)
-                root.startDraft(option.id);
+                return;
+            if (option.id === -2)
+                categoryPrompt.openPrompt();
             else
-                categoryChoice.forceActiveFocus(Qt.PopupFocusReason);
+                root.startDraft(option.id);
         }
     }
     // 右上角「新建」的菜单。两项都等菜单收起（finished）再做：「新建分类…」接着要在同一位置打开挑科目的弹层。
@@ -1424,23 +1397,21 @@ FocusScope {
         ]
         onFinished: function (option) {
             if (!option)
-                root.returnFocus(newButton, newMenu);
-            else if (option.id === "memo")
+                return;
+            if (option.id === "memo")
                 root.startDraft();
             else
-                root.addCategory("draft");
+                root.addCategory();
         }
     }
     NewCategoryPrompt {
         id: categoryPrompt
         parent: root
         categoryManagerRef: root.categoryManagerRef
+        // 只从「新建 → 新建分类」打开：建好的科目开一条草稿，写下内容后成为新分类。
         onCreated: function (categoryId, name) {
             root.reload();
-            if (root.promptPurpose === "draft")
-                root.startDraft(categoryId);
-            else
-                root.chooseCategory(categoryId);
+            root.startDraft(categoryId);
         }
     }
     Popup {
