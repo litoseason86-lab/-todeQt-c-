@@ -331,9 +331,6 @@ TestCase {
         compare(stackLayout.currentIndex, mainWindow.viewIndex(mainWindow.currentView));
     }
 
-    // 页面编号必须与 StackLayout 里页面的书写顺序一一对应，切页状态机按编号取页。
-    // 2026-09 删掉「目标」页（原第 7 页）后，排在它后面的三页各前移一位；这条逐页核对
-    // 「按名字切过去，栈里显示的正是那一页」，而不只是「currentIndex 等于映射出来的数」。
     // 产品保证：备忘录能从正式页面栈进入，退出流程能保存草稿，失败则回到编辑页展示原因。
     function test_memoWiringAndQuitFlush() {
         const oldReduceMotion = Theme.reduceMotion
@@ -363,6 +360,9 @@ TestCase {
         Theme.reduceMotion = oldReduceMotion
     }
 
+    // 页面编号必须与 StackLayout 里页面的书写顺序一一对应，切页状态机按编号取页。
+    // 2026-09 删掉「目标」页（原第 7 页）后，排在它后面的三页各前移一位；这条逐页核对
+    // 「按名字切过去，栈里显示的正是那一页」，而不只是「currentIndex 等于映射出来的数」。
     function test_everyViewNameMapsToItsOwnPage_data() {
         return [
             { tag: "today", page: "todayTaskViewPage" },

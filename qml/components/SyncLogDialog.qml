@@ -35,15 +35,6 @@ Popup {
         closeButton.forceActiveFocus()
     }
 
-    readonly property bool copyNoticeShown: copyToast.shown
-    Toast {
-        id: copyToast
-        // Popup 默认会把子项送进内容布局；提示条放到覆盖层，避免挤占日志列表。
-        parent: Overlay.overlay
-        x: parent ? (parent.width - width) / 2 : 0
-        z: 1000
-    }
-
     Connections {
         target: root.syncControllerRef
         ignoreUnknownSignals: true
@@ -225,17 +216,45 @@ Popup {
                             wrapMode: Text.Wrap
                         }
 
+                        // 按钮和「已复制」排成一行，按钮保持文字宽度；不要直接把按钮装进填满整行的 Loader，
+                        // Loader 有了宽度会把装进来的按钮拉成一整条。
                         Loader {
-                            Layout.fillWidth: true
                             active: Boolean(entry.modelData.canCopyLostValue)
-                            sourceComponent: PageActionButton {
-                                objectName: "syncLogCopyLostValue" + entry.index
-                                text: qsTr("复制被覆盖的内容")
-                                onClicked: {
-                                    if (root.syncControllerRef) {
+                            sourceComponent: RowLayout {
+                                id: copyRow
+
+                                property bool copied: false
+
+                                spacing: Theme.space8
+
+                                PageActionButton {
+                                    objectName: "syncLogCopyLostValue" + entry.index
+                                    text: qsTr("复制被覆盖的内容")
+                                    onClicked: {
+                                        if (!root.syncControllerRef)
+                                            return
                                         root.syncControllerRef.copyLostValue(String(entry.modelData.lostValue))
-                                        copyToast.show(qsTr("已复制"))
+                                        copyRow.copied = true
+                                        copiedReset.restart()
                                     }
+                                }
+
+                                // 复制成功的反馈就放在按钮旁边。用透明度显隐，提示出现、消失时按钮不会跳动。
+                                // 不用悬浮提示条：弹窗打开之前它挂不到覆盖层上，结果从来没显示过。
+                                Text {
+                                    objectName: "syncLogCopied" + entry.index
+                                    text: qsTr("已复制")
+                                    textFormat: Text.PlainText
+                                    color: Theme.inkSoft
+                                    font.pixelSize: Theme.fontSm
+                                    opacity: copyRow.copied ? 1 : 0
+                                    Accessible.ignored: !copyRow.copied
+                                }
+
+                                Timer {
+                                    id: copiedReset
+                                    interval: 2000
+                                    onTriggered: copyRow.copied = false
                                 }
                             }
                         }

@@ -22,10 +22,19 @@ TestCase {
     MemoCategoryMock {
         id: categories
     }
+    SignalSpy {
+        id: bodyChanges
+        signalName: "editorBodyChanged"
+    }
     QtObject {
         id: keyboardMock
         property bool visible: false
         property rect keyboardRectangle: Qt.rect(0, 0, 0, 0)
+        // 记录页面要求输入法提交组合文字的次数。离屏平台的真输入法 commit() 是空操作，看不出有没有被调用。
+        property int commits: 0
+        function commit() {
+            commits += 1;
+        }
     }
     Component {
         id: viewComponent
@@ -50,8 +59,11 @@ TestCase {
         Theme.reduceMotion = oldReduceMotion;
     }
     function init() {
+        // 和 ctest 的失败规则一致：出现绑定循环就算失败。直接跑单个用例、做变异验证时也照样拦住。
+        failOnWarning(/Binding loop/);
         keyboardMock.visible = false;
         keyboardMock.keyboardRectangle = Qt.rect(0, 0, 0, 0);
+        keyboardMock.commits = 0;
         service.reset(fixture());
         categories.records = [
             {
@@ -86,9 +98,17 @@ TestCase {
         var input = child("memoBodyInput");
         input.selectAll();
         input.remove(0, input.length);
+        // insert 是 TextEdit 原生编辑接口，避免模拟几千次按键。这里不再手动补发 textEdited：
+        // 页面必须靠文字本身的变化认出修改，补发信号会掩盖「输入法上屏不发 textEdited」这类缺陷。
         input.insert(0, text);
-        // insert 是 TextEdit 原生编辑接口，手动发送同一编辑完成信号，避免模拟几千次按键。
-        input.textEdited();
+    }
+    // 走真实输入法路径上屏一段文字（iPad 软键盘、Mac 拼音选字都是这条路）。
+    function imeCommit(input, text) {
+        input.forceActiveFocus(Qt.MouseFocusReason);
+        input.cursorPosition = input.length;
+        // qmllint disable unqualified
+        verify(inputMethodProbe.commit(input, text), "前置：输入法事件送到了这个输入框");
+        // qmllint enable unqualified
     }
     function typeTitle(text) {
         var input = child("memoTitleInput");
@@ -543,5 +563,229 @@ TestCase {
         compare(input.color, Theme.inputInk);
         compare(input.palette.text, Theme.inputInk);
         compare(input.placeholderTextColor, Theme.inkSoft);
+    }
+    // 产品保证：用输入法上屏的文字（iPad 软键盘的全部输入、Mac 拼音选字后的中文）和按键一样会保存，切到别的备忘也不丢。
+    // 抓住的错误实现：正文只靠 textEdited 判断修改——Qt 6.10 的 TextArea 收到输入法提交时不发这个信号。
+    function test_inputMethodTextIsSaved() {
+        var body = child("memoBodyInput");
+        imeCommit(body, "学习进度");
+        compare(body.text, "第八讲做完\n第二行不在预览里学习进度");
+        verify(view.dirty);
+        view.selectMemo(12);
+        compare(service.updates.length, 1);
+        compare(service.updates[0].id, 11);
+        compare(service.updates[0].changes.body, "第八讲做完\n第二行不在预览里学习进度");
+        // 标题框（TextField）同样以输入法提交收字，也必须保存。
+        var title = child("memoTitleInput");
+        imeCommit(title, "复习");
+        view.selectMemo(11);
+        compare(service.updates.length, 2);
+        compare(service.updates[1].id, 12);
+        compare(service.updates[1].changes.title, "第二条复习");
+    }
+    // 产品保证：拼音还在组合（候选窗开着）时，自动保存照常把已上屏的文字存下，但不打断组合，
+    // 不能替用户把拼音原样上屏；只有切换备忘、切页、进后台、退出这类真正打断输入的操作才提交组合。
+    // 抓住的错误实现：自动保存定时器调用会先 Qt.inputMethod.commit() 的保存函数（Mac 和 iPad 上会把拼音写进框里）。
+    function test_autosaveKeepsCompositionOpen() {
+        view.inputMethodRef = keyboardMock;
+        var body = child("memoBodyInput");
+        imeCommit(body, "复习");
+        // qmllint disable unqualified
+        verify(inputMethodProbe.compose(body, "jin du"));
+        // qmllint enable unqualified
+        compare(body.preeditText, "jin du", "前置：下一个词的拼音正在组合");
+        compare(service.updates.length, 0, "前置：还没到自动保存");
+        tryCompare(service, "updates", [
+            {
+                id: 11,
+                changes: {
+                    body: "第八讲做完\n第二行不在预览里复习"
+                }
+            }
+        ], 3000);
+        compare(keyboardMock.commits, 0);
+        compare(body.preeditText, "jin du");
+        view.selectMemo(12);
+        compare(keyboardMock.commits, 1);
+    }
+    // 产品保证：正文滚动条贴在窗口右缘，上下始终和正文区对齐；错误提示出现、正文区下移时，滚动条跟着移动。
+    // 抓住的错误实现：用只求值一次的 mapToItem 定位（滚动条停在页面顶部 y=0，盖住页头一侧）。
+    function test_bodyScrollbarFollowsEditorLayout() {
+        var body = child("memoBodyScroll");
+        typeBody("很多行正文\n".repeat(200));
+        tryVerify(function () {
+            return body.contentHeight > body.height;
+        }, 3000);
+        var bar = body.ScrollBar.vertical;
+        var top = body.mapToItem(view, 0, 0).y;
+        verify(top > 100, "前置：正文区在页头和工具栏下面");
+        tryCompare(bar, "y", top, 3000);
+        compare(bar.height, body.height);
+        service.failSave = true;
+        verify(!view.saveNow());
+        tryVerify(function () {
+            return body.mapToItem(view, 0, 0).y > top;
+        }, 3000, "前置：错误提示把正文区往下推了");
+        tryCompare(bar, "y", body.mapToItem(view, 0, 0).y, 3000);
+        compare(bar.height, body.height);
+    }
+    // 产品保证：新建后什么都没写就点「删除」，草稿直接丢掉，回到新建前选中的那条；列表里有备忘时右侧不会变成「还没有备忘录」。
+    // 抓住的错误实现：只清空编辑区、不恢复选中，右侧落到空状态。
+    function test_discardEmptyDraftReturnsToPreviousMemo() {
+        view.selectMemo(12);
+        view.startDraft();
+        verify(view.drafting);
+        compare(view.selectedId, -1, "前置：草稿状态下没有选中任何一条");
+        mouseClick(child("memoDeleteButton"));
+        compare(view.drafting, false);
+        compare(view.selectedId, 12);
+        compare(view.hasEditor, true);
+        compare(view.editorTitle, "第二条");
+        compare(view.pendingDeleteId, -1, "空草稿不弹确认");
+        compare(service.creates.length, 0);
+        compare(service.deletes.length, 0);
+    }
+    // 产品保证：草稿里已经写了字再点「删除」，和普通备忘一样要先确认；取消保住文字，确认后只丢草稿、不写库。
+    // 抓住的错误实现：写了字的草稿不经确认就被清掉。
+    function test_draftWithTextNeedsConfirmation() {
+        view.selectMemo(12);
+        view.startDraft();
+        typeBody("刚写的一句");
+        mouseClick(child("memoDeleteButton"));
+        compare(view.pendingDeleteId, 0, "弹出确认，编号 0 表示还没进数据库的草稿");
+        view.cancelDelete();
+        verify(view.drafting);
+        compare(view.editorBody, "刚写的一句");
+        view.requestDelete();
+        view.confirmDelete();
+        compare(view.drafting, false);
+        compare(view.selectedId, 12);
+        compare(service.creates.length, 0, "前置：整个过程没被自动保存打断");
+        compare(service.deletes.length, 0);
+    }
+    // 产品保证：新建的备忘排在最后，保存后列表自动滚到这一行。
+    // 抓住的错误实现：保存新建后只重建列表、不滚动，新行在可视区外，用户找不到刚建的那条。
+    function test_newMemoScrollsIntoView() {
+        var values = [];
+        for (var i = 0; i < 30; ++i)
+            values.push(service.makeRecord(300 + i, "备忘" + i, "正文" + i, 1));
+        service.records = values;
+        service.memosChanged();
+        var list = child("memoList");
+        tryVerify(function () {
+            return list.contentHeight > list.height * 2;
+        }, 3000, "前置：列表长到最后一行在可视区外");
+        list.positionViewAtBeginning();
+        view.startDraft();
+        typeBody("新建的一条");
+        verify(view.saveNow());
+        var row = findChild(view, "memoRow" + view.selectedId);
+        verify(row !== null, "新行已在列表里实例化");
+        var y = row.mapToItem(list, 0, 0).y;
+        verify(y >= 0 && y + row.height <= list.height + 1, "新行在可视区内");
+    }
+    // 产品保证：组头写成「科目 · 条数」，名字短时条数紧跟在名字后面，不被推到行尾。
+    // 抓住的错误实现：名字一栏占满整行，条数被挤到最右边（和定稿不一致）。
+    function test_groupCountFollowsShortName() {
+        var group = child("memoGroup2");
+        var name = findChild(group, "memoGroupName");
+        var count = findChild(group, "memoGroupCount");
+        verify(name.implicitWidth + count.implicitWidth < group.width / 2, "前置：「物理 · 1」远比组头窄");
+        compare(name.truncated, false);
+        verify(Math.abs(count.x - (name.x + name.width)) <= 1, "条数紧跟名字");
+        verify(count.x + count.width < group.width / 2, "条数没被推到行尾");
+    }
+    // 产品保证：编辑区左上角的科目按名字宽度显示，最宽 220；名字太长时在 220 内省略。
+    // 抓住的错误实现：科目按钮固定占满 220，短名字后面拖一大段空白（和定稿不一致）。
+    function test_categoryChipHugsName() {
+        var chip = child("memoCategoryButton");
+        view.selectMemo(21);
+        tryVerify(function () {
+            return chip.implicitWidth < 160;
+        }, 3000, "前置：「物理」的自然宽度远小于 220");
+        compare(chip.width, chip.implicitWidth);
+        view.selectMemo(11);
+        tryVerify(function () {
+            return chip.implicitWidth > 220;
+        }, 3000, "前置：超长科目名放不下");
+        compare(chip.width, 220);
+        verify(findChild(chip, "memoCategoryLabel").truncated);
+    }
+    // 产品保证：离开备忘录页一段时间再回来，「今天」「昨天」按回来时的时间算，不沿用离开时的时间。
+    // 抓住的错误实现：只靠每分钟一次、页面不可见时停走的定时器刷新。
+    function test_timeLabelsRefreshOnReturn() {
+        var stale = new Date(2020, 0, 1);
+        view.pageActive = false;
+        // 模拟页面不可见期间时间过去了：定时器停着，记下的时刻还是离开那会儿。
+        view.displayNow = stale;
+        view.pageActive = true;
+        verify(view.displayNow.getTime() > stale.getTime() + 86400000);
+    }
+    // 产品保证：另一台删掉了正在编辑的备忘时，用户可以明确放弃本机修改，回到原来相邻的一条；之后切换、退出都不再被拦。
+    // 抓住的错误实现：唯一出口是「另存为新备忘」，或者放弃时把修改偷偷写回数据库。
+    function test_discardChangesOfRemotelyDeletedMemo() {
+        typeBody("不想要了的修改");
+        service.records = fixture().filter(function (r) {
+            return r.id !== 11;
+        });
+        service.memosChanged();
+        verify(view.remoteDeleted, "前置：进入了「另一台已删、本机有修改」的状态");
+        compare(view.saveNow(), false, "前置：这个状态下保存会被拦住");
+        // 记录已经不在了，「删除」只会报错，这个状态下不给。
+        compare(child("memoDeleteButton").visible, false);
+        var discard = child("memoDiscardDeleted");
+        tryVerify(function () {
+            return discard.width > 0;
+        }, 3000);
+        waitForRendering(view, 3000);
+        mouseClick(discard);
+        compare(view.remoteDeleted, false);
+        compare(view.selectedId, 12);
+        compare(view.editorBody, "积分练习");
+        compare(service.creates.length, 0);
+        compare(service.updates.length, 0);
+        compare(view.saveNow(), true);
+    }
+    // 产品保证：只是打开查看一条备忘、甚至开始打拼音还没选字，都不会改动它。编辑框会把不间断空格显示成普通空格，
+    // 这种显示上的差别不能被当成修改写回数据库（否则看一眼就变成「刚刚更新」，还会多出一次同步）。
+    // 抓住的错误实现：模型留着数据库原文、编辑框里是规范后的文字，两边对不上；
+    // 之后编辑框随便发一次文字变化（例如拼音组合），就被当成修改写回。
+    function test_viewingMemoDoesNotRewriteIt() {
+        service.records = fixture().concat([service.makeRecord(41, "带空格", "甲 乙", 2)]);
+        service.memosChanged();
+        view.selectMemo(41);
+        var body = child("memoBodyInput");
+        compare(body.text, "甲 乙", "前置：编辑框把不间断空格规范成了普通空格");
+        compare(view.dirty, false);
+        body.forceActiveFocus(Qt.MouseFocusReason);
+        // qmllint disable unqualified
+        verify(inputMethodProbe.compose(body, "jin"));
+        // qmllint enable unqualified
+        compare(body.preeditText, "jin", "前置：拼音正在组合，文字本身没变");
+        compare(view.dirty, false);
+        // 要证明的是「一秒自动保存的窗口里什么都没发生」，只能等过这个窗口。
+        wait(1300);
+        compare(service.updates.length, 0);
+    }
+    // 产品保证：拼音还在组合时切到另一条备忘，编辑框直接换成新备忘的内容，旧备忘的文字不会在装载途中写进模型。
+    // 抓住的错误实现：装载时不屏蔽编辑框的文字变化——TextEdit 取消组合时先按旧文字发一次 textChanged，
+    // 处理函数把旧文字写回 editorBody（绑定循环，模型短暂变回上一条的正文）。
+    function test_switchWhileComposingLoadsCleanly() {
+        // 离屏平台的真输入法不会提交组合；换成替身，让组合在切换时还开着，复现「取消组合」那一步。
+        view.inputMethodRef = keyboardMock;
+        var body = child("memoBodyInput");
+        body.forceActiveFocus(Qt.MouseFocusReason);
+        // qmllint disable unqualified
+        verify(inputMethodProbe.compose(body, "jin du"));
+        // qmllint enable unqualified
+        compare(body.preeditText, "jin du", "前置：切换时组合还开着");
+        verify(!view.dirty, "前置：只在组合，没有上屏任何字");
+        bodyChanges.target = view;
+        bodyChanges.clear();
+        view.selectMemo(12);
+        compare(view.editorBody, "积分练习");
+        compare(body.text, "积分练习");
+        compare(bodyChanges.count, 1, "模型只变一次：直接从上一条换成这一条");
+        compare(view.dirty, false);
     }
 }

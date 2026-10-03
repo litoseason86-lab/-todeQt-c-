@@ -78,15 +78,32 @@ TestCase {
         verify(findChild(dialog.contentItem, "syncLogEntry1") !== null, "不可复制的条目也必须真正渲染");
         verify(findChild(dialog.contentItem, "syncLogCopyLostValue1") === null);
     }
-    // 产品保证：点击复制携带完整正文（包括末尾），用户获得“已复制”的提示。
+    // 产品保证：点击复制携带完整正文（包括末尾）；按钮旁边出现「已复制」，用户看得到复制成功，几秒后自动消失。
+    // 抓住的错误实现：提示挂在一个不在画面里的提示条上（父项为空），只有内部标记变了，用户什么也看不到。
     function test_clickCopiesOriginalAndShowsNotice() {
         verify(original.length > 7000);
         tryVerify(function () {
             return findChild(dialog.contentItem, "syncLogCopyLostValue0") !== null;
         }, 3000);
+        var notice = findChild(dialog.contentItem, "syncLogCopied0");
+        verify(notice !== null);
+        compare(notice.opacity, 0, "前置：点击前没有提示");
         mouseClick(findChild(dialog.contentItem, "syncLogCopyLostValue0"));
         tryCompare(copied, "count", 1, 3000);
         compare(copied.signalArguments[0][0], original);
-        tryCompare(dialog, "copyNoticeShown", true, 3000);
+        compare(notice.opacity, 1);
+        compare(notice.text, "已复制");
+        verify(notice.Window.window !== null, "提示就在弹窗的画面里，不是悬空的对象");
+        tryCompare(notice, "opacity", 0, 5000);
+    }
+    // 产品保证：复制按钮按文字宽度显示，不被拉成和日志条目一样宽的通栏。
+    function test_copyButtonKeepsNaturalWidth() {
+        tryVerify(function () {
+            return findChild(dialog.contentItem, "syncLogCopyLostValue0") !== null;
+        }, 3000);
+        var button = findChild(dialog.contentItem, "syncLogCopyLostValue0");
+        var entry = findChild(dialog.contentItem, "syncLogEntry0");
+        verify(button.implicitWidth < entry.width / 2, "前置：条目比按钮文字宽得多");
+        compare(button.width, button.implicitWidth);
     }
 }

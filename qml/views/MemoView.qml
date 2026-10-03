@@ -17,7 +17,13 @@ FocusScope {
     property int filterCategoryId: -1
     property int selectedId: -1
     property bool drafting: false
+    // 新建前选中的那条：什么都没写的草稿被丢弃时回到这里。
+    property int draftReturnId: -1
     property bool remoteDeleted: false
+    // 被另一台删掉的那条原来在列表里的位置；用户放弃本机修改后选这个位置上的相邻一条。
+    property int deletedNeighborIndex: 0
+    // 正在把一条备忘装进编辑框。装载期间编辑框发出的文字变化都不是用户编辑，见正文的 onTextChanged。
+    property bool loadingEditor: false
     property string editorTitle: ""
     property string editorBody: ""
     property int editorCategoryId: 0
@@ -101,8 +107,13 @@ FocusScope {
         return root.idsForCategory(Number(id)).length;
     }
     function readEditor(entry) {
+        root.loadingEditor = true;
         root.editorTitle = String(entry.title);
         root.editorBody = String(entry.body);
+        // 编辑框会把不间断空格等字符规范成普通字符。模型跟编辑框里实际的文字对齐，基准值也取这份：
+        // 否则两边一直对不上，之后一开始打拼音（文字没变也会发 textChanged）就被当成修改写回数据库。
+        root.editorBody = bodyInput.text;
+        root.loadingEditor = false;
         root.editorCategoryId = Number(entry.categoryId);
         root.baselineTitle = root.editorTitle;
         root.baselineBody = root.editorBody;
@@ -114,6 +125,7 @@ FocusScope {
     function clearEditor() {
         root.selectedId = -1;
         root.drafting = false;
+        root.draftReturnId = -1;
         root.readEditor({
             title: "",
             body: "",
@@ -150,6 +162,9 @@ FocusScope {
         for (var i = 0; i < rows.count; ++i)
             if (rows.get(i).memoId === root.selectedId)
                 oldIndex = i;
+        // 每分钟一次的定时器在页面不可见时停着；回到页面或保存后重读时先对一次表，
+        // 「今天」「昨天」按现在算，不沿用离开那会儿的时间。
+        root.displayNow = new Date();
         root.readFailure = "";
         root.reading = true;
         var values = root.memoServiceRef.listMemos(-1);
@@ -193,7 +208,8 @@ FocusScope {
                 root.readEditor(current);
         } else if (root.dirty) {
             root.remoteDeleted = true;
-            root.errorMessage = qsTr("这条备忘录已在另一台设备删除。编辑中的内容仍保留在这里。");
+            root.deletedNeighborIndex = oldIndex;
+            root.errorMessage = qsTr("这条备忘录已在另一台设备删除。编辑中的内容还在这里，可以另存为新备忘，或放弃修改。");
         } else if (rows.count > 0) {
             root.selectedId = rows.get(Math.min(oldIndex, rows.count - 1)).memoId;
             root.readEditor(root.memo(root.selectedId));
@@ -201,12 +217,16 @@ FocusScope {
             root.clearEditor();
         }
     }
+    // 切换备忘、切页、进后台、退出时调用：这些操作会打断输入，先把输入法正在组合的文字提交进编辑框，
+    // 免得还没选字的候选内容丢掉，再保存。
     function saveNow() {
-        // 先提交输入法正在组合的文字，切页/退出不能丢掉还没进入 text 的候选内容。
-        // 静态检查器将 Qt.inputMethod 推断为 QObject，运行时实际是有 commit 的 QInputMethod。
-        // qmllint disable missing-property
-        Qt.inputMethod.commit();
-        // qmllint enable missing-property
+        if (root.inputMethodRef)
+            root.inputMethodRef.commit();
+        return root.writeEdits();
+    }
+    // 停止输入一秒后的自动保存只存已经上屏的文字，不提交输入法的组合：
+    // 在 Mac 和 iPad 上 commit() 会把还没选字的拼音原样写进框里，候选窗也随之关掉。
+    function writeEdits() {
         saveTimer.stop();
         if (!root.hasEditor || !root.dirty)
             return true;
@@ -227,6 +247,8 @@ FocusScope {
         if (root.editorCategoryId !== root.baselineCategoryId)
             changes.categoryId = root.editorCategoryId;
         root.errorMessage = "";
+        // 新建的和换了科目的都排到那一科最后，保存后要把它滚进列表可视区。
+        var moved = root.drafting || changes.categoryId !== undefined;
         root.saving = true;
         var ok;
         if (root.drafting) {
@@ -249,7 +271,22 @@ FocusScope {
         root.baselineBody = root.editorBody;
         root.baselineCategoryId = root.editorCategoryId;
         root.reload();
+        if (moved)
+            root.revealSelected();
         return true;
+    }
+    function revealSelected() {
+        for (var i = 0; i < rows.count; ++i) {
+            if (rows.get(i).memoId === root.selectedId) {
+                // 列表刚整体重建过，先让它把增删排完，否则按旧布局算位置。
+                memoList.forceLayout();
+                memoList.positionViewAtIndex(i, ListView.Contain);
+                // 第一次定位时，这一行所在科目的组头可能还没建出来；组头建出来后行会被推下去一截，
+                // 底边落到可视区外。再定位一次，这时组头已经算在内。
+                memoList.positionViewAtIndex(i, ListView.Contain);
+                return;
+            }
+        }
     }
     function saveDeletedAsNew() {
         if (!root.remoteDeleted)
@@ -262,11 +299,26 @@ FocusScope {
         root.baselineCategoryId = root.editorCategoryId;
         root.saveNow();
     }
+    // 用户明确放弃被另一台删掉的那条的本机修改：不写库，选原来位置上的相邻一条；列表空了就回到空状态。
+    function discardDeleted() {
+        if (!root.remoteDeleted)
+            return;
+        saveTimer.stop();
+        var index = root.deletedNeighborIndex;
+        root.clearEditor();
+        if (rows.count > 0) {
+            root.selectedId = rows.get(Math.min(index, rows.count - 1)).memoId;
+            root.readEditor(root.memo(root.selectedId));
+        }
+    }
     function startDraft() {
         if (!root.saveNow())
             return;
+        // 连续点「新建」时，空草稿不会被保存，回去的目标仍是最初选中的那条。
+        var back = root.drafting ? root.draftReturnId : root.selectedId;
         root.clearEditor();
         root.drafting = true;
+        root.draftReturnId = back;
         root.editorCategoryId = Math.max(0, root.filterCategoryId);
         root.baselineCategoryId = root.editorCategoryId;
         titleInput.forceActiveFocus(Qt.TabFocusReason);
@@ -309,12 +361,26 @@ FocusScope {
         root.editorCategoryId = id;
         root.edited();
     }
+    // 丢掉还没进数据库的草稿：只清界面，回到新建前选中的那条；那条已经不在了就按列表重新选。
+    function discardDraft() {
+        saveTimer.stop();
+        var back = root.memo(root.draftReturnId);
+        root.clearEditor();
+        if (back) {
+            root.selectedId = Number(back.id);
+            root.readEditor(back);
+        } else {
+            root.reload();
+        }
+    }
     function requestDelete() {
-        if (root.drafting) {
-            root.clearEditor();
+        if (root.drafting && root.editorTitle.trim().length === 0 && root.editorBody.trim().length === 0) {
+            // 什么都没写的草稿没有内容可丢，直接放弃，不弹确认。
+            root.discardDraft();
             return;
         }
-        deleteConfirm.pendingId = root.selectedId;
+        // 写了字的草稿和普通备忘一样先确认。草稿可能还没进数据库，编号先记 0，确认时再看它有没有被自动保存。
+        deleteConfirm.pendingId = root.drafting ? 0 : root.selectedId;
         deleteConfirm.open();
     }
     function cancelDelete() {
@@ -324,6 +390,14 @@ FocusScope {
     function confirmDelete() {
         var id = deleteConfirm.pendingId;
         root.cancelDelete();
+        if (id === 0) {
+            if (root.drafting) {
+                root.discardDraft();
+                return;
+            }
+            // 确认框开着的时候，草稿已经被自动保存成了一条，按普通删除处理。
+            id = root.selectedId;
+        }
         // 用户明确确认删除时才舍弃当前草稿；失败仍保留输入。
         root.saving = true;
         var ok = root.memoServiceRef && root.memoServiceRef.deleteMemo(id);
@@ -402,7 +476,7 @@ FocusScope {
     Timer {
         id: saveTimer
         interval: 1000
-        onTriggered: root.saveNow()
+        onTriggered: root.writeEdits()
     }
     Timer {
         interval: 60000
@@ -569,12 +643,16 @@ FocusScope {
                     width: memoList.width
                     height: active ? 30 : 0
                     active: root.filterCategoryId < 0
+                    // 组头写成「科目 · 条数」：名字按自身宽度排、条数紧跟其后，多出来的宽度留在行尾。
+                    // 名字太长放不下时只压缩名字（省略号），条数始终完整。
                     sourceComponent: RowLayout {
                         objectName: "memoGroup" + groupLoader.section
                         spacing: 0
                         Text {
+                            id: groupName
                             objectName: "memoGroupName"
                             Layout.fillWidth: true
+                            Layout.maximumWidth: groupName.implicitWidth
                             text: root.category(Number(groupLoader.section)).name
                             textFormat: Text.PlainText
                             font.pixelSize: Theme.fontSm
@@ -589,6 +667,9 @@ FocusScope {
                             font.pixelSize: Theme.fontSm
                             font.bold: true
                             color: Theme.inkSoft
+                        }
+                        Item {
+                            Layout.fillWidth: true
                         }
                     }
                 }
@@ -797,23 +878,35 @@ FocusScope {
                     color: Theme.danger
                     font.pixelSize: Theme.fontSm
                 }
-                PageActionButton {
-                    objectName: "memoRecoverDeleted"
+                // 另一台删掉了正在编辑的这条：两个出口都要用户明确选，不会悄悄复活记录，也不会悄悄丢字。
+                RowLayout {
                     visible: root.remoteDeleted
-                    text: qsTr("另存为新备忘")
-                    implicitHeight: root.touchUi ? 44 : Theme.controlHeightMd
-                    onClicked: root.saveDeletedAsNew()
+                    spacing: Theme.space8
+                    PageActionButton {
+                        objectName: "memoRecoverDeleted"
+                        text: qsTr("另存为新备忘")
+                        implicitHeight: root.touchUi ? 44 : Theme.controlHeightMd
+                        onClicked: root.saveDeletedAsNew()
+                    }
+                    PageActionButton {
+                        objectName: "memoDiscardDeleted"
+                        text: qsTr("放弃修改")
+                        implicitHeight: root.touchUi ? 44 : Theme.controlHeightMd
+                        onClicked: root.discardDeleted()
+                    }
                 }
                 // 竖屏仍保留两栏；编辑卡窄时只把卡内工具分成两行，避免按钮挤掉科目名。
                 Item {
                     Layout.fillWidth: true
                     implicitHeight: narrow ? toolHeight * 2 : toolHeight
                     readonly property int toolHeight: root.touchUi ? 44 : 36
-                    readonly property bool narrow: width < 220 + actions.implicitWidth + Theme.space8
+                    // 科目按名字宽度显示，最宽 220（定稿）；名字更长就在 220 内省略。
+                    readonly property real chipWidth: Math.min(categoryChoice.implicitWidth, 220)
+                    readonly property bool narrow: width < chipWidth + actions.implicitWidth + Theme.space8
                     Button {
                         id: categoryChoice
                         objectName: "memoCategoryButton"
-                        width: Math.min(220, Math.max(80, parent.width - (parent.narrow ? 0 : actions.implicitWidth + Theme.space8)))
+                        width: Math.min(parent.chipWidth, parent.width)
                         height: root.touchUi ? 44 : 36
                         padding: 0
                         Accessible.name: root.category(root.editorCategoryId).name
@@ -837,6 +930,7 @@ FocusScope {
                                 color: root.category(root.editorCategoryId).color || Qt.rgba(1, 1, 1, 0)
                             }
                             Text {
+                                objectName: "memoCategoryLabel"
                                 Layout.fillWidth: true
                                 text: root.editorCategoryId === 0 ? qsTr("不选科目") : root.category(root.editorCategoryId).name
                                 textFormat: Text.PlainText
@@ -897,6 +991,9 @@ FocusScope {
                         PageActionButton {
                             implicitHeight: root.touchUi ? 44 : Theme.controlHeightMd
                             objectName: "memoDeleteButton"
+                            // 另一台已经删掉这条时，出口只有「另存为新备忘」和「放弃修改」；
+                            // 再点删除只会报「已不存在」，还把上面的说明盖掉。
+                            visible: !root.remoteDeleted
                             text: qsTr("删除")
                             onClicked: root.requestDelete()
                         }
@@ -964,7 +1061,16 @@ FocusScope {
                             border.width: bodyInput.visualFocus ? 2 : 0
                             border.color: Theme.focusRing
                         }
-                        onTextEdited: {
+                        // 不用 textEdited：Qt 6.10 的 TextEdit 只在按键时发它，输入法上屏的文字不发——
+                        // iPad 软键盘的每个字、Mac 拼音选字后的中文都走输入法，会被当成没改过。
+                        // 改看文字本身，两种情况跳过：
+                        // 1. 装载一条备忘时（readEditor）。text 绑定写入新内容的途中，编辑框还会再发信号：
+                        //    输入法组合开着时先取消组合，按「旧文字」发一次；不间断空格等字符被规范后又发一次。
+                        //    这时把文字写回 editorBody，会把旧备忘的内容写进模型，也会触发绑定循环。
+                        // 2. 文字和 editorBody 相同（输入法组合中的拼音、行高排版也会发这个信号，但文字没变）。
+                        onTextChanged: {
+                            if (root.loadingEditor || text === root.editorBody)
+                                return;
                             root.editorBody = text;
                             root.edited();
                         }
@@ -977,7 +1083,10 @@ FocusScope {
                         id: bodyBar
                         parent: root
                         x: root.width - width
-                        y: bodyScroll.mapToItem(root, 0, 0).y
+                        // 滚动条挂在页面根上（贴窗口右缘），纵向要和正文区对齐。逐层加上各级的 y：
+                        // 错误提示、两行工具栏或键盘避让让正文区移动时，滚动条跟着走。
+                        // 不能用 mapToItem，它不随布局变化重新求值，只在创建时算一次。
+                        y: content.y + paper.y + editorColumn.y + bodyScroll.y
                         height: bodyScroll.height
                         scrollAreaVisible: root.pageActive && root.hasEditor
                     }
