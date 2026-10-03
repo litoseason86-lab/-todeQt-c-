@@ -21,8 +21,6 @@ Popup {
     // 行首留给色点、加号的一格。整张都没有色点的菜单不留，文字靠左。
     property bool showLeading: true
     property bool touchUi: false
-    // 列表上方的一行说明；空串不显示。
-    property string caption: ""
     property string accessibleName: ""
     readonly property alias list: optionList
     // 亮起行的底色与它的零透明版本：颜色过渡只改透明度，不会从黑色插值出一层灰。
@@ -133,19 +131,6 @@ Popup {
         Keys.onEnterPressed: popup.choose(optionList.currentIndex)
         Keys.onSpacePressed: popup.choose(optionList.currentIndex)
         ScrollBar.vertical: PageScrollBar {}
-        header: Text {
-            width: optionList.width
-            height: popup.caption.length > 0 ? implicitHeight + Theme.space4 : 0
-            visible: popup.caption.length > 0
-            text: popup.caption
-            textFormat: Text.PlainText
-            font.pixelSize: Theme.fontXs
-            color: Theme.inkSoft
-            leftPadding: Theme.space12
-            rightPadding: Theme.space12
-            topPadding: Theme.space4
-            elide: Text.ElideRight
-        }
         delegate: ItemDelegate {
             id: option
             required property var modelData

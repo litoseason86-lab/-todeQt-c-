@@ -64,7 +64,7 @@ FocusScope {
     }
     readonly property bool dirty: editorTitle !== baselineTitle || editorBody !== baselineBody || editorCategoryId !== baselineCategoryId
     readonly property bool hasEditor: drafting || selectedId > 0
-    // 一条备忘都没有、也没在新建：只在框中间留一行字，不摆一个孤零零的「全部」和分隔线。
+    // 一条备忘都没有、也没在新建：框里什么都不摆，不留一个孤零零的「全部」和分隔线，也不放提示文字（用户要求页面不放说明性文字）。
     readonly property bool libraryEmpty: allMemos.length === 0 && !drafting
     // 列表里第一个分组的科目。组头上方的 16 间距只放在组与组之间，第一个组头贴着列表顶。
     property string firstGroupKey: ""
@@ -1252,8 +1252,6 @@ FocusScope {
                         font.pixelSize: Theme.fontMd
                         color: Theme.inputInk
                         palette.text: Theme.inputInk
-                        placeholderText: qsTr("写下现在的进度…")
-                        placeholderTextColor: Theme.inkSoft
                         padding: root.inputInset
                         leftPadding: root.inputInset
                         background: Rectangle {
@@ -1294,17 +1292,6 @@ FocusScope {
                 }
             }
         }
-        // 空状态只留一行弱色文字，和知识缺口页同一个取舍：这一页做什么，点进来之前就知道了。
-        // 放在整个框的正中；inkSoft 而不是 inkMuted，这一行是正文，要够 4.5:1 的对比度。
-        Text {
-            objectName: "memoEmptyHint"
-            anchors.centerIn: root.libraryEmpty ? parent : paper
-            visible: !root.hasEditor
-            text: qsTr("还没有备忘录")
-            textFormat: Text.PlainText
-            color: Theme.inkSoft
-            font.pixelSize: Theme.fontMd
-        }
     }
     // 改分类的弹层：列表里右键一条备忘（iPad 长按后不拖、直接松手；键盘 Shift+F10）时在指针处弹出。
     // 只列已有的分类（写过备忘的科目）和「未分类」，不在这里新建——新分类从右上角「新建」建。
@@ -1312,7 +1299,6 @@ FocusScope {
         id: moveCategoryPopup
         objectName: "memoMovePopup"
         namePrefix: "memoMove"
-        caption: qsTr("更改分类")
         accessibleName: qsTr("更改分类")
         touchUi: root.touchUi
         parent: root
@@ -1347,7 +1333,6 @@ FocusScope {
         objectName: "memoSubjectPicker"
         namePrefix: "memoSubject"
         accessibleName: qsTr("选一个科目作为分类")
-        caption: qsTr("选一个科目作为分类")
         touchUi: root.touchUi
         parent: newButton
         x: newButton.width - width
@@ -1460,13 +1445,6 @@ FocusScope {
                 wrapMode: Text.Wrap
                 maximumLineCount: 2
                 elide: Text.ElideRight
-            }
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("删除后无法撤销。")
-                textFormat: Text.PlainText
-                color: Theme.danger
-                font.pixelSize: Theme.fontSm
             }
             RowLayout {
                 Layout.fillWidth: true

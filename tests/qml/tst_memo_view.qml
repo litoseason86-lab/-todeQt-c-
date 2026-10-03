@@ -94,6 +94,17 @@ TestCase {
         verify(result !== null, name);
         return result;
     }
+    // 收集一个控件里所有看得见、非空的文字（按控件树的顺序），用来断言界面上没有多出说明性文字。
+    function visibleTexts(item) {
+        var texts = [];
+        (function collect(node) {
+            if (node.text !== undefined && node.visible && String(node.text).length > 0)
+                texts.push(String(node.text));
+            for (var i = 0; i < node.children.length; ++i)
+                collect(node.children[i]);
+        })(item);
+        return texts;
+    }
     function typeBody(text) {
         var input = child("memoBodyInput");
         input.selectAll();
@@ -351,6 +362,8 @@ TestCase {
         mouseClick(child("memoDeleteButton"));
         tryCompare(view, "pendingDeleteId", 11, 3000);
         compare(child("memoDeleteConfirmText").text, "数学进度", "写出要删的是哪一条");
+        // 按钮的文字在按钮和它的标签上各出现一次。
+        compare(visibleTexts(child("memoDeleteConfirm").contentItem).join("|"), "删除这条备忘录？|数学进度|取消|取消|删除|删除", "确认框不放说明性文字");
         compare(service.deletes.length, 0);
         mouseClick(child("memoDeleteCancel"));
         compare(service.deletes.length, 0);
@@ -569,7 +582,7 @@ TestCase {
         compare(input.textFormat, TextEdit.PlainText);
         compare(input.color, Theme.inputInk);
         compare(input.palette.text, Theme.inputInk);
-        compare(input.placeholderTextColor, Theme.inkSoft);
+        compare(input.placeholderText, "", "正文不放提示文字");
     }
     // 产品保证：用输入法上屏的文字（iPad 软键盘的全部输入、Mac 拼音选字后的中文）和按键一样会保存，切到别的备忘也不丢。
     // 抓住的错误实现：正文只靠 textEdited 判断修改——Qt 6.10 的 TextArea 收到输入法提交时不发这个信号。
@@ -637,7 +650,7 @@ TestCase {
         compare(bar.height, body.height);
     }
     // 产品保证：点「删除」一律先弹确认，新建了还没写字的草稿也一样：取消就留在草稿里；确认后丢掉草稿，
-    // 回到新建前选中的那条，列表里有备忘时右侧不会变成「还没有备忘录」。
+    // 回到新建前选中的那条，列表里有备忘时右侧不会变成空白。
     // 抓住的错误实现：空草稿一点「删除」就直接没了，不弹确认（真机上用户以为删除没有确认）；确认后只清空编辑区、不恢复选中。
     function test_discardEmptyDraftReturnsToPreviousMemo() {
         view.selectMemo(12);
@@ -868,17 +881,19 @@ TestCase {
             return label.mapToItem(tag, 0, 0).x === 0;
         }, 3000, "「未分类」靠左，前面不留空圆点的位置");
     }
-    // 产品保证：一条备忘都没有时，只在整个框的正中显示一行「还没有备忘录」，不摆孤零零的「全部」和分隔线；点「新建」后回到两栏。
-    // 抓住的错误实现：照样摆出左栏和分隔线，那行字只在右边一栏里居中。
-    function test_emptyLibraryCentersSingleLine() {
+    // 产品保证：一条备忘都没有时，框里什么都不摆：没有孤零零的「全部」、列表和编辑卡，也没有提示文字；点「新建」后回到两栏。
+    // 抓住的错误实现：照样摆出左栏和空的编辑卡，或者放一行「还没有备忘录」（用户要求页面不放说明性文字）。
+    function test_emptyLibraryShowsNothing() {
         service.records = [];
         service.memosChanged();
         tryCompare(view, "libraryEmpty", true, 3000);
-        var hint = child("memoEmptyHint");
-        verify(Math.abs(hint.mapToItem(view, hint.width / 2, 0).x - view.width / 2) <= 1, "那一行字在整页水平居中");
+        compare(child("memoList").visible, false, "左栏不显示");
+        compare(child("memoPaper").visible, false, "编辑卡不显示");
+        verify(findChild(view, "memoEmptyHint") === null, "不放提示文字");
         view.startDraft();
         compare(view.libraryEmpty, false);
         compare(view.hasEditor, true);
+        compare(child("memoPaper").visible, true, "新建后编辑卡出来");
     }
     // 产品保证：改分类用应用自己的主题弹层：右键一条备忘时在指针处弹出，打开时停在它现在的分类，
     // 上下键移动、回车选定并马上保存，Esc 关闭且不改分类，关掉后焦点回到列表；键盘在列表里按 Shift+F10 也能打开。
@@ -944,6 +959,8 @@ TestCase {
         verify(!popup.options.some(function (o) {
             return !!o.action;
         }), "没有新建一类的动作项");
+        // 列表里各行在控件树上的先后和显示顺序无关，只比较有哪些文字。
+        compare(visibleTexts(popup.contentItem).sort().join("|"), [categories.records[0].name, "物理", "未分类"].sort().join("|"), "只有选项，不放说明行");
         verify(findChild(popup.contentItem, "memoMoveOption2").current, "当前分类带对勾");
         verify(!findChild(popup.contentItem, "memoMoveOption1").current);
         keyClick(Qt.Key_Escape);
@@ -1024,6 +1041,8 @@ TestCase {
         compare(picker.options.map(function (o) {
             return o.id;
         }).join(","), "3,-2");
+        verify(waitForItemPolished(picker.contentItem));
+        compare(visibleTexts(picker.contentItem).sort().join("|"), ["还没有备忘的科目", "新建科目…"].sort().join("|"), "只有选项，不放说明行");
         picker.choose(0);
         tryVerify(function () {
             return view.drafting && view.editorCategoryId === 3 && !picker.visible;
