@@ -70,6 +70,8 @@ endif()
 
 set(APP_SOURCES
     src/main.cpp
+    src/models/PlainTextLayout.h
+    src/models/PlainTextLayout.cpp
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/models/CountdownGoal.cpp
@@ -145,6 +147,8 @@ set(APP_SOURCES
     src/services/ShortcutRegistry.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
     src/services/TaskInteractionCoordinator.h
     src/services/TaskInteractionCoordinator.cpp
     # 外部 AI 接入（plans/047）：common 是与辅助程序共用的契约与路径，bridge 只编入主应用。
@@ -643,6 +647,18 @@ target_link_libraries(KnowledgeGapServiceTests PRIVATE
 pomodoro_todo_enable_warnings(KnowledgeGapServiceTests)
 add_test(NAME KnowledgeGapServiceTests COMMAND KnowledgeGapServiceTests)
 
+# 备忘录只依赖数据库，不引入任务或计时服务，保证纯文本记录不影响专注统计。
+add_executable(MemoServiceTests
+    tests/MemoServiceTests.cpp
+    src/services/DatabaseManager.h src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h src/services/SyncSchema.cpp
+    src/services/MemoService.h src/services/MemoService.cpp
+)
+target_link_libraries(MemoServiceTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
+pomodoro_todo_enable_warnings(MemoServiceTests)
+add_test(NAME MemoServiceTests COMMAND MemoServiceTests)
+set_tests_properties(MemoServiceTests PROPERTIES TIMEOUT 90)
+
 # 课表：只验证存储与「按周次筛选」两件事。日期到周次的换算不在这里——
 # 它在 QML 侧的 ScheduleWeeks.js，由 QML 测试覆盖。
 # 不引入 TaskManager/FocusTimer：课表项与任务、专注记录之间没有任何写入关系，
@@ -948,6 +964,8 @@ add_executable(SyncTests
     src/services/ScheduleService.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     src/models/CountdownGoal.cpp
@@ -1018,6 +1036,8 @@ add_executable(SyncTransportTests
     src/services/ScheduleService.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     src/models/CountdownGoal.cpp
@@ -1088,6 +1108,8 @@ add_executable(SyncControllerTests
     src/services/ScheduleService.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     src/models/CountdownGoal.cpp
@@ -1336,6 +1358,10 @@ else()
     message(WARNING "未找到 Python3，跳过 QML 文本格式与悬停过渡门禁")
 endif()
 
+add_executable(MemoQuickTests tests/MemoQuickTests.cpp src/models/PlainTextLayout.h src/models/PlainTextLayout.cpp)
+target_link_libraries(MemoQuickTests PRIVATE Qt6::QuickTest Qt6::Quick)
+pomodoro_todo_enable_warnings(MemoQuickTests)
+
 # QML 测试按文件拆成独立 ctest 条目。聚合成一条时 qmltestrunner 在单进程里串行跑完
 # 全部文件，`ctest -j` 对全量耗时最大的这一块完全无效——实测它占 -j4 全量 57s 中的 56s。
 # 拆开后同样的机器上并行跑约 25s。
@@ -1348,9 +1374,13 @@ file(GLOB POMODORO_TODO_QML_TEST_FILES CONFIGURE_DEPENDS
 foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
     get_filename_component(qml_test_name "${qml_test_file}" NAME_WE)
     string(REGEX REPLACE "^tst_" "" qml_test_name "${qml_test_name}")
+    set(qml_test_runner Qt6::qmltestrunner)
+    if(qml_test_name STREQUAL "memo_view")
+        set(qml_test_runner MemoQuickTests)
+    endif()
     add_test(
         NAME QmlTest.${qml_test_name}
-        COMMAND Qt6::qmltestrunner -input "${qml_test_file}"
+        COMMAND ${qml_test_runner} -input "${qml_test_file}"
     )
     set_tests_properties(QmlTest.${qml_test_name} PROPERTIES
         # 测试固定离屏平台与 Basic 风格，后台验证不得创建真实应用窗口。

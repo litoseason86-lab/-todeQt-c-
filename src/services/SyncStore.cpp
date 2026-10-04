@@ -10,6 +10,7 @@
 #include <QMap>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QTimeZone>
 
 #include <algorithm>
 #include <utility>
@@ -25,6 +26,9 @@ constexpr int kMaxMergeHops = 16;
 const QString kKindDelete = QStringLiteral("delete");
 const QString kKindReclaim = QStringLiteral("reclaim");
 const QString kKindMerge = QStringLiteral("merge");
+// 日志里的「已删除」：另一台删掉了一条备忘录，这台留一份删除前的内容，方便误删后找回。
+// 它不是冲突：这台的内容早已发出去，无从知道对方删之前看没看到，所以不能说成「修改没有生效」。
+const QString kKindRemoved = QStringLiteral("removed");
 
 struct LocalRow {
     bool exists = false;
@@ -111,6 +115,8 @@ public:
     // 3. 倒计时的排序号撞了（两台设备各自新建，都排在末尾）：按「排序号、创建时间、sync_id」重排，
     //    同样作为本机改动发出。两台设备拿到同样的倒计时集合后算出同样的顺序。
     bool normalizeCountdownOrders(QString* error);
+    // 4. 备忘录只在同一科目内重排，未分类也是一组；内容时间与顺序号无关。
+    bool normalizeMemoOrders(QString* error);
 
     // 把目标已经在本机的「待接回引用」全部接上（调用方保证触发器跳过：接回不是本机改动）。
     // 目标可能不是从同步收到的：例行实例被收回后，本机当天重新启用、自己又生成了同一个身份的实例；
@@ -125,6 +131,8 @@ private:
                         bool* resurrected, QString* error);
     bool insertRow(const SyncSchema::Table& table, const SyncRecord& record, QString* error);
     bool mergeRow(const SyncSchema::Table& table, const SyncRecord& record, const LocalRow& row, QString* error);
+    QString contentTimestamp(const SyncSchema::Table& table, const SyncRecord& record,
+                             const QHash<QString, LocalVersion>& local = {}) const;
     bool deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row, const Tombstone& tombstone,
                         QString* error);
 
@@ -463,7 +471,26 @@ bool Applier::applyDeletion(const SyncSchema::Table& table, const SyncRecord& re
         const QHash<QString, LocalVersion> versions = readVersions(table.name, record.syncId);
         for (auto it = versions.cbegin(); it != versions.cend(); ++it) {
             const SyncSchema::Field* field = SyncSchema::field(table.name, it.key());
-            if (!field || !it.value().pending || it.value().version.device != m_me) {
+            // 已发送不等于对方删之前见过：两台离线各改后，正文可能先写进文件、再收到删除。
+            // 备忘录仍要保留这台设备写下的内容，不能因确认发送清掉 pending 就丢掉可找回的原文。
+            const bool memoContent = table.name == QLatin1String("memos")
+                && (it.key() == QLatin1String("title") || it.key() == QLatin1String("body"));
+            if (!field || (!it.value().pending && !memoContent)
+                || it.value().version.device != m_me) {
+                continue;
+            }
+            // 备忘录的空标题、空正文没有可找回的东西，不记，免得日志里出现一条什么都没有的条目。
+            // 要看原值：显示值会把空串写成「（空）」，拿它判断永远不为空。
+            if (memoContent && row.values.value(field->column).toString().isEmpty()) {
+                continue;
+            }
+            if (!it.value().pending) {
+                // 已经发出去的内容：只留一份删除前的内容，记成「已删除」，不说成冲突。
+                // 正常的删除（对方看过内容才删）也会走到这里，说「修改没有生效」就是错的。
+                logConflict(kKindRemoved, table, record.syncId, label, field->column,
+                            displayValue(*field, row.values.value(field->column)), QStringLiteral("（已删除）"),
+                            m_me, winner.version.device,
+                            QStringLiteral("另一台设备删除了这条备忘录，这里保留删除前的内容"));
                 continue;
             }
             logConflict(winner.kind == kKindMerge ? kKindMerge : kKindDelete, table, record.syncId, label,
@@ -526,6 +553,24 @@ bool Applier::applyToDeleted(const SyncSchema::Table& table, const SyncRecord& r
                 values.insert(it.key(), it.value().value);
             }
         }
+        if (table.name == QLatin1String("memos")) {
+            // 删除先到、本机已经没有行时，也要保住对方后来发来的完整正文。
+            // 普通记录级“（修改）”提示没有原文，无法兑现从日志找回内容的产品保证。
+            for (const QString& column : {QStringLiteral("title"), QStringLiteral("body")}) {
+                if (record.fields.contains(column)) {
+                    const SyncSchema::Field* field = SyncSchema::field(table.name, column);
+                    // 空的标题或正文没有可找回的内容，不记。看原值，显示值会把空串写成「（空）」。
+                    if (record.fields.value(column).value.toString().isEmpty()) {
+                        continue;
+                    }
+                    logConflict(kKindDelete, table, record.syncId, recordLabel(table, values), column,
+                                displayValue(*field, record.fields.value(column).value), QStringLiteral("（已删除）"),
+                                incomingLatest.device, local.version.device,
+                                QStringLiteral("这条备忘录已被删除，另一台设备的修改没有生效"));
+                }
+            }
+            return true;
+        }
         logConflict(local.kind == kKindMerge ? kKindMerge : kKindDelete, table, record.syncId,
                     recordLabel(table, values), QString(), QStringLiteral("（修改）"), QStringLiteral("（已删除）"),
                     incomingLatest.device, local.version.device,
@@ -533,6 +578,18 @@ bool Applier::applyToDeleted(const SyncSchema::Table& table, const SyncRecord& r
                                              : QStringLiteral("这条记录已被删除，另一台设备对它的修改没有生效"));
     }
     return true;
+}
+
+QString Applier::contentTimestamp(const SyncSchema::Table& table, const SyncRecord& record,
+                                 const QHash<QString, LocalVersion>& local) const
+{
+    // 不同字段可以各自赢：取合并后的所有内容字段版本，避免接收顺序不同使时间倒退。
+    qint64 latest = 0;
+    for (const QString& field : table.versionStamp.fields) {
+        const qint64 incoming = record.fields.value(field).version.time;
+        latest = qMax(latest, qMax(incoming, local.value(field).version.time));
+    }
+    return QDateTime::fromMSecsSinceEpoch(latest, QTimeZone::UTC).toString(Qt::ISODateWithMs);
 }
 
 bool Applier::insertRow(const SyncSchema::Table& table, const SyncRecord& record, QString* error)
@@ -573,6 +630,10 @@ bool Applier::insertRow(const SyncSchema::Table& table, const SyncRecord& record
     for (const QString& column : table.stampOnInsert) {
         columns.append(column);
         values.append(QDateTime::currentDateTime().toString(Qt::ISODate));
+    }
+    if (!table.versionStamp.column.isEmpty()) {
+        columns.append(table.versionStamp.column);
+        values.append(contentTimestamp(table, record));
     }
     // 科目名先落临时名，整批应用完再换成最终名（见 finalizeCategoryNames）。
     const qsizetype nameColumn = table.name == QLatin1String("categories") ? columns.indexOf(QStringLiteral("name")) : -1;
@@ -818,6 +879,7 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
     QStringList assignments;
     QVariantList assignedValues;
     QList<QPair<QString, SyncFieldValue>> newVersions;
+    SyncRecord acceptedContent;
     bool categoryDangling = false;
     bool routineDangling = false;
 
@@ -868,6 +930,9 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
         if (!takeIncoming) {
             continue;
         }
+        if (table.versionStamp.fields.contains(field.column)) {
+            acceptedContent.fields.insert(field.column, incoming);
+        }
 
         QVariant value = incoming.value;
         if (!field.refTable.isEmpty()) {
@@ -912,6 +977,12 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
         }
     }
 
+    // 只从真正胜出的内容版本派生时间。保留其它字段已有的较新时间，
+    // 两台分别改标题和正文时才能显示一致；输掉的修改、单改排序都不推进更新时间。
+    if (!acceptedContent.fields.isEmpty()) {
+        assignments.append(table.versionStamp.column + QStringLiteral(" = ?"));
+        assignedValues.append(contentTimestamp(table, acceptedContent, versions));
+    }
     if (!assignments.isEmpty()) {
         QSqlQuery update(m_db);
         update.prepare(QStringLiteral("UPDATE %1 SET %2 WHERE id = ?")
@@ -970,6 +1041,8 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
                 || !run(QStringLiteral("UPDATE schedule_entries SET category_id = ? WHERE category_id = ?"),
                         {target, row.id})
                 || !run(QStringLiteral("UPDATE knowledge_gaps SET category_id = ? WHERE category_id = ?"),
+                        {target, row.id})
+                || !run(QStringLiteral("UPDATE memos SET category_id = ? WHERE category_id = ?"),
                         {target, row.id})) {
                 return false;
             }
@@ -979,6 +1052,7 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
             // 界面上显示的科目变了，照样要刷新。
             m_result->changedTables.insert(QStringLiteral("schedule_entries"));
             m_result->changedTables.insert(QStringLiteral("knowledge_gaps"));
+            m_result->changedTables.insert(QStringLiteral("memos"));
         } else {
             // 与 CategoryManager::deleteCategory 一致：任务不删，外键和旧的科目名文本一起清空，变成未分类。
             // 例行、课表、知识缺口的外键是 ON DELETE SET NULL，删行时自动置空。
@@ -992,6 +1066,7 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
             // 课表项、知识缺口的科目由外键置空：界面要刷新。
             m_result->changedTables.insert(QStringLiteral("schedule_entries"));
             m_result->changedTables.insert(QStringLiteral("knowledge_gaps"));
+            m_result->changedTables.insert(QStringLiteral("memos"));
         }
     } else if (table.name == QLatin1String("routines")) {
         // 与 RoutineManager::deleteRoutine 一致：历史任务退化成普通任务，生成标记一起清掉。
@@ -1214,6 +1289,11 @@ bool Applier::overwriteFromSnapshot(const SyncRecord& record, QString* error)
         assignments.append(field.column + QStringLiteral(" = ?"));
         values.append(value);
     }
+    if (!table->versionStamp.column.isEmpty()) {
+        // 快照整体替换已有行也要更新派生时间，否则全局回滚后仍显示回滚前的“最后修改”。
+        assignments.append(table->versionStamp.column + QStringLiteral(" = ?"));
+        values.append(contentTimestamp(*table, record));
+    }
     if (table->name == QLatin1String("tasks")) {
         if (categoryDangling) {
             assignments.append(QStringLiteral("category = ?"));
@@ -1390,7 +1470,8 @@ bool Applier::mergeCategory(qint64 loserId, const QString& loserSyncId, qint64 w
         || !run(QStringLiteral("UPDATE focus_sessions SET category_id_snapshot = ? WHERE category_id_snapshot = ?"),
                 {winnerId, loserId})
         || !run(QStringLiteral("UPDATE schedule_entries SET category_id = ? WHERE category_id = ?"), {winnerId, loserId})
-        || !run(QStringLiteral("UPDATE knowledge_gaps SET category_id = ? WHERE category_id = ?"), {winnerId, loserId})) {
+        || !run(QStringLiteral("UPDATE knowledge_gaps SET category_id = ? WHERE category_id = ?"), {winnerId, loserId})
+        || !run(QStringLiteral("UPDATE memos SET category_id = ? WHERE category_id = ?"), {winnerId, loserId})) {
         return false;
     }
 
@@ -1418,7 +1499,7 @@ bool Applier::mergeCategory(qint64 loserId, const QString& loserSyncId, qint64 w
     const SyncSchema::Table* categories = SyncSchema::table(QStringLiteral("categories"));
     logConflict(kKindMerge, *categories, loserSyncId, name, QString(), QString(), QString(), QString(), QString(),
                 QStringLiteral("两台设备上各有一个「%1」，已合并成一个").arg(name));
-    for (const char* changed : {"categories", "tasks", "routines", "focus_sessions"}) {
+    for (const char* changed : {"categories", "tasks", "routines", "focus_sessions", "memos"}) {
         m_result->changedTables.insert(QString::fromLatin1(changed));
     }
     return true;
@@ -1608,6 +1689,46 @@ bool Applier::normalizeCountdownOrders(QString* error)
     return setApplying(true, error);
 }
 
+bool Applier::normalizeMemoOrders(QString* error)
+{
+    if (!m_result->changedTables.contains(QStringLiteral("memos"))) {
+        return true;
+    }
+    QSqlQuery check(m_db);
+    // GROUP BY 将 NULL 单独分组，未分类同样要处理；用 = NULL 会漏掉整组。
+    if (!check.exec(QStringLiteral("SELECT category_id FROM memos GROUP BY category_id "
+                                   "HAVING COUNT(*) > COUNT(DISTINCT sort_order)"))) {
+        *error = check.lastError().text();
+        return false;
+    }
+    QVariantList categories;
+    while (check.next()) {
+        categories.append(check.value(0));
+    }
+    check.finish();
+    if (categories.isEmpty()) {
+        return true;
+    }
+    // 与任务重排一样，这一步是本机改动。只动顺序列，内容更新时间保持原值。
+    if (!setApplying(false, error)) {
+        return false;
+    }
+    for (const QVariant& category : categories) {
+        QSqlQuery renumber(m_db);
+        renumber.prepare(QStringLiteral(
+            "WITH ranked AS (SELECT id, ROW_NUMBER() OVER (ORDER BY sort_order, created_at, sync_id) AS n "
+            "FROM memos WHERE category_id IS :category) "
+            "UPDATE memos SET sort_order = (SELECT n FROM ranked WHERE ranked.id = memos.id) "
+            "WHERE category_id IS :category2 AND sort_order <> (SELECT n FROM ranked WHERE ranked.id = memos.id)"));
+        renumber.bindValue(QStringLiteral(":category"), category);
+        renumber.bindValue(QStringLiteral(":category2"), category);
+        if (!exec(renumber, error)) {
+            return false;
+        }
+    }
+    return setApplying(true, error);
+}
+
 bool Applier::logSkipped(const SyncRecord& record, const QString& reason)
 {
     const SyncSchema::Table* table = SyncSchema::table(record.table);
@@ -1643,8 +1764,9 @@ void Applier::logConflict(const QString& kind, const SyncSchema::Table& table, c
     query.bindValue(QStringLiteral(":id"), text(syncId));
     query.bindValue(QStringLiteral(":label"), text(truncated(recordLabel)));
     query.bindValue(QStringLiteral(":field"), text(field));
-    query.bindValue(QStringLiteral(":lost"), text(truncated(lostValue)));
-    query.bindValue(QStringLiteral(":kept"), text(truncated(keptValue)));
+    // 保存完整值供找回内容；摘要只在展示层缩短，数据库不能先截掉正文。
+    query.bindValue(QStringLiteral(":lost"), text(lostValue));
+    query.bindValue(QStringLiteral(":kept"), text(keptValue));
     query.bindValue(QStringLiteral(":lostDevice"), text(lostDevice));
     query.bindValue(QStringLiteral(":keptDevice"), text(keptDevice));
     query.bindValue(QStringLiteral(":detail"), text(detail));
@@ -1661,6 +1783,17 @@ void Applier::logConflict(const QString& kind, const SyncSchema::Table& table, c
 
 QString Applier::recordLabel(const SyncSchema::Table& table, const QHash<QString, QVariant>& values)
 {
+    if (table.name == QLatin1String("memos")) {
+        const QString title = values.value(QStringLiteral("title")).toString();
+        if (!title.trimmed().isEmpty()) {
+            return title;
+        }
+        QString firstLine = values.value(QStringLiteral("body")).toString().section(QLatin1Char('\n'), 0, 0);
+        if (firstLine.endsWith(QLatin1Char('\r'))) {
+            firstLine.chop(1); // 与 MemoService 的列表标题一致，只去掉换行前的 CR。
+        }
+        return firstLine;
+    }
     if (table.name == QLatin1String("categories")) {
         return values.value(QStringLiteral("name")).toString();
     }
@@ -1696,6 +1829,10 @@ QString Applier::nameOf(const QString& table, const QVariant& localId)
 QString Applier::displayValue(const SyncSchema::Field& field, const QVariant& localValue)
 {
     const QString column = field.column;
+    if (column == QLatin1String("body")) {
+        // 备忘录正文必须原样保存，包括空串、空格与换行，供复制找回。
+        return localValue.toString();
+    }
     if (!field.refTable.isEmpty()) {
         const QString name = nameOf(field.refTable, localValue);
         if (!name.isEmpty()) {
@@ -2410,7 +2547,8 @@ SyncStore::ApplyResult SyncStore::applyRemote(const SyncBatch& batch)
     // 接回引用要在重排之前：重排会临时放开触发器，而接回不是本机改动，不能被记成新版本。
     QString finishError;
     if (!applier.finalizeCategoryNames(&finishError) || !applier.resolveAllPendingRefs(&finishError)
-        || !applier.normalizeTaskOrders(&finishError) || !applier.normalizeCountdownOrders(&finishError)) {
+        || !applier.normalizeTaskOrders(&finishError) || !applier.normalizeCountdownOrders(&finishError)
+        || !applier.normalizeMemoOrders(&finishError)) {
         return fail(finishError);
     }
     if (!query.exec(QStringLiteral("UPDATE sync_runtime SET applying = 0 WHERE singleton_id = 1"))) {
@@ -2703,6 +2841,8 @@ QList<SyncStore::LogEntry> SyncStore::syncLog(int limit) const
         const QString lostDevice = query.value(8).toString();
         const QString keptDevice = query.value(9).toString();
         entry.detail = query.value(10).toString();
+        entry.table = table;
+        entry.field = field;
         // 表名、字段名换成给人看的名字。设置项不在同步表里：它的「字段」就是设置键。
         if (table == QLatin1String("settings")) {
             entry.tableLabel = QStringLiteral("设置");

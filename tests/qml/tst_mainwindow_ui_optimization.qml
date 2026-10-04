@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtTest
 import "../../qml"
+import "fixtures"
 
 TestCase {
     id: testCase
@@ -330,6 +331,35 @@ TestCase {
         compare(stackLayout.currentIndex, mainWindow.viewIndex(mainWindow.currentView));
     }
 
+    // 产品保证：备忘录能从正式页面栈进入，退出流程能保存草稿，失败则回到编辑页展示原因。
+    function test_memoWiringAndQuitFlush() {
+        const oldReduceMotion = Theme.reduceMotion
+        memoService.reset([memoService.makeRecord(1, "退出前", "原正文", 1)])
+        mainWindow.memoServiceRef = memoService
+        mainWindow.categoryManagerRef = memoCategories
+        Theme.reduceMotion = true
+        mainWindow.switchToView("memo")
+        var page = findChild(mainWindow, "memoViewPage")
+        tryCompare(page, "selectedId", 1, 3000)
+        compare(page.memoServiceRef, memoService)
+        page.editorBody = "退出之前还没保存的正文"
+        verify(page.dirty)
+        compare(mainWindow.flushMemoEdits(), true)
+        compare(memoService.updates[0].changes.body, "退出之前还没保存的正文")
+        page.editorBody = "保存失败的正文"
+        memoService.failSave = true
+        mainWindow.currentView = "today"
+        compare(mainWindow.flushMemoEdits(), false)
+        compare(mainWindow.currentView, "memo")
+        compare(page.editorBody, "保存失败的正文")
+        compare(page.errorMessage, "磁盘不可写")
+        memoService.failSave = false
+        page.saveNow()
+        mainWindow.memoServiceRef = null
+        mainWindow.categoryManagerRef = null
+        Theme.reduceMotion = oldReduceMotion
+    }
+
     // 页面编号必须与 StackLayout 里页面的书写顺序一一对应，切页状态机按编号取页。
     // 2026-09 删掉「目标」页（原第 7 页）后，排在它后面的三页各前移一位；这条逐页核对
     // 「按名字切过去，栈里显示的正是那一页」，而不只是「currentIndex 等于映射出来的数」。
@@ -344,6 +374,7 @@ TestCase {
             { tag: "dashboard", page: "dashboardViewPage" },
             { tag: "todayFocus", page: "todayFocusViewPage" },
             { tag: "schedule", page: "schedulePlanViewPage" },
+            { tag: "memo", page: "memoViewPage" },
             { tag: "knowledgeGaps", page: "knowledgeGapViewPage" }
         ]
     }
@@ -360,7 +391,7 @@ TestCase {
         const stack = findChild(mainWindow, "mainViewStack")
         verify(stack !== null)
         // 栈里正好是上面那十页：多一页或少一页，编号就会整体错位。
-        compare(stack.children.length, 10)
+        compare(stack.children.length, 11)
         // 旧配置、旧快捷键里残留的 "goals" 落到默认的今日页，不能落到别的页上。
         compare(mainWindow.viewIndex("goals"), mainWindow.viewIndex("today"))
         verify(findChild(mainWindow, "goalsViewPage") === null)
@@ -579,6 +610,9 @@ TestCase {
         tryCompare(mainWindow, "textInputFocused", false)
         tryCompare(instantiator.objectAt(1), "enabled", true)
     }
+
+    MemoServiceMock { id: memoService }
+    MemoCategoryMock { id: memoCategories }
 
     Component {
         id: textInputProbe

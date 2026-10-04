@@ -112,7 +112,7 @@ Popup {
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
-            text: "两台设备同时改了同一处时，以较晚的修改为准；删除优先于修改。没有生效的内容记在这里，需要的话可以手动补回去。只保留最近 500 条。"
+            text: "两台设备同时改了同一处时，以较晚的修改为准；删除优先于修改。被覆盖或被删除的备忘录文字可复制找回。只保留最近 500 条。"
             textFormat: Text.PlainText
             color: Theme.inkSoft
             font.pixelSize: Theme.fontSm
@@ -214,6 +214,49 @@ Popup {
                             color: Theme.ink
                             font.pixelSize: Theme.fontMd
                             wrapMode: Text.Wrap
+                        }
+
+                        // 按钮和「已复制」排成一行，按钮保持文字宽度；不要直接把按钮装进填满整行的 Loader，
+                        // Loader 有了宽度会把装进来的按钮拉成一整条。
+                        Loader {
+                            active: Boolean(entry.modelData.canCopyLostValue)
+                            sourceComponent: RowLayout {
+                                id: copyRow
+
+                                property bool copied: false
+
+                                spacing: Theme.space8
+
+                                PageActionButton {
+                                    objectName: "syncLogCopyLostValue" + entry.index
+                                    text: qsTr("复制被覆盖的内容")
+                                    onClicked: {
+                                        if (!root.syncControllerRef)
+                                            return
+                                        root.syncControllerRef.copyLostValue(String(entry.modelData.lostValue))
+                                        copyRow.copied = true
+                                        copiedReset.restart()
+                                    }
+                                }
+
+                                // 复制成功的反馈就放在按钮旁边。用透明度显隐，提示出现、消失时按钮不会跳动。
+                                // 不用悬浮提示条：弹窗打开之前它挂不到覆盖层上，结果从来没显示过。
+                                Text {
+                                    objectName: "syncLogCopied" + entry.index
+                                    text: qsTr("已复制")
+                                    textFormat: Text.PlainText
+                                    color: Theme.inkSoft
+                                    font.pixelSize: Theme.fontSm
+                                    opacity: copyRow.copied ? 1 : 0
+                                    Accessible.ignored: !copyRow.copied
+                                }
+
+                                Timer {
+                                    id: copiedReset
+                                    interval: 2000
+                                    onTriggered: copyRow.copied = false
+                                }
+                            }
                         }
                     }
                 }

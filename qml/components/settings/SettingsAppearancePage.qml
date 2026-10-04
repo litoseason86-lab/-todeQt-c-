@@ -24,7 +24,8 @@ FocusScope {
         "month": "专注历史",
         "stats": "数据统计",
         "countdown": "目标倒计时",
-        "knowledgeGaps": "知识缺口"
+        "knowledgeGaps": "知识缺口",
+        "memo": "备忘录"
     })
 
     // 替身或旧配置可能给出本页没有名字的 id；直接显示 id 也好过整行空白，

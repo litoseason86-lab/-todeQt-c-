@@ -82,8 +82,10 @@ namespace SyncJson {
 // 格式版本：以后改了字段含义就加一，读到更高版本的文件时拒绝，而不是按旧含义猜。
 // 2（计划 051）：批次里多了课表、知识缺口、倒计时三张表和更多设置项。v18 的应用读到 2 会停下、提示更新，
 // 而不是把不认识的表当成坏记录跳过——跳过之后读取进度已经往前走了，更新应用也补不回来。
-constexpr int kFormatVersion = 2;
-// 还读得懂的最旧格式：1 是第一期写的，内容是 2 的子集，照常读。
+// 3（计划 052）：加入备忘录。旧版 Applier 不认识 memos 会跳过记录、照常推进读取进度，
+// 更新应用后也不会补读。提升格式让旧版停在文件前等更新，保住全部记录。
+constexpr int kFormatVersion = 3;
+// 格式 1、2 是当前格式的子集，仍然接受。
 constexpr int kOldestReadableFormat = 1;
 
 QJsonObject toJson(const SyncBatch& batch);

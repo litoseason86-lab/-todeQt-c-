@@ -69,6 +69,9 @@ Canvas {
             line(12, 5, 12, 19)
             line(5, 12, 19, 12)
             break
+        case "check": // 选项弹层里的当前项
+            poly([5, 12.5, 10, 17.5, 19, 7], false)
+            break
         case "appearance": // 明暗对比圆
             circle(12, 12, 9)
             line(12, 3, 12, 21)

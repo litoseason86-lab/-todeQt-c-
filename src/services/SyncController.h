@@ -123,6 +123,7 @@ public:
     Q_INVOKABLE void rebuildFolder();
     // 同步日志，新的在前。每一项是给界面直接显示的文字。
     Q_INVOKABLE QVariantList syncLog(int limit = 200) const;
+    Q_INVOKABLE void copyLostValue(const QString& text);
     // 恢复确认框里的提醒。这台设备加入过同步文件夹，恢复就是全局回滚：开着同步，另一台马上跟着回到这份备份；
     // 关着的，下次打开同步时才发生。关着的时候更要说清楚——过几天打开同步，另一台被整个换掉，事先却没有任何提示。
     // 没加入过（或库没打开）时为空：恢复只影响这台设备。
@@ -134,6 +135,8 @@ signals:
     void folderChanged();
     void choosingFolderChanged();
     void logChanged();
+    // 只传递复制意图；测试监听信号，不接触系统剪贴板。
+    void copyRequested(const QString& text);
     // 要用提示条告诉你的事：已经加入、另一台设备恢复了备份、选错了文件夹……
     void notice(const QString& message);
 

@@ -7,6 +7,7 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QTemporaryDir>
+#include <QTimeZone>
 #include <QtTest>
 
 #include <functional>
@@ -21,6 +22,7 @@
 #include "../src/services/FocusTimer.h"
 #include "../src/services/KnowledgeGapService.h"
 #include "../src/services/LogicalDay.h"
+#include "../src/services/MemoService.h"
 #include "../src/services/RoutineManager.h"
 #include "../src/services/RoutineRules.h"
 #include "../src/services/ScheduleService.h"
@@ -342,6 +344,51 @@ QVariant valueOf(const Device& device, const QString& table, const QString& sync
     return scalar(device, QStringLiteral("SELECT %1 FROM %2 WHERE sync_id = '%3'").arg(column, table, syncId));
 }
 
+// 052：用真实触发器生成版本；固定创建时间和身份，使排序能抓住误用本机 id 的实现。
+QString addMemo(const Device& device, const QString& title, const QString& body,
+                const QString& category = QString(), const QString& identity = QString())
+{
+    QSqlQuery query(deviceDb(device));
+    query.prepare(QStringLiteral(
+        "INSERT INTO memos(title,body,category_id,sort_order,created_at,updated_at,sync_id) "
+        "VALUES(:title,:body,(SELECT id FROM categories WHERE sync_id=:cat),"
+        "(SELECT COALESCE(MAX(sort_order),0)+1 FROM memos WHERE category_id IS "
+        "(SELECT id FROM categories WHERE sync_id=:cat2)),"
+        "'2026-10-02T12:51:46.728Z','2026-10-02T12:51:46.728Z',:identity)"));
+    query.bindValue(QStringLiteral(":title"), title.isNull() ? QStringLiteral("") : title);
+    query.bindValue(QStringLiteral(":body"), body);
+    query.bindValue(QStringLiteral(":cat"), category);
+    query.bindValue(QStringLiteral(":cat2"), category);
+    query.bindValue(QStringLiteral(":identity"), identity.isEmpty() ? QVariant() : QVariant(identity));
+    if (!query.exec()) {
+        qWarning() << query.lastError().text();
+        return {};
+    }
+    return scalar(device, QStringLiteral("SELECT sync_id FROM memos WHERE id=%1")
+                              .arg(query.lastInsertId().toLongLong())).toString();
+}
+
+QString memoCategory(const Device& device, const QString& id)
+{
+    return scalar(device, QStringLiteral("SELECT c.sync_id FROM memos m LEFT JOIN categories c "
+                                         "ON c.id=m.category_id WHERE m.sync_id='%1'").arg(id)).toString();
+}
+
+QString memoStamp(qint64 milliseconds)
+{
+    return QDateTime::fromMSecsSinceEpoch(milliseconds, QTimeZone::UTC).toString(Qt::ISODateWithMs);
+}
+
+SyncRecord memoRecord(const SyncBatch& batch, const QString& identity)
+{
+    for (const SyncRecord& record : batch.records) {
+        if (record.table == QLatin1String("memos") && record.syncId == identity) {
+            return record;
+        }
+    }
+    return {};
+}
+
 // 倒计时按界面的顺序（排序号、本机编号）排出来的名字与排序号。
 QStringList countdownOrder(const Device& device)
 {
@@ -641,6 +688,22 @@ private slots:
     void snapshotReplacementReportsSettingsItLacks();
     void settingConflictsReadAsPlainText();
 
+    // 052 阶段 2：产品保证写在各用例的第一行，前置断言防止数据没有触发目标场景。
+    void memosTravelWithContentTimeAndNullableCategory();
+    void memoEditsMergeAndKeepFullLosingBody();
+    void memoSortingAndLosingEditsKeepContentTime();
+    void memoCategoryEditsAdvanceContentTime();
+    void memoDeletionWinsAndPreservesLosingBody();
+    void memoDeletedElsewhereKeepsCopyWithoutCallingItConflict();
+    void memoOrderCollisionsConverge_data();
+    void memoOrderCollisionsConverge();
+    void memoCategoryDeletionKeepsConcurrentContent();
+    void memoCategoryMergeRepointsOnBothPaths();
+    void memoSnapshotsPreserveContentTimeDuringJoinAndRollback();
+    void memoPendingCategoryRelinksWithoutEcho();
+    void phaseOneV20MemosAcquireSyncWithoutVersionBump();
+    void memoNotificationsCoverContentAndCategoryDeletion();
+
 private:
     Device openDevice(const QString& name);
     // 临时把服务层（TaskManager 等单例）切到这台设备的库上执行一段操作，用完关掉。
@@ -736,7 +799,7 @@ void SyncTests::syncAll(FakeCloud& cloud, const QList<Device>& devices)
 
 void SyncTests::freshDatabaseHasSyncInfrastructure()
 {
-    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 19);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), DatabaseManager::kCurrentSchemaVersion);
     for (const SyncSchema::Table& table : SyncSchema::tables()) {
         QVERIFY2(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('%1') WHERE name = 'sync_id'")
                            .arg(table.name)) == 1, qPrintable(table.name));
@@ -998,9 +1061,9 @@ void SyncTests::migrationFromV17BackfillsIdentitiesAndQueuesRecords()
     const int snapshotsBefore = dir.entryList(pattern, QDir::Files).size();
     QVERIFY(DatabaseManager::instance()->createTables());
 
-    // 升级前留了一份快照：v18 之后旧版本应用打不开这个库，想退回只能靠它。一路升到当前的 v19。
+    // 升级前留了一份快照：v18 之后旧版本应用打不开这个库，想退回只能靠它。一路升到当前版本。
     QCOMPARE(dir.entryList(pattern, QDir::Files).size(), snapshotsBefore + 1);
-    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 19);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), DatabaseManager::kCurrentSchemaVersion);
     QCOMPARE(triggerSql(), SyncSchema::canonicalTriggerSql());
 
     // 每一行都有身份，且互不相同。
@@ -1184,9 +1247,8 @@ void SyncTests::batchSurvivesJsonRoundTrip()
     QVERIFY(!SyncJson::fromJson(future, &parsed, &error));
     QVERIFY(!error.isEmpty());
 
-    // 第二期（051）写出格式 2：v18 的应用读到会停下等更新，不会把新表当成坏记录跳过。
-    // 第一期写的格式 1（同步文件夹里可能已经有了）照样读得懂；比它更旧的不认识。
-    QCOMPARE(SyncJson::toJson(batch).value(QStringLiteral("format")).toInt(), 2);
+    // 第三期（052）写出格式 3，旧应用停下等更新；第一期的格式 1 仍能读，比它更旧的不认识。
+    QCOMPARE(SyncJson::toJson(batch).value(QStringLiteral("format")).toInt(), 3);
     QJsonObject firstPhase = SyncJson::toJson(batch);
     firstPhase.insert(QStringLiteral("format"), 1);
     SyncBatch old;
@@ -2799,9 +2861,9 @@ void SyncTests::migrationFromV18QueuesPhaseTwoRows()
     const int snapshotsBefore = dir.entryList(pattern, QDir::Files).size();
     QVERIFY(DatabaseManager::instance()->createTables());
 
-    // 升级前留了一份迁移快照（升到 v19 之后 v18 的应用打不开这个库）；版本推到 19；触发器全部装好。
+    // 升级前留了一份迁移快照（升到 v19 之后 v18 的应用打不开这个库）；版本推到当前版本；触发器全部装好。
     QCOMPARE(dir.entryList(pattern, QDir::Files).size(), snapshotsBefore + 1);
-    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), 19);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")).toInt(), DatabaseManager::kCurrentSchemaVersion);
     QCOMPARE(triggerSql(), SyncSchema::canonicalTriggerSql());
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('countdown_goals') WHERE name = 'sync_id'")), 1);
 
@@ -2879,6 +2941,487 @@ void SyncTests::settingConflictsReadAsPlainText()
     QCOMPARE(byField.value(QStringLiteral("番茄时长")).keptValue, QStringLiteral("40 分钟"));
     QCOMPARE(byField.value(QStringLiteral("课表节次")).lostValue, QStringLiteral("2 节，08:00–09:40"));
     QCOMPARE(byField.value(QStringLiteral("课表节次")).keptValue, QStringLiteral("1 节，08:10–08:55"));
+}
+
+
+void SyncTests::memosTravelWithContentTimeAndNullableCategory()
+{
+    // 产品保证：新建备忘的五个字段完整到达，科目按身份接回；更新时间是修改时刻，不能是接收时刻。
+    const Device a = openDevice(QStringLiteral("memo-a"));
+    const Device b = openDevice(QStringLiteral("memo-b"));
+    QVERIFY(!addCategory(b, QStringLiteral("占用编号")).isEmpty());
+    const QString cat = addCategory(a, QStringLiteral("学习"));
+    constexpr qint64 time = 1900000000728;
+    QVERIFY(setClock(a, time));
+    const QString id = addMemo(a, QString(), QStringLiteral("第一行\r\n第二行"), cat);
+    QVERIFY(!id.isEmpty());
+    const QString plain = addMemo(a, QStringLiteral("未分类"), QStringLiteral("原文"));
+    SyncStore sa(a.connection), sb(b.connection);
+    const SyncBatch batch = throughJson(sa.collectPending());
+    const SyncRecord record = memoRecord(batch, id);
+    QCOMPARE(record.fields.size(), 5);
+    QVERIFY(!record.fields.contains(QStringLiteral("updated_at")));
+    QCOMPARE(record.fields.value(QStringLiteral("category_id")).value.toString(), cat);
+    QCOMPARE(record.fields.value(QStringLiteral("body")).version.time, time);
+    QVERIFY(setClock(b, time + 900000));
+    const auto result = sb.applyRemote(batch);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.skippedRecords, 0);
+    QVERIFY(result.changedTables.contains(QStringLiteral("memos")));
+    QVERIFY(localIdOf(a, QStringLiteral("categories"), cat) != localIdOf(b, QStringLiteral("categories"), cat));
+    QCOMPARE(memoCategory(b, id), cat);
+    QVERIFY(valueOf(b, QStringLiteral("memos"), plain, QStringLiteral("category_id")).isNull());
+    for (const QString& field : {QStringLiteral("title"), QStringLiteral("body"), QStringLiteral("sort_order"),
+                                 QStringLiteral("created_at"), QStringLiteral("updated_at")}) {
+        QCOMPARE(valueOf(b, QStringLiteral("memos"), id, field), valueOf(a, QStringLiteral("memos"), id, field));
+    }
+    QCOMPARE(valueOf(b, QStringLiteral("memos"), id, QStringLiteral("updated_at")).toString(), memoStamp(time));
+}
+
+void SyncTests::memoEditsMergeAndKeepFullLosingBody()
+{
+    // 产品保证：不同字段的改动都保留；同一字段以后改的赢，输掉的完整正文可从日志找回。
+    const Device a = openDevice(QStringLiteral("memo-a"));
+    const Device b = openDevice(QStringLiteral("memo-b"));
+    constexpr qint64 time = 1900000000728;
+    QVERIFY(setClock(a, time));
+    const QString id = addMemo(a, QStringLiteral("原题"), QStringLiteral("原文"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    syncAll(cloud, {a, b});
+    QVERIFY(setClock(a, time + 100));
+    QVERIFY(exec(a, QStringLiteral("UPDATE memos SET title='新题' WHERE sync_id='%1'").arg(id)));
+    QVERIFY(setClock(b, time + 200));
+    QVERIFY(exec(b, QStringLiteral("UPDATE memos SET body='另一台的正文' WHERE sync_id='%1'").arg(id)));
+    syncAll(cloud, {a, b});
+    for (const Device& d : {a, b}) {
+        QCOMPARE(valueOf(d, QStringLiteral("memos"), id, QStringLiteral("title")).toString(), QStringLiteral("新题"));
+        QCOMPARE(valueOf(d, QStringLiteral("memos"), id, QStringLiteral("body")).toString(), QStringLiteral("另一台的正文"));
+        QCOMPARE(valueOf(d, QStringLiteral("memos"), id, QStringLiteral("updated_at")).toString(), memoStamp(time + 200));
+        QCOMPARE(logCount(d), 0);
+    }
+    const QString lost = QString(3000, QChar(0x7532)) + QStringLiteral("\n独有末尾甲");
+    const QString kept = QString(3100, QChar(0x4e59)) + QStringLiteral("\n独有末尾乙");
+    auto edit = [&](const Device& d, const QString& body, qint64 t) {
+        QVERIFY(setClock(d, t));
+        QSqlQuery q(deviceDb(d));
+        q.prepare(QStringLiteral("UPDATE memos SET body=? WHERE sync_id=?"));
+        q.addBindValue(body); q.addBindValue(id);
+        QVERIFY(q.exec());
+    };
+    edit(a, lost, time + 300);
+    edit(b, kept, time + 400);
+    const auto av = memoRecord(SyncStore(a.connection).collectPending(), id).fields.value(QStringLiteral("body"));
+    const auto bv = memoRecord(SyncStore(b.connection).collectPending(), id).fields.value(QStringLiteral("body"));
+    QVERIFY(av.value != bv.value && av.version.time < bv.version.time);
+    QCOMPARE(av.base, bv.base); // 共同基础，才是真正并发，不能拿顺序修改冒充冲突。
+    syncAll(cloud, {a, b});
+    for (const Device& d : {a, b}) {
+        QCOMPARE(valueOf(d, QStringLiteral("memos"), id, QStringLiteral("body")).toString(), kept);
+        QCOMPARE(valueOf(d, QStringLiteral("memos"), id, QStringLiteral("updated_at")).toString(), memoStamp(time + 400));
+        const auto logs = SyncStore(d.connection).syncLog(10);
+        QCOMPARE(logs.size(), 1);
+        QCOMPARE(logs.first().fieldLabel, QStringLiteral("正文"));
+        QCOMPARE(logs.first().recordLabel, QStringLiteral("新题"));
+        QCOMPARE(logs.first().lostValue, lost);
+        QCOMPARE(logs.first().keptValue, kept);
+    }
+}
+
+void SyncTests::memoSortingAndLosingEditsKeepContentTime()
+{
+    // 产品保证：对方只拖动排序或发来输掉的内容版本，列表里的内容更新时间都不动。
+    const Device a = openDevice(QStringLiteral("memo-a"));
+    const Device b = openDevice(QStringLiteral("memo-b"));
+    constexpr qint64 time = 1900000000728;
+    QVERIFY(setClock(a, time));
+    const QString first = addMemo(a, QStringLiteral("第一条"), QStringLiteral("正文"));
+    const QString second = addMemo(a, QStringLiteral("第二条"), QStringLiteral("正文"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    syncAll(cloud, {a, b});
+    const QVariant stamp = valueOf(a, QStringLiteral("memos"), first, QStringLiteral("updated_at"));
+    QVERIFY(setClock(a, time + 100));
+    withServices(a, [&] {
+        QVERIFY(MemoService::instance()->reorderMemos(0, {localIdOf(a, QStringLiteral("memos"), second),
+                                                        localIdOf(a, QStringLiteral("memos"), first)}));
+    });
+    QCOMPARE(valueOf(a, QStringLiteral("memos"), first, QStringLiteral("sort_order")).toInt(), 2);
+    const SyncBatch sorted = SyncStore(a.connection).collectPending();
+    const auto fields = memoRecord(sorted, first).fields;
+    QVERIFY(fields.value(QStringLiteral("sort_order")).version.time > fields.value(QStringLiteral("body")).version.time);
+    syncAll(cloud, {a, b});
+    QCOMPARE(valueOf(a, QStringLiteral("memos"), first, QStringLiteral("updated_at")), stamp);
+    QCOMPARE(valueOf(b, QStringLiteral("memos"), first, QStringLiteral("updated_at")), stamp);
+    QVERIFY(setClock(b, time + 400));
+    QVERIFY(exec(b, QStringLiteral("UPDATE memos SET title='较新标题' WHERE sync_id='%1'").arg(first)));
+    const QVariant newer = valueOf(b, QStringLiteral("memos"), first, QStringLiteral("updated_at"));
+    SyncBatch stale = sorted;
+    stale.records = {memoRecord(sorted, first)};
+    stale.records[0].fields[QStringLiteral("title")].value = QStringLiteral("过期标题");
+    const auto incoming = stale.records.first().fields.value(QStringLiteral("title"));
+    QVERIFY(incoming.version.time < time + 400);
+    const auto result = SyncStore(b.connection).applyRemote(stale);
+    QVERIFY(result.ok);
+    QCOMPARE(valueOf(b, QStringLiteral("memos"), first, QStringLiteral("title")).toString(), QStringLiteral("较新标题"));
+    QCOMPARE(valueOf(b, QStringLiteral("memos"), first, QStringLiteral("updated_at")), newer);
+}
+
+
+void SyncTests::memoCategoryEditsAdvanceContentTime()
+{
+    // 产品保证：只改科目也算内容更新，两台按科目字段版本显示同一个 UTC 毫秒时间。
+    const Device a = openDevice(QStringLiteral("memo-a"));
+    const Device b = openDevice(QStringLiteral("memo-b"));
+    const QString oldCat = addCategory(a, QStringLiteral("原科目"));
+    const QString newCat = addCategory(a, QStringLiteral("新科目"));
+    constexpr qint64 time = 1900000000728;
+    QVERIFY(setClock(a, time));
+    const QString id = addMemo(a, QStringLiteral("移科目"), QStringLiteral("正文"), oldCat);
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    syncAll(cloud, {a, b});
+    const QVariant before = valueOf(a, QStringLiteral("memos"), id, QStringLiteral("updated_at"));
+    QVERIFY(memoCategory(a, id) == oldCat && oldCat != newCat);
+    QVERIFY(setClock(a, time + 500));
+    withServices(a, [&] {
+        QVERIFY(MemoService::instance()->updateMemo(int(localIdOf(a, QStringLiteral("memos"), id)),
+                {{QStringLiteral("categoryId"), localIdOf(a, QStringLiteral("categories"), newCat)}}));
+    });
+    const auto fields = memoRecord(SyncStore(a.connection).collectPending(), id).fields;
+    QCOMPARE(fields.value(QStringLiteral("category_id")).version.time, time + 500);
+    QCOMPARE(fields.value(QStringLiteral("body")).version.time, time);
+    syncAll(cloud, {a, b});
+    for (const Device& d : {a, b}) {
+        QCOMPARE(memoCategory(d, id), newCat);
+        QCOMPARE(valueOf(d, QStringLiteral("memos"), id, QStringLiteral("updated_at")).toString(), memoStamp(time + 500));
+        QVERIFY(valueOf(d, QStringLiteral("memos"), id, QStringLiteral("updated_at")) != before);
+    }
+}
+
+void SyncTests::memoDeletionWinsAndPreservesLosingBody()
+{
+    // 产品保证：一台删除、一台写长正文，两种接收路径都删除优先，完整被覆盖内容留下来；
+    // 空标题没有可找回的内容，哪台都不记。
+    const Device a = openDevice(QStringLiteral("memo-a"));
+    const Device b = openDevice(QStringLiteral("memo-b"));
+    constexpr qint64 time = 1900000000728;
+    QVERIFY(setClock(a, time));
+    const QString id = addMemo(a, QString(), QStringLiteral("正文首行\n旧内容"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    syncAll(cloud, {a, b});
+    QVERIFY(setClock(a, time + 100));
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM memos WHERE sync_id='%1'").arg(id)));
+    QVERIFY(setClock(b, time + 200));
+    const QString body = QStringLiteral("正文首行\n") + QString(3000, QChar(0x7532)) + QStringLiteral("完整结尾");
+    QSqlQuery q(deviceDb(b));
+    q.prepare(QStringLiteral("UPDATE memos SET body=? WHERE sync_id=?")); q.addBindValue(body); q.addBindValue(id);
+    QVERIFY(q.exec());
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM memos")), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM memos")), 1);
+    // 空标题那一项确实会随记录发出去：A 收到这条修改时要面对一个空的标题，测「空的不记」才有意义。
+    const auto outgoing = memoRecord(SyncStore(b.connection).collectPending(), id).fields;
+    QVERIFY(outgoing.contains(QStringLiteral("title")));
+    QVERIFY(outgoing.value(QStringLiteral("title")).value.toString().isEmpty());
+    // 删除到达还在编辑的一台，以及编辑到达已删的一台，分别经过不同的应用分支。
+    // 编辑的一台先发出修改还是先收到删除取决于读写顺序，记成「删除优先」或「已删除」都对，关键是正文完整留下。
+    syncAll(cloud, {a, b});
+    for (const Device& d : {a, b}) {
+        QCOMPARE(count(d, QStringLiteral("SELECT COUNT(*) FROM memos")), 0);
+        bool found = false;
+        for (const auto& log : SyncStore(d.connection).syncLog(10)) {
+            if ((log.kind == QLatin1String("delete") || log.kind == QLatin1String("removed"))
+                && log.field == QLatin1String("body")) {
+                QCOMPARE(log.lostValue, body);
+                QCOMPARE(log.recordLabel, QStringLiteral("正文首行"));
+                found = true;
+            }
+        }
+        QVERIFY(found);
+        QCOMPARE(count(d, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE tbl = 'memos' AND field = 'title'")),
+                 0);
+    }
+}
+
+void SyncTests::memoDeletedElsewhereKeepsCopyWithoutCallingItConflict()
+{
+    // 产品保证：另一台正常删掉备忘录时，这台在日志里留一份删除前的内容，记成「已删除」而不是冲突，
+    // 空标题、空正文不记；只有本机还没发出去的修改被删除盖掉，才记成「删除优先」的冲突。
+    const Device a = openDevice(QStringLiteral("memo-copy-a"));
+    const Device b = openDevice(QStringLiteral("memo-copy-b"));
+    const QString titled = addMemo(a, QStringLiteral("张宇 36 讲"), QStringLiteral("第 8 讲做完"));
+    const QString untitled = addMemo(a, QString(), QStringLiteral("只有正文"));
+    const QString editing = addMemo(a, QStringLiteral("1000 题"), QStringLiteral("第 3 章"));
+    QVERIFY(!titled.isEmpty() && !untitled.isEmpty() && !editing.isEmpty());
+    FakeCloud cloud(m_data->filePath(QStringLiteral("memo-copy-cloud")));
+    syncAll(cloud, {a, b});
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM memos")), 3);
+
+    // A 又改了第三条的正文，还没发出去；其余内容都已经发出去了。
+    QVERIFY(exec(a, QStringLiteral("UPDATE memos SET body = '第 4 章' WHERE sync_id = '%1'").arg(editing)));
+    const QString pendingSql = QStringLiteral(
+        "SELECT COUNT(*) FROM sync_field_versions WHERE tbl = 'memos' AND pending = 1 AND sync_id = '%1' AND field = '%2'");
+    QCOMPARE(count(a, pendingSql.arg(titled, QStringLiteral("body"))), 0);
+    QCOMPARE(count(a, pendingSql.arg(editing, QStringLiteral("title"))), 0);
+    QCOMPARE(count(a, pendingSql.arg(editing, QStringLiteral("body"))), 1);
+
+    // B 看过三条之后全删了。删除直接交给 A，不让 A 先把手上的修改发出去，两种情况才能都出现。
+    QVERIFY(exec(b, QStringLiteral("DELETE FROM memos")));
+    const SyncStore::ApplyResult result =
+        SyncStore(a.connection).applyRemote(throughJson(SyncStore(b.connection).collectPending()));
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM memos")), 0);
+
+    const QString entrySql = QStringLiteral(
+        "SELECT COUNT(*) FROM sync_conflict_log WHERE kind = '%1' AND sync_id = '%2' AND field = '%3' AND lost_value = '%4'");
+    // 已经发出去的内容：记成「已删除」，留着删除前的原文。
+    QCOMPARE(count(a, entrySql.arg(QStringLiteral("removed"), titled, QStringLiteral("title"), QStringLiteral("张宇 36 讲"))), 1);
+    QCOMPARE(count(a, entrySql.arg(QStringLiteral("removed"), titled, QStringLiteral("body"), QStringLiteral("第 8 讲做完"))), 1);
+    QCOMPARE(count(a, entrySql.arg(QStringLiteral("removed"), untitled, QStringLiteral("body"), QStringLiteral("只有正文"))), 1);
+    QCOMPARE(count(a, entrySql.arg(QStringLiteral("removed"), editing, QStringLiteral("title"), QStringLiteral("1000 题"))), 1);
+    // 空标题不记。
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE sync_id = '%1' AND field = 'title'")
+                          .arg(untitled)), 0);
+    // 本机还没发出去的修改被删除盖掉：这才是冲突。
+    QCOMPARE(count(a, entrySql.arg(QStringLiteral("delete"), editing, QStringLiteral("body"), QStringLiteral("第 4 章"))), 1);
+    QCOMPARE(logCount(a, QStringLiteral("removed")), 4);
+    QCOMPARE(logCount(a, QStringLiteral("delete")), 1);
+    // 删除的一台什么都没丢，不记。
+    QCOMPARE(logCount(b), 0);
+}
+
+void SyncTests::memoOrderCollisionsConverge_data()
+{
+    QTest::addColumn<bool>("classified");
+    QTest::newRow("category") << true;
+    QTest::newRow("null-category") << false;
+}
+
+void SyncTests::memoOrderCollisionsConverge()
+{
+    // 产品保证：两台各自拖动造成真实撞号后，科目内按顺序、创建时间、同步身份归一，两台一致且不改内容时间。
+    QFETCH(bool, classified);
+    const Device a = openDevice(QStringLiteral("memo-a"));
+    const Device b = openDevice(QStringLiteral("memo-b"));
+    const QString cat = classified ? addCategory(a, QStringLiteral("归一科目")) : QString();
+    constexpr qint64 time = 1900000000728;
+    QVERIFY(setClock(a, time));
+    const QString first = addMemo(a, QStringLiteral("第一条"), QStringLiteral("正文"), cat, QStringLiteral("memo-z"));
+    const QString second = addMemo(a, QStringLiteral("第二条"), QStringLiteral("正文"), cat, QStringLiteral("memo-m"));
+    const QString third = addMemo(a, QStringLiteral("第三条"), QStringLiteral("正文"), cat, QStringLiteral("memo-a"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    syncAll(cloud, {a, b});
+    const QVariant firstTime = valueOf(a, QStringLiteral("memos"), first, QStringLiteral("updated_at"));
+    QVERIFY(setClock(a, time + 100));
+    QVERIFY(exec(a, QStringLiteral("UPDATE memos SET sort_order=CASE sync_id WHEN 'memo-z' THEN 2 ELSE 1 END "
+                                  "WHERE sync_id IN ('memo-z','memo-m')")));
+    QVERIFY(setClock(b, time + 200));
+    QVERIFY(exec(b, QStringLiteral("UPDATE memos SET sort_order=CASE sync_id WHEN 'memo-m' THEN 3 ELSE 2 END "
+                                  "WHERE sync_id IN ('memo-m','memo-a')")));
+    SyncStore sa(a.connection), sb(b.connection);
+    const SyncBatch ab = sa.collectPending(), bb = sb.collectPending();
+    // 各台拖动前后都没有本地撞号；字段合并后的 first=2、third=2 才是真正的同步碰撞。
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(DISTINCT sort_order) FROM memos")), 3);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(DISTINCT sort_order) FROM memos")), 3);
+    QCOMPARE(memoRecord(ab, first).fields.value(QStringLiteral("sort_order")).value.toInt(), 2);
+    QCOMPARE(memoRecord(bb, third).fields.value(QStringLiteral("sort_order")).value.toInt(), 2);
+    QCOMPARE(valueOf(a, QStringLiteral("memos"), first, QStringLiteral("created_at")),
+             valueOf(a, QStringLiteral("memos"), third, QStringLiteral("created_at")));
+    QVERIFY(localIdOf(a, QStringLiteral("memos"), first) < localIdOf(a, QStringLiteral("memos"), third));
+    QVERIFY(sa.acknowledge(ab) && sb.acknowledge(bb));
+    const auto applied = sa.applyRemote(throughJson(bb));
+    QVERIFY2(applied.ok, qPrintable(applied.error));
+    QVERIFY(sa.hasPending()); // 归一必须成为本机改动，再发给对方，不能静默改本地顺序。
+    QCOMPARE(valueOf(a, QStringLiteral("memos"), third, QStringLiteral("sort_order")).toInt(), 1);
+    QCOMPARE(valueOf(a, QStringLiteral("memos"), first, QStringLiteral("sort_order")).toInt(), 2);
+    QCOMPARE(valueOf(a, QStringLiteral("memos"), second, QStringLiteral("sort_order")).toInt(), 3);
+    QVERIFY(sb.applyRemote(throughJson(ab)).ok);
+    syncAll(cloud, {a, b});
+    for (const QString& id : {first, second, third}) {
+        QCOMPARE(valueOf(a, QStringLiteral("memos"), id, QStringLiteral("sort_order")),
+                 valueOf(b, QStringLiteral("memos"), id, QStringLiteral("sort_order")));
+    }
+    QCOMPARE(valueOf(a, QStringLiteral("memos"), first, QStringLiteral("updated_at")), firstTime);
+    QCOMPARE(valueOf(b, QStringLiteral("memos"), first, QStringLiteral("updated_at")), firstTime);
+    QCOMPARE(describe(sa.exportSnapshot()), describe(sb.exportSnapshot()));
+}
+
+void SyncTests::memoCategoryDeletionKeepsConcurrentContent()
+{
+    // 产品保证：一台删科目、一台改正文，最后都归到未分类，修改后的内容不能丢。
+    const Device a = openDevice(QStringLiteral("memo-a"));
+    const Device b = openDevice(QStringLiteral("memo-b"));
+    const QString cat = addCategory(a, QStringLiteral("待删科目"));
+    const QString id = addMemo(a, QStringLiteral("备忘"), QStringLiteral("旧文"), cat);
+    QVERIFY(!addMemo(a, QStringLiteral("原未分类"), QStringLiteral("旧文")).isEmpty());
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    syncAll(cloud, {a, b});
+    QVERIFY(!memoCategory(a, id).isEmpty() && !memoCategory(b, id).isEmpty());
+    withServices(a, [&] { QVERIFY(CategoryManager::instance()->deleteCategory(int(localIdOf(a, QStringLiteral("categories"), cat)))); });
+    QVERIFY(exec(b, QStringLiteral("UPDATE memos SET body='删除时仍在写的正文' WHERE sync_id='%1'").arg(id)));
+    syncAll(cloud, {a, b});
+    for (const Device& d : {a, b}) {
+        QVERIFY(valueOf(d, QStringLiteral("memos"), id, QStringLiteral("category_id")).isNull());
+        QCOMPARE(valueOf(d, QStringLiteral("memos"), id, QStringLiteral("body")).toString(), QStringLiteral("删除时仍在写的正文"));
+        QCOMPARE(count(d, QStringLiteral("SELECT COUNT(DISTINCT sort_order) FROM memos")), 2);
+    }
+}
+
+void SyncTests::memoCategoryMergeRepointsOnBothPaths()
+{
+    // 产品保证：本机撞名合并与远端 merge 删除，两条路径都把备忘跟到留下的科目。
+    const Device a = openDevice(QStringLiteral("memo-a"));
+    const Device b = openDevice(QStringLiteral("memo-b"));
+    const QString winner = addCategory(a, QStringLiteral("同名科目"), QStringLiteral("cat-a"));
+    const QString loser = addCategory(b, QStringLiteral("同名科目"), QStringLiteral("cat-z"));
+    const QString id = addMemo(b, QStringLiteral("合并备忘"), QStringLiteral("不能掉进未分类"), loser);
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    QVERIFY(cloud.publish(b) > 0);
+    // B 先改名，因而收到 A 时没有同名碰撞；B 必须只靠远端 merge 记录改指，不能误由本机合并兜底。
+    QVERIFY(exec(b, QStringLiteral("UPDATE categories SET name='独立科目' WHERE sync_id='cat-z'")));
+    QCOMPARE(customCategoryNames(b), QStringList{QStringLiteral("独立科目")});
+    const auto pulled = cloud.pull(a);
+    QVERIFY(!pulled.isEmpty());
+    for (const auto& r : pulled) { QVERIFY2(r.ok, qPrintable(r.error)); QVERIFY(r.changedTables.contains(QStringLiteral("memos"))); }
+    QCOMPARE(memoCategory(a, id), winner);
+    QCOMPARE(scalar(a, QStringLiteral("SELECT kind FROM sync_tombstones WHERE tbl='categories' AND sync_id='cat-z'")).toString(), QStringLiteral("merge"));
+    QVERIFY(cloud.publish(a) > 0);
+    const auto merged = cloud.pull(b);
+    QVERIFY(!merged.isEmpty());
+    for (const auto& r : merged) { QVERIFY2(r.ok, qPrintable(r.error)); QVERIFY(r.changedTables.contains(QStringLiteral("memos"))); }
+    QCOMPARE(memoCategory(b, id), winner);
+    syncAll(cloud, {a, b});
+    for (const Device& d : {a, b}) {
+        QCOMPARE(memoCategory(d, id), winner);
+        QCOMPARE(valueOf(d, QStringLiteral("memos"), id, QStringLiteral("body")).toString(), QStringLiteral("不能掉进未分类"));
+        QCOMPARE(count(d, QStringLiteral("SELECT COUNT(*) FROM categories WHERE sync_id='cat-z'")), 0);
+    }
+}
+
+void SyncTests::memoSnapshotsPreserveContentTimeDuringJoinAndRollback()
+{
+    // 产品保证：首次加入和恢复备份的全局回滚都带上备忘原文与内容时间，不能留下接收方的旧时间。
+    const Device a = openDevice(QStringLiteral("memo-a"));
+    const Device b = openDevice(QStringLiteral("memo-b"));
+    constexpr qint64 time = 1900000000728;
+    QVERIFY(setClock(a, time));
+    const QString id = addMemo(a, QStringLiteral("快照"), QStringLiteral("备份正文"));
+    const QString extra = addMemo(b, QStringLiteral("应被替换"), QStringLiteral("本机正文"));
+    QVERIFY(!extra.isEmpty());
+    SyncStore sa(a.connection), sb(b.connection);
+    const SyncBatch original = throughJson(sa.exportSnapshot());
+    const auto joined = sb.replaceWithSnapshot(original);
+    QVERIFY2(joined.ok, qPrintable(joined.error));
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM memos")), 1);
+    QCOMPARE(valueOf(b, QStringLiteral("memos"), id, QStringLiteral("updated_at")).toString(), memoStamp(time));
+    const qint64 localId = localIdOf(b, QStringLiteral("memos"), id);
+    QVERIFY(setClock(b, time + 800));
+    QVERIFY(exec(b, QStringLiteral("UPDATE memos SET body='备份之后的正文' WHERE sync_id='%1'").arg(id)));
+    QVERIFY(valueOf(b, QStringLiteral("memos"), id, QStringLiteral("updated_at")).toString() != memoStamp(time));
+    QVERIFY(sa.beginEpochAfterRestore(0, a.id));
+    const auto rolled = sb.replaceWithSnapshot(throughJson(sa.exportSnapshot()));
+    QVERIFY2(rolled.ok, qPrintable(rolled.error));
+    QVERIFY(rolled.changedTables.contains(QStringLiteral("memos")));
+    QCOMPARE(sb.epoch(), qint64(1));
+    QCOMPARE(localIdOf(b, QStringLiteral("memos"), id), localId);
+    QCOMPARE(valueOf(b, QStringLiteral("memos"), id, QStringLiteral("body")).toString(), QStringLiteral("备份正文"));
+    QCOMPARE(valueOf(b, QStringLiteral("memos"), id, QStringLiteral("updated_at")).toString(), memoStamp(time));
+    QVERIFY(!sb.applyRemote(original).ok);
+}
+
+void SyncTests::memoPendingCategoryRelinksWithoutEcho()
+{
+    // 产品保证：备忘先到、科目后到时能接回引用；等待期间导出的快照也保留科目身份，不产生回声修改。
+    const Device a = openDevice(QStringLiteral("memo-a"));
+    const Device b = openDevice(QStringLiteral("memo-b"));
+    const QString cat = addCategory(a, QStringLiteral("晚到科目"));
+    const QString id = addMemo(a, QStringLiteral("引用"), QStringLiteral("原文"), cat);
+    SyncStore sa(a.connection), sb(b.connection);
+    SyncBatch memos = throughJson(sa.collectPending()), categories = memos;
+    memos.records = {memoRecord(memos, id)};
+    categories.records.removeIf([](const SyncRecord& r) { return r.table != QLatin1String("categories"); });
+    QVERIFY(localIdOf(b, QStringLiteral("categories"), cat) == 0);
+    const auto first = sb.applyRemote(memos);
+    QVERIFY(first.ok && first.skippedRecords == 0);
+    QVERIFY(valueOf(b, QStringLiteral("memos"), id, QStringLiteral("category_id")).isNull());
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs WHERE tbl='memos'")), 1);
+    const SyncRecord waiting = memoRecord(throughJson(sb.exportSnapshot()), id);
+    QCOMPARE(waiting.fields.value(QStringLiteral("category_id")).value.toString(), cat);
+    const QVariant stamp = valueOf(b, QStringLiteral("memos"), id, QStringLiteral("updated_at"));
+    const auto second = sb.applyRemote(categories);
+    QVERIFY2(second.ok, qPrintable(second.error));
+    QVERIFY(second.changedTables.contains(QStringLiteral("memos")));
+    QCOMPARE(memoCategory(b, id), cat);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs WHERE tbl='memos'")), 0);
+    QCOMPARE(memoRecord(sb.exportSnapshot(), id).fields.value(QStringLiteral("category_id")).version,
+             waiting.fields.value(QStringLiteral("category_id")).version);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE tbl='memos'")), 0);
+    QCOMPARE(valueOf(b, QStringLiteral("memos"), id, QStringLiteral("updated_at")), stamp);
+}
+
+void SyncTests::phaseOneV20MemosAcquireSyncWithoutVersionBump()
+{
+    // 产品保证：阶段 1 的 v20 库已有正文、还没有同步列时，重复迁移能补齐身份和队列，原内容时间不变。
+    const int id = MemoService::instance()->createMemo(QStringLiteral("阶段一"), QStringLiteral("既有正文"));
+    QVERIFY(id > 0);
+    for (const auto& spec : SyncSchema::triggers()) {
+        if (spec.first.startsWith(QStringLiteral("memos_sync_"))) { QVERIFY(exec(QStringLiteral("DROP TRIGGER %1").arg(spec.first))); }
+    }
+    QVERIFY(exec(QStringLiteral("DROP INDEX idx_memos_sync_id")));
+    QVERIFY(exec(QStringLiteral("ALTER TABLE memos DROP COLUMN sync_id")));
+    QVERIFY(exec(QStringLiteral("DELETE FROM sync_field_versions WHERE tbl='memos'")));
+    QVERIFY(exec(QStringLiteral("DELETE FROM sync_outbox WHERE tbl='memos'")));
+    const QString original = QStringLiteral("2026-10-02T12:51:46.728Z");
+    QVERIFY(exec(QStringLiteral("UPDATE memos SET updated_at='%1'").arg(original)));
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 20);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('memos') WHERE name='sync_id'")), 0);
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 20);
+    const QString identity = syncIdOf(QStringLiteral("memos"), id);
+    QVERIFY(!identity.isEmpty());
+    QCOMPARE(versionCount(QStringLiteral("memos"), identity), 5);
+    QVERIFY(queued(QStringLiteral("memos"), identity));
+    const qint64 time = QDateTime::fromString(original, Qt::ISODateWithMs).toMSecsSinceEpoch();
+    QCOMPARE(versionOf(QStringLiteral("memos"), identity, QStringLiteral("body")).time, time);
+    QCOMPARE(scalar(QStringLiteral("SELECT updated_at FROM memos WHERE id=%1").arg(id)).toString(), original);
+    QCOMPARE(scalar(QStringLiteral("SELECT body FROM memos WHERE id=%1").arg(id)).toString(), QStringLiteral("既有正文"));
+    QCOMPARE(triggerSql(), SyncSchema::canonicalTriggerSql());
+    QVERIFY(markEverythingSent());
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QCOMPARE(syncIdOf(QStringLiteral("memos"), id), identity);
+    QVERIFY(!queued(QStringLiteral("memos"), identity));
+    QCOMPARE(versionOf(QStringLiteral("memos"), identity, QStringLiteral("body")).time, time);
+}
+
+void SyncTests::memoNotificationsCoverContentAndCategoryDeletion()
+{
+    // 产品保证：远端内容生效或科目被删，提交后都会刷新备忘；重复应用和失败不会多发信号。
+    const int cat = CategoryManager::instance()->addCategory(QStringLiteral("通知科目"), QStringLiteral("#123456"));
+    const int id = MemoService::instance()->createMemo(QStringLiteral("通知"), QStringLiteral("正文"), cat);
+    QVERIFY(cat > 0 && id > 0);
+    QSignalSpy spy(MemoService::instance(), &MemoService::memosChanged);
+    const QString identity = syncIdOf(QStringLiteral("memos"), id);
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    SyncBatch batch; batch.device = remote;
+    SyncRecord record; record.table = QStringLiteral("memos"); record.syncId = identity;
+    record.fields.insert(QStringLiteral("body"), {QStringLiteral("远端正文"), {1900000000728, remote}, {}});
+    batch.records = {record};
+    const auto changed = SyncStore().applyRemote(batch);
+    QVERIFY(changed.ok && changed.changedTables.contains(QStringLiteral("memos")));
+    QCOMPARE(spy.count(), 0);
+    SyncNotifier::publish(changed);
+    QCOMPARE(spy.count(), 1);
+    SyncNotifier::publish(SyncStore().applyRemote(batch));
+    QCOMPARE(spy.count(), 1);
+    SyncStore::ApplyResult failed;
+    failed.changedTables.insert(QStringLiteral("memos"));
+    SyncNotifier::publish(failed);
+    QCOMPARE(spy.count(), 1);
+    batch.records = {remoteDeletion(QStringLiteral("categories"), syncIdOf(QStringLiteral("categories"), cat),
+                                    {1900000000828, remote})};
+    QCOMPARE(MemoService::instance()->getMemo(id).value(QStringLiteral("categoryId")).toInt(), cat);
+    const auto deleted = SyncStore().applyRemote(batch);
+    QVERIFY(deleted.ok && deleted.changedTables.contains(QStringLiteral("memos")));
+    QCOMPARE(MemoService::instance()->getMemo(id).value(QStringLiteral("categoryId")).toInt(), 0);
+    SyncNotifier::publish(deleted);
+    QCOMPARE(spy.count(), 2);
 }
 
 QTEST_MAIN(SyncTests)

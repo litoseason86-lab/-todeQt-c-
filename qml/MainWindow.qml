@@ -56,6 +56,8 @@ Item {
     property var statisticsServiceRef: null
     property var focusHistoryServiceRef: null
     property var countdownServiceRef: null
+    property var memoServiceRef: null
+    property var memoTextLayoutRef: null
     property var knowledgeGapServiceRef: null
     property var appSettingsRef: null
     property var focusTimerRef: null
@@ -205,6 +207,8 @@ Item {
             return 7;
         case "schedule":
             return 8;
+        case "memo":
+            return 10
         case "knowledgeGaps":
             return 9;
         case "today":
@@ -306,6 +310,12 @@ Item {
 
     // 当前待删除项的「撤销」回调。提前提交后要凭它收起那条撤销条（见 commitPendingDelete）。
     property var pendingDeleteUndoAction: null
+
+    function flushMemoEdits() {
+        if (memoView.saveNow()) return true
+        root.switchToView("memo")
+        return false
+    }
 
     function commitPendingDelete() {
         if (root.pendingDeleteTaskId <= 0 && root.pendingDeleteSessionId <= 0) {
@@ -1059,6 +1069,14 @@ Item {
                     onGapConvertedToTask: function (title) {
                         root.showToast(qsTr("已加到今天的任务：%1").arg(title))
                     }
+                }
+                MemoView {
+                    id: memoView
+                    objectName: "memoViewPage"
+                    pageActive: root.currentView === "memo"
+                    memoServiceRef: root.memoServiceRef
+                    categoryManagerRef: root.categoryManagerRef
+                    textLayoutRef: root.memoTextLayoutRef
                 }
             }
 

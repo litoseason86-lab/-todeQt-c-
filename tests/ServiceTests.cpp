@@ -4620,7 +4620,8 @@ void ServiceTests::migrationV17DropsLongGoalsAfterSnapshot()
     // 版本号变了就回来复核本用例。v18 复核过：v17 这一步照旧建快照，紧接着的 v18 迁移
     // 发现本轮已经建过快照就不再建，所以下面「新增快照恰好一份」仍然成立。
     // v19 复核过：v19 那一步只推版本号、不建快照，结论不变。
-    QCOMPARE(DatabaseManager::kCurrentSchemaVersion, 19);
+    // v20 复核：本轮 v17 已留过快照，新增备忘录复用该快照，仍只新增一份。
+    QCOMPARE(DatabaseManager::kCurrentSchemaVersion, 20);
 
     // 删之前留了一份快照，里面那条目标还在：用户真想找回，数据目录里有。
     QStringList newSnapshots = dir.entryList(snapshotPattern, QDir::Files);

@@ -38,14 +38,15 @@ Rectangle {
         "month": { text: "专注历史", marker: "月", iconName: "" },
         "stats": { text: "数据统计", marker: "数", iconName: "" },
         "countdown": { text: "目标倒计时", marker: "倒", iconName: "" },
-        "knowledgeGaps": { text: "知识缺口", marker: "补", iconName: "gap" }
+        "knowledgeGaps": { text: "知识缺口", marker: "补", iconName: "gap" },
+        "memo": { text: "备忘录", marker: "备", iconName: "" }
     })
 
     // 出厂顺序的兜底副本。正常路径读 settingsRef.sidebarOrder；
     // 离屏测试和预览场景常常只注入自己关心的那几个 ref，不能因此渲不出侧栏。
     readonly property var fallbackOrder: [
         "dashboard", "today", "todayFocus", "focus", "schedule", "week",
-        "month", "stats", "countdown", "knowledgeGaps"
+        "month", "stats", "countdown", "knowledgeGaps", "memo"
     ]
 
     // 实际渲染用的有序 id 列表。这里再过滤一次不认识的 id：

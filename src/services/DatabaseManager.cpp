@@ -16,6 +16,7 @@
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QStringList>
+#include <QMap>
 
 #include <iterator>
 
@@ -521,6 +522,20 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // 新增表前先拍快照，保存真正的升级前数据；表先于同步迁移建立，
+    // 阶段 2 加入同步清单后可复用原来的身份回填与触发器安装，不另写一套迁移。
+    if (version < 20 || !tableExists(QStringLiteral("memos"))) {
+        // 表已完整、只是版本号被调低时没有新结构改动，不占用快照保留名额。
+        if ((!tableExists(QStringLiteral("memos")) && !backupDatabaseBeforeMigration())
+            || !createMemoTable()) {
+            return false;
+        }
+    }
+    if (!memoSchemaIsValid(m_db)) {
+        qWarning() << "备忘录表结构不完整或不兼容";
+        return false;
+    }
+
     // v18 设备间同步。缺任何一部分（半迁移、外部改库、v5 整表重建带走了唯一索引）都重跑一遍，
     // 迁移本身可以重复执行，已经有的身份和版本保持不动。第二期加进同步清单的三张表也由这一步补齐：
     // v18 的库里它们还没有 sync_id，结构判为不完整，这一步就会给它们加列、回填并放进待发送队列。
@@ -537,6 +552,9 @@ bool DatabaseManager::createTables()
         version = 19;
     }
     if (!ensureSyncInfrastructure()) {
+        return false;
+    }
+    if (version < 20 && !migrateToVersion20()) {
         return false;
     }
 
@@ -572,7 +590,9 @@ bool DatabaseManager::createTables()
         // 知识缺口的每次查询都先按状态筛（待处理/已安排/已解决），再按到期日排；
         // 提示条的「今天到期 / 已逾期」统计也走同一条路径，所以按这两列建复合索引。
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_knowledge_gaps_status_due "
-                       "ON knowledge_gaps(status, due_date)")
+                       "ON knowledge_gaps(status, due_date)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_memos_category_order "
+                       "ON memos(category_id, sort_order, created_at)")
     };
 
     for (const QString& indexSql : indexes) {
@@ -2045,13 +2065,18 @@ bool DatabaseManager::migrateToVersion18()
                   "OR (f.column1 = 'color' AND r.color = (SELECT d.column3 FROM %1 d WHERE d.column1 = r.display_order))))")
                   .arg(defaults)
             : QStringLiteral("0");
+        // 阶段 1 已写下的备忘录首次加入同步时，内容版本取原来的更新时间。
+        // 直接取迁移此刻会让另一台显示“刚刚更新”，两台时间也会不一致；解析失败才退回迁移时间。
+        const QString initialClock = table.versionStamp.column.isEmpty() ? clock
+            : QStringLiteral("COALESCE(CAST(ROUND((julianday(r.%1) - 2440587.5) * 86400000) AS INTEGER), %2)")
+                  .arg(table.versionStamp.column, clock);
         const QString versions = QStringLiteral(
             "INSERT INTO sync_field_versions (tbl, sync_id, field, v_time, v_device, base_time, base_device, pending) "
             "SELECT '%1', r.sync_id, f.column1, CASE WHEN %2 THEN 0 ELSE %3 END, "
             "CASE WHEN %2 THEN '' ELSE %4 END, 0, '', 1 "
             "FROM %1 r, %5 f WHERE r.sync_id IS NOT NULL AND %6 "
             "ON CONFLICT(tbl, sync_id, field) DO NOTHING")
-            .arg(table.name, minimal, clock, device, SyncSchema::fieldValuesSql(table), published);
+            .arg(table.name, minimal, initialClock, device, SyncSchema::fieldValuesSql(table), published);
         if (!run(enqueue, "Failed to queue existing records for sync:")
             || !run(versions, "Failed to backfill sync field versions:")) {
             return false;
@@ -2091,6 +2116,98 @@ bool DatabaseManager::migrateToVersion19()
     }
     qInfo() << "Database migrated to version 19";
     return true;
+}
+
+bool DatabaseManager::createMemoTable()
+{
+    QSqlQuery query(m_db);
+    // 标题与正文都允许空串，供新建后直接编辑；是否丢弃空白草稿由编辑页决定。
+    return execSql(query, QStringLiteral(R"SQL(
+        CREATE TABLE IF NOT EXISTS memos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL DEFAULT '' CHECK(length(title) <= 60),
+            body TEXT NOT NULL DEFAULT '' CHECK(length(body) <= 10000),
+            category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+            sort_order INTEGER NOT NULL CHECK(sort_order >= 1),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    )SQL"), "创建备忘录表失败：");
+}
+
+bool DatabaseManager::migrateToVersion20()
+{
+    if (!m_db.transaction()) {
+        qWarning() << "开始数据库 v20 迁移失败：" << m_db.lastError().text();
+        return false;
+    }
+    // 建表、结构检查、同步基础设施全部成功后才标记版本，失败可在下次打开时继续补齐。
+    if (!setDatabaseVersion(20) || !m_db.commit()) {
+        m_db.rollback();
+        return false;
+    }
+    qInfo() << "数据库已升级到 v20";
+    return true;
+}
+
+bool DatabaseManager::memoForeignKeysAreValid(const QSqlDatabase& db)
+{
+    QSqlQuery query(db);
+    if (!query.exec(QStringLiteral("PRAGMA foreign_key_list(memos)")) || !query.next()) {
+        return false;
+    }
+    // 恰好一条单列外键；额外外键、复合外键或 CASCADE 都会改变删科目时保留正文的规则。
+    const bool valid = query.value(1).toInt() == 0
+        && query.value(2).toString() == QStringLiteral("categories")
+        && query.value(3).toString() == QStringLiteral("category_id")
+        && query.value(4).toString() == QStringLiteral("id")
+        && query.value(6).toString().compare(QStringLiteral("SET NULL"), Qt::CaseInsensitive) == 0;
+    return valid && !query.next();
+}
+
+bool DatabaseManager::memoSchemaIsValid(const QSqlDatabase& db)
+{
+    if (!hasGeneratedIntegerId(db, QStringLiteral("memos"))) {
+        return false;
+    }
+    const QMap<QString, QString> required = {
+        {QStringLiteral("id"), QStringLiteral("INTEGER")},
+        {QStringLiteral("title"), QStringLiteral("TEXT")},
+        {QStringLiteral("body"), QStringLiteral("TEXT")},
+        {QStringLiteral("category_id"), QStringLiteral("INTEGER")},
+        {QStringLiteral("sort_order"), QStringLiteral("INTEGER")},
+        {QStringLiteral("created_at"), QStringLiteral("TEXT")},
+        {QStringLiteral("updated_at"), QStringLiteral("TEXT")}
+    };
+    QSqlQuery query(db);
+    if (!query.exec(QStringLiteral("PRAGMA table_info(memos)"))) {
+        return false;
+    }
+    QStringList found;
+    while (query.next()) {
+        const QString column = query.value(1).toString();
+        if (!required.contains(column)) {
+            continue; // 后续同步迁移添加的列不属于业务结构契约。
+        }
+        const bool mustBeNotNull = column != QStringLiteral("id") && column != QStringLiteral("category_id");
+        if (query.value(2).toString().toUpper() != required.value(column)
+            || (query.value(3).toInt() != 0) != mustBeNotNull) {
+            return false;
+        }
+        found.append(column);
+    }
+    if (found.size() != required.size()) {
+        return false;
+    }
+    if (!query.exec(QStringLiteral("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'memos'"))
+        || !query.next()) {
+        return false;
+    }
+    const QString sql = normalizedCreateSql(query.value(0).toString());
+    return sql.contains(QStringLiteral("check(length(title)<=60)"))
+        && sql.contains(QStringLiteral("check(length(body)<=10000)"))
+        && sql.contains(QStringLiteral("check(sort_order>=1)"))
+        && memoForeignKeysAreValid(db);
 }
 
 bool DatabaseManager::createCountdownGoalsTable()

@@ -163,6 +163,7 @@ QString normalizedCreateSql(QString sql)
 bool validateRequiredTableStructure(const QSqlDatabase& database,
                                     bool requireScheduleTables,
                                     bool requireKnowledgeGapTable,
+                                    bool requireMemoTable,
                                     QString* reason)
 {
     struct TableContract {
@@ -332,6 +333,12 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
     // 恢复成功、启动正常，直到删掉一条任务时，关联它的知识缺口被无声地连带删除。
     if (requireKnowledgeGapTable && !DatabaseManager::knowledgeGapForeignKeysAreValid(database)) {
         *reason = QStringLiteral("备份知识缺口外键不完整");
+        return false;
+    }
+    // v20 才引入备忘录：旧备份恢复后建空表，新备份缺表或错约束必须拒绝，
+    // 不能把用户手写内容丢失伪装成一次成功恢复。完整契约与启动共用，避免两处漂移。
+    if (requireMemoTable && !DatabaseManager::memoSchemaIsValid(database)) {
+        *reason = QStringLiteral("备份 memos 表结构或外键不完整");
         return false;
     }
 
@@ -707,6 +714,7 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
                 validateRequiredTableStructure(database,
                                                pragmaVersion >= 13,
                                                pragmaVersion >= 14,
+                                               pragmaVersion >= 20,
                                                &reason);
             }
 

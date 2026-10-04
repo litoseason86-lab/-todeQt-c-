@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtTest
 import "../../qml"
+import "fixtures"
 
 // 全视图对比度门禁。
 //
@@ -262,18 +263,13 @@ TestCase {
         }
     }
 
-    QtObject {
-        id: categoryManager
-
-        signal categoriesChanged
-
-        function getCategories() {
-            return [];
-        }
-
-        function getActiveCategories() {
-            return [];
-        }
+    MemoCategoryMock { id: categoryManager }
+    MemoServiceMock {
+        id: memoService
+        records: [makeRecord(11, "数学进度", "第八讲做完", 1),
+                  makeRecord(12, "第二条记录", "积分练习", 1),
+                  makeRecord(21, "物理进度", "力学第一章", 2),
+                  makeRecord(31, "", "未分类的记录", 0)]
     }
 
     QtObject {
@@ -340,6 +336,7 @@ TestCase {
 
         width: testCase.width
         height: testCase.height
+        memoServiceRef: memoService
         focusHistoryServiceRef: focusHistoryService
         taskManagerRef: taskManager
         categoryManagerRef: categoryManager
@@ -516,11 +513,21 @@ TestCase {
         // 没有入口图标不代表不用体检，它同样是用户天天看的一整页文字。
         var views = ["dashboard", "today", "focus", "week", "month",
                      "stats", "countdown", "schedule", "knowledgeGaps",
-                     "todayFocus"]
+                     "todayFocus", "memo"]
         for (var i = 0; i < views.length; ++i) {
             mainWindow.currentView = views[i]
             mainWindow.pendingView = views[i]
             wait(200)
+            if (views[i] === "memo") {
+                // 产品保证：两套主题都扫描真正带胶囊、组头、行和编辑区的备忘录页，不能空扫。
+                var memoPage = findChild(mainWindow, "memoViewPage")
+                tryCompare(memoPage, "selectedId", 11, 3000)
+                verify(findChild(memoPage, "memoFilter1"))
+                verify(findChild(memoPage, "memoFilter0"))
+                verify(findChild(memoPage, "memoGroup1"))
+                verify(findChild(memoPage, "memoRow11"))
+                verify(findChild(memoPage, "memoTitleInput").text.length > 0)
+            }
             walk(mainWindow, tag, Theme.surface, 0)
         }
         // 统计页默认停在「今日」，复盘卡只在「本周」出现：必须真的切进周视图，

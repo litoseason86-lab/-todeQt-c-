@@ -129,8 +129,13 @@ public:
     struct LogEntry {
         qint64 id = 0;
         QDateTime loggedAt;
-        // edit 两台同时改了同一项；delete 删除优先；merge 两个同名科目合并；skipped 这条没能应用；file 文件读不懂。
+        // edit 两台同时改了同一项；delete 删除优先；merge 两个同名科目合并；skipped 这条没能应用；file 文件读不懂；
+        // removed 另一台删掉了一条备忘录，这里留着删除前的内容（不是冲突）。
         QString kind;
+        // 原始的表名和列名（memos、body……）。程序判断用这两个，不用下面给人看的名字：
+        // 显示名以后改个说法，判断就会悄悄失效。
+        QString table;
+        QString field;
         // 任务、科目、设置……；文件问题为空。
         QString tableLabel;
         // 那条记录叫什么（任务标题、科目名、设置名）；文件问题是文件名。

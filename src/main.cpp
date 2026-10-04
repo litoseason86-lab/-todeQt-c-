@@ -1,4 +1,5 @@
 #include <QCoreApplication>
+#include <QClipboard>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -17,6 +18,8 @@
 #include "services/CategoryManager.h"
 #include "services/CountdownService.h"
 #include "services/KnowledgeGapService.h"
+#include "services/MemoService.h"
+#include "models/PlainTextLayout.h"
 #include "services/ExportService.h"
 #include "services/FocusHistoryService.h"
 #include "services/FocusTimer.h"
@@ -41,7 +44,6 @@
 #if defined(Q_OS_MACOS)
 #include "services/SingleInstanceGuard.h"
 #include "mcp/bridge/McpAccessController.h"
-#include <QClipboard>
 #include "mcp/bridge/McpToolDispatcher.h"
 
 #include "platform/macos/MacGlobalHotkeyBackend.h"
@@ -286,27 +288,6 @@ int main(int argc, char *argv[])
                      &syncController, [&syncController](bool success, const QString&) {
         syncController.finishRestore(success);
     });
-#if defined(Q_OS_IOS)
-    // 只有 iPad 接前后台：回到前台立即同步一轮，进了后台立即写出攒下的改动（哪些状态算后台见 setApplicationState）。
-    // Mac 不接：切到别的应用很频繁，每次都立即写会拆出很多小文件，而 iPad 每读一个要约 1 秒。
-    QObject::connect(&app, &QGuiApplication::applicationStateChanged, &syncController,
-                     [&syncController](Qt::ApplicationState state) {
-        syncController.setApplicationState(state);
-    });
-#endif
-
-    // 退出顺序：计时器先落盘（它结束的记录要随这次写出），备份的后台任务收尾，同步把攒下的改动写出去，最后关库。
-    // 同一个信号的槽按连接先后调用，所以同步这一条必须连在 DatabaseManager::close 之前。
-    QObject::connect(&app, &QCoreApplication::aboutToQuit,
-                     FocusTimer::instance(), &FocusTimer::prepareForShutdown);
-    QObject::connect(&app, &QCoreApplication::aboutToQuit,
-                     BackupService::instance(), &BackupService::prepareForShutdown);
-    QObject::connect(&app, &QCoreApplication::aboutToQuit, &syncController, [&syncController] {
-        syncController.shutdown(3000);
-    });
-    QObject::connect(&app, &QCoreApplication::aboutToQuit,
-                     DatabaseManager::instance(), &DatabaseManager::close);
-
     // 关闭主窗口时隐藏到菜单栏而不退出：菜单栏计时器让应用在无可见窗口时仍需存活。
     app.setQuitOnLastWindowClosed(false);
 
@@ -370,7 +351,42 @@ int main(int argc, char *argv[])
     QObject::connect(KnowledgeGapService::instance(), &KnowledgeGapService::tasksAffected,
                      TaskManager::instance(), &TaskManager::tasksChanged);
 
+    PlainTextLayout memoTextLayout;
     QQmlApplicationEngine engine;
+    // 界面草稿先落盘，再收尾同步并关库；系统退出没有机会再等待自动保存定时器。
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &engine, [&engine] {
+        if (!engine.rootObjects().isEmpty())
+            QMetaObject::invokeMethod(engine.rootObjects().first(), "flushMemoEdits", Qt::DirectConnection);
+    });
+    // 剪贴板属于装配层；连接放在平台条件之外，iPad 和 Mac 使用同一条复制路径。
+    QObject::connect(&syncController, &SyncController::copyRequested, &app, [](const QString& text) {
+        QGuiApplication::clipboard()->setText(text);
+    });
+
+    // 退出顺序：计时器先落盘（它结束的记录要随这次写出），备份的后台任务收尾，同步把攒下的改动写出去，最后关库。
+    // 同一个信号的槽按连接先后调用，所以同步这一条必须连在 DatabaseManager::close 之前。
+    QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                     FocusTimer::instance(), &FocusTimer::prepareForShutdown);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                     BackupService::instance(), &BackupService::prepareForShutdown);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &syncController, [&syncController] {
+        syncController.shutdown(3000);
+    });
+    QObject::connect(&app, &QCoreApplication::aboutToQuit,
+                     DatabaseManager::instance(), &DatabaseManager::close);
+
+#if defined(Q_OS_IOS)
+    // 只有 iPad 接前后台：回到前台立即同步一轮，进了后台立即写出攒下的改动（哪些状态算后台见 setApplicationState）。
+    // Mac 不接：切到别的应用很频繁，每次都立即写会拆出很多小文件，而 iPad 每读一个要约 1 秒。
+    QObject::connect(&app, &QGuiApplication::applicationStateChanged, &syncController,
+                     [&syncController, &engine](Qt::ApplicationState state) {
+        // 先保存界面草稿，再请求后台写同步文件，避免同步线程读队列时漏掉最后的输入。
+        if (state != Qt::ApplicationActive && !engine.rootObjects().isEmpty())
+            QMetaObject::invokeMethod(engine.rootObjects().first(), "flushMemoEdits", Qt::DirectConnection);
+        syncController.setApplicationState(state);
+    });
+#endif
+
     // QML 通过单例上下文对象访问服务，视图层保持声明式和轻量。
     engine.rootContext()->setContextProperty(QStringLiteral("categoryManager"), CategoryManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("CategoryManager"), CategoryManager::instance());
@@ -385,6 +401,8 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("statisticsService"), StatisticsService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("memoService"), MemoService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("memoTextLayout"), &memoTextLayout);
     engine.rootContext()->setContextProperty(QStringLiteral("knowledgeGapService"), KnowledgeGapService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("routineManager"), RoutineManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("scheduleService"), ScheduleService::instance());
