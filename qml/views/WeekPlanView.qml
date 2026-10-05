@@ -1086,13 +1086,12 @@ Item {
                                         root.deleteRequested(id, title)
                                     }
 
-                                    renameSubmitter: function(id, newTitle) {
-                                        var latest = root.taskManagerRef.getTask(id)
-                                        if (!latest || !latest.id) return false
-                                        var originalCategoryId = Number(latest.categoryId || -1)
-                                        var originalDate = root.isoDate(latest.date)
-                                        var succeeded = Boolean(root.taskManagerRef.updateTask(
-                                            id, newTitle, originalCategoryId, originalDate))
+                                    // 行内改名只改标题：科目、日期不经手，也就不会把同步刚写进来的值盖回去，
+                                    // 只有旧科目文本、没有科目编号的老任务也不会因为改名丢掉科目。
+                                    renameSubmitter: function (id, newTitle) {
+                                        var succeeded = Boolean(root.taskManagerRef.updateTaskChanges(id, {
+                                            title: newTitle
+                                        }))
                                         if (!succeeded) {
                                             root.loadError = "任务更新失败，请重试"
                                         }
@@ -1193,11 +1192,9 @@ Item {
         parent: root
         categoryManagerRef: root.categoryManagerRef
 
-        // completionNote 原样转交（未完成任务是 undefined = 保持不变），不能用 String() 包一层。
-        taskSubmitter: function (taskId, title, categoryId, isoDate, estimatedMinutes, notes, completionNote) {
-            var succeeded = Boolean(root.taskManagerRef.updateTask(
-                taskId, title, categoryId, isoDate, Number(estimatedMinutes), String(notes || ""),
-                completionNote))
+        // changes 只含用户改过的字段，原样交给字段级接口；没改的字段不写回，不会盖掉同步刚写进来的值。
+        taskSubmitter: function (taskId, changes) {
+            var succeeded = Boolean(root.taskManagerRef.updateTaskChanges(taskId, changes))
             if (!succeeded) {
                 root.loadError = "任务更新失败，请重试"
             }

@@ -41,7 +41,7 @@ FocusScope {
     // 还没写过备忘的科目：「新建分类」从这里挑。
     readonly property var unusedCategoryOptions: root.categoryOptions(false)
     property bool saving: false
-    property bool reading: false
+    // 最近一次读取失败的原因；读到了就清空。页面上的出错提示据此决定要不要给「重试」。
     property string readFailure: ""
     property bool touchUi: Qt.platform.os === "ios"
     property var inputMethodRef: Qt.inputMethod
@@ -202,17 +202,23 @@ FocusScope {
         // 「今天」「昨天」按现在算，不沿用离开那会儿的时间。
         root.displayNow = new Date();
         var previousFailure = root.readFailure;
-        root.readFailure = "";
-        root.reading = true;
-        var values = root.memoServiceRef.listMemos(-1);
-        // 科目和备忘录算同一次读取，任何一个失败都保留上一次读到的内容。科目读失败时服务返回空列表，
-        // 不能拿它当「科目都被删了」：备忘会全按未分类分组，草稿也会被改成未分类（见下面对草稿的处理）。
-        var categoryValues = [];
-        if (root.readFailure.length === 0 && root.categoryManagerRef && typeof root.categoryManagerRef.getAllCategories === "function")
-            categoryValues = root.categoryManagerRef.getAllCategories();
-        root.reading = false;
-        if (root.readFailure.length > 0)
+        // 成败直接看返回值（readMemos / readAllCategories 都不发共享的失败信号），不靠「正在读取」的标志
+        // 去认领别处发来的失败。科目和备忘录算同一次读取，任何一个失败都保留上一次读到的内容：
+        // 科目没读出来不能当成「科目都被删了」，否则备忘会全按未分类分组，草稿也会被改成未分类（见下面对草稿的处理）。
+        var memoRead = root.memoServiceRef.readMemos();
+        var categoryRead = memoRead.ok && root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function" ? root.categoryManagerRef.readAllCategories() : {
+            ok: true,
+            categories: []
+        };
+        if (!memoRead.ok || !categoryRead.ok) {
+            root.readFailure = String(memoRead.ok ? categoryRead.error : memoRead.error);
+            if (root.pageActive)
+                root.errorMessage = root.readFailure;
             return;
+        }
+        root.readFailure = "";
+        var values = memoRead.memos;
+        var categoryValues = categoryRead.categories;
         // 上一次读取失败的提示，这次读到了就收起。草稿和改了还没存的备忘不会重新装进编辑框（装载时才清提示），
         // 不在这里清，提示会一直留到下一次保存。
         if (previousFailure.length > 0 && root.errorMessage === previousFailure)
@@ -414,7 +420,8 @@ FocusScope {
     }
     // 改一条备忘的分类（列表里右键、iPad 长按后松手、键盘 Shift+F10）：先选中它（切走前照常保存当前这条），
     // 再在指针处弹出已有的分类。只能在已有的分类之间换，新分类从右上角「新建」建。
-    function requestMoveCategory(id, sceneX, sceneY) {
+    // byKeyboard：键盘打开时弹层先不让悬停改高亮，见 ChoicePopup.openedByKeyboard。
+    function requestMoveCategory(id, sceneX, sceneY, byKeyboard) {
         root.selectMemo(id);
         if (root.selectedId !== id || root.drafting)
             return;
@@ -422,6 +429,7 @@ FocusScope {
         moveCategoryPopup.x = p.x;
         moveCategoryPopup.y = p.y;
         moveCategoryPopup.targetId = id;
+        moveCategoryPopup.openedByKeyboard = byKeyboard === true;
         moveCategoryPopup.open();
     }
     // 键盘入口：在选中行的左下方弹出。
@@ -433,7 +441,7 @@ FocusScope {
             if (!item)
                 return;
             var p = item.mapToItem(null, Theme.space16, item.height);
-            root.requestMoveCategory(root.selectedId, p.x, p.y);
+            root.requestMoveCategory(root.selectedId, p.x, p.y, true);
             return;
         }
     }
@@ -617,8 +625,6 @@ FocusScope {
                 root.reload();
         }
         function onOperationFailed(message) {
-            if (root.reading)
-                root.readFailure = message;
             if (root.pageActive || root.saving)
                 root.errorMessage = message;
         }
@@ -629,14 +635,6 @@ FocusScope {
         function onCategoriesChanged() {
             if (root.pageActive)
                 root.reload();
-        }
-        // 只认 reload() 读科目时的失败。科目管理等别处的科目操作失败也走这个信号，和这一页无关。
-        function onOperationFailed(message) {
-            if (!root.reading)
-                return;
-            root.readFailure = message;
-            if (root.pageActive)
-                root.errorMessage = message;
         }
     }
     Connections {
@@ -1504,63 +1502,6 @@ FocusScope {
                     primary: true
                     onClicked: root.confirmDelete()
                 }
-            }
-        }
-    }
-    // 出错提示条，和倒计时页的错误横幅同一套：危险色描边加「!」，不只靠红色表达出错；说明文字用正文色，读得清楚。
-    // 两处用到：编辑卡里一条（memoErrorBanner），编辑卡不在时页面上一条（memoPageErrorBanner）。
-    component ErrorBanner: Rectangle {
-        id: banner
-        property string message: ""
-        // 里面那行说明文字的 objectName。两条提示条各用各的名字，测试才分得清找到的是哪一条。
-        property string messageName: ""
-        // 读取失败时为真，多一个「重试」。保存失败不放：再改一下内容就会重新保存。
-        property bool retryable: false
-        property bool touchUi: false
-        signal retryRequested
-        implicitHeight: bannerRow.implicitHeight + Theme.space8 * 2
-        radius: Theme.radiusMd
-        // 底色和倒计时页的错误横幅一样用 surfaceRaised：危险色的「!」压在沉底色上日间只有 4.44:1，不达正文 4.5:1。
-        color: Theme.surfaceRaised
-        border.color: Theme.dangerBorder
-        border.width: 1
-        RowLayout {
-            id: bannerRow
-            anchors.fill: parent
-            anchors.leftMargin: Theme.space12
-            anchors.rightMargin: Theme.space12
-            anchors.topMargin: Theme.space8
-            anchors.bottomMargin: Theme.space8
-            spacing: Theme.space8
-            // 「!」对齐说明文字的第一行；这一块整体再和「重试」按钮上下居中。
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: Theme.space8
-                Text {
-                    Layout.alignment: Qt.AlignTop
-                    text: "!"
-                    textFormat: Text.PlainText
-                    color: Theme.danger
-                    font.pixelSize: Theme.fontMd
-                    font.weight: Font.Bold
-                    Accessible.ignored: true
-                }
-                Text {
-                    objectName: banner.messageName
-                    Layout.fillWidth: true
-                    text: banner.message
-                    textFormat: Text.PlainText
-                    wrapMode: Text.Wrap
-                    color: Theme.ink
-                    font.pixelSize: Theme.fontSm
-                }
-            }
-            PageActionButton {
-                objectName: banner.objectName + "Retry"
-                visible: banner.retryable
-                implicitHeight: banner.touchUi ? 44 : Theme.controlHeightMd
-                text: qsTr("重试")
-                onClicked: banner.retryRequested()
             }
         }
     }

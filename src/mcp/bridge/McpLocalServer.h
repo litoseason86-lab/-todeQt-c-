@@ -16,6 +16,10 @@ public:
     void close();
     void rejectQueued(const QJsonObject& error);
     int connectionCount() const;
+    // 握手期限：连上后多久不发握手帧就断开。只供测试缩短等待，生产沿用 kHandshakeTimeoutMs；
+    // 只影响之后新来的连接。
+    void setHandshakeTimeoutMs(int milliseconds) { m_handshakeTimeoutMs = qMax(1, milliseconds); }
+    int handshakeTimeoutMs() const { return m_handshakeTimeoutMs; }
 signals:
     void connectionsChanged();
 private:
@@ -29,4 +33,5 @@ private:
     QList<Peer*> m_peers;
     // 正在等待握手、只为回一句“连接已满”的连接数；不占用 m_peers 的名额。
     int m_rejecting = 0;
+    int m_handshakeTimeoutMs = McpContracts::kHandshakeTimeoutMs;
 };

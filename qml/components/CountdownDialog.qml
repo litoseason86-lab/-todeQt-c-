@@ -46,6 +46,9 @@ Popup {
     property var logicalNowProvider: null
     property int editGoalId: -1
     readonly property bool isEditMode: editGoalId >= 0
+    // 编辑时打开那一刻的名称和日期。保存时和它比，只交出改过的字段：弹窗开着时另一台改了另一项，
+    // 同步写进来的新值不会被这里打开时的旧值盖掉。
+    property var openedValues: ({})
 
     signal goalSaved()
 
@@ -81,6 +84,10 @@ Popup {
         headingLabel.text = "编辑目标";
         nameField.text = String(name || "");
         dateField.text = dateToInput(targetDate);
+        openedValues = {
+            name: nameField.text,
+            date: dateField.text
+        };
         errorLabel.text = "";
         open();
     }
@@ -121,9 +128,19 @@ Popup {
             return;
         }
 
-        var success = root.isEditMode
-                ? root.countdownServiceRef.updateGoal(root.editGoalId, name, targetDate)
-                : root.countdownServiceRef.addGoal(name, targetDate);
+        var success;
+        if (root.isEditMode) {
+            var changes = {};
+            if (nameField.text !== root.openedValues.name)
+                changes.name = name;
+            if (dateField.text !== root.openedValues.date)
+                changes.targetDate = dateField.text.trim();
+            // 什么都没改：不写库，照常收起。
+            success = Object.keys(changes).length === 0
+                    || root.countdownServiceRef.updateGoalChanges(root.editGoalId, changes);
+        } else {
+            success = root.countdownServiceRef.addGoal(name, targetDate);
+        }
         if (!success) {
             errorLabel.text = "保存失败，请检查输入后重试";
             return;

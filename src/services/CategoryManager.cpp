@@ -332,6 +332,19 @@ bool CategoryManager::isValidColor(const QString& color) const
     return hexColorPattern.match(color.trimmed()).hasMatch();
 }
 
+QVariantMap CategoryManager::readAllCategories() const
+{
+    const ServiceReadResult<QVariantList> result = readCategories();
+    if (result.ok()) {
+        return {{QStringLiteral("ok"), true}, {QStringLiteral("categories"), result.value}};
+    }
+    const QString error = result.error == ServiceReadError::LimitExceeded
+        ? QStringLiteral("科目太多，没能全部读出")
+        : QStringLiteral("科目加载失败，请稍后重试");
+    return {{QStringLiteral("ok"), false}, {QStringLiteral("categories"), QVariantList()},
+            {QStringLiteral("error"), error}};
+}
+
 ServiceReadResult<QVariantList> CategoryManager::readCategories(int limit) const
 {
     if (limit < 1 || limit > 10000) return {{}, ServiceReadError::InvalidArgument};

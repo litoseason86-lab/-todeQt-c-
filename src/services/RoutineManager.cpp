@@ -4,6 +4,7 @@
 #include "CategoryManager.h"
 #include "DatabaseManager.h"
 #include "LogicalDay.h"
+#include "QmlValues.h"
 #include "RoutineRules.h"
 #include "SyncSchema.h"
 #include "TaskManager.h"
@@ -15,6 +16,8 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QVariantMap>
+
+#include <limits>
 
 namespace {
 struct DueRoutine {
@@ -278,6 +281,58 @@ bool RoutineManager::addRoutine(const QString& title, int categoryId, int weekda
 
     emit routinesChanged();
     return true;
+}
+
+bool RoutineManager::updateRoutineChanges(int id, const QVariantMap& changes)
+{
+    const QString titleKey = QStringLiteral("title");
+    const QString categoryKey = QStringLiteral("categoryId");
+    for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
+        if (it.key() != titleKey && it.key() != categoryKey) {
+            qWarning() << "Failed to update routine: unknown field" << it.key();
+            return false;
+        }
+    }
+    if (changes.contains(titleKey) && changes.value(titleKey).typeId() != QMetaType::QString) {
+        qWarning() << "Failed to update routine: title must be text";
+        return false;
+    }
+    int categoryId = 0;
+    if (changes.contains(categoryKey)
+        && !QmlValues::integer(changes.value(categoryKey), -1, std::numeric_limits<int>::max(), &categoryId)) {
+        qWarning() << "Failed to update routine: invalid category id";
+        return false;
+    }
+    if (id <= 0) {
+        qWarning() << "Failed to update routine: invalid id" << id;
+        return false;
+    }
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to update routine: database is not open";
+        return false;
+    }
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("SELECT title, category_id FROM routines WHERE id = :id"));
+    query.bindValue(QStringLiteral(":id"), id);
+    if (!query.exec()) {
+        qWarning() << "Failed to read routine:" << query.lastError().text();
+        return false;
+    }
+    if (!query.next()) {
+        qWarning() << "Failed to update routine: routine not found" << id;
+        return false;
+    }
+    const QString currentTitle = query.value(0).toString();
+    const int currentCategoryId = query.value(1).isNull() ? 0 : query.value(1).toInt();
+    query.finish();
+    if (changes.isEmpty()) {
+        return true;
+    }
+    // 没交的字段用库里现在的值再写一遍：值没变，同步就不会把它记成本机修改，也就不会盖掉另一台。
+    // 数据库只在主线程读写，读和写之间同步插不进来。
+    return updateRoutine(id, changes.contains(titleKey) ? changes.value(titleKey).toString() : currentTitle,
+                         changes.contains(categoryKey) ? categoryId : currentCategoryId);
 }
 
 bool RoutineManager::updateRoutine(int id, const QString& title, int categoryId)

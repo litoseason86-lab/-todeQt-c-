@@ -47,6 +47,9 @@ Popup {
     // 编辑复用顶部表单：0 表示新增模式，避免复制一套标题和科目输入控件后状态漂移。
     property int editingRoutineId: -1
     readonly property bool editingRoutine: editingRoutineId > 0
+    // 开始编辑那一刻的标题和科目。保存时和它比，只交出改过的字段：编辑开着时另一台改了另一项，
+    // 同步写进来的新值不会被这里的旧值盖掉。
+    property var editingOpenedValues: ({})
 
     // 重复日不在这个表单里编辑：新增一律按「每天」落地，之后在列表行的重复药丸里改。
     // 星期的位掩码与文案口径统一在 RoutineWeekdays.js（对应 C++ 的 RoutineRules.h）。
@@ -146,15 +149,20 @@ Popup {
             root.routines = []
         }
 
-        var categories = []
-        if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
-            categories = root.categoryManagerRef.getAllCategories()
+        // 读科目看返回值里的成败：读失败不等于「科目都没了」，保留上一次的下拉（编辑中选中的科目也就还在），报出原因。
+        var read = root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function" ? root.categoryManagerRef.readAllCategories() : {
+            ok: true,
+            categories: []
         }
-        root.categoryOptions = [{
-            id: -1,
-            name: "不设置科目",
-            color: ""
-        }].concat(categories)
+        if (read.ok) {
+            root.categoryOptions = [{
+                id: -1,
+                name: "不设置科目",
+                color: ""
+            }].concat(read.categories)
+        } else {
+            root.errorText = String(read.error || "科目加载失败")
+        }
 
         root.selectCategory(previousCategoryId)
     }
@@ -194,6 +202,10 @@ Popup {
         root.editingRoutineId = routineId
         routineTitleField.text = String(routine.title || "")
         root.selectCategory(routine.categoryId)
+        root.editingOpenedValues = {
+            title: routineTitleField.text,
+            categoryId: root.selectedCategoryId()
+        }
         root.errorText = ""
         routineTitleField.forceActiveFocus()
     }
@@ -208,7 +220,7 @@ Popup {
     function submit() {
         var isEditing = root.editingRoutine
         var operationAvailable = root.routineManagerRef
-                && (isEditing ? root.routineManagerRef.updateRoutine : root.routineManagerRef.addRoutine)
+                && (isEditing ? root.routineManagerRef.updateRoutineChanges : root.routineManagerRef.addRoutine)
         if (!operationAvailable) {
             root.errorText = isEditing ? "每日例行编辑服务不可用" : "每日例行服务不可用"
             routineTitleField.forceActiveFocus()
@@ -224,10 +236,19 @@ Popup {
 
         // 新增不带重复日：服务层默认按「每天」落地，之后在列表行的重复药丸里改。
         // 改标题/科目也不碰重复日——两者在服务层就是两条独立的写入。
-        var succeeded = isEditing
-                ? root.routineManagerRef.updateRoutine(root.editingRoutineId, title,
-                                                       root.selectedCategoryId())
-                : root.routineManagerRef.addRoutine(title, root.selectedCategoryId())
+        var succeeded
+        if (isEditing) {
+            var changes = {}
+            if (routineTitleField.text !== root.editingOpenedValues.title)
+                changes.title = title
+            if (root.selectedCategoryId() !== root.editingOpenedValues.categoryId)
+                changes.categoryId = root.selectedCategoryId()
+            // 什么都没改：不写库，照常退出编辑。
+            succeeded = Object.keys(changes).length === 0
+                    || root.routineManagerRef.updateRoutineChanges(root.editingRoutineId, changes)
+        } else {
+            succeeded = root.routineManagerRef.addRoutine(title, root.selectedCategoryId())
+        }
         if (succeeded) {
             routineTitleField.text = ""
             root.editingRoutineId = -1

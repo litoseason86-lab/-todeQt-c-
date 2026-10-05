@@ -28,6 +28,16 @@ Popup {
     readonly property color litIdle: Qt.rgba(litColor.r, litColor.g, litColor.b, 0)
     // 这次选中的项，弹层完全关上后随 finished 发出。
     property var pickedOption: null
+    // 用键盘打开（Shift+F10、菜单键）时由宿主在 open() 之前设为真，每次打开后复位。
+    // 弹层出现在一动不动的指针底下时，系统也会补发一次悬停；那不是用户在指，不能让它把高亮
+    // 从当前项抢走——键盘用户接着按回车，选中的会是指针底下那一项。所以这时先不让悬停改高亮，
+    // 等指针真的动了再跟着走。用鼠标打开的弹层就在指针处展开，悬停照常立刻生效。
+    property bool openedByKeyboard: false
+    // 这一次打开里，悬停是否已经跟着指针走（见 openedByKeyboard）。
+    property bool hoverFollows: true
+    // 键盘打开后第一次看到指针的位置（场景坐标）。指针离开这里才算真的动了。
+    property bool pointerSeen: false
+    property point pointerOrigin: Qt.point(0, 0)
 
     // 选中一项后马上发出：换科目这类只改数值的选择在这里生效。
     signal picked(var option)
@@ -35,6 +45,24 @@ Popup {
     // 选完要接着打开另一层的（比如「新建分类…」接着挑科目），放在这里做：
     // 等这一层淡出完再打开下一层，两层不会叠在同一个位置一起动。
     signal finished(var option)
+
+    // 键盘打开后的指针跟踪：第一次只记下位置；之后位置变了才让悬停接管，并把高亮交给指针底下那一行
+    // （指针可能一直在同一行里挪动，那一行的 hovered 不会再变，得在这里补一次）。
+    function trackPointer(scenePosition, listPosition) {
+        if (popup.hoverFollows)
+            return;
+        if (!popup.pointerSeen) {
+            popup.pointerSeen = true;
+            popup.pointerOrigin = scenePosition;
+            return;
+        }
+        if (Math.abs(scenePosition.x - popup.pointerOrigin.x) < 1 && Math.abs(scenePosition.y - popup.pointerOrigin.y) < 1)
+            return;
+        popup.hoverFollows = true;
+        var index = optionList.indexAt(listPosition.x + optionList.contentX, listPosition.y + optionList.contentY);
+        if (index >= 0)
+            optionList.currentIndex = index;
+    }
 
     function choose(index) {
         var option = popup.options[index];
@@ -56,6 +84,9 @@ Popup {
     // 打开前就停到当前项：淡入的那一下已经看得到它亮着，方向键也从它开始走。
     onAboutToShow: {
         popup.pickedOption = null;
+        popup.hoverFollows = !popup.openedByKeyboard;
+        popup.openedByKeyboard = false;
+        popup.pointerSeen = false;
         var index = popup.options.findIndex(function (option) {
             return option.id === popup.currentId;
         });
@@ -130,6 +161,11 @@ Popup {
         Keys.onReturnPressed: popup.choose(optionList.currentIndex)
         Keys.onEnterPressed: popup.choose(optionList.currentIndex)
         Keys.onSpacePressed: popup.choose(optionList.currentIndex)
+        // 键盘打开时跟踪指针（见 openedByKeyboard）。HoverHandler 不拦事件，各行照常收到悬停。
+        HoverHandler {
+            enabled: !popup.touchUi
+            onPointChanged: popup.trackPointer(point.scenePosition, point.position)
+        }
         ScrollBar.vertical: PageScrollBar {}
         delegate: ItemDelegate {
             id: option
@@ -153,8 +189,9 @@ Popup {
             hoverEnabled: !popup.touchUi
             Accessible.name: option.modelData.name
             // 鼠标移到哪行，哪行就成为当前行：亮起的只有一行，键盘接着从这里走。
+            // 键盘打开后指针还没动过时不算（见 popup.openedByKeyboard）。
             onHoveredChanged: {
-                if (option.hovered)
+                if (option.hovered && popup.hoverFollows)
                     optionList.currentIndex = option.index;
             }
             onClicked: popup.choose(option.index)

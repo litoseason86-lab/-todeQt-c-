@@ -1133,6 +1133,37 @@ TestCase {
             return memoList.activeFocus;
         }, 3000, "Esc 后焦点也回到列表");
     }
+    // 产品保证：键盘（Shift+F10）打开改分类时停在当前分类；指针一动不动地压在弹层上，系统补发的悬停
+    // 不会把高亮抢走（否则接着按回车选中的是指针底下那一项）。指针真的移动以后，高亮才跟着指针。
+    // 抓住的错误实现：悬停一来就改当前行——全量测试在机器忙时偶发失败就是它（指针恰好停在弹层出现的位置）。
+    function test_keyboardOpenedPopupIgnoresParkedPointer() {
+        var popup = child("memoMovePopup");
+        view.selectMemo(21);
+        var row = child("memoRow21");
+        // 弹层在选中行左下方展开（见 moveSelectedFromKeyboard）；指针先停在它第一项将要出现的地方。
+        var corner = row.mapToItem(view, Theme.space16, row.height);
+        var parked = Qt.point(corner.x + 40, corner.y + 20);
+        mouseMove(view, parked.x, parked.y);
+        child("memoList").forceActiveFocus(Qt.TabFocusReason);
+        keyClick(Qt.Key_F10, Qt.ShiftModifier);
+        tryVerify(function () {
+            return popup.opened;
+        }, 3000);
+        verify(waitForItemPolished(popup.contentItem));
+        var first = findChild(popup.contentItem, "memoMoveOption1");
+        verify(first !== null && first.contains(first.mapFromItem(view, parked.x, parked.y)), "前置：指针压在第一项上");
+        compare(popup.options[0].id, 1, "前置：第一项不是当前分类");
+        // 等系统补发的悬停送到（它跟着画面更新走）。
+        wait(300);
+        compare(popup.options[popup.list.currentIndex].id, 2, "高亮停在当前分类");
+        mouseMove(view, parked.x + 30, parked.y + 2);
+        tryCompare(popup.list, "currentIndex", 0, 3000, "指针动了，高亮跟着指针");
+        keyClick(Qt.Key_Escape);
+        tryVerify(function () {
+            return !popup.visible;
+        }, 3000);
+        compare(view.editorCategoryId, 2, "Esc 不改分类");
+    }
     // 产品保证：改分类只能在已有的分类（写过备忘的科目）和「未分类」之间选，没写过备忘的科目不出现，
     // 也没有新建的入口（新分类只从右上角「新建」建）；当前分类带对勾。编辑区只显示分类，点它什么都不弹。
     // 抓住的错误实现：把全部科目都列出来，或者在这里放「新建分类…」；编辑区的分类还能点开下拉来改。

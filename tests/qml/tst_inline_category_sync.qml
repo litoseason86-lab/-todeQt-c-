@@ -28,6 +28,7 @@ TestCase {
         property var rows: []
         property int nextId: 30
 
+        function readAllCategories() { return { ok: true, categories: getAllCategories() } }
         function getAllCategories() { return rows }
         function addCategory(name, color) {
             var id = nextId

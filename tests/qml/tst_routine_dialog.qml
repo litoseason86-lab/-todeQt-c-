@@ -15,6 +15,7 @@ TestCase {
     property int addCalls: 0
     property int lastCategoryId: -999
     property int updateCalls: 0
+    property var lastChanges: null
     property int updatedRoutineId: -1
     property string updatedTitle: ""
     property int updatedCategoryId: -999
@@ -72,13 +73,17 @@ TestCase {
             return true
         }
 
-        function updateRoutine(id, title, categoryId, weekdays) {
+        // 编辑只交改过的字段：记下改动表本身，再按服务层的口径把没交的字段原样留着。
+        function updateRoutineChanges(id, changes) {
             testCase.updateCalls += 1
             testCase.updatedRoutineId = id
-            testCase.updatedTitle = title
-            testCase.updatedCategoryId = categoryId
+            testCase.lastChanges = changes
+            if (changes.title !== undefined)
+                testCase.updatedTitle = changes.title
+            if (changes.categoryId !== undefined)
+                testCase.updatedCategoryId = changes.categoryId
             // 改标题/科目不该带重复日过来；记下来好断言它确实是 undefined。
-            testCase.updatedWeekdays = weekdays
+            testCase.updatedWeekdays = changes.weekdays
             if (!testCase.updateResult) {
                 return false
             }
@@ -87,9 +92,10 @@ TestCase {
                 if (item.id !== id) {
                     return item
                 }
+                var categoryId = changes.categoryId === undefined ? item.categoryId : changes.categoryId
                 return {
                     id: item.id,
-                    title: title,
+                    title: changes.title === undefined ? item.title : changes.title,
                     categoryId: categoryId,
                     categoryName: categoryId === 7 ? "数学" : "",
                     categoryColor: categoryId === 7 ? "#d4a574" : "",
@@ -135,6 +141,12 @@ TestCase {
         signal operationFailed(string message)
         property bool failLoad: false
 
+        // 界面读科目走这里：成败放在返回值里，和真实服务一样不发失败信号。
+        function readAllCategories() {
+            if (failLoad)
+                return { ok: false, categories: [], error: "科目数据库故障" }
+            return { ok: true, categories: getAllCategories() }
+        }
         function getAllCategories() {
             if (failLoad) {
                 operationFailed("科目数据库故障")
@@ -157,6 +169,7 @@ TestCase {
         testCase.addCalls = 0
         testCase.lastCategoryId = -999
         testCase.updateCalls = 0
+        testCase.lastChanges = null
         testCase.updatedRoutineId = -1
         testCase.updatedTitle = ""
         testCase.updatedCategoryId = -999
@@ -350,6 +363,41 @@ TestCase {
         compare(testCase.added[0].categoryId, 7)
         tryCompare(dialog, "editingRoutineId", -1)
         compare(input.text, "")
+        dialog.close()
+    }
+
+    // 产品保证：编辑例行只交出改过的字段，没改就不写库。编辑开着时另一台改了另一项，
+    // 这边保存不会用打开时的旧值把它盖掉。
+    // 抓住的错误实现：标题、科目一起交回，或者没改也写一次。
+    function test_editSendsOnlyChangedFields() {
+        testCase.added = [{
+            id: 51,
+            title: "背单词",
+            categoryId: -1,
+            categoryName: "",
+            categoryColor: "",
+            active: true,
+            displayOrder: 1
+        }]
+        dialog.open()
+        tryCompare(dialog, "opened", true, 3000)
+        var categoryCombo = findChild(dialog, "routineCategoryCombo")
+        verify(categoryCombo !== null)
+
+        dialog.beginEditing(dialog.routines[0])
+        tryCompare(dialog, "editingRoutineId", 51)
+        categoryCombo.currentIndex = 1
+        dialog.submit()
+        compare(testCase.updateCalls, 1)
+        compare(Object.keys(testCase.lastChanges).join(","), "categoryId", "只改了科目，标题没动不交")
+        compare(testCase.lastChanges.categoryId, 7)
+        tryCompare(dialog, "editingRoutineId", -1)
+
+        dialog.beginEditing(dialog.routines[0])
+        tryCompare(dialog, "editingRoutineId", 51)
+        dialog.submit()
+        compare(testCase.updateCalls, 1, "什么都没改，不写库")
+        tryCompare(dialog, "editingRoutineId", -1, 3000, "照常退出编辑")
         dialog.close()
     }
 

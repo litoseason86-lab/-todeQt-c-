@@ -529,6 +529,23 @@ TestCase {
                 verify(findChild(memoPage, "memoTitleInput").text.length > 0)
             }
             walk(mainWindow, tag, Theme.surface, 0)
+            // 产品保证：出错提示条的文字同样要过对比度门禁。它只在出错时出现，平时这里一个字都扫不到——
+            // 知识缺口页的错误条曾经是危险色字压在沉底色上，日间只有 4.44:1，全量测试照样全绿。
+            // 这里给两页各摆出一条错误，只扫这一页再看一遍。
+            if (views[i] === "knowledgeGaps" || views[i] === "memo") {
+                var errorPage = views[i] === "memo" ? findChild(mainWindow, "memoViewPage")
+                                                        : findChild(mainWindow, "knowledgeGapViewPage")
+                verify(errorPage, views[i])
+                var errorProperty = views[i] === "memo" ? "errorMessage" : "loadError"
+                var errorTextName = views[i] === "memo" ? "memoError" : "knowledgeGapErrorText"
+                errorPage[errorProperty] = "读取失败：磁盘 I/O 错误，数据库文件可能被其它程序占用"
+                tryVerify(function () {
+                    var text = findChild(errorPage, errorTextName)
+                    return text !== null && text.width > 0 && text.height > 0
+                }, 3000, "前置：" + views[i] + " 的错误条排好了版")
+                walk(errorPage, tag + "·出错提示", Theme.surface, 0)
+                errorPage[errorProperty] = ""
+            }
         }
         // 统计页默认停在「今日」，复盘卡只在「本周」出现：必须真的切进周视图，
         // 把当前周概览、已结束周的事实、错误态各扫一遍，否则目标、事实、对账与错误文字全在门禁之外。

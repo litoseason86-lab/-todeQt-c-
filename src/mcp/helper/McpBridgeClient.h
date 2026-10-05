@@ -22,6 +22,9 @@ public:
     void cancelAll();
     // 空闲多久释放连接；只供测试缩短等待，生产沿用 kBridgeIdleDisconnectMs。
     void setIdleDisconnectMs(int milliseconds);
+    // 一次工具调用最多等多久；只供测试缩短等待，生产沿用 kToolTimeoutMs。只影响之后发起的调用。
+    void setToolTimeoutMs(int milliseconds) { m_toolTimeoutMs = qMax(1, milliseconds); }
+    int toolTimeoutMs() const { return m_toolTimeoutMs; }
 signals:
     void completed(const QString& id, const QJsonObject& result);
 private:
@@ -49,6 +52,7 @@ private:
     QTimer m_connectionTimer, m_deadlineTimer, m_idleTimer;
     QByteArray m_credential;
     int m_idleDisconnectMs = McpContracts::kBridgeIdleDisconnectMs;
+    int m_toolTimeoutMs = McpContracts::kToolTimeoutMs;
     quint64 m_nextOrder = 0;
     bool m_ready = false;
     bool m_failing = false;

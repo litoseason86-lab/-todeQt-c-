@@ -5,6 +5,7 @@
 #include "DatabaseManager.h"
 #include "FocusSessionRules.h"
 #include "LogicalDay.h"
+#include "QmlValues.h"
 
 #include <QDebug>
 #include <QDateTime>
@@ -13,6 +14,8 @@
 #include <QSqlQuery>
 #include <QSet>
 #include <QVariant>
+
+#include <limits>
 
 namespace {
 bool isValidTaskId(int taskId)
@@ -484,10 +487,62 @@ bool TaskManager::updateTask(int taskId, const QString& title, int categoryId,
                             false, completionNoteValue);
 }
 
+bool TaskManager::updateTaskChanges(int taskId, const QVariantMap& changes)
+{
+    const QString titleKey = QStringLiteral("title");
+    const QString categoryKey = QStringLiteral("categoryId");
+    const QString dateKey = QStringLiteral("date");
+    const QString estimateKey = QStringLiteral("estimatedMinutes");
+    const QString notesKey = QStringLiteral("notes");
+    const QString completionKey = QStringLiteral("completionNote");
+    for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
+        const QString& key = it.key();
+        const bool textField = key == titleKey || key == notesKey || key == completionKey;
+        if (!textField && key != categoryKey && key != dateKey && key != estimateKey) {
+            qWarning() << "Failed to update task: unknown field" << key;
+            return false;
+        }
+        // 文本字段必须真是字符串：QML 的 undefined/null 不能被悄悄当成「清空」。
+        if (textField && it.value().typeId() != QMetaType::QString) {
+            qWarning() << "Failed to update task: field" << key << "must be text";
+            return false;
+        }
+    }
+    if (changes.isEmpty()) {
+        return readTask(taskId).ok();
+    }
+
+    // 科目编号 -1 或 0 表示不设科目。
+    int categoryId = -1;
+    if (changes.contains(categoryKey)
+        && !QmlValues::integer(changes.value(categoryKey), -1, std::numeric_limits<int>::max(), &categoryId)) {
+        qWarning() << "Failed to update task: invalid category id";
+        return false;
+    }
+    int estimatedMinutes = -1; // -1 = 预计用时保持不变
+    if (changes.contains(estimateKey)
+        && !QmlValues::integer(changes.value(estimateKey), 0, std::numeric_limits<int>::max(), &estimatedMinutes)) {
+        qWarning() << "Failed to update task: invalid estimated minutes";
+        return false;
+    }
+    // null QString 表示「备注保持不变」；要改就收敛成非 null，空串才会被当成清空写入。
+    const QString notes = changes.contains(notesKey)
+        ? (changes.value(notesKey).toString().isNull() ? QStringLiteral("") : changes.value(notesKey).toString())
+        : QString();
+    std::optional<QString> completionNote;
+    if (changes.contains(completionKey)) {
+        const QString text = changes.value(completionKey).toString();
+        completionNote = text.isNull() ? QStringLiteral("") : text;
+    }
+    return updateTaskFields(taskId, changes.value(titleKey).toString(), categoryId, changes.value(dateKey),
+                            estimatedMinutes, notes, !changes.contains(categoryKey), !changes.contains(titleKey),
+                            completionNote, !changes.contains(dateKey));
+}
+
 bool TaskManager::updateTaskFields(int taskId, const QString& title, int categoryId,
                                     const QVariant& dateValue, int estimatedMinutes,
                                     const QString& notes, bool preserveCategory, bool preserveTitle,
-                                    const std::optional<QString>& completionNote)
+                                    const std::optional<QString>& completionNote, bool preserveDate)
 {
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to update task: invalid task id" << taskId;
@@ -505,8 +560,9 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
         return false;
     }
 
-    const QDate date = normalizeDate(dateValue);
-    if (!date.isValid()) {
+    // 保留日期时同样不碰 date 列，也不校验传进来的日期。
+    const QDate date = preserveDate ? QDate() : normalizeDate(dateValue);
+    if (!preserveDate && !date.isValid()) {
         qWarning() << "Failed to update task: invalid date";
         return false;
     }
@@ -544,35 +600,44 @@ bool TaskManager::updateTaskFields(int taskId, const QString& title, int categor
         return false;
     }
 
-    QString assignments = QStringLiteral(
-        "date = :date, "
-        "display_order = CASE WHEN date = :comparisonDate THEN display_order ELSE "
-        "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks "
-        " WHERE date = :orderDate AND id <> :selfId) END");
-    if (!preserveTitle) assignments += QStringLiteral(", title = :title");
-    if (!preserveCategory) assignments += QStringLiteral(", category = :category, category_id = :categoryId");
+    QStringList assignments;
+    if (!preserveDate) {
+        assignments.append(QStringLiteral(
+            "date = :date, "
+            "display_order = CASE WHEN date = :comparisonDate THEN display_order ELSE "
+            "(SELECT COALESCE(MAX(display_order), 0) + 1 FROM tasks "
+            " WHERE date = :orderDate AND id <> :selfId) END"));
+    }
+    if (!preserveTitle) assignments.append(QStringLiteral("title = :title"));
+    if (!preserveCategory) assignments.append(QStringLiteral("category = :category, category_id = :categoryId"));
     if (updateEstimate) {
-        assignments += QStringLiteral(", estimated_minutes = :estimated");
+        assignments.append(QStringLiteral("estimated_minutes = :estimated"));
     }
     if (updateNotes) {
-        assignments += QStringLiteral(", notes = :notes");
+        assignments.append(QStringLiteral("notes = :notes"));
     }
     if (completionNote) {
-        assignments += QStringLiteral(", completion_note = :completionNote");
+        assignments.append(QStringLiteral("completion_note = :completionNote"));
+    }
+    // 什么都不改（只有字段级入口会走到这里）：不发 UPDATE，只确认任务还在。
+    if (assignments.isEmpty()) {
+        return readTask(taskId).ok();
     }
 
     QSqlQuery query(db);
     // category 文本仍要同步写入，保证旧导出和旧视图在 category_id 缺失时也能退回显示。
-    query.prepare(QStringLiteral("UPDATE tasks SET %1 WHERE id = :id").arg(assignments));
+    query.prepare(QStringLiteral("UPDATE tasks SET %1 WHERE id = :id").arg(assignments.join(QStringLiteral(", "))));
     if (!preserveTitle) query.bindValue(QStringLiteral(":title"), normalizedTitle);
     if (!preserveCategory) {
         query.bindValue(QStringLiteral(":category"), categoryName);
         query.bindValue(QStringLiteral(":categoryId"), categoryIdValue);
     }
-    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":comparisonDate"), date.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":orderDate"), date.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":selfId"), taskId);
+    if (!preserveDate) {
+        query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+        query.bindValue(QStringLiteral(":comparisonDate"), date.toString(Qt::ISODate));
+        query.bindValue(QStringLiteral(":orderDate"), date.toString(Qt::ISODate));
+        query.bindValue(QStringLiteral(":selfId"), taskId);
+    }
     if (updateEstimate) {
         query.bindValue(QStringLiteral(":estimated"), clampEstimatedMinutes(estimatedMinutes));
     }

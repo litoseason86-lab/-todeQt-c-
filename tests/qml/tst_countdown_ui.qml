@@ -56,11 +56,15 @@ TestCase {
             return true
         }
 
-        function updateGoal(id, name, targetDate) {
+        property var lastGoalChanges: null
+        property int goalUpdateCalls: 0
+        function updateGoalChanges(id, changes) {
+            goalUpdateCalls += 1
+            lastGoalChanges = changes
             primaryGoal = {
                 goalId: id,
-                name: name,
-                targetDate: targetDate,
+                name: changes.name === undefined ? primaryGoal.name : changes.name,
+                targetDate: changes.targetDate === undefined ? primaryGoal.targetDate : changes.targetDate,
                 displayOrder: 0,
                 daysRemaining: 12
             }
@@ -139,6 +143,8 @@ TestCase {
         fakeCountdownService.reorderSucceeds = true
         fakeCountdownService.reloadSucceeds = true
         fakeCountdownService.reloadCalls = 0
+        fakeCountdownService.goalUpdateCalls = 0
+        fakeCountdownService.lastGoalChanges = null
         countdownView.loadError = ""
         countdownDialog.close()
     }
@@ -174,6 +180,29 @@ TestCase {
         compare(testCase.addedName, "研究生初试")
         compare(testCase.addedDateText, "2026-12-23")
         verify(fakeCountdownService.primaryGoal !== null)
+    }
+
+    // 产品保证：编辑目标只交出改过的字段，没改就不写库。弹窗开着时另一台改了另一项，
+    // 这边保存不会用打开时的旧值把它盖掉。
+    // 抓住的错误实现：名称、日期一起交回，或者没改也写一次。
+    function test_dialogEditSendsOnlyChangedFields() {
+        fakeCountdownService.primaryGoal = { goalId: 3, name: "初试", targetDate: new Date(2026, 11, 20),
+                                             displayOrder: 0, daysRemaining: 10 }
+        countdownDialog.openForEdit(3, "初试", new Date(2026, 11, 20))
+        tryVerify(function () { return countdownDialog.opened }, 3000)
+        compare(countdownDialog.isEditMode, true, "前置：编辑模式")
+        findChild(countdownDialog, "countdownDateField").text = "2026-12-21"
+        countdownDialog.submit()
+        compare(fakeCountdownService.goalUpdateCalls, 1)
+        compare(Object.keys(fakeCountdownService.lastGoalChanges).join(","), "targetDate", "只改了日期，名称没动不交")
+        compare(fakeCountdownService.lastGoalChanges.targetDate, "2026-12-21")
+        tryVerify(function () { return !countdownDialog.visible }, 3000)
+
+        countdownDialog.openForEdit(3, "初试", new Date(2026, 11, 21))
+        tryVerify(function () { return countdownDialog.opened }, 3000)
+        countdownDialog.submit()
+        compare(fakeCountdownService.goalUpdateCalls, 1, "什么都没改，不写库")
+        tryVerify(function () { return !countdownDialog.visible }, 3000, "照常收起")
     }
 
     function test_dialogDefaultDateUsesLogicalToday() {

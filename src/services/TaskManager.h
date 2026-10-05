@@ -8,6 +8,7 @@
 #include <QString>
 #include <QVariant>
 #include <QVariantList>
+#include <QVariantMap>
 #include <optional>
 
 class TaskManager : public QObject
@@ -90,6 +91,10 @@ public:
     Q_INVOKABLE bool updateTask(int taskId, const QString& title, int categoryId,
                                 const QVariant& dateValue, int estimatedMinutes,
                                 const QString& notes, const QVariant& completionNote);
+    // 编辑弹窗只交出用户改过的字段，键为 title / categoryId / date / estimatedMinutes / notes / completionNote。
+    // 没交的字段原样留在库里：弹窗开着时另一台改了别的字段，同步写进来的新值不会被弹窗打开时读到的旧值盖掉。
+    // 不认识的键、类型不对的值整次拒绝；没有任何改动时只确认任务还在。
+    Q_INVOKABLE bool updateTaskChanges(int taskId, const QVariantMap& changes);
 
     // —— 手动排序与改期 ——
     // 同一天里的任务此前只能按创建时间排，十几条并列时无法表达"先做哪个"。
@@ -133,10 +138,12 @@ public:
     // preserveTitle 为真时既不校验也不改写标题（title 参数被忽略）：外部只改备注、预计用时时，
     // 不能因为没要求修改的旧标题（上限出现之前可能超过 100 字）而整次失败。
     // completionNote 为 nullopt 时不碰完成记录；外部 AI 接入走的正是这条默认路径。
+    // preserveDate 为真时不改日期（dateValue 被忽略），当天的排序也不动。
     bool updateTaskFields(int taskId, const QString& title, int categoryId, const QVariant& dateValue,
                           int estimatedMinutes, const QString& notes, bool preserveCategory,
                           bool preserveTitle = false,
-                          const std::optional<QString>& completionNote = std::nullopt);
+                          const std::optional<QString>& completionNote = std::nullopt,
+                          bool preserveDate = false);
     // 返回提交事实，让后台调用区分“未创建”和“已提交但无法取得编号”。
     int createTaskWithOutcome(const QString& title, const QVariant& dateValue, int categoryId,
                               int estimatedMinutes, const QString& notes, bool* committed);

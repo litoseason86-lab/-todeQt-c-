@@ -31,6 +31,7 @@ TestCase {
         signal categoriesChanged()
         signal operationFailed(string message)
 
+        function readAllCategories() { return { ok: true, categories: getAllCategories() } }
         function getAllCategories() {
             return [ { id: 1, name: "数学", color: "#d4a574" } ]
         }
@@ -113,7 +114,7 @@ TestCase {
 
         parent: testCase
         categoryManagerRef: categoryManager
-        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedMinutes, notes) {
+        taskSubmitter: function(taskId, changes) {
             return testCase.countWrite()
         }
     }
@@ -143,7 +144,7 @@ TestCase {
         signal operationFailed(string message)
 
         function addGoal(name, targetDate) { return testCase.countWrite() }
-        function updateGoal(goalId, name, targetDate) { return testCase.countWrite() }
+        function updateGoalChanges(goalId, changes) { return testCase.countWrite() }
     }
 
     CountdownDialog {
@@ -178,7 +179,7 @@ TestCase {
             testCase.countWrite()
             return 42
         }
-        function updateGap(id, title, categoryId, detail, priority, due) {
+        function updateGapChanges(id, changes) {
             return testCase.countWrite()
         }
     }
@@ -247,7 +248,7 @@ TestCase {
         }
         function findConflicts() { return [] }
         function addEntry() { return testCase.countWrite() }
-        function updateEntry() { return testCase.countWrite() }
+        function updateEntryChanges() { return testCase.countWrite() }
         function setPeriods(periods) { return testCase.countWrite() }
     }
 

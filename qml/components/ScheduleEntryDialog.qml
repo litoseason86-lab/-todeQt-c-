@@ -51,6 +51,8 @@ Popup {
     property string errorField: ""
     property string conflictText: ""
     property var categoryOptions: [{ id: -1, name: "不设置科目", color: "" }]
+    // 编辑时打开那一刻各栏的值。保存时和它比，只交出改过的字段（见 changedFields）。
+    property var openedValues: ({})
 
     signal deleteRequested(int entryId, string title)
 
@@ -121,10 +123,16 @@ Popup {
         }
     }
 
+    // 读失败不等于「科目都没了」：保留上一次的下拉，报出原因，不把选中的科目当成已删除。
     function refreshCategories() {
         var loaded = []
-        if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
-            loaded = root.categoryManagerRef.getAllCategories()
+        if (root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function") {
+            var read = root.categoryManagerRef.readAllCategories()
+            if (!read.ok) {
+                root.errorText = String(read.error || "科目加载失败")
+                return
+            }
+            loaded = read.categories
         }
         root.categoryOptions = [{ id: -1, name: "不设置科目", color: "" }].concat(loaded)
     }
@@ -171,10 +179,48 @@ Popup {
         weekEndField.text = String(Number(entry.weekEnd))
         parityCombo.currentIndex = Math.max(0, Math.min(2, Number(entry.weekParity)))
         categoryCombo.currentIndex = root.categoryIndexForId(entry.categoryId)
+        root.openedValues = {
+            title: titleField.text,
+            location: locationField.text,
+            weekday: weekdayCombo.currentIndex,
+            start: startField.text,
+            end: endField.text,
+            weekStart: weekStartField.text,
+            weekEnd: weekEndField.text,
+            parity: parityCombo.currentIndex,
+            categoryId: Number(root.categoryOptions[categoryCombo.currentIndex].id || -1)
+        }
         root.errorText = ""
         root.errorField = ""
         root.conflictText = ""
         root.open()
+    }
+
+    // 只交出用户改过的字段。没动过的不写回：弹窗开着时另一台改了它们，同步写进来的新值
+    // 不会被这里打开时读到的旧值盖掉。各栏比的是框里的原文和下拉的选中项，没动过就一定相等；
+    // 交上去的是 collectInput 校验、换算过的值。科目比编号：下拉会随科目增删重建，下标会变。
+    function changedFields(input) {
+        var opened = root.openedValues
+        var changes = {}
+        if (titleField.text !== opened.title)
+            changes.title = input.title
+        if (locationField.text !== opened.location)
+            changes.location = input.location
+        if (weekdayCombo.currentIndex !== opened.weekday)
+            changes.weekday = input.weekday
+        if (startField.text !== opened.start)
+            changes.startMinutes = input.startMinutes
+        if (endField.text !== opened.end)
+            changes.endMinutes = input.endMinutes
+        if (weekStartField.text !== opened.weekStart)
+            changes.weekStart = input.weekStart
+        if (weekEndField.text !== opened.weekEnd)
+            changes.weekEnd = input.weekEnd
+        if (parityCombo.currentIndex !== opened.parity)
+            changes.weekParity = input.weekParity
+        if (input.categoryId !== opened.categoryId)
+            changes.categoryId = input.categoryId
+        return changes
     }
 
     // 收集并校验表单。返回 null 表示校验未通过。
@@ -297,11 +343,10 @@ Popup {
             return
         }
 
+        var changes = root.editing ? root.changedFields(input) : null
         var succeeded = root.editing
-            ? root.scheduleServiceRef.updateEntry(
-                  root.editingEntryId, input.title, input.weekday,
-                  input.startMinutes, input.endMinutes, input.location,
-                  input.categoryId, input.weekStart, input.weekEnd, input.weekParity)
+            ? (Object.keys(changes).length === 0
+               || root.scheduleServiceRef.updateEntryChanges(root.editingEntryId, changes))
             : root.scheduleServiceRef.addEntry(
                   input.title, input.weekday, input.startMinutes, input.endMinutes,
                   input.location, input.categoryId,

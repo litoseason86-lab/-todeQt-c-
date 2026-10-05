@@ -170,7 +170,7 @@ private slots:
         QCOMPARE(result.value("task").toObject().value("notes").toString(), QStringLiteral(""));
         QCOMPARE(result.value("task").toObject().value("estimated_minutes").toInt(), 0);
         args = editArgs(id); args.insert("date", "2026-09-17");
-        const int before = changed.size();
+        const qsizetype before = changed.size();
         QVERIFY(!output(run(Tool::RescheduleTask, args)).value("changed").toBool());
         QCOMPARE(changed.size(), before);
         args.insert("date", "2026-09-18");

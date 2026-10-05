@@ -87,11 +87,10 @@ TestCase {
             return true
         }
 
-        // 记下实参个数：第 7 个参数「没传」和「传了 undefined」对服务来说都是保持不变，
-        // 但宿主必须真的把它转交过来，而不是在中间丢掉或包成字符串。
-        function updateTask(id, title, categoryId, date, estimatedMinutes, notes, completionNote) {
+        // 编辑弹窗只交出改过的字段；宿主要把改动表原样转交，不能在中间丢掉或改写。
+        function updateTaskChanges(id, changes) {
             taskManager.updateCalls = taskManager.updateCalls.concat([{
-                id: id, argCount: arguments.length, completionNote: completionNote
+                id: id, changes: changes
             }])
             taskManager.tasksChanged()
             return true
@@ -308,7 +307,7 @@ TestCase {
         const editDialog = findChild(view, "todayEditTaskDialog")
         verify(editDialog !== null)
 
-        // 已完成：记录栏改过的内容作为第 7 个参数交给 TaskManager。
+        // 已完成：记录栏改过的内容放在改动表里交给 TaskManager，别的栏没动就不交。
         mouseClick(findChild(testCase.rowAt(view, 1), "taskEditButton"))
         tryCompare(editDialog, "opened", true, 3000)
         compare(editDialog.editingCompleted, true)
@@ -317,20 +316,21 @@ TestCase {
         mouseClick(findChild(editDialog, "editConfirmButton"))
         compare(taskManager.updateCalls.length, 1)
         compare(taskManager.updateCalls[0].id, 52)
-        compare(taskManager.updateCalls[0].argCount, 7)
-        compare(taskManager.updateCalls[0].completionNote, "做完极限和导数")
+        compare(Object.keys(taskManager.updateCalls[0].changes).join(","), "completionNote")
+        compare(taskManager.updateCalls[0].changes.completionNote, "做完极限和导数")
         tryCompare(editDialog, "visible", false, 3000)
         tryCompare(coordinator, "refreshBlocked", false, 3000)
 
-        // 未完成：第 7 个参数必须原样是 undefined（= 保持不变），不能被包成字符串 "undefined"。
+        // 未完成：改动表里不能有完成记录（没有就是保持不变），也不能是字符串 "undefined"。
+        // 改一下标题，确保这次确实提交了。
         tryCompare(findChild(view, "todayTaskList"), "count", 2)
         mouseClick(findChild(testCase.rowAt(view, 0), "taskEditButton"))
         tryCompare(editDialog, "opened", true, 3000)
         compare(editDialog.editingCompleted, false)
+        findChild(editDialog, "editTitleField").text = "改过的标题"
         mouseClick(findChild(editDialog, "editConfirmButton"))
         compare(taskManager.updateCalls.length, 2)
         compare(taskManager.updateCalls[1].id, 51)
-        compare(taskManager.updateCalls[1].argCount, 7)
-        compare(typeof taskManager.updateCalls[1].completionNote, "undefined")
+        compare(Object.keys(taskManager.updateCalls[1].changes).join(","), "title")
     }
 }

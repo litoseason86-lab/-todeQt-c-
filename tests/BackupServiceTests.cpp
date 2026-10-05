@@ -532,7 +532,7 @@ void BackupServiceTests::version14BackupWithCompositeKnowledgeGapForeignKeyIsRej
         QVERIFY(sql.contains(linkedColumn));
         sql.replace(sourceColumn, QStringLiteral("source_task_id INTEGER"));
         sql.replace(linkedColumn, QStringLiteral("linked_task_id INTEGER"));
-        const int closingParen = sql.lastIndexOf(QLatin1Char(')'));
+        const qsizetype closingParen = sql.lastIndexOf(QLatin1Char(')'));
         QVERIFY(closingParen > 0);
         sql.insert(closingParen,
                    QStringLiteral(", FOREIGN KEY (source_task_id, linked_task_id) "

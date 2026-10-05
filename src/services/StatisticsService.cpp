@@ -934,7 +934,8 @@ QVariantMap StatisticsService::getMonthComparison(int year, int month,
 
 int StatisticsService::getEffectiveDays(const QDate& startDate, const QDate& endDate) const
 {
-    return getUniqueFocusDates(startDate, endDate).size();
+    // 天数个数，远小于 int 上限。
+    return static_cast<int>(getUniqueFocusDates(startDate, endDate).size());
 }
 
 int StatisticsService::getFocusSessionCount(const QDate& startDate, const QDate& endDate) const

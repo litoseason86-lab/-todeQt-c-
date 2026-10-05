@@ -64,6 +64,11 @@ public:
                                  int startMinutes, int endMinutes,
                                  const QString& location, int categoryId,
                                  int weekStart, int weekEnd, int weekParity);
+    // 编辑弹窗只交出用户改过的字段，键为 title / location / weekday / startMinutes / endMinutes /
+    // weekStart / weekEnd / weekParity / categoryId。没交的字段取库里现在的值，合起来再按整条规则校验：
+    // 弹窗开着时另一台改了它们，同步写进来的新值不会被弹窗打开时的旧值盖掉。
+    // 不认识的键、类型不对的值整次拒绝；没有改动时只确认课程还在。
+    Q_INVOKABLE bool updateEntryChanges(int id, const QVariantMap& changes);
     Q_INVOKABLE bool deleteEntry(int id);
 
     // 全部课表项（不按周次筛选），按星期几和开始时间排序。

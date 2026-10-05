@@ -141,8 +141,14 @@ Popup {
 
     function refreshCategories() {
         // 打开时刷新，保证科目管理里的改动不用重启就能显示。
-        if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
-            root.categories = root.categoryManagerRef.getAllCategories();
+        // 读失败不等于「科目都没了」：保留上一次的下拉，报出原因，免得用户以为科目丢了、建出一条没分科目的任务。
+        if (root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function") {
+            var read = root.categoryManagerRef.readAllCategories();
+            if (!read.ok) {
+                errorLabel.text = String(read.error || "科目加载失败");
+                return;
+            }
+            root.categories = read.categories;
         } else {
             root.categories = [];
         }

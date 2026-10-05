@@ -68,13 +68,13 @@ Popup {
     // 正在编辑的任务是否已完成。已完成才显示「完成记录」一栏：未完成的任务还谈不上做完了什么，
     // 它残留的旧记录（取消完成时保留下来的）也不该在这里被改动。
     property bool editingCompleted: false
-    // 生产页面注入返回 bool 的写入函数；保留信号用于独立组件和兼容测试。
-    // 第 7 个参数是完成记录：已完成任务传字符串（空串 = 清空），未完成任务传 undefined，
-    // 宿主原样转给 TaskManager 七参 updateTask，由它按「不是字符串就保持不变」处理。
+    // 生产页面注入返回 bool 的写入函数 (taskId, changes)；保留信号用于独立组件和兼容测试。
+    // changes 只含用户改过的字段（见 changedFields），宿主原样交给 TaskManager.updateTaskChanges。
     property var taskSubmitter: null
+    // 打开时各栏的值。提交时和它比，只交出改过的字段。
+    property var openedValues: ({})
 
-    signal taskEdited(int taskId, string title, int categoryId, var isoDate, int estimatedMinutes, string notes,
-                      var completionNote)
+    signal taskEdited(int taskId, var changes)
 
     modal: true
     focus: true
@@ -112,12 +112,16 @@ Popup {
                 color: ""
             }
         ];
-        // 与 AddTaskDialog 一致走 getAllCategories——这是 CategoryManager 的真实接口名，
-        // 写错方法名会被守卫静默吞掉，下拉只剩"不设置科目"。
-        if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
-            var actives = root.categoryManagerRef.getAllCategories();
-            for (var i = 0; i < actives.length; i++) {
-                options.push(actives[i]);
+        // 读科目看返回值里的成败：读失败不等于「科目都没了」，保留上一次的下拉（选中的科目也就还在），报出原因。
+        // 当成空列表的话，选中的科目会被当成已删除退回「不设置科目」，保存时就把任务的科目清掉了。
+        if (root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function") {
+            var read = root.categoryManagerRef.readAllCategories();
+            if (!read.ok) {
+                root.errorText = String(read.error || "科目加载失败");
+                return;
+            }
+            for (var i = 0; i < read.categories.length; i++) {
+                options.push(read.categories[i]);
             }
         }
         // 末尾那条是哨兵，不是科目：选中它表示「我要现在建一个」。
@@ -224,6 +228,15 @@ Popup {
                 break;
             }
         }
+        root.openedValues = {
+            title: titleField.text,
+            categoryId: root.lastRealCategoryId,
+            dateOffsetSelection: root.dateOffsetSelection,
+            customDate: customDate.text,
+            estimatedMinutes: root.estimatedMinutes,
+            notes: notesField.text,
+            completionNote: completionNoteField.text
+        };
 
         root.open();
         titleField.forceActiveFocus();
@@ -232,6 +245,28 @@ Popup {
 
     function resultIsoDate() {
         return root.dateOffsetSelection < 0 ? customDate.text : root.isoWithOffset(root.dateOffsetSelection);
+    }
+
+    // 只交出用户在弹窗里改过的字段。没动过的字段不写回：弹窗开着时另一台改了它们，
+    // 同步写进来的新值不会被这里打开时读到的旧值盖掉（同步按字段比对，旧值也算一次「更晚的修改」）。
+    // 标题、备注比的是框里的原文，没动过就一定相等；日期看选中的快捷项和日期框：
+    // 跨过逻辑日零点才保存时「今天」已经变了，但用户没碰日期就不算改，任务不会被挪到新的今天。
+    function changedFields(title, categoryId, completionNote) {
+        var opened = root.openedValues;
+        var changes = {};
+        if (titleField.text !== opened.title)
+            changes.title = title;
+        if (categoryId !== opened.categoryId)
+            changes.categoryId = categoryId;
+        if (root.dateOffsetSelection !== opened.dateOffsetSelection || customDate.text !== opened.customDate)
+            changes.date = root.resultIsoDate();
+        if (root.estimatedMinutes !== opened.estimatedMinutes)
+            changes.estimatedMinutes = root.estimatedMinutes;
+        if (notesField.text !== opened.notes)
+            changes.notes = notesField.text.trim();
+        if (root.editingCompleted && completionNoteField.text !== opened.completionNote)
+            changes.completionNote = completionNote;
+        return changes;
     }
 
     function submit() {
@@ -279,17 +314,17 @@ Popup {
         if (categoryId === root.newCategorySentinelId) {
             categoryId = -1;
         }
+        var changes = root.changedFields(title, categoryId, completionNote)
         var succeeded = true
-        if (root.taskSubmitter) {
+        if (Object.keys(changes).length === 0) {
+            // 什么都没改：不写库，直接收起。
+        } else if (root.taskSubmitter) {
             // taskSubmitter 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
             // qmllint disable use-proper-function
-            succeeded = Boolean(root.taskSubmitter(
-                root.editingTaskId, title, categoryId,
-                root.resultIsoDate(), root.estimatedMinutes, notesField.text.trim(), completionNote))
+            succeeded = Boolean(root.taskSubmitter(root.editingTaskId, changes))
             // qmllint enable use-proper-function
         } else {
-            root.taskEdited(root.editingTaskId, title, categoryId,
-                            root.resultIsoDate(), root.estimatedMinutes, notesField.text.trim(), completionNote)
+            root.taskEdited(root.editingTaskId, changes)
         }
         if (!succeeded) {
             root.errorText = "保存失败，请检查数据库后重试"

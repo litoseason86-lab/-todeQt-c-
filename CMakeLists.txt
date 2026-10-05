@@ -151,6 +151,7 @@ set(APP_SOURCES
     src/services/MemoService.cpp
     src/services/TaskInteractionCoordinator.h
     src/services/TaskInteractionCoordinator.cpp
+    src/services/QmlValues.h
     # 外部 AI 接入（plans/047）：common 是与辅助程序共用的契约与路径，bridge 只编入主应用。
     src/mcp/common/McpContracts.h
     src/mcp/common/McpContracts.cpp
@@ -372,6 +373,11 @@ function(pomodoro_todo_enable_warnings target)
         target_compile_options(${target} PRIVATE /W4)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra)
+        # 64 位转 32 位的截断告警：iOS 用 Xcode 生成器，默认就开着它；Mac 这边不开的话，
+        # 这类告警只在编 iOS 时冒出来，平时看不到也就没人修（2026-10 攒到过 6 条）。只有 Clang 认这个选项。
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${target} PRIVATE -Wshorten-64-to-32)
+        endif()
     endif()
 endfunction()
 
@@ -1393,6 +1399,9 @@ foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
         # 这些告警不会让任何断言转红，测试照样全绿，但每一条都是真缺陷：
         #   Unable to assign [undefined]  属性赋值被拒，绑定停在上一次的值
         #   TypeError / is not a function 求值当场中断，后面的兜底逻辑根本跑不到
+        #   ReferenceError                绑定里引用了不存在的名字（改名、删 id 后漏改），同样当场中断
+        #   RangeError                    JavaScript 栈溢出：递归失控，或组件在不对的作用域里创建
+        #                                 （截图脚本漏写 ComponentBehavior: Bound 时出现过，行号是乱的）
         #   Binding loop                  绑定反复求值，界面可能停在中间态
         # 实测本仓曾同时存在三处：ExportDialog 的 busy 决定导出期间能否关窗却停在旧值；
         # MonthGoalView.formatDuration 抛 TypeError，跳过了它自己写的兜底格式化。
@@ -1400,7 +1409,7 @@ foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
         # 挂在已有条目上而不是新加一条门禁：串行重跑全部 QML 测试实测 63s，
         # 会让全量从 22s 涨到三倍以上，而这里是零额外开销。
         # 某条测试确实需要故意触发告警时，单独覆盖它的 FAIL_REGULAR_EXPRESSION。
-        FAIL_REGULAR_EXPRESSION "Unable to assign;TypeError;is not a function;Binding loop"
+        FAIL_REGULAR_EXPRESSION "Unable to assign;TypeError;is not a function;ReferenceError;RangeError;Binding loop"
     )
 endforeach()
 

@@ -101,7 +101,7 @@ public:
 private:
     void dropRegistration(const QString& actionId)
     {
-        for (int i = registered.size() - 1; i >= 0; --i) {
+        for (qsizetype i = registered.size() - 1; i >= 0; --i) {
             if (registered.at(i).actionId == actionId) {
                 registered.removeAt(i);
             }

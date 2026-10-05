@@ -78,6 +78,7 @@ private slots:
     void addEntryTrimsTextAndPersistsAllFields();
     void addEntryRejectsInvalidInput();
     void updateEntryRewritesFieldsAndRejectsMissingRow();
+    void updateEntryChangesWritesOnlyGivenFields();
     void deleteEntryRemovesRowAndRejectsMissingRow();
     void weekRangeFiltersEntries();
     void weekParityFiltersEntries();
@@ -599,6 +600,53 @@ void ScheduleServiceTests::updateEntryRewritesFieldsAndRejectsMissingRow()
     QVERIFY(!service->updateEntry(0, QStringLiteral("编号无效"), 1,
                                   8 * 60, 9 * 60, QString(), -1,
                                   1, 16, ScheduleService::EveryWeek));
+}
+
+// 产品保证：字段级入口只改交进来的字段；没交的取库里现在的值，合起来按整条规则校验。
+// 弹窗开着时另一台改了地点和周次（这里直接写库，模拟同步写进来），这边只改课名后保存，地点、周次还是另一台的。
+// 合起来不合法（只改结束时间，却早于开始时间）、不认识的键、类型不对，都整次拒绝；没有改动时只确认课程还在。
+// 抓住的错误实现：按弹窗打开时的值整条写回（地点、周次被盖回旧值），或没交的字段写成默认值。
+void ScheduleServiceTests::updateEntryChangesWritesOnlyGivenFields()
+{
+    ScheduleService* service = ScheduleService::instance();
+    QVERIFY(addEntry(EntryArgs {}));
+    const int id = idOfFirst(service->getEntries());
+    QVERIFY(id > 0);
+    QSqlQuery remote(DatabaseManager::instance()->database());
+    remote.prepare(QStringLiteral("UPDATE schedule_entries SET location = 'B305', week_start = 3, week_end = 12 "
+                                  "WHERE id = :id"));
+    remote.bindValue(QStringLiteral(":id"), id);
+    QVERIFY(remote.exec());
+
+    QSignalSpy changed(service, &ScheduleService::scheduleChanged);
+    QVERIFY(service->updateEntryChanges(id, {{QStringLiteral("title"), QStringLiteral("线性代数")}}));
+    QCOMPARE(changed.count(), 1);
+    QVariantMap entry = service->getEntries().first().toMap();
+    QCOMPARE(entry.value(QStringLiteral("title")).toString(), QStringLiteral("线性代数"));
+    QCOMPARE(entry.value(QStringLiteral("location")).toString(), QStringLiteral("B305"));
+    QCOMPARE(entry.value(QStringLiteral("weekStart")).toInt(), 3);
+    QCOMPARE(entry.value(QStringLiteral("weekEnd")).toInt(), 12);
+    QCOMPARE(entry.value(QStringLiteral("startMinutes")).toInt(), 8 * 60);
+    QCOMPARE(entry.value(QStringLiteral("endMinutes")).toInt(), 9 * 60 + 40);
+    QCOMPARE(entry.value(QStringLiteral("weekday")).toInt(), 1);
+
+    // 整次拒绝，什么都不写。
+    QSignalSpy failures(service, &ScheduleService::operationFailed);
+    QVERIFY(!service->updateEntryChanges(id, {{QStringLiteral("endMinutes"), 7 * 60}}));
+    QVERIFY(!service->updateEntryChanges(id, {{QStringLiteral("room"), QStringLiteral("C1")}}));
+    QVERIFY(!service->updateEntryChanges(id, {{QStringLiteral("title"), 5}}));
+    QVERIFY(!service->updateEntryChanges(id, {{QStringLiteral("weekday"), 1.5},
+                                              {QStringLiteral("title"), QStringLiteral("不该写进去")}}));
+    QCOMPARE(failures.count(), 4);
+    QCOMPARE(changed.count(), 1);
+    entry = service->getEntries().first().toMap();
+    QCOMPARE(entry.value(QStringLiteral("title")).toString(), QStringLiteral("线性代数"));
+    QCOMPARE(entry.value(QStringLiteral("endMinutes")).toInt(), 9 * 60 + 40);
+
+    // 没有改动：课程在就算成功，不在就失败；都不写库。
+    QVERIFY(service->updateEntryChanges(id, {}));
+    QVERIFY(!service->updateEntryChanges(id + 999, {}));
+    QCOMPARE(changed.count(), 1);
 }
 
 void ScheduleServiceTests::deleteEntryRemovesRowAndRejectsMissingRow()

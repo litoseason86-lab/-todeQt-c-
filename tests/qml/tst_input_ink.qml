@@ -22,6 +22,7 @@ TestCase {
     QtObject {
         id: categoryManagerMock
 
+        function readAllCategories() { return { ok: true, categories: getAllCategories() } }
         function getAllCategories() {
             return [{ id: 1, name: "数学", color: "#d4a574" }]
         }

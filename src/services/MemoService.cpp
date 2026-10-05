@@ -140,13 +140,14 @@ QVariantMap MemoService::memoFromQuery(const QSqlQuery& query) const
             {QStringLiteral("updatedAt"), query.value(8).toString()}};
 }
 
-QVariantList MemoService::listMemos(int categoryId) const
+QVariantList MemoService::queryMemos(int categoryId, QString* error) const
 {
     if (categoryId < kFilterAll) {
-        reportFailure(QStringLiteral("科目筛选无效"));
+        *error = QStringLiteral("科目筛选无效");
         return {};
     }
-    if (!databaseReady()) {
+    if (!DatabaseManager::instance()->isOpen()) {
+        *error = QStringLiteral("数据库未打开，无法读取或保存备忘录");
         return {};
     }
     QSqlQuery query(DatabaseManager::instance()->database());
@@ -162,7 +163,7 @@ QVariantList MemoService::listMemos(int categoryId) const
         query.bindValue(QStringLiteral(":category"), categoryValue(categoryId));
     }
     if (!query.exec()) {
-        reportFailure(QStringLiteral("读取备忘录列表失败：%1").arg(query.lastError().text()));
+        *error = QStringLiteral("读取备忘录列表失败：%1").arg(query.lastError().text());
         return {};
     }
     QVariantList result;
@@ -170,10 +171,31 @@ QVariantList MemoService::listMemos(int categoryId) const
         result.append(memoFromQuery(query));
     }
     if (query.lastError().isValid()) {
-        reportFailure(QStringLiteral("读取备忘录列表失败：%1").arg(query.lastError().text()));
+        *error = QStringLiteral("读取备忘录列表失败：%1").arg(query.lastError().text());
         return {};
     }
     return result;
+}
+
+QVariantList MemoService::listMemos(int categoryId) const
+{
+    QString error;
+    const QVariantList result = queryMemos(categoryId, &error);
+    if (!error.isEmpty()) {
+        reportFailure(error);
+    }
+    return result;
+}
+
+QVariantMap MemoService::readMemos() const
+{
+    QString error;
+    const QVariantList memos = queryMemos(kFilterAll, &error);
+    if (!error.isEmpty()) {
+        return {{QStringLiteral("ok"), false}, {QStringLiteral("memos"), QVariantList()},
+                {QStringLiteral("error"), error}};
+    }
+    return {{QStringLiteral("ok"), true}, {QStringLiteral("memos"), memos}};
 }
 
 QVariantMap MemoService::getMemo(int memoId) const

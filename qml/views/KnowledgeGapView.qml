@@ -353,27 +353,14 @@ Item {
             }
         }
 
-        Rectangle {
+        // 出错提示：和备忘录页同一个组件。原来是危险色的字压在沉底色上，日间只有 4.44:1，
+        // 不到正文 4.5:1，而且固定一行高、长的数据库错误被截掉看不全。
+        ErrorBanner {
             objectName: "knowledgeGapErrorBanner"
+            messageName: "knowledgeGapErrorText"
             Layout.fillWidth: true
-            Layout.preferredHeight: 36
             visible: root.loadError.length > 0
-            radius: Theme.radiusMd
-            color: Theme.surfaceSunken
-            border.color: Theme.dangerBorder
-            border.width: 1
-
-            Text {
-                anchors.fill: parent
-                anchors.leftMargin: Theme.space12
-                anchors.rightMargin: Theme.space12
-                verticalAlignment: Text.AlignVCenter
-                text: root.loadError
-                textFormat: Text.PlainText
-                font.pixelSize: Theme.fontSm
-                color: Theme.danger
-                elide: Text.ElideRight
-            }
+            message: root.loadError
         }
 
         // 空状态只留一行弱色文字。这一页是干什么的，用户点进来之前就知道了；

@@ -21,6 +21,10 @@ public:
 
     Q_INVOKABLE bool addGoal(const QString& name, const QDate& targetDate);
     Q_INVOKABLE bool updateGoal(int id, const QString& name, const QDate& targetDate);
+    // 编辑弹窗只交出用户改过的字段，键为 name / targetDate（yyyy-MM-dd 文字）。没交的取库里现在的值：
+    // 弹窗开着时另一台改了它，同步写进来的新值不会被弹窗打开时的旧值盖掉。
+    // 不认识的键、类型不对的值整次拒绝；没有改动时只确认目标还在。
+    Q_INVOKABLE bool updateGoalChanges(int id, const QVariantMap& changes);
     Q_INVOKABLE bool deleteGoal(int id);
     Q_INVOKABLE bool reorder(int fromIndex, int toIndex);
     // 读取失败时保留当前模型；调用方只能在 true 和 goalsReloaded 后清除错误提示。
