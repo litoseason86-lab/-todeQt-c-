@@ -65,6 +65,7 @@ TestCase {
         keyboardMock.keyboardRectangle = Qt.rect(0, 0, 0, 0);
         keyboardMock.commits = 0;
         service.reset(fixture());
+        categories.failRead = false;
         categories.records = [
             {
                 id: 1,
@@ -299,6 +300,7 @@ TestCase {
         compare(view.saveNow(), false);
         compare(child("memoBodyInput").text, "还没能保存的文字");
         compare(child("memoError").text, "磁盘不可写");
+        compare(child("memoPageErrorBanner").visible, false, "编辑卡在的时候只在卡里提示，不重复一条");
         verify(view.dirty);
         view.selectMemo(12);
         compare(view.selectedId, 11);
@@ -699,6 +701,100 @@ TestCase {
         compare(service.creates.length, 0, "前置：整个过程没被自动保存打断");
         compare(service.deletes.length, 0);
     }
+    // 产品保证：确认框开着的时候草稿被自动保存了，点「删除」删掉的就是它存下的那一条。
+    // 抓住的错误实现：确认框还记着草稿的编号 0，确认时发现已经不是草稿就什么都不删（点了删除，备忘还在）。
+    function test_draftSavedWhileConfirmingIsDeleted() {
+        view.startDraft();
+        typeBody("确认框开着时被存下的草稿");
+        var confirm = child("memoDeleteConfirm");
+        mouseClick(child("memoDeleteButton"));
+        tryVerify(function () {
+            return confirm.opened;
+        }, 3000);
+        compare(view.pendingDeleteId, 0, "前置：打开确认框时还是没进数据库的草稿");
+        compare(service.creates.length, 0, "前置：打开确认框时还没自动保存");
+        // 自动保存在停止输入一秒后才发生，只能等它。
+        tryCompare(view, "drafting", false, 3000);
+        var savedId = view.selectedId;
+        verify(savedId > 0 && service.getMemo(savedId).id === savedId, "前置：确认框开着时草稿被存成了一条");
+        verify(confirm.opened, "前置：确认框还开着");
+        compare(view.pendingDeleteId, savedId, "确认框改记存下的这一条");
+        mouseClick(child("memoDeleteConfirmButton"));
+        tryCompare(service, "deletes", [savedId], 3000);
+    }
+    // 产品保证：确认框开着的时候，要删的那条被另一台删掉、同步改选了相邻的一条：确认框随之收起，
+    // 就算「删除」恰好在收起前被点下，也不会删到别的备忘。
+    // 抓住的错误实现：确认时拿当前选中的编号补草稿的编号 0，删掉了同步后选中的相邻备忘（审查复现过：误删 31）。
+    function test_confirmNeverDeletesSyncedNeighbor() {
+        view.startDraft();
+        typeBody("待删除的草稿");
+        var confirm = child("memoDeleteConfirm");
+        view.requestDelete();
+        tryVerify(function () {
+            return confirm.opened;
+        }, 3000);
+        compare(view.pendingDeleteId, 0, "前置：打开确认框时还是草稿");
+        tryCompare(view, "drafting", false, 3000);
+        var draftId = view.selectedId;
+        verify(draftId > 0, "前置：确认框开着时草稿被自动保存");
+        service.records = service.records.filter(function (r) {
+            return r.id !== draftId;
+        });
+        service.memosChanged();
+        var neighborId = view.selectedId;
+        verify(neighborId > 0 && neighborId !== draftId, "前置：同步把选中项换成了相邻的一条");
+        compare(view.pendingDeleteId, -1, "要删的那条不在了，确认框不再指向任何一条");
+        tryVerify(function () {
+            return !confirm.visible;
+        }, 3000, "确认框收起");
+        view.confirmDelete();
+        compare(service.deletes.length, 0, "什么都不删");
+        compare(service.getMemo(neighborId).id, neighborId, "相邻的那条还在");
+    }
+    // 产品保证：草稿所在的科目在第一次保存前被另一台删掉：草稿改成未分类、文字原样保留，存下时不再带着已不存在的科目编号。
+    // 真实服务对不存在的科目一律拒绝保存（MemoServiceTests::invalidFieldsIdsAndCategoriesAreRejected），
+    // 草稿又不在列表里、编辑区的分类只读，带着旧编号就再也存不下，换备忘、新建也都被拦住。
+    // 抓住的错误实现：刷新时发现在写草稿就直接返回，不看它的科目还在不在（审查复现过：保存仍带着科目 3）。
+    function test_draftCategoryDeletedRemotely() {
+        view.startDraft(3);
+        typeBody("保留这份还没保存的草稿");
+        verify(view.drafting && view.editorCategoryId === 3, "前置：在科目 3 里写一条新草稿");
+        compare(service.creates.length, 0, "前置：还没自动保存");
+        categories.records = categories.records.filter(function (c) {
+            return c.id !== 3;
+        });
+        categories.categoriesChanged();
+        verify(!view.categories.some(function (c) {
+            return c.id === 3;
+        }), "前置：刷新后的科目里已经没有 3");
+        verify(view.drafting, "还是那份草稿");
+        compare(view.editorCategoryId, 0, "改成未分类");
+        compare(view.editorBody, "保留这份还没保存的草稿", "文字原样保留");
+        verify(view.saveNow());
+        compare(service.creates.length, 1);
+        compare(service.creates[0].categoryId, 0, "存下时不带已删除的科目编号");
+        compare(service.creates[0].body, "保留这份还没保存的草稿");
+    }
+    // 产品保证：读取科目失败不等于科目被删了：草稿留在原来的科目，出错原因显示出来；读取恢复后提示收起，一切照旧。
+    // 抓住的错误实现：科目读失败返回的空列表照样拿来刷新，草稿被当成「科目已删除」改成了未分类。
+    function test_categoryReadFailureKeepsDraftCategory() {
+        view.startDraft(3);
+        typeBody("读取科目失败时的草稿");
+        verify(view.drafting && view.editorCategoryId === 3, "前置：在科目 3 里写一条新草稿");
+        categories.failRead = true;
+        categories.categoriesChanged();
+        compare(view.readFailure, "科目加载失败: 磁盘 I/O 错误", "前置：这次刷新读科目失败了");
+        compare(view.editorCategoryId, 3, "草稿留在原来的科目");
+        verify(view.categories.some(function (c) {
+            return c.id === 3;
+        }), "保留上一次读到的科目");
+        compare(child("memoError").text, "科目加载失败: 磁盘 I/O 错误", "出错原因显示在编辑卡里");
+        categories.failRead = false;
+        categories.categoriesChanged();
+        compare(view.readFailure, "");
+        compare(view.errorMessage, "", "读取恢复后出错提示收起");
+        compare(view.editorCategoryId, 3);
+    }
     // 产品保证：新建的备忘排在最后，保存后列表自动滚到这一行。
     // 抓住的错误实现：保存新建后只重建列表、不滚动，新行在可视区外，用户找不到刚建的那条。
     function test_newMemoScrollsIntoView() {
@@ -890,10 +986,51 @@ TestCase {
         compare(child("memoList").visible, false, "左栏不显示");
         compare(child("memoPaper").visible, false, "编辑卡不显示");
         verify(findChild(view, "memoEmptyHint") === null, "不放提示文字");
+        compare(child("memoPageErrorBanner").visible, false, "读到了、只是一条都没有：不放出错提示");
         view.startDraft();
         compare(view.libraryEmpty, false);
         compare(view.hasEditor, true);
         compare(child("memoPaper").visible, true, "新建后编辑卡出来");
+    }
+    // 产品保证：第一次读取就失败时，出错原因显示在页面上，不会被当成「没有备忘录」的空框；点「重试」重新读，读到了回到两栏。
+    // 抓住的错误实现：提示条只放在编辑卡里，编辑卡随「没有选中、也没在新建」一起隐藏，读取失败的页面一片空白（审查复现过）。
+    function test_initialReadFailureShownWithRetry() {
+        // init() 建好的页面读取正常；藏起来，单独建一个第一次读取就失败的页面，点击都落在新页面上。
+        view.visible = false;
+        service.failList = true;
+        var failed = createTemporaryObject(viewComponent, testCase);
+        verify(failed);
+        compare(failed.readFailure, "读取备忘录列表失败：数据库不可用", "前置：第一次读取失败");
+        verify(failed.libraryEmpty && !failed.hasEditor, "前置：没有编辑卡，卡里那条提示跟着看不见");
+        var banner = findChild(failed, "memoPageErrorBanner");
+        var retry = findChild(failed, "memoPageErrorBannerRetry");
+        verify(banner !== null && retry !== null);
+        compare(banner.visible, true, "出错提示显示在页面上");
+        compare(findChild(failed, "memoPageError").text, "读取备忘录列表失败：数据库不可用");
+        compare(retry.visible, true, "读取失败带「重试」");
+        mouseClick(retry);
+        compare(failed.readFailure, "读取备忘录列表失败：数据库不可用", "前置：重试时还是读不到");
+        compare(banner.visible, true, "还是读不到，提示留着");
+        service.failList = false;
+        mouseClick(retry);
+        tryCompare(failed, "selectedId", 11, 3000);
+        compare(failed.errorMessage, "");
+        compare(banner.visible, false, "读到了，回到两栏，页面上的提示收起");
+    }
+    // 产品保证：左栏还在、编辑卡不在时读取失败（换了筛选后重读失败），出错提示放在编辑卡的位置上，不盖住左栏。
+    // 抓住的错误实现：页面上的提示只在「一条备忘都没有」时出现；或者照样从框的最左边开始，压在列表上。
+    function test_readFailureWithoutEditorBesideList() {
+        service.failList = true;
+        view.selectFilter(2);
+        verify(!view.hasEditor && !view.libraryEmpty, "前置：左栏还在，编辑卡不在");
+        var banner = child("memoPageErrorBanner");
+        var list = child("memoList");
+        compare(banner.visible, true);
+        verify(banner.mapToItem(view, 0, 0).x > list.mapToItem(view, list.width, 0).x, "在左栏右边");
+        service.failList = false;
+        mouseClick(child("memoPageErrorBannerRetry"));
+        tryCompare(view, "selectedId", 21, 3000);
+        compare(banner.visible, false);
     }
     // 产品保证：改分类用应用自己的主题弹层：右键一条备忘时在指针处弹出，打开时停在它现在的分类，
     // 上下键移动、回车选定并马上保存，Esc 关闭且不改分类，关掉后焦点回到列表；键盘在列表里按 Shift+F10 也能打开。

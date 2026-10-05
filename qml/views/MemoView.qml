@@ -201,14 +201,27 @@ FocusScope {
         // 每分钟一次的定时器在页面不可见时停着；回到页面或保存后重读时先对一次表，
         // 「今天」「昨天」按现在算，不沿用离开那会儿的时间。
         root.displayNow = new Date();
+        var previousFailure = root.readFailure;
         root.readFailure = "";
         root.reading = true;
         var values = root.memoServiceRef.listMemos(-1);
+        // 科目和备忘录算同一次读取，任何一个失败都保留上一次读到的内容。科目读失败时服务返回空列表，
+        // 不能拿它当「科目都被删了」：备忘会全按未分类分组，草稿也会被改成未分类（见下面对草稿的处理）。
+        var categoryValues = [];
+        if (root.readFailure.length === 0 && root.categoryManagerRef && typeof root.categoryManagerRef.getAllCategories === "function")
+            categoryValues = root.categoryManagerRef.getAllCategories();
         root.reading = false;
         if (root.readFailure.length > 0)
             return;
+        // 上一次读取失败的提示，这次读到了就收起。草稿和改了还没存的备忘不会重新装进编辑框（装载时才清提示），
+        // 不在这里清，提示会一直留到下一次保存。
+        if (previousFailure.length > 0 && root.errorMessage === previousFailure)
+            root.errorMessage = "";
         root.allMemos = values;
-        root.categories = root.categoryManagerRef && typeof root.categoryManagerRef.getAllCategories === "function" ? root.categoryManagerRef.getAllCategories() : [];
+        root.categories = categoryValues;
+        // 删除确认框要删的那条已经不在了（另一台删掉了它）：没有东西可删，收起确认框。
+        if (deleteConfirm.pendingId > 0 && !root.memo(deleteConfirm.pendingId))
+            root.cancelDelete();
         var choices = [
             {
                 id: -1,
@@ -236,8 +249,20 @@ FocusScope {
             oldIndex = Math.max(0, oldGlobalIndex);
         }
         root.rebuildRows();
-        if (root.drafting)
+        if (root.drafting) {
+            // 草稿的科目被另一台删掉了。草稿还没进数据库，数据库删科目时把备忘的科目置空，管不到它；
+            // 照已存备忘的结果改成未分类，文字原样保留，再按改动排一次自动保存。
+            // 不改的话，每次保存都带着不存在的科目编号被服务拒绝；换备忘、新建都要先保存，用户就被卡在这里，
+            // 而草稿不在列表里（右键改不了分类）、编辑区的分类又是只读的。
+            if (root.editorCategoryId > 0 && !root.categories.some(function (entry) {
+                return Number(entry.id) === root.editorCategoryId;
+            })) {
+                root.editorCategoryId = 0;
+                root.baselineCategoryId = 0;
+                root.edited();
+            }
             return;
+        }
         var current = root.memo(root.selectedId);
         if (current) {
             if (!root.dirty)
@@ -293,6 +318,10 @@ FocusScope {
             if (ok) {
                 root.selectedId = id;
                 root.drafting = false;
+                // 删除确认框开着的时候草稿被存下了（停止输入一秒的自动保存、切到后台都会存）：
+                // 确认框改记它存下的这一条。编号 0 只表示「还没进数据库的草稿」，存下以后就不是了。
+                if (deleteConfirm.pendingId === 0)
+                    deleteConfirm.pendingId = id;
             }
         } else {
             ok = root.memoServiceRef.updateMemo(root.selectedId, changes);
@@ -463,7 +492,7 @@ FocusScope {
     }
     // 点「删除」一律先确认，新建了还没写字的草稿也一样（确认后只丢草稿，回到新建前那条）。
     function requestDelete() {
-        // 草稿可能还没进数据库，编号先记 0，确认时再看它有没有被自动保存。
+        // 草稿还没进数据库，编号先记 0；确认框开着时它被自动保存的话，writeEdits 会换成存下的编号。
         deleteConfirm.pendingId = root.drafting ? 0 : root.selectedId;
         // 确认框里写出要删的是哪一条：标题，没有标题就用正文第一行，和列表里显示的一致。
         var title = root.editorTitle.trim();
@@ -477,14 +506,14 @@ FocusScope {
     function confirmDelete() {
         var id = deleteConfirm.pendingId;
         root.cancelDelete();
-        if (id === 0) {
-            if (root.drafting) {
-                root.discardDraft();
-                return;
-            }
-            // 确认框开着的时候，草稿已经被自动保存成了一条，按普通删除处理。
-            id = root.selectedId;
+        if (id === 0 && root.drafting) {
+            root.discardDraft();
+            return;
         }
+        // 只删确认框记下的那一条，不拿当前选中的补：确认框开着的时候，同步可能已经删掉了要删的那条、
+        // 改选了相邻的另一条，这时删选中的就删错了。
+        if (id <= 0)
+            return;
         // 用户明确确认删除时才舍弃当前草稿；失败仍保留输入。
         root.saving = true;
         var ok = root.memoServiceRef && root.memoServiceRef.deleteMemo(id);
@@ -590,6 +619,14 @@ FocusScope {
         function onCategoriesChanged() {
             if (root.pageActive)
                 root.reload();
+        }
+        // 只认 reload() 读科目时的失败。科目管理等别处的科目操作失败也走这个信号，和这一页无关。
+        function onOperationFailed(message) {
+            if (!root.reading)
+                return;
+            root.readFailure = message;
+            if (root.pageActive)
+                root.errorMessage = message;
         }
     }
     Connections {
@@ -1058,45 +1095,14 @@ FocusScope {
                 anchors.margins: root.paperPadding
                 anchors.bottomMargin: root.paperPadding + root.floatingKeyboardInset
                 spacing: Theme.space12
-                // 保存失败、另一台删除等情况的提示条，和倒计时页的错误横幅同一套：危险色描边加「!」，
-                // 不只靠红色表达出错；说明文字用正文色，读得清楚。
-                Rectangle {
+                // 保存失败、另一台删除等情况的提示条。
+                ErrorBanner {
                     objectName: "memoErrorBanner"
+                    messageName: "memoError"
                     Layout.fillWidth: true
                     visible: root.errorMessage.length > 0
-                    implicitHeight: errorRow.implicitHeight + Theme.space8 * 2
-                    radius: Theme.radiusMd
-                    // 底色和倒计时页的错误横幅一样用 surfaceRaised：危险色的「!」压在沉底色上日间只有 4.44:1，不达正文 4.5:1。
-                    color: Theme.surfaceRaised
-                    border.color: Theme.dangerBorder
-                    border.width: 1
-                    RowLayout {
-                        id: errorRow
-                        anchors.fill: parent
-                        anchors.leftMargin: Theme.space12
-                        anchors.rightMargin: Theme.space12
-                        anchors.topMargin: Theme.space8
-                        anchors.bottomMargin: Theme.space8
-                        spacing: Theme.space8
-                        Text {
-                            Layout.alignment: Qt.AlignTop
-                            text: "!"
-                            textFormat: Text.PlainText
-                            color: Theme.danger
-                            font.pixelSize: Theme.fontMd
-                            font.weight: Font.Bold
-                            Accessible.ignored: true
-                        }
-                        Text {
-                            objectName: "memoError"
-                            Layout.fillWidth: true
-                            text: root.errorMessage
-                            textFormat: Text.PlainText
-                            wrapMode: Text.Wrap
-                            color: Theme.ink
-                            font.pixelSize: Theme.fontSm
-                        }
-                    }
+                    message: root.errorMessage
+                    touchUi: root.touchUi
                 }
                 // 另一台删掉了正在编辑的这条：两个出口都要用户明确选，不会悄悄复活记录，也不会悄悄丢字。
                 RowLayout {
@@ -1292,6 +1298,23 @@ FocusScope {
                 }
             }
         }
+        // 编辑卡不在的时候（第一次读取就失败，或者换筛选后重读失败），卡里那条提示跟着看不见，
+        // 页面看起来就像「没有备忘录」。这时把提示放在编辑卡的位置上，读取失败的带「重试」；左栏也不在时从框的左边开始。
+        ErrorBanner {
+            objectName: "memoPageErrorBanner"
+            messageName: "memoPageError"
+            visible: !root.hasEditor && root.errorMessage.length > 0
+            anchors {
+                top: parent.top
+                left: root.libraryEmpty ? parent.left : divider.right
+                leftMargin: root.libraryEmpty ? 0 : Theme.space16
+                right: parent.right
+            }
+            message: root.errorMessage
+            retryable: root.readFailure.length > 0
+            touchUi: root.touchUi
+            onRetryRequested: root.reload()
+        }
     }
     // 改分类的弹层：列表里右键一条备忘（iPad 长按后不拖、直接松手；键盘 Shift+F10）时在指针处弹出。
     // 只列已有的分类（写过备忘的科目）和「未分类」，不在这里新建——新分类从右上角「新建」建。
@@ -1465,6 +1488,63 @@ FocusScope {
                     primary: true
                     onClicked: root.confirmDelete()
                 }
+            }
+        }
+    }
+    // 出错提示条，和倒计时页的错误横幅同一套：危险色描边加「!」，不只靠红色表达出错；说明文字用正文色，读得清楚。
+    // 两处用到：编辑卡里一条（memoErrorBanner），编辑卡不在时页面上一条（memoPageErrorBanner）。
+    component ErrorBanner: Rectangle {
+        id: banner
+        property string message: ""
+        // 里面那行说明文字的 objectName。两条提示条各用各的名字，测试才分得清找到的是哪一条。
+        property string messageName: ""
+        // 读取失败时为真，多一个「重试」。保存失败不放：再改一下内容就会重新保存。
+        property bool retryable: false
+        property bool touchUi: false
+        signal retryRequested
+        implicitHeight: bannerRow.implicitHeight + Theme.space8 * 2
+        radius: Theme.radiusMd
+        // 底色和倒计时页的错误横幅一样用 surfaceRaised：危险色的「!」压在沉底色上日间只有 4.44:1，不达正文 4.5:1。
+        color: Theme.surfaceRaised
+        border.color: Theme.dangerBorder
+        border.width: 1
+        RowLayout {
+            id: bannerRow
+            anchors.fill: parent
+            anchors.leftMargin: Theme.space12
+            anchors.rightMargin: Theme.space12
+            anchors.topMargin: Theme.space8
+            anchors.bottomMargin: Theme.space8
+            spacing: Theme.space8
+            // 「!」对齐说明文字的第一行；这一块整体再和「重试」按钮上下居中。
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: Theme.space8
+                Text {
+                    Layout.alignment: Qt.AlignTop
+                    text: "!"
+                    textFormat: Text.PlainText
+                    color: Theme.danger
+                    font.pixelSize: Theme.fontMd
+                    font.weight: Font.Bold
+                    Accessible.ignored: true
+                }
+                Text {
+                    objectName: banner.messageName
+                    Layout.fillWidth: true
+                    text: banner.message
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                    color: Theme.ink
+                    font.pixelSize: Theme.fontSm
+                }
+            }
+            PageActionButton {
+                objectName: banner.objectName + "Retry"
+                visible: banner.retryable
+                implicitHeight: banner.touchUi ? 44 : Theme.controlHeightMd
+                text: qsTr("重试")
+                onClicked: banner.retryRequested()
             }
         }
     }
