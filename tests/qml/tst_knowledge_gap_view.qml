@@ -429,6 +429,24 @@ TestCase {
         compare(view.gaps.length, 0)
     }
 
+    // 产品保证：出错原因很长时（数据库报错常常一长串）整句折行显示，不被截断；文字用正文色放在浮起面上，
+    // 和备忘录页的出错提示同一个样子。对比度由 tst_contrast_audit 的「出错提示」一轮把关。
+    // 抓住的错误实现：固定一行高、末尾省略，用户只看到半句话；或者危险色字压在沉底色上。
+    function test_longErrorWrapsInsteadOfEliding() {
+        var view = createTemporaryObject(viewComponent, testCase)
+        verify(view)
+        view.loadError = "读取知识缺口失败：database disk image is malformed，数据库文件可能已经损坏，"
+                + "请先在「数据与管理」里用最近一份备份恢复，再回来看看这一页是否还能打开"
+        var banner = findChild(view, "knowledgeGapErrorBanner")
+        var text = findChild(view, "knowledgeGapErrorText")
+        verify(banner !== null && text !== null)
+        tryVerify(function () { return text.width > 0 && text.lineCount > 1 }, 3000, "长原因折成多行")
+        compare(text.truncated, false, "一个字都不截掉")
+        verify(banner.height >= text.height, "提示条跟着文字长高")
+        compare(text.color, Theme.ink)
+        compare(banner.color, Theme.surfaceRaised)
+    }
+
     function test_missingServiceLeavesEmptyListInsteadOfThrowing() {
         var view = createTemporaryObject(viewComponent, testCase, { knowledgeGapServiceRef: null })
         verify(view)

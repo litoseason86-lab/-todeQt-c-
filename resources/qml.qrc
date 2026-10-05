@@ -105,6 +105,7 @@
         <file alias="qml/components/Toast.qml">../qml/components/Toast.qml</file>
         <file alias="qml/components/ThemedToolTip.qml">../qml/components/ThemedToolTip.qml</file>
         <file alias="qml/components/ChoicePopup.qml">../qml/components/ChoicePopup.qml</file>
+        <file alias="qml/components/ErrorBanner.qml">../qml/components/ErrorBanner.qml</file>
         <file alias="sounds/phase-complete.wav">sounds/phase-complete.wav</file>
         <file alias="qml/components/DateInput.qml">../qml/components/DateInput.qml</file>
         <file alias="qml/components/DatePill.qml">../qml/components/DatePill.qml</file>
