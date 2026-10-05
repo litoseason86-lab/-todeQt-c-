@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <QVariantMap>
 
 class RoutineManager : public QObject
 {
@@ -29,6 +30,10 @@ public:
     // 两件事从不在同一次提交里发生。放在一条语句里覆盖写，少传一个参数就会把用户设好的
     // 「周一三五」静默改回「每天」——拆开之后这种错根本没有机会发生。
     Q_INVOKABLE bool updateRoutine(int id, const QString& title, int categoryId);
+    // 编辑只交出用户改过的字段，键为 title / categoryId。没交的取库里现在的值：
+    // 编辑开着时另一台改了它，同步写进来的新值不会被打开时的旧值盖掉。
+    // 不认识的键、类型不对的值整次拒绝；没有改动时只确认例行还在。
+    Q_INVOKABLE bool updateRoutineChanges(int id, const QVariantMap& changes);
     Q_INVOKABLE bool deleteRoutine(int id);
     Q_INVOKABLE bool setRoutineActive(int id, bool active);
     // 只改重复日的单字段写入，与 setRoutineActive 同形，供「重复」弹窗使用。

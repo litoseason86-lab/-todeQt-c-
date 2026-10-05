@@ -1,14 +1,17 @@
 #include "ScheduleService.h"
 
 #include "DatabaseManager.h"
+#include "QmlValues.h"
 
 #include <QDebug>
+#include <QHash>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QSqlRecord>
 
 #include <algorithm>
+#include <limits>
 
 namespace {
 
@@ -332,6 +335,78 @@ bool ScheduleService::deleteEntry(int id)
 
     emit scheduleChanged();
     return true;
+}
+
+bool ScheduleService::updateEntryChanges(int id, const QVariantMap& changes)
+{
+    static const QStringList textKeys = {QStringLiteral("title"), QStringLiteral("location")};
+    static const QStringList numberKeys = {QStringLiteral("weekday"), QStringLiteral("startMinutes"),
+                                           QStringLiteral("endMinutes"), QStringLiteral("weekStart"),
+                                           QStringLiteral("weekEnd"), QStringLiteral("weekParity"),
+                                           QStringLiteral("categoryId")};
+    QHash<QString, int> numbers;
+    for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
+        if (textKeys.contains(it.key())) {
+            if (it.value().typeId() != QMetaType::QString) {
+                reportFailure(QStringLiteral("课程名称和地点必须是文字"));
+                return false;
+            }
+            continue;
+        }
+        int number = 0;
+        if (!numberKeys.contains(it.key())) {
+            reportFailure(QStringLiteral("不能修改课程字段：%1").arg(it.key()));
+            return false;
+        }
+        // 取值范围交给下面的整条校验，这里只管是不是整数。
+        if (!QmlValues::integer(it.value(), std::numeric_limits<int>::min(), std::numeric_limits<int>::max(),
+                                &number)) {
+            reportFailure(QStringLiteral("课程的时间、周次和科目必须是整数"));
+            return false;
+        }
+        numbers.insert(it.key(), number);
+    }
+    if (id <= 0) {
+        reportFailure(QStringLiteral("课程编号无效"));
+        return false;
+    }
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        reportFailure(QStringLiteral("数据库未打开，无法修改课程"));
+        return false;
+    }
+    QSqlQuery query(db);
+    query.prepare(entrySelectSql() + QStringLiteral("WHERE s.id = :id"));
+    query.bindValue(QStringLiteral(":id"), id);
+    if (!query.exec()) {
+        reportFailure(QStringLiteral("读取课程失败: %1").arg(query.lastError().text()));
+        return false;
+    }
+    if (!query.next()) {
+        reportFailure(QStringLiteral("课程不存在或已被删除"));
+        return false;
+    }
+    const QVariantMap current = entryFromQuery(query);
+    query.finish();
+    if (changes.isEmpty()) {
+        return true;
+    }
+    // 没交的字段用库里现在的值再写一遍：值没变，同步就不会把它们记成本机修改，也就不会盖掉另一台。
+    // 数据库只在主线程读写，读和写之间同步插不进来。
+    auto number = [&](const QString& key) {
+        if (numbers.contains(key)) {
+            return numbers.value(key);
+        }
+        const QVariant value = current.value(key);
+        return value.isValid() && !value.isNull() ? value.toInt() : -1; // 科目为空时是 -1（不设科目）
+    };
+    return updateEntry(id,
+                       changes.value(QStringLiteral("title"), current.value(QStringLiteral("title"))).toString(),
+                       number(QStringLiteral("weekday")), number(QStringLiteral("startMinutes")),
+                       number(QStringLiteral("endMinutes")),
+                       changes.value(QStringLiteral("location"), current.value(QStringLiteral("location"))).toString(),
+                       number(QStringLiteral("categoryId")), number(QStringLiteral("weekStart")),
+                       number(QStringLiteral("weekEnd")), number(QStringLiteral("weekParity")));
 }
 
 QVariantList ScheduleService::getEntries() const

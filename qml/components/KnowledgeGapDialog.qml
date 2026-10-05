@@ -45,6 +45,8 @@ Dialog {
     // 存成属性、由 refreshCategories 显式重查，而不是在 model 绑定里直接调 getAllCategories()：
     // 那样只在创建时查一次，之后科目增删、弹窗重新打开都看不到变化。
     property var categoryChoices: [{ id: 0, name: qsTr("不指定") }]
+    // 编辑时打开那一刻各栏的值。保存时和它比，只交出改过的字段（见 changedFields）。
+    property var openedValues: ({})
 
     signal saved()
 
@@ -122,7 +124,33 @@ Dialog {
         // 已解决的条目才显示结论输入；未解决时写结论没有意义。
         root.resolvedState = Number(gap.status || 0) === 2
         root.refreshCategories()
+        root.openedValues = {
+            title: titleField.text,
+            detail: detailField.text,
+            categoryId: root.selectedCategoryId,
+            priority: root.selectedPriority,
+            dueIso: root.dueIso,
+            resolution: resolutionField.text
+        }
         root.open()
+    }
+
+    // 只交出用户改过的字段。没动过的不写回：弹窗开着时另一台改了它们，同步写进来的新值
+    // 不会被这里打开时读到的旧值盖掉。内容、正文比框里的原文，没动过就一定相等。
+    function changedFields(title, due) {
+        var opened = root.openedValues
+        var changes = {}
+        if (titleField.text !== opened.title)
+            changes.title = title
+        if (detailField.text !== opened.detail)
+            changes.detail = detailField.text
+        if (root.selectedCategoryId !== opened.categoryId)
+            changes.categoryId = root.selectedCategoryId
+        if (root.selectedPriority !== opened.priority)
+            changes.priority = root.selectedPriority
+        if (root.dueIso !== opened.dueIso)
+            changes.dueDate = due
+        return changes
     }
 
     function submit() {
@@ -161,14 +189,17 @@ Dialog {
 
         var ok = false
         if (root.editing) {
-            if (typeof root.gapServiceRef.updateGap !== "function") {
+            if (typeof root.gapServiceRef.updateGapChanges !== "function") {
                 root.errorText = "记录服务不可用"
                 return
             }
-            ok = Boolean(root.gapServiceRef.updateGap(root.editingId, title, root.selectedCategoryId,
-                                                      detailField.text, root.selectedPriority, due))
+            var changes = root.changedFields(title, due)
+            ok = Object.keys(changes).length === 0
+                    || Boolean(root.gapServiceRef.updateGapChanges(root.editingId, changes))
             // 结论单独走 resolveGap：它同时决定 resolved_at，不能混进普通字段更新。
-            if (ok && root.resolvedState && typeof root.gapServiceRef.resolveGap === "function") {
+            // 结论没改就不写，免得把另一台刚补的结论盖回打开时的旧文字。
+            if (ok && root.resolvedState && resolutionField.text !== root.openedValues.resolution
+                    && typeof root.gapServiceRef.resolveGap === "function") {
                 ok = Boolean(root.gapServiceRef.resolveGap(root.editingId, resolutionField.text))
             }
         } else {

@@ -70,6 +70,10 @@ public:
                                const QString& detail,
                                int priority,
                                const QVariant& dueDateValue);
+    // 编辑弹窗只交出用户改过的字段，键为 title / categoryId / detail / priority / dueDate（空串 = 未排期）。
+    // 没交的字段取库里现在的值：弹窗开着时另一台改了它们，同步写进来的新值不会被弹窗打开时的旧值盖掉。
+    // 不认识的键、类型不对的值整次拒绝；没有改动时只确认条目还在。
+    Q_INVOKABLE bool updateGapChanges(int gapId, const QVariantMap& changes);
     Q_INVOKABLE bool setDueDate(int gapId, const QVariant& dueDateValue);
     // 批量改期在一个事务内校验全部编号，任一条不合法就整批回滚，
     // 不留下「一半改了一半没改」的中间状态。

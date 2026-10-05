@@ -120,6 +120,55 @@ bool CountdownService::addGoal(const QString& name, const QDate& targetDate)
     return true;
 }
 
+bool CountdownService::updateGoalChanges(int id, const QVariantMap& changes)
+{
+    const QString nameKey = QStringLiteral("name");
+    const QString dateKey = QStringLiteral("targetDate");
+    for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
+        if (it.key() != nameKey && it.key() != dateKey) {
+            emit operationFailed(QStringLiteral("不能修改目标字段：%1").arg(it.key()));
+            return false;
+        }
+        if (it.value().typeId() != QMetaType::QString) {
+            emit operationFailed(QStringLiteral("目标名称和日期必须是文字"));
+            return false;
+        }
+    }
+    QDate targetDate;
+    if (changes.contains(dateKey)) {
+        targetDate = QDate::fromString(changes.value(dateKey).toString(), Qt::ISODate);
+        if (!targetDate.isValid()) {
+            emit operationFailed(QStringLiteral("目标日期无效"));
+            return false;
+        }
+    }
+    if (!ensureDatabaseReady()) {
+        return false;
+    }
+    // 当前值从库里读，不用内存里的列表：另一台刚同步进来的修改以库为准。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral("SELECT name, target_date FROM countdown_goals WHERE id = :id"));
+    query.bindValue(QStringLiteral(":id"), id);
+    if (!query.exec()) {
+        emit operationFailed(QStringLiteral("读取目标失败: ") + query.lastError().text());
+        return false;
+    }
+    if (!query.next()) {
+        emit operationFailed(QStringLiteral("目标不存在"));
+        return false;
+    }
+    const QString currentName = query.value(0).toString();
+    const QDate currentDate = QDate::fromString(query.value(1).toString(), Qt::ISODate);
+    query.finish();
+    if (changes.isEmpty()) {
+        return true;
+    }
+    // 没交的字段用库里现在的值再写一遍：值没变，同步就不会把它记成本机修改，也就不会盖掉另一台。
+    // 数据库只在主线程读写，读和写之间同步插不进来。
+    return updateGoal(id, changes.contains(nameKey) ? changes.value(nameKey).toString() : currentName,
+                      changes.contains(dateKey) ? targetDate : currentDate);
+}
+
 bool CountdownService::updateGoal(int id, const QString& name, const QDate& targetDate)
 {
     QString normalizedName;

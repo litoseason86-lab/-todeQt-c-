@@ -143,7 +143,7 @@ TestCase {
         signal operationFailed(string message)
 
         function addGoal(name, targetDate) { return testCase.countWrite() }
-        function updateGoal(goalId, name, targetDate) { return testCase.countWrite() }
+        function updateGoalChanges(goalId, changes) { return testCase.countWrite() }
     }
 
     CountdownDialog {
@@ -178,7 +178,7 @@ TestCase {
             testCase.countWrite()
             return 42
         }
-        function updateGap(id, title, categoryId, detail, priority, due) {
+        function updateGapChanges(id, changes) {
             return testCase.countWrite()
         }
     }
@@ -247,7 +247,7 @@ TestCase {
         }
         function findConflicts() { return [] }
         function addEntry() { return testCase.countWrite() }
-        function updateEntry() { return testCase.countWrite() }
+        function updateEntryChanges() { return testCase.countWrite() }
         function setPeriods(periods) { return testCase.countWrite() }
     }
 

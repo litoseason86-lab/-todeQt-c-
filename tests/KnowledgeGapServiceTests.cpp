@@ -67,6 +67,7 @@ private slots:
     void listFiltersByStatusCategoryAndSearchText();
     void resolveKeepsFirstResolvedAtAndReopenKeepsResolution();
     void editingResolvedGapDoesNotReopenIt();
+    void updateGapChangesWritesOnlyGivenFields();
     void schedulingResolvedGapIsRejected();
     void batchMoveRollsBackWholeSelectionOnBadId();
     void convertToTaskCreatesTaskAndLinksGap();
@@ -430,6 +431,60 @@ void KnowledgeGapServiceTests::editingResolvedGapDoesNotReopenIt()
     QCOMPARE(gap.value(QStringLiteral("title")).toString(),
              QStringLiteral("已想明白（改过标题）"));
     QCOMPARE(gap.value(QStringLiteral("resolution")).toString(), QStringLiteral("结论"));
+}
+
+// 产品保证：字段级入口只改交进来的字段；没交的字段取库里现在的值。弹窗开着时另一台改了正文和日期
+// （这里直接写库，模拟同步写进来），这边只改内容后保存，另一台的正文和日期还在，低优先级也不被抬高。
+// 不认识的键、类型不对的值整次拒绝且什么都不写；没有改动时只确认条目还在。
+// 抓住的错误实现：按弹窗打开时的值整条写回（正文、日期被盖回旧值），或没交的字段写成默认值。
+void KnowledgeGapServiceTests::updateGapChangesWritesOnlyGivenFields()
+{
+    KnowledgeGapService* service = KnowledgeGapService::instance();
+    const int categoryId = seedCategory(QStringLiteral("字段级科目"));
+    QVERIFY(categoryId > 0);
+    const QDate due = logicalToday().addDays(3);
+    const int id = service->addGap(QStringLiteral("原内容"), categoryId, QStringLiteral("原正文"), 0, due, 0);
+    QVERIFY(id > 0);
+
+    const QDate remoteDue = logicalToday().addDays(5);
+    QSqlQuery remote(DatabaseManager::instance()->database());
+    remote.prepare(QStringLiteral("UPDATE knowledge_gaps SET detail = :detail, due_date = :due WHERE id = :id"));
+    remote.bindValue(QStringLiteral(":detail"), QStringLiteral("另一台补的正文"));
+    remote.bindValue(QStringLiteral(":due"), remoteDue.toString(Qt::ISODate));
+    remote.bindValue(QStringLiteral(":id"), id);
+    QVERIFY(remote.exec());
+
+    QSignalSpy changed(service, &KnowledgeGapService::gapsChanged);
+    QVERIFY(service->updateGapChanges(id, {{QStringLiteral("title"), QStringLiteral("改过的内容")}}));
+    QCOMPARE(changed.count(), 1);
+    QVariantMap gap = service->getGap(id);
+    QCOMPARE(gap.value(QStringLiteral("title")).toString(), QStringLiteral("改过的内容"));
+    QCOMPARE(gap.value(QStringLiteral("detail")).toString(), QStringLiteral("另一台补的正文"));
+    QCOMPARE(gap.value(QStringLiteral("dueDate")).toString(), remoteDue.toString(Qt::ISODate));
+    QCOMPARE(gap.value(QStringLiteral("priority")).toInt(), 0);
+    QCOMPARE(gap.value(QStringLiteral("categoryId")).toInt(), categoryId);
+
+    // 只改日期：清空成未排期，状态跟着回到待处理（和整条接口同一口径）。
+    QVERIFY(service->updateGapChanges(id, {{QStringLiteral("dueDate"), QString()}}));
+    gap = service->getGap(id);
+    QCOMPARE(gap.value(QStringLiteral("dueDate")).toString(), QString());
+    QCOMPARE(gap.value(QStringLiteral("status")).toInt(), static_cast<int>(KnowledgeGapService::StatusOpen));
+    QCOMPARE(gap.value(QStringLiteral("detail")).toString(), QStringLiteral("另一台补的正文"));
+
+    // 整次拒绝，什么都不写。
+    changed.clear();
+    QVERIFY(!service->updateGapChanges(id, {{QStringLiteral("status"), 2},
+                                            {QStringLiteral("title"), QStringLiteral("不该写进去")}}));
+    QVERIFY(!service->updateGapChanges(id, {{QStringLiteral("detail"), 5}}));
+    QVERIFY(!service->updateGapChanges(id, {{QStringLiteral("priority"), 1.5},
+                                            {QStringLiteral("title"), QStringLiteral("不该写进去")}}));
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(service->getGap(id).value(QStringLiteral("title")).toString(), QStringLiteral("改过的内容"));
+
+    // 没有改动：条目在就算成功，不在就失败；都不写库。
+    QVERIFY(service->updateGapChanges(id, {}));
+    QVERIFY(!service->updateGapChanges(id + 1000, {}));
+    QCOMPARE(changed.count(), 0);
 }
 
 void KnowledgeGapServiceTests::schedulingResolvedGapIsRejected()

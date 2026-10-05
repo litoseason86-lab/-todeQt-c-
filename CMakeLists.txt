@@ -151,6 +151,7 @@ set(APP_SOURCES
     src/services/MemoService.cpp
     src/services/TaskInteractionCoordinator.h
     src/services/TaskInteractionCoordinator.cpp
+    src/services/QmlValues.h
     # 外部 AI 接入（plans/047）：common 是与辅助程序共用的契约与路径，bridge 只编入主应用。
     src/mcp/common/McpContracts.h
     src/mcp/common/McpContracts.cpp

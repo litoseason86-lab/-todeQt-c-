@@ -3,6 +3,7 @@
 #include "AppSettings.h"
 #include "DatabaseManager.h"
 #include "LogicalDay.h"
+#include "QmlValues.h"
 #include "TaskManager.h"
 
 #include <QDateTime>
@@ -11,6 +12,8 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QVariant>
+
+#include <limits>
 
 namespace {
 
@@ -335,6 +338,63 @@ bool KnowledgeGapService::updateGap(int gapId,
 
     emit gapsChanged();
     return true;
+}
+
+bool KnowledgeGapService::updateGapChanges(int gapId, const QVariantMap& changes)
+{
+    const QString titleKey = QStringLiteral("title");
+    const QString detailKey = QStringLiteral("detail");
+    const QString dueKey = QStringLiteral("dueDate");
+    const QString categoryKey = QStringLiteral("categoryId");
+    const QString priorityKey = QStringLiteral("priority");
+    for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
+        const bool textField = it.key() == titleKey || it.key() == detailKey || it.key() == dueKey;
+        if (!textField && it.key() != categoryKey && it.key() != priorityKey) {
+            return reportFailure(QStringLiteral("不能修改知识缺口字段：%1").arg(it.key()));
+        }
+        if (textField && it.value().typeId() != QMetaType::QString) {
+            return reportFailure(QStringLiteral("知识缺口的内容、正文和日期必须是文字"));
+        }
+    }
+    int categoryId = 0;
+    if (changes.contains(categoryKey)
+        && !QmlValues::integer(changes.value(categoryKey), -1, std::numeric_limits<int>::max(), &categoryId)) {
+        return reportFailure(QStringLiteral("科目编号无效"));
+    }
+    int priority = 0;
+    if (changes.contains(priorityKey)
+        && !QmlValues::integer(changes.value(priorityKey), 0, std::numeric_limits<int>::max(), &priority)) {
+        return reportFailure(QStringLiteral("优先级无效"));
+    }
+    if (!isValidGapId(gapId)) {
+        return reportFailure(QStringLiteral("条目编号无效"));
+    }
+    if (!databaseReady()) {
+        return false;
+    }
+    // 自己查当前记录：要分清「条目已不存在」和「查询失败」，两种情况报给用户的原因不同。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QLatin1String(kGapSelectSql) + QStringLiteral("WHERE g.id = :id"));
+    query.bindValue(QStringLiteral(":id"), gapId);
+    if (!query.exec()) {
+        return reportFailure(QStringLiteral("读取知识缺口失败：%1").arg(query.lastError().text()));
+    }
+    if (!query.next()) {
+        return reportFailure(QStringLiteral("这条记录已不存在"));
+    }
+    const QVariantMap current = rowToVariantMap(query, logicalToday());
+    query.finish();
+    if (changes.isEmpty()) {
+        return true;
+    }
+    // 没交的字段用库里现在的值再写一遍：值没变，同步就不会把它们记成本机修改，也就不会盖掉另一台。
+    // 数据库只在主线程读写，读和写之间同步插不进来。
+    return updateGap(gapId,
+                     changes.value(titleKey, current.value(titleKey)).toString(),
+                     changes.contains(categoryKey) ? categoryId : current.value(categoryKey).toInt(),
+                     changes.value(detailKey, current.value(detailKey)).toString(),
+                     changes.contains(priorityKey) ? priority : current.value(priorityKey).toInt(),
+                     changes.value(dueKey, current.value(dueKey)).toString());
 }
 
 bool KnowledgeGapService::setDueDate(int gapId, const QVariant& dueDateValue)

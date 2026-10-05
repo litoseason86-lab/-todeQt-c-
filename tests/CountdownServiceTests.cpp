@@ -44,6 +44,7 @@ private slots:
     void rejectsInvalidNamesAndDates();
     void updateGoalValidatesAndUpdatesExistingGoal();
     void updateGoalIgnoredWriteKeepsModelUnchanged();
+    void updateGoalChangesWritesOnlyGivenFields();
     void deleteGoalRemovesModelDatabaseAndRefreshesPrimary();
     void reorderMovesModelPersistsOrdersAndRefreshesPrimary();
     void reorderFailureKeepsOriginalModelOrder();
@@ -192,6 +193,46 @@ void CountdownServiceTests::updateGoalValidatesAndUpdatesExistingGoal()
     QCOMPARE(query.value(0).toString(), QStringLiteral("更新目标"));
     QCOMPARE(QDate::fromString(query.value(1).toString(), Qt::ISODate), updatedDate);
     QVERIFY(!query.value(2).toString().isEmpty());
+}
+
+// 产品保证：倒计时的字段级入口只改交进来的字段；没交的取库里现在的值。弹窗开着时另一台改了日期
+// （这里直接写库，模拟同步写进来），这边只改名称后保存，日期还是另一台的。
+// 不认识的键、类型不对、日期写错都整次拒绝且什么都不写；没有改动时只确认目标还在。
+// 抓住的错误实现：按弹窗打开时的值整条写回（另一台改的日期被盖回旧值），或拿内存里过期的列表当当前值。
+void CountdownServiceTests::updateGoalChangesWritesOnlyGivenFields()
+{
+    CountdownService* service = CountdownService::instance();
+    const QDate originalDate = QDate::currentDate().addDays(10);
+    QVERIFY(service->addGoal(QStringLiteral("初试"), originalDate));
+    const int id = goalIdAt(service->model(), 0);
+    const QDate remoteDate = QDate::currentDate().addDays(40);
+    QSqlQuery remote(DatabaseManager::instance()->database());
+    remote.prepare(QStringLiteral("UPDATE countdown_goals SET target_date = :date WHERE id = :id"));
+    remote.bindValue(QStringLiteral(":date"), remoteDate.toString(Qt::ISODate));
+    remote.bindValue(QStringLiteral(":id"), id);
+    QVERIFY(remote.exec());
+
+    QSignalSpy errorSpy(service, &CountdownService::operationFailed);
+    QVERIFY(service->updateGoalChanges(id, {{QStringLiteral("name"), QStringLiteral("研究生初试")}}));
+    QCOMPARE(errorSpy.count(), 0);
+    QSqlQuery stored(DatabaseManager::instance()->database());
+    stored.prepare(QStringLiteral("SELECT name, target_date FROM countdown_goals WHERE id = :id"));
+    stored.bindValue(QStringLiteral(":id"), id);
+    QVERIFY(stored.exec() && stored.next());
+    QCOMPARE(stored.value(0).toString(), QStringLiteral("研究生初试"));
+    QCOMPARE(QDate::fromString(stored.value(1).toString(), Qt::ISODate), remoteDate);
+    stored.finish();
+
+    QVERIFY(!service->updateGoalChanges(id, {{QStringLiteral("note"), QStringLiteral("x")}}));
+    QVERIFY(!service->updateGoalChanges(id, {{QStringLiteral("name"), 5}}));
+    QVERIFY(!service->updateGoalChanges(id, {{QStringLiteral("targetDate"), QStringLiteral("2026-02-31")},
+                                             {QStringLiteral("name"), QStringLiteral("不该写进去")}}));
+    QCOMPARE(errorSpy.count(), 3);
+    QCOMPARE(nameAt(service->model(), 0), QStringLiteral("研究生初试"));
+
+    QVERIFY(service->updateGoalChanges(id, {}));
+    QVERIFY(!service->updateGoalChanges(id + 999, {}));
+    QCOMPARE(errorSpy.count(), 4);
 }
 
 void CountdownServiceTests::updateGoalIgnoredWriteKeepsModelUnchanged()

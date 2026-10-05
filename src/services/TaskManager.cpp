@@ -5,6 +5,7 @@
 #include "DatabaseManager.h"
 #include "FocusSessionRules.h"
 #include "LogicalDay.h"
+#include "QmlValues.h"
 
 #include <QDebug>
 #include <QDateTime>
@@ -14,7 +15,6 @@
 #include <QSet>
 #include <QVariant>
 
-#include <cmath>
 #include <limits>
 
 namespace {
@@ -512,24 +512,16 @@ bool TaskManager::updateTaskChanges(int taskId, const QVariantMap& changes)
         return readTask(taskId).ok();
     }
 
-    // QML 的数字以浮点数传入。科目编号、预计用时都要是整数，不能把 1.5 悄悄当成 1。
-    auto integerOf = [&changes](const QString& key, int* result) {
-        bool ok = false;
-        const double number = changes.value(key).toDouble(&ok);
-        if (!ok || number != std::floor(number) || number < -1
-            || number > std::numeric_limits<int>::max()) {
-            return false;
-        }
-        *result = static_cast<int>(number);
-        return true;
-    };
+    // 科目编号 -1 或 0 表示不设科目。
     int categoryId = -1;
-    if (changes.contains(categoryKey) && !integerOf(categoryKey, &categoryId)) {
+    if (changes.contains(categoryKey)
+        && !QmlValues::integer(changes.value(categoryKey), -1, std::numeric_limits<int>::max(), &categoryId)) {
         qWarning() << "Failed to update task: invalid category id";
         return false;
     }
     int estimatedMinutes = -1; // -1 = 预计用时保持不变
-    if (changes.contains(estimateKey) && (!integerOf(estimateKey, &estimatedMinutes) || estimatedMinutes < 0)) {
+    if (changes.contains(estimateKey)
+        && !QmlValues::integer(changes.value(estimateKey), 0, std::numeric_limits<int>::max(), &estimatedMinutes)) {
         qWarning() << "Failed to update task: invalid estimated minutes";
         return false;
     }

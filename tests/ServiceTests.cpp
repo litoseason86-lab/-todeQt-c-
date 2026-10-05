@@ -884,6 +884,7 @@ private slots:
     void version2MigrationAddsRoutinesSchemaAndIndex();
     void routinesCategoryForeignKeyClearsWhenCategoryDeleted();
     void routineCrudAddsGetsUpdatesDeletes();
+    void updateRoutineChangesWritesOnlyGivenFields();
     void deletingRoutineReclaimsUntouchedTodayTask();
     void deletingRoutineKeepsTouchedTodayTask();
     void updatingRoutineSyncsTodayTask();
@@ -3828,6 +3829,48 @@ void ServiceTests::routinesCategoryForeignKeyClearsWhenCategoryDeleted()
     QVERIFY(routine.exec());
     QVERIFY(routine.next());
     QVERIFY(routine.value(0).isNull());
+}
+
+// 产品保证：例行的字段级入口只改交进来的字段；没交的取库里现在的值。编辑开着时另一台改了科目
+// （这里直接写库，模拟同步写进来），这边只改标题后保存，科目还是另一台的。
+// 不认识的键、类型不对的值整次拒绝且什么都不写；没有改动时只确认例行还在。
+// 抓住的错误实现：按打开编辑时的值整条写回（另一台改的科目被盖回旧值）。
+void ServiceTests::updateRoutineChangesWritesOnlyGivenFields()
+{
+    RoutineManager* manager = RoutineManager::instance();
+    const int remoteCategory = CategoryManager::instance()->addCategory(QStringLiteral("另一台的科目"), QStringLiteral("#123456"));
+    QVERIFY(remoteCategory > 0);
+    QVERIFY(manager->addRoutine(QStringLiteral("背单词"), -1));
+    const int id = manager->getRoutines().first().toMap().value(QStringLiteral("id")).toInt();
+    QVERIFY(id > 0);
+    QSqlQuery remote(DatabaseManager::instance()->database());
+    remote.prepare(QStringLiteral("UPDATE routines SET category_id = :category WHERE id = :id"));
+    remote.bindValue(QStringLiteral(":category"), remoteCategory);
+    remote.bindValue(QStringLiteral(":id"), id);
+    QVERIFY(remote.exec());
+
+    QSignalSpy spy(manager, &RoutineManager::routinesChanged);
+    QVERIFY(manager->updateRoutineChanges(id, {{QStringLiteral("title"), QStringLiteral("背单词 list 2")}}));
+    QCOMPARE(spy.count(), 1);
+    QVariantMap routine = manager->getRoutines().first().toMap();
+    QCOMPARE(routine.value(QStringLiteral("title")).toString(), QStringLiteral("背单词 list 2"));
+    QCOMPARE(routine.value(QStringLiteral("categoryId")).toInt(), remoteCategory);
+
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update routine: unknown field \"weekdays\"");
+    QVERIFY(!manager->updateRoutineChanges(id, {{QStringLiteral("weekdays"), 1},
+                                                {QStringLiteral("title"), QStringLiteral("不该写进去")}}));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update routine: title must be text");
+    QVERIFY(!manager->updateRoutineChanges(id, {{QStringLiteral("title"), 5}}));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update routine: invalid category id");
+    QVERIFY(!manager->updateRoutineChanges(id, {{QStringLiteral("categoryId"), 1.5}}));
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(manager->getRoutines().first().toMap().value(QStringLiteral("title")).toString(),
+             QStringLiteral("背单词 list 2"));
+
+    QVERIFY(manager->updateRoutineChanges(id, {}));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update routine: routine not found 999999");
+    QVERIFY(!manager->updateRoutineChanges(999999, {}));
+    QCOMPARE(spy.count(), 1);
 }
 
 void ServiceTests::routineCrudAddsGetsUpdatesDeletes()

@@ -35,6 +35,9 @@ TestCase {
         readonly property int maxPeriodCount: 24
         property bool failPeriodLoad: false
         property int setPeriodsCallCount: 0
+        // 编辑课表时交上来的改动表和调用次数，用来核对弹窗只交改过的字段。
+        property var lastEntryChanges: null
+        property int entryUpdateCalls: 0
         property var currentPeriods: [
             { index: 1, startMinutes: 480, endMinutes: 525 },
             { index: 2, startMinutes: 535, endMinutes: 580 }
@@ -48,6 +51,11 @@ TestCase {
             return scheduleService.currentPeriods
         }
         function findConflicts() { return [] }
+        function updateEntryChanges(id, changes) {
+            scheduleService.entryUpdateCalls += 1
+            scheduleService.lastEntryChanges = changes
+            return true
+        }
         function setPeriods(periods) {
             scheduleService.setPeriodsCallCount += 1
             var stored = []
@@ -126,18 +134,24 @@ TestCase {
         readonly property int maxDetailLength: 2000
         // 记下调用次数：用来证明超长输入在弹窗里就被拦住了，根本没走到服务。
         property int addCalls: 0
-        // 记下最近一次保存收到的优先级，用来核对「低」有没有被悄悄改成「中」。
-        property int lastUpdatedPriority: -1
+        // 记下最近一次编辑交上来的改动表和调用次数，用来核对弹窗只交改过的字段。
+        property var lastChanges: null
+        property int updateCalls: 0
+        property int resolveCalls: 0
 
         function addGap(title, categoryId, detail, priority, dueDate, sourceTaskId) {
             knowledgeGapService.addCalls += 1
             return 1
         }
-        function updateGap(id, title, categoryId, detail, priority, dueDate) {
-            knowledgeGapService.lastUpdatedPriority = priority
+        function updateGapChanges(id, changes) {
+            knowledgeGapService.updateCalls += 1
+            knowledgeGapService.lastChanges = changes
             return true
         }
-        function resolveGap(id, resolution) { return true }
+        function resolveGap(id, resolution) {
+            knowledgeGapService.resolveCalls += 1
+            return true
+        }
     }
 
     KnowledgeGapDialog {
@@ -163,10 +177,14 @@ TestCase {
         knowledgeGapCapturePopup.close()
         wait(60)
         categoryManager.categoryRows = [{ id: 1, name: "专业课", color: "#d4a574" }]
-        knowledgeGapService.lastUpdatedPriority = -1
+        knowledgeGapService.lastChanges = null
+        knowledgeGapService.updateCalls = 0
+        knowledgeGapService.resolveCalls = 0
         knowledgeGapService.addCalls = 0
         scheduleService.failPeriodLoad = false
         scheduleService.setPeriodsCallCount = 0
+        scheduleService.lastEntryChanges = null
+        scheduleService.entryUpdateCalls = 0
         scheduleService.currentPeriods = [
             { index: 1, startMinutes: 480, endMinutes: 525 },
             { index: 2, startMinutes: 535, endMinutes: 580 }
@@ -208,6 +226,31 @@ TestCase {
         compare(testCase.fieldIn(entryDialog, "scheduleParityCombo").currentIndex, 1)
         // 编辑态才有删除入口。
         verify(testCase.fieldIn(entryDialog, "scheduleDeleteButton").visible)
+    }
+
+    // 产品保证：编辑课表只交出改过的字段，没改就不写库。弹窗开着时另一台改了别的字段（比如周次），
+    // 这边保存不会用打开时的旧值把它盖掉。
+    // 抓住的错误实现：整条交回（课名、地点、星期、起止时间、周次、单双周、科目全带上），或者没改也写一次。
+    function test_scheduleEntryDialogSendsOnlyChangedFields() {
+        var entry = {
+            id: 5, title: "高等数学", location: "A101", weekday: 2,
+            startMinutes: 480, endMinutes: 580,
+            weekStart: 1, weekEnd: 8, weekParity: 1, categoryId: 1
+        }
+        entryDialog.openForEdit(entry)
+        tryVerify(function () { return entryDialog.opened }, 2000)
+        testCase.fieldIn(entryDialog, "scheduleLocationField").text = "B305"
+        entryDialog.submit()
+        compare(scheduleService.entryUpdateCalls, 1)
+        compare(Object.keys(scheduleService.lastEntryChanges).join(","), "location")
+        compare(scheduleService.lastEntryChanges.location, "B305")
+        tryVerify(function () { return !entryDialog.visible }, 2000)
+
+        entryDialog.openForEdit(entry)
+        tryVerify(function () { return entryDialog.opened }, 2000)
+        entryDialog.submit()
+        compare(scheduleService.entryUpdateCalls, 1, "什么都没改，不写库")
+        tryVerify(function () { return !entryDialog.visible }, 2000, "照常收起")
     }
 
     function test_scheduleEntryRejectsEmptyActiveWeeks() {
@@ -386,7 +429,49 @@ TestCase {
 
         testCase.fieldIn(knowledgeGapDialog, "knowledgeGapTitleField").text = "低优先级那条（改了标题）"
         knowledgeGapDialog.submit()
-        compare(knowledgeGapService.lastUpdatedPriority, 0)
+        // 只交改过的标题：优先级没动就不交，更不会被抬成「中」。
+        compare(Object.keys(knowledgeGapService.lastChanges).join(","), "title")
+    }
+
+    // 产品保证：编辑知识缺口只交出改过的字段；结论没改就不重写。弹窗开着时另一台改了别的字段
+    // （或补了结论），这边保存不会用打开时的旧值把它们盖掉。什么都没改就不写库。
+    // 抓住的错误实现：整条交回（内容、正文、科目、优先级、日期全带上），或者每次都把结论重写一遍。
+    function test_knowledgeGapDialogSendsOnlyChangedFields() {
+        knowledgeGapService.updateCalls = 0
+        knowledgeGapService.resolveCalls = 0
+        knowledgeGapService.lastChanges = null
+        knowledgeGapDialog.openForEdit({
+            id: 11, title: "特征值", detail: "第五章", categoryId: 1,
+            priority: 2, status: 2, dueDate: "2026-09-20", resolution: "看懂了"
+        })
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        compare(knowledgeGapDialog.resolvedState, true, "前置：已解决的条目，结论栏在")
+        testCase.fieldIn(knowledgeGapDialog, "knowledgeGapDetailField").text = "第五章 例 3"
+        knowledgeGapDialog.submit()
+        compare(knowledgeGapService.updateCalls, 1)
+        compare(Object.keys(knowledgeGapService.lastChanges).join(","), "detail")
+        compare(knowledgeGapService.lastChanges.detail, "第五章 例 3")
+        compare(knowledgeGapService.resolveCalls, 0, "结论没改，不重写")
+
+        knowledgeGapDialog.openForEdit({
+            id: 11, title: "特征值", detail: "第五章", categoryId: 1,
+            priority: 2, status: 2, dueDate: "2026-09-20", resolution: "看懂了"
+        })
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        testCase.fieldIn(knowledgeGapDialog, "knowledgeGapResolutionField").text = "看懂了，补了一个反例"
+        knowledgeGapDialog.submit()
+        compare(knowledgeGapService.updateCalls, 1, "只改结论：普通字段一项没交，不调字段更新")
+        compare(knowledgeGapService.resolveCalls, 1)
+
+        knowledgeGapDialog.openForEdit({
+            id: 11, title: "特征值", detail: "第五章", categoryId: 1,
+            priority: 2, status: 1, dueDate: "2026-09-20", resolution: ""
+        })
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        knowledgeGapDialog.submit()
+        compare(knowledgeGapService.updateCalls, 1, "什么都没改，不写库")
+        compare(knowledgeGapService.resolveCalls, 1)
+        tryVerify(function () { return !knowledgeGapDialog.visible }, 2000, "照常收起")
     }
 
     function test_knowledgeGapDialogControlsStayInsideAvailableWidth() {
