@@ -986,6 +986,7 @@ private slots:
     void estimatedMinutesDefaultsToZeroAfterMigration();
     void addTaskPersistsEstimatedPomodoros();
     void updateTaskChangesEstimateAndRenamePreservesIt();
+    void updateTaskChangesWritesOnlyGivenFields();
     void taskAggregatesActualPomodorosFromValidWorkSessions();
     void freeFocusCountsMinutesButNotPomodoros();
     void pomodoroAggregationDoesNotCrossTasksOrLeakUnbound();
@@ -7035,6 +7036,67 @@ void ServiceTests::addTaskPersistsEstimatedPomodoros()
     QCOMPARE(normal.value(QStringLiteral("estimatedMinutes")).toInt(), 4);
     QCOMPARE(clamped.value(QStringLiteral("estimatedMinutes")).toInt(),
              TaskManager::kMaxEstimatedMinutes);
+}
+
+// 产品保证：字段级入口只改交进来的字段；没交的标题、日期、当天排序、科目、备注、预计用时原样留着。
+// 不认识的键、文本字段不是字符串、预计用时为负，整次拒绝且什么都不写；没有改动时只确认任务还在。
+// 抓住的错误实现：没交日期也照写一遍（空日期报错，或任务被挪到当天末尾）、没交备注就把备注清空。
+void ServiceTests::updateTaskChangesWritesOnlyGivenFields()
+{
+    TaskManager* manager = TaskManager::instance();
+    const QDate today = logicalToday();
+    const int categoryId = CategoryManager::instance()->addCategory(QStringLiteral("字段级科目"), QStringLiteral("#d4a574"));
+    QVERIFY(categoryId > 0);
+    const int taskId = insertTaskRow(QStringLiteral("原标题"), today);
+    const int later = insertTaskRow(QStringLiteral("同一天排在后面的"), today);
+    QVERIFY(taskId > 0 && later > 0);
+    QVERIFY(manager->updateTask(taskId, QStringLiteral("原标题"), categoryId, today.toString(Qt::ISODate), 45,
+                                QStringLiteral("原备注"), QVariant()));
+    QVERIFY(manager->reorderTasks(today.toString(Qt::ISODate), {taskId, later}));
+    const QVariantMap before = manager->readTask(taskId).value;
+    QCOMPARE(before.value(QStringLiteral("notes")).toString(), QStringLiteral("原备注"));
+    QCOMPARE(before.value(QStringLiteral("displayOrder")).toInt(), 1);
+
+    QSignalSpy changed(manager, &TaskManager::tasksChanged);
+    QVERIFY(manager->updateTaskChanges(taskId, {{QStringLiteral("notes"), QStringLiteral("新备注")}}));
+    QCOMPARE(changed.count(), 1);
+    QVariantMap after = manager->readTask(taskId).value;
+    QCOMPARE(after.value(QStringLiteral("notes")).toString(), QStringLiteral("新备注"));
+    for (const QString& key : {QStringLiteral("title"), QStringLiteral("date"), QStringLiteral("displayOrder"),
+                               QStringLiteral("categoryId"), QStringLiteral("categoryText"),
+                               QStringLiteral("estimatedMinutes"), QStringLiteral("completionNote")}) {
+        QCOMPARE(after.value(key), before.value(key));
+    }
+
+    // 只改日期：排到新日期末尾（和整条接口同一口径），其它字段不动。
+    const QDate tomorrow = today.addDays(1);
+    const int tomorrowTask = insertTaskRow(QStringLiteral("明天已有的"), tomorrow);
+    QVERIFY(tomorrowTask > 0);
+    QVERIFY(manager->updateTaskChanges(taskId, {{QStringLiteral("date"), tomorrow.toString(Qt::ISODate)}}));
+    after = manager->readTask(taskId).value;
+    QCOMPARE(after.value(QStringLiteral("date")).toString(), tomorrow.toString(Qt::ISODate));
+    QVERIFY(after.value(QStringLiteral("displayOrder")).toInt()
+            > manager->readTask(tomorrowTask).value.value(QStringLiteral("displayOrder")).toInt());
+    QCOMPARE(after.value(QStringLiteral("title")), before.value(QStringLiteral("title")));
+    QCOMPARE(after.value(QStringLiteral("notes")).toString(), QStringLiteral("新备注"));
+
+    // 整次拒绝，什么都不写，也不发变更。
+    changed.clear();
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update task: unknown field \"priority\"");
+    QVERIFY(!manager->updateTaskChanges(taskId, {{QStringLiteral("priority"), 1},
+                                                 {QStringLiteral("notes"), QStringLiteral("不该写进去")}}));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update task: field \"notes\" must be text");
+    QVERIFY(!manager->updateTaskChanges(taskId, {{QStringLiteral("notes"), 123}}));
+    QTest::ignoreMessage(QtWarningMsg, "Failed to update task: invalid estimated minutes");
+    QVERIFY(!manager->updateTaskChanges(taskId, {{QStringLiteral("estimatedMinutes"), -5},
+                                                 {QStringLiteral("notes"), QStringLiteral("不该写进去")}}));
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(manager->readTask(taskId).value.value(QStringLiteral("notes")).toString(), QStringLiteral("新备注"));
+
+    // 没有改动：任务在就算成功，不在就失败；都不写库、不发变更。
+    QVERIFY(manager->updateTaskChanges(taskId, {}));
+    QVERIFY(!manager->updateTaskChanges(999999, {}));
+    QCOMPARE(changed.count(), 0);
 }
 
 void ServiceTests::updateTaskChangesEstimateAndRenamePreservesIt()

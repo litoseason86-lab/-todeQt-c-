@@ -624,6 +624,7 @@ private slots:
     void batchSurvivesJsonRoundTrip();
     void insertUpdateDeleteReachOtherDevice();
     void editsOfDifferentFieldsAreBothKept();
+    void fieldLevelEditKeepsOtherDevicesChanges();
     void concurrentEditsOfSameFieldConvergeAndAreLogged();
     void sequentialEditsAcrossDevicesAreNotConflicts();
     void deleteWinsOverConcurrentEdit_deleteArrivesFirst();
@@ -1297,6 +1298,46 @@ void SyncTests::editsOfDifferentFieldsAreBothKept()
     for (const Device& device : {a, b}) {
         QCOMPARE(taskValue(device, id, QStringLiteral("title")).toString(), QStringLiteral("写论文（第二稿）"));
         QCOMPARE(taskValue(device, id, QStringLiteral("notes")).toString(), QStringLiteral("第三章"));
+    }
+    QCOMPARE(logCount(a) + logCount(b), 0);
+}
+
+// 产品保证：编辑弹窗只写用户改过的字段。弹窗开着时另一台改了同一条的备注和日期，这边只改标题后保存，
+// 两台上留下的都是「这边的标题 + 另一台的备注和日期」，也不算冲突。
+// 抓住的错误实现：按弹窗打开时的快照整条写回，把另一台刚改的备注、日期盖回打开时的旧值，并同步回去。
+void SyncTests::fieldLevelEditKeepsOtherDevicesChanges()
+{
+    Device a = openDevice(QStringLiteral("a"));
+    Device b = openDevice(QStringLiteral("b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString id = addTask(a, QStringLiteral("写论文"));
+    syncAll(cloud, {a, b});
+    const int localId = static_cast<int>(localIdOf(a, QStringLiteral("tasks"), id));
+    QVERIFY(localId > 0);
+
+    // A 打开编辑弹窗，读到的备注是空的、日期是原来的。
+    QVariantMap opened;
+    withServices(a, [&] { opened = TaskManager::instance()->readTask(localId).value; });
+    QCOMPARE(opened.value(QStringLiteral("notes")).toString(), QString());
+    QCOMPARE(opened.value(QStringLiteral("date")).toString(), QStringLiteral("2026-09-30"));
+
+    // 弹窗开着时，B 改了备注和日期，并且已经同步到 A。
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET notes = '第三章', date = '2026-10-02' WHERE sync_id = '%1'").arg(id)));
+    syncAll(cloud, {a, b});
+    QCOMPARE(taskValue(a, id, QStringLiteral("notes")).toString(), QStringLiteral("第三章"));
+
+    // A 只改了标题就保存。
+    bool saved = false;
+    withServices(a, [&] {
+        saved = TaskManager::instance()->updateTaskChanges(
+            localId, {{QStringLiteral("title"), QStringLiteral("写论文（第二稿）")}});
+    });
+    QVERIFY(saved);
+    syncAll(cloud, {a, b});
+    for (const Device& device : {a, b}) {
+        QCOMPARE(taskValue(device, id, QStringLiteral("title")).toString(), QStringLiteral("写论文（第二稿）"));
+        QCOMPARE(taskValue(device, id, QStringLiteral("notes")).toString(), QStringLiteral("第三章"));
+        QCOMPARE(taskValue(device, id, QStringLiteral("date")).toString(), QStringLiteral("2026-10-02"));
     }
     QCOMPARE(logCount(a) + logCount(b), 0);
 }

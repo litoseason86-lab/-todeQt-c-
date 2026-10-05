@@ -40,7 +40,7 @@ TestCase {
     EditTaskDialog {
         id: failingDialog
         categoryManagerRef: categoryManagerMock
-        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedMinutes) {
+        taskSubmitter: function(taskId, changes) {
             return false
         }
     }
@@ -50,21 +50,20 @@ TestCase {
     EditTaskDialog {
         id: estimateDialog
         categoryManagerRef: categoryManagerMock
-        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedMinutes) {
-            testCase.submittedMinutes = Number(estimatedMinutes)
+        taskSubmitter: function(taskId, changes) {
+            testCase.submittedMinutes = changes.estimatedMinutes === undefined ? -1 : Number(changes.estimatedMinutes)
             return true
         }
     }
 
-    // 完成记录用例的提交记录：带上实参个数，区分「第 7 个参数传了 undefined」和「根本没传」。
+    // 完成记录用例的提交记录：弹窗交出的改动表原样留着，断言看有哪些键。
     property var lastSubmission: null
 
     EditTaskDialog {
         id: completionDialog
         categoryManagerRef: categoryManagerMock
-        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedMinutes, notes, completionNote) {
-            testCase.lastSubmission = { taskId: taskId, notes: notes, completionNote: completionNote,
-                                        argCount: arguments.length }
+        taskSubmitter: function(taskId, changes) {
+            testCase.lastSubmission = { taskId: taskId, changes: changes }
             return true
         }
     }
@@ -180,9 +179,67 @@ TestCase {
         dialog.submit()
         compare(editedSpy.count, 1)
         compare(editedSpy.signalArguments[0][0], 9)
-        compare(editedSpy.signalArguments[0][1], "新标题")
-        compare(editedSpy.signalArguments[0][2], -1)
-        compare(editedSpy.signalArguments[0][3], isoWithOffset(1))
+        const changes = editedSpy.signalArguments[0][1]
+        compare(Object.keys(changes).sort().join(","), "date,title", "只交改过的两项，科目没动不交")
+        compare(changes.title, "新标题")
+        compare(changes.date, isoWithOffset(1))
+    }
+
+    // 产品保证：保存只交出用户改过的字段。弹窗开着时另一台改了别的字段，同步写进来的新值不会被这里打开时的旧值盖掉。
+    // 抓住的错误实现：按打开时的快照整条交回（标题、科目、日期、预计用时、备注全带上）。
+    function test_submitSendsOnlyChangedFields() {
+        dialog.openForTask({ id: 21, title: "整理错题", categoryId: 3, date: "2026-06-30",
+                             estimatedMinutes: 60, notes: "原备注" })
+        wait(20)
+        compare(dialog.dateOffsetSelection, -1, "前置：日期不在快捷项里，走日期框")
+        findChild(dialog, "editNotesField").text = "  新备注  "
+        dialog.submit()
+        compare(editedSpy.count, 1)
+        compare(editedSpy.signalArguments[0][0], 21)
+        const changes = editedSpy.signalArguments[0][1]
+        compare(Object.keys(changes).join(","), "notes", "只交备注：日期框、标题、科目、预计用时都没动")
+        compare(changes.notes, "新备注")
+    }
+
+    // 产品保证：什么都没改就点保存，不写库，弹窗直接收起。
+    // 抓住的错误实现：照样整条写回一次（另一台刚改的字段被打开时的旧值盖掉）。
+    function test_unchangedSubmitWritesNothing() {
+        dialog.openForTask({ id: 22, title: "背单词", categoryId: 5, date: isoWithOffset(0),
+                             estimatedMinutes: 30, notes: "List 3" })
+        tryCompare(dialog, "opened", true, 3000)
+        compare(dialog.dateOffsetSelection, 0, "前置：日期选的是「今天」快捷项")
+        dialog.submit()
+        compare(editedSpy.count, 0)
+        tryVerify(function () { return !dialog.visible }, 3000, "弹窗收起")
+        compare(dialog.errorText, "")
+    }
+
+    // 产品保证：只改科目时只交科目。
+    // 抓住的错误实现：比较科目时拿任务数据里的编号而不是打开时选中的那一项，或者没改也交。
+    function test_categoryChangeSendsOnlyCategory() {
+        dialog.openForTask({ id: 23, title: "阅读", categoryId: 3, date: isoWithOffset(0),
+                             estimatedMinutes: 0, notes: "" })
+        wait(20)
+        verify(dialog.selectCategoryById(5))
+        dialog.submit()
+        compare(editedSpy.count, 1)
+        const changes = editedSpy.signalArguments[0][1]
+        compare(Object.keys(changes).join(","), "categoryId")
+        compare(changes.categoryId, 5)
+    }
+
+    // 产品保证：任务的科目已经不在下拉里（科目被删了），没碰科目就保存，不会把它写成「不设置科目」。
+    // 抓住的错误实现：拿任务数据里的科目编号当基准——打开时下拉落在「不设置科目」，两者不等就被当成改了。
+    function test_missingCategoryIsNotRewritten() {
+        dialog.openForTask({ id: 24, title: "旧科目的任务", categoryId: 99, date: isoWithOffset(0),
+                             estimatedMinutes: 0, notes: "" })
+        wait(20)
+        compare(Number(dialog.categoryOptions[findChild(dialog, "editCategoryCombo").currentIndex].id), -1,
+                "前置：下拉里没有科目 99，落在「不设置科目」")
+        findChild(dialog, "editTitleField").text = "改个名"
+        dialog.submit()
+        compare(editedSpy.count, 1)
+        compare(Object.keys(editedSpy.signalArguments[0][1]).join(","), "title")
     }
 
     function test_blankTitleBlocksSubmit() {
@@ -357,22 +414,22 @@ TestCase {
         completionDialog.submit()
         verify(testCase.lastSubmission !== null, completionDialog.errorText)
         compare(testCase.lastSubmission.taskId, 8)
-        compare(testCase.lastSubmission.completionNote, "做完 1–15 题")
-        // 两栏分开：计划备注原样交回，不能被完成记录顶掉。
-        compare(testCase.lastSubmission.notes, "第三章")
+        compare(testCase.lastSubmission.changes.completionNote, "做完 1–15 题")
+        // 两栏分开：只改了完成记录，计划备注没动就不交，更不会被完成记录顶掉。
+        compare(Object.keys(testCase.lastSubmission.changes).join(","), "completionNote")
     }
 
     function test_uncompletedTaskLeavesCompletionNoteUntouched() {
-        // 未完成任务不显示完成记录栏，提交时第 7 个参数必须是 undefined：宿主原样交给 TaskManager，
-        // 它据此保持旧记录不变。若这里传空串，取消完成前写的记录就会被悄悄清空。
+        // 未完成任务不显示完成记录栏，提交的改动表里不能有完成记录：
+        // 若带上空串，取消完成前写的记录就会被悄悄清空。改一下标题，确保这次确实提交了。
         completionDialog.openForTask({ id: 9, title: "高等数学", categoryId: -1, date: isoWithOffset(0),
                                        completed: false, completionNote: "取消完成前写的" })
         wait(20)
         compare(completionDialog.editingCompleted, false)
+        findChild(completionDialog, "editTitleField").text = "高等数学（下）"
         completionDialog.submit()
         verify(testCase.lastSubmission !== null, completionDialog.errorText)
-        compare(testCase.lastSubmission.argCount, 7)
-        compare(typeof testCase.lastSubmission.completionNote, "undefined")
+        compare(Object.keys(testCase.lastSubmission.changes).join(","), "title")
     }
 
     function test_completionNoteLengthBoundary() {
@@ -393,7 +450,7 @@ TestCase {
         field.text = "一二三四五六七八九十"
         completionDialog.submit()
         verify(testCase.lastSubmission !== null, completionDialog.errorText)
-        compare(testCase.lastSubmission.completionNote, "一二三四五六七八九十")
+        compare(testCase.lastSubmission.changes.completionNote, "一二三四五六七八九十")
     }
 }
 

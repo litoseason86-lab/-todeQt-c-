@@ -113,7 +113,7 @@ TestCase {
 
         parent: testCase
         categoryManagerRef: categoryManager
-        taskSubmitter: function(taskId, title, categoryId, isoDate, estimatedMinutes, notes) {
+        taskSubmitter: function(taskId, changes) {
             return testCase.countWrite()
         }
     }
