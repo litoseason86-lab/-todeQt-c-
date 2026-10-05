@@ -23,7 +23,7 @@ public:
         socket->setParent(this);
         socket->setReadBufferSize(kMaxRequestBytes + 1);
         timer.setSingleShot(true);
-        timer.start(kHandshakeTimeoutMs);
+        timer.start(server->m_handshakeTimeoutMs);
         connect(&timer, &QTimer::timeout, this, [this] { socket->abort(); });
         connect(&stream, &McpJsonStream::failed, this, [this] { socket->abort(); });
         connect(&stream, &McpJsonStream::malformed, this, [this] { socket->abort(); });

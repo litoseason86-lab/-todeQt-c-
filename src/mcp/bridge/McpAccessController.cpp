@@ -81,6 +81,7 @@ bool McpAccessController::start()
     }
     credential = credential.toHex();
     auto server = std::make_unique<McpLocalServer>(paths, this);
+    server->setHandshakeTimeoutMs(m_handshakeTimeoutMs);
     if (!server->listen(credential, [this](Tool tool, const QJsonObject& arguments) { return dispatch(tool, arguments); })
         || !McpEndpointFiles::publish(paths, credential)) {
         server->close();
@@ -228,6 +229,11 @@ void McpAccessController::setBlockProvider(std::function<QList<BusyBlock>()> pro
     m_blockProvider = std::move(provider);
 }
 
+void McpAccessController::setHandshakeTimeoutMs(int milliseconds)
+{
+    m_handshakeTimeoutMs = qMax(1, milliseconds);
+    if (m_server) m_server->setHandshakeTimeoutMs(m_handshakeTimeoutMs);
+}
 int McpAccessController::connectionCount() const { return m_server ? m_server->connectionCount() : 0; }
 QString McpAccessController::helperPath() const
 {

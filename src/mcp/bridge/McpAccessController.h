@@ -44,6 +44,8 @@ public:
     void setDataHandler(McpLocalServer::Handler handler);
     QJsonObject appStatus() const;
     void setBlockProvider(std::function<QList<McpContracts::BusyBlock>()> provider);
+    // 只供测试缩短握手期限的等待，见 McpLocalServer::setHandshakeTimeoutMs；之后开启的服务端也沿用。
+    void setHandshakeTimeoutMs(int milliseconds);
 signals:
     void stateChanged();
     void sessionChanged();
@@ -66,4 +68,5 @@ private:
     bool m_writeEnabled = false;
     bool m_restoreBlocked = false;
     bool m_shuttingDown = false;
+    int m_handshakeTimeoutMs = McpContracts::kHandshakeTimeoutMs;
 };

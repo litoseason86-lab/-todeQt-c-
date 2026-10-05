@@ -21,6 +21,7 @@ public:
     // 防止别的进程占着连接只发半帧；stdio 的另一端是拉起辅助程序的 AI 客户端本身，
     // 它分几次写完一行不该让进程自行退出。
     void setPartialTimeout(int milliseconds);
+    int partialTimeout() const { return m_partialTimeoutMs; }
     // 开启后，超过输入上限的一行只丢弃这一行并发 oversized()，后面的消息照常处理；
     // 关闭（默认）时按传输失败处理，适合对端必须守规矩的私有通道。
     void setOversizedLineRecovery(bool enabled);

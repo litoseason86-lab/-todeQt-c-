@@ -896,7 +896,7 @@ private slots:
         QVERIFY(until([&] { return spy.size() == 1; }));
         QCOMPARE(spy.first().at(1).toJsonObject().value("structuredContent").toObject().value("connected"), QJsonValue(true));
     }
-    void connectionLimitAndHandshakeTimeout()
+    void connectionLimitRejectsExcessPeer()
     {
         Host host; QVERIFY(host.access.setEnabled(true));
         std::vector<std::unique_ptr<RawPeer>> peers;
@@ -905,27 +905,46 @@ private slots:
         }
         // 满员时等对方发完握手帧再回拒绝原因：连上就立刻写一帧然后关闭的话，对方的握手帧会撞上
         // 已关闭的连接，它只能报成“连不上”。凭据对不对都先报满员，反正这条连接不会被执行。
+        // 这里用生产的握手期限：上面那些连接要在检查期间一直挂着，期限由下一个用例单独测。
         RawPeer excess; QVERIFY(excess.connectTo(host.endpoint));
         excess.stream.send({{"kind", "hello"}, {"version", kBridgeProtocolVersion}, {"token", "无所谓"}});
         QVERIFY(until([&] { return !excess.frames.isEmpty(); }));
         QCOMPARE(excess.frames.first().value("accepted"), QJsonValue(false));
         QCOMPARE(excess.frames.first().value("reason"), QJsonValue("connection_limit"));
         QVERIFY(until([&] { return excess.socket.state() == QLocalSocket::UnconnectedState; }));
-        // 一直不发握手帧的连接由握手期限收走，不会长期占着资源。
-        RawPeer silent; QVERIFY(silent.connectTo(host.endpoint));
-        QVERIFY(until([&] { return silent.socket.state() == QLocalSocket::UnconnectedState; }, kHandshakeTimeoutMs + 1500));
+        // 前面的连接一断开，名额就空出来。
+        peers.clear();
+        QVERIFY(until([&] { return host.access.connectionCount() == 0; }));
+        RawPeer recovered; QVERIFY(recovered.authenticate(host.endpoint));
+    }
+    void handshakeTimeoutFreesSilentPeers()
+    {
+        // 一直不发握手帧的连接由握手期限收走，不会长期占着名额；满员后多出来的那条也一样。
+        // 期限改短只是为了不必真等 5 秒，收走连接走的是同一条代码路径；生产默认值单独核对。
+        Host host;
+        QCOMPARE(McpLocalServer(host.endpoint.paths).handshakeTimeoutMs(), kHandshakeTimeoutMs);
+        const int timeout = 300;
+        host.access.setHandshakeTimeoutMs(timeout);
+        QVERIFY(host.access.setEnabled(true));
+        std::vector<std::unique_ptr<RawPeer>> silent;
+        for (int i = 0; i < kMaxConnections + 1; ++i) {
+            auto peer = std::make_unique<RawPeer>(); QVERIFY(peer->connectTo(host.endpoint)); silent.push_back(std::move(peer));
+        }
         QVERIFY(until([&] {
-            for (const auto& peer : peers) if (peer->socket.state() != QLocalSocket::UnconnectedState) return false;
+            for (const auto& peer : silent) if (peer->socket.state() != QLocalSocket::UnconnectedState) return false;
             return true;
-        }, kHandshakeTimeoutMs + 1500));
+        }, timeout + 3000));
         RawPeer recovered; QVERIFY(recovered.authenticate(host.endpoint));
     }
     void partialFrameTimeout()
     {
+        // 收到半帧、迟迟等不到换行时，等满期限就判失败。生产期限就是握手期限；这里改短，不必真等 5 秒。
         MemoryDevice device; McpJsonStream stream(&device, kMaxRequestBytes);
+        QCOMPARE(stream.partialTimeout(), kHandshakeTimeoutMs);
+        stream.setPartialTimeout(300);
         QSignalSpy failed(&stream, &McpJsonStream::failed);
         device.feed("{");
-        QVERIFY(until([&] { return failed.size() == 1; }, kHandshakeTimeoutMs + 1500));
+        QVERIFY(until([&] { return failed.size() == 1; }, 3000));
     }
     void unknownOutcomeDoesNotReplay()
     {
@@ -968,8 +987,11 @@ private slots:
             });
         });
         McpBridgeClient bridge(host.endpoint); QSignalSpy spy(&bridge, &McpBridgeClient::completed);
+        // 生产期限是 kToolTimeoutMs；改短只是为了不必真等 10 秒，到期取消走的是同一条代码路径。
+        QCOMPARE(bridge.toolTimeoutMs(), kToolTimeoutMs);
+        bridge.setToolTimeoutMs(300);
         bridge.call("write", Tool::CreateTask, createArguments(host.access.sessionId()));
-        QVERIFY(until([&] { return spy.size() == 1 && cancellations == 1; }, kToolTimeoutMs + 1500));
+        QVERIFY(until([&] { return spy.size() == 1 && cancellations == 1; }, 3000));
         QCOMPARE(code(spy.first().at(1).toJsonObject()), QStringLiteral("OUTCOME_UNKNOWN"));
         QCOMPARE(calls, 1);
     }

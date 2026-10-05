@@ -49,7 +49,7 @@ void McpBridgeClient::call(const QString& id, Tool tool, const QJsonObject& argu
         emit completed(id, makeToolErrorResult(makeError(ErrorCode::AppUnavailable, QStringLiteral("连接请求队列已满"))));
         return;
     }
-    m_pending.insert(id, {tool, arguments, QDeadlineTimer(kToolTimeoutMs), false, ++m_nextOrder});
+    m_pending.insert(id, {tool, arguments, QDeadlineTimer(m_toolTimeoutMs), false, ++m_nextOrder});
     m_deadlineTimer.start();
     updateIdleTimer();
     if (m_ready) sendPending();
