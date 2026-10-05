@@ -11,6 +11,8 @@ QtObject {
     property var deletes: []
     property var reorders: []
     property bool failSave: false
+    // 为真时读取列表失败：和真实服务一样，在读取函数内部同步发出失败信号，再返回空列表。
+    property bool failList: false
     signal memosChanged
     signal operationFailed(string message)
     function reset(values) {
@@ -20,8 +22,13 @@ QtObject {
         deletes = [];
         reorders = [];
         failSave = false;
+        failList = false;
     }
     function listMemos(categoryId) {
+        if (failList) {
+            operationFailed("读取备忘录列表失败：数据库不可用");
+            return [];
+        }
         return records.filter(function (r) {
             return categoryId < 0 || r.categoryId === categoryId;
         });

@@ -18,8 +18,15 @@ QtObject {
             color: "#467c7c"
         }
     ]
+    // 为真时读取科目失败：和真实服务一样，在读取函数内部同步发出失败信号，再返回空列表。
+    property bool failRead: false
     signal categoriesChanged
+    signal operationFailed(string message)
     function getAllCategories() {
+        if (failRead) {
+            operationFailed("科目加载失败: 磁盘 I/O 错误");
+            return [];
+        }
         return records;
     }
     function getCategories() {
