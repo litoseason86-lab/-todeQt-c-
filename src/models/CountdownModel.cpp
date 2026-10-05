@@ -11,7 +11,8 @@ int CountdownModel::rowCount(const QModelIndex& parent) const
         return 0;
     }
 
-    return m_goals.size();
+    // 模型行号是 int；目标数量远小于上限。
+    return static_cast<int>(m_goals.size());
 }
 
 QVariant CountdownModel::data(const QModelIndex& index, int role) const
@@ -57,7 +58,7 @@ void CountdownModel::setGoals(const QList<CountdownGoal>& goals)
 
 void CountdownModel::addGoal(const CountdownGoal& goal)
 {
-    const int row = m_goals.size();
+    const int row = static_cast<int>(m_goals.size());
     beginInsertRows(QModelIndex(), row, row);
     m_goals.append(goal);
     endInsertRows();
@@ -110,7 +111,7 @@ void CountdownModel::setReferenceDate(const QDate& referenceDate)
     m_referenceDate = referenceDate;
     if (!m_goals.isEmpty()) {
         // 基准日变化只影响剩余天数角色，不迫使 QML 重读其它字段。
-        emit dataChanged(index(0), index(m_goals.size() - 1), {DaysRemainingRole});
+        emit dataChanged(index(0), index(static_cast<int>(m_goals.size()) - 1), {DaysRemainingRole});
     }
 }
 

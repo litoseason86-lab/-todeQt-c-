@@ -204,7 +204,7 @@ void PhaseAlarmCoordinatorTests::naturalExpiryDoesNotCancel()
     settle();
     m_backend->answer(1, true);
     settle();
-    const int callsBefore = m_backend->calls.size();
+    const qsizetype callsBefore = m_backend->calls.size();
 
     m_clock.advanceSecs(25 * 60);
     tick();
@@ -225,7 +225,7 @@ void PhaseAlarmCoordinatorTests::offlineSettlementDoesNotCancel()
     settle();
     m_backend->answer(1, true);
     settle();
-    const int callsBefore = m_backend->calls.size();
+    const qsizetype callsBefore = m_backend->calls.size();
 
     // 离线结算同样是「到点了」，与自然到点一样不撤销。
     emit FocusTimer::instance()->phaseSettledOffline(FocusTimer::WorkPhase);
@@ -249,7 +249,7 @@ void PhaseAlarmCoordinatorTests::pauseCancelsAndResumeReschedules()
     QVERIFY(FocusTimer::instance()->pauseFocus());
     settle();
     QCOMPARE(m_backend->calls.last().kind, QStringLiteral("cancel"));
-    m_backend->answer(m_backend->calls.size() - 1, true);
+    m_backend->answer(static_cast<int>(m_backend->calls.size()) - 1, true);
     settle();
     QVERIFY(m_backend->pending.isEmpty());
     QVERIFY(!m_coordinator->currentAlarmScheduled());
@@ -298,7 +298,7 @@ void PhaseAlarmCoordinatorTests::lateCallbackOfOldGenerationDoesNotMarkCurrent()
 
     QVERIFY(startPomodoro(25) > 0);
     settle();
-    const int firstSchedule = m_backend->calls.size() - 1;
+    const int firstSchedule = static_cast<int>(m_backend->calls.size()) - 1;
     // 第一代预约还没答复，用户就暂停又继续：当前已换成第二代。
     QVERIFY(FocusTimer::instance()->pauseFocus());
     settle();
@@ -374,7 +374,7 @@ void PhaseAlarmCoordinatorTests::stopBeforeExpiryCancels()
     QVERIFY(FocusTimer::instance()->stopFocus());
     settle();
     QCOMPARE(m_backend->calls.last().kind, QStringLiteral("cancel"));
-    m_backend->answer(m_backend->calls.size() - 1, true);
+    m_backend->answer(static_cast<int>(m_backend->calls.size()) - 1, true);
     settle();
     QVERIFY(m_backend->pending.isEmpty());
 }

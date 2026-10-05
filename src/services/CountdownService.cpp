@@ -11,6 +11,8 @@
 #include <QSqlError>
 #include <QSqlQuery>
 
+#include <algorithm>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -322,7 +324,9 @@ int CountdownService::calculateDaysRemaining(const QDate& targetDate) const
         return 0;
     }
 
-    return m_referenceDate.daysTo(targetDate);
+    // daysTo 返回 64 位；剩余天数对外是 int。正常日期远在范围内，夹一下只防同步进来的荒唐日期截断成乱数。
+    return static_cast<int>(std::clamp<qint64>(m_referenceDate.daysTo(targetDate), std::numeric_limits<int>::min(),
+                                               std::numeric_limits<int>::max()));
 }
 
 bool CountdownService::ensureDatabaseReady()

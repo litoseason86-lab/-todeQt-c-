@@ -1059,7 +1059,7 @@ void SyncTests::migrationFromV17BackfillsIdentitiesAndQueuesRecords()
 
     const QDir dir = QFileInfo(db().databaseName()).absoluteDir();
     const QStringList pattern{QStringLiteral("pomodoro_backup_*.db")};
-    const int snapshotsBefore = dir.entryList(pattern, QDir::Files).size();
+    const qsizetype snapshotsBefore = dir.entryList(pattern, QDir::Files).size();
     QVERIFY(DatabaseManager::instance()->createTables());
 
     // 升级前留了一份快照：v18 之后旧版本应用打不开这个库，想退回只能靠它。一路升到当前版本。
@@ -1866,7 +1866,7 @@ void SyncTests::sameDayTasksAreRenumberedWithoutMigration()
     }
     const QDir dataDir(m_data->path());
     const QStringList pattern{QStringLiteral("pomodoro_backup_*.db")};
-    const int snapshotsBefore = dataDir.entryList(pattern, QDir::Files).size();
+    const qsizetype snapshotsBefore = dataDir.entryList(pattern, QDir::Files).size();
     syncAll(cloud, {a, b});
 
     for (const Device& device : {a, b}) {
@@ -2899,7 +2899,7 @@ void SyncTests::migrationFromV18QueuesPhaseTwoRows()
 
     const QDir dir = QFileInfo(db().databaseName()).absoluteDir();
     const QStringList pattern{QStringLiteral("pomodoro_backup_*.db")};
-    const int snapshotsBefore = dir.entryList(pattern, QDir::Files).size();
+    const qsizetype snapshotsBefore = dir.entryList(pattern, QDir::Files).size();
     QVERIFY(DatabaseManager::instance()->createTables());
 
     // 升级前留了一份迁移快照（升到 v19 之后 v18 的应用打不开这个库）；版本推到当前版本；触发器全部装好。

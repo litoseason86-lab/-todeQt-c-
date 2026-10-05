@@ -1,5 +1,8 @@
 #include "CountdownGoal.h"
 
+#include <algorithm>
+#include <limits>
+
 CountdownGoal::CountdownGoal() = default;
 
 CountdownGoal::CountdownGoal(int id,
@@ -83,5 +86,7 @@ int CountdownGoal::daysRemainingFrom(const QDate& baseDate) const
         return 0;
     }
 
-    return baseDate.daysTo(m_targetDate);
+    // daysTo 返回 64 位；剩余天数对外是 int。正常日期远在范围内，夹一下只防同步进来的荒唐日期截断成乱数。
+    return static_cast<int>(std::clamp<qint64>(baseDate.daysTo(m_targetDate), std::numeric_limits<int>::min(),
+                                               std::numeric_limits<int>::max()));
 }

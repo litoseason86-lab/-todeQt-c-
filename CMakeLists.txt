@@ -373,6 +373,11 @@ function(pomodoro_todo_enable_warnings target)
         target_compile_options(${target} PRIVATE /W4)
     else()
         target_compile_options(${target} PRIVATE -Wall -Wextra)
+        # 64 位转 32 位的截断告警：iOS 用 Xcode 生成器，默认就开着它；Mac 这边不开的话，
+        # 这类告警只在编 iOS 时冒出来，平时看不到也就没人修（2026-10 攒到过 6 条）。只有 Clang 认这个选项。
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+            target_compile_options(${target} PRIVATE -Wshorten-64-to-32)
+        endif()
     endif()
 endfunction()
 

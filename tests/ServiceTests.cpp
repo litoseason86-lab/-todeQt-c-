@@ -1840,7 +1840,7 @@ void ServiceTests::appSettingsDayStartHourNormalizeAndPersist()
         settings.setDayStartHour(-1);
         QCOMPARE(settings.dayStartHour(), 4);
 
-        const int countBefore = spy.count();
+        const qsizetype countBefore = spy.count();
         settings.setDayStartHour(4);
         QCOMPARE(spy.count(), countBefore);
 
@@ -4691,7 +4691,7 @@ void ServiceTests::migrationV17DropsLongGoalsAfterSnapshot()
     QSqlDatabase::removeDatabase(verificationConnection);
 
     // 从没用过目标页的 v16 库（没有这张表）升上来：v17 照样执行、推版本号，但不为此新建快照。
-    const int snapshotCountAfterDrop = dir.entryList(snapshotPattern, QDir::Files).size();
+    const qsizetype snapshotCountAfterDrop = dir.entryList(snapshotPattern, QDir::Files).size();
     {
         QSqlQuery query(DatabaseManager::instance()->database());
         QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 16")));
@@ -4920,7 +4920,7 @@ void ServiceTests::migrationV14RejectsCompositeKnowledgeGapForeignKey()
     QVERIFY(createSql.contains(linkedColumn));
     createSql.replace(sourceColumn, QStringLiteral("source_task_id INTEGER"));
     createSql.replace(linkedColumn, QStringLiteral("linked_task_id INTEGER"));
-    const int closingParen = createSql.lastIndexOf(QLatin1Char(')'));
+    const qsizetype closingParen = createSql.lastIndexOf(QLatin1Char(')'));
     QVERIFY(closingParen > 0);
     createSql.insert(closingParen,
                      QStringLiteral(", FOREIGN KEY (source_task_id, linked_task_id) "
