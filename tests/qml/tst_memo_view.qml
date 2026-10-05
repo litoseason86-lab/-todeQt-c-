@@ -775,6 +775,64 @@ TestCase {
         compare(service.creates[0].categoryId, 0, "存下时不带已删除的科目编号");
         compare(service.creates[0].body, "保留这份还没保存的草稿");
     }
+    // 产品保证：另一台把正在编辑的备忘连同它的科目一起删掉了，「另存为新备忘」照样存得下：改成未分类，文字原样保留。
+    // 抓住的错误实现：只给草稿换掉不存在的科目，另存时还带着已删除的科目编号（真实服务拒绝保存，存不下、也切不走）。
+    function test_deletedMemoAndCategorySavedAsNew() {
+        typeBody("被删之前尚未保存的文字");
+        verify(view.dirty && view.editorCategoryId === 1, "前置：正在改科目 1 里的备忘 11");
+        // 数据库删科目时把这一科其余备忘的科目置空，替身照这个结果给数据。
+        categories.records = categories.records.filter(function (c) {
+            return c.id !== 1;
+        });
+        service.records = fixture().filter(function (r) {
+            return r.id !== 11;
+        }).map(function (r) {
+            return r.categoryId === 1 ? Object.assign({}, r, {
+                categoryId: 0
+            }) : r;
+        });
+        categories.categoriesChanged();
+        service.memosChanged();
+        verify(view.remoteDeleted, "前置：进入了「另一台已删、本机有修改」的状态");
+        view.saveDeletedAsNew();
+        compare(service.creates.length, 1);
+        compare(service.creates[0].categoryId, 0, "另存时不带已删除的科目编号");
+        compare(service.creates[0].body, "被删之前尚未保存的文字");
+    }
+    // 产品保证：右键改分类的弹层开着时，同步来的其它改动不会把它关掉；要改的那条被另一台删掉、选中项换成相邻的一条时，
+    // 弹层收起，就算这时选了一项，也不会改到别的备忘上。
+    // 抓住的错误实现：选完直接改当前选中的那条（同步后已是相邻的一条），把别的备忘挪了分类。
+    function test_movePopupFollowsItsTarget() {
+        var popup = child("memoMovePopup");
+        var row = child("memoRow12");
+        mouseClick(row, row.width / 2, row.height / 2, Qt.RightButton);
+        tryVerify(function () {
+            return popup.opened;
+        }, 3000);
+        compare(view.selectedId, 12, "前置：在改备忘 12 的分类");
+        var values = fixture();
+        values[0].body = "另一台改了别的备忘";
+        service.records = values;
+        service.memosChanged();
+        verify(popup.opened, "别的备忘有改动，弹层照旧开着");
+        service.records = values.filter(function (r) {
+            return r.id !== 12;
+        });
+        service.memosChanged();
+        var neighborId = view.selectedId;
+        verify(neighborId > 0 && neighborId !== 12, "前置：同步把选中项换成了相邻的一条");
+        var neighborCategory = service.getMemo(neighborId).categoryId;
+        tryVerify(function () {
+            return !popup.visible;
+        }, 3000, "要改的那条不在了，弹层收起");
+        var other = popup.options.findIndex(function (o) {
+            return o.id !== neighborCategory;
+        });
+        verify(other >= 0, "前置：有一个和相邻那条不同的分类可选");
+        popup.choose(other);
+        compare(service.updates.length, 0, "不改任何一条");
+        compare(service.getMemo(neighborId).categoryId, neighborCategory, "相邻那条的分类没变");
+    }
     // 产品保证：读取科目失败不等于科目被删了：草稿留在原来的科目，出错原因显示出来；读取恢复后提示收起，一切照旧。
     // 抓住的错误实现：科目读失败返回的空列表照样拿来刷新，草稿被当成「科目已删除」改成了未分类。
     function test_categoryReadFailureKeepsDraftCategory() {

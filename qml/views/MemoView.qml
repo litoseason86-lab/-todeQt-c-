@@ -219,9 +219,11 @@ FocusScope {
             root.errorMessage = "";
         root.allMemos = values;
         root.categories = categoryValues;
-        // 删除确认框要删的那条已经不在了（另一台删掉了它）：没有东西可删，收起确认框。
+        // 删除确认框、改分类弹层针对的那条已经不在了（另一台删掉了它）：没有东西可删、可改，收起。
         if (deleteConfirm.pendingId > 0 && !root.memo(deleteConfirm.pendingId))
             root.cancelDelete();
+        if (moveCategoryPopup.visible && !root.memo(moveCategoryPopup.targetId))
+            moveCategoryPopup.close();
         var choices = [
             {
                 id: -1,
@@ -250,17 +252,9 @@ FocusScope {
         }
         root.rebuildRows();
         if (root.drafting) {
-            // 草稿的科目被另一台删掉了。草稿还没进数据库，数据库删科目时把备忘的科目置空，管不到它；
-            // 照已存备忘的结果改成未分类，文字原样保留，再按改动排一次自动保存。
-            // 不改的话，每次保存都带着不存在的科目编号被服务拒绝；换备忘、新建都要先保存，用户就被卡在这里，
-            // 而草稿不在列表里（右键改不了分类）、编辑区的分类又是只读的。
-            if (root.editorCategoryId > 0 && !root.categories.some(function (entry) {
-                return Number(entry.id) === root.editorCategoryId;
-            })) {
-                root.editorCategoryId = 0;
-                root.baselineCategoryId = 0;
+            // 改成未分类后重新排一次自动保存：上一次可能正是因为科目不存在没存成。
+            if (root.dropMissingEditorCategory())
                 root.edited();
-            }
             return;
         }
         var current = root.memo(root.selectedId);
@@ -271,12 +265,27 @@ FocusScope {
             root.remoteDeleted = true;
             root.deletedNeighborIndex = oldIndex;
             root.errorMessage = qsTr("这条备忘录已在另一台设备删除。编辑中的内容还在这里，可以另存为新备忘，或放弃修改。");
+            // 另一台可能连它的科目一起删了；「另存为新备忘」要存得下。
+            root.dropMissingEditorCategory();
         } else if (rows.count > 0) {
             root.selectedId = rows.get(Math.min(oldIndex, rows.count - 1)).memoId;
             root.readEditor(root.memo(root.selectedId));
         } else {
             root.clearEditor();
         }
+    }
+    // 编辑区里还没进数据库的内容（草稿，或另一台已经删掉的那条）所在的科目被另一台删掉了：改成未分类，文字原样保留。
+    // 已存的备忘不用管，数据库删科目时会把它们的科目置空，重读时跟着变成未分类；这里照同样的结果处理。
+    // 不改的话，保存一直带着不存在的科目编号被服务拒绝；换备忘、新建都要先保存，用户就被卡住，
+    // 而这些内容不在列表里（右键改不了分类）、编辑区的分类又是只读的。改了返回 true。
+    function dropMissingEditorCategory() {
+        if (root.editorCategoryId === 0 || root.categories.some(function (entry) {
+            return Number(entry.id) === root.editorCategoryId;
+        }))
+            return false;
+        root.editorCategoryId = 0;
+        root.baselineCategoryId = 0;
+        return true;
     }
     // 切换备忘、切页、进后台、退出时调用：这些操作会打断输入，先把输入法正在组合的文字提交进编辑框，
     // 免得还没选字的候选内容丢掉，再保存。
@@ -412,6 +421,7 @@ FocusScope {
         var p = root.mapFromItem(null, sceneX, sceneY);
         moveCategoryPopup.x = p.x;
         moveCategoryPopup.y = p.y;
+        moveCategoryPopup.targetId = id;
         moveCategoryPopup.open();
     }
     // 键盘入口：在选中行的左下方弹出。
@@ -1337,8 +1347,14 @@ FocusScope {
                 color: ""
             }
         ])
+        // 打开时要改的那一条。选中项随时可能被同步换掉（这条被另一台删了，改选相邻的一条），不能拿选中项代替它。
+        property int targetId: -1
         // 选完立刻保存：列表马上按新分类重新分组，不等一秒后的自动保存。
+        // 选中项已经不是打开时那一条了，就什么都不改。重读时发现这条不在了会收起弹层（见 reload），
+        // 这里再挡一道，不依赖「收起」一定发生在「选中」之前。
         onPicked: function (option) {
+            if (root.drafting || root.selectedId !== moveCategoryPopup.targetId)
+                return;
             root.chooseCategory(option.id);
             root.saveNow();
         }
