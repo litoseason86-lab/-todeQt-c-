@@ -41,7 +41,7 @@ FocusScope {
     // 还没写过备忘的科目：「新建分类」从这里挑。
     readonly property var unusedCategoryOptions: root.categoryOptions(false)
     property bool saving: false
-    property bool reading: false
+    // 最近一次读取失败的原因；读到了就清空。页面上的出错提示据此决定要不要给「重试」。
     property string readFailure: ""
     property bool touchUi: Qt.platform.os === "ios"
     property var inputMethodRef: Qt.inputMethod
@@ -202,17 +202,23 @@ FocusScope {
         // 「今天」「昨天」按现在算，不沿用离开那会儿的时间。
         root.displayNow = new Date();
         var previousFailure = root.readFailure;
-        root.readFailure = "";
-        root.reading = true;
-        var values = root.memoServiceRef.listMemos(-1);
-        // 科目和备忘录算同一次读取，任何一个失败都保留上一次读到的内容。科目读失败时服务返回空列表，
-        // 不能拿它当「科目都被删了」：备忘会全按未分类分组，草稿也会被改成未分类（见下面对草稿的处理）。
-        var categoryValues = [];
-        if (root.readFailure.length === 0 && root.categoryManagerRef && typeof root.categoryManagerRef.getAllCategories === "function")
-            categoryValues = root.categoryManagerRef.getAllCategories();
-        root.reading = false;
-        if (root.readFailure.length > 0)
+        // 成败直接看返回值（readMemos / readAllCategories 都不发共享的失败信号），不靠「正在读取」的标志
+        // 去认领别处发来的失败。科目和备忘录算同一次读取，任何一个失败都保留上一次读到的内容：
+        // 科目没读出来不能当成「科目都被删了」，否则备忘会全按未分类分组，草稿也会被改成未分类（见下面对草稿的处理）。
+        var memoRead = root.memoServiceRef.readMemos();
+        var categoryRead = memoRead.ok && root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function" ? root.categoryManagerRef.readAllCategories() : {
+            ok: true,
+            categories: []
+        };
+        if (!memoRead.ok || !categoryRead.ok) {
+            root.readFailure = String(memoRead.ok ? categoryRead.error : memoRead.error);
+            if (root.pageActive)
+                root.errorMessage = root.readFailure;
             return;
+        }
+        root.readFailure = "";
+        var values = memoRead.memos;
+        var categoryValues = categoryRead.categories;
         // 上一次读取失败的提示，这次读到了就收起。草稿和改了还没存的备忘不会重新装进编辑框（装载时才清提示），
         // 不在这里清，提示会一直留到下一次保存。
         if (previousFailure.length > 0 && root.errorMessage === previousFailure)
@@ -619,8 +625,6 @@ FocusScope {
                 root.reload();
         }
         function onOperationFailed(message) {
-            if (root.reading)
-                root.readFailure = message;
             if (root.pageActive || root.saving)
                 root.errorMessage = message;
         }
@@ -631,14 +635,6 @@ FocusScope {
         function onCategoriesChanged() {
             if (root.pageActive)
                 root.reload();
-        }
-        // 只认 reload() 读科目时的失败。科目管理等别处的科目操作失败也走这个信号，和这一页无关。
-        function onOperationFailed(message) {
-            if (!root.reading)
-                return;
-            root.readFailure = message;
-            if (root.pageActive)
-                root.errorMessage = message;
         }
     }
     Connections {

@@ -123,10 +123,16 @@ Popup {
         }
     }
 
+    // 读失败不等于「科目都没了」：保留上一次的下拉，报出原因，不把选中的科目当成已删除。
     function refreshCategories() {
         var loaded = []
-        if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
-            loaded = root.categoryManagerRef.getAllCategories()
+        if (root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function") {
+            var read = root.categoryManagerRef.readAllCategories()
+            if (!read.ok) {
+                root.errorText = String(read.error || "科目加载失败")
+                return
+            }
+            loaded = read.categories
         }
         root.categoryOptions = [{ id: -1, name: "不设置科目", color: "" }].concat(loaded)
     }

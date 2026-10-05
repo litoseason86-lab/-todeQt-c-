@@ -112,12 +112,16 @@ Popup {
                 color: ""
             }
         ];
-        // 与 AddTaskDialog 一致走 getAllCategories——这是 CategoryManager 的真实接口名，
-        // 写错方法名会被守卫静默吞掉，下拉只剩"不设置科目"。
-        if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
-            var actives = root.categoryManagerRef.getAllCategories();
-            for (var i = 0; i < actives.length; i++) {
-                options.push(actives[i]);
+        // 读科目看返回值里的成败：读失败不等于「科目都没了」，保留上一次的下拉（选中的科目也就还在），报出原因。
+        // 当成空列表的话，选中的科目会被当成已删除退回「不设置科目」，保存时就把任务的科目清掉了。
+        if (root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function") {
+            var read = root.categoryManagerRef.readAllCategories();
+            if (!read.ok) {
+                root.errorText = String(read.error || "科目加载失败");
+                return;
+            }
+            for (var i = 0; i < read.categories.length; i++) {
+                options.push(read.categories[i]);
             }
         }
         // 末尾那条是哨兵，不是科目：选中它表示「我要现在建一个」。

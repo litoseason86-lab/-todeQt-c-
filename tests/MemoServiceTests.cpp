@@ -30,6 +30,7 @@ private slots:
     void unchangedSaveAndReorderDoNotChangeTimestamp();
     void movingMemosKeepsTheirUpdatedTime();
     void databaseReopenNotifiesAndClosedDatabaseFails();
+    void readMemosReportsFailureInReturnValue();
     void version19MigrationPreservesDataAndSnapshot();
     void brokenMemoSchemaIsRejected_data();
     void brokenMemoSchemaIsRejected();
@@ -376,6 +377,27 @@ void MemoServiceTests::databaseReopenNotifiesAndClosedDatabaseFails()
     QVERIFY(DatabaseManager::instance()->initialize(path));
     QCOMPARE(changed.count(), 1);
     QCOMPARE(service->getMemo(id).value(QStringLiteral("title")).toString(), QStringLiteral("重开前"));
+}
+
+// 产品保证：给界面的读取把成败放在返回值里：读到了 ok 为真、带全部备忘；数据库关着时 ok 为假、带原因，
+// 而且不发共享的 operationFailed——页面不必再靠「正在读取」的标志去认领别处发来的失败。
+// 抓住的错误实现：读失败时把空列表当成功返回（页面会以为一条备忘都没有），或者照旧只靠信号报错。
+void MemoServiceTests::readMemosReportsFailureInReturnValue()
+{
+    auto* service = MemoService::instance();
+    const int id = service->createMemo(QStringLiteral("读得到"), QString());
+    QVERIFY(id > 0);
+    QSignalSpy failed(service, &MemoService::operationFailed);
+    QVariantMap read = service->readMemos();
+    QVERIFY(read.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(idsOf(read.value(QStringLiteral("memos")).toList()), (QVariantList{id}));
+
+    DatabaseManager::instance()->close();
+    read = service->readMemos();
+    QVERIFY(!read.value(QStringLiteral("ok")).toBool());
+    QVERIFY(read.value(QStringLiteral("memos")).toList().isEmpty());
+    QVERIFY(!read.value(QStringLiteral("error")).toString().isEmpty());
+    QCOMPARE(failed.count(), 0);
 }
 
 void MemoServiceTests::version19MigrationPreservesDataAndSnapshot()

@@ -149,15 +149,20 @@ Popup {
             root.routines = []
         }
 
-        var categories = []
-        if (root.categoryManagerRef && root.categoryManagerRef.getAllCategories) {
-            categories = root.categoryManagerRef.getAllCategories()
+        // 读科目看返回值里的成败：读失败不等于「科目都没了」，保留上一次的下拉（编辑中选中的科目也就还在），报出原因。
+        var read = root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function" ? root.categoryManagerRef.readAllCategories() : {
+            ok: true,
+            categories: []
         }
-        root.categoryOptions = [{
-            id: -1,
-            name: "不设置科目",
-            color: ""
-        }].concat(categories)
+        if (read.ok) {
+            root.categoryOptions = [{
+                id: -1,
+                name: "不设置科目",
+                color: ""
+            }].concat(read.categories)
+        } else {
+            root.errorText = String(read.error || "科目加载失败")
+        }
 
         root.selectCategory(previousCategoryId)
     }

@@ -20,13 +20,20 @@ TestCase {
     QtObject {
         id: categoryManagerMock
 
-        // 必须与 CategoryManager 的真实接口同名（getAllCategories）：此前 mock 提供了
+        // 必须与 CategoryManager 的真实接口同名（readAllCategories）：此前 mock 提供了
         // 不存在的 getActiveCategories，测试全绿但真机下拉是空的——mock 名称错配会骗过测试。
         property var categories: [
             { id: 3, name: "数学", color: "#d4a574" },
             { id: 5, name: "英语", color: "#8b7355" }
         ]
+        // 为真时读科目失败：和真实服务一样把失败放在返回值里。
+        property bool failRead: false
 
+        function readAllCategories() {
+            if (failRead)
+                return { ok: false, categories: [], error: "科目加载失败，请稍后重试" }
+            return { ok: true, categories: getAllCategories() }
+        }
         function getAllCategories() {
             return categories
         }
@@ -92,6 +99,7 @@ TestCase {
         dialog.finishEditing()
         dialog.interactionCoordinatorRef = null
         coordinator.failRead = false
+        categoryManagerMock.failRead = false
         editedSpy.clear()
         dialog.close()
         failingDialog.close()
@@ -360,6 +368,27 @@ TestCase {
         compare(testCase.submittedMinutes, -1)
         verify(estimateDialog.errorText.length > 0)
         estimateDialog.close()
+    }
+
+    // 产品保证：弹窗开着时科目没读出来（数据库一时出错），不等于科目被删了：下拉和选中的科目原样保留、报出原因，
+    // 保存时也不会把任务的科目清掉。
+    // 抓住的错误实现：把读失败的空列表照样拿来重建下拉，选中的科目被当成已删除退回「不设置科目」，
+    // 保存时连科目一起交上去清空。
+    function test_categoryReadFailureKeepsSelectedCategory() {
+        dialog.openForTask({ id: 31, title: "背单词", categoryId: 5, date: isoWithOffset(0),
+                             estimatedMinutes: 0, notes: "" })
+        wait(20)
+        var combo = findChild(dialog, "editCategoryCombo")
+        compare(Number(dialog.categoryOptions[combo.currentIndex].id), 5, "前置：选中的是科目 5")
+        compare(dialog.errorText, "", "前置：打开时读得到科目")
+        categoryManagerMock.failRead = true
+        dialog.syncCategoriesWhileOpen()
+        compare(Number(dialog.categoryOptions[combo.currentIndex].id), 5, "选中的科目还在")
+        compare(dialog.errorText, "科目加载失败，请稍后重试", "报出没读出来")
+        findChild(dialog, "editTitleField").text = "背单词 List 4"
+        dialog.submit()
+        compare(editedSpy.count, 1)
+        compare(Object.keys(editedSpy.signalArguments[0][1]).join(","), "title", "科目没交，不会被清掉")
     }
 
     // —— 审查修复：取消新建科目按编号恢复（2026-09-14）——

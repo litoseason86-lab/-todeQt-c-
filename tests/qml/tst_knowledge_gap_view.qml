@@ -77,6 +77,7 @@ TestCase {
     QtObject {
         id: fakeCategoryManager
 
+        function readAllCategories() { return { ok: true, categories: getAllCategories() } }
         function getAllCategories() {
             return [{ id: 1, name: "数学", color: "#ff8800" }]
         }

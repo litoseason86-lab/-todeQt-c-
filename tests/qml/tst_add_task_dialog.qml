@@ -46,6 +46,12 @@ TestCase {
             { id: 2, name: "英语", color: "#c9956e" }
         ]
 
+        // 界面读科目走这里：成败放在返回值里，和真实服务一样不发失败信号。
+        function readAllCategories() {
+            if (failLoad)
+                return { ok: false, categories: [], error: "科目数据库故障" }
+            return { ok: true, categories: getAllCategories() }
+        }
         function getAllCategories() {
             if (failLoad) {
                 operationFailed("科目数据库故障")

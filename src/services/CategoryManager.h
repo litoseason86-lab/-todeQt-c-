@@ -18,6 +18,10 @@ public:
 
     // 科目列表给任务弹窗、科目管理弹窗和统计页面共用。
     Q_INVOKABLE QVariantList getAllCategories() const;
+    // 给界面用的读取：{ ok, categories, error }，成败放在返回值里，不发共享的 operationFailed。
+    // getAllCategories 读失败时返回空列表，界面分不清「一个科目都没有」和「没读出来」；
+    // 当成前者的话，编辑弹窗会把选中的科目当成已删除而退回「不设置」，保存时就把条目的科目清掉了。
+    Q_INVOKABLE QVariantMap readAllCategories() const;
     Q_INVOKABLE QVariantList getPresetCategories() const;
     Q_INVOKABLE QVariantList getCustomCategories() const;
     Q_INVOKABLE QVariantMap getCategoryById(int id) const;

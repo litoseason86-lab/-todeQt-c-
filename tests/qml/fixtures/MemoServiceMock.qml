@@ -33,6 +33,19 @@ QtObject {
             return categoryId < 0 || r.categoryId === categoryId;
         });
     }
+    // 界面用的读取：成败放在返回值里，和真实服务一样不发失败信号。
+    function readMemos() {
+        if (failList)
+            return {
+                ok: false,
+                memos: [],
+                error: "读取备忘录列表失败：数据库不可用"
+            };
+        return {
+            ok: true,
+            memos: records.slice()
+        };
+    }
     function getMemo(id) {
         return records.find(function (r) {
             return r.id === id;

@@ -18,7 +18,8 @@ QtObject {
             color: "#467c7c"
         }
     ]
-    // 为真时读取科目失败：和真实服务一样，在读取函数内部同步发出失败信号，再返回空列表。
+    // 为真时读取科目失败：getAllCategories 像真实服务一样在读取函数内部同步发失败信号、返回空列表；
+    // readAllCategories 把失败放在返回值里。
     property bool failRead: false
     signal categoriesChanged
     signal operationFailed(string message)
@@ -28,6 +29,19 @@ QtObject {
             return [];
         }
         return records;
+    }
+    // 界面用的读取：成败放在返回值里，和真实服务一样不发失败信号。
+    function readAllCategories() {
+        if (failRead)
+            return {
+                ok: false,
+                categories: [],
+                error: "科目加载失败: 磁盘 I/O 错误"
+            };
+        return {
+            ok: true,
+            categories: records
+        };
     }
     function getCategories() {
         return records;

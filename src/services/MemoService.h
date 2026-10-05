@@ -26,6 +26,9 @@ public:
 
     // -1 取全部（按科目顺序分组），0 取未分类，正数取指定科目。
     Q_INVOKABLE QVariantList listMemos(int categoryId = kFilterAll) const;
+    // 给界面用的读取：{ ok, memos, error }，全部备忘按 listMemos(-1) 的顺序。成败放在返回值里，
+    // 不发共享的 operationFailed——页面不必再靠「正在读取」的标志去认领别处发来的失败。
+    Q_INVOKABLE QVariantMap readMemos() const;
     Q_INVOKABLE QVariantMap getMemo(int memoId) const;
     Q_INVOKABLE int createMemo(const QString& title, const QString& body, int categoryId = 0);
     // 只保存编辑过的字段（title / body / categoryId），以后同步修改其它字段时不会被旧编辑副本覆盖。
@@ -47,6 +50,8 @@ private:
     bool categoryExists(int categoryId) const;
     bool nextSortOrder(int categoryId, int* order) const;
     QVariantMap memoFromQuery(const QSqlQuery& query) const;
+    // 查列表本身：失败时 error 写原因、返回空列表，不发信号；listMemos 与 readMemos 共用。
+    QVariantList queryMemos(int categoryId, QString* error) const;
 };
 
 #endif // MEMOSERVICE_H

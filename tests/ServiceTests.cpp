@@ -885,6 +885,7 @@ private slots:
     void routinesCategoryForeignKeyClearsWhenCategoryDeleted();
     void routineCrudAddsGetsUpdatesDeletes();
     void updateRoutineChangesWritesOnlyGivenFields();
+    void readAllCategoriesReportsFailureInReturnValue();
     void deletingRoutineReclaimsUntouchedTodayTask();
     void deletingRoutineKeepsTouchedTodayTask();
     void updatingRoutineSyncsTodayTask();
@@ -3835,6 +3836,31 @@ void ServiceTests::routinesCategoryForeignKeyClearsWhenCategoryDeleted()
 // （这里直接写库，模拟同步写进来），这边只改标题后保存，科目还是另一台的。
 // 不认识的键、类型不对的值整次拒绝且什么都不写；没有改动时只确认例行还在。
 // 抓住的错误实现：按打开编辑时的值整条写回（另一台改的科目被盖回旧值）。
+// 产品保证：给界面的科目读取把成败放在返回值里。读失败时 ok 为假、带原因，不发共享的 operationFailed；
+// 界面据此分得清「一个科目都没有」和「没读出来」，后者不会被当成科目已删除。
+// 抓住的错误实现：读失败时把空列表当成功返回（getAllCategories 就是这样，只靠信号报错）。
+void ServiceTests::readAllCategoriesReportsFailureInReturnValue()
+{
+    CategoryManager* manager = CategoryManager::instance();
+    const int id = manager->addCategory(QStringLiteral("读取用科目"), QStringLiteral("#123456"));
+    QVERIFY(id > 0);
+    QSignalSpy failed(manager, &CategoryManager::operationFailed);
+    QVariantMap read = manager->readAllCategories();
+    QVERIFY(read.value(QStringLiteral("ok")).toBool());
+    bool found = false;
+    for (const QVariant& category : read.value(QStringLiteral("categories")).toList()) {
+        found = found || category.toMap().value(QStringLiteral("id")).toInt() == id;
+    }
+    QVERIFY(found);
+
+    DatabaseManager::instance()->close();
+    read = manager->readAllCategories();
+    QVERIFY(!read.value(QStringLiteral("ok")).toBool());
+    QVERIFY(read.value(QStringLiteral("categories")).toList().isEmpty());
+    QVERIFY(!read.value(QStringLiteral("error")).toString().isEmpty());
+    QCOMPARE(failed.count(), 0);
+}
+
 void ServiceTests::updateRoutineChangesWritesOnlyGivenFields()
 {
     RoutineManager* manager = RoutineManager::instance();

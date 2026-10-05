@@ -79,6 +79,13 @@ TestCase {
         // 可改写：知识缺口弹窗的用例要模拟「弹窗开着时科目被增删」。
         // 不能叫 categories：属性自带 categoriesChanged 信号，和上面声明的信号重名。
         property var categoryRows: [{ id: 1, name: "专业课", color: "#d4a574" }]
+        // 为真时读科目失败：和真实服务一样把失败放在返回值里。
+        property bool failRead: false
+        function readAllCategories() {
+            if (failRead)
+                return { ok: false, categories: [], error: "科目加载失败，请稍后重试" }
+            return { ok: true, categories: getAllCategories() }
+        }
         function getAllCategories() {
             return categoryManager.categoryRows
         }
@@ -177,6 +184,7 @@ TestCase {
         knowledgeGapCapturePopup.close()
         wait(60)
         categoryManager.categoryRows = [{ id: 1, name: "专业课", color: "#d4a574" }]
+        categoryManager.failRead = false
         knowledgeGapService.lastChanges = null
         knowledgeGapService.updateCalls = 0
         knowledgeGapService.resolveCalls = 0
@@ -414,6 +422,25 @@ TestCase {
         tryVerify(function () { return knowledgeGapCapturePopup.opened }, 2000)
         compare(knowledgeGapCapturePopup.sourceTaskId, 3)
         compare(testCase.fieldIn(knowledgeGapCapturePopup, "knowledgeGapCaptureField").text, "")
+    }
+
+    // 产品保证：编辑知识缺口时科目没读出来，不等于科目被删了：选中的科目原样保留、报出原因，保存时不会把它清掉。
+    // 抓住的错误实现：读失败的空列表照样拿来核对「选中的科目还在不在」，退回「不指定」后连科目一起交上去清空。
+    function test_knowledgeGapCategoryReadFailureKeepsCategory() {
+        knowledgeGapService.lastChanges = null
+        knowledgeGapDialog.openForEdit({
+            id: 12, title: "极限", detail: "", categoryId: 1,
+            priority: 1, status: 1, dueDate: "", resolution: ""
+        })
+        tryVerify(function () { return knowledgeGapDialog.opened }, 2000)
+        compare(knowledgeGapDialog.selectedCategoryId, 1, "前置：选中的是科目 1")
+        categoryManager.failRead = true
+        categoryManager.categoriesChanged()
+        compare(knowledgeGapDialog.selectedCategoryId, 1, "选中的科目还在")
+        compare(knowledgeGapDialog.errorText, "科目加载失败，请稍后重试", "报出没读出来")
+        testCase.fieldIn(knowledgeGapDialog, "knowledgeGapTitleField").text = "极限（补一题）"
+        knowledgeGapDialog.submit()
+        compare(Object.keys(knowledgeGapService.lastChanges).join(","), "title", "科目没交，不会被清掉")
     }
 
     function test_knowledgeGapDialogKeepsLowPriorityOnEdit() {

@@ -42,7 +42,7 @@ Dialog {
     // 选中的日期存在这里，由本弹窗写回。
     property string dueIso: ""
     // 科目下拉的数据源。首项是「不指定」：知识缺口常常是在还没分清属于哪一科时记下的。
-    // 存成属性、由 refreshCategories 显式重查，而不是在 model 绑定里直接调 getAllCategories()：
+    // 存成属性、由 refreshCategories 显式重查，而不是在 model 绑定里直接调读取接口：
     // 那样只在创建时查一次，之后科目增删、弹窗重新打开都看不到变化。
     property var categoryChoices: [{ id: 0, name: qsTr("不指定") }]
     // 编辑时打开那一刻各栏的值。保存时和它比，只交出改过的字段（见 changedFields）。
@@ -50,17 +50,21 @@ Dialog {
 
     signal saved()
 
-    function categoryOptions() {
-        if (!root.categoryManagerRef || typeof root.categoryManagerRef.getAllCategories !== "function") {
-            return []
-        }
-        return root.categoryManagerRef.getAllCategories()
-    }
-
     // 重查科目，并核对选中的科目是否还在。被删掉就退回「不指定」：
     // 留着旧编号保存会撞外键，整条保存失败，用户却看不出是科目的问题。
+    // 读失败不等于「科目都没了」：保留上一次的下拉和选中的科目，报出原因。当成空列表的话，
+    // 选中的科目会被当成已删除退回「不指定」，保存时就把条目的科目清掉了。
     function refreshCategories() {
-        var choices = [{ id: 0, name: qsTr("不指定") }].concat(root.categoryOptions())
+        var loaded = []
+        if (root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function") {
+            var read = root.categoryManagerRef.readAllCategories()
+            if (!read.ok) {
+                root.errorText = String(read.error || "科目加载失败")
+                return
+            }
+            loaded = read.categories
+        }
+        var choices = [{ id: 0, name: qsTr("不指定") }].concat(loaded)
         var stillExists = false
         for (var i = 0; i < choices.length; ++i) {
             if (Number(choices[i].id) === root.selectedCategoryId) {

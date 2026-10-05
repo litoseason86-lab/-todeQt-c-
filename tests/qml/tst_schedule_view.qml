@@ -35,6 +35,7 @@ TestCase {
 
         signal categoriesChanged()
 
+        function readAllCategories() { return { ok: true, categories: getAllCategories() } }
         function getAllCategories() {
             return []
         }
