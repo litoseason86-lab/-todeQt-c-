@@ -414,7 +414,8 @@ FocusScope {
     }
     // 改一条备忘的分类（列表里右键、iPad 长按后松手、键盘 Shift+F10）：先选中它（切走前照常保存当前这条），
     // 再在指针处弹出已有的分类。只能在已有的分类之间换，新分类从右上角「新建」建。
-    function requestMoveCategory(id, sceneX, sceneY) {
+    // byKeyboard：键盘打开时弹层先不让悬停改高亮，见 ChoicePopup.openedByKeyboard。
+    function requestMoveCategory(id, sceneX, sceneY, byKeyboard) {
         root.selectMemo(id);
         if (root.selectedId !== id || root.drafting)
             return;
@@ -422,6 +423,7 @@ FocusScope {
         moveCategoryPopup.x = p.x;
         moveCategoryPopup.y = p.y;
         moveCategoryPopup.targetId = id;
+        moveCategoryPopup.openedByKeyboard = byKeyboard === true;
         moveCategoryPopup.open();
     }
     // 键盘入口：在选中行的左下方弹出。
@@ -433,7 +435,7 @@ FocusScope {
             if (!item)
                 return;
             var p = item.mapToItem(null, Theme.space16, item.height);
-            root.requestMoveCategory(root.selectedId, p.x, p.y);
+            root.requestMoveCategory(root.selectedId, p.x, p.y, true);
             return;
         }
     }
