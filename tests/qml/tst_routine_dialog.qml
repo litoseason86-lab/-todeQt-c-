@@ -401,6 +401,53 @@ TestCase {
         dialog.close()
     }
 
+    // 产品保证：编辑例行时科目没读出来，不等于科目被删了：读失败的那一刻报出原因，下拉和选中的科目原样保留，
+    // 保存时不会把例行的科目清掉。「先开始编辑、再读失败」和「先读失败、再开始编辑」两种顺序都一样。
+    // （开始编辑、输入会照常清掉提示，和其它一次性提示一致；这里只管失败当时报出原因。）
+    // 抓住的错误实现：读失败时拿空列表重建下拉，选中的科目被当成已删除退回「不设置科目」，保存时连科目一起交上去清空。
+    function test_categoryReadFailureKeepsEditedCategory() {
+        testCase.added = [{
+            id: 61,
+            title: "背单词",
+            categoryId: 7,
+            categoryName: "数学",
+            categoryColor: "#d4a574",
+            active: true,
+            displayOrder: 1
+        }]
+        dialog.open()
+        tryCompare(dialog, "opened", true, 3000)
+
+        // 顺序一：先开始编辑，弹窗开着时重读（例行列表变了会重读科目），这次科目读失败。
+        dialog.beginEditing(dialog.routines[0])
+        tryCompare(dialog, "editingRoutineId", 61)
+        compare(dialog.selectedCategoryId(), 7, "前置：选中的是科目 7")
+        fakeCategoryManager.failLoad = true
+        fakeRoutineManager.routinesChanged()
+        compare(dialog.errorText, "科目数据库故障", "读失败的那一刻报出原因")
+        compare(dialog.selectedCategoryId(), 7, "选中的科目还在")
+        findChild(dialog, "routineTitleField").text = "背单词 List 5"
+        dialog.submit()
+        compare(testCase.updateCalls, 1)
+        compare(Object.keys(testCase.lastChanges).join(","), "title", "科目没交，不会被清掉")
+        tryCompare(dialog, "editingRoutineId", -1, 3000)
+        dialog.close()
+        tryCompare(dialog, "opened", false, 3000)
+
+        // 顺序二：打开时科目就读失败，之后才开始编辑。
+        dialog.open()
+        tryCompare(dialog, "opened", true, 3000)
+        compare(dialog.errorText, "科目数据库故障", "打开时读失败，报出原因")
+        dialog.beginEditing(dialog.routines[0])
+        tryCompare(dialog, "editingRoutineId", 61)
+        compare(dialog.selectedCategoryId(), 7, "下拉还是上一次读到的，选中的科目还在")
+        findChild(dialog, "routineTitleField").text = "背单词 List 6"
+        dialog.submit()
+        compare(testCase.updateCalls, 2)
+        compare(Object.keys(testCase.lastChanges).join(","), "title", "科目没交，不会被清掉")
+        dialog.close()
+    }
+
     function test_editFailureKeepsValuesForCorrection() {
         testCase.added = [{
             id: 24,

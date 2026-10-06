@@ -13,6 +13,11 @@ QtObject {
     property bool failSave: false
     // 为真时读取列表失败：和真实服务一样，在读取函数内部同步发出失败信号，再返回空列表。
     property bool failList: false
+    // 读取、保存失败时报的原因。真实服务遇到数据库未打开时两者是同一句话，用例要能设成相同的文字。
+    readonly property string defaultListFailure: "读取备忘录列表失败：数据库不可用"
+    readonly property string defaultSaveFailure: "磁盘不可写"
+    property string listFailureMessage: defaultListFailure
+    property string saveFailureMessage: defaultSaveFailure
     signal memosChanged
     signal operationFailed(string message)
     function reset(values) {
@@ -23,10 +28,12 @@ QtObject {
         reorders = [];
         failSave = false;
         failList = false;
+        listFailureMessage = defaultListFailure;
+        saveFailureMessage = defaultSaveFailure;
     }
     function listMemos(categoryId) {
         if (failList) {
-            operationFailed("读取备忘录列表失败：数据库不可用");
+            operationFailed(listFailureMessage);
             return [];
         }
         return records.filter(function (r) {
@@ -39,7 +46,7 @@ QtObject {
             return {
                 ok: false,
                 memos: [],
-                error: "读取备忘录列表失败：数据库不可用"
+                error: listFailureMessage
             };
         return {
             ok: true,
@@ -60,7 +67,7 @@ QtObject {
             }
         ]);
         if (failSave) {
-            operationFailed("磁盘不可写");
+            operationFailed(saveFailureMessage);
             return -1;
         }
         var id = 100 + creates.length;
@@ -76,7 +83,7 @@ QtObject {
             }
         ]);
         if (failSave) {
-            operationFailed("磁盘不可写");
+            operationFailed(saveFailureMessage);
             return false;
         }
         var next = records.slice();

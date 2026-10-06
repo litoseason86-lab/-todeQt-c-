@@ -41,8 +41,12 @@ FocusScope {
     // 还没写过备忘的科目：「新建分类」从这里挑。
     readonly property var unusedCategoryOptions: root.categoryOptions(false)
     property bool saving: false
-    // 最近一次读取失败的原因；读到了就清空。页面上的出错提示据此决定要不要给「重试」。
+    // 最近一次读取失败的原因；读到了就清空。
     property string readFailure: ""
+    // 页面上这条提示是不是读取失败报的：只有它才给「重试」，重读成功时也只收起它。写提示一律走 setError。
+    // 不拿提示文字和 readFailure 比：读取和保存遇到数据库未打开时报的是同一句话。比文字会把保存失败当成读取失败，
+    // 给出只会重读的「重试」；重读成功后还会把保存失败的提示收掉，没存上的内容就没有任何提示了。
+    property bool errorFromRead: false
     property bool touchUi: Qt.platform.os === "ios"
     property var inputMethodRef: Qt.inputMethod
     readonly property real floatingKeyboardInset: {
@@ -155,7 +159,12 @@ FocusScope {
         root.baselineCategoryId = root.editorCategoryId;
         root.updatedAt = entry.updatedAt;
         root.remoteDeleted = false;
-        root.errorMessage = "";
+        root.setError("");
+    }
+    // 换掉页面上的出错提示，同时记下它是不是读取失败报的（见 errorFromRead）。
+    function setError(message, fromRead) {
+        root.errorMessage = message;
+        root.errorFromRead = fromRead === true && message.length > 0;
     }
     function clearEditor() {
         root.selectedId = -1;
@@ -201,7 +210,6 @@ FocusScope {
         // 每分钟一次的定时器在页面不可见时停着；回到页面或保存后重读时先对一次表，
         // 「今天」「昨天」按现在算，不沿用离开那会儿的时间。
         root.displayNow = new Date();
-        var previousFailure = root.readFailure;
         // 成败直接看返回值（readMemos / readAllCategories 都不发共享的失败信号），不靠「正在读取」的标志
         // 去认领别处发来的失败。科目和备忘录算同一次读取，任何一个失败都保留上一次读到的内容：
         // 科目没读出来不能当成「科目都被删了」，否则备忘会全按未分类分组，草稿也会被改成未分类（见下面对草稿的处理）。
@@ -213,16 +221,16 @@ FocusScope {
         if (!memoRead.ok || !categoryRead.ok) {
             root.readFailure = String(memoRead.ok ? categoryRead.error : memoRead.error);
             if (root.pageActive)
-                root.errorMessage = root.readFailure;
+                root.setError(root.readFailure, true);
             return;
         }
         root.readFailure = "";
         var values = memoRead.memos;
         var categoryValues = categoryRead.categories;
-        // 上一次读取失败的提示，这次读到了就收起。草稿和改了还没存的备忘不会重新装进编辑框（装载时才清提示），
-        // 不在这里清，提示会一直留到下一次保存。
-        if (previousFailure.length > 0 && root.errorMessage === previousFailure)
-            root.errorMessage = "";
+        // 页面上的提示是读取失败报的，这次读到了就收起。草稿和改了还没存的备忘不会重新装进编辑框（装载时才清提示），
+        // 不在这里清，提示会一直留到下一次保存。保存失败等别的提示不收：内容还没存上，提示得留着。
+        if (root.errorFromRead)
+            root.setError("");
         root.allMemos = values;
         root.categories = categoryValues;
         // 删除确认框、改分类弹层针对的那条已经不在了（另一台删掉了它）：没有东西可删、可改，收起。
@@ -270,7 +278,7 @@ FocusScope {
         } else if (root.dirty) {
             root.remoteDeleted = true;
             root.deletedNeighborIndex = oldIndex;
-            root.errorMessage = qsTr("这条备忘录已在另一台设备删除。编辑中的内容还在这里，可以另存为新备忘，或放弃修改。");
+            root.setError(qsTr("这条备忘录已在另一台设备删除。编辑中的内容还在这里，可以另存为新备忘，或放弃修改。"));
             // 另一台可能连它的科目一起删了；「另存为新备忘」要存得下。
             root.dropMissingEditorCategory();
         } else if (rows.count > 0) {
@@ -310,7 +318,7 @@ FocusScope {
             return true;
         var excess = MemoFormat.characterCount(root.editorBody) - root.bodyLimit;
         if (excess > 0) {
-            root.errorMessage = qsTr("正文超出 %1 字，没有保存。").arg(excess);
+            root.setError(qsTr("正文超出 %1 字，没有保存。").arg(excess));
             return false;
         }
         if (root.remoteDeleted || !root.memoServiceRef)
@@ -322,7 +330,7 @@ FocusScope {
             changes.body = root.editorBody;
         if (root.editorCategoryId !== root.baselineCategoryId)
             changes.categoryId = root.editorCategoryId;
-        root.errorMessage = "";
+        root.setError("");
         // 新建的和换了科目的都排到那一科最后，保存后要把它滚进列表可视区。
         var moved = root.drafting || changes.categoryId !== undefined;
         root.saving = true;
@@ -344,7 +352,7 @@ FocusScope {
         root.saving = false;
         if (!ok) {
             if (root.errorMessage.length === 0)
-                root.errorMessage = qsTr("保存失败，编辑内容仍保留在这里。");
+                root.setError(qsTr("保存失败，编辑内容仍保留在这里。"));
             return false;
         }
         root.baselineTitle = root.editorTitle;
@@ -624,9 +632,10 @@ FocusScope {
             if (root.pageActive)
                 root.reload();
         }
+        // 读取不走这个信号（readMemos 把成败放在返回值里），来的都是保存、删除、排序这类写操作的失败。
         function onOperationFailed(message) {
             if (root.pageActive || root.saving)
-                root.errorMessage = message;
+                root.setError(message);
         }
     }
     Connections {
@@ -1103,14 +1112,17 @@ FocusScope {
                 anchors.margins: root.paperPadding
                 anchors.bottomMargin: root.paperPadding + root.floatingKeyboardInset
                 spacing: Theme.space12
-                // 保存失败、另一台删除等情况的提示条。
+                // 保存失败、另一台删除、读取失败等情况的提示条。读取失败的带「重试」：编辑卡在的时候，
+                // 页面上那条带重试的提示是隐藏的；保存失败不给，重试只会重读，存不上内容。
                 ErrorBanner {
                     objectName: "memoErrorBanner"
                     messageName: "memoError"
                     Layout.fillWidth: true
                     visible: root.errorMessage.length > 0
                     message: root.errorMessage
+                    retryable: root.errorFromRead
                     touchUi: root.touchUi
+                    onRetryRequested: root.reload()
                 }
                 // 另一台删掉了正在编辑的这条：两个出口都要用户明确选，不会悄悄复活记录，也不会悄悄丢字。
                 RowLayout {
@@ -1319,7 +1331,7 @@ FocusScope {
                 right: parent.right
             }
             message: root.errorMessage
-            retryable: root.readFailure.length > 0
+            retryable: root.errorFromRead
             touchUi: root.touchUi
             onRetryRequested: root.reload()
         }

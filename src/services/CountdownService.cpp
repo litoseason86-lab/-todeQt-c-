@@ -166,6 +166,9 @@ bool CountdownService::updateGoalChanges(int id, const QVariantMap& changes)
         return true;
     }
     // 没交的字段用库里现在的值再写一遍：值没变，同步就不会把它记成本机修改，也就不会盖掉另一台。
+    // 前提是库里的值已按 updateGoal 同一套规则规范化（名称裁剪空白、日期只存 ISO 日期）：现有写入入口和
+    // 另一台同步过来的数据都满足。以后新增不经这套规则的写入路径，或改了规范化规则，要改成只更新交进来的列，
+    // 否则会顺手改写没交的字段。
     // 数据库只在主线程读写，读和写之间同步插不进来。
     return updateGoal(id, changes.contains(nameKey) ? changes.value(nameKey).toString() : currentName,
                       changes.contains(dateKey) ? targetDate : currentDate);

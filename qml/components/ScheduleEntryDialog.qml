@@ -149,6 +149,11 @@ Popup {
     // 新增：预填调用方点中的那一天与时段，用户少改几个字段。
     function openForNew(weekday, startMinutes) {
         root.editingEntryId = -1
+        // 先复位提示再刷新科目：读科目失败时刷新会写出原因，放在后面复位就把它清掉了。
+        // 下面程序填各栏不会清提示（课程名只在用户输入时才清）。
+        root.errorText = ""
+        root.errorField = ""
+        root.conflictText = ""
         root.refreshCategories()
         titleField.text = ""
         locationField.text = ""
@@ -161,14 +166,15 @@ Popup {
         weekEndField.text = String(root.semesterWeeks)
         parityCombo.currentIndex = 0
         categoryCombo.currentIndex = 0
-        root.errorText = ""
-        root.errorField = ""
-        root.conflictText = ""
         root.open()
     }
 
     function openForEdit(entry) {
         root.editingEntryId = Number(entry.id)
+        // 同 openForNew：先复位提示再刷新科目，读科目失败的原因才留得住。
+        root.errorText = ""
+        root.errorField = ""
+        root.conflictText = ""
         root.refreshCategories()
         titleField.text = String(entry.title || "")
         locationField.text = String(entry.location || "")
@@ -190,9 +196,6 @@ Popup {
             parity: parityCombo.currentIndex,
             categoryId: Number(root.categoryOptions[categoryCombo.currentIndex].id || -1)
         }
-        root.errorText = ""
-        root.errorField = ""
-        root.conflictText = ""
         root.open()
     }
 

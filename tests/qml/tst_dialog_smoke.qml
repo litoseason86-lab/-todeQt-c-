@@ -261,6 +261,39 @@ TestCase {
         tryVerify(function () { return !entryDialog.visible }, 2000, "照常收起")
     }
 
+    // 产品保证：打开课表弹窗时科目没读出来，下拉保留上一次读到的科目、选中的科目不变，读失败的原因显示出来；
+    // 保存时不会把课程的科目清掉。新增、编辑两个入口都一样。
+    // 抓住的错误实现：先刷新科目（写出原因）、再统一复位提示——原因刚写上就被清空，用户看不出科目列表没刷新。
+    function test_scheduleEntryDialogCategoryReadFailureShowsReason() {
+        // 先正常打开一次，让下拉里有科目 1；之后的读取失败要保留的就是这一份。
+        entryDialog.openForNew(2, 480)
+        tryVerify(function () { return entryDialog.opened }, 2000)
+        entryDialog.close()
+        tryVerify(function () { return !entryDialog.visible }, 2000)
+        verify(entryDialog.categoryOptions.some(function (option) { return Number(option.id) === 1 }),
+               "前置：上一次读到了科目 1")
+
+        categoryManager.failRead = true
+        entryDialog.openForEdit({
+            id: 6, title: "线性代数", location: "A203", weekday: 3,
+            startMinutes: 600, endMinutes: 690,
+            weekStart: 1, weekEnd: 16, weekParity: 0, categoryId: 1
+        })
+        tryVerify(function () { return entryDialog.opened }, 2000)
+        compare(entryDialog.errorText, "科目加载失败，请稍后重试", "编辑：读失败的原因显示出来")
+        var combo = testCase.fieldIn(entryDialog, "scheduleCategoryCombo")
+        compare(Number(entryDialog.categoryOptions[combo.currentIndex].id), 1, "选中的仍是科目 1")
+        testCase.fieldIn(entryDialog, "scheduleLocationField").text = "B305"
+        entryDialog.submit()
+        compare(scheduleService.entryUpdateCalls, 1)
+        compare(Object.keys(scheduleService.lastEntryChanges).join(","), "location", "科目没交，不会被清掉")
+        tryVerify(function () { return !entryDialog.visible }, 2000)
+
+        entryDialog.openForNew(2, 480)
+        tryVerify(function () { return entryDialog.opened }, 2000)
+        compare(entryDialog.errorText, "科目加载失败，请稍后重试", "新增：读失败的原因同样显示")
+    }
+
     function test_scheduleEntryRejectsEmptyActiveWeeks() {
         entryDialog.openForEdit({
             id: 5, title: "高等数学", location: "A101", weekday: 2,
