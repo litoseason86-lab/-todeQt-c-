@@ -110,9 +110,9 @@ cmake --build ~/pt-build --target deploy-local-app -j8
 src/models/            数据模型
 src/services/          C++ 服务层（跨平台业务逻辑）
 src/mcp/               外部 AI 接入（common/ 协议与契约、bridge/ 主应用内的权限与工具分派、helper/ 包内 stdio 辅助程序）
-src/platform/macos/    macOS 原生层（菜单栏 NSStatusItem、全局热键 Carbon、偏好域清理，Objective-C++）
-src/platform/ios/      iOS 专属（打包配置 Info.plist 模板）
-src/platform/apple/    macOS 与 iOS 共用的 Apple 框架层（系统通知 UNUserNotificationCenter，Objective-C++）
+src/platform/macos/    macOS 原生层（菜单栏 NSStatusItem、全局热键 Carbon、偏好域清理、iCloud 同步文件夹、外部 AI 本地连接的同用户校验，Objective-C++）
+src/platform/ios/      iOS 专属（同步文件夹的选择与访问、切到后台时的后台时间、Info.plist 模板，Objective-C++）
+src/platform/apple/    macOS 与 iOS 共用的 Apple 框架层（系统通知 UNUserNotificationCenter、iCloud 云盘文件的上传状态，Objective-C++）
 qml/                   QML 界面（views/ 页面、components/ 组件、components/settings/ 设置面板）
 resources/             Qt 资源文件（字体、壁纸、音效）
 shaders/               预编译 Shader 资源
@@ -120,7 +120,7 @@ cmake/                 构建脚本（DeployLocalApp.cmake：部署到 /Applicat
 tests/                 Qt Test 自动化测试（C++ 用例 + tests/qml/ 的 Qt Quick Test）
 docs/                  当前业务规则与运行命令
 plans/                 当前状态、待评估事项与未采纳决策
-.agents/               协作用 skill（skills/ 活动目录、skills-archive/ 归档与上游来源，规则见 AGENTS.md）
+.agents/               协作用 skill（skills/ 活动目录、skills-archive/ 归档与上游来源，维护说明见 skills-archive/README.md）
 ```
 
 业务逻辑（标准 C++/Qt）与原生代码（`.mm`）保持分离：`src/services` 只依赖平台无关抽象，原生实现按平台放在 `src/platform/macos`、`src/platform/ios`，两个平台共用的放在 `src/platform/apple`。

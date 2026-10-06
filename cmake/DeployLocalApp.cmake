@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.16)
 
+# 本机部署：把新构建的应用包切换到固定启动入口（默认 /Applications/番茄Todo.app）。
+# 顺序固定为：复制到同目录的暂存包 → 校验主程序与辅助程序 → 旧包改名备份 → rename 换上新包
+# → 删除备份并用 lsregister 刷新 LaunchServices（macOS 记录应用位置与打开方式的系统索引）。
+# 不得改成「先删旧包再复制新包」：中途失败会让用户既没有旧包也没有新包。
+# DeployLocalAppTests 用伪应用包验证新包不完整时旧包原样保留，改这里后必须让它通过。
+
 function(pomodoro_todo_deploy_local_app)
     foreach(required_variable SOURCE_APP DESTINATION_APP BUNDLE_EXECUTABLE)
         if(NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")

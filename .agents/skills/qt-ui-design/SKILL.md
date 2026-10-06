@@ -8,7 +8,7 @@ metadata:
   qt-version: "6.x"
   category: conceptual
   changelog: "Initial release"
-  project-revision: "2"
+  project-revision: "3"
 ---
 
 # Qt 桌面界面设计
@@ -28,7 +28,7 @@ metadata:
 - 复用现有 Qt Quick Controls 和业务组件；页面编排、通用控件和后端状态分开。
 - 字号、密度、圆角和动效应与现有应用协调，不强制套用固定字号、比例或统一动画时长。
 - 主操作、危险操作、选中、禁用、加载和错误应有清楚区别；颜色以外还要有文字、图标或形状线索。
-- 玻璃效果及技术栈约束以 `AGENTS.md` 为准；涉及光学效果时再读取 `liquid-glass` 的相关原理。
+- 技术栈约束以 `AGENTS.md` 为准；玻璃效果的使用范围、光学分层、降级与 Shader 要求见 `docs/业务规则.md`「界面与验证约定」。改折射或模糊时照现有实现 `qml/components/LiquidGlassBackdrop.qml`；只有设计新的光学效果时才读 `liquid-glass` 的原理部分，不照搬它的 Web 写法。
 
 ## 交互检查
 

@@ -19,3 +19,6 @@
 - 七个活动 Qt skill 由项目直接维护，不再列入根目录 `skills-lock.json` 的上游安装集合，避免后续批量操作恢复旧入口或覆盖定制内容。
 - [upstream-lock.json](upstream-lock.json) 保存此次调整前全部 Qt skill 的来源与哈希，仅供核对；不要将它直接作为活动安装清单。
 - 原始版本及完整历史可通过 Git 查阅。恢复旧流程前，应重新评估其中的强制确认、构建目录和代理规则。
+- 项目事实（构建目录、验证与部署、目录分层、界面约束）只在 `AGENTS.md` 与 `docs/` 维护；skill 只引用，不复制另一套。从上游更新某个 skill 时人工核对差异，避免覆盖本地定制。
+- Claude Code 经 `.claude/skills/` 下指向 `.agents/skills/` 的软链接发现 skill：新增或归档 skill 时同步增删软链接，不留指向已移走目录的失效链接。
+- `.claude/settings.json` 启用的 `qt-development-skills` 插件（带 Qt 文档检索）会带出同名的上游 skill，包括已合并的 `qt-qml-test-run` 和这里归档的四个；一律以 `.agents/skills/` 下的项目版为准（`AGENTS.md` 末尾有同样的规定）。

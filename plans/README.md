@@ -72,7 +72,7 @@ iOS 用 `qt_add_executable` 让静态 Qt 自动链接平台与 QML 插件，并�
 iPad 真机验收通过，已知问题与未验证项见 048 留档。
 
 **2026-09-21 文档与 skill 目录维护**：七个 Qt skill 收归项目自行维护（`qt-qml-test-run` 并入 `qt-qml-test`，文档与 Figma 四个低频 skill 移入 `.agents/skills-archive/`），
-规则写在 [协作规则](../AGENTS.md) 的「Qt Skill 维护规则」。同时按当日实测更新文档：全量离屏回归 **100/100**（`ctest -j8` 约 32 秒，22 个 C++ 目标 572 个函数、72 个 QML 文件 857 个函数、6 条脚本门禁），
+规则当时写在协作规则的「Qt Skill 维护规则」，2026-10-06 精简协作规则后移到 [.agents/skills-archive/README.md](../.agents/skills-archive/README.md)。同时按当日实测更新文档：全量离屏回归 **100/100**（`ctest -j8` 约 32 秒，22 个 C++ 目标 572 个函数、72 个 QML 文件 857 个函数、6 条脚本门禁），
 [运行命令](../docs/运行命令.md) 的目标清单补齐 MCP 三个目标与偏好域清理目标，[README](../README.md) 补上 `src/mcp/` 与 `.agents/` 两层。本轮只改文档与 skill，未动产品代码，未重新部署。
 
 **047：MCP 外部 AI 管理接入**（2026-09-18 完成，2026-09-19 审查后提交）。功能与计划全文已在 `7be9ff6` 留档；计划正文按约定删除，查阅用 `git show 7be9ff6:plans/047-MCP外部AI管理接入.md`。使用方式见 [MCP 接入说明](../docs/MCP接入.md)。
