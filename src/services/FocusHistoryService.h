@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QVariant>
 #include <QObject>
+#include <QSqlDatabase>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
@@ -54,6 +55,14 @@ public:
     Q_INVOKABLE QVariantList getTaskOptions(const QVariant& dateValue) const;
 
     static constexpr int kTaskOptionLimit = 200;
+
+    // 区间占用检查：专注表（含进行中）、休息表、进行中的休息快照三处。补录、修改与废纸篓恢复共用，
+    // 在调用方给的连接（可处于其事务内）上执行。excludeFocusId / excludeRestId 排除被编辑的原记录，不排除传 -1。
+    // ActiveRest 是计划之外多出的一档：原校验第三段查的是 active_focus_state 里正在进行的休息，
+    // 与「已有休息记录」是两句不同的提示，抽函数时不能把它并掉。
+    enum class TimelineOverlap { None, Focus, Rest, ActiveRest, Error };
+    static TimelineOverlap findTimelineOverlap(QSqlDatabase& db, const QDateTime& start, const QDateTime& end,
+                                               int excludeFocusId, int excludeRestId, QString* dbError);
 
 signals:
     // 手工改动后各视图需要重查；查询本身不缓存，只要有人重新拉一次就是最新的。

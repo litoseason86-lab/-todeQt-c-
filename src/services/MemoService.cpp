@@ -1,6 +1,7 @@
 #include "MemoService.h"
 
 #include "DatabaseManager.h"
+#include "TrashStore.h"
 
 #include <QDateTime>
 #include <QSqlDatabase>
@@ -346,16 +347,41 @@ bool MemoService::deleteMemo(int memoId)
     if (!databaseReady()) {
         return false;
     }
-    QSqlQuery query(DatabaseManager::instance()->database());
+    // 先写废纸篓再删除，同一事务：写入失败整体回滚，宁可删不掉也不能删了却没进废纸篓。
+    // 完全空白的备忘 capture 会直接放行、不写废纸篓。
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.transaction()) {
+        return reportFailure(QStringLiteral("删除备忘录失败：%1").arg(db.lastError().text()));
+    }
+    QString trashError;
+    if (!TrashStore::captureMemo(db, memoId, &trashError)) {
+        db.rollback();
+        return reportFailure(trashError == TrashStore::kMissingRecord
+                                 ? QStringLiteral("这条备忘录已不存在")
+                                 : QStringLiteral("删除备忘录失败：%1").arg(trashError));
+    }
+    QSqlQuery query(db);
     query.prepare(QStringLiteral("DELETE FROM memos WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), memoId);
     if (!query.exec()) {
-        return reportFailure(QStringLiteral("删除备忘录失败：%1").arg(query.lastError().text()));
+        const QString reason = query.lastError().text();
+        query.finish();
+        db.rollback();
+        return reportFailure(QStringLiteral("删除备忘录失败：%1").arg(reason));
     }
     if (query.numRowsAffected() != 1) {
+        query.finish();
+        db.rollback();
         return reportFailure(QStringLiteral("这条备忘录已不存在"));
     }
+    query.finish();
+    if (!db.commit()) {
+        const QString reason = db.lastError().text();
+        db.rollback();
+        return reportFailure(QStringLiteral("删除备忘录失败：%1").arg(reason));
+    }
     emit memosChanged();
+    emit TrashNotifier::instance()->changed();
     return true;
 }
 

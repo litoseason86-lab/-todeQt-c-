@@ -2,6 +2,7 @@
 
 #include "DatabaseManager.h"
 #include "QmlValues.h"
+#include "TrashStore.h"
 
 #include <QDebug>
 #include <QHash>
@@ -320,20 +321,46 @@ bool ScheduleService::deleteEntry(int id)
         return false;
     }
 
+    // 先写废纸篓再删除，同一事务：写入失败整体回滚，宁可删不掉也不能删了却没进废纸篓。
+    if (!db.transaction()) {
+        reportFailure(QStringLiteral("删除课程失败: %1").arg(db.lastError().text()));
+        return false;
+    }
+    QString trashError;
+    if (!TrashStore::captureScheduleEntry(db, id, &trashError)) {
+        db.rollback();
+        reportFailure(trashError == TrashStore::kMissingRecord
+                          ? QStringLiteral("课程不存在或已被删除")
+                          : QStringLiteral("删除课程失败: %1").arg(trashError));
+        return false;
+    }
     QSqlQuery query(db);
     query.prepare(QStringLiteral("DELETE FROM schedule_entries WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), id);
     if (!query.exec()) {
-        qWarning() << "Failed to delete schedule entry:" << query.lastError().text();
-        reportFailure(QStringLiteral("删除课程失败: %1").arg(query.lastError().text()));
+        const QString reason = query.lastError().text();
+        qWarning() << "Failed to delete schedule entry:" << reason;
+        query.finish();
+        db.rollback();
+        reportFailure(QStringLiteral("删除课程失败: %1").arg(reason));
         return false;
     }
     if (query.numRowsAffected() == 0) {
+        query.finish();
+        db.rollback();
         reportFailure(QStringLiteral("课程不存在或已被删除"));
+        return false;
+    }
+    query.finish();
+    if (!db.commit()) {
+        const QString reason = db.lastError().text();
+        db.rollback();
+        reportFailure(QStringLiteral("删除课程失败: %1").arg(reason));
         return false;
     }
 
     emit scheduleChanged();
+    emit TrashNotifier::instance()->changed();
     return true;
 }
 

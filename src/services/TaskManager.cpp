@@ -6,6 +6,7 @@
 #include "FocusSessionRules.h"
 #include "LogicalDay.h"
 #include "QmlValues.h"
+#include "TrashStore.h"
 
 #include <QDebug>
 #include <QDateTime>
@@ -683,6 +684,20 @@ bool TaskManager::deleteTask(int taskId)
         return false;
     }
 
+    // 先把任务写进废纸篓，再解除专注记录关联：解除之后就查不到挂在它上面的专注记录了，
+    // 恢复时没法接回。写入失败整体回滚——宁可删不掉，也不能删了却没进废纸篓。
+    QString trashError;
+    if (!TrashStore::captureTask(db, taskId, &trashError)) {
+        // 任务不存在时保持原有的日志文案；其余是写废纸篓失败。
+        if (trashError == TrashStore::kMissingRecord) {
+            qWarning() << "Failed to delete task: task not found" << taskId;
+        } else {
+            qWarning() << "Failed to move task to trash:" << trashError;
+        }
+        db.rollback();
+        return false;
+    }
+
     // 专注记录是历史数据，删除任务时只解除关联，不让记录跟着任务一起删除。
     QSqlQuery detachSessions(db);
     detachSessions.prepare(QStringLiteral("UPDATE focus_sessions SET task_id = NULL WHERE task_id = :id"));
@@ -718,6 +733,7 @@ bool TaskManager::deleteTask(int taskId)
     // 的页面不会观察到“任务已删、计时器仍绑定旧 ID”的中间状态。
     emit taskDeleted(taskId);
     emit tasksChanged();
+    emit TrashNotifier::instance()->changed();
     return true;
 }
 

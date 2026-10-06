@@ -164,6 +164,7 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
                                     bool requireScheduleTables,
                                     bool requireKnowledgeGapTable,
                                     bool requireMemoTable,
+                                    bool requireTrashTable,
                                     QString* reason)
 {
     struct TableContract {
@@ -339,6 +340,12 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
     // 不能把用户手写内容丢失伪装成一次成功恢复。完整契约与启动共用，避免两处漂移。
     if (requireMemoTable && !DatabaseManager::memoSchemaIsValid(database)) {
         *reason = QStringLiteral("备份 memos 表结构或外键不完整");
+        return false;
+    }
+    // v21 才引入废纸篓：更早的备份不要求，恢复后由迁移建空表；v21 及以后缺表或结构不对必须拒绝，
+    // 否则恢复成功后用户的「找回」兜底会静默缺失。契约与启动检查共用。
+    if (requireTrashTable && !DatabaseManager::trashSchemaIsValid(database)) {
+        *reason = QStringLiteral("备份 trash_items 表结构不完整");
         return false;
     }
 
@@ -715,6 +722,7 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
                                                pragmaVersion >= 13,
                                                pragmaVersion >= 14,
                                                pragmaVersion >= 20,
+                                               pragmaVersion >= 21,
                                                &reason);
             }
 

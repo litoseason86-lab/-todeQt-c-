@@ -146,6 +146,10 @@ private slots:
     void version20BackupBrokenMemoSchemaIsRejected();
     void version19BackupWithoutMemosRestoresAndMigrates();
     void version20BackupRestoresAllMemoFields();
+    void version20BackupWithoutTrashRestoresIntoEmptyTrash();
+    void version21BackupKeepsTrashItems();
+    void version21BackupBrokenTrashSchemaIsRejected_data();
+    void version21BackupBrokenTrashSchemaIsRejected();
     void higherSchemaVersionIsRejected();
     void formatVersionMismatchIsRejected();
     void schemaMetadataMismatchIsRejected();
@@ -1321,7 +1325,7 @@ void BackupServiceTests::version19BackupWithoutMemosRestoresAndMigrates()
     const auto info = BackupService::instance()->readBackupInfo(backupFile());
     QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
     QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
-    QCOMPARE(scalarCount(QStringLiteral("PRAGMA user_version")), 20);
+    QCOMPARE(scalarCount(QStringLiteral("PRAGMA user_version")), DatabaseManager::kCurrentSchemaVersion);
     QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = 'v19 旧任务'")), 1);
     QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM memos")), 0);
     QVERIFY(DatabaseManager::memoSchemaIsValid(DatabaseManager::instance()->database()));
@@ -1366,6 +1370,101 @@ void BackupServiceTests::version20BackupRestoresAllMemoFields()
     QCOMPARE(check.value(5).toString(), QStringLiteral("2026-10-01T08:00:00.000Z"));
     QCOMPARE(check.value(6).toString(), QStringLiteral("2026-10-02T09:00:00.000Z"));
     QVERIFY(!check.next());
+}
+
+void BackupServiceTests::version20BackupWithoutTrashRestoresIntoEmptyTrash()
+{
+    // 产品保证：v20 的旧备份（没有废纸篓表）可以恢复，恢复后升到 v21 并得到一张空的废纸篓，原有数据不丢。
+    QVERIFY(insertTask(QStringLiteral("v20 旧任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    const QString connection = QStringLiteral("Version20TrashBackup");
+    {
+        auto db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery query(db);
+        // 真实 v20 没有 trash_items，不能只调低版本号而继续带着新表来冒充旧备份。
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE trash_items")));
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+    setBackupSchemaVersion(backupFile(), 20);
+    const auto info = BackupService::instance()->readBackupInfo(backupFile());
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+    QCOMPARE(scalarCount(QStringLiteral("PRAGMA user_version")), DatabaseManager::kCurrentSchemaVersion);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = 'v20 旧任务'")), 1);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 0);
+    QVERIFY(DatabaseManager::trashSchemaIsValid(DatabaseManager::instance()->database()));
+}
+
+void BackupServiceTests::version21BackupKeepsTrashItems()
+{
+    // 产品保证：v21 备份连同废纸篓一起恢复——恢复是全局回滚，备份之后新放进去的项消失，备份时在的项回来。
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral(
+            "INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
+            "VALUES ('memo', 'in-backup', '备份时在的', '{\"v\":1}', '2026-10-05T01:00:00.000Z')")));
+    }
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral("DELETE FROM trash_items")));
+        QVERIFY(query.exec(QStringLiteral(
+            "INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
+            "VALUES ('memo', 'after-backup', '备份后放进的', '{\"v\":1}', '2026-10-06T01:00:00.000Z')")));
+    }
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 1);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE origin_sync_id = 'in-backup' "
+                                        "AND payload = '{\"v\":1}'")), 1);
+}
+
+void BackupServiceTests::version21BackupBrokenTrashSchemaIsRejected_data()
+{
+    QTest::addColumn<QString>("oldText");
+    QTest::addColumn<QString>("replacement");
+    QTest::newRow("missing-table") << QString() << QString();
+    QTest::newRow("missing-column") << QStringLiteral("title TEXT NOT NULL DEFAULT '',") << QString();
+    QTest::newRow("nullable-payload") << QStringLiteral("payload TEXT NOT NULL") << QStringLiteral("payload TEXT");
+    QTest::newRow("missing-check") << QStringLiteral("CHECK(length(kind) > 0)") << QString();
+    QTest::newRow("invalid-primary-key") << QStringLiteral("INTEGER PRIMARY KEY AUTOINCREMENT") << QStringLiteral("INT PRIMARY KEY");
+    QTest::newRow("foreign-key") << QStringLiteral("deleted_at TEXT NOT NULL")
+                                 << QStringLiteral("deleted_at TEXT NOT NULL, FOREIGN KEY (origin_sync_id) REFERENCES categories(sync_id)");
+}
+
+void BackupServiceTests::version21BackupBrokenTrashSchemaIsRejected()
+{
+    // 产品保证：v21 备份缺废纸篓表或结构不对时被拒绝恢复，正式库不受影响；契约与启动检查共用。
+    QFETCH(QString, oldText);
+    QFETCH(QString, replacement);
+    QVERIFY(insertTask(QStringLiteral("正式库保留")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    const QString connection = QStringLiteral("BrokenTrashBackup");
+    {
+        auto db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery query(db);
+        QVERIFY(query.exec(QStringLiteral("SELECT sql FROM sqlite_master WHERE name = 'trash_items'")) && query.next());
+        QString sql = query.value(0).toString();
+        query.finish();
+        QVERIFY(query.exec(QStringLiteral("DROP TABLE trash_items")));
+        if (!oldText.isEmpty()) {
+            QVERIFY(sql.contains(oldText));
+            sql.replace(oldText, replacement);
+            QVERIFY2(query.exec(sql), qPrintable(query.lastError().text()));
+        }
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+    const auto info = BackupService::instance()->readBackupInfo(backupFile());
+    QVERIFY(!info.value(QStringLiteral("valid")).toBool());
+    QVERIFY(info.value(QStringLiteral("reason")).toString().contains(QStringLiteral("trash_items")));
+    QVERIFY(!BackupService::instance()->restoreBackup(backupFile()));
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '正式库保留'")), 1);
+    QVERIFY(DatabaseManager::trashSchemaIsValid(DatabaseManager::instance()->database()));
 }
 
 QTEST_MAIN(BackupServiceTests)

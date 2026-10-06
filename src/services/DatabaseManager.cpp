@@ -536,6 +536,21 @@ bool DatabaseManager::createTables()
         return false;
     }
 
+    // 废纸篓表（v21）。与备忘录同理：新增表前先拍迁移快照，保存真正的升级前数据；
+    // 表已完整、只是版本号被调低时没有结构改动，不占快照保留名额（backupDatabaseBeforeMigration 一次启动只拍一份）。
+    // 本阶段不进同步清单，同步迁移不会给它加 sync_id；以后登记时再由同步迁移补列，
+    // 补出来的列不属于业务契约（见 trashSchemaIsValid）。
+    if (version < 21 || !tableExists(QStringLiteral("trash_items"))) {
+        if ((!tableExists(QStringLiteral("trash_items")) && !backupDatabaseBeforeMigration())
+            || !createTrashTable()) {
+            return false;
+        }
+    }
+    if (!trashSchemaIsValid(m_db)) {
+        qWarning() << "废纸篓表结构不完整或不兼容";
+        return false;
+    }
+
     // v18 设备间同步。缺任何一部分（半迁移、外部改库、v5 整表重建带走了唯一索引）都重跑一遍，
     // 迁移本身可以重复执行，已经有的身份和版本保持不动。第二期加进同步清单的三张表也由这一步补齐：
     // v18 的库里它们还没有 sync_id，结构判为不完整，这一步就会给它们加列、回填并放进待发送队列。
@@ -555,6 +570,9 @@ bool DatabaseManager::createTables()
         return false;
     }
     if (version < 20 && !migrateToVersion20()) {
+        return false;
+    }
+    if (version < 21 && !migrateToVersion21()) {
         return false;
     }
 
@@ -592,7 +610,10 @@ bool DatabaseManager::createTables()
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_knowledge_gaps_status_due "
                        "ON knowledge_gaps(status, due_date)"),
         QStringLiteral("CREATE INDEX IF NOT EXISTS idx_memos_category_order "
-                       "ON memos(category_id, sort_order, created_at)")
+                       "ON memos(category_id, sort_order, created_at)"),
+        // 清理过期项按 deleted_at 范围扫，列表也按它排序；去重与「删同一原记录的全部行」按 origin_sync_id 查。
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_trash_items_deleted ON trash_items(deleted_at)"),
+        QStringLiteral("CREATE INDEX IF NOT EXISTS idx_trash_items_origin ON trash_items(origin_sync_id)")
     };
 
     for (const QString& indexSql : indexes) {
@@ -2148,6 +2169,82 @@ bool DatabaseManager::migrateToVersion20()
     }
     qInfo() << "数据库已升级到 v20";
     return true;
+}
+
+bool DatabaseManager::migrateToVersion21()
+{
+    if (!m_db.transaction()) {
+        qWarning() << "开始数据库 v21 迁移失败：" << m_db.lastError().text();
+        return false;
+    }
+    // 建表与结构检查已在 createTables 里先完成，成功后才标记版本，失败可在下次打开时继续补齐。
+    if (!setDatabaseVersion(21) || !m_db.commit()) {
+        m_db.rollback();
+        return false;
+    }
+    qInfo() << "数据库已升级到 v21";
+    return true;
+}
+
+bool DatabaseManager::createTrashTable()
+{
+    QSqlQuery query(m_db);
+    // kind 只要求非空、不限制取值：以后新增类型时，旧版收到（同步或备份）仍能插入并列出，
+    // 显示为「需要更新应用才能恢复」，而不是整行写不进去。
+    // payload 是删除前的完整内容（JSON，带 v 版本号），引用一律存 sync_id。
+    return execSql(query, QStringLiteral(R"SQL(
+        CREATE TABLE IF NOT EXISTS trash_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL CHECK(length(kind) > 0),
+            origin_sync_id TEXT NOT NULL DEFAULT '',
+            title TEXT NOT NULL DEFAULT '',
+            payload TEXT NOT NULL,
+            deleted_at TEXT NOT NULL
+        )
+    )SQL"), "创建废纸篓表失败：");
+}
+
+bool DatabaseManager::trashSchemaIsValid(const QSqlDatabase& db)
+{
+    if (!hasGeneratedIntegerId(db, QStringLiteral("trash_items"))) {
+        return false;
+    }
+    const QMap<QString, QString> required = {
+        {QStringLiteral("id"), QStringLiteral("INTEGER")},
+        {QStringLiteral("kind"), QStringLiteral("TEXT")},
+        {QStringLiteral("origin_sync_id"), QStringLiteral("TEXT")},
+        {QStringLiteral("title"), QStringLiteral("TEXT")},
+        {QStringLiteral("payload"), QStringLiteral("TEXT")},
+        {QStringLiteral("deleted_at"), QStringLiteral("TEXT")}
+    };
+    QSqlQuery query(db);
+    if (!query.exec(QStringLiteral("PRAGMA table_info(trash_items)"))) {
+        return false;
+    }
+    QStringList found;
+    while (query.next()) {
+        const QString column = query.value(1).toString();
+        if (!required.contains(column)) {
+            continue; // 后续同步迁移添加的列不属于业务结构契约。
+        }
+        const bool mustBeNotNull = column != QStringLiteral("id");
+        if (query.value(2).toString().toUpper() != required.value(column)
+            || (query.value(3).toInt() != 0) != mustBeNotNull) {
+            return false;
+        }
+        found.append(column);
+    }
+    if (found.size() != required.size()) {
+        return false;
+    }
+    if (!query.exec(QStringLiteral("PRAGMA foreign_key_list(trash_items)")) || query.next()) {
+        return false;
+    }
+    if (!query.exec(QStringLiteral("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'trash_items'"))
+        || !query.next()) {
+        return false;
+    }
+    return normalizedCreateSql(query.value(0).toString()).contains(QStringLiteral("check(length(kind)>0)"));
 }
 
 bool DatabaseManager::memoForeignKeysAreValid(const QSqlDatabase& db)

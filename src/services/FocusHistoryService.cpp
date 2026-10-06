@@ -4,6 +4,7 @@
 #include "DatabaseManager.h"
 #include "FocusSessionRules.h"
 #include "LogicalDay.h"
+#include "TrashStore.h"
 
 #include <algorithm>
 
@@ -351,6 +352,31 @@ bool FocusHistoryService::validateSessionInterval(const QDateTime& startTime,
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
+    QString dbError;
+    switch (findTimelineOverlap(db, startTime, endTime, sourceRest ? -1 : excludeSessionId,
+                                sourceRest ? excludeSessionId : -1, &dbError)) {
+    case TimelineOverlap::None:
+        return true;
+    case TimelineOverlap::Focus:
+        m_lastError = QStringLiteral("这段时间已有专注记录");
+        return false;
+    case TimelineOverlap::Rest:
+        m_lastError = QStringLiteral("这段时间已有休息记录，请先调整该记录或直接修改其类型");
+        return false;
+    case TimelineOverlap::ActiveRest:
+        m_lastError = QStringLiteral("这段时间有正在进行的休息，请先结束休息");
+        return false;
+    case TimelineOverlap::Error:
+        m_lastError = dbError;
+        return false;
+    }
+    return false;
+}
+
+FocusHistoryService::TimelineOverlap FocusHistoryService::findTimelineOverlap(
+    QSqlDatabase& db, const QDateTime& startTime, const QDateTime& endTime, int excludeFocusId,
+    int excludeRestId, QString* dbError)
+{
     QSqlQuery query(db);
     // 重叠判定：两段区间相交当且仅当 A.start < B.end 且 B.start < A.end。
     // 不拦的话，同一段时间被两条记录覆盖，统计凭空多出时长，而且事后无从察觉。
@@ -362,23 +388,25 @@ bool FocusHistoryService::validateSessionInterval(const QDateTime& startTime,
     //
     // 「现在」由 C++ 绑入而不用 SQLite 的 datetime('now')：后者是 UTC，
     // 而 start_time 存的是本地时间，混用会在非零时区整体错开。
+    //
+    // 补录、修改、废纸篓恢复共用本函数；db 由调用方给，恢复时在它自己的事务内调用，
+    // 检查与随后的插入之间不会被别的写入插队。
     query.prepare(QStringLiteral(
         "SELECT COUNT(*) FROM focus_sessions "
         "WHERE id <> :excludeId "
         "AND julianday(start_time) < julianday(:endTime) "
         "AND julianday(COALESCE(end_time, :now)) > julianday(:startTime)"));
-    query.bindValue(QStringLiteral(":excludeId"), sourceRest ? -1 : excludeSessionId);
+    query.bindValue(QStringLiteral(":excludeId"), excludeFocusId);
     query.bindValue(QStringLiteral(":startTime"), startTime.toString(Qt::ISODateWithMs));
     query.bindValue(QStringLiteral(":endTime"), endTime.toString(Qt::ISODateWithMs));
     query.bindValue(QStringLiteral(":now"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
     if (!query.exec() || !query.next()) {
-        m_lastError = query.lastError().text();
+        if (dbError) *dbError = query.lastError().text();
         qWarning() << "Failed to check session overlap:" << query.lastError().text();
-        return false;
+        return TimelineOverlap::Error;
     }
     if (query.value(0).toInt() > 0) {
-        m_lastError = QStringLiteral("这段时间已有专注记录");
-        return false;
+        return TimelineOverlap::Focus;
     }
     // 两种记录占用同一条时间线，但 ID 来自不同表，必须分别排除被编辑的原记录。
     //
@@ -388,16 +416,15 @@ bool FocusHistoryService::validateSessionInterval(const QDateTime& startTime,
         "SELECT COUNT(*) FROM rest_sessions WHERE id <> :excludeId "
         "AND julianday(start_time) < julianday(:end) "
         "AND julianday(start_time) + duration / 86400.0 > julianday(:start)"));
-    query.bindValue(QStringLiteral(":excludeId"), sourceRest ? excludeSessionId : -1);
+    query.bindValue(QStringLiteral(":excludeId"), excludeRestId);
     query.bindValue(QStringLiteral(":start"), startTime.toString(Qt::ISODateWithMs));
     query.bindValue(QStringLiteral(":end"), endTime.toString(Qt::ISODateWithMs));
     if (!query.exec() || !query.next()) {
-        m_lastError = query.lastError().text();
-        return false;
+        if (dbError) *dbError = query.lastError().text();
+        return TimelineOverlap::Error;
     }
     if (query.value(0).toInt() > 0) {
-        m_lastError = QStringLiteral("这段时间已有休息记录，请先调整该记录或直接修改其类型");
-        return false;
+        return TimelineOverlap::Rest;
     }
     // 正在进行的休息同理按「起点 + 已计秒数」占用：暂停中的休息不该锁死它之后的整段时间。
     // 旧快照没有起点，用最后检查点倒推，占用区间退化为 [updated_at - elapsed, updated_at]。
@@ -410,14 +437,10 @@ bool FocusHistoryService::validateSessionInterval(const QDateTime& startTime,
     query.bindValue(QStringLiteral(":start"), startTime.toString(Qt::ISODateWithMs));
     query.bindValue(QStringLiteral(":end"), endTime.toString(Qt::ISODateWithMs));
     if (!query.exec() || !query.next()) {
-        m_lastError = query.lastError().text();
-        return false;
+        if (dbError) *dbError = query.lastError().text();
+        return TimelineOverlap::Error;
     }
-    if (query.value(0).toInt() > 0) {
-        m_lastError = QStringLiteral("这段时间有正在进行的休息，请先结束休息");
-        return false;
-    }
-    return true;
+    return query.value(0).toInt() > 0 ? TimelineOverlap::ActiveRest : TimelineOverlap::None;
 }
 
 int FocusHistoryService::addManualSession(int taskId,
@@ -662,14 +685,32 @@ bool FocusHistoryService::deleteTimelineRecord(int sessionId, bool isRest)
         m_lastError = QStringLiteral("数据库未打开");
         return false;
     }
+    // 先写废纸篓再删除，同一事务：写入失败（含记录不存在、仍在进行中，capture 只认已结束的行）
+    // 整体回滚，对外仍是原来的失败文案。
+    if (!db.transaction()) {
+        m_lastError = QStringLiteral("记录不存在、正在进行中或删除失败");
+        return false;
+    }
+    QString trashError;
+    const bool captured = isRest ? TrashStore::captureRestSession(db, sessionId, &trashError)
+                                 : TrashStore::captureFocusSession(db, sessionId, &trashError);
+    if (!captured) {
+        db.rollback();
+        m_lastError = QStringLiteral("记录不存在、正在进行中或删除失败");
+        return false;
+    }
     QSqlQuery query(db);
     query.prepare(QStringLiteral("DELETE FROM %1 WHERE id = :id AND end_time IS NOT NULL")
                   .arg(isRest ? QStringLiteral("rest_sessions") : QStringLiteral("focus_sessions")));
     query.bindValue(QStringLiteral(":id"), sessionId);
-    if (!query.exec() || query.numRowsAffected() != 1) {
+    const bool deleted = query.exec() && query.numRowsAffected() == 1;
+    query.finish(); // 先释放语句，再提交或回滚。
+    if (!deleted || !db.commit()) {
+        db.rollback();
         m_lastError = QStringLiteral("记录不存在、正在进行中或删除失败");
         return false;
     }
     emit historyChanged();
+    emit TrashNotifier::instance()->changed();
     return true;
 }

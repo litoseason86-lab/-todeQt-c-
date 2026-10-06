@@ -5,6 +5,7 @@
 #include "LogicalDay.h"
 #include "QmlValues.h"
 #include "TaskManager.h"
+#include "TrashStore.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -558,17 +559,42 @@ bool KnowledgeGapService::deleteGap(int gapId)
         return false;
     }
 
-    QSqlQuery query(DatabaseManager::instance()->database());
+    // 先写废纸篓再删除，同一事务：写入失败整体回滚，宁可删不掉也不能删了却没进废纸篓。
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.transaction()) {
+        return reportFailure(QStringLiteral("删除失败：%1").arg(db.lastError().text()));
+    }
+    QString trashError;
+    if (!TrashStore::captureKnowledgeGap(db, gapId, &trashError)) {
+        db.rollback();
+        // 行不存在时保持原有提示；其余是写废纸篓失败，按删除失败报。
+        return reportFailure(trashError == TrashStore::kMissingRecord
+                                 ? QStringLiteral("这条记录已不存在")
+                                 : QStringLiteral("删除失败：%1").arg(trashError));
+    }
+    QSqlQuery query(db);
     query.prepare(QStringLiteral("DELETE FROM knowledge_gaps WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), gapId);
     if (!query.exec()) {
-        return reportFailure(QStringLiteral("删除失败：%1").arg(query.lastError().text()));
+        const QString reason = query.lastError().text();
+        query.finish();
+        db.rollback();
+        return reportFailure(QStringLiteral("删除失败：%1").arg(reason));
     }
     if (query.numRowsAffected() != 1) {
+        query.finish();
+        db.rollback();
         return reportFailure(QStringLiteral("这条记录已不存在"));
+    }
+    query.finish();
+    if (!db.commit()) {
+        const QString reason = db.lastError().text();
+        db.rollback();
+        return reportFailure(QStringLiteral("删除失败：%1").arg(reason));
     }
 
     emit gapsChanged();
+    emit TrashNotifier::instance()->changed();
     return true;
 }
 

@@ -4,6 +4,7 @@
 #include "DatabaseManager.h"
 #include "LogicalDay.h"
 #include "LogicalDayService.h"
+#include "TrashStore.h"
 
 #include <QDateTime>
 #include <QDebug>
@@ -233,21 +234,49 @@ bool CountdownService::deleteGoal(int id)
         return false;
     }
 
-    QSqlQuery query(DatabaseManager::instance()->database());
+    // 先写废纸篓再删除，同一事务：写入失败整体回滚，宁可删不掉也不能删了却没进废纸篓。
+    // 列表模型与主目标只在提交成功之后更新，回滚时界面不会先于数据库变化。
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.transaction()) {
+        emit operationFailed(QStringLiteral("删除目标失败: ") + db.lastError().text());
+        return false;
+    }
+    QString trashError;
+    if (!TrashStore::captureCountdownGoal(db, id, &trashError)) {
+        db.rollback();
+        emit operationFailed(trashError == TrashStore::kMissingRecord
+                                 ? QStringLiteral("目标不存在")
+                                 : QStringLiteral("删除目标失败: ") + trashError);
+        return false;
+    }
+    QSqlQuery query(db);
     query.prepare(QStringLiteral("DELETE FROM countdown_goals WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), id);
     if (!query.exec()) {
-        emit operationFailed(QStringLiteral("删除目标失败: ") + query.lastError().text());
+        const QString reason = query.lastError().text();
+        query.finish();
+        db.rollback();
+        emit operationFailed(QStringLiteral("删除目标失败: ") + reason);
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
+        query.finish();
+        db.rollback();
         emit operationFailed(QStringLiteral("目标不存在"));
+        return false;
+    }
+    query.finish();
+    if (!db.commit()) {
+        const QString reason = db.lastError().text();
+        db.rollback();
+        emit operationFailed(QStringLiteral("删除目标失败: ") + reason);
         return false;
     }
 
     m_model->removeGoal(index);
     updatePrimaryGoal();
+    emit TrashNotifier::instance()->changed();
     return true;
 }
 

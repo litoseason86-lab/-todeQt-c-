@@ -3411,10 +3411,10 @@ void SyncTests::phaseOneV20MemosAcquireSyncWithoutVersionBump()
     QVERIFY(exec(QStringLiteral("DELETE FROM sync_outbox WHERE tbl='memos'")));
     const QString original = QStringLiteral("2026-10-02T12:51:46.728Z");
     QVERIFY(exec(QStringLiteral("UPDATE memos SET updated_at='%1'").arg(original)));
-    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 20);
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), DatabaseManager::kCurrentSchemaVersion);
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('memos') WHERE name='sync_id'")), 0);
     QVERIFY(DatabaseManager::instance()->createTables());
-    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 20);
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), DatabaseManager::kCurrentSchemaVersion);
     const QString identity = syncIdOf(QStringLiteral("memos"), id);
     QVERIFY(!identity.isEmpty());
     QCOMPARE(versionCount(QStringLiteral("memos"), identity), 5);
