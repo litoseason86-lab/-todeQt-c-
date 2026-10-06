@@ -10,6 +10,8 @@ QtObject {
     property var updates: []
     property var deletes: []
     property var reorders: []
+    // 写库调用的先后顺序（"update:编号"、"create"）：creates、updates 各记各的，看不出谁先谁后。
+    property var calls: []
     property bool failSave: false
     // 为真时读取列表失败：和真实服务一样，在读取函数内部同步发出失败信号，再返回空列表。
     property bool failList: false
@@ -26,6 +28,7 @@ QtObject {
         updates = [];
         deletes = [];
         reorders = [];
+        calls = [];
         failSave = false;
         failList = false;
         listFailureMessage = defaultListFailure;
@@ -59,6 +62,7 @@ QtObject {
         }) || ({});
     }
     function createMemo(title, body, categoryId) {
+        calls = calls.concat(["create"]);
         creates = creates.concat([
             {
                 title: title,
@@ -76,6 +80,7 @@ QtObject {
         return id;
     }
     function updateMemo(id, changes) {
+        calls = calls.concat(["update:" + id]);
         updates = updates.concat([
             {
                 id: id,
