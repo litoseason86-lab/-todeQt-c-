@@ -7,7 +7,7 @@ metadata:
   version: "1.0"
   qt-version: "6.x"
   category: process
-  project-revision: "2"
+  project-revision: "3"
 ---
 
 # Qt Quick Test 编写与执行
@@ -33,6 +33,8 @@ metadata:
 - 每个用例恢复状态、销毁临时对象；单例、时间、语言环境和持久化依赖需要显式隔离。
 
 涉及焦点、Window、单例、信号或状态覆盖时，读取 [行为与隔离检查](references/qt-quick-test-patterns.md)。
+
+写、改或排查本项目的 QML 测试，先读 [本项目的坑](references/project-pitfalls.md)：可见性断言、委托查找、排位与悬停时序、输入法与字体、替身、偶发失败复现、变异验证、离屏截图和容易漏测的场景。
 
 ## 运行与诊断
 
