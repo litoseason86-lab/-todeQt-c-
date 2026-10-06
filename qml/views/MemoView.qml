@@ -7,7 +7,7 @@ import "../components"
 import ".."
 import "MemoFormat.js" as MemoFormat
 
-// 草稿与最后一次读取的数据库版本分开：同步刷新不得盖掉尚未保存的输入。
+// 编辑区的内容与最后一次读取的数据库版本分开：同步刷新不得盖掉尚未保存的输入。
 FocusScope {
     id: root
     property var memoServiceRef: null
@@ -16,9 +16,6 @@ FocusScope {
     property bool pageActive: true
     property int filterCategoryId: -1
     property int selectedId: -1
-    property bool drafting: false
-    // 新建前选中的那条：什么都没写的草稿被丢弃时回到这里。
-    property int draftReturnId: -1
     property bool remoteDeleted: false
     // 被另一台删掉的那条原来在列表里的位置；用户放弃本机修改后选这个位置上的相邻一条。
     property int deletedNeighborIndex: 0
@@ -35,8 +32,7 @@ FocusScope {
     property var allMemos: []
     property var categories: []
     property var capsules: []
-    // 已有的分类：写过备忘的科目，按科目管理里的顺序。正在编辑的这条所在的科目也算——
-    // 用「新建分类」开的第一条还没保存时，那一科还没有备忘。右键改分类只在这些里面选。
+    // 已有的分类：写过备忘的科目，按科目管理里的顺序。右键改分类只在这些里面选。
     readonly property var memoCategoryOptions: root.categoryOptions(true)
     // 还没写过备忘的科目：「新建分类」从这里挑。
     readonly property var unusedCategoryOptions: root.categoryOptions(false)
@@ -67,9 +63,9 @@ FocusScope {
         return Math.min(Math.max(0, bottom - keyboard.y + Theme.space16), Math.max(0, bottom - top - 80));
     }
     readonly property bool dirty: editorTitle !== baselineTitle || editorBody !== baselineBody || editorCategoryId !== baselineCategoryId
-    readonly property bool hasEditor: drafting || selectedId > 0
-    // 一条备忘都没有、也没在新建：框里什么都不摆，不留一个孤零零的「全部」和分隔线，也不放提示文字（用户要求页面不放说明性文字）。
-    readonly property bool libraryEmpty: allMemos.length === 0 && !drafting
+    readonly property bool hasEditor: selectedId > 0
+    // 一条备忘都没有：框里什么都不摆，不留一个孤零零的「全部」和分隔线，也不放提示文字（用户要求页面不放说明性文字）。
+    readonly property bool libraryEmpty: allMemos.length === 0
     // 列表里第一个分组的科目。组头上方的 16 间距只放在组与组之间，第一个组头贴着列表顶。
     property string firstGroupKey: ""
     // 列表焦点是鼠标或触屏点出来的。键盘（Tab 进来、方向键移动）选择时才给选中行画焦点环，
@@ -116,6 +112,11 @@ FocusScope {
             color: ""
         };
     }
+    // 列表行和删除确认框里显示的名字：传进来的是标题（没有标题时是正文第一行）。全是空白（刚新建、还没写字）
+    // 就写「新备忘录」，不显示一行空白。只是显示，数据库里的标题仍是空的。
+    function shownTitle(title) {
+        return title.trim().length > 0 ? title : qsTr("新备忘录");
+    }
     function memo(id) {
         for (var entry of root.allMemos)
             if (Number(entry.id) === id)
@@ -132,11 +133,12 @@ FocusScope {
     function groupCount(id) {
         return root.idsForCategory(Number(id)).length;
     }
-    // inUse 为真：写过备忘的科目，加上正在编辑的这条所在的科目；为假：其余的科目。
+    // inUse 为真：写过备忘的科目；为假：其余的科目。新建的备忘一点下就进了数据库，编辑区里的这条所在的科目本来就算「写过」。
+    // 例外是另一台删掉了正在改的那条、它又是这一科最后一条：这一科会出现在「新建分类」的可挑列表里，
+    // 挑它就是在这一科新建（要先过保存这一关，见 createNewMemo），结果正确，不用特殊处理。
     function categoryOptions(inUse) {
         return root.categories.filter(function (entry) {
-            var id = Number(entry.id);
-            return (id === root.editorCategoryId || root.idsForCategory(id).length > 0) === inUse;
+            return (root.idsForCategory(Number(entry.id)).length > 0) === inUse;
         }).map(function (entry) {
             return {
                 id: Number(entry.id),
@@ -168,8 +170,6 @@ FocusScope {
     }
     function clearEditor() {
         root.selectedId = -1;
-        root.drafting = false;
-        root.draftReturnId = -1;
         root.readEditor({
             title: "",
             body: "",
@@ -212,7 +212,8 @@ FocusScope {
         root.displayNow = new Date();
         // 成败直接看返回值（readMemos / readAllCategories 都不发共享的失败信号），不靠「正在读取」的标志
         // 去认领别处发来的失败。科目和备忘录算同一次读取，任何一个失败都保留上一次读到的内容：
-        // 科目没读出来不能当成「科目都被删了」，否则备忘会全按未分类分组，草稿也会被改成未分类（见下面对草稿的处理）。
+        // 科目没读出来不能当成「科目都被删了」，否则备忘会全按未分类分组，编辑区里另一台已删除的那条也会被改成未分类
+        // （见 dropMissingEditorCategory）。
         var memoRead = root.memoServiceRef.readMemos();
         var categoryRead = memoRead.ok && root.categoryManagerRef && typeof root.categoryManagerRef.readAllCategories === "function" ? root.categoryManagerRef.readAllCategories() : {
             ok: true,
@@ -227,7 +228,7 @@ FocusScope {
         root.readFailure = "";
         var values = memoRead.memos;
         var categoryValues = categoryRead.categories;
-        // 页面上的提示是读取失败报的，这次读到了就收起。草稿和改了还没存的备忘不会重新装进编辑框（装载时才清提示），
+        // 页面上的提示是读取失败报的，这次读到了就收起。改了还没存的备忘不会重新装进编辑框（装载时才清提示），
         // 不在这里清，提示会一直留到下一次保存。保存失败等别的提示不收：内容还没存上，提示得留着。
         if (root.errorFromRead)
             root.setError("");
@@ -265,12 +266,6 @@ FocusScope {
             oldIndex = Math.max(0, oldGlobalIndex);
         }
         root.rebuildRows();
-        if (root.drafting) {
-            // 改成未分类后重新排一次自动保存：上一次可能正是因为科目不存在没存成。
-            if (root.dropMissingEditorCategory())
-                root.edited();
-            return;
-        }
         var current = root.memo(root.selectedId);
         if (current) {
             if (!root.dirty)
@@ -288,18 +283,17 @@ FocusScope {
             root.clearEditor();
         }
     }
-    // 编辑区里还没进数据库的内容（草稿，或另一台已经删掉的那条）所在的科目被另一台删掉了：改成未分类，文字原样保留。
+    // 另一台删掉了正在改的这条，还连它所在的科目一起删了：编辑区改成未分类，文字原样保留。
     // 已存的备忘不用管，数据库删科目时会把它们的科目置空，重读时跟着变成未分类；这里照同样的结果处理。
-    // 不改的话，保存一直带着不存在的科目编号被服务拒绝；换备忘、新建都要先保存，用户就被卡住，
-    // 而这些内容不在列表里（右键改不了分类）、编辑区的分类又是只读的。改了返回 true。
+    // 不改的话，「另存为新备忘」一直带着不存在的科目编号被服务拒绝；而这条内容已不在列表里（右键改不了分类）、
+    // 编辑区的分类又是只读的，用户就只剩「放弃修改」一个出口。
     function dropMissingEditorCategory() {
         if (root.editorCategoryId === 0 || root.categories.some(function (entry) {
             return Number(entry.id) === root.editorCategoryId;
         }))
-            return false;
+            return;
         root.editorCategoryId = 0;
         root.baselineCategoryId = 0;
-        return true;
     }
     // 切换备忘、切页、进后台、退出时调用：这些操作会打断输入，先把输入法正在组合的文字提交进编辑框，
     // 免得还没选字的候选内容丢掉，再保存。
@@ -313,8 +307,6 @@ FocusScope {
     function writeEdits() {
         saveTimer.stop();
         if (!root.hasEditor || !root.dirty)
-            return true;
-        if (root.drafting && root.editorTitle.trim().length === 0 && root.editorBody.trim().length === 0)
             return true;
         var excess = MemoFormat.characterCount(root.editorBody) - root.bodyLimit;
         if (excess > 0) {
@@ -331,24 +323,10 @@ FocusScope {
         if (root.editorCategoryId !== root.baselineCategoryId)
             changes.categoryId = root.editorCategoryId;
         root.setError("");
-        // 新建的和换了科目的都排到那一科最后，保存后要把它滚进列表可视区。
-        var moved = root.drafting || changes.categoryId !== undefined;
+        // 换了科目的排到那一科最后，保存后要把它滚进列表可视区。
+        var moved = changes.categoryId !== undefined;
         root.saving = true;
-        var ok;
-        if (root.drafting) {
-            var id = root.memoServiceRef.createMemo(root.editorTitle, root.editorBody, root.editorCategoryId);
-            ok = id > 0;
-            if (ok) {
-                root.selectedId = id;
-                root.drafting = false;
-                // 删除确认框开着的时候草稿被存下了（停止输入一秒的自动保存、切到后台都会存）：
-                // 确认框改记它存下的这一条。编号 0 只表示「还没进数据库的草稿」，存下以后就不是了。
-                if (deleteConfirm.pendingId === 0)
-                    deleteConfirm.pendingId = id;
-            }
-        } else {
-            ok = root.memoServiceRef.updateMemo(root.selectedId, changes);
-        }
+        var ok = root.memoServiceRef.updateMemo(root.selectedId, changes);
         root.saving = false;
         if (!ok) {
             if (root.errorMessage.length === 0)
@@ -376,16 +354,36 @@ FocusScope {
             }
         }
     }
+    // 另一台删掉了正在改的这条，用户选「另存为新备忘」：用编辑区里的内容直接新建一条并选中它。
+    // 失败时留在「已删除」状态，文字和两个出口都在，可以再点一次。科目不存在的情况已由 dropMissingEditorCategory 改成未分类。
     function saveDeletedAsNew() {
-        if (!root.remoteDeleted)
+        if (!root.remoteDeleted || !root.memoServiceRef)
             return;
-        root.drafting = true;
-        root.selectedId = -1;
+        // 点按钮会打断输入：先把输入法正在组合的文字提交进编辑框，和 saveNow 一样。
+        if (root.inputMethodRef)
+            root.inputMethodRef.commit();
+        saveTimer.stop();
+        var excess = MemoFormat.characterCount(root.editorBody) - root.bodyLimit;
+        if (excess > 0) {
+            root.setError(qsTr("正文超出 %1 字，没有保存。").arg(excess));
+            return;
+        }
+        root.setError("");
+        root.saving = true;
+        var id = root.memoServiceRef.createMemo(root.editorTitle, root.editorBody, root.editorCategoryId);
+        root.saving = false;
+        if (!(id > 0)) {
+            if (root.errorMessage.length === 0)
+                root.setError(qsTr("保存失败，编辑内容仍保留在这里。"));
+            return;
+        }
         root.remoteDeleted = false;
-        root.baselineTitle = "";
-        root.baselineBody = "";
+        root.selectedId = id;
+        root.baselineTitle = root.editorTitle;
+        root.baselineBody = root.editorBody;
         root.baselineCategoryId = root.editorCategoryId;
-        root.saveNow();
+        root.reload();
+        root.revealSelected();
     }
     // 用户明确放弃被另一台删掉的那条的本机修改：不写库，选原来位置上的相邻一条；列表空了就回到空状态。
     function discardDeleted() {
@@ -399,27 +397,51 @@ FocusScope {
             root.readEditor(root.memo(root.selectedId));
         }
     }
-    // 开一条新草稿。categoryId 给了（「新建分类」挑好的科目）就放在那一科，没给就跟着当前筛选。
-    function startDraft(categoryId) {
+    // 新建一条备忘：点下就在数据库里建一条标题、正文都空的备忘，马上出现在列表里并选中，光标进标题。
+    // categoryId 给了（「新建分类」挑好或建好的科目）就建在那一科，没给就跟着当前筛选（「全部」「未分类」下建在未分类）。
+    // 建成返回 true；当前这条存不下、或者新建失败时选中项、筛选、编辑区都不动，返回 false。
+    function createNewMemo(categoryId) {
+        // 先存当前这条。存不下（正文超长、写库失败、另一台已删除而本机有修改）就不新建，内容和提示留着。
         if (!root.saveNow())
-            return;
-        // 连续点「新建」时，空草稿不会被保存，回去的目标仍是最初选中的那条。
-        var back = root.drafting ? root.draftReturnId : root.selectedId;
+            return false;
+        if (!root.memoServiceRef)
+            return false;
         var target = categoryId === undefined ? Math.max(0, root.filterCategoryId) : Number(categoryId);
-        // 正筛着别的科目时回到「全部」：新分类的第一条存下来以后，列表里要看得到它。
-        if (root.filterCategoryId >= 0 && root.filterCategoryId !== target) {
-            root.filterCategoryId = -1;
-            root.rebuildRows();
+        root.setError("");
+        // saving 期间服务同步发出的 memosChanged 不会触发重读（见 reload 开头），编辑区装好以后再统一重读一次。
+        root.saving = true;
+        var id = root.memoServiceRef.createMemo("", "", target);
+        root.saving = false;
+        if (!(id > 0)) {
+            // 服务的 operationFailed 已经把原因写进提示（数据库未打开、科目已被另一台删掉等）；没有原因时补一句。
+            if (root.errorMessage.length === 0)
+                root.setError(qsTr("新建备忘录失败。"));
+            return false;
         }
-        root.clearEditor();
-        root.drafting = true;
-        root.draftReturnId = back;
-        root.editorCategoryId = target;
-        root.baselineCategoryId = target;
+        // 正筛着别的科目时回到「全部」：列表里要看得到刚建的这一条。
+        if (root.filterCategoryId >= 0 && root.filterCategoryId !== target)
+            root.filterCategoryId = -1;
+        root.selectedId = id;
+        // 先把编辑区装成这条空备忘，再重读。顺序不能反：
+        // - 重读失败时 reload 直接返回、不碰编辑区。不先装的话，编辑区留着上一条的内容，选中的却已经是新编号，
+        //   之后一保存就把上一条的内容写进了新备忘。
+        // - readEditor 会清掉页面上的提示。先重读、失败后再装，重读失败的提示和「重试」就被它清掉了。
+        // 重读成功时编辑区不脏，reload 会用库里的这一条再装一次（内容相同，带上更新时间）。
+        root.readEditor({
+            title: "",
+            body: "",
+            categoryId: target,
+            updatedAt: ""
+        });
+        root.reload();
+        // 新建的排在那一科最后，滚进列表可视区。
+        root.revealSelected();
         // 点「新建」后直接能打标题；焦点环只给键盘 Tab 用，这里只要闪烁的光标。
         titleInput.forceActiveFocus(Qt.OtherFocusReason);
+        return true;
     }
-    // 「新建 → 新建分类」：从还没写过备忘的科目里挑一个，一个都不剩就直接新建科目；挑好或建好后在那一科开一条草稿。
+    // 「新建 → 新建分类」：从还没写过备忘的科目里挑一个，一个都不剩就直接新建科目；
+    // 挑好或建好的那一刻就在这一科建一条空备忘（见 createNewMemo），分类胶囊随之出现。
     function addCategory() {
         if (root.unusedCategoryOptions.length === 0)
             categoryPrompt.openPrompt();
@@ -431,7 +453,7 @@ FocusScope {
     // byKeyboard：键盘打开时弹层先不让悬停改高亮，见 ChoicePopup.openedByKeyboard。
     function requestMoveCategory(id, sceneX, sceneY, byKeyboard) {
         root.selectMemo(id);
-        if (root.selectedId !== id || root.drafting)
+        if (root.selectedId !== id)
             return;
         var p = root.mapFromItem(null, sceneX, sceneY);
         moveCategoryPopup.x = p.x;
@@ -467,14 +489,13 @@ FocusScope {
         root.ensureBodyCursorVisible();
     }
     function selectMemo(id) {
-        if (id === root.selectedId && !root.drafting)
+        if (id === root.selectedId)
             return;
         if (!root.saveNow())
             return;
         var entry = root.memo(id);
         if (!entry)
             return;
-        root.drafting = false;
         root.selectedId = id;
         root.readEditor(entry);
     }
@@ -504,25 +525,12 @@ FocusScope {
         root.editorCategoryId = id;
         root.edited();
     }
-    // 丢掉还没进数据库的草稿：只清界面，回到新建前选中的那条；那条已经不在了就按列表重新选。
-    function discardDraft() {
-        saveTimer.stop();
-        var back = root.memo(root.draftReturnId);
-        root.clearEditor();
-        if (back) {
-            root.selectedId = Number(back.id);
-            root.readEditor(back);
-        } else {
-            root.reload();
-        }
-    }
-    // 点「删除」一律先确认，新建了还没写字的草稿也一样（确认后只丢草稿，回到新建前那条）。
+    // 点「删除」一律先确认，新建了还没写字的空备忘也一样。
     function requestDelete() {
-        // 草稿还没进数据库，编号先记 0；确认框开着时它被自动保存的话，writeEdits 会换成存下的编号。
-        deleteConfirm.pendingId = root.drafting ? 0 : root.selectedId;
-        // 确认框里写出要删的是哪一条：标题，没有标题就用正文第一行，和列表里显示的一致。
+        deleteConfirm.pendingId = root.selectedId;
+        // 确认框里写出要删的是哪一条：标题，没有标题就用正文第一行，都是空白就写「新备忘录」，和列表里显示的一致。
         var title = root.editorTitle.trim();
-        deleteConfirm.pendingTitle = title.length > 0 ? title : root.editorBody.split("\n")[0].trim();
+        deleteConfirm.pendingTitle = root.shownTitle(title.length > 0 ? title : root.editorBody.split("\n")[0].trim());
         deleteConfirm.open();
     }
     function cancelDelete() {
@@ -532,15 +540,11 @@ FocusScope {
     function confirmDelete() {
         var id = deleteConfirm.pendingId;
         root.cancelDelete();
-        if (id === 0 && root.drafting) {
-            root.discardDraft();
-            return;
-        }
         // 只删确认框记下的那一条，不拿当前选中的补：确认框开着的时候，同步可能已经删掉了要删的那条、
         // 改选了相邻的另一条，这时删选中的就删错了。
         if (id <= 0)
             return;
-        // 用户明确确认删除时才舍弃当前草稿；失败仍保留输入。
+        // 用户明确确认才删，编辑区里没存的修改随之舍弃；删除失败时内容不动。
         root.saving = true;
         var ok = root.memoServiceRef && root.memoServiceRef.deleteMemo(id);
         root.saving = false;
@@ -894,8 +898,9 @@ FocusScope {
                     required property int index
                     objectName: "memoRow" + memoId
                     Accessible.role: Accessible.ListItem
-                    Accessible.name: memoTitle
-                    readonly property bool selected: root.selectedId === memoId && !root.drafting
+                    Accessible.name: titleText
+                    readonly property bool selected: root.selectedId === memoId
+                    readonly property string titleText: root.shownTitle(memoTitle)
                     width: memoList.width
                     // 行高随内容：上下各留 12，标题行与摘要之间 4，两行在行内上下居中（定稿）。
                     // 写死行高会让多出来的高度被布局摊进两行之间，标题和摘要被拉开。
@@ -934,7 +939,7 @@ FocusScope {
                             Text {
                                 objectName: "memoRowTitle"
                                 Layout.fillWidth: true
-                                text: row.memoTitle
+                                text: row.titleText
                                 textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontMd
                                 font.weight: row.selected ? Font.Medium : Font.Normal
@@ -1363,7 +1368,7 @@ FocusScope {
         // 选中项已经不是打开时那一条了，就什么都不改。重读时发现这条不在了会收起弹层（见 reload），
         // 这里再挡一道，不依赖「收起」一定发生在「选中」之前。
         onPicked: function (option) {
-            if (root.drafting || root.selectedId !== moveCategoryPopup.targetId)
+            if (root.selectedId !== moveCategoryPopup.targetId)
                 return;
             root.chooseCategory(option.id);
             root.saveNow();
@@ -1376,7 +1381,7 @@ FocusScope {
         }
     }
     // 「新建 → 新建分类」挑科目：还没写过备忘的科目，最后是「新建科目…」（编号 -2 只是标记，不是科目）。
-    // 挑好或建好后在那一科开一条草稿。
+    // 挑好或建好的那一刻就在那一科建一条空备忘。
     ChoicePopup {
         id: subjectPicker
         objectName: "memoSubjectPicker"
@@ -1402,7 +1407,7 @@ FocusScope {
             if (option.id === -2)
                 categoryPrompt.openPrompt();
             else
-                root.startDraft(option.id);
+                root.createNewMemo(option.id);
         }
     }
     // 右上角「新建」的菜单。两项都等菜单收起（finished）再做：「新建分类…」接着要在同一位置打开挑科目的弹层。
@@ -1432,7 +1437,7 @@ FocusScope {
             if (!option)
                 return;
             if (option.id === "memo")
-                root.startDraft();
+                root.createNewMemo();
             else
                 root.addCategory();
         }
@@ -1441,10 +1446,10 @@ FocusScope {
         id: categoryPrompt
         parent: root
         categoryManagerRef: root.categoryManagerRef
-        // 只从「新建 → 新建分类」打开：建好的科目开一条草稿，写下内容后成为新分类。
+        // 只从「新建 → 新建分类」打开：科目建好就在这一科建一条空备忘，它马上成为新分类。
         onCreated: function (categoryId, name) {
             root.reload();
-            root.startDraft(categoryId);
+            root.createNewMemo(categoryId);
         }
     }
     Popup {
@@ -1482,11 +1487,10 @@ FocusScope {
                 font.pixelSize: Theme.fontLg
                 font.bold: true
             }
-            // 和知识缺口的删除确认一样写出是哪一条；还没写字的草稿没有可写的，这一行不占位置。
+            // 和知识缺口的删除确认一样写出是哪一条；还没写字的空备忘写「新备忘录」，和列表一致。
             Text {
                 objectName: "memoDeleteConfirmText"
                 Layout.fillWidth: true
-                visible: text.length > 0
                 text: deleteConfirm.pendingTitle
                 textFormat: Text.PlainText
                 color: Theme.inkSoft
