@@ -992,7 +992,9 @@ add_executable(SyncTests
     src/models/CountdownGoal.cpp
     src/models/CountdownModel.h
     src/models/CountdownModel.cpp
+    # 跨设备用例要在设备上调用 TrashService（读列表、恢复、彻底删除、清空、清理过期项）。
     src/services/TrashStore.h src/services/TrashStore.cpp
+    src/services/TrashService.h src/services/TrashService.cpp
 )
 
 target_link_libraries(SyncTests PRIVATE

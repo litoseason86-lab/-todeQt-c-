@@ -31,7 +31,7 @@ const QString kMissingRecord = QStringLiteral("记录不存在");
 constexpr int kPayloadVersion = 1;
 
 // 按 sync_id 找本机编号。目标已被同名合并掉的科目，顺着 sync_tombstones 里 kind = 'merge' 的记录
-// 追到留下的那条（最多 8 跳，写法同 SyncStore 的 resolveLocal）。找不到返回无效 QVariant。
+// 追到留下的那条（最多 16 跳，写法与跳数都同 SyncStore 的 resolveLocal）。找不到返回无效 QVariant。
 // ok 可选：查询本身失败时置 false（与「找不到」区分）；恢复路径据此整体回滚，不能把查询失败当成没有这个科目或任务。
 QVariant resolveSyncId(QSqlDatabase& db, const QString& table, const QString& syncId, bool* ok = nullptr);
 

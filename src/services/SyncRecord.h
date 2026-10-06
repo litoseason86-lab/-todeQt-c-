@@ -84,8 +84,10 @@ namespace SyncJson {
 // 而不是把不认识的表当成坏记录跳过——跳过之后读取进度已经往前走了，更新应用也补不回来。
 // 3（计划 052）：加入备忘录。旧版 Applier 不认识 memos 会跳过记录、照常推进读取进度，
 // 更新应用后也不会补读。提升格式让旧版停在文件前等更新，保住全部记录。
-constexpr int kFormatVersion = 3;
-// 格式 1、2 是当前格式的子集，仍然接受。
+// 4（计划 054）：加入废纸篓 trash_items。理由同 3：旧版不认识这张表，会把记录当坏记录跳过、
+// 照常推进读取进度，更新应用后也补不回来；提升格式让旧版停在这一批前等更新。
+constexpr int kFormatVersion = 4;
+// 格式 1–3 是当前格式的子集，仍然接受。
 constexpr int kOldestReadableFormat = 1;
 
 QJsonObject toJson(const SyncBatch& batch);

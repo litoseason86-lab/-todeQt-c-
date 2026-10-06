@@ -538,7 +538,9 @@ bool DatabaseManager::createTables()
 
     // 废纸篓表（v21）。与备忘录同理：新增表前先拍迁移快照，保存真正的升级前数据；
     // 表已完整、只是版本号被调低时没有结构改动，不占快照保留名额（backupDatabaseBeforeMigration 一次启动只拍一份）。
-    // 本阶段不进同步清单，同步迁移不会给它加 sync_id；以后登记时再由同步迁移补列，
+    // 废纸篓已登记进同步清单：这里新建的表还没有 sync_id，在同一次打开里由后面的 v18 那一步
+    // 按清单补齐 sync_id、回填、入队和触发器（syncSchemaIsComplete 逐表检查，缺列就重跑）；
+    // 已经是 v21、废纸篓表却还没有同步列的库（计划 054 阶段 1 留下的）也走同一条路，版本号不变。
     // 补出来的列不属于业务契约（见 trashSchemaIsValid）。
     if (version < 21 || !tableExists(QStringLiteral("trash_items"))) {
         if ((!tableExists(QStringLiteral("trash_items")) && !backupDatabaseBeforeMigration())
@@ -552,8 +554,9 @@ bool DatabaseManager::createTables()
     }
 
     // v18 设备间同步。缺任何一部分（半迁移、外部改库、v5 整表重建带走了唯一索引）都重跑一遍，
-    // 迁移本身可以重复执行，已经有的身份和版本保持不动。第二期加进同步清单的三张表也由这一步补齐：
-    // v18 的库里它们还没有 sync_id，结构判为不完整，这一步就会给它们加列、回填并放进待发送队列。
+    // 迁移本身可以重复执行，已经有的身份和版本保持不动。第二期加进同步清单的三张表也由这一步补齐
+    // （备忘录、废纸篓同理）：v18 的库里它们还没有 sync_id，结构判为不完整，
+    // 这一步就会给它们加列、回填并放进待发送队列。
     if (version < 18 || !syncSchemaIsComplete()) {
         if (!migrateToVersion18()) {
             return false;

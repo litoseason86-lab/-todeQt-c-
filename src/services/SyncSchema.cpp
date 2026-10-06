@@ -83,6 +83,17 @@ QList<Table> buildTables()
           makeField("sort_order", "顺序"), makeField("created_at", "创建时间")},
          QString(), {}, {QStringLiteral("updated_at"),
                          {QStringLiteral("title"), QStringLiteral("body"), QStringLiteral("category_id")}}},
+        // 计划 054：废纸篓，两台设备共用。废纸篓记录建好以后不再修改，只有新建和删除（恢复、彻底删除、
+        // 清空、过期清理都是删除），所以没有 updated_at，也不需要内容版本时间。
+        // 排在最后：应用远端改动按这份清单的顺序进行，同一批里被删的原记录（任务、备忘录……）先处理，
+        // 之后才出现它的废纸篓记录。
+        // origin_sync_id 存的是被删记录的 sync_id 文本，只用来给同一条记录的多份废纸篓记录去重，
+        // 不是本机编号：不能设 refTable，否则发出记录时会把它当本机编号去目标表里换算 sync_id，
+        // 查不到就发空值，原文本丢了（见 SyncStore 读出记录的那一段）。
+        {QStringLiteral("trash_items"), QStringLiteral("废纸篓"),
+         {makeField("kind", "类型"), makeField("origin_sync_id", "原记录"), makeField("title", "标题"),
+          makeField("payload", "内容"), makeField("deleted_at", "删除时间")},
+         QString()},
     };
 }
 

@@ -148,6 +148,7 @@ private slots:
     void version20BackupRestoresAllMemoFields();
     void version20BackupWithoutTrashRestoresIntoEmptyTrash();
     void version21BackupKeepsTrashItems();
+    void version21BackupWithTrashSyncTriggersIsAcceptedAndRestored();
     void version21BackupBrokenTrashSchemaIsRejected_data();
     void version21BackupBrokenTrashSchemaIsRejected();
     void higherSchemaVersionIsRejected();
@@ -1421,6 +1422,80 @@ void BackupServiceTests::version21BackupKeepsTrashItems()
                                         "AND payload = '{\"v\":1}'")), 1);
 }
 
+void BackupServiceTests::version21BackupWithTrashSyncTriggersIsAcceptedAndRestored()
+{
+    // 产品保证：废纸篓登记同步之后，备份里带着 trash_items 的同步触发器和每一行的同步身份；
+    // 这样的 v21 备份能通过检查并恢复（同步触发器只按名字放行，名字清单从同步表清单推出），
+    // 恢复后废纸篓的内容、同步身份和触发器都在。
+    // version21BackupKeepsTrashItems 的备份在登记同步后同样带着触发器、也会走到这条检查，但它不断言触发器真的在备份里；这里显式断言。
+    QStringList expectedTriggers;
+    for (const auto& spec : SyncSchema::triggers()) {
+        if (spec.first.startsWith(QStringLiteral("trash_items_sync_"))) {
+            expectedTriggers.append(spec.first);
+        }
+    }
+    QVERIFY(!expectedTriggers.isEmpty());
+    const QString liveTriggerSql = QStringLiteral(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND instr(name, 'trash_items_sync_') = 1");
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral(
+            "INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
+            "VALUES ('memo', 'in-backup', '备份时在的', '{\"v\":1}', '2026-10-05T01:00:00.000Z')")));
+    }
+    QCOMPARE(scalarCount(liveTriggerSql), int(expectedTriggers.size()));
+    const QString identity = [] {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        return query.exec(QStringLiteral("SELECT sync_id FROM trash_items WHERE origin_sync_id = 'in-backup'"))
+                && query.next() ? query.value(0).toString() : QString();
+    }();
+    QVERIFY(!identity.isEmpty());
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+
+    // 前提：备份文件里确实有 trash_items_sync_ 开头的触发器，那一行带着同步身份。
+    const QString connection = QStringLiteral("TrashSyncTriggerBackup");
+    QStringList backedUpTriggers;
+    QString backedUpIdentity;
+    {
+        auto db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery query(db);
+        QVERIFY(query.exec(QStringLiteral(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND instr(name, 'trash_items_sync_') = 1")));
+        while (query.next()) {
+            backedUpTriggers.append(query.value(0).toString());
+        }
+        QVERIFY(query.exec(QStringLiteral("SELECT sync_id FROM trash_items WHERE origin_sync_id = 'in-backup'"))
+                && query.next());
+        backedUpIdentity = query.value(0).toString();
+        db.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+    backedUpTriggers.sort();
+    expectedTriggers.sort();
+    QCOMPARE(backedUpTriggers, expectedTriggers);
+    QCOMPARE(backedUpIdentity, identity);
+
+    const auto info = BackupService::instance()->readBackupInfo(backupFile());
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QCOMPARE(info.value(QStringLiteral("schemaVersion")).toInt(), DatabaseManager::kCurrentSchemaVersion);
+
+    // 备份之后废纸篓换了内容；恢复把备份时的那一行连同身份带回来，触发器还在。
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral("DELETE FROM trash_items")));
+        QVERIFY(query.exec(QStringLiteral(
+            "INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
+            "VALUES ('memo', 'after-backup', '备份后放进的', '{\"v\":1}', '2026-10-06T01:00:00.000Z')")));
+    }
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 1);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE origin_sync_id = 'in-backup' "
+                                        "AND sync_id = '%1'").arg(identity)), 1);
+    QCOMPARE(scalarCount(liveTriggerSql), int(expectedTriggers.size()));
+}
+
 void BackupServiceTests::version21BackupBrokenTrashSchemaIsRejected_data()
 {
     QTest::addColumn<QString>("oldText");
@@ -1430,8 +1505,11 @@ void BackupServiceTests::version21BackupBrokenTrashSchemaIsRejected_data()
     QTest::newRow("nullable-payload") << QStringLiteral("payload TEXT NOT NULL") << QStringLiteral("payload TEXT");
     QTest::newRow("missing-check") << QStringLiteral("CHECK(length(kind) > 0)") << QString();
     QTest::newRow("invalid-primary-key") << QStringLiteral("INTEGER PRIMARY KEY AUTOINCREMENT") << QStringLiteral("INT PRIMARY KEY");
-    QTest::newRow("foreign-key") << QStringLiteral("deleted_at TEXT NOT NULL")
-                                 << QStringLiteral("deleted_at TEXT NOT NULL, FOREIGN KEY (origin_sync_id) REFERENCES categories(sync_id)");
+    // 废纸篓登记同步之后，备份里的建表语句末尾带着同步迁移追加的「, sync_id TEXT」；表约束必须排在所有列定义之后，
+    // 所以外键要接在 sync_id 后面，插在 deleted_at 后面会让重建这张表的语句本身出现语法错误。
+    // oldText 带逗号：origin_sync_id 的定义里也有「sync_id TEXT」，不带逗号会被一起替换掉。
+    QTest::newRow("foreign-key") << QStringLiteral(", sync_id TEXT")
+                                 << QStringLiteral(", sync_id TEXT, FOREIGN KEY (origin_sync_id) REFERENCES categories(sync_id)");
 }
 
 void BackupServiceTests::version21BackupBrokenTrashSchemaIsRejected()

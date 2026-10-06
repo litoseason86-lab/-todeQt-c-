@@ -8,7 +8,9 @@
 #include <QSqlQuery>
 
 namespace {
-constexpr int kMaxMergeHops = 8;
+// 合并链最多追这么多步，取值与 SyncStore 一致：同一条合并链，同步收到时追到哪、恢复时就追到哪，
+// 不会因为上限不同而得出两个终点。上限只防外部改坏的数据让这里死循环。
+constexpr int kMaxMergeHops = 16;
 
 QJsonValue jsonValue(const QVariant& value)
 {

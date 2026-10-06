@@ -386,8 +386,10 @@ private slots:
     // 3f：异常与暂停
     void corruptFileIsSkippedLoggedAndHealedBySnapshot();
     void newerFormatFileStopsWithoutSkipping();
-    void memoFormatThreeWritesAndReadsVersionsOneThroughThree();
+    void memoRecordsRoundTripInEveryReadableFormat();
+    void trashFormatFourWritesAndReadsVersionsOneThroughFour();
     void newerBatchFormatStopsWithoutAdvancingMemoCursor();
+    void newerBatchFormatStopsWithoutAdvancingTrashCursor();
     void readFailureIsRetriedNotSkipped();
     void stuckFolderOperationIsAbandonedAndRetried();
     void slowButSteadyFolderIsNotAbandoned();
@@ -2229,9 +2231,11 @@ void SyncTransportTests::macFolderIsUnavailableWithoutICloudDrive()
     QVERIFY(SyncStore(device.connection).folderId().isEmpty());
 }
 
-void SyncTransportTests::memoFormatThreeWritesAndReadsVersionsOneThroughThree()
+void SyncTransportTests::memoRecordsRoundTripInEveryReadableFormat()
 {
-    // 产品保证：增量与快照都写格式 3，并兼容格式 1、2、3；不能以格式 2 发送旧应用会跳过的备忘。
+    // 产品保证：增量与快照都写当前格式，并兼容从 1 到当前格式的全部旧格式，备忘录记录在每一种格式下内容不变；
+    // 写出的格式不能低于 3（备忘录从格式 3 起才有，低了旧应用会把它当不认识的表跳过）。
+    // 原来写死「格式 3」的断言随废纸篓升到格式 4 改成跟随常量；写死数字的版本钉在下面的废纸篓用例里。
     SyncBatch batch = sampleBatch(kDeviceA, 0);
     SyncRecord memo;
     memo.table = QStringLiteral("memos"); memo.syncId = QStringLiteral("memo-format");
@@ -2243,13 +2247,15 @@ void SyncTransportTests::memoFormatThreeWritesAndReadsVersionsOneThroughThree()
                    {QStringLiteral("created_at"), {QStringLiteral("2026-10-02T12:51:46.728Z"), version, {}}}};
     batch.records = {memo};
     const QByteArray bytes = SyncFiles::encodeChanges({1, 1900000000728, batch});
-    QCOMPARE(QJsonDocument::fromJson(bytes).object().value(QStringLiteral("batch")).toObject()
-                 .value(QStringLiteral("format")).toInt(), 3);
+    const int written = QJsonDocument::fromJson(bytes).object().value(QStringLiteral("batch")).toObject()
+                            .value(QStringLiteral("format")).toInt();
+    QCOMPARE(written, SyncJson::kFormatVersion);
+    QVERIFY(written >= 3);
     SyncFiles::SnapshotFile snapshot; snapshot.coveredSeq = 1; snapshot.batch = batch;
     const QByteArray snapshotBytes = SyncFiles::encodeSnapshot(snapshot);
     QCOMPARE(QJsonDocument::fromJson(snapshotBytes).object().value(QStringLiteral("batch")).toObject()
-                 .value(QStringLiteral("format")).toInt(), 3);
-    for (const int format : {1, 2, 3}) {
+                 .value(QStringLiteral("format")).toInt(), SyncJson::kFormatVersion);
+    for (int format = SyncJson::kOldestReadableFormat; format <= SyncJson::kFormatVersion; ++format) {
         const auto changeFormat = [format](QJsonObject& outer) {
             auto inner = outer.value(QStringLiteral("batch")).toObject();
             inner.insert(QStringLiteral("format"), format); outer.insert(QStringLiteral("batch"), inner);
@@ -2263,6 +2269,68 @@ void SyncTransportTests::memoFormatThreeWritesAndReadsVersionsOneThroughThree()
         SyncFiles::SnapshotFile readSnapshot;
         QCOMPARE(SyncFiles::decodeSnapshot(tamper(snapshotBytes, changeFormat), kDeviceA, {0, 1}, &readSnapshot, &error),
                  SyncFiles::ParseStatus::Ok);
+    }
+}
+
+void SyncTransportTests::trashFormatFourWritesAndReadsVersionsOneThroughFour()
+{
+    // 产品保证：带废纸篓记录的增量与快照写格式 4（旧应用据此停在这一批等更新，不会把废纸篓当成不认识的表跳过），
+    // 格式 1 到 4 的文件都读得出来，废纸篓记录与删除记录的内容一字不变，包括超过备忘录正文上限的内容。
+    // 这里故意写死 4：格式号若被改回 3，旧应用会跳过废纸篓记录并照常推进读取进度，更新后也补不回来。
+    SyncBatch batch = sampleBatch(kDeviceA, 0);
+    SyncRecord trash;
+    trash.table = QStringLiteral("trash_items"); trash.syncId = QStringLiteral("trash-format");
+    const SyncVersion version{1900000000728, kDeviceA};
+    // 内容是 JSON 文本：带引号、转义的换行、emoji，正文 12000 字，比备忘录正文的上限 1 万字还长。
+    const QString payload = QStringLiteral("{\"v\":1,\"body\":\"") + QString(12000, QChar(0x7532))
+        + QStringLiteral("\\n带\\\"引号\\\" 😀\"}");
+    trash.fields = {{QStringLiteral("kind"), {QStringLiteral("memo"), version, {}}},
+                    {QStringLiteral("origin_sync_id"), {QStringLiteral("memo-origin-1"), version, {}}},
+                    {QStringLiteral("title"), {QStringLiteral("废纸篓里的备忘"), version, {}}},
+                    {QStringLiteral("payload"), {payload, version, {}}},
+                    {QStringLiteral("deleted_at"), {QStringLiteral("2026-10-06T01:02:03.456Z"), version, {}}}};
+    SyncRecord removed;
+    removed.table = QStringLiteral("trash_items"); removed.syncId = QStringLiteral("trash-removed");
+    removed.deleted = true; removed.deleteVersion = {1900000000900, kDeviceA};
+    removed.deleteKind = QStringLiteral("delete");
+    batch.records = {trash, removed};
+    QVERIFY(payload.size() > 10000);
+
+    const QByteArray bytes = SyncFiles::encodeChanges({1, 1900000000728, batch});
+    QCOMPARE(QJsonDocument::fromJson(bytes).object().value(QStringLiteral("batch")).toObject()
+                 .value(QStringLiteral("format")).toInt(), 4);
+    SyncFiles::SnapshotFile snapshot; snapshot.coveredSeq = 1; snapshot.batch = batch;
+    const QByteArray snapshotBytes = SyncFiles::encodeSnapshot(snapshot);
+    QCOMPARE(QJsonDocument::fromJson(snapshotBytes).object().value(QStringLiteral("batch")).toObject()
+                 .value(QStringLiteral("format")).toInt(), 4);
+    const auto expectTrash = [&](const SyncBatch& read) {
+        QCOMPARE(read.records.size(), 2);
+        QCOMPARE(read.records.at(0).table, QStringLiteral("trash_items"));
+        QCOMPARE(read.records.at(0).syncId, QStringLiteral("trash-format"));
+        for (const QString& field : {QStringLiteral("kind"), QStringLiteral("origin_sync_id"), QStringLiteral("title"),
+                                     QStringLiteral("payload"), QStringLiteral("deleted_at")}) {
+            QCOMPARE(read.records.at(0).fields.value(field).value.toString(),
+                     trash.fields.value(field).value.toString());
+        }
+        QVERIFY(read.records.at(1).deleted);
+        QCOMPARE(read.records.at(1).table, QStringLiteral("trash_items"));
+        QCOMPARE(read.records.at(1).syncId, QStringLiteral("trash-removed"));
+        QCOMPARE(read.records.at(1).deleteKind, QStringLiteral("delete"));
+    };
+    for (int format = 1; format <= 4; ++format) {
+        const auto changeFormat = [format](QJsonObject& outer) {
+            auto inner = outer.value(QStringLiteral("batch")).toObject();
+            inner.insert(QStringLiteral("format"), format); outer.insert(QStringLiteral("batch"), inner);
+        };
+        QString error;
+        SyncFiles::ChangeFile decoded;
+        QCOMPARE(SyncFiles::decodeChanges(tamper(bytes, changeFormat), kDeviceA, {0, 1}, &decoded, &error),
+                 SyncFiles::ParseStatus::Ok);
+        expectTrash(decoded.batch);
+        SyncFiles::SnapshotFile readSnapshot;
+        QCOMPARE(SyncFiles::decodeSnapshot(tamper(snapshotBytes, changeFormat), kDeviceA, {0, 1}, &readSnapshot, &error),
+                 SyncFiles::ParseStatus::Ok);
+        expectTrash(readSnapshot.batch);
     }
 }
 
@@ -2286,7 +2354,7 @@ void SyncTransportTests::newerBatchFormatStopsWithoutAdvancingMemoCursor()
     QCOMPARE(outer.value(QStringLiteral("batch")).toObject().value(QStringLiteral("format")).toInt(), SyncJson::kFormatVersion);
     const auto newer = tamper(original, [](QJsonObject& o) {
         auto batch = o.value(QStringLiteral("batch")).toObject();
-        // 编译为旧版读取能力 2 时，这里发格式 3；当前能力 3 则发 4，验证同一道停读边界。
+        // 当前读取能力是 4，这里发格式 5；更早编译成能力 2、3 的旧版收到的是 3、4，停读的边界是同一道。
         batch.insert(QStringLiteral("format"), SyncJson::kFormatVersion + 1); o.insert(QStringLiteral("batch"), batch);
     });
     QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate)); file.write(newer); file.close();
@@ -2300,6 +2368,53 @@ void SyncTransportTests::newerBatchFormatStopsWithoutAdvancingMemoCursor()
     QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
     QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 1}));
     QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT body FROM memos")).toString(), QStringLiteral("不能跳过"));
+}
+
+void SyncTransportTests::newerBatchFormatStopsWithoutAdvancingTrashCursor()
+{
+    // 产品保证：旧版读到更高的内部批次格式就停住、不推进读取进度，更新应用之后从原位置补齐废纸篓记录；
+    // 不能像不认识的表那样被跳过。（格式 4 起带废纸篓；同一道停读边界对备忘录见上一条用例。）
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac, ipad;
+    setUpPair(cloud, &mac, &ipad);
+    QVERIFY(exec(mac->device, QStringLiteral(
+        "INSERT INTO trash_items(kind,origin_sync_id,title,payload,deleted_at) "
+        "VALUES('memo','origin-trash','待升级的废纸篓项','{\"v\":1,\"body\":\"不能跳过\"}','2026-10-06T01:02:03.456Z')")));
+    QVERIFY(syncOnce(*mac));
+    cloud.deliver(mac->device, ipad->device);
+    const QString path = SyncFiles::changesDirectory(mac->device.id) + QLatin1Char('/') + SyncFiles::changeFileName({0, 1});
+    QFile file(cloud.path(ipad->device, path));
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray original = file.readAll(); file.close();
+    // 前提：这一批里确实有那行废纸篓记录，写出的内部格式是当前格式。
+    const auto outer = QJsonDocument::fromJson(original).object();
+    QCOMPARE(outer.value(QStringLiteral("batch")).toObject().value(QStringLiteral("format")).toInt(), SyncJson::kFormatVersion);
+    SyncFiles::ChangeFile written;
+    QString writtenError;
+    QCOMPARE(SyncFiles::decodeChanges(original, mac->device.id, {0, 1}, &written, &writtenError),
+             SyncFiles::ParseStatus::Ok);
+    QCOMPARE(written.batch.records.size(), 1);
+    QCOMPARE(written.batch.records.first().table, QStringLiteral("trash_items"));
+    const auto newer = tamper(original, [](QJsonObject& o) {
+        auto batch = o.value(QStringLiteral("batch")).toObject();
+        batch.insert(QStringLiteral("format"), SyncJson::kFormatVersion + 1); o.insert(QStringLiteral("batch"), batch);
+    });
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate)); file.write(newer); file.close();
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::NewerVersion);
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 0}));
+    QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 0);
+    QVERIFY(SyncStore(ipad->device.connection).snapshotRequests().isEmpty());
+    // 更新应用之后（这里以还原文件代表）：游标从原位置前进，废纸篓记录补齐，内容一字不变。
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate)); file.write(original); file.close();
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{0, 1}));
+    QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+    QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT payload FROM trash_items")).toString(),
+             QStringLiteral("{\"v\":1,\"body\":\"不能跳过\"}"));
+    QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT origin_sync_id FROM trash_items")).toString(),
+             QStringLiteral("origin-trash"));
 }
 
 QTEST_GUILESS_MAIN(SyncTransportTests)
