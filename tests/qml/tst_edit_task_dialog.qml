@@ -222,6 +222,28 @@ TestCase {
         compare(dialog.errorText, "")
     }
 
+    // 产品保证：预计用时超过 24 小时上限的存量任务（旧版最多 99 个预计番茄，迁移后最多 2475 分钟），
+    // 没碰预计用时就不交它：什么都不改不写库，只改标题只交标题，库里的原值不会被压成上限。
+    // 抓住的错误实现：拿任务里的原始分钟数当基准——控件显示时夹到 1440，两者不等就被当成改过。
+    function test_estimateAboveLimitIsNotRewritten() {
+        dialog.openForTask({ id: 25, title: "复习全书", categoryId: 5, date: "2026-06-30",
+                             estimatedMinutes: 2475, notes: "" })
+        tryCompare(dialog, "opened", true, 3000)
+        compare(findChild(dialog, "editEstimateFields").enteredMinutes, 1440,
+                "前置：控件显示时夹到上限，和原始的 2475 不同")
+        dialog.submit()
+        compare(editedSpy.count, 0, "什么都没改：不写库")
+        tryVerify(function () { return !dialog.visible }, 3000, "弹窗收起")
+
+        dialog.openForTask({ id: 25, title: "复习全书", categoryId: 5, date: "2026-06-30",
+                             estimatedMinutes: 2475, notes: "" })
+        tryCompare(dialog, "opened", true, 3000)
+        findChild(dialog, "editTitleField").text = "复习全书（二轮）"
+        dialog.submit()
+        compare(editedSpy.count, 1)
+        compare(Object.keys(editedSpy.signalArguments[0][1]).join(","), "title", "只改标题：预计用时没动，不交")
+    }
+
     // 产品保证：只改科目时只交科目。
     // 抓住的错误实现：比较科目时拿任务数据里的编号而不是打开时选中的那一项，或者没改也交。
     function test_categoryChangeSendsOnlyCategory() {

@@ -388,6 +388,10 @@ bool KnowledgeGapService::updateGapChanges(int gapId, const QVariantMap& changes
         return true;
     }
     // 没交的字段用库里现在的值再写一遍：值没变，同步就不会把它们记成本机修改，也就不会盖掉另一台。
+    // 前提是库里的值已按 updateGap 同一套规则规范化（内容裁剪空白、到期日只存 ISO 日期或空）：现有写入入口和
+    // 另一台同步过来的数据都满足。以后新增不经这套规则的写入路径，或改了规范化规则，要改成只更新交进来的列，
+    // 否则会顺手改写没交的字段。状态是例外：它由到期日推出（业务规则），updateGap 按合并后的到期日重算、已解决的不动。
+    // 两台分别改了到期日和状态、合并出对不上的组合时，这里会把状态改回和到期日一致，这是有意的。
     // 数据库只在主线程读写，读和写之间同步插不进来。
     return updateGap(gapId,
                      changes.value(titleKey, current.value(titleKey)).toString(),

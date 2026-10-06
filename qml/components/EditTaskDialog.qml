@@ -233,7 +233,10 @@ Popup {
             categoryId: root.lastRealCategoryId,
             dateOffsetSelection: root.dateOffsetSelection,
             customDate: customDate.text,
-            estimatedMinutes: root.estimatedMinutes,
+            // 记控件此刻显示的分钟数，不记任务里的原始值：v10 迁移把旧版最多 99 个预计番茄按每个 25 分钟换算，
+            // 存量任务可能超过 24 小时上限，控件显示时会夹到上限。拿原始值比，没碰预计用时也会被当成改过，
+            // 保存时把它压成上限。所以规则是「最终分钟数和打开时显示的不同才交」。
+            estimatedMinutes: estimateFields.enteredMinutes,
             notes: notesField.text,
             completionNote: completionNoteField.text
         };

@@ -1090,6 +1090,50 @@ TestCase {
         tryCompare(view, "selectedId", 21, 3000);
         compare(banner.visible, false);
     }
+    // 产品保证：编辑卡在的时候读取失败（选中了一条、还改着没存），编辑卡里的提示条带「重试」；
+    // 点了读到以后提示收起，编辑框里没存的内容原样留着，不会被库里的旧正文盖掉。
+    // 抓住的错误实现：编辑卡里的提示条不给重试（带重试的页面提示条此时是隐藏的，用户只能切页再回来）；
+    // 或者重读时不管有没有改动，照样把库里的正文装回编辑框。
+    function test_readFailureWithEditorOffersRetryAndKeepsEdits() {
+        typeBody("第八讲做完，第九讲开了个头");
+        verify(view.dirty, "前置：编辑框里有没存的改动");
+        verify(service.getMemo(11).body !== "第八讲做完，第九讲开了个头", "前置：库里的正文和编辑框不同");
+        service.failList = true;
+        view.reload();
+        verify(view.hasEditor, "前置：编辑卡在，页面上那条带重试的提示是隐藏的");
+        compare(view.errorMessage, "读取备忘录列表失败：数据库不可用");
+        compare(child("memoErrorBanner").retryable, true, "编辑卡里的提示条给「重试」");
+        compare(child("memoPageErrorBanner").visible, false);
+        service.failList = false;
+        mouseClick(child("memoErrorBannerRetry"));
+        compare(view.readFailure, "", "读到了");
+        compare(view.errorMessage, "", "读取失败的提示收起");
+        compare(child("memoBodyInput").text, "第八讲做完，第九讲开了个头", "没存的内容原样留着");
+        verify(view.dirty, "仍是没存的改动，等自动保存");
+    }
+    // 产品保证：读取失败之后又保存失败，而两次报的是同一句话（真实服务遇到数据库未打开时就是这样）：
+    // 这时提示的是保存失败，不给只会重读的「重试」；之后重读成功也不把它收起——内容还没存上，提示得留着。
+    // 抓住的错误实现：拿提示文字和读取失败的原因比，相同就当成读取失败——给出「重试」，重读成功后还把保存失败的提示收掉。
+    function test_saveFailureWithSameTextIsNotTreatedAsReadFailure() {
+        var sameText = "数据库未打开，无法读取或保存备忘录";
+        service.listFailureMessage = sameText;
+        service.saveFailureMessage = sameText;
+        service.failList = true;
+        view.reload();
+        compare(view.errorMessage, sameText, "前置：读取失败的提示");
+        compare(view.errorFromRead, true);
+        typeBody("第八讲做完，第九讲开了个头");
+        service.failSave = true;
+        verify(!view.writeEdits(), "前置：保存失败");
+        compare(view.errorMessage, sameText, "前置：保存失败报的是同一句话");
+        compare(child("memoErrorBanner").retryable, false, "提示的是保存失败，不给只会重读的「重试」");
+        service.failList = false;
+        view.reload();
+        compare(view.readFailure, "", "前置：这次读到了");
+        compare(view.errorMessage, sameText, "保存失败的提示留着");
+        verify(view.dirty, "内容还没存上");
+        compare(child("memoBodyInput").text, "第八讲做完，第九讲开了个头");
+    }
     // 产品保证：改分类用应用自己的主题弹层：右键一条备忘时在指针处弹出，打开时停在它现在的分类，
     // 上下键移动、回车选定并马上保存，Esc 关闭且不改分类，关掉后焦点回到列表；键盘在列表里按 Shift+F10 也能打开。
     // 抓住的错误实现：Qt 自带的白底 Menu（夜间刺眼，打开时也不停在当前分类）；选完要等一秒自动保存，列表才重新分组。
