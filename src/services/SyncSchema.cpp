@@ -139,6 +139,25 @@ QString newSyncIdExpression(const Table& table)
                         "AND NOT EXISTS (SELECT 1 FROM tasks x WHERE x.sync_id = {INSTANCE})) END, {RANDOM})"),
                     {{QStringLiteral("{INSTANCE}"), instance}, {QStringLiteral("{RANDOM}"), random}});
     }
+    if (table.name == QLatin1String("trash_items")) {
+        // 废纸篓记录的身份由被删的原记录推出：'trash-' 加原记录的 sync_id（同例行实例「例行身份 + 日期」的做法）。
+        // 为什么由原记录推出：两台设备各自删了同一条记录，各写的一份其实是同一条，身份相同，同步时才能合成一份；
+        // 一台恢复、彻底删除、清空或过期清理之后留下的删除记录，也因此挡得住另一台晚到的那一份
+        // （删除优先），不会让已经处理掉的项重新出现在废纸篓里。
+        // 为什么不会撞号：原记录的身份删除之后永远作废，同一个身份不会被删第二次，
+        // 所以本机不会为同一条原记录写出第二份正常的废纸篓记录。
+        // 为什么要退回随机（三种情况）：原记录身份为空、这个身份在本机已被占用，是为了不让插入因唯一索引失败，
+        // 删除不能因此失败；这个身份已有删除记录（外部改库之类），还用它的话，对方会按删除优先忽略这条新写的记录，
+        // 两台就不一致了。
+        const QString identity = QStringLiteral("('trash-' || NEW.origin_sync_id)");
+        return fill(QStringLiteral(
+                        "CASE WHEN NEW.origin_sync_id <> '' "
+                        "AND NOT EXISTS (SELECT 1 FROM trash_items x WHERE x.sync_id = {IDENTITY}) "
+                        "AND NOT EXISTS (SELECT 1 FROM sync_tombstones z WHERE z.tbl = 'trash_items' "
+                        "AND z.sync_id = {IDENTITY}) "
+                        "THEN {IDENTITY} ELSE {RANDOM} END"),
+                    {{QStringLiteral("{IDENTITY}"), identity}, {QStringLiteral("{RANDOM}"), random}});
+    }
     return random;
 }
 

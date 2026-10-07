@@ -1096,12 +1096,15 @@ void TrashServiceTests::readItemsOrdersNewestFirstAndDescribesEachItem()
 
 void TrashServiceTests::twinsSharingAnOriginAreListedOnceAndHandledTogether()
 {
-    // 产品保证：两台设备同时删了同一条会各写一行，列表里同一原记录只列最新的一条；
-    // 恢复或彻底删除时两行一起处理，不留下分身。
+    // 产品保证：同一条原记录在废纸篓里有多行时，列表里只列最新的一条；恢复或彻底删除时多行一起处理，不留下分身。
+    // 废纸篓记录的身份由原记录推出，两台设备各写的同一条通常合成一行；多行只会出现在身份退回随机的情形
+    // （这个身份在本机已被占用、或已有它的删除记录）。这里靠「第一行占住推出的身份」造出这种情形。
     const QDateTime base = QDateTime::currentDateTime();
     const QString payload = QStringLiteral("{\"v\":1,\"title\":\"同一任务\",\"date\":\"2026-10-03\"}");
     const int older = insertTrashRow(QStringLiteral("task"), QStringLiteral("same"), QStringLiteral("较旧"), payload, utcText(base.addSecs(-60)));
     const int newer = insertTrashRow(QStringLiteral("task"), QStringLiteral("same"), QStringLiteral("较新"), payload, utcText(base));
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE origin_sync_id = 'same'")), 2);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id = 'trash-same'")), 1);
     insertTrashRow(QStringLiteral("task"), QString(), QStringLiteral("无身份甲"), payload, utcText(base));
     insertTrashRow(QStringLiteral("task"), QString(), QStringLiteral("无身份乙"), payload, utcText(base));
     QVERIFY(older < newer);
