@@ -605,14 +605,6 @@ Item {
                 wrapMode: Text.WordWrap
             }
 
-            Text {
-                Layout.fillWidth: true
-                text: qsTr("删除后无法撤销。")
-                textFormat: Text.PlainText
-                font.pixelSize: Theme.fontSm
-                color: Theme.danger
-            }
-
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Theme.space8

@@ -1,6 +1,7 @@
 import QtQuick
 import QtTest
 import "../../qml/components"
+import "../../qml/views"
 
 // 弹窗冒烟：把「从未被任何测试打开过」的弹窗真正打开一次。
 //
@@ -601,5 +602,63 @@ TestCase {
         verify(save)
         // 只给「保存」留底边距时，RowLayout 会把「取消」在加高的那一行里垂直居中，两个按钮上下错开。
         compare(cancel.mapToItem(footer, 0, 0).y, save.mapToItem(footer, 0, 0).y)
+    }
+    // —— 废纸篓页的两个确认弹层 ——
+    QtObject {
+        id: trashService
+
+        signal trashChanged()
+        property var calls: []
+
+        function purgeExpired() { return 0 }
+        function readItems() {
+            return { ok: true, error: "", today: "2026-10-07", items: [{
+                id: 5, kind: "memo", title: "冒烟用的备忘", deletedDate: "2026-10-07", remainingDays: 30,
+                categoryName: "", categoryColor: "", restorable: true, blockedReason: "", details: {}
+            }] }
+        }
+        function deleteItem(id) { calls.push("deleteItem:" + id); return { ok: true, error: "" } }
+        function emptyTrash() { calls.push("emptyTrash"); return { ok: true, error: "", count: 1 } }
+        function restoreItem(id) { return { ok: true, error: "", kind: "memo", title: "冒烟用的备忘", conflict: "" } }
+    }
+
+    Component {
+        id: trashViewComponent
+
+        TrashView {
+            anchors.fill: parent
+            trashServiceRef: trashService
+        }
+    }
+
+    function test_trashConfirmDialogsOpenInteractAndClose() {
+        trashService.calls = []
+        var view = createTemporaryObject(trashViewComponent, testCase)
+        verify(view)
+        waitForRendering(view)
+        verify(waitForItemPolished(view))
+
+        // 彻底删除一项：打开 → 取消 → 再打开 → 确认。
+        var deleteConfirm = findChild(view, "trashDeleteConfirm")
+        mouseClick(findChild(view, "trashDeleteButton-5"))
+        tryVerify(function () { return deleteConfirm.opened }, 3000)
+        compare(findChild(view, "trashDeleteConfirmText").text, "冒烟用的备忘")
+        mouseClick(findChild(view, "trashDeleteCancel"))
+        tryVerify(function () { return !deleteConfirm.opened }, 3000)
+        compare(trashService.calls.length, 0)
+        mouseClick(findChild(view, "trashDeleteButton-5"))
+        tryVerify(function () { return deleteConfirm.opened }, 3000)
+        mouseClick(findChild(view, "trashDeleteConfirmButton"))
+        tryVerify(function () { return !deleteConfirm.opened }, 3000)
+        compare(trashService.calls.join(","), "deleteItem:5")
+
+        // 清空：打开 → 确认。
+        var emptyConfirm = findChild(view, "trashEmptyConfirm")
+        mouseClick(findChild(view, "trashEmptyButton"))
+        tryVerify(function () { return emptyConfirm.opened }, 3000)
+        compare(findChild(view, "trashEmptyConfirmTitle").text, "彻底删除废纸篓里的 1 项？")
+        mouseClick(findChild(view, "trashEmptyConfirmButton"))
+        tryVerify(function () { return !emptyConfirm.opened }, 3000)
+        compare(trashService.calls.join(","), "deleteItem:5,emptyTrash")
     }
 }

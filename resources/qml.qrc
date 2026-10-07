@@ -30,6 +30,8 @@
         <file alias="qml/views/KnowledgeGapView.qml">../qml/views/KnowledgeGapView.qml</file>
         <file alias="qml/views/MemoView.qml">../qml/views/MemoView.qml</file>
         <file alias="qml/views/MemoFormat.js">../qml/views/MemoFormat.js</file>
+        <file alias="qml/views/TrashView.qml">../qml/views/TrashView.qml</file>
+        <file alias="qml/views/TrashFormat.js">../qml/views/TrashFormat.js</file>
         <file alias="qml/components/GlassPanel.qml">../qml/components/GlassPanel.qml</file>
         <file alias="qml/components/KnowledgeGapCapturePopup.qml">../qml/components/KnowledgeGapCapturePopup.qml</file>
         <file alias="qml/components/KnowledgeGapDialog.qml">../qml/components/KnowledgeGapDialog.qml</file>

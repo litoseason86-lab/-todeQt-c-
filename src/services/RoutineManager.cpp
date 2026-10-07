@@ -8,6 +8,7 @@
 #include "RoutineRules.h"
 #include "SyncSchema.h"
 #include "TaskManager.h"
+#include "TrashStore.h"
 
 #include <QDate>
 #include <QDebug>
@@ -456,6 +457,20 @@ bool RoutineManager::deleteRoutine(int id)
         return false;
     }
 
+    // 先写废纸篓再删除。放在收回之后：收回过当日实例时，生成戳要存成空，恢复后当天才会补生成。
+    // 不能更晚：DELETE 之后这一行就读不到了。写入失败整体回滚。
+    QString trashError;
+    if (!TrashStore::captureRoutine(db, id, !reclaimedTaskIds.isEmpty(), &trashError)) {
+        // 例行不存在时保持原有的日志文案；其余是写废纸篓失败。
+        if (trashError == TrashStore::kMissingRecord) {
+            qWarning() << "Failed to delete routine: routine not found" << id;
+        } else {
+            qWarning() << "Failed to move routine to trash:" << trashError;
+        }
+        db.rollback();
+        return false;
+    }
+
     QSqlQuery query(db);
     query.prepare(QStringLiteral("DELETE FROM routines WHERE id = :id"));
     query.bindValue(QStringLiteral(":id"), id);
@@ -480,6 +495,7 @@ bool RoutineManager::deleteRoutine(int id)
 
     notifyTasksReclaimed(reclaimedTaskIds);
     emit routinesChanged();
+    emit TrashNotifier::instance()->changed();
     return true;
 }
 

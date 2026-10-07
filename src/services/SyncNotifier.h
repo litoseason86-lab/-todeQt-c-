@@ -11,6 +11,11 @@ namespace SyncNotifier {
 // 解绑一个其实还在的任务、让界面刷新出并不存在的变化，所以一个都不发。
 void publish(const SyncStore::ApplyResult& result);
 
+// 「按表发信号」这一段，同步（publish）与废纸篓恢复共用：恢复直接写库，没有 ApplyResult，
+// 但各页面要的刷新和同步改动之后完全一样，不另写一套。changedTables 用库里的表名；
+// tasksDeleted 为真时任务列表也刷新（同步删了任务但 tasks 不在 changedTables 时用）。
+void publishTableChanges(const QSet<QString>& changedTables, bool tasksDeleted = false);
+
 } // namespace SyncNotifier
 
 #endif // SYNCNOTIFIER_H

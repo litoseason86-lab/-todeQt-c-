@@ -43,6 +43,8 @@ FocusTimer::FocusTimer(QObject* parent)
     // 会产生竞态，且跨线程/换库时可能读到另一份数据库；只按这条事实信号解绑内存状态。
     connect(TaskManager::instance(), &TaskManager::taskDeleted,
             this, &FocusTimer::handleTaskDeleted);
+    connect(TaskManager::instance(), &TaskManager::taskRestored,
+            this, &FocusTimer::handleTaskRestored);
     connect(&m_timer, &QTimer::timeout, this, [this]() {
         syncElapsedTime();
         // 每五秒保存一次活动进度；崩溃最多损失一个检查点区间，正常退出会再做一次同步。
@@ -1021,6 +1023,26 @@ void FocusTimer::handleTaskDeleted(int taskId)
     m_currentTaskId = -1;
     if (hasActiveTimer() && !persistActiveState()) {
         qWarning() << "Failed to detach deleted task from active focus state"
+                   << "taskId=" << taskId << "sessionId=" << m_sessionId;
+    }
+    emit currentTaskChanged();
+}
+
+void FocusTimer::handleTaskRestored(int taskId, const QList<int>& focusSessionIds)
+{
+    // 只在「计时器没挂任务、有进行中的专注记录、且这条记录正是被接回到恢复任务名下的那条」时重新挂上。
+    // 休息段没有专注记录（m_sessionId <= 0）；已挂着别的任务或接回的是别的会话，一律不动。
+    if (taskId <= 0 || m_sessionId <= 0 || m_currentTaskId > 0 || !focusSessionIds.contains(m_sessionId)) {
+        return;
+    }
+
+    // 删除任务时计时器已解绑（handleTaskDeleted），而恢复事务把这条进行中的记录接回了新任务：
+    // 不同步内存的话，专注结束时不会按这个任务判定预计用时自动完成，
+    // 手动完成恢复后的任务时界面（比的是 currentTaskId）也认不出正在给它计时。
+    // 标题不动：删除时保留了会话快照里的标题。
+    m_currentTaskId = taskId;
+    if (!persistActiveState()) {
+        qWarning() << "Failed to reattach restored task to active focus state"
                    << "taskId=" << taskId << "sessionId=" << m_sessionId;
     }
     emit currentTaskChanged();

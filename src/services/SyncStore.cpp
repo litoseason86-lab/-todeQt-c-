@@ -1751,6 +1751,12 @@ void Applier::logConflict(const QString& kind, const SyncSchema::Table& table, c
                           const QString& keptValue, const QString& lostDevice, const QString& keptDevice,
                           const QString& detail)
 {
+    // 废纸篓记录不写日志：它是删除那一刻的快照，不是谁的编辑。两台各写的同一条合成一份（字段取较新的一边）、
+    // 晚到的一份被删除记录挡住，都是预期结果，没有丢掉任何修改，记下来只会让人以为出了冲突。
+    // 只有应用失败被跳过（skipped）照常记：否则这一条记录静默消失，没人知道它没同步过来。
+    if (table.name == QLatin1String("trash_items") && kind != QLatin1String("skipped")) {
+        return;
+    }
     // 空的 QString 绑定进去是 SQL 的 NULL，会撞上日志表的 NOT NULL；一律收敛成空串。
     const auto text = [](const QString& value) { return value.isNull() ? QStringLiteral("") : value; };
     QSqlQuery query(m_db);
@@ -1798,7 +1804,8 @@ QString Applier::recordLabel(const SyncSchema::Table& table, const QHash<QString
         return values.value(QStringLiteral("name")).toString();
     }
     if (table.name == QLatin1String("routines") || table.name == QLatin1String("tasks")
-        || table.name == QLatin1String("schedule_entries") || table.name == QLatin1String("knowledge_gaps")) {
+        || table.name == QLatin1String("schedule_entries") || table.name == QLatin1String("knowledge_gaps")
+        || table.name == QLatin1String("trash_items")) {
         return values.value(QStringLiteral("title")).toString();
     }
     if (table.name == QLatin1String("countdown_goals")) {

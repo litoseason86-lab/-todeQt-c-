@@ -19,6 +19,7 @@
 #include "services/CountdownService.h"
 #include "services/KnowledgeGapService.h"
 #include "services/MemoService.h"
+#include "services/TrashService.h"
 #include "models/PlainTextLayout.h"
 #include "services/ExportService.h"
 #include "services/FocusHistoryService.h"
@@ -342,6 +343,14 @@ int main(int argc, char *argv[])
     QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed,
                      RoutineManager::instance(), &RoutineManager::materializeToday);
 
+    // 废纸篓保留期按逻辑日算：启动时、逻辑日变化时、恢复备份换了库之后各清理一次到期项。
+    // 这里只管清理；页面自己订阅逻辑日变化重读（见 TrashView），没有项到期时也要刷新「今天」分组和剩余天数。
+    TrashService::instance()->purgeExpired();
+    QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed,
+                     TrashService::instance(), [] { TrashService::instance()->purgeExpired(); });
+    QObject::connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged,
+                     TrashService::instance(), [] { TrashService::instance()->purgeExpired(); });
+
     // 历史编辑会改变任务累计时长；在装配层广播刷新，避免服务互相依赖。
     QObject::connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged,
                      TaskManager::instance(), &TaskManager::tasksChanged);
@@ -402,6 +411,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("memoService"), MemoService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("trashService"), TrashService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("memoTextLayout"), &memoTextLayout);
     engine.rootContext()->setContextProperty(QStringLiteral("knowledgeGapService"), KnowledgeGapService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("routineManager"), RoutineManager::instance());

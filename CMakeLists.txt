@@ -149,6 +149,10 @@ set(APP_SOURCES
     src/services/KnowledgeGapService.cpp
     src/services/MemoService.h
     src/services/MemoService.cpp
+    src/services/TrashStore.h
+    src/services/TrashStore.cpp
+    src/services/TrashService.h
+    src/services/TrashService.cpp
     src/services/TaskInteractionCoordinator.h
     src/services/TaskInteractionCoordinator.cpp
     src/services/QmlValues.h
@@ -498,6 +502,7 @@ add_executable(PomodoroTodoTests
     src/services/LogicalDay.h
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 # Qml 只给服务测试用：用 QJSEngine 走一遍界面调用 Q_INVOKABLE 的真实路径（重载选择、
@@ -541,6 +546,7 @@ add_executable(CoreLogicTests
     src/services/LogicalDay.h
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(CoreLogicTests PRIVATE
@@ -581,6 +587,7 @@ add_executable(RobustnessTests
     src/services/LogicalDay.h
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(RobustnessTests PRIVATE
@@ -609,6 +616,7 @@ add_executable(CountdownServiceTests
     src/services/LogicalDay.h
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(CountdownServiceTests PRIVATE
@@ -642,6 +650,7 @@ add_executable(KnowledgeGapServiceTests
     src/services/LogicalDay.h
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(KnowledgeGapServiceTests PRIVATE
@@ -659,6 +668,7 @@ add_executable(MemoServiceTests
     src/services/DatabaseManager.h src/services/DatabaseManager.cpp
     src/services/SyncSchema.h src/services/SyncSchema.cpp
     src/services/MemoService.h src/services/MemoService.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 target_link_libraries(MemoServiceTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
 pomodoro_todo_enable_warnings(MemoServiceTests)
@@ -681,6 +691,7 @@ add_executable(ScheduleServiceTests
     # ScheduleService::kMaxWeekIndex 钉死在一起，两处常量不能各改各的。
     src/services/AppSettings.h
     src/services/AppSettings.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(ScheduleServiceTests PRIVATE
@@ -721,6 +732,7 @@ add_executable(PlatformControlTests
     src/services/LogicalDay.h
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(PlatformControlTests PRIVATE
@@ -841,6 +853,7 @@ add_executable(BackupServiceTests
     src/services/LogicalDay.h
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(BackupServiceTests PRIVATE
@@ -880,6 +893,7 @@ add_executable(TimingRobustnessTests
     src/services/LogicalDay.h
     src/services/LogicalDayService.h
     src/services/LogicalDayService.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(TimingRobustnessTests PRIVATE
@@ -918,6 +932,7 @@ add_executable(PhaseAlarmCoordinatorTests
     src/services/NotificationService.cpp
     src/services/PhaseAlarmCoordinator.h
     src/services/PhaseAlarmCoordinator.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(PhaseAlarmCoordinatorTests PRIVATE
@@ -977,6 +992,9 @@ add_executable(SyncTests
     src/models/CountdownGoal.cpp
     src/models/CountdownModel.h
     src/models/CountdownModel.cpp
+    # 跨设备用例要在设备上调用 TrashService（读列表、恢复、彻底删除、清空、清理过期项）。
+    src/services/TrashStore.h src/services/TrashStore.cpp
+    src/services/TrashService.h src/services/TrashService.cpp
 )
 
 target_link_libraries(SyncTests PRIVATE
@@ -987,6 +1005,64 @@ target_link_libraries(SyncTests PRIVATE
 
 pomodoro_todo_enable_warnings(SyncTests)
 add_test(NAME SyncTests COMMAND SyncTests)
+
+# 废纸篓（054 阶段 1）：放进、恢复、清理、迁移与备份契约。源文件以 SyncTests 为基础，
+# 因为恢复会走 SyncNotifier 的按表发信号，连带各服务；仍用真实建表逻辑，不手写简化表。
+add_executable(TrashServiceTests
+    tests/TrashServiceTests.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncStore.h
+    src/services/SyncStore.cpp
+    src/services/SyncNotifier.h
+    src/services/SyncNotifier.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/FocusHistoryService.h
+    src/services/FocusHistoryService.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/RoutineManager.h
+    src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+    src/services/FocusSessionRules.h
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
+    src/services/CountdownService.h
+    src/services/CountdownService.cpp
+    src/services/TrashStore.h
+    src/services/TrashStore.cpp
+    src/services/TrashService.h
+    src/services/TrashService.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
+    src/models/CountdownModel.cpp
+)
+target_link_libraries(TrashServiceTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
+pomodoro_todo_enable_warnings(TrashServiceTests)
+add_test(NAME TrashServiceTests COMMAND TrashServiceTests)
+set_tests_properties(TrashServiceTests PROPERTIES TIMEOUT 90)
 
 # 设备间同步的云盘传输（050 阶段 3）：文件格式、文件夹读写、同步引擎。
 # 两台设备各用一个真实结构的临时库，云盘用临时文件夹模拟，可以注入延迟、乱序、坏文件和读写失败。
@@ -1049,6 +1125,7 @@ add_executable(SyncTransportTests
     src/models/CountdownGoal.cpp
     src/models/CountdownModel.h
     src/models/CountdownModel.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(SyncTransportTests PRIVATE
@@ -1121,6 +1198,7 @@ add_executable(SyncControllerTests
     src/models/CountdownGoal.cpp
     src/models/CountdownModel.h
     src/models/CountdownModel.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 
 target_link_libraries(SyncControllerTests PRIVATE
@@ -1269,6 +1347,7 @@ qt_add_executable(McpServiceTests
     src/mcp/bridge/McpToolDispatcher.h src/mcp/bridge/McpToolDispatcher.cpp
     src/mcp/bridge/McpTaskWrites.cpp
     src/mcp/bridge/McpCreateRegistry.h src/mcp/bridge/McpCreateRegistry.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp
 )
 target_link_libraries(McpServiceTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
 pomodoro_todo_enable_warnings(McpServiceTests)

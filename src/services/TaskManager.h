@@ -152,6 +152,10 @@ signals:
     void tasksChanged();
     // 仅在删除事务提交后发出。计时器等持有任务 ID 的服务据此解绑，避免通过查询猜测删除结果。
     void taskDeleted(int taskId);
+    // 只在废纸篓恢复任务的事务提交后由 TrashService 发出。任务以新编号 taskId 回来，
+    // focusSessionIds 是这次接回到它名下的专注记录本地编号（含进行中的那条）；
+    // 计时器据此重新挂上，同 taskDeleted 不靠查询猜测。
+    void taskRestored(int taskId, const QList<int>& focusSessionIds);
     // 查询失败不能再伪装成合法空列表；页面监听该信号展示明确错误。
     void operationFailed(const QString& message);
 

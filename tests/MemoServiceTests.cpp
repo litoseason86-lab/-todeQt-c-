@@ -410,7 +410,7 @@ void MemoServiceTests::version19MigrationPreservesDataAndSnapshot()
     const QStringList pattern{QStringLiteral("pomodoro_backup_*.db")};
     const QStringList before = dir.entryList(pattern, QDir::Files);
     QVERIFY(DatabaseManager::instance()->createTables());
-    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")), 20);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")), DatabaseManager::kCurrentSchemaVersion);
     QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '升级前任务'")), 1);
     QVERIFY(DatabaseManager::memoSchemaIsValid(DatabaseManager::instance()->database()));
     QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM memos")), 0);
@@ -473,10 +473,11 @@ void MemoServiceTests::futureDatabaseIsRejectedBeforeWriting()
 {
     QSqlQuery query(DatabaseManager::instance()->database());
     QVERIFY(query.exec(QStringLiteral("DROP TABLE memos")));
-    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = 21")));
+    const int future = DatabaseManager::kCurrentSchemaVersion + 1;
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version = %1").arg(future)));
     QVERIFY(!DatabaseManager::instance()->createTables());
     QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'memos'")), 0);
-    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")), 21);
+    QCOMPARE(scalar(QStringLiteral("PRAGMA user_version")), future);
 }
 
 QTEST_GUILESS_MAIN(MemoServiceTests)

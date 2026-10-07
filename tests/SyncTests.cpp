@@ -31,6 +31,7 @@
 #include "../src/services/SyncSchema.h"
 #include "../src/services/SyncStore.h"
 #include "../src/services/TaskManager.h"
+#include "../src/services/TrashService.h"
 
 // 设备间同步（050 阶段 2）的测试。
 //
@@ -425,6 +426,97 @@ QStringList dayOrder(const Device& device, const QString& date)
     return ids;
 }
 
+// ── 054：废纸篓（两台设备共用）──
+
+// 同步字段的列名：逐列比较两台设备上的同一行。
+const QStringList kTrashColumns = {QStringLiteral("kind"), QStringLiteral("origin_sync_id"),
+                                   QStringLiteral("title"), QStringLiteral("payload"),
+                                   QStringLiteral("deleted_at")};
+
+int trashRows(const Device& device)
+{
+    return count(device, QStringLiteral("SELECT COUNT(*) FROM trash_items"));
+}
+
+// 标题为 title 的那一行在这台设备上的本机编号，没有则为 0。
+int trashIdOf(const Device& device, const QString& title)
+{
+    return scalar(device, QStringLiteral("SELECT id FROM trash_items WHERE title = '%1'").arg(title)).toInt();
+}
+
+// 同步日志里属于废纸篓的条目数：废纸篓记录不是谁的编辑，只有应用失败被跳过的才记。
+int trashLogRows(const Device& device)
+{
+    return count(device, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE tbl = 'trash_items'"));
+}
+
+QString trashValue(const Device& device, const QString& trashSyncId, const QString& column)
+{
+    return scalar(device, QStringLiteral("SELECT %1 FROM trash_items WHERE sync_id = '%2'")
+                              .arg(column, trashSyncId)).toString();
+}
+
+// 废纸篓里全部标题，排好序，比较「到底剩下哪几项」用。
+QStringList trashTitles(const Device& device)
+{
+    QStringList titles;
+    QSqlQuery query(deviceDb(device));
+    query.exec(QStringLiteral("SELECT title FROM trash_items"));
+    while (query.next()) {
+        titles.append(query.value(0).toString());
+    }
+    titles.sort();
+    return titles;
+}
+
+// 废纸篓的完整内容（身份加全部同步字段），每行一条、排好序：两台设备一模一样就说明废纸篓整体一致。
+QStringList trashDump(const Device& device)
+{
+    QStringList lines;
+    QSqlQuery query(deviceDb(device));
+    query.exec(QStringLiteral("SELECT sync_id, kind, origin_sync_id, title, payload, deleted_at FROM trash_items"));
+    while (query.next()) {
+        QStringList parts;
+        for (int column = 0; column < 6; ++column) {
+            parts.append(query.value(column).toString());
+        }
+        lines.append(parts.join(QLatin1Char('|')));
+    }
+    lines.sort();
+    return lines;
+}
+
+// 直接写一行废纸篓记录（走 SQL，触发器照常补身份、版本和待发送），返回它的 sync_id。
+QString addTrashRow(const Device& device, const QString& kind, const QString& origin, const QString& title,
+                    const QString& payload, const QString& deletedAt)
+{
+    QSqlQuery query(deviceDb(device));
+    query.prepare(QStringLiteral("INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
+                                 "VALUES (:kind, :origin, :title, :payload, :deletedAt)"));
+    query.bindValue(QStringLiteral(":kind"), kind);
+    query.bindValue(QStringLiteral(":origin"), origin);
+    query.bindValue(QStringLiteral(":title"), title);
+    query.bindValue(QStringLiteral(":payload"), payload);
+    query.bindValue(QStringLiteral(":deletedAt"), deletedAt);
+    if (!query.exec()) {
+        qWarning() << query.lastError().text();
+        return {};
+    }
+    return scalar(device, QStringLiteral("SELECT sync_id FROM trash_items WHERE id = %1")
+                              .arg(query.lastInsertId().toLongLong())).toString();
+}
+
+// 把某一行废纸篓记录的「现在」定在它的逻辑删除日再过 days 天的中午，给 TrashService::setNowForTesting 用。
+// 删除时刻是写入那一刻的系统时间，测试没法注入，所以「到期与否」只能靠拨「现在」来造：
+// days = 30 时这一行刚好到期（D+30 清掉），days = 29 时还剩 1 天。
+QDateTime trashNowAfter(const Device& device, const QString& trashSyncId, int days)
+{
+    const QDateTime deletedAt = QDateTime::fromString(trashValue(device, trashSyncId, QStringLiteral("deleted_at")),
+                                                      Qt::ISODateWithMs);
+    const QDate day = LogicalDay::dateOf(deletedAt.toLocalTime(), AppSettings::instance()->dayStartHour());
+    return QDateTime(day.addDays(days), QTime(12, 0));
+}
+
 // 把一份快照写成可比较的文字：每条记录一行，字段按名字排序，带上值和版本（不带 base，它只影响日志）。
 // 两台设备导出的快照文字相同，就说明它们的同步数据完全一致。
 QStringList describe(const SyncBatch& snapshot)
@@ -705,12 +797,44 @@ private slots:
     void phaseOneV20MemosAcquireSyncWithoutVersionBump();
     void memoNotificationsCoverContentAndCategoryDeletion();
 
+    // 054 阶段 2：废纸篓两台共用。产品保证写在各用例的第一行，前置断言防止数据没有触发目标场景。
+    void trashDeletedOnOneDeviceAppearsOnTheOtherWithoutBeingWrittenTwice();
+    void trashRestoredOnOneDeviceCreatesTheRecordOnTheOtherAndClearsBothTrashes();
+    void trashDeleteItemAndEmptyTrashFollowToTheOtherDevice();
+    void trashBothDevicesDeletingTheSameRecordListsOneAndRestoresOnce();
+    void trashExpiryPurgeConvergesWhetherBothDevicesOrOnlyOneExpireIt();
+    void trashChangesFromSyncNotifyTheTrashPage();
+    void phaseOneV21TrashAcquiresSyncWithoutVersionBump();
+    void trashSnapshotsReplaceTheTrashOnJoinAndRollback();
+
+    // 054 验收后修补：废纸篓记录的身份由原记录推出（两台各写的同一条合成一份），废纸篓记录不写同步日志。
+    void trashLateCopyDoesNotComeBackAfterAnEarlyRestore();
+    void trashRowIdentityComesFromTheOriginalRecordAndFallsBackToRandom();
+    void trashRecordThatFailsToApplyIsStillLoggedWithItsTitle();
+    void trashDeletionBeatingALateEditWritesNoSyncLog();
+
 private:
     Device openDevice(const QString& name);
     // 临时把服务层（TaskManager 等单例）切到这台设备的库上执行一段操作，用完关掉。
     void withServices(const Device& device, const std::function<void()>& action);
     // 两台设备来回同步，直到一轮下来谁也没有新改动要发。
     void syncAll(FakeCloud& cloud, const QList<Device>& devices);
+
+    // 废纸篓用例的公共起点：A 建一个自定义科目和带它的任务，同步之后两台都有；
+    // B 先占一个科目编号，让同一个科目在两台设备上的本机编号不同（废纸篓的内容只能靠 sync_id 对应）。
+    struct TrashScenario {
+        Device a;
+        Device b;
+        QString category; // 科目的 sync_id
+        QString task;     // 任务的 sync_id（A 上建的）
+    };
+    void setUpTrashScenario(FakeCloud& cloud, const QString& title, TrashScenario* scenario);
+    // 经服务层在 device 上建任务 / 删任务：删除要走 TaskManager::deleteTask 才会写废纸篓。
+    QString createTaskOn(const Device& device, const QString& title, const QString& categorySyncId,
+                         int estimatedMinutes, const QString& notes);
+    void deleteTaskOn(const Device& device, const QString& taskSyncId);
+    // 在 device 上把「现在」定在 now 再清理过期项，返回清掉的条数；用完还原。
+    int purgeExpiredOn(const Device& device, const QDateTime& now);
 
     QTemporaryDir m_preferences;
     std::unique_ptr<QTemporaryDir> m_data;
@@ -738,8 +862,10 @@ void SyncTests::init()
 void SyncTests::cleanup()
 {
     // 单例计时器与设置跨用例共享：复位，免得上一条用例的计时或逻辑日起点漏到下一条。
+    // TrashService 也是单例，废纸篓用例会把它的「现在」拨到几十天后来造到期项，这里必须还原。
     FocusTimer::instance()->resetSession();
     AppSettings::instance()->setDayStartHour(4);
+    TrashService::instance()->setNowForTesting(QDateTime());
     DatabaseManager::instance()->close();
     for (const QString& connection : m_connections) {
         {
@@ -796,6 +922,59 @@ void SyncTests::syncAll(FakeCloud& cloud, const QList<Device>& devices)
         }
     }
     QFAIL("来回同步六轮后仍有新改动，没有收敛");
+}
+
+void SyncTests::setUpTrashScenario(FakeCloud& cloud, const QString& title, TrashScenario* scenario)
+{
+    scenario->a = openDevice(QStringLiteral("trash-a"));
+    scenario->b = openDevice(QStringLiteral("trash-b"));
+    // B 先占一个科目编号：A 建的科目同步到 B 之后，在 B 上拿到的本机编号就和在 A 上的不同。
+    QVERIFY(!addCategory(scenario->b, QStringLiteral("B 先建的科目")).isEmpty());
+    scenario->category = addCategory(scenario->a, QStringLiteral("线性代数"));
+    QVERIFY(!scenario->category.isEmpty());
+    scenario->task = createTaskOn(scenario->a, title, scenario->category, 45, QStringLiteral("第二遍"));
+    QVERIFY(!scenario->task.isEmpty());
+    syncAll(cloud, {scenario->a, scenario->b});
+    // 前提：B 也有这个科目和这条任务，而且同一个科目在两台设备上的本机编号不同；两台的废纸篓都是空的。
+    QVERIFY(localIdOf(scenario->b, QStringLiteral("categories"), scenario->category) > 0);
+    QVERIFY(localIdOf(scenario->b, QStringLiteral("tasks"), scenario->task) > 0);
+    QVERIFY(localIdOf(scenario->a, QStringLiteral("categories"), scenario->category)
+            != localIdOf(scenario->b, QStringLiteral("categories"), scenario->category));
+    QCOMPARE(trashRows(scenario->a), 0);
+    QCOMPARE(trashRows(scenario->b), 0);
+}
+
+QString SyncTests::createTaskOn(const Device& device, const QString& title, const QString& categorySyncId,
+                                int estimatedMinutes, const QString& notes)
+{
+    QString syncId;
+    withServices(device, [&] {
+        const qint64 categoryId = categorySyncId.isEmpty()
+            ? -1 : localIdOf(device, QStringLiteral("categories"), categorySyncId);
+        const int id = TaskManager::instance()->createTask(title, today(), static_cast<int>(categoryId),
+                                                           estimatedMinutes, notes);
+        QVERIFY(id > 0);
+        syncId = syncIdOf(QStringLiteral("tasks"), id);
+    });
+    return syncId;
+}
+
+void SyncTests::deleteTaskOn(const Device& device, const QString& taskSyncId)
+{
+    const qint64 localId = localIdOf(device, QStringLiteral("tasks"), taskSyncId);
+    QVERIFY2(localId > 0, "要删的任务不在这台设备上");
+    withServices(device, [&] { QVERIFY(TaskManager::instance()->deleteTask(static_cast<int>(localId))); });
+}
+
+int SyncTests::purgeExpiredOn(const Device& device, const QDateTime& now)
+{
+    int purged = -2;
+    withServices(device, [&] {
+        TrashService::instance()->setNowForTesting(now);
+        purged = TrashService::instance()->purgeExpired();
+        TrashService::instance()->setNowForTesting(QDateTime());
+    });
+    return purged;
 }
 
 void SyncTests::freshDatabaseHasSyncInfrastructure()
@@ -874,11 +1053,17 @@ void SyncTests::serviceWritesAreVersionedPerField()
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sync_outbox")), 0);
 
     // 删除：留下删除记录（普通删除），版本行清掉，记录重新进待发送队列。
+    // 删除任务的同一个事务里先把它写进废纸篓（计划 054）：那一行用掉逻辑时间 4000，
+    // 任务的删除记录紧接着取 4001。两者都在同一次删除里，顺序是先废纸篓、后删除记录。
     QVERIFY(setClock(4000));
     QVERIFY(TaskManager::instance()->deleteTask(taskId));
     QCOMPARE(tombstoneKind(QStringLiteral("tasks"), id), QStringLiteral("delete"));
     QCOMPARE(scalar(QStringLiteral("SELECT v_time FROM sync_tombstones WHERE sync_id = '%1'").arg(id)).toLongLong(),
-             4000);
+             4001);
+    const QString trashSyncId =
+        scalar(QStringLiteral("SELECT sync_id FROM trash_items WHERE origin_sync_id = '%1'").arg(id)).toString();
+    QVERIFY(!trashSyncId.isEmpty());
+    QCOMPARE(versionOf(QStringLiteral("trash_items"), trashSyncId, QStringLiteral("kind")).time, 4000);
     QCOMPARE(versionCount(QStringLiteral("tasks"), id), 0);
     QVERIFY(queued(QStringLiteral("tasks"), id));
 }
@@ -1248,8 +1433,8 @@ void SyncTests::batchSurvivesJsonRoundTrip()
     QVERIFY(!SyncJson::fromJson(future, &parsed, &error));
     QVERIFY(!error.isEmpty());
 
-    // 第三期（052）写出格式 3，旧应用停下等更新；第一期的格式 1 仍能读，比它更旧的不认识。
-    QCOMPARE(SyncJson::toJson(batch).value(QStringLiteral("format")).toInt(), 3);
+    // 计划 054 起写出格式 4（052 起是 3），旧应用停下等更新；第一期的格式 1 仍能读，比它更旧的不认识。
+    QCOMPARE(SyncJson::toJson(batch).value(QStringLiteral("format")).toInt(), 4);
     QJsonObject firstPhase = SyncJson::toJson(batch);
     firstPhase.insert(QStringLiteral("format"), 1);
     SyncBatch old;
@@ -3411,10 +3596,10 @@ void SyncTests::phaseOneV20MemosAcquireSyncWithoutVersionBump()
     QVERIFY(exec(QStringLiteral("DELETE FROM sync_outbox WHERE tbl='memos'")));
     const QString original = QStringLiteral("2026-10-02T12:51:46.728Z");
     QVERIFY(exec(QStringLiteral("UPDATE memos SET updated_at='%1'").arg(original)));
-    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 20);
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), DatabaseManager::kCurrentSchemaVersion);
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('memos') WHERE name='sync_id'")), 0);
     QVERIFY(DatabaseManager::instance()->createTables());
-    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 20);
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), DatabaseManager::kCurrentSchemaVersion);
     const QString identity = syncIdOf(QStringLiteral("memos"), id);
     QVERIFY(!identity.isEmpty());
     QCOMPARE(versionCount(QStringLiteral("memos"), identity), 5);
@@ -3463,6 +3648,682 @@ void SyncTests::memoNotificationsCoverContentAndCategoryDeletion()
     QCOMPARE(MemoService::instance()->getMemo(id).value(QStringLiteral("categoryId")).toInt(), 0);
     SyncNotifier::publish(deleted);
     QCOMPARE(spy.count(), 2);
+}
+
+// ── 054 阶段 2：废纸篓两台共用 ──
+
+void SyncTests::trashDeletedOnOneDeviceAppearsOnTheOtherWithoutBeingWrittenTwice()
+{
+    // 产品保证：在一台设备上删除的内容，另一台的废纸篓里也有同样的一份（逐字相同），原记录在两台都没了；
+    // 只有执行删除的那台写废纸篓，另一台应用远端删除时不会自己再写一份。
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    TrashScenario s;
+    setUpTrashScenario(cloud, QStringLiteral("线性代数 第 4 讲"), &s);
+    QVERIFY(!QTest::currentTestFailed());
+    // B 把科目改了名：A 删除时写进内容里的是旧名字，列表上的科目名要读 B 本机现在的科目。
+    const QString renamed = QStringLiteral("线代（B 改名）");
+    QVERIFY(exec(s.b, QStringLiteral("UPDATE categories SET name = '%1' WHERE sync_id = '%2'")
+                          .arg(renamed, s.category)));
+
+    deleteTaskOn(s.a, s.task);
+    QCOMPARE(trashRows(s.a), 1);
+    QCOMPARE(trashRows(s.b), 0);
+    const QString trashId = scalar(s.a, QStringLiteral("SELECT sync_id FROM trash_items")).toString();
+    QCOMPARE(trashId, QStringLiteral("trash-") + s.task);
+    // A 删除时写下的原样：之后 B 那一份要和它逐字相同。拿它比、不拿同步之后的 A 比：
+    // 两台各写一份的身份相同，会合成一行，B 要是自己也写了一份（删除时间更晚），合并后连 A 手里的也会被盖掉。
+    QStringList written;
+    for (const QString& column : kTrashColumns) {
+        written.append(trashValue(s.a, trashId, column));
+    }
+
+    // 先只把 A 的这一批送到 B，看 B 刚应用完时的样子：不能等同步到安静再看，
+    // 那时 B 自己多写的一份早就发出去、合并掉了，队列和行数都看不出来。
+    QVERIFY(cloud.publish(s.a) > 0);
+    for (const SyncStore::ApplyResult& result : cloud.pull(s.b)) {
+        QVERIFY2(result.ok, qPrintable(result.error));
+    }
+    QCOMPARE(count(s.b, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(s.task)), 0);
+    QCOMPARE(trashRows(s.b), 1);
+    // 收到的废纸篓记录不是 B 的本机改动：没有等着发出去的，每个字段的版本都出自 A。
+    QCOMPARE(count(s.b, QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE tbl = 'trash_items'")), 0);
+    QCOMPARE(count(s.b, QStringLiteral("SELECT COUNT(*) FROM sync_field_versions WHERE tbl = 'trash_items' "
+                                       "AND sync_id = '%1' AND v_device <> '%2'").arg(trashId, s.a.id)), 0);
+    syncAll(cloud, {s.a, s.b});
+
+    // 原记录两台都没了；两台的废纸篓恰好是 A 写的那一行：身份和五个同步字段逐字相同。
+    for (const Device& d : {s.a, s.b}) {
+        QCOMPARE(count(d, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(s.task)), 0);
+        QCOMPARE(trashRows(d), 1);
+        for (qsizetype i = 0; i < kTrashColumns.size(); ++i) {
+            QCOMPARE(trashValue(d, trashId, kTrashColumns.at(i)), written.at(i));
+        }
+    }
+    QCOMPARE(trashValue(s.b, trashId, QStringLiteral("kind")), QStringLiteral("task"));
+    QCOMPARE(trashValue(s.b, trashId, QStringLiteral("origin_sync_id")), s.task);
+    QCOMPARE(trashValue(s.b, trashId, QStringLiteral("title")), QStringLiteral("线性代数 第 4 讲"));
+
+    // B 上能把它列出来：科目是 B 本机的科目（改名后的名字、颜色），不是内容里记的旧名字。
+    QVariantMap listed;
+    withServices(s.b, [&] { listed = TrashService::instance()->readItems(); });
+    QVERIFY2(listed.value(QStringLiteral("ok")).toBool(), qPrintable(listed.value(QStringLiteral("error")).toString()));
+    const QVariantList items = listed.value(QStringLiteral("items")).toList();
+    QCOMPARE(items.size(), 1);
+    const QVariantMap item = items.first().toMap();
+    QCOMPARE(item.value(QStringLiteral("kind")).toString(), QStringLiteral("task"));
+    QCOMPARE(item.value(QStringLiteral("title")).toString(), QStringLiteral("线性代数 第 4 讲"));
+    QCOMPARE(item.value(QStringLiteral("originSyncId")).toString(), s.task);
+    QCOMPARE(item.value(QStringLiteral("categoryName")).toString(), renamed);
+    QCOMPARE(item.value(QStringLiteral("categoryColor")).toString(), QStringLiteral("#123456"));
+    QVERIFY(item.value(QStringLiteral("restorable")).toBool());
+}
+
+void SyncTests::trashRestoredOnOneDeviceCreatesTheRecordOnTheOtherAndClearsBothTrashes()
+{
+    // 产品保证：一台设备恢复之后，另一台出现同一条新记录（同一个新身份、同一个科目、同样的内容），
+    // 两台的废纸篓里那一项都没了；恢复出来的是新记录，原来的身份不会被写回去，也不会出现第二份。
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    TrashScenario s;
+    setUpTrashScenario(cloud, QStringLiteral("线性代数 第 4 讲"), &s);
+    QVERIFY(!QTest::currentTestFailed());
+    deleteTaskOn(s.a, s.task);
+    syncAll(cloud, {s.a, s.b});
+    QCOMPARE(trashRows(s.a), 1);
+    QCOMPARE(trashRows(s.b), 1);
+    QCOMPARE(count(s.a, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '线性代数 第 4 讲'")), 0);
+    QCOMPARE(count(s.b, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '线性代数 第 4 讲'")), 0);
+
+    // 在收到废纸篓记录的 B 上恢复。
+    QVariantMap restored;
+    withServices(s.b, [&] {
+        const QVariantList items = TrashService::instance()->readItems().value(QStringLiteral("items")).toList();
+        QVERIFY(items.size() == 1);
+        restored = TrashService::instance()->restoreItem(items.first().toMap().value(QStringLiteral("id")).toInt());
+    });
+    QVERIFY2(restored.value(QStringLiteral("ok")).toBool(), qPrintable(restored.value(QStringLiteral("error")).toString()));
+    QCOMPARE(count(s.b, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '线性代数 第 4 讲'")), 1);
+    QCOMPARE(trashRows(s.b), 0);
+    QCOMPARE(trashRows(s.a), 1); // A 还没收到，前提成立后再同步
+    syncAll(cloud, {s.a, s.b});
+
+    for (const Device& d : {s.a, s.b}) {
+        QCOMPARE(count(d, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '线性代数 第 4 讲'")), 1);
+        QCOMPARE(trashRows(d), 0);
+        // 原来的身份是删除记录占着的，写回去另一台会忽略：恢复出来的必须是新身份。
+        QCOMPARE(count(d, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id = '%1'").arg(s.task)), 0);
+    }
+    const QString restoredId =
+        scalar(s.b, QStringLiteral("SELECT sync_id FROM tasks WHERE title = '线性代数 第 4 讲'")).toString();
+    QVERIFY(!restoredId.isEmpty());
+    QVERIFY(restoredId != s.task);
+    QCOMPARE(scalar(s.a, QStringLiteral("SELECT sync_id FROM tasks WHERE title = '线性代数 第 4 讲'")).toString(),
+             restoredId);
+    // 科目按身份接回，两台一致（本机编号不同，但指向同一个科目）；其余内容是删除前的样子。
+    QCOMPARE(taskCategory(s.a, restoredId), s.category);
+    QCOMPARE(taskCategory(s.b, restoredId), s.category);
+    for (const QString& column : {QStringLiteral("date"), QStringLiteral("estimated_minutes"),
+                                  QStringLiteral("notes"), QStringLiteral("completed")}) {
+        QCOMPARE(taskValue(s.a, restoredId, column), taskValue(s.b, restoredId, column));
+    }
+    QCOMPARE(taskValue(s.a, restoredId, QStringLiteral("estimated_minutes")).toInt(), 45);
+    QCOMPARE(taskValue(s.a, restoredId, QStringLiteral("notes")).toString(), QStringLiteral("第二遍"));
+}
+
+void SyncTests::trashDeleteItemAndEmptyTrashFollowToTheOtherDevice()
+{
+    // 产品保证：一台设备彻底删除废纸篓里的一项，另一台只少这一项；一台设备清空，另一台也跟着清空，
+    // 之后再同步也不会有哪一项复活。
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    TrashScenario s;
+    setUpTrashScenario(cloud, QStringLiteral("第一项"), &s);
+    QVERIFY(!QTest::currentTestFailed());
+    const QString second = createTaskOn(s.a, QStringLiteral("第二项"), s.category, 0, QString());
+    const QString third = createTaskOn(s.a, QStringLiteral("第三项"), s.category, 0, QString());
+    syncAll(cloud, {s.a, s.b});
+    deleteTaskOn(s.a, s.task);
+    deleteTaskOn(s.a, second);
+    deleteTaskOn(s.a, third);
+    syncAll(cloud, {s.a, s.b});
+    QCOMPARE(trashRows(s.a), 3);
+    QCOMPARE(trashRows(s.b), 3);
+
+    // A 彻底删除中间那一项：B 只少这一项，排在它前后的两项还在（删错了别的项、或清空了，这里都会不同）。
+    QVariantMap removed;
+    withServices(s.a, [&] {
+        removed = TrashService::instance()->deleteItem(trashIdOf(s.a, QStringLiteral("第二项")));
+    });
+    QVERIFY2(removed.value(QStringLiteral("ok")).toBool(), qPrintable(removed.value(QStringLiteral("error")).toString()));
+    QCOMPARE(trashRows(s.b), 3); // 同步之前 B 还有
+    syncAll(cloud, {s.a, s.b});
+    QStringList expected{QStringLiteral("第一项"), QStringLiteral("第三项")};
+    expected.sort();
+    QCOMPARE(trashTitles(s.a), expected);
+    QCOMPARE(trashTitles(s.b), expected);
+
+    // 再放两项，由 B（不是写入这些项的那一台）清空：A 也清空。
+    const QString fourth = createTaskOn(s.a, QStringLiteral("第四项"), s.category, 0, QString());
+    const QString fifth = createTaskOn(s.a, QStringLiteral("第五项"), s.category, 0, QString());
+    syncAll(cloud, {s.a, s.b});
+    deleteTaskOn(s.a, fourth);
+    deleteTaskOn(s.a, fifth);
+    syncAll(cloud, {s.a, s.b});
+    QCOMPARE(trashRows(s.a), 4);
+    QCOMPARE(trashRows(s.b), 4);
+    QVariantMap emptied;
+    withServices(s.b, [&] {
+        // 清空只删传入的编号：取此刻 B 上全部废纸篓行，等同确认框列出的全部项。
+        QVariantList ids;
+        QSqlQuery idQuery(DatabaseManager::instance()->database());
+        QVERIFY(idQuery.exec(QStringLiteral("SELECT id FROM trash_items")));
+        while (idQuery.next()) {
+            ids.append(idQuery.value(0).toInt());
+        }
+        emptied = TrashService::instance()->emptyTrash(ids);
+    });
+    QVERIFY2(emptied.value(QStringLiteral("ok")).toBool(), qPrintable(emptied.value(QStringLiteral("error")).toString()));
+    QCOMPARE(emptied.value(QStringLiteral("count")).toInt(), 4);
+    QCOMPARE(trashRows(s.a), 4); // 同步之前 A 还有
+    syncAll(cloud, {s.a, s.b});
+    QCOMPARE(trashRows(s.a), 0);
+    QCOMPARE(trashRows(s.b), 0);
+    // 再同步一轮也没有复活：删除记录压过任何还在路上的旧记录。
+    syncAll(cloud, {s.a, s.b});
+    QCOMPARE(trashRows(s.a), 0);
+    QCOMPARE(trashRows(s.b), 0);
+}
+
+void SyncTests::trashBothDevicesDeletingTheSameRecordListsOneAndRestoresOnce()
+{
+    // 产品保证：两台设备（没有同步时）各自删了同一条记录，同步之后只有一条废纸篓记录——两台各写的一份是同一条，
+    // 身份由原记录推出，合成一份，内容两台一致，列表里只出现一次；恢复它之后任务恰好一条、两台的废纸篓都空了；
+    // 这一切都不会在同步日志里留下废纸篓条目（那不是谁的编辑，也没有丢掉修改）。
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    TrashScenario s;
+    setUpTrashScenario(cloud, QStringLiteral("同时删除"), &s);
+    QVERIFY(!QTest::currentTestFailed());
+    const QString identity = QStringLiteral("trash-") + s.task;
+    deleteTaskOn(s.a, s.task);
+    // 隔几毫秒再在 B 上删：删除时间是毫秒精度，两份的 deleted_at 不同，合并之后两台取到同一个值才说明真的合并了。
+    QTest::qWait(5);
+    deleteTaskOn(s.b, s.task);
+    QCOMPARE(trashRows(s.a), 1);
+    QCOMPARE(trashRows(s.b), 1);
+    // 前提：两台各写的一份身份相同（都由原记录推出），删除时间不同。
+    QCOMPARE(scalar(s.a, QStringLiteral("SELECT sync_id FROM trash_items")).toString(), identity);
+    QCOMPARE(scalar(s.b, QStringLiteral("SELECT sync_id FROM trash_items")).toString(), identity);
+    const QString deletedOnA = trashValue(s.a, identity, QStringLiteral("deleted_at"));
+    const QString deletedOnB = trashValue(s.b, identity, QStringLiteral("deleted_at"));
+    QVERIFY(deletedOnA != deletedOnB);
+    syncAll(cloud, {s.a, s.b});
+
+    // 同步之后每台恰好一行，两台的内容逐字一致，删除时间取了两份里的一个，同步日志里没有废纸篓条目。
+    QCOMPARE(trashDump(s.a), trashDump(s.b));
+    for (const Device& d : {s.a, s.b}) {
+        QCOMPARE(trashRows(d), 1);
+        QCOMPARE(scalar(d, QStringLiteral("SELECT sync_id FROM trash_items")).toString(), identity);
+        const QString merged = trashValue(d, identity, QStringLiteral("deleted_at"));
+        QVERIFY(merged == deletedOnA || merged == deletedOnB);
+        QCOMPARE(trashLogRows(d), 0);
+        QVariantList items;
+        withServices(d, [&] { items = TrashService::instance()->readItems().value(QStringLiteral("items")).toList(); });
+        QCOMPARE(items.size(), 1);
+    }
+
+    // A 恢复：这一项在两台的废纸篓里都没了，任务恰好一条，两台一致，日志里仍然没有废纸篓条目。
+    QVariantMap restored;
+    withServices(s.a, [&] {
+        const QVariantList items = TrashService::instance()->readItems().value(QStringLiteral("items")).toList();
+        QVERIFY(items.size() == 1);
+        restored = TrashService::instance()->restoreItem(items.first().toMap().value(QStringLiteral("id")).toInt());
+    });
+    QVERIFY2(restored.value(QStringLiteral("ok")).toBool(), qPrintable(restored.value(QStringLiteral("error")).toString()));
+    QCOMPARE(trashRows(s.a), 0);
+    syncAll(cloud, {s.a, s.b});
+    for (const Device& d : {s.a, s.b}) {
+        QCOMPARE(trashRows(d), 0);
+        QCOMPARE(count(d, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '同时删除'")), 1);
+        QCOMPARE(trashLogRows(d), 0);
+    }
+    QCOMPARE(scalar(s.b, QStringLiteral("SELECT sync_id FROM tasks WHERE title = '同时删除'")).toString(),
+             scalar(s.a, QStringLiteral("SELECT sync_id FROM tasks WHERE title = '同时删除'")).toString());
+}
+
+void SyncTests::trashExpiryPurgeConvergesWhetherBothDevicesOrOnlyOneExpireIt()
+{
+    // 产品保证：过期清理在两台设备上结果一致——同一项在两台都到期、各自清掉时，同步照常完成、两边都空；
+    // 只有一台到期（另一台的日期还早一天）时，那台清掉之后另一台也跟着没有，不必等自己到期。
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    TrashScenario s;
+    setUpTrashScenario(cloud, QStringLiteral("两台同时到期"), &s);
+    QVERIFY(!QTest::currentTestFailed());
+    deleteTaskOn(s.a, s.task);
+    syncAll(cloud, {s.a, s.b});
+    QCOMPARE(trashRows(s.a), 1);
+    QCOMPARE(trashRows(s.b), 1);
+    const QString both = scalar(s.a, QStringLiteral("SELECT sync_id FROM trash_items")).toString();
+    QCOMPARE(trashValue(s.b, both, QStringLiteral("deleted_at")), trashValue(s.a, both, QStringLiteral("deleted_at")));
+
+    // 前提：到期前一天（D+29）两台都不会清掉它。
+    QCOMPARE(purgeExpiredOn(s.a, trashNowAfter(s.a, both, 29)), 0);
+    QCOMPARE(purgeExpiredOn(s.b, trashNowAfter(s.b, both, 29)), 0);
+    QCOMPARE(trashRows(s.a), 1);
+    QCOMPARE(trashRows(s.b), 1);
+    // 到期当天（D+30）两台各自清掉同一项：各清一条，都是自己写的删除记录。
+    QCOMPARE(purgeExpiredOn(s.a, trashNowAfter(s.a, both, 30)), 1);
+    QCOMPARE(purgeExpiredOn(s.b, trashNowAfter(s.b, both, 30)), 1);
+    QCOMPARE(trashRows(s.a), 0);
+    QCOMPARE(trashRows(s.b), 0);
+    syncAll(cloud, {s.a, s.b}); // 两边互相收到对方对同一项的删除记录，不能出错，也不能把它救回来
+    QCOMPARE(trashRows(s.a), 0);
+    QCOMPARE(trashRows(s.b), 0);
+
+    // 另造一行，只有 A 到期：B 的「现在」早一天，它自己清不掉，要靠同步收到 A 的删除。
+    const QString second = createTaskOn(s.a, QStringLiteral("只有一台到期"), s.category, 0, QString());
+    syncAll(cloud, {s.a, s.b});
+    deleteTaskOn(s.a, second);
+    syncAll(cloud, {s.a, s.b});
+    QCOMPARE(trashRows(s.a), 1);
+    QCOMPARE(trashRows(s.b), 1);
+    const QString onlyA = scalar(s.a, QStringLiteral("SELECT sync_id FROM trash_items")).toString();
+    QVERIFY(onlyA != both);
+    QCOMPARE(purgeExpiredOn(s.b, trashNowAfter(s.b, onlyA, 29)), 0);
+    QCOMPARE(trashRows(s.b), 1);
+    QCOMPARE(purgeExpiredOn(s.a, trashNowAfter(s.a, onlyA, 30)), 1);
+    QCOMPARE(trashRows(s.a), 0);
+    QCOMPARE(trashRows(s.b), 1); // 同步之前 B 还有
+    syncAll(cloud, {s.a, s.b});
+    QCOMPARE(trashRows(s.a), 0);
+    QCOMPARE(trashRows(s.b), 0);
+}
+
+void SyncTests::trashChangesFromSyncNotifyTheTrashPage()
+{
+    // 产品保证：同步带来废纸篓的变化（对方放进、彻底删除、清空、恢复……）并提交之后，废纸篓页收到 trashChanged
+    // 重读；应用失败的结果、与废纸篓无关的改动都不会误报。
+    // 先取单例：TrashNotifier 到 trashChanged 的转发在 TrashService 构造时才接上。
+    QSignalSpy spy(TrashService::instance(), &TrashService::trashChanged);
+    const Device a = openDevice(QStringLiteral("trash-a"));
+    const Device b = openDevice(QStringLiteral("trash-b"));
+    SyncStore sa(a.connection), sb(b.connection);
+
+    // 真实路径一：A 写了一行废纸篓记录，B 应用之后提交。
+    QVERIFY(!addTrashRow(a, QStringLiteral("memo"), QStringLiteral("origin-1"), QStringLiteral("远端放进的"),
+                         QStringLiteral("{\"v\":1}"), QStringLiteral("2026-10-06T01:00:00.000Z")).isEmpty());
+    // 确认发送用本机读出的那一批：出队要核对记录带着的 changeTime，它不写进文件，
+    // 经 JSON 解析出来的批次没有这个值（见 SyncRecord::changeTime）。
+    const SyncBatch inserted = sa.collectPending();
+    QVERIFY(!inserted.isEmpty());
+    QVERIFY(sa.acknowledge(inserted));
+    const SyncStore::ApplyResult arrived = sb.applyRemote(throughJson(inserted));
+    QVERIFY2(arrived.ok, qPrintable(arrived.error));
+    QVERIFY(arrived.changedTables.contains(QStringLiteral("trash_items")));
+    QCOMPARE(trashRows(b), 1);
+    QCOMPARE(spy.count(), 0); // 应用本身不发信号，提交之后由 SyncNotifier 统一发
+    SyncNotifier::publish(arrived);
+    QCOMPARE(spy.count(), 1);
+
+    // 真实路径二：A 又把它彻底删除，B 应用对方的删除记录。
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM trash_items WHERE origin_sync_id = 'origin-1'")));
+    const SyncBatch deletion = sa.collectPending();
+    QVERIFY(!deletion.isEmpty());
+    QVERIFY(sa.acknowledge(deletion));
+    const SyncStore::ApplyResult removed = sb.applyRemote(throughJson(deletion));
+    QVERIFY2(removed.ok, qPrintable(removed.error));
+    QVERIFY(removed.changedTables.contains(QStringLiteral("trash_items")));
+    QCOMPARE(trashRows(b), 0);
+    SyncNotifier::publish(removed);
+    QCOMPARE(spy.count(), 2);
+
+    // 应用失败（ok = false）：即使带着 trash_items 也一个信号都不发。
+    SyncStore::ApplyResult failed;
+    failed.changedTables.insert(QStringLiteral("trash_items"));
+    SyncNotifier::publish(failed);
+    QCOMPARE(spy.count(), 2);
+
+    // 成功但没有碰废纸篓：不发。
+    SyncStore::ApplyResult unrelated;
+    unrelated.ok = true;
+    unrelated.changedTables.insert(QStringLiteral("tasks"));
+    unrelated.changedTables.insert(QStringLiteral("memos"));
+    SyncNotifier::publish(unrelated);
+    QCOMPARE(spy.count(), 2);
+
+    // 成功且含废纸篓：照发，且同一次提交只发一次。
+    SyncStore::ApplyResult mixed;
+    mixed.ok = true;
+    mixed.changedTables.insert(QStringLiteral("tasks"));
+    mixed.changedTables.insert(QStringLiteral("trash_items"));
+    SyncNotifier::publish(mixed);
+    QCOMPARE(spy.count(), 3);
+}
+
+void SyncTests::phaseOneV21TrashAcquiresSyncWithoutVersionBump()
+{
+    // 产品保证：阶段 1 留下的 v21 库（废纸篓里已有内容、还没有同步列）打开之后补齐身份、进待发送队列、
+    // 装上触发器，原有内容一字不动，版本号不变——已经装过阶段 1 的设备升级之后，废纸篓里现有的内容也会同步出去。
+    for (const auto& spec : SyncSchema::triggers()) {
+        if (spec.first.startsWith(QStringLiteral("trash_items_sync_"))) {
+            QVERIFY(exec(QStringLiteral("DROP TRIGGER %1").arg(spec.first)));
+        }
+    }
+    QVERIFY(exec(QStringLiteral("DROP INDEX idx_trash_items_sync_id")));
+    QVERIFY(exec(QStringLiteral("ALTER TABLE trash_items DROP COLUMN sync_id")));
+    // 阶段 1 的库没有同步列，行是在没有触发器的情况下写的，附属表里不会有它们的踪迹。
+    const QString specialPayload = QStringLiteral("{\"v\":1,\"title\":\"含 '单引号' 和 emoji 😀\"}");
+    QVERIFY(exec(QStringLiteral("INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
+                                "VALUES ('task', 'origin-one', '阶段一的任务', '{\"v\":1,\"title\":\"阶段一的任务\"}', "
+                                "'2026-10-05T01:00:00.000Z')")));
+    QVERIFY(exec(QStringLiteral("INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
+                                "VALUES ('memo', 'origin-two', '阶段一的备忘', '%1', '2026-10-06T01:00:00.000Z')")
+                     .arg(QString(specialPayload).replace(QLatin1Char('\''), QStringLiteral("''")))));
+    QVERIFY(exec(QStringLiteral("PRAGMA user_version = 21")));
+    // 前提：没有同步列、索引、触发器，也没有版本和队列；数据在；版本是 21。
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 21);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('trash_items') WHERE name = 'sync_id'")), 0);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE name = 'idx_trash_items_sync_id'")), 0);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' "
+                                  "AND instr(name, 'trash_items_sync_') = 1")), 0);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sync_field_versions WHERE tbl = 'trash_items'")), 0);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE tbl = 'trash_items'")), 0);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 2);
+    const auto snapshotOf = [] {
+        QStringList rows;
+        QSqlQuery query(db());
+        query.exec(QStringLiteral("SELECT id, kind, origin_sync_id, title, payload, deleted_at FROM trash_items ORDER BY id"));
+        while (query.next()) {
+            QStringList parts;
+            for (int column = 0; column < 6; ++column) {
+                parts.append(query.value(column).toString());
+            }
+            rows.append(parts.join(QLatin1Char('|')));
+        }
+        return rows;
+    };
+    const QStringList before = snapshotOf();
+    QCOMPARE(before.size(), 2);
+
+    QVERIFY(DatabaseManager::instance()->createTables());
+
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 21);
+    QVERIFY(DatabaseManager::trashSchemaIsValid(db()));
+    QCOMPARE(snapshotOf(), before); // 原数据一字不动（含编号）
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id IS NULL OR sync_id = ''")), 0);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(DISTINCT sync_id) FROM trash_items")), 2);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE name = 'idx_trash_items_sync_id'")), 1);
+    QStringList expectedTriggers;
+    for (const auto& spec : SyncSchema::triggers()) {
+        if (spec.first.startsWith(QStringLiteral("trash_items_sync_"))) {
+            expectedTriggers.append(spec.first);
+        }
+    }
+    QVERIFY(!expectedTriggers.isEmpty());
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' "
+                                  "AND instr(name, 'trash_items_sync_') = 1")), int(expectedTriggers.size()));
+    QCOMPARE(triggerSql(), SyncSchema::canonicalTriggerSql());
+    const SyncSchema::Table* trash = SyncSchema::table(QStringLiteral("trash_items"));
+    QVERIFY(trash);
+    QSqlQuery rows(db());
+    QVERIFY(rows.exec(QStringLiteral("SELECT sync_id FROM trash_items")));
+    QStringList identities;
+    while (rows.next()) {
+        identities.append(rows.value(0).toString());
+    }
+    rows.finish();
+    QCOMPARE(identities.size(), 2);
+    for (const QString& identity : identities) {
+        QVERIFY(queued(QStringLiteral("trash_items"), identity));
+        QCOMPARE(versionCount(QStringLiteral("trash_items"), identity), int(trash->fields.size()));
+    }
+
+    // 再打开一次：身份不变，已经发出去的不会重新排队。
+    QVERIFY(markEverythingSent());
+    QVERIFY(DatabaseManager::instance()->createTables());
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 21);
+    for (const QString& identity : identities) {
+        QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id = '%1'").arg(identity)), 1);
+        QVERIFY(!queued(QStringLiteral("trash_items"), identity));
+    }
+    QCOMPARE(snapshotOf(), before);
+}
+
+void SyncTests::trashSnapshotsReplaceTheTrashOnJoinAndRollback()
+{
+    // 产品保证：首次加入和恢复备份的全局回滚都带上废纸篓——整体替换之后，本机的废纸篓与发出快照的那台
+    // 一模一样（身份和内容逐字相同），本机原来多出来的项消失，快照里没有的项不会残留。
+    const Device a = openDevice(QStringLiteral("trash-a"));
+    const Device b = openDevice(QStringLiteral("trash-b"));
+    // 内容里带引号、反斜杠、换行转义和 emoji：快照走一遍 JSON，文本必须原样回来。
+    const QString tricky = QStringLiteral("{\"v\":1,\"title\":\"带\\\"引号\\\"、\\\\ 和\\n换行 😀\"}");
+    QVERIFY(!addTrashRow(a, QStringLiteral("task"), QStringLiteral("origin-a1"), QStringLiteral("A 的第一项"), tricky,
+                         QStringLiteral("2026-10-05T01:00:00.123Z")).isEmpty());
+    QVERIFY(!addTrashRow(a, QStringLiteral("memo"), QStringLiteral("origin-a2"), QStringLiteral("A 的第二项"),
+                         QStringLiteral("{\"v\":1}"), QStringLiteral("2026-10-06T01:00:00.456Z")).isEmpty());
+    QVERIFY(!addTrashRow(b, QStringLiteral("task"), QStringLiteral("origin-b1"), QStringLiteral("B 本机的，应被替换"),
+                         QStringLiteral("{\"v\":1}"), QStringLiteral("2026-10-04T01:00:00.000Z")).isEmpty());
+    SyncStore sa(a.connection), sb(b.connection);
+
+    // 首次加入：B 以 A 的快照为准。
+    QVERIFY(trashDump(a) != trashDump(b));
+    const SyncBatch original = throughJson(sa.exportSnapshot());
+    const SyncStore::ApplyResult joined = sb.replaceWithSnapshot(original);
+    QVERIFY2(joined.ok, qPrintable(joined.error));
+    QVERIFY(joined.changedTables.contains(QStringLiteral("trash_items")));
+    QCOMPARE(trashRows(b), 2);
+    QCOMPARE(trashDump(b), trashDump(a));
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE title = 'B 本机的，应被替换'")), 0);
+
+    // 全局回滚：B 加入之后自己动了废纸篓；A 恢复了备份，废纸篓变成另一个样子（少了第一项，多了一项）。
+    QVERIFY(exec(b, QStringLiteral("DELETE FROM trash_items WHERE origin_sync_id = 'origin-a2'")));
+    QVERIFY(!addTrashRow(b, QStringLiteral("task"), QStringLiteral("origin-b2"), QStringLiteral("加入之后 B 放的"),
+                         QStringLiteral("{\"v\":1}"), QStringLiteral("2026-10-06T02:00:00.000Z")).isEmpty());
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM trash_items WHERE origin_sync_id = 'origin-a1'")));
+    QVERIFY(!addTrashRow(a, QStringLiteral("countdown_goal"), QStringLiteral("origin-a3"),
+                         QStringLiteral("A 恢复后多出的一项"), QStringLiteral("{\"v\":1}"),
+                         QStringLiteral("2026-10-06T03:00:00.000Z")).isEmpty());
+    QVERIFY(trashDump(a) != trashDump(b));
+    QVERIFY(sa.beginEpochAfterRestore(0, a.id));
+    const SyncStore::ApplyResult rolled = sb.replaceWithSnapshot(throughJson(sa.exportSnapshot()));
+    QVERIFY2(rolled.ok, qPrintable(rolled.error));
+    QVERIFY(rolled.changedTables.contains(QStringLiteral("trash_items")));
+    QCOMPARE(sb.epoch(), qint64(1));
+    QCOMPARE(trashRows(b), 2);
+    QCOMPARE(trashDump(b), trashDump(a));
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE title = '加入之后 B 放的'")), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE origin_sync_id = 'origin-a1'")), 0);
+}
+
+void SyncTests::trashLateCopyDoesNotComeBackAfterAnEarlyRestore()
+{
+    // 产品保证：两台设备各自删了同一条记录，一台在收到另一台那一份之前就恢复了它，之后晚到的那一份不会让
+    // 这一项重新出现在废纸篓里（否则再点一次「恢复」就多出第二份）；两台最后都是 0 项、任务恰好一条，
+    // 同步日志里没有废纸篓条目。
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    TrashScenario s;
+    setUpTrashScenario(cloud, QStringLiteral("抢先恢复"), &s);
+    QVERIFY(!QTest::currentTestFailed());
+    deleteTaskOn(s.a, s.task);
+    deleteTaskOn(s.b, s.task);
+    QCOMPARE(trashRows(s.a), 1);
+    QCOMPARE(trashRows(s.b), 1);
+
+    // A 在收到 B 那一份之前恢复。
+    QVariantMap restored;
+    withServices(s.a, [&] {
+        const QVariantList items = TrashService::instance()->readItems().value(QStringLiteral("items")).toList();
+        QVERIFY(items.size() == 1);
+        restored = TrashService::instance()->restoreItem(items.first().toMap().value(QStringLiteral("id")).toInt());
+    });
+    QVERIFY2(restored.value(QStringLiteral("ok")).toBool(), qPrintable(restored.value(QStringLiteral("error")).toString()));
+    // 前提：A 的废纸篓空了、任务回来了；B 那一份还在 B 手里，A 没见过它——这才是「晚到」。
+    QCOMPARE(trashRows(s.a), 0);
+    QCOMPARE(trashRows(s.b), 1);
+    QCOMPARE(count(s.a, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '抢先恢复'")), 1);
+    QCOMPARE(count(s.b, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '抢先恢复'")), 0);
+
+    // 同步一次之后、再同步一轮之后，两台都是空的、任务各一条、日志里没有废纸篓条目。
+    for (int round = 0; round < 2; ++round) {
+        syncAll(cloud, {s.a, s.b});
+        for (const Device& d : {s.a, s.b}) {
+            QCOMPARE(trashRows(d), 0);
+            QCOMPARE(count(d, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '抢先恢复'")), 1);
+            QCOMPARE(trashLogRows(d), 0);
+            QVariantList items;
+            withServices(d, [&] { items = TrashService::instance()->readItems().value(QStringLiteral("items")).toList(); });
+            QVERIFY(items.isEmpty());
+        }
+    }
+    // 恢复出来的是新记录：两台身份相同，且不是原来的身份。
+    const QString restoredId = scalar(s.a, QStringLiteral("SELECT sync_id FROM tasks WHERE title = '抢先恢复'")).toString();
+    QVERIFY(!restoredId.isEmpty());
+    QVERIFY(restoredId != s.task);
+    QCOMPARE(scalar(s.b, QStringLiteral("SELECT sync_id FROM tasks WHERE title = '抢先恢复'")).toString(), restoredId);
+}
+
+void SyncTests::trashRowIdentityComesFromTheOriginalRecordAndFallsBackToRandom()
+{
+    // 产品保证：废纸篓记录的身份由被删的原记录推出（'trash-' 加原记录的 sync_id）——两台设备各写的同一条才是同一条，
+    // 一台处理之后留下的删除记录才挡得住另一台晚到的那份；这个身份用不了（已被占用、已有它的删除记录）
+    // 或原记录身份为空时，退回随机身份，而且删除照样成功，不会因为唯一索引失败。
+    const QRegularExpression randomIdentity(QStringLiteral("^[0-9a-f]{32}$"));
+    const auto trashIdentityOf = [](const QString& origin) {
+        return scalar(QStringLiteral("SELECT sync_id FROM trash_items WHERE origin_sync_id = '%1'").arg(origin)).toString();
+    };
+
+    // 一、正常：经 TaskManager::deleteTask 删除，身份由原任务的 sync_id 推出。
+    const int normalTask = TaskManager::instance()->createTask(QStringLiteral("身份：正常"), today(), -1, 0, QString());
+    QVERIFY(normalTask > 0);
+    const QString normalOrigin = syncIdOf(QStringLiteral("tasks"), normalTask);
+    QVERIFY(TaskManager::instance()->deleteTask(normalTask));
+    QCOMPARE(trashIdentityOf(normalOrigin), QStringLiteral("trash-") + normalOrigin);
+
+    // 二、这个身份已被别的废纸篓记录占着（外部写入之类）：退回随机，删除成功，占着的那一行原样还在。
+    const int occupiedTask = TaskManager::instance()->createTask(QStringLiteral("身份：被占用"), today(), -1, 0, QString());
+    QVERIFY(occupiedTask > 0);
+    const QString occupiedOrigin = syncIdOf(QStringLiteral("tasks"), occupiedTask);
+    const QString occupiedIdentity = QStringLiteral("trash-") + occupiedOrigin;
+    QVERIFY(exec(QStringLiteral("INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at, sync_id) "
+                                "VALUES ('task', 'someone-else', '占着身份的一项', '{\"v\":1}', "
+                                "'2026-10-06T01:00:00.000Z', '%1')").arg(occupiedIdentity)));
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id = '%1'").arg(occupiedIdentity)), 1);
+    QVERIFY(TaskManager::instance()->deleteTask(occupiedTask));
+    QVERIFY(randomIdentity.match(trashIdentityOf(occupiedOrigin)).hasMatch());
+    QCOMPARE(scalar(QStringLiteral("SELECT origin_sync_id FROM trash_items WHERE sync_id = '%1'")
+                        .arg(occupiedIdentity)).toString(), QStringLiteral("someone-else"));
+
+    // 三、这个身份已经有一条删除记录（外部写入之类）：退回随机，删除成功。
+    // 还用这个身份的话，对方会按「删除优先」忽略这一条新写的记录，两台就不一致了。
+    const int buriedTask = TaskManager::instance()->createTask(QStringLiteral("身份：有删除记录"), today(), -1, 0, QString());
+    QVERIFY(buriedTask > 0);
+    const QString buriedOrigin = syncIdOf(QStringLiteral("tasks"), buriedTask);
+    const QString buriedIdentity = QStringLiteral("trash-") + buriedOrigin;
+    QVERIFY(exec(QStringLiteral("INSERT INTO sync_tombstones (tbl, sync_id, v_time, v_device, kind, merged_into, deleted_at) "
+                                "VALUES ('trash_items', '%1', 1, 'other-device', 'delete', NULL, 1)").arg(buriedIdentity)));
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id = '%1'").arg(buriedIdentity)), 0);
+    QVERIFY(TaskManager::instance()->deleteTask(buriedTask));
+    const QString buriedRowIdentity = trashIdentityOf(buriedOrigin);
+    QVERIFY(randomIdentity.match(buriedRowIdentity).hasMatch());
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id = '%1'").arg(buriedIdentity)), 0);
+
+    // 四、原记录身份为空：退回随机；两行都是空也不会因为撞号而插不进去。
+    for (const QString& title : {QStringLiteral("无来源甲"), QStringLiteral("无来源乙")}) {
+        QVERIFY(exec(QStringLiteral("INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
+                                    "VALUES ('memo', '', '%1', '{\"v\":1}', '2026-10-06T01:00:00.000Z')").arg(title)));
+    }
+    const QString emptyFirst = scalar(QStringLiteral("SELECT sync_id FROM trash_items WHERE title = '无来源甲'")).toString();
+    const QString emptySecond = scalar(QStringLiteral("SELECT sync_id FROM trash_items WHERE title = '无来源乙'")).toString();
+    QVERIFY(randomIdentity.match(emptyFirst).hasMatch());
+    QVERIFY(randomIdentity.match(emptySecond).hasMatch());
+    QVERIFY(emptyFirst != emptySecond);
+}
+
+void SyncTests::trashRecordThatFailsToApplyIsStillLoggedWithItsTitle()
+{
+    // 产品保证：废纸篓记录不写冲突日志，但应用失败被跳过的那一条仍要记，而且名字写它的标题，
+    // 让人认得出是哪一项没同步过来，而不是写成别的类型的默认样子（「专注 ？（0 分钟）」）。
+    const Device b = openDevice(QStringLiteral("trash-b"));
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const SyncVersion version{kFuture, remote};
+    SyncBatch batch;
+    batch.device = remote;
+    // 类型为空串撞上表上的 CHECK(length(kind) > 0)，这一条应用不进去；旁边夹一条正常的，它照常落地、也不记日志。
+    SyncRecord bad;
+    bad.table = QStringLiteral("trash_items");
+    bad.syncId = QStringLiteral("trash-bad-origin");
+    bad.fields.insert(QStringLiteral("kind"), {QString(QStringLiteral("")), version, {}});
+    bad.fields.insert(QStringLiteral("origin_sync_id"), {QStringLiteral("bad-origin"), version, {}});
+    bad.fields.insert(QStringLiteral("title"), {QStringLiteral("没能同步过来的那一项"), version, {}});
+    bad.fields.insert(QStringLiteral("payload"), {QStringLiteral("{\"v\":1}"), version, {}});
+    bad.fields.insert(QStringLiteral("deleted_at"), {QStringLiteral("2026-10-06T01:00:00.000Z"), version, {}});
+    SyncRecord good;
+    good.table = QStringLiteral("trash_items");
+    good.syncId = QStringLiteral("trash-good-origin");
+    good.fields.insert(QStringLiteral("kind"), {QStringLiteral("memo"), version, {}});
+    good.fields.insert(QStringLiteral("origin_sync_id"), {QStringLiteral("good-origin"), version, {}});
+    good.fields.insert(QStringLiteral("title"), {QStringLiteral("正常落地的一项"), version, {}});
+    good.fields.insert(QStringLiteral("payload"), {QStringLiteral("{\"v\":1}"), version, {}});
+    good.fields.insert(QStringLiteral("deleted_at"), {QStringLiteral("2026-10-06T02:00:00.000Z"), version, {}});
+    batch.records = {bad, good};
+    QCOMPARE(trashRows(b), 0);
+    QCOMPARE(trashLogRows(b), 0);
+
+    QTest::ignoreMessage(QtWarningMsg,
+                         QRegularExpression(QStringLiteral("^Skipped sync record \"trash_items\" \"trash-bad-origin\"")));
+    const SyncStore::ApplyResult result = SyncStore(b.connection).applyRemote(batch);
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(result.skippedRecords, 1);
+    // 坏的没有落地，正常的落地了。
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id = 'trash-bad-origin'")), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id = 'trash-good-origin'")), 1);
+    // 日志里废纸篓的条目只有被跳过的那一条，名字是它的标题。
+    QCOMPARE(trashLogRows(b), 1);
+    QCOMPARE(scalar(b, QStringLiteral("SELECT kind FROM sync_conflict_log WHERE tbl = 'trash_items'")).toString(),
+             QStringLiteral("skipped"));
+    QCOMPARE(scalar(b, QStringLiteral("SELECT record_label FROM sync_conflict_log WHERE tbl = 'trash_items'")).toString(),
+             QStringLiteral("没能同步过来的那一项"));
+}
+
+void SyncTests::trashDeletionBeatingALateEditWritesNoSyncLog()
+{
+    // 产品保证：一台已经把某一项废纸篓记录删掉（彻底删除、清空、清理过期项），另一台晚到的修改按「删除优先」
+    // 被挡住时，同步日志里不写废纸篓条目——那一份是删除那一刻的快照，不是谁的编辑，挡住它没有丢掉修改。
+    // 两条记录各走一条「删除优先」的路径：修改先发出、到 B 时被 B 手里的删除记录挡住；
+    // 修改还没发出就先收到 B 的删除，本机还没发出去的修改随删除作废。
+    const Device a = openDevice(QStringLiteral("trash-a"));
+    const Device b = openDevice(QStringLiteral("trash-b"));
+    FakeCloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    const QString payload = QStringLiteral("{\"v\":1}");
+    const QString outgoing = addTrashRow(a, QStringLiteral("memo"), QStringLiteral("origin-late-1"),
+                                         QStringLiteral("修改先发出"), payload, QStringLiteral("2026-10-06T01:00:00.000Z"));
+    const QString pending = addTrashRow(a, QStringLiteral("memo"), QStringLiteral("origin-late-2"),
+                                        QStringLiteral("修改还没发出"), payload, QStringLiteral("2026-10-06T02:00:00.000Z"));
+    QVERIFY(!outgoing.isEmpty() && !pending.isEmpty());
+    syncAll(cloud, {a, b});
+    // 前提：两台都有这两行，日志是空的。
+    QCOMPARE(trashRows(a), 2);
+    QCOMPARE(trashRows(b), 2);
+    QCOMPARE(trashLogRows(a), 0);
+    QCOMPARE(trashLogRows(b), 0);
+
+    // 路径一：B 删掉第一行，A 同时改了它的标题；两边都先发出，再互相应用。
+    QVERIFY(exec(b, QStringLiteral("DELETE FROM trash_items WHERE sync_id = '%1'").arg(outgoing)));
+    QVERIFY(exec(a, QStringLiteral("UPDATE trash_items SET title = '晚到的修改（一）' WHERE sync_id = '%1'").arg(outgoing)));
+    syncAll(cloud, {a, b});
+
+    // 路径二：B 删掉第二行并发出；A 改了它的标题，在发出自己的修改之前先收到 B 的删除。
+    QVERIFY(exec(b, QStringLiteral("DELETE FROM trash_items WHERE sync_id = '%1'").arg(pending)));
+    QVERIFY(cloud.publish(b) > 0);
+    QVERIFY(exec(a, QStringLiteral("UPDATE trash_items SET title = '晚到的修改（二）' WHERE sync_id = '%1'").arg(pending)));
+    for (const SyncStore::ApplyResult& result : cloud.pull(a)) {
+        QVERIFY2(result.ok, qPrintable(result.error));
+    }
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id = '%1'").arg(pending)), 0);
+    syncAll(cloud, {a, b});
+
+    // 两条都没了，没有哪一份修改把它们带回来；两台的日志里都没有废纸篓条目。
+    for (const Device& d : {a, b}) {
+        QCOMPARE(trashRows(d), 0);
+        QCOMPARE(trashLogRows(d), 0);
+    }
 }
 
 QTEST_MAIN(SyncTests)

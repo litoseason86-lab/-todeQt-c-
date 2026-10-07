@@ -11,6 +11,7 @@
 #include "SyncSchema.h"
 #include "SyncedSettings.h"
 #include "TaskManager.h"
+#include "TrashStore.h"
 
 namespace SyncNotifier {
 
@@ -66,35 +67,45 @@ void publish(const SyncStore::ApplyResult& result)
         }
     }
 
+    publishTableChanges(changed, !result.deletedTaskIds.isEmpty());
+}
+
+void publishTableChanges(const QSet<QString>& changedTables, bool tasksDeleted)
+{
     // 科目变了会连带例行列表（RoutineManager 把 categoriesChanged 转成 routinesChanged），不必再单独发一次。
-    if (changed.contains(QStringLiteral("categories"))) {
+    if (changedTables.contains(QStringLiteral("categories"))) {
         emit CategoryManager::instance()->categoriesChanged();
-    } else if (changed.contains(QStringLiteral("routines"))) {
+    } else if (changedTables.contains(QStringLiteral("routines"))) {
         emit RoutineManager::instance()->routinesChanged();
     }
-    if (changed.contains(QStringLiteral("focus_sessions")) || changed.contains(QStringLiteral("rest_sessions"))) {
+    if (changedTables.contains(QStringLiteral("focus_sessions")) || changedTables.contains(QStringLiteral("rest_sessions"))) {
         emit FocusHistoryService::instance()->historyChanged();
     }
     // 专注记录变了，任务上的累计时长也跟着变，所以任务列表同样要刷新。应用里装配层已经把 historyChanged
     // 接到了 tasksChanged 上，这里仍然直接发一次：不依赖那条接线还在，多刷新一次的代价很小。
-    if (changed.contains(QStringLiteral("tasks")) || changed.contains(QStringLiteral("focus_sessions"))
-        || !result.deletedTaskIds.isEmpty()) {
+    if (changedTables.contains(QStringLiteral("tasks")) || changedTables.contains(QStringLiteral("focus_sessions"))
+        || tasksDeleted) {
         emit TaskManager::instance()->tasksChanged();
     }
     // 第二期（计划 051）的三张表，各自发自己的刷新信号。倒计时服务把目标缓存在列表模型里，要重新读一遍库，
     // 它读完会发 goalsReloaded；另外两个服务的页面收到信号后自己重查。
-    if (changed.contains(QStringLiteral("schedule_entries"))) {
+    if (changedTables.contains(QStringLiteral("schedule_entries"))) {
         emit ScheduleService::instance()->scheduleChanged();
     }
-    if (changed.contains(QStringLiteral("knowledge_gaps"))) {
+    if (changedTables.contains(QStringLiteral("knowledge_gaps"))) {
         emit KnowledgeGapService::instance()->gapsChanged();
     }
-    if (changed.contains(QStringLiteral("memos"))) {
+    if (changedTables.contains(QStringLiteral("memos"))) {
         emit MemoService::instance()->memosChanged();
     }
-    if (changed.contains(QStringLiteral("countdown_goals"))) {
+    if (changedTables.contains(QStringLiteral("countdown_goals"))) {
         CountdownService::instance()->reload();
     }
+    // 废纸篓记录随同步到达（另一台删除、恢复、清空、清理过期项）：让废纸篓页重读。
+    // TrashService 依赖本文件（恢复之后复用上面这段按表刷新），这里不能反过来依赖它，
+    // 所以经 TrashNotifier 转发：TrashService 构造时把它接到自己的 trashChanged。
+    if (changedTables.contains(QStringLiteral("trash_items"))) {
+        emit TrashNotifier::instance()->changed();
+    }
 }
-
 } // namespace SyncNotifier
