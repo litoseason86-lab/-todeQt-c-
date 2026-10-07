@@ -456,6 +456,15 @@ QVariantMap failureMap(const QString& error)
     return {{QStringLiteral("ok"), false}, {QStringLiteral("error"), error}};
 }
 
+// 这一项已经不在废纸篓里（另一台刚恢复或删掉了它）。带结构化的 code，页面据此重读列表，
+// 不靠逐字比较提示文案：文案以后改了，判断也不会悄悄失效。
+QVariantMap goneMap()
+{
+    QVariantMap map = failureMap(kGone);
+    map.insert(QStringLiteral("code"), QStringLiteral("gone"));
+    return map;
+}
+
 // 删掉 id 这一行，以及 origin_sync_id 非空且相同的全部行（两台同时删了同一条各写一条）。返回删除条数，失败 -1。
 int deleteRowAndTwins(QSqlDatabase& db, int trashId, const QString& origin)
 {
@@ -615,7 +624,8 @@ QVariantMap TrashService::readItems() const
             {QStringLiteral("blockedReason"), problem},
             {QStringLiteral("details"), details}});
     }
-    return {{QStringLiteral("ok"), true}, {QStringLiteral("error"), QString()}, {QStringLiteral("items"), items}};
+    return {{QStringLiteral("ok"), true}, {QStringLiteral("error"), QString()},
+            {QStringLiteral("today"), today.toString(Qt::ISODate)}, {QStringLiteral("items"), items}};
 }
 
 int TrashService::purgeExpired()
@@ -699,7 +709,7 @@ QVariantMap TrashService::deleteItem(int trashId)
         if (!query.next()) {
             query.finish();
             db.rollback();
-            return failureMap(kGone); // 另一台可能刚恢复或删掉了它
+            return goneMap(); // 另一台可能刚恢复或删掉了它
         }
         origin = query.value(0).toString();
     }
@@ -770,7 +780,7 @@ QVariantMap TrashService::restoreItem(int trashId)
         if (!query.next()) {
             query.finish();
             db.rollback();
-            return failureMap(kGone);
+            return goneMap();
         }
         kind = query.value(0).toString();
         title = query.value(1).toString();

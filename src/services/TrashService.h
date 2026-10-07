@@ -17,18 +17,23 @@ public:
     // 保留期按逻辑日算：逻辑日 D 删除的，D 当天剩 30 天，D+29 剩 1 天，D+30 起到期。
     static constexpr int kRetentionDays = 30;
 
-    // { ok, error, items }。读失败 ok=false 且 items 为空、不发信号，不把失败当成空废纸篓（同 MemoService::readMemos）。
+    // { ok, error, today, items }。读失败 ok=false 且 items 为空、不发信号，不把失败当成空废纸篓（同 MemoService::readMemos），
+    // 此时也不给 today。
+    // today 是逻辑今天（yyyy-MM-dd）：与每项的 remainingDays 用同一个「现在」和同一个日界点算出，
+    // 页面判断「今天 / 昨天 / 是否今年」只拿它去比 deletedDate，不自己算日期（「今天」只在 C++ 里算一份）。
     // 服务只给结构化数据，不拼说明句子（同周复盘的做法）。
     // 每项的 restorable 为 false 时，blockedReason 说明原因："corrupted"（内容损坏）或 "needsUpdate"
     // （更新版本新增的类型或更高的内容格式），判定与 restoreItem 共用；能恢复时为空串。
     Q_INVOKABLE QVariantMap readItems() const;
     // 删除到期的全部项，一个事务。返回删除条数，失败返回 -1；删了才发 trashChanged。
     Q_INVOKABLE int purgeExpired();
-    // 彻底删除一项，连同 origin_sync_id 相同的全部项（两台同时删了同一条会各写一条）。
+    // 彻底删除一项，连同 origin_sync_id 相同的全部项（身份退回随机时同一原记录会有多行）。
+    // { ok, error, code }；这一项已不在废纸篓里（另一台刚恢复或删掉）时 code 为 "gone"，其余失败不给 code。
     Q_INVOKABLE QVariantMap deleteItem(int trashId);
     // { ok, error, count }
     Q_INVOKABLE QVariantMap emptyTrash();
     // { ok, error, kind, title, conflict }；conflict 只在专注/休息撞时间时给 "focus" 或 "rest"。
+    // 这一项已不在废纸篓里时只给 { ok, error, code: "gone" }，同 deleteItem。
     // 恢复出来的是新记录：同步「删除优先」，原来的身份已经作废。
     Q_INVOKABLE QVariantMap restoreItem(int trashId);
 

@@ -740,7 +740,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
-                text: "该课程会从整张课表移除，不能撤销。"
+                text: "该课程会从整张课表移除。"
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontSm
                 color: Theme.inkSoft

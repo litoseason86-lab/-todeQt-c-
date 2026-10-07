@@ -149,6 +149,70 @@ TestCase {
         verify(findChild(sidebar, "sidebarItem-设") !== null)
     }
 
+    // 「废纸篓」是固定入口，不是可排序页面：它不在 orderedEntryIds / 呈现表里（上面「每个默认条目都有呈现定义」
+    // 的前提「每个页面都可排序」对它不成立，这里显式写出这个例外），而是固定在「设置」正上方。
+    // 产品保证：侧栏底部的顺序是 …可排序条目 → 废纸篓 → 设置，两者紧挨着。
+    // 抓住的错误实现：废纸篓被加进 entryPresentation / 排序列表，或摆在设置下面、离设置很远。
+    function test_trashEntryIsPinnedRightAboveSettingsAndNotSortable() {
+        var trash = findChild(sidebar, "sidebarItem-废")
+        var settings = findChild(sidebar, "sidebarItem-设")
+        verify(trash)
+        verify(settings)
+        compare(trash.text, "废纸篓")
+        compare(trash.iconName, "trash")
+        verify(sidebar.orderedEntryIds.indexOf("trash") < 0, "不在可排序列表里")
+        compare(sidebar.entryPresentation["trash"], undefined)
+        compare(sidebar.fallbackOrder.indexOf("trash"), -1)
+        verify(testCase.defaultOrder().indexOf("trash") < 0)
+        // 紧贴设置：两者之间只隔一个条目间距（Theme.space4），中间没有别的条目。
+        compare(settings.y - (trash.y + trash.height), Theme.space4)
+        // 在最后一个可排序条目之下。
+        var last = findChild(sidebar, "sidebarItem-" + testCase.markersInOrder().slice(-1)[0])
+        verify(last)
+        verify(trash.y >= last.y + last.height)
+    }
+
+    // 产品保证：用户把侧栏顺序改成别的样子（少几项、换位置）之后，废纸篓仍固定在设置上方，不会被排走或消失。
+    function test_trashEntryStaysPinnedWhenTheUserReordersTheSidebar() {
+        settingsMock.sidebarOrder = ["knowledgeGaps", "today"]
+        wait(20)
+        var trash = findChild(sidebar, "sidebarItem-废")
+        var settings = findChild(sidebar, "sidebarItem-设")
+        verify(trash)
+        compare(sidebar.orderedEntryIds.length, 2)
+        verify(sidebar.orderedEntryIds.indexOf("trash") < 0)
+        compare(settings.y - (trash.y + trash.height), Theme.space4)
+        // 顺序里只有两项时，它离那两项很远（中间是弹性空白），不是跟在它们后面。
+        var last = findChild(sidebar, "sidebarItem-今")
+        verify(trash.y > last.y + last.height + 100)
+    }
+
+    // 产品保证：当前页是废纸篓时，它的条目是选中样式（与其它条目同一套），别的页时不是。
+    function test_trashEntryShowsSelectedStyleOnlyOnTheTrashPage() {
+        var trash = findChild(sidebar, "sidebarItem-废")
+        verify(trash)
+        compare(trash.isActive, false)
+        sidebar.currentView = "trash"
+        compare(trash.isActive, true)
+        // 底色和描边带 70ms 的颜色过渡，等它走完再比。
+        tryCompare(trash, "color", sidebar.sidebarItemActiveColor, 2000)
+        tryCompare(trash.border, "color", sidebar.sidebarItemActiveBorderColor, 2000)
+        // 选中的是废纸篓时，可排序条目没有一个是选中的。
+        var today = findChild(sidebar, "sidebarItem-今")
+        compare(today.isActive, false)
+        sidebar.currentView = "today"
+        compare(trash.isActive, false)
+    }
+
+    // 产品保证：点废纸篓条目发出 itemClicked("trash")，主窗口据此切页。
+    function test_clickingTheTrashEntryReportsTheTrashView() {
+        var hit = findChild(sidebar, "sidebarHitArea-废")
+        verify(hit)
+        mouseClick(hit)
+        compare(clickSpy.count, 1)
+        compare(clickSpy.signalArguments[0][0], "trash")
+    }
+
     function test_clickStillReportsTheRightView() {
         settingsMock.sidebarOrder = ["knowledgeGaps", "today", "focus"]
         wait(20)

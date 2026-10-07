@@ -62,6 +62,7 @@ private slots:
 
     // 列表、去重、清理
     void readItemsOrdersNewestFirstAndDescribesEachItem();
+    void readItemsReportsTheLogicalTodayThatRemainingDaysUse();
     void twinsSharingAnOriginAreListedOnceAndHandledTogether();
     void expiredRowsAreHiddenAndFutureDeletionTimesAreClamped();
     void deleteItemAndEmptyTrashRemoveRows();
@@ -999,7 +1000,7 @@ void TrashServiceTests::unknownKindOrFuturePayloadCannotBeRestored()
 void TrashServiceTests::alreadyGoneItemIsReported()
 {
     // 产品保证：另一台设备刚恢复或删掉了这一项时，再恢复/再彻底删除要如实说「这一项已经不在废纸篓里了」，
-    // 并且不会恢复出第二份。
+    // 并且不会恢复出第二份；结果带 code "gone"，页面凭它重读列表（不比文案）。别的失败不带这个 code。
     const int id = seedKind(QStringLiteral("task"));
     QVERIFY(TaskManager::instance()->deleteTask(id));
     const int trashId = lastTrashId();
@@ -1010,10 +1011,19 @@ void TrashServiceTests::alreadyGoneItemIsReported()
     const QVariantMap again = TrashService::instance()->restoreItem(trashId);
     QVERIFY(!again.value(QStringLiteral("ok")).toBool());
     QCOMPARE(again.value(QStringLiteral("error")).toString(), gone);
+    QCOMPARE(again.value(QStringLiteral("code")).toString(), QStringLiteral("gone"));
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
     const QVariantMap deleted = TrashService::instance()->deleteItem(trashId);
     QVERIFY(!deleted.value(QStringLiteral("ok")).toBool());
     QCOMPARE(deleted.value(QStringLiteral("error")).toString(), gone);
+    QCOMPARE(deleted.value(QStringLiteral("code")).toString(), QStringLiteral("gone"));
+
+    // 对照：内容损坏这类别的失败不带 code，页面不会因此重读。
+    const int corrupted = insertTrashRow(QStringLiteral("task"), QStringLiteral("bad"), QStringLiteral("损坏项"),
+                                         QStringLiteral("not json {"), utcText(QDateTime::currentDateTime()));
+    const QVariantMap broken = TrashService::instance()->restoreItem(corrupted);
+    QVERIFY(!broken.value(QStringLiteral("ok")).toBool());
+    QVERIFY(broken.value(QStringLiteral("code")).toString().isEmpty());
 }
 
 void TrashServiceTests::restoreEmitsRefreshSignalsForWhatChanged()
@@ -1092,6 +1102,42 @@ void TrashServiceTests::readItemsOrdersNewestFirstAndDescribesEachItem()
     QCOMPARE(memo.value(QStringLiteral("categoryName")).toString(), QString()); // 非专注记录科目不在时给空串
     QCOMPARE(memo.value(QStringLiteral("remainingDays")).toInt(), 30);
     QVERIFY(memo.value(QStringLiteral("details")).toMap().isEmpty());
+}
+
+void TrashServiceTests::readItemsReportsTheLogicalTodayThatRemainingDaysUse()
+{
+    // 产品保证：读取结果顶层的 today 是逻辑今天（凌晨日界点之前算前一天），与每项的 remainingDays
+    // 用同一个「现在」和同一个日界点——页面只拿 today 去比删除日期，不自己算日期。
+    // 数据：一条 10-06 中午删除的备忘；「现在」取 10-07 的 03:59 与 04:00（日界点 4:00）。
+    // 03:59 的逻辑日仍是 10-06（today=10-06、还剩 30 天），04:00 起是 10-07（today=10-07、还剩 29 天）；
+    // 按自然日取 today 的实现在 03:59 会给出 10-07，与 remainingDays 对不上。再把日界点改成 0 点，
+    // 同一个 03:59 就已经是 10-07：today 跟着设置走，不是写死的 4。
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 4);
+    insertTrashRow(QStringLiteral("memo"), QStringLiteral("m"), QStringLiteral("备忘"), QStringLiteral("{\"v\":1}"),
+                   utcText(QDateTime(QDate(2026, 10, 6), QTime(12, 0))));
+
+    auto read = [](const QDateTime& now) {
+        TrashService::instance()->setNowForTesting(now);
+        return TrashService::instance()->readItems();
+    };
+    auto remaining = [](const QVariantMap& result) {
+        return result.value(QStringLiteral("items")).toList().first().toMap()
+            .value(QStringLiteral("remainingDays")).toInt();
+    };
+
+    const QVariantMap beforeBoundary = read(QDateTime(QDate(2026, 10, 7), QTime(3, 59)));
+    QVERIFY(beforeBoundary.value(QStringLiteral("ok")).toBool());
+    QCOMPARE(beforeBoundary.value(QStringLiteral("today")).toString(), QStringLiteral("2026-10-06"));
+    QCOMPARE(remaining(beforeBoundary), 30);
+
+    const QVariantMap atBoundary = read(QDateTime(QDate(2026, 10, 7), QTime(4, 0)));
+    QCOMPARE(atBoundary.value(QStringLiteral("today")).toString(), QStringLiteral("2026-10-07"));
+    QCOMPARE(remaining(atBoundary), 29);
+
+    AppSettings::instance()->setDayStartHour(0);
+    const QVariantMap midnightBoundary = read(QDateTime(QDate(2026, 10, 7), QTime(3, 59)));
+    QCOMPARE(midnightBoundary.value(QStringLiteral("today")).toString(), QStringLiteral("2026-10-07"));
+    QCOMPARE(remaining(midnightBoundary), 29);
 }
 
 void TrashServiceTests::twinsSharingAnOriginAreListedOnceAndHandledTogether()

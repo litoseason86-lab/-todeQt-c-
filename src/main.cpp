@@ -411,6 +411,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("memoService"), MemoService::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("trashService"), TrashService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("memoTextLayout"), &memoTextLayout);
     engine.rootContext()->setContextProperty(QStringLiteral("knowledgeGapService"), KnowledgeGapService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("routineManager"), RoutineManager::instance());

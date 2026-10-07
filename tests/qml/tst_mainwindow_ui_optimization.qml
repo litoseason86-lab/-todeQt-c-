@@ -237,6 +237,32 @@ TestCase {
         function normalize(key, modifiers) { return "" }
     }
 
+    // 废纸篓服务替身：只够页面读一次列表、恢复一项。
+    QtObject {
+        id: trashService
+
+        signal trashChanged
+        property var calls: []
+
+        function purgeExpired() {
+            calls.push("purgeExpired")
+            return 0
+        }
+
+        function readItems() {
+            calls.push("readItems")
+            return { ok: true, error: "", today: "2026-10-07", items: [{
+                id: 5, kind: "memo", title: "英语一 真题进度", deletedDate: "2026-10-07", remainingDays: 30,
+                categoryName: "", categoryColor: "", restorable: true, blockedReason: "", details: {}
+            }] }
+        }
+
+        function restoreItem(id) {
+            calls.push("restoreItem:" + id)
+            return { ok: true, error: "", kind: "memo", title: "英语一 真题进度", conflict: "" }
+        }
+    }
+
     MainWindow {
         id: mainWindow
 
@@ -375,7 +401,8 @@ TestCase {
             { tag: "todayFocus", page: "todayFocusViewPage" },
             { tag: "schedule", page: "schedulePlanViewPage" },
             { tag: "memo", page: "memoViewPage" },
-            { tag: "knowledgeGaps", page: "knowledgeGapViewPage" }
+            { tag: "knowledgeGaps", page: "knowledgeGapViewPage" },
+            { tag: "trash", page: "trashViewPage" }
         ]
     }
 
@@ -387,11 +414,41 @@ TestCase {
         compare(stack.children[index].objectName, data.page)
     }
 
+    // 产品保证：废纸篓能从正式页面栈进入（第 11 页，页面随之激活并读取），恢复成功后底部提示条写「已恢复「标题」」。
+    // 抓住的错误实现：页面编号错位、pageActive 没接上、恢复信号没接成提示条。
+    function test_trashPageIsPageElevenAndRestoreShowsToast() {
+        const oldReduceMotion = Theme.reduceMotion
+        Theme.reduceMotion = true
+        appSettings.reduceMotion = true
+        try {
+            mainWindow.trashServiceRef = trashService
+            const stack = findChild(mainWindow, "mainViewStack")
+            const page = findChild(mainWindow, "trashViewPage")
+            compare(page.pageActive, false, "前提：没切过去之前不激活")
+            trashService.calls = []
+            mainWindow.switchToView("trash")
+            compare(stack.currentIndex, 11)
+            compare(stack.children[11], page)
+            compare(page.pageActive, true)
+            compare(trashService.calls.join(","), "purgeExpired,readItems")
+            // 这个测试窗口没有 visible: true，收不到真实鼠标事件；这里验证的是接线（信号 → 提示条），
+            // 点按钮本身由 tst_trash_view 覆盖，所以直接走页面的恢复入口。
+            compare(page.items.length, 1)
+            page.restore(page.items[0])
+            const toast = findChild(mainWindow, "globalToast")
+            tryCompare(toast, "shown", true, 3000)
+            compare(findChild(toast, "toastText").text, "已恢复「英语一 真题进度」")
+        } finally {
+            mainWindow.trashServiceRef = null
+            Theme.reduceMotion = oldReduceMotion
+        }
+    }
+
     function test_removedGoalsViewHasNoPageOfItsOwn() {
         const stack = findChild(mainWindow, "mainViewStack")
         verify(stack !== null)
-        // 栈里正好是上面那十页：多一页或少一页，编号就会整体错位。
-        compare(stack.children.length, 11)
+        // 栈里正好是上面那十二页（含 2026-10 追加在栈尾的废纸篓）：多一页或少一页，编号就会整体错位。
+        compare(stack.children.length, 12)
         // 旧配置、旧快捷键里残留的 "goals" 落到默认的今日页，不能落到别的页上。
         compare(mainWindow.viewIndex("goals"), mainWindow.viewIndex("today"))
         verify(findChild(mainWindow, "goalsViewPage") === null)

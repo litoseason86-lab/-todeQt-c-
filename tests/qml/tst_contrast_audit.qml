@@ -331,12 +331,57 @@ TestCase {
         function deleteSession(sessionId) { return true }
     }
 
+    // 废纸篓页的数据源：八类内容各一条，外加一条不能恢复的，列表、空状态、读取失败三种状态都靠它切换。
+    // 不注入的话这页只有「服务不可用」的错误条，卡片、组头、按钮上的字全都进不了体检。
+    QtObject {
+        id: trashService
+
+        signal trashChanged
+
+        property bool readOk: true
+        property bool empty: false
+
+        function purgeExpired() { return 0 }
+        function emptyTrash() { return { ok: true, error: "", count: 0 } }
+        function deleteItem(id) { return { ok: true, error: "" } }
+        function restoreItem(id) { return { ok: true, error: "", kind: "", title: "", conflict: "" } }
+        function row(id, kind, title, date, remaining, category, color, details) {
+            return { id: id, kind: kind, title: title, deletedDate: date, remainingDays: remaining,
+                     categoryName: category, categoryColor: color, restorable: true, blockedReason: "",
+                     details: details }
+        }
+        function readItems() {
+            if (!readOk)
+                return { ok: false, error: "读取废纸篓失败：database is locked", items: [] }
+            if (empty)
+                return { ok: true, error: "", today: "2026-10-07", items: [] }
+            var broken = row(9, "task", "损坏的任务", "2026-10-02", 17, "", "", {})
+            broken.restorable = false
+            broken.blockedReason = "corrupted"
+            return { ok: true, error: "", today: "2026-10-07", items: [
+                row(1, "task", "肖秀荣 1000 题 第 3 章", "2026-10-07", 30, "政治", "#c46f5f", { date: "2026-10-06" }),
+                row(2, "focus_session", "线性代数 第 4 讲", "2026-10-07", 30, "数学", "#6f91a6",
+                    { startTime: "2026-10-06T14:05:00.000", endTime: "2026-10-06T14:50:00.000", durationSeconds: 2700 }),
+                row(3, "memo", "英语一 真题进度", "2026-10-06", 29, "英语", "#9aa66b", {}),
+                row(4, "routine", "背单词 100 个", "2026-10-06", 29, "英语", "#9aa66b", { weekdays: 127 }),
+                row(5, "knowledge_gap", "泰勒公式余项的几种形式", "2026-10-06", 29, "数学", "#6f91a6", { dueDate: "2026-10-08" }),
+                row(6, "schedule_entry", "数据结构", "2026-10-02", 17, "专业课", "#b58aa0",
+                    { weekday: 4, startMinutes: 840, endMinutes: 940, weekStart: 1, weekEnd: 16, weekParity: 0, location: "教三 204" }),
+                broken,
+                row(7, "rest_session", "主动休息", "2026-10-02", 17, "", "",
+                    { startTime: "2026-10-02T21:10:00.000", endTime: "2026-10-02T21:25:00.000", durationSeconds: 900 }),
+                row(8, "countdown_goal", "全国硕士研究生招生考试", "2026-09-12", 6, "", "", { targetDate: "2026-12-19" })
+            ] }
+        }
+    }
+
     MainWindow {
         id: mainWindow
 
         width: testCase.width
         height: testCase.height
         memoServiceRef: memoService
+        trashServiceRef: trashService
         focusHistoryServiceRef: focusHistoryService
         taskManagerRef: taskManager
         categoryManagerRef: categoryManager
@@ -513,7 +558,7 @@ TestCase {
         // 没有入口图标不代表不用体检，它同样是用户天天看的一整页文字。
         var views = ["dashboard", "today", "focus", "week", "month",
                      "stats", "countdown", "schedule", "knowledgeGaps",
-                     "todayFocus", "memo"]
+                     "todayFocus", "memo", "trash"]
         for (var i = 0; i < views.length; ++i) {
             mainWindow.currentView = views[i]
             mainWindow.pendingView = views[i]
@@ -527,6 +572,42 @@ TestCase {
                 verify(findChild(memoPage, "memoGroup1"))
                 verify(findChild(memoPage, "memoRow11"))
                 verify(findChild(memoPage, "memoTitleInput").text.length > 0)
+            }
+            if (views[i] === "trash") {
+                // 产品保证：废纸篓页的列表、操作失败条、空状态、读取失败条在两套主题下都过对比度门禁，
+                // 不能只扫默认的那一屏（空状态和错误条平时一个字都扫不到）。
+                var trashPage = findChild(mainWindow, "trashViewPage")
+                verify(trashPage, "找不到废纸篓页")
+                tryVerify(function () { return findChild(trashPage, "trashRow-9") !== null }, 3000, "前置：列表排好了")
+                verify(findChild(trashPage, "trashGroupHeading-2026-10-07"))
+                verify(findChild(trashPage, "trashMeta-6").text.indexOf("教三 204") > 0)
+                walk(mainWindow, tag + "·废纸篓列表", Theme.surface, 0)
+
+                trashPage.actionError = "没能恢复「线性代数 第 4 讲」：10月6日 14:05–14:50 这段时间已有别的专注记录"
+                tryVerify(function () {
+                    var t = findChild(trashPage, "trashActionErrorText")
+                    return t !== null && t.width > 0 && t.height > 0
+                }, 3000, "前置：操作失败条排好了版")
+                walk(mainWindow, tag + "·废纸篓操作失败条", Theme.surface, 0)
+                trashPage.actionError = ""
+
+                trashService.empty = true
+                trashPage.reload()
+                tryVerify(function () { return trashPage.loaded && !trashPage.hasItems }, 3000)
+                verify(findChild(trashPage, "trashEmptyStateText").visible, "前置：空状态在")
+                walk(mainWindow, tag + "·废纸篓空状态", Theme.surface, 0)
+                trashService.empty = false
+
+                trashService.readOk = false
+                trashPage.reload()
+                tryVerify(function () {
+                    var t = findChild(trashPage, "trashLoadErrorText")
+                    return trashPage.loadError.length > 0 && t !== null && t.width > 0 && t.height > 0
+                }, 3000, "前置：读取失败条排好了版")
+                walk(mainWindow, tag + "·废纸篓读取失败条", Theme.surface, 0)
+                trashService.readOk = true
+                trashPage.reload()
+                tryVerify(function () { return trashPage.hasItems }, 3000)
             }
             walk(mainWindow, tag, Theme.surface, 0)
             // 产品保证：出错提示条的文字同样要过对比度门禁。它只在出错时出现，平时这里一个字都扫不到——

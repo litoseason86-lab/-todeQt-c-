@@ -28,6 +28,7 @@ Rectangle {
     // 条目的呈现定义：这张表只回答「这个 id 长什么样」，不回答顺序。
     // 顺序的唯一定义处是 AppSettings::defaultSidebarOrder()，用户可在设置里重排。
     // 新增页面要同时改这两处，QmlTest.sidebar_order 会在漏改时转红。
+    // 例外：「废纸篓」和「设置」一样固定在侧栏底部，不参与排序，不在这张表里（见底部的条目）。
     readonly property var entryPresentation: ({
         "dashboard": { text: "仪表盘", marker: "仪", iconName: "" },
         "today": { text: "今日任务", marker: "今", iconName: "" },
@@ -180,6 +181,17 @@ Rectangle {
 
         Item {
             Layout.fillHeight: true
+        }
+
+        // 废纸篓固定在「设置」上方、不参与侧栏排序（用户在计划 054 里选定）：所以它不在
+        // entryPresentation / fallbackOrder 里，AppSettings::defaultSidebarOrder() 也没有它，
+        // 设置页「侧栏顺序」排不到它，用户自定义顺序后它仍在这里。
+        SidebarItem {
+            text: "废纸篓"
+            marker: "废"
+            iconName: "trash"
+            isActive: root.currentView === "trash"
+            onClicked: root.itemClicked("trash")
         }
 
         SidebarItem {

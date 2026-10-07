@@ -68,6 +68,7 @@ ApplicationWindow {
         countdownServiceRef: typeof countdownService === "undefined" ? null : countdownService
         memoServiceRef: typeof memoService === "undefined" ? null : memoService
         memoTextLayoutRef: typeof memoTextLayout === "undefined" ? null : memoTextLayout
+        trashServiceRef: typeof trashService === "undefined" ? null : trashService
         knowledgeGapServiceRef: typeof knowledgeGapService === "undefined" ? null : knowledgeGapService
         appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
         focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer

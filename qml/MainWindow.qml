@@ -58,6 +58,7 @@ Item {
     property var countdownServiceRef: null
     property var memoServiceRef: null
     property var memoTextLayoutRef: null
+    property var trashServiceRef: null
     property var knowledgeGapServiceRef: null
     property var appSettingsRef: null
     property var focusTimerRef: null
@@ -211,6 +212,9 @@ Item {
             return 10
         case "knowledgeGaps":
             return 9;
+        case "trash":
+            // 废纸篓追加在栈尾（StackLayout 里排在备忘录之后），不挪动既有页面的编号。
+            return 11;
         case "today":
         default:
             return 0;
@@ -1077,6 +1081,15 @@ Item {
                     memoServiceRef: root.memoServiceRef
                     categoryManagerRef: root.categoryManagerRef
                     textLayoutRef: root.memoTextLayoutRef
+                }
+                TrashView {
+                    objectName: "trashViewPage"
+                    pageActive: root.currentView === "trash"
+                    trashServiceRef: root.trashServiceRef
+
+                    onItemRestored: function (title) {
+                        root.showToast(qsTr("已恢复「%1」").arg(title))
+                    }
                 }
             }
 
