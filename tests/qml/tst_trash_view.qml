@@ -62,10 +62,17 @@ TestCase {
             return deleteResult
         }
 
-        function emptyTrash() {
-            calls.push("emptyTrash")
+        function emptyTrash(ids) {
+            calls.push("emptyTrash:" + (ids || []).join("|"))
             return emptyResult
         }
+    }
+
+    // 逻辑日变化信号的替身（真实的是 LogicalDayService::changed）。
+    QtObject {
+        id: logicalDay
+
+        signal changed
     }
 
     Component {
@@ -73,6 +80,7 @@ TestCase {
 
         TrashView {
             anchors.fill: parent
+            logicalDayServiceRef: logicalDay
             onItemRestored: function (title) {
                 testCase.restoredTitles = testCase.restoredTitles.concat([title])
             }
@@ -405,7 +413,50 @@ TestCase {
         tryVerify(function () { return popup.opened }, 3000)
         service.calls = []
         mouseClick(child("trashEmptyConfirmButton"))
-        compare(service.calls.join(","), "emptyTrash,readItems")
+        compare(service.calls.join(","), "emptyTrash:11|12|13,readItems")
+    }
+
+    // 产品保证：清空只删确认框打开那一刻列出的项，确认期间同步进来的新项不会被一起删掉。
+    // 数据：打开确认框时是 11、12 两项；框开着时服务端多出 13 并通知页面重读，点「清空」传给服务的只能是 11、12。
+    function test_emptyDeletesOnlyTheItemsListedWhenTheConfirmOpened() {
+        service.data = smallData()
+        create({ trashServiceRef: service })
+        var popup = child("trashEmptyConfirm")
+        mouseClick(child("trashEmptyButton"))
+        tryVerify(function () { return popup.opened }, 3000)
+        compare(child("trashEmptyConfirmTitle").text, "彻底删除废纸篓里的 2 项？")
+
+        service.data = smallData().concat([entry(13, "memo", "备忘丙", "2026-10-06", 29, "", "", {})])
+        service.trashChanged()
+        compare(view.items.length, 3, "前提：列表已重读成三项")
+        verify(popup.opened, "前提：确认框仍开着")
+        compare(child("trashEmptyConfirmTitle").text, "彻底删除废纸篓里的 2 项？")
+
+        service.calls = []
+        mouseClick(child("trashEmptyConfirmButton"))
+        verify(service.calls.indexOf("emptyTrash:11|12") >= 0, service.calls.join(","))
+        verify(service.calls.join(",").indexOf("13") < 0, "不含确认后新进来的 13：" + service.calls.join(","))
+    }
+
+    // 产品保证：停在废纸篓页跨过日界点时页面重读，即使没有项到期（没有 trashChanged）：「今天」分组和剩余天数照样要变。
+    // 不在当前页时不读库。
+    function test_logicalDayChangeRereadsEvenWithoutExpiredItems() {
+        service.data = [entry(21, "memo", "备忘丁", "2026-10-07", 30, "", "", {})]
+        service.todayValue = "2026-10-07"
+        create({ trashServiceRef: service })
+        compare(child("trashGroupHeading-2026-10-07").text, "今天 · 1")
+        compare(child("trashGroupRemaining-2026-10-07").text, "还剩 30 天")
+
+        service.todayValue = "2026-10-08"
+        service.data = [entry(21, "memo", "备忘丁", "2026-10-07", 29, "", "", {})]
+        logicalDay.changed()
+        tryCompare(child("trashGroupHeading-2026-10-07"), "text", "昨天 · 1")
+        compare(child("trashGroupRemaining-2026-10-07").text, "还剩 29 天")
+
+        view.pageActive = false
+        service.calls = []
+        logicalDay.changed()
+        compare(service.count("readItems"), 0, "不在当前页不读库")
     }
 
     // 产品保证：清空失败时提示条写服务给的原因，列表不动。

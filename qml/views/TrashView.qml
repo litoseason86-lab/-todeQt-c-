@@ -14,6 +14,8 @@ Item {
     id: root
 
     property var trashServiceRef: null
+    // 逻辑日服务（LogicalDayService）：日界点或时区变化时它发 changed，页面据此重读。
+    property var logicalDayServiceRef: null
     // 页面容器显式声明是否当前页；不能依赖 effective visible，离屏测试和窗口层级会污染该值。
     property bool pageActive: true
     property bool touchUi: Qt.platform.os === "ios"
@@ -125,17 +127,24 @@ Item {
         if (!root.hasItems) {
             return
         }
-        emptyConfirm.pendingCount = root.items.length
+        var ids = []
+        for (var i = 0; i < root.items.length; ++i) {
+            ids.push(Number(root.items[i].id))
+        }
+        emptyConfirm.pendingIds = ids
+        emptyConfirm.pendingCount = ids.length
         emptyConfirm.open()
     }
 
     function confirmEmpty() {
+        // onAboutToHide 会把 pendingIds 复位，先取出再关。
+        var ids = emptyConfirm.pendingIds
         emptyConfirm.close()
         var svc = root.service()
         if (!svc || typeof svc.emptyTrash !== "function") {
             return
         }
-        var result = svc.emptyTrash()
+        var result = svc.emptyTrash(ids)
         if (result && result.ok) {
             root.actionError = ""
             root.reload()
@@ -165,6 +174,20 @@ Item {
         ignoreUnknownSignals: true
 
         function onTrashChanged() {
+            if (root.pageActive) {
+                root.reload()
+            }
+        }
+    }
+
+    Connections {
+        // C++ 装配层（main.cpp）在同一信号上已先清理到期项（连接早于界面加载，先执行），这里只重读。
+        // 刷新不能依赖有没有项被清掉：没有到期项时不会发 trashChanged，但「今天」分组和剩余天数已经变了。
+        // 门禁同样写在处理函数里；不在这一页时不读库，切回来时 activate 会读。
+        target: root.logicalDayServiceRef
+        ignoreUnknownSignals: true
+
+        function onChanged() {
             if (root.pageActive) {
                 root.reload()
             }
@@ -490,8 +513,11 @@ Item {
         id: emptyConfirm
         objectName: "trashEmptyConfirm"
 
-        // 打开时列表里的项数：弹层开着期间列表可能被同步刷新，确认框上写的数字以打开那一刻为准。
+        // 打开时列表里各项的编号和项数：弹层开着期间列表可能被同步刷新，确认框上写的数字以打开那一刻为准，
+        // 服务也只删这些编号（连同同一原记录的行），确认期间新同步进来的项不会被一起删掉。
+        property var pendingIds: []
         property int pendingCount: 0
+        onAboutToHide: pendingIds = []
 
         parent: root
         anchors.centerIn: parent

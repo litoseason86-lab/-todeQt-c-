@@ -1086,6 +1086,7 @@ Item {
                     objectName: "trashViewPage"
                     pageActive: root.currentView === "trash"
                     trashServiceRef: root.trashServiceRef
+                    logicalDayServiceRef: root.logicalDayServiceRef
 
                     onItemRestored: function (title) {
                         root.showToast(qsTr("已恢复「%1」").arg(title))

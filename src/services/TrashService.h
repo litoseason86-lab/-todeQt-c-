@@ -30,8 +30,11 @@ public:
     // 彻底删除一项，连同 origin_sync_id 相同的全部项（身份退回随机时同一原记录会有多行）。
     // { ok, error, code }；这一项已不在废纸篓里（另一台刚恢复或删掉）时 code 为 "gone"，其余失败不给 code。
     Q_INVOKABLE QVariantMap deleteItem(int trashId);
-    // { ok, error, count }
-    Q_INVOKABLE QVariantMap emptyTrash();
+    // 清空：只删 trashIds 里的各项，连同 origin_sync_id 相同（非空）的同源行（同 deleteItem）。
+    // 确认框上说的是打开那一刻列出的项；确认期间同步进来的新项不在其中，保留。
+    // 已经不在的编号（另一台刚恢复或删掉）跳过，不算失败；非整数的元素同样跳过。
+    // 返回 { ok, error, count }，count 是实际删掉的行数；删了才发 trashChanged。
+    Q_INVOKABLE QVariantMap emptyTrash(const QVariantList& trashIds);
     // { ok, error, kind, title, conflict }；conflict 只在专注/休息撞时间时给 "focus" 或 "rest"。
     // 这一项已不在废纸篓里时只给 { ok, error, code: "gone" }，同 deleteItem。
     // 恢复出来的是新记录：同步「删除优先」，原来的身份已经作废。

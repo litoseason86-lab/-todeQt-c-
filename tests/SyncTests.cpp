@@ -3810,7 +3810,16 @@ void SyncTests::trashDeleteItemAndEmptyTrashFollowToTheOtherDevice()
     QCOMPARE(trashRows(s.a), 4);
     QCOMPARE(trashRows(s.b), 4);
     QVariantMap emptied;
-    withServices(s.b, [&] { emptied = TrashService::instance()->emptyTrash(); });
+    withServices(s.b, [&] {
+        // 清空只删传入的编号：取此刻 B 上全部废纸篓行，等同确认框列出的全部项。
+        QVariantList ids;
+        QSqlQuery idQuery(DatabaseManager::instance()->database());
+        QVERIFY(idQuery.exec(QStringLiteral("SELECT id FROM trash_items")));
+        while (idQuery.next()) {
+            ids.append(idQuery.value(0).toInt());
+        }
+        emptied = TrashService::instance()->emptyTrash(ids);
+    });
     QVERIFY2(emptied.value(QStringLiteral("ok")).toBool(), qPrintable(emptied.value(QStringLiteral("error")).toString()));
     QCOMPARE(emptied.value(QStringLiteral("count")).toInt(), 4);
     QCOMPARE(trashRows(s.a), 4); // 同步之前 A 还有

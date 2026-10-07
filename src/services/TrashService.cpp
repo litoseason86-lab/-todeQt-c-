@@ -6,6 +6,7 @@
 #include "LogicalDay.h"
 #include "RoutineManager.h"
 #include "SyncNotifier.h"
+#include "TaskManager.h"
 #include "TrashStore.h"
 
 #include <QDate>
@@ -72,6 +73,9 @@ struct RestoreOutcome
     QString error;
     QString conflict;
     QSet<QString> changedTables;
+    // 仅恢复任务时有值：新任务的本地编号，以及这次接回到它名下的专注记录编号。
+    int restoredTaskId = -1;
+    QList<int> reattachedSessionIds;
 };
 
 bool fail(RestoreOutcome* out, const QString& message)
@@ -158,6 +162,7 @@ bool restoreTask(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
     const QVariant newId = insert.lastInsertId();
     insert.finish();
     out->changedTables.insert(QStringLiteral("tasks"));
+    out->restoredTaskId = newId.toInt();
 
     // 接回关联：只接回仍然没有归属的。删除之后它们可能被用户改挂到了别的任务，那些不动。
     struct Link { const char* key; const char* table; const char* column; const char* tableName; };
@@ -181,6 +186,19 @@ bool restoreTask(QSqlDatabase& db, const QJsonObject& p, RestoreOutcome* out)
             }
         }
     }
+
+    // 查出接回的专注记录供计时器重新挂上。新任务刚建，名下的专注记录都是上面这次接回的，
+    // 所以直接按 task_id 查，不必再逐条核对。
+    QSqlQuery attached(db);
+    attached.prepare(QStringLiteral("SELECT id FROM focus_sessions WHERE task_id = :task"));
+    attached.bindValue(QStringLiteral(":task"), newId);
+    if (!attached.exec()) {
+        return fail(out, QStringLiteral("恢复失败："), attached);
+    }
+    while (attached.next()) {
+        out->reattachedSessionIds.append(attached.value(0).toInt());
+    }
+    attached.finish();
     return true;
 }
 
@@ -722,7 +740,7 @@ QVariantMap TrashService::deleteItem(int trashId)
     return {{QStringLiteral("ok"), true}, {QStringLiteral("error"), QString()}};
 }
 
-QVariantMap TrashService::emptyTrash()
+QVariantMap TrashService::emptyTrash(const QVariantList& trashIds)
 {
     if (!DatabaseManager::instance()->isOpen()) {
         return failureMap(QStringLiteral("数据库未打开，无法清空"));
@@ -731,16 +749,38 @@ QVariantMap TrashService::emptyTrash()
     if (!db.transaction()) {
         return failureMap(QStringLiteral("清空失败：%1").arg(db.lastError().text()));
     }
+    // 一个事务里逐项处理：任何一步 SQL 失败整体回滚，不留下清了一半的废纸篓。
     int count = 0;
-    {
-        QSqlQuery remove(db);
-        if (!remove.exec(QStringLiteral("DELETE FROM trash_items"))) {
-            const QString reason = remove.lastError().text();
-            remove.finish();
-            db.rollback();
-            return failureMap(QStringLiteral("清空失败：%1").arg(reason));
+    for (const QVariant& element : trashIds) {
+        bool isInt = false;
+        const int id = element.toInt(&isInt);
+        if (!isInt) {
+            continue;
         }
-        count = remove.numRowsAffected();
+        QString origin;
+        {
+            QSqlQuery query(db);
+            query.prepare(QStringLiteral("SELECT origin_sync_id FROM trash_items WHERE id = :id"));
+            query.bindValue(QStringLiteral(":id"), id);
+            if (!query.exec()) {
+                const QString reason = query.lastError().text();
+                query.finish();
+                db.rollback();
+                return failureMap(QStringLiteral("清空失败：%1").arg(reason));
+            }
+            if (!query.next()) {
+                query.finish();
+                continue; // 已被另一台恢复或删掉，或已随前面某项的同源行一起删了
+            }
+            origin = query.value(0).toString();
+            query.finish();
+        }
+        const int removed = deleteRowAndTwins(db, id, origin);
+        if (removed < 0) {
+            db.rollback();
+            return failureMap(QStringLiteral("清空失败"));
+        }
+        count += removed;
     }
     if (!db.commit()) {
         db.rollback();
@@ -834,6 +874,11 @@ QVariantMap TrashService::restoreItem(int trashId)
     emit trashChanged();
     if (kind == TrashStore::kKindRoutine) {
         RoutineManager::instance()->materializeToday();
+    }
+    if (kind == TrashStore::kKindTask) {
+        // 同 TaskManager::deleteTask：先发事实让计时器挂回，再发列表刷新（下面的 publishTableChanges），
+        // 页面不会看到「任务回来了、计时器还没挂」的中间状态。
+        emit TaskManager::instance()->taskRestored(outcome.restoredTaskId, outcome.reattachedSessionIds);
     }
     SyncNotifier::publishTableChanges(outcome.changedTables);
     return {{QStringLiteral("ok"), true}, {QStringLiteral("error"), QString()},

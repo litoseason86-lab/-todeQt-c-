@@ -344,7 +344,7 @@ int main(int argc, char *argv[])
                      RoutineManager::instance(), &RoutineManager::materializeToday);
 
     // 废纸篓保留期按逻辑日算：启动时、逻辑日变化时、恢复备份换了库之后各清理一次到期项。
-    // 本阶段只接清理，界面（QML 注册与页面）在后续阶段。
+    // 这里只管清理；页面自己订阅逻辑日变化重读（见 TrashView），没有项到期时也要刷新「今天」分组和剩余天数。
     TrashService::instance()->purgeExpired();
     QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed,
                      TrashService::instance(), [] { TrashService::instance()->purgeExpired(); });

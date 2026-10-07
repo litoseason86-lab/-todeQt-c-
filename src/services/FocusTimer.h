@@ -180,6 +180,8 @@ private:
     bool cleanupOrphanedSessions();
     // 任务删除提交后按 ID 解绑当前会话；标题是历史快照，不能随任务一起清空。
     void handleTaskDeleted(int taskId);
+    // 废纸篓恢复任务提交后，把仍在进行的专注会话重新挂回恢复出来的任务（新编号）。
+    void handleTaskRestored(int taskId, const QList<int>& focusSessionIds);
     qint64 currentElapsedMilliseconds() const;
     void syncElapsedTime();
     void freezeElapsedTime();

@@ -14,6 +14,7 @@
 #include "../src/services/CountdownService.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusHistoryService.h"
+#include "../src/services/FocusTimer.h"
 #include "../src/services/KnowledgeGapService.h"
 #include "../src/services/LogicalDay.h"
 #include "../src/services/MemoService.h"
@@ -59,6 +60,7 @@ private slots:
     void corruptPayloadIsReportedAsCorruptedAndNotAsNeedingUpdate();
     void restoreFailsAsAWholeWhenReferenceLookupFails();
     void restoreEmitsRefreshSignalsForWhatChanged();
+    void restoringATaskReattachesTheTimerOnlyToItsOwnRunningSession();
 
     // 列表、去重、清理
     void readItemsOrdersNewestFirstAndDescribesEachItem();
@@ -66,6 +68,7 @@ private slots:
     void twinsSharingAnOriginAreListedOnceAndHandledTogether();
     void expiredRowsAreHiddenAndFutureDeletionTimesAreClamped();
     void deleteItemAndEmptyTrashRemoveRows();
+    void emptyTrashRemovesOnlyTheItemsItWasGiven();
     void retentionKeepsDay29AndPurgesDay30();
     void retentionFollowsTheLogicalDayBoundary();
     void readItemsFailsLoudlyWhenDatabaseIsClosed();
@@ -128,6 +131,11 @@ void TrashServiceTests::init()
 
 void TrashServiceTests::cleanup()
 {
+    // FocusTimer 是单例：用例（含失败的）没结束的活动会话要在关库前结束，否则状态会漏到后面的用例。
+    if (FocusTimer::instance()->hasActiveSession()) {
+        FocusTimer::instance()->stopFocus();
+    }
+    FocusTimer::instance()->resetPomodoroCount();
     // 单例设置跨用例共享：复位逻辑日起点和注入的时钟，免得漏到下一条用例。
     AppSettings::instance()->setDayStartHour(4);
     TrashService::instance()->setNowForTesting(QDateTime());
@@ -1047,6 +1055,56 @@ void TrashServiceTests::restoreEmitsRefreshSignalsForWhatChanged()
     QCOMPARE(history.count(), 1);
 }
 
+void TrashServiceTests::restoringATaskReattachesTheTimerOnlyToItsOwnRunningSession()
+{
+    // 产品保证：给任务计时中删掉它、计时结束前又恢复，计时器重新挂到恢复出来的任务上
+    // （内存与活动快照一致，并且在任务列表刷新前就挂上）；恢复别的任务不会把计时器挂错。
+    // 数据：A 带一条已结束的专注记录，C 正在计时；先恢复 A（计时器没挂任务，不能随便挂上），再恢复 C。
+    // 恢复出来的是新记录（AUTOINCREMENT 不复用编号），所以新 C 的编号一定不同于旧 C，能区分「按旧编号挂」的错误实现。
+    const QString day = today();
+    const int a = insertTask(QStringLiteral("任务A"), day, 1);
+    const int c = insertTask(QStringLiteral("任务C"), day, 2);
+    QVERIFY(insertFocus(a, QStringLiteral("2026-01-01T08:00:00.000"), QStringLiteral("2026-01-01T08:30:00.000"), 1800) > 0);
+    FocusTimer* timer = FocusTimer::instance();
+    QVERIFY(timer->startPomodoroWork(c, QStringLiteral("任务C"), 1500));
+    QCOMPARE(timer->currentTaskId(), c);
+    QVERIFY(timer->hasActiveSession());
+
+    QVERIFY(TaskManager::instance()->deleteTask(a));
+    QVERIFY(TaskManager::instance()->deleteTask(c));
+    QCOMPARE(timer->currentTaskId(), -1);
+    QVERIFY(value(QStringLiteral("SELECT task_id FROM active_focus_state")).isNull());
+    const int trashA = value(QStringLiteral("SELECT id FROM trash_items WHERE title = '任务A'")).toInt();
+    const int trashC = value(QStringLiteral("SELECT id FROM trash_items WHERE title = '任务C'")).toInt();
+    QVERIFY(trashA > 0 && trashC > 0);
+
+    QSignalSpy taskChanged(timer, &FocusTimer::currentTaskChanged);
+    QVariantList seenAtRefresh;
+    const QMetaObject::Connection conn = connect(TaskManager::instance(), &TaskManager::tasksChanged, this, [&] {
+        seenAtRefresh.append(FocusTimer::instance()->currentTaskId());
+    });
+
+    QVERIFY(TrashService::instance()->restoreItem(trashA).value(QStringLiteral("ok")).toBool());
+    const int newA = value(QStringLiteral("SELECT id FROM tasks WHERE title = '任务A'")).toInt();
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE task_id = %1").arg(newA)), 1);
+    QCOMPARE(timer->currentTaskId(), -1);
+    QVERIFY(value(QStringLiteral("SELECT task_id FROM active_focus_state")).isNull());
+    QCOMPARE(taskChanged.count(), 0);
+
+    seenAtRefresh.clear();
+    QVERIFY(TrashService::instance()->restoreItem(trashC).value(QStringLiteral("ok")).toBool());
+    disconnect(conn);
+    const int newC = value(QStringLiteral("SELECT id FROM tasks WHERE title = '任务C'")).toInt();
+    QVERIFY(newC > 0 && newC != c);
+    QCOMPARE(timer->currentTaskId(), newC);
+    QCOMPARE(value(QStringLiteral("SELECT task_id FROM active_focus_state")).toInt(), newC);
+    QCOMPARE(taskChanged.count(), 1);
+    QVERIFY(!seenAtRefresh.isEmpty());
+    for (const QVariant& seen : seenAtRefresh) {
+        QCOMPARE(seen.toInt(), newC); // 任务列表刷新时计时器已经挂上
+    }
+}
+
 // ───────────────────────── 列表、去重、清理 ─────────────────────────
 
 void TrashServiceTests::readItemsOrdersNewestFirstAndDescribesEachItem()
@@ -1189,11 +1247,38 @@ void TrashServiceTests::deleteItemAndEmptyTrashRemoveRows()
     QVERIFY(TrashService::instance()->deleteItem(a).value(QStringLiteral("ok")).toBool());
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 2);
     QCOMPARE(changed.count(), 1);
-    const QVariantMap emptied = TrashService::instance()->emptyTrash();
+    const int b = value(QStringLiteral("SELECT id FROM trash_items WHERE origin_sync_id = 'b'")).toInt();
+    const int c = value(QStringLiteral("SELECT id FROM trash_items WHERE origin_sync_id = 'c'")).toInt();
+    QVERIFY(b > 0 && c > 0);
+    const QVariantMap emptied = TrashService::instance()->emptyTrash({b, c});
     QVERIFY(emptied.value(QStringLiteral("ok")).toBool());
     QCOMPARE(emptied.value(QStringLiteral("count")).toInt(), 2);
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 0);
     QCOMPARE(changed.count(), 2);
+}
+
+void TrashServiceTests::emptyTrashRemovesOnlyTheItemsItWasGiven()
+{
+    // 产品保证：清空只删确认时列出的项（连同同一原记录的各行），确认期间同步进来的新项留下。
+    // 数据：先有 a、b 并记下编号；之后才进来 a 的同源行和新项 c；再多传一个不存在的编号，它应被跳过而不是失败。
+    const QString payload = QStringLiteral("{\"v\":1}");
+    const QString now = utcText(QDateTime::currentDateTime());
+    const int a = insertTrashRow(QStringLiteral("memo"), QStringLiteral("a"), QStringLiteral("A"), payload, now);
+    const int b = insertTrashRow(QStringLiteral("memo"), QStringLiteral("b"), QStringLiteral("B"), payload, now);
+    const QVariantList listed{a, b};
+    insertTrashRow(QStringLiteral("memo"), QStringLiteral("a"), QStringLiteral("A 的同源行"), payload, now);
+    const int c = insertTrashRow(QStringLiteral("memo"), QStringLiteral("c"), QStringLiteral("C"), payload, now);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 4);
+    QSignalSpy changed(TrashService::instance(), &TrashService::trashChanged);
+
+    QVariantList ids = listed;
+    ids.append(99999);
+    const QVariantMap emptied = TrashService::instance()->emptyTrash(ids);
+    QVERIFY2(emptied.value(QStringLiteral("ok")).toBool(), qPrintable(emptied.value(QStringLiteral("error")).toString()));
+    QCOMPARE(emptied.value(QStringLiteral("count")).toInt(), 3);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 1);
+    QCOMPARE(value(QStringLiteral("SELECT id FROM trash_items")).toInt(), c);
+    QCOMPARE(changed.count(), 1);
 }
 
 void TrashServiceTests::retentionKeepsDay29AndPurgesDay30()
