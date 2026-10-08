@@ -65,6 +65,7 @@
 #include "platform/ios/IosBackgroundTask.h"
 #include "platform/ios/IosFolderPicker.h"
 #include "platform/ios/IosSyncFolder.h"
+#include "platform/ios/native/NativeRoot.h"
 
 namespace {
 // 手机用随身伴侣页，平板用完整界面。启动时还没有窗口，只能按屏幕判定：
@@ -362,11 +363,21 @@ int main(int argc, char *argv[])
 
     PlainTextLayout memoTextLayout;
     QQmlApplicationEngine engine;
-    // 界面草稿先落盘，再收尾同步并关库；系统退出没有机会再等待自动保存定时器。
-    QObject::connect(&app, &QCoreApplication::aboutToQuit, &engine, [&engine] {
+#if defined(Q_OS_IOS)
+    const bool nativeRoot = shouldUseNativeRoot();
+#endif
+    // 草稿先同步保存，再结束计时、写同步、关库。原生路径没有 QML 根对象，调用它登记的保存钩子。
+    const auto flushUiDrafts = [&] {
+#if defined(Q_OS_IOS)
+        if (nativeRoot) {
+            flushNativeEdits();
+            return;
+        }
+#endif
         if (!engine.rootObjects().isEmpty())
             QMetaObject::invokeMethod(engine.rootObjects().first(), "flushMemoEdits", Qt::DirectConnection);
-    });
+    };
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &engine, flushUiDrafts);
     // 剪贴板属于装配层；连接放在平台条件之外，iPad 和 Mac 使用同一条复制路径。
     QObject::connect(&syncController, &SyncController::copyRequested, &app, [](const QString& text) {
         QGuiApplication::clipboard()->setText(text);
@@ -388,10 +399,10 @@ int main(int argc, char *argv[])
     // 只有 iPad 接前后台：回到前台立即同步一轮，进了后台立即写出攒下的改动（哪些状态算后台见 setApplicationState）。
     // Mac 不接：切到别的应用很频繁，每次都立即写会拆出很多小文件，而 iPad 每读一个要约 1 秒。
     QObject::connect(&app, &QGuiApplication::applicationStateChanged, &syncController,
-                     [&syncController, &engine](Qt::ApplicationState state) {
+                     [&syncController, flushUiDrafts](Qt::ApplicationState state) {
         // 先保存界面草稿，再请求后台写同步文件，避免同步线程读队列时漏掉最后的输入。
-        if (state != Qt::ApplicationActive && !engine.rootObjects().isEmpty())
-            QMetaObject::invokeMethod(engine.rootObjects().first(), "flushMemoEdits", Qt::DirectConnection);
+        if (state != Qt::ApplicationActive)
+            flushUiDrafts();
         syncController.setApplicationState(state);
     });
 #endif
@@ -443,7 +454,13 @@ int main(int argc, char *argv[])
         }
     }, Qt::QueuedConnection);
 
-    engine.load(url);
+#if defined(Q_OS_IOS)
+    // 开关关闭时保持原 QML 入口；只有 iPad 原生路径等待场景连接并安装 SwiftUI 根视图。
+    if (nativeRoot)
+        installNativeRoot();
+    else
+#endif
+        engine.load(url);
     // 自动备份放到后台线程。退出时不再重复执行重 I/O，避免应用长时间卡在关闭阶段。
     BackupService::instance()->requestAutoBackupIfDue();
     const int exitCode = app.exec();

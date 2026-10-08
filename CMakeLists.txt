@@ -238,11 +238,18 @@ if(IOS)
         src/platform/ios/IosFolderPicker.mm
         src/platform/ios/IosBackgroundTask.h
         src/platform/ios/IosBackgroundTask.mm
+        # 055-P3A：挂载与生命周期只在 iOS 装配。
+        src/platform/ios/native/NativeRoot.h
+        src/platform/ios/native/NativeRoot.mm
+        src/platform/ios/bridge/PTLifecycleBridge.h
+        src/platform/ios/bridge/PTLifecycleBridge.mm
     )
     set_source_files_properties(
         src/platform/ios/IosSyncFolder.mm
         src/platform/ios/IosFolderPicker.mm
         src/platform/ios/IosBackgroundTask.mm
+        src/platform/ios/native/NativeRoot.mm
+        src/platform/ios/bridge/PTLifecycleBridge.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
     )
 endif()
@@ -423,7 +430,9 @@ if(IOS)
 
     # 055-P3A：数据层与界面层使用与 SwiftPM 一致的独立模块，不链接 Qt。
     add_library(IPadCore STATIC src/ui/ipad/Sources/IPadCore/ShellNavigation.swift)
-    add_library(IPadUI STATIC src/ui/ipad/Sources/IPadUI/BuildMarker.swift)
+    add_library(IPadUI STATIC
+        src/ui/ipad/Sources/IPadUI/BuildMarker.swift
+        src/ui/ipad/Sources/IPadUI/NativeRoot.swift)
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
@@ -432,6 +441,8 @@ if(IOS)
             XCODE_ATTRIBUTE_SWIFT_VERSION "6.0"
             XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "26.0")
     endforeach()
+    set_target_properties(IPadUI PROPERTIES
+        XCODE_ATTRIBUTE_SWIFT_INCLUDE_PATHS "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ios/bridge")
     target_link_libraries(IPadUI PRIVATE IPadCore)
     target_link_libraries(PomodoroTodo PRIVATE IPadUI)
     set_target_properties(PomodoroTodo PROPERTIES
