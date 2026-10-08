@@ -6,6 +6,7 @@ private enum ShellTab: Hashable { case page(PageID), more }
 struct ShellRootView: View {
     @Bindable var store: ShellStore
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var tab: ShellTab = .page(.dashboard)
     @State private var morePath: [PageID] = []
 
@@ -45,12 +46,19 @@ struct ShellRootView: View {
         .tabViewBottomAccessory {
             if store.snapshot.hasTimer { miniTimer }
         }
+        .tint(ThemeColors.accentInk)
+        .preferredColorScheme(store.snapshot.useWallpaper
+            ? (["starry", "rainy", "moon"].contains(store.snapshot.backgroundTheme) ? .dark : .light) : nil)
+        .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
         .background { keyboardCommands }
         .disabled(store.snapshot.operationBlocksUI)
         .overlay {
             if store.snapshot.operationBlocksUI {
                 ZStack {
-                    Color.black.opacity(0.45).ignoresSafeArea()
+                    Group {
+                        if reduceTransparency { ThemeColors.surface }
+                        else { ThemeColors.modalScrim }
+                    }.ignoresSafeArea()
                     VStack(spacing: 16) {
                         ProgressView()
                         Text(store.snapshot.operationText.isEmpty ? "正在恢复数据" : store.snapshot.operationText)
@@ -82,13 +90,19 @@ struct ShellRootView: View {
     }
 
     private func pageView(_ page: PageID) -> some View {
-        NavigationStack { PageRegistry.view(for: page).shellChrome(store: store) }
+        NavigationStack {
+            PageRegistry.view(for: page).shellChrome(store: store)
+                .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
+        }
     }
     private var moreView: some View {
         NavigationStack(path: $morePath) {
             List(store.morePages, id: \.self) { page in
                 NavigationLink(value: page) { Label(page.title, systemImage: page.symbol) }
+                    .listRowBackground(store.snapshot.useWallpaper ? ThemeColors.surface : nil)
             }
+            .scrollContentBackground(store.snapshot.useWallpaper ? .hidden : .visible)
+            .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
             .navigationTitle("更多")
             .navigationDestination(for: PageID.self) { page in
                 PageRegistry.view(for: page).shellChrome(store: store)
@@ -191,7 +205,7 @@ private struct ShellChrome: ViewModifier {
             Text("记一笔").font(.headline)
             TextField("写下问题或关键词", text: $store.captureTitle, axis: .vertical)
                 .lineLimit(2...5).onSubmit { store.capture() }
-            if !store.captureError.isEmpty { Text(store.captureError).foregroundStyle(.red) }
+            if !store.captureError.isEmpty { Text(store.captureError).foregroundStyle(ThemeColors.danger) }
             HStack {
                 Spacer()
                 Button("记下") { store.capture() }.buttonStyle(.borderedProminent)

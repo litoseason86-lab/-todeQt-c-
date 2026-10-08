@@ -1,5 +1,4 @@
 import Foundation
-import Observation
 
 public enum PageID: String, CaseIterable, Hashable, Sendable, Codable {
     case today, focus, week, dashboard, todayFocus, schedule
@@ -47,8 +46,3 @@ public enum PageID: String, CaseIterable, Hashable, Sendable, Codable {
     }
 }
 
-@MainActor @Observable
-public final class ShellNavigation {
-    public var selection: PageID
-    public init(selection: PageID = .dashboard) { self.selection = selection }
-}

@@ -436,11 +436,13 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/ShellNavigation.swift
         src/ui/ipad/Sources/IPadCore/ShellStore.swift)
     add_library(IPadUI STATIC
-        src/ui/ipad/Sources/IPadUI/BuildMarker.swift
         src/ui/ipad/Sources/IPadUI/NativeRoot.swift
         src/ui/ipad/Sources/IPadUI/Shell/ShellBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Shell/PageRegistry.swift
-        src/ui/ipad/Sources/IPadUI/Shell/ShellRootView.swift)
+        src/ui/ipad/Sources/IPadUI/Shell/ShellRootView.swift
+        src/ui/ipad/Sources/IPadUI/Theme/ThemeColors.swift
+        src/ui/ipad/Sources/IPadUI/Theme/WallpaperBackground.swift
+        src/ui/ipad/Sources/IPadUI/Components/MarkedTextEditor.swift)
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
@@ -452,6 +454,10 @@ if(IOS)
     set_target_properties(IPadUI PROPERTIES
         XCODE_ATTRIBUTE_SWIFT_INCLUDE_PATHS "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ios/bridge")
     target_link_libraries(IPadUI PRIVATE IPadCore)
+    # 055-P3A：颜色资源属于应用包，Swift 按 Bundle.main 获取；壁纸继续只用 Qt 已打包的资源。
+    target_sources(PomodoroTodo PRIVATE src/ui/ipad/Sources/IPadUI/Resources/Colors.xcassets)
+    set_source_files_properties(src/ui/ipad/Sources/IPadUI/Resources/Colors.xcassets
+        PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     target_link_libraries(PomodoroTodo PRIVATE IPadUI)
     set_target_properties(PomodoroTodo PROPERTIES
         XCODE_ATTRIBUTE_SWIFT_VERSION "6.0"
@@ -1111,6 +1117,7 @@ set_tests_properties(TrashServiceTests PROPERTIES TIMEOUT 90)
 get_target_property(PT_SHELL_TEST_SOURCES TrashServiceTests SOURCES)
 list(REMOVE_ITEM PT_SHELL_TEST_SOURCES tests/TrashServiceTests.cpp)
 add_executable(PTShellBridgeTests ${PT_SHELL_TEST_SOURCES}
+    resources/wallpapers.qrc
     tests/PTShellBridgeTests.mm
     src/platform/ios/bridge/PTShellBridge.h src/platform/ios/bridge/PTShellBridge.mm
     src/platform/ios/bridge/PTLifecycleBridge.h src/platform/ios/bridge/PTLifecycleBridge.mm
@@ -1486,6 +1493,9 @@ if(Python3_FOUND)
         add_test(NAME DeployLocalAppTests
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/DeployLocalAppTests.py")
     endif()
+    # 055-P3A：原生颜色与 QML 的语义令牌必须同源。
+    add_test(NAME IPadThemeGate COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipad_theme_gate.py")
+    set_tests_properties(IPadThemeGate PROPERTIES TIMEOUT 30)
     add_test(NAME QmlTextFormatGate
              COMMAND ${Python3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml_text_format_gate.py

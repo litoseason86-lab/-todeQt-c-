@@ -3,6 +3,8 @@
 #include <QCoreApplication>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QThread>
+#include <memory>
 #include <QtTest>
 #include "../src/services/AppSettings.h"
 #include "../src/services/DatabaseManager.h"
@@ -20,6 +22,8 @@ private slots:
     void convertsServiceSnapshotAndPersistsLocalSelection();
     void forwardsChangesOnTheMainThread();
     void releaseDisconnectsCallbacks();
+    void workerSignalsReturnToMainThread();
+    void wallpaperUsesExistingQtResources();
     void capturesWithoutInterruptingFocusAndForwardsFailure();
     void closedDatabaseReturnsAnError();
     void lifecycleFlushIsSynchronous();
@@ -87,6 +91,36 @@ void PTShellBridgeTests::forwardsChangesOnTheMainThread()
         QVERIFY(mainThread);
     }
 }
+// 产品保证：工作线程发出的服务信号排队回主线程，不从后台直接调用原生界面。
+void PTShellBridgeTests::workerSignalsReturnToMainThread()
+{
+    @autoreleasepool {
+        PTShellBridge *bridge = [PTShellBridge new];
+        __block int calls = 0;
+        __block BOOL mainThread = NO;
+        bridge.onChanged = ^{ ++calls; mainThread = NSThread.isMainThread; };
+        auto *tasks = TaskManager::instance();
+        std::unique_ptr<QThread> worker(QThread::create([tasks] { emit tasks->tasksChanged(); }));
+        worker->start();
+        // 主线程等待后台结束期间不泵事件，先确认回调没有越过线程边界直接执行。
+        QVERIFY(worker->wait(2000));
+        QCOMPARE(calls, 0);
+        QTRY_COMPARE(calls, 1);
+        QVERIFY(mainThread);
+    }
+}
+// 产品保证：壁纸使用现有 Qt 图片资源，未知主题与任意文件路径不返回图片。
+void PTShellBridgeTests::wallpaperUsesExistingQtResources()
+{
+    @autoreleasepool {
+        NSData *data = [PTShellBridge wallpaperDataForTheme:@"warm"];
+        QVERIFY(data.length > 8);
+        const QByteArray signature(static_cast<const char *>(data.bytes), 8);
+        QCOMPARE(signature.toHex(), QByteArray("89504e470d0a1a0a"));
+        QVERIFY([PTShellBridge wallpaperDataForTheme:@"../../main"] == nil);
+        QVERIFY([PTShellBridge wallpaperDataForTheme:@"unknown"] == nil);
+    }
+}
 // 产品保证：桥接对象释放后断开 Qt 信号，后续服务刷新不再调用已销毁的界面。
 void PTShellBridgeTests::releaseDisconnectsCallbacks()
 {
@@ -114,6 +148,14 @@ void PTShellBridgeTests::capturesWithoutInterruptingFocusAndForwardsFailure()
         QVERIFY(FocusTimer::instance()->startFocus(task, QStringLiteral("计时中的任务")));
         QVERIFY(FocusTimer::instance()->hasActiveSession());
         PTShellBridge *bridge = [PTShellBridge new];
+        PTShellSnapshot *timer = [bridge readSnapshot];
+        QVERIFY(timer.hasTimer && timer.running);
+        QCOMPARE(timer.currentTaskId, NSInteger(task));
+        QVERIFY([timer.taskTitle isEqualToString:@"计时中的任务"]);
+        QVERIFY([bridge pause]);
+        QVERIFY(![bridge readSnapshot].running);
+        QVERIFY([bridge resume]);
+        QVERIFY([bridge readSnapshot].running);
         const NSInteger id = [bridge captureTitle:@"中文 <b>标题" categoryId:-1 sourceTaskId:-1];
         QVERIFY(id > 0);
         QCOMPARE(KnowledgeGapService::instance()->getGap(static_cast<int>(id)).value(QStringLiteral("title")).toString(), QStringLiteral("中文 <b>标题"));

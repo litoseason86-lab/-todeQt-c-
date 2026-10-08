@@ -9,6 +9,7 @@
 #include "../../../services/LogicalDayService.h"
 #include "../../../services/StatisticsService.h"
 #include "../../../services/TaskManager.h"
+#include <QFile>
 #include <QObject>
 #include <QSettings>
 #include <QSqlDatabase>
@@ -111,6 +112,18 @@
         QObject::connect(StatisticsService::instance(), &StatisticsService::operationFailed, context, failed);
     }
     return self;
+}
++ (NSData *)wallpaperDataForTheme:(NSString *)theme
+{
+    // 白名单只是资源名映射，不接受任意文件路径；图片和 QML 共用同一份 qrc 资源。
+    const QString id = QString::fromNSString(theme);
+    const QStringList themes = {QStringLiteral("warm"), QStringLiteral("pink"), QStringLiteral("jiangnan"),
+        QStringLiteral("sword"), QStringLiteral("starry"), QStringLiteral("rainy"), QStringLiteral("moon")};
+    if (!themes.contains(id)) return nil;
+    QFile file(QStringLiteral(":/resources/wallpapers/%1.png").arg(id));
+    if (!file.open(QIODevice::ReadOnly)) return nil;
+    const QByteArray data = file.readAll();
+    return [NSData dataWithBytes:data.constData() length:static_cast<NSUInteger>(data.size())];
 }
 - (PTShellSnapshot *)readSnapshot
 {

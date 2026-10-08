@@ -29,6 +29,8 @@ NS_ASSUME_NONNULL_BEGIN
 @interface PTShellBridge : NSObject
 @property(nonatomic, copy, nullable) void (^onChanged)(void);
 @property(nonatomic, copy, nullable) void (^onFailure)(NSString *message);
+// 从 Qt 资源读取现有壁纸，避免原生应用再复制一套图片；不依赖 UIKit。
++ (nullable NSData *)wallpaperDataForTheme:(NSString *)theme NS_SWIFT_NAME(wallpaperData(forTheme:));
 - (PTShellSnapshot *)readSnapshot NS_SWIFT_NAME(read());
 - (BOOL)pause;
 - (BOOL)resume;
