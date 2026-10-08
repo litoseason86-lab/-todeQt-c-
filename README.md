@@ -1,6 +1,6 @@
 # 番茄Todo
 
-面向考研复习的本地应用，Mac 与 iPad 共用一份代码。核心流程是先创建任务，再从任务启动专注计时，最后沉淀本地统计数据。Mac 版使用原生菜单栏与通知能力。数据保存在本地，两台设备经 iCloud 云盘里的同步文件夹互通，不需要账号或服务器，应用本身不联网。
+面向考研复习的本地应用，Mac 与 iPad 共用 C++ 业务与数据层。核心流程是先创建任务，再从任务启动专注计时，最后沉淀本地统计数据。Mac 版使用原生菜单栏与通知能力。数据保存在本地，两台设备经 iCloud 云盘里的同步文件夹互通，不需要账号或服务器，应用本身不联网。
 
 ## 文档入口
 
@@ -90,14 +90,16 @@
 ## 技术栈
 
 - Qt 6
-- Qt Quick/QML
+- Qt Quick/QML（Mac 与 iPhone 伴侣页，iPad 当前默认界面）
+- Swift 6 / SwiftUI / UIKit（iPad 原生外壳，开关默认关闭）
+- Objective-C++ / Foundation（Qt 与原生界面的桥接）
 - C++17
 - SQLite
 - CMake
 
 ## 构建
 
-使用 Qt 6.7 或更高版本的 SDK；本机已验证 Qt 6.10.3。部署目录固定为 `~/pt-build`，验证目录固定为 `~/pt-audit`，不能混用；iPad 版与 Mac 共用同一份代码，两台之间的云盘同步见上文「功能」，iOS 构建另用 `~/pt-ios`，永不部署。完整命令、环境要求和部署校验见 [运行命令](docs/运行命令.md)。
+使用 Qt 6.7 或更高版本的 SDK；本机已验证 Qt 6.10.3。部署目录固定为 `~/pt-build`，验证目录固定为 `~/pt-audit`，不能混用；iPad 版与 Mac 共用 C++ 业务层，iOS / iPadOS 最低 26，两台之间的云盘同步见上文「功能」，iOS 构建另用 `~/pt-ios`，永不部署。完整命令、环境要求和部署校验见 [运行命令](docs/运行命令.md)。
 
 ```bash
 /Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake -B ~/pt-build -S . \
@@ -114,13 +116,14 @@ src/models/            数据模型
 src/services/          C++ 服务层（跨平台业务逻辑）
 src/mcp/               外部 AI 接入（common/ 协议与契约、bridge/ 主应用内的权限与工具分派、helper/ 包内 stdio 辅助程序）
 src/platform/macos/    macOS 原生层（菜单栏 NSStatusItem、全局热键 Carbon、偏好域清理、iCloud 同步文件夹、外部 AI 本地连接的同用户校验，Objective-C++）
-src/platform/ios/      iOS 专属（同步文件夹的选择与访问、切到后台时的后台时间、Info.plist 模板，Objective-C++）
+src/platform/ios/      iOS 专属（同步文件夹、后台时间、Info.plist；native/ 原生根挂载，bridge/ Foundation 数据与生命周期桥接）
+src/ui/ipad/           iPad 原生前端（Package.swift；Sources/IPadCore 展示状态，Sources/IPadUI SwiftUI 外壳与组件，Tests 数据层测试）
 src/platform/apple/    macOS 与 iOS 共用的 Apple 框架层（系统通知 UNUserNotificationCenter、iCloud 云盘文件的上传状态，Objective-C++）
 qml/                   QML 界面（views/ 页面、components/ 组件、components/settings/ 设置面板）
 resources/             Qt 资源文件（字体、壁纸、音效）
 shaders/               预编译 Shader 资源
 cmake/                 构建脚本（DeployLocalApp.cmake：部署到 /Applications 的原子切换逻辑）
-tests/                 Qt Test 自动化测试（C++ 用例 + tests/qml/ 的 Qt Quick Test）
+tests/                 Qt Test 自动化测试（C++ 与 Objective-C++ 用例、Qt Quick Test、原生颜色门禁）
 docs/                  当前业务规则与运行命令
 plans/                 当前状态、待评估事项与未采纳决策
 .agents/               协作用 skill（skills/ 活动目录、skills-archive/ 归档与上游来源，维护说明见 skills-archive/README.md）
