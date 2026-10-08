@@ -6,6 +6,12 @@ project(PomodoroTodo VERSION 0.1.0 LANGUAGES CXX)
 # 需要 Objective-C++ 编译能力。平台只有 macOS 与 iOS 两个：iOS 构建只产出应用本体，
 # 菜单栏、全局热键、外部 AI 接入、测试与本机部署都只属于 macOS（见下方 if(IOS) 分支）。
 enable_language(OBJCXX)
+# 055-P3A：SwiftUI 只在 iOS 编译。Qt 函数保留定义时的策略，故须在 find_package 前设默认值。
+# CMake 4.0.2 + Xcode 27 实测：CMP0142 OLD 会生成不存在的 Swift 库搜索路径副本。
+if(IOS)
+    enable_language(Swift)
+    set(CMAKE_POLICY_DEFAULT_CMP0142 NEW)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -234,11 +240,21 @@ if(IOS)
         src/platform/ios/IosFolderPicker.mm
         src/platform/ios/IosBackgroundTask.h
         src/platform/ios/IosBackgroundTask.mm
+        # 055-P3A：挂载与生命周期只在 iOS 装配。
+        src/platform/ios/native/NativeRoot.h
+        src/platform/ios/native/NativeRoot.mm
+        src/platform/ios/bridge/PTLifecycleBridge.h
+        src/platform/ios/bridge/PTLifecycleBridge.mm
+        src/platform/ios/bridge/PTShellBridge.h
+        src/platform/ios/bridge/PTShellBridge.mm
     )
     set_source_files_properties(
         src/platform/ios/IosSyncFolder.mm
         src/platform/ios/IosFolderPicker.mm
         src/platform/ios/IosBackgroundTask.mm
+        src/platform/ios/native/NativeRoot.mm
+        src/platform/ios/bridge/PTLifecycleBridge.mm
+        src/platform/ios/bridge/PTShellBridge.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
     )
 endif()
@@ -378,11 +394,12 @@ function(pomodoro_todo_enable_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4)
     else()
-        target_compile_options(${target} PRIVATE -Wall -Wextra)
+        # CMake 4.0.2 + Xcode 27 会把无语言限制的选项写进 OTHER_SWIFT_FLAGS；Swift 不接受 -Wall。
+        target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wall;-Wextra>")
         # 64 位转 32 位的截断告警：iOS 用 Xcode 生成器，默认就开着它；Mac 这边不开的话，
         # 这类告警只在编 iOS 时冒出来，平时看不到也就没人修（2026-10 攒到过 6 条）。只有 Clang 认这个选项。
         if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-            target_compile_options(${target} PRIVATE -Wshorten-64-to-32)
+            target_compile_options(${target} PRIVATE "$<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-Wshorten-64-to-32>")
         endif()
     endif()
 endfunction()
@@ -415,6 +432,38 @@ if(IOS)
             XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
         )
     endif()
+
+    # 055-P3A：数据层与界面层使用与 SwiftPM 一致的独立模块，不链接 Qt。
+    add_library(IPadCore STATIC
+        src/ui/ipad/Sources/IPadCore/ShellNavigation.swift
+        src/ui/ipad/Sources/IPadCore/ShellStore.swift)
+    add_library(IPadUI STATIC
+        src/ui/ipad/Sources/IPadUI/NativeRoot.swift
+        src/ui/ipad/Sources/IPadUI/Shell/ShellBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Shell/PageRegistry.swift
+        src/ui/ipad/Sources/IPadUI/Shell/ShellRootView.swift
+        src/ui/ipad/Sources/IPadUI/Theme/ThemeColors.swift
+        src/ui/ipad/Sources/IPadUI/Theme/WallpaperBackground.swift
+        src/ui/ipad/Sources/IPadUI/Components/MarkedTextEditor.swift)
+    foreach(swift_target IN ITEMS IPadCore IPadUI)
+        # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
+        # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
+        set_target_properties(${swift_target} PROPERTIES
+            AUTOMOC OFF AUTORCC OFF
+            XCODE_ATTRIBUTE_SWIFT_VERSION "6.0"
+            XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "26.0")
+    endforeach()
+    set_target_properties(IPadUI PROPERTIES
+        XCODE_ATTRIBUTE_SWIFT_INCLUDE_PATHS "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ios/bridge")
+    target_link_libraries(IPadUI PRIVATE IPadCore)
+    # 055-P3A：颜色资源属于应用包，Swift 按 Bundle.main 获取；壁纸继续只用 Qt 已打包的资源。
+    target_sources(PomodoroTodo PRIVATE src/ui/ipad/Sources/IPadUI/Resources/Colors.xcassets)
+    set_source_files_properties(src/ui/ipad/Sources/IPadUI/Resources/Colors.xcassets
+        PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_link_libraries(PomodoroTodo PRIVATE IPadUI)
+    set_target_properties(PomodoroTodo PROPERTIES
+        XCODE_ATTRIBUTE_SWIFT_VERSION "6.0"
+        XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET "26.0")
 
     qt_finalize_target(PomodoroTodo)
 
@@ -1126,6 +1175,27 @@ pomodoro_todo_enable_warnings(PendingDeletionTests)
 add_test(NAME PendingDeletionTests COMMAND PendingDeletionTests)
 set_tests_properties(PendingDeletionTests PROPERTIES TIMEOUT 90)
 
+# 055-P3A：数据桥接仅依赖 Foundation 与 Qt，可在 macOS 测类型转换和信号生命周期。
+get_target_property(PT_SHELL_TEST_SOURCES TrashServiceTests SOURCES)
+list(REMOVE_ITEM PT_SHELL_TEST_SOURCES tests/TrashServiceTests.cpp)
+add_executable(PTShellBridgeTests ${PT_SHELL_TEST_SOURCES}
+    resources/wallpapers.qrc
+    tests/PTShellBridgeTests.mm
+    src/platform/ios/bridge/PTShellBridge.h src/platform/ios/bridge/PTShellBridge.mm
+    src/platform/ios/bridge/PTLifecycleBridge.h src/platform/ios/bridge/PTLifecycleBridge.mm
+    src/services/StatisticsService.h src/services/StatisticsService.cpp
+    src/services/BackupService.h src/services/BackupService.cpp
+    src/services/BackupOperations.h src/services/BackupOperations.cpp
+    src/services/LogicalDayService.h src/services/LogicalDayService.cpp)
+set_source_files_properties(tests/PTShellBridgeTests.mm
+    src/platform/ios/bridge/PTShellBridge.mm src/platform/ios/bridge/PTLifecycleBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(PTShellBridgeTests PRIVATE Qt6::Core Qt6::Gui Qt6::Sql Qt6::Concurrent Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(PTShellBridgeTests)
+add_test(NAME PTShellBridgeTests COMMAND PTShellBridgeTests)
+set_tests_properties(PTShellBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
 # 设备间同步的云盘传输（050 阶段 3）：文件格式、文件夹读写、同步引擎。
 # 两台设备各用一个真实结构的临时库，云盘用临时文件夹模拟，可以注入延迟、乱序、坏文件和读写失败。
 add_executable(SyncTransportTests
@@ -1485,6 +1555,9 @@ if(Python3_FOUND)
         add_test(NAME DeployLocalAppTests
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/DeployLocalAppTests.py")
     endif()
+    # 055-P3A：原生颜色与 QML 的语义令牌必须同源。
+    add_test(NAME IPadThemeGate COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/ipad_theme_gate.py")
+    set_tests_properties(IPadThemeGate PROPERTIES TIMEOUT 30)
     add_test(NAME QmlTextFormatGate
              COMMAND ${Python3_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml_text_format_gate.py
@@ -1504,6 +1577,13 @@ if(Python3_FOUND)
 else()
     message(WARNING "未找到 Python3，跳过 QML 文本格式与悬停过渡门禁")
 endif()
+
+# 055-P3A：全量 ctest 包含 Swift 数据层；构建产物留在当前构建目录里。
+find_program(POMODORO_TODO_SWIFT swift REQUIRED)
+add_test(NAME IPadSwiftTests COMMAND ${POMODORO_TODO_SWIFT} test
+    --package-path "${CMAKE_CURRENT_SOURCE_DIR}/src/ui/ipad"
+    --scratch-path "${CMAKE_CURRENT_BINARY_DIR}/ipad-swift")
+set_tests_properties(IPadSwiftTests PROPERTIES TIMEOUT 120)
 
 add_executable(MemoQuickTests tests/MemoQuickTests.cpp src/models/PlainTextLayout.h src/models/PlainTextLayout.cpp)
 target_link_libraries(MemoQuickTests PRIVATE Qt6::QuickTest Qt6::Quick)

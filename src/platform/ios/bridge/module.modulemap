@@ -1,0 +1,5 @@
+module PTBridge {
+    umbrella "."
+    export *
+    module * { export * }
+}
