@@ -17,6 +17,7 @@ final class ShellNavigationTests: XCTestCase {
         let url = try XCTUnwrap(Bundle.module.url(forResource: "display-clock", withExtension: "json", subdirectory: "Fixtures"))
         let rows = try JSONDecoder().decode([Row].self, from: Data(contentsOf: url))
         XCTAssertEqual(rows.map(\.input), [65, 3601])
+        for row in rows { XCTAssertEqual(ShellDisplay.clock(row.input), row.expected, row.reason) }
         XCTAssertFalse(rows.contains { $0.reason.isEmpty || $0.expected.isEmpty })
     }
 }

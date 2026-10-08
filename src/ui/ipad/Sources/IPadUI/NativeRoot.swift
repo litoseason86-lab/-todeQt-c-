@@ -14,8 +14,11 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
 
 @MainActor enum NativeRoot {
     static func makeController() -> UIViewController {
-        UIHostingController(rootView: NavigationStack {
-            ContentUnavailableView("番茄Todo", systemImage: "checklist")
-        })
+        let store = ShellStore(bridge: ShellBridgeAdapter())
+        // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
+        PTLifecycleBridge.flushHandler = { [weak store] in
+            MainActor.assumeIsolated { store?.flushEdits() }
+        }
+        return UIHostingController(rootView: ShellRootView(store: store))
     }
 }

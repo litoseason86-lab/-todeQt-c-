@@ -432,10 +432,15 @@ if(IOS)
     endif()
 
     # 055-P3A：数据层与界面层使用与 SwiftPM 一致的独立模块，不链接 Qt。
-    add_library(IPadCore STATIC src/ui/ipad/Sources/IPadCore/ShellNavigation.swift)
+    add_library(IPadCore STATIC
+        src/ui/ipad/Sources/IPadCore/ShellNavigation.swift
+        src/ui/ipad/Sources/IPadCore/ShellStore.swift)
     add_library(IPadUI STATIC
         src/ui/ipad/Sources/IPadUI/BuildMarker.swift
-        src/ui/ipad/Sources/IPadUI/NativeRoot.swift)
+        src/ui/ipad/Sources/IPadUI/NativeRoot.swift
+        src/ui/ipad/Sources/IPadUI/Shell/ShellBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Shell/PageRegistry.swift
+        src/ui/ipad/Sources/IPadUI/Shell/ShellRootView.swift)
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
