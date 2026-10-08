@@ -26,6 +26,7 @@
 #include "services/FocusTimer.h"
 #include "services/LogicalDayService.h"
 #include "services/NotificationService.h"
+#include "services/PendingDeletion.h"
 #include "services/PhaseSoundService.h"
 #include "services/RoutineManager.h"
 #include "services/ScheduleService.h"
@@ -361,11 +362,22 @@ int main(int argc, char *argv[])
                      TaskManager::instance(), &TaskManager::tasksChanged);
 
     PlainTextLayout memoTextLayout;
+    // 单槽撤销删除的业务部分（计时、提交、撤销、被别处删掉时退场）；界面只管撤销条。
+    // 声明在引擎之前：引擎先析构，QML 里挂着的引用不会指向已经销毁的对象。
+    PendingDeletion pendingDeletion(TaskManager::instance(), FocusHistoryService::instance());
     QQmlApplicationEngine engine;
     // 界面草稿先落盘，再收尾同步并关库；系统退出没有机会再等待自动保存定时器。
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &engine, [&engine] {
         if (!engine.rootObjects().isEmpty())
             QMetaObject::invokeMethod(engine.rootObjects().first(), "flushMemoEdits", Qt::DirectConnection);
+    });
+    // 退出前再提交一次待删项，兜底：常规关窗界面已经先提交过了（失败还会拦住退出），
+    // 这里补的是系统直接退出、将来的 iPad 原生界面没有这一步的情况。顺序是先存草稿、再提交待删、
+    // 再结束计时、写同步、关库——待删项触库会改动任务与专注记录，必须赶在计时器落盘和同步收尾之前。
+    // 走到这里已经拦不住退出，提交失败只能留日志（界面那边的失败提示用户多半看不到了）。
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &pendingDeletion, [&pendingDeletion] {
+        if (!pendingDeletion.commit())
+            qWarning() << "退出时提交待删项失败，该项保留在库里";
     });
     // 剪贴板属于装配层；连接放在平台条件之外，iPad 和 Mac 使用同一条复制路径。
     QObject::connect(&syncController, &SyncController::copyRequested, &app, [](const QString& text) {
@@ -403,6 +415,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("ExportService"), ExportService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("taskManager"), TaskManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("taskInteractionCoordinator"), &taskInteractions);
+    engine.rootContext()->setContextProperty(QStringLiteral("pendingDeletion"), &pendingDeletion);
 #if defined(Q_OS_MACOS)
     engine.rootContext()->setContextProperty(QStringLiteral("mcpAccessController"), &mcpAccess);
 #endif

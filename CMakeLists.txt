@@ -155,6 +155,8 @@ set(APP_SOURCES
     src/services/TrashService.cpp
     src/services/TaskInteractionCoordinator.h
     src/services/TaskInteractionCoordinator.cpp
+    src/services/PendingDeletion.h
+    src/services/PendingDeletion.cpp
     src/services/QmlValues.h
     # 外部 AI 接入（plans/047）：common 是与辅助程序共用的契约与路径，bridge 只编入主应用。
     src/mcp/common/McpContracts.h
@@ -1063,6 +1065,66 @@ target_link_libraries(TrashServiceTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
 pomodoro_todo_enable_warnings(TrashServiceTests)
 add_test(NAME TrashServiceTests COMMAND TrashServiceTests)
 set_tests_properties(TrashServiceTests PROPERTIES TIMEOUT 90)
+
+# 单槽撤销删除（055 阶段 2）：计时提交、撤销、提前提交、被别处删掉时退场、失败回报。
+# 删除走真实的 TaskManager / FocusHistoryService 和真实建表逻辑的临时库，源文件清单照 TrashServiceTests。
+add_executable(PendingDeletionTests
+    tests/PendingDeletionTests.cpp
+    src/services/PendingDeletion.h
+    src/services/PendingDeletion.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncStore.h
+    src/services/SyncStore.cpp
+    src/services/SyncNotifier.h
+    src/services/SyncNotifier.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/FocusHistoryService.h
+    src/services/FocusHistoryService.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/RoutineManager.h
+    src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+    src/services/FocusSessionRules.h
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
+    src/services/CountdownService.h
+    src/services/CountdownService.cpp
+    src/services/TrashStore.h
+    src/services/TrashStore.cpp
+    src/services/TrashService.h
+    src/services/TrashService.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
+    src/models/CountdownModel.cpp
+)
+target_link_libraries(PendingDeletionTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
+pomodoro_todo_enable_warnings(PendingDeletionTests)
+add_test(NAME PendingDeletionTests COMMAND PendingDeletionTests)
+set_tests_properties(PendingDeletionTests PROPERTIES TIMEOUT 90)
 
 # 设备间同步的云盘传输（050 阶段 3）：文件格式、文件夹读写、同步引擎。
 # 两台设备各用一个真实结构的临时库，云盘用临时文件夹模拟，可以注入延迟、乱序、坏文件和读写失败。

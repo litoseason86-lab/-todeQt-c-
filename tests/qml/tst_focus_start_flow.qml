@@ -16,11 +16,6 @@ TestCase {
         id: taskManager
 
         signal tasksChanged
-        signal taskDeleted(int taskId)
-
-        property int deleteTaskCalls: 0
-        property int lastDeletedTaskId: -1
-        property bool deleteSucceeds: true
 
         // 选择器的候选来源。用例按需替换，默认空——保持原有用例的行为不变。
         property var todayTasks: []
@@ -65,15 +60,6 @@ TestCase {
             lastSetCompletedId = id
             lastSetCompletedValue = completed
             return true
-        }
-        function deleteTask(id) {
-            deleteTaskCalls += 1
-            lastDeletedTaskId = id
-            // 与 TaskManager::deleteTask 同契约：提交成功后、返回之前同步发出删除事实。
-            // 这样既有的撤销用例也会走到主窗口处理函数在提交途中重入的那条路径。
-            if (deleteSucceeds)
-                taskDeleted(id)
-            return deleteSucceeds
         }
     }
 
@@ -278,9 +264,6 @@ TestCase {
 
     QtObject {
         id: historyService
-        property int deletedId: -1
-        property bool succeeds: true
-        function deleteSession(id) { if (succeeds) deletedId = id; return succeeds }
         function getDayTimeline() { return [] }
         function getMonthSessions() { return [] }
         function lastError() { return "" }
@@ -314,8 +297,126 @@ TestCase {
         function restoreWarning() { return restoreWarningText }
     }
 
+    // 单槽撤销删除（PendingDeletion）的替身：属性与信号同 C++，行为同步模拟。
+    // 计时、真正删库、被别处删掉时退场等业务由 PendingDeletionTests 负责，这里只测 MainWindow 的接线。
+    QtObject {
+        id: pendingDeletion
+
+        property int taskId: -1
+        property int sessionId: -1
+        property bool sessionIsRest: false
+        property string title: ""
+        readonly property bool active: taskId > 0 || sessionId > 0
+        property int delayMs: 5000
+        property bool commitSucceeds: true
+
+        property int requestTaskCalls: 0
+        property int lastTaskId: -1
+        property string lastTaskTitle: ""
+        property int requestSessionCalls: 0
+        property int lastSessionId: -1
+        property string lastSessionTitle: ""
+        property bool lastSessionIsRest: false
+        property int commitCalls: 0
+        property int cancelCalls: 0
+
+        signal changed()
+        signal retired()
+        signal commitFailed(string failedTitle)
+
+        function clearSlot() {
+            taskId = -1
+            sessionId = -1
+            sessionIsRest = false
+            title = ""
+        }
+        function resetForTest() {
+            clearSlot()
+            commitSucceeds = true
+            delayMs = 5000
+            requestTaskCalls = 0; lastTaskId = -1; lastTaskTitle = ""
+            requestSessionCalls = 0; lastSessionId = -1; lastSessionTitle = ""; lastSessionIsRest = false
+            commitCalls = 0
+            cancelCalls = 0
+        }
+        function requestTask(id, titleText) {
+            requestTaskCalls += 1
+            lastTaskId = id
+            lastTaskTitle = titleText
+            if (id <= 0)
+                return false
+            if (active && !commit())
+                return false
+            taskId = id
+            sessionId = -1
+            sessionIsRest = false
+            title = titleText
+            changed()
+            return true
+        }
+        function requestSession(id, titleText, isRest) {
+            requestSessionCalls += 1
+            lastSessionId = id
+            lastSessionTitle = titleText
+            lastSessionIsRest = isRest
+            if (id <= 0)
+                return false
+            if (active && !commit())
+                return false
+            taskId = -1
+            sessionId = id
+            sessionIsRest = isRest
+            title = titleText
+            changed()
+            return true
+        }
+        function commit() {
+            commitCalls += 1
+            if (!active)
+                return true
+            retired()
+            var failedTitle = title
+            clearSlot()
+            changed()
+            if (!commitSucceeds) {
+                commitFailed(failedTitle)
+                return false
+            }
+            return true
+        }
+        function cancel() {
+            cancelCalls += 1
+            if (!active)
+                return
+            clearSlot()
+            changed()
+        }
+        // 模拟「待删任务被别处先删掉」：撤销窗口失效，槽清空。
+        function retireElsewhere() {
+            retired()
+            clearSlot()
+            changed()
+        }
+    }
+
+    // 交互协调器替身：只记 MainWindow 同步过来的待删任务编号。
+    QtObject {
+        id: interactionCoordinator
+
+        property int pendingDeleteReports: 0
+        property int lastPendingDeleteId: -1
+
+        function setPendingDelete(owner, id) {
+            pendingDeleteReports += 1
+            lastPendingDeleteId = id
+        }
+        function end(owner) {}
+    }
+
     MainWindow {
         id: mainWindow
+        pendingDeletionRef: pendingDeletion
+        interactionCoordinatorRef: interactionCoordinator
 
         width: testCase.width
         height: testCase.height
@@ -357,9 +458,6 @@ TestCase {
         appSettings.lastMode = 0
         appSettings.quickStartEnabled = true
         appSettings.workMinutes = 25
-        taskManager.deleteTaskCalls = 0
-        taskManager.lastDeletedTaskId = -1
-        taskManager.deleteSucceeds = true
         // 复位写在 init 而不是用例末尾：断言一失败就跳过还原的话，
         // 一条真实失败会污染后面每一条（docs/业务规则.md「界面与验证约定」记过这个坑）。
         taskManager.otherDateTasks = []
@@ -403,6 +501,9 @@ TestCase {
         focusView.toPomodoroTab(false)
         focusView.clearSelectedTask()
         mainWindow.cancelPendingDelete()
+        pendingDeletion.resetForTest()
+        interactionCoordinator.pendingDeleteReports = 0
+        interactionCoordinator.lastPendingDeleteId = -1
         wait(20)
     }
 
@@ -849,33 +950,48 @@ TestCase {
         compare(toast.actionText, "")
     }
 
+    // 以下删除用例只测 MainWindow 的接线：撤销条、各页拿到的待删编号、对 PendingDeletion 的调用。
+    // 计时到点提交、提前提交、被别处删掉时退场、提交失败的业务行为由 PendingDeletionTests 负责。
+
     function test_sessionDeleteCanUndoAndFailureRestoresState() {
-        historyService.deletedId = -1
-        historyService.succeeds = true
-        mainWindow.requestDeleteSession(12, "数学")
-        compare(historyService.deletedId, -1)
-        findChild(mainWindow, "globalToast").triggerAction()
+        var toast = findChild(mainWindow, "globalToast")
+        verify(mainWindow.requestDeleteSession(12, "数学", false))
+        compare(pendingDeletion.lastSessionId, 12)
+        compare(pendingDeletion.lastSessionTitle, "数学")
+        compare(pendingDeletion.lastSessionIsRest, false)
+        compare(mainWindow.pendingDeleteSessionId, 12)
+        compare(mainWindow.pendingDeleteIsRest, false)
+        compare(toast.actionText, "撤销")
+        compare(findChild(toast, "toastText").text, "已删除专注记录「数学」")
+
+        toast.triggerAction()
+        compare(pendingDeletion.cancelCalls, 1)
         compare(mainWindow.pendingDeleteSessionId, -1)
-        compare(historyService.deletedId, -1)
-        mainWindow.requestDeleteSession(12, "数学")
-        mainWindow.requestDeleteTask(30, "下一条")
-        compare(historyService.deletedId, 12)
+
+        // 休息记录文案；标题缺省时用「专注记录」。
+        verify(mainWindow.requestDeleteSession(13, "", true))
+        compare(pendingDeletion.lastSessionTitle, "专注记录")
+        compare(pendingDeletion.lastSessionIsRest, true)
+        compare(mainWindow.pendingDeleteIsRest, true)
+        compare(findChild(toast, "toastText").text, "已删除休息记录「专注记录」")
         mainWindow.cancelPendingDelete()
-        historyService.succeeds = false
-        mainWindow.requestDeleteSession(13, "失败记录")
-        verify(!mainWindow.commitPendingDelete())
-        compare(mainWindow.pendingDeleteSessionId, -1)
-        historyService.succeeds = true
+
+        // 无效编号被替身（同真实类）拒绝：没有撤销条。
+        toast.show("占位", "", null)
+        verify(!mainWindow.requestDeleteSession(-1, "无效", false))
+        compare(findChild(toast, "toastText").text, "占位")
     }
 
     function test_deleteIsDeferredAndUndoable() {
-        mainWindow.deleteCommitDelayMs = 60
-
-        mainWindow.requestDeleteTask(21, "误删任务")
+        verify(mainWindow.requestDeleteTask(21, "误删任务"))
+        compare(pendingDeletion.requestTaskCalls, 1)
+        compare(pendingDeletion.lastTaskId, 21)
+        compare(pendingDeletion.lastTaskTitle, "误删任务")
         compare(mainWindow.pendingDeleteTaskId, 21)
         // 今日专注页的补录候选也要知道待删任务，否则用户能在撤销窗口内选中它去补录。
         compare(findChild(mainWindow, "todayFocusViewPage").pendingDeleteTaskId, 21)
-        compare(taskManager.deleteTaskCalls, 0)
+        // 待删任务编号要同步给交互协调器（外部 AI 接入据此回避这条任务）。
+        compare(interactionCoordinator.lastPendingDeleteId, 21)
 
         var toast = findChild(mainWindow, "globalToast")
         verify(toast)
@@ -883,32 +999,28 @@ TestCase {
         compare(toast.actionText, "撤销")
 
         toast.triggerAction()
+        compare(pendingDeletion.cancelCalls, 1)
         compare(mainWindow.pendingDeleteTaskId, -1)
         compare(findChild(mainWindow, "todayFocusViewPage").pendingDeleteTaskId, -1)
-        wait(120)
-        compare(taskManager.deleteTaskCalls, 0)
-
-        mainWindow.deleteCommitDelayMs = 5000
+        compare(interactionCoordinator.lastPendingDeleteId, -1)
     }
 
     function test_earlyCommitRetiresTheUndoToast() {
         // 补录或修改记录、备份、恢复、关窗之前都会先提交待删除项。提交之后撤销条若还挂着，
         // 用户点「撤销」时提示条照常消失、看起来像撤销成功，记录其实已经永久删除。
-        mainWindow.deleteCommitDelayMs = 5000
         var toast = findChild(mainWindow, "globalToast")
 
         mainWindow.requestDeleteTask(26, "提前落库的任务")
         compare(toast.actionText, "撤销")
 
         verify(mainWindow.commitPendingDelete())
-        compare(taskManager.deleteTaskCalls, 1)
+        compare(pendingDeletion.commitCalls, 1)
         compare(toast.actionText, "")
         compare(toast.shown, false)
     }
 
     function test_earlyCommitLeavesUnrelatedToastAlone() {
         // 只收起属于这次删除的撤销条；提示条已经被别的提示顶掉时不能误关。
-        mainWindow.deleteCommitDelayMs = 5000
         var toast = findChild(mainWindow, "globalToast")
 
         mainWindow.requestDeleteTask(27, "待删任务")
@@ -920,74 +1032,50 @@ TestCase {
         compare(toast.actionText, "查看")
     }
 
-    function test_deleteCommitsAfterTimeout() {
+    function test_commitDelayFollowsTheWindowSetting() {
+        // 撤销窗口时长由主窗口的 deleteCommitDelayMs 决定，同步给 PendingDeletion；到点提交由 PendingDeletionTests 负责。
         mainWindow.deleteCommitDelayMs = 60
-
-        mainWindow.requestDeleteTask(22, "真删任务")
-        tryCompare(taskManager, "deleteTaskCalls", 1, 2000)
-        compare(taskManager.lastDeletedTaskId, 22)
-        compare(mainWindow.pendingDeleteTaskId, -1)
-
+        compare(pendingDeletion.delayMs, 60)
         mainWindow.deleteCommitDelayMs = 5000
+        compare(pendingDeletion.delayMs, 5000)
     }
 
     function test_secondDeleteCommitsFirstImmediately() {
-        mainWindow.deleteCommitDelayMs = 5000
+        var toast = findChild(mainWindow, "globalToast")
 
         mainWindow.requestDeleteTask(23, "第一个")
+        compare(pendingDeletion.commitCalls, 0)
+        compare(toast.shown, true)
         mainWindow.requestDeleteTask(24, "第二个")
 
-        compare(taskManager.deleteTaskCalls, 1)
-        compare(taskManager.lastDeletedTaskId, 23)
+        // 第二次请求时替身先提交了第一条：旧撤销条收起，新的撤销条出现。
+        compare(pendingDeletion.commitCalls, 1)
         compare(mainWindow.pendingDeleteTaskId, 24)
+        compare(toast.shown, true)
+        compare(toast.actionText, "撤销")
+        compare(findChild(toast, "toastText").text, "已删除「第二个」")
 
         mainWindow.cancelPendingDelete()
     }
 
     function test_pendingTaskDeletedElsewhereRetiresUndoSlot() {
-        // 待删任务被别的路径先删掉（删除每日例行时会顺带收回今天那条没动过的实例）：
-        // 窗口到期后不能再删一次——那必然失败，会弹出一条假的「删除失败，请重试」；
-        // 撤销条也要收起，否则用户点「撤销」只会看到提示消失，任务却回不来。
-        mainWindow.deleteCommitDelayMs = 60
+        // 待删任务被别的路径先删掉：撤销条要收起，否则用户点「撤销」只会看到提示消失，任务却回不来。
+        // 退场本身由 PendingDeletion 判断，这里用替身模拟它发出的 retired 与清槽。
         var toast = findChild(mainWindow, "globalToast")
         verify(toast)
 
         mainWindow.requestDeleteTask(28, "随例行收回的任务")
         compare(toast.actionText, "撤销")
 
-        taskManager.taskDeleted(28)
+        pendingDeletion.retireElsewhere()
         compare(mainWindow.pendingDeleteTaskId, -1)
         compare(findChild(mainWindow, "todayFocusViewPage").pendingDeleteTaskId, -1)
         compare(toast.actionText, "")
         compare(toast.shown, false)
-
-        // 「没有再删一次」只能等过原定的提交时刻才能观察到。
-        wait(120)
-        compare(taskManager.deleteTaskCalls, 0)
-
-        mainWindow.deleteCommitDelayMs = 5000
-    }
-
-    function test_unrelatedTaskDeletionKeepsUndoWindow() {
-        // 只认待删的那一条：别的任务被删掉时，撤销窗口和撤销条都必须原样保留。
-        mainWindow.deleteCommitDelayMs = 5000
-        var toast = findChild(mainWindow, "globalToast")
-        verify(toast)
-
-        mainWindow.requestDeleteTask(29, "仍可撤销的任务")
-        taskManager.taskDeleted(999)
-
-        compare(mainWindow.pendingDeleteTaskId, 29)
-        compare(toast.actionText, "撤销")
-        compare(toast.shown, true)
-
-        toast.triggerAction()
-        compare(mainWindow.pendingDeleteTaskId, -1)
-        compare(taskManager.deleteTaskCalls, 0)
     }
 
     function test_deleteFailureRestoresHiddenTaskAndReportsError() {
-        taskManager.deleteSucceeds = false
+        pendingDeletion.commitSucceeds = false
         mainWindow.requestDeleteTask(25, "删除失败任务")
 
         compare(mainWindow.commitPendingDelete(), false)
@@ -997,6 +1085,18 @@ TestCase {
         var toastText = findChild(toast, "toastText")
         verify(toastText)
         verify(toastText.text.indexOf("失败") >= 0)
+        verify(toastText.text.indexOf("删除失败任务") >= 0)
+    }
+
+    function test_newToastCommitsThePendingDeletion() {
+        // 提示条是单槽：别的提示要顶掉撤销条时先提交，不让看不见的倒计时在背后走完。
+        mainWindow.requestDeleteTask(31, "待删任务")
+        compare(pendingDeletion.commitCalls, 0)
+
+        mainWindow.showToast("别的提示")
+        compare(pendingDeletion.commitCalls, 1)
+        compare(mainWindow.pendingDeleteTaskId, -1)
+        compare(findChild(findChild(mainWindow, "globalToast"), "toastText").text, "别的提示")
     }
 
     // —— 专注页任务选择器与 ⌘↩ 的口径 ——

@@ -35,11 +35,20 @@ Item {
     property bool isSwitching: false
     // 原生全屏、主内容显隐和沉浸覆盖层都从这一事实源派生，避免三处互相写状态。
     property bool focusImmersiveActive: false
-    property int pendingDeleteTaskId: -1
-    property int pendingDeleteSessionId: -1
-    property bool pendingDeleteIsRest: false
-    property string pendingDeleteTitle: ""
+    // 单槽撤销删除的状态、计时、提交与撤销都在 C++ 的 PendingDeletion 里；这里只读出来给各页隐藏待删的行，
+    // 界面自己只管撤销条。ref 为空（测试、没有装配）时视为没有待删项。
+    property var pendingDeletionRef: null
+    readonly property int pendingDeleteTaskId: root.pendingDeletionRef ? root.pendingDeletionRef.taskId : -1
+    readonly property int pendingDeleteSessionId: root.pendingDeletionRef ? root.pendingDeletionRef.sessionId : -1
+    readonly property bool pendingDeleteIsRest: root.pendingDeletionRef ? root.pendingDeletionRef.sessionIsRest : false
+    readonly property string pendingDeleteTitle: root.pendingDeletionRef ? root.pendingDeletionRef.title : ""
     property int deleteCommitDelayMs: 5000
+    Binding {
+        target: root.pendingDeletionRef
+        property: "delayMs"
+        value: root.deleteCommitDelayMs
+        when: !!root.pendingDeletionRef
+    }
     property string restoreInspectionPath: ""
     property var interactionCoordinatorRef: null
     onPendingDeleteTaskIdChanged: {
@@ -253,29 +262,26 @@ Item {
     function showToast(message, actionText, actionCallback) {
         // 提示条是单槽：任何新提示都会顶掉撤销条。撤销入口一旦不可见就立即提交删除，
         // 不让“看不见的删除倒计时”在背后继续走完 5 秒。
-        if (root.pendingDeleteTaskId > 0 || root.pendingDeleteSessionId > 0) {
+        if (root.pendingDeletionRef && root.pendingDeletionRef.active) {
             root.commitPendingDelete()
         }
         globalToast.show(message, actionText, actionCallback)
     }
 
     function requestDeleteTask(taskId, taskTitle) {
-        // 单槽撤销：新删除到来时，上一条先真正落库，撤销窗口只保护最近一次操作。
-        if (!root.commitPendingDelete()) {
+        // 单槽撤销：新删除到来时上一条先真正落库（PendingDeletion::requestTask 负责，失败则新请求不进槽），
+        // 撤销窗口只保护最近一次操作。
+        const title = String(taskTitle || "")
+        if (!root.pendingDeletionRef || !root.pendingDeletionRef.requestTask(taskId, title)) {
             return false
         }
-
-        root.pendingDeleteTaskId = taskId
-        root.pendingDeleteTitle = String(taskTitle || "")
-        deleteCommitTimer.interval = root.deleteCommitDelayMs
-        deleteCommitTimer.restart()
         // 例行生成的当日实例：删除只影响今天，例行规则本身不受影响，撤销文案据此区分，
         // 让用户明白这不是删掉了整条例行规则。
         const isRoutine = root.taskManagerRef && root.taskManagerRef.isRoutineGeneratedTask
                 ? root.taskManagerRef.isRoutineGeneratedTask(taskId) : false
         var deleteMessage = isRoutine
-                ? "已删除今天的例行任务「" + root.pendingDeleteTitle + "」"
-                : "已删除「" + root.pendingDeleteTitle + "」"
+                ? "已删除今天的例行任务「" + title + "」"
+                : "已删除「" + title + "」"
         // 直接走 globalToast：showToast 会把“已有待删任务”先提交，撤销条自己不能触发这条规则。
         root.pendingDeleteUndoAction = function() {
             root.cancelPendingDelete()
@@ -285,17 +291,14 @@ Item {
     }
 
     function requestDeleteSession(sessionId, title, isRest) {
-        if (sessionId <= 0 || !root.commitPendingDelete())
+        const sessionTitle = String(title || qsTr("专注记录"))
+        const rest = Boolean(isRest)
+        if (!root.pendingDeletionRef || !root.pendingDeletionRef.requestSession(sessionId, sessionTitle, rest))
             return false
-        root.pendingDeleteIsRest = Boolean(isRest)
-        root.pendingDeleteSessionId = sessionId
-        root.pendingDeleteTitle = String(title || qsTr("专注记录"))
-        deleteCommitTimer.interval = root.deleteCommitDelayMs
-        deleteCommitTimer.restart()
         root.pendingDeleteUndoAction = function() {
             root.cancelPendingDelete()
         }
-        globalToast.show(qsTr("已删除%1记录「%2」").arg(root.pendingDeleteIsRest ? qsTr("休息") : qsTr("专注")).arg(root.pendingDeleteTitle), qsTr("撤销"), root.pendingDeleteUndoAction)
+        globalToast.show(qsTr("已删除%1记录「%2」").arg(rest ? qsTr("休息") : qsTr("专注")).arg(sessionTitle), qsTr("撤销"), root.pendingDeleteUndoAction)
         return true
     }
 
@@ -322,44 +325,15 @@ Item {
     }
 
     function commitPendingDelete() {
-        if (root.pendingDeleteTaskId <= 0 && root.pendingDeleteSessionId <= 0) {
-            return true
-        }
-
-        deleteCommitTimer.stop()
-        // 删除一旦触库就不能撤销了。补录、备份、恢复、关窗等路径会提前提交，
-        // 此时撤销条可能还在剩余的几秒里挂着：用户点「撤销」提示条会消失、看起来像撤销成功，
-        // 记录却已经永久删除。所以不论成败，先收起属于这次删除的撤销条。
-        globalToast.dismissAction(root.pendingDeleteUndoAction)
-        root.pendingDeleteUndoAction = null
-        // 到这里才真正触库；撤销窗口内数据库没有被碰过，专注记录关联不会提前丢失。
-        var deletedTitle = root.pendingDeleteTitle
-        // 任务和专注记录共用单槽撤销及退出守卫，避免切页后遗失尚未提交的删除。
-        var deleted = root.pendingDeleteSessionId > 0
-                ? root.focusHistoryServiceRef && (root.pendingDeleteIsRest
-                    ? root.focusHistoryServiceRef.deleteRestSession(root.pendingDeleteSessionId)
-                    : root.focusHistoryServiceRef.deleteSession(root.pendingDeleteSessionId))
-                : root.taskManagerRef && root.taskManagerRef.deleteTask(root.pendingDeleteTaskId)
-        if (!deleted) {
-            // 失败后立即解除隐藏，让任务重新出现；不能把数据库失败伪装成“已删除”。
-            root.pendingDeleteTaskId = -1
-            root.pendingDeleteSessionId = -1
-            root.pendingDeleteTitle = ""
-            root.showToast("删除「" + deletedTitle + "」失败，请重试")
-            return false
-        }
-        root.pendingDeleteTaskId = -1
-        root.pendingDeleteSessionId = -1
-        root.pendingDeleteTitle = ""
-        return true
+        // 停计时、先收起撤销条、触库、清槽都在 PendingDeletion::commit；
+        // 撤销条的收起和失败提示由下面 Connections 里的 retired / commitFailed 处理。
+        return !root.pendingDeletionRef || root.pendingDeletionRef.commit()
     }
 
     function cancelPendingDelete() {
-        deleteCommitTimer.stop()
         root.pendingDeleteUndoAction = null
-        root.pendingDeleteTaskId = -1
-        root.pendingDeleteSessionId = -1
-        root.pendingDeleteTitle = ""
+        if (root.pendingDeletionRef)
+            root.pendingDeletionRef.cancel()
     }
 
     // 今日任务、本周计划、仪表盘三个任务入口都从这里分流。
@@ -1292,32 +1266,22 @@ Item {
         anchors.bottomMargin: Theme.space32 + root.SafeArea.margins.bottom
     }
 
-    Timer {
-        id: deleteCommitTimer
-
-        interval: 5000
-        onTriggered: root.commitPendingDelete()
-    }
-
     Connections {
-        // 待删任务可能被别的路径先删掉：删除、停用每日例行会顺带收回今天那条还没动过的实例，
-        // 外部 AI 接入也能删任务。这时既没有东西可提交，也没有东西可撤销。
-        // 不清掉单槽的话，窗口到期再删一次必然失败，弹出一条假的「删除失败，请重试」；
-        // 撤销条留着，也会让用户以为还能把任务找回来。
-        // taskDeleted 只在删除提交之后才发出，按它解绑不需要再去查询任务是否还在。
-        target: root.taskManagerRef
+        target: root.pendingDeletionRef
         ignoreUnknownSignals: true
 
-        function onTaskDeleted(taskId) {
-            if (Number(taskId) !== root.pendingDeleteTaskId)
-                return
-            // commitPendingDelete 自己调用 deleteTask 时也会同步走到这里。那时计时器已停、
-            // 撤销条已收、回调已清空，下面几步再执行一遍没有副作用，提交流程照常收尾。
-            deleteCommitTimer.stop()
+        // 删除一旦触库就不能撤销了。补录、备份、恢复、关窗等路径会提前提交，
+        // 此时撤销条可能还在剩余的几秒里挂着：用户点「撤销」提示条会消失、看起来像撤销成功，
+        // 记录却已经永久删除。所以不论成败，先收起属于这次删除的撤销条；
+        // 只在提示条挂着的正是这个回调时才收起，已被别的提示顶掉的不能误关。
+        // 待删任务被别处先删掉而退场时同样会发。
+        function onRetired() {
             globalToast.dismissAction(root.pendingDeleteUndoAction)
             root.pendingDeleteUndoAction = null
-            root.pendingDeleteTaskId = -1
-            root.pendingDeleteTitle = ""
+        }
+
+        function onCommitFailed(title) {
+            root.showToast("删除「" + title + "」失败，请重试")
         }
     }
 

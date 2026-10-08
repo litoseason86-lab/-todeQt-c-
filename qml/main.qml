@@ -76,6 +76,7 @@ ApplicationWindow {
         mcpAccessRef: typeof mcpAccessController === "undefined" ? null : mcpAccessController
         backupServiceRef: typeof backupService === "undefined" ? null : backupService
         syncControllerRef: typeof syncController === "undefined" ? null : syncController
+        pendingDeletionRef: typeof pendingDeletion === "undefined" ? null : pendingDeletion
         scheduleServiceRef: typeof scheduleService === "undefined" ? null : scheduleService
         shortcutRegistryRef: typeof shortcutRegistry === "undefined" ? null : shortcutRegistry
         // qmllint enable unqualified
