@@ -848,6 +848,7 @@ private slots:
     void reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation();
     void reorderTasksRejectsInvalidSetsAtomically();
     void moveTaskToDateLandsAtTheEndOfTheTargetDay();
+    void moveTaskToDateToItsOwnDateIsANoOp();
     void focusHistoryDistinguishesEmptyResultFromQueryError();
     void focusHistorySkipsUnfinishedSessions();
     void focusHistorySkipsInvalidShortSessions();
@@ -8556,6 +8557,65 @@ void ServiceTests::moveTaskToDateLandsAtTheEndOfTheTargetDay()
 
     // 不存在的任务要如实失败。
     QVERIFY(!tasks->moveTaskToDate(999999, tomorrow));
+}
+
+void ServiceTests::moveTaskToDateToItsOwnDateIsANoOp()
+{
+    // 把任务改期到它原来那天不算改期：返回成功，不写库、不改顺序、不发 tasksChanged。
+    // 照常写一次的话，它会被挪到当天末尾、手排好的顺序就乱了；Mac 拖回原日和 iPad 的拖放
+    // 都交给服务判断，所以被改期的这条排在第一位——违反保证时它的位置和序号才会变。
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+
+    QVERIFY(tasks->addTask(QStringLiteral("甲"), today, -1, 0));
+    QVERIFY(tasks->addTask(QStringLiteral("乙"), today, -1, 0));
+    QVERIFY(tasks->addTask(QStringLiteral("丙"), today, -1, 0));
+
+    auto displayOrders = [](const QVariantList& rows) {
+        QList<int> orders;
+        for (const QVariant& row : rows)
+            orders.append(row.toMap().value(QStringLiteral("displayOrder")).toInt());
+        return orders;
+    };
+    // total_changes() 是连接上累计的行写入数（含触发器写的同步登记）。只比顺序抓不到
+    // 「写了一遍、值恰好没变」的实现，而同步登记会因此多出记录；这个计数前后相等才算没写库。
+    auto totalChanges = []() -> qlonglong {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        if (!query.exec(QStringLiteral("SELECT total_changes()")) || !query.next())
+            return -1;
+        return query.value(0).toLongLong();
+    };
+
+    // 前提：被改期的是第一条，且它的序号小于末尾那条——真被挪到末尾的话，位置和序号都会变。
+    const QVariantList before = tasks->getTasksByDate(today);
+    QCOMPARE(taskTitles(before),
+             QStringList({QStringLiteral("甲"), QStringLiteral("乙"), QStringLiteral("丙")}));
+    const QList<int> ordersBefore = displayOrders(before);
+    QCOMPARE(ordersBefore.size(), 3);
+    QVERIFY(ordersBefore.at(0) < ordersBefore.at(1));
+    QVERIFY(ordersBefore.at(1) < ordersBefore.at(2));
+    const int firstId = before.first().toMap().value(QStringLiteral("id")).toInt();
+    QVERIFY(firstId > 0);
+
+    QSignalSpy changedSpy(tasks, &TaskManager::tasksChanged);
+    const qlonglong writesBefore = totalChanges();
+    QVERIFY(writesBefore >= 0);
+
+    // Mac 的界面传 ISO 字符串，C++ 调用方传 QDate：两种写法的同一天都不算改期。
+    const QVariantList sameDayValues{QVariant(today), QVariant(today.toString(Qt::ISODate))};
+    for (const QVariant& sameDay : sameDayValues) {
+        QVERIFY(tasks->moveTaskToDate(firstId, sameDay));
+
+        QCOMPARE(changedSpy.count(), 0);
+        QCOMPARE(totalChanges(), writesBefore);
+        const QVariantList after = tasks->getTasksByDate(today);
+        QCOMPARE(taskTitles(after), taskTitles(before));
+        QCOMPARE(displayOrders(after), ordersBefore);
+    }
+
+    // 不存在的任务仍要如实失败：读不到它现在的日期，不能当成「同一天」放行。
+    QVERIFY(!tasks->moveTaskToDate(999999, today));
+    QCOMPARE(changedSpy.count(), 0);
 }
 
 void ServiceTests::manualSessionRejectsOverlapWithRunningSession()

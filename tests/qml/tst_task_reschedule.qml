@@ -59,6 +59,13 @@ TestCase {
             testCase.verify(coordinator.refreshBlocked || trackingCoordinator.refreshBlocked,
                             "写库结束前不得释放拖动登记")
             testCase.moveCalls.push({ taskId: taskId, date: isoDate })
+            // 照真实服务（TaskManager::moveTaskToDate）：目标日就是任务现在的日期时不算改期，
+            // 成功返回、不发 tasksChanged。上面的调用记录照留，用例据此确认视图把它交给了服务。
+            for (var i = 0; i < taskManager.weekRows.length; ++i) {
+                var row = taskManager.weekRows[i]
+                if (row.id === taskId && row.date === isoDate)
+                    return true
+            }
             tasksChanged()
             return true
         }
@@ -117,6 +124,16 @@ TestCase {
         return null
     }
 
+    // 某个 ISO 日期是视图本周的第几天（0~6），不在本周返回 -1。用视图自己的 dayDate/isoDate
+    // 换算，用例就不必知道今天是周几。
+    function dayIndexOfDate(view, iso) {
+        for (var i = 0; i < 7; ++i) {
+            if (view.isoDate(view.dayDate(i)) === iso)
+                return i
+        }
+        return -1
+    }
+
     function logicalToday() {
         var d = new Date()
         if (d.getHours() < appSettings.dayStartHour) {
@@ -170,30 +187,47 @@ TestCase {
         wait(80)
         testCase.weekQueryCount = 0
 
+        // 目标取原日的下一天：目标就是原日的话，服务按"没改期"处理、不发 tasksChanged，
+        // 下面"一次改期只刷新一次"的断言就等不到那次刷新。
+        var home = testCase.dayIndexOfDate(view, taskManager.weekRows[0].date)
+        verify(home >= 0, "待挪任务应落在本周某一天")
+        var target = (home + 1) % 7
+
         // 直接驱动状态机而不模拟真实指针：坐标命中依赖离屏布局，
         // 那部分不稳定；这里要守的是"落在第 N 天就改到第 N 天"这条规则。
         view.beginDrag(1)
-        view.dropTargetIndex = 4
-        view.commitDrag(1, 0)
+        view.dropTargetIndex = target
+        view.commitDrag(1)
 
         compare(testCase.moveCalls.length, 1)
         compare(testCase.moveCalls[0].taskId, 1)
-        compare(testCase.moveCalls[0].date, view.isoDate(view.dayDate(4)))
+        compare(testCase.moveCalls[0].date, view.isoDate(view.dayDate(target)))
         // 生产服务在返回前同步发 tasksChanged；一次改期只能因此刷新一次。
         // 显式 refresh 再叠加信号刷新，会在拖动回调栈里连续重建两轮 delegate。
         tryCompare(testCase, "weekQueryCount", 1)
     }
 
-    function test_dropping_back_on_the_same_day_is_not_a_move() {
+    function test_dropping_back_on_the_same_day_is_left_to_the_service() {
+        // 拖回原日：视图把原日期原样交给服务、不显示错误，是否写库由服务判断
+        // （TaskManager::moveTaskToDate 对同一天返回成功、不写库，C++ 测试覆盖）。
         var view = createTemporaryObject(viewComponent, testCase)
+        verify(!!view, "Component exists")
         view.refresh()
         wait(80)
 
+        // 原日用视图自己的日期换算找出来，前提先断言成立。
+        var home = testCase.dayIndexOfDate(view, taskManager.weekRows[0].date)
+        verify(home >= 0, "待挪任务应落在本周某一天")
+        compare(view.loadError, "")
+
         view.beginDrag(1)
-        view.dropTargetIndex = 2
-        view.commitDrag(1, 2)
-        // 拖回原处不算改期：白写一次库，还会把它挪到当天末尾。
-        compare(testCase.moveCalls.length, 0)
+        view.dropTargetIndex = home
+        view.commitDrag(1)
+
+        compare(testCase.moveCalls.length, 1)
+        compare(testCase.moveCalls[0].taskId, 1)
+        compare(testCase.moveCalls[0].date, view.isoDate(view.dayDate(home)))
+        compare(view.loadError, "")
     }
 
     function test_dropping_outside_any_day_is_cancelled() {
@@ -203,9 +237,8 @@ TestCase {
 
         view.beginDrag(1)
         view.dropTargetIndex = -1
-        // currentIndex 刻意不取 0：取 0 的话「把 -1 钳成 0」这种错误实现会因为
-        // 恰好等于原位置而被拖回原处不算改期那条规则掩盖掉。
-        view.commitDrag(1, 3)
+        // 桩会记下对原日的调用，所以「把 -1 钳成 0」这类错误实现不论今天是周几都会被抓到。
+        view.commitDrag(1)
         compare(testCase.moveCalls.length, 0)
         // 状态要复位，否则下一次拖动会带着上次的残留目标。
         compare(view.draggingTaskId, -1)
@@ -218,7 +251,7 @@ TestCase {
 
         view.beginDrag(1)
         view.dropTargetIndex = 4
-        view.commitDrag(1, 0, true)
+        view.commitDrag(1, true)
 
         compare(testCase.moveCalls.length, 0)
         compare(view.draggingTaskId, -1)

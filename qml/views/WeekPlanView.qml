@@ -73,14 +73,14 @@ Item {
         if (!root.pageActive) {
             editTaskDialog.finishEditing()
             editTaskDialog.close()
-            root.commitDrag(-1, -1, true)
+            root.commitDrag(-1, true)
         }
         refreshCoalescer.cancel()
         if (root.pageActive)
             root.refresh()
     }
     onPendingDeleteTaskIdChanged: {
-        if (root.pendingDeleteTaskId > 0) root.commitDrag(-1, -1, true)
+        if (root.pendingDeleteTaskId > 0) root.commitDrag(-1, true)
         if (root.pageActive)
             refresh()
     }
@@ -235,7 +235,7 @@ Item {
         return null
     }
 
-    function commitDrag(taskId, currentIndex, cancelled) {
+    function commitDrag(taskId, cancelled) {
         // 先取出本次拖动的登记对象：落库结束后释放的必须是它。
         const dragOwner = root.dragOwner
         root.dragOwner = null
@@ -243,9 +243,8 @@ Item {
             const target = root.dropTargetIndex
             root.draggingTaskId = -1
             root.dropTargetIndex = -1
-            // 拖回原来那天不算改期：白写一次库还会把它挪到当天末尾。
-            if (cancelled === true || !root.canMoveTasks
-                    || target < 0 || target === currentIndex) {
+            // 拖回原日由服务判断，不写库。
+            if (cancelled === true || !root.canMoveTasks || target < 0) {
                 return
             }
             if (!root.taskManagerRef.moveTaskToDate(taskId, root.isoDate(root.dayDate(target)))) {
@@ -1061,9 +1060,7 @@ Item {
                                     onDragStarted: root.beginDrag(weekTaskRow.taskId, weekTaskRow)
                                     onDragMoved: function (sceneX, sceneY) { root.updateDrag(sceneY) }
                                     onDragFinished: function (cancelled) {
-                                        root.commitDrag(weekTaskRow.taskId,
-                                                        dayRow.index,
-                                                        cancelled)
+                                        root.commitDrag(weekTaskRow.taskId, cancelled)
                                     }
 
                                     onCompletionChanged: function(id, completed) {

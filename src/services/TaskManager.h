@@ -107,6 +107,9 @@ public:
     Q_INVOKABLE QVariantMap getTask(int taskId) const;
     Q_INVOKABLE QVariantList searchTasks(const QString& text, int status, int limit) const;
     Q_INVOKABLE bool duplicateTask(int taskId, const QVariant& dateValue);
+    // 单条改期，落到目标日末尾。目标日就是任务现在的日期时不算改期：返回 true，
+    // 不写库、不改顺序、不发 tasksChanged（与 moveTasksToDate 对已在目标日的任务同一口径）。
+    // 任务不存在返回 false。
     Q_INVOKABLE bool moveTaskToDate(int taskId, const QVariant& dateValue);
 
     // 备注长度上限（QChar 计数）。超长一律拒绝而不是截断：截断会让保存照常「成功」，

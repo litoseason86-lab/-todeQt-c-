@@ -1152,6 +1152,28 @@ bool TaskManager::moveTaskToDate(int taskId, const QVariant& dateValue)
         return false;
     }
 
+    // 改期到任务原来那天不算改期：直接成功，不写库、不发信号。照常写一次会把它挪到当天末尾，
+    // 手排好的顺序就乱了，还白触发一轮刷新。Mac 周计划拖回原日和 iPad 的拖放都靠这里判断，
+    // 界面不再各自比较日期；与 moveTasksToDate「已在目标日期的任务保持排序」同一口径。
+    // 日期列存的是 ISO 字符串，按字符串比较，和 moveTasksToDate 里的 SQL 比较方式一致。
+    QSqlQuery currentQuery(db);
+    currentQuery.prepare(QStringLiteral("SELECT date FROM tasks WHERE id = :id"));
+    currentQuery.bindValue(QStringLiteral(":id"), taskId);
+    if (!currentQuery.exec()) {
+        qWarning() << "Failed to move task:" << currentQuery.lastError().text();
+        return false;
+    }
+    if (!currentQuery.next()) {
+        qWarning() << "Failed to move task: task not found" << taskId;
+        return false;
+    }
+    const bool alreadyOnTargetDate =
+        currentQuery.value(0).toString() == date.toString(Qt::ISODate);
+    currentQuery.finish();
+    if (alreadyOnTargetDate) {
+        return true;
+    }
+
     QSqlQuery query(db);
     // 落到新日期的末尾：插到中间会打乱目标日期上已排好的顺序。
     query.prepare(QStringLiteral(
