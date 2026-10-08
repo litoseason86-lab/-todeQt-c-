@@ -243,6 +243,8 @@ if(IOS)
         src/platform/ios/native/NativeRoot.mm
         src/platform/ios/bridge/PTLifecycleBridge.h
         src/platform/ios/bridge/PTLifecycleBridge.mm
+        src/platform/ios/bridge/PTShellBridge.h
+        src/platform/ios/bridge/PTShellBridge.mm
     )
     set_source_files_properties(
         src/platform/ios/IosSyncFolder.mm
@@ -250,6 +252,7 @@ if(IOS)
         src/platform/ios/IosBackgroundTask.mm
         src/platform/ios/native/NativeRoot.mm
         src/platform/ios/bridge/PTLifecycleBridge.mm
+        src/platform/ios/bridge/PTShellBridge.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
     )
 endif()
@@ -1098,6 +1101,26 @@ target_link_libraries(TrashServiceTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
 pomodoro_todo_enable_warnings(TrashServiceTests)
 add_test(NAME TrashServiceTests COMMAND TrashServiceTests)
 set_tests_properties(TrashServiceTests PROPERTIES TIMEOUT 90)
+
+# 055-P3A：数据桥接仅依赖 Foundation 与 Qt，可在 macOS 测类型转换和信号生命周期。
+get_target_property(PT_SHELL_TEST_SOURCES TrashServiceTests SOURCES)
+list(REMOVE_ITEM PT_SHELL_TEST_SOURCES tests/TrashServiceTests.cpp)
+add_executable(PTShellBridgeTests ${PT_SHELL_TEST_SOURCES}
+    tests/PTShellBridgeTests.mm
+    src/platform/ios/bridge/PTShellBridge.h src/platform/ios/bridge/PTShellBridge.mm
+    src/platform/ios/bridge/PTLifecycleBridge.h src/platform/ios/bridge/PTLifecycleBridge.mm
+    src/services/StatisticsService.h src/services/StatisticsService.cpp
+    src/services/BackupService.h src/services/BackupService.cpp
+    src/services/BackupOperations.h src/services/BackupOperations.cpp
+    src/services/LogicalDayService.h src/services/LogicalDayService.cpp)
+set_source_files_properties(tests/PTShellBridgeTests.mm
+    src/platform/ios/bridge/PTShellBridge.mm src/platform/ios/bridge/PTLifecycleBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(PTShellBridgeTests PRIVATE Qt6::Core Qt6::Gui Qt6::Sql Qt6::Concurrent Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(PTShellBridgeTests)
+add_test(NAME PTShellBridgeTests COMMAND PTShellBridgeTests)
+set_tests_properties(PTShellBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
 # 设备间同步的云盘传输（050 阶段 3）：文件格式、文件夹读写、同步引擎。
 # 两台设备各用一个真实结构的临时库，云盘用临时文件夹模拟，可以注入延迟、乱序、坏文件和读写失败。
