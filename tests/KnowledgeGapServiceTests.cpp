@@ -1,6 +1,7 @@
 #include <QCoreApplication>
 #include <QDate>
 #include <QDateTime>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -45,6 +46,36 @@ QStringList titlesOf(const QVariantList& rows)
     return titles;
 }
 
+// 批量转换的返回值必须三个键齐全：没有失败时 reason 也是空串而不是缺键，界面和桥接层都按键读。
+bool hasBatchResultKeys(const QVariantMap& result)
+{
+    return result.contains(QStringLiteral("converted")) && result.contains(QStringLiteral("failed"))
+           && result.contains(QStringLiteral("reason"));
+}
+
+int taskCount()
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    if (!query.exec(QStringLiteral("SELECT COUNT(*) FROM tasks")) || !query.next()) {
+        return -1;
+    }
+    const int count = query.value(0).toInt();
+    // 计数游标先合上：结果集开着时 SQLite 会一直持有 tasks 的表锁。
+    query.finish();
+    return count;
+}
+
+// SQLite 的 total_changes()：连接上累计的行写入数（含触发器写的记录）。前后相等才说明期间
+// 一次库都没写过——只比较数据抓不到「写了一遍、值恰好没变」的实现。读不出来返回 -1。
+qlonglong totalDbChanges()
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    if (!query.exec(QStringLiteral("SELECT total_changes()")) || !query.next()) {
+        return -1;
+    }
+    return query.value(0).toLongLong();
+}
+
 } // namespace
 
 class KnowledgeGapServiceTests : public QObject
@@ -78,6 +109,9 @@ private slots:
     void convertToTaskKeepsOverdueDueDate();
     void reminderSummaryUsesLogicalDayBoundary();
     void reminderSummarySkipsGapsWhoseTaskIsStillOpen();
+    void convertDueGapsToTasksConvertsOnlyDueUnresolvedWithoutOpenTask();
+    void convertDueGapsToTasksKeepsSuccessesAndReportsTheLastFailure();
+    void convertDueGapsToTasksWithNothingDueChangesNothing();
     void operationsFailSafelyWhenDatabaseIsClosed();
 
 private:
@@ -782,6 +816,244 @@ void KnowledgeGapServiceTests::reminderSummarySkipsGapsWhoseTaskIsStillOpen()
     summary = service->getReminderSummary();
     QCOMPARE(summary.value(QStringLiteral("overdue")).toInt(), 1);
     QCOMPARE(summary.value(QStringLiteral("oldestOverdueDays")).toInt(), 3);
+}
+
+// 产品保证：「全部加到今天」只转今天到期和已逾期、未解决、还没有未完成关联任务的条目，
+// 按 listGaps 的顺序逐条转成今天的任务；其余条目一条都不碰，逾期条目的到期日保持原样。
+// 抓住的错误实现：不跳过已有未完成任务的条目（建出重复任务）、把明天到期或没排期的也转了、
+// 把已解决的逾期条目转了、转完顺延逾期日期、按编号而不是 listGaps 的顺序转。
+void KnowledgeGapServiceTests::convertDueGapsToTasksConvertsOnlyDueUnresolvedWithoutOpenTask()
+{
+    KnowledgeGapService* service = KnowledgeGapService::instance();
+    const QDate today = logicalToday();
+    const QString titleA = QStringLiteral("A 今天到期");
+    const QString titleB = QStringLiteral("B 逾期三天");
+    const QString titleC = QStringLiteral("C 明天到期");
+    const QString titleD = QStringLiteral("D 没排日期");
+    const QString titleE = QStringLiteral("E 已解决的逾期");
+    const QString titleF = QStringLiteral("F 逾期但任务没做完");
+    const QString titleG = QStringLiteral("G 逾期且任务已做完");
+
+    // 创建顺序是 A 到 G，listGaps 的顺序按到期日：G(-5) F(-4) B(-3) A(今天) C(明天) D(没排期)，
+    // 转换顺序与创建顺序不同，按编号转的实现会得到另一个任务顺序。
+    const int gapA = service->addGap(titleA, 0, QString(), 1, today, 0);
+    const int gapB = service->addGap(titleB, 0, QString(), 1, today.addDays(-3), 0);
+    const int gapC = service->addGap(titleC, 0, QString(), 1, today.addDays(1), 0);
+    const int gapD = service->captureGap(titleD, 0, 0);
+    const int gapE = service->addGap(titleE, 0, QString(), 1, today.addDays(-2), 0);
+    const int gapF = service->addGap(titleF, 0, QString(), 1, today.addDays(-4), 0);
+    const int gapG = service->addGap(titleG, 0, QString(), 1, today.addDays(-5), 0);
+    QVERIFY(gapA > 0 && gapB > 0 && gapC > 0 && gapD > 0 && gapE > 0 && gapF > 0 && gapG > 0);
+    QVERIFY(service->resolveGap(gapE, QStringLiteral("想明白了")));
+    // F 已有一条没做完的任务；G 的任务做完了，但条目没标记解决，做完不等于想明白。
+    const int taskF = service->convertToTask(gapF, today);
+    const int taskG = service->convertToTask(gapG, today);
+    QVERIFY(taskF > 0 && taskG > 0);
+    QVERIFY(TaskManager::instance()->completeTask(taskG));
+
+    // 前提：每一条在列表里的到期状态，和这条用例要验证的分类一致。
+    const QVariantList rows = service->listGaps(KnowledgeGapService::kFilterUnresolved, 0, QString(), 0);
+    QCOMPARE(titlesOf(rows), (QStringList{titleG, titleF, titleB, titleA, titleC, titleD}));
+    QVERIFY(findByTitle(rows, titleE).isEmpty());
+    struct Premise {
+        QString title;
+        bool dueToday;
+        bool overdue;
+        bool linkedTaskOpen;
+    };
+    const Premise premises[] = {
+        {titleA, true, false, false},
+        {titleB, false, true, false},
+        {titleC, false, false, false},
+        {titleD, false, false, false},
+        {titleF, false, true, true},
+        {titleG, false, true, false},
+    };
+    for (const Premise& premise : premises) {
+        const QVariantMap row = findByTitle(rows, premise.title);
+        QVERIFY2(!row.isEmpty(), qPrintable(premise.title));
+        QVERIFY2(row.value(QStringLiteral("dueToday")).toBool() == premise.dueToday, qPrintable(premise.title));
+        QVERIFY2(row.value(QStringLiteral("overdue")).toBool() == premise.overdue, qPrintable(premise.title));
+        QVERIFY2(row.value(QStringLiteral("linkedTaskOpen")).toBool() == premise.linkedTaskOpen,
+                 qPrintable(premise.title));
+    }
+    const int tasksBefore = taskCount();
+    QCOMPARE(tasksBefore, 2);
+
+    QSignalSpy tasksSpy(service, &KnowledgeGapService::tasksAffected);
+    QSignalSpy failureSpy(service, &KnowledgeGapService::operationFailed);
+    const QVariantMap result = service->convertDueGapsToTasks();
+
+    QVERIFY(hasBatchResultKeys(result));
+    QCOMPARE(result.value(QStringLiteral("converted")).toInt(), 3);
+    QCOMPARE(result.value(QStringLiteral("failed")).toInt(), 0);
+    QCOMPARE(result.value(QStringLiteral("reason")).toString(), QString());
+    QCOMPARE(failureSpy.count(), 0);
+    QVERIFY(tasksSpy.count() >= 1);
+
+    // 新建的三条都在今天、未完成，标题与条目一致，顺序是 listGaps 的顺序 G、B、A，不是创建顺序 A、B、G。
+    QSqlQuery created(DatabaseManager::instance()->database());
+    created.prepare(QStringLiteral(
+        "SELECT id, title, date, completed, display_order FROM tasks WHERE id > :last ORDER BY id"));
+    created.bindValue(QStringLiteral(":last"), qMax(taskF, taskG));
+    QVERIFY(created.exec());
+    QStringList createdTitles;
+    QList<int> createdIds;
+    QList<int> createdOrders;
+    while (created.next()) {
+        createdIds.append(created.value(0).toInt());
+        createdTitles.append(created.value(1).toString());
+        QCOMPARE(created.value(2).toString(), today.toString(Qt::ISODate));
+        QCOMPARE(created.value(3).toInt(), 0);
+        createdOrders.append(created.value(4).toInt());
+    }
+    created.finish();
+    QCOMPARE(createdTitles, (QStringList{titleG, titleB, titleA}));
+    QVERIFY(createdOrders.at(0) < createdOrders.at(1) && createdOrders.at(1) < createdOrders.at(2));
+    // 任务总数只多出这三条：F 没有生成第二条，C、D、E 也没有任务。
+    QCOMPARE(taskCount(), tasksBefore + 3);
+
+    QCOMPARE(service->getGap(gapG).value(QStringLiteral("linkedTaskId")).toInt(), createdIds.at(0));
+    QCOMPARE(service->getGap(gapB).value(QStringLiteral("linkedTaskId")).toInt(), createdIds.at(1));
+    QCOMPARE(service->getGap(gapA).value(QStringLiteral("linkedTaskId")).toInt(), createdIds.at(2));
+    QCOMPARE(service->getGap(gapF).value(QStringLiteral("linkedTaskId")).toInt(), taskF);
+
+    // 逾期不顺延：B 转成今天的任务后，到期日仍是三天前。
+    QCOMPARE(service->getGap(gapB).value(QStringLiteral("dueDate")).toString(),
+             today.addDays(-3).toString(Qt::ISODate));
+    // 没转的条目原样不动：转了的话，明天到期的会被提前到今天，没排期的会被补成今天。
+    const QVariantMap untouchedC = service->getGap(gapC);
+    QCOMPARE(untouchedC.value(QStringLiteral("linkedTaskId")).toInt(), 0);
+    QCOMPARE(untouchedC.value(QStringLiteral("dueDate")).toString(), today.addDays(1).toString(Qt::ISODate));
+    const QVariantMap untouchedD = service->getGap(gapD);
+    QCOMPARE(untouchedD.value(QStringLiteral("linkedTaskId")).toInt(), 0);
+    QCOMPARE(untouchedD.value(QStringLiteral("dueDate")).toString(), QString());
+    QCOMPARE(untouchedD.value(QStringLiteral("status")).toInt(),
+             static_cast<int>(KnowledgeGapService::StatusOpen));
+    const QVariantMap untouchedE = service->getGap(gapE);
+    QCOMPARE(untouchedE.value(QStringLiteral("linkedTaskId")).toInt(), 0);
+    QCOMPARE(untouchedE.value(QStringLiteral("status")).toInt(),
+             static_cast<int>(KnowledgeGapService::StatusResolved));
+}
+
+// 产品保证：批量转换里有的条目失败时，成功的照常保留，返回成功数、失败数和最后一条失败的原因；
+// 每条失败仍照常播报 operationFailed，别的监听方行为不变。
+// 抓住的错误实现：失败后整批回滚或提前返回（成功的被撤销、后面的没转）、reason 记成第一条而不是最后一条、
+// 按编号而不是 listGaps 的顺序转（最后一条失败变成另一条）、吞掉逐条的失败播报。
+void KnowledgeGapServiceTests::convertDueGapsToTasksKeepsSuccessesAndReportsTheLastFailure()
+{
+    KnowledgeGapService* service = KnowledgeGapService::instance();
+    const QDate today = logicalToday();
+    const QString blockedTitle = QStringLiteral("触发器拦下的");
+    const QString longTitle = QStringLiteral("正文太长的");
+    const QString okTitle = QStringLiteral("能转成功的");
+
+    // 创建顺序（触发器那条、长正文那条、能成功的那条）与 listGaps 的顺序（按到期日）不同：
+    // 长正文(-5) 能成功的(-4) 触发器拦下的(-3)，成功的那条夹在两条失败之间。
+    const int blockedId = service->addGap(blockedTitle, 0, QString(), 1, today.addDays(-3), 0);
+    // 正文刚好到上限能存下来，但加上「来自知识缺口 #N」的来源说明就超过任务备注上限，转任务会被拒绝。
+    const QString longDetail(KnowledgeGapService::kMaxDetailLength, QChar(0x6587));
+    const int longId = service->addGap(longTitle, 0, longDetail, 1, today.addDays(-5), 0);
+    const int okId = service->addGap(okTitle, 0, QString(), 1, today.addDays(-4), 0);
+    QVERIFY(blockedId > 0 && longId > 0 && okId > 0);
+
+    const QVariantList rows = service->listGaps(KnowledgeGapService::kFilterUnresolved, 0, QString(), 0);
+    QCOMPARE(titlesOf(rows), (QStringList{longTitle, okTitle, blockedTitle}));
+    for (const QVariant& row : rows) {
+        QVERIFY(row.toMap().value(QStringLiteral("overdue")).toBool());
+        QVERIFY(!row.toMap().value(QStringLiteral("linkedTaskOpen")).toBool());
+    }
+
+    // 第二种失败来自数据库本身：临时触发器让这一条任务的 INSERT 真的被 SQLite 拒绝。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY2(query.exec(QStringLiteral(
+                 "CREATE TEMP TRIGGER fail_gap_task_insert BEFORE INSERT ON tasks "
+                 "WHEN NEW.title = '%1' BEGIN SELECT RAISE(ABORT, '测试：磁盘已满'); END").arg(blockedTitle)),
+             qPrintable(query.lastError().text()));
+    const auto dropTrigger = qScopeGuard([] {
+        QSqlQuery drop(DatabaseManager::instance()->database());
+        drop.exec(QStringLiteral("DROP TRIGGER IF EXISTS fail_gap_task_insert"));
+    });
+    QCOMPARE(taskCount(), 0);
+
+    QSignalSpy tasksSpy(service, &KnowledgeGapService::tasksAffected);
+    QSignalSpy failureSpy(service, &KnowledgeGapService::operationFailed);
+    const QVariantMap result = service->convertDueGapsToTasks();
+
+    QVERIFY(hasBatchResultKeys(result));
+    QCOMPARE(result.value(QStringLiteral("converted")).toInt(), 1);
+    QCOMPARE(result.value(QStringLiteral("failed")).toInt(), 2);
+    // 每条失败各播报一次，且顺序就是转换顺序：先是长正文，后是触发器拦下的。
+    QCOMPARE(failureSpy.count(), 2);
+    const QString firstFailure = failureSpy.at(0).at(0).toString();
+    const QString lastFailure = failureSpy.at(1).at(0).toString();
+    QVERIFY2(firstFailure.contains(QStringLiteral("备注上限")), qPrintable(firstFailure));
+    QVERIFY2(lastFailure.contains(QStringLiteral("创建任务失败")), qPrintable(lastFailure));
+    QVERIFY(firstFailure != lastFailure);
+    // 返回的是最后一条失败的原因，不是第一条。
+    QCOMPARE(result.value(QStringLiteral("reason")).toString(), lastFailure);
+
+    // 成功的那条确实建了任务，没有因为它后面的失败被撤销；两条失败的条目没留下半成品。
+    const int okTaskId = service->getGap(okId).value(QStringLiteral("linkedTaskId")).toInt();
+    QVERIFY(okTaskId > 0);
+    const QVariantMap okTask = TaskManager::instance()->getTask(okTaskId);
+    QCOMPARE(okTask.value(QStringLiteral("title")).toString(), okTitle);
+    QCOMPARE(okTask.value(QStringLiteral("date")).toDate(), today);
+    QCOMPARE(okTask.value(QStringLiteral("completed")).toBool(), false);
+    QCOMPARE(taskCount(), 1);
+    QCOMPARE(service->getGap(longId).value(QStringLiteral("linkedTaskId")).toInt(), 0);
+    QCOMPARE(service->getGap(blockedId).value(QStringLiteral("linkedTaskId")).toInt(), 0);
+    QCOMPARE(tasksSpy.count(), 1);
+}
+
+// 产品保证：没有到期条目可转时「全部加到今天」什么都不做：返回 0、0、空原因，
+// 不新建任务、不发 tasksAffected、不写库。
+// 抓住的错误实现：没有可转的条目时仍去碰库、把明天到期或没排期的当成到期、
+// 把已有未完成任务的逾期条目再转一次（被拒绝，白算一次失败）。
+void KnowledgeGapServiceTests::convertDueGapsToTasksWithNothingDueChangesNothing()
+{
+    KnowledgeGapService* service = KnowledgeGapService::instance();
+    const QDate today = logicalToday();
+
+    // 四类看起来像、但不该转的条目：明天到期、没排期、已解决的逾期、逾期但已有没做完的任务。
+    const int tomorrowId = service->addGap(QStringLiteral("明天到期"), 0, QString(), 1, today.addDays(1), 0);
+    const int unscheduledId = service->captureGap(QStringLiteral("没排日期"), 0, 0);
+    const int resolvedId = service->addGap(QStringLiteral("已解决的逾期"), 0, QString(), 1,
+                                           today.addDays(-2), 0);
+    const int openTaskId = service->addGap(QStringLiteral("逾期但任务没做完"), 0, QString(), 1,
+                                           today.addDays(-4), 0);
+    QVERIFY(tomorrowId > 0 && unscheduledId > 0 && resolvedId > 0 && openTaskId > 0);
+    QVERIFY(service->resolveGap(resolvedId, QStringLiteral("想明白了")));
+    QVERIFY(service->convertToTask(openTaskId, today) > 0);
+
+    // 前提：提示条的摘要也认为没有到期条目，未解决的三条都不满足转换条件。
+    const QVariantMap summary = service->getReminderSummary();
+    QCOMPARE(summary.value(QStringLiteral("valid")).toBool(), true);
+    QCOMPARE(summary.value(QStringLiteral("dueToday")).toInt(), 0);
+    QCOMPARE(summary.value(QStringLiteral("overdue")).toInt(), 0);
+    const QVariantList rows = service->listGaps(KnowledgeGapService::kFilterUnresolved, 0, QString(), 0);
+    QCOMPARE(titlesOf(rows), (QStringList{QStringLiteral("逾期但任务没做完"), QStringLiteral("明天到期"),
+                                          QStringLiteral("没排日期")}));
+    const int tasksBefore = taskCount();
+    QCOMPARE(tasksBefore, 1);
+
+    QSignalSpy tasksSpy(service, &KnowledgeGapService::tasksAffected);
+    QSignalSpy changedSpy(service, &KnowledgeGapService::gapsChanged);
+    QSignalSpy failureSpy(service, &KnowledgeGapService::operationFailed);
+    const qlonglong writesBefore = totalDbChanges();
+    QVERIFY(writesBefore >= 0);
+
+    const QVariantMap result = service->convertDueGapsToTasks();
+
+    QVERIFY(hasBatchResultKeys(result));
+    QCOMPARE(result.value(QStringLiteral("converted")).toInt(), 0);
+    QCOMPARE(result.value(QStringLiteral("failed")).toInt(), 0);
+    QCOMPARE(result.value(QStringLiteral("reason")).toString(), QString());
+    QCOMPARE(tasksSpy.count(), 0);
+    QCOMPARE(changedSpy.count(), 0);
+    QCOMPARE(failureSpy.count(), 0);
+    QCOMPARE(taskCount(), tasksBefore);
+    QCOMPARE(totalDbChanges(), writesBefore);
 }
 
 void KnowledgeGapServiceTests::operationsFailSafelyWhenDatabaseIsClosed()

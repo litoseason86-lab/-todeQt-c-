@@ -91,6 +91,17 @@ public:
     // 已有没做完的关联任务时拒绝，不会建出重复任务；到期日取原到期日与任务日期中较早的一个，
     // 逾期记录不会因为转任务被清零。
     Q_INVOKABLE int convertToTask(int gapId, const QVariant& dateValue);
+    // 今日任务页「全部加到今天」：把今天到期和已逾期的条目一次性转成今天的任务。
+    // 规则放在服务里，Mac 的今日页和 iPad 共用这一份，界面不再各自挑条目、数成败、拼原因。
+    // 返回 {converted, failed, reason}：成功数、失败数、最后一条失败的原因（没有失败时 reason 是空串）。
+    //   - 筛选口径：listGaps(kFilterUnresolved, …) 的结果里 dueToday 或 overdue、且不是 linkedTaskOpen 的条目。
+    //     已有没做完的关联任务的条目跳过——再转只会被 convertToTask 拒绝、白算一次失败，提示条的计数也不含它们。
+    //   - 「今天」用服务自己的逻辑日，调用方不传日期：判断到期和新任务落在哪天是同一个口径。
+    //   - 逐条调 convertToTask，每条各自一个事务：前面成功的不会因为后面失败而撤销，部分成功照常保留。
+    //     逾期条目的到期日保持原样（见 convertToTask），顺延会抹掉「这条拖了多久」。
+    //   - 每条失败照旧发 operationFailed，别的监听方行为不变；reason 取转换期间最后一次播报的失败原因。
+    //     读候选失败时 listGaps 同样播报并返回空，这里得到 {0, 0, 空}，页面按约定保持安静。
+    Q_INVOKABLE QVariantMap convertDueGapsToTasks();
 
     // —— 查询 ——
     // statusFilter 取 Status、kFilterAll 或 kFilterUnresolved；categoryId <= 0 表示不筛科目。

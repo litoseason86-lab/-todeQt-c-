@@ -65,10 +65,6 @@ Item {
     // 「全部加到今天」里没加上的条目。不和 loadError 共用：部分成功会触发任务列表刷新，
     // 刷新成功就清掉 loadError，失败提示会一闪而过。提示条安静下来（没有到期条目）时一并清空。
     property string knowledgeGapConvertError: ""
-    // 批量转任务期间收集服务播报的失败原因。服务先同步发 operationFailed 再返回 -1，
-    // 只在这段时间里记，别处的失败不会串进这条提示。
-    property bool gapBatchConverting: false
-    property string gapBatchFailureReason: ""
 
     onKnowledgeGapBannerActiveChanged: {
         if (!root.knowledgeGapBannerActive) {
@@ -223,15 +219,6 @@ Item {
             if (!root.pageActive)
                 return
             root.loadKnowledgeGapSummary()
-        }
-
-        // 只在批量转任务期间记下原因；别处的失败（比如提醒摘要读取失败）按约定保持安静。
-        function onOperationFailed(message) {
-            if (!root.pageActive)
-                return
-            if (root.gapBatchConverting) {
-                root.gapBatchFailureReason = String(message || "")
-            }
         }
     }
 
@@ -566,44 +553,28 @@ Item {
         root.knowledgeGapSummary = root.knowledgeGapServiceRef.getReminderSummary()
     }
 
-    // 把今天到期和已逾期的条目一次性变成今天的任务。逾期条目的日期保持原样不动——
+    // 把今天到期和已逾期的条目一次性变成今天的任务。挑哪些条目、逐条各自一个事务地转、
+    // 汇总成功与失败数和最后一条失败的原因，都由服务给（KnowledgeGapService::convertDueGapsToTasks），
+    // Mac 和 iPad 共用同一份规则；页面只负责提示。逾期条目的日期保持原样不动——
     // 顺延会把「这条拖了多久」抹掉，而拖了多久正是判断该不该现在停下来处理它的依据。
     function convertDueGapsToTasks() {
         if (!root.knowledgeGapServiceRef
-                || typeof root.knowledgeGapServiceRef.listGaps !== "function"
-                || typeof root.knowledgeGapServiceRef.convertToTask !== "function") {
+                || typeof root.knowledgeGapServiceRef.convertDueGapsToTasks !== "function") {
             root.loadError = "记录服务不可用"
             return
         }
         root.knowledgeGapConvertError = ""
-        // -2 是 kFilterUnresolved：待处理和已安排都要，已解决的不用再做。
-        var candidates = root.knowledgeGapServiceRef.listGaps(-2, 0, "", 0)
-        var converted = 0
-        var failed = 0
-        root.gapBatchFailureReason = ""
-        root.gapBatchConverting = true
-        for (var i = 0; i < candidates.length; ++i) {
-            var gap = candidates[i]
-            if (!gap.dueToday && !gap.overdue) {
-                continue
-            }
-            // 已经有一条没做完的任务：它早就在任务列表里了，再转只会被服务拒绝、
-            // 被算成一次失败。提示条的计数同样不含这类条目。
-            if (gap.linkedTaskOpen) {
-                continue
-            }
-            if (Number(root.knowledgeGapServiceRef.convertToTask(gap.id, root.logicalTodayIso)) > 0) {
-                converted += 1
-            } else {
-                failed += 1
-            }
-        }
-        root.gapBatchConverting = false
+        var result = root.knowledgeGapServiceRef.convertDueGapsToTasks() || ({})
+        var converted = Number(result.converted || 0)
+        var failed = Number(result.failed || 0)
+        var reason = String(result.reason || "")
         root.loadKnowledgeGapSummary()
 
         if (failed > 0) {
             // 失败必须说出来：只报成功的数量，用户会以为整批都加上了。
-            var reason = root.gapBatchFailureReason.length > 0 ? root.gapBatchFailureReason : qsTr("未知原因")
+            if (reason.length === 0) {
+                reason = qsTr("未知原因")
+            }
             root.knowledgeGapConvertError = converted > 0
                     ? qsTr("有 %1 条知识缺口没加上：%2").arg(failed).arg(reason)
                     : qsTr("%1 条知识缺口没能加到今天：%2").arg(failed).arg(reason)

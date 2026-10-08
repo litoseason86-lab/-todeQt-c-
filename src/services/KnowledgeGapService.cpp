@@ -9,6 +9,7 @@
 
 #include <QDateTime>
 #include <QDebug>
+#include <QScopeGuard>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -748,6 +749,56 @@ int KnowledgeGapService::convertToTask(int gapId, const QVariant& dateValue)
     emit gapsChanged();
     emit tasksAffected();
     return newTaskId;
+}
+
+QVariantMap KnowledgeGapService::convertDueGapsToTasks()
+{
+    QVariantMap result;
+    result.insert(QStringLiteral("converted"), 0);
+    result.insert(QStringLiteral("failed"), 0);
+    result.insert(QStringLiteral("reason"), QString());
+
+    // 「今天」取一次，整批任务落在同一天；到期判断用的是 listGaps 里同一套逻辑日口径，
+    // 所以调用方不传日期，界面和服务不会各算各的。
+    const QDate today = logicalToday();
+    // kFilterUnresolved：待处理和已安排都要，已解决的不用再做。读候选失败时 listGaps 自己播报并
+    // 返回空，这里不接它的失败（连接在下面才建立），页面按约定保持安静，看到的就是「没有可转的」。
+    const QVariantList candidates = listGaps(kFilterUnresolved, 0, QString(), 0);
+
+    // 失败原因只在逐条转换期间接住：convertToTask 先同步发 operationFailed 再返回 -1，
+    // 这里同线程直连，最后留下的就是最后一次播报的原因。别的监听方照常收到每一条播报。
+    // lambda 引用着本函数的局部变量，连接绝不能活过这个函数，所以用 qScopeGuard 保证断开。
+    QString lastReason;
+    const QMetaObject::Connection capture = connect(
+        this, &KnowledgeGapService::operationFailed, this,
+        [&lastReason](const QString& message) { lastReason = message; }, Qt::DirectConnection);
+    const auto releaseCapture = qScopeGuard([&capture] { QObject::disconnect(capture); });
+
+    int converted = 0;
+    int failed = 0;
+    for (const QVariant& candidate : candidates) {
+        const QVariantMap gap = candidate.toMap();
+        if (!gap.value(QStringLiteral("dueToday")).toBool()
+                && !gap.value(QStringLiteral("overdue")).toBool()) {
+            continue;
+        }
+        // 已经有一条没做完的任务：它早就在任务列表里了，再转只会被 convertToTask 拒绝、
+        // 被算成一次失败。getReminderSummary 的计数同样不含这类条目。
+        if (gap.value(QStringLiteral("linkedTaskOpen")).toBool()) {
+            continue;
+        }
+        // 每条各自一个事务：前面成功的不会因为后面失败而撤销。
+        if (convertToTask(gap.value(QStringLiteral("id")).toInt(), today) > 0) {
+            ++converted;
+        } else {
+            ++failed;
+        }
+    }
+
+    result.insert(QStringLiteral("converted"), converted);
+    result.insert(QStringLiteral("failed"), failed);
+    result.insert(QStringLiteral("reason"), failed > 0 ? lastReason : QString());
+    return result;
 }
 
 QVariantMap KnowledgeGapService::rowToVariantMap(const QSqlQuery& query, const QDate& today) const
