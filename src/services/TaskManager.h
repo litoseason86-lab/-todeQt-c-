@@ -101,6 +101,15 @@ public:
     // orderedTaskIds 必须是该日期下任务从上到下的完整、无重复集合；服务在同一事务内
     // 校验数据库集合后按数组下标重写 1..N，过期或跨日期输入会原子失败。
     Q_INVOKABLE bool reorderTasks(const QVariant& dateValue, const QVariantList& orderedTaskIds);
+    // 拖动排序的意图接口：把 taskId 移到 beforeTaskId 之前。界面（Mac 的今日页、iPad 的系统列表）
+    // 只说「谁移到谁前面」，整天的重新编号由服务在一个事务里读出库里最新的当天完整集合后写成 1..N，
+    // 界面手里的列表快照过期也不会写出重复或漏项的序号；与 reorderTasks 不同，调用方不必交出完整集合。
+    //   - taskId 必须是存在且未完成的任务，否则返回 false；已完成的任务固定排在未完成之后，不参与排序。
+    //   - beforeTaskId <= 0，或它是已完成任务：落到未完成组末尾（第一条已完成任务之前）。
+    //   - beforeTaskId 是同一天的未完成任务：落到它前面；不在同一天（含不存在）返回 false。
+    //   - beforeTaskId == taskId，或新顺序与现有显示顺序相同：返回 true，不写库、不发 tasksChanged。
+    // 写入失败整体回滚并返回 false；成功后只发一次 tasksChanged。失败照 reorderTasks 的写法报 operationFailed。
+    Q_INVOKABLE bool moveTaskBefore(int taskId, int beforeTaskId);
     // 改期。编辑弹窗此前只有今天/明天/后天三个按钮，最远只能挪两天；
     // 周计划里整块前后挪需要任意日期。
     Q_INVOKABLE bool moveTasksToDate(const QVariantList& taskIds, const QVariant& dateValue);

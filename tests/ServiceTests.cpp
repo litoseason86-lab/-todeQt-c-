@@ -3,6 +3,7 @@
 #include <QDir>
 #include <QFile>
 #include <QJSEngine>
+#include <QScopeGuard>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSignalSpy>
@@ -750,6 +751,52 @@ QDate logicalToday()
     // 测试里所有“服务的今天”都必须与生产设置使用同一口径。
     return LogicalDay::today(AppSettings::instance()->dayStartHour());
 }
+
+// 按给定行的顺序（取自 getTasksByDate，即显示顺序）列出每条任务的 display_order。
+QList<int> taskDisplayOrders(const QVariantList& rows)
+{
+    QList<int> orders;
+    for (const QVariant& row : rows) {
+        orders.append(row.toMap().value(QStringLiteral("displayOrder")).toInt());
+    }
+    return orders;
+}
+
+// 整张 tasks 表的（编号, 原始 display_order），按编号排序。比较前后两次读数，
+// 就能看出任何一行的序号有没有被动过，不限于某一天。
+QList<QPair<int, int>> readTaskOrders()
+{
+    QList<QPair<int, int>> rows;
+    QSqlQuery query(DatabaseManager::instance()->database());
+    if (!query.exec(QStringLiteral("SELECT id, display_order FROM tasks ORDER BY id ASC"))) {
+        return rows;
+    }
+    while (query.next()) {
+        rows.append({query.value(0).toInt(), query.value(1).toInt()});
+    }
+    return rows;
+}
+
+// 直接改库造出「不连续、交错」的原始序号，绕开服务层的重新编号。
+bool setTaskDisplayOrder(int taskId, int order)
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral("UPDATE tasks SET display_order = :order WHERE id = :id"));
+    query.bindValue(QStringLiteral(":order"), order);
+    query.bindValue(QStringLiteral(":id"), taskId);
+    return query.exec() && query.numRowsAffected() == 1;
+}
+
+// SQLite 的 total_changes()：连接上累计的行写入数（含触发器写的同步登记）。前后相等才说明
+// 期间一次库都没写过——只比较数据抓不到「写了一遍、值恰好没变」的实现。读不出来返回 -1。
+qlonglong totalDbChanges()
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    if (!query.exec(QStringLiteral("SELECT total_changes()")) || !query.next()) {
+        return -1;
+    }
+    return query.value(0).toLongLong();
+}
 }
 
 class ServiceTests : public QObject {
@@ -847,6 +894,11 @@ private slots:
     void allTaskDateWritesAppendAfterLegacyRows();
     void reorderTasksPutsManualOrderFirstAndKeepsUnsortedByCreation();
     void reorderTasksRejectsInvalidSetsAtomically();
+    void moveTaskBeforeReordersTheWholeDay();
+    void moveTaskBeforeClampsToPendingGroup();
+    void moveTaskBeforeIsANoOpWhenNothingChanges();
+    void moveTaskBeforeRejectsInvalidRequestsWithoutWriting();
+    void moveTaskBeforeRollsBackWhenAWriteFails();
     void moveTaskToDateLandsAtTheEndOfTheTargetDay();
     void moveTaskToDateToItsOwnDateIsANoOp();
     void focusHistoryDistinguishesEmptyResultFromQueryError();
@@ -8522,6 +8574,277 @@ void ServiceTests::reorderTasksRejectsInvalidSetsAtomically()
         QCOMPARE(readAllOrders(), original);
         QCOMPARE(changedSpy.count(), 0);
     }
+}
+
+void ServiceTests::moveTaskBeforeReordersTheWholeDay()
+{
+    // 把一条未完成任务移到另一条之前，整天按新顺序重新编号：向上、向下移动都落在目标之前，
+    // 其余任务的相对次序不变，已完成的任务固定在末尾，全天序号写成连续的 1..N，只通知一次刷新。
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+    const auto create = [tasks, today](const QString& title) {
+        return tasks->createTask(title, today, -1, 0, QString());
+    };
+
+    // 已完成的戊最先建：它的原始序号最小（1），却因为已完成排在显示顺序的末尾。
+    // 只重排未完成任务的实现留不下「戊 = 5」，会被下面的序号断言拆穿。
+    const int wu = create(QStringLiteral("戊"));
+    QVERIFY(wu > 0);
+    QVERIFY(tasks->setTaskCompleted(wu, true));
+    const int jia = create(QStringLiteral("甲"));
+    const int yi = create(QStringLiteral("乙"));
+    const int bing = create(QStringLiteral("丙"));
+    const int ding = create(QStringLiteral("丁"));
+    QVERIFY(jia > 0 && yi > 0 && bing > 0 && ding > 0);
+
+    QVariantList rows = tasks->getTasksByDate(today);
+    QCOMPARE(taskTitles(rows),
+             QStringList({QStringLiteral("甲"), QStringLiteral("乙"), QStringLiteral("丙"),
+                          QStringLiteral("丁"), QStringLiteral("戊")}));
+    QVERIFY(rows.last().toMap().value(QStringLiteral("completed")).toBool());
+    QCOMPARE(taskDisplayOrders(rows), QList<int>({2, 3, 4, 5, 1}));
+
+    QSignalSpy changedSpy(tasks, &TaskManager::tasksChanged);
+
+    // 向上：丁移到乙之前。插入顺序是甲乙丙丁，结果是甲丁乙丙。
+    QVERIFY(tasks->moveTaskBefore(ding, yi));
+    rows = tasks->getTasksByDate(today);
+    QCOMPARE(taskTitles(rows),
+             QStringList({QStringLiteral("甲"), QStringLiteral("丁"), QStringLiteral("乙"),
+                          QStringLiteral("丙"), QStringLiteral("戊")}));
+    QCOMPARE(taskDisplayOrders(rows), QList<int>({1, 2, 3, 4, 5}));
+    QCOMPARE(changedSpy.count(), 1);
+
+    // 向下：甲移到丙之前，落在丙前面而不是后面。
+    QVERIFY(tasks->moveTaskBefore(jia, bing));
+    rows = tasks->getTasksByDate(today);
+    QCOMPARE(taskTitles(rows),
+             QStringList({QStringLiteral("丁"), QStringLiteral("乙"), QStringLiteral("甲"),
+                          QStringLiteral("丙"), QStringLiteral("戊")}));
+    QCOMPARE(taskDisplayOrders(rows), QList<int>({1, 2, 3, 4, 5}));
+    QCOMPARE(changedSpy.count(), 2);
+}
+
+void ServiceTests::moveTaskBeforeClampsToPendingGroup()
+{
+    // 已完成的任务固定排在未完成之后：落点是已完成任务、或没有落点（beforeTaskId <= 0）时，
+    // 被移动的未完成任务只落到未完成组末尾，不会插进已完成任务中间，也不会排到它们后面。
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+
+    // 直接造数：未完成与已完成交错的原始序号（甲1、丙2、乙3、丁4），显示顺序是 甲 乙 丙 丁。
+    const int jia = insertTaskRow(QStringLiteral("甲"), today);
+    const int bing = insertTaskRow(QStringLiteral("丙"), today, QString(), true);
+    const int yi = insertTaskRow(QStringLiteral("乙"), today);
+    const int ding = insertTaskRow(QStringLiteral("丁"), today, QString(), true);
+    QVERIFY(jia > 0 && bing > 0 && yi > 0 && ding > 0);
+    QVERIFY(setTaskDisplayOrder(jia, 1));
+    QVERIFY(setTaskDisplayOrder(bing, 2));
+    QVERIFY(setTaskDisplayOrder(yi, 3));
+    QVERIFY(setTaskDisplayOrder(ding, 4));
+
+    const auto dayTitles = [tasks, today]() { return taskTitles(tasks->getTasksByDate(today)); };
+    const auto dayOrders = [tasks, today]() {
+        return taskDisplayOrders(tasks->getTasksByDate(today));
+    };
+    const QStringList pendingFirst{QStringLiteral("甲"), QStringLiteral("乙"),
+                                   QStringLiteral("丙"), QStringLiteral("丁")};
+    const QStringList jiaAfterYi{QStringLiteral("乙"), QStringLiteral("甲"),
+                                 QStringLiteral("丙"), QStringLiteral("丁")};
+    QCOMPARE(dayTitles(), pendingFirst);
+    QCOMPARE(dayOrders(), QList<int>({1, 3, 2, 4}));
+
+    QSignalSpy changedSpy(tasks, &TaskManager::tasksChanged);
+
+    // 落点是已完成的丙：甲落到未完成组末尾，也就是丙之前。序号重排后丙丁排在所有未完成任务之后。
+    QVERIFY(tasks->moveTaskBefore(jia, bing));
+    QCOMPARE(dayTitles(), jiaAfterYi);
+    QCOMPARE(dayOrders(), QList<int>({1, 2, 3, 4}));
+    QCOMPARE(changedSpy.count(), 1);
+
+    // 落点是排在后面的已完成丁：同样只落到未完成组末尾，正是甲现在的位置——没有变化，不写。
+    // 照字面插到丁前面的实现会把甲排到丙后面，序号变成 乙1 丙2 甲3 丁4，显示序号对不上。
+    QVERIFY(tasks->moveTaskBefore(jia, ding));
+    QCOMPARE(dayTitles(), jiaAfterYi);
+    QCOMPARE(dayOrders(), QList<int>({1, 2, 3, 4}));
+    QCOMPARE(changedSpy.count(), 1);
+
+    // 没有落点（0）：乙移到未完成组末尾，不会排到已完成的丙丁后面。
+    QVERIFY(tasks->moveTaskBefore(yi, 0));
+    QCOMPARE(dayTitles(), pendingFirst);
+    QCOMPARE(dayOrders(), QList<int>({1, 2, 3, 4}));
+    QCOMPARE(changedSpy.count(), 2);
+
+    // 负数同样当作没有落点。
+    QVERIFY(tasks->moveTaskBefore(jia, -1));
+    QCOMPARE(dayTitles(), jiaAfterYi);
+    QCOMPARE(dayOrders(), QList<int>({1, 2, 3, 4}));
+    QCOMPARE(changedSpy.count(), 3);
+}
+
+void ServiceTests::moveTaskBeforeIsANoOpWhenNothingChanges()
+{
+    // 请求不会改变顺序时不算一次排序：返回成功，不写库、不发 tasksChanged、序号原样。
+    // 否则一次放回原处的拖动，也会把历史遗留的不连续序号全天重排，还触发各页一轮多余的刷新。
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+
+    const int jia = insertTaskRow(QStringLiteral("甲"), today);
+    const int yi = insertTaskRow(QStringLiteral("乙"), today);
+    const int bing = insertTaskRow(QStringLiteral("丙"), today);
+    QVERIFY(jia > 0 && yi > 0 && bing > 0);
+    // 不连续的原始序号：一旦写库就会被重排成 1、2、3，能看出来。
+    QVERIFY(setTaskDisplayOrder(jia, 5));
+    QVERIFY(setTaskDisplayOrder(yi, 9));
+    QVERIFY(setTaskDisplayOrder(bing, 12));
+    const QVariantList before = tasks->getTasksByDate(today);
+    QCOMPARE(taskTitles(before),
+             QStringList({QStringLiteral("甲"), QStringLiteral("乙"), QStringLiteral("丙")}));
+    QCOMPARE(taskDisplayOrders(before), QList<int>({5, 9, 12}));
+    const QList<QPair<int, int>> ordersBefore = readTaskOrders();
+    QCOMPARE(ordersBefore.size(), 3);
+
+    QSignalSpy changedSpy(tasks, &TaskManager::tasksChanged);
+    const qlonglong writesBefore = totalDbChanges();
+    QVERIFY(writesBefore >= 0);
+
+    struct Request {
+        int taskId;
+        int beforeTaskId;
+        const char* what;
+    };
+    const Request requests[] = {
+        {yi, bing, "乙移到丙之前（本来就紧挨着）"},
+        {jia, yi, "甲移到乙之前（本来就在那）"},
+        {yi, yi, "乙移到乙之前"},
+        {bing, 0, "丙移到未完成组末尾（本来就在那）"},
+    };
+    for (const Request& request : requests) {
+        QVERIFY2(tasks->moveTaskBefore(request.taskId, request.beforeTaskId), request.what);
+        QVERIFY2(changedSpy.count() == 0, request.what);
+        QVERIFY2(totalDbChanges() == writesBefore, request.what);
+        QVERIFY2(readTaskOrders() == ordersBefore, request.what);
+    }
+}
+
+void ServiceTests::moveTaskBeforeRejectsInvalidRequestsWithoutWriting()
+{
+    // 不成立的排序请求（落点在别的日子或不存在、被移动的任务已完成或不存在）一律返回 false，
+    // 报 operationFailed，且不写库、不发 tasksChanged、任何一行的序号都原样。
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+
+    const int jia = insertTaskRow(QStringLiteral("甲"), today);
+    const int yi = insertTaskRow(QStringLiteral("乙"), today);
+    const int bing = insertTaskRow(QStringLiteral("丙"), today, QString(), true);
+    const int tomorrowTask = insertTaskRow(QStringLiteral("明天的"), today.addDays(1));
+    QVERIFY(jia > 0 && yi > 0 && bing > 0 && tomorrowTask > 0);
+    // 不连续的原始序号：任何一次误写都会把今天的序号重排成 1、2、3。
+    QVERIFY(setTaskDisplayOrder(jia, 5));
+    QVERIFY(setTaskDisplayOrder(yi, 9));
+    QVERIFY(setTaskDisplayOrder(bing, 12));
+    QVERIFY(setTaskDisplayOrder(tomorrowTask, 7));
+    // 前提：若把落点不成立的请求当成「没有落点」放行，甲会被挪到未完成组末尾，顺序和序号都会变。
+    QCOMPARE(taskTitles(tasks->getTasksByDate(today)),
+             QStringList({QStringLiteral("甲"), QStringLiteral("乙"), QStringLiteral("丙")}));
+    const QList<QPair<int, int>> ordersBefore = readTaskOrders();
+    QCOMPARE(ordersBefore.size(), 4);
+
+    QSignalSpy changedSpy(tasks, &TaskManager::tasksChanged);
+    QSignalSpy failedSpy(tasks, &TaskManager::operationFailed);
+    const qlonglong writesBefore = totalDbChanges();
+    QVERIFY(writesBefore >= 0);
+
+    struct Request {
+        int taskId;
+        int beforeTaskId;
+        const char* what;
+    };
+    const Request requests[] = {
+        {jia, tomorrowTask, "落点是另一天的任务"},
+        {bing, jia, "被移动的任务已完成"},
+        {999999, jia, "被移动的任务不存在"},
+        {jia, 999999, "落点任务不存在"},
+        {0, jia, "被移动的任务编号无效"},
+    };
+    for (const Request& request : requests) {
+        failedSpy.clear();
+        QVERIFY2(!tasks->moveTaskBefore(request.taskId, request.beforeTaskId), request.what);
+        QVERIFY2(failedSpy.count() == 1, request.what);
+        QVERIFY2(failedSpy.first().at(0).toString().startsWith(QStringLiteral("任务排序失败")),
+                 request.what);
+        QVERIFY2(changedSpy.count() == 0, request.what);
+        QVERIFY2(totalDbChanges() == writesBefore, request.what);
+        QVERIFY2(readTaskOrders() == ordersBefore, request.what);
+    }
+}
+
+void ServiceTests::moveTaskBeforeRollsBackWhenAWriteFails()
+{
+    // 重新编号写到一半失败（SQLite 报错，或更新被静默跳过、0 行受影响）时整体回滚：
+    // 已经写成功的几条也要退回原序号，不发 tasksChanged，并报 operationFailed，
+    // 不能留下一半新序号、一半旧序号的当天顺序。
+    TaskManager* tasks = TaskManager::instance();
+    const QDate today = logicalToday();
+
+    const int jia = insertTaskRow(QStringLiteral("甲"), today);
+    const int yi = insertTaskRow(QStringLiteral("乙"), today);
+    const int bing = insertTaskRow(QStringLiteral("丙"), today);
+    const int ding = insertTaskRow(QStringLiteral("丁"), today);
+    QVERIFY(jia > 0 && yi > 0 && bing > 0 && ding > 0);
+    QVERIFY(setTaskDisplayOrder(jia, 5));
+    QVERIFY(setTaskDisplayOrder(yi, 9));
+    QVERIFY(setTaskDisplayOrder(bing, 12));
+    QVERIFY(setTaskDisplayOrder(ding, 20));
+
+    // 把丁移到甲之前：新顺序 丁 甲 乙 丙，依次把序号写成 1、2、3、4。
+    // 让乙的更新失败——它排第三，丁（20→1）和甲（5→2）在它之前已经真的写成功。
+    // 前提先断言成立：失败的那条不是第一条被写的，且排在它前面的写入确实改了值。
+    const QList<int> newOrder({ding, jia, yi, bing});
+    const int failingId = yi;
+    QVERIFY(newOrder.indexOf(failingId) > 0);
+    QCOMPARE(taskDisplayOrders(tasks->getTasksByDate(today)), QList<int>({5, 9, 12, 20}));
+    const QList<QPair<int, int>> ordersBefore = readTaskOrders();
+    QCOMPARE(ordersBefore.size(), 4);
+
+    struct Failure {
+        const char* what;
+        const char* triggerBody;
+    };
+    const Failure failures[] = {
+        {"更新报错", "SELECT RAISE(ABORT, 'test');"},
+        {"更新被静默跳过（0 行受影响）", "SELECT RAISE(IGNORE);"},
+    };
+    QSignalSpy changedSpy(tasks, &TaskManager::tasksChanged);
+    QSignalSpy failedSpy(tasks, &TaskManager::operationFailed);
+    for (const Failure& failure : failures) {
+        // 临时触发器只存在于这条连接上；无论用例怎么退出都要拆掉，免得影响后面的用例。
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY2(query.exec(QStringLiteral(
+                     "CREATE TEMP TRIGGER fail_task_reorder BEFORE UPDATE OF display_order ON tasks "
+                     "WHEN NEW.id = %1 BEGIN %2 END")
+                     .arg(failingId).arg(QString::fromUtf8(failure.triggerBody))),
+                 failure.what);
+        const auto dropTrigger = qScopeGuard([] {
+            QSqlQuery drop(DatabaseManager::instance()->database());
+            drop.exec(QStringLiteral("DROP TRIGGER IF EXISTS fail_task_reorder"));
+        });
+
+        failedSpy.clear();
+        QVERIFY2(!tasks->moveTaskBefore(ding, jia), failure.what);
+        QVERIFY2(readTaskOrders() == ordersBefore, failure.what);
+        QVERIFY2(changedSpy.count() == 0, failure.what);
+        QVERIFY2(failedSpy.count() == 1, failure.what);
+        QVERIFY2(failedSpy.first().at(0).toString().startsWith(QStringLiteral("任务排序失败")),
+                 failure.what);
+    }
+
+    // 拆掉触发器后同一个请求照常成功：之前的失败确实来自写入，而不是请求本身不成立。
+    QVERIFY(tasks->moveTaskBefore(ding, jia));
+    QCOMPARE(taskTitles(tasks->getTasksByDate(today)),
+             QStringList({QStringLiteral("丁"), QStringLiteral("甲"), QStringLiteral("乙"),
+                          QStringLiteral("丙")}));
+    QCOMPARE(changedSpy.count(), 1);
 }
 
 void ServiceTests::moveTaskToDateLandsAtTheEndOfTheTargetDay()

@@ -13,7 +13,7 @@ TestCase {
     height: 700
     visible: true
 
-    property var reorderCalls: []
+    property var moveCalls: []
     property int todayQueryCount: 0
 
     QtObject {
@@ -57,10 +57,10 @@ TestCase {
         function setTaskCompleted(id, completed) { return true }
         function updateTask(id, title, categoryId, date) { return true }
         function deleteTask(id) { return true }
-        function reorderTasks(isoDate, ids) {
+        function moveTaskBefore(taskId, beforeTaskId) {
             testCase.verify(coordinator.refreshBlocked || trackingCoordinator.refreshBlocked,
                             "写库结束前不得释放拖动登记")
-            testCase.reorderCalls.push({ date: isoDate, ids: ids })
+            testCase.moveCalls.push({ taskId: taskId, beforeTaskId: beforeTaskId })
             return true
         }
     }
@@ -136,7 +136,7 @@ TestCase {
     function init() {
         coordinator.end(null)
         trackingCoordinator.owners = []
-        testCase.reorderCalls = []
+        testCase.moveCalls = []
         testCase.todayQueryCount = 0
         taskManager.rows = [makeTask(1, "甲"), makeTask(2, "乙"), makeTask(3, "丙")]
     }
@@ -181,7 +181,7 @@ TestCase {
                   "行销毁后拖动登记仍残留")
         compare(view.draggingTaskId, -1)
         compare(view.dropTargetIndex, -1)
-        compare(testCase.reorderCalls.length, 0)
+        compare(testCase.moveCalls.length, 0)
     }
 
     function test_releasedDragEndsTheRowRegistration() {
@@ -194,7 +194,7 @@ TestCase {
         view.updateReorder(3, 0)
         // 正常松手：先落库再释放，释放的正是这一行的登记。
         row.dragFinished(false)
-        compare(testCase.reorderCalls.length, 1)
+        compare(testCase.moveCalls.length, 1)
         compare(trackingCoordinator.owners.length, 0)
         compare(view.draggingTaskId, -1)
     }
@@ -213,11 +213,13 @@ TestCase {
         compare(Number(view.tasks[0].id), 1)
         // 关键：拖动过程中一次都不写库。每次移动都落库会在一次拖动里产生几十次
         // 事务，中途松不开手还回不去。
-        compare(testCase.reorderCalls.length, 0)
+        compare(testCase.moveCalls.length, 0)
 
         view.commitReorder()
-        compare(testCase.reorderCalls.length, 1)
-        compare(testCase.reorderCalls[0].ids, [3, 1, 2])
+        compare(testCase.moveCalls.length, 1)
+        // 界面只交意图：丙移到甲之前；整天怎么重新编号是服务的事。
+        compare(testCase.moveCalls[0].taskId, 3)
+        compare(testCase.moveCalls[0].beforeTaskId, 1)
         // 落点状态必须复位，否则下一次拖动会带着上次的残留目标。
         compare(view.dropTargetIndex, -1)
         compare(view.draggingTaskId, -1)
@@ -235,7 +237,7 @@ TestCase {
         view.commitReorder(true)
 
         // 窗口失焦、抓取被夺走或 delegate 被禁用都属于取消，不是一次 drop。
-        compare(testCase.reorderCalls.length, 0)
+        compare(testCase.moveCalls.length, 0)
         compare(view.dropTargetIndex, -1)
         compare(view.draggingTaskId, -1)
     }
@@ -260,7 +262,10 @@ TestCase {
                 "向下拖时指示线必须落在目标行下方")
 
         view.commitReorder(false)
-        compare(testCase.reorderCalls[0].ids, [2, 3, 1])
+        // 甲往下落到最后一位，后面没有下一条：不指定落点（0），由服务落到末尾。
+        compare(testCase.moveCalls.length, 1)
+        compare(testCase.moveCalls[0].taskId, 1)
+        compare(testCase.moveCalls[0].beforeTaskId, 0)
 
         // 最后项上移到首位时，槽位仍须留在父级图层内部，不能落到负坐标被裁掉。
         view.beginReorder(3)
@@ -285,7 +290,7 @@ TestCase {
         view.updateReorder(3, list.contentY - 1)
         compare(view.dropTargetIndex, -1)
         view.commitReorder(false)
-        compare(testCase.reorderCalls.length, 0)
+        compare(testCase.moveCalls.length, 0)
     }
 
     function test_completed_tasks_do_not_participate() {
@@ -315,14 +320,15 @@ TestCase {
         compare(view.draggingTaskId, 3)
         compare(view.dropTargetIndex, 0)
 
-        // 待删除行只从 UI 快照隐藏，数据库还没删；此时提交会违反服务的完整集合契约。
+        // 撤销条挂着时保持原来的交互：不开放排序，已经开始的拖动也取消。
+        // 这是交互上的选择，不是数据限制——服务按库里最新的完整集合重排，隐藏的那条仍在库里也不影响。
         view.pendingDeleteTaskId = 2
         compare(view.canReorderTasks, false)
         compare(view.draggingTaskId, -1)
         compare(view.dropTargetIndex, -1)
         view.beginReorder(1)
         view.commitReorder(false)
-        compare(testCase.reorderCalls.length, 0)
+        compare(testCase.moveCalls.length, 0)
     }
 
     function test_drop_on_completed_row_clamps_to_pending_group() {
@@ -348,12 +354,14 @@ TestCase {
                 "完成区的指针必须显示在未完成组最后一个可兑现槽位")
 
         view.commitReorder(false)
-        compare(testCase.reorderCalls.length, 1)
-        compare(testCase.reorderCalls[0].ids, [2, 1, 3])
+        compare(testCase.moveCalls.length, 1)
+        compare(testCase.moveCalls[0].taskId, 1)
+        // 落点传的是紧随其后的那条已完成任务（3）：界面只交意图，把落点夹到未完成组末尾是服务的事。
+        compare(testCase.moveCalls[0].beforeTaskId, 3)
     }
 
     function test_reorder_is_disabled_without_service_support() {
-        // 服务端没有 reorderTasks 时不该露出可拖动的行为。
+        // 服务端没有 moveTaskBefore 时不该露出可拖动的行为。
         var view = createTemporaryObject(viewComponent, testCase, { taskManagerRef: statisticsService })
         verify(!!view, "Component exists")
         compare(view.canReorderTasks, false)

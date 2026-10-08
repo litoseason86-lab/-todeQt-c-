@@ -119,6 +119,50 @@ bool bindCategoryTextFromId(QSqlQuery& query, int categoryId, QString* categoryN
     *categoryName = query.value(0).toString();
     return true;
 }
+
+// moveTaskBefore 的排序规则，不碰数据库。current 是当天全部任务此刻的显示顺序（未完成在前、
+// 已完成在后），completed 是其中已完成的编号。成立时 *result 是移动后的全天新顺序（可能与
+// current 相同）；不成立时返回 false，原因写进 *reason。
+bool placeTaskBefore(const QList<int>& current, const QSet<int>& completed,
+                     int taskId, int beforeTaskId, QList<int>* result, QString* reason)
+{
+    if (!current.contains(taskId)) {
+        *reason = QStringLiteral("任务不存在");
+        return false;
+    }
+    // 已完成的任务由显示口径固定排在未完成之后，不参与手动排序：
+    // 允许拖它只会让人以为能把它插回未完成那一段。
+    if (completed.contains(taskId)) {
+        *reason = QStringLiteral("已完成的任务不参与排序");
+        return false;
+    }
+    *result = current;
+    if (beforeTaskId == taskId) {
+        return true;
+    }
+    // 落点编号有效却不在当天的集合里：要么是另一天的任务，要么根本不存在。
+    if (beforeTaskId > 0 && !current.contains(beforeTaskId)) {
+        *reason = QStringLiteral("目标任务不在同一天或不存在");
+        return false;
+    }
+
+    result->removeOne(taskId);
+    // 默认落点是未完成组的末尾，即第一条已完成任务之前（没有已完成任务时就是全天末尾）。
+    // 没有落点（beforeTaskId <= 0）或落点是已完成任务时都落在这里：已完成的固定在最后，
+    // 把未完成任务插进它们中间或排到它们后面，写出的序号就和显示顺序对不上了。
+    qsizetype insertAt = result->size();
+    for (qsizetype i = 0; i < result->size(); ++i) {
+        if (completed.contains(result->at(i))) {
+            insertAt = i;
+            break;
+        }
+    }
+    if (beforeTaskId > 0 && !completed.contains(beforeTaskId)) {
+        insertAt = result->indexOf(beforeTaskId);
+    }
+    result->insert(insertAt, taskId);
+    return true;
+}
 }
 
 TaskManager::TaskManager(QObject* parent)
@@ -1125,6 +1169,100 @@ bool TaskManager::reorderTasks(const QVariant& dateValue, const QVariantList& or
 
     if (!db.commit()) {
         qWarning() << "Failed to commit reorder:" << db.lastError().text();
+        reportFailure(QStringLiteral("任务排序失败：无法提交事务"));
+        db.rollback();
+        return false;
+    }
+
+    emit tasksChanged();
+    return true;
+}
+
+bool TaskManager::moveTaskBefore(int taskId, int beforeTaskId)
+{
+    // 界面只交意图「把 X 移到 Y 之前」，整天的顺序由这里在库里重新算：iPad 的系统列表拖动
+    // 只能表达这个意图；而且界面手里的列表是快照，拖动期间会过期（别的设备同步来了任务、
+    // 撤销窗口里的任务还没真正删除）。让界面拼整天的 id 数组交上来，快照一过期整次排序就会被拒。
+    if (!isValidTaskId(taskId)) {
+        qWarning() << "Failed to move task before another: invalid task id" << taskId;
+        reportFailure(QStringLiteral("任务排序失败：任务编号无效"));
+        return false;
+    }
+
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) {
+        qWarning() << "Failed to move task before another: database is not open";
+        reportFailure(QStringLiteral("任务排序失败：数据库未打开"));
+        return false;
+    }
+    // 读当天集合和写序号放在同一个事务里：写入基于的就是读到的那一版集合，读完之后别处增删任务，
+    // 也不会让这次按旧集合写出撞号或漏号的序号；写到一半失败还能整体撤销。
+    if (!db.transaction()) {
+        qWarning() << "Failed to start move-before transaction:" << db.lastError().text();
+        reportFailure(QStringLiteral("任务排序失败：无法启动事务"));
+        return false;
+    }
+
+    // 一条语句里先按 taskId 找到它所在的日期，再按今日页的显示口径读出当天全部任务
+    // （与 getTasksByDate 的排序一致）；taskId 不存在时子查询为 NULL，读出的集合为空。
+    QSqlQuery dayQuery(db);
+    dayQuery.prepare(QStringLiteral(
+        "SELECT id, completed FROM tasks "
+        "WHERE date = (SELECT date FROM tasks WHERE id = :id) "
+        "ORDER BY completed ASC, display_order ASC, created_at ASC, id ASC"));
+    dayQuery.bindValue(QStringLiteral(":id"), taskId);
+    if (!dayQuery.exec()) {
+        qWarning() << "Failed to read tasks before move-before:" << dayQuery.lastError().text();
+        reportFailure(QStringLiteral("任务排序失败：无法读取当天任务"));
+        db.rollback();
+        return false;
+    }
+    QList<int> current;
+    QSet<int> completed;
+    while (dayQuery.next()) {
+        const int id = dayQuery.value(0).toInt();
+        current.append(id);
+        if (dayQuery.value(1).toInt() != 0) {
+            completed.insert(id);
+        }
+    }
+    dayQuery.finish();
+
+    QList<int> reordered;
+    QString reason;
+    if (!placeTaskBefore(current, completed, taskId, beforeTaskId, &reordered, &reason)) {
+        qWarning() << "Failed to move task before another:" << reason
+                   << "task" << taskId << "before" << beforeTaskId;
+        reportFailure(QStringLiteral("任务排序失败：%1").arg(reason));
+        db.rollback();
+        return false;
+    }
+
+    // 顺序没变就不写：白写一遍会把历史遗留的重复或不连续序号全天重排成 1..N，
+    // 同步出去的是一批没有意义的排序变化，还会触发各页一轮多余的刷新。
+    // 到这里只读过，回滚只是结束事务。
+    if (reordered == current) {
+        db.rollback();
+        return true;
+    }
+
+    QSqlQuery update(db);
+    update.prepare(QStringLiteral("UPDATE tasks SET display_order = :order WHERE id = :id"));
+    for (int i = 0; i < reordered.size(); ++i) {
+        update.bindValue(QStringLiteral(":order"), i + 1);
+        update.bindValue(QStringLiteral(":id"), reordered.at(i));
+        // 恰好一行才算写成功：触发器静默跳过更新时影响行数是 0，不能当成成功提交。
+        if (!update.exec() || update.numRowsAffected() != 1) {
+            qWarning() << "Failed to move task before another: write failed for task" << reordered.at(i)
+                       << "rows affected" << update.numRowsAffected() << update.lastError().text();
+            reportFailure(QStringLiteral("任务排序失败：写入顺序失败"));
+            db.rollback();
+            return false;
+        }
+    }
+
+    if (!db.commit()) {
+        qWarning() << "Failed to commit move-before:" << db.lastError().text();
         reportFailure(QStringLiteral("任务排序失败：无法提交事务"));
         db.rollback();
         return false;

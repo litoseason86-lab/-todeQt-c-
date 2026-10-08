@@ -195,8 +195,7 @@ Item {
             refresh()
     }
     onPendingDeleteTaskIdChanged: {
-        // 待删除窗口会把一行从 UI 模型隐藏，但数据库里的完整集合仍包含它。
-        // 立即清掉拖拽快照，避免松手把不完整数组提交给服务层。
+        // 撤销条挂着时不开放排序（见 canReorderTasks），已经开始的拖动在这里取消，保持原来的交互。
         if (root.pendingDeleteTaskId > 0) root.commitReorder(true)
         if (root.pageActive)
             refresh()
@@ -424,8 +423,10 @@ Item {
         root.rolloverBannerActive = false;
     }
 
+    // 撤销条挂着（pendingDeleteTaskId > 0）时不开放排序，保持原来的交互。这不是数据上的限制：
+    // 服务按库里最新的完整集合重排，列表里暂时隐藏的那条仍在库里也不影响结果。
     readonly property bool canReorderTasks: !!root.taskManagerRef
-                                           && typeof root.taskManagerRef.reorderTasks === "function"
+                                           && typeof root.taskManagerRef.moveTaskBefore === "function"
                                            && root.pendingDeleteTaskId <= 0
 
     // 本次拖动的登记挂在哪个对象上：正常是发起拖动的那一行（delegate）。
@@ -495,6 +496,8 @@ Item {
         try {
             const from = root.draggingFromIndex
             const target = root.dropTargetIndex
+            // 被拖任务的编号要在复位 draggingTaskId 之前取：复位后 draggingFromIndex 立刻变回 -1。
+            const taskId = from >= 0 ? Number(root.tasks[from].id) : -1
             root.draggingTaskId = -1
             root.dropTargetIndex = -1
 
@@ -503,12 +506,17 @@ Item {
                 return
             }
 
-            var ids = []
-            for (var i = 0; i < root.tasks.length; ++i) {
-                ids.push(Number(root.tasks[i].id))
+            // 界面只说谁移到谁前面：整天重新编号、已完成固定在末尾都由服务做。
+            // target 是移动后的最终下标：向上移动落在原来 target 位置那条之前；
+            // 向下移动落在原来 target + 1 位置那条之前，没有下一条就传 0，表示落到末尾。
+            // 下一条是已完成任务时照样传它的编号，服务会把落点夹到未完成组末尾。
+            var beforeId = 0
+            if (target < from) {
+                beforeId = Number(root.tasks[target].id)
+            } else if (target + 1 < root.tasks.length) {
+                beforeId = Number(root.tasks[target + 1].id)
             }
-            ids.splice(target, 0, ids.splice(from, 1)[0])
-            if (!root.taskManagerRef.reorderTasks(root.todayIsoDate(), ids)) {
+            if (!root.taskManagerRef.moveTaskBefore(taskId, beforeId)) {
                 root.loadError = "任务排序保存失败，请重试"
             }
         } finally {
