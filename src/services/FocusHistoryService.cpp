@@ -25,11 +25,13 @@ bool isValidHistoryYear(int year)
 
 // 记录改挂到别的任务时，科目快照要换成新任务此刻的科目。
 // 回退链与 FocusTimer、addManualSession 的写入路径保持一致：先看关联科目，再退回旧版文本科目。
+// 默认值就是「不关联任务」的快照：编号为 NULL，名称和颜色是空串。
+// 名称和颜色列是 NOT NULL DEFAULT ''，默认构造的 QString 是空值，会按 NULL 绑定，清空归属时整条回滚。
 struct CategorySnapshot
 {
     QVariant id;
-    QString name;
-    QString color;
+    QString name = QStringLiteral("");
+    QString color = QStringLiteral("");
 };
 
 bool loadCategorySnapshot(QSqlDatabase& db, int taskId, CategorySnapshot* snapshot, QString* error)

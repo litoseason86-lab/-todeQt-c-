@@ -875,6 +875,7 @@ private slots:
     void timelineRecordCorrectionKeepsIdentityAndRollsBack();
     void restOccupiesOnlyItsMeasuredDuration();
     void attributionOnlyEditSkipsOverlapCheck();
+    void clearingSessionTaskLeavesItUnlinked();
     void taskOptionsPreferSelectedDateAndAreCapped();
     void deleteSessionRemovesItAndRollsStatsBack();
     void manualWriteRefusesToTouchRunningSession();
@@ -9197,6 +9198,59 @@ void ServiceTests::attributionOnlyEditSkipsOverlapCheck()
     // 一旦真的改动时间，重叠校验照常生效。
     QVERIFY(!history->updateSessionFields(id, {{QStringLiteral("startTime"), start.addSecs(300)}}));
     QVERIFY(history->lastError().contains(QStringLiteral("已有专注记录")));
+}
+
+// 保证：修改记录时选「不关联任务」能保存——记录变成未关联，科目快照清成空串，原任务不再计入，
+// 番茄完成事实保留；休息转专注时显式选「不关联任务」同样能保存。
+// 曾经的缺陷：清空时科目名和颜色按 NULL 写入，撞上 category_name_snapshot 的 NOT NULL，整条回滚。
+void ServiceTests::clearingSessionTaskLeavesItUnlinked()
+{
+    auto* history = FocusHistoryService::instance();
+    const QDate day = QDate::currentDate().addDays(-2);
+    const int task = insertTaskRow(QStringLiteral("原任务"), day, QStringLiteral("数学"));
+    const QDateTime start(day, QTime(9, 0));
+    const int id = history->addManualSession(task, start, 30);
+    QVERIFY(id > 0);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("UPDATE focus_sessions SET mode = 1, pomodoro_completed = 1")));
+    // 前提：清空之前带着任务和非空的科目快照，且计入原任务。
+    QVERIFY(query.exec(QStringLiteral("SELECT task_id, category_name_snapshot FROM focus_sessions WHERE id = %1").arg(id)));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), task);
+    QCOMPARE(query.value(1).toString(), QStringLiteral("数学"));
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(task), 30);
+
+    QVERIFY2(history->updateSessionFields(id, {{QStringLiteral("taskId"), -1}}), qPrintable(history->lastError()));
+
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT task_id IS NULL, category_id_snapshot IS NULL, category_name_snapshot, category_color_snapshot, "
+        "pomodoro_completed, duration FROM focus_sessions WHERE id = %1").arg(id)));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toBool(), true);
+    QCOMPARE(query.value(1).toBool(), true);
+    QCOMPARE(query.value(2).toString(), QString());
+    QVERIFY(!query.value(2).isNull());
+    QCOMPARE(query.value(3).toString(), QString());
+    QVERIFY(!query.value(3).isNull());
+    QCOMPARE(query.value(4).toInt(), 1);
+    QCOMPARE(query.value(5).toInt(), 30 * 60);
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(task), 0);
+
+    // 休息转专注、显式不关联任务：走同一段清空逻辑。
+    const QDateTime restStart(day, QTime(14, 0));
+    query.prepare(QStringLiteral("INSERT INTO rest_sessions (start_time, end_time, duration, manual) "
+                                 "VALUES (:start, :end, 600, 1)"));
+    query.bindValue(QStringLiteral(":start"), restStart.toString(Qt::ISODateWithMs));
+    query.bindValue(QStringLiteral(":end"), restStart.addSecs(600).toString(Qt::ISODateWithMs));
+    QVERIFY(query.exec());
+    const int restId = query.lastInsertId().toInt();
+    QVERIFY(restId > 0);
+    QVERIFY2(history->updateRestSessionFields(restId, {{QStringLiteral("isRest"), false}, {QStringLiteral("taskId"), -1}}),
+             qPrintable(history->lastError()));
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE task_id IS NULL "
+                                      "AND category_name_snapshot = '' AND duration = 600")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
 }
 
 void ServiceTests::taskOptionsPreferSelectedDateAndAreCapped()
