@@ -166,10 +166,11 @@ TestCase {
         verify(testCase.defaultOrder().indexOf("trash") < 0)
         // 紧贴设置：两者之间只隔一个条目间距（Theme.space4），中间没有别的条目。
         compare(settings.y - (trash.y + trash.height), Theme.space4)
-        // 在最后一个可排序条目之下。
-        var last = findChild(sidebar, "sidebarItem-" + testCase.markersInOrder().slice(-1)[0])
-        verify(last)
-        verify(trash.y >= last.y + last.height)
+        // 矮窗口里最后一个条目可能在裁剪区外；固定项要在滚动视口下方，而非内容末尾下方。
+        var scroll = findChild(sidebar, "sidebarEntryScroll")
+        verify(scroll)
+        verify(trash.mapToItem(sidebar, 0, 0).y
+               >= scroll.mapToItem(sidebar, 0, 0).y + scroll.height)
     }
 
     // 产品保证：用户把侧栏顺序改成别的样子（少几项、换位置）之后，废纸篓仍固定在设置上方，不会被排走或消失。
@@ -184,7 +185,8 @@ TestCase {
         compare(settings.y - (trash.y + trash.height), Theme.space4)
         // 顺序里只有两项时，它离那两项很远（中间是弹性空白），不是跟在它们后面。
         var last = findChild(sidebar, "sidebarItem-今")
-        verify(trash.y > last.y + last.height + 100)
+        verify(trash.mapToItem(sidebar, 0, 0).y
+               > last.mapToItem(sidebar, 0, 0).y + last.height + 100)
     }
 
     // 产品保证：当前页是废纸篓时，它的条目是选中样式（与其它条目同一套），别的页时不是。
