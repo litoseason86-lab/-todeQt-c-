@@ -1372,6 +1372,77 @@ TestCase {
         compare(view.selectedTaskTitle, "测试任务")
     }
 
+    function test_freeTabSwitchConfirmsLongFreeEvenWhenTabMismatchesTimer() {
+        // 保证：切到自由页签时，要结束的若实际是超长自由专注，先弹超长确认、不直接停表——不管页签当时停在哪。
+        // 构造页签与计时器不一致：空闲时先切到番茄页签，再让替身直接进入自由会话。mode、phase 都不变，
+        // 替身也没有 currentTaskChanged 信号，页面收不到任何会触发同步的信号，页签仍停在番茄。
+        // 计时器和页面都没有任务（如任务被删后解绑），切换走「只换页签」这条路，不经切换确认框。
+        view.toPomodoroTab(true)
+        view.clearSelectedTask()
+        focusTimer.currentTaskId = -1
+        focusTimer.currentTaskTitle = ""
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 9 * 60 * 60
+        controller.needsConfirmation = true
+        wait(20)
+        compare(view.pomodoroModeSelected, true)
+        compare(view.state, "pomoIdle")
+        compare(focusTimer.mode, 0)
+        compare(controller.planModeSwitch(view.selectedTaskId, view.selectedTaskTitle).kind, "pageOnly")
+
+        view.requestModeSwitch(false)
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        tryCompare(dialog, "opened", true)
+        compare(focusTimer.stopFocusCalls, 0)
+        compare(focusTimer.hasActiveSession, true)
+        compare(view.pomodoroModeSelected, true)
+
+        mouseClick(findChild(dialog, "longFreeFocusRecordButton"))
+
+        // 确认记录、控制器收尾成功后才换到自由页签，停在待机。
+        tryCompare(controller.finishCalls, "length", 1)
+        compare(controller.finishCalls[0].record, true)
+        tryCompare(view, "pomodoroModeSelected", false)
+        compare(focusTimer.hasActiveSession, false)
+        compare(view.state, "free")
+    }
+
+    function test_freeTabSwitchStopFailureKeepsTimerAndTab() {
+        // 保证：切到自由页签时结束当前阶段失败，计时器与页签都保持原样，提示「结束当前阶段失败，请重试」；重试成功后才换页签。
+        // 番茄工作段，计时器和页面都没有任务，切换走「只换页签」这条路。
+        focusTimer.currentTaskId = -1
+        focusTimer.currentTaskTitle = ""
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.mode = 1
+        focusTimer.phase = 1
+        view.clearSelectedTask()
+        focusTimer.stopFocusFails = true
+        wait(20)
+        compare(view.pomodoroModeSelected, true)
+        compare(view.state, "pomoWork")
+        compare(controller.planModeSwitch(view.selectedTaskId, view.selectedTaskTitle).kind, "pageOnly")
+
+        view.requestModeSwitch(false)
+
+        compare(view.errorText, "结束当前阶段失败，请重试")
+        compare(view.pomodoroModeSelected, true)
+        compare(focusTimer.hasActiveSession, true)
+        compare(focusTimer.mode, 1)
+        compare(focusTimer.phase, 1)
+
+        focusTimer.stopFocusFails = false
+        view.requestModeSwitch(false)
+
+        compare(focusTimer.hasActiveSession, false)
+        compare(view.pomodoroModeSelected, false)
+        compare(view.state, "free")
+        compare(view.errorText, "")
+    }
+
     function test_enterPomodoroWithTaskAfterLongFreeConfirmationKeepsNewTask() {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true

@@ -387,8 +387,8 @@ Item {
             root.focusEnded()
         } else if (action === "startPomodoro" || action === "startFree") {
             root.applyTask(taskId, taskTitle, action === "startPomodoro", true)
-        } else if (action === "toPomodoro") {
-            root.pomodoroModeSelected = true
+        } else if (action === "toPomodoro" || action === "toFree") {
+            root.pomodoroModeSelected = action === "toPomodoro"
         } else if (action === "enterPomodoro" || action === "enterFree") {
             // 多走了一道超时确认，意图仍是「切过去待机」，不能因此变成自动开始。
             root.applyTask(taskId, taskTitle, action === "enterPomodoro", false)
@@ -488,7 +488,9 @@ Item {
 
     // 页签切换（番茄 / 自由）。到达这里时计时器要么空闲，要么是「忙碌但没有可继承的任务」：
     // 有可继承任务的忙碌状态在 requestModeSwitch 里已先走切换确认框（planModeSwitch）。
-    // 后一种情况没有任务可说，沿用原行为直接结束当前阶段再换页签（超长自由专注仍会先弹超长确认）。
+    // 后一种情况没有任务可说，沿用原行为直接结束当前阶段再换页签。
+    // 两个方向的停表都经控制器：超长自由专注按计时器的真实模式判断，不凭页签推断。
+    // 页签与计时器万一不一致（页签停在番茄、计时器在跑自由专注），切到自由也会先弹超长确认，不会直接把整段记下。
     function toPomodoroTab(enabled) {
         enabled = enabled || !root.freeModeAvailable
         root.cancelAutoAdvance()
@@ -502,9 +504,9 @@ Item {
             return
         }
 
+        var timerBusy = root.timer.hasActiveSession || root.timer.phase !== 0
         if (enabled) {
-            var timerHasSession = root.timer.hasActiveSession || root.timer.phase !== 0
-            var shouldUseTimerTask = timerHasSession || root.selectedTaskId <= 0
+            var shouldUseTimerTask = timerBusy || root.selectedTaskId <= 0
             // 只有正在切换真实计时会话，或本地没有“从任务页直达”的显式选择时，
             // 才从 timer 覆盖缓存；否则会把用户刚点的任务替换成 timer 里的旧值。
             if (shouldUseTimerTask && root.timer.currentTaskId > 0) {
@@ -513,20 +515,13 @@ Item {
             if (shouldUseTimerTask && root.timer.currentTaskTitle && root.timer.currentTaskTitle.length > 0) {
                 root.selectedTaskTitle = root.timer.currentTaskTitle
             }
-            if (timerHasSession) {
-                var stopped = root.stopBusyTimerForSwitch("toPomodoro", -1, "")
-                if (stopped === "confirming")
-                    return
-                if (stopped === "failed") {
-                    root.errorText = "切换番茄失败，请重试"
-                    return
-                }
-            }
-        } else {
-            // 切到自由：当前页签是番茄，忙碌的计时器是番茄段 / 番茄休息，没有超长自由专注的确认问题，直接停。
-            var hasRunningTimer = root.timer.hasActiveSession || root.timer.phase !== 0
-            if (hasRunningTimer && !root.timer.stopFocus()) {
-                root.errorText = "结束当前阶段失败，请重试"
+        }
+        if (timerBusy) {
+            var stopped = root.stopBusyTimerForSwitch(enabled ? "toPomodoro" : "toFree", -1, "")
+            if (stopped === "confirming")
+                return
+            if (stopped === "failed") {
+                root.errorText = enabled ? "切换番茄失败，请重试" : "结束当前阶段失败，请重试"
                 return
             }
         }
