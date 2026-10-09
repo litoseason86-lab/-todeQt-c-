@@ -59,5 +59,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)moveTasksToToday:(NSArray<NSNumber *> *)taskIds error:(NSError **)error;
 - (BOOL)duplicateTask:(NSInteger)taskId date:(NSString *)date error:(NSError **)error;
 - (BOOL)isRoutineGeneratedTask:(NSInteger)taskId;
+// 从 start 起连续 days 天、每天「已排」分钟，口径见 TaskManager::readPlannedMinutesByDay；
+// excludedTaskId 是撤销窗口里待删的任务，没有时传 -1。
+- (nullable NSArray<NSNumber *> *)plannedMinutesFrom:(NSString *)start days:(NSInteger)days excludingTask:(NSInteger)excludedTaskId error:(NSError **)error;
 @end
 NS_ASSUME_NONNULL_END

@@ -1386,3 +1386,30 @@ ServiceReadResult<QVariantList> TaskManager::readTasks(const QDate& from, const 
     if (query.lastError().isValid()) return {{}, ServiceReadError::Database};
     return {rows};
 }
+
+ServiceReadResult<QList<int>> TaskManager::readPlannedMinutesByDay(const QDate& start, int days,
+                                                                int excludedTaskId) const
+{
+    if (!start.isValid() || days < 1 || days > 31)
+        return {{}, ServiceReadError::InvalidArgument};
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) return {{}, ServiceReadError::Database};
+    const QDate end = start.addDays(days - 1);
+    QSqlQuery query(db);
+    // 范围与 getWeekTasks / getTasksByDate 一样只按日期筛选，保证求和的就是页面上列出的那些任务。
+    query.prepare(QStringLiteral(
+        "SELECT date, SUM(MAX(estimated_minutes, 0)) FROM tasks "
+        "WHERE date BETWEEN :from AND :to AND id <> :excluded GROUP BY date"));
+    query.bindValue(QStringLiteral(":from"), start.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":to"), end.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":excluded"), excludedTaskId);
+    if (!query.exec()) return {{}, ServiceReadError::Database};
+    QList<int> minutes(days, 0);
+    while (query.next()) {
+        const qint64 index = start.daysTo(QDate::fromString(query.value(0).toString(), Qt::ISODate));
+        if (index >= 0 && index < days)
+            minutes[static_cast<qsizetype>(index)] = query.value(1).toInt();
+    }
+    if (query.lastError().isValid()) return {{}, ServiceReadError::Database};
+    return {minutes};
+}
