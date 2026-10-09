@@ -10,6 +10,12 @@
 #include "../src/services/FocusHistoryService.h"
 #include "../src/services/AppSettings.h"
 #include "../src/services/LogicalDay.h"
+#import "../src/platform/ios/bridge/PTCategoryBridge.h"
+#import "../src/platform/ios/bridge/PTLogicalDayBridge.h"
+#import "../src/platform/ios/bridge/PTSettingsBridge.h"
+@interface PTSettingsBridge (TestInjection)
+- (instancetype)initWithSettings:(AppSettings *)settings;
+@end
 #include <QSettings>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -17,10 +23,22 @@
 #include <memory>
 #include <QtTest>
 #include <limits>
+#include <optional>
+#include "../src/services/LogicalDayService.h"
+
+// 仅测试目标替换墙钟读取；不改系统时间或生产服务，默认仍取真实本地时间。
+static std::optional<QDateTime> bridgeTestNow;
+QDateTime QDateTime::currentDateTime() {
+    return bridgeTestNow.value_or(QDateTime::fromMSecsSinceEpoch(QDateTime::currentMSecsSinceEpoch()));
+}
 
 class PTCoreBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void clockOverrideDrivesLogicalDayService();
+    void categoryValuesAndErrors();
+    void settingsSnapshotWritesAndFailures();
+    void configurationSignalsAndLifetime();
     void initTestCase();
     void init();
     void cleanup();
@@ -289,5 +307,209 @@ void PTCoreBridgeTests::coreSignalsReturnToMainThreadAndDisconnect() {
         emit taskService->tasksChanged(); emit pending.changed(); emit coordinator.changed(); QCOMPARE(calls, 3);
     }
 }
+// 产品保证：测试墙钟能够驱动真实逻辑日服务，跨过日界会发变化信号。
+void PTCoreBridgeTests::clockOverrideDrivesLogicalDayService() {
+    struct Reset { ~Reset() { bridgeTestNow.reset(); } } reset;
+    bridgeTestNow = QDateTime(QDate(2024, 2, 29), QTime(3, 59));
+    QCOMPARE(QDateTime::currentDateTime(), *bridgeTestNow);
+    AppSettings::instance()->setDayStartHour(4);
+    auto *service = LogicalDayService::instance();
+    QVERIFY(QMetaObject::invokeMethod(service, "onInvalidate", Qt::DirectConnection));
+    PTLogicalDayBridge *bridge = [PTLogicalDayBridge new];
+    __block int changes = 0; bridge.onChanged = ^{ ++changes; };
+    QSignalSpy spy(service, &LogicalDayService::changed);
+    QVERIFY([bridge.today isEqualToString:@"2024-02-28"]);
+    QCOMPARE(bridge.dayStartHour, NSInteger(4));
+    QCOMPARE(LogicalDay::today(4), QDate(2024, 2, 28));
+    bridgeTestNow = QDateTime(QDate(2024, 2, 29), QTime(4, 0));
+    QVERIFY(QMetaObject::invokeMethod(service, "checkSystemClock", Qt::DirectConnection));
+    QCOMPARE(spy.count(), 1); QCOMPARE(changes, 1);
+    QVERIFY([bridge.today isEqualToString:@"2024-02-29"]);
+    QCOMPARE(LogicalDay::today(4), QDate(2024, 2, 29));
+}
+// 产品保证：科目保留字段并走原服务增删改，空结果与数据库失败可区分。
+void PTCoreBridgeTests::categoryValuesAndErrors() {
+    @autoreleasepool {
+        PTCategoryBridge *bridge = [PTCategoryBridge new]; NSError *error = nil;
+        NSInteger a = [bridge addCategory:@"甲科" color:@"#112233" error:&error];
+        NSInteger b = [bridge addCategory:@"乙科" color:@"#aabbcc" error:&error];
+        QVERIFY(a > 0 && b > 0 && a != b); QVERIFY(error == nil);
+        auto rows = [bridge allCategories]; QVERIFY(rows.valid && rows.categories.count >= 2);
+        for (PTCategoryValue *value in rows.categories) {
+            auto map = CategoryManager::instance()->getCategoryById(static_cast<int>(value.categoryId));
+            QCOMPARE(PTBridgeSupport::string(value.name), map.value("name").toString());
+            QCOMPARE(PTBridgeSupport::string(value.color), map.value("color").toString());
+            QCOMPARE(bool(value.isPreset), map.value("isPreset").toBool());
+            QCOMPARE(value.displayOrder, NSInteger(map.value("displayOrder").toInt()));
+            QCOMPARE(PTBridgeSupport::timestamp(value.createdAt), map.value("createdAt").toDateTime());
+        }
+        QVERIFY([[bridge category:a].categories.firstObject.name isEqualToString:@"甲科"]);
+        QVERIFY([bridge nameExists:@"甲科" excluding:-1]); QVERIFY(![bridge nameExists:@"甲科" excluding:a]);
+        QVERIFY([bridge canDeleteCategory:a]);
+        QVERIFY([bridge updateCategory:a name:@"新甲" color:@"#334455" error:&error]);
+        QVERIFY([[bridge category:a].categories.firstObject.color isEqualToString:@"#334455"]);
+        QVERIFY([bridge deleteCategory:b error:&error]); QVERIFY(![bridge category:b].valid);
+        // 空库确实没有科目，保证“空”断言不是建立在有预设科目的假设上。
+        QSqlQuery clear(DatabaseManager::instance()->database()); QVERIFY(clear.exec("DELETE FROM categories"));
+        QVERIFY([bridge allCategories].valid); QCOMPARE([bridge allCategories].categories.count, NSUInteger(0));
+        __block int failures = 0; bridge.onFailure = ^(NSString *) { ++failures; };
+        DatabaseManager::instance()->close(); QVERIFY(![bridge allCategories].valid); QCOMPARE(failures, 0);
+        QVERIFY(![bridge updateCategory:a name:@"甲" color:@"#112233" error:&error]);
+        QVERIFY(error.localizedDescription.length > 0); QCOMPARE(failures, 0);
+    }
+}
+// 产品保证：设置快照完整投影，可写项落到原后端；写盘失败只成为调用错误，不伪报成功。
+void PTCoreBridgeTests::settingsSnapshotWritesAndFailures() {
+    @autoreleasepool {
+        QTemporaryDir dir; QVERIFY(dir.isValid()); AppSettings settings(dir.filePath("settings.ini"));
+        PTSettingsBridge *bridge = [[PTSettingsBridge alloc] initWithSettings:&settings]; NSError *error = nil;
+        __block int successes = 0, failures = 0; bridge.onWriteSucceeded = ^(NSString *) { ++successes; };
+        bridge.onWriteFailed = ^(NSString *, NSString *) { ++failures; };
+
+
+        QVERIFY([bridge setLastMode:1 error:&error]);
+        QVERIFY([bridge setWorkMinutes:43 error:&error]);
+        QVERIFY([bridge setBreakMinutes:9 error:&error]);
+        QVERIFY([bridge setFreeTimerWarningHours:6 error:&error]);
+        QVERIFY([bridge setSoundEnabled:!settings.soundEnabled() error:&error]);
+        QVERIFY([bridge setReduceMotion:!settings.reduceMotion() error:&error]);
+        QVERIFY([bridge setSlimClockFont:!settings.slimClockFont() error:&error]);
+        QVERIFY([bridge setRolloverIgnoredDate:@"2024-02-29" error:&error]);
+        QVERIFY([bridge setBackgroundTheme:@"starry" error:&error]);
+        QVERIFY([bridge setDayStartHour:3 error:&error]);
+        QVERIFY([bridge setNickname:@"桥接测试" error:&error]);
+        QVERIFY([bridge setSidebarVisible:!settings.sidebarVisible() error:&error]);
+        QVERIFY(([bridge setSidebarOrder:@[@"focus", @"today"] error:&error]));
+        QVERIFY([bridge setDashboardTimerVisible:!settings.dashboardTimerVisible() error:&error]);
+        QVERIFY([bridge setReduceTransparency:!settings.reduceTransparency() error:&error]);
+        QVERIFY([bridge setNaturalCompletionNoticeShown:!settings.naturalCompletionNoticeShown() error:&error]);
+        QVERIFY([bridge setAutoStartBreak:!settings.autoStartBreak() error:&error]);
+        QVERIFY([bridge setAutoStartNextPomodoro:!settings.autoStartNextPomodoro() error:&error]);
+        QVERIFY([bridge setQuickStartEnabled:!settings.quickStartEnabled() error:&error]);
+        QVERIFY([bridge setLongBreakEnabled:!settings.longBreakEnabled() error:&error]);
+        QVERIFY([bridge setLongBreakMinutes:21 error:&error]);
+        QVERIFY([bridge setLongBreakInterval:3 error:&error]);
+        QVERIFY([bridge setScheduleDisplayMode:@"period" error:&error]);
+        PTSettingsSnapshot *snapshot = [bridge snapshot];
+        QCOMPARE(snapshot.lastMode, NSInteger(settings.lastMode()));
+        QCOMPARE(snapshot.workMinutes, NSInteger(settings.workMinutes()));
+        QCOMPARE(snapshot.breakMinutes, NSInteger(settings.breakMinutes()));
+        QCOMPARE(snapshot.freeTimerWarningHours, NSInteger(settings.freeTimerWarningHours()));
+        QCOMPARE(snapshot.soundEnabled, BOOL(settings.soundEnabled()));
+        QCOMPARE(snapshot.reduceMotion, BOOL(settings.reduceMotion()));
+        QCOMPARE(snapshot.slimClockFont, BOOL(settings.slimClockFont()));
+        QCOMPARE(PTBridgeSupport::string(snapshot.rolloverIgnoredDate), settings.rolloverIgnoredDate());
+        QCOMPARE(PTBridgeSupport::string(snapshot.backgroundTheme), settings.backgroundTheme());
+        QCOMPARE(snapshot.dayStartHour, NSInteger(settings.dayStartHour()));
+        QCOMPARE(PTBridgeSupport::string(snapshot.nickname), settings.nickname());
+        QCOMPARE(snapshot.sidebarVisible, BOOL(settings.sidebarVisible()));
+        QCOMPARE(snapshot.sidebarOrder.count, NSUInteger(settings.sidebarOrder().size()));
+        for (NSUInteger i = 0; i < snapshot.sidebarOrder.count; ++i) QCOMPARE(PTBridgeSupport::string(snapshot.sidebarOrder[i]), settings.sidebarOrder().at(static_cast<qsizetype>(i)));
+        QCOMPARE(snapshot.sidebarOrderIsDefault, BOOL(settings.sidebarOrderIsDefault()));
+        QCOMPARE(snapshot.dashboardTimerVisible, BOOL(settings.dashboardTimerVisible()));
+        QCOMPARE(snapshot.reduceTransparency, BOOL(settings.reduceTransparency()));
+        QCOMPARE(snapshot.naturalCompletionNoticeShown, BOOL(settings.naturalCompletionNoticeShown()));
+        QCOMPARE(snapshot.autoStartBreak, BOOL(settings.autoStartBreak()));
+        QCOMPARE(snapshot.autoStartNextPomodoro, BOOL(settings.autoStartNextPomodoro()));
+        QCOMPARE(snapshot.quickStartEnabled, BOOL(settings.quickStartEnabled()));
+        QCOMPARE(snapshot.longBreakEnabled, BOOL(settings.longBreakEnabled()));
+        QCOMPARE(snapshot.longBreakMinutes, NSInteger(settings.longBreakMinutes()));
+        QCOMPARE(snapshot.longBreakInterval, NSInteger(settings.longBreakInterval()));
+        QCOMPARE(PTBridgeSupport::string(snapshot.semesterStartDate), settings.semesterStartDate());
+        QCOMPARE(snapshot.semesterWeeks, NSInteger(settings.semesterWeeks()));
+        QCOMPARE(PTBridgeSupport::string(snapshot.scheduleDisplayMode), settings.scheduleDisplayMode());
+        QCOMPARE(snapshot.scheduleShowWeekend, BOOL(settings.scheduleShowWeekend()));
+        QVERIFY(successes > 0); QCOMPARE(failures, 0);
+        QVERIFY([bridge setDailyFocusGoal:@"2024-02-29" minutes:180 error:&error]);
+        QCOMPARE([bridge dailyFocusGoal:@"2024-02-29"], NSInteger(180));
+        QVERIFY([bridge resetSidebarOrder:&error]); QVERIFY([bridge snapshot].sidebarOrderIsDefault);
+        QVERIFY(![bridge setWorkMinutes:NSIntegerMax error:&error]);
+        // 与现有 AppSettings 测试同样注入不可写后端：路径被目录占用，不依赖账户权限。
+        const QString blockedPath = dir.filePath("blocked.ini"); QVERIFY(QDir().mkdir(blockedPath));
+        AppSettings blocked(blockedPath); PTSettingsBridge *bad = [[PTSettingsBridge alloc] initWithSettings:&blocked];
+        __block int background = 0; bad.onWriteFailed = ^(NSString *, NSString *) { ++background; };
+        const int oldMinutes = blocked.workMinutes();
+        QVERIFY(![bad setWorkMinutes:oldMinutes + 1 error:&error]);
+        QVERIFY(error.localizedDescription.length > 0); QCOMPARE(blocked.workMinutes(), oldMinutes); QCOMPARE(background, 0);
+        emit blocked.settingsWriteFailed(QStringLiteral("test"), QStringLiteral("背景失败")); QCOMPARE(background, 1);
+    }
+}
+// 产品保证：科目、逻辑日与设置逐域信号转发，工作线程回主线程，释放后全部断连。
+void PTCoreBridgeTests::configurationSignalsAndLifetime() {
+    @autoreleasepool {
+        PTCategoryBridge *categories = [PTCategoryBridge new]; PTLogicalDayBridge *days = [PTLogicalDayBridge new];
+        PTSettingsBridge *settings = [PTSettingsBridge new];
+        __weak PTCategoryBridge *weakCategories = categories; __weak PTLogicalDayBridge *weakDays = days; __weak PTSettingsBridge *weakSettings = settings;
+        __block int count = 0; __block BOOL onMain = YES;
+        void (^changed)(void) = ^{ ++count; onMain = onMain && NSThread.isMainThread; };
+        categories.onChanged = changed; days.onChanged = changed; settings.onNicknameChanged = changed;
+        auto *categoryService = CategoryManager::instance(); auto *dayService = LogicalDayService::instance(); auto *settingService = AppSettings::instance();
+        std::unique_ptr<QThread> worker(QThread::create([=] { emit categoryService->categoriesChanged(); emit dayService->changed(); emit settingService->nicknameChanged(); }));
+        worker->start(); QVERIFY(worker->wait(2000)); QCOMPARE(count, 0); QTRY_COMPARE(count, 3); QVERIFY(onMain);
+        __block int propertyCount = 0;
+        settings.onLastModeChanged = ^{ ++propertyCount; };
+        settings.onWorkMinutesChanged = ^{ ++propertyCount; };
+        settings.onBreakMinutesChanged = ^{ ++propertyCount; };
+        settings.onFreeTimerWarningHoursChanged = ^{ ++propertyCount; };
+        settings.onSoundEnabledChanged = ^{ ++propertyCount; };
+        settings.onReduceMotionChanged = ^{ ++propertyCount; };
+        settings.onSlimClockFontChanged = ^{ ++propertyCount; };
+        settings.onRolloverIgnoredDateChanged = ^{ ++propertyCount; };
+        settings.onBackgroundThemeChanged = ^{ ++propertyCount; };
+        settings.onDayStartHourChanged = ^{ ++propertyCount; };
+        settings.onNicknameChanged = ^{ ++propertyCount; };
+        settings.onSidebarVisibleChanged = ^{ ++propertyCount; };
+        settings.onSidebarOrderChanged = ^{ ++propertyCount; };
+        settings.onSidebarOrderIsDefaultChanged = ^{ ++propertyCount; };
+        settings.onDashboardTimerVisibleChanged = ^{ ++propertyCount; };
+        settings.onReduceTransparencyChanged = ^{ ++propertyCount; };
+        settings.onNaturalCompletionNoticeShownChanged = ^{ ++propertyCount; };
+        settings.onAutoStartBreakChanged = ^{ ++propertyCount; };
+        settings.onAutoStartNextPomodoroChanged = ^{ ++propertyCount; };
+        settings.onQuickStartEnabledChanged = ^{ ++propertyCount; };
+        settings.onLongBreakEnabledChanged = ^{ ++propertyCount; };
+        settings.onLongBreakMinutesChanged = ^{ ++propertyCount; };
+        settings.onLongBreakIntervalChanged = ^{ ++propertyCount; };
+        settings.onSemesterStartDateChanged = ^{ ++propertyCount; };
+        settings.onSemesterWeeksChanged = ^{ ++propertyCount; };
+        settings.onScheduleDisplayModeChanged = ^{ ++propertyCount; };
+        settings.onScheduleShowWeekendChanged = ^{ ++propertyCount; };
+        settings.onDailyFocusGoalChanged = ^{ ++propertyCount; };
+        emit settingService->lastModeChanged();
+        emit settingService->workMinutesChanged();
+        emit settingService->breakMinutesChanged();
+        emit settingService->freeTimerWarningHoursChanged();
+        emit settingService->soundEnabledChanged();
+        emit settingService->reduceMotionChanged();
+        emit settingService->slimClockFontChanged();
+        emit settingService->rolloverIgnoredDateChanged();
+        emit settingService->backgroundThemeChanged();
+        emit settingService->dayStartHourChanged();
+        emit settingService->nicknameChanged();
+        emit settingService->sidebarVisibleChanged();
+        emit settingService->sidebarOrderChanged();
+        emit settingService->dashboardTimerVisibleChanged();
+        emit settingService->reduceTransparencyChanged();
+        emit settingService->naturalCompletionNoticeShownChanged();
+        emit settingService->autoStartBreakChanged();
+        emit settingService->autoStartNextPomodoroChanged();
+        emit settingService->quickStartEnabledChanged();
+        emit settingService->longBreakEnabledChanged();
+        emit settingService->longBreakMinutesChanged();
+        emit settingService->longBreakIntervalChanged();
+        emit settingService->semesterStartDateChanged();
+        emit settingService->semesterWeeksChanged();
+        emit settingService->scheduleDisplayModeChanged();
+        emit settingService->scheduleShowWeekendChanged();
+        emit settingService->dailyFocusGoalChanged();
+        QCOMPARE(propertyCount, 28);
+        const int frozenCount = count;
+        categories = nil; days = nil; settings = nil;
+        QVERIFY(weakCategories == nil && weakDays == nil && weakSettings == nil);
+        emit categoryService->categoriesChanged(); emit dayService->changed(); emit settingService->nicknameChanged(); QCOMPARE(count, frozenCount);
+    }
+}
 QTEST_GUILESS_MAIN(PTCoreBridgeTests)
+
+
 #include "PTCoreBridgeTests.moc"

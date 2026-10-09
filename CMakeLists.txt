@@ -250,6 +250,9 @@ if(IOS)
         src/platform/ios/bridge/PTTaskBridge.h src/platform/ios/bridge/PTTaskBridge.mm
         src/platform/ios/bridge/PTPendingDeletionBridge.h src/platform/ios/bridge/PTPendingDeletionBridge.mm
         src/platform/ios/bridge/PTInteractionBridge.h src/platform/ios/bridge/PTInteractionBridge.mm
+        src/platform/ios/bridge/PTCategoryBridge.h src/platform/ios/bridge/PTCategoryBridge.mm
+        src/platform/ios/bridge/PTLogicalDayBridge.h src/platform/ios/bridge/PTLogicalDayBridge.mm
+        src/platform/ios/bridge/PTSettingsBridge.h src/platform/ios/bridge/PTSettingsBridge.mm
         # 055-P3B：转换与非单例服务登记。
         src/platform/ios/bridge/PTBridgeSupport.h
         src/platform/ios/bridge/PTBridgeSupport.mm
@@ -264,6 +267,9 @@ if(IOS)
         src/platform/ios/bridge/PTTaskBridge.mm
         src/platform/ios/bridge/PTPendingDeletionBridge.mm
         src/platform/ios/bridge/PTInteractionBridge.mm
+        src/platform/ios/bridge/PTCategoryBridge.mm
+        src/platform/ios/bridge/PTLogicalDayBridge.mm
+        src/platform/ios/bridge/PTSettingsBridge.mm
         # 055-P3B：支撑层使用 Foundation，按 ARC 管理对象。
         src/platform/ios/bridge/PTBridgeSupport.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
@@ -471,6 +477,17 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Bridges/PendingDeletionBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/InteractionBridgeAdapter.swift
 )
+    # 055-P3B：科目、逻辑日与设置协议和适配器。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/CategoryBridge.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/LogicalDayBridge.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/SettingsBridge.swift
+    )
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/CategoryBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/LogicalDayBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/SettingsBridgeAdapter.swift
+    )
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
@@ -1719,3 +1736,15 @@ set_tests_properties(
     MacGlobalHotkeyTests
     PROPERTIES TIMEOUT 30
 )
+
+# 055-P3B：科目、逻辑日与设置的 Mac 桥接测试。
+target_sources(PTCoreBridgeTests PRIVATE
+    src/platform/ios/bridge/PTCategoryBridge.h src/platform/ios/bridge/PTCategoryBridge.mm
+    src/platform/ios/bridge/PTLogicalDayBridge.h src/platform/ios/bridge/PTLogicalDayBridge.mm
+    src/platform/ios/bridge/PTSettingsBridge.h src/platform/ios/bridge/PTSettingsBridge.mm
+)
+set_source_files_properties(
+    src/platform/ios/bridge/PTCategoryBridge.mm
+    src/platform/ios/bridge/PTLogicalDayBridge.mm
+    src/platform/ios/bridge/PTSettingsBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
