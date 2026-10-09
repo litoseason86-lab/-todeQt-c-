@@ -1,73 +1,13 @@
 import QtQuick
 import QtTest
 import "../../qml/ScheduleWeeks.js" as ScheduleWeeks
+import "CaliberFixtures.js" as Fixtures
 
 // 课表的日期 ↔ 周次换算与重叠排布。这层是纯函数，不需要拉起视图，
 // 因此单独成一条用例：它跑得快，坏掉时指向也最明确。
 TestCase {
     id: testCase
     name: "ScheduleWeeks"
-
-    function test_mondayOfSnapsBackToWeekStart() {
-        // 2026-09-02 是周三，回退到 2026-08-31（周一）。
-        compare(ScheduleWeeks.isoDate(ScheduleWeeks.mondayOf(new Date(2026, 8, 2))),
-                "2026-08-31")
-        // 周一自身不动。
-        compare(ScheduleWeeks.isoDate(ScheduleWeeks.mondayOf(new Date(2026, 7, 31))),
-                "2026-08-31")
-        // 周日必须回退 6 天到本周周一，而不是前进到下周一。
-        compare(ScheduleWeeks.isoDate(ScheduleWeeks.mondayOf(new Date(2026, 8, 6))),
-                "2026-08-31")
-    }
-
-    function test_parseSemesterStartNormalizesToMonday() {
-        // 填周三也要对齐到该周周一，否则同一周内会被算成两个周次。
-        compare(ScheduleWeeks.isoDate(ScheduleWeeks.parseSemesterStart("2026-09-02")),
-                "2026-08-31")
-    }
-
-    function test_parseSemesterStartRejectsBadInput() {
-        compare(ScheduleWeeks.parseSemesterStart(""), null)
-        compare(ScheduleWeeks.parseSemesterStart("   "), null)
-        // 残缺串不能被 Date 猜成某个真实日期。
-        compare(ScheduleWeeks.parseSemesterStart("2026-9"), null)
-        compare(ScheduleWeeks.parseSemesterStart("2026/09/02"), null)
-        // 2 月没有 31 号，Date 会静默进位到 3 月，必须挡住。
-        compare(ScheduleWeeks.parseSemesterStart("2026-02-31"), null)
-        compare(ScheduleWeeks.parseSemesterStart("not-a-date"), null)
-    }
-
-    function test_weekIndexCountsWholeWeeks() {
-        var start = "2026-08-31"
-        // 起始周内的任何一天都是第 1 周。
-        compare(ScheduleWeeks.weekIndexForDate(start, new Date(2026, 7, 31)), 1)
-        compare(ScheduleWeeks.weekIndexForDate(start, new Date(2026, 8, 6)), 1)
-        // 跨过周一进入第 2 周。
-        compare(ScheduleWeeks.weekIndexForDate(start, new Date(2026, 8, 7)), 2)
-        compare(ScheduleWeeks.weekIndexForDate(start, new Date(2026, 8, 13)), 2)
-        compare(ScheduleWeeks.weekIndexForDate(start, new Date(2026, 8, 14)), 3)
-    }
-
-    function test_weekIndexIsZeroWithoutAnchor() {
-        // 算不出周次时返回 0，页面据此引导用户先设置学期起始日。
-        compare(ScheduleWeeks.weekIndexForDate("", new Date(2026, 8, 2)), 0)
-        compare(ScheduleWeeks.weekIndexForDate("坏值", new Date(2026, 8, 2)), 0)
-    }
-
-    function test_weekIndexBeforeSemesterIsNotPositive() {
-        // 学期开始之前往前翻是正常操作，周次会 ≤ 0，由服务层返回空课表。
-        verify(ScheduleWeeks.weekIndexForDate("2026-08-31", new Date(2026, 7, 24)) <= 0)
-    }
-
-    function test_mondayOfWeekAndDateOfWeekday() {
-        var start = "2026-08-31"
-        compare(ScheduleWeeks.isoDate(ScheduleWeeks.mondayOfWeek(start, 1)), "2026-08-31")
-        compare(ScheduleWeeks.isoDate(ScheduleWeeks.mondayOfWeek(start, 3)), "2026-09-14")
-        // weekday 1..7 = 周一..周日。
-        compare(ScheduleWeeks.isoDate(ScheduleWeeks.dateOfWeekday(start, 1, 3)), "2026-09-02")
-        compare(ScheduleWeeks.isoDate(ScheduleWeeks.dateOfWeekday(start, 1, 7)), "2026-09-06")
-        compare(ScheduleWeeks.mondayOfWeek("", 1), null)
-    }
 
     function test_formatAndParseMinutesRoundTrip() {
         compare(ScheduleWeeks.formatMinutes(0), "00:00")
@@ -188,18 +128,37 @@ TestCase {
     // 而中间那些明显相交的用例照样通过。所以边界必须单独钉住。
     function test_overlapsIsHalfOpen() {
         // 紧邻不算相交，两个方向都要成立。
-        verify(!ScheduleWeeks.overlaps(480, 525, 525, 570))
-        verify(!ScheduleWeeks.overlaps(525, 570, 480, 525))
+        verify(!scheduleCalibers.overlaps(480, 525, 525, 570))
+        verify(!scheduleCalibers.overlaps(525, 570, 480, 525))
         // 完全不挨着。
-        verify(!ScheduleWeeks.overlaps(480, 525, 600, 645))
+        verify(!scheduleCalibers.overlaps(480, 525, 600, 645))
         // 只差一分钟也算相交。
-        verify(ScheduleWeeks.overlaps(480, 526, 525, 570))
+        verify(scheduleCalibers.overlaps(480, 526, 525, 570))
         // 包含关系两个方向都算相交。
-        verify(ScheduleWeeks.overlaps(480, 700, 540, 570))
-        verify(ScheduleWeeks.overlaps(540, 570, 480, 700))
+        verify(scheduleCalibers.overlaps(480, 700, 540, 570))
+        verify(scheduleCalibers.overlaps(540, 570, 480, 700))
         // 完全重合。
-        verify(ScheduleWeeks.overlaps(480, 525, 480, 525))
+        verify(scheduleCalibers.overlaps(480, 525, 480, 525))
         // 字符串入参也要按数字比，绑定里传进来的常常是未转换的模型值。
-        verify(ScheduleWeeks.overlaps("480", "600", "540", "570"))
+        verify(scheduleCalibers.overlaps("480", "600", "540", "570"))
+    }
+    // 周次、自然星期和紧邻时段的现有口径必须与跨端对照表一致。
+    function test_fixtureWeeks() {
+        var rows = Fixtures.load("schedule-weeks")
+        for (var i = 0; i < rows.length; ++i) {
+            var input = rows[i].input
+            var result
+            switch (input.op) {
+            case "mondayOf": result = scheduleCalibers.mondayOf(input.date); break
+            case "parseSemesterStart": result = scheduleCalibers.parseSemesterStart(input.start); break
+            case "weekIndexForDate": result = scheduleCalibers.weekIndexForDate(input.start, input.date); break
+            case "mondayOfWeek": result = scheduleCalibers.mondayOfWeek(input.start, input.week); break
+            case "dateOfWeekday": result = scheduleCalibers.dateOfWeekday(input.start, input.week, input.weekday); break
+            case "overlaps": result = scheduleCalibers.overlaps(input.aStart, input.aEnd, input.bStart, input.bEnd); break
+            default: fail("未知操作 " + input.op)
+            }
+            if (result === "") result = null
+            compare(result, rows[i].expected, rows[i].reason)
+        }
     }
 }

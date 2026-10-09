@@ -2,7 +2,6 @@ import QtQuick
 import QtTest
 import "../../qml"
 import "../../qml/views"
-import "../../qml/HeatmapBands.js" as HeatmapBands
 
 // 专注历史月历的投入条（2026-09-14 定稿的 B 方案，规则见 docs/业务规则.md「热力取档与专注历史月历的投入条」）。
 //
@@ -35,6 +34,9 @@ TestCase {
 
     QtObject {
         id: history
+
+        // 存储仍用固定数据，取档走真实服务，避免替身复制业务阈值。
+        function bandForMinutes(minutes) { return historyCalibers.bandForMinutes(minutes) }
 
         function getMonthSessions(year, month) {
             var prefix = year + "-" + (month < 10 ? "0" : "") + month + "-"
@@ -112,7 +114,7 @@ TestCase {
     }
 
     function test_pastZeroDayShowsEmptyTrack() {
-        compare(cell(13).heatBand, HeatmapBands.NONE)
+        compare(cell(13).heatBand, historyCalibers.heatmapNoInvestment)
         compare(cell(13).showsInvestmentBar, true)
         verify(Qt.colorEqual(bar(13).color, Theme.heatmapEmptyTrack))
     }

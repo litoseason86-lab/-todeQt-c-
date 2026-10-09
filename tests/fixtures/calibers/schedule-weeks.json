@@ -1,0 +1,357 @@
+[
+  {
+    "input": {
+      "op": "mondayOf",
+      "date": "2026-09-02"
+    },
+    "expected": "2026-08-31",
+    "reason": "自然星期以周一开始，覆盖周日、跨年和闰日"
+  },
+  {
+    "input": {
+      "op": "mondayOf",
+      "date": "2026-08-31"
+    },
+    "expected": "2026-08-31",
+    "reason": "自然星期以周一开始，覆盖周日、跨年和闰日"
+  },
+  {
+    "input": {
+      "op": "mondayOf",
+      "date": "2026-09-06"
+    },
+    "expected": "2026-08-31",
+    "reason": "自然星期以周一开始，覆盖周日、跨年和闰日"
+  },
+  {
+    "input": {
+      "op": "mondayOf",
+      "date": "2027-01-01"
+    },
+    "expected": "2026-12-28",
+    "reason": "自然星期以周一开始，覆盖周日、跨年和闰日"
+  },
+  {
+    "input": {
+      "op": "mondayOf",
+      "date": "2024-02-29"
+    },
+    "expected": "2024-02-26",
+    "reason": "自然星期以周一开始，覆盖周日、跨年和闰日"
+  },
+  {
+    "input": {
+      "op": "parseSemesterStart",
+      "start": ""
+    },
+    "expected": null,
+    "reason": "严格 ISO 日期，空白可去除，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseSemesterStart",
+      "start": "   "
+    },
+    "expected": null,
+    "reason": "严格 ISO 日期，空白可去除，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseSemesterStart",
+      "start": "2026-9"
+    },
+    "expected": null,
+    "reason": "严格 ISO 日期，空白可去除，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseSemesterStart",
+      "start": "2026/09/02"
+    },
+    "expected": null,
+    "reason": "严格 ISO 日期，空白可去除，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseSemesterStart",
+      "start": "2026-02-31"
+    },
+    "expected": null,
+    "reason": "严格 ISO 日期，空白可去除，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseSemesterStart",
+      "start": "2026-02-29"
+    },
+    "expected": null,
+    "reason": "严格 ISO 日期，空白可去除，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseSemesterStart",
+      "start": "2024-02-29"
+    },
+    "expected": "2024-02-26",
+    "reason": "严格 ISO 日期，空白可去除，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseSemesterStart",
+      "start": " 2026-09-02 "
+    },
+    "expected": "2026-08-31",
+    "reason": "严格 ISO 日期，空白可去除，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "2026-09-02",
+      "date": "2026-08-31"
+    },
+    "expected": 1,
+    "reason": "学期起始日所在周是第 1 周；之前允许零或负周次"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "2026-09-02",
+      "date": "2026-09-06"
+    },
+    "expected": 1,
+    "reason": "学期起始日所在周是第 1 周；之前允许零或负周次"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "2026-09-02",
+      "date": "2026-09-07"
+    },
+    "expected": 2,
+    "reason": "学期起始日所在周是第 1 周；之前允许零或负周次"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "2026-09-02",
+      "date": "2026-09-13"
+    },
+    "expected": 2,
+    "reason": "学期起始日所在周是第 1 周；之前允许零或负周次"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "2026-09-02",
+      "date": "2026-09-14"
+    },
+    "expected": 3,
+    "reason": "学期起始日所在周是第 1 周；之前允许零或负周次"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "2026-09-02",
+      "date": "2026-08-24"
+    },
+    "expected": 0,
+    "reason": "学期起始日所在周是第 1 周；之前允许零或负周次"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "2026-09-02",
+      "date": "2026-08-23"
+    },
+    "expected": -1,
+    "reason": "学期起始日所在周是第 1 周；之前允许零或负周次"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "2026-12-30",
+      "date": "2027-01-04"
+    },
+    "expected": 2,
+    "reason": "跨年仍按日历天算整周"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "2024-02-29",
+      "date": "2024-03-04"
+    },
+    "expected": 2,
+    "reason": "闰日不改变星期锚点"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "2026-03-02",
+      "date": "2026-03-09"
+    },
+    "expected": 2,
+    "reason": "夏令时切换前后按日历周，不按 168 小时"
+  },
+  {
+    "input": {
+      "op": "weekIndexForDate",
+      "start": "",
+      "date": "2026-09-02"
+    },
+    "expected": 0,
+    "reason": "未设学期不能推算周次"
+  },
+  {
+    "input": {
+      "op": "mondayOfWeek",
+      "start": "2026-09-02",
+      "week": 1
+    },
+    "expected": "2026-08-31",
+    "reason": "周次由周一偏移，可查询学期之前的周"
+  },
+  {
+    "input": {
+      "op": "mondayOfWeek",
+      "start": "2026-09-02",
+      "week": 3
+    },
+    "expected": "2026-09-14",
+    "reason": "周次由周一偏移，可查询学期之前的周"
+  },
+  {
+    "input": {
+      "op": "mondayOfWeek",
+      "start": "2026-09-02",
+      "week": 0
+    },
+    "expected": "2026-08-24",
+    "reason": "周次由周一偏移，可查询学期之前的周"
+  },
+  {
+    "input": {
+      "op": "mondayOfWeek",
+      "start": "2026-09-02",
+      "week": -1
+    },
+    "expected": "2026-08-17",
+    "reason": "周次由周一偏移，可查询学期之前的周"
+  },
+  {
+    "input": {
+      "op": "mondayOfWeek",
+      "start": "",
+      "week": 1
+    },
+    "expected": null,
+    "reason": "无学期锚点时无日期"
+  },
+  {
+    "input": {
+      "op": "dateOfWeekday",
+      "start": "2026-09-02",
+      "week": 1,
+      "weekday": 3
+    },
+    "expected": "2026-09-02",
+    "reason": "星期编号 1 至 7，周日不落到下一周"
+  },
+  {
+    "input": {
+      "op": "dateOfWeekday",
+      "start": "2026-09-02",
+      "week": 1,
+      "weekday": 7
+    },
+    "expected": "2026-09-06",
+    "reason": "星期编号 1 至 7，周日不落到下一周"
+  },
+  {
+    "input": {
+      "op": "dateOfWeekday",
+      "start": "2026-09-02",
+      "week": 19,
+      "weekday": 1
+    },
+    "expected": "2027-01-04",
+    "reason": "星期编号 1 至 7，周日不落到下一周"
+  },
+  {
+    "input": {
+      "op": "overlaps",
+      "aStart": 480,
+      "aEnd": 525,
+      "bStart": 525,
+      "bEnd": 570
+    },
+    "expected": false,
+    "reason": "半开区间：首尾紧邻不相交，包含与一分钟交叠均相交"
+  },
+  {
+    "input": {
+      "op": "overlaps",
+      "aStart": 525,
+      "aEnd": 570,
+      "bStart": 480,
+      "bEnd": 525
+    },
+    "expected": false,
+    "reason": "半开区间：首尾紧邻不相交，包含与一分钟交叠均相交"
+  },
+  {
+    "input": {
+      "op": "overlaps",
+      "aStart": 480,
+      "aEnd": 525,
+      "bStart": 600,
+      "bEnd": 645
+    },
+    "expected": false,
+    "reason": "半开区间：首尾紧邻不相交，包含与一分钟交叠均相交"
+  },
+  {
+    "input": {
+      "op": "overlaps",
+      "aStart": 480,
+      "aEnd": 526,
+      "bStart": 525,
+      "bEnd": 570
+    },
+    "expected": true,
+    "reason": "半开区间：首尾紧邻不相交，包含与一分钟交叠均相交"
+  },
+  {
+    "input": {
+      "op": "overlaps",
+      "aStart": 480,
+      "aEnd": 700,
+      "bStart": 540,
+      "bEnd": 570
+    },
+    "expected": true,
+    "reason": "半开区间：首尾紧邻不相交，包含与一分钟交叠均相交"
+  },
+  {
+    "input": {
+      "op": "overlaps",
+      "aStart": 540,
+      "aEnd": 570,
+      "bStart": 480,
+      "bEnd": 700
+    },
+    "expected": true,
+    "reason": "半开区间：首尾紧邻不相交，包含与一分钟交叠均相交"
+  },
+  {
+    "input": {
+      "op": "overlaps",
+      "aStart": 480,
+      "aEnd": 525,
+      "bStart": 480,
+      "bEnd": 525
+    },
+    "expected": true,
+    "reason": "半开区间：首尾紧邻不相交，包含与一分钟交叠均相交"
+  }
+]

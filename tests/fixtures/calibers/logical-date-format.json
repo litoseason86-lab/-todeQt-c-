@@ -1,0 +1,104 @@
+[
+  {
+    "input": {
+      "op": "parseIsoDate",
+      "args": [
+        "2000-01-01"
+      ]
+    },
+    "expected": "2000-01-01",
+    "reason": "任务表单 ISO 解析限定 2000 至 2100，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseIsoDate",
+      "args": [
+        "2100-12-31"
+      ]
+    },
+    "expected": "2100-12-31",
+    "reason": "任务表单 ISO 解析限定 2000 至 2100，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseIsoDate",
+      "args": [
+        "1999-12-31"
+      ]
+    },
+    "expected": null,
+    "reason": "任务表单 ISO 解析限定 2000 至 2100，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseIsoDate",
+      "args": [
+        "2101-01-01"
+      ]
+    },
+    "expected": null,
+    "reason": "任务表单 ISO 解析限定 2000 至 2100，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseIsoDate",
+      "args": [
+        "2024-02-29"
+      ]
+    },
+    "expected": "2024-02-29",
+    "reason": "任务表单 ISO 解析限定 2000 至 2100，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseIsoDate",
+      "args": [
+        "2026-02-29"
+      ]
+    },
+    "expected": null,
+    "reason": "任务表单 ISO 解析限定 2000 至 2100，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseIsoDate",
+      "args": [
+        "2026-2-01"
+      ]
+    },
+    "expected": null,
+    "reason": "任务表单 ISO 解析限定 2000 至 2100，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseIsoDate",
+      "args": [
+        "2026-02-31"
+      ]
+    },
+    "expected": null,
+    "reason": "任务表单 ISO 解析限定 2000 至 2100，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "parseIsoDate",
+      "args": [
+        ""
+      ]
+    },
+    "expected": null,
+    "reason": "任务表单 ISO 解析限定 2000 至 2100，非法日期不静默进位"
+  },
+  {
+    "input": {
+      "op": "isoOf",
+      "args": [
+        {
+          "date": "2027-01-01"
+        }
+      ]
+    },
+    "expected": "2027-01-01",
+    "reason": "显示日期只取本地年月日"
+  }
+]

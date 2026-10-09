@@ -266,6 +266,9 @@ TestCase {
 
     QtObject {
         id: historyService
+
+        // 主窗口也挂载月历；取档走真实服务，避免桩缺方法被运行时门禁拦截。
+        function bandForMinutes(minutes) { return historyCalibers.bandForMinutes(minutes) }
         property int deletedId: -1
         property bool succeeds: true
         function deleteSession(id) { if (succeeds) deletedId = id; return succeeds }

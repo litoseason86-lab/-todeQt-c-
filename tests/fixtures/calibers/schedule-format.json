@@ -1,0 +1,377 @@
+[
+  {
+    "input": {
+      "op": "formatMinutes",
+      "args": [
+        0
+      ]
+    },
+    "expected": "00:00",
+    "reason": "起止分钟限制在自然日，包括合法 24:00"
+  },
+  {
+    "input": {
+      "op": "formatMinutes",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "00:00",
+    "reason": "起止分钟限制在自然日，包括合法 24:00"
+  },
+  {
+    "input": {
+      "op": "formatMinutes",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "00:00",
+    "reason": "起止分钟限制在自然日，包括合法 24:00"
+  },
+  {
+    "input": {
+      "op": "formatMinutes",
+      "args": [
+        null
+      ]
+    },
+    "expected": "00:00",
+    "reason": "起止分钟限制在自然日，包括合法 24:00"
+  },
+  {
+    "input": {
+      "op": "formatMinutes",
+      "args": [
+        480
+      ]
+    },
+    "expected": "08:00",
+    "reason": "起止分钟限制在自然日，包括合法 24:00"
+  },
+  {
+    "input": {
+      "op": "formatMinutes",
+      "args": [
+        580
+      ]
+    },
+    "expected": "09:40",
+    "reason": "起止分钟限制在自然日，包括合法 24:00"
+  },
+  {
+    "input": {
+      "op": "formatMinutes",
+      "args": [
+        1440
+      ]
+    },
+    "expected": "24:00",
+    "reason": "起止分钟限制在自然日，包括合法 24:00"
+  },
+  {
+    "input": {
+      "op": "formatMinutes",
+      "args": [
+        1000000000.0
+      ]
+    },
+    "expected": "24:00",
+    "reason": "起止分钟限制在自然日，包括合法 24:00"
+  },
+  {
+    "input": {
+      "op": "parseMinutes",
+      "args": [
+        "08:00"
+      ]
+    },
+    "expected": 480,
+    "reason": "严格时分输入，不能把越界分钟进位"
+  },
+  {
+    "input": {
+      "op": "parseMinutes",
+      "args": [
+        "9:40"
+      ]
+    },
+    "expected": 580,
+    "reason": "严格时分输入，不能把越界分钟进位"
+  },
+  {
+    "input": {
+      "op": "parseMinutes",
+      "args": [
+        " 14:05 "
+      ]
+    },
+    "expected": 845,
+    "reason": "严格时分输入，不能把越界分钟进位"
+  },
+  {
+    "input": {
+      "op": "parseMinutes",
+      "args": [
+        "24:00"
+      ]
+    },
+    "expected": 1440,
+    "reason": "严格时分输入，不能把越界分钟进位"
+  },
+  {
+    "input": {
+      "op": "parseMinutes",
+      "args": [
+        "24:30"
+      ]
+    },
+    "expected": -1,
+    "reason": "严格时分输入，不能把越界分钟进位"
+  },
+  {
+    "input": {
+      "op": "parseMinutes",
+      "args": [
+        "25:00"
+      ]
+    },
+    "expected": -1,
+    "reason": "严格时分输入，不能把越界分钟进位"
+  },
+  {
+    "input": {
+      "op": "parseMinutes",
+      "args": [
+        "08:60"
+      ]
+    },
+    "expected": -1,
+    "reason": "严格时分输入，不能把越界分钟进位"
+  },
+  {
+    "input": {
+      "op": "parseMinutes",
+      "args": [
+        "0800"
+      ]
+    },
+    "expected": -1,
+    "reason": "严格时分输入，不能把越界分钟进位"
+  },
+  {
+    "input": {
+      "op": "parseMinutes",
+      "args": [
+        ""
+      ]
+    },
+    "expected": -1,
+    "reason": "严格时分输入，不能把越界分钟进位"
+  },
+  {
+    "input": {
+      "op": "parseMinutes",
+      "args": [
+        null
+      ]
+    },
+    "expected": -1,
+    "reason": "严格时分输入，不能把越界分钟进位"
+  },
+  {
+    "input": {
+      "op": "parityLabel",
+      "args": [
+        0
+      ]
+    },
+    "expected": "",
+    "reason": "单双周值与服务枚举一致，未知值不加标签"
+  },
+  {
+    "input": {
+      "op": "parityLabel",
+      "args": [
+        1
+      ]
+    },
+    "expected": "单周",
+    "reason": "单双周值与服务枚举一致，未知值不加标签"
+  },
+  {
+    "input": {
+      "op": "parityLabel",
+      "args": [
+        2
+      ]
+    },
+    "expected": "双周",
+    "reason": "单双周值与服务枚举一致，未知值不加标签"
+  },
+  {
+    "input": {
+      "op": "parityLabel",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "",
+    "reason": "单双周值与服务枚举一致，未知值不加标签"
+  },
+  {
+    "input": {
+      "op": "parityLabel",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "",
+    "reason": "单双周值与服务枚举一致，未知值不加标签"
+  },
+  {
+    "input": {
+      "op": "parityLabel",
+      "args": [
+        "2"
+      ]
+    },
+    "expected": "双周",
+    "reason": "单双周值与服务枚举一致，未知值不加标签"
+  },
+  {
+    "input": {
+      "op": "weekRangeLabel",
+      "args": [
+        1,
+        20,
+        0,
+        20
+      ]
+    },
+    "expected": "",
+    "reason": "整学期每周省略范围，单周数不显示重复端点"
+  },
+  {
+    "input": {
+      "op": "weekRangeLabel",
+      "args": [
+        1,
+        20,
+        1,
+        20
+      ]
+    },
+    "expected": "单周",
+    "reason": "整学期每周省略范围，单周数不显示重复端点"
+  },
+  {
+    "input": {
+      "op": "weekRangeLabel",
+      "args": [
+        1,
+        8,
+        0,
+        20
+      ]
+    },
+    "expected": "第 1-8 周",
+    "reason": "整学期每周省略范围，单周数不显示重复端点"
+  },
+  {
+    "input": {
+      "op": "weekRangeLabel",
+      "args": [
+        3,
+        3,
+        0,
+        20
+      ]
+    },
+    "expected": "第 3 周",
+    "reason": "整学期每周省略范围，单周数不显示重复端点"
+  },
+  {
+    "input": {
+      "op": "weekRangeLabel",
+      "args": [
+        1,
+        8,
+        2,
+        20
+      ]
+    },
+    "expected": "第 1-8 周 · 双周",
+    "reason": "整学期每周省略范围，单周数不显示重复端点"
+  },
+  {
+    "input": {
+      "op": "weekRangeLabel",
+      "args": [
+        1,
+        21,
+        0,
+        20
+      ]
+    },
+    "expected": "",
+    "reason": "整学期每周省略范围，单周数不显示重复端点"
+  },
+  {
+    "input": {
+      "op": "weekRangeLabel",
+      "args": [
+        0,
+        0,
+        0,
+        20
+      ]
+    },
+    "expected": "第 0 周",
+    "reason": "整学期每周省略范围，单周数不显示重复端点"
+  },
+  {
+    "input": {
+      "op": "displayDate",
+      "args": [
+        ""
+      ]
+    },
+    "expected": null,
+    "reason": "只显示服务给的有效 ISO，不额外施加表单年份范围"
+  },
+  {
+    "input": {
+      "op": "displayDate",
+      "args": [
+        "2024-02-29"
+      ]
+    },
+    "expected": "2024-02-29",
+    "reason": "只显示服务给的有效 ISO，不额外施加表单年份范围"
+  },
+  {
+    "input": {
+      "op": "displayDate",
+      "args": [
+        "0100-01-01"
+      ]
+    },
+    "expected": "100-01-01",
+    "reason": "只显示服务给的有效 ISO，不额外施加表单年份范围"
+  },
+  {
+    "input": {
+      "op": "displayDate",
+      "args": [
+        "2027-01-01"
+      ]
+    },
+    "expected": "2027-01-01",
+    "reason": "只显示服务给的有效 ISO，不额外施加表单年份范围"
+  }
+]

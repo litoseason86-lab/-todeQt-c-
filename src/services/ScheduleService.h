@@ -15,7 +15,7 @@ class QSqlQuery;
 // 因此课表项没有完成状态，也不写 tasks / focus_sessions，不参与任何统计。
 //
 // 分层约定：本服务只负责存储与「给定周次筛选」，**不关心今天是第几周**。
-// 日期到周次的换算在 QML 侧的 ScheduleWeeks.js 完成，服务层因此不依赖 AppSettings。
+// 日期换算由 ScheduleWeeks 纯函数完成，学期起始日由调用方传入，不依赖 AppSettings。
 class ScheduleService : public QObject
 {
     Q_OBJECT
@@ -53,6 +53,15 @@ public:
     int maxLocationLength() const { return kMaxLocationLength; }
     int maxWeekIndex() const { return kMaxWeekIndex; }
     int maxPeriodCount() const { return kMaxPeriodCount; }
+
+    // 跨层只传 ISO 日期文本，避免 QDate 到 JS Date 的时区转换改变日历日期。
+    // 空串表示无效日期；周次计算失败返回 0，与原 QML 口径一致。
+    Q_INVOKABLE QString mondayOf(const QString& dateIso) const;
+    Q_INVOKABLE QString parseSemesterStart(const QString& semesterStartIso) const;
+    Q_INVOKABLE int weekIndexForDate(const QString& semesterStartIso, const QString& dateIso) const;
+    Q_INVOKABLE QString mondayOfWeek(const QString& semesterStartIso, int weekIndex) const;
+    Q_INVOKABLE QString dateOfWeekday(const QString& semesterStartIso, int weekIndex, int weekday) const;
+    Q_INVOKABLE bool overlaps(double aStart, double aEnd, double bStart, double bEnd) const;
 
     // —— 课表项增删改查 ——
     // weekday 取 1..7（1 = 周一）；startMinutes/endMinutes 是当天第几分钟，要求 start < end。

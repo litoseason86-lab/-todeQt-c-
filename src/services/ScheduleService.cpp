@@ -1,4 +1,5 @@
 #include "ScheduleService.h"
+#include "ScheduleWeeks.h"
 
 #include "DatabaseManager.h"
 #include "QmlValues.h"
@@ -697,4 +698,34 @@ bool ScheduleService::setPeriods(const QVariantList& periods)
 
     emit periodsChanged();
     return true;
+}
+
+QString ScheduleService::mondayOf(const QString& dateIso) const
+{
+    return ScheduleWeeks::mondayOf(QDate::fromString(dateIso, Qt::ISODate)).toString(Qt::ISODate);
+}
+
+QString ScheduleService::parseSemesterStart(const QString& semesterStartIso) const
+{
+    return ScheduleWeeks::parseSemesterStart(semesterStartIso).toString(Qt::ISODate);
+}
+
+int ScheduleService::weekIndexForDate(const QString& semesterStartIso, const QString& dateIso) const
+{
+    return ScheduleWeeks::weekIndexForDate(semesterStartIso, QDate::fromString(dateIso, Qt::ISODate));
+}
+
+QString ScheduleService::mondayOfWeek(const QString& semesterStartIso, int weekIndex) const
+{
+    return ScheduleWeeks::mondayOfWeek(semesterStartIso, weekIndex).toString(Qt::ISODate);
+}
+
+QString ScheduleService::dateOfWeekday(const QString& semesterStartIso, int weekIndex, int weekday) const
+{
+    return ScheduleWeeks::dateOfWeekday(semesterStartIso, weekIndex, weekday).toString(Qt::ISODate);
+}
+
+bool ScheduleService::overlaps(double aStart, double aEnd, double bStart, double bEnd) const
+{
+    return ScheduleWeeks::overlaps(aStart, aEnd, bStart, bEnd);
 }

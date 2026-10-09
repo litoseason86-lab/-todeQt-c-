@@ -26,6 +26,7 @@ TestCase {
             focusHistoryService.pendingInvalid = 0
             return 7
         }
+        function bandForMinutes(minutes) { return historyCalibers.bandForMinutes(minutes) }
         function getMonthSessions(year, month) { return [] }
     }
 

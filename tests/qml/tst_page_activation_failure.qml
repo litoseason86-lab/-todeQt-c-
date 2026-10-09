@@ -114,6 +114,14 @@ TestCase {
     QtObject {
         id: scheduleService
 
+        // 纯计算走真实 C++，存储与失败信号继续使用本文件替身。
+        function mondayOf(date) { return scheduleCalibers.mondayOf(date) }
+        function parseSemesterStart(start) { return scheduleCalibers.parseSemesterStart(start) }
+        function weekIndexForDate(start, date) { return scheduleCalibers.weekIndexForDate(start, date) }
+        function mondayOfWeek(start, week) { return scheduleCalibers.mondayOfWeek(start, week) }
+        function dateOfWeekday(start, week, day) { return scheduleCalibers.dateOfWeekday(start, week, day) }
+        function overlaps(a, b, c, d) { return scheduleCalibers.overlaps(a, b, c, d) }
+
         signal scheduleChanged()
         signal periodsChanged()
         signal operationFailed(string message)

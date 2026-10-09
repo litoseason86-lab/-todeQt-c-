@@ -5,7 +5,6 @@
         <file alias="qml/LogicalDay.js">../qml/LogicalDay.js</file>
         <file alias="qml/Duration.js">../qml/Duration.js</file>
         <file alias="qml/ScheduleWeeks.js">../qml/ScheduleWeeks.js</file>
-        <file alias="qml/HeatmapBands.js">../qml/HeatmapBands.js</file>
         <file alias="qml/RoutineWeekdays.js">../qml/RoutineWeekdays.js</file>
         <file alias="qml/StartupErrorWindow.qml">../qml/StartupErrorWindow.qml</file>
         <file alias="qml/main.qml">../qml/main.qml</file>

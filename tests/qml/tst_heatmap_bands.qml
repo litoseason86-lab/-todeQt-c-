@@ -1,7 +1,7 @@
 import QtQuick
 import QtTest
 import "../../qml"
-import "../../qml/HeatmapBands.js" as HeatmapBands
+import "CaliberFixtures.js" as Fixtures
 
 // 热力取档函数与热力令牌。
 //
@@ -78,35 +78,35 @@ TestCase {
     // —— 取档函数 ——
 
     function test_zeroAndInvalidValuesAreNoInvestment() {
-        compare(HeatmapBands.bandForMinutes(0), HeatmapBands.NONE)
-        compare(HeatmapBands.bandForMinutes(-5), HeatmapBands.NONE)
-        compare(HeatmapBands.bandForMinutes(null), HeatmapBands.NONE)
-        compare(HeatmapBands.bandForMinutes(undefined), HeatmapBands.NONE)
-        compare(HeatmapBands.bandForMinutes("不是数字"), HeatmapBands.NONE)
+        compare(historyCalibers.bandForMinutes(0), historyCalibers.heatmapNoInvestment)
+        compare(historyCalibers.bandForMinutes(-5), historyCalibers.heatmapNoInvestment)
+        compare(historyCalibers.bandForMinutes(null), historyCalibers.heatmapNoInvestment)
+        compare(historyCalibers.bandForMinutes(undefined), historyCalibers.heatmapNoInvestment)
+        compare(historyCalibers.bandForMinutes("不是数字"), historyCalibers.heatmapNoInvestment)
         // NaN 与任何数比较都是假：写成 `minutes <= 0` 的实现会让它一路漏到最深那档。
-        compare(HeatmapBands.bandForMinutes(NaN), HeatmapBands.NONE)
+        compare(historyCalibers.bandForMinutes(NaN), historyCalibers.heatmapNoInvestment)
     }
 
     function test_thresholdBoundaries() {
-        compare(HeatmapBands.bandForMinutes(0.5), 0)      // 30 秒也是有投入
-        compare(HeatmapBands.bandForMinutes(59), 0)
-        compare(HeatmapBands.bandForMinutes(3599 / 60), 0)
-        compare(HeatmapBands.bandForMinutes(60), 1)
-        compare(HeatmapBands.bandForMinutes(149), 1)
-        compare(HeatmapBands.bandForMinutes(150), 2)
-        compare(HeatmapBands.bandForMinutes(299), 2)
-        compare(HeatmapBands.bandForMinutes(300), 3)
-        compare(HeatmapBands.bandForMinutes(24 * 60), 3)
+        compare(historyCalibers.bandForMinutes(0.5), 0)      // 30 秒也是有投入
+        compare(historyCalibers.bandForMinutes(59), 0)
+        compare(historyCalibers.bandForMinutes(3599 / 60), 0)
+        compare(historyCalibers.bandForMinutes(60), 1)
+        compare(historyCalibers.bandForMinutes(149), 1)
+        compare(historyCalibers.bandForMinutes(150), 2)
+        compare(historyCalibers.bandForMinutes(299), 2)
+        compare(historyCalibers.bandForMinutes(300), 3)
+        compare(historyCalibers.bandForMinutes(24 * 60), 3)
     }
 
     function test_bandCountMatchesThresholds() {
-        compare(HeatmapBands.BAND_COUNT, HeatmapBands.THRESHOLDS.length + 1)
+        compare(historyCalibers.heatmapBandCount, 4)
     }
 
     // —— 令牌 ——
 
     function checkPalette(expectedBands, expectedTrack) {
-        compare(Theme.heatmapBandColors.length, HeatmapBands.BAND_COUNT)
+        compare(Theme.heatmapBandColors.length, historyCalibers.heatmapBandCount)
         for (var i = 0; i < expectedBands.length; ++i)
             verify(Qt.colorEqual(Theme.heatmapBandColors[i], expectedBands[i]),
                    "第 " + (i + 1) + " 档取值不对：" + Theme.heatmapBandColors[i])
@@ -199,5 +199,11 @@ TestCase {
         Theme.activeThemeId = "starry"
         var dark = Theme.heatmapBandColors
         verify(Theme.contrastRatio(dark[0], "#ffffff") > Theme.contrastRatio(dark[3], "#ffffff"))
+    }
+    // 分钟阈值、小数投入和坏数据在跨端实现中必须同档。
+    function test_fixtureBands() {
+        var rows = Fixtures.load("heatmap-bands")
+        for (var i = 0; i < rows.length; ++i)
+            compare(historyCalibers.bandForMinutes(Fixtures.value(rows[i].input)), rows[i].expected, rows[i].reason)
     }
 }

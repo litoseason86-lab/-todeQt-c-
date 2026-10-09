@@ -1,0 +1,106 @@
+[
+  {
+    "input": {
+      "timestamp": "2026-10-09T03:59:59",
+      "dayStartHour": 4
+    },
+    "expected": "2026-10-08",
+    "reason": "日界前一秒归前一天"
+  },
+  {
+    "input": {
+      "timestamp": "2026-10-09T04:00:00",
+      "dayStartHour": 4
+    },
+    "expected": "2026-10-09",
+    "reason": "恰好日界归当天"
+  },
+  {
+    "input": {
+      "timestamp": "2026-10-09T04:00:01",
+      "dayStartHour": 4
+    },
+    "expected": "2026-10-09",
+    "reason": "日界后一秒"
+  },
+  {
+    "input": {
+      "timestamp": "2026-10-09T00:00:00",
+      "dayStartHour": 0
+    },
+    "expected": "2026-10-09",
+    "reason": "合法零点日界"
+  },
+  {
+    "input": {
+      "timestamp": "2026-10-09T00:00:00",
+      "dayStartHour": 4
+    },
+    "expected": "2026-10-08",
+    "reason": "自然午夜仍在前一逻辑日"
+  },
+  {
+    "input": {
+      "timestamp": "2027-01-01T03:59:59",
+      "dayStartHour": 4
+    },
+    "expected": "2026-12-31",
+    "reason": "跨年回退"
+  },
+  {
+    "input": {
+      "timestamp": "2024-03-01T03:59:59",
+      "dayStartHour": 4
+    },
+    "expected": "2024-02-29",
+    "reason": "闰年回退到二月二十九"
+  },
+  {
+    "input": {
+      "timestamp": "2026-03-01T03:59:59",
+      "dayStartHour": 4
+    },
+    "expected": "2026-02-28",
+    "reason": "非闰年二月"
+  },
+  {
+    "input": {
+      "timestamp": "2026-10-09T22:59:59",
+      "dayStartHour": 23
+    },
+    "expected": "2026-10-08",
+    "reason": "日界上限之前"
+  },
+  {
+    "input": {
+      "timestamp": "2026-10-09T23:00:00",
+      "dayStartHour": 23
+    },
+    "expected": "2026-10-09",
+    "reason": "日界上限等号"
+  },
+  {
+    "input": {
+      "timestamp": "2026-03-08T03:59:59",
+      "dayStartHour": 4
+    },
+    "expected": "2026-03-07",
+    "reason": "只比较本地日历与小时，夏令时不适用：本表不测经过时长"
+  },
+  {
+    "input": {
+      "timestamp": "2026-11-01T04:00:00",
+      "dayStartHour": 4
+    },
+    "expected": "2026-11-01",
+    "reason": "只比较本地墙钟字段，不用减固定毫秒解释夏令时"
+  },
+  {
+    "input": {
+      "timestamp": "2026-10-09T12:30:00",
+      "dayStartHour": 4
+    },
+    "expected": "2026-10-09",
+    "reason": "日间保持当天"
+  }
+]

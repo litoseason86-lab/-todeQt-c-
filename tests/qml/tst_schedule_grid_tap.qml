@@ -18,6 +18,7 @@ TestCase {
 
     ScheduleGrid {
         id: grid
+        scheduleServiceRef: scheduleCalibers
 
         anchors.fill: parent
         semesterStartDate: "2026-08-31"

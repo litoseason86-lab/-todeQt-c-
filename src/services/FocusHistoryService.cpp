@@ -1,4 +1,5 @@
 #include "FocusHistoryService.h"
+#include "HeatmapBands.h"
 
 #include "AppSettings.h"
 #include "DatabaseManager.h"
@@ -713,4 +714,19 @@ bool FocusHistoryService::deleteTimelineRecord(int sessionId, bool isRest)
     emit historyChanged();
     emit TrashNotifier::instance()->changed();
     return true;
+}
+
+int FocusHistoryService::bandForMinutes(double minutes) const
+{
+    return HeatmapBands::bandForMinutes(minutes);
+}
+
+int FocusHistoryService::heatmapBandCount() const
+{
+    return HeatmapBands::kBandCount;
+}
+
+int FocusHistoryService::heatmapNoInvestment() const
+{
+    return HeatmapBands::kNone;
 }

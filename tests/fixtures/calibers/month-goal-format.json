@@ -1,0 +1,130 @@
+[
+  {
+    "input": {
+      "op": "formatClock",
+      "args": [
+        null
+      ]
+    },
+    "expected": "--:--",
+    "reason": "服务时间文本优先截取 HH:mm；这里只验证显示形状，不再校验时间"
+  },
+  {
+    "input": {
+      "op": "formatClock",
+      "args": [
+        {
+          "special": "undefined"
+        }
+      ]
+    },
+    "expected": "--:--",
+    "reason": "服务时间文本优先截取 HH:mm；这里只验证显示形状，不再校验时间"
+  },
+  {
+    "input": {
+      "op": "formatClock",
+      "args": [
+        ""
+      ]
+    },
+    "expected": "--:--",
+    "reason": "服务时间文本优先截取 HH:mm；这里只验证显示形状，不再校验时间"
+  },
+  {
+    "input": {
+      "op": "formatClock",
+      "args": [
+        "   "
+      ]
+    },
+    "expected": "--:--",
+    "reason": "服务时间文本优先截取 HH:mm；这里只验证显示形状，不再校验时间"
+  },
+  {
+    "input": {
+      "op": "formatClock",
+      "args": [
+        "bad"
+      ]
+    },
+    "expected": "--:--",
+    "reason": "服务时间文本优先截取 HH:mm；这里只验证显示形状，不再校验时间"
+  },
+  {
+    "input": {
+      "op": "formatClock",
+      "args": [
+        "2026-10-03T14:05:00.123"
+      ]
+    },
+    "expected": "14:05",
+    "reason": "服务时间文本优先截取 HH:mm；这里只验证显示形状，不再校验时间"
+  },
+  {
+    "input": {
+      "op": "formatClock",
+      "args": [
+        "2026-10-03 00:00:00"
+      ]
+    },
+    "expected": "00:00",
+    "reason": "服务时间文本优先截取 HH:mm；这里只验证显示形状，不再校验时间"
+  },
+  {
+    "input": {
+      "op": "formatClock",
+      "args": [
+        "2026-10-03T23:59:00+08:00"
+      ]
+    },
+    "expected": "23:59",
+    "reason": "服务时间文本优先截取 HH:mm；这里只验证显示形状，不再校验时间"
+  },
+  {
+    "input": {
+      "op": "formatClock",
+      "args": [
+        "2026-10-03T99:99:00"
+      ]
+    },
+    "expected": "99:99",
+    "reason": "服务时间文本优先截取 HH:mm；这里只验证显示形状，不再校验时间"
+  },
+  {
+    "input": {
+      "op": "isoDate",
+      "args": [
+        {
+          "date": "2024-02-29"
+        }
+      ]
+    },
+    "expected": "2024-02-29",
+    "reason": "本地日历日期显示不跨日"
+  },
+  {
+    "input": {
+      "op": "isoDate",
+      "args": [
+        {
+          "date": "2026-12-31"
+        }
+      ]
+    },
+    "expected": "2026-12-31",
+    "reason": "本地日历日期显示不跨日"
+  },
+  {
+    "input": {
+      "op": "isoDate",
+      "args": [
+        {
+          "date": "2027-01-01"
+        }
+      ]
+    },
+    "expected": "2027-01-01",
+    "reason": "本地日历日期显示不跨日"
+  }
+]

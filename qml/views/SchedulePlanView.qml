@@ -51,8 +51,9 @@ Item {
     // 其余控件原本是 40，两种高度并排是页头看起来乱的一半原因。
     readonly property int controlHeight: 34
     // 今天落在第几周。学期锚点没设时为 0，表示算不出来。
-    readonly property int currentWeekIndex: ScheduleWeeks.weekIndexForDate(root.semesterStartDate,
-                                                                          root.logicalToday)
+    // 日期作为文本交给服务，日界快照与学期锚点变化都会重新计算。
+    readonly property int currentWeekIndex: root.scheduleServiceRef
+        ? root.scheduleServiceRef.weekIndexForDate(root.semesterStartDate, LogicalDay.isoOf(root.logicalToday)) : 0
     // 今天是否还落在学期范围内。学期结束（或起始日被设到未来）之后，
     // currentWeekIndex 会越出 1..semesterWeeks，此时「本周」在这张表上根本不存在。
     readonly property bool currentWeekInSemester: root.currentWeekIndex >= 1
@@ -125,11 +126,10 @@ Item {
     // 把学期锚点设成本周周一，让「今天」立刻变成第 1 周。
     // 这是首次使用时最省事的入口：多数人只想先把课排进去，不关心学期第几周。
     function anchorSemesterToThisWeek() {
-        if (!root.settingsRef) {
+        if (!root.settingsRef || !root.scheduleServiceRef) {
             return
         }
-        root.settingsRef.semesterStartDate = ScheduleWeeks.isoDate(
-            ScheduleWeeks.mondayOf(root.logicalToday))
+        root.settingsRef.semesterStartDate = root.scheduleServiceRef.mondayOf(LogicalDay.isoOf(root.logicalToday))
         root.weekIndex = 1
         root.refresh()
     }
@@ -272,8 +272,10 @@ Item {
                         if (!root.semesterConfigured) {
                             return "尚未设置学期起始日"
                         }
-                        var monday = ScheduleWeeks.mondayOfWeek(root.semesterStartDate, root.weekIndex)
-                        var sunday = ScheduleWeeks.dateOfWeekday(root.semesterStartDate, root.weekIndex, 7)
+                        var monday = root.scheduleServiceRef ? ScheduleWeeks.displayDate(
+                            root.scheduleServiceRef.mondayOfWeek(root.semesterStartDate, root.weekIndex)) : null
+                        var sunday = root.scheduleServiceRef ? ScheduleWeeks.displayDate(
+                            root.scheduleServiceRef.dateOfWeekday(root.semesterStartDate, root.weekIndex, 7)) : null
                         var rangeText = monday && sunday
                             ? Qt.formatDate(monday, "M.d") + " – " + Qt.formatDate(sunday, "M.d")
                             : ""
@@ -583,6 +585,7 @@ Item {
         }
 
         ScheduleGrid {
+            scheduleServiceRef: root.scheduleServiceRef
             id: scheduleGrid
 
             objectName: "scheduleGrid"
