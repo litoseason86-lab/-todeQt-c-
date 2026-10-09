@@ -512,8 +512,17 @@ if(IOS)
     target_sources(PomodoroTodo PRIVATE
         src/platform/ios/bridge/PTScheduleBridge.h src/platform/ios/bridge/PTScheduleBridge.mm)
     set_source_files_properties(src/platform/ios/bridge/PTScheduleBridge.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
-    target_sources(IPadCore PRIVATE src/ui/ipad/Sources/IPadCore/Bridging/ScheduleBridging.swift)
-    target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Bridges/ScheduleBridgeAdapter.swift)
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/ScheduleBridging.swift
+        src/ui/ipad/Sources/IPadCore/Stores/ScheduleStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/ScheduleFormat.swift
+        src/ui/ipad/Sources/IPadCore/Format/ScheduleLayout.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/ScheduleBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Schedule/ScheduleView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Schedule/WeekGrid.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Schedule/ScheduleEntrySheet.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Schedule/ScheduleSettingsSheet.swift)
 
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。

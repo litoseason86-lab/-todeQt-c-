@@ -22,6 +22,9 @@ import IPadCore
     var weekMondayValue = ""
     var weekdayDateValue = ""
     var overlapsValue = false
+    var overlapResult: ((Double, Double, Double, Double) -> Bool)?
+    var settingsError: Error?
+    var periodWriteErrorAfterFirst: Error?
     var readError: Error?
     var writeError: Error?
     var calls: [String] = []
@@ -47,10 +50,14 @@ import IPadCore
     func update(id: Int, changes: ScheduleChanges) throws { updates.append((id, changes)); try write("update") }
     func delete(id: Int) throws { deletions.append(id); try write("delete") }
     func periods() throws -> [SchedulePeriod] { try read("periods"); return periodValues }
-    func savePeriods(_ periods: [SchedulePeriod]) throws { savedPeriods.append(periods); try write("savePeriods") }
+    func savePeriods(_ periods: [SchedulePeriod]) throws {
+        savedPeriods.append(periods); try write("savePeriods")
+        if savedPeriods.count > 1, let periodWriteErrorAfterFirst { throw periodWriteErrorAfterFirst }
+        periodValues = periods
+    }
     func settings() throws -> ScheduleSettings { try read("settings"); return settingsValue }
     func saveSettings(_ settings: ScheduleSettings) throws {
-        savedSettings.append(settings); try write("saveSettings"); settingsValue = settings
+        savedSettings.append(settings); try write("saveSettings"); if let settingsError { throw settingsError }; settingsValue = settings
     }
     func mondayOf(date: String) -> String { calls.append("mondayOf"); return mondayValue }
     func parseSemesterStart(_ start: String) -> String { calls.append("parseSemesterStart"); return parsedStartValue }
@@ -59,5 +66,5 @@ import IPadCore
     func dateOfWeekday(start: String, week: Int, weekday: Int) -> String {
         weekdayInputs.append((start, week, weekday)); return weekdayDateValue
     }
-    func overlaps(start: Double, end: Double, otherStart: Double, otherEnd: Double) -> Bool { overlapsValue }
+    func overlaps(start: Double, end: Double, otherStart: Double, otherEnd: Double) -> Bool { overlapResult?(start, end, otherStart, otherEnd) ?? overlapsValue }
 }
