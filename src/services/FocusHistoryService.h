@@ -13,9 +13,16 @@
 class FocusHistoryService : public QObject
 {
     Q_OBJECT
+    Q_PROPERTY(int heatmapBandCount READ heatmapBandCount CONSTANT)
+    Q_PROPERTY(int heatmapNoInvestment READ heatmapNoInvestment CONSTANT)
 
 public:
     static FocusHistoryService* instance();
+
+    // QML 与原生桥接共用投入取档，传小数分钟，不在界面另写阈值。
+    Q_INVOKABLE int bandForMinutes(double minutes) const;
+    int heatmapBandCount() const;
+    int heatmapNoInvestment() const;
 
     // 返回给 QML 的列表项固定包含 id/taskId/taskTitle/startTime/endTime/durationSeconds/date。
     Q_INVOKABLE QVariantList getMonthSessions(int year, int month) const;

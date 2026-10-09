@@ -5,6 +5,7 @@
 #include <QtQuickTest/quicktest.h>
 
 #include "../src/services/ScheduleService.h"
+#include "../src/services/FocusHistoryService.h"
 
 class CaliberSetup : public QObject
 {
@@ -20,6 +21,7 @@ public slots:
     void qmlEngineAvailable(QQmlEngine* engine)
     {
         engine->rootContext()->setContextProperty(QStringLiteral("scheduleCalibers"), ScheduleService::instance());
+        engine->rootContext()->setContextProperty(QStringLiteral("historyCalibers"), FocusHistoryService::instance());
     }
 };
 

@@ -1,0 +1,105 @@
+[
+  {
+    "input": 0,
+    "expected": -1,
+    "reason": "零投入"
+  },
+  {
+    "input": -5,
+    "expected": -1,
+    "reason": "负数按零投入"
+  },
+  {
+    "input": null,
+    "expected": -1,
+    "reason": "空值按零投入"
+  },
+  {
+    "input": {
+      "special": "undefined"
+    },
+    "expected": -1,
+    "reason": "缺失输入按零投入"
+  },
+  {
+    "input": {
+      "special": "NaN"
+    },
+    "expected": -1,
+    "reason": "NaN 不可漏到最深档"
+  },
+  {
+    "input": "不是数字",
+    "expected": -1,
+    "reason": "非数字按零投入"
+  },
+  {
+    "input": 0.5,
+    "expected": 0,
+    "reason": "30 秒也属于有效投入"
+  },
+  {
+    "input": 59,
+    "expected": 0,
+    "reason": "小于一小时"
+  },
+  {
+    "input": 59.983333333333334,
+    "expected": 0,
+    "reason": "3599 秒不提前升级"
+  },
+  {
+    "input": 60,
+    "expected": 1,
+    "reason": "一小时阈值属于第 2 档"
+  },
+  {
+    "input": 149.999,
+    "expected": 1,
+    "reason": "150 分钟之前"
+  },
+  {
+    "input": 150,
+    "expected": 2,
+    "reason": "150 分钟阈值属于第 3 档"
+  },
+  {
+    "input": 299.999,
+    "expected": 2,
+    "reason": "300 分钟之前"
+  },
+  {
+    "input": 300,
+    "expected": 3,
+    "reason": "300 分钟阈值属于第 4 档"
+  },
+  {
+    "input": 1440,
+    "expected": 3,
+    "reason": "整日投入封顶取档"
+  },
+  {
+    "input": 1000000000000.0,
+    "expected": 3,
+    "reason": "极大值保持最高档"
+  },
+  {
+    "input": {
+      "special": "Infinity"
+    },
+    "expected": 3,
+    "reason": "正无穷保持旧 JS 最高档口径"
+  },
+  {
+    "input": {
+      "special": "-Infinity"
+    },
+    "expected": -1,
+    "reason": "负无穷按零投入"
+  },
+  {
+    "input": "60",
+    "expected": 1,
+    "reason": "旧 JS 数字串按数字转换"
+  }
+]

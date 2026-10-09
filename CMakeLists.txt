@@ -129,6 +129,8 @@ set(APP_SOURCES
     src/services/FocusSessionRules.h
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    # 055-P2B：投入取档与使用它的服务同目标链接。
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
     src/services/AppSettings.h
     src/services/AppSettings.cpp
     src/services/PhaseSoundService.h
@@ -550,6 +552,8 @@ add_executable(PomodoroTodoTests
     src/services/StatisticsService.cpp
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    # 055-P2B：投入取档与使用它的服务同目标链接。
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
     src/services/AppSettings.h
     src/services/AppSettings.cpp
     src/services/LogicalDay.h
@@ -592,6 +596,8 @@ add_executable(CoreLogicTests
     src/services/MonotonicClock.cpp
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    # 055-P2B：投入取档与使用它的服务同目标链接。
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
     src/services/CountdownService.h
     src/services/CountdownService.cpp
     src/services/AppSettings.h
@@ -635,6 +641,8 @@ add_executable(RobustnessTests
     src/services/StatisticsService.cpp
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    # 055-P2B：投入取档与使用它的服务同目标链接。
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
     src/services/AppSettings.h
     src/services/AppSettings.cpp
     src/services/LogicalDay.h
@@ -1023,6 +1031,8 @@ add_executable(SyncTests
     src/services/MonotonicClock.cpp
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    # 055-P2B：投入取档与使用它的服务同目标链接。
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -1087,6 +1097,8 @@ add_executable(TrashServiceTests
     src/services/MonotonicClock.cpp
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    # 055-P2B：投入取档与使用它的服务同目标链接。
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -1149,6 +1161,8 @@ add_executable(PendingDeletionTests
     src/services/MonotonicClock.cpp
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    # 055-P2B：投入取档与使用它的服务同目标链接。
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -1243,6 +1257,8 @@ add_executable(SyncTransportTests
     src/services/MonotonicClock.cpp
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    # 055-P2B：投入取档与使用它的服务同目标链接。
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -1318,6 +1334,8 @@ add_executable(SyncControllerTests
     src/services/MonotonicClock.cpp
     src/services/FocusHistoryService.h
     src/services/FocusHistoryService.cpp
+    # 055-P2B：投入取档与使用它的服务同目标链接。
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
     src/services/CategoryManager.h
     src/services/CategoryManager.cpp
     src/services/TaskManager.h
@@ -1600,7 +1618,8 @@ add_test(NAME IPadSwiftTests COMMAND ${POMODORO_TODO_SWIFT} test
 set_tests_properties(IPadSwiftTests PROPERTIES TIMEOUT 120)
 
 # 055-P2B：纯规则读表测试与真实服务包装的 QML 接线宿主。
-add_executable(CaliberTests tests/CaliberTests.cpp src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp)
+add_executable(CaliberTests tests/CaliberTests.cpp src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp)
 target_link_libraries(CaliberTests PRIVATE Qt6::Core Qt6::Test)
 target_compile_definitions(CaliberTests PRIVATE CALIBERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calibers")
 pomodoro_todo_enable_warnings(CaliberTests)
@@ -1608,6 +1627,9 @@ add_test(NAME CaliberTests COMMAND CaliberTests)
 set_tests_properties(CaliberTests PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
 add_executable(CaliberQuickTests tests/CaliberQuickTests.cpp
+    src/services/FocusHistoryService.h src/services/FocusHistoryService.cpp
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
+    src/services/AppSettings.h src/services/AppSettings.cpp
     src/services/ScheduleService.h src/services/ScheduleService.cpp
     src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
     src/services/DatabaseManager.h src/services/DatabaseManager.cpp
@@ -1615,7 +1637,7 @@ add_executable(CaliberQuickTests tests/CaliberQuickTests.cpp
     src/services/TrashStore.h src/services/TrashStore.cpp)
 target_link_libraries(CaliberQuickTests PRIVATE Qt6::QuickTest Qt6::Quick Qt6::Sql)
 pomodoro_todo_enable_warnings(CaliberQuickTests)
-set(POMODORO_TODO_CALIBER_QML_TESTS schedule_weeks schedule_view schedule_grid_tap page_activation_failure dialog_smoke dialog_close_guard)
+set(POMODORO_TODO_CALIBER_QML_TESTS heatmap_bands month_heatmap_bar month_cleanup_confirm today_focus_view schedule_weeks schedule_view schedule_grid_tap page_activation_failure dialog_smoke dialog_close_guard)
 
 add_executable(MemoQuickTests tests/MemoQuickTests.cpp src/models/PlainTextLayout.h src/models/PlainTextLayout.cpp)
 target_link_libraries(MemoQuickTests PRIVATE Qt6::QuickTest Qt6::Quick)
@@ -1667,7 +1689,7 @@ foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
         FAIL_REGULAR_EXPRESSION "Unable to assign;TypeError;is not a function;ReferenceError;RangeError;Binding loop"
     )
     # 055-P2B：只有读表用例允许本地 XHR，生产与其它测试不放宽权限。
-    if(qml_test_name STREQUAL "schedule_weeks")
+    if(qml_test_name STREQUAL "schedule_weeks" OR qml_test_name STREQUAL "heatmap_bands")
         set_property(TEST QmlTest.${qml_test_name} APPEND PROPERTY ENVIRONMENT "QML_XHR_ALLOW_FILE_READ=1")
     endif()
 endforeach()

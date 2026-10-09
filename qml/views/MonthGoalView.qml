@@ -7,7 +7,6 @@ import ".."
 import "../components"
 import "MonthGoalFormat.js" as MgFmt
 import "../LogicalDay.js" as LogicalDay
-import "../HeatmapBands.js" as HeatmapBands
 
 Item {
     id: root
@@ -583,7 +582,9 @@ Item {
                                     // 整格铺色会被选中态的 accentSoft 整个盖掉（4 档那天反而成了全月最浅的一格），
                                     // 且 119×78 的大格铺满色阶会压过整页。见 docs/业务规则.md「热力取档与专注历史月历的投入条」。
                                     // 传 seconds / 60 不取整：30 秒是有投入，不能画成零投入。
-                                    readonly property int heatBand: HeatmapBands.bandForMinutes(dayDuration / 60)
+                                    // 投入取档只在 C++；保留小数分钟，日界状态仍由页面快照驱动。
+                                    readonly property int heatBand: root.focusHistoryServiceRef
+                                        ? root.focusHistoryServiceRef.bandForMinutes(dayDuration / 60) : -1
                                     // 未来不画条（「尚未发生」），零投入画空轨道（「这天没学」），本月之外什么都没有。
                                     readonly property bool showsInvestmentBar: dayNumber > 0 && !futureCell
 
@@ -671,7 +672,7 @@ Item {
                                         anchors.margins: Theme.space8
                                         height: 8
                                         radius: height / 2
-                                        color: calendarCell.heatBand === HeatmapBands.NONE
+                                        color: calendarCell.heatBand < 0
                                                ? Theme.heatmapEmptyTrack
                                                : Theme.heatmapBandColors[calendarCell.heatBand]
                                     }
