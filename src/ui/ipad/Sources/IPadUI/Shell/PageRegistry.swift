@@ -14,7 +14,7 @@ import SwiftUI
         case .schedule: placeholder(.schedule)
         case .monthGoal: placeholder(.monthGoal)
         case .statistics: placeholder(.statistics)
-        case .countdown: placeholder(.countdown)
+        case .countdown: CountdownPage()
         case .memo: MemoPage()
         case .trash: placeholder(.trash)
         case .settings: placeholder(.settings)

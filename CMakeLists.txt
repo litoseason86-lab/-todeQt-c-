@@ -543,6 +543,12 @@ if(IOS)
     target_sources(IPadUI PRIVATE
         src/ui/ipad/Sources/IPadUI/Pages/Memo/MemoPage.swift
         src/ui/ipad/Sources/IPadUI/Pages/Memo/MemoTitleEditor.swift)
+    # 055-P4-3：主目标、系统列表和倒计时表单。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/CountdownStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/CountdownFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Countdown/CountdownPage.swift)
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。

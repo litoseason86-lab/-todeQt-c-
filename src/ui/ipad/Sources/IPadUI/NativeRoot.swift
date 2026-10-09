@@ -39,6 +39,10 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let memos = MemoStore(bridge: MemoAdapter(), categories: core.categories, shell: store, preferences: .standard)
         let previousMemoCategoryChanged = core.categories.onChanged
         core.categories.onChanged = { [weak memos] in previousMemoCategoryChanged?(); memos?.relatedDataChanged() }
+        // 055-P4-3：倒计时只消费服务主目标、排序与剩余天数。
+        let countdown = CountdownStore(bridge: CountdownAdapter(), logicalDay: core.logicalDay, shell: store)
+        let previousCountdownDayChanged = core.logicalDay.onChanged
+        core.logicalDay.onChanged = { [weak countdown] in previousCountdownDayChanged?(); countdown?.logicalDayChanged() }
         // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
         PTLifecycleBridge.flushHandler = { [weak store] in
             MainActor.assumeIsolated {
@@ -47,6 +51,6 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                 store?.flushEdits()
             }
         }
-        return UIHostingController(rootView: ShellRootView(store: store).environment(core).environment(store).environment(gaps).environment(memos))
+        return UIHostingController(rootView: ShellRootView(store: store).environment(core).environment(store).environment(gaps).environment(memos).environment(countdown))
     }
 }
