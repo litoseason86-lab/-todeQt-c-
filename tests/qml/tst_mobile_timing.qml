@@ -81,7 +81,6 @@ TestCase {
         function pauseFocus() { isRunning = false; return true }
         function resumeFocus() { isRunning = true; return true }
         function resetPomodoroCount() { completedPomodoros = 0 }
-        function requiresFreeFocusStopConfirmation(hours) { return false }
 
         // 模拟一个专注段结束（正常到点或离线结算之后，计时器回到空闲）。
         function finishWork() {

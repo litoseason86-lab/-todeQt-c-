@@ -469,6 +469,26 @@ Item {
         return "pomoIdle"
     }
 
+    // 为切模式 / 切任务停掉忙碌中的计时器：停表与超长自由专注的确认判断都经控制器（stopForSwitch），本页不自己判断。
+    // 先 capture 再立刻 stop，所以来源不会不一致（stateChanged 不会出现）。返回：
+    //   "stopped"     已停下，调用方继续；
+    //   "confirming"  超长自由专注，已弹确认框并记下确认后的动作 action，调用方应直接返回；
+    //   "failed"      停表失败（计时保持原样），或控制器没接上。
+    function stopBusyTimerForSwitch(action, taskId, title) {
+        if (!root.focusSessionControllerRef)
+            return "failed"
+        var outcome = root.focusSessionControllerRef.stopForSwitch(
+                    root.focusSessionControllerRef.captureSwitchSource())
+        if (outcome === "needsLongFreeConfirmation") {
+            root.requestLongFreeConfirmation(action, taskId, title)
+            return "confirming"
+        }
+        return outcome === "stopped" ? "stopped" : "failed"
+    }
+
+    // 页签切换（番茄 / 自由）。到达这里时计时器要么空闲，要么是「忙碌但没有可继承的任务」：
+    // 有可继承任务的忙碌状态在 requestModeSwitch 里已先走切换确认框（planModeSwitch）。
+    // 后一种情况没有任务可说，沿用原行为直接结束当前阶段再换页签（超长自由专注仍会先弹超长确认）。
     function toPomodoroTab(enabled) {
         enabled = enabled || !root.freeModeAvailable
         root.cancelAutoAdvance()
@@ -494,16 +514,16 @@ Item {
                 root.selectedTaskTitle = root.timer.currentTaskTitle
             }
             if (timerHasSession) {
-                if (root.shouldConfirmLongFreeStop()) {
-                    root.requestLongFreeConfirmation("toPomodoro", -1, "")
+                var stopped = root.stopBusyTimerForSwitch("toPomodoro", -1, "")
+                if (stopped === "confirming")
                     return
-                }
-                if (!root.timer.stopFocus()) {
+                if (stopped === "failed") {
                     root.errorText = "切换番茄失败，请重试"
                     return
                 }
             }
         } else {
+            // 切到自由：当前页签是番茄，忙碌的计时器是番茄段 / 番茄休息，没有超长自由专注的确认问题，直接停。
             var hasRunningTimer = root.timer.hasActiveSession || root.timer.phase !== 0
             if (hasRunningTimer && !root.timer.stopFocus()) {
                 root.errorText = "结束当前阶段失败，请重试"
@@ -516,6 +536,8 @@ Item {
         root.justCompletedPhase = 0
     }
 
+    // 外部任务选择进入番茄待机。正常入口到达时计时器已空闲（任务入口先走切换确认框并停表，
+    // 超长确认后同样已停）；直接调用时若计时器仍忙，停表照样经控制器，超长自由专注先弹确认。
     function enterPomodoroWithTask(taskId, title) {
         root.cancelAutoAdvance()
         var safeTitle = String(title || "").trim()
@@ -527,11 +549,10 @@ Item {
         // 外部任务选择是新的明确意图，必须一次性替换模式和任务缓存。
         // 不复用 toPomodoroTab：它面向页内切换，会优先保留旧缓存，正是任务错位的来源。
         if (root.timer.hasActiveSession || root.timer.phase !== 0) {
-            if (root.shouldConfirmLongFreeStop()) {
-                root.requestLongFreeConfirmation("enterPomodoro", taskId, safeTitle)
+            var stopped = root.stopBusyTimerForSwitch("enterPomodoro", taskId, safeTitle)
+            if (stopped === "confirming")
                 return true
-            }
-            if (!root.timer.stopFocus()) {
+            if (stopped === "failed") {
                 root.errorText = "切换番茄失败，请重试"
                 return false
             }
@@ -579,7 +600,8 @@ Item {
     // 把任务和模式落到本页。调用前计时器必须已经空闲。
     // autoStart 为假时停在待机：番茄模式顺带展开时长面板，让用户确认本轮时长后再手动开始。
     function applyTask(taskId, title, usePomodoro, autoStart) {
-        // 任务入口都经过这里：平台不支持自由计时时一律按番茄处理（任务页可能按记住的「自由」传进来）。
+        // 入口（MainWindow.startFocusForTask）已由控制器的 planTaskEntry 把平台规则算进 usePomodoro；
+        // 这里只防未经控制器的直接调用（嵌入式测试、确认框走完后沿用 pendingSwitch 里的值），保留作兜底。
         usePomodoro = usePomodoro || !root.freeModeAvailable
         if (!root.enterWithTask(taskId, title, usePomodoro))
             return false

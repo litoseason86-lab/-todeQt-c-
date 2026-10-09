@@ -230,7 +230,6 @@ TestCase {
         property int minimumValidMinutes: 3
         property int completedPomodoros: 0
         property string sessionLogicalDate: ""
-        property bool requiresFreeFocusStopConfirmation: false
 
         signal focusCompleted(int duration)
         signal phaseCompleted(int phase)

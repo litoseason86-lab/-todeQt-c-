@@ -31,9 +31,6 @@ TestCase {
         property string startPomodoroWorkTitle: ""
         property int startPomodoroWorkSeconds: 0
         property int stopFocusCalls: 0
-        property int stopFreeFocusWithDurationCalls: 0
-        property int correctedFreeFocusDurationSeconds: -1
-        property int discardFreeFocusCalls: 0
         property bool stopFocusFails: false
         property int minimumValidMinutes: 3
         property int completedPomodoros: 0
@@ -80,13 +77,10 @@ TestCase {
         }
 
         function stopFreeFocusWithDuration(durationSeconds) {
-            stopFreeFocusWithDurationCalls += 1
-            correctedFreeFocusDurationSeconds = durationSeconds
             return stopFocus()
         }
 
         function discardFreeFocus() {
-            discardFreeFocusCalls += 1
             isRunning = false
             hasActiveSession = false
             mode = 0
@@ -94,11 +88,6 @@ TestCase {
             currentTaskId = 0
             currentTaskTitle = ""
             return true
-        }
-
-        function requiresFreeFocusStopConfirmation(thresholdHours) {
-            return hasActiveSession && mode === 0
-                    && elapsedSeconds > thresholdHours * 60 * 60
         }
 
         function startPomodoroWork(taskId, title, workSeconds) {
@@ -207,7 +196,11 @@ TestCase {
         function captureSwitchSource() {
             return { taskId: focusTimer.currentTaskId, mode: focusTimer.mode, phase: focusTimer.phase }
         }
-        function stopForSwitch(source) { return focusTimer.stopFocus() ? "stopped" : "stopFailed" }
+        function stopForSwitch(source) {
+            if (needsConfirmation && focusTimer.mode === 0 && focusTimer.hasActiveSession)
+                return "needsLongFreeConfirmation"
+            return focusTimer.stopFocus() ? "stopped" : "stopFailed"
+        }
         function planModeSwitch(selectedTaskId, selectedTitle) {
             var busy = focusTimer.hasActiveSession || focusTimer.phase !== 0
             var taskId = focusTimer.currentTaskId > 0 ? focusTimer.currentTaskId : selectedTaskId
@@ -257,7 +250,6 @@ TestCase {
         property bool longBreakEnabled: true
         property int longBreakMinutes: 15
         property int longBreakInterval: 4
-        property int freeTimerWarningHours: 8
     }
 
     QtObject {
@@ -333,9 +325,6 @@ TestCase {
         focusTimer.startPomodoroWorkTitle = ""
         focusTimer.startPomodoroWorkSeconds = 0
         focusTimer.stopFocusCalls = 0
-        focusTimer.stopFreeFocusWithDurationCalls = 0
-        focusTimer.correctedFreeFocusDurationSeconds = -1
-        focusTimer.discardFreeFocusCalls = 0
         view.selectedTaskId = -1
         view.selectedTaskTitle = ""
         view.pageActive = true
@@ -368,7 +357,6 @@ TestCase {
         appSettingsMock.longBreakEnabled = true
         appSettingsMock.longBreakMinutes = 15
         appSettingsMock.longBreakInterval = 4
-        appSettingsMock.freeTimerWarningHours = 8
         const warningDialog = findChild(view, "longFreeFocusConfirmDialog")
         if (warningDialog) {
             warningDialog.close()
