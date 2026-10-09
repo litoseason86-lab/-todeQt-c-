@@ -253,6 +253,8 @@ if(IOS)
         src/platform/ios/bridge/PTCategoryBridge.h src/platform/ios/bridge/PTCategoryBridge.mm
         src/platform/ios/bridge/PTLogicalDayBridge.h src/platform/ios/bridge/PTLogicalDayBridge.mm
         src/platform/ios/bridge/PTSettingsBridge.h src/platform/ios/bridge/PTSettingsBridge.mm
+        src/platform/ios/bridge/PTStatisticsBridge.h src/platform/ios/bridge/PTStatisticsBridge.mm
+        src/platform/ios/bridge/PTFocusHistoryBridge.h src/platform/ios/bridge/PTFocusHistoryBridge.mm
         # 055-P3B：转换与非单例服务登记。
         src/platform/ios/bridge/PTBridgeSupport.h
         src/platform/ios/bridge/PTBridgeSupport.mm
@@ -270,6 +272,8 @@ if(IOS)
         src/platform/ios/bridge/PTCategoryBridge.mm
         src/platform/ios/bridge/PTLogicalDayBridge.mm
         src/platform/ios/bridge/PTSettingsBridge.mm
+        src/platform/ios/bridge/PTStatisticsBridge.mm
+        src/platform/ios/bridge/PTFocusHistoryBridge.mm
         # 055-P3B：支撑层使用 Foundation，按 ARC 管理对象。
         src/platform/ios/bridge/PTBridgeSupport.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
@@ -487,6 +491,16 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Bridges/CategoryBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/LogicalDayBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/SettingsBridgeAdapter.swift
+    )
+    # 055-P3B：统计与专注历史协议及适配器。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/StatisticsBridge.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/FocusHistoryBridge.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/CoreBridges.swift
+    )
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/StatisticsBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/FocusHistoryBridgeAdapter.swift
     )
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
@@ -1747,4 +1761,15 @@ set_source_files_properties(
     src/platform/ios/bridge/PTCategoryBridge.mm
     src/platform/ios/bridge/PTLogicalDayBridge.mm
     src/platform/ios/bridge/PTSettingsBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+
+# 055-P3B：统计与专注历史加入核心桥接测试。
+target_sources(PTCoreBridgeTests PRIVATE
+    src/services/StatisticsService.h src/services/StatisticsService.cpp
+    src/platform/ios/bridge/PTStatisticsBridge.h src/platform/ios/bridge/PTStatisticsBridge.mm
+    src/platform/ios/bridge/PTFocusHistoryBridge.h src/platform/ios/bridge/PTFocusHistoryBridge.mm
+)
+set_source_files_properties(
+    src/platform/ios/bridge/PTStatisticsBridge.mm
+    src/platform/ios/bridge/PTFocusHistoryBridge.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")

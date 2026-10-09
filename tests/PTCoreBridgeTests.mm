@@ -8,6 +8,7 @@
 #include "../src/services/TaskManager.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusHistoryService.h"
+#include "../src/services/StatisticsService.h"
 #include "../src/services/AppSettings.h"
 #include "../src/services/LogicalDay.h"
 #import "../src/platform/ios/bridge/PTCategoryBridge.h"
@@ -16,6 +17,8 @@
 @interface PTSettingsBridge (TestInjection)
 - (instancetype)initWithSettings:(AppSettings *)settings;
 @end
+#import "../src/platform/ios/bridge/PTStatisticsBridge.h"
+#import "../src/platform/ios/bridge/PTFocusHistoryBridge.h"
 #include <QSettings>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -39,6 +42,9 @@ private slots:
     void categoryValuesAndErrors();
     void settingsSnapshotWritesAndFailures();
     void configurationSignalsAndLifetime();
+    void statisticsReadEntryPointsAndNestedValues();
+    void statisticsFailuresAndHistorySignalLifetime();
+    void historyFieldsPartialChangesAndFailures();
     void initTestCase();
     void init();
     void cleanup();
@@ -507,6 +513,398 @@ void PTCoreBridgeTests::configurationSignalsAndLifetime() {
         categories = nil; days = nil; settings = nil;
         QVERIFY(weakCategories == nil && weakDays == nil && weakSettings == nil);
         emit categoryService->categoriesChanged(); emit dayService->changed(); emit settingService->nicknameChanged(); QCOMPARE(count, frozenCount);
+    }
+}
+// 逐字段对照服务返回值，包括嵌套空值；桥接不得改写统计口径或把空值补成零。
+static void compareValue(PTDayStatistics *value, const QVariantMap &map);
+static void compareValue(PTMonthStatistics *value, const QVariantMap &map);
+static void compareValue(PTComparisonMetric *value, const QVariantMap &map);
+static void compareValue(PTStatisticsComparison *value, const QVariantMap &map);
+static void compareValue(PTWeekDayStatistics *value, const QVariantMap &map);
+static void compareValue(PTCategoryStatisticsRow *value, const QVariantMap &map);
+static void compareValue(PTCategoryStatistics *value, const QVariantMap &map);
+static void compareValue(PTTaskStatisticsRow *value, const QVariantMap &map);
+static void compareValue(PTTaskStatistics *value, const QVariantMap &map);
+static void compareValue(PTMonthWeekStatistics *value, const QVariantMap &map);
+static void compareValue(PTReviewGoalDay *value, const QVariantMap &map);
+static void compareValue(PTReviewGoal *value, const QVariantMap &map);
+static void compareValue(PTReviewTodayGoal *value, const QVariantMap &map);
+static void compareValue(PTReviewSubject *value, const QVariantMap &map);
+static void compareValue(PTReviewPlannedRow *value, const QVariantMap &map);
+static void compareValue(PTReviewPlannedTasks *value, const QVariantMap &map);
+static void compareValue(PTReviewFact *value, const QVariantMap &map);
+static void compareValue(PTWeeklyReview *value, const QVariantMap &map);
+static void compareValue(PTFocusSummaryDay *value, const QVariantMap &map);
+static void compareValue(PTFocusSummaryCategory *value, const QVariantMap &map);
+static void compareValue(PTFocusSummary *value, const QVariantMap &map);
+static void compareValue(PTDayStatistics *value, const QVariantMap &map) {
+    QCOMPARE(value.totalDuration, NSInteger(map.value("totalDuration").toLongLong()));
+    QCOMPARE(value.completedTasks, NSInteger(map.value("completedTasks").toLongLong()));
+    QCOMPARE(value.totalTasks, NSInteger(map.value("totalTasks").toLongLong()));
+    QCOMPARE(value.completionRate, double(map.value("completionRate").toDouble()));
+    QCOMPARE(value.sessionCount, NSInteger(map.value("sessionCount").toLongLong()));
+    QCOMPARE(value.pomodoroCount, NSInteger(map.value("pomodoroCount").toLongLong()));
+}
+static void compareValue(PTMonthStatistics *value, const QVariantMap &map) {
+    QCOMPARE(value.totalDuration, NSInteger(map.value("totalDuration").toLongLong()));
+    QCOMPARE(value.effectiveDays, NSInteger(map.value("effectiveDays").toLongLong()));
+    QCOMPARE(value.sessionCount, NSInteger(map.value("sessionCount").toLongLong()));
+    QCOMPARE(value.completedTasks, NSInteger(map.value("completedTasks").toLongLong()));
+    QCOMPARE(value.totalTasks, NSInteger(map.value("totalTasks").toLongLong()));
+}
+static void compareValue(PTComparisonMetric *value, const QVariantMap &map) {
+    QCOMPARE(value.hasData, BOOL(map.value("hasData").toBool()));
+    QCOMPARE(value.currentValue, NSInteger(map.value("currentValue").toLongLong()));
+    QCOMPARE(value.previousValue, NSInteger(map.value("previousValue").toLongLong()));
+    QCOMPARE(value.changePercent, double(map.value("changePercent").toDouble()));
+    QCOMPARE(value.trend, NSInteger(map.value("trend").toLongLong()));
+    QCOMPARE(PTBridgeSupport::string(value.displayText), map.value("displayText").toString());
+}
+static void compareValue(PTStatisticsComparison *value, const QVariantMap &map) {
+    QCOMPARE(value.hasData, BOOL(map.value("hasData").toBool()));
+    QCOMPARE(PTBridgeSupport::string(value.periodState), map.value("periodState").toString());
+    compareValue(value.duration, map.value("duration").toMap());
+    compareValue(value.sessionCount, map.value("sessionCount").toMap());
+    compareValue(value.taskCompletion, map.value("taskCompletion").toMap());
+    compareValue(value.effectiveDays, map.value("effectiveDays").toMap());
+}
+static void compareValue(PTWeekDayStatistics *value, const QVariantMap &map) {
+    QCOMPARE(PTBridgeSupport::string(value.date), map.value("date").toString());
+    QCOMPARE(value.duration, NSInteger(map.value("duration").toLongLong()));
+    QCOMPARE(value.tasks, NSInteger(map.value("tasks").toLongLong()));
+    QCOMPARE(value.completedTasks, NSInteger(map.value("completedTasks").toLongLong()));
+}
+static void compareValue(PTCategoryStatisticsRow *value, const QVariantMap &map) {
+    QCOMPARE(PTBridgeSupport::string(value.name), map.value("name").toString());
+    QCOMPARE(PTBridgeSupport::string(value.color), map.value("color").toString());
+    QCOMPARE(value.duration, NSInteger(map.value("duration").toLongLong()));
+    QCOMPARE(value.percentage, double(map.value("percentage").toDouble()));
+}
+static void compareValue(PTCategoryStatistics *value, const QVariantMap &map) {
+    const auto categories = map.value("categories").toList(); QCOMPARE(value.categories.count, NSUInteger(categories.size()));
+    for (NSUInteger i = 0; i < value.categories.count; ++i) compareValue(value.categories[i], categories.at(static_cast<qsizetype>(i)).toMap());
+    QCOMPARE(value.totalDuration, NSInteger(map.value("totalDuration").toLongLong()));
+}
+static void compareValue(PTTaskStatisticsRow *value, const QVariantMap &map) {
+    QCOMPARE(value.taskId, NSInteger(map.value("taskId").isNull() ? -1 : map.value("taskId").toInt()));
+    QCOMPARE(PTBridgeSupport::string(value.title), map.value("title").toString());
+    QCOMPARE(value.completed, BOOL(map.value("completed").toBool()));
+    QCOMPARE(PTBridgeSupport::string(value.categoryName), map.value("categoryName").toString());
+    QCOMPARE(PTBridgeSupport::string(value.color), map.value("color").toString());
+    QCOMPARE(value.focusedSeconds, NSInteger(map.value("focusedSeconds").toLongLong()));
+    QCOMPARE(value.pomodoros, NSInteger(map.value("pomodoros").toLongLong()));
+    QCOMPARE(value.unassigned, BOOL(map.value("unassigned").toBool()));
+}
+static void compareValue(PTTaskStatistics *value, const QVariantMap &map) {
+    const auto tasks = map.value("tasks").toList(); QCOMPARE(value.tasks.count, NSUInteger(tasks.size()));
+    for (NSUInteger i = 0; i < value.tasks.count; ++i) compareValue(value.tasks[i], tasks.at(static_cast<qsizetype>(i)).toMap());
+    QCOMPARE(value.totalDuration, NSInteger(map.value("totalDuration").toLongLong()));
+    QCOMPARE(value.taskCount, NSInteger(map.value("taskCount").toLongLong()));
+}
+static void compareValue(PTMonthWeekStatistics *value, const QVariantMap &map) {
+    QCOMPARE(PTBridgeSupport::string(value.label), map.value("label").toString());
+    QCOMPARE(value.duration, NSInteger(map.value("duration").toLongLong()));
+    QCOMPARE(PTBridgeSupport::string(value.startDate), map.value("startDate").toString());
+    QCOMPARE(PTBridgeSupport::string(value.endDate), map.value("endDate").toString());
+}
+static void compareValue(PTReviewGoalDay *value, const QVariantMap &map) {
+    QCOMPARE(PTBridgeSupport::string(value.date), map.value("date").toString());
+    QCOMPARE(value.goalMinutes, NSInteger(map.value("goalMinutes").toLongLong()));
+    QCOMPARE(value.actualSeconds, NSInteger(map.value("actualSeconds").toLongLong()));
+    QCOMPARE(value.met, BOOL(map.value("met").toBool()));
+}
+static void compareValue(PTReviewGoal *value, const QVariantMap &map) {
+    QCOMPARE(value.goalDays, NSInteger(map.value("goalDays").toLongLong()));
+    QCOMPARE(value.metDays, NSInteger(map.value("metDays").toLongLong()));
+    QCOMPARE(value.goalMinutesTotal, NSInteger(map.value("goalMinutesTotal").toLongLong()));
+    QCOMPARE(value.actualSecondsTotal, NSInteger(map.value("actualSecondsTotal").toLongLong()));
+    const auto days = map.value("days").toList(); QCOMPARE(value.days.count, NSUInteger(days.size()));
+    for (NSUInteger i = 0; i < value.days.count; ++i) compareValue(value.days[i], days.at(static_cast<qsizetype>(i)).toMap());
+}
+static void compareValue(PTReviewTodayGoal *value, const QVariantMap &map) {
+    QCOMPARE(PTBridgeSupport::string(value.date), map.value("date").toString());
+    QCOMPARE(value.goalMinutes, NSInteger(map.value("goalMinutes").toLongLong()));
+    QCOMPARE(value.actualSeconds, NSInteger(map.value("actualSeconds").toLongLong()));
+    QCOMPARE(value.progressPercent, double(map.value("progressPercent").toDouble()));
+}
+static void compareValue(PTReviewSubject *value, const QVariantMap &map) {
+    QCOMPARE(PTBridgeSupport::string(value.name), map.value("name").toString());
+    QCOMPARE(PTBridgeSupport::string(value.color), map.value("color").toString());
+    QCOMPARE(value.currentSeconds, NSInteger(map.value("currentSeconds").toLongLong()));
+    QCOMPARE(value.currentSharePercent, double(map.value("currentSharePercent").toDouble()));
+    QCOMPARE(value.pseudoSubject, BOOL(map.value("pseudoSubject").toBool()));
+    QCOMPARE(value.previousSeconds == nil, map.value("previousSeconds").isNull()); if (value.previousSeconds) QCOMPARE(value.previousSeconds.longLongValue, map.value("previousSeconds").toLongLong());
+    QCOMPARE(value.deltaSeconds == nil, map.value("deltaSeconds").isNull()); if (value.deltaSeconds) QCOMPARE(value.deltaSeconds.longLongValue, map.value("deltaSeconds").toLongLong());
+    QCOMPARE(value.previousSharePercent == nil, map.value("previousSharePercent").isNull()); if (value.previousSharePercent) QCOMPARE(value.previousSharePercent.doubleValue, map.value("previousSharePercent").toDouble());
+    QCOMPARE(value.deltaPoints == nil, map.value("deltaPoints").isNull()); if (value.deltaPoints) QCOMPARE(value.deltaPoints.doubleValue, map.value("deltaPoints").toDouble());
+}
+static void compareValue(PTReviewPlannedRow *value, const QVariantMap &map) {
+    QCOMPARE(PTBridgeSupport::string(value.subject), map.value("subject").toString());
+    QCOMPARE(PTBridgeSupport::string(value.color), map.value("color").toString());
+    QCOMPARE(value.plannedMinutes, NSInteger(map.value("plannedMinutes").toLongLong()));
+    QCOMPARE(value.actualSeconds, NSInteger(map.value("actualSeconds").toLongLong()));
+    QCOMPARE(value.actualDisplayMinutes, NSInteger(map.value("actualDisplayMinutes").toLongLong()));
+    QCOMPARE(value.differenceDisplayMinutes, NSInteger(map.value("differenceDisplayMinutes").toLongLong()));
+    QCOMPARE(value.investmentRatioPercent, double(map.value("investmentRatioPercent").toDouble()));
+}
+static void compareValue(PTReviewPlannedTasks *value, const QVariantMap &map) {
+    const auto rows = map.value("rows").toList(); QCOMPARE(value.rows.count, NSUInteger(rows.size()));
+    for (NSUInteger i = 0; i < value.rows.count; ++i) compareValue(value.rows[i], rows.at(static_cast<qsizetype>(i)).toMap());
+    QCOMPARE(value.inProgress, BOOL(map.value("inProgress").toBool()));
+    QCOMPARE(value.totalPlannedMinutes, NSInteger(map.value("totalPlannedMinutes").toLongLong()));
+    QCOMPARE(value.totalActualSeconds, NSInteger(map.value("totalActualSeconds").toLongLong()));
+    QCOMPARE(value.totalActualDisplayMinutes, NSInteger(map.value("totalActualDisplayMinutes").toLongLong()));
+    QCOMPARE(value.totalDifferenceDisplayMinutes, NSInteger(map.value("totalDifferenceDisplayMinutes").toLongLong()));
+    QCOMPARE(value.totalInvestmentRatioPercent == nil, map.value("totalInvestmentRatioPercent").isNull()); if (value.totalInvestmentRatioPercent) QCOMPARE(value.totalInvestmentRatioPercent.doubleValue, map.value("totalInvestmentRatioPercent").toDouble());
+}
+static void compareValue(PTReviewFact *value, const QVariantMap &map) {
+    QCOMPARE(PTBridgeSupport::string(value.type), map.value("type").toString());
+    QCOMPARE(PTBridgeSupport::string(value.date), map.value("date").toString());
+    QCOMPARE(PTBridgeSupport::string(value.subject), map.value("subject").toString());
+    QCOMPARE(value.goalMinutes == nil, map.value("goalMinutes").isNull()); if (value.goalMinutes) QCOMPARE(value.goalMinutes.longLongValue, map.value("goalMinutes").toLongLong());
+    QCOMPARE(value.actualSeconds == nil, map.value("actualSeconds").isNull()); if (value.actualSeconds) QCOMPARE(value.actualSeconds.longLongValue, map.value("actualSeconds").toLongLong());
+    QCOMPARE(value.ratioPercent == nil, map.value("ratioPercent").isNull()); if (value.ratioPercent) QCOMPARE(value.ratioPercent.doubleValue, map.value("ratioPercent").toDouble());
+    QCOMPARE(value.currentSeconds == nil, map.value("currentSeconds").isNull()); if (value.currentSeconds) QCOMPARE(value.currentSeconds.longLongValue, map.value("currentSeconds").toLongLong());
+    QCOMPARE(value.previousSeconds == nil, map.value("previousSeconds").isNull()); if (value.previousSeconds) QCOMPARE(value.previousSeconds.longLongValue, map.value("previousSeconds").toLongLong());
+    QCOMPARE(value.currentSharePercent == nil, map.value("currentSharePercent").isNull()); if (value.currentSharePercent) QCOMPARE(value.currentSharePercent.doubleValue, map.value("currentSharePercent").toDouble());
+    QCOMPARE(value.deltaPoints == nil, map.value("deltaPoints").isNull()); if (value.deltaPoints) QCOMPARE(value.deltaPoints.doubleValue, map.value("deltaPoints").toDouble());
+    QCOMPARE(value.plannedMinutes == nil, map.value("plannedMinutes").isNull()); if (value.plannedMinutes) QCOMPARE(value.plannedMinutes.longLongValue, map.value("plannedMinutes").toLongLong());
+    QCOMPARE(value.actualDisplayMinutes == nil, map.value("actualDisplayMinutes").isNull()); if (value.actualDisplayMinutes) QCOMPARE(value.actualDisplayMinutes.longLongValue, map.value("actualDisplayMinutes").toLongLong());
+    QCOMPARE(value.shortfallDisplayMinutes == nil, map.value("shortfallDisplayMinutes").isNull()); if (value.shortfallDisplayMinutes) QCOMPARE(value.shortfallDisplayMinutes.longLongValue, map.value("shortfallDisplayMinutes").toLongLong());
+}
+static void compareValue(PTWeeklyReview *value, const QVariantMap &map) {
+    QCOMPARE(PTBridgeSupport::string(value.weekStart), map.value("weekStart").toString());
+    QCOMPARE(PTBridgeSupport::string(value.weekEnd), map.value("weekEnd").toString());
+    QCOMPARE(PTBridgeSupport::string(value.logicalTodayIso), map.value("logicalTodayIso").toString());
+    QCOMPARE(PTBridgeSupport::string(value.periodState), map.value("periodState").toString());
+    QCOMPARE(PTBridgeSupport::string(value.loadState), map.value("loadState").toString());
+    QCOMPARE(PTBridgeSupport::string(value.errorMessage), map.value("errorMessage").toString());
+    QCOMPARE(value.hasData, BOOL(map.value("hasData").toBool()));
+    QCOMPARE(value.hasDisplayContent, BOOL(map.value("hasDisplayContent").toBool()));
+    QCOMPARE(value.goal == nil, map.value("goal").toMap().isEmpty()); if (value.goal) compareValue(value.goal, map.value("goal").toMap());
+    QCOMPARE(value.todayGoal == nil, map.value("todayGoal").toMap().isEmpty()); if (value.todayGoal) compareValue(value.todayGoal, map.value("todayGoal").toMap());
+    const auto subjects = map.value("subjects").toList(); QCOMPARE(value.subjects.count, NSUInteger(subjects.size()));
+    for (NSUInteger i = 0; i < value.subjects.count; ++i) compareValue(value.subjects[i], subjects.at(static_cast<qsizetype>(i)).toMap());
+    QCOMPARE(value.plannedTasks == nil, map.value("plannedTasks").toMap().isEmpty()); if (value.plannedTasks) compareValue(value.plannedTasks, map.value("plannedTasks").toMap());
+    const auto facts = map.value("facts").toList(); QCOMPARE(value.facts.count, NSUInteger(facts.size()));
+    for (NSUInteger i = 0; i < value.facts.count; ++i) compareValue(value.facts[i], facts.at(static_cast<qsizetype>(i)).toMap());
+}
+static void compareValue(PTFocusSummaryDay *value, const QVariantMap &map) {
+    QCOMPARE(PTBridgeSupport::string(value.date), map.value("date").toString());
+    QCOMPARE(value.seconds, NSInteger(map.value("seconds").toLongLong()));
+    QCOMPARE(value.pomodoros, NSInteger(map.value("pomodoros").toLongLong()));
+}
+static void compareValue(PTFocusSummaryCategory *value, const QVariantMap &map) {
+    QCOMPARE(value.categoryId, NSInteger(map.value("id").isNull() ? -1 : map.value("id").toInt()));
+    QCOMPARE(PTBridgeSupport::string(value.name), map.value("name").toString());
+    QCOMPARE(value.seconds, NSInteger(map.value("seconds").toLongLong()));
+}
+static void compareValue(PTFocusSummary *value, const QVariantMap &map) {
+    QCOMPARE(value.seconds, NSInteger(map.value("seconds").toLongLong()));
+    QCOMPARE(value.pomodoros, NSInteger(map.value("pomodoros").toLongLong()));
+    const auto days = map.value("days").toList(); QCOMPARE(value.days.count, NSUInteger(days.size()));
+    for (NSUInteger i = 0; i < value.days.count; ++i) compareValue(value.days[i], days.at(static_cast<qsizetype>(i)).toMap());
+    const auto categories = map.value("categories").toList(); QCOMPARE(value.categories.count, NSUInteger(categories.size()));
+    for (NSUInteger i = 0; i < value.categories.count; ++i) compareValue(value.categories[i], categories.at(static_cast<qsizetype>(i)).toMap());
+}
+// 产品保证：统计所有只读入口保持原服务口径，报告逐字段复制且不丢失嵌套可选状态。
+void PTCoreBridgeTests::statisticsReadEntryPointsAndNestedValues() {
+    @autoreleasepool {
+        struct Reset { ~Reset() { bridgeTestNow.reset(); } } reset;
+        bridgeTestNow = QDateTime(QDate(2024, 3, 7), QTime(12, 0));
+        auto *settings = AppSettings::instance(); settings->setDayStartHour(4);
+        auto *tasks = TaskManager::instance(); auto *service = StatisticsService::instance();
+        const int category = CategoryManager::instance()->addCategory(QStringLiteral("统计科"), QStringLiteral("#123456")); QVERIFY(category > 0);
+        const int a = tasks->createTask(QStringLiteral("统计甲"), QDate(2024, 2, 29), category, 120, QStringLiteral("甲"));
+        const int b = tasks->createTask(QStringLiteral("统计乙"), QDate(2024, 2, 26), -1, 30, QStringLiteral("乙")); QVERIFY(a > 0 && b > 0 && a != b);
+        QVERIFY(tasks->completeTask(a)); QVERIFY(settings->setDailyFocusGoal(QStringLiteral("2024-02-29"), 120));
+        QSqlQuery seed(DatabaseManager::instance()->database());
+        QVERIFY(seed.exec(QStringLiteral("INSERT INTO focus_sessions(task_id,start_time,end_time,duration,mode,pomodoro_completed) VALUES "
+            "(%1,'2024-02-29T08:00:00.789','2024-02-29T08:10:00.789',243,1,1),"
+            "(%2,'2024-02-26T09:00:00','2024-02-26T09:08:00',480,0,0),"
+            "(%1,'2024-02-22T08:00:00','2024-02-22T08:20:00',1200,0,0)").arg(a).arg(b)));
+        QVERIFY(service->getMonthStats(2024, 2).value("totalDuration").toInt() > 0);
+        QVERIFY(service->getWeeklyReview(QDate(2024, 2, 26), QStringLiteral("2024-03-07")).value("goal").toMap().value("days").toList().size() > 0);
+        PTStatisticsBridge *bridge = [PTStatisticsBridge new];
+        PTStatisticsResult *result0 = [bridge dayStats:@"2024-02-29"]; QVERIFY(result0.valid);
+        const auto expected0 = service->getDayStats(QDate(2024, 2, 29));
+        compareValue(result0.day, expected0);
+        PTStatisticsResult *result1 = [bridge todayStats]; QVERIFY(result1.valid);
+        const auto expected1 = service->getTodayStats();
+        compareValue(result1.day, expected1);
+        PTStatisticsResult *result2 = [bridge dayComparison:@"2024-02-29"]; QVERIFY(result2.valid);
+        const auto expected2 = service->getDayComparison(QDate(2024, 2, 29));
+        compareValue(result2.comparison, expected2);
+        PTStatisticsResult *result3 = [bridge weekStats:@"2024-02-26"]; QVERIFY(result3.valid);
+        const auto expected3 = service->getWeekStats(QDate(2024, 2, 26));
+        QCOMPARE(result3.weekDays.count, NSUInteger(expected3.size()));
+        for (NSUInteger j = 0; j < result3.weekDays.count; ++j) compareValue(result3.weekDays[j], expected3.at(static_cast<qsizetype>(j)).toMap());
+        PTStatisticsResult *result4 = [bridge currentWeekStats]; QVERIFY(result4.valid);
+        const auto expected4 = service->getWeekStats();
+        QCOMPARE(result4.weekDays.count, NSUInteger(expected4.size()));
+        for (NSUInteger j = 0; j < result4.weekDays.count; ++j) compareValue(result4.weekDays[j], expected4.at(static_cast<qsizetype>(j)).toMap());
+        PTStatisticsResult *result5 = [bridge weekComparison:@"2024-02-26" logicalToday:@"2024-03-07"]; QVERIFY(result5.valid);
+        const auto expected5 = service->getWeekComparison(QDate(2024, 2, 26), QStringLiteral("2024-03-07"));
+        compareValue(result5.comparison, expected5);
+        PTStatisticsResult *result6 = [bridge categoryStats:@"2024-02-01" to:@"2024-02-29"]; QVERIFY(result6.valid);
+        const auto expected6 = service->getCategoryStats(QDate(2024, 2, 1), QDate(2024, 2, 29));
+        compareValue(result6.categoryStats, expected6);
+        PTStatisticsResult *result7 = [bridge dayTaskStats:@"2024-02-29"]; QVERIFY(result7.valid);
+        const auto expected7 = service->getDayTaskStats(QDate(2024, 2, 29));
+        compareValue(result7.taskStats, expected7);
+        PTStatisticsResult *result8 = [bridge todayTaskStats]; QVERIFY(result8.valid);
+        const auto expected8 = service->getTodayTaskStats();
+        compareValue(result8.taskStats, expected8);
+        PTStatisticsResult *result9 = [bridge monthStats:2024 month:2]; QVERIFY(result9.valid);
+        const auto expected9 = service->getMonthStats(2024, 2);
+        compareValue(result9.month, expected9);
+        PTStatisticsResult *result10 = [bridge currentMonthStats]; QVERIFY(result10.valid);
+        const auto expected10 = service->getMonthStats();
+        compareValue(result10.month, expected10);
+        PTStatisticsResult *result11 = [bridge monthComparison:2024 month:2]; QVERIFY(result11.valid);
+        const auto expected11 = service->getMonthComparison(2024, 2);
+        compareValue(result11.comparison, expected11);
+        PTMonthStatisticsInput *input = [PTMonthStatisticsInput new]; const auto current = service->getMonthStats(2024, 2);
+        input.totalDuration = current.value("totalDuration").toInt();
+        input.effectiveDays = current.value("effectiveDays").toInt();
+        input.sessionCount = current.value("sessionCount").toInt();
+        input.completedTasks = current.value("completedTasks").toInt();
+        input.totalTasks = current.value("totalTasks").toInt();
+        PTStatisticsResult *result12 = [bridge monthComparison:2024 month:2 current:input]; QVERIFY(result12.valid);
+        const auto expected12 = service->getMonthComparison(2024, 2, current);
+        compareValue(result12.comparison, expected12);
+        PTStatisticsResult *result13 = [bridge effectiveDays:@"2024-02-01" to:@"2024-02-29"]; QVERIFY(result13.valid);
+        const auto expected13 = service->getEffectiveDays(QDate(2024, 2, 1), QDate(2024, 2, 29));
+        QCOMPARE(result13.count, NSInteger(expected13));
+        PTStatisticsResult *result14 = [bridge focusSessionCount:@"2024-02-01" to:@"2024-02-29"]; QVERIFY(result14.valid);
+        const auto expected14 = service->getFocusSessionCount(QDate(2024, 2, 1), QDate(2024, 2, 29));
+        QCOMPARE(result14.count, NSInteger(expected14));
+        PTStatisticsResult *result15 = [bridge validPomodoroCount:@"2024-02-01" to:@"2024-02-29"]; QVERIFY(result15.valid);
+        const auto expected15 = service->getValidPomodoroCount(QDate(2024, 2, 1), QDate(2024, 2, 29));
+        QCOMPARE(result15.count, NSInteger(expected15));
+        PTStatisticsResult *result16 = [bridge streakDays]; QVERIFY(result16.valid);
+        const auto expected16 = service->getStreakDays();
+        QCOMPARE(result16.count, NSInteger(expected16));
+        PTStatisticsResult *result17 = [bridge totalFocusDuration]; QVERIFY(result17.valid);
+        const auto expected17 = service->getTotalFocusDuration();
+        QCOMPARE(result17.count, NSInteger(expected17));
+        PTStatisticsResult *result18 = [bridge monthWeeklySummary:2024 month:2]; QVERIFY(result18.valid);
+        const auto expected18 = service->getMonthWeeklySummary(2024, 2);
+        QCOMPARE(result18.monthWeeks.count, NSUInteger(expected18.size()));
+        for (NSUInteger j = 0; j < result18.monthWeeks.count; ++j) compareValue(result18.monthWeeks[j], expected18.at(static_cast<qsizetype>(j)).toMap());
+        PTStatisticsResult *result19 = [bridge currentMonthWeeklySummary]; QVERIFY(result19.valid);
+        const auto expected19 = service->getMonthWeeklySummary();
+        QCOMPARE(result19.monthWeeks.count, NSUInteger(expected19.size()));
+        for (NSUInteger j = 0; j < result19.monthWeeks.count; ++j) compareValue(result19.monthWeeks[j], expected19.at(static_cast<qsizetype>(j)).toMap());
+        PTStatisticsResult *result20 = [bridge weeklyReview:@"2024-02-26" logicalToday:@"2024-03-07"]; QVERIFY(result20.valid);
+        const auto expected20 = service->getWeeklyReview(QDate(2024, 2, 26), QStringLiteral("2024-03-07"));
+        compareValue(result20.review, expected20);
+        PTStatisticsResult *result21 = [bridge currentWeeklyReview]; QVERIFY(result21.valid);
+        const auto expected21 = service->getWeeklyReview();
+        compareValue(result21.review, expected21);
+        PTStatisticsResult *result22 = [bridge focusSummary:@"2024-02-01" to:@"2024-02-29" dayStartHour:4]; QVERIFY(result22.valid);
+        const auto expected22 = service->readFocusSummary(QDate(2024, 2, 1), QDate(2024, 2, 29), 4);
+        compareValue(result22.summary, expected22.value);
+        auto currentReview = [bridge weeklyReview:@"2024-02-26" logicalToday:@"2024-02-29"];
+        QVERIFY(currentReview.valid); QVERIFY(currentReview.review.subjects.count > 0);
+        QVERIFY(currentReview.review.subjects.firstObject.previousSeconds == nil);
+        QVERIFY(currentReview.review.todayGoal != nil);
+    }
+}
+// 产品保证：统计失败不当成空报告、不重复广播，统计与历史信号回主线程且释放即断连。
+void PTCoreBridgeTests::statisticsFailuresAndHistorySignalLifetime() {
+    @autoreleasepool {
+        PTStatisticsBridge *stats = [PTStatisticsBridge new]; PTFocusHistoryBridge *history = [PTFocusHistoryBridge new];
+        auto empty = [stats dayStats:@"2024-02-29"]; QVERIFY(empty.valid); QCOMPARE(empty.day.totalDuration, NSInteger(0));
+        __block int background = 0; stats.onFailure = ^(NSString *) { ++background; };
+        DatabaseManager::instance()->close(); auto failed = [stats dayStats:@"2024-02-29"];
+        QVERIFY(!failed.valid && failed.error.length > 0); QCOMPARE(background, 0);
+        auto review = [stats weeklyReview:@"2024-02-26" logicalToday:@"2024-03-07"];
+        QVERIFY(!review.valid && review.error.length > 0); QCOMPARE(review.review.subjects.count, NSUInteger(0));
+        QVERIFY(![stats monthWeeklySummary:2024 month:2].valid);
+        QVERIFY(![stats focusSummary:@"2024-02-01" to:@"2024-02-29" dayStartHour:4].valid);
+        QVERIFY(![history daySessions:@"2024-02-29"].valid); QVERIFY(![history invalidSessionCount].valid);
+        __block int calls = 0; __block BOOL onMain = YES;
+        stats.onFailure = ^(NSString *) { ++calls; onMain = onMain && NSThread.isMainThread; };
+        history.onChanged = ^{ ++calls; onMain = onMain && NSThread.isMainThread; };
+        __weak PTStatisticsBridge *weakStats = stats; __weak PTFocusHistoryBridge *weakHistory = history;
+        auto *statistics = StatisticsService::instance(); auto *sessions = FocusHistoryService::instance();
+        std::unique_ptr<QThread> worker(QThread::create([=] { emit statistics->operationFailed(QStringLiteral("背景")); emit sessions->historyChanged(); }));
+        worker->start(); QVERIFY(worker->wait(2000)); QCOMPARE(calls, 0); QTRY_COMPARE(calls, 2); QVERIFY(onMain);
+        stats = nil; history = nil; QVERIFY(weakStats == nil && weakHistory == nil);
+        emit statistics->operationFailed(QStringLiteral("释放后")); emit sessions->historyChanged(); QCOMPARE(calls, 2);
+    }
+}
+// 产品保证：历史逐字段保留毫秒、秒数与暂停跨度；编辑只交改动，补录与失败使用服务原文。
+void PTCoreBridgeTests::historyFieldsPartialChangesAndFailures() {
+    @autoreleasepool {
+        struct Reset { ~Reset() { bridgeTestNow.reset(); } } reset;
+        bridgeTestNow = QDateTime(QDate(2024, 3, 7), QTime(12, 0)); AppSettings::instance()->setDayStartHour(4);
+        auto *tasks = TaskManager::instance(); auto *service = FocusHistoryService::instance();
+        const int a = tasks->createTask(QStringLiteral("历史甲"), QDate(2024, 2, 29), -1, 0, QString());
+        const int b = tasks->createTask(QStringLiteral("历史乙"), QDate(2024, 2, 28), -1, 0, QString()); QVERIFY(a > 0 && b > 0 && a != b);
+        QSqlQuery seed(DatabaseManager::instance()->database());
+        QVERIFY(seed.exec(QStringLiteral("INSERT INTO focus_sessions(id,task_id,start_time,end_time,duration,mode,pomodoro_completed) VALUES "
+            "(100,%1,'2024-02-29T08:00:00.789','2024-02-29T08:10:00.789',243,1,1),"
+            "(101,NULL,'2024-02-29T11:00:00','2024-02-29T11:01:00',60,0,0)").arg(a)));
+        QVERIFY(seed.exec("INSERT INTO rest_sessions(id,start_time,end_time,duration,manual) VALUES (200,'2024-02-29T09:00:00.456','2024-02-29T09:10:00.456',301,1)"));
+        PTFocusHistoryBridge *bridge = [PTFocusHistoryBridge new]; NSError *error = nil;
+        auto timeline = [bridge dayTimeline:@"2024-02-29"]; QVERIFY(timeline.valid); QCOMPARE(timeline.sessions.count, NSUInteger(2));
+        auto raw = service->getDayTimeline(QDate(2024, 2, 29));
+        for (NSUInteger i = 0; i < timeline.sessions.count; ++i) {
+            auto value = timeline.sessions[i]; auto map = raw.at(static_cast<qsizetype>(i)).toMap();
+            QCOMPARE(value.sessionId, NSInteger(map.value("id").toInt()));
+            QCOMPARE(value.taskId, NSInteger(map.value("taskId").isNull() ? -1 : map.value("taskId").toInt()));
+            QCOMPARE(PTBridgeSupport::string(value.taskTitle), map.value("taskTitle").toString());
+            QCOMPARE(PTBridgeSupport::timestamp(value.startTime), QDateTime::fromString(map.value("startTime").toString(), Qt::ISODate));
+            QCOMPARE(PTBridgeSupport::timestamp(value.endTime), QDateTime::fromString(map.value("endTime").toString(), Qt::ISODate));
+            QCOMPARE(value.durationSeconds, NSInteger(map.value("durationSeconds").toInt()));
+            QCOMPARE(PTBridgeSupport::string(value.date), map.value("date").toString()); QCOMPARE(bool(value.isRest), map.value("isRest").toBool());
+        }
+        QVERIFY(!timeline.sessions.firstObject.isRest && timeline.sessions.lastObject.isRest);
+        QCOMPARE([bridge monthSessions:2024 month:2].sessions.count, NSUInteger(1));
+        QCOMPARE([bridge dayTotalDuration:@"2024-02-29"].count, NSInteger(243));
+        QCOMPARE([bridge invalidSessionCount].count, NSInteger(1));
+        QVERIFY([[bridge formatDuration:3660] isEqualToString:@"1小时1分"]);
+        auto options = [bridge taskOptions:@"2024-02-29"]; QVERIFY(options.valid); QCOMPARE(options.taskOptions.count, NSUInteger(2));
+        auto rawOptions = service->getTaskOptions(QDate(2024, 2, 29));
+        for (NSUInteger i = 0; i < options.taskOptions.count; ++i) {
+            QCOMPARE(options.taskOptions[i].taskId, NSInteger(rawOptions.at(static_cast<qsizetype>(i)).toMap().value("id").toInt()));
+            QCOMPARE(PTBridgeSupport::string(options.taskOptions[i].title), rawOptions.at(static_cast<qsizetype>(i)).toMap().value("title").toString());
+        }
+        PTSessionChanges *changes = [PTSessionChanges new]; changes.taskId = b;
+        QVERIFY(changes.hasTaskId && !changes.hasDurationSeconds && !changes.hasStartTime && !changes.hasIsRest);
+        QVERIFY([bridge updateSession:100 changes:changes error:&error]);
+        auto updated = [bridge daySessions:@"2024-02-29"].sessions.firstObject;
+        QCOMPARE(updated.taskId, NSInteger(b)); QCOMPARE(updated.durationSeconds, NSInteger(243));
+        QCOMPARE(PTBridgeSupport::timestamp(updated.startTime).time().msec(), 789);
+        QCOMPARE(PTBridgeSupport::timestamp(updated.startTime).msecsTo(PTBridgeSupport::timestamp(updated.endTime)), qint64(600000));
+        // 清空使用显式哨兵；成功与失败必须和服务一致，桥接不能掩盖原服务约束失败。
+        const bool serviceCleared = service->updateSessionFields(100, QVariantMap{{QStringLiteral("taskId"), -1}});
+        const QString clearingError = service->lastError();
+        changes = [PTSessionChanges new]; changes.taskId = -1;
+        QCOMPARE(bool([bridge updateSession:100 changes:changes error:&error]), serviceCleared);
+        if (!serviceCleared) QCOMPARE(PTBridgeSupport::string(error.localizedDescription), clearingError);
+        QCOMPARE([bridge daySessions:@"2024-02-29"].sessions.firstObject.taskId, NSInteger(serviceCleared ? -1 : b));
+        changes = [PTSessionChanges new]; changes.startTime = @"2024-02-29T08:01:00.547"; changes.durationSeconds = 255;
+        QVERIFY([bridge updateSession:100 changes:changes error:&error]); updated = [bridge daySessions:@"2024-02-29"].sessions.firstObject;
+        QCOMPARE(updated.durationSeconds, NSInteger(255)); QCOMPARE(PTBridgeSupport::timestamp(updated.startTime).time().msec(), 547);
+        changes = [PTSessionChanges new]; changes.durationSeconds = 333;
+        QVERIFY([bridge updateRestSession:200 changes:changes error:&error]);
+        changes = [PTSessionChanges new]; changes.isRest = NO; changes.taskId = a;
+        QVERIFY([bridge updateRestSession:200 changes:changes error:&error]);
+        auto focusRows = [bridge daySessions:@"2024-02-29"].sessions; QCOMPARE(focusRows.count, NSUInteger(2));
+        changes = [PTSessionChanges new]; changes.isRest = YES;
+        QVERIFY([bridge updateSession:focusRows.lastObject.sessionId changes:changes error:&error]);
+        NSInteger created = [bridge addManualSession:b startTime:@"2024-02-29T10:00:00.321" durationMinutes:10 error:&error]; QVERIFY(created > 0);
+        QCOMPARE([bridge cleanupInvalidSessions:&error], NSInteger(1)); QCOMPARE([bridge invalidSessionCount].count, NSInteger(0));
+        changes = [PTSessionChanges new]; changes.durationSeconds = 1;
+        QVERIFY(![bridge updateSession:100 changes:changes error:&error]);
+        QCOMPARE(PTBridgeSupport::string(error.localizedDescription), service->lastError()); QVERIFY([bridge.lastError isEqualToString:error.localizedDescription]);
+        QVERIFY([bridge addManualSession:a startTime:@"2024-02-29T08:02:00" durationMinutes:5 error:&error] < 0);
+        QCOMPARE(PTBridgeSupport::string(error.localizedDescription), service->lastError());
+        QVERIFY(![bridge monthSessions:NSIntegerMax month:2].valid);
+        QVERIFY(![bridge updateSession:NSIntegerMax changes:changes error:&error]);
     }
 }
 QTEST_GUILESS_MAIN(PTCoreBridgeTests)
