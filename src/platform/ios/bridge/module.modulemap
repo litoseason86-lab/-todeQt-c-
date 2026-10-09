@@ -1,5 +1,7 @@
 module PTBridge {
     umbrella "."
+    // 055-P3B：支撑头含 C++ / Qt，只供 .mm 和装配层使用，不导入 Swift。
+    exclude header "PTBridgeSupport.h"
     export *
     module * { export * }
 }

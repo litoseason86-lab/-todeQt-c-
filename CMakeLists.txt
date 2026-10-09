@@ -253,6 +253,17 @@ if(IOS)
         src/platform/ios/bridge/PTLifecycleBridge.mm
         src/platform/ios/bridge/PTShellBridge.h
         src/platform/ios/bridge/PTShellBridge.mm
+        src/platform/ios/bridge/PTTaskBridge.h src/platform/ios/bridge/PTTaskBridge.mm
+        src/platform/ios/bridge/PTPendingDeletionBridge.h src/platform/ios/bridge/PTPendingDeletionBridge.mm
+        src/platform/ios/bridge/PTInteractionBridge.h src/platform/ios/bridge/PTInteractionBridge.mm
+        src/platform/ios/bridge/PTCategoryBridge.h src/platform/ios/bridge/PTCategoryBridge.mm
+        src/platform/ios/bridge/PTLogicalDayBridge.h src/platform/ios/bridge/PTLogicalDayBridge.mm
+        src/platform/ios/bridge/PTSettingsBridge.h src/platform/ios/bridge/PTSettingsBridge.mm
+        src/platform/ios/bridge/PTStatisticsBridge.h src/platform/ios/bridge/PTStatisticsBridge.mm
+        src/platform/ios/bridge/PTFocusHistoryBridge.h src/platform/ios/bridge/PTFocusHistoryBridge.mm
+        # 055-P3B：转换与非单例服务登记。
+        src/platform/ios/bridge/PTBridgeSupport.h
+        src/platform/ios/bridge/PTBridgeSupport.mm
     )
     set_source_files_properties(
         src/platform/ios/IosSyncFolder.mm
@@ -261,6 +272,16 @@ if(IOS)
         src/platform/ios/native/NativeRoot.mm
         src/platform/ios/bridge/PTLifecycleBridge.mm
         src/platform/ios/bridge/PTShellBridge.mm
+        src/platform/ios/bridge/PTTaskBridge.mm
+        src/platform/ios/bridge/PTPendingDeletionBridge.mm
+        src/platform/ios/bridge/PTInteractionBridge.mm
+        src/platform/ios/bridge/PTCategoryBridge.mm
+        src/platform/ios/bridge/PTLogicalDayBridge.mm
+        src/platform/ios/bridge/PTSettingsBridge.mm
+        src/platform/ios/bridge/PTStatisticsBridge.mm
+        src/platform/ios/bridge/PTFocusHistoryBridge.mm
+        # 055-P3B：支撑层使用 Foundation，按 ARC 管理对象。
+        src/platform/ios/bridge/PTBridgeSupport.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
     )
 endif()
@@ -451,6 +472,42 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Theme/ThemeColors.swift
         src/ui/ipad/Sources/IPadUI/Theme/WallpaperBackground.swift
         src/ui/ipad/Sources/IPadUI/Components/MarkedTextEditor.swift)
+    # 055-P3B：跨页任务动作与撤销提示状态。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/PendingDeletionStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/TaskActions.swift)
+    # 055-P3B：领域协议与适配器按层登记，页面仍保留占位。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/TaskBridge.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/PendingDeletionBridge.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/InteractionBridge.swift
+)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/TaskBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/PendingDeletionBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/InteractionBridgeAdapter.swift
+)
+    # 055-P3B：科目、逻辑日与设置协议和适配器。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/CategoryBridge.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/LogicalDayBridge.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/SettingsBridge.swift
+    )
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/CategoryBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/LogicalDayBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/SettingsBridgeAdapter.swift
+    )
+    # 055-P3B：统计与专注历史协议及适配器。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/StatisticsBridge.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/FocusHistoryBridge.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/CoreBridges.swift
+    )
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/StatisticsBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/FocusHistoryBridgeAdapter.swift
+    )
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
@@ -1288,6 +1345,34 @@ add_test(NAME PTShellBridgeTests COMMAND PTShellBridgeTests)
 set_tests_properties(PTShellBridgeTests PROPERTIES TIMEOUT 90
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
+# 055-P3B：核心数据桥接在 Mac 测试，源文件沿用废纸篓测试的服务装配。
+get_target_property(PT_CORE_TEST_SOURCES TrashServiceTests SOURCES)
+list(REMOVE_ITEM PT_CORE_TEST_SOURCES tests/TrashServiceTests.cpp)
+add_executable(PTCoreBridgeTests ${PT_CORE_TEST_SOURCES}
+    tests/PTCoreBridgeTests.mm
+    src/platform/ios/bridge/PTBridgeSupport.h src/platform/ios/bridge/PTBridgeSupport.mm
+    src/services/PendingDeletion.h src/services/PendingDeletion.cpp
+    src/services/TaskInteractionCoordinator.h src/services/TaskInteractionCoordinator.cpp)
+set_source_files_properties(tests/PTCoreBridgeTests.mm src/platform/ios/bridge/PTBridgeSupport.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(PTCoreBridgeTests PRIVATE Qt6::Core Qt6::Gui Qt6::Sql Qt6::Concurrent Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(PTCoreBridgeTests)
+add_test(NAME PTCoreBridgeTests COMMAND PTCoreBridgeTests)
+set_tests_properties(PTCoreBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
+# 055-P3B：任务、撤销删除与交互令牌接入同一个测试目标。
+target_sources(PTCoreBridgeTests PRIVATE
+        src/platform/ios/bridge/PTTaskBridge.h src/platform/ios/bridge/PTTaskBridge.mm
+        src/platform/ios/bridge/PTPendingDeletionBridge.h src/platform/ios/bridge/PTPendingDeletionBridge.mm
+        src/platform/ios/bridge/PTInteractionBridge.h src/platform/ios/bridge/PTInteractionBridge.mm
+)
+set_source_files_properties(
+    src/platform/ios/bridge/PTTaskBridge.mm
+    src/platform/ios/bridge/PTPendingDeletionBridge.mm
+    src/platform/ios/bridge/PTInteractionBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+
 # 设备间同步的云盘传输（050 阶段 3）：文件格式、文件夹读写、同步引擎。
 # 两台设备各用一个真实结构的临时库，云盘用临时文件夹模拟，可以注入延迟、乱序、坏文件和读写失败。
 add_executable(SyncTransportTests
@@ -1793,3 +1878,26 @@ set_tests_properties(
     MacGlobalHotkeyTests
     PROPERTIES TIMEOUT 30
 )
+
+# 055-P3B：科目、逻辑日与设置的 Mac 桥接测试。
+target_sources(PTCoreBridgeTests PRIVATE
+    src/platform/ios/bridge/PTCategoryBridge.h src/platform/ios/bridge/PTCategoryBridge.mm
+    src/platform/ios/bridge/PTLogicalDayBridge.h src/platform/ios/bridge/PTLogicalDayBridge.mm
+    src/platform/ios/bridge/PTSettingsBridge.h src/platform/ios/bridge/PTSettingsBridge.mm
+)
+set_source_files_properties(
+    src/platform/ios/bridge/PTCategoryBridge.mm
+    src/platform/ios/bridge/PTLogicalDayBridge.mm
+    src/platform/ios/bridge/PTSettingsBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+
+# 055-P3B：统计与专注历史加入核心桥接测试。
+target_sources(PTCoreBridgeTests PRIVATE
+    src/services/StatisticsService.h src/services/StatisticsService.cpp
+    src/platform/ios/bridge/PTStatisticsBridge.h src/platform/ios/bridge/PTStatisticsBridge.mm
+    src/platform/ios/bridge/PTFocusHistoryBridge.h src/platform/ios/bridge/PTFocusHistoryBridge.mm
+)
+set_source_files_properties(
+    src/platform/ios/bridge/PTStatisticsBridge.mm
+    src/platform/ios/bridge/PTFocusHistoryBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")

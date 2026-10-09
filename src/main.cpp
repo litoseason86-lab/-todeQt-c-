@@ -61,6 +61,7 @@
 // iOS：计时恢复策略、前后台来源与系统预约通知。
 #if defined(Q_OS_IOS)
 #include <QScreen>
+#include "platform/ios/bridge/PTBridgeSupport.h"
 #include "services/ApplicationActivity.h"
 #include "services/MonotonicClock.h"
 #include "services/PhaseAlarmCoordinator.h"
@@ -474,8 +475,12 @@ int main(int argc, char *argv[])
 
 #if defined(Q_OS_IOS)
     // 开关关闭时保持原 QML 入口；只有 iPad 原生路径等待场景连接并安装 SwiftUI 根视图。
-    if (nativeRoot)
+    if (nativeRoot) {
+        // 055-P3B：非单例仅登记弱引用，原生桥接不接管 main 栈服务的生命周期。
+        PTBridgeSupport::registerService(QStringLiteral("pendingDeletion"), &pendingDeletion);
+        PTBridgeSupport::registerService(QStringLiteral("taskInteractions"), &taskInteractions);
         installNativeRoot();
+    }
     else
 #endif
         engine.load(url);
