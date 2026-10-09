@@ -287,6 +287,7 @@ private slots:
     // 4d：同步日志
     void copyLostValueEmitsCompleteText();
     void syncLogReadsAsPlainSentencesNewestFirst();
+    void syncLogReadSeparatesEmptyFromFailure();
     void logChangesAreAnnouncedOnlyWhenSomethingWasLogged();
     void longMemoConflictsHaveShortSummariesAndCopyableOriginals();
     void memoDeletedElsewhereShowsCopyNotConflict();
@@ -1097,6 +1098,58 @@ void SyncControllerTests::copyLostValueEmitsCompleteText()
     controller.copyLostValue(text);
     QCOMPARE(copied.count(), 1);
     QCOMPARE(copied.first().first().toString(), text);
+}
+
+// 保证：读同步日志时能分清「没有日志」和「读不出来」（iPad 设置页要分开显示）：没有日志是成功的空列表、计数 0；
+// 有日志时新接口与旧接口给出同样的内容，limit 照样生效、新的在前；查询失败或数据库没开时报 Database，
+// 而旧接口仍回落为空列表 / 0，Mac 设置页的行为不变。
+void SyncControllerTests::syncLogReadSeparatesEmptyFromFailure()
+{
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+
+    const ServiceReadResult<QVariantList> empty = controller.readSyncLog();
+    QVERIFY(empty.ok());
+    QVERIFY(empty.value.isEmpty());
+    const ServiceReadResult<int> emptyCount = controller.readLogCount();
+    QVERIFY(emptyCount.ok());
+    QCOMPARE(emptyCount.value, 0);
+
+    const QString other = QStringLiteral("fedcba9876543210fedcba9876543210");
+    QVERIFY(SyncStore().logFileProblem(other, QStringLiteral("devices/%1/changes/0-1.json").arg(other),
+                                       QStringLiteral("不是 JSON")));
+    QVERIFY(SyncStore().logFileProblem(other, QStringLiteral("devices/%1/changes/0-2.json").arg(other),
+                                       QStringLiteral("读不懂")));
+    const ServiceReadResult<QVariantList> both = controller.readSyncLog();
+    QVERIFY(both.ok());
+    QCOMPARE(both.value.size(), 2);
+    QCOMPARE(both.value, controller.syncLog());
+    const ServiceReadResult<QVariantList> newest = controller.readSyncLog(1);
+    QVERIFY(newest.ok());
+    QCOMPARE(newest.value.size(), 1);
+    QCOMPARE(newest.value.first().toMap().value(QStringLiteral("title")).toString(), QStringLiteral("文件「0-2.json」"));
+    const ServiceReadResult<int> count = controller.readLogCount();
+    QVERIFY(count.ok());
+    QCOMPARE(count.value, 2);
+
+    // 查询失败：把日志表挪开。先挪回来再断言，断言失败也不会把坏表留给后面的用例。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("ALTER TABLE sync_conflict_log RENAME TO sync_conflict_log_hidden")));
+    const ServiceReadResult<QVariantList> broken = controller.readSyncLog();
+    const ServiceReadResult<int> brokenCount = controller.readLogCount();
+    const QVariantList legacyLog = controller.syncLog();
+    const int legacyCount = controller.logCount();
+    QVERIFY(query.exec(QStringLiteral("ALTER TABLE sync_conflict_log_hidden RENAME TO sync_conflict_log")));
+    QVERIFY(broken.error == ServiceReadError::Database);
+    QVERIFY(broken.value.isEmpty());
+    QVERIFY(brokenCount.error == ServiceReadError::Database);
+    QVERIFY(legacyLog.isEmpty());
+    QCOMPARE(legacyCount, 0);
+
+    // 数据库没开：同样报 Database（cleanup 里再关一次是安全的）。
+    DatabaseManager::instance()->close();
+    QVERIFY(controller.readSyncLog().error == ServiceReadError::Database);
+    QVERIFY(controller.readLogCount().error == ServiceReadError::Database);
 }
 
 void SyncControllerTests::syncLogReadsAsPlainSentencesNewestFirst()

@@ -2,7 +2,8 @@
 #include <QString>
 
 // 只读调用通过返回值区分空结果、目标不存在与数据库失败，不向无关页面发送失败信号。
-enum class ServiceReadError { None, InvalidArgument, NotFound, Database, LimitExceeded };
+// Storage：文件或文件夹读不了（例如备份文件夹没有读取权限），与数据库失败分开报。
+enum class ServiceReadError { None, InvalidArgument, NotFound, Database, LimitExceeded, Storage };
 template<typename T> struct ServiceReadResult
 {
     T value {};

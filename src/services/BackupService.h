@@ -8,6 +8,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include "ServiceReadResult.h"
+
 #include <functional>
 
 class QFutureWatcherBase;
@@ -67,6 +69,9 @@ public:
 
     Q_INVOKABLE QString backupsDirectory() const;
     Q_INVOKABLE QVariantList listBackups() const;
+    // 同 listBackups，但区分「还没有备份」（文件夹不存在或为空，成功的空列表）与文件夹读不了（报 Storage）。
+    // iPad 设置页用它；listBackups 失败时仍回落为空列表，Mac 照旧。
+    ServiceReadResult<QVariantList> readBackups() const;
     Q_INVOKABLE bool openBackupsFolder() const;
     Q_INVOKABLE QString suggestedBackupFileName() const;
     Q_INVOKABLE QString lastError() const;
