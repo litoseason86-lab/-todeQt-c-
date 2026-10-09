@@ -1,0 +1,730 @@
+[
+  {
+    "input": {
+      "op": "parseIso",
+      "args": [
+        ""
+      ]
+    },
+    "expected": null,
+    "reason": "废纸篓显示只拆 ISO 前缀，不替代服务数据校验"
+  },
+  {
+    "input": {
+      "op": "parseIso",
+      "args": [
+        null
+      ]
+    },
+    "expected": null,
+    "reason": "废纸篓显示只拆 ISO 前缀，不替代服务数据校验"
+  },
+  {
+    "input": {
+      "op": "parseIso",
+      "args": [
+        {
+          "special": "undefined"
+        }
+      ]
+    },
+    "expected": null,
+    "reason": "废纸篓显示只拆 ISO 前缀，不替代服务数据校验"
+  },
+  {
+    "input": {
+      "op": "parseIso",
+      "args": [
+        "bad"
+      ]
+    },
+    "expected": null,
+    "reason": "废纸篓显示只拆 ISO 前缀，不替代服务数据校验"
+  },
+  {
+    "input": {
+      "op": "parseIso",
+      "args": [
+        "2024-02-29"
+      ]
+    },
+    "expected": {
+      "year": 2024,
+      "month": 2,
+      "day": 29
+    },
+    "reason": "废纸篓显示只拆 ISO 前缀，不替代服务数据校验"
+  },
+  {
+    "input": {
+      "op": "parseIso",
+      "args": [
+        "2026-10-03T14:05:00"
+      ]
+    },
+    "expected": {
+      "year": 2026,
+      "month": 10,
+      "day": 3
+    },
+    "reason": "废纸篓显示只拆 ISO 前缀，不替代服务数据校验"
+  },
+  {
+    "input": {
+      "op": "pad",
+      "args": [
+        0
+      ]
+    },
+    "expected": "00",
+    "reason": "时分补零"
+  },
+  {
+    "input": {
+      "op": "pad",
+      "args": [
+        9
+      ]
+    },
+    "expected": "09",
+    "reason": "时分补零"
+  },
+  {
+    "input": {
+      "op": "pad",
+      "args": [
+        10
+      ]
+    },
+    "expected": "10",
+    "reason": "时分补零"
+  },
+  {
+    "input": {
+      "op": "dateLabel",
+      "args": [
+        "2026-10-02",
+        "2026-10-03"
+      ]
+    },
+    "expected": "10月2日",
+    "reason": "跨年或无今日补年份"
+  },
+  {
+    "input": {
+      "op": "dateLabel",
+      "args": [
+        "2025-10-02",
+        "2026-10-03"
+      ]
+    },
+    "expected": "2025年10月2日",
+    "reason": "跨年或无今日补年份"
+  },
+  {
+    "input": {
+      "op": "dateLabel",
+      "args": [
+        "2026-10-02",
+        ""
+      ]
+    },
+    "expected": "2026年10月2日",
+    "reason": "跨年或无今日补年份"
+  },
+  {
+    "input": {
+      "op": "dateLabel",
+      "args": [
+        "bad",
+        "2026-10-03"
+      ]
+    },
+    "expected": "",
+    "reason": "跨年或无今日补年份"
+  },
+  {
+    "input": {
+      "op": "dateLabelWithYear",
+      "args": [
+        "2027-01-01"
+      ]
+    },
+    "expected": "2027年1月1日",
+    "reason": "倒计时始终显示年份"
+  },
+  {
+    "input": {
+      "op": "dateLabelWithYear",
+      "args": [
+        ""
+      ]
+    },
+    "expected": "",
+    "reason": "倒计时始终显示年份"
+  },
+  {
+    "input": {
+      "op": "yesterdayOf",
+      "args": [
+        "2027-01-01"
+      ]
+    },
+    "expected": "2026-12-31",
+    "reason": "昨日按 UTC 日历回退，不受运行机器夏令时影响"
+  },
+  {
+    "input": {
+      "op": "yesterdayOf",
+      "args": [
+        "2024-03-01"
+      ]
+    },
+    "expected": "2024-02-29",
+    "reason": "昨日按 UTC 日历回退，不受运行机器夏令时影响"
+  },
+  {
+    "input": {
+      "op": "yesterdayOf",
+      "args": [
+        "2026-03-01"
+      ]
+    },
+    "expected": "2026-02-28",
+    "reason": "昨日按 UTC 日历回退，不受运行机器夏令时影响"
+  },
+  {
+    "input": {
+      "op": "yesterdayOf",
+      "args": [
+        "bad"
+      ]
+    },
+    "expected": "",
+    "reason": "昨日按 UTC 日历回退，不受运行机器夏令时影响"
+  },
+  {
+    "input": {
+      "op": "groupLabel",
+      "args": [
+        "2026-10-03",
+        "2026-10-03"
+      ]
+    },
+    "expected": "今天",
+    "reason": "删除日期分组标签遵守逻辑今日"
+  },
+  {
+    "input": {
+      "op": "groupLabel",
+      "args": [
+        "2026-10-02",
+        "2026-10-03"
+      ]
+    },
+    "expected": "昨天",
+    "reason": "删除日期分组标签遵守逻辑今日"
+  },
+  {
+    "input": {
+      "op": "groupLabel",
+      "args": [
+        "2026-10-01",
+        "2026-10-03"
+      ]
+    },
+    "expected": "10月1日",
+    "reason": "删除日期分组标签遵守逻辑今日"
+  },
+  {
+    "input": {
+      "op": "groupLabel",
+      "args": [
+        "2025-12-31",
+        "2026-10-03"
+      ]
+    },
+    "expected": "2025年12月31日",
+    "reason": "删除日期分组标签遵守逻辑今日"
+  },
+  {
+    "input": {
+      "op": "groupLabel",
+      "args": [
+        "",
+        "2026-10-03"
+      ]
+    },
+    "expected": "删除时间不详",
+    "reason": "删除日期分组标签遵守逻辑今日"
+  },
+  {
+    "input": {
+      "op": "groupLabel",
+      "args": [
+        {
+          "special": "undefined"
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "删除时间不详",
+    "reason": "删除日期分组标签遵守逻辑今日"
+  },
+  {
+    "input": {
+      "op": "timeOf",
+      "args": [
+        "2026-10-03T00:00:00"
+      ]
+    },
+    "expected": "00:00",
+    "reason": "只提取 ISO 时间前缀"
+  },
+  {
+    "input": {
+      "op": "timeOf",
+      "args": [
+        "2026-10-03 23:59:00"
+      ]
+    },
+    "expected": "23:59",
+    "reason": "只提取 ISO 时间前缀"
+  },
+  {
+    "input": {
+      "op": "timeOf",
+      "args": [
+        "bad"
+      ]
+    },
+    "expected": "",
+    "reason": "只提取 ISO 时间前缀"
+  },
+  {
+    "input": {
+      "op": "timeOf",
+      "args": [
+        null
+      ]
+    },
+    "expected": "",
+    "reason": "只提取 ISO 时间前缀"
+  },
+  {
+    "input": {
+      "op": "sessionSpan",
+      "args": [
+        {
+          "startTime": "2026-10-03T14:05:00",
+          "endTime": "2026-10-03T14:50:00"
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "10月3日 14:05–14:50",
+    "reason": "缺结束时间不留悬空连接符"
+  },
+  {
+    "input": {
+      "op": "sessionSpan",
+      "args": [
+        {
+          "startTime": "2026-10-03T14:05:00"
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "10月3日 14:05",
+    "reason": "缺结束时间不留悬空连接符"
+  },
+  {
+    "input": {
+      "op": "sessionSpan",
+      "args": [
+        {},
+        "2026-10-03"
+      ]
+    },
+    "expected": "",
+    "reason": "缺结束时间不留悬空连接符"
+  },
+  {
+    "input": {
+      "op": "blockedText",
+      "args": [
+        "corrupted"
+      ]
+    },
+    "expected": "内容已损坏，无法恢复",
+    "reason": "只有已知阻断原因有显示文案"
+  },
+  {
+    "input": {
+      "op": "blockedText",
+      "args": [
+        "needsUpdate"
+      ]
+    },
+    "expected": "需要更新应用后才能恢复",
+    "reason": "只有已知阻断原因有显示文案"
+  },
+  {
+    "input": {
+      "op": "blockedText",
+      "args": [
+        "other"
+      ]
+    },
+    "expected": "",
+    "reason": "只有已知阻断原因有显示文案"
+  },
+  {
+    "input": {
+      "op": "scheduleParts",
+      "args": [
+        {
+          "weekday": 4,
+          "startMinutes": 840,
+          "endMinutes": 940,
+          "weekStart": 1,
+          "weekEnd": 16,
+          "weekParity": 1,
+          "location": "A101"
+        }
+      ]
+    },
+    "expected": [
+      "周四 14:00–15:40",
+      "第 1–16 周",
+      "单周",
+      "A101"
+    ],
+    "reason": "废纸篓始终保留课表范围，连接符不同于页内标签"
+  },
+  {
+    "input": {
+      "op": "scheduleParts",
+      "args": [
+        {
+          "weekday": 1,
+          "weekStart": 3,
+          "weekEnd": 3,
+          "weekParity": 2
+        }
+      ]
+    },
+    "expected": [
+      "周一",
+      "第 3 周",
+      "双周"
+    ],
+    "reason": "废纸篓始终保留课表范围，连接符不同于页内标签"
+  },
+  {
+    "input": {
+      "op": "scheduleParts",
+      "args": [
+        {}
+      ]
+    },
+    "expected": [],
+    "reason": "废纸篓始终保留课表范围，连接符不同于页内标签"
+  },
+  {
+    "input": {
+      "op": "metaText",
+      "args": [
+        {
+          "kind": "task",
+          "details": {
+            "date": "2026-10-03"
+          },
+          "categoryName": "数学"
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "任务 · 10月3日 · 数学",
+    "reason": "每种类型要点与不可恢复提示，空段不产生多余分隔符"
+  },
+  {
+    "input": {
+      "op": "metaText",
+      "args": [
+        {
+          "kind": "focus_session",
+          "details": {
+            "startTime": "2026-10-03T14:05:00",
+            "endTime": "2026-10-03T14:50:00",
+            "durationSeconds": 2700
+          },
+          "categoryName": "数学"
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "专注记录 · 10月3日 14:05–14:50 · 45 分钟 · 数学",
+    "reason": "每种类型要点与不可恢复提示，空段不产生多余分隔符"
+  },
+  {
+    "input": {
+      "op": "metaText",
+      "args": [
+        {
+          "kind": "rest_session",
+          "details": {
+            "durationSeconds": 30
+          }
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "休息记录 · 0 分钟",
+    "reason": "每种类型要点与不可恢复提示，空段不产生多余分隔符"
+  },
+  {
+    "input": {
+      "op": "metaText",
+      "args": [
+        {
+          "kind": "memo",
+          "categoryName": "英语"
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "备忘录 · 英语",
+    "reason": "每种类型要点与不可恢复提示，空段不产生多余分隔符"
+  },
+  {
+    "input": {
+      "op": "metaText",
+      "args": [
+        {
+          "kind": "knowledge_gap",
+          "categoryName": "数学",
+          "details": {
+            "dueDate": "2027-01-01"
+          }
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "知识缺口 · 数学 · 计划 2027年1月1日",
+    "reason": "每种类型要点与不可恢复提示，空段不产生多余分隔符"
+  },
+  {
+    "input": {
+      "op": "metaText",
+      "args": [
+        {
+          "kind": "routine",
+          "details": {
+            "weekdays": 31
+          }
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "每日例行 · 工作日",
+    "reason": "每种类型要点与不可恢复提示，空段不产生多余分隔符"
+  },
+  {
+    "input": {
+      "op": "metaText",
+      "args": [
+        {
+          "kind": "schedule_entry",
+          "details": {
+            "weekday": 1,
+            "startMinutes": 480,
+            "endMinutes": 580
+          }
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "课表 · 周一 08:00–09:40",
+    "reason": "每种类型要点与不可恢复提示，空段不产生多余分隔符"
+  },
+  {
+    "input": {
+      "op": "metaText",
+      "args": [
+        {
+          "kind": "countdown_goal",
+          "details": {
+            "targetDate": "2027-01-01"
+          }
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "倒计时 · 2027年1月1日",
+    "reason": "每种类型要点与不可恢复提示，空段不产生多余分隔符"
+  },
+  {
+    "input": {
+      "op": "metaText",
+      "args": [
+        {
+          "kind": "task",
+          "restorable": false,
+          "blockedReason": "corrupted",
+          "categoryName": "数学"
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "任务 · 内容已损坏，无法恢复",
+    "reason": "每种类型要点与不可恢复提示，空段不产生多余分隔符"
+  },
+  {
+    "input": {
+      "op": "metaText",
+      "args": [
+        {
+          "kind": "unknown"
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "",
+    "reason": "每种类型要点与不可恢复提示，空段不产生多余分隔符"
+  },
+  {
+    "input": {
+      "op": "groupItems",
+      "args": [
+        [
+          {
+            "id": 3,
+            "deletedDate": "2026-10-03",
+            "remainingDays": 30
+          },
+          {
+            "id": 2,
+            "deletedDate": "2026-10-02",
+            "remainingDays": 29
+          },
+          {
+            "id": 1,
+            "deletedDate": "2026-10-03",
+            "remainingDays": 28
+          },
+          {
+            "id": 4
+          }
+        ],
+        "2026-10-03"
+      ]
+    },
+    "expected": [
+      {
+        "key": "2026-10-03",
+        "label": "今天",
+        "remaining": "还剩 30 天",
+        "items": [
+          {
+            "id": 3,
+            "deletedDate": "2026-10-03",
+            "remainingDays": 30
+          },
+          {
+            "id": 1,
+            "deletedDate": "2026-10-03",
+            "remainingDays": 28
+          }
+        ]
+      },
+      {
+        "key": "2026-10-02",
+        "label": "昨天",
+        "remaining": "还剩 29 天",
+        "items": [
+          {
+            "id": 2,
+            "deletedDate": "2026-10-02",
+            "remainingDays": 29
+          }
+        ]
+      },
+      {
+        "key": "",
+        "label": "删除时间不详",
+        "remaining": "",
+        "items": [
+          {
+            "id": 4
+          }
+        ]
+      }
+    ],
+    "reason": "保持服务次序，相同日期合并，剩余天数取该组第一项"
+  },
+  {
+    "input": {
+      "op": "groupItems",
+      "args": [
+        [],
+        "2026-10-03"
+      ]
+    },
+    "expected": [],
+    "reason": "空废纸篓没有分组"
+  },
+  {
+    "input": {
+      "op": "groupHeading",
+      "args": [
+        {
+          "label": "今天",
+          "items": [
+            1,
+            2
+          ]
+        }
+      ]
+    },
+    "expected": "今天 · 2",
+    "reason": "组头数量不把中文量词重复拼上"
+  },
+  {
+    "input": {
+      "op": "restoreFailureText",
+      "args": [
+        {
+          "title": "复习"
+        },
+        {
+          "error": "任务不存在"
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "没能恢复「复习」：任务不存在",
+    "reason": "冲突提示带原记录时间段，其它失败只写原因"
+  },
+  {
+    "input": {
+      "op": "restoreFailureText",
+      "args": [
+        {
+          "title": "专注",
+          "details": {
+            "startTime": "2026-10-03T14:05:00",
+            "endTime": "2026-10-03T14:50:00"
+          }
+        },
+        {
+          "error": "时间重叠",
+          "conflict": "focus"
+        },
+        "2026-10-03"
+      ]
+    },
+    "expected": "没能恢复「专注」：10月3日 14:05–14:50 时间重叠",
+    "reason": "冲突提示带原记录时间段，其它失败只写原因"
+  }
+]

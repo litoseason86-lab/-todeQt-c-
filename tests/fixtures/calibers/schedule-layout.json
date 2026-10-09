@@ -1,0 +1,445 @@
+[
+  {
+    "input": {
+      "op": "layoutDayEntries",
+      "args": [
+        []
+      ]
+    },
+    "expected": [],
+    "reason": "空网格无泳道"
+  },
+  {
+    "input": {
+      "op": "layoutDayEntries",
+      "args": [
+        null
+      ]
+    },
+    "expected": [],
+    "reason": "空输入保持空网格"
+  },
+  {
+    "input": {
+      "op": "layoutDayEntries",
+      "args": [
+        [
+          {
+            "id": 2,
+            "startMinutes": 600,
+            "endMinutes": 660
+          },
+          {
+            "id": 1,
+            "startMinutes": 480,
+            "endMinutes": 540
+          }
+        ]
+      ]
+    },
+    "expected": [
+      {
+        "entry": {
+          "id": 1,
+          "startMinutes": 480,
+          "endMinutes": 540
+        },
+        "lane": 0,
+        "laneCount": 1
+      },
+      {
+        "entry": {
+          "id": 2,
+          "startMinutes": 600,
+          "endMinutes": 660
+        },
+        "lane": 0,
+        "laneCount": 1
+      }
+    ],
+    "reason": "插入顺序不同于时间顺序，独立簇各占整宽"
+  },
+  {
+    "input": {
+      "op": "layoutDayEntries",
+      "args": [
+        [
+          {
+            "id": 2,
+            "startMinutes": 520,
+            "endMinutes": 600
+          },
+          {
+            "id": 1,
+            "startMinutes": 480,
+            "endMinutes": 560
+          }
+        ]
+      ]
+    },
+    "expected": [
+      {
+        "entry": {
+          "id": 1,
+          "startMinutes": 480,
+          "endMinutes": 560
+        },
+        "lane": 0,
+        "laneCount": 2
+      },
+      {
+        "entry": {
+          "id": 2,
+          "startMinutes": 520,
+          "endMinutes": 600
+        },
+        "lane": 1,
+        "laneCount": 2
+      }
+    ],
+    "reason": "交叠两项共享两条泳道"
+  },
+  {
+    "input": {
+      "op": "layoutDayEntries",
+      "args": [
+        [
+          {
+            "id": 3,
+            "startMinutes": 660,
+            "endMinutes": 720
+          },
+          {
+            "id": 2,
+            "startMinutes": 520,
+            "endMinutes": 600
+          },
+          {
+            "id": 1,
+            "startMinutes": 480,
+            "endMinutes": 560
+          }
+        ]
+      ]
+    },
+    "expected": [
+      {
+        "entry": {
+          "id": 1,
+          "startMinutes": 480,
+          "endMinutes": 560
+        },
+        "lane": 0,
+        "laneCount": 2
+      },
+      {
+        "entry": {
+          "id": 2,
+          "startMinutes": 520,
+          "endMinutes": 600
+        },
+        "lane": 1,
+        "laneCount": 2
+      },
+      {
+        "entry": {
+          "id": 3,
+          "startMinutes": 660,
+          "endMinutes": 720
+        },
+        "lane": 0,
+        "laneCount": 1
+      }
+    ],
+    "reason": "上午重叠不缩窄下午独立课程"
+  },
+  {
+    "input": {
+      "op": "layoutDayEntries",
+      "args": [
+        [
+          {
+            "id": 3,
+            "startMinutes": 540,
+            "endMinutes": 580
+          },
+          {
+            "id": 1,
+            "startMinutes": 480,
+            "endMinutes": 540
+          },
+          {
+            "id": 2,
+            "startMinutes": 500,
+            "endMinutes": 600
+          }
+        ]
+      ]
+    },
+    "expected": [
+      {
+        "entry": {
+          "id": 1,
+          "startMinutes": 480,
+          "endMinutes": 540
+        },
+        "lane": 0,
+        "laneCount": 2
+      },
+      {
+        "entry": {
+          "id": 2,
+          "startMinutes": 500,
+          "endMinutes": 600
+        },
+        "lane": 1,
+        "laneCount": 2
+      },
+      {
+        "entry": {
+          "id": 3,
+          "startMinutes": 540,
+          "endMinutes": 580
+        },
+        "lane": 0,
+        "laneCount": 2
+      }
+    ],
+    "reason": "连通簇中已结束泳道可复用"
+  },
+  {
+    "input": {
+      "op": "layoutDayEntries",
+      "args": [
+        [
+          {
+            "id": 2,
+            "startMinutes": 540,
+            "endMinutes": 600
+          },
+          {
+            "id": 1,
+            "startMinutes": 480,
+            "endMinutes": 540
+          }
+        ]
+      ]
+    },
+    "expected": [
+      {
+        "entry": {
+          "id": 1,
+          "startMinutes": 480,
+          "endMinutes": 540
+        },
+        "lane": 0,
+        "laneCount": 1
+      },
+      {
+        "entry": {
+          "id": 2,
+          "startMinutes": 540,
+          "endMinutes": 600
+        },
+        "lane": 0,
+        "laneCount": 1
+      }
+    ],
+    "reason": "紧邻项是两个独立簇"
+  },
+  {
+    "input": {
+      "op": "layoutDayEntries",
+      "args": [
+        [
+          {
+            "id": 1,
+            "startMinutes": 480,
+            "endMinutes": 620
+          },
+          {
+            "id": 3,
+            "startMinutes": 520,
+            "endMinutes": 600
+          },
+          {
+            "id": 2,
+            "startMinutes": 500,
+            "endMinutes": 580
+          }
+        ]
+      ]
+    },
+    "expected": [
+      {
+        "entry": {
+          "id": 1,
+          "startMinutes": 480,
+          "endMinutes": 620
+        },
+        "lane": 0,
+        "laneCount": 3
+      },
+      {
+        "entry": {
+          "id": 2,
+          "startMinutes": 500,
+          "endMinutes": 580
+        },
+        "lane": 1,
+        "laneCount": 3
+      },
+      {
+        "entry": {
+          "id": 3,
+          "startMinutes": 520,
+          "endMinutes": 600
+        },
+        "lane": 2,
+        "laneCount": 3
+      }
+    ],
+    "reason": "三项同时交叠需要三条泳道"
+  },
+  {
+    "input": {
+      "op": "layoutDayEntries",
+      "args": [
+        [
+          {
+            "id": 1,
+            "startMinutes": 480,
+            "endMinutes": 620
+          },
+          {
+            "id": 2,
+            "startMinutes": 480,
+            "endMinutes": 540
+          }
+        ]
+      ]
+    },
+    "expected": [
+      {
+        "entry": {
+          "id": 2,
+          "startMinutes": 480,
+          "endMinutes": 540
+        },
+        "lane": 0,
+        "laneCount": 2
+      },
+      {
+        "entry": {
+          "id": 1,
+          "startMinutes": 480,
+          "endMinutes": 620
+        },
+        "lane": 1,
+        "laneCount": 2
+      }
+    ],
+    "reason": "同起点按结束时间排序，短课程先分道"
+  },
+  {
+    "input": {
+      "op": "layoutVisualEntries",
+      "args": [
+        [
+          {
+            "entry": {
+              "id": 2
+            },
+            "layoutStart": 12,
+            "layoutEnd": 40,
+            "top": 12,
+            "height": 28
+          },
+          {
+            "entry": {
+              "id": 1
+            },
+            "layoutStart": 0,
+            "layoutEnd": 28,
+            "top": 0,
+            "height": 28
+          }
+        ]
+      ]
+    },
+    "expected": [
+      {
+        "entry": {
+          "id": 1
+        },
+        "top": 0,
+        "height": 28,
+        "lane": 0,
+        "laneCount": 2
+      },
+      {
+        "entry": {
+          "id": 2
+        },
+        "top": 12,
+        "height": 28,
+        "lane": 1,
+        "laneCount": 2
+      }
+    ],
+    "reason": "原始时段可以不重叠，最终扩大后的可点击区间仍必须并排"
+  },
+  {
+    "input": {
+      "op": "layoutVisualEntries",
+      "args": [
+        []
+      ]
+    },
+    "expected": [],
+    "reason": "视觉网格空数据"
+  },
+  {
+    "input": {
+      "op": "layoutEntries",
+      "args": [
+        [
+          {
+            "id": 2,
+            "a": 10,
+            "b": 20
+          },
+          {
+            "id": 1,
+            "a": 0,
+            "b": 15
+          }
+        ],
+        "a",
+        "b",
+        false
+      ]
+    },
+    "expected": [
+      {
+        "entry": {
+          "id": 1,
+          "a": 0,
+          "b": 15
+        },
+        "lane": 0,
+        "laneCount": 2
+      },
+      {
+        "entry": {
+          "id": 2,
+          "a": 10,
+          "b": 20
+        },
+        "lane": 1,
+        "laneCount": 2
+      }
+    ],
+    "reason": "通用角色接口使用显式给定的区间字段"
+  }
+]

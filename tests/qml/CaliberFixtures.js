@@ -18,6 +18,7 @@ function date(text) {
 
 // JSON 无法表示非有限数字和 undefined；显式标签只由测试解码，不改变数组表结构。
 function value(input) {
+    if (input && typeof input === "object" && input.date) return date(input.date)
     if (input && typeof input === "object" && input.special) {
         switch (input.special) {
         case "NaN": return NaN

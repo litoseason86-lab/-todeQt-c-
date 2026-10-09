@@ -1637,7 +1637,7 @@ add_executable(CaliberQuickTests tests/CaliberQuickTests.cpp
     src/services/TrashStore.h src/services/TrashStore.cpp)
 target_link_libraries(CaliberQuickTests PRIVATE Qt6::QuickTest Qt6::Quick Qt6::Sql)
 pomodoro_todo_enable_warnings(CaliberQuickTests)
-set(POMODORO_TODO_CALIBER_QML_TESTS heatmap_bands month_heatmap_bar month_cleanup_confirm today_focus_view schedule_weeks schedule_view schedule_grid_tap page_activation_failure dialog_smoke dialog_close_guard)
+set(POMODORO_TODO_CALIBER_QML_TESTS heatmap_bands month_heatmap_bar month_cleanup_confirm schedule_weeks schedule_view schedule_grid_tap page_activation_failure dialog_smoke dialog_close_guard)
 
 add_executable(MemoQuickTests tests/MemoQuickTests.cpp src/models/PlainTextLayout.h src/models/PlainTextLayout.cpp)
 target_link_libraries(MemoQuickTests PRIVATE Qt6::QuickTest Qt6::Quick)
@@ -1689,7 +1689,7 @@ foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
         FAIL_REGULAR_EXPRESSION "Unable to assign;TypeError;is not a function;ReferenceError;RangeError;Binding loop"
     )
     # 055-P2B：只有读表用例允许本地 XHR，生产与其它测试不放宽权限。
-    if(qml_test_name STREQUAL "schedule_weeks" OR qml_test_name STREQUAL "heatmap_bands" OR qml_test_name STREQUAL "caliber_shared")
+    if(qml_test_name STREQUAL "schedule_weeks" OR qml_test_name STREQUAL "heatmap_bands" OR qml_test_name STREQUAL "caliber_shared" OR qml_test_name STREQUAL "caliber_display")
         set_property(TEST QmlTest.${qml_test_name} APPEND PROPERTY ENVIRONMENT "QML_XHR_ALLOW_FILE_READ=1")
     endif()
 endforeach()

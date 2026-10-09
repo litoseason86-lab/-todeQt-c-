@@ -1,0 +1,724 @@
+[
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        0
+      ]
+    },
+    "expected": {
+      "lv": 1,
+      "min": 0,
+      "name": "起步"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        -1
+      ]
+    },
+    "expected": {
+      "lv": 1,
+      "min": 0,
+      "name": "起步"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": {
+      "lv": 1,
+      "min": 0,
+      "name": "起步"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        2.999
+      ]
+    },
+    "expected": {
+      "lv": 1,
+      "min": 0,
+      "name": "起步"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        3
+      ]
+    },
+    "expected": {
+      "lv": 2,
+      "min": 3,
+      "name": "上路"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        7.999
+      ]
+    },
+    "expected": {
+      "lv": 2,
+      "min": 3,
+      "name": "上路"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        8
+      ]
+    },
+    "expected": {
+      "lv": 3,
+      "min": 8,
+      "name": "成习"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        19.999
+      ]
+    },
+    "expected": {
+      "lv": 3,
+      "min": 8,
+      "name": "成习"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        20
+      ]
+    },
+    "expected": {
+      "lv": 4,
+      "min": 20,
+      "name": "丰收"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        39.999
+      ]
+    },
+    "expected": {
+      "lv": 4,
+      "min": 20,
+      "name": "丰收"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        40
+      ]
+    },
+    "expected": {
+      "lv": 5,
+      "min": 40,
+      "name": "燎原"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "levelOf",
+      "args": [
+        1000000000.0
+      ]
+    },
+    "expected": {
+      "lv": 5,
+      "min": 40,
+      "name": "燎原"
+    },
+    "reason": "等级阈值先取整，保留已有纯格式函数"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        0
+      ]
+    },
+    "expected": "0分钟",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "0分钟",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "0分钟",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        "bad"
+      ]
+    },
+    "expected": "NaN分钟",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        0.99
+      ]
+    },
+    "expected": "0分钟",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        1
+      ]
+    },
+    "expected": "1秒",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        59.9
+      ]
+    },
+    "expected": "59秒",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        60
+      ]
+    },
+    "expected": "1分钟",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        3599
+      ]
+    },
+    "expected": "59分钟",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        3600
+      ]
+    },
+    "expected": "1小时0分钟",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        3660
+      ]
+    },
+    "expected": "1小时1分钟",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "formatDuration",
+      "args": [
+        1000000000.0
+      ]
+    },
+    "expected": "277777小时46分钟",
+    "reason": "统计文字保留秒门槛与无空格单位，不混同 Duration"
+  },
+  {
+    "input": {
+      "op": "decimalHours",
+      "args": [
+        0
+      ]
+    },
+    "expected": "0.0",
+    "reason": "统计小数小时始终保留一位，包括零"
+  },
+  {
+    "input": {
+      "op": "decimalHours",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "0.0",
+    "reason": "统计小数小时始终保留一位，包括零"
+  },
+  {
+    "input": {
+      "op": "decimalHours",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "0.0",
+    "reason": "统计小数小时始终保留一位，包括零"
+  },
+  {
+    "input": {
+      "op": "decimalHours",
+      "args": [
+        "bad"
+      ]
+    },
+    "expected": "NaN",
+    "reason": "统计小数小时始终保留一位，包括零"
+  },
+  {
+    "input": {
+      "op": "decimalHours",
+      "args": [
+        3600
+      ]
+    },
+    "expected": "1.0",
+    "reason": "统计小数小时始终保留一位，包括零"
+  },
+  {
+    "input": {
+      "op": "decimalHours",
+      "args": [
+        5400
+      ]
+    },
+    "expected": "1.5",
+    "reason": "统计小数小时始终保留一位，包括零"
+  },
+  {
+    "input": {
+      "op": "decimalHours",
+      "args": [
+        1000000000.0
+      ]
+    },
+    "expected": "277777.8",
+    "reason": "统计小数小时始终保留一位，包括零"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        0
+      ]
+    },
+    "expected": "0",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        0
+      ]
+    },
+    "expected": "分钟",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "0",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "分钟",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "0",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "分钟",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        0.99
+      ]
+    },
+    "expected": "0",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        0.99
+      ]
+    },
+    "expected": "分钟",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        1
+      ]
+    },
+    "expected": "1",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        1
+      ]
+    },
+    "expected": "秒",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        59.9
+      ]
+    },
+    "expected": "59",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        59.9
+      ]
+    },
+    "expected": "秒",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        60
+      ]
+    },
+    "expected": "1",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        60
+      ]
+    },
+    "expected": "分钟",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        3599
+      ]
+    },
+    "expected": "59",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        3599
+      ]
+    },
+    "expected": "分钟",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        3600
+      ]
+    },
+    "expected": "1.0",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        3600
+      ]
+    },
+    "expected": "小时",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        5400
+      ]
+    },
+    "expected": "1.5",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        5400
+      ]
+    },
+    "expected": "小时",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "totalDurationValue",
+      "args": [
+        1000000000.0
+      ]
+    },
+    "expected": "277777.8",
+    "reason": "卡片数字与单位分离，秒和小时阈值一致"
+  },
+  {
+    "input": {
+      "op": "totalDurationUnit",
+      "args": [
+        1000000000.0
+      ]
+    },
+    "expected": "小时",
+    "reason": "卡片单位与数字使用相同取整口径"
+  },
+  {
+    "input": {
+      "op": "mondayOf",
+      "args": [
+        {
+          "date": "2026-09-02T12:30:00"
+        }
+      ]
+    },
+    "expected": "2026-08-31",
+    "reason": "自然周周一，不把周日推到下一周"
+  },
+  {
+    "input": {
+      "op": "mondayOf",
+      "args": [
+        {
+          "date": "2026-09-06"
+        }
+      ]
+    },
+    "expected": "2026-08-31",
+    "reason": "自然周周一，不把周日推到下一周"
+  },
+  {
+    "input": {
+      "op": "mondayOf",
+      "args": [
+        {
+          "date": "2027-01-01"
+        }
+      ]
+    },
+    "expected": "2026-12-28",
+    "reason": "自然周周一，不把周日推到下一周"
+  },
+  {
+    "input": {
+      "op": "endOfWeek",
+      "args": [
+        {
+          "date": "2026-12-28"
+        }
+      ]
+    },
+    "expected": "2027-01-03",
+    "reason": "周日可跨年"
+  },
+  {
+    "input": {
+      "op": "formatWeekRange",
+      "args": [
+        {
+          "date": "2026-12-28"
+        },
+        {
+          "date": "2027-01-03"
+        }
+      ]
+    },
+    "expected": "12.28-1.3",
+    "reason": "范围不额外补年份或单位"
+  },
+  {
+    "input": {
+      "op": "dayStart",
+      "args": [
+        {
+          "date": "2026-10-03T23:59:59"
+        }
+      ]
+    },
+    "expected": "2026-10-03",
+    "reason": "显示日期归零到本地午夜"
+  },
+  {
+    "input": {
+      "op": "weekdayLabel",
+      "args": [
+        {
+          "date": "2026-09-02"
+        },
+        0
+      ]
+    },
+    "expected": "周三",
+    "reason": "有效日期优先，坏日期按给定列序号兜底"
+  },
+  {
+    "input": {
+      "op": "weekdayLabel",
+      "args": [
+        {
+          "date": "2026-09-06"
+        },
+        0
+      ]
+    },
+    "expected": "周日",
+    "reason": "有效日期优先，坏日期按给定列序号兜底"
+  },
+  {
+    "input": {
+      "op": "weekdayLabel",
+      "args": [
+        "bad",
+        0
+      ]
+    },
+    "expected": "周一",
+    "reason": "有效日期优先，坏日期按给定列序号兜底"
+  },
+  {
+    "input": {
+      "op": "weekdayLabel",
+      "args": [
+        "bad",
+        6
+      ]
+    },
+    "expected": "周日",
+    "reason": "有效日期优先，坏日期按给定列序号兜底"
+  },
+  {
+    "input": {
+      "op": "weekdayLabel",
+      "args": [
+        "bad",
+        7
+      ]
+    },
+    "expected": "周一",
+    "reason": "有效日期优先，坏日期按给定列序号兜底"
+  }
+]

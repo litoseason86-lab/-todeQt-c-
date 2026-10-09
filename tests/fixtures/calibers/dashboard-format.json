@@ -1,0 +1,379 @@
+[
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "夜深了",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        0
+      ]
+    },
+    "expected": "夜深了",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        4
+      ]
+    },
+    "expected": "夜深了",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        5
+      ]
+    },
+    "expected": "早上好",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        10
+      ]
+    },
+    "expected": "早上好",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        11
+      ]
+    },
+    "expected": "中午好",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        12
+      ]
+    },
+    "expected": "中午好",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        13
+      ]
+    },
+    "expected": "下午好",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        17
+      ]
+    },
+    "expected": "下午好",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        18
+      ]
+    },
+    "expected": "晚上好",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        22
+      ]
+    },
+    "expected": "晚上好",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        23
+      ]
+    },
+    "expected": "夜深了",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "greetingFor",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "夜深了",
+    "reason": "问候切换点和坏输入回退"
+  },
+  {
+    "input": {
+      "op": "totalHoursText",
+      "args": [
+        0
+      ]
+    },
+    "expected": "0",
+    "reason": "100 小时前一位小数，达到阈值后取整"
+  },
+  {
+    "input": {
+      "op": "totalHoursText",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "0",
+    "reason": "100 小时前一位小数，达到阈值后取整"
+  },
+  {
+    "input": {
+      "op": "totalHoursText",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "0",
+    "reason": "100 小时前一位小数，达到阈值后取整"
+  },
+  {
+    "input": {
+      "op": "totalHoursText",
+      "args": [
+        180
+      ]
+    },
+    "expected": "0.1",
+    "reason": "100 小时前一位小数，达到阈值后取整"
+  },
+  {
+    "input": {
+      "op": "totalHoursText",
+      "args": [
+        359640
+      ]
+    },
+    "expected": "99.9",
+    "reason": "100 小时前一位小数，达到阈值后取整"
+  },
+  {
+    "input": {
+      "op": "totalHoursText",
+      "args": [
+        359999
+      ]
+    },
+    "expected": "100",
+    "reason": "100 小时前一位小数，达到阈值后取整"
+  },
+  {
+    "input": {
+      "op": "totalHoursText",
+      "args": [
+        360000
+      ]
+    },
+    "expected": "100",
+    "reason": "100 小时前一位小数，达到阈值后取整"
+  },
+  {
+    "input": {
+      "op": "totalHoursText",
+      "args": [
+        361800
+      ]
+    },
+    "expected": "101",
+    "reason": "100 小时前一位小数，达到阈值后取整"
+  },
+  {
+    "input": {
+      "op": "totalHoursText",
+      "args": [
+        1000000000000.0
+      ]
+    },
+    "expected": "277777778",
+    "reason": "100 小时前一位小数，达到阈值后取整"
+  },
+  {
+    "input": {
+      "op": "equivalentDaysText",
+      "args": [
+        0
+      ]
+    },
+    "expected": "0",
+    "reason": "天数保留一位小数并去掉末尾零"
+  },
+  {
+    "input": {
+      "op": "equivalentDaysText",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "0",
+    "reason": "天数保留一位小数并去掉末尾零"
+  },
+  {
+    "input": {
+      "op": "equivalentDaysText",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "0",
+    "reason": "天数保留一位小数并去掉末尾零"
+  },
+  {
+    "input": {
+      "op": "equivalentDaysText",
+      "args": [
+        4320
+      ]
+    },
+    "expected": "0.1",
+    "reason": "天数保留一位小数并去掉末尾零"
+  },
+  {
+    "input": {
+      "op": "equivalentDaysText",
+      "args": [
+        86400
+      ]
+    },
+    "expected": "1",
+    "reason": "天数保留一位小数并去掉末尾零"
+  },
+  {
+    "input": {
+      "op": "equivalentDaysText",
+      "args": [
+        129600
+      ]
+    },
+    "expected": "1.5",
+    "reason": "天数保留一位小数并去掉末尾零"
+  },
+  {
+    "input": {
+      "op": "equivalentDaysText",
+      "args": [
+        1000000000.0
+      ]
+    },
+    "expected": "11574.1",
+    "reason": "天数保留一位小数并去掉末尾零"
+  },
+  {
+    "input": {
+      "op": "dailyPick",
+      "args": [
+        [],
+        {
+          "date": "2026-01-01"
+        }
+      ]
+    },
+    "expected": "",
+    "reason": "年内日序从零开始，闰年与跨年轮播不读真实时钟"
+  },
+  {
+    "input": {
+      "op": "dailyPick",
+      "args": [
+        [
+          "甲",
+          "乙",
+          "丙"
+        ],
+        {
+          "date": "2026-01-01"
+        }
+      ]
+    },
+    "expected": "甲",
+    "reason": "年内日序从零开始，闰年与跨年轮播不读真实时钟"
+  },
+  {
+    "input": {
+      "op": "dailyPick",
+      "args": [
+        [
+          "甲",
+          "乙",
+          "丙"
+        ],
+        {
+          "date": "2026-01-02"
+        }
+      ]
+    },
+    "expected": "乙",
+    "reason": "年内日序从零开始，闰年与跨年轮播不读真实时钟"
+  },
+  {
+    "input": {
+      "op": "dailyPick",
+      "args": [
+        [
+          "甲",
+          "乙",
+          "丙"
+        ],
+        {
+          "date": "2024-02-29"
+        }
+      ]
+    },
+    "expected": "丙",
+    "reason": "年内日序从零开始，闰年与跨年轮播不读真实时钟"
+  },
+  {
+    "input": {
+      "op": "dailyPick",
+      "args": [
+        [
+          "甲",
+          "乙",
+          "丙"
+        ],
+        {
+          "date": "2027-01-01"
+        }
+      ]
+    },
+    "expected": "甲",
+    "reason": "年内日序从零开始，闰年与跨年轮播不读真实时钟"
+  }
+]

@@ -1,0 +1,238 @@
+[
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        0
+      ]
+    },
+    "expected": "0 分钟",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "0 分钟",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "0 分钟",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        null
+      ]
+    },
+    "expected": "0 分钟",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        "bad"
+      ]
+    },
+    "expected": "NaN 分钟",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        0.49
+      ]
+    },
+    "expected": "0 分钟",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        0.5
+      ]
+    },
+    "expected": "1 分钟",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        59.49
+      ]
+    },
+    "expected": "59 分钟",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        59.5
+      ]
+    },
+    "expected": "1 小时",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        60
+      ]
+    },
+    "expected": "1 小时",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        60.5
+      ]
+    },
+    "expected": "1 小时 1 分",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        61
+      ]
+    },
+    "expected": "1 小时 1 分",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        1000000.0
+      ]
+    },
+    "expected": "16666 小时 40 分",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "format",
+      "args": [
+        {
+          "special": "Infinity"
+        }
+      ]
+    },
+    "expected": "Infinity 小时",
+    "reason": "分钟四舍五入、非负收敛；非数字串沿用旧显示边界"
+  },
+  {
+    "input": {
+      "op": "formatSeconds",
+      "args": [
+        0
+      ]
+    },
+    "expected": "0 分钟",
+    "reason": "秒先向下取整到分钟，不把 59 秒提前显示为一分"
+  },
+  {
+    "input": {
+      "op": "formatSeconds",
+      "args": [
+        -10
+      ]
+    },
+    "expected": "0 分钟",
+    "reason": "秒先向下取整到分钟，不把 59 秒提前显示为一分"
+  },
+  {
+    "input": {
+      "op": "formatSeconds",
+      "args": [
+        {
+          "special": "NaN"
+        }
+      ]
+    },
+    "expected": "0 分钟",
+    "reason": "秒先向下取整到分钟，不把 59 秒提前显示为一分"
+  },
+  {
+    "input": {
+      "op": "formatSeconds",
+      "args": [
+        59.999
+      ]
+    },
+    "expected": "0 分钟",
+    "reason": "秒先向下取整到分钟，不把 59 秒提前显示为一分"
+  },
+  {
+    "input": {
+      "op": "formatSeconds",
+      "args": [
+        60
+      ]
+    },
+    "expected": "1 分钟",
+    "reason": "秒先向下取整到分钟，不把 59 秒提前显示为一分"
+  },
+  {
+    "input": {
+      "op": "formatSeconds",
+      "args": [
+        3599
+      ]
+    },
+    "expected": "59 分钟",
+    "reason": "秒先向下取整到分钟，不把 59 秒提前显示为一分"
+  },
+  {
+    "input": {
+      "op": "formatSeconds",
+      "args": [
+        3600
+      ]
+    },
+    "expected": "1 小时",
+    "reason": "秒先向下取整到分钟，不把 59 秒提前显示为一分"
+  },
+  {
+    "input": {
+      "op": "formatSeconds",
+      "args": [
+        3661
+      ]
+    },
+    "expected": "1 小时 1 分",
+    "reason": "秒先向下取整到分钟，不把 59 秒提前显示为一分"
+  },
+  {
+    "input": {
+      "op": "formatSeconds",
+      "args": [
+        1000000000.0
+      ]
+    },
+    "expected": "277777 小时 46 分",
+    "reason": "秒先向下取整到分钟，不把 59 秒提前显示为一分"
+  }
+]

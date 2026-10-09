@@ -1,0 +1,292 @@
+[
+  {
+    "input": {
+      "op": "formatUpdatedAt",
+      "args": [
+        {
+          "date": "2026-10-03T00:00:00"
+        },
+        {
+          "date": "2026-10-03T00:01:00"
+        }
+      ]
+    },
+    "expected": "今天 00:00",
+    "reason": "按自然日期分档，近日称呼优先于年份，无效时间为空"
+  },
+  {
+    "input": {
+      "op": "formatUpdatedAt",
+      "args": [
+        {
+          "date": "2026-10-02T23:59:00"
+        },
+        {
+          "date": "2026-10-03T00:01:00"
+        }
+      ]
+    },
+    "expected": "昨天",
+    "reason": "按自然日期分档，近日称呼优先于年份，无效时间为空"
+  },
+  {
+    "input": {
+      "op": "formatUpdatedAt",
+      "args": [
+        {
+          "date": "2026-10-01T23:59:00"
+        },
+        {
+          "date": "2026-10-03T00:01:00"
+        }
+      ]
+    },
+    "expected": "2 天前",
+    "reason": "按自然日期分档，近日称呼优先于年份，无效时间为空"
+  },
+  {
+    "input": {
+      "op": "formatUpdatedAt",
+      "args": [
+        {
+          "date": "2026-09-27T01:00:00"
+        },
+        {
+          "date": "2026-10-03T00:01:00"
+        }
+      ]
+    },
+    "expected": "6 天前",
+    "reason": "按自然日期分档，近日称呼优先于年份，无效时间为空"
+  },
+  {
+    "input": {
+      "op": "formatUpdatedAt",
+      "args": [
+        {
+          "date": "2026-09-26T23:59:00"
+        },
+        {
+          "date": "2026-10-03T00:01:00"
+        }
+      ]
+    },
+    "expected": "9月26日",
+    "reason": "按自然日期分档，近日称呼优先于年份，无效时间为空"
+  },
+  {
+    "input": {
+      "op": "formatUpdatedAt",
+      "args": [
+        {
+          "date": "2025-12-31T23:59:00"
+        },
+        {
+          "date": "2026-01-01T00:01:00"
+        }
+      ]
+    },
+    "expected": "昨天",
+    "reason": "按自然日期分档，近日称呼优先于年份，无效时间为空"
+  },
+  {
+    "input": {
+      "op": "formatUpdatedAt",
+      "args": [
+        {
+          "date": "2025-11-20T12:00:00"
+        },
+        {
+          "date": "2026-01-01"
+        }
+      ]
+    },
+    "expected": "2025年11月20日",
+    "reason": "按自然日期分档，近日称呼优先于年份，无效时间为空"
+  },
+  {
+    "input": {
+      "op": "formatUpdatedAt",
+      "args": [
+        {
+          "date": "2026-10-04T00:00:00"
+        },
+        {
+          "date": "2026-10-03T00:01:00"
+        }
+      ]
+    },
+    "expected": "10月4日",
+    "reason": "按自然日期分档，近日称呼优先于年份，无效时间为空"
+  },
+  {
+    "input": {
+      "op": "formatUpdatedAt",
+      "args": [
+        "bad",
+        {
+          "date": "2026-10-03T00:01:00"
+        }
+      ]
+    },
+    "expected": "",
+    "reason": "按自然日期分档，近日称呼优先于年份，无效时间为空"
+  },
+  {
+    "input": {
+      "op": "formatUpdatedAt",
+      "args": [
+        {
+          "date": "2026-10-03T00:01:00"
+        },
+        "bad"
+      ]
+    },
+    "expected": "",
+    "reason": "按自然日期分档，近日称呼优先于年份，无效时间为空"
+  },
+  {
+    "input": {
+      "op": "pad",
+      "args": [
+        0
+      ]
+    },
+    "expected": "00",
+    "reason": "补零保留现有显示函数边界"
+  },
+  {
+    "input": {
+      "op": "pad",
+      "args": [
+        9
+      ]
+    },
+    "expected": "09",
+    "reason": "补零保留现有显示函数边界"
+  },
+  {
+    "input": {
+      "op": "pad",
+      "args": [
+        10
+      ]
+    },
+    "expected": "10",
+    "reason": "补零保留现有显示函数边界"
+  },
+  {
+    "input": {
+      "op": "pad",
+      "args": [
+        -1
+      ]
+    },
+    "expected": "0-1",
+    "reason": "补零保留现有显示函数边界"
+  },
+  {
+    "input": {
+      "op": "characterCount",
+      "args": [
+        ""
+      ]
+    },
+    "expected": 0,
+    "reason": "当前 Qt JS Array.from 按 UTF-16 单元，表情计为两字；与产品规则冲突的已知缺陷，用户要求本次保留"
+  },
+  {
+    "input": {
+      "op": "characterCount",
+      "args": [
+        "中文"
+      ]
+    },
+    "expected": 2,
+    "reason": "当前 Qt JS Array.from 按 UTF-16 单元，表情计为两字；与产品规则冲突的已知缺陷，用户要求本次保留"
+  },
+  {
+    "input": {
+      "op": "characterCount",
+      "args": [
+        "🍅"
+      ]
+    },
+    "expected": 2,
+    "reason": "当前 Qt JS Array.from 按 UTF-16 单元，表情计为两字；与产品规则冲突的已知缺陷，用户要求本次保留"
+  },
+  {
+    "input": {
+      "op": "characterCount",
+      "args": [
+        "A🍅中"
+      ]
+    },
+    "expected": 4,
+    "reason": "当前 Qt JS Array.from 按 UTF-16 单元，表情计为两字；与产品规则冲突的已知缺陷，用户要求本次保留"
+  },
+  {
+    "input": {
+      "op": "characterCount",
+      "args": [
+        "é"
+      ]
+    },
+    "expected": 2,
+    "reason": "当前 Qt JS Array.from 按 UTF-16 单元，表情计为两字；与产品规则冲突的已知缺陷，用户要求本次保留"
+  },
+  {
+    "input": {
+      "op": "characterCount",
+      "args": [
+        "👨‍👩‍👧"
+      ]
+    },
+    "expected": 8,
+    "reason": "当前 Qt JS Array.from 按 UTF-16 单元，表情计为两字；与产品规则冲突的已知缺陷，用户要求本次保留"
+  },
+  {
+    "input": {
+      "op": "firstCharacters",
+      "args": [
+        "A🍅中",
+        2
+      ]
+    },
+    "expected": "A\ud83c",
+    "reason": "当前截取按 UTF-16 单元，可能拆开表情代理对；用户要求记录现状并留待后续修复"
+  },
+  {
+    "input": {
+      "op": "firstCharacters",
+      "args": [
+        "中文",
+        0
+      ]
+    },
+    "expected": "",
+    "reason": "当前截取按 UTF-16 单元，可能拆开表情代理对；用户要求记录现状并留待后续修复"
+  },
+  {
+    "input": {
+      "op": "firstCharacters",
+      "args": [
+        "中文",
+        10
+      ]
+    },
+    "expected": "中文",
+    "reason": "当前截取按 UTF-16 单元，可能拆开表情代理对；用户要求记录现状并留待后续修复"
+  },
+  {
+    "input": {
+      "op": "firstCharacters",
+      "args": [
+        "A🍅中",
+        -1
+      ]
+    },
+    "expected": "A🍅",
+    "reason": "当前截取按 UTF-16 单元，可能拆开表情代理对；用户要求记录现状并留待后续修复"
+  }
+]
