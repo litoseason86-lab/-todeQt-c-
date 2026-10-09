@@ -32,6 +32,12 @@ TestCase {
                 // 布局返回未定义的 top/height；JSON 不表达 undefined，统一省略这些非视觉字段。
                 actual = JSON.parse(JSON.stringify(actual))
             }
+            // 孤立代理项不是合法 Unicode 字符串，用码元数组保留已知缺陷且让 Swift 可读。
+            if (rows[i].expected && rows[i].expected.utf16) {
+                var units = []
+                for (var u = 0; u < actual.length; ++u) units.push(actual.charCodeAt(u))
+                actual = { utf16: units }
+            }
             compare(actual, Fixtures.value(rows[i].expected), name + " #" + (i + 1) + " " + input.op + "：" + rows[i].reason)
         }
     }

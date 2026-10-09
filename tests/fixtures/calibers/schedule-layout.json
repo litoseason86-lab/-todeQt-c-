@@ -441,5 +441,59 @@
       }
     ],
     "reason": "通用角色接口使用显式给定的区间字段"
+  },
+  {
+    "input": {
+      "op": "layoutDayEntries",
+      "args": [
+        [
+          {
+            "id": 3,
+            "startMinutes": 600,
+            "endMinutes": 660
+          },
+          {
+            "id": 2,
+            "startMinutes": 500,
+            "endMinutes": 600
+          },
+          {
+            "id": 1,
+            "startMinutes": 480,
+            "endMinutes": 540
+          }
+        ]
+      ]
+    },
+    "expected": [
+      {
+        "entry": {
+          "id": 1,
+          "startMinutes": 480,
+          "endMinutes": 540
+        },
+        "lane": 0,
+        "laneCount": 2
+      },
+      {
+        "entry": {
+          "id": 2,
+          "startMinutes": 500,
+          "endMinutes": 600
+        },
+        "lane": 1,
+        "laneCount": 2
+      },
+      {
+        "entry": {
+          "id": 3,
+          "startMinutes": 600,
+          "endMinutes": 660
+        },
+        "lane": 0,
+        "laneCount": 1
+      }
+    ],
+    "reason": "已重叠簇结束时，紧邻的下一课程必须恢复整宽；两条单泳道紧邻不足以区分是否清簇"
   }
 ]

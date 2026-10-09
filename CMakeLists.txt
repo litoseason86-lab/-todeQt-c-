@@ -1637,7 +1637,7 @@ add_executable(CaliberQuickTests tests/CaliberQuickTests.cpp
     src/services/TrashStore.h src/services/TrashStore.cpp)
 target_link_libraries(CaliberQuickTests PRIVATE Qt6::QuickTest Qt6::Quick Qt6::Sql)
 pomodoro_todo_enable_warnings(CaliberQuickTests)
-set(POMODORO_TODO_CALIBER_QML_TESTS heatmap_bands month_heatmap_bar month_cleanup_confirm schedule_weeks schedule_view schedule_grid_tap page_activation_failure dialog_smoke dialog_close_guard)
+set(POMODORO_TODO_CALIBER_QML_TESTS contrast_audit page_scrollbars focus_start_flow week_keyboard_entry heatmap_bands month_heatmap_bar month_cleanup_confirm schedule_weeks schedule_view schedule_grid_tap page_activation_failure dialog_smoke dialog_close_guard)
 
 add_executable(MemoQuickTests tests/MemoQuickTests.cpp src/models/PlainTextLayout.h src/models/PlainTextLayout.cpp)
 target_link_libraries(MemoQuickTests PRIVATE Qt6::QuickTest Qt6::Quick)
