@@ -520,6 +520,17 @@ if(IOS)
     target_sources(IPadUI PRIVATE
         src/ui/ipad/Sources/IPadUI/Bridges/FocusBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/GapReminderBridgeAdapter.swift)
+    # 055-P4-1：提前合并点 A 的共用任务表单、行与显示格式。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/TaskEditorStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/TaskCategoryStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/TaskCompletionNoteStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/Duration.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Components/Task/TaskRow.swift
+        src/ui/ipad/Sources/IPadUI/Components/Task/TaskCategoryPicker.swift
+        src/ui/ipad/Sources/IPadUI/Components/Task/TaskDetailSheet.swift
+        src/ui/ipad/Sources/IPadUI/Components/Task/TaskCompletionNoteSheet.swift)
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。

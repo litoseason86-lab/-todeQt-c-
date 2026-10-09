@@ -36,7 +36,10 @@ public enum TaskCompletionFocusOutcome: Equatable, Sendable {
     @discardableResult public func uncomplete(id: Int) -> Bool {
         guard shell?.snapshot.operationBlocksUI != true else { return false }
         do { try tasks.setCompleted(id: id, completed: false); return true }
-        catch { shell?.showToast(error.localizedDescription); return false }
+        catch {
+            // 撤销失败沿用 Mac 的动作提示，不把桥接技术错误替换成另一套用户文案。
+            shell?.showToast("撤销完成失败，请重试"); return false
+        }
     }
     @discardableResult public func delete(id: Int, title: String) -> Bool { pendingDeletion.requestTask(id: id, title: title) }
     public func openFocus(id: Int, title: String) {
