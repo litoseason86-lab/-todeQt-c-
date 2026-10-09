@@ -77,6 +77,7 @@ ApplicationWindow {
         backupServiceRef: typeof backupService === "undefined" ? null : backupService
         syncControllerRef: typeof syncController === "undefined" ? null : syncController
         pendingDeletionRef: typeof pendingDeletion === "undefined" ? null : pendingDeletion
+        focusSessionControllerRef: typeof focusSessionController === "undefined" ? null : focusSessionController
         scheduleServiceRef: typeof scheduleService === "undefined" ? null : scheduleService
         shortcutRegistryRef: typeof shortcutRegistry === "undefined" ? null : shortcutRegistry
         // qmllint enable unqualified

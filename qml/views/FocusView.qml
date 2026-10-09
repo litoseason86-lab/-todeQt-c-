@@ -3,13 +3,15 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import ".."
 import "../components"
-import "../LogicalDay.js" as LogicalDay
 
 Item {
     id: root
 
     property var timer: null
     property var settings: null
+    // 专注计时的业务流程（C++ FocusSessionController）：结束的分发与失败文案、超长自由专注的判断与修正都在那边，
+    // 本页只按返回的结果做界面动作。为空时（嵌入式测试）结束入口报失败、不弹超长确认，不抛错。
+    property var focusSessionControllerRef: null
     property string errorText: ""
     property var pendingSwitch: null
     property var taskManagerRef: null
@@ -163,38 +165,25 @@ Item {
                 : loaded
     }
 
-    // 可自动启动的那条：已有有效选中项优先——用户刚在今日页点过某条，
-    // 按 ⌘↩ 不该被换成别的任务；否则取今日第一个未完成的
-    // （getTodayTasks 已按未完成在前、display_order 升序排好）。
+    // 可自动启动的那条（挑谁由控制器判断，见 FocusSessionController::autoStartCandidate）：
+    // 有效的选中项优先，选中项失效则清掉选中并取逻辑今日第一个未完成任务，跳过撤销窗口里的那条。
     // 取不到时返回 null，由调用方落到选择器，不要在这里兜底成"随便挑一条"。
+    // 控制器没接上时同样返回 null（落到选择器）。
     function autoStartCandidate() {
-        if (root.selectedTaskId > 0 && root.selectedTaskTitle.length > 0) {
-            if (root.selectedTaskStillExists()) {
-                return { id: root.selectedTaskId, title: root.selectedTaskTitle }
-            }
-            // 失效了就清掉，继续找今日候选；不清的话下次按键还会再撞一次。
+        var candidate = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.autoStartCandidate(root.selectedTaskId, root.selectedTaskTitle)
+                : null
+        if (candidate && candidate.selectionStale) {
+            // 选中项已不存在：清掉，不然下次按键还会再撞一次。
             root.clearSelectedTask()
         }
         root.reloadTodayTasks()
-        for (var i = 0; i < root.todayTasks.length; ++i) {
-            var task = root.todayTasks[i]
-            if (!task.completed) {
-                return { id: Number(task.id), title: String(task.title || "") }
-            }
-        }
-        return null
+        return candidate && candidate.id > 0
+                ? { id: Number(candidate.id), title: String(candidate.title || "") } : null
     }
 
-    // 选中项是否仍指向一条存在的任务。
-    //
-    // 选中项只在少数几条路径里清空（结束番茄、选择「结束」等），在今日页删掉任务不会清它。
-    // 拿一个已删除的编号去启动，服务端 INSERT … SELECT … WHERE t.id = :taskId 插入 0 行而失败——
-    // 快捷键于是既没启动、也没展开选择器。启动前按编号回查一次。
+    // 按编号回查任务是否还在（待删任务撤销后还原选中项用）。
     // 注入的服务没有 getTask 时无从验证，保持信任，不因为验证不了就丢掉用户的选择。
-    function selectedTaskStillExists() {
-        return root.taskExists(root.selectedTaskId)
-    }
-
     function taskExists(taskId) {
         if (!root.taskManagerRef || typeof root.taskManagerRef.getTask !== "function") {
             return true
@@ -242,16 +231,12 @@ Item {
     // 「标题相同 + display_order 最大」不是唯一键，反查可能绑到另一条任务上，
     // 而绑错任务的后果是这段专注记到了别人头上，用户看不出来。
     function createTaskAndStart(title) {
-        if (!root.taskManagerRef || typeof root.taskManagerRef.createTask !== "function") {
+        if (!root.focusSessionControllerRef) {
             root.errorText = "任务服务不可用"
             return false
         }
-        var startHour = root.settings ? Number(root.settings.dayStartHour) : 4
-        var iso = LogicalDay.todayIso(startHour, new Date())
-        // 与服务端一致地去掉首尾空白：入库的是 trim 过的标题，
-        // 页面上显示的当前任务必须是同一个串，否则两处对不上。
-        var safeTitle = String(title || "").trim()
-        var newId = Number(root.taskManagerRef.createTask(safeTitle, iso, -1, 0, ""))
+        // 建在逻辑今日、标题 trim、返回编号都由控制器负责。
+        var newId = Number(root.focusSessionControllerRef.createTodayTask(title))
         if (!(newId > 0)) {
             root.errorText = "新建任务失败，请重试"
             return false
@@ -259,7 +244,8 @@ Item {
 
         root.reloadTodayTasks()
         root.selectedTaskId = newId
-        root.selectedTaskTitle = safeTitle
+        // 页面上显示的当前任务必须与入库的 trim 过的标题是同一个串，否则两处对不上。
+        root.selectedTaskTitle = String(title || "").trim()
         return root.startCurrentMode()
     }
 
@@ -370,19 +356,12 @@ Item {
     }
 
     function freeTimerWarningHours() {
-        var configured = root.settings ? Number(root.settings.freeTimerWarningHours) : 8
-        return configured >= 1 && configured <= 24 ? Math.round(configured) : 8
+        return root.focusSessionControllerRef ? root.focusSessionControllerRef.freeTimerWarningHours() : 8
     }
 
     function shouldConfirmLongFreeStop() {
-        if (!root.timer || !root.timer.hasActiveSession || Number(root.timer.mode || 0) !== 0) {
-            return false
-        }
-        if (typeof root.timer.requiresFreeFocusStopConfirmation === "function") {
-            return root.timer.requiresFreeFocusStopConfirmation(root.freeTimerWarningHours())
-        }
-        // “超过”按严格大于处理：恰好 8:00:00 不弹，8:00:01 才进入保险确认。
-        return Number(root.timer.elapsedSeconds || 0) > root.freeTimerWarningHours() * 60 * 60
+        return root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.needsLongFreeStopConfirmation() : false
     }
 
     function clearPendingLongFreeAction() {
@@ -425,17 +404,11 @@ Item {
         if (!root.timer || action.length === 0) {
             return
         }
-        var succeeded = false
-        if (recordSession) {
-            var hasCorrection = Number(correctedDurationSeconds || 0) > 0
-            succeeded = hasCorrection && typeof root.timer.stopFreeFocusWithDuration === "function"
-                    ? root.timer.stopFreeFocusWithDuration(correctedDurationSeconds)
-                    : root.timer.stopFocus()
-        } else {
-            succeeded = typeof root.timer.discardFreeFocus === "function" && root.timer.discardFreeFocus()
-        }
-        if (!succeeded) {
-            root.errorText = recordSession ? "专注保存失败，请重试" : "专注丢弃失败，请重试"
+        var outcome = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.finishLongFree(recordSession, Number(correctedDurationSeconds || 0))
+                : { ok: false, error: recordSession ? "专注保存失败，请重试" : "专注丢弃失败，请重试" }
+        if (!outcome.ok) {
+            root.errorText = outcome.error
             return
         }
         root.applyPostFreeStopAction(action, taskId, taskTitle)
@@ -496,6 +469,26 @@ Item {
         return "pomoIdle"
     }
 
+    // 为切模式 / 切任务停掉忙碌中的计时器：停表与超长自由专注的确认判断都经控制器（stopForSwitch），本页不自己判断。
+    // 先 capture 再立刻 stop，所以来源不会不一致（stateChanged 不会出现）。返回：
+    //   "stopped"     已停下，调用方继续；
+    //   "confirming"  超长自由专注，已弹确认框并记下确认后的动作 action，调用方应直接返回；
+    //   "failed"      停表失败（计时保持原样），或控制器没接上。
+    function stopBusyTimerForSwitch(action, taskId, title) {
+        if (!root.focusSessionControllerRef)
+            return "failed"
+        var outcome = root.focusSessionControllerRef.stopForSwitch(
+                    root.focusSessionControllerRef.captureSwitchSource())
+        if (outcome === "needsLongFreeConfirmation") {
+            root.requestLongFreeConfirmation(action, taskId, title)
+            return "confirming"
+        }
+        return outcome === "stopped" ? "stopped" : "failed"
+    }
+
+    // 页签切换（番茄 / 自由）。到达这里时计时器要么空闲，要么是「忙碌但没有可继承的任务」：
+    // 有可继承任务的忙碌状态在 requestModeSwitch 里已先走切换确认框（planModeSwitch）。
+    // 后一种情况没有任务可说，沿用原行为直接结束当前阶段再换页签（超长自由专注仍会先弹超长确认）。
     function toPomodoroTab(enabled) {
         enabled = enabled || !root.freeModeAvailable
         root.cancelAutoAdvance()
@@ -521,16 +514,16 @@ Item {
                 root.selectedTaskTitle = root.timer.currentTaskTitle
             }
             if (timerHasSession) {
-                if (root.shouldConfirmLongFreeStop()) {
-                    root.requestLongFreeConfirmation("toPomodoro", -1, "")
+                var stopped = root.stopBusyTimerForSwitch("toPomodoro", -1, "")
+                if (stopped === "confirming")
                     return
-                }
-                if (!root.timer.stopFocus()) {
+                if (stopped === "failed") {
                     root.errorText = "切换番茄失败，请重试"
                     return
                 }
             }
         } else {
+            // 切到自由：当前页签是番茄，忙碌的计时器是番茄段 / 番茄休息，没有超长自由专注的确认问题，直接停。
             var hasRunningTimer = root.timer.hasActiveSession || root.timer.phase !== 0
             if (hasRunningTimer && !root.timer.stopFocus()) {
                 root.errorText = "结束当前阶段失败，请重试"
@@ -543,6 +536,8 @@ Item {
         root.justCompletedPhase = 0
     }
 
+    // 外部任务选择进入番茄待机。正常入口到达时计时器已空闲（任务入口先走切换确认框并停表，
+    // 超长确认后同样已停）；直接调用时若计时器仍忙，停表照样经控制器，超长自由专注先弹确认。
     function enterPomodoroWithTask(taskId, title) {
         root.cancelAutoAdvance()
         var safeTitle = String(title || "").trim()
@@ -554,11 +549,10 @@ Item {
         // 外部任务选择是新的明确意图，必须一次性替换模式和任务缓存。
         // 不复用 toPomodoroTab：它面向页内切换，会优先保留旧缓存，正是任务错位的来源。
         if (root.timer.hasActiveSession || root.timer.phase !== 0) {
-            if (root.shouldConfirmLongFreeStop()) {
-                root.requestLongFreeConfirmation("enterPomodoro", taskId, safeTitle)
+            var stopped = root.stopBusyTimerForSwitch("enterPomodoro", taskId, safeTitle)
+            if (stopped === "confirming")
                 return true
-            }
-            if (!root.timer.stopFocus()) {
+            if (stopped === "failed") {
                 root.errorText = "切换番茄失败，请重试"
                 return false
             }
@@ -606,7 +600,8 @@ Item {
     // 把任务和模式落到本页。调用前计时器必须已经空闲。
     // autoStart 为假时停在待机：番茄模式顺带展开时长面板，让用户确认本轮时长后再手动开始。
     function applyTask(taskId, title, usePomodoro, autoStart) {
-        // 任务入口都经过这里：平台不支持自由计时时一律按番茄处理（任务页可能按记住的「自由」传进来）。
+        // 入口（MainWindow.startFocusForTask）已由控制器的 planTaskEntry 把平台规则算进 usePomodoro；
+        // 这里只防未经控制器的直接调用（嵌入式测试、确认框走完后沿用 pendingSwitch 里的值），保留作兜底。
         usePomodoro = usePomodoro || !root.freeModeAvailable
         if (!root.enterWithTask(taskId, title, usePomodoro))
             return false
@@ -621,9 +616,9 @@ Item {
     function requestEndThen(taskId, title, usePomodoro, autoStart) {
         root.cancelAutoAdvance()
         root.syncToActiveTimer()
+        // 打开确认框时记下计时器的 {taskId, mode, phase}，确认时由控制器比对。
         root.pendingSwitch = { taskId: taskId, title: title, pomodoro: usePomodoro, autoStart: autoStart,
-            sourceId: root.timer.currentTaskId, sourceMode: root.timer.mode,
-            sourcePhase: root.timer.phase }
+            source: root.focusSessionControllerRef ? root.focusSessionControllerRef.captureSwitchSource() : null }
         switchDialog.open()
         return true
     }
@@ -632,18 +627,22 @@ Item {
     // autoStart 为真对应设置里的「快速开始」：直接按给定模式计时；
     // 为假只进入待机，由用户确认模式和时长后再点开始。
     function openTask(taskId, title, usePomodoro, autoStart) {
-        if (!root.timer || taskId <= 0 || !String(title || "").trim()) {
+        // 分流（无效 / 回到当前计时 / 先确认 / 直接落地）由控制器判断，本页只按 kind 做界面动作。
+        // 控制器没接上（嵌入式测试）时只在计时器空闲时落地，忙时报错，不去猜该不该截断计时。
+        var plan = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.planTaskEntry(taskId, title)
+                : { kind: root.timer && !root.timer.hasActiveSession && root.timer.phase === 0
+                          ? "apply" : "invalid" }
+        if (!root.timer || plan.kind === "invalid") {
             // 静默返回会让任务页「开始」和分段控件都变成点了没反应；必须给出可见原因。
             root.errorText = "任务信息无效，无法开始计时"
             return false
         }
-        // 点的正是正在计时的任务：回到当前专注即可。不看记住的模式——
-        // 那是「下一次」的偏好，拿它去结束正在进行的同一任务只会让人丢掉这段计时。
-        if (root.timer.hasActiveSession && root.timer.currentTaskId === taskId) {
+        if (plan.kind === "returnToCurrent") {
             root.syncToActiveTimer()
             return true
         }
-        if (root.timer.hasActiveSession || root.timer.phase !== 0)
+        if (plan.kind === "confirmSwitch")
             return root.requestEndThen(taskId, title, usePomodoro, autoStart)
         return root.applyTask(taskId, title, usePomodoro, autoStart)
     }
@@ -658,14 +657,13 @@ Item {
 
     // 被截断的是什么由当前阶段决定，不能对休息也说「专注不足 3 分钟不会保存」。
     function switchConsequenceText() {
-        if (!root.timer)
+        if (!root.timer || !root.focusSessionControllerRef)
             return ""
-        var phase = root.timerNumber("phase", 0)
-        if (phase === 2 || phase === 3)
+        var consequence = root.focusSessionControllerRef.switchConsequence()
+        if (consequence.kind === "restKept")
             return qsTr("当前休息会保留在时间轴中。")
-        var minimum = root.timerNumber("minimumValidMinutes", 3)
-        return root.timerNumber("elapsedSeconds", 0) < minimum * 60
-                ? qsTr("当前专注不足 %1 分钟，不会保存。").arg(minimum)
+        return consequence.kind === "notSaved"
+                ? qsTr("当前专注不足 %1 分钟，不会保存。").arg(consequence.minimumMinutes)
                 : qsTr("当前专注会先保存。")
     }
 
@@ -684,21 +682,21 @@ Item {
     function confirmSwitch() {
         var intent = root.pendingSwitch
         root.pendingSwitch = null
-        if (!intent || !root.timer)
+        if (!intent || !root.timer || !root.focusSessionControllerRef)
             return
-        // 确认期间阶段可能自然结束；不能把确认误用于刚自动启动的下一段。
-        if (root.timer.currentTaskId !== intent.sourceId || root.timer.mode !== intent.sourceMode
-                || root.timer.phase !== intent.sourcePhase) {
+        // 状态是否变过、要不要超长确认、停表是否成功都由控制器判断，本页按结果做界面动作。
+        var outcome = root.focusSessionControllerRef.stopForSwitch(intent.source)
+        if (outcome === "stateChanged") {
             root.errorText = "计时状态已变化，请重新选择任务"
             return
         }
-        if (root.shouldConfirmLongFreeStop()) {
+        if (outcome === "needsLongFreeConfirmation") {
             var action = intent.autoStart ? (intent.pomodoro ? "startPomodoro" : "startFree")
                                           : (intent.pomodoro ? "enterPomodoro" : "enterFree")
             root.requestLongFreeConfirmation(action, intent.taskId, intent.title)
             return
         }
-        if (!root.timer.stopFocus()) {
+        if (outcome === "stopFailed") {
             root.errorText = "当前计时保存失败，未切换"
             return
         }
@@ -708,16 +706,15 @@ Item {
     function requestModeSwitch(usePomodoro) {
         if (usePomodoro === root.pomodoroModeSelected)
             return
-        var busy = root.timer && (root.timer.hasActiveSession || root.timer.phase !== 0)
-        var taskId = root.timer && root.timer.currentTaskId > 0 ? root.timer.currentTaskId : root.selectedTaskId
-        var title = String((root.timer && root.timer.currentTaskTitle) || root.selectedTaskTitle || "").trim()
-        // 活动任务被删除后计时器会解绑任务 ID，此时按「切换任务」处理只会原地失败。
-        // 没有可继承的任务就退回页内切换：结束当前阶段并换模式，与改动前一致。
-        if (busy && taskId > 0 && title.length > 0) {
+        // 要不要先确认、继承哪个任务由控制器判断；没接上时只换页签。
+        var plan = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.planModeSwitch(root.selectedTaskId, root.selectedTaskTitle)
+                : { kind: "pageOnly" }
+        if (plan.kind === "confirmSwitch") {
             // 切模式只换计时方式：确认结束后停在新模式待机，番茄模式可先调时长。
             // 快速开始只管任务入口，这里即使开着也不自动开始。
             // 直接走确认框而不经 openTask：同一任务正在计时会被它当成「回到当前专注」。
-            root.requestEndThen(taskId, title, usePomodoro, false)
+            root.requestEndThen(plan.taskId, plan.title, usePomodoro, false)
         } else {
             root.toPomodoroTab(usePomodoro)
         }
@@ -856,6 +853,41 @@ Item {
         }
     }
 
+    // 控制器没接上时的退化结果：当作结束失败，计时保持原样。
+    function endCurrentSession() {
+        if (root.focusSessionControllerRef) {
+            return root.focusSessionControllerRef.endCurrent()
+        }
+        return { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" }
+    }
+
+    // 把控制器的结束结果落成界面动作；MainWindow 原地结束时也走这里。
+    // needsConfirmation 在这里只弹确认框，切到专注页由调用方（MainWindow）负责。
+    function applyEndResult(outcome) {
+        if (outcome.result === "needsConfirmation") {
+            root.requestLongFreeConfirmation("end", -1, "")
+            return
+        }
+        if (outcome.result === "failed") {
+            root.errorText = outcome.error
+            return
+        }
+        if (outcome.kind === "manualRest") {
+            root.errorText = ""
+            root.manualRestEnded()
+            return
+        }
+        if (outcome.kind === "pomodoro") {
+            root.errorText = ""
+            root.justCompletedPhase = 0
+            root.clearSelectedTask()
+            root.focusEnded()
+            return
+        }
+        // free 与 none 同一收尾（none 是自动衔接的空档里点结束：没有东西要停，页面照样回到起点）。
+        root.applyPostFreeStopAction("end", -1, "")
+    }
+
     function endPomodoro() {
         root.cancelAutoAdvance()
         if (!root.timer) {
@@ -863,44 +895,25 @@ Item {
             root.focusEnded()
             return
         }
-        var shouldStopTimer = root.timer.phase !== 0 || root.timer.hasActiveSession
-
-        // 休息段不会创建数据库会话，hasActiveSession 为 false 仍必须允许结束计时器。
-        if (shouldStopTimer && !root.timer.stopFocus()) {
-            root.errorText = "番茄结束失败，请重试"
-            return
-        }
-
-        root.errorText = ""
-        root.justCompletedPhase = 0
-        // 完全结束番茄循环：连续计数归零，下一轮长休息节奏从头开始。
-        root.timer.resetPomodoroCount()
-        root.clearSelectedTask()
-        root.focusEnded()
+        // 番茄页的结束用专门入口：空档里计时器已回到自由模式，只有它能放弃整个番茄循环（连续计数归零）。
+        var outcome = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.endPomodoroCycle()
+                : { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" }
+        root.applyEndResult(outcome)
     }
 
     function endFreeFocus() {
         root.cancelAutoAdvance()
-        // 自由模式结束逻辑单点：页面按钮与沉浸层共用，避免两处复制。
-        if (root.shouldConfirmLongFreeStop()) {
-            root.requestLongFreeConfirmation("end", -1, "")
-            return
-        }
-        if (!root.timer || !root.timer.stopFocus()) {
-            root.errorText = "专注保存失败，请重试"
-            return
-        }
-        root.applyPostFreeStopAction("end", -1, "")
+        root.applyEndResult(root.endCurrentSession())
     }
 
     function endManualRest() {
-        if (!root.timer || root.timer.mode !== 2 || root.timer.phase !== 3
-                || !root.timer.stopFocus()) {
+        // 只在计时器确实处于主动休息时才结束；别的状态下收到这个入口，一律报失败而不是误停别的会话。
+        if (!root.timer || root.timer.mode !== 2 || root.timer.phase !== 3) {
             root.errorText = "结束休息失败，请重试"
             return
         }
-        root.errorText = ""
-        root.manualRestEnded()
+        root.applyEndResult(root.endCurrentSession())
     }
 
     Connections {

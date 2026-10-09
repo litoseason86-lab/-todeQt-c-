@@ -26,6 +26,7 @@
 #include "services/FocusTimer.h"
 #include "services/LogicalDayService.h"
 #include "services/NotificationService.h"
+#include "services/FocusSessionController.h"
 #include "services/PendingDeletion.h"
 #include "services/PhaseSoundService.h"
 #include "services/RoutineManager.h"
@@ -366,6 +367,9 @@ int main(int argc, char *argv[])
     // 单槽撤销删除的业务部分（计时、提交、撤销、被别处删掉时退场）；界面只管撤销条。
     // 声明在引擎之前：引擎先析构，QML 里挂着的引用不会指向已经销毁的对象。
     PendingDeletion pendingDeletion(TaskManager::instance(), FocusHistoryService::instance());
+    // 专注计时的业务流程（结束同口径、超长自由专注确认）；同样声明在引擎之前。
+    FocusSessionController focusSessionController(FocusTimer::instance(), TaskManager::instance(),
+                                                  AppSettings::instance(), &pendingDeletion);
     QQmlApplicationEngine engine;
 #if defined(Q_OS_IOS)
     const bool nativeRoot = shouldUseNativeRoot();
@@ -431,6 +435,7 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("mcpAccessController"), &mcpAccess);
 #endif
     engine.rootContext()->setContextProperty(QStringLiteral("focusTimer"), FocusTimer::instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("focusSessionController"), &focusSessionController);
     engine.rootContext()->setContextProperty(QStringLiteral("statisticsService"), StatisticsService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());

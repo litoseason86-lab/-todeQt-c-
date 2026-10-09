@@ -38,6 +38,7 @@ Item {
     // 单槽撤销删除的状态、计时、提交与撤销都在 C++ 的 PendingDeletion 里；这里只读出来给各页隐藏待删的行，
     // 界面自己只管撤销条。ref 为空（测试、没有装配）时视为没有待删项。
     property var pendingDeletionRef: null
+    property var focusSessionControllerRef: null
     readonly property int pendingDeleteTaskId: root.pendingDeletionRef ? root.pendingDeletionRef.taskId : -1
     readonly property int pendingDeleteSessionId: root.pendingDeletionRef ? root.pendingDeletionRef.sessionId : -1
     readonly property bool pendingDeleteIsRest: root.pendingDeletionRef ? root.pendingDeletionRef.sessionIsRest : false
@@ -340,12 +341,15 @@ Item {
     // 开启「快速开始」：沿用上次模式立即计时；关闭（默认）：只进入专注页待机，
     // 预选上次的模式，由用户确认模式和时长后再点开始。
     function startFocusForTask(taskId, taskTitle) {
-        var usePomodoro = root.appSettingsRef && root.appSettingsRef.lastMode === 1
+        // 记住的模式、平台是否开放自由计时、快速开始开关都由控制器合成；没接上时保守地只进待机。
+        var plan = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.planTaskEntry(taskId, taskTitle)
+                : { usePomodoro: false, autoStart: false }
         root.switchToView("focus")
-        if (root.appSettingsRef && root.appSettingsRef.quickStartEnabled)
-            focusView.startTask(taskId, taskTitle, usePomodoro)
+        if (plan.autoStart)
+            focusView.startTask(taskId, taskTitle, plan.usePomodoro)
         else
-            focusView.prepareTask(taskId, taskTitle, usePomodoro)
+            focusView.prepareTask(taskId, taskTitle, plan.usePomodoro)
     }
 
     function isManualRestActive() {
@@ -579,30 +583,34 @@ Item {
     //   "ended"      已结束（包括不足 3 分钟被丢弃的情况）；
     //   "failed"     结束失败，计时仍在继续，原因写在 focusView.errorText。
     function endFocusInPlace() {
-        var timer = root.focusTimerRef
-        if (!timer || (!timer.hasActiveSession && Number(timer.phase) === 0)) {
+        // 按计时器的真实模式分发、超长确认、失败文案、连续计数归零都在控制器里，不看专注页本地的模式选择。
+        return root.applyInPlaceEnd(root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.endCurrent()
+                : { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" })
+    }
+
+    // 把控制器的结束结果（{result, kind, discarded, error}）落成原地结束的界面动作，返回值含义同 endFocusInPlace。
+    // 仪表盘「结束」与完成任务时顺带结束专注共用。
+    function applyInPlaceEnd(outcome) {
+        if (outcome.result === "none") {
             return "none"
         }
-        if (focusView.shouldConfirmLongFreeStop()) {
+        if (outcome.result === "needsConfirmation") {
             // 确认弹窗属于专注页，要切过去才看得见；记录、丢弃或修正由弹窗走完。
             root.requestLongFreeFocusStop()
             return "confirming"
         }
-
-        // 按计时器的真实模式分发，不看专注页本地的模式选择：
-        // 用户可能从没打开过专注页，本地选择未必和计时器一致。
-        // 模式取值：0 = 自由专注，1 = 番茄，2 = 主动休息（阶段 3）。
-        root.endingFocusInPlace = true
-        if (Number(timer.mode) === 2 && Number(timer.phase) === 3) {
-            focusView.endManualRest()
-        } else if (Number(timer.mode) === 1) {
-            focusView.endPomodoro()
-        } else {
-            focusView.endFreeFocus()
+        if (outcome.result === "failed") {
+            // 原因留在专注页的错误行里，仪表盘等调用方再转成提示条。
+            focusView.errorText = outcome.error
+            return "failed"
         }
+        // 专注页的收尾（清选中、发 focusEnded / manualRestEnded）；endingFocusInPlace 让跳页处理函数留在原页。
+        root.endingFocusInPlace = true
+        focusView.cancelAutoAdvance()
+        focusView.applyEndResult(outcome)
         root.endingFocusInPlace = false
-        // 三个结束入口成功时都会清空 errorText、失败时写入原因，所以调用之后读到的就是这一次的结果。
-        return focusView.errorText.length > 0 ? "failed" : "ended"
+        return "ended"
     }
 
     // 仪表盘「结束」。
@@ -617,27 +625,28 @@ Item {
     // 不单独弹提示，改由完成提示一并说明：提示条只有一个槽，单独弹会被紧跟着的撤销条顶掉；
     // 反过来先弹撤销条，又会被它顶掉撤销入口。
     property bool endingFocusForCompletion: false
-    property bool completionFocusDiscarded: false
 
     // 用户在今日、仪表盘或本周页亲手完成了任务（复选框或「完成」弹窗），写库已经成功。
     // 完成的正是正在计时的任务时，顺带结束这段专注：任务已经做完，计时再走下去
     // 只会把之后的时间也记到它头上，此前用户得专门去专注页再点一次「结束专注」。
     function handleTaskCompletedByUser(taskId, taskTitle) {
-        var timer = root.focusTimerRef
-        var focusResult = "none"
-        // 只认「此刻正在给这个任务计时」时的这一下完成，不能写成「任务已完成就停表」：
-        // 已完成的任务允许再练一轮（专注页选择器里可以挑），那种计时不该被打断。
-        // 番茄休息阶段没有专注会话（hasActiveSession 为假），休息照常进行。
-        if (timer && timer.hasActiveSession && Number(timer.currentTaskId) === Number(taskId)) {
-            root.completionFocusDiscarded = false
-            root.endingFocusForCompletion = true
-            focusResult = root.endFocusInPlace()
-            root.endingFocusForCompletion = false
-        }
+        // 要不要结束（只认「此刻正在给这个任务计时」）由控制器判断，见 FocusSessionController::handleTaskCompleted；
+        // 控制器没接上时当作没有可结束的计时。
+        // 停表发生在这次调用里，计时器会同步发 sessionDiscarded：标志为真期间它不单独弹提示，
+        // 由下面的完成提示一并说明，所以标志必须罩住这次调用本身。
+        root.endingFocusForCompletion = true
+        var completed = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.handleTaskCompleted(taskId)
+                : { focusResult: "none", kind: "", discarded: false, error: "" }
+        root.endingFocusForCompletion = false
+        var focusResult = completed.focusResult === "none"
+                ? "none"
+                : root.applyInPlaceEnd({ result: completed.focusResult, kind: completed.kind,
+                                         discarded: completed.discarded, error: completed.error })
 
         var message = "已完成「" + String(taskTitle || "") + "」"
         if (focusResult === "ended") {
-            message += root.completionFocusDiscarded ? "，专注不足 3 分钟，未计入记录" : "，专注已结束"
+            message += completed.discarded ? "，专注不足 3 分钟，未计入记录" : "，专注已结束"
         } else if (focusResult === "failed") {
             // 失败原因同时留在专注页的错误行里，用户去专注页还能再点「结束专注」。
             message += "，但结束专注失败，计时仍在继续"
@@ -895,6 +904,7 @@ Item {
                     taskManagerRef: root.taskManagerRef
                     knowledgeGapServiceRef: root.knowledgeGapServiceRef
                     settings: root.appSettingsRef
+                    focusSessionControllerRef: root.focusSessionControllerRef
                     pageActive: root.currentView === "focus"
                     pendingDeleteTaskId: root.pendingDeleteTaskId
 
@@ -1291,7 +1301,6 @@ Item {
 
         function onSessionDiscarded(duration) {
             if (root.endingFocusForCompletion) {
-                root.completionFocusDiscarded = true
                 return
             }
             root.showToast("本次专注不足 3 分钟，未计入记录")
