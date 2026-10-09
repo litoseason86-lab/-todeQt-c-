@@ -1,4 +1,5 @@
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDate>
 #include <QDir>
 #include <QFile>
@@ -803,6 +804,7 @@ class ServiceTests : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void init();
     void cleanup();
 
@@ -1078,6 +1080,19 @@ void ServiceTests::setFocusElapsedSeconds(FocusTimer* timer, int seconds)
     if (timer->m_isRunning) {
         timer->m_runSegmentStartNsecs = timer->m_clock->nowNsecs();
     }
+}
+
+void ServiceTests::initTestCase()
+{
+    // 偏好域按构建目录区分。AppSettings 单例和各服务都用默认构造的 QSettings，macOS 上落在系统偏好目录里
+    // 一份按「组织名 + 程序名」命名的 plist。几个工作区（各自的构建目录）同时跑这个程序时会读写同一份 plist，
+    // 互相改掉对方的日界和每日目标：协调者 10-09 同时起两个进程跑三轮，两轮出现失败，单独跑全过。
+    // 组织名带上构建目录路径的摘要后各用一份；同一构建目录里仍跨运行保留，由 init / cleanup 负责清理。
+    // 不改成临时目录里的 INI：INI 每次写入都原子替换并强制刷盘，本程序会从十几秒变成一分半。
+    // 必须在第一次构造 QSettings（含 AppSettings::instance()）之前设置。
+    const QByteArray buildDirDigest = QCryptographicHash::hash(
+        QCoreApplication::applicationDirPath().toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
+    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTests-") + QString::fromLatin1(buildDirDigest));
 }
 
 void ServiceTests::init()

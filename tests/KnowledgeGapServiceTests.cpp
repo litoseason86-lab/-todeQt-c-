@@ -1,4 +1,5 @@
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDate>
 #include <QDateTime>
 #include <QScopeGuard>
@@ -128,7 +129,10 @@ void KnowledgeGapServiceTests::initTestCase()
     m_tempDir = new QTemporaryDir();
     QVERIFY(m_tempDir->isValid());
 
-    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTest"));
+    // 偏好域按构建目录区分，免得几个工作区同时跑本程序时互相改设置；原因见 ServiceTests::initTestCase。
+    const QByteArray buildDirDigest = QCryptographicHash::hash(
+        QCoreApplication::applicationDirPath().toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
+    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTest-") + QString::fromLatin1(buildDirDigest));
     QCoreApplication::setApplicationName(QStringLiteral("KnowledgeGapServiceTests"));
     m_databasePath = m_tempDir->filePath(QStringLiteral("knowledge-gap-test.sqlite"));
     QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));

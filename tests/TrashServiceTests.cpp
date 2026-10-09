@@ -1,3 +1,4 @@
+#include <QCryptographicHash>
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -29,6 +30,7 @@ class TrashServiceTests : public QObject
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void init();
     void cleanup();
 
@@ -116,6 +118,14 @@ QString today()
     return LogicalDay::today(AppSettings::instance()->dayStartHour()).toString(Qt::ISODate);
 }
 } // namespace
+
+void TrashServiceTests::initTestCase()
+{
+    // 偏好域按构建目录区分，免得几个工作区同时跑本程序时互相改设置；原因见 ServiceTests::initTestCase。
+    const QByteArray buildDirDigest = QCryptographicHash::hash(
+        QCoreApplication::applicationDirPath().toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
+    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTests-") + QString::fromLatin1(buildDirDigest));
+}
 
 void TrashServiceTests::init()
 {
