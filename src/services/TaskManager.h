@@ -145,6 +145,10 @@ public:
     ServiceReadResult<QVariantMap> readTask(int taskId) const;
     ServiceReadResult<QVariantList> readTasks(const QDate& from, const QDate& to,
                                              int completed, int limit, const QSet<int>& excluded) const;
+    // 从 start 起连续 days 天、每天「已排」多少分钟（iPad 本周计划组头与今日页副标题用）。口径与 Mac 页面一致：
+    // 当天全部任务的预计用时之和，完成与否都算，负值按 0；excludedTaskId 是撤销窗口里待删的那条
+    // （页面上已经藏起来了，不能算进去），没有时传 -1。days 只接受 1–31；日期无效或越界报 InvalidArgument。
+    ServiceReadResult<QList<int>> readPlannedMinutesByDay(const QDate& start, int days, int excludedTaskId) const;
 
     // 字段级编辑可保留历史科目文本；UI 全量表单仍使用原 updateTask 接口。
     // preserveTitle 为真时既不校验也不改写标题（title 参数被忽略）：外部只改备注、预计用时时，

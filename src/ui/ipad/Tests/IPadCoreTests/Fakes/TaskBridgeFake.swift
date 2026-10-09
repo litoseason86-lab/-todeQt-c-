@@ -9,6 +9,7 @@ import IPadCore
     var result: [TaskValue] = []
     var createdID = 1
     var routine = false
+    var planned: [Int] = []
     var error: Error?
     var calls: [(name: String, ids: [Int], text: [String], numbers: [Int])] = []
     var changes: [(Int, TaskChanges)] = []
@@ -33,4 +34,7 @@ import IPadCore
     func moveToToday(ids: [Int]) throws { try record("moveToday", ids: ids) }
     func duplicate(id: Int, date: String) throws { try record("duplicate", ids: [id], text: [date]) }
     func isRoutineGenerated(id: Int) -> Bool { calls.append(("routine", [id], [], [])); return routine }
+    func plannedMinutes(from start: String, days: Int, excluding taskID: Int) throws -> [Int] {
+        try record("plannedMinutes", ids: [taskID], text: [start], numbers: [days]); return planned
+    }
 }

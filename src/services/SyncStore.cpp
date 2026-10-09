@@ -2824,7 +2824,13 @@ bool SyncStore::logFileProblem(const QString& device, const QString& file, const
 
 QList<SyncStore::LogEntry> SyncStore::syncLog(int limit) const
 {
-    QList<LogEntry> entries;
+    return readSyncLog(limit).value;
+}
+
+ServiceReadResult<QList<SyncStore::LogEntry>> SyncStore::readSyncLog(int limit) const
+{
+    ServiceReadResult<QList<LogEntry>> result;
+    QList<LogEntry>& entries = result.value;
     QSqlQuery query(database());
     query.prepare(QStringLiteral(
         "SELECT id, logged_at, kind, tbl, record_label, field, lost_value, kept_value, lost_device, kept_device, "
@@ -2832,7 +2838,8 @@ QList<SyncStore::LogEntry> SyncStore::syncLog(int limit) const
     query.bindValue(QStringLiteral(":limit"), qMax(0, limit));
     if (!query.exec()) {
         qWarning() << "Failed to read sync log:" << query.lastError().text();
-        return entries;
+        result.error = ServiceReadError::Database;
+        return result;
     }
     const QString me = deviceId();
     while (query.next()) {
@@ -2863,14 +2870,24 @@ QList<SyncStore::LogEntry> SyncStore::syncLog(int limit) const
         entry.keptHere = !keptDevice.isEmpty() && keptDevice == me;
         entries.append(entry);
     }
-    return entries;
+    return result;
 }
 
 int SyncStore::syncLogCount() const
 {
+    return readSyncLogCount().value;
+}
+
+ServiceReadResult<int> SyncStore::readSyncLogCount() const
+{
+    ServiceReadResult<int> result;
     QSqlQuery query(database());
-    return query.exec(QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log")) && query.next()
-        ? query.value(0).toInt() : 0;
+    if (query.exec(QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log")) && query.next()) {
+        result.value = query.value(0).toInt();
+    } else {
+        result.error = ServiceReadError::Database;
+    }
+    return result;
 }
 
 qint64 SyncStore::latestSyncLogId() const

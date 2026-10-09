@@ -51,6 +51,7 @@ private slots:
     void taskReadsPreserveFieldsAndPartialChanges();
     void taskFailuresAreCollectedOnce();
     void taskWriteAndReadEntryPoints();
+    void taskPlannedMinutesMatchesService();
     void pendingDeletionSignalsAndState();
     void interactionTokenOwnsRegistration();
     void coreSignalsReturnToMainThreadAndDisconnect();
@@ -242,6 +243,38 @@ void PTCoreBridgeTests::taskWriteAndReadEntryPoints() {
         QVERIFY([bridge duplicateTask:a date:iso error:&error]);
         QCOMPARE([bridge todayTasks].tasks.count, NSUInteger(1));
         QVERIFY(![bridge isRoutineGeneratedTask:a]);
+    }
+}
+// 产品保证：「已排」分钟逐天原样投影服务结果（加总口径在 C++），待删的那条按调用方给的编号排除；
+// 参数不合法与读取失败都抛错且不给半份数据，两种错误文案不同。
+void PTCoreBridgeTests::taskPlannedMinutesMatchesService() {
+    @autoreleasepool {
+        PTTaskBridge *bridge = [PTTaskBridge new]; NSError *error = nil;
+        const QDate monday(2026, 7, 13);
+        NSInteger a = [bridge createTask:@"甲" date:PTBridgeSupport::date(monday) categoryId:-1 estimatedMinutes:25 notes:@"" error:&error];
+        NSInteger b = [bridge createTask:@"乙" date:PTBridgeSupport::date(monday.addDays(2)) categoryId:-1 estimatedMinutes:40 notes:@"" error:&error];
+        NSInteger c = [bridge createTask:@"丙" date:PTBridgeSupport::date(monday.addDays(2)) categoryId:-1 estimatedMinutes:15 notes:@"" error:&error];
+        QVERIFY(a > 0 && b > 0 && c > 0 && error == nil);
+        NSArray<NSNumber *> *week = [bridge plannedMinutesFrom:PTBridgeSupport::date(monday) days:7 excludingTask:b error:&error];
+        QVERIFY(week != nil && error == nil);
+        const auto service = TaskManager::instance()->readPlannedMinutesByDay(monday, 7, static_cast<int>(b));
+        QVERIFY(service.ok());
+        QCOMPARE(qsizetype(week.count), service.value.size());
+        for (NSUInteger i = 0; i < week.count; ++i)
+            QCOMPARE(week[i].intValue, service.value.at(static_cast<qsizetype>(i)));
+        QCOMPARE(week[2].intValue, 15);
+        QCOMPARE([bridge plannedMinutesFrom:PTBridgeSupport::date(monday.addDays(2)) days:1 excludingTask:-1 error:&error][0].intValue, 55);
+
+        error = nil;
+        QVERIFY([bridge plannedMinutesFrom:@"2026-7-13" days:7 excludingTask:-1 error:&error] == nil);
+        QVERIFY([error.localizedDescription isEqualToString:@"日期范围无效"]);
+        error = nil;
+        QVERIFY([bridge plannedMinutesFrom:PTBridgeSupport::date(monday) days:NSInteger(std::numeric_limits<int>::max()) + 1 excludingTask:-1 error:&error] == nil);
+        QVERIFY(error != nil);
+        error = nil;
+        DatabaseManager::instance()->close();
+        QVERIFY([bridge plannedMinutesFrom:PTBridgeSupport::date(monday) days:7 excludingTask:-1 error:&error] == nil);
+        QVERIFY([error.localizedDescription isEqualToString:@"读取已排时长失败"]);
     }
 }
 // 产品保证：撤销槽状态与退场、失败信号原样投影，取消不触库，提交成功后只退场一次。

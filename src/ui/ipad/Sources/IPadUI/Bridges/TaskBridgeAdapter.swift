@@ -56,4 +56,7 @@ import PTBridge
     func moveToToday(ids: [Int]) throws { try bridge.moveTasks(toToday: ids.map { NSNumber(value: $0) }) }
     func duplicate(id: Int, date: String) throws { try bridge.duplicateTask(id, date: date) }
     func isRoutineGenerated(id: Int) -> Bool { bridge.isRoutineGeneratedTask(id) }
+    func plannedMinutes(from start: String, days: Int, excluding taskID: Int) throws -> [Int] {
+        try bridge.plannedMinutes(from: start, days: days, excludingTask: taskID).map(\.intValue)
+    }
 }

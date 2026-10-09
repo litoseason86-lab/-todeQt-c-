@@ -153,6 +153,16 @@ TestCase {
         property var finishCalls: []
 
         function freeTimerWarningHours() { return warningHours }
+        // 长休息与自动衔接的判定表在 C++（FocusSessionControllerTests），替身照同一口径读设置与计时器替身。
+        function nextBreakMinutes(selected) {
+            var interval = appSettings.longBreakInterval
+            var done = focusTimer.completedPomodoros
+            return appSettings.longBreakEnabled && interval > 0 && done > 0 && done % interval === 0
+                    ? appSettings.longBreakMinutes : selected
+        }
+        function autoAdvanceAfter(phase) {
+            return (phase === 1 && appSettings.autoStartBreak) || (phase === 2 && appSettings.autoStartNextPomodoro)
+        }
         function needsLongFreeStopConfirmation() { return needsConfirmation }
 
         function endCurrent() {

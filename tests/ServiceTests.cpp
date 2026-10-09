@@ -1,4 +1,5 @@
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDate>
 #include <QDir>
 #include <QFile>
@@ -803,6 +804,7 @@ class ServiceTests : public QObject {
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void init();
     void cleanup();
 
@@ -875,6 +877,7 @@ private slots:
     void timelineRecordCorrectionKeepsIdentityAndRollsBack();
     void restOccupiesOnlyItsMeasuredDuration();
     void attributionOnlyEditSkipsOverlapCheck();
+    void clearingSessionTaskLeavesItUnlinked();
     void taskOptionsPreferSelectedDateAndAreCapped();
     void deleteSessionRemovesItAndRollsStatsBack();
     void manualWriteRefusesToTouchRunningSession();
@@ -911,6 +914,7 @@ private slots:
     void weekComparisonRangeQueryEqualsPerDaySum();
     void weekStatsGroupedDurationsEqualPerDayQueries();
     void getWeekTasksReturnsInclusiveRangeAndRequiredOrder();
+    void plannedMinutesByDayFollowsWeekPageRule();
     void getMonthTasksReturnsInclusiveMonthRange();
     void getMonthTasksRejectsInvalidMonth();
     void getEffectiveDaysFiltersInvalidSessions();
@@ -1077,6 +1081,19 @@ void ServiceTests::setFocusElapsedSeconds(FocusTimer* timer, int seconds)
     if (timer->m_isRunning) {
         timer->m_runSegmentStartNsecs = timer->m_clock->nowNsecs();
     }
+}
+
+void ServiceTests::initTestCase()
+{
+    // 偏好域按构建目录区分。AppSettings 单例和各服务都用默认构造的 QSettings，macOS 上落在系统偏好目录里
+    // 一份按「组织名 + 程序名」命名的 plist。几个工作区（各自的构建目录）同时跑这个程序时会读写同一份 plist，
+    // 互相改掉对方的日界和每日目标：协调者 10-09 同时起两个进程跑三轮，两轮出现失败，单独跑全过。
+    // 组织名带上构建目录路径的摘要后各用一份；同一构建目录里仍跨运行保留，由 init / cleanup 负责清理。
+    // 不改成临时目录里的 INI：INI 每次写入都原子替换并强制刷盘，本程序会从十几秒变成一分半。
+    // 必须在第一次构造 QSettings（含 AppSettings::instance()）之前设置。
+    const QByteArray buildDirDigest = QCryptographicHash::hash(
+        QCoreApplication::applicationDirPath().toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
+    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTests-") + QString::fromLatin1(buildDirDigest));
 }
 
 void ServiceTests::init()
@@ -9199,6 +9216,59 @@ void ServiceTests::attributionOnlyEditSkipsOverlapCheck()
     QVERIFY(history->lastError().contains(QStringLiteral("已有专注记录")));
 }
 
+// 保证：修改记录时选「不关联任务」能保存——记录变成未关联，科目快照清成空串，原任务不再计入，
+// 番茄完成事实保留；休息转专注时显式选「不关联任务」同样能保存。
+// 曾经的缺陷：清空时科目名和颜色按 NULL 写入，撞上 category_name_snapshot 的 NOT NULL，整条回滚。
+void ServiceTests::clearingSessionTaskLeavesItUnlinked()
+{
+    auto* history = FocusHistoryService::instance();
+    const QDate day = QDate::currentDate().addDays(-2);
+    const int task = insertTaskRow(QStringLiteral("原任务"), day, QStringLiteral("数学"));
+    const QDateTime start(day, QTime(9, 0));
+    const int id = history->addManualSession(task, start, 30);
+    QVERIFY(id > 0);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("UPDATE focus_sessions SET mode = 1, pomodoro_completed = 1")));
+    // 前提：清空之前带着任务和非空的科目快照，且计入原任务。
+    QVERIFY(query.exec(QStringLiteral("SELECT task_id, category_name_snapshot FROM focus_sessions WHERE id = %1").arg(id)));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), task);
+    QCOMPARE(query.value(1).toString(), QStringLiteral("数学"));
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(task), 30);
+
+    QVERIFY2(history->updateSessionFields(id, {{QStringLiteral("taskId"), -1}}), qPrintable(history->lastError()));
+
+    QVERIFY(query.exec(QStringLiteral(
+        "SELECT task_id IS NULL, category_id_snapshot IS NULL, category_name_snapshot, category_color_snapshot, "
+        "pomodoro_completed, duration FROM focus_sessions WHERE id = %1").arg(id)));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toBool(), true);
+    QCOMPARE(query.value(1).toBool(), true);
+    QCOMPARE(query.value(2).toString(), QString());
+    QVERIFY(!query.value(2).isNull());
+    QCOMPARE(query.value(3).toString(), QString());
+    QVERIFY(!query.value(3).isNull());
+    QCOMPARE(query.value(4).toInt(), 1);
+    QCOMPARE(query.value(5).toInt(), 30 * 60);
+    QCOMPARE(TaskManager::instance()->getFocusedMinutesForTask(task), 0);
+
+    // 休息转专注、显式不关联任务：走同一段清空逻辑。
+    const QDateTime restStart(day, QTime(14, 0));
+    query.prepare(QStringLiteral("INSERT INTO rest_sessions (start_time, end_time, duration, manual) "
+                                 "VALUES (:start, :end, 600, 1)"));
+    query.bindValue(QStringLiteral(":start"), restStart.toString(Qt::ISODateWithMs));
+    query.bindValue(QStringLiteral(":end"), restStart.addSecs(600).toString(Qt::ISODateWithMs));
+    QVERIFY(query.exec());
+    const int restId = query.lastInsertId().toInt();
+    QVERIFY(restId > 0);
+    QVERIFY2(history->updateRestSessionFields(restId, {{QStringLiteral("isRest"), false}, {QStringLiteral("taskId"), -1}}),
+             qPrintable(history->lastError()));
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE task_id IS NULL "
+                                      "AND category_name_snapshot = '' AND duration = 600")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+}
+
 void ServiceTests::taskOptionsPreferSelectedDateAndAreCapped()
 {
     auto* history = FocusHistoryService::instance();
@@ -9280,4 +9350,42 @@ void ServiceTests::weeklySubjectMinutesAddUpToTotal()
     QCOMPARE(subjectByName(review.value(QStringLiteral("subjects")).toList(), QStringLiteral("政治"))
                  .value(QStringLiteral("currentSeconds")).toInt(),
              230);
+}
+
+// 保证：「已排」分钟按天给出，口径与 Mac 本周计划、今日页一致——当天全部任务的预计用时之和，完成与否都算，
+// 负值按 0；撤销窗口里待删的那条不算；范围外的日子不混进来，没有任务的日子是 0；参数不合法与数据库失败分开报。
+void ServiceTests::plannedMinutesByDayFollowsWeekPageRule()
+{
+    auto* tasks = TaskManager::instance();
+    const QDate monday(2026, 7, 13);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    const auto withEstimate = [&query](int id, int minutes) {
+        query.prepare(QStringLiteral("UPDATE tasks SET estimated_minutes = :minutes WHERE id = :id"));
+        query.bindValue(QStringLiteral(":minutes"), minutes);
+        query.bindValue(QStringLiteral(":id"), id);
+        return query.exec() && query.numRowsAffected() == 1;
+    };
+    // 周一：未完成 30 + 已完成 45 + 旧数据里的负值 -10（按 0 算）。
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("一"), monday), 30));
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("二"), monday, QString(), true), 45));
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("负"), monday), -10));
+    // 周三：20 + 待删的 40（不算）。
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("三"), monday.addDays(2)), 20));
+    const int pending = insertTaskRow(QStringLiteral("待删"), monday.addDays(2));
+    QVERIFY(withEstimate(pending, 40));
+    // 范围外：上周日、下周一。
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("前"), monday.addDays(-1)), 100));
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("后"), monday.addDays(7)), 100));
+
+    const ServiceReadResult<QList<int>> week = tasks->readPlannedMinutesByDay(monday, 7, pending);
+    QVERIFY(week.ok());
+    QCOMPARE(week.value, (QList<int>{75, 0, 20, 0, 0, 0, 0}));
+    // 没有待删项时那条照算。
+    QCOMPARE(tasks->readPlannedMinutesByDay(monday.addDays(2), 1, -1).value, QList<int>{60});
+
+    QVERIFY(tasks->readPlannedMinutesByDay(QDate(), 7, -1).error == ServiceReadError::InvalidArgument);
+    QVERIFY(tasks->readPlannedMinutesByDay(monday, 0, -1).error == ServiceReadError::InvalidArgument);
+    QVERIFY(tasks->readPlannedMinutesByDay(monday, 32, -1).error == ServiceReadError::InvalidArgument);
+    DatabaseManager::instance()->close();
+    QVERIFY(tasks->readPlannedMinutesByDay(monday, 7, -1).error == ServiceReadError::Database);
 }

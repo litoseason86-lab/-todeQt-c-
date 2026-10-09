@@ -43,6 +43,34 @@ int FocusSessionController::freeTimerWarningHours() const
     return (configured >= 1 && configured <= 24) ? qRound(configured) : kDefaultWarningHours;
 }
 
+int FocusSessionController::nextBreakMinutes(int selectedBreakMinutes) const
+{
+    if (!m_settings || !m_timer || !m_settings->longBreakEnabled()) {
+        return selectedBreakMinutes;
+    }
+    const int interval = m_settings->longBreakInterval();
+    const int completed = m_timer->completedPomodoros();
+    // 间隔在设置层已限定为 2–8，这里仍防一手 0，免得取模除零。
+    if (interval > 0 && completed > 0 && completed % interval == 0) {
+        return m_settings->longBreakMinutes();
+    }
+    return selectedBreakMinutes;
+}
+
+bool FocusSessionController::autoAdvanceAfter(int completedPhase) const
+{
+    if (!m_settings) {
+        return false;
+    }
+    if (completedPhase == FocusTimer::WorkPhase) {
+        return m_settings->autoStartBreak();
+    }
+    if (completedPhase == FocusTimer::BreakPhase) {
+        return m_settings->autoStartNextPomodoro();
+    }
+    return false;
+}
+
 bool FocusSessionController::needsLongFreeStopConfirmation() const
 {
     if (!m_timer || !m_timer->hasActiveSession() || m_timer->mode() != FocusTimer::FreeMode) {

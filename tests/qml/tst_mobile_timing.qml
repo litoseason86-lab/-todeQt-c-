@@ -128,6 +128,24 @@ TestCase {
         }
     }
 
+    // 专注控制器替身：只给本文件流程用到的分支，口径同 C++（判定表在 FocusSessionControllerTests）。
+    // 自动衔接的判定在控制器里，专注页不接控制器就不会衔接，所以这里必须接上。
+    QtObject {
+        id: controllerStub
+
+        function planTaskEntry(taskId, title) {
+            var busy = timerStub.hasActiveSession || timerStub.phase !== 0
+            return { kind: busy ? "confirmSwitch" : "apply", usePomodoro: settingsStub.lastMode === 1,
+                     autoStart: true, title: String(title || "").trim() }
+        }
+        function nextBreakMinutes(selected) { return selected }
+        function autoAdvanceAfter(phase) {
+            return (phase === 1 && settingsStub.autoStartBreak) || (phase === 2 && settingsStub.autoStartNextPomodoro === true)
+        }
+        function freeTimerWarningHours() { return 8 }
+        function needsLongFreeStopConfirmation() { return false }
+    }
+
     Component {
         id: focusViewComponent
 
@@ -137,6 +155,7 @@ TestCase {
             timer: timerStub
             settings: settingsStub
             taskManagerRef: taskStub
+            focusSessionControllerRef: controllerStub
         }
     }
 

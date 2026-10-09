@@ -64,4 +64,16 @@ import XCTest
         XCTAssertTrue(tasks.calls.isEmpty); XCTAssertEqual(blockedShell.selection, .dashboard)
         shell.retireToast()
     }
+    // 产品保证：撤销完成失败与 Mac 文案一致，不把桥接的技术错误直接交给用户。
+    func testFailedUncompleteUsesMacMessageForDirectAndToastActions() {
+        let (shell, tasks, actions) = fixture()
+        XCTAssertTrue(actions.complete(id: 7, title: "甲"))
+        tasks.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "数据库技术错误"])
+        shell.triggerToastAction()
+        XCTAssertEqual(shell.toast?.message, "撤销完成失败，请重试")
+        XCTAssertEqual(tasks.calls.last?.numbers, [0])
+        XCTAssertFalse(actions.uncomplete(id: 7))
+        XCTAssertEqual(shell.toast?.message, "撤销完成失败，请重试")
+    }
+
 }

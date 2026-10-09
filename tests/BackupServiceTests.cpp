@@ -1,5 +1,6 @@
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSqlError>
@@ -128,6 +129,7 @@ private slots:
     void init();
     void cleanup();
 
+    void readBackupsSeparatesNoneFromUnreadableFolder();
     void createBackupProducesSingleFileNoTemp();
     void backupRejectsRuntimeProtectedDestinations();
     void backupCapturesAllBusinessTables();
@@ -1546,6 +1548,58 @@ void BackupServiceTests::version21BackupBrokenTrashSchemaIsRejected()
 }
 
 QTEST_MAIN(BackupServiceTests)
+// 保证：读备份列表时能分清「还没有备份」和「备份文件夹读不了」（iPad 设置页要分开显示）：文件夹不存在是成功的空列表；
+// 有备份时新旧接口给出同样的列表，只列备份文件、新的在前；文件夹没有读取权限或者是个普通文件时报 Storage，
+// 而旧接口仍回落为空列表，Mac 设置页的行为不变。
+void BackupServiceTests::readBackupsSeparatesNoneFromUnreadableFolder()
+{
+    BackupService* service = BackupService::instance();
+    const QString folder = backupsDir();
+    QVERIFY(!QFileInfo::exists(folder));
+    const ServiceReadResult<QVariantList> none = service->readBackups();
+    QVERIFY(none.ok());
+    QVERIFY(none.value.isEmpty());
+
+    // 先建较旧的 a、再建较新的 b：期望顺序 b、a 与文件名顺序、创建顺序都相反。
+    QVERIFY(QDir().mkpath(folder));
+    const auto writeBackup = [&folder](const QString& name, const QDateTime& modified) {
+        QFile file(QDir(folder).filePath(name));
+        // 先把内容刷到磁盘再改时间：留在缓冲里的话，关文件时的写入会把修改时间刷回「现在」。
+        if (!file.open(QIODevice::WriteOnly) || file.write("x") != 1 || !file.flush())
+            return false;
+        return file.setFileTime(modified, QFileDevice::FileModificationTime);
+    };
+    const QDateTime now = QDateTime::currentDateTime();
+    QVERIFY(writeBackup(QStringLiteral("a") + service->backupFileExtension(), now.addSecs(-7200)));
+    QVERIFY(writeBackup(QStringLiteral("b") + service->backupFileExtension(), now.addSecs(-3600)));
+    QVERIFY(writeBackup(QStringLiteral("notes.txt"), now));
+    const ServiceReadResult<QVariantList> listed = service->readBackups();
+    QVERIFY(listed.ok());
+    QCOMPARE(listed.value.size(), 2);
+    QCOMPARE(listed.value.at(0).toMap().value(QStringLiteral("name")).toString(),
+             QStringLiteral("b") + service->backupFileExtension());
+    QCOMPARE(listed.value.at(1).toMap().value(QStringLiteral("name")).toString(),
+             QStringLiteral("a") + service->backupFileExtension());
+    QCOMPARE(listed.value, service->listBackups());
+
+    // 没有读取和进入权限。先恢复权限再断言，失败时临时目录也能正常删掉。
+    const QFileDevice::Permissions permissions = QFile::permissions(folder);
+    QVERIFY(QFile::setPermissions(folder, QFileDevice::WriteOwner));
+    const ServiceReadResult<QVariantList> locked = service->readBackups();
+    const QVariantList legacy = service->listBackups();
+    QVERIFY(QFile::setPermissions(folder, permissions));
+    QVERIFY(locked.error == ServiceReadError::Storage);
+    QVERIFY(locked.value.isEmpty());
+    QVERIFY(legacy.isEmpty());
+
+    // 路径上是个普通文件。
+    QVERIFY(QDir(folder).removeRecursively());
+    QFile plain(folder);
+    QVERIFY(plain.open(QIODevice::WriteOnly));
+    plain.close();
+    QVERIFY(service->readBackups().error == ServiceReadError::Storage);
+}
+
 #include "BackupServiceTests.moc"
 
 void BackupServiceTests::restoreDropsForeignSettingKeysAndKeepsShortcutOverrides()
