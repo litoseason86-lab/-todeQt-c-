@@ -536,6 +536,13 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/Format/GapFormat.swift)
     target_sources(IPadUI PRIVATE
         src/ui/ipad/Sources/IPadUI/Pages/KnowledgeGap/KnowledgeGapPage.swift)
+    # 055-P4-3：备忘录编辑会话和组合保护标题，正文复用 P3A 编辑器。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/MemoStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/MemoFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Memo/MemoPage.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Memo/MemoTitleEditor.swift)
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。

@@ -35,10 +35,18 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         core.categories.onChanged = { [weak gaps] in previousCategoryChanged?(); gaps?.relatedDataChanged() }
         let previousTasksChanged = core.tasks.onChanged
         core.tasks.onChanged = { [weak gaps] in previousTasksChanged?(); gaps?.relatedDataChanged() }
+        // 055-P4-3：备忘编辑会话跨页保留，生命周期由外壳同步调用。
+        let memos = MemoStore(bridge: MemoAdapter(), categories: core.categories, shell: store, preferences: .standard)
+        let previousMemoCategoryChanged = core.categories.onChanged
+        core.categories.onChanged = { [weak memos] in previousMemoCategoryChanged?(); memos?.relatedDataChanged() }
         // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
         PTLifecycleBridge.flushHandler = { [weak store] in
-            MainActor.assumeIsolated { store?.flushEdits() }
+            MainActor.assumeIsolated {
+                // 先让 UIKit 上屏组合，再同步保存；返回后 C++ 才写出设备同步。
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                store?.flushEdits()
+            }
         }
-        return UIHostingController(rootView: ShellRootView(store: store).environment(core).environment(store).environment(gaps))
+        return UIHostingController(rootView: ShellRootView(store: store).environment(core).environment(store).environment(gaps).environment(memos))
     }
 }
