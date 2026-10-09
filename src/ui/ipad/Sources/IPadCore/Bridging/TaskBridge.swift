@@ -50,4 +50,6 @@ public struct TaskChanges: Equatable, Sendable {
     func moveToToday(ids: [Int]) throws
     func duplicate(id: Int, date: String) throws
     func isRoutineGenerated(id: Int) -> Bool
+    // 从 start 起连续 days 天、每天「已排」分钟；加总口径在 C++（含已完成、负值按 0、排除待删的那条）。
+    func plannedMinutes(from start: String, days: Int, excluding taskID: Int) throws -> [Int]
 }

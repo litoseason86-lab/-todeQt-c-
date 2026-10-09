@@ -177,6 +177,19 @@ using namespace PTBridgeSupport;
     FailureCollector::Call call(_failures);
     return TaskManager::instance()->moveTasksToToday(values) || fail(error, call.error());
 }
+- (NSArray<NSNumber *> *)plannedMinutesFrom:(NSString *)start days:(NSInteger)days excludingTask:(NSInteger)excludedTaskId error:(NSError **)error {
+    NSAssert(NSThread.isMainThread, @"任务读取必须在主线程");
+    int count, excluded;
+    if (!integer(days, &count) || !integer(excludedTaskId, &excluded)) { fail(error, QStringLiteral("已排时长参数越界")); return nil; }
+    const auto result = TaskManager::instance()->readPlannedMinutesByDay(date(start), count, excluded);
+    if (!result.ok()) {
+        fail(error, result.error == ServiceReadError::InvalidArgument ? QStringLiteral("日期范围无效") : QStringLiteral("读取已排时长失败"));
+        return nil;
+    }
+    NSMutableArray<NSNumber *> *values = [NSMutableArray arrayWithCapacity:static_cast<NSUInteger>(result.value.size())];
+    for (int minutes : result.value) [values addObject:@(minutes)];
+    return values;
+}
 - (BOOL)isRoutineGeneratedTask:(NSInteger)taskId {
     NSAssert(NSThread.isMainThread, @"任务读取必须在主线程");
     int id; return integer(taskId, &id) && TaskManager::instance()->isRoutineGeneratedTask(id);

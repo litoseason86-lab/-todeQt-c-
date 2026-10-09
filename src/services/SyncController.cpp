@@ -409,7 +409,15 @@ QString SyncController::folderDisplayPath() const
 
 int SyncController::logCount() const
 {
-    return DatabaseManager::instance()->isOpen() ? SyncStore().syncLogCount() : 0;
+    return readLogCount().value;
+}
+
+ServiceReadResult<int> SyncController::readLogCount() const
+{
+    if (!DatabaseManager::instance()->isOpen()) {
+        return {0, ServiceReadError::Database};
+    }
+    return SyncStore().readSyncLogCount();
 }
 
 void SyncController::setEnabled(bool enabled)
@@ -493,12 +501,24 @@ void SyncController::rebuildFolder()
 
 QVariantList SyncController::syncLog(int limit) const
 {
-    QVariantList result;
+    return readSyncLog(limit).value;
+}
+
+ServiceReadResult<QVariantList> SyncController::readSyncLog(int limit) const
+{
+    ServiceReadResult<QVariantList> read;
+    QVariantList& result = read.value;
     if (!DatabaseManager::instance()->isOpen()) {
-        return result;
+        read.error = ServiceReadError::Database;
+        return read;
+    }
+    const ServiceReadResult<QList<SyncStore::LogEntry>> entries = SyncStore().readSyncLog(limit);
+    if (!entries.ok()) {
+        read.error = entries.error;
+        return read;
     }
     const QDate today = QDate::currentDate();
-    for (const SyncStore::LogEntry& entry : SyncStore().syncLog(limit)) {
+    for (const SyncStore::LogEntry& entry : entries.value) {
         QVariantMap item;
         item.insert(QStringLiteral("id"), entry.id);
         item.insert(QStringLiteral("kind"), entry.kind);
@@ -546,7 +566,7 @@ QVariantList SyncController::syncLog(int limit) const
                     && !entry.lostValue.isEmpty());
         result.append(item);
     }
-    return result;
+    return read;
 }
 
 QString SyncController::restoreWarning() const

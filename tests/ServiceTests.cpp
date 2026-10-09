@@ -914,6 +914,7 @@ private slots:
     void weekComparisonRangeQueryEqualsPerDaySum();
     void weekStatsGroupedDurationsEqualPerDayQueries();
     void getWeekTasksReturnsInclusiveRangeAndRequiredOrder();
+    void plannedMinutesByDayFollowsWeekPageRule();
     void getMonthTasksReturnsInclusiveMonthRange();
     void getMonthTasksRejectsInvalidMonth();
     void getEffectiveDaysFiltersInvalidSessions();
@@ -9349,4 +9350,42 @@ void ServiceTests::weeklySubjectMinutesAddUpToTotal()
     QCOMPARE(subjectByName(review.value(QStringLiteral("subjects")).toList(), QStringLiteral("政治"))
                  .value(QStringLiteral("currentSeconds")).toInt(),
              230);
+}
+
+// 保证：「已排」分钟按天给出，口径与 Mac 本周计划、今日页一致——当天全部任务的预计用时之和，完成与否都算，
+// 负值按 0；撤销窗口里待删的那条不算；范围外的日子不混进来，没有任务的日子是 0；参数不合法与数据库失败分开报。
+void ServiceTests::plannedMinutesByDayFollowsWeekPageRule()
+{
+    auto* tasks = TaskManager::instance();
+    const QDate monday(2026, 7, 13);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    const auto withEstimate = [&query](int id, int minutes) {
+        query.prepare(QStringLiteral("UPDATE tasks SET estimated_minutes = :minutes WHERE id = :id"));
+        query.bindValue(QStringLiteral(":minutes"), minutes);
+        query.bindValue(QStringLiteral(":id"), id);
+        return query.exec() && query.numRowsAffected() == 1;
+    };
+    // 周一：未完成 30 + 已完成 45 + 旧数据里的负值 -10（按 0 算）。
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("一"), monday), 30));
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("二"), monday, QString(), true), 45));
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("负"), monday), -10));
+    // 周三：20 + 待删的 40（不算）。
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("三"), monday.addDays(2)), 20));
+    const int pending = insertTaskRow(QStringLiteral("待删"), monday.addDays(2));
+    QVERIFY(withEstimate(pending, 40));
+    // 范围外：上周日、下周一。
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("前"), monday.addDays(-1)), 100));
+    QVERIFY(withEstimate(insertTaskRow(QStringLiteral("后"), monday.addDays(7)), 100));
+
+    const ServiceReadResult<QList<int>> week = tasks->readPlannedMinutesByDay(monday, 7, pending);
+    QVERIFY(week.ok());
+    QCOMPARE(week.value, (QList<int>{75, 0, 20, 0, 0, 0, 0}));
+    // 没有待删项时那条照算。
+    QCOMPARE(tasks->readPlannedMinutesByDay(monday.addDays(2), 1, -1).value, QList<int>{60});
+
+    QVERIFY(tasks->readPlannedMinutesByDay(QDate(), 7, -1).error == ServiceReadError::InvalidArgument);
+    QVERIFY(tasks->readPlannedMinutesByDay(monday, 0, -1).error == ServiceReadError::InvalidArgument);
+    QVERIFY(tasks->readPlannedMinutesByDay(monday, 32, -1).error == ServiceReadError::InvalidArgument);
+    DatabaseManager::instance()->close();
+    QVERIFY(tasks->readPlannedMinutesByDay(monday, 7, -1).error == ServiceReadError::Database);
 }

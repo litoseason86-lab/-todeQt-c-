@@ -1,6 +1,7 @@
 #ifndef SYNCCONTROLLER_H
 #define SYNCCONTROLLER_H
 
+#include "ServiceReadResult.h"
 #include "SyncEngine.h"
 
 #include <QByteArray>
@@ -123,6 +124,10 @@ public:
     Q_INVOKABLE void rebuildFolder();
     // 同步日志，新的在前。每一项是给界面直接显示的文字。
     Q_INVOKABLE QVariantList syncLog(int limit = 200) const;
+    // 同 syncLog / logCount，但区分「没有日志」（成功的空列表、0）与读取失败（数据库没开或查询出错，报 Database）。
+    // iPad 设置页用这两个；旧接口失败时仍回落为空列表 / 0，Mac 设置页照旧。
+    ServiceReadResult<QVariantList> readSyncLog(int limit = 200) const;
+    ServiceReadResult<int> readLogCount() const;
     Q_INVOKABLE void copyLostValue(const QString& text);
     // 恢复确认框里的提醒。这台设备加入过同步文件夹，恢复就是全局回滚：开着同步，另一台马上跟着回到这份备份；
     // 关着的，下次打开同步时才发生。关着的时候更要说清楚——过几天打开同步，另一台被整个换掉，事先却没有任何提示。

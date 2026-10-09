@@ -67,6 +67,7 @@ QJsonObject McpToolDispatcher::failure(ServiceReadError error, const QString& su
         return makeToolErrorResult(makeError(ErrorCode::ResultLimitExceeded, joinPhrase(subject, QStringLiteral("超过返回上限"))));
     case ServiceReadError::None:
     case ServiceReadError::Database:
+    case ServiceReadError::Storage:
         break;
     }
     return makeToolErrorResult(makeError(ErrorCode::DatabaseError, QStringLiteral("读取") + joinPhrase(subject, QStringLiteral("失败"))));

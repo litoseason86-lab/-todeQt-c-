@@ -1028,8 +1028,25 @@ void BackupService::pruneByPrefix(const QString& prefix, int retention, const QS
 
 QVariantList BackupService::listBackups() const
 {
-    QVariantList result;
-    QDir dir(autoBackupsDir());
+    return readBackups().value;
+}
+
+ServiceReadResult<QVariantList> BackupService::readBackups() const
+{
+    ServiceReadResult<QVariantList> read;
+    QVariantList& result = read.value;
+    const QFileInfo folder(autoBackupsDir());
+    // 还没做过备份时文件夹不存在：这是正常的空列表。
+    if (!folder.exists()) {
+        return read;
+    }
+    // 文件夹在却列不出内容（不是文件夹，或没有读取、进入权限）时，QDir 只会安静地返回空列表，
+    // 必须先在这里判出来，否则页面会把「读不了」显示成「没有备份」。
+    if (!folder.isDir() || !folder.isReadable() || !folder.isExecutable()) {
+        read.error = ServiceReadError::Storage;
+        return read;
+    }
+    QDir dir(folder.absoluteFilePath());
     const QFileInfoList files = dir.entryInfoList(
         QStringList{QStringLiteral("*") + kBackupExtension},
         QDir::Files,
@@ -1042,7 +1059,7 @@ QVariantList BackupService::listBackups() const
         entry.insert(QStringLiteral("sizeBytes"), file.size());
         result.append(entry);
     }
-    return result;
+    return read;
 }
 
 bool BackupService::openBackupsFolder() const

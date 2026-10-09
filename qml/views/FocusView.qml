@@ -798,15 +798,18 @@ Item {
     }
 
     function nextBreakMinutes() {
-        // 长休息：每完成 N 个番茄，这一次休息更久。连续数由 FocusTimer 维护（只计自然到点的番茄），
-        // 手动和自动开始休息共用同一判定，行为一致。
-        if (root.settings && root.settings.longBreakEnabled && root.timer
-                && root.settings.longBreakInterval > 0
-                && root.timer.completedPomodoros > 0
-                && (root.timer.completedPomodoros % root.settings.longBreakInterval) === 0) {
-            return root.settings.longBreakMinutes
-        }
-        return root.selectedBreakMinutes
+        // 长休息（每完成 N 个番茄这次休息更久）的判定在控制器 FocusSessionController::nextBreakMinutes，
+        // 手动和自动开始休息共用；控制器没接上（嵌入式测试）时只用当前选的休息时长。
+        return root.focusSessionControllerRef
+                ? Number(root.focusSessionControllerRef.nextBreakMinutes(root.selectedBreakMinutes))
+                : root.selectedBreakMinutes
+    }
+
+    // 阶段完成后要不要自动衔接，判定在控制器 FocusSessionController::autoAdvanceAfter；没接上时不衔接。
+    function wantsAutoAdvance(phase) {
+        return root.focusSessionControllerRef
+                ? Boolean(root.focusSessionControllerRef.autoAdvanceAfter(phase))
+                : false
     }
 
     function startBreak() {
@@ -931,10 +934,7 @@ Item {
             root.cancelAutoAdvance()
             root.justCompletedPhase = phase
             // 自动衔接（可选，默认关）：延一小段再切，让用户看清完成态、听到提示音后再进入下一阶段。
-            var wantsAuto = root.settings
-                    && ((phase === 1 && root.settings.autoStartBreak)
-                        || (phase === 2 && root.settings.autoStartNextPomodoro))
-            if (wantsAuto) {
+            if (root.wantsAutoAdvance(phase)) {
                 autoAdvanceTimer.pendingPhase = phase
                 autoAdvanceTimer.restart()
             }
@@ -960,13 +960,13 @@ Item {
         }
 
         function onAutoStartBreakChanged() {
-            if (!root.settings.autoStartBreak && autoAdvanceTimer.pendingPhase === 1) {
+            if (autoAdvanceTimer.pendingPhase === 1 && !root.wantsAutoAdvance(1)) {
                 root.cancelAutoAdvance()
             }
         }
 
         function onAutoStartNextPomodoroChanged() {
-            if (!root.settings.autoStartNextPomodoro && autoAdvanceTimer.pendingPhase === 2) {
+            if (autoAdvanceTimer.pendingPhase === 2 && !root.wantsAutoAdvance(2)) {
                 root.cancelAutoAdvance()
             }
         }
@@ -995,15 +995,15 @@ Item {
             autoAdvanceTimer.pendingPhase = 0
             // 延迟期间用户可能已经结束循环或关闭自动衔接；触发前必须重验前提。
             // 自动衔接跟随计时器而不是页面：用户在仪表盘等其它页时同样生效。
-            if (root.justCompletedPhase !== phase || !root.settings) {
+            if (root.justCompletedPhase !== phase || !root.wantsAutoAdvance(phase)) {
                 return
             }
-            if (phase === 1 && root.settings.autoStartBreak) {
+            if (phase === 1) {
                 root.startBreak()
                 if (root.errorText.length === 0) {
                     root.autoAdvanced(1)
                 }
-            } else if (phase === 2 && root.settings.autoStartNextPomodoro) {
+            } else if (phase === 2) {
                 root.startPomodoro()
                 if (root.errorText.length === 0) {
                     root.autoAdvanced(2)

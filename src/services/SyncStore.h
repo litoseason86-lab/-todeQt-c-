@@ -1,6 +1,7 @@
 #ifndef SYNCSTORE_H
 #define SYNCSTORE_H
 
+#include "ServiceReadResult.h"
 #include "SyncRecord.h"
 
 #include <QDateTime>
@@ -152,6 +153,9 @@ public:
     // 新的在前，最多 limit 条。
     QList<LogEntry> syncLog(int limit) const;
     int syncLogCount() const;
+    // 同上，但查询失败时报 Database，不和「没有日志」混在一起。上面两个在失败时回落为空列表 / 0。
+    ServiceReadResult<QList<LogEntry>> readSyncLog(int limit) const;
+    ServiceReadResult<int> readSyncLogCount() const;
     // 最新一条的编号（没有时为 0）：变了才需要让界面重新读。
     qint64 latestSyncLogId() const;
 
