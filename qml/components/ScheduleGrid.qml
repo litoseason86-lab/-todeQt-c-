@@ -14,6 +14,8 @@ Item {
     id: root
 
     // 已按当前周次筛选过的课表项；本组件不做周次过滤。
+    // 日期与时段判定交给课表服务；网格只负责位置和交互。
+    property var scheduleServiceRef: null
     property var entries: []
     property var periods: []
     property string displayMode: "time"
@@ -181,7 +183,7 @@ Item {
         var last = -1
         for (var i = 0; i < root.periods.length; ++i) {
             var period = root.periods[i]
-            if (ScheduleWeeks.overlaps(entry.startMinutes, entry.endMinutes,
+            if (root.scheduleServiceRef && root.scheduleServiceRef.overlaps(entry.startMinutes, entry.endMinutes,
                                        period.startMinutes, period.endMinutes)) {
                 if (first < 0) {
                     first = i
@@ -271,10 +273,8 @@ Item {
                     required property int index
                     readonly property int weekday: dayHeader.index + 1
                     readonly property bool isToday: root.highlightWeekday === dayHeader.weekday
-                    readonly property var columnDate: ScheduleWeeks.dateOfWeekday(
-                                                          root.semesterStartDate,
-                                                          root.weekIndex,
-                                                          dayHeader.weekday)
+                    readonly property var columnDate: root.scheduleServiceRef ? ScheduleWeeks.displayDate(
+                        root.scheduleServiceRef.dateOfWeekday(root.semesterStartDate, root.weekIndex, dayHeader.weekday)) : null
 
                     objectName: "scheduleDayHeader-" + dayHeader.weekday
                     Layout.fillWidth: true

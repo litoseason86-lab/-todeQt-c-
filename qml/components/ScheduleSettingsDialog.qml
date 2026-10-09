@@ -101,7 +101,7 @@ Popup {
         // 学期起始日允许留空：未设置时课表页会引导用户先定锚点，
         // 而不是替他猜一个日期然后算出一堆看不懂的周次。
         var startText = semesterStartField.text.trim()
-        if (startText.length > 0 && !ScheduleWeeks.parseSemesterStart(startText)) {
+        if (startText.length > 0 && !root.scheduleServiceRef.parseSemesterStart(startText)) {
             root.errorText = "学期起始日格式应为 yyyy-MM-dd"
             semesterStartField.forceActiveFocus()
             return
@@ -146,7 +146,7 @@ Popup {
             return a.startMinutes - b.startMinutes
         })
         for (var k = 1; k < sorted.length; ++k) {
-            if (ScheduleWeeks.overlaps(sorted[k - 1].startMinutes, sorted[k - 1].endMinutes,
+            if (root.scheduleServiceRef.overlaps(sorted[k - 1].startMinutes, sorted[k - 1].endMinutes,
                                        sorted[k].startMinutes, sorted[k].endMinutes)) {
                 root.errorText = "节次时间不能重叠："
                         + ScheduleWeeks.formatMinutes(sorted[k - 1].startMinutes) + "–"

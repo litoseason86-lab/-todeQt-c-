@@ -137,6 +137,8 @@ set(APP_SOURCES
     src/services/CountdownService.cpp
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
+    # 055-P2B：周次纯函数与使用它的服务同目标链接。
+    src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
     src/services/TrayController.h
     src/services/TrayController.cpp
     src/services/NotificationService.h
@@ -738,6 +740,8 @@ add_executable(ScheduleServiceTests
     src/services/SyncSchema.cpp
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
+    # 055-P2B：周次纯函数与使用它的服务同目标链接。
+    src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
     # AppSettings 只为一条用例引入：它把「学期总周数上限」与
     # ScheduleService::kMaxWeekIndex 钉死在一起，两处常量不能各改各的。
     src/services/AppSettings.h
@@ -1034,6 +1038,8 @@ add_executable(SyncTests
     src/services/FocusSessionRules.h
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
+    # 055-P2B：周次纯函数与使用它的服务同目标链接。
+    src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
     src/services/MemoService.h
@@ -1096,6 +1102,8 @@ add_executable(TrashServiceTests
     src/services/FocusSessionRules.h
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
+    # 055-P2B：周次纯函数与使用它的服务同目标链接。
+    src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
     src/services/MemoService.h
@@ -1156,6 +1164,8 @@ add_executable(PendingDeletionTests
     src/services/FocusSessionRules.h
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
+    # 055-P2B：周次纯函数与使用它的服务同目标链接。
+    src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
     src/services/MemoService.h
@@ -1248,6 +1258,8 @@ add_executable(SyncTransportTests
     src/services/FocusSessionRules.h
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
+    # 055-P2B：周次纯函数与使用它的服务同目标链接。
+    src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
     src/services/MemoService.h
@@ -1321,6 +1333,8 @@ add_executable(SyncControllerTests
     src/services/FocusSessionRules.h
     src/services/ScheduleService.h
     src/services/ScheduleService.cpp
+    # 055-P2B：周次纯函数与使用它的服务同目标链接。
+    src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
     src/services/KnowledgeGapService.h
     src/services/KnowledgeGapService.cpp
     src/services/MemoService.h
@@ -1585,6 +1599,24 @@ add_test(NAME IPadSwiftTests COMMAND ${POMODORO_TODO_SWIFT} test
     --scratch-path "${CMAKE_CURRENT_BINARY_DIR}/ipad-swift")
 set_tests_properties(IPadSwiftTests PROPERTIES TIMEOUT 120)
 
+# 055-P2B：纯规则读表测试与真实服务包装的 QML 接线宿主。
+add_executable(CaliberTests tests/CaliberTests.cpp src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp)
+target_link_libraries(CaliberTests PRIVATE Qt6::Core Qt6::Test)
+target_compile_definitions(CaliberTests PRIVATE CALIBERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calibers")
+pomodoro_todo_enable_warnings(CaliberTests)
+add_test(NAME CaliberTests COMMAND CaliberTests)
+set_tests_properties(CaliberTests PROPERTIES TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
+add_executable(CaliberQuickTests tests/CaliberQuickTests.cpp
+    src/services/ScheduleService.h src/services/ScheduleService.cpp
+    src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
+    src/services/DatabaseManager.h src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h src/services/SyncSchema.cpp
+    src/services/TrashStore.h src/services/TrashStore.cpp)
+target_link_libraries(CaliberQuickTests PRIVATE Qt6::QuickTest Qt6::Quick Qt6::Sql)
+pomodoro_todo_enable_warnings(CaliberQuickTests)
+set(POMODORO_TODO_CALIBER_QML_TESTS schedule_weeks schedule_view schedule_grid_tap page_activation_failure dialog_smoke dialog_close_guard)
+
 add_executable(MemoQuickTests tests/MemoQuickTests.cpp src/models/PlainTextLayout.h src/models/PlainTextLayout.cpp)
 target_link_libraries(MemoQuickTests PRIVATE Qt6::QuickTest Qt6::Quick)
 pomodoro_todo_enable_warnings(MemoQuickTests)
@@ -1604,6 +1636,8 @@ foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
     set(qml_test_runner Qt6::qmltestrunner)
     if(qml_test_name STREQUAL "memo_view")
         set(qml_test_runner MemoQuickTests)
+    elseif(qml_test_name IN_LIST POMODORO_TODO_CALIBER_QML_TESTS)
+        set(qml_test_runner CaliberQuickTests)
     endif()
     add_test(
         NAME QmlTest.${qml_test_name}
@@ -1632,6 +1666,10 @@ foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
         # 某条测试确实需要故意触发告警时，单独覆盖它的 FAIL_REGULAR_EXPRESSION。
         FAIL_REGULAR_EXPRESSION "Unable to assign;TypeError;is not a function;ReferenceError;RangeError;Binding loop"
     )
+    # 055-P2B：只有读表用例允许本地 XHR，生产与其它测试不放宽权限。
+    if(qml_test_name STREQUAL "schedule_weeks")
+        set_property(TEST QmlTest.${qml_test_name} APPEND PROPERTY ENVIRONMENT "QML_XHR_ALLOW_FILE_READ=1")
+    endif()
 endforeach()
 
 list(LENGTH POMODORO_TODO_QML_TEST_FILES POMODORO_TODO_QML_TEST_COUNT)

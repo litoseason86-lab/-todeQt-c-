@@ -1,92 +1,10 @@
 .pragma library
 
-// 课表的日期 ↔ 周次换算。与 LogicalDay.js 同构：纯函数、不读全局状态，
-// 所有输入显式传入，测试可以喂固定日期得到确定结果。
-//
-// 「周次」指学期里的第几周，从 1 开始。第 1 周是学期起始日所在的那一周，
-// 每周固定以周一为起点——课表的一行就是一周，锚点若不落在周一，
-// 同一周里的周一和周三会被算成相邻两个周次。
+// 日期与周次换算已迁到 C++ ScheduleWeeks；这里只保留显示格式与泳道排版。
 
-// 把任意日期回退到所在周的周一，并归零到本地午夜。
-function mondayOf(value) {
-    var date = new Date(value)
-    var day = date.getDay()
-    // JS 的 getDay() 是 0(周日)–6(周六)：周日要往回退 6 天才到本周周一，
-    // 其余按 1 - day 回退。直接用 1 - day 会把周日算成下一周的周一。
-    var diff = day === 0 ? -6 : 1 - day
-    date.setDate(date.getDate() + diff)
-    date.setHours(0, 0, 0, 0)
-    return date
-}
-
-function isoDate(value) {
-    var date = new Date(value)
-    var month = date.getMonth() + 1
-    var day = date.getDate()
-    return date.getFullYear() + "-" + (month < 10 ? "0" : "") + month
-            + "-" + (day < 10 ? "0" : "") + day
-}
-
-// 解析设置里存的学期起始日。无效或未设置时返回 null，
-// 调用方据此决定是引导用户先设置，还是回退到「本周即第 1 周」。
-function parseSemesterStart(isoText) {
-    var text = String(isoText || "").trim()
-    if (text.length === 0) {
-        return null
-    }
-    // 只接受 yyyy-MM-dd。交给 Date 直接解析会把 "2026-9" 这类残缺串
-    // 解释成某个真实日期，让一个坏配置静悄悄地算出错误周次。
-    var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text)
-    if (!match) {
-        return null
-    }
-    var year = Number(match[1])
-    var month = Number(match[2])
-    var day = Number(match[3])
-    var date = new Date(year, month - 1, day)
-    // 构造后回读一遍，挡住 2026-02-31 这种会被 Date 静默进位的日期。
-    if (date.getFullYear() !== year || date.getMonth() !== month - 1
-            || date.getDate() !== day) {
-        return null
-    }
-    return mondayOf(date)
-}
-
-// 给定日期落在第几周。起始日无效时返回 0，表示「算不出周次」；
-// 日期早于学期开始时返回 0 或负数由调用方自行处理（服务层对 <1 的周次返回空课表）。
-function weekIndexForDate(semesterStartIso, value) {
-    var start = parseSemesterStart(semesterStartIso)
-    if (!start) {
-        return 0
-    }
-    var target = mondayOf(value)
-    // 按「周一到周一」的整周差计算，避免夏令时导致的小时数漂移影响取整。
-    // 先算天数差再除以 7：两个周一之间的天数一定是 7 的整数倍。
-    var dayMs = 24 * 60 * 60 * 1000
-    var days = Math.round((target.getTime() - start.getTime()) / dayMs)
-    return Math.floor(days / 7) + 1
-}
-
-// 第 weekIndex 周的周一。起始日无效时返回 null。
-function mondayOfWeek(semesterStartIso, weekIndex) {
-    var start = parseSemesterStart(semesterStartIso)
-    if (!start) {
-        return null
-    }
-    var date = new Date(start)
-    date.setDate(date.getDate() + (Number(weekIndex) - 1) * 7)
-    return date
-}
-
-// 第 weekIndex 周里第 weekday(1=周一…7=周日) 天的日期。
-function dateOfWeekday(semesterStartIso, weekIndex, weekday) {
-    var monday = mondayOfWeek(semesterStartIso, weekIndex)
-    if (!monday) {
-        return null
-    }
-    var date = new Date(monday)
-    date.setDate(date.getDate() + (Number(weekday) - 1))
-    return date
+// 服务返回已经校验的 ISO 日期，补本地午夜后只供列头显示，不再判断学期有效性。
+function displayDate(iso) {
+    return iso ? new Date(iso + "T00:00:00") : null
 }
 
 // 把「当天第几分钟」格式化成 HH:mm。课表的起止时间都以分钟数存储。
@@ -222,11 +140,3 @@ function weekRangeLabel(weekStart, weekEnd, parity, semesterWeeks) {
     return parityText.length > 0 ? (rangeText + " · " + parityText) : rangeText
 }
 
-// 两个时间区间是否真的相交。半开区间：紧邻的 09:40 结束与 09:40 开始不算相交。
-//
-// 这个判据在课表里出现的地方不止一处（课程块落在哪几节、哪些条目一节都落不进、
-// 服务端的冲突查询），每处各写一遍迟早会有一处把 < 写成 <=，
-// 结果就是「相邻的两节课被判成冲突」这类只在边界上才现形、且很难复现的毛病。
-function overlaps(aStart, aEnd, bStart, bEnd) {
-    return Number(aStart) < Number(bEnd) && Number(aEnd) > Number(bStart)
-}
