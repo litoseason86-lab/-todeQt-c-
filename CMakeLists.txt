@@ -264,6 +264,9 @@ if(IOS)
         # 055-P3B：转换与非单例服务登记。
         src/platform/ios/bridge/PTBridgeSupport.h
         src/platform/ios/bridge/PTBridgeSupport.mm
+        # 055-P4-1：专注与今日知识缺口提醒桥接。
+        src/platform/ios/bridge/PTFocusBridge.h src/platform/ios/bridge/PTFocusBridge.mm
+        src/platform/ios/bridge/PTGapReminderBridge.h src/platform/ios/bridge/PTGapReminderBridge.mm
     )
     set_source_files_properties(
         src/platform/ios/IosSyncFolder.mm
@@ -282,6 +285,8 @@ if(IOS)
         src/platform/ios/bridge/PTFocusHistoryBridge.mm
         # 055-P3B：支撑层使用 Foundation，按 ARC 管理对象。
         src/platform/ios/bridge/PTBridgeSupport.mm
+        # 055-P4-1：桥接仅使用 Foundation，ARC 管理回调生命周期。
+        src/platform/ios/bridge/PTFocusBridge.mm src/platform/ios/bridge/PTGapReminderBridge.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
     )
 endif()
@@ -508,6 +513,13 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Bridges/StatisticsBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/FocusHistoryBridgeAdapter.swift
     )
+    # 055-P4-1：专注与缺口提醒的协议及适配器。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/FocusBridging.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/GapReminderBridging.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/FocusBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/GapReminderBridgeAdapter.swift)
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
@@ -1372,6 +1384,23 @@ set_source_files_properties(
     src/platform/ios/bridge/PTPendingDeletionBridge.mm
     src/platform/ios/bridge/PTInteractionBridge.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+
+# 055-P4-1：专注与到期提醒桥接沿用隔离服务装配，不依赖 UIKit。
+add_executable(PTFocusBridgeTests ${PT_CORE_TEST_SOURCES}
+    tests/PTFocusBridgeTests.mm
+    src/platform/ios/bridge/PTBridgeSupport.h src/platform/ios/bridge/PTBridgeSupport.mm
+    src/platform/ios/bridge/PTFocusBridge.h src/platform/ios/bridge/PTFocusBridge.mm
+    src/platform/ios/bridge/PTGapReminderBridge.h src/platform/ios/bridge/PTGapReminderBridge.mm
+    src/services/PendingDeletion.h src/services/PendingDeletion.cpp
+    src/services/FocusSessionController.h src/services/FocusSessionController.cpp)
+set_source_files_properties(tests/PTFocusBridgeTests.mm
+    src/platform/ios/bridge/PTFocusBridge.mm src/platform/ios/bridge/PTGapReminderBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(PTFocusBridgeTests PRIVATE Qt6::Core Qt6::Gui Qt6::Sql Qt6::Concurrent Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(PTFocusBridgeTests)
+add_test(NAME PTFocusBridgeTests COMMAND PTFocusBridgeTests)
+set_tests_properties(PTFocusBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
 # 设备间同步的云盘传输（050 阶段 3）：文件格式、文件夹读写、同步引擎。
 # 两台设备各用一个真实结构的临时库，云盘用临时文件夹模拟，可以注入延迟、乱序、坏文件和读写失败。
