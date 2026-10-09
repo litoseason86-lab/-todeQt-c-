@@ -247,6 +247,9 @@ if(IOS)
         src/platform/ios/bridge/PTLifecycleBridge.mm
         src/platform/ios/bridge/PTShellBridge.h
         src/platform/ios/bridge/PTShellBridge.mm
+        # 055-P3B：转换与非单例服务登记。
+        src/platform/ios/bridge/PTBridgeSupport.h
+        src/platform/ios/bridge/PTBridgeSupport.mm
     )
     set_source_files_properties(
         src/platform/ios/IosSyncFolder.mm
@@ -255,6 +258,8 @@ if(IOS)
         src/platform/ios/native/NativeRoot.mm
         src/platform/ios/bridge/PTLifecycleBridge.mm
         src/platform/ios/bridge/PTShellBridge.mm
+        # 055-P3B：支撑层使用 Foundation，按 ARC 管理对象。
+        src/platform/ios/bridge/PTBridgeSupport.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
     )
 endif()
@@ -1194,6 +1199,22 @@ target_link_libraries(PTShellBridgeTests PRIVATE Qt6::Core Qt6::Gui Qt6::Sql Qt6
 pomodoro_todo_enable_warnings(PTShellBridgeTests)
 add_test(NAME PTShellBridgeTests COMMAND PTShellBridgeTests)
 set_tests_properties(PTShellBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
+# 055-P3B：核心数据桥接在 Mac 测试，源文件沿用废纸篓测试的服务装配。
+get_target_property(PT_CORE_TEST_SOURCES TrashServiceTests SOURCES)
+list(REMOVE_ITEM PT_CORE_TEST_SOURCES tests/TrashServiceTests.cpp)
+add_executable(PTCoreBridgeTests ${PT_CORE_TEST_SOURCES}
+    tests/PTCoreBridgeTests.mm
+    src/platform/ios/bridge/PTBridgeSupport.h src/platform/ios/bridge/PTBridgeSupport.mm
+    src/services/PendingDeletion.h src/services/PendingDeletion.cpp
+    src/services/TaskInteractionCoordinator.h src/services/TaskInteractionCoordinator.cpp)
+set_source_files_properties(tests/PTCoreBridgeTests.mm src/platform/ios/bridge/PTBridgeSupport.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(PTCoreBridgeTests PRIVATE Qt6::Core Qt6::Gui Qt6::Sql Qt6::Concurrent Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(PTCoreBridgeTests)
+add_test(NAME PTCoreBridgeTests COMMAND PTCoreBridgeTests)
+set_tests_properties(PTCoreBridgeTests PROPERTIES TIMEOUT 90
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
 # 设备间同步的云盘传输（050 阶段 3）：文件格式、文件夹读写、同步引擎。
