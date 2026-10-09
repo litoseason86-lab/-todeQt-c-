@@ -1,0 +1,2432 @@
+[
+  {
+    "input": {
+      "mask": 1,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "周一",
+      "normalized": 1,
+      "toggled": 0
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 1,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周一",
+      "normalized": 1,
+      "toggled": 3
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 1,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周一",
+      "normalized": 1,
+      "toggled": 5
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 1,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周一",
+      "normalized": 1,
+      "toggled": 9
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 1,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周一",
+      "normalized": 1,
+      "toggled": 17
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 1,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "周一",
+      "normalized": 1,
+      "toggled": 33
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 1,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "周一",
+      "normalized": 1,
+      "toggled": 65
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 2,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周二",
+      "normalized": 2,
+      "toggled": 6
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 3,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周一二",
+      "normalized": 3,
+      "toggled": 11
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 4,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周三",
+      "normalized": 4,
+      "toggled": 20
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 5,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "周一三",
+      "normalized": 5,
+      "toggled": 37
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 6,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "周二三",
+      "normalized": 6,
+      "toggled": 70
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 7,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "周一二三",
+      "normalized": 7,
+      "toggled": 6
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 8,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周四",
+      "normalized": 8,
+      "toggled": 10
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 9,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周一四",
+      "normalized": 9,
+      "toggled": 13
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 10,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": true,
+      "text": "周二四",
+      "normalized": 10,
+      "toggled": 2
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 11,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周一二四",
+      "normalized": 11,
+      "toggled": 27
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 12,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "周三四",
+      "normalized": 12,
+      "toggled": 44
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 13,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "周一三四",
+      "normalized": 13,
+      "toggled": 77
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 14,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "周二三四",
+      "normalized": 14,
+      "toggled": 15
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 15,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": true,
+      "text": "周一二三四",
+      "normalized": 15,
+      "toggled": 13
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 16,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周五",
+      "normalized": 16,
+      "toggled": 20
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 17,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周一五",
+      "normalized": 17,
+      "toggled": 25
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 18,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "周二五",
+      "normalized": 18,
+      "toggled": 2
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 19,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "周一二五",
+      "normalized": 19,
+      "toggled": 51
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 20,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "周三五",
+      "normalized": 20,
+      "toggled": 84
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 21,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "周一三五",
+      "normalized": 21,
+      "toggled": 20
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 22,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": true,
+      "text": "周二三五",
+      "normalized": 22,
+      "toggled": 20
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 23,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": true,
+      "text": "周一二三五",
+      "normalized": 23,
+      "toggled": 19
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 24,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": true,
+      "text": "周四五",
+      "normalized": 24,
+      "toggled": 16
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 25,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "周一四五",
+      "normalized": 25,
+      "toggled": 9
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 26,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "周二四五",
+      "normalized": 26,
+      "toggled": 58
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 27,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "周一二四五",
+      "normalized": 27,
+      "toggled": 91
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 28,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "周三四五",
+      "normalized": 28,
+      "toggled": 29
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 29,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周一三四五",
+      "normalized": 29,
+      "toggled": 31
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 30,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": true,
+      "text": "周二三四五",
+      "normalized": 30,
+      "toggled": 26
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 31,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "工作日",
+      "normalized": 31,
+      "toggled": 30
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 31,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": true,
+      "text": "工作日",
+      "normalized": 31,
+      "toggled": 29
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 31,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": true,
+      "text": "工作日",
+      "normalized": 31,
+      "toggled": 27
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 31,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": true,
+      "text": "工作日",
+      "normalized": 31,
+      "toggled": 23
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 31,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "工作日",
+      "normalized": 31,
+      "toggled": 15
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 31,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "工作日",
+      "normalized": 31,
+      "toggled": 63
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 31,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "工作日",
+      "normalized": 31,
+      "toggled": 95
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 32,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周六",
+      "normalized": 32,
+      "toggled": 48
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 33,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "周一六",
+      "normalized": 33,
+      "toggled": 1
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 34,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "周二六",
+      "normalized": 34,
+      "toggled": 98
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 35,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "周一二六",
+      "normalized": 35,
+      "toggled": 34
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 36,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周三六",
+      "normalized": 36,
+      "toggled": 38
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 37,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": true,
+      "text": "周一三六",
+      "normalized": 37,
+      "toggled": 33
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 38,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周二三六",
+      "normalized": 38,
+      "toggled": 46
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 39,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周一二三六",
+      "normalized": 39,
+      "toggled": 55
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 40,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "周四六",
+      "normalized": 40,
+      "toggled": 8
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 41,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "周一四六",
+      "normalized": 41,
+      "toggled": 105
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 42,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "周二四六",
+      "normalized": 42,
+      "toggled": 43
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 43,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": true,
+      "text": "周一二四六",
+      "normalized": 43,
+      "toggled": 41
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 44,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": true,
+      "text": "周三四六",
+      "normalized": 44,
+      "toggled": 40
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 45,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": true,
+      "text": "周一三四六",
+      "normalized": 45,
+      "toggled": 37
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 46,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周二三四六",
+      "normalized": 46,
+      "toggled": 62
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 47,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "周一二三四六",
+      "normalized": 47,
+      "toggled": 15
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 48,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "周五六",
+      "normalized": 48,
+      "toggled": 112
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 49,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "周一五六",
+      "normalized": 49,
+      "toggled": 48
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 50,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": true,
+      "text": "周二五六",
+      "normalized": 50,
+      "toggled": 48
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 51,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周一二五六",
+      "normalized": 51,
+      "toggled": 55
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 52,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周三五六",
+      "normalized": 52,
+      "toggled": 60
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 53,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "周一三五六",
+      "normalized": 53,
+      "toggled": 37
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 54,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "周二三五六",
+      "normalized": 54,
+      "toggled": 22
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 55,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "周一二三五六",
+      "normalized": 55,
+      "toggled": 119
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 56,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "周四五六",
+      "normalized": 56,
+      "toggled": 57
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 57,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周一四五六",
+      "normalized": 57,
+      "toggled": 59
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 58,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周二四五六",
+      "normalized": 58,
+      "toggled": 62
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 59,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": true,
+      "text": "周一二四五六",
+      "normalized": 59,
+      "toggled": 51
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 60,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "周三四五六",
+      "normalized": 60,
+      "toggled": 44
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 61,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "周一三四五六",
+      "normalized": 61,
+      "toggled": 29
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 62,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": false,
+      "text": "周二三四五六",
+      "normalized": 62,
+      "toggled": 126
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 63,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "除周日",
+      "normalized": 63,
+      "toggled": 62
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 64,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "周日",
+      "normalized": 64,
+      "toggled": 65
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 64,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周日",
+      "normalized": 64,
+      "toggled": 66
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 64,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周日",
+      "normalized": 64,
+      "toggled": 68
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 64,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周日",
+      "normalized": 64,
+      "toggled": 72
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 64,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周日",
+      "normalized": 64,
+      "toggled": 80
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 64,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "周日",
+      "normalized": 64,
+      "toggled": 96
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 64,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "周日",
+      "normalized": 64,
+      "toggled": 0
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 65,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周一日",
+      "normalized": 65,
+      "toggled": 69
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 66,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周二日",
+      "normalized": 66,
+      "toggled": 74
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 67,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周一二日",
+      "normalized": 67,
+      "toggled": 83
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 68,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "周三日",
+      "normalized": 68,
+      "toggled": 100
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 69,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "周一三日",
+      "normalized": 69,
+      "toggled": 5
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 70,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "周二三日",
+      "normalized": 70,
+      "toggled": 71
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 71,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": true,
+      "text": "周一二三日",
+      "normalized": 71,
+      "toggled": 69
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 72,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周四日",
+      "normalized": 72,
+      "toggled": 76
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 73,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": true,
+      "text": "周一四日",
+      "normalized": 73,
+      "toggled": 65
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 74,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周二四日",
+      "normalized": 74,
+      "toggled": 90
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 75,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "周一二四日",
+      "normalized": 75,
+      "toggled": 107
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 76,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "周三四日",
+      "normalized": 76,
+      "toggled": 12
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 77,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "周一三四日",
+      "normalized": 77,
+      "toggled": 76
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 78,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": true,
+      "text": "周二三四日",
+      "normalized": 78,
+      "toggled": 76
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 79,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": true,
+      "text": "周一二三四日",
+      "normalized": 79,
+      "toggled": 75
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 80,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周五日",
+      "normalized": 80,
+      "toggled": 88
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 81,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "周一五日",
+      "normalized": 81,
+      "toggled": 65
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 82,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "周二五日",
+      "normalized": 82,
+      "toggled": 114
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 83,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "周一二五日",
+      "normalized": 83,
+      "toggled": 19
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 84,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "周三五日",
+      "normalized": 84,
+      "toggled": 85
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 85,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周一三五日",
+      "normalized": 85,
+      "toggled": 87
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 86,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": true,
+      "text": "周二三五日",
+      "normalized": 86,
+      "toggled": 82
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 87,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周一二三五日",
+      "normalized": 87,
+      "toggled": 95
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 88,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "周四五日",
+      "normalized": 88,
+      "toggled": 72
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 89,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": false,
+      "text": "周一四五日",
+      "normalized": 89,
+      "toggled": 121
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 90,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "周二四五日",
+      "normalized": 90,
+      "toggled": 26
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 91,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "周一二四五日",
+      "normalized": 91,
+      "toggled": 90
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 92,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周三四五日",
+      "normalized": 92,
+      "toggled": 94
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 93,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": true,
+      "text": "周一三四五日",
+      "normalized": 93,
+      "toggled": 89
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 94,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": true,
+      "text": "周二三四五日",
+      "normalized": 94,
+      "toggled": 86
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 95,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "除周六",
+      "normalized": 95,
+      "toggled": 79
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 96,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "周末",
+      "normalized": 96,
+      "toggled": 97
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 96,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周末",
+      "normalized": 96,
+      "toggled": 98
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 96,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周末",
+      "normalized": 96,
+      "toggled": 100
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 96,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周末",
+      "normalized": 96,
+      "toggled": 104
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 96,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周末",
+      "normalized": 96,
+      "toggled": 112
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 96,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "周末",
+      "normalized": 96,
+      "toggled": 64
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 96,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "周末",
+      "normalized": 96,
+      "toggled": 32
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 97,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "周一六日",
+      "normalized": 97,
+      "toggled": 33
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 98,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "周二六日",
+      "normalized": 98,
+      "toggled": 99
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 99,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": true,
+      "text": "周一二六日",
+      "normalized": 99,
+      "toggled": 97
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 100,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": true,
+      "text": "周三六日",
+      "normalized": 100,
+      "toggled": 96
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 101,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周一三六日",
+      "normalized": 101,
+      "toggled": 109
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 102,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周二三六日",
+      "normalized": 102,
+      "toggled": 118
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 103,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "周一二三六日",
+      "normalized": 103,
+      "toggled": 71
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 104,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "周四六日",
+      "normalized": 104,
+      "toggled": 40
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 105,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "周一四六日",
+      "normalized": 105,
+      "toggled": 104
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 106,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": true,
+      "text": "周二四六日",
+      "normalized": 106,
+      "toggled": 104
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 107,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周一二四六日",
+      "normalized": 107,
+      "toggled": 111
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 108,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": true,
+      "text": "周三四六日",
+      "normalized": 108,
+      "toggled": 100
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 109,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": false,
+      "text": "周一三四六日",
+      "normalized": 109,
+      "toggled": 125
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 110,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "周二三四六日",
+      "normalized": 110,
+      "toggled": 78
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 111,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "除周五",
+      "normalized": 111,
+      "toggled": 47
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 112,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "周五六日",
+      "normalized": 112,
+      "toggled": 113
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 113,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周一五六日",
+      "normalized": 113,
+      "toggled": 115
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 114,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周二五六日",
+      "normalized": 114,
+      "toggled": 118
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 115,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": false,
+      "text": "周一二五六日",
+      "normalized": 115,
+      "toggled": 123
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 116,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "周三五六日",
+      "normalized": 116,
+      "toggled": 100
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 117,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "周一三五六日",
+      "normalized": 117,
+      "toggled": 85
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 118,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "周二三五六日",
+      "normalized": 118,
+      "toggled": 54
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 119,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "除周四",
+      "normalized": 119,
+      "toggled": 118
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 120,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": false,
+      "text": "周四五六日",
+      "normalized": 120,
+      "toggled": 122
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 121,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": false,
+      "text": "周一四五六日",
+      "normalized": 121,
+      "toggled": 125
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 122,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": true,
+      "text": "周二四五六日",
+      "normalized": 122,
+      "toggled": 114
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 123,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "除周三",
+      "normalized": 123,
+      "toggled": 107
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 124,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "周三四五六日",
+      "normalized": 124,
+      "toggled": 92
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 125,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "除周二",
+      "normalized": 125,
+      "toggled": 61
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 126,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": false,
+      "text": "除周一",
+      "normalized": 126,
+      "toggled": 127
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 127,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": true,
+      "bit": 1,
+      "matches": true,
+      "text": "每天",
+      "normalized": 127,
+      "toggled": 126
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 127,
+      "dayOfWeek": 2
+    },
+    "expected": {
+      "valid": true,
+      "bit": 2,
+      "matches": true,
+      "text": "每天",
+      "normalized": 127,
+      "toggled": 125
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 127,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": true,
+      "bit": 4,
+      "matches": true,
+      "text": "每天",
+      "normalized": 127,
+      "toggled": 123
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 127,
+      "dayOfWeek": 4
+    },
+    "expected": {
+      "valid": true,
+      "bit": 8,
+      "matches": true,
+      "text": "每天",
+      "normalized": 127,
+      "toggled": 119
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 127,
+      "dayOfWeek": 5
+    },
+    "expected": {
+      "valid": true,
+      "bit": 16,
+      "matches": true,
+      "text": "每天",
+      "normalized": 127,
+      "toggled": 111
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 127,
+      "dayOfWeek": 6
+    },
+    "expected": {
+      "valid": true,
+      "bit": 32,
+      "matches": true,
+      "text": "每天",
+      "normalized": 127,
+      "toggled": 95
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 127,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": true,
+      "bit": 64,
+      "matches": true,
+      "text": "每天",
+      "normalized": 127,
+      "toggled": 63
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 127,
+      "dayOfWeek": 0
+    },
+    "expected": {
+      "valid": true,
+      "bit": 0,
+      "matches": false,
+      "text": "每天",
+      "normalized": 127,
+      "toggled": 127
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 127,
+      "dayOfWeek": 8
+    },
+    "expected": {
+      "valid": true,
+      "bit": 0,
+      "matches": false,
+      "text": "每天",
+      "normalized": 127,
+      "toggled": 127
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 0,
+      "dayOfWeek": 1
+    },
+    "expected": {
+      "valid": false,
+      "bit": 1,
+      "matches": false,
+      "text": "未设置",
+      "normalized": 127,
+      "toggled": 1
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": -1,
+      "dayOfWeek": 7
+    },
+    "expected": {
+      "valid": false,
+      "bit": 64,
+      "matches": true,
+      "text": "未设置",
+      "normalized": 127,
+      "toggled": -65
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  },
+  {
+    "input": {
+      "mask": 128,
+      "dayOfWeek": 3
+    },
+    "expected": {
+      "valid": false,
+      "bit": 4,
+      "matches": false,
+      "text": "未设置",
+      "normalized": 127,
+      "toggled": 132
+    },
+    "reason": "周一占最低位，全部合法组合覆盖中文短标签；越界星期不命中"
+  }
+]

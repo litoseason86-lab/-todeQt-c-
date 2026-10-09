@@ -7,6 +7,8 @@
 #include "../src/services/ScheduleWeeks.h"
 #include "../src/services/HeatmapBands.h"
 #include <limits>
+#include "../src/services/LogicalDay.h"
+#include "../src/services/RoutineRules.h"
 
 class CaliberTests : public QObject
 {
@@ -14,6 +16,8 @@ class CaliberTests : public QObject
 private slots:
     void scheduleWeeks();
     void heatmapBands();
+    void logicalDay();
+    void routineWeekdays();
 };
 
 // 读表失败必须使测试失败，不能把零条数据当成口径通过。
@@ -81,6 +85,37 @@ void CaliberTests::heatmapBands()
     for (const QJsonValue& row : rows) {
         const QJsonObject data = row.toObject();
         QCOMPARE(HeatmapBands::bandForMinutes(number(data.value("input"))), data.value("expected").toInt());
+    }
+}
+
+// 凌晨归属由本地时分与日界决定，不以经过毫秒替代日历天。
+void CaliberTests::logicalDay()
+{
+    const QJsonArray rows = fixtures("logical-day");
+    QVERIFY(!rows.isEmpty());
+    for (const QJsonValue& row : rows) {
+        const QJsonObject data = row.toObject();
+        const QJsonObject input = data.value("input").toObject();
+        // 表中不带时区的文本固定为 UTC 构造，仅比较墙钟字段，隔离运行机器的时区。
+        const QDateTime timestamp = QDateTime::fromString(input.value("timestamp").toString() + QLatin1Char('Z'), Qt::ISODate);
+        QVERIFY(timestamp.isValid());
+        QCOMPARE(LogicalDay::dateOf(timestamp, input.value("dayStartHour").toInt()).toString(Qt::ISODate), data.value("expected").toString());
+    }
+}
+
+// 每日例行有效范围与星期位序必须和界面共用表，越界星期不生成任务。
+void CaliberTests::routineWeekdays()
+{
+    const QJsonArray rows = fixtures("routine-weekdays");
+    QVERIFY(!rows.isEmpty());
+    for (const QJsonValue& row : rows) {
+        const QJsonObject data = row.toObject();
+        const QJsonObject input = data.value("input").toObject(), expected = data.value("expected").toObject();
+        const int mask = input.value("mask").toInt();
+        const int bit = RoutineRules::maskForDayOfWeek(input.value("dayOfWeek").toInt());
+        QCOMPARE(RoutineRules::isValidWeekdayMask(mask), expected.value("valid").toBool());
+        QCOMPARE(bit, expected.value("bit").toInt());
+        QCOMPARE((mask & bit) != 0, expected.value("matches").toBool());
     }
 }
 

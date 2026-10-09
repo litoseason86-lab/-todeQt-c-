@@ -1689,7 +1689,7 @@ foreach(qml_test_file IN LISTS POMODORO_TODO_QML_TEST_FILES)
         FAIL_REGULAR_EXPRESSION "Unable to assign;TypeError;is not a function;ReferenceError;RangeError;Binding loop"
     )
     # 055-P2B：只有读表用例允许本地 XHR，生产与其它测试不放宽权限。
-    if(qml_test_name STREQUAL "schedule_weeks" OR qml_test_name STREQUAL "heatmap_bands")
+    if(qml_test_name STREQUAL "schedule_weeks" OR qml_test_name STREQUAL "heatmap_bands" OR qml_test_name STREQUAL "caliber_shared")
         set_property(TEST QmlTest.${qml_test_name} APPEND PROPERTY ENVIRONMENT "QML_XHR_ALLOW_FILE_READ=1")
     endif()
 endforeach()
