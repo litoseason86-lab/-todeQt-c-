@@ -105,6 +105,31 @@ Rectangle {
         return (isRunning ? "● " : "⏸ ") + (mode === 2 ? "休息 " : "") + timeText
     }
 
+    // 焦点和切页共用最小滚动量，避免已经可见的入口仍跳到视口顶端。
+    function ensureEntryVisible(entry) {
+        if (!entry || entryScroll.height <= 0)
+            return
+        var top = entry.mapToItem(entryColumn, 0, 0).y
+        var target = entryScroll.contentY
+        if (top < target)
+            target = top
+        else if (top + entry.height > target + entryScroll.height)
+            target = top + entry.height - entryScroll.height
+        entryScroll.contentY = Math.max(0, Math.min(target,
+                Math.max(0, entryScroll.contentHeight - entryScroll.height)))
+    }
+
+    function revealCurrentEntry() {
+        // 排序或缩放后等布局排位完成再按稳定页面 id 找入口，不保存会变化的行号。
+        var index = root.orderedEntryIds.indexOf(root.currentView)
+        if (index >= 0)
+            root.ensureEntryVisible(entryRepeater.itemAt(index))
+    }
+
+    onCurrentViewChanged: Qt.callLater(root.revealCurrentEntry)
+    onOrderedEntryIdsChanged: Qt.callLater(root.revealCurrentEntry)
+    Component.onCompleted: Qt.callLater(root.revealCurrentEntry)
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: Theme.space16
@@ -150,37 +175,81 @@ Rectangle {
             }
         }
 
-        // 条目按用户设定的顺序渲染。原来这里是两组写死的 SidebarItem，中间夹一条
-        // 「时间视图」小标题和一条分隔线；顺序既然交给用户，分组就不再成立——
-        // 一个用户可以把「课表」排到「今日任务」前面，那条线也就失去了含义。
-        Repeater {
-            model: root.orderedEntryIds
-
-            SidebarItem {
-                id: entryItem
-                required property string modelData
-
-                readonly property var presentation: root.entryPresentation[entryItem.modelData]
-
-                text: entryItem.presentation ? entryItem.presentation.text : ""
-                marker: entryItem.presentation ? entryItem.presentation.marker : ""
-                iconName: entryItem.presentation ? entryItem.presentation.iconName : ""
-                isActive: root.currentView === entryItem.modelData
-                // 只有专注计时那一条带走秒状态；参数显式传入，tick 才能驱动文本每秒刷新。
-                statusText: entryItem.modelData === "focus" && root.focusTimerRef
-                            ? root.focusStatusFor(root.focusTimerRef.hasActiveSession,
-                                                  root.focusTimerRef.phase,
-                                                  root.focusTimerRef.mode,
-                                                  root.focusTimerRef.isRunning,
-                                                  root.focusTimerRef.remainingSeconds,
-                                                  root.focusTimerRef.elapsedSeconds)
-                            : ""
-                onClicked: root.itemClicked(entryItem.modelData)
-            }
-        }
-
-        Item {
+        // 中间入口独占剩余高度：内容放得下时仍顶对齐，底部固定项不参与滚动。
+        ScrollView {
+            id: entryScrollView
+            Layout.fillWidth: true
             Layout.fillHeight: true
+            Layout.minimumHeight: 0
+            // ScrollView 会收养并裁剪滚动条，向右伸进原有侧栏边距，再把内容收回。
+            // 固定 16px 通道保留条目的原宽度，不依赖滚动条显隐，避免宽高绑定相互反馈。
+            Layout.rightMargin: -Theme.space16
+            rightPadding: Theme.space16
+            clip: true
+            activeFocusOnTab: false
+
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+            ScrollBar.vertical: PageScrollBar {
+                parent: entryScrollView
+                x: entryScrollView.width - width
+                y: 0
+                height: entryScrollView.height
+            }
+
+            Flickable {
+                id: entryScroll
+                objectName: "sidebarEntryScroll"
+                contentWidth: width
+                contentHeight: entryColumn.implicitHeight
+                flickableDirection: Flickable.VerticalFlick
+                boundsBehavior: Flickable.StopAtBounds
+                clip: true
+                onHeightChanged: Qt.callLater(root.revealCurrentEntry)
+                onContentHeightChanged: Qt.callLater(root.revealCurrentEntry)
+
+                ColumnLayout {
+                    id: entryColumn
+                    width: entryScroll.width
+                    height: implicitHeight
+                    spacing: Theme.space4
+
+                    Repeater {
+                        id: entryRepeater
+                        model: root.orderedEntryIds
+
+                        SidebarItem {
+                            id: entryItem
+                            required property string modelData
+
+                            readonly property var presentation: root.entryPresentation[entryItem.modelData]
+
+                            text: entryItem.presentation ? entryItem.presentation.text : ""
+                            marker: entryItem.presentation ? entryItem.presentation.marker : ""
+                            iconName: entryItem.presentation ? entryItem.presentation.iconName : ""
+                            isActive: root.currentView === entryItem.modelData
+                            // 只有专注计时那一条带走秒状态；参数显式传入，tick 才能驱动文本每秒刷新。
+                            statusText: entryItem.modelData === "focus" && root.focusTimerRef
+                                        ? root.focusStatusFor(root.focusTimerRef.hasActiveSession,
+                                                              root.focusTimerRef.phase,
+                                                              root.focusTimerRef.mode,
+                                                              root.focusTimerRef.isRunning,
+                                                              root.focusTimerRef.remainingSeconds,
+                                                              root.focusTimerRef.elapsedSeconds)
+                                        : ""
+                            // 重排会先创建委托再排位；只在实际位置变化后重定位选中项。
+                            onYChanged: {
+                                if (entryItem.isActive)
+                                    Qt.callLater(root.revealCurrentEntry)
+                            }
+                            onActiveFocusChanged: {
+                                if (entryItem.activeFocus)
+                                    root.ensureEntryVisible(entryItem)
+                            }
+                            onClicked: root.itemClicked(entryItem.modelData)
+                        }
+                    }
+                }
+            }
         }
 
         // 废纸篓固定在「设置」上方、不参与侧栏排序（用户在计划 054 里选定）：所以它不在
