@@ -456,6 +456,10 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Theme/ThemeColors.swift
         src/ui/ipad/Sources/IPadUI/Theme/WallpaperBackground.swift
         src/ui/ipad/Sources/IPadUI/Components/MarkedTextEditor.swift)
+    # 055-P3B：跨页任务动作与撤销提示状态。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/PendingDeletionStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/TaskActions.swift)
     # 055-P3B：领域协议与适配器按层登记，页面仍保留占位。
     target_sources(IPadCore PRIVATE
         src/ui/ipad/Sources/IPadCore/Bridging/TaskBridge.swift

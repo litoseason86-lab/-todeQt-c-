@@ -50,6 +50,8 @@ public final class ShellStore {
     public var capturePresented = false
     public private(set) var captureError = ""
     // P4 各页登记保存回调与新建/开始意图，外壳只转发；不在这里决定任务或计时业务流程。
+    // 跨页动作由原生根装配一次，持有点让占位外壳也能保存共用撤销状态。
+    public var taskActions: TaskActions?
     @ObservationIgnored public var onNewTask: (() -> Void)?
     @ObservationIgnored public var onStartOrPause: (() -> Void)?
     @ObservationIgnored private var editFlushers: [UUID: () -> Void] = [:]

@@ -11,10 +11,13 @@ import IPadCore
     var calls: [(name: String, id: Int, title: String, isRest: Bool)] = []
     func requestTask(id: Int, title: String) throws {
         calls.append(("requestTask", id, title, false)); if let error { throw error }
+        // 真实 PendingDeletion 的新请求先提交旧槽，不能让旧提示的退场回调提交新槽。
+        if state.active { try commit() }
         state.active = true; state.taskID = id; state.sessionID = -1; state.title = title; onChanged?()
     }
     func requestSession(id: Int, title: String, isRest: Bool) throws {
         calls.append(("requestSession", id, title, isRest)); if let error { throw error }
+        if state.active { try commit() }
         state.active = true; state.taskID = -1; state.sessionID = id; state.sessionIsRest = isRest; state.title = title; onChanged?()
     }
     func commit() throws {
