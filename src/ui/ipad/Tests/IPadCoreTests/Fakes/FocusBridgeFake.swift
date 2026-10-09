@@ -54,6 +54,11 @@ import IPadCore
     func handleTaskCompleted(taskID: Int) throws -> FocusTaskCompletion { try record("handleTaskCompleted", taskID: taskID); return focusTaskCompletion }
     func freeTimerWarningHours() throws -> Int { try record("freeTimerWarningHours"); return warningHours }
     func needsLongFreeStopConfirmation() throws -> Bool { try record("needsLongFreeStopConfirmation"); return needsConfirmation }
+    // 没设 longBreakMinutes 时原样返回所选时长；autoAdvance 按阶段给结果，没给的阶段不衔接。
+    var longBreakMinutes: Int?
+    var autoAdvance: [Int: Bool] = [:]
+    func nextBreakMinutes(selected: Int) throws -> Int { try record("nextBreakMinutes", seconds: selected); return longBreakMinutes ?? selected }
+    func autoAdvanceAfter(phase: Int) throws -> Bool { try record("autoAdvanceAfter", seconds: phase); return autoAdvance[phase] ?? false }
     func endCurrent() throws -> FocusEndResult { try record("endCurrent"); return focusEndResult }
     func endPomodoroCycle() throws -> FocusEndResult { try record("endPomodoroCycle"); return focusEndResult }
     func finishLongFree(record keep: Bool, correctedSeconds: Int) throws -> FocusFinishResult { recordedLongFree.append(keep); try record("finishLongFree", seconds: correctedSeconds); return focusFinishResult }

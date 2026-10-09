@@ -76,6 +76,9 @@ private slots:
     void init();
     void cleanup();
 
+    void nextBreakUsesLongBreakOnEveryNthPomodoro();
+    void autoAdvanceFollowsPerPhaseSwitch();
+
     void warningHoursUsesValidSettingValue();
     void warningHoursFallsBackToEightWhenOutOfRange();
     void longFreeConfirmationUsesStrictlyGreaterThanThreshold();
@@ -918,6 +921,46 @@ void FocusSessionControllerTests::finishLongFreeFailuresCarryDistinctMessages()
     QVERIFY(!r.value("ok").toBool());
     QCOMPARE(r.value("error").toString(), QStringLiteral("专注丢弃失败，请重试"));
     QVERIFY(timer()->hasActiveSession());
+}
+
+void FocusSessionControllerTests::nextBreakUsesLongBreakOnEveryNthPomodoro()
+{
+    // 保证：长休息只在连续完成数大于 0 且是间隔的整数倍时生效，其余用页面当前选的休息时长；关掉长休息一律用所选时长。
+    // 三个时长互不相同（所选 7、默认 5、长休息 20），返回哪一个一眼可辨。
+    m_settings->setLongBreakEnabled(true);
+    m_settings->setLongBreakInterval(4);
+    m_settings->setLongBreakMinutes(20);
+    QVERIFY(m_settings->longBreakEnabled());
+    QCOMPARE(m_settings->longBreakInterval(), 4);
+    QCOMPARE(m_settings->longBreakMinutes(), 20);
+
+    const QList<QPair<int, int>> table{{0, 7}, {3, 7}, {4, 20}, {6, 7}, {8, 20}};
+    for (const auto& row : table) {
+        timer()->m_completedPomodoros = row.first;
+        QCOMPARE(m_controller->nextBreakMinutes(7), row.second);
+    }
+
+    m_settings->setLongBreakEnabled(false);
+    timer()->m_completedPomodoros = 4;
+    QCOMPARE(m_controller->nextBreakMinutes(7), 7);
+}
+
+void FocusSessionControllerTests::autoAdvanceFollowsPerPhaseSwitch()
+{
+    // 保证：工作段完成后只看「自动开始休息」，休息段完成后只看「自动开始下一个番茄」，两个开关不串用；其它阶段从不自动衔接。
+    struct Row { bool autoBreak; bool autoNext; int phase; bool expected; };
+    const QList<Row> table{
+        {true, false, 1, true}, {false, true, 1, false},
+        {false, true, 2, true}, {true, false, 2, false},
+        {true, true, 0, false}, {true, true, 3, false},
+    };
+    for (const Row& row : table) {
+        m_settings->setAutoStartBreak(row.autoBreak);
+        m_settings->setAutoStartNextPomodoro(row.autoNext);
+        QCOMPARE(m_settings->autoStartBreak(), row.autoBreak);
+        QCOMPARE(m_settings->autoStartNextPomodoro(), row.autoNext);
+        QCOMPARE(m_controller->autoAdvanceAfter(row.phase), row.expected);
+    }
 }
 
 QTEST_GUILESS_MAIN(FocusSessionControllerTests)

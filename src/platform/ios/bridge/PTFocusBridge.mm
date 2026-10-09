@@ -330,6 +330,18 @@ QVariantMap overflow() { return {{"valid", false}, {"error", QStringLiteral("专
     auto *c = controller(); if (!c) return fail(error, QStringLiteral("专注控制器不可用"));
     return c->needsLongFreeStopConfirmation();
 }
+- (NSInteger)nextBreakMinutes:(NSInteger)selectedBreakMinutes error:(NSError **)error {
+    NSAssert(NSThread.isMainThread, @"休息时长必须在主线程读取");
+    int selected; if (!integer(selectedBreakMinutes, &selected)) { fail(error, QStringLiteral("休息时长越界")); return 0; }
+    auto *c = controller(); if (!c) { fail(error, QStringLiteral("专注控制器不可用")); return 0; }
+    return c->nextBreakMinutes(selected);
+}
+- (BOOL)autoAdvanceAfterPhase:(NSInteger)completedPhase error:(NSError **)error {
+    NSAssert(NSThread.isMainThread, @"自动衔接判断必须在主线程调用");
+    int phase; if (!integer(completedPhase, &phase)) return fail(error, QStringLiteral("阶段越界"));
+    auto *c = controller(); if (!c) return fail(error, QStringLiteral("专注控制器不可用"));
+    return c->autoAdvanceAfter(phase);
+}
 - (PTFocusFinishResult *)finishLongFree:(BOOL)recordSession correctedSeconds:(NSInteger)seconds {
     NSAssert(NSThread.isMainThread, @"超长确认收尾必须在主线程");
     int duration; if (!integer(seconds, &duration)) return [[PTFocusFinishResult alloc] initWithValue:overflow()];
