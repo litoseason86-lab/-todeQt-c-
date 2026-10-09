@@ -508,6 +508,13 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Bridges/StatisticsBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/FocusHistoryBridgeAdapter.swift
     )
+    # 055-P4-2：课表数据桥接与 Swift 类型、适配器，追加在现有清单末尾。
+    target_sources(PomodoroTodo PRIVATE
+        src/platform/ios/bridge/PTScheduleBridge.h src/platform/ios/bridge/PTScheduleBridge.mm)
+    set_source_files_properties(src/platform/ios/bridge/PTScheduleBridge.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_sources(IPadCore PRIVATE src/ui/ipad/Sources/IPadCore/Bridging/ScheduleBridging.swift)
+    target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Bridges/ScheduleBridgeAdapter.swift)
+
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
@@ -1901,3 +1908,19 @@ set_source_files_properties(
     src/platform/ios/bridge/PTStatisticsBridge.mm
     src/platform/ios/bridge/PTFocusHistoryBridge.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+
+# 055-P4-2：课表桥接在 Mac 用 Foundation + Qt Test 测，复用同领域服务源清单。
+get_target_property(PT_SCHEDULE_TEST_SOURCES ScheduleServiceTests SOURCES)
+list(REMOVE_ITEM PT_SCHEDULE_TEST_SOURCES tests/ScheduleServiceTests.cpp)
+add_executable(PTScheduleBridgeTests ${PT_SCHEDULE_TEST_SOURCES}
+    tests/PTScheduleBridgeTests.mm
+    src/platform/ios/bridge/PTScheduleBridge.h src/platform/ios/bridge/PTScheduleBridge.mm
+    src/platform/ios/bridge/PTBridgeSupport.h src/platform/ios/bridge/PTBridgeSupport.mm)
+set_source_files_properties(tests/PTScheduleBridgeTests.mm src/platform/ios/bridge/PTScheduleBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_compile_definitions(PTScheduleBridgeTests PRIVATE PT_CALIBERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calibers")
+target_link_libraries(PTScheduleBridgeTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(PTScheduleBridgeTests)
+add_test(NAME PTScheduleBridgeTests COMMAND PTScheduleBridgeTests)
+set_tests_properties(PTScheduleBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
