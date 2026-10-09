@@ -25,10 +25,19 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                settings: SettingsBridgeAdapter(), statistics: StatisticsBridgeAdapter(),
                                focusHistory: FocusHistoryBridgeAdapter(), pendingDeletion: pending,
                                taskActions: actions)
+        // 055-P4-1：今日任务页的 Store 在根上装配一份，⌘N 经外壳现有回调切页并请求新建输入。
+        // 回调槽只有一个，今日页监听信号用的是自己的一份适配器，不占用 CoreBridges 里共享的那份。
+        let today = TodayStore(tasks: TaskBridgeAdapter(), interactions: InteractionBridgeAdapter(),
+                               logicalDay: LogicalDayBridgeAdapter(), settings: SettingsBridgeAdapter(),
+                               statistics: StatisticsBridgeAdapter(), gaps: GapReminderBridgeAdapter(),
+                               pendingDeletion: pending, shell: store)
+        store.onNewTask = { [weak store, weak today] in
+            store?.select(.today); today?.requestNewTask()
+        }
         // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
         PTLifecycleBridge.flushHandler = { [weak store] in
             MainActor.assumeIsolated { store?.flushEdits() }
         }
-        return UIHostingController(rootView: ShellRootView(store: store).environment(core))
+        return UIHostingController(rootView: ShellRootView(store: store).environment(core).environment(today).environment(store))
     }
 }

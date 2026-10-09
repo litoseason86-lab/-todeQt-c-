@@ -531,6 +531,15 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskCategoryPicker.swift
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskDetailSheet.swift
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskCompletionNoteSheet.swift)
+    # 055-P4-1 步骤 3：今日任务（Store 与页面）。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/TodayStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/TodayToolsStore.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Today/TodayView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Today/TodayBanners.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Today/TodaySheets.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Today/TodayToolsSheet.swift)
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
