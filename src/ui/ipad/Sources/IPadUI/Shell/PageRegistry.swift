@@ -9,7 +9,7 @@ import SwiftUI
         case .focus: placeholder(.focus)
         case .week: placeholder(.week)
         case .dashboard: placeholder(.dashboard)
-        case .knowledgeGap: placeholder(.knowledgeGap)
+        case .knowledgeGap: KnowledgeGapPage()
         case .todayFocus: placeholder(.todayFocus)
         case .schedule: placeholder(.schedule)
         case .monthGoal: placeholder(.monthGoal)

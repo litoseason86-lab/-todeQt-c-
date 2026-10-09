@@ -25,10 +25,20 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                settings: SettingsBridgeAdapter(), statistics: StatisticsBridgeAdapter(),
                                focusHistory: FocusHistoryBridgeAdapter(), pendingDeletion: pending,
                                taskActions: actions)
+        // 055-P4-3：一个领域一份会话，多个页面容器从环境复用。
+        let gaps = GapStore(bridge: KnowledgeGapAdapter(), logicalDay: core.logicalDay,
+                            shell: store, categories: core.categories, preferences: .standard)
+        // 共用桥接只有一个回调槽；串接前任接收者，合并其它 P4 计划时仍保留各自刷新。
+        let previousDayChanged = core.logicalDay.onChanged
+        core.logicalDay.onChanged = { [weak gaps] in previousDayChanged?(); gaps?.logicalDayChanged() }
+        let previousCategoryChanged = core.categories.onChanged
+        core.categories.onChanged = { [weak gaps] in previousCategoryChanged?(); gaps?.relatedDataChanged() }
+        let previousTasksChanged = core.tasks.onChanged
+        core.tasks.onChanged = { [weak gaps] in previousTasksChanged?(); gaps?.relatedDataChanged() }
         // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
         PTLifecycleBridge.flushHandler = { [weak store] in
             MainActor.assumeIsolated { store?.flushEdits() }
         }
-        return UIHostingController(rootView: ShellRootView(store: store).environment(core))
+        return UIHostingController(rootView: ShellRootView(store: store).environment(core).environment(store).environment(gaps))
     }
 }
