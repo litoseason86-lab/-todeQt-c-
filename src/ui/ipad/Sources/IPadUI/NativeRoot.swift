@@ -25,10 +25,12 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                settings: SettingsBridgeAdapter(), statistics: StatisticsBridgeAdapter(),
                                focusHistory: FocusHistoryBridgeAdapter(), pendingDeletion: pending,
                                taskActions: actions)
+        // 055-P4-4：页面订阅各自的桥接实例，单回调协议不会覆盖其它页面的失效通知。
+        let history = HistoryStore(history: FocusHistoryBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter())
         // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
         PTLifecycleBridge.flushHandler = { [weak store] in
             MainActor.assumeIsolated { store?.flushEdits() }
         }
-        return UIHostingController(rootView: ShellRootView(store: store).environment(core))
+        return UIHostingController(rootView: ShellRootView(store: store).environment(core).environment(store).environment(history))
     }
 }

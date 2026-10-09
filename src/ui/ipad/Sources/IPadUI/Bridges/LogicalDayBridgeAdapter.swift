@@ -2,6 +2,17 @@ import IPadCore
 import PTBridge
 @MainActor final class LogicalDayBridgeAdapter: LogicalDayBridgeProtocol {
     private let native = PTLogicalDayBridge()
+    func relation(_ date: String, to reference: String) throws -> DateRelation {
+        DateRelation(rawValue: try native.relation(ofDate: date, toDate: reference))!
+    }
+    func period(anchor: String, range: String, shift: Int, logicalToday: String) throws -> PeriodDates {
+        let result = try native.period(forAnchor: anchor, range: range, shift: shift, logicalToday: logicalToday)
+        var value = PeriodDates()
+        value.start = result.start; value.end = result.end; value.year = result.year; value.month = result.month
+        value.comparisonDistance = result.comparisonDistance
+        value.current = result.current; value.canAdvance = result.canAdvance
+        return value
+    }
     var today: String { native.today }
     var dayStartHour: Int { native.dayStartHour }
     var onChanged: (() -> Void)?

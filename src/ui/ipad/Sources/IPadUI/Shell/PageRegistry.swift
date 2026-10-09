@@ -12,7 +12,7 @@ import SwiftUI
         case .knowledgeGap: placeholder(.knowledgeGap)
         case .todayFocus: placeholder(.todayFocus)
         case .schedule: placeholder(.schedule)
-        case .monthGoal: placeholder(.monthGoal)
+        case .monthGoal: HistoryView()
         case .statistics: placeholder(.statistics)
         case .countdown: placeholder(.countdown)
         case .memo: placeholder(.memo)

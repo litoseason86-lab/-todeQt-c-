@@ -508,6 +508,15 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Bridges/StatisticsBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/FocusHistoryBridgeAdapter.swift
     )
+
+    # 055-P4-4：原生专注历史数据层、格式与月历，不改 Mac 的 QML 路径。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/HistoryStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/MonthGoalFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/History/HistoryView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/History/MonthGrid.swift)
+
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
