@@ -154,6 +154,78 @@ TestCase {
         }
     }
 
+    // 控制器替身（接口与 C++ FocusSessionController 一致）：同步返回用例设定的结果并记录调用。
+    // 业务规则（阈值、分发、失败文案、丢弃判定）由 tests/FocusSessionControllerTests.cpp 保证，
+    // 这里只验证页面把什么交给了控制器、按返回结果做了什么界面动作。
+    // 替身仍会推动 focusTimer 替身的状态（结束后会话消失），好让页面的状态同步照常运行。
+    QtObject {
+        id: controller
+
+        property bool needsConfirmation: false
+        property int warningHours: 8
+        // 非空时 endCurrent 原样返回它（result 为 ended 时仍结束计时器替身）。
+        property var endOutcome: null
+        property int endCurrentCalls: 0
+        property var finishCalls: []
+        property bool finishFails: false
+
+        function freeTimerWarningHours() {
+            return warningHours
+        }
+
+        function needsLongFreeStopConfirmation() {
+            return needsConfirmation
+        }
+
+        function endCurrent() {
+            endCurrentCalls += 1
+            if (endOutcome) {
+                if (endOutcome.result === "ended") {
+                    focusTimer.stopFocus()
+                }
+                return endOutcome
+            }
+            if (!focusTimer.hasActiveSession && focusTimer.phase === 0) {
+                return { result: "none", kind: "", discarded: false, error: "" }
+            }
+            var kind = (focusTimer.mode === 2 && focusTimer.phase === 3) ? "manualRest"
+                     : focusTimer.mode === 1 ? "pomodoro" : "free"
+            if (kind === "free" && needsConfirmation) {
+                return { result: "needsConfirmation", kind: kind, discarded: false, error: "" }
+            }
+            if (!focusTimer.stopFocus()) {
+                return { result: "failed", kind: kind, discarded: false, error: "控制器给的失败文案" }
+            }
+            return { result: "ended", kind: kind, discarded: false, error: "" }
+        }
+
+        property int endCycleCalls: 0
+
+        // 番茄页的结束：与 C++ 一致，空档里的 none 转成 ended/pomodoro；其余原样（这里复用 endCurrent）。
+        function endPomodoroCycle() {
+            endCycleCalls += 1
+            var r = endCurrent()
+            if (r.result === "none")
+                return { result: "ended", kind: "pomodoro", discarded: false, error: "" }
+            return r
+        }
+
+        function finishLongFree(recordSession, correctedSeconds) {
+            finishCalls = finishCalls.concat([{ record: recordSession, seconds: correctedSeconds }])
+            if (finishFails) {
+                return { ok: false, error: "控制器给的收尾失败文案" }
+            }
+            if (!recordSession) {
+                focusTimer.discardFreeFocus()
+            } else if (correctedSeconds > 0) {
+                focusTimer.stopFreeFocusWithDuration(correctedSeconds)
+            } else {
+                focusTimer.stopFocus()
+            }
+            return { ok: true, error: "" }
+        }
+    }
+
     QtObject {
         id: appSettingsMock
 
@@ -197,6 +269,7 @@ TestCase {
         height: testCase.height
         timer: focusTimer
         settings: appSettingsMock
+        focusSessionControllerRef: controller
     }
 
     Component {
@@ -266,6 +339,13 @@ TestCase {
         focusTimer.startBreakTaskTitle = ""
         focusTimer.startBreakFails = false
         focusTimer.resetPomodoroCountCalls = 0
+        controller.needsConfirmation = false
+        controller.warningHours = 8
+        controller.endOutcome = null
+        controller.endCurrentCalls = 0
+        controller.finishCalls = []
+        controller.finishFails = false
+        controller.endCycleCalls = 0
         appSettingsMock.autoStartBreak = false
         appSettingsMock.autoStartNextPomodoro = false
         appSettingsMock.longBreakEnabled = true
@@ -469,7 +549,9 @@ TestCase {
 
         view.endPomodoro()
 
-        compare(focusTimer.stopFocusCalls, 1)
+        // 接线：休息段（没有数据库会话）的结束也交给控制器；真正停表见 C++ endPomodoroBreakWithoutSessionStillStops。
+        compare(controller.endCurrentCalls, 1)
+        compare(focusEndedSpy.count, 1)
     }
 
     function test_freeModeHasNoFocusRing() {
@@ -980,75 +1062,142 @@ TestCase {
 
         view.endFreeFocus()
 
-        compare(focusTimer.stopFocusCalls, 1)
+        // 接线：结束交给控制器一次；返回 ended 后页面清错误行并发出 focusEnded。
+        compare(controller.endCurrentCalls, 1)
         compare(view.errorText, "")
         compare(focusEndedSpy.count, 1)
     }
 
     function test_endFreeFocusFailureShowsErrorWithoutSignal() {
         focusTimer.hasActiveSession = true
-        focusTimer.stopFocusFails = true
+        controller.endOutcome = { result: "failed", kind: "free", discarded: false, error: "控制器给的失败文案" }
         wait(20)
 
         view.endFreeFocus()
 
-        compare(view.errorText, "专注保存失败，请重试")
+        // 接线：错误行显示的是控制器返回的文案，不是页面自己的常量。
+        compare(view.errorText, "控制器给的失败文案")
         compare(focusEndedSpy.count, 0)
     }
 
-    function test_freeFocusAtWarningThresholdStopsWithoutConfirmation() {
+    function test_endFreeFocusEndedResultClearsSelectionAndError() {
+        // 新增接线用例（补原 test_endFreeFocus* 对「结束成功收尾」的覆盖）：错误行与选中任务一并清空。
         focusTimer.hasActiveSession = true
-        focusTimer.isRunning = true
-        focusTimer.elapsedSeconds = 8 * 60 * 60
+        view.selectedTaskId = 7
+        view.selectedTaskTitle = "测试任务"
+        view.errorText = "旧错误"
+        wait(20)
 
         view.endFreeFocus()
 
-        compare(focusTimer.stopFocusCalls, 1)
+        compare(view.errorText, "")
+        compare(view.selectedTaskId, -1)
         compare(focusEndedSpy.count, 1)
-        const dialog = findChild(view, "longFreeFocusConfirmDialog")
-        verify(dialog)
-        compare(dialog.opened, false)
     }
 
-    function test_customFreeFocusWarningThresholdIsUsed() {
-        appSettingsMock.freeTimerWarningHours = 12
+    function test_noControllerEndReportsFailureWithoutThrowing() {
+        // 新增接线用例：控制器没接上（嵌入式测试）时，结束入口报失败而不抛 TypeError，也不误发 focusEnded。
+        var bare = focusViewComponent.createObject(testCase, { timer: focusTimer, settings: appSettingsMock })
+        verify(bare)
         focusTimer.hasActiveSession = true
-        focusTimer.isRunning = true
-        focusTimer.elapsedSeconds = 9 * 60 * 60
-
-        view.endFreeFocus()
-
-        compare(focusTimer.stopFocusCalls, 1)
-        compare(focusEndedSpy.count, 1)
-        const dialog = findChild(view, "longFreeFocusConfirmDialog")
-        verify(dialog)
-        compare(dialog.opened, false)
+        bare.endFreeFocus()
+        compare(bare.errorText, "专注结束失败，请重试")
+        compare(bare.shouldConfirmLongFreeStop(), false)
+        compare(bare.freeTimerWarningHours(), 8)
+        bare.destroy()
     }
 
-    function test_longFreeFocusCanBeRecordedAfterConfirmation() {
+    function test_needsConfirmationOpensDialogWithoutEnding() {
+        // 接线：控制器说需要确认时，页面弹超长确认框，不结束、不发 focusEnded（阈值边界见 C++ longFreeConfirmationUsesStrictlyGreaterThanThreshold）。
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
-        focusTimer.elapsedSeconds = 8 * 60 * 60 + 1
+        controller.needsConfirmation = true
 
         view.endFreeFocus()
 
         const dialog = findChild(view, "longFreeFocusConfirmDialog")
         verify(dialog)
         tryCompare(dialog, "opened", true)
+        compare(controller.endCurrentCalls, 1)
         compare(focusTimer.stopFocusCalls, 0)
+        compare(focusEndedSpy.count, 0)
+    }
+
+    function test_confirmedResultEndsWithoutDialog() {
+        // 接线（原 test_freeFocusAtWarningThresholdStopsWithoutConfirmation / test_customFreeFocusWarningThresholdIsUsed 的界面侧）：
+        // 控制器说不用确认时直接结束，确认框不出现。阈值取值与自定义小时数见 C++ 的阈值用例。
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        controller.needsConfirmation = false
+
+        view.endFreeFocus()
+
+        compare(focusEndedSpy.count, 1)
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        compare(dialog.opened, false)
+    }
+
+    function test_dialogShowsWarningHoursFromController() {
+        // 新增接线用例（补原 test_customFreeFocusWarningThresholdIsUsed 的提醒小时数传递）：确认框用控制器给的小时数。
+        focusTimer.hasActiveSession = true
+        focusTimer.elapsedSeconds = 13 * 60 * 60
+        controller.needsConfirmation = true
+        controller.warningHours = 12
+
+        compare(view.freeTimerWarningHours(), 12)
+        view.endFreeFocus()
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        tryCompare(dialog, "opened", true)
+    }
+
+    function test_longFreeFocusCanBeRecordedAfterConfirmation() {
+        focusTimer.hasActiveSession = true
+        focusTimer.isRunning = true
+        focusTimer.elapsedSeconds = 8 * 60 * 60 + 1
+        controller.needsConfirmation = true
+
+        view.endFreeFocus()
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        verify(dialog)
+        tryCompare(dialog, "opened", true)
+        compare(controller.finishCalls.length, 0)
 
         const recordButton = findChild(dialog, "longFreeFocusRecordButton")
         verify(recordButton)
         mouseClick(recordButton)
-        tryCompare(focusTimer, "stopFocusCalls", 1)
+        // 接线：「记录」把「记录、不修正」交给控制器，成功后发 focusEnded。
+        tryCompare(controller.finishCalls, "length", 1)
+        compare(controller.finishCalls[0].record, true)
+        compare(controller.finishCalls[0].seconds, -1)
         tryCompare(focusEndedSpy, "count", 1)
-        compare(focusTimer.discardFreeFocusCalls, 0)
+    }
+
+    function test_longFreeFinishFailureShowsControllerError() {
+        // 新增接线用例：确认框的收尾失败时，错误行显示控制器的文案，页面不跳走（失败文案本身见 C++ finishLongFreeFailuresCarryDistinctMessages）。
+        focusTimer.hasActiveSession = true
+        focusTimer.elapsedSeconds = 9 * 60 * 60
+        controller.needsConfirmation = true
+        controller.finishFails = true
+
+        view.endFreeFocus()
+
+        const dialog = findChild(view, "longFreeFocusConfirmDialog")
+        tryCompare(dialog, "opened", true)
+        mouseClick(findChild(dialog, "longFreeFocusRecordButton"))
+
+        tryCompare(controller.finishCalls, "length", 1)
+        tryCompare(view, "errorText", "控制器给的收尾失败文案")
+        compare(focusEndedSpy.count, 0)
     }
 
     function test_longFreeFocusCanBeRecordedWithCorrectedDuration() {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
         focusTimer.elapsedSeconds = 9 * 60 * 60 + 45
+        controller.needsConfirmation = true
 
         view.endFreeFocus()
 
@@ -1068,9 +1217,10 @@ TestCase {
         verify(recordButton)
         mouseClick(recordButton)
 
-        tryCompare(focusTimer, "stopFreeFocusWithDurationCalls", 1)
-        compare(focusTimer.correctedFreeFocusDurationSeconds, 2 * 60 * 60 + 15 * 60)
-        compare(focusTimer.discardFreeFocusCalls, 0)
+        // 接线：弹窗里填的 2 小时 15 分换算成秒交给控制器；修正是否合法由 C++ 服务层把关。
+        tryCompare(controller.finishCalls, "length", 1)
+        compare(controller.finishCalls[0].record, true)
+        compare(controller.finishCalls[0].seconds, 2 * 60 * 60 + 15 * 60)
         tryCompare(focusEndedSpy, "count", 1)
     }
 
@@ -1078,6 +1228,7 @@ TestCase {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
         focusTimer.elapsedSeconds = 9 * 60 * 60 + 60
+        controller.needsConfirmation = true
 
         view.endFreeFocus()
 
@@ -1098,8 +1249,7 @@ TestCase {
         mouseClick(recordButton)
 
         // 弹窗必须原地拦下并说明上限，不能把放大的时长交给服务层，也不能顺手结束会话。
-        compare(focusTimer.stopFreeFocusWithDurationCalls, 0)
-        compare(focusTimer.stopFocusCalls, 0)
+        compare(controller.finishCalls.length, 0)
         compare(dialog.opened, true)
         const errorLabel = findChild(dialog, "longFreeFocusAdjustmentError")
         verify(errorLabel)
@@ -1109,8 +1259,8 @@ TestCase {
         hourField.text = "9"
         minuteField.text = "0"
         mouseClick(recordButton)
-        tryCompare(focusTimer, "stopFreeFocusWithDurationCalls", 1)
-        compare(focusTimer.correctedFreeFocusDurationSeconds, 9 * 60 * 60)
+        tryCompare(controller.finishCalls, "length", 1)
+        compare(controller.finishCalls[0].seconds, 9 * 60 * 60)
     }
 
     function test_manualRestUsesSeparatePanelAndDoesNotRequireTask() {
@@ -1154,6 +1304,7 @@ TestCase {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
         focusTimer.elapsedSeconds = 9 * 60 * 60
+        controller.needsConfirmation = true
 
         view.endFreeFocus()
 
@@ -1164,15 +1315,17 @@ TestCase {
         verify(discardButton)
         mouseClick(discardButton)
 
-        tryCompare(focusTimer, "discardFreeFocusCalls", 1)
+        // 接线：「不记录」交给控制器的是 record=false。
+        tryCompare(controller.finishCalls, "length", 1)
+        compare(controller.finishCalls[0].record, false)
         tryCompare(focusEndedSpy, "count", 1)
-        compare(focusTimer.stopFocusCalls, 0)
     }
 
     function test_longFreeFocusConfirmationCanContinueTiming() {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
         focusTimer.elapsedSeconds = 9 * 60 * 60
+        controller.needsConfirmation = true
 
         view.endFreeFocus()
 
@@ -1184,8 +1337,7 @@ TestCase {
         mouseClick(continueButton)
 
         tryCompare(dialog, "opened", false)
-        compare(focusTimer.stopFocusCalls, 0)
-        compare(focusTimer.discardFreeFocusCalls, 0)
+        compare(controller.finishCalls.length, 0)
         compare(focusTimer.hasActiveSession, true)
         compare(focusEndedSpy.count, 0)
     }
@@ -1196,6 +1348,7 @@ TestCase {
         focusTimer.elapsedSeconds = 9 * 60 * 60
         focusTimer.currentTaskId = 7
         focusTimer.currentTaskTitle = "测试任务"
+        controller.needsConfirmation = true
 
         view.toPomodoroTab(true)
 
@@ -1208,7 +1361,8 @@ TestCase {
         mouseClick(recordButton)
 
         tryCompare(view, "pomodoroModeSelected", true)
-        compare(focusTimer.stopFocusCalls, 1)
+        compare(controller.finishCalls.length, 1)
+        compare(controller.finishCalls[0].record, true)
         compare(view.selectedTaskId, 7)
         compare(view.selectedTaskTitle, "测试任务")
     }
@@ -1217,6 +1371,7 @@ TestCase {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
         focusTimer.elapsedSeconds = 9 * 60 * 60
+        controller.needsConfirmation = true
 
         compare(view.enterPomodoroWithTask(9, "新番茄任务"), true)
 
@@ -1228,7 +1383,8 @@ TestCase {
         mouseClick(discardButton)
 
         tryCompare(view, "pomodoroModeSelected", true)
-        compare(focusTimer.discardFreeFocusCalls, 1)
+        compare(controller.finishCalls.length, 1)
+        compare(controller.finishCalls[0].record, false)
         compare(view.selectedTaskId, 9)
         compare(view.selectedTaskTitle, "新番茄任务")
     }
@@ -1290,12 +1446,64 @@ TestCase {
         compare(focusTimer.startBreakSeconds, 5 * 60)
     }
 
-    function test_endPomodoroResetsPomodoroCount() {
+    function test_endPomodoroHandsOverToControllerAndFinishes() {
+        // 接线（原 test_endPomodoroResetsPomodoroCount 的界面侧）：番茄结束交给控制器，返回 ended 后清选中、发 focusEnded。
+        // 连续计数归零由控制器负责，见 C++ endPomodoroResetsConsecutiveCount。
+        focusTimer.mode = 1
         focusTimer.phase = 1
         focusTimer.hasActiveSession = true
+        view.selectedTaskId = 7
+        view.selectedTaskTitle = "测试任务"
         focusTimer.completedPomodoros = 3
         view.endPomodoro()
-        compare(focusTimer.resetPomodoroCountCalls, 1)
+        compare(controller.endCurrentCalls, 1)
+        compare(focusTimer.resetPomodoroCountCalls, 0)
+        compare(view.selectedTaskId, -1)
+        compare(focusEndedSpy.count, 1)
+    }
+
+    function test_endPomodoroFailureShowsControllerErrorAndKeepsSelection() {
+        // 新增接线用例（补原番茄失败文案的界面侧，文案本身见 C++ endFailureReportsPerModeMessageAndKeepsTimer）。
+        focusTimer.mode = 1
+        focusTimer.phase = 1
+        focusTimer.hasActiveSession = true
+        view.selectedTaskId = 7
+        controller.endOutcome = { result: "failed", kind: "pomodoro", discarded: false, error: "控制器给的失败文案" }
+        view.endPomodoro()
+        compare(view.errorText, "控制器给的失败文案")
+        compare(view.selectedTaskId, 7)
+        compare(focusEndedSpy.count, 0)
+    }
+
+    function test_endPomodoroWithNothingRunningLeavesViaEndPomodoroCycle() {
+        // 接线：空档里点结束，页面调的是 endPomodoroCycle（计数归零由它负责，见 C++ endPomodoroCycleInTheGap...），
+        // 返回 ended 就离开页面；页面自己不碰 resetPomodoroCount。
+        focusTimer.mode = 1
+        focusTimer.phase = 0
+        focusTimer.hasActiveSession = false
+        view.endPomodoro()
+        compare(controller.endCycleCalls, 1)
+        compare(focusTimer.resetPomodoroCountCalls, 0)
+        compare(focusEndedSpy.count, 1)
+    }
+
+    function test_endManualRestEmitsManualRestEndedFromControllerResult() {
+        // 新增接线用例（补主动休息结束的界面侧）：页面把结束交给控制器，返回 ended/manualRest 后发 manualRestEnded；
+        // 失败时错误行显示控制器的文案。
+        focusTimer.hasActiveSession = false
+        focusTimer.isRunning = true
+        focusTimer.mode = 2
+        focusTimer.phase = 3
+        controller.endOutcome = { result: "failed", kind: "manualRest", discarded: false, error: "控制器给的失败文案" }
+        view.endManualRest()
+        compare(view.errorText, "控制器给的失败文案")
+        compare(manualRestEndedSpy.count, 0)
+
+        controller.endOutcome = null
+        view.endManualRest()
+        compare(controller.endCurrentCalls, 2)
+        compare(view.errorText, "")
+        compare(manualRestEndedSpy.count, 1)
     }
 
     function test_autoStartBreakAfterWorkComplete() {

@@ -38,6 +38,7 @@ Item {
     // 单槽撤销删除的状态、计时、提交与撤销都在 C++ 的 PendingDeletion 里；这里只读出来给各页隐藏待删的行，
     // 界面自己只管撤销条。ref 为空（测试、没有装配）时视为没有待删项。
     property var pendingDeletionRef: null
+    property var focusSessionControllerRef: null
     readonly property int pendingDeleteTaskId: root.pendingDeletionRef ? root.pendingDeletionRef.taskId : -1
     readonly property int pendingDeleteSessionId: root.pendingDeletionRef ? root.pendingDeletionRef.sessionId : -1
     readonly property bool pendingDeleteIsRest: root.pendingDeletionRef ? root.pendingDeletionRef.sessionIsRest : false
@@ -579,30 +580,32 @@ Item {
     //   "ended"      已结束（包括不足 3 分钟被丢弃的情况）；
     //   "failed"     结束失败，计时仍在继续，原因写在 focusView.errorText。
     function endFocusInPlace() {
-        var timer = root.focusTimerRef
-        if (!timer || (!timer.hasActiveSession && Number(timer.phase) === 0)) {
+        // 按计时器的真实模式分发、超长确认、失败文案、连续计数归零都在控制器里，不看专注页本地的模式选择。
+        var outcome = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.endCurrent()
+                : { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" }
+        if (outcome.result === "none") {
             return "none"
         }
-        if (focusView.shouldConfirmLongFreeStop()) {
+        if (outcome.result === "needsConfirmation") {
             // 确认弹窗属于专注页，要切过去才看得见；记录、丢弃或修正由弹窗走完。
             root.requestLongFreeFocusStop()
             return "confirming"
         }
-
-        // 按计时器的真实模式分发，不看专注页本地的模式选择：
-        // 用户可能从没打开过专注页，本地选择未必和计时器一致。
-        // 模式取值：0 = 自由专注，1 = 番茄，2 = 主动休息（阶段 3）。
-        root.endingFocusInPlace = true
-        if (Number(timer.mode) === 2 && Number(timer.phase) === 3) {
-            focusView.endManualRest()
-        } else if (Number(timer.mode) === 1) {
-            focusView.endPomodoro()
-        } else {
-            focusView.endFreeFocus()
+        if (outcome.result === "failed") {
+            // 原因留在专注页的错误行里，仪表盘等调用方再转成提示条。
+            focusView.errorText = outcome.error
+            return "failed"
         }
+        // 专注页的收尾（清选中、发 focusEnded / manualRestEnded）；endingFocusInPlace 让跳页处理函数留在原页。
+        root.endingFocusInPlace = true
+        focusView.cancelAutoAdvance()
+        focusView.applyEndResult(outcome)
         root.endingFocusInPlace = false
-        // 三个结束入口成功时都会清空 errorText、失败时写入原因，所以调用之后读到的就是这一次的结果。
-        return focusView.errorText.length > 0 ? "failed" : "ended"
+        if (root.endingFocusForCompletion) {
+            root.completionFocusDiscarded = !!outcome.discarded
+        }
+        return "ended"
     }
 
     // 仪表盘「结束」。
@@ -895,6 +898,7 @@ Item {
                     taskManagerRef: root.taskManagerRef
                     knowledgeGapServiceRef: root.knowledgeGapServiceRef
                     settings: root.appSettingsRef
+                    focusSessionControllerRef: root.focusSessionControllerRef
                     pageActive: root.currentView === "focus"
                     pendingDeleteTaskId: root.pendingDeleteTaskId
 

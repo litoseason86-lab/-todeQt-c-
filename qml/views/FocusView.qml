@@ -10,6 +10,9 @@ Item {
 
     property var timer: null
     property var settings: null
+    // 专注计时的业务流程（C++ FocusSessionController）：结束的分发与失败文案、超长自由专注的判断与修正都在那边，
+    // 本页只按返回的结果做界面动作。为空时（嵌入式测试）结束入口报失败、不弹超长确认，不抛错。
+    property var focusSessionControllerRef: null
     property string errorText: ""
     property var pendingSwitch: null
     property var taskManagerRef: null
@@ -370,19 +373,12 @@ Item {
     }
 
     function freeTimerWarningHours() {
-        var configured = root.settings ? Number(root.settings.freeTimerWarningHours) : 8
-        return configured >= 1 && configured <= 24 ? Math.round(configured) : 8
+        return root.focusSessionControllerRef ? root.focusSessionControllerRef.freeTimerWarningHours() : 8
     }
 
     function shouldConfirmLongFreeStop() {
-        if (!root.timer || !root.timer.hasActiveSession || Number(root.timer.mode || 0) !== 0) {
-            return false
-        }
-        if (typeof root.timer.requiresFreeFocusStopConfirmation === "function") {
-            return root.timer.requiresFreeFocusStopConfirmation(root.freeTimerWarningHours())
-        }
-        // “超过”按严格大于处理：恰好 8:00:00 不弹，8:00:01 才进入保险确认。
-        return Number(root.timer.elapsedSeconds || 0) > root.freeTimerWarningHours() * 60 * 60
+        return root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.needsLongFreeStopConfirmation() : false
     }
 
     function clearPendingLongFreeAction() {
@@ -425,17 +421,11 @@ Item {
         if (!root.timer || action.length === 0) {
             return
         }
-        var succeeded = false
-        if (recordSession) {
-            var hasCorrection = Number(correctedDurationSeconds || 0) > 0
-            succeeded = hasCorrection && typeof root.timer.stopFreeFocusWithDuration === "function"
-                    ? root.timer.stopFreeFocusWithDuration(correctedDurationSeconds)
-                    : root.timer.stopFocus()
-        } else {
-            succeeded = typeof root.timer.discardFreeFocus === "function" && root.timer.discardFreeFocus()
-        }
-        if (!succeeded) {
-            root.errorText = recordSession ? "专注保存失败，请重试" : "专注丢弃失败，请重试"
+        var outcome = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.finishLongFree(recordSession, Number(correctedDurationSeconds || 0))
+                : { ok: false, error: recordSession ? "专注保存失败，请重试" : "专注丢弃失败，请重试" }
+        if (!outcome.ok) {
+            root.errorText = outcome.error
             return
         }
         root.applyPostFreeStopAction(action, taskId, taskTitle)
@@ -856,6 +846,41 @@ Item {
         }
     }
 
+    // 控制器没接上时的退化结果：当作结束失败，计时保持原样。
+    function endCurrentSession() {
+        if (root.focusSessionControllerRef) {
+            return root.focusSessionControllerRef.endCurrent()
+        }
+        return { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" }
+    }
+
+    // 把控制器的结束结果落成界面动作；MainWindow 原地结束时也走这里。
+    // needsConfirmation 在这里只弹确认框，切到专注页由调用方（MainWindow）负责。
+    function applyEndResult(outcome) {
+        if (outcome.result === "needsConfirmation") {
+            root.requestLongFreeConfirmation("end", -1, "")
+            return
+        }
+        if (outcome.result === "failed") {
+            root.errorText = outcome.error
+            return
+        }
+        if (outcome.kind === "manualRest") {
+            root.errorText = ""
+            root.manualRestEnded()
+            return
+        }
+        if (outcome.kind === "pomodoro") {
+            root.errorText = ""
+            root.justCompletedPhase = 0
+            root.clearSelectedTask()
+            root.focusEnded()
+            return
+        }
+        // free 与 none 同一收尾（none 是自动衔接的空档里点结束：没有东西要停，页面照样回到起点）。
+        root.applyPostFreeStopAction("end", -1, "")
+    }
+
     function endPomodoro() {
         root.cancelAutoAdvance()
         if (!root.timer) {
@@ -863,44 +888,25 @@ Item {
             root.focusEnded()
             return
         }
-        var shouldStopTimer = root.timer.phase !== 0 || root.timer.hasActiveSession
-
-        // 休息段不会创建数据库会话，hasActiveSession 为 false 仍必须允许结束计时器。
-        if (shouldStopTimer && !root.timer.stopFocus()) {
-            root.errorText = "番茄结束失败，请重试"
-            return
-        }
-
-        root.errorText = ""
-        root.justCompletedPhase = 0
-        // 完全结束番茄循环：连续计数归零，下一轮长休息节奏从头开始。
-        root.timer.resetPomodoroCount()
-        root.clearSelectedTask()
-        root.focusEnded()
+        // 番茄页的结束用专门入口：空档里计时器已回到自由模式，只有它能放弃整个番茄循环（连续计数归零）。
+        var outcome = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.endPomodoroCycle()
+                : { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" }
+        root.applyEndResult(outcome)
     }
 
     function endFreeFocus() {
         root.cancelAutoAdvance()
-        // 自由模式结束逻辑单点：页面按钮与沉浸层共用，避免两处复制。
-        if (root.shouldConfirmLongFreeStop()) {
-            root.requestLongFreeConfirmation("end", -1, "")
-            return
-        }
-        if (!root.timer || !root.timer.stopFocus()) {
-            root.errorText = "专注保存失败，请重试"
-            return
-        }
-        root.applyPostFreeStopAction("end", -1, "")
+        root.applyEndResult(root.endCurrentSession())
     }
 
     function endManualRest() {
-        if (!root.timer || root.timer.mode !== 2 || root.timer.phase !== 3
-                || !root.timer.stopFocus()) {
+        // 只在计时器确实处于主动休息时才结束；别的状态下收到这个入口，一律报失败而不是误停别的会话。
+        if (!root.timer || root.timer.mode !== 2 || root.timer.phase !== 3) {
             root.errorText = "结束休息失败，请重试"
             return
         }
-        root.errorText = ""
-        root.manualRestEnded()
+        root.applyEndResult(root.endCurrentSession())
     }
 
     Connections {

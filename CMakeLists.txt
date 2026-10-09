@@ -163,6 +163,8 @@ set(APP_SOURCES
     src/services/TaskInteractionCoordinator.cpp
     src/services/PendingDeletion.h
     src/services/PendingDeletion.cpp
+    src/services/FocusSessionController.h
+    src/services/FocusSessionController.cpp
     src/services/QmlValues.h
     # 外部 AI 接入（plans/047）：common 是与辅助程序共用的契约与路径，bridge 只编入主应用。
     src/mcp/common/McpContracts.h
@@ -1174,6 +1176,68 @@ target_link_libraries(PendingDeletionTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
 pomodoro_todo_enable_warnings(PendingDeletionTests)
 add_test(NAME PendingDeletionTests COMMAND PendingDeletionTests)
 set_tests_properties(PendingDeletionTests PROPERTIES TIMEOUT 90)
+
+# 055-P2A：专注计时控制器的业务规则（结束同口径、超长自由专注确认与修正）。
+# 用真实的 FocusTimer（注入假时钟）和临时库，源文件清单照 PendingDeletionTests。
+add_executable(FocusSessionControllerTests
+    tests/FocusSessionControllerTests.cpp
+    src/services/FocusSessionController.h
+    src/services/FocusSessionController.cpp
+    src/services/PendingDeletion.h
+    src/services/PendingDeletion.cpp
+    src/models/Task.cpp
+    src/models/FocusSession.cpp
+    src/services/DatabaseManager.h
+    src/services/DatabaseManager.cpp
+    src/services/SyncSchema.h
+    src/services/SyncSchema.cpp
+    src/services/SyncRecord.h
+    src/services/SyncRecord.cpp
+    src/services/SyncStore.h
+    src/services/SyncStore.cpp
+    src/services/SyncNotifier.h
+    src/services/SyncNotifier.cpp
+    src/services/SyncedSettings.h
+    src/services/SyncedSettings.cpp
+    src/services/FocusTimer.h
+    src/services/FocusTimer.cpp
+    src/services/MonotonicClock.h
+    src/services/MonotonicClock.cpp
+    src/services/FocusHistoryService.h
+    src/services/FocusHistoryService.cpp
+    src/services/CategoryManager.h
+    src/services/CategoryManager.cpp
+    src/services/TaskManager.h
+    src/services/TaskManager.cpp
+    src/services/RoutineManager.h
+    src/services/RoutineManager.cpp
+    src/services/RoutineRules.h
+    src/services/AppSettings.h
+    src/services/AppSettings.cpp
+    src/services/LogicalDay.h
+    src/services/LogicalDayService.h
+    src/services/LogicalDayService.cpp
+    src/services/FocusSessionRules.h
+    src/services/ScheduleService.h
+    src/services/ScheduleService.cpp
+    src/services/KnowledgeGapService.h
+    src/services/KnowledgeGapService.cpp
+    src/services/MemoService.h
+    src/services/MemoService.cpp
+    src/services/CountdownService.h
+    src/services/CountdownService.cpp
+    src/services/TrashStore.h
+    src/services/TrashStore.cpp
+    src/services/TrashService.h
+    src/services/TrashService.cpp
+    src/models/CountdownGoal.cpp
+    src/models/CountdownModel.h
+    src/models/CountdownModel.cpp
+)
+target_link_libraries(FocusSessionControllerTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
+pomodoro_todo_enable_warnings(FocusSessionControllerTests)
+add_test(NAME FocusSessionControllerTests COMMAND FocusSessionControllerTests)
+set_tests_properties(FocusSessionControllerTests PROPERTIES TIMEOUT 90)
 
 # 055-P3A：数据桥接仅依赖 Foundation 与 Qt，可在 macOS 测类型转换和信号生命周期。
 get_target_property(PT_SHELL_TEST_SOURCES TrashServiceTests SOURCES)

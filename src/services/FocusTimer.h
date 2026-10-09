@@ -149,6 +149,8 @@ private:
     friend class PhaseAlarmCoordinatorTests;
     // 同步测试在用例之间复位计时器（远端删除正在计时的任务）。
     friend class SyncTests;
+    // 专注计时控制器测试注入 FakeClock 推进长时间运行，并复位单例计时器。
+    friend class FocusSessionControllerTests;
 
     explicit FocusTimer(QObject* parent = nullptr);
 
