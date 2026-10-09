@@ -231,6 +231,21 @@ TestCase {
                     ? { kind: "confirmSwitch", taskId: taskId, title: title } : { kind: "pageOnly" }
         }
 
+        // 规则 3：完成任务时是否顺带结束专注。默认按 C++ 的判定（有会话且正是这个任务才结束，其余 none），
+        // completedOverride 用于接线用例。
+        property var completedOverride: null
+        property var completedCalls: []
+
+        function handleTaskCompleted(taskId) {
+            completedCalls = completedCalls.concat([taskId])
+            if (completedOverride)
+                return completedOverride
+            if (!focusTimer.hasActiveSession || focusTimer.currentTaskId !== taskId)
+                return { focusResult: "none", kind: "", discarded: false, error: "" }
+            var r = endCurrent()
+            return { focusResult: r.result, kind: r.kind, discarded: r.discarded, error: r.error }
+        }
+
         // 规则 5、8。默认同样按 C++ 的判定从 taskManager / pendingDeletion 替身推出，*Override 用于接线用例。
         property var candidateOverride: null
         property var createTodayOverride: null
@@ -654,6 +669,8 @@ TestCase {
         focusSessionController.stopForSwitchOverride = null
         focusSessionController.modeSwitchOverride = null
         focusSessionController.planCalls = []
+        focusSessionController.completedOverride = null
+        focusSessionController.completedCalls = []
         focusSessionController.candidateOverride = null
         focusSessionController.createTodayOverride = null
         focusSessionController.candidateCalls = []
@@ -2417,6 +2434,51 @@ TestCase {
         compare(toastText(), "已完成「英语」")
         tryCompare(mainWindow, "currentView", "focus", 3000)
         tryCompare(findChild(focusPage(), "longFreeFocusConfirmDialog"), "opened", true, 3000)
+    }
+
+    function test_completionAsksTheControllerWithTheCompletedTaskId() {
+        // 接线（规则 3）：完成任务时页面把任务编号交给控制器，是否结束由控制器说了算。
+        runFocusOn(7, "英语", 0)
+        completeOnTodayPage(8)
+        compare(focusSessionController.completedCalls.length, 1)
+        compare(focusSessionController.completedCalls[0], 8)
+        compare(focusSessionController.endCurrentCalls, 0)
+        compare(focusTimer.hasActiveSession, true)
+    }
+
+    function test_completionToastEndingsFollowTheControllerResult() {
+        // 接线（规则 3）：三种结尾文案只由控制器的 focusResult / discarded 决定，页面不自己判断计时器。
+        // 计时器替身此刻是空闲的，替身却说「已结束」，证明文案不是页面从计时器推出来的。
+        focusSessionController.completedOverride = { focusResult: "ended", kind: "free", discarded: false, error: "" }
+        completeOnTodayPage(7)
+        compare(toastText(), "已完成「英语」，专注已结束")
+
+        focusSessionController.completedOverride = { focusResult: "ended", kind: "free", discarded: true, error: "" }
+        completeOnTodayPage(7)
+        compare(toastText(), "已完成「英语」，专注不足 3 分钟，未计入记录")
+
+        focusSessionController.completedOverride = { focusResult: "failed", kind: "free", discarded: false, error: "控制器给的失败文案" }
+        completeOnTodayPage(7)
+        compare(toastText(), "已完成「英语」，但结束专注失败，计时仍在继续")
+        compare(focusPage().errorText, "控制器给的失败文案")
+
+        focusSessionController.completedOverride = { focusResult: "none", kind: "", discarded: false, error: "" }
+        completeOnTodayPage(7)
+        compare(toastText(), "已完成「英语」")
+    }
+
+    function test_completionNeedsConfirmationSwitchesToFocusPageWithoutSuffix() {
+        // 接线（规则 3）：控制器说需要确认时不加结尾、切到专注页弹超长确认框，不当作已结束。
+        runFocusOn(7, "英语", 0)
+        focusSessionController.needsConfirmation = true
+        focusSessionController.completedOverride = { focusResult: "needsConfirmation", kind: "free", discarded: false, error: "" }
+
+        completeOnTodayPage(7)
+
+        compare(toastText(), "已完成「英语」")
+        tryCompare(mainWindow, "currentView", "focus", 3000)
+        tryCompare(findChild(focusPage(), "longFreeFocusConfirmDialog"), "opened", true, 3000)
+        compare(focusTimer.hasActiveSession, true)
     }
 
     function test_everyTaskPageEndsTheRunningFocusInPlace_data() {

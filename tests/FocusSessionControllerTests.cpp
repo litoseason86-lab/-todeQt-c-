@@ -114,6 +114,14 @@ private slots:
     void createTodayTaskLandsOnLogicalTodayAndIdentifiesTheNewRow();
     void createTodayTaskRejectsBlankTitleWithoutWriting();
 
+    void completingTheTimedTaskEndsItsFocus();
+    void completingAnotherTaskLeavesTheTimerRunning();
+    void completingDuringARestDoesNotInterruptIt();
+    void completingThePausedTimedTaskAlsoEndsIt();
+    void completingTheTimedTaskUnderMinimumReportsDiscarded();
+    void completingTheTimedTaskPastThresholdAsksForConfirmation();
+    void completingTheTimedTaskReportsSaveFailure();
+
     void finishLongFreeWithCorrectionSavesCorrectedDuration();
     void finishLongFreeWithoutCorrectionSavesFullDuration();
     void finishLongFreeDiscardDropsSession();
@@ -768,6 +776,99 @@ void FocusSessionControllerTests::createTodayTaskRejectsBlankTitleWithoutWriting
         QCOMPARE(m_controller->createTodayTask(title), -1);
     }
     QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM tasks")), 0);
+}
+
+void FocusSessionControllerTests::completingTheTimedTaskEndsItsFocus()
+{
+    // 保证：完成的正是正在计时的任务时，顺带结束这段专注并写入记录。
+    const int taskId = startFreeFor(10 * 60);
+    QVERIFY(taskId > 0);
+    QCOMPARE(timer()->currentTaskId(), taskId);
+    const QVariantMap r = m_controller->handleTaskCompleted(taskId);
+    QCOMPARE(r.value("focusResult").toString(), QStringLiteral("ended"));
+    QVERIFY(!r.value("discarded").toBool());
+    QCOMPARE(r.value("error").toString(), QString());
+    QVERIFY(!timer()->hasActiveSession());
+    QCOMPARE(queryInt("SELECT duration FROM focus_sessions"), 10 * 60);
+}
+
+void FocusSessionControllerTests::completingAnotherTaskLeavesTheTimerRunning()
+{
+    // 保证：完成的不是正在计时的任务（例如已完成的任务再练一轮时完成别的），计时器和会话原样继续。
+    const int taskId = startFreeFor(10 * 60);
+    QVERIFY(taskId > 0);
+    const int sessionId = timer()->m_sessionId;
+    QVERIFY(sessionId > 0);
+    const QVariantMap r = m_controller->handleTaskCompleted(taskId + 1);
+    QCOMPARE(r.value("focusResult").toString(), QStringLiteral("none"));
+    QVERIFY(timer()->hasActiveSession());
+    QVERIFY(timer()->isRunning());
+    QCOMPARE(timer()->currentTaskId(), taskId);
+    QCOMPARE(timer()->m_sessionId, sessionId);
+}
+
+void FocusSessionControllerTests::completingDuringARestDoesNotInterruptIt()
+{
+    // 保证：番茄休息段带着刚才的任务但没有会话，此时完成这个任务不打断休息。
+    const int taskId = insertTask(QStringLiteral("番茄"));
+    QVERIFY(timer()->startBreakForTask(5 * 60, taskId, QStringLiteral("番茄")));
+    QVERIFY(!timer()->hasActiveSession());
+    QCOMPARE(timer()->currentTaskId(), taskId);
+    QCOMPARE(timer()->phase(), int(FocusTimer::BreakPhase));
+    const QVariantMap r = m_controller->handleTaskCompleted(taskId);
+    QCOMPARE(r.value("focusResult").toString(), QStringLiteral("none"));
+    QCOMPARE(timer()->phase(), int(FocusTimer::BreakPhase));
+    QVERIFY(timer()->isRunning());
+}
+
+void FocusSessionControllerTests::completingThePausedTimedTaskAlsoEndsIt()
+{
+    // 保证：暂停中的计时也是进行中的专注，完成它同样结束。
+    const int taskId = startFreeFor(10 * 60);
+    QVERIFY(taskId > 0);
+    QVERIFY(timer()->pauseFocus());
+    QVERIFY(timer()->hasActiveSession());
+    QVERIFY(!timer()->isRunning());
+    const QVariantMap r = m_controller->handleTaskCompleted(taskId);
+    QCOMPARE(r.value("focusResult").toString(), QStringLiteral("ended"));
+    QVERIFY(!timer()->hasActiveSession());
+    QCOMPARE(queryInt("SELECT duration FROM focus_sessions"), 10 * 60);
+}
+
+void FocusSessionControllerTests::completingTheTimedTaskUnderMinimumReportsDiscarded()
+{
+    // 保证：不足最小有效时长时仍算结束，但 discarded 为真，界面据此说明「未计入记录」。
+    const int taskId = startFreeFor(90);
+    QVERIFY(taskId > 0);
+    QVERIFY(90 < timer()->minimumValidMinutes() * 60);
+    const QVariantMap r = m_controller->handleTaskCompleted(taskId);
+    QCOMPARE(r.value("focusResult").toString(), QStringLiteral("ended"));
+    QVERIFY(r.value("discarded").toBool());
+    QCOMPARE(queryInt("SELECT COUNT(*) FROM focus_sessions"), 0);
+}
+
+void FocusSessionControllerTests::completingTheTimedTaskPastThresholdAsksForConfirmation()
+{
+    // 保证：超长自由专注可能是忘了停，完成任务时不直接停表，原样告诉界面需要确认。
+    const int taskId = startFreeFor(9 * kHour);
+    QVERIFY(taskId > 0);
+    QVERIFY(m_controller->needsLongFreeStopConfirmation());
+    const QVariantMap r = m_controller->handleTaskCompleted(taskId);
+    QCOMPARE(r.value("focusResult").toString(), QStringLiteral("needsConfirmation"));
+    QVERIFY(timer()->hasActiveSession());
+    QCOMPARE(timer()->elapsedSeconds(), 9 * kHour);
+}
+
+void FocusSessionControllerTests::completingTheTimedTaskReportsSaveFailure()
+{
+    // 保证：停表失败时如实带回失败和文案，计时仍在继续。
+    const int taskId = startFreeFor(10 * 60);
+    QVERIFY(taskId > 0);
+    DatabaseManager::instance()->close();
+    const QVariantMap r = m_controller->handleTaskCompleted(taskId);
+    QCOMPARE(r.value("focusResult").toString(), QStringLiteral("failed"));
+    QCOMPARE(r.value("error").toString(), QStringLiteral("专注保存失败，请重试"));
+    QVERIFY(timer()->hasActiveSession());
 }
 
 void FocusSessionControllerTests::finishLongFreeWithCorrectionSavesCorrectedDuration()

@@ -584,9 +584,14 @@ Item {
     //   "failed"     结束失败，计时仍在继续，原因写在 focusView.errorText。
     function endFocusInPlace() {
         // 按计时器的真实模式分发、超长确认、失败文案、连续计数归零都在控制器里，不看专注页本地的模式选择。
-        var outcome = root.focusSessionControllerRef
+        return root.applyInPlaceEnd(root.focusSessionControllerRef
                 ? root.focusSessionControllerRef.endCurrent()
-                : { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" }
+                : { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" })
+    }
+
+    // 把控制器的结束结果（{result, kind, discarded, error}）落成原地结束的界面动作，返回值含义同 endFocusInPlace。
+    // 仪表盘「结束」与完成任务时顺带结束专注共用。
+    function applyInPlaceEnd(outcome) {
         if (outcome.result === "none") {
             return "none"
         }
@@ -605,9 +610,6 @@ Item {
         focusView.cancelAutoAdvance()
         focusView.applyEndResult(outcome)
         root.endingFocusInPlace = false
-        if (root.endingFocusForCompletion) {
-            root.completionFocusDiscarded = !!outcome.discarded
-        }
         return "ended"
     }
 
@@ -623,27 +625,28 @@ Item {
     // 不单独弹提示，改由完成提示一并说明：提示条只有一个槽，单独弹会被紧跟着的撤销条顶掉；
     // 反过来先弹撤销条，又会被它顶掉撤销入口。
     property bool endingFocusForCompletion: false
-    property bool completionFocusDiscarded: false
 
     // 用户在今日、仪表盘或本周页亲手完成了任务（复选框或「完成」弹窗），写库已经成功。
     // 完成的正是正在计时的任务时，顺带结束这段专注：任务已经做完，计时再走下去
     // 只会把之后的时间也记到它头上，此前用户得专门去专注页再点一次「结束专注」。
     function handleTaskCompletedByUser(taskId, taskTitle) {
-        var timer = root.focusTimerRef
-        var focusResult = "none"
-        // 只认「此刻正在给这个任务计时」时的这一下完成，不能写成「任务已完成就停表」：
-        // 已完成的任务允许再练一轮（专注页选择器里可以挑），那种计时不该被打断。
-        // 番茄休息阶段没有专注会话（hasActiveSession 为假），休息照常进行。
-        if (timer && timer.hasActiveSession && Number(timer.currentTaskId) === Number(taskId)) {
-            root.completionFocusDiscarded = false
-            root.endingFocusForCompletion = true
-            focusResult = root.endFocusInPlace()
-            root.endingFocusForCompletion = false
-        }
+        // 要不要结束（只认「此刻正在给这个任务计时」）由控制器判断，见 FocusSessionController::handleTaskCompleted；
+        // 控制器没接上时当作没有可结束的计时。
+        // 停表发生在这次调用里，计时器会同步发 sessionDiscarded：标志为真期间它不单独弹提示，
+        // 由下面的完成提示一并说明，所以标志必须罩住这次调用本身。
+        root.endingFocusForCompletion = true
+        var completed = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.handleTaskCompleted(taskId)
+                : { focusResult: "none", kind: "", discarded: false, error: "" }
+        root.endingFocusForCompletion = false
+        var focusResult = completed.focusResult === "none"
+                ? "none"
+                : root.applyInPlaceEnd({ result: completed.focusResult, kind: completed.kind,
+                                         discarded: completed.discarded, error: completed.error })
 
         var message = "已完成「" + String(taskTitle || "") + "」"
         if (focusResult === "ended") {
-            message += root.completionFocusDiscarded ? "，专注不足 3 分钟，未计入记录" : "，专注已结束"
+            message += completed.discarded ? "，专注不足 3 分钟，未计入记录" : "，专注已结束"
         } else if (focusResult === "failed") {
             // 失败原因同时留在专注页的错误行里，用户去专注页还能再点「结束专注」。
             message += "，但结束专注失败，计时仍在继续"
@@ -1298,7 +1301,6 @@ Item {
 
         function onSessionDiscarded(duration) {
             if (root.endingFocusForCompletion) {
-                root.completionFocusDiscarded = true
                 return
             }
             root.showToast("本次专注不足 3 分钟，未计入记录")

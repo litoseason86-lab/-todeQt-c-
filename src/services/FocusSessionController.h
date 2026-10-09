@@ -68,6 +68,13 @@ public:
     // 编号来自 createTask 的返回值，不按标题反查：同一天允许同名任务，反查会绑到别人头上。
     Q_INVOKABLE int createTodayTask(const QString& title);
 
+    // 规则 3：用户在今日 / 仪表盘 / 本周页亲手完成了任务，写库已成功。返回 {focusResult, kind, discarded, error}：
+    // 只在「有活动会话且正在计时的就是这个任务」时调 endCurrent()，把它的 result 作为 focusResult
+    // （ended / failed / needsConfirmation），kind、discarded、error 原样带回；其余一律 focusResult = none：
+    // 已完成的任务允许再练一轮，那种计时不能被完成动作打断；番茄休息段没有会话（hasActiveSession 为假），休息照常进行。
+    // needsConfirmation 是超长自由专注，尚未结束，由界面切到专注页弹确认。
+    Q_INVOKABLE QVariantMap handleTaskCompleted(int taskId);
+
     // 超长自由专注的提醒时长（小时）：设置值在 1–24 之间取整，否则用 8。
     Q_INVOKABLE int freeTimerWarningHours() const;
     // 有活动会话、mode == 0，且已超过提醒时长（严格大于：恰好等于阈值不弹，多一秒才弹）。

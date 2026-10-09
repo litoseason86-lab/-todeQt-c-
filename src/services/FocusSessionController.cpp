@@ -113,6 +113,25 @@ QVariantMap FocusSessionController::endPomodoroCycle()
     return outcome;
 }
 
+QVariantMap FocusSessionController::handleTaskCompleted(int taskId)
+{
+    if (!m_timer || !m_timer->hasActiveSession() || m_timer->currentTaskId() != taskId) {
+        return {
+            {QStringLiteral("focusResult"), QStringLiteral("none")},
+            {QStringLiteral("kind"), QString()},
+            {QStringLiteral("discarded"), false},
+            {QStringLiteral("error"), QString()},
+        };
+    }
+    const QVariantMap ended = endCurrent();
+    return {
+        {QStringLiteral("focusResult"), ended.value(QStringLiteral("result"))},
+        {QStringLiteral("kind"), ended.value(QStringLiteral("kind"))},
+        {QStringLiteral("discarded"), ended.value(QStringLiteral("discarded"))},
+        {QStringLiteral("error"), ended.value(QStringLiteral("error"))},
+    };
+}
+
 QVariantMap FocusSessionController::finishLongFree(bool recordSession, int correctedSeconds)
 {
     bool succeeded = false;
