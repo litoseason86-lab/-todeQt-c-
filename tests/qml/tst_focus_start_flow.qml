@@ -170,6 +170,67 @@ TestCase {
             return { result: "ended", kind: kind, discarded: focusTimer.stopDiscards, error: "" }
         }
 
+        // 规则 2、6 的接口。默认按与 C++ 相同的判定表从计时器 / 设置替身推出结果（判定表本身由
+        // FocusSessionControllerTests 保证），好让下面依赖真实分流的流程用例照常运行；
+        // 接线用例设置 *Override 后，替身原样返回，验证页面只听控制器的、不自己再判断。
+        property var planOverride: null
+        property var consequenceOverride: null
+        property var stopForSwitchOverride: null
+        property var modeSwitchOverride: null
+        property var planCalls: []
+        property var stopForSwitchCalls: []
+        property var modeSwitchCalls: []
+        property int captureCalls: 0
+
+        function planTaskEntry(taskId, title) {
+            planCalls = planCalls.concat([{ taskId: taskId, title: title }])
+            if (planOverride)
+                return planOverride
+            var trimmed = String(title || "").trim()
+            var kind = (taskId <= 0 || trimmed.length === 0) ? "invalid"
+                     : (focusTimer.hasActiveSession && focusTimer.currentTaskId === taskId) ? "returnToCurrent"
+                     : (focusTimer.hasActiveSession || focusTimer.phase !== 0) ? "confirmSwitch" : "apply"
+            return { kind: kind, usePomodoro: appSettings.lastMode === 1,
+                     autoStart: appSettings.quickStartEnabled, title: trimmed }
+        }
+
+        // 注意：确认框文案是绑定，会反复调用这里，替身不能在其中写属性（会触发 Binding loop）。
+        function switchConsequence() {
+            if (consequenceOverride)
+                return consequenceOverride
+            var kind = (focusTimer.phase === 2 || focusTimer.phase === 3) ? "restKept"
+                     : focusTimer.elapsedSeconds < focusTimer.minimumValidMinutes * 60 ? "notSaved" : "saved"
+            return { kind: kind, minimumMinutes: focusTimer.minimumValidMinutes }
+        }
+
+        function captureSwitchSource() {
+            captureCalls += 1
+            return { taskId: focusTimer.currentTaskId, mode: focusTimer.mode, phase: focusTimer.phase }
+        }
+
+        function stopForSwitch(source) {
+            stopForSwitchCalls = stopForSwitchCalls.concat([source])
+            if (stopForSwitchOverride)
+                return stopForSwitchOverride
+            if (focusTimer.currentTaskId !== source.taskId || focusTimer.mode !== source.mode
+                    || focusTimer.phase !== source.phase)
+                return "stateChanged"
+            if (needsConfirmation && focusTimer.mode === 0 && focusTimer.hasActiveSession)
+                return "needsLongFreeConfirmation"
+            return focusTimer.stopFocus() ? "stopped" : "stopFailed"
+        }
+
+        function planModeSwitch(selectedTaskId, selectedTitle) {
+            modeSwitchCalls = modeSwitchCalls.concat([{ taskId: selectedTaskId, title: selectedTitle }])
+            if (modeSwitchOverride)
+                return modeSwitchOverride
+            var busy = focusTimer.hasActiveSession || focusTimer.phase !== 0
+            var taskId = focusTimer.currentTaskId > 0 ? focusTimer.currentTaskId : selectedTaskId
+            var title = String(focusTimer.currentTaskTitle || selectedTitle || "").trim()
+            return busy && taskId > 0 && title.length > 0
+                    ? { kind: "confirmSwitch", taskId: taskId, title: title } : { kind: "pageOnly" }
+        }
+
         // 番茄页的结束：与 C++ 一致，空档里的 none 转成 ended/pomodoro。
         function endPomodoroCycle() {
             var r = endCurrent()
@@ -551,6 +612,14 @@ TestCase {
         focusSessionController.endOutcome = null
         focusSessionController.endCurrentCalls = 0
         focusSessionController.finishCalls = []
+        focusSessionController.planOverride = null
+        focusSessionController.consequenceOverride = null
+        focusSessionController.stopForSwitchOverride = null
+        focusSessionController.modeSwitchOverride = null
+        focusSessionController.planCalls = []
+        focusSessionController.stopForSwitchCalls = []
+        focusSessionController.modeSwitchCalls = []
+        focusSessionController.captureCalls = 0
         findChild(focusView, "longFreeFocusConfirmDialog").close()
         focusView.toPomodoroTab(false)
         focusView.clearSelectedTask()
@@ -682,6 +751,148 @@ TestCase {
         view.requestModeSwitch(true)
         compare(view.pomodoroModeSelected, true)
         compare(focusTimer.hasActiveSession, false)
+    }
+
+    // ===== 规则 2、6 的接线用例（判定表在 C++ FocusSessionControllerTests）=====
+    // 这些用例让替身返回与计时器实际状态不一致的结果，证明页面只听控制器的。
+
+    function test_taskEntryUsesControllerPlanForModeAndAutoStart() {
+        // 接线：MainWindow.startFocusForTask 把任务交给 planTaskEntry，用返回的 usePomodoro / autoStart 分流，
+        // 而不是读设置：设置里记着自由 + 快速开始，替身却说「番茄 + 不自动开始」。
+        appSettings.lastMode = 0
+        appSettings.quickStartEnabled = true
+        focusSessionController.planOverride = { kind: "apply", usePomodoro: true, autoStart: false, title: "任务" }
+
+        mainWindow.startFocusForTask(7, "任务")
+        wait(20)
+
+        compare(focusSessionController.planCalls.length >= 1, true)
+        compare(focusSessionController.planCalls[0].taskId, 7)
+        compare(focusTimer.startFocusCalls, 0)
+        compare(focusTimer.startPomodoroCalls, 0)
+        var view = focusPage()
+        compare(view.pomodoroModeSelected, true)
+        compare(view.selectedTaskId, 7)
+        compare(view.panelExpanded, true)
+    }
+
+    function test_taskEntryAutoStartFollowsControllerNotSettings() {
+        // 对照：设置里快速开始关着，替身说自动开始 + 自由，页面就立即开始自由计时。
+        appSettings.quickStartEnabled = false
+        appSettings.lastMode = 1
+        focusSessionController.planOverride = { kind: "apply", usePomodoro: false, autoStart: true, title: "任务" }
+
+        mainWindow.startFocusForTask(7, "任务")
+        wait(20)
+
+        compare(focusTimer.startFocusCalls, 1)
+        compare(focusTimer.startPomodoroCalls, 0)
+    }
+
+    function test_taskEntryKindDrivesThePageAction() {
+        // 接线：openTask 按 kind 分流。同一个空闲计时器，替身依次说 invalid / returnToCurrent / confirmSwitch / apply。
+        var view = focusPage()
+        view.errorText = ""
+        focusSessionController.planOverride = { kind: "invalid", usePomodoro: false, autoStart: true, title: "" }
+        compare(view.openTask(7, "任务", false, true), false)
+        compare(view.errorText, "任务信息无效，无法开始计时")
+        compare(focusTimer.startFocusCalls, 0)
+
+        focusSessionController.planOverride = { kind: "returnToCurrent", usePomodoro: false, autoStart: true, title: "任务" }
+        compare(view.openTask(7, "任务", false, true), true)
+        compare(focusTimer.startFocusCalls, 0)
+        compare(findChild(view, "focusSwitchDialog").opened, false)
+
+        focusSessionController.planOverride = { kind: "confirmSwitch", usePomodoro: false, autoStart: true, title: "任务" }
+        compare(view.openTask(7, "任务", false, true), true)
+        tryCompare(findChild(view, "focusSwitchDialog"), "opened", true, 2000)
+        compare(focusSessionController.captureCalls, 1)
+        compare(focusTimer.startFocusCalls, 0)
+        findChild(view, "focusSwitchDialog").close()
+
+        focusSessionController.planOverride = { kind: "apply", usePomodoro: false, autoStart: true, title: "任务" }
+        compare(view.openTask(7, "任务", false, true), true)
+        compare(focusTimer.startFocusCalls, 1)
+    }
+
+    function test_switchDialogTextFollowsControllerConsequence() {
+        // 接线：确认框的后果文案只由控制器的 kind 决定，页面不再看已用秒数和阶段（计时器替身此刻是 0 秒的专注）。
+        var view = focusPage()
+        focusSessionController.planOverride = { kind: "confirmSwitch", usePomodoro: false, autoStart: true, title: "新任务" }
+        focusSessionController.consequenceOverride = { kind: "restKept", minimumMinutes: 3 }
+        view.openTask(8, "新任务", false, true)
+        compare(view.switchDialogText().indexOf("当前休息会保留在时间轴中。") >= 0, true)
+
+        focusSessionController.consequenceOverride = { kind: "notSaved", minimumMinutes: 5 }
+        compare(view.switchDialogText().indexOf("当前专注不足 5 分钟，不会保存。") >= 0, true)
+
+        focusSessionController.consequenceOverride = { kind: "saved", minimumMinutes: 3 }
+        compare(view.switchDialogText().indexOf("当前专注会先保存。") >= 0, true)
+        findChild(view, "focusSwitchDialog").close()
+    }
+
+    function test_confirmSwitchFollowsStopForSwitchResult() {
+        // 接线：确认时页面把打开确认框时记下的来源交给 stopForSwitch，再按四种返回做界面动作。
+        var view = focusPage()
+        mainWindow.startFocusForTask(7, "原任务")
+        var dialog = findChild(view, "focusSwitchDialog")
+
+        focusSessionController.stopForSwitchOverride = "stateChanged"
+        mainWindow.startFocusForTask(8, "新任务")
+        dialog.accept()
+        compare(view.errorText, "计时状态已变化，请重新选择任务")
+        compare(focusTimer.currentTaskId, 7)
+        compare(focusSessionController.stopForSwitchCalls.length, 1)
+        compare(focusSessionController.stopForSwitchCalls[0].taskId, 7)
+
+        focusSessionController.stopForSwitchOverride = "stopFailed"
+        mainWindow.startFocusForTask(8, "新任务")
+        dialog.accept()
+        compare(view.errorText, "当前计时保存失败，未切换")
+        compare(focusTimer.currentTaskId, 7)
+
+        focusSessionController.stopForSwitchOverride = "needsLongFreeConfirmation"
+        mainWindow.startFocusForTask(8, "新任务")
+        dialog.accept()
+        tryCompare(findChild(view, "longFreeFocusConfirmDialog"), "opened", true, 2000)
+        compare(focusTimer.currentTaskId, 7)
+        findChild(view, "longFreeFocusConfirmDialog").close()
+
+        // stopped：替身只返回结果，计时器替身要自己停；页面接着落到新任务。
+        focusSessionController.stopForSwitchOverride = "stopped"
+        mainWindow.startFocusForTask(8, "新任务")
+        focusTimer.stopFocus()
+        dialog.accept()
+        compare(focusTimer.currentTaskId, 8)
+    }
+
+    function test_modeSwitchFollowsControllerPlan() {
+        // 接线：切页签时页面把选中项交给 planModeSwitch；confirmSwitch 才弹确认框并带上控制器给的任务，pageOnly 只换页签。
+        mainWindow.startFocusForTask(7, "原任务")
+        var view = focusPage()
+        view.selectedTaskId = 7
+        view.selectedTaskTitle = "原任务"
+
+        focusSessionController.modeSwitchOverride = { kind: "pageOnly" }
+        view.requestModeSwitch(true)
+        compare(focusSessionController.modeSwitchCalls.length, 1)
+        compare(focusSessionController.modeSwitchCalls[0].taskId, 7)
+        compare(findChild(view, "focusSwitchDialog").opened, false)
+        compare(view.pomodoroModeSelected, true)
+        view.toPomodoroTab(false)
+
+        focusSessionController.modeSwitchOverride = { kind: "confirmSwitch", taskId: 55, title: "控制器选的任务" }
+        view.requestModeSwitch(true)
+        tryCompare(findChild(view, "focusSwitchDialog"), "opened", true, 2000)
+        compare(view.pendingSwitch.taskId, 55)
+        compare(view.pendingSwitch.title, "控制器选的任务")
+        compare(view.pendingSwitch.autoStart, false)
+        findChild(view, "focusSwitchDialog").close()
+
+        // 要切的就是当前页签：页面状态，根本不问控制器。
+        var before = focusSessionController.modeSwitchCalls.length
+        view.requestModeSwitch(view.pomodoroModeSelected)
+        compare(focusSessionController.modeSwitchCalls.length, before)
     }
 
     function test_windowTitleReflectsTimerState() {

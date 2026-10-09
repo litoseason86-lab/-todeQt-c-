@@ -611,9 +611,9 @@ Item {
     function requestEndThen(taskId, title, usePomodoro, autoStart) {
         root.cancelAutoAdvance()
         root.syncToActiveTimer()
+        // 打开确认框时记下计时器的 {taskId, mode, phase}，确认时由控制器比对。
         root.pendingSwitch = { taskId: taskId, title: title, pomodoro: usePomodoro, autoStart: autoStart,
-            sourceId: root.timer.currentTaskId, sourceMode: root.timer.mode,
-            sourcePhase: root.timer.phase }
+            source: root.focusSessionControllerRef ? root.focusSessionControllerRef.captureSwitchSource() : null }
         switchDialog.open()
         return true
     }
@@ -622,18 +622,22 @@ Item {
     // autoStart 为真对应设置里的「快速开始」：直接按给定模式计时；
     // 为假只进入待机，由用户确认模式和时长后再点开始。
     function openTask(taskId, title, usePomodoro, autoStart) {
-        if (!root.timer || taskId <= 0 || !String(title || "").trim()) {
+        // 分流（无效 / 回到当前计时 / 先确认 / 直接落地）由控制器判断，本页只按 kind 做界面动作。
+        // 控制器没接上（嵌入式测试）时只在计时器空闲时落地，忙时报错，不去猜该不该截断计时。
+        var plan = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.planTaskEntry(taskId, title)
+                : { kind: root.timer && !root.timer.hasActiveSession && root.timer.phase === 0
+                          ? "apply" : "invalid" }
+        if (!root.timer || plan.kind === "invalid") {
             // 静默返回会让任务页「开始」和分段控件都变成点了没反应；必须给出可见原因。
             root.errorText = "任务信息无效，无法开始计时"
             return false
         }
-        // 点的正是正在计时的任务：回到当前专注即可。不看记住的模式——
-        // 那是「下一次」的偏好，拿它去结束正在进行的同一任务只会让人丢掉这段计时。
-        if (root.timer.hasActiveSession && root.timer.currentTaskId === taskId) {
+        if (plan.kind === "returnToCurrent") {
             root.syncToActiveTimer()
             return true
         }
-        if (root.timer.hasActiveSession || root.timer.phase !== 0)
+        if (plan.kind === "confirmSwitch")
             return root.requestEndThen(taskId, title, usePomodoro, autoStart)
         return root.applyTask(taskId, title, usePomodoro, autoStart)
     }
@@ -648,14 +652,13 @@ Item {
 
     // 被截断的是什么由当前阶段决定，不能对休息也说「专注不足 3 分钟不会保存」。
     function switchConsequenceText() {
-        if (!root.timer)
+        if (!root.timer || !root.focusSessionControllerRef)
             return ""
-        var phase = root.timerNumber("phase", 0)
-        if (phase === 2 || phase === 3)
+        var consequence = root.focusSessionControllerRef.switchConsequence()
+        if (consequence.kind === "restKept")
             return qsTr("当前休息会保留在时间轴中。")
-        var minimum = root.timerNumber("minimumValidMinutes", 3)
-        return root.timerNumber("elapsedSeconds", 0) < minimum * 60
-                ? qsTr("当前专注不足 %1 分钟，不会保存。").arg(minimum)
+        return consequence.kind === "notSaved"
+                ? qsTr("当前专注不足 %1 分钟，不会保存。").arg(consequence.minimumMinutes)
                 : qsTr("当前专注会先保存。")
     }
 
@@ -674,21 +677,21 @@ Item {
     function confirmSwitch() {
         var intent = root.pendingSwitch
         root.pendingSwitch = null
-        if (!intent || !root.timer)
+        if (!intent || !root.timer || !root.focusSessionControllerRef)
             return
-        // 确认期间阶段可能自然结束；不能把确认误用于刚自动启动的下一段。
-        if (root.timer.currentTaskId !== intent.sourceId || root.timer.mode !== intent.sourceMode
-                || root.timer.phase !== intent.sourcePhase) {
+        // 状态是否变过、要不要超长确认、停表是否成功都由控制器判断，本页按结果做界面动作。
+        var outcome = root.focusSessionControllerRef.stopForSwitch(intent.source)
+        if (outcome === "stateChanged") {
             root.errorText = "计时状态已变化，请重新选择任务"
             return
         }
-        if (root.shouldConfirmLongFreeStop()) {
+        if (outcome === "needsLongFreeConfirmation") {
             var action = intent.autoStart ? (intent.pomodoro ? "startPomodoro" : "startFree")
                                           : (intent.pomodoro ? "enterPomodoro" : "enterFree")
             root.requestLongFreeConfirmation(action, intent.taskId, intent.title)
             return
         }
-        if (!root.timer.stopFocus()) {
+        if (outcome === "stopFailed") {
             root.errorText = "当前计时保存失败，未切换"
             return
         }
@@ -698,16 +701,15 @@ Item {
     function requestModeSwitch(usePomodoro) {
         if (usePomodoro === root.pomodoroModeSelected)
             return
-        var busy = root.timer && (root.timer.hasActiveSession || root.timer.phase !== 0)
-        var taskId = root.timer && root.timer.currentTaskId > 0 ? root.timer.currentTaskId : root.selectedTaskId
-        var title = String((root.timer && root.timer.currentTaskTitle) || root.selectedTaskTitle || "").trim()
-        // 活动任务被删除后计时器会解绑任务 ID，此时按「切换任务」处理只会原地失败。
-        // 没有可继承的任务就退回页内切换：结束当前阶段并换模式，与改动前一致。
-        if (busy && taskId > 0 && title.length > 0) {
+        // 要不要先确认、继承哪个任务由控制器判断；没接上时只换页签。
+        var plan = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.planModeSwitch(root.selectedTaskId, root.selectedTaskTitle)
+                : { kind: "pageOnly" }
+        if (plan.kind === "confirmSwitch") {
             // 切模式只换计时方式：确认结束后停在新模式待机，番茄模式可先调时长。
             // 快速开始只管任务入口，这里即使开着也不自动开始。
             // 直接走确认框而不经 openTask：同一任务正在计时会被它当成「回到当前专注」。
-            root.requestEndThen(taskId, title, usePomodoro, false)
+            root.requestEndThen(plan.taskId, plan.title, usePomodoro, false)
         } else {
             root.toPomodoroTab(usePomodoro)
         }

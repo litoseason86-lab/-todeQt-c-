@@ -341,12 +341,15 @@ Item {
     // 开启「快速开始」：沿用上次模式立即计时；关闭（默认）：只进入专注页待机，
     // 预选上次的模式，由用户确认模式和时长后再点开始。
     function startFocusForTask(taskId, taskTitle) {
-        var usePomodoro = root.appSettingsRef && root.appSettingsRef.lastMode === 1
+        // 记住的模式、平台是否开放自由计时、快速开始开关都由控制器合成；没接上时保守地只进待机。
+        var plan = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.planTaskEntry(taskId, taskTitle)
+                : { usePomodoro: false, autoStart: false }
         root.switchToView("focus")
-        if (root.appSettingsRef && root.appSettingsRef.quickStartEnabled)
-            focusView.startTask(taskId, taskTitle, usePomodoro)
+        if (plan.autoStart)
+            focusView.startTask(taskId, taskTitle, plan.usePomodoro)
         else
-            focusView.prepareTask(taskId, taskTitle, usePomodoro)
+            focusView.prepareTask(taskId, taskTitle, plan.usePomodoro)
     }
 
     function isManualRestActive() {

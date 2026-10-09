@@ -23,6 +23,36 @@ public:
     FocusSessionController(FocusTimer* timer, TaskManager* tasks, AppSettings* settings,
                            PendingDeletion* pendingDeletion, QObject* parent = nullptr);
 
+    // 规则 2：任务入口（今日、仪表盘、本周）的「开始专注」怎么分流。返回 {kind, usePomodoro, autoStart, title}，
+    // title 是 trim 后的标题。kind：
+    //   invalid          编号 <= 0 或标题为空（界面提示「任务信息无效，无法开始计时」）；
+    //   returnToCurrent  计时中且正是这个任务：只回到当前计时，不看记住的模式（那是「下一次」的偏好）；
+    //   confirmSwitch    有活动会话或 phase != 0：要先确认结束当前计时；
+    //   apply            空闲：直接落到本页。
+    // usePomodoro = 记住的模式是番茄，或平台不开放自由计时；autoStart = 设置里的「快速开始」。
+    Q_INVOKABLE QVariantMap planTaskEntry(int taskId, const QString& title) const;
+
+    // 规则 6：计时中切换模式或任务，被截断的东西会怎样。返回 {kind, minimumMinutes}：
+    //   restKept   休息段（phase 2/3），休息记录会保留；
+    //   notSaved   已用秒数 < 最小有效时长，专注不会保存；
+    //   saved      其余，专注会先保存。
+    // 文案留在界面。
+    Q_INVOKABLE QVariantMap switchConsequence() const;
+
+    // 打开切换确认框时记下 {taskId, mode, phase}；用户点确认时把它交给 stopForSwitch。
+    Q_INVOKABLE QVariantMap captureSwitchSource() const;
+    // 确认期间计时可能自然结束或换了段，不能把确认误用到刚自动启动的下一段。依次判断：
+    //   stateChanged               计时器的 taskId / mode / phase 与记下的不一致（不停表）；
+    //   needsLongFreeConfirmation  超长自由专注，要先走超长确认（不停表）；
+    //   stopFailed                 stopFocus 失败（计时保持原样）；
+    //   stopped                    已停下，界面可以落到新任务 / 新模式。
+    Q_INVOKABLE QString stopForSwitch(const QVariantMap& source);
+
+    // 页签切换模式（番茄 / 自由）时是否要先确认：计时器忙且有可继承的任务时返回
+    // {kind: "confirmSwitch", taskId, title}（这条路不自动开始）；其余 {kind: "pageOnly"}，由界面只换页签。
+    // 可继承的任务：计时器有当前任务就用它，否则用界面选中的。「要切的模式就是当前页签」属于页面状态，不在这里判。
+    Q_INVOKABLE QVariantMap planModeSwitch(int selectedTaskId, const QString& selectedTitle) const;
+
     // 超长自由专注的提醒时长（小时）：设置值在 1–24 之间取整，否则用 8。
     Q_INVOKABLE int freeTimerWarningHours() const;
     // 有活动会话、mode == 0，且已超过提醒时长（严格大于：恰好等于阈值不弹，多一秒才弹）。
@@ -49,7 +79,7 @@ public:
 
 private:
     FocusTimer* m_timer = nullptr;
-    // 后续步骤（候选任务回查、新建任务、跳过撤销窗口里的任务）才会用到这两个依赖，
+    // 后续步骤（候选任务回查、新建任务、跳过撤销窗口里的任务）才会用到 m_tasks 与 m_pendingDeletion，
     // 构造签名先按计划定下，避免之后改装配。
     [[maybe_unused]] TaskManager* m_tasks = nullptr;
     AppSettings* m_settings = nullptr;

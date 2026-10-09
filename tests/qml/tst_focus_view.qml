@@ -199,6 +199,23 @@ TestCase {
             return { result: "ended", kind: kind, discarded: false, error: "" }
         }
 
+        // 规则 2、6 的接口：本文件不测这些流程，只提供与 C++ 同形的最小实现（页签切换要用 planModeSwitch）。
+        function planTaskEntry(taskId, title) {
+            return { kind: "apply", usePomodoro: false, autoStart: false, title: String(title || "").trim() }
+        }
+        function switchConsequence() { return { kind: "saved", minimumMinutes: 3 } }
+        function captureSwitchSource() {
+            return { taskId: focusTimer.currentTaskId, mode: focusTimer.mode, phase: focusTimer.phase }
+        }
+        function stopForSwitch(source) { return focusTimer.stopFocus() ? "stopped" : "stopFailed" }
+        function planModeSwitch(selectedTaskId, selectedTitle) {
+            var busy = focusTimer.hasActiveSession || focusTimer.phase !== 0
+            var taskId = focusTimer.currentTaskId > 0 ? focusTimer.currentTaskId : selectedTaskId
+            var title = String(focusTimer.currentTaskTitle || selectedTitle || "").trim()
+            return busy && taskId > 0 && title.length > 0
+                    ? { kind: "confirmSwitch", taskId: taskId, title: title } : { kind: "pageOnly" }
+        }
+
         property int endCycleCalls: 0
 
         // 番茄页的结束：与 C++ 一致，空档里的 none 转成 ended/pomodoro；其余原样（这里复用 endCurrent）。

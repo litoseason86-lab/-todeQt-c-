@@ -128,3 +128,94 @@ QVariantMap FocusSessionController::finishLongFree(bool recordSession, int corre
                              : QStringLiteral("专注丢弃失败，请重试"))},
     };
 }
+
+QVariantMap FocusSessionController::planTaskEntry(int taskId, const QString& title) const
+{
+    const QString trimmed = title.trimmed();
+    QString kind;
+    if (!m_timer || taskId <= 0 || trimmed.isEmpty()) {
+        kind = QStringLiteral("invalid");
+    } else if (m_timer->hasActiveSession() && m_timer->currentTaskId() == taskId) {
+        // 点的正是正在计时的任务：回到当前计时即可，不看记住的模式。
+        kind = QStringLiteral("returnToCurrent");
+    } else if (m_timer->hasActiveSession() || m_timer->phase() != FocusTimer::NoPhase) {
+        kind = QStringLiteral("confirmSwitch");
+    } else {
+        kind = QStringLiteral("apply");
+    }
+    const bool freeAllowed = !m_timer || m_timer->freeTimingAllowed();
+    return {
+        {QStringLiteral("kind"), kind},
+        {QStringLiteral("usePomodoro"), (m_settings && m_settings->lastMode() == 1) || !freeAllowed},
+        {QStringLiteral("autoStart"), m_settings && m_settings->quickStartEnabled()},
+        {QStringLiteral("title"), trimmed},
+    };
+}
+
+QVariantMap FocusSessionController::switchConsequence() const
+{
+    const int minimumMinutes = m_timer ? m_timer->minimumValidMinutes() : 3;
+    QString kind = QStringLiteral("saved");
+    if (m_timer) {
+        const int phase = m_timer->phase();
+        if (phase == FocusTimer::BreakPhase || phase == FocusTimer::ManualRestPhase) {
+            kind = QStringLiteral("restKept");
+        } else if (m_timer->elapsedSeconds() < minimumMinutes * 60) {
+            kind = QStringLiteral("notSaved");
+        }
+    }
+    return {
+        {QStringLiteral("kind"), kind},
+        {QStringLiteral("minimumMinutes"), minimumMinutes},
+    };
+}
+
+QVariantMap FocusSessionController::captureSwitchSource() const
+{
+    return {
+        {QStringLiteral("taskId"), m_timer ? m_timer->currentTaskId() : -1},
+        {QStringLiteral("mode"), m_timer ? m_timer->mode() : 0},
+        {QStringLiteral("phase"), m_timer ? m_timer->phase() : 0},
+    };
+}
+
+QString FocusSessionController::stopForSwitch(const QVariantMap& source)
+{
+    if (!m_timer) {
+        return QStringLiteral("stopFailed");
+    }
+    if (m_timer->currentTaskId() != source.value(QStringLiteral("taskId")).toInt()
+        || m_timer->mode() != source.value(QStringLiteral("mode")).toInt()
+        || m_timer->phase() != source.value(QStringLiteral("phase")).toInt()) {
+        return QStringLiteral("stateChanged");
+    }
+    if (needsLongFreeStopConfirmation()) {
+        return QStringLiteral("needsLongFreeConfirmation");
+    }
+    if (!m_timer->stopFocus()) {
+        return QStringLiteral("stopFailed");
+    }
+    return QStringLiteral("stopped");
+}
+
+QVariantMap FocusSessionController::planModeSwitch(int selectedTaskId, const QString& selectedTitle) const
+{
+    const QVariantMap pageOnly{{QStringLiteral("kind"), QStringLiteral("pageOnly")}};
+    if (!m_timer) {
+        return pageOnly;
+    }
+    const bool busy = m_timer->hasActiveSession() || m_timer->phase() != FocusTimer::NoPhase;
+    // 活动任务被删除后计时器会解绑任务编号：没有可继承的任务就退回页内切换，
+    // 否则按「切换任务」处理只会原地失败。
+    const int taskId = m_timer->currentTaskId() > 0 ? m_timer->currentTaskId() : selectedTaskId;
+    const QString timerTitle = m_timer->currentTaskTitle();
+    const QString title = (timerTitle.isEmpty() ? selectedTitle : timerTitle).trimmed();
+    if (!busy || taskId <= 0 || title.isEmpty()) {
+        return pageOnly;
+    }
+    return {
+        {QStringLiteral("kind"), QStringLiteral("confirmSwitch")},
+        {QStringLiteral("taskId"), taskId},
+        {QStringLiteral("title"), title},
+    };
+}

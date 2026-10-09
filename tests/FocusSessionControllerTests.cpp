@@ -76,6 +76,17 @@ private slots:
     void endPomodoroCycleOnRunningPomodoroMatchesEndCurrentAndResetsCount();
     void endFailureReportsPerModeMessageAndKeepsTimer();
 
+    void planTaskEntryFollowsQuickStartAndRememberedMode();
+    void planTaskEntryReturnsToTheRunningTaskIgnoringRememberedMode();
+    void planTaskEntryTreatsDisallowedFreeTimingAsPomodoro();
+    void planTaskEntryRejectsInvalidTaskOrTitle();
+    void switchConsequenceSeparatesRestSavedAndNotSaved();
+    void stopForSwitchBlocksWhenTimerStateChanged();
+    void stopForSwitchWaitsForLongFreeConfirmation();
+    void stopForSwitchStopsMatchingSessionAndReportsFailure();
+    void planModeSwitchInheritsTimerTaskBeforeSelection();
+    void planModeSwitchStaysOnPageWithoutBusyTimerOrTask();
+
     void finishLongFreeWithCorrectionSavesCorrectedDuration();
     void finishLongFreeWithoutCorrectionSavesFullDuration();
     void finishLongFreeDiscardDropsSession();
@@ -407,6 +418,196 @@ void FocusSessionControllerTests::endFailureReportsPerModeMessageAndKeepsTimer()
     QCOMPARE(r.value("kind").toString(), QStringLiteral("manualRest"));
     QCOMPARE(r.value("error").toString(), QStringLiteral("结束休息失败，请重试"));
     QCOMPARE(timer()->phase(), int(FocusTimer::ManualRestPhase));
+}
+
+void FocusSessionControllerTests::planTaskEntryFollowsQuickStartAndRememberedMode()
+{
+    // 保证：空闲时任务入口按「记住的模式」与「快速开始」开关分流，标题 trim 后交回。
+    QVERIFY(timer()->freeTimingAllowed());
+    QVERIFY(!timer()->hasActiveSession());
+    struct Row { int lastMode; bool quick; };
+    for (const Row row : {Row{0, false}, Row{0, true}, Row{1, false}, Row{1, true}}) {
+        m_settings->setLastMode(row.lastMode);
+        m_settings->setQuickStartEnabled(row.quick);
+        QCOMPARE(m_settings->lastMode(), row.lastMode);
+        QCOMPARE(m_settings->quickStartEnabled(), row.quick);
+        const QVariantMap plan = m_controller->planTaskEntry(7, QStringLiteral("  高等数学 \n"));
+        QCOMPARE(plan.value("kind").toString(), QStringLiteral("apply"));
+        QCOMPARE(plan.value("usePomodoro").toBool(), row.lastMode == 1);
+        QCOMPARE(plan.value("autoStart").toBool(), row.quick);
+        QCOMPARE(plan.value("title").toString(), QStringLiteral("高等数学"));
+    }
+}
+
+void FocusSessionControllerTests::planTaskEntryReturnsToTheRunningTaskIgnoringRememberedMode()
+{
+    // 保证：点正在计时的同一任务只回到当前计时，不看记住的模式；点别的任务才要确认；
+    // 只有休息段（没有会话）时，即使任务编号相同也不是「回到当前」。
+    m_settings->setLastMode(1);
+    const int taskId = startFreeFor(10 * 60);
+    QVERIFY(taskId > 0);
+    QCOMPARE(timer()->currentTaskId(), taskId);
+    QCOMPARE(m_controller->planTaskEntry(taskId, QStringLiteral("自由任务")).value("kind").toString(),
+             QStringLiteral("returnToCurrent"));
+    QCOMPARE(m_controller->planTaskEntry(taskId + 1, QStringLiteral("别的任务")).value("kind").toString(),
+             QStringLiteral("confirmSwitch"));
+
+    // 暂停也算进行中。
+    QVERIFY(timer()->pauseFocus());
+    QCOMPARE(m_controller->planTaskEntry(taskId, QStringLiteral("自由任务")).value("kind").toString(),
+             QStringLiteral("returnToCurrent"));
+    QVERIFY(m_controller->endCurrent().value("result").toString() == QStringLiteral("ended"));
+
+    QVERIFY(timer()->startBreakForTask(5 * 60, taskId, QStringLiteral("自由任务")));
+    QVERIFY(!timer()->hasActiveSession());
+    QCOMPARE(timer()->currentTaskId(), taskId);
+    QCOMPARE(m_controller->planTaskEntry(taskId, QStringLiteral("自由任务")).value("kind").toString(),
+             QStringLiteral("confirmSwitch"));
+}
+
+void FocusSessionControllerTests::planTaskEntryTreatsDisallowedFreeTimingAsPomodoro()
+{
+    // 保证：平台不开放自由计时时，即使记住的是自由模式，任务入口也按番茄处理。
+    m_settings->setLastMode(0);
+    QVERIFY(!m_controller->planTaskEntry(7, QStringLiteral("任务")).value("usePomodoro").toBool());
+    timer()->setFreeTimingAllowed(false);
+    QVERIFY(m_controller->planTaskEntry(7, QStringLiteral("任务")).value("usePomodoro").toBool());
+    timer()->setFreeTimingAllowed(true);
+    QVERIFY(!m_controller->planTaskEntry(7, QStringLiteral("任务")).value("usePomodoro").toBool());
+}
+
+void FocusSessionControllerTests::planTaskEntryRejectsInvalidTaskOrTitle()
+{
+    // 保证：编号不大于 0 或标题全是空白时判为无效；同样的流程里有效输入不会被误判。
+    QCOMPARE(m_controller->planTaskEntry(7, QStringLiteral("任务")).value("kind").toString(),
+             QStringLiteral("apply"));
+    for (const int id : {0, -1}) {
+        QCOMPARE(m_controller->planTaskEntry(id, QStringLiteral("任务")).value("kind").toString(),
+                 QStringLiteral("invalid"));
+    }
+    for (const QString& title : {QString(), QStringLiteral("   "), QStringLiteral(" \t\n ")}) {
+        QCOMPARE(m_controller->planTaskEntry(7, title).value("kind").toString(), QStringLiteral("invalid"));
+    }
+    // 忙碌时无效输入也优先判无效，不去确认切换。
+    QVERIFY(startFreeFor(10 * 60) > 0);
+    QCOMPARE(m_controller->planTaskEntry(0, QStringLiteral("任务")).value("kind").toString(),
+             QStringLiteral("invalid"));
+}
+
+void FocusSessionControllerTests::switchConsequenceSeparatesRestSavedAndNotSaved()
+{
+    // 保证：被截断的是休息、会保存的专注还是不足门槛不保存的专注，三者分得清，且门槛上「恰好」算保存。
+    const int minimumSeconds = timer()->minimumValidMinutes() * 60;
+    QVERIFY(startFreeFor(minimumSeconds - 1) > 0);
+    QVariantMap c = m_controller->switchConsequence();
+    QCOMPARE(c.value("kind").toString(), QStringLiteral("notSaved"));
+    QCOMPARE(c.value("minimumMinutes").toInt(), timer()->minimumValidMinutes());
+
+    m_clock.advanceSecs(1);
+    tick();
+    QCOMPARE(timer()->elapsedSeconds(), minimumSeconds);
+    QCOMPARE(m_controller->switchConsequence().value("kind").toString(), QStringLiteral("saved"));
+    QVERIFY(m_controller->endCurrent().value("result").toString() == QStringLiteral("ended"));
+
+    // 休息段：哪怕只跑了几秒（专注口径下会是 notSaved）也只说休息保留。
+    const int taskId = insertTask(QStringLiteral("番茄"));
+    QVERIFY(timer()->startBreakForTask(5 * 60, taskId, QStringLiteral("番茄")));
+    m_clock.advanceSecs(5);
+    tick();
+    QVERIFY(timer()->elapsedSeconds() < minimumSeconds);
+    QCOMPARE(m_controller->switchConsequence().value("kind").toString(), QStringLiteral("restKept"));
+    QVERIFY(m_controller->endCurrent().value("result").toString() == QStringLiteral("ended"));
+
+    QVERIFY(timer()->startManualRest());
+    QCOMPARE(timer()->phase(), int(FocusTimer::ManualRestPhase));
+    QCOMPARE(m_controller->switchConsequence().value("kind").toString(), QStringLiteral("restKept"));
+}
+
+void FocusSessionControllerTests::stopForSwitchBlocksWhenTimerStateChanged()
+{
+    // 保证：确认期间任务、模式或阶段任一项变了，确认被拦下，计时器不被停（不会误停刚自动启动的下一段）。
+    const int taskId = startFreeFor(10 * 60);
+    QVERIFY(taskId > 0);
+    const QVariantMap source = m_controller->captureSwitchSource();
+    QCOMPARE(source.value("taskId").toInt(), taskId);
+    QCOMPARE(source.value("mode").toInt(), int(FocusTimer::FreeMode));
+    QCOMPARE(source.value("phase").toInt(), int(FocusTimer::NoPhase));
+
+    // 对照：状态没变时才会停（用另一份相同来源在最后验证）。
+    timer()->m_currentTaskId = taskId + 100;
+    QCOMPARE(m_controller->stopForSwitch(source), QStringLiteral("stateChanged"));
+    QVERIFY(timer()->hasActiveSession());
+    timer()->m_currentTaskId = taskId;
+
+    timer()->m_mode = FocusTimer::PomodoroMode;
+    QCOMPARE(m_controller->stopForSwitch(source), QStringLiteral("stateChanged"));
+    QVERIFY(timer()->hasActiveSession());
+    timer()->m_mode = FocusTimer::FreeMode;
+
+    timer()->m_phase = FocusTimer::BreakPhase;
+    QCOMPARE(m_controller->stopForSwitch(source), QStringLiteral("stateChanged"));
+    QVERIFY(timer()->hasActiveSession());
+    timer()->m_phase = FocusTimer::NoPhase;
+
+    QCOMPARE(queryInt("SELECT COUNT(*) FROM focus_sessions WHERE duration >= 600"), 0);
+    QCOMPARE(m_controller->stopForSwitch(source), QStringLiteral("stopped"));
+    QCOMPARE(queryInt("SELECT duration FROM focus_sessions"), 10 * 60);
+}
+
+void FocusSessionControllerTests::stopForSwitchWaitsForLongFreeConfirmation()
+{
+    // 保证：超长自由专注切换时先走超长确认，不直接停表。
+    QVERIFY(startFreeFor(8 * kHour + 5) > 0);
+    const QVariantMap source = m_controller->captureSwitchSource();
+    QCOMPARE(m_controller->stopForSwitch(source), QStringLiteral("needsLongFreeConfirmation"));
+    QVERIFY(timer()->hasActiveSession());
+    QCOMPARE(timer()->elapsedSeconds(), 8 * kHour + 5);
+}
+
+void FocusSessionControllerTests::stopForSwitchStopsMatchingSessionAndReportsFailure()
+{
+    // 保证：停表失败时报 stopFailed 且计时保持；成功时报 stopped。
+    QVERIFY(startFreeFor(10 * 60) > 0);
+    const QVariantMap source = m_controller->captureSwitchSource();
+    DatabaseManager::instance()->close();
+    QCOMPARE(m_controller->stopForSwitch(source), QStringLiteral("stopFailed"));
+    QVERIFY(timer()->hasActiveSession());
+}
+
+void FocusSessionControllerTests::planModeSwitchInheritsTimerTaskBeforeSelection()
+{
+    // 保证：计时器忙时切模式要确认，继承的是计时器的任务而不是页面选中的；计时器没有任务时才用选中项。
+    const int taskId = startFreeFor(10 * 60);
+    QVERIFY(taskId > 0);
+    QVariantMap plan = m_controller->planModeSwitch(taskId + 50, QStringLiteral("选中的任务"));
+    QCOMPARE(plan.value("kind").toString(), QStringLiteral("confirmSwitch"));
+    QCOMPARE(plan.value("taskId").toInt(), taskId);
+    QCOMPARE(plan.value("title").toString(), QStringLiteral("自由任务"));
+    QVERIFY(m_controller->endCurrent().value("result").toString() == QStringLiteral("ended"));
+
+    // 休息段没有任务：用选中项。
+    QVERIFY(timer()->startBreak(5 * 60));
+    QCOMPARE(timer()->currentTaskId(), -1);
+    plan = m_controller->planModeSwitch(42, QStringLiteral("  选中的任务 "));
+    QCOMPARE(plan.value("kind").toString(), QStringLiteral("confirmSwitch"));
+    QCOMPARE(plan.value("taskId").toInt(), 42);
+    QCOMPARE(plan.value("title").toString(), QStringLiteral("选中的任务"));
+}
+
+void FocusSessionControllerTests::planModeSwitchStaysOnPageWithoutBusyTimerOrTask()
+{
+    // 保证：空闲时只换页签；忙但既没有计时器任务也没有选中项（休息段）时同样只换页签。
+    QVERIFY(!timer()->hasActiveSession());
+    QCOMPARE(m_controller->planModeSwitch(42, QStringLiteral("选中的任务")).value("kind").toString(),
+             QStringLiteral("pageOnly"));
+
+    QVERIFY(timer()->startBreak(5 * 60));
+    QCOMPARE(timer()->currentTaskId(), -1);
+    QCOMPARE(m_controller->planModeSwitch(-1, QString()).value("kind").toString(), QStringLiteral("pageOnly"));
+    QCOMPARE(m_controller->planModeSwitch(42, QStringLiteral("   ")).value("kind").toString(),
+             QStringLiteral("pageOnly"));
+    QCOMPARE(m_controller->planModeSwitch(0, QStringLiteral("标题")).value("kind").toString(),
+             QStringLiteral("pageOnly"));
 }
 
 void FocusSessionControllerTests::finishLongFreeWithCorrectionSavesCorrectedDuration()
