@@ -1,9 +1,11 @@
 #ifndef FOCUSSESSIONCONTROLLER_H
 #define FOCUSSESSIONCONTROLLER_H
 
+#include <QDateTime>
 #include <QObject>
 #include <QString>
 #include <QVariantMap>
+#include <functional>
 
 class AppSettings;
 class FocusTimer;
@@ -53,6 +55,19 @@ public:
     // 可继承的任务：计时器有当前任务就用它，否则用界面选中的。「要切的模式就是当前页签」属于页面状态，不在这里判。
     Q_INVOKABLE QVariantMap planModeSwitch(int selectedTaskId, const QString& selectedTitle) const;
 
+    // 规则 5：快捷键 / 全局热键「开始专注」自动挑哪条任务。返回 {id, title, selectionStale}，没有候选时 id 为 -1。
+    // 依次判断：
+    //   1. 界面选中项有效（编号 > 0、标题 trim 后非空）且按编号回查确实存在：用它（用户刚点过某条，不该被换掉）；
+    //   2. 选中项回查不到（在别处被删了）：selectionStale = true，界面据此清掉选中，然后继续往下；
+    //   3. 逻辑今日第一个未完成任务（顺序同今日页：未完成在前、display_order 升序），
+    //      跳过撤销窗口里的那条（窗口内它仍在库里，对它开始计时会在窗口结束后变成「未关联」）。
+    // 候选范围只是逻辑今日，不会挑到别的日期的任务。
+    Q_INVOKABLE QVariantMap autoStartCandidate(int selectedTaskId, const QString& selectedTitle) const;
+
+    // 规则 8：选择器里新建今日任务。标题 trim 后为空返回 -1，否则按逻辑今日建任务并返回新编号，失败返回 -1。
+    // 编号来自 createTask 的返回值，不按标题反查：同一天允许同名任务，反查会绑到别人头上。
+    Q_INVOKABLE int createTodayTask(const QString& title);
+
     // 超长自由专注的提醒时长（小时）：设置值在 1–24 之间取整，否则用 8。
     Q_INVOKABLE int freeTimerWarningHours() const;
     // 有活动会话、mode == 0，且已超过提醒时长（严格大于：恰好等于阈值不弹，多一秒才弹）。
@@ -79,11 +94,14 @@ public:
 
 private:
     FocusTimer* m_timer = nullptr;
-    // 后续步骤（候选任务回查、新建任务、跳过撤销窗口里的任务）才会用到 m_tasks 与 m_pendingDeletion，
-    // 构造签名先按计划定下，避免之后改装配。
-    [[maybe_unused]] TaskManager* m_tasks = nullptr;
+    // 逻辑今日的「现在」。默认取系统时钟；测试经友元注入固定时刻，才能稳定构造「自然日与逻辑日不同」的凌晨场景。
+    friend class FocusSessionControllerTests;
+    std::function<QDateTime()> m_now = [] { return QDateTime::currentDateTime(); };
+    QDate logicalToday() const;
+
+    TaskManager* m_tasks = nullptr;
     AppSettings* m_settings = nullptr;
-    [[maybe_unused]] PendingDeletion* m_pendingDeletion = nullptr;
+    PendingDeletion* m_pendingDeletion = nullptr;
 };
 
 #endif // FOCUSSESSIONCONTROLLER_H

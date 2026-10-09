@@ -3,7 +3,6 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import ".."
 import "../components"
-import "../LogicalDay.js" as LogicalDay
 
 Item {
     id: root
@@ -166,38 +165,25 @@ Item {
                 : loaded
     }
 
-    // 可自动启动的那条：已有有效选中项优先——用户刚在今日页点过某条，
-    // 按 ⌘↩ 不该被换成别的任务；否则取今日第一个未完成的
-    // （getTodayTasks 已按未完成在前、display_order 升序排好）。
+    // 可自动启动的那条（挑谁由控制器判断，见 FocusSessionController::autoStartCandidate）：
+    // 有效的选中项优先，选中项失效则清掉选中并取逻辑今日第一个未完成任务，跳过撤销窗口里的那条。
     // 取不到时返回 null，由调用方落到选择器，不要在这里兜底成"随便挑一条"。
+    // 控制器没接上时同样返回 null（落到选择器）。
     function autoStartCandidate() {
-        if (root.selectedTaskId > 0 && root.selectedTaskTitle.length > 0) {
-            if (root.selectedTaskStillExists()) {
-                return { id: root.selectedTaskId, title: root.selectedTaskTitle }
-            }
-            // 失效了就清掉，继续找今日候选；不清的话下次按键还会再撞一次。
+        var candidate = root.focusSessionControllerRef
+                ? root.focusSessionControllerRef.autoStartCandidate(root.selectedTaskId, root.selectedTaskTitle)
+                : null
+        if (candidate && candidate.selectionStale) {
+            // 选中项已不存在：清掉，不然下次按键还会再撞一次。
             root.clearSelectedTask()
         }
         root.reloadTodayTasks()
-        for (var i = 0; i < root.todayTasks.length; ++i) {
-            var task = root.todayTasks[i]
-            if (!task.completed) {
-                return { id: Number(task.id), title: String(task.title || "") }
-            }
-        }
-        return null
+        return candidate && candidate.id > 0
+                ? { id: Number(candidate.id), title: String(candidate.title || "") } : null
     }
 
-    // 选中项是否仍指向一条存在的任务。
-    //
-    // 选中项只在少数几条路径里清空（结束番茄、选择「结束」等），在今日页删掉任务不会清它。
-    // 拿一个已删除的编号去启动，服务端 INSERT … SELECT … WHERE t.id = :taskId 插入 0 行而失败——
-    // 快捷键于是既没启动、也没展开选择器。启动前按编号回查一次。
+    // 按编号回查任务是否还在（待删任务撤销后还原选中项用）。
     // 注入的服务没有 getTask 时无从验证，保持信任，不因为验证不了就丢掉用户的选择。
-    function selectedTaskStillExists() {
-        return root.taskExists(root.selectedTaskId)
-    }
-
     function taskExists(taskId) {
         if (!root.taskManagerRef || typeof root.taskManagerRef.getTask !== "function") {
             return true
@@ -245,16 +231,12 @@ Item {
     // 「标题相同 + display_order 最大」不是唯一键，反查可能绑到另一条任务上，
     // 而绑错任务的后果是这段专注记到了别人头上，用户看不出来。
     function createTaskAndStart(title) {
-        if (!root.taskManagerRef || typeof root.taskManagerRef.createTask !== "function") {
+        if (!root.focusSessionControllerRef) {
             root.errorText = "任务服务不可用"
             return false
         }
-        var startHour = root.settings ? Number(root.settings.dayStartHour) : 4
-        var iso = LogicalDay.todayIso(startHour, new Date())
-        // 与服务端一致地去掉首尾空白：入库的是 trim 过的标题，
-        // 页面上显示的当前任务必须是同一个串，否则两处对不上。
-        var safeTitle = String(title || "").trim()
-        var newId = Number(root.taskManagerRef.createTask(safeTitle, iso, -1, 0, ""))
+        // 建在逻辑今日、标题 trim、返回编号都由控制器负责。
+        var newId = Number(root.focusSessionControllerRef.createTodayTask(title))
         if (!(newId > 0)) {
             root.errorText = "新建任务失败，请重试"
             return false
@@ -262,7 +244,8 @@ Item {
 
         root.reloadTodayTasks()
         root.selectedTaskId = newId
-        root.selectedTaskTitle = safeTitle
+        // 页面上显示的当前任务必须与入库的 trim 过的标题是同一个串，否则两处对不上。
+        root.selectedTaskTitle = String(title || "").trim()
         return root.startCurrentMode()
     }
 

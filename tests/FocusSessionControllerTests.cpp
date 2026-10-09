@@ -8,7 +8,9 @@
 // FocusTimer 声明 friend class FocusSessionControllerTests，测试可注入时钟并直接触发内部计时器。
 #include "../src/services/FocusSessionController.h"
 #include "../src/services/FocusTimer.h"
+#include "../src/services/FocusHistoryService.h"
 #include "../src/services/MonotonicClock.h"
+#include "../src/services/PendingDeletion.h"
 #include "../src/services/TaskManager.h"
 
 namespace {
@@ -40,6 +42,22 @@ int insertTask(const QString& title)
     query.prepare(QStringLiteral("INSERT INTO tasks (title, date, completed) VALUES (:t, :d, 0)"));
     query.bindValue(QStringLiteral(":t"), title);
     query.bindValue(QStringLiteral(":d"), QDate::currentDate().toString(Qt::ISODate));
+    if (!query.exec()) {
+        return -1;
+    }
+    return query.lastInsertId().toInt();
+}
+
+// 按指定日期、完成状态与显示顺序造一条任务，返回编号。
+int insertTaskOn(const QString& title, const QString& isoDate, bool completed, int displayOrder)
+{
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral(
+        "INSERT INTO tasks (title, date, completed, display_order) VALUES (:t, :d, :c, :o)"));
+    query.bindValue(QStringLiteral(":t"), title);
+    query.bindValue(QStringLiteral(":d"), isoDate);
+    query.bindValue(QStringLiteral(":c"), completed ? 1 : 0);
+    query.bindValue(QStringLiteral(":o"), displayOrder);
     if (!query.exec()) {
         return -1;
     }
@@ -87,6 +105,15 @@ private slots:
     void planModeSwitchInheritsTimerTaskBeforeSelection();
     void planModeSwitchStaysOnPageWithoutBusyTimerOrTask();
 
+    void autoStartCandidatePrefersTheValidSelection();
+    void autoStartCandidateFlagsADeletedSelectionAndFallsBack();
+    void autoStartCandidateIsEmptyWhenEverythingIsCompleted();
+    void autoStartCandidateFollowsDisplayOrderNotInsertionOrder();
+    void autoStartCandidateSkipsTheTaskInTheUndoWindow();
+    void autoStartCandidateOnlyLooksAtTheLogicalToday();
+    void createTodayTaskLandsOnLogicalTodayAndIdentifiesTheNewRow();
+    void createTodayTaskRejectsBlankTitleWithoutWriting();
+
     void finishLongFreeWithCorrectionSavesCorrectedDuration();
     void finishLongFreeWithoutCorrectionSavesFullDuration();
     void finishLongFreeDiscardDropsSession();
@@ -120,6 +147,7 @@ private:
     QString m_settingsPath;
     AppSettings* m_settings = nullptr;
     FocusSessionController* m_controller = nullptr;
+    PendingDeletion* m_pending = nullptr;
     FakeMonotonicClock m_clock;
 };
 
@@ -130,7 +158,10 @@ void FocusSessionControllerTests::init()
     QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("controller.sqlite")));
     m_settingsPath = m_tempDir->filePath("settings.ini");
     m_settings = new AppSettings(m_settingsPath);
-    m_controller = new FocusSessionController(timer(), TaskManager::instance(), m_settings, nullptr);
+    m_pending = new PendingDeletion(TaskManager::instance(), FocusHistoryService::instance());
+    // 撤销窗口设得很大：用例里要的是「窗口还开着」，不能被计时器提前提交。
+    m_pending->setDelayMs(10 * 60 * 1000);
+    m_controller = new FocusSessionController(timer(), TaskManager::instance(), m_settings, m_pending);
     m_clock.ns = 0;
     m_clock.utcMs = 1700000000000LL;
     timer()->m_clock = &m_clock;
@@ -144,6 +175,9 @@ void FocusSessionControllerTests::cleanup()
     timer()->m_clock = SystemMonotonicClock::instance();
     delete m_controller;
     m_controller = nullptr;
+    m_pending->cancel();
+    delete m_pending;
+    m_pending = nullptr;
     delete m_settings;
     m_settings = nullptr;
     DatabaseManager::instance()->close();
@@ -608,6 +642,132 @@ void FocusSessionControllerTests::planModeSwitchStaysOnPageWithoutBusyTimerOrTas
              QStringLiteral("pageOnly"));
     QCOMPARE(m_controller->planModeSwitch(0, QStringLiteral("标题")).value("kind").toString(),
              QStringLiteral("pageOnly"));
+}
+
+void FocusSessionControllerTests::autoStartCandidatePrefersTheValidSelection()
+{
+    // 保证：用户刚选中的任务优先于今日第一条（⌘↩ 不该把人换到别的任务上）。
+    const QString today = m_controller->logicalToday().toString(Qt::ISODate);
+    const int first = insertTaskOn(QStringLiteral("第一条"), today, false, 1);
+    const int second = insertTaskOn(QStringLiteral("第二条"), today, false, 2);
+    QVERIFY(first > 0 && second > first);
+
+    const QVariantMap c = m_controller->autoStartCandidate(second, QStringLiteral("  第二条 "));
+    QCOMPARE(c.value("id").toInt(), second);
+    QCOMPARE(c.value("title").toString(), QStringLiteral("第二条"));
+    QVERIFY(!c.value("selectionStale").toBool());
+}
+
+void FocusSessionControllerTests::autoStartCandidateFlagsADeletedSelectionAndFallsBack()
+{
+    // 保证：选中项已被删除时标记 stale 并回落到今日第一条未完成；
+    // 选中编号有效但标题为空时不算「选中项」，也不标 stale。
+    const QString today = m_controller->logicalToday().toString(Qt::ISODate);
+    const int first = insertTaskOn(QStringLiteral("第一条"), today, false, 1);
+    const int doomed = insertTaskOn(QStringLiteral("要删的"), today, false, 2);
+    QSqlQuery del(DatabaseManager::instance()->database());
+    QVERIFY(del.exec(QStringLiteral("DELETE FROM tasks WHERE id = %1").arg(doomed)));
+
+    QVariantMap c = m_controller->autoStartCandidate(doomed, QStringLiteral("要删的"));
+    QVERIFY(c.value("selectionStale").toBool());
+    QCOMPARE(c.value("id").toInt(), first);
+    QCOMPARE(c.value("title").toString(), QStringLiteral("第一条"));
+
+    c = m_controller->autoStartCandidate(doomed, QStringLiteral("   "));
+    QVERIFY(!c.value("selectionStale").toBool());
+    QCOMPARE(c.value("id").toInt(), first);
+}
+
+void FocusSessionControllerTests::autoStartCandidateIsEmptyWhenEverythingIsCompleted()
+{
+    // 保证：今日任务全部完成（或今日没有任务）时没有候选，交给界面展开选择器，而不是随便挑一条。
+    QCOMPARE(m_controller->autoStartCandidate(-1, QString()).value("id").toInt(), -1);
+    const QString today = m_controller->logicalToday().toString(Qt::ISODate);
+    QVERIFY(insertTaskOn(QStringLiteral("做完了"), today, true, 1) > 0);
+    QVERIFY(insertTaskOn(QStringLiteral("也做完了"), today, true, 2) > 0);
+    const QVariantMap c = m_controller->autoStartCandidate(-1, QString());
+    QCOMPARE(c.value("id").toInt(), -1);
+    QVERIFY(!c.value("selectionStale").toBool());
+}
+
+void FocusSessionControllerTests::autoStartCandidateFollowsDisplayOrderNotInsertionOrder()
+{
+    // 保证：候选是今日页显示顺序里的第一条未完成，而不是最先插入的那条；已完成的不参选。
+    const QString today = m_controller->logicalToday().toString(Qt::ISODate);
+    const int inserted1 = insertTaskOn(QStringLiteral("插入最早但排第三"), today, false, 3);
+    const int inserted2 = insertTaskOn(QStringLiteral("排第一"), today, false, 1);
+    insertTaskOn(QStringLiteral("排第二"), today, false, 2);
+    insertTaskOn(QStringLiteral("已完成但顺序最小"), today, true, 0);
+    QVERIFY(inserted1 > 0 && inserted2 > inserted1);
+
+    QCOMPARE(m_controller->autoStartCandidate(-1, QString()).value("title").toString(),
+             QStringLiteral("排第一"));
+}
+
+void FocusSessionControllerTests::autoStartCandidateSkipsTheTaskInTheUndoWindow()
+{
+    // 保证：撤销窗口里的任务（仍在库里）不会被挑作候选；撤销之后它又能参选。
+    const QString today = m_controller->logicalToday().toString(Qt::ISODate);
+    const int first = insertTaskOn(QStringLiteral("刚删的第一条"), today, false, 1);
+    const int second = insertTaskOn(QStringLiteral("第二条"), today, false, 2);
+    QCOMPARE(m_controller->autoStartCandidate(-1, QString()).value("id").toInt(), first);
+
+    QVERIFY(m_pending->requestTask(first, QStringLiteral("刚删的第一条")));
+    QCOMPARE(m_pending->taskId(), first);
+    QCOMPARE(m_controller->autoStartCandidate(-1, QString()).value("id").toInt(), second);
+
+    m_pending->cancel();
+    QCOMPARE(m_controller->autoStartCandidate(-1, QString()).value("id").toInt(), first);
+}
+
+void FocusSessionControllerTests::autoStartCandidateOnlyLooksAtTheLogicalToday()
+{
+    // 保证：候选只取逻辑今日。凌晨 02:00、日界 4 点时，逻辑今日是前一天：
+    // 自然日上显示顺序更靠前的任务、以及更早日期的任务都不能入选。
+    m_settings->setDayStartHour(4);
+    m_controller->m_now = [] { return QDateTime(QDate(2026, 3, 10), QTime(2, 0)); };
+    QCOMPARE(m_controller->logicalToday(), QDate(2026, 3, 9));
+
+    insertTaskOn(QStringLiteral("自然日第一条"), QStringLiteral("2026-03-10"), false, 1);
+    insertTaskOn(QStringLiteral("更早的一天"), QStringLiteral("2026-03-08"), false, 1);
+    // 逻辑今日里只有顺序更靠后的一条，仍应入选。
+    const int logical = insertTaskOn(QStringLiteral("逻辑今日"), QStringLiteral("2026-03-09"), false, 5);
+    QCOMPARE(m_controller->autoStartCandidate(-1, QString()).value("id").toInt(), logical);
+
+    // 逻辑今日没有未完成任务时没有候选，哪怕别的日子有。
+    QSqlQuery done(DatabaseManager::instance()->database());
+    QVERIFY(done.exec(QStringLiteral("UPDATE tasks SET completed = 1 WHERE id = %1").arg(logical)));
+    QCOMPARE(m_controller->autoStartCandidate(-1, QString()).value("id").toInt(), -1);
+}
+
+void FocusSessionControllerTests::createTodayTaskLandsOnLogicalTodayAndIdentifiesTheNewRow()
+{
+    // 保证：新任务建在逻辑今日（不是自然日），标题 trim 后入库，编号来自创建结果；
+    // 已有同名任务时返回的是新行，不会绑到旧的那条。
+    m_settings->setDayStartHour(4);
+    m_controller->m_now = [] { return QDateTime(QDate(2026, 3, 10), QTime(2, 0)); };
+    const int existing = insertTaskOn(QStringLiteral("同名任务"), QStringLiteral("2026-03-09"), false, 99);
+    QVERIFY(existing > 0);
+
+    const int created = m_controller->createTodayTask(QStringLiteral("  同名任务\n"));
+    QVERIFY(created > 0);
+    QVERIFY(created != existing);
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '同名任务'")), 2);
+    QSqlQuery q(DatabaseManager::instance()->database());
+    QVERIFY(q.exec(QStringLiteral("SELECT title, date FROM tasks WHERE id = %1").arg(created)));
+    QVERIFY(q.next());
+    QCOMPARE(q.value(0).toString(), QStringLiteral("同名任务"));
+    QCOMPARE(q.value(1).toString(), QStringLiteral("2026-03-09"));
+}
+
+void FocusSessionControllerTests::createTodayTaskRejectsBlankTitleWithoutWriting()
+{
+    // 保证：空白标题返回 -1 且不写库（前提：库里本来一条任务都没有）。
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM tasks")), 0);
+    for (const QString& title : {QString(), QStringLiteral("   "), QStringLiteral(" \t\n ")}) {
+        QCOMPARE(m_controller->createTodayTask(title), -1);
+    }
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM tasks")), 0);
 }
 
 void FocusSessionControllerTests::finishLongFreeWithCorrectionSavesCorrectedDuration()

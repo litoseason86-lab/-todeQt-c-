@@ -231,6 +231,43 @@ TestCase {
                     ? { kind: "confirmSwitch", taskId: taskId, title: title } : { kind: "pageOnly" }
         }
 
+        // 规则 5、8。默认同样按 C++ 的判定从 taskManager / pendingDeletion 替身推出，*Override 用于接线用例。
+        property var candidateOverride: null
+        property var createTodayOverride: null
+        property var candidateCalls: []
+        property var createTodayCalls: []
+
+        function autoStartCandidate(selectedTaskId, selectedTitle) {
+            candidateCalls = candidateCalls.concat([{ taskId: selectedTaskId, title: selectedTitle }])
+            if (candidateOverride)
+                return candidateOverride
+            var title = String(selectedTitle || "").trim()
+            var stale = false
+            if (selectedTaskId > 0 && title.length > 0) {
+                var found = taskManager.getTask(selectedTaskId)
+                if (Number(found.id) === selectedTaskId)
+                    return { id: selectedTaskId, title: title, selectionStale: false }
+                stale = true
+            }
+            var tasks = taskManager.getTodayTasks()
+            for (var i = 0; i < tasks.length; ++i) {
+                if (!tasks[i].completed && Number(tasks[i].id) !== pendingDeletion.taskId)
+                    return { id: Number(tasks[i].id), title: String(tasks[i].title), selectionStale: stale }
+            }
+            return { id: -1, title: "", selectionStale: stale }
+        }
+
+        function createTodayTask(title) {
+            createTodayCalls = createTodayCalls.concat([title])
+            if (createTodayOverride !== null)
+                return createTodayOverride
+            var trimmed = String(title || "").trim()
+            if (trimmed.length === 0)
+                return -1
+            // 日期（逻辑今日）是 C++ 的事，这里只给个占位串。
+            return taskManager.createTask(trimmed, "2000-01-01", -1, 0, "")
+        }
+
         // 番茄页的结束：与 C++ 一致，空档里的 none 转成 ended/pomodoro。
         function endPomodoroCycle() {
             var r = endCurrent()
@@ -617,6 +654,10 @@ TestCase {
         focusSessionController.stopForSwitchOverride = null
         focusSessionController.modeSwitchOverride = null
         focusSessionController.planCalls = []
+        focusSessionController.candidateOverride = null
+        focusSessionController.createTodayOverride = null
+        focusSessionController.candidateCalls = []
+        focusSessionController.createTodayCalls = []
         focusSessionController.stopForSwitchCalls = []
         focusSessionController.modeSwitchCalls = []
         focusSessionController.captureCalls = 0
@@ -1491,8 +1532,9 @@ TestCase {
 
         compare(taskManager.createTaskCalls, 1)
         compare(taskManager.createTaskTitle, "临时补一道题")
-        // 建在逻辑今日，不是别的日子。
-        compare(taskManager.createTaskDate.length, 10)
+        // 接线：页面把标题交给控制器；建在逻辑今日由控制器保证（C++ createTodayTaskLandsOnLogicalToday…）。
+        compare(focusSessionController.createTodayCalls.length, 1)
+        compare(focusSessionController.createTodayCalls[0], "临时补一道题")
         compare(focusTimer.startFocusCalls, 1)
         compare(focusTimer.startFocusTaskId, 901)
         compare(focusTimer.startFocusTaskTitle, "临时补一道题")
@@ -1541,6 +1583,62 @@ TestCase {
         compare(focusTimer.startFocusCalls, 0)
         compare(focusTimer.startPomodoroCalls, 0)
         verify(view.errorText.length > 0)
+    }
+
+    function test_createTaskAndStartUsesTheControllerResultOnly() {
+        // 接线（规则 8）：新任务编号以控制器返回为准，页面不再自己调 taskManager.createTask；
+        // 返回 -1 报错且不启动。
+        var view = focusPage()
+        appSettings.lastMode = 0
+        focusSessionController.createTodayOverride = 77
+        compare(view.createTaskAndStart("  控制器建的  "), true)
+        compare(taskManager.createTaskCalls, 0)
+        compare(view.selectedTaskId, 77)
+        compare(view.selectedTaskTitle, "控制器建的")
+        compare(focusTimer.startFocusTaskId, 77)
+
+        focusTimer.stopFocus()
+        focusTimer.startFocusCalls = 0
+        view.errorText = ""
+        focusSessionController.createTodayOverride = -1
+        compare(view.createTaskAndStart("失败的"), false)
+        compare(view.errorText, "新建任务失败，请重试")
+        compare(focusTimer.startFocusCalls, 0)
+    }
+
+    function test_shortcutFollowsControllerCandidate() {
+        // 接线（规则 5）：快捷键把当前选中项交给控制器，开始的是控制器返回的候选，不是页面自己从今日列表里挑的。
+        taskManager.todayTasks = [{ id: 61, title: "页面看得到的第一条", completed: false, displayOrder: 1 }]
+        var view = focusPage()
+        appSettings.lastMode = 0
+        view.selectedTaskId = 61
+        view.selectedTaskTitle = "页面看得到的第一条"
+        focusSessionController.candidateOverride = { id: 55, title: "控制器选的", selectionStale: false }
+
+        compare(view.startFromShortcut(), true)
+
+        compare(focusSessionController.candidateCalls[0].taskId, 61)
+        compare(focusSessionController.candidateCalls[0].title, "页面看得到的第一条")
+        compare(focusTimer.startFocusTaskId, 55)
+        compare(focusTimer.startFocusTaskTitle, "控制器选的")
+    }
+
+    function test_shortcutClearsSelectionWhenControllerSaysStale() {
+        // 接线（规则 5）：控制器标 selectionStale 时页面清掉选中；没有候选就展开选择器。
+        // 任务替身里仍有这条任务，页面自己的回查（reconcileSelectedTask）不会清它，清掉只能归功于控制器的标记。
+        taskManager.todayTasks = [{ id: 61, title: "已经不在的任务", completed: true, displayOrder: 1 }]
+        var view = focusPage()
+        view.selectedTaskId = 61
+        view.selectedTaskTitle = "已经不在的任务"
+        focusSessionController.candidateOverride = { id: -1, title: "", selectionStale: true }
+
+        compare(view.selectedTaskId, 61)
+        compare(view.startFromShortcut(), false)
+
+        compare(view.selectedTaskId, -1)
+        compare(view.shortcutOpenedSelector, true)
+        compare(focusTimer.startFocusCalls, 0)
+        findChild(view, "focusTaskPicker").collapse()
     }
 
     function test_taskSelectorIsInactiveWhileTimerRuns() {

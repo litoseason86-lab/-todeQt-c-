@@ -5,6 +5,9 @@
 
 #include "AppSettings.h"
 #include "FocusTimer.h"
+#include "LogicalDay.h"
+#include "PendingDeletion.h"
+#include "TaskManager.h"
 
 namespace {
 
@@ -218,4 +221,60 @@ QVariantMap FocusSessionController::planModeSwitch(int selectedTaskId, const QSt
         {QStringLiteral("taskId"), taskId},
         {QStringLiteral("title"), title},
     };
+}
+
+QDate FocusSessionController::logicalToday() const
+{
+    const int hour = m_settings ? m_settings->dayStartHour() : 4;
+    return LogicalDay::dateOf(m_now(), hour);
+}
+
+QVariantMap FocusSessionController::autoStartCandidate(int selectedTaskId, const QString& selectedTitle) const
+{
+    QVariantMap candidate{
+        {QStringLiteral("id"), -1},
+        {QStringLiteral("title"), QString()},
+        {QStringLiteral("selectionStale"), false},
+    };
+    if (!m_tasks) {
+        return candidate;
+    }
+
+    const QString title = selectedTitle.trimmed();
+    if (selectedTaskId > 0 && !title.isEmpty()) {
+        // 选中项只在少数路径里清空，在今日页删掉任务不会清它；拿已删除的编号去启动，
+        // 服务端插入 0 行而失败，快捷键就既没启动也没展开选择器。所以先按编号回查。
+        const QVariantMap found = m_tasks->getTask(selectedTaskId);
+        if (found.value(QStringLiteral("id")).toInt() == selectedTaskId) {
+            candidate[QStringLiteral("id")] = selectedTaskId;
+            candidate[QStringLiteral("title")] = title;
+            return candidate;
+        }
+        candidate[QStringLiteral("selectionStale")] = true;
+    }
+
+    const int pendingId = m_pendingDeletion ? m_pendingDeletion->taskId() : -1;
+    // getTasksByDate 已按「未完成在前、display_order 升序」排好。
+    const QVariantList today = m_tasks->getTasksByDate(logicalToday());
+    for (const QVariant& value : today) {
+        const QVariantMap task = value.toMap();
+        const int id = task.value(QStringLiteral("id")).toInt();
+        if (task.value(QStringLiteral("completed")).toBool() || (pendingId > 0 && id == pendingId)) {
+            continue;
+        }
+        candidate[QStringLiteral("id")] = id;
+        candidate[QStringLiteral("title")] = task.value(QStringLiteral("title")).toString();
+        return candidate;
+    }
+    return candidate;
+}
+
+int FocusSessionController::createTodayTask(const QString& title)
+{
+    const QString trimmed = title.trimmed();
+    if (!m_tasks || trimmed.isEmpty()) {
+        return -1;
+    }
+    const int id = m_tasks->createTask(trimmed, logicalToday(), -1, 0, QString());
+    return id > 0 ? id : -1;
 }
