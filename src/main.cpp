@@ -479,6 +479,7 @@ int main(int argc, char *argv[])
         // 055-P3B：非单例仅登记弱引用，原生桥接不接管 main 栈服务的生命周期。
         PTBridgeSupport::registerService(QStringLiteral("pendingDeletion"), &pendingDeletion);
         PTBridgeSupport::registerService(QStringLiteral("taskInteractions"), &taskInteractions);
+        PTBridgeSupport::registerService(QStringLiteral("focusController"), &focusSessionController);
         installNativeRoot();
     }
     else
