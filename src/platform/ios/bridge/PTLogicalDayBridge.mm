@@ -55,7 +55,7 @@ using namespace PTBridgeSupport;
         start = QDate(start.year(), start.month(), 1).addMonths(step);
         todayStart = QDate(todayStart.year(), todayStart.month(), 1); end = start.addMonths(1).addDays(-1);
     } else { fail(error, QStringLiteral("统计范围无效")); return nil; }
-    if (!start.isValid() || !end.isValid() || start.year() < 2000 || end.year() > 2100) { fail(error, QStringLiteral("日期范围无效")); return nil; }
+    if (!start.isValid() || !end.isValid()) { fail(error, QStringLiteral("日期范围无效")); return nil; }
     return [[PTPeriodDates alloc] initWithStart:start end:end todayStart:todayStart range:range];
 }
 - (NSString *)today { NSAssert(NSThread.isMainThread, @"逻辑日读取必须在主线程"); return date(LogicalDay::today(AppSettings::instance()->dayStartHour())); }

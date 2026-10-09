@@ -870,9 +870,12 @@ void PTCoreBridgeTests::dateRelationsAndPeriodNavigation() {
         PTPeriodDates *day = [bridge periodForAnchor:@"2024-02-28" range:@"day" shift:1 logicalToday:@"2024-02-28" error:&error];
         QCOMPARE(PTBridgeSupport::string(day.start), QStringLiteral("2024-02-29"));
         QVERIFY(!day.current); QVERIFY(!day.canAdvance);
+        PTPeriodDates *boundaryWeek = [bridge periodForAnchor:@"2000-01-01" range:@"week" shift:0 logicalToday:@"2000-01-01" error:&error];
+        QVERIFY(boundaryWeek); QVERIFY(!error);
+        QCOMPARE(PTBridgeSupport::string(boundaryWeek.start), QStringLiteral("1999-12-27"));
         QVERIFY(![bridge periodForAnchor:@"2024-02-28" range:@"bad" shift:0 logicalToday:@"2024-02-28" error:&error]);
         QVERIFY(error); error = nil;
-        QVERIFY(![bridge periodForAnchor:@"2000-01-01" range:@"month" shift:-1 logicalToday:@"2024-02-28" error:&error]);
+        QVERIFY(![bridge periodForAnchor:@"2000-01-01" range:@"month" shift:std::numeric_limits<NSInteger>::max() logicalToday:@"2024-02-28" error:&error]);
         QVERIFY(error);
     }
 }

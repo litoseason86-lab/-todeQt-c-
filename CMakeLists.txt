@@ -517,6 +517,15 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Pages/History/HistoryView.swift
         src/ui/ipad/Sources/IPadUI/Pages/History/MonthGrid.swift)
 
+    # 055-P4-4：原生数据统计、系统图表与周复盘。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/StatsStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/StatisticsFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Statistics/StatisticsView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Statistics/StatisticsCharts.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Statistics/WeeklyReviewCard.swift)
+
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。

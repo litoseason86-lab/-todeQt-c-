@@ -13,7 +13,7 @@ import SwiftUI
         case .todayFocus: placeholder(.todayFocus)
         case .schedule: placeholder(.schedule)
         case .monthGoal: HistoryView()
-        case .statistics: placeholder(.statistics)
+        case .statistics: StatisticsView()
         case .countdown: placeholder(.countdown)
         case .memo: placeholder(.memo)
         case .trash: placeholder(.trash)
