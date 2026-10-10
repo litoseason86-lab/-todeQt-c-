@@ -41,7 +41,8 @@ QString string(NSString *value);
 NSString *string(const QString &value);
 QDate date(NSString *iso);
 NSString *date(const QDate &value);
-// 全桥时刻统一为 ISO 8601 字符串，带毫秒与时区偏移；不转成整秒，保留记录的原始精度。
+// 专注/休息记录两侧使用不带时区的本地墙钟串 yyyy-MM-ddTHH:mm:ss.zzz（毫秒可无）。
+// 与 FocusTimer 落库一致，保留精度；解析仍兼容带偏移或 Z 的串，写入由服务统一本地化。
 QDateTime timestamp(NSString *iso);
 NSString *timestamp(const QDateTime &value);
 bool integer(NSInteger value, int *result);
