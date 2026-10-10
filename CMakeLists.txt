@@ -2109,6 +2109,8 @@ target_link_libraries(PTScheduleBridgeTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test
 pomodoro_todo_enable_warnings(PTScheduleBridgeTests)
 add_test(NAME PTScheduleBridgeTests COMMAND PTScheduleBridgeTests)
 set_tests_properties(PTScheduleBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
 # 055-P4-5：独立数据桥接目标；P3B 的核心桥接目标与用例保持原样。
 get_target_property(PT_DATA_TEST_SOURCES TrashServiceTests SOURCES)
 list(REMOVE_ITEM PT_DATA_TEST_SOURCES tests/TrashServiceTests.cpp)
