@@ -16,4 +16,5 @@ public struct PeriodDates: Equatable, Sendable {
     var today: String { get }
     var dayStartHour: Int { get }
     var onChanged: (() -> Void)? { get set }
+    func observeChanges(_ handler: @escaping () -> Void)
 }

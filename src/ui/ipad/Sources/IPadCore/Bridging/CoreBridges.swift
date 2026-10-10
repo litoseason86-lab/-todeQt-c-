@@ -10,13 +10,18 @@ import Observation
     public let focusHistory: any FocusHistoryBridgeProtocol
     public let pendingDeletion: PendingDeletionStore
     public let taskActions: TaskActions
+    public let weekStore: WeekStore
+    public let timelineStore: TimelineStore
+    public let scheduleStore: ScheduleStore
     public init(tasks: any TaskBridgeProtocol, interactions: any InteractionBridgeProtocol,
                 categories: any CategoryBridgeProtocol, logicalDay: any LogicalDayBridgeProtocol,
                 settings: any SettingsBridgeProtocol, statistics: any StatisticsBridgeProtocol,
                 focusHistory: any FocusHistoryBridgeProtocol, pendingDeletion: PendingDeletionStore,
-                taskActions: TaskActions) {
+                taskActions: TaskActions, weekStore: WeekStore, timelineStore: TimelineStore,
+                scheduleStore: ScheduleStore) {
         self.tasks = tasks; self.interactions = interactions; self.categories = categories
         self.logicalDay = logicalDay; self.settings = settings; self.statistics = statistics
         self.focusHistory = focusHistory; self.pendingDeletion = pendingDeletion; self.taskActions = taskActions
+        self.weekStore = weekStore; self.timelineStore = timelineStore; self.scheduleStore = scheduleStore
     }
 }

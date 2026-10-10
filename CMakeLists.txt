@@ -517,6 +517,27 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Bridges/StatisticsBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/FocusHistoryBridgeAdapter.swift
     )
+    # 055-P4-2：课表数据桥接与 Swift 类型、适配器，追加在现有清单末尾.
+    target_sources(PomodoroTodo PRIVATE
+        src/platform/ios/bridge/PTScheduleBridge.h src/platform/ios/bridge/PTScheduleBridge.mm)
+    set_source_files_properties(src/platform/ios/bridge/PTScheduleBridge.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/ScheduleBridging.swift
+        src/ui/ipad/Sources/IPadCore/Stores/ScheduleStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/TimelineStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/WeekStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/LogicalDateNavigation.swift
+        src/ui/ipad/Sources/IPadCore/Format/ScheduleFormat.swift
+        src/ui/ipad/Sources/IPadCore/Format/ScheduleLayout.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/ScheduleBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Schedule/ScheduleView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Schedule/WeekGrid.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Schedule/ScheduleEntrySheet.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Schedule/ScheduleSettingsSheet.swift
+        src/ui/ipad/Sources/IPadUI/Pages/TodayFocusView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/SessionEditorSheet.swift
+        src/ui/ipad/Sources/IPadUI/Pages/WeekView.swift)
     # 055-P4-1：专注与缺口提醒的协议及适配器。
     target_sources(IPadCore PRIVATE
         src/ui/ipad/Sources/IPadCore/Bridging/FocusBridging.swift
@@ -2033,6 +2054,22 @@ set_source_files_properties(
     src/platform/ios/bridge/PTStatisticsBridge.mm
     src/platform/ios/bridge/PTFocusHistoryBridge.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+
+# 055-P4-2：课表桥接在 Mac 用 Foundation + Qt Test 测，复用同领域服务源清单。
+get_target_property(PT_SCHEDULE_TEST_SOURCES ScheduleServiceTests SOURCES)
+list(REMOVE_ITEM PT_SCHEDULE_TEST_SOURCES tests/ScheduleServiceTests.cpp)
+add_executable(PTScheduleBridgeTests ${PT_SCHEDULE_TEST_SOURCES}
+    tests/PTScheduleBridgeTests.mm
+    src/platform/ios/bridge/PTScheduleBridge.h src/platform/ios/bridge/PTScheduleBridge.mm
+    src/platform/ios/bridge/PTBridgeSupport.h src/platform/ios/bridge/PTBridgeSupport.mm)
+set_source_files_properties(tests/PTScheduleBridgeTests.mm src/platform/ios/bridge/PTScheduleBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_compile_definitions(PTScheduleBridgeTests PRIVATE PT_CALIBERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calibers")
+target_link_libraries(PTScheduleBridgeTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(PTScheduleBridgeTests)
+add_test(NAME PTScheduleBridgeTests COMMAND PTScheduleBridgeTests)
+set_tests_properties(PTScheduleBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
 # 055-P4-3：三个内容桥接在 Mac 上共用一个测试目标。
 get_target_property(PT_CONTENT_TEST_SOURCES TrashServiceTests SOURCES)

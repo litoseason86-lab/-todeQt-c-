@@ -9,6 +9,7 @@ import XCTest
     var today: String { reads += 1; return alternateReads && reads > 1 ? "2024-02-16" : fake.today }
     var dayStartHour: Int { fake.dayStartHour }
     var onChanged: (() -> Void)? { get { fake.onChanged } set { fake.onChanged = newValue } }
+    func observeChanges(_ handler: @escaping () -> Void) { fake.observeChanges(handler) }
     func relation(_ date: String, to reference: String) throws -> DateRelation { try fake.relation(date, to: reference) }
     func period(anchor: String, range: String, shift: Int, logicalToday: String) throws -> PeriodDates {
         try fake.period(anchor: anchor, range: range, shift: shift, logicalToday: logicalToday)

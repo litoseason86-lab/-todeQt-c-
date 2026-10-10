@@ -15,16 +15,31 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
 @MainActor enum NativeRoot {
     static func makeController() -> UIViewController {
         let store = ShellStore(bridge: ShellBridgeAdapter())
-        // 055-P3B：各页复用一份动作与撤销槽；领域桥接的回调仅有一个 Store 作为接收者。
+        // 055-P3B：各页复用一份动作与撤销槽；领域桥接按单槽回调的订阅需要独立装配。
         let tasks = TaskBridgeAdapter()
         let pending = PendingDeletionStore(bridge: PendingDeletionBridgeAdapter(), tasks: tasks, shell: store)
         let actions = TaskActions(tasks: tasks, pendingDeletion: pending, shell: store)
         store.taskActions = actions
-        let core = CoreBridges(tasks: tasks, interactions: InteractionBridgeAdapter(),
-                               categories: CategoryBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter(),
-                               settings: SettingsBridgeAdapter(), statistics: StatisticsBridgeAdapter(),
-                               focusHistory: FocusHistoryBridgeAdapter(), pendingDeletion: pending,
-                               taskActions: actions)
+        let logicalDay = LogicalDayBridgeAdapter()
+        let statisticsBridge = StatisticsBridgeAdapter()
+        let focusHistory = FocusHistoryBridgeAdapter()
+        let settings = SettingsBridgeAdapter()
+        let categories = CategoryBridgeAdapter()
+        let scheduleBridge = ScheduleBridgeAdapter()
+        let interactions = InteractionBridgeAdapter()
+        // 本周使用独立任务信号适配器，避免 FocusStore.start 覆盖单槽回调；动作与撤销槽仍共享。
+        let week = WeekStore(tasks: TaskBridgeAdapter(), logicalDay: logicalDay, pendingDeletion: pending, interactions: interactions,
+                             weekStart: "", weekDates: { start in
+                                 try statisticsBridge.weekStats(startDate: start).map(\.date)
+                             }, weekStartProvider: { try statisticsBridge.currentWeeklyReview().weekStart })
+        let timeline = TimelineStore(history: focusHistory, statistics: statisticsBridge, pendingDeletion: pending,
+                                     logicalDay: logicalDay, date: logicalDay.today)
+        let schedule = ScheduleStore(bridge: scheduleBridge, settingsBridge: settings, logicalDay: logicalDay)
+        let core = CoreBridges(tasks: tasks, interactions: interactions,
+                               categories: categories, logicalDay: logicalDay,
+                               settings: settings, statistics: statisticsBridge,
+                               focusHistory: focusHistory, pendingDeletion: pending,
+                               taskActions: actions, weekStore: week, timelineStore: timeline, scheduleStore: schedule)
         let focus = FocusStore(focus: FocusBridgeAdapter(), settings: core.settings, tasks: core.tasks,
                                pendingDeletion: pending, shell: store)
         focus.start()

@@ -3,15 +3,15 @@ import SwiftUI
 
 // P4 各计划只替换归属页面的分支，外壳不随页面功能增加而重新分发。
 @MainActor enum PageRegistry {
-    @ViewBuilder static func view(for page: PageID) -> some View {
+    @ViewBuilder static func view(for page: PageID, core: CoreBridges, shell: ShellStore) -> some View {
         switch page {
         case .today: TodayView()
         case .focus: FocusView()
-        case .week: placeholder(.week)
+        case .week: WeekView(store: core.weekStore, actions: core.taskActions, core: core, shell: shell)
         case .dashboard: DashboardView()
         case .knowledgeGap: KnowledgeGapPage()
-        case .todayFocus: placeholder(.todayFocus)
-        case .schedule: placeholder(.schedule)
+        case .todayFocus: TodayFocusView(store: core.timelineStore, shell: shell)
+        case .schedule: ScheduleView(store: core.scheduleStore, categories: core.categories)
         case .monthGoal: HistoryView()
         case .statistics: StatisticsView()
         case .countdown: CountdownPage()
