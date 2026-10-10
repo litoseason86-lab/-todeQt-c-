@@ -34,15 +34,13 @@ import PTBridge
     func readBackupInfo(path: String) -> BackupInfo { Self.info(native.readBackupInfo(path)) }
     func readBackups() throws -> [BackupEntry] {
         try native.readBackups().map { item in
-            BackupEntry(path: item["path"] as? String ?? "", name: item["name"] as? String ?? "",
-                        modified: item["modified"] as? String ?? "", sizeBytes: (item["sizeBytes"] as? NSNumber)?.int64Value ?? 0)
+            BackupEntry(path: item.path, name: item.name, modified: item.modified, sizeBytes: item.sizeBytes)
         }
     }
     func suggestedBackupFileName() -> String { native.suggestedBackupFileName() }
     func backupFileExtension() -> String { native.backupFileExtension() }
-    private static func info(_ item: [AnyHashable: Any]) -> BackupInfo {
-        BackupInfo(valid: (item["valid"] as? NSNumber)?.boolValue ?? false, reason: item["reason"] as? String ?? "",
-                   createdAt: item["created_at"] as? String ?? "", appVersion: item["app_version"] as? String ?? "",
-                   taskCount: (item["taskCount"] as? NSNumber)?.intValue ?? 0, sessionCount: (item["sessionCount"] as? NSNumber)?.intValue ?? 0)
+    private static func info(_ item: PTBackupInfoValue) -> BackupInfo {
+        BackupInfo(valid: item.valid, reason: item.reason, createdAt: item.createdAt, appVersion: item.appVersion,
+                   taskCount: item.taskCount, sessionCount: item.sessionCount)
     }
 }

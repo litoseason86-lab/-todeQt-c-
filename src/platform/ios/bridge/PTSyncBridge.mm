@@ -4,11 +4,48 @@
 #include <memory>
 #include <QPointer>
 using namespace PTBridgeSupport;
+
+@interface PTSyncLogValue ()
+- (instancetype)initWithMap:(const QVariantMap &)map;
+@end
+@implementation PTSyncLogValue
+- (instancetype)initWithMap:(const QVariantMap &)map
+{
+    if ((self = [super init])) {
+        _entryId = map.value(QStringLiteral("id")).toLongLong();
+        _kind = string(map.value(QStringLiteral("kind")).toString());
+        _kindLabel = string(map.value(QStringLiteral("kindLabel")).toString());
+        _time = string(map.value(QStringLiteral("time")).toString());
+        _title = string(map.value(QStringLiteral("title")).toString());
+        _summary = string(map.value(QStringLiteral("summary")).toString());
+        _detail = string(map.value(QStringLiteral("detail")).toString());
+        _fieldLabel = string(map.value(QStringLiteral("fieldLabel")).toString());
+        _lostValue = string(map.value(QStringLiteral("lostValue")).toString());
+        _keptValue = string(map.value(QStringLiteral("keptValue")).toString());
+        _canCopyLostValue = map.value(QStringLiteral("canCopyLostValue")).toBool();
+    }
+    return self;
+}
+@end
+
 static NSError *syncError(NSString *message) { return [NSError errorWithDomain:@"PTSyncBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: message ?: @"同步读取失败"}]; }
 static NSString *readError(ServiceReadError error) { return error == ServiceReadError::Database ? @"数据库未打开或同步日志读取失败" : @"同步日志读取失败"; }
 @interface PTSyncLogReadResult () - (instancetype)initWithResult:(const ServiceReadResult<QVariantList> &)result; @end
 @implementation PTSyncLogReadResult
-- (instancetype)initWithResult:(const ServiceReadResult<QVariantList> &)result { if ((self = [super init])) { _valid = result.ok(); _error = result.ok() ? @"" : readError(result.error); _entries = result.ok() ? array(result.value) : @[]; } return self; }
+- (instancetype)initWithResult:(const ServiceReadResult<QVariantList> &)result
+{
+    if ((self = [super init])) {
+        _valid = result.ok();
+        _error = result.ok() ? @"" : readError(result.error);
+        NSMutableArray<PTSyncLogValue *> *entries = [NSMutableArray array];
+        if (result.ok()) {
+            for (const auto &item : result.value)
+                [entries addObject:[[PTSyncLogValue alloc] initWithMap:item.toMap()]];
+        }
+        _entries = [entries copy];
+    }
+    return self;
+}
 @end
 
 @implementation PTSyncBridge { QPointer<SyncController> _controller; std::unique_ptr<QObject> _connections; }

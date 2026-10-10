@@ -27,5 +27,8 @@ import Observation
     public func syncNow() { bridge.syncNow() }
     public func chooseFolder() { bridge.chooseFolder() }
     public func rebuildFolder() { bridge.rebuildFolder() }
-    public func copy(_ entry: SyncLogEntry) { bridge.copyLostValue(entry.lostValue) }
+    public func copy(_ entry: SyncLogEntry) {
+        guard entry.canCopyLostValue else { return }
+        bridge.copyLostValue(entry.lostValue)
+    }
 }

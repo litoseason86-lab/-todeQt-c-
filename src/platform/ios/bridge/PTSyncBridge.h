@@ -1,10 +1,25 @@
 #import <Foundation/Foundation.h>
 NS_ASSUME_NONNULL_BEGIN
 
+// 值对象保留服务字段类型；键映射在 Objective-C++，Swift 只复制属性。
+@interface PTSyncLogValue : NSObject
+@property(nonatomic, readonly) int64_t entryId;
+@property(nonatomic, readonly, copy) NSString *kind;
+@property(nonatomic, readonly, copy) NSString *kindLabel;
+@property(nonatomic, readonly, copy) NSString *time;
+@property(nonatomic, readonly, copy) NSString *title;
+@property(nonatomic, readonly, copy) NSString *summary;
+@property(nonatomic, readonly, copy) NSString *detail;
+@property(nonatomic, readonly, copy) NSString *fieldLabel;
+@property(nonatomic, readonly, copy) NSString *lostValue;
+@property(nonatomic, readonly, copy) NSString *keptValue;
+@property(nonatomic, readonly) BOOL canCopyLostValue;
+@end
+
 @interface PTSyncLogReadResult : NSObject
 @property(nonatomic, readonly) BOOL valid;
 @property(nonatomic, readonly, copy) NSString *error;
-@property(nonatomic, readonly, copy) NSArray<NSDictionary *> *entries;
+@property(nonatomic, readonly, copy) NSArray<PTSyncLogValue *> *entries;
 @end
 
 @interface PTSyncBridge : NSObject

@@ -6,10 +6,9 @@ import PTBridge
     init() { native.onChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }; native.onFailure = { [weak self] message in MainActor.assumeIsolated { self?.onFailure?(message) } } }
     func routines() throws -> [RoutineValue] {
         try native.readRoutines().map { item in
-            RoutineValue(id: (item["id"] as? NSNumber)?.intValue ?? -1, title: item["title"] as? String ?? "",
-                         categoryID: (item["categoryId"] as? NSNumber)?.intValue ?? -1,
-                         categoryName: item["categoryName"] as? String ?? "", categoryColor: item["categoryColor"] as? String ?? "",
-                         active: (item["active"] as? NSNumber)?.boolValue ?? false, weekdays: (item["weekdays"] as? NSNumber)?.intValue ?? 127)
+            RoutineValue(id: item.routineId, title: item.title, categoryID: item.categoryId,
+                         categoryName: item.categoryName, categoryColor: item.categoryColor,
+                         active: item.active, weekdays: item.weekdays)
         }
     }
     func add(title: String, categoryID: Int, weekdays: Int) throws { try native.addTitle(title, categoryId: categoryID, weekdays: weekdays) }

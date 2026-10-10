@@ -3,14 +3,36 @@
 #include "../../../services/RoutineManager.h"
 #include <memory>
 using namespace PTBridgeSupport;
+
+@interface PTRoutineValue ()
+- (instancetype)initWithMap:(const QVariantMap &)map;
+@end
+@implementation PTRoutineValue
+- (instancetype)initWithMap:(const QVariantMap &)map
+{
+    if ((self = [super init])) {
+        _routineId = map.value(QStringLiteral("id")).toInt();
+        _title = string(map.value(QStringLiteral("title")).toString());
+        _categoryId = map.value(QStringLiteral("categoryId")).toInt();
+        _categoryName = string(map.value(QStringLiteral("categoryName")).toString());
+        _categoryColor = string(map.value(QStringLiteral("categoryColor")).toString());
+        _active = map.value(QStringLiteral("active")).toBool();
+        _weekdays = map.value(QStringLiteral("weekdays")).toInt();
+    }
+    return self;
+}
+@end
+
 @implementation PTRoutineBridge { std::unique_ptr<QObject> _connections; FailureCollector _failures; }
 - (instancetype)init { NSAssert(NSThread.isMainThread, @"例行桥接只能在主线程创建"); if ((self = [super init])) { _connections = std::make_unique<QObject>(); __weak PTRoutineBridge *weakSelf = self; auto *service = RoutineManager::instance(); QObject::connect(service, &RoutineManager::routinesChanged, _connections.get(), [weakSelf] { PTRoutineBridge *b = weakSelf; if (b.onChanged) b.onChanged(); }); QObject::connect(service, &RoutineManager::operationFailed, _connections.get(), [weakSelf](const QString &message) { PTRoutineBridge *b = weakSelf; if (b && !b->_failures.collect(message) && b.onFailure) b.onFailure(string(message)); }); } return self; }
-- (NSArray<NSDictionary *> *)routines { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); return [self readRoutines:nil] ?: @[]; }
-- (NSArray<NSDictionary *> *)readRoutines:(NSError **)error { NSAssert(NSThread.isMainThread, @"例行读取必须在主线程");
+- (NSArray<PTRoutineValue *> *)routines { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); return [self readRoutines:nil] ?: @[]; }
+- (NSArray<PTRoutineValue *> *)readRoutines:(NSError **)error { NSAssert(NSThread.isMainThread, @"例行读取必须在主线程");
     FailureCollector::Call call(_failures);
     const auto values = RoutineManager::instance()->getRoutines();
     if (!call.error().isEmpty()) { fail(error, call.error()); return nil; }
-    return array(values);
+    NSMutableArray<PTRoutineValue *> *result = [NSMutableArray array];
+    for (const auto &item : values) [result addObject:[[PTRoutineValue alloc] initWithMap:item.toMap()]];
+    return [result copy];
 }
 - (BOOL)addTitle:(NSString *)title categoryId:(NSInteger)categoryId weekdays:(NSInteger)weekdays error:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); int category; int mask; if (!integer(categoryId, &category) || !integer(weekdays, &mask)) return fail(error, QStringLiteral("例行参数越界")); FailureCollector::Call call(_failures); if (!RoutineManager::instance()->addRoutine(string(title), category, mask)) return fail(error, call.error().isEmpty() ? QStringLiteral("新增每日例行失败") : call.error()); return YES; }
 - (BOOL)update:(NSInteger)routineId changes:(NSDictionary *)changes error:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); int routine; if (!integer(routineId, &routine)) return fail(error, QStringLiteral("例行编号越界")); QVariantMap map;

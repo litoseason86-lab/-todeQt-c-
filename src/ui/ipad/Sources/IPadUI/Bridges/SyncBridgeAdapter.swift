@@ -10,12 +10,10 @@ import UIKit
     func syncLog(limit: Int) throws -> [SyncLogEntry] {
         let result = native.syncLog(limit)
         guard result.valid else { throw NSError(domain: "PTSyncBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: result.error]) }
-        return result.entries.compactMap { raw in
-            guard let id = (raw["id"] as? NSNumber)?.int64Value else { return nil }
-            func text(_ key: String) -> String { raw[key] as? String ?? "" }
-            return SyncLogEntry(id: id, kind: text("kind"), kindLabel: text("kindLabel"), time: text("time"),
-                                title: text("title"), summary: text("summary"), detail: text("detail"),
-                                fieldLabel: text("fieldLabel"), lostValue: text("lostValue"), keptValue: text("keptValue"))
+        return result.entries.map { entry in
+            SyncLogEntry(id: entry.entryId, kind: entry.kind, kindLabel: entry.kindLabel, time: entry.time,
+                         title: entry.title, summary: entry.summary, detail: entry.detail, fieldLabel: entry.fieldLabel,
+                         lostValue: entry.lostValue, keptValue: entry.keptValue, canCopyLostValue: entry.canCopyLostValue)
         }
     }
 }

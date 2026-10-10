@@ -8,7 +8,7 @@ import PTBridge
         let result = native.readItems()
         guard result.valid else { throw NSError(domain: "PTTrashBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: result.error]) }
         var value = TrashRead(); value.today = result.today
-        value.items = result.items.compactMap(Self.item)
+        value.items = result.items.map(Self.item)
         return value
     }
     func purgeExpired() throws -> Int { try native.purgeExpired() }
@@ -16,36 +16,23 @@ import PTBridge
     func delete(id: Int) throws -> TrashActionResult { Self.action(try native.deleteItem(id)) }
     func empty(ids: [Int]) throws -> TrashActionResult { Self.action(try native.emptyTrash(ids.map(NSNumber.init))) }
 
-    private static func action(_ raw: [AnyHashable: Any]) -> TrashActionResult {
-        func text(_ key: String) -> String { raw[key] as? String ?? "" }
-        return TrashActionResult(title: text("title"), error: text("error"), code: text("code"), conflict: text("conflict"))
+    private static func action(_ value: PTTrashActionValue) -> TrashActionResult {
+        TrashActionResult(title: value.title, error: value.error, code: value.code, conflict: value.conflict)
     }
 
-    private static func item(_ raw: [AnyHashable: Any]) -> TrashItem? {
-        guard let id = raw["id"] as? NSNumber else { return nil }
-        let details = raw["details"] as? [AnyHashable: Any] ?? [:]
-        func text(_ key: String) -> String { details[key] as? String ?? "" }
-        func number(_ key: String) -> Int { (details[key] as? NSNumber)?.intValue ?? 0 }
-        func flag(_ key: String) -> Bool { (details[key] as? NSNumber)?.boolValue ?? false }
+    private static func item(_ item: PTTrashItemValue) -> TrashItem {
+        let details = item.details
         var value = TrashDetails()
-        value.date = text("date"); value.completed = flag("completed"); value.estimatedMinutes = number("estimatedMinutes")
-        value.startTime = text("startTime"); value.endTime = text("endTime"); value.durationSeconds = number("durationSeconds")
-        value.mode = number("mode"); value.taskTitle = text("taskTitle"); value.manual = flag("manual")
-        value.dueDate = text("dueDate"); value.status = number("status"); value.weekdays = number("weekdays"); value.active = flag("active")
-        value.weekday = number("weekday"); value.startMinutes = (details["startMinutes"] as? NSNumber)?.intValue; value.endMinutes = (details["endMinutes"] as? NSNumber)?.intValue
-        value.weekStart = number("weekStart"); value.weekEnd = number("weekEnd"); value.weekParity = number("weekParity")
-        value.location = text("location"); value.targetDate = text("targetDate")
-        return TrashItem(id: id.intValue,
-                         kind: raw["kind"] as? String ?? "",
-                         title: raw["title"] as? String ?? "",
-                         deletedAt: raw["deletedAt"] as? String ?? "",
-                         deletedDate: raw["deletedDate"] as? String ?? "",
-                         remainingDays: (raw["remainingDays"] as? NSNumber)?.intValue ?? 0,
-                         originSyncID: raw["originSyncId"] as? String ?? "",
-                         categoryName: raw["categoryName"] as? String ?? "",
-                         categoryColor: raw["categoryColor"] as? String ?? "",
-                         restorable: (raw["restorable"] as? NSNumber)?.boolValue ?? false,
-                         blockedReason: raw["blockedReason"] as? String ?? "",
-                         details: value)
+        value.date = details.date; value.completed = details.completed; value.estimatedMinutes = details.estimatedMinutes
+        value.startTime = details.startTime; value.endTime = details.endTime; value.durationSeconds = details.durationSeconds
+        value.mode = details.mode; value.taskTitle = details.taskTitle; value.manual = details.manual
+        value.dueDate = details.dueDate; value.status = details.status; value.weekdays = details.weekdays; value.active = details.active
+        value.weekday = details.weekday; value.startMinutes = details.startMinutes?.intValue; value.endMinutes = details.endMinutes?.intValue
+        value.weekStart = details.weekStart; value.weekEnd = details.weekEnd; value.weekParity = details.weekParity
+        value.location = details.location; value.targetDate = details.targetDate
+        return TrashItem(id: item.itemId, kind: item.kind, title: item.title,
+                         deletedAt: item.deletedAt, deletedDate: item.deletedDate, remainingDays: item.remainingDays,
+                         originSyncID: item.originSyncId, categoryName: item.categoryName, categoryColor: item.categoryColor,
+                         restorable: item.restorable, blockedReason: item.blockedReason, details: value)
     }
 }

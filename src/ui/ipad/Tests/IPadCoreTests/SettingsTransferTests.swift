@@ -103,7 +103,7 @@ import XCTest
     func testSyncFailureAndLostValueCopy() {
         let bridge = SettingsSyncFake()
         let entry = SyncLogEntry(id: 1, kind: "edit", kindLabel: "修改冲突", time: "今天", title: "备忘录",
-            summary: "冲突", detail: "详情", fieldLabel: "正文", lostValue: "  第一行\n🍅\n", keptValue: "新版")
+            summary: "冲突", detail: "详情", fieldLabel: "正文", lostValue: "  第一行\n🍅\n", keptValue: "新版", canCopyLostValue: true)
         bridge.logs = [entry]
         let store = SettingsSyncStore(bridge: bridge)
         store.reloadLogs(); XCTAssertEqual(store.logs, [entry])
@@ -111,6 +111,19 @@ import XCTest
         XCTAssertEqual(store.notice, "已复制丢失值")
         bridge.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "数据库读取失败"])
         store.reloadLogs(); XCTAssertEqual(store.logs, [entry]); XCTAssertEqual(store.errorMessage, "数据库读取失败")
+    }
+
+    // 产品保证：只有服务允许复制的同步日志提供复制动作，有原文而不可复制的日志不会写剪贴板。
+    func testSyncCopyRespectsServiceCapability() {
+        let bridge = SettingsSyncFake()
+        let entry = SyncLogEntry(id: 2, kind: "delete", kindLabel: "删除冲突", time: "今天", title: "任务",
+            summary: "删除赢过修改", detail: "详情", fieldLabel: "标题", lostValue: "未生效的任务名", keptValue: "", canCopyLostValue: false)
+        XCTAssertFalse(entry.lostValue.isEmpty)
+        XCTAssertFalse(entry.canCopyLostValue)
+        let store = SettingsSyncStore(bridge: bridge)
+        store.copy(entry)
+        XCTAssertEqual(bridge.copied, "")
+        XCTAssertEqual(store.notice, "")
     }
 
     // 产品保证：系统保存失败与备份服务失败都展示原因，并清理已生成的文件。

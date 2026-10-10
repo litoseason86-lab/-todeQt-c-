@@ -64,7 +64,9 @@ import UniformTypeIdentifiers
                         if !entry.lostValue.isEmpty {
                             Section("未生效的值") {
                                 Text(entry.lostValue).textSelection(.enabled)
-                                Button("复制丢失值", systemImage: "doc.on.doc") { store.copy(entry) }
+                                if entry.canCopyLostValue {
+                                    Button("复制丢失值", systemImage: "doc.on.doc") { store.copy(entry) }
+                                }
                             }
                         }
                         if !entry.keptValue.isEmpty { Section("保留的值") { Text(entry.keptValue).textSelection(.enabled) } }

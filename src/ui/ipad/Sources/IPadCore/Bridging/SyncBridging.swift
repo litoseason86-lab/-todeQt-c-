@@ -11,10 +11,11 @@ public struct SyncLogEntry: Equatable, Sendable, Identifiable {
     public let fieldLabel: String
     public let lostValue: String
     public let keptValue: String
+    public let canCopyLostValue: Bool
     public init(id: Int64, kind: String, kindLabel: String, time: String, title: String,
-                summary: String, detail: String, fieldLabel: String, lostValue: String, keptValue: String) {
+                summary: String, detail: String, fieldLabel: String, lostValue: String, keptValue: String, canCopyLostValue: Bool = false) {
         self.id = id; self.kind = kind; self.kindLabel = kindLabel; self.time = time; self.title = title
-        self.summary = summary; self.detail = detail; self.fieldLabel = fieldLabel; self.lostValue = lostValue; self.keptValue = keptValue
+        self.summary = summary; self.detail = detail; self.fieldLabel = fieldLabel; self.lostValue = lostValue; self.keptValue = keptValue; self.canCopyLostValue = canCopyLostValue
     }
 }
 @MainActor public protocol SyncBridgeProtocol: AnyObject { var onChanged: (() -> Void)? { get set }; var onNotice: ((String) -> Void)? { get set }; var onCopyRequested: ((String) -> Void)? { get set }; func snapshot() throws -> SyncSnapshot; func setEnabled(_ value: Bool); func confirmJoin(); func syncNow(); func chooseFolder(); func rebuildFolder(); func syncLog(limit: Int) throws -> [SyncLogEntry]; func copyLostValue(_ text: String); func restoreWarning() -> String }

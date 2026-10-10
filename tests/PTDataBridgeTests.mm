@@ -14,6 +14,26 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+// 仅测试声明内部转换入口，不把 QVariantMap 暴露给 Swift 模块。
+@interface PTTrashItemValue (PTDataBridgeTests)
+- (instancetype)initWithMap:(const QVariantMap &)map;
+@end
+@interface PTTrashActionValue (PTDataBridgeTests)
+- (instancetype)initWithMap:(const QVariantMap &)map;
+@end
+@interface PTRoutineValue (PTDataBridgeTests)
+- (instancetype)initWithMap:(const QVariantMap &)map;
+@end
+@interface PTBackupInfoValue (PTDataBridgeTests)
+- (instancetype)initWithMap:(const QVariantMap &)map;
+@end
+@interface PTBackupEntryValue (PTDataBridgeTests)
+- (instancetype)initWithMap:(const QVariantMap &)map;
+@end
+@interface PTSyncLogValue (PTDataBridgeTests)
+- (instancetype)initWithMap:(const QVariantMap &)map;
+@end
+
 class PTDataBridgeTests : public QObject {
     Q_OBJECT
 private slots:
@@ -30,6 +50,8 @@ private slots:
     void backupBridgeDetectsPreferenceWriteFailure();
     void trashRestoreKeepsStructuredFailure();
     void trashEmptyRejectsOverflowWithoutDeletingTruncatedId();
+    void trashTypedValuesPreserveDetailsAndFailure();
+    void typedValuesPreserveRoutineBackupAndSyncFields();
 private:
     QTemporaryDir m_preferences;
     QTemporaryDir m_database;
@@ -77,8 +99,8 @@ void PTDataBridgeTests::trashBridgeEmptyUsesProvidedIdentifiers() {
         seed.bindValue(QStringLiteral(":title"), QStringLiteral("确认后条目")); seed.bindValue(QStringLiteral(":deleted"), deleted); QVERIFY(seed.exec());
         const int laterId = seed.lastInsertId().toInt(); QVERIFY(confirmedId > 0 && laterId > confirmedId);
         PTTrashBridge *bridge = [PTTrashBridge new]; NSError *error = nil;
-        NSDictionary *result = [bridge emptyTrash:@[@(confirmedId)] error:&error];
-        QVERIFY(error == nil); QVERIFY([result[@"ok"] boolValue]);
+        PTTrashActionValue *result = [bridge emptyTrash:@[@(confirmedId)] error:&error];
+        QVERIFY(error == nil); QVERIFY(result.ok);
         QCOMPARE(seed.exec(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE id = %1").arg(confirmedId)), true); QVERIFY(seed.next()); QCOMPARE(seed.value(0).toInt(), 0);
         QVERIFY(seed.exec(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE id = %1").arg(laterId))); QVERIFY(seed.next()); QCOMPARE(seed.value(0).toInt(), 1);
     }
@@ -121,11 +143,11 @@ void PTDataBridgeTests::exportAndRoutineBridgeForwardServiceOperations() {
         QVERIFY(name.length > 0); QVERIFY([name containsString:@"2026"]);
         PTRoutineBridge *routine = [PTRoutineBridge new]; NSError *error = nil;
         QVERIFY([routine addTitle:@"桥接例行" categoryId:-1 weekdays:5 error:&error]); QVERIFY(error == nil);
-        NSArray<NSDictionary *> *values = [routine routines]; QCOMPARE(values.count, NSUInteger(1));
-        QCOMPARE([values.firstObject[@"weekdays"] integerValue], 5);
-        const NSInteger routineId = [values.firstObject[@"id"] integerValue];
+        NSArray<PTRoutineValue *> *values = [routine routines]; QCOMPARE(values.count, NSUInteger(1));
+        QCOMPARE(values.firstObject.weekdays, 5);
+        const NSInteger routineId = values.firstObject.routineId;
         QVERIFY([routine setWeekdays:routineId weekdays:9 error:&error]);
-        QCOMPARE([[routine routines].firstObject[@"weekdays"] integerValue], 9);
+        QCOMPARE([routine routines].firstObject.weekdays, 9);
     }
 }
 // 产品保证：例行字段级编辑转发整型科目，读取失败不会伪装成有效空列表。
@@ -135,11 +157,11 @@ void PTDataBridgeTests::routineBridgePreservesFieldTypesAndReadFailures() {
         QVERIFY([bridge addTitle:@"阅读" categoryId:-1 weekdays:31 error:&error]);
         auto values = [bridge readRoutines:&error]; QVERIFY(error == nil);
         QCOMPARE(values.count, NSUInteger(1));
-        const NSInteger id = [values.firstObject[@"id"] integerValue];
+        const NSInteger id = values.firstObject.routineId;
         QVERIFY(([bridge update:id changes:@{@"title": @"阅读两章", @"categoryId": @(-1)} error:&error]));
         values = [bridge readRoutines:&error];
-        QVERIFY([values.firstObject[@"title"] isEqualToString:@"阅读两章"]);
-        QCOMPARE([values.firstObject[@"weekdays"] integerValue], 31);
+        QVERIFY([values.firstObject.title isEqualToString:@"阅读两章"]);
+        QCOMPARE(values.firstObject.weekdays, 31);
         QVERIFY(![bridge update:id changes:@{@"categoryId": @(1.5)} error:&error]);
         QVERIFY(error != nil);
         DatabaseManager::instance()->close(); error = nil;
@@ -180,11 +202,11 @@ void PTDataBridgeTests::backupBridgeDetectsPreferenceWriteFailure() {
 void PTDataBridgeTests::trashRestoreKeepsStructuredFailure() {
     @autoreleasepool {
         PTTrashBridge *bridge = [PTTrashBridge new]; NSError *error = nil;
-        const NSDictionary *result = [bridge restoreItem:999999 error:&error];
+        PTTrashActionValue *result = [bridge restoreItem:999999 error:&error];
         QVERIFY(error == nil);
-        QVERIFY(![result[@"ok"] boolValue]);
-        QVERIFY([result[@"code"] isEqualToString:@"gone"]);
-        QVERIFY([result[@"error"] length] > 0);
+        QVERIFY(!result.ok);
+        QVERIFY([result.code isEqualToString:@"gone"]);
+        QVERIFY(result.error.length > 0);
     }
 }
 // 产品保证：批量清空编号越界时整批拒绝，不截断成另一条有效编号造成误删。
@@ -199,6 +221,96 @@ void PTDataBridgeTests::trashEmptyRejectsOverflowWithoutDeletingTruncatedId() {
         [bridge emptyTrash:@[@(overflow)] error:&error]; QVERIFY(error != nil);
         QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE id = %1").arg(id)));
         QVERIFY(query.next()); QCOMPARE(query.value(0).toInt(), 1);
+    }
+}
+// 产品保证：废纸篓详情的合法零时间、缺少时间和服务恢复失败，在有类型的值对象里仍可区分。
+void PTDataBridgeTests::trashTypedValuesPreserveDetailsAndFailure() {
+    @autoreleasepool {
+        const QVariantMap details{
+            {QStringLiteral("date"), QStringLiteral("2026-10-10")}, {QStringLiteral("completed"), true},
+            {QStringLiteral("estimatedMinutes"), 25}, {QStringLiteral("startTime"), QStringLiteral("2026-10-10T00:00:00")},
+            {QStringLiteral("endTime"), QStringLiteral("2026-10-10T00:45:00")}, {QStringLiteral("durationSeconds"), 2700},
+            {QStringLiteral("mode"), 2}, {QStringLiteral("taskTitle"), QStringLiteral("阅读 🍅")},
+            {QStringLiteral("manual"), true}, {QStringLiteral("dueDate"), QStringLiteral("2026-10-11")},
+            {QStringLiteral("status"), 3}, {QStringLiteral("weekdays"), 96}, {QStringLiteral("active"), true},
+            {QStringLiteral("weekday"), 6}, {QStringLiteral("startMinutes"), 0}, {QStringLiteral("endMinutes"), 45},
+            {QStringLiteral("weekStart"), 2}, {QStringLiteral("weekEnd"), 18}, {QStringLiteral("weekParity"), 1},
+            {QStringLiteral("location"), QStringLiteral("图书馆")}, {QStringLiteral("targetDate"), QStringLiteral("2027-01-01")}};
+        QVariantMap itemMap{
+            {QStringLiteral("id"), 42}, {QStringLiteral("kind"), QStringLiteral("schedule_entry")},
+            {QStringLiteral("title"), QStringLiteral("午夜课表")}, {QStringLiteral("deletedAt"), QStringLiteral("2026-10-10T12:00:00")},
+            {QStringLiteral("deletedDate"), QStringLiteral("2026-10-10")}, {QStringLiteral("remainingDays"), 29},
+            {QStringLiteral("originSyncId"), QStringLiteral("origin-42")}, {QStringLiteral("categoryName"), QStringLiteral("阅读")},
+            {QStringLiteral("categoryColor"), QStringLiteral("#aabbcc")}, {QStringLiteral("restorable"), false},
+            {QStringLiteral("blockedReason"), QStringLiteral("依赖已删除")}, {QStringLiteral("details"), details}};
+        PTTrashItemValue *item = [[PTTrashItemValue alloc] initWithMap:itemMap];
+        QCOMPARE(item.itemId, NSInteger(42)); QVERIFY([item.kind isEqualToString:@"schedule_entry"]);
+        QVERIFY([item.title isEqualToString:@"午夜课表"]); QVERIFY([item.deletedAt isEqualToString:@"2026-10-10T12:00:00"]);
+        QVERIFY([item.deletedDate isEqualToString:@"2026-10-10"]); QCOMPARE(item.remainingDays, NSInteger(29));
+        QVERIFY([item.originSyncId isEqualToString:@"origin-42"]); QVERIFY([item.categoryName isEqualToString:@"阅读"]);
+        QVERIFY([item.categoryColor isEqualToString:@"#aabbcc"]); QVERIFY(!item.restorable);
+        QVERIFY([item.blockedReason isEqualToString:@"依赖已删除"]);
+        PTTrashDetailsValue *value = item.details;
+        QVERIFY([value.date isEqualToString:@"2026-10-10"]); QVERIFY(value.completed); QCOMPARE(value.estimatedMinutes, NSInteger(25));
+        QVERIFY([value.startTime isEqualToString:@"2026-10-10T00:00:00"]); QVERIFY([value.endTime isEqualToString:@"2026-10-10T00:45:00"]);
+        QCOMPARE(value.durationSeconds, NSInteger(2700)); QCOMPARE(value.mode, NSInteger(2));
+        QVERIFY([value.taskTitle isEqualToString:@"阅读 🍅"]); QVERIFY(value.manual);
+        QVERIFY([value.dueDate isEqualToString:@"2026-10-11"]); QCOMPARE(value.status, NSInteger(3));
+        QCOMPARE(value.weekdays, NSInteger(96)); QVERIFY(value.active); QCOMPARE(value.weekday, NSInteger(6));
+        QVERIFY(value.startMinutes != nil); QCOMPARE(value.startMinutes.integerValue, NSInteger(0));
+        QCOMPARE(value.endMinutes.integerValue, NSInteger(45)); QCOMPARE(value.weekStart, NSInteger(2));
+        QCOMPARE(value.weekEnd, NSInteger(18)); QCOMPARE(value.weekParity, NSInteger(1));
+        QVERIFY([value.location isEqualToString:@"图书馆"]); QVERIFY([value.targetDate isEqualToString:@"2027-01-01"]);
+        itemMap[QStringLiteral("details")] = QVariantMap{};
+        PTTrashItemValue *missing = [[PTTrashItemValue alloc] initWithMap:itemMap];
+        QVERIFY(missing.details.startMinutes == nil); QVERIFY(missing.details.endMinutes == nil);
+        const QVariantMap failure{{QStringLiteral("ok"), false}, {QStringLiteral("title"), QStringLiteral("专注记录")},
+            {QStringLiteral("error"), QStringLiteral("记录冲突")}, {QStringLiteral("code"), QStringLiteral("conflict")},
+            {QStringLiteral("conflict"), QStringLiteral("focus")}};
+        PTTrashActionValue *action = [[PTTrashActionValue alloc] initWithMap:failure];
+        QVERIFY(!action.ok); QVERIFY([action.title isEqualToString:@"专注记录"]); QVERIFY([action.error isEqualToString:@"记录冲突"]);
+        QVERIFY([action.code isEqualToString:@"conflict"]); QVERIFY([action.conflict isEqualToString:@"focus"]);
+    }
+}
+// 产品保证：例行科目和星期、备份元信息和大文件大小、日志完整原文和复制能力均由桥接保真转换。
+void PTDataBridgeTests::typedValuesPreserveRoutineBackupAndSyncFields() {
+    @autoreleasepool {
+        const QVariantMap routineMap{{QStringLiteral("id"), 7}, {QStringLiteral("title"), QStringLiteral("周末阅读")},
+            {QStringLiteral("categoryId"), 9}, {QStringLiteral("categoryName"), QStringLiteral("文学")},
+            {QStringLiteral("categoryColor"), QStringLiteral("#123456")}, {QStringLiteral("active"), true}, {QStringLiteral("weekdays"), 96}};
+        PTRoutineValue *routine = [[PTRoutineValue alloc] initWithMap:routineMap];
+        QCOMPARE(routine.routineId, NSInteger(7)); QVERIFY([routine.title isEqualToString:@"周末阅读"]);
+        QCOMPARE(routine.categoryId, NSInteger(9)); QVERIFY([routine.categoryName isEqualToString:@"文学"]);
+        QVERIFY([routine.categoryColor isEqualToString:@"#123456"]); QVERIFY(routine.active); QCOMPARE(routine.weekdays, NSInteger(96));
+        const QVariantMap infoMap{{QStringLiteral("valid"), true}, {QStringLiteral("reason"), QString()},
+            {QStringLiteral("created_at"), QStringLiteral("2026-10-10T14:30:00")}, {QStringLiteral("app_version"), QStringLiteral("1.5.0")},
+            {QStringLiteral("taskCount"), 123}, {QStringLiteral("sessionCount"), 456}};
+        PTBackupInfoValue *info = [[PTBackupInfoValue alloc] initWithMap:infoMap];
+        QVERIFY(info.valid); QCOMPARE(info.reason.length, NSUInteger(0));
+        QVERIFY([info.createdAt isEqualToString:@"2026-10-10T14:30:00"]); QVERIFY([info.appVersion isEqualToString:@"1.5.0"]);
+        QCOMPARE(info.taskCount, NSInteger(123)); QCOMPARE(info.sessionCount, NSInteger(456));
+        const qint64 wideValue = (qint64(1) << 53) + 123;
+        const QVariantMap entryMap{{QStringLiteral("path"), QStringLiteral("/backup/原始.tomatobackup")},
+            {QStringLiteral("name"), QStringLiteral("原始.tomatobackup")}, {QStringLiteral("modified"), QStringLiteral("2026-10-10T15:00:00")},
+            {QStringLiteral("sizeBytes"), wideValue}};
+        PTBackupEntryValue *entry = [[PTBackupEntryValue alloc] initWithMap:entryMap];
+        QVERIFY([entry.path isEqualToString:@"/backup/原始.tomatobackup"]); QVERIFY([entry.name isEqualToString:@"原始.tomatobackup"]);
+        QVERIFY([entry.modified isEqualToString:@"2026-10-10T15:00:00"]); QCOMPARE(entry.sizeBytes, wideValue);
+        QVariantMap logMap{{QStringLiteral("id"), wideValue}, {QStringLiteral("kind"), QStringLiteral("edit")},
+            {QStringLiteral("kindLabel"), QStringLiteral("修改冲突")}, {QStringLiteral("time"), QStringLiteral("今天 15:00")},
+            {QStringLiteral("title"), QStringLiteral("备忘录标题")}, {QStringLiteral("summary"), QStringLiteral("截断摘要…")},
+            {QStringLiteral("detail"), QStringLiteral("同步详情")}, {QStringLiteral("fieldLabel"), QStringLiteral("正文")},
+            {QStringLiteral("lostValue"), QStringLiteral("  第一行\n🍅\n")}, {QStringLiteral("keptValue"), QStringLiteral("新版")},
+            {QStringLiteral("canCopyLostValue"), true}};
+        PTSyncLogValue *log = [[PTSyncLogValue alloc] initWithMap:logMap];
+        QCOMPARE(log.entryId, wideValue); QVERIFY([log.kind isEqualToString:@"edit"]); QVERIFY([log.kindLabel isEqualToString:@"修改冲突"]);
+        QVERIFY([log.time isEqualToString:@"今天 15:00"]); QVERIFY([log.title isEqualToString:@"备忘录标题"]);
+        QVERIFY([log.summary isEqualToString:@"截断摘要…"]); QVERIFY([log.detail isEqualToString:@"同步详情"]);
+        QVERIFY([log.fieldLabel isEqualToString:@"正文"]); QVERIFY([log.lostValue isEqualToString:@"  第一行\n🍅\n"]);
+        QVERIFY([log.keptValue isEqualToString:@"新版"]); QVERIFY(log.canCopyLostValue);
+        logMap[QStringLiteral("canCopyLostValue")] = false;
+        PTSyncLogValue *blocked = [[PTSyncLogValue alloc] initWithMap:logMap];
+        QVERIFY(blocked.lostValue.length > 0); QVERIFY(!blocked.canCopyLostValue);
     }
 }
 QTEST_GUILESS_MAIN(PTDataBridgeTests)
