@@ -520,6 +520,8 @@ if(IOS)
     target_sources(IPadCore PRIVATE
         src/ui/ipad/Sources/IPadCore/Bridging/ScheduleBridging.swift
         src/ui/ipad/Sources/IPadCore/Stores/ScheduleStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/TimelineStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/WeekStore.swift
         src/ui/ipad/Sources/IPadCore/Format/ScheduleFormat.swift
         src/ui/ipad/Sources/IPadCore/Format/ScheduleLayout.swift)
     target_sources(IPadUI PRIVATE
@@ -527,7 +529,10 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Pages/Schedule/ScheduleView.swift
         src/ui/ipad/Sources/IPadUI/Pages/Schedule/WeekGrid.swift
         src/ui/ipad/Sources/IPadUI/Pages/Schedule/ScheduleEntrySheet.swift
-        src/ui/ipad/Sources/IPadUI/Pages/Schedule/ScheduleSettingsSheet.swift)
+        src/ui/ipad/Sources/IPadUI/Pages/Schedule/ScheduleSettingsSheet.swift
+        src/ui/ipad/Sources/IPadUI/Pages/TodayFocusView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/SessionEditorSheet.swift
+        src/ui/ipad/Sources/IPadUI/Pages/WeekView.swift)
     # 055-P4-1：专注与缺口提醒的协议及适配器。
     target_sources(IPadCore PRIVATE
         src/ui/ipad/Sources/IPadCore/Bridging/FocusBridging.swift
