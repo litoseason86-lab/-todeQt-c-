@@ -267,6 +267,12 @@ if(IOS)
         # 055-P4-1：专注与今日知识缺口提醒桥接。
         src/platform/ios/bridge/PTFocusBridge.h src/platform/ios/bridge/PTFocusBridge.mm
         src/platform/ios/bridge/PTGapReminderBridge.h src/platform/ios/bridge/PTGapReminderBridge.mm
+        # 055-P4-5：废纸篓与设置的数据桥接。
+        src/platform/ios/bridge/PTTrashBridge.h src/platform/ios/bridge/PTTrashBridge.mm
+        src/platform/ios/bridge/PTSyncBridge.h src/platform/ios/bridge/PTSyncBridge.mm
+        src/platform/ios/bridge/PTBackupBridge.h src/platform/ios/bridge/PTBackupBridge.mm
+        src/platform/ios/bridge/PTExportBridge.h src/platform/ios/bridge/PTExportBridge.mm
+        src/platform/ios/bridge/PTRoutineBridge.h src/platform/ios/bridge/PTRoutineBridge.mm
     )
     set_source_files_properties(
         src/platform/ios/IosSyncFolder.mm
@@ -287,6 +293,11 @@ if(IOS)
         src/platform/ios/bridge/PTBridgeSupport.mm
         # 055-P4-1：桥接仅使用 Foundation，ARC 管理回调生命周期。
         src/platform/ios/bridge/PTFocusBridge.mm src/platform/ios/bridge/PTGapReminderBridge.mm
+        src/platform/ios/bridge/PTTrashBridge.mm
+        src/platform/ios/bridge/PTSyncBridge.mm
+        src/platform/ios/bridge/PTBackupBridge.mm
+        src/platform/ios/bridge/PTExportBridge.mm
+        src/platform/ios/bridge/PTRoutineBridge.mm
         PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
     )
 endif()
@@ -512,6 +523,25 @@ if(IOS)
     target_sources(IPadUI PRIVATE
         src/ui/ipad/Sources/IPadUI/Bridges/StatisticsBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/FocusHistoryBridgeAdapter.swift
+    )
+    # 055-P4-5：废纸篓与设置的协议、Store 和页面。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/TrashBridging.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/SyncBridging.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/BackupBridging.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/ExportBridging.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/RoutineBridging.swift
+        src/ui/ipad/Sources/IPadCore/Stores/TrashStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/SettingsStore.swift
+    )
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/TrashBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/SyncBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/BackupBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/ExportBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/RoutineBridgeAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Pages/TrashPage.swift
+        src/ui/ipad/Sources/IPadUI/Pages/SettingsPage.swift
     )
     # 055-P4-1：专注与缺口提醒的协议及适配器。
     target_sources(IPadCore PRIVATE
@@ -1941,3 +1971,40 @@ set_source_files_properties(
     src/platform/ios/bridge/PTStatisticsBridge.mm
     src/platform/ios/bridge/PTFocusHistoryBridge.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+
+# 055-P4-5：独立数据桥接目标；P3B 的核心桥接目标与用例保持原样。
+get_target_property(PT_DATA_TEST_SOURCES TrashServiceTests SOURCES)
+list(REMOVE_ITEM PT_DATA_TEST_SOURCES tests/TrashServiceTests.cpp)
+add_executable(PTDataBridgeTests ${PT_DATA_TEST_SOURCES}
+    tests/PTDataBridgeTests.mm
+    src/platform/ios/bridge/PTBridgeSupport.h src/platform/ios/bridge/PTBridgeSupport.mm
+    # 055-P4-5：桥接所依赖的服务实现；沿用 TrashServiceTests 的隔离数据库装配。
+    src/services/BackupOperations.h src/services/BackupOperations.cpp
+    src/services/BackupService.h src/services/BackupService.cpp
+    src/services/SnapshotRetention.h
+    src/services/ExportService.h src/services/ExportService.cpp
+    src/services/SyncFiles.h src/services/SyncFiles.cpp
+    src/services/SyncFolder.h
+    src/services/LocalSyncFolder.h src/services/LocalSyncFolder.cpp
+    src/services/SyncWorker.h src/services/SyncWorker.cpp
+    src/services/SyncEngine.h src/services/SyncEngine.cpp
+    src/services/SyncController.h src/services/SyncController.cpp
+    src/services/ServiceReadResult.h
+    src/platform/ios/bridge/PTTrashBridge.h src/platform/ios/bridge/PTTrashBridge.mm
+    src/platform/ios/bridge/PTSyncBridge.h src/platform/ios/bridge/PTSyncBridge.mm
+    src/platform/ios/bridge/PTBackupBridge.h src/platform/ios/bridge/PTBackupBridge.mm
+    src/platform/ios/bridge/PTExportBridge.h src/platform/ios/bridge/PTExportBridge.mm
+    src/platform/ios/bridge/PTRoutineBridge.h src/platform/ios/bridge/PTRoutineBridge.mm
+)
+set_source_files_properties(tests/PTDataBridgeTests.mm
+    src/platform/ios/bridge/PTTrashBridge.mm
+    src/platform/ios/bridge/PTSyncBridge.mm
+    src/platform/ios/bridge/PTBackupBridge.mm
+    src/platform/ios/bridge/PTExportBridge.mm
+    src/platform/ios/bridge/PTRoutineBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(PTDataBridgeTests PRIVATE Qt6::Core Qt6::Gui Qt6::Sql Qt6::Concurrent Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(PTDataBridgeTests)
+add_test(NAME PTDataBridgeTests COMMAND PTDataBridgeTests)
+set_tests_properties(PTDataBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")

@@ -2,6 +2,7 @@
 #include <QHash>
 #include <QThread>
 #include <limits>
+#include <QVariantList>
 
 namespace PTBridgeSupport {
 namespace {
@@ -60,5 +61,54 @@ bool fail(NSError **error, const QString &message)
     if (error) *error = [NSError errorWithDomain:@"PTCoreBridge" code:1
         userInfo:@{NSLocalizedDescriptionKey: string(message.isEmpty() ? QStringLiteral("操作失败，请重试") : message)}];
     return false;
+}
+
+id object(const QVariant &value)
+{
+    if (!value.isValid() || value.isNull()) return [NSNull null];
+    switch (value.typeId()) {
+    case QMetaType::Bool: return @(value.toBool());
+    case QMetaType::Int: return @(value.toInt());
+    case QMetaType::UInt: return @(value.toUInt());
+    case QMetaType::LongLong: return @(value.toLongLong());
+    case QMetaType::ULongLong: return @(value.toULongLong());
+    case QMetaType::Double: return @(value.toDouble());
+    case QMetaType::QString: return string(value.toString());
+    case QMetaType::QDate: return string(value.toDate().toString(Qt::ISODate));
+    case QMetaType::QDateTime: return timestamp(value.toDateTime());
+    case QMetaType::QVariantList: return array(value.toList());
+    case QMetaType::QVariantMap: return dictionary(value.toMap());
+    default: return string(value.toString());
+    }
+}
+
+NSArray *array(const QVariantList &values)
+{
+    NSMutableArray *result = [NSMutableArray arrayWithCapacity:values.size()];
+    for (const QVariant &value : values) [result addObject:object(value)];
+    return [result copy];
+}
+
+NSDictionary *dictionary(const QVariantMap &values)
+{
+    NSMutableDictionary *result = [NSMutableDictionary dictionaryWithCapacity:values.size()];
+    for (auto it = values.cbegin(); it != values.cend(); ++it) result[string(it.key())] = object(it.value());
+    return [result copy];
+}
+
+QVariantMap map(NSDictionary *values)
+{
+    QVariantMap result;
+    for (id key in values) {
+        id value = values[key];
+        if ([value isKindOfClass:[NSString class]]) result[string(key)] = string(value);
+        else if ([value isKindOfClass:[NSNumber class]]) result[string(key)] = [(NSNumber *)value doubleValue];
+        else if ([value isKindOfClass:[NSArray class]]) {
+            QVariantList list;
+            for (id item in (NSArray *)value) list.append([item isKindOfClass:[NSString class]] ? QVariant(string(item)) : QVariant::fromValue([item doubleValue]));
+            result[string(key)] = list;
+        }
+    }
+    return result;
 }
 }

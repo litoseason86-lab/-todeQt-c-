@@ -1,0 +1,8 @@
+import Foundation
+import IPadCore
+import PTBridge
+@MainActor final class BackupBridgeAdapter: BackupBridgeProtocol {
+    private let native = PTBackupBridge(); var onChanged: (() -> Void)?; var onBackupCompleted: ((Bool, String) -> Void)?; var onRestoreCompleted: ((Bool, String) -> Void)?; var onRestoreStarted: (() -> Void)?
+    init() { native.onChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }; native.onBackupCompleted = { [weak self] ok, text in MainActor.assumeIsolated { self?.onBackupCompleted?(ok, text) } }; native.onRestoreCompleted = { [weak self] ok, text in MainActor.assumeIsolated { self?.onRestoreCompleted?(ok, text) } }; native.onRestoreStarted = { [weak self] in MainActor.assumeIsolated { self?.onRestoreStarted?() } } }
+    func autoBackupEnabled() -> Bool { native.autoBackupEnabled }; func setAutoBackupEnabled(_ value: Bool) throws { try native.setAutoBackupEnabled(value) }; func snapshot() -> (lastBackupTimeIso: String, busy: Bool, operationBlocksUI: Bool, operationText: String) { (native.lastBackupTimeIso, native.busy, native.operationBlocksUi, native.operationText) }; func requestBackup(path: String) { native.requestBackup(path) }; func requestBackupInfo(path: String) { native.requestBackupInfo(path) }; func requestRestore(path: String) { native.requestRestore(path) }; func readBackupInfo(path: String) -> [String: Any] { native.readBackupInfo(path) as! [String: Any] }; func readBackups() throws -> [[String: Any]] { try native.readBackups().map { $0 as! [String: Any] } }; func suggestedBackupFileName() -> String { native.suggestedBackupFileName() }; func backupFileExtension() -> String { native.backupFileExtension() }
+}

@@ -480,6 +480,7 @@ int main(int argc, char *argv[])
         PTBridgeSupport::registerService(QStringLiteral("pendingDeletion"), &pendingDeletion);
         PTBridgeSupport::registerService(QStringLiteral("taskInteractions"), &taskInteractions);
         PTBridgeSupport::registerService(QStringLiteral("focusController"), &focusSessionController);
+        PTBridgeSupport::registerService(QStringLiteral("syncController"), &syncController);
         installNativeRoot();
     }
     else

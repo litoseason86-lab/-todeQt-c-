@@ -1,0 +1,2 @@
+import Foundation
+@MainActor public protocol RoutineBridgeProtocol: AnyObject { var onChanged: (() -> Void)? { get set }; var onFailure: ((String) -> Void)? { get set }; func routines() -> [[String: Any]]; func add(title: String, categoryID: Int, weekdays: Int) throws; func update(id: Int, changes: [String: Any]) throws; func delete(id: Int) throws; func setActive(id: Int, active: Bool) throws; func setWeekdays(id: Int, weekdays: Int) throws; func materializeToday() -> Int }

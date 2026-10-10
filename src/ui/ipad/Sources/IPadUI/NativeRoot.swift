@@ -20,15 +20,21 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let pending = PendingDeletionStore(bridge: PendingDeletionBridgeAdapter(), tasks: tasks, shell: store)
         let actions = TaskActions(tasks: tasks, pendingDeletion: pending, shell: store)
         store.taskActions = actions
+        let trash = TrashBridgeAdapter()
+        let sync = SyncBridgeAdapter()
+        let backup = BackupBridgeAdapter()
+        let export = ExportBridgeAdapter()
+        let routines = RoutineBridgeAdapter()
         let core = CoreBridges(tasks: tasks, interactions: InteractionBridgeAdapter(),
                                categories: CategoryBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter(),
                                settings: SettingsBridgeAdapter(), statistics: StatisticsBridgeAdapter(),
                                focusHistory: FocusHistoryBridgeAdapter(), pendingDeletion: pending,
-                               taskActions: actions)
+                               taskActions: actions, trash: trash, sync: sync, backup: backup,
+                               export: export, routines: routines)
         // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
         PTLifecycleBridge.flushHandler = { [weak store] in
             MainActor.assumeIsolated { store?.flushEdits() }
         }
-        return UIHostingController(rootView: ShellRootView(store: store).environment(core))
+        return UIHostingController(rootView: ShellRootView(store: store).environment(core).environment(store))
     }
 }

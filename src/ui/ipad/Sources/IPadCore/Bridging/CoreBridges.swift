@@ -8,15 +8,23 @@ import Observation
     public let settings: any SettingsBridgeProtocol
     public let statistics: any StatisticsBridgeProtocol
     public let focusHistory: any FocusHistoryBridgeProtocol
+    public let trash: any TrashBridgeProtocol
+    public let sync: any SyncBridgeProtocol
+    public let backup: any BackupBridgeProtocol
+    public let export: any ExportBridgeProtocol
+    public let routines: any RoutineBridgeProtocol
     public let pendingDeletion: PendingDeletionStore
     public let taskActions: TaskActions
     public init(tasks: any TaskBridgeProtocol, interactions: any InteractionBridgeProtocol,
                 categories: any CategoryBridgeProtocol, logicalDay: any LogicalDayBridgeProtocol,
                 settings: any SettingsBridgeProtocol, statistics: any StatisticsBridgeProtocol,
                 focusHistory: any FocusHistoryBridgeProtocol, pendingDeletion: PendingDeletionStore,
-                taskActions: TaskActions) {
+                taskActions: TaskActions, trash: any TrashBridgeProtocol,
+                sync: any SyncBridgeProtocol, backup: any BackupBridgeProtocol,
+                export: any ExportBridgeProtocol, routines: any RoutineBridgeProtocol) {
         self.tasks = tasks; self.interactions = interactions; self.categories = categories
         self.logicalDay = logicalDay; self.settings = settings; self.statistics = statistics
         self.focusHistory = focusHistory; self.pendingDeletion = pendingDeletion; self.taskActions = taskActions
+        self.trash = trash; self.sync = sync; self.backup = backup; self.export = export; self.routines = routines
     }
 }

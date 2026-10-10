@@ -32,6 +32,8 @@ NS_ASSUME_NONNULL_BEGIN
 // 从 Qt 资源读取现有壁纸，避免原生应用再复制一套图片；不依赖 UIKit。
 + (nullable NSData *)wallpaperDataForTheme:(NSString *)theme NS_SWIFT_NAME(wallpaperData(forTheme:));
 - (PTShellSnapshot *)readSnapshot NS_SWIFT_NAME(read());
+- (BOOL)setUseWallpaper:(BOOL)value error:(NSError **)error
+    __attribute__((swift_error(nonnull_error)));
 - (BOOL)pause;
 - (BOOL)resume;
 - (NSInteger)captureTitle:(NSString *)title categoryId:(NSInteger)categoryId sourceTaskId:(NSInteger)sourceTaskId

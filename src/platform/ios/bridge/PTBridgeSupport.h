@@ -5,6 +5,7 @@
 #include <QPointer>
 #include <QString>
 #include <QList>
+#include <QVariant>
 
 // 非单例只登记弱引用；服务销毁后读取为空，避免 Swift 持有已经释放的 C++ 对象。
 #ifdef __OBJC__
@@ -46,5 +47,10 @@ QDateTime timestamp(NSString *iso);
 NSString *timestamp(const QDateTime &value);
 bool integer(NSInteger value, int *result);
 bool fail(NSError **error, const QString &message);
+// Qt 值对象不能直接调用 Foundation 转换方法；所有桥接统一经这里递归转换，避免各领域各写一套漏类型的投影。
+id object(const QVariant &value);
+NSArray *array(const QVariantList &values);
+NSDictionary *dictionary(const QVariantMap &values);
+QVariantMap map(NSDictionary *values);
 #endif
 }
