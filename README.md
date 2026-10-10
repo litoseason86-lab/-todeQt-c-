@@ -1,6 +1,6 @@
 # 番茄Todo
 
-面向考研复习的本地应用，Mac 与 iPad 共用 C++ 业务与数据层。核心流程是先创建任务，再从任务启动专注计时，最后沉淀本地统计数据。Mac 版使用原生菜单栏与通知能力。数据保存在本地，两台设备经 iCloud 云盘里的同步文件夹互通，不需要账号或服务器，应用本身不联网。
+面向考研复习的本地应用，Mac 与 iPad 共用 C++ 业务与数据层。核心流程是先创建任务，再从任务启动专注计时，最后沉淀本地统计数据。Mac 版使用原生菜单栏与通知能力。iPad 默认使用 SwiftUI 原生界面，保留旧版 QML 一个版本作为回退；iPhone 使用 QML 伴侣页。数据保存在本地，两台设备经 iCloud 云盘里的同步文件夹互通，不需要账号或服务器，应用本身不联网。
 
 ## 文档入口
 
@@ -90,12 +90,16 @@
 ## 技术栈
 
 - Qt 6
-- Qt Quick/QML（Mac 与 iPhone 伴侣页，iPad 当前默认界面）
-- Swift 6 / SwiftUI / UIKit（iPad 原生外壳，开关默认关闭）
+- Qt Quick/QML（Mac 与 iPhone 伴侣页，iPad 旧版回退界面）
+- Swift 6 / SwiftUI / UIKit / Swift Charts（iPad 默认原生界面，13 页已接入）
 - Objective-C++ / Foundation（Qt 与原生界面的桥接）
 - C++17
 - SQLite
 - CMake
+
+iPad 原生「设置 → 外观 → 界面」可选择下次启动用旧版；旧版 QML 设置可切回新版。
+两端只写本机 `ipad/nativeUI`，不参与同步，业务和数据仍来自同一份 C++ 服务。
+启动开关、生命周期保存约定与真机确认见 [运行命令](docs/运行命令.md#ipad-原生界面与-swift055)。
 
 ## 构建
 
