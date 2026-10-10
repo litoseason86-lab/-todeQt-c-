@@ -46,7 +46,7 @@ struct ShellRootView: View {
         .tabViewStyle(.sidebarAdaptable)
         .defaultAdaptableTabBarPlacement(.sidebar)
         .tabViewSidebarHeader { summaryTiles }
-        .tabViewBottomAccessory(isEnabled: store.miniTimerVisible) { miniTimer }
+        .modifier(TimerAccessoryModifier(store: store, accessory: miniTimer))
         .tint(ThemeColors.accentInk)
         .preferredColorScheme(store.snapshot.useWallpaper
             ? (["starry", "rainy", "moon"].contains(store.snapshot.backgroundTheme) ? .dark : .light) : nil)
@@ -229,4 +229,19 @@ private struct ShellChrome: ViewModifier {
 }
 private extension View {
     func shellChrome(store: ShellStore) -> some View { modifier(ShellChrome(store: store)) }
+}
+
+private struct TimerAccessoryModifier<Accessory: View>: ViewModifier {
+    @Bindable var store: ShellStore
+    let accessory: Accessory
+
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.1, *) {
+            content.tabViewBottomAccessory(isEnabled: store.miniTimerVisible) { accessory }
+        } else {
+            // iOS 26.0 没有 isEnabled 重载，只能让附件内容为空；部署到 26.1 后由上面的 API
+            // 完全关闭容器，避免空白玻璃继续占位。
+            content.tabViewBottomAccessory { if store.miniTimerVisible { accessory } }
+        }
+    }
 }
