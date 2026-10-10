@@ -9,7 +9,8 @@ struct TaskDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     init(taskID: Int, core: CoreBridges, shell: ShellStore) {
         self.taskID = taskID; self.shell = shell
-        _store = State(initialValue: TaskEditorStore(tasks: core.tasks, interactions: core.interactions, categories: core.categories, shell: shell))
+        // 科目变化回调只有一个槽：表单用自己的适配器实例，不占用 CoreBridges 里共享的那份。
+        _store = State(initialValue: TaskEditorStore(tasks: core.tasks, interactions: core.interactions, categories: CategoryBridgeAdapter(), shell: shell))
     }
     var body: some View {
         @Bindable var store = store

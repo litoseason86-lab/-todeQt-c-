@@ -53,6 +53,7 @@ private slots:
     void taskFailuresAreCollectedOnce();
     void taskWriteAndReadEntryPoints();
     void taskPlannedMinutesMatchesService();
+    void taskOverdueRolloverDaysMatchesService();
     void pendingDeletionSignalsAndState();
     void interactionTokenOwnsRegistration();
     void coreSignalsReturnToMainThreadAndDisconnect();
@@ -248,6 +249,14 @@ void PTCoreBridgeTests::taskWriteAndReadEntryPoints() {
 }
 // 产品保证：「已排」分钟逐天原样投影服务结果（加总口径在 C++），待删的那条按调用方给的编号排除；
 // 参数不合法与读取失败都抛错且不给半份数据，两种错误文案不同。
+// 桥接转发的结转窗口天数必须等于服务常量，结转提示里的「最近 N 天」才与 Mac 一致。
+void PTCoreBridgeTests::taskOverdueRolloverDaysMatchesService() {
+    @autoreleasepool {
+        PTTaskBridge *bridge = [PTTaskBridge new];
+        QVERIFY(TaskManager::instance()->overdueRolloverDays() > 0);
+        QCOMPARE(bridge.overdueRolloverDays, NSInteger(TaskManager::instance()->overdueRolloverDays()));
+    }
+}
 void PTCoreBridgeTests::taskPlannedMinutesMatchesService() {
     @autoreleasepool {
         PTTaskBridge *bridge = [PTTaskBridge new]; NSError *error = nil;

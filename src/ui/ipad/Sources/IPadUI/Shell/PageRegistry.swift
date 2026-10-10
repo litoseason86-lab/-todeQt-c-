@@ -5,10 +5,10 @@ import SwiftUI
 @MainActor enum PageRegistry {
     @ViewBuilder static func view(for page: PageID) -> some View {
         switch page {
-        case .today: placeholder(.today)
-        case .focus: placeholder(.focus)
+        case .today: TodayView()
+        case .focus: FocusView()
         case .week: placeholder(.week)
-        case .dashboard: placeholder(.dashboard)
+        case .dashboard: DashboardView()
         case .knowledgeGap: placeholder(.knowledgeGap)
         case .todayFocus: placeholder(.todayFocus)
         case .schedule: placeholder(.schedule)

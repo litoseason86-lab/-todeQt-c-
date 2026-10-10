@@ -9,6 +9,8 @@
 #include "../src/services/KnowledgeGapService.h"
 #include "../src/services/LogicalDay.h"
 #include "../src/services/MonotonicClock.h"
+#include "../src/services/NotificationService.h"
+#include "../src/services/PhaseAlarmCoordinator.h"
 #include "../src/services/PendingDeletion.h"
 #include "../src/services/TaskManager.h"
 #include <QSettings>
@@ -54,6 +56,7 @@ private slots:
     void failuresAndMissingController();
     void allSignalsAndLifetime();
     void backgroundSignalsReturnToMain();
+    void reminderFailureSignals();
     void gapSummaryAndConversion();
     void gapPartialFailureAndReadFailure();
 private:
@@ -275,6 +278,41 @@ void PTFocusBridgeTests::backgroundSignalsReturnToMain() {
         worker->start(); QVERIFY(worker->wait()); QTRY_COMPARE(count, 2); QVERIFY(main);
         __weak PTGapReminderBridge *released = gap; gap = nil; QVERIFY(released == nil);
         emit KnowledgeGapService::instance()->gapsChanged(); QCOMPARE(count, 2);
+    }
+}
+// 产品保证：到点提醒没预约成功、系统通知没发出这两类失败原样转给界面做前台提示；
+// 预约协调器没登记（Mac 不创建它）时只转通知失败，桥接释放后不再回调。
+void PTFocusBridgeTests::reminderFailureSignals() {
+    @autoreleasepool {
+        NotificationService notifications;
+        PhaseAlarmCoordinator alarms(FocusTimer::instance(), &notifications);
+        __block NSString *alarmReason = nil, *deliveryReason = nil; __block int alarmCount = 0, deliveryCount = 0;
+        // 先不登记协调器：只应收到通知失败，预约失败的信号没有来源。
+        __weak PTFocusBridge *released;
+        {
+            PTFocusBridge *without = [PTFocusBridge new]; released = without;
+            without.onAlarmUnavailable = ^(NSString *r) { alarmReason = r; ++alarmCount; };
+            without.onNotificationDeliveryFailed = ^(NSString *r) { deliveryReason = r; ++deliveryCount; };
+            emit alarms.alarmUnavailable(QStringLiteral("未登记"));
+            QCOMPARE(alarmCount, 0);
+            emit NotificationService::instance()->notificationDeliveryFailed(QStringLiteral("没有权限"));
+            QCOMPARE(deliveryCount, 1); QVERIFY([deliveryReason isEqualToString:@"没有权限"]);
+        }
+        QVERIFY(released == nil);
+        emit NotificationService::instance()->notificationDeliveryFailed(QStringLiteral("释放后"));
+        QCOMPARE(deliveryCount, 1);
+        PTBridgeSupport::registerService(QStringLiteral("phaseAlarms"), &alarms);
+        PTFocusBridge *with = [PTFocusBridge new];
+        with.onAlarmUnavailable = ^(NSString *r) { alarmReason = r; ++alarmCount; };
+        with.onNotificationDeliveryFailed = ^(NSString *r) { deliveryReason = r; ++deliveryCount; };
+        emit alarms.alarmUnavailable(QStringLiteral("通知权限未开"));
+        QCOMPARE(alarmCount, 1); QVERIFY([alarmReason isEqualToString:@"通知权限未开"]);
+        emit NotificationService::instance()->notificationDeliveryFailed(QStringLiteral("系统拒绝"));
+        QCOMPARE(deliveryCount, 2); QVERIFY([deliveryReason isEqualToString:@"系统拒绝"]);
+        with = nil;
+        emit alarms.alarmUnavailable(QStringLiteral("释放后"));
+        QCOMPARE(alarmCount, 1);
+        PTBridgeSupport::registerService(QStringLiteral("phaseAlarms"), nullptr);
     }
 }
 // 产品保证：提醒五个数字与转换计数来自服务，转任务后两个变化信号都有投递。

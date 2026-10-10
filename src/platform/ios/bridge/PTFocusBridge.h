@@ -109,6 +109,11 @@ __attribute__((swift_attr("@MainActor")))
 @property(nonatomic, copy, nullable) void (^onPhaseSettledOffline)(NSInteger phase);
 @property(nonatomic, copy, nullable) void (^onTaskAutoCompleteFailed)(NSInteger taskId);
 @property(nonatomic, copy, nullable) void (^onFailure)(NSString *message);
+// 到点提醒没能交给系统预约（PhaseAlarmCoordinator::alarmUnavailable）；协调器只在移动端创建，
+// 登记处取不到时本信号永远不发。
+@property(nonatomic, copy, nullable) void (^onAlarmUnavailable)(NSString *reason);
+// 系统通知没有发出（NotificationService::notificationDeliveryFailed）。
+@property(nonatomic, copy, nullable) void (^onNotificationDeliveryFailed)(NSString *reason);
 - (BOOL)startFree:(NSInteger)taskId title:(NSString *)title error:(NSError **)error;
 - (BOOL)startPomodoro:(NSInteger)taskId title:(NSString *)title seconds:(NSInteger)seconds error:(NSError **)error;
 - (BOOL)pause:(NSError **)error;

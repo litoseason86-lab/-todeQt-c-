@@ -194,4 +194,5 @@ using namespace PTBridgeSupport;
     NSAssert(NSThread.isMainThread, @"任务读取必须在主线程");
     int id; return integer(taskId, &id) && TaskManager::instance()->isRoutineGeneratedTask(id);
 }
+- (NSInteger)overdueRolloverDays { return TaskManager::instance()->overdueRolloverDays(); }
 @end
