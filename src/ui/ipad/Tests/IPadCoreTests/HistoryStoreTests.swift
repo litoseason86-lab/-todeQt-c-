@@ -79,7 +79,10 @@ import XCTest
         XCTAssertFalse(history.calls.contains { $0.0 == "cleanupInvalidSessions" })
         store.cancelCleanup(); store.confirmCleanup()
         XCTAssertFalse(history.calls.contains { $0.0 == "cleanupInvalidSessions" })
-        store.requestCleanup(); store.confirmCleanup(); store.confirmCleanup()
+        store.requestCleanup()
+        // 面板收起绑定不代替显式确认意图，隔离系统面板动作与显示状态的先后顺序。
+        store.cleanupConfirmationPresented = false
+        store.confirmCleanup(); store.confirmCleanup()
         XCTAssertEqual(history.calls.filter { $0.0 == "cleanupInvalidSessions" }.count, 1)
         XCTAssertEqual(history.calls.filter { $0.0 == "monthSessions" }.count, before + 1)
     }
