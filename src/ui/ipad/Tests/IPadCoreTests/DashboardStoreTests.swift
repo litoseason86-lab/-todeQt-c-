@@ -79,13 +79,13 @@ import XCTest
         XCTAssertEqual(r.store.nickname, "小明")
     }
 
-    // 产品保证：仪表盘任务区最多展示今日任务前八条，并保留桥接返回的顺序。
-    func testTopTasksOnlyExposesFirstEightRows() {
-        let r = rig((1...10).map { task($0) })
+    // 产品保证：仪表盘任务区最多展示今日任务前六条，并保留桥接返回的顺序。
+    func testTopTasksOnlyExposesFirstSixRows() {
+        let r = rig([9, 4, 7, 1, 12, 3, 8, 2, 10].map { task($0) })
         r.store.start()
 
-        XCTAssertEqual(r.store.topTasks.map(\.id), Array(1...8))
-        XCTAssertEqual(r.store.topTasks.count, 8)
+        XCTAssertEqual(r.store.topTasks.map(\.id), [9, 4, 7, 1, 12, 3])
+        XCTAssertEqual(r.store.topTasks.count, 6)
     }
 
     // 产品保证：某一路刷新失败时保留旧快照，同时显示对应错误，不用成功读取的空值覆盖旧数据。
@@ -143,5 +143,11 @@ import XCTest
 
         XCTAssertEqual(r.store.todayStats.totalDuration, 1800)
         XCTAssertGreaterThanOrEqual(r.statistics.calls.filter { $0.0 == "todayStats" }.count, 2)
+    }
+    // 产品保证：仪表盘开始任务仍经 TaskActions 切到专注页，不直接操作计时器。
+    func testR2StartUsesSharedTaskActions() {
+        let r = rig([task(3, "报告")]); r.shell.select(.dashboard)
+        r.store.openFocus(task(3, "报告"))
+        XCTAssertEqual(r.shell.selection, .focus)
     }
 }

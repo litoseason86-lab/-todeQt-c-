@@ -10,7 +10,7 @@ import Observation
     public private(set) var nickname = ""
     public private(set) var loadError = ""
     public private(set) var now = Date()
-    public var topTasks: [TaskValue] { Array(tasks.prefix(8)) }
+    public var topTasks: [TaskValue] { Array(tasks.prefix(6)) }
     public var greeting: String { DashboardFormat.greeting(for: Calendar.current.component(.hour, from: now)) }
     public var dateText: String { DashboardFormat.dateText(now) }
 
