@@ -9,7 +9,7 @@ import XCTest
     func testGroupsPreserveServiceFactsAndOrder() {
         let b = KnowledgeGapFake(); let day = LogicalDayBridgeFake()
         b.rows = [row(8, status: 1, overdue: true), row(3, status: 0), row(2, status: 1), row(6, status: 2, overdue: true)]
-        let s = GapStore(bridge: b, logicalDay: day); s.refresh()
+        let s = GapStore(bridge: b, logicalDay: day); s.refresh(); XCTAssertEqual(b.filters.first?.0, -2)
         XCTAssertEqual(s.gaps(status: 1).map(\.id), [8, 2]); XCTAssertEqual(s.gaps(status: 2).map(\.id), [6])
         XCTAssertTrue(GapFormat.meta(b.rows[0]).contains("已逾期 9 天"))
     }
@@ -40,4 +40,13 @@ import XCTest
         s.setActive(true); let n = b.calls.count; s.logicalDayChanged(); XCTAssertGreaterThan(b.calls.count, n)
         s.setActive(false); b.onFailure?("别页错误"); XCTAssertNotEqual(s.errorMessage, "别页错误")
     }
+    // 产品保证：关联任务完成只刷新服务事实，界面不会自动解决知识缺口。
+    func testCompletedLinkedTaskDoesNotAutoResolve() {
+        let b = KnowledgeGapFake(); b.rows = [row(6, status: 1)]
+        let s = GapStore(bridge: b, logicalDay: LogicalDayBridgeFake()); s.setActive(true)
+        b.rows[0].linkedTaskCompleted = true; b.onChanged?()
+        XCTAssertTrue(s.items[0].linkedTaskCompleted); XCTAssertEqual(s.items[0].status, 1)
+        XCTAssertFalse(b.calls.contains("resolve"))
+    }
+
 }

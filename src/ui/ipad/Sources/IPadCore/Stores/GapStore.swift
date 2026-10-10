@@ -27,6 +27,7 @@ import Observation
     public func logicalDayChanged() { if active { refresh() } }
     public func relatedDataChanged() { if active { refresh() } }
     public func gaps(status: Int) -> [GapValue] { items.filter { $0.status == status } }
+    public var logicalToday: String { logicalDay.today }
     public var selected: GapValue? { items.first { $0.id == selectedID } }
     public func refresh() {
         guard !reading else { return }; reading = true; defer { reading = false }

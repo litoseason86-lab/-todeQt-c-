@@ -6,6 +6,7 @@
 #include "../src/services/MemoService.h"
 #include "../src/services/CountdownService.h"
 #include "../src/services/CategoryManager.h"
+#include "../src/services/TaskManager.h"
 #include "../src/services/LogicalDay.h"
 #include "../src/services/AppSettings.h"
 #include <QSettings>
@@ -48,17 +49,30 @@ void PTContentBridgeTests::gapFieldsActionsAndPartialChanges() {
     @autoreleasepool {
         PTKnowledgeGapBridge *b = [PTKnowledgeGapBridge new]; NSError *error = nil;
         const auto today = LogicalDay::today(AppSettings::instance()->dayStartHour()).toString(Qt::ISODate).toNSString();
-        NSInteger first = [b addTitle:@"第一条" categoryId:-1 detail:@"现场" priority:2 dueDate:@"" sourceTaskId:-1 error:&error];
+        const int category = CategoryManager::instance()->addCategory(QStringLiteral("缺口科目"), QStringLiteral("#be8568"));
+        QVERIFY(category > 0);
+        const int source = TaskManager::instance()->createTask(QStringLiteral("来源现场"), LogicalDay::today(AppSettings::instance()->dayStartHour()), category, 23, QString());
+        QVERIFY(source > 0);
+        NSInteger first = [b addTitle:@"第一条" categoryId:category detail:@"现场" priority:2 dueDate:@"" sourceTaskId:source error:&error];
         NSInteger second = [b addTitle:@"第二条" categoryId:-1 detail:@"不同正文" priority:0 dueDate:today sourceTaskId:-1 error:&error];
         QVERIFY(first > 0 && second > 0 && first != second); QVERIFY(!error);
         auto value = [b gap:first].items.firstObject;
-        QVERIFY([value.detail isEqualToString:@"现场"]); QCOMPARE(value.priority, NSInteger(2)); QCOMPARE(value.sourceTaskId, NSInteger(-1));
+        QVERIFY([value.detail isEqualToString:@"现场"]); QCOMPARE(value.priority, NSInteger(2)); QCOMPARE(value.sourceTaskId, NSInteger(source));
+        QCOMPARE(value.gapId, first); QCOMPARE(value.categoryId, NSInteger(category));
+        QVERIFY([value.title isEqualToString:@"第一条"]); QVERIFY([value.categoryName isEqualToString:@"缺口科目"]);
+        QVERIFY([value.categoryColor isEqualToString:@"#be8568"]); QVERIFY([value.sourceTaskTitle isEqualToString:@"来源现场"]);
+        QCOMPARE(value.status, NSInteger(0)); QVERIFY(!value.scheduled && !value.overdue && !value.dueToday);
+        QCOMPARE(value.overdueDays, NSInteger(0)); QCOMPARE(value.linkedTaskId, NSInteger(-1));
+        QVERIFY(!value.linkedTaskOpen && !value.linkedTaskCompleted); QVERIFY(value.linkedTaskTitle.length == 0);
+        QVERIFY(value.createdAt.length > 0 && value.updatedAt.length > 0 && value.resolvedAt.length == 0);
+        auto scheduled = [b gap:second].items.firstObject;
+        QVERIFY(scheduled.scheduled && scheduled.dueToday); QVERIFY([scheduled.dueDate isEqualToString:today]);
         PTKnowledgeGapChanges *changes = [PTKnowledgeGapChanges new]; changes.title = @"改标题";
         QVERIFY(changes.hasTitle && !changes.hasDetail); QVERIFY([b updateGap:first changes:changes error:&error]);
         QVERIFY([[b gap:first].items.firstObject.detail isEqualToString:@"现场"]);
         QVERIFY([b setDueDate:first date:today error:&error]);
         QVERIFY(([b moveGaps:@[@(first), @(second)] date:@"" error:&error]));
-        QVERIFY([b resolveGap:first resolution:@"结论" error:&error]); QCOMPARE([b gap:first].items.firstObject.status, NSInteger(2));
+        QVERIFY([b resolveGap:first resolution:@"结论" error:&error]); QCOMPARE([b gap:first].items.firstObject.status, NSInteger(2)); QVERIFY([b gap:first].items.firstObject.resolvedAt.length > 0);
         QVERIFY([b reopenGap:first error:&error]); QVERIFY([[b gap:first].items.firstObject.resolution isEqualToString:@"结论"]);
         QVERIFY([b convertGap:first date:today error:&error] > 0);
         QVERIFY([b gap:first].items.firstObject.linkedTaskOpen);
@@ -71,15 +85,20 @@ void PTContentBridgeTests::gapFieldsActionsAndPartialChanges() {
 void PTContentBridgeTests::memoFieldsWritesAndPartialChanges() {
     @autoreleasepool {
         PTMemoBridge *b = [PTMemoBridge new]; NSError *error = nil;
-        NSInteger first = [b createTitle:@"标题" body:@"正文🍅\n下一行" categoryId:0 error:&error];
-        NSInteger second = [b createTitle:@"" body:@"" categoryId:0 error:&error];
+        const int category = CategoryManager::instance()->addCategory(QStringLiteral("备忘科目"), QStringLiteral("#c9956e"));
+        QVERIFY(category > 0);
+        NSInteger first = [b createTitle:@"标题" body:@"正文🍅\n下一行" categoryId:category error:&error];
+        NSInteger second = [b createTitle:@"" body:@"" categoryId:category error:&error];
         QVERIFY(first > 0 && second > 0 && first != second); QCOMPARE([b memos].items.count, NSUInteger(2));
         auto value = [b memo:first].items.firstObject; QVERIFY([value.body isEqualToString:@"正文🍅\n下一行"]);
-        QVERIFY([value.preview isEqualToString:@"正文🍅"]); QVERIFY(value.updatedAt.length > 0);
+        QVERIFY([value.preview isEqualToString:@"正文🍅"]); QVERIFY(value.updatedAt.length > 0 && value.createdAt.length > 0);
+        QCOMPARE(value.memoId, first); QCOMPARE(value.categoryId, NSInteger(category)); QCOMPARE(value.sortOrder, NSInteger(1));
+        QVERIFY([value.title isEqualToString:@"标题"]); QVERIFY([value.displayTitle isEqualToString:@"标题"]);
+        QVERIFY([value.categoryName isEqualToString:@"备忘科目"]); QVERIFY([value.categoryColor isEqualToString:@"#c9956e"]);
         PTMemoChanges *changes = [PTMemoChanges new]; changes.title = @"";
         QVERIFY(changes.hasTitle && !changes.hasBody); QVERIFY([b updateMemo:first changes:changes error:&error]);
         QVERIFY([[b memo:first].items.firstObject.body isEqualToString:@"正文🍅\n下一行"]);
-        QVERIFY(([b reorderCategory:0 ids:@[@(second), @(first)] error:&error]));
+        QVERIFY(([b reorderCategory:category ids:@[@(second), @(first)] error:&error]));
         QCOMPARE([b memos].items.firstObject.memoId, second);
         QVERIFY([b deleteMemo:first error:&error]); QCOMPARE([b memos].items.count, NSUInteger(1));
     }
@@ -89,9 +108,14 @@ void PTContentBridgeTests::countdownModelOrderingAndPartialChanges() {
     @autoreleasepool {
         PTCountdownBridge *b = [PTCountdownBridge new]; NSError *error = nil;
         const auto today = LogicalDay::today(AppSettings::instance()->dayStartHour());
+        __block int modelChanges = 0, primaryChanges = 0;
+        b.onChanged = ^{ ++modelChanges; }; b.onPrimaryGoalChanged = ^{ ++primaryChanges; };
         QVERIFY([b addName:@"第一目标" date:today.addDays(8).toString(Qt::ISODate).toNSString() error:&error]);
         QVERIFY([b addName:@"第二目标" date:today.addDays(21).toString(Qt::ISODate).toNSString() error:&error]);
+        QVERIFY(modelChanges >= 2 && primaryChanges >= 1);
         auto rows = [b goals]; QVERIFY(rows.valid); QCOMPARE(rows.items.count, NSUInteger(2));
+        QVERIFY([rows.items[0].name isEqualToString:@"第一目标"]); QCOMPARE(rows.items[0].displayOrder, NSInteger(0));
+        QVERIFY(rows.items[0].createdAt.length > 0 && rows.items[0].updatedAt.length > 0);
         NSInteger second = rows.items[1].goalId; QCOMPARE(rows.items[1].daysRemaining, NSInteger(21));
         QVERIFY([b reorderFrom:1 to:0 error:&error]); QCOMPARE([b primaryGoal].items.firstObject.goalId, second);
         PTCountdownChanges *changes = [PTCountdownChanges new]; changes.name = @"只改名字";

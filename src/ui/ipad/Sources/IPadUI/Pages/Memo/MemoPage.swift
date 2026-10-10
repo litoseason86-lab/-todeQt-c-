@@ -49,7 +49,19 @@ import UIKit
                                         guard store.beginDrag(memo.id) else { return NSItemProvider() }
                                         return NSItemProvider(object: "\(memo.id)" as NSString)
                                     }
-                                    .onDrop(of: [UTType.text], isTargeted: nil) { _ in store.drop(before: memo.id) }
+                                    .onDrop(of: [UTType.text], isTargeted: nil) { providers in
+                                        guard let provider = providers.first, store.draggingID != nil else { return false }
+                                        let session = store, target = memo.id
+                                        // 只接受当前拖动编号；异步载荷返回前若同步刷新取消了拖动，不提交旧完整集合。
+                                        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                                            guard let text = object as? String, let source = Int(text) else { return }
+                                            Task { @MainActor in
+                                                guard session.draggingID == source else { return }
+                                                _ = session.drop(before: target)
+                                            }
+                                        }
+                                        return true
+                                    }
                                 }
                             }
                         }

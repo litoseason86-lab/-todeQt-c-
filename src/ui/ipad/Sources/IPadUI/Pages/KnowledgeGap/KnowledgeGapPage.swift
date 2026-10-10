@@ -112,8 +112,8 @@ private enum GapFormIntent: Identifiable {
                     }
                     Picker("优先级", selection: $value.priority) { Text("低").tag(0); Text("中").tag(1); Text("高").tag(2) }
                     Section("当时遇到了什么") { TextEditor(text: $value.detail).frame(minHeight: 120) }
-                    TextField("到期日 YYYY-MM-DD", text: $value.dueDate)
-                case .schedule: TextField("到期日 YYYY-MM-DD", text: $value.dueDate)
+                    dateFields
+                case .schedule: dateFields
                 case .resolve: Section("后来想明白了什么") { TextEditor(text: $value.resolution).frame(minHeight: 180) }
                 }
                 if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
@@ -126,6 +126,14 @@ private enum GapFormIntent: Identifiable {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { save() } }
+            }
+        }
+    }
+    private var dateFields: some View {
+        Group {
+            Toggle("排期", isOn: Binding(get: { !value.dueDate.isEmpty }, set: { enabled in value.dueDate = enabled ? store.logicalToday : "" }))
+            if !value.dueDate.isEmpty {
+                DatePicker("到期日", selection: Binding(get: { ContentDateFormat.date(value.dueDate) ?? ContentDateFormat.date(store.logicalToday) ?? Date() }, set: { value.dueDate = ContentDateFormat.isoDate($0) }), displayedComponents: .date)
             }
         }
     }

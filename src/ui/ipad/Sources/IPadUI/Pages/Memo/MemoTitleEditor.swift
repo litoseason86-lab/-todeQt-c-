@@ -22,7 +22,14 @@ import UIKit
         if field.markedTextRange == nil && field.text != text { field.text = text }
         if context.coordinator.focusGeneration != focusGeneration {
             context.coordinator.focusGeneration = focusGeneration
-            if focusGeneration > 0 { field.becomeFirstResponder() }
+            if focusGeneration > 0 {
+                let generation = focusGeneration
+                // 新建后详情可能尚未入窗口；下一主队列周期再聚焦，过期的焦点请求不得抢新会话。
+                Task { @MainActor [weak field, weak coordinator = context.coordinator] in
+                    guard coordinator?.focusGeneration == generation, field?.window != nil else { return }
+                    field?.becomeFirstResponder()
+                }
+            }
         }
     }
     func makeCoordinator() -> Coordinator { Coordinator(editor: self) }

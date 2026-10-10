@@ -549,6 +549,8 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/Format/CountdownFormat.swift)
     target_sources(IPadUI PRIVATE
         src/ui/ipad/Sources/IPadUI/Pages/Countdown/CountdownPage.swift)
+    # 055-P4-3：两种表单共用 ISO 日期投影，不共享领域 Store 或业务判断。
+    target_sources(IPadCore PRIVATE src/ui/ipad/Sources/IPadCore/Format/ContentDateFormat.swift)
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
