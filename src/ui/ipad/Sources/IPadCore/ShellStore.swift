@@ -24,10 +24,25 @@ public struct ShellSnapshot: Equatable, Sendable {
     public init() {}
 }
 
+public struct ShellTimerSnapshot: Equatable, Sendable {
+    public var hasTimer = false
+    public var running = false
+    public var mode = 0
+    public var phase = 0
+    public var elapsedSeconds = 0
+    public var remainingSeconds = 0
+    public var currentTaskId = -1
+    public var taskTitle = ""
+    public init() {}
+}
+
 @MainActor public protocol ShellBridgeProtocol: AnyObject {
     var onChanged: (() -> Void)? { get set }
+    var onTimerChanged: (() -> Void)? { get set }
     var onFailure: ((String) -> Void)? { get set }
     func read() throws -> ShellSnapshot
+    func readTimer() throws -> ShellTimerSnapshot
+    func setNativeUI(_ value: Bool) throws
     func setUseWallpaper(_ value: Bool) throws
     func pause() -> Bool
     func resume() -> Bool
@@ -37,6 +52,7 @@ public struct ShellSnapshot: Equatable, Sendable {
 
 // 旧外壳替身不涉及新增的本机外观写入；默认拒绝，防止测试或其它实现假装保存成功。
 public extension ShellBridgeProtocol {
+    func setNativeUI(_ value: Bool) throws { throw CocoaError(.featureUnsupported) }
     func setUseWallpaper(_ value: Bool) throws { throw CocoaError(.featureUnsupported) }
 }
 
@@ -90,8 +106,10 @@ public final class ShellStore {
 
     public init(bridge: any ShellBridgeProtocol) {
         self.bridge = bridge
-        // Qt 信号经桥接回主线程，刷新整份一致的展示快照；弱引用避免 Store 与桥接回调互相保留。
+        // Qt 信号经桥接回主线程；统计失效重读完整快照，tick 只投影计时字段，避免每秒查询统计。
+        // 弱引用避免 Store 与桥接回调互相保留。
         bridge.onChanged = { [weak self] in self?.refresh() }
+        bridge.onTimerChanged = { [weak self] in self?.refreshTimer() }
         bridge.onFailure = { [weak self] message in self?.errorMessage = message }
         refresh()
         selection = PageID(rawValue: snapshot.selectedPage) ?? .dashboard
@@ -110,6 +128,19 @@ public final class ShellStore {
             errorMessage = ""
         } catch { errorMessage = error.localizedDescription }
     }
+    public func refreshTimer() {
+        do {
+            let value = try bridge.readTimer()
+            snapshot.hasTimer = value.hasTimer
+            snapshot.running = value.running
+            snapshot.mode = value.mode
+            snapshot.phase = value.phase
+            snapshot.elapsedSeconds = value.elapsedSeconds
+            snapshot.remainingSeconds = value.remainingSeconds
+            snapshot.currentTaskId = value.currentTaskId
+            snapshot.taskTitle = value.taskTitle
+        } catch { errorMessage = error.localizedDescription }
+    }
     public func setUseWallpaper(_ value: Bool) {
         let previous = snapshot.useWallpaper
         do {
@@ -119,6 +150,14 @@ public final class ShellStore {
             snapshot.useWallpaper = previous
             errorMessage = error.localizedDescription
         }
+    }
+    public func useLegacyUIOnNextLaunch() {
+        guard !snapshot.operationBlocksUI else { return }
+        do {
+            try bridge.setNativeUI(false)
+            errorMessage = ""
+            showToast("下次启动将使用旧版界面")
+        } catch { errorMessage = error.localizedDescription }
     }
     public func select(_ page: PageID) {
         guard !snapshot.operationBlocksUI else { return }
@@ -131,7 +170,7 @@ public final class ShellStore {
         if !succeeded && errorMessage.isEmpty { errorMessage = "计时操作失败，请重试" }
     }
     public func presentCapture() {
-        presentCapture(source: captureSourceProvider?() ?? ShellCaptureSource())
+        presentCapture(source: selection == .focus ? (captureSourceProvider?() ?? ShellCaptureSource()) : ShellCaptureSource())
     }
     // 带来源的入口：来源任务与科目随这次记一笔一起写入，打开时固定，之后任务切换也不改。
     public func presentCapture(source: ShellCaptureSource) {

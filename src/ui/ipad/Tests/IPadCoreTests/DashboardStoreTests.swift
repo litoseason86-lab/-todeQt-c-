@@ -38,6 +38,22 @@ import XCTest
                    focus: focus, pending: pending, shell: shell)
     }
 
+    // 产品保证：没有任务新增的日界切换也重读仪表盘今日数据，隐藏页不查询。
+    func testLogicalDayRefreshesActiveDashboard() {
+        let tasks = TaskBridgeFake(), statistics = StatisticsBridgeFake(), settings = SettingsBridgeFake()
+        let shell = ShellStore(bridge: ShellBridgeFake()), day = LogicalDayBridgeFake()
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: shell)
+        let actions = TaskActions(tasks: tasks, pendingDeletion: pending, shell: shell)
+        let focus = FocusStore(focus: FocusBridgeFake(), settings: settings, tasks: tasks, pendingDeletion: pending, shell: shell)
+        let store = DashboardStore(tasks: tasks, statistics: statistics, settings: settings,
+                                   actions: actions, shell: shell, focus: focus, logicalDay: day)
+        store.start(); XCTAssertEqual(store.todayStats.totalDuration, 0)
+        statistics.day.totalDuration = 123
+        day.today = "2026-10-11"
+        XCTAssertEqual(store.todayStats.totalDuration, 123)
+        store.stop(); statistics.day.totalDuration = 999; day.today = "2026-10-12"
+        XCTAssertEqual(store.todayStats.totalDuration, 123)
+    }
     // 产品保证：仪表盘的摘要数字原样来自统计桥，不在 Swift 层重新推算统计口径。
     func testRefreshUsesStatisticsBridgeValues() {
         let r = rig([task(1)])

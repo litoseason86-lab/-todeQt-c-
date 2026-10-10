@@ -26,13 +26,31 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) NSInteger maxCaptureTitleLength;
 @end
 
+// 每秒计时刷新使用的轻量值对象；不携带统计摘要，避免 tick 重读数据库统计。
+@interface PTShellTimerSnapshot : NSObject
+@property(nonatomic, readonly) BOOL valid;
+@property(nonatomic, readonly, copy) NSString *error;
+@property(nonatomic, readonly) BOOL hasTimer;
+@property(nonatomic, readonly) BOOL running;
+@property(nonatomic, readonly) NSInteger mode;
+@property(nonatomic, readonly) NSInteger phase;
+@property(nonatomic, readonly) NSInteger elapsedSeconds;
+@property(nonatomic, readonly) NSInteger remainingSeconds;
+@property(nonatomic, readonly) NSInteger currentTaskId;
+@property(nonatomic, readonly, copy) NSString *taskTitle;
+@end
+
 @interface PTShellBridge : NSObject
 @property(nonatomic, copy, nullable) void (^onChanged)(void);
+@property(nonatomic, copy, nullable) void (^onTimerChanged)(void);
 @property(nonatomic, copy, nullable) void (^onFailure)(NSString *message);
 // 从 Qt 资源读取现有壁纸，避免原生应用再复制一套图片；不依赖 UIKit。
 + (nullable NSData *)wallpaperDataForTheme:(NSString *)theme NS_SWIFT_NAME(wallpaperData(forTheme:));
 - (PTShellSnapshot *)readSnapshot NS_SWIFT_NAME(read());
+- (PTShellTimerSnapshot *)readTimerSnapshot NS_SWIFT_NAME(readTimer());
 - (BOOL)setUseWallpaper:(BOOL)value error:(NSError **)error
+    __attribute__((swift_error(nonnull_error)));
+- (BOOL)setNativeUI:(BOOL)value error:(NSError **)error
     __attribute__((swift_error(nonnull_error)));
 - (BOOL)pause;
 - (BOOL)resume;

@@ -1,4 +1,5 @@
 #include "NativeRoot.h"
+#include "IPadUiPreferences.h"
 #import "../bridge/PTLifecycleBridge.h"
 #import <UIKit/UIKit.h>
 #include <QCoreApplication>
@@ -21,17 +22,12 @@ void mount(UIWindowScene *scene)
 }
 }
 
+bool isIPadDevice() { return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad; }
+
 bool shouldUseNativeRoot()
 {
-    // iPhone 始终使用伴侣页；本机设置与开发开关都不能绕过设备分发。
-    if (UIDevice.currentDevice.userInterfaceIdiom != UIUserInterfaceIdiomPad) return false;
-    const auto arguments = QCoreApplication::arguments();
-    if (arguments.contains(QStringLiteral("--ipad-qml-ui"))) return false;
-    if (arguments.contains(QStringLiteral("--ipad-native-ui"))) return true;
-    const QByteArray forced = qgetenv("POMODORO_TODO_NATIVE_UI");
-    if (forced == "0") return false;
-    if (forced == "1") return true;
-    return QSettings().value(QStringLiteral("ipad/nativeUI"), false).toBool();
+    // 设备分发先于所有开发开关，iPhone 始终使用伴侣页。
+    return IPadUiPreferences::shouldUseNative(isIPadDevice(), QCoreApplication::arguments(), qgetenv("POMODORO_TODO_NATIVE_UI"));
 }
 
 void installNativeRoot()

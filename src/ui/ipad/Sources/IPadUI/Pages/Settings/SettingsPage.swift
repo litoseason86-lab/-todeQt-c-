@@ -74,6 +74,10 @@ import SwiftUI
                 Toggle("纤细时钟字体", isOn: Binding(get: { store.snapshot.slimClockFont }, set: store.setSlimClockFont))
                 Toggle("仪表盘计时摘要", isOn: Binding(get: { store.snapshot.dashboardTimerVisible }, set: store.setDashboardTimerVisible))
             }
+            Section("界面") {
+                Button("使用旧版界面（下次启动生效）") { shell.useLegacyUIOnNextLaunch() }
+                    .disabled(shell.snapshot.operationBlocksUI)
+            }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
             if !shell.errorMessage.isEmpty { Text(shell.errorMessage).foregroundStyle(ThemeColors.danger) }
         }.formStyle(.grouped).navigationTitle("外观")

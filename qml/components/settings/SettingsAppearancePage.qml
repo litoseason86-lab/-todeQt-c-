@@ -9,8 +9,13 @@ FocusScope {
     id: root
 
     objectName: "settingsAppearancePage"
+    property var ipadUiPreferencesRef: null
     property var appSettingsRef: null
     property bool compact: false
+    readonly property bool nativeUIEntryAvailable: root.ipadUiPreferencesRef !== null
+                                                    && root.ipadUiPreferencesRef.isIPad === true
+    property bool nativeUIRequested: false
+    property string nativeUIError: ""
 
     // 侧栏顺序的呈现名。这张表只回答「这个 id 叫什么」；顺序本身来自设置，
     // 出厂顺序的唯一定义处在 AppSettings::defaultSidebarOrder()。
@@ -307,6 +312,30 @@ FocusScope {
                             root.appSettingsRef.reduceTransparency = enabled
                         }
                     }
+                }
+            }
+        }
+
+        SettingsSection {
+            visible: root.nativeUIEntryAvailable
+            title: "界面"
+
+            SettingsRow {
+                label: "iPad 新版界面"
+                caption: root.nativeUIError.length > 0 ? root.nativeUIError
+                        : (root.nativeUIRequested ? "下次启动将使用新版界面" : "下次启动生效")
+                compact: root.compact
+
+                Button {
+                    objectName: "settingsNativeUIButton"
+                    text: "使用新版界面"
+                    enabled: root.nativeUIEntryAvailable && !root.nativeUIRequested
+                    // 只写本机偏好；不切换当前窗口，不提交页面里尚未确认的表单。
+                    onClicked: {
+                        root.nativeUIRequested = root.ipadUiPreferencesRef.setNativeUI(true)
+                        root.nativeUIError = root.nativeUIRequested ? "" : root.ipadUiPreferencesRef.error
+                    }
+                    palette.buttonText: Theme.controlInk
                 }
             }
         }

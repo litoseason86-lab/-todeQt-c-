@@ -4,11 +4,13 @@ import PTBridge
 
 @MainActor final class ShellBridgeAdapter: ShellBridgeProtocol {
     var onChanged: (() -> Void)?
+    var onTimerChanged: (() -> Void)?
     var onFailure: ((String) -> Void)?
     private let bridge = PTShellBridge()
     init() {
         // Foundation 桥接的回调由 Qt 主线程上下文派发，明确进入 MainActor，违反约束立即暴露。
         bridge.onChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
+        bridge.onTimerChanged = { [weak self] in MainActor.assumeIsolated { self?.onTimerChanged?() } }
         bridge.onFailure = { [weak self] message in
             MainActor.assumeIsolated { self?.onFailure?(message) }
         }
@@ -40,6 +42,23 @@ import PTBridge
         result.maxCaptureTitleLength = value.maxCaptureTitleLength
         return result
     }
+    func readTimer() throws -> ShellTimerSnapshot {
+        let value = bridge.readTimer()
+        if !value.valid {
+            throw NSError(domain: "PTShellBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: value.error])
+        }
+        var result = ShellTimerSnapshot()
+        result.hasTimer = value.hasTimer
+        result.running = value.running
+        result.mode = value.mode
+        result.phase = value.phase
+        result.elapsedSeconds = value.elapsedSeconds
+        result.remainingSeconds = value.remainingSeconds
+        result.currentTaskId = value.currentTaskId
+        result.taskTitle = value.taskTitle
+        return result
+    }
+    func setNativeUI(_ value: Bool) throws { try bridge.setNativeUI(value) }
     func setUseWallpaper(_ value: Bool) throws { try bridge.setUseWallpaper(value) }
     func pause() -> Bool { bridge.pause() }
     func resume() -> Bool { bridge.resume() }

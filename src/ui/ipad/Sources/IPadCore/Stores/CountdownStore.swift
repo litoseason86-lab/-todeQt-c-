@@ -15,6 +15,7 @@ import Observation
     public init(bridge: any CountdownBridging, logicalDay: any LogicalDayBridgeProtocol, shell: ShellStore? = nil) {
         self.bridge = bridge; self.logicalDay = logicalDay; self.shell = shell
         // 模型重载和主目标信号可能同步交错；刷新期间不重入，失败保留最后一次完整结果。
+        logicalDay.onChanged = { [weak self] in self?.logicalDayChanged() }
         bridge.onChanged = { [weak self] in if self?.active == true { self?.refresh() } }
         bridge.onPrimaryGoalChanged = { [weak self] in if self?.active == true { self?.refresh() } }
         bridge.onFailure = { [weak self] message in if self?.active == true { self?.errorMessage = message } }

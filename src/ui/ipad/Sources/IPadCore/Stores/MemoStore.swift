@@ -35,6 +35,7 @@ import Observation
         self.bridge = bridge; categoryBridge = categories; self.shell = shell; self.preferences = preferences
         if let stored = preferences?.object(forKey: "ipadui.memo.category") as? Int { filterCategoryID = stored }
         // 本计划保留 Swift 编辑会话；服务变化只在活跃页读取，保存期间的同步信号不重入编辑器。
+        categories.onChanged = { [weak self] in self?.relatedDataChanged() }
         bridge.onChanged = { [weak self] in if self?.active == true { self?.refresh() } }
         bridge.onFailure = { [weak self] message in if self?.active == true { self?.setError(message) } }
     }

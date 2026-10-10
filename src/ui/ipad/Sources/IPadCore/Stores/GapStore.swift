@@ -10,16 +10,21 @@ import Observation
     public private(set) var errorMessage = ""
     public private(set) var pendingDelete: GapValue?
     @ObservationIgnored private let bridge: any KnowledgeGapBridging
+    @ObservationIgnored private let taskBridge: (any TaskBridgeProtocol)?
     @ObservationIgnored private let categoryBridge: (any CategoryBridgeProtocol)?
     @ObservationIgnored private let preferences: UserDefaults?
     @ObservationIgnored private let logicalDay: any LogicalDayBridgeProtocol
     @ObservationIgnored private weak var shell: ShellStore?
     private var active = false
     private var reading = false
-    public init(bridge: any KnowledgeGapBridging, logicalDay: any LogicalDayBridgeProtocol, shell: ShellStore? = nil, categories: (any CategoryBridgeProtocol)? = nil, preferences: UserDefaults? = nil) {
-        self.bridge = bridge; self.logicalDay = logicalDay; self.shell = shell; categoryBridge = categories; self.preferences = preferences
+    public init(bridge: any KnowledgeGapBridging, logicalDay: any LogicalDayBridgeProtocol, shell: ShellStore? = nil, categories: (any CategoryBridgeProtocol)? = nil, preferences: UserDefaults? = nil, tasks: (any TaskBridgeProtocol)? = nil) {
+        self.bridge = bridge; self.logicalDay = logicalDay; self.shell = shell; categoryBridge = categories; self.preferences = preferences; taskBridge = tasks
         if let stored = preferences?.object(forKey: "ipadui.knowledgeGap.status") as? Int, [-2, 2].contains(stored) { statusFilter = stored }
         // 信号来自同一个 C++ 服务；后台失败只在当前页展示，重新进入时重读。
+        // 每个 Store 独占订阅适配器；同一服务的信号由各实例分别接收，避免串接顺序影响刷新。
+        logicalDay.onChanged = { [weak self] in self?.logicalDayChanged() }
+        categories?.onChanged = { [weak self] in self?.relatedDataChanged() }
+        tasks?.onChanged = { [weak self] in self?.relatedDataChanged() }
         bridge.onChanged = { [weak self] in if self?.active == true { self?.refresh() } }
         bridge.onFailure = { [weak self] message in if self?.active == true { self?.errorMessage = message } }
     }
