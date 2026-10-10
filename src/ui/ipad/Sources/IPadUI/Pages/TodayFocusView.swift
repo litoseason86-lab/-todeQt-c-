@@ -115,7 +115,7 @@ import SwiftUI
                     VStack(alignment: .leading, spacing: 5) {
                         HStack { Text(item.name); Spacer(); Text(store.formatDuration(item.duration)).monospacedDigit() }.font(.caption)
                         // 百分比和条形顺序均来自服务，控件只画比例，不重算或加总记录。
-                        ProgressView(value: item.percentage, total: 100).tint(ThemeColors.accentFill)
+                        ProgressView(value: item.percentage, total: 100).tint(TaskCategoryColor.value(item.color))
                             .accessibilityLabel(item.name + "，" + store.formatDuration(item.duration))
                     }
                 }

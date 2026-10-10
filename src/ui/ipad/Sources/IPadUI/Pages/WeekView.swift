@@ -57,7 +57,10 @@ import UniformTypeIdentifiers
                                 Button(store.addTitle, systemImage: "plus") { addingDate = group.date }
                                     .dropDestination(for: String.self) { ids, _ in return drop(ids, to: group.date) }
                             }
-                        } header: { groupHeader(group) }
+                        } header: {
+                            groupHeader(group)
+                                .dropDestination(for: String.self) { ids, _ in return drop(ids, to: group.date) }
+                        }
                     }
                 }.listStyle(.plain).scrollContentBackground(.hidden)
                     .focusable().focused($listFocused)
@@ -72,26 +75,47 @@ import UniformTypeIdentifiers
     static func weekdayLabel(_ index: Int) -> String { ["一", "二", "三", "四", "五", "六", "日"][index] }
     private var wideBody: some View {
         GeometryReader { geometry in
-            ScrollView(.horizontal) {
-                HStack(alignment: .top, spacing: 10) {
-                    ForEach(store.groups) { group in
-                        VStack(spacing: 8) {
-                            groupHeader(group).padding(10)
-                            ScrollView {
-                                LazyVStack(spacing: 8) { ForEach(group.tasks) { task in taskRow(task, compact: true).padding(8).background(ThemeColors.surfaceRaised, in: RoundedRectangle(cornerRadius: 10)) } }
+            ScrollViewReader { columns in
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: 10) {
+                        ForEach(store.groups) { group in
+                            VStack(spacing: 8) {
+                                groupHeader(group).padding(10)
+                                // 每列使用系统 List，才能保留任务行的左滑删除和上下文菜单；外层横向滚动只负责七列布局。
+                                ScrollViewReader { rows in
+                                    List {
+                                        ForEach(group.tasks) { task in
+                                            taskRow(task, compact: true).id(task.id)
+                                                .padding(8)
+                                                .background(ThemeColors.surfaceRaised, in: RoundedRectangle(cornerRadius: 10))
+                                                .listRowBackground(ThemeColors.surface)
+                                                .listRowInsets(EdgeInsets())
+                                        }
+                                    }
+                                    .listStyle(.plain)
+                                    .scrollContentBackground(.hidden)
+                                    .onChange(of: store.cursorTaskID) { _, id in
+                                        if group.tasks.contains(where: { $0.id == id }) { rows.scrollTo(id) }
+                                    }
+                                }
+                                if store.canAdd(on: group.date) { Button("添加", systemImage: "plus") { addingDate = group.date }.frame(minHeight: 44) }
                             }
-                            if store.canAdd(on: group.date) { Button("添加", systemImage: "plus") { addingDate = group.date }.frame(minHeight: 44) }
+                            .padding(8).frame(width: max(170, (geometry.size.width - 124) / 7))
+                            .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(store.isToday(group.date) ? ThemeColors.accentInk : ThemeColors.borderSubtle, lineWidth: store.isToday(group.date) ? 2 : 1))
+                            .dropDestination(for: String.self) { ids, _ in return drop(ids, to: group.date) }
+                            .id(group.date)
                         }
-                        .padding(8).frame(width: max(170, (geometry.size.width - 124) / 7))
-                        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 12))
-                        .overlay(RoundedRectangle(cornerRadius: 12).stroke(store.isToday(group.date) ? ThemeColors.accentInk : ThemeColors.borderSubtle, lineWidth: store.isToday(group.date) ? 2 : 1))
-                        .dropDestination(for: String.self) { ids, _ in return drop(ids, to: group.date) }
-                    }
-                }.padding(.horizontal, 32).padding(.vertical, 16)
+                    }.padding(.horizontal, 32).padding(.vertical, 16)
+                }
+                .focusable().focused($listFocused)
+                .onAppear { listFocused = true }
+                .onKeyPress(keys: [.upArrow, .downArrow, .space, .return], action: keyAction)
+                .onChange(of: store.cursorTaskID) { _, id in
+                    // 键盘跨列和列内移动都滚到服务选中的任务，不改排序，也不另外维护光标。
+                    if let task = store.task(id: id) { columns.scrollTo(task.date) }
+                }
             }
-            .focusable().focused($listFocused)
-            .onAppear { listFocused = true }
-            .onKeyPress(keys: [.upArrow, .downArrow, .space, .return], action: keyAction)
         }
     }
     private func groupHeader(_ group: WeekDayGroup) -> some View {
