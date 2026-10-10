@@ -40,6 +40,7 @@ import PTBridge
         result.maxCaptureTitleLength = value.maxCaptureTitleLength
         return result
     }
+    func setUseWallpaper(_ value: Bool) throws { try bridge.setUseWallpaper(value) }
     func pause() -> Bool { bridge.pause() }
     func resume() -> Bool { bridge.resume() }
     func capture(title: String, categoryID: Int, sourceTaskID: Int) -> Int {

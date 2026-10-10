@@ -16,8 +16,8 @@ import SwiftUI
         case .statistics: StatisticsView()
         case .countdown: CountdownPage()
         case .memo: MemoPage()
-        case .trash: placeholder(.trash)
-        case .settings: placeholder(.settings)
+        case .trash: TrashPage()
+        case .settings: SettingsPage()
         }
     }
     private static func placeholder(_ page: PageID) -> some View {

@@ -35,11 +35,17 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let timeline = TimelineStore(history: focusHistory, statistics: statisticsBridge, pendingDeletion: pending,
                                      logicalDay: logicalDay, date: logicalDay.today)
         let schedule = ScheduleStore(bridge: scheduleBridge, settingsBridge: settings, logicalDay: logicalDay)
+        let trash = TrashBridgeAdapter()
+        let sync = SyncBridgeAdapter()
+        let backup = BackupBridgeAdapter()
+        let export = ExportBridgeAdapter()
+        let routines = RoutineBridgeAdapter()
         let core = CoreBridges(tasks: tasks, interactions: interactions,
                                categories: categories, logicalDay: logicalDay,
                                settings: settings, statistics: statisticsBridge,
                                focusHistory: focusHistory, pendingDeletion: pending,
-                               taskActions: actions, weekStore: week, timelineStore: timeline, scheduleStore: schedule)
+                               taskActions: actions, weekStore: week, timelineStore: timeline, scheduleStore: schedule,
+                               trash: trash, sync: sync, backup: backup, export: export, routines: routines)
         let focus = FocusStore(focus: FocusBridgeAdapter(), settings: core.settings, tasks: core.tasks,
                                pendingDeletion: pending, shell: store)
         focus.start()
@@ -82,6 +88,17 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let statistics = StatsStore(statistics: StatisticsBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter(),
                                     tasks: TaskBridgeAdapter(), settings: SettingsBridgeAdapter(),
                                     categories: CategoryBridgeAdapter(), history: FocusHistoryBridgeAdapter(), defaults: .standard)
+        // 055-P4-5：设置页独占自己的设置适配器，不覆盖 FocusStore 的回调。
+        let trashStore = TrashStore(bridge: TrashBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter())
+        let settings = SettingsStore(bridge: SettingsBridgeAdapter())
+        let settingsCategories = SettingsCategoryStore(bridge: CategoryBridgeAdapter())
+        let settingsRoutines = SettingsRoutineStore(bridge: RoutineBridgeAdapter(), categories: CategoryBridgeAdapter())
+        // 055-P4-5：异步文件操作跨设置子页存活，回调不随一次导出注销。
+        let settingsSync = SettingsSyncStore(bridge: SyncBridgeAdapter())
+        let settingsBackup = SettingsBackupStore(bridge: BackupBridgeAdapter(), files: FileTransferWorkspace(),
+            commitPending: { [weak pending] in pending?.commitIfNeeded() ?? false },
+            restoreWarning: { sync.restoreWarning() })
+        let settingsExport = SettingsExportStore(bridge: ExportBridgeAdapter(), files: FileTransferWorkspace(), logicalDay: LogicalDayBridgeAdapter())
         // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
         PTLifecycleBridge.flushHandler = { [weak store] in
             MainActor.assumeIsolated {
@@ -93,6 +110,6 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         return UIHostingController(rootView: ShellRootView(store: store)
             .environment(core).environment(today).environment(dashboard).environment(focus).environment(store)
             .environment(gaps).environment(memos).environment(countdown)
-            .environment(history).environment(statistics))
+            .environment(history).environment(statistics).environment(settings).environment(settingsCategories).environment(settingsRoutines).environment(settingsSync).environment(settingsBackup).environment(settingsExport).environment(trashStore))
     }
 }

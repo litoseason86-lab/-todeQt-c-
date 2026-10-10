@@ -84,7 +84,34 @@ def main():
     swift = (root / "src/ui/ipad/Sources/IPadUI/Theme/ThemeColors.swift").read_text(encoding="utf-8")
     references = set(re.findall(r'Color\("(\w+)"', swift))
     if references != set(values): raise ValueError("Swift 颜色入口与资源集合不一致")
-    print(f"iPad 颜色门禁通过：{len(values)} 个语义令牌，浅深两套")
+    theme_source = (root / "qml/Theme.qml").read_text(encoding="utf-8")
+    theme_ids = set(re.findall(r'\bid:\s*"([^"]+)"', theme_source))
+    theme_blocks = re.findall(r'\{\s*id:.*?\n\s*\}', theme_source, re.S)
+    dark_theme_ids = {
+        match.group(1)
+        for block in theme_blocks
+        if 'mode: "dark"' in block
+        for match in [re.search(r'id:\s*"([^"]+)"', block)]
+        if match
+    }
+    shell_source = (root / "src/ui/ipad/Sources/IPadUI/Shell/ShellRootView.swift").read_text(encoding="utf-8")
+    dark_match = re.search(r'\[([^\]]*)\]\.contains\(store\.snapshot\.backgroundTheme\)', shell_source)
+    if not dark_match: raise ValueError("未找到 ShellRootView 的壁纸深色名单")
+    dark_ids = set(re.findall(r'"([^"]+)"', dark_match.group(1)))
+    bridge_source = (root / "src/platform/ios/bridge/PTShellBridge.mm").read_text(encoding="utf-8")
+    bridge_match = re.search(r'const\s+QStringList\s+themes\s*=\s*\{([^}]*)\}', bridge_source, re.S)
+    if not bridge_match: raise ValueError("未找到 PTShellBridge 的壁纸资源白名单")
+    bridge_ids = set(re.findall(r'QStringLiteral\("([^"]+)"\)', bridge_match.group(1)))
+    if not dark_ids.issubset(theme_ids): raise ValueError("ShellRootView 深色壁纸名单包含 Theme.qml 未定义的主题")
+    if not bridge_ids.issubset(theme_ids): raise ValueError("PTShellBridge 壁纸白名单包含 Theme.qml 未定义的主题")
+    if dark_ids != dark_theme_ids:
+        raise ValueError("ShellRootView 深色壁纸名单与 Theme.qml 不一致")
+    if bridge_ids != theme_ids:
+        raise ValueError("PTShellBridge 壁纸白名单与 Theme.qml 不一致")
+    settings_source = (root / "src/ui/ipad/Sources/IPadCore/Stores/SettingsAvailability.swift").read_text(encoding="utf-8")
+    choices = set(re.findall(r'\("([^"]+)",\s*"[^"]+"\)', settings_source))
+    if choices != theme_ids: raise ValueError("设置外观主题选项与 Theme.qml 不一致")
+    print(f"iPad 颜色门禁通过：{len(values)} 个语义令牌，浅深两套；壁纸名单与 Theme.qml 同源核对通过")
 
 
 if __name__ == "__main__":

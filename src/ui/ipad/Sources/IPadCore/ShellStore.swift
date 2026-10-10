@@ -28,10 +28,16 @@ public struct ShellSnapshot: Equatable, Sendable {
     var onChanged: (() -> Void)? { get set }
     var onFailure: ((String) -> Void)? { get set }
     func read() throws -> ShellSnapshot
+    func setUseWallpaper(_ value: Bool) throws
     func pause() -> Bool
     func resume() -> Bool
     func capture(title: String, categoryID: Int, sourceTaskID: Int) -> Int
     func select(page: String)
+}
+
+// 旧外壳替身不涉及新增的本机外观写入；默认拒绝，防止测试或其它实现假装保存成功。
+public extension ShellBridgeProtocol {
+    func setUseWallpaper(_ value: Bool) throws { throw CocoaError(.featureUnsupported) }
 }
 
 // 记一笔的来源任务与它的科目；-1 表示无来源 / 未分类。
@@ -103,6 +109,16 @@ public final class ShellStore {
             snapshot = value
             errorMessage = ""
         } catch { errorMessage = error.localizedDescription }
+    }
+    public func setUseWallpaper(_ value: Bool) {
+        let previous = snapshot.useWallpaper
+        do {
+            try bridge.setUseWallpaper(value)
+            refresh()
+        } catch {
+            snapshot.useWallpaper = previous
+            errorMessage = error.localizedDescription
+        }
     }
     public func select(_ page: PageID) {
         guard !snapshot.operationBlocksUI else { return }

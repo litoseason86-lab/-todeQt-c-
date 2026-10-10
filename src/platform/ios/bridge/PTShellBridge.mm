@@ -145,6 +145,25 @@
     _reading = false;
     return [[PTShellSnapshot alloc] initWithToday:today week:week gaps:gaps error:_readError];
 }
+- (BOOL)setUseWallpaper:(BOOL)value error:(NSError **)error
+{
+    NSAssert(NSThread.isMainThread, @"外观设置必须在主线程");
+    QSettings settings;
+    const QString key = QStringLiteral("ipad/useWallpaper");
+    const bool existed = settings.contains(key);
+    const QVariant previous = settings.value(key);
+    settings.setValue(QStringLiteral("ipad/useWallpaper"), value);
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        // QSettings 写失败仍保留内存值；还原它，随后外壳读取继续显示旧偏好。
+        if (existed) settings.setValue(key, previous); else settings.remove(key);
+        settings.sync();
+        if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"壁纸设置保存失败"}];
+        return NO;
+    }
+    if (self.onChanged) self.onChanged();
+    return YES;
+}
 - (BOOL)pause
 {
     NSAssert(NSThread.isMainThread, @"计时动作必须在主线程");

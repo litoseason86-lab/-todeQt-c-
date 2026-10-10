@@ -1,0 +1,2 @@
+import Foundation
+@MainActor public protocol ExportBridgeProtocol: AnyObject { var onProgress: ((Int, Int) -> Void)? { get set }; var onCompleted: ((Bool, String) -> Void)? { get set }; var onBusyChanged: (() -> Void)? { get set }; func isBusy() -> Bool; func exportTasks(startDate: String, endDate: String, path: String); func exportFocusSessions(startDate: String, endDate: String, path: String); func exportAll(startDate: String, endDate: String, directory: String); func generateFileName(type: String, startDate: String, endDate: String) -> String }
