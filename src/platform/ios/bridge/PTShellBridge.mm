@@ -21,6 +21,9 @@
 - (instancetype)initWithToday:(const QVariantMap &)today week:(const QVariantList &)week
                          gaps:(const QVariantMap &)gaps error:(const QString &)error;
 @end
+@interface PTShellTimerSnapshot ()
+- (instancetype)initWithError:(const QString &)error;
+@end
 @implementation PTShellSnapshot
 - (instancetype)initWithToday:(const QVariantMap &)today week:(const QVariantList &)week
                          gaps:(const QVariantMap &)gaps error:(const QString &)error
@@ -63,6 +66,26 @@
 }
 @end
 
+@implementation PTShellTimerSnapshot
+- (instancetype)initWithError:(const QString &)error
+{
+    if ((self = [super init])) {
+        _valid = error.isEmpty();
+        _error = error.toNSString();
+        const auto *timer = FocusTimer::instance();
+        _hasTimer = timer->hasActiveSession() || timer->phase() != FocusTimer::NoPhase;
+        _running = timer->isRunning();
+        _mode = timer->mode();
+        _phase = timer->phase();
+        _elapsedSeconds = timer->elapsedSeconds();
+        _remainingSeconds = timer->remainingSeconds();
+        _currentTaskId = timer->currentTaskId();
+        _taskTitle = timer->currentTaskTitle().toNSString();
+    }
+    return self;
+}
+@end
+
 @implementation PTShellBridge {
     std::unique_ptr<QObject> _connections;
     QString _readError;
@@ -94,11 +117,15 @@
         auto *settings = AppSettings::instance();
         auto *backup = BackupService::instance();
         QObject::connect(tasks, &TaskManager::tasksChanged, context, changed);
-        QObject::connect(timer, &FocusTimer::tick, context, changed);
-        QObject::connect(timer, &FocusTimer::currentTaskChanged, context, changed);
-        QObject::connect(timer, &FocusTimer::runningStateChanged, context, changed);
-        QObject::connect(timer, &FocusTimer::phaseChanged, context, changed);
-        QObject::connect(timer, &FocusTimer::modeChanged, context, changed);
+        const auto timerChanged = [weakSelf] {
+            PTShellBridge *bridge = weakSelf;
+            if (bridge && bridge.onTimerChanged) bridge.onTimerChanged();
+        };
+        QObject::connect(timer, &FocusTimer::tick, context, timerChanged);
+        QObject::connect(timer, &FocusTimer::currentTaskChanged, context, timerChanged);
+        QObject::connect(timer, &FocusTimer::runningStateChanged, context, timerChanged);
+        QObject::connect(timer, &FocusTimer::phaseChanged, context, timerChanged);
+        QObject::connect(timer, &FocusTimer::modeChanged, context, timerChanged);
         QObject::connect(history, &FocusHistoryService::historyChanged, context, changed);
         QObject::connect(gaps, &KnowledgeGapService::gapsChanged, context, changed);
         QObject::connect(settings, &AppSettings::sidebarOrderChanged, context, changed);
@@ -144,6 +171,11 @@
     }
     _reading = false;
     return [[PTShellSnapshot alloc] initWithToday:today week:week gaps:gaps error:_readError];
+}
+- (PTShellTimerSnapshot *)readTimerSnapshot
+{
+    NSAssert(NSThread.isMainThread, @"读取计时状态必须在主线程");
+    return [[PTShellTimerSnapshot alloc] initWithError:QString()];
 }
 - (BOOL)setUseWallpaper:(BOOL)value error:(NSError **)error
 {

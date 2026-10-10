@@ -4,6 +4,7 @@
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QSqlQuery>
 #include <memory>
 #include <QtTest>
 #include "../src/services/AppSettings.h"
@@ -27,6 +28,8 @@ private slots:
     void capturesWithoutInterruptingFocusAndForwardsFailure();
     void closedDatabaseReturnsAnError();
     void lifecycleFlushIsSynchronous();
+    void tickRefreshBenchmark();
+    void timerSnapshotDoesNotQueryStatistics();
 private:
     QTemporaryDir m_preferences;
     QTemporaryDir m_database;
@@ -85,6 +88,7 @@ void PTShellBridgeTests::forwardsChangesOnTheMainThread()
         __block BOOL mainThread = NO;
         PTShellBridge *bridge = [PTShellBridge new];
         bridge.onChanged = ^{ ++calls; mainThread = NSThread.isMainThread; };
+        bridge.onTimerChanged = ^{ ++calls; mainThread = NSThread.isMainThread; };
         emit TaskManager::instance()->tasksChanged();
         emit FocusTimer::instance()->tick();
         QCOMPARE(calls, 2);
@@ -189,6 +193,55 @@ void PTShellBridgeTests::lifecycleFlushIsSynchronous()
     PTLifecycleBridge.flushHandler = nil;
     [PTLifecycleBridge flush];
     QCOMPARE(calls, 1);
+}
+// 产品保证：外壳 tick 的刷新路径可计量，基准不靠耗时阈值判断正确性。
+void PTShellBridgeTests::tickRefreshBenchmark()
+{
+    @autoreleasepool {
+        PTShellBridge *bridge = [PTShellBridge new];
+        __block int snapshots = 0, timers = 0;
+        __weak PTShellBridge *weakBridge = bridge;
+        bridge.onChanged = ^{ ++snapshots; (void)[weakBridge readSnapshot]; };
+        bridge.onTimerChanged = ^{ ++timers; (void)[weakBridge readTimerSnapshot]; };
+        QElapsedTimer clock;
+        clock.start();
+        int ticks = 0;
+        // 无事件循环等待，避免墙钟秒级定时器影响计数；实际服务查询在同一主线程同步执行。
+        while (clock.elapsed() < 1000) { @autoreleasepool { emit FocusTimer::instance()->tick(); ++ticks; } }
+        const qint64 elapsed = clock.nsecsElapsed();
+        QVERIFY(ticks > 0);
+        QCOMPARE(snapshots, 0);
+        QCOMPARE(timers, ticks);
+        qInfo() << "tick-benchmark ticks=" << ticks << "fullSnapshots=" << snapshots
+                << "aggregateReads=" << snapshots * 3 << "nsPerTick=" << elapsed / ticks;
+        bridge.onChanged = nil; bridge.onTimerChanged = nil;
+    }
+}
+// 产品保证：计时字段只来自计时器，不查询统计；统计表不可读时，计时仍可显示且不产生数据库错误。
+void PTShellBridgeTests::timerSnapshotDoesNotQueryStatistics()
+{
+    @autoreleasepool {
+        const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
+        const int task = TaskManager::instance()->createTask(QStringLiteral("计时任务"), today, -1, 0, QString());
+        QVERIFY(task > 0);
+        QVERIFY(FocusTimer::instance()->startFocus(task, QStringLiteral("计时任务")));
+        PTShellBridge *bridge = [PTShellBridge new];
+        QVERIFY([bridge readSnapshot].valid);
+        __block int failures = 0;
+        bridge.onFailure = ^(NSString *) { ++failures; };
+        // 仅在隔离数据库故意破坏统计表，保证误加回的查询真实失败，不能靠替身自称零读取。
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral("ALTER TABLE tasks RENAME TO tasks_unavailable")));
+        QVERIFY(![bridge readSnapshot].valid);
+        QCOMPARE(failures, 0);
+        PTShellTimerSnapshot *value = [bridge readTimerSnapshot];
+        QVERIFY(value.valid); QVERIFY(value.hasTimer); QVERIFY(value.running);
+        QCOMPARE(value.currentTaskId, NSInteger(task));
+        QVERIFY([value.taskTitle isEqualToString:@"计时任务"]);
+        QCOMPARE(failures, 0);
+        // 恢复表供计时器 cleanup 结算；不污染同目标的后续测试。
+        QVERIFY(query.exec(QStringLiteral("ALTER TABLE tasks_unavailable RENAME TO tasks")));
+    }
 }
 QTEST_GUILESS_MAIN(PTShellBridgeTests)
 #include "PTShellBridgeTests.moc"

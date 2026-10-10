@@ -24,10 +24,24 @@ public struct ShellSnapshot: Equatable, Sendable {
     public init() {}
 }
 
+public struct ShellTimerSnapshot: Equatable, Sendable {
+    public var hasTimer = false
+    public var running = false
+    public var mode = 0
+    public var phase = 0
+    public var elapsedSeconds = 0
+    public var remainingSeconds = 0
+    public var currentTaskId = -1
+    public var taskTitle = ""
+    public init() {}
+}
+
 @MainActor public protocol ShellBridgeProtocol: AnyObject {
     var onChanged: (() -> Void)? { get set }
+    var onTimerChanged: (() -> Void)? { get set }
     var onFailure: ((String) -> Void)? { get set }
     func read() throws -> ShellSnapshot
+    func readTimer() throws -> ShellTimerSnapshot
     func setUseWallpaper(_ value: Bool) throws
     func pause() -> Bool
     func resume() -> Bool
@@ -90,8 +104,10 @@ public final class ShellStore {
 
     public init(bridge: any ShellBridgeProtocol) {
         self.bridge = bridge
-        // Qt 信号经桥接回主线程，刷新整份一致的展示快照；弱引用避免 Store 与桥接回调互相保留。
+        // Qt 信号经桥接回主线程；统计失效重读完整快照，tick 只投影计时字段，避免每秒查询统计。
+        // 弱引用避免 Store 与桥接回调互相保留。
         bridge.onChanged = { [weak self] in self?.refresh() }
+        bridge.onTimerChanged = { [weak self] in self?.refreshTimer() }
         bridge.onFailure = { [weak self] message in self?.errorMessage = message }
         refresh()
         selection = PageID(rawValue: snapshot.selectedPage) ?? .dashboard
@@ -108,6 +124,19 @@ public final class ShellStore {
             let value = try bridge.read()
             snapshot = value
             errorMessage = ""
+        } catch { errorMessage = error.localizedDescription }
+    }
+    public func refreshTimer() {
+        do {
+            let value = try bridge.readTimer()
+            snapshot.hasTimer = value.hasTimer
+            snapshot.running = value.running
+            snapshot.mode = value.mode
+            snapshot.phase = value.phase
+            snapshot.elapsedSeconds = value.elapsedSeconds
+            snapshot.remainingSeconds = value.remainingSeconds
+            snapshot.currentTaskId = value.currentTaskId
+            snapshot.taskTitle = value.taskTitle
         } catch { errorMessage = error.localizedDescription }
     }
     public func setUseWallpaper(_ value: Bool) {
