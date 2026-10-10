@@ -62,4 +62,25 @@ import XCTest
         XCTAssertEqual(CountdownFormat.defaultDate(logicalToday: "2026-10-09"), "2026-11-08")
     }
 
+    // 产品保证：编辑入口固定目标身份和打开时的值，后续同步刷新不替换表单基线。
+    func testEditIntentKeepsOpenedGoalAcrossRefresh() {
+        let (store, bridge) = setup(); let opened = bridge.rows[1]
+        XCTAssertNotEqual(opened.id, bridge.rows[0].id)
+        store.requestEdit(opened); XCTAssertEqual(store.form, .edit(opened))
+        bridge.rows[1].name = "远端改名"; store.refresh()
+        XCTAssertEqual(store.form?.opened, opened)
+        var missing = opened; missing.id = 999
+        store.dismissForm(); store.requestEdit(missing)
+        XCTAssertNil(store.form)
+    }
+
+    // 产品保证：新建和编辑共用单个表单意图，取消只收表单，不提交或移动任何目标。
+    func testAddReplacesEditAndDismissDoesNotWrite() {
+        let (store, bridge) = setup(); let initialCalls = bridge.calls
+        store.requestEdit(bridge.rows[2]); XCTAssertNotNil(store.form)
+        store.requestAdd(); XCTAssertEqual(store.form, .add)
+        store.dismissForm(); XCTAssertNil(store.form)
+        XCTAssertEqual(bridge.calls, initialCalls); XCTAssertTrue(bridge.orders.isEmpty)
+    }
+
 }

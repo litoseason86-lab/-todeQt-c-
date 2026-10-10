@@ -3,7 +3,6 @@ import SwiftUI
 
 @MainActor struct TrashPage: View {
     @Environment(TrashStore.self) private var store
-    @Environment(ShellStore.self) private var shell
     @Environment(\.dynamicTypeSize) private var typeSize
     var body: some View {
         GeometryReader { geometry in
@@ -43,7 +42,6 @@ import SwiftUI
         .toolbar {
             Button("清空", systemImage: "trash") { store.requestEmpty() }
                 .disabled(store.items.isEmpty || !store.loadError.isEmpty)
-            Button("记一笔", systemImage: "square.and.pencil") { shell.presentCapture() }
         }
         .alert(store.confirmation?.title ?? "", isPresented: Binding(get: { store.confirmation != nil }, set: { _ in }), presenting: store.confirmation) { action in
             Button("取消", role: .cancel) { store.cancelConfirmation() }
