@@ -132,7 +132,8 @@ public struct StatsSnapshot: Equatable, Sendable {
             let period = try logicalDay.period(anchor: anchor, range: range.rawValue, shift: 0, logicalToday: today)
             var next = StatsSnapshot(); next.range = range; next.period = period
             let comparison: StatisticsComparison
-            let days: Int, count: Int, duration: Int
+            let count: Int, duration: Int
+            let secondary: (title: String, value: String, unit: String, subtitle: String, metric: ComparisonMetric)
             func weekBars(_ rows: [WeekDayStatistics]) throws -> [StatisticsBar] {
                 try rows.enumerated().map { index, row in
                     StatisticsBar(id: index, label: StatisticsFormat.weekdayLabel(row.date, index: index), seconds: row.duration,
@@ -146,8 +147,9 @@ public struct StatsSnapshot: Equatable, Sendable {
                 let week = try logicalDay.period(anchor: period.start, range: "week", shift: 0, logicalToday: today)
                 next.bars = try weekBars(statistics.weekStats(startDate: week.start))
                 next.categories = try statistics.categoryStats(from: period.start, to: period.end)
-                // 有记录天数由服务提供，即使单日也不根据总时长在 Swift 派生 0 或 1。
-                days = try statistics.effectiveDays(from: period.start, to: period.end)
+                // 日卡取任务完成指标和服务完成率，不把已完成数除以任务数重新计算。
+                secondary = ("任务完成", "\(day.completedTasks) / \(day.totalTasks)", "",
+                             "完成率 \(Int((day.completionRate * 100).rounded()))%", comparison.taskCompletion)
                 count = day.sessionCount; duration = day.totalDuration
             case .week:
                 next.bars = try weekBars(statistics.weekStats(startDate: period.start))
@@ -156,7 +158,7 @@ public struct StatsSnapshot: Equatable, Sendable {
                 if review.loadState == "error" { throw NSError(domain: "周复盘", code: 1, userInfo: [NSLocalizedDescriptionKey: review.errorMessage]) }
                 next.review = review
                 next.categories = try statistics.categoryStats(from: period.start, to: period.end)
-                days = try statistics.effectiveDays(from: period.start, to: period.end)
+                secondary = ("有记录天数", String(try statistics.effectiveDays(from: period.start, to: period.end)), "天", "", comparison.effectiveDays)
                 count = try statistics.focusSessionCount(from: period.start, to: period.end)
                 // 当前周比较不提供总量，累计继续使用同范围科目统计的服务合计，不能加总图表。
                 duration = next.categories.totalDuration
@@ -170,18 +172,19 @@ public struct StatsSnapshot: Equatable, Sendable {
                                   date: row.date, today: try logicalDay.relation(row.date, to: today) == .same)
                 }
                 next.categories = try statistics.categoryStats(from: period.start, to: period.end)
-                days = month.effectiveDays; count = month.sessionCount; duration = month.totalDuration
+                secondary = ("有记录天数", String(month.effectiveDays), "天", "", comparison.effectiveDays)
+                count = month.sessionCount; duration = month.totalDuration
             }
-            // 是否显示比较只消费服务的当前期标记；当前日、周、月均留白，结束周期保留服务比较文字。
-            func card(_ id: Int, _ title: String, _ value: String, _ unit: String, _ metric: ComparisonMetric) -> StatisticsCard {
+            // hasData（服务是否提供可展示的比较）决定留白；当前周由服务关闭，日/月不另加当前期门禁。
+            func card(_ id: Int, _ title: String, _ value: String, _ unit: String, _ metric: ComparisonMetric, subtitle: String = "") -> StatisticsCard {
                 let oldLabel = range == .day ? "昨天" : range == .week ? "上周" : "上月"
-                let text = !period.current && metric.hasData ? metric.displayText.replacingOccurrences(of: oldLabel,
+                let text = metric.hasData ? metric.displayText.replacingOccurrences(of: oldLabel,
                     with: StatisticsFormat.comparisonLabel(range: range.rawValue, distance: period.comparisonDistance)) : ""
-                return StatisticsCard(id: id, title: title, value: value, unit: unit, subtitle: "", comparison: text, trend: metric.trend)
+                return StatisticsCard(id: id, title: title, value: value, unit: unit, subtitle: subtitle, comparison: text, trend: metric.trend)
             }
             next.cards = [card(2, "专注时长", StatisticsFormat.totalDurationValue(Double(duration)),
                                StatisticsFormat.totalDurationUnit(Double(duration)), comparison.duration),
-                          card(0, "有记录天数", String(days), "天", comparison.effectiveDays),
+                          card(0, secondary.title, secondary.value, secondary.unit, secondary.metric, subtitle: secondary.subtitle),
                           card(1, "完成次数", String(count), "次", comparison.sessionCount)]
             // 成功换数据后才清图表选择；失败不能清掉旧读数或换上半份图表。
             if next.bars != snapshot.bars { selectedBarLabel = nil }

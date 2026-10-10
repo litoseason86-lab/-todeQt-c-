@@ -65,6 +65,9 @@ private struct StatisticsCardView: View {
                 Text(card.value).font(compact ? .title2.bold() : .largeTitle.bold()).monospacedDigit()
                 Text(card.unit).font(compact ? .caption : .subheadline).foregroundStyle(ThemeColors.inkSoft)
             }.lineLimit(1).minimumScaleFactor(0.6)
+            if !card.subtitle.isEmpty {
+                Text(card.subtitle).font(.caption).foregroundStyle(ThemeColors.inkSoft).lineLimit(2)
+            }
             // 比较为空仍预留位置，当前周期与结束周期切换不推动下面图表跳动。
             Text(card.comparison.isEmpty ? " " : card.comparison)
                 .font(.caption).lineLimit(2).foregroundStyle(card.trend > 0 ? ThemeColors.success : card.trend < 0 ? ThemeColors.danger : ThemeColors.inkSoft)
