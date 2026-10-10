@@ -1,6 +1,12 @@
 import Foundation
 import Observation
 
+public struct ShellSummaryTile: Equatable, Sendable {
+    public let page: PageID
+    public let title: String
+    public let value: String
+}
+
 public struct ShellSnapshot: Equatable, Sendable {
     public var todayPendingCount = 0
     public var weekPendingCount = 0
@@ -82,7 +88,7 @@ public final class ShellStore {
     public private(set) var errorMessage = ""
     public private(set) var toast: ShellToast?
     public private(set) var sidebarPages: [PageID] = PageID.ordered([]).filter {
-        !PageID.summary.contains($0) && !PageID.fixed.contains($0)
+        !PageID.summary.prefix(3).contains($0) && !PageID.fixed.contains($0)
     }
     public private(set) var morePages: [PageID] = PageID.ordered([]).filter { !PageID.primary.contains($0) }
     public var captureTitle = ""
@@ -126,7 +132,21 @@ public final class ShellStore {
     }
 
     public var orderedPages: [PageID] { PageID.ordered(snapshot.sidebarOrder) }
-    public var miniTimerVisible: Bool { snapshot.hasTimer }
+    public func summaryTiles(focusTimeText: String) -> [ShellSummaryTile] {
+        let focusValue = snapshot.hasTimer ? focusTimeText : DurationFormat.seconds(Double(snapshot.todayFocusedSeconds))
+        let goalTitle = snapshot.hasPrimaryGoal ? snapshot.primaryGoalName : "目标倒计时"
+        let goalValue = snapshot.hasPrimaryGoal ? "\(snapshot.primaryGoalDaysRemaining) 天" : "—"
+        return [
+            ShellSummaryTile(page: .today, title: PageID.today.title, value: "\(snapshot.todayPendingCount)"),
+            ShellSummaryTile(page: .focus, title: PageID.focus.title, value: focusValue),
+            ShellSummaryTile(page: .week, title: "本周待办", value: "\(snapshot.weekPendingCount)"),
+            ShellSummaryTile(page: .countdown, title: goalTitle, value: goalValue)
+        ]
+    }
+    public func sidebarBadge(for page: PageID) -> Int? {
+        page == .knowledgeGap ? snapshot.dueGapCount : nil
+    }
+    public var miniTimerVisible: Bool { snapshot.hasTimer && selection != .focus }
 
     public static func navigationTarget(for page: PageID, size: ShellWindowSize) -> ShellNavigationTarget {
         switch size {
@@ -137,7 +157,7 @@ public final class ShellStore {
 
     private func updateNavigationPages(for sidebarOrder: [String]) {
         let ordered = PageID.ordered(sidebarOrder)
-        let sidebar = ordered.filter { !PageID.summary.contains($0) && !PageID.fixed.contains($0) }
+        let sidebar = ordered.filter { !PageID.summary.prefix(3).contains($0) && !PageID.fixed.contains($0) }
         let more = ordered.filter { !PageID.primary.contains($0) }
         if sidebarPages != sidebar { sidebarPages = sidebar }
         if morePages != more { morePages = more }

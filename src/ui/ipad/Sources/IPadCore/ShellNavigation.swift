@@ -17,6 +17,15 @@ public enum PageID: String, CaseIterable, Hashable, Sendable, Codable {
     case statistics = "stats"
     case countdown, memo, trash, settings
 
+    public func tabTitle(size: ShellWindowSize) -> String {
+        switch self {
+        case .focus: "专注"
+        case .week: "本周"
+        case .todayFocus where size == .compact: "记录"
+        default: title
+        }
+    }
+
     public var title: String {
         switch self {
         case .today: "今日任务"
@@ -35,8 +44,9 @@ public enum PageID: String, CaseIterable, Hashable, Sendable, Codable {
         }
     }
 
-    public static let primary: [Self] = [.today, .focus, .week, .dashboard]
-    public static let summary: [Self] = [.today, .focus, .week, .knowledgeGap]
+    public static let regularTabs: [Self] = [.today, .focus, .week, .todayFocus, .dashboard]
+    public static let primary: [Self] = [.today, .focus, .todayFocus, .dashboard]
+    public static let summary: [Self] = [.today, .focus, .week, .countdown]
     public static let fixed: [Self] = [.trash, .settings]
     public static let defaultOrder: [Self] = [
         .dashboard, .today, .todayFocus, .focus, .schedule, .week,
