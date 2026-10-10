@@ -25,8 +25,8 @@ import UniformTypeIdentifiers
     @ViewBuilder private func detail(_ section: SettingsSection, store: SettingsStore) -> some View {
         switch section {
         case .general: GeneralSettings(store: store)
-        case .categories: CategoriesSettings(bridge: bridges.categories)
-        case .routines: RoutinesSettings(bridge: bridges.routines)
+        case .categories: CategoriesSettings()
+        case .routines: RoutinesSettings()
         case .sidebar: SidebarSettings(store: store)
         case .sync: SyncSettings(bridge: bridges.sync)
         case .backup: BackupSettings(bridge: bridges.backup, pendingDeletion: bridges.pendingDeletion, warning: bridges.sync.restoreWarning())
@@ -86,91 +86,11 @@ import UniformTypeIdentifiers
     @Bindable var store: SettingsStore
     var body: some View {
         List {
-            Section { ForEach(PageID.ordered(store.snapshot.sidebarOrder), id: \.self) { page in Text(page.title) }.onMove { offsets, destination in var values = PageID.ordered(store.snapshot.sidebarOrder); values.move(fromOffsets: offsets, toOffset: destination); store.setSidebarOrder(values) } }
+            Section { ForEach(PageID.ordered(store.snapshot.sidebarOrder).filter { !PageID.fixed.contains($0) }, id: \.self) { page in Text(page.title) }.onMove { offsets, destination in var values = PageID.ordered(store.snapshot.sidebarOrder).filter { !PageID.fixed.contains($0) }; values.move(fromOffsets: offsets, toOffset: destination); store.setSidebarOrder(values) } }
+            Section("固定入口") { ForEach(PageID.fixed, id: \.self) { Text($0.title) } }
             Section { Button("恢复默认顺序", systemImage: "arrow.counterclockwise") { store.resetSidebarOrder() } }
-        }.environment(\.editMode, .constant(.active)).toolbar { EditButton() }.navigationTitle("侧栏顺序")
+        }.toolbar { EditButton() }.navigationTitle("侧栏顺序")
     }
-}
-
-@MainActor private struct CategoriesSettings: View {
-    let bridge: any CategoryBridgeProtocol
-    @State private var values: [CategoryValue] = []; @State private var name = ""; @State private var error = ""
-    @State private var editing: CategoryValue?; @State private var deletingID: Int?
-    var body: some View {
-        List {
-            ForEach(values, id: \.id) { value in
-                HStack {
-                    Circle().fill(.gray).frame(width: 12, height: 12)
-                    Text(value.name)
-                    Spacer()
-                    Button("编辑", systemImage: "pencil") { editing = value }.labelStyle(.iconOnly)
-                }
-                .swipeActions(edge: .trailing) {
-                    Button("删除", systemImage: "trash", role: .destructive) { deletingID = value.id }
-                        .disabled(value.isPreset || !bridge.canDelete(id: value.id))
-                }
-            }
-            Section { TextField("新科目", text: $name); Button("新增") { add() } }
-            if !error.isEmpty { Text(error).foregroundStyle(ThemeColors.danger) }
-        }
-        .navigationTitle("科目").task { reload() }
-        .sheet(isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) { if let value = editing { CategoryEditor(value: value) { editedName, color in update(value.id, name: editedName, color: color) } } }
-        .alert("确认删除科目？", isPresented: Binding(get: { deletingID != nil }, set: { if !$0 { deletingID = nil } })) {
-            Button("删除", role: .destructive) { if let id = deletingID { delete(id); deletingID = nil } }
-            Button("取消", role: .cancel) { deletingID = nil }
-        } message: { Text("删除会解除任务、例行、课表和知识缺口的科目关联。") }
-    }
-    private func reload() { do { values = try bridge.allCategories(); error = "" } catch let caught { error = caught.localizedDescription } }
-    private func add() { let value = name.trimmingCharacters(in: .whitespacesAndNewlines); guard !value.isEmpty else { return }; do { _ = try bridge.add(name: value, color: "#d4a574"); name = ""; reload() } catch let caught { error = caught.localizedDescription } }
-    private func update(_ id: Int, name: String, color: String) { do { try bridge.update(id: id, name: name, color: color); reload() } catch let caught { error = caught.localizedDescription } }
-    private func delete(_ id: Int) { do { try bridge.delete(id: id); reload() } catch let caught { error = caught.localizedDescription } }
-}
-
-@MainActor private struct CategoryEditor: View {
-    let value: CategoryValue; let onSave: (String, String) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var name: String; @State private var color: String
-    init(value: CategoryValue, onSave: @escaping (String, String) -> Void) { self.value = value; self.onSave = onSave; _name = State(initialValue: value.name); _color = State(initialValue: value.color) }
-    var body: some View { NavigationStack { Form { TextField("名称", text: $name); TextField("颜色", text: $color) }.navigationTitle("编辑科目").toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("保存") { onSave(name.trimmingCharacters(in: .whitespacesAndNewlines), color); dismiss() }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) } } } }
-}
-
-@MainActor private struct RoutinesSettings: View {
-    let bridge: any RoutineBridgeProtocol
-    @State private var values: [[String: Any]] = []; @State private var title = ""; @State private var error = ""
-    @State private var editing: [String: Any]?; @State private var deletingID: Int?
-    var body: some View {
-        List {
-            ForEach(Array(values.enumerated()), id: \.offset) { _, item in
-                let id = item["id"] as? Int ?? -1
-                HStack {
-                    VStack(alignment: .leading) { Text(item["title"] as? String ?? "每日例行"); Text(weekdayText(item["weekdays"] as? Int ?? 127)).font(.caption).foregroundStyle(.secondary) }
-                    Spacer()
-                    Toggle("启用", isOn: Binding(get: { item["active"] as? Bool ?? false }, set: { setActive(id, $0) })).labelsHidden()
-                    Button("编辑", systemImage: "pencil") { editing = item }.labelStyle(.iconOnly)
-                }
-                .swipeActions { Button("删除", systemImage: "trash", role: .destructive) { deletingID = id } }
-            }
-            Section { TextField("新例行", text: $title); Button("新增") { add() } }
-            if !error.isEmpty { Text(error).foregroundStyle(ThemeColors.danger) }
-        }
-        .navigationTitle("每日例行").task { reload() }
-        .sheet(isPresented: Binding(get: { editing != nil }, set: { if !$0 { editing = nil } })) { if let editing { RoutineEditor(item: editing) { id, newTitle, weekdays in update(id, title: newTitle, weekdays: weekdays) } } }
-        .alert("确认删除每日例行？", isPresented: Binding(get: { deletingID != nil }, set: { if !$0 { deletingID = nil } })) { Button("删除", role: .destructive) { if let id = deletingID { delete(id); deletingID = nil } }; Button("取消", role: .cancel) { deletingID = nil } }
-    }
-    private func reload() { values = bridge.routines() }
-    private func add() { do { try bridge.add(title: title.trimmingCharacters(in: .whitespacesAndNewlines), categoryID: -1, weekdays: 127); title = ""; reload() } catch let caught { error = caught.localizedDescription } }
-    private func setActive(_ id: Int, _ active: Bool) { do { try bridge.setActive(id: id, active: active); reload() } catch let caught { error = caught.localizedDescription } }
-    private func update(_ id: Int, title: String, weekdays: Int) { do { try bridge.update(id: id, changes: ["title": title]); try bridge.setWeekdays(id: id, weekdays: weekdays); reload() } catch let caught { error = caught.localizedDescription } }
-    private func delete(_ id: Int) { do { try bridge.delete(id: id); reload() } catch let caught { error = caught.localizedDescription } }
-    private func weekdayText(_ mask: Int) -> String { let names = ["一", "二", "三", "四", "五", "六", "日"]; let selected = names.enumerated().compactMap { mask & (1 << $0.offset) != 0 ? "周\($0.element)" : nil }; return selected.isEmpty ? "不重复" : selected.joined(separator: "、") }
-}
-
-@MainActor private struct RoutineEditor: View {
-    let item: [String: Any]; let onSave: (Int, String, Int) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var title: String; @State private var weekdays: Int
-    init(item: [String: Any], onSave: @escaping (Int, String, Int) -> Void) { self.item = item; self.onSave = onSave; _title = State(initialValue: item["title"] as? String ?? ""); _weekdays = State(initialValue: item["weekdays"] as? Int ?? 127) }
-    var body: some View { NavigationStack { Form { TextField("标题", text: $title); Stepper("星期掩码：\(weekdays)", value: $weekdays, in: 0...127) }.navigationTitle("编辑每日例行").toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button("保存") { if let id = item["id"] as? Int { onSave(id, title.trimmingCharacters(in: .whitespacesAndNewlines), weekdays); dismiss() } }.disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) } } } }
 }
 
 @MainActor private struct SyncSettings: View {

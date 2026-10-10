@@ -4,6 +4,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) void (^onChanged)(void);
 @property(nonatomic, copy, nullable) void (^onFailure)(NSString *message);
 - (NSArray<NSDictionary *> *)routines;
+- (nullable NSArray<NSDictionary *> *)readRoutines:(NSError **)error;
 - (BOOL)addTitle:(NSString *)title categoryId:(NSInteger)categoryId weekdays:(NSInteger)weekdays error:(NSError **)error;
 - (BOOL)update:(NSInteger)routineId changes:(NSDictionary *)changes error:(NSError **)error;
 - (BOOL)deleteRoutine:(NSInteger)routineId error:(NSError **)error;

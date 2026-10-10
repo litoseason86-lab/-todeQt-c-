@@ -4,5 +4,23 @@ import PTBridge
 @MainActor final class RoutineBridgeAdapter: RoutineBridgeProtocol {
     private let native = PTRoutineBridge(); var onChanged: (() -> Void)?; var onFailure: ((String) -> Void)?
     init() { native.onChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }; native.onFailure = { [weak self] message in MainActor.assumeIsolated { self?.onFailure?(message) } } }
-    func routines() -> [[String: Any]] { native.routines().map { $0 as! [String: Any] } }; func add(title: String, categoryID: Int, weekdays: Int) throws { try native.addTitle(title, categoryId: categoryID, weekdays: weekdays) }; func update(id: Int, changes: [String: Any]) throws { try native.update(id, changes: changes) }; func delete(id: Int) throws { try native.deleteRoutine(id) }; func setActive(id: Int, active: Bool) throws { try native.setActive(id, active: active) }; func setWeekdays(id: Int, weekdays: Int) throws { try native.setWeekdays(id, weekdays: weekdays) }; func materializeToday() -> Int { native.materializeToday() }
+    func routines() throws -> [RoutineValue] {
+        try native.readRoutines().map { item in
+            RoutineValue(id: (item["id"] as? NSNumber)?.intValue ?? -1, title: item["title"] as? String ?? "",
+                         categoryID: (item["categoryId"] as? NSNumber)?.intValue ?? -1,
+                         categoryName: item["categoryName"] as? String ?? "", categoryColor: item["categoryColor"] as? String ?? "",
+                         active: (item["active"] as? NSNumber)?.boolValue ?? false, weekdays: (item["weekdays"] as? NSNumber)?.intValue ?? 127)
+        }
+    }
+    func add(title: String, categoryID: Int, weekdays: Int) throws { try native.addTitle(title, categoryId: categoryID, weekdays: weekdays) }
+    func update(id: Int, changes: RoutineChanges) throws {
+        var fields: [String: Any] = [:]
+        if let title = changes.title { fields["title"] = title }
+        if let category = changes.categoryID { fields["categoryId"] = category }
+        try native.update(id, changes: fields)
+    }
+    func delete(id: Int) throws { try native.deleteRoutine(id) }
+    func setActive(id: Int, active: Bool) throws { try native.setActive(id, active: active) }
+    func setWeekdays(id: Int, weekdays: Int) throws { try native.setWeekdays(id, weekdays: weekdays) }
+    func materializeToday() -> Int { native.materializeToday() }
 }

@@ -25,6 +25,7 @@ private slots:
     void syncBridgeDistinguishesEmptyAndDatabaseFailure();
     void backupBridgeDistinguishesMissingAndUnreadableFolder();
     void exportAndRoutineBridgeForwardServiceOperations();
+    void routineBridgePreservesFieldTypesAndReadFailures();
 private:
     QTemporaryDir m_preferences;
     QTemporaryDir m_database;
@@ -121,6 +122,24 @@ void PTDataBridgeTests::exportAndRoutineBridgeForwardServiceOperations() {
         const NSInteger routineId = [values.firstObject[@"id"] integerValue];
         QVERIFY([routine setWeekdays:routineId weekdays:9 error:&error]);
         QCOMPARE([[routine routines].firstObject[@"weekdays"] integerValue], 9);
+    }
+}
+// 产品保证：例行字段级编辑转发整型科目，读取失败不会伪装成有效空列表。
+void PTDataBridgeTests::routineBridgePreservesFieldTypesAndReadFailures() {
+    @autoreleasepool {
+        PTRoutineBridge *bridge = [PTRoutineBridge new]; NSError *error = nil;
+        QVERIFY([bridge addTitle:@"阅读" categoryId:-1 weekdays:31 error:&error]);
+        auto values = [bridge readRoutines:&error]; QVERIFY(error == nil);
+        QCOMPARE(values.count, NSUInteger(1));
+        const NSInteger id = [values.firstObject[@"id"] integerValue];
+        QVERIFY(([bridge update:id changes:@{@"title": @"阅读两章", @"categoryId": @(-1)} error:&error]));
+        values = [bridge readRoutines:&error];
+        QVERIFY([values.firstObject[@"title"] isEqualToString:@"阅读两章"]);
+        QCOMPARE([values.firstObject[@"weekdays"] integerValue], 31);
+        QVERIFY(![bridge update:id changes:@{@"categoryId": @(1.5)} error:&error]);
+        QVERIFY(error != nil);
+        DatabaseManager::instance()->close(); error = nil;
+        QVERIFY([bridge readRoutines:&error] == nil); QVERIFY(error != nil);
     }
 }
 QTEST_GUILESS_MAIN(PTDataBridgeTests)
