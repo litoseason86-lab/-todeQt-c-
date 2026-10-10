@@ -32,7 +32,7 @@ import PTBridge
         value.startTime = text("startTime"); value.endTime = text("endTime"); value.durationSeconds = number("durationSeconds")
         value.mode = number("mode"); value.taskTitle = text("taskTitle"); value.manual = flag("manual")
         value.dueDate = text("dueDate"); value.status = number("status"); value.weekdays = number("weekdays"); value.active = flag("active")
-        value.weekday = number("weekday"); value.startMinutes = number("startMinutes"); value.endMinutes = number("endMinutes")
+        value.weekday = number("weekday"); value.startMinutes = (details["startMinutes"] as? NSNumber)?.intValue; value.endMinutes = (details["endMinutes"] as? NSNumber)?.intValue
         value.weekStart = number("weekStart"); value.weekEnd = number("weekEnd"); value.weekParity = number("weekParity")
         value.location = text("location"); value.targetDate = text("targetDate")
         return TrashItem(id: id.intValue,

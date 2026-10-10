@@ -51,6 +51,5 @@ bool fail(NSError **error, const QString &message);
 id object(const QVariant &value);
 NSArray *array(const QVariantList &values);
 NSDictionary *dictionary(const QVariantMap &values);
-QVariantMap map(NSDictionary *values);
 #endif
 }

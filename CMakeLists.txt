@@ -544,6 +544,7 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/Stores/SettingsExportStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/SettingsSyncStore.swift
         src/ui/ipad/Sources/IPadCore/Format/RoutineWeekdaysFormat.swift
+        src/ui/ipad/Sources/IPadCore/Format/TrashFormat.swift
     )
     target_sources(IPadUI PRIVATE
         src/ui/ipad/Sources/IPadUI/Bridges/TrashBridgeAdapter.swift
@@ -551,7 +552,7 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Bridges/BackupBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/ExportBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/RoutineBridgeAdapter.swift
-        src/ui/ipad/Sources/IPadUI/Pages/TrashPage.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Trash/TrashPage.swift
         src/ui/ipad/Sources/IPadUI/Pages/Settings/SettingsPage.swift
         src/ui/ipad/Sources/IPadUI/Pages/Settings/SettingsManagementViews.swift
         src/ui/ipad/Sources/IPadUI/Pages/Settings/SettingsTransferViews.swift

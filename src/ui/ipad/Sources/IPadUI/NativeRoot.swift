@@ -74,6 +74,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                     tasks: TaskBridgeAdapter(), settings: SettingsBridgeAdapter(),
                                     categories: CategoryBridgeAdapter(), history: FocusHistoryBridgeAdapter(), defaults: .standard)
         // 055-P4-5：设置页独占自己的设置适配器，不覆盖 FocusStore 的回调。
+        let trashStore = TrashStore(bridge: TrashBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter())
         let settings = SettingsStore(bridge: SettingsBridgeAdapter())
         let settingsCategories = SettingsCategoryStore(bridge: CategoryBridgeAdapter())
         let settingsRoutines = SettingsRoutineStore(bridge: RoutineBridgeAdapter(), categories: CategoryBridgeAdapter())
@@ -94,6 +95,6 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         return UIHostingController(rootView: ShellRootView(store: store)
             .environment(core).environment(today).environment(dashboard).environment(focus).environment(store)
             .environment(gaps).environment(memos).environment(countdown)
-            .environment(history).environment(statistics).environment(settings).environment(settingsCategories).environment(settingsRoutines).environment(settingsSync).environment(settingsBackup).environment(settingsExport))
+            .environment(history).environment(statistics).environment(settings).environment(settingsCategories).environment(settingsRoutines).environment(settingsSync).environment(settingsBackup).environment(settingsExport).environment(trashStore))
     }
 }

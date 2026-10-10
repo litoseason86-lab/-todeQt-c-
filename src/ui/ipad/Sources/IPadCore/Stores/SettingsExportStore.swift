@@ -51,6 +51,8 @@ public enum ExportKind: String, CaseIterable, Sendable { case tasks, focus = "fo
         else { errorMessage = message; releaseFiles() }
     }
     public func finishExport(error: Error?) {
+        // 系统保存只在服务生成成功后出现；生成期间没有可取消的系统导出会话。
+        guard !working && exportURL != nil else { return }
         if let error {
             let value = error as NSError
             if value.domain != NSCocoaErrorDomain || value.code != NSUserCancelledError { errorMessage = error.localizedDescription }

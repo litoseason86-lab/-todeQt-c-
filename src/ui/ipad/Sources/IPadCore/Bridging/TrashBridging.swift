@@ -15,8 +15,8 @@ public struct TrashDetails: Sendable, Equatable {
     public var weekdays = 0
     public var active = false
     public var weekday = 0
-    public var startMinutes = 0
-    public var endMinutes = 0
+    public var startMinutes: Int?
+    public var endMinutes: Int?
     public var weekStart = 0
     public var weekEnd = 0
     public var weekParity = 0

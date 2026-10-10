@@ -129,6 +129,38 @@ import XCTest
         XCTAssertEqual(exportStore.errorMessage, "文件保存失败")
         XCTAssertEqual(exportFiles.cleanups, 1)
     }
+
+    // 产品保证：同步开关显示服务接受的值；状态变化刷新，文件夹和同步动作原样转发。
+    func testSyncShowsAcceptedStateAndForwardsActions() {
+        let bridge = SettingsSyncFake(); let store = SettingsSyncStore(bridge: bridge)
+        store.setEnabled(true)
+        XCTAssertFalse(store.snapshot.enabled)
+        XCTAssertEqual(bridge.calls, ["enabled:true"])
+        bridge.result.enabled = true; bridge.result.statusKey = "needsConfirmation"
+        bridge.result.folderProblem = "所选目录不是同步文件夹"
+        bridge.onChanged?()
+        XCTAssertTrue(store.snapshot.enabled)
+        XCTAssertEqual(store.snapshot.statusKey, "needsConfirmation")
+        XCTAssertEqual(store.snapshot.folderProblem, "所选目录不是同步文件夹")
+        store.chooseFolder(); store.confirmJoin(); store.rebuildFolder(); store.syncNow()
+        XCTAssertEqual(Array(bridge.calls.suffix(4)), ["choose", "join", "rebuild", "sync"])
+        bridge.onNotice?("目录选择取消")
+        XCTAssertEqual(store.notice, "目录选择取消")
+    }
+
+    // 产品保证：服务仍在生成导出文件时，不伪造取消或清理服务正在写入的目录。
+    func testExportCannotPretendCancellationWhileServiceIsWorking() {
+        let bridge = SettingsExportFake(); let files = SettingsFilesFake()
+        let store = SettingsExportStore(bridge: bridge, files: files, logicalDay: LogicalDayBridgeFake())
+        store.start(.tasks); XCTAssertTrue(store.busy); XCTAssertNil(store.exportURL)
+        store.finishExport(error: CocoaError(.userCancelled))
+        XCTAssertTrue(store.busy); XCTAssertEqual(files.cleanups, 0)
+        bridge.onProgress?(4, 10)
+        XCTAssertEqual(store.progress, 4); XCTAssertEqual(store.total, 10)
+        bridge.onCompleted?(false, "导出数据库不可读")
+        XCTAssertEqual(store.errorMessage, "导出数据库不可读")
+        XCTAssertEqual(files.cleanups, 1)
+    }
 }
 
 @MainActor final class SettingsFilesFake: FileTransferWorkspaceProtocol {
@@ -176,12 +208,14 @@ import XCTest
     var logs: [SyncLogEntry] = []
     var error: Error?
     var copied = ""
-    func snapshot() throws -> SyncSnapshot { if let error { throw error }; return SyncSnapshot() }
-    func setEnabled(_ value: Bool) {}
-    func confirmJoin() {}
-    func syncNow() {}
-    func chooseFolder() {}
-    func rebuildFolder() {}
+    var result = SyncSnapshot()
+    var calls: [String] = []
+    func snapshot() throws -> SyncSnapshot { if let error { throw error }; return result }
+    func setEnabled(_ value: Bool) { calls.append("enabled:\(value)") }
+    func confirmJoin() { calls.append("join") }
+    func syncNow() { calls.append("sync") }
+    func chooseFolder() { calls.append("choose") }
+    func rebuildFolder() { calls.append("rebuild") }
     func syncLog(limit: Int) throws -> [SyncLogEntry] { if let error { throw error }; return logs }
     func copyLostValue(_ text: String) { copied = text; onCopyRequested?(text) }
     func restoreWarning() -> String { "" }

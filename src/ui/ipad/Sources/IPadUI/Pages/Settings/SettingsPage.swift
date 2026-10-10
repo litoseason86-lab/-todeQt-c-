@@ -1,9 +1,7 @@
 import IPadCore
 import SwiftUI
-import UniformTypeIdentifiers
 
 @MainActor struct SettingsPage: View {
-    @Environment(CoreBridges.self) private var bridges
     @Environment(ShellStore.self) private var shell
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var selection: SettingsSection? = .general
@@ -84,11 +82,22 @@ import UniformTypeIdentifiers
 
 @MainActor private struct SidebarSettings: View {
     @Bindable var store: SettingsStore
+    private var movablePages: [PageID] {
+        PageID.ordered(store.snapshot.sidebarOrder).filter { !PageID.fixed.contains($0) }
+    }
     var body: some View {
         List {
-            Section { ForEach(PageID.ordered(store.snapshot.sidebarOrder).filter { !PageID.fixed.contains($0) }, id: \.self) { page in Text(page.title) }.onMove { offsets, destination in var values = PageID.ordered(store.snapshot.sidebarOrder).filter { !PageID.fixed.contains($0) }; values.move(fromOffsets: offsets, toOffset: destination); store.setSidebarOrder(values) } }
+            Section {
+                ForEach(movablePages, id: \.self) { Text($0.title) }
+                    .onMove { offsets, destination in
+                        var values = movablePages
+                        values.move(fromOffsets: offsets, toOffset: destination)
+                        store.setSidebarOrder(values)
+                    }
+            }
             Section("固定入口") { ForEach(PageID.fixed, id: \.self) { Text($0.title) } }
             Section { Button("恢复默认顺序", systemImage: "arrow.counterclockwise") { store.resetSidebarOrder() } }
+            if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
         }.toolbar { EditButton() }.navigationTitle("侧栏顺序")
     }
 }

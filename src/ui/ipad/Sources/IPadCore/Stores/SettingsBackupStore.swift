@@ -82,6 +82,7 @@ import Observation
         releaseFiles(); refresh(); if success { reloadBackups() }
     }
     public func finishExport(error: Error?) {
+        guard exportURL != nil else { return }
         if let error, !Self.isCancellation(error) { errorMessage = error.localizedDescription }
         exportURL = nil; releaseFiles()
     }

@@ -95,15 +95,13 @@ def main():
         if match
     }
     shell_source = (root / "src/ui/ipad/Sources/IPadUI/Shell/ShellRootView.swift").read_text(encoding="utf-8")
-    dark_ids = set(re.findall(r'\["([^"]+)",\s*"([^"]+)",\s*"([^"]+)"\]', shell_source))
-    dark_ids = set().union(*map(set, dark_ids)) if dark_ids else set()
+    dark_match = re.search(r'\[([^\]]*)\]\.contains\(store\.snapshot\.backgroundTheme\)', shell_source)
+    if not dark_match: raise ValueError("未找到 ShellRootView 的壁纸深色名单")
+    dark_ids = set(re.findall(r'"([^"]+)"', dark_match.group(1)))
     bridge_source = (root / "src/platform/ios/bridge/PTShellBridge.mm").read_text(encoding="utf-8")
-    bridge_match = re.search(r'wallpaperThemes\s*=\s*\{([^}]*)\}', bridge_source, re.S)
-    if bridge_match:
-        bridge_ids = set(re.findall(r'QStringLiteral\("([^"]+)"\)', bridge_match.group(1)))
-    else:
-        bridge_ids = set(re.findall(r'QStringLiteral\("([^"]+)"\)', bridge_source[bridge_source.find("wallpaper"):] ))
-        bridge_ids &= theme_ids
+    bridge_match = re.search(r'const\s+QStringList\s+themes\s*=\s*\{([^}]*)\}', bridge_source, re.S)
+    if not bridge_match: raise ValueError("未找到 PTShellBridge 的壁纸资源白名单")
+    bridge_ids = set(re.findall(r'QStringLiteral\("([^"]+)"\)', bridge_match.group(1)))
     if not dark_ids.issubset(theme_ids): raise ValueError("ShellRootView 深色壁纸名单包含 Theme.qml 未定义的主题")
     if not bridge_ids.issubset(theme_ids): raise ValueError("PTShellBridge 壁纸白名单包含 Theme.qml 未定义的主题")
     if dark_ids != dark_theme_ids:

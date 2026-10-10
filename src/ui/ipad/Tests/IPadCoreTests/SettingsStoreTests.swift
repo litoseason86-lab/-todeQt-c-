@@ -47,4 +47,14 @@ import XCTest
     func testAppearanceOffersAllSupportedThemes() {
         XCTAssertEqual(SettingsAvailability.themes.map(\.id), ["warm", "pink", "jiangnan", "sword", "starry", "rainy", "moon"])
     }
+
+    // 产品保证：壁纸写入口拒绝保存时，显示仍为旧偏好并提供错误，不假装开启成功。
+    func testWallpaperFailureKeepsPreviousSnapshot() {
+        let bridge = ShellBridgeFake(); bridge.snapshot.useWallpaper = false
+        let store = ShellStore(bridge: bridge); store.refresh()
+        XCTAssertFalse(store.snapshot.useWallpaper)
+        store.setUseWallpaper(true)
+        XCTAssertFalse(store.snapshot.useWallpaper)
+        XCTAssertFalse(store.errorMessage.isEmpty)
+    }
 }

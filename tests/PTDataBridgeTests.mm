@@ -28,6 +28,8 @@ private slots:
     void routineBridgePreservesFieldTypesAndReadFailures();
     void syncBridgeSurvivesServiceDestruction();
     void backupBridgeDetectsPreferenceWriteFailure();
+    void trashRestoreKeepsStructuredFailure();
+    void trashEmptyRejectsOverflowWithoutDeletingTruncatedId();
 private:
     QTemporaryDir m_preferences;
     QTemporaryDir m_database;
@@ -172,6 +174,31 @@ void PTDataBridgeTests::backupBridgeDetectsPreferenceWriteFailure() {
         NSError *error = nil; [bridge setAutoBackupEnabled:!previous error:&error];
         QVERIFY(error != nil);
         QVERIFY([error.localizedDescription containsString:@"保存失败"]);
+    }
+}
+// 产品保证：恢复失败仍交回结构化原因和状态，Swift 不因异常而丢掉冲突时间段。
+void PTDataBridgeTests::trashRestoreKeepsStructuredFailure() {
+    @autoreleasepool {
+        PTTrashBridge *bridge = [PTTrashBridge new]; NSError *error = nil;
+        const NSDictionary *result = [bridge restoreItem:999999 error:&error];
+        QVERIFY(error == nil);
+        QVERIFY(![result[@"ok"] boolValue]);
+        QVERIFY([result[@"code"] isEqualToString:@"gone"]);
+        QVERIFY([result[@"error"] length] > 0);
+    }
+}
+// 产品保证：批量清空编号越界时整批拒绝，不截断成另一条有效编号造成误删。
+void PTDataBridgeTests::trashEmptyRejectsOverflowWithoutDeletingTruncatedId() {
+    @autoreleasepool {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.prepare(QStringLiteral("INSERT INTO trash_items(kind, origin_sync_id, title, payload, deleted_at) VALUES ('memo', '', '保留', '{\"v\":1}', :deleted)")));
+        query.bindValue(QStringLiteral(":deleted"), QDateTime::currentDateTime().toString(Qt::ISODateWithMs));
+        QVERIFY(query.exec()); const int id = query.lastInsertId().toInt(); QVERIFY(id > 0);
+        PTTrashBridge *bridge = [PTTrashBridge new]; NSError *error = nil;
+        const qint64 overflow = (qint64(1) << 32) + id;
+        [bridge emptyTrash:@[@(overflow)] error:&error]; QVERIFY(error != nil);
+        QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE id = %1").arg(id)));
+        QVERIFY(query.next()); QCOMPARE(query.value(0).toInt(), 1);
     }
 }
 QTEST_GUILESS_MAIN(PTDataBridgeTests)

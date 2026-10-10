@@ -9,7 +9,11 @@ import SwiftUI
         List {
             ForEach(store.values, id: \.id) { value in
                 Button { store.beginEdit(value) } label: {
-                    HStack { Text(value.name).foregroundStyle(ThemeColors.ink); Spacer(); Image(systemName: "pencil") }
+                    HStack {
+                        Image(systemName: "circle.fill").foregroundStyle(SettingsCategoryColor.value(value.color)).accessibilityHidden(true)
+                        Text(value.name).foregroundStyle(ThemeColors.ink)
+                        Spacer(); Image(systemName: "pencil")
+                    }
                 }.accessibilityLabel("编辑科目「\(value.name)」")
                 .swipeActions {
                     Button("删除", systemImage: "trash", role: .destructive) { deleting = value }
@@ -29,7 +33,9 @@ import SwiftUI
                     TextField("科目名称", text: $store.name)
                     Picker("颜色", selection: $store.color) {
                         ForEach(Array(SettingsCategoryStore.colors.enumerated()), id: \.element) { index, color in
-                            Text("暖色 \(index + 1)").tag(color)
+                            Label { Text("暖色 \(index + 1)") } icon: {
+                                Image(systemName: "circle.fill").foregroundStyle(SettingsCategoryColor.value(color))
+                            }.tag(color)
                         }
                         if !SettingsCategoryStore.colors.contains(store.color) { Text("现有颜色").tag(store.color) }
                     }
@@ -46,6 +52,15 @@ import SwiftUI
             Button("删除", role: .destructive) { if let deleting { _ = store.delete(deleting) }; deleting = nil }
         } message: { Text("删除会解除任务、例行、课表和知识缺口的科目关联。") }
         .task { store.reload() }
+    }
+}
+
+// 科目色是用户保存的数据，沿用任务行的显示约定；界面色与无效颜色兜底仍为语义色。
+private enum SettingsCategoryColor {
+    static func value(_ hex: String) -> Color {
+        guard hex.count == 7, hex.hasPrefix("#"), let value = UInt32(hex.dropFirst(), radix: 16) else { return ThemeColors.inkSoft }
+        return Color(.sRGB, red: Double((value >> 16) & 255) / 255,
+                     green: Double((value >> 8) & 255) / 255, blue: Double(value & 255) / 255, opacity: 1)
     }
 }
 

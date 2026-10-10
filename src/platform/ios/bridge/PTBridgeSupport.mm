@@ -96,19 +96,4 @@ NSDictionary *dictionary(const QVariantMap &values)
     return [result copy];
 }
 
-QVariantMap map(NSDictionary *values)
-{
-    QVariantMap result;
-    for (id key in values) {
-        id value = values[key];
-        if ([value isKindOfClass:[NSString class]]) result[string(key)] = string(value);
-        else if ([value isKindOfClass:[NSNumber class]]) result[string(key)] = [(NSNumber *)value doubleValue];
-        else if ([value isKindOfClass:[NSArray class]]) {
-            QVariantList list;
-            for (id item in (NSArray *)value) list.append([item isKindOfClass:[NSString class]] ? QVariant(string(item)) : QVariant::fromValue([item doubleValue]));
-            result[string(key)] = list;
-        }
-    }
-    return result;
-}
 }
