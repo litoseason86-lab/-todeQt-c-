@@ -45,6 +45,7 @@ private slots:
     void statisticsReadEntryPointsAndNestedValues();
     void statisticsFailuresAndHistorySignalLifetime();
     void historyFieldsPartialChangesAndFailures();
+    void dateRelationsForSelectedDay();
     void initTestCase();
     void init();
     void cleanup();
@@ -942,5 +943,21 @@ void PTCoreBridgeTests::historyFieldsPartialChangesAndFailures() {
 }
 QTEST_GUILESS_MAIN(PTCoreBridgeTests)
 
+
+// 产品保证：所选日相对同一逻辑今日的先后由 QDate 给出，无效日期报错，Swift 不比较日期。
+void PTCoreBridgeTests::dateRelationsForSelectedDay() {
+    @autoreleasepool {
+        PTLogicalDayBridge *bridge = [PTLogicalDayBridge new];
+        NSError *error = nil;
+        QCOMPARE([bridge relationOfDate:@"2024-02-29" toDate:@"2024-02-28" error:&error], NSInteger(1));
+        QVERIFY(!error);
+        QCOMPARE([bridge relationOfDate:@"2024-02-28" toDate:@"2024-02-28" error:&error], NSInteger(0));
+        QCOMPARE([bridge relationOfDate:@"2023-12-31" toDate:@"2024-02-28" error:&error], NSInteger(-1));
+        [bridge relationOfDate:@"2024-02-30" toDate:@"2024-02-28" error:&error];
+        QVERIFY(error); error = nil;
+        [bridge relationOfDate:@"2024-2-28" toDate:@"2024-02-28" error:&error];
+        QVERIFY(error); error = nil;
+    }
+}
 
 #include "PTCoreBridgeTests.moc"

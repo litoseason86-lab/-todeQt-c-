@@ -17,6 +17,13 @@ using namespace PTBridgeSupport;
     }
     return self;
 }
+// 日期比较不接触墙钟；逻辑日已由 today 生成，不能在这里再次减日界。
+- (NSInteger)relationOfDate:(NSString *)value toDate:(NSString *)reference error:(NSError **)error {
+    NSAssert(NSThread.isMainThread, @"日期读取必须在主线程");
+    const QDate left = date(value), right = date(reference);
+    if (!left.isValid() || !right.isValid()) { fail(error, QStringLiteral("日期无效")); return 0; }
+    return left < right ? -1 : left > right ? 1 : 0;
+}
 - (NSString *)today { NSAssert(NSThread.isMainThread, @"逻辑日读取必须在主线程"); return date(LogicalDay::today(AppSettings::instance()->dayStartHour())); }
 - (NSInteger)dayStartHour { NSAssert(NSThread.isMainThread, @"日界读取必须在主线程"); return AppSettings::instance()->dayStartHour(); }
 @end
