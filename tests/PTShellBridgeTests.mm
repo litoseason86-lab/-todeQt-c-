@@ -9,6 +9,7 @@
 #include <memory>
 #include <QtTest>
 #include "../src/services/AppSettings.h"
+#include "../src/services/CountdownService.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusTimer.h"
 #include "../src/services/KnowledgeGapService.h"
@@ -18,6 +19,9 @@
 class PTShellBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void primaryGoalProjectsServiceAndRefreshes();
+    void appearanceMigrationAndPersistence();
+    void appearanceWriteFailureRestoresValue();
     void initTestCase();
     void init();
     void cleanup();
@@ -277,6 +281,83 @@ void PTShellBridgeTests::bothUIEntrancesWriteTheSameLocalKey()
         IPadUiPreferences phone(false);
         QVERIFY(!phone.setNativeUI(false));
         QVERIFY(QSettings().value(QStringLiteral("ipad/nativeUI")).toBool());
+    }
+}
+// 产品保证：侧栏主目标使用服务给出的名称和剩余天数，主目标变化后刷新，无目标不冒充零天目标。
+void PTShellBridgeTests::primaryGoalProjectsServiceAndRefreshes()
+{
+    @autoreleasepool {
+        auto *service = CountdownService::instance();
+        QVERIFY(service->reload());
+        PTShellBridge *bridge = [PTShellBridge new];
+        QVERIFY(![bridge readSnapshot].hasPrimaryGoal);
+        __block int changed = 0;
+        bridge.onChanged = ^{ ++changed; };
+        QVERIFY(service->addGoal(QStringLiteral("考研初试"), QDate(2030, 12, 21)));
+        service->syncReferenceDateTo(QDate(2030, 10, 10));
+        const auto goal = service->primaryGoal().toMap();
+        QVERIFY(!goal.isEmpty());
+        PTShellSnapshot *value = [bridge readSnapshot];
+        QVERIFY(value.hasPrimaryGoal);
+        QCOMPARE(QString::fromNSString(value.primaryGoalName), goal.value(QStringLiteral("name")).toString());
+        QCOMPARE(value.primaryGoalDaysRemaining, NSInteger(goal.value(QStringLiteral("daysRemaining")).toInt()));
+        QVERIFY(changed > 0);
+        changed = 0;
+        QVERIFY(service->deleteGoal(goal.value(QStringLiteral("goalId")).toInt()));
+        QVERIFY(changed > 0);
+        value = [bridge readSnapshot];
+        QVERIFY(!value.hasPrimaryGoal);
+        QVERIFY(value.primaryGoalName.length == 0);
+    }
+}
+// 产品保证：老用户的壁纸设置只在读取时推导外观，新外观写入只保存本机键且成功后刷新。
+void PTShellBridgeTests::appearanceMigrationAndPersistence()
+{
+    @autoreleasepool {
+        PTShellBridge *bridge = [PTShellBridge new];
+        QVERIFY(!QSettings().contains(QStringLiteral("ipad/appearance")));
+        QVERIFY([[bridge readSnapshot].appearance isEqualToString:@"system"]);
+        QSettings().setValue(QStringLiteral("ipad/useWallpaper"), true);
+        QVERIFY([[bridge readSnapshot].appearance isEqualToString:@"theme"]);
+        QVERIFY(!QSettings().contains(QStringLiteral("ipad/appearance")));
+        __block int changes = 0;
+        bridge.onChanged = ^{ ++changes; };
+        for (NSString *mode in @[@"light", @"dark", @"theme", @"system"]) {
+            NSError *error = nil;
+            QVERIFY([bridge setAppearance:mode error:&error]);
+            QVERIFY(error == nil);
+            QVERIFY([[bridge readSnapshot].appearance isEqualToString:mode]);
+        }
+        QCOMPARE(changes, 4);
+        QCOMPARE(QSettings().allKeys(), QStringList({QStringLiteral("ipad/appearance"), QStringLiteral("ipad/useWallpaper")}));
+        NSError *error = nil;
+        QVERIFY(![bridge setAppearance:@"invalid" error:&error]);
+        QVERIFY(error != nil);
+        QVERIFY([[bridge readSnapshot].appearance isEqualToString:@"system"]);
+        QCOMPARE(changes, 4);
+    }
+}
+// 产品保证：本机外观写入失败时恢复旧值、不发成功变化，返回可展示的失败原因。
+void PTShellBridgeTests::appearanceWriteFailureRestoresValue()
+{
+    @autoreleasepool {
+        // 用路径上的普通文件阻断偏好子目录，稳定触发 AccessError，不依赖当前用户的权限等级。
+        QTemporaryDir blocked;
+        QVERIFY(blocked.isValid());
+        QFile file(blocked.filePath(QStringLiteral("PomodoroTodoTests")));
+        QVERIFY(file.open(QIODevice::WriteOnly)); file.close();
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, blocked.path());
+        PTShellBridge *bridge = [PTShellBridge new];
+        __block int changes = 0;
+        bridge.onChanged = ^{ ++changes; };
+        NSError *error = nil;
+        const BOOL ok = [bridge setAppearance:@"dark" error:&error];
+        const auto value = [bridge readSnapshot];
+        // 在断言前恢复路径，失败也不会污染后续测试。
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+        QVERIFY(!ok); QVERIFY(error.localizedDescription.length > 0);
+        QVERIFY([value.appearance isEqualToString:@"system"]);
+        QCOMPARE(changes, 0);
     }
 }
 QTEST_GUILESS_MAIN(PTShellBridgeTests)
