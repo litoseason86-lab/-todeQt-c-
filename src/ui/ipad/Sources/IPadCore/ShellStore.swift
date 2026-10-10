@@ -75,6 +75,10 @@ public final class ShellStore {
     public private(set) var selection: PageID = .dashboard
     public private(set) var errorMessage = ""
     public private(set) var toast: ShellToast?
+    public private(set) var sidebarPages: [PageID] = PageID.ordered([]).filter {
+        !PageID.summary.contains($0) && !PageID.fixed.contains($0)
+    }
+    public private(set) var morePages: [PageID] = PageID.ordered([]).filter { !PageID.primary.contains($0) }
     public var captureTitle = ""
     public var capturePresented = false
     public private(set) var captureError = ""
@@ -116,15 +120,27 @@ public final class ShellStore {
     }
 
     public var orderedPages: [PageID] { PageID.ordered(snapshot.sidebarOrder) }
-    public var sidebarPages: [PageID] {
-        orderedPages.filter { !PageID.summary.contains($0) && !PageID.fixed.contains($0) }
+
+    public static func navigationTarget(for page: PageID, size: ShellWindowSize) -> ShellNavigationTarget {
+        switch size {
+        case .compact where !PageID.primary.contains(page): return .more(path: [page])
+        case .compact, .regular: return .page(page)
+        }
     }
-    public var morePages: [PageID] { orderedPages.filter { !PageID.primary.contains($0) } }
+
+    private func updateNavigationPages(for sidebarOrder: [String]) {
+        let ordered = PageID.ordered(sidebarOrder)
+        let sidebar = ordered.filter { !PageID.summary.contains($0) && !PageID.fixed.contains($0) }
+        let more = ordered.filter { !PageID.primary.contains($0) }
+        if sidebarPages != sidebar { sidebarPages = sidebar }
+        if morePages != more { morePages = more }
+    }
 
     public func refresh() {
         do {
             let value = try bridge.read()
             snapshot = value
+            updateNavigationPages(for: value.sidebarOrder)
             errorMessage = ""
         } catch { errorMessage = error.localizedDescription }
     }

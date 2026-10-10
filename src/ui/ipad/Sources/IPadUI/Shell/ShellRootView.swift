@@ -37,10 +37,11 @@ struct ShellRootView: View {
                         .tabPlacement(.sidebarOnly)
                 }
             }
-            if sizeClass == .compact {
-                Tab("更多", systemImage: "ellipsis", value: ShellTab.more) { moreView }
-                    .tabPlacement(.pinned)
-            }
+            // 「更多」始终注册，宽窗口只由系统隐藏；动态增删 Tab 会让 iPadOS 重建标签控制器时
+            // 出现标签项与页面控制器错位，窄窗口点击标签可能触发 UIKit 断言崩溃。
+            Tab("更多", systemImage: "ellipsis", value: ShellTab.more) { moreView }
+                .tabPlacement(.pinned)
+                .defaultVisibility(.hidden, for: .sidebar)
         }
         .tabViewStyle(.sidebarAdaptable)
         .defaultAdaptableTabBarPlacement(.sidebar)
@@ -73,8 +74,8 @@ struct ShellRootView: View {
             }
         }
         .onAppear { syncSelection() }
-        .onChange(of: store.selection) { _, _ in syncSelection() }
-        .onChange(of: sizeClass) { _, _ in syncSelection() }
+        .onChange(of: store.selection) { _, _ in scheduleSelectionSync() }
+        .onChange(of: sizeClass) { _, _ in scheduleSelectionSync() }
         .onChange(of: tab) { _, selected in
             if case let .page(page) = selected { store.select(page) }
         }
@@ -82,12 +83,23 @@ struct ShellRootView: View {
 
     // 窄窗口非主标签页由「更多」的 NavigationStack 承载；旋转回宽窗口时恢复同一页面。
     private func syncSelection() {
-        if sizeClass == .compact && !PageID.primary.contains(store.selection) {
-            morePath = [store.selection]
-            tab = .more
-        } else {
+        let size: ShellWindowSize = sizeClass == .compact ? .compact : .regular
+        switch ShellStore.navigationTarget(for: store.selection, size: size) {
+        case .page(let page):
             morePath = []
-            tab = .page(store.selection)
+            tab = .page(page)
+        case .more(let path):
+            morePath = path
+            tab = .more
+        }
+    }
+
+    private func scheduleSelectionSync() {
+        // UIKit 处理标签点击的同一轮里不能再改变标签结构或选中值；推迟到下一轮，
+        // 让 TabView 先完成自身的 selection 更新，避免 iPadOS 26 的控制器断言。
+        Task { @MainActor in
+            await Task.yield()
+            syncSelection()
         }
     }
 
