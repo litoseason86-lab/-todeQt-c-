@@ -4,6 +4,7 @@ import Observation
 @MainActor @Observable public final class SettingsStore {
     public private(set) var snapshot = SettingsSnapshot()
     public private(set) var errorMessage = ""
+    public private(set) var selectedSection: SettingsSection = .general
     @ObservationIgnored private let bridge: any SettingsBridgeProtocol
 
     public init(bridge: any SettingsBridgeProtocol) {
@@ -31,6 +32,11 @@ import Observation
         refresh()
     }
     public func refresh() { snapshot = bridge.snapshot() }
+    public var selectedSectionTitle: String { selectedSection.rawValue }
+    public func selectSection(_ section: SettingsSection) {
+        guard SettingsAvailability.sections.contains(section) else { return }
+        selectedSection = section
+    }
     private func writeSucceeded() { refresh(); errorMessage = "" }
     private func writeFailed(_ message: String) { refresh(); errorMessage = message }
     private func write(_ operation: () throws -> Void) {

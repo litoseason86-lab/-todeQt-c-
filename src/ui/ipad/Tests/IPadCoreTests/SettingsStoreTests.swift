@@ -48,6 +48,16 @@ import XCTest
         XCTAssertEqual(SettingsAvailability.themes.map(\.id), ["warm", "pink", "jiangnan", "sword", "starry", "rainy", "moon"])
     }
 
+    // 产品保证：宽窗口设置左侧选中分组后，右侧详情使用同一分组并显示对应标题。
+    func testSelectingSettingsSectionUpdatesDetailTitle() {
+        let store = SettingsStore(bridge: SettingsBridgeFake())
+        XCTAssertEqual(store.selectedSection, .general)
+        XCTAssertEqual(store.selectedSectionTitle, "通用")
+        store.selectSection(.appearance)
+        XCTAssertEqual(store.selectedSection, .appearance)
+        XCTAssertEqual(store.selectedSectionTitle, "外观")
+    }
+
     // 产品保证：壁纸写入口拒绝保存时，显示仍为旧偏好并提供错误，不假装开启成功。
     func testWallpaperFailureKeepsPreviousSnapshot() {
         let bridge = ShellBridgeFake(); bridge.snapshot.useWallpaper = false

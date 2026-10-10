@@ -4,20 +4,33 @@ import SwiftUI
 @MainActor struct SettingsPage: View {
     @Environment(ShellStore.self) private var shell
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var selection: SettingsSection? = .general
     @Environment(SettingsStore.self) private var store
 
     var body: some View {
-        layout(store).navigationTitle("设置")
+        layout(store)
     }
     @ViewBuilder private func layout(_ store: SettingsStore) -> some View {
         if sizeClass == .compact {
-            List { ForEach(SettingsAvailability.sections) { section in NavigationLink(section.rawValue, value: section) } }
+            List {
+                ForEach(SettingsAvailability.sections) { section in
+                    NavigationLink(section.rawValue, value: section)
+                }
+            }
+            .navigationTitle("设置")
                 .navigationDestination(for: SettingsSection.self) { detail($0, store: store) }
         } else {
-            NavigationSplitView {
-                List(SettingsAvailability.sections, selection: $selection) { Text($0.rawValue).tag(Optional($0)) }.navigationTitle("设置")
-            } detail: { detail(selection ?? .general, store: store) }
+            HStack(spacing: 0) {
+                List(SettingsAvailability.sections,
+                     selection: Binding(get: { Optional(store.selectedSection) },
+                                        set: { if let section = $0 { store.selectSection(section) } })) { section in
+                    Text(section.rawValue).tag(Optional(section))
+                }
+                .frame(minWidth: 220, idealWidth: 260, maxWidth: 300)
+                Divider()
+                detail(store.selectedSection, store: store)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            .navigationTitle(store.selectedSectionTitle)
         }
     }
     @ViewBuilder private func detail(_ section: SettingsSection, store: SettingsStore) -> some View {
