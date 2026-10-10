@@ -414,6 +414,27 @@ import XCTest
         XCTAssertEqual(r.store.selectedTaskID, 1)
         XCTAssertFalse(r.shellBridge.calls.contains("select:today"))
     }
+    // 产品保证：仪表盘专注卡点「结束」而控制器要求超长确认时，切到专注页弹出结束确认，不直接结束；
+    // 能直接结束时留在原页，不跳去今日任务页（对照 Mac MainWindow.endFocusFromDashboard）。
+    func testDashboardEndSwitchesToFocusPageOnlyWhenConfirmationNeeded() {
+        let confirm = rig([task(1)])
+        setTimer(confirm, mode: 0, active: true, taskID: 1, title: "任务1", elapsed: 34200)
+        confirm.focus.focusEndResult = FocusEndResult(result: "needsConfirmation")
+        XCTAssertFalse(confirm.shellBridge.calls.contains("select:focus"))
+        XCTAssertEqual(confirm.store.endFromDashboard(), .confirming)
+        XCTAssertEqual(confirm.shellBridge.calls.last, "select:focus")
+        XCTAssertEqual(confirm.store.longFree?.action, "end")
+        XCTAssertEqual(count(confirm, "finishLongFree"), 0)
+        XCTAssertEqual(confirm.store.selectedTaskID, 1)
+
+        let ended = rig([task(1)])
+        setTimer(ended, mode: 0, active: true, taskID: 1, title: "任务1", elapsed: 700)
+        ended.focus.focusEndResult = FocusEndResult(result: "ended", kind: "free")
+        XCTAssertEqual(ended.store.endFromDashboard(), .ended)
+        XCTAssertFalse(ended.shellBridge.calls.contains("select:focus"))
+        XCTAssertFalse(ended.shellBridge.calls.contains("select:today"))
+        XCTAssertNil(ended.store.longFree)
+    }
 
     // MARK: 候选、选择器与新建
 
