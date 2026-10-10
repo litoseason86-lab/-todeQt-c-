@@ -2,6 +2,28 @@ import Foundation
 import Observation
 
 @MainActor @Observable public final class MemoStore {
+    public private(set) var detailPresented = false
+    public private(set) var categorySheetPresented = false
+    public var newCategoryName = ""
+    public func categoryCount(_ id: Int) -> Int { id == -1 ? items.count : items.filter { $0.categoryID == id }.count }
+    @discardableResult public func presentMemo(_ id: Int) -> Bool {
+        guard selectMemo(id) else { return false }; detailPresented = true; return true
+    }
+    @discardableResult public func dismissMemo() -> Bool {
+        // 返回纸面外之前仍走原编辑会话的同步保存，失败不能把未保存输入藏回列表。
+        guard leaveDetail() else { return false }; detailPresented = false; return true
+    }
+    @discardableResult public func createAndPresentMemo(categoryID: Int? = nil) -> Bool {
+        guard createNew(categoryID: categoryID) else { return false }; detailPresented = true; return true
+    }
+    @discardableResult public func requestCategorySheet() -> Bool {
+        guard flush() else { return false }; categorySheetPresented = true; return true
+    }
+    public func dismissCategorySheet() { categorySheetPresented = false }
+    @discardableResult public func createAndPresentCategory() -> Bool {
+        guard createCategory(name: newCategoryName, color: newCategoryColor) else { return false }
+        newCategoryName = ""; categorySheetPresented = false; detailPresented = true; return true
+    }
     public private(set) var items: [MemoValue] = []
     public private(set) var categories: [CategoryValue] = []
     public private(set) var selectedID: Int?
