@@ -26,6 +26,8 @@ private slots:
     void backupBridgeDistinguishesMissingAndUnreadableFolder();
     void exportAndRoutineBridgeForwardServiceOperations();
     void routineBridgePreservesFieldTypesAndReadFailures();
+    void syncBridgeSurvivesServiceDestruction();
+    void backupBridgeDetectsPreferenceWriteFailure();
 private:
     QTemporaryDir m_preferences;
     QTemporaryDir m_database;
@@ -140,6 +142,36 @@ void PTDataBridgeTests::routineBridgePreservesFieldTypesAndReadFailures() {
         QVERIFY(error != nil);
         DatabaseManager::instance()->close(); error = nil;
         QVERIFY([bridge readRoutines:&error] == nil); QVERIFY(error != nil);
+    }
+}
+// 产品保证：同步控制器销毁后桥接拒绝读取，不访问悬空的登记指针。
+void PTDataBridgeTests::syncBridgeSurvivesServiceDestruction() {
+    @autoreleasepool {
+        PTSyncBridge *bridge;
+        {
+            SyncController controller(SyncController::Platform{});
+            PTBridgeSupport::registerService(QStringLiteral("syncController"), &controller);
+            bridge = [PTSyncBridge new];
+            QVERIFY([bridge syncLog:10].valid);
+            QVERIFY([bridge syncLog:10].error.length == 0);
+        }
+        QVERIFY(![bridge syncLog:10].valid);
+        NSError *error = nil; [bridge readLogCount:&error]; QVERIFY(error != nil);
+        [bridge syncNow];
+    }
+}
+// 产品保证：自动备份开关只有落盘成功才算保存，内存读回不能吞掉偏好写失败。
+void PTDataBridgeTests::backupBridgeDetectsPreferenceWriteFailure() {
+    @autoreleasepool {
+        QFile blocker(m_preferences.filePath(QStringLiteral("blocker")));
+        QVERIFY(blocker.open(QIODevice::WriteOnly)); blocker.close();
+        auto *service = BackupService::instance();
+        service->configure(blocker.fileName() + QStringLiteral("/settings.ini"), QString());
+        PTBackupBridge *bridge = [PTBackupBridge new];
+        const bool previous = bridge.autoBackupEnabled;
+        NSError *error = nil; [bridge setAutoBackupEnabled:!previous error:&error];
+        QVERIFY(error != nil);
+        QVERIFY([error.localizedDescription containsString:@"保存失败"]);
     }
 }
 QTEST_GUILESS_MAIN(PTDataBridgeTests)

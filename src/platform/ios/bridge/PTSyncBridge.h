@@ -35,7 +35,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)chooseFolder;
 - (void)rebuildFolder;
 - (PTSyncLogReadResult *)syncLog:(NSInteger)limit;
-- (NSInteger)readLogCount:(NSError **)error;
+- (NSInteger)readLogCount:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (void)copyLostValue:(NSString *)text;
 - (NSString *)restoreWarning;
 @end

@@ -11,6 +11,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL busy;
 @property(nonatomic, readonly) BOOL operationBlocksUi;
 @property(nonatomic, readonly, copy) NSString *operationText;
+@property(nonatomic, readonly, copy) NSString *lastError;
 - (void)setAutoBackupEnabled:(BOOL)value error:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (void)requestBackup:(NSString *)path;
 - (void)requestBackupInfo:(NSString *)path;

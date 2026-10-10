@@ -17,4 +17,4 @@ public struct SyncLogEntry: Equatable, Sendable, Identifiable {
         self.summary = summary; self.detail = detail; self.fieldLabel = fieldLabel; self.lostValue = lostValue; self.keptValue = keptValue
     }
 }
-@MainActor public protocol SyncBridgeProtocol: AnyObject { var onChanged: (() -> Void)? { get set }; var onNotice: ((String) -> Void)? { get set }; var onCopyRequested: ((String) -> Void)? { get set }; func snapshot() -> SyncSnapshot; func setEnabled(_ value: Bool); func confirmJoin(); func syncNow(); func chooseFolder(); func rebuildFolder(); func syncLog(limit: Int) throws -> [SyncLogEntry]; func copyLostValue(_ text: String); func restoreWarning() -> String }
+@MainActor public protocol SyncBridgeProtocol: AnyObject { var onChanged: (() -> Void)? { get set }; var onNotice: ((String) -> Void)? { get set }; var onCopyRequested: ((String) -> Void)? { get set }; func snapshot() throws -> SyncSnapshot; func setEnabled(_ value: Bool); func confirmJoin(); func syncNow(); func chooseFolder(); func rebuildFolder(); func syncLog(limit: Int) throws -> [SyncLogEntry]; func copyLostValue(_ text: String); func restoreWarning() -> String }

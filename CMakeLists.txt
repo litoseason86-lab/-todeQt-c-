@@ -539,6 +539,10 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/Stores/SettingsStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/SettingsAvailability.swift
         src/ui/ipad/Sources/IPadCore/Stores/SettingsManagementStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/FileTransferWorkspace.swift
+        src/ui/ipad/Sources/IPadCore/Stores/SettingsBackupStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/SettingsExportStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/SettingsSyncStore.swift
         src/ui/ipad/Sources/IPadCore/Format/RoutineWeekdaysFormat.swift
     )
     target_sources(IPadUI PRIVATE
@@ -550,6 +554,7 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Pages/TrashPage.swift
         src/ui/ipad/Sources/IPadUI/Pages/Settings/SettingsPage.swift
         src/ui/ipad/Sources/IPadUI/Pages/Settings/SettingsManagementViews.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Settings/SettingsTransferViews.swift
     )
     # 055-P4-1：专注与缺口提醒的协议及适配器。
     target_sources(IPadCore PRIVATE
