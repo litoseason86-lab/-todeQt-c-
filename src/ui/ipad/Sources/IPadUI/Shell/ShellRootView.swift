@@ -238,10 +238,11 @@ private struct TimerAccessoryModifier<Accessory: View>: ViewModifier {
     @ViewBuilder func body(content: Content) -> some View {
         if #available(iOS 26.1, *) {
             content.tabViewBottomAccessory(isEnabled: store.miniTimerVisible) { accessory }
+        } else if store.miniTimerVisible {
+            // iOS 26.0 没有 isEnabled 重载；无计时时不应用附件位修饰器，避免系统创建空容器。
+            content.tabViewBottomAccessory { accessory }
         } else {
-            // iOS 26.0 没有 isEnabled 重载，只能让附件内容为空；部署到 26.1 后由上面的 API
-            // 完全关闭容器，避免空白玻璃继续占位。
-            content.tabViewBottomAccessory { if store.miniTimerVisible { accessory } }
+            content
         }
     }
 }
