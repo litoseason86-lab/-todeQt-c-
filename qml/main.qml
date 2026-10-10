@@ -319,10 +319,6 @@ ApplicationWindow {
         // qmllint disable unqualified
         focusTimerRef: focusTimer
         settingsRef: typeof appSettings === "undefined" ? null : appSettings
-        notificationServiceRef: typeof notificationService === "undefined"
-                                ? null : notificationService
-        phaseSoundServiceRef: typeof phaseSoundService === "undefined"
-                              ? null : phaseSoundService
         // qmllint enable unqualified
     }
 
@@ -333,7 +329,7 @@ ApplicationWindow {
         ignoreUnknownSignals: true
 
         // 移动端没有提示音后端，系统通知又发不出去时，只能在前台给出可见提示。
-        // 桌面照旧由 PhaseCompletionCoordinator 播放提示音降级，不重复弹提示条。
+        // 桌面由 C++ PhaseCompletionNotifier 播放提示音兜底，不重复弹提示条。
         function onNotificationDeliveryFailed(reason) {
             if (Qt.platform.os === "ios") {
                 mainContent.showToast(qsTr("系统通知没有发出（%1）").arg(reason))

@@ -29,6 +29,7 @@
 #include "services/FocusSessionController.h"
 #include "services/PendingDeletion.h"
 #include "services/PhaseSoundService.h"
+#include "services/PhaseCompletionNotifier.h"
 #include "services/RoutineManager.h"
 #include "services/ScheduleService.h"
 #include "services/ShortcutRegistry.h"
@@ -320,6 +321,11 @@ int main(int argc, char *argv[])
     });
 #endif
     NotificationService::instance()->requestAuthorization();
+    // 阶段自然完成时的即时通知与提示音兜底（055 从 QML PhaseCompletionCoordinator 下沉）：
+    // 在任何界面加载之前接好，QML 界面与 iPad 原生界面共用；Mac 的「到点置前窗口」仍在 QML。
+    PhaseCompletionNotifier phaseCompletion(FocusTimer::instance(), AppSettings::instance(),
+                                            NotificationService::instance(),
+                                            [] { return PhaseSoundService::instance()->playPhaseCompleteChime(); });
 #if defined(Q_OS_IOS)
     // 恢复已经完成：先撤销上个进程遗留的预约，再按当前计时状态重新预约。
     phaseAlarms.start();

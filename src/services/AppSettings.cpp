@@ -844,6 +844,18 @@ int AppSettings::longBreakInterval() const
     return normalizeLongBreakInterval(m_settings->value(kLongBreakIntervalKey, kDefaultLongBreakInterval).toInt());
 }
 
+bool AppSettings::longBreakDueAfter(int completedPomodoros) const
+{
+    const int interval = longBreakInterval();
+    // 间隔已归一到 2–8，这里仍防一手 0，免得取模除零。
+    return longBreakEnabled() && interval > 0 && completedPomodoros > 0 && completedPomodoros % interval == 0;
+}
+
+bool AppSettings::breakTargetIsLong(int targetSeconds) const
+{
+    return longBreakEnabled() && targetSeconds == longBreakMinutes() * 60;
+}
+
 void AppSettings::setLongBreakInterval(int count)
 {
     const int normalized = normalizeLongBreakInterval(count);
