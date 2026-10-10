@@ -141,6 +141,8 @@ set(APP_SOURCES
     src/services/ScheduleService.cpp
     # 055-P2B：周次纯函数与使用它的服务同目标链接。
     src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
+    # 055-P4-4：统计页翻周期的纯函数（iPad 原生页经逻辑日桥接调用）。
+    src/services/StatisticsPeriod.h src/services/StatisticsPeriod.cpp
     src/services/TrayController.h
     src/services/TrayController.cpp
     src/services/NotificationService.h
@@ -1900,7 +1902,8 @@ set_tests_properties(IPadSwiftTests PROPERTIES TIMEOUT 120)
 
 # 055-P2B：纯规则读表测试与真实服务包装的 QML 接线宿主。
 add_executable(CaliberTests tests/CaliberTests.cpp src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
-    src/services/HeatmapBands.h src/services/HeatmapBands.cpp)
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
+    src/services/StatisticsPeriod.h src/services/StatisticsPeriod.cpp)
 target_link_libraries(CaliberTests PRIVATE Qt6::Core Qt6::Test)
 target_compile_definitions(CaliberTests PRIVATE CALIBERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calibers")
 pomodoro_todo_enable_warnings(CaliberTests)
@@ -2012,6 +2015,7 @@ target_sources(PTCoreBridgeTests PRIVATE
     src/platform/ios/bridge/PTCategoryBridge.h src/platform/ios/bridge/PTCategoryBridge.mm
     src/platform/ios/bridge/PTLogicalDayBridge.h src/platform/ios/bridge/PTLogicalDayBridge.mm
     src/platform/ios/bridge/PTSettingsBridge.h src/platform/ios/bridge/PTSettingsBridge.mm
+    src/services/StatisticsPeriod.h src/services/StatisticsPeriod.cpp
 )
 set_source_files_properties(
     src/platform/ios/bridge/PTCategoryBridge.mm

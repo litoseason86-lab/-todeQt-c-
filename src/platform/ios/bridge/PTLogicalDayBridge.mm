@@ -3,19 +3,17 @@
 #include "../../../services/LogicalDay.h"
 #include "../../../services/LogicalDayService.h"
 #include "../../../services/AppSettings.h"
+#include "../../../services/StatisticsPeriod.h"
 #include <memory>
 using namespace PTBridgeSupport;
 @interface PTPeriodDates ()
-- (instancetype)initWithStart:(QDate)start end:(QDate)end todayStart:(QDate)todayStart range:(NSString *)range;
+- (instancetype)initWithPeriod:(const StatisticsPeriod::Period &)period;
 @end
 @implementation PTPeriodDates
-- (instancetype)initWithStart:(QDate)start end:(QDate)end todayStart:(QDate)todayStart range:(NSString *)range {
+- (instancetype)initWithPeriod:(const StatisticsPeriod::Period &)period {
     if ((self = [super init])) {
-        _start = date(start); _end = date(end); _year = start.year(); _month = start.month();
-        _comparisonDistance = [range isEqualToString:@"month"]
-            ? (todayStart.year() - start.year()) * 12 + todayStart.month() - start.month() + 1
-            : start.daysTo(todayStart) / ([range isEqualToString:@"week"] ? 7 : 1) + 1;
-        _current = start == todayStart; _canAdvance = start < todayStart;
+        _start = date(period.start); _end = date(period.end); _year = period.start.year(); _month = period.start.month();
+        _comparisonDistance = period.comparisonDistance; _current = period.current; _canAdvance = period.canAdvance;
     }
     return self;
 }
@@ -39,24 +37,17 @@ using namespace PTBridgeSupport;
     if (!left.isValid() || !right.isValid()) { fail(error, QStringLiteral("日期无效")); return 0; }
     return left < right ? -1 : left > right ? 1 : 0;
 }
+// 周期范围与三个标志由 StatisticsPeriod 计算，这里只转换类型；调用方传同一份逻辑今日，不另读时钟。
 - (PTPeriodDates *)periodForAnchor:(NSString *)anchor range:(NSString *)range shift:(NSInteger)shift logicalToday:(NSString *)logicalToday error:(NSError **)error {
     NSAssert(NSThread.isMainThread, @"日期读取必须在主线程");
-    QDate start = date(anchor), todayStart = date(logicalToday);
+    const QDate anchorDate = date(anchor), today = date(logicalToday);
     int step;
-    if (!start.isValid() || !todayStart.isValid() || !integer(shift, &step)) { fail(error, QStringLiteral("日期或翻页参数无效")); return nil; }
-    QDate end;
-    if ([range isEqualToString:@"day"]) {
-        start = start.addDays(step); end = start;
-    } else if ([range isEqualToString:@"week"]) {
-        // QDate 周一为 1；先归到周一再偏移，跨月跨年与闰日都沿同一日历。
-        start = start.addDays(1 - start.dayOfWeek()).addDays(qint64(step) * 7);
-        todayStart = todayStart.addDays(1 - todayStart.dayOfWeek()); end = start.addDays(6);
-    } else if ([range isEqualToString:@"month"]) {
-        start = QDate(start.year(), start.month(), 1).addMonths(step);
-        todayStart = QDate(todayStart.year(), todayStart.month(), 1); end = start.addMonths(1).addDays(-1);
-    } else { fail(error, QStringLiteral("统计范围无效")); return nil; }
-    if (!start.isValid() || !end.isValid()) { fail(error, QStringLiteral("日期范围无效")); return nil; }
-    return [[PTPeriodDates alloc] initWithStart:start end:end todayStart:todayStart range:range];
+    if (!anchorDate.isValid() || !today.isValid() || !integer(shift, &step)) { fail(error, QStringLiteral("日期或翻页参数无效")); return nil; }
+    StatisticsPeriod::Range kind = StatisticsPeriod::Range::Day;
+    if (!StatisticsPeriod::parseRange(string(range), &kind)) { fail(error, QStringLiteral("统计范围无效")); return nil; }
+    const StatisticsPeriod::Period period = StatisticsPeriod::forAnchor(anchorDate, kind, step, today);
+    if (!period.isValid()) { fail(error, QStringLiteral("日期范围无效")); return nil; }
+    return [[PTPeriodDates alloc] initWithPeriod:period];
 }
 - (NSString *)today { NSAssert(NSThread.isMainThread, @"逻辑日读取必须在主线程"); return date(LogicalDay::today(AppSettings::instance()->dayStartHour())); }
 - (NSInteger)dayStartHour { NSAssert(NSThread.isMainThread, @"日界读取必须在主线程"); return AppSettings::instance()->dayStartHour(); }

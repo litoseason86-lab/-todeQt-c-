@@ -1,6 +1,6 @@
 #import <Foundation/Foundation.h>
 NS_ASSUME_NONNULL_BEGIN
-// 日期关系与周期范围由 QDate 给出；调用方传同一份逻辑今日，不在这些查询中另读时钟。
+// 日期关系由 QDate 比较给出，周期范围由服务 StatisticsPeriod 计算；调用方传同一份逻辑今日，不在这些查询中另读时钟。
 @interface PTPeriodDates : NSObject
 @property(nonatomic, readonly, copy) NSString *start;
 @property(nonatomic, readonly, copy) NSString *end;
