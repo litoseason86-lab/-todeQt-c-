@@ -23,7 +23,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let logicalDay = LogicalDayBridgeAdapter()
         let statisticsBridge = StatisticsBridgeAdapter()
         let focusHistory = FocusHistoryBridgeAdapter()
-        let settings = SettingsBridgeAdapter()
+        let settingsBridge = SettingsBridgeAdapter()
         let categories = CategoryBridgeAdapter()
         let scheduleBridge = ScheduleBridgeAdapter()
         let interactions = InteractionBridgeAdapter()
@@ -34,7 +34,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                              }, weekStartProvider: { try statisticsBridge.currentWeeklyReview().weekStart })
         let timeline = TimelineStore(history: focusHistory, statistics: statisticsBridge, pendingDeletion: pending,
                                      logicalDay: logicalDay, date: logicalDay.today)
-        let schedule = ScheduleStore(bridge: scheduleBridge, settingsBridge: settings, logicalDay: logicalDay)
+        let schedule = ScheduleStore(bridge: scheduleBridge, settingsBridge: settingsBridge, logicalDay: logicalDay)
         let trash = TrashBridgeAdapter()
         let sync = SyncBridgeAdapter()
         let backup = BackupBridgeAdapter()
@@ -42,7 +42,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let routines = RoutineBridgeAdapter()
         let core = CoreBridges(tasks: tasks, interactions: interactions,
                                categories: categories, logicalDay: logicalDay,
-                               settings: settings, statistics: statisticsBridge,
+                               settings: settingsBridge, statistics: statisticsBridge,
                                focusHistory: focusHistory, pendingDeletion: pending,
                                taskActions: actions, weekStore: week, timelineStore: timeline, scheduleStore: schedule,
                                trash: trash, sync: sync, backup: backup, export: export, routines: routines)
