@@ -46,9 +46,7 @@ struct ShellRootView: View {
         .tabViewStyle(.sidebarAdaptable)
         .defaultAdaptableTabBarPlacement(.sidebar)
         .tabViewSidebarHeader { summaryTiles }
-        .tabViewBottomAccessory {
-            if store.snapshot.hasTimer { miniTimer }
-        }
+        .tabViewBottomAccessory(isEnabled: store.miniTimerVisible) { miniTimer }
         .tint(ThemeColors.accentInk)
         .preferredColorScheme(store.snapshot.useWallpaper
             ? (["starry", "rainy", "moon"].contains(store.snapshot.backgroundTheme) ? .dark : .light) : nil)

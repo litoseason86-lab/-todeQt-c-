@@ -120,6 +120,7 @@ public final class ShellStore {
     }
 
     public var orderedPages: [PageID] { PageID.ordered(snapshot.sidebarOrder) }
+    public var miniTimerVisible: Bool { snapshot.hasTimer }
 
     public static func navigationTarget(for page: PageID, size: ShellWindowSize) -> ShellNavigationTarget {
         switch size {
