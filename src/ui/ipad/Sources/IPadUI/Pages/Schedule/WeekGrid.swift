@@ -26,7 +26,7 @@ import SwiftUI
                             }
                         }.frame(width: width, height: 48)
                             .foregroundStyle(today ? ThemeColors.accentInk : ThemeColors.ink)
-                            .background(today ? ThemeColors.accentFill : ThemeColors.surface)
+                            .background(today ? ThemeColors.accentSoft : ThemeColors.surface)
                             .accessibilityLabel("周" + ScheduleView.weekdayName(day) + (today ? "，今天" : ""))
                     }
                 }
@@ -71,7 +71,7 @@ import SwiftUI
     private func dayColumn(_ day: Int, width: Double) -> some View {
         let placements = store.layout(weekday: day, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight)
         return ZStack(alignment: .topLeading) {
-            Rectangle().fill(ThemeColors.surface).overlay(alignment: .leading) { Rectangle().fill(ThemeColors.borderSubtle).frame(width: 1) }
+            Rectangle().fill(store.weekIndex == store.currentWeekIndex && store.todayWeekday == day ? ThemeColors.accentSoft : ThemeColors.surface).overlay(alignment: .leading) { Rectangle().fill(ThemeColors.borderSubtle).frame(width: 1) }
                 .contentShape(Rectangle())
                 .onTapGesture { location in
                     add(day, store.minutesAtOffset(location.y, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight))
@@ -87,7 +87,8 @@ import SwiftUI
                         Text(ScheduleFormat.formatMinutes(Double(item.entry.startMinutes)) + "–" + ScheduleFormat.formatMinutes(Double(item.entry.endMinutes)))
                             .font(.caption2).monospacedDigit().lineLimit(1)
                     }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(6)
-                        .foregroundStyle(ThemeColors.ink).background(ThemeColors.accentFill)
+                        .foregroundStyle(ThemeColors.ink).background(TaskCategoryColor.value(item.entry.categoryColor).opacity(0.16))
+                        .overlay(alignment: .leading) { Rectangle().fill(TaskCategoryColor.value(item.entry.categoryColor)).frame(width: 3) }
                         .clipShape(RoundedRectangle(cornerRadius: 8))
                 }.buttonStyle(.plain)
                     .frame(width: max(1, laneWidth - 4), height: item.height)
@@ -97,6 +98,17 @@ import SwiftUI
                         Button("编辑", systemImage: "pencil") { edit(item.entry) }
                         Button("删除", systemImage: "trash", role: .destructive) { delete(item.entry) }
                     }
+            }
+            if store.weekIndex == store.currentWeekIndex && store.todayWeekday == day {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    // 本地时钟仅画当前时间线，不决定课程或逻辑今日；不另建业务定时器。
+                    let components = Calendar.current.dateComponents([.hour, .minute], from: context.date)
+                    let minute = (components.hour ?? 0) * 60 + (components.minute ?? 0)
+                    if let top = store.currentTimeTop(minutes: minute, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight) {
+                        Rectangle().fill(ThemeColors.danger).frame(height: 2).offset(y: top)
+                            .accessibilityLabel("当前时间，" + ScheduleFormat.formatMinutes(Double(minute)))
+                    }
+                }.allowsHitTesting(false)
             }
         }
     }

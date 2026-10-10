@@ -97,7 +97,7 @@ struct TaskRow: View {
 }
 
 // 科目点显示用户保存的科目色，属于数据；其余界面颜色用 ThemeColors，损坏的颜色也回落到语义色。
-private enum TaskCategoryColor {
+enum TaskCategoryColor {
     static func value(_ hex: String) -> Color {
         guard hex.count == 7, hex.hasPrefix("#"), let number = UInt32(hex.dropFirst(), radix: 16) else { return ThemeColors.inkSoft }
         return Color(.sRGB, red: Double((number >> 16) & 255) / 255,

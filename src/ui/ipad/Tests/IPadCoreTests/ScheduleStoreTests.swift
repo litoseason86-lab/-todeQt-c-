@@ -130,4 +130,24 @@ final class ScheduleStoreTests: XCTestCase {
         XCTAssertFalse(store.saveSettings(ScheduleSettings(), periods: [SchedulePeriod(startMinutes: 600, endMinutes: 650)]))
         XCTAssertTrue(store.error.contains("写盘失败")); XCTAssertTrue(store.error.contains("节次恢复失败"))
     }
+    // 产品保证：窄窗只列选中星期的可见课程，提示逐门写明节次外和被周末隐藏的课程。
+    @MainActor func testR2CompactRowsAndNamedHiddenCourses() {
+        let bridge = ScheduleBridgeFake()
+        var weekend = ScheduleEntry(); weekend.id = 1; weekend.weekday = 7; weekend.title = "自习"
+        var outside = ScheduleEntry(); outside.id = 2; outside.weekday = 3; outside.title = "政治网课"; outside.startMinutes = 750; outside.endMinutes = 800
+        var placed = ScheduleEntry(); placed.id = 3; placed.weekday = 3; placed.title = "线性代数"
+        var other = placed; other.id = 4; other.weekday = 2; other.title = "英语"
+        bridge.entryValues = [weekend, outside, placed, other]
+        bridge.periodValues = [SchedulePeriod(index: 3, startMinutes: 480, endMinutes: 525)]
+        bridge.settingsValue.showWeekend = false; bridge.overlapResult = { start, _, _, _ in start == 480 }
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 3)
+        store.setDisplayMode(.period)
+        XCTAssertEqual(store.selectedDayEntries.map(\.id), [3])
+        XCTAssertEqual(store.undisplayedEntryTitles, ["自习（周末隐藏）", "政治网课（不在节次内）"])
+        XCTAssertEqual(store.periodLabel(for: placed), "第 3 节")
+        store.setDisplayMode(.time)
+        XCTAssertEqual(store.selectedDayEntries.map(\.id), [2, 3])
+        XCTAssertEqual(store.undisplayedEntryTitles, ["自习（周末隐藏）"])
+        store.selectWeekday(2); XCTAssertEqual(store.selectedDayEntries.map(\.id), [4])
+    }
 }
