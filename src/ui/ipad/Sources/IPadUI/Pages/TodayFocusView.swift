@@ -3,6 +3,7 @@ import SwiftUI
 
 @MainActor struct TodayFocusView: View {
     @Bindable var store: TimelineStore
+    let shell: ShellStore
     @State private var editing: SessionValue?
     @State private var adding = false
     @State private var datePickerPresented = false
@@ -60,6 +61,8 @@ import SwiftUI
         }
         .sheet(item: $editing) { SessionEditorSheet(store: store, session: $0) }
         .sheet(isPresented: $adding) { SessionEditorSheet(store: store, session: nil) }
+        .onAppear { store.selectRequestedDate(from: shell) }
+        .onChange(of: shell.requestedFocusDate) { store.selectRequestedDate(from: shell) }
     }
     private var errorRow: some View {
         HStack {

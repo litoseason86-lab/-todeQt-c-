@@ -33,6 +33,7 @@ public struct SessionChanges: Equatable, Sendable {
     func dayTotalDuration(date: String) throws -> Int
     func invalidSessionCount() throws -> Int
     func taskOptions(date: String) throws -> [SessionTaskOption]
+    func bandForMinutes(_ minutes: Double) -> Int
     func formatDuration(seconds: Int) -> String
     func cleanupInvalidSessions() throws -> Int
     func addManualSession(taskID: Int, startTime: String, durationMinutes: Int) throws -> Int

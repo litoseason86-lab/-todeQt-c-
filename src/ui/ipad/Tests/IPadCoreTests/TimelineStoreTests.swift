@@ -80,6 +80,25 @@ import XCTest
         f.store.selectDate("2026-10-08")
         XCTAssertTrue(f.store.canAddManualSession)
     }
+    // 产品保证：历史页的日期意图只消费一次；日后打开今日专注不覆盖手动选择，失败仍显示服务原因。
+    func testHistoryNavigationConsumesDateOnceAndPreservesFailure() {
+        let f = Fixture()
+        f.logicalDay.relations["2026-10-07/2026-10-09"] = .earlier
+        f.shell.openFocusHistory(date: "2026-10-07")
+        XCTAssertEqual(f.shell.requestedFocusDate, "2026-10-07")
+        f.store.selectRequestedDate(from: f.shell)
+        XCTAssertEqual(f.store.selectedDate, "2026-10-07")
+        XCTAssertNil(f.shell.requestedFocusDate)
+        f.store.selectDate("2026-10-09")
+        f.store.selectRequestedDate(from: f.shell)
+        XCTAssertEqual(f.store.selectedDate, "2026-10-09")
+        f.logicalDay.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "历史日期读取失败"])
+        f.shell.openFocusHistory(date: "2026-10-06")
+        f.store.selectRequestedDate(from: f.shell)
+        XCTAssertNil(f.shell.requestedFocusDate)
+        XCTAssertEqual(f.store.selectedDate, "2026-10-09")
+        XCTAssertEqual(f.store.error, "历史日期读取失败")
+    }
     // 产品保证：无效日期关系显示服务错误并保留当前日期，Swift 不回退到本机比较。
     func testRelationFailureKeepsDateAndBlocksAdd() {
         let f = Fixture(); f.logicalDay.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "日期无效"])

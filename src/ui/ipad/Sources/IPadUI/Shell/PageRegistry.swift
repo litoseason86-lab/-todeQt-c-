@@ -5,17 +5,17 @@ import SwiftUI
 @MainActor enum PageRegistry {
     @ViewBuilder static func view(for page: PageID, core: CoreBridges, shell: ShellStore) -> some View {
         switch page {
-        case .today: placeholder(.today)
-        case .focus: placeholder(.focus)
+        case .today: TodayView()
+        case .focus: FocusView()
         case .week: WeekView(store: core.weekStore, actions: core.taskActions, core: core, shell: shell)
-        case .dashboard: placeholder(.dashboard)
-        case .knowledgeGap: placeholder(.knowledgeGap)
-        case .todayFocus: TodayFocusView(store: core.timelineStore)
+        case .dashboard: DashboardView()
+        case .knowledgeGap: KnowledgeGapPage()
+        case .todayFocus: TodayFocusView(store: core.timelineStore, shell: shell)
         case .schedule: ScheduleView(store: core.scheduleStore, categories: core.categories)
-        case .monthGoal: placeholder(.monthGoal)
-        case .statistics: placeholder(.statistics)
-        case .countdown: placeholder(.countdown)
-        case .memo: placeholder(.memo)
+        case .monthGoal: HistoryView()
+        case .statistics: StatisticsView()
+        case .countdown: CountdownPage()
+        case .memo: MemoPage()
         case .trash: placeholder(.trash)
         case .settings: placeholder(.settings)
         }

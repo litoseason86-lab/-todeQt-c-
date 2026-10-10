@@ -19,6 +19,8 @@ import PTBridge
     var onPhaseSettledOffline: ((Int) -> Void)?
     var onTaskAutoCompleteFailed: ((Int) -> Void)?
     var onFailure: ((String) -> Void)?
+    var onAlarmUnavailable: ((String) -> Void)?
+    var onNotificationDeliveryFailed: ((String) -> Void)?
     private let bridge = PTFocusBridge()
     init() {
         // Objective-C++ 接收上下文保证主线程，适配器只作类型投影和事件转发。
@@ -38,6 +40,8 @@ import PTBridge
         bridge.onPhaseSettledOffline = { [weak self] value in MainActor.assumeIsolated { self?.onPhaseSettledOffline?(value) } }
         bridge.onTaskAutoCompleteFailed = { [weak self] value in MainActor.assumeIsolated { self?.onTaskAutoCompleteFailed?(value) } }
         bridge.onFailure = { [weak self] value in MainActor.assumeIsolated { self?.onFailure?(value) } }
+        bridge.onAlarmUnavailable = { [weak self] value in MainActor.assumeIsolated { self?.onAlarmUnavailable?(value) } }
+        bridge.onNotificationDeliveryFailed = { [weak self] value in MainActor.assumeIsolated { self?.onNotificationDeliveryFailed?(value) } }
     }
     private func requireValid(_ valid: Bool, _ error: String) throws {
         guard valid else { throw NSError(domain: "PTFocusBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: error]) }

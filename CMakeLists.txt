@@ -141,6 +141,8 @@ set(APP_SOURCES
     src/services/ScheduleService.cpp
     # 055-P2B：周次纯函数与使用它的服务同目标链接。
     src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
+    # 055-P4-4：统计页翻周期的纯函数（iPad 原生页经逻辑日桥接调用）。
+    src/services/StatisticsPeriod.h src/services/StatisticsPeriod.cpp
     src/services/TrayController.h
     src/services/TrayController.cpp
     src/services/NotificationService.h
@@ -548,12 +550,93 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/Stores/TaskEditorStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/TaskCategoryStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/TaskCompletionNoteStore.swift
-        src/ui/ipad/Sources/IPadCore/Format/Duration.swift)
+        src/ui/ipad/Sources/IPadCore/Format/Duration.swift
+        src/ui/ipad/Sources/IPadCore/Format/DashboardFormat.swift)
     target_sources(IPadUI PRIVATE
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskRow.swift
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskCategoryPicker.swift
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskDetailSheet.swift
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskCompletionNoteSheet.swift)
+    # 055-P4-1 步骤 4–5：专注计时与仪表盘。
+    target_sources(IPadCore PRIVATE src/ui/ipad/Sources/IPadCore/Stores/FocusStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/DashboardStore.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Focus/FocusView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Focus/FocusClockText.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Focus/FocusRingView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Focus/FocusSheets.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Focus/FocusImmersiveView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Dashboard/DashboardView.swift)
+    # 055-P4-1 步骤 3：今日任务（Store 与页面）。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/TodayStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/TodayToolsStore.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Today/TodayView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Today/TodayBanners.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Today/TodaySheets.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Today/TodayToolsSheet.swift)
+    # 055-P4-3：内容桥接与协议、适配器。
+    target_sources(PomodoroTodo PRIVATE
+        src/platform/ios/bridge/PTKnowledgeGapBridge.h src/platform/ios/bridge/PTKnowledgeGapBridge.mm
+        src/platform/ios/bridge/PTMemoBridge.h src/platform/ios/bridge/PTMemoBridge.mm
+        src/platform/ios/bridge/PTCountdownBridge.h src/platform/ios/bridge/PTCountdownBridge.mm
+    )
+    set_source_files_properties(
+        src/platform/ios/bridge/PTKnowledgeGapBridge.mm
+        src/platform/ios/bridge/PTMemoBridge.mm
+        src/platform/ios/bridge/PTCountdownBridge.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    # 055-P4-3：Swift 内容协议与适配器分层登记。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/KnowledgeGapBridging.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/MemoBridging.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/CountdownBridging.swift
+    )
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/KnowledgeGapAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/MemoAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/CountdownAdapter.swift
+    )
+    # 055-P4-3：知识缺口列表、详情与展示 Store。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/GapStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/GapFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/KnowledgeGap/KnowledgeGapPage.swift)
+    # 055-P4-3：备忘录编辑会话和组合保护标题，正文复用 P3A 编辑器。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/MemoStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/MemoFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Memo/MemoPage.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Memo/MemoTitleEditor.swift)
+    # 055-P4-3：主目标、系统列表和倒计时表单。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/CountdownStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/CountdownFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Countdown/CountdownPage.swift)
+    # 055-P4-3：两种表单共用 ISO 日期投影，不共享领域 Store 或业务判断。
+    target_sources(IPadCore PRIVATE src/ui/ipad/Sources/IPadCore/Format/ContentDateFormat.swift)
+
+    # 055-P4-4：原生专注历史数据层、格式与月历，不改 Mac 的 QML 路径。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/HistoryStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/MonthGoalFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/History/HistoryView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/History/MonthGrid.swift)
+
+    # 055-P4-4：原生数据统计、系统图表与周复盘。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/StatsStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/StatisticsFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Statistics/StatisticsView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Statistics/StatisticsCharts.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Statistics/WeeklyReviewCard.swift)
+
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
@@ -1428,7 +1511,10 @@ add_executable(PTFocusBridgeTests ${PT_CORE_TEST_SOURCES}
     src/platform/ios/bridge/PTFocusBridge.h src/platform/ios/bridge/PTFocusBridge.mm
     src/platform/ios/bridge/PTGapReminderBridge.h src/platform/ios/bridge/PTGapReminderBridge.mm
     src/services/PendingDeletion.h src/services/PendingDeletion.cpp
-    src/services/FocusSessionController.h src/services/FocusSessionController.cpp)
+    src/services/FocusSessionController.h src/services/FocusSessionController.cpp
+    # 055-P4-1 步骤 4：提醒信号转发需要真实的通知服务与预约协调器。
+    src/services/NotificationService.h src/services/NotificationService.cpp
+    src/services/PhaseAlarmCoordinator.h src/services/PhaseAlarmCoordinator.cpp)
 set_source_files_properties(tests/PTFocusBridgeTests.mm
     src/platform/ios/bridge/PTFocusBridge.mm src/platform/ios/bridge/PTGapReminderBridge.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
@@ -1837,7 +1923,8 @@ set_tests_properties(IPadSwiftTests PROPERTIES TIMEOUT 120)
 
 # 055-P2B：纯规则读表测试与真实服务包装的 QML 接线宿主。
 add_executable(CaliberTests tests/CaliberTests.cpp src/services/ScheduleWeeks.h src/services/ScheduleWeeks.cpp
-    src/services/HeatmapBands.h src/services/HeatmapBands.cpp)
+    src/services/HeatmapBands.h src/services/HeatmapBands.cpp
+    src/services/StatisticsPeriod.h src/services/StatisticsPeriod.cpp)
 target_link_libraries(CaliberTests PRIVATE Qt6::Core Qt6::Test)
 target_compile_definitions(CaliberTests PRIVATE CALIBERS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/calibers")
 pomodoro_todo_enable_warnings(CaliberTests)
@@ -1949,6 +2036,7 @@ target_sources(PTCoreBridgeTests PRIVATE
     src/platform/ios/bridge/PTCategoryBridge.h src/platform/ios/bridge/PTCategoryBridge.mm
     src/platform/ios/bridge/PTLogicalDayBridge.h src/platform/ios/bridge/PTLogicalDayBridge.mm
     src/platform/ios/bridge/PTSettingsBridge.h src/platform/ios/bridge/PTSettingsBridge.mm
+    src/services/StatisticsPeriod.h src/services/StatisticsPeriod.cpp
 )
 set_source_files_properties(
     src/platform/ios/bridge/PTCategoryBridge.mm
@@ -1981,4 +2069,25 @@ target_link_libraries(PTScheduleBridgeTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test
 pomodoro_todo_enable_warnings(PTScheduleBridgeTests)
 add_test(NAME PTScheduleBridgeTests COMMAND PTScheduleBridgeTests)
 set_tests_properties(PTScheduleBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
+# 055-P4-3：三个内容桥接在 Mac 上共用一个测试目标。
+get_target_property(PT_CONTENT_TEST_SOURCES TrashServiceTests SOURCES)
+list(REMOVE_ITEM PT_CONTENT_TEST_SOURCES tests/TrashServiceTests.cpp)
+add_executable(PTContentBridgeTests ${PT_CONTENT_TEST_SOURCES}
+    tests/PTContentBridgeTests.mm
+    src/platform/ios/bridge/PTBridgeSupport.mm
+    src/platform/ios/bridge/PTKnowledgeGapBridge.h src/platform/ios/bridge/PTKnowledgeGapBridge.mm
+    src/platform/ios/bridge/PTMemoBridge.h src/platform/ios/bridge/PTMemoBridge.mm
+    src/platform/ios/bridge/PTCountdownBridge.h src/platform/ios/bridge/PTCountdownBridge.mm
+)
+set_source_files_properties(tests/PTContentBridgeTests.mm
+    src/platform/ios/bridge/PTKnowledgeGapBridge.mm
+    src/platform/ios/bridge/PTMemoBridge.mm
+    src/platform/ios/bridge/PTCountdownBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(PTContentBridgeTests PRIVATE Qt6::Core Qt6::Gui Qt6::Sql Qt6::Concurrent Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(PTContentBridgeTests)
+add_test(NAME PTContentBridgeTests COMMAND PTContentBridgeTests)
+set_tests_properties(PTContentBridgeTests PROPERTIES TIMEOUT 90
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")

@@ -38,6 +38,7 @@ import PTBridge
             var value = SessionTaskOption(); value.taskID = item.taskId; value.title = item.title; return value
         }
     }
+    func bandForMinutes(_ minutes: Double) -> Int { native.band(forMinutes: minutes) }
     func formatDuration(seconds: Int) -> String { native.formatDuration(seconds) }
     func cleanupInvalidSessions() throws -> Int { try native.cleanupInvalidSessions() }
     func addManualSession(taskID: Int, startTime: String, durationMinutes: Int) throws -> Int { try native.addManualSession(taskID, startTime: startTime, durationMinutes: durationMinutes) }

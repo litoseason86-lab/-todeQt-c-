@@ -59,6 +59,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)moveTasksToToday:(NSArray<NSNumber *> *)taskIds error:(NSError **)error;
 - (BOOL)duplicateTask:(NSInteger)taskId date:(NSString *)date error:(NSError **)error;
 - (BOOL)isRoutineGeneratedTask:(NSInteger)taskId;
+// 结转窗口天数（TaskManager 的常量，只读转发）；结转提示用它说明「回看了几天」。
+@property(nonatomic, readonly) NSInteger overdueRolloverDays;
 // 从 start 起连续 days 天、每天「已排」分钟，口径见 TaskManager::readPlannedMinutesByDay；
 // excludedTaskId 是撤销窗口里待删的任务，没有时传 -1。
 - (nullable NSArray<NSNumber *> *)plannedMinutesFrom:(NSString *)start days:(NSInteger)days excludingTask:(NSInteger)excludedTaskId error:(NSError **)error;

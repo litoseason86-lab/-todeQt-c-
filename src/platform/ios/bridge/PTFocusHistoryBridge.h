@@ -41,6 +41,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (PTFocusHistoryResult *)dayTotalDuration:(NSString *)date;
 - (PTFocusHistoryResult *)invalidSessionCount;
 - (PTFocusHistoryResult *)taskOptions:(NSString *)date;
+- (NSInteger)bandForMinutes:(double)minutes;
 - (NSString *)formatDuration:(NSInteger)seconds;
 - (NSInteger)cleanupInvalidSessions:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (NSInteger)addManualSession:(NSInteger)taskId startTime:(NSString *)startTime durationMinutes:(NSInteger)minutes error:(NSError **)error __attribute__((swift_error(nonnull_error)));

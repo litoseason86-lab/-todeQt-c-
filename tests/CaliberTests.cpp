@@ -9,6 +9,7 @@
 #include <limits>
 #include "../src/services/LogicalDay.h"
 #include "../src/services/RoutineRules.h"
+#include "../src/services/StatisticsPeriod.h"
 
 class CaliberTests : public QObject
 {
@@ -18,6 +19,7 @@ private slots:
     void heatmapBands();
     void logicalDay();
     void routineWeekdays();
+    void statisticsPeriod();
 };
 
 // 读表失败必须使测试失败，不能把零条数据当成口径通过。
@@ -117,6 +119,66 @@ void CaliberTests::routineWeekdays()
         QCOMPARE(bit, expected.value("bit").toInt());
         QCOMPARE((mask & bit) != 0, expected.value("matches").toBool());
     }
+}
+
+// 统计页翻周期：周一开头、月从 1 号起，跨年与闰月按日历走；当前期不能再往后翻，比较对象的距离跨年不算错。
+// 周一归位与 Mac StatisticsFormat.js 的 mondayOf / endOfWeek 读同一张表；翻页、当前期与比较距离
+// 是 Mac StatisticsView.qml 内联的规则，没有 JS 函数可读表，所以在这里逐条写明。
+void CaliberTests::statisticsPeriod()
+{
+    using StatisticsPeriod::Range;
+    const QJsonArray rows = fixtures("statistics-format");
+    int checked = 0;
+    for (const QJsonValue& row : rows) {
+        const QJsonObject data = row.toObject();
+        const QJsonObject input = data.value("input").toObject();
+        const QString op = input.value("op").toString();
+        if (op != QLatin1String("mondayOf") && op != QLatin1String("endOfWeek")) continue;
+        // 表里的本地日期可能带时分，只取日期部分；周期计算只看日历日。
+        const QDate date = QDate::fromString(input.value("args").toArray().at(0).toObject().value("date").toString().left(10), Qt::ISODate);
+        const StatisticsPeriod::Period week = StatisticsPeriod::forAnchor(date, Range::Week, 0, date);
+        const QDate actual = op == QLatin1String("mondayOf") ? week.start : week.end;
+        QVERIFY2(actual.toString(Qt::ISODate) == data.value("expected").toString(), qPrintable(data.value("reason").toString()));
+        ++checked;
+    }
+    // 表里没有这两种操作时用例必须失败，不能零条通过。
+    QVERIFY(checked >= 4);
+
+    struct Case { const char* anchor; Range range; int shift; const char* today;
+                  const char* start; const char* end; int distance; bool current; bool canAdvance; };
+    const Case cases[] = {
+        // 1 月 31 日往后翻一月落在 2 月整月（闰年 29 日），不是 3 月 2 日；离当前 3 月隔一期，比较对象是上上月。
+        {"2024-01-31", Range::Month, 1, "2024-03-01", "2024-02-01", "2024-02-29", 2, false, true},
+        // 1 月往前翻跨年到上一年 12 月；比较对象 11 月离当前 1 月两个月（按 年*12+月，跨年不算成 -10）。
+        {"2027-01-15", Range::Month, -1, "2027-01-20", "2026-12-01", "2026-12-31", 2, false, true},
+        // 周五所在周跨年：周一在上一年，逻辑今日是同周周日，仍算当前周，不能往后翻。
+        {"2027-01-01", Range::Week, 0, "2027-01-03", "2026-12-28", "2027-01-03", 1, true, false},
+        {"2027-01-01", Range::Week, -1, "2027-01-03", "2026-12-21", "2026-12-27", 2, false, true},
+        // 逻辑今日是周日时不能被推到下一周：上周仍是距离 2、可往后翻。
+        {"2026-09-01", Range::Week, -1, "2026-09-06", "2026-08-24", "2026-08-30", 2, false, true},
+        // 翻到逻辑今日之后的日子：不是当前期，也不能再往后翻。
+        {"2024-02-28", Range::Day, 1, "2024-02-28", "2024-02-29", "2024-02-29", 0, false, false},
+        {"2024-03-01", Range::Day, -1, "2024-03-01", "2024-02-29", "2024-02-29", 2, false, true},
+    };
+    for (const Case& c : cases) {
+        const StatisticsPeriod::Period period = StatisticsPeriod::forAnchor(
+            QDate::fromString(QLatin1String(c.anchor), Qt::ISODate), c.range, c.shift, QDate::fromString(QLatin1String(c.today), Qt::ISODate));
+        const QString label = QStringLiteral("%1 平移 %2").arg(QLatin1String(c.anchor)).arg(c.shift);
+        QVERIFY2(period.isValid(), qPrintable(label));
+        QCOMPARE(period.start.toString(Qt::ISODate), QLatin1String(c.start));
+        QCOMPARE(period.end.toString(Qt::ISODate), QLatin1String(c.end));
+        QCOMPARE(period.comparisonDistance, c.distance);
+        QCOMPARE(period.current, c.current);
+        QCOMPARE(period.canAdvance, c.canAdvance);
+    }
+
+    StatisticsPeriod::Range range = Range::Day;
+    QVERIFY(StatisticsPeriod::parseRange(QStringLiteral("month"), &range));
+    QCOMPARE(range, Range::Month);
+    QVERIFY(!StatisticsPeriod::parseRange(QStringLiteral("Month"), &range));
+    QVERIFY(!StatisticsPeriod::parseRange(QString(), &range));
+    QVERIFY(!StatisticsPeriod::forAnchor(QDate(), Range::Day, 0, QDate(2024, 2, 28)).isValid());
+    QVERIFY(!StatisticsPeriod::forAnchor(QDate(2024, 2, 28), Range::Week, 0, QDate()).isValid());
 }
 
 QTEST_GUILESS_MAIN(CaliberTests)

@@ -58,6 +58,10 @@ public struct SessionEditorDraft: Equatable, Sendable {
             selectedDate = date; relationAvailable = true; refresh()
         } catch { relationAvailable = false; self.error = error.localizedDescription }
     }
+    public func selectRequestedDate(from shell: ShellStore) {
+        guard let date = shell.consumeRequestedFocusDate() else { return }
+        selectDate(date)
+    }
     // 停在今日时随日界切到新的逻辑今日；正在查看历史日时保留所选日，只重新查询关系。
     public func logicalDayChanged() { selectDate(relationAvailable && selectedRelation == .same ? logicalDay.today : selectedDate) }
     public func adjacentDate(days: Int) -> String? { LogicalDateNavigation.shifted(selectedDate, days: days) }
