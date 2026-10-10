@@ -22,7 +22,7 @@ import XCTest
     // 产品保证：休息转为专注时把用户新选的任务交给字段级接口，时间精度仍保持原值。
     func testRestConversionForwardsSelectedTask() {
         let f = Fixture(); var row = SessionValue(); row.id = 7; row.isRest = true
-        row.durationSeconds = 301; row.startTime = "2026-10-09T08:00:05.123+08:00"
+        row.durationSeconds = 301; row.startTime = "2026-10-09T08:00:05.123"
         var draft = SessionEditorDraft(original: row); draft.isRest = false; draft.taskID = 41
         XCTAssertTrue(row.isRest); XCTAssertEqual(row.taskID, -1)
         XCTAssertTrue(f.store.updateSession(draft, original: row))
@@ -33,7 +33,7 @@ import XCTest
     }
     // 产品保证：补录把表单选择原样交服务，冲突失败保留输入和服务原因，重试成功只新增一次。
     func testManualSubmissionForwardsFieldsAndPreservesConflict() {
-        let f = Fixture(); let start = "2026-10-09T09:15:00.123+08:00"
+        let f = Fixture(); let start = "2026-10-09T09:15:00.123"
         XCTAssertTrue(f.store.canAddManualSession)
         f.history.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "与 09:00–10:00 专注重叠"])
         XCTAssertFalse(f.store.addManualSession(taskID: 41, startTime: start, durationMinutes: 45))
@@ -55,17 +55,57 @@ import XCTest
         f.logicalDay.today = "2026-10-11"
         XCTAssertEqual(f.store.selectedDate, "2026-10-08")
     }
-    // 产品保证：导航跨月与闰日仍发有效公历日期；控件时刻以带毫秒和时区的 ISO 串交服务。
-    func testDateNavigationAndTimestampRoundTrip() throws {
+    // 产品保证：导航跨月与闰日仍发有效公历日期，同号专注和休息保持独立列表身份。
+    func testDateNavigationAndTimelineIdentity() {
         XCTAssertEqual(LogicalDateNavigation.shifted("2024-03-01", days: -1), "2024-02-29")
         XCTAssertEqual(LogicalDateNavigation.shifted("2026-12-31", days: 1), "2027-01-01")
         XCTAssertNil(LogicalDateNavigation.date("2026-02-30"))
-        let date = try XCTUnwrap(LogicalDateNavigation.timestampDate("2026-10-09T08:00:05.123+08:00"))
-        let roundTrip = try XCTUnwrap(LogicalDateNavigation.timestampDate(LogicalDateNavigation.timestamp(date)))
-        XCTAssertEqual(roundTrip.timeIntervalSince1970, date.timeIntervalSince1970, accuracy: 0.001)
         var focus = SessionValue(); focus.id = 7
         var rest = focus; rest.isRest = true
         XCTAssertNotEqual(focus.timelineID, rest.timelineID)
+    }
+    // 产品保证：控件发送本地墙钟串、不含时区，毫秒精度可以往返保留。
+    func testTimestampEmitsLocalWallClockAndRoundTrips() throws {
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = .current
+        let wholeSecond = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 9, hour: 8, minute: 0, second: 5)))
+        let date = wholeSecond.addingTimeInterval(0.123)
+        let text = LogicalDateNavigation.timestamp(date)
+        XCTAssertEqual(text, "2026-10-09T08:00:05.123")
+        let decoded = try XCTUnwrap(LogicalDateNavigation.timestampDate(text))
+        XCTAssertEqual(decoded.timeIntervalSince1970, date.timeIntervalSince1970, accuracy: 0.001)
+    }
+    // 产品保证：桥接输出的本地时间带毫秒或整秒时，读取均保持本地 08:00。
+    func testTimestampParsesLocalWallClockWithAndWithoutMilliseconds() throws {
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = .current
+        let expected = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 9, hour: 8, minute: 0, second: 5)))
+        for (text, fraction) in [("2026-10-09T08:00:05.123", 0.123), ("2026-10-09T08:00:05", 0.0)] {
+            let date = try XCTUnwrap(LogicalDateNavigation.timestampDate(text), text)
+            XCTAssertEqual(date.timeIntervalSince1970, expected.timeIntervalSince1970 + fraction, accuracy: 0.001)
+        }
+    }
+    // 产品保证：读入仍兼容带偏移或 Z 的时间串，保持它们指向的绝对时刻。
+    func testTimestampStillParsesOffsetAndUTC() throws {
+        for (offset, utc) in [("2026-10-09T08:00:05.123+08:00", "2026-10-09T00:00:05.123Z"),
+                              ("2026-10-09T08:00:05+08:00", "2026-10-09T00:00:05Z")] {
+            let date = try XCTUnwrap(LogicalDateNavigation.timestampDate(offset))
+            let expected = try XCTUnwrap(LogicalDateNavigation.timestampDate(utc))
+            XCTAssertEqual(date.timeIntervalSince1970, expected.timeIntervalSince1970, accuracy: 0.001)
+        }
+    }
+    // 产品保证：时间轴真实桥接数据进入编辑草稿后，预填为记录开始时刻，不回退到 9 点。
+    func testRealBridgeTimestampPrefillsRecordStart() throws {
+        let f = Fixture(); var row = SessionValue(); row.id = 19
+        row.startTime = "2026-10-09T08:00:05.123"; row.endTime = "2026-10-09T08:30:05.123"; row.durationSeconds = 1800
+        f.history.sessions = [row]; f.store.refresh()
+        let loaded = try XCTUnwrap(f.store.sessions.first)
+        let draft = SessionEditorDraft(original: loaded)
+        XCTAssertEqual(draft.startTime, row.startTime); XCTAssertFalse(draft.startEdited)
+        // 与编辑框相同的解析/回退路径，数据层验证真实时间能进入 DatePicker。
+        let prefilled = LogicalDateNavigation.timestampDate(draft.startTime)
+            ?? LogicalDateNavigation.initialSessionStart(date: f.store.selectedDate)
+        XCTAssertEqual(LogicalDateNavigation.timestamp(prefilled), row.startTime)
+        XCTAssertTrue(f.store.updateSession(draft, original: loaded))
+        XCTAssertNil(f.history.submittedChanges.last?.2.startTime)
     }
     // 产品保证：日期与未来标志只消费服务输入；未来日不能补录，切日重读对应日期。
     func testDateSelectionAndFutureGate() {
@@ -74,7 +114,7 @@ import XCTest
         f.store.selectDate("2026-10-10")
         XCTAssertEqual(f.history.calls.last(where: { $0.0 == "dayTimeline" })?.2, ["2026-10-10"])
         XCTAssertFalse(f.store.canAddManualSession)
-        XCTAssertFalse(f.store.addManualSession(taskID: -1, startTime: "2026-10-10T08:00:00.000+08:00", durationMinutes: 30))
+        XCTAssertFalse(f.store.addManualSession(taskID: -1, startTime: "2026-10-10T08:00:00.000", durationMinutes: 30))
         XCTAssertFalse(f.history.calls.contains { $0.0 == "addManualSession" })
         f.logicalDay.relations["2026-10-08/2026-10-09"] = .earlier
         f.store.selectDate("2026-10-08")
@@ -122,7 +162,7 @@ import XCTest
         let f = Fixture(); var row = SessionValue(); row.id = 19
         XCTAssertTrue(f.pending.requestSession(id: 7, isRest: false)); XCTAssertTrue(f.deletion.state.active)
         f.deletion.commitError = NSError(domain: "test", code: 1)
-        XCTAssertFalse(f.store.addManualSession(taskID: 3, startTime: "2026-10-09T08:00:00.000+08:00", durationMinutes: 30))
+        XCTAssertFalse(f.store.addManualSession(taskID: 3, startTime: "2026-10-09T08:00:00.000", durationMinutes: 30))
         XCTAssertFalse(f.history.calls.contains { $0.0 == "addManualSession" })
         XCTAssertTrue(f.pending.requestSession(id: 8, isRest: true)); XCTAssertTrue(f.deletion.state.active)
         var draft = SessionEditorDraft(original: row); draft.taskID = 5
@@ -132,7 +172,7 @@ import XCTest
     // 产品保证：只改归属或类型保留原始秒数和时间；明确不关联任务仍交服务，失败原文保留。
     func testPartialChangesAndClearTaskFailure() {
         let f = Fixture(); var row = SessionValue(); row.id = 19; row.taskID = 5
-        row.startTime = "2026-10-09T08:00:05.123+08:00"; row.durationSeconds = 181
+        row.startTime = "2026-10-09T08:00:05.123"; row.durationSeconds = 181
         var draft = SessionEditorDraft(original: row); draft.taskID = -1
         f.history.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "NOT NULL 原始服务原因"])
         XCTAssertFalse(f.store.updateSession(draft, original: row))
@@ -151,7 +191,7 @@ import XCTest
         draft.durationEdited = true; draft.durationMinutes = 3
         XCTAssertTrue(f.store.updateSession(draft, original: row))
         XCTAssertEqual(f.history.submittedChanges.last?.1, true); XCTAssertNil(f.history.submittedChanges.last?.2.durationSeconds)
-        draft.durationMinutes = 4; draft.startEdited = true; draft.startTime = "2026-10-09T09:00:00.000+08:00"
+        draft.durationMinutes = 4; draft.startEdited = true; draft.startTime = "2026-10-09T09:00:00.000"
         XCTAssertTrue(f.store.updateSession(draft, original: row))
         XCTAssertEqual(f.history.submittedChanges.last?.2.durationSeconds, 240)
         XCTAssertEqual(f.history.submittedChanges.last?.2.startTime, draft.startTime)

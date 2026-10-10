@@ -23,6 +23,42 @@ import XCTest
         XCTAssertFalse(store.loadError.isEmpty)
     }
 
+    // 产品保证：彻底删除失败显示服务原文；仅 gone（条目已不存在）时重读列表。
+    func testDeleteFailureKeepsServiceReasonAndReloadsGone() {
+        for code in ["blocked", "gone"] {
+            let bridge = TrashBridgeFake(); bridge.result.items = [item(4)]
+            let store = TrashStore(bridge: bridge); store.activate()
+            XCTAssertEqual(store.items.map(\.id), [4])
+            store.requestDelete(item(4)); XCTAssertEqual(store.pendingDelete?.id, 4)
+            bridge.actionResult = TrashActionResult(error: "彻底删除失败：数据库只读", code: code)
+            // 服务快照换成不同编号，重读与保留旧列表必须得到不同结果。
+            bridge.result.items = [item(9)]
+            store.confirmDelete()
+            XCTAssertEqual(store.actionError, "彻底删除失败：数据库只读", code)
+            XCTAssertEqual(store.items.map(\.id), code == "gone" ? [9] : [4], code)
+            XCTAssertNil(store.pendingDelete)
+            XCTAssertEqual(bridge.calls.last?.0, "delete"); XCTAssertEqual(bridge.calls.last?.1, [4])
+        }
+    }
+
+    // 产品保证：清空失败显示服务原文；仅 gone 时重读列表，确认始终提交打开时的编号。
+    func testEmptyFailureKeepsServiceReasonAndReloadsGone() {
+        for code in ["blocked", "gone"] {
+            let bridge = TrashBridgeFake(); bridge.result.items = [item(4), item(7)]
+            let store = TrashStore(bridge: bridge); store.activate()
+            XCTAssertEqual(store.items.map(\.id), [4, 7])
+            store.requestEmpty(); XCTAssertEqual(store.pendingEmptyIDs, [4, 7])
+            bridge.actionResult = TrashActionResult(error: "清空失败：有条目已被另一台设备删除", code: code)
+            // 不触发变化回调，只有动作的 gone 分支可以更新这个快照。
+            bridge.result.items = [item(9)]
+            store.confirmEmpty()
+            XCTAssertEqual(store.actionError, "清空失败：有条目已被另一台设备删除", code)
+            XCTAssertEqual(store.items.map(\.id), code == "gone" ? [9] : [4, 7], code)
+            XCTAssertNil(store.pendingEmptyIDs)
+            XCTAssertEqual(bridge.calls.last?.0, "empty"); XCTAssertEqual(bridge.calls.last?.1, [4, 7])
+        }
+    }
+
     // 产品保证：空日期、今天、昨天與跨年日期按服务提供的逻辑日分组。
     func testGroupLabelsUseServiceLogicalDay() {
         XCTAssertEqual(TrashStore.groupLabel("2026-10-10", today: "2026-10-10"), "今天")

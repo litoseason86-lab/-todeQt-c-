@@ -27,13 +27,26 @@ public enum LogicalDateNavigation {
         let day = date(iso) ?? Date()
         return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: day) ?? day
     }
-    public static func timestamp(_ date: Date) -> String {
-        let formatter = ISO8601DateFormatter()
+    // 专注记录按本地墙钟跨桥接传递；固定公历与 POSIX 区域，避免系统历法改变落库字段。
+    private static func localTimestampFormatter(fractionalSeconds: Bool) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = calendar
         formatter.timeZone = .current
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        formatter.dateFormat = fractionalSeconds ? "yyyy-MM-dd'T'HH:mm:ss.SSS" : "yyyy-MM-dd'T'HH:mm:ss"
+        formatter.isLenient = false
+        return formatter
+    }
+    public static func timestamp(_ date: Date) -> String {
+        localTimestampFormatter(fractionalSeconds: true).string(from: date)
     }
     public static func timestampDate(_ iso: String) -> Date? {
+        // 桥接真实输出不含时区；整秒旧记录也按当前时区解析。回写比对避免宽松解析吞掉后缀。
+        for fractionalSeconds in [true, false] {
+            let formatter = localTimestampFormatter(fractionalSeconds: fractionalSeconds)
+            if let result = formatter.date(from: iso), formatter.string(from: result) == iso { return result }
+        }
+        // 兼容曾使用的带偏移或 Z 的 ISO 串，按其绝对时刻读取，不把它们当本地墙钟。
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let result = formatter.date(from: iso) { return result }
