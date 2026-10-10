@@ -82,13 +82,18 @@ import XCTest
         weak let released = store; store = nil
         XCTAssertNil(released); XCTAssertFalse(interactions.refreshBlocked)
     }
-    // 产品保证：科目同步重排按编号保持选中，被删除才退到不设置科目，原订阅仍收到信号。
-    func testCategoryReorderRemovalAndPreviousObserver() {
-        let (store, _, _, categories, _) = editor(); var priorSignals = 0; categories.onChanged = { priorSignals += 1 }
+    // 产品保证：科目同步重排按编号保持选中，被删除才退到不设置科目；表单打开期间收到变化会重读，关闭后不再重读。
+    func testCategoryReorderRemovalAndOpenCloseLifetime() {
+        let (store, _, _, categories, _) = editor()
+        XCTAssertNil(categories.onChanged)
         XCTAssertTrue(store.begin(id: 12)); XCTAssertEqual(store.categoryID, 8)
         categories.values = [category(3), category(8)]; categories.onChanged?(); XCTAssertEqual(store.categoryID, 8)
+        XCTAssertEqual(store.categories.values.map(\.id), [3, 8])
         categories.values = [category(3)]; categories.onChanged?(); XCTAssertEqual(store.categoryID, -1)
-        XCTAssertEqual(priorSignals, 2); store.cancel(); categories.onChanged?(); XCTAssertEqual(priorSignals, 3)
+        let stale = categories.onChanged; store.cancel(); XCTAssertNil(categories.onChanged)
+        // 即使旧回调被别处持有，关闭后也不再重读。
+        categories.values = [category(3), category(9)]; stale?()
+        XCTAssertEqual(store.categories.values.map(\.id), [3])
     }
     // 产品保证：内联新建先同步刷新再返回编号仍能选中新科目，取消不会留下哨兵科目。
     func testInlineCreationUsesReturnedIDAfterSynchronousSignal() {

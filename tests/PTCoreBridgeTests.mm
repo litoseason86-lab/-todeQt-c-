@@ -19,6 +19,10 @@
 @end
 #import "../src/platform/ios/bridge/PTStatisticsBridge.h"
 #import "../src/platform/ios/bridge/PTFocusHistoryBridge.h"
+#include <QFile>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QSettings>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -44,7 +48,10 @@ private slots:
     void configurationSignalsAndLifetime();
     void statisticsReadEntryPointsAndNestedValues();
     void statisticsFailuresAndHistorySignalLifetime();
+    void historyBandsMatchCaliberFixtures();
+    void dateRelationsAndPeriodNavigation();
     void historyFieldsPartialChangesAndFailures();
+    void dateRelationsForSelectedDay();
     void initTestCase();
     void init();
     void cleanup();
@@ -52,6 +59,7 @@ private slots:
     void taskFailuresAreCollectedOnce();
     void taskWriteAndReadEntryPoints();
     void taskPlannedMinutesMatchesService();
+    void taskOverdueRolloverDaysMatchesService();
     void pendingDeletionSignalsAndState();
     void interactionTokenOwnsRegistration();
     void coreSignalsReturnToMainThreadAndDisconnect();
@@ -247,6 +255,14 @@ void PTCoreBridgeTests::taskWriteAndReadEntryPoints() {
 }
 // 产品保证：「已排」分钟逐天原样投影服务结果（加总口径在 C++），待删的那条按调用方给的编号排除；
 // 参数不合法与读取失败都抛错且不给半份数据，两种错误文案不同。
+// 桥接转发的结转窗口天数必须等于服务常量，结转提示里的「最近 N 天」才与 Mac 一致。
+void PTCoreBridgeTests::taskOverdueRolloverDaysMatchesService() {
+    @autoreleasepool {
+        PTTaskBridge *bridge = [PTTaskBridge new];
+        QVERIFY(TaskManager::instance()->overdueRolloverDays() > 0);
+        QCOMPARE(bridge.overdueRolloverDays, NSInteger(TaskManager::instance()->overdueRolloverDays()));
+    }
+}
 void PTCoreBridgeTests::taskPlannedMinutesMatchesService() {
     @autoreleasepool {
         PTTaskBridge *bridge = [PTTaskBridge new]; NSError *error = nil;
@@ -869,6 +885,78 @@ void PTCoreBridgeTests::statisticsFailuresAndHistorySignalLifetime() {
     }
 }
 // 产品保证：历史逐字段保留毫秒、秒数与暂停跨度；编辑只交改动，补录与失败使用服务原文。
+// 产品保证：页面日期关系与周期导航认调用方同一逻辑今日，闰月、跨年和无效日期不在 Swift 重算。
+void PTCoreBridgeTests::dateRelationsAndPeriodNavigation() {
+    @autoreleasepool {
+        PTLogicalDayBridge *bridge = [PTLogicalDayBridge new];
+        NSError *error = nil;
+        QCOMPARE([bridge relationOfDate:@"2024-02-29" toDate:@"2024-02-28" error:&error], NSInteger(1));
+        QVERIFY(!error);
+        QCOMPARE([bridge relationOfDate:@"2024-02-28" toDate:@"2024-02-28" error:&error], NSInteger(0));
+        QCOMPARE([bridge relationOfDate:@"2023-12-31" toDate:@"2024-02-28" error:&error], NSInteger(-1));
+        [bridge relationOfDate:@"2024-02-30" toDate:@"2024-02-28" error:&error];
+        QVERIFY(error); error = nil;
+        [bridge relationOfDate:@"2024-2-28" toDate:@"2024-02-28" error:&error];
+        QVERIFY(error); error = nil;
+        PTPeriodDates *month = [bridge periodForAnchor:@"2024-01-31" range:@"month" shift:1 logicalToday:@"2024-03-01" error:&error];
+        QVERIFY(month); QVERIFY(!error);
+        QCOMPARE(PTBridgeSupport::string(month.start), QStringLiteral("2024-02-01"));
+        QCOMPARE(PTBridgeSupport::string(month.end), QStringLiteral("2024-02-29"));
+        QCOMPARE(month.year, NSInteger(2024)); QCOMPARE(month.month, NSInteger(2));
+        QVERIFY(month.canAdvance); QVERIFY(!month.current);
+        PTPeriodDates *week = [bridge periodForAnchor:@"2027-01-01" range:@"week" shift:0 logicalToday:@"2027-01-03" error:&error];
+        QVERIFY(week); QVERIFY(week.current); QVERIFY(!week.canAdvance);
+        QCOMPARE(PTBridgeSupport::string(week.start), QStringLiteral("2026-12-28"));
+        QCOMPARE(PTBridgeSupport::string(week.end), QStringLiteral("2027-01-03"));
+        PTPeriodDates *previous = [bridge periodForAnchor:week.start range:@"week" shift:-1 logicalToday:@"2027-01-03" error:&error];
+        QCOMPARE(PTBridgeSupport::string(previous.start), QStringLiteral("2026-12-21"));
+        PTPeriodDates *day = [bridge periodForAnchor:@"2024-02-28" range:@"day" shift:1 logicalToday:@"2024-02-28" error:&error];
+        QCOMPARE(PTBridgeSupport::string(day.start), QStringLiteral("2024-02-29"));
+        QVERIFY(!day.current); QVERIFY(!day.canAdvance);
+        PTPeriodDates *boundaryWeek = [bridge periodForAnchor:@"2000-01-01" range:@"week" shift:0 logicalToday:@"2000-01-01" error:&error];
+        QVERIFY(boundaryWeek); QVERIFY(!error);
+        QCOMPARE(PTBridgeSupport::string(boundaryWeek.start), QStringLiteral("1999-12-27"));
+        QVERIFY(![bridge periodForAnchor:@"2024-02-28" range:@"bad" shift:0 logicalToday:@"2024-02-28" error:&error]);
+        QVERIFY(error); error = nil;
+        QVERIFY(![bridge periodForAnchor:@"2000-01-01" range:@"month" shift:std::numeric_limits<NSInteger>::max() logicalToday:@"2024-02-28" error:&error]);
+        QVERIFY(error);
+    }
+}
+
+// 产品保证：月历取档与 Mac 共用服务，小数分钟、阈值等号和非数值不会被桥接改变。
+void PTCoreBridgeTests::historyBandsMatchCaliberFixtures() {
+    @autoreleasepool {
+        QFile fixture(QFINDTESTDATA("fixtures/calibers/heatmap-bands.json"));
+        QVERIFY(fixture.open(QIODevice::ReadOnly));
+        QJsonParseError error;
+        const auto document = QJsonDocument::fromJson(fixture.readAll(), &error);
+        QCOMPARE(error.error, QJsonParseError::NoError);
+        QVERIFY(document.isArray());
+        const auto rows = document.array();
+        QCOMPARE(rows.size(), 19);
+        PTFocusHistoryBridge *bridge = [PTFocusHistoryBridge new];
+        for (const auto &entry : rows) {
+            const auto row = entry.toObject();
+            const auto input = row.value("input");
+            double minutes = 0;
+            if (input.isDouble()) minutes = input.toDouble();
+            else if (input.isString()) {
+                bool ok = false;
+                minutes = input.toString().toDouble(&ok);
+                if (!ok) minutes = std::numeric_limits<double>::quiet_NaN();
+            } else if (input.isObject()) {
+                const auto special = input.toObject().value("special").toString();
+                if (special == "Infinity") minutes = std::numeric_limits<double>::infinity();
+                else if (special == "-Infinity") minutes = -std::numeric_limits<double>::infinity();
+                else minutes = std::numeric_limits<double>::quiet_NaN();
+            }
+            const int expected = row.value("expected").toInt();
+            QCOMPARE(FocusHistoryService::instance()->bandForMinutes(minutes), expected);
+            QCOMPARE([bridge bandForMinutes:minutes], expected);
+        }
+    }
+}
+
 void PTCoreBridgeTests::historyFieldsPartialChangesAndFailures() {
     @autoreleasepool {
         struct Reset { ~Reset() { bridgeTestNow.reset(); } } reset;
@@ -942,5 +1030,21 @@ void PTCoreBridgeTests::historyFieldsPartialChangesAndFailures() {
 }
 QTEST_GUILESS_MAIN(PTCoreBridgeTests)
 
+
+// 产品保证：所选日相对同一逻辑今日的先后由 QDate 给出，无效日期报错，Swift 不比较日期。
+void PTCoreBridgeTests::dateRelationsForSelectedDay() {
+    @autoreleasepool {
+        PTLogicalDayBridge *bridge = [PTLogicalDayBridge new];
+        NSError *error = nil;
+        QCOMPARE([bridge relationOfDate:@"2024-02-29" toDate:@"2024-02-28" error:&error], NSInteger(1));
+        QVERIFY(!error);
+        QCOMPARE([bridge relationOfDate:@"2024-02-28" toDate:@"2024-02-28" error:&error], NSInteger(0));
+        QCOMPARE([bridge relationOfDate:@"2023-12-31" toDate:@"2024-02-28" error:&error], NSInteger(-1));
+        [bridge relationOfDate:@"2024-02-30" toDate:@"2024-02-28" error:&error];
+        QVERIFY(error); error = nil;
+        [bridge relationOfDate:@"2024-2-28" toDate:@"2024-02-28" error:&error];
+        QVERIFY(error); error = nil;
+    }
+}
 
 #include "PTCoreBridgeTests.moc"

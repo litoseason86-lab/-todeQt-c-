@@ -84,6 +84,9 @@ public struct FocusTaskCompletion: Equatable, Sendable {
     var onPhaseSettledOffline: ((Int) -> Void)? { get set }
     var onTaskAutoCompleteFailed: ((Int) -> Void)? { get set }
     var onFailure: ((String) -> Void)? { get set }
+    // 移动端提示：到点提醒没预约成功、系统通知没发出（参数是原因）。
+    var onAlarmUnavailable: ((String) -> Void)? { get set }
+    var onNotificationDeliveryFailed: ((String) -> Void)? { get set }
     var snapshot: FocusSnapshot { get }
     func startFree(taskID: Int, title: String) throws
     func startPomodoro(taskID: Int, title: String, seconds: Int) throws

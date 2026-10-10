@@ -90,14 +90,13 @@ ApplicationWindow {
         anchors.bottomMargin: Theme.space32 + parent.SafeArea.margins.bottom
     }
 
-    // 到点提醒：与完整界面共用同一个协调器（系统通知、长休息文案、提示音降级）。
+    // 到点置前窗口：与完整界面共用同一个协调器。系统通知、长休息文案与提示音兜底在 C++ PhaseCompletionNotifier，
+    // main.cpp 装配，伴侣页同样生效。
     PhaseCompletionCoordinator {
         windowRef: root
         // qmllint disable unqualified
         focusTimerRef: focusTimer
         settingsRef: typeof appSettings === "undefined" ? null : appSettings
-        notificationServiceRef: typeof notificationService === "undefined" ? null : notificationService
-        phaseSoundServiceRef: typeof phaseSoundService === "undefined" ? null : phaseSoundService
         // qmllint enable unqualified
     }
 

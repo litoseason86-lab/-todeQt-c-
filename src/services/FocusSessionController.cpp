@@ -45,13 +45,7 @@ int FocusSessionController::freeTimerWarningHours() const
 
 int FocusSessionController::nextBreakMinutes(int selectedBreakMinutes) const
 {
-    if (!m_settings || !m_timer || !m_settings->longBreakEnabled()) {
-        return selectedBreakMinutes;
-    }
-    const int interval = m_settings->longBreakInterval();
-    const int completed = m_timer->completedPomodoros();
-    // 间隔在设置层已限定为 2–8，这里仍防一手 0，免得取模除零。
-    if (interval > 0 && completed > 0 && completed % interval == 0) {
+    if (m_settings && m_timer && m_settings->longBreakDueAfter(m_timer->completedPomodoros())) {
         return m_settings->longBreakMinutes();
     }
     return selectedBreakMinutes;

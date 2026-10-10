@@ -7,8 +7,10 @@
 // FocusTimer 声明 friend class PhaseAlarmCoordinatorTests，测试可注入时钟并直接触发 tick。
 #include "../src/services/FocusTimer.h"
 #include "../src/services/MonotonicClock.h"
+#include "../src/services/AppSettings.h"
 #include "../src/services/NotificationService.h"
 #include "../src/services/PhaseAlarmCoordinator.h"
+#include "../src/services/PhaseCompletionNotifier.h"
 
 namespace {
 
@@ -34,14 +36,24 @@ public:
         ScheduleCallback callback;
     };
 
+    // 即时投递的内容；failDeliver 为真时系统「拒收」，用来验证提示音兜底。
+    struct Delivery {
+        QString title;
+        QString body;
+        bool playSound = false;
+    };
+
     QList<Call> calls;
     QSet<QString> pending;
     int deliverCount = 0;
+    QList<Delivery> delivered;
+    bool failDeliver = false;
 
-    void deliver(const QString&, const QString&, bool, DeliveryCallback callback) override
+    void deliver(const QString& title, const QString& body, bool playSound, DeliveryCallback callback) override
     {
         ++deliverCount;
-        callback(true, QString());
+        delivered.append({title, body, playSound});
+        callback(!failDeliver, failDeliver ? QStringLiteral("测试拒收") : QString());
     }
     bool isAuthorized() const override { return true; }
     void requestAuthorization() override {}
@@ -105,6 +117,8 @@ private slots:
     void coveredExpiryDoesNotDeliverTwice();
     void stopBeforeExpiryCancels();
     void alreadyExpiredSegmentIsNotScheduled();
+    void workCompletionNotifiesNextBreakKind();
+    void breakCompletionRemembersLongBreakAndFallsBackToChime();
 
 private:
     void tick() { QVERIFY(QMetaObject::invokeMethod(&FocusTimer::instance()->m_timer, "timeout", Qt::DirectConnection)); }
@@ -390,6 +404,111 @@ void PhaseAlarmCoordinatorTests::alreadyExpiredSegmentIsNotScheduled()
     settle();
     // 剩余时间为 0：只做启动清理，不预约一条会立刻响起的提醒。
     QCOMPARE(m_backend->calls.size(), 1);
+}
+
+void PhaseAlarmCoordinatorTests::workCompletionNotifiesNextBreakKind()
+{
+    // 保证：番茄自然完成时的即时通知说清下一段休息——连续数到了间隔的整数倍按长休息时长说「长休息」，
+    // 否则按普通休息时长说；响铃跟随提示音设置。（原 QML PhaseCompletionCoordinator 的口径，055 下沉到 C++。）
+    // 用独立的通知服务与临时设置文件，不受本文件预约协调器的覆盖判断影响。
+    QTemporaryDir preferences;
+    QVERIFY(preferences.isValid());
+    AppSettings settings(preferences.filePath(QStringLiteral("settings.ini")));
+    settings.setLongBreakEnabled(true);
+    settings.setLongBreakInterval(2);
+    settings.setLongBreakMinutes(20);
+    settings.setBreakMinutes(7);
+    settings.setSoundEnabled(true);
+    FakeBackend backend;
+    NotificationService service;
+    service.setBackend(&backend);
+    int chimes = 0;
+    PhaseCompletionNotifier notifier(FocusTimer::instance(), &settings, &service, [&chimes] { ++chimes; return true; });
+
+    // 完成后连续数 = 2：长休息。番茄要够 3 分钟，不足的会被当成无效丢弃、不计入连续数。
+    FocusTimer::instance()->m_completedPomodoros = 1;
+    QVERIFY(startPomodoro(5) > 0);
+    m_clock.advanceSecs(5 * 60 + 1);
+    tick();
+    settle();
+    QCOMPARE(FocusTimer::instance()->completedPomodoros(), 2);
+    QString title;
+    QString body;
+    QVERIFY(NotificationService::phaseCompleteContent(1, 2, 20, true, &title, &body));
+    QCOMPARE(backend.delivered.size(), 1);
+    QCOMPARE(backend.delivered.at(0).title, title);
+    QCOMPARE(backend.delivered.at(0).body, body);
+    QVERIFY(backend.delivered.at(0).playSound);
+
+    // 完成后连续数 = 3：普通休息，关了提示音就不响铃。
+    FocusTimer::instance()->resetSession();
+    settings.setSoundEnabled(false);
+    QVERIFY(startPomodoro(5) > 0);
+    m_clock.advanceSecs(5 * 60 + 1);
+    tick();
+    settle();
+    QCOMPARE(FocusTimer::instance()->completedPomodoros(), 3);
+    QVERIFY(NotificationService::phaseCompleteContent(1, 3, 7, false, &title, &body));
+    QCOMPARE(backend.delivered.size(), 2);
+    QCOMPARE(backend.delivered.at(1).body, body);
+    QVERIFY(!backend.delivered.at(1).playSound);
+    QCOMPARE(chimes, 0);
+}
+
+void PhaseAlarmCoordinatorTests::breakCompletionRemembersLongBreakAndFallsBackToChime()
+{
+    // 保证：长休息结束的通知说「长休息」——进入休息段时记下的口径，结束时计时器已空闲读不到目标时长；
+    // 系统通知发不出去时用本地提示音兜底，关了提示音就不响；没有通知服务时直接响铃。
+    QTemporaryDir preferences;
+    QVERIFY(preferences.isValid());
+    AppSettings settings(preferences.filePath(QStringLiteral("settings.ini")));
+    settings.setLongBreakEnabled(true);
+    settings.setLongBreakMinutes(20);
+    settings.setSoundEnabled(true);
+    FakeBackend backend;
+    backend.failDeliver = true;
+    NotificationService service;
+    service.setBackend(&backend);
+    int chimes = 0;
+    PhaseCompletionNotifier notifier(FocusTimer::instance(), &settings, &service, [&chimes] { ++chimes; return true; });
+
+    QVERIFY(FocusTimer::instance()->startBreakForTask(20 * 60, -1, QString()));
+    m_clock.advanceSecs(20 * 60 + 1);
+    tick();
+    settle();
+    QString title;
+    QString body;
+    QVERIFY(NotificationService::phaseCompleteContent(2, FocusTimer::instance()->completedPomodoros(), 0, true,
+                                                      &title, &body));
+    QCOMPARE(backend.delivered.size(), 1);
+    // 长休息只体现在标题上（「长休息结束」），正文与普通休息相同，所以必须比标题。
+    QCOMPARE(backend.delivered.at(0).title, QStringLiteral("长休息结束"));
+    QCOMPARE(backend.delivered.at(0).title, title);
+    QCOMPARE(backend.delivered.at(0).body, body);
+    QCOMPARE(chimes, 1);
+
+    // 普通休息（目标不是长休息时长）结束：按普通休息说；关了提示音，投递失败也不响。
+    settings.setSoundEnabled(false);
+    QVERIFY(FocusTimer::instance()->startBreakForTask(5 * 60, -1, QString()));
+    m_clock.advanceSecs(5 * 60 + 1);
+    tick();
+    settle();
+    QVERIFY(NotificationService::phaseCompleteContent(2, FocusTimer::instance()->completedPomodoros(), 0, false,
+                                                      &title, &body));
+    QCOMPARE(backend.delivered.size(), 2);
+    QCOMPARE(backend.delivered.at(1).title, QStringLiteral("休息结束"));
+    QCOMPARE(backend.delivered.at(1).body, body);
+    QCOMPARE(chimes, 1);
+
+    // 没有通知服务：直接用提示音。
+    settings.setSoundEnabled(true);
+    int directChimes = 0;
+    PhaseCompletionNotifier bare(FocusTimer::instance(), &settings, nullptr, [&directChimes] { ++directChimes; return true; });
+    QVERIFY(FocusTimer::instance()->startBreakForTask(5 * 60, -1, QString()));
+    m_clock.advanceSecs(5 * 60 + 1);
+    tick();
+    settle();
+    QCOMPARE(directChimes, 1);
 }
 
 QTEST_MAIN(PhaseAlarmCoordinatorTests)

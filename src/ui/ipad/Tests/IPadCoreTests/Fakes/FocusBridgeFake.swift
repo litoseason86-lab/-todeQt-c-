@@ -18,10 +18,16 @@ import IPadCore
     var onPhaseSettledOffline: ((Int) -> Void)?
     var onTaskAutoCompleteFailed: ((Int) -> Void)?
     var onFailure: ((String) -> Void)?
+    var onAlarmUnavailable: ((String) -> Void)?
+    var onNotificationDeliveryFailed: ((String) -> Void)?
     var error: Error?
     var calls: [(name: String, taskID: Int, title: String, seconds: Int)] = []
+    // failing 只让指定方法失败；onHandleCompleted 让 handleTaskCompleted 在返回前触发信号（真实控制器停表时会同步发 sessionDiscarded）。
+    var failing: Set<String> = []
+    var onHandleCompleted: (() -> Void)?
     private func record(_ name: String, taskID: Int = -1, title: String = "", seconds: Int = 0) throws {
         calls.append((name, taskID, title, seconds)); if let error { throw error }
+        if failing.contains(name) { throw NSError(domain: "测试", code: 3, userInfo: [NSLocalizedDescriptionKey: "\(name) 失败"]) }
     }
     var focusSnapshot = FocusSnapshot()
     var focusTaskEntry = FocusTaskEntry()
@@ -41,8 +47,8 @@ import IPadCore
     var recordedLongFree: [Bool] = []
     func startFree(taskID: Int, title: String) throws { try record("startFree", taskID: taskID, title: title) }
     func startPomodoro(taskID: Int, title: String, seconds: Int) throws { try record("startPomodoro", taskID: taskID, title: title, seconds: seconds) }
-    func pause() throws { try record("pause") }
-    func resume() throws { try record("resume") }
+    func pause() throws { try record("pause"); focusSnapshot.running = false }
+    func resume() throws { try record("resume"); focusSnapshot.running = true }
     func startBreak(seconds: Int, taskID: Int, title: String) throws { try record("startBreak", taskID: taskID, title: title, seconds: seconds) }
     func planTaskEntry(taskID: Int, title: String) throws -> FocusTaskEntry { try record("planTaskEntry", taskID: taskID, title: title); return focusTaskEntry }
     func switchConsequence() throws -> FocusSwitchConsequence { try record("switchConsequence"); return focusSwitchConsequence }
@@ -51,7 +57,7 @@ import IPadCore
     func planModeSwitch(taskID: Int, title: String) throws -> FocusModeSwitch { try record("planModeSwitch", taskID: taskID, title: title); return focusModeSwitch }
     func autoStartCandidate(taskID: Int, title: String) throws -> FocusCandidate { try record("autoStartCandidate", taskID: taskID, title: title); return focusCandidate }
     func createTodayTask(title: String) throws -> Int { try record("createTodayTask", title: title); return createdID }
-    func handleTaskCompleted(taskID: Int) throws -> FocusTaskCompletion { try record("handleTaskCompleted", taskID: taskID); return focusTaskCompletion }
+    func handleTaskCompleted(taskID: Int) throws -> FocusTaskCompletion { try record("handleTaskCompleted", taskID: taskID); onHandleCompleted?(); return focusTaskCompletion }
     func freeTimerWarningHours() throws -> Int { try record("freeTimerWarningHours"); return warningHours }
     func needsLongFreeStopConfirmation() throws -> Bool { try record("needsLongFreeStopConfirmation"); return needsConfirmation }
     // 没设 longBreakMinutes 时原样返回所选时长；autoAdvance 按阶段给结果，没给的阶段不衔接。

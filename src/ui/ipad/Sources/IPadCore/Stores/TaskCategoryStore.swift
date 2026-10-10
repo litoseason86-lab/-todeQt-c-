@@ -8,7 +8,6 @@ import Observation
     public var newCategoryPresented = false
     public private(set) var errorMessage = ""
     @ObservationIgnored private let bridge: any CategoryBridgeProtocol
-    @ObservationIgnored private var previousChanged: (() -> Void)?
     @ObservationIgnored private var active = false
 
     // 这是科目数据的默认配色，与 ColorPicker.qml 的暖色阶同源；界面语义色仍由 ThemeColors 提供。
@@ -21,16 +20,14 @@ import Observation
         close()
         self.selectedID = selectedID > 0 ? selectedID : -1
         active = true
-        // 任务表单只在打开期间订阅，保留并转发宿主已有的科目监听；退出时恢复它。
-        // 页面不能同时挂两个任务表单，避免单回调协议出现两个相互覆盖的编辑宿主。
-        previousChanged = bridge.onChanged
-        let previous = previousChanged
-        bridge.onChanged = { [weak self] in previous?(); if self?.active == true { self?.reload() } }
+        // 回调槽只有一个：宿主必须给本 Store 一份专用的桥接实例（别的页面各用各的），
+        // 这样打开时直接占用、关闭时置空，不会与其它监听方互相覆盖。
+        bridge.onChanged = { [weak self] in if self?.active == true { self?.reload() } }
         reload()
     }
     public func close() {
-        if active { bridge.onChanged = previousChanged }
-        previousChanged = nil; active = false; newCategoryPresented = false
+        if active { bridge.onChanged = nil }
+        active = false; newCategoryPresented = false
     }
     public func reload() {
         guard active else { return }

@@ -3,6 +3,8 @@
 #include "../../../services/FocusTimer.h"
 #include "../../../services/FocusSessionController.h"
 #include "../../../services/TaskManager.h"
+#include "../../../services/NotificationService.h"
+#include "../../../services/PhaseAlarmCoordinator.h"
 #include <memory>
 using namespace PTBridgeSupport;
 
@@ -201,6 +203,16 @@ QVariantMap overflow() { return {{"valid", false}, {"error", QStringLiteral("专
             if (b && !b->_failures.collect(message) && b.onFailure) b.onFailure(string(message));
         };
         QObject::connect(timer, &FocusTimer::operationFailed, context, failure);
+        // 提醒类信号只用于前台提示。预约协调器由 main.cpp 在移动端创建并按名字登记，桥接创建时取不到就不连；
+        // 登记晚于桥接创建的话本桥接收不到，所以原生根必须在登记之后才创建桥接。
+        if (auto *alarms = service<PhaseAlarmCoordinator>(QStringLiteral("phaseAlarms"))) {
+            QObject::connect(alarms, &PhaseAlarmCoordinator::alarmUnavailable, context, [weakSelf](const QString &reason) {
+                PTFocusBridge *b = weakSelf; if (b.onAlarmUnavailable) b.onAlarmUnavailable(string(reason));
+            });
+        }
+        QObject::connect(NotificationService::instance(), &NotificationService::notificationDeliveryFailed, context, [weakSelf](const QString &reason) {
+            PTFocusBridge *b = weakSelf; if (b.onNotificationDeliveryFailed) b.onNotificationDeliveryFailed(string(reason));
+        });
         // 新建专注任务的错误仅在调用期收集；其它页面的任务错误由任务桥接处理，不串到专注页。
         QObject::connect(TaskManager::instance(), &TaskManager::operationFailed, context, [weakSelf](const QString &message) {
             PTFocusBridge *b = weakSelf; if (b) b->_failures.collect(message);
