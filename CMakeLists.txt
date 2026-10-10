@@ -527,12 +527,23 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/Stores/TaskEditorStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/TaskCategoryStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/TaskCompletionNoteStore.swift
-        src/ui/ipad/Sources/IPadCore/Format/Duration.swift)
+        src/ui/ipad/Sources/IPadCore/Format/Duration.swift
+        src/ui/ipad/Sources/IPadCore/Format/DashboardFormat.swift)
     target_sources(IPadUI PRIVATE
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskRow.swift
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskCategoryPicker.swift
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskDetailSheet.swift
         src/ui/ipad/Sources/IPadUI/Components/Task/TaskCompletionNoteSheet.swift)
+    # 055-P4-1 步骤 4–5：专注计时与仪表盘。
+    target_sources(IPadCore PRIVATE src/ui/ipad/Sources/IPadCore/Stores/FocusStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/DashboardStore.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Focus/FocusView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Focus/FocusClockText.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Focus/FocusRingView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Focus/FocusSheets.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Focus/FocusImmersiveView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Dashboard/DashboardView.swift)
     # 055-P4-1 步骤 3：今日任务（Store 与页面）。
     target_sources(IPadCore PRIVATE
         src/ui/ipad/Sources/IPadCore/Stores/TodayStore.swift
@@ -1416,7 +1427,10 @@ add_executable(PTFocusBridgeTests ${PT_CORE_TEST_SOURCES}
     src/platform/ios/bridge/PTFocusBridge.h src/platform/ios/bridge/PTFocusBridge.mm
     src/platform/ios/bridge/PTGapReminderBridge.h src/platform/ios/bridge/PTGapReminderBridge.mm
     src/services/PendingDeletion.h src/services/PendingDeletion.cpp
-    src/services/FocusSessionController.h src/services/FocusSessionController.cpp)
+    src/services/FocusSessionController.h src/services/FocusSessionController.cpp
+    # 055-P4-1 步骤 4：提醒信号转发需要真实的通知服务与预约协调器。
+    src/services/NotificationService.h src/services/NotificationService.cpp
+    src/services/PhaseAlarmCoordinator.h src/services/PhaseAlarmCoordinator.cpp)
 set_source_files_properties(tests/PTFocusBridgeTests.mm
     src/platform/ios/bridge/PTFocusBridge.mm src/platform/ios/bridge/PTGapReminderBridge.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")

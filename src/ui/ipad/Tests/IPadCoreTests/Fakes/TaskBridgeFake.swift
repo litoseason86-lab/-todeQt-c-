@@ -25,7 +25,16 @@ import IPadCore
     func todayTasks() throws -> [TaskValue] { try record("todayTasks"); return result }
     func weekTasks(startDate: String) throws -> [TaskValue] { try record("weekTasks", text: [startDate]); return result }
     func overdueTasks() throws -> [TaskValue] { try record("overdueTasks"); return overdue ?? result }
-    func task(id: Int) throws -> TaskValue { try record("task", ids: [id]); return result.first ?? TaskValue() }
+    // 按编号查任务：给了 tasksByID 就严格按编号，缺的抛真实桥接同款「任务已不存在」；没给时沿用旧行为。
+    var tasksByID: [Int: TaskValue]?
+    func task(id: Int) throws -> TaskValue {
+        try record("task", ids: [id])
+        if let tasksByID {
+            guard let value = tasksByID[id] else { throw NSError(domain: "PTTaskBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: "任务已不存在"]) }
+            return value
+        }
+        return result.first ?? TaskValue()
+    }
     func search(text: String, status: Int, limit: Int) throws -> [TaskValue] { try record("search", text: [text], numbers: [status, limit]); return result }
     func create(title: String, date: String, categoryID: Int, estimatedMinutes: Int, notes: String) throws -> Int {
         try record("create", text: [title, date, notes], numbers: [categoryID, estimatedMinutes]); return createdID

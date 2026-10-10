@@ -6,9 +6,9 @@ import SwiftUI
     @ViewBuilder static func view(for page: PageID) -> some View {
         switch page {
         case .today: TodayView()
-        case .focus: placeholder(.focus)
+        case .focus: FocusView()
         case .week: placeholder(.week)
-        case .dashboard: placeholder(.dashboard)
+        case .dashboard: DashboardView()
         case .knowledgeGap: placeholder(.knowledgeGap)
         case .todayFocus: placeholder(.todayFocus)
         case .schedule: placeholder(.schedule)

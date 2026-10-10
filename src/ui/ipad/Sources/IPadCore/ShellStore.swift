@@ -34,6 +34,13 @@ public struct ShellSnapshot: Equatable, Sendable {
     func select(page: String)
 }
 
+// 记一笔的来源任务与它的科目；-1 表示无来源 / 未分类。
+public struct ShellCaptureSource: Equatable, Sendable {
+    public var taskID: Int
+    public var categoryID: Int
+    public init(taskID: Int = -1, categoryID: Int = -1) { self.taskID = taskID; self.categoryID = categoryID }
+}
+
 public struct ShellToast: Identifiable {
     public let id: UUID
     public let message: String
@@ -54,6 +61,10 @@ public final class ShellStore {
     public var taskActions: TaskActions?
     @ObservationIgnored public var onNewTask: (() -> Void)?
     @ObservationIgnored public var onStartOrPause: (() -> Void)?
+    // 055-P4-1：专注页的记一笔要带当前计时任务与科目，其它页没有来源。由原生根装配，
+    // 提供者在每次打开记一笔时现取，避免来源停留在上一次的任务上。
+    @ObservationIgnored public var captureSourceProvider: (() -> ShellCaptureSource?)?
+    @ObservationIgnored private var captureSource = ShellCaptureSource()
     @ObservationIgnored private var editFlushers: [UUID: () -> Void] = [:]
     @ObservationIgnored private let bridge: any ShellBridgeProtocol
     @ObservationIgnored private var toastAction: (() -> Void)?
@@ -93,7 +104,12 @@ public final class ShellStore {
         if !succeeded && errorMessage.isEmpty { errorMessage = "计时操作失败，请重试" }
     }
     public func presentCapture() {
+        presentCapture(source: captureSourceProvider?() ?? ShellCaptureSource())
+    }
+    // 带来源的入口：来源任务与科目随这次记一笔一起写入，打开时固定，之后任务切换也不改。
+    public func presentCapture(source: ShellCaptureSource) {
         guard !snapshot.operationBlocksUI else { return }
+        captureSource = source
         captureError = ""
         capturePresented = true
     }
@@ -101,7 +117,7 @@ public final class ShellStore {
         guard !snapshot.operationBlocksUI else { return false }
         let title = captureTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if title.isEmpty { captureError = "先写一句，哪怕只是几个关键词"; return false }
-        if bridge.capture(title: title, categoryID: -1, sourceTaskID: -1) <= 0 {
+        if bridge.capture(title: title, categoryID: captureSource.categoryID, sourceTaskID: captureSource.taskID) <= 0 {
             captureError = errorMessage.isEmpty ? "没能存下来，请再试一次" : errorMessage
             return false
         }

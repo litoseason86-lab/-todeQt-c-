@@ -5,6 +5,7 @@ private enum ShellTab: Hashable { case page(PageID), more }
 
 struct ShellRootView: View {
     @Bindable var store: ShellStore
+    @Environment(FocusStore.self) private var focus
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var tab: ShellTab = .page(.dashboard)
@@ -119,7 +120,7 @@ struct ShellRootView: View {
         .padding(.vertical, 8)
     }
     private var focusSummary: String {
-        store.snapshot.hasTimer ? clock : "\(store.snapshot.todayFocusedSeconds / 60) 分钟"
+        store.snapshot.hasTimer ? focus.primaryTimeText : DurationFormat.seconds(Double(store.snapshot.todayFocusedSeconds))
     }
     private var clock: String {
         ShellDisplay.clock(store.snapshot.mode == 1 ? store.snapshot.remainingSeconds : store.snapshot.elapsedSeconds)
@@ -142,7 +143,7 @@ struct ShellRootView: View {
             Button { store.select(.focus) } label: {
                 HStack {
                     Text(clock).monospacedDigit()
-                    Text(store.snapshot.taskTitle.isEmpty ? "休息" : store.snapshot.taskTitle).lineLimit(1)
+                    Text(focus.miniTimerLabel).lineLimit(1)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)

@@ -58,6 +58,8 @@ import Observation
     @ObservationIgnored private let statistics: any StatisticsBridgeProtocol
     @ObservationIgnored private let gaps: any GapReminderBridgeProtocol
     @ObservationIgnored private let pendingDeletion: PendingDeletionStore
+    // 055-P4-1 步骤 4：专注完成后「已专注」要跟着变；宿主给本 Store 一份专用适配器，不给就不监听。
+    @ObservationIgnored private let focus: (any FocusBridgeProtocol)?
     @ObservationIgnored private weak var shell: ShellStore?
     @ObservationIgnored private var active = false
     // 冻结期间收到的刷新只记一笔，令牌释放时补读一次。
@@ -67,7 +69,9 @@ import Observation
     public init(tasks: any TaskBridgeProtocol, interactions: any InteractionBridgeProtocol,
                 logicalDay: any LogicalDayBridgeProtocol, settings: any SettingsBridgeProtocol,
                 statistics: any StatisticsBridgeProtocol, gaps: any GapReminderBridgeProtocol,
-                pendingDeletion: PendingDeletionStore, shell: ShellStore) {
+                pendingDeletion: PendingDeletionStore, shell: ShellStore,
+                focus: (any FocusBridgeProtocol)? = nil) {
+        self.focus = focus
         self.taskBridge = tasks; self.interactions = interactions; self.logicalDay = logicalDay
         self.settings = settings; self.statistics = statistics; self.gaps = gaps
         self.pendingDeletion = pendingDeletion; self.shell = shell
@@ -102,6 +106,10 @@ import Observation
             guard let self, self.active else { return }
             self.loadError = message.isEmpty ? "统计数据加载失败，请重试" : message
         }
+        focus?.onFocusCompleted = { [weak self] _ in
+            guard let self, self.active else { return }
+            self.loadStats()
+        }
         refresh()
     }
     public func stop() {
@@ -114,6 +122,7 @@ import Observation
         interactions.onChanged = nil; logicalDay.onChanged = nil
         settings.onDailyFocusGoalChanged = nil; settings.onRolloverIgnoredDateChanged = nil
         gaps.onChanged = nil; gaps.onTasksAffected = nil; statistics.onFailure = nil
+        focus?.onFocusCompleted = nil
     }
 
     // MARK: 读取

@@ -377,4 +377,24 @@ import XCTest
         XCTAssertEqual(r.tasks.calls.last(where: { $0.name == "duplicate" })?.text, ["2031-02-03"])
         XCTAssertEqual(r.store.tools.message, "已复制到今天，完成状态与计时从零开始")
     }
+    // 产品保证：一段专注完成后，今日页的「已专注」立刻跟着变，不必等下次进页；离开页面后不再监听。
+    func testFocusCompletedRefreshesFocusedTimeWhileActive() {
+        let tasks = TaskBridgeFake(); let statistics = StatisticsBridgeFake(); let focus = FocusBridgeFake()
+        let shell = ShellStore(bridge: ShellBridgeFake()); retainedShell = shell
+        let logicalDay = LogicalDayBridgeFake(); logicalDay.today = "2026-10-09"
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: shell)
+        let store = TodayStore(tasks: tasks, interactions: InteractionBridgeFake(), logicalDay: logicalDay,
+                               settings: SettingsBridgeFake(), statistics: statistics, gaps: GapReminderBridgeFake(),
+                               pendingDeletion: pending, shell: shell, focus: focus)
+        statistics.day.totalDuration = 600
+        store.start()
+        XCTAssertEqual(store.focusedSeconds, 600)
+        statistics.day.totalDuration = 2100   // 服务里多了一段 25 分钟的专注
+        focus.onFocusCompleted?(1500)
+        XCTAssertEqual(store.focusedSeconds, 2100)
+        store.stop()
+        statistics.day.totalDuration = 9000
+        XCTAssertNil(focus.onFocusCompleted)
+        XCTAssertEqual(store.focusedSeconds, 2100)
+    }
 }
