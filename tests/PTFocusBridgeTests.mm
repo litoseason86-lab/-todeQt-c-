@@ -49,6 +49,7 @@ private slots:
     void snapshotAndTimerActions();
     void taskEntryAndSwitchProjections();
     void endAndLongFreeBranches();
+    void breakAndAutoAdvanceForwardController();
     void candidateCreationAndTaskCompletion();
     void failuresAndMissingController();
     void allSignalsAndLifetime();
@@ -218,6 +219,26 @@ void PTFocusBridgeTests::failuresAndMissingController() {
         QVERIFY(![b planModeSwitch:m_task title:@"甲"].valid); QVERIFY(![b autoStartCandidate:m_task title:@"甲"].valid);
         QVERIFY(![b handleTaskCompleted:m_task].valid); QVERIFY(![b finishLongFree:YES correctedSeconds:0].valid);
         QCOMPARE([b freeTimerWarningHours:&error], NSInteger(0)); QVERIFY(error != nil);
+    }
+}
+// 产品保证：长休息时长与自动衔接原样转发控制器的判定（判定表在 FocusSessionControllerTests）：
+// 所选休息时长原样传进去，两个开关各管各的阶段；控制器不可用时报错而不是给默认值。
+void PTFocusBridgeTests::breakAndAutoAdvanceForwardController() {
+    @autoreleasepool {
+        PTFocusBridge *b = [PTFocusBridge new]; NSError *error = nil;
+        AppSettings::instance()->setLongBreakEnabled(false);
+        QCOMPARE([b nextBreakMinutes:13 error:&error], NSInteger(13)); QVERIFY(error == nil);
+        AppSettings::instance()->setAutoStartBreak(true);
+        AppSettings::instance()->setAutoStartNextPomodoro(false);
+        QVERIFY([b autoAdvanceAfterPhase:1 error:&error]); QVERIFY(error == nil);
+        QVERIFY(![b autoAdvanceAfterPhase:2 error:&error]); QVERIFY(error == nil);
+        AppSettings::instance()->setAutoStartBreak(false);
+        AppSettings::instance()->setAutoStartNextPomodoro(true);
+        QVERIFY(![b autoAdvanceAfterPhase:1 error:&error]);
+        QVERIFY([b autoAdvanceAfterPhase:2 error:&error]); QVERIFY(error == nil);
+        m_controller.reset();
+        QCOMPARE([b nextBreakMinutes:13 error:&error], NSInteger(0)); QVERIFY(error != nil); error = nil;
+        QVERIFY(![b autoAdvanceAfterPhase:2 error:&error]); QVERIFY(error != nil);
     }
 }
 // 产品保证：全部计时信号的载荷保留，桥接释放后无保留环且不再回调。

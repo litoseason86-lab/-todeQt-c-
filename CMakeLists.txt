@@ -145,6 +145,8 @@ set(APP_SOURCES
     src/services/TrayController.cpp
     src/services/NotificationService.h
     src/services/NotificationService.cpp
+    src/services/PhaseCompletionNotifier.h
+    src/services/PhaseCompletionNotifier.cpp
     src/services/PhaseAlarmCoordinator.h
     src/services/PhaseAlarmCoordinator.cpp
     src/services/BackupOperations.h
@@ -1086,6 +1088,8 @@ add_executable(PhaseAlarmCoordinatorTests
     src/services/NotificationService.cpp
     src/services/PhaseAlarmCoordinator.h
     src/services/PhaseAlarmCoordinator.cpp
+    src/services/PhaseCompletionNotifier.h
+    src/services/PhaseCompletionNotifier.cpp
     src/services/TrashStore.h src/services/TrashStore.cpp
 )
 

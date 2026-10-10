@@ -136,17 +136,14 @@ bool PhaseAlarmCoordinator::composeContent(QString* title, QString* body, bool* 
     if (phase == FocusTimer::WorkPhase) {
         // 预约发生在这个番茄完成之前：到点那一刻它才计入连续数，文案要按「完成后」的数写。
         const int completedAfter = m_timer->completedPomodoros() + 1;
-        const bool isLongBreak = settings->longBreakEnabled()
-            && settings->longBreakInterval() > 0
-            && completedAfter % settings->longBreakInterval() == 0;
+        const bool isLongBreak = settings->longBreakDueAfter(completedAfter);
         const int breakMinutes = isLongBreak ? settings->longBreakMinutes() : settings->breakMinutes();
         return NotificationService::phaseCompleteContent(
             phase, completedAfter, breakMinutes, isLongBreak, title, body);
     }
     if (phase == FocusTimer::BreakPhase) {
         // 与界面的长休息判定同一口径：开着长休息且本段时长正好等于长休息时长。
-        const bool isLongBreak = settings->longBreakEnabled()
-            && m_timer->targetSeconds() == settings->longBreakMinutes() * 60;
+        const bool isLongBreak = settings->breakTargetIsLong(m_timer->targetSeconds());
         return NotificationService::phaseCompleteContent(phase, 0, 0, isLongBreak, title, body);
     }
     return false;

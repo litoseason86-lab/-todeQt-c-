@@ -125,6 +125,10 @@ __attribute__((swift_attr("@MainActor")))
 - (NSInteger)freeTimerWarningHours:(NSError **)error __attribute__((swift_error(nonnull_error)));
 // false 是合法判断结果，错误另走 NSError，不能让 Swift 将 false 当成调用失败。
 - (BOOL)needsLongFreeStopConfirmation:(NSError **)error __attribute__((swift_error(nonnull_error)));
+// 长休息判定，见 FocusSessionController::nextBreakMinutes；selectedBreakMinutes 是页面当前选的休息时长。
+- (NSInteger)nextBreakMinutes:(NSInteger)selectedBreakMinutes error:(NSError **)error __attribute__((swift_error(nonnull_error)));
+// 阶段自然完成后要不要自动衔接，见 FocusSessionController::autoAdvanceAfter；延迟到点时要再问一次。
+- (BOOL)autoAdvanceAfterPhase:(NSInteger)completedPhase error:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (PTFocusEndResult *)endCurrent;
 - (PTFocusEndResult *)endPomodoroCycle;
 - (PTFocusFinishResult *)finishLongFree:(BOOL)recordSession correctedSeconds:(NSInteger)seconds;

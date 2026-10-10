@@ -143,6 +143,8 @@ import PTBridge
     func handleTaskCompleted(taskID: Int) throws -> FocusTaskCompletion { try value(bridge.handleTaskCompleted(taskID)) }
     func freeTimerWarningHours() throws -> Int { try bridge.freeTimerWarningHours() }
     func needsLongFreeStopConfirmation() throws -> Bool { try bridge.needsLongFreeStopConfirmation() }
+    func nextBreakMinutes(selected: Int) throws -> Int { try bridge.nextBreakMinutes(selected) }
+    func autoAdvanceAfter(phase: Int) throws -> Bool { try bridge.autoAdvance(afterPhase: phase) }
     func endCurrent() throws -> FocusEndResult { try value(bridge.endCurrent()) }
     func endPomodoroCycle() throws -> FocusEndResult { try value(bridge.endPomodoroCycle()) }
     func finishLongFree(record: Bool, correctedSeconds: Int) throws -> FocusFinishResult { try value(bridge.finishLongFree(record, correctedSeconds: correctedSeconds)) }

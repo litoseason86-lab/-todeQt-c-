@@ -158,6 +158,20 @@ TestCase {
         property var finishCalls: []
         property bool finishFails: false
 
+        // 长休息与自动衔接：判定表由 C++ nextBreakUsesLongBreakOnEveryNthPomodoro / autoAdvanceFollowsPerPhaseSwitch 保证，
+        // 替身照同一口径读设置替身与计时器替身，让依赖它们的流程用例照常运行。
+        property var nextBreakCalls: []
+        function nextBreakMinutes(selected) {
+            nextBreakCalls = nextBreakCalls.concat([selected])
+            var interval = appSettingsMock.longBreakInterval
+            var done = focusTimer.completedPomodoros
+            return appSettingsMock.longBreakEnabled && interval > 0 && done > 0 && done % interval === 0
+                    ? appSettingsMock.longBreakMinutes : selected
+        }
+        function autoAdvanceAfter(phase) {
+            return (phase === 1 && appSettingsMock.autoStartBreak) || (phase === 2 && appSettingsMock.autoStartNextPomodoro)
+        }
+
         function freeTimerWarningHours() {
             return warningHours
         }
@@ -352,6 +366,7 @@ TestCase {
         controller.finishCalls = []
         controller.finishFails = false
         controller.endCycleCalls = 0
+        controller.nextBreakCalls = []
         appSettingsMock.autoStartBreak = false
         appSettingsMock.autoStartNextPomodoro = false
         appSettingsMock.longBreakEnabled = true

@@ -139,6 +139,11 @@ public:
     void setLongBreakMinutes(int minutes);
     int longBreakInterval() const;
     void setLongBreakInterval(int count);
+    // 长休息口径只有这一处：开着长休息、连续完成数大于 0 且是间隔的整数倍时，下一段休息是长休息。
+    // FocusSessionController::nextBreakMinutes、PhaseAlarmCoordinator 的预约文案、PhaseCompletionNotifier 的即时通知共用。
+    bool longBreakDueAfter(int completedPomodoros) const;
+    // 正在进行的这段休息是不是长休息：开着长休息且目标时长正好是长休息分钟数。
+    bool breakTargetIsLong(int targetSeconds) const;
     QString semesterStartDate() const;
     void setSemesterStartDate(const QString& isoDate);
     int semesterWeeks() const;

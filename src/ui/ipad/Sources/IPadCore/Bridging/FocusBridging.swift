@@ -100,6 +100,9 @@ public struct FocusTaskCompletion: Equatable, Sendable {
     func handleTaskCompleted(taskID: Int) throws -> FocusTaskCompletion
     func freeTimerWarningHours() throws -> Int
     func needsLongFreeStopConfirmation() throws -> Bool
+    // 长休息与自动衔接的判定在 C++（FocusSessionController），Swift 不读设置自己算。
+    func nextBreakMinutes(selected: Int) throws -> Int
+    func autoAdvanceAfter(phase: Int) throws -> Bool
     func endCurrent() throws -> FocusEndResult
     func endPomodoroCycle() throws -> FocusEndResult
     func finishLongFree(record: Bool, correctedSeconds: Int) throws -> FocusFinishResult

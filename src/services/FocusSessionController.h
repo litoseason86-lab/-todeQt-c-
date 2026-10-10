@@ -75,6 +75,14 @@ public:
     // needsConfirmation 是超长自由专注，尚未结束，由界面切到专注页弹确认。
     Q_INVOKABLE QVariantMap handleTaskCompleted(int taskId);
 
+    // 长休息：每完成 N 个番茄，这一次休息更久。连续完成数由 FocusTimer 维护（只计自然到点的番茄）；
+    // 开着长休息、连续数大于 0 且是间隔的整数倍时返回长休息分钟，其余返回页面当前选的 selectedBreakMinutes。
+    // 手动与自动开始休息共用这一判定。
+    Q_INVOKABLE int nextBreakMinutes(int selectedBreakMinutes) const;
+    // 阶段自然完成后要不要自动衔接下一段：工作段（phase 1）看「自动开始休息」，休息段（phase 2）看「自动开始下一个番茄」，
+    // 其它阶段一律不衔接。界面延迟到点时要再问一次：等待期间用户可能关掉了开关。
+    Q_INVOKABLE bool autoAdvanceAfter(int completedPhase) const;
+
     // 超长自由专注的提醒时长（小时）：设置值在 1–24 之间取整，否则用 8。
     Q_INVOKABLE int freeTimerWarningHours() const;
     // 有活动会话、mode == 0，且已超过提醒时长（严格大于：恰好等于阈值不弹，多一秒才弹）。
