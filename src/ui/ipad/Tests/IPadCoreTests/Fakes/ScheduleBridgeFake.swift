@@ -21,6 +21,7 @@ import IPadCore
     var weekValue = 0
     var weekMondayValue = ""
     var weekdayDateValue = ""
+    var weekdayDates: [Int: String] = [:]
     var overlapsValue = false
     var overlapResult: ((Double, Double, Double, Double) -> Bool)?
     var settingsError: Error?
@@ -64,7 +65,7 @@ import IPadCore
     func weekIndex(start: String, date: String) -> Int { weekInputs.append((start, date)); return weekValue }
     func mondayOfWeek(start: String, week: Int) -> String { calls.append("mondayOfWeek"); return weekMondayValue }
     func dateOfWeekday(start: String, week: Int, weekday: Int) -> String {
-        weekdayInputs.append((start, week, weekday)); return weekdayDateValue
+        weekdayInputs.append((start, week, weekday)); return weekdayDates[weekday] ?? weekdayDateValue
     }
     func overlaps(start: Double, end: Double, otherStart: Double, otherEnd: Double) -> Bool { overlapResult?(start, end, otherStart, otherEnd) ?? overlapsValue }
 }

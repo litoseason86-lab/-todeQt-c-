@@ -5,6 +5,7 @@ private enum ShellTab: Hashable { case page(PageID), more }
 
 struct ShellRootView: View {
     @Bindable var store: ShellStore
+    @Environment(CoreBridges.self) private var core
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var tab: ShellTab = .page(.dashboard)
@@ -91,7 +92,7 @@ struct ShellRootView: View {
 
     private func pageView(_ page: PageID) -> some View {
         NavigationStack {
-            PageRegistry.view(for: page).shellChrome(store: store)
+            PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store)
                 .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
         }
     }
@@ -105,7 +106,7 @@ struct ShellRootView: View {
             .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
             .navigationTitle("更多")
             .navigationDestination(for: PageID.self) { page in
-                PageRegistry.view(for: page).shellChrome(store: store)
+                PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store)
                     .onAppear { store.select(page) }
             }
             .shellChrome(store: store)

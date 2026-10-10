@@ -524,6 +524,7 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/Stores/ScheduleStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/TimelineStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/WeekStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/LogicalDateNavigation.swift
         src/ui/ipad/Sources/IPadCore/Format/ScheduleFormat.swift
         src/ui/ipad/Sources/IPadCore/Format/ScheduleLayout.swift)
     target_sources(IPadUI PRIVATE

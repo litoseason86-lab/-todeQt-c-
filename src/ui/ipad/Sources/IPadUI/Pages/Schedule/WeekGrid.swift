@@ -18,7 +18,7 @@ import SwiftUI
                 HStack(spacing: 0) {
                     Color.clear.frame(width: gutter, height: 48)
                     ForEach(weekdays, id: \.self) { day in
-                        let today = store.weekIndex == store.currentWeekIndex && store.naturalWeekday == day
+                        let today = store.weekIndex == store.currentWeekIndex && store.todayWeekday == day
                         VStack(spacing: 2) {
                             Text("周" + ScheduleView.weekdayName(day)).font(.headline)
                             if let date = ScheduleFormat.displayDate(store.dateForWeekday(day)) {

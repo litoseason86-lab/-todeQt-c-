@@ -11,11 +11,12 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
     public private(set) var weekIndex = 1
     public private(set) var currentWeekIndex = 0
     public private(set) var selectedWeekday: Int
-    public private(set) var naturalDate: String
-    public private(set) var naturalWeekday: Int
+    public private(set) var todayDate: String
+    public private(set) var todayWeekday: Int
     public private(set) var displayMode: ScheduleDisplayMode = .time
     @ObservationIgnored private let bridge: any ScheduleBridging
     @ObservationIgnored private let settingsBridge: any SettingsBridgeProtocol
+    @ObservationIgnored private var logicalDay: (any LogicalDayBridgeProtocol)?
     @ObservationIgnored private var writing = false
     public var maxWeekIndex: Int { bridge.maxWeekIndex }
     public var maxPeriodCount: Int { bridge.maxPeriodCount }
@@ -31,10 +32,11 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
     public var axisEndMinutes: Int {
         min(1440, Int(ceil(Double(visibleEntries.map(\.endMinutes).max().map { max(1320, $0) } ?? 1320) / 60)) * 60)
     }
-    // 自然日期与星期由装配层提供，不能拿逻辑今日或本机临时猜测替代；周次继续交 C++。
-    public init(bridge: any ScheduleBridging, settingsBridge: any SettingsBridgeProtocol, naturalDate: String, naturalWeekday: Int) {
-        self.bridge = bridge; self.settingsBridge = settingsBridge; self.naturalDate = naturalDate; self.naturalWeekday = naturalWeekday
-        selectedWeekday = naturalWeekday
+    // 测试或宿主可注入服务给出的日期和星期；正式装配使用下面的逻辑日构造器。
+    public init(bridge: any ScheduleBridging, settingsBridge: any SettingsBridgeProtocol, todayDate: String, todayWeekday: Int) {
+        self.bridge = bridge; self.settingsBridge = settingsBridge; self.logicalDay = nil
+        self.todayDate = todayDate; self.todayWeekday = todayWeekday
+        selectedWeekday = todayWeekday
         displayMode = ScheduleDisplayMode(rawValue: settingsBridge.snapshot().scheduleDisplayMode) ?? .time
         // 使用独立设置适配器订阅版式变化，避免与外壳覆盖同一个单槽回调。
         settingsBridge.onScheduleDisplayModeChanged = { [weak self] in
@@ -49,6 +51,15 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
         bridge.onFailure = { [weak self] in self?.error = $0 }
         refresh(initial: true)
     }
+    // 正式装配使用逻辑今日；自然日不再由页面或系统时钟推断。
+    public convenience init(bridge: any ScheduleBridging, settingsBridge: any SettingsBridgeProtocol,
+                            logicalDay: any LogicalDayBridgeProtocol) {
+        self.init(bridge: bridge, settingsBridge: settingsBridge,
+                  todayDate: logicalDay.today, todayWeekday: 1)
+        self.logicalDay = logicalDay
+        logicalDay.observeChanges { [weak self] in self?.refreshFromSignal() }
+        refresh(initial: true)
+    }
     @discardableResult public func setDisplayMode(_ mode: ScheduleDisplayMode) -> Bool {
         do { try settingsBridge.setScheduleDisplayMode(mode.rawValue); displayMode = mode; error = ""; return true }
         catch { self.error = error.localizedDescription; return false }
@@ -59,18 +70,28 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
     private func refresh(initial: Bool) {
         do {
             let newSettings = try bridge.settings()
-            let newCurrentWeek = bridge.weekIndex(start: newSettings.semesterStartDate, date: naturalDate)
-            let newWeek = clampedWeek(initial ? newCurrentWeek : weekIndex, settings: newSettings)
+            let effectiveDate = logicalDay?.today ?? todayDate
+            let dateChanged = todayDate != effectiveDate
+            let followingCurrentWeek = initial || (dateChanged && weekIndex == currentWeekIndex)
+            let newCurrentWeek = bridge.weekIndex(start: newSettings.semesterStartDate, date: effectiveDate)
+            let newWeek = clampedWeek(followingCurrentWeek ? newCurrentWeek : weekIndex, settings: newSettings)
             let newEntries = try bridge.entries(week: newWeek), newPeriods = try bridge.periods()
+            // 以逻辑今日所在的自然周反查星期，学期尚未设置时也能选对列；Swift 不另算星期。
+            let newWeekday = logicalDay == nil ? todayWeekday : ((1...7).first(where: {
+                bridge.dateOfWeekday(start: effectiveDate, week: 1, weekday: $0) == effectiveDate
+            }) ?? todayWeekday)
             // 全部读取成功才替换快照，节次读取失败时也保留上一版课程和设置。
-            settings = newSettings; currentWeekIndex = newCurrentWeek; weekIndex = newWeek
+            settings = newSettings; todayDate = effectiveDate
+            if initial || (dateChanged && selectedWeekday == todayWeekday) { selectedWeekday = newWeekday }
+            todayWeekday = newWeekday
+            currentWeekIndex = newCurrentWeek; weekIndex = newWeek
             entries = newEntries; periods = newPeriods; error = ""
         } catch { self.error = error.localizedDescription }
     }
     public func selectWeekday(_ day: Int) { if (1...7).contains(day) { selectedWeekday = day } }
-    public func updateNaturalDay(date: String, weekday: Int) {
+    public func updateToday(date: String, weekday: Int) {
         let following = weekIndex == currentWeekIndex
-        naturalDate = date; naturalWeekday = weekday
+        todayDate = date; todayWeekday = weekday
         let newWeek = bridge.weekIndex(start: settings.semesterStartDate, date: date)
         if following { weekIndex = clampedWeek(newWeek, settings: settings) }
         refresh()

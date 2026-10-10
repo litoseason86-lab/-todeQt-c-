@@ -1,6 +1,6 @@
 import Foundation
 
-public struct TaskValue: Equatable, Sendable {
+public struct TaskValue: Equatable, Sendable, Identifiable {
     public var id = -1
     public var title = ""
     public var categoryText = ""
