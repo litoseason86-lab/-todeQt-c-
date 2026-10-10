@@ -1,5 +1,15 @@
 import Foundation
 
+public enum ShellWindowSize: Sendable {
+    case compact
+    case regular
+}
+
+public enum ShellNavigationTarget: Equatable, Sendable {
+    case page(PageID)
+    case more(path: [PageID])
+}
+
 public enum PageID: String, CaseIterable, Hashable, Sendable, Codable {
     case today, focus, week, dashboard, todayFocus, schedule
     case knowledgeGap = "knowledgeGaps"

@@ -176,6 +176,28 @@ import XCTest
         store.select(.focus)
         XCTAssertEqual(bridge.calls, ["select:focus"])
     }
+
+    // 产品保证：底部迷你计时条只在计时快照存在时显示，计时结束后的 tick 会隐藏它。
+    func testMiniTimerVisibilityFollowsTimerSnapshot() {
+        let bridge = FakeShellBridge()
+        let store = ShellStore(bridge: bridge)
+        XCTAssertFalse(store.miniTimerVisible)
+        bridge.timerSnapshot.hasTimer = true
+        bridge.onTimerChanged?()
+        XCTAssertTrue(store.miniTimerVisible)
+        bridge.timerSnapshot.hasTimer = false
+        bridge.onTimerChanged?()
+        XCTAssertFalse(store.miniTimerVisible)
+    }
+
+    // 产品保证：窄窗口的非主页面只能通过「更多」承载，宽窗口仍直接选中对应页面。
+    func testNavigationTargetMapsCompactPagesToMorePath() {
+        XCTAssertEqual(ShellStore.navigationTarget(for: .today, size: .compact), .page(.today))
+        XCTAssertEqual(ShellStore.navigationTarget(for: .memo, size: .compact), .more(path: [.memo]))
+        XCTAssertEqual(ShellStore.navigationTarget(for: .settings, size: .compact), .more(path: [.settings]))
+        XCTAssertEqual(ShellStore.navigationTarget(for: .memo, size: .regular), .page(.memo))
+    }
+
     // 产品保证：进后台的保存同步执行，已注销页面不再保存。
     func testEditFlushersCanBeRemoved() {
         let store = ShellStore(bridge: FakeShellBridge())
