@@ -16,7 +16,7 @@ import SwiftUI
                     Section("记录") {
                         Toggle("休息", isOn: Binding(get: { draft.isRest }, set: { draft.isRest = $0; self.draft = draft }))
                         if !draft.isRest { TextField("任务编号（-1 表示不关联）", value: Binding(get: { draft.taskID }, set: { draft.taskID = $0; self.draft = draft }), format: .number).keyboardType(.numberPad) }
-                        TextField("开始时间", text: $startText).onChange(of: startText) { draft.startTime = $0; draft.startEdited = true; self.draft = draft }
+                        TextField("开始时间", text: $startText).onChange(of: startText) { _, value in draft.startTime = value; draft.startEdited = true; self.draft = draft }
                         Stepper("时长：\(draft.durationMinutes) 分钟", value: Binding(get: { draft.durationMinutes }, set: { draft.durationMinutes = $0; draft.durationEdited = true; self.draft = draft }), in: 1...1440)
                     }
                 } else {

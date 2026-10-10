@@ -1,5 +1,5 @@
 import Foundation
-public struct SessionValue: Equatable, Sendable {
+public struct SessionValue: Equatable, Sendable, Identifiable {
     public var id = -1
     public var taskID = -1
     public var taskTitle = ""
