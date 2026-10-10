@@ -21,56 +21,46 @@ struct TodayView: View {
     @Environment(CoreBridges.self) private var core
     @Environment(ShellStore.self) private var shell
     @State private var sheet: TodaySheet?
-    // 本机界面状态：已完成组是否展开，只给 Swift 自己用，键名按 ipadui.<页面>.<项>。
-    @AppStorage("ipadui.today.finishedExpanded") private var finishedExpanded = true
-    @FocusState private var newTaskFocused: Bool
+    @Environment(FocusStore.self) private var focus
 
     var body: some View {
         @Bindable var store = store
-        List {
-            TodayBanners(store: store)
-            Section("未完成") {
-                ForEach(store.unfinished, id: \.id) { task in row(task) }
-                    .onMove { source, destination in
-                        // SwiftUI 给的是「插入到 destination 之前」的偏移，换成移动后的最终下标交给 Store。
-                        guard let from = source.first, from < store.unfinished.count else { return }
-                        let id = store.unfinished[from].id
-                        store.commitDrag(taskID: id, toIndex: destination > from ? destination - 1 : destination)
+        GeometryReader { geometry in
+            let narrow = geometry.size.width < 700
+            VStack(spacing: 12) {
+                goalCard
+                HStack {
+                    Picker("任务状态", selection: $store.filter) {
+                        Text("未完成 · \(store.unfinished.count)").tag(TodayStore.Filter.unfinished)
+                        Text("已完成 · \(store.finished.count)").tag(TodayStore.Filter.finished)
+                    }.pickerStyle(.menu)
+                    Spacer()
+                    Button("新建", systemImage: "plus") { store.requestNewTask() }
+                }
+                List {
+                    TodayBanners(store: store)
+                    ForEach(store.filteredTasks, id: \.id) { task in row(task, narrow: narrow) }
+                        .onMove { source, destination in
+                            guard store.filter == .unfinished, let from = source.first,
+                                  from < store.unfinished.count else { return }
+                            store.commitDrag(taskID: store.unfinished[from].id,
+                                             toIndex: destination > from ? destination - 1 : destination)
+                        }
+                    if store.filteredTasks.isEmpty && store.loadError.isEmpty {
+                        Text(store.filter == .unfinished ? "今天没有未完成任务" : "今天没有已完成任务")
+                            .foregroundStyle(ThemeColors.inkSoft)
                     }
-                if store.unfinished.isEmpty && store.finished.isEmpty && store.loadError.isEmpty {
-                    Text("今天还没有任务").foregroundStyle(ThemeColors.inkSoft)
-                }
-                HStack(spacing: 8) {
-                    Image(systemName: "plus.circle").foregroundStyle(ThemeColors.accentInk).accessibilityHidden(true)
-                    TextField("新任务", text: $store.newTitle)
-                        .focused($newTaskFocused)
-                        .submitLabel(.next)
-                        .accessibilityLabel("新任务标题")
-                        .onSubmit { _ = store.submitNewTask(); newTaskFocused = true }
-                }
-                .frame(minHeight: 44)
-                .listRowBackground(ThemeColors.surface)
+                }.listStyle(.plain).scrollContentBackground(.hidden)
             }
-            if !store.finished.isEmpty {
-                Section {
-                    DisclosureGroup("已完成 \(store.finished.count)", isExpanded: $finishedExpanded) {
-                        ForEach(store.finished, id: \.id) { task in row(task) }
-                    }
-                    .listRowBackground(ThemeColors.surface)
-                }
-            }
+            .padding(.horizontal, narrow ? 16 : 32).padding(.top, 16)
+            .frame(maxWidth: 964).frame(maxWidth: .infinity)
         }
-        .scrollContentBackground(.hidden)
         .navigationTitle("今日任务")
-        .navigationSubtitle(subtitle)
+        .navigationSubtitle(TodayDisplayDate.title(store.today))
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button { sheet = .tools } label: { Label("搜索与批量改期", systemImage: "magnifyingglass") }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button("设置今日目标", systemImage: "target") { sheet = .goal }
-                    Button("搜索与批量改期", systemImage: "calendar.badge.clock") { sheet = .tools }
+                    Button("搜索与批量改期", systemImage: "magnifyingglass") { sheet = .tools }
                     if store.rolloverBannerActive {
                         Button("全部结转到今天", systemImage: "arrow.uturn.forward") { store.moveOverdueToToday() }
                     }
@@ -78,22 +68,39 @@ struct TodayView: View {
             }
         }
         .sheet(item: $sheet, onDismiss: { store.tools.close() }) { item in sheetContent(item) }
+        .sheet(isPresented: $store.newTaskPresented) { TodayNewTaskSheet(store: store, categories: core.categories) }
         .onAppear { store.start() }
         .onDisappear { store.stop() }
-        // 撤销条出现或收起：隐藏 / 恢复那一行，并换掉「已排」的排除对象。
+        // 撤销状态改变由 Store 隐藏/恢复任务，不在视图维护第二份列表。
         .onChange(of: core.pendingDeletion.pendingTaskID) { _, _ in store.pendingDeletionChanged() }
-        // ⌘N 或其它入口请求新建：聚焦输入框后确认，请求才算消费。
+        // 外壳 ⌘N 与本页新建都投影同一个 Store 表单状态。
         .onChange(of: store.newTaskFocusRequested, initial: true) { _, requested in
-            if requested { newTaskFocused = true; store.acknowledgeNewTaskRequest() }
+            if requested { store.newTaskPresented = true; store.acknowledgeNewTaskRequest() }
         }
     }
 
-    private var subtitle: String {
-        ([TodayDisplayDate.title(store.today)].filter { !$0.isEmpty } + store.subtitleParts).joined(separator: " · ")
+    private var goalCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("今日目标").font(.headline)
+                Spacer()
+                Button { sheet = .goal } label: { Image(systemName: "pencil").frame(minWidth: 44, minHeight: 44) }
+                    .accessibilityLabel("修改今日目标")
+            }
+            Text(DurationFormat.seconds(Double(store.focusedSeconds)) + " / " +
+                 (store.goalMinutes > 0 ? DurationFormat.minutes(Double(store.goalMinutes)) : "未设目标"))
+                .font(.title3).monospacedDigit()
+            ProgressView(value: store.goalProgressPercent, total: 100)
+                .tint(ThemeColors.accentFill)
+                .accessibilityLabel("今日目标进度")
+                .accessibilityValue(StatisticsFormat.percent(store.goalProgressPercent))
+        }
+        .padding(16).foregroundStyle(ThemeColors.ink)
+        .background(ThemeColors.surfaceRaised, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    private func row(_ task: TaskValue) -> some View {
-        TaskRow(task: task, actions: core.taskActions,
+    private func row(_ task: TaskValue, narrow: Bool) -> some View {
+        TaskRow(task: task, actions: core.taskActions, activeFocus: focus.snapshot, compactAppearance: narrow,
                 onEdit: { sheet = .detail(task.id) },
                 onCompleteWithNote: { sheet = .note(task.id) },
                 onReschedule: { sheet = .reschedule(task.id) },

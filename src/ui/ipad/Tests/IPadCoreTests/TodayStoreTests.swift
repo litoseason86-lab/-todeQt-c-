@@ -213,14 +213,14 @@ import XCTest
         r.gaps.summary.dueToday = 0; r.store.refresh()
         XCTAssertEqual(r.store.gapConvertMessage, "")
     }
-    // 产品保证：新任务落在逻辑今日（不是系统日期），标题去首尾空白；回车后输入清空但仍保持输入状态。
+    // 产品保证：新任务落在逻辑今日（不是系统日期），标题去首尾空白；保存后清空并关闭表单。
     func testNewTaskLandsOnLogicalTodayAndKeepsComposing() {
         let r = rig([]); r.logicalDay.today = "2031-02-03"
         r.store.newTitle = "  写作业 "
         XCTAssertTrue(r.store.submitNewTask())
         let call = r.tasks.calls.last(where: { $0.name == "create" })
         XCTAssertEqual(call?.text, ["写作业", "2031-02-03", ""]); XCTAssertEqual(call?.numbers, [-1, 0])
-        XCTAssertEqual(r.store.newTitle, ""); XCTAssertTrue(r.store.newTaskFocusRequested)
+        XCTAssertEqual(r.store.newTitle, ""); XCTAssertFalse(r.store.newTaskFocusRequested)
     }
     // 产品保证：空标题不建任务；建任务失败保留输入并显示原因。
     func testNewTaskEmptyIsIgnoredAndFailureKeepsInput() {
@@ -396,5 +396,39 @@ import XCTest
         statistics.day.totalDuration = 9000
         XCTAssertNil(focus.onFocusCompleted)
         XCTAssertEqual(store.focusedSeconds, 2100)
+    }
+    // 产品保证：每次重新进页都默认未完成，切换只投影对应列表并保留两组计数。
+    func testR2FilterResetsOnReentryAndKeepsCounts() {
+        let r = rig([task(8, completed: true), task(4), task(2, completed: true), task(7)])
+        XCTAssertEqual(r.store.filter, .unfinished)
+        XCTAssertEqual(ids(r.store.filteredTasks), [4, 7])
+        r.store.filter = .finished
+        XCTAssertEqual(ids(r.store.filteredTasks), [8, 2])
+        XCTAssertEqual(r.store.unfinished.count, 2); XCTAssertEqual(r.store.finished.count, 2)
+        r.store.stop(); r.store.start()
+        XCTAssertEqual(r.store.filter, .unfinished)
+    }
+    // 产品保证：新建表单提交填写的四项，日期取提交时的逻辑今日，失败不丢草稿。
+    func testR2NewFormSubmitsFieldsForLogicalToday() {
+        let r = rig(); r.store.requestNewTask()
+        r.store.newTitle = "  复习  "; r.store.newCategoryID = 9
+        r.store.newEstimatedMinutes = 45; r.store.newNotes = "重点章节"
+        r.tasks.failing = ["create"]
+        XCTAssertFalse(r.store.submitNewTask()); XCTAssertEqual(r.store.newNotes, "重点章节")
+        r.tasks.failing = []; r.logicalDay.today = "2031-02-03"
+        XCTAssertTrue(r.store.submitNewTask())
+        let call = r.tasks.calls.last { $0.name == "create" }
+        XCTAssertEqual(call?.text, ["复习", "2031-02-03", "重点章节"])
+        XCTAssertEqual(call?.numbers, [9, 45]); XCTAssertFalse(r.store.newTaskPresented)
+    }
+    // 产品保证：今日目标进度照服务值展示，禁止从已专注与目标重新相除。
+    func testR2GoalProgressUsesServiceValueAndKeepsSnapshotOnFailure() {
+        let r = rig(); r.settings.goal = 60; r.statistics.day.totalDuration = 1800
+        var goal = ReviewTodayGoal(); goal.goalMinutes = 60; goal.progressPercent = 73.5
+        r.statistics.review.todayGoal = goal; r.store.refresh()
+        XCTAssertEqual(r.store.goalProgressPercent, 73.5)
+        r.statistics.error = NSError(domain: "测试", code: 1); r.store.refresh()
+        XCTAssertEqual(r.store.goalProgressPercent, 73.5)
+        XCTAssertFalse(r.store.loadError.isEmpty)
     }
 }

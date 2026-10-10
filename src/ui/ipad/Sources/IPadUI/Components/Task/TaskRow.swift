@@ -7,6 +7,8 @@ struct TaskRow: View {
     let actions: TaskActions
     var allowsStart = true
     var allowsCompletion = true
+    var activeFocus: FocusSnapshot? = nil
+    var compactAppearance: Bool? = nil
     let onEdit: () -> Void
     let onCompleteWithNote: () -> Void
     var onReschedule: (() -> Void)?
@@ -51,23 +53,29 @@ struct TaskRow: View {
                     }
                     .font(.caption).foregroundStyle(ThemeColors.inkSoft)
                 }
-                if !task.notes.isEmpty { Text(task.notes).font(.caption).foregroundStyle(ThemeColors.inkMuted).lineLimit(2) }
+                if !task.notes.isEmpty { Text(task.notes).font(.caption).foregroundStyle(ThemeColors.inkMuted).lineLimit(1) }
                 if task.completed && !task.completionNote.isEmpty {
                     Text("完成：\(task.completionNote)").font(.caption).foregroundStyle(ThemeColors.inkSoft).lineLimit(2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            if allowsStart && !task.completed {
+            if let activeFocus, activeFocus.hasActiveSession, activeFocus.currentTaskID == task.id {
+                // 行只投影根计时器的读数，不另设 Timer 或修改正在计时的任务。
+                Text("专注中 " + String(format: "%02d:%02d", activeFocus.elapsedSeconds / 60, activeFocus.elapsedSeconds % 60))
+                    .font(.caption.monospacedDigit()).foregroundStyle(ThemeColors.accentInk)
+            } else if allowsStart && !task.completed {
                 Button { actions.openFocus(id: task.id, title: task.title) } label: {
-                    if sizeClass == .compact { Image(systemName: "play.fill").frame(minWidth: 44, minHeight: 44) }
+                    if compactAppearance ?? (sizeClass == .compact) { Image(systemName: "play.fill").frame(minWidth: 44, minHeight: 44) }
                     else { Label("开始", systemImage: "play.fill").frame(minHeight: 44) }
                 }
                 .buttonStyle(.borderless).foregroundStyle(ThemeColors.accentInk)
                 .accessibilityLabel("开始专注「\(task.title)」")
             }
-            Button(action: onEdit) { Image(systemName: "info.circle").frame(minWidth: 44, minHeight: 44) }
-                .buttonStyle(.borderless).foregroundStyle(ThemeColors.inkSoft)
-                .accessibilityLabel("编辑「\(task.title)」")
+            if compactAppearance != true {
+                Button(action: onEdit) { Image(systemName: "info.circle").frame(minWidth: 44, minHeight: 44) }
+                    .buttonStyle(.borderless).foregroundStyle(ThemeColors.inkSoft)
+                    .accessibilityLabel("编辑「\(task.title)」")
+            }
         }
         .listRowBackground(ThemeColors.surface)
         .swipeActions(edge: .trailing) {
