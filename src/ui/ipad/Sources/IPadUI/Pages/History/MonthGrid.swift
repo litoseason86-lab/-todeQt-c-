@@ -4,7 +4,7 @@ import SwiftUI
 struct MonthGrid: View {
     let store: HistoryStore
     let compact: Bool
-    private let columns = Array(repeating: GridItem(.flexible(minimum: 0), spacing: 6), count: 7)
+    private var columns: [GridItem] { Array(repeating: GridItem(.flexible(minimum: 0), spacing: compact ? 2 : 6), count: 7) }
     var body: some View {
         VStack(spacing: 8) {
             HStack(spacing: 0) {
@@ -26,15 +26,17 @@ struct MonthGrid: View {
                                 if !cell.future { RoundedRectangle(cornerRadius: 3).fill(bandColor(cell.band)).frame(height: 8) }
                                 else { Color.clear.frame(height: 8).accessibilityHidden(true) }
                             }
-                            .padding(8).frame(maxWidth: .infinity, minHeight: compact ? 64 : 84, alignment: .topLeading)
+                            .padding(compact ? 6 : 8).frame(maxWidth: .infinity, minHeight: compact ? 64 : 84, alignment: .topLeading)
                             .foregroundStyle(ThemeColors.ink)
-                            .background(store.selectedDate == date ? ThemeColors.accentSoft : ThemeColors.surfaceRaised,
+                            .background(store.isSelected(cell) ? ThemeColors.accentSoft : ThemeColors.surfaceRaised,
                                         in: RoundedRectangle(cornerRadius: 10))
+                            // 今天描边与选中底色是独立状态，选历史日不能把今天标记搬过去。
+                            .overlay { RoundedRectangle(cornerRadius: 10).stroke(cell.today ? ThemeColors.accentInk : .clear, lineWidth: 1.5) }
                         }
                         .buttonStyle(.plain).disabled(cell.future)
-                        .accessibilityLabel(date)
+                        .accessibilityLabel(date + (cell.today ? "，今天" : ""))
                         .accessibilityValue(cell.future ? "未来日期" : store.durationText(cell.seconds))
-                        .accessibilityAddTraits(store.selectedDate == date ? .isSelected : [])
+                        .accessibilityAddTraits(store.isSelected(cell) ? .isSelected : [])
                     } else { Color.clear.frame(minHeight: compact ? 64 : 84).accessibilityHidden(true) }
                 }
             }

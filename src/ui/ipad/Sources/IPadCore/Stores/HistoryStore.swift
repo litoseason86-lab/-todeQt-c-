@@ -39,6 +39,11 @@ public struct HistoryDay: Equatable, Identifiable, Sendable {
             guard let self, self.active else { return }; self.refresh()
         }
     }
+    public func isSelected(_ day: HistoryDay) -> Bool { day.date == selectedDate }
+    public func detailSessions(compact: Bool) -> [SessionValue] {
+        // 窄窗仅截取展示条数；原记录次序与日合计仍来自服务，不按时长重排或加总。
+        compact ? Array(selectedSessions.prefix(2)) : selectedSessions
+    }
     public var selectedSeconds: Int { cells.first { $0.date == selectedDate }?.seconds ?? 0 }
     public var selectedSessions: [SessionValue] { sessions.filter { $0.date == selectedDate } }
     public func durationText(_ seconds: Int) -> String { history.formatDuration(seconds: seconds) }

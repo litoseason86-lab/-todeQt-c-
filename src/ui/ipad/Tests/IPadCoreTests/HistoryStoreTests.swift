@@ -132,4 +132,38 @@ import XCTest
         store.openSelectedDay(shell: blockedShell)
         XCTAssertNil(blockedShell.requestedFocusDate)
     }
+    // 产品保证：手选历史日不移动今天标记，未来日不能取代选中日。
+    func testTodayAndHistoricalSelectionRemainIndependent() throws {
+        let store = HistoryStore(history: FocusHistoryBridgeFake(), logicalDay: configuredDay())
+        store.setActive(true)
+        let today = try XCTUnwrap(store.cells.first { $0.date == "2024-02-15" })
+        let historical = try XCTUnwrap(store.cells.first { $0.date == "2024-02-14" })
+        let future = try XCTUnwrap(store.cells.first { $0.date == "2024-02-16" })
+        XCTAssertTrue(today.today); XCTAssertFalse(historical.today); XCTAssertTrue(future.future)
+        store.select("2024-02-14")
+        XCTAssertTrue(store.isSelected(historical)); XCTAssertFalse(store.isSelected(today))
+        XCTAssertTrue(today.today); XCTAssertEqual(store.cells.filter(\.today).map(\.date), ["2024-02-15"])
+        store.select("2024-02-16")
+        XCTAssertEqual(store.selectedDate, "2024-02-14"); XCTAssertFalse(store.isSelected(future))
+    }
+
+    // 产品保证：窄窗只显示选中日的前两段，保留服务顺序、全段数和独立服务合计。
+    func testCompactDetailsKeepFirstTwoSelectedDaySessions() {
+        let history = FocusHistoryBridgeFake()
+        func record(_ id: Int, _ date: String, _ title: String) -> SessionValue {
+            var value = SessionValue(); value.id = id; value.date = date; value.taskTitle = title
+            value.durationSeconds = 100; return value
+        }
+        history.sessions = [record(5, "2024-02-15", "今日"), record(9, "2024-02-14", "晚间"),
+                            record(3, "2024-02-14", ""), record(7, "2024-02-14", "晨间")]
+        history.dailyTotals["2024-02-14"] = 9999
+        let store = HistoryStore(history: history, logicalDay: configuredDay())
+        store.setActive(true); store.select("2024-02-14")
+        XCTAssertEqual(store.selectedSessions.map(\.id), [9, 3, 7])
+        XCTAssertEqual(store.detailSessions(compact: true).map(\.id), [9, 3])
+        XCTAssertEqual(store.detailSessions(compact: false).map(\.id), [9, 3, 7])
+        XCTAssertEqual(store.detailSessions(compact: true).last?.taskTitle, "")
+        XCTAssertEqual(store.selectedSeconds, 9999)
+    }
+
 }
