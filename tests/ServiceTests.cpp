@@ -870,6 +870,10 @@ private slots:
     void focusHistoryReturnsDayTotalsAndFormattedDurations();
     void focusHistoryFallsBackWhenTaskWasDeleted();
     void manualSessionCountsTowardMinutesButNotPomodoros();
+    void manualSessionNormalizesTimezone_data();
+    void manualSessionNormalizesTimezone();
+    void timelineStartEditNormalizesTimezone_data();
+    void timelineStartEditNormalizesTimezone();
     void manualSessionRejectsOverlapWithExistingRecord();
     void manualSessionRejectsFutureAndTooShort();
     void updateSessionMovesItAndKeepsItsMode();
@@ -9388,4 +9392,79 @@ void ServiceTests::plannedMinutesByDayFollowsWeekPageRule()
     QVERIFY(tasks->readPlannedMinutesByDay(monday, 32, -1).error == ServiceReadError::InvalidArgument);
     DatabaseManager::instance()->close();
     QVERIFY(tasks->readPlannedMinutesByDay(monday, 7, -1).error == ServiceReadError::Database);
+}
+
+// 产品保证：补录接受带本机偏移或 UTC 的同一时刻，写库仍遵守本地墙钟契约。
+void ServiceTests::manualSessionNormalizesTimezone_data()
+{
+    QTest::addColumn<bool>("utc");
+    QTest::newRow("local-offset") << false;
+    QTest::newRow("utc") << true;
+}
+
+// 产品保证：带时区的补录不污染库中时间格式，早上的专注归入本地当天。
+void ServiceTests::manualSessionNormalizesTimezone()
+{
+    QFETCH(bool, utc);
+    auto* history = FocusHistoryService::instance();
+    // 选昨天避免未来时间门禁；偏移取该时刻本机值，兼容夏令时及不同运行时区。
+    const QDate day = QDate::currentDate().addDays(-1);
+    const QDateTime local(day, QTime(7, 0, 5, 123));
+    const QDateTime input = utc ? local.toUTC()
+        : local.toTimeZone(QTimeZone::fromSecondsAheadOfUtc(local.offsetFromUtc()));
+    QCOMPARE(input.toLocalTime(), local);
+    QVERIFY(input.toString(Qt::ISODateWithMs) != local.toString(Qt::ISODateWithMs));
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 4);
+    QCOMPARE(history->getDayTotalDuration(day), 0);
+    const int id = history->addManualSession(-1, input, 30);
+    QVERIFY2(id > 0, qPrintable(history->lastError()));
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral("SELECT start_time, end_time FROM focus_sessions WHERE id = ?"));
+    query.addBindValue(id);
+    QVERIFY(query.exec());
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toString(), local.toString(Qt::ISODateWithMs));
+    QCOMPARE(query.value(1).toString(), local.addSecs(1800).toString(Qt::ISODateWithMs));
+    QCOMPARE(history->getDayTotalDuration(day), 1800);
+    QCOMPARE(history->getDayTotalDuration(day.addDays(-1)), 0);
+}
+
+// 产品保证：只改开始时间时，带偏移和 UTC 输入都走同一个本地化写入口。
+void ServiceTests::timelineStartEditNormalizesTimezone_data()
+{
+    QTest::addColumn<bool>("utc");
+    QTest::newRow("local-offset") << false;
+    QTest::newRow("utc") << true;
+}
+
+// 产品保证：只改记录开始时间保持时长与毫秒精度，仍计入本地当天。
+void ServiceTests::timelineStartEditNormalizesTimezone()
+{
+    QFETCH(bool, utc);
+    auto* history = FocusHistoryService::instance();
+    // 原记录与目标同在日界后；先断言真实移动，避免原地写回掩盖错误。
+    const QDate day = QDate::currentDate().addDays(-1);
+    const QDateTime local(day, QTime(7, 0, 5, 123));
+    const QDateTime oldStart = local.addSecs(-3600);
+    const QDateTime input = utc ? local.toUTC()
+        : local.toTimeZone(QTimeZone::fromSecondsAheadOfUtc(local.offsetFromUtc()));
+    QCOMPARE(input.toLocalTime(), local);
+    QVERIFY(input.toString(Qt::ISODateWithMs) != local.toString(Qt::ISODateWithMs));
+    QVERIFY(oldStart != local);
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 4);
+    const int id = history->addManualSession(-1, oldStart, 30);
+    QVERIFY2(id > 0, qPrintable(history->lastError()));
+    QCOMPARE(history->getDayTotalDuration(day), 1800);
+    QVERIFY2(history->updateSessionFields(id, {{QStringLiteral("startTime"), input}}),
+             qPrintable(history->lastError()));
+    QSqlQuery query(DatabaseManager::instance()->database());
+    query.prepare(QStringLiteral("SELECT start_time, end_time, duration FROM focus_sessions WHERE id = ?"));
+    query.addBindValue(id);
+    QVERIFY(query.exec());
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toString(), local.toString(Qt::ISODateWithMs));
+    QCOMPARE(query.value(1).toString(), local.addSecs(1800).toString(Qt::ISODateWithMs));
+    QCOMPARE(query.value(2).toInt(), 1800);
+    QCOMPARE(history->getDayTotalDuration(day), 1800);
+    QCOMPARE(history->getDayTotalDuration(day.addDays(-1)), 0);
 }

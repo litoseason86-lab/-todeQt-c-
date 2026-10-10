@@ -458,7 +458,9 @@ int FocusHistoryService::addManualSession(int taskId,
         return -1;
     }
 
-    const QDateTime startTime = startDateTimeValue.toDateTime();
+    // SQLite 的 date() 会先把带时区后缀的值换成 UTC，导致日界归日偏移。
+    // 写入口统一成本地墙钟时间，与 FocusTimer 的落库格式一致。
+    const QDateTime startTime = startDateTimeValue.toDateTime().toLocalTime();
     if (!validateManualSession(startTime, durationMinutes, -1)) {
         return -1;
     }
@@ -592,8 +594,10 @@ bool FocusHistoryService::updateTimelineRecord(int sessionId, bool sourceRest, c
         ? changes.value(QStringLiteral("isRest")).toBool() : sourceRest;
     const QDateTime oldStart = QDateTime::fromString(original.value("start_time").toString(), Qt::ISODate);
     const QDateTime oldEnd = QDateTime::fromString(original.value("end_time").toString(), Qt::ISODate);
+    // 只在改开始时本地化；SQLite 的 date() 遇到时区后缀会先换 UTC，早上的记录可能归到前一天。
+    // 未改时间仍保留原串与精度，结束时刻从本地开始时刻计算，避免引入时区后缀。
     const QDateTime start = changes.contains(QStringLiteral("startTime"))
-        ? changes.value(QStringLiteral("startTime")).toDateTime() : oldStart;
+        ? changes.value(QStringLiteral("startTime")).toDateTime().toLocalTime() : oldStart;
     bool durationOk = true;
     const int duration = changes.contains(QStringLiteral("durationSeconds"))
         ? changes.value(QStringLiteral("durationSeconds")).toInt(&durationOk) : original.value("duration").toInt();
