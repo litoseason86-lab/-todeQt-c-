@@ -58,6 +58,7 @@ import PTBridge
         result.taskTitle = value.taskTitle
         return result
     }
+    func setNativeUI(_ value: Bool) throws { try bridge.setNativeUI(value) }
     func setUseWallpaper(_ value: Bool) throws { try bridge.setUseWallpaper(value) }
     func pause() -> Bool { bridge.pause() }
     func resume() -> Bool { bridge.resume() }

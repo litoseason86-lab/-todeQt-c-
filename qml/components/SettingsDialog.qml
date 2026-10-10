@@ -10,6 +10,7 @@ import "settings"
 Popup {
     id: root
 
+    property var ipadUiPreferencesRef: null
     property var appSettingsRef: null
     property var backupServiceRef: null
     property var mcpAccessRef: null
@@ -250,6 +251,9 @@ Popup {
                         onLoaded: {
                             if (item) {
                                 item.appSettingsRef = Qt.binding(function() { return root.appSettingsRef })
+                                if (item.hasOwnProperty("ipadUiPreferencesRef")) {
+                                    item.ipadUiPreferencesRef = Qt.binding(function() { return root.ipadUiPreferencesRef })
+                                }
                                 item.compact = Qt.binding(function() { return root.compact })
                                 if (item.hasOwnProperty("mcpAccessRef")) {
                                     item.mcpAccessRef = Qt.binding(function() { return root.mcpAccessRef })

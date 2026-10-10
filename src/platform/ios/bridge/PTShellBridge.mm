@@ -1,4 +1,5 @@
 #import "PTShellBridge.h"
+#include "../native/IPadUiPreferences.h"
 
 #include "../../../services/AppSettings.h"
 #include "../../../services/BackupService.h"
@@ -195,6 +196,14 @@
     }
     if (self.onChanged) self.onChanged();
     return YES;
+}
+- (BOOL)setNativeUI:(BOOL)value error:(NSError **)error
+{
+    NSAssert(NSThread.isMainThread, @"界面偏好必须在主线程保存");
+    QString message;
+    if (IPadUiPreferences::writeNativeUI(value, &message)) return YES;
+    if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: message.toNSString()}];
+    return NO;
 }
 - (BOOL)pause
 {

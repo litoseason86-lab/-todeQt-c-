@@ -10,11 +10,13 @@ import XCTest
     var fullReads = 0
     var timerReads = 0
     var timerError: Error?
+    var nativeUIError: Error?
     var error: Error?
     var captureResult = 9
     var calls: [String] = []
     func readTimer() throws -> ShellTimerSnapshot { timerReads += 1; if let timerError { throw timerError }; return timerSnapshot }
     func read() throws -> ShellSnapshot { fullReads += 1; if let error { throw error }; return snapshot }
+    func setNativeUI(_ value: Bool) throws { if let nativeUIError { throw nativeUIError }; calls.append("nativeUI:\(value)") }
     func pause() -> Bool { calls.append("pause"); return true }
     func resume() -> Bool { calls.append("resume"); return true }
     func capture(title: String, categoryID: Int, sourceTaskID: Int) -> Int {
@@ -25,6 +27,20 @@ import XCTest
 }
 
 @MainActor final class ShellStoreTests: XCTestCase {
+    // 产品保证：原生回退只写下次启动偏好，不切当前页；失败不给成功提示，恢复遮罩时不写入。
+    func testLegacyUIRequestSavesOnlyNextLaunchPreference() {
+        let bridge = FakeShellBridge(); let store = ShellStore(bridge: bridge)
+        store.select(.settings); store.useLegacyUIOnNextLaunch()
+        XCTAssertEqual(store.selection, .settings); XCTAssertEqual(bridge.calls.last, "nativeUI:false")
+        XCTAssertEqual(store.toast?.message, "下次启动将使用旧版界面")
+        store.retireToast()
+        bridge.nativeUIError = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "偏好写入失败"])
+        store.useLegacyUIOnNextLaunch()
+        XCTAssertNil(store.toast); XCTAssertEqual(store.errorMessage, "偏好写入失败")
+        bridge.nativeUIError = nil; bridge.snapshot.operationBlocksUI = true; bridge.onChanged?()
+        let previous = bridge.calls; store.useLegacyUIOnNextLaunch()
+        XCTAssertEqual(bridge.calls, previous); XCTAssertNil(store.toast)
+    }
     // 产品保证：每秒 tick 只更新计时字段，保留统计摘要、恢复遮罩与此前的读取错误；语义变化仍刷新摘要。
     func testTickDoesNotReadSummaryAndKeepsOtherState() {
         let bridge = FakeShellBridge()

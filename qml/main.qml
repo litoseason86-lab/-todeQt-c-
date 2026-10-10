@@ -70,6 +70,7 @@ ApplicationWindow {
         memoTextLayoutRef: typeof memoTextLayout === "undefined" ? null : memoTextLayout
         trashServiceRef: typeof trashService === "undefined" ? null : trashService
         knowledgeGapServiceRef: typeof knowledgeGapService === "undefined" ? null : knowledgeGapService
+        ipadUiPreferencesRef: typeof ipadUiPreferences === "undefined" ? null : ipadUiPreferences
         appSettingsRef: typeof appSettings === "undefined" ? null : appSettings
         focusTimerRef: typeof focusTimer === "undefined" ? null : focusTimer
         logicalDayServiceRef: typeof logicalDayService === "undefined" ? null : logicalDayService

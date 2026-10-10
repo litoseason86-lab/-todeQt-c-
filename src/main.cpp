@@ -70,6 +70,7 @@
 #include "platform/ios/IosFolderPicker.h"
 #include "platform/ios/IosSyncFolder.h"
 #include "platform/ios/native/NativeRoot.h"
+#include "platform/ios/native/IPadUiPreferences.h"
 
 namespace {
 // 手机用随身伴侣页，平板用完整界面。启动时还没有窗口，只能按屏幕判定：
@@ -430,6 +431,10 @@ int main(int argc, char *argv[])
     });
 #endif
 
+#if defined(Q_OS_IOS)
+    IPadUiPreferences ipadUiPreferences(isIPadDevice());
+    engine.rootContext()->setContextProperty(QStringLiteral("ipadUiPreferences"), &ipadUiPreferences);
+#endif
     // QML 通过单例上下文对象访问服务，视图层保持声明式和轻量。
     engine.rootContext()->setContextProperty(QStringLiteral("categoryManager"), CategoryManager::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("CategoryManager"), CategoryManager::instance());

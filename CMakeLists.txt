@@ -251,6 +251,7 @@ if(IOS)
         src/platform/ios/IosBackgroundTask.h
         src/platform/ios/IosBackgroundTask.mm
         # 055-P3A：挂载与生命周期只在 iOS 装配。
+        src/platform/ios/native/IPadUiPreferences.h
         src/platform/ios/native/NativeRoot.h
         src/platform/ios/native/NativeRoot.mm
         src/platform/ios/bridge/PTLifecycleBridge.h
@@ -1501,6 +1502,7 @@ list(REMOVE_ITEM PT_SHELL_TEST_SOURCES tests/TrashServiceTests.cpp)
 add_executable(PTShellBridgeTests ${PT_SHELL_TEST_SOURCES}
     resources/wallpapers.qrc
     tests/PTShellBridgeTests.mm
+    src/platform/ios/native/IPadUiPreferences.h
     src/platform/ios/bridge/PTShellBridge.h src/platform/ios/bridge/PTShellBridge.mm
     src/platform/ios/bridge/PTLifecycleBridge.h src/platform/ios/bridge/PTLifecycleBridge.mm
     src/services/StatisticsService.h src/services/StatisticsService.cpp

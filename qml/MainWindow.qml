@@ -70,6 +70,7 @@ Item {
     property var memoTextLayoutRef: null
     property var trashServiceRef: null
     property var knowledgeGapServiceRef: null
+    property var ipadUiPreferencesRef: null
     property var appSettingsRef: null
     property var focusTimerRef: null
     property var logicalDayServiceRef: null
@@ -1352,6 +1353,7 @@ Item {
 
     SettingsDialog {
         id: settingsDialog
+        ipadUiPreferencesRef: root.ipadUiPreferencesRef
         objectName: "settingsDialog"
 
         parent: root

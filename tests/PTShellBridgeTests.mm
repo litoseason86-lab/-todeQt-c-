@@ -1,6 +1,7 @@
 #import "../src/platform/ios/bridge/PTShellBridge.h"
 #import "../src/platform/ios/bridge/PTLifecycleBridge.h"
 #include <QCoreApplication>
+#include "../src/platform/ios/native/IPadUiPreferences.h"
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QThread>
@@ -29,6 +30,8 @@ private slots:
     void closedDatabaseReturnsAnError();
     void lifecycleFlushIsSynchronous();
     void tickRefreshBenchmark();
+    void nativeUIIsDefaultWithDeviceAndOverridePrecedence();
+    void bothUIEntrancesWriteTheSameLocalKey();
     void timerSnapshotDoesNotQueryStatistics();
 private:
     QTemporaryDir m_preferences;
@@ -241,6 +244,39 @@ void PTShellBridgeTests::timerSnapshotDoesNotQueryStatistics()
         QCOMPARE(failures, 0);
         // 恢复表供计时器 cleanup 结算；不污染同目标的后续测试。
         QVERIFY(query.exec(QStringLiteral("ALTER TABLE tasks_unavailable RENAME TO tasks")));
+    }
+}
+// 产品保证：无偏好 iPad 默认原生，旧偏好与强制参数保留优先级，任何开关都不能改变 iPhone 伴侣页。
+void PTShellBridgeTests::nativeUIIsDefaultWithDeviceAndOverridePrecedence()
+{
+    QVERIFY(!QSettings().contains(QStringLiteral("ipad/nativeUI")));
+    QVERIFY(IPadUiPreferences::shouldUseNative(true, {}, {}));
+    QVERIFY(!IPadUiPreferences::shouldUseNative(false, {QStringLiteral("--ipad-native-ui")}, "1"));
+    QVERIFY(!IPadUiPreferences::shouldUseNative(true, {QStringLiteral("--ipad-qml-ui"), QStringLiteral("--ipad-native-ui")}, "1"));
+    QVERIFY(IPadUiPreferences::shouldUseNative(true, {QStringLiteral("--ipad-native-ui")}, "0"));
+    QVERIFY(!IPadUiPreferences::shouldUseNative(true, {}, "0"));
+    QSettings().setValue(QStringLiteral("ipad/nativeUI"), false);
+    QVERIFY(!IPadUiPreferences::shouldUseNative(true, {}, {}));
+    QVERIFY(IPadUiPreferences::shouldUseNative(true, {}, "1"));
+}
+// 产品保证：原生回退与 QML 恢复都写同一本机键，不修改业务设置，也不即时改变当前页面。
+void PTShellBridgeTests::bothUIEntrancesWriteTheSameLocalKey()
+{
+    @autoreleasepool {
+        PTShellBridge *native = [PTShellBridge new];
+        [native selectPage:@"settings"];
+        NSError *error = nil;
+        QVERIFY([native setNativeUI:NO error:&error]); QVERIFY(error == nil);
+        QVERIFY(QSettings().contains(QStringLiteral("ipad/nativeUI")));
+        QVERIFY(!QSettings().value(QStringLiteral("ipad/nativeUI")).toBool());
+        IPadUiPreferences qml(true);
+        QVERIFY(qml.setNativeUI(true));
+        QVERIFY(QSettings().value(QStringLiteral("ipad/nativeUI")).toBool());
+        QCOMPARE(QSettings().allKeys(), QStringList({QStringLiteral("ipad/nativeUI"), QStringLiteral("ipad/selectedPage")}));
+        QCOMPARE(QSettings().value(QStringLiteral("ipad/selectedPage")).toString(), QStringLiteral("settings"));
+        IPadUiPreferences phone(false);
+        QVERIFY(!phone.setNativeUI(false));
+        QVERIFY(QSettings().value(QStringLiteral("ipad/nativeUI")).toBool());
     }
 }
 QTEST_GUILESS_MAIN(PTShellBridgeTests)

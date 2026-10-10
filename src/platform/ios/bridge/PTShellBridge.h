@@ -50,6 +50,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (PTShellTimerSnapshot *)readTimerSnapshot NS_SWIFT_NAME(readTimer());
 - (BOOL)setUseWallpaper:(BOOL)value error:(NSError **)error
     __attribute__((swift_error(nonnull_error)));
+- (BOOL)setNativeUI:(BOOL)value error:(NSError **)error
+    __attribute__((swift_error(nonnull_error)));
 - (BOOL)pause;
 - (BOOL)resume;
 - (NSInteger)captureTitle:(NSString *)title categoryId:(NSInteger)categoryId sourceTaskId:(NSInteger)sourceTaskId

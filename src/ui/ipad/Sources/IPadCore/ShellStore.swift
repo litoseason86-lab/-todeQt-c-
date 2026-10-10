@@ -42,6 +42,7 @@ public struct ShellTimerSnapshot: Equatable, Sendable {
     var onFailure: ((String) -> Void)? { get set }
     func read() throws -> ShellSnapshot
     func readTimer() throws -> ShellTimerSnapshot
+    func setNativeUI(_ value: Bool) throws
     func setUseWallpaper(_ value: Bool) throws
     func pause() -> Bool
     func resume() -> Bool
@@ -51,6 +52,7 @@ public struct ShellTimerSnapshot: Equatable, Sendable {
 
 // 旧外壳替身不涉及新增的本机外观写入；默认拒绝，防止测试或其它实现假装保存成功。
 public extension ShellBridgeProtocol {
+    func setNativeUI(_ value: Bool) throws { throw CocoaError(.featureUnsupported) }
     func setUseWallpaper(_ value: Bool) throws { throw CocoaError(.featureUnsupported) }
 }
 
@@ -148,6 +150,14 @@ public final class ShellStore {
             snapshot.useWallpaper = previous
             errorMessage = error.localizedDescription
         }
+    }
+    public func useLegacyUIOnNextLaunch() {
+        guard !snapshot.operationBlocksUI else { return }
+        do {
+            try bridge.setNativeUI(false)
+            errorMessage = ""
+            showToast("下次启动将使用旧版界面")
+        } catch { errorMessage = error.localizedDescription }
     }
     public func select(_ page: PageID) {
         guard !snapshot.operationBlocksUI else { return }
