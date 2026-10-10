@@ -73,6 +73,8 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let statistics = StatsStore(statistics: StatisticsBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter(),
                                     tasks: TaskBridgeAdapter(), settings: SettingsBridgeAdapter(),
                                     categories: CategoryBridgeAdapter(), history: FocusHistoryBridgeAdapter(), defaults: .standard)
+        // 055-P4-5：设置页独占自己的设置适配器，不覆盖 FocusStore 的回调。
+        let settings = SettingsStore(bridge: SettingsBridgeAdapter())
         // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
         PTLifecycleBridge.flushHandler = { [weak store] in
             MainActor.assumeIsolated {
@@ -84,6 +86,6 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         return UIHostingController(rootView: ShellRootView(store: store)
             .environment(core).environment(today).environment(dashboard).environment(focus).environment(store)
             .environment(gaps).environment(memos).environment(countdown)
-            .environment(history).environment(statistics))
+            .environment(history).environment(statistics).environment(settings))
     }
 }

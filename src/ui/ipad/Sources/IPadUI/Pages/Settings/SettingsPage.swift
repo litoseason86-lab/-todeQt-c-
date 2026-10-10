@@ -2,31 +2,23 @@ import IPadCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-private enum SettingsSection: String, CaseIterable, Identifiable {
-    case general = "通用", categories = "科目", routines = "每日例行", sidebar = "侧栏顺序", sync = "同步与日志", backup = "备份与恢复", export = "导出", appearance = "外观"
-    var id: String { rawValue }
-}
-
 @MainActor struct SettingsPage: View {
     @Environment(CoreBridges.self) private var bridges
     @Environment(ShellStore.self) private var shell
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var selection: SettingsSection? = .general
-    @State private var store: SettingsStore?
+    @Environment(SettingsStore.self) private var store
 
     var body: some View {
-        Group {
-            if let store { layout(store) }
-            else { ProgressView().task { store = SettingsStore(bridge: bridges.settings) } }
-        }.navigationTitle("设置")
+        layout(store).navigationTitle("设置")
     }
     @ViewBuilder private func layout(_ store: SettingsStore) -> some View {
         if sizeClass == .compact {
-            List { ForEach(SettingsSection.allCases) { section in NavigationLink(section.rawValue, value: section) } }
+            List { ForEach(SettingsAvailability.sections) { section in NavigationLink(section.rawValue, value: section) } }
                 .navigationDestination(for: SettingsSection.self) { detail($0, store: store) }
         } else {
             NavigationSplitView {
-                List(SettingsSection.allCases, selection: $selection) { Text($0.rawValue).tag(Optional($0)) }.navigationTitle("设置")
+                List(SettingsAvailability.sections, selection: $selection) { Text($0.rawValue).tag(Optional($0)) }.navigationTitle("设置")
             } detail: { detail(selection ?? .general, store: store) }
         }
     }
@@ -49,8 +41,21 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     var body: some View {
         Form {
             Section("专注") {
-                Stepper("专注时长：\(store.snapshot.workMinutes) 分钟", value: Binding(get: { store.snapshot.workMinutes }, set: { store.setWorkMinutes($0) }), in: 1...180)
-                Stepper("休息时长：\(store.snapshot.breakMinutes) 分钟", value: Binding(get: { store.snapshot.breakMinutes }, set: { store.setBreakMinutes($0) }), in: 1...120)
+                Stepper("专注时长：\(store.snapshot.workMinutes) 分钟", value: Binding(get: { store.snapshot.workMinutes }, set: store.setWorkMinutes), in: 5...180)
+                Stepper("休息时长：\(store.snapshot.breakMinutes) 分钟", value: Binding(get: { store.snapshot.breakMinutes }, set: store.setBreakMinutes), in: 1...60)
+                Toggle("长休息", isOn: Binding(get: { store.snapshot.longBreakEnabled }, set: store.setLongBreakEnabled))
+                if store.snapshot.longBreakEnabled {
+                    Stepper("长休息：\(store.snapshot.longBreakMinutes) 分钟", value: Binding(get: { store.snapshot.longBreakMinutes }, set: store.setLongBreakMinutes), in: 5...60)
+                    Stepper("每 \(store.snapshot.longBreakInterval) 个番茄长休息", value: Binding(get: { store.snapshot.longBreakInterval }, set: store.setLongBreakInterval), in: 2...8)
+                }
+                Toggle("快速开始", isOn: Binding(get: { store.snapshot.quickStartEnabled }, set: store.setQuickStartEnabled))
+                Toggle("自动开始休息", isOn: Binding(get: { store.snapshot.autoStartBreak }, set: store.setAutoStartBreak))
+                Toggle("自动开始下个番茄", isOn: Binding(get: { store.snapshot.autoStartNextPomodoro }, set: store.setAutoStartNextPomodoro))
+                Stepper("自由计时超时确认：\(store.snapshot.freeTimerWarningHours) 小时", value: Binding(get: { store.snapshot.freeTimerWarningHours }, set: store.setFreeTimerWarningHours), in: 1...24)
+                Toggle("阶段结束提示音", isOn: Binding(get: { store.snapshot.soundEnabled }, set: store.setSoundEnabled))
+            }
+            Section("个人") {
+                TextField("昵称", text: Binding(get: { store.snapshot.nickname }, set: store.setNickname))
             }
             Section("日期") { Stepper("日界：\(store.snapshot.dayStartHour):00", value: Binding(get: { store.snapshot.dayStartHour }, set: { store.setDayStartHour($0) }), in: 0...23) }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
@@ -65,8 +70,14 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         Form {
             Section("背景") {
                 Toggle("使用壁纸", isOn: Binding(get: { shell.snapshot.useWallpaper }, set: { shell.setUseWallpaper($0) }))
-                Picker("背景主题", selection: Binding(get: { store.snapshot.backgroundTheme }, set: { store.setBackgroundTheme($0) })) { Text("暖色").tag("warm"); Text("浅色").tag("light"); Text("星空").tag("starry"); Text("雨夜").tag("rainy"); Text("月光").tag("moon") }
+                Picker("背景主题", selection: Binding(get: { store.snapshot.backgroundTheme }, set: store.setBackgroundTheme)) {
+                    ForEach(SettingsAvailability.themes, id: \.id) { Text($0.title).tag($0.id) }
+                }
+                Toggle("纤细时钟字体", isOn: Binding(get: { store.snapshot.slimClockFont }, set: store.setSlimClockFont))
+                Toggle("仪表盘计时摘要", isOn: Binding(get: { store.snapshot.dashboardTimerVisible }, set: store.setDashboardTimerVisible))
             }
+            if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
+            if !shell.errorMessage.isEmpty { Text(shell.errorMessage).foregroundStyle(ThemeColors.danger) }
         }.formStyle(.grouped).navigationTitle("外观")
     }
 }

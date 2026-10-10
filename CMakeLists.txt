@@ -537,6 +537,7 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/Bridging/RoutineBridging.swift
         src/ui/ipad/Sources/IPadCore/Stores/TrashStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/SettingsStore.swift
+        src/ui/ipad/Sources/IPadCore/Stores/SettingsAvailability.swift
     )
     target_sources(IPadUI PRIVATE
         src/ui/ipad/Sources/IPadUI/Bridges/TrashBridgeAdapter.swift
@@ -545,7 +546,7 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Bridges/ExportBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Bridges/RoutineBridgeAdapter.swift
         src/ui/ipad/Sources/IPadUI/Pages/TrashPage.swift
-        src/ui/ipad/Sources/IPadUI/Pages/SettingsPage.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Settings/SettingsPage.swift
     )
     # 055-P4-1：专注与缺口提醒的协议及适配器。
     target_sources(IPadCore PRIVATE

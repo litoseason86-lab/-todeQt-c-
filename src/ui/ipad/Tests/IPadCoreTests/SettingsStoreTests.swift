@@ -20,4 +20,31 @@ import XCTest
         XCTAssertEqual(write?.0, "setSidebarOrder")
         XCTAssertEqual(write?.1, .strings(["today", "focus"]))
     }
+    // 产品保证：iPad 分组只包含有效项，Mac 专属项和系统辅助开关没有入口。
+    func testPlatformGroupsExcludeUnavailableFeatures() {
+        XCTAssertEqual(SettingsSection.allCases.count, 8)
+        let shown = Set(SettingsSection.allCases.flatMap { SettingsAvailability.features(in: $0) })
+        XCTAssertTrue(shown.contains(.workMinutes))
+        XCTAssertTrue(shown.contains(.wallpaper))
+        XCTAssertTrue(shown.isDisjoint(with: SettingsAvailability.hidden))
+        XCTAssertEqual(SettingsAvailability.hidden, [.externalAI, .bringWindowFront, .globalHotkey,
+            .customShortcuts, .closeToMenuBar, .reduceMotion, .reduceTransparency])
+    }
+
+    // 产品保证：其它页面或同步改了设置时，本页收到变化便刷新；失败信号保留原因。
+    func testExternalChangesAndFailureSignalRefreshControls() {
+        let bridge = SettingsBridgeFake(); bridge.result.backgroundTheme = "warm"
+        let store = SettingsStore(bridge: bridge)
+        bridge.result.backgroundTheme = "pink"; bridge.onBackgroundThemeChanged?()
+        XCTAssertEqual(store.snapshot.backgroundTheme, "pink")
+        bridge.onWriteFailed?("backgroundTheme", "偏好文件不可写")
+        XCTAssertEqual(store.errorMessage, "偏好文件不可写")
+        bridge.onWriteSucceeded?("backgroundTheme")
+        XCTAssertEqual(store.errorMessage, "")
+    }
+
+    // 产品保证：外观的可选主题与现有七种主题一致，没有不存在的浅色主题。
+    func testAppearanceOffersAllSupportedThemes() {
+        XCTAssertEqual(SettingsAvailability.themes.map(\.id), ["warm", "pink", "jiangnan", "sword", "starry", "rainy", "moon"])
+    }
 }

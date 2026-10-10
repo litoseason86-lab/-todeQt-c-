@@ -110,6 +110,9 @@ def main():
         raise ValueError("ShellRootView 深色壁纸名单与 Theme.qml 不一致")
     if bridge_ids != theme_ids:
         raise ValueError("PTShellBridge 壁纸白名单与 Theme.qml 不一致")
+    settings_source = (root / "src/ui/ipad/Sources/IPadCore/Stores/SettingsAvailability.swift").read_text(encoding="utf-8")
+    choices = set(re.findall(r'\("([^"]+)",\s*"[^"]+"\)', settings_source))
+    if choices != theme_ids: raise ValueError("设置外观主题选项与 Theme.qml 不一致")
     print(f"iPad 颜色门禁通过：{len(values)} 个语义令牌，浅深两套；壁纸名单与 Theme.qml 同源核对通过")
 
 
