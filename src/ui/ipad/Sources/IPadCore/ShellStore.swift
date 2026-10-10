@@ -58,6 +58,17 @@ public final class ShellStore {
     public private(set) var captureError = ""
     // P4 各页登记保存回调与新建/开始意图，外壳只转发；不在这里决定任务或计时业务流程。
     // 跨页动作由原生根装配一次，持有点让占位外壳也能保存共用撤销状态。
+    // 历史页只发日期和切页意图；今日专注页消费一次，业务记录读取仍由该页 Store 负责。
+    public private(set) var requestedFocusDate: String?
+    public func openFocusHistory(date: String) {
+        guard !snapshot.operationBlocksUI else { return }
+        requestedFocusDate = date
+        select(.todayFocus)
+    }
+    public func consumeRequestedFocusDate() -> String? {
+        defer { requestedFocusDate = nil }
+        return requestedFocusDate
+    }
     public var taskActions: TaskActions?
     @ObservationIgnored public var onNewTask: (() -> Void)?
     @ObservationIgnored public var onStartOrPause: (() -> Void)?

@@ -596,6 +596,24 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Pages/Countdown/CountdownPage.swift)
     # 055-P4-3：两种表单共用 ISO 日期投影，不共享领域 Store 或业务判断。
     target_sources(IPadCore PRIVATE src/ui/ipad/Sources/IPadCore/Format/ContentDateFormat.swift)
+
+    # 055-P4-4：原生专注历史数据层、格式与月历，不改 Mac 的 QML 路径。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/HistoryStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/MonthGoalFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/History/HistoryView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/History/MonthGrid.swift)
+
+    # 055-P4-4：原生数据统计、系统图表与周复盘。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/StatsStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/StatisticsFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Statistics/StatisticsView.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Statistics/StatisticsCharts.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Statistics/WeeklyReviewCard.swift)
+
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。

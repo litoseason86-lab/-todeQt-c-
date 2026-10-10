@@ -102,6 +102,11 @@ static bool sessionChanges(PTSessionChanges *changes, QVariantMap *map, NSError 
     NSAssert(NSThread.isMainThread, @"历史读取必须在主线程"); auto *service = FocusHistoryService::instance(); const auto rows = service->getTaskOptions(date(iso));
     return [[PTFocusHistoryResult alloc] initWithSessions:{} options:rows count:0 error:service->lastError()];
 }
+// 投入取档只调用服务包装，保留小数分钟与 NaN，不在桥接复制阈值。
+- (NSInteger)bandForMinutes:(double)minutes {
+    NSAssert(NSThread.isMainThread, @"历史读取必须在主线程");
+    return FocusHistoryService::instance()->bandForMinutes(minutes);
+}
 - (NSString *)formatDuration:(NSInteger)seconds {
     NSAssert(NSThread.isMainThread, @"历史读取必须在主线程"); int value;
     return integer(seconds, &value) ? string(FocusHistoryService::instance()->formatDuration(value)) : @"";
