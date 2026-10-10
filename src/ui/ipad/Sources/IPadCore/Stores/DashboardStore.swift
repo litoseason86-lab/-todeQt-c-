@@ -20,19 +20,22 @@ import Observation
     @ObservationIgnored private let actions: TaskActions
     @ObservationIgnored private weak var shell: ShellStore?
     @ObservationIgnored private weak var focus: FocusStore?
+    @ObservationIgnored private let logicalDay: (any LogicalDayBridgeProtocol)?
     @ObservationIgnored private let nowProvider: () -> Date
     @ObservationIgnored private var active = false
 
     public init(tasks: any TaskBridgeProtocol, statistics: any StatisticsBridgeProtocol,
                 settings: any SettingsBridgeProtocol, actions: TaskActions, shell: ShellStore,
-                focus: FocusStore, nowProvider: @escaping () -> Date = Date.init) {
+                focus: FocusStore, logicalDay: (any LogicalDayBridgeProtocol)? = nil, nowProvider: @escaping () -> Date = Date.init) {
         self.tasksBridge = tasks; self.statistics = statistics; self.settings = settings
-        self.actions = actions; self.shell = shell; self.focus = focus; self.nowProvider = nowProvider
+        self.actions = actions; self.shell = shell; self.focus = focus; self.logicalDay = logicalDay; self.nowProvider = nowProvider
     }
 
     public func start() {
         guard !active else { return }
         active = true
+        // 日界可能没有例行任务新增，不能靠任务信号间接刷新今日数据。
+        logicalDay?.onChanged = { [weak self] in self?.refresh() }
         tasksBridge.onChanged = { [weak self] in self?.refresh() }
         tasksBridge.onFailure = { [weak self] message in self?.loadError = message.isEmpty ? "任务加载失败，请重试" : message }
         statistics.onFailure = { [weak self] message in self?.loadError = message.isEmpty ? "统计数据加载失败，请重试" : message }
@@ -45,6 +48,7 @@ import Observation
         guard active else { return }
         active = false
         tasksBridge.onChanged = nil; tasksBridge.onFailure = nil; statistics.onFailure = nil
+        logicalDay?.onChanged = nil
         settings.onNicknameChanged = nil
         if focus?.onFocusCompletedForPages != nil { focus?.onFocusCompletedForPages = nil }
     }

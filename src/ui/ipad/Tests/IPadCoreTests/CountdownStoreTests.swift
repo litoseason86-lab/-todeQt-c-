@@ -2,6 +2,20 @@ import XCTest
 @testable import IPadCore
 
 @MainActor final class CountdownStoreTests: XCTestCase {
+    // 产品保证：内容页各持独立适配器，同一个日界信号到达缺口与倒计时，两页都重读。
+    func testIndependentDayReceiversBothRefresh() {
+        let gapDay = LogicalDayBridgeFake(), countdownDay = LogicalDayBridgeFake()
+        let gaps = KnowledgeGapFake(), countdown = CountdownFake()
+        let gapStore = GapStore(bridge: gaps, logicalDay: gapDay)
+        let countdownStore = CountdownStore(bridge: countdown, logicalDay: countdownDay)
+        gapStore.setActive(true); countdownStore.setActive(true)
+        let gapReads = gaps.calls.filter { $0 == "read" }.count
+        let countdownReads = countdown.calls.filter { $0 == "read" }.count
+        // 两个适配器模拟同一服务广播；测试真实 Store 的订阅，不手动调用刷新方法。
+        gapDay.today = "2026-10-11"; countdownDay.today = "2026-10-11"
+        XCTAssertEqual(gaps.calls.filter { $0 == "read" }.count, gapReads + 1)
+        XCTAssertEqual(countdown.calls.filter { $0 == "read" }.count, countdownReads + 1)
+    }
     private func goal(_ id: Int, days: Int) -> CountdownValue { var v = CountdownValue(); v.id = id; v.name = "目标\(id)"; v.targetDate = "2026-11-01"; v.daysRemaining = days; return v }
     private func setup() -> (CountdownStore, CountdownFake) {
         let b = CountdownFake(); b.rows = [goal(3, days: 11), goal(1, days: 7), goal(8, days: -2)]; b.primary = b.rows[0]

@@ -57,7 +57,7 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
         self.init(bridge: bridge, settingsBridge: settingsBridge,
                   todayDate: logicalDay.today, todayWeekday: 1)
         self.logicalDay = logicalDay
-        logicalDay.observeChanges { [weak self] in self?.refreshFromSignal() }
+        logicalDay.onChanged = { [weak self] in self?.refreshFromSignal() }
         refresh(initial: true)
     }
     @discardableResult public func setDisplayMode(_ mode: ScheduleDisplayMode) -> Bool {

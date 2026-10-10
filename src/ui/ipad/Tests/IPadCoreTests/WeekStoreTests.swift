@@ -141,12 +141,13 @@ import XCTest
         tasks.result = [row(23, date: "2026-10-11")]; tasks.onChanged?(); XCTAssertEqual(store.cursorTaskID, -1)
     }
     // 产品保证：日界通知同时到达本周和其它页面，不因后订阅者覆盖回调而丢失整周刷新。
-    func testLogicalDayMulticastRefreshesWeekAndOtherObserver() {
+    func testIndependentLogicalDayAdaptersRefreshWeekAndOtherReceiver() {
         let (tasks, _, day, _, store, _) = interactionFixture()
         var anotherObserverCalls = 0
-        day.observeChanges { anotherObserverCalls += 1 }
+        let otherDay = LogicalDayBridgeFake()
+        otherDay.onChanged = { anotherObserverCalls += 1 }
         let reads = tasks.calls.filter { $0.name == "weekTasks" }.count
-        day.today = "2026-10-10"
+        day.today = "2026-10-10"; otherDay.today = "2026-10-10"
         XCTAssertEqual(anotherObserverCalls, 1)
         XCTAssertEqual(store.logicalToday, "2026-10-10")
         XCTAssertEqual(tasks.calls.filter { $0.name == "weekTasks" }.count, reads + 1)

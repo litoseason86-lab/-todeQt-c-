@@ -15,7 +15,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
 @MainActor enum NativeRoot {
     static func makeController() -> UIViewController {
         let store = ShellStore(bridge: ShellBridgeAdapter())
-        // 055-P3B：各页复用一份动作与撤销槽；领域桥接按单槽回调的订阅需要独立装配。
+        // 055-P3B：各页复用一份动作与撤销槽；每个 Store 独占自己的信号适配器，独立的 Qt 连接仍读取同一 C++ 服务。
         let tasks = TaskBridgeAdapter()
         let pending = PendingDeletionStore(bridge: PendingDeletionBridgeAdapter(), tasks: tasks, shell: store)
         let actions = TaskActions(tasks: tasks, pendingDeletion: pending, shell: store)
@@ -28,13 +28,13 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         let scheduleBridge = ScheduleBridgeAdapter()
         let interactions = InteractionBridgeAdapter()
         // 本周使用独立任务信号适配器，避免 FocusStore.start 覆盖单槽回调；动作与撤销槽仍共享。
-        let week = WeekStore(tasks: TaskBridgeAdapter(), logicalDay: logicalDay, pendingDeletion: pending, interactions: interactions,
+        let week = WeekStore(tasks: TaskBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter(), pendingDeletion: pending, interactions: InteractionBridgeAdapter(),
                              weekStart: "", weekDates: { start in
                                  try statisticsBridge.weekStats(startDate: start).map(\.date)
                              }, weekStartProvider: { try statisticsBridge.currentWeeklyReview().weekStart })
         let timeline = TimelineStore(history: focusHistory, statistics: statisticsBridge, pendingDeletion: pending,
-                                     logicalDay: logicalDay, date: logicalDay.today)
-        let schedule = ScheduleStore(bridge: scheduleBridge, settingsBridge: settingsBridge, logicalDay: logicalDay)
+                                     logicalDay: LogicalDayBridgeAdapter(), date: logicalDay.today)
+        let schedule = ScheduleStore(bridge: scheduleBridge, settingsBridge: SettingsBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter())
         let trash = TrashBridgeAdapter()
         let sync = SyncBridgeAdapter()
         let backup = BackupBridgeAdapter()
@@ -46,7 +46,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                focusHistory: focusHistory, pendingDeletion: pending,
                                taskActions: actions, weekStore: week, timelineStore: timeline, scheduleStore: schedule,
                                trash: trash, sync: sync, backup: backup, export: export, routines: routines)
-        let focus = FocusStore(focus: FocusBridgeAdapter(), settings: core.settings, tasks: core.tasks,
+        let focus = FocusStore(focus: FocusBridgeAdapter(), settings: SettingsBridgeAdapter(), tasks: TaskBridgeAdapter(),
                                pendingDeletion: pending, shell: store)
         focus.start()
         actions.focusHook = focus
@@ -56,33 +56,20 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                logicalDay: LogicalDayBridgeAdapter(), settings: SettingsBridgeAdapter(),
                                statistics: StatisticsBridgeAdapter(), gaps: GapReminderBridgeAdapter(),
                                pendingDeletion: pending, shell: store, focus: FocusBridgeAdapter())
-        // 仪表盘使用独立桥接实例；这些桥的回调是单槽，不能覆盖 FocusStore 使用的共享任务与设置桥。
+        // 仪表盘使用独立桥接实例；这些桥的回调是单槽，避免覆盖其它 Store 的单槽回调。
         let dashboard = DashboardStore(tasks: TaskBridgeAdapter(), statistics: StatisticsBridgeAdapter(),
                                        settings: SettingsBridgeAdapter(),
-                                       actions: actions, shell: store, focus: focus)
+                                       actions: actions, shell: store, focus: focus, logicalDay: LogicalDayBridgeAdapter())
         store.onStartOrPause = { [weak focus] in focus?.startOrPauseFromShortcut() }
         store.captureSourceProvider = { [weak focus] in focus?.captureSource }
         store.onNewTask = { [weak store, weak today] in
             store?.select(.today); today?.requestNewTask()
         }
         // 055-P4-3：一个领域一份会话，多个页面容器从环境复用。
-        let gaps = GapStore(bridge: KnowledgeGapAdapter(), logicalDay: core.logicalDay,
-                            shell: store, categories: core.categories, preferences: .standard)
-        // 共用桥接只有一个回调槽；串接前任接收者，合并其它 P4 计划时仍保留各自刷新。
-        let previousDayChanged = core.logicalDay.onChanged
-        core.logicalDay.onChanged = { [weak gaps] in previousDayChanged?(); gaps?.logicalDayChanged() }
-        let previousCategoryChanged = core.categories.onChanged
-        core.categories.onChanged = { [weak gaps] in previousCategoryChanged?(); gaps?.relatedDataChanged() }
-        let previousTasksChanged = core.tasks.onChanged
-        core.tasks.onChanged = { [weak gaps] in previousTasksChanged?(); gaps?.relatedDataChanged() }
-        // 055-P4-3：备忘编辑会话跨页保留，生命周期由外壳同步调用。
-        let memos = MemoStore(bridge: MemoAdapter(), categories: core.categories, shell: store, preferences: .standard)
-        let previousMemoCategoryChanged = core.categories.onChanged
-        core.categories.onChanged = { [weak memos] in previousMemoCategoryChanged?(); memos?.relatedDataChanged() }
-        // 055-P4-3：倒计时只消费服务主目标、排序与剩余天数。
-        let countdown = CountdownStore(bridge: CountdownAdapter(), logicalDay: core.logicalDay, shell: store)
-        let previousCountdownDayChanged = core.logicalDay.onChanged
-        core.logicalDay.onChanged = { [weak countdown] in previousCountdownDayChanged?(); countdown?.logicalDayChanged() }
+        let gaps = GapStore(bridge: KnowledgeGapAdapter(), logicalDay: LogicalDayBridgeAdapter(),
+                            shell: store, categories: CategoryBridgeAdapter(), preferences: .standard, tasks: TaskBridgeAdapter())
+        let memos = MemoStore(bridge: MemoAdapter(), categories: CategoryBridgeAdapter(), shell: store, preferences: .standard)
+        let countdown = CountdownStore(bridge: CountdownAdapter(), logicalDay: LogicalDayBridgeAdapter(), shell: store)
         // 055-P4-4：页面订阅各自的桥接实例，单回调协议不会覆盖其它页面的失效通知。
         let history = HistoryStore(history: FocusHistoryBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter())
         let statistics = StatsStore(statistics: StatisticsBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter(),

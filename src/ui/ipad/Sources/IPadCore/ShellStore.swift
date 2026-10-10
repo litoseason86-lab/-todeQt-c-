@@ -131,7 +131,7 @@ public final class ShellStore {
         if !succeeded && errorMessage.isEmpty { errorMessage = "计时操作失败，请重试" }
     }
     public func presentCapture() {
-        presentCapture(source: captureSourceProvider?() ?? ShellCaptureSource())
+        presentCapture(source: selection == .focus ? (captureSourceProvider?() ?? ShellCaptureSource()) : ShellCaptureSource())
     }
     // 带来源的入口：来源任务与科目随这次记一笔一起写入，打开时固定，之后任务切换也不改。
     public func presentCapture(source: ShellCaptureSource) {

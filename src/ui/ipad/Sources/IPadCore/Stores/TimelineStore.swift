@@ -47,7 +47,7 @@ public struct SessionEditorDraft: Equatable, Sendable {
         do { selectedRelation = try logicalDay.relation(date, to: logicalDay.today); isFutureDate = selectedRelation == .later }
         catch { isFutureDate = false; relationAvailable = false; self.error = error.localizedDescription }
         history.onChanged = { [weak self] in self?.refresh() }
-        logicalDay.observeChanges { [weak self] in self?.logicalDayChanged() }
+        logicalDay.onChanged = { [weak self] in self?.logicalDayChanged() }
         statistics.onFailure = { [weak self] in self?.error = $0 }
         refresh()
     }
@@ -64,7 +64,11 @@ public struct SessionEditorDraft: Equatable, Sendable {
     }
     // 停在今日时随日界切到新的逻辑今日；正在查看历史日时保留所选日，只重新查询关系。
     public func logicalDayChanged() { selectDate(relationAvailable && selectedRelation == .same ? logicalDay.today : selectedDate) }
-    public func adjacentDate(days: Int) -> String? { LogicalDateNavigation.shifted(selectedDate, days: days) }
+    public func adjacentDate(days: Int) -> String? {
+        // 翻日使用与统计页相同的 C++ 周期计算；读取失败不改变选中日，不在 Swift 回退计算。
+        do { return try logicalDay.period(anchor: selectedDate, range: "day", shift: days, logicalToday: logicalDay.today).start }
+        catch { self.error = error.localizedDescription; return nil }
+    }
     public func refresh() {
         do {
             let timeline = try history.dayTimeline(date: selectedDate)

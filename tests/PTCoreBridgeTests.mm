@@ -42,6 +42,7 @@ QDateTime QDateTime::currentDateTime() {
 class PTCoreBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void independentLogicalDayReceivers();
     void clockOverrideDrivesLogicalDayService();
     void categoryValuesAndErrors();
     void settingsSnapshotWritesAndFailures();
@@ -1026,6 +1027,22 @@ void PTCoreBridgeTests::historyFieldsPartialChangesAndFailures() {
         QCOMPARE(PTBridgeSupport::string(error.localizedDescription), service->lastError());
         QVERIFY(![bridge monthSessions:NSIntegerMax month:2].valid);
         QVERIFY(![bridge updateSession:NSIntegerMax changes:changes error:&error]);
+    }
+}
+// 产品保证：两个页面各自的逻辑日适配器同时收到服务广播，释放一个不影响另一个。
+void PTCoreBridgeTests::independentLogicalDayReceivers()
+{
+    @autoreleasepool {
+        __block int first = 0, second = 0;
+        PTLogicalDayBridge *left = [PTLogicalDayBridge new];
+        PTLogicalDayBridge *right = [PTLogicalDayBridge new];
+        left.onChanged = ^{ ++first; };
+        right.onChanged = ^{ ++second; };
+        emit LogicalDayService::instance()->changed();
+        QCOMPARE(first, 1); QCOMPARE(second, 1);
+        left = nil;
+        emit LogicalDayService::instance()->changed();
+        QCOMPARE(first, 1); QCOMPARE(second, 2);
     }
 }
 QTEST_GUILESS_MAIN(PTCoreBridgeTests)

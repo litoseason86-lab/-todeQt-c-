@@ -830,13 +830,14 @@ import XCTest
         setTimer(rest, mode: 2, phase: 3, active: true, taskID: 3, title: "休息")
         XCTAssertNil(rest.store.captureSource)
     }
-    // 产品保证：外壳的记一笔把提供者给的来源一并写入；没有提供者（其它页）仍是无来源；每次打开现取。
+    // 产品保证：专注页记一笔把提供者给的来源一并写入；其它页无来源；每次打开现取。
     func testShellCapturePassesSourceFromProvider() {
         let bridge = ShellBridgeFake(); let shell = ShellStore(bridge: bridge)
         shell.captureTitle = "无来源"; shell.presentCapture(); XCTAssertTrue(shell.capture())
         XCTAssertEqual(bridge.calls.last, "capture:无来源:-1:-1")
         var source: ShellCaptureSource? = ShellCaptureSource(taskID: 12, categoryID: 5)
         shell.captureSourceProvider = { source }
+        shell.select(.focus)
         shell.captureTitle = "有来源"; shell.presentCapture(); XCTAssertTrue(shell.capture())
         XCTAssertEqual(bridge.calls.last, "capture:有来源:5:12")
         source = nil

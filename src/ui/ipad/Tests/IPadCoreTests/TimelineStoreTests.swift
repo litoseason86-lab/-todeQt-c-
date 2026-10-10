@@ -19,6 +19,20 @@ import XCTest
                                   logicalDay: logicalDay, date: "2026-10-09")
         }
     }
+    // 产品保证：前后日导航委托 C++ 周期接口，失败保留所选日期与服务错误。
+    func testAdjacentDateUsesLogicalDayPeriod() {
+        let f = Fixture()
+        f.logicalDay.periodResult.start = "2026-10-08"
+        XCTAssertEqual(f.store.adjacentDate(days: -1), "2026-10-08")
+        XCTAssertEqual(f.logicalDay.periodCalls.last?.0, "2026-10-09")
+        XCTAssertEqual(f.logicalDay.periodCalls.last?.1, "day")
+        XCTAssertEqual(f.logicalDay.periodCalls.last?.2, -1)
+        XCTAssertEqual(f.logicalDay.periodCalls.last?.3, "2026-10-09")
+        f.logicalDay.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "日期读取失败"])
+        XCTAssertNil(f.store.adjacentDate(days: 1))
+        XCTAssertEqual(f.store.selectedDate, "2026-10-09")
+        XCTAssertEqual(f.store.error, "日期读取失败")
+    }
     // 产品保证：休息转为专注时把用户新选的任务交给字段级接口，时间精度仍保持原值。
     func testRestConversionForwardsSelectedTask() {
         let f = Fixture(); var row = SessionValue(); row.id = 7; row.isRest = true

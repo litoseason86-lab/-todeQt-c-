@@ -19,6 +19,18 @@ import XCTest
 }
 
 @MainActor final class ShellStoreTests: XCTestCase {
+    // 产品保证：只有专注页的工具栏捕获才带计时任务，其它页面保持无来源。
+    func testCaptureSourceOnlyOnFocusPage() {
+        let bridge = FakeShellBridge()
+        let store = ShellStore(bridge: bridge)
+        store.captureSourceProvider = { ShellCaptureSource(taskID: 41, categoryID: 3) }
+        store.select(.dashboard); store.presentCapture(); store.captureTitle = "无来源"
+        XCTAssertTrue(store.capture())
+        store.select(.focus); store.presentCapture(); store.captureTitle = "来自任务"
+        XCTAssertTrue(store.capture())
+        XCTAssertTrue(bridge.calls.contains("capture:无来源:-1:-1"))
+        XCTAssertTrue(bridge.calls.contains("capture:来自任务:3:41"))
+    }
     // 产品保证：读取失败保留上一份有效摘要，重试成功再清错并更新，失败不伪装为零任务。
     func testReadFailureKeepsSnapshotAndRetryClearsError() {
         let bridge = FakeShellBridge()

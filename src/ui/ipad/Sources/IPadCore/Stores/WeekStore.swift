@@ -40,13 +40,10 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
         self.tasks = tasks; self.logicalDay = logicalDay; self.pendingDeletion = pendingDeletion
         self.interactions = interactions; self.weekStart = weekStart; logicalToday = logicalDay.today
         self.weekDates = weekDates; self.weekStartProvider = weekStartProvider
-        logicalDay.observeChanges { [weak self] in self?.refresh() }
-        let previousTaskChanged = tasks.onChanged
-        tasks.onChanged = { [weak self] in previousTaskChanged?(); self?.refresh() }
-        let previousInteractionChanged = interactions.onChanged
+        logicalDay.onChanged = { [weak self] in self?.refresh() }
+        tasks.onChanged = { [weak self] in self?.refresh() }
         // 共用交互协调器冻结所有任务入口；最后一个令牌结束后只补一次读取。
         interactions.onChanged = { [weak self] in
-            previousInteractionChanged?()
             guard let self, !self.interactions.refreshBlocked, self.refreshPending else { return }
             self.refresh()
         }
