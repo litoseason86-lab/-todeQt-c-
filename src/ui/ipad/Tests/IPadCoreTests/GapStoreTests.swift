@@ -49,4 +49,31 @@ import XCTest
         XCTAssertFalse(b.calls.contains("resolve"))
     }
 
+    // 产品保证：筛选或同步移走当前条目时收起详情；读取失败继续保留原条目和详情。
+    func testSelectionClosesOnlyAfterSuccessfulResultDropsRow() {
+        let bridge = KnowledgeGapFake(); bridge.rows = [row(7, status: 0), row(3, status: 0)]
+        let store = GapStore(bridge: bridge, logicalDay: LogicalDayBridgeFake()); store.refresh()
+        store.select(7); XCTAssertEqual(store.selectedID, 7); XCTAssertTrue(store.detailPresented)
+        bridge.rows = [row(3, status: 2)]
+        bridge.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "读取失败"])
+        store.statusFilter = 2; store.refresh()
+        XCTAssertEqual(store.selectedID, 7); XCTAssertTrue(store.detailPresented)
+        bridge.error = nil; store.refresh()
+        XCTAssertNil(store.selectedID); XCTAssertFalse(store.detailPresented)
+        store.select(99); XCTAssertNil(store.selectedID); XCTAssertFalse(store.detailPresented)
+    }
+
+    // 产品保证：编辑意图固定打开时的条目，切换选择和同步改名不把草稿移到另一条记录。
+    func testFormKeepsOpenedSnapshotAcrossSelectionAndRefresh() {
+        let bridge = KnowledgeGapFake(); bridge.rows = [row(7, status: 0), row(3, status: 0)]
+        let store = GapStore(bridge: bridge, logicalDay: LogicalDayBridgeFake()); store.refresh()
+        let opened = bridge.rows[0]
+        store.requestForm(.edit(opened)); XCTAssertEqual(store.form?.gap, opened)
+        store.select(3); bridge.rows[0].title = "远端改名"; store.refresh()
+        XCTAssertEqual(store.selectedID, 3); XCTAssertEqual(store.form?.gap, opened)
+        store.dismissForm(); XCTAssertNil(store.form)
+        store.closeDetail(); XCTAssertFalse(store.detailPresented); XCTAssertEqual(store.selectedID, 3)
+        XCTAssertFalse(bridge.calls.contains("update"))
+    }
+
 }
