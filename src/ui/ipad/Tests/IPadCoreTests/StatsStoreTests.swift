@@ -81,10 +81,10 @@ import XCTest
         statistics.comparison.duration.hasData = true
         statistics.comparison.duration.displayText = "比上周增加 25%"; statistics.comparison.duration.trend = 1
         store.movePeriod(-1)
-        XCTAssertEqual(store.snapshot.cards.last?.comparison, "比上上周增加 25%")
+        XCTAssertEqual(store.snapshot.cards.first?.comparison, "比上上周增加 25%")
         XCTAssertEqual(store.snapshot.review?.periodState, "ended")
         XCTAssertEqual(store.snapshot.review?.facts, [fact])
-        XCTAssertEqual(store.snapshot.cards.last?.trend, 1)
+        XCTAssertEqual(store.snapshot.cards.first?.trend, 1)
     }
     // 产品保证：图表顺序与秒数原样来自服务，周累计使用服务合计，不把图表各项重新加总。
     func testChartsPreserveServiceOrderAndTotals() {
@@ -100,13 +100,15 @@ import XCTest
         XCTAssertEqual(store.snapshot.bars.map(\.seconds), [86400, 100])
         XCTAssertEqual(store.snapshot.bars.map(\.label), ["周五", "周一"])
         XCTAssertEqual(store.snapshot.categories, statistics.categoryStats)
-        XCTAssertEqual(store.snapshot.cards.last?.value, "1.1")
-        XCTAssertEqual(store.snapshot.cards.last?.unit, "小时")
-        var second = MonthWeekStatistics(); second.label = "第2周"; second.duration = 19
-        var first = MonthWeekStatistics(); first.label = "第1周"; first.duration = 71
-        statistics.monthWeeks = [second, first]; store.selectRange(.month)
-        XCTAssertEqual(store.snapshot.bars.map(\.label), ["第2周", "第1周"])
+        XCTAssertEqual(store.snapshot.cards.first?.value, "1.1")
+        XCTAssertEqual(store.snapshot.cards.first?.unit, "小时")
+        var second = FocusSummaryDay(); second.date = "2024-02-16"; second.seconds = 19
+        var first = FocusSummaryDay(); first.date = "2024-02-12"; first.seconds = 71
+        statistics.summary.days = [second, first]; store.selectRange(.month)
+        XCTAssertEqual(store.snapshot.bars.map(\.date), ["2024-02-16", "2024-02-12"])
         XCTAssertEqual(store.snapshot.bars.map(\.seconds), [19, 71])
+        XCTAssertEqual(statistics.calls.last { $0.0 == "focusSummary" }?.1, ["2024-02-01", "2024-02-29"])
+        XCTAssertEqual(statistics.calls.last { $0.0 == "focusSummary" }?.2, [4])
     }
     // 产品保证：查询失败与空数据分开，失败保留已成功快照，重试成功才清错。
     func testReadFailurePreservesSnapshotAndDiffersFromEmpty() {
@@ -117,7 +119,7 @@ import XCTest
         tested.setActive(true); XCTAssertFalse(tested.hasLoaded); XCTAssertFalse(tested.isEmpty)
         statistics.error = nil; statistics.day.totalDuration = 123; statistics.categoryStats.totalDuration = 123
         tested.refresh(); let snapshot = tested.snapshot
-        XCTAssertEqual(snapshot.cards.last?.value, "2")
+        XCTAssertEqual(snapshot.cards.first?.value, "2")
         statistics.error = NSError(domain: "测试", code: 2, userInfo: [NSLocalizedDescriptionKey: "再次失败"])
         tested.refresh(); XCTAssertEqual(tested.snapshot, snapshot); XCTAssertEqual(tested.errorMessage, "再次失败")
         statistics.error = nil; tested.refresh(); XCTAssertEqual(tested.errorMessage, "")
@@ -162,4 +164,60 @@ import XCTest
         store.setActive(true); store.selectRange(.month)
         XCTAssertEqual(defaults.string(forKey: "ipadui.statistics.range"), "month")
     }
+    // 产品保证：日、周、月的数字卡统一按专注时长、有记录天数、完成次数排列，直接消费各服务指标。
+    func testCardsUseServiceValuesInDesignOrderForEveryRange() {
+        let statistics = StatisticsBridgeFake(); statistics.day.totalDuration = 1337; statistics.day.sessionCount = 9
+        statistics.day.completedTasks = 88; statistics.day.totalTasks = 99
+        statistics.effectiveDayCount = 0; statistics.sessionCount = 13
+        statistics.categoryStats.totalDuration = 3789
+        statistics.month.totalDuration = 4499; statistics.month.effectiveDays = 17; statistics.month.sessionCount = 29
+        let store = StatsStore(statistics: statistics, logicalDay: CountingDayBridge()); store.setActive(true)
+        XCTAssertEqual(store.snapshot.cards.map(\.title), ["专注时长", "有记录天数", "完成次数"])
+        XCTAssertEqual(store.snapshot.cards.map(\.value), [StatisticsFormat.totalDurationValue(1337), "0", "9"])
+        store.selectRange(.week)
+        XCTAssertEqual(store.snapshot.cards.map(\.value), [StatisticsFormat.totalDurationValue(3789), "0", "13"])
+        store.selectRange(.month)
+        XCTAssertEqual(store.snapshot.cards.map(\.value), [StatisticsFormat.totalDurationValue(4499), "17", "29"])
+    }
+
+    // 产品保证：所有当前周期均隐藏比较，即使服务返回比较值；结束周期才显示。
+    func testCurrentRangesHideComparisonButEndedRangesShowIt() {
+        let statistics = StatisticsBridgeFake()
+        var metric = ComparisonMetric(); metric.hasData = true; metric.displayText = "比昨天增加 20%"
+        statistics.comparison.duration = metric; statistics.comparison.effectiveDays = metric
+        statistics.comparison.sessionCount = metric; statistics.comparison.taskCompletion = metric
+        let store = StatsStore(statistics: statistics, logicalDay: CountingDayBridge()); store.setActive(true)
+        for range in StatisticsRange.allCases {
+            store.selectRange(range)
+            XCTAssertTrue(store.snapshot.period.current)
+            XCTAssertTrue(store.snapshot.cards.allSatisfy { $0.comparison.isEmpty }, range.rawValue)
+            store.movePeriod(-1); XCTAssertFalse(store.snapshot.period.current)
+            XCTAssertTrue(store.snapshot.cards.allSatisfy { !$0.comparison.isEmpty }, range.rawValue)
+        }
+    }
+
+    // 产品保证：今日柱只认服务日期关系；图表选择在读失败时保留，成功换数据后才清掉。
+    func testChartSelectionAndTodayMarkFollowSuccessfulSnapshot() {
+        let statistics = StatisticsBridgeFake(), day = CountingDayBridge()
+        var row = WeekDayStatistics(); row.date = "2030-01-01"; row.duration = 123
+        statistics.weekDays = [row]
+        // 故意让与设备日期无关的日期得到 same，任何 Swift 日期比较都会给出错误标记。
+        day.fake.relations["2030-01-01/2024-02-15"] = .same
+        var category = CategoryStatisticsRow(); category.name = "数学"; category.duration = 987; category.percentage = 25
+        statistics.categoryStats.categories = [category]
+        let store = StatsStore(statistics: statistics, logicalDay: day); store.setActive(true)
+        XCTAssertEqual(store.snapshot.bars.count, 1)
+        XCTAssertTrue(store.snapshot.bars[0].today); XCTAssertEqual(store.snapshot.bars[0].date, row.date)
+        let label = store.snapshot.bars[0].label
+        store.selectBar(label); store.selectCategory(0)
+        XCTAssertEqual(store.selectedBarLabel, label); XCTAssertEqual(store.selectedCategoryIndex, 0)
+        statistics.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "读取失败"])
+        store.refresh(); XCTAssertEqual(store.selectedBarLabel, label); XCTAssertEqual(store.selectedCategoryIndex, 0)
+        statistics.error = nil; statistics.weekDays[0].duration = 456
+        statistics.categoryStats.categories[0].duration = 999; store.refresh()
+        XCTAssertNil(store.selectedBarLabel); XCTAssertNil(store.selectedCategoryIndex)
+        store.selectBar("不存在"); store.selectCategory(99)
+        XCTAssertNil(store.selectedBarLabel); XCTAssertNil(store.selectedCategoryIndex)
+    }
+
 }
