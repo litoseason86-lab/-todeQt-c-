@@ -464,6 +464,32 @@ public typealias FocusDelay = @MainActor (_ seconds: Double, _ action: @escaping
         }
     }
 
+    public var newTaskTitle = ""
+    public func selectIdleTask(id: Int, title: String) {
+        guard taskSelectorActive else { return }
+        selectTask(id: id, title: title)
+    }
+    public func selectModePreset(minutes: Int?) {
+        guard taskSelectorActive else { return }
+        if let minutes {
+            guard [25, 45, 60].contains(minutes) else { return }
+            selectWorkMinutes(minutes)
+            requestModeSwitch(usePomodoro: true)
+        } else if freeModeAvailable { requestModeSwitch(usePomodoro: false) }
+    }
+    public var modeMenuTitle: String {
+        pomodoroModeSelected ? "番茄 · \(selectedWorkMinutes) 分钟" : "自由计时"
+    }
+    public var compactStageText: String {
+        switch state {
+        case .manualRest: "主动休息"
+        case .pomoBreak: "番茄 · 休息"
+        case .workDone: "专注完成"
+        case .breakDone: "休息结束"
+        default: pomodoroModeSelected ? "番茄 · 第 \(snapshot.completedPomodoros + 1) 个" : "自由计时"
+        }
+    }
+
     // MARK: 时长
     public func selectWorkMinutes(_ minutes: Int) {
         // 范围而非白名单：自定义时长和预设走同一入口。
