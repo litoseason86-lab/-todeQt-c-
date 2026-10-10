@@ -3,6 +3,7 @@ import SwiftUI
 
 @MainActor struct KnowledgeGapPage: View {
     @Environment(GapStore.self) private var store
+    @Environment(ShellStore.self) private var shell
     @Environment(\.dynamicTypeSize) private var typeSize
     var body: some View {
         GeometryReader { geometry in
@@ -25,7 +26,7 @@ import SwiftUI
             .navigationDestination(isPresented: Binding(get: { !wide && store.detailPresented }, set: { if !$0 { store.closeDetail() } })) {
                 if let gap = store.selected {
                     detail(gap).padding(16).navigationTitle("知识缺口")
-                        .onAppear { store.setActive(true) }.onDisappear { store.setActive(false) }
+                        .onAppear { store.setActive(true) }.onDisappear { if shell.selection != .knowledgeGap { store.setActive(false) } }
                 }
             }
         }
@@ -38,7 +39,12 @@ import SwiftUI
             Button("删除", role: .destructive) { store.confirmDelete() }
             Button("取消", role: .cancel) { store.cancelDelete() }
         }
-        .onAppear { store.setActive(true) }.onDisappear { store.setActive(false) }
+        .onAppear { store.setActive(true) }
+        .onDisappear {
+            // 内部推入详情仍是同一业务页面，不依赖父子 onAppear/onDisappear 的先后顺序停掉订阅。
+            if !store.detailPresented || shell.selection != .knowledgeGap { store.setActive(false) }
+        }
+        .onChange(of: shell.selection) { _, page in store.setActive(page == .knowledgeGap) }
     }
     private var listCard: some View {
         @Bindable var binding = store

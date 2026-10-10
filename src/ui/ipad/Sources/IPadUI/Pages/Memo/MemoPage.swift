@@ -29,7 +29,9 @@ import UIKit
                             Button("备忘录", systemImage: "chevron.left") { commitInput(); _ = store.dismissMemo() }
                         }
                     }
-                    .onAppear { store.setActive(true) }.onDisappear { commitInput(); store.setActive(false) }
+                    .onAppear { store.setActive(true) }.onDisappear {
+                        commitInput(); if shell.selection != .memo { store.setActive(false) }
+                    }
             }
             .onChange(of: wide) { commitInput() }
         }
@@ -46,7 +48,11 @@ import UIKit
             Button("取消", role: .cancel) { store.cancelDelete() }
         }
         .onAppear { store.setActive(shell.selection == .memo) }
-        .onDisappear { commitInput(); store.setActive(false) }
+        .onDisappear {
+            commitInput()
+            // 列表推入纸面不代表离开备忘录；只有真的离页才释放页面活跃状态。
+            if !store.detailPresented || shell.selection != .memo { store.setActive(false) }
+        }
         .onChange(of: shell.selection) { _, page in
             if page != .memo { commitInput() }; store.setActive(page == .memo)
         }
