@@ -1,0 +1,68 @@
+import Foundation
+import Observation
+
+@MainActor @Observable public final class GapStore {
+    public private(set) var items: [GapValue] = []
+    public var selectedID: Int?
+    public private(set) var categories: [CategoryValue] = []
+    public var statusFilter = -2 { didSet { preferences?.set(statusFilter, forKey: "ipadui.knowledgeGap.status") } }
+    public var search = ""
+    public private(set) var errorMessage = ""
+    public private(set) var pendingDelete: GapValue?
+    @ObservationIgnored private let bridge: any KnowledgeGapBridging
+    @ObservationIgnored private let categoryBridge: (any CategoryBridgeProtocol)?
+    @ObservationIgnored private let preferences: UserDefaults?
+    @ObservationIgnored private let logicalDay: any LogicalDayBridgeProtocol
+    @ObservationIgnored private weak var shell: ShellStore?
+    private var active = false
+    private var reading = false
+    public init(bridge: any KnowledgeGapBridging, logicalDay: any LogicalDayBridgeProtocol, shell: ShellStore? = nil, categories: (any CategoryBridgeProtocol)? = nil, preferences: UserDefaults? = nil) {
+        self.bridge = bridge; self.logicalDay = logicalDay; self.shell = shell; categoryBridge = categories; self.preferences = preferences
+        if let stored = preferences?.object(forKey: "ipadui.knowledgeGap.status") as? Int, [-2, 2].contains(stored) { statusFilter = stored }
+        // 信号来自同一个 C++ 服务；后台失败只在当前页展示，重新进入时重读。
+        bridge.onChanged = { [weak self] in if self?.active == true { self?.refresh() } }
+        bridge.onFailure = { [weak self] message in if self?.active == true { self?.errorMessage = message } }
+    }
+    public func setActive(_ value: Bool) { active = value; if value { refresh() } }
+    public func logicalDayChanged() { if active { refresh() } }
+    public func relatedDataChanged() { if active { refresh() } }
+    public func gaps(status: Int) -> [GapValue] { items.filter { $0.status == status } }
+    public var logicalToday: String { logicalDay.today }
+    public var selected: GapValue? { items.first { $0.id == selectedID } }
+    public func refresh() {
+        guard !reading else { return }; reading = true; defer { reading = false }
+        do {
+            let rows = try bridge.gaps(status: statusFilter, categoryID: 0, search: search)
+            let subjects = try categoryBridge?.allCategories() ?? []
+            items = rows; categories = subjects; errorMessage = ""
+        }
+        catch { errorMessage = error.localizedDescription }
+    }
+    @discardableResult private func perform(_ action: () throws -> Void) -> Bool {
+        do { try action(); errorMessage = ""; refresh(); return true }
+        catch { errorMessage = error.localizedDescription; return false }
+    }
+    @discardableResult public func add(title: String, categoryID: Int, detail: String, priority: Int, dueDate: String) -> Bool {
+        perform { _ = try bridge.add(title: title, categoryID: categoryID, detail: detail, priority: priority, dueDate: dueDate, sourceTaskID: -1) }
+    }
+    @discardableResult public func update(opened: GapValue, edited: GapValue) -> Bool {
+        let changes = GapChanges(title: edited.title == opened.title ? nil : edited.title,
+            categoryID: edited.categoryID == opened.categoryID ? nil : edited.categoryID,
+            detail: edited.detail == opened.detail ? nil : edited.detail,
+            priority: edited.priority == opened.priority ? nil : edited.priority,
+            dueDate: edited.dueDate == opened.dueDate ? nil : edited.dueDate)
+        guard !changes.isEmpty else { return true }
+        return perform { try bridge.update(id: opened.id, changes: changes) }
+    }
+    @discardableResult public func convert(_ gap: GapValue) -> Bool {
+        let ok = perform { _ = try bridge.convert(id: gap.id, date: logicalDay.today) }
+        if ok { shell?.showToast("已加到今天「\(gap.title)」") }; return ok
+    }
+    @discardableResult public func schedule(_ gap: GapValue, date: String) -> Bool { perform { try bridge.schedule(id: gap.id, date: date) } }
+    @discardableResult public func schedule(ids: [Int], date: String) -> Bool { perform { try bridge.schedule(ids: ids, date: date) } }
+    @discardableResult public func resolve(_ gap: GapValue, resolution: String) -> Bool { perform { try bridge.resolve(id: gap.id, resolution: resolution) } }
+    @discardableResult public func reopen(_ gap: GapValue) -> Bool { perform { try bridge.reopen(id: gap.id) } }
+    public func requestDelete(_ gap: GapValue) { pendingDelete = gap }
+    public func cancelDelete() { pendingDelete = nil }
+    public func confirmDelete() { guard let gap = pendingDelete else { return }; pendingDelete = nil; _ = perform { try bridge.delete(id: gap.id) } }
+}

@@ -553,6 +553,49 @@ if(IOS)
         src/ui/ipad/Sources/IPadUI/Pages/Today/TodayBanners.swift
         src/ui/ipad/Sources/IPadUI/Pages/Today/TodaySheets.swift
         src/ui/ipad/Sources/IPadUI/Pages/Today/TodayToolsSheet.swift)
+    # 055-P4-3：内容桥接与协议、适配器。
+    target_sources(PomodoroTodo PRIVATE
+        src/platform/ios/bridge/PTKnowledgeGapBridge.h src/platform/ios/bridge/PTKnowledgeGapBridge.mm
+        src/platform/ios/bridge/PTMemoBridge.h src/platform/ios/bridge/PTMemoBridge.mm
+        src/platform/ios/bridge/PTCountdownBridge.h src/platform/ios/bridge/PTCountdownBridge.mm
+    )
+    set_source_files_properties(
+        src/platform/ios/bridge/PTKnowledgeGapBridge.mm
+        src/platform/ios/bridge/PTMemoBridge.mm
+        src/platform/ios/bridge/PTCountdownBridge.mm
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    # 055-P4-3：Swift 内容协议与适配器分层登记。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Bridging/KnowledgeGapBridging.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/MemoBridging.swift
+        src/ui/ipad/Sources/IPadCore/Bridging/CountdownBridging.swift
+    )
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Bridges/KnowledgeGapAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/MemoAdapter.swift
+        src/ui/ipad/Sources/IPadUI/Bridges/CountdownAdapter.swift
+    )
+    # 055-P4-3：知识缺口列表、详情与展示 Store。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/GapStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/GapFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/KnowledgeGap/KnowledgeGapPage.swift)
+    # 055-P4-3：备忘录编辑会话和组合保护标题，正文复用 P3A 编辑器。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/MemoStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/MemoFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Memo/MemoPage.swift
+        src/ui/ipad/Sources/IPadUI/Pages/Memo/MemoTitleEditor.swift)
+    # 055-P4-3：主目标、系统列表和倒计时表单。
+    target_sources(IPadCore PRIVATE
+        src/ui/ipad/Sources/IPadCore/Stores/CountdownStore.swift
+        src/ui/ipad/Sources/IPadCore/Format/CountdownFormat.swift)
+    target_sources(IPadUI PRIVATE
+        src/ui/ipad/Sources/IPadUI/Pages/Countdown/CountdownPage.swift)
+    # 055-P4-3：两种表单共用 ISO 日期投影，不共享领域 Store 或业务判断。
+    target_sources(IPadCore PRIVATE src/ui/ipad/Sources/IPadCore/Format/ContentDateFormat.swift)
     foreach(swift_target IN ITEMS IPadCore IPadUI)
         # 纯 Swift 目标关闭 Qt 的自动生成，否则空的 moc 编译单元会触发 libtool 告警。
         # Xcode 下用 SWIFT_VERSION，Swift_LANGUAGE_VERSION 会与工程默认的 4.0 冲突。
@@ -1968,3 +2011,24 @@ set_source_files_properties(
     src/platform/ios/bridge/PTStatisticsBridge.mm
     src/platform/ios/bridge/PTFocusHistoryBridge.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+
+# 055-P4-3：三个内容桥接在 Mac 上共用一个测试目标。
+get_target_property(PT_CONTENT_TEST_SOURCES TrashServiceTests SOURCES)
+list(REMOVE_ITEM PT_CONTENT_TEST_SOURCES tests/TrashServiceTests.cpp)
+add_executable(PTContentBridgeTests ${PT_CONTENT_TEST_SOURCES}
+    tests/PTContentBridgeTests.mm
+    src/platform/ios/bridge/PTBridgeSupport.mm
+    src/platform/ios/bridge/PTKnowledgeGapBridge.h src/platform/ios/bridge/PTKnowledgeGapBridge.mm
+    src/platform/ios/bridge/PTMemoBridge.h src/platform/ios/bridge/PTMemoBridge.mm
+    src/platform/ios/bridge/PTCountdownBridge.h src/platform/ios/bridge/PTCountdownBridge.mm
+)
+set_source_files_properties(tests/PTContentBridgeTests.mm
+    src/platform/ios/bridge/PTKnowledgeGapBridge.mm
+    src/platform/ios/bridge/PTMemoBridge.mm
+    src/platform/ios/bridge/PTCountdownBridge.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(PTContentBridgeTests PRIVATE Qt6::Core Qt6::Gui Qt6::Sql Qt6::Concurrent Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(PTContentBridgeTests)
+add_test(NAME PTContentBridgeTests COMMAND PTContentBridgeTests)
+set_tests_properties(PTContentBridgeTests PROPERTIES TIMEOUT 90
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")

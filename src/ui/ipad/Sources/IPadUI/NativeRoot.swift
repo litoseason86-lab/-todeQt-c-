@@ -44,11 +44,34 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         store.onNewTask = { [weak store, weak today] in
             store?.select(.today); today?.requestNewTask()
         }
+        // 055-P4-3：一个领域一份会话，多个页面容器从环境复用。
+        let gaps = GapStore(bridge: KnowledgeGapAdapter(), logicalDay: core.logicalDay,
+                            shell: store, categories: core.categories, preferences: .standard)
+        // 共用桥接只有一个回调槽；串接前任接收者，合并其它 P4 计划时仍保留各自刷新。
+        let previousDayChanged = core.logicalDay.onChanged
+        core.logicalDay.onChanged = { [weak gaps] in previousDayChanged?(); gaps?.logicalDayChanged() }
+        let previousCategoryChanged = core.categories.onChanged
+        core.categories.onChanged = { [weak gaps] in previousCategoryChanged?(); gaps?.relatedDataChanged() }
+        let previousTasksChanged = core.tasks.onChanged
+        core.tasks.onChanged = { [weak gaps] in previousTasksChanged?(); gaps?.relatedDataChanged() }
+        // 055-P4-3：备忘编辑会话跨页保留，生命周期由外壳同步调用。
+        let memos = MemoStore(bridge: MemoAdapter(), categories: core.categories, shell: store, preferences: .standard)
+        let previousMemoCategoryChanged = core.categories.onChanged
+        core.categories.onChanged = { [weak memos] in previousMemoCategoryChanged?(); memos?.relatedDataChanged() }
+        // 055-P4-3：倒计时只消费服务主目标、排序与剩余天数。
+        let countdown = CountdownStore(bridge: CountdownAdapter(), logicalDay: core.logicalDay, shell: store)
+        let previousCountdownDayChanged = core.logicalDay.onChanged
+        core.logicalDay.onChanged = { [weak countdown] in previousCountdownDayChanged?(); countdown?.logicalDayChanged() }
         // 保留同步保存顺序；闭包不保留 Store，页面保存登记由外壳管理，P4 挂入各页编辑会话。
         PTLifecycleBridge.flushHandler = { [weak store] in
-            MainActor.assumeIsolated { store?.flushEdits() }
+            MainActor.assumeIsolated {
+                // 先让 UIKit 上屏组合，再同步保存；返回后 C++ 才写出设备同步。
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                store?.flushEdits()
+            }
         }
         return UIHostingController(rootView: ShellRootView(store: store)
-            .environment(core).environment(today).environment(dashboard).environment(focus).environment(store))
+            .environment(core).environment(today).environment(dashboard).environment(focus).environment(store)
+            .environment(gaps).environment(memos).environment(countdown))
     }
 }
