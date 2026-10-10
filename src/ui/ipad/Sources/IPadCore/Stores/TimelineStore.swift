@@ -29,6 +29,33 @@ public struct SessionEditorDraft: Equatable, Sendable {
     public private(set) var taskOptions: [SessionTaskOption] = []
     public private(set) var error = ""
     public private(set) var relationAvailable = true
+    public private(set) var categoryStatistics = CategoryStatistics()
+    public var editorDraft: SessionEditorDraft?
+    public private(set) var editorOriginal: SessionValue?
+    public private(set) var editorError = ""
+    public private(set) var editorOptionsLoaded = false
+    public private(set) var editorTaskOptions: [SessionTaskOption] = []
+    public func openEditor(original: SessionValue?) {
+        editorOriginal = original
+        var value = original ?? SessionValue()
+        if original == nil { value.startTime = LogicalDateNavigation.timestamp(LogicalDateNavigation.initialSessionStart(date: selectedDate)); value.durationSeconds = 1800 }
+        editorDraft = SessionEditorDraft(original: value)
+        editorError = ""; editorOptionsLoaded = false; reloadEditorOptions()
+    }
+    public func submitEditor() -> Bool {
+        guard let draft = editorDraft else { return false }
+        let saved: Bool
+        if let original = editorOriginal { saved = updateSession(draft, original: original) }
+        else { saved = addManualSession(taskID: draft.taskID, startTime: draft.startTime, durationMinutes: draft.durationMinutes) }
+        if !saved { editorError = error.isEmpty ? "保存失败，请重试" : error }
+        else { editorError = "" }
+        return saved
+    }
+    public func reloadEditorOptions() {
+        do { editorTaskOptions = try taskOptions(original: editorOriginal); editorOptionsLoaded = true; editorError = "" }
+        catch { editorError = error.localizedDescription }
+    }
+
     @ObservationIgnored private let history: any FocusHistoryBridgeProtocol
     @ObservationIgnored private let statisticsBridge: any StatisticsBridgeProtocol
     @ObservationIgnored private let pendingDeletion: PendingDeletionStore
@@ -75,7 +102,8 @@ public struct SessionEditorDraft: Equatable, Sendable {
             let total = try history.dayTotalDuration(date: selectedDate)
             let day = try statisticsBridge.dayStats(date: selectedDate)
             let options = try history.taskOptions(date: selectedDate)
-            sessions = timeline; totalSeconds = total; statistics = day; taskOptions = options
+            let categories = try statisticsBridge.categoryStats(from: selectedDate, to: selectedDate)
+            sessions = timeline; totalSeconds = total; statistics = day; taskOptions = options; categoryStatistics = categories
             if relationAvailable { error = "" }
         } catch { self.error = error.localizedDescription }
     }

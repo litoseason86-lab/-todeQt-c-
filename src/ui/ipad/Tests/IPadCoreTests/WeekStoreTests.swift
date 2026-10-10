@@ -190,4 +190,24 @@ import XCTest
         XCTAssertEqual(store.groups, snapshot); XCTAssertEqual(store.weekStart, "2026-10-12")
         XCTAssertEqual(store.error, "周起点读取失败")
     }
+    // 产品保证：窄窗星期分段的今天标记直接用逻辑今日，不能由系统日期推断。
+    @MainActor func testR2TodayMarkerUsesLogicalDay() {
+        let (_, day, _, store) = fixture()
+        XCTAssertTrue(store.isToday(day.today)); XCTAssertFalse(store.isToday("2026-10-08"))
+        day.today = "2026-10-10"; store.updateLogicalDay()
+        XCTAssertTrue(store.isToday("2026-10-10")); XCTAssertFalse(store.isToday("2026-10-09"))
+    }
+    // 产品保证：窄窗默认逻辑今日，切换星期只改展示组；日界跟随今日，手选历史日保留。
+    @MainActor func testR2SelectedDayDefaultsAndRetainsManualSelection() {
+        let (_, day, _, store) = fixture()
+        XCTAssertEqual(store.selectedGroup?.date, "2026-10-09")
+        store.selectDay("2026-10-07")
+        XCTAssertEqual(store.selectedGroup?.date, "2026-10-07")
+        day.today = "2026-10-10"; store.updateLogicalDay()
+        XCTAssertEqual(store.selectedGroup?.date, "2026-10-07")
+        store.selectDay(day.today)
+        XCTAssertEqual(store.addTitle, "添加到周六")
+        day.today = "2026-10-11"; store.updateLogicalDay()
+        XCTAssertEqual(store.selectedGroup?.date, "2026-10-11")
+    }
 }

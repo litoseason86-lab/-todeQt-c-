@@ -73,11 +73,22 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
                 WeekDayGroup(date: date, tasks: rows.filter { $0.date == date },
                              plannedMinutes: planned.indices.contains(day) ? max(0, planned[day]) : 0)
             }
+            // 日界只带动仍跟随今日的选中项；手选日期保持，周被替换后失效选择退回今日。
+            if selectedDate.isEmpty || selectedDate == logicalToday || !dates.contains(selectedDate) { selectedDate = logicalDay.today }
             weekStart = start; logicalToday = logicalDay.today; error = ""
             if task(id: cursorTaskID) == nil { cursorTaskID = -1 }
         } catch { self.error = error.localizedDescription }
     }
     public func updateLogicalDay() { refresh() }
+    public var selectedDate = ""
+    public var selectedGroup: WeekDayGroup? { groups.first { $0.date == selectedDate } ?? groups.first { $0.date == logicalToday } ?? groups.first }
+    public func selectDay(_ date: String) { if groups.contains(where: { $0.date == date }) { selectedDate = date } }
+    public var addTitle: String {
+        guard let date = selectedGroup?.date, let index = groups.firstIndex(where: { $0.date == date }) else { return "添加" }
+        return "添加到周" + ["一", "二", "三", "四", "五", "六", "日"][index]
+    }
+    public func isToday(_ date: String) -> Bool { date == logicalToday }
+
     public func canAdd(on date: String) -> Bool {
         do { return try logicalDay.relation(date, to: logicalDay.today) != .earlier }
         catch { return false }

@@ -15,9 +15,19 @@ import Observation
     public private(set) var gapSummary: GapReminderSummary?
     public private(set) var gapConvertMessage = ""
     public private(set) var loadError = ""
-    // ⌘N 等入口只置位，由页面聚焦输入框后确认；页面还没创建时请求不会丢。
+    // ⌘N 等入口置位并打开同一表单；页面还没创建时请求不会丢。
     public private(set) var newTaskFocusRequested = false
     public var newTitle = ""
+    public var newCategoryID = -1
+    public var newEstimatedMinutes = 0
+    public var newNotes = ""
+    public var newTaskPresented = false
+    public enum Filter: String, CaseIterable, Sendable { case unfinished, finished }
+    public var filter: Filter = .unfinished
+    public var filteredTasks: [TaskValue] { filter == .unfinished ? unfinished : finished }
+    public private(set) var goalProgressPercent: Double = 0
+    public private(set) var newCategories: [CategoryValue] = []
+    public private(set) var newFormError = ""
     public let tools: TodayToolsStore
 
     // 待删任务立刻隐藏；撤销后 pendingTaskID 回到 -1，下一次读取自然恢复。
@@ -85,6 +95,7 @@ import Observation
     public func start() {
         guard !active else { return }
         active = true
+        filter = .unfinished
         taskBridge.onChanged = { [weak self] in self?.requestRefresh() }
         taskBridge.onFailure = { [weak self] message in
             guard let self, self.active else { return }
@@ -108,7 +119,7 @@ import Observation
         }
         focus?.onFocusCompleted = { [weak self] _ in
             guard let self, self.active else { return }
-            self.loadStats()
+            self.loadStats(); self.loadGoal()
         }
         refresh()
     }
@@ -163,7 +174,12 @@ import Observation
     private func loadStats() {
         do { focusedSeconds = try statistics.todayStats().totalDuration } catch { fail("统计数据加载失败，请重试") }
     }
-    private func loadGoal() { goalMinutes = settings.dailyFocusGoal(date: logicalDay.today) }
+    private func loadGoal() {
+        goalMinutes = settings.dailyFocusGoal(date: logicalDay.today)
+        // 进度来自服务的周复盘今日目标，不用不同查询时刻的数字在 Swift 重算比例。
+        do { goalProgressPercent = try statistics.currentWeeklyReview().todayGoal?.progressPercent ?? 0 }
+        catch { fail("统计数据加载失败，请重试") }
+    }
     private func loadPlanned() {
         do {
             let hidden = pendingDeletion.pendingTaskID
@@ -210,14 +226,21 @@ import Observation
         guard shell?.snapshot.operationBlocksUI != true else { return false }
         let title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return false }
-        do { _ = try taskBridge.create(title: title, date: logicalDay.today, categoryID: -1, estimatedMinutes: 0, notes: "") }
-        catch { loadError = error.localizedDescription; return false }
-        // 回车后清空输入并保持输入状态，用户可接着建下一条。
-        newTitle = ""; newTaskFocusRequested = true
+        do { _ = try taskBridge.create(title: title, date: logicalDay.today, categoryID: newCategoryID, estimatedMinutes: newEstimatedMinutes, notes: newNotes) }
+        catch { newFormError = error.localizedDescription; loadError = newFormError; return false }
+        newTitle = ""; newTaskFocusRequested = false; newTaskPresented = false
         refresh()
         return true
     }
-    public func requestNewTask() { newTaskFocusRequested = true }
+    public func requestNewTask() {
+        guard !newTaskPresented else { return }
+        newTitle = ""; newCategoryID = -1; newEstimatedMinutes = 0; newNotes = ""; newFormError = ""
+        newTaskPresented = true; newTaskFocusRequested = true
+    }
+    public func loadNewCategories(from bridge: any CategoryBridgeProtocol) {
+        do { newCategories = try bridge.allCategories(); newFormError = "" }
+        catch { newFormError = error.localizedDescription }
+    }
     public func acknowledgeNewTaskRequest() { newTaskFocusRequested = false }
 
     // MARK: 排序

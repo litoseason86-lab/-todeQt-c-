@@ -232,4 +232,35 @@ import XCTest
         XCTAssertEqual(f.store.sessions.map(\.id), [19]); XCTAssertEqual(f.store.error, "统计读取失败")
         f.statistics.error = nil; f.store.refresh(); XCTAssertTrue(f.store.sessions.isEmpty)
     }
+    // 产品保证：补录失败的服务原文显示在开始项下面所用的错误状态，四项草稿原样保留。
+    func testR2EditorRetainsDraftAndConflictReason() throws {
+        let f = Fixture(); f.store.openEditor(original: nil)
+        var draft = try XCTUnwrap(f.store.editorDraft)
+        draft.taskID = 41; draft.startTime = "2026-10-09T09:15:00.123"; draft.durationMinutes = 45
+        f.store.editorDraft = draft
+        f.history.error = NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: "与 09:00–10:00 专注重叠"])
+        XCTAssertFalse(f.store.submitEditor())
+        XCTAssertEqual(f.store.editorDraft, draft)
+        XCTAssertEqual(f.store.editorError, "与 09:00–10:00 专注重叠")
+        f.history.error = nil; XCTAssertTrue(f.store.submitEditor())
+        XCTAssertEqual(f.history.calls.last(where: { $0.0 == "addManualSession" })?.1, [41, 45])
+    }
+    // 产品保证：科目条形直接采用所选逻辑日服务统计的顺序、时长和比例，失败保持整份旧快照。
+    func testR2CategorySummaryUsesServiceSnapshot() {
+        let f = Fixture(); var item = CategoryStatisticsRow(); item.name = "英语"; item.duration = 777; item.percentage = 68.5
+        f.statistics.categoryStats.categories = [item]; f.statistics.categoryStats.totalDuration = 999
+        f.store.refresh()
+        XCTAssertEqual(f.store.categoryStatistics, f.statistics.categoryStats)
+        XCTAssertEqual(f.statistics.calls.last(where: { $0.0 == "categoryStats" })?.1, ["2026-10-09", "2026-10-09"])
+        f.statistics.error = NSError(domain: "test", code: 1); f.statistics.categoryStats = CategoryStatistics()
+        f.store.refresh(); XCTAssertEqual(f.store.categoryStatistics.categories, [item])
+    }
+    // 产品保证：编辑旧归属任务时，列表刷新不能移除表单中的原任务选项。
+    func testR2EditorOriginalTaskOptionSurvivesTimelineRefresh() throws {
+        let f = Fixture(); var original = SessionValue(); original.taskID = 71; original.taskTitle = "旧任务"
+        f.store.openEditor(original: original)
+        XCTAssertTrue(f.store.editorTaskOptions.contains { $0.taskID == 71 })
+        f.store.refresh()
+        XCTAssertTrue(f.store.editorTaskOptions.contains { $0.taskID == 71 })
+    }
 }

@@ -895,6 +895,34 @@ import XCTest
         setTimer(r, mode: 0, phase: 0, active: false)
         XCTAssertFalse(r.store.immersiveActive)
     }
+    // 产品保证：空闲菜单的番茄时长经设置投影到控制器，自由选项经既有切换路径。
+    func testR2IdleMenuMapsPresetsAndFreeMode() {
+        let r = rig([task(7)])
+        r.store.selectIdleTask(id: 7, title: "任务7")
+        r.store.selectModePreset(minutes: 45)
+        XCTAssertTrue(r.store.pomodoroModeSelected)
+        XCTAssertEqual(r.store.selectedWorkMinutes, 45)
+        XCTAssertTrue(r.store.startCurrentMode())
+        XCTAssertEqual(last(r, "startPomodoro")?.seconds, 2700)
+        r.store.selectModePreset(minutes: nil)
+        XCTAssertFalse(r.store.pomodoroModeSelected)
+        XCTAssertTrue(r.store.startCurrentMode())
+        XCTAssertEqual(last(r, "startFree")?.taskID, 7)
+    }
+    // 产品保证：计时中的菜单与任务入口只读，不写设置、不换待选任务、不停当前会话。
+    func testR2ActiveSessionIgnoresIdleMenus() {
+        let r = rig([task(7), task(2)])
+        setTimer(r, mode: 1, phase: 1, active: true, taskID: 7, title: "任务7", remaining: 600, target: 1500)
+        let before = r.settings.calls.count
+        r.store.selectIdleTask(id: 2, title: "任务2")
+        r.store.selectModePreset(minutes: 60)
+        r.store.selectModePreset(minutes: nil)
+        XCTAssertEqual(r.store.selectedTaskID, 7)
+        XCTAssertEqual(r.settings.calls.count, before)
+        XCTAssertEqual(count(r, "stopForSwitch"), 0)
+        XCTAssertTrue(r.store.pomodoroModeSelected)
+    }
+
 }
 
 // 测试里直接构造完成结果的便捷初始化。

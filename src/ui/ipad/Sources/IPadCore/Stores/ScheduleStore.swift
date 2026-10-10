@@ -26,6 +26,30 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
     public var unplacedEntries: [ScheduleEntry] {
         displayMode == .period ? visibleEntries.filter { periodRange($0) == nil } : []
     }
+    public var selectedDayEntries: [ScheduleEntry] {
+        visibleEntries.filter { $0.weekday == selectedWeekday && (displayMode == .time || periodRange($0) != nil) }
+    }
+    public var undisplayedEntryTitles: [String] {
+        hiddenWeekendEntries.map { $0.title + "（周末隐藏）" } + unplacedEntries.map { $0.title + "（不在节次内）" }
+    }
+    public func periodLabel(for entry: ScheduleEntry) -> String {
+        guard let range = periodRange(entry) else { return "" }
+        let first = periods[range.lowerBound].index, last = periods[range.upperBound].index
+        return first == last ? "第 \(first) 节" : "第 \(first)–\(last) 节"
+    }
+    // 当前时间只映射到网格坐标，课程生效周与今日列仍由服务结果决定。
+    public func currentTimeTop(minutes: Int, pixelsPerMinute: Double, periodRowHeight: Double) -> Double? {
+        if displayMode == .time {
+            guard minutes >= axisStartMinutes && minutes <= axisEndMinutes else { return nil }
+            return Double(minutes - axisStartMinutes) * pixelsPerMinute
+        }
+        guard let index = periods.firstIndex(where: {
+            bridge.overlaps(start: Double(minutes), end: Double(minutes + 1), otherStart: Double($0.startMinutes), otherEnd: Double($0.endMinutes))
+        }) else { return nil }
+        let period = periods[index]
+        guard period.endMinutes > period.startMinutes else { return nil }
+        return Double(index) * (periodRowHeight + 4) + Double(minutes - period.startMinutes) / Double(period.endMinutes - period.startMinutes) * periodRowHeight
+    }
     public var axisStartMinutes: Int {
         max(0, Int(floor(Double(visibleEntries.map(\.startMinutes).min().map { min(480, $0) } ?? 480) / 60)) * 60)
     }

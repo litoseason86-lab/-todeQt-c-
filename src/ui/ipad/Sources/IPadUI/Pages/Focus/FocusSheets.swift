@@ -49,15 +49,16 @@ struct FocusDurationPanel: View {
 // 任务选择：今日任务（跳过待删项）加「新建并开始」。
 struct FocusTaskPicker: View {
     let store: FocusStore
-    @State private var newTitle = ""
+
 
     var body: some View {
+        @Bindable var store = store
         NavigationStack {
             List {
                 Section("今日任务") {
                     ForEach(store.selectableTasks(), id: \.id) { task in
                         Button {
-                            store.selectTask(id: task.id, title: task.title)
+                            store.selectIdleTask(id: task.id, title: task.title)
                             store.taskSelectorPresented = false
                         } label: {
                             HStack {
@@ -70,11 +71,11 @@ struct FocusTaskPicker: View {
                     }
                 }
                 Section("新建任务") {
-                    TextField("任务标题", text: $newTitle)
+                    TextField("任务标题", text: $store.newTaskTitle)
                         .submitLabel(.go)
                         .onSubmit(createAndStart)
                     Button("新建并开始", action: createAndStart)
-                        .disabled(newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(store.newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
             .navigationTitle("选择任务")
@@ -86,11 +87,11 @@ struct FocusTaskPicker: View {
         .frame(minWidth: 320, minHeight: 360)
     }
     private func createAndStart() {
-        let title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = store.newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
         // 失败时错误行在专注页显示，选择器也收起，避免遮住它。
         store.taskSelectorPresented = false
-        if store.createTaskAndStart(title: title) { newTitle = "" }
+        if store.createTaskAndStart(title: title) { store.newTaskTitle = "" }
     }
 }
 
