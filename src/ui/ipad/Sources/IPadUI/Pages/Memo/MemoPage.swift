@@ -213,7 +213,7 @@ import UIKit
                 }
                 if !store.errorMessage.isEmpty { errorRow }
             }
-            .navigationTitle("新建分类")
+            .navigationTitle("新建分类").sheetChrome()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { store.dismissCategorySheet() } } }
         }
     }

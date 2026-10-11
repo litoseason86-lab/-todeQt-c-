@@ -40,7 +40,7 @@ import SwiftUI
                         if !SettingsCategoryStore.colors.contains(store.color) { Text("现有颜色").tag(store.color) }
                     }
                     if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-                }.navigationTitle("科目")
+                }.navigationTitle("科目").sheetChrome()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel() } }
                     ToolbarItem(placement: .confirmationAction) { Button("保存") { _ = store.save() } }
@@ -106,7 +106,7 @@ private enum SettingsCategoryColor {
                         }
                     }
                     if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-                }.formStyle(.grouped).navigationTitle("每日例行")
+                }.formStyle(.grouped).navigationTitle("每日例行").sheetChrome()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel() } }
                     ToolbarItem(placement: .confirmationAction) { Button("保存") { _ = store.save() } }
@@ -132,7 +132,7 @@ private enum SettingsCategoryColor {
                         Button("周末") { store.weekdays = 96 }
                     }
                     if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-                }.navigationTitle("重复日")
+                }.navigationTitle("重复日").sheetChrome()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel() } }
                     ToolbarItem(placement: .confirmationAction) { Button("保存") { _ = store.saveWeekdays() } }

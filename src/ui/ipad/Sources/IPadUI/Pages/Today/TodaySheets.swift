@@ -13,7 +13,7 @@ struct TodayRescheduleSheet: View {
                 DatePicker("新日期", selection: $date, displayedComponents: .date)
                 if !store.loadError.isEmpty { Text(store.loadError).foregroundStyle(ThemeColors.danger) }
             }
-            .navigationTitle("改期").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("改期").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -35,10 +35,11 @@ struct TodayGoalSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Stepper("目标：\(DurationFormat.minutes(Double(minutes)))", value: $minutes, in: 0...1440, step: 5)
+                let goal = "目标：\(DurationFormat.minutes(Double(minutes)))"
+                HStack { Text(goal); Spacer(); AccentStepper(title: goal, value: $minutes, range: 0...1440, step: 5) }
                 if !store.loadError.isEmpty { Text(store.loadError).foregroundStyle(ThemeColors.danger) }
             }
-            .navigationTitle("今日专注目标").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("今日专注目标").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -65,11 +66,12 @@ struct TodayNewTaskSheet: View {
                     Text("无科目").tag(-1)
                     ForEach(store.newCategories, id: \.id) { Text($0.name).tag($0.id) }
                 }
-                Stepper("预计用时：\(store.newEstimatedMinutes) 分钟", value: $store.newEstimatedMinutes, in: 0...1440, step: 5)
+                let estimate = "预计用时：\(store.newEstimatedMinutes) 分钟"
+                HStack { Text(estimate); Spacer(); AccentStepper(title: estimate, value: $store.newEstimatedMinutes, range: 0...1440, step: 5) }
                 TextField("备注", text: $store.newNotes, axis: .vertical)
                 if !store.newFormError.isEmpty { Text(store.newFormError).foregroundStyle(ThemeColors.danger) }
             }
-            .navigationTitle("新建任务").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("新建任务").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

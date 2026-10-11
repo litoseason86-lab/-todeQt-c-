@@ -28,7 +28,7 @@ struct TaskCompletionNoteSheet: View {
                     }
                 }
             }
-            .navigationTitle("完成任务").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("完成任务").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel(); dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

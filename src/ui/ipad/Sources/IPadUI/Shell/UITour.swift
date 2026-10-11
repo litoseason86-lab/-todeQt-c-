@@ -16,9 +16,8 @@ import UIKit
     static var extras: [PageID: [(suffix: String?, action: () -> Void)]] = [:]
     // 打开搜索并填入查询词，截搜索结果页。
     static var openSearch: ((String) -> Void)?
-    // 表单截图：打开、关闭各一个闭包；补录表单是页面自己的状态，单独放进一个表单大小的窗口里画。
+    // 表单截图：打开、关闭各一个闭包，表单都由页面真实弹出，带上主题与表单底色。
     static var sheets: [(name: String, open: () -> Void, close: () -> Void)] = []
-    static var sessionSheet: (() -> AnyView)?
     private static var windows: [UIWindow] = []
 
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour") }
@@ -90,13 +89,6 @@ import UIKit
                     save(window, name: "sheet-\(sheet.name)-\(item.name)")
                     sheet.close()
                     try? await Task.sleep(for: .milliseconds(800))
-                }
-                if let sessionSheet {
-                    let sheetWindow = makeWindow(scene: scene, size: CGSize(width: 560, height: 620), compact: false, root: sessionSheet())
-                    try? await Task.sleep(for: .milliseconds(1500))
-                    save(sheetWindow, name: "sheet-session-\(item.name)")
-                    sheetWindow.isHidden = true
-                    windows.removeAll { $0 === sheetWindow }
                 }
             }
             if !item.compact, item.theme == nil, let selectSettingsSection {

@@ -127,7 +127,7 @@ import SwiftUI
                 DatePicker("目标日期", selection: Binding(get: { ContentDateFormat.date(value.targetDate) ?? ContentDateFormat.date(store.logicalToday) ?? Date() }, set: { value.targetDate = ContentDateFormat.isoDate($0) }), displayedComponents: .date)
                 if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
             }
-            .navigationTitle(opened == nil ? "新增目标" : "编辑目标")
+            .navigationTitle(opened == nil ? "新增目标" : "编辑目标").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

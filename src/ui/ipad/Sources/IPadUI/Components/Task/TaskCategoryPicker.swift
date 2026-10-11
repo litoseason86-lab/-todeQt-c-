@@ -40,7 +40,7 @@ private struct TaskCategoryCreationSheet: View {
                 TextField("科目名称", text: $store.newName).accessibilityLabel("科目名称")
                 if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
             }
-            .navigationTitle("新建科目").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("新建科目").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancelNewCategory() } }
                 ToolbarItem(placement: .confirmationAction) { Button("新建") { _ = store.createCategory() } }

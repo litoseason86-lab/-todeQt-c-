@@ -240,7 +240,35 @@ import SwiftUI
         Text(title).foregroundStyle(ThemeColors.inkStrong)
         Spacer()
         Text(value).monospacedDigit().foregroundStyle(ThemeColors.ink)
-        Stepper(title, value: binding, in: range).labelsHidden()
+        AccentStepper(title: "\(title)，\(value)", value: binding, range: range)
+    }
+}
+
+// 定稿的步进器：浅焦糖底、焦糖色「− +」；系统 Stepper 的灰底改不了色，所以自己排两个按钮。
+// 长按连续加减沿用系统按钮的重复触发；读屏仍按系统步进器读（可上下轻扫调整）。
+@MainActor struct AccentStepper: View {
+    let title: String
+    @Binding var value: Int
+    let range: ClosedRange<Int>
+    var step = 1
+    @Environment(\.isEnabled) private var isEnabled
+    var body: some View {
+        HStack(spacing: 0) {
+            button("minus", enabled: value > range.lowerBound) { value = max(range.lowerBound, value - step) }
+            button("plus", enabled: value < range.upperBound) { value = min(range.upperBound, value + step) }
+        }
+        .background(ThemeColors.accentFill.opacity(isEnabled ? 1 : 0.5), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .accessibilityRepresentation { Stepper(title, value: $value, in: range, step: step) }
+    }
+    private func button(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
+                .frame(width: 44, height: 32).contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .buttonRepeatBehavior(.enabled)
+        .foregroundStyle(enabled && isEnabled ? ThemeColors.accentInk : ThemeColors.inkMuted)
+        .disabled(!enabled)
     }
 }
 

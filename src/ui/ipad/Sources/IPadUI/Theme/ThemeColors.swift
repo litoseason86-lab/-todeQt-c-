@@ -19,6 +19,8 @@ enum ThemeColors {
 
     static var surface: Color { semantic("surface", system: .secondarySystemGroupedBackground) }
     static var surfaceRaised: Color { semantic("surfaceRaised", system: .secondarySystemBackground) }
+    // 弹出表单的底：主题外观取浮起暖底（定稿补录表单 #faf6ee），系统外观保留系统分组表单底。
+    static var sheetBackground: Color { semantic("surfaceRaised", system: .systemGroupedBackground) }
     static var surfaceSunken: Color { semantic("surfaceSunken", system: .tertiarySystemBackground) }
     static var border: Color { semantic("border", system: .separator) }
     static var borderSubtle: Color { semantic("borderSubtle", system: .separator) }

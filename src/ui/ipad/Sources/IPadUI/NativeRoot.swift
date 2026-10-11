@@ -106,8 +106,8 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         UITour.sheets = [
             ("new-task", { [weak store, weak today] in store?.select(.today); today?.requestNewTask() }, { [weak today] in today?.newTaskPresented = false }),
             ("gap", { [weak store, weak gaps] in store?.select(.knowledgeGap); gaps?.requestForm(.add) }, { [weak gaps] in gaps?.dismissForm() }),
-            ("countdown", { [weak store, weak countdown] in store?.select(.countdown); countdown?.requestAdd() }, { [weak countdown] in countdown?.dismissForm() })]
-        UITour.sessionSheet = { AnyView(SessionEditorSheet(store: timeline, session: nil).environment(store).environment(core)) }
+            ("countdown", { [weak store, weak countdown] in store?.select(.countdown); countdown?.requestAdd() }, { [weak countdown] in countdown?.dismissForm() }),
+            ("session", { [weak store, weak timeline] in store?.select(.todayFocus); timeline?.manualAddPresented = true }, { [weak timeline] in timeline?.manualAddPresented = false })]
         UITour.extras[.todayFocus] = [
             ("prev", { [weak timeline] in if let day = timeline?.adjacentDate(days: -1) { timeline?.selectDate(day) } }),
             (nil, { [weak timeline] in if let day = timeline?.adjacentDate(days: 1) { timeline?.selectDate(day) } })]

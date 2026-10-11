@@ -27,9 +27,13 @@ struct TaskDetailSheet: View {
                                    in: TaskDateInput.range, displayedComponents: .date)
                         TaskCategoryPicker(store: store.categories)
                         // 控件沿用 Mac 的 24 小时输入上限；只夹展示值，不改原始基线，未碰该字段就不写回。
-                        Stepper("预计用时：\(DurationFormat.minutes(Double(min(1440, store.estimatedMinutes))))",
-                                value: Binding(get: { min(1440, store.estimatedMinutes) },
-                                               set: { store.estimatedMinutes = $0 }), in: 0...1440)
+                        let estimate = "预计用时：\(DurationFormat.minutes(Double(min(1440, store.estimatedMinutes))))"
+                        HStack {
+                            Text(estimate)
+                            Spacer()
+                            AccentStepper(title: estimate, value: Binding(get: { min(1440, store.estimatedMinutes) },
+                                                                          set: { store.estimatedMinutes = $0 }), range: 0...1440)
+                        }
                     }
                     if store.initialTask?.completed == true {
                         Section("完成记录") {
@@ -45,7 +49,7 @@ struct TaskDetailSheet: View {
                     }
                 }
             }
-            .navigationTitle("任务详情").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("任务详情").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel(); dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

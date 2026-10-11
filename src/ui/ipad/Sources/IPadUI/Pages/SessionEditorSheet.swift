@@ -42,7 +42,7 @@ import SwiftUI
                     }
                 }
             }
-            .navigationTitle(session == nil ? "补录专注" : "编辑记录")
+            .navigationTitle(session == nil ? "补录专注" : "编辑记录").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

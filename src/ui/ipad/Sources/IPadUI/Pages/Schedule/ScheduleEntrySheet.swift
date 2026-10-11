@@ -81,7 +81,7 @@ import SwiftUI
                 }
             }
             .scrollContentBackground(.hidden).background(ThemeColors.surface)
-            .navigationTitle(original == nil ? "添加课程" : "编辑课程")
+            .navigationTitle(original == nil ? "添加课程" : "编辑课程").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { save() } }

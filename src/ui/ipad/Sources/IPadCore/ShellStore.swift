@@ -135,7 +135,9 @@ public final class ShellStore {
 
     public var orderedPages: [PageID] { PageID.ordered(snapshot.sidebarOrder) }
     public func summaryTiles(focusTimeText: String) -> [ShellSummaryTile] {
-        let focusValue = snapshot.hasTimer ? focusTimeText : DurationFormat.seconds(Double(snapshot.todayFocusedSeconds))
+        // 定稿摘要块写「时:分」（1:05）：块宽只放得下四五个数字，整句「1 小时 5 分」会被截断。计时中沿用计时器读数。
+        let minutes = max(0, snapshot.todayFocusedSeconds) / 60
+        let focusValue = snapshot.hasTimer ? focusTimeText : "\(minutes / 60):" + String(format: "%02d", minutes % 60)
         let goalTitle = snapshot.hasPrimaryGoal ? snapshot.primaryGoalName : "目标倒计时"
         let goalValue = snapshot.hasPrimaryGoal ? CountdownFormat.days(snapshot.primaryGoalDaysRemaining) : "—"
         return [
@@ -146,7 +148,7 @@ public final class ShellStore {
         ]
     }
     public func sidebarBadge(for page: PageID) -> Int? {
-        page == .knowledgeGap ? snapshot.dueGapCount : nil
+        page == .knowledgeGap && snapshot.dueGapCount > 0 ? snapshot.dueGapCount : nil
     }
     public var miniTimerVisible: Bool { snapshot.hasTimer && selection != .focus }
 

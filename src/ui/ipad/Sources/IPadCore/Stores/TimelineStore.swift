@@ -31,6 +31,8 @@ public struct SessionEditorDraft: Equatable, Sendable {
     public private(set) var relationAvailable = true
     public private(set) var categoryStatistics = CategoryStatistics()
     public var editorDraft: SessionEditorDraft?
+    // 「补录」表单是否弹出；放在 Store 里，巡检能像其它页的新建表单一样真实弹出它截图。
+    public var manualAddPresented = false
     public private(set) var editorOriginal: SessionValue?
     public private(set) var editorError = ""
     public private(set) var editorOptionsLoaded = false

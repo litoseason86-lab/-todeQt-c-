@@ -342,7 +342,7 @@ private struct IdentifiedDate: Identifiable {
                 LabeledContent("日期", value: date)
                 if !error.isEmpty { Text(error).foregroundStyle(ThemeColors.danger) }
             }
-            .navigationTitle("添加任务")
+            .navigationTitle("添加任务").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -376,7 +376,7 @@ private struct IdentifiedDate: Identifiable {
                 DatePicker("改期到", selection: $target, displayedComponents: .date)
                 if !error.isEmpty { Text(error).foregroundStyle(ThemeColors.danger) }
             }
-            .navigationTitle("改期任务")
+            .navigationTitle("改期任务").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("改期") { move() }.disabled(submitted) }

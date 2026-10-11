@@ -44,7 +44,7 @@ struct TodayToolsSheet: View {
                     if !store.message.isEmpty { Text(store.message).font(.callout).foregroundStyle(ThemeColors.inkSoft) }
                 }
             }
-            .navigationTitle("搜索与批量改期").navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("搜索与批量改期").sheetChrome()
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭") { dismiss() } } }
         }
         .tint(ThemeColors.accentInk)

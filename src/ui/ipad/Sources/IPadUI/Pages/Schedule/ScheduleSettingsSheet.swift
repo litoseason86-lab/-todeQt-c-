@@ -55,7 +55,7 @@ import SwiftUI
                 if !error.isEmpty { Section { Text(error).foregroundStyle(ThemeColors.danger).accessibilityLabel("错误：" + error) } }
             }
             .scrollContentBackground(.hidden).background(ThemeColors.surface)
-            .navigationTitle("课表设置")
+            .navigationTitle("课表设置").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { save() } }

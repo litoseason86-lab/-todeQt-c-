@@ -6,7 +6,6 @@ import SwiftUI
     let shell: ShellStore
     @Environment(FocusStore.self) private var focus
     @State private var editing: SessionValue?
-    @State private var adding = false
     @State private var datePickerPresented = false
 
     var body: some View {
@@ -20,7 +19,7 @@ import SwiftUI
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button { shiftDate(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("前一天")
                 Button { shiftDate(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("后一天")
-                Button("补录", systemImage: "plus") { adding = true }.disabled(!store.canAddManualSession)
+                Button("补录", systemImage: "plus") { store.manualAddPresented = true }.disabled(!store.canAddManualSession)
             }
         }
         .sheet(isPresented: $datePickerPresented) {
@@ -29,12 +28,12 @@ import SwiftUI
                     get: { LogicalDateNavigation.date(store.selectedDate) ?? .now },
                     set: { store.selectDate(LogicalDateNavigation.isoDate($0)) }), displayedComponents: .date)
                     .datePickerStyle(.graphical).padding()
-                    .navigationTitle("选择日期")
+                    .navigationTitle("选择日期").sheetChrome()
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { datePickerPresented = false } } }
             }.presentationDetents([.medium, .large])
         }
         .sheet(item: $editing) { SessionEditorSheet(store: store, session: $0) }
-        .sheet(isPresented: $adding) { SessionEditorSheet(store: store, session: nil) }
+        .sheet(isPresented: $store.manualAddPresented) { SessionEditorSheet(store: store, session: nil) }
         .onAppear { store.selectRequestedDate(from: shell) }
         .onChange(of: shell.requestedFocusDate) { store.selectRequestedDate(from: shell) }
     }

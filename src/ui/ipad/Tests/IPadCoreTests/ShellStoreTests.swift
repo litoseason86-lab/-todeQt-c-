@@ -51,7 +51,8 @@ import XCTest
         guard tiles.count == 4 else { XCTFail("必须展示四块摘要"); return }
         XCTAssertEqual(tiles.map(\.page), [.today, .focus, .week, .countdown])
         XCTAssertEqual(tiles.map(\.title), ["今日任务", "专注计时", "本周待办", "目标倒计时"])
-        XCTAssertEqual(tiles.map(\.value), ["5", DurationFormat.seconds(3900), "12", "—"])
+        // 定稿「专注计时」块是今日累计的「时:分」（1 小时 05 分写成 1:05），整句时长在窄块里会被截断。
+        XCTAssertEqual(tiles.map(\.value), ["5", "1:05", "12", "—"])
         bridge.snapshot.hasPrimaryGoal = true; bridge.snapshot.primaryGoalName = "考研初试"
         bridge.snapshot.primaryGoalDaysRemaining = 72; bridge.snapshot.hasTimer = true
         bridge.onChanged?()
@@ -63,6 +64,14 @@ import XCTest
         XCTAssertEqual(store.summaryTiles(focusTimeText: "18:42")[3].value, "已过期 3 天")
         XCTAssertEqual(store.sidebarBadge(for: .knowledgeGap), 2)
         XCTAssertNil(store.sidebarBadge(for: .countdown))
+        // 没有待复习的缺口时不显示角标，不在侧栏挂一个「0」。
+        bridge.snapshot.dueGapCount = 0; bridge.onChanged?()
+        XCTAssertNil(store.sidebarBadge(for: .knowledgeGap))
+        // 不足一分钟按 0 分，满 10 小时不补零也不进位成天。
+        bridge.snapshot.hasTimer = false; bridge.snapshot.todayFocusedSeconds = 59; bridge.onChanged?()
+        XCTAssertEqual(store.summaryTiles(focusTimeText: "18:42")[1].value, "0:00")
+        bridge.snapshot.todayFocusedSeconds = 36_000 + 9 * 60 + 59; bridge.onChanged?()
+        XCTAssertEqual(store.summaryTiles(focusTimeText: "18:42")[1].value, "10:09")
     }
     // 产品保证：计时和暂停时其它页显示底条，专注页自身不重复显示，离开后恢复。
     func testR1MiniTimerHiddenOnlyOnFocusPage() {

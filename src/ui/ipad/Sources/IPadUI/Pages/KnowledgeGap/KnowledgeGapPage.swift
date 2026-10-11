@@ -230,7 +230,7 @@ import SwiftUI
                 }
                 if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
             }
-            .navigationTitle(intent.gap == nil ? "新增知识缺口" : "知识缺口")
+            .navigationTitle(intent.gap == nil ? "新增知识缺口" : "知识缺口").sheetChrome()
             .onChange(of: subjects.map(\.id)) { _, ids in
                 // 同步删科目后不能把已不存在的外键交回服务；不改其它已输入字段。
                 if value.categoryID > 0 && !ids.contains(value.categoryID) { value.categoryID = 0 }

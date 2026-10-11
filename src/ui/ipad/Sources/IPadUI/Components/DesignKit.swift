@@ -227,3 +227,22 @@ struct PageBackground: ViewModifier {
             .background { WallpaperBackground(theme: shell.snapshot.backgroundTheme, enabled: shell.wallpaperVisible) }
     }
 }
+
+// 弹出表单统一按定稿：标题居中小号，表单底是暖色浮起底（不是系统灰），行仍是纸面白。
+// 底色铺在弹层上（presentationBackground），表单自己的滚动底放开，两种外观都取同一个语义令牌。
+// 主题特征挂在主界面的根控制器上，弹出的表单是另一棵控制器树、收不到（10-11 真机截图表单仍是系统灰），
+// 所以表单里再挂一次同一个主题。
+struct SheetChrome: ViewModifier {
+    @Environment(ShellStore.self) private var shell
+    @Environment(\.previewThemeID) private var previewThemeID
+    func body(content: Content) -> some View {
+        content
+            .navigationBarTitleDisplayMode(.inline)
+            .scrollContentBackground(.hidden)
+            .presentationBackground(ThemeColors.sheetBackground)
+            .background { ThemeAppearance(themeID: previewThemeID ?? shell.selectedTheme ?? "").frame(width: 0, height: 0) }
+    }
+}
+extension View {
+    func sheetChrome() -> some View { modifier(SheetChrome()) }
+}

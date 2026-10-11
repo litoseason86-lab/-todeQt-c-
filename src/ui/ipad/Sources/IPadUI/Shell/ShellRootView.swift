@@ -1,9 +1,13 @@
 import IPadCore
 import SwiftUI
+import UIKit
 
 private enum ShellTab: Hashable { case page(PageID), more }
 // 宽窗标签值：页面之外还有一个原生搜索标签（定稿侧栏顶部的搜索框）。
 private enum RegularTab: Hashable { case page(PageID), search }
+// 窄窗「更多」里推入的目标：页面或搜索。同一条路径一次换成 [.search]，
+// 不和 navigationDestination(isPresented:) 混用（10-11 真机：先清路径再置推入标志，搜索页是空白）。
+private enum MoreRoute: Hashable { case page(PageID), search }
 
 struct ShellRootView: View {
     @Bindable var store: ShellStore
@@ -15,8 +19,8 @@ struct ShellRootView: View {
     // 宽窄各用一份选中状态：两个分支的标签集合不同，共用一份会把窄窗不存在的页面值交给窄窗标签栏。
     @State private var regularTab: RegularTab = .page(.dashboard)
     @State private var compactTab: ShellTab = .page(.dashboard)
-    @State private var morePath: [PageID] = []
-    @State private var searchPushed = false
+    @State private var morePath: [MoreRoute] = []
+    @State private var sidebar = SidebarWatcher()
 
     var body: some View {
         tabs
@@ -52,7 +56,7 @@ struct ShellRootView: View {
                 if case let .page(page) = selected { store.select(page) }
             }
             .onChange(of: store.searchRequest) { _, _ in
-                if sizeClass == .compact { compactTab = .more; morePath = []; searchPushed = true } else { regularTab = .search }
+                if sizeClass == .compact { compactTab = .more; morePath = [.search] } else { regularTab = .search }
             }
             .onChange(of: compactTab) { _, selected in
                 if case let .page(page) = selected { store.select(page) }
@@ -76,25 +80,30 @@ struct ShellRootView: View {
         }
     }
 
-    // 宽窗口：侧栏可收起的标签栏。收起后顶部只有五个常用页；其余页面只在侧栏；
+    // 宽窗口：侧栏可收起的标签栏。收起后顶部是五个常用页；其余页面只在侧栏；
     // 废纸篓、设置的入口在侧栏底栏，标签只为承载页面，侧栏与标签栏都不显示。
+    // 今日任务、专注、本周在侧栏展开时由摘要块进入，列表里不重复；收起后要回到顶部标签栏。
+    // iPadOS 27 只有「侧栏、标签栏一起隐藏」（defaultVisibility 对 .sidebar 也会把收起后的标签栏项去掉，
+    // 10-11 真机截图只剩今日专注、仪表盘），所以按侧栏当前显隐切这三个标签的可见性。
+    // 不能用 .hidden()：它把标签移出标签集合，而这三页常是选中页，10-11 18:39 真机启动即崩
+    // （-[_UITabModel _setSelectedItem:] 断言）；defaultVisibility 隐藏的标签仍可被选中。
     private var regularTabs: some View {
         TabView(selection: $regularTab) {
             // iPadOS 的搜索标签放在侧栏最上方，就是定稿侧栏顶部的搜索框；侧栏收起时在顶部标签栏末尾。
             Tab(value: RegularTab.search, role: .search) {
-                NavigationStack { SearchPage().shellChrome(store: store) }
+                NavigationStack { SearchPage().shellChrome(store: store) }.background { SidebarProbe(watcher: sidebar) }
             }
             ForEach(PageID.regularTabs, id: \.self) { page in
-                Tab(page.tabTitle(size: .regular), systemImage: page.symbol, value: RegularTab.page(page)) { pageView(page) }
-                    .defaultVisibility(PageID.summary.prefix(3).contains(page) ? .hidden : .visible, for: .sidebar)
+                Tab(page.tabTitle(size: .regular), systemImage: page.symbol, value: RegularTab.page(page)) { regularPage(page) }
+                    .defaultVisibility(sidebar.shown && PageID.summary.prefix(3).contains(page) ? .hidden : .visible, for: .sidebar)
             }
             ForEach(store.sidebarPages.filter { !PageID.regularTabs.contains($0) }, id: \.self) { page in
-                Tab(page.title, systemImage: page.symbol, value: RegularTab.page(page)) { pageView(page) }
+                Tab(page.title, systemImage: page.symbol, value: RegularTab.page(page)) { regularPage(page) }
                     .badge(store.sidebarBadge(for: page).map { Text(String($0)) })
                     .tabPlacement(.sidebarOnly)
             }
             ForEach(PageID.fixed, id: \.self) { page in
-                Tab(page.title, systemImage: page.symbol, value: RegularTab.page(page)) { pageView(page) }
+                Tab(page.title, systemImage: page.symbol, value: RegularTab.page(page)) { regularPage(page) }
                     .tabPlacement(.sidebarOnly)
                     .defaultVisibility(.hidden, for: .sidebar)
             }
@@ -114,7 +123,8 @@ struct ShellRootView: View {
             if !morePath.isEmpty { morePath = [] }
         case .more(let path):
             if compactTab != .more { compactTab = .more }
-            if morePath != path { morePath = path }
+            let routes = path.map(MoreRoute.page)
+            if morePath != routes { morePath = routes }
         }
     }
 
@@ -131,30 +141,45 @@ struct ShellRootView: View {
             PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store)
         }
     }
+    private func regularPage(_ page: PageID) -> some View {
+        pageView(page).background { SidebarProbe(watcher: sidebar) }
+    }
+    // 宽窗当前页：搜索标签选中时没有当前页，摘要块和底栏都不高亮。
+    private var currentRegularPage: PageID? {
+        if case let .page(page) = regularTab { page } else { nil }
+    }
+    // 摘要块与底栏点选直接改宽窗标签：从搜索回到原来那页时 store.selection 没变，只调 select 不会切走。
+    private func selectRegular(_ page: PageID) {
+        regularTab = .page(page)
+        store.select(page)
+    }
     private var moreView: some View {
         NavigationStack(path: $morePath) {
             List {
                 // 窄窗没有侧栏，搜索放在「更多」第一行。
-                Button { searchPushed = true } label: {
+                NavigationLink(value: MoreRoute.search) {
                     Label { Text("搜索").foregroundStyle(ThemeColors.inkStrong) }
                     icon: { Image(systemName: "magnifyingglass").foregroundStyle(ThemeColors.accentInk) }
                 }
                 .listRowBackground(store.selectedTheme != nil ? ThemeColors.surface : nil)
                 ForEach(store.morePages, id: \.self) { page in
-                NavigationLink(value: page) {
-                    Label { Text(page.title).foregroundStyle(ThemeColors.inkStrong) }
-                    icon: { Image(systemName: page.symbol).foregroundStyle(ThemeColors.accentInk) }
-                }
+                    NavigationLink(value: MoreRoute.page(page)) {
+                        Label { Text(page.title).foregroundStyle(ThemeColors.inkStrong) }
+                        icon: { Image(systemName: page.symbol).foregroundStyle(ThemeColors.accentInk) }
+                    }
                     .listRowBackground(store.selectedTheme != nil ? ThemeColors.surface : nil)
                 }
             }
-            .navigationDestination(isPresented: $searchPushed) { SearchPage().shellChrome(store: store) }
             .scrollContentBackground(store.selectedTheme != nil ? .hidden : .visible)
             .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
             .navigationTitle("更多")
-            .navigationDestination(for: PageID.self) { page in
-                PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store)
-                    .onAppear { store.select(page) }
+            .navigationDestination(for: MoreRoute.self) { route in
+                switch route {
+                case .search: SearchPage().shellChrome(store: store)
+                case .page(let page):
+                    PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store)
+                        .onAppear { store.select(page) }
+                }
             }
             .shellChrome(store: store)
         }
@@ -166,28 +191,32 @@ struct ShellRootView: View {
             GridRow { tile(tiles[2]); tile(tiles[3]) }
         }.padding(.vertical, 8)
     }
-    // 定稿侧栏底部：细分隔线下两行，图标焦糖、文字 16 常规，行高 44；当前页浅焦糖底。
+    // 定稿侧栏底部：细分隔线下两行，图标焦糖、文字与侧栏列表同字号，行高 44；当前页浅焦糖底。
+    // 底栏视图铺满侧栏宽度，系统列表行却有内缩：10-11 真机实测列表图标中心距侧栏左缘 46、文字起点 70，
+    // 分隔线与摘要块同为两侧 32，这里按这几个数对齐（20 外边距 + 14 行内边距 + 图标中心 12）。
     private var fixedEntries: some View {
         VStack(alignment: .leading, spacing: 2) {
+            Rectangle().fill(ThemeColors.border).frame(height: 1)
+                .padding(.horizontal, 12).padding(.bottom, 8)
             ForEach(PageID.fixed, id: \.self) { page in
-                let selected = store.selection == page
-                Button { store.select(page) } label: {
+                let selected = currentRegularPage == page
+                Button { selectRegular(page) } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: page.symbol).font(.system(size: 18)).foregroundStyle(ThemeColors.accentInk)
-                            .frame(width: 24)
-                        Text(page.title).font(.system(size: 16)).foregroundStyle(ThemeColors.inkStrong)
+                        Image(systemName: page.symbol).font(.system(size: 17)).imageScale(.large)
+                            .foregroundStyle(ThemeColors.accentInk).frame(width: 24)
+                        Text(page.title).font(.body).foregroundStyle(ThemeColors.inkStrong)
                         Spacer()
                     }
-                    .padding(.horizontal, 12).frame(height: 44)
-                    .background(selected ? ThemeColors.accentFill : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 14).frame(height: 44)
+                    .background(selected ? ThemeColors.accentFill : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
-        .padding(.top, 8)
-        .overlay(alignment: .top) { Rectangle().fill(ThemeColors.border).frame(height: 1) }
+        .padding(.horizontal, 20).padding(.bottom, 4)
     }
     private var preferredScheme: ColorScheme? {
         if let previewThemeID { return SettingsAvailability.theme(previewThemeID).mode == "dark" ? .dark : .light }
@@ -203,8 +232,8 @@ struct ShellRootView: View {
     }
     // 定稿侧栏摘要块：当前页那块焦糖实底、浅色字，其余浅焦糖底；数字 22 粗、单位 13。
     private func tile(_ tile: ShellSummaryTile) -> some View {
-        let selected = store.selection == tile.page
-        return Button { store.select(tile.page) } label: {
+        let selected = currentRegularPage == tile.page
+        return Button { selectRegular(tile.page) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Image(systemName: tile.page.symbol).font(.system(size: 17))
@@ -212,7 +241,7 @@ struct ShellRootView: View {
                     Spacer(minLength: 4)
                     MixedNumberText(parts: MixedNumberText.split(tile.value), numberSize: 22, unitSize: 13,
                                     color: selected ? ThemeColors.surface : ThemeColors.inkStrong)
-                        .lineLimit(1).minimumScaleFactor(0.7)
+                        .lineLimit(1).minimumScaleFactor(0.5)
                 }
                 Text(tile.title).font(.system(size: 13)).lineLimit(1)
                     .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.ink)
@@ -328,6 +357,74 @@ private struct TimerAccessoryModifier<Accessory: View>: ViewModifier {
             content.tabViewBottomAccessory { accessory }
         } else {
             content
+        }
+    }
+}
+
+// 宽窗侧栏当前是否展开。SwiftUI 没有读侧栏显隐的接口，借 UIKit 侧栏代理（UITabBarController.Sidebar.Delegate，
+// 侧栏显隐将要变化时回调）得知；SwiftUI 若已设过侧栏代理，其余回调原样转交给它。
+@MainActor @Observable private final class SidebarWatcher: NSObject, UITabBarController.Sidebar.Delegate {
+    private(set) var shown = true
+    // 只在主线程读写；声明成 nonisolated(unsafe) 是因为 responds(to:) 等 NSObject 方法不在主线程隔离域内。
+    @ObservationIgnored nonisolated(unsafe) private weak var forwarded: (any UITabBarController.Sidebar.Delegate)?
+
+    func attach(_ controller: UITabBarController) {
+        if controller.sidebar.delegate !== self {
+            forwarded = controller.sidebar.delegate
+            controller.sidebar.delegate = self
+        }
+        update(!controller.sidebar.isHidden)
+    }
+    func tabBarController(_ tabBarController: UITabBarController, sidebarVisibilityWillChange sidebar: UITabBarController.Sidebar,
+                          animator: any UITabBarController.Sidebar.Animating) {
+        forwarded?.tabBarController?(tabBarController, sidebarVisibilityWillChange: sidebar, animator: animator)
+        update(!sidebar.isHidden)
+    }
+    // 回调可能落在 SwiftUI 更新或布局过程中，推迟到下一轮再改观察值，避免在视图更新里改状态。
+    private func update(_ value: Bool) {
+        guard value != shown else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.shown != value else { return }
+            self.shown = value
+        }
+    }
+    nonisolated override func responds(to selector: Selector!) -> Bool {
+        super.responds(to: selector) || (forwarded?.responds(to: selector) ?? false)
+    }
+    nonisolated override func forwardingTarget(for selector: Selector!) -> Any? {
+        if !super.responds(to: selector), let forwarded, forwarded.responds(to: selector) { return forwarded }
+        return super.forwardingTarget(for: selector)
+    }
+}
+
+// 放进宽窗每个标签页内容里的零尺寸视图：上了窗口后沿响应链找到承载它的标签控制器，把侧栏代理接上。
+// 宽窄切换会整份重建标签控制器，新控制器的页面一出现就重新接上。
+private struct SidebarProbe: UIViewRepresentable {
+    let watcher: SidebarWatcher
+    func makeUIView(context: Context) -> ProbeView { ProbeView(watcher: watcher) }
+    func updateUIView(_ view: ProbeView, context: Context) {}
+
+    final class ProbeView: UIView {
+        private let watcher: SidebarWatcher
+        init(watcher: SidebarWatcher) {
+            self.watcher = watcher
+            super.init(frame: .zero)
+            isUserInteractionEnabled = false
+        }
+        required init?(coder: NSCoder) { nil }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            attach()
+        }
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            attach()
+        }
+        private func attach() {
+            guard window != nil else { return }
+            var responder: UIResponder? = self
+            while let current = responder, !(current is UITabBarController) { responder = current.next }
+            if let controller = responder as? UITabBarController { watcher.attach(controller) }
         }
     }
 }

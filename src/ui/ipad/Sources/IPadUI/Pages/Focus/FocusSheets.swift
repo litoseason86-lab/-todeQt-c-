@@ -40,8 +40,7 @@ struct FocusDurationPanel: View {
                     .accessibilityLabel("\(title) \(minutes) 分钟")
             }
             Spacer(minLength: 0)
-            Stepper("\(title)分钟数", value: Binding(get: { value }, set: { set($0) }), in: range)
-                .labelsHidden()
+            AccentStepper(title: "\(title)分钟数，\(value)", value: Binding(get: { value }, set: { set($0) }), range: range)
         }
     }
 }
@@ -78,8 +77,7 @@ struct FocusTaskPicker: View {
                         .disabled(store.newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-            .navigationTitle("选择任务")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("选择任务").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("完成") { store.taskSelectorPresented = false } }
             }
@@ -130,8 +128,7 @@ struct FocusLongFreeSheet: View {
                     }
                 }
             }
-            .navigationTitle("确认自由计时记录")
-            .navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("确认自由计时记录").sheetChrome()
         }
         .onAppear {
             guard let prompt = store.longFree else { return }
