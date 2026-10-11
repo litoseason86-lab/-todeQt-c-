@@ -64,22 +64,22 @@ enum ThemeColors {
     static var focusGlassShadow: Color { Color("focusGlassShadow", bundle: .main) }
     static var focusGlassHighlight: Color { Color("focusGlassHighlight", bundle: .main) }
     static var focusColonMuted: Color { Color("focusColonMuted", bundle: .main) }
-    static var glassSidebar: Color { Color("glassSidebar", bundle: .main) }
-    static var glassCard: Color { Color("glassCard", bundle: .main) }
-    static var glassHover: Color { Color("glassHover", bundle: .main) }
-    static var glassHoverIdle: Color { Color("glassHoverIdle", bundle: .main) }
+    static var glassSidebar: Color { semantic("glassSidebar", system: .systemGroupedBackground) }
+    static var glassCard: Color { semantic("glassCard", system: .secondarySystemGroupedBackground) }
+    static var glassHover: Color { semantic("glassHover", system: .tertiarySystemFill) }
+    static var glassHoverIdle: Color { semantic("glassHoverIdle", system: .quaternarySystemFill) }
     static var glassAccent: Color { Color("glassAccent", bundle: .main) }
-    static var glassDialog: Color { Color("glassDialog", bundle: .main) }
-    static var glassDialogSoft: Color { Color("glassDialogSoft", bundle: .main) }
-    static var glassBorder: Color { Color("glassBorder", bundle: .main) }
-    static var glassTrack: Color { Color("glassTrack", bundle: .main) }
-    static var glassThumb: Color { Color("glassThumb", bundle: .main) }
-    static var glassSolidCard: Color { Color("glassSolidCard", bundle: .main) }
-    static var glassSolidHover: Color { Color("glassSolidHover", bundle: .main) }
+    static var glassDialog: Color { semantic("glassDialog", system: .secondarySystemBackground) }
+    static var glassDialogSoft: Color { semantic("glassDialogSoft", system: .tertiarySystemBackground) }
+    static var glassBorder: Color { semantic("glassBorder", system: .separator) }
+    static var glassTrack: Color { semantic("glassTrack", system: .tertiarySystemFill) }
+    static var glassThumb: Color { semantic("glassThumb", system: .secondarySystemBackground) }
+    static var glassSolidCard: Color { semantic("glassSolidCard", system: .secondarySystemGroupedBackground) }
+    static var glassSolidHover: Color { semantic("glassSolidHover", system: .tertiarySystemBackground) }
     static var glassSolidAccent: Color { Color("glassSolidAccent", bundle: .main) }
-    static var glassSolidSidebar: Color { Color("glassSolidSidebar", bundle: .main) }
-    static var glassSolidTrack: Color { Color("glassSolidTrack", bundle: .main) }
-    static var glassSolidThumb: Color { Color("glassSolidThumb", bundle: .main) }
+    static var glassSolidSidebar: Color { semantic("glassSolidSidebar", system: .systemGroupedBackground) }
+    static var glassSolidTrack: Color { semantic("glassSolidTrack", system: .tertiarySystemFill) }
+    static var glassSolidThumb: Color { semantic("glassSolidThumb", system: .secondarySystemBackground) }
     static var chartColors0: Color { Color("chartColors0", bundle: .main) }
     static var chartColors1: Color { Color("chartColors1", bundle: .main) }
     static var chartColors2: Color { Color("chartColors2", bundle: .main) }

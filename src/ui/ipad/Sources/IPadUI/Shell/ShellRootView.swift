@@ -41,7 +41,7 @@ struct ShellRootView: View {
         .tabViewStyle(.sidebarAdaptable)
         .defaultAdaptableTabBarPlacement(.sidebar)
         .tabViewSidebarHeader { summaryTiles }
-        .tabViewSidebarFooter { fixedEntries }
+        .tabViewSidebarBottomBar { fixedEntries }
         .modifier(TimerAccessoryModifier(store: store, accessory: miniTimer))
         .tint(ThemeColors.accentInk)
         .preferredColorScheme(preferredScheme)
@@ -196,6 +196,9 @@ private struct ShellChrome: ViewModifier {
     @Environment(\.horizontalSizeClass) private var sizeClass
     func body(content: Content) -> some View {
         content
+            // 统一放开主题页底，列表行仍由各页的语义纸面令牌决定；系统外观保留系统滚动底色。
+            .scrollContentBackground(store.selectedTheme != nil ? .hidden : .visible)
+            .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { store.presentCapture() } label: {

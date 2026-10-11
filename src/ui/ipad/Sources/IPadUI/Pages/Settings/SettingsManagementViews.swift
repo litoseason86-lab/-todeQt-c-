@@ -6,7 +6,7 @@ import SwiftUI
     @State private var deleting: CategoryValue?
     var body: some View {
         @Bindable var store = store
-        Form {
+        SettingsForm {
             ForEach(store.values, id: \.id) { value in
                 Button { store.beginEdit(value) } label: {
                     HStack {
@@ -30,7 +30,7 @@ import SwiftUI
         .toolbar { Button("新增科目", systemImage: "plus") { store.beginNew() } }
         .sheet(isPresented: Binding(get: { store.editing }, set: { if !$0 { store.cancel() } })) {
             NavigationStack {
-                Form {
+                SettingsForm {
                     TextField("科目名称", text: $store.name)
                     Picker("颜色", selection: $store.color) {
                         ForEach(Array(SettingsCategoryStore.colors.enumerated()), id: \.element) { index, color in
@@ -70,7 +70,7 @@ private enum SettingsCategoryColor {
     @State private var deleting: RoutineValue?
     var body: some View {
         @Bindable var store = store
-        Form {
+        SettingsForm {
             ForEach(store.values) { value in
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -97,7 +97,7 @@ private enum SettingsCategoryColor {
         .toolbar { Button("新增例行", systemImage: "plus") { store.beginNew() } }
         .sheet(isPresented: Binding(get: { store.editing }, set: { if !$0 { store.cancel() } })) {
             NavigationStack {
-                Form {
+                SettingsForm {
                     TextField("标题", text: $store.title)
                     Picker("科目", selection: $store.categoryID) {
                         Text("不设置科目").tag(-1)
@@ -116,7 +116,7 @@ private enum SettingsCategoryColor {
         }
         .sheet(isPresented: Binding(get: { store.editingWeekdays }, set: { if !$0 { store.cancel() } })) {
             NavigationStack {
-                Form {
+                SettingsForm {
                     Section {
                         ForEach(0..<7, id: \.self) { index in
                             Toggle(RoutineWeekdaysFormat.names[index], isOn: Binding(

@@ -54,7 +54,7 @@ import SwiftUI
 @MainActor private struct GeneralSettings: View {
     @Bindable var store: SettingsStore
     var body: some View {
-        Form {
+        SettingsForm {
             Section("专注") {
                 Stepper("专注时长：\(store.snapshot.workMinutes) 分钟", value: Binding(get: { store.snapshot.workMinutes }, set: store.setWorkMinutes), in: 5...180)
                 Stepper("休息时长：\(store.snapshot.breakMinutes) 分钟", value: Binding(get: { store.snapshot.breakMinutes }, set: store.setBreakMinutes), in: 1...60)
@@ -82,7 +82,7 @@ import SwiftUI
         }.formStyle(.grouped).navigationTitle("通用")
     }
     private var longBreakForm: some View {
-        Form {
+        SettingsForm {
             Section {
                 Toggle("长休息", isOn: Binding(get: { store.snapshot.longBreakEnabled }, set: store.setLongBreakEnabled))
                 Stepper("长休息：\(store.snapshot.longBreakMinutes) 分钟", value: Binding(get: { store.snapshot.longBreakMinutes }, set: store.setLongBreakMinutes), in: 5...60)
@@ -101,7 +101,7 @@ import SwiftUI
     @Bindable var shell: ShellStore
     private let systemModes: [(String, String)] = [("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")]
     var body: some View {
-        Form {
+        SettingsForm {
             Section("系统外观") {
                 ForEach(systemModes, id: \.0) { mode in
                     appearanceChoice(mode.1, selected: shell.selectedSystemAppearance == mode.0) {
@@ -147,7 +147,7 @@ import SwiftUI
         PageID.ordered(store.snapshot.sidebarOrder).filter { !PageID.fixed.contains($0) }
     }
     var body: some View {
-        Form {
+        SettingsForm {
             Section {
                 ForEach(movablePages, id: \.self) { Text($0.title) }
                     .onMove { offsets, destination in
@@ -160,5 +160,18 @@ import SwiftUI
             Section { Button("恢复默认顺序", systemImage: "arrow.counterclockwise") { store.resetSidebarOrder() } }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
         }.formStyle(.grouped).toolbar { EditButton() }.navigationTitle("侧栏顺序")
+    }
+}
+
+// 设置分组统一使用系统 Form（分组表单）；主题下只换语义纸面和底色，不仿制系统控件。
+@MainActor struct SettingsForm<Content: View>: View {
+    @Environment(ShellStore.self) private var shell
+    private let content: Content
+    init(@ViewBuilder content: () -> Content) { self.content = content() }
+    var body: some View {
+        Form { content.listRowBackground(shell.selectedTheme != nil ? ThemeColors.surface : nil) }
+            .formStyle(.grouped)
+            .scrollContentBackground(shell.selectedTheme != nil ? .hidden : .visible)
+            .background { WallpaperBackground(theme: shell.snapshot.backgroundTheme, enabled: shell.wallpaperVisible) }
     }
 }

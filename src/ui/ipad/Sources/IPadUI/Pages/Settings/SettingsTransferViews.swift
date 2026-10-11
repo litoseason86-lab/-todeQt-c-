@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
     @Environment(SettingsSyncStore.self) private var store
     @State private var joinConfirmation = false
     var body: some View {
-        Form {
+        SettingsForm {
             Section("同步") {
                 Toggle("启用同步", isOn: Binding(get: { store.snapshot.enabled }, set: store.setEnabled))
                     .disabled(store.snapshot.busy)
@@ -57,7 +57,7 @@ import UniformTypeIdentifiers
             }
             ForEach(store.logs) { entry in
                 NavigationLink {
-                    Form {
+                    SettingsForm {
                         LabeledContent("时间", value: entry.time)
                         LabeledContent("类型", value: entry.kindLabel)
                         Text(entry.summary)
@@ -94,7 +94,7 @@ import UniformTypeIdentifiers
     @State private var exportPresented = false
     @State private var importPresented = false
     var body: some View {
-        Form {
+        SettingsForm {
             Section {
                 Toggle("自动备份", isOn: Binding(get: { store.autoBackupEnabled }, set: store.setAutoBackupEnabled))
                 LabeledContent("上次备份", value: store.snapshot.lastBackupTimeIso.isEmpty ? "尚未备份" : store.snapshot.lastBackupTimeIso)
@@ -158,7 +158,7 @@ import UniformTypeIdentifiers
     @State private var exportPresented = false
     var body: some View {
         @Bindable var store = store
-        Form {
+        SettingsForm {
             Section("日期范围") {
                 DatePicker("开始日期", selection: Binding(
                     get: { ContentDateFormat.date(store.startDate) ?? .now },
