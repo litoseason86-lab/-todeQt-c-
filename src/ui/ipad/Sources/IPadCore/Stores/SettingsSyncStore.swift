@@ -14,6 +14,8 @@ import Observation
         bridge.onCopyRequested = { [weak self] _ in self?.notice = "已复制丢失值" }
         refresh()
     }
+    public var folderActionTitle: String { snapshot.hasFolder ? "重新选择文件夹" : "选择同步文件夹" }
+    public var pendingText: String { "\(snapshot.pendingCount) 项" }
     public func refresh() {
         do { snapshot = try bridge.snapshot(); errorMessage = "" }
         catch { errorMessage = error.localizedDescription }

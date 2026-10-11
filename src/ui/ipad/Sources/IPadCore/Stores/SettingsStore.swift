@@ -32,6 +32,9 @@ import Observation
         refresh()
     }
     public func refresh() { snapshot = bridge.snapshot() }
+    public var longBreakSummary: String {
+        snapshot.longBreakEnabled ? "每 \(snapshot.longBreakInterval) 个番茄 · \(snapshot.longBreakMinutes) 分钟" : "关闭"
+    }
     public var selectedSectionTitle: String { selectedSection.rawValue }
     public func selectSection(_ section: SettingsSection) {
         guard SettingsAvailability.sections.contains(section) else { return }

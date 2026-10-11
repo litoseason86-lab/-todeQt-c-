@@ -6,7 +6,7 @@ import SwiftUI
     @State private var deleting: CategoryValue?
     var body: some View {
         @Bindable var store = store
-        List {
+        Form {
             ForEach(store.values, id: \.id) { value in
                 Button { store.beginEdit(value) } label: {
                     HStack {
@@ -25,6 +25,7 @@ import SwiftUI
                 Button("重试读取科目") { store.reload() }
             }
         }
+        .formStyle(.grouped)
         .navigationTitle("科目")
         .toolbar { Button("新增科目", systemImage: "plus") { store.beginNew() } }
         .sheet(isPresented: Binding(get: { store.editing }, set: { if !$0 { store.cancel() } })) {
@@ -69,7 +70,7 @@ private enum SettingsCategoryColor {
     @State private var deleting: RoutineValue?
     var body: some View {
         @Bindable var store = store
-        List {
+        Form {
             ForEach(store.values) { value in
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
@@ -92,7 +93,7 @@ private enum SettingsCategoryColor {
                 Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
                 Button("重试读取例行") { store.reload(); store.reloadCategories() }
             }
-        }.navigationTitle("每日例行")
+        }.formStyle(.grouped).navigationTitle("每日例行")
         .toolbar { Button("新增例行", systemImage: "plus") { store.beginNew() } }
         .sheet(isPresented: Binding(get: { store.editing }, set: { if !$0 { store.cancel() } })) {
             NavigationStack {
@@ -106,7 +107,7 @@ private enum SettingsCategoryColor {
                         }
                     }
                     if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-                }.navigationTitle("每日例行")
+                }.formStyle(.grouped).navigationTitle("每日例行")
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel() } }
                     ToolbarItem(placement: .confirmationAction) { Button("保存") { _ = store.save() } }

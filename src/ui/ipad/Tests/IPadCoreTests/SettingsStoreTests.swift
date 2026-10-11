@@ -44,6 +44,32 @@ import XCTest
         bridge.snapshot.appearance = "system"; bridge.onChanged?()
         XCTAssertNil(store.selectedTheme); XCTAssertEqual(store.selectedSystemAppearance, "system")
     }
+    // 产品保证：长休息行显示当前启用状态和服务设置，不启用时不冒充仍会自动长休息。
+    func testR1LongBreakSummaryReflectsEnabledSettings() {
+        let bridge = SettingsBridgeFake(); bridge.result.longBreakEnabled = false
+        bridge.result.longBreakInterval = 4; bridge.result.longBreakMinutes = 15
+        let store = SettingsStore(bridge: bridge)
+        XCTAssertEqual(store.longBreakSummary, "关闭")
+        store.setLongBreakEnabled(true)
+        XCTAssertEqual(store.longBreakSummary, "每 4 个番茄 · 15 分钟")
+        store.setLongBreakInterval(6); store.setLongBreakMinutes(20)
+        XCTAssertEqual(store.longBreakSummary, "每 6 个番茄 · 20 分钟")
+    }
+    // 产品保证：同步页始终显示服务给的待同步数，文件夹存在时操作明确为重新选择。
+    func testR1SyncFormProjectsPendingZeroAndFolderAction() {
+        let bridge = SettingsSyncFake(); let store = SettingsSyncStore(bridge: bridge)
+        XCTAssertEqual(store.pendingText, "0 项"); XCTAssertEqual(store.folderActionTitle, "选择同步文件夹")
+        bridge.result.pendingCount = 8; bridge.result.hasFolder = true; bridge.onChanged?()
+        XCTAssertEqual(store.pendingText, "8 项"); XCTAssertEqual(store.folderActionTitle, "重新选择文件夹")
+    }
+    // 产品保证：设置分组覆盖设计稿要求的通用专注、提示、日期、个人字段，并保持同步日志与外观入口。
+    func testR1SettingsSectionsExposeFormFieldsAndSubpages() {
+        let general = Set(SettingsAvailability.features(in: .general))
+        XCTAssertTrue(general.isSuperset(of: [.workMinutes, .breakMinutes, .longBreak, .quickStart, .autoAdvance, .freeTimerWarning, .sound, .dayStart, .nickname]))
+        XCTAssertEqual(SettingsAvailability.features(in: .sync), [.sync])
+        XCTAssertTrue(SettingsAvailability.features(in: .appearance).contains(.backgroundTheme))
+        XCTAssertFalse(SettingsAvailability.features(in: .appearance).contains(.dashboardTimer))
+    }
     // 产品保证：设置写入失败时显示值恢复为写入前快照，并向页面提供错误。
     func testFailedWriteRollsBackDisplayedValue() {
         let bridge = SettingsBridgeFake(); bridge.result.workMinutes = 25
