@@ -2,6 +2,7 @@
 #include "../native/IPadUiPreferences.h"
 
 #include "../../../services/AppSettings.h"
+#include "../../../services/CountdownService.h"
 #include "../../../services/BackupService.h"
 #include "../../../services/DatabaseManager.h"
 #include "../../../services/FocusHistoryService.h"
@@ -61,6 +62,13 @@
         const QSettings settings;
         _useWallpaper = settings.value(QStringLiteral("ipad/useWallpaper"), false).toBool();
         _selectedPage = settings.value(QStringLiteral("ipad/selectedPage"), QStringLiteral("dashboard")).toString().toNSString();
+        // 无外观键的旧设置只推导、不写回；首次主动选择才落键，保留旧壁纸体验。
+        _appearance = settings.value(QStringLiteral("ipad/appearance"),
+            _useWallpaper ? QStringLiteral("theme") : QStringLiteral("system")).toString().toNSString();
+        const auto goal = CountdownService::instance()->primaryGoal().toMap();
+        _hasPrimaryGoal = !goal.isEmpty();
+        _primaryGoalName = goal.value(QStringLiteral("name")).toString().toNSString();
+        _primaryGoalDaysRemaining = goal.value(QStringLiteral("daysRemaining")).toInt();
         _maxCaptureTitleLength = KnowledgeGapService::instance()->maxTitleLength();
     }
     return self;
@@ -129,6 +137,7 @@
         QObject::connect(timer, &FocusTimer::modeChanged, context, timerChanged);
         QObject::connect(history, &FocusHistoryService::historyChanged, context, changed);
         QObject::connect(gaps, &KnowledgeGapService::gapsChanged, context, changed);
+        QObject::connect(CountdownService::instance(), &CountdownService::primaryGoalChanged, context, changed);
         QObject::connect(settings, &AppSettings::sidebarOrderChanged, context, changed);
         QObject::connect(settings, &AppSettings::backgroundThemeChanged, context, changed);
         QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed, context, changed);
@@ -192,6 +201,67 @@
         if (existed) settings.setValue(key, previous); else settings.remove(key);
         settings.sync();
         if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"壁纸设置保存失败"}];
+        return NO;
+    }
+    if (self.onChanged) self.onChanged();
+    return YES;
+}
+- (BOOL)selectTheme:(NSString *)value error:(NSError **)error
+{
+    NSAssert(NSThread.isMainThread, @"主题设置必须在主线程");
+    const QString theme = QString::fromNSString(value);
+    if (theme.isEmpty()) {
+        if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"无效的主题选项"}];
+        return NO;
+    }
+    QSettings settings;
+    const QString appearanceKey = QStringLiteral("ipad/appearance");
+    const QVariant oldAppearance = settings.value(appearanceKey);
+    const bool hadAppearance = settings.contains(appearanceKey);
+    const auto restoreAppearance = [&] {
+        if (hadAppearance) settings.setValue(appearanceKey, oldAppearance); else settings.remove(appearanceKey);
+        settings.sync();
+    };
+    settings.setValue(appearanceKey, QStringLiteral("theme"));
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        restoreAppearance();
+        if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"主题设置保存失败"}];
+        return NO;
+    }
+    // 主题写入由服务处理刷盘、失败信号和后端重建；读回确认后才能保留本机主题模式。
+    auto *appSettings = AppSettings::instance();
+    const QString oldTheme = appSettings->backgroundTheme();
+    appSettings->setBackgroundTheme(theme);
+    if (appSettings->backgroundTheme() != theme) {
+        restoreAppearance();
+        if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"主题设置保存失败"}];
+        return NO;
+    }
+    // 主题未变时服务不会发变化信号，但外观模式可能刚从系统切到主题，外壳仍需刷新。
+    if (oldTheme == theme && self.onChanged) self.onChanged();
+    return YES;
+}
+- (BOOL)setAppearance:(NSString *)value error:(NSError **)error
+{
+    NSAssert(NSThread.isMainThread, @"外观设置必须在主线程");
+    const QString mode = QString::fromNSString(value);
+    const QStringList modes = {QStringLiteral("system"), QStringLiteral("light"), QStringLiteral("dark"), QStringLiteral("theme")};
+    if (!modes.contains(mode)) {
+        if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"无效的外观选项"}];
+        return NO;
+    }
+    QSettings settings;
+    const QString key = QStringLiteral("ipad/appearance");
+    const bool existed = settings.contains(key);
+    const QVariant previous = settings.value(key);
+    settings.setValue(key, mode);
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        // 写失败仍会改变 QSettings 内存缓存；恢复旧值或无键状态，不广播成功刷新。
+        if (existed) settings.setValue(key, previous); else settings.remove(key);
+        settings.sync();
+        if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"外观设置保存失败"}];
         return NO;
     }
     if (self.onChanged) self.onChanged();

@@ -27,6 +27,55 @@ import XCTest
 }
 
 @MainActor final class ShellStoreTests: XCTestCase {
+    // 产品保证：窄窗记录直达今日专注，本周只从更多进入，宽窗五个常用页保持定稿顺序。
+    func testR1TabMappingKeepsRecordsDirectAndWeekInMore() {
+        XCTAssertEqual(PageID.regularTabs, [.today, .focus, .week, .todayFocus, .dashboard])
+        XCTAssertEqual(PageID.primary, [.today, .focus, .todayFocus, .dashboard])
+        XCTAssertEqual(ShellStore.navigationTarget(for: .todayFocus, size: .compact), .page(.todayFocus))
+        XCTAssertEqual(ShellStore.navigationTarget(for: .week, size: .compact), .more(path: [.week]))
+        XCTAssertEqual(PageID.todayFocus.tabTitle(size: .compact), "记录")
+        XCTAssertEqual(PageID.todayFocus.title, "今日专注")
+        let store = ShellStore(bridge: FakeShellBridge())
+        XCTAssertTrue(store.morePages.contains(.week))
+        XCTAssertFalse(store.morePages.contains(.todayFocus))
+        XCTAssertTrue(store.sidebarPages.contains(.knowledgeGap))
+        XCTAssertTrue(store.sidebarPages.contains(.countdown))
+    }
+    // 产品保证：四块摘要用服务读数，第四块是主目标且过期文案与倒计时页一致；无主目标显示破折号并仍能进入倒计时。
+    func testR1SummaryTilesProjectGoalAndServiceCounts() {
+        let bridge = FakeShellBridge()
+        bridge.snapshot.todayPendingCount = 5; bridge.snapshot.weekPendingCount = 12
+        bridge.snapshot.todayFocusedSeconds = 3900; bridge.snapshot.dueGapCount = 2
+        let store = ShellStore(bridge: bridge)
+        var tiles = store.summaryTiles(focusTimeText: "18:42")
+        guard tiles.count == 4 else { XCTFail("必须展示四块摘要"); return }
+        XCTAssertEqual(tiles.map(\.page), [.today, .focus, .week, .countdown])
+        XCTAssertEqual(tiles.map(\.title), ["今日任务", "专注计时", "本周待办", "目标倒计时"])
+        XCTAssertEqual(tiles.map(\.value), ["5", DurationFormat.seconds(3900), "12", "—"])
+        bridge.snapshot.hasPrimaryGoal = true; bridge.snapshot.primaryGoalName = "考研初试"
+        bridge.snapshot.primaryGoalDaysRemaining = 72; bridge.snapshot.hasTimer = true
+        bridge.onChanged?()
+        tiles = store.summaryTiles(focusTimeText: "18:42")
+        XCTAssertEqual(tiles[1].value, "18:42")
+        XCTAssertEqual(tiles[3].title, "考研初试"); XCTAssertEqual(tiles[3].value, "72 天")
+        bridge.snapshot.primaryGoalDaysRemaining = -3
+        bridge.onChanged?()
+        XCTAssertEqual(store.summaryTiles(focusTimeText: "18:42")[3].value, "已过期 3 天")
+        XCTAssertEqual(store.sidebarBadge(for: .knowledgeGap), 2)
+        XCTAssertNil(store.sidebarBadge(for: .countdown))
+    }
+    // 产品保证：计时和暂停时其它页显示底条，专注页自身不重复显示，离开后恢复。
+    func testR1MiniTimerHiddenOnlyOnFocusPage() {
+        let bridge = FakeShellBridge(); bridge.snapshot.hasTimer = true
+        let store = ShellStore(bridge: bridge)
+        XCTAssertTrue(store.miniTimerVisible)
+        store.select(.focus); XCTAssertFalse(store.miniTimerVisible)
+        bridge.timerSnapshot.hasTimer = true; bridge.timerSnapshot.running = false; bridge.onTimerChanged?()
+        XCTAssertFalse(store.miniTimerVisible)
+        store.select(.week); XCTAssertTrue(store.miniTimerVisible)
+        bridge.timerSnapshot.hasTimer = false; bridge.onTimerChanged?()
+        XCTAssertFalse(store.miniTimerVisible)
+    }
     // 产品保证：原生回退只写下次启动偏好，不切当前页；失败不给成功提示，恢复遮罩时不写入。
     func testLegacyUIRequestSavesOnlyNextLaunchPreference() {
         let bridge = FakeShellBridge(); let store = ShellStore(bridge: bridge)

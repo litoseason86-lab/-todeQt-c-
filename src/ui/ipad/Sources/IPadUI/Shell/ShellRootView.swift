@@ -14,43 +14,39 @@ struct ShellRootView: View {
 
     var body: some View {
         TabView(selection: $tab) {
-            ForEach([PageID.today, .focus, .week], id: \.self) { page in
+            // 常用页各自注册，宽窄窗口只改变系统可见性与放置位置，不增删标签或页面值。
+            ForEach(PageID.regularTabs, id: \.self) { page in
+                Tab(page.tabTitle(size: sizeClass == .compact ? .compact : .regular),
+                    systemImage: page.symbol, value: ShellTab.page(page)) { pageView(page) }
+                    .tabPlacement(page == .week && sizeClass == .compact ? .sidebarOnly : .pinned)
+                    .defaultVisibility(PageID.summary.prefix(3).contains(page) ? .hidden : .visible, for: .sidebar)
+            }
+            ForEach(store.sidebarPages.filter { !PageID.regularTabs.contains($0) }, id: \.self) { page in
                 Tab(page.title, systemImage: page.symbol, value: ShellTab.page(page)) { pageView(page) }
-                    .tabPlacement(.pinned)
-                    .defaultVisibility(.hidden, for: .sidebar)
+                    .badge(store.sidebarBadge(for: page).map { Text(String($0)) })
+                    .tabPlacement(.sidebarOnly)
+                    .defaultVisibility(.hidden, for: .tabBar)
             }
-            // 知识缺口入口在摘要块里，注册隐藏的页面值供头部切页；不占窄窗口标签栏。
-            Tab(PageID.knowledgeGap.title, systemImage: PageID.knowledgeGap.symbol,
-                value: ShellTab.page(.knowledgeGap)) { pageView(.knowledgeGap) }
-                .tabPlacement(.sidebarOnly)
-                .defaultVisibility(.hidden, for: .sidebar)
-            TabSection("页面") {
-                ForEach(store.sidebarPages, id: \.self) { page in
-                    Tab(page.title, systemImage: page.symbol, value: ShellTab.page(page)) { pageView(page) }
-                        .tabPlacement(page == .dashboard ? .pinned : .sidebarOnly)
-                }
+            // 废纸篓和设置的页面值保持注册，实际入口固定在侧栏底部。
+            ForEach(PageID.fixed, id: \.self) { page in
+                Tab(page.title, systemImage: page.symbol, value: ShellTab.page(page)) { pageView(page) }
+                    .tabPlacement(.sidebarOnly)
+                    .defaultVisibility(.hidden, for: .sidebar, .tabBar)
             }
-            // 两组都使用 TabSection，避免 Qt 验证版里普通标签被系统排到分组之前。
-            TabSection("应用") {
-                ForEach(PageID.fixed, id: \.self) { page in
-                    Tab(page.title, systemImage: page.symbol, value: ShellTab.page(page)) { pageView(page) }
-                        .tabPlacement(.sidebarOnly)
-                }
-            }
-            // 「更多」始终注册，宽窗口只由系统隐藏；动态增删 Tab 会让 iPadOS 重建标签控制器时
-            // 出现标签项与页面控制器错位，窄窗口点击标签可能触发 UIKit 断言崩溃。
             Tab("更多", systemImage: "ellipsis", value: ShellTab.more) { moreView }
                 .tabPlacement(.pinned)
                 .defaultVisibility(.hidden, for: .sidebar)
+                .hidden(sizeClass != .compact)
         }
         .tabViewStyle(.sidebarAdaptable)
         .defaultAdaptableTabBarPlacement(.sidebar)
         .tabViewSidebarHeader { summaryTiles }
+        .tabViewSidebarBottomBar { fixedEntries }
         .modifier(TimerAccessoryModifier(store: store, accessory: miniTimer))
         .tint(ThemeColors.accentInk)
-        .preferredColorScheme(store.snapshot.useWallpaper
-            ? (["starry", "rainy", "moon"].contains(store.snapshot.backgroundTheme) ? .dark : .light) : nil)
-        .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
+        .preferredColorScheme(preferredScheme)
+        .background { ThemeAppearance(themeID: store.selectedTheme ?? "").frame(width: 0, height: 0) }
+        .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
         .background { keyboardCommands }
         .disabled(store.snapshot.operationBlocksUI)
         .overlay {
@@ -104,17 +100,16 @@ struct ShellRootView: View {
     private func pageView(_ page: PageID) -> some View {
         NavigationStack {
             PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store)
-                .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
         }
     }
     private var moreView: some View {
         NavigationStack(path: $morePath) {
             List(store.morePages, id: \.self) { page in
                 NavigationLink(value: page) { Label(page.title, systemImage: page.symbol) }
-                    .listRowBackground(store.snapshot.useWallpaper ? ThemeColors.surface : nil)
+                    .listRowBackground(store.selectedTheme != nil ? ThemeColors.surface : nil)
             }
-            .scrollContentBackground(store.snapshot.useWallpaper ? .hidden : .visible)
-            .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
+            .scrollContentBackground(store.selectedTheme != nil ? .hidden : .visible)
+            .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
             .navigationTitle("更多")
             .navigationDestination(for: PageID.self) { page in
                 PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store)
@@ -124,30 +119,45 @@ struct ShellRootView: View {
         }
     }
     private var summaryTiles: some View {
-        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
-            GridRow { tile(.today, value: "\(store.snapshot.todayPendingCount)"); tile(.focus, value: focusSummary) }
-            GridRow { tile(.week, value: "\(store.snapshot.weekPendingCount)"); tile(.knowledgeGap, value: "\(store.snapshot.dueGapCount)") }
-        }
-        .padding(.vertical, 8)
+        let tiles = store.summaryTiles(focusTimeText: focus.primaryTimeText)
+        return Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            GridRow { tile(tiles[0]); tile(tiles[1]) }
+            GridRow { tile(tiles[2]); tile(tiles[3]) }
+        }.padding(.vertical, 8)
     }
-    private var focusSummary: String {
-        store.snapshot.hasTimer ? focus.primaryTimeText : DurationFormat.seconds(Double(store.snapshot.todayFocusedSeconds))
+    private var fixedEntries: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(PageID.fixed, id: \.self) { page in
+                Button { store.select(page) } label: {
+                    Label(page.title, systemImage: page.symbol)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                }.buttonStyle(.plain)
+            }
+        }.padding(.vertical, 8)
+    }
+    private var preferredScheme: ColorScheme? {
+        switch store.snapshot.appearance {
+        case "light": .light
+        case "dark": .dark
+        case "theme": SettingsAvailability.theme(store.snapshot.backgroundTheme).mode == "dark" ? .dark : .light
+        default: nil
+        }
     }
     private var clock: String {
         ShellDisplay.clock(store.snapshot.mode == 1 ? store.snapshot.remainingSeconds : store.snapshot.elapsedSeconds)
     }
-    private func tile(_ page: PageID, value: String) -> some View {
-        Button { store.select(page) } label: {
+    private func tile(_ tile: ShellSummaryTile) -> some View {
+        Button { store.select(tile.page) } label: {
             VStack(alignment: .leading, spacing: 8) {
-                HStack { Image(systemName: page.symbol); Spacer(); Text(value).monospacedDigit() }
-                Text(page.title).font(.caption)
+                HStack { Image(systemName: tile.page.symbol); Spacer(); Text(tile.value).monospacedDigit() }
+                Text(tile.title).font(.caption)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(page.title)，\(value)")
+        .accessibilityLabel("\(tile.title)，\(tile.value)")
     }
     private var miniTimer: some View {
         HStack(spacing: 12) {
@@ -182,11 +192,18 @@ struct ShellRootView: View {
 
 private struct ShellChrome: ViewModifier {
     @Bindable var store: ShellStore
+    @Environment(\.horizontalSizeClass) private var sizeClass
     func body(content: Content) -> some View {
         content
+            // 统一放开主题页底，列表行仍由各页的语义纸面令牌决定；系统外观保留系统滚动底色。
+            .scrollContentBackground(store.selectedTheme != nil ? .hidden : .visible)
+            .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { store.presentCapture() } label: { Label("记一笔", systemImage: "square.and.pencil") }
+                    Button { store.presentCapture() } label: {
+                        if sizeClass == .compact { Image(systemName: "square.and.pencil") }
+                        else { Label("记一笔", systemImage: "square.and.pencil") }
+                    }.accessibilityLabel("记一笔")
                         .popover(isPresented: $store.capturePresented) { capturePopover }
                 }
             }

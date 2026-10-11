@@ -6,6 +6,7 @@ import UIKit
 struct WallpaperBackground: View {
     let theme: String
     let enabled: Bool
+    @Environment(ShellStore.self) private var shell
     @State private var image: UIImage?
     var body: some View {
         Group {
@@ -14,7 +15,8 @@ struct WallpaperBackground: View {
                     Image(uiImage: image).resizable().scaledToFill()
                         .frame(width: proxy.size.width, height: proxy.size.height).clipped()
                 }
-            } else { Color(uiColor: .systemBackground) }
+            } else if shell.snapshot.appearance == "theme" { ThemeColors.themeBase(theme) }
+            else { Color(uiColor: .systemBackground) }
         }
         .ignoresSafeArea()
         .task(id: enabled ? theme : "") {

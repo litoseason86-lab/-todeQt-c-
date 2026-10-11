@@ -7,28 +7,30 @@ import UniformTypeIdentifiers
     @Environment(SettingsSyncStore.self) private var store
     @State private var joinConfirmation = false
     var body: some View {
-        Form {
+        SettingsForm {
             Section("同步") {
                 Toggle("启用同步", isOn: Binding(get: { store.snapshot.enabled }, set: store.setEnabled))
                     .disabled(store.snapshot.busy)
-                Text(store.snapshot.summaryText)
-                Text(store.snapshot.statusText).foregroundStyle(store.snapshot.hasProblem ? ThemeColors.danger : ThemeColors.ink)
-                if !store.snapshot.statusDetail.isEmpty { Text(store.snapshot.statusDetail).foregroundStyle(ThemeColors.inkMuted) }
-                if !store.snapshot.folderDisplayPath.isEmpty { LabeledContent("同步文件夹", value: store.snapshot.folderDisplayPath) }
+                LabeledContent("同步文件夹", value: store.snapshot.folderDisplayPath.isEmpty ? "—" : store.snapshot.folderDisplayPath)
                 if !store.snapshot.folderProblem.isEmpty { Text(store.snapshot.folderProblem).foregroundStyle(ThemeColors.danger) }
-                Button("选择同步文件夹", systemImage: "folder") { store.chooseFolder() }
-                    .disabled(store.snapshot.busy || store.snapshot.choosingFolder)
+                Button(store.folderActionTitle, systemImage: "folder") {
+                    if store.snapshot.statusKey == "folderMissing" { store.rebuildFolder() }
+                    else { store.chooseFolder() }
+                }.disabled(store.snapshot.busy || store.snapshot.choosingFolder)
+            }
+            Section("状态") {
+                Text(store.snapshot.statusText).foregroundStyle(store.snapshot.hasProblem ? ThemeColors.danger : ThemeColors.ink)
+                if !store.snapshot.statusDetail.isEmpty && store.snapshot.hasProblem {
+                    Text(store.snapshot.statusDetail).foregroundStyle(ThemeColors.danger)
+                }
+                LabeledContent("上次同步", value: store.snapshot.lastSyncedAt.isEmpty ? "—" : store.snapshot.lastSyncedAt)
+                LabeledContent("待同步", value: store.pendingText)
                 Button("立即同步", systemImage: "arrow.triangle.2.circlepath") { store.syncNow() }
                     .disabled(store.snapshot.busy || !store.snapshot.hasFolder)
                 if store.snapshot.statusKey == "needsConfirmation" {
                     Button("确认加入") { joinConfirmation = true }
                     Button("暂不加入") { store.setEnabled(false) }
                 }
-                if store.snapshot.statusKey == "folderMissing" {
-                    Button("重新选择文件夹") { store.rebuildFolder() }
-                }
-                if store.snapshot.pendingCount > 0 { LabeledContent("待同步", value: String(store.snapshot.pendingCount)) }
-                if !store.snapshot.lastSyncedAt.isEmpty { LabeledContent("上次同步", value: store.snapshot.lastSyncedAt) }
             }
             Section { NavigationLink("同步日志（\(store.snapshot.logCount)）") { SyncLogSettings() } }
             if !store.notice.isEmpty { Text(store.notice).foregroundStyle(ThemeColors.ink) }
@@ -36,7 +38,7 @@ import UniformTypeIdentifiers
                 Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
                 Button("重试读取同步状态") { store.refresh() }
             }
-        }.navigationTitle("同步与日志")
+        }.formStyle(.grouped).navigationTitle("同步与日志")
         .alert("加入同步文件夹？", isPresented: $joinConfirmation) {
             Button("取消", role: .cancel) {}
             Button("确认加入", role: .destructive) { store.confirmJoin() }
@@ -52,10 +54,10 @@ import UniformTypeIdentifiers
             if !store.errorMessage.isEmpty {
                 Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
                 Button("重试读取日志") { store.reloadLogs() }
-            } else if store.logs.isEmpty { ContentUnavailableView("暂无同步日志", systemImage: "list.bullet.rectangle") }
+            }
             ForEach(store.logs) { entry in
                 NavigationLink {
-                    Form {
+                    SettingsForm {
                         LabeledContent("时间", value: entry.time)
                         LabeledContent("类型", value: entry.kindLabel)
                         Text(entry.summary)
@@ -92,7 +94,7 @@ import UniformTypeIdentifiers
     @State private var exportPresented = false
     @State private var importPresented = false
     var body: some View {
-        Form {
+        SettingsForm {
             Section {
                 Toggle("自动备份", isOn: Binding(get: { store.autoBackupEnabled }, set: store.setAutoBackupEnabled))
                 LabeledContent("上次备份", value: store.snapshot.lastBackupTimeIso.isEmpty ? "尚未备份" : store.snapshot.lastBackupTimeIso)
@@ -115,7 +117,7 @@ import UniformTypeIdentifiers
             }
             if !store.notice.isEmpty { Text(store.notice) }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-        }.navigationTitle("备份与恢复")
+        }.formStyle(.grouped).navigationTitle("备份与恢复")
         .fileExporter(isPresented: $exportPresented, document: document, contentType: .data,
                       defaultFilename: store.exportURL?.lastPathComponent) { result in
             document = nil
@@ -156,7 +158,7 @@ import UniformTypeIdentifiers
     @State private var exportPresented = false
     var body: some View {
         @Bindable var store = store
-        Form {
+        SettingsForm {
             Section("日期范围") {
                 DatePicker("开始日期", selection: Binding(
                     get: { ContentDateFormat.date(store.startDate) ?? .now },
@@ -175,7 +177,7 @@ import UniformTypeIdentifiers
             if store.busy { ProgressView(value: Double(store.progress), total: Double(max(1, store.total))).accessibilityLabel("导出进度") }
             if !store.notice.isEmpty { Text(store.notice) }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-        }.navigationTitle("导出")
+        }.formStyle(.grouped).navigationTitle("导出")
         .fileExporter(isPresented: $exportPresented, document: document,
                       contentType: store.kind == .all ? .folder : .commaSeparatedText,
                       defaultFilename: store.exportURL?.lastPathComponent) { result in

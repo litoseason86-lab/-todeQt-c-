@@ -22,6 +22,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly, copy) NSArray<NSString *> *sidebarOrder;
 @property(nonatomic, readonly, copy) NSString *backgroundTheme;
 @property(nonatomic, readonly) BOOL useWallpaper;
+@property(nonatomic, readonly, copy) NSString *appearance;
+@property(nonatomic, readonly) BOOL hasPrimaryGoal;
+@property(nonatomic, readonly, copy) NSString *primaryGoalName;
+@property(nonatomic, readonly) NSInteger primaryGoalDaysRemaining;
 @property(nonatomic, readonly, copy) NSString *selectedPage;
 @property(nonatomic, readonly) NSInteger maxCaptureTitleLength;
 @end
@@ -49,6 +53,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (PTShellSnapshot *)readSnapshot NS_SWIFT_NAME(read());
 - (PTShellTimerSnapshot *)readTimerSnapshot NS_SWIFT_NAME(readTimer());
 - (BOOL)setUseWallpaper:(BOOL)value error:(NSError **)error
+    __attribute__((swift_error(nonnull_error)));
+- (BOOL)selectTheme:(NSString *)value error:(NSError **)error
+    __attribute__((swift_error(nonnull_error)));
+- (BOOL)setAppearance:(NSString *)value error:(NSError **)error
     __attribute__((swift_error(nonnull_error)));
 - (BOOL)setNativeUI:(BOOL)value error:(NSError **)error
     __attribute__((swift_error(nonnull_error)));
