@@ -2,6 +2,8 @@ import IPadCore
 import SwiftUI
 
 private enum ShellTab: Hashable { case page(PageID), more }
+// 宽窗标签值：页面之外还有一个原生搜索标签（定稿侧栏顶部的搜索框）。
+private enum RegularTab: Hashable { case page(PageID), search }
 
 struct ShellRootView: View {
     @Bindable var store: ShellStore
@@ -11,9 +13,10 @@ struct ShellRootView: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.previewThemeID) private var previewThemeID
     // 宽窄各用一份选中状态：两个分支的标签集合不同，共用一份会把窄窗不存在的页面值交给窄窗标签栏。
-    @State private var regularTab: PageID = .dashboard
+    @State private var regularTab: RegularTab = .page(.dashboard)
     @State private var compactTab: ShellTab = .page(.dashboard)
     @State private var morePath: [PageID] = []
+    @State private var searchPushed = false
 
     var body: some View {
         tabs
@@ -45,7 +48,12 @@ struct ShellRootView: View {
             .onAppear { syncSelection() }
             .onChange(of: store.selection) { _, _ in scheduleSelectionSync() }
             .onChange(of: sizeClass) { _, _ in syncSelection() }
-            .onChange(of: regularTab) { _, page in store.select(page) }
+            .onChange(of: regularTab) { _, selected in
+                if case let .page(page) = selected { store.select(page) }
+            }
+            .onChange(of: store.searchRequest) { _, _ in
+                if sizeClass == .compact { compactTab = .more; morePath = []; searchPushed = true } else { regularTab = .search }
+            }
             .onChange(of: compactTab) { _, selected in
                 if case let .page(page) = selected { store.select(page) }
             }
@@ -72,17 +80,21 @@ struct ShellRootView: View {
     // 废纸篓、设置的入口在侧栏底栏，标签只为承载页面，侧栏与标签栏都不显示。
     private var regularTabs: some View {
         TabView(selection: $regularTab) {
+            // iPadOS 的搜索标签放在侧栏最上方，就是定稿侧栏顶部的搜索框；侧栏收起时在顶部标签栏末尾。
+            Tab(value: RegularTab.search, role: .search) {
+                NavigationStack { SearchPage().shellChrome(store: store) }
+            }
             ForEach(PageID.regularTabs, id: \.self) { page in
-                Tab(page.tabTitle(size: .regular), systemImage: page.symbol, value: page) { pageView(page) }
+                Tab(page.tabTitle(size: .regular), systemImage: page.symbol, value: RegularTab.page(page)) { pageView(page) }
                     .defaultVisibility(PageID.summary.prefix(3).contains(page) ? .hidden : .visible, for: .sidebar)
             }
             ForEach(store.sidebarPages.filter { !PageID.regularTabs.contains($0) }, id: \.self) { page in
-                Tab(page.title, systemImage: page.symbol, value: page) { pageView(page) }
+                Tab(page.title, systemImage: page.symbol, value: RegularTab.page(page)) { pageView(page) }
                     .badge(store.sidebarBadge(for: page).map { Text(String($0)) })
                     .tabPlacement(.sidebarOnly)
             }
             ForEach(PageID.fixed, id: \.self) { page in
-                Tab(page.title, systemImage: page.symbol, value: page) { pageView(page) }
+                Tab(page.title, systemImage: page.symbol, value: RegularTab.page(page)) { pageView(page) }
                     .tabPlacement(.sidebarOnly)
                     .defaultVisibility(.hidden, for: .sidebar)
             }
@@ -95,7 +107,7 @@ struct ShellRootView: View {
 
     // 窄窗口非主标签页由「更多」的 NavigationStack 承载；旋转回宽窗口时恢复同一页面。
     private func syncSelection() {
-        if regularTab != store.selection { regularTab = store.selection }
+        if regularTab != .page(store.selection) { regularTab = .page(store.selection) }
         switch ShellStore.navigationTarget(for: store.selection, size: .compact) {
         case .page(let page):
             if compactTab != .page(page) { compactTab = .page(page) }
@@ -121,13 +133,22 @@ struct ShellRootView: View {
     }
     private var moreView: some View {
         NavigationStack(path: $morePath) {
-            List(store.morePages, id: \.self) { page in
+            List {
+                // 窄窗没有侧栏，搜索放在「更多」第一行。
+                Button { searchPushed = true } label: {
+                    Label { Text("搜索").foregroundStyle(ThemeColors.inkStrong) }
+                    icon: { Image(systemName: "magnifyingglass").foregroundStyle(ThemeColors.accentInk) }
+                }
+                .listRowBackground(store.selectedTheme != nil ? ThemeColors.surface : nil)
+                ForEach(store.morePages, id: \.self) { page in
                 NavigationLink(value: page) {
                     Label { Text(page.title).foregroundStyle(ThemeColors.inkStrong) }
                     icon: { Image(systemName: page.symbol).foregroundStyle(ThemeColors.accentInk) }
                 }
                     .listRowBackground(store.selectedTheme != nil ? ThemeColors.surface : nil)
+                }
             }
+            .navigationDestination(isPresented: $searchPushed) { SearchPage().shellChrome(store: store) }
             .scrollContentBackground(store.selectedTheme != nil ? .hidden : .visible)
             .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
             .navigationTitle("更多")

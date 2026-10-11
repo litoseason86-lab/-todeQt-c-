@@ -226,6 +226,15 @@ import XCTest
         XCTAssertEqual(bridge.calls, ["select:focus"])
     }
 
+    // 产品保证：打开搜索不改当前页面，只发一次切到搜索的请求；连续打开每次都发。
+    func testOpenSearchRequestsWithoutChangingSelection() {
+        let store = ShellStore(bridge: FakeShellBridge())
+        store.select(.memo)
+        store.openSearch(); store.openSearch()
+        XCTAssertEqual(store.searchRequest, 2)
+        XCTAssertEqual(store.selection, .memo)
+    }
+
     // 产品保证：底部迷你计时条只在计时快照存在时显示，计时结束后的 tick 会隐藏它。
     func testMiniTimerVisibilityFollowsTimerSnapshot() {
         let bridge = FakeShellBridge()

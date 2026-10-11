@@ -695,6 +695,9 @@ if(IOS)
     target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Shell/UITour.swift)
     # 055-R4：按定稿 CSS 的公共样式（卡片、胶囊、页头、数字混排）。
     target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Components/DesignKit.swift)
+    # 055-R4：定稿侧栏顶部的搜索（任务与知识缺口都走服务现成搜索）。
+    target_sources(IPadCore PRIVATE src/ui/ipad/Sources/IPadCore/Stores/SearchStore.swift)
+    target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Pages/Search/SearchPage.swift)
     target_link_libraries(IPadUI PRIVATE IPadCore)
     # 055-P3A：颜色资源属于应用包，Swift 按 Bundle.main 获取；壁纸继续只用 Qt 已打包的资源。
     target_sources(PomodoroTodo PRIVATE src/ui/ipad/Sources/IPadUI/Resources/Colors.xcassets)

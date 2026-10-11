@@ -221,6 +221,9 @@ public final class ShellStore {
             showToast("下次启动将使用旧版界面")
         } catch { errorMessage = error.localizedDescription }
     }
+    // 055-R4：打开搜索。搜索不是侧栏页面，没有 PageID；外壳看到计数变化就切到搜索标签。
+    public private(set) var searchRequest = 0
+    public func openSearch() { searchRequest += 1 }
     public func select(_ page: PageID) {
         guard !snapshot.operationBlocksUI else { return }
         selection = page

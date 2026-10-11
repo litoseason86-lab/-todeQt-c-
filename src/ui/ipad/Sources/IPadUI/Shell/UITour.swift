@@ -14,6 +14,11 @@ import UIKit
     static var selectSettingsSection: ((SettingsSection) -> Void)?
     // 某页截完后追加的状态：有后缀的截一张，后缀为空的只执行（用于还原）。
     static var extras: [PageID: [(suffix: String?, action: () -> Void)]] = [:]
+    // 打开搜索并填入查询词，截搜索结果页。
+    static var openSearch: ((String) -> Void)?
+    // 表单截图：打开、关闭各一个闭包；补录表单是页面自己的状态，单独放进一个表单大小的窗口里画。
+    static var sheets: [(name: String, open: () -> Void, close: () -> Void)] = []
+    static var sessionSheet: (() -> AnyView)?
     private static var windows: [UIWindow] = []
 
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour") }
@@ -71,6 +76,29 @@ import UIKit
                     if let suffix = extra.suffix { save(window, name: "\(page.rawValue)-\(suffix)-\(item.name)") }
                 }
             }
+            if let openSearch {
+                openSearch("线")
+                try? await Task.sleep(for: .milliseconds(1500))
+                save(window, name: "search-\(item.name)")
+                openSearch("")
+            }
+            if !item.compact && item.theme == nil {
+                await captureCollapsedSidebar(in: window, shell: shell, name: item.name)
+                for sheet in sheets {
+                    sheet.open()
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    save(window, name: "sheet-\(sheet.name)-\(item.name)")
+                    sheet.close()
+                    try? await Task.sleep(for: .milliseconds(800))
+                }
+                if let sessionSheet {
+                    let sheetWindow = makeWindow(scene: scene, size: CGSize(width: 560, height: 620), compact: false, root: sessionSheet())
+                    try? await Task.sleep(for: .milliseconds(1500))
+                    save(sheetWindow, name: "sheet-session-\(item.name)")
+                    sheetWindow.isHidden = true
+                    windows.removeAll { $0 === sheetWindow }
+                }
+            }
             if !item.compact, item.theme == nil, let selectSettingsSection {
                 shell.select(.settings)
                 for (index, section) in SettingsAvailability.sections.enumerated() {
@@ -89,6 +117,22 @@ import UIKit
         }
         shell.select(original)
         log("完成")
+    }
+
+    // 侧栏收起后顶部是五个常用页的浮动标签栏；巡检时临时收起，截完恢复。
+    private static func captureCollapsedSidebar(in window: UIWindow, shell: ShellStore, name: String) async {
+        func tabControllers(_ controller: UIViewController) -> [UITabBarController] {
+            ((controller as? UITabBarController).map { [$0] } ?? []) + controller.children.flatMap(tabControllers)
+        }
+        guard let root = window.rootViewController, let tabs = tabControllers(root).first else {
+            log("没找到标签控制器，跳过收起侧栏截图"); return
+        }
+        shell.select(.today)
+        tabs.sidebar.isHidden = true
+        try? await Task.sleep(for: .milliseconds(1500))
+        save(window, name: "collapsed-\(name)")
+        tabs.sidebar.isHidden = false
+        try? await Task.sleep(for: .milliseconds(800))
     }
 
     private static func makeWindow(scene: UIWindowScene, size: CGSize, compact: Bool, root: AnyView) -> UIWindow {
