@@ -139,4 +139,3 @@ function weekRangeLabel(weekStart, weekEnd, parity, semesterWeeks) {
     }
     return parityText.length > 0 ? (rangeText + " · " + parityText) : rangeText
 }
-
