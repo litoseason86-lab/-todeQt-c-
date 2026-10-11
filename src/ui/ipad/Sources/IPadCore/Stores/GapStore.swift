@@ -1,7 +1,36 @@
 import Foundation
 import Observation
 
+public enum GapFormIntent: Identifiable, Equatable {
+    case add, edit(GapValue), schedule(GapValue), resolve(GapValue)
+    public var id: String {
+        switch self { case .add: "add"; case .edit(let g): "edit\(g.id)"; case .schedule(let g): "date\(g.id)"; case .resolve(let g): "resolve\(g.id)" }
+    }
+    public var gap: GapValue? {
+        switch self { case .add: nil; case .edit(let g), .schedule(let g), .resolve(let g): g }
+    }
+}
+
 @MainActor @Observable public final class GapStore {
+    public private(set) var detailPresented = false
+    public private(set) var form: GapFormIntent?
+    public func select(_ id: Int) {
+        guard items.contains(where: { $0.id == id }) else { return }
+        selectedID = id; detailPresented = true
+    }
+    public func closeDetail() { detailPresented = false }
+    public func requestForm(_ intent: GapFormIntent) {
+        if case .add = intent { form = .add; return }
+        guard let id = intent.gap?.id, let current = items.first(where: { $0.id == id }) else { return }
+        // 显式表单保留打开时的值；换选择或远端刷新都不能改写正在编辑的记录身份。
+        switch intent {
+        case .add: form = .add
+        case .edit: form = .edit(current)
+        case .schedule: form = .schedule(current)
+        case .resolve: form = .resolve(current)
+        }
+    }
+    public func dismissForm() { form = nil }
     public private(set) var items: [GapValue] = []
     public var selectedID: Int?
     public private(set) var categories: [CategoryValue] = []
@@ -40,6 +69,9 @@ import Observation
             let rows = try bridge.gaps(status: statusFilter, categoryID: 0, search: search)
             let subjects = try categoryBridge?.allCategories() ?? []
             items = rows; categories = subjects; errorMessage = ""
+            if let selectedID, !rows.contains(where: { $0.id == selectedID }) {
+                self.selectedID = nil; detailPresented = false
+            }
         }
         catch { errorMessage = error.localizedDescription }
     }

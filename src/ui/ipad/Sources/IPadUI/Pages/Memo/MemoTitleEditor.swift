@@ -10,7 +10,7 @@ import UIKit
     var onComposition: (Bool) -> Void
     var onText: (String) -> Void
     func makeUIView(context: Context) -> UITextField {
-        let field = UITextField(); field.placeholder = "标题"; field.accessibilityLabel = "标题"
+        let field = UITextField(); field.accessibilityLabel = "标题"
         field.textColor = UIColor(ThemeColors.inputInk)
         field.font = .preferredFont(forTextStyle: .title3); field.adjustsFontForContentSizeCategory = true
         field.delegate = context.coordinator; field.text = text; field.returnKeyType = .next

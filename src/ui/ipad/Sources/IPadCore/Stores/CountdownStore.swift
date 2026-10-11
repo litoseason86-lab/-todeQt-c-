@@ -1,7 +1,21 @@
 import Foundation
 import Observation
 
+public enum CountdownForm: Equatable, Identifiable {
+    case add, edit(CountdownValue)
+    public var id: String { switch self { case .add: "add"; case .edit(let goal): "edit\(goal.id)" } }
+    public var opened: CountdownValue? { switch self { case .add: nil; case .edit(let goal): goal } }
+}
+
 @MainActor @Observable public final class CountdownStore {
+    public private(set) var form: CountdownForm?
+    public func requestAdd() { form = .add }
+    public func requestEdit(_ goal: CountdownValue) {
+        guard let current = items.first(where: { $0.id == goal.id }) else { return }
+        // 表单基线固定在打开时；同步更新只刷新列表，不替换用户正在编辑的身份和值。
+        form = .edit(current)
+    }
+    public func dismissForm() { form = nil }
     public private(set) var items: [CountdownValue] = []
     public private(set) var primary: CountdownValue?
     public private(set) var errorMessage = ""

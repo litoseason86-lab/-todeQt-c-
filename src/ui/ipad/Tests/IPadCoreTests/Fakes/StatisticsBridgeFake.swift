@@ -13,6 +13,8 @@ import IPadCore
     var monthWeeks: [MonthWeekStatistics] = []
     var review: WeeklyReview = WeeklyReview()
     var summary: FocusSummary = FocusSummary()
+    var effectiveDayCount: Int?
+    var sessionCount: Int?
     var count: Int = 0
     private func record(_ name: String, dates: [String] = [], numbers: [Int] = []) throws { calls.append((name, dates, numbers)); if let error { throw error } }
     func dayStats(date: String) throws -> DayStatistics { try record("dayStats", dates: [date], numbers: []); return self.day }
@@ -28,8 +30,8 @@ import IPadCore
     func currentMonthStats() throws -> MonthStatistics { try record("currentMonthStats", dates: [], numbers: []); return self.month }
     func monthComparison(year: Int, month: Int) throws -> StatisticsComparison { try record("monthComparison", dates: [], numbers: [year, month]); return self.comparison }
     func monthComparison(year: Int, month: Int, current: MonthStatistics) throws -> StatisticsComparison { suppliedMonths.append(current); try record("monthComparison", dates: [], numbers: [year, month]); return self.comparison }
-    func effectiveDays(from: String, to: String) throws -> Int { try record("effectiveDays", dates: [from, to], numbers: []); return self.count }
-    func focusSessionCount(from: String, to: String) throws -> Int { try record("focusSessionCount", dates: [from, to], numbers: []); return self.count }
+    func effectiveDays(from: String, to: String) throws -> Int { try record("effectiveDays", dates: [from, to], numbers: []); return effectiveDayCount ?? count }
+    func focusSessionCount(from: String, to: String) throws -> Int { try record("focusSessionCount", dates: [from, to], numbers: []); return sessionCount ?? count }
     func validPomodoroCount(from: String, to: String) throws -> Int { try record("validPomodoroCount", dates: [from, to], numbers: []); return self.count }
     func streakDays() throws -> Int { try record("streakDays", dates: [], numbers: []); return self.count }
     func totalFocusDuration() throws -> Int { try record("totalFocusDuration", dates: [], numbers: []); return self.count }

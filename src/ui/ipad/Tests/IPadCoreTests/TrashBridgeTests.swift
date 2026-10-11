@@ -78,6 +78,32 @@ import XCTest
                        "没能恢复「复习」：10月10日 14:05–14:50 与已有专注记录冲突")
     }
 
+    // 产品保证：切换废纸篓操作时只保留最后一次确认意图，取消不会恢复旧意图。
+    func testSwitchingConfirmationKeepsOnlyLatestIntent() {
+        let bridge = TrashBridgeFake(); bridge.result.items = [item(4), item(9)]
+        let store = TrashStore(bridge: bridge); store.activate()
+        store.requestEmpty(); XCTAssertEqual(store.pendingEmptyIDs, [4, 9])
+        store.requestRestore(item(4))
+        XCTAssertNil(store.pendingEmptyIDs); XCTAssertEqual(store.pendingRestore?.id, 4)
+        store.requestDelete(item(9))
+        XCTAssertNil(store.pendingRestore); XCTAssertEqual(store.pendingDelete?.id, 9)
+        store.cancelDelete(); store.confirmRestore(); store.confirmEmpty(); store.confirmDelete()
+        XCTAssertFalse(bridge.calls.contains { ["restore", "delete", "empty"].contains($0.0) })
+    }
+
+    // 产品保证：不可恢复条目不产生恢复确认，仍可经独立确认彻底删除。
+    func testBlockedItemDoesNotOpenRestoreConfirmation() {
+        let bridge = TrashBridgeFake()
+        let blocked = TrashItem(id: 8, kind: "memo", title: "损坏条目", deletedAt: "", deletedDate: "2026-10-10",
+            remainingDays: 3, originSyncID: "", categoryName: "", categoryColor: "", restorable: false,
+            blockedReason: "corrupted", details: TrashDetails())
+        XCTAssertFalse(blocked.restorable)
+        let store = TrashStore(bridge: bridge)
+        store.requestRestore(blocked); XCTAssertNil(store.pendingRestore)
+        store.confirmRestore(); XCTAssertTrue(bridge.calls.isEmpty)
+        store.requestDelete(blocked); XCTAssertEqual(store.pendingDelete?.id, 8)
+    }
+
     private func item(_ id: Int) -> TrashItem {
         TrashItem(id: id, kind: "memo", title: "条目", deletedAt: "", deletedDate: "2026-10-10", remainingDays: 3,
                   originSyncID: "", categoryName: "", categoryColor: "", restorable: true, blockedReason: "", details: TrashDetails())

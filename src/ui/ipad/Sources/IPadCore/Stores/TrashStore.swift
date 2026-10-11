@@ -9,6 +9,13 @@ public struct TrashGroup: Equatable, Identifiable {
     public var id: String { key }
 }
 
+public enum TrashConfirmation: Equatable {
+    case restore, delete, empty
+    public var title: String {
+        switch self { case .restore: "恢复项目？"; case .delete: "彻底删除？"; case .empty: "清空废纸篓？" }
+    }
+}
+
 @MainActor @Observable public final class TrashStore {
     public private(set) var items: [TrashItem] = []
     public private(set) var today = ""
@@ -30,7 +37,17 @@ public struct TrashGroup: Equatable, Identifiable {
     }
 
     public var groups: [TrashGroup] { TrashFormat.groupItems(items, today: today) }
-    public func requestRestore(_ item: TrashItem) { pendingRestore = item }
+    public var confirmation: TrashConfirmation? {
+        if pendingRestore != nil { return .restore }
+        if pendingDelete != nil { return .delete }
+        if pendingEmptyIDs != nil { return .empty }
+        return nil
+    }
+    public func cancelConfirmation() { pendingRestore = nil; pendingDelete = nil; pendingEmptyIDs = nil }
+    public func requestRestore(_ item: TrashItem) {
+        guard item.restorable else { return }
+        cancelConfirmation(); pendingRestore = item
+    }
     public func cancelRestore() { pendingRestore = nil }
     public func confirmRestore() {
         guard let item = pendingRestore else { return }
@@ -54,7 +71,7 @@ public struct TrashGroup: Equatable, Identifiable {
             else { actionError = Self.restoreFailure(item: item, result: result, today: today); if result.code == "gone" { reload() } }
         } catch { actionError = error.localizedDescription }
     }
-    public func requestDelete(_ item: TrashItem) { pendingDelete = item }
+    public func requestDelete(_ item: TrashItem) { cancelConfirmation(); pendingDelete = item }
     public func cancelDelete() { pendingDelete = nil }
     public func confirmDelete() {
         guard let item = pendingDelete else { return }
@@ -62,7 +79,7 @@ public struct TrashGroup: Equatable, Identifiable {
         do { let result = try bridge.delete(id: item.id); finish(result) }
         catch { actionError = error.localizedDescription }
     }
-    public func requestEmpty() { guard !items.isEmpty else { return }; pendingEmptyIDs = items.map(\.id) }
+    public func requestEmpty() { guard !items.isEmpty else { return }; cancelConfirmation(); pendingEmptyIDs = items.map(\.id) }
     public func cancelEmpty() { pendingEmptyIDs = nil }
     public func confirmEmpty() {
         guard let ids = pendingEmptyIDs else { return }

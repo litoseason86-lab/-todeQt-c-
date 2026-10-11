@@ -166,4 +166,40 @@ import XCTest
         XCTAssertEqual(s.errorMessage, "正文超出 37 字，没有保存。")
     }
 
+    // 产品保证：分类胶囊条数来自完整列表，切到某分类不会把其他分类条数清零。
+    func testCapsuleCountsKeepFullListWhenFiltering() {
+        let (store, bridge, _) = setup(); bridge.rows.append(memo(9, body: "未分类")); store.refresh()
+        XCTAssertEqual(store.categoryCount(-1), 4); XCTAssertEqual(store.categoryCount(1), 2)
+        XCTAssertEqual(store.categoryCount(2), 1); XCTAssertEqual(store.categoryCount(0), 1)
+        XCTAssertTrue(store.selectFilter(1)); XCTAssertEqual(store.visibleItems.map(\.id), [2, 5])
+        XCTAssertEqual(store.categoryCount(-1), 4); XCTAssertEqual(store.categoryCount(2), 1)
+        XCTAssertEqual(store.categoryCount(0), 1)
+    }
+
+    // 产品保证：窄窗返回列表先保存，失败留在纸面并保留输入，成功才允许返回。
+    func testCompactReturnKeepsPaperWhenSaveFails() {
+        let (store, bridge, _) = setup()
+        XCTAssertTrue(store.presentMemo(5)); XCTAssertTrue(store.detailPresented); XCTAssertEqual(store.selectedID, 5)
+        store.editBody("保留草稿"); bridge.writeError = failure
+        XCTAssertFalse(store.dismissMemo()); XCTAssertTrue(store.detailPresented)
+        XCTAssertEqual(store.editorBody, "保留草稿"); XCTAssertEqual(store.selectedID, 5)
+        bridge.writeError = nil; XCTAssertTrue(store.dismissMemo()); XCTAssertFalse(store.detailPresented)
+        XCTAssertEqual(bridge.updates.last?.1.body, "保留草稿")
+        XCTAssertFalse(store.presentMemo(999)); XCTAssertFalse(store.detailPresented)
+    }
+
+    // 产品保证：新建分类前保存失败不打开表单；创建失败保留分类名称，成功才收表单并进入新纸面。
+    func testCategorySheetPreservesDraftUntilCreationSucceeds() {
+        let (store, bridge, categories) = setup(); store.editBody("正文草稿"); bridge.writeError = failure
+        XCTAssertFalse(store.requestCategorySheet()); XCTAssertFalse(store.categorySheetPresented)
+        bridge.writeError = nil; XCTAssertTrue(store.requestCategorySheet()); XCTAssertTrue(store.categorySheetPresented)
+        store.newCategoryName = "新科目"; categories.error = failure
+        XCTAssertFalse(store.createAndPresentCategory()); XCTAssertTrue(store.categorySheetPresented)
+        XCTAssertEqual(store.newCategoryName, "新科目")
+        categories.error = nil; categories.createdID = 7
+        XCTAssertTrue(store.createAndPresentCategory()); XCTAssertFalse(store.categorySheetPresented)
+        XCTAssertEqual(store.newCategoryName, ""); XCTAssertTrue(store.detailPresented)
+        XCTAssertEqual(bridge.creates.last?.2, 7)
+    }
+
 }
