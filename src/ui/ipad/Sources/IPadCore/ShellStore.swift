@@ -137,7 +137,7 @@ public final class ShellStore {
     public func summaryTiles(focusTimeText: String) -> [ShellSummaryTile] {
         let focusValue = snapshot.hasTimer ? focusTimeText : DurationFormat.seconds(Double(snapshot.todayFocusedSeconds))
         let goalTitle = snapshot.hasPrimaryGoal ? snapshot.primaryGoalName : "目标倒计时"
-        let goalValue = snapshot.hasPrimaryGoal ? "\(snapshot.primaryGoalDaysRemaining) 天" : "—"
+        let goalValue = snapshot.hasPrimaryGoal ? CountdownFormat.days(snapshot.primaryGoalDaysRemaining) : "—"
         return [
             ShellSummaryTile(page: .today, title: PageID.today.title, value: "\(snapshot.todayPendingCount)"),
             ShellSummaryTile(page: .focus, title: PageID.focus.title, value: focusValue),

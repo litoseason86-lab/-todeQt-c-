@@ -210,9 +210,7 @@
 {
     NSAssert(NSThread.isMainThread, @"主题设置必须在主线程");
     const QString theme = QString::fromNSString(value);
-    const QStringList themes = {QStringLiteral("warm"), QStringLiteral("pink"), QStringLiteral("jiangnan"),
-        QStringLiteral("sword"), QStringLiteral("starry"), QStringLiteral("rainy"), QStringLiteral("moon")};
-    if (!themes.contains(theme)) {
+    if (theme.isEmpty()) {
         if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"无效的主题选项"}];
         return NO;
     }
@@ -220,21 +218,28 @@
     const QString appearanceKey = QStringLiteral("ipad/appearance");
     const QVariant oldAppearance = settings.value(appearanceKey);
     const bool hadAppearance = settings.contains(appearanceKey);
-    // 两个键在同一 QSettings 缓存中一起刷盘；只在成功后转发原主题信号，避免半选择被页面读到。
-    const QString themeKey = QStringLiteral("appearance/backgroundTheme");
-    const QVariant oldTheme = settings.value(themeKey);
-    const bool hadTheme = settings.contains(themeKey);
+    const auto restoreAppearance = [&] {
+        if (hadAppearance) settings.setValue(appearanceKey, oldAppearance); else settings.remove(appearanceKey);
+        settings.sync();
+    };
     settings.setValue(appearanceKey, QStringLiteral("theme"));
-    settings.setValue(themeKey, theme);
     settings.sync();
     if (settings.status() != QSettings::NoError) {
-        if (hadAppearance) settings.setValue(appearanceKey, oldAppearance); else settings.remove(appearanceKey);
-        if (hadTheme) settings.setValue(themeKey, oldTheme); else settings.remove(themeKey);
-        settings.sync();
+        restoreAppearance();
         if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"主题设置保存失败"}];
         return NO;
     }
-    emit AppSettings::instance()->backgroundThemeChanged();
+    // 主题写入由服务处理刷盘、失败信号和后端重建；读回确认后才能保留本机主题模式。
+    auto *appSettings = AppSettings::instance();
+    const QString oldTheme = appSettings->backgroundTheme();
+    appSettings->setBackgroundTheme(theme);
+    if (appSettings->backgroundTheme() != theme) {
+        restoreAppearance();
+        if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"主题设置保存失败"}];
+        return NO;
+    }
+    // 主题未变时服务不会发变化信号，但外观模式可能刚从系统切到主题，外壳仍需刷新。
+    if (oldTheme == theme && self.onChanged) self.onChanged();
     return YES;
 }
 - (BOOL)setAppearance:(NSString *)value error:(NSError **)error

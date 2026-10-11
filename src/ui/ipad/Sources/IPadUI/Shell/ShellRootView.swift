@@ -100,7 +100,6 @@ struct ShellRootView: View {
     private func pageView(_ page: PageID) -> some View {
         NavigationStack {
             PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store)
-                .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
         }
     }
     private var moreView: some View {

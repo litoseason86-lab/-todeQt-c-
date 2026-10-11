@@ -41,7 +41,7 @@ import XCTest
         XCTAssertTrue(store.sidebarPages.contains(.knowledgeGap))
         XCTAssertTrue(store.sidebarPages.contains(.countdown))
     }
-    // 产品保证：四块摘要用服务读数，第四块是主目标；无主目标显示破折号并仍能进入倒计时。
+    // 产品保证：四块摘要用服务读数，第四块是主目标且过期文案与倒计时页一致；无主目标显示破折号并仍能进入倒计时。
     func testR1SummaryTilesProjectGoalAndServiceCounts() {
         let bridge = FakeShellBridge()
         bridge.snapshot.todayPendingCount = 5; bridge.snapshot.weekPendingCount = 12
@@ -58,6 +58,9 @@ import XCTest
         tiles = store.summaryTiles(focusTimeText: "18:42")
         XCTAssertEqual(tiles[1].value, "18:42")
         XCTAssertEqual(tiles[3].title, "考研初试"); XCTAssertEqual(tiles[3].value, "72 天")
+        bridge.snapshot.primaryGoalDaysRemaining = -3
+        bridge.onChanged?()
+        XCTAssertEqual(store.summaryTiles(focusTimeText: "18:42")[3].value, "已过期 3 天")
         XCTAssertEqual(store.sidebarBadge(for: .knowledgeGap), 2)
         XCTAssertNil(store.sidebarBadge(for: .countdown))
     }

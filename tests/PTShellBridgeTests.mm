@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include "../src/platform/ios/native/IPadUiPreferences.h"
 #include <QSettings>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QSqlQuery>
@@ -19,7 +20,7 @@
 class PTShellBridgeTests : public QObject {
     Q_OBJECT
 private slots:
-    void themeChoicePersistsTogetherAndRejectsUnknown();
+    void themeChoicePersistsTogetherAndAcceptsNonempty();
     void themeChoiceFailureRestoresBothKeys();
     void primaryGoalProjectsServiceAndRefreshes();
     void appearanceMigrationAndPersistence();
@@ -285,8 +286,8 @@ void PTShellBridgeTests::bothUIEntrancesWriteTheSameLocalKey()
         QVERIFY(QSettings().value(QStringLiteral("ipad/nativeUI")).toBool());
     }
 }
-// 产品保证：主题选择同时保存本机外观模式和已有主题键，未知主题整次拒绝。
-void PTShellBridgeTests::themeChoicePersistsTogetherAndRejectsUnknown()
+// 产品保证：主题选择经设置服务保存并发成功信号，非空新主题不被桥接的过期名单拒绝。
+void PTShellBridgeTests::themeChoicePersistsTogetherAndAcceptsNonempty()
 {
     @autoreleasepool {
         PTShellBridge *bridge = [PTShellBridge new];
@@ -294,42 +295,56 @@ void PTShellBridgeTests::themeChoicePersistsTogetherAndRejectsUnknown()
         QVERIFY([bridge setAppearance:@"light" error:&error]);
         __block int changes = 0;
         bridge.onChanged = ^{ ++changes; };
+        QSignalSpy writes(AppSettings::instance(), &AppSettings::settingsWriteSucceeded);
         QVERIFY([bridge selectTheme:@"moon" error:&error]);
         PTShellSnapshot *value = [bridge readSnapshot];
         QVERIFY([value.appearance isEqualToString:@"theme"]);
         QVERIFY([value.backgroundTheme isEqualToString:@"moon"]);
         QCOMPARE(AppSettings::instance()->backgroundTheme(), QStringLiteral("moon"));
         QVERIFY(changes > 0);
+        QVERIFY([bridge selectTheme:@"future-theme" error:&error]);
+        QCOMPARE(AppSettings::instance()->backgroundTheme(), QStringLiteral("future-theme"));
+        QCOMPARE(writes.count(), 2);
+        QCOMPARE(writes.at(0).at(0).toString(), QStringLiteral("appearance/backgroundTheme"));
         changes = 0;
-        QVERIFY(![bridge selectTheme:@"invalid" error:&error]);
+        QVERIFY(![bridge selectTheme:@"" error:&error]);
         QVERIFY(error != nil);
-        QVERIFY([[bridge readSnapshot].backgroundTheme isEqualToString:@"moon"]);
+        QVERIFY([[bridge readSnapshot].backgroundTheme isEqualToString:@"future-theme"]);
         QCOMPARE(changes, 0);
     }
 }
-// 产品保证：主题偏好写失败还原模式与主题两个键，不发成功信号，不留下半个选择。
+// 产品保证：主题服务写失败时返回错误，还原外观模式并保持旧主题，不发成功刷新。
 void PTShellBridgeTests::themeChoiceFailureRestoresBothKeys()
 {
     @autoreleasepool {
+        auto *appSettings = AppSettings::instance();
+        appSettings->setBackgroundTheme(QStringLiteral("warm"));
+        QCOMPARE(appSettings->backgroundTheme(), QStringLiteral("warm"));
         QTemporaryDir blocked;
         QVERIFY(blocked.isValid());
         QFile file(blocked.filePath(QStringLiteral("PomodoroTodoTests")));
         QVERIFY(file.open(QIODevice::WriteOnly)); file.close();
+        // 只阻断服务当前后端，本机外观键仍可写；裸 QSettings 绕过服务会伪报成功。
+        const auto restore = qScopeGuard([this, appSettings] {
+            QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+            appSettings->reload();
+        });
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, blocked.path());
-        // 先放入内存旧值；阻断目录保证无论权限等级都无法刷盘。
-        QSettings settings;
-        settings.setValue(QStringLiteral("ipad/appearance"), QStringLiteral("light"));
-        settings.setValue(QStringLiteral("appearance/backgroundTheme"), QStringLiteral("pink"));
+        appSettings->reload();
+        QCOMPARE(appSettings->backgroundTheme(), QStringLiteral("warm"));
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
         PTShellBridge *bridge = [PTShellBridge new];
+        NSError *error = nil;
+        QVERIFY([bridge setAppearance:@"light" error:&error]);
         __block int changes = 0;
         bridge.onChanged = ^{ ++changes; };
-        NSError *error = nil;
+        QSignalSpy failures(appSettings, &AppSettings::settingsWriteFailed);
         const BOOL ok = [bridge selectTheme:@"starry" error:&error];
-        const QString appearance = settings.value(QStringLiteral("ipad/appearance")).toString();
-        const QString theme = settings.value(QStringLiteral("appearance/backgroundTheme")).toString();
-        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
         QVERIFY(!ok); QVERIFY(error.localizedDescription.length > 0);
-        QCOMPARE(appearance, QStringLiteral("light")); QCOMPARE(theme, QStringLiteral("pink"));
+        QCOMPARE(QSettings().value(QStringLiteral("ipad/appearance")).toString(), QStringLiteral("light"));
+        QCOMPARE(appSettings->backgroundTheme(), QStringLiteral("warm"));
+        QCOMPARE(failures.count(), 1);
+        QCOMPARE(failures.at(0).at(0).toString(), QStringLiteral("appearance/backgroundTheme"));
         QCOMPARE(changes, 0);
     }
 }
