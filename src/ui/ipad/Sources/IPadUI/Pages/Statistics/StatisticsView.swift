@@ -4,6 +4,15 @@ import SwiftUI
 struct StatisticsView: View {
     @Environment(StatsStore.self) private var store
     @Environment(\.dynamicTypeSize) private var typeSize
+    // 副标题写「本周 · 10月6日 – 12日」（定稿）；周期起止与是否当前期都来自服务，这里只换成中文日期。
+    private var subtitle: String {
+        guard store.hasLoaded else { return "" }
+        let period = store.snapshot.period
+        guard !period.start.isEmpty else { return store.periodSubtitle }
+        let dates = period.start == period.end ? WeekView.monthDay(period.start)
+            : WeekView.monthDay(period.start) + " – " + (period.start.prefix(7) == period.end.prefix(7) ? WeekView.day(period.end) + "日" : WeekView.monthDay(period.end))
+        return period.current ? store.snapshot.range.title + " · " + dates : dates
+    }
     private var rangePicker: some View {
         Picker("时间范围", selection: Binding(get: { store.range }, set: { store.selectRange($0) })) {
             ForEach(StatisticsRange.allCases, id: \.self) { range in Text(range.segmentTitle).tag(range) }
@@ -17,7 +26,7 @@ struct StatisticsView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     // 定稿：标题在左，「日 | 周 | 月」胶囊分段在页面正中（沿用居中定案）。
                     ZStack(alignment: .top) {
-                        PageHeader(title: "数据统计", subtitle: store.periodSubtitle)
+                        PageHeader(title: "数据统计", subtitle: subtitle)
                         if wide { rangePicker.frame(width: 190).padding(.top, 8) }
                     }
                     if !wide { rangePicker.frame(maxWidth: .infinity) }

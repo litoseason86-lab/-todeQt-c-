@@ -18,6 +18,8 @@ import UIKit
 
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour") }
     private static var tapsRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-taps") }
+    // 另带 --ipad-ui-tour-warm 时再用暖色主题各拍一轮（只在巡检窗口里套用，不改设置），对照浅色定稿。
+    private static var warmRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-warm") }
 
     static func startIfRequested(shell: ShellStore) {
         guard isRequested else { return }
@@ -49,11 +51,16 @@ import UIKit
               let rootView else { log("没有可用场景或根视图"); return }
         let original = shell.selection
         log("开始，原选中页 \(original.rawValue)")
-        let sizes: [(name: String, size: CGSize, compact: Bool)] = [
-            ("wide", CGSize(width: 1210, height: 834), false),
-            ("compact", CGSize(width: 375, height: 834), true)]
+        var sizes: [(name: String, size: CGSize, compact: Bool, theme: String?)] = [
+            ("wide", CGSize(width: 1210, height: 834), false, nil),
+            ("compact", CGSize(width: 375, height: 834), true, nil)]
+        if warmRequested {
+            sizes += [("wide-warm", CGSize(width: 1210, height: 834), false, "warm"),
+                      ("compact-warm", CGSize(width: 375, height: 834), true, "warm")]
+        }
         for item in sizes {
-            let window = makeWindow(scene: scene, size: item.size, compact: item.compact, root: rootView())
+            let root = item.theme.map { AnyView(rootView().environment(\.previewThemeID, $0)) } ?? rootView()
+            let window = makeWindow(scene: scene, size: item.size, compact: item.compact, root: root)
             for page in PageID.allCases {
                 shell.select(page)
                 try? await Task.sleep(for: .milliseconds(1500))
@@ -64,7 +71,7 @@ import UIKit
                     if let suffix = extra.suffix { save(window, name: "\(page.rawValue)-\(suffix)-\(item.name)") }
                 }
             }
-            if !item.compact, let selectSettingsSection {
+            if !item.compact, item.theme == nil, let selectSettingsSection {
                 shell.select(.settings)
                 for (index, section) in SettingsAvailability.sections.enumerated() {
                     selectSettingsSection(section)
@@ -73,7 +80,7 @@ import UIKit
                 }
                 selectSettingsSection(.general)
             }
-            if item.compact && tapsRequested {
+            if item.compact && item.theme == nil && tapsRequested {
                 await tapTabBar(in: window)
                 await toggleSizes(in: window, shell: shell)
             }

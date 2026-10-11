@@ -9,6 +9,7 @@ struct ShellRootView: View {
     @Environment(FocusStore.self) private var focus
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.previewThemeID) private var previewThemeID
     // 宽窄各用一份选中状态：两个分支的标签集合不同，共用一份会把窄窗不存在的页面值交给窄窗标签栏。
     @State private var regularTab: PageID = .dashboard
     @State private var compactTab: ShellTab = .page(.dashboard)
@@ -19,7 +20,7 @@ struct ShellRootView: View {
             .modifier(TimerAccessoryModifier(store: store, accessory: miniTimer))
             .tint(ThemeColors.accentInk)
             .preferredColorScheme(preferredScheme)
-            .background { ThemeAppearance(themeID: store.selectedTheme ?? "").frame(width: 0, height: 0) }
+            .background { ThemeAppearance(themeID: previewThemeID ?? store.selectedTheme ?? "").frame(width: 0, height: 0) }
             .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
             .background { keyboardCommands }
             .disabled(store.snapshot.operationBlocksUI)
@@ -168,11 +169,12 @@ struct ShellRootView: View {
         .overlay(alignment: .top) { Rectangle().fill(ThemeColors.border).frame(height: 1) }
     }
     private var preferredScheme: ColorScheme? {
+        if let previewThemeID { return SettingsAvailability.theme(previewThemeID).mode == "dark" ? .dark : .light }
         switch store.snapshot.appearance {
-        case "light": .light
-        case "dark": .dark
-        case "theme": SettingsAvailability.theme(store.snapshot.backgroundTheme).mode == "dark" ? .dark : .light
-        default: nil
+        case "light": return .light
+        case "dark": return .dark
+        case "theme": return SettingsAvailability.theme(store.snapshot.backgroundTheme).mode == "dark" ? .dark : .light
+        default: return nil
         }
     }
     private var clock: String {
