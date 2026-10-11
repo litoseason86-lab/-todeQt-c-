@@ -90,6 +90,8 @@ struct MixedNumberText: View {
     let parts: [(text: String, isNumber: Bool)]
     var numberSize: CGFloat = 30
     var unitSize: CGFloat = 15
+    // 字色由调用方给：外层 foregroundStyle 盖不过这里，选中态要换色时必须传进来。
+    var color: Color = ThemeColors.inkStrong
     var body: some View {
         // iOS 26 已废弃 Text 的 + 拼接；用带字体属性的 AttributedString 拼成一个 Text。
         var string = AttributedString()
@@ -100,7 +102,7 @@ struct MixedNumberText: View {
         }
         return Text(string)
             .monospacedDigit()
-            .foregroundStyle(ThemeColors.inkStrong)
+            .foregroundStyle(color)
     }
 
     // 把「1 小时 05 分」这类已格式化的文字按数字与非数字切段。

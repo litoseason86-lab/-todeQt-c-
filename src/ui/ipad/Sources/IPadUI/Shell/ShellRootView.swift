@@ -187,8 +187,8 @@ struct ShellRootView: View {
                     Image(systemName: tile.page.symbol).font(.system(size: 17))
                         .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.accentInk)
                     Spacer(minLength: 4)
-                    MixedNumberText(parts: MixedNumberText.split(tile.value), numberSize: 22, unitSize: 13)
-                        .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.inkStrong)
+                    MixedNumberText(parts: MixedNumberText.split(tile.value), numberSize: 22, unitSize: 13,
+                                    color: selected ? ThemeColors.surface : ThemeColors.inkStrong)
                         .lineLimit(1).minimumScaleFactor(0.7)
                 }
                 Text(tile.title).font(.system(size: 13)).lineLimit(1)
