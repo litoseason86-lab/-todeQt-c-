@@ -235,13 +235,44 @@ import XCTest
         XCTAssertEqual(bridge.calls, ["select:focus"])
     }
 
-    // 产品保证：打开搜索不改当前页面，只发一次切到搜索的请求；连续打开每次都发。
-    func testOpenSearchRequestsWithoutChangingSelection() {
+    // 产品保证：打开搜索不改当前页面，每次打开都发切换请求；离开搜索时回到原页，
+    // 选的仍是同一页也要发请求（否则外壳停在搜索），窄窗返回列表只清标记不切页。
+    func testOpenSearchKeepsSelectionAndSamePageLeavesSearch() {
         let store = ShellStore(bridge: FakeShellBridge())
         store.select(.memo)
+        let before = store.navigationRequest
         store.openSearch(); store.openSearch()
-        XCTAssertEqual(store.searchRequest, 2)
+        XCTAssertEqual(store.navigationRequest, before + 2)
         XCTAssertEqual(store.selection, .memo)
+        XCTAssertTrue(store.searchShown)
+        store.select(.memo)
+        XCTAssertFalse(store.searchShown)
+        XCTAssertEqual(store.navigationRequest, before + 3)
+        store.openSearch(); store.closeSearch()
+        XCTAssertFalse(store.searchShown)
+        XCTAssertEqual(store.navigationRequest, before + 4)
+        XCTAssertEqual(store.selection, .memo)
+    }
+
+    // 产品保证：搜索页上的「记一笔」不带离开前专注页的任务来源，迷你计时条照常显示；回到专注页后恢复专注页的规则。
+    func testSearchShownOverFocusUsesSearchContext() {
+        let bridge = FakeShellBridge(); bridge.snapshot.hasTimer = true
+        let store = ShellStore(bridge: bridge)
+        store.captureSourceProvider = { ShellCaptureSource(taskID: 41, categoryID: 3) }
+        store.select(.dashboard)
+        XCTAssertTrue(store.miniTimerVisible)
+        store.select(.focus)
+        XCTAssertFalse(store.miniTimerVisible)
+        store.openSearch()
+        XCTAssertEqual(store.selection, .focus)
+        XCTAssertTrue(store.miniTimerVisible)
+        store.presentCapture(); store.captureTitle = "搜索页"
+        XCTAssertTrue(store.capture())
+        store.select(.focus)
+        XCTAssertFalse(store.miniTimerVisible)
+        store.presentCapture(); store.captureTitle = "专注页"
+        XCTAssertTrue(store.capture())
+        XCTAssertEqual(bridge.calls.filter { $0.hasPrefix("capture") }, ["capture:搜索页:-1:-1", "capture:专注页:3:41"])
     }
 
     // 产品保证：底部迷你计时条只在计时快照存在时显示，计时结束后的 tick 会隐藏它。

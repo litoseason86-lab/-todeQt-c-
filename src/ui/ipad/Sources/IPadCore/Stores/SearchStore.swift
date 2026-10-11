@@ -16,7 +16,13 @@ import Observation
 
     public init(tasks: any TaskBridgeProtocol, gaps: any KnowledgeGapBridging) {
         taskBridge = tasks; gapBridge = gaps
+        // 任务或缺口在别处改动（详情里改名、删除、同步进来）后按当前查询重读，结果不停在旧数据上。
+        // 两个适配器是本 Store 独占的实例，占用它们的变更回调不影响其它页面。
+        tasks.onChanged = { [weak self] in self?.dataChanged() }
+        gaps.onChanged = { [weak self] in self?.dataChanged() }
     }
+    // 还没搜过（或查询已清空）就不读。
+    private func dataChanged() { if searched { search() } }
 
     public func search() {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)

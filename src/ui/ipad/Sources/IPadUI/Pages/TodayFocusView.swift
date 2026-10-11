@@ -75,10 +75,11 @@ import SwiftUI
         .safeAreaPadding(.horizontal, margin)
     }
 
+    // 进行中色块从服务给的真实开始时刻画起，结束保存后的正式记录也是这个时刻，不会跳位。
+    // 不用「现在 − 有效计时」：有效计时不含暂停，暂停过就会画晚。
     private var activeStartMinute: Int? {
         guard focus.snapshot.hasActiveSession, focus.snapshot.sessionLogicalDate == store.selectedDate else { return nil }
-        let start = Date().addingTimeInterval(-Double(focus.snapshot.elapsedSeconds))
-        return TimelineLayout.minute(of: LogicalDateNavigation.timestamp(start), day: store.selectedDate)
+        return TimelineLayout.minute(of: focus.snapshot.sessionStartTime, day: store.selectedDate)
     }
 
     private var timelineCard: some View {

@@ -61,6 +61,7 @@ import PTBridge
         value.freeTimingAllowed = source.freeTimingAllowed
         value.manualRestAllowed = source.manualRestAllowed
         value.sessionLogicalDate = source.sessionLogicalDate
+        value.sessionStartTime = source.sessionStartTime
         value.minimumValidMinutes = source.minimumValidMinutes
         return value
     }

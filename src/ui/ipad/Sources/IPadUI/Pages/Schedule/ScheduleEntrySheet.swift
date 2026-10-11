@@ -80,7 +80,6 @@ import SwiftUI
                     } message: { Text("该课程会从整张课表移除。") }
                 }
             }
-            .scrollContentBackground(.hidden).background(ThemeColors.surface)
             .navigationTitle(original == nil ? "添加课程" : "编辑课程").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }

@@ -92,6 +92,7 @@ private slots:
 
     void normalRunTracksMonotonicClock();
     void pauseDoesNotConsumeTime();
+    void sessionStartTimeStaysAtRealStartAcrossPause();
     void sleepDuringRunCountsTowardElapsed();
     void sleepPastEndCompletesExactlyOnce();
     void manuallyStoppedPomodoroPreservesElapsedPastTarget();
@@ -196,6 +197,33 @@ void TimingRobustnessTests::pauseDoesNotConsumeTime()
     m_clock.advanceSecs(5);
     tick();
     QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 15);
+}
+
+// 产品保证：进行中会话的开始时刻是真实开始那一刻，暂停时长不会把它往后推（有效计时只含运行段，
+// 「现在 − 有效计时」会晚于真实开始）；结束后为空。iPad 时间轴用它定位进行中的色块。
+void TimingRobustnessTests::sessionStartTimeStaysAtRealStartAcrossPause()
+{
+    const int taskId = insertTask(QStringLiteral("暂停后的开始时刻"));
+    QVERIFY(!FocusTimer::instance()->sessionStartTime().isValid());
+    const QDateTime before = QDateTime::currentDateTime();
+    QVERIFY(FocusTimer::instance()->startFocus(taskId, QStringLiteral("暂停后的开始时刻")));
+    const QDateTime after = QDateTime::currentDateTime();
+
+    // 运行 10 分钟、暂停 30 分钟、再运行 5 分钟：有效计时 15 分钟，真实开始仍是起点。
+    m_clock.advanceSecs(10 * 60);
+    tick();
+    FocusTimer::instance()->pauseFocus();
+    m_clock.advanceSecs(30 * 60);
+    QVERIFY(FocusTimer::instance()->resumeFocus());
+    m_clock.advanceSecs(5 * 60);
+    tick();
+    QCOMPARE(FocusTimer::instance()->elapsedSeconds(), 15 * 60);
+    const QDateTime start = FocusTimer::instance()->sessionStartTime();
+    QVERIFY(start.isValid());
+    QVERIFY2(start >= before && start <= after, qPrintable(start.toString(Qt::ISODateWithMs)));
+
+    QVERIFY(FocusTimer::instance()->stopFocus());
+    QVERIFY(!FocusTimer::instance()->sessionStartTime().isValid());
 }
 
 void TimingRobustnessTests::sleepDuringRunCountsTowardElapsed()

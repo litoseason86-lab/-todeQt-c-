@@ -51,15 +51,26 @@ struct ShellRootView: View {
             }
             .onAppear { syncSelection() }
             .onChange(of: store.selection) { _, _ in scheduleSelectionSync() }
+            .onChange(of: store.navigationRequest) { _, _ in scheduleSelectionSync() }
             .onChange(of: sizeClass) { _, _ in syncSelection() }
+            // 用户在标签栏或侧栏里直接点：页面标签走 select，宽窗的原生搜索标签记成打开搜索。
             .onChange(of: regularTab) { _, selected in
-                if case let .page(page) = selected { store.select(page) }
-            }
-            .onChange(of: store.searchRequest) { _, _ in
-                if sizeClass == .compact { compactTab = .more; morePath = [.search] } else { regularTab = .search }
+                switch selected {
+                case .page(let page): store.select(page)
+                case .search: if !store.searchShown { store.openSearch() }
+                }
             }
             .onChange(of: compactTab) { _, selected in
-                if case let .page(page) = selected { store.select(page) }
+                switch selected {
+                case .page(let page): store.select(page)
+                // 切回「更多」时栈顶仍是搜索页：重新记成在搜索。
+                case .more: if morePath.last == .search && !store.searchShown { store.openSearch() }
+                }
+            }
+            // 窄窗在「更多」里推入或退出搜索页。
+            .onChange(of: morePath) { _, path in
+                if path.last == .search { if !store.searchShown { store.openSearch() } }
+                else if store.searchShown { store.closeSearch() }
             }
     }
 
@@ -115,7 +126,15 @@ struct ShellRootView: View {
     }
 
     // 窄窗口非主标签页由「更多」的 NavigationStack 承载；旋转回宽窗口时恢复同一页面。
+    // 一律按 Store 的当前状态重建（不按触发它的事件），排队的同步晚执行也只会落到最新状态。
+    // 在搜索时宽窄都停在搜索：宽窗是搜索标签，窄窗是「更多」里的搜索页。
     private func syncSelection() {
+        if store.searchShown {
+            if regularTab != .search { regularTab = .search }
+            if compactTab != .more { compactTab = .more }
+            if morePath != [.search] { morePath = [.search] }
+            return
+        }
         if regularTab != .page(store.selection) { regularTab = .page(store.selection) }
         switch ShellStore.navigationTarget(for: store.selection, size: .compact) {
         case .page(let page):
@@ -144,15 +163,8 @@ struct ShellRootView: View {
     private func regularPage(_ page: PageID) -> some View {
         pageView(page).background { SidebarProbe(watcher: sidebar) }
     }
-    // 宽窗当前页：搜索标签选中时没有当前页，摘要块和底栏都不高亮。
-    private var currentRegularPage: PageID? {
-        if case let .page(page) = regularTab { page } else { nil }
-    }
-    // 摘要块与底栏点选直接改宽窗标签：从搜索回到原来那页时 store.selection 没变，只调 select 不会切走。
-    private func selectRegular(_ page: PageID) {
-        regularTab = .page(page)
-        store.select(page)
-    }
+    // 宽窗当前页：在搜索时没有当前页，摘要块和底栏都不高亮。
+    private var currentRegularPage: PageID? { store.searchShown ? nil : store.selection }
     private var moreView: some View {
         NavigationStack(path: $morePath) {
             List {
@@ -200,7 +212,7 @@ struct ShellRootView: View {
                 .padding(.horizontal, 12).padding(.bottom, 8)
             ForEach(PageID.fixed, id: \.self) { page in
                 let selected = currentRegularPage == page
-                Button { selectRegular(page) } label: {
+                Button { store.select(page) } label: {
                     HStack(spacing: 12) {
                         Image(systemName: page.symbol).font(.system(size: 17)).imageScale(.large)
                             .foregroundStyle(ThemeColors.accentInk).frame(width: 24)
@@ -233,7 +245,7 @@ struct ShellRootView: View {
     // 定稿侧栏摘要块：当前页那块焦糖实底、浅色字，其余浅焦糖底；数字 22 粗、单位 13。
     private func tile(_ tile: ShellSummaryTile) -> some View {
         let selected = currentRegularPage == tile.page
-        return Button { selectRegular(tile.page) } label: {
+        return Button { store.select(tile.page) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
                     Image(systemName: tile.page.symbol).font(.system(size: 17))

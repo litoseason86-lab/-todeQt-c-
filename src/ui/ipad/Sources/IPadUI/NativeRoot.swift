@@ -99,18 +99,20 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
             .environment(search).environment(core).environment(today).environment(dashboard).environment(focus).environment(store)
             .environment(gaps).environment(memos).environment(countdown)
             .environment(history).environment(statistics).environment(settings).environment(settingsCategories).environment(settingsRoutines).environment(settingsSync).environment(settingsBackup).environment(settingsExport).environment(trashStore)
-        // 055-R4：调试巡检复用同一套 Store 另开窗口截图；不带启动参数时不生效。
-        UITour.rootView = { AnyView(root) }
-        UITour.selectSettingsSection = { [weak settings] in settings?.selectSection($0) }
-        UITour.openSearch = { [weak store, weak search] query in search?.query = query; search?.search(); store?.openSearch() }
-        UITour.sheets = [
-            ("new-task", { [weak store, weak today] in store?.select(.today); today?.requestNewTask() }, { [weak today] in today?.newTaskPresented = false }),
-            ("gap", { [weak store, weak gaps] in store?.select(.knowledgeGap); gaps?.requestForm(.add) }, { [weak gaps] in gaps?.dismissForm() }),
-            ("countdown", { [weak store, weak countdown] in store?.select(.countdown); countdown?.requestAdd() }, { [weak countdown] in countdown?.dismissForm() }),
-            ("session", { [weak store, weak timeline] in store?.select(.todayFocus); timeline?.manualAddPresented = true }, { [weak timeline] in timeline?.manualAddPresented = false })]
-        UITour.extras[.todayFocus] = [
-            ("prev", { [weak timeline] in if let day = timeline?.adjacentDate(days: -1) { timeline?.selectDate(day) } }),
-            (nil, { [weak timeline] in if let day = timeline?.adjacentDate(days: 1) { timeline?.selectDate(day) } })]
+        // 055-R4：调试巡检复用同一套 Store 另开窗口截图；只在带巡检参数启动时登记，平时不保留任何引用。
+        if UITour.isRequested {
+            UITour.rootView = { AnyView(root) }
+            UITour.selectSettingsSection = { [weak settings] in settings?.selectSection($0) }
+            UITour.openSearch = { [weak store, weak search] query in search?.query = query; search?.search(); store?.openSearch() }
+            UITour.sheets = [
+                ("new-task", { [weak store, weak today] in store?.select(.today); today?.requestNewTask() }, { [weak today] in today?.newTaskPresented = false }),
+                ("gap", { [weak store, weak gaps] in store?.select(.knowledgeGap); gaps?.requestForm(.add) }, { [weak gaps] in gaps?.dismissForm() }),
+                ("countdown", { [weak store, weak countdown] in store?.select(.countdown); countdown?.requestAdd() }, { [weak countdown] in countdown?.dismissForm() }),
+                ("session", { [weak store, weak timeline] in store?.select(.todayFocus); timeline?.manualAddPresented = true }, { [weak timeline] in timeline?.manualAddPresented = false })]
+            UITour.extras[.todayFocus] = [
+                ("prev", { [weak timeline] in if let day = timeline?.adjacentDate(days: -1) { timeline?.selectDate(day) } }),
+                (nil, { [weak timeline] in if let day = timeline?.adjacentDate(days: 1) { timeline?.selectDate(day) } })]
+        }
         UITour.startIfRequested(shell: store)
         return UIHostingController(rootView: root)
     }

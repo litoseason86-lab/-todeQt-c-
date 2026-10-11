@@ -106,10 +106,13 @@ void PTFocusBridgeTests::snapshotAndTimerActions() {
         QCOMPARE(value.elapsedSeconds, NSInteger(61)); QCOMPARE(value.remainingSeconds, NSInteger(246)); QCOMPARE(value.targetSeconds, NSInteger(307));
         QCOMPARE(value.currentTaskId, NSInteger(m_task)); QVERIFY([value.currentTaskTitle isEqualToString:@"桥接甲"]);
         QVERIFY([value.sessionLogicalDate isEqualToString:PTBridgeSupport::string(FocusTimer::instance()->sessionLogicalDate())]);
+        QVERIFY(value.sessionStartTime.length > 0);
+        QVERIFY([value.sessionStartTime isEqualToString:PTBridgeSupport::timestamp(FocusTimer::instance()->sessionStartTime())]);
         QCOMPARE(value.minimumValidMinutes, NSInteger(3)); QCOMPARE(value.completedPomodoros, NSInteger(0));
         QVERIFY(value.freeTimingAllowed && value.manualRestAllowed);
         QVERIFY([bridge pause:&error]); QVERIFY(!bridge.snapshot.running); QVERIFY([bridge resume:&error]);
         QVERIFY([bridge.endCurrent.result isEqualToString:@"ended"]);
+        QCOMPARE(bridge.snapshot.sessionStartTime.length, NSUInteger(0));
         QVERIFY([bridge startBreak:89 taskId:m_task title:@"休息上下文" error:&error]);
         QCOMPARE(bridge.snapshot.phase, NSInteger(2)); QCOMPARE(bridge.snapshot.currentTaskId, NSInteger(m_task));
         QVERIFY([bridge.snapshot.currentTaskTitle isEqualToString:@"休息上下文"]);

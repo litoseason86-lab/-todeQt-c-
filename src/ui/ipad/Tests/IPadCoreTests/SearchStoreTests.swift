@@ -51,4 +51,23 @@ import XCTest
         tasks.error = nil; store.search()
         XCTAssertEqual(store.errorMessage, "")
     }
+
+    // 产品保证：任务或缺口在别处改动（详情里改名、同步进来）后，已显示的结果按当前查询重读，
+    // 改名后不再匹配的条目消失；还没搜索过时变更不触发读取。
+    func testDataChangeRerunsCurrentQuery() {
+        let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake()
+        let store = SearchStore(tasks: tasks, gaps: gaps)
+        tasks.onChanged?(); gaps.onChanged?()
+        XCTAssertFalse(tasks.calls.contains { $0.name == "search" })
+        tasks.result = [task(3, "线代 第 4 讲"), task(9, "线代 第 3 讲")]
+        store.query = "线代"; store.search()
+        XCTAssertEqual(store.tasks.map(\.id), [3, 9])
+        tasks.result = [task(9, "线代 第 3 讲")]
+        tasks.onChanged?()
+        XCTAssertEqual(store.tasks.map(\.id), [9])
+        gaps.rows = [gap(5, "线代 特征值")]
+        gaps.onChanged?()
+        XCTAssertEqual(store.gaps.map(\.id), [5])
+        XCTAssertEqual(tasks.calls.last?.text, ["线代"])
+    }
 }

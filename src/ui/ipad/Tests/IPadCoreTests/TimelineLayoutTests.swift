@@ -27,6 +27,25 @@ final class TimelineLayoutTests: XCTestCase {
     }
 
     // 产品保证：解析不了的时刻不画，不把它当成 0 点。
+    // 产品保证：夏令时切换日（当天 23 或 25 小时）色块与时间文字仍按本地墙钟定位：09:00 的记录就在 9 点，
+    // 次日凌晨 01:00 仍接在 24 点之后（25 点）。
+    func testDaylightSavingDaysUseWallClock() throws {
+        // 测试进程默认是本机时区（上海，无夏令时），用例无法区分「墙钟分钟」和「绝对经过分钟」；
+        // 临时把进程时区换成有夏令时的洛杉矶。只改 NSTimeZone.default 不影响 TimeZone.current（10-11 实测），
+        // 要改 TZ 环境变量并让 Foundation 重读系统时区；结束后原样还原。
+        let saved = getenv("TZ").map { String(cString: $0) }
+        setenv("TZ", "America/Los_Angeles", 1); NSTimeZone.resetSystemTimeZone()
+        defer {
+            if let saved { setenv("TZ", saved, 1) } else { unsetenv("TZ") }
+            NSTimeZone.resetSystemTimeZone()
+        }
+        try XCTSkipUnless(TimeZone.current.identifier == "America/Los_Angeles", "无法切换进程时区，用例前提不成立")
+        XCTAssertEqual(TimelineLayout.minute(of: "2026-03-08T09:00:00.000", day: "2026-03-08"), 9 * 60)
+        XCTAssertEqual(TimelineLayout.minute(of: "2026-11-01T09:00:00.000", day: "2026-11-01"), 9 * 60)
+        XCTAssertEqual(TimelineLayout.minute(of: "2026-03-09T01:00:00.000", day: "2026-03-08"), 25 * 60)
+        XCTAssertEqual(TimelineLayout.minute(of: "2026-11-02T01:00:00.000", day: "2026-11-01"), 25 * 60)
+    }
+
     func testUnparsableStartIsSkipped() {
         XCTAssertTrue(TimelineLayout.blocks([session("坏数据", seconds: 60)], day: "2026-10-10").isEmpty)
     }

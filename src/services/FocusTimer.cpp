@@ -753,6 +753,14 @@ int FocusTimer::completedPomodoros() const
     return m_completedPomodoros;
 }
 
+QDateTime FocusTimer::sessionStartTime() const
+{
+    if (m_sessionId <= 0 || !m_startTime.isValid()) {
+        return QDateTime();
+    }
+    return m_startTime;
+}
+
 QString FocusTimer::sessionLogicalDate() const
 {
     if (m_sessionId <= 0 || !m_startTime.isValid()) {

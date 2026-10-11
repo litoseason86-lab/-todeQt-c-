@@ -14,6 +14,8 @@ public struct FocusSnapshot: Equatable, Sendable {
     public var freeTimingAllowed: Bool = true
     public var manualRestAllowed: Bool = false
     public var sessionLogicalDate: String = ""
+    // 会话真实开始的本地墙钟串（服务给出，含暂停前的那一段）；没有会话时为空。
+    public var sessionStartTime: String = ""
     public var minimumValidMinutes: Int = 3
     public init() {}
 }

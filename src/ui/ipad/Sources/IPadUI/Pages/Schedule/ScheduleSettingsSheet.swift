@@ -54,7 +54,6 @@ import SwiftUI
                 } header: { Text("节次") } footer: { Text("节次与学期设置全部保存成功后才关闭。节次排序、重叠和学期范围由服务校验。") }
                 if !error.isEmpty { Section { Text(error).foregroundStyle(ThemeColors.danger).accessibilityLabel("错误：" + error) } }
             }
-            .scrollContentBackground(.hidden).background(ThemeColors.surface)
             .navigationTitle("课表设置").sheetChrome()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }

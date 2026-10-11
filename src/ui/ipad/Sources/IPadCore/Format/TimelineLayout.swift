@@ -14,10 +14,16 @@ public enum TimelineLayout {
     public static let defaultEndHour = 20
 
     // 逻辑日的起点在凌晨（默认 4 点），所以次日凌晨的记录会算成 24 点以后的分钟，接在当天后面。
+    // 按本地墙钟换算（隔了几个日历日 × 24 小时 + 当时的时分），不用与 0 点的绝对秒差：
+    // 夏令时切换日只有 23 或 25 小时，秒差会把 09:00 算成 8 点或 10 点。
     public static func minute(of timestamp: String, day: String) -> Int? {
         guard let start = LogicalDateNavigation.timestampDate(timestamp),
               let midnight = LogicalDateNavigation.date(day) else { return nil }
-        return Int((start.timeIntervalSince(midnight) / 60).rounded(.down))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        guard let days = calendar.dateComponents([.day], from: midnight, to: calendar.startOfDay(for: start)).day else { return nil }
+        let clock = calendar.dateComponents([.hour, .minute], from: start)
+        return days * 24 * 60 + (clock.hour ?? 0) * 60 + (clock.minute ?? 0)
     }
 
     public static func blocks(_ sessions: [SessionValue], day: String) -> [TimelineBlock] {

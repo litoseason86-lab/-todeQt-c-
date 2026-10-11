@@ -150,7 +150,8 @@ public final class ShellStore {
     public func sidebarBadge(for page: PageID) -> Int? {
         page == .knowledgeGap && snapshot.dueGapCount > 0 ? snapshot.dueGapCount : nil
     }
-    public var miniTimerVisible: Bool { snapshot.hasTimer && selection != .focus }
+    // 搜索页叠在专注页上时，显示的已不是专注页，底条照常显示。
+    public var miniTimerVisible: Bool { snapshot.hasTimer && (selection != .focus || searchShown) }
 
     public static func navigationTarget(for page: PageID, size: ShellWindowSize) -> ShellNavigationTarget {
         switch size {
@@ -223,12 +224,23 @@ public final class ShellStore {
             showToast("下次启动将使用旧版界面")
         } catch { errorMessage = error.localizedDescription }
     }
-    // 055-R4：打开搜索。搜索不是侧栏页面，没有 PageID；外壳看到计数变化就切到搜索标签。
-    public private(set) var searchRequest = 0
-    public func openSearch() { searchRequest += 1 }
+    // 055-R4：搜索不是侧栏页面，没有 PageID；selection 仍是进搜索前那页（离开搜索时回到它）。
+    // 「当前实际显示的是不是搜索」单独记在这里：记一笔的来源、迷你计时条、宽窄切换后停在哪，都按它判断。
+    public private(set) var searchShown = false
+    // 每次切页或打开搜索都加一，外壳据此重新对齐标签与「更多」路径。
+    // 选的还是同一页（从搜索回到原页、页面快捷键）时 selection 不变，只靠它通知外壳。
+    public private(set) var navigationRequest = 0
+    public func openSearch() {
+        searchShown = true
+        navigationRequest += 1
+    }
+    // 外壳里直接离开搜索（窄窗从搜索页返回「更多」列表）：只清标记，不切页。
+    public func closeSearch() { searchShown = false }
     public func select(_ page: PageID) {
         guard !snapshot.operationBlocksUI else { return }
         selection = page
+        searchShown = false
+        navigationRequest += 1
         bridge.select(page: page.rawValue)
     }
     public func toggleTimer() {
@@ -237,7 +249,8 @@ public final class ShellStore {
         if !succeeded && errorMessage.isEmpty { errorMessage = "计时操作失败，请重试" }
     }
     public func presentCapture() {
-        presentCapture(source: selection == .focus ? (captureSourceProvider?() ?? ShellCaptureSource()) : ShellCaptureSource())
+        let onFocusPage = selection == .focus && !searchShown
+        presentCapture(source: onFocusPage ? (captureSourceProvider?() ?? ShellCaptureSource()) : ShellCaptureSource())
     }
     // 带来源的入口：来源任务与科目随这次记一笔一起写入，打开时固定，之后任务切换也不改。
     public func presentCapture(source: ShellCaptureSource) {

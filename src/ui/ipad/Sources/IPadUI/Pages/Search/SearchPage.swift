@@ -108,10 +108,9 @@ import SwiftUI
         .padding(.horizontal, 16).frame(minHeight: 64).contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }
-    // 跳到知识缺口页：先把筛选切到这条所在的状态，否则选中的条目不在列表里会被清掉。
+    // 跳到知识缺口页并显示这一条；搜索前就在缺口页时也会离开搜索（select 总会通知外壳）。
     private func open(_ gap: GapValue) {
-        gaps.statusFilter = gap.status == 2 ? 2 : -2
-        gaps.selectedID = gap.id
+        gaps.reveal(gap)
         shell.select(.knowledgeGap)
     }
 }

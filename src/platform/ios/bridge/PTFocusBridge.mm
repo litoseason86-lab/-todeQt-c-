@@ -52,6 +52,7 @@ using namespace PTBridgeSupport;
         _freeTimingAllowed = value->freeTimingAllowed();
         _manualRestAllowed = value->manualRestAllowed();
         _sessionLogicalDate = string(value->sessionLogicalDate());
+        _sessionStartTime = timestamp(value->sessionStartTime());
         _minimumValidMinutes = value->minimumValidMinutes();
     }
     return self;

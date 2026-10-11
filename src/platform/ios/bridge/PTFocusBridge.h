@@ -16,6 +16,8 @@ __attribute__((swift_attr("@MainActor")))
 @property(nonatomic, readonly) BOOL freeTimingAllowed;
 @property(nonatomic, readonly) BOOL manualRestAllowed;
 @property(nonatomic, readonly, copy) NSString * sessionLogicalDate;
+// 会话真实开始的本地墙钟串（同专注记录的开始时刻格式）；没有会话时为空串。
+@property(nonatomic, readonly, copy) NSString * sessionStartTime;
 @property(nonatomic, readonly) NSInteger minimumValidMinutes;
 @end
 

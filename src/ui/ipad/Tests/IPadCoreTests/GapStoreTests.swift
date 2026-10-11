@@ -76,4 +76,21 @@ import XCTest
         XCTAssertFalse(bridge.calls.contains("update"))
     }
 
+    // 产品保证：从全局搜索跳到某条缺口时，清掉页内旧搜索词、状态筛选切到它所在的一类，
+    // 重读后它在结果里、被选中并推入详情（窄窗显示详情）；页面随后激活重读也不会把选中清掉。
+    func testRevealClearsPageSearchAndOpensDetail() {
+        let bridge = KnowledgeGapFake(); bridge.rows = [row(4, status: 0), row(9, status: 2)]
+        let store = GapStore(bridge: bridge, logicalDay: LogicalDayBridgeFake())
+        store.search = "高数"; store.statusFilter = -2
+        XCTAssertNil(store.selectedID); XCTAssertFalse(store.detailPresented)
+        store.reveal(row(9, status: 2))
+        XCTAssertEqual(store.search, "")
+        XCTAssertEqual(bridge.filters.last?.0, 2); XCTAssertEqual(bridge.filters.last?.2, "")
+        XCTAssertEqual(store.selectedID, 9); XCTAssertTrue(store.detailPresented)
+        store.setActive(true)
+        XCTAssertEqual(store.selectedID, 9); XCTAssertTrue(store.detailPresented)
+        // 未解决的跳回未解决筛选。
+        store.reveal(row(4, status: 0))
+        XCTAssertEqual(store.statusFilter, -2); XCTAssertEqual(store.selectedID, 4)
+    }
 }

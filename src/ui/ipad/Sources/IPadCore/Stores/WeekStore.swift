@@ -65,6 +65,8 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
         refreshPending = false
         do {
             let following = try weekStartProvider?() ?? followedWeekStart
+            // 固定显示的周在日界换周后正好成了本周：恢复跟随，之后的日界照常前进。
+            if shownWeekStart == following { shownWeekStart = nil }
             let start = shownWeekStart ?? following
             followedWeekStart = following
             let dates = try weekDates(start)
@@ -77,24 +79,24 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
             }
             // 日界只带动仍跟随今日的选中项；手选日期保持，周被替换后失效选择退回今日。
             if selectedDate.isEmpty || selectedDate == logicalToday || !dates.contains(selectedDate) { selectedDate = logicalDay.today }
-            weekStart = start; logicalToday = logicalDay.today; error = ""
+            weekStart = start; showsCurrentWeek = start == following; logicalToday = logicalDay.today; error = ""
             if task(id: cursorTaskID) == nil { cursorTaskID = -1 }
         } catch { self.error = error.localizedDescription }
     }
     public func updateLogicalDay() { refresh() }
     // 055-R4 翻周（同 Mac 本周计划）：周的起止由服务按统一日界换算；翻到别的周后日界不抢回，
-    // 翻回本周就重新跟随服务的「本周」。
+    // 翻回本周就重新跟随服务的「本周」。是不是本周一律拿显示的周和服务当前的本周比，
+    // 不记累计翻了几周：跨过周日界后服务的本周会变，累计偏移就对不上了。
     @ObservationIgnored private var shownWeekStart: String?
     // 跟随中的本周起点：没有服务提供本周时（测试替身），翻回来要回到这里，而不是停在上次显示的周。
     @ObservationIgnored private lazy var followedWeekStart: String = weekStart
-    public private(set) var weekOffset = 0
-    public var showsCurrentWeek: Bool { weekOffset == 0 }
+    public private(set) var showsCurrentWeek = true
     public func shiftWeek(_ delta: Int) {
         guard delta != 0 else { return }
         do {
             let period = try logicalDay.period(anchor: weekStart, range: "week", shift: delta, logicalToday: logicalDay.today)
-            weekOffset += delta
-            shownWeekStart = weekOffset == 0 ? nil : period.start
+            let following = try weekStartProvider?() ?? followedWeekStart
+            shownWeekStart = period.start == following ? nil : period.start
             refresh()
         } catch { self.error = error.localizedDescription }
     }

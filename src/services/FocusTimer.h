@@ -115,6 +115,9 @@ public:
     int minimumValidMinutes() const;
     int completedPomodoros() const;
     QString sessionLogicalDate() const;
+    // 当前会话真实开始的本地墙钟时刻，与落库的开始时刻同一个值；没有会话时为空。
+    // 有效计时 elapsedSeconds 不含暂停，不能用「现在 − 有效计时」反推开始时刻（iPad 时间轴据此定位进行中的色块）。
+    QDateTime sessionStartTime() const;
 
 signals:
     void tick();

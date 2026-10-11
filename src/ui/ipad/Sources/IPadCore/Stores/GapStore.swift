@@ -19,6 +19,14 @@ public enum GapFormIntent: Identifiable, Equatable {
         selectedID = id; detailPresented = true
     }
     public func closeDetail() { detailPresented = false }
+    // 从全局搜索跳到某条：只改状态筛选不够，页内旧搜索词会让它不在结果里，refresh 随即清掉选中；
+    // 所以先清搜索词、筛选切到它所在的一类（已解决 2，其余归未解决 -2），重读后再选中并推入详情。
+    public func reveal(_ gap: GapValue) {
+        search = ""
+        statusFilter = gap.status == 2 ? 2 : -2
+        refresh()
+        select(gap.id)
+    }
     public func requestForm(_ intent: GapFormIntent) {
         if case .add = intent { form = .add; return }
         guard let id = intent.gap?.id, let current = items.first(where: { $0.id == id }) else { return }

@@ -61,6 +61,37 @@ import XCTest
         XCTAssertTrue(store.showsCurrentWeek); XCTAssertEqual(store.weekStart, "2026-10-05")
     }
 
+    // 产品保证：翻到别的周后跨过逻辑周日界（服务的本周前进一周），「本周」标识按显示的周与服务本周是否相同判断，
+    // 再点上一周仍移动到前一周；翻回到服务本周后恢复跟随。
+    func testShiftWeekAfterServiceWeekAdvances() {
+        let tasks = TaskBridgeFake(); tasks.planned = Array(repeating: 0, count: 7)
+        let day = LogicalDayBridgeFake(); day.today = "2026-10-09"
+        day.periodHandler = { anchor, _, shift, _ in
+            var value = PeriodDates(); value.start = LogicalDateNavigation.shifted(anchor, days: 7 * shift) ?? anchor; return value
+        }
+        var serviceWeek = "2026-10-05"
+        let shell = ShellStore(bridge: ShellBridgeFake())
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: shell)
+        let store = WeekStore(tasks: tasks, logicalDay: day, pendingDeletion: pending, interactions: InteractionBridgeFake(),
+                              weekStart: "2026-10-05",
+                              weekDates: { start in (0..<7).compactMap { LogicalDateNavigation.shifted(start, days: $0) } },
+                              weekStartProvider: { serviceWeek })
+        store.shiftWeek(1)
+        XCTAssertEqual(store.weekStart, "2026-10-12"); XCTAssertFalse(store.showsCurrentWeek)
+        // 跨过逻辑周日界：服务的本周变成 10-12，正在显示的就是本周。
+        serviceWeek = "2026-10-12"; day.today = "2026-10-12"
+        store.refresh()
+        XCTAssertEqual(store.weekStart, "2026-10-12"); XCTAssertTrue(store.showsCurrentWeek)
+        store.shiftWeek(-1)
+        XCTAssertEqual(store.weekStart, "2026-10-05"); XCTAssertFalse(store.showsCurrentWeek)
+        store.shiftWeek(1)
+        XCTAssertEqual(store.weekStart, "2026-10-12"); XCTAssertTrue(store.showsCurrentWeek)
+        // 回到跟随后，下一次周日界自动前进。
+        serviceWeek = "2026-10-19"; day.today = "2026-10-19"
+        store.refresh()
+        XCTAssertEqual(store.weekStart, "2026-10-19"); XCTAssertTrue(store.showsCurrentWeek)
+    }
+
     private func row(_ id: Int, date: String = "2026-10-09", completed: Bool = false) -> TaskValue {
         var value = TaskValue(); value.id = id; value.title = "任务 \(id)"; value.date = date; value.completed = completed
         return value
