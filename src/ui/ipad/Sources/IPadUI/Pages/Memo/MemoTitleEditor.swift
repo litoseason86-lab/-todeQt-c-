@@ -12,7 +12,8 @@ import UIKit
     func makeUIView(context: Context) -> UITextField {
         let field = UITextField(); field.accessibilityLabel = "标题"
         field.textColor = UIColor(ThemeColors.inputInk)
-        field.font = .preferredFont(forTextStyle: .title3); field.adjustsFontForContentSizeCategory = true
+        // 定稿纸面标题 24 粗，随系统字号缩放。
+        field.font = UIFontMetrics(forTextStyle: .title2).scaledFont(for: .systemFont(ofSize: 24, weight: .bold)); field.adjustsFontForContentSizeCategory = true
         field.delegate = context.coordinator; field.text = text; field.returnKeyType = .next
         field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
         return field

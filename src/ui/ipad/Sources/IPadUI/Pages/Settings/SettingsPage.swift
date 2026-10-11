@@ -1,4 +1,6 @@
 import IPadCore
+import ImageIO
+import PTBridge
 import SwiftUI
 
 @MainActor struct SettingsPage: View {
@@ -14,10 +16,11 @@ import SwiftUI
             List {
                 ForEach(SettingsAvailability.sections) { section in
                     NavigationLink(section.rawValue, value: section)
+                        .listRowBackground(shell.selectedTheme != nil ? ThemeColors.surface : nil)
                 }
             }
             .navigationTitle("设置")
-            .navigationDestination(for: SettingsSection.self) { detail($0, store: store).navigationTitle($0.rawValue) }
+            .navigationDestination(for: SettingsSection.self) { detail($0, store: store).modifier(PageBackground()).navigationTitle($0.rawValue) }
         } else {
             // 055-R4：左栏每行是明确的按钮。List(selection:) 放在分栏侧栏之外时，iPadOS 上点按不会改选中，
             // 10-11 真机实测点「科目」「每日例行」都切不过去。
@@ -72,8 +75,9 @@ import SwiftUI
     var body: some View {
         SettingsForm {
             Section("专注") {
-                Stepper("专注时长：\(store.snapshot.workMinutes) 分钟", value: Binding(get: { store.snapshot.workMinutes }, set: store.setWorkMinutes), in: 5...180)
-                Stepper("休息时长：\(store.snapshot.breakMinutes) 分钟", value: Binding(get: { store.snapshot.breakMinutes }, set: store.setBreakMinutes), in: 1...60)
+                // 定稿：左边名称，右边数值紧挨步进器。
+                valueStepper("专注时长", "\(store.snapshot.workMinutes) 分钟", value: Binding(get: { store.snapshot.workMinutes }, set: store.setWorkMinutes), in: 5...180)
+                valueStepper("休息时长", "\(store.snapshot.breakMinutes) 分钟", value: Binding(get: { store.snapshot.breakMinutes }, set: store.setBreakMinutes), in: 1...60)
                 NavigationLink {
                     longBreakForm
                 } label: { LabeledContent("长休息", value: store.longBreakSummary) }
@@ -101,9 +105,9 @@ import SwiftUI
         SettingsForm {
             Section {
                 Toggle("长休息", isOn: Binding(get: { store.snapshot.longBreakEnabled }, set: store.setLongBreakEnabled))
-                Stepper("长休息：\(store.snapshot.longBreakMinutes) 分钟", value: Binding(get: { store.snapshot.longBreakMinutes }, set: store.setLongBreakMinutes), in: 5...60)
+                valueStepper("长休息时长", "\(store.snapshot.longBreakMinutes) 分钟", value: Binding(get: { store.snapshot.longBreakMinutes }, set: store.setLongBreakMinutes), in: 5...60)
                     .disabled(!store.snapshot.longBreakEnabled)
-                Stepper("每 \(store.snapshot.longBreakInterval) 个番茄", value: Binding(get: { store.snapshot.longBreakInterval }, set: store.setLongBreakInterval), in: 2...8)
+                valueStepper("间隔", "每 \(store.snapshot.longBreakInterval) 个番茄", value: Binding(get: { store.snapshot.longBreakInterval }, set: store.setLongBreakInterval), in: 2...8)
                     .disabled(!store.snapshot.longBreakEnabled)
             }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
@@ -116,45 +120,95 @@ import SwiftUI
     @Bindable var store: SettingsStore
     @Bindable var shell: ShellStore
     private let systemModes: [(String, String)] = [("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")]
+    // 定稿外观：「明暗」一行三段（选了主题时三段都不亮）；主题是七张壁纸缩略图网格；再下「使用壁纸」。
     var body: some View {
         SettingsForm {
             Section("系统外观") {
-                ForEach(systemModes, id: \.0) { mode in
-                    appearanceChoice(mode.1, selected: shell.selectedSystemAppearance == mode.0) {
-                        shell.setAppearance(mode.0)
+                HStack {
+                    Text("明暗").foregroundStyle(ThemeColors.inkStrong)
+                    Spacer()
+                    HStack(spacing: 2) {
+                        ForEach(systemModes, id: \.0) { mode in
+                            let selected = shell.selectedSystemAppearance == mode.0
+                            Button { shell.setAppearance(mode.0) } label: {
+                                Text(mode.1).font(.system(size: 14, weight: selected ? .semibold : .regular))
+                                    .foregroundStyle(selected ? ThemeColors.accentFillInk : ThemeColors.ink)
+                                    .padding(.horizontal, 14).frame(height: 32)
+                                    .background(selected ? ThemeColors.surface : Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(selected ? .isSelected : [])
+                        }
                     }
+                    .padding(3)
+                    .background(ThemeColors.accentFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
             }
             Section("主题") {
-                ForEach(SettingsAvailability.themes, id: \.id) { theme in
-                    appearanceChoice(theme.title, selected: shell.selectedTheme == theme.id) {
-                        shell.selectTheme(theme.id)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 104, maximum: 132), spacing: 14)], alignment: .leading, spacing: 14) {
+                    ForEach(SettingsAvailability.themes, id: \.id) { theme in
+                        let selected = shell.selectedTheme == theme.id
+                        Button { shell.selectTheme(theme.id) } label: {
+                            VStack(spacing: 6) {
+                                ThemeThumbnail(theme: theme.id)
+                                    .frame(height: 68)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .strokeBorder(selected ? ThemeColors.accentInk : ThemeColors.border, lineWidth: selected ? 3 : 1)
+                                    }
+                                Text(theme.title).font(.system(size: 13, weight: selected ? .semibold : .regular))
+                                    .foregroundStyle(ThemeColors.inkStrong)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(theme.title)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
                     }
                 }
+                .padding(.vertical, 8)
                 Toggle("使用壁纸", isOn: Binding(
                     get: { shell.wallpaperVisible },
                     set: { shell.setUseWallpaper($0) }))
                 .disabled(!shell.wallpaperAvailable || shell.snapshot.operationBlocksUI)
             }
-            Section("界面") {
+            Section {
                 Toggle("纤细时钟字体", isOn: Binding(get: { store.snapshot.slimClockFont }, set: store.setSlimClockFont))
                 Button("使用旧版界面（下次启动生效）") { shell.useLegacyUIOnNextLaunch() }
+                    .foregroundStyle(ThemeColors.accentInk)
                     .disabled(shell.snapshot.operationBlocksUI)
             }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
             if !shell.errorMessage.isEmpty { Text(shell.errorMessage).foregroundStyle(ThemeColors.danger) }
         }.formStyle(.grouped)
     }
-    private func appearanceChoice(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack {
-                Text(title).foregroundStyle(ThemeColors.ink)
-                Spacer()
-                if selected { Image(systemName: "checkmark").foregroundStyle(ThemeColors.accentInk) }
-            }
-        }.accessibilityValue(selected ? "已选中" : "未选中")
-    }
+}
 
+// 主题缩略图：从 Qt 已打包的壁纸按 320 像素缩略解码（ImageIO 直接出小图，不先解出整张大图），
+// 解过的留在内存里；没有壁纸的主题只画它的底色。
+@MainActor private struct ThemeThumbnail: View {
+    let theme: String
+    @State private var image: UIImage?
+    private static var cache: [String: UIImage] = [:]
+    var body: some View {
+        ZStack {
+            ThemeColors.themeBase(theme)
+            if let image { Image(uiImage: image).resizable().scaledToFill() }
+        }
+        .task(id: theme) {
+            if let cached = Self.cache[theme] { image = cached; return }
+            let options = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 320,
+                           kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary
+            guard let data = PTShellBridge.wallpaperData(forTheme: theme),
+                  let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return }
+            let value = UIImage(cgImage: thumbnail)
+            Self.cache[theme] = value
+            image = value
+        }
+    }
 }
 
 @MainActor private struct SidebarSettings: View {
@@ -180,6 +234,16 @@ import SwiftUI
 }
 
 // 设置分组统一使用系统 Form（分组表单）；主题下只换语义纸面和底色，不仿制系统控件。
+// 设置里的数值行：名称在左，当前值与步进器在右。
+@MainActor func valueStepper(_ title: String, _ value: String, value binding: Binding<Int>, in range: ClosedRange<Int>) -> some View {
+    HStack {
+        Text(title).foregroundStyle(ThemeColors.inkStrong)
+        Spacer()
+        Text(value).monospacedDigit().foregroundStyle(ThemeColors.ink)
+        Stepper(title, value: binding, in: range).labelsHidden()
+    }
+}
+
 @MainActor struct SettingsForm<Content: View>: View {
     @Environment(ShellStore.self) private var shell
     private let content: Content

@@ -8,30 +8,40 @@ import SwiftUI
     var body: some View {
         GeometryReader { geometry in
             let wide = geometry.size.width >= 760 && !typeSize.isAccessibilitySize
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("知识缺口").font(.largeTitle.bold())
-                    Text("\(store.items.count) 条\(store.statusFilter == 2 ? "已解决" : "未解决")")
-                        .font(.subheadline).foregroundStyle(ThemeColors.inkMuted)
-                }
+            VStack(alignment: .leading, spacing: 14) {
+                PageHeader(title: "知识缺口", subtitle: subtitle)
                 if wide {
+                    // 定稿：左边列表卡（最宽 380）、右边详情卡，两张卡都只包住内容，长了在卡内滚动。
                     HStack(alignment: .top, spacing: 20) {
-                        listCard.frame(width: min(380, geometry.size.width * 0.38))
-                        if let gap = store.selected { detail(gap).frame(maxWidth: .infinity) }
-                        else { ThemeColors.surface.frame(maxWidth: .infinity).clipShape(RoundedRectangle(cornerRadius: 18)) }
+                        ScrollView { listCard(compact: false) }.scrollIndicators(.hidden)
+                            .frame(width: min(380, geometry.size.width * 0.38))
+                        ScrollView { if let gap = store.selected { detail(gap) } }.scrollIndicators(.hidden)
+                            .frame(maxWidth: .infinity)
                     }
-                } else { listCard }
+                    .onAppear { selectFirstIfNeeded() }
+                    .onChange(of: store.items.map(\.id)) { selectFirstIfNeeded() }
+                } else {
+                    ScrollView { listCard(compact: true) }.scrollIndicators(.hidden)
+                }
             }
-            .padding(.horizontal, wide ? 32 : 16).padding(.vertical, 16)
+            .padding(.top, 4)
+            .safeAreaPadding(.horizontal, wide ? Design.pageMargin(geometry: geometry, compact: false, maxWidth: 1100) : 16)
             .navigationDestination(isPresented: Binding(get: { !wide && store.detailPresented }, set: { if !$0 { store.closeDetail() } })) {
                 if let gap = store.selected {
-                    detail(gap).padding(16).navigationTitle("知识缺口")
+                    ScrollView { detail(gap).padding(16) }
+                        .modifier(PageBackground())
+                        .navigationTitle("知识缺口")
                         .onAppear { store.setActive(true) }.onDisappear { if shell.selection != .knowledgeGap { store.setActive(false) } }
                 }
             }
         }
         .foregroundStyle(ThemeColors.ink).navigationTitle("")
-        .toolbar { Button("新增", systemImage: "plus") { store.requestForm(.add) } }
+        .toolbarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { store.requestForm(.add) } label: { ToolbarTextLabel(title: "新增", systemImage: "plus") }
+            }
+        }
         .sheet(item: Binding(get: { store.form }, set: { if $0 == nil { store.dismissForm() } })) { intent in
             GapSheet(intent: intent, store: store, subjects: store.categories)
         }
@@ -46,78 +56,135 @@ import SwiftUI
         }
         .onChange(of: shell.selection) { _, page in store.setActive(page == .knowledgeGap) }
     }
-    private var listCard: some View {
+
+    // 副标题：「5 条未解决 · 2 条到期」；到期数取外壳摘要（服务），已解决列表不写到期。
+    private var subtitle: String {
+        let base = "\(store.items.count) 条\(store.statusFilter == 2 ? "已解决" : "未解决")"
+        return store.statusFilter != 2 && shell.snapshot.dueGapCount > 0 ? base + " · \(shell.snapshot.dueGapCount) 条到期" : base
+    }
+
+    // 宽窗进页时右边不留空卡：没有选中就选列表第一条（只是展示选择，不写数据）。
+    // 只设选中，不标记「已推入」：否则窗口缩到窄时会自动推进详情（10-11 巡检截图）。
+    private func selectFirstIfNeeded() {
+        if store.selected == nil, let first = store.items.first { store.selectedID = first.id }
+    }
+
+    private func listCard(compact: Bool) -> some View {
         @Bindable var binding = store
-        return VStack(spacing: 12) {
+        return VStack(spacing: 10) {
             Picker("状态", selection: $binding.statusFilter) {
                 Text("未解决").tag(-2); Text("已解决").tag(2)
-            }.pickerStyle(.segmented).padding(.horizontal, 16).padding(.top, 16)
-            HStack {
-                Image(systemName: "magnifyingglass").foregroundStyle(ThemeColors.inkMuted).accessibilityHidden(true)
+            }.pickerStyle(.segmented)
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(ThemeColors.inkSoft).accessibilityHidden(true)
                 TextField("搜索", text: $binding.search).accessibilityLabel("搜索知识缺口")
-            }.padding(10).background(ThemeColors.surfaceSunken, in: RoundedRectangle(cornerRadius: 10)).padding(.horizontal, 16)
-            List {
-                if !store.errorMessage.isEmpty { errorRow }
+            }
+            .font(.system(size: 15))
+            .padding(.horizontal, 12).frame(height: 40)
+            .background(ThemeColors.accentFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            if !store.errorMessage.isEmpty { errorRow }
+            VStack(spacing: 2) {
                 ForEach(store.items) { gap in
+                    let selected = !compact && store.selectedID == gap.id
                     Button { store.select(gap.id) } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(gap.title).font(.headline).foregroundStyle(ThemeColors.ink)
-                            metadata(gap)
-                            if !gap.linkedTaskTitle.isEmpty {
-                                Text("已转成任务：\(gap.linkedTaskTitle)").font(.caption).foregroundStyle(ThemeColors.inkMuted)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(gap.title).font(.system(size: 16, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+                                .lineLimit(2).multilineTextAlignment(.leading)
+                            HStack(spacing: 6) {
+                                Circle().fill(TaskCategoryColor.value(gap.categoryColor)).frame(width: 7, height: 7)
+                                    .opacity(gap.categoryName.isEmpty ? 0 : 1).accessibilityHidden(true)
+                                metadata(gap)
                             }
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(selected ? ThemeColors.accentFill : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .listRowBackground(store.selectedID == gap.id ? ThemeColors.accentSoft : ThemeColors.surface)
                     .contextMenu { Button("删除", systemImage: "trash", role: .destructive) { store.requestDelete(gap) } }
                     .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
                 }
             }
-            .listStyle(.plain).scrollContentBackground(.hidden).contentMargins(.top, 0, for: .scrollContent)
         }
-        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 18))
+        .padding(12)
+        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
         .onChange(of: store.statusFilter) { store.refresh() }
         .onChange(of: store.search) { store.refresh() }
     }
+
+    // 定稿详情：大标题、科目 / 优先级 / 到期三个胶囊标签、两段原文（空写「—」）、四个同样宽的操作。
     private func detail(_ gap: GapValue) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text(gap.title).font(.title2.bold()).foregroundStyle(ThemeColors.inkStrong)
-                metadata(gap)
-                if !store.errorMessage.isEmpty { errorRow }
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("当时遇到了什么").font(.headline).foregroundStyle(ThemeColors.inkSoft)
-                    Text(gap.detail.isEmpty ? "—" : gap.detail).textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 18) {
+            Text(gap.title).font(.system(size: 26, weight: .bold)).foregroundStyle(ThemeColors.inkStrong)
+            HStack(spacing: 8) {
+                tag {
+                    HStack(spacing: 6) {
+                        Circle().fill(TaskCategoryColor.value(gap.categoryColor)).frame(width: 7, height: 7)
+                        Text(gap.categoryName.isEmpty ? "未分类" : gap.categoryName)
+                    }
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("后来想明白了什么").font(.headline).foregroundStyle(ThemeColors.inkSoft)
-                    Text(gap.resolution.isEmpty ? "—" : gap.resolution).textSelection(.enabled)
+                tag { Text("优先级 " + priority(gap.priority)) }
+                tag { Text(dueText(gap)).fontWeight(gap.overdue || gap.dueToday ? .semibold : .regular).foregroundStyle(dueColor(gap)) }
+            }
+            if !store.errorMessage.isEmpty { errorRow }
+            section("当时遇到了什么", gap.detail)
+            section("后来想明白了什么", gap.resolution)
+            if !gap.linkedTaskTitle.isEmpty {
+                Text("已转成任务：\(gap.linkedTaskTitle)").font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+            }
+            // 四个操作同分量常驻：放得下就一行四个等宽，窄时两行两个。
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { actions(gap) }
+                Grid(horizontalSpacing: 10, verticalSpacing: 10) {
+                    GridRow { actionButtons(gap)[0]; actionButtons(gap)[1] }
+                    GridRow { actionButtons(gap)[2]; actionButtons(gap)[3] }
                 }
-                if !gap.linkedTaskTitle.isEmpty {
-                    Text("已转成任务：\(gap.linkedTaskTitle)").foregroundStyle(ThemeColors.inkMuted)
-                }
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 12)], spacing: 12) {
-                    Button { store.convert(gap) } label: { Text("今天做").frame(maxWidth: .infinity) }
-                        .disabled(gap.status == 2 || gap.linkedTaskOpen)
-                    Button { store.requestForm(.schedule(gap)) } label: { Text("排期").frame(maxWidth: .infinity) }
-                        .disabled(gap.status == 2)
-                    Button {
-                        if gap.status == 2 { store.reopen(gap) } else { store.requestForm(.resolve(gap)) }
-                    } label: { Text(gap.status == 2 ? "重新打开" : "解决").frame(maxWidth: .infinity) }
-                    Button { store.requestForm(.edit(gap)) } label: { Text("编辑").frame(maxWidth: .infinity) }
-                }.buttonStyle(.bordered).controlSize(.large)
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
+            }
+            .padding(.top, 4)
         }
-        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 18))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(EdgeInsets(top: 24, leading: 28, bottom: 24, trailing: 28))
+        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
         .contextMenu { Button("删除", systemImage: "trash", role: .destructive) { store.requestDelete(gap) } }
+    }
+    @ViewBuilder private func actions(_ gap: GapValue) -> some View {
+        ForEach(0..<4, id: \.self) { actionButtons(gap)[$0].frame(minWidth: 96) }
+    }
+    private func actionButtons(_ gap: GapValue) -> [AnyView] {
+        [AnyView(action("今天做") { store.convert(gap) }.disabled(gap.status == 2 || gap.linkedTaskOpen)),
+         AnyView(action("排期") { store.requestForm(.schedule(gap)) }.disabled(gap.status == 2)),
+         AnyView(action(gap.status == 2 ? "重新打开" : "解决") {
+             if gap.status == 2 { store.reopen(gap) } else { store.requestForm(.resolve(gap)) }
+         }),
+         AnyView(action("编辑") { store.requestForm(.edit(gap)) })]
+    }
+    private func tag<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content().font(.system(size: 14)).foregroundStyle(ThemeColors.ink)
+            .padding(.horizontal, 12).frame(height: 30)
+            .background(ThemeColors.accentFill, in: Capsule())
+    }
+    private func section(_ title: String, _ text: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColors.inkSoft)
+            Text(text.isEmpty ? "—" : text).font(.system(size: 16)).foregroundStyle(ThemeColors.inkStrong).textSelection(.enabled)
+        }
+    }
+    private func action(_ title: String, _ perform: @escaping () -> Void) -> some View {
+        Button(action: perform) {
+            Text(title).frame(maxWidth: .infinity, minHeight: 46)
+        }
+        .buttonStyle(SoftPillStyle())
+    }
+    private func dueColor(_ gap: GapValue) -> Color {
+        gap.overdue ? ThemeColors.danger : gap.dueToday ? ThemeColors.accentInk : ThemeColors.inkSoft
     }
     private func metadata(_ gap: GapValue) -> some View {
         // 颜色只消费服务的到期事实；不拿 Swift 日期比较来派生今天或逾期。
         let prefix = (gap.categoryName.isEmpty ? "未分类" : gap.categoryName) + " · " + priority(gap.priority) + " · "
-        let color = gap.overdue ? ThemeColors.danger : gap.dueToday ? ThemeColors.accentInk : ThemeColors.inkSoft
-        return Text("\(Text(prefix).foregroundStyle(ThemeColors.inkSoft))\(Text(dueText(gap)).foregroundStyle(color))")
-            .font(.subheadline)
+        return Text("\(Text(prefix).foregroundStyle(ThemeColors.inkSoft))\(Text(dueText(gap)).foregroundStyle(dueColor(gap)).fontWeight(gap.overdue || gap.dueToday ? .semibold : .regular))")
+            .font(.system(size: 13)).lineLimit(1)
     }
     private func priority(_ value: Int) -> String { switch value { case 2: "高"; case 1: "中"; default: "低" } }
     private func dueText(_ gap: GapValue) -> String {
@@ -126,9 +193,10 @@ import SwiftUI
         return gap.scheduled ? TrashFormat.dateLabel(gap.dueDate, today: store.logicalToday) : "未排期"
     }
     private var errorRow: some View {
-        VStack(alignment: .leading) {
+        HStack {
             Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
-            Button("重试") { store.refresh() }
+            Spacer()
+            Button("重试") { store.refresh() }.buttonStyle(SoftPillStyle())
         }
     }
 }

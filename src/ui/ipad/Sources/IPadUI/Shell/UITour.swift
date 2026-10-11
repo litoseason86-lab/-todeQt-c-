@@ -12,6 +12,8 @@ import UIKit
     static var rootView: (() -> AnyView)?
     // 设置页各分组也逐个截图，用来确认宽窗左栏切换。
     static var selectSettingsSection: ((SettingsSection) -> Void)?
+    // 某页截完后追加的状态：有后缀的截一张，后缀为空的只执行（用于还原）。
+    static var extras: [PageID: [(suffix: String?, action: () -> Void)]] = [:]
     private static var windows: [UIWindow] = []
 
     static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour") }
@@ -56,6 +58,11 @@ import UIKit
                 shell.select(page)
                 try? await Task.sleep(for: .milliseconds(1500))
                 save(window, name: "\(page.rawValue)-\(item.name)")
+                for extra in extras[page] ?? [] {
+                    extra.action()
+                    try? await Task.sleep(for: .milliseconds(1200))
+                    if let suffix = extra.suffix { save(window, name: "\(page.rawValue)-\(suffix)-\(item.name)") }
+                }
             }
             if !item.compact, let selectSettingsSection {
                 shell.select(.settings)

@@ -11,16 +11,12 @@ struct HistoryView: View {
             let wide = geometry.size.width >= 760 && !typeSize.isAccessibilitySize
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("专注历史").font(.largeTitle.bold())
-                        if store.year != 0 {
-                            Text("\(store.year)年\(store.month)月").font(.subheadline).foregroundStyle(ThemeColors.inkMuted)
-                        }
-                    }
+                    // 年份用 String 拼接：Text 插值会按区域格式把 2026 写成「2,026」（10-11 真机截图）。
+                    PageHeader(title: "专注历史", subtitle: store.year != 0 ? String(store.year) + "年" + String(store.month) + "月" : "")
                     if !store.errorMessage.isEmpty {
                         HStack(alignment: .top) {
                             Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
-                            Spacer(); Button("重试") { store.refresh() }
+                            Spacer(); Button("重试") { store.refresh() }.buttonStyle(SoftPillStyle())
                         }
                     }
                     if wide {
@@ -33,10 +29,12 @@ struct HistoryView: View {
                         summary(compact: true)
                     }
                 }
-                .padding(.horizontal, wide ? 32 : 16).padding(.vertical, 16)
+                .padding(.top, 4).padding(.bottom, 24)
             }
+            .safeAreaPadding(.horizontal, wide ? Design.pageMargin(geometry: geometry, compact: false, maxWidth: 1150) : 16)
         }
         .foregroundStyle(ThemeColors.ink).navigationTitle("")
+        .toolbarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button("上个月", systemImage: "chevron.left") { store.moveMonth(-1) }.labelStyle(.iconOnly)
@@ -57,37 +55,47 @@ struct HistoryView: View {
         .onDisappear { store.setActive(false); store.cancelCleanup() }
     }
     private func calendar(compact: Bool) -> some View {
-        MonthGrid(store: store, compact: compact).padding(compact ? 12 : 20)
-            .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 18))
+        MonthGrid(store: store, compact: compact).padding(compact ? 10 : 16)
+            .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
     }
+    // 定稿当天明细：日期、混排总时长、段数；分隔线下每段一行（时间、色条、任务、时长），底部「查看这天的今日专注 ›」。
     private func summary(compact: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 0) {
             if !store.selectedDate.isEmpty {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(CountdownFormat.targetDate(store.selectedDate)).font(.headline)
-                        Text("\(store.selectedSessions.count) 段专注").font(.subheadline).foregroundStyle(ThemeColors.inkMuted)
-                    }
-                    if compact { Spacer() }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(TodayDisplayDate.title(store.selectedDate)).font(.system(size: 14)).foregroundStyle(ThemeColors.inkSoft)
+                    MixedNumberText(parts: MixedNumberText.split(store.durationText(store.selectedSeconds)), numberSize: 30, unitSize: 15)
+                    Text("\(store.selectedSessions.count) 段专注").font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
                 }
-                Text(store.durationText(store.selectedSeconds)).font(.title.bold()).monospacedDigit()
+                .padding(EdgeInsets(top: 18, leading: 18, bottom: 14, trailing: 18))
                 ForEach(store.detailSessions(compact: compact)) { session in
-                    HStack(alignment: .top, spacing: 12) {
-                        Text(MonthGoalFormat.formatClock(session.startTime)).font(.subheadline).monospacedDigit()
-                            .foregroundStyle(ThemeColors.inkSoft)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(session.taskTitle.isEmpty ? "未关联任务" : session.taskTitle).font(.headline)
-                            Text(store.durationText(session.durationSeconds)).font(.subheadline).foregroundStyle(ThemeColors.inkMuted)
-                        }
+                    CardDivider()
+                    HStack(spacing: 12) {
+                        Text(MonthGoalFormat.formatClock(session.startTime)).font(.system(size: 13)).monospacedDigit()
+                            .foregroundStyle(ThemeColors.inkSoft).frame(width: 44, alignment: .leading)
+                        Capsule().fill(session.taskTitle.isEmpty ? ThemeColors.border : ThemeColors.accentInk).frame(width: 4, height: 36)
+                        Text(session.taskTitle.isEmpty ? "未关联任务" : session.taskTitle).font(.system(size: 16))
+                            .foregroundStyle(session.taskTitle.isEmpty ? ThemeColors.inkSoft : ThemeColors.inkStrong).lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text(store.durationText(session.durationSeconds)).font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
                     }
+                    .padding(.horizontal, 18).frame(minHeight: 66)
                     .accessibilityElement(children: .combine)
                 }
-                Button(compact ? "全部 \(store.selectedSessions.count) 段 · 查看今日专注" : "查看这天的今日专注",
-                       systemImage: "arrow.right") { store.openSelectedDay(shell: shell) }
-                    .buttonStyle(.bordered).frame(minHeight: 44)
+                CardDivider()
+                Button { store.openSelectedDay(shell: shell) } label: {
+                    HStack {
+                        Text(compact ? "全部 \(store.selectedSessions.count) 段 · 查看今日专注" : "查看这天的今日专注")
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
+                    }
+                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(ThemeColors.accentInk)
+                    .padding(.horizontal, 18).frame(minHeight: 52).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading).padding(20)
-        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 18))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
     }
 }

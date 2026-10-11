@@ -14,9 +14,10 @@ import SwiftUI
                 if let draft = store.editorDraft {
                     Section {
                         if session != nil {
+                            // 定稿：类型是一行两段的分段控件。
                             Picker("类型", selection: field(\.isRest, default: false)) {
                                 Text("专注").tag(false); Text("休息").tag(true)
-                            }
+                            }.pickerStyle(.segmented)
                         }
                         DatePicker("开始", selection: Binding(
                             get: { LogicalDateNavigation.timestampDate(draft.startTime) ?? LogicalDateNavigation.initialSessionStart(date: store.selectedDate) },
@@ -28,7 +29,7 @@ import SwiftUI
                             Text(store.editorError).font(.callout).foregroundStyle(ThemeColors.danger)
                                 .accessibilityLabel("开始时间或记录保存失败，" + store.editorError)
                         }
-                        Stepper("时长：\(draft.durationMinutes) 分钟", value: Binding(
+                        valueStepper("时长（分钟）", "\(draft.durationMinutes)", value: Binding(
                             get: { draft.durationMinutes },
                             set: { store.editorDraft?.durationMinutes = $0; store.editorDraft?.durationEdited = true }), in: 1...1440)
                         if !draft.isRest {

@@ -10,36 +10,63 @@ import SwiftUI
     let delete: (ScheduleEntry) -> Void
     @ScaledMetric(relativeTo: .body) private var minuteHeight = 1.1
     @ScaledMetric(relativeTo: .body) private var rowHeight = 72.0
+    // 055-R4 定稿：整张网格是一张白卡片；表头「周一 6」，今天那天日期是焦糖实心圆；整点细线、两小时一个刻度字。
     var body: some View {
         GeometryReader { geometry in
             let gutter = 52.0
             let width = max(1, (geometry.size.width - gutter) / Double(weekdays.count))
             VStack(spacing: 0) {
                 HStack(spacing: 0) {
-                    Color.clear.frame(width: gutter, height: 48)
+                    Color.clear.frame(width: gutter, height: 44)
                     ForEach(weekdays, id: \.self) { day in
                         let today = store.weekIndex == store.currentWeekIndex && store.todayWeekday == day
-                        VStack(spacing: 2) {
-                            Text("周" + ScheduleView.weekdayName(day)).font(.headline)
-                            if let date = ScheduleFormat.displayDate(store.dateForWeekday(day)) {
-                                Text(date, format: .dateTime.month(.defaultDigits).day()).font(.caption)
-                            }
-                        }.frame(width: width, height: 48)
-                            .foregroundStyle(today ? ThemeColors.accentInk : ThemeColors.ink)
-                            .background(today ? ThemeColors.accentSoft : ThemeColors.surface)
-                            .accessibilityLabel("周" + ScheduleView.weekdayName(day) + (today ? "，今天" : ""))
+                        HStack(spacing: 6) {
+                            Text("周" + ScheduleView.weekdayName(day))
+                            let number = Text(WeekView.day(store.dateForWeekday(day))).monospacedDigit()
+                            if today {
+                                number.font(.system(size: 13, weight: .bold)).foregroundStyle(ThemeColors.surface)
+                                    .frame(width: 26, height: 26).background(ThemeColors.accentInk, in: Circle())
+                            } else { number }
+                        }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(today ? ThemeColors.accentInk : ThemeColors.ink)
+                        .frame(width: width, height: 44)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("周" + ScheduleView.weekdayName(day) + (today ? "，今天" : ""))
                     }
                 }
+                CardDivider()
                 ScrollView(.vertical) {
                     HStack(alignment: .top, spacing: 0) {
                         axis.frame(width: gutter)
                         ForEach(weekdays, id: \.self) { day in
                             dayColumn(day, width: width).frame(width: width, height: contentHeight)
                         }
-                    }.padding(.top, 8).padding(.bottom, 8)
-                }.background(ThemeColors.surface)
+                    }
+                    .background(alignment: .topLeading) { hourLines.padding(.leading, gutter) }
+                    .padding(.top, 8).padding(.bottom, 12)
+                }
+            }
+            .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
+        }
+    }
+    // 时间模式下每个整点一条细线，节次模式下每节一条。
+    @ViewBuilder private var hourLines: some View {
+        ZStack(alignment: .topLeading) {
+            Color.clear.frame(height: contentHeight)
+            if store.displayMode == .time {
+                ForEach(Array(stride(from: store.axisStartMinutes, through: store.axisEndMinutes, by: 60)), id: \.self) { minute in
+                    Rectangle().fill(ThemeColors.borderSubtle).frame(height: 1)
+                        .offset(y: Double(minute - store.axisStartMinutes) * minuteHeight)
+                }
+            } else {
+                ForEach(0...store.periods.count, id: \.self) { index in
+                    Rectangle().fill(ThemeColors.borderSubtle).frame(height: 1).offset(y: Double(index) * (rowHeight + 4) - 2)
+                }
             }
         }
+        .allowsHitTesting(false)
     }
     private var contentHeight: Double {
         if store.displayMode == .period { return max(rowHeight, Double(store.periods.count) * (rowHeight + 4) - 4) }
@@ -52,10 +79,10 @@ import SwiftUI
         ZStack(alignment: .topTrailing) {
             Color.clear.frame(height: contentHeight)
             if store.displayMode == .time {
-                ForEach(Array(stride(from: store.axisStartMinutes, through: store.axisEndMinutes, by: 60)), id: \.self) { minute in
-                    Text(ScheduleFormat.formatMinutes(Double(minute))).font(.caption2).monospacedDigit()
+                ForEach(Array(stride(from: store.axisStartMinutes, through: store.axisEndMinutes, by: 120)), id: \.self) { minute in
+                    Text(ScheduleFormat.formatMinutes(Double(minute))).font(.system(size: 11)).monospacedDigit()
                         .foregroundStyle(ThemeColors.inkSoft).padding(.trailing, 6)
-                        .offset(y: Double(minute - store.axisStartMinutes) * minuteHeight)
+                        .offset(y: Double(minute - store.axisStartMinutes) * minuteHeight - 7)
                 }
             } else {
                 ForEach(Array(store.periods.enumerated()), id: \.offset) { index, period in
@@ -71,7 +98,9 @@ import SwiftUI
     private func dayColumn(_ day: Int, width: Double) -> some View {
         let placements = store.layout(weekday: day, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight)
         return ZStack(alignment: .topLeading) {
-            Rectangle().fill(store.weekIndex == store.currentWeekIndex && store.todayWeekday == day ? ThemeColors.accentSoft : ThemeColors.surface).overlay(alignment: .leading) { Rectangle().fill(ThemeColors.borderSubtle).frame(width: 1) }
+            // 今天那列浅焦糖底；列间一条细竖线。
+            Rectangle().fill(store.weekIndex == store.currentWeekIndex && store.todayWeekday == day ? ThemeColors.accentFill.opacity(0.35) : Color.clear)
+                .overlay(alignment: .leading) { Rectangle().fill(ThemeColors.borderSubtle).frame(width: 1) }
                 .contentShape(Rectangle())
                 .onTapGesture { location in
                     add(day, store.minutesAtOffset(location.y, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight))
@@ -81,15 +110,17 @@ import SwiftUI
             ForEach(placements, id: \.entry.id) { item in
                 let laneWidth = width / Double(max(1, item.laneCount))
                 Button { edit(item.entry) } label: {
+                    // 定稿课程块：科目色浅底、左边 3 宽科目色条，课名 13 粗、地点与时间 11。
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(item.entry.title).font(.callout).fontWeight(.semibold).lineLimit(2)
-                        if !item.entry.location.isEmpty { Text(item.entry.location).font(.caption).lineLimit(2) }
+                        Text(item.entry.title).font(.system(size: 13, weight: .semibold)).lineLimit(2)
+                        if !item.entry.location.isEmpty { Text(item.entry.location).font(.system(size: 11)).lineLimit(2) }
                         Text(ScheduleFormat.formatMinutes(Double(item.entry.startMinutes)) + "–" + ScheduleFormat.formatMinutes(Double(item.entry.endMinutes)))
-                            .font(.caption2).monospacedDigit().lineLimit(1)
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(6)
-                        .foregroundStyle(ThemeColors.ink).background(TaskCategoryColor.value(item.entry.categoryColor).opacity(0.16))
+                            .font(.system(size: 11)).monospacedDigit().lineLimit(1)
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.horizontal, 8).padding(.vertical, 6)
+                        .foregroundStyle(ThemeColors.inkStrong)
+                        .background(TaskCategoryColor.value(item.entry.categoryColor).opacity(0.18))
                         .overlay(alignment: .leading) { Rectangle().fill(TaskCategoryColor.value(item.entry.categoryColor)).frame(width: 3) }
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }.buttonStyle(.plain)
                     .frame(width: max(1, laneWidth - 4), height: item.height)
                     .offset(x: Double(item.lane) * laneWidth + 2, y: item.top)
@@ -105,8 +136,12 @@ import SwiftUI
                     let components = Calendar.current.dateComponents([.hour, .minute], from: context.date)
                     let minute = (components.hour ?? 0) * 60 + (components.minute ?? 0)
                     if let top = store.currentTimeTop(minutes: minute, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight) {
-                        Rectangle().fill(ThemeColors.danger).frame(height: 2).offset(y: top)
-                            .accessibilityLabel("当前时间，" + ScheduleFormat.formatMinutes(Double(minute)))
+                        HStack(spacing: 0) {
+                            Circle().fill(ThemeColors.danger).frame(width: 8, height: 8)
+                            Rectangle().fill(ThemeColors.danger).frame(height: 2)
+                        }
+                        .offset(x: -4, y: top - 4)
+                        .accessibilityLabel("当前时间，" + ScheduleFormat.formatMinutes(Double(minute)))
                     }
                 }.allowsHitTesting(false)
             }

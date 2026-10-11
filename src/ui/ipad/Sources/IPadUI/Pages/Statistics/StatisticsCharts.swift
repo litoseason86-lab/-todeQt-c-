@@ -6,11 +6,17 @@ struct StatisticsBarChart: View {
     let store: StatsStore
     var body: some View {
         let bars = store.snapshot.bars
+        let maxSeconds = bars.map(\.seconds).max() ?? 0
+        // 纵轴写整小时（定稿 1h 2h 3h），刻度按最大值取 1、2、3… 小时一格，最多约四格。
+        let stepHours = max(1, Int((Double(maxSeconds) / 3600 / 4).rounded(.up)))
+        let ticks = Array(stride(from: 0, through: max(maxSeconds, stepHours * 3600), by: stepHours * 3600))
         VStack(alignment: .leading, spacing: 16) {
-            Text("每日专注").font(.headline)
+            Text("每日专注").font(.system(size: 16, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
             Chart(bars) { bar in
-                BarMark(x: .value("日期", bar.label), y: .value("专注时长（秒）", bar.seconds))
-                    .foregroundStyle(bar.today ? ThemeColors.accentFill : ThemeColors.chartColors0)
+                // 定稿：今天的柱子用焦糖强调色，其余浅焦糖；柱宽与圆角取系统默认。
+                BarMark(x: .value("日期", bar.label), y: .value("专注时长（秒）", bar.seconds), width: .ratio(0.42))
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .foregroundStyle(bar.today ? ThemeColors.accentInk : ThemeColors.accentStrong.opacity(0.55))
                     .accessibilityLabel(bar.date)
                     .accessibilityValue(StatisticsFormat.formatDuration(Double(bar.seconds)))
             }
@@ -20,10 +26,21 @@ struct StatisticsBarChart: View {
                 SpatialTapGesture().onEnded { value in proxy.selectXValue(at: value.location.x) }
             }
             .chartYAxis {
-                AxisMarks(position: .leading) { value in
-                    AxisGridLine()
+                AxisMarks(position: .leading, values: ticks) { value in
+                    AxisGridLine().foregroundStyle(ThemeColors.borderSubtle)
                     AxisValueLabel {
-                        if let seconds = value.as(Int.self) { Text(StatisticsFormat.formatDuration(Double(seconds))).foregroundStyle(ThemeColors.inkSoft) }
+                        if let seconds = value.as(Int.self), seconds > 0 { Text("\(seconds / 3600)h").font(.system(size: 11)).foregroundStyle(ThemeColors.inkSoft) }
+                    }
+                }
+            }
+            .chartXAxis {
+                AxisMarks { value in
+                    AxisValueLabel {
+                        if let label = value.as(String.self) {
+                            let today = bars.first(where: { $0.label == label })?.today == true
+                            Text(label).font(.system(size: 12, weight: today ? .bold : .regular))
+                                .foregroundStyle(today ? ThemeColors.accentInk : ThemeColors.inkSoft)
+                        }
                     }
                 }
             }
@@ -34,7 +51,7 @@ struct StatisticsBarChart: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(20)
-        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 18))
+        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
     }
 }
 struct StatisticsPieChart: View {
@@ -43,7 +60,7 @@ struct StatisticsPieChart: View {
                            ThemeColors.chartColors3, ThemeColors.chartColors4, ThemeColors.chartColors5]
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("科目分配").font(.headline)
+            Text("科目分配").font(.system(size: 16, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 16) { ring; legend }
                 VStack(alignment: .leading, spacing: 16) { ring.frame(maxWidth: .infinity); legend }
@@ -54,7 +71,7 @@ struct StatisticsPieChart: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading).padding(20)
-        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 18))
+        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
     }
     private var ring: some View {
         Chart(Array(store.snapshot.categories.categories.enumerated()), id: \.offset) { item in
@@ -73,7 +90,8 @@ struct StatisticsPieChart: View {
         .chartBackground { _ in
             VStack(spacing: 3) {
                 Text(StatisticsFormat.formatDuration(Double(store.snapshot.categories.totalDuration)))
-                    .font(.caption.bold()).monospacedDigit().multilineTextAlignment(.center)
+                    .font(.system(size: 17, weight: .bold)).monospacedDigit().multilineTextAlignment(.center)
+                    .lineLimit(2).minimumScaleFactor(0.7)
                 Text("合计").font(.caption2).foregroundStyle(ThemeColors.inkMuted)
             }.frame(width: 80).allowsHitTesting(false)
         }

@@ -9,35 +9,34 @@ struct MonthGrid: View {
         VStack(spacing: 8) {
             HStack(spacing: 0) {
                 ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { weekday in
-                    Text(weekday).font(.subheadline).foregroundStyle(ThemeColors.inkSoft).frame(maxWidth: .infinity)
+                    Text(weekday).font(.system(size: 12)).foregroundStyle(ThemeColors.inkSoft).frame(maxWidth: .infinity)
                 }
             }.accessibilityHidden(true)
             LazyVGrid(columns: columns, spacing: 8) {
                 ForEach(store.cells) { cell in
                     if let date = cell.date {
                         Button { store.select(date) } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("\(cell.day)").fontWeight(cell.today ? .bold : .regular)
-                                if !compact && cell.seconds > 0 {
-                                    Text(store.durationText(cell.seconds)).font(.caption).lineLimit(1)
-                                }
+                            // 定稿格子：左上日期，底部一条投入条；选中日浅焦糖底，今天焦糖描边与焦糖日期，二者独立。
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text("\(cell.day)").font(.system(size: 15, weight: cell.today || store.isSelected(cell) ? .semibold : .regular))
+                                    .foregroundStyle(cell.today ? ThemeColors.accentInk : (cell.future ? ThemeColors.inkMuted : ThemeColors.inkStrong))
                                 Spacer(minLength: 8)
                                 // 只绘制投入条；未来与空轨道分开，选中态不覆盖档位颜色。没有自定义动画。
-                                if !cell.future { RoundedRectangle(cornerRadius: 3).fill(bandColor(cell.band)).frame(height: 8) }
-                                else { Color.clear.frame(height: 8).accessibilityHidden(true) }
+                                if !cell.future { Capsule().fill(bandColor(cell.band)).frame(height: 6) }
+                                else { Color.clear.frame(height: 6).accessibilityHidden(true) }
                             }
-                            .padding(compact ? 6 : 8).frame(maxWidth: .infinity, minHeight: compact ? 64 : 84, alignment: .topLeading)
-                            .foregroundStyle(ThemeColors.ink)
-                            .background(store.isSelected(cell) ? ThemeColors.accentSoft : ThemeColors.surfaceRaised,
-                                        in: RoundedRectangle(cornerRadius: 10))
+                            .padding(compact ? 6 : 10).frame(maxWidth: .infinity, minHeight: compact ? 58 : 88, alignment: .topLeading)
+                            .background(store.isSelected(cell) ? ThemeColors.accentFill : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                             // 今天描边与选中底色是独立状态，选历史日不能把今天标记搬过去。
-                            .overlay { RoundedRectangle(cornerRadius: 10).stroke(cell.today ? ThemeColors.accentInk : .clear, lineWidth: 1.5) }
+                            .overlay { RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(cell.today ? ThemeColors.accentInk : .clear, lineWidth: 1.5) }
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain).disabled(cell.future)
                         .accessibilityLabel(date + (cell.today ? "，今天" : ""))
                         .accessibilityValue(cell.future ? "未来日期" : store.durationText(cell.seconds))
                         .accessibilityAddTraits(store.isSelected(cell) ? .isSelected : [])
-                    } else { Color.clear.frame(minHeight: compact ? 64 : 84).accessibilityHidden(true) }
+                    } else { Color.clear.frame(minHeight: compact ? 58 : 88).accessibilityHidden(true) }
                 }
             }
         }

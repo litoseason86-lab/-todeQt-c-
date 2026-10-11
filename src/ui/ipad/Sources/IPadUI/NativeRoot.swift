@@ -101,6 +101,9 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         // 055-R4：调试巡检复用同一套 Store 另开窗口截图；不带启动参数时不生效。
         UITour.rootView = { AnyView(root) }
         UITour.selectSettingsSection = { [weak settings] in settings?.selectSection($0) }
+        UITour.extras[.todayFocus] = [
+            ("prev", { [weak timeline] in if let day = timeline?.adjacentDate(days: -1) { timeline?.selectDate(day) } }),
+            (nil, { [weak timeline] in if let day = timeline?.adjacentDate(days: 1) { timeline?.selectDate(day) } })]
         UITour.startIfRequested(shell: store)
         return UIHostingController(rootView: root)
     }

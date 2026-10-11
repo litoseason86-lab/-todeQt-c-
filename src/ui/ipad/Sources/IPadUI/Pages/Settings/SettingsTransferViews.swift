@@ -23,7 +23,7 @@ import UniformTypeIdentifiers
                 if !store.snapshot.statusDetail.isEmpty && store.snapshot.hasProblem {
                     Text(store.snapshot.statusDetail).foregroundStyle(ThemeColors.danger)
                 }
-                LabeledContent("上次同步", value: store.snapshot.lastSyncedAt.isEmpty ? "—" : store.snapshot.lastSyncedAt)
+                LabeledContent("上次同步", value: SyncTimeText.display(store.snapshot.lastSyncedAt))
                 LabeledContent("待同步", value: store.pendingText)
                 Button("立即同步", systemImage: "arrow.triangle.2.circlepath") { store.syncNow() }
                     .disabled(store.snapshot.busy || !store.snapshot.hasFolder)
@@ -215,5 +215,20 @@ private indirect enum TransferValue: Sendable {
         case .file(let data): return FileWrapper(regularFileWithContents: data)
         case .directory(let children): return FileWrapper(directoryWithFileWrappers: children.mapValues { $0.wrapper() })
         }
+    }
+}
+
+// 「上次同步」按设备时钟写成「今天 19:42」「昨天 08:10」「10月8日 21:30」；原始时间串解析不了就原样显示。
+// 只是展示口径，同步状态与时间本身都来自服务。
+enum SyncTimeText {
+    static func display(_ value: String) -> String {
+        guard !value.isEmpty else { return "—" }
+        guard let date = LogicalDateNavigation.timestampDate(value) else { return value }
+        let calendar = Calendar(identifier: .gregorian)
+        let clock = date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+        if calendar.isDateInToday(date) { return "今天 " + clock }
+        if calendar.isDateInYesterday(date) { return "昨天 " + clock }
+        let parts = calendar.dateComponents([.month, .day], from: date)
+        return "\(parts.month ?? 0)月\(parts.day ?? 0)日 " + clock
     }
 }

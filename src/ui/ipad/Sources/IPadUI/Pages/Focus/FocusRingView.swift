@@ -11,15 +11,19 @@ struct FocusRingView<Center: View>: View {
     var reduceMotion: Bool
     var lineWidth: CGFloat = 14
     var glassFill = true
+    // 定稿专注页：专注弧用焦糖单色、底轨用浅焦糖；沉浸页仍用渐变弧。
+    var workColor: Color? = nil
+    var trackColor: Color? = nil
     @ViewBuilder var center: () -> Center
 
     private var arcStyle: AnyShapeStyle {
         switch tone {
         case .work:
-            AnyShapeStyle(AngularGradient(colors: [ThemeColors.focusRingArcStart, ThemeColors.focusRingArcMid, ThemeColors.focusRingArcEnd],
+            if let workColor { return AnyShapeStyle(workColor) }
+            return AnyShapeStyle(AngularGradient(colors: [ThemeColors.focusRingArcStart, ThemeColors.focusRingArcMid, ThemeColors.focusRingArcEnd],
                                           center: .center, startAngle: .degrees(0), endAngle: .degrees(360)))
-        case .rest: AnyShapeStyle(ThemeColors.focusBreakAccent)
-        case .done: AnyShapeStyle(ThemeColors.success)
+        case .rest: return AnyShapeStyle(ThemeColors.focusBreakAccent)
+        case .done: return AnyShapeStyle(ThemeColors.success)
         }
     }
 
@@ -29,7 +33,7 @@ struct FocusRingView<Center: View>: View {
             Circle().fill(RadialGradient(colors: [ThemeColors.focusGlassCenter, ThemeColors.focusGlassEdge],
                                          center: .center, startRadius: 0, endRadius: 160))
             }
-            Circle().stroke(ThemeColors.focusRingTrack, lineWidth: lineWidth)
+            Circle().stroke(trackColor ?? ThemeColors.focusRingTrack, lineWidth: lineWidth)
             Circle()
                 .trim(from: 0, to: max(0.001, min(1, progress)))
                 .stroke(arcStyle, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))

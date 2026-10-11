@@ -46,6 +46,21 @@ import XCTest
         XCTAssertFalse(store.canAdd(on: "2026-10-10"))
     }
 
+    // 产品保证：翻周读服务换算出的那一周；翻回本周后重新跟随服务的本周，不停在手动记下的日期上。
+    func testShiftWeekReadsServicePeriodAndReturnsToCurrent() {
+        let (tasks, day, _, store) = fixture()
+        day.periodHandler = { _, _, shift, _ in
+            var value = PeriodDates(); value.start = shift > 0 ? "2026-10-12" : "2026-10-05"; return value
+        }
+        XCTAssertTrue(store.showsCurrentWeek)
+        store.shiftWeek(1)
+        XCTAssertEqual(day.periodCalls.last?.0, "2026-10-05"); XCTAssertEqual(day.periodCalls.last?.1, "week")
+        XCTAssertEqual(tasks.calls.last(where: { $0.name == "plannedMinutes" })?.text.first, "2026-10-12")
+        XCTAssertEqual(store.weekStart, "2026-10-12"); XCTAssertFalse(store.showsCurrentWeek)
+        store.shiftWeek(-1)
+        XCTAssertTrue(store.showsCurrentWeek); XCTAssertEqual(store.weekStart, "2026-10-05")
+    }
+
     private func row(_ id: Int, date: String = "2026-10-09", completed: Bool = false) -> TaskValue {
         var value = TaskValue(); value.id = id; value.title = "任务 \(id)"; value.date = date; value.completed = completed
         return value

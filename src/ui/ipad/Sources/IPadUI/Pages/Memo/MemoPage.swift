@@ -10,8 +10,8 @@ import UIKit
     var body: some View {
         GeometryReader { geometry in
             let wide = geometry.size.width >= 760 && !typeSize.isAccessibilitySize
-            VStack(alignment: .leading, spacing: 20) {
-                Text("备忘录").font(.largeTitle.bold())
+            VStack(alignment: .leading, spacing: 14) {
+                PageHeader(title: "备忘录")
                 if wide {
                     HStack(alignment: .top, spacing: 20) {
                         listCard.frame(width: min(380, geometry.size.width * 0.38))
@@ -19,11 +19,12 @@ import UIKit
                     }
                 } else { listCard }
             }
-            .padding(.horizontal, wide ? 32 : 16).padding(.vertical, 16)
+            .padding(.top, 4).padding(.bottom, wide ? 24 : 0)
+            .safeAreaPadding(.horizontal, wide ? Design.pageMargin(geometry: geometry, compact: false, maxWidth: 1100) : 16)
             .navigationDestination(isPresented: Binding(get: { !wide && store.detailPresented }, set: { value in
                 if !value { commitInput(); _ = store.dismissMemo() }
             })) {
-                paper.padding(16).navigationTitle("备忘录").navigationBarBackButtonHidden(true)
+                paper.padding(16).modifier(PageBackground()).navigationTitle("备忘录").navigationBarBackButtonHidden(true)
                     .toolbar {
                         ToolbarItem(placement: .topBarLeading) {
                             Button("备忘录", systemImage: "chevron.left") { commitInput(); _ = store.dismissMemo() }
@@ -36,10 +37,13 @@ import UIKit
             .onChange(of: wide) { commitInput() }
         }
         .foregroundStyle(ThemeColors.ink).navigationTitle("")
+        .toolbarTitleDisplayMode(.inline)
         .toolbar {
-            Menu("新建", systemImage: "plus") {
-                Button("新建备忘录") { commitInput(); _ = store.createAndPresentMemo() }
-                Button("新建分类…") { commitInput(); _ = store.requestCategorySheet() }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button("新建备忘录") { commitInput(); _ = store.createAndPresentMemo() }
+                    Button("新建分类…") { commitInput(); _ = store.requestCategorySheet() }
+                } label: { ToolbarTextLabel(title: "新建", systemImage: "square.and.pencil") }
             }
         }
         .sheet(isPresented: Binding(get: { store.categorySheetPresented }, set: { if !$0 { store.dismissCategorySheet() } })) { categoryPicker }
@@ -69,14 +73,15 @@ import UIKit
                                     Text(id == -1 ? "全部" : store.categoryName(id))
                                     Text("\(store.categoryCount(id))").monospacedDigit()
                                 }
-                                .font(.subheadline).padding(.horizontal, 12).padding(.vertical, 8)
-                                .foregroundStyle(store.filterCategoryID == id ? ThemeColors.accentForeground : ThemeColors.inkSoft)
-                                .background(store.filterCategoryID == id ? ThemeColors.accentFill : ThemeColors.surfaceSunken, in: Capsule())
+                                // 定稿：选中的分类焦糖实底浅字，其余浅焦糖底。
+                                .font(.system(size: 14, weight: .semibold)).padding(.horizontal, 12).frame(height: 34)
+                                .foregroundStyle(store.filterCategoryID == id ? ThemeColors.surface : ThemeColors.accentFillInk)
+                                .background(store.filterCategoryID == id ? ThemeColors.accentInk : ThemeColors.accentFill, in: Capsule())
                             }
                             .buttonStyle(.plain).accessibilityLabel("\(id == -1 ? "全部" : store.categoryName(id))，\(store.categoryCount(id)) 条")
                             .accessibilityAddTraits(store.filterCategoryID == id ? .isSelected : [])
                         }
-                    }.padding(16)
+                    }.padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 8)
                 }.scrollIndicators(.hidden)
             }
             ScrollViewReader { proxy in
@@ -84,19 +89,28 @@ import UIKit
                     if !store.errorMessage.isEmpty { errorRow }
                     ForEach(store.visibleItems) { memo in
                         Button { commitInput(); _ = store.presentMemo(memo.id) } label: {
-                            VStack(alignment: .leading, spacing: 6) {
+                            // 定稿行：标题 15 粗、右侧更新时间 12，下面首行预览 13；选中行圆角浅焦糖底。
+                            VStack(alignment: .leading, spacing: 4) {
                                 HStack(alignment: .firstTextBaseline) {
-                                    Text(MemoFormat.shownTitle(title: memo.title, body: memo.body)).font(.headline).foregroundStyle(ThemeColors.ink)
+                                    Text(MemoFormat.shownTitle(title: memo.title, body: memo.body))
+                                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong).lineLimit(1)
                                     Spacer(minLength: 8)
                                     Text(MemoFormat.formatUpdatedAt(memo.updatedAt, now: store.displayNow))
-                                        .font(.caption).foregroundStyle(ThemeColors.inkMuted)
+                                        .font(.system(size: 12)).foregroundStyle(ThemeColors.inkSoft)
                                 }
-                                Text(memo.body.components(separatedBy: "\n").first ?? "").font(.subheadline)
+                                Text(memo.body.components(separatedBy: "\n").first ?? "").font(.system(size: 13))
                                     .foregroundStyle(ThemeColors.inkSoft).lineLimit(1)
-                            }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 14).padding(.vertical, 12)
+                            .background(store.selectedID == memo.id ? ThemeColors.accentFill : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain).id(memo.id)
-                        .listRowBackground(store.selectedID == memo.id ? ThemeColors.accentSoft : ThemeColors.surface)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 1, leading: 12, bottom: 1, trailing: 12))
                         .contextMenu { moveMenu(memo) }
                         .onDrag {
                             commitInput()
@@ -119,18 +133,20 @@ import UIKit
                     }
                 }
                 .listStyle(.plain).scrollContentBackground(.hidden).contentMargins(.top, 0, for: .scrollContent)
+                .environment(\.defaultMinListRowHeight, 1)
                 .onChange(of: store.selectedID) { _, id in if let id { proxy.scrollTo(id, anchor: .center) } }
             }
-        }.background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 18))
+        }.background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
     }
     private var paper: some View {
         VStack(alignment: .leading, spacing: 12) {
             if store.selectedID != nil {
+                // 定稿纸面：左上分类名（13 粗焦糖），右上「X 更新」，下面大标题与正文。
                 HStack {
-                    Text(store.categoryName(store.editorCategoryID)).foregroundStyle(ThemeColors.inkSoft)
+                    Text(store.categoryName(store.editorCategoryID)).font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColors.accentInk)
                     Spacer()
                     let updated = MemoFormat.formatUpdatedAt(store.updatedAt, now: store.displayNow)
-                    if !updated.isEmpty { Text(updated + " 更新").font(.caption).foregroundStyle(ThemeColors.inkSoft) }
+                    if !updated.isEmpty { Text(updated + " 更新").font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft) }
                 }
                 if !store.errorMessage.isEmpty { errorRow }
                 MemoTitleEditor(text: store.editorTitle, isComposing: store.titleComposing,
@@ -147,8 +163,9 @@ import UIKit
                 }
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(20)
-        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 18))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(EdgeInsets(top: 28, leading: 36, bottom: 28, trailing: 36))
+        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
         .task { await refreshDisplayClock(forDetail: true) }
     }
     private func refreshDisplayClock(forDetail: Bool) async {
@@ -160,9 +177,10 @@ import UIKit
         }
     }
     private var errorRow: some View {
-        VStack(alignment: .leading) {
+        HStack {
             Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
-            if store.errorFromRead { Button("重试") { store.refresh() } }
+            Spacer()
+            if store.errorFromRead { Button("重试") { store.refresh() }.buttonStyle(SoftPillStyle()) }
         }
     }
     @ViewBuilder private func moveMenu(_ memo: MemoValue) -> some View {

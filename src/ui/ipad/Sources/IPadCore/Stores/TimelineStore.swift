@@ -62,6 +62,8 @@ public struct SessionEditorDraft: Equatable, Sendable {
     @ObservationIgnored private let logicalDay: any LogicalDayBridgeProtocol
     @ObservationIgnored private var selectedRelation: DateRelation = .same
     public var canAddManualSession: Bool { relationAvailable && !isFutureDate }
+    // 副标题「· 今天」只认服务的日期关系，不用设备日期比较。
+    public var isSelectedToday: Bool { relationAvailable && selectedRelation == .same }
     public var visibleSessions: [SessionValue] {
         sessions.filter { !pendingDeletion.state.active || $0.id != pendingDeletion.pendingSessionID || $0.isRest != pendingDeletion.state.sessionIsRest }
     }

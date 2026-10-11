@@ -121,7 +121,10 @@ struct ShellRootView: View {
     private var moreView: some View {
         NavigationStack(path: $morePath) {
             List(store.morePages, id: \.self) { page in
-                NavigationLink(value: page) { Label(page.title, systemImage: page.symbol) }
+                NavigationLink(value: page) {
+                    Label { Text(page.title).foregroundStyle(ThemeColors.inkStrong) }
+                    icon: { Image(systemName: page.symbol).foregroundStyle(ThemeColors.accentInk) }
+                }
                     .listRowBackground(store.selectedTheme != nil ? ThemeColors.surface : nil)
             }
             .scrollContentBackground(store.selectedTheme != nil ? .hidden : .visible)
@@ -141,15 +144,28 @@ struct ShellRootView: View {
             GridRow { tile(tiles[2]); tile(tiles[3]) }
         }.padding(.vertical, 8)
     }
+    // 定稿侧栏底部：细分隔线下两行，图标焦糖、文字 16 常规，行高 44；当前页浅焦糖底。
     private var fixedEntries: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 2) {
             ForEach(PageID.fixed, id: \.self) { page in
+                let selected = store.selection == page
                 Button { store.select(page) } label: {
-                    Label(page.title, systemImage: page.symbol)
-                        .frame(maxWidth: .infinity, alignment: .leading).padding(12)
-                }.buttonStyle(.plain)
+                    HStack(spacing: 12) {
+                        Image(systemName: page.symbol).font(.system(size: 18)).foregroundStyle(ThemeColors.accentInk)
+                            .frame(width: 24)
+                        Text(page.title).font(.system(size: 16)).foregroundStyle(ThemeColors.inkStrong)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12).frame(height: 44)
+                    .background(selected ? ThemeColors.accentFill : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
-        }.padding(.vertical, 8)
+        }
+        .padding(.top, 8)
+        .overlay(alignment: .top) { Rectangle().fill(ThemeColors.border).frame(height: 1) }
     }
     private var preferredScheme: ColorScheme? {
         switch store.snapshot.appearance {
@@ -162,18 +178,30 @@ struct ShellRootView: View {
     private var clock: String {
         ShellDisplay.clock(store.snapshot.mode == 1 ? store.snapshot.remainingSeconds : store.snapshot.elapsedSeconds)
     }
+    // 定稿侧栏摘要块：当前页那块焦糖实底、浅色字，其余浅焦糖底；数字 22 粗、单位 13。
     private func tile(_ tile: ShellSummaryTile) -> some View {
-        Button { store.select(tile.page) } label: {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack { Image(systemName: tile.page.symbol); Spacer(); Text(tile.value).monospacedDigit() }
-                Text(tile.title).font(.caption)
+        let selected = store.selection == tile.page
+        return Button { store.select(tile.page) } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Image(systemName: tile.page.symbol).font(.system(size: 17))
+                        .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.accentInk)
+                    Spacer(minLength: 4)
+                    MixedNumberText(parts: MixedNumberText.split(tile.value), numberSize: 22, unitSize: 13)
+                        .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.inkStrong)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                }
+                Text(tile.title).font(.system(size: 13)).lineLimit(1)
+                    .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.ink)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
+            .background(selected ? ThemeColors.accentInk : ThemeColors.accentFill.opacity(0.7),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(tile.title)，\(tile.value)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
     private var miniTimer: some View {
         HStack(spacing: 12) {
@@ -216,9 +244,10 @@ private struct ShellChrome: ViewModifier {
             .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
+                    // 定稿：宽窗「✎ 记一笔」带文字，窄窗只留图标。
                     Button { store.presentCapture() } label: {
-                        if sizeClass == .compact { Image(systemName: "square.and.pencil") }
-                        else { Label("记一笔", systemImage: "square.and.pencil") }
+                        if sizeClass == .compact { Image(systemName: "pencil") }
+                        else { ToolbarTextLabel(title: "记一笔", systemImage: "pencil") }
                     }.accessibilityLabel("记一笔")
                         .popover(isPresented: $store.capturePresented) { capturePopover }
                 }

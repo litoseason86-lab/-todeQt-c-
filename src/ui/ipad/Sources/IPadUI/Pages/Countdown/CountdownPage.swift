@@ -9,67 +9,97 @@ import SwiftUI
         GeometryReader { geometry in
             let wide = geometry.size.width >= 720 && !typeSize.isAccessibilitySize
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("目标倒计时").font(.largeTitle.bold())
-                        Text("\(store.items.count) 个目标").font(.subheadline).foregroundStyle(ThemeColors.inkMuted)
-                    }
+                VStack(alignment: .leading, spacing: 18) {
+                    PageHeader(title: "目标倒计时")
                     if !store.errorMessage.isEmpty {
-                        VStack(alignment: .leading) {
+                        HStack {
                             Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
-                            Button("重试") { store.refresh() }
+                            Spacer()
+                            Button("重试") { store.refresh() }.buttonStyle(SoftPillStyle())
                         }
                     }
                     if let main = store.primary {
-                        Button { store.requestEdit(main) } label: {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("主目标").font(.subheadline).foregroundStyle(ThemeColors.accentInk)
-                                Text(main.name).font(.title2.bold()).foregroundStyle(ThemeColors.inkStrong)
-                                Text(CountdownFormat.targetDate(main.targetDate)).foregroundStyle(ThemeColors.inkSoft)
-                                Text(CountdownFormat.days(main.daysRemaining))
-                                    .font(.system(size: wide ? 64 : 48, weight: .bold, design: .rounded))
-                                    .monospacedDigit().minimumScaleFactor(0.5).lineLimit(1).foregroundStyle(ThemeColors.accentInk)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(wide ? 28 : 20)
-                            .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 18))
-                        }
-                        .buttonStyle(.plain).contextMenu { goalMenu(main) }
-                        .accessibilityElement(children: .combine)
+                        Button { store.requestEdit(main) } label: { primaryCard(main, wide: wide) }
+                            .buttonStyle(.plain).contextMenu { goalMenu(main) }
+                            .accessibilityElement(children: .combine)
                     }
                     if !store.secondary.isEmpty {
                         VStack(spacing: 0) {
                             ForEach(store.secondary) { goal in
+                                if goal.id != store.secondary.first?.id { CardDivider() }
                                 Button { store.requestEdit(goal) } label: {
                                     HStack(spacing: 16) {
-                                        VStack(alignment: .leading, spacing: 5) {
-                                            Text(goal.name).font(.headline).foregroundStyle(ThemeColors.ink)
-                                            Text(CountdownFormat.targetDate(goal.targetDate)).font(.subheadline).foregroundStyle(ThemeColors.inkSoft)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(goal.name).font(.system(size: 16)).foregroundStyle(ThemeColors.inkStrong)
+                                            Text(CountdownFormat.targetDate(goal.targetDate)).font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
                                         }
                                         Spacer(minLength: 0)
-                                        Text(CountdownFormat.days(goal.daysRemaining)).font(.title3.bold())
-                                            .monospacedDigit().foregroundStyle(ThemeColors.accentInk)
-                                    }.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                                        daysText(goal.daysRemaining, numberSize: 22, unitSize: 13)
+                                    }
+                                    .padding(.horizontal, 20).frame(minHeight: 68).contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain).contextMenu { goalMenu(goal) }
                                 .accessibilityElement(children: .combine)
-                                if goal.id != store.secondary.last?.id { Divider().overlay(ThemeColors.borderSubtle).padding(.horizontal, 20) }
                             }
-                        }.background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: 18))
+                        }
+                        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
                     }
                 }
-                .frame(maxWidth: 900).frame(maxWidth: .infinity)
-                .padding(.horizontal, wide ? 32 : 16).padding(.vertical, 16)
+                .padding(.top, 4).padding(.bottom, 24)
+                .frame(maxWidth: Design.contentMaxWidth).frame(maxWidth: .infinity)
             }
+            .safeAreaPadding(.horizontal, Design.pagePadding(compact: !wide))
         }
         .foregroundStyle(ThemeColors.ink).navigationTitle("")
+        .toolbarTitleDisplayMode(.inline)
         .toolbar {
-            Button("新增目标", systemImage: "plus") { store.requestAdd() }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { store.requestAdd() } label: { ToolbarTextLabel(title: "新增目标", systemImage: "plus") }
+            }
         }
         .sheet(item: Binding(get: { store.form }, set: { if $0 == nil { store.dismissForm() } })) { intent in
             CountdownSheet(store: store, opened: intent.opened)
         }
         .onAppear { store.setActive(true) }.onDisappear { store.setActive(false) }
     }
+
+    // 定稿主目标卡：左边「主目标」、名称与日期，右边「还有 72 天」（数字 72 号焦糖）；过期写「已过 N 天」。
+    private func primaryCard(_ main: CountdownValue, wide: Bool) -> some View {
+        let days = main.daysRemaining
+        let left = VStack(alignment: .leading, spacing: 6) {
+            Text("主目标").font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColors.accentInk)
+            Text(main.name).font(.system(size: 28, weight: .bold)).foregroundStyle(ThemeColors.inkStrong).lineLimit(2)
+            Text(CountdownFormat.targetDate(main.targetDate)).font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+        }
+        let right = HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(days < 0 ? "已过" : "还有").font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+            Text("\(abs(days))").font(.system(size: wide ? 72 : 56, weight: .bold)).monospacedDigit()
+                .foregroundStyle(days < 0 ? ThemeColors.danger : ThemeColors.accentInk)
+                .lineLimit(1).minimumScaleFactor(0.5)
+            Text("天").font(.system(size: 20, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+        }
+        return Group {
+            if wide {
+                HStack(alignment: .center) { left; Spacer(minLength: 16); right }
+            } else {
+                VStack(alignment: .leading, spacing: 10) { left; right }
+            }
+        }
+        .padding(EdgeInsets(top: 26, leading: 32, bottom: 26, trailing: 32))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
+    }
+
+    private func daysText(_ days: Int, numberSize: CGFloat, unitSize: CGFloat) -> some View {
+        Group {
+            if days < 0 {
+                Text(CountdownFormat.days(days)).font(.system(size: 15, weight: .semibold)).foregroundStyle(ThemeColors.danger)
+            } else {
+                MixedNumberText(parts: [("\(days)", true), ("天", false)], numberSize: numberSize, unitSize: unitSize)
+            }
+        }
+    }
+
     @ViewBuilder private func goalMenu(_ goal: CountdownValue) -> some View {
         Button("设为主目标") { store.makePrimary(id: goal.id) }.disabled(store.primary?.id == goal.id)
         Button("上移") { store.move(id: goal.id, delta: -1) }.disabled(store.items.first?.id == goal.id)

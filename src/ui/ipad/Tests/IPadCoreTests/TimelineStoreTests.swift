@@ -19,6 +19,18 @@ import XCTest
                                   logicalDay: logicalDay, date: "2026-10-09")
         }
     }
+    // 产品保证：副标题「· 今天」只认服务的日期关系；翻到别的日子或关系读取失败时都不写「今天」。
+    func testSelectedTodayFollowsServiceRelation() {
+        let f = Fixture()
+        XCTAssertTrue(f.store.isSelectedToday)
+        f.logicalDay.relations["2026-10-08/2026-10-09"] = .earlier
+        f.store.selectDate("2026-10-08")
+        XCTAssertFalse(f.store.isSelectedToday)
+        f.logicalDay.error = NSError(domain: "test", code: 1)
+        f.store.selectDate("2026-10-09")
+        XCTAssertFalse(f.store.isSelectedToday)
+    }
+
     // 产品保证：前后日导航委托 C++ 周期接口，失败保留所选日期与服务错误。
     func testAdjacentDateUsesLogicalDayPeriod() {
         let f = Fixture()

@@ -11,21 +11,22 @@ struct FocusView: View {
         GeometryReader { geometry in
             let narrow = geometry.size.width < 700
             ScrollView {
-                VStack(spacing: 24) {
-                    clockArea
-                        .frame(width: narrow ? 260 : 340)
-                    if !store.taskSelectorActive {
-                        Text(store.compactStageText).font(.subheadline).foregroundStyle(ThemeColors.inkSoft)
+                // 定稿：圆环居中，环内时间与一行状态；环下任务名，再下两个圆按钮。
+                VStack(spacing: narrow ? 28 : 36) {
+                    clockArea(narrow: narrow)
+                        .frame(width: narrow ? 280 : 404)
+                    VStack(spacing: 20) {
+                        taskHeader
+                        if !store.errorText.isEmpty {
+                            Text(store.errorText).font(.system(size: 15)).foregroundStyle(ThemeColors.danger)
+                                .multilineTextAlignment(.center)
+                        }
+                        controls
                     }
-                    taskHeader
-                    if !store.errorText.isEmpty {
-                        Text(store.errorText).font(.subheadline).foregroundStyle(ThemeColors.danger)
-                            .multilineTextAlignment(.center)
-                    }
-                    controls
                 }
-                .padding(narrow ? 16 : 32).frame(maxWidth: .infinity)
-                .frame(minHeight: max(0, geometry.size.height - 64))
+                .padding(.horizontal, narrow ? 16 : 32).padding(.top, narrow ? 24 : 40)
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: max(0, geometry.size.height - 120), alignment: .top)
             }
         }
         .scrollContentBackground(.hidden)
@@ -65,23 +66,28 @@ struct FocusView: View {
                 }
                 Button("新建并开始", systemImage: "plus") { store.openTaskSelector() }
             } label: {
-                Label(store.selectedTaskTitle.isEmpty ? "选择要专注的任务" : store.selectedTaskTitle,
-                      systemImage: "chevron.down")
-                    .font(.title3).foregroundStyle(ThemeColors.ink).frame(minHeight: 44)
+                HStack(spacing: 6) {
+                    Text(store.selectedTaskTitle.isEmpty ? "选择要专注的任务" : store.selectedTaskTitle)
+                    Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold))
+                }
+                .font(.system(size: 17, weight: .medium)).foregroundStyle(ThemeColors.ink).frame(minHeight: 44)
             }
             .popover(isPresented: Bindable(store).taskSelectorPresented) {
                 FocusTaskPicker(store: store).presentationCompactAdaptation(.sheet)
             }
         } else {
-            Text(store.taskTitleText).font(.title2).multilineTextAlignment(.center).foregroundStyle(ThemeColors.ink)
+            Text(store.taskTitleText).font(.system(size: 17, weight: .medium))
+                .multilineTextAlignment(.center).foregroundStyle(ThemeColors.ink)
         }
     }
 
-    private var clockArea: some View {
+    private func clockArea(narrow: Bool) -> some View {
         FocusRingView(progress: store.ringProgress, tone: ringTone, dimmed: store.ringDimmed,
-                      reduceMotion: store.animationsReduced, lineWidth: 3, glassFill: false) {
-            VStack(spacing: 12) {
-                FocusClockText(text: store.primaryTimeText, size: store.pomodoroModeSelected ? 56 : 42,
+                      reduceMotion: store.animationsReduced, lineWidth: 5, glassFill: false,
+                      workColor: ThemeColors.accentInk, trackColor: ThemeColors.borderSubtle) {
+            VStack(spacing: 10) {
+                FocusClockText(text: store.primaryTimeText,
+                               size: (store.pomodoroModeSelected ? 96 : 76) * (narrow ? 0.66 : 1),
                                slim: store.slimClockFont, color: timeColor)
                 if store.taskSelectorActive {
                     Menu {
@@ -92,11 +98,16 @@ struct FocusView: View {
                             Button("自由计时") { store.selectModePreset(minutes: nil) }
                         }
                     } label: {
-                        Label(store.modeMenuTitle, systemImage: "chevron.down")
-                            .font(.subheadline).foregroundStyle(ThemeColors.inkSoft)
+                        HStack(spacing: 6) {
+                            Text(store.modeMenuTitle)
+                            Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
+                        }
+                        .font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
                     }.accessibilityLabel("专注模式与时长，" + store.modeMenuTitle)
+                } else {
+                    Text(store.compactStageText).font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
                 }
-            }.padding(24)
+            }.padding(28)
         }
     }
     private var ringTone: FocusRingTone {
@@ -110,7 +121,7 @@ struct FocusView: View {
         switch store.state {
         case .workDone, .breakDone: ThemeColors.successInk
         case .pomoBreak: ThemeColors.focusBreakInk
-        default: store.ringDimmed ? ThemeColors.inkSoft : ThemeColors.accentInk
+        default: store.ringDimmed ? ThemeColors.inkSoft : ThemeColors.inkStrong
         }
     }
 
@@ -121,7 +132,7 @@ struct FocusView: View {
                 _ = store.startCurrentMode()
             }
         } else {
-            HStack(spacing: 28) {
+            HStack(spacing: 24) {
                 roundButton(store.primaryButtonText,
                             icon: store.snapshot.running ? "pause.fill" : "play.fill", primary: true,
                             enabled: store.primaryButtonEnabled) { store.triggerPrimary() }
@@ -131,12 +142,14 @@ struct FocusView: View {
             }
         }
     }
+    // 定稿：主按钮焦糖实心圆、浅色图标；次按钮浅焦糖圆、焦糖图标；直径 68。
     private func roundButton(_ title: String, icon: String, primary: Bool, enabled: Bool,
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.title2).frame(width: 64, height: 64)
-                .foregroundStyle(primary ? ThemeColors.accentInk : ThemeColors.inkSoft)
-                .background(primary ? ThemeColors.accentSoft : ThemeColors.surfaceRaised, in: Circle())
+            Image(systemName: icon).font(.system(size: 22, weight: .semibold)).frame(width: 68, height: 68)
+                .foregroundStyle(primary ? ThemeColors.surface : ThemeColors.accentInk)
+                .background(primary ? ThemeColors.accentInk : ThemeColors.accentFill, in: Circle())
+                .opacity(enabled ? 1 : 0.45)
         }.buttonStyle(.plain).disabled(!enabled).accessibilityLabel(title)
     }
 }

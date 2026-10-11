@@ -539,6 +539,7 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/Stores/TimelineStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/WeekStore.swift
         src/ui/ipad/Sources/IPadCore/Format/LogicalDateNavigation.swift
+        src/ui/ipad/Sources/IPadCore/Format/TimelineLayout.swift
         src/ui/ipad/Sources/IPadCore/Format/ScheduleFormat.swift
         src/ui/ipad/Sources/IPadCore/Format/ScheduleLayout.swift)
     target_sources(IPadUI PRIVATE
@@ -692,6 +693,8 @@ if(IOS)
     target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Theme/ThemeAppearance.swift)
     # 055-R4：调试巡检，只有带 --ipad-ui-tour 启动参数时截图。
     target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Shell/UITour.swift)
+    # 055-R4：按定稿 CSS 的公共样式（卡片、胶囊、页头、数字混排）。
+    target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Components/DesignKit.swift)
     target_link_libraries(IPadUI PRIVATE IPadCore)
     # 055-P3A：颜色资源属于应用包，Swift 按 Bundle.main 获取；壁纸继续只用 Qt 已打包的资源。
     target_sources(PomodoroTodo PRIVATE src/ui/ipad/Sources/IPadUI/Resources/Colors.xcassets)

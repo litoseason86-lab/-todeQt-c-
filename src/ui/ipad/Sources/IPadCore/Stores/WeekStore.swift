@@ -64,7 +64,9 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
         guard !interactions.refreshBlocked else { refreshPending = true; return }
         refreshPending = false
         do {
-            let start = try weekStartProvider?() ?? weekStart
+            let following = try weekStartProvider?() ?? followedWeekStart
+            let start = shownWeekStart ?? following
+            followedWeekStart = following
             let dates = try weekDates(start)
             guard dates.count == 7 else { throw NSError(domain: "WeekStore", code: 1, userInfo: [NSLocalizedDescriptionKey: "周日期读取不完整"]) }
             let rows = try tasks.weekTasks(startDate: start)
@@ -80,6 +82,22 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
         } catch { self.error = error.localizedDescription }
     }
     public func updateLogicalDay() { refresh() }
+    // 055-R4 翻周（同 Mac 本周计划）：周的起止由服务按统一日界换算；翻到别的周后日界不抢回，
+    // 翻回本周就重新跟随服务的「本周」。
+    @ObservationIgnored private var shownWeekStart: String?
+    // 跟随中的本周起点：没有服务提供本周时（测试替身），翻回来要回到这里，而不是停在上次显示的周。
+    @ObservationIgnored private lazy var followedWeekStart: String = weekStart
+    public private(set) var weekOffset = 0
+    public var showsCurrentWeek: Bool { weekOffset == 0 }
+    public func shiftWeek(_ delta: Int) {
+        guard delta != 0 else { return }
+        do {
+            let period = try logicalDay.period(anchor: weekStart, range: "week", shift: delta, logicalToday: logicalDay.today)
+            weekOffset += delta
+            shownWeekStart = weekOffset == 0 ? nil : period.start
+            refresh()
+        } catch { self.error = error.localizedDescription }
+    }
     public var selectedDate = ""
     public var selectedGroup: WeekDayGroup? { groups.first { $0.date == selectedDate } ?? groups.first { $0.date == logicalToday } ?? groups.first }
     public func selectDay(_ date: String) { if groups.contains(where: { $0.date == date }) { selectedDate = date } }
