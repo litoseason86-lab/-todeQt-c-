@@ -16,16 +16,21 @@ public enum GapFormIntent: Identifiable, Equatable {
     public private(set) var form: GapFormIntent?
     public func select(_ id: Int) {
         guard items.contains(where: { $0.id == id }) else { return }
+        pendingRevealID = nil
         selectedID = id; detailPresented = true
     }
     public func closeDetail() { detailPresented = false }
     // 从全局搜索跳到某条：只改状态筛选不够，页内旧搜索词会让它不在结果里，refresh 随即清掉选中；
     // 所以先清搜索词、筛选切到它所在的一类（已解决 2，其余归未解决 -2），重读后再选中并推入详情。
+    // 目标记成待定，等某次读取成功才落到选中：这次读取失败时先清掉旧选中（不把另一条当成这次的结果），
+    // 之后重试或页面激活读到了再打开它；期间用户自己选了别的条目（select）就作废。
+    @ObservationIgnored private var pendingRevealID: Int?
     public func reveal(_ gap: GapValue) {
         search = ""
         statusFilter = gap.status == 2 ? 2 : -2
+        pendingRevealID = gap.id
+        selectedID = nil; detailPresented = false
         refresh()
-        select(gap.id)
     }
     public func requestForm(_ intent: GapFormIntent) {
         if case .add = intent { form = .add; return }
@@ -77,7 +82,11 @@ public enum GapFormIntent: Identifiable, Equatable {
             let rows = try bridge.gaps(status: statusFilter, categoryID: 0, search: search)
             let subjects = try categoryBridge?.allCategories() ?? []
             items = rows; categories = subjects; errorMessage = ""
-            if let selectedID, !rows.contains(where: { $0.id == selectedID }) {
+            if let target = pendingRevealID {
+                // 目标已被删除或不在这一类里：不再等，保持无选中。
+                pendingRevealID = nil
+                if rows.contains(where: { $0.id == target }) { selectedID = target; detailPresented = true }
+            } else if let selectedID, !rows.contains(where: { $0.id == selectedID }) {
                 self.selectedID = nil; detailPresented = false
             }
         }

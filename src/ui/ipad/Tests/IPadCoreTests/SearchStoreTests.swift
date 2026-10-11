@@ -70,4 +70,18 @@ import XCTest
         XCTAssertEqual(store.gaps.map(\.id), [5])
         XCTAssertEqual(tasks.calls.last?.text, ["线代"])
     }
+
+    // 产品保证：科目改名或删除后（任务搜索也匹配科目名，结果行显示科目），已显示的结果按当前查询重读，
+    // 不再匹配的任务消失。
+    func testCategoryChangeRerunsCurrentQuery() {
+        let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake(), categories = CategoryBridgeFake()
+        let store = SearchStore(tasks: tasks, gaps: gaps, categories: categories)
+        tasks.result = [task(3, "微积分 第 2 章")]
+        store.query = "数学"; store.search()
+        XCTAssertEqual(store.tasks.map(\.id), [3])
+        tasks.result = []
+        categories.onChanged?()
+        XCTAssertTrue(store.tasks.isEmpty)
+        XCTAssertEqual(tasks.calls.last?.text, ["数学"])
+    }
 }

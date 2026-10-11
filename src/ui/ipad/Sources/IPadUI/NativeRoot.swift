@@ -94,7 +94,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                 store?.flushEdits()
             }
         }
-        let search = SearchStore(tasks: TaskBridgeAdapter(), gaps: KnowledgeGapAdapter())
+        let search = SearchStore(tasks: TaskBridgeAdapter(), gaps: KnowledgeGapAdapter(), categories: CategoryBridgeAdapter())
         let root = ShellRootView(store: store)
             .environment(search).environment(core).environment(today).environment(dashboard).environment(focus).environment(store)
             .environment(gaps).environment(memos).environment(countdown)

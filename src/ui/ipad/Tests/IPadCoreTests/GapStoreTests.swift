@@ -93,4 +93,29 @@ import XCTest
         store.reveal(row(4, status: 0))
         XCTAssertEqual(store.statusFilter, -2); XCTAssertEqual(store.selectedID, 4)
     }
+
+    // 产品保证：跳转时第一次读取失败，不把之前选中的另一条当作这次点击的结果，而是显示失败原因；
+    // 之后读取恢复（重试或页面激活）仍打开目标。用户在这期间自己选了别的条目，就不再跳回目标。
+    func testRevealKeepsTargetUntilReadSucceeds() {
+        let bridge = KnowledgeGapFake(); bridge.rows = [row(1, status: 0)]
+        let store = GapStore(bridge: bridge, logicalDay: LogicalDayBridgeFake())
+        store.refresh(); store.select(1)
+        XCTAssertEqual(store.selectedID, 1); XCTAssertTrue(store.detailPresented)
+        let busy = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "数据库忙"])
+        bridge.rows = [row(1, status: 0), row(9, status: 0)]
+        bridge.error = busy
+        store.reveal(row(9, status: 0))
+        XCTAssertEqual(store.errorMessage, "数据库忙")
+        XCTAssertNil(store.selectedID); XCTAssertFalse(store.detailPresented)
+        bridge.error = nil
+        store.setActive(true)
+        XCTAssertEqual(store.selectedID, 9); XCTAssertTrue(store.detailPresented)
+        // 再跳一次又失败，这回用户先手动选了条目 1：恢复读取后停在条目 1。
+        bridge.error = busy
+        store.reveal(row(9, status: 0))
+        store.select(1)
+        bridge.error = nil
+        store.refresh()
+        XCTAssertEqual(store.selectedID, 1)
+    }
 }

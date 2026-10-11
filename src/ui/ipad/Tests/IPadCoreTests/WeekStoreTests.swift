@@ -92,6 +92,35 @@ import XCTest
         XCTAssertEqual(store.weekStart, "2026-10-19"); XCTAssertTrue(store.showsCurrentWeek)
     }
 
+    // 产品保证：跨周日界后周列表读取失败或被拖动冻结时保留旧周列表，但不再标成本周
+    // （外壳的本周待办数已是新周的，不能接在旧周日期后面）；读取恢复后跟随新的本周。
+    func testCurrentWeekFlagRecheckedWhenRefreshFailsOrFrozen() {
+        let tasks = TaskBridgeFake(); tasks.planned = Array(repeating: 0, count: 7)
+        let day = LogicalDayBridgeFake(); day.today = "2026-10-09"
+        let interactions = InteractionBridgeFake()
+        var serviceWeek = "2026-10-05"
+        let shell = ShellStore(bridge: ShellBridgeFake())
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: shell)
+        let store = WeekStore(tasks: tasks, logicalDay: day, pendingDeletion: pending, interactions: interactions,
+                              weekStart: "2026-10-05",
+                              weekDates: { start in (0..<7).compactMap { LogicalDateNavigation.shifted(start, days: $0) } },
+                              weekStartProvider: { serviceWeek })
+        XCTAssertEqual(store.weekStart, "2026-10-05"); XCTAssertTrue(store.showsCurrentWeek)
+        // 跨周后周列表读取失败。
+        serviceWeek = "2026-10-12"; tasks.failing = ["weekTasks"]
+        store.refresh()
+        XCTAssertFalse(store.error.isEmpty)
+        XCTAssertEqual(store.weekStart, "2026-10-05"); XCTAssertFalse(store.showsCurrentWeek)
+        tasks.failing = []; store.refresh()
+        XCTAssertEqual(store.weekStart, "2026-10-12"); XCTAssertTrue(store.showsCurrentWeek)
+        // 再跨一周时正在拖动，刷新被冻结。
+        serviceWeek = "2026-10-19"; interactions.refreshBlocked = true
+        store.refresh()
+        XCTAssertEqual(store.weekStart, "2026-10-12"); XCTAssertFalse(store.showsCurrentWeek)
+        interactions.refreshBlocked = false; store.refresh()
+        XCTAssertEqual(store.weekStart, "2026-10-19"); XCTAssertTrue(store.showsCurrentWeek)
+    }
+
     private func row(_ id: Int, date: String = "2026-10-09", completed: Bool = false) -> TaskValue {
         var value = TaskValue(); value.id = id; value.title = "任务 \(id)"; value.date = date; value.completed = completed
         return value

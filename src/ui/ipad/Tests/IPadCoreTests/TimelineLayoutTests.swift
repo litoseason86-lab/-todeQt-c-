@@ -26,7 +26,6 @@ final class TimelineLayoutTests: XCTestCase {
         XCTAssertEqual(TimelineLayout.hourRange([], extraMinutes: [23 * 60 + 5]), 8...24)
     }
 
-    // 产品保证：解析不了的时刻不画，不把它当成 0 点。
     // 产品保证：夏令时切换日（当天 23 或 25 小时）色块与时间文字仍按本地墙钟定位：09:00 的记录就在 9 点，
     // 次日凌晨 01:00 仍接在 24 点之后（25 点）。
     func testDaylightSavingDaysUseWallClock() throws {
@@ -46,6 +45,22 @@ final class TimelineLayoutTests: XCTestCase {
         XCTAssertEqual(TimelineLayout.minute(of: "2026-11-02T01:00:00.000", day: "2026-11-01"), 25 * 60)
     }
 
+    // 产品保证：服务归到当天、但本地墙钟落在前一天的记录（兼容的带 Z 旧时间串换时区读取）得到负分钟时，
+    // 刻度范围向下扩到包住它的偶数整点，不让色块画到刻度上方。
+    func testNegativeMinutesExtendRangeDownward() {
+        XCTAssertEqual(TimelineLayout.hourRange([], extraMinutes: [-150]), -4...20)
+        XCTAssertEqual(TimelineLayout.hourRange([], extraMinutes: [-30]), -2...20)
+    }
+
+    // 产品保证：时间轴上的时间文字一律是墙钟「HH:mm」：前一天晚上的负分钟、次日凌晨的 24 点以后都换回当天钟面，不出现负号。
+    func testClockTextWrapsToWallClock() {
+        XCTAssertEqual(TimelineLayout.clockText(-150), "21:30")
+        XCTAssertEqual(TimelineLayout.clockText(-4 * 60), "20:00")
+        XCTAssertEqual(TimelineLayout.clockText(9 * 60 + 5), "09:05")
+        XCTAssertEqual(TimelineLayout.clockText(25 * 60), "01:00")
+    }
+
+    // 产品保证：解析不了的时刻不画，不把它当成 0 点。
     func testUnparsableStartIsSkipped() {
         XCTAssertTrue(TimelineLayout.blocks([session("坏数据", seconds: 60)], day: "2026-10-10").isEmpty)
     }

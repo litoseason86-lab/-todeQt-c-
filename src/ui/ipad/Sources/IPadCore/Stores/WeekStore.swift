@@ -61,10 +61,14 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
         }
     }
     public func refresh() {
+        let followingRead = Result { try weekStartProvider?() ?? followedWeekStart }
+        // 列表读取被冻结或失败时保留旧周，但「是否本周」先按服务当前的本周核对：跨周日界后旧周就不是本周了，
+        // 外壳给的本周待办数已是新周的，不能接在旧周日期后面；读不到服务的本周也按「不是」处理。
+        showsCurrentWeek = (try? followingRead.get()) == weekStart
         guard !interactions.refreshBlocked else { refreshPending = true; return }
         refreshPending = false
         do {
-            let following = try weekStartProvider?() ?? followedWeekStart
+            let following = try followingRead.get()
             // 固定显示的周在日界换周后正好成了本周：恢复跟随，之后的日界照常前进。
             if shownWeekStart == following { shownWeekStart = nil }
             let start = shownWeekStart ?? following

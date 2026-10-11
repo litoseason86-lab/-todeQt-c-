@@ -14,12 +14,16 @@ import Observation
     @ObservationIgnored private let taskBridge: any TaskBridgeProtocol
     @ObservationIgnored private let gapBridge: any KnowledgeGapBridging
 
-    public init(tasks: any TaskBridgeProtocol, gaps: any KnowledgeGapBridging) {
-        taskBridge = tasks; gapBridge = gaps
+    @ObservationIgnored private let categoryBridge: (any CategoryBridgeProtocol)?
+
+    public init(tasks: any TaskBridgeProtocol, gaps: any KnowledgeGapBridging, categories: (any CategoryBridgeProtocol)? = nil) {
+        taskBridge = tasks; gapBridge = gaps; categoryBridge = categories
         // 任务或缺口在别处改动（详情里改名、删除、同步进来）后按当前查询重读，结果不停在旧数据上。
-        // 两个适配器是本 Store 独占的实例，占用它们的变更回调不影响其它页面。
+        // 科目也要听：任务搜索同时匹配科目名，结果行显示科目名和颜色，而改科目只发科目变更。
+        // 这几个适配器是本 Store 独占的实例，占用它们的变更回调不影响其它页面。
         tasks.onChanged = { [weak self] in self?.dataChanged() }
         gaps.onChanged = { [weak self] in self?.dataChanged() }
+        categories?.onChanged = { [weak self] in self?.dataChanged() }
     }
     // 还没搜过（或查询已清空）就不读。
     private func dataChanged() { if searched { search() } }

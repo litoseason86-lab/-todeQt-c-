@@ -93,7 +93,7 @@ import SwiftUI
             ZStack(alignment: .topLeading) {
                 ForEach(Array(stride(from: hours.lowerBound, through: hours.upperBound, by: 2)), id: \.self) { hour in
                     Rectangle().fill(ThemeColors.borderSubtle).frame(height: 1).offset(y: y(hour * 60))
-                    Text(String(format: "%02d:00", hour % 24)).font(.system(size: 12)).foregroundStyle(ThemeColors.inkSoft)
+                    Text(TimelineLayout.clockText(hour * 60)).font(.system(size: 12)).foregroundStyle(ThemeColors.inkSoft)
                         .padding(.trailing, 6).background(ThemeColors.surface)
                         .offset(x: 12, y: y(hour * 60) - 8)
                 }
@@ -162,9 +162,7 @@ import SwiftUI
         }
     }
 
-    private func clock(_ minute: Int) -> String {
-        String(format: "%02d:%02d", (minute / 60) % 24, minute % 60)
-    }
+    private func clock(_ minute: Int) -> String { TimelineLayout.clockText(minute) }
 
     // 汇总卡：「今日专注」、大号时长、「N 段专注 · M 个番茄」（数字均来自服务）。
     private func totalCard(compact: Bool) -> some View {

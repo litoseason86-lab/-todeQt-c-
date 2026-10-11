@@ -35,13 +35,25 @@ public enum TimelineLayout {
     }
 
     // 刻度范围（整点，偶数小时对齐，便于两小时一格的刻度）。
+    // 分钟可能为负（服务归到当天、本地墙钟却在前一天的旧记录）：下界一律向更早取整，
+    // Swift 的整数除法和取余向零截断，负数直接用会往晚处取。
     public static func hourRange(_ blocks: [TimelineBlock], extraMinutes: [Int] = []) -> ClosedRange<Int> {
         let starts = blocks.map(\.startMinute) + extraMinutes
         let ends = blocks.map(\.endMinute) + extraMinutes
-        var lower = min(defaultStartHour, (starts.min() ?? defaultStartHour * 60) / 60)
+        var lower = min(defaultStartHour, Int((Double(starts.min() ?? defaultStartHour * 60) / 60).rounded(.down)))
         var upper = max(defaultEndHour, Int((Double(ends.max() ?? defaultEndHour * 60) / 60).rounded(.up)))
-        lower -= lower % 2
-        upper += upper % 2
+        lower -= positiveRemainder(lower, 2)
+        upper += positiveRemainder(upper, 2)
         return lower...upper
+    }
+
+    // 时间轴上的分钟写成墙钟「HH:mm」：24 点以后接次日凌晨，负数接前一天晚上（-150 → 21:30）。
+    public static func clockText(_ minute: Int) -> String {
+        let wall = positiveRemainder(minute, 24 * 60)
+        return String(format: "%02d:%02d", wall / 60, wall % 60)
+    }
+
+    private static func positiveRemainder(_ value: Int, _ divisor: Int) -> Int {
+        (value % divisor + divisor) % divisor
     }
 }
