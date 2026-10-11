@@ -94,9 +94,14 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                 store?.flushEdits()
             }
         }
-        return UIHostingController(rootView: ShellRootView(store: store)
+        let root = ShellRootView(store: store)
             .environment(core).environment(today).environment(dashboard).environment(focus).environment(store)
             .environment(gaps).environment(memos).environment(countdown)
-            .environment(history).environment(statistics).environment(settings).environment(settingsCategories).environment(settingsRoutines).environment(settingsSync).environment(settingsBackup).environment(settingsExport).environment(trashStore))
+            .environment(history).environment(statistics).environment(settings).environment(settingsCategories).environment(settingsRoutines).environment(settingsSync).environment(settingsBackup).environment(settingsExport).environment(trashStore)
+        // 055-R4：调试巡检复用同一套 Store 另开窗口截图；不带启动参数时不生效。
+        UITour.rootView = { AnyView(root) }
+        UITour.selectSettingsSection = { [weak settings] in settings?.selectSection($0) }
+        UITour.startIfRequested(shell: store)
+        return UIHostingController(rootView: root)
     }
 }

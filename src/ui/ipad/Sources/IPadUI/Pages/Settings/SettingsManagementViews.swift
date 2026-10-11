@@ -26,7 +26,6 @@ import SwiftUI
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("科目")
         .toolbar { Button("新增科目", systemImage: "plus") { store.beginNew() } }
         .sheet(isPresented: Binding(get: { store.editing }, set: { if !$0 { store.cancel() } })) {
             NavigationStack {
@@ -93,7 +92,7 @@ private enum SettingsCategoryColor {
                 Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
                 Button("重试读取例行") { store.reload(); store.reloadCategories() }
             }
-        }.formStyle(.grouped).navigationTitle("每日例行")
+        }.formStyle(.grouped)
         .toolbar { Button("新增例行", systemImage: "plus") { store.beginNew() } }
         .sheet(isPresented: Binding(get: { store.editing }, set: { if !$0 { store.cancel() } })) {
             NavigationStack {

@@ -38,7 +38,7 @@ import UniformTypeIdentifiers
                 Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
                 Button("重试读取同步状态") { store.refresh() }
             }
-        }.formStyle(.grouped).navigationTitle("同步与日志")
+        }.formStyle(.grouped)
         .alert("加入同步文件夹？", isPresented: $joinConfirmation) {
             Button("取消", role: .cancel) {}
             Button("确认加入", role: .destructive) { store.confirmJoin() }
@@ -117,7 +117,7 @@ import UniformTypeIdentifiers
             }
             if !store.notice.isEmpty { Text(store.notice) }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-        }.formStyle(.grouped).navigationTitle("备份与恢复")
+        }.formStyle(.grouped)
         .fileExporter(isPresented: $exportPresented, document: document, contentType: .data,
                       defaultFilename: store.exportURL?.lastPathComponent) { result in
             document = nil
@@ -177,7 +177,7 @@ import UniformTypeIdentifiers
             if store.busy { ProgressView(value: Double(store.progress), total: Double(max(1, store.total))).accessibilityLabel("导出进度") }
             if !store.notice.isEmpty { Text(store.notice) }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-        }.formStyle(.grouped).navigationTitle("导出")
+        }.formStyle(.grouped)
         .fileExporter(isPresented: $exportPresented, document: document,
                       contentType: store.kind == .all ? .folder : .commaSeparatedText,
                       defaultFilename: store.exportURL?.lastPathComponent) { result in

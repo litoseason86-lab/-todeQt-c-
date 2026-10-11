@@ -9,88 +9,104 @@ struct ShellRootView: View {
     @Environment(FocusStore.self) private var focus
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @State private var tab: ShellTab = .page(.dashboard)
+    // 宽窄各用一份选中状态：两个分支的标签集合不同，共用一份会把窄窗不存在的页面值交给窄窗标签栏。
+    @State private var regularTab: PageID = .dashboard
+    @State private var compactTab: ShellTab = .page(.dashboard)
     @State private var morePath: [PageID] = []
 
     var body: some View {
-        TabView(selection: $tab) {
-            // 常用页各自注册，宽窄窗口只改变系统可见性与放置位置，不增删标签或页面值。
+        tabs
+            .modifier(TimerAccessoryModifier(store: store, accessory: miniTimer))
+            .tint(ThemeColors.accentInk)
+            .preferredColorScheme(preferredScheme)
+            .background { ThemeAppearance(themeID: store.selectedTheme ?? "").frame(width: 0, height: 0) }
+            .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
+            .background { keyboardCommands }
+            .disabled(store.snapshot.operationBlocksUI)
+            .overlay {
+                if store.snapshot.operationBlocksUI {
+                    ZStack {
+                        Group {
+                            if reduceTransparency { ThemeColors.surface }
+                            else { ThemeColors.modalScrim }
+                        }.ignoresSafeArea()
+                        VStack(spacing: 16) {
+                            ProgressView()
+                            Text(store.snapshot.operationText.isEmpty ? "正在恢复数据" : store.snapshot.operationText)
+                        }
+                        .padding(28)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    }
+                    .accessibilityAddTraits(.isModal)
+                    .accessibilityLabel("正在恢复数据，暂时不能操作")
+                }
+            }
+            .onAppear { syncSelection() }
+            .onChange(of: store.selection) { _, _ in scheduleSelectionSync() }
+            .onChange(of: sizeClass) { _, _ in syncSelection() }
+            .onChange(of: regularTab) { _, page in store.select(page) }
+            .onChange(of: compactTab) { _, selected in
+                if case let .page(page) = selected { store.select(page) }
+            }
+    }
+
+    // 055-R4：宽窄是两个独立的 TabView，切换尺寸时整份重建，不在同一个标签控制器里改标签。
+    // iPadOS 27.0.1 实测（10-10、10-11 崩溃日志）：同一个 sidebarAdaptable 标签栏在窄窗口里
+    // 把仅侧栏、侧栏隐藏的标签显示进底栏，点下去 -[UITabBarController _viewControllerForTabBarItem:] 断言崩溃。
+    @ViewBuilder private var tabs: some View {
+        if sizeClass == .compact { compactTabs } else { regularTabs }
+    }
+
+    // 窄窗口：普通标签栏，只有定稿的五个固定标签；其余页面都从「更多」推入。
+    private var compactTabs: some View {
+        TabView(selection: $compactTab) {
+            ForEach(PageID.primary, id: \.self) { page in
+                Tab(page.tabTitle(size: .compact), systemImage: page.symbol, value: ShellTab.page(page)) { pageView(page) }
+            }
+            Tab("更多", systemImage: "ellipsis", value: ShellTab.more) { moreView }
+        }
+    }
+
+    // 宽窗口：侧栏可收起的标签栏。收起后顶部只有五个常用页；其余页面只在侧栏；
+    // 废纸篓、设置的入口在侧栏底栏，标签只为承载页面，侧栏与标签栏都不显示。
+    private var regularTabs: some View {
+        TabView(selection: $regularTab) {
             ForEach(PageID.regularTabs, id: \.self) { page in
-                Tab(page.tabTitle(size: sizeClass == .compact ? .compact : .regular),
-                    systemImage: page.symbol, value: ShellTab.page(page)) { pageView(page) }
-                    .tabPlacement(page == .week && sizeClass == .compact ? .sidebarOnly : .pinned)
+                Tab(page.tabTitle(size: .regular), systemImage: page.symbol, value: page) { pageView(page) }
                     .defaultVisibility(PageID.summary.prefix(3).contains(page) ? .hidden : .visible, for: .sidebar)
             }
             ForEach(store.sidebarPages.filter { !PageID.regularTabs.contains($0) }, id: \.self) { page in
-                Tab(page.title, systemImage: page.symbol, value: ShellTab.page(page)) { pageView(page) }
+                Tab(page.title, systemImage: page.symbol, value: page) { pageView(page) }
                     .badge(store.sidebarBadge(for: page).map { Text(String($0)) })
                     .tabPlacement(.sidebarOnly)
-                    .defaultVisibility(.hidden, for: .tabBar)
             }
-            // 废纸篓和设置的页面值保持注册，实际入口固定在侧栏底部。
             ForEach(PageID.fixed, id: \.self) { page in
-                Tab(page.title, systemImage: page.symbol, value: ShellTab.page(page)) { pageView(page) }
+                Tab(page.title, systemImage: page.symbol, value: page) { pageView(page) }
                     .tabPlacement(.sidebarOnly)
-                    .defaultVisibility(.hidden, for: .sidebar, .tabBar)
+                    .defaultVisibility(.hidden, for: .sidebar)
             }
-            Tab("更多", systemImage: "ellipsis", value: ShellTab.more) { moreView }
-                .tabPlacement(.pinned)
-                .defaultVisibility(.hidden, for: .sidebar)
-                .hidden(sizeClass != .compact)
         }
         .tabViewStyle(.sidebarAdaptable)
         .defaultAdaptableTabBarPlacement(.sidebar)
         .tabViewSidebarHeader { summaryTiles }
         .tabViewSidebarBottomBar { fixedEntries }
-        .modifier(TimerAccessoryModifier(store: store, accessory: miniTimer))
-        .tint(ThemeColors.accentInk)
-        .preferredColorScheme(preferredScheme)
-        .background { ThemeAppearance(themeID: store.selectedTheme ?? "").frame(width: 0, height: 0) }
-        .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
-        .background { keyboardCommands }
-        .disabled(store.snapshot.operationBlocksUI)
-        .overlay {
-            if store.snapshot.operationBlocksUI {
-                ZStack {
-                    Group {
-                        if reduceTransparency { ThemeColors.surface }
-                        else { ThemeColors.modalScrim }
-                    }.ignoresSafeArea()
-                    VStack(spacing: 16) {
-                        ProgressView()
-                        Text(store.snapshot.operationText.isEmpty ? "正在恢复数据" : store.snapshot.operationText)
-                    }
-                    .padding(28)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                }
-                .accessibilityAddTraits(.isModal)
-                .accessibilityLabel("正在恢复数据，暂时不能操作")
-            }
-        }
-        .onAppear { syncSelection() }
-        .onChange(of: store.selection) { _, _ in scheduleSelectionSync() }
-        .onChange(of: sizeClass) { _, _ in scheduleSelectionSync() }
-        .onChange(of: tab) { _, selected in
-            if case let .page(page) = selected { store.select(page) }
-        }
     }
 
     // 窄窗口非主标签页由「更多」的 NavigationStack 承载；旋转回宽窗口时恢复同一页面。
     private func syncSelection() {
-        let size: ShellWindowSize = sizeClass == .compact ? .compact : .regular
-        switch ShellStore.navigationTarget(for: store.selection, size: size) {
+        if regularTab != store.selection { regularTab = store.selection }
+        switch ShellStore.navigationTarget(for: store.selection, size: .compact) {
         case .page(let page):
-            morePath = []
-            tab = .page(page)
+            if compactTab != .page(page) { compactTab = .page(page) }
+            if !morePath.isEmpty { morePath = [] }
         case .more(let path):
-            morePath = path
-            tab = .more
+            if compactTab != .more { compactTab = .more }
+            if morePath != path { morePath = path }
         }
     }
 
     private func scheduleSelectionSync() {
-        // UIKit 处理标签点击的同一轮里不能再改变标签结构或选中值；推迟到下一轮，
-        // 让 TabView 先完成自身的 selection 更新，避免 iPadOS 26 的控制器断言。
+        // 标签点击处理中不改选中值，推迟到下一轮，让 TabView 先完成自身的 selection 更新。
         Task { @MainActor in
             await Task.yield()
             syncSelection()

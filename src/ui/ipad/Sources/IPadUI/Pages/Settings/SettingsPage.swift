@@ -17,25 +17,41 @@ import SwiftUI
                 }
             }
             .navigationTitle("设置")
-                .navigationDestination(for: SettingsSection.self) { detail($0, store: store) }
+            .navigationDestination(for: SettingsSection.self) { detail($0, store: store).navigationTitle($0.rawValue) }
         } else {
-            HStack(spacing: 0) {
-                List(SettingsAvailability.sections,
-                     selection: Binding(get: { Optional(store.selectedSection) },
-                                        set: { if let section = $0 { store.selectSection(section) } })) { section in
-                    Text(section.rawValue).tag(Optional(section))
+            // 055-R4：左栏每行是明确的按钮。List(selection:) 放在分栏侧栏之外时，iPadOS 上点按不会改选中，
+            // 10-11 真机实测点「科目」「每日例行」都切不过去。
+            HStack(alignment: .top, spacing: 28) {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(SettingsAvailability.sections) { section in
+                        sectionButton(section, selected: section == store.selectedSection)
+                    }
                 }
-                .frame(minWidth: 220, idealWidth: 260, maxWidth: 300)
-                Divider()
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(store.selectedSectionTitle).font(.title2.bold()).padding(.horizontal, 20)
+                .frame(width: 240)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(store.selectedSectionTitle).font(.title2.bold()).foregroundStyle(ThemeColors.inkStrong)
+                        .padding(.horizontal, 20).padding(.top, 8)
                     detail(store.selectedSection, store: store)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .frame(maxWidth: 760, maxHeight: .infinity, alignment: .topLeading)
             }
-            .padding(.horizontal, 32).padding(.vertical, 16)
+            .padding(.horizontal, 32).padding(.top, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .navigationTitle("设置")
         }
+    }
+    private func sectionButton(_ section: SettingsSection, selected: Bool) -> some View {
+        Button { store.selectSection(section) } label: {
+            Text(section.rawValue)
+                .font(.body.weight(selected ? .semibold : .regular))
+                .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.inkStrong)
+                .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+                .padding(.horizontal, 14)
+                .background(selected ? ThemeColors.accentInk : Color.clear, in: RoundedRectangle(cornerRadius: 12))
+                .contentShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
     @ViewBuilder private func detail(_ section: SettingsSection, store: SettingsStore) -> some View {
         switch section {
@@ -79,7 +95,7 @@ import SwiftUI
                 }
             }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-        }.formStyle(.grouped).navigationTitle("通用")
+        }.formStyle(.grouped)
     }
     private var longBreakForm: some View {
         SettingsForm {
@@ -127,7 +143,7 @@ import SwiftUI
             }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
             if !shell.errorMessage.isEmpty { Text(shell.errorMessage).foregroundStyle(ThemeColors.danger) }
-        }.formStyle(.grouped).navigationTitle("外观")
+        }.formStyle(.grouped)
     }
     private func appearanceChoice(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -159,7 +175,7 @@ import SwiftUI
             Section("固定入口") { ForEach(PageID.fixed, id: \.self) { Text($0.title) } }
             Section { Button("恢复默认顺序", systemImage: "arrow.counterclockwise") { store.resetSidebarOrder() } }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
-        }.formStyle(.grouped).toolbar { EditButton() }.navigationTitle("侧栏顺序")
+        }.formStyle(.grouped).toolbar { EditButton() }
     }
 }
 
@@ -169,9 +185,9 @@ import SwiftUI
     private let content: Content
     init(@ViewBuilder content: () -> Content) { self.content = content() }
     var body: some View {
+        // 页底与壁纸由外壳统一铺，表单只把滚动底色放开，不再叠一层壁纸。
         Form { content.listRowBackground(shell.selectedTheme != nil ? ThemeColors.surface : nil) }
             .formStyle(.grouped)
             .scrollContentBackground(shell.selectedTheme != nil ? .hidden : .visible)
-            .background { WallpaperBackground(theme: shell.snapshot.backgroundTheme, enabled: shell.wallpaperVisible) }
     }
 }
