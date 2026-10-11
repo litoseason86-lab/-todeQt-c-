@@ -19,6 +19,8 @@
 class PTShellBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void themeChoicePersistsTogetherAndRejectsUnknown();
+    void themeChoiceFailureRestoresBothKeys();
     void primaryGoalProjectsServiceAndRefreshes();
     void appearanceMigrationAndPersistence();
     void appearanceWriteFailureRestoresValue();
@@ -281,6 +283,54 @@ void PTShellBridgeTests::bothUIEntrancesWriteTheSameLocalKey()
         IPadUiPreferences phone(false);
         QVERIFY(!phone.setNativeUI(false));
         QVERIFY(QSettings().value(QStringLiteral("ipad/nativeUI")).toBool());
+    }
+}
+// 产品保证：主题选择同时保存本机外观模式和已有主题键，未知主题整次拒绝。
+void PTShellBridgeTests::themeChoicePersistsTogetherAndRejectsUnknown()
+{
+    @autoreleasepool {
+        PTShellBridge *bridge = [PTShellBridge new];
+        NSError *error = nil;
+        QVERIFY([bridge setAppearance:@"light" error:&error]);
+        __block int changes = 0;
+        bridge.onChanged = ^{ ++changes; };
+        QVERIFY([bridge selectTheme:@"moon" error:&error]);
+        PTShellSnapshot *value = [bridge readSnapshot];
+        QVERIFY([value.appearance isEqualToString:@"theme"]);
+        QVERIFY([value.backgroundTheme isEqualToString:@"moon"]);
+        QCOMPARE(AppSettings::instance()->backgroundTheme(), QStringLiteral("moon"));
+        QVERIFY(changes > 0);
+        changes = 0;
+        QVERIFY(![bridge selectTheme:@"invalid" error:&error]);
+        QVERIFY(error != nil);
+        QVERIFY([[bridge readSnapshot].backgroundTheme isEqualToString:@"moon"]);
+        QCOMPARE(changes, 0);
+    }
+}
+// 产品保证：主题偏好写失败还原模式与主题两个键，不发成功信号，不留下半个选择。
+void PTShellBridgeTests::themeChoiceFailureRestoresBothKeys()
+{
+    @autoreleasepool {
+        QTemporaryDir blocked;
+        QVERIFY(blocked.isValid());
+        QFile file(blocked.filePath(QStringLiteral("PomodoroTodoTests")));
+        QVERIFY(file.open(QIODevice::WriteOnly)); file.close();
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, blocked.path());
+        // 先放入内存旧值；阻断目录保证无论权限等级都无法刷盘。
+        QSettings settings;
+        settings.setValue(QStringLiteral("ipad/appearance"), QStringLiteral("light"));
+        settings.setValue(QStringLiteral("appearance/backgroundTheme"), QStringLiteral("pink"));
+        PTShellBridge *bridge = [PTShellBridge new];
+        __block int changes = 0;
+        bridge.onChanged = ^{ ++changes; };
+        NSError *error = nil;
+        const BOOL ok = [bridge selectTheme:@"starry" error:&error];
+        const QString appearance = settings.value(QStringLiteral("ipad/appearance")).toString();
+        const QString theme = settings.value(QStringLiteral("appearance/backgroundTheme")).toString();
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+        QVERIFY(!ok); QVERIFY(error.localizedDescription.length > 0);
+        QCOMPARE(appearance, QStringLiteral("light")); QCOMPARE(theme, QStringLiteral("pink"));
+        QCOMPARE(changes, 0);
     }
 }
 // 产品保证：侧栏主目标使用服务给出的名称和剩余天数，主目标变化后刷新，无目标不冒充零天目标。

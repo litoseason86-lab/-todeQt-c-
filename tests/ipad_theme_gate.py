@@ -54,11 +54,21 @@ def theme_values(path):
 def main():
     root = Path(__file__).resolve().parent.parent
     values = theme_values(root / "qml/Theme.qml")
+    theme_source = (root / "qml/Theme.qml").read_text(encoding="utf-8")
+    definitions = {
+        match[0]: (match[1], match[2], match[3])
+        for match in re.findall(r'id:\s*"([^\"]+)",\s*name:\s*"([^\"]+)",\s*mode:\s*"([^\"]+)".*?base:\s*"([^\"]+)"', theme_source, re.S)
+    }
+    theme_bases = {}
+    for name, (_, _, base) in definitions.items():
+        channels = tuple(int(base[i:i+2], 16) / 255 for i in (1, 3, 5)) + (1.0,)
+        theme_bases["themeBase_" + name] = (channels, channels)
+    resource_values = values | theme_bases
     catalog = root / "src/ui/ipad/Sources/IPadUI/Resources/Colors.xcassets"
     if "--write" in sys.argv:
         catalog.mkdir(parents=True, exist_ok=True)
         (catalog / "Contents.json").write_text(json.dumps({"info": {"author": "xcode", "version": 1}}, indent=2) + "\n", encoding="utf-8")
-        for name, appearances in values.items():
+        for name, appearances in resource_values.items():
             directory = catalog / (name + ".colorset")
             directory.mkdir(exist_ok=True)
             colors = []
@@ -69,8 +79,8 @@ def main():
             (directory / "Contents.json").write_text(json.dumps({"colors": colors, "info": {"author": "xcode", "version": 1}}, indent=2) + "\n", encoding="utf-8")
         return
     actual_names = {p.stem for p in catalog.glob("*.colorset")}
-    if actual_names != set(values): raise ValueError("颜色资源集合与 Theme.qml 不一致")
-    for name, expected in values.items():
+    if actual_names != set(resource_values): raise ValueError("颜色资源集合与 Theme.qml 不一致")
+    for name, expected in resource_values.items():
         entries = json.loads((catalog / (name + ".colorset") / "Contents.json").read_text(encoding="utf-8"))["colors"]
         if len(entries) != 2: raise ValueError(name + " 必须提供浅深两套")
         actual = {}
@@ -82,36 +92,29 @@ def main():
             if dark not in actual or any(abs(a - b) > 1e-6 for a, b in zip(actual[dark], expected[dark])):
                 raise ValueError(f"{name} 的{'深' if dark else '浅'}色值偏离 Theme.qml")
     swift = (root / "src/ui/ipad/Sources/IPadUI/Theme/ThemeColors.swift").read_text(encoding="utf-8")
-    references = set(re.findall(r'Color\("(\w+)"', swift))
+    references = set(re.findall(r'(?:Color|semantic)\("(\w+)"', swift))
+    references.discard("themeBase_")  # 动态资源前缀，七份具体 base 已由资源逐个核对。
     if references != set(values): raise ValueError("Swift 颜色入口与资源集合不一致")
     theme_source = (root / "qml/Theme.qml").read_text(encoding="utf-8")
     theme_ids = set(re.findall(r'\bid:\s*"([^"]+)"', theme_source))
-    theme_blocks = re.findall(r'\{\s*id:.*?\n\s*\}', theme_source, re.S)
-    dark_theme_ids = {
-        match.group(1)
-        for block in theme_blocks
-        if 'mode: "dark"' in block
-        for match in [re.search(r'id:\s*"([^"]+)"', block)]
-        if match
-    }
-    shell_source = (root / "src/ui/ipad/Sources/IPadUI/Shell/ShellRootView.swift").read_text(encoding="utf-8")
-    dark_match = re.search(r'\[([^\]]*)\]\.contains\(store\.snapshot\.backgroundTheme\)', shell_source)
-    if not dark_match: raise ValueError("未找到 ShellRootView 的壁纸深色名单")
-    dark_ids = set(re.findall(r'"([^"]+)"', dark_match.group(1)))
     bridge_source = (root / "src/platform/ios/bridge/PTShellBridge.mm").read_text(encoding="utf-8")
     bridge_match = re.search(r'const\s+QStringList\s+themes\s*=\s*\{([^}]*)\}', bridge_source, re.S)
     if not bridge_match: raise ValueError("未找到 PTShellBridge 的壁纸资源白名单")
     bridge_ids = set(re.findall(r'QStringLiteral\("([^"]+)"\)', bridge_match.group(1)))
-    if not dark_ids.issubset(theme_ids): raise ValueError("ShellRootView 深色壁纸名单包含 Theme.qml 未定义的主题")
     if not bridge_ids.issubset(theme_ids): raise ValueError("PTShellBridge 壁纸白名单包含 Theme.qml 未定义的主题")
-    if dark_ids != dark_theme_ids:
-        raise ValueError("ShellRootView 深色壁纸名单与 Theme.qml 不一致")
     if bridge_ids != theme_ids:
         raise ValueError("PTShellBridge 壁纸白名单与 Theme.qml 不一致")
     settings_source = (root / "src/ui/ipad/Sources/IPadCore/Stores/SettingsAvailability.swift").read_text(encoding="utf-8")
-    choices = set(re.findall(r'\("([^"]+)",\s*"[^"]+"\)', settings_source))
-    if choices != theme_ids: raise ValueError("设置外观主题选项与 Theme.qml 不一致")
-    print(f"iPad 颜色门禁通过：{len(values)} 个语义令牌，浅深两套；壁纸名单与 Theme.qml 同源核对通过")
+    choices = {
+        match[0]: (match[1], match[2], match[3])
+        for match in re.findall(r'Theme\(id: "([^\"]+)", title: "([^\"]+)", mode: "([^\"]+)", base: "([^\"]+)"\)', settings_source)
+    }
+    if choices != definitions: raise ValueError("设置主题的名单、文案、明暗或 base 色与 Theme.qml 不一致")
+    # 两个原生入口的资源白名单都受门禁约束，不能只核对第一个匹配。
+    for block in re.findall(r'const\s+QStringList\s+themes\s*=\s*\{([^}]*)\}', bridge_source, re.S):
+        ids = set(re.findall(r'QStringLiteral\("([^\"]+)"\)', block))
+        if ids != theme_ids: raise ValueError("桥接主题白名单与 Theme.qml 不一致")
+    print(f"iPad 颜色门禁通过：{len(values)} 个语义令牌，浅深两套；七主题文案、明暗、base 与壁纸名单同源核对通过")
 
 
 if __name__ == "__main__":

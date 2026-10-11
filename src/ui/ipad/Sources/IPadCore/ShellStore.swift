@@ -54,6 +54,7 @@ public struct ShellTimerSnapshot: Equatable, Sendable {
     func readTimer() throws -> ShellTimerSnapshot
     func setNativeUI(_ value: Bool) throws
     func setAppearance(_ value: String) throws
+    func selectTheme(_ value: String) throws
     func setUseWallpaper(_ value: Bool) throws
     func pause() -> Bool
     func resume() -> Bool
@@ -64,6 +65,7 @@ public struct ShellTimerSnapshot: Equatable, Sendable {
 // 旧外壳替身不涉及新增的本机外观写入；默认拒绝，防止测试或其它实现假装保存成功。
 public extension ShellBridgeProtocol {
     func setAppearance(_ value: String) throws { throw CocoaError(.featureUnsupported) }
+    func selectTheme(_ value: String) throws { throw CocoaError(.featureUnsupported) }
     func setNativeUI(_ value: Bool) throws { throw CocoaError(.featureUnsupported) }
     func setUseWallpaper(_ value: Bool) throws { throw CocoaError(.featureUnsupported) }
 }
@@ -184,7 +186,24 @@ public final class ShellStore {
             snapshot.taskTitle = value.taskTitle
         } catch { errorMessage = error.localizedDescription }
     }
+    public var selectedSystemAppearance: String? { snapshot.appearance == "theme" ? nil : snapshot.appearance }
+    public var selectedTheme: String? { snapshot.appearance == "theme" ? snapshot.backgroundTheme : nil }
+    public var wallpaperAvailable: Bool { snapshot.appearance == "theme" }
+    public var wallpaperVisible: Bool { wallpaperAvailable && snapshot.useWallpaper }
+    public func setAppearance(_ value: String) {
+        guard !snapshot.operationBlocksUI else { return }
+        let previous = snapshot
+        do { try bridge.setAppearance(value); refresh() }
+        catch { snapshot = previous; errorMessage = error.localizedDescription }
+    }
+    public func selectTheme(_ value: String) {
+        guard !snapshot.operationBlocksUI else { return }
+        let previous = snapshot
+        do { try bridge.selectTheme(value); refresh() }
+        catch { snapshot = previous; errorMessage = error.localizedDescription }
+    }
     public func setUseWallpaper(_ value: Bool) {
+        guard wallpaperAvailable && !snapshot.operationBlocksUI else { return }
         let previous = snapshot.useWallpaper
         do {
             try bridge.setUseWallpaper(value)

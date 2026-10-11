@@ -1,25 +1,40 @@
+import IPadCore
 import SwiftUI
+import UIKit
 
 // 数值来自颜色资源，浅深自动随系统切换；ipad_theme_gate.py 与 Theme.qml 比对实际资源。
 enum ThemeColors {
-    static var surface: Color { Color("surface", bundle: .main) }
-    static var surfaceRaised: Color { Color("surfaceRaised", bundle: .main) }
-    static var surfaceSunken: Color { Color("surfaceSunken", bundle: .main) }
-    static var border: Color { Color("border", bundle: .main) }
-    static var borderSubtle: Color { Color("borderSubtle", bundle: .main) }
-    static var inkStrong: Color { Color("inkStrong", bundle: .main) }
-    static var ink: Color { Color("ink", bundle: .main) }
-    static var inkSoft: Color { Color("inkSoft", bundle: .main) }
-    static var inkMuted: Color { Color("inkMuted", bundle: .main) }
-    static var inputInk: Color { Color("inputInk", bundle: .main) }
-    static var inputPlaceholderInk: Color { Color("inputPlaceholderInk", bundle: .main) }
+    // UIKit 的动态颜色读取本窗口的主题特征；系统外观用原生语义色，主题外观才取日/夜资源。
+    // 颜色仍由同一入口消费，页面不保存第二份明暗状态，也不需要改其它计划的内容页。
+    private static func semantic(_ name: String, system: UIColor) -> Color {
+        Color(uiColor: UIColor { traits in
+            if traits[IPadThemeTrait.self].isEmpty { return system.resolvedColor(with: traits) }
+            return UIColor(named: name, in: .main, compatibleWith: traits)?.resolvedColor(with: traits)
+                ?? system.resolvedColor(with: traits)
+        })
+    }
+    static func themeBase(_ id: String) -> Color {
+        Color("themeBase_" + SettingsAvailability.theme(id).id, bundle: .main)
+    }
+
+    static var surface: Color { semantic("surface", system: .secondarySystemGroupedBackground) }
+    static var surfaceRaised: Color { semantic("surfaceRaised", system: .secondarySystemBackground) }
+    static var surfaceSunken: Color { semantic("surfaceSunken", system: .tertiarySystemBackground) }
+    static var border: Color { semantic("border", system: .separator) }
+    static var borderSubtle: Color { semantic("borderSubtle", system: .separator) }
+    static var inkStrong: Color { semantic("inkStrong", system: .label) }
+    static var ink: Color { semantic("ink", system: .label) }
+    static var inkSoft: Color { semantic("inkSoft", system: .secondaryLabel) }
+    static var inkMuted: Color { semantic("inkMuted", system: .tertiaryLabel) }
+    static var inputInk: Color { semantic("inputInk", system: .label) }
+    static var inputPlaceholderInk: Color { semantic("inputPlaceholderInk", system: .placeholderText) }
     static var inputSelection: Color { Color("inputSelection", bundle: .main) }
     static var inputSelectedInk: Color { Color("inputSelectedInk", bundle: .main) }
-    static var inputPopupSurface: Color { Color("inputPopupSurface", bundle: .main) }
-    static var inputPopupBorder: Color { Color("inputPopupBorder", bundle: .main) }
+    static var inputPopupSurface: Color { semantic("inputPopupSurface", system: .secondarySystemBackground) }
+    static var inputPopupBorder: Color { semantic("inputPopupBorder", system: .separator) }
     static var inputPopupHighlight: Color { Color("inputPopupHighlight", bundle: .main) }
-    static var controlSurface: Color { Color("controlSurface", bundle: .main) }
-    static var controlInk: Color { Color("controlInk", bundle: .main) }
+    static var controlSurface: Color { semantic("controlSurface", system: .secondarySystemBackground) }
+    static var controlInk: Color { semantic("controlInk", system: .label) }
     static var accent: Color { Color("accent", bundle: .main) }
     static var accentStrong: Color { Color("accentStrong", bundle: .main) }
     static var accentFill: Color { Color("accentFill", bundle: .main) }

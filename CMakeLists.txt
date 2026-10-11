@@ -688,6 +688,8 @@ if(IOS)
     endforeach()
     set_target_properties(IPadUI PROPERTIES
         XCODE_ATTRIBUTE_SWIFT_INCLUDE_PATHS "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/ios/bridge")
+    # 055-R1：原生窗口的系统/主题颜色环境，不进入 Mac 或 iPhone QML。
+    target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Theme/ThemeAppearance.swift)
     target_link_libraries(IPadUI PRIVATE IPadCore)
     # 055-P3A：颜色资源属于应用包，Swift 按 Bundle.main 获取；壁纸继续只用 Qt 已打包的资源。
     target_sources(PomodoroTodo PRIVATE src/ui/ipad/Sources/IPadUI/Resources/Colors.xcassets)

@@ -24,12 +24,24 @@ public enum SettingsAvailability {
         case .sync: return [.sync]
         case .backup: return [.backup]
         case .export: return [.export]
-        case .appearance: return [.wallpaper, .backgroundTheme, .slimClockFont, .dashboardTimer]
+        case .appearance: return [.wallpaper, .backgroundTheme, .slimClockFont]
         }
     }
     public static var sections: [SettingsSection] { SettingsSection.allCases.filter { !features(in: $0).isEmpty } }
     // ThemeGate 核对这份展示选项与 Theme.qml，避免外观选择器与壁纸资产漂移。
-    public static let themes: [(id: String, title: String)] = [
-        ("warm", "暖色"), ("pink", "粉色"), ("jiangnan", "烟雨江南"), ("sword", "雪岭剑影"),
-        ("starry", "星空"), ("rainy", "雨夜窗景"), ("moon", "月夜山影")]
+    public struct Theme: Sendable {
+        public let id: String
+        public let title: String
+        public let mode: String
+        public let base: String
+    }
+    public static let themes: [Theme] = [
+        Theme(id: "warm", title: "暖色", mode: "light", base: "#f3e3cf"),
+        Theme(id: "pink", title: "粉色", mode: "light", base: "#efc4d0"),
+        Theme(id: "jiangnan", title: "烟雨江南", mode: "light", base: "#dfe8e2"),
+        Theme(id: "sword", title: "雪岭剑影", mode: "light", base: "#ccd4e6"),
+        Theme(id: "starry", title: "星空", mode: "dark", base: "#12102a"),
+        Theme(id: "rainy", title: "雨夜窗景", mode: "dark", base: "#0f1622"),
+        Theme(id: "moon", title: "月夜山影", mode: "dark", base: "#0d1626")]
+    public static func theme(_ id: String) -> Theme { themes.first { $0.id == id } ?? themes[0] }
 }

@@ -62,6 +62,7 @@ import PTBridge
         result.taskTitle = value.taskTitle
         return result
     }
+    func selectTheme(_ value: String) throws { try bridge.selectTheme(value) }
     func setAppearance(_ value: String) throws { try bridge.setAppearance(value) }
     func setNativeUI(_ value: Bool) throws { try bridge.setNativeUI(value) }
     func setUseWallpaper(_ value: Bool) throws { try bridge.setUseWallpaper(value) }

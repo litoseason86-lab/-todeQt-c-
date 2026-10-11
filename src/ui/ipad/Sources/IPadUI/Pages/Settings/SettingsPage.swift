@@ -77,17 +77,29 @@ import SwiftUI
 @MainActor private struct AppearanceSettings: View {
     @Bindable var store: SettingsStore
     @Bindable var shell: ShellStore
+    private let systemModes: [(String, String)] = [("system", "跟随系统"), ("light", "浅色"), ("dark", "深色")]
     var body: some View {
         Form {
-            Section("背景") {
-                Toggle("使用壁纸", isOn: Binding(get: { shell.snapshot.useWallpaper }, set: { shell.setUseWallpaper($0) }))
-                Picker("背景主题", selection: Binding(get: { store.snapshot.backgroundTheme }, set: store.setBackgroundTheme)) {
-                    ForEach(SettingsAvailability.themes, id: \.id) { Text($0.title).tag($0.id) }
+            Section("系统外观") {
+                ForEach(systemModes, id: \.0) { mode in
+                    appearanceChoice(mode.1, selected: shell.selectedSystemAppearance == mode.0) {
+                        shell.setAppearance(mode.0)
+                    }
                 }
-                Toggle("纤细时钟字体", isOn: Binding(get: { store.snapshot.slimClockFont }, set: store.setSlimClockFont))
-                Toggle("仪表盘计时摘要", isOn: Binding(get: { store.snapshot.dashboardTimerVisible }, set: store.setDashboardTimerVisible))
+            }
+            Section("主题") {
+                ForEach(SettingsAvailability.themes, id: \.id) { theme in
+                    appearanceChoice(theme.title, selected: shell.selectedTheme == theme.id) {
+                        shell.selectTheme(theme.id)
+                    }
+                }
+                Toggle("使用壁纸", isOn: Binding(
+                    get: { shell.wallpaperVisible },
+                    set: { shell.setUseWallpaper($0) }))
+                .disabled(!shell.wallpaperAvailable || shell.snapshot.operationBlocksUI)
             }
             Section("界面") {
+                Toggle("纤细时钟字体", isOn: Binding(get: { store.snapshot.slimClockFont }, set: store.setSlimClockFont))
                 Button("使用旧版界面（下次启动生效）") { shell.useLegacyUIOnNextLaunch() }
                     .disabled(shell.snapshot.operationBlocksUI)
             }
@@ -95,6 +107,16 @@ import SwiftUI
             if !shell.errorMessage.isEmpty { Text(shell.errorMessage).foregroundStyle(ThemeColors.danger) }
         }.formStyle(.grouped).navigationTitle("外观")
     }
+    private func appearanceChoice(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title).foregroundStyle(ThemeColors.ink)
+                Spacer()
+                if selected { Image(systemName: "checkmark").foregroundStyle(ThemeColors.accentInk) }
+            }
+        }.accessibilityValue(selected ? "已选中" : "未选中")
+    }
+
 }
 
 @MainActor private struct SidebarSettings: View {

@@ -206,6 +206,37 @@
     if (self.onChanged) self.onChanged();
     return YES;
 }
+- (BOOL)selectTheme:(NSString *)value error:(NSError **)error
+{
+    NSAssert(NSThread.isMainThread, @"主题设置必须在主线程");
+    const QString theme = QString::fromNSString(value);
+    const QStringList themes = {QStringLiteral("warm"), QStringLiteral("pink"), QStringLiteral("jiangnan"),
+        QStringLiteral("sword"), QStringLiteral("starry"), QStringLiteral("rainy"), QStringLiteral("moon")};
+    if (!themes.contains(theme)) {
+        if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"无效的主题选项"}];
+        return NO;
+    }
+    QSettings settings;
+    const QString appearanceKey = QStringLiteral("ipad/appearance");
+    const QVariant oldAppearance = settings.value(appearanceKey);
+    const bool hadAppearance = settings.contains(appearanceKey);
+    // 两个键在同一 QSettings 缓存中一起刷盘；只在成功后转发原主题信号，避免半选择被页面读到。
+    const QString themeKey = QStringLiteral("appearance/backgroundTheme");
+    const QVariant oldTheme = settings.value(themeKey);
+    const bool hadTheme = settings.contains(themeKey);
+    settings.setValue(appearanceKey, QStringLiteral("theme"));
+    settings.setValue(themeKey, theme);
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        if (hadAppearance) settings.setValue(appearanceKey, oldAppearance); else settings.remove(appearanceKey);
+        if (hadTheme) settings.setValue(themeKey, oldTheme); else settings.remove(themeKey);
+        settings.sync();
+        if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: @"主题设置保存失败"}];
+        return NO;
+    }
+    emit AppSettings::instance()->backgroundThemeChanged();
+    return YES;
+}
 - (BOOL)setAppearance:(NSString *)value error:(NSError **)error
 {
     NSAssert(NSThread.isMainThread, @"外观设置必须在主线程");

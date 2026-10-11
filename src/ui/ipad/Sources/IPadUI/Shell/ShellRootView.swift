@@ -44,9 +44,9 @@ struct ShellRootView: View {
         .tabViewSidebarFooter { fixedEntries }
         .modifier(TimerAccessoryModifier(store: store, accessory: miniTimer))
         .tint(ThemeColors.accentInk)
-        .preferredColorScheme(store.snapshot.useWallpaper
-            ? (["starry", "rainy", "moon"].contains(store.snapshot.backgroundTheme) ? .dark : .light) : nil)
-        .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
+        .preferredColorScheme(preferredScheme)
+        .background { ThemeAppearance(themeID: store.selectedTheme ?? "").frame(width: 0, height: 0) }
+        .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
         .background { keyboardCommands }
         .disabled(store.snapshot.operationBlocksUI)
         .overlay {
@@ -100,17 +100,17 @@ struct ShellRootView: View {
     private func pageView(_ page: PageID) -> some View {
         NavigationStack {
             PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store)
-                .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
+                .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
         }
     }
     private var moreView: some View {
         NavigationStack(path: $morePath) {
             List(store.morePages, id: \.self) { page in
                 NavigationLink(value: page) { Label(page.title, systemImage: page.symbol) }
-                    .listRowBackground(store.snapshot.useWallpaper ? ThemeColors.surface : nil)
+                    .listRowBackground(store.selectedTheme != nil ? ThemeColors.surface : nil)
             }
-            .scrollContentBackground(store.snapshot.useWallpaper ? .hidden : .visible)
-            .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.snapshot.useWallpaper) }
+            .scrollContentBackground(store.selectedTheme != nil ? .hidden : .visible)
+            .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
             .navigationTitle("更多")
             .navigationDestination(for: PageID.self) { page in
                 PageRegistry.view(for: page, core: core, shell: store).shellChrome(store: store)
@@ -135,6 +135,14 @@ struct ShellRootView: View {
                 }.buttonStyle(.plain)
             }
         }.padding(.vertical, 8)
+    }
+    private var preferredScheme: ColorScheme? {
+        switch store.snapshot.appearance {
+        case "light": .light
+        case "dark": .dark
+        case "theme": SettingsAvailability.theme(store.snapshot.backgroundTheme).mode == "dark" ? .dark : .light
+        default: nil
+        }
     }
     private var clock: String {
         ShellDisplay.clock(store.snapshot.mode == 1 ? store.snapshot.remainingSeconds : store.snapshot.elapsedSeconds)
