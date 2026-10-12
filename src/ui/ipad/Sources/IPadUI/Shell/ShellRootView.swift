@@ -23,8 +23,8 @@ struct ShellRootView: View {
     @State private var sidebar = SidebarWatcher()
 
     var body: some View {
+        // 10-12 用户要求去掉跨页迷你计时条（底部附件位）：没用还挡内容；计时在专注页和侧栏摘要块里看。
         tabs
-            .modifier(TimerAccessoryModifier(store: store, accessory: miniTimer))
             .tint(ThemeColors.accentInk)
             .preferredColorScheme(preferredScheme)
             .background { ThemeAppearance(themeID: previewThemeID ?? store.selectedTheme ?? "").frame(width: 0, height: 0) }
@@ -121,7 +121,7 @@ struct ShellRootView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .defaultAdaptableTabBarPlacement(.sidebar)
-        .tabViewSidebarHeader { summaryTiles }
+        .tabViewSidebarHeader { summaryTiles.background { SidebarSwipeProbe() } }
         .tabViewSidebarBottomBar { fixedEntries }
     }
 
@@ -239,9 +239,6 @@ struct ShellRootView: View {
         default: return nil
         }
     }
-    private var clock: String {
-        ShellDisplay.clock(store.snapshot.mode == 1 ? store.snapshot.remainingSeconds : store.snapshot.elapsedSeconds)
-    }
     // 定稿侧栏摘要块：当前页那块焦糖实底、浅色字，其余浅焦糖底；数字 22 粗、单位 13。
     private func tile(_ tile: ShellSummaryTile) -> some View {
         let selected = currentRegularPage == tile.page
@@ -267,22 +264,6 @@ struct ShellRootView: View {
         .accessibilityLabel("\(tile.title)，\(tile.value)")
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
-    private var miniTimer: some View {
-        HStack(spacing: 12) {
-            Button { store.select(.focus) } label: {
-                HStack {
-                    Text(clock).monospacedDigit()
-                    Text(focus.miniTimerLabel).lineLimit(1)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            Button { store.toggleTimer() } label: {
-                Image(systemName: store.snapshot.running ? "pause.fill" : "play.fill")
-            }
-            .accessibilityLabel(store.snapshot.running ? "暂停计时" : "继续计时")
-        }
-        .padding(.horizontal, 16).padding(.vertical, 8)
-    }
     private var keyboardCommands: some View {
         VStack {
             ForEach(Array(store.orderedPages.prefix(7).enumerated()), id: \.element) { index, page in
@@ -301,23 +282,30 @@ struct ShellRootView: View {
 private struct ShellChrome: ViewModifier {
     @Bindable var store: ShellStore
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var captureHostID = UUID()
     func body(content: Content) -> some View {
         content
             // 统一放开主题页底，列表行仍由各页的语义纸面令牌决定；系统外观保留系统滚动底色。
             .scrollContentBackground(store.selectedTheme != nil ? .hidden : .visible)
             .background { WallpaperBackground(theme: store.snapshot.backgroundTheme, enabled: store.wallpaperVisible) }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    // 定稿：宽窗「✎ 记一笔」带文字，窄窗只留图标。
-                    Button { store.presentCapture() } label: {
-                        if sizeClass == .compact { Image(systemName: "pencil") }
-                        else { ToolbarTextLabel(title: "记一笔", systemImage: "pencil") }
-                    }.accessibilityLabel("记一笔")
-                        .popover(isPresented: $store.capturePresented) { capturePopover }
+                // 专注页计时中无操作时整项移出，和底部计时按钮一起淡出（记一笔浮层开着时专注页不会隐藏）。
+                if !store.focusChromeHidden {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        // 定稿：宽窗「✎ 记一笔」带文字，窄窗只留图标。
+                        Button { store.toggleCapture(for: captureHostID) } label: {
+                            if sizeClass == .compact { Image(systemName: "pencil") }
+                            else { ToolbarTextLabel(title: "记一笔", systemImage: "pencil") }
+                        }.accessibilityLabel("记一笔")
+                            .popover(isPresented: Binding(
+                                get: { store.capturePresented(for: captureHostID) },
+                                set: { if !$0 { store.captureDismissed(by: captureHostID) } }
+                            )) { capturePopover }
+                    }
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                // 由页面安全区让开标签栏与附件位，提示不写固定底边偏移量。
+                // 由页面安全区让开标签栏，提示不写固定底边偏移量。
                 if let toast = store.toast {
                     HStack {
                         Text(toast.message)
@@ -337,40 +325,36 @@ private struct ShellChrome: ViewModifier {
                     .padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)).padding()
                 }
             }
+            .onAppear { _ = store.claimCaptureHost(captureHostID) }
+            .onDisappear { store.releaseCaptureHost(captureHostID) }
     }
     private var capturePopover: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        let form = VStack(alignment: .leading, spacing: 16) {
             Text("记一笔").font(.headline)
             TextField("写下问题或关键词", text: $store.captureTitle, axis: .vertical)
                 .lineLimit(2...5).onSubmit { store.capture() }
             if !store.captureError.isEmpty { Text(store.captureError).foregroundStyle(ThemeColors.danger) }
             HStack {
+                Button("取消") { store.dismissCapture() }
                 Spacer()
                 Button("记下") { store.capture() }.buttonStyle(.borderedProminent)
             }
         }
-        .padding(20).frame(minWidth: 280, idealWidth: 340)
-        .presentationCompactAdaptation(.sheet)
+        .padding(20)
+        return Group {
+            // 窄窗口退化成整页表单。带输入框的表单不用半高：10-12 目标表单在窄窗口半高表单里点输入框弹键盘时
+            // 两次闪退（见 TodaySheets.swift）。
+            if sizeClass == .compact {
+                form.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .presentationDetents([.large])
+            } else {
+                form.frame(minWidth: 280, idealWidth: 340)
+            }
+        }.presentationCompactAdaptation(.sheet)
     }
 }
 private extension View {
     func shellChrome(store: ShellStore) -> some View { modifier(ShellChrome(store: store)) }
-}
-
-private struct TimerAccessoryModifier<Accessory: View>: ViewModifier {
-    @Bindable var store: ShellStore
-    let accessory: Accessory
-
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.1, *) {
-            content.tabViewBottomAccessory(isEnabled: store.miniTimerVisible) { accessory }
-        } else if store.miniTimerVisible {
-            // iOS 26.0 没有 isEnabled 重载；无计时时不应用附件位修饰器，避免系统创建空容器。
-            content.tabViewBottomAccessory { accessory }
-        } else {
-            content
-        }
-    }
 }
 
 // 宽窗侧栏当前是否展开。SwiftUI 没有读侧栏显隐的接口，借 UIKit 侧栏代理（UITabBarController.Sidebar.Delegate，
@@ -406,6 +390,69 @@ private struct TimerAccessoryModifier<Accessory: View>: ViewModifier {
     nonisolated override func forwardingTarget(for selector: Selector!) -> Any? {
         if !super.responds(to: selector), let forwarded, forwarded.responds(to: selector) { return forwarded }
         return super.forwardingTarget(for: selector)
+    }
+}
+
+// 宽窗侧栏左滑收起（10-12 用户要求）：不必每次点左上角的收起按钮，在侧栏上向左一扫就收到顶部标签栏。
+// SwiftUI 没有控制侧栏显隐的接口，这个零尺寸视图放在侧栏头部（摘要块）里：上了窗口后往上找「仍比窗口窄得多」的
+// 最外层祖先视图，也就是整条侧栏（摘要块、页面列表、底栏都在里面），把向左横扫手势挂上去；
+// 识别后经响应链找到承载它的标签控制器，把 sidebar.isHidden 置真。侧栏收起时本视图离开窗口，手势随之摘下，
+// 再展开时重新挂上。只认横扫，与列表的竖向滚动、行点按同时识别，不抢它们的手势。
+private struct SidebarSwipeProbe: UIViewRepresentable {
+    func makeUIView(context: Context) -> ProbeView { ProbeView() }
+    func updateUIView(_ view: ProbeView, context: Context) {}
+
+    final class ProbeView: UIView, UIGestureRecognizerDelegate {
+        private weak var host: UIView?
+        private lazy var swipe: UISwipeGestureRecognizer = {
+            let recognizer = UISwipeGestureRecognizer(target: self, action: #selector(collapseSidebar))
+            recognizer.direction = .left
+            recognizer.delegate = self
+            return recognizer
+        }()
+        init() {
+            super.init(frame: .zero)
+            isUserInteractionEnabled = false
+        }
+        required init?(coder: NSCoder) { nil }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            attach()
+        }
+        // 刚上窗口时祖先视图可能还没排版、宽度为 0，排版后再找一次；找到的还是同一个就不动。
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            attach()
+        }
+        // 手势识别器不持有目标；离开窗口先摘下，免得侧栏容器留着一个指向已释放视图的手势。
+        override func willMove(toWindow newWindow: UIWindow?) {
+            super.willMove(toWindow: newWindow)
+            if newWindow == nil { host?.removeGestureRecognizer(swipe); host = nil }
+        }
+        private func attach() {
+            guard let window else { return }
+            // 侧栏宽约 280–320，标签页内容区和整窗都远宽于它；取窗口宽的六成作分界。
+            let limit = window.bounds.width * 0.6
+            var target: UIView?
+            var current = superview
+            while let view = current, view.bounds.width > 0, view.bounds.width < limit {
+                target = view
+                current = view.superview
+            }
+            guard let target, target !== host else { return }
+            host?.removeGestureRecognizer(swipe)
+            target.addGestureRecognizer(swipe)
+            host = target
+        }
+        @objc private func collapseSidebar() {
+            var responder: UIResponder? = self
+            while let current = responder, !(current is UITabBarController) { responder = current.next }
+            guard let controller = responder as? UITabBarController, !controller.sidebar.isHidden else { return }
+            if UIAccessibility.isReduceMotionEnabled { controller.sidebar.isHidden = true }
+            else { UIView.animate(withDuration: 0.3) { controller.sidebar.isHidden = true } }
+        }
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
     }
 }
 

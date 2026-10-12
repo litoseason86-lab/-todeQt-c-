@@ -31,6 +31,18 @@ public struct LongFreePrompt: Equatable, Sendable {
     public var adjustmentError = ""
 }
 
+// 决定专注页计时控制能否自动隐藏的全部输入。任一项变化都算一次「状态变了」：先把控制露出来，再重新计时。
+public struct FocusControlsAutoHideKey: Equatable, Sendable {
+    public var state: FocusPageState
+    public var running: Bool
+    public var hasActiveSession: Bool
+    public var pageActive: Bool
+    public var immersive: Bool
+    // 确认框、超长确认或记一笔浮层开着：浮层锚在工具栏按钮上，按钮藏了浮层就没了着落。
+    public var prompting: Bool
+    public var assistive: Bool
+}
+
 public typealias FocusDelay = @MainActor (_ seconds: Double, _ action: @escaping @MainActor () -> Void) -> @MainActor () -> Void
 
 // 专注计时的展示与交互状态。长休息、自动衔接、切换分流、结束分发、超长确认、候选任务等业务判断
@@ -58,8 +70,12 @@ public typealias FocusDelay = @MainActor (_ seconds: Double, _ action: @escaping
     public var pageActive = false
     // 「细体时钟」设置：只换计时数字的字重，随设置信号更新。
     public private(set) var slimClockFont = false
-    // 动画是否该收敛：系统「减少动态效果」或应用内同名设置任一打开；视图每次渲染时现取。
+    // iPad 不提供应用内「减少动态效果」入口，只跟随系统开关；通过宿主注入的读取器现取，数据层不依赖 UIKit。
     public var animationsReduced: Bool { reduceMotion() }
+    // 专注页底部计时按钮与右上角工具按钮是否已因无操作而隐藏（规则见「计时控制自动隐藏」一节）。
+    public private(set) var controlsHidden = false
+    // 旁白或切换控制开着：由视图从系统环境同步进来。
+    public private(set) var assistiveTechnologyActive = false
     @ObservationIgnored public var onFocusCompletedForPages: (() -> Void)?
 
     @ObservationIgnored private let focus: any FocusBridgeProtocol
@@ -71,6 +87,8 @@ public typealias FocusDelay = @MainActor (_ seconds: Double, _ action: @escaping
     @ObservationIgnored private let delay: FocusDelay
     @ObservationIgnored private var cancelAutoAdvanceAction: (@MainActor () -> Void)?
     @ObservationIgnored private var autoAdvancePhase = 0
+    @ObservationIgnored private var cancelControlsHideAction: (@MainActor () -> Void)?
+    @ObservationIgnored private var lastControlsAutoHideKey: FocusControlsAutoHideKey?
     // 为完成任务而结束专注期间为真：计时器同步发出的「不足 3 分钟未计入」改由完成提示一并说明。
     @ObservationIgnored private var endingForCompletion = false
     // 在其它页原地结束计时（仪表盘、完成任务）时不跳回今日页。
@@ -121,7 +139,7 @@ public typealias FocusDelay = @MainActor (_ seconds: Double, _ action: @escaping
     // 沉浸里除计时中还要能显示完成态；待机和无会话的自由态没有可投影内容。
     public var immersiveProjectable: Bool { immersiveAvailable || state == .workDone || state == .breakDone }
     public var knowledgeGapEntryAvailable: Bool { state != .manualRest }
-    // 迷你计时条文字：工作与自由显示任务名，休息段显示「休息」。
+    // 今日专注时间轴上进行中色块的文字：工作与自由显示任务名，休息段显示「休息」。
     public var miniTimerLabel: String {
         if snapshot.phase == 2 || snapshot.phase == 3 { return "休息" }
         return snapshot.currentTaskTitle.isEmpty ? "专注" : snapshot.currentTaskTitle
@@ -359,6 +377,9 @@ public typealias FocusDelay = @MainActor (_ seconds: Double, _ action: @escaping
     public func setPageActive(_ active: Bool) {
         pageActive = active
         if active { reloadTodayTasks() }
+        // 离页时视图已不在、收不到键变化，这里直接露出并停掉隐藏计时，别把「记一笔」藏到别的页去；
+        // 清掉记下的键，回到本页时首次同步一定重新计时。
+        else { lastControlsAutoHideKey = nil; wakeControls() }
     }
     public func reloadTodayTasks() {
         reconcileSelectedTask()
@@ -479,6 +500,21 @@ public typealias FocusDelay = @MainActor (_ seconds: Double, _ action: @escaping
     }
     public var modeMenuTitle: String {
         pomodoroModeSelected ? "番茄 · \(selectedWorkMinutes) 分钟" : "自由计时"
+    }
+    // 专注页圆环里时间下面那一行（计时开始后；待机时那里是模式菜单）。暂停统一写「已暂停」，
+    // 番茄带总分钟，工作段再带「第几个」：completedPomodoros 是本轮之前已完成的个数，所以加 1。
+    public var ringStatusText: String {
+        let total = Int((Double(snapshot.targetSeconds) / 60).rounded())
+        let running = snapshot.running
+        switch state {
+        case .pomoWork: return running ? "第 \(snapshot.completedPomodoros + 1) 个番茄 · 共 \(total) 分" : "已暂停 · 共 \(total) 分"
+        case .pomoBreak: return running ? "休息 · 共 \(total) 分" : "已暂停 · 共 \(total) 分"
+        case .workDone: return "专注完成"
+        case .breakDone: return "休息结束"
+        case .manualRest: return running ? "主动休息" : "已暂停"
+        case .free: return snapshot.hasActiveSession ? (running ? "自由计时" : "已暂停") : ""
+        case .pomoIdle: return ""
+        }
     }
     public var compactStageText: String {
         switch state {
@@ -800,6 +836,52 @@ public typealias FocusDelay = @MainActor (_ seconds: Double, _ action: @escaping
     public func enterImmersive() { if immersiveAvailable { immersiveActive = true } }
     public func exitImmersive() { immersiveActive = false }
 
+    // MARK: 计时控制自动隐藏
+    // 10-12 用户定稿：专注页计时进行中，3 秒没碰屏幕就淡出底部计时按钮和右上角工具按钮，点屏幕唤醒。
+    // 只在计时真正在走时隐藏；暂停、完成、待机都在等用户点按钮，不藏。旁白或切换控制开着时也不藏：
+    // 看不见的按钮读屏摸不到，「点屏幕唤醒」对它们也不成立。是否隐藏属于展示状态，不进 C++。
+    public static let controlsHideDelay: Double = 3
+
+    public var controlsAutoHideKey: FocusControlsAutoHideKey {
+        FocusControlsAutoHideKey(state: state, running: snapshot.running, hasActiveSession: snapshot.hasActiveSession,
+                                 pageActive: pageActive, immersive: immersiveActive,
+                                 prompting: switchPrompt != nil || longFree != nil || (shell?.capturePresented ?? false),
+                                 assistive: assistiveTechnologyActive)
+    }
+    private var controlsAutoHideAllowed: Bool {
+        let key = controlsAutoHideKey
+        guard key.pageActive, key.running, !key.immersive, !key.prompting, !key.assistive else { return false }
+        switch key.state {
+        case .pomoWork, .pomoBreak, .manualRest: return true
+        case .free: return key.hasActiveSession
+        case .pomoIdle, .workDone, .breakDone: return false
+        }
+    }
+    public func setAssistiveTechnologyActive(_ active: Bool) {
+        if assistiveTechnologyActive != active { assistiveTechnologyActive = active }
+    }
+    // 视图在 controlsAutoHideKey 变化时调用（首次出现也调一次）。每秒走字不改这把键，不会一直重排计时；
+    // 键变了（暂停继续、换阶段、离页、弹窗开合）就当作一次提醒，先露出控制再从头计时。
+    public func syncControlsAutoHide() {
+        let key = controlsAutoHideKey
+        guard key != lastControlsAutoHideKey else { return }
+        lastControlsAutoHideKey = key
+        wakeControls()
+    }
+    // 点屏幕或按任一按钮：露出控制，从头计 3 秒；不该隐藏的状态只露出、不计时。
+    public func wakeControls() {
+        cancelControlsHideAction?(); cancelControlsHideAction = nil
+        if controlsHidden { controlsHidden = false }
+        guard controlsAutoHideAllowed else { return }
+        cancelControlsHideAction = delay(Self.controlsHideDelay) { [weak self] in self?.controlsHideFired() }
+    }
+    private func controlsHideFired() {
+        cancelControlsHideAction = nil
+        // 到点再验一次：期间可能已暂停或弹出确认框，而视图的同步还没轮到。
+        guard controlsAutoHideAllowed else { return }
+        controlsHidden = true
+    }
+
     // MARK: FocusFlowHook
     // 任务入口（今日、仪表盘、本周）的统一落点；分流由控制器的 planTaskEntry 决定。
     public func openTask(taskId: Int, title: String) {
@@ -836,5 +918,69 @@ extension FocusEndResult {
     init(result: String, kind: String = "", discarded: Bool = false, error: String = "") {
         self.init()
         self.result = result; self.kind = kind; self.discarded = discarded; self.error = error
+    }
+}
+
+// 专注页尺寸（10-12 定稿：任务在上、细线圆环居中、按钮在下，整组居中）。纯数值，放在这里便于在 Mac 上测。
+// 三档，按窗口依次尝试：
+// 1. 定稿竖排：整组在「窗口顶到底部安全区」里上下对称居中，上下各让出顶栏，圆环 200–420；
+// 2. 矮窗口竖排：放不下第 1 档时收紧间距，改在「顶栏下沿到底部安全区」的可见区里居中；
+// 3. 横排：可见区更矮时圆环在左、任务与按钮一列在右，比硬缩成小圆环更好认时间。
+// 档位始终按无错误时选择，避免错误出现时整页换排法；错误块参与布局，对称竖排借底部留白、收紧竖排缩环让位，
+// 横排把错误接在右列按钮下。圆环到最小值或右列仍放不下时，由页面滚动容纳。
+// 顶栏高度一律按「有导航栏」算（不少于 74）：计时中工具按钮淡出后导航栏可能收起、顶部安全区变小，
+// 若跟着它重算，圆盘会在按钮隐藏时跳一下（10-12 用户在最小窗口遇到：先叠在按钮上，几秒后才排正）。
+public struct FocusPageLayout: Equatable, Sendable {
+    public enum Axis: Equatable, Sendable { case vertical, horizontal }
+    public static let taskHeight = 44.0
+    public static let sideColumnWidth = 240.0
+    public static let minimumTopBar = 74.0
+    // 12 点上间距加两行 15 号错误文字，预留固定高度，避免提示落到可滚动内容之外。
+    public static let errorBlockHeight = 52.0
+    public let axis: Axis
+    public let ring: Double
+    // 竖排：任务到圆环、圆环到按钮；横排：圆环到右列、右列里任务到按钮。
+    public let gapAbove: Double
+    public let gapBelow: Double
+    public let controlsHeight: Double
+    public let errorHeight: Double
+    // 滚动内容里整组上下的留白，与 regionHeight 一起决定居中的范围。
+    public let topPadding: Double
+    public let bottomPadding: Double
+    public let regionHeight: Double
+    public let taskMaxWidth: Double
+
+    public init(width: Double, height: Double, topInset: Double, bottomInset: Double, compact: Bool, showsError: Bool = false) {
+        errorHeight = showsError ? Self.errorBlockHeight : 0
+        let top = max(topInset, Self.minimumTopBar) + 8
+        let region = max(0, height - bottomInset)
+        regionHeight = region
+        let wideGapAbove: Double = compact ? 24 : 32
+        let wideGapBelow: Double = compact ? 28 : 32
+        let wideControls: Double = compact ? 60 : 64
+        let byWidth = width - 2 * max(36, width * 0.15)
+        let symmetric = min(420, region - 2 * top - (Self.taskHeight + wideGapAbove + wideGapBelow + wideControls), byWidth)
+        if symmetric >= 200 {
+            axis = .vertical; ring = symmetric
+            gapAbove = wideGapAbove; gapBelow = wideGapBelow; controlsHeight = wideControls
+            topPadding = top; bottomPadding = top - errorHeight
+            taskMaxWidth = max(0, min(560, width - 48))
+            return
+        }
+        let visible = region - top - 8
+        let tight = min(420, visible - (Self.taskHeight + 16 + 16 + 56), width - 32)
+        let sideways = min(360, visible, width - 32 - 24 - Self.sideColumnWidth)
+        topPadding = top; bottomPadding = 8
+        controlsHeight = 56
+        if sideways >= 160 && sideways > tight {
+            axis = .horizontal; ring = sideways
+            gapAbove = 24; gapBelow = 16
+            taskMaxWidth = Self.sideColumnWidth
+        } else {
+            // 再小的窗口也不把圆环缩到认不出时间：最少 120，放不下就让页面滚动。
+            axis = .vertical; ring = max(120, tight - errorHeight)
+            gapAbove = 16; gapBelow = 16
+            taskMaxWidth = max(0, min(560, width - 48))
+        }
     }
 }

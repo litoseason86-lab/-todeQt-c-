@@ -5,7 +5,7 @@ import XCTest
     // 自动衔接的延迟调度替身：记录每次调度的延迟，测试手动触发；cancel 只打标记，
     // 触发时可选择无视标记，用来验证「迟到的旧回调」自己也会再验前提。
     @MainActor private final class Scheduler {
-        struct Item { var delay: Double; var action: @MainActor () -> Void; var cancelled = false }
+        struct Item { var delay: Double; var action: @MainActor () -> Void; var cancelled = false; var fired = false }
         var items: [Item] = []
         var delayFn: FocusDelay {
             { [unowned self] delay, action in
@@ -16,6 +16,7 @@ import XCTest
         }
         func fire(_ index: Int, ignoringCancel: Bool = false) {
             guard index < items.count, ignoringCancel || !items[index].cancelled else { return }
+            items[index].fired = true
             items[index].action()
         }
         var live: [Int] { items.indices.filter { !items[$0].cancelled } }
@@ -921,6 +922,219 @@ import XCTest
         XCTAssertEqual(r.settings.calls.count, before)
         XCTAssertEqual(count(r, "stopForSwitch"), 0)
         XCTAssertTrue(r.store.pomodoroModeSelected)
+    }
+    // 产品保证：圆环里时间下面一行按阶段写——工作段写「第几个番茄 · 共几分」，暂停统一「已暂停」，休息、自由、主动休息、完成各有说法。
+    func testRingStatusTextByPhase() {
+        let r = rig([task(1)])
+        // 已完成 2 个时正在做的是第 3 个：用非 0 的完成数，区分「直接用完成数」的错误写法。
+        r.focus.focusSnapshot.completedPomodoros = 2
+        setTimer(r, mode: 1, phase: 1, active: true, taskID: 1, title: "任务1", remaining: 600, target: 1500)
+        XCTAssertEqual(r.store.ringStatusText, "第 3 个番茄 · 共 25 分")
+        setTimer(r, mode: 1, phase: 1, running: false, active: true, taskID: 1, title: "任务1", remaining: 600, target: 1500)
+        XCTAssertEqual(r.store.ringStatusText, "已暂停 · 共 25 分")
+        setTimer(r, mode: 1, phase: 2, active: true, taskID: 1, title: "任务1", remaining: 200, target: 300)
+        XCTAssertEqual(r.store.ringStatusText, "休息 · 共 5 分")
+        r.focus.onPhaseCompleted?(2)
+        XCTAssertEqual(r.store.ringStatusText, "休息结束")
+        let free = rig([task(1)])
+        setTimer(free, mode: 0, active: true, taskID: 1, title: "任务1", elapsed: 90)
+        XCTAssertEqual(free.store.ringStatusText, "自由计时")
+        setTimer(free, mode: 0, running: false, active: true, taskID: 1, title: "任务1", elapsed: 90)
+        XCTAssertEqual(free.store.ringStatusText, "已暂停")
+        setTimer(free, mode: 2, phase: 3, active: true, elapsed: 30)
+        XCTAssertEqual(free.store.ringStatusText, "主动休息")
+    }
+
+    // MARK: 计时控制自动隐藏
+    // 视图在 controlsAutoHideKey 变化时调 syncControlsAutoHide；测试在每次改状态后手动调一次，模拟这条接线。
+    private func controlsTimers(_ r: Rig) -> [Int] {
+        r.scheduler.items.indices.filter { r.scheduler.items[$0].delay == FocusStore.controlsHideDelay }
+    }
+    // 还在等的隐藏计时：没取消、也没触发过。
+    private func liveControlsTimers(_ r: Rig) -> [Int] {
+        controlsTimers(r).filter { !r.scheduler.items[$0].cancelled && !r.scheduler.items[$0].fired }
+    }
+
+    // 产品保证：专注页计时进行中，3 秒无操作后按钮与工具栏隐藏；到点之前不隐藏。
+    func testControlsHideThreeSecondsAfterTimingStarts() {
+        let r = rig([task(1)])
+        r.store.setPageActive(true)
+        setTimer(r, mode: 1, phase: 1, active: true, taskID: 1, title: "任务1", remaining: 600, target: 1500)
+        r.store.syncControlsAutoHide()
+        XCTAssertFalse(r.store.controlsHidden)
+        XCTAssertEqual(FocusStore.controlsHideDelay, 3)
+        XCTAssertEqual(liveControlsTimers(r).count, 1)
+        r.scheduler.fire(liveControlsTimers(r)[0])
+        XCTAssertTrue(r.store.controlsHidden)
+    }
+    // 产品保证：每秒走字不会把隐藏计时一直往后推；暂停、换阶段这类状态变化会先露出按钮再从头计时。
+    func testTicksKeepTimerButStateChangesRevealControls() {
+        let r = rig([task(1)])
+        r.store.setPageActive(true)
+        setTimer(r, mode: 1, phase: 1, active: true, taskID: 1, title: "任务1", remaining: 600, target: 1500)
+        r.store.syncControlsAutoHide()
+        setTimer(r, mode: 1, phase: 1, active: true, taskID: 1, title: "任务1", remaining: 599, target: 1500)
+        r.store.syncControlsAutoHide()
+        XCTAssertEqual(controlsTimers(r).count, 1, "走字不该重排隐藏计时")
+        r.scheduler.fire(liveControlsTimers(r)[0])
+        XCTAssertTrue(r.store.controlsHidden)
+        // 自动进入休息（仍在走）：先露出，再重新计 3 秒。
+        setTimer(r, mode: 1, phase: 2, active: true, taskID: 1, title: "任务1", remaining: 300, target: 300)
+        r.store.syncControlsAutoHide()
+        XCTAssertFalse(r.store.controlsHidden)
+        XCTAssertEqual(liveControlsTimers(r).count, 1)
+        XCTAssertEqual(controlsTimers(r).count, 2)
+    }
+    // 产品保证：点屏幕唤醒后按钮立刻出现，并从唤醒那一刻重新计 3 秒，旧计时作废。
+    func testWakeRevealsAndRestartsTimer() {
+        let r = rig([task(1)])
+        r.store.setPageActive(true)
+        setTimer(r, mode: 0, active: true, taskID: 1, title: "任务1", elapsed: 60)
+        r.store.syncControlsAutoHide()
+        let first = liveControlsTimers(r)[0]
+        r.scheduler.fire(first)
+        XCTAssertTrue(r.store.controlsHidden)
+        r.store.wakeControls()
+        XCTAssertFalse(r.store.controlsHidden)
+        XCTAssertEqual(liveControlsTimers(r).count, 1)
+        XCTAssertNotEqual(liveControlsTimers(r)[0], first)
+        r.store.wakeControls()
+        XCTAssertEqual(liveControlsTimers(r).count, 1, "连续唤醒只留最新一个计时")
+    }
+    // 产品保证：暂停时按钮一直在（等用户继续）；暂停前排下的旧计时迟到触发也不会把按钮藏掉。
+    func testPausedNeverHidesEvenIfStaleTimerFires() {
+        let r = rig([task(1)])
+        r.store.setPageActive(true)
+        setTimer(r, mode: 1, phase: 1, active: true, taskID: 1, title: "任务1", remaining: 600, target: 1500)
+        r.store.syncControlsAutoHide()
+        let stale = liveControlsTimers(r)[0]
+        setTimer(r, mode: 1, phase: 1, running: false, active: true, taskID: 1, title: "任务1", remaining: 600, target: 1500)
+        XCTAssertTrue(r.store.ringDimmed, "前提：已进入暂停")
+        r.store.syncControlsAutoHide()
+        XCTAssertTrue(liveControlsTimers(r).isEmpty)
+        r.scheduler.fire(stale, ignoringCancel: true)
+        XCTAssertFalse(r.store.controlsHidden)
+        // 待机（还没开始）同样不藏。
+        let idle = rig([task(1)])
+        idle.store.setPageActive(true)
+        idle.store.requestModeSwitch(usePomodoro: true)
+        idle.store.syncControlsAutoHide()
+        XCTAssertEqual(idle.store.state, .pomoIdle)
+        XCTAssertTrue(liveControlsTimers(idle).isEmpty)
+    }
+    // 产品保证：旁白开着、记一笔浮层或确认框开着时不隐藏；离开专注页立刻露出，别的页的记一笔不受影响。
+    func testAssistivePromptsAndLeavingPageKeepControlsVisible() {
+        let r = rig([task(1)])
+        r.store.setPageActive(true)
+        setTimer(r, mode: 0, active: true, taskID: 1, title: "任务1", elapsed: 60)
+        r.store.setAssistiveTechnologyActive(true)
+        r.store.syncControlsAutoHide()
+        XCTAssertTrue(liveControlsTimers(r).isEmpty)
+        r.store.setAssistiveTechnologyActive(false)
+        r.shell.capturePresented = true
+        r.store.syncControlsAutoHide()
+        XCTAssertTrue(liveControlsTimers(r).isEmpty)
+        r.shell.capturePresented = false
+        r.store.syncControlsAutoHide()
+        r.scheduler.fire(liveControlsTimers(r)[0])
+        XCTAssertTrue(r.store.controlsHidden, "前提：已隐藏")
+        r.store.setPageActive(false)
+        XCTAssertFalse(r.store.controlsHidden)
+        XCTAssertTrue(liveControlsTimers(r).isEmpty)
+        // 回到本页：状态没变也要重新计时，否则按钮会一直挂着。
+        r.store.setPageActive(true)
+        r.store.syncControlsAutoHide()
+        XCTAssertEqual(liveControlsTimers(r).count, 1)
+    }
+
+    // 产品保证：切换确认框唤醒已隐藏的计时控制，等待确认期间不隐藏，取消后重新计时一次。
+    func testSwitchPromptRevealsControlsAndDefersAutoHide() throws {
+        let r = rig([task(1), task(7)])
+        r.store.setPageActive(true)
+        setTimer(r, mode: 0, active: true, taskID: 1, title: "任务1", elapsed: 1200)
+        r.store.syncControlsAutoHide()
+        XCTAssertEqual(liveControlsTimers(r).count, 1)
+        r.scheduler.fire(try XCTUnwrap(liveControlsTimers(r).first))
+        XCTAssertTrue(r.store.controlsHidden, "前提：计时中控制已隐藏")
+        r.focus.focusTaskEntry = entry("confirmSwitch", pomodoro: true, autoStart: true)
+        r.focus.focusSwitchConsequence.kind = "saved"
+        r.store.openTask(taskId: 7, title: "任务7")
+        XCTAssertNotNil(r.store.switchPrompt, "前提：切换确认框已打开")
+        r.store.syncControlsAutoHide()
+        XCTAssertFalse(r.store.controlsHidden)
+        XCTAssertTrue(liveControlsTimers(r).isEmpty)
+        r.store.cancelSwitch()
+        XCTAssertNil(r.store.switchPrompt)
+        r.store.syncControlsAutoHide()
+        XCTAssertEqual(liveControlsTimers(r).count, 1)
+    }
+
+    // MARK: 专注页尺寸
+
+    // 产品保证：工具按钮淡出后导航栏收起、顶部安全区变小，圆盘也不跟着跳（10-12 最小窗口里先叠后正的问题）。
+    func testFocusLayoutIgnoresToolbarCollapse() {
+        // 这个窗口若按收起后的 24 重算，圆环会从 290 变成 390；两种顶部安全区必须得到同一套尺寸。
+        let withBar = FocusPageLayout(width: 600, height: 700, topInset: 74, bottomInset: 90, compact: true)
+        let collapsed = FocusPageLayout(width: 600, height: 700, topInset: 24, bottomInset: 90, compact: true)
+        XCTAssertEqual(withBar, collapsed)
+        XCTAssertEqual(withBar.ring, 290)
+    }
+    // 产品保证：错误提示参与可滚动布局且不改变档位；矮窗缩环让位，大窗保持圆环位置，横排容纳右列错误块。
+    func testFocusLayoutKeepsErrorInsideRegion() {
+        func verticalHeight(_ layout: FocusPageLayout) -> Double {
+            let group = FocusPageLayout.taskHeight + layout.gapAbove + layout.ring
+                + layout.gapBelow + layout.controlsHeight
+            return layout.topPadding + group + layout.errorHeight + layout.bottomPadding
+        }
+        let narrow = FocusPageLayout(width: 375, height: 488, topInset: 74, bottomInset: 90, compact: true)
+        XCTAssertEqual(narrow.axis, .vertical)
+        XCTAssertEqual(narrow.ring, 176, "前提：收紧竖排仍有缩环空间")
+        XCTAssertEqual(narrow.errorHeight, 0)
+        let narrowError = FocusPageLayout(width: 375, height: 488, topInset: 74, bottomInset: 90,
+                                         compact: true, showsError: true)
+        XCTAssertEqual(narrowError.axis, narrow.axis)
+        XCTAssertEqual(narrowError.errorHeight, 52)
+        XCTAssertLessThan(narrowError.ring, narrow.ring)
+        XCTAssertLessThanOrEqual(verticalHeight(narrowError), narrowError.regionHeight)
+
+        let wide = FocusPageLayout(width: 930, height: 834, topInset: 74, bottomInset: 20, compact: false)
+        XCTAssertEqual(wide.axis, .vertical)
+        XCTAssertEqual(wide.topPadding, wide.bottomPadding, "前提：无错误时采用对称竖排")
+        let wideError = FocusPageLayout(width: 930, height: 834, topInset: 74, bottomInset: 20,
+                                       compact: false, showsError: true)
+        XCTAssertEqual(wideError.axis, wide.axis)
+        XCTAssertEqual(wideError.ring, wide.ring)
+        XCTAssertEqual(wideError.topPadding, wide.topPadding)
+        XCTAssertEqual(verticalHeight(wideError), verticalHeight(wide))
+
+        let short = FocusPageLayout(width: 600, height: 410, topInset: 74, bottomInset: 80, compact: true)
+        XCTAssertEqual(short.axis, .horizontal, "前提：无错误时采用横排")
+        let shortError = FocusPageLayout(width: 600, height: 410, topInset: 74, bottomInset: 80,
+                                        compact: true, showsError: true)
+        XCTAssertEqual(shortError.axis, short.axis)
+        XCTAssertEqual(shortError.ring, short.ring)
+        let columnHeight = FocusPageLayout.taskHeight + shortError.gapBelow
+            + shortError.controlsHeight + shortError.errorHeight
+        XCTAssertLessThanOrEqual(columnHeight, shortError.regionHeight - shortError.topPadding - shortError.bottomPadding)
+    }
+
+    // 产品保证：大窗照定稿竖排对称居中；放不下时先收紧竖排，可见区更矮就横排；再小也不把圆环缩到 120 以下。
+    func testFocusLayoutTiersBySize() {
+        let wide = FocusPageLayout(width: 930, height: 834, topInset: 74, bottomInset: 20, compact: false)
+        XCTAssertEqual(wide.axis, .vertical); XCTAssertEqual(wide.ring, 420)
+        XCTAssertEqual(wide.topPadding, wide.bottomPadding)
+        let narrow = FocusPageLayout(width: 375, height: 834, topInset: 74, bottomInset: 90, compact: true)
+        XCTAssertEqual(narrow.axis, .vertical); XCTAssertEqual(narrow.ring, 262.5)
+        // 四分之一屏左右的矮窗：竖排只剩 108，横排能给 240。
+        let quarter = FocusPageLayout(width: 600, height: 410, topInset: 74, bottomInset: 80, compact: true)
+        XCTAssertEqual(quarter.axis, .horizontal); XCTAssertEqual(quarter.ring, 240)
+        XCTAssertEqual(quarter.bottomPadding, 8)
+        // 偏窄偏矮：横排右列放不下，收紧的竖排更大。
+        let tall = FocusPageLayout(width: 500, height: 580, topInset: 74, bottomInset: 80, compact: true)
+        XCTAssertEqual(tall.axis, .vertical); XCTAssertEqual(tall.ring, 278)
+        XCTAssertEqual([tall.gapAbove, tall.gapBelow], [16, 16])
+        let tiny = FocusPageLayout(width: 320, height: 300, topInset: 74, bottomInset: 80, compact: true)
+        XCTAssertEqual(tiny.axis, .vertical); XCTAssertEqual(tiny.ring, 120)
     }
 
 }

@@ -24,6 +24,10 @@ import UIKit
     private static var tapsRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-taps") }
     // 另带 --ipad-ui-tour-warm 时再用暖色主题各拍一轮（只在巡检窗口里套用，不改设置），对照浅色定稿。
     private static var warmRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-warm") }
+    // 另带 --ipad-ui-tour-focus 时只拍专注页的几种小窗口（含应用当前窗口的实际尺寸），每种切过去后 0.3 秒、
+    // 3.5 秒各一张，不拍其它页。只有启动巡检时已有正在走的计时且满足自动隐藏条件，按钮才会在 3 秒后隐藏，
+    // 两张图才可对照隐藏前后布局；没有计时会话时两张图的控制显隐相同，只能核对首帧布局。
+    private static var focusOnlyRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-focus") }
 
     static func startIfRequested(shell: ShellStore) {
         guard isRequested else { return }
@@ -55,6 +59,12 @@ import UIKit
               let rootView else { log("没有可用场景或根视图"); return }
         let original = shell.selection
         log("开始，原选中页 \(original.rawValue)")
+        if focusOnlyRequested {
+            await captureFocusSizes(scene: scene, root: rootView, shell: shell)
+            shell.select(original)
+            log("完成")
+            return
+        }
         var sizes: [(name: String, size: CGSize, compact: Bool, theme: String?)] = [
             ("wide", CGSize(width: 1210, height: 834), false, nil),
             ("compact", CGSize(width: 375, height: 834), true, nil)]
@@ -109,6 +119,30 @@ import UIKit
         }
         shell.select(original)
         log("完成")
+    }
+
+    private static func captureFocusSizes(scene: UIWindowScene, root: () -> AnyView, shell: ShellStore) async {
+        let current = scene.effectiveGeometry.coordinateSpace.bounds.size
+        let minimum = scene.sizeRestrictions?.minimumSize ?? .zero
+        log("当前窗口 \(Int(current.width))×\(Int(current.height))，系统最小 \(Int(minimum.width))×\(Int(minimum.height))，"
+            + "尺寸类别 \(scene.traitCollection.horizontalSizeClass == .compact ? "窄" : "宽")")
+        var sizes: [(name: String, size: CGSize)] = [("current", current)]
+        if minimum.width > 0 && minimum.height > 0 { sizes.append(("minimum", minimum)) }
+        sizes += [("600x410", CGSize(width: 600, height: 410)), ("500x580", CGSize(width: 500, height: 580)),
+                  ("375x834", CGSize(width: 375, height: 834))]
+        for item in sizes {
+            // 与系统一致：窄于 700 按窄窗口（标签栏在底部）排。
+            let window = makeWindow(scene: scene, size: item.size, compact: item.size.width < 700, root: root())
+            shell.select(.today)
+            try? await Task.sleep(for: .milliseconds(1200))
+            shell.select(.focus)
+            try? await Task.sleep(for: .milliseconds(300))
+            save(window, name: "focus-\(item.name)-0.3s")
+            try? await Task.sleep(for: .milliseconds(3200))
+            save(window, name: "focus-\(item.name)-3.5s")
+            window.isHidden = true
+            windows.removeAll { $0 === window }
+        }
     }
 
     // 侧栏收起后顶部是五个常用页的浮动标签栏；巡检时临时收起，截完恢复。

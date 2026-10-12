@@ -9,6 +9,7 @@ import XCTest
         let history = FocusHistoryBridgeFake()
         let statistics = StatisticsBridgeFake()
         let logicalDay = LogicalDayBridgeFake()
+        let focus = FocusBridgeFake()
         let pending: PendingDeletionStore
         let store: TimelineStore
         init() {
@@ -16,7 +17,7 @@ import XCTest
             logicalDay.today = "2026-10-09"
             logicalDay.relations["2026-10-09/2026-10-09"] = .same
             store = TimelineStore(history: history, statistics: statistics, pendingDeletion: pending,
-                                  logicalDay: logicalDay, date: "2026-10-09")
+                                  logicalDay: logicalDay, date: "2026-10-09", focus: focus)
         }
     }
     // 产品保证：副标题「· 今天」只认服务的日期关系；翻到别的日子或关系读取失败时都不写「今天」。
@@ -164,6 +165,46 @@ import XCTest
         XCTAssertNil(f.shell.requestedFocusDate)
         XCTAssertEqual(f.store.selectedDate, "2026-10-09")
         XCTAssertEqual(f.store.error, "历史日期读取失败")
+    }
+
+    // 产品保证：专注完成后记录已落库，今日专注页立即重读记录和合计。
+    func testFocusCompletedRefreshesImmediately() {
+        let f = Fixture(); var old = SessionValue(); old.id = 1
+        f.history.sessions = [old]; f.history.count = 1200; f.store.refresh()
+        XCTAssertEqual(f.store.sessions.map(\.id), [1]); XCTAssertEqual(f.store.totalSeconds, 1200)
+        var newer = SessionValue(); newer.id = 2
+        f.history.sessions = [newer]; f.history.count = 2400
+        f.focus.onFocusCompleted?(42)
+        XCTAssertEqual(f.store.sessions.map(\.id), [2]); XCTAssertEqual(f.store.totalSeconds, 2400)
+    }
+
+    // 产品保证：休息完成后今日专注页也立即重读记录和合计。
+    func testRestCompletedRefreshesImmediately() {
+        let f = Fixture(); var old = SessionValue(); old.id = 3; old.isRest = true
+        f.history.sessions = [old]; f.history.count = 600; f.store.refresh()
+        XCTAssertEqual(f.store.sessions.map(\.id), [3]); XCTAssertEqual(f.store.totalSeconds, 600)
+        var newer = SessionValue(); newer.id = 4; newer.isRest = true
+        f.history.sessions = [newer]; f.history.count = 900
+        f.focus.onRestCompleted?()
+        XCTAssertEqual(f.store.sessions.map(\.id), [4]); XCTAssertEqual(f.store.totalSeconds, 900)
+    }
+
+    // 产品保证：今日专注页重新出现时无跳转日期就重读，存在跳转日期则消费并切到目标日期。
+    func testPageAppearedRefreshesOrConsumesRequestedDate() {
+        let f = Fixture(); var old = SessionValue(); old.id = 5
+        f.history.sessions = [old]; f.history.count = 300; f.store.refresh()
+        XCTAssertEqual(f.store.sessions.map(\.id), [5]); XCTAssertEqual(f.store.totalSeconds, 300)
+        var current = SessionValue(); current.id = 6
+        f.history.sessions = [current]; f.history.count = 700
+        f.store.pageAppeared(shell: f.shell)
+        XCTAssertEqual(f.store.sessions.map(\.id), [6]); XCTAssertEqual(f.store.totalSeconds, 700)
+
+        f.logicalDay.relations["2026-10-07/2026-10-09"] = .earlier
+        f.shell.openFocusHistory(date: "2026-10-07")
+        XCTAssertEqual(f.shell.requestedFocusDate, "2026-10-07")
+        f.store.pageAppeared(shell: f.shell)
+        XCTAssertEqual(f.store.selectedDate, "2026-10-07"); XCTAssertNil(f.shell.requestedFocusDate)
+        XCTAssertEqual(f.history.calls.last(where: { $0.0 == "dayTimeline" })?.2, ["2026-10-07"])
     }
     // 产品保证：无效日期关系显示服务错误并保留当前日期，Swift 不回退到本机比较。
     func testRelationFailureKeepsDateAndBlocksAdd() {

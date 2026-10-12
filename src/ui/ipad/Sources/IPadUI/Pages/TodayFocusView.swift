@@ -34,7 +34,8 @@ import SwiftUI
         }
         .sheet(item: $editing) { SessionEditorSheet(store: store, session: $0) }
         .sheet(isPresented: $store.manualAddPresented) { SessionEditorSheet(store: store, session: nil) }
-        .onAppear { store.selectRequestedDate(from: shell) }
+        // 对照 Mac 的 TodayFocusView：回页时重读；若有跨页日期意图则先消费并切到该日期。
+        .onAppear { store.pageAppeared(shell: shell) }
         .onChange(of: shell.requestedFocusDate) { store.selectRequestedDate(from: shell) }
     }
 

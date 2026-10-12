@@ -62,6 +62,7 @@ public struct SessionEditorDraft: Equatable, Sendable {
     @ObservationIgnored private let statisticsBridge: any StatisticsBridgeProtocol
     @ObservationIgnored private let pendingDeletion: PendingDeletionStore
     @ObservationIgnored private let logicalDay: any LogicalDayBridgeProtocol
+    @ObservationIgnored private let focus: (any FocusBridgeProtocol)?
     @ObservationIgnored private var selectedRelation: DateRelation = .same
     public var canAddManualSession: Bool { relationAvailable && !isFutureDate }
     // 副标题「· 今天」只认服务的日期关系，不用设备日期比较。
@@ -71,13 +72,17 @@ public struct SessionEditorDraft: Equatable, Sendable {
     }
 
     public init(history: any FocusHistoryBridgeProtocol, statistics: any StatisticsBridgeProtocol,
-                pendingDeletion: PendingDeletionStore, logicalDay: any LogicalDayBridgeProtocol, date: String) {
+                pendingDeletion: PendingDeletionStore, logicalDay: any LogicalDayBridgeProtocol, date: String,
+                focus: (any FocusBridgeProtocol)? = nil) {
         self.history = history; statisticsBridge = statistics; self.pendingDeletion = pendingDeletion
-        self.logicalDay = logicalDay; selectedDate = date
+        self.logicalDay = logicalDay; self.focus = focus; selectedDate = date
         isFutureDate = false
         do { selectedRelation = try logicalDay.relation(date, to: logicalDay.today); isFutureDate = selectedRelation == .later }
         catch { isFutureDate = false; relationAvailable = false; self.error = error.localizedDescription }
         history.onChanged = { [weak self] in self?.refresh() }
+        // 对照 Mac 的 TodayFocusView：完成信号在记录保存后发出，因此专注/休息完成都要立即重读；另有 historyChanged 和回页刷新。
+        focus?.onFocusCompleted = { [weak self] _ in self?.refresh() }
+        focus?.onRestCompleted = { [weak self] in self?.refresh() }
         logicalDay.onChanged = { [weak self] in self?.logicalDayChanged() }
         statistics.onFailure = { [weak self] in self?.error = $0 }
         refresh()
@@ -92,6 +97,10 @@ public struct SessionEditorDraft: Equatable, Sendable {
     public func selectRequestedDate(from shell: ShellStore) {
         guard let date = shell.consumeRequestedFocusDate() else { return }
         selectDate(date)
+    }
+    public func pageAppeared(shell: ShellStore) {
+        if shell.requestedFocusDate != nil { selectRequestedDate(from: shell) }
+        else { refresh() }
     }
     // 停在今日时随日界切到新的逻辑今日；正在查看历史日时保留所选日，只重新查询关系。
     public func logicalDayChanged() { selectDate(relationAvailable && selectedRelation == .same ? logicalDay.today : selectedDate) }

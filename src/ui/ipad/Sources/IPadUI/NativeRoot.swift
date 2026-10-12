@@ -32,8 +32,10 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                              weekStart: "", weekDates: { start in
                                  try statisticsBridge.weekStats(startDate: start).map(\.date)
                              }, weekStartProvider: { try statisticsBridge.currentWeeklyReview().weekStart })
+        // TimelineStore 也订阅完成信号；FocusBridge 的回调是单槽，不能与 FocusStore 或 TodayStore 共用适配器。
         let timeline = TimelineStore(history: focusHistory, statistics: statisticsBridge, pendingDeletion: pending,
-                                     logicalDay: LogicalDayBridgeAdapter(), date: logicalDay.today)
+                                     logicalDay: LogicalDayBridgeAdapter(), date: logicalDay.today,
+                                     focus: FocusBridgeAdapter())
         let schedule = ScheduleStore(bridge: scheduleBridge, settingsBridge: SettingsBridgeAdapter(), logicalDay: LogicalDayBridgeAdapter())
         let trash = TrashBridgeAdapter()
         let sync = SyncBridgeAdapter()
@@ -47,7 +49,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                taskActions: actions, weekStore: week, timelineStore: timeline, scheduleStore: schedule,
                                trash: trash, sync: sync, backup: backup, export: export, routines: routines)
         let focus = FocusStore(focus: FocusBridgeAdapter(), settings: SettingsBridgeAdapter(), tasks: TaskBridgeAdapter(),
-                               pendingDeletion: pending, shell: store)
+                               pendingDeletion: pending, shell: store, reduceMotion: { UIAccessibility.isReduceMotionEnabled })
         focus.start()
         actions.focusHook = focus
         // 055-P4-1：今日任务页的 Store 在根上装配一份，⌘N 经外壳现有回调切页并请求新建输入。

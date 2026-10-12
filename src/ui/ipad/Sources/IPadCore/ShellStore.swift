@@ -95,6 +95,13 @@ public final class ShellStore {
     public private(set) var morePages: [PageID] = PageID.ordered([]).filter { !PageID.primary.contains($0) }
     public var captureTitle = ""
     public var capturePresented = false
+    // 记一笔浮层的唯一宿主：每页工具栏都有一个记一笔按钮，切走的标签页、「更多」里压在下层的列表视图仍然活着，
+    // 多份浮层绑同一个开关时由谁弹出、谁关闭不确定（10-12 用户真机报：打开后关不掉、小窗口弹不出）。
+    // 最后出现的页面认领宿主，只有它能弹出和关闭；新页面的 onAppear 可能早于旧页面的 onDisappear，所以释放要核对身份。
+    public private(set) var captureHostID: UUID?
+    // 专注页计时进行中无操作时，右上角「记一笔」随计时按钮一起淡出（隐藏与否由 FocusStore 判断，
+    // 专注页在动画事务里写进来、离页时清掉）；其它页不会写它。
+    public var focusChromeHidden = false
     public private(set) var captureError = ""
     // P4 各页登记保存回调与新建/开始意图，外壳只转发；不在这里决定任务或计时业务流程。
     // 跨页动作由原生根装配一次，持有点让占位外壳也能保存共用撤销状态。
@@ -150,9 +157,6 @@ public final class ShellStore {
     public func sidebarBadge(for page: PageID) -> Int? {
         page == .knowledgeGap && snapshot.dueGapCount > 0 ? snapshot.dueGapCount : nil
     }
-    // 搜索页叠在专注页上时，显示的已不是专注页，底条照常显示。
-    public var miniTimerVisible: Bool { snapshot.hasTimer && (selection != .focus || searchShown) }
-
     public static func navigationTarget(for page: PageID, size: ShellWindowSize) -> ShellNavigationTarget {
         switch size {
         case .compact where !PageID.primary.contains(page): return .more(path: [page])
@@ -225,7 +229,7 @@ public final class ShellStore {
         } catch { errorMessage = error.localizedDescription }
     }
     // 055-R4：搜索不是侧栏页面，没有 PageID；selection 仍是进搜索前那页（离开搜索时回到它）。
-    // 「当前实际显示的是不是搜索」单独记在这里：记一笔的来源、迷你计时条、宽窄切换后停在哪，都按它判断。
+    // 「当前实际显示的是不是搜索」单独记在这里：记一笔的来源、宽窄切换后停在哪，都按它判断。
     public private(set) var searchShown = false
     // 每次切页或打开搜索都加一，外壳据此重新对齐标签与「更多」路径。
     // 选的还是同一页（从搜索回到原页、页面快捷键）时 selection 不变，只靠它通知外壳。
@@ -243,11 +247,6 @@ public final class ShellStore {
         navigationRequest += 1
         bridge.select(page: page.rawValue)
     }
-    public func toggleTimer() {
-        guard !snapshot.operationBlocksUI else { return }
-        let succeeded = snapshot.running ? bridge.pause() : bridge.resume()
-        if !succeeded && errorMessage.isEmpty { errorMessage = "计时操作失败，请重试" }
-    }
     public func presentCapture() {
         let onFocusPage = selection == .focus && !searchShown
         presentCapture(source: onFocusPage ? (captureSourceProvider?() ?? ShellCaptureSource()) : ShellCaptureSource())
@@ -257,7 +256,31 @@ public final class ShellStore {
         guard !snapshot.operationBlocksUI else { return }
         captureSource = source
         captureError = ""
+        // 没有宿主（页面切换的间隙）时不打开，免得开关停在 true、之后在别的页面突然弹出。
+        guard captureHostID != nil else { return }
         capturePresented = true
+    }
+    @discardableResult public func claimCaptureHost(_ id: UUID) -> Bool {
+        captureHostID = id
+        return true
+    }
+    public func releaseCaptureHost(_ id: UUID) {
+        guard captureHostID == id else { return }
+        captureHostID = nil
+    }
+    public func capturePresented(for id: UUID) -> Bool {
+        capturePresented && captureHostID == id
+    }
+    public func captureDismissed(by id: UUID) {
+        guard captureHostID == id else { return }
+        capturePresented = false
+    }
+    // 「取消」与点浮层外面一样只关闭，不清空没记下的文字。
+    public func dismissCapture() { capturePresented = false }
+    // 工具栏按钮再点一下就关闭：从工具栏按钮弹出的气泡不保证因点按钮本身而收起。
+    public func toggleCapture(for id: UUID) {
+        guard captureHostID == id else { return }
+        if capturePresented { dismissCapture() } else { presentCapture() }
     }
     @discardableResult public func capture() -> Bool {
         guard !snapshot.operationBlocksUI else { return false }
