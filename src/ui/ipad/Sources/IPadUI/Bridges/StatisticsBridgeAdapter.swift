@@ -263,6 +263,9 @@ import PTBridge
     func effectiveDays(from: String, to: String) throws -> Int {
         return try checked(native.effectiveDays(from: from, to: to)).count
     }
+    func suggestedDailyGoalMinutes(logicalToday: String) throws -> Int {
+        return try checked(native.suggestedDailyGoal(logicalToday: logicalToday)).count
+    }
     func focusSessionCount(from: String, to: String) throws -> Int {
         return try checked(native.focusSessionCount(from: from, to: to)).count
     }

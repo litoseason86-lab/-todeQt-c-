@@ -863,6 +863,7 @@ private slots:
     void statisticsReturnsTodayCompletionAndDuration();
     void statisticsBucketsSessionsByLogicalDay();
     void statisticsTodayUsesLogicalToday();
+    void suggestedDailyGoalUsesYesterdayWholeHours();
     void getDayStatsUsesSpecifiedHistoricalDate();
     void getDayComparisonReturnsTrendTextAndRejectsInvalidDate();
     void focusHistoryBucketsSessionsByLogicalDay();
@@ -2651,6 +2652,40 @@ void ServiceTests::statisticsTodayUsesLogicalToday()
                                     QStringLiteral("12:30:00"), 1800));
 
     QCOMPARE(service->getTodayStats(), service->getDayStats(today));
+}
+
+// 产品保证：今日目标编辑器预填的是「逻辑昨天」实际专注向下取整的整小时；不足 1 小时不预填；今天、前天不算。
+void ServiceTests::suggestedDailyGoalUsesYesterdayWholeHours()
+{
+    AppSettings::instance()->setDayStartHour(4);
+    StatisticsService* service = StatisticsService::instance();
+    const QDate today(2026, 7, 8);
+    const QDate yesterday = today.addDays(-1);
+    const int taskId = insertTaskRow(QStringLiteral("线性代数"), yesterday, QStringLiteral("数学"));
+    QVERIFY(taskId > 0);
+
+    // 昨天两段共 7 小时 10 分，加上今天自然日凌晨 1:00–2:30（日界 4 点前，归逻辑昨天）1 小时 30 分 = 8 小时 40 分。
+    // 各种错法得数都不同：只按自然日 7、四舍五入 9、算成今天 3、算成前天 9，正确是向下取整的 8。
+    QVERIFY(insertFocusSessionRowAt(taskId, yesterday, QStringLiteral("08:00:00"),
+                                    QStringLiteral("11:00:00"), 3 * 3600));
+    QVERIFY(insertFocusSessionRowAt(taskId, yesterday, QStringLiteral("13:00:00"),
+                                    QStringLiteral("17:10:00"), 4 * 3600 + 10 * 60));
+    QVERIFY(insertFocusSessionRowAt(taskId, today, QStringLiteral("01:00:00"),
+                                    QStringLiteral("02:30:00"), 90 * 60));
+    QVERIFY(insertFocusSessionRowAt(taskId, today, QStringLiteral("09:00:00"),
+                                    QStringLiteral("11:00:00"), 2 * 3600));
+    QVERIFY(insertFocusSessionRowAt(taskId, yesterday.addDays(-1), QStringLiteral("09:00:00"),
+                                    QStringLiteral("18:00:00"), 9 * 3600));
+    QCOMPARE(service->getDayStats(yesterday).value(QStringLiteral("totalDuration")).toInt(),
+             8 * 3600 + 40 * 60);
+    QCOMPARE(service->suggestedDailyGoalMinutes(today), 8 * 60);
+
+    // 昨天差 1 秒满 1 小时：不预填。
+    const QDate laterToday(2026, 7, 20);
+    QVERIFY(insertFocusSessionRowAt(taskId, laterToday.addDays(-1), QStringLiteral("10:00:00"),
+                                    QStringLiteral("10:59:59"), 3599));
+    QCOMPARE(service->suggestedDailyGoalMinutes(laterToday), 0);
+    QCOMPARE(service->suggestedDailyGoalMinutes(QDate()), 0);
 }
 
 void ServiceTests::getDayStatsUsesSpecifiedHistoricalDate()

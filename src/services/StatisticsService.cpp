@@ -932,6 +932,17 @@ QVariantMap StatisticsService::getMonthComparison(int year, int month,
     return result;
 }
 
+int StatisticsService::suggestedDailyGoalMinutes(const QDate& logicalToday) const
+{
+    if (!logicalToday.isValid()) {
+        return 0;
+    }
+    // 10-12 用户定：昨天 6 小时 40 分预填 6 小时（向下取整）；不足 1 小时得 0，编辑器不预填。
+    // 会话已按逻辑日归属（日界前的凌晨算前一天），这里不再换算；上限与每日目标的 24 小时一致。
+    const int seconds = calculateTotalDuration(logicalToday.addDays(-1));
+    return qMin(seconds / 3600, 24) * 60;
+}
+
 int StatisticsService::getEffectiveDays(const QDate& startDate, const QDate& endDate) const
 {
     // 天数个数，远小于 int 上限。

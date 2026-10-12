@@ -41,6 +41,9 @@ public:
     Q_INVOKABLE QVariantMap getMonthComparison(int year, int month,
                                                const QVariantMap& precomputedCurrent) const;
     Q_INVOKABLE int getEffectiveDays(const QDate& startDate, const QDate& endDate) const;
+    // 今日专注目标编辑器的预填分钟：逻辑今天前一天的实际专注，向下取整到整小时；不足 1 小时为 0（不预填）。
+    // 只给编辑器当起始值，不写设置、不当作目标参与统计。
+    Q_INVOKABLE int suggestedDailyGoalMinutes(const QDate& logicalToday) const;
     Q_INVOKABLE int getFocusSessionCount(const QDate& startDate, const QDate& endDate) const;
     Q_INVOKABLE int getValidPomodoroCount(const QDate& startDate, const QDate& endDate) const;
     Q_INVOKABLE int getStreakDays() const;

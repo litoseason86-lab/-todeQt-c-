@@ -198,6 +198,8 @@ public struct FocusSummary: Equatable, Sendable {
     func monthComparison(year: Int, month: Int) throws -> StatisticsComparison
     func monthComparison(year: Int, month: Int, current: MonthStatistics) throws -> StatisticsComparison
     func effectiveDays(from: String, to: String) throws -> Int
+    // 今日目标编辑器的预填分钟（逻辑昨天实际专注向下取整的整小时，不足 1 小时为 0），口径在 C++。
+    func suggestedDailyGoalMinutes(logicalToday: String) throws -> Int
     func focusSessionCount(from: String, to: String) throws -> Int
     func validPomodoroCount(from: String, to: String) throws -> Int
     func streakDays() throws -> Int

@@ -462,6 +462,13 @@ static QVariantMap monthMap(PTMonthStatisticsInput *value) {
     QString error = scope.error();
     return [[PTStatisticsResult alloc] initWithMap:QVariantMap{{QStringLiteral("count"), value}} error:error];
 }
+- (PTStatisticsResult *)suggestedDailyGoal:(NSString *)logicalToday {
+    NSAssert(NSThread.isMainThread, @"统计读取必须在主线程");
+    FailureCollector::Call scope(_failures);
+    const auto value = StatisticsService::instance()->suggestedDailyGoalMinutes(date(logicalToday));
+    QString error = scope.error();
+    return [[PTStatisticsResult alloc] initWithMap:QVariantMap{{QStringLiteral("count"), value}} error:error];
+}
 - (PTStatisticsResult *)focusSessionCount:(NSString *)from to:(NSString *)to {
     NSAssert(NSThread.isMainThread, @"统计读取必须在主线程");
     FailureCollector::Call scope(_failures);

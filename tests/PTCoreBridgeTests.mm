@@ -826,7 +826,13 @@ void PTCoreBridgeTests::statisticsReadEntryPointsAndNestedValues() {
         PTStatisticsResult *result13 = [bridge effectiveDays:@"2024-02-01" to:@"2024-02-29"]; QVERIFY(result13.valid);
         const auto expected13 = service->getEffectiveDays(QDate(2024, 2, 1), QDate(2024, 2, 29));
         QCOMPARE(result13.count, NSInteger(expected13));
-        PTStatisticsResult *result14 = [bridge focusSessionCount:@"2024-02-01" to:@"2024-02-29"]; QVERIFY(result14.valid);
+        // 目标预填：前一天 2 小时 10 分 → 120；转换不能把分钟丢成 0 或按秒透传。
+        QVERIFY(seed.exec(QStringLiteral("INSERT INTO focus_sessions(task_id,start_time,end_time,duration,mode,pomodoro_completed) VALUES "
+            "(%1,'2024-02-27T09:00:00','2024-02-27T11:10:00',7800,0,0)").arg(a)));
+        PTStatisticsResult *suggested = [bridge suggestedDailyGoal:@"2024-02-28"]; QVERIFY(suggested.valid);
+        QCOMPARE(suggested.count, NSInteger(service->suggestedDailyGoalMinutes(QDate(2024, 2, 28))));
+        QCOMPARE(suggested.count, NSInteger(120));
+        PTStatisticsResult *result14 =[bridge focusSessionCount:@"2024-02-01" to:@"2024-02-29"]; QVERIFY(result14.valid);
         const auto expected14 = service->getFocusSessionCount(QDate(2024, 2, 1), QDate(2024, 2, 29));
         QCOMPARE(result14.count, NSInteger(expected14));
         PTStatisticsResult *result15 = [bridge validPomodoroCount:@"2024-02-01" to:@"2024-02-29"]; QVERIFY(result15.valid);

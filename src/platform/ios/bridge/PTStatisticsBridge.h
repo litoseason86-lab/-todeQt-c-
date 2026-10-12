@@ -199,6 +199,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (PTStatisticsResult *)monthComparison:(NSInteger)year month:(NSInteger)month NS_SWIFT_NAME(monthComparison(year:month:));
 - (PTStatisticsResult *)monthComparison:(NSInteger)year month:(NSInteger)month current:(PTMonthStatisticsInput *)current NS_SWIFT_NAME(monthComparison(year:month:current:));
 - (PTStatisticsResult *)effectiveDays:(NSString *)from to:(NSString *)to NS_SWIFT_NAME(effectiveDays(from:to:));
+// 今日目标编辑器的预填分钟（count）；口径见 StatisticsService::suggestedDailyGoalMinutes。
+- (PTStatisticsResult *)suggestedDailyGoal:(NSString *)logicalToday NS_SWIFT_NAME(suggestedDailyGoal(logicalToday:));
 - (PTStatisticsResult *)focusSessionCount:(NSString *)from to:(NSString *)to NS_SWIFT_NAME(focusSessionCount(from:to:));
 - (PTStatisticsResult *)validPomodoroCount:(NSString *)from to:(NSString *)to NS_SWIFT_NAME(validPomodoroCount(from:to:));
 - (PTStatisticsResult *)streakDays NS_SWIFT_NAME(streakDays());

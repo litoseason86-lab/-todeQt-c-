@@ -274,6 +274,12 @@ import Observation
     }
 
     // MARK: 其它写入
+    // 目标编辑器打开时的起始分钟：今天设过就从当前目标改；没设过才用服务给的预填值（逻辑昨天实际专注的整小时，
+    // 10-12 用户定）。不足 1 小时或读不出来时为 0，编辑器从空白开始。预填只是起始值，不点保存就不算设了目标。
+    public func goalEditorStartMinutes() -> Int {
+        if goalMinutes > 0 { return goalMinutes }
+        return (try? statistics.suggestedDailyGoalMinutes(logicalToday: logicalDay.today)) ?? 0
+    }
     @discardableResult public func saveGoal(minutes: Int) -> Bool {
         do { try settings.setDailyFocusGoal(date: logicalDay.today, minutes: minutes) }
         catch { loadError = error.localizedDescription; return false }
@@ -289,4 +295,31 @@ import Observation
         catch { loadError = error.localizedDescription; return false }
         return true
     }
+}
+
+// 今日目标编辑器的草稿：小时、分钟两个输入框与 ±15 分、±1 小时按钮共用一个总分钟数
+// （10-12 用户要求：原来 5 分钟一档，设 8 小时要点太多下）。范围 0–1440，与 AppSettings 的目标上限一致；
+// 0 只表示还没填，保存至少要 1 分钟（服务也拒绝 0）。
+public struct DailyGoalDraft: Equatable, Sendable {
+    public static let maxMinutes = 24 * 60
+    public private(set) var totalMinutes: Int
+    public init(minutes: Int) { totalMinutes = Self.clamped(minutes) }
+    public var hours: Int { totalMinutes / 60 }
+    public var minutes: Int { totalMinutes % 60 }
+    public var canSave: Bool { totalMinutes >= 1 }
+    // 按钮按总分钟加减，越界停在边上不回绕：6:00 减 15 分是 5:45，不是只动分钟框。
+    public mutating func adjust(by delta: Int) { totalMinutes = Self.clamped(totalMinutes + delta) }
+    // 输入框：空框按 0；分钟可以填超过 59，按总分钟折算（填 90 就是 1 小时 30 分）；数字以外的字符忽略。
+    public mutating func setFields(hours: String, minutes: String) {
+        totalMinutes = Self.clamped(Self.number(hours) * 60 + Self.number(minutes))
+    }
+    private static func number(_ text: String) -> Int {
+        // 每位累积后立即饱和，下一次乘 10 的值始终有界；前导零不改变数值，长串粘贴也不会溢出。
+        var value = 0
+        for byte in text.utf8 where byte >= 48 && byte <= 57 {
+            value = min(value * 10 + Int(byte - 48), Self.maxMinutes)
+        }
+        return value
+    }
+    private static func clamped(_ value: Int) -> Int { min(max(value, 0), maxMinutes) }
 }

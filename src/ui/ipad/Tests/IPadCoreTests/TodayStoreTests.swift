@@ -279,6 +279,58 @@ import XCTest
         XCTAssertFalse(r.store.saveGoal(minutes: 30))
         XCTAssertEqual(r.store.goalMinutes, 120); XCTAssertEqual(r.store.loadError, "写不进去")
     }
+    // 产品保证：目标编辑器今天设过就从当前目标改；没设过才用服务给的逻辑昨天整小时预填，读不出来从空白开始。
+    func testGoalEditorStartsFromGoalOrYesterdaySuggestion() {
+        let r = rig([])
+        r.statistics.suggestedGoal = 360
+        r.settings.goal = 0; r.store.refresh()
+        XCTAssertEqual(r.store.goalEditorStartMinutes(), 360)
+        XCTAssertEqual(r.statistics.calls.last(where: { $0.0 == "suggestedDailyGoal" })?.1, ["2026-10-09"])
+        // 已设目标（与预填值不同）时以目标为准，不去问预填。
+        r.settings.goal = 480; r.store.refresh()
+        let asked = r.statistics.calls.filter { $0.0 == "suggestedDailyGoal" }.count
+        XCTAssertEqual(r.store.goalEditorStartMinutes(), 480)
+        XCTAssertEqual(r.statistics.calls.filter { $0.0 == "suggestedDailyGoal" }.count, asked)
+        r.settings.goal = 0; r.store.refresh()
+        r.statistics.error = NSError(domain: "测试", code: 1)
+        XCTAssertEqual(r.store.goalEditorStartMinutes(), 0)
+    }
+    // 产品保证：目标草稿按总分钟加减（跨小时借位、两端夹住不回绕），输入框空框按 0、分钟超 59 折算进小时、非数字忽略。
+    func testDailyGoalDraftStepsAndInput() {
+        var draft = DailyGoalDraft(minutes: 360)
+        draft.adjust(by: -15)
+        XCTAssertEqual([draft.hours, draft.minutes], [5, 45])
+        draft.adjust(by: 60); draft.adjust(by: 15)
+        XCTAssertEqual(draft.totalMinutes, 420)
+        draft = DailyGoalDraft(minutes: 10); draft.adjust(by: -15)
+        XCTAssertEqual(draft.totalMinutes, 0); XCTAssertFalse(draft.canSave)
+        draft = DailyGoalDraft(minutes: 23 * 60 + 30); draft.adjust(by: 60)
+        XCTAssertEqual(draft.totalMinutes, 1440)
+        draft.setFields(hours: "1", minutes: "90")
+        XCTAssertEqual([draft.hours, draft.minutes], [2, 30])
+        draft.setFields(hours: "", minutes: "45")
+        XCTAssertEqual(draft.totalMinutes, 45); XCTAssertTrue(draft.canSave)
+        draft.setFields(hours: "8小时", minutes: "")
+        XCTAssertEqual(draft.totalMinutes, 480)
+        draft.setFields(hours: "30", minutes: "0")
+        XCTAssertEqual(draft.totalMinutes, 1440)
+        draft.setFields(hours: "", minutes: "")
+        XCTAssertEqual(draft.totalMinutes, 0); XCTAssertFalse(draft.canSave)
+    }
+    // 产品保证：目标输入的前导零不改变数值，超长 ASCII 数字饱和到 24 小时且不会溢出。
+    func testDailyGoalDraftPreservesLeadingZerosAndSaturates() {
+        var draft = DailyGoalDraft(minutes: 0)
+        draft.setFields(hours: "", minutes: "00060")
+        XCTAssertEqual(draft.totalMinutes, 60)
+        draft.setFields(hours: "", minutes: "00005")
+        XCTAssertEqual(draft.totalMinutes, 5)
+        XCTAssertTrue(draft.canSave)
+        draft.setFields(hours: "00008", minutes: "")
+        XCTAssertEqual(draft.totalMinutes, 480)
+        draft.setFields(hours: "", minutes: String(repeating: "9", count: 30))
+        XCTAssertEqual(draft.totalMinutes, 1440)
+    }
+
     // 产品保证：页面不在前台时不重读，也不响应任何桥接信号；回到前台后恢复，离开后回调槽被清空。
     func testInactivePageDoesNotReadOrListen() {
         let tasks = TaskBridgeFake(); let shell = ShellStore(bridge: ShellBridgeFake()); retainedShell = shell
