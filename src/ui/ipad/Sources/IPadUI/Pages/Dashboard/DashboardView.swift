@@ -50,7 +50,7 @@ struct DashboardView: View {
                     }
                 }
             }
-            .modifier(PageListModifier(geometry: geometry, compact: narrow))
+            .modifier(PageListModifier(geometry: geometry, compact: narrow, indicatorAtWindowEdge: true))
         }
         .navigationTitle("")
         .toolbarTitleDisplayMode(.inline)

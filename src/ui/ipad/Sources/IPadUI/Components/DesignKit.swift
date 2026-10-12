@@ -170,12 +170,26 @@ struct PageListModifier: ViewModifier {
     let geometry: GeometryProxy
     let compact: Bool
     var maxWidth: CGFloat = Design.contentMaxWidth
+    // 滚动条贴窗口最右缘（10-12 用户点名今日任务、仪表盘）：safeAreaPadding 会把滚动条一起往里缩到内容列右缘，
+    // 所以右边距改用只作用于内容的 contentMargins。右侧安全区平时是 0，两者取较大者与相加结果相同，
+    // 不会出现左边那种被侧栏吃掉边距的问题；左边仍用 safeAreaPadding 让开侧栏。
+    var indicatorAtWindowEdge = false
     func body(content: Content) -> some View {
-        content
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .safeAreaPadding(.horizontal, Design.pageMargin(geometry: geometry, compact: compact, maxWidth: maxWidth))
-            .environment(\.defaultMinListRowHeight, 1)
+        let margin = Design.pageMargin(geometry: geometry, compact: compact, maxWidth: maxWidth)
+        if indicatorAtWindowEdge {
+            content
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .safeAreaPadding(.leading, margin)
+                .contentMargins(.trailing, margin, for: .scrollContent)
+                .environment(\.defaultMinListRowHeight, 1)
+        } else {
+            content
+                .listStyle(.plain)
+                .scrollContentBackground(.hidden)
+                .safeAreaPadding(.horizontal, margin)
+                .environment(\.defaultMinListRowHeight, 1)
+        }
     }
 }
 

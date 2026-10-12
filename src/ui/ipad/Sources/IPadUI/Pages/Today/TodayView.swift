@@ -56,7 +56,7 @@ struct TodayView: View {
                         .cardRow(.bottom)
                 }
             }
-            .modifier(PageListModifier(geometry: geometry, compact: narrow))
+            .modifier(PageListModifier(geometry: geometry, compact: narrow, indicatorAtWindowEdge: true))
         }
         .navigationTitle("")
         .toolbarTitleDisplayMode(.inline)
