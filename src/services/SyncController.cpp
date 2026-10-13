@@ -7,6 +7,7 @@
 #include "SyncSchema.h"
 #include "SyncStore.h"
 #include "SyncWorker.h"
+#include "SyncNotifier.h"
 #include "SyncedSettings.h"
 
 #include <QCoreApplication>
@@ -593,6 +594,7 @@ void SyncController::ensureEngine()
         return;
     }
     m_engine = std::make_unique<SyncEngine>(std::move(folder), m_platform.engine);
+    m_engine->setChangeNotifier(SyncNotifier::publish);
     if (m_safetyBackup) {
         m_engine->setSafetyBackup(m_safetyBackup);
     }

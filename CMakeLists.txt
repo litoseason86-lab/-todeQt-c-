@@ -452,6 +452,41 @@ function(pomodoro_todo_enable_warnings target)
     endif()
 endfunction()
 
+# 057-A：业务与同步层的静态库。源文件仍留在原目录，避免改变 include 路径和资源布局；
+# PlainTextLayout 属于 QML 接入层，SingleInstanceGuard 属于 macOS 入口，两个例外留在原目标。
+set(PTCORE_SOURCES ${APP_SOURCES})
+list(FILTER PTCORE_SOURCES INCLUDE REGEX "^src/(services|models)/")
+list(FILTER PTCORE_SOURCES EXCLUDE REGEX "^src/services/SingleInstanceGuard\\.")
+list(FILTER PTCORE_SOURCES EXCLUDE REGEX "^src/models/PlainTextLayout\\.")
+list(APPEND PTCORE_SOURCES
+    src/models/Task.h
+    src/models/CountdownGoal.h
+    src/models/FocusSession.h
+    src/services/ServiceReadResult.h
+)
+list(REMOVE_DUPLICATES PTCORE_SOURCES)
+
+add_library(PTCore STATIC ${PTCORE_SOURCES})
+target_include_directories(PTCore PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(PTCore PUBLIC
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Sql
+    Qt6::Concurrent
+)
+pomodoro_todo_enable_warnings(PTCore)
+
+# PomodoroTodo 继续保留入口、平台后端、资源和 macOS 专属源码；业务实现由 PTCore 提供。
+get_target_property(POMODORO_TODO_TARGET_SOURCES PomodoroTodo SOURCES)
+foreach(ptcore_source IN LISTS PTCORE_SOURCES)
+    list(REMOVE_ITEM POMODORO_TODO_TARGET_SOURCES
+        "${ptcore_source}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/${ptcore_source}")
+endforeach()
+set_property(TARGET PomodoroTodo PROPERTY SOURCES "${POMODORO_TODO_TARGET_SOURCES}")
+list(REMOVE_ITEM APP_SOURCES ${PTCORE_SOURCES})
+target_link_libraries(PomodoroTodo PRIVATE PTCore)
+
 pomodoro_todo_enable_warnings(PomodoroTodo)
 
 if(IOS)
@@ -1938,7 +1973,12 @@ endif()
 # Qt 的默认值是 AutoText，会用 mightBeRichText() 猜——用户写的任务标题里带
 # "<b>" 就会被当富文本解析。qmllint 不管这件事，所以单独一条。
 # 用 Python 而不是再写一个 C++ 目标：判据是纯文本模式匹配，不需要跑起应用。
-find_package(Python3 COMPONENTS Interpreter)
+if(NOT IOS)
+    # ArchitectureGate 是 PTCore 的强制架构约束；非 iOS 构建缺少 Python 时不能静默跳过。
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+else()
+    find_package(Python3 COMPONENTS Interpreter)
+endif()
 if(Python3_FOUND)
     if(APPLE)
         add_test(NAME McpBundleSmoke
@@ -2184,3 +2224,64 @@ pomodoro_todo_enable_warnings(PTContentBridgeTests)
 add_test(NAME PTContentBridgeTests COMMAND PTContentBridgeTests)
 set_tests_properties(PTContentBridgeTests PROPERTIES TIMEOUT 90
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
+# 057-A：测试与联调宿主改链 PTCore。只从目标删除已经属于 PTCore 的源文件；
+# PlainTextLayout、SingleInstanceGuard 和平台桥接源码不在 PTCore，保留它们各自的测试边界。
+get_property(POMODORO_TODO_ALL_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+foreach(pt_target IN LISTS POMODORO_TODO_ALL_TARGETS)
+    if(pt_target STREQUAL "PTCore" OR pt_target STREQUAL "PomodoroTodo" OR pt_target STREQUAL "PomodoroTodoMcp"
+       OR pt_target STREQUAL "McpTestHelper")
+        continue()
+    endif()
+    get_target_property(pt_target_type ${pt_target} TYPE)
+    if(NOT pt_target_type STREQUAL "EXECUTABLE")
+        continue()
+    endif()
+    get_target_property(pt_target_sources ${pt_target} SOURCES)
+    if(NOT pt_target_sources)
+        continue()
+    endif()
+    set(pt_target_used_core FALSE)
+    foreach(pt_source IN LISTS pt_target_sources)
+        set(pt_source_is_core FALSE)
+        foreach(ptcore_source IN LISTS PTCORE_SOURCES)
+            if(pt_source STREQUAL "${ptcore_source}" OR pt_source STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/${ptcore_source}")
+                set(pt_source_is_core TRUE)
+                break()
+            endif()
+        endforeach()
+        if(pt_source_is_core)
+            list(REMOVE_ITEM pt_target_sources "${pt_source}")
+            set(pt_target_used_core TRUE)
+        endif()
+    endforeach()
+    if(pt_target_used_core)
+        set_property(TARGET ${pt_target} PROPERTY SOURCES "${pt_target_sources}")
+        target_link_libraries(${pt_target} PRIVATE PTCore)
+    endif()
+endforeach()
+
+# ArchitectureGate 在配置阶段读取目标的源码，避免带入生成阶段 AUTOMOC 追加的构建规则文件。
+# TARGET_PROPERTY 的结果不递归求值，保留 LINK_ONLY 等表达式交给门禁判断；直接插值会让
+# file(GENERATE) 提前求值，在门禁运行前就因 LINK_ONLY 只能用于链接而失败。
+get_target_property(PTCORE_MANIFEST_SOURCES PTCore SOURCES)
+string(REPLACE ";" "\",\"" PTCORE_MANIFEST_SOURCES "${PTCORE_MANIFEST_SOURCES}")
+string(CONFIGURE [=[
+{
+  "PTCore": {
+    "sources": ["@PTCORE_MANIFEST_SOURCES@"],
+    "link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTCore,LINK_LIBRARIES>,",">"],
+    "interface_link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTCore,INTERFACE_LINK_LIBRARIES>,",">"]
+  }
+}
+]=] PTCORE_ARCHITECTURE_MANIFEST @ONLY)
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/architecture-manifest.json"
+    CONTENT "${PTCORE_ARCHITECTURE_MANIFEST}")
+
+if(NOT IOS AND Python3_FOUND)
+    add_test(NAME ArchitectureGate
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_gate.py"
+            "${CMAKE_CURRENT_BINARY_DIR}/architecture-manifest.json"
+            "${CMAKE_CURRENT_SOURCE_DIR}")
+    set_tests_properties(ArchitectureGate PROPERTIES TIMEOUT 30)
+endif()

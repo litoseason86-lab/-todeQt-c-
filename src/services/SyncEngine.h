@@ -111,7 +111,7 @@ public:
     // 整体换掉本机数据（首次加入、另一台恢复了备份）之前调用，返回 false 时不替换。
     // 生产环境接自动备份；没设置时直接替换（只给测试用）。
     void setSafetyBackup(std::function<bool(QString* error)> backup);
-    // 改动提交之后怎么通知界面。默认是 SyncNotifier::publish；测试里两台设备不共用单例服务，换成记录。
+    // 改动提交之后怎么通知界面。装配层显式注入；测试里两台设备不共用单例服务，换成记录。
     void setChangeNotifier(std::function<void(const SyncStore::ApplyResult&)> notifier);
     // 换一个同步文件夹（iPad 重新选了文件夹）。正在进行的一轮作废，下一轮用新的。
     void setFolder(std::unique_ptr<SyncFolder> folder);

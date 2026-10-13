@@ -1,7 +1,5 @@
 #include "SyncEngine.h"
 
-#include "SyncNotifier.h"
-
 #include <QDebug>
 #include <QFutureWatcher>
 #include <QThreadPool>
@@ -106,7 +104,6 @@ SyncEngine::SyncEngine(std::unique_ptr<SyncFolder> folder, const Options& option
     m_pool->setMaxThreadCount(1);
     // 线程一直留着，不随空闲回收：Mac 每 20 秒就要用一次。
     m_pool->setExpiryTimeout(-1);
-    m_notifier = [](const SyncStore::ApplyResult& result) { SyncNotifier::publish(result); };
     m_clock.start();
     m_tick.setInterval(m_options.tickMs);
     connect(&m_tick, &QTimer::timeout, this, &SyncEngine::onTick);

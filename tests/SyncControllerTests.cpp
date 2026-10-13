@@ -27,6 +27,7 @@
 #include "../src/services/SyncNotifier.h"
 #include "../src/services/SyncSchema.h"
 #include "../src/services/SyncStore.h"
+#include "../src/services/TaskManager.h"
 
 // 设备间同步接进应用（050 阶段 4）的测试：SyncController 怎么开关同步、怎么和恢复备份、逻辑日起点、
 // 前后台、退出衔接，iPad 怎么选文件夹，同步日志怎么给人看。
@@ -260,6 +261,8 @@ private slots:
     // 4a：开关与装配
     void syncIsOffUntilEnabledAndRemembersTheSwitch();
     void enablingBeforeInitializeWaitsForTheDatabase();
+    void startupCreatedEnginePublishesRemoteTaskChanges();
+    void enabledAfterStartupCreatedEnginePublishesRemoteTaskChanges();
     void shutdownWritesPendingChangesBeforeTheDatabaseCloses();
     void leavingTheForegroundWritesRightAway();
     void inactiveWindowIsNotTreatedAsBackground();
@@ -452,6 +455,163 @@ void SyncControllerTests::enablingBeforeInitializeWaitsForTheDatabase()
     QVERIFY(controller.engine()->isRunning());
     QVERIFY(waitIdle(controller.engine()));
     QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
+}
+
+void SyncControllerTests::startupCreatedEnginePublishesRemoteTaskChanges()
+{
+    // 生产启动路径收到远端删除和修改后，必须在提交后先通知任务删除，再刷新任务列表。
+    std::unique_ptr<Peer> peer = openMacPeer();
+    peer->engine->start();
+    QVERIFY(waitIdle(peer->engine.get()));
+
+    QSettings().setValue(QStringLiteral("sync/enabled"), true);
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    QVERIFY(controller.engine());
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(controller.statusKey(), QStringLiteral("needsConfirmation"));
+    controller.confirmJoin();
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
+
+    QSqlQuery insert(peer->database());
+    QVERIFY(insert.exec(QStringLiteral(
+        "INSERT INTO tasks (title, date, completed, display_order) VALUES ('远端任务', '2026-09-30', 0, 1)")));
+    QVERIFY(insert.exec(QStringLiteral(
+        "INSERT INTO tasks (title, date, completed, display_order) VALUES ('远端待删除', '2026-09-30', 0, 2)")));
+    peer->engine->syncNow();
+    QVERIFY(waitIdle(peer->engine.get()));
+    controller.syncNow();
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(taskTitles(DatabaseManager::instance()->database()),
+             (QStringList{QStringLiteral("远端任务"), QStringLiteral("远端待删除")}));
+
+    QSqlQuery localId(DatabaseManager::instance()->database());
+    QVERIFY(localId.exec(QStringLiteral("SELECT id FROM tasks WHERE title = '远端待删除'")));
+    QVERIFY(localId.next());
+    const int deletedTaskId = localId.value(0).toInt();
+    localId.finish();
+    QSqlQuery update(peer->database());
+    QVERIFY(update.exec(QStringLiteral("UPDATE tasks SET title = '远端任务已修改' WHERE title = '远端任务'")));
+    QCOMPARE(update.numRowsAffected(), 1);
+    QSqlQuery remove(peer->database());
+    QVERIFY(remove.exec(QStringLiteral("DELETE FROM tasks WHERE title = '远端待删除'")));
+    QCOMPARE(remove.numRowsAffected(), 1);
+    peer->engine->syncNow();
+    QVERIFY(waitIdle(peer->engine.get()));
+
+    QSignalSpy changed(TaskManager::instance(), &TaskManager::tasksChanged);
+    QSignalSpy deleted(TaskManager::instance(), &TaskManager::taskDeleted);
+    // 独立只读连接在信号发出的当场读库：主连接能看到自己的未提交写入，不能证明提交边界。
+    const QString readerName = QStringLiteral("startup-notification-reader");
+    QSqlDatabase reader = QSqlDatabase::cloneDatabase(DatabaseManager::instance()->database(), readerName);
+    m_connections.append(readerName);
+    reader.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
+    QVERIFY2(reader.open(), qPrintable(reader.lastError().text()));
+    QCOMPARE(taskTitles(reader),
+             (QStringList{QStringLiteral("远端任务"), QStringLiteral("远端待删除")}));
+    QStringList signalOrder;
+    QList<QStringList> titlesAtSignals;
+    // 此对象先于捕获的局部变量销毁，断言提前返回时也会自动断开单例发出的信号。
+    QObject notificationObserver;
+    connect(TaskManager::instance(), &TaskManager::taskDeleted, &notificationObserver, [&](int) {
+        signalOrder.append(QStringLiteral("taskDeleted"));
+        titlesAtSignals.append(taskTitles(reader));
+    });
+    connect(TaskManager::instance(), &TaskManager::tasksChanged, &notificationObserver, [&] {
+        signalOrder.append(QStringLiteral("tasksChanged"));
+        titlesAtSignals.append(taskTitles(reader));
+    });
+    controller.syncNow();
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(!changed.isEmpty());
+    QCOMPARE(deleted.count(), 1);
+    QCOMPARE(deleted.first().first().toInt(), deletedTaskId);
+    QVERIFY(signalOrder.indexOf(QStringLiteral("taskDeleted")) < signalOrder.indexOf(QStringLiteral("tasksChanged")));
+    QCOMPARE(titlesAtSignals.size(), changed.size() + deleted.size());
+    for (const QStringList& titles : std::as_const(titlesAtSignals)) {
+        QCOMPARE(titles, QStringList{QStringLiteral("远端任务已修改")});
+    }
+    QCOMPARE(taskTitles(DatabaseManager::instance()->database()), QStringList{QStringLiteral("远端任务已修改")});
+}
+
+void SyncControllerTests::enabledAfterStartupCreatedEnginePublishesRemoteTaskChanges()
+{
+    // 启动后开启同步收到远端删除和修改时，也必须在提交后先通知任务删除，再刷新任务列表。
+    std::unique_ptr<Peer> peer = openMacPeer();
+    peer->engine->start();
+    QVERIFY(waitIdle(peer->engine.get()));
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    QVERIFY(!controller.isEnabled());
+    QVERIFY(!controller.engine());
+    controller.setEnabled(true);
+    QVERIFY(controller.engine());
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(controller.statusKey(), QStringLiteral("needsConfirmation"));
+    controller.confirmJoin();
+    QVERIFY(waitIdle(controller.engine()));
+
+    QSqlQuery insert(peer->database());
+    QVERIFY(insert.exec(QStringLiteral(
+        "INSERT INTO tasks (title, date, completed, display_order) VALUES ('待修改任务', '2026-09-30', 0, 1)")));
+    QVERIFY(insert.exec(QStringLiteral(
+        "INSERT INTO tasks (title, date, completed, display_order) VALUES ('待删除任务', '2026-09-30', 0, 2)")));
+    peer->engine->syncNow();
+    QVERIFY(waitIdle(peer->engine.get()));
+    controller.syncNow();
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(taskTitles(DatabaseManager::instance()->database()),
+             (QStringList{QStringLiteral("待修改任务"), QStringLiteral("待删除任务")}));
+
+    QSqlQuery idQuery(DatabaseManager::instance()->database());
+    QVERIFY(idQuery.exec(QStringLiteral("SELECT id FROM tasks WHERE title = '待删除任务'")));
+    QVERIFY(idQuery.next());
+    const int taskId = idQuery.value(0).toInt();
+    idQuery.finish();
+    QSqlQuery update(peer->database());
+    QVERIFY(update.exec(QStringLiteral("UPDATE tasks SET title = '已修改任务' WHERE title = '待修改任务'")));
+    QCOMPARE(update.numRowsAffected(), 1);
+    QSqlQuery remove(peer->database());
+    QVERIFY(remove.exec(QStringLiteral("DELETE FROM tasks WHERE title = '待删除任务'")));
+    QCOMPARE(remove.numRowsAffected(), 1);
+    peer->engine->syncNow();
+    QVERIFY(waitIdle(peer->engine.get()));
+
+    QSignalSpy deleted(TaskManager::instance(), &TaskManager::taskDeleted);
+    QSignalSpy changed(TaskManager::instance(), &TaskManager::tasksChanged);
+    // 用另一条只读连接观察提交后的内容，避免同一连接的未提交视图掩盖过早发信号。
+    const QString readerName = QStringLiteral("enabled-notification-reader");
+    QSqlDatabase reader = QSqlDatabase::cloneDatabase(DatabaseManager::instance()->database(), readerName);
+    m_connections.append(readerName);
+    reader.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
+    QVERIFY2(reader.open(), qPrintable(reader.lastError().text()));
+    QCOMPARE(taskTitles(reader),
+             (QStringList{QStringLiteral("待修改任务"), QStringLiteral("待删除任务")}));
+    QStringList signalOrder;
+    QList<QStringList> titlesAtSignals;
+    // 局部接收对象负责断连，失败提前返回后不会留下捕获栈变量的单例连接。
+    QObject notificationObserver;
+    connect(TaskManager::instance(), &TaskManager::taskDeleted, &notificationObserver, [&](int) {
+        signalOrder.append(QStringLiteral("taskDeleted"));
+        titlesAtSignals.append(taskTitles(reader));
+    });
+    connect(TaskManager::instance(), &TaskManager::tasksChanged, &notificationObserver, [&] {
+        signalOrder.append(QStringLiteral("tasksChanged"));
+        titlesAtSignals.append(taskTitles(reader));
+    });
+    controller.syncNow();
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(deleted.count(), 1);
+    QVERIFY(!changed.isEmpty());
+    QCOMPARE(deleted.first().first().toInt(), taskId);
+    QVERIFY(signalOrder.indexOf(QStringLiteral("taskDeleted")) < signalOrder.indexOf(QStringLiteral("tasksChanged")));
+    QCOMPARE(titlesAtSignals.size(), changed.size() + deleted.size());
+    for (const QStringList& titles : std::as_const(titlesAtSignals)) {
+        QCOMPARE(titles, QStringList{QStringLiteral("已修改任务")});
+    }
+    QCOMPARE(taskTitles(DatabaseManager::instance()->database()), QStringList{QStringLiteral("已修改任务")});
 }
 
 void SyncControllerTests::shutdownWritesPendingChangesBeforeTheDatabaseCloses()
