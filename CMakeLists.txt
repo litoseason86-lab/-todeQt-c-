@@ -23,7 +23,8 @@ set(CMAKE_AUTORCC ON)
 find_package(Qt6 6.7 REQUIRED COMPONENTS Concurrent Core Gui Network Qml Quick QuickControls2 QuickLayouts Sql)
 if(NOT IOS)
     # 测试只在 macOS 上离屏运行；iOS 构建不注册任何测试，也就不要求 iOS 套件带测试模块。
-    find_package(Qt6 6.7 REQUIRED COMPONENTS QuickTest Test)
+    set(QT_NO_PRIVATE_MODULE_WARNING ON)
+    find_package(Qt6 6.7 REQUIRED COMPONENTS GuiPrivate QuickTest Test)
 endif()
 
 # CVE-2025-12385：Text 组件解析 <img> 时不校验尺寸，可导致无限制内存分配与界面失去响应。
@@ -476,7 +477,21 @@ target_link_libraries(PTCore PUBLIC
 )
 pomodoro_todo_enable_warnings(PTCore)
 
-# PomodoroTodo 继续保留入口、平台后端、资源和 macOS 专属源码；业务实现由 PTCore 提供。
+# 057-B：跨平台共享装配与生命周期库 PTApp。
+set(PTAPP_SOURCES
+    src/app/SharedApp.h
+    src/app/SharedApp.cpp
+    src/app/AppLifecycle.h
+    src/app/AppLifecycle.cpp
+    src/app/AppServices.h
+    src/app/AppServices.cpp
+)
+add_library(PTApp STATIC ${PTAPP_SOURCES})
+target_include_directories(PTApp PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(PTApp PUBLIC PTCore)
+pomodoro_todo_enable_warnings(PTApp)
+
+# PomodoroTodo 继续保留入口、平台后端、资源和 macOS 专属源码；业务实现由 PTCore 提供，装配由 PTApp 提供。
 get_target_property(POMODORO_TODO_TARGET_SOURCES PomodoroTodo SOURCES)
 foreach(ptcore_source IN LISTS PTCORE_SOURCES)
     list(REMOVE_ITEM POMODORO_TODO_TARGET_SOURCES
@@ -485,7 +500,7 @@ foreach(ptcore_source IN LISTS PTCORE_SOURCES)
 endforeach()
 set_property(TARGET PomodoroTodo PROPERTY SOURCES "${POMODORO_TODO_TARGET_SOURCES}")
 list(REMOVE_ITEM APP_SOURCES ${PTCORE_SOURCES})
-target_link_libraries(PomodoroTodo PRIVATE PTCore)
+target_link_libraries(PomodoroTodo PRIVATE PTApp PTCore)
 
 pomodoro_todo_enable_warnings(PomodoroTodo)
 
@@ -2225,12 +2240,31 @@ add_test(NAME PTContentBridgeTests COMMAND PTContentBridgeTests)
 set_tests_properties(PTContentBridgeTests PROPERTIES TIMEOUT 90
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
+# 057-B：新增共享装配与生命周期测试目标 SharedAppTests
+add_executable(SharedAppTests
+    tests/SharedAppTests.cpp
+    src/mcp/common/McpPaths.cpp
+)
+target_link_libraries(SharedAppTests PRIVATE
+    PTApp
+    Qt6::Core
+    Qt6::Gui
+    Qt6::GuiPrivate
+    Qt6::Sql
+    Qt6::Concurrent
+    Qt6::Test
+)
+pomodoro_todo_enable_warnings(SharedAppTests)
+add_test(NAME SharedAppTests COMMAND SharedAppTests)
+set_tests_properties(SharedAppTests PROPERTIES TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
 # 057-A：测试与联调宿主改链 PTCore。只从目标删除已经属于 PTCore 的源文件；
 # PlainTextLayout、SingleInstanceGuard 和平台桥接源码不在 PTCore，保留它们各自的测试边界。
 get_property(POMODORO_TODO_ALL_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(pt_target IN LISTS POMODORO_TODO_ALL_TARGETS)
-    if(pt_target STREQUAL "PTCore" OR pt_target STREQUAL "PomodoroTodo" OR pt_target STREQUAL "PomodoroTodoMcp"
-       OR pt_target STREQUAL "McpTestHelper")
+    if(pt_target STREQUAL "PTCore" OR pt_target STREQUAL "PTApp" OR pt_target STREQUAL "PomodoroTodo" OR pt_target STREQUAL "PomodoroTodoMcp"
+       OR pt_target STREQUAL "McpTestHelper" OR pt_target STREQUAL "SharedAppTests")
         continue()
     endif()
     get_target_property(pt_target_type ${pt_target} TYPE)
@@ -2266,17 +2300,24 @@ endforeach()
 # file(GENERATE) 提前求值，在门禁运行前就因 LINK_ONLY 只能用于链接而失败。
 get_target_property(PTCORE_MANIFEST_SOURCES PTCore SOURCES)
 string(REPLACE ";" "\",\"" PTCORE_MANIFEST_SOURCES "${PTCORE_MANIFEST_SOURCES}")
+get_target_property(PTAPP_MANIFEST_SOURCES PTApp SOURCES)
+string(REPLACE ";" "\",\"" PTAPP_MANIFEST_SOURCES "${PTAPP_MANIFEST_SOURCES}")
 string(CONFIGURE [=[
 {
   "PTCore": {
     "sources": ["@PTCORE_MANIFEST_SOURCES@"],
     "link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTCore,LINK_LIBRARIES>,",">"],
     "interface_link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTCore,INTERFACE_LINK_LIBRARIES>,",">"]
+  },
+  "PTApp": {
+    "sources": ["@PTAPP_MANIFEST_SOURCES@"],
+    "link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTApp,LINK_LIBRARIES>,",">"],
+    "interface_link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTApp,INTERFACE_LINK_LIBRARIES>,",">"]
   }
 }
-]=] PTCORE_ARCHITECTURE_MANIFEST @ONLY)
+]=] PT_ARCHITECTURE_MANIFEST @ONLY)
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/architecture-manifest.json"
-    CONTENT "${PTCORE_ARCHITECTURE_MANIFEST}")
+    CONTENT "${PT_ARCHITECTURE_MANIFEST}")
 
 if(NOT IOS AND Python3_FOUND)
     add_test(NAME ArchitectureGate

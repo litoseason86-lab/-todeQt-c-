@@ -12,6 +12,7 @@
 #include <QStandardPaths>
 #include <QUrl>
 
+#include "app/SharedApp.h"
 #include "services/DatabaseManager.h"
 #include "services/AppSettings.h"
 #include "services/BackupService.h"
@@ -26,20 +27,18 @@
 #include "services/FocusTimer.h"
 #include "services/LogicalDayService.h"
 #include "services/NotificationService.h"
-#include "services/FocusSessionController.h"
-#include "services/PendingDeletion.h"
 #include "services/PhaseSoundService.h"
-#include "services/PhaseCompletionNotifier.h"
 #include "services/RoutineManager.h"
 #include "services/ScheduleService.h"
 #include "services/ShortcutRegistry.h"
 #include "services/StatisticsService.h"
-#include "services/SyncController.h"
 #include "services/TaskManager.h"
+#include "services/FocusSessionController.h"
+#include "services/PendingDeletion.h"
+#include "services/TaskInteractionCoordinator.h"
 #include "services/TrayController.h"
 
 #include "mcp/common/McpPaths.h"
-#include "services/TaskInteractionCoordinator.h"
 #include "services/LogicalDay.h"
 
 // 以下能力只在 macOS 存在：单实例守卫、外部 AI 接入、菜单栏、全局热键、系统通知后端。
@@ -63,13 +62,11 @@
 #if defined(Q_OS_IOS)
 #include <QScreen>
 #include "platform/ios/bridge/PTBridgeSupport.h"
-#include "services/ApplicationActivity.h"
-#include "services/MonotonicClock.h"
-#include "services/PhaseAlarmCoordinator.h"
 #include "platform/ios/IosBackgroundTask.h"
 #include "platform/ios/IosFolderPicker.h"
 #include "platform/ios/IosSyncFolder.h"
 #include "platform/ios/native/NativeRoot.h"
+#include "services/PhaseAlarmCoordinator.h"
 #include "platform/ios/native/IPadUiPreferences.h"
 
 namespace {
@@ -170,7 +167,21 @@ int main(int argc, char *argv[])
     }
 #endif
 
-    if (!DatabaseManager::instance()->initialize()) {
+    SharedApp::Options sharedAppOptions;
+#if defined(Q_OS_IOS)
+    sharedAppOptions.enableOfflineRecovery = true;
+    sharedAppOptions.allowManualRest = false;
+    sharedAppOptions.monitorApplicationActivity = true;
+    sharedAppOptions.enablePhaseAlarms = true;
+#else
+    sharedAppOptions.enableOfflineRecovery = false;
+    sharedAppOptions.allowManualRest = true;
+    sharedAppOptions.monitorApplicationActivity = false;
+    sharedAppOptions.enablePhaseAlarms = false;
+#endif
+    SharedApp sharedApp(sharedAppOptions);
+
+    if (!sharedApp.openDatabase()) {
         qCritical() << "数据库初始化失败，停止加载业务界面";
         // 失败窗口独立于所有业务服务，避免在坏库上继续触发查询或备份。
         // 离屏自动验证只写日志，不进入等待用户操作的界面事件循环。
@@ -190,32 +201,8 @@ int main(int argc, char *argv[])
         }
         return -1;
     }
-    // v8 历史回填与新版本自然到点规则口径不同；只在本次启动原本就有数据库且
-    // 用户尚未确认时注入说明上下文。这里不查询历史会话，也不参与 schema 判断。
-    const bool naturalCompletionNoticeRequired =
-        DatabaseManager::instance()->openedExistingDatabase()
-        && !AppSettings::instance()->naturalCompletionNoticeShown();
 
-#if defined(Q_OS_IOS)
-    // 必须在恢复之前设置：恢复逻辑按策略决定是否补回离线时段。
-    // 移动端的进程常在后台被系统结束，并非用户想暂停，同一次开机内按单调时钟补算；
-    // 番茄段在后台到期时只做离线结算（不自动衔接、不补发提醒）。
-    FocusTimer::instance()->setRecoveryPolicy(FocusTimer::RecoveryPolicy::CatchUpOffline);
-    // iPad 开放自由计时（用户的主要用法），被系统结束后同样按上面的策略补回离线时段。
-    // 主动休息暂不开放：050 计划没有这个需求，入口隐藏、服务层拒绝。
-    FocusTimer::instance()->setManualRestAllowed(false);
-    GuiApplicationActivity applicationActivity(SystemMonotonicClock::instance());
-    FocusTimer::instance()->setApplicationActivity(&applicationActivity);
-    // 离开前台时补写一次检查点。锚点在开始、暂停、继续时已经落盘，这里只是让最后的进度更新鲜。
-    QObject::connect(&applicationActivity, &GuiApplicationActivity::leftForeground,
-                     FocusTimer::instance(), &FocusTimer::checkpoint);
-#endif
-    if (!FocusTimer::instance()->restoreInterruptedSession()) {
-        qWarning() << "活动专注会话恢复失败";
-    }
-    // 任务交互协调器与平台无关（iOS 界面同样通过它串起完成、删除等交互），
-    // 所以放在外部 AI 接入之前创建；接入层只是它的一个监听者。
-    TaskInteractionCoordinator taskInteractions(TaskManager::instance());
+    sharedApp.restoreSession();
 
 #if defined(Q_OS_MACOS)
     // 显式装配接入生命周期；默认关闭，设置页显式授权后才启动端点。
@@ -239,10 +226,12 @@ int main(int argc, char *argv[])
         // 同步恢复可能没有 operationBlocksUi 的状态变化，完成信号也必须释放阻断。
         mcpAccess.setRestoreBlocked(BackupService::instance()->operationBlocksUi());
     });
-    QObject::connect(&app, &QCoreApplication::aboutToQuit,
-                     &mcpAccess, &McpAccessController::shutdown);
+    sharedApp.lifecycle().setPreShutdownHook([&mcpAccess] {
+        mcpAccess.shutdown();
+    });
     McpToolDispatcher mcpDispatcher(TaskManager::instance(), CategoryManager::instance(),
-        StatisticsService::instance(), KnowledgeGapService::instance(), &taskInteractions, [&mcpAccess] {
+        StatisticsService::instance(), KnowledgeGapService::instance(),
+        sharedApp.services().taskInteractionCoordinator(), [&mcpAccess] {
             return McpToolDispatcher::Context{mcpAccess.sessionId(), QDateTime::currentDateTime(),
                                               AppSettings::instance()->dayStartHour()};
         });
@@ -252,7 +241,7 @@ int main(int argc, char *argv[])
         return mcpDispatcher.dispatch(tool, arguments);
     });
     mcpAccess.setBlockProvider([&mcpDispatcher] { return mcpDispatcher.blocks(); });
-    QObject::connect(&taskInteractions, &TaskInteractionCoordinator::changed,
+    QObject::connect(sharedApp.services().taskInteractionCoordinator(), &TaskInteractionCoordinator::changed,
                      &mcpAccess, &McpAccessController::stateChanged);
     QObject::connect(&mcpAccess, &McpAccessController::copyRequested, &app, [](const QString& text) {
         QGuiApplication::clipboard()->setText(text);
@@ -283,53 +272,25 @@ int main(int argc, char *argv[])
     syncPlatform.engine.mayCreateFolder = false;
     syncPlatform.engine.runInBackground = false;
 #endif
-    SyncController syncController(std::move(syncPlatform));
-    // 第一次加入、另一台设备恢复了备份时，本机数据会被整体换掉：先做一份单独计数的自动备份，写成了才换。
-    syncController.setSafetyBackup([](QString* error) {
-        return BackupService::instance()->backupBeforeSyncReplace(error);
-    });
-    // 恢复备份 = 全局回滚：开始前停下同步并记下恢复前的纪元与设备标识，结束后开新纪元、给所有设备写全量快照。
-    QObject::connect(BackupService::instance(), &BackupService::restoreStarted,
-                     &syncController, &SyncController::prepareForRestore);
-    QObject::connect(BackupService::instance(), &BackupService::restoreCompleted,
-                     &syncController, [&syncController](bool success, const QString&) {
-        syncController.finishRestore(success);
-    });
+    sharedApp.setUpSync(std::move(syncPlatform));
+
     // 关闭主窗口时隐藏到菜单栏而不退出：菜单栏计时器让应用在无可见窗口时仍需存活。
     app.setQuitOnLastWindowClosed(false);
 
     // 菜单栏与系统通知：平台无关的 TrayController/NotificationService 负责逻辑，
     // macOS 后端负责 NSStatusItem 与 UNUserNotificationCenter。全部在 app 之后创建，
     // 生命周期与 main 同长；showWindow/quit 意图交给 QML 落实（复用窗口与待删提交逻辑）。
-    TrayController trayController(FocusTimer::instance());
 #if defined(Q_OS_MACOS)
+    TrayController* trayController = sharedApp.services().trayController();
     QObject::connect(&instanceGuard, &SingleInstanceGuard::activationRequested,
-                     &trayController, &TrayController::requestShowWindow);
-    MacStatusBarController statusBar(&trayController);
-    trayController.setView(&statusBar);
-
+                     trayController, &TrayController::requestShowWindow);
+    MacStatusBarController statusBar(trayController);
+    trayController->setView(&statusBar);
 #endif
+
 #if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
     AppleNotificationBackend notificationBackend;
-    NotificationService::instance()->setBackend(&notificationBackend);
-#endif
-#if defined(Q_OS_IOS)
-    // 番茄到点提醒交给系统预约：进程被挂起时进程内的计时器不会运行，只有预约的通知能按时响。
-    // 预约成功时，到点那一刻进程内不再即时投递第二条（由协调器回答「是否已覆盖」）。
-    PhaseAlarmCoordinator phaseAlarms(FocusTimer::instance(), NotificationService::instance());
-    NotificationService::instance()->setPhaseAlarmCoverage([&phaseAlarms](int phase) {
-        return phaseAlarms.coversPhase(phase);
-    });
-#endif
-    NotificationService::instance()->requestAuthorization();
-    // 阶段自然完成时的即时通知与提示音兜底（055 从 QML PhaseCompletionCoordinator 下沉）：
-    // 在任何界面加载之前接好，QML 界面与 iPad 原生界面共用；Mac 的「到点置前窗口」仍在 QML。
-    PhaseCompletionNotifier phaseCompletion(FocusTimer::instance(), AppSettings::instance(),
-                                            NotificationService::instance(),
-                                            [] { return PhaseSoundService::instance()->playPhaseCompleteChime(); });
-#if defined(Q_OS_IOS)
-    // 恢复已经完成：先撤销上个进程遗留的预约，再按当前计时状态重新预约。
-    phaseAlarms.start();
+    sharedApp.setUpNotifications(&notificationBackend);
 #endif
 
     // 快捷键：应用内键位由 QML 的 Shortcut 直接消费 ShortcutRegistry 的清单；
@@ -340,50 +301,19 @@ int main(int argc, char *argv[])
     ShortcutRegistry::instance()->setGlobalBackend(&globalHotkeyBackend);
 #endif
 
-    // 同步的启动核对放在生成例行之前：同步记下的逻辑日起点若和本机设置不一致，要先写回，
-    // 「今天」是哪天才是对的。上次开着同步的话，这里接着开始（第一轮在事件循环里异步进行）。
-    syncController.initialize();
-
-    // 启动即生成今天的例行任务，保证 QML 首次读取今日任务时已经能看到它们。
-    // 两个平台都生成：同一例行同一天的实例在所有设备上是同一条记录（身份 = 例行 sync_id + 日期），
-    // 同步过来的不会再生成一份，见 RoutineManager::materializeToday。
-    RoutineManager::instance()->materializeToday();
-
-    // 失效信号同步派发时先补新逻辑日例行，再由后接入的 QML 视图重查。
-    // 连接必须早于 engine.load，否则视图槽可能先看到尚未补齐的数据。
-    QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed,
-                     RoutineManager::instance(), &RoutineManager::materializeToday);
-
-    // 废纸篓保留期按逻辑日算：启动时、逻辑日变化时、恢复备份换了库之后各清理一次到期项。
-    // 这里只管清理；页面自己订阅逻辑日变化重读（见 TrashView），没有项到期时也要刷新「今天」分组和剩余天数。
-    TrashService::instance()->purgeExpired();
-    QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed,
-                     TrashService::instance(), [] { TrashService::instance()->purgeExpired(); });
-    QObject::connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged,
-                     TrashService::instance(), [] { TrashService::instance()->purgeExpired(); });
-
-    // 历史编辑会改变任务累计时长；在装配层广播刷新，避免服务互相依赖。
-    QObject::connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged,
-                     TaskManager::instance(), &TaskManager::tasksChanged);
-
-    // 知识缺口转任务会往 tasks 里插一行。在装配层把它接到任务变更信号上，
-    // 任务列表就能立刻刷新，而不必让 KnowledgeGapService 反向依赖 TaskManager。
-    QObject::connect(KnowledgeGapService::instance(), &KnowledgeGapService::tasksAffected,
-                     TaskManager::instance(), &TaskManager::tasksChanged);
+    sharedApp.startDay();
+    sharedApp.createInteractionServices();
 
     PlainTextLayout memoTextLayout;
-    // 单槽撤销删除的业务部分（计时、提交、撤销、被别处删掉时退场）；界面只管撤销条。
-    // 声明在引擎之前：引擎先析构，QML 里挂着的引用不会指向已经销毁的对象。
-    PendingDeletion pendingDeletion(TaskManager::instance(), FocusHistoryService::instance());
-    // 专注计时的业务流程（结束同口径、超长自由专注确认）；同样声明在引擎之前。
-    FocusSessionController focusSessionController(FocusTimer::instance(), TaskManager::instance(),
-                                                  AppSettings::instance(), &pendingDeletion);
     QQmlApplicationEngine engine;
 #if defined(Q_OS_IOS)
     const bool nativeRoot = shouldUseNativeRoot();
 #endif
+    // 剪贴板属于装配层；保持原有 SyncController::copyRequested -> QGuiApplication::clipboard()->setText 连线。
+    sharedApp.connectClipboard();
+
     // 草稿先同步保存，再结束计时、写同步、关库。原生路径没有 QML 根对象，调用它登记的保存钩子。
-    const auto flushUiDrafts = [&] {
+    sharedApp.lifecycle().setFlushDraftsHook([&] {
 #if defined(Q_OS_IOS)
         if (nativeRoot) {
             flushNativeEdits();
@@ -392,42 +322,18 @@ int main(int argc, char *argv[])
 #endif
         if (!engine.rootObjects().isEmpty())
             QMetaObject::invokeMethod(engine.rootObjects().first(), "flushMemoEdits", Qt::DirectConnection);
-    };
-    QObject::connect(&app, &QCoreApplication::aboutToQuit, &engine, flushUiDrafts);
-    // 退出前再提交一次待删项，兜底：常规关窗界面已经先提交过了（失败还会拦住退出），
-    // 这里补的是系统直接退出、iPad 原生界面没有这一步的情况。顺序是先存草稿、再提交待删、
-    // 再结束计时、写同步、关库——待删项触库会改动任务与专注记录，必须赶在计时器落盘和同步收尾之前。
-    // 走到这里已经拦不住退出，提交失败只能留日志（界面那边的失败提示用户多半看不到了）。
-    QObject::connect(&app, &QCoreApplication::aboutToQuit, &pendingDeletion, [&pendingDeletion] {
-        if (!pendingDeletion.commit())
-            qWarning() << "退出时提交待删项失败，该项保留在库里";
-    });
-    // 剪贴板属于装配层；连接放在平台条件之外，iPad 和 Mac 使用同一条复制路径。
-    QObject::connect(&syncController, &SyncController::copyRequested, &app, [](const QString& text) {
-        QGuiApplication::clipboard()->setText(text);
     });
 
-    // 退出顺序：计时器先落盘（它结束的记录要随这次写出），备份的后台任务收尾，同步把攒下的改动写出去，最后关库。
-    // 同一个信号的槽按连接先后调用，所以同步这一条必须连在 DatabaseManager::close 之前。
-    QObject::connect(&app, &QCoreApplication::aboutToQuit,
-                     FocusTimer::instance(), &FocusTimer::prepareForShutdown);
-    QObject::connect(&app, &QCoreApplication::aboutToQuit,
-                     BackupService::instance(), &BackupService::prepareForShutdown);
-    QObject::connect(&app, &QCoreApplication::aboutToQuit, &syncController, [&syncController] {
-        syncController.shutdown(3000);
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &sharedApp, [&sharedApp] {
+        sharedApp.lifecycle().shutdown();
     });
-    QObject::connect(&app, &QCoreApplication::aboutToQuit,
-                     DatabaseManager::instance(), &DatabaseManager::close);
 
 #if defined(Q_OS_IOS)
-    // 只有 iPad 接前后台：回到前台立即同步一轮，进了后台立即写出攒下的改动（哪些状态算后台见 setApplicationState）。
+    // 只有 iPad 接前后台：回到前台立即同步一轮，进了后台立即写出攒下的改动。
     // Mac 不接：切到别的应用很频繁，每次都立即写会拆出很多小文件，而 iPad 每读一个要约 1 秒。
-    QObject::connect(&app, &QGuiApplication::applicationStateChanged, &syncController,
-                     [&syncController, flushUiDrafts](Qt::ApplicationState state) {
-        // 先保存界面草稿，再请求后台写同步文件，避免同步线程读队列时漏掉最后的输入。
-        if (state != Qt::ApplicationActive)
-            flushUiDrafts();
-        syncController.setApplicationState(state);
+    QObject::connect(&app, &QGuiApplication::applicationStateChanged, &sharedApp,
+                     [&sharedApp](Qt::ApplicationState state) {
+        sharedApp.lifecycle().handleApplicationStateChanged(state);
     });
 #endif
 
@@ -441,13 +347,16 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("exportService"), ExportService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("ExportService"), ExportService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("taskManager"), TaskManager::instance());
-    engine.rootContext()->setContextProperty(QStringLiteral("taskInteractionCoordinator"), &taskInteractions);
-    engine.rootContext()->setContextProperty(QStringLiteral("pendingDeletion"), &pendingDeletion);
+    engine.rootContext()->setContextProperty(QStringLiteral("taskInteractionCoordinator"),
+                                             sharedApp.services().taskInteractionCoordinator());
+    engine.rootContext()->setContextProperty(QStringLiteral("pendingDeletion"),
+                                             sharedApp.services().pendingDeletion());
 #if defined(Q_OS_MACOS)
     engine.rootContext()->setContextProperty(QStringLiteral("mcpAccessController"), &mcpAccess);
 #endif
     engine.rootContext()->setContextProperty(QStringLiteral("focusTimer"), FocusTimer::instance());
-    engine.rootContext()->setContextProperty(QStringLiteral("focusSessionController"), &focusSessionController);
+    engine.rootContext()->setContextProperty(QStringLiteral("focusSessionController"),
+                                             sharedApp.services().focusSessionController());
     engine.rootContext()->setContextProperty(QStringLiteral("statisticsService"), StatisticsService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("focusHistoryService"), FocusHistoryService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("countdownService"), CountdownService::instance());
@@ -460,16 +369,19 @@ int main(int argc, char *argv[])
     engine.rootContext()->setContextProperty(QStringLiteral("appSettings"), AppSettings::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("logicalDayService"), LogicalDayService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("phaseSoundService"), PhaseSoundService::instance());
-    engine.rootContext()->setContextProperty(QStringLiteral("trayController"), &trayController);
+    engine.rootContext()->setContextProperty(QStringLiteral("trayController"),
+                                             sharedApp.services().trayController());
     engine.rootContext()->setContextProperty(QStringLiteral("notificationService"), NotificationService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("backupService"), BackupService::instance());
     engine.rootContext()->setContextProperty(QStringLiteral("shortcutRegistry"), ShortcutRegistry::instance());
-    engine.rootContext()->setContextProperty(QStringLiteral("syncController"), &syncController);
+    engine.rootContext()->setContextProperty(QStringLiteral("syncController"),
+                                             sharedApp.services().syncController());
 #if defined(Q_OS_IOS)
-    engine.rootContext()->setContextProperty(QStringLiteral("phaseAlarmCoordinator"), &phaseAlarms);
+    engine.rootContext()->setContextProperty(QStringLiteral("phaseAlarmCoordinator"),
+                                             sharedApp.services().phaseAlarmCoordinator());
 #endif
     engine.rootContext()->setContextProperty(QStringLiteral("naturalCompletionNoticeRequired"),
-                                             naturalCompletionNoticeRequired);
+                                             sharedApp.services().naturalCompletionNoticeRequired());
 
 #if defined(Q_OS_IOS)
     const QUrl url(useCompanionLayout() ? QStringLiteral("qrc:/qml/mobile/CompanionMain.qml")
@@ -488,34 +400,36 @@ int main(int argc, char *argv[])
     // 开关关闭时保持原 QML 入口；只有 iPad 原生路径等待场景连接并安装 SwiftUI 根视图。
     if (nativeRoot) {
         // 055-P3B：非单例仅登记弱引用，原生桥接不接管 main 栈服务的生命周期。
-        PTBridgeSupport::registerService(QStringLiteral("pendingDeletion"), &pendingDeletion);
-        PTBridgeSupport::registerService(QStringLiteral("taskInteractions"), &taskInteractions);
-        PTBridgeSupport::registerService(QStringLiteral("focusController"), &focusSessionController);
-        PTBridgeSupport::registerService(QStringLiteral("phaseAlarms"), &phaseAlarms);
-        PTBridgeSupport::registerService(QStringLiteral("syncController"), &syncController);
+        PTBridgeSupport::registerService(QStringLiteral("pendingDeletion"),
+                                         sharedApp.services().pendingDeletion());
+        PTBridgeSupport::registerService(QStringLiteral("taskInteractions"),
+                                         sharedApp.services().taskInteractionCoordinator());
+        PTBridgeSupport::registerService(QStringLiteral("focusController"),
+                                         sharedApp.services().focusSessionController());
+        PTBridgeSupport::registerService(QStringLiteral("phaseAlarms"),
+                                         sharedApp.services().phaseAlarmCoordinator());
+        PTBridgeSupport::registerService(QStringLiteral("syncController"),
+                                         sharedApp.services().syncController());
         installNativeRoot();
     }
     else
 #endif
         engine.load(url);
     // 自动备份放到后台线程。退出时不再重复执行重 I/O，避免应用长时间卡在关闭阶段。
-    BackupService::instance()->requestAutoBackupIfDue();
+    sharedApp.startBackgroundWork();
     const int exitCode = app.exec();
-#if defined(Q_OS_IOS)
-    // 这些对象都是 main 的栈对象，事件循环结束后先解开单例对它们的引用，再进入析构。
-    NotificationService::instance()->setPhaseAlarmCoverage({});
-    NotificationService::instance()->setBackend(nullptr);
-    FocusTimer::instance()->setApplicationActivity(nullptr);
-#endif
+
+    sharedApp.cleanup();
 #if defined(Q_OS_MACOS)
     // 平台后端是 main 栈对象；事件循环结束后先清空非拥有指针，再进入局部对象析构。
-    NotificationService::instance()->setBackend(nullptr);
     // 同理：解绑会先把已注册的系统热键全部注销，避免进程退出后系统里残留热键登记。
     ShortcutRegistry::instance()->setGlobalBackend(nullptr);
     // 菜单栏与控制器互相持有裸指针，两个方向都要显式断开。此前正确性只靠
     // 「trayController 声明在 statusBar 之前所以析构更晚」这一条隐式约定支撑，
     // 而代码里没有任何地方写着这件事——挪一行声明就会变成悬垂指针。
-    trayController.setView(nullptr);
+    if (trayController) {
+        trayController->setView(nullptr);
+    }
     statusBar.detachController();
 #endif
     return exitCode;

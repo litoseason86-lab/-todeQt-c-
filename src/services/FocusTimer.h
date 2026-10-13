@@ -154,6 +154,8 @@ private:
     friend class SyncTests;
     // 专注计时控制器测试注入 FakeClock 推进长时间运行，并复位单例计时器。
     friend class FocusSessionControllerTests;
+    // 共享装配测试推进可控时钟，验证生命周期连线确实把最新进度落盘，并隔离单例状态。
+    friend class SharedAppTests;
 
     explicit FocusTimer(QObject* parent = nullptr);
 
