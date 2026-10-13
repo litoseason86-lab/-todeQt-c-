@@ -166,4 +166,21 @@ import XCTest
         XCTAssertEqual(store.selectedSeconds, 9999)
     }
 
+    // 产品保证：翻月只读一次整月日合计，记录变更和日界设置变化都会重读，不能沿用旧合计。
+    func testMonthTotalsUseOneReadAndInvalidate() {
+        let day = configuredDay(), history = FocusHistoryBridgeFake()
+        history.dailyTotals = ["2024-02-14": 700]
+        let store = HistoryStore(history: history, logicalDay: day); store.setActive(true)
+        XCTAssertEqual(history.calls.filter { $0.0 == "monthDailyTotals" }.count, 1)
+        XCTAssertFalse(history.calls.contains { $0.0 == "dayTotalDuration" })
+        XCTAssertEqual(store.cells.first { $0.date == "2024-02-14" }?.seconds, 700)
+        history.dailyTotals["2024-02-14"] = 900; history.onChanged?()
+        XCTAssertEqual(store.cells.first { $0.date == "2024-02-14" }?.seconds, 900)
+        history.dailyTotals["2024-02-14"] = 300; day.dayStartHour = 5
+        XCTAssertEqual(store.cells.first { $0.date == "2024-02-14" }?.seconds, 300)
+        XCTAssertEqual(history.calls.filter { $0.0 == "monthDailyTotals" }.count, 3)
+        store.moveMonth(-1)
+        XCTAssertEqual(history.calls.last(where: { $0.0 == "monthDailyTotals" })?.1, [2024, 1])
+        XCTAssertFalse(history.calls.contains { $0.0 == "dayTotalDuration" })
+    }
 }

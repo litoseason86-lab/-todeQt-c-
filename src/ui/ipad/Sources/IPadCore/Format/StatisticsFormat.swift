@@ -42,10 +42,19 @@ public enum StatisticsFormat {
         return value >= 3600 ? "小时" : (value > 0 && value < 60 ? "秒" : "分钟")
     }
     // 显示对照表中的自然日格式；页面的周期导航与未来判断使用桥接，不能调用这些函数作业务判断。
-    public static func parseDate(_ text: String) -> Date? {
+    private static let dateParser: DateFormatter = {
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.calendar = Calendar(identifier: .gregorian); formatter.dateFormat = "yyyy-MM-dd"; formatter.isLenient = false
-        return formatter.date(from: String(text.prefix(10)))
+        return formatter
+    }()
+    private static let parserLock = NSLock()
+    public static func parseDate(_ text: String) -> Date? {
+        // ICU（系统日期解析器）的初始化比解析本身贵；复用格式器，仍在每次调用核对当前时区。
+        // 格式函数也可被后台调用，时区更新与解析必须同锁，不能跨线程看到半次配置。
+        parserLock.lock(); defer { parserLock.unlock() }
+        let zone = NSTimeZone.default
+        if dateParser.timeZone != zone { dateParser.timeZone = zone }
+        return dateParser.date(from: String(text.prefix(10)))
     }
     private static var calendar: Calendar { Calendar(identifier: .gregorian) }
     public static func mondayOf(_ date: Date) -> Date {

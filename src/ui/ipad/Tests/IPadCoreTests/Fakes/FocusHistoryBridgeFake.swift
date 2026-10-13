@@ -15,6 +15,7 @@ import IPadCore
     func monthSessions(year: Int, month: Int) throws -> [SessionValue] { try record("monthSessions", numbers: [year, month]); return sessions }
     func daySessions(date: String) throws -> [SessionValue] { try record("daySessions", text: [date]); return sessions }
     func dayTimeline(date: String) throws -> [SessionValue] { try record("dayTimeline", text: [date]); return sessions }
+    func monthDailyTotals(year: Int, month: Int) throws -> [String: Int] { try record("monthDailyTotals", numbers: [year, month]); return dailyTotals }
     func dayTotalDuration(date: String) throws -> Int { try record("dayTotalDuration", text: [date]); return dailyTotals[date] ?? count }
     func invalidSessionCount() throws -> Int { try record("invalidSessionCount"); return count }
     func taskOptions(date: String) throws -> [SessionTaskOption] { try record("taskOptions", text: [date]); return options }

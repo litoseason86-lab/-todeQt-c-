@@ -22,11 +22,11 @@ struct HistoryView: View {
                     if wide {
                         HStack(alignment: .top, spacing: 20) {
                             calendar(compact: false).frame(maxWidth: .infinity)
-                            summary(compact: false).frame(width: 300)
+                            HistorySelectionSummary(store: store, shell: shell, compact: false).frame(width: 300)
                         }
                     } else {
                         calendar(compact: true)
-                        summary(compact: true)
+                        HistorySelectionSummary(store: store, shell: shell, compact: true)
                     }
                 }
                 .padding(.top, 4).padding(.bottom, 24)
@@ -58,8 +58,15 @@ struct HistoryView: View {
         MonthGrid(store: store, compact: compact).padding(compact ? 10 : 16)
             .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
     }
+}
+
+// 选日期只更新明细这一支，不让明细里的选中值成为整页 GeometryReader 的观察依赖。
+private struct HistorySelectionSummary: View {
+    let store: HistoryStore
+    let shell: ShellStore
+    let compact: Bool
     // 定稿当天明细：日期、混排总时长、段数；分隔线下每段一行（时间、色条、任务、时长），底部「查看这天的今日专注 ›」。
-    private func summary(compact: Bool) -> some View {
+    var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !store.selectedDate.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {

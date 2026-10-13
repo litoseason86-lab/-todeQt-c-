@@ -285,4 +285,70 @@ import XCTest
         day.today = "2026-10-11"; store.updateLogicalDay()
         XCTAssertEqual(store.selectedGroup?.date, "2026-10-11")
     }
+    // 产品保证：跨七天选中编号按日期组和组内顺序提交，全选再次点击清空。
+    func testBatchSelectionUsesGroupedOrder() {
+        let (tasks, _, _, _, store, _) = interactionFixture()
+        tasks.result = [row(23, date: "2026-10-11"), row(9), row(4)]; store.refresh()
+        XCTAssertEqual(store.groups.flatMap(\.tasks).map(\.id), [9, 4, 23])
+        store.beginSelection(); store.toggleSelection(23); store.toggleSelection(4); store.toggleSelection(9)
+        XCTAssertEqual(store.orderedSelection, [9, 4, 23]); XCTAssertTrue(store.allSelected)
+        store.toggleSelectAll(); XCTAssertTrue(store.selection.isEmpty); XCTAssertFalse(store.allSelected)
+        store.toggleSelectAll(); XCTAssertEqual(store.orderedSelection, [9, 4, 23])
+        tasks.result = [row(4)]; store.refresh(); XCTAssertEqual(store.selection, [4])
+        store.shiftWeek(1); XCTAssertFalse(store.selecting); XCTAssertTrue(store.selection.isEmpty)
+    }
+    // 产品保证：进入多选取消拖动和改期令牌，不能留下阻断列表刷新的交互。
+    func testSelectionCancelsActiveInteractions() throws {
+        let (_, interactions, _, _, store, _) = interactionFixture()
+        _ = try XCTUnwrap(store.beginDrag(id: 9)); XCTAssertTrue(interactions.refreshBlocked)
+        store.beginSelection(); XCTAssertEqual(store.draggingTaskID, -1); XCTAssertFalse(interactions.refreshBlocked)
+        store.endSelection(); interactions.latest = row(4)
+        XCTAssertNotNil(store.beginReschedule(id: 4)); XCTAssertTrue(interactions.refreshBlocked)
+        store.beginSelection(); XCTAssertFalse(interactions.refreshBlocked); XCTAssertTrue(store.selecting)
+    }
+    // 产品保证：四类周批量操作按列表顺序提交，失败保留选择与原文，成功清空并退出多选。
+    func testBatchActionsSuccessAndFailure() {
+        for method in ["setCompletedBatch", "deleteBatch", "moveDates", "moveToday"] {
+            let (tasks, _, _, shell, store, actions) = interactionFixture()
+            store.beginSelection(); store.toggleSelection(23); store.toggleSelection(4); store.toggleSelection(9)
+            let perform: () -> Bool = {
+                switch method {
+                case "setCompletedBatch": store.completeSelection(using: actions)
+                case "deleteBatch": store.deleteSelection(using: actions)
+                case "moveDates": store.rescheduleSelection(to: "2031-02-03")
+                default: store.moveSelectionToToday()
+                }
+            }
+            tasks.failing = [method]; XCTAssertFalse(perform()); XCTAssertTrue(store.selecting); XCTAssertEqual(store.selection, [9, 4, 23])
+            XCTAssertEqual(method.hasPrefix("move") ? store.error : shell.toast?.message, method + " 失败")
+            tasks.failing = []; XCTAssertTrue(perform()); XCTAssertFalse(store.selecting); XCTAssertTrue(store.selection.isEmpty)
+            XCTAssertEqual(tasks.calls.last(where: { $0.name == method })?.ids, [9, 4, 23])
+            if method == "moveDates" { XCTAssertEqual(tasks.calls.last(where: { $0.name == method })?.text, ["2031-02-03"]) }
+        }
+    }
+    // 产品保证：空选择不执行任何周批量写入，空周不会被显示成全选。
+    func testEmptyBatchNeverWrites() {
+        let (tasks, _, _, _, store, actions) = interactionFixture()
+        store.beginSelection(); let count = tasks.calls.count
+        XCTAssertFalse(store.completeSelection(using: actions)); XCTAssertFalse(store.deleteSelection(using: actions))
+        XCTAssertFalse(store.rescheduleSelection(to: "2031-02-03")); XCTAssertFalse(store.moveSelectionToToday())
+        XCTAssertEqual(tasks.calls.count, count)
+        tasks.result = []; store.refresh(); store.toggleSelectAll(); XCTAssertFalse(store.allSelected)
+    }
+    // 产品保证：一次翻周只查询一次当前周起点，后续数据和日界刷新仍读取最新起点。
+    func testShiftReadsCurrentWeekOnlyOnce() {
+        let tasks = TaskBridgeFake(); let day = LogicalDayBridgeFake(); day.today = "2026-10-09"
+        day.periodResult.start = "2026-10-12"
+        let shell = ShellStore(bridge: ShellBridgeFake())
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: shell)
+        var currentWeek = "2026-10-05", reads = 0
+        let store = WeekStore(tasks: tasks, logicalDay: day, pendingDeletion: pending, interactions: InteractionBridgeFake(),
+            weekStart: currentWeek, weekDates: { start in (0..<7).compactMap { LogicalDateNavigation.shifted(start, days: $0) } },
+            weekStartProvider: { reads += 1; return currentWeek })
+        XCTAssertEqual(reads, 1); store.shiftWeek(1); XCTAssertEqual(reads, 2)
+        XCTAssertEqual(store.weekStart, "2026-10-12"); XCTAssertFalse(store.showsCurrentWeek)
+        currentWeek = "2026-10-12"; day.today = "2026-10-12"
+        XCTAssertEqual(reads, 3); XCTAssertTrue(store.showsCurrentWeek)
+        tasks.onChanged?(); XCTAssertEqual(reads, 4)
+    }
 }

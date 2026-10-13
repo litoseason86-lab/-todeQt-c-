@@ -57,7 +57,7 @@ import UIKit
             // 列表推入纸面不代表离开备忘录；只有真的离页才释放页面活跃状态。
             if !store.detailPresented || shell.selection != .memo { store.setActive(false) }
         }
-        .onChange(of: shell.selection) { _, page in
+        .onShellSelectionChange(shell) { page in
             if page != .memo { commitInput() }; store.setActive(page == .memo)
         }
         .task { await refreshDisplayClock(forDetail: false) }

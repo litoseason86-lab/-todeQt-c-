@@ -57,6 +57,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)moveTask:(NSInteger)taskId toDate:(NSString *)date error:(NSError **)error;
 - (BOOL)moveTasks:(NSArray<NSNumber *> *)taskIds toDate:(NSString *)date error:(NSError **)error;
 - (BOOL)moveTasksToToday:(NSArray<NSNumber *> *)taskIds error:(NSError **)error;
+- (BOOL)setTasksCompleted:(NSArray<NSNumber *> *)taskIds completed:(BOOL)completed error:(NSError **)error;
+- (BOOL)deleteTasks:(NSArray<NSNumber *> *)taskIds error:(NSError **)error;
 - (BOOL)duplicateTask:(NSInteger)taskId date:(NSString *)date error:(NSError **)error;
 - (BOOL)isRoutineGeneratedTask:(NSInteger)taskId;
 // 结转窗口天数（TaskManager 的常量，只读转发）；结转提示用它说明「回看了几天」。

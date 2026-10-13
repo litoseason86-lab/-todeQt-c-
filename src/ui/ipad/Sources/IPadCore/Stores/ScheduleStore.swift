@@ -18,6 +18,7 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
     @ObservationIgnored private let settingsBridge: any SettingsBridgeProtocol
     @ObservationIgnored private var logicalDay: (any LogicalDayBridgeProtocol)?
     @ObservationIgnored private var writing = false
+    @ObservationIgnored private var hasSnapshot = false
     public var maxWeekIndex: Int { bridge.maxWeekIndex }
     public var maxPeriodCount: Int { bridge.maxPeriodCount }
     public var visibleWeekdays: [Int] { Array(1...(settings.showWeekend ? 7 : 5)) }
@@ -91,14 +92,14 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
     private func clampedWeek(_ value: Int, settings: ScheduleSettings) -> Int { max(1, min(settings.semesterWeeks, value)) }
     private func refreshFromSignal() { if !writing { refresh() } }
     public func refresh() { refresh(initial: false) }
-    private func refresh(initial: Bool) {
+    private func refresh(initial: Bool, requestedWeek: Int? = nil) {
         do {
             let newSettings = try bridge.settings()
             let effectiveDate = logicalDay?.today ?? todayDate
             let dateChanged = todayDate != effectiveDate
             let followingCurrentWeek = initial || (dateChanged && weekIndex == currentWeekIndex)
             let newCurrentWeek = bridge.weekIndex(start: newSettings.semesterStartDate, date: effectiveDate)
-            let newWeek = clampedWeek(followingCurrentWeek ? newCurrentWeek : weekIndex, settings: newSettings)
+            let newWeek = clampedWeek(requestedWeek ?? (followingCurrentWeek ? newCurrentWeek : weekIndex), settings: newSettings)
             let newEntries = try bridge.entries(week: newWeek), newPeriods = try bridge.periods()
             // 以逻辑今日所在的自然周反查星期，学期尚未设置时也能选对列；Swift 不另算星期。
             let newWeekday = logicalDay == nil ? todayWeekday : ((1...7).first(where: {
@@ -109,7 +110,7 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
             if initial || (dateChanged && selectedWeekday == todayWeekday) { selectedWeekday = newWeekday }
             todayWeekday = newWeekday
             currentWeekIndex = newCurrentWeek; weekIndex = newWeek
-            entries = newEntries; periods = newPeriods; error = ""
+            entries = newEntries; periods = newPeriods; hasSnapshot = true; error = ""
         } catch { self.error = error.localizedDescription }
     }
     public func selectWeekday(_ day: Int) { if (1...7).contains(day) { selectedWeekday = day } }
@@ -120,7 +121,18 @@ public enum ScheduleDisplayMode: String, CaseIterable, Sendable { case time, per
         if following { weekIndex = clampedWeek(newWeek, settings: settings) }
         refresh()
     }
-    public func goToWeek(_ week: Int) { weekIndex = clampedWeek(week, settings: settings); refresh() }
+    public func goToWeek(_ week: Int) {
+        // 翻周只改变课程范围；设置、节次和今日星期已经由各自通知即时刷新，无需每次翻页再查一遍。
+        // 前次读取失败或日界通知尚未送达时走完整读取，不能把旧设置当作可信缓存。
+        guard hasSnapshot, error.isEmpty, logicalDay == nil || logicalDay?.today == todayDate else {
+            refresh(initial: false, requestedWeek: week); return
+        }
+        do {
+            let next = clampedWeek(week, settings: settings)
+            let rows = try bridge.entries(week: next)
+            entries = rows; weekIndex = next; error = ""
+        } catch { self.error = error.localizedDescription }
+    }
     public func goToCurrentWeek() { goToWeek(currentWeekIndex) }
     public func dateForWeekday(_ day: Int) -> String {
         bridge.dateOfWeekday(start: settings.semesterStartDate, week: weekIndex, weekday: day)

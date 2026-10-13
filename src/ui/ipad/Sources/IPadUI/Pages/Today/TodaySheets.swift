@@ -89,33 +89,3 @@ struct TodayGoalSheet: View {
         minutesText = draft.totalMinutes == 0 ? "" : String(draft.minutes)
     }
 }
-
-// 草稿保存在 Store，服务拒绝时不关闭表单，也不覆盖用户输入。
-struct TodayNewTaskSheet: View {
-    @Bindable var store: TodayStore
-    let categories: any CategoryBridgeProtocol
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        NavigationStack {
-            Form {
-                TextField("标题（必填）", text: $store.newTitle)
-                Picker("科目", selection: $store.newCategoryID) {
-                    Text("无科目").tag(-1)
-                    ForEach(store.newCategories, id: \.id) { Text($0.name).tag($0.id) }
-                }
-                let estimate = "预计用时：\(store.newEstimatedMinutes) 分钟"
-                HStack { Text(estimate); Spacer(); AccentStepper(title: estimate, value: $store.newEstimatedMinutes, range: 0...1440, step: 5) }
-                TextField("备注", text: $store.newNotes, axis: .vertical)
-                if !store.newFormError.isEmpty { Text(store.newFormError).foregroundStyle(ThemeColors.danger) }
-            }
-            .navigationTitle("新建任务").sheetChrome()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { _ = store.submitNewTask() }
-                        .disabled(store.newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-        }.task { store.loadNewCategories(from: categories) }
-    }
-}

@@ -150,4 +150,36 @@ final class ScheduleStoreTests: XCTestCase {
         XCTAssertEqual(store.undisplayedEntryTitles, ["自习（周末隐藏）"])
         store.selectWeekday(2); XCTAssertEqual(store.selectedDayEntries.map(\.id), [4])
     }
+    // 产品保证：翻周读取失败保留旧周标题和课程快照，避免把旧课表标成新的一周。
+    @MainActor func testFailedWeekNavigationPreservesWeekAndEntries() {
+        let bridge = ScheduleBridgeFake(); bridge.weekValue = 7; var row = ScheduleEntry(); row.id = 9
+        bridge.entryValues = [row]
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), todayDate: "2026-10-09", todayWeekday: 5)
+        XCTAssertEqual(store.weekIndex, 7); XCTAssertEqual(store.entries.map(\.id), [9])
+        bridge.readError = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "查询失败"])
+        store.goToWeek(8)
+        XCTAssertEqual(store.weekIndex, 7); XCTAssertEqual(store.entries.map(\.id), [9]); XCTAssertEqual(store.error, "查询失败")
+    }
+    // 产品保证：翻周只查课程一次，学期、节次和日界通知后仍使用完整的新快照。
+    @MainActor func testWeekNavigationReusesOnlyUnchangedMetadata() {
+        let bridge = ScheduleBridgeFake(); bridge.weekValue = 7; bridge.settingsValue.semesterWeeks = 20
+        bridge.weekdayDates = [5: "2026-10-09"]
+        let day = LogicalDayBridgeFake(); day.today = "2026-10-09"
+        let store = ScheduleStore(bridge: bridge, settingsBridge: SettingsBridgeFake(), logicalDay: day)
+        let calls = bridge.calls.count, weekdays = bridge.weekdayInputs.count
+        store.goToWeek(8)
+        XCTAssertEqual(Array(bridge.calls.dropFirst(calls)), ["entriesForWeek"])
+        XCTAssertEqual(bridge.weekdayInputs.count, weekdays); XCTAssertEqual(store.weekIndex, 8)
+        bridge.settingsValue.semesterWeeks = 5; bridge.onSemesterWeeksChanged?()
+        XCTAssertEqual(store.weekIndex, 5); store.goToWeek(9); XCTAssertEqual(store.weekIndex, 5)
+        bridge.settingsValue.semesterStartDate = "2026-09-07"; bridge.onSemesterStartDateChanged?()
+        XCTAssertEqual(store.settings.semesterStartDate, "2026-09-07")
+        bridge.periodValues = [SchedulePeriod(index: 1, startMinutes: 600, endMinutes: 650)]; bridge.onPeriodsChanged?()
+        XCTAssertEqual(store.periods.first?.startMinutes, 600)
+        bridge.settingsValue.showWeekend = true; bridge.onShowWeekendChanged?(); XCTAssertTrue(store.settings.showWeekend)
+        var row = ScheduleEntry(); row.id = 19; bridge.entryValues = [row]; bridge.onScheduleChanged?()
+        XCTAssertEqual(store.entries.map(\.id), [19])
+        bridge.weekdayDates = [1: "2026-10-12"]; day.today = "2026-10-12"
+        XCTAssertEqual(store.todayWeekday, 1); XCTAssertEqual(store.todayDate, "2026-10-12")
+    }
 }

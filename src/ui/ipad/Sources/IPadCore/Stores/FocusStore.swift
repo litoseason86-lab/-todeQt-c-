@@ -48,8 +48,19 @@ public typealias FocusDelay = @MainActor (_ seconds: Double, _ action: @escaping
 // 专注计时的展示与交互状态。长休息、自动衔接、切换分流、结束分发、超长确认、候选任务等业务判断
 // 全在 C++（FocusSessionController），这里只按返回结果做界面动作；根级常驻，
 // 自动衔接跟随计时器而不是页面（用户停在别的页时同样生效）。
+// 进行中会话里不随秒变的部分：哪个任务、哪个逻辑日、几点开始。
+public struct ActiveFocusSession: Equatable, Sendable {
+    public var taskID: Int
+    public var logicalDate: String
+    public var startTime: String
+}
+
 @MainActor @Observable public final class FocusStore: FocusFlowHook {
+    // 计时在走时每秒都变；读它的视图每秒重算，所以只给真要显示秒数的地方读。
     public private(set) var snapshot = FocusSnapshot()
+    // 列表页（今日任务、仪表盘、今日专注）只要知道有没有会话、在专注哪个任务，读这一项；秒数交给行里的小视图单独读，
+    // 整页不随计时每秒重算（10-12 真机测速）。只在会话开始、结束或换任务时变。
+    public private(set) var activeSession: ActiveFocusSession?
     public private(set) var pomodoroModeSelected = false
     public private(set) var selectedTaskID = -1
     public private(set) var selectedTaskTitle = ""
@@ -322,6 +333,10 @@ public typealias FocusDelay = @MainActor (_ seconds: Double, _ action: @escaping
     public func refreshSnapshot() {
         let value = focus.snapshot
         if value != snapshot { snapshot = value }
+        let active = value.hasActiveSession
+            ? ActiveFocusSession(taskID: value.currentTaskID, logicalDate: value.sessionLogicalDate, startTime: value.sessionStartTime)
+            : nil
+        if active != activeSession { activeSession = active }
         // 沉浸中意外落入待机或无会话的自由态，立即退出，不留空白全屏。
         if immersiveActive && !immersiveProjectable { immersiveActive = false }
         if state != .pomoIdle { panelExpanded = false }

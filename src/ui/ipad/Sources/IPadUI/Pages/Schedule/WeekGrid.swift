@@ -12,7 +12,17 @@ import SwiftUI
     @ScaledMetric(relativeTo: .body) private var rowHeight = 72.0
     // 055-R4 定稿：整张网格是一张白卡片；表头「周一 6」，今天那天日期是焦糖实心圆；整点细线、两小时一个刻度字。
     var body: some View {
-        GeometryReader { geometry in
+        // 同一轮布局只给每一天排一次泳道（重叠课程的横向位置）；原来求整张网格高度时，
+        // 轴、背景和七列各自又排了整周。高度和课程块共用本轮结果，不跨设置或字号变化缓存。
+        let placements = Dictionary(uniqueKeysWithValues: weekdays.map { day in
+            (day, store.layout(weekday: day, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight))
+        })
+        let axisStart = store.axisStartMinutes, axisEnd = store.axisEndMinutes
+        let contentHeight = store.displayMode == .period
+            ? max(rowHeight, Double(store.periods.count) * (rowHeight + 4) - 4)
+            : max(Double(axisEnd - axisStart) * minuteHeight,
+                  placements.values.flatMap { $0 }.map { $0.top + $0.height }.max() ?? 0)
+        return GeometryReader { geometry in
             let gutter = 52.0
             let width = max(1, (geometry.size.width - gutter) / Double(weekdays.count))
             VStack(spacing: 0) {
@@ -38,12 +48,12 @@ import SwiftUI
                 CardDivider()
                 ScrollView(.vertical) {
                     HStack(alignment: .top, spacing: 0) {
-                        axis.frame(width: gutter)
+                        axis(height: contentHeight, start: axisStart, end: axisEnd).frame(width: gutter)
                         ForEach(weekdays, id: \.self) { day in
-                            dayColumn(day, width: width).frame(width: width, height: contentHeight)
+                            dayColumn(day, width: width, placements: placements[day] ?? []).frame(width: width, height: contentHeight)
                         }
                     }
-                    .background(alignment: .topLeading) { hourLines.padding(.leading, gutter) }
+                    .background(alignment: .topLeading) { hourLines(height: contentHeight, start: axisStart, end: axisEnd).padding(.leading, gutter) }
                     .padding(.top, 8).padding(.bottom, 12)
                 }
             }
@@ -52,13 +62,13 @@ import SwiftUI
         }
     }
     // 时间模式下每个整点一条细线，节次模式下每节一条。
-    @ViewBuilder private var hourLines: some View {
+    @ViewBuilder private func hourLines(height: Double, start: Int, end: Int) -> some View {
         ZStack(alignment: .topLeading) {
-            Color.clear.frame(height: contentHeight)
+            Color.clear.frame(height: height)
             if store.displayMode == .time {
-                ForEach(Array(stride(from: store.axisStartMinutes, through: store.axisEndMinutes, by: 60)), id: \.self) { minute in
+                ForEach(Array(stride(from: start, through: end, by: 60)), id: \.self) { minute in
                     Rectangle().fill(ThemeColors.borderSubtle).frame(height: 1)
-                        .offset(y: Double(minute - store.axisStartMinutes) * minuteHeight)
+                        .offset(y: Double(minute - start) * minuteHeight)
                 }
             } else {
                 ForEach(0...store.periods.count, id: \.self) { index in
@@ -68,21 +78,14 @@ import SwiftUI
         }
         .allowsHitTesting(false)
     }
-    private var contentHeight: Double {
-        if store.displayMode == .period { return max(rowHeight, Double(store.periods.count) * (rowHeight + 4) - 4) }
-        let axisHeight = Double(store.axisEndMinutes - store.axisStartMinutes) * minuteHeight
-        let ends = weekdays.flatMap { store.layout(weekday: $0, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight) }
-            .map { $0.top + $0.height }
-        return max(axisHeight, ends.max() ?? 0)
-    }
-    @ViewBuilder private var axis: some View {
+    @ViewBuilder private func axis(height: Double, start: Int, end: Int) -> some View {
         ZStack(alignment: .topTrailing) {
-            Color.clear.frame(height: contentHeight)
+            Color.clear.frame(height: height)
             if store.displayMode == .time {
-                ForEach(Array(stride(from: store.axisStartMinutes, through: store.axisEndMinutes, by: 120)), id: \.self) { minute in
+                ForEach(Array(stride(from: start, through: end, by: 120)), id: \.self) { minute in
                     Text(ScheduleFormat.formatMinutes(Double(minute))).font(.system(size: 11)).monospacedDigit()
                         .foregroundStyle(ThemeColors.inkSoft).padding(.trailing, 6)
-                        .offset(y: Double(minute - store.axisStartMinutes) * minuteHeight - 7)
+                        .offset(y: Double(minute - start) * minuteHeight - 7)
                 }
             } else {
                 ForEach(Array(store.periods.enumerated()), id: \.offset) { index, period in
@@ -95,8 +98,7 @@ import SwiftUI
             }
         }
     }
-    private func dayColumn(_ day: Int, width: Double) -> some View {
-        let placements = store.layout(weekday: day, pixelsPerMinute: minuteHeight, periodRowHeight: rowHeight)
+    private func dayColumn(_ day: Int, width: Double, placements: [SchedulePlacement<ScheduleEntry>]) -> some View {
         return ZStack(alignment: .topLeading) {
             // 今天那列浅焦糖底；列间一条细竖线。
             Rectangle().fill(store.weekIndex == store.currentWeekIndex && store.todayWeekday == day ? ThemeColors.accentFill.opacity(0.35) : Color.clear)

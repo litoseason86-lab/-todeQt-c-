@@ -592,6 +592,8 @@ if(IOS)
         src/ui/ipad/Sources/IPadCore/Stores/TaskEditorStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/TaskCategoryStore.swift
         src/ui/ipad/Sources/IPadCore/Stores/TaskCompletionNoteStore.swift
+        # 10-12 对齐提醒事项：任务行的行内编辑（各页共用一份）。
+        src/ui/ipad/Sources/IPadCore/Stores/InlineTaskEditor.swift
         src/ui/ipad/Sources/IPadCore/Format/Duration.swift
         src/ui/ipad/Sources/IPadCore/Format/DashboardFormat.swift)
     target_sources(IPadUI PRIVATE
@@ -693,6 +695,8 @@ if(IOS)
     target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Theme/ThemeAppearance.swift)
     # 055-R4：调试巡检，只有带 --ipad-ui-tour 启动参数时截图。
     target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Shell/UITour.swift)
+    # 10-12：调试测速，只有带 --ipad-ui-tour-perf 启动参数时记录主线程占用。
+    target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Shell/UIPerfProbe.swift)
     # 055-R4：按定稿 CSS 的公共样式（卡片、胶囊、页头、数字混排）。
     target_sources(IPadUI PRIVATE src/ui/ipad/Sources/IPadUI/Components/DesignKit.swift)
     # 055-R4：定稿侧栏顶部的搜索（任务与知识缺口都走服务现成搜索）。

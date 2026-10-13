@@ -55,13 +55,15 @@ public struct HistoryDay: Equatable, Identifiable, Sendable {
             let anchor = followingToday ? today : requestedAnchor ?? (monthStart.isEmpty ? today : monthStart)
             let period = try logicalDay.period(anchor: anchor, range: "month", shift: 0, logicalToday: today)
             let records = try history.monthSessions(year: period.year, month: period.month)
+            let totals = try history.monthDailyTotals(year: period.year, month: period.month)
             let invalidCount = try history.invalidSessionCount()
             let nextCells = try MonthGoalFormat.monthCells(year: period.year, month: period.month).map { item in
                 guard let date = item.date else {
                     return HistoryDay(id: item.index, date: nil, day: 0, seconds: 0, band: -1, today: false, future: false)
                 }
                 let relation = try logicalDay.relation(date, to: today)
-                let seconds = try history.dayTotalDuration(date: date)
+                // 月历合计整月只跨桥一次；日期关系和档位仍消费服务结果，不从 Swift 明细自行加总。
+                let seconds = totals[date] ?? 0
                 // seconds / 60.0 保留不足一分钟的投入，档位结果只消费 C++ 返回值。
                 let band = history.bandForMinutes(Double(seconds) / 60.0)
                 return HistoryDay(id: item.index, date: date, day: item.day, seconds: seconds, band: band,

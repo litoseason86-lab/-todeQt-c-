@@ -1,4 +1,5 @@
 import IPadCore
+import Observation
 import XCTest
 
 @MainActor final class TrashBridgeTests: XCTestCase {
@@ -129,5 +130,88 @@ import XCTest
         day.onChanged?(); XCTAssertEqual(store.today, "2026-10-11")
         store.deactivate(); bridge.result.today = "2026-10-12"
         day.onChanged?(); XCTAssertEqual(store.today, "2026-10-11")
+    }
+    // 产品保证：多选全选可反选，刷新移除失效编号，离开页面清空选择与确认。
+    func testBatchSelectionLifecycle() {
+        let bridge = TrashBridgeFake(); bridge.result.items = [item(9), item(4)]
+        let store = TrashStore(bridge: bridge); store.activate(); store.beginSelection()
+        XCTAssertFalse(store.allSelected); store.toggleSelectAll(); XCTAssertEqual(store.selection, [9, 4]); XCTAssertTrue(store.allSelected)
+        store.toggleSelectAll(); XCTAssertTrue(store.selection.isEmpty)
+        store.toggleSelection(4); store.toggleSelection(9); bridge.result.items = [item(4)]; store.reload()
+        XCTAssertEqual(store.selection, [4]); store.requestDeleteSelection(); store.deactivate()
+        XCTAssertFalse(store.selecting); XCTAssertTrue(store.selection.isEmpty); XCTAssertNil(store.confirmation)
+    }
+    // 产品保证：批量恢复按列表次序逐条写，成功项移出选择，混合失败逐条说明，整批仅重读一次。
+    func testPartialRestoreKeepsFailuresAndReloadsOnce() {
+        let bridge = TrashBridgeFake(); bridge.result.items = [item(9), item(4), item(7)]
+        let store = TrashStore(bridge: bridge); store.activate(); store.beginSelection()
+        store.toggleSelection(7); store.toggleSelection(4); store.toggleSelection(9)
+        bridge.restoreResults[4] = TrashActionResult(error: "与已有记录冲突", conflict: "focus")
+        bridge.restoreResults[7] = TrashActionResult(error: "数据库只读")
+        bridge.onRestore = { id in
+            if id == 9 { bridge.result.items.removeAll { $0.id == 9 } }
+            bridge.onChanged?()
+        }
+        let reads = bridge.readCount; store.restoreSelection()
+        XCTAssertEqual(bridge.calls.filter { $0.0 == "restore" }.map(\.1), [[9], [4], [7]])
+        XCTAssertEqual(bridge.readCount, reads + 1); XCTAssertEqual(store.selection, [4, 7]); XCTAssertTrue(store.selecting)
+        XCTAssertEqual(store.actionError, "有 2 项没能恢复：没能恢复「条目」：与已有记录冲突\n没能恢复「条目」：数据库只读")
+        XCTAssertEqual(store.batchNotice, "")
+    }
+    // 产品保证：全部恢复成功退出多选并显示批次数，清提示同时清批量成功文案。
+    func testBatchRestoreSuccessNotice() {
+        let bridge = TrashBridgeFake(); bridge.result.items = [item(9), item(4), item(7)]
+        let store = TrashStore(bridge: bridge); store.activate(); store.beginSelection(); store.toggleSelectAll()
+        store.restoreSelection()
+        XCTAssertFalse(store.selecting); XCTAssertTrue(store.selection.isEmpty); XCTAssertEqual(store.batchNotice, "已恢复 3 项")
+        store.dismissNotice(); XCTAssertEqual(store.batchNotice, ""); XCTAssertEqual(store.actionError, "")
+    }
+    // 产品保证：不可恢复条目不调用恢复服务，抛错条目也保留选择并显示逐条原因。
+    func testBlockedAndThrownRestoreFailures() {
+        let bridge = TrashBridgeFake()
+        let blocked = TrashItem(id: 7, kind: "memo", title: "损坏", deletedAt: "", deletedDate: "2026-10-10", remainingDays: 3,
+            originSyncID: "", categoryName: "", categoryColor: "", restorable: false, blockedReason: "corrupted", details: TrashDetails())
+        XCTAssertFalse(blocked.restorable); bridge.result.items = [blocked, item(9)]
+        let store = TrashStore(bridge: bridge); store.activate(); store.beginSelection(); store.toggleSelectAll()
+        bridge.actionError = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "锁定"])
+        store.restoreSelection()
+        XCTAssertEqual(bridge.calls.filter { $0.0 == "restore" }.map(\.1), [[9]])
+        XCTAssertEqual(store.selection, [7, 9]); XCTAssertEqual(store.actionError, "有 2 项没能恢复：没能恢复「损坏」：内容已损坏，无法恢复\n没能恢复「条目」：锁定")
+    }
+    // 产品保证：批量彻底删除固定确认时的列表顺序，取消不写，成功退出多选。
+    func testBatchDeleteConfirmationCapturesOrderedIDs() {
+        let bridge = TrashBridgeFake(); bridge.result.items = [item(9), item(4)]
+        let store = TrashStore(bridge: bridge); store.activate(); store.beginSelection()
+        store.requestDeleteSelection(); XCTAssertNil(store.confirmation)
+        store.toggleSelection(4); store.toggleSelection(9); store.requestDeleteSelection()
+        XCTAssertEqual(store.confirmation, .deleteSelection(2)); XCTAssertEqual(store.confirmation?.title, "彻底删除选中的 2 项？")
+        store.cancelConfirmation(); store.confirmDeleteSelection(); XCTAssertFalse(bridge.calls.contains { $0.0 == "empty" })
+        store.requestDeleteSelection(); bridge.result.items.insert(item(12), at: 0); store.reload(); store.toggleSelection(12)
+        store.confirmDeleteSelection()
+        XCTAssertEqual(bridge.calls.last?.0, "empty"); XCTAssertEqual(bridge.calls.last?.1, [9, 4]); XCTAssertFalse(store.selecting)
+    }
+    // 产品保证：批量彻底删除返回错误或抛错时保留选中并显示原文，不把失败当成功。
+    func testBatchDeleteFailuresPreserveSelection() {
+        for throwing in [false, true] {
+            let bridge = TrashBridgeFake(); bridge.result.items = [item(9), item(4)]
+            let store = TrashStore(bridge: bridge); store.activate(); store.beginSelection(); store.toggleSelectAll(); store.requestDeleteSelection()
+            if throwing { bridge.actionError = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "删除失败"]) }
+            else { bridge.actionResult = TrashActionResult(error: "删除失败") }
+            store.confirmDeleteSelection()
+            XCTAssertEqual(store.selection, [9, 4]); XCTAssertTrue(store.selecting); XCTAssertEqual(store.actionError, "删除失败")
+            XCTAssertNil(store.confirmation)
+        }
+    }
+    // 产品保证：批量删除确认出现后，取消操作会通知订阅确认状态的界面关闭面板。
+    func testBatchConfirmationCancellationIsObservable() {
+        let bridge = TrashBridgeFake(); bridge.result.items = [item(9)]
+        let store = TrashStore(bridge: bridge); store.activate(); store.beginSelection(); store.toggleSelectAll()
+        store.requestDeleteSelection(); XCTAssertEqual(store.confirmation, .deleteSelection(1))
+        // Observation 的回调在同一主线程写入时同步执行，本用例不跨线程读写这个标志。
+        final class Flag: @unchecked Sendable { var changed = false }
+        let flag = Flag()
+        withObservationTracking({ _ = store.confirmation }) { flag.changed = true }
+        store.cancelConfirmation()
+        XCTAssertNil(store.confirmation); XCTAssertTrue(flag.changed)
     }
 }

@@ -52,6 +52,7 @@ private slots:
     void historyBandsMatchCaliberFixtures();
     void dateRelationsAndPeriodNavigation();
     void historyFieldsPartialChangesAndFailures();
+    void historyMonthTotalsAndReadFailures();
     void dateRelationsForSelectedDay();
     void initTestCase();
     void init();
@@ -59,6 +60,7 @@ private slots:
     void taskReadsPreserveFieldsAndPartialChanges();
     void taskFailuresAreCollectedOnce();
     void taskWriteAndReadEntryPoints();
+    void taskBatchCompleteAndDelete();
     void taskPlannedMinutesMatchesService();
     void taskOverdueRolloverDaysMatchesService();
     void pendingDeletionSignalsAndState();
@@ -73,6 +75,37 @@ private:
     QTemporaryDir m_preferences;
     QTemporaryDir m_database;
 };
+// 产品保证：整月合计桥接保留逻辑日和零日，错误不会伪装成全零月份，变更后新读取使用最新结果。
+void PTCoreBridgeTests::historyMonthTotalsAndReadFailures()
+{
+    @autoreleasepool {
+        auto *settings = AppSettings::instance(); settings->setDayStartHour(4);
+        QSqlQuery seed(DatabaseManager::instance()->database());
+        QVERIFY(seed.exec(QStringLiteral("INSERT INTO focus_sessions(start_time,end_time,duration) VALUES "
+            "('2024-03-01T03:00:00','2024-03-01T03:04:00',240),"
+            "('2024-02-01T03:00:00','2024-02-01T03:05:00',300),"
+            "('2024-02-15T10:00:00','2024-02-15T10:02:59',179),"
+            "('2024-02-15T11:00:00',NULL,900)")));
+        PTFocusHistoryBridge *bridge = [PTFocusHistoryBridge new];
+        auto result = [bridge monthDailyTotals:2024 month:2];
+        QVERIFY(result.valid); QCOMPARE(result.dailyTotals.count, NSUInteger(29));
+        QCOMPARE(result.dailyTotals[@"2024-02-29"].integerValue, NSInteger(240));
+        QCOMPARE(result.dailyTotals[@"2024-02-01"].integerValue, NSInteger(0));
+        QCOMPARE(result.dailyTotals[@"2024-02-15"].integerValue, NSInteger(0));
+        QCOMPARE([bridge dayTotalDuration:@"2024-02-29"].count, NSInteger(240));
+        settings->setDayStartHour(0);
+        result = [bridge monthDailyTotals:2024 month:2]; QVERIFY(result.valid);
+        QCOMPARE(result.dailyTotals[@"2024-02-01"].integerValue, NSInteger(300));
+        QCOMPARE(result.dailyTotals[@"2024-02-29"].integerValue, NSInteger(0));
+        QVERIFY(![bridge monthDailyTotals:NSIntegerMax month:2].valid);
+        QVERIFY(![bridge monthDailyTotals:2024 month:13].valid);
+        DatabaseManager::instance()->close();
+        result = [bridge monthDailyTotals:2024 month:2]; QVERIFY(!result.valid);
+        QVERIFY(result.error.length > 0); QCOMPARE(result.dailyTotals.count, NSUInteger(0));
+        QVERIFY(![bridge dayTotalDuration:@"2024-02-29"].valid);
+    }
+}
+
 // 产品保证：中文、空串和超长字符串逐字保留，桥接不偷偷截断输入。
 void PTCoreBridgeTests::convertsStringsWithoutTruncation()
 {
@@ -252,6 +285,28 @@ void PTCoreBridgeTests::taskWriteAndReadEntryPoints() {
         QVERIFY([bridge duplicateTask:a date:iso error:&error]);
         QCOMPARE([bridge todayTasks].tasks.count, NSUInteger(1));
         QVERIFY(![bridge isRoutineGeneratedTask:a]);
+    }
+}
+// 产品保证：多选的批量完成、批量删除经桥接整批生效；有一条不存在时抛出服务给的原因，已选的其它任务原样不动。
+void PTCoreBridgeTests::taskBatchCompleteAndDelete() {
+    @autoreleasepool {
+        PTTaskBridge *bridge = [PTTaskBridge new]; NSError *error = nil;
+        NSString *iso = PTBridgeSupport::date(LogicalDay::today(AppSettings::instance()->dayStartHour()));
+        NSInteger a = [bridge createTask:@"批一" date:iso categoryId:-1 estimatedMinutes:0 notes:@"" error:&error];
+        NSInteger b = [bridge createTask:@"批二" date:iso categoryId:-1 estimatedMinutes:0 notes:@"" error:&error];
+        QVERIFY(a > 0 && b > 0 && error == nil);
+        QVERIFY((![bridge setTasksCompleted:@[@(a), @(999999)] completed:YES error:&error]));
+        QVERIFY(error != nil && error.localizedDescription.length > 0);
+        QVERIFY(![bridge task:a].tasks.firstObject.completed);
+        error = nil;
+        QVERIFY(([bridge setTasksCompleted:@[@(b), @(a)] completed:YES error:&error]));
+        QVERIFY([bridge task:a].tasks.firstObject.completed && [bridge task:b].tasks.firstObject.completed);
+        QVERIFY((![bridge deleteTasks:@[@(a), @(999999)] error:&error]));
+        QVERIFY(error != nil);
+        QCOMPARE([bridge todayTasks].tasks.count, NSUInteger(2));
+        error = nil;
+        QVERIFY(([bridge deleteTasks:@[@(a), @(b)] error:&error]));
+        QCOMPARE([bridge todayTasks].tasks.count, NSUInteger(0));
     }
 }
 // 产品保证：「已排」分钟逐天原样投影服务结果（加总口径在 C++），待删的那条按调用方给的编号排除；

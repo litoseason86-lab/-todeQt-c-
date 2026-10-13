@@ -6,10 +6,14 @@ public enum TrashFormat {
         "knowledge_gap": "知识缺口", "memo": "备忘录", "routine": "每日例行", "schedule_entry": "课表", "countdown_goal": "倒计时"]
     // 展示层只拆 ISO 前缀，不替服务校验日期；与 TrashFormat.js 和共享对照表保持一致。
     public static func parseIso(_ text: String) -> DateParts? {
-        guard text.range(of: "^[0-9]{4}-[0-9]{2}-[0-9]{2}", options: .regularExpression) != nil else { return nil }
-        let parts = text.prefix(10).split(separator: "-")
-        guard let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]) else { return nil }
-        return DateParts(year: year, month: month, day: day)
+        // 月图每一根柱都会拆两次日期；直接验证十个 ASCII 字节，避免逐项创建正则解析器。
+        // 这里只拆显示前缀，仍接受后缀和 99 月等旧显示边界，不替服务校验真实日历日期。
+        let bytes = Array(text.utf8.prefix(10))
+        guard bytes.count == 10, bytes[4] == 45, bytes[7] == 45,
+              [0, 1, 2, 3, 5, 6, 8, 9].allSatisfy({ bytes[$0] >= 48 && bytes[$0] <= 57 }) else { return nil }
+        let year = Int(bytes[0] - 48) * 1000 + Int(bytes[1] - 48) * 100 + Int(bytes[2] - 48) * 10 + Int(bytes[3] - 48)
+        return DateParts(year: year, month: Int(bytes[5] - 48) * 10 + Int(bytes[6] - 48),
+                         day: Int(bytes[8] - 48) * 10 + Int(bytes[9] - 48))
     }
     public static func pad(_ value: Int) -> String { value < 10 ? "0\(value)" : String(value) }
     public static func dateLabel(_ iso: String, today: String) -> String {

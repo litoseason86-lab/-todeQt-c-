@@ -57,6 +57,59 @@ QDate normalizeDate(const QVariant& value)
     return QDate();
 }
 
+// 在调用方已开启的事务里删掉一条任务，失败时把日志文案写进 failure、不回滚（回滚由调用方统一做）。
+// 单条删除与批量删除共用这一份步骤：先把任务写进废纸篓，再解除专注记录关联——解除之后就查不到挂在它上面的
+// 专注记录了，恢复时没法接回。写废纸篓失败整体回滚，宁可删不掉，也不能删了却没进废纸篓。
+bool removeTaskInTransaction(QSqlDatabase& db, int taskId, QString* failure)
+{
+    QString trashError;
+    if (!TrashStore::captureTask(db, taskId, &trashError)) {
+        // 任务不存在时保持原有的日志文案；其余是写废纸篓失败。
+        *failure = trashError == TrashStore::kMissingRecord
+            ? QStringLiteral("Failed to delete task: task not found %1").arg(taskId)
+            : QStringLiteral("Failed to move task to trash: %1").arg(trashError);
+        return false;
+    }
+
+    // 专注记录是历史数据，删除任务时只解除关联，不让记录跟着任务一起删除。
+    QSqlQuery detachSessions(db);
+    detachSessions.prepare(QStringLiteral("UPDATE focus_sessions SET task_id = NULL WHERE task_id = :id"));
+    detachSessions.bindValue(QStringLiteral(":id"), taskId);
+    if (!detachSessions.exec()) {
+        *failure = QStringLiteral("Failed to detach focus sessions before deleting task: %1")
+                       .arg(detachSessions.lastError().text());
+        return false;
+    }
+
+    QSqlQuery deleteQuery(db);
+    deleteQuery.prepare(QStringLiteral("DELETE FROM tasks WHERE id = :id"));
+    deleteQuery.bindValue(QStringLiteral(":id"), taskId);
+    if (!deleteQuery.exec()) {
+        *failure = QStringLiteral("Failed to delete task: %1").arg(deleteQuery.lastError().text());
+        return false;
+    }
+    if (deleteQuery.numRowsAffected() == 0) {
+        *failure = QStringLiteral("Failed to delete task: task not found %1").arg(taskId);
+        return false;
+    }
+    return true;
+}
+
+// 批量接口的编号清单：必须全是正整数且不重复，否则整批拒绝（不写库）。
+bool collectTaskIds(const QVariantList& values, QList<int>* ids)
+{
+    QSet<int> seen;
+    for (const QVariant& value : values) {
+        bool valid = false;
+        const int id = value.toInt(&valid);
+        if (!valid || id <= 0 || seen.contains(id))
+            return false;
+        seen.insert(id);
+        ids->append(id);
+    }
+    return true;
+}
+
 int clampEstimatedMinutes(int value)
 {
     // 越界一律夹紧：负数当未设置，超上限压到上限，绝不因预估值让任务本体保存失败。
@@ -728,41 +781,9 @@ bool TaskManager::deleteTask(int taskId)
         return false;
     }
 
-    // 先把任务写进废纸篓，再解除专注记录关联：解除之后就查不到挂在它上面的专注记录了，
-    // 恢复时没法接回。写入失败整体回滚——宁可删不掉，也不能删了却没进废纸篓。
-    QString trashError;
-    if (!TrashStore::captureTask(db, taskId, &trashError)) {
-        // 任务不存在时保持原有的日志文案；其余是写废纸篓失败。
-        if (trashError == TrashStore::kMissingRecord) {
-            qWarning() << "Failed to delete task: task not found" << taskId;
-        } else {
-            qWarning() << "Failed to move task to trash:" << trashError;
-        }
-        db.rollback();
-        return false;
-    }
-
-    // 专注记录是历史数据，删除任务时只解除关联，不让记录跟着任务一起删除。
-    QSqlQuery detachSessions(db);
-    detachSessions.prepare(QStringLiteral("UPDATE focus_sessions SET task_id = NULL WHERE task_id = :id"));
-    detachSessions.bindValue(QStringLiteral(":id"), taskId);
-    if (!detachSessions.exec()) {
-        qWarning() << "Failed to detach focus sessions before deleting task:" << detachSessions.lastError().text();
-        db.rollback();
-        return false;
-    }
-
-    QSqlQuery deleteQuery(db);
-    deleteQuery.prepare(QStringLiteral("DELETE FROM tasks WHERE id = :id"));
-    deleteQuery.bindValue(QStringLiteral(":id"), taskId);
-    if (!deleteQuery.exec()) {
-        qWarning() << "Failed to delete task:" << deleteQuery.lastError().text();
-        db.rollback();
-        return false;
-    }
-
-    if (deleteQuery.numRowsAffected() == 0) {
-        qWarning() << "Failed to delete task: task not found" << taskId;
+    QString failure;
+    if (!removeTaskInTransaction(db, taskId, &failure)) {
+        qWarning().noquote() << failure;
         db.rollback();
         return false;
     }
@@ -778,6 +799,81 @@ bool TaskManager::deleteTask(int taskId)
     emit taskDeleted(taskId);
     emit tasksChanged();
     emit TrashNotifier::instance()->changed();
+    return true;
+}
+
+bool TaskManager::deleteTasks(const QVariantList& taskIds)
+{
+    QList<int> ids;
+    if (!collectTaskIds(taskIds, &ids)) {
+        reportFailure(QStringLiteral("删除失败：任务编号无效或重复"));
+        return false;
+    }
+    if (ids.isEmpty())
+        return true;
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen() || !db.transaction()) {
+        reportFailure(QStringLiteral("删除失败：无法开始数据库事务"));
+        return false;
+    }
+    // 整批在一个事务里：任何一条删不掉（已被另一台删掉、写废纸篓失败）就全部回滚，
+    // 不会出现选中五条、删掉三条、剩两条还在列表里的半状态。
+    for (const int id : ids) {
+        QString failure;
+        if (!removeTaskInTransaction(db, id, &failure)) {
+            qWarning().noquote() << failure;
+            db.rollback();
+            reportFailure(QStringLiteral("删除失败：任务已变化，请刷新重试"));
+            return false;
+        }
+    }
+    if (!db.commit()) {
+        db.rollback();
+        reportFailure(QStringLiteral("删除失败：数据库提交失败"));
+        return false;
+    }
+    // 与单条删除同一顺序：逐条发删除事实让计时器先解绑，再发一次列表刷新。
+    for (const int id : ids)
+        emit taskDeleted(id);
+    emit tasksChanged();
+    emit TrashNotifier::instance()->changed();
+    return true;
+}
+
+bool TaskManager::setTasksCompleted(const QVariantList& taskIds, bool completed)
+{
+    const QString action = completed ? QStringLiteral("完成") : QStringLiteral("取消完成");
+    QList<int> ids;
+    if (!collectTaskIds(taskIds, &ids)) {
+        reportFailure(QStringLiteral("%1失败：任务编号无效或重复").arg(action));
+        return false;
+    }
+    if (ids.isEmpty())
+        return true;
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen() || !db.transaction()) {
+        reportFailure(QStringLiteral("%1失败：无法开始数据库事务").arg(action));
+        return false;
+    }
+    // 与 setTaskCompleted 同一口径：只改 completed 一列，完成记录原样保留。
+    // 已经是目标状态的任务也算命中（SQLite 按 WHERE 命中行计数），不当失败；不存在的任务让整批回滚。
+    for (const int id : ids) {
+        QSqlQuery query(db);
+        query.prepare(QStringLiteral("UPDATE tasks SET completed = :completed WHERE id = :id"));
+        query.bindValue(QStringLiteral(":completed"), completed ? 1 : 0);
+        query.bindValue(QStringLiteral(":id"), id);
+        if (!query.exec() || query.numRowsAffected() != 1) {
+            db.rollback();
+            reportFailure(QStringLiteral("%1失败：任务已变化，请刷新重试").arg(action));
+            return false;
+        }
+    }
+    if (!db.commit()) {
+        db.rollback();
+        reportFailure(QStringLiteral("%1失败：数据库提交失败").arg(action));
+        return false;
+    }
+    emit tasksChanged();
     return true;
 }
 

@@ -11,7 +11,8 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
 @MainActor @Observable public final class WeekStore {
     private var snapshotGroups: [WeekDayGroup] = []
     public var groups: [WeekDayGroup] {
-        snapshotGroups.map { group in
+        guard pendingDeletion.pendingTaskID > 0 else { return snapshotGroups }
+        return snapshotGroups.map { group in
             var visible = group
             visible.tasks.removeAll { $0.id == pendingDeletion.pendingTaskID }
             return visible
@@ -22,6 +23,13 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
     public private(set) var error = ""
     public private(set) var cursorTaskID = -1
     public private(set) var draggingTaskID = -1
+    public private(set) var selecting = false
+    public private(set) var selection: Set<Int> = []
+    public var allSelected: Bool {
+        let ids = groups.flatMap(\.tasks).map(\.id)
+        return !ids.isEmpty && ids.allSatisfy { selection.contains($0) }
+    }
+    public var orderedSelection: [Int] { groups.flatMap(\.tasks).map(\.id).filter { selection.contains($0) } }
     @ObservationIgnored private let tasks: any TaskBridgeProtocol
     @ObservationIgnored private let logicalDay: any LogicalDayBridgeProtocol
     @ObservationIgnored private let pendingDeletion: PendingDeletionStore
@@ -77,13 +85,16 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
             guard dates.count == 7 else { throw NSError(domain: "WeekStore", code: 1, userInfo: [NSLocalizedDescriptionKey: "周日期读取不完整"]) }
             let rows = try tasks.weekTasks(startDate: start)
             let planned = try tasks.plannedMinutes(from: start, days: 7, excluding: pendingDeletion.pendingTaskID)
+            // 一次分组保留服务给的组内次序，避免七列各自扫描整周任务。
+            let rowsByDate = Dictionary(grouping: rows, by: \.date)
             snapshotGroups = dates.enumerated().map { day, date in
-                WeekDayGroup(date: date, tasks: rows.filter { $0.date == date },
+                WeekDayGroup(date: date, tasks: rowsByDate[date] ?? [],
                              plannedMinutes: planned.indices.contains(day) ? max(0, planned[day]) : 0)
             }
             // 日界只带动仍跟随今日的选中项；手选日期保持，周被替换后失效选择退回今日。
             if selectedDate.isEmpty || selectedDate == logicalToday || !dates.contains(selectedDate) { selectedDate = logicalDay.today }
             weekStart = start; showsCurrentWeek = start == following; logicalToday = logicalDay.today; error = ""
+            selection.formIntersection(Set(groups.flatMap(\.tasks).map(\.id)))
             if task(id: cursorTaskID) == nil { cursorTaskID = -1 }
         } catch { self.error = error.localizedDescription }
     }
@@ -97,10 +108,11 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
     public private(set) var showsCurrentWeek = true
     public func shiftWeek(_ delta: Int) {
         guard delta != 0 else { return }
+        endSelection()
         do {
             let period = try logicalDay.period(anchor: weekStart, range: "week", shift: delta, logicalToday: logicalDay.today)
-            let following = try weekStartProvider?() ?? followedWeekStart
-            shownWeekStart = period.start == following ? nil : period.start
+            // refresh 会核对当前周并恢复跟随；这里不提前查询一次周复盘来只取周起点。
+            shownWeekStart = period.start
             refresh()
         } catch { self.error = error.localizedDescription }
     }
@@ -112,6 +124,42 @@ public struct WeekDayGroup: Equatable, Sendable, Identifiable {
         return "添加到周" + ["一", "二", "三", "四", "五", "六", "日"][index]
     }
     public func isToday(_ date: String) -> Bool { date == logicalToday }
+
+    public func beginSelection() {
+        // 先释放拖动和改期令牌，让被冻结的最新周列表补读后再进入多选。
+        cancelDrag(); endReschedule(); selecting = true; selection = []
+    }
+    public func endSelection() { selecting = false; selection = [] }
+    public func toggleSelection(_ id: Int) {
+        guard selecting, task(id: id) != nil else { return }
+        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+    }
+    public func toggleSelectAll() {
+        guard selecting else { return }
+        selection = allSelected ? [] : Set(groups.flatMap(\.tasks).map(\.id))
+    }
+    @discardableResult public func completeSelection(using actions: TaskActions) -> Bool {
+        let ids = orderedSelection
+        guard !ids.isEmpty, actions.complete(ids: ids) else { return false }
+        endSelection(); return true
+    }
+    @discardableResult public func deleteSelection(using actions: TaskActions) -> Bool {
+        let ids = orderedSelection
+        guard !ids.isEmpty, actions.delete(ids: ids) else { return false }
+        endSelection(); return true
+    }
+    @discardableResult public func rescheduleSelection(to date: String) -> Bool {
+        let ids = orderedSelection
+        guard !ids.isEmpty else { return false }
+        do { try tasks.move(ids: ids, date: date); endSelection(); return true }
+        catch { self.error = error.localizedDescription; return false }
+    }
+    @discardableResult public func moveSelectionToToday() -> Bool {
+        let ids = orderedSelection
+        guard !ids.isEmpty else { return false }
+        do { try tasks.moveToToday(ids: ids); endSelection(); return true }
+        catch { self.error = error.localizedDescription; return false }
+    }
 
     public func canAdd(on date: String) -> Bool {
         do { return try logicalDay.relation(date, to: logicalDay.today) != .earlier }

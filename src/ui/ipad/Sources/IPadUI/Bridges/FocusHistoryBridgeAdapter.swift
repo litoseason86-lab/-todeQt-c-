@@ -31,6 +31,9 @@ import PTBridge
     func monthSessions(year: Int, month: Int) throws -> [SessionValue] { try values(native.monthSessions(year, month: month)) }
     func daySessions(date: String) throws -> [SessionValue] { try values(native.daySessions(date)) }
     func dayTimeline(date: String) throws -> [SessionValue] { try values(native.dayTimeline(date)) }
+    func monthDailyTotals(year: Int, month: Int) throws -> [String: Int] {
+        try checked(native.monthDailyTotals(year, month: month)).dailyTotals.mapValues(\.intValue)
+    }
     func dayTotalDuration(date: String) throws -> Int { try checked(native.dayTotalDuration(date)).count }
     func invalidSessionCount() throws -> Int { try checked(native.invalidSessionCount()).count }
     func taskOptions(date: String) throws -> [SessionTaskOption] {

@@ -7,6 +7,8 @@ struct DashboardView: View {
     @Environment(CoreBridges.self) private var core
     @Environment(ShellStore.self) private var shell
     @State private var sheet: DashboardSheet?
+    // 任务详情从行尾以浮层弹出（TaskRow），这里只记哪一行开着。
+    @State private var detailTaskID: Int?
 
     var body: some View {
         GeometryReader { geometry in
@@ -24,7 +26,7 @@ struct DashboardView: View {
                     }
                     .plainRow(insets: EdgeInsets(top: 0, leading: 4, bottom: 12, trailing: 4))
                 }
-                // 定稿：「今日任务」卡片，标题行右边「全部任务 ›」，下面前六条，行尾只有 ▶。
+                // 定稿：「今日任务」卡片，标题行右边「全部任务 ›」，下面前六条；行尾开始按钮与今日任务页一致（不放 ⓘ）。
                 HStack {
                     Text("今日任务").font(.system(size: 17, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
                     Spacer()
@@ -41,10 +43,13 @@ struct DashboardView: View {
                     ForEach(Array(store.topTasks.enumerated()), id: \.element.id) { index, task in
                         VStack(spacing: 0) {
                             if index > 0 { CardDivider() }
-                            TaskRow(task: task, actions: core.taskActions, allowsStart: !task.completed, activeFocus: focus.snapshot,
-                                    minimal: true, onEdit: { sheet = .detail(task.id) }, onCompleteWithNote: { sheet = .note(task.id) },
+                            TaskRow(task: task, actions: core.taskActions, allowsStart: !task.completed, activeFocusTaskID: focus.activeSession?.taskID ?? -1,
+                                    compactAppearance: narrow, minimal: true, detailTaskID: $detailTaskID,
+                                    onCompleteWithNote: { sheet = .note(task.id) },
                                     onReschedule: nil, onCopyToToday: nil)
-                                .padding(.horizontal, 4).padding(.vertical, 2)
+                                // 宽窗没有 ⓘ 垫在右边，胶囊右缘与标题行「全部任务 ›」对齐（离卡片边 16）；
+                                // 窄窗右边距取今日任务页的 8，▶ 与「专注中」落在和今日任务页相同的位置。
+                                .padding(.leading, 4).padding(.trailing, narrow ? 8 : 16).padding(.vertical, 2)
                         }
                         .cardRow(index == store.topTasks.count - 1 ? .bottom : .middle)
                     }
@@ -58,7 +63,6 @@ struct DashboardView: View {
         .onDisappear { store.stop() }
         .sheet(item: $sheet) { item in
             switch item {
-            case .detail(let id): TaskDetailSheet(taskID: id, core: core, shell: shell)
             case .note(let id): TaskCompletionNoteSheet(taskID: id, core: core, shell: shell)
             }
         }
@@ -87,4 +91,4 @@ struct DashboardView: View {
     }
 }
 
-private enum DashboardSheet: Identifiable { case detail(Int), note(Int); var id: String { switch self { case .detail(let id): "d\(id)"; case .note(let id): "n\(id)" } } }
+private enum DashboardSheet: Identifiable { case note(Int); var id: String { switch self { case .note(let id): "n\(id)" } } }

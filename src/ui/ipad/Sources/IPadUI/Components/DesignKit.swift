@@ -238,7 +238,7 @@ struct PageBackground: ViewModifier {
     func body(content: Content) -> some View {
         content
             .scrollContentBackground(shell.selectedTheme != nil ? .hidden : .visible)
-            .background { WallpaperBackground(theme: shell.snapshot.backgroundTheme, enabled: shell.wallpaperVisible) }
+            .background { WallpaperBackground(theme: shell.appearanceState.backgroundTheme, enabled: shell.wallpaperVisible) }
     }
 }
 
@@ -259,4 +259,54 @@ struct SheetChrome: ViewModifier {
 }
 extension View {
     func sheetChrome() -> some View { modifier(SheetChrome()) }
+}
+
+// 跟随外壳选中页：只在这个修饰器里读选中页，页面 body 不因每次切页重算（10-12 测速：知识缺口、备忘录两页
+// 原来在 body 里读它，切到任何一页都会整页重算一次）。
+private struct ShellSelectionObserver: ViewModifier {
+    let shell: ShellStore
+    let action: (PageID) -> Void
+    func body(content: Content) -> some View {
+        content.onChange(of: shell.selection) { _, page in action(page) }
+    }
+}
+extension View {
+    func onShellSelectionChange(_ shell: ShellStore, perform action: @escaping (PageID) -> Void) -> some View {
+        modifier(ShellSelectionObserver(shell: shell, action: action))
+    }
+}
+
+// 多选模式底部浮出的操作条（今日任务、本周计划、废纸篓共用）：半透明白胶囊，按钮上图标下文字。
+// 放在页面的 safeAreaInset 里，列表最后几行能滚到它上方，不被挡住。
+struct SelectionActionBar<Content: View>: View {
+    @ViewBuilder var content: Content
+    var body: some View {
+        HStack(spacing: 8) { content }
+            .padding(.horizontal, 14).frame(height: 64)
+            .background(ThemeColors.surface.opacity(0.94), in: Capsule())
+            .shadow(color: ThemeColors.shadow.opacity(0.16), radius: 15, y: 12)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+struct SelectionBarButton: View {
+    let title: String
+    let systemImage: String
+    var role: ButtonRole? = nil
+    let action: () -> Void
+    @Environment(\.isEnabled) private var enabled
+    var body: some View {
+        Button(role: role, action: action) {
+            VStack(spacing: 3) {
+                Image(systemName: systemImage).font(.system(size: 19, weight: .semibold))
+                Text(title).font(.system(size: 13, weight: .semibold))
+            }
+            .frame(minWidth: 72, minHeight: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(role == .destructive ? ThemeColors.danger : ThemeColors.accentInk)
+        .opacity(enabled ? 1 : 0.4)
+    }
 }

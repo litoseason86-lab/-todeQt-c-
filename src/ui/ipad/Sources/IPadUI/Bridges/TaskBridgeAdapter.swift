@@ -54,6 +54,8 @@ import PTBridge
     func move(id: Int, date: String) throws { try bridge.moveTask(id, toDate: date) }
     func move(ids: [Int], date: String) throws { try bridge.moveTasks(ids.map { NSNumber(value: $0) }, toDate: date) }
     func moveToToday(ids: [Int]) throws { try bridge.moveTasks(toToday: ids.map { NSNumber(value: $0) }) }
+    func setCompleted(ids: [Int], completed: Bool) throws { try bridge.setTasksCompleted(ids.map { NSNumber(value: $0) }, completed: completed) }
+    func delete(ids: [Int]) throws { try bridge.deleteTasks(ids.map { NSNumber(value: $0) }) }
     func duplicate(id: Int, date: String) throws { try bridge.duplicateTask(id, date: date) }
     func isRoutineGenerated(id: Int) -> Bool { bridge.isRoutineGeneratedTask(id) }
     var overdueRolloverDays: Int { bridge.overdueRolloverDays }

@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 @testable import IPadCore
 
@@ -27,9 +28,14 @@ import XCTest
 }
 
 @MainActor final class ShellStoreTests: XCTestCase {
-    // 产品保证：窄窗记录直达今日专注，本周只从更多进入，宽窗五个常用页保持定稿顺序。
+    // 产品保证：窄窗记录直达今日专注，本周只从更多进入；宽窗侧栏收起后顶部只有仪表盘、专注、今日专注（按此顺序），
+    // 今日任务、本周不放进顶部和侧栏列表，但仍能从侧栏摘要块进入。
     func testR1TabMappingKeepsRecordsDirectAndWeekInMore() {
-        XCTAssertEqual(PageID.regularTabs, [.today, .focus, .week, .todayFocus, .dashboard])
+        XCTAssertEqual(PageID.collapsedBarTabs, [.dashboard, .focus, .todayFocus])
+        XCTAssertEqual(PageID.tileOnlyTabs, [.today, .week])
+        XCTAssertTrue(Set(PageID.tileOnlyTabs).isSubset(of: PageID.summary))
+        XCTAssertTrue(Set(PageID.collapsedBarTabs).isDisjoint(with: PageID.tileOnlyTabs))
+        XCTAssertEqual(Set(PageID.regularTabs), Set(PageID.collapsedBarTabs + PageID.tileOnlyTabs))
         XCTAssertEqual(PageID.primary, [.today, .focus, .todayFocus, .dashboard])
         XCTAssertEqual(ShellStore.navigationTarget(for: .todayFocus, size: .compact), .page(.todayFocus))
         XCTAssertEqual(ShellStore.navigationTarget(for: .week, size: .compact), .more(path: [.week]))
@@ -118,18 +124,65 @@ import XCTest
         bridge.timerSnapshot.elapsedSeconds = 99; bridge.onTimerChanged?()
         XCTAssertEqual(store.snapshot.elapsedSeconds, 19); XCTAssertEqual(store.errorMessage, "计时读取失败")
     }
+    // 产品保证：计时每秒跳动、以及服务通知后读回的内容没变时，只读外观、计数、阻断状态的界面不会被通知重算
+    // （10-12 真机测速：原来每跳一次所有页面的外壳都重算，主线程忙约 155 毫秒）；真变了的那一项照常通知，别的项不跟着通知。
+    func testTimerTicksAndUnchangedRefreshDoNotInvalidateOtherState() {
+        let bridge = FakeShellBridge()
+        bridge.snapshot.appearance = "theme"; bridge.snapshot.backgroundTheme = "jiangnan"
+        bridge.snapshot.todayPendingCount = 3; bridge.snapshot.dueGapCount = 1
+        let store = ShellStore(bridge: bridge)
+        // 跟踪期间读过的属性一旦被写就记一笔；onChange 在写入的那一刻同步调用。
+        final class Flag: @unchecked Sendable { var value = false }
+        func notifies(_ read: @escaping () -> Void, when action: () -> Void) -> Bool {
+            let flag = Flag()
+            withObservationTracking(read) { flag.value = true }
+            action()
+            return flag.value
+        }
+        let others = { _ = store.appearanceState; _ = store.details; _ = store.operationBlocksUI; _ = store.dueGapCount }
+        // 前提：跟踪有效，计时读数真变了会通知读计时的地方。
+        bridge.timerSnapshot.hasTimer = true; bridge.timerSnapshot.elapsedSeconds = 1
+        XCTAssertTrue(notifies({ _ = store.timer }, when: { bridge.onTimerChanged?() }))
+        // 计时跳一秒：其它各项都不通知，hasTimer 没变也不通知。
+        bridge.timerSnapshot.elapsedSeconds = 2
+        XCTAssertFalse(notifies({ others(); _ = store.hasTimer }, when: { bridge.onTimerChanged?() }))
+        // 服务通知后整份重读、只有计时秒数不同：外观、其余字段等都不通知。
+        bridge.snapshot.hasTimer = true; bridge.snapshot.elapsedSeconds = 3
+        XCTAssertFalse(notifies(others, when: { bridge.onChanged?() }))
+        // 计数变了只通知其余字段，外观不跟着通知；换主题才通知外观。
+        bridge.snapshot.todayPendingCount = 4
+        XCTAssertTrue(notifies({ _ = store.details }, when: { bridge.onChanged?() }))
+        bridge.snapshot.todayPendingCount = 5
+        XCTAssertFalse(notifies({ _ = store.appearanceState }, when: { bridge.onChanged?() }))
+        bridge.snapshot.backgroundTheme = "warm"
+        XCTAssertTrue(notifies({ _ = store.appearanceState }, when: { bridge.onChanged?() }))
+        // 兼容入口仍拼出完整快照。
+        XCTAssertEqual(store.snapshot.backgroundTheme, "warm"); XCTAssertEqual(store.snapshot.todayPendingCount, 5)
+        XCTAssertEqual(store.snapshot.dueGapCount, 1); XCTAssertEqual(store.snapshot.elapsedSeconds, 3)
+    }
     // 产品保证：只有专注页的工具栏捕获才带计时任务，其它页面保持无来源。
     func testCaptureSourceOnlyOnFocusPage() {
         let bridge = FakeShellBridge()
         let store = ShellStore(bridge: bridge)
-        let host = UUID(); XCTAssertTrue(store.claimCaptureHost(host))
-        store.captureSourceProvider = { ShellCaptureSource(taskID: 41, categoryID: 3) }
-        store.select(.dashboard); store.presentCapture(); store.captureTitle = "无来源"
+        var sourceReads = 0
+        store.captureSourceProvider = { sourceReads += 1; return ShellCaptureSource(taskID: 41, categoryID: 3) }
+        store.select(.dashboard)
+        XCTAssertEqual(store.selection, .dashboard)
+        store.presentCapture(from: .page(.focus)); store.captureTitle = "来自任务"
+        XCTAssertTrue(store.isCapturePresented(at: .page(.focus)))
+        XCTAssertEqual(sourceReads, 1)
         XCTAssertTrue(store.capture())
-        store.select(.focus); store.presentCapture(); store.captureTitle = "来自任务"
-        XCTAssertTrue(store.capture())
-        XCTAssertTrue(bridge.calls.contains("capture:无来源:-1:-1"))
-        XCTAssertTrue(bridge.calls.contains("capture:来自任务:3:41"))
+        store.select(.focus)
+        XCTAssertEqual(store.selection, .focus)
+        for (anchor, title) in [(CaptureAnchor.page(.dashboard), "普通页"), (.search, "搜索"), (.moreRoot, "更多")] {
+            store.presentCapture(from: anchor); store.captureTitle = title
+            XCTAssertTrue(store.isCapturePresented(at: anchor))
+            XCTAssertTrue(store.capture())
+        }
+        XCTAssertEqual(sourceReads, 1)
+        XCTAssertEqual(bridge.calls.filter { $0.hasPrefix("capture:") }, [
+            "capture:来自任务:3:41", "capture:普通页:-1:-1", "capture:搜索:-1:-1", "capture:更多:-1:-1"
+        ])
     }
     // 产品保证：读取失败保留上一份有效摘要，重试成功再清错并更新，失败不伪装为零任务。
     func testReadFailureKeepsSnapshotAndRetryClearsError() {
@@ -152,8 +205,8 @@ import XCTest
         let bridge = FakeShellBridge()
         bridge.snapshot.operationBlocksUI = true
         let store = ShellStore(bridge: bridge)
-        XCTAssertTrue(store.claimCaptureHost(UUID()))
-        store.select(.memo); store.presentCapture()
+        XCTAssertTrue(store.snapshot.operationBlocksUI)
+        store.select(.memo); store.presentCapture(from: .page(.today))
         store.captureTitle = "不能写入"
         XCTAssertFalse(store.capture())
         XCTAssertTrue(bridge.calls.isEmpty)
@@ -193,7 +246,6 @@ import XCTest
         let bridge = FakeShellBridge()
         bridge.captureResult = -1
         let store = ShellStore(bridge: bridge)
-        XCTAssertTrue(store.claimCaptureHost(UUID()))
         store.presentCapture()
         store.captureTitle = " 中文问题 "
         XCTAssertFalse(store.capture())
@@ -241,7 +293,6 @@ import XCTest
     func testSearchShownOverFocusUsesSearchContext() {
         let bridge = FakeShellBridge(); bridge.snapshot.hasTimer = true
         let store = ShellStore(bridge: bridge)
-        XCTAssertTrue(store.claimCaptureHost(UUID()))
         store.captureSourceProvider = { ShellCaptureSource(taskID: 41, categoryID: 3) }
         store.select(.focus)
         store.openSearch()
@@ -254,41 +305,83 @@ import XCTest
         XCTAssertEqual(bridge.calls.filter { $0.hasPrefix("capture") }, ["capture:搜索页:-1:-1", "capture:专注页:3:41"])
     }
 
-    // 产品保证：捕获宿主交接按身份释放，旧宿主的迟到回调和关闭回调不能影响新宿主。
-    func testCaptureHostHandoffIgnoresStaleReleaseAndDismiss() {
-        let store = ShellStore(bridge: FakeShellBridge()); let old = UUID(); let current = UUID()
-        XCTAssertTrue(store.claimCaptureHost(old)); XCTAssertTrue(store.claimCaptureHost(current))
+    // 产品保证：切页和开关搜索关闭记一笔，未提交的文字保留。
+    func testNavigationClosesCaptureAndPreservesDraft() {
+        let store = ShellStore(bridge: FakeShellBridge())
+        store.select(.today)
+        store.captureTitle = "尚未记下的草稿"
         store.presentCapture()
-        XCTAssertTrue(store.capturePresented(for: current)); XCTAssertFalse(store.capturePresented(for: old))
-        store.releaseCaptureHost(old)
-        XCTAssertEqual(store.captureHostID, current)
-        store.captureDismissed(by: old)
         XCTAssertTrue(store.capturePresented)
-        store.captureDismissed(by: current)
+        store.select(.dashboard)
+        XCTAssertFalse(store.capturePresented)
+        XCTAssertEqual(store.captureTitle, "尚未记下的草稿")
+        store.presentCapture()
+        XCTAssertTrue(store.capturePresented)
+        store.openSearch()
+        XCTAssertFalse(store.capturePresented)
+        XCTAssertEqual(store.captureTitle, "尚未记下的草稿")
+        store.presentCapture()
+        XCTAssertTrue(store.capturePresented)
+        store.closeSearch()
+        XCTAssertFalse(store.capturePresented)
+        XCTAssertEqual(store.captureTitle, "尚未记下的草稿")
+    }
+
+    // 产品保证：记一笔只在打开它的位置显示，关闭后任何位置都不显示。
+    func testCaptureOnlyAppearsAtOpeningAnchor() {
+        let store = ShellStore(bridge: FakeShellBridge())
+        XCTAssertFalse(store.capturePresented)
+        store.presentCapture(from: .page(.today))
+        XCTAssertTrue(store.capturePresented)
+        XCTAssertEqual(store.captureAnchor, .page(.today))
+        XCTAssertTrue(store.isCapturePresented(at: .page(.today)))
+        XCTAssertFalse(store.isCapturePresented(at: .page(.dashboard)))
+        XCTAssertFalse(store.isCapturePresented(at: .search))
+        XCTAssertFalse(store.isCapturePresented(at: .moreRoot))
+        store.dismissCapture()
+        XCTAssertFalse(store.isCapturePresented(at: .page(.today)))
+    }
+
+    // 产品保证：旧位置迟到的关闭回调不关闭新位置刚打开的记一笔。
+    func testCaptureDismissIgnoresOldAnchor() {
+        let store = ShellStore(bridge: FakeShellBridge())
+        store.select(.today)
+        store.presentCapture(from: .page(.today))
+        XCTAssertTrue(store.isCapturePresented(at: .page(.today)))
+        store.select(.dashboard)
+        XCTAssertFalse(store.capturePresented)
+        store.presentCapture(from: .page(.dashboard))
+        XCTAssertTrue(store.isCapturePresented(at: .page(.dashboard)))
+        store.captureDismissed(at: .page(.today))
+        XCTAssertTrue(store.isCapturePresented(at: .page(.dashboard)))
+        store.captureDismissed(at: .page(.dashboard))
         XCTAssertFalse(store.capturePresented)
     }
 
-    // 产品保证：没有当前页宿主时记一笔不打开，宿主释放后重新认领仍可正常打开。
-    func testCaptureRequiresLiveHost() {
-        let store = ShellStore(bridge: FakeShellBridge()); let first = UUID(); let second = UUID()
-        store.presentCapture()
+    // 产品保证：同一处的按钮先开后关，取消保留草稿；快捷键在搜索中只打开搜索处的浮层。
+    func testCaptureToggleAndDismissPreserveDraft() {
+        let store = ShellStore(bridge: FakeShellBridge())
+        store.captureTitle = "草稿"
         XCTAssertFalse(store.capturePresented)
-        XCTAssertTrue(store.claimCaptureHost(first)); store.presentCapture()
-        XCTAssertTrue(store.capturePresented)
-        store.releaseCaptureHost(first); store.capturePresented = false
-        store.presentCapture(); XCTAssertFalse(store.capturePresented)
-        XCTAssertTrue(store.claimCaptureHost(second)); store.presentCapture()
-        XCTAssertTrue(store.capturePresented)
-    }
-
-    // 产品保证：取消只关闭捕获表单并保留草稿，宿主按钮再次点按切换开关。
-    func testCaptureDismissAndTogglePreserveDraft() {
-        let store = ShellStore(bridge: FakeShellBridge()); let host = UUID()
-        XCTAssertTrue(store.claimCaptureHost(host)); store.captureTitle = "草稿"; store.presentCapture()
-        XCTAssertTrue(store.capturePresented); store.dismissCapture()
-        XCTAssertFalse(store.capturePresented); XCTAssertEqual(store.captureTitle, "草稿")
-        store.toggleCapture(for: host); XCTAssertTrue(store.capturePresented)
-        store.toggleCapture(for: host); XCTAssertFalse(store.capturePresented)
+        store.toggleCapture(from: .page(.today))
+        XCTAssertTrue(store.isCapturePresented(at: .page(.today)))
+        store.toggleCapture(from: .page(.today))
+        XCTAssertFalse(store.capturePresented)
+        XCTAssertEqual(store.captureTitle, "草稿")
+        store.toggleCapture(from: .moreRoot)
+        XCTAssertTrue(store.isCapturePresented(at: .moreRoot))
+        store.dismissCapture()
+        XCTAssertFalse(store.capturePresented)
+        XCTAssertEqual(store.captureTitle, "草稿")
+        store.select(.focus)
+        store.openSearch()
+        XCTAssertTrue(store.searchShown)
+        XCTAssertEqual(store.selection, .focus)
+        store.presentCapture()
+        XCTAssertEqual(store.captureAnchor, .search)
+        XCTAssertTrue(store.isCapturePresented(at: .search))
+        store.presentCapture()
+        XCTAssertTrue(store.isCapturePresented(at: .search))
     }
 
     // 产品保证：窄窗口的非主页面只能通过「更多」承载，宽窗口仍直接选中对应页面。

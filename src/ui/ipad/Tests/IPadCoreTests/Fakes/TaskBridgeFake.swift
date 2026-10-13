@@ -16,6 +16,7 @@ import IPadCore
     var overdue: [TaskValue]?
     var failing: Set<String> = []
     var calls: [(name: String, ids: [Int], text: [String], numbers: [Int])] = []
+    var onWrite: (() -> Void)?
     var changes: [(Int, TaskChanges)] = []
     private func record(_ name: String, ids: [Int] = [], text: [String] = [], numbers: [Int] = []) throws {
         calls.append((name, ids, text, numbers)); if let error { throw error }
@@ -39,13 +40,15 @@ import IPadCore
     func create(title: String, date: String, categoryID: Int, estimatedMinutes: Int, notes: String) throws -> Int {
         try record("create", text: [title, date, notes], numbers: [categoryID, estimatedMinutes]); return createdID
     }
-    func update(id: Int, changes: TaskChanges) throws { self.changes.append((id, changes)); try record("update", ids: [id]) }
-    func setCompleted(id: Int, completed: Bool) throws { try record("setCompleted", ids: [id], numbers: [completed ? 1 : 0]) }
+    func update(id: Int, changes: TaskChanges) throws { self.changes.append((id, changes)); try record("update", ids: [id]); onWrite?() }
+    func setCompleted(id: Int, completed: Bool) throws { try record("setCompleted", ids: [id], numbers: [completed ? 1 : 0]); onWrite?() }
     func complete(id: Int, note: String) throws { try record("complete", ids: [id], text: [note]) }
     func move(id: Int, before: Int) throws { try record("moveBefore", ids: [id, before]) }
     func move(id: Int, date: String) throws { try record("moveDate", ids: [id], text: [date]) }
     func move(ids: [Int], date: String) throws { try record("moveDates", ids: ids, text: [date]) }
     func moveToToday(ids: [Int]) throws { try record("moveToday", ids: ids) }
+    func setCompleted(ids: [Int], completed: Bool) throws { try record("setCompletedBatch", ids: ids, numbers: [completed ? 1 : 0]) }
+    func delete(ids: [Int]) throws { try record("deleteBatch", ids: ids) }
     func duplicate(id: Int, date: String) throws { try record("duplicate", ids: [id], text: [date]) }
     func isRoutineGenerated(id: Int) -> Bool { calls.append(("routine", [id], [], [])); return routine }
     func plannedMinutes(from start: String, days: Int, excluding taskID: Int) throws -> [Int] {

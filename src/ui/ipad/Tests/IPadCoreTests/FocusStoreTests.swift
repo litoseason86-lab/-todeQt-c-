@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 @testable import IPadCore
 
@@ -75,6 +76,36 @@ import XCTest
     }
     private func lastMode(_ r: Rig) -> [Int] {
         r.settings.calls.compactMap { if $0.0 == "setLastMode", case .integer(let v) = $0.1 { v } else { nil } }
+    }
+
+    // MARK: 列表页订阅的会话摘要
+
+    // 产品保证：计时每秒跳动时，今日任务、仪表盘、今日专注这些只读「在专注哪个任务」的列表页不会被通知重算
+    // （秒数由行里的小视图单独读）；会话开始、换任务、结束时照常通知。
+    func testTickDoesNotInvalidateActiveSessionButTaskChangeDoes() {
+        let r = rig([task(1), task(7)])
+        final class Flag: @unchecked Sendable { var value = false }
+        func notifies(_ action: () -> Void) -> Bool {
+            let flag = Flag()
+            withObservationTracking({ _ = r.store.activeSession }) { flag.value = true }
+            action()
+            return flag.value
+        }
+        // 前提：没有会话时为空；开始一段会话会通知。
+        XCTAssertNil(r.store.activeSession)
+        XCTAssertTrue(notifies { setTimer(r, mode: 0, active: true, taskID: 1, title: "任务1", elapsed: 10) })
+        XCTAssertEqual(r.store.activeSession?.taskID, 1)
+        // 同一会话里秒数在走：snapshot 变了，activeSession 不通知。
+        XCTAssertFalse(notifies {
+            r.focus.focusSnapshot.elapsedSeconds = 11; r.focus.onTick?()
+            r.focus.focusSnapshot.elapsedSeconds = 12; r.focus.onTick?()
+        })
+        XCTAssertEqual(r.store.snapshot.elapsedSeconds, 12)
+        // 换任务、结束会话都通知。
+        XCTAssertTrue(notifies { setTimer(r, mode: 0, active: true, taskID: 7, title: "任务7", elapsed: 0) })
+        XCTAssertEqual(r.store.activeSession?.taskID, 7)
+        XCTAssertTrue(notifies { setTimer(r, mode: 0, running: false, active: false) })
+        XCTAssertNil(r.store.activeSession)
     }
 
     // MARK: 入口分流（openTask / FocusFlowHook）

@@ -34,6 +34,14 @@ public struct ShellSnapshot: Equatable, Sendable {
     public init() {}
 }
 
+// 外观三项：主题、外观模式、壁纸开关。各页外壳修饰与壁纸只读这一项（10-12 拆出，见 ShellStore.appearanceState）。
+public struct ShellAppearanceState: Equatable, Sendable {
+    public var backgroundTheme = "warm"
+    public var appearance = "system"
+    public var useWallpaper = false
+    public init() {}
+}
+
 public struct ShellTimerSnapshot: Equatable, Sendable {
     public var hasTimer = false
     public var running = false
@@ -77,6 +85,10 @@ public struct ShellCaptureSource: Equatable, Sendable {
     public init(taskID: Int = -1, categoryID: Int = -1) { self.taskID = taskID; self.categoryID = categoryID }
 }
 
+public enum CaptureAnchor: Hashable, Sendable {
+    case page(PageID), search, moreRoot
+}
+
 public struct ShellToast: Identifiable {
     public let id: UUID
     public let message: String
@@ -85,7 +97,39 @@ public struct ShellToast: Identifiable {
 
 @MainActor @Observable
 public final class ShellStore {
-    public private(set) var snapshot = ShellSnapshot()
+    // 10-12 真机测速：快照原是一个整体属性，计时每秒改一次、每次写任务也整份重写，读它的视图（外壳根视图、
+    // 每页的外壳修饰）就跟着整体重算：模拟计时跳一下主线程忙约 155 毫秒、动到 14 个外壳修饰。
+    // 现按变化频率拆开存，视图只读自己需要的那几项；每项写入前先比较，值没变就不写
+    // （Observation 不比较新旧值，照写一样会通知所有读过它的视图）。
+    public private(set) var appearanceState = ShellAppearanceState()
+    public private(set) var operationBlocksUI = false
+    public private(set) var operationText = ""
+    public private(set) var dueGapCount = 0
+    public private(set) var hasTimer = false
+    // 计时读数每秒都变；目前没有视图读它，留给需要读数的地方单独订阅。
+    public private(set) var timer = ShellTimerSnapshot()
+    // 其余字段（计数、主目标、侧栏顺序、选中页偏好等）：只在服务通知变化后整份重读时更新，计时跳动不碰它；
+    // 上面单独存放的几项在这里一律是默认值，读它们要用各自的属性。
+    public private(set) var details = ShellSnapshot()
+    // 兼容入口：按上面各项拼回整份快照，给测试和动作里的判断用。视图别读它——读它等于同时订阅了所有项。
+    public var snapshot: ShellSnapshot {
+        var value = details
+        value.backgroundTheme = appearanceState.backgroundTheme
+        value.appearance = appearanceState.appearance
+        value.useWallpaper = appearanceState.useWallpaper
+        value.operationBlocksUI = operationBlocksUI
+        value.operationText = operationText
+        value.dueGapCount = dueGapCount
+        value.hasTimer = timer.hasTimer
+        value.running = timer.running
+        value.mode = timer.mode
+        value.phase = timer.phase
+        value.elapsedSeconds = timer.elapsedSeconds
+        value.remainingSeconds = timer.remainingSeconds
+        value.currentTaskId = timer.currentTaskId
+        value.taskTitle = timer.taskTitle
+        return value
+    }
     public private(set) var selection: PageID = .dashboard
     public private(set) var errorMessage = ""
     public private(set) var toast: ShellToast?
@@ -95,10 +139,9 @@ public final class ShellStore {
     public private(set) var morePages: [PageID] = PageID.ordered([]).filter { !PageID.primary.contains($0) }
     public var captureTitle = ""
     public var capturePresented = false
-    // 记一笔浮层的唯一宿主：每页工具栏都有一个记一笔按钮，切走的标签页、「更多」里压在下层的列表视图仍然活着，
-    // 多份浮层绑同一个开关时由谁弹出、谁关闭不确定（10-12 用户真机报：打开后关不掉、小窗口弹不出）。
-    // 最后出现的页面认领宿主，只有它能弹出和关闭；新页面的 onAppear 可能早于旧页面的 onDisappear，所以释放要核对身份。
-    public private(set) var captureHostID: UUID?
+    // 打开位置固定到这次展示：10-12 真机复现切页后开关仍为 true、宿主丢失或落到不可见页面，后续弹窗也被挡住。
+    // TabView / NavigationStack 的 onAppear、onDisappear 顺序不能用来认领宿主；显式记录位置并在导航时关闭。
+    public private(set) var captureAnchor: CaptureAnchor?
     // 专注页计时进行中无操作时，右上角「记一笔」随计时按钮一起淡出（隐藏与否由 FocusStore 判断，
     // 专注页在动画事务里写进来、离页时清掉）；其它页不会写它。
     public var focusChromeHidden = false
@@ -108,7 +151,7 @@ public final class ShellStore {
     // 历史页只发日期和切页意图；今日专注页消费一次，业务记录读取仍由该页 Store 负责。
     public private(set) var requestedFocusDate: String?
     public func openFocusHistory(date: String) {
-        guard !snapshot.operationBlocksUI else { return }
+        guard !operationBlocksUI else { return }
         requestedFocusDate = date
         select(.todayFocus)
     }
@@ -137,25 +180,25 @@ public final class ShellStore {
         bridge.onTimerChanged = { [weak self] in self?.refreshTimer() }
         bridge.onFailure = { [weak self] message in self?.errorMessage = message }
         refresh()
-        selection = PageID(rawValue: snapshot.selectedPage) ?? .dashboard
+        selection = PageID(rawValue: details.selectedPage) ?? .dashboard
     }
 
-    public var orderedPages: [PageID] { PageID.ordered(snapshot.sidebarOrder) }
+    public var orderedPages: [PageID] { PageID.ordered(details.sidebarOrder) }
     public func summaryTiles(focusTimeText: String) -> [ShellSummaryTile] {
         // 定稿摘要块写「时:分」（1:05）：块宽只放得下四五个数字，整句「1 小时 5 分」会被截断。计时中沿用计时器读数。
-        let minutes = max(0, snapshot.todayFocusedSeconds) / 60
-        let focusValue = snapshot.hasTimer ? focusTimeText : "\(minutes / 60):" + String(format: "%02d", minutes % 60)
-        let goalTitle = snapshot.hasPrimaryGoal ? snapshot.primaryGoalName : "目标倒计时"
-        let goalValue = snapshot.hasPrimaryGoal ? CountdownFormat.days(snapshot.primaryGoalDaysRemaining) : "—"
+        let minutes = max(0, details.todayFocusedSeconds) / 60
+        let focusValue = hasTimer ? focusTimeText : "\(minutes / 60):" + String(format: "%02d", minutes % 60)
+        let goalTitle = details.hasPrimaryGoal ? details.primaryGoalName : "目标倒计时"
+        let goalValue = details.hasPrimaryGoal ? CountdownFormat.days(details.primaryGoalDaysRemaining) : "—"
         return [
-            ShellSummaryTile(page: .today, title: PageID.today.title, value: "\(snapshot.todayPendingCount)"),
+            ShellSummaryTile(page: .today, title: PageID.today.title, value: "\(details.todayPendingCount)"),
             ShellSummaryTile(page: .focus, title: PageID.focus.title, value: focusValue),
-            ShellSummaryTile(page: .week, title: "本周待办", value: "\(snapshot.weekPendingCount)"),
+            ShellSummaryTile(page: .week, title: "本周待办", value: "\(details.weekPendingCount)"),
             ShellSummaryTile(page: .countdown, title: goalTitle, value: goalValue)
         ]
     }
     public func sidebarBadge(for page: PageID) -> Int? {
-        page == .knowledgeGap && snapshot.dueGapCount > 0 ? snapshot.dueGapCount : nil
+        page == .knowledgeGap && dueGapCount > 0 ? dueGapCount : nil
     }
     public static func navigationTarget(for page: PageID, size: ShellWindowSize) -> ShellNavigationTarget {
         switch size {
@@ -175,53 +218,76 @@ public final class ShellStore {
     public func refresh() {
         do {
             let value = try bridge.read()
-            snapshot = value
+            apply(value)
             updateNavigationPages(for: value.sidebarOrder)
-            errorMessage = ""
+            if !errorMessage.isEmpty { errorMessage = "" }
         } catch { errorMessage = error.localizedDescription }
     }
     public func refreshTimer() {
         do {
             let value = try bridge.readTimer()
-            snapshot.hasTimer = value.hasTimer
-            snapshot.running = value.running
-            snapshot.mode = value.mode
-            snapshot.phase = value.phase
-            snapshot.elapsedSeconds = value.elapsedSeconds
-            snapshot.remainingSeconds = value.remainingSeconds
-            snapshot.currentTaskId = value.currentTaskId
-            snapshot.taskTitle = value.taskTitle
+            applyTimer(value)
         } catch { errorMessage = error.localizedDescription }
     }
-    public var selectedSystemAppearance: String? { snapshot.appearance == "theme" ? nil : snapshot.appearance }
-    public var selectedTheme: String? { snapshot.appearance == "theme" ? snapshot.backgroundTheme : nil }
-    public var wallpaperAvailable: Bool { snapshot.appearance == "theme" }
-    public var wallpaperVisible: Bool { wallpaperAvailable && snapshot.useWallpaper }
+    // 整份快照按项分发，每项变了才写。
+    private func apply(_ value: ShellSnapshot) {
+        var appearance = ShellAppearanceState()
+        appearance.backgroundTheme = value.backgroundTheme
+        appearance.appearance = value.appearance
+        appearance.useWallpaper = value.useWallpaper
+        if appearance != appearanceState { appearanceState = appearance }
+        if value.operationBlocksUI != operationBlocksUI { operationBlocksUI = value.operationBlocksUI }
+        if value.operationText != operationText { operationText = value.operationText }
+        if value.dueGapCount != dueGapCount { dueGapCount = value.dueGapCount }
+        var timerValue = ShellTimerSnapshot()
+        timerValue.hasTimer = value.hasTimer; timerValue.running = value.running
+        timerValue.mode = value.mode; timerValue.phase = value.phase
+        timerValue.elapsedSeconds = value.elapsedSeconds; timerValue.remainingSeconds = value.remainingSeconds
+        timerValue.currentTaskId = value.currentTaskId; timerValue.taskTitle = value.taskTitle
+        applyTimer(timerValue)
+        // 已单独存放的几项在这里清回默认值，计时在走时每次重读也不会因为秒数不同而让「其余字段」变一次。
+        var rest = value
+        let blank = ShellSnapshot()
+        rest.backgroundTheme = blank.backgroundTheme; rest.appearance = blank.appearance; rest.useWallpaper = blank.useWallpaper
+        rest.operationBlocksUI = blank.operationBlocksUI; rest.operationText = blank.operationText; rest.dueGapCount = blank.dueGapCount
+        rest.hasTimer = blank.hasTimer; rest.running = blank.running; rest.mode = blank.mode; rest.phase = blank.phase
+        rest.elapsedSeconds = blank.elapsedSeconds; rest.remainingSeconds = blank.remainingSeconds
+        rest.currentTaskId = blank.currentTaskId; rest.taskTitle = blank.taskTitle
+        if rest != details { details = rest }
+    }
+    private func applyTimer(_ value: ShellTimerSnapshot) {
+        if value != timer { timer = value }
+        if value.hasTimer != hasTimer { hasTimer = value.hasTimer }
+    }
+    public var selectedSystemAppearance: String? { appearanceState.appearance == "theme" ? nil : appearanceState.appearance }
+    public var selectedTheme: String? { appearanceState.appearance == "theme" ? appearanceState.backgroundTheme : nil }
+    public var wallpaperAvailable: Bool { appearanceState.appearance == "theme" }
+    public var wallpaperVisible: Bool { wallpaperAvailable && appearanceState.useWallpaper }
     public func setAppearance(_ value: String) {
-        guard !snapshot.operationBlocksUI else { return }
-        let previous = snapshot
+        guard !operationBlocksUI else { return }
+        let previous = appearanceState
         do { try bridge.setAppearance(value); refresh() }
-        catch { snapshot = previous; errorMessage = error.localizedDescription }
+        catch { appearanceState = previous; errorMessage = error.localizedDescription }
     }
     public func selectTheme(_ value: String) {
-        guard !snapshot.operationBlocksUI else { return }
-        let previous = snapshot
+        guard !operationBlocksUI else { return }
+        let previous = appearanceState
         do { try bridge.selectTheme(value); refresh() }
-        catch { snapshot = previous; errorMessage = error.localizedDescription }
+        catch { appearanceState = previous; errorMessage = error.localizedDescription }
     }
     public func setUseWallpaper(_ value: Bool) {
-        guard wallpaperAvailable && !snapshot.operationBlocksUI else { return }
-        let previous = snapshot.useWallpaper
+        guard wallpaperAvailable && !operationBlocksUI else { return }
+        let previous = appearanceState.useWallpaper
         do {
             try bridge.setUseWallpaper(value)
             refresh()
         } catch {
-            snapshot.useWallpaper = previous
+            appearanceState.useWallpaper = previous
             errorMessage = error.localizedDescription
         }
     }
     public func useLegacyUIOnNextLaunch() {
-        guard !snapshot.operationBlocksUI else { return }
+        guard !operationBlocksUI else { return }
         do {
             try bridge.setNativeUI(false)
             errorMessage = ""
@@ -235,55 +301,51 @@ public final class ShellStore {
     // 选的还是同一页（从搜索回到原页、页面快捷键）时 selection 不变，只靠它通知外壳。
     public private(set) var navigationRequest = 0
     public func openSearch() {
+        dismissCapture()
         searchShown = true
         navigationRequest += 1
     }
     // 外壳里直接离开搜索（窄窗从搜索页返回「更多」列表）：只清标记，不切页。
-    public func closeSearch() { searchShown = false }
+    public func closeSearch() {
+        dismissCapture()
+        searchShown = false
+    }
     public func select(_ page: PageID) {
-        guard !snapshot.operationBlocksUI else { return }
+        guard !operationBlocksUI else { return }
+        dismissCapture()
         selection = page
         searchShown = false
         navigationRequest += 1
         bridge.select(page: page.rawValue)
     }
     public func presentCapture() {
-        let onFocusPage = selection == .focus && !searchShown
-        presentCapture(source: onFocusPage ? (captureSourceProvider?() ?? ShellCaptureSource()) : ShellCaptureSource())
+        presentCapture(from: searchShown ? .search : .page(selection))
     }
-    // 带来源的入口：来源任务与科目随这次记一笔一起写入，打开时固定，之后任务切换也不改。
-    public func presentCapture(source: ShellCaptureSource) {
-        guard !snapshot.operationBlocksUI else { return }
-        captureSource = source
+    // 来源只取打开位置；「更多」根列表或搜索可能仍保留专注页 selection，不能据此带入任务。
+    public func presentCapture(from anchor: CaptureAnchor) {
+        guard !operationBlocksUI else { return }
+        captureSource = anchor == .page(.focus) ? (captureSourceProvider?() ?? ShellCaptureSource()) : ShellCaptureSource()
         captureError = ""
-        // 没有宿主（页面切换的间隙）时不打开，免得开关停在 true、之后在别的页面突然弹出。
-        guard captureHostID != nil else { return }
+        captureAnchor = anchor
         capturePresented = true
     }
-    @discardableResult public func claimCaptureHost(_ id: UUID) -> Bool {
-        captureHostID = id
-        return true
+    public func isCapturePresented(at anchor: CaptureAnchor) -> Bool {
+        capturePresented && captureAnchor == anchor
     }
-    public func releaseCaptureHost(_ id: UUID) {
-        guard captureHostID == id else { return }
-        captureHostID = nil
-    }
-    public func capturePresented(for id: UUID) -> Bool {
-        capturePresented && captureHostID == id
-    }
-    public func captureDismissed(by id: UUID) {
-        guard captureHostID == id else { return }
-        capturePresented = false
+    public func captureDismissed(at anchor: CaptureAnchor) {
+        // 旧页面的关闭回调可能晚于新页面打开，不能收掉新位置的浮层。
+        guard captureAnchor == anchor else { return }
+        dismissCapture()
     }
     // 「取消」与点浮层外面一样只关闭，不清空没记下的文字。
     public func dismissCapture() { capturePresented = false }
     // 工具栏按钮再点一下就关闭：从工具栏按钮弹出的气泡不保证因点按钮本身而收起。
-    public func toggleCapture(for id: UUID) {
-        guard captureHostID == id else { return }
-        if capturePresented { dismissCapture() } else { presentCapture() }
+    public func toggleCapture(from anchor: CaptureAnchor) {
+        if isCapturePresented(at: anchor) { dismissCapture() }
+        else { presentCapture(from: anchor) }
     }
     @discardableResult public func capture() -> Bool {
-        guard !snapshot.operationBlocksUI else { return false }
+        guard !operationBlocksUI else { return false }
         let title = captureTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if title.isEmpty { captureError = "先写一句，哪怕只是几个关键词"; return false }
         if bridge.capture(title: title, categoryID: captureSource.categoryID, sourceTaskID: captureSource.taskID) <= 0 {
@@ -323,7 +385,7 @@ public final class ShellStore {
         retired?()
     }
     public func triggerToastAction() {
-        guard !snapshot.operationBlocksUI else { return }
+        guard !operationBlocksUI else { return }
         let action = toastAction
         toastRetired = nil
         retireToast()

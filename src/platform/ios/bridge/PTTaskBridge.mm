@@ -177,6 +177,19 @@ using namespace PTBridgeSupport;
     FailureCollector::Call call(_failures);
     return TaskManager::instance()->moveTasksToToday(values) || fail(error, call.error());
 }
+// 多选的批量完成与删除：整批一个事务、失败原因由服务的 operationFailed 给出，桥接只转类型。
+- (BOOL)setTasksCompleted:(NSArray<NSNumber *> *)ids completed:(BOOL)completed error:(NSError **)error {
+    NSAssert(NSThread.isMainThread, @"批量任务写入必须在主线程");
+    QVariantList values; for (NSNumber *number in ids) { int id; if (!integer(number.integerValue, &id)) return fail(error, QStringLiteral("任务编号越界")); values.append(id); }
+    FailureCollector::Call call(_failures);
+    return TaskManager::instance()->setTasksCompleted(values, completed) || fail(error, call.error());
+}
+- (BOOL)deleteTasks:(NSArray<NSNumber *> *)ids error:(NSError **)error {
+    NSAssert(NSThread.isMainThread, @"批量任务写入必须在主线程");
+    QVariantList values; for (NSNumber *number in ids) { int id; if (!integer(number.integerValue, &id)) return fail(error, QStringLiteral("任务编号越界")); values.append(id); }
+    FailureCollector::Call call(_failures);
+    return TaskManager::instance()->deleteTasks(values) || fail(error, call.error());
+}
 - (NSArray<NSNumber *> *)plannedMinutesFrom:(NSString *)start days:(NSInteger)days excludingTask:(NSInteger)excludedTaskId error:(NSError **)error {
     NSAssert(NSThread.isMainThread, @"任务读取必须在主线程");
     int count, excluded;

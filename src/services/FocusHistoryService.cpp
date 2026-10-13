@@ -143,14 +143,50 @@ int FocusHistoryService::getDayTotalDuration(const QDate& date) const
         return 0;
     }
 
-    int totalDuration = 0;
-    const QVariantList sessions = getDaySessions(date);
-    for (const QVariant& sessionValue : sessions) {
-        // 这里复用返回给 QML 的 durationSeconds 字段，避免日统计和明细查询出现口径分裂。
-        totalDuration += sessionValue.toMap().value(QStringLiteral("durationSeconds")).toInt();
-    }
+    m_lastError.clear();
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) { m_lastError = QStringLiteral("数据库未打开"); return 0; }
+    QSqlQuery query(db);
+    // 日合计只读秒数，不再为求和重建每条明细、任务标题和时间串；过滤条件与 querySessions 相同。
+    query.prepare(QStringLiteral(
+        "SELECT COALESCE(SUM(duration), 0) FROM focus_sessions "
+        "WHERE date(start_time, :shift) = :date AND end_time IS NOT NULL "
+        "AND duration IS NOT NULL AND duration >= :minimum"));
+    query.bindValue(QStringLiteral(":shift"), LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
+    query.bindValue(QStringLiteral(":date"), date.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minimum"), FocusSessionRules::kMinimumValidDurationSeconds);
+    if (!query.exec() || !query.next()) { m_lastError = query.lastError().text(); return 0; }
+    return query.value(0).toInt();
+}
 
-    return totalDuration;
+QVariantMap FocusHistoryService::getMonthDailyTotals(int year, int month) const
+{
+    m_lastError.clear();
+    const QDate first(year, month, 1);
+    if (!isValidHistoryYear(year) || !first.isValid()) {
+        m_lastError = QStringLiteral("日期范围无效");
+        return {};
+    }
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) { m_lastError = QStringLiteral("数据库未打开"); return {}; }
+    QSqlQuery query(db);
+    // 日界使用与明细相同的 SQL 位移；一个月只扫描一次记录表，空日由 C++ 补零，Swift 不另算归属。
+    query.prepare(QStringLiteral(
+        "SELECT date(start_time, :shift), SUM(duration) FROM focus_sessions "
+        "WHERE date(start_time, :shift) >= :first AND date(start_time, :shift) < :end "
+        "AND end_time IS NOT NULL AND duration IS NOT NULL AND duration >= :minimum "
+        "GROUP BY date(start_time, :shift)"));
+    query.bindValue(QStringLiteral(":shift"), LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
+    query.bindValue(QStringLiteral(":first"), first.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":end"), first.addMonths(1).toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minimum"), FocusSessionRules::kMinimumValidDurationSeconds);
+    if (!query.exec()) { m_lastError = query.lastError().text(); return {}; }
+    QVariantMap totals;
+    for (int day = 0; day < first.daysInMonth(); ++day)
+        totals.insert(first.addDays(day).toString(Qt::ISODate), 0);
+    while (query.next()) totals.insert(query.value(0).toString(), query.value(1).toInt());
+    if (query.lastError().isValid()) { m_lastError = query.lastError().text(); return {}; }
+    return totals;
 }
 
 QString FocusHistoryService::formatDuration(int seconds) const

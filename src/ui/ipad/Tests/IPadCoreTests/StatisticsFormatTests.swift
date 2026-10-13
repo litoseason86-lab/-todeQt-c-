@@ -70,4 +70,19 @@ final class StatisticsFormatTests: XCTestCase {
         var unknown = ReviewFact(); unknown.type = "somethingNew"
         XCTAssertEqual(StatisticsFormat.factText(unknown), "")
     }
+    // 产品保证：日期解析器复用后仍随当前时区变化，闰日合法性和星期文案不被旧配置污染。
+    func testReusedParserTracksTimeZoneAndRejectsInvalidLeapDay() throws {
+        // 默认时区只在本用例内替换；defer 保证断言抛错也恢复，避免污染其它日期用例。
+        let previous = NSTimeZone.default
+        defer { NSTimeZone.default = previous }
+        NSTimeZone.default = try XCTUnwrap(TimeZone(secondsFromGMT: 8 * 3600))
+        let east = try XCTUnwrap(StatisticsFormat.parseDate("2024-02-29"))
+        XCTAssertEqual(StatisticsFormat.weekdayLabel("2024-02-29", index: 0), "周四")
+        NSTimeZone.default = try XCTUnwrap(TimeZone(secondsFromGMT: -5 * 3600))
+        let west = try XCTUnwrap(StatisticsFormat.parseDate("2024-02-29"))
+        XCTAssertEqual(west.timeIntervalSince(east), 13 * 3600)
+        XCTAssertEqual(StatisticsFormat.weekdayLabel("2024-02-29", index: 0), "周四")
+        XCTAssertNil(StatisticsFormat.parseDate("2023-02-29"))
+        XCTAssertEqual(StatisticsFormat.weekdayLabel("非法", index: 2), "周三")
+    }
 }

@@ -29,6 +29,8 @@ public:
     Q_INVOKABLE QVariantList getDaySessions(const QDate& date) const;
     // 时间轴混排休息和专注；原专注查询保持统计口径不变。
     Q_INVOKABLE QVariantList getDayTimeline(const QDate& date) const;
+    // 月历日合计一次分组查询，返回包含零投入日的 ISO 日期到秒数映射。
+    Q_INVOKABLE QVariantMap getMonthDailyTotals(int year, int month) const;
     Q_INVOKABLE int getDayTotalDuration(const QDate& date) const;
     Q_INVOKABLE QString formatDuration(int seconds) const;
     Q_INVOKABLE QString lastError() const;

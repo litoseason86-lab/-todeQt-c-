@@ -48,6 +48,9 @@ public struct TaskChanges: Equatable, Sendable {
     func move(id: Int, date: String) throws
     func move(ids: [Int], date: String) throws
     func moveToToday(ids: [Int]) throws
+    // 多选的批量完成 / 取消完成与批量删除（进废纸篓）：整批一个事务，规则在 C++；空数组什么都不做。
+    func setCompleted(ids: [Int], completed: Bool) throws
+    func delete(ids: [Int]) throws
     func duplicate(id: Int, date: String) throws
     func isRoutineGenerated(id: Int) -> Bool
     // 结转窗口天数，来自服务常量；0 表示不知道，提示不带天数。

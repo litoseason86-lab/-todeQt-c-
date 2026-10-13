@@ -263,6 +263,42 @@ import XCTest
         XCTAssertEqual(f.history.submittedChanges.last?.2.durationSeconds, 240)
         XCTAssertEqual(f.history.submittedChanges.last?.2.startTime, draft.startTime)
     }
+    // 产品保证：编辑旧记录时，表单把时长写回小时、分钟两个框不算改动，保存不提交秒数；
+    // 真正改了框里的数才提交，分钟超过 59 折算进小时。
+    func testDurationFieldsEchoKeepsOriginalSeconds() {
+        let f = Fixture(); var row = SessionValue(); row.id = 19; row.taskID = 5; row.durationSeconds = 181
+        var draft = SessionEditorDraft(original: row)
+        XCTAssertEqual(draft.durationMinutes, 3); XCTAssertFalse(draft.durationEdited)
+        draft.setDurationFields(hours: "", minutes: "3")
+        XCTAssertFalse(draft.durationEdited)
+        XCTAssertTrue(f.store.updateSession(draft, original: row))
+        XCTAssertNil(f.history.submittedChanges.last?.2.durationSeconds)
+        draft.setDurationFields(hours: "1", minutes: "90")
+        XCTAssertEqual([draft.durationHours, draft.durationRemainderMinutes], [2, 30]); XCTAssertTrue(draft.durationEdited)
+        XCTAssertTrue(f.store.updateSession(draft, original: row))
+        XCTAssertEqual(f.history.submittedChanges.last?.2.durationSeconds, 9000)
+    }
+    // 产品保证：补录时清空两个框（0 分钟）不能保存，按步进器后恢复；超过 24 小时夹在 1440 分；
+    // 不足 1 分钟、超过 24 小时的旧记录写回框里不算改动，仍可只改别的项保存。
+    func testDurationFieldsValidityAndBounds() throws {
+        let f = Fixture(); f.store.openEditor(original: nil)
+        var draft = try XCTUnwrap(f.store.editorDraft)
+        XCTAssertEqual(draft.durationMinutes, 30); XCTAssertTrue(draft.durationValid)
+        draft.setDurationFields(hours: "", minutes: "")
+        XCTAssertEqual(draft.durationMinutes, 0); XCTAssertFalse(draft.durationValid)
+        draft.setDuration(5)
+        XCTAssertEqual(draft.durationMinutes, 5); XCTAssertTrue(draft.durationValid)
+        draft.setDurationFields(hours: "30", minutes: "0")
+        XCTAssertEqual(draft.durationMinutes, 1440)
+        var short = SessionValue(); short.durationSeconds = 20
+        var shortDraft = SessionEditorDraft(original: short)
+        shortDraft.setDurationFields(hours: "", minutes: "0")
+        XCTAssertEqual(shortDraft.durationMinutes, 0); XCTAssertTrue(shortDraft.durationValid)
+        var long = SessionValue(); long.durationSeconds = 25 * 3600
+        var longDraft = SessionEditorDraft(original: long)
+        longDraft.setDurationFields(hours: "25", minutes: "0")
+        XCTAssertEqual(longDraft.durationMinutes, 1500); XCTAssertFalse(longDraft.durationEdited)
+    }
     // 产品保证：同号专注和休息分别隐藏；撤销共用槽恢复该行，删除只请求一次。
     func testDeletionKindAndUndo() {
         let f = Fixture(); var focus = SessionValue(); focus.id = 7; focus.taskTitle = "任务"

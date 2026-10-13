@@ -918,6 +918,8 @@ private slots:
     void getWeekComparisonSumsNaturalWeeksAndRejectsInvalidStart();
     void weekComparisonRangeQueryEqualsPerDaySum();
     void weekStatsGroupedDurationsEqualPerDayQueries();
+    void groupedStatisticsPreserveLogicalDayAndValidity();
+    void historyMonthTotalsMatchDetailsAndRefresh();
     void getWeekTasksReturnsInclusiveRangeAndRequiredOrder();
     void plannedMinutesByDayFollowsWeekPageRule();
     void getMonthTasksReturnsInclusiveMonthRange();
@@ -1006,6 +1008,8 @@ private slots:
     void overdueQueryExcludesTodayCompletedAndTrustedRoutine();
     void overdueQueryOnlyLooksBackTheRolloverWindow();
     void moveTasksToTodayIsTransactional();
+    void deleteTasksMovesWholeBatchToTrashOrNothing();
+    void setTasksCompletedIsTransactionalAndKeepsNotes();
     void batchRescheduleSearchAndCopy();
     void exportFocusSessionsUsesLogicalDayRange();
     void exportTasksWritesUtf8CsvWithEscapingAndCategoryFallbacks();
@@ -3063,6 +3067,88 @@ void ServiceTests::getWeekStatsUsesSpecifiedMondayAndRejectsInvalidStart()
 
     QVERIFY(StatisticsService::instance()->getWeekStats(QDate()).isEmpty());
     QVERIFY(StatisticsService::instance()->getWeekStats(weekStart.addDays(1)).isEmpty());
+}
+
+// 产品保证：合并查询后的日、周、月统计逐项保留逻辑日、任务归属和有效番茄口径，改日界与写入后不读旧值。
+void ServiceTests::groupedStatisticsPreserveLogicalDayAndValidity()
+{
+    auto *settings = AppSettings::instance();
+    settings->setDayStartHour(4);
+    auto *tasks = TaskManager::instance();
+    const int a = tasks->createTask(QStringLiteral("闰日完成"), QDate(2024, 2, 29), -1, 0, QString());
+    const int b = tasks->createTask(QStringLiteral("闰日待办"), QDate(2024, 2, 29), -1, 0, QString());
+    const int c = tasks->createTask(QStringLiteral("前日完成"), QDate(2024, 2, 28), -1, 0, QString());
+    const int d = tasks->createTask(QStringLiteral("下月完成"), QDate(2024, 3, 1), -1, 0, QString());
+    QVERIFY(a > 0 && b > 0 && c > 0 && d > 0);
+    QVERIFY(tasks->completeTask(a)); QVERIFY(tasks->completeTask(c)); QVERIFY(tasks->completeTask(d));
+    QSqlQuery seed(DatabaseManager::instance()->database());
+    // 插入顺序与逻辑日期不一致，短记录和未结束记录都不能混进聚合；自由计时即使带旧到点标记也不算番茄。
+    QVERIFY(seed.exec(QStringLiteral("INSERT INTO focus_sessions(start_time,end_time,duration,mode,pomodoro_completed) VALUES "
+        "('2024-03-01T03:30:00','2024-03-01T03:36:00',360,1,0),"
+        "('2024-02-29T04:00:00','2024-02-29T04:03:00',180,1,1),"
+        "('2024-02-28T23:50:00','2024-02-29T00:00:00',600,1,1),"
+        "('2024-02-29T03:30:00','2024-02-29T03:35:00',300,1,1),"
+        "('2024-02-29T05:00:00','2024-02-29T05:07:00',420,0,1),"
+        "('2024-02-29T06:00:00','2024-02-29T06:02:59',179,1,1),"
+        "('2024-02-29T07:00:00',NULL,900,1,1),"
+        "('2024-02-27T10:00:00','2024-02-27T10:02:59',179,0,0),"
+        "('2024-03-01T04:00:00','2024-03-01T04:09:00',540,1,1)")));
+    auto *stats = StatisticsService::instance();
+    const auto day = stats->getDayStats(QDate(2024, 2, 29));
+    QCOMPARE(day.value("totalDuration").toInt(), 960);
+    QCOMPARE(day.value("sessionCount").toInt(), 3); QCOMPARE(day.value("pomodoroCount").toInt(), 1);
+    QCOMPARE(day.value("totalTasks").toInt(), 2); QCOMPARE(day.value("completedTasks").toInt(), 1);
+    QCOMPARE(day.value("completionRate").toDouble(), 0.5);
+    const auto month = stats->getMonthStats(2024, 2);
+    QCOMPARE(month.value("totalDuration").toInt(), 1860); QCOMPARE(month.value("sessionCount").toInt(), 5);
+    QCOMPARE(month.value("effectiveDays").toInt(), 2);
+    QCOMPARE(month.value("totalTasks").toInt(), 3); QCOMPARE(month.value("completedTasks").toInt(), 2);
+    const auto week = stats->getWeekStats(QDate(2024, 2, 26));
+    QCOMPARE(week.size(), 7);
+    const QList<int> expectedTasks{0, 0, 1, 2, 1, 0, 0}, expectedDone{0, 0, 1, 1, 1, 0, 0};
+    for (int i = 0; i < 7; ++i) {
+        const auto row = week[i].toMap();
+        QCOMPARE(row.value("date").toDate(), QDate(2024, 2, 26).addDays(i));
+        QCOMPARE(row.value("tasks").toInt(), expectedTasks[i]); QCOMPARE(row.value("completedTasks").toInt(), expectedDone[i]);
+    }
+    settings->setDayStartHour(0);
+    QCOMPARE(stats->getMonthStats(2024, 2).value("totalDuration").toInt(), 1500);
+    QCOMPARE(stats->getDayStats(QDate(2024, 2, 29)).value("totalDuration").toInt(), 900);
+    QVERIFY(insertFocusSessionRow(-1, QDate(2024, 2, 29), 240));
+    QCOMPARE(stats->getMonthStats(2024, 2).value("totalDuration").toInt(), 1740);
+    QCOMPARE(stats->getDayStats(QDate(2024, 2, 29)).value("sessionCount").toInt(), 4);
+}
+
+// 产品保证：整月日合计与每一天有效明细完全相等，闰月和跨年不丢边界，改日界和记录后立即重算。
+void ServiceTests::historyMonthTotalsMatchDetailsAndRefresh()
+{
+    auto *settings = AppSettings::instance(); settings->setDayStartHour(4);
+    auto *history = FocusHistoryService::instance();
+    QVERIFY(insertFocusSessionRowAt(-1, QDate(2024, 3, 1), QStringLiteral("03:00:00"), QStringLiteral("03:06:00"), 360));
+    QVERIFY(insertFocusSessionRowAt(-1, QDate(2024, 2, 1), QStringLiteral("03:00:00"), QStringLiteral("03:04:00"), 240));
+    QVERIFY(insertFocusSessionRow(-1, QDate(2024, 2, 14), 600));
+    QVERIFY(insertFocusSessionRow(-1, QDate(2024, 2, 14), 179));
+    const auto totals = history->getMonthDailyTotals(2024, 2);
+    QVERIFY(history->lastError().isEmpty()); QCOMPARE(totals.size(), 29);
+    QCOMPARE(totals.value("2024-02-29").toInt(), 360); QCOMPARE(totals.value("2024-02-01").toInt(), 0);
+    QCOMPARE(totals.value("2024-02-14").toInt(), 600);
+    for (int day = 1; day <= 29; ++day) {
+        const QDate date(2024, 2, day);
+        const auto rows = history->getDaySessions(date); QVERIFY(history->lastError().isEmpty());
+        int sum = 0; for (const auto& row : rows) sum += row.toMap().value("durationSeconds").toInt();
+        QCOMPARE(totals.value(date.toString(Qt::ISODate)).toInt(), sum);
+        QCOMPARE(history->getDayTotalDuration(date), sum);
+    }
+    settings->setDayStartHour(0);
+    const auto changed = history->getMonthDailyTotals(2024, 2);
+    QCOMPARE(changed.value("2024-02-01").toInt(), 240); QCOMPARE(changed.value("2024-02-29").toInt(), 0);
+    QVERIFY(insertFocusSessionRow(-1, QDate(2024, 2, 14), 420));
+    QCOMPARE(history->getMonthDailyTotals(2024, 2).value("2024-02-14").toInt(), 1020);
+    settings->setDayStartHour(4);
+    QVERIFY(insertFocusSessionRowAt(-1, QDate(2025, 1, 1), QStringLiteral("03:00:00"), QStringLiteral("03:05:00"), 300));
+    QCOMPARE(history->getMonthDailyTotals(2024, 12).value("2024-12-31").toInt(), 300);
+    QVERIFY(history->getMonthDailyTotals(2024, 13).isEmpty()); QVERIFY(!history->lastError().isEmpty());
+    QVERIFY(!history->getMonthDailyTotals(2024, 12).isEmpty()); QVERIFY(history->lastError().isEmpty());
 }
 
 void ServiceTests::weekStatsGroupedDurationsEqualPerDayQueries()
@@ -6080,6 +6166,88 @@ void ServiceTests::moveTasksToTodayIsTransactional()
     QCOMPARE(manager->getOverdueUncompletedTasks().size(), 0);
 
     QVERIFY(manager->moveTasksToToday(QVariantList{}));
+}
+
+// 保证：iPad 多选删除一批任务时，要么整批进废纸篓（专注记录只解除关联、逐条发删除事实），要么一条都不删。
+void ServiceTests::deleteTasksMovesWholeBatchToTrashOrNothing()
+{
+    TaskManager* manager = TaskManager::instance();
+    const QDate today = logicalToday();
+    const int first = insertTaskRow(QStringLiteral("批删一"), today);
+    const int kept = insertTaskRow(QStringLiteral("批删留"), today);
+    const int third = insertTaskRow(QStringLiteral("批删三"), today);
+    QVERIFY(first > 0 && kept > 0 && third > 0);
+    QVERIFY(insertFocusSessionRow(first, today, 1500));
+    auto trashCount = [] {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        return query.exec(QStringLiteral("SELECT COUNT(*) FROM trash_items")) && query.next() ? query.value(0).toInt() : -1;
+    };
+    const int trashBefore = trashCount();
+    QVERIFY(trashBefore >= 0);
+
+    QSignalSpy deletedSpy(manager, &TaskManager::taskDeleted);
+    QSignalSpy changedSpy(manager, &TaskManager::tasksChanged);
+    QSignalSpy failedSpy(manager, &TaskManager::operationFailed);
+    // 第一条能删、第二条不存在：第一条已在事务里写进废纸篓并删掉，整批回滚后必须还在。
+    QVERIFY(!manager->deleteTasks(QVariantList{first, 999999}));
+    QCOMPARE(manager->getTasksByDate(today).size(), 3);
+    QCOMPARE(trashCount(), trashBefore);
+    QCOMPARE(deletedSpy.count(), 0);
+    QCOMPARE(changedSpy.count(), 0);
+    QCOMPARE(failedSpy.count(), 1);
+    // 重复编号整批拒绝，不写库。
+    QVERIFY(!manager->deleteTasks(QVariantList{third, third}));
+    QCOMPARE(manager->getTasksByDate(today).size(), 3);
+
+    // 选择顺序与列表顺序不同，删除事实按选择顺序逐条发出。
+    QVERIFY(manager->deleteTasks(QVariantList{third, first}));
+    QCOMPARE(deletedSpy.count(), 2);
+    QCOMPARE(deletedSpy.at(0).at(0).toInt(), third);
+    QCOMPARE(deletedSpy.at(1).at(0).toInt(), first);
+    QCOMPARE(changedSpy.count(), 1);
+    const QVariantList left = manager->getTasksByDate(today);
+    QCOMPARE(left.size(), 1);
+    QCOMPARE(left.first().toMap().value(QStringLiteral("id")).toInt(), kept);
+    QCOMPARE(trashCount(), trashBefore + 2);
+    QSqlQuery session(DatabaseManager::instance()->database());
+    QVERIFY(session.exec(QStringLiteral("SELECT task_id, duration FROM focus_sessions WHERE duration = 1500")));
+    QVERIFY(session.next());
+    QVERIFY(session.value(0).isNull());
+
+    QVERIFY(manager->deleteTasks(QVariantList{}));
+    QCOMPARE(changedSpy.count(), 1);
+}
+
+// 保证：多选「完成」「取消完成」整批生效或整批不变，且不抹掉已有的完成记录。
+void ServiceTests::setTasksCompletedIsTransactionalAndKeepsNotes()
+{
+    TaskManager* manager = TaskManager::instance();
+    const QDate today = logicalToday();
+    const int open = insertTaskRow(QStringLiteral("批完成一"), today);
+    const int noted = insertTaskRow(QStringLiteral("批完成二"), today);
+    QVERIFY(open > 0 && noted > 0);
+    QVERIFY(manager->completeTaskWithNote(noted, QStringLiteral("做完第三章")));
+    QVERIFY(manager->setTaskCompleted(noted, false));
+    QVERIFY(!manager->getTask(open).value(QStringLiteral("completed")).toBool());
+
+    QSignalSpy changedSpy(manager, &TaskManager::tasksChanged);
+    // 第一条能写、第二条不存在：整批回滚，第一条仍未完成。
+    QVERIFY(!manager->setTasksCompleted(QVariantList{open, 999999}, true));
+    QVERIFY(!manager->getTask(open).value(QStringLiteral("completed")).toBool());
+    QCOMPARE(changedSpy.count(), 0);
+
+    QVERIFY(manager->setTasksCompleted(QVariantList{noted, open}, true));
+    QCOMPARE(changedSpy.count(), 1);
+    QVERIFY(manager->getTask(open).value(QStringLiteral("completed")).toBool());
+    QVERIFY(manager->getTask(noted).value(QStringLiteral("completed")).toBool());
+    QCOMPARE(manager->getTask(noted).value(QStringLiteral("completionNote")).toString(), QStringLiteral("做完第三章"));
+    // 已经是目标状态的任务不算失败。
+    QVERIFY(manager->setTasksCompleted(QVariantList{open}, true));
+
+    QVERIFY(manager->setTasksCompleted(QVariantList{open, noted}, false));
+    QVERIFY(!manager->getTask(open).value(QStringLiteral("completed")).toBool());
+    QVERIFY(!manager->getTask(noted).value(QStringLiteral("completed")).toBool());
+    QCOMPARE(manager->getTask(noted).value(QStringLiteral("completionNote")).toString(), QStringLiteral("做完第三章"));
 }
 
 void ServiceTests::batchRescheduleSearchAndCopy()

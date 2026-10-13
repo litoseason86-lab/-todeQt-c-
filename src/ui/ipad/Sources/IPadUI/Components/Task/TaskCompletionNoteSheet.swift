@@ -32,14 +32,14 @@ struct TaskCompletionNoteSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { store.cancel(); dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { if store.save() { dismiss() } }.disabled(!store.active || shell.snapshot.operationBlocksUI)
+                    Button("完成") { if store.save() { dismiss() } }.disabled(!store.active || shell.operationBlocksUI)
                 }
             }
         }
         .tint(ThemeColors.accentInk)
         .presentationDetents([.medium, .large])
         .interactiveDismissDisabled(store.active && store.note != store.task?.completionNote)
-        .disabled(shell.snapshot.operationBlocksUI)
+        .disabled(shell.operationBlocksUI)
         .onAppear { if !store.active { _ = store.begin(id: taskID) } }
         .onDisappear { store.cancel() }
     }

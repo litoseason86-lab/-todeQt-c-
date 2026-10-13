@@ -15,20 +15,23 @@ import Observation
     public private(set) var gapSummary: GapReminderSummary?
     public private(set) var gapConvertMessage = ""
     public private(set) var loadError = ""
-    // ⌘N 等入口置位并打开同一表单；页面还没创建时请求不会丢。
+    // 行内新建（对齐提醒事项，10-12）：列表底部「＋ 新任务」点开一行输入框，回车建好并接着起下一行，
+    // 空行回车或点别处结束。⌘N 等入口置位聚焦请求，页面还没创建时请求不会丢。
+    public private(set) var composing = false
     public private(set) var newTaskFocusRequested = false
     public var newTitle = ""
-    public var newCategoryID = -1
-    public var newEstimatedMinutes = 0
-    public var newNotes = ""
-    public var newTaskPresented = false
-    public enum Filter: String, CaseIterable, Sendable { case unfinished, finished }
-    public var filter: Filter = .unfinished
-    public var filteredTasks: [TaskValue] { filter == .unfinished ? unfinished : finished }
+    // 「已完成」组默认收起；同一次运行里离开再回来保持用户上次的选择（提醒事项的「显示已完成」也是记住的）。
+    public var completedExpanded = false
+    // 多选模式：选中集合只记编号；刷新后不在列表里的编号自动剔除。
+    public private(set) var selecting = false
+    public private(set) var selection: Set<Int> = []
     public private(set) var goalProgressPercent: Double = 0
-    public private(set) var newCategories: [CategoryValue] = []
-    public private(set) var newFormError = ""
     public let tools: TodayToolsStore
+    // 打勾后停留（10-12 用户定）：刚完成的任务先在原位置留 lingerDelay 再收进「已完成」组，
+    // 连续打勾时从最后一次起算、一起收。值是打勾那一刻它在未完成组里的位置。
+    public private(set) var lingering: [Int: Int] = [:]
+    @ObservationIgnored public var lingerDelay: Duration = .milliseconds(1500)
+    @ObservationIgnored private var lingerTask: Task<Void, Never>?
 
     // 待删任务立刻隐藏；撤销后 pendingTaskID 回到 -1，下一次读取自然恢复。
     private var visibleTasks: [TaskValue] {
@@ -36,8 +39,20 @@ import Observation
         return hidden > 0 ? tasks.filter { $0.id != hidden } : tasks
     }
     // 服务已把完成项排在末尾；这里只按完成态分组并保持组内原序，不再排序。
-    public var unfinished: [TaskValue] { visibleTasks.filter { !$0.completed } }
-    public var finished: [TaskValue] { visibleTasks.filter { $0.completed } }
+    // 停留中的已完成任务按打勾时的位置插回未完成组（按位置从小到大插，连续打勾的几条各回各位）。
+    public var unfinished: [TaskValue] {
+        let visible = visibleTasks
+        var rows = visible.filter { !$0.completed }
+        guard !lingering.isEmpty else { return rows }
+        for (id, index) in lingering.sorted(by: { $0.value < $1.value }) {
+            if let task = visible.first(where: { $0.id == id && $0.completed }) { rows.insert(task, at: min(index, rows.count)) }
+        }
+        return rows
+    }
+    public var finished: [TaskValue] { visibleTasks.filter { $0.completed && lingering[$0.id] == nil } }
+    // 多选能选到的行：未完成组（含停留的），「已完成」组展开时也算。
+    public var selectable: [TaskValue] { completedExpanded ? unfinished + finished : unfinished }
+    public var allSelected: Bool { !selection.isEmpty && selectable.allSatisfy { selection.contains($0.id) } }
     public var gapBannerActive: Bool { (gapSummary?.dueToday ?? 0) + (gapSummary?.overdue ?? 0) > 0 }
     // 文案照 Mac：只报三个数，不拼成长句。
     public var gapBannerText: String {
@@ -95,7 +110,6 @@ import Observation
     public func start() {
         guard !active else { return }
         active = true
-        filter = .unfinished
         taskBridge.onChanged = { [weak self] in self?.requestRefresh() }
         taskBridge.onFailure = { [weak self] message in
             guard let self, self.active else { return }
@@ -128,6 +142,7 @@ import Observation
         active = false
         releaseDrag()
         refreshPending = false
+        settleLingering(); endSelection(); composing = false; newTitle = ""; newTaskFocusRequested = false
         tools.close()
         taskBridge.onChanged = nil; taskBridge.onFailure = nil
         interactions.onChanged = nil; logicalDay.onChanged = nil
@@ -162,7 +177,12 @@ import Observation
     }
     private func fail(_ message: String) { if loadError.isEmpty { loadError = message } }
     private func loadTasks() {
-        do { tasks = try taskBridge.todayTasks() } catch { fail("任务加载失败，请重试") }
+        do { tasks = try taskBridge.todayTasks() } catch { fail("任务加载失败，请重试"); return }
+        // 别处删掉或改期走的任务不再停留、也不留在选中集合里。
+        let ids = Set(visibleTasks.map(\.id))
+        let lingeringLeft = lingering.filter { ids.contains($0.key) }
+        if lingeringLeft.count != lingering.count { lingering = lingeringLeft }
+        if !selection.isSubset(of: ids) { selection = selection.intersection(ids) }
     }
     private func loadOverdue() {
         do {
@@ -221,27 +241,97 @@ import Observation
         if result.converted > 0 { shell?.showToast("已把 \(result.converted) 条知识缺口加到今天的任务") }
     }
 
-    // MARK: 新建
+    // MARK: 新建（行内）
+    // 建在逻辑今天、无科目、不预计用时；科目等细节建好后点 ⓘ 补。成功后清空输入、仍在新建状态（回车接下一条）。
     @discardableResult public func submitNewTask() -> Bool {
-        guard shell?.snapshot.operationBlocksUI != true else { return false }
+        guard shell?.operationBlocksUI != true else { return false }
         let title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return false }
-        do { _ = try taskBridge.create(title: title, date: logicalDay.today, categoryID: newCategoryID, estimatedMinutes: newEstimatedMinutes, notes: newNotes) }
-        catch { newFormError = error.localizedDescription; loadError = newFormError; return false }
-        newTitle = ""; newTaskFocusRequested = false; newTaskPresented = false
+        do { _ = try taskBridge.create(title: title, date: logicalDay.today, categoryID: -1, estimatedMinutes: 0, notes: "") }
+        catch { loadError = error.localizedDescription; return false }
+        newTitle = ""; newTaskFocusRequested = false
         refresh()
         return true
     }
+    // 起一行新任务并请求聚焦；多选中不起（提醒事项选择模式下也不能新建）。
     public func requestNewTask() {
-        guard !newTaskPresented else { return }
-        newTitle = ""; newCategoryID = -1; newEstimatedMinutes = 0; newNotes = ""; newFormError = ""
-        newTaskPresented = true; newTaskFocusRequested = true
-    }
-    public func loadNewCategories(from bridge: any CategoryBridgeProtocol) {
-        do { newCategories = try bridge.allCategories(); newFormError = "" }
-        catch { newFormError = error.localizedDescription }
+        guard !selecting else { return }
+        composing = true; newTaskFocusRequested = true
     }
     public func acknowledgeNewTaskRequest() { newTaskFocusRequested = false }
+    // 结束新建：有字就先建上（点别处、Esc 都不丢已输入的标题），建失败保留这一行和文字，让用户看到原因。
+    public func endComposing() {
+        guard composing else { return }
+        if !newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !submitNewTask() { return }
+        composing = false; newTitle = ""; newTaskFocusRequested = false
+    }
+
+    // MARK: 完成与停留
+    // 打勾：先登记停留再写库，写库触发的刷新里这一行就留在原位；写失败撤掉登记。取消完成不停留。
+    public func toggleCompletion(_ task: TaskValue, using actions: TaskActions) {
+        if task.completed {
+            if lingering[task.id] != nil { lingering[task.id] = nil }
+            _ = actions.uncomplete(id: task.id)
+            return
+        }
+        guard let index = unfinished.firstIndex(where: { $0.id == task.id }) else {
+            _ = actions.complete(id: task.id, title: task.title); return
+        }
+        lingering[task.id] = index
+        guard actions.complete(id: task.id, title: task.title) else { lingering[task.id] = nil; return }
+        scheduleSettle()
+    }
+    // 停留结束：全部收进「已完成」组。离开页面、进入多选时也立刻收。
+    public func settleLingering() {
+        lingerTask?.cancel(); lingerTask = nil
+        if !lingering.isEmpty { lingering = [:] }
+    }
+    private func scheduleSettle() {
+        lingerTask?.cancel()
+        let delay = lingerDelay
+        lingerTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            self?.settleLingering()
+        }
+    }
+
+    // MARK: 多选
+    public func beginSelection() {
+        endComposing()
+        // 草稿写入失败时保留新建行，不能再进入与它互斥的多选模式。
+        guard !composing else { return }
+        settleLingering()
+        selecting = true; selection = []
+    }
+    public func endSelection() { selecting = false; if !selection.isEmpty { selection = [] } }
+    public func toggleSelection(_ id: Int) {
+        guard selecting else { return }
+        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+    }
+    // 「全选」再点一次是全不选（照提醒事项）。
+    public func toggleSelectAll() {
+        selection = allSelected ? [] : Set(selectable.map(\.id))
+    }
+    // 按列表顺序交出选中的编号：批量写入按选择集合的展示顺序，结果与用户看到的一致。
+    public var orderedSelection: [Int] { selectable.map(\.id).filter { selection.contains($0) } }
+    @discardableResult public func completeSelection(using actions: TaskActions) -> Bool {
+        let ids = orderedSelection
+        guard !ids.isEmpty, actions.complete(ids: ids) else { return false }
+        endSelection(); return true
+    }
+    @discardableResult public func deleteSelection(using actions: TaskActions) -> Bool {
+        let ids = orderedSelection
+        guard !ids.isEmpty, actions.delete(ids: ids) else { return false }
+        endSelection(); return true
+    }
+    @discardableResult public func rescheduleSelection(to date: String) -> Bool {
+        let ids = orderedSelection
+        guard !ids.isEmpty else { return false }
+        do { try taskBridge.move(ids: ids, date: date) }
+        catch { loadError = error.localizedDescription; return false }
+        endSelection(); return true
+    }
 
     // MARK: 排序
     // 拖动只交「把 X 移到 Y 之前」，整天重新编号、已完成固定在末尾由服务做。
@@ -309,17 +399,24 @@ public struct DailyGoalDraft: Equatable, Sendable {
     public var canSave: Bool { totalMinutes >= 1 }
     // 按钮按总分钟加减，越界停在边上不回绕：6:00 减 15 分是 5:45，不是只动分钟框。
     public mutating func adjust(by delta: Int) { totalMinutes = Self.clamped(totalMinutes + delta) }
-    // 输入框：空框按 0；分钟可以填超过 59，按总分钟折算（填 90 就是 1 小时 30 分）；数字以外的字符忽略。
     public mutating func setFields(hours: String, minutes: String) {
-        totalMinutes = Self.clamped(Self.number(hours) * 60 + Self.number(minutes))
+        totalMinutes = Self.clamped(HourMinuteFields.minutes(hours: hours, minutes: minutes, cap: Self.maxMinutes))
     }
-    private static func number(_ text: String) -> Int {
+    private static func clamped(_ value: Int) -> Int { min(max(value, 0), maxMinutes) }
+}
+
+// 「小时」「分钟」两个输入框合成总分钟数，今日目标与补录时长共用：空框按 0；分钟可以填超过 59，
+// 按总分钟折算（填 90 就是 1 小时 30 分）；数字以外的字符忽略。结果不夹范围，由各自的草稿决定上下限。
+enum HourMinuteFields {
+    static func minutes(hours: String, minutes: String, cap: Int) -> Int {
+        number(hours, cap: cap) * 60 + number(minutes, cap: cap)
+    }
+    private static func number(_ text: String, cap: Int) -> Int {
         // 每位累积后立即饱和，下一次乘 10 的值始终有界；前导零不改变数值，长串粘贴也不会溢出。
         var value = 0
         for byte in text.utf8 where byte >= 48 && byte <= 57 {
-            value = min(value * 10 + Int(byte - 48), Self.maxMinutes)
+            value = min(value * 10 + Int(byte - 48), cap)
         }
         return value
     }
-    private static func clamped(_ value: Int) -> Int { min(max(value, 0), maxMinutes) }
 }

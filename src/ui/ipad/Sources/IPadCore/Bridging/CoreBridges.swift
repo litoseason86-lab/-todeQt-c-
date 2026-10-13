@@ -15,6 +15,8 @@ import Observation
     public let routines: any RoutineBridgeProtocol
     public let pendingDeletion: PendingDeletionStore
     public let taskActions: TaskActions
+    // 任务行的行内编辑全应用只有一行在编辑，各页共用这一份。
+    public let inlineEditor: InlineTaskEditor
     public let weekStore: WeekStore
     public let timelineStore: TimelineStore
     public let scheduleStore: ScheduleStore
@@ -22,13 +24,14 @@ import Observation
                 categories: any CategoryBridgeProtocol, logicalDay: any LogicalDayBridgeProtocol,
                 settings: any SettingsBridgeProtocol, statistics: any StatisticsBridgeProtocol,
                 focusHistory: any FocusHistoryBridgeProtocol, pendingDeletion: PendingDeletionStore,
-                taskActions: TaskActions, weekStore: WeekStore, timelineStore: TimelineStore,
+                taskActions: TaskActions, inlineEditor: InlineTaskEditor, weekStore: WeekStore, timelineStore: TimelineStore,
                 scheduleStore: ScheduleStore, trash: any TrashBridgeProtocol,
                 sync: any SyncBridgeProtocol, backup: any BackupBridgeProtocol,
                 export: any ExportBridgeProtocol, routines: any RoutineBridgeProtocol) {
         self.tasks = tasks; self.interactions = interactions; self.categories = categories
         self.logicalDay = logicalDay; self.settings = settings; self.statistics = statistics
         self.focusHistory = focusHistory; self.pendingDeletion = pendingDeletion; self.taskActions = taskActions
+        self.inlineEditor = inlineEditor
         self.weekStore = weekStore; self.timelineStore = timelineStore; self.scheduleStore = scheduleStore
         self.trash = trash; self.sync = sync; self.backup = backup; self.export = export; self.routines = routines
     }

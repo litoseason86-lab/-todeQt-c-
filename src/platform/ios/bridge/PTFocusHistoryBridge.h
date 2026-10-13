@@ -20,6 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly, copy) NSArray<PTSessionValue *> *sessions;
 @property(nonatomic, readonly, copy) NSArray<PTSessionTaskOption *> *taskOptions;
 @property(nonatomic, readonly) NSInteger count;
+@property(nonatomic, readonly, copy) NSDictionary<NSString *, NSNumber *> *dailyTotals;
 @end
 // has 标记区分未改与清空；时刻遵循 PTBridgeSupport 的带毫秒 ISO 约定。
 @interface PTSessionChanges : NSObject
@@ -38,6 +39,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (PTFocusHistoryResult *)monthSessions:(NSInteger)year month:(NSInteger)month;
 - (PTFocusHistoryResult *)daySessions:(NSString *)date;
 - (PTFocusHistoryResult *)dayTimeline:(NSString *)date;
+- (PTFocusHistoryResult *)monthDailyTotals:(NSInteger)year month:(NSInteger)month;
 - (PTFocusHistoryResult *)dayTotalDuration:(NSString *)date;
 - (PTFocusHistoryResult *)invalidSessionCount;
 - (PTFocusHistoryResult *)taskOptions:(NSString *)date;

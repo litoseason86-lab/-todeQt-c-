@@ -125,6 +125,11 @@ public:
     // 用户重新打开才发现末尾没了，而丢掉的往往正是最想留下的那段。
     static constexpr int kMaxNotesLength = 2000;
     Q_INVOKABLE bool deleteTask(int taskId);
+    // iPad 多选的批量写入。整批一个事务：编号无效或重复整批拒绝；任何一条写不进去（任务已不在等）全部回滚，
+    // 返回 false 并报 operationFailed；成功后只发一次 tasksChanged。删除与 deleteTask 同一套步骤（进废纸篓、
+    // 专注记录只解除关联），提交后逐条发 taskDeleted。空清单直接返回 true。
+    Q_INVOKABLE bool deleteTasks(const QVariantList& taskIds);
+    Q_INVOKABLE bool setTasksCompleted(const QVariantList& taskIds, bool completed);
     // 删除撤销 UI 用来区分“例行生成的当日实例”与普通任务：删除实例只影响今天，
     // 例行规则本身在 routines 表中不受影响。据此给出更准确的撤销提示。
     Q_INVOKABLE bool isRoutineGeneratedTask(int taskId) const;

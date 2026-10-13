@@ -18,6 +18,25 @@ public struct SessionEditorDraft: Equatable, Sendable {
         durationMinutes = max(0, Int((Double(original.durationSeconds) / 60.0).rounded()))
         durationEdited = false; startEdited = false; isRest = original.isRest
     }
+
+    // 10-13 用户要求：时长和今日目标编辑器一样分「小时」「分钟」两行，都能直接输入，行尾步进器按总分钟加减。
+    // 上限沿用原单行步进器的 1440 分钟；输入框清空得到 0 分钟，改过且不足 1 分钟时不能保存。
+    public static let maxDurationMinutes = 24 * 60
+    public var durationHours: Int { durationMinutes / 60 }
+    public var durationRemainderMinutes: Int { durationMinutes % 60 }
+    public var durationValid: Bool { !durationEdited || (1...Self.maxDurationMinutes).contains(durationMinutes) }
+    // 表单把草稿写回两个输入框时也会触发输入回调，所以合出的总分钟数（未夹范围）和草稿相同就不算改动：
+    // 否则不足 1 分钟的旧记录（20 秒显示 0 分）会被判成「改成 0 分钟」而不能保存，
+    // 超过 24 小时的旧记录会被夹成 1440 分钟提交。
+    public mutating func setDurationFields(hours: String, minutes: String) {
+        let typed = HourMinuteFields.minutes(hours: hours, minutes: minutes, cap: Self.maxDurationMinutes)
+        guard typed != durationMinutes else { return }
+        setDuration(typed)
+    }
+    // 步进器给出的新总分钟数；越界停在 0 或 1440，不回绕。
+    public mutating func setDuration(_ minutes: Int) {
+        durationMinutes = min(max(minutes, 0), Self.maxDurationMinutes); durationEdited = true
+    }
 }
 
 @MainActor @Observable public final class TimelineStore {

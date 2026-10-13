@@ -44,7 +44,12 @@ public enum PageID: String, CaseIterable, Hashable, Sendable, Codable {
         }
     }
 
-    public static let regularTabs: [Self] = [.today, .focus, .week, .todayFocus, .dashboard]
+    // 宽窗侧栏收起后顶部只放这三页，按此顺序（10-12 用户定）；侧栏展开时它们也常驻列表，
+    // 专注因此和摘要块里的「专注计时」并存——收起、展开都不再切换任何标签的可见性。
+    public static let collapsedBarTabs: [Self] = [.dashboard, .focus, .todayFocus]
+    // 只从侧栏摘要块进入的页：侧栏列表和收起后的顶部都不放。
+    public static let tileOnlyTabs: [Self] = [.today, .week]
+    public static let regularTabs: [Self] = collapsedBarTabs + tileOnlyTabs
     public static let primary: [Self] = [.today, .focus, .todayFocus, .dashboard]
     public static let summary: [Self] = [.today, .focus, .week, .countdown]
     public static let fixed: [Self] = [.trash, .settings]

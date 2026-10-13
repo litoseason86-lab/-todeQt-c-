@@ -46,7 +46,8 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                categories: categories, logicalDay: logicalDay,
                                settings: settingsBridge, statistics: statisticsBridge,
                                focusHistory: focusHistory, pendingDeletion: pending,
-                               taskActions: actions, weekStore: week, timelineStore: timeline, scheduleStore: schedule,
+                               taskActions: actions, inlineEditor: InlineTaskEditor(tasks: tasks, interactions: interactions, shell: store),
+                               weekStore: week, timelineStore: timeline, scheduleStore: schedule,
                                trash: trash, sync: sync, backup: backup, export: export, routines: routines)
         let focus = FocusStore(focus: FocusBridgeAdapter(), settings: SettingsBridgeAdapter(), tasks: TaskBridgeAdapter(),
                                pendingDeletion: pending, shell: store, reduceMotion: { UIAccessibility.isReduceMotionEnabled })
@@ -107,7 +108,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
             UITour.selectSettingsSection = { [weak settings] in settings?.selectSection($0) }
             UITour.openSearch = { [weak store, weak search] query in search?.query = query; search?.search(); store?.openSearch() }
             UITour.sheets = [
-                ("new-task", { [weak store, weak today] in store?.select(.today); today?.requestNewTask() }, { [weak today] in today?.newTaskPresented = false }),
+                ("new-task", { [weak store, weak today] in store?.select(.today); today?.requestNewTask() }, { [weak today] in today?.endComposing() }),
                 ("gap", { [weak store, weak gaps] in store?.select(.knowledgeGap); gaps?.requestForm(.add) }, { [weak gaps] in gaps?.dismissForm() }),
                 ("countdown", { [weak store, weak countdown] in store?.select(.countdown); countdown?.requestAdd() }, { [weak countdown] in countdown?.dismissForm() }),
                 ("session", { [weak store, weak timeline] in store?.select(.todayFocus); timeline?.manualAddPresented = true }, { [weak timeline] in timeline?.manualAddPresented = false })]
@@ -115,7 +116,72 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                 ("prev", { [weak timeline] in if let day = timeline?.adjacentDate(days: -1) { timeline?.selectDate(day) } }),
                 (nil, { [weak timeline] in if let day = timeline?.adjacentDate(days: 1) { timeline?.selectDate(day) } })]
         }
+        // 10-12 测速：各页的只读重读与页内只读切换，只在带测速参数启动时登记。
+        if UITour.isRequested && UIPerfProbe.isRequested {
+            UIPerfProbe.refreshers = [
+                .today: { [weak today] in today?.refresh() }, .dashboard: { [weak dashboard] in dashboard?.refresh() },
+                .week: { [weak week] in week?.refresh() }, .todayFocus: { [weak timeline] in timeline?.refresh() },
+                .schedule: { [weak schedule] in schedule?.refresh() }, .monthGoal: { [weak history] in history?.refresh() },
+                .statistics: { [weak statistics] in statistics?.refresh() }, .countdown: { [weak countdown] in countdown?.refresh() },
+                .knowledgeGap: { [weak gaps] in gaps?.refresh() }, .memo: { [weak memos] in memos?.refresh() },
+                .trash: { [weak trashStore] in trashStore?.reload() }]
+            UIPerfProbe.shellRefresh = { [weak store] in store?.refresh() }
+            UIPerfProbe.extraActions = [
+                ("计时跳动·外壳", { [weak store] in store?.refreshTimer() }),
+                ("计时跳动·专注页", { [weak focus] in focus?.refreshSnapshot() }),
+                ("提示条出现", { [weak store] in store?.showToast("测速提示") }),
+                ("提示条收起", { [weak store] in store?.retireToast() })]
+            // 选另一条再选回：记下原来选中的那条，测完还原。
+            var memoOriginal: Int?
+            var gapOriginal: Int?
+            let statsOriginal = statistics.range
+            UIPerfProbe.interactions = [
+                .today: [("展开已完成", { [weak today] in today?.completedExpanded = true }),
+                         ("收起已完成", { [weak today] in today?.completedExpanded = false }),
+                         ("进入多选", { [weak today] in today?.beginSelection() }),
+                         ("退出多选", { [weak today] in today?.endSelection() }),
+                         ("行内编辑第一条", { [weak today, weak core] in
+                             if let id = today?.unfinished.first?.id { _ = core?.inlineEditor.begin(id: id) } }),
+                         ("结束行内编辑", { [weak core] in _ = core?.inlineEditor.finish() }),
+                         ("打开第一条详情", { [weak today] in UIPerfProbe.todayDetail?(today?.unfinished.first?.id) }),
+                         ("关闭详情", { UIPerfProbe.todayDetail?(nil) }),
+                         ("起一行新任务", { [weak today] in today?.requestNewTask() }),
+                         ("结束新建", { [weak today] in today?.endComposing() })],
+                .week: [("下一周", { [weak week] in week?.shiftWeek(1) }), ("回到原来那周", { [weak week] in week?.shiftWeek(-1) })],
+                .todayFocus: [("前一天", { [weak timeline] in if let day = timeline?.adjacentDate(days: -1) { timeline?.selectDate(day) } }),
+                              ("后一天", { [weak timeline] in if let day = timeline?.adjacentDate(days: 1) { timeline?.selectDate(day) } })],
+                .monthGoal: [("上个月", { [weak history] in history?.moveMonth(-1) }),
+                             ("回本月", { [weak history] in history?.returnToCurrentMonth() })],
+                .statistics: [("切到周", { [weak statistics] in statistics?.selectRange(.week) }),
+                              ("切到月", { [weak statistics] in statistics?.selectRange(.month) }),
+                              ("切回原周期", { [weak statistics] in statistics?.selectRange(statsOriginal) })],
+                .schedule: [("下一周", { [weak schedule] in if let s = schedule { s.goToWeek(s.weekIndex + 1) } }),
+                            ("回本周", { [weak schedule] in schedule?.goToCurrentWeek() })],
+                .memo: [("选另一条", { [weak memos] in
+                            guard let memos else { return }
+                            memoOriginal = memos.selectedID
+                            if let other = memos.items.first(where: { $0.id != memos.selectedID }) { _ = memos.presentMemo(other.id) }
+                        }),
+                        ("选回原来那条", { [weak memos] in
+                            if let id = memoOriginal { _ = memos?.presentMemo(id) } else { _ = memos?.dismissMemo() }
+                        })],
+                .knowledgeGap: [("选另一条", { [weak gaps] in
+                                    guard let gaps else { return }
+                                    gapOriginal = gaps.selectedID
+                                    if let other = gaps.items.first(where: { $0.id != gaps.selectedID }) { gaps.select(other.id) }
+                                }),
+                                ("选回原来那条", { [weak gaps] in
+                                    if let id = gapOriginal { gaps?.select(id) } else { gaps?.closeDetail() }
+                                })]]
+        }
         UITour.startIfRequested(shell: store)
-        return UIHostingController(rootView: root)
+        let controller = UIHostingController(rootView: root)
+        // 10-12 真机测速：弹出表单或浮层时，系统把背后整个界面的 HDR 余量特征（hdrHeadroomUsageLimit）改成「限制」、
+        // 着色改成变暗，关掉后再改回来；特征一变 SwiftUI 就把整棵视图的环境刷新一遍、所有文字重新排版，
+        // 开、关各让主线程卡约 200 毫秒（iPadOS 27.0.1）。界面里没有 HDR 内容、背后已有系统的暗化遮罩，
+        // 所以在根上固定这两项，不再随弹出变化。
+        controller.traitOverrides.headroomUsageLimit = .inactive
+        controller.view.tintAdjustmentMode = .normal
+        return controller
     }
 }

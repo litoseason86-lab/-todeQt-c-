@@ -449,29 +449,28 @@ import XCTest
         XCTAssertNil(focus.onFocusCompleted)
         XCTAssertEqual(store.focusedSeconds, 2100)
     }
-    // 产品保证：每次重新进页都默认未完成，切换只投影对应列表并保留两组计数。
-    func testR2FilterResetsOnReentryAndKeepsCounts() {
+    // 产品保证：已完成组展开状态跨进页保留，未完成与已完成计数始终独立。
+    func testCompletedExpansionPersistsOnReentry() {
         let r = rig([task(8, completed: true), task(4), task(2, completed: true), task(7)])
-        XCTAssertEqual(r.store.filter, .unfinished)
-        XCTAssertEqual(ids(r.store.filteredTasks), [4, 7])
-        r.store.filter = .finished
-        XCTAssertEqual(ids(r.store.filteredTasks), [8, 2])
-        XCTAssertEqual(r.store.unfinished.count, 2); XCTAssertEqual(r.store.finished.count, 2)
+        XCTAssertFalse(r.store.completedExpanded)
+        XCTAssertEqual(ids(r.store.selectable), [4, 7])
+        r.store.completedExpanded = true
+        XCTAssertEqual(ids(r.store.selectable), [4, 7, 8, 2])
         r.store.stop(); r.store.start()
-        XCTAssertEqual(r.store.filter, .unfinished)
+        XCTAssertTrue(r.store.completedExpanded)
+        XCTAssertEqual(r.store.unfinished.count, 2); XCTAssertEqual(r.store.finished.count, 2)
     }
-    // 产品保证：新建表单提交填写的四项，日期取提交时的逻辑今日，失败不丢草稿。
-    func testR2NewFormSubmitsFieldsForLogicalToday() {
-        let r = rig(); r.store.requestNewTask()
-        r.store.newTitle = "  复习  "; r.store.newCategoryID = 9
-        r.store.newEstimatedMinutes = 45; r.store.newNotes = "重点章节"
+    // 产品保证：行内新建失败保留标题，重试用提交时的逻辑今日和默认任务字段。
+    func testInlineNewTaskRetriesForLogicalToday() {
+        let r = rig(); r.store.requestNewTask(); r.store.newTitle = "  复习  "
         r.tasks.failing = ["create"]
-        XCTAssertFalse(r.store.submitNewTask()); XCTAssertEqual(r.store.newNotes, "重点章节")
+        XCTAssertFalse(r.store.submitNewTask()); XCTAssertEqual(r.store.newTitle, "  复习  ")
         r.tasks.failing = []; r.logicalDay.today = "2031-02-03"
         XCTAssertTrue(r.store.submitNewTask())
         let call = r.tasks.calls.last { $0.name == "create" }
-        XCTAssertEqual(call?.text, ["复习", "2031-02-03", "重点章节"])
-        XCTAssertEqual(call?.numbers, [9, 45]); XCTAssertFalse(r.store.newTaskPresented)
+        XCTAssertEqual(call?.text, ["复习", "2031-02-03", ""])
+        XCTAssertEqual(call?.numbers, [-1, 0]); XCTAssertTrue(r.store.composing)
+        XCTAssertEqual(r.store.newTitle, "")
     }
     // 产品保证：今日目标进度照服务值展示，禁止从已专注与目标重新相除。
     func testR2GoalProgressUsesServiceValueAndKeepsSnapshotOnFailure() {
@@ -482,5 +481,103 @@ import XCTest
         r.statistics.error = NSError(domain: "测试", code: 1); r.store.refresh()
         XCTAssertEqual(r.store.goalProgressPercent, 73.5)
         XCTAssertFalse(r.store.loadError.isEmpty)
+    }
+    private func actions(_ r: Rig) -> TaskActions { TaskActions(tasks: r.tasks, pendingDeletion: r.pending, shell: r.shell) }
+    private func reflectCompletions(_ r: Rig) {
+        // 模拟真实服务写入后同步发出列表通知，确保停留必须在写库之前登记。
+        r.tasks.onWrite = {
+            guard let call = r.tasks.calls.last, call.name == "setCompleted" else { return }
+            r.tasks.result = r.tasks.result.map { row in
+                var changed = row
+                if call.ids.contains(row.id) { changed.completed = call.numbers == [1] }
+                return changed
+            }
+            r.tasks.result = r.tasks.result.filter { !$0.completed } + r.tasks.result.filter { $0.completed }
+            r.tasks.onChanged?()
+        }
+    }
+    // 产品保证：连续打勾后各行仍在原位置且不出现在已完成组，收起后才一起进入已完成组。
+    func testCompletionLingersAtOriginalPositions() {
+        let r = rig([task(9), task(4), task(7)]); reflectCompletions(r)
+        let action = actions(r); XCTAssertEqual(ids(r.store.unfinished), [9, 4, 7])
+        r.store.toggleCompletion(task(4), using: action)
+        XCTAssertEqual(ids(r.store.unfinished), [9, 4, 7]); XCTAssertTrue(r.store.finished.isEmpty)
+        r.store.toggleCompletion(task(9), using: action)
+        XCTAssertEqual(ids(r.store.unfinished), [9, 4, 7]); XCTAssertTrue(r.store.finished.isEmpty)
+        r.store.settleLingering()
+        XCTAssertEqual(ids(r.store.unfinished), [7]); XCTAssertEqual(ids(r.store.finished), [9, 4])
+    }
+    // 产品保证：完成写入失败撤掉停留，取消完成也不保留停留登记。
+    func testFailedCompletionAndUncompletionDoNotLinger() {
+        let r = rig([task(9), task(4, completed: true)]); reflectCompletions(r)
+        r.tasks.failing = ["setCompleted"]
+        r.store.toggleCompletion(task(9), using: actions(r)); XCTAssertTrue(r.store.lingering.isEmpty)
+        r.tasks.failing = []
+        r.store.toggleCompletion(task(9), using: actions(r)); XCTAssertNotNil(r.store.lingering[9])
+        r.store.toggleCompletion(task(9, completed: true), using: actions(r)); XCTAssertNil(r.store.lingering[9])
+        r.store.toggleCompletion(task(4, completed: true), using: actions(r))
+        XCTAssertTrue(r.store.lingering.isEmpty); XCTAssertEqual(ids(r.store.unfinished), [9, 4])
+    }
+    // 产品保证：停留到期自动收起；等待可观察状态而不依赖调度器恰好在固定毫秒内执行。
+    func testLingeringAutomaticallySettles() async throws {
+        let r = rig([task(9)]); reflectCompletions(r); r.store.lingerDelay = .milliseconds(1)
+        r.store.toggleCompletion(task(9), using: actions(r)); XCTAssertFalse(r.store.lingering.isEmpty)
+        for _ in 0..<300 where !r.store.lingering.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(r.store.lingering.isEmpty); XCTAssertEqual(ids(r.store.finished), [9])
+    }
+    // 产品保证：刷新剔除已删除或改期走的停留行和选中编号，不能遗留不可见操作对象。
+    func testRefreshPrunesLingeringAndSelection() {
+        let r = rig([task(9), task(4)]); reflectCompletions(r)
+        r.store.toggleCompletion(task(9), using: actions(r)); XCTAssertNotNil(r.store.lingering[9])
+        r.tasks.result = [task(4)]; r.store.refresh(); XCTAssertTrue(r.store.lingering.isEmpty)
+        r.store.beginSelection(); r.store.toggleSelectAll(); XCTAssertEqual(r.store.selection, [4])
+        r.tasks.result = [task(7)]; r.store.refresh(); XCTAssertTrue(r.store.selection.isEmpty)
+    }
+    // 产品保证：结束行内新建先保存非空草稿，失败保留行和原文，多选禁止请求新建。
+    func testEndComposingPreservesFailedDraftAndSelectionBlocksNewRow() {
+        let r = rig(); r.store.requestNewTask()
+        XCTAssertTrue(r.store.composing); XCTAssertTrue(r.store.newTaskFocusRequested)
+        r.store.newTitle = "  甲 "; r.tasks.failing = ["create"]; r.store.endComposing()
+        XCTAssertTrue(r.store.composing); XCTAssertEqual(r.store.newTitle, "  甲 ")
+        r.tasks.failing = []; r.store.endComposing()
+        XCTAssertFalse(r.store.composing); XCTAssertEqual(r.tasks.calls.last(where: { $0.name == "create" })?.text, ["甲", "2026-10-09", ""])
+        r.store.beginSelection(); r.store.requestNewTask(); XCTAssertFalse(r.store.composing)
+    }
+    // 产品保证：进入多选先结束新建并收起停留，已完成仅在展开后可选，全选再点清空。
+    func testSelectionEntryAndSelectableGroups() {
+        let r = rig([task(9), task(4), task(7, completed: true)]); reflectCompletions(r)
+        r.store.toggleCompletion(task(9), using: actions(r)); r.store.requestNewTask()
+        r.store.beginSelection(); XCTAssertFalse(r.store.composing); XCTAssertTrue(r.store.lingering.isEmpty)
+        XCTAssertEqual(ids(r.store.selectable), [4]); r.store.toggleSelectAll(); XCTAssertTrue(r.store.allSelected)
+        r.store.toggleSelectAll(); XCTAssertTrue(r.store.selection.isEmpty)
+        r.store.completedExpanded = true; r.store.toggleSelectAll()
+        XCTAssertEqual(r.store.orderedSelection, [4, 9, 7])
+        r.store.stop(); XCTAssertFalse(r.store.selecting); XCTAssertFalse(r.store.composing); XCTAssertTrue(r.store.selection.isEmpty)
+    }
+    // 产品保证：批量操作按列表顺序交编号，成功退出多选；失败保留选择并给出服务原文。
+    func testSelectionActionsOrderAndFailure() {
+        for method in ["setCompletedBatch", "deleteBatch", "moveDates"] {
+            let r = rig([task(9), task(4)]); let action = actions(r)
+            r.store.beginSelection(); r.store.toggleSelection(4); r.store.toggleSelection(9)
+            let perform = { method == "setCompletedBatch" ? r.store.completeSelection(using: action) : method == "deleteBatch" ? r.store.deleteSelection(using: action) : r.store.rescheduleSelection(to: "2031-02-03") }
+            r.tasks.failing = [method]; XCTAssertFalse(perform())
+            XCTAssertTrue(r.store.selecting); XCTAssertEqual(r.store.selection, [9, 4])
+            XCTAssertEqual(method == "moveDates" ? r.store.loadError : r.shell.toast?.message, method + " 失败")
+            r.tasks.failing = []; XCTAssertTrue(perform())
+            XCTAssertEqual(r.tasks.calls.last(where: { $0.name == method })?.ids, [9, 4]); XCTAssertFalse(r.store.selecting)
+        }
+    }
+    // 产品保证：新建草稿保存失败时不能进入多选，否则会同时显示互斥的两种交互状态。
+    func testSelectionDoesNotEnterWhenDraftCannotSave() {
+        let r = rig(); r.store.requestNewTask(); r.store.newTitle = "草稿"; r.tasks.failing = ["create"]
+        r.store.beginSelection()
+        XCTAssertTrue(r.store.composing); XCTAssertFalse(r.store.selecting); XCTAssertEqual(r.store.newTitle, "草稿")
+    }
+    // 产品保证：离开今日页清空新建草稿及尚未消费的聚焦请求，回页不会意外弹出输入。
+    func testStopClearsPendingCompositionFocus() {
+        let r = rig(); r.store.requestNewTask(); r.store.newTitle = "未提交"
+        XCTAssertTrue(r.store.composing); XCTAssertTrue(r.store.newTaskFocusRequested)
+        r.store.stop()
+        XCTAssertFalse(r.store.composing); XCTAssertEqual(r.store.newTitle, ""); XCTAssertFalse(r.store.newTaskFocusRequested)
     }
 }

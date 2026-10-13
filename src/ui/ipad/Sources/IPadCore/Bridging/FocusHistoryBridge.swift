@@ -30,6 +30,7 @@ public struct SessionChanges: Equatable, Sendable {
     func monthSessions(year: Int, month: Int) throws -> [SessionValue]
     func daySessions(date: String) throws -> [SessionValue]
     func dayTimeline(date: String) throws -> [SessionValue]
+    func monthDailyTotals(year: Int, month: Int) throws -> [String: Int]
     func dayTotalDuration(date: String) throws -> Int
     func invalidSessionCount() throws -> Int
     func taskOptions(date: String) throws -> [SessionTaskOption]

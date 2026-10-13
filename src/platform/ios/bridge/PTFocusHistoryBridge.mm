@@ -10,6 +10,7 @@ using namespace PTBridgeSupport;
 - (instancetype)initWithMap:(const QVariantMap &)map;
 @end
 @interface PTFocusHistoryResult ()
+- (instancetype)initWithDailyTotals:(const QVariantMap &)totals error:(const QString &)error;
 - (instancetype)initWithSessions:(const QVariantList &)sessions options:(const QVariantList &)options count:(int)count error:(const QString &)error;
 @end
 @implementation PTSessionValue
@@ -39,8 +40,19 @@ using namespace PTBridgeSupport;
             for (const auto &row : sessions) [sessionValues addObject:[[PTSessionValue alloc] initWithMap:row.toMap()]];
             for (const auto &row : options) [optionValues addObject:[[PTSessionTaskOption alloc] initWithMap:row.toMap()]];
         }
-        _sessions = [sessionValues copy]; _taskOptions = [optionValues copy];
+        _sessions = [sessionValues copy]; _taskOptions = [optionValues copy]; _dailyTotals = @{};
     } return self;
+}
+- (instancetype)initWithDailyTotals:(const QVariantMap &)totals error:(const QString &)error {
+    if ((self = [self initWithSessions:{} options:{} count:0 error:error])) {
+        NSMutableDictionary *values = [NSMutableDictionary dictionaryWithCapacity:totals.size()];
+        if (_valid) {
+            // 桥接只转换服务已经聚合的秒数，不在 Objective-C 或 Swift 再做统计。
+            for (auto it = totals.cbegin(); it != totals.cend(); ++it) values[string(it.key())] = @(it.value().toInt());
+        }
+        _dailyTotals = [values copy];
+    }
+    return self;
 }
 @end
 @implementation PTSessionChanges
@@ -89,6 +101,13 @@ static bool sessionChanges(PTSessionChanges *changes, QVariantMap *map, NSError 
 - (PTFocusHistoryResult *)dayTimeline:(NSString *)iso {
     NSAssert(NSThread.isMainThread, @"历史读取必须在主线程"); auto *service = FocusHistoryService::instance(); const auto rows = service->getDayTimeline(date(iso));
     return [[PTFocusHistoryResult alloc] initWithSessions:rows options:{} count:0 error:service->lastError()];
+}
+- (PTFocusHistoryResult *)monthDailyTotals:(NSInteger)year month:(NSInteger)month {
+    NSAssert(NSThread.isMainThread, @"历史读取必须在主线程");
+    int y, m;
+    if (!integer(year, &y) || !integer(month, &m)) return [[PTFocusHistoryResult alloc] initWithDailyTotals:{} error:QStringLiteral("年月参数越界")];
+    auto *service = FocusHistoryService::instance(); const auto totals = service->getMonthDailyTotals(y, m);
+    return [[PTFocusHistoryResult alloc] initWithDailyTotals:totals error:service->lastError()];
 }
 - (PTFocusHistoryResult *)dayTotalDuration:(NSString *)iso {
     NSAssert(NSThread.isMainThread, @"历史读取必须在主线程"); auto *service = FocusHistoryService::instance(); const int value = service->getDayTotalDuration(date(iso));

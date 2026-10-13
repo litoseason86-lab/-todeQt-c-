@@ -2,7 +2,7 @@ import IPadCore
 import SwiftUI
 
 // 055-R4 定稿侧栏顶部的「搜索」：任务与知识缺口两张结果卡。匹配与顺序都来自服务（SearchStore），
-// 点任务打开任务详情，点缺口跳到知识缺口页并选中它。
+// 点任务打开任务详情（宽窗是从这一行弹出的浮层，窄窗系统改成整页表单），点缺口跳到知识缺口页并选中它。
 @MainActor struct SearchPage: View {
     @Environment(SearchStore.self) private var store
     @Environment(GapStore.self) private var gaps
@@ -36,8 +36,20 @@ import SwiftUI
                         VStack(spacing: 0) {
                             if index > 0 { CardDivider() }
                             Button { detailTaskID = task.id } label: { taskRow(task) }.buttonStyle(.plain)
+                                .popover(isPresented: Binding(get: { detailTaskID == task.id },
+                                                              set: { if !$0 && detailTaskID == task.id { detailTaskID = nil } })) {
+                                    // 详情改过之后结果里的标题、科目要跟着变：浮层收起、详情自己的保存跑完后（下一轮）按当前关键词重搜。
+                                    TaskDetailSheet(taskID: task.id, core: core, shell: shell)
+                                        .onDisappear { Task { @MainActor in store.search() } }
+                                }
                         }
                         .cardRow(position(index, store.tasks.count))
+                        .swipeActions(edge: .trailing) {
+                            Button { detailTaskID = task.id } label: { Label("详情", systemImage: "info.circle") }.tint(ThemeColors.inkSoft)
+                        }
+                        .contextMenu {
+                            Button("编辑详情", systemImage: "info.circle") { detailTaskID = task.id }
+                        }
                     }
                 }
                 if !store.gaps.isEmpty {
@@ -57,9 +69,6 @@ import SwiftUI
         .toolbarTitleDisplayMode(.inline)
         .searchable(text: $store.query, prompt: "搜索任务和知识缺口")
         .onChange(of: store.query) { store.search() }
-        .sheet(item: Binding(get: { detailTaskID.map(SearchTaskID.init) }, set: { detailTaskID = $0?.id })) { item in
-            TaskDetailSheet(taskID: item.id, core: core, shell: shell)
-        }
     }
 
     private var subtitle: String {
@@ -114,5 +123,3 @@ import SwiftUI
         shell.select(.knowledgeGap)
     }
 }
-
-private struct SearchTaskID: Identifiable { let id: Int }

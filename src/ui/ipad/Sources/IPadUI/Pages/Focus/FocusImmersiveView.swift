@@ -9,7 +9,7 @@ struct FocusImmersiveView: View {
     var body: some View {
         ZStack {
             ThemeColors.surface.ignoresSafeArea()
-            WallpaperBackground(theme: shell.snapshot.backgroundTheme, enabled: shell.snapshot.useWallpaper).ignoresSafeArea()
+            WallpaperBackground(theme: shell.appearanceState.backgroundTheme, enabled: shell.appearanceState.useWallpaper).ignoresSafeArea()
             VStack(spacing: 28) {
                 Text(store.taskTitleText).font(.title2.bold()).foregroundStyle(ThemeColors.ink)
                     .multilineTextAlignment(.center).lineLimit(2)

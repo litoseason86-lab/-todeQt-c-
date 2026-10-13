@@ -1,0 +1,458 @@
+import Darwin
+import IPadCore
+import MachO
+import SwiftUI
+import UIKit
+
+// 10-12 调试测速：只有同时带 --ipad-ui-tour 与 --ipad-ui-tour-perf 启动才运行，平时没有任何副作用。
+// 用户反映各页点按都有点卡：在应用的主窗口里（不另开窗口，另开的窗口共用同一套 Store，会让每次刷新多画一遍）
+// 依次切每一页、做页内的只读切换、开关各个表单、搜索、记一笔、设置分组、侧栏收放，再在几页上静置，
+// 记下主线程每次被占用多久。只读：不完成、不删除、不开始计时；唯一的写入是选中页偏好，结束时还原。
+//
+// 测法：在主运行循环上挂两个观察者，「醒来」记起点、「将要睡眠」记终点，两者之差就是这一轮主线程连续忙了多久
+// （终点观察者排在 Core Animation 提交之后，含界面提交）。这一轮没结束之前，手指点下去也得等它结束才处理，
+// 所以「最长一段」近似一次点按最多要等多久。测量窗口内不写日志，结果攒在内存里，全部测完一次写出。
+@MainActor enum UIPerfProbe {
+    static var isRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-perf") }
+    // 各页 Store 的只读重读：写库后各页就是这样整份重读的，单独计时看桥接与查询要多久。
+    static var refreshers: [PageID: () -> Void] = [:]
+    static var shellRefresh: (() -> Void)?
+    // 页内只读切换（翻周、翻月、切统计周期、切筛选、选另一条等），按页登记。
+    static var interactions: [PageID: [(name: String, action: () -> Void)]] = [:]
+    // 今日任务页登记的「打开 / 关闭某条任务的详情浮层」：浮层状态在视图里，测速只能经它触发。
+    static var todayDetail: ((Int?) -> Void)?
+    // 另带 --ipad-ui-tour-sample 时同时采样主线程调用栈，看时间花在哪些函数上（采样本身让主线程每毫秒停几微秒，
+    // 所以计时数字以不带采样的那一轮为准）。
+    private static var samplingRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-sample") }
+    private static var sampler: MainThreadSampler?
+    // 只改界面状态的模拟动作（计时跳一下、提示条出现与收起），看它们会让哪些页面跟着重算。
+    static var extraActions: [(name: String, action: () -> Void)] = []
+
+    private struct Chunk { let start: Double; let duration: Double }
+    private static var chunks: [Chunk] = []
+    private static var iterationStart = 0.0
+    private static var observers: [CFRunLoopObserver] = []
+    private static var rows: [String] = []
+
+    private static func now() -> Double { CFAbsoluteTimeGetCurrent() }
+
+    private static func install() {
+        guard observers.isEmpty else { return }
+        // 观察者回调就在主线程上；按 MainActor 访问静态状态。
+        let begin = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.afterWaiting.rawValue, true, CFIndex.min) { _, _ in
+            MainActor.assumeIsolated { iterationStart = now(); sampler?.setBusy(true) }
+        }
+        let end = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, CFIndex.max) { _, _ in
+            MainActor.assumeIsolated {
+                let finished = now()
+                if iterationStart > 0 { chunks.append(Chunk(start: iterationStart, duration: finished - iterationStart)) }
+                iterationStart = 0
+                sampler?.setBusy(false)
+            }
+        }
+        for observer in [begin, end].compactMap({ $0 }) {
+            CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+            observers.append(observer)
+        }
+    }
+    private static func uninstall() {
+        observers.forEach { CFRunLoopRemoveObserver(CFRunLoopGetMain(), $0, .commonModes) }
+        observers.removeAll()
+    }
+
+    // 一次动作：动作本身同步耗时、到第一次界面提交的时间、之后 settle 毫秒内主线程总共忙了多久、最长一段、超过 50 毫秒的段数。
+    private static func measure(_ section: String, _ name: String, settle: Int = 900, _ action: () -> Void) async {
+        try? await Task.sleep(for: .milliseconds(350))
+        chunks.removeAll()
+        sampler?.setTag(rows.count)
+        let start = now()
+        action()
+        let sync = now() - start
+        try? await Task.sleep(for: .milliseconds(settle))
+        sampler?.setTag(-1)
+        // 动作所在的那一轮在 start 之前就醒了，只算 start 之后的部分。
+        let after = chunks.filter { $0.start + $0.duration >= start }
+        let clipped = after.map { max(0, $0.start + $0.duration - max($0.start, start)) }
+        let firstCommit = after.first.map { $0.start + $0.duration - start } ?? 0
+        let busy = clipped.reduce(0, +)
+        let longest = clipped.max() ?? 0
+        let long = clipped.filter { $0 > 0.05 }.count
+        rows.append([section, name, ms(sync), ms(firstCommit), ms(busy), ms(longest), "\(long)"].joined(separator: "\t"))
+    }
+    // 静置：什么都不做，看计时器每秒跳动等后台刷新让主线程每秒忙多久。
+    private static func idle(_ name: String, seconds: Int) async {
+        try? await Task.sleep(for: .milliseconds(800))
+        chunks.removeAll()
+        sampler?.setTag(rows.count)
+        let start = now()
+        try? await Task.sleep(for: .seconds(seconds))
+        let span = now() - start
+        sampler?.setTag(-1)
+        let after = chunks.filter { $0.start >= start }
+        let busy = after.map(\.duration).reduce(0, +)
+        let longest = after.map(\.duration).max() ?? 0
+        let perSecond = busy / span
+        let wakes = Double(after.count) / span
+        rows.append(["静置", name, "", "", ms(perSecond) + "/秒", ms(longest), String(format: "%.1f次/秒", wakes)].joined(separator: "\t"))
+    }
+    // 同步重读：连读三次取中位数，只含 Store 内的桥接与查询，不含之后的界面重算。
+    private static func timeRefresh(_ name: String, _ refresh: () -> Void) -> String {
+        var samples: [Double] = []
+        for _ in 0..<3 {
+            let start = now(); refresh(); samples.append(now() - start)
+        }
+        return ms(samples.sorted()[1])
+    }
+    private static func ms(_ seconds: Double) -> String { String(format: "%.1f", seconds * 1000) }
+
+    // 另带 --ipad-ui-tour-sheetdiag 时只做一件事：开、关一个表单，记下前后根视图、标签控制器、当前页的
+    // 尺寸、安全区、变换和特征集合，找出弹出表单时让背后整页重排的那一项变化。
+    static var sheetDiagnosisRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-sheetdiag") }
+    static func diagnoseSheet(shell: ShellStore, log: (String) -> Void) async {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first,
+              let window = scene.windows.first(where: \.isKeyWindow) ?? scene.windows.first,
+              let root = window.rootViewController,
+              let sheet = UITour.sheets.first(where: { $0.name == "gap" }) else { log("诊断：缺少窗口或表单"); return }
+        func describe(_ label: String) -> [String: String] {
+            var result: [String: String] = [:]
+            var targets: [(String, UIViewController)] = [("root", root)]
+            if let tabs = tabControllers(root).first {
+                targets.append(("tabs", tabs))
+                if let selected = tabs.selectedViewController {
+                    targets.append(("page", selected))
+                    if let nav = selected as? UINavigationController, let top = nav.topViewController { targets.append(("pageTop", top)) }
+                }
+            }
+            for (name, controller) in targets {
+                let view = controller.view!
+                result["\(name).bounds"] = "\(view.bounds.size)"
+                result["\(name).frameInWindow"] = "\(view.convert(view.bounds, to: nil))"
+                result["\(name).safe"] = "\(view.safeAreaInsets)"
+                result["\(name).transform"] = "\(view.transform) layer=\(view.layer.transform.m11)"
+                result["\(name).superTransform"] = "\(view.superview?.transform ?? .identity)"
+                result["\(name).tintMode"] = "\(view.tintAdjustmentMode.rawValue)"
+                for part in controller.traitCollection.description.components(separatedBy: "; ") {
+                    let pieces = part.split(separator: "=", maxSplits: 1)
+                    if pieces.count == 2 { result["\(name).trait.\(pieces[0].trimmingCharacters(in: .whitespaces))"] = String(pieces[1]) }
+                }
+            }
+            return result
+        }
+        shell.select(.knowledgeGap)
+        try? await Task.sleep(for: .milliseconds(1500))
+        let before = describe("开表单前")
+        sheet.open()
+        try? await Task.sleep(for: .milliseconds(1200))
+        let during = describe("表单开着")
+        sheet.close()
+        try? await Task.sleep(for: .milliseconds(1200))
+        let after = describe("关表单后")
+        for key in before.keys.sorted() where before[key] != during[key] || before[key] != after[key] {
+            log("诊断 \(key)：前 \(before[key] ?? "-") ｜ 开着 \(during[key] ?? "-") ｜ 关后 \(after[key] ?? "-")")
+        }
+        log("诊断完成，共比较 \(before.count) 项")
+    }
+
+    static func run(shell: ShellStore, log: (String) -> Void, write: (String, String) -> Void) async {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else {
+            log("测速：没有可用场景"); return
+        }
+        let window = scene.windows.first(where: \.isKeyWindow) ?? scene.windows.first { !$0.isHidden }
+        let tabs = window?.rootViewController.flatMap { tabControllers($0).first }
+        let original = shell.selection
+        let wide = tabs?.traitCollection.horizontalSizeClass == .regular
+        log("测速开始：主窗口 \(Int(window?.bounds.width ?? 0))×\(Int(window?.bounds.height ?? 0))，\(wide ? "宽" : "窄")，"
+            + "侧栏\(tabs.map { $0.sidebar.isHidden ? "收起" : "展开" } ?? "无")，计时 \(shell.snapshot.hasTimer ? (shell.snapshot.running ? "进行中" : "暂停") : "无")，"
+            + "系统 \(UIDevice.current.systemVersion)，最高 \(window?.screen.maximumFramesPerSecond ?? 0) 帧/秒，减少动态效果=\(UIAccessibility.isReduceMotionEnabled)")
+        rows = ["分组\t动作\t动作同步ms\t到首次提交ms\t之后主线程总忙ms\t最长一段ms\t超50ms段数"]
+        install()
+        defer { uninstall() }
+        if samplingRequested {
+            sampler = MainThreadSampler()
+            sampler?.start()
+            log("测速：同时采样主线程调用栈")
+        }
+
+        // 1. 切页：第一轮多数页是第一次创建，第二轮是再次进入。
+        let pages = PageID.allCases.filter { $0 != shell.selection } + [shell.selection]
+        for round in 1...2 {
+            for page in pages {
+                await measure("切页第\(round)轮", page.title) { shell.select(page) }
+            }
+            log("测速：切页第 \(round) 轮完成")
+        }
+
+        // 2. 每页：同步重读耗时，以及重读后界面重算（相当于每次写库后的那次整页刷新）。
+        var refreshRows: [String] = []
+        for page in PageID.allCases {
+            shell.select(page)
+            try? await Task.sleep(for: .milliseconds(1200))
+            if let refresh = refreshers[page] {
+                refreshRows.append("\(page.title)\t\(timeRefresh(page.title, refresh))")
+                await measure("重读后重算", page.title) { refresh() }
+            }
+            for item in interactions[page] ?? [] {
+                await measure("页内·\(page.title)", item.name, item.action)
+            }
+        }
+        if let shellRefresh {
+            refreshRows.append("外壳摘要\t\(timeRefresh("外壳摘要", shellRefresh))")
+            await measure("重读后重算", "外壳摘要") { shellRefresh() }
+        }
+        log("测速：页内与重读完成")
+
+        // 3. 今日任务：点 ⓘ 打开详情表单、再取消（经辅助功能激活真实按钮，等同于读屏双击）。
+        shell.select(.today)
+        try? await Task.sleep(for: .milliseconds(1200))
+        if let window {
+            if let info = findElement(in: window, labelPrefix: "编辑「") {
+                await measure("表单", "今日任务·点 ⓘ 开详情", settle: 1200) { _ = info.accessibilityActivate() }
+                if let cancel = findElement(in: window, labelPrefix: "取消") {
+                    await measure("表单", "详情·点取消", settle: 1000) { _ = cancel.accessibilityActivate() }
+                } else {
+                    window.rootViewController?.presentedViewController?.dismiss(animated: true)
+                    log("测速：详情表单里没找到「取消」，直接收起")
+                    try? await Task.sleep(for: .milliseconds(1000))
+                }
+            } else {
+                log("测速：今日任务页没找到 ⓘ 按钮（窄窗不显示 ⓘ）")
+            }
+        }
+
+        // 4. 其它表单与浮层：真实页面弹出的表单，开、关各测一次。
+        for sheet in UITour.sheets {
+            await measure("表单", "开·\(sheet.name)", settle: 1200) { sheet.open() }
+            await measure("表单", "关·\(sheet.name)", settle: 1000) { sheet.close() }
+        }
+        shell.select(.today)
+        try? await Task.sleep(for: .milliseconds(1000))
+        await measure("浮层", "开·记一笔", settle: 1000) { shell.presentCapture(from: .page(.today)) }
+        await measure("浮层", "关·记一笔", settle: 800) { shell.dismissCapture() }
+        if let openSearch = UITour.openSearch {
+            await measure("搜索", "打开并搜「线」", settle: 1200) { openSearch("线") }
+            await measure("搜索", "关闭", settle: 1000) { shell.closeSearch() }
+        }
+        if let selectSection = UITour.selectSettingsSection {
+            shell.select(.settings)
+            try? await Task.sleep(for: .milliseconds(1200))
+            for section in SettingsAvailability.sections {
+                await measure("设置分组", section.rawValue) { selectSection(section) }
+            }
+            selectSection(.general)
+        }
+        if let tabs, wide, !tabs.sidebar.isHidden {
+            shell.select(.today)
+            try? await Task.sleep(for: .milliseconds(1000))
+            await measure("侧栏", "收起", settle: 1500) { tabs.sidebar.isHidden = true }
+            await measure("侧栏", "展开", settle: 1500) { tabs.sidebar.isHidden = false }
+        }
+
+        shell.select(.today)
+        try? await Task.sleep(for: .milliseconds(1000))
+        for item in extraActions {
+            await measure("模拟", item.name, settle: 700, item.action)
+        }
+
+        // 5. 静置：计时在走时每秒的刷新代价。
+        for page in [PageID.today, .dashboard, .focus, .todayFocus, .week, .statistics] {
+            shell.select(page)
+            await idle(page.title, seconds: 6)
+        }
+        shell.select(original)
+        write("perf.tsv", rows.joined(separator: "\n") + "\n")
+        write("perf-refresh.tsv", "页面\t同步重读中位ms\n" + refreshRows.joined(separator: "\n") + "\n")
+        if let sampler {
+            sampler.stop()
+            // 整理采样（遍历系统库方法表、逐个查地址）要好几秒，放到后台线程，主线程不卡、也不会被系统当成无响应。
+            let (samples, symbols) = await Task.detached(priority: .userInitiated) { sampler.export() }.value
+            write("samples.txt", samples)
+            write("symbols.txt", symbols)
+            self.sampler = nil
+        }
+        log("测速完成，结果在 perf.tsv、perf-refresh.tsv")
+    }
+
+    private static func tabControllers(_ controller: UIViewController) -> [UITabBarController] {
+        ((controller as? UITabBarController).map { [$0] } ?? []) + controller.children.flatMap(tabControllers)
+    }
+    // 在窗口（含弹出的表单）的辅助功能树里找第一个标签以 prefix 开头的元素；SwiftUI 的按钮在这里能被激活。
+    private static func findElement(in window: UIWindow, labelPrefix: String) -> NSObject? {
+        var roots: [NSObject] = [window]
+        var presented = window.rootViewController?.presentedViewController
+        while let controller = presented { roots.insert(controller.view, at: 0); presented = controller.presentedViewController }
+        for root in roots {
+            var visited = 0
+            if let found = search(root, prefix: labelPrefix, depth: 0, visited: &visited) { return found }
+        }
+        return nil
+    }
+    private static func search(_ object: NSObject, prefix: String, depth: Int, visited: inout Int) -> NSObject? {
+        visited += 1
+        guard depth < 80, visited < 20000 else { return nil }
+        if let label = object.accessibilityLabel, label.hasPrefix(prefix), object.isAccessibilityElement { return object }
+        var children: [NSObject] = []
+        if let elements = object.accessibilityElements as? [NSObject] {
+            children = elements
+        } else {
+            let count = object.accessibilityElementCount()
+            if count != NSNotFound && count > 0 {
+                children = (0..<count).compactMap { object.accessibilityElement(at: $0) as? NSObject }
+            }
+        }
+        if let view = object as? UIView { children += view.subviews.filter { !$0.isHidden && $0.alpha > 0 } }
+        for child in children {
+            if let found = search(child, prefix: prefix, depth: depth + 1, visited: &visited) { return found }
+        }
+        return nil
+    }
+}
+
+// 主线程调用栈采样：后台线程每毫秒暂停主线程一次，读出寄存器后沿帧指针链往上走，记下返回地址就立即恢复。
+// 主线程暂停期间不能分配内存（主线程可能正握着 malloc 的锁，会互相等死），所以先写进预先分配的缓冲区，恢复后再拷贝。
+// 只在测量窗口内（标签 >= 0）采样；地址在测完后用 dladdr 就地查出所在镜像与最近的导出符号，
+// 应用自己的函数再在 Mac 上用 atos 按镜像加载地址还原。
+private final class MainThreadSampler: @unchecked Sendable {
+    private let target: thread_act_t
+    private let stackLow: UInt
+    private let stackHigh: UInt
+    private let lock = NSLock()
+    private var tag = -1
+    // 主线程这一轮是否醒着（运行循环观察者置位）；睡着时不采样，样本只剩真在干活的时刻，内存小得多
+    // （10-12：连睡眠一起采，三分钟十万份样本，整理时被系统因内存结束）。
+    private var busy = false
+    private var running = false
+    private var records: [(tag: Int, frames: [UInt])] = []
+    private let buffer = UnsafeMutablePointer<UInt>.allocate(capacity: 160)
+
+    // 只能在主线程上创建：记下的是创建时所在线程。
+    init() {
+        target = pthread_mach_thread_np(pthread_self())
+        let high = UInt(bitPattern: pthread_get_stackaddr_np(pthread_self()))
+        stackHigh = high
+        stackLow = high - UInt(pthread_get_stacksize_np(pthread_self()))
+    }
+    deinit { buffer.deallocate() }
+
+    func setTag(_ value: Int) { lock.lock(); tag = value; lock.unlock() }
+    func setBusy(_ value: Bool) { lock.lock(); busy = value; lock.unlock() }
+    private func currentTag() -> Int { lock.lock(); defer { lock.unlock() }; return busy ? tag : -1 }
+    private func isRunning() -> Bool { lock.lock(); defer { lock.unlock() }; return running }
+
+    func start() {
+        lock.lock(); running = true; lock.unlock()
+        let thread = Thread { [self] in
+            while isRunning() {
+                let current = currentTag()
+                if current >= 0 {
+                    let count = sampleOnce()
+                    if count > 0 {
+                        let frames = Array(UnsafeBufferPointer(start: buffer, count: count))
+                        lock.lock(); records.append((current, frames)); lock.unlock()
+                    }
+                }
+                usleep(1000)
+            }
+        }
+        thread.qualityOfService = .userInteractive
+        thread.start()
+    }
+    func stop() { lock.lock(); running = false; lock.unlock(); usleep(5000) }
+
+    // 返回写进缓冲区的帧数；暂停期间只做寄存器读取和栈上的指针读取。
+    private func sampleOnce() -> Int {
+        guard thread_suspend(target) == KERN_SUCCESS else { return 0 }
+        defer { thread_resume(target) }
+        var state = arm_thread_state64_t()
+        var count = mach_msg_type_number_t(MemoryLayout<arm_thread_state64_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &state) { pointer in
+            pointer.withMemoryRebound(to: natural_t.self, capacity: Int(count)) {
+                thread_get_state(target, thread_state_flavor_t(ARM_THREAD_STATE64), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        // 系统库是 arm64e，返回地址带指针认证位；去掉高位才是真实地址。
+        func strip(_ value: UInt64) -> UInt { UInt(value & 0x0000_000F_FFFF_FFFF) }
+        var written = 0
+        buffer[written] = strip(state.__pc); written += 1
+        buffer[written] = strip(state.__lr); written += 1
+        var frame = UInt(state.__fp)
+        while written < 160, frame >= stackLow, frame + 16 <= stackHigh, frame & 7 == 0 {
+            let pointer = UnsafePointer<UInt>(bitPattern: frame)!
+            let next = pointer[0]
+            let returnAddress = strip(UInt64(pointer[1]))
+            if returnAddress == 0 { break }
+            buffer[written] = returnAddress; written += 1
+            if next <= frame { break }
+            frame = next
+        }
+        return written
+    }
+
+    // samples.txt：每行「标签<TAB>十六进制地址，叶子在前」；symbols.txt：「地址<TAB>镜像<TAB>镜像加载地址<TAB>最近导出符号」。
+    func export() -> (String, String) {
+        lock.lock(); let all = records; lock.unlock()
+        var lines: [String] = []
+        var unique = Set<UInt>()
+        for record in all {
+            lines.append("\(record.tag)\t" + record.frames.map { String($0, radix: 16) }.joined(separator: " "))
+            unique.formUnion(record.frames)
+        }
+        var symbols: [String] = []
+        let methods = Self.objcMethods()
+        for address in unique {
+            var info = Dl_info()
+            guard dladdr(UnsafeRawPointer(bitPattern: address), &info) != 0 else { continue }
+            let image = info.dli_fname.map { String(cString: $0) } ?? "?"
+            let base = UInt(bitPattern: info.dli_fbase)
+            var symbol = info.dli_sname.map { String(cString: $0) } ?? "?"
+            // 系统库的内部符号在设备上被抹成 <redacted>；Objective-C 方法可以按实现地址就近找回名字。
+            if symbol == "<redacted>" || symbol == "?", let method = Self.nearest(methods, address) { symbol = method }
+            symbols.append("\(String(address, radix: 16))\t\((image as NSString).lastPathComponent)\t\(String(base, radix: 16))\t\(symbol)")
+        }
+        return (lines.joined(separator: "\n") + "\n", symbols.joined(separator: "\n") + "\n")
+    }
+
+    // UIKit、SwiftUI 等系统库里全部 Objective-C 方法的实现地址，按地址排序；只在测完导出时建一次。
+    // 只存方法句柄，名字等查到了才拼（几十万个方法名一次全拼出来太占内存）。
+    private static func objcMethods() -> [(address: UInt, method: Method, prefix: String, cls: AnyClass)] {
+        let wanted: Set<String> = ["UIKitCore", "SwiftUI", "SwiftUICore", "QuartzCore", "UIFoundation"]
+        var result: [(address: UInt, method: Method, prefix: String, cls: AnyClass)] = []
+        var classes: [AnyClass] = []
+        for image in 0..<_dyld_image_count() {
+            guard let path = _dyld_get_image_name(image),
+                  wanted.contains((String(cString: path) as NSString).lastPathComponent) else { continue }
+            var count: UInt32 = 0
+            guard let names = objc_copyClassNamesForImage(path, &count) else { continue }
+            // 不用 Swift 的类型转换：它会给类发消息，遇到不继承 NSObject 的类会走消息转发崩溃（10-12 真机）。
+            for index in 0..<Int(count) { if let cls = objc_lookUpClass(names[index]) { classes.append(cls) } }
+            free(names)
+        }
+        for cls in classes {
+            var targets: [(AnyClass, String)] = [(cls, "-")]
+            if let meta = object_getClass(cls) { targets.append((meta, "+")) }
+            for pair in targets {
+                let target: AnyClass = pair.0, prefix = pair.1
+                var methodCount: UInt32 = 0
+                guard let list = class_copyMethodList(target, &methodCount) else { continue }
+                for item in 0..<Int(methodCount) {
+                    let implementation = UInt(bitPattern: unsafeBitCast(method_getImplementation(list[item]), to: Int.self)) & 0x0000_000F_FFFF_FFFF
+                    result.append((implementation, list[item], prefix, cls))
+                }
+                free(list)
+            }
+        }
+        return result.sorted { $0.address < $1.address }
+    }
+    // 不超过 address 的最近一个方法实现，且相距不到 16 KB（再远多半是夹在中间的 C 函数，名字不可信）。
+    private static func nearest(_ methods: [(address: UInt, method: Method, prefix: String, cls: AnyClass)], _ address: UInt) -> String? {
+        var low = 0, high = methods.count - 1, found = -1
+        while low <= high {
+            let middle = (low + high) / 2
+            if methods[middle].address <= address { found = middle; low = middle + 1 } else { high = middle - 1 }
+        }
+        guard found >= 0, address - methods[found].address < 0x4000 else { return nil }
+        let item = methods[found]
+        return "\(item.prefix)[\(String(cString: class_getName(item.cls))) \(NSStringFromSelector(method_getName(item.method)))]+0x"
+            + String(address - item.address, radix: 16)
+    }
+}

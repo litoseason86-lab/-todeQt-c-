@@ -28,6 +28,15 @@ import UIKit
     // 3.5 秒各一张，不拍其它页。只有启动巡检时已有正在走的计时且满足自动隐藏条件，按钮才会在 3 秒后隐藏，
     // 两张图才可对照隐藏前后布局；没有计时会话时两张图的控制显隐相同，只能核对首帧布局。
     private static var focusOnlyRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-focus") }
+    // 另带 --ipad-ui-tour-capture 时只复现 10-12 用户报的问题：记一笔浮层开着时切页再切回（之后记一笔、补录都弹不出），
+    // 并顺带跑一遍下面的侧栏巡检、拍专注历史的月历时长。每步截图，并把各窗口当前挂着的弹出链写进 tour.log。
+    private static var captureDiagnosisRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-capture") }
+    // 另带 --ipad-ui-tour-sidebar 时只跑侧栏巡检：经真实 SidebarSwipeProbe 的处理函数收起侧栏、再展开，逐帧截图。
+    // 主窗口是宽窗且侧栏展开时就在主窗口里做（不改尺寸）；否则另开 1210×834 的宽窗口做，结果只作参考——
+    // 10-12 第二个窗口里看着正常的收起写法，在主窗口真实左滑时仍出过问题。
+    private static var sidebarOnlyRequested: Bool { ProcessInfo.processInfo.arguments.contains("--ipad-ui-tour-sidebar") }
+    // 真实左滑探针在巡检启动时登记的收起入口，按窗口匹配。
+    static var sidebarTriggers: [ObjectIdentifier: (UIWindow) -> Bool] = [:]
 
     static func startIfRequested(shell: ShellStore) {
         guard isRequested else { return }
@@ -59,8 +68,33 @@ import UIKit
               let rootView else { log("没有可用场景或根视图"); return }
         let original = shell.selection
         log("开始，原选中页 \(original.rawValue)")
+        if UIPerfProbe.sheetDiagnosisRequested {
+            await UIPerfProbe.diagnoseSheet(shell: shell, log: { log($0) })
+            shell.select(original)
+            log("完成")
+            return
+        }
+        if UIPerfProbe.isRequested {
+            await UIPerfProbe.run(shell: shell, log: { log($0) },
+                                  write: { name, text in try? Data(text.utf8).write(to: directory.appendingPathComponent(name)) })
+            shell.select(original)
+            log("完成")
+            return
+        }
+        if sidebarOnlyRequested {
+            await diagnoseSidebar(scene: scene, root: rootView, shell: shell)
+            shell.select(original)
+            log("完成")
+            return
+        }
         if focusOnlyRequested {
             await captureFocusSizes(scene: scene, root: rootView, shell: shell)
+            shell.select(original)
+            log("完成")
+            return
+        }
+        if captureDiagnosisRequested {
+            await diagnoseCaptureAndSidebar(scene: scene, root: rootView, shell: shell)
             shell.select(original)
             log("完成")
             return
@@ -143,6 +177,121 @@ import UIKit
             window.isHidden = true
             windows.removeAll { $0 === window }
         }
+    }
+
+    private static func diagnoseCaptureAndSidebar(scene: UIWindowScene, root: () -> AnyView, shell: ShellStore) async {
+        // 两个窗口共用同一个 ShellStore，也有相同的打开位置；复现期间先把其它窗口藏起来，隔离这次巡检，结束还原。
+        let hidden = scene.windows.filter { !$0.isHidden && $0.rootViewController.map(hasTabController) == true }
+        hidden.forEach { $0.isHidden = true }
+        defer { hidden.forEach { $0.isHidden = false } }
+        let window = makeWindow(scene: scene, size: CGSize(width: 1210, height: 834), compact: false, root: root())
+        func step(_ name: String, wait milliseconds: Int) async {
+            try? await Task.sleep(for: .milliseconds(milliseconds))
+            logPresentations(name, shell: shell, scene: scene)
+            save(window, name: "capture-\(name)")
+        }
+        shell.select(.today)
+        await step("0-today", wait: 1500)
+        shell.presentCapture(from: .page(.today))
+        await step("1-open", wait: 1200)
+        shell.select(.dashboard)
+        await step("2-switched", wait: 1500)
+        shell.select(.today)
+        await step("3-back", wait: 1500)
+        // 工具栏按钮走的是切换：按两次，记下每次之后能否弹出。
+        shell.toggleCapture(from: .page(.today))
+        await step("4-toggle1", wait: 1200)
+        shell.toggleCapture(from: .page(.today))
+        await step("5-toggle2", wait: 1200)
+        shell.dismissCapture()
+        if let session = sheets.first(where: { $0.name == "session" }) {
+            session.open()
+            await step("6-session", wait: 1500)
+            session.close()
+            try? await Task.sleep(for: .milliseconds(800))
+        }
+        window.isHidden = true
+        windows.removeAll { $0 === window }
+        // 侧栏优先在主窗口测；记一笔与月历仍保留各自原有的巡检窗口。
+        hidden.forEach { $0.isHidden = false }
+        await diagnoseSidebar(scene: scene, root: root, shell: shell)
+        hidden.forEach { $0.isHidden = true }
+        // 专注历史：侧栏展开（格子窄，时长折两行）与收起（格子宽，一行）各一张。
+        let history = makeWindow(scene: scene, size: CGSize(width: 1210, height: 834), compact: false, root: root())
+        shell.select(.monthGoal)
+        try? await Task.sleep(for: .milliseconds(1500))
+        save(history, name: "history-sidebar")
+        if let tabs = history.rootViewController.flatMap({ tabControllers($0).first }) {
+            tabs.sidebar.isHidden = true
+            try? await Task.sleep(for: .milliseconds(2000))
+            save(history, name: "history-collapsed")
+        }
+        history.isHidden = true
+        windows.removeAll { $0 === history }
+    }
+    private static func diagnoseSidebar(scene: UIWindowScene, root: () -> AnyView, shell: ShellStore) async {
+        let candidates = scene.windows.filter {
+            !$0.isHidden && !windows.contains($0) && $0.rootViewController.map(hasTabController) == true
+        }
+        var window = candidates.first(where: \.isKeyWindow) ?? candidates.first
+        var tabs = window?.rootViewController.flatMap { tabControllers($0).first }
+        var extra: UIWindow?
+        if let current = tabs, current.traitCollection.horizontalSizeClass == .regular, !current.sidebar.isHidden {
+            log("侧栏巡检在主窗口 \(Int(window?.bounds.width ?? 0))×\(Int(window?.bounds.height ?? 0))")
+        } else {
+            let fresh = makeWindow(scene: scene, size: CGSize(width: 1210, height: 834), compact: false, root: root())
+            extra = fresh; window = fresh
+            try? await Task.sleep(for: .milliseconds(1500))
+            tabs = fresh.rootViewController.flatMap { tabControllers($0).first }
+            log("主窗口不是展开侧栏的宽窗，改在另开的 1210×834 窗口里做（结果只作参考）")
+        }
+        defer { if let extra { extra.isHidden = true; windows.removeAll { $0 === extra } } }
+        guard let window, let tabs else { log("侧栏巡检跳过：没有标签控制器"); return }
+        log("系统 \(UIDevice.current.systemVersion)，减少动态效果=\(UIAccessibility.isReduceMotionEnabled)；调用真实探针处理函数，不合成触摸")
+        // 先像日常使用那样切几页，最后停在只从摘要块进入的今日任务，看它被选中时收起顶部怎么显示。
+        for page in [PageID.dashboard, .week, .focus, .today] {
+            shell.select(page)
+            try? await Task.sleep(for: .milliseconds(900))
+        }
+        save(window, name: "sidebar-0-before")
+        let start = Date()
+        guard Array(sidebarTriggers.values).contains(where: { $0(window) }) else {
+            log("侧栏巡检停止：这个窗口没有登记的 SidebarSwipeProbe，不退回直接修改 isHidden")
+            return
+        }
+        for milliseconds in [100, 300, 800, 1500, 3000] {
+            let elapsed = Int(Date().timeIntervalSince(start) * 1000)
+            if milliseconds > elapsed { try? await Task.sleep(for: .milliseconds(milliseconds - elapsed)) }
+            save(window, name: "sidebar-1-collapse-\(milliseconds)ms")
+        }
+        log("收起后 hidden=\(tabs.sidebar.isHidden) tabBarFrame=\(tabs.tabBar.frame)")
+        // 再展开：看列表里会不会闪出不该出现的行（10-12 上一种写法展开时闪出三行）。
+        let expand = Date()
+        tabs.sidebar.isHidden = false
+        for milliseconds in [100, 300, 800, 1500] {
+            let elapsed = Int(Date().timeIntervalSince(expand) * 1000)
+            if milliseconds > elapsed { try? await Task.sleep(for: .milliseconds(milliseconds - elapsed)) }
+            save(window, name: "sidebar-2-expand-\(milliseconds)ms")
+        }
+    }
+
+    private static func tabControllers(_ controller: UIViewController) -> [UITabBarController] {
+        ((controller as? UITabBarController).map { [$0] } ?? []) + controller.children.flatMap(tabControllers)
+    }
+    private static func hasTabController(_ controller: UIViewController) -> Bool { !tabControllers(controller).isEmpty }
+    // 每个可见窗口从根控制器往下的弹出链（类名，收起中的标出），以及记一笔的开关与打开位置。
+    private static func logPresentations(_ label: String, shell: ShellStore, scene: UIWindowScene) {
+        let chains = scene.windows.filter { !$0.isHidden }.map { window -> String in
+            var chain: [String] = []
+            var current = window.rootViewController?.presentedViewController
+            while let controller = current {
+                chain.append(String(describing: type(of: controller)) + (controller.isBeingDismissed ? "(收起中)" : ""))
+                current = controller.presentedViewController
+            }
+            return "\(Int(window.bounds.width))×\(Int(window.bounds.height))[\(chain.joined(separator: ">"))]"
+        }
+        let anchor = shell.captureAnchor.map { String(describing: $0) } ?? "无"
+        log("\(label)：记一笔开关=\(shell.capturePresented) captureAnchor=\(anchor) 弹出链 " + chains.joined(separator: "；"))
     }
 
     // 侧栏收起后顶部是五个常用页的浮动标签栏；巡检时临时收起，截完恢复。

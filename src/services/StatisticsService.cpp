@@ -47,6 +47,52 @@ void reportStatisticsFailure(const QString& detail)
                          : QStringLiteral("统计数据加载失败: %1").arg(detail));
 }
 
+struct SessionMetrics {
+    int seconds = 0;
+    int sessions = 0;
+    int pomodoros = 0;
+    int effectiveDays = 0;
+};
+
+SessionMetrics querySessionMetrics(const QDate& first, const QDate& last)
+{
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) { reportStatisticsFailure(QStringLiteral("数据库未打开")); return {}; }
+    QSqlQuery query(db);
+    // 卡片的秒数、次数、有效天数共用同一行集，合为一次扫描；番茄条件仍取唯一事实源。
+    // 不跨调用缓存，因此改日界、补录、同步或恢复数据库后的下一次读取自然得到新结果。
+    query.prepare(QStringLiteral(
+        "SELECT COALESCE(SUM(duration), 0), COUNT(*), COALESCE(%1, 0), "
+        "COUNT(DISTINCT date(start_time, :shift)) FROM focus_sessions "
+        "WHERE date(start_time, :shift) BETWEEN :first AND :last "
+        "AND end_time IS NOT NULL AND duration IS NOT NULL AND duration >= :minimum")
+        .arg(FocusSessionRules::validPomodoroCountExpr()));
+    query.bindValue(QStringLiteral(":shift"), LogicalDay::sqlShift(AppSettings::instance()->dayStartHour()));
+    query.bindValue(QStringLiteral(":first"), first.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":last"), last.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":minimum"), FocusSessionRules::kMinimumValidDurationSeconds);
+    if (!query.exec() || !query.next()) { reportStatisticsFailure(query.lastError().text()); return {}; }
+    return {query.value(0).toInt(), query.value(1).toInt(), query.value(2).toInt(), query.value(3).toInt()};
+}
+
+QHash<QString, QPair<int, int>> queryTaskCountsByDay(const QDate& first, const QDate& last)
+{
+    const auto db = DatabaseManager::instance()->database();
+    if (!db.isOpen()) { reportStatisticsFailure(QStringLiteral("数据库未打开")); return {}; }
+    QSqlQuery query(db);
+    // 周统计以前逐日查总任务和完成任务，共 14 次准备/执行；一次按业务日期分组保留空日补零的语义。
+    query.prepare(QStringLiteral(
+        "SELECT date, COUNT(*), COALESCE(SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END), 0) "
+        "FROM tasks WHERE date BETWEEN :first AND :last GROUP BY date"));
+    query.bindValue(QStringLiteral(":first"), first.toString(Qt::ISODate));
+    query.bindValue(QStringLiteral(":last"), last.toString(Qt::ISODate));
+    if (!query.exec()) { reportStatisticsFailure(query.lastError().text()); return {}; }
+    QHash<QString, QPair<int, int>> result;
+    while (query.next()) result.insert(query.value(0).toString(), {query.value(1).toInt(), query.value(2).toInt()});
+    if (query.lastError().isValid()) { reportStatisticsFailure(query.lastError().text()); return {}; }
+    return result;
+}
+
 QVariantMap noComparisonData()
 {
     QVariantMap result;
@@ -503,16 +549,18 @@ QVariantMap StatisticsService::getDayStats(const QDate& date) const
         return stats;
     }
 
-    const int totalDuration = calculateTotalDuration(date);
-    const int completedTasks = countCompletedTasks(date);
-    const int totalTasks = countTotalTasks(date);
+    const auto metrics = querySessionMetrics(date, date);
+    const auto counts = queryTaskCountsByDay(date, date).value(date.toString(Qt::ISODate));
+    const int totalDuration = metrics.seconds;
+    const int completedTasks = counts.second;
+    const int totalTasks = counts.first;
 
     stats.insert(QStringLiteral("totalDuration"), totalDuration);
     stats.insert(QStringLiteral("completedTasks"), completedTasks);
     stats.insert(QStringLiteral("totalTasks"), totalTasks);
     stats.insert(QStringLiteral("completionRate"), totalTasks > 0 ? static_cast<double>(completedTasks) / totalTasks : 0.0);
-    stats.insert(QStringLiteral("sessionCount"), getFocusSessionCount(date, date));
-    stats.insert(QStringLiteral("pomodoroCount"), getValidPomodoroCount(date, date));
+    stats.insert(QStringLiteral("sessionCount"), metrics.sessions);
+    stats.insert(QStringLiteral("pomodoroCount"), metrics.pomodoros);
     return stats;
 }
 
@@ -574,11 +622,10 @@ QVariantList StatisticsService::getWeekStats(const QDate& weekStart) const
         return weekStats;
     }
 
-    // 专注时长一次查完：原本按天调 7 次，每次都是一遍全表扫描。
-    // 任务计数保持逐日查询——tasks.date 是普通日期列且有 idx_tasks_date，
-    // 那是走索引的等值查询，成本可忽略，为它再加一套解析代码不划算。
+    // 时长与任务各一次范围查询，避免在 iPad 主线程重复准备十四条任务计数查询。
     const QHash<QString, int> durations = queryDurationsByLogicalDay(
         weekStart, weekStart.addDays(6), QStringLiteral("week stats"));
+    const auto counts = queryTaskCountsByDay(weekStart, weekStart.addDays(6));
 
     for (int offset = 0; offset < 7; ++offset) {
         const QDate date = weekStart.addDays(offset);
@@ -587,8 +634,9 @@ QVariantList StatisticsService::getWeekStats(const QDate& weekStart) const
         // 没有会话的日子不会出现在 GROUP BY 结果里，缺失即 0——与原来逐日查询返回 0 一致。
         dayStats.insert(QStringLiteral("duration"),
                         durations.value(date.toString(Qt::ISODate), 0));
-        dayStats.insert(QStringLiteral("tasks"), countTotalTasks(date));
-        dayStats.insert(QStringLiteral("completedTasks"), countCompletedTasks(date));
+        const auto count = counts.value(date.toString(Qt::ISODate));
+        dayStats.insert(QStringLiteral("tasks"), count.first);
+        dayStats.insert(QStringLiteral("completedTasks"), count.second);
         weekStats.append(dayStats);
     }
 
@@ -850,37 +898,15 @@ QVariantMap StatisticsService::getMonthStats(int year, int month) const
 
     const QDate firstDay(year, month, 1);
     const QDate lastDay(year, month, firstDay.daysInMonth());
-    result.insert(QStringLiteral("totalDuration"),
-                  queryTotalDurationForRange(firstDay, lastDay, QStringLiteral("month stats")));
-    result.insert(QStringLiteral("effectiveDays"), getEffectiveDays(firstDay, lastDay));
-    result.insert(QStringLiteral("sessionCount"), getFocusSessionCount(firstDay, lastDay));
-
-    QSqlDatabase db = DatabaseManager::instance()->database();
-    if (!db.isOpen()) {
-        qWarning() << "Failed to get month stats: database is not open";
-        reportStatisticsFailure(QStringLiteral("数据库未打开"));
-        return result;
-    }
-
-    QSqlQuery query(db);
-    // 任务的业务日期是 tasks.date，不是创建时间；补录或跨天创建时必须按用户选择的日期归属统计。
-    query.prepare(QStringLiteral(
-        "SELECT COUNT(*) AS total, "
-        "COALESCE(SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END), 0) AS completed "
-        "FROM tasks "
-        "WHERE date >= :firstDay "
-        "AND date <= :lastDay"));
-    query.bindValue(QStringLiteral(":firstDay"), firstDay.toString(Qt::ISODate));
-    query.bindValue(QStringLiteral(":lastDay"), lastDay.toString(Qt::ISODate));
-
-    if (!query.exec() || !query.next()) {
-        qWarning() << "Failed to get month task stats:" << query.lastError().text();
-        reportStatisticsFailure(query.lastError().text());
-        return result;
-    }
-
-    result.insert(QStringLiteral("totalTasks"), query.value(QStringLiteral("total")).toInt());
-    result.insert(QStringLiteral("completedTasks"), query.value(QStringLiteral("completed")).toInt());
+    const auto metrics = querySessionMetrics(firstDay, lastDay);
+    result.insert(QStringLiteral("totalDuration"), metrics.seconds);
+    result.insert(QStringLiteral("effectiveDays"), metrics.effectiveDays);
+    result.insert(QStringLiteral("sessionCount"), metrics.sessions);
+    const auto counts = queryTaskCountsByDay(firstDay, lastDay);
+    int total = 0, completed = 0;
+    for (const auto& count : counts) { total += count.first; completed += count.second; }
+    result.insert(QStringLiteral("totalTasks"), total);
+    result.insert(QStringLiteral("completedTasks"), completed);
     return result;
 }
 

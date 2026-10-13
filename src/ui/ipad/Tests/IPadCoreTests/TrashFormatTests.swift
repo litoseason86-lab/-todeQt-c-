@@ -65,4 +65,13 @@ final class TrashFormatTests: XCTestCase {
             restorable: map["restorable"] as? Bool ?? true, blockedReason: map["blockedReason"] as? String ?? "",
             details: details(map["details"] as? [String: Any] ?? [:]))
     }
+    // 产品保证：日期标签只拆 ASCII 日期前缀，不校验日历合法性；非 ASCII 数字和未补零日期不能误入。
+    func testDatePrefixPreservesDisplayOnlyBoundaries() {
+        let parts = TrashFormat.parseIso("0001-99-00T中文后缀")
+        XCTAssertEqual(parts?.year, 1); XCTAssertEqual(parts?.month, 99); XCTAssertEqual(parts?.day, 0)
+        XCTAssertEqual(TrashFormat.dateLabel("2024-02-29T12:30", today: "2025-01-01"), "2024年2月29日")
+        for invalid in ["２０２４-02-29", "2024-٠٢-29", "2024-2-29", "2024-02-2", "x2024-02-29", "2024/02/29", ""] {
+            XCTAssertNil(TrashFormat.parseIso(invalid), invalid)
+        }
+    }
 }

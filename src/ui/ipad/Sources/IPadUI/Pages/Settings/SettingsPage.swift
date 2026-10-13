@@ -172,13 +172,13 @@ import SwiftUI
                 Toggle("使用壁纸", isOn: Binding(
                     get: { shell.wallpaperVisible },
                     set: { shell.setUseWallpaper($0) }))
-                .disabled(!shell.wallpaperAvailable || shell.snapshot.operationBlocksUI)
+                .disabled(!shell.wallpaperAvailable || shell.operationBlocksUI)
             }
             Section {
                 Toggle("纤细时钟字体", isOn: Binding(get: { store.snapshot.slimClockFont }, set: store.setSlimClockFont))
                 Button("使用旧版界面（下次启动生效）") { shell.useLegacyUIOnNextLaunch() }
                     .foregroundStyle(ThemeColors.accentInk)
-                    .disabled(shell.snapshot.operationBlocksUI)
+                    .disabled(shell.operationBlocksUI)
             }
             if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
             if !shell.errorMessage.isEmpty { Text(shell.errorMessage).foregroundStyle(ThemeColors.danger) }

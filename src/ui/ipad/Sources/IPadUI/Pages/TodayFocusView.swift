@@ -20,6 +20,8 @@ import SwiftUI
                 Button { shiftDate(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("前一天")
                 Button { shiftDate(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("后一天")
                 Button("补录", systemImage: "plus") { store.manualAddPresented = true }.disabled(!store.canAddManualSession)
+                    // 补录从按钮弹出浮层（10-13 真机：系统表单开约 275 毫秒）；窄窗系统改成整页表单。
+                    .popover(isPresented: $store.manualAddPresented) { SessionEditorSheet(store: store, session: nil) }
             }
         }
         .sheet(isPresented: $datePickerPresented) {
@@ -32,8 +34,6 @@ import SwiftUI
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { datePickerPresented = false } } }
             }.presentationDetents([.medium, .large])
         }
-        .sheet(item: $editing) { SessionEditorSheet(store: store, session: $0) }
-        .sheet(isPresented: $store.manualAddPresented) { SessionEditorSheet(store: store, session: nil) }
         // 对照 Mac 的 TodayFocusView：回页时重读；若有跨页日期意图则先消费并切到该日期。
         .onAppear { store.pageAppeared(shell: shell) }
         .onChange(of: shell.requestedFocusDate) { store.selectRequestedDate(from: shell) }
@@ -78,9 +78,10 @@ import SwiftUI
 
     // 进行中色块从服务给的真实开始时刻画起，结束保存后的正式记录也是这个时刻，不会跳位。
     // 不用「现在 − 有效计时」：有效计时不含暂停，暂停过就会画晚。
+    // 只读不随秒变的 activeSession：时间轴整页不随计时每秒重算，读秒的只有下面的 ActiveSessionBlock。
     private var activeStartMinute: Int? {
-        guard focus.snapshot.hasActiveSession, focus.snapshot.sessionLogicalDate == store.selectedDate else { return nil }
-        return TimelineLayout.minute(of: focus.snapshot.sessionStartTime, day: store.selectedDate)
+        guard let session = focus.activeSession, session.logicalDate == store.selectedDate else { return nil }
+        return TimelineLayout.minute(of: session.startTime, day: store.selectedDate)
     }
 
     private var timelineCard: some View {
@@ -101,6 +102,7 @@ import SwiftUI
                 ForEach(blocks, id: \.session.timelineID) { block in
                     let height = max(16, y(block.endMinute) - y(block.startMinute) - 2)
                     Button { editing = block.session } label: { sessionBlock(block, height: height) }
+                        .popover(isPresented: editorPresented(block.session)) { SessionEditorSheet(store: store, session: block.session) }
                         .buttonStyle(.plain)
                         .offset(x: 68, y: y(block.startMinute) + 1)
                         .padding(.trailing, 84)
@@ -110,7 +112,7 @@ import SwiftUI
                         }
                 }
                 if let active {
-                    activeBlock.offset(x: 68, y: y(active)).padding(.trailing, 84)
+                    ActiveSessionBlock().offset(x: 68, y: y(active)).padding(.trailing, 84)
                 }
             }
             .frame(maxWidth: .infinity, minHeight: y(hours.upperBound * 60) + 24, alignment: .topLeading)
@@ -143,24 +145,6 @@ import SwiftUI
         }
         .accessibilityElement(children: .combine)
         .accessibilityHint("编辑这段记录")
-    }
-
-    private var activeBlock: some View {
-        let resting = focus.snapshot.phase == 2 || focus.snapshot.phase == 3
-        return HStack {
-            Text(resting ? "正在休息" : "正在专注 · " + focus.miniTimerLabel).lineLimit(1)
-            Spacer(minLength: 8)
-            Text(DurationFormat.seconds(Double(focus.snapshot.elapsedSeconds))).monospacedDigit()
-        }
-        .font(.system(size: 12))
-        .foregroundStyle(ThemeColors.danger)
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
-        .background(ThemeColors.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-        .overlay(alignment: .leading) {
-            UnevenRoundedRectangle(topLeadingRadius: 9, bottomLeadingRadius: 9, style: .continuous)
-                .fill(ThemeColors.dangerBorder).frame(width: 4)
-        }
     }
 
     private func clock(_ minute: Int) -> String { TimelineLayout.clockText(minute) }
@@ -236,12 +220,13 @@ import SwiftUI
             }
             totalCard(compact: true).plainRow(insets: EdgeInsets(top: 0, leading: 0, bottom: 14, trailing: 0))
             if activeStartMinute != nil {
-                activeBlock.plainRow(insets: EdgeInsets(top: 0, leading: 0, bottom: 14, trailing: 0))
+                ActiveSessionBlock().plainRow(insets: EdgeInsets(top: 0, leading: 0, bottom: 14, trailing: 0))
             }
             ForEach(Array(blocks.enumerated()), id: \.element.session.timelineID) { index, block in
                 VStack(spacing: 0) {
                     if index > 0 { CardDivider() }
                     Button { editing = block.session } label: { compactRow(block) }.buttonStyle(.plain)
+                        .popover(isPresented: editorPresented(block.session)) { SessionEditorSheet(store: store, session: block.session) }
                 }
                 .cardRow(blocks.count == 1 ? .single : index == 0 ? .top : index == blocks.count - 1 ? .bottom : .middle)
                 .swipeActions(edge: .trailing) {
@@ -250,6 +235,12 @@ import SwiftUI
             }
         }
         .modifier(PageListModifier(geometry: geometry, compact: true))
+    }
+
+    // 点记录块编辑：宽窗从这一块弹出浮层，窄窗系统改成整页表单（10-12 对齐提醒事项，浮层不走表单的背景缩放）。
+    private func editorPresented(_ session: SessionValue) -> Binding<Bool> {
+        Binding(get: { editing?.timelineID == session.timelineID },
+                set: { if !$0 && editing?.timelineID == session.timelineID { editing = nil } })
     }
 
     private func compactRow(_ block: TimelineBlock) -> some View {
@@ -284,5 +275,27 @@ import SwiftUI
     }
     private func shiftDate(_ delta: Int) {
         if let date = store.adjacentDate(days: delta) { store.selectDate(date) }
+    }
+}
+
+// 时间轴上进行中的那一块：秒数每秒变，单独读专注 Store，只有它每秒重算。
+private struct ActiveSessionBlock: View {
+    @Environment(FocusStore.self) private var focus
+    var body: some View {
+        let resting = focus.snapshot.phase == 2 || focus.snapshot.phase == 3
+        return HStack {
+            Text(resting ? "正在休息" : "正在专注 · " + focus.miniTimerLabel).lineLimit(1)
+            Spacer(minLength: 8)
+            Text(DurationFormat.seconds(Double(focus.snapshot.elapsedSeconds))).monospacedDigit()
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(ThemeColors.danger)
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+        .background(ThemeColors.danger.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(alignment: .leading) {
+            UnevenRoundedRectangle(topLeadingRadius: 9, bottomLeadingRadius: 9, style: .continuous)
+                .fill(ThemeColors.dangerBorder).frame(width: 4)
+        }
     }
 }

@@ -1,19 +1,26 @@
 import IPadCore
+import Observation
 import SwiftUI
 import UniformTypeIdentifiers
+
+// 详情编号只由行里的浮层读取，打开详情不让七个 List 的宿主重新生成。
+@MainActor @Observable private final class WeekPresentation {
+    var detailTaskID: Int?
+}
 
 @MainActor struct WeekView: View {
     @Bindable var store: WeekStore
     let actions: TaskActions
     let core: CoreBridges
     let shell: ShellStore
-    @State private var editingTask: TaskValue?
+    // 任务详情从任务行 / 小块以浮层弹出（窄窗系统改成整页表单），这里只记哪一条开着。
+    @State private var presentation = WeekPresentation()
     @State private var completionTask: TaskValue?
-    @State private var addingDate: String?
+    // 行内新建（10-12 对齐提醒事项）：哪一天正在新建；同一时间只有一处输入行。
+    @State private var composingDate: String?
     @State private var movingTask: TaskValue?
+    @State private var batchReschedulePresented = false
     @FocusState private var listFocused: Bool
-
-    @Environment(ShellStore.self) private var shellStore
 
     var body: some View {
         GeometryReader { geometry in
@@ -25,24 +32,42 @@ import UniformTypeIdentifiers
         .navigationTitle("")
         .toolbarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button { store.shiftWeek(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("上一周")
-                Button { store.shiftWeek(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("下一周")
+            // 10-12 对齐提醒事项：「选择」进多选（跨七天），底部浮出批量完成、改期、结转到今天、删除。
+            if store.selecting {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button(store.allSelected ? "全不选" : "全选") { store.toggleSelectAll() }
+                    Button("完成") { store.endSelection() }.fontWeight(.semibold).keyboardShortcut(.escape, modifiers: [])
+                }
+            } else {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button("选择") { composingDate = nil; store.beginSelection() }
+                        .disabled(store.groups.allSatisfy { $0.tasks.isEmpty })
+                    Button { store.shiftWeek(-1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("上一周")
+                    Button { store.shiftWeek(1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("下一周")
+                }
             }
         }
-        .sheet(item: $editingTask) { task in TaskDetailSheet(taskID: task.id, core: core, shell: shell) }
+        .safeAreaInset(edge: .bottom) { if store.selecting { selectionBar } }
         .sheet(item: $completionTask) { task in TaskCompletionNoteSheet(taskID: task.id, core: core, shell: shell) }
-        .sheet(item: Binding(get: { addingDate.map(IdentifiedDate.init) }, set: { addingDate = $0?.date })) { value in WeekAddTaskSheet(store: store, date: value.date) }
         .sheet(item: $movingTask, onDismiss: { store.endReschedule() }) { task in WeekMoveTaskSheet(store: store, task: task) }
         .onDisappear { store.cancelDrag(); store.endReschedule() }
     }
 
-    // 副标题：「10月6日 – 12日 · 待办 12」。待办数取外壳摘要（服务），本周以外的周不写待办；
-    // 「已排」合计服务没有给，界面不自己把七天加起来，所以不写。
-    private var subtitle: String {
-        guard let first = store.groups.first?.date, let last = store.groups.last?.date else { return "" }
-        let range = Self.monthDay(first) + " – " + (first.prefix(7) == last.prefix(7) ? Self.day(last) + "日" : Self.monthDay(last))
-        return store.showsCurrentWeek ? range + " · 待办 \(shellStore.snapshot.weekPendingCount)" : range
+    private var selectionBar: some View {
+        let empty = store.selection.isEmpty
+        return SelectionActionBar {
+            SelectionBarButton(title: "完成", systemImage: "checkmark") { store.completeSelection(using: actions) }.disabled(empty)
+            SelectionBarButton(title: "改期", systemImage: "calendar") { batchReschedulePresented = true }
+                .disabled(empty)
+                .popover(isPresented: $batchReschedulePresented) {
+                    BatchDatePicker(title: "改期 \(store.selection.count) 项", initial: store.logicalToday) { date in
+                        store.rescheduleSelection(to: date)
+                    }
+                }
+            SelectionBarButton(title: "结转到今天", systemImage: "arrow.uturn.forward") { store.moveSelectionToToday() }.disabled(empty)
+            SelectionBarButton(title: "删除", systemImage: "trash", role: .destructive) { store.deleteSelection(using: actions) }
+                .disabled(empty).keyboardShortcut(.delete, modifiers: .command)
+        }
     }
     static func monthDay(_ iso: String) -> String {
         let parts = iso.split(separator: "-"); guard parts.count == 3 else { return iso }
@@ -65,7 +90,7 @@ import UniformTypeIdentifiers
     private func compactBody(_ geometry: GeometryProxy) -> some View {
         ScrollViewReader { proxy in
             List {
-                PageHeader(title: "本周计划", subtitle: subtitle)
+                WeekPageHeader(store: store)
                     .plainRow(insets: EdgeInsets(top: 4, leading: 0, bottom: 12, trailing: 0))
                 if !store.error.isEmpty { errorBar.plainRow(insets: EdgeInsets(top: 0, leading: 4, bottom: 12, trailing: 4)) }
                 dayStrip.plainRow(insets: EdgeInsets(top: 0, leading: 0, bottom: 14, trailing: 0))
@@ -85,15 +110,16 @@ import UniformTypeIdentifiers
                             taskRow(task, compact: true).padding(.horizontal, 8).padding(.vertical, 4)
                         }
                         .id(task.id)
-                        .cardRow(group.tasks.count == 1 ? .single : taskIndex == 0 ? .top : taskIndex == group.tasks.count - 1 ? .bottom : .middle,
-                                 fill: store.cursorTaskID == task.id ? ThemeColors.accentFill : ThemeColors.surface)
+                        .cardRow(cardPosition(taskIndex, count: group.tasks.count, footer: store.canAdd(on: group.date) && !store.selecting),
+                                 fill: store.cursorTaskID == task.id || store.selection.contains(task.id) ? ThemeColors.accentFill : ThemeColors.surface)
                     }
-                    if store.canAdd(on: group.date) {
-                        Button { addingDate = group.date } label: {
-                            Label(store.addTitle, systemImage: "plus").labelStyle(PillLabelStyle())
+                    if store.canAdd(on: group.date) && !store.selecting {
+                        VStack(spacing: 0) {
+                            if !group.tasks.isEmpty { CardDivider() }
+                            WeekComposeRow(store: store, date: group.date, composingDate: $composingDate, compact: false)
                         }
-                        .buttonStyle(AccentTextButtonStyle(size: 16))
-                        .plainRow(insets: EdgeInsets(top: 10, leading: 4, bottom: 0, trailing: 0))
+                        .padding(.horizontal, 8)
+                        .cardRow(group.tasks.isEmpty ? .single : .bottom)
                         .dropDestination(for: String.self) { ids, _ in return drop(ids, to: group.date) }
                     }
                 }
@@ -141,12 +167,14 @@ import UniformTypeIdentifiers
         let available = geometry.size.width - geometry.safeAreaInsets.leading - geometry.safeAreaInsets.trailing - margin * 2
         let columnWidth = max(112, (available - 60) / 7)
         return VStack(alignment: .leading, spacing: 12) {
-            PageHeader(title: "本周计划", subtitle: subtitle)
+            WeekPageHeader(store: store)
             if !store.error.isEmpty { errorBar }
             ScrollViewReader { columns in
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(alignment: .top, spacing: 10) {
-                        ForEach(store.groups) { group in column(group).frame(width: columnWidth).id(group.date) }
+                        ForEach(Array(store.groups.enumerated()), id: \.element.date) { index, group in
+                            column(group, index: index).frame(width: columnWidth).id(group.date)
+                        }
                     }
                     .padding(.bottom, 24)
                 }
@@ -164,8 +192,7 @@ import UniformTypeIdentifiers
         .safeAreaPadding(.horizontal, margin)
     }
 
-    private func column(_ group: WeekDayGroup) -> some View {
-        let index = store.groups.firstIndex(where: { $0.date == group.date }) ?? 0
+    private func column(_ group: WeekDayGroup, index: Int) -> some View {
         let today = store.isToday(group.date)
         return VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
@@ -187,13 +214,10 @@ import UniformTypeIdentifiers
                             .listRowSeparator(.hidden)
                             .listRowInsets(EdgeInsets(top: 3, leading: 8, bottom: 3, trailing: 8))
                     }
-                    if store.canAdd(on: group.date) {
-                        Button { addingDate = group.date } label: {
-                            Label("添加", systemImage: "plus").labelStyle(PillLabelStyle())
-                        }
-                        .buttonStyle(AccentTextButtonStyle())
-                        .listRowBackground(Color.clear).listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 2, leading: 2, bottom: 2, trailing: 8))
+                    if store.canAdd(on: group.date) && !store.selecting {
+                        WeekComposeRow(store: store, date: group.date, composingDate: $composingDate, compact: true)
+                            .listRowBackground(Color.clear).listRowSeparator(.hidden)
+                            .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
                     }
                 }
                 .listStyle(.plain)
@@ -219,15 +243,21 @@ import UniformTypeIdentifiers
 
     private func taskRow(_ task: TaskValue, compact: Bool, chip: Bool = false) -> some View {
         WeekTaskRow(task: task, store: store, actions: actions, compact: compact, chip: chip,
-                    onEdit: { editingTask = task }, onCompleteWithNote: { completionTask = task }, onReschedule: { reschedule(task) })
+                    detailTaskID: Binding(get: { presentation.detailTaskID }, set: { presentation.detailTaskID = $0 }), onCompleteWithNote: { completionTask = task }, onReschedule: { reschedule(task) })
+    }
+    // 窄窗当天那张卡：有新建行时它在最后，任务行就不再是底边。
+    private func cardPosition(_ index: Int, count: Int, footer: Bool) -> CardRowPosition {
+        let last = index == count - 1 && !footer
+        if index == 0 { return last ? .single : .top }
+        return last ? .bottom : .middle
     }
     private func drop(_ ids: [String], to date: String) -> Bool {
         guard ids.count == 1, let id = Int(ids[0]) else { return false }
         return store.drop(taskID: id, to: date)
     }
     private func keyAction(_ press: KeyPress) -> KeyPress.Result {
-        guard press.modifiers.isEmpty, editingTask == nil, completionTask == nil,
-              movingTask == nil, addingDate == nil, store.draggingTaskID == -1 else { return .ignored }
+        guard press.modifiers.isEmpty, !store.selecting, presentation.detailTaskID == nil, completionTask == nil,
+              movingTask == nil, composingDate == nil, store.draggingTaskID == -1 else { return .ignored }
         switch press.key {
         case .upArrow: store.moveCursor(-1)
         case .downArrow: store.moveCursor(1)
@@ -239,6 +269,23 @@ import UniformTypeIdentifiers
     }
     private func reschedule(_ task: TaskValue) {
         movingTask = store.beginReschedule(id: task.id)
+    }
+}
+
+// 页头独立读取待办摘要，计时每秒变化不重建七列任务列表。
+// 只在当前周显示服务给的待办数；其它周仍只显示日期范围，不在界面合计七天。
+private struct WeekPageHeader: View {
+    let store: WeekStore
+    @Environment(ShellStore.self) private var shell
+    var body: some View {
+        let groups = store.groups
+        let subtitle: String = {
+            guard let first = groups.first?.date, let last = groups.last?.date else { return "" }
+            let range = WeekView.monthDay(first) + " – " + (first.prefix(7) == last.prefix(7)
+                ? WeekView.day(last) + "日" : WeekView.monthDay(last))
+            return store.showsCurrentWeek ? range + " · 待办 \(shell.details.weekPendingCount)" : range
+        }()
+        PageHeader(title: store.selecting ? "已选 \(store.selection.count) 项" : "本周计划", subtitle: subtitle)
     }
 }
 
@@ -255,13 +302,22 @@ private final class WeekDragLifetime: Sendable {
     let actions: TaskActions
     var compact = false
     var chip = false
-    let onEdit: () -> Void
+    let detailTaskID: Binding<Int?>
     let onCompleteWithNote: () -> Void
     let onReschedule: () -> Void
+    @Environment(CoreBridges.self) private var core
+    @Environment(ShellStore.self) private var shell
+    private var detailPresented: Binding<Bool> {
+        Binding(get: { detailTaskID.wrappedValue == task.id },
+                set: { if !$0 && detailTaskID.wrappedValue == task.id { detailTaskID.wrappedValue = nil } })
+    }
 
+    private var selected: Bool { store.selection.contains(task.id) }
     var body: some View {
         content
-            .simultaneousGesture(TapGesture().onEnded { store.selectTask(id: task.id) })
+            .simultaneousGesture(TapGesture().onEnded {
+                if store.selecting { store.toggleSelection(task.id) } else { store.selectTask(id: task.id) }
+            })
             .onDrag { dragProvider() }
             .dropDestination(for: String.self) { ids, _ in
                 guard ids.count == 1, let id = Int(ids[0]) else { return false }
@@ -272,42 +328,60 @@ private final class WeekDragLifetime: Sendable {
         if chip {
             // 定稿宽窗的任务小块：科目色点 + 标题（最多两行），完成的划线变淡；操作在左滑和长按菜单里。
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Circle().fill(TaskCategoryColor.value(task.categoryColor).opacity(task.completed ? 0.45 : 1))
-                    .frame(width: 7, height: 7).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                if store.selecting {
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 15)).foregroundStyle(selected ? ThemeColors.accentInk : ThemeColors.inkMuted)
+                } else {
+                    Circle().fill(TaskCategoryColor.value(task.categoryColor).opacity(task.completed ? 0.45 : 1))
+                        .frame(width: 7, height: 7).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
+                }
                 Text(task.title).font(.system(size: 14)).lineLimit(2)
                     .foregroundStyle(task.completed ? ThemeColors.inkMuted : ThemeColors.inkStrong)
                     .strikethrough(task.completed)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
-            .background(store.cursorTaskID == task.id ? ThemeColors.accentFill : ThemeColors.surfaceRaised,
+            .background(store.cursorTaskID == task.id || selected ? ThemeColors.accentFill : ThemeColors.surfaceRaised,
                         in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .contentShape(Rectangle())
             .accessibilityElement(children: .combine)
             .accessibilityLabel(task.title + (task.completed ? "，已完成" : ""))
+            .accessibilityAddTraits(store.selecting && selected ? .isSelected : [])
+            .popover(isPresented: detailPresented) { TaskDetailSheet(taskID: task.id, core: core, shell: shell) }
+            // 与任务行同一套（TaskRow）：左滑删除 / 详情，右滑完成记录，长按菜单。
             .swipeActions(edge: .trailing) {
-                Button("删除", role: .destructive) { _ = actions.delete(id: task.id, title: task.title) }.tint(ThemeColors.danger)
+                if !store.selecting {
+                    Button(role: .destructive) { _ = actions.delete(id: task.id, title: task.title) } label: { Label("删除", systemImage: "trash") }
+                        .tint(ThemeColors.danger)
+                    Button { detailTaskID.wrappedValue = task.id } label: { Label("详情", systemImage: "info.circle") }.tint(ThemeColors.inkSoft)
+                }
             }
             .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                if !task.completed { Button("完成记录", systemImage: "checkmark") { onCompleteWithNote() }.tint(ThemeColors.success) }
+                if !store.selecting && !task.completed { Button("完成记录", systemImage: "checkmark") { onCompleteWithNote() }.tint(ThemeColors.success) }
             }
-            .contextMenu {
+            .contextMenu { if !store.selecting { chipMenu } }
+        } else {
+            TaskRow(task: task, actions: actions, allowsStart: store.canStart(on: task.date), compactAppearance: compact,
+                    // 点行切换选中由外层的同时手势做（它在非多选时移动键盘光标），这里不再传，免得一次点击切两次。
+                    selectionMode: store.selecting, selected: selected,
+                    detailTaskID: detailTaskID, onCompleteWithNote: onCompleteWithNote, onReschedule: onReschedule)
+        }
+    }
+    @ViewBuilder private var chipMenu: some View {
+                Button("编辑详情", systemImage: "info.circle") { detailTaskID.wrappedValue = task.id }
                 if task.completed { Button("取消完成", systemImage: "arrow.uturn.backward") { _ = actions.uncomplete(id: task.id) } }
                 else { Button("完成", systemImage: "checkmark") { _ = actions.complete(id: task.id, title: task.title) } }
                 if store.canStart(on: task.date) && !task.completed {
                     Button("开始专注", systemImage: "play.fill") { actions.openFocus(id: task.id, title: task.title) }
                 }
-                Button("编辑", systemImage: "pencil", action: onEdit)
-                Button("改期", systemImage: "calendar", action: onReschedule)
+                if !task.completed { Button("完成并写记录", systemImage: "checkmark.circle", action: onCompleteWithNote) }
+                Button("改期…", systemImage: "calendar", action: onReschedule)
+                Divider()
                 Button("删除", systemImage: "trash", role: .destructive) { _ = actions.delete(id: task.id, title: task.title) }
-            }
-        } else {
-            TaskRow(task: task, actions: actions, allowsStart: store.canStart(on: task.date), compactAppearance: compact,
-                    onEdit: onEdit, onCompleteWithNote: onCompleteWithNote, onReschedule: onReschedule)
-        }
     }
     private func dragProvider() -> NSItemProvider {
-        guard let session = store.beginDrag(id: task.id) else { return NSItemProvider() }
+        // 多选中不拖：拖动的冻结登记会与批量写入交叉。
+        guard !store.selecting, let session = store.beginDrag(id: task.id) else { return NSItemProvider() }
         let lifetime = WeekDragLifetime { [weak store] in
             Task { @MainActor in store?.endDrag(session: session) }
         }
@@ -322,40 +396,64 @@ private final class WeekDragLifetime: Sendable {
     }
 }
 
-private struct IdentifiedDate: Identifiable {
-    let date: String
-    var id: String { date }
-    init(_ date: String) { self.date = date }
-}
-
-@MainActor private struct WeekAddTaskSheet: View {
+// 行内新建的一行（10-12 对齐提醒事项）：平时是「＋ 新任务」，点开变输入框；回车建好接着起下一条，
+// 空行回车、点别处或 Esc 结束（有字的先建上）。建在哪天由 WeekStore.addTask 校验（过去的日期不让建）。
+@MainActor private struct WeekComposeRow: View {
     let store: WeekStore
     let date: String
-    @Environment(\.dismiss) private var dismiss
+    @Binding var composingDate: String?
+    // 宽窗七列里的小号样式；窄窗与今日任务页的新建行同一大小。
+    let compact: Bool
     @State private var title = ""
-    @State private var submitted = false
-    @State private var error = ""
+    @State private var continuing = false
+    @FocusState private var focused: Bool
+    private var composing: Bool { composingDate == date }
     var body: some View {
-        NavigationStack {
-            Form {
-                TextField("任务名称", text: $title)
-                LabeledContent("日期", value: date)
-                if !error.isEmpty { Text(error).foregroundStyle(ThemeColors.danger) }
-            }
-            .navigationTitle("添加任务").sheetChrome()
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("添加") { save() }.disabled(submitted || title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        Group {
+            if composing {
+                HStack(spacing: compact ? 8 : 14) {
+                    Circle().strokeBorder(ThemeColors.accentStrong.opacity(0.5), lineWidth: 2)
+                        .frame(width: compact ? 14 : 26, height: compact ? 14 : 26)
+                        .frame(width: compact ? 18 : 44, height: compact ? 30 : 44)
+                    TextField("新任务", text: $title)
+                        .font(.system(size: compact ? 14 : 17)).foregroundStyle(ThemeColors.inkStrong)
+                        .focused($focused).submitLabel(.next).onSubmit(submit)
+                        .onKeyPress(.escape) { focused = false; end(); return .handled }
+                        .accessibilityLabel("新任务标题")
                 }
+                .frame(minHeight: compact ? 36 : 56)
+                .onAppear { focused = true }
+                .onChange(of: focused) { _, value in
+                    guard !value else { continuing = false; return }
+                    Task { @MainActor in if !focused && !continuing && composing { end() } }
+                }
+            } else {
+                Button { composingDate = date } label: {
+                    HStack(spacing: compact ? 6 : 14) {
+                        Image(systemName: "plus.circle.fill").font(.system(size: compact ? 16 : 26))
+                            .frame(width: compact ? 18 : 44, height: compact ? 30 : 44)
+                        Text("新任务").font(.system(size: compact ? 14 : 17))
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(ThemeColors.accentInk)
+                    .frame(minHeight: compact ? 36 : 56).contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("在 \(date) 新建任务")
             }
-        }.presentationDetents([.medium, .large])
+        }
     }
-    private func save() {
-        guard !submitted else { return }
-        if store.addTask(title: title.trimmingCharacters(in: .whitespacesAndNewlines), date: date) {
-            submitted = true; dismiss()
-        } else { error = store.error }
+    private func submit() {
+        let text = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { focused = false; end(); return }
+        continuing = true
+        if store.addTask(title: text, date: date) { title = ""; focused = true } else { continuing = false }
+    }
+    private func end() {
+        let text = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty && !store.addTask(title: text, date: date) { return }
+        title = ""
+        if composingDate == date { composingDate = nil }
     }
 }
 

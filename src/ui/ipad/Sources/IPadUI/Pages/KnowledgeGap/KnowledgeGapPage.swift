@@ -40,9 +40,14 @@ import SwiftUI
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { store.requestForm(.add) } label: { ToolbarTextLabel(title: "新增", systemImage: "plus") }
+                    // 新增从按钮弹出浮层（10-13 真机：系统表单开约 245 毫秒，浮层不走表单的背景缩放）；窄窗系统改成整页表单。
+                    .popover(isPresented: Binding(get: { store.form == .add }, set: { if !$0 && store.form == .add { store.dismissForm() } })) {
+                        GapSheet(intent: .add, store: store, subjects: store.categories).frame(idealWidth: 440, idealHeight: 560)
+                    }
             }
         }
-        .sheet(item: Binding(get: { store.form }, set: { if $0 == nil { store.dismissForm() } })) { intent in
+        // 编辑、排期、解决仍是整页表单：它们从详情里的按钮和长按菜单打开，两处入口没有共同的锚点。
+        .sheet(item: Binding(get: { store.form == .add ? nil : store.form }, set: { if $0 == nil { store.dismissForm() } })) { intent in
             GapSheet(intent: intent, store: store, subjects: store.categories)
         }
         .confirmationDialog("删除「\(store.pendingDelete?.title ?? "")」？", isPresented: Binding(get: { store.pendingDelete != nil }, set: { if !$0 { store.cancelDelete() } }), titleVisibility: .visible) {
@@ -54,13 +59,13 @@ import SwiftUI
             // 内部推入详情仍是同一业务页面，不依赖父子 onAppear/onDisappear 的先后顺序停掉订阅。
             if !store.detailPresented || shell.selection != .knowledgeGap { store.setActive(false) }
         }
-        .onChange(of: shell.selection) { _, page in store.setActive(page == .knowledgeGap) }
+        .onShellSelectionChange(shell) { page in store.setActive(page == .knowledgeGap) }
     }
 
     // 副标题：「5 条未解决 · 2 条到期」；到期数取外壳摘要（服务），已解决列表不写到期。
     private var subtitle: String {
         let base = "\(store.items.count) 条\(store.statusFilter == 2 ? "已解决" : "未解决")"
-        return store.statusFilter != 2 && shell.snapshot.dueGapCount > 0 ? base + " · \(shell.snapshot.dueGapCount) 条到期" : base
+        return store.statusFilter != 2 && shell.dueGapCount > 0 ? base + " · \(shell.dueGapCount) 条到期" : base
     }
 
     // 宽窗进页时右边不留空卡：没有选中就选列表第一条（只是展示选择，不写数据）。
@@ -102,7 +107,7 @@ import SwiftUI
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .contextMenu { Button("删除", systemImage: "trash", role: .destructive) { store.requestDelete(gap) } }
+                    .contextMenu { gapMenu(gap) }
                     .accessibilityElement(children: .combine)
                     .accessibilityAddTraits(selected ? .isSelected : [])
                 }
@@ -147,7 +152,20 @@ import SwiftUI
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(EdgeInsets(top: 24, leading: 28, bottom: 24, trailing: 28))
         .background(ThemeColors.surface, in: RoundedRectangle(cornerRadius: Design.cardRadius, style: .continuous))
-        .contextMenu { Button("删除", systemImage: "trash", role: .destructive) { store.requestDelete(gap) } }
+        .contextMenu { gapMenu(gap) }
+    }
+    // 长按菜单与详情里的四个操作同一套（10-12 对齐提醒事项：列表行长按就能做，不必先点进详情）；删除仍先确认（10-04 定）。
+    @ViewBuilder private func gapMenu(_ gap: GapValue) -> some View {
+        Button("今天做", systemImage: "checklist") { store.convert(gap) }.disabled(gap.status == 2 || gap.linkedTaskOpen)
+        Button("排期…", systemImage: "calendar") { store.requestForm(.schedule(gap)) }.disabled(gap.status == 2)
+        if gap.status == 2 {
+            Button("重新打开", systemImage: "arrow.uturn.backward") { store.reopen(gap) }
+        } else {
+            Button("解决…", systemImage: "checkmark.seal") { store.requestForm(.resolve(gap)) }
+        }
+        Button("编辑", systemImage: "pencil") { store.requestForm(.edit(gap)) }
+        Divider()
+        Button("删除", systemImage: "trash", role: .destructive) { store.requestDelete(gap) }
     }
     @ViewBuilder private func actions(_ gap: GapValue) -> some View {
         ForEach(0..<4, id: \.self) { actionButtons(gap)[$0].frame(minWidth: 96) }
