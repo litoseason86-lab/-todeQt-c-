@@ -119,7 +119,11 @@ cmake --build ~/pt-build --target deploy-local-app -j8
 
 ```text
 src/models/            数据模型
-src/services/          C++ 服务层（跨平台业务逻辑）
+src/services/          C++ 服务层（跨平台业务逻辑，编入静态库 PTCore）
+src/app/               跨平台共享装配与生命周期管理（SharedApp、AppLifecycle、AppServices，编入静态库 PTApp）
+src/qmlfacade/         QML 上下文装配与展示辅助（QmlFacade，编入静态库 PTQml）
+src/entry/mac/         macOS 应用入口与平台专属装配（单实例守卫、外部 AI 接入、菜单栏与全局热键）
+src/entry/ios/         iOS 应用入口、专属依赖装配与纯函数界面路由（UiRouter）
 src/mcp/               外部 AI 接入（common/ 协议与契约、bridge/ 主应用内的权限与工具分派、helper/ 包内 stdio 辅助程序）
 src/platform/macos/    macOS 原生层（菜单栏 NSStatusItem、全局热键 Carbon、偏好域清理、iCloud 同步文件夹、外部 AI 本地连接的同用户校验，Objective-C++）
 src/platform/ios/      iOS 专属（同步文件夹、后台时间、Info.plist；native/ 原生根挂载，bridge/ Foundation 数据与生命周期桥接）
@@ -129,12 +133,16 @@ qml/                   QML 界面（views/ 页面、components/ 组件、compone
 resources/             Qt 资源文件（字体、壁纸、音效）
 shaders/               预编译 Shader 资源
 cmake/                 构建脚本（DeployLocalApp.cmake：部署到 /Applications 的原子切换逻辑）
-tests/                 Qt Test 自动化测试（C++ 与 Objective-C++ 用例、Qt Quick Test、原生颜色门禁）
+tests/                 Qt Test 自动化测试（C++ 与 Objective-C++ 用例、Qt Quick Test、架构门禁）
 docs/                  当前业务规则与运行命令
 plans/                 当前状态、待评估事项与未采纳决策
 .agents/               协作用 skill（skills/ 活动目录、skills-archive/ 归档与上游来源，维护说明见 skills-archive/README.md）
 ```
 
-业务逻辑（标准 C++/Qt）与原生代码（`.mm`）保持分离：`src/services` 只依赖平台无关抽象，原生实现按平台放在 `src/platform/macos`、`src/platform/ios`，两个平台共用的放在 `src/platform/apple`。
+架构分层与依赖解耦：
+- `PTCore`：包含业务核心与同步数据层，严禁链接 QML，不反向依赖上层；
+- `PTApp`：负责跨平台共享装配与生命周期管理，不写平台分支，严禁链接 QML；
+- `PTQml`：封装 QML 上下文注入、控件风格、打包字体注册与展示辅助；
+- 平台入口：`src/entry/mac` 与 `src/entry/ios` 保持独立，仅编入所属平台的可执行目标，自顶向下单向链接 `PTQml`、`PTApp` 与 `PTCore`。分层约束由 `ArchitectureGate` 与 `ArchitectureGateR8` 自动化门禁守护。
 
 外部 AI 接入按同样的方式分层：包内辅助程序只编译 `src/mcp/helper` 与 `src/mcp/common`，不链接业务服务与数据库，权限判断和读写一律在主应用内完成（由 `McpHelperLinkGate` 这条测试守门）。

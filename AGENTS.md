@@ -17,16 +17,23 @@
 
 - 只改完成任务需要的代码。顺手发现的问题写进汇报，不顺手修、不顺手重构。
 - 工作区里与本任务无关的未提交修改：不覆盖、不还原、不一起提交；提交时按文件添加，不用 `git add -A`、`git commit -a`。
-- 新增 C++/Objective-C++ 源文件登记到 `CMakeLists.txt` 对应的源文件列表，新增 Swift 源文件登记到其中的 iOS 源文件列表；新增 `qml/` 下的文件登记到 `resources/qml.qrc`（`tests/qml/tst_*.qml` 自动收集，不用登记）。
+- 新增 C++/Objective-C++ 源文件登记到 `CMakeLists.txt` 实际所属目标（`PTCore`、`PTApp`、`PTQml` 或各平台入口）的源文件列表，新增 Swift 源文件登记到其中的 iOS 源文件列表；新增 `qml/` 下的文件登记到 `resources/qml.qrc`（`tests/qml/tst_*.qml` 自动收集，不用登记）。
 - 临时文件（截图、日志、试验脚本）写到仓库外的，本次任务结束前删掉；要跨会话保留的，放仓库内已被忽略的目录（如 `.superpowers/`）。
 - 仓库内 `build/` 是旧产物：不写、不删、不当构建目录。
 - 目录职责：
   - `src/services`：平台无关的业务逻辑。不写平台分支（`Q_OS_*`、`#ifdef`），现存例外只有 `PhaseSoundService` 的提示音。
+  - `src/app`：跨平台共享装配与生命周期管理（`SharedApp`、`AppLifecycle`、`AppServices`）。不写平台分支、不链接 QML。
+  - `src/qmlfacade`：QML 上下文装配、控件风格、打包字体注册与启动失败界面辅助（`QmlFacade`），不持有业务状态。
+  - `src/entry/mac`、`src/entry/ios`：对应平台入口与平台依赖装配；iOS 入口含纯函数界面路由（`UiRouter`）。
   - 需要平台差异 → 在 `src/platform/macos` 或 `src/platform/ios` 写后端，服务经接口调用（照 `NotificationService` + `NotificationBackend`）。两个平台接口相同的 Apple 框架实现放 `src/platform/apple`；不从另一个平台的目录借源码。
   - `src/ui/ipad`：iPad 原生界面（Swift），不写业务判断；颜色用 iPad 颜色资源，数值与 `Theme.qml` 同源。
   - `src/platform/ios/bridge`：Objective-C++ 桥接，只做类型转换、信号转发和主线程约束；数据与信号部分不依赖 UIKit，保证能在 macOS 上编译测试。
   - 只在 macOS 存在的功能（菜单栏、全局热键、外部 AI 接入）由 `CMakeLists.txt` 按平台排除源码。
   - `src/mcp/helper` 只做协议转发，不链接业务服务、SQL、QML（`McpHelperLinkGate` 测试会拦）；权限判断和读写在主应用内完成。
+- 架构分层与依赖门禁：
+  - 核心依赖方向保持单向：可执行入口 → `PTQml` → `PTApp` → `PTCore`。`PTCore` 包含业务与同步逻辑，严禁直接或接口链接 QML，严禁反向依赖上层；`PTApp` 负责共享装配与生命周期，严禁链接 QML；`PTQml` 仅封装 QML 上下文与展示辅助。
+  - `ArchitectureGate`：自动化校验三库的静态链接属性、头文件包含白名单、禁止越层包含与平台宏位置（规则 R1–R7）。
+  - `ArchitectureGateR8`：静态校验双平台入口 `main()` 的启动时序（规则 R8），确保 `McpPaths::applyApplicationIdentity()` 在 `main()` 顶层独立无条件执行，严防偏好域和数据目录在应用身份设置前被提前访问。
 
 ## 编写约定
 
