@@ -846,6 +846,15 @@ endif()
 
 enable_testing()
 
+# 架构门禁与原生偏好测试的退出后清理均依赖 Python；iOS 已在上方返回。
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+function(pomodoro_todo_add_native_preferences_test target)
+    add_test(NAME ${target}
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/run_native_preferences_test.py"
+            "$<TARGET_FILE:${target}>")
+endfunction()
+
 add_executable(PomodoroTodoTests
     tests/ServiceTests.cpp
     src/models/Task.cpp
@@ -892,7 +901,7 @@ target_link_libraries(PomodoroTodoTests PRIVATE
 )
 
 pomodoro_todo_enable_warnings(PomodoroTodoTests)
-add_test(NAME PomodoroTodoTests COMMAND PomodoroTodoTests)
+pomodoro_todo_add_native_preferences_test(PomodoroTodoTests)
 
 add_executable(CoreLogicTests
     tests/CoreLogicTests.cpp
@@ -1040,7 +1049,7 @@ target_link_libraries(KnowledgeGapServiceTests PRIVATE
 )
 
 pomodoro_todo_enable_warnings(KnowledgeGapServiceTests)
-add_test(NAME KnowledgeGapServiceTests COMMAND KnowledgeGapServiceTests)
+pomodoro_todo_add_native_preferences_test(KnowledgeGapServiceTests)
 
 # 备忘录只依赖数据库，不引入任务或计时服务，保证纯文本记录不影响专注统计。
 add_executable(MemoServiceTests
@@ -1146,8 +1155,8 @@ target_link_libraries(AppleNotificationBackendTests PRIVATE
 pomodoro_todo_enable_warnings(AppleNotificationBackendTests)
 add_test(NAME AppleNotificationBackendTests COMMAND AppleNotificationBackendTests)
 
-# 偏好清理直接读写 CoreFoundation 偏好：用例只写按进程号命名的临时偏好域，结束时删掉，
-# 系统全局域只读不写。
+# 偏好清理直接读写 CoreFoundation 偏好：用例只写专用测试偏好域，系统全局域只读不写。
+# 启动脚本在进程退出后删除文件，避免偏好守护进程在退出阶段重新写回空 plist。
 add_executable(MacPreferencesCleanupTests
     tests/MacPreferencesCleanupTests.cpp
     src/platform/macos/MacPreferencesCleanup.h
@@ -1161,7 +1170,7 @@ target_link_libraries(MacPreferencesCleanupTests PRIVATE
 )
 
 pomodoro_todo_enable_warnings(MacPreferencesCleanupTests)
-add_test(NAME MacPreferencesCleanupTests COMMAND MacPreferencesCleanupTests)
+pomodoro_todo_add_native_preferences_test(MacPreferencesCleanupTests)
 
 # 快捷键注册表是平台无关层：默认键位、用户覆盖、冲突判定与全局热键装配全在这里，
 # 用假热键后端验证，不向系统注册任何真实热键。
@@ -1453,7 +1462,7 @@ add_executable(TrashServiceTests
 )
 target_link_libraries(TrashServiceTests PRIVATE Qt6::Core Qt6::Sql Qt6::Test)
 pomodoro_todo_enable_warnings(TrashServiceTests)
-add_test(NAME TrashServiceTests COMMAND TrashServiceTests)
+pomodoro_todo_add_native_preferences_test(TrashServiceTests)
 set_tests_properties(TrashServiceTests PROPERTIES TIMEOUT 90)
 
 # 单槽撤销删除（055 阶段 2）：计时提交、撤销、提前提交、被别处删掉时退场、失败回报。
@@ -2014,12 +2023,6 @@ endif()
 # Qt 的默认值是 AutoText，会用 mightBeRichText() 猜——用户写的任务标题里带
 # "<b>" 就会被当富文本解析。qmllint 不管这件事，所以单独一条。
 # 用 Python 而不是再写一个 C++ 目标：判据是纯文本模式匹配，不需要跑起应用。
-if(NOT IOS)
-    # ArchitectureGate 是 PTCore 的强制架构约束；非 iOS 构建缺少 Python 时不能静默跳过。
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
-else()
-    find_package(Python3 COMPONENTS Interpreter)
-endif()
 if(Python3_FOUND)
     if(APPLE)
         add_test(NAME McpBundleSmoke
