@@ -4,11 +4,11 @@
 
 ## 当前交付
 
-**057：跨平台架构基础解耦**（自动化验收与本轮真机启动验证完成；Mac 强制退出重开因当时存在运行中的专注计时未执行；归档计划正文见 `git show 01a1ddb:plans/057-跨平台架构基础解耦.md`）。
-已建立 PTCore、PTApp、PTQml 三个库，拆出 Mac、iOS 两个入口；数据库、同步格式和用户可见行为不变。Mac 已在 `~/pt-build` 构建部署并启动，主程序与 MCP 二进制校验一致，正式数据库只读核对有 294 个任务和 275 条专注记录，再次 `open` 验证单实例召回；iPad Pro M4 已签名覆盖安装并以 `--ipad-native-ui` 后台启动，截图确认原生界面、原有任务和计时状态保留。
-真机逐项记录：Mac 数据与设置通过、启动通过、单实例召回通过；Mac 专注操作、删除与撤销、菜单栏、关窗隐藏、退出重开、同步、复制、热键和外部 AI 未验证。iPad 原生启动、任务与计时数据保留通过；同步文件夹、前后台/控制中心、草稿、划掉后重开未验证。iPad 旧版 QML 与 iPhone 伴侣页未验证；原生启动使用 `--ipad-native-ui`，默认路由由 `UiRouterTests` 覆盖。
-Mac 构建、iOS 不签名编译、Swift 数据层测试和 132 条 CTest 已完成；`PlatformControlTests` 的时序失败已确认是 Qt6::Gui 传播后测试入口变化引入，改用 `QTEST_GUILESS_MAIN` 修复，并完成带/不带离屏环境的对比回归（均 132/132）。`aff320c` 基线未重新编译运行：项目规定只用 `~/pt-audit`，该目录已绑定当前源码，切换临时 worktree 会破坏共享构建缓存；基线结论来自静态链接与入口核对。
-勘误：归档计划历史记录中曾将 PTCore/PTApp 的 `INTERFACE Qt6::Qml`、`LINK_ONLY` 依赖变异写成已执行；仓库没有对应的独立门禁变异测试，该记录不作为验收证据。生产入口 R8 由 `ArchitectureGate` 执行，`ArchitectureGateR8` 只覆盖检查器自身回归。
+**057：跨平台架构基础解耦**（自动化验收通过；Mac 新版本启动未验证；归档计划正文见 `git show 01a1ddb:plans/057-跨平台架构基础解耦.md`）。
+已建立 PTCore、PTApp、PTQml 三个库，拆出 Mac、iOS 两个入口；数据库、同步格式和用户可见行为不变。Mac 已在 `~/pt-build` 构建部署，主程序与 MCP 二进制校验一致；没有证据证明部署后的新版本实际启动，因此 Mac 启动、数据与设置读取、单实例守卫均未验证。此前只读查库得到 294 个任务和 275 条专注记录，该结果不能证明新程序读取了对应数据。iPad Pro M4 已签名覆盖安装并以 `--ipad-native-ui` 后台启动，截图确认原生界面、原有任务和计时状态保留。
+真机逐项记录：Mac 部署与二进制校验通过；启动、数据与设置、单实例守卫、专注操作、删除与撤销、菜单栏、关窗隐藏、退出重开、同步、复制、热键和外部 AI 均未验证。iPad 原生启动、任务与计时数据保留通过；同步文件夹、前后台/控制中心、草稿、划掉后重开未验证。iPad 旧版 QML 与 iPhone 伴侣页未验证；原生启动使用 `--ipad-native-ui`，默认路由由 `UiRouterTests` 覆盖。
+Mac 构建、iOS 不签名编译、Swift 数据层测试和 132 条 CTest 已完成；`PlatformControlTests` 的失败由 Qt6::Gui 传播后测试入口变化引入，改用 `QTEST_GUILESS_MAIN` 修复，并完成带/不带离屏环境的对比回归（均 132/132）。HEAD 上修复前后的对比已证明成因，无需基线复跑。
+门禁变异验证（据本轮审查提供的结果）：审查方在容器中使用 CMake 3.28、假的 Qt 目标和仓库原有清单生成代码及检查器完成验证；本机未重复执行。结果：PTCore 的 `INTERFACE Qt6::Qml`、`PRIVATE Qt6::Qml`（含 `$<LINK_ONLY:Qt6::Qml>`）、`PRIVATE Qt6::Quick` 和反向依赖 PTApp 均被 R1 拦截；无法解析的配置生成器表达式按失败处理；PTApp 的 `INTERFACE Qt6::Qml`、`PRIVATE Qt6::QuickControls2` 和反向依赖 PTQml 均被 R6 拦截；合法的 `LINK_ONLY` 正向依赖（PTCore → Qt6::Sql、PTQml → Qt6::Qml）通过。此前 PTApp 的 `INTERFACE Qt6::Qml` 变异也已在 057-B 执行。生产入口 R8 由 `ArchitectureGate` 执行，`ArchitectureGateR8` 只覆盖检查器自身回归。
 
 **055：iPad 原生前端 + 056：iPad 提速与对齐提醒事项**（055 于 2026-10-08 批准，2026-10-13 与 056 一起合入 `main`，分支 `feat/ipad-native`）。
 计划全文随 `bfa3f6b` 入库留档后按约定删除：总计划 `git show bfa3f6b:plans/055-iPad原生前端.md`，进度与分工 `git show bfa3f6b:plans/055-进度与分工.md`，
