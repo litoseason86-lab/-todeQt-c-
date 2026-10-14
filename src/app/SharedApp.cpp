@@ -37,21 +37,6 @@ SharedApp::SharedApp(Options options, QObject* parent)
     , m_lifecycle(this)
     , m_services(*this)
 {
-    // 菜单栏控制器属于平台无关层，生命周期由 SharedApp 持有。
-    m_trayController = std::make_unique<TrayController>(FocusTimer::instance());
-
-    // 移动端/iOS 恢复策略与应用活动监控（必须早于专注会话恢复与前后台处理建立）。
-    if (m_options.enableOfflineRecovery) {
-        FocusTimer::instance()->setRecoveryPolicy(FocusTimer::RecoveryPolicy::CatchUpOffline);
-    }
-    FocusTimer::instance()->setManualRestAllowed(m_options.allowManualRest);
-
-    if (m_options.monitorApplicationActivity) {
-        m_applicationActivity = std::make_unique<GuiApplicationActivity>(SystemMonotonicClock::instance());
-        FocusTimer::instance()->setApplicationActivity(m_applicationActivity.get());
-        connect(m_applicationActivity.get(), &GuiApplicationActivity::leftForeground,
-                FocusTimer::instance(), &FocusTimer::checkpoint);
-    }
 }
 
 SharedApp::~SharedApp()
@@ -82,10 +67,36 @@ bool SharedApp::openDatabase(QString* errorMessage)
         return false;
     }
 
+    initializeRuntimeServices();
+
     m_naturalCompletionNoticeRequired =
         DatabaseManager::instance()->openedExistingDatabase()
         && !AppSettings::instance()->naturalCompletionNoticeShown();
     return true;
+}
+
+void SharedApp::initializeRuntimeServices()
+{
+    if (m_runtimeServicesInitialized) {
+        return;
+    }
+    m_runtimeServicesInitialized = true;
+
+    // 菜单栏控制器属于平台无关层，生命周期由 SharedApp 持有；必须在数据库成功打开后创建。
+    m_trayController = std::make_unique<TrayController>(FocusTimer::instance());
+
+    // 移动端/iOS 恢复策略与应用活动监控（必须早于专注会话恢复与前后台处理建立）。
+    if (m_options.enableOfflineRecovery) {
+        FocusTimer::instance()->setRecoveryPolicy(FocusTimer::RecoveryPolicy::CatchUpOffline);
+    }
+    FocusTimer::instance()->setManualRestAllowed(m_options.allowManualRest);
+
+    if (m_options.monitorApplicationActivity) {
+        m_applicationActivity = std::make_unique<GuiApplicationActivity>(SystemMonotonicClock::instance());
+        FocusTimer::instance()->setApplicationActivity(m_applicationActivity.get());
+        connect(m_applicationActivity.get(), &GuiApplicationActivity::leftForeground,
+                FocusTimer::instance(), &FocusTimer::checkpoint);
+    }
 }
 
 void SharedApp::restoreSession()
