@@ -4,8 +4,8 @@
 
 ## 当前交付
 
-**057：跨平台架构基础解耦**（自动化验收完成，真机与部署仍待授权验证；归档计划正文见提交 `01a1ddb`）。
-已建立 PTCore、PTApp、PTQml 三个库，拆出 Mac、iOS 两个入口；数据库、同步格式和用户可见行为不变。Mac 构建、iOS 不签名编译、Swift 数据层测试和 132 条离屏 CTest 已完成；`PlatformControlTests` 的时序失败在 HEAD 上连续 5 次复现，未改测试或实现。
+**057：跨平台架构基础解耦**（自动化验收与本轮真机启动验证完成；Mac 强制退出重开因当时存在运行中的专注计时未执行；归档计划正文见提交 `01a1ddb`）。
+已建立 PTCore、PTApp、PTQml 三个库，拆出 Mac、iOS 两个入口；数据库、同步格式和用户可见行为不变。Mac 已在 `~/pt-build` 构建部署并启动，主程序与 MCP 二进制校验一致，正式数据库只读核对有 294 个任务和 275 条专注记录，再次 `open` 验证单实例召回；iPad Pro M4 已签名覆盖安装并以 `--ipad-native-ui` 后台启动，截图确认原生界面、原有任务和计时状态保留。Mac 构建、iOS 不签名编译、Swift 数据层测试和 132 条离屏 CTest 已完成；`PlatformControlTests` 的时序失败在 HEAD 上连续 5 次复现，未改测试或实现。
 
 **055：iPad 原生前端 + 056：iPad 提速与对齐提醒事项**（055 于 2026-10-08 批准，2026-10-13 与 056 一起合入 `main`，分支 `feat/ipad-native`）。
 计划全文随 `bfa3f6b` 入库留档后按约定删除：总计划 `git show bfa3f6b:plans/055-iPad原生前端.md`，进度与分工 `git show bfa3f6b:plans/055-进度与分工.md`，
