@@ -4,11 +4,12 @@
 
 ## 当前交付
 
-**057：跨平台架构基础解耦**（自动化验收通过；Mac 新版本启动未验证；归档计划正文见 `git show 01a1ddb:plans/057-跨平台架构基础解耦.md`）。
-已建立 PTCore、PTApp、PTQml 三个库，拆出 Mac、iOS 两个入口；数据库、同步格式和用户可见行为不变。Mac 已在 `~/pt-build` 构建部署，主程序与 MCP 二进制校验一致；没有证据证明部署后的新版本实际启动，因此 Mac 启动、数据与设置读取、单实例守卫均未验证。此前只读查库得到 294 个任务和 275 条专注记录，该结果不能证明新程序读取了对应数据。iPad Pro M4 已签名覆盖安装并以 `--ipad-native-ui` 后台启动，截图确认原生界面、原有任务和计时状态保留。
-真机逐项记录：Mac 部署与二进制校验通过；启动、数据与设置、单实例守卫、专注操作、删除与撤销、菜单栏、关窗隐藏、退出重开、同步、复制、热键和外部 AI 均未验证。iPad 原生启动、任务与计时数据保留通过；同步文件夹、前后台/控制中心、草稿、划掉后重开未验证。iPad 旧版 QML 与 iPhone 伴侣页未验证；原生启动使用 `--ipad-native-ui`，默认路由由 `UiRouterTests` 覆盖。
-Mac 构建、iOS 不签名编译、Swift 数据层测试和 132 条 CTest 已完成；`PlatformControlTests` 的失败由 Qt6::Gui 传播后测试入口变化引入，改用 `QTEST_GUILESS_MAIN` 修复，并完成带/不带离屏环境的对比回归（均 132/132）。HEAD 上修复前后的对比已证明成因，无需基线复跑。
-门禁变异验证（据本轮审查提供的结果）：审查方在容器中使用 CMake 3.28、假的 Qt 目标和仓库原有清单生成代码及检查器完成验证；本机未重复执行。结果：PTCore 的 `INTERFACE Qt6::Qml`、`PRIVATE Qt6::Qml`（含 `$<LINK_ONLY:Qt6::Qml>`）、`PRIVATE Qt6::Quick` 和反向依赖 PTApp 均被 R1 拦截；无法解析的配置生成器表达式按失败处理；PTApp 的 `INTERFACE Qt6::Qml`、`PRIVATE Qt6::QuickControls2` 和反向依赖 PTQml 均被 R6 拦截；合法的 `LINK_ONLY` 正向依赖（PTCore → Qt6::Sql、PTQml → Qt6::Qml）通过。此前 PTApp 的 `INTERFACE Qt6::Qml` 变异也已在 057-B 执行。生产入口 R8 由 `ArchitectureGate` 执行，`ArchitectureGateR8` 只覆盖检查器自身回归。
+**057：跨平台架构基础解耦**（2026-10-13 批准，2026-10-14 验收通过并合入 `main`，分支 `feat/057-arch-foundation`；归档计划正文见 `git show 01a1ddb:plans/057-跨平台架构基础解耦.md`）。
+已建立 PTCore、PTApp、PTQml 三个库，拆出 Mac、iOS 两个入口；数据库、同步格式和用户可见行为不变。分层、目录职责与门禁规则见 `AGENTS.md`，测试条目与门禁清单见 [运行命令](../docs/运行命令.md)。
+自动化（10-14 在 `d6354e3` 复核）：`~/pt-audit` 构建 0 告警、CTest 132/132、`swift test` 390/390、iOS 不签名编译 0 条编译告警；Mac 链接的 Qt 框架集合、iOS 二进制的 49 个 Qt 静态插件与改动前基线一致。
+与计划的唯一偏离：PTCore 公开链接 Qt6::Gui 后，原本不带界面的测试用 `QTEST_MAIN` 会变成 `QGuiApplication`，11 个测试改用 `QTEST_GUILESS_MAIN` 恢复 `QCoreApplication`（`PlatformControlTests` 的时序失败即由此引起），名单见运行命令；其余已有测试未删改。
+门禁变异：本机 CMake 4.0.2 用合成工程照搬仓库的清单生成代码复现了 11 例——PTCore 的 `INTERFACE`/`PRIVATE Qt6::Qml`（后者在接口里是 `$<LINK_ONLY:Qt6::Qml>`）、`PRIVATE Qt6::Quick`、反向依赖 PTApp 被 R1 拦截，无法解析的配置生成器表达式按失败处理；PTApp 的 `INTERFACE Qt6::Qml`、`PRIVATE Qt6::QuickControls2`、反向依赖 PTQml 被 R6 拦截；合法的 `LINK_ONLY` 正向依赖（PTCore → Qt6::Sql、PTQml → Qt6::Qml）放行。审查方此前在容器（CMake 3.28）得到同样结果。生产入口 R8 由 `ArchitectureGate` 执行，`ArchitectureGateR8` 只覆盖检查器自身回归。
+真机：Mac 从 `~/pt-build` 部署，主程序与 MCP 二进制 `shasum` 一致；iPad Pro M4 签名覆盖安装（描述文件 10-17 18:12 到期）。057-D 真机清单（Mac、iPad 原生、iPad 旧版 QML、iPhone 伴侣页）由用户于 10-14 确认全部通过。
 
 **055：iPad 原生前端 + 056：iPad 提速与对齐提醒事项**（055 于 2026-10-08 批准，2026-10-13 与 056 一起合入 `main`，分支 `feat/ipad-native`）。
 计划全文随 `bfa3f6b` 入库留档后按约定删除：总计划 `git show bfa3f6b:plans/055-iPad原生前端.md`，进度与分工 `git show bfa3f6b:plans/055-进度与分工.md`，
