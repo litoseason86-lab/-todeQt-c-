@@ -778,5 +778,5 @@ void TimingRobustnessTests::manualRestDisallowedRejectsOnlyManualRest()
     QCOMPARE(failedSpy.count(), 1);
 }
 
-QTEST_MAIN(TimingRobustnessTests)
+QTEST_GUILESS_MAIN(TimingRobustnessTests)
 #include "TimingRobustnessTests.moc"

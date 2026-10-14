@@ -503,5 +503,5 @@ void PlatformControlTests::freePhaseSendsNoNotification()
     QCOMPARE(backend.deliveredCount, 0);
 }
 
-QTEST_MAIN(PlatformControlTests)
+QTEST_GUILESS_MAIN(PlatformControlTests)
 #include "PlatformControlTests.moc"

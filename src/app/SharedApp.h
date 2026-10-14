@@ -49,7 +49,7 @@ public:
     AppServices& services() { return m_services; }
     AppLifecycle& lifecycle() { return m_lifecycle; }
 
-    // 1. 打开数据库。防呆：组织名为空时拒绝打开并给出原因。
+    // 1. 打开数据库并在成功后创建运行期服务；防呆：组织名为空时拒绝打开并给出原因。
     bool openDatabase(QString* errorMessage = nullptr);
 
     // 2. 恢复中断的专注会话，并创建 TaskInteractionCoordinator

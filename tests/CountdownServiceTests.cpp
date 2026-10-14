@@ -524,5 +524,5 @@ void CountdownServiceTests::syncReferenceDateUpdatesBothPathsAndNotifies()
     QCOMPARE(primarySpy.count(), 1);
 }
 
-QTEST_MAIN(CountdownServiceTests)
+QTEST_GUILESS_MAIN(CountdownServiceTests)
 #include "CountdownServiceTests.moc"

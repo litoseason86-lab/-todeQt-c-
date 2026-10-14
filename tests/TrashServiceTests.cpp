@@ -1500,5 +1500,5 @@ void TrashServiceTests::brokenTrashSchemaIsRejected()
     QVERIFY(!DatabaseManager::instance()->createTables());
 }
 
-QTEST_MAIN(TrashServiceTests)
+QTEST_GUILESS_MAIN(TrashServiceTests)
 #include "TrashServiceTests.moc"

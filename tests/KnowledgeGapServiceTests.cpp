@@ -1087,7 +1087,7 @@ void KnowledgeGapServiceTests::operationsFailSafelyWhenDatabaseIsClosed()
     QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
 }
 
-QTEST_MAIN(KnowledgeGapServiceTests)
+QTEST_GUILESS_MAIN(KnowledgeGapServiceTests)
 #include "KnowledgeGapServiceTests.moc"
 
 void KnowledgeGapServiceTests::conversionRejectsOverlongNotesAndSearchIsLiteral()

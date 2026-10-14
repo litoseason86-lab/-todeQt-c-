@@ -511,5 +511,5 @@ void PhaseAlarmCoordinatorTests::breakCompletionRemembersLongBreakAndFallsBackTo
     QCOMPARE(directChimes, 1);
 }
 
-QTEST_MAIN(PhaseAlarmCoordinatorTests)
+QTEST_GUILESS_MAIN(PhaseAlarmCoordinatorTests)
 #include "PhaseAlarmCoordinatorTests.moc"

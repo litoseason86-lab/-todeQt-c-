@@ -386,5 +386,5 @@ void RobustnessTests::writeSucceedsWhileAnotherConnectionHoldsTheLock()
              QStringLiteral("撞锁期间写入"));
 }
 
-QTEST_MAIN(RobustnessTests)
+QTEST_GUILESS_MAIN(RobustnessTests)
 #include "RobustnessTests.moc"

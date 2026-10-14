@@ -564,5 +564,5 @@ void CoreLogicTests::countdownDuplicateGoalNamesAreAllowed()
                                     CountdownModel::DisplayOrderRole).toInt(), 1);
 }
 
-QTEST_MAIN(CoreLogicTests)
+QTEST_GUILESS_MAIN(CoreLogicTests)
 #include "CoreLogicTests.moc"

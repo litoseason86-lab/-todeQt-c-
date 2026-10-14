@@ -4326,5 +4326,5 @@ void SyncTests::trashDeletionBeatingALateEditWritesNoSyncLog()
     }
 }
 
-QTEST_MAIN(SyncTests)
+QTEST_GUILESS_MAIN(SyncTests)
 #include "SyncTests.moc"

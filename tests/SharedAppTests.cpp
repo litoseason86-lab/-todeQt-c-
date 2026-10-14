@@ -462,6 +462,7 @@ void SharedAppTests::openDatabaseGuardsAgainstEmptyOrganizationName()
     QVERIFY(!app.openDatabase(&error));
     QVERIFY(error.contains(QStringLiteral("组织名为空")));
     QVERIFY(!QFile::exists(guardDbPath));
+    QVERIFY(app.trayController() == nullptr);
 
     // 重新应用应用身份：打开必须成功，磁盘建立数据库
     McpPaths::applyApplicationIdentity();
@@ -469,6 +470,7 @@ void SharedAppTests::openDatabaseGuardsAgainstEmptyOrganizationName()
     QVERIFY(app.openDatabase(&error));
     QVERIFY(error.isEmpty());
     QVERIFY(QFile::exists(guardDbPath));
+    QVERIFY(app.trayController() != nullptr);
 }
 
 void SharedAppTests::applicationIdentityAndDatabasePathContract()

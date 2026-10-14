@@ -416,5 +416,5 @@ void PendingDeletionTests::delayMsIgnoresNonPositiveValuesAndOnlyAffectsTheNextR
     QTRY_COMPARE_WITH_TIMEOUT(rowCount(QStringLiteral("tasks"), second), 0, 2000);
 }
 
-QTEST_MAIN(PendingDeletionTests)
+QTEST_GUILESS_MAIN(PendingDeletionTests)
 #include "PendingDeletionTests.moc"

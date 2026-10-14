@@ -952,5 +952,5 @@ void ScheduleServiceTests::deletingCategoryClearsEntryCategory()
     QCOMPARE(cleared.value(QStringLiteral("title")).toString(), QStringLiteral("高等数学"));
 }
 
-QTEST_MAIN(ScheduleServiceTests)
+QTEST_GUILESS_MAIN(ScheduleServiceTests)
 #include "ScheduleServiceTests.moc"
