@@ -2289,6 +2289,7 @@ set_tests_properties(SharedAppTests PROPERTIES TIMEOUT 60
 add_executable(QmlFacadeTests
     tests/QmlFacadeTests.cpp
     src/mcp/common/McpPaths.cpp
+    resources/fonts.qrc
 )
 target_link_libraries(QmlFacadeTests PRIVATE
     PTQml
@@ -2396,4 +2397,8 @@ if(NOT IOS AND Python3_FOUND)
             "${CMAKE_CURRENT_BINARY_DIR}/architecture-manifest.json"
             "${CMAKE_CURRENT_SOURCE_DIR}")
     set_tests_properties(ArchitectureGate PROPERTIES TIMEOUT 30)
+
+    add_test(NAME ArchitectureGateR8
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_architecture_gate_r8.py")
+    set_tests_properties(ArchitectureGateR8 PROPERTIES TIMEOUT 30)
 endif()
