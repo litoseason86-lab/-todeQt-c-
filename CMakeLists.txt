@@ -76,9 +76,6 @@ if(APPLE AND NOT IOS AND TARGET WrapOpenGL::WrapOpenGL)
 endif()
 
 set(APP_SOURCES
-    src/main.cpp
-    src/models/PlainTextLayout.h
-    src/models/PlainTextLayout.cpp
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/models/CountdownGoal.cpp
@@ -195,6 +192,7 @@ if(NOT IOS)
     # 菜单栏、全局热键与偏好域清理。iOS 由系统保证单实例，
     # 也没有外部进程能连进来，这些源码整体不编入；main.cpp 里的装配用 Q_OS_MACOS 同步圈住。
     list(APPEND APP_SOURCES
+        src/entry/mac/main.cpp
         src/services/SingleInstanceGuard.h
         src/services/SingleInstanceGuard.cpp
         src/mcp/bridge/McpAccessController.h
@@ -245,6 +243,9 @@ if(IOS)
     # iPad 的同步文件夹：用「文件」选择器选中的 iCloud 云盘文件夹（安全作用域书签 + 文件协调），
     # 以及切到后台时向系统要时间把改动写完。
     list(APPEND APP_SOURCES
+        src/entry/ios/main.cpp
+        src/entry/ios/UiRouter.h
+        src/entry/ios/UiRouter.cpp
         src/platform/ios/IosSyncFolder.h
         src/platform/ios/IosSyncFolder.mm
         src/platform/ios/IosFolderPicker.h
@@ -491,16 +492,41 @@ target_include_directories(PTApp PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 target_link_libraries(PTApp PUBLIC PTCore)
 pomodoro_todo_enable_warnings(PTApp)
 
-# PomodoroTodo 继续保留入口、平台后端、资源和 macOS 专属源码；业务实现由 PTCore 提供，装配由 PTApp 提供。
+# 057-C：跨平台 QML 门面与文字排版库 PTQml。
+set(PTQML_SOURCES
+    src/qmlfacade/QmlFacade.h
+    src/qmlfacade/QmlFacade.cpp
+    src/models/PlainTextLayout.h
+    src/models/PlainTextLayout.cpp
+)
+add_library(PTQml STATIC ${PTQML_SOURCES})
+target_include_directories(PTQml PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(PTQml PUBLIC
+    PTApp
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::QuickControls2
+)
+pomodoro_todo_enable_warnings(PTQml)
+
+# PomodoroTodo 继续保留入口、平台后端、资源和 macOS 专属源码；业务实现由 PTCore 提供，装配由 PTApp 提供，QML 门面由 PTQml 提供。
 get_target_property(POMODORO_TODO_TARGET_SOURCES PomodoroTodo SOURCES)
 foreach(ptcore_source IN LISTS PTCORE_SOURCES)
     list(REMOVE_ITEM POMODORO_TODO_TARGET_SOURCES
         "${ptcore_source}"
         "${CMAKE_CURRENT_SOURCE_DIR}/${ptcore_source}")
 endforeach()
+foreach(ptqml_source IN LISTS PTQML_SOURCES)
+    list(REMOVE_ITEM POMODORO_TODO_TARGET_SOURCES
+        "${ptqml_source}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/${ptqml_source}")
+endforeach()
 set_property(TARGET PomodoroTodo PROPERTY SOURCES "${POMODORO_TODO_TARGET_SOURCES}")
 list(REMOVE_ITEM APP_SOURCES ${PTCORE_SOURCES})
-target_link_libraries(PomodoroTodo PRIVATE PTApp PTCore)
+list(REMOVE_ITEM APP_SOURCES ${PTQML_SOURCES})
+target_link_libraries(PomodoroTodo PRIVATE PTQml PTApp PTCore)
 
 pomodoro_todo_enable_warnings(PomodoroTodo)
 
@@ -2055,8 +2081,8 @@ target_link_libraries(CaliberQuickTests PRIVATE Qt6::QuickTest Qt6::Quick Qt6::S
 pomodoro_todo_enable_warnings(CaliberQuickTests)
 set(POMODORO_TODO_CALIBER_QML_TESTS contrast_audit page_scrollbars focus_start_flow week_keyboard_entry heatmap_bands month_heatmap_bar month_cleanup_confirm schedule_weeks schedule_view schedule_grid_tap page_activation_failure dialog_smoke dialog_close_guard)
 
-add_executable(MemoQuickTests tests/MemoQuickTests.cpp src/models/PlainTextLayout.h src/models/PlainTextLayout.cpp)
-target_link_libraries(MemoQuickTests PRIVATE Qt6::QuickTest Qt6::Quick)
+add_executable(MemoQuickTests tests/MemoQuickTests.cpp)
+target_link_libraries(MemoQuickTests PRIVATE PTQml Qt6::QuickTest Qt6::Quick)
 pomodoro_todo_enable_warnings(MemoQuickTests)
 
 # QML 测试按文件拆成独立 ctest 条目。聚合成一条时 qmltestrunner 在单进程里串行跑完
@@ -2259,12 +2285,50 @@ add_test(NAME SharedAppTests COMMAND SharedAppTests)
 set_tests_properties(SharedAppTests PROPERTIES TIMEOUT 60
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
+# 057-C：新增 QML 上下文属性安装测试目标 QmlFacadeTests
+add_executable(QmlFacadeTests
+    tests/QmlFacadeTests.cpp
+    src/mcp/common/McpPaths.cpp
+)
+target_link_libraries(QmlFacadeTests PRIVATE
+    PTQml
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Sql
+    Qt6::Test
+)
+pomodoro_todo_enable_warnings(QmlFacadeTests)
+add_test(NAME QmlFacadeTests COMMAND QmlFacadeTests)
+set_tests_properties(QmlFacadeTests PROPERTIES TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
+# 057-C：新增 iOS 界面路由纯函数测试目标 UiRouterTests
+add_executable(UiRouterTests
+    tests/UiRouterTests.cpp
+    src/entry/ios/UiRouter.cpp
+    src/entry/ios/UiRouter.h
+    src/platform/ios/native/IPadUiPreferences.h
+)
+target_include_directories(UiRouterTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(UiRouterTests PRIVATE
+    Qt6::Core
+    Qt6::Test
+)
+pomodoro_todo_enable_warnings(UiRouterTests)
+add_test(NAME UiRouterTests COMMAND UiRouterTests)
+set_tests_properties(UiRouterTests PROPERTIES TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
 # 057-A：测试与联调宿主改链 PTCore。只从目标删除已经属于 PTCore 的源文件；
 # PlainTextLayout、SingleInstanceGuard 和平台桥接源码不在 PTCore，保留它们各自的测试边界。
 get_property(POMODORO_TODO_ALL_TARGETS DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
 foreach(pt_target IN LISTS POMODORO_TODO_ALL_TARGETS)
-    if(pt_target STREQUAL "PTCore" OR pt_target STREQUAL "PTApp" OR pt_target STREQUAL "PomodoroTodo" OR pt_target STREQUAL "PomodoroTodoMcp"
-       OR pt_target STREQUAL "McpTestHelper" OR pt_target STREQUAL "SharedAppTests")
+    if(pt_target STREQUAL "PTCore" OR pt_target STREQUAL "PTApp" OR pt_target STREQUAL "PTQml"
+       OR pt_target STREQUAL "PomodoroTodo" OR pt_target STREQUAL "PomodoroTodoMcp"
+       OR pt_target STREQUAL "McpTestHelper" OR pt_target STREQUAL "SharedAppTests"
+       OR pt_target STREQUAL "QmlFacadeTests" OR pt_target STREQUAL "UiRouterTests")
         continue()
     endif()
     get_target_property(pt_target_type ${pt_target} TYPE)
@@ -2302,6 +2366,8 @@ get_target_property(PTCORE_MANIFEST_SOURCES PTCore SOURCES)
 string(REPLACE ";" "\",\"" PTCORE_MANIFEST_SOURCES "${PTCORE_MANIFEST_SOURCES}")
 get_target_property(PTAPP_MANIFEST_SOURCES PTApp SOURCES)
 string(REPLACE ";" "\",\"" PTAPP_MANIFEST_SOURCES "${PTAPP_MANIFEST_SOURCES}")
+get_target_property(PTQML_MANIFEST_SOURCES PTQml SOURCES)
+string(REPLACE ";" "\",\"" PTQML_MANIFEST_SOURCES "${PTQML_MANIFEST_SOURCES}")
 string(CONFIGURE [=[
 {
   "PTCore": {
@@ -2313,6 +2379,11 @@ string(CONFIGURE [=[
     "sources": ["@PTAPP_MANIFEST_SOURCES@"],
     "link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTApp,LINK_LIBRARIES>,",">"],
     "interface_link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTApp,INTERFACE_LINK_LIBRARIES>,",">"]
+  },
+  "PTQml": {
+    "sources": ["@PTQML_MANIFEST_SOURCES@"],
+    "link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTQml,LINK_LIBRARIES>,",">"],
+    "interface_link_libraries": ["$<JOIN:$<TARGET_PROPERTY:PTQml,INTERFACE_LINK_LIBRARIES>,",">"]
   }
 }
 ]=] PT_ARCHITECTURE_MANIFEST @ONLY)

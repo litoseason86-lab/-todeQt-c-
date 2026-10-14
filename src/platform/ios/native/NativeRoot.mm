@@ -24,11 +24,6 @@ void mount(UIWindowScene *scene)
 
 bool isIPadDevice() { return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad; }
 
-bool shouldUseNativeRoot()
-{
-    // 设备分发先于所有开发开关，iPhone 始终使用伴侣页。
-    return IPadUiPreferences::shouldUseNative(isIPadDevice(), QCoreApplication::arguments(), qgetenv("POMODORO_TODO_NATIVE_UI"));
-}
 
 void installNativeRoot()
 {

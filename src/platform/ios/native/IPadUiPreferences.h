@@ -12,13 +12,17 @@ public:
     explicit IPadUiPreferences(bool isIPad, QObject *parent = nullptr) : QObject(parent), m_isIPad(isIPad) {}
     bool isIPad() const { return m_isIPad; }
     QString error() const { return m_error; }
-    static bool shouldUseNative(bool isIPad, const QStringList &arguments, const QByteArray &forced) {
+    static bool shouldUseNative(bool isIPad, const QStringList &arguments, const QByteArray &forced, bool preferenceValue) {
         if (!isIPad) return false;
         if (arguments.contains(QStringLiteral("--ipad-qml-ui"))) return false;
         if (arguments.contains(QStringLiteral("--ipad-native-ui"))) return true;
         if (forced == "0") return false;
         if (forced == "1") return true;
-        return QSettings().value(QStringLiteral("ipad/nativeUI"), true).toBool();
+        return preferenceValue;
+    }
+    static bool shouldUseNative(bool isIPad, const QStringList &arguments, const QByteArray &forced) {
+        return shouldUseNative(isIPad, arguments, forced,
+                                QSettings().value(QStringLiteral("ipad/nativeUI"), true).toBool());
     }
     static bool writeNativeUI(bool value, QString *error = nullptr) {
         QSettings settings;
