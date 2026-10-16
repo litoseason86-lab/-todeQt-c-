@@ -43,7 +43,12 @@ jobs:
 
       - name: 完整构建
         id: build
-        run: cmake --build "$HOME/pt-audit" --parallel 3
+        run: |
+          # 先验证已定位的压力用例，避免每次等待全仓构建才能取得诊断；其余门禁仍完整执行。
+          cmake --build "$HOME/pt-audit" --target McpIntegrationTests --parallel 3
+          QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
+            "$HOME/pt-audit/McpIntegrationTests" helperSurvivesMixedBatchWhileBacklogged
+          cmake --build "$HOME/pt-audit" --parallel 3
 
       - name: C++、QML、桥接与架构门禁
         # 使用固定串行基线，便于对照托管 runner 与本机结果；

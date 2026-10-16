@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QProcess>
+#include <QElapsedTimer>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QScopeGuard>
@@ -832,7 +833,13 @@ private slots:
         const QString blob(470000, QChar(u'x'));
         const auto largeResult = makeToolSuccessResult({{"blob", blob}});
         QVERIFY(line({{"kind", "result"}, {"id", "6"}, {"result", largeResult}}).size() < kMaxResponseBytes);
-        host.access.setDataHandler([&](Tool, const QJsonObject&) { return makeToolSuccessResult({{"blob", blob}}); });
+        QElapsedTimer elapsed;
+        elapsed.start();
+        QList<qint64> dispatchTimes;
+        host.access.setDataHandler([&](Tool, const QJsonObject&) {
+            dispatchTimes.append(elapsed.elapsed());
+            return makeToolSuccessResult({{"blob", blob}});
+        });
         int output[2]; QVERIFY(::pipe(output) == 0);
         QVERIFY(::fcntl(output[0], F_SETFL, ::fcntl(output[0], F_GETFL) | O_NONBLOCK) == 0);
         QProcess process;
@@ -896,6 +903,7 @@ private slots:
                                             || process.state() != QProcess::Running; }, 30000));
         QCOMPARE(process.state(), QProcess::Running);
         QCOMPARE(received.count('\n'), kBatch + 1);
+        const QByteArray helperTrace = process.readAllStandardError();
         int big = 0;
         QSet<int> replyIds;
         for (const auto& reply : received.trimmed().split('\n')) {
@@ -911,6 +919,9 @@ private slots:
             QVERIFY2(!message.contains("error"), reply.constData());
             QVERIFY(message.value("result").isObject());
             const auto result = message.value("result").toObject();
+            if (result.value("isError").toBool())
+                qWarning().noquote() << "MCP pressure dispatch times (ms):" << dispatchTimes
+                                     << "\nhelper trace:\n" << helperTrace;
             QVERIFY2(!result.value("isError").toBool(), reply.constData());
             if (id >= 2 && id < 2 + kBigCalls) {
                 QCOMPARE(result.value("structuredContent").toObject().value("blob").toString(), blob);
