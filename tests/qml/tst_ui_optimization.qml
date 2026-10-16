@@ -895,15 +895,17 @@ TestCase {
         compare(cancelButton.contentItem.font.weight, Font.Medium);
         compare(submitButton.contentItem.font.weight, Font.Medium);
 
+        // 先把焦点交给按钮，提交空标题必须重新把焦点送回输入框；不能靠初始焦点蒙混过关。
+        cancelButton.forceActiveFocus();
+        tryCompare(cancelButton, "activeFocus", true, testCase.uiTimeout);
         addTaskDialog.submit();
         tryVerify(function () {
-            // forceActiveFocus 只有在测试窗口成为系统 active window 时才会置 activeFocus；
-            // 离屏 runner 不保证这一点，提交失败的稳定产品契约是错误文案和危险边框。
-            return titleErrorLabel.text === "任务标题不能为空"
+            return titleField.activeFocus && titleErrorLabel.text === "任务标题不能为空"
                     && Qt.colorEqual(titleFieldBackground.border.color, Theme.dangerBorder)
                     && titleFieldBackground.border.width === 2;
         }, testCase.uiTimeout, "提交空任务后标题错误状态未落位");
 
+        verify(titleField.activeFocus);
         compare(titleErrorLabel.text, "任务标题不能为空");
         verify(Qt.colorEqual(titleFieldBackground.border.color, Theme.dangerBorder));
         compare(titleFieldBackground.border.width, 2);

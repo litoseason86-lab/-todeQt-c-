@@ -9,6 +9,9 @@
 #include <QProcess>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QScopeGuard>
+#include <QSet>
+#include <QSocketNotifier>
 #include <QTemporaryDir>
 #include <QUuid>
 #include <sys/socket.h>
@@ -822,28 +825,47 @@ private slots:
     }
     void helperSurvivesMixedBatchWhileBacklogged()
     {
-        // 同一批请求里既有几条大结果，也有上百条同步响应的请求，期间客户端短暂不读 stdout：
-        // 辅助程序既不能退出，也不能丢结果——背压只推迟，不丢弃。
+        // 产品保证：大结果与大量小请求混合积压时，所有响应仍成功且恰好返回一次，辅助程序保持连接。
+        // 客户端短暂不读 stdout，背压只推迟，不丢弃；生产的请求期限保持原值。
         Host host; QVERIFY(host.access.setEnabled(true));
-        // 单条结果约 400 KiB：足以触发标准输出背压，同时给 JSON-RPC 信封和
-        // 主应用/辅助程序两层转发留下明确余量，避免不同 macOS 管道缓冲把合法响应推过 1 MiB 上限。
-        const QString blob(200000, QChar(u'x'));
+        // 恢复原始约 940 KiB 样本，显式核对信封仍在协议预算内，不能通过缩小数据规避失败。
+        const QString blob(470000, QChar(u'x'));
+        const auto largeResult = makeToolSuccessResult({{"blob", blob}});
+        QVERIFY(line({{"kind", "result"}, {"id", "6"}, {"result", largeResult}}).size() < kMaxResponseBytes);
         host.access.setDataHandler([&](Tool, const QJsonObject&) { return makeToolSuccessResult({{"blob", blob}}); });
         int output[2]; QVERIFY(::pipe(output) == 0);
         QVERIFY(::fcntl(output[0], F_SETFL, ::fcntl(output[0], F_GETFL) | O_NONBLOCK) == 0);
         QProcess process;
+        // 断言失败也收掉隔离辅助进程和管道，避免后续用例继承资源或出现进程析构告警。
+        const auto cleanup = qScopeGuard([&] {
+            if (process.state() != QProcess::NotRunning) {
+                process.closeWriteChannel();
+                if (!process.waitForFinished(1500)) {
+                    process.kill();
+                    process.waitForFinished();
+                }
+            }
+            ::close(output[0]);
+            if (output[1] >= 0) ::close(output[1]);
+        });
         process.setChildProcessModifier([writer = output[1], reader = output[0]] {
             ::dup2(writer, STDOUT_FILENO); ::close(writer); ::close(reader);
         });
         process.start(QStringLiteral(MCP_TEST_HELPER), {host.endpoint.paths.rootDirectory});
         QVERIFY(process.waitForStarted(3000));
         ::close(output[1]);
+        output[1] = -1;
         QByteArray received;
         const auto drain = [&] {
             char buffer[65536];
             ssize_t count = 0;
             while ((count = ::read(output[0], buffer, sizeof buffer)) > 0) received.append(buffer, count);
         };
+        // 手工管道绕过了 QProcess 的 readyRead；积压结束后按可读事件立即排空，
+        // 不让测试自身每轮 qWait 的延迟占掉生产的 10 秒请求期限。
+        QSocketNotifier reader(output[0], QSocketNotifier::Read);
+        reader.setEnabled(false);
+        connect(&reader, &QSocketNotifier::activated, this, [&](QSocketDescriptor, QSocketNotifier::Type) { drain(); });
         process.write(line({{"jsonrpc", "2.0"}, {"id", 1}, {"method", "initialize"},
             {"params", QJsonObject{{"protocolVersion", "2025-11-25"}, {"capabilities", QJsonObject{}},
                                    {"clientInfo", QJsonObject{{"name", "batch-client"}, {"version", "1"}}}}}}));
@@ -869,25 +891,35 @@ private slots:
         // 先攒一段积压：这期间一个字节也不读。
         QTest::qWait(300);
         QCOMPARE(process.state(), QProcess::Running);
-        QVERIFY(until([&] { drain(); return received.count('\n') == kBatch + 1
+        reader.setEnabled(true);
+        QVERIFY(until([&] { return received.count('\n') == kBatch + 1
                                             || process.state() != QProcess::Running; }, 30000));
         QCOMPARE(process.state(), QProcess::Running);
         QCOMPARE(received.count('\n'), kBatch + 1);
         int big = 0;
+        QSet<int> replyIds;
         for (const auto& reply : received.trimmed().split('\n')) {
             const auto document = QJsonDocument::fromJson(reply);
             QVERIFY(document.isObject());
             const auto message = document.object();
             QCOMPARE(message.value("jsonrpc"), QJsonValue(QStringLiteral("2.0")));
             QVERIFY(message.value("id").isDouble());
-            QVERIFY(message.contains("result") || message.contains("error"));
-            if (reply.size() > 300000) ++big;
+            const int id = message.value("id").toInt();
+            QVERIFY(id >= 1 && id <= kBatch + 1);
+            QVERIFY2(!replyIds.contains(id), "同一请求返回了重复响应");
+            replyIds.insert(id);
+            QVERIFY2(!message.contains("error"), reply.constData());
+            QVERIFY(message.value("result").isObject());
+            const auto result = message.value("result").toObject();
+            QVERIFY2(!result.value("isError").toBool(), reply.constData());
+            if (id >= 2 && id < 2 + kBigCalls) {
+                QCOMPARE(result.value("structuredContent").toObject().value("blob").toString(), blob);
+                QVERIFY(reply.size() > 500000);
+                ++big;
+            }
         }
         QCOMPARE(big, kBigCalls);
-        process.closeWriteChannel();
-        drain();
-        if (!process.waitForFinished(3000)) process.kill();
-        ::close(output[0]);
+        QCOMPARE(replyIds.size(), kBatch + 1);
     }
     void staleWritePermissionIsClearedOnLoad()
     {
