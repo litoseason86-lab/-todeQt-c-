@@ -9,6 +9,7 @@
 #include <QVariantMap>
 
 #include "ServiceReadResult.h"
+#include "BackupOperationControl.h"
 
 #include <functional>
 
@@ -68,9 +69,12 @@ public:
     Q_INVOKABLE void requestBackupInfo(const QString& srcPath);
     Q_INVOKABLE void requestRestore(const QString& srcPath);
     void requestAutoBackupIfDue();
-    // aboutToQuit 中调用：先让后台文件任务结束，再允许数据库和 Qt 全局对象销毁。
+    // aboutToQuit 中调用：先请求协作停止并等后台任务实际结束，再允许数据库和Qt全局对象销毁。
+    // 永久阻塞的系统I/O仍可能拖住这里，不能把取消请求当作线程已退出。
     // 该函数可重复调用，避免退出路径因重复信号或析构兜底而二次释放 watcher。
     void prepareForShutdown();
+    // 只请求停止；busy与恢复保护由实际完成回调解除。
+    Q_INVOKABLE void cancelCurrentOperation();
 
     Q_INVOKABLE QString backupsDirectory() const;
     Q_INVOKABLE QVariantList listBackups() const;
@@ -113,8 +117,10 @@ private:
     struct RestoreContext;
 
     // 写快照的实际步骤由纯后台操作层执行，当前函数保留给单元测试和非 GUI 调用。
-    bool writeSnapshot(const QString& destPath, const QString& kind);
+    bool writeSnapshot(const QString& destPath, const QString& kind, const BackupOperation& operation = {});
     QVariantMap inspectBackup(const QString& srcPath) const;
+    // 同步恢复的实际步骤由公共入口持有准入，内部收尾完成后才释放并发送UI完成信号。
+    bool restoreSynchronously(const QString& srcPath, const BackupOperation& operation);
 
     QString databasePath() const;
     QString autoBackupsDir() const;
@@ -156,6 +162,9 @@ private:
     // QtConcurrent 任务不归 QObject 生命周期管理；必须持有 watcher，才能在事件循环停止前等待。
     QList<QFutureWatcherBase*> m_activeWorkers;
     bool m_shutdownPrepared = false;
+    BackupOperation m_operation;
+    BackupOperation m_nextOperationForTest;
+    BackupOperation beginOperation();
     // 仅供 BackupServiceTests 置位：强制下一次回滚的拷贝返回失败。生产代码永远不写它。
     bool m_forceRollbackCopyFailureForTest = false;
     // 仅供测试在“校验完成、安装尚未开始”的窗口替换外部源路径，锁定恢复必须使用受控副本。

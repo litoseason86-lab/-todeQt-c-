@@ -1,4 +1,12 @@
 #include <QDir>
+#include <QProcess>
+#include <QFutureWatcher>
+#include <QSemaphore>
+#include <QThread>
+#include <cstdio>
+#include <cstring>
+#include <utility>
+#include "../src/services/BackupSqliteDriver.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QSettings>
@@ -15,6 +23,7 @@
 #include <QTemporaryDir>
 #include <QUuid>
 #include <QtTest>
+#include <sqlite3.h>
 
 #include "../src/services/AppSettings.h"
 #include "../src/services/BackupOperations.h"
@@ -131,7 +140,32 @@ class BackupServiceTests : public QObject
 {
     Q_OBJECT
 
+public:
+    static int shutdownProbe();
 private slots:
+    void copyCancellationAtCommitBoundaries_data();
+    void copyCancellationAtCommitBoundaries();
+    void sqlProgressAndBusyObserveCancellation_data();
+    void sqlProgressAndBusyObserveCancellation();
+    void restoreCancellationAtInstallBoundaries_data();
+    void restoreCancellationAtInstallBoundaries();
+    void shutdownDuringInstalledRestorePreservesJournal();
+    void cooperativeShutdownExitsWholeProcess();
+    void queuedBackupResultStillObservesCancellation();
+    void cancelledAutomaticBackupKeepsRetentionAndSchedule();
+    void asyncExpiredRestoreKeepsOriginalDatabase_data();
+    void asyncExpiredRestoreKeepsOriginalDatabase();
+    void synchronousBackupCannotReplaceActiveOperation();
+    void restoreAdmissionPrecedesReentrantCallbacks_data();
+    void restoreAdmissionPrecedesReentrantCallbacks();
+    void synchronousSnapshotsReserveTheirOperation_data();
+    void synchronousSnapshotsReserveTheirOperation();
+    void completionNotificationsPreserveReentrantOperation_data();
+    void completionNotificationsPreserveReentrantOperation();
+    void asyncCancellationDoesNotPublishSuccess();
+    void asyncRestoreCancellationPreservesOriginalData();
+    void cancellationBeforeWorkPreservesFiles();
+    void elapsedBudgetRejectsSnapshotAndInspection();
     void init();
     void cleanup();
 
@@ -140,6 +174,8 @@ private slots:
     void backupRejectsRuntimeProtectedDestinations();
     void backupCapturesAllBusinessTables();
     void backupWorksUnderWalMode();
+    void backupConnectionClosePreservesMainWriteLock_data();
+    void backupConnectionClosePreservesMainWriteLock();
     void oversizedBackupIsRejectedBeforeRestore_data();
     void oversizedBackupIsRejectedBeforeRestore();
     void boundedCopyPreservesDestinationAndAcceptsExactLimit();
@@ -230,6 +266,8 @@ void BackupServiceTests::init()
 
 void BackupServiceTests::cleanup()
 {
+    BackupService::instance()->m_nextOperationForTest.reset();
+    BackupService::instance()->m_operation.reset();
     BackupService::instance()->m_afterRestoreValidationHookForTest = {};
     BackupService::instance()->m_shutdownPrepared = false;
     BackupService::instance()->setRestorePreparationCallback(nullptr);
@@ -458,6 +496,8 @@ void BackupServiceTests::backupRejectsRuntimeProtectedDestinations()
     QVERIFY(!BackupService::instance()->createBackup(aliasedDatabasePath));
     QVERIFY(BackupService::instance()->lastError().contains(QStringLiteral("数据库")));
     QVERIFY(!BackupService::instance()->createBackup(dbPath() + QStringLiteral("-wal")));
+    QVERIFY(BackupService::instance()->lastError().contains(QStringLiteral("受保护")));
+    QVERIFY(!BackupService::instance()->createBackup(dbPath() + QStringLiteral(".sync-disabled")));
     QVERIFY(BackupService::instance()->lastError().contains(QStringLiteral("受保护")));
     QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
 }
@@ -1458,11 +1498,15 @@ void BackupServiceTests::shutdownWaitsForAsyncWorkers()
     service->requestBackup(backupFile());
     QVERIFY(service->busy());
 
-    // 不处理事件循环就进入退出收束：只有 waitForFinished() 真正等待了后台任务，
-    // 这里才能看到完整文件；随后再次调用必须是无副作用的幂等操作。
+    // 保证退出会收束后台任务且不留下回调；允许已完整发布或在发布前取消，绝不接受部分备份。
+    QSignalSpy completed(service, &BackupService::backupCompleted);
     service->prepareForShutdown();
     QVERIFY(!service->busy());
-    QVERIFY(QFileInfo::exists(backupFile()));
+    QVERIFY(service->m_activeWorkers.isEmpty());
+    QCOMPARE(completed.count(), 0);
+    if (QFileInfo::exists(backupFile())) {
+        QVERIFY(service->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool());
+    }
     service->prepareForShutdown();
 
     const QString ignoredPath = m_tempDir->filePath(QStringLiteral("after-shutdown.tomatobackup"));
@@ -1754,7 +1798,121 @@ void BackupServiceTests::version21BackupBrokenTrashSchemaIsRejected()
     QVERIFY(DatabaseManager::trashSchemaIsValid(DatabaseManager::instance()->database()));
 }
 
-QTEST_MAIN(BackupServiceTests)
+int main(int argc, char** argv)
+{
+    if (argc == 3 && std::strcmp(argv[1], "--sqlite-write-lock-probe") == 0) {
+        QCoreApplication app(argc, argv);
+        // 独立进程只探测写锁后回滚，不修改数据；同进程锁检查无法证明操作系统互斥仍有效。
+        sqlite3* database = nullptr;
+        int code = sqlite3_open_v2(argv[2], &database, SQLITE_OPEN_READWRITE, nullptr);
+        if (code == SQLITE_OK) {
+            code = sqlite3_exec(database, "BEGIN IMMEDIATE", nullptr, nullptr, nullptr);
+            if (code == SQLITE_OK) sqlite3_exec(database, "ROLLBACK", nullptr, nullptr, nullptr);
+        }
+        sqlite3_close(database);
+        std::printf("%d\n", code);
+        return 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--backup-shutdown-probe") == 0) {
+        QCoreApplication app(argc, argv);
+        return BackupServiceTests::shutdownProbe();
+    }
+    QGuiApplication app(argc, argv);
+    BackupServiceTests tests;
+    return QTest::qExec(&tests, argc, argv);
+}
+
+// 保证DELETE与WAL模式下，快照连接读取或VACUUM后关闭都不解除主库未提交事务的写锁。
+void BackupServiceTests::backupConnectionClosePreservesMainWriteLock_data()
+{
+    QTest::addColumn<QString>("journalMode");
+    QTest::addColumn<bool>("vacuum");
+    QTest::addColumn<bool>("control");
+    for (const QString& mode : {QStringLiteral("DELETE"), QStringLiteral("WAL")}) {
+        for (bool vacuum : {false, true}) {
+            for (bool control : {false, true}) {
+                const QByteArray name = mode.toLatin1() + (vacuum ? "-vacuum" : "-read")
+                    + (control ? "-same-runtime-control" : "-backup-driver");
+                QTest::newRow(name.constData()) << mode << vacuum << control;
+            }
+        }
+    }
+}
+
+// 保证快照生命周期内主事务始终排斥外部写者；同运行实例对照排除探针自身关闭锁的误判。
+void BackupServiceTests::backupConnectionClosePreservesMainWriteLock()
+{
+    QFETCH(QString, journalMode);
+    QFETCH(bool, vacuum);
+    QFETCH(bool, control);
+    const QString path = m_tempDir->filePath(QStringLiteral("lock-source.sqlite"));
+    const QString primaryName = QStringLiteral("lock-primary");
+    const QString secondaryName = QStringLiteral("lock-secondary");
+    const auto removeConnections = qScopeGuard([&] {
+        QSqlDatabase::removeDatabase(secondaryName);
+        QSqlDatabase::removeDatabase(primaryName);
+    });
+    auto database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), primaryName);
+    database.setDatabaseName(path);
+    QVERIFY(database.open());
+    const auto closePrimary = qScopeGuard([&] {
+        QSqlQuery rollback(database);
+        rollback.exec(QStringLiteral("ROLLBACK"));
+        rollback.finish();
+        database.close();
+    });
+    {
+        QSqlQuery query(database);
+        QVERIFY(query.exec(QStringLiteral("CREATE TABLE lock_values(value INTEGER)")));
+        QVERIFY(query.exec(QStringLiteral("INSERT INTO lock_values VALUES(0)")));
+        QVERIFY(query.exec(QStringLiteral("PRAGMA journal_mode=") + journalMode) && query.next());
+        QCOMPARE(query.value(0).toString().toUpper(), journalMode);
+        query.finish();
+        QVERIFY(query.exec(QStringLiteral("BEGIN IMMEDIATE")));
+        QVERIFY(query.exec(QStringLiteral("UPDATE lock_values SET value=1")));
+    }
+    const auto externalWriter = [&]() {
+        QProcess process;
+        const auto stop = qScopeGuard([&] {
+            if (process.state() != QProcess::NotRunning) {
+                process.kill();
+                process.waitForFinished(1000);
+            }
+        });
+        process.start(QCoreApplication::applicationFilePath(),
+                      {QStringLiteral("--sqlite-write-lock-probe"), path});
+        if (!process.waitForFinished(10000) || process.exitStatus() != QProcess::NormalExit
+            || process.exitCode() != 0) return -1;
+        bool valid = false;
+        const int code = process.readAllStandardOutput().trimmed().toInt(&valid);
+        return valid ? code : -1;
+    };
+    QCOMPARE(externalWriter(), SQLITE_BUSY);
+    {
+        auto secondary = control
+            ? QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), secondaryName)
+            : QSqlDatabase::addDatabase(new BackupSqliteDriver({}), secondaryName);
+        secondary.setDatabaseName(path);
+        QVERIFY(secondary.open());
+        {
+            QSqlQuery query(secondary);
+            const QString sql = vacuum
+                ? QStringLiteral("VACUUM main INTO '%1'").arg(path + QStringLiteral(".copy"))
+                : QStringLiteral("SELECT value FROM lock_values");
+            QVERIFY2(query.exec(sql), qPrintable(query.lastError().text()));
+            if (!vacuum) {
+                QVERIFY(query.next());
+                QCOMPARE(query.value(0).toInt(), 0);
+            }
+            query.finish();
+        }
+        secondary.close();
+    }
+    QCOMPARE(externalWriter(), SQLITE_BUSY);
+    QSqlQuery ownWrite(database);
+    QVERIFY(ownWrite.exec(QStringLiteral("SELECT value FROM lock_values")) && ownWrite.next());
+    QCOMPARE(ownWrite.value(0).toInt(), 1);
+}
 // 保证：读备份列表时能分清「还没有备份」和「备份文件夹读不了」（iPad 设置页要分开显示）：文件夹不存在是成功的空列表；
 // 有备份时新旧接口给出同样的列表，只列备份文件、新的在前；文件夹没有读取权限或者是个普通文件时报 Storage，
 // 而旧接口仍回落为空列表，Mac 设置页的行为不变。
@@ -2518,4 +2676,667 @@ void BackupServiceTests::restoreSyncCompletedSignalSemanticsAndBranchCoverage()
         QCOMPARE(tracker.lastSuccess, false);
         QCOMPARE(tracker.lastSafe, false);
     }
+}
+
+// 保证取消发生在任何工作之前时，复制和快照均不写目标，检查信息不报告有效。
+void BackupServiceTests::cancellationBeforeWorkPreservesFiles()
+{
+    QVERIFY(insertTask(QStringLiteral("取消必须保留")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    QFile original(backupFile());
+    QVERIFY(original.open(QIODevice::ReadOnly));
+    const QByteArray before = original.readAll();
+    original.close();
+    auto operation = std::make_shared<BackupOperationControl>();
+    operation->requestStop();
+    const QString target = m_tempDir->filePath(QStringLiteral("cancelled-copy"));
+    const auto copy = BackupOperations::atomicCopy(backupFile(), target, -1, operation);
+    QVERIFY(!copy.success);
+    QVERIFY(!copy.committed);
+    QVERIFY(!QFileInfo::exists(target));
+    const auto snapshot = BackupOperations::createSnapshot(dbPath(), settingsPath(), backupFile(),
+        QStringLiteral("manual"), DatabaseManager::kCurrentSchemaVersion, operation);
+    QVERIFY(!snapshot.success);
+    QVERIFY(!snapshot.committed);
+    QVERIFY(original.open(QIODevice::ReadOnly));
+    QCOMPARE(original.readAll(), before);
+    const auto info = BackupOperations::inspectBackup(backupFile(), DatabaseManager::kCurrentSchemaVersion, operation);
+    QVERIFY(!info.value(QStringLiteral("valid")).toBool());
+    QVERIFY(!BackupOperations::readEmbeddedSettings(backupFile(), operation).success);
+}
+
+// 保证已用尽处理预算的操作在入口拒绝，不生成新快照或把取消校验判为有效。
+void BackupServiceTests::elapsedBudgetRejectsSnapshotAndInspection()
+{
+    QVERIFY(insertTask(QStringLiteral("预算原数据")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    auto operation = std::make_shared<BackupOperationControl>(0);
+    QVERIFY(operation->stopped());
+    const auto info = BackupOperations::inspectBackup(backupFile(), DatabaseManager::kCurrentSchemaVersion, operation);
+    QVERIFY(!info.value(QStringLiteral("valid")).toBool());
+    const QString destination = m_tempDir->filePath(QStringLiteral("expired.tomatobackup"));
+    const auto result = BackupOperations::createSnapshot(dbPath(), settingsPath(), destination,
+        QStringLiteral("manual"), DatabaseManager::kCurrentSchemaVersion, operation);
+    QVERIFY(!result.success);
+    QVERIFY(!QFileInfo::exists(destination));
+}
+
+// 保证显式取消异步备份不报告成功，原目标保留；完成前仍拒绝另一项备份。
+void BackupServiceTests::asyncCancellationDoesNotPublishSuccess()
+{
+    QVERIFY(insertTask(QStringLiteral("异步取消")) > 0);
+    auto* service = BackupService::instance();
+    QSignalSpy completed(service, &BackupService::backupCompleted);
+    service->requestBackup(backupFile());
+    QVERIFY(service->busy());
+    service->cancelCurrentOperation();
+    QVERIFY(service->busy());
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(!completed.at(0).at(0).toBool());
+    QVERIFY(!QFileInfo::exists(backupFile()));
+    QVERIFY(!service->busy());
+}
+
+// 保证异步恢复在安装前取消时保留当前任务及偏好，并只在真实完成后发安全结束。
+void BackupServiceTests::asyncRestoreCancellationPreservesOriginalData()
+{
+    QVERIFY(insertTask(QStringLiteral("旧备份任务")) > 0);
+    auto* service = BackupService::instance();
+    QVERIFY(service->createBackup(backupFile()));
+    QVERIFY(insertTask(QStringLiteral("不可被取消恢复删除")) > 0);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+    QSignalSpy completed(service, &BackupService::restoreCompleted);
+    QSignalSpy syncCompleted(service, &BackupService::restoreSyncCompleted);
+    service->requestRestore(backupFile());
+    QVERIFY(service->operationBlocksUi());
+    service->cancelCurrentOperation();
+    QVERIFY(service->operationBlocksUi());
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(!completed.at(0).at(0).toBool());
+    QCOMPARE(syncCompleted.count(), 1);
+    QVERIFY(syncCompleted.at(0).at(1).toBool());
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+}
+
+// 保证复制取消前已写过至少一块，仍保留旧目标；原子提交后取消必须报告已提交事实。
+void BackupServiceTests::copyCancellationAtCommitBoundaries_data()
+{
+    QTest::addColumn<QByteArray>("stage");
+    QTest::newRow("second-chunk") << QByteArray("copy-chunk");
+    QTest::newRow("before-commit") << QByteArray("copy-before-commit");
+    QTest::newRow("after-commit") << QByteArray("copy-after-commit");
+}
+
+// 保证原子复制在取消边界不混淆原目标保留与已提交结果，且不留下暂存文件。
+void BackupServiceTests::copyCancellationAtCommitBoundaries()
+{
+    QFETCH(QByteArray, stage);
+    const QString source = m_tempDir->filePath(QStringLiteral("copy-source"));
+    const QString target = m_tempDir->filePath(QStringLiteral("copy-target"));
+    const QByteArray content(3 * 1024 * 1024, 'n');
+    QFile file(source);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write(content), content.size());
+    file.close();
+    file.setFileName(target);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    QCOMPARE(file.write("old", 3), 3);
+    file.close();
+    auto operation = std::make_shared<BackupOperationControl>();
+    int hits = 0;
+    operation->m_checkpointForTest = [&](const char* checkpoint) {
+        if (stage != checkpoint) return;
+        if (++hits >= (stage == "copy-chunk" ? 2 : 1)) operation->requestStop();
+    };
+    const auto result = BackupOperations::atomicCopy(source, target, -1, operation);
+    QVERIFY(!result.success);
+    QCOMPARE(result.committed, stage == "copy-after-commit");
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), result.committed ? content : QByteArray("old"));
+    QVERIFY(hits > 0);
+    QCOMPARE(QDir(m_tempDir->path()).entryList({QStringLiteral("copy-target.*")}, QDir::Files).size(), 0);
+}
+
+// 保证长SQL计算和持锁查询都观察取消，不只在语句之间检查。
+void BackupServiceTests::sqlProgressAndBusyObserveCancellation_data()
+{
+    QTest::addColumn<bool>("busy");
+    QTest::newRow("long-sql") << false;
+    QTest::newRow("exclusive-lock") << true;
+}
+
+// 保证独立SQLite连接可以在进度/等锁回调取消，且原主库连接与数据仍完好。
+void BackupServiceTests::sqlProgressAndBusyObserveCancellation()
+{
+    QFETCH(bool, busy);
+    QVERIFY(insertTask(QStringLiteral("SQL取消后保留")) > 0);
+    QSqlQuery lock(DatabaseManager::instance()->database());
+    if (busy) QVERIFY(lock.exec(QStringLiteral("BEGIN EXCLUSIVE")));
+    const auto rollback = qScopeGuard([&] { if (busy) lock.exec(QStringLiteral("ROLLBACK")); });
+    auto operation = std::make_shared<BackupOperationControl>();
+    int entered = 0;
+    operation->m_checkpointForTest = [&](const char* stage) {
+        if (std::strcmp(stage, busy ? "sql-busy" : "sql-progress") == 0) {
+            ++entered;
+            operation->requestStop();
+        }
+    };
+    const QString name = QStringLiteral("cancel-sql-connection");
+    {
+        auto database = QSqlDatabase::addDatabase(new BackupSqliteDriver(operation), name);
+        database.setDatabaseName(dbPath());
+        QVERIFY(database.open());
+        QSqlQuery query(database);
+        const QString sql = busy ? QStringLiteral("SELECT COUNT(*) FROM tasks") : QStringLiteral(
+            "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<2000000) SELECT sum(x) FROM n");
+        QVERIFY(!query.exec(sql));
+        QVERIFY(query.lastError().isValid());
+        QVERIFY(entered > 0);
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(name);
+    QVERIFY(DatabaseManager::instance()->isOpen());
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+}
+
+// 保证恢复取消分别覆盖预检后、恢复点发布后、主库提交前后，以及补救回滚失败。
+void BackupServiceTests::restoreCancellationAtInstallBoundaries_data()
+{
+    QTest::addColumn<int>("commitIndex");
+    QTest::addColumn<bool>("afterCommit");
+    QTest::addColumn<bool>("rollbackFails");
+    QTest::addColumn<bool>("rollbackTimeout");
+    QTest::newRow("preflight-committed") << 1 << true << false << false;
+    QTest::newRow("snapshot-committed") << 2 << true << false << false;
+    QTest::newRow("install-before-commit") << 3 << false << false << false;
+    QTest::newRow("install-after-commit") << 3 << true << false << false;
+    QTest::newRow("install-rollback-fails") << 3 << true << true << false;
+    QTest::newRow("rollback-budget-exhausted") << 3 << true << false << true;
+}
+
+// 保证主库已提交的取消进入独立回滚；回滚失败保留prepared日志并阻断同步，重建后仍保护。
+void BackupServiceTests::restoreCancellationAtInstallBoundaries()
+{
+    QFETCH(int, commitIndex);
+    QFETCH(bool, afterCommit);
+    QFETCH(bool, rollbackFails);
+    QFETCH(bool, rollbackTimeout);
+    const bool unsafe = rollbackFails || rollbackTimeout;
+    auto* service = BackupService::instance();
+    QVERIFY(insertTask(QStringLiteral("旧备份")) > 0);
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("timer/workDuration"), 25);
+    settings.sync();
+    QVERIFY(service->createBackup(backupFile()));
+    QVERIFY(insertTask(QStringLiteral("恢复前保留")) > 0);
+    settings.setValue(QStringLiteral("timer/workDuration"), 40);
+    settings.sync();
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+    auto operation = std::make_shared<BackupOperationControl>();
+    int commits = 0;
+    operation->m_checkpointForTest = [&](const char* stage) {
+        if (std::strcmp(stage, afterCommit ? "copy-after-commit" : "copy-before-commit") == 0
+            && ++commits == commitIndex) operation->requestStop();
+    };
+    SyncController controller(SyncController::Platform{});
+    controller.initialize();
+    service->setRestorePreparationCallback([&](QString* error) { return controller.prepareForRestore(error); });
+    const auto connection = connect(service, &BackupService::restoreSyncCompleted, &controller, &SyncController::finishRestore);
+    const auto rollbackBudget = connect(service, &BackupService::restoreStarted, &controller, [&] {
+        // 只给补救链注入已用尽预算；安装自身仍用原令牌，不能把两个阶段混在一起。
+        if (rollbackTimeout) service->m_nextOperationForTest = std::make_shared<BackupOperationControl>(0);
+    });
+    const auto disconnect = qScopeGuard([&] {
+        QObject::disconnect(connection);
+        QObject::disconnect(rollbackBudget);
+        service->setRestorePreparationCallback(nullptr);
+        service->m_forceRollbackCopyFailureForTest = false;
+    });
+    service->m_nextOperationForTest = operation;
+    service->m_forceRollbackCopyFailureForTest = rollbackFails;
+    QSignalSpy completed(service, &BackupService::restoreCompleted);
+    QSignalSpy syncCompleted(service, &BackupService::restoreSyncCompleted);
+    service->requestRestore(backupFile());
+    QTRY_COMPARE(completed.count(), 1);
+    QCOMPARE(commits, commitIndex);
+    QVERIFY(!completed.at(0).at(0).toBool());
+    QCOMPARE(syncCompleted.count(), 1);
+    QCOMPARE(syncCompleted.at(0).at(1).toBool(), !unsafe);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), unsafe ? 1 : 2);
+    QCOMPARE(settings.value(QStringLiteral("timer/workDuration")).toInt(), 40);
+    QCOMPARE(controller.isRestoreStateUncertain(), unsafe);
+    SyncController restarted(SyncController::Platform{});
+    restarted.initialize();
+    QCOMPARE(restarted.isRestoreStateUncertain(), unsafe);
+    if (commitIndex >= 2) {
+        QVERIFY(!QDir(backupsDir()).entryList({QStringLiteral("before-restore-*.tomatobackup")}, QDir::Files).isEmpty());
+    }
+}
+
+// 保证退出时SQL工作收到协作取消，整个测试进程连同Qt全局线程池都能退出。
+int BackupServiceTests::shutdownProbe()
+{
+    QTemporaryDir directory;
+    if (!directory.isValid()) return 20;
+    if (!DatabaseManager::instance()->initialize(directory.filePath(QStringLiteral("probe.db")))) return 21;
+    BackupService service;
+    service.configure(directory.filePath(QStringLiteral("settings.ini")), directory.filePath(QStringLiteral("backups")));
+    auto operation = std::make_shared<BackupOperationControl>();
+    QSemaphore entered;
+    std::atomic<bool> reached{false};
+    operation->m_checkpointForTest = [&](const char* stage) {
+        if (std::strcmp(stage, "sql-step") != 0 || reached.exchange(true)) return;
+        entered.release();
+        while (!operation->stopped()) QThread::msleep(1);
+    };
+    service.m_nextOperationForTest = operation;
+    service.requestBackup(directory.filePath(QStringLiteral("cancelled.tomatobackup")));
+    if (!entered.tryAcquire(1, 3000)) return 22;
+    std::puts("WORKER_ENTERED");
+    std::fflush(stdout);
+    service.prepareForShutdown();
+    if (!service.m_activeWorkers.isEmpty() || service.busy()) return 23;
+    if (QFileInfo::exists(directory.filePath(QStringLiteral("cancelled.tomatobackup")))) return 24;
+    DatabaseManager::instance()->close();
+    std::puts("SHUTDOWN_RETURNED");
+    return 0;
+}
+
+// 保证父进程验证真正退出而非只看函数返回；护栏失败也回收自己的实验进程。
+void BackupServiceTests::cooperativeShutdownExitsWholeProcess()
+{
+    QProcess process;
+    const auto cleanup = qScopeGuard([&] {
+        if (process.state() != QProcess::NotRunning) {
+            process.kill();
+            process.waitForFinished(1000);
+        }
+    });
+    process.start(QCoreApplication::applicationFilePath(), {QStringLiteral("--backup-shutdown-probe")});
+    QVERIFY(process.waitForStarted(3000));
+    QByteArray output;
+    QDeadlineTimer handshake(3000);
+    while (!output.contains("WORKER_ENTERED") && !handshake.hasExpired()) {
+        process.waitForReadyRead(100);
+        output += process.readAllStandardOutput();
+        if (process.state() == QProcess::NotRunning) break;
+    }
+    QVERIFY2(output.contains("WORKER_ENTERED"), "退出前必须确认工作线程已进入受控阻塞点");
+    QVERIFY2(process.waitForFinished(5000), "工作已经进入SQL检查点，但取消后整个进程未退出");
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    QCOMPARE(process.exitCode(), 0);
+    output += process.readAllStandardOutput();
+    QVERIFY(output.contains("WORKER_ENTERED"));
+    QVERIFY(output.contains("SHUTDOWN_RETURNED"));
+}
+
+// 保证工作已提交但完成回调尚未执行时，取消仍不报告成功，已提交的完整文件不会误删。
+void BackupServiceTests::queuedBackupResultStillObservesCancellation()
+{
+    QVERIFY(insertTask(QStringLiteral("提交后取消")) > 0);
+    auto* service = BackupService::instance();
+    QSignalSpy completed(service, &BackupService::backupCompleted);
+    service->requestBackup(backupFile());
+    QVERIFY(service->busy());
+    QCOMPARE(service->m_activeWorkers.size(), 1);
+    service->m_activeWorkers.first()->waitForFinished();
+    QVERIFY(QFileInfo::exists(backupFile()));
+    QCOMPARE(completed.count(), 0);
+    service->cancelCurrentOperation();
+    QVERIFY(service->busy());
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(!completed.at(0).at(0).toBool());
+    QVERIFY(service->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool());
+}
+
+// 保证自动备份提交后取消不推进上次成功时间，也不借取消结果清理历史恢复点。
+void BackupServiceTests::cancelledAutomaticBackupKeepsRetentionAndSchedule()
+{
+    QVERIFY(insertTask(QStringLiteral("自动备份取消")) > 0);
+    QVERIFY(QDir().mkpath(backupsDir()));
+    for (int i = 0; i < BackupService::kAutoBackupRetention + 1; ++i) {
+        QFile file(QDir(backupsDir()).filePath(QStringLiteral("auto-20000101-%1.tomatobackup").arg(i)));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write("preserve"), 8);
+    }
+    auto operation = std::make_shared<BackupOperationControl>();
+    operation->m_checkpointForTest = [&](const char* stage) {
+        if (std::strcmp(stage, "copy-after-commit") == 0) operation->requestStop();
+    };
+    auto* service = BackupService::instance();
+    service->m_nextOperationForTest = operation;
+    QVERIFY(service->lastBackupTimeIso().isEmpty());
+    service->requestAutoBackupIfDue();
+    QVERIFY(service->busy());
+    QTRY_VERIFY(!service->busy());
+    QVERIFY(service->lastBackupTimeIso().isEmpty());
+    QCOMPARE(QDir(backupsDir()).entryList({QStringLiteral("auto-20000101-*.tomatobackup")}, QDir::Files).size(),
+             BackupService::kAutoBackupRetention + 1);
+}
+
+// 保证预检开始前及复制后到下一阶段之间，都不重置整条恢复链的预算。
+void BackupServiceTests::asyncExpiredRestoreKeepsOriginalDatabase_data()
+{
+    QTest::addColumn<bool>("expireDuringPreflight");
+    QTest::newRow("expired-at-start") << false;
+    QTest::newRow("expired-between-stages") << true;
+}
+
+// 保证恢复链预算用尽时在换库前结束，原数据与恢复点配额不变。
+void BackupServiceTests::asyncExpiredRestoreKeepsOriginalDatabase()
+{
+    auto* service = BackupService::instance();
+    QVERIFY(insertTask(QStringLiteral("备份版本")) > 0);
+    QVERIFY(service->createBackup(backupFile()));
+    QVERIFY(insertTask(QStringLiteral("当前版本")) > 0);
+    QFETCH(bool, expireDuringPreflight);
+    auto operation = std::make_shared<BackupOperationControl>(expireDuringPreflight ? 120000 : 0);
+    if (expireDuringPreflight) {
+        operation->m_checkpointForTest = [&](const char* stage) {
+            if (std::strcmp(stage, "copy-after-commit") == 0) operation->m_deadline = QDeadlineTimer(0);
+        };
+    } else {
+        QVERIFY(operation->stopped());
+    }
+    service->m_nextOperationForTest = operation;
+    QSignalSpy completed(service, &BackupService::restoreCompleted);
+    QSignalSpy safe(service, &BackupService::restoreSyncCompleted);
+    service->requestRestore(backupFile());
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(!completed.first().first().toBool());
+    QVERIFY(completed.first().at(1).toString().contains(QStringLiteral("预算")));
+    QCOMPARE(safe.count(), 1);
+    QVERIFY(safe.first().at(1).toBool());
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+    QCOMPARE(QDir(backupsDir()).entryList({QStringLiteral("before-restore-*.tomatobackup")}, QDir::Files).size(), 0);
+}
+
+// 保证安装已提交但收尾尚未执行时退出，prepared日志与恢复点保留，重启不会自动恢复同步。
+void BackupServiceTests::shutdownDuringInstalledRestorePreservesJournal()
+{
+    auto* service = BackupService::instance();
+    QVERIFY(insertTask(QStringLiteral("备份旧库")) > 0);
+    QVERIFY(service->createBackup(backupFile()));
+    QVERIFY(insertTask(QStringLiteral("当前保留项")) > 0);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+    auto operation = std::make_shared<BackupOperationControl>();
+    std::atomic<bool> installed{false};
+    int commits = 0;
+    operation->m_checkpointForTest = [&](const char* stage) {
+        if (std::strcmp(stage, "copy-after-commit") == 0 && ++commits == 3) {
+            installed.store(true);
+            while (!operation->stopped()) QThread::msleep(1);
+        }
+    };
+    SyncController controller(SyncController::Platform{});
+    controller.initialize();
+    service->setRestorePreparationCallback([&](QString* error) { return controller.prepareForRestore(error); });
+    service->m_nextOperationForTest = operation;
+    const auto cleanup = qScopeGuard([&] {
+        operation->requestStop();
+        service->prepareForShutdown();
+        service->setRestorePreparationCallback(nullptr);
+    });
+    QSignalSpy completed(service, &BackupService::restoreCompleted);
+    QSignalSpy safe(service, &BackupService::restoreSyncCompleted);
+    service->requestRestore(backupFile());
+    QTRY_VERIFY(installed.load());
+    QVERIFY(service->busy());
+    QVERIFY(service->operationBlocksUi());
+    QCOMPARE(completed.count(), 0);
+    service->prepareForShutdown();
+    QVERIFY(service->m_activeWorkers.isEmpty());
+    QCOMPARE(completed.count(), 0);
+    QCOMPARE(safe.count(), 0);
+    QVERIFY(DatabaseManager::instance()->initialize(dbPath()));
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+    SyncController restarted(SyncController::Platform{});
+    restarted.initialize();
+    QVERIFY(restarted.isRestoreStateUncertain());
+    const auto points = QDir(backupsDir()).entryList({QStringLiteral("before-restore-*.tomatobackup")}, QDir::Files);
+    QCOMPARE(points.size(), 1);
+    QVERIFY(service->readBackupInfo(QDir(backupsDir()).filePath(points.first())).value(QStringLiteral("valid")).toBool());
+}
+
+// 保证同步备份入口不能夺走异步操作的取消身份，拒绝时不创建第二个目标文件。
+void BackupServiceTests::synchronousBackupCannotReplaceActiveOperation()
+{
+    QVERIFY(insertTask(QStringLiteral("只允许一项备份")) > 0);
+    auto* service = BackupService::instance();
+    const auto cleanup = qScopeGuard([&] { service->prepareForShutdown(); });
+    service->requestBackup(backupFile());
+    QVERIFY(service->busy());
+    const auto operation = service->m_operation;
+    const QString other = m_tempDir->filePath(QStringLiteral("other.tomatobackup"));
+    QVERIFY(!service->createBackup(other));
+    QCOMPARE(service->m_operation, operation);
+    QVERIFY(!QFileInfo::exists(other));
+    service->cancelCurrentOperation();
+    QTRY_VERIFY(!service->busy());
+}
+
+// 保证同步和异步恢复在调用准备回调、通知恢复开始之前，就已阻止第二项备份进入。
+void BackupServiceTests::restoreAdmissionPrecedesReentrantCallbacks_data()
+{
+    QTest::addColumn<bool>("asynchronous");
+    QTest::addColumn<bool>("duringPreparation");
+    QTest::newRow("sync-preparation") << false << true;
+    QTest::newRow("sync-started") << false << false;
+    QTest::newRow("async-preparation") << true << true;
+    QTest::newRow("async-started") << true << false;
+}
+
+// 保证恢复重入请求被拒绝且不替换取消身份，原恢复仍正确安装数据并在完成时释放准入。
+void BackupServiceTests::restoreAdmissionPrecedesReentrantCallbacks()
+{
+    QFETCH(bool, asynchronous);
+    QFETCH(bool, duringPreparation);
+    BackupService service;
+    service.configure(settingsPath(), backupsDir());
+    QVERIFY(insertTask(QStringLiteral("备份里的任务")) > 0);
+    QVERIFY(service.createBackup(backupFile()));
+    QVERIFY(insertTask(QStringLiteral("恢复应当移除的任务")) > 0);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+
+    QSemaphore releaseWorker;
+    const auto original = std::make_shared<BackupOperationControl>();
+    const auto unexpected = std::make_shared<BackupOperationControl>();
+    // 旧实现会错误启动第二项工作；让它停在首次入口，断言失败也不会并发触碰正在恢复的库。
+    unexpected->m_checkpointForTest = [&, first = true](const char* stage) mutable {
+        if (qstrcmp(stage, "operation-start") == 0 && std::exchange(first, false)) {
+            releaseWorker.acquire();
+        }
+    };
+    QObject callbacks;
+    const auto cleanup = qScopeGuard([&] {
+        QObject::disconnect(&service, nullptr, &callbacks, nullptr);
+        service.setRestorePreparationCallback({});
+        unexpected->requestStop();
+        releaseWorker.release();
+        service.prepareForShutdown();
+    });
+    const QString other = m_tempDir->filePath(QStringLiteral("reentrant.tomatobackup"));
+    int attempts = 0;
+    bool sawBusy = false;
+    bool sawBlocking = false;
+    bool keptIdentity = false;
+    bool internallyFinishedWhileBusy = false;
+    const auto reenter = [&] {
+        ++attempts;
+        sawBusy = service.busy();
+        sawBlocking = service.operationBlocksUi();
+        service.m_nextOperationForTest = unexpected;
+        service.requestBackup(other);
+        service.m_nextOperationForTest.reset();
+        keptIdentity = service.m_operation == original;
+    };
+    if (duringPreparation) {
+        service.setRestorePreparationCallback([&](QString*) { reenter(); return true; });
+    } else {
+        connect(&service, &BackupService::restoreStarted, &callbacks, reenter);
+    }
+    connect(&service, &BackupService::restoreSyncCompleted, &callbacks, [&] {
+        internallyFinishedWhileBusy = service.busy() && service.m_operation == original;
+    });
+    QSignalSpy backups(&service, &BackupService::backupCompleted);
+    QSignalSpy restored(&service, &BackupService::restoreCompleted);
+    service.m_nextOperationForTest = original;
+    if (asynchronous) {
+        service.requestRestore(backupFile());
+        QTRY_COMPARE_WITH_TIMEOUT(restored.count(), 1, 15000);
+    } else {
+        QVERIFY(service.restoreBackup(backupFile()));
+    }
+    QCOMPARE(attempts, 1);
+    QVERIFY(sawBusy);
+    QVERIFY(sawBlocking);
+    QVERIFY(keptIdentity);
+    QCOMPARE(backups.count(), 1);
+    QVERIFY(!backups.first().at(0).toBool());
+    QVERIFY(!QFileInfo::exists(other));
+    QCOMPARE(restored.count(), 1);
+    QVERIFY(restored.first().at(0).toBool());
+    QVERIFY(internallyFinishedWhileBusy);
+    QVERIFY(!service.busy());
+    QVERIFY(!service.operationBlocksUi());
+    QVERIFY(!service.m_operation);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+}
+
+// 保证同步手动、自动及替换前快照都占用同一操作准入，而不是只检查异步任务已有的busy。
+void BackupServiceTests::synchronousSnapshotsReserveTheirOperation_data()
+{
+    QTest::addColumn<QString>("entry");
+    QTest::newRow("manual") << QStringLiteral("manual");
+    QTest::newRow("automatic") << QStringLiteral("automatic");
+    QTest::newRow("before-sync") << QStringLiteral("before-sync");
+}
+
+// 保证同步快照执行期间的重入不能创建新目标或抢走原操作身份，成功及失败都会释放占用。
+void BackupServiceTests::synchronousSnapshotsReserveTheirOperation()
+{
+    QFETCH(QString, entry);
+    QVERIFY(insertTask(QStringLiteral("同步快照准入")) > 0);
+    BackupService service;
+    service.configure(settingsPath(), backupsDir());
+    QSemaphore releaseWorker;
+    const auto unexpected = std::make_shared<BackupOperationControl>();
+    unexpected->m_checkpointForTest = [&, first = true](const char* stage) mutable {
+        if (qstrcmp(stage, "operation-start") == 0 && std::exchange(first, false)) {
+            releaseWorker.acquire();
+        }
+    };
+    const auto cleanup = qScopeGuard([&] {
+        unexpected->requestStop();
+        releaseWorker.release();
+        service.prepareForShutdown();
+    });
+    const auto original = std::make_shared<BackupOperationControl>();
+    const QString other = m_tempDir->filePath(QStringLiteral("other.tomatobackup"));
+    bool observed = false;
+    bool occupied = false;
+    bool keptIdentity = false;
+    // 同步路径不运行事件循环，用现有入口检查点确定进入操作后才发起重入，不依赖时长猜测。
+    original->m_checkpointForTest = [&](const char* stage) {
+        if (observed || qstrcmp(stage, "operation-start") != 0) return;
+        observed = true;
+        occupied = service.busy();
+        service.m_nextOperationForTest = unexpected;
+        service.requestBackup(other);
+        service.m_nextOperationForTest.reset();
+        keptIdentity = service.m_operation == original;
+    };
+    service.m_nextOperationForTest = original;
+    bool success = false;
+    if (entry == QStringLiteral("manual")) success = service.createBackup(backupFile());
+    else if (entry == QStringLiteral("automatic")) success = service.runAutoBackupIfDue();
+    else { QString error; success = service.backupBeforeSyncReplace(&error); }
+    QVERIFY(success);
+    QVERIFY(observed);
+    QVERIFY(occupied);
+    QVERIFY(keptIdentity);
+    QVERIFY(!QFileInfo::exists(other));
+    QVERIFY(!service.busy());
+    QVERIFY(!service.m_operation);
+
+    // 失败出口也必须释放；自动备份先移除刚记录的周期，确保这次真的进入操作。
+    if (entry == QStringLiteral("automatic")) {
+        QSettings settings(settingsPath(), QSettings::IniFormat);
+        settings.remove(QStringLiteral("backup/lastBackupIso"));
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+    }
+    const auto cancelled = std::make_shared<BackupOperationControl>();
+    cancelled->requestStop();
+    service.m_nextOperationForTest = cancelled;
+    if (entry == QStringLiteral("manual")) success = service.createBackup(backupFile());
+    else if (entry == QStringLiteral("automatic")) success = service.runAutoBackupIfDue();
+    else { QString error; success = service.backupBeforeSyncReplace(&error); }
+    QVERIFY(!success);
+    QVERIFY(!service.busy());
+    QVERIFY(!service.operationBlocksUi());
+    QVERIFY(service.operationText().isEmpty());
+    QVERIFY(!service.m_operation);
+}
+
+// 保证三类状态通知都可以触发下一项工作，旧收尾不能再覆盖新任务的文字、遮罩或身份。
+void BackupServiceTests::completionNotificationsPreserveReentrantOperation_data()
+{
+    QTest::addColumn<QString>("notification");
+    QTest::newRow("busy") << QStringLiteral("busy");
+    QTest::newRow("text") << QStringLiteral("text");
+    QTest::newRow("blocks-ui") << QStringLiteral("blocks-ui");
+}
+
+// 保证通知观察到完整状态，并且通知中启动的新备份仍保持busy、遮罩和自己的取消身份。
+void BackupServiceTests::completionNotificationsPreserveReentrantOperation()
+{
+    QFETCH(QString, notification);
+    QVERIFY(insertTask(QStringLiteral("通知重入")) > 0);
+    BackupService service;
+    service.configure(settingsPath(), backupsDir());
+    QSemaphore releaseWorker;
+    const auto next = std::make_shared<BackupOperationControl>();
+    next->m_checkpointForTest = [&, first = true](const char* stage) mutable {
+        if (qstrcmp(stage, "operation-start") == 0 && std::exchange(first, false)) {
+            releaseWorker.acquire();
+        }
+    };
+    QObject callbacks;
+    const auto cleanup = qScopeGuard([&] {
+        QObject::disconnect(&service, nullptr, &callbacks, nullptr);
+        next->requestStop();
+        releaseWorker.release();
+        service.prepareForShutdown();
+    });
+    bool consistent = true;
+    bool started = false;
+    QString nextText;
+    const auto observe = [&](const QString& signal) {
+        consistent = consistent && (service.busy()
+            ? service.operationBlocksUi() && !service.operationText().isEmpty() && bool(service.m_operation)
+            : !service.operationBlocksUi() && service.operationText().isEmpty() && !service.m_operation);
+        if (signal == notification && !service.busy() && !started) {
+            started = true;
+            service.m_nextOperationForTest = next;
+            service.requestBackup(m_tempDir->filePath(QStringLiteral("next.tomatobackup")));
+            nextText = service.operationText();
+        }
+    };
+    connect(&service, &BackupService::busyChanged, &callbacks, [&] { observe(QStringLiteral("busy")); });
+    connect(&service, &BackupService::operationTextChanged, &callbacks, [&] { observe(QStringLiteral("text")); });
+    connect(&service, &BackupService::operationBlocksUiChanged, &callbacks, [&] { observe(QStringLiteral("blocks-ui")); });
+    QSignalSpy completed(&service, &BackupService::backupCompleted);
+    service.requestBackup(backupFile());
+    QVERIFY(service.busy());
+    QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
+    QVERIFY(completed.first().at(0).toBool());
+    QVERIFY(started);
+    QVERIFY(consistent);
+    QVERIFY(service.busy());
+    QVERIFY(service.operationBlocksUi());
+    QVERIFY(!nextText.isEmpty());
+    QCOMPARE(service.operationText(), nextText);
+    QCOMPARE(service.m_operation, next);
+    QVERIFY(service.m_activeWorkers.size() == 1);
 }

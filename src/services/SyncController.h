@@ -152,6 +152,7 @@ private:
     void ensureEngine();
     void startEngine();
     bool setEnabledState(bool enabled);
+    void loadDisableIntent();
     void setChoosingFolder(bool choosing, const QString& problem = QString());
     void checkChosenFolder(const QByteArray& bookmark, const QString& displayPath);
     std::unique_ptr<SyncFolder> makeFolder(const QByteArray& bookmark);
@@ -242,6 +243,9 @@ private:
     bool m_journalCorrupted = false;
     QString m_settingsError;
     bool m_settingsRetryNeeded = false;
+    // 独立关闭记录优先于旧开启偏好；只有明确开启且两步提交成功后解除。
+    bool m_disableIntentBlocked = false;
+    bool m_changingEnabled = false;
 
     QString currentDatabasePath() const;
 };

@@ -21,6 +21,8 @@
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QScopeGuard>
+#include <QScopedValueRollback>
 #include <QSettings>
 #include <QTimer>
 #include <QUuid>
@@ -126,6 +128,77 @@ QString journalFilePath(const QString& dbPath)
         return QString();
     }
     return dbPath + QStringLiteral(".sync-restore.json");
+}
+
+enum class DisableIntentState { Missing, Disabled, Invalid };
+const QByteArray kDisableIntentContent("sync-disabled-v1\n");
+
+QString disableIntentPath(const QString& dbPath)
+{
+    // 记录位于主库之外，不随备份替换，也不依赖可能不可写的QSettings后端。
+    // 后缀同时登记在BackupOperations的运行期目标保护中，防止手动备份覆盖关闭意图。
+    return dbPath.isEmpty() ? QString() : dbPath + QStringLiteral(".sync-disabled");
+}
+
+DisableIntentState readDisableIntent(const QString& path, QString* error)
+{
+    const QFileInfo info(path);
+    if (info.isSymLink()) {
+        *error = QStringLiteral("同步关闭记录不能是符号链接，请检查本机存储");
+        return DisableIntentState::Invalid;
+    }
+    if (!info.exists()) return DisableIntentState::Missing;
+    if (!info.isFile() || info.size() > 64) {
+        *error = QStringLiteral("同步关闭记录格式异常，自动同步已阻断，请检查本机存储");
+        return DisableIntentState::Invalid;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        *error = QStringLiteral("无法读取同步关闭记录，自动同步已阻断：") + file.errorString();
+        return DisableIntentState::Invalid;
+    }
+    const QByteArray content = file.read(65);
+    if (file.error() != QFileDevice::NoError || content != kDisableIntentContent) {
+        *error = QStringLiteral("同步关闭记录无法识别，自动同步已阻断；未知文件不会被覆盖或删除");
+        return DisableIntentState::Invalid;
+    }
+    return DisableIntentState::Disabled;
+}
+
+bool writeDisableIntent(const QString& path, QString* error)
+{
+    if (path.isEmpty()) {
+        *error = QStringLiteral("数据库位置不可用，无法保存独立关闭记录");
+        return false;
+    }
+    const auto state = readDisableIntent(path, error);
+    if (state == DisableIntentState::Disabled) return true;
+    if (state == DisableIntentState::Invalid) return false;
+    // 必须先原子提交关闭记录，再尝试修改偏好；中途退出仍能识别原来的关闭意图。
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly)
+        || file.write(kDisableIntentContent) != kDisableIntentContent.size()
+        || !file.commit()) {
+        *error = QStringLiteral("独立关闭记录保存失败：") + file.errorString();
+        return false;
+    }
+    return true;
+}
+
+bool removeDisableIntent(const QString& path, QString* error)
+{
+    if (path.isEmpty()) {
+        *error = QStringLiteral("数据库位置不可用，无法核实关闭记录");
+        return false;
+    }
+    const auto state = readDisableIntent(path, error);
+    if (state == DisableIntentState::Missing) return true;
+    if (state == DisableIntentState::Invalid) return false;
+    if (!QFile::remove(path)) {
+        *error = QStringLiteral("同步关闭记录未能清除，同步保持关闭，请修复存储后重试开启");
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -449,6 +522,7 @@ SyncController::SyncController(Platform platform, QObject* parent)
     , m_platform(std::move(platform))
 {
     m_enabled = QSettings().value(kEnabledKey, false).toBool();
+    loadDisableIntent();
     // 本机改了跟着同步的设置（SyncSchema::syncedSettingKeys 与每一天的今日目标），记进库等着发出。
     // 同步写回对方的改动时这些信号也会发出，那时值与库里记下的相同，不会再记一次。
     AppSettings* settings = AppSettings::instance();
@@ -477,6 +551,8 @@ void SyncController::setSafetyBackup(std::function<bool(QString* error)> backup)
 
 void SyncController::initialize()
 {
+    // 构造控制器时数据库可能尚未打开；初始化时再核对，不能仅依赖旧的开启偏好。
+    loadDisableIntent();
     m_initialized = true;
     m_journalCorrupted = false;
 
@@ -538,6 +614,28 @@ void SyncController::initialize()
         startEngine();
     }
     emit statusChanged();
+}
+
+void SyncController::loadDisableIntent()
+{
+    const QString path = disableIntentPath(currentDatabasePath());
+    if (path.isEmpty()) return;
+    QString error;
+    const auto state = readDisableIntent(path, &error);
+    if (state == DisableIntentState::Missing) return;
+    const QScopedValueRollback<bool> changing(m_changingEnabled, true);
+    const bool wasEnabled = m_enabled;
+    m_enabled = false;
+    m_disableIntentBlocked = true;
+    if (m_engine) m_engine->stop();
+    if (state == DisableIntentState::Invalid) {
+        m_settingsError = error;
+        m_settingsRetryNeeded = true;
+    } else if (QSettings().value(kEnabledKey, false).toBool()) {
+        m_settingsError = QStringLiteral("已保留上次关闭同步的意图，同步保持关闭；开关设置尚未保存，请修复存储后重试关闭");
+        m_settingsRetryNeeded = true;
+    }
+    if (wasEnabled) emit enabledChanged();
 }
 
 void SyncController::setForeground(bool foreground)
@@ -1466,7 +1564,7 @@ void SyncController::startEngine()
     // 偏好设置持久化错误存在时也禁止开始同步。
     if (!DatabaseManager::instance()->isOpen() || !m_initialized || m_restore.pending
         || m_restoreRetry.hasPending() || m_journalCorrupted || !m_restoreError.isEmpty()
-        || !m_settingsError.isEmpty() || !m_enabled) {
+        || !m_settingsError.isEmpty() || m_disableIntentBlocked || !m_enabled) {
         return;
     }
     ensureEngine();
@@ -1477,23 +1575,34 @@ void SyncController::startEngine()
 
 bool SyncController::setEnabledState(bool enabled)
 {
+    // 停止引擎和属性通知都可能同步重入；一项开关保存完成前不接受相反的新请求。
+    if (m_changingEnabled) return false;
+    const QScopedValueRollback<bool> changing(m_changingEnabled, true);
+    const bool wasEnabled = m_enabled;
+    const auto notify = qScopeGuard([this, wasEnabled] {
+        if (wasEnabled != m_enabled) emit enabledChanged();
+    });
     if (!enabled) {
-        // 关闭请求：无论 QSettings 写入是否成功，都先停止当前引擎并把本次运行态设为关闭
-        if (m_engine) {
-            m_engine->stop();
-        }
-        const bool wasEnabled = m_enabled;
         m_enabled = false;
-        if (wasEnabled) {
-            emit enabledChanged();
-        }
+        m_disableIntentBlocked = true;
+        if (m_engine) m_engine->stop();
+        QString intentError;
+        const bool intentSaved = writeDisableIntent(disableIntentPath(currentDatabasePath()), &intentError);
 
-        // 调用 sync 后检查 status；再次 setEnabled(false) 即使 m_enabled 已是 false 也必须重试持久化
+        // 两条持久化通道独立尝试；任何一条成功都可保留关闭，不能因日志失败就放弃写偏好。
         QSettings settings;
         settings.setValue(kEnabledKey, false);
         settings.sync();
-        if (settings.status() != QSettings::NoError) {
-            m_settingsError = QStringLiteral("同步开关状态保存失败，同步已暂停以保护数据。");
+        const bool settingsSaved = settings.status() == QSettings::NoError;
+        if (!settingsSaved || !intentSaved) {
+            if (!settingsSaved && !intentSaved) {
+                m_settingsError = QStringLiteral("同步开关和独立关闭记录都保存失败。本次同步已停止，但无法保证重启后仍关闭；请修复存储后再次关闭。")
+                    + intentError;
+            } else if (!settingsSaved) {
+                m_settingsError = QStringLiteral("同步开关保存失败；独立关闭记录已保存，重启后仍保持关闭。请修复存储后重试关闭。");
+            } else {
+                m_settingsError = QStringLiteral("同步已关闭且开关已保存，但关闭保护记录异常：") + intentError;
+            }
             m_settingsRetryNeeded = true;
             return false;
         }
@@ -1501,23 +1610,40 @@ bool SyncController::setEnabledState(bool enabled)
         m_settingsRetryNeeded = false;
         return true;
     } else {
-        // 开启请求：只有 QSettings sync 成功才把 m_enabled 设为 true 并允许 startEngine；失败保持关闭、错误可见、可重试。
+        QString intentError;
+        const QString path = disableIntentPath(currentDatabasePath());
+        const auto state = path.isEmpty() ? DisableIntentState::Missing : readDisableIntent(path, &intentError);
+        if (state == DisableIntentState::Invalid) {
+            m_enabled = false;
+            m_disableIntentBlocked = true;
+            if (m_engine) m_engine->stop();
+            m_settingsError = intentError;
+            m_settingsRetryNeeded = true;
+            return false;
+        }
+        // 先保存开启偏好，再解除关闭记录；若中途退出，记录仍在，启动采取关闭状态。
         QSettings settings;
         settings.setValue(kEnabledKey, true);
         settings.sync();
         if (settings.status() != QSettings::NoError) {
             m_enabled = false;
+            if (m_engine) m_engine->stop();
             m_settingsError = QStringLiteral("同步开关状态保存失败，无法开启同步。");
+            m_settingsRetryNeeded = true;
+            return false;
+        }
+        if (!removeDisableIntent(path, &intentError)) {
+            m_enabled = false;
+            m_disableIntentBlocked = true;
+            if (m_engine) m_engine->stop();
+            m_settingsError = intentError;
             m_settingsRetryNeeded = true;
             return false;
         }
         m_settingsError.clear();
         m_settingsRetryNeeded = false;
-        const bool wasDisabled = !m_enabled;
+        m_disableIntentBlocked = false;
         m_enabled = true;
-        if (wasDisabled) {
-            emit enabledChanged();
-        }
         return true;
     }
 }

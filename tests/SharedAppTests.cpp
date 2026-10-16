@@ -122,6 +122,7 @@ private slots:
 
     void shutdownStepsNamesAndExecutionOrder_data();
     void shutdownStepsNamesAndExecutionOrder();
+    void backgroundRequestsBackupCancellation();
     void applicationStateTransitions();
     void openDatabaseGuardsAgainstEmptyOrganizationName();
     void applicationIdentityAndDatabasePathContract();
@@ -1027,3 +1028,23 @@ void SharedAppTests::sharedAppRestoreFailureSafetyClassificationWiringAndLifecyc
 
 QTEST_MAIN(SharedAppTests)
 #include "SharedAppTests.moc"
+
+// 保证只有真正进入后台才请求备份取消，分屏失焦不取消；请求本身不解除正在执行的保护。
+void SharedAppTests::backgroundRequestsBackupCancellation()
+{
+    AppLifecycle lifecycle;
+    auto* service = BackupService::instance();
+    auto operation = std::make_shared<BackupOperationControl>();
+    service->m_operation = operation;
+    lifecycle.handleApplicationStateChanged(Qt::ApplicationInactive);
+    QVERIFY(!operation->stopped());
+    lifecycle.handleApplicationStateChanged(Qt::ApplicationActive);
+    QVERIFY(!operation->stopped());
+    lifecycle.handleApplicationStateChanged(Qt::ApplicationHidden);
+    QVERIFY(operation->stopped());
+    auto another = std::make_shared<BackupOperationControl>();
+    service->m_operation = another;
+    lifecycle.handleApplicationStateChanged(Qt::ApplicationSuspended);
+    QVERIFY(another->stopped());
+    service->m_operation.reset();
+}

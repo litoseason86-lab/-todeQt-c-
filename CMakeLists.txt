@@ -23,6 +23,18 @@ set(CMAKE_AUTORCC ON)
 find_package(Qt6 6.7 REQUIRED COMPONENTS Concurrent Core Gui Network Qml Quick QuickControls2 QuickLayouts Sql)
 # Shader编译是构建输入，缺少同SDK的qsb时直接失败，不能继续打包过期二进制。
 find_package(Qt6 6.7 REQUIRED COMPONENTS ShaderTools)
+# 备份取消使用自行创建的SQLite C API连接，不借用Qt主连接的native句柄。
+find_package(SQLite3 REQUIRED)
+if(APPLE AND SQLite3_INCLUDE_DIR MATCHES "[.]sdk/usr/include$")
+    # Xcode27.1+CMake4.0.2实测：FindSQLite3把SDK的usr/include作为显式搜索路径后，
+    # libc++的include_next绕过标准库包装头而编译失败。该头目录本就由sysroot隐式提供。
+    set_property(TARGET SQLite::SQLite3 PROPERTY INTERFACE_INCLUDE_DIRECTORIES "")
+endif()
+
+# Mac主驱动与备份C API必须来自同一个SQLite运行实例；插件独立构建，不替换SDK。
+if(APPLE AND NOT IOS)
+    include(cmake/QtSqliteRuntime.cmake)
+endif()
 
 # 主应用和资源测试采用同一生成选项，保持原资源URL和跨图形后端集合。
 function(pomodoro_todo_add_glass_shader target resource_name)
@@ -163,6 +175,9 @@ set(APP_SOURCES
     src/services/PhaseCompletionNotifier.cpp
     src/services/PhaseAlarmCoordinator.h
     src/services/PhaseAlarmCoordinator.cpp
+    src/services/BackupOperationControl.h
+    src/services/BackupSqliteDriver.h
+    src/services/BackupSqliteDriver.cpp
     src/services/BackupOperations.h
     src/services/BackupOperations.cpp
     src/services/BackupService.h
@@ -482,6 +497,7 @@ list(REMOVE_DUPLICATES PTCORE_SOURCES)
 
 add_library(PTCore STATIC ${PTCORE_SOURCES})
 target_include_directories(PTCore PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_link_libraries(PTCore PRIVATE SQLite::SQLite3)
 target_link_libraries(PTCore PUBLIC
     Qt6::Core
     Qt6::Gui
@@ -2379,6 +2395,55 @@ foreach(pt_target IN LISTS POMODORO_TODO_ALL_TARGETS)
         target_link_libraries(${pt_target} PRIVATE PTCore)
     endif()
 endforeach()
+
+if(APPLE AND NOT IOS)
+    add_executable(SqliteRuntimeTests tests/SqliteRuntimeTests.cpp)
+    target_link_libraries(SqliteRuntimeTests PRIVATE PTMacSqliteRuntime Qt6::Test SQLite::SQLite3)
+    target_compile_definitions(SqliteRuntimeTests PRIVATE
+        POMODORO_SQLITE_TEST_PLUGIN_PATH="$<TARGET_FILE:PTSqliteDriver>"
+        POMODORO_SQLITE_APP_PLUGIN_PATH="$<TARGET_BUNDLE_DIR:PomodoroTodo>/Contents/PlugIns/sqldrivers/$<TARGET_FILE_NAME:PTSqliteDriver>")
+    add_dependencies(SqliteRuntimeTests PTSqliteDriver)
+    pomodoro_todo_enable_warnings(SqliteRuntimeTests)
+    pomodoro_todo_enable_warnings(PTMacSqliteRuntime)
+    add_test(NAME SqliteRuntimeTests COMMAND SqliteRuntimeTests)
+    set_tests_properties(SqliteRuntimeTests PROPERTIES TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
+    target_link_libraries(PomodoroTodo PRIVATE PTMacSqliteRuntime)
+    # 插件单独重编也必须更新包内副本，不能只依赖应用重新链接时的POST_BUILD。
+    add_custom_target(bundle-sqlite-runtime ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_BUNDLE_DIR:PomodoroTodo>/Contents/PlugIns/sqldrivers"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:PTSqliteDriver>"
+            "$<TARGET_BUNDLE_DIR:PomodoroTodo>/Contents/PlugIns/sqldrivers/$<TARGET_FILE_NAME:PTSqliteDriver>"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${pt_sqlite_source_root}/LICENSES"
+            "$<TARGET_BUNDLE_DIR:PomodoroTodo>/Contents/Resources/licenses/qt-sqlite"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${CMAKE_BINARY_DIR}/pt-sqlite/source.json"
+            "$<TARGET_BUNDLE_DIR:PomodoroTodo>/Contents/Resources/licenses/qt-sqlite/source.json"
+        DEPENDS PomodoroTodo PTSqliteDriver VERBATIM)
+    add_dependencies(SqliteRuntimeTests bundle-sqlite-runtime)
+    if(TARGET deploy-local-app)
+        add_dependencies(deploy-local-app bundle-sqlite-runtime)
+    endif()
+
+    # 同一装配覆盖直接编译服务及改链PTCore的测试／隔离宿主；MCP协议helper保持不链接SQL。
+    get_property(pt_sqlite_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(pt_sqlite_target IN LISTS pt_sqlite_targets)
+        get_target_property(pt_sqlite_type ${pt_sqlite_target} TYPE)
+        if(NOT pt_sqlite_type STREQUAL "EXECUTABLE" OR pt_sqlite_target STREQUAL "PomodoroTodo"
+           OR pt_sqlite_target STREQUAL "SqliteRuntimeTests")
+            continue()
+        endif()
+        get_target_property(pt_sqlite_links ${pt_sqlite_target} LINK_LIBRARIES)
+        if(pt_sqlite_links MATCHES "(^|;)(PTCore|PTApp|PTQml|Qt6::Sql)(;|$)")
+            target_sources(${pt_sqlite_target} PRIVATE tests/SqliteRuntimeTestBootstrap.cpp)
+            target_link_libraries(${pt_sqlite_target} PRIVATE PTMacSqliteRuntime)
+            target_compile_definitions(${pt_sqlite_target} PRIVATE
+                POMODORO_SQLITE_TEST_PLUGIN_PATH="$<TARGET_FILE:PTSqliteDriver>")
+            add_dependencies(${pt_sqlite_target} PTSqliteDriver)
+        endif()
+    endforeach()
+endif()
 
 # ArchitectureGate 在配置阶段读取目标的源码，避免带入生成阶段 AUTOMOC 追加的构建规则文件。
 # TARGET_PROPERTY 的结果不递归求值，保留 LINK_ONLY 等表达式交给门禁判断；直接插值会让

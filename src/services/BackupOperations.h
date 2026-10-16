@@ -1,6 +1,8 @@
 #ifndef BACKUPOPERATIONS_H
 #define BACKUPOPERATIONS_H
 
+#include "BackupOperationControl.h"
+
 #include <QString>
 #include <QVariantMap>
 
@@ -28,6 +30,8 @@ struct OperationResult
 {
     bool success = false;
     QString error;
+    // 原子提交已发生时保留事实；提交后取消不能让调用方误判为原目标未动。
+    bool committed = false;
 };
 
 struct EmbeddedSettingsResult
@@ -41,12 +45,15 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
                                const QString& settingsFilePath,
                                const QString& destinationPath,
                                const QString& kind,
-                               int currentSchemaVersion);
-QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion);
-EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath);
+                               int currentSchemaVersion,
+                               const BackupOperation& operation = {});
+QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion,
+                          const BackupOperation& operation = {});
+EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath,
+                                            const BackupOperation& operation = {});
 // 外部暂存和发布备份必须传同源预算；本地可信回滚沿用负值，不因新支持上限丢失回滚能力。
 OperationResult atomicCopy(const QString& sourcePath, const QString& destinationPath,
-                           qint64 maxBytes = -1);
+                           qint64 maxBytes = -1, const BackupOperation& operation = {});
 
 } // namespace BackupOperations
 

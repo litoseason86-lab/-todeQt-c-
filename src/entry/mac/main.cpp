@@ -34,6 +34,7 @@
 #include "platform/macos/MacPreferencesCleanup.h"
 #include "platform/macos/MacStatusBarController.h"
 #include "platform/macos/MacSyncFolder.h"
+#include "platform/macos/SqliteRuntime.h"
 #include "platform/apple/AppleNotificationBackend.h"
 
 int main(int argc, char *argv[])
@@ -90,6 +91,15 @@ int main(int argc, char *argv[])
         // 无法取得排他锁时继续运行就是故意放行多实例，数据库可写不能证明安全。
         qCritical() << "无法创建单实例锁，拒绝启动:" << instanceLockDir;
         return -1;
+    }
+
+    // 首个数据库连接前固定SQLite工厂；驱动缺失时阻断，避免退回内嵌运行时再破坏写锁。
+    QString sqliteRuntimeError;
+    const QString sqlitePluginPath = QDir(QCoreApplication::applicationDirPath()).filePath(
+        QStringLiteral("../PlugIns/sqldrivers/libptqsqlite.dylib"));
+    if (!MacSqliteRuntime::initialize(sqlitePluginPath, &sqliteRuntimeError)) {
+        qCritical() << sqliteRuntimeError;
+        return QmlFacade::showStartupErrorWindow(app, DatabaseManager::defaultDatabasePath());
     }
 
     // 7. 打开数据库。

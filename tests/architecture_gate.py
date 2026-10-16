@@ -19,6 +19,8 @@ ALLOWED_QT_LINKS = {
     "Qt6::Sql",
     "Qt6::Concurrent",
 }
+# 059仅为核心的独立备份连接增加原生SQLite依赖；PTApp/PTQml仍不能直接链接它。
+ALLOWED_CORE_LINKS = ALLOWED_QT_LINKS | {"SQLite::SQLite3"}
 ALLOWED_QML_LINKS = ALLOWED_QT_LINKS | {
     "PTCore",
     "PTApp",
@@ -562,8 +564,8 @@ def main() -> int:
     )
     valid = valid and core_direct_valid and core_interface_valid
     for dependency in core_direct + core_interface:
-        if dependency not in ALLOWED_QT_LINKS:
-            fail(f"R1：PTCore 不允许链接 {dependency!r}，允许集合为 {sorted(ALLOWED_QT_LINKS)}")
+        if dependency not in ALLOWED_CORE_LINKS:
+            fail(f"R1：PTCore 不允许链接 {dependency!r}，允许集合为 {sorted(ALLOWED_CORE_LINKS)}")
             valid = False
 
     for source in sorted(core_sources):

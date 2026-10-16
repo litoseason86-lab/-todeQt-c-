@@ -1,4 +1,5 @@
 #include "BackupOperations.h"
+#include "BackupSqliteDriver.h"
 
 #include "AppSettings.h"
 #include "DatabaseManager.h"
@@ -450,12 +451,12 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
 OperationResult embedMetadataAndSettings(const QString& snapshotPath,
                                          const QString& settingsFilePath,
                                          const QString& kind,
-                                         int schemaVersion)
+                                         int schemaVersion, const BackupOperation& control)
 {
     OperationResult result;
     const QString connectionName = uniqueConnectionName(QStringLiteral("BackupMetadata_"));
     {
-        QSqlDatabase database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        QSqlDatabase database = QSqlDatabase::addDatabase(new BackupSqliteDriver(control), connectionName);
         database.setDatabaseName(snapshotPath);
         if (!database.open()) {
             result.error = QStringLiteral("无法写入备份元数据：") + database.lastError().text();
@@ -524,6 +525,11 @@ OperationResult embedMetadataAndSettings(const QString& snapshotPath,
 
             if (ok) {
                 for (const QString& key : settings->allKeys()) {
+                    if (!control->checkpoint("metadata-setting")) {
+                        result.error = control->message();
+                        ok = false;
+                        break;
+                    }
                     // 只带走本应用拥有的键：恢复时也只认这些键，别的键带进备份文件
                     // 只会泄露信息。backup/ 是本机策略，恢复时按设计保留本机值，同样不带。
                     if (!AppSettings::isOwnedSettingKey(key)) {
@@ -554,6 +560,10 @@ OperationResult embedMetadataAndSettings(const QString& snapshotPath,
                 }
             }
 
+            if (ok && !control->checkpoint("metadata-before-commit")) {
+                result.error = control->message();
+                ok = false;
+            }
             if (ok) {
                 if (!database.commit()) {
                     result.error = QStringLiteral("提交备份元数据失败：")
@@ -570,14 +580,24 @@ OperationResult embedMetadataAndSettings(const QString& snapshotPath,
         }
     }
     QSqlDatabase::removeDatabase(connectionName);
+    if (control->stopped()) {
+        result.success = false;
+        result.error = control->message();
+    }
     return result;
 }
 
 } // namespace
 
-OperationResult atomicCopy(const QString& sourcePath, const QString& destinationPath, qint64 maxBytes)
+OperationResult atomicCopy(const QString& sourcePath, const QString& destinationPath, qint64 maxBytes,
+                           const BackupOperation& operation)
 {
+    const auto control = operation ? operation : std::make_shared<BackupOperationControl>();
     OperationResult result;
+    if (!control->checkpoint("operation-start")) {
+        result.error = control->message();
+        return result;
+    }
     if (!QFileInfo(sourcePath).isFile()) {
         result.error = QStringLiteral("复制源必须是普通文件");
         return result;
@@ -610,6 +630,11 @@ OperationResult atomicCopy(const QString& sourcePath, const QString& destination
     constexpr qint64 kChunkSize = 1024 * 1024;
     qint64 copiedBytes = 0;
     while (!source.atEnd()) {
+        if (!control->checkpoint("copy-chunk")) {
+            destination.cancelWriting();
+            result.error = control->message();
+            return result;
+        }
         const QByteArray chunk = source.read(kChunkSize);
         if (chunk.isEmpty() && source.error() != QFileDevice::NoError) {
             destination.cancelWriting();
@@ -630,12 +655,20 @@ OperationResult atomicCopy(const QString& sourcePath, const QString& destination
         copiedBytes += chunk.size();
     }
 
+    if (!control->checkpoint("copy-before-commit")) {
+        destination.cancelWriting();
+        result.error = control->message();
+        return result;
+    }
     if (!destination.commit()) {
         result.error = QStringLiteral("原子替换目标文件失败：") + destination.errorString();
         return result;
     }
 
-    result.success = true;
+    result.committed = true;
+    // 提交已发生时即便同时收到取消，也保留committed事实，调用方据此决定验证或回滚。
+    result.success = control->checkpoint("copy-after-commit");
+    if (!result.success) result.error = control->message();
     return result;
 }
 
@@ -643,9 +676,14 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
                                const QString& settingsFilePath,
                                const QString& destinationPath,
                                const QString& kind,
-                               int currentSchemaVersion)
+                               int currentSchemaVersion, const BackupOperation& operation)
 {
+    const auto control = operation ? operation : std::make_shared<BackupOperationControl>();
     OperationResult result;
+    if (!control->checkpoint("operation-start")) {
+        result.error = control->message();
+        return result;
+    }
     if (sourceDatabasePath.isEmpty() || !QFileInfo::exists(sourceDatabasePath)) {
         result.error = QStringLiteral("数据库路径无效");
         return result;
@@ -666,7 +704,9 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
     QStringList protectedRuntimeFiles = {
         sourceDatabasePath + QStringLiteral("-wal"),
         sourceDatabasePath + QStringLiteral("-shm"),
-        sourceDatabasePath + QStringLiteral("-journal")
+        sourceDatabasePath + QStringLiteral("-journal"),
+        // 与SyncController的独立关闭记录同源；它不能被手动备份覆盖成SQLite文件。
+        sourceDatabasePath + QStringLiteral(".sync-disabled")
     };
     if (!effectiveSettingsPath.isEmpty()) {
         protectedRuntimeFiles.append(effectiveSettingsPath);
@@ -692,18 +732,12 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
     const QString connectionName = uniqueConnectionName(QStringLiteral("BackupSnapshot_"));
     int schemaVersion = -1;
     {
-        QSqlDatabase source = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        QSqlDatabase source = QSqlDatabase::addDatabase(new BackupSqliteDriver(control), connectionName);
         source.setDatabaseName(sourceDatabasePath);
         if (!source.open()) {
             result.error = QStringLiteral("无法打开数据库快照连接：") + source.lastError().text();
         } else {
-            {
-                QSqlQuery timeout(source);
-                if (!timeout.exec(QStringLiteral("PRAGMA busy_timeout = 5000"))) {
-                    result.error = QStringLiteral("设置数据库快照等待时间失败：")
-                        + timeout.lastError().text();
-                }
-            }
+            // 等锁由独立驱动的busy回调负责；不能用PRAGMA busy_timeout覆盖取消回调。
             if (result.error.isEmpty()) {
                 QSqlQuery version(source);
                 if (!version.exec(QStringLiteral("PRAGMA user_version")) || !version.next()) {
@@ -733,20 +767,21 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
     }
     QSqlDatabase::removeDatabase(connectionName);
 
+    if (control->stopped()) result.error = control->message();
     if (!result.error.isEmpty()) {
         QFile::remove(temporaryPath);
         return result;
     }
 
     result = embedMetadataAndSettings(
-        temporaryPath, settingsFilePath, kind, schemaVersion);
+        temporaryPath, settingsFilePath, kind, schemaVersion, control);
     if (!result.success) {
         QFile::remove(temporaryPath);
         return result;
     }
 
     // 发布与恢复采用同一可恢复性门禁；否则超限的本地数据会产生“成功但无法恢复”的备份。
-    const QVariantMap inspection = inspectBackup(temporaryPath, currentSchemaVersion);
+    const QVariantMap inspection = inspectBackup(temporaryPath, currentSchemaVersion, control);
     if (!inspection.value(QStringLiteral("valid")).toBool()) {
         result.success = false;
         result.error = inspection.value(QStringLiteral("reason")).toString();
@@ -755,14 +790,18 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
     }
 
     // 不发布本版本会拒绝恢复的超限文件；失败保留原目标，临时快照在下面统一移除。
-    result = atomicCopy(temporaryPath, destinationPath, kMaxBackupFileBytes);
+    result = atomicCopy(temporaryPath, destinationPath, kMaxBackupFileBytes, control);
     QFile::remove(temporaryPath);
     return result;
 }
 
-QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
+QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion, const BackupOperation& operation)
 {
+    const auto control = operation ? operation : std::make_shared<BackupOperationControl>();
     QVariantMap result;
+    if (!control->checkpoint("inspect-start")) {
+        return {{QStringLiteral("valid"), false}, {QStringLiteral("reason"), control->message()}};
+    }
     result.insert(QStringLiteral("valid"), false);
 
     const QFileInfo info(sourcePath);
@@ -778,7 +817,7 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
     const QString connectionName = uniqueConnectionName(QStringLiteral("BackupInspect_"));
     QString reason;
     {
-        QSqlDatabase database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        QSqlDatabase database = QSqlDatabase::addDatabase(new BackupSqliteDriver(control), connectionName);
         database.setDatabaseName(sourcePath);
         database.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
         if (!database.open()) {
@@ -914,17 +953,23 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
     }
     QSqlDatabase::removeDatabase(connectionName);
 
+    if (!control->checkpoint("inspect-complete")) reason = control->message();
     result.insert(QStringLiteral("valid"), reason.isEmpty());
     result.insert(QStringLiteral("reason"), reason);
     return result;
 }
 
-EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath)
+EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath, const BackupOperation& operation)
 {
+    const auto control = operation ? operation : std::make_shared<BackupOperationControl>();
     EmbeddedSettingsResult result;
+    if (!control->checkpoint("settings-start")) {
+        result.error = control->message();
+        return result;
+    }
     const QString connectionName = uniqueConnectionName(QStringLiteral("BackupSettingsRead_"));
     {
-        QSqlDatabase database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connectionName);
+        QSqlDatabase database = QSqlDatabase::addDatabase(new BackupSqliteDriver(control), connectionName);
         database.setDatabaseName(sourcePath);
         database.setConnectOptions(QStringLiteral("QSQLITE_OPEN_READONLY"));
         if (!database.open()) {
@@ -986,12 +1031,20 @@ EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath)
                     qInfo() << "Restore skipped" << skipped
                             << "unrecognised setting key(s) from backup";
                 }
+                if (rows.lastError().isValid()) {
+                    ok = false;
+                    result.error = QStringLiteral("读取备份偏好失败：") + rows.lastError().text();
+                }
                 result.success = ok;
             }
             database.close();
         }
     }
     QSqlDatabase::removeDatabase(connectionName);
+    if (control->stopped()) {
+        result.success = false;
+        result.error = control->message();
+    }
     return result;
 }
 

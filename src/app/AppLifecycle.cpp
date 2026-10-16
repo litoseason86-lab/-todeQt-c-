@@ -92,6 +92,12 @@ void AppLifecycle::handleApplicationStateChanged(Qt::ApplicationState state)
         }
     }
 
+    // 真正进入后台时请求备份协作停止；失焦仍可能在分屏中可见，不能据此取消。
+    // 取消不解除恢复遮罩，后台worker实际结束前仍由BackupService持有全部依赖。
+    if (state == Qt::ApplicationHidden || state == Qt::ApplicationSuspended) {
+        BackupService::instance()->cancelCurrentOperation();
+    }
+
     // 对所有状态均通知同步控制器（包括回到 Active 恢复前台同步节奏）。
     if (m_syncController) {
         m_syncController->setApplicationState(state);

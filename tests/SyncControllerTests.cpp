@@ -1,6 +1,9 @@
 #include <QDir>
 #include <QFile>
 #include <QMutex>
+#include <QProcess>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
@@ -15,8 +18,10 @@
 
 #include <functional>
 #include <memory>
+#include <cstdio>
 
 #include "../src/services/AppSettings.h"
+#include "../src/services/BackupService.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/LocalSyncFolder.h"
 #include "../src/services/MemoService.h"
@@ -39,6 +44,15 @@
 namespace {
 
 const QString kTaskDate = QStringLiteral("2026-09-30");
+
+void configurePreferences(const QString& directory)
+{
+    // 父进程与重启探针使用同一临时INI，避免Qt进程内缓存掩盖旧磁盘值。
+    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoSyncControllerTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("SyncControllerTests"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, directory);
+}
 
 SyncEngine::Options testOptions()
 {
@@ -63,6 +77,51 @@ SyncController::Platform macPlatform(const QString& folder)
     platform.engine = testOptions();
     platform.engine.mayCreateFolder = true;
     return platform;
+}
+
+int restartProbe(const QStringList& arguments)
+{
+    // 独立进程按正常构造／初始化顺序读取临时库与偏好，不借用父进程的设置缓存。
+    configurePreferences(arguments.at(2));
+    if (!DatabaseManager::instance()->initialize(arguments.at(3))) return 21;
+    SyncController controller(macPlatform(arguments.at(4)));
+    controller.initialize();
+    const QJsonObject state{
+        {QStringLiteral("enabled"), controller.isEnabled()},
+        {QStringLiteral("running"), controller.engine() && controller.engine()->isRunning()},
+        {QStringLiteral("problem"), controller.hasProblem()}
+    };
+    std::puts(QJsonDocument(state).toJson(QJsonDocument::Compact).constData());
+    return 0;
+}
+
+QJsonObject readRestartState(const QString& preferences, const QString& database,
+                            const QString& folder, QString* error)
+{
+    QProcess process;
+    const auto cleanup = qScopeGuard([&] {
+        if (process.state() != QProcess::NotRunning) {
+            process.kill();
+            process.waitForFinished();
+        }
+    });
+    process.start(QCoreApplication::applicationFilePath(),
+                  {QStringLiteral("--sync-restart-probe"), preferences, database, folder});
+    if (!process.waitForFinished(15000)) {
+        *error = QStringLiteral("重启探针未结束：") + process.errorString();
+        return {};
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0) {
+        *error = QString::fromUtf8(process.readAllStandardError());
+        return {};
+    }
+    QJsonParseError parseError;
+    const auto state = QJsonDocument::fromJson(process.readAllStandardOutput(), &parseError);
+    if (!state.isObject() || parseError.error != QJsonParseError::NoError) {
+        *error = parseError.errorString();
+        return {};
+    }
+    return state.object();
 }
 
 // iPad 的样子：要自己选文件夹，只能加入 Mac 建好的，只在前台定时同步。
@@ -335,6 +394,14 @@ private slots:
 
     // 058 阶段 2：同步开关与iPad文件夹持久化
     void settingsAccessErrorOnDisableStopsEngineAndRecoversOnRetry();
+    void failedDisableSurvivesProcessRestart_data();
+    void failedDisableSurvivesProcessRestart();
+    void disableIntentBlocksUnsafeStartup_data();
+    void disableIntentBlocksUnsafeStartup();
+    void disableIntentRemovalFailureKeepsSyncStopped();
+    void bothDisableStoresFailExposesRestartRisk();
+    void restoredDatabaseKeepsIndependentDisableIntent();
+    void disableNotificationCannotReenableBeforeCommit();
     void settingsAccessErrorOnEnableBlocksEngineAndRecoversOnRetry();
     void settingsAccessErrorOnAcceptFolderPreservesExistingEngineAndRecovers();
     void settingsAccessErrorOnBookmarkRefreshPreservesEngineAndExposesError();
@@ -359,10 +426,7 @@ void SyncControllerTests::initTestCase()
 {
     QVERIFY(m_preferences.isValid());
     // 偏好只落到临时 INI：同步开关、书签、逻辑日起点都不能碰真实偏好。
-    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoSyncControllerTests"));
-    QCoreApplication::setApplicationName(QStringLiteral("SyncControllerTests"));
-    QSettings::setDefaultFormat(QSettings::IniFormat);
-    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+    configurePreferences(m_preferences.path());
 }
 
 void SyncControllerTests::init()
@@ -2246,6 +2310,210 @@ void SyncControllerTests::settingsAccessErrorOnDisableStopsEngineAndRecoversOnRe
     }
 }
 
+// 保证关闭设置落盘失败后，偏好仍只读或权限已经恢复的重启，都不会直接恢复旧的开启状态。
+void SyncControllerTests::failedDisableSurvivesProcessRestart_data()
+{
+    QTest::addColumn<bool>("repairPermissions");
+    QTest::newRow("preferences-still-read-only") << false;
+    QTest::newRow("permissions-repaired-with-old-true") << true;
+}
+
+// 保证失败关闭的意图跨进程阻断同步；用户修复存储并明确重开后，正常自动启动仍然可用。
+void SyncControllerTests::failedDisableSurvivesProcessRestart()
+{
+    QFETCH(bool, repairPermissions);
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(controller.isEnabled());
+    QVERIFY(controller.engine()->isRunning());
+
+    QString iniPath;
+    {
+        QSettings settings;
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+        iniPath = settings.fileName();
+    }
+    const QString directory = QFileInfo(iniPath).absolutePath();
+    const auto filePermissions = QFileInfo(iniPath).permissions();
+    const auto directoryPermissions = QFileInfo(directory).permissions();
+    const auto restorePermissions = qScopeGuard([&] {
+        QFile::setPermissions(directory, directoryPermissions);
+        QFile::setPermissions(iniPath, filePermissions);
+    });
+    // 保留真实的enabled=true磁盘文件，只剥夺写权限；用同名目录替换会抹掉这项关键前提。
+    QVERIFY(QFile::setPermissions(iniPath, QFileDevice::ReadOwner));
+    QVERIFY(QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    {
+        QFile probe(iniPath);
+        QVERIFY(!probe.open(QIODevice::WriteOnly | QIODevice::Append));
+    }
+    controller.setEnabled(false);
+    QVERIFY(!controller.isEnabled());
+    QVERIFY(!controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+    if (repairPermissions) {
+        QVERIFY(QFile::setPermissions(directory, directoryPermissions));
+        QVERIFY(QFile::setPermissions(iniPath, filePermissions));
+    }
+    {
+        QFile disk(iniPath);
+        QVERIFY(disk.open(QIODevice::ReadOnly));
+        QVERIFY(disk.readAll().contains("enabled=true"));
+    }
+    QString error;
+    const auto restarted = readRestartState(m_preferences.path(),
+        m_data->filePath(QStringLiteral("this.sqlite")), cloudFolder(), &error);
+    QVERIFY2(!restarted.isEmpty(), qPrintable(error));
+    QCOMPARE(restarted.value(QStringLiteral("enabled")), QJsonValue(false));
+    QCOMPARE(restarted.value(QStringLiteral("running")), QJsonValue(false));
+
+    QVERIFY(QFile::setPermissions(directory, directoryPermissions));
+    QVERIFY(QFile::setPermissions(iniPath, filePermissions));
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(controller.isEnabled());
+    QVERIFY(!controller.hasProblem());
+    const auto reenabled = readRestartState(m_preferences.path(),
+        m_data->filePath(QStringLiteral("this.sqlite")), cloudFolder(), &error);
+    QVERIFY2(!reenabled.isEmpty(), qPrintable(error));
+    QCOMPARE(reenabled.value(QStringLiteral("enabled")), QJsonValue(true));
+    QCOMPARE(reenabled.value(QStringLiteral("running")), QJsonValue(true));
+}
+
+// 保证合法关闭记录及无法辨识的占位都阻断自动启动，未知文件不会被显式开启顺手覆盖或删除。
+void SyncControllerTests::disableIntentBlocksUnsafeStartup_data()
+{
+    QTest::addColumn<QString>("kind");
+    for (const char* kind : {"valid", "unknown", "oversized", "directory", "dangling-link"})
+        QTest::newRow(kind) << QString::fromLatin1(kind);
+}
+
+// 保证旧偏好即使写着开启，关闭记录优先；未知记录保留原状，只有合法记录允许用户显式解除。
+void SyncControllerTests::disableIntentBlocksUnsafeStartup()
+{
+    QFETCH(QString, kind);
+    { QSettings settings; settings.setValue(QStringLiteral("sync/enabled"), true); settings.sync(); }
+    const QString path = m_data->filePath(QStringLiteral("this.sqlite.sync-disabled"));
+    const QByteArray content = kind == QStringLiteral("valid") ? QByteArray("sync-disabled-v1\n")
+        : kind == QStringLiteral("oversized") ? QByteArray(65, 'x') : QByteArray("unknown-file");
+    if (kind == QStringLiteral("directory")) QVERIFY(QDir().mkdir(path));
+    else if (kind == QStringLiteral("dangling-link"))
+        QVERIFY(QFile::link(m_data->filePath(QStringLiteral("absent-target")), path));
+    else {
+        QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(content), qint64(content.size()));
+    }
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    QVERIFY(!controller.isEnabled());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+    if (kind != QStringLiteral("valid")) {
+        controller.setEnabled(true);
+        QVERIFY(!controller.isEnabled());
+        QVERIFY(controller.hasProblem());
+        QVERIFY(QFileInfo(path).exists() || QFileInfo(path).isSymLink());
+        if (kind == QStringLiteral("unknown") || kind == QStringLiteral("oversized")) {
+            QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), content);
+        }
+    }
+}
+
+// 保证开启偏好已保存但关闭记录删除失败时，引擎仍停止且重启继续关闭，不伪报开启成功。
+void SyncControllerTests::disableIntentRemovalFailureKeepsSyncStopped()
+{
+    const QString path = m_data->filePath(QStringLiteral("this.sqlite.sync-disabled"));
+    { QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); QCOMPARE(file.write("sync-disabled-v1\n"), qint64(17)); }
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    QVERIFY(!controller.isEnabled());
+    const auto permissions = QFileInfo(m_data->path()).permissions();
+    const auto restore = qScopeGuard([&] { QFile::setPermissions(m_data->path(), permissions); });
+    QVERIFY(QFile::setPermissions(m_data->path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    controller.setEnabled(true);
+    QVERIFY(!controller.isEnabled());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+    QVERIFY(QFileInfo::exists(path));
+    QVERIFY(QFile::setPermissions(m_data->path(), permissions));
+    QString error;
+    const auto state = readRestartState(m_preferences.path(), m_data->filePath(QStringLiteral("this.sqlite")), cloudFolder(), &error);
+    QVERIFY2(!state.isEmpty(), qPrintable(error));
+    QCOMPARE(state.value(QStringLiteral("enabled")), QJsonValue(false));
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(controller.isEnabled());
+    QVERIFY(!QFileInfo::exists(path));
+}
+
+// 保证两个关闭持久化通道都不可用时立即停同步，并明确告知重启风险，不能暗示已经保存。
+void SyncControllerTests::bothDisableStoresFailExposesRestartRisk()
+{
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize(); controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(controller.engine()->isRunning());
+    const QString path = m_data->filePath(QStringLiteral("this.sqlite.sync-disabled"));
+    QVERIFY(QDir().mkdir(path));
+    const QString ini = QSettings().fileName();
+    const auto filePermissions = QFileInfo(ini).permissions();
+    const auto restore = qScopeGuard([&] { QFile::setPermissions(ini, filePermissions); });
+    QVERIFY(QFile::setPermissions(ini, QFileDevice::ReadOwner));
+    // 禁止原子替换也禁止直接写入，让偏好通道确实失败；关闭日志用目录占位独立阻断。
+    const QString directory = QFileInfo(ini).absolutePath();
+    const auto directoryPermissions = QFileInfo(directory).permissions();
+    const auto restoreDirectory = qScopeGuard([&] { QFile::setPermissions(directory, directoryPermissions); });
+    QVERIFY(QFile::setPermissions(directory, QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+    controller.setEnabled(false);
+    QVERIFY(!controller.isEnabled());
+    QVERIFY(!controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+    QVERIFY(controller.statusDetail().contains(QStringLiteral("重启")));
+    QVERIFY(controller.statusDetail().contains(QStringLiteral("无法保证")));
+}
+
+// 保证恢复旧数据库不会抹掉本机关闭意图，恢复后旧开启配置也不能绕过独立记录。
+void SyncControllerTests::restoredDatabaseKeepsIndependentDisableIntent()
+{
+    const QString database = m_data->filePath(QStringLiteral("this.sqlite"));
+    BackupService backup;
+    backup.configure(QSettings().fileName(), m_data->filePath(QStringLiteral("backups")));
+    const QString snapshot = m_data->filePath(QStringLiteral("old.tomatobackup"));
+    QVERIFY(backup.createBackup(snapshot));
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize(); controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    controller.setEnabled(false);
+    QVERIFY(backup.restoreBackup(snapshot));
+    // 人为保留旧true，确保断言依靠独立关闭记录而非备份或Qt缓存碰巧保持false。
+    { QSettings settings; settings.setValue(QStringLiteral("sync/enabled"), true); settings.sync(); }
+    QString error;
+    const auto state = readRestartState(m_preferences.path(), database, cloudFolder(), &error);
+    QVERIFY2(!state.isEmpty(), qPrintable(error));
+    QCOMPARE(state.value(QStringLiteral("enabled")), QJsonValue(false));
+    QCOMPARE(state.value(QStringLiteral("running")), QJsonValue(false));
+}
+
+// 保证关闭过程的同步属性通知不能重入开启，把内存和已提交的关闭意图撕成两个状态。
+void SyncControllerTests::disableNotificationCannotReenableBeforeCommit()
+{
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize(); controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    bool attempted = false;
+    connect(&controller, &SyncController::enabledChanged, this, [&] {
+        if (!controller.isEnabled() && !attempted) { attempted = true; controller.setEnabled(true); }
+    });
+    controller.setEnabled(false);
+    QVERIFY(attempted);
+    QVERIFY(!controller.isEnabled());
+    QVERIFY(!controller.engine()->isRunning());
+    QCOMPARE(QSettings().value(QStringLiteral("sync/enabled")).toBool(), false);
+}
+
 void SyncControllerTests::settingsAccessErrorOnEnableBlocksEngineAndRecoversOnRetry()
 {
     // 保证在偏好存储不可写时开启同步被阻断且不启动引擎，故障解除后再次开启可成功启动。
@@ -3929,5 +4197,14 @@ void SyncControllerTests::restoreFinalizeQSettingsWriteBackFailureBlocksSyncAndP
     QCOMPARE(AppSettings::instance()->dayStartHour(), 5);
 }
 
-QTEST_GUILESS_MAIN(SyncControllerTests)
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+    if (app.arguments().size() == 5
+        && app.arguments().at(1) == QStringLiteral("--sync-restart-probe")) {
+        return restartProbe(app.arguments());
+    }
+    SyncControllerTests tests;
+    return QTest::qExec(&tests, argc, argv);
+}
 #include "SyncControllerTests.moc"
