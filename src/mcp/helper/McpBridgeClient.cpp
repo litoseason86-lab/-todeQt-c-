@@ -4,10 +4,6 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QJsonDocument>
-#ifdef MCP_TEST_HOST
-#include <QDateTime>
-#include <QDebug>
-#endif
 #include <algorithm>
 #include <utility>
 
@@ -34,9 +30,6 @@ McpBridgeClient::McpBridgeClient(const McpPaths::Resolution& endpoint, QObject* 
         for (const auto& id : ids) {
             if (!m_pending.contains(id) || !m_pending.value(id).deadline.hasExpired()) continue;
             const Pending pending = m_pending.value(id);
-#ifdef MCP_TEST_HOST
-            qWarning() << "MCP_TEST_TRACE deadline" << QDateTime::currentMSecsSinceEpoch() << id << pending.sent;
-#endif
             cancel(id);
             emit completed(id, unavailable(pending.tool, UnavailableReason::EndpointUnreachable, pending.sent));
         }
@@ -56,9 +49,6 @@ void McpBridgeClient::call(const QString& id, Tool tool, const QJsonObject& argu
         emit completed(id, makeToolErrorResult(makeError(ErrorCode::AppUnavailable, QStringLiteral("连接请求队列已满"))));
         return;
     }
-#ifdef MCP_TEST_HOST
-    qWarning() << "MCP_TEST_TRACE call" << QDateTime::currentMSecsSinceEpoch() << id;
-#endif
     m_pending.insert(id, {tool, arguments, QDeadlineTimer(m_toolTimeoutMs), false, ++m_nextOrder});
     m_deadlineTimer.start();
     updateIdleTimer();
@@ -128,9 +118,6 @@ void McpBridgeClient::receive(const QJsonObject& frame)
     const QString id = frame.value("id").toString();
     if (!m_pending.contains(id)) return; // 已取消或超时的迟到应答不再交给模型。
     const Pending pending = m_pending.value(id);
-#ifdef MCP_TEST_HOST
-    qWarning() << "MCP_TEST_TRACE result" << QDateTime::currentMSecsSinceEpoch() << id << pending.deadline.remainingTime();
-#endif
     if (pending.deadline.hasExpired()) {
         cancel(id);
         emit completed(id, unavailable(pending.tool, UnavailableReason::EndpointUnreachable, pending.sent));
@@ -183,9 +170,6 @@ QJsonObject McpBridgeClient::unavailable(Tool tool, UnavailableReason reason, bo
 void McpBridgeClient::fail(UnavailableReason reason)
 {
     if (m_failing) return;
-#ifdef MCP_TEST_HOST
-    qWarning() << "MCP_TEST_TRACE fail" << QDateTime::currentMSecsSinceEpoch() << unavailableReasonName(reason) << m_pending.size() << m_socket.errorString();
-#endif
     m_failing = true;
     m_ready = false;
     m_connectionTimer.stop();

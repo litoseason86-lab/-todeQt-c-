@@ -824,6 +824,43 @@ private slots:
         stream.resumeDispatch();
         QCOMPARE(seen, 20);
     }
+    void chunkedFramesRespectLimitsAndResumeAtMessageBoundaries()
+    {
+        // 产品保证：按段读取仍完整接收上限内的UTF-8消息；超长只拒绝该行，背压恢复后下一行不丢失。
+        constexpr qsizetype limit = 4096;
+        const QByteArray exact = QByteArray("{\"text\":\"") + QByteArray(4079, 'x')
+                                 + QStringLiteral("中文").toUtf8() + "\"}";
+        QCOMPARE(exact.size(), limit);
+        MemoryDevice device;
+        McpJsonStream stream(&device, limit);
+        stream.setOversizedLineRecovery(true);
+        bool open = true;
+        stream.setDispatchGate([&] { return open; });
+        QSignalSpy received(&stream, &McpJsonStream::received);
+        QSignalSpy oversized(&stream, &McpJsonStream::oversized);
+        QSignalSpy failed(&stream, &McpJsonStream::failed);
+        connect(&stream, &McpJsonStream::oversized, this, [&] { open = false; });
+
+        // 把“文”的UTF-8字节切在两个设备输入之间，不能按单个分段提前解码或报错。
+        device.feed(exact.left(exact.size() - 4));
+        QCOMPARE(received.size(), 0);
+        device.feed(exact.right(4) + '\n');
+        QCOMPARE(received.size(), 1);
+        QCOMPARE(received.first().first().toJsonObject().value("text").toString(),
+                 QString(4079, QChar(u'x')) + QStringLiteral("中文"));
+
+        // 多出的一个空格让行长越界；错误回调关闸时，换行和其后的完整消息必须留到恢复后处理。
+        device.feed(exact + " \n" + exact + '\n');
+        QCOMPARE(oversized.size(), 1);
+        QCOMPARE(received.size(), 1);
+        QVERIFY(!open);
+        open = true;
+        stream.resumeDispatch();
+        QCOMPARE(received.size(), 2);
+        QCOMPARE(received.last().first().toJsonObject(), received.first().first().toJsonObject());
+        QCOMPARE(oversized.size(), 1);
+        QCOMPARE(failed.size(), 0);
+    }
     void helperSurvivesMixedBatchWhileBacklogged()
     {
         // 产品保证：大结果与大量小请求混合积压时，所有响应仍成功且恰好返回一次，辅助程序保持连接。
@@ -904,6 +941,9 @@ private slots:
         QCOMPARE(process.state(), QProcess::Running);
         QCOMPARE(received.count('\n'), kBatch + 1);
         const QByteArray helperTrace = process.readAllStandardError();
+        if (qEnvironmentVariableIsSet("POMODORO_MCP_PRESSURE_TRACE"))
+            qInfo().noquote() << "MCP pressure dispatch times (ms):" << dispatchTimes
+                             << "\nhelper trace:\n" << helperTrace;
         int big = 0;
         QSet<int> replyIds;
         for (const auto& reply : received.trimmed().split('\n')) {

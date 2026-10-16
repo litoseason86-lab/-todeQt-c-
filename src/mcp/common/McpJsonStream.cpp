@@ -106,35 +106,44 @@ void McpJsonStream::read()
             if (m_carry.isEmpty()) break;
             budget -= m_carry.size();
         }
-        // 一次只推进到下一条消息结束，然后回到上面重新看闸门。
-        bool boundary = false;
-        while (!boundary && m_carryOffset < m_carry.size()) {
-            const char c = m_carry.at(m_carryOffset++);
-            if (m_discarding) {
-                // 超长的那一行已经报过错；丢到它的换行为止，下一行照常解析。
-                if (c == '\n') { m_discarding = false; boundary = true; }
-                continue;
+        // 按连续字节段组装分帧（以换行确定一条消息），避免大响应逐字节调用Qt容器。
+        // 每次最多处理到一个消息边界，随后仍回到上面检查背压；设备读取预算保持64KiB。
+        const qsizetype newline = m_carry.indexOf('\n', m_carryOffset);
+        const qsizetype end = newline >= 0 ? newline : m_carry.size();
+        if (m_discarding) {
+            m_carryOffset = end;
+            if (newline >= 0) {
+                ++m_carryOffset;
+                m_discarding = false;
             }
-            if (c == '\n') {
-                boundary = true;
-                m_partialTimer.stop();
-                if (isBlankLine(m_buffer)) { m_buffer.clear(); continue; }
-                dispatchLine();
-                if (m_failed) return;
-                continue;
-            }
+            continue;
+        }
+
+        const qsizetype length = end - m_carryOffset;
+        if (length > 0) {
             if (m_buffer.isEmpty() && m_partialTimeoutMs > 0) m_partialTimer.start();
-            m_buffer.append(c);
-            if (m_buffer.size() > m_inputLimit) {
+            const qsizetype room = m_buffer.size() < m_inputLimit ? m_inputLimit - m_buffer.size() : 0;
+            const qsizetype count = qMin(length, room);
+            m_buffer.append(m_carry.constData() + m_carryOffset, count);
+            m_carryOffset += count;
+            if (count < length) {
+                // 只消耗第一个越界字节；oversized回调可能关闸，余下字节留到恢复后再丢到换行。
+                ++m_carryOffset;
                 if (!m_recoverOversized) { fail(); return; }
-                // 只拒绝这一条：内存里不再攒它的内容，丢弃模式一直持续到它的换行。
                 m_buffer.clear();
                 m_partialTimer.stop();
                 m_discarding = true;
-                boundary = true;
                 emit oversized();
                 if (m_failed) return;
+                continue;
             }
+        }
+        if (newline >= 0) {
+            ++m_carryOffset;
+            m_partialTimer.stop();
+            if (isBlankLine(m_buffer)) { m_buffer.clear(); continue; }
+            dispatchLine();
+            if (m_failed) return;
         }
     }
     if (!m_failed && m_device && (m_carryOffset < m_carry.size() || m_device->bytesAvailable() > 0))

@@ -41,12 +41,12 @@ jobs:
           "$QT_ROOT_DIR/bin/qt-cmake" -S . -B "$HOME/pt-audit" \
             -DCMAKE_BUILD_TYPE=Debug -DPOMODORO_TODO_DEPLOY_LOCAL=OFF
 
-      - name: 完整构建
+      - name: 完整构建与MCP压力门禁
         id: build
         run: |
           # 先验证已定位的压力用例，避免每次等待全仓构建才能取得诊断；其余门禁仍完整执行。
           cmake --build "$HOME/pt-audit" --target McpIntegrationTests --parallel 3
-          QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic \
+          QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic POMODORO_MCP_PRESSURE_TRACE=1 \
             "$HOME/pt-audit/McpIntegrationTests" helperSurvivesMixedBatchWhileBacklogged
           cmake --build "$HOME/pt-audit" --parallel 3
 
