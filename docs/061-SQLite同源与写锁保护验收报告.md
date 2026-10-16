@@ -1,6 +1,8 @@
 # 061：SQLite同源与写锁保护验收报告
 
-日期：2026-10-16。计划：[061](../plans/061-SQLite运行时同源与事务锁保护.md)。对象：`fix/058-audit-gates`未提交工作区，HEAD仍为`d8e6c525`，不含059／060／061。最终文件摘要保存于被忽略的`.superpowers/061/accepted-source-sha.json`。
+> 2026-10-17 交付更新：059／060／061 已随 `00014ef` 提交并推送，远端 CI 第 2 次运行通过。最新交付与设备边界见[交付清单](058-061-交付与设备验收清单.md)。下文未提交、未推送及旧 HEAD 等表述属于当时的阶段记录；本地开发日志按合并流程清理，正式结论及远端证据保留。
+
+日期：2026-10-16。计划：[061](https://github.com/litoseason86-lab/-todeQt-c-/blob/00014ef7d4497d61142e2c045cb304c822487e68/plans/061-SQLite运行时同源与事务锁保护.md)。对象：`fix/058-audit-gates`未提交工作区，HEAD仍为`d8e6c525`，不含059／060／061。最终文件摘要保存于被忽略的`.superpowers/061/accepted-source-sha.json`。
 
 ## 结论与实现
 
