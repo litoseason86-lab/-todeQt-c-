@@ -92,8 +92,8 @@ import SwiftUI
                     let today = store.weekIndex == store.currentWeekIndex && store.todayWeekday == day
                     Button { store.selectWeekday(day) } label: {
                         VStack(spacing: 2) {
-                            Text(Self.weekdayName(day)).font(.system(size: 12))
-                            Text(WeekView.day(store.dateForWeekday(day))).font(.system(size: 18, weight: .semibold)).monospacedDigit()
+                            Text(Self.weekdayName(day)).scaledSystemFont(size: 12)
+                            Text(WeekView.day(store.dateForWeekday(day))).scaledSystemFont(size: 18, weight: .semibold).monospacedDigit()
                             Circle().fill(today && !selected ? ThemeColors.danger : Color.clear).frame(width: 4, height: 4)
                         }
                         .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.ink)
@@ -118,7 +118,7 @@ import SwiftUI
             Image(systemName: "info.circle").foregroundStyle(ThemeColors.accentInk)
             Text("未显示：" + store.undisplayedEntryTitles.joined(separator: "、"))
         }
-        .font(.system(size: 14)).foregroundStyle(ThemeColors.ink)
+        .scaledSystemFont(size: 14).foregroundStyle(ThemeColors.ink)
         .padding(14).frame(maxWidth: .infinity, alignment: .leading)
         .background(ThemeColors.accentFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
@@ -132,19 +132,19 @@ import SwiftUI
                         HStack(spacing: 14) {
                             VStack(alignment: .leading, spacing: 3) {
                                 if store.displayMode == .period {
-                                    Text(store.periodLabel(for: entry)).font(.system(size: 14, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+                                    Text(store.periodLabel(for: entry)).scaledSystemFont(size: 14, weight: .semibold).foregroundStyle(ThemeColors.inkStrong)
                                 }
                                 Text(ScheduleFormat.formatMinutes(Double(entry.startMinutes)) + "–" + ScheduleFormat.formatMinutes(Double(entry.endMinutes)))
-                                    .font(.system(size: store.displayMode == .period ? 12 : 14, weight: store.displayMode == .period ? .regular : .semibold))
+                                    .scaledSystemFont(size: store.displayMode == .period ? 12 : 14, weight: store.displayMode == .period ? .regular : .semibold)
                                     .monospacedDigit()
                                     .foregroundStyle(store.displayMode == .period ? ThemeColors.inkSoft : ThemeColors.inkStrong)
                             }
                             .frame(width: 92, alignment: .leading)
                             Capsule().fill(TaskCategoryColor.value(entry.categoryColor)).frame(width: 4, height: 48)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(entry.title).font(.system(size: 17)).foregroundStyle(ThemeColors.inkStrong).lineLimit(1)
+                                Text(entry.title).scaledSystemFont(size: 17).foregroundStyle(ThemeColors.inkStrong).lineLimit(1)
                                 Text([entry.location, ScheduleFormat.weekRangeLabel(start: Double(entry.weekStart), end: Double(entry.weekEnd), parity: Double(entry.weekParity), semesterWeeks: Double(store.settings.semesterWeeks))].filter { !$0.isEmpty }.joined(separator: " · "))
-                                    .font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft).lineLimit(1)
+                                    .scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft).lineLimit(1)
                             }
                             Spacer(minLength: 0)
                         }

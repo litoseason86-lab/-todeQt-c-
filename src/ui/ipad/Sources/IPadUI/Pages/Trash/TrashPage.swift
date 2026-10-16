@@ -27,7 +27,7 @@ import SwiftUI
                         Spacer()
                         if !group.remainingLabel.isEmpty { Text(group.remainingLabel) }
                     }
-                    .font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
+                    .scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
                     .plainRow(insets: EdgeInsets(top: 12, leading: 6, bottom: 6, trailing: 6))
                     ForEach(Array(group.items.enumerated()), id: \.element.id) { index, item in
                         let selected = store.selecting && store.selection.contains(item.id)
@@ -118,16 +118,16 @@ import SwiftUI
             if store.selecting {
                 let selected = store.selection.contains(item.id)
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 24)).foregroundStyle(selected ? ThemeColors.accentInk : ThemeColors.inkMuted)
+                    .scaledSystemFont(size: 24).foregroundStyle(selected ? ThemeColors.accentInk : ThemeColors.inkMuted)
                     .accessibilityLabel(selected ? "已选" : "未选")
             }
-            Image(systemName: icon(item.kind)).font(.system(size: 15)).foregroundStyle(ThemeColors.accentInk)
+            Image(systemName: icon(item.kind)).scaledSystemFont(size: 15).foregroundStyle(ThemeColors.accentInk)
                 .frame(width: 34, height: 34)
                 .background(ThemeColors.accentFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.title.isEmpty ? "未命名" : item.title).font(.system(size: 16)).foregroundStyle(ThemeColors.inkStrong).lineLimit(2)
-                Text(TrashFormat.metaText(item, today: store.today)).font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft).lineLimit(1)
+                Text(item.title.isEmpty ? "未命名" : item.title).scaledSystemFont(size: 16).foregroundStyle(ThemeColors.inkStrong).lineLimit(2)
+                Text(TrashFormat.metaText(item, today: store.today)).scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft).lineLimit(1)
             }
             Spacer(minLength: 0)
             if wide && item.restorable && !store.selecting {

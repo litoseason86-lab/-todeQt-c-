@@ -32,8 +32,8 @@ RowLayout {
 
         background: Rectangle {
             color: minusButton.enabled ? Theme.surface : Theme.surfaceSunken
-            border.color: minusButton.activeFocus ? Theme.focusRing : Theme.border
-            border.width: minusButton.activeFocus ? 2 : 1
+            border.color: minusButton.visualFocus ? Theme.focusRing : Theme.border
+            border.width: minusButton.visualFocus ? 2 : 1
             radius: Theme.radiusMd
         }
 
@@ -80,8 +80,8 @@ RowLayout {
 
         background: Rectangle {
             color: plusButton.enabled ? Theme.surface : Theme.surfaceSunken
-            border.color: plusButton.activeFocus ? Theme.focusRing : Theme.border
-            border.width: plusButton.activeFocus ? 2 : 1
+            border.color: plusButton.visualFocus ? Theme.focusRing : Theme.border
+            border.width: plusButton.visualFocus ? 2 : 1
             radius: Theme.radiusMd
         }
 

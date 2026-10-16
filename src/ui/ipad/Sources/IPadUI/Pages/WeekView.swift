@@ -101,7 +101,7 @@ import UniformTypeIdentifiers
                         Spacer()
                         if group.plannedMinutes > 0 { Text("已排 " + DurationFormat.minutes(Double(group.plannedMinutes))) }
                     }
-                    .font(.system(size: 14, weight: .semibold)).foregroundStyle(ThemeColors.ink)
+                    .scaledSystemFont(size: 14, weight: .semibold).foregroundStyle(ThemeColors.ink)
                     .plainRow(insets: EdgeInsets(top: 0, leading: 4, bottom: 8, trailing: 4))
                     .dropDestination(for: String.self) { ids, _ in return drop(ids, to: group.date) }
                     ForEach(Array(group.tasks.enumerated()), id: \.element.id) { taskIndex, task in
@@ -140,8 +140,8 @@ import UniformTypeIdentifiers
                 let selected = store.selectedGroup?.date == group.date
                 Button { store.selectDay(group.date) } label: {
                     VStack(spacing: 2) {
-                        Text(Self.weekdayLabel(index)).font(.system(size: 12))
-                        Text(Self.day(group.date)).font(.system(size: 18, weight: .semibold)).monospacedDigit()
+                        Text(Self.weekdayLabel(index)).scaledSystemFont(size: 12)
+                        Text(Self.day(group.date)).scaledSystemFont(size: 18, weight: .semibold).monospacedDigit()
                     }
                     .foregroundStyle(selected ? ThemeColors.surface : (store.isToday(group.date) ? ThemeColors.accentInk : ThemeColors.ink))
                     .frame(maxWidth: .infinity, minHeight: 52)
@@ -197,10 +197,10 @@ import UniformTypeIdentifiers
         return VStack(spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 Text("周" + Self.weekdayLabel(index) + " " + Self.day(group.date))
-                    .font(.system(size: 16, weight: .semibold))
+                    .scaledSystemFont(size: 16, weight: .semibold)
                     .foregroundStyle(today ? ThemeColors.accentInk : ThemeColors.inkStrong)
                 Spacer(minLength: 4)
-                Text(Self.shortMinutes(group.plannedMinutes)).font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
+                Text(Self.shortMinutes(group.plannedMinutes)).scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
                     .accessibilityLabel(group.plannedMinutes > 0 ? "已排 " + DurationFormat.minutes(Double(group.plannedMinutes)) : "")
             }
             .padding(.horizontal, 12).padding(.top, 12).padding(.bottom, 8)
@@ -330,12 +330,12 @@ private final class WeekDragLifetime: Sendable {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if store.selecting {
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 15)).foregroundStyle(selected ? ThemeColors.accentInk : ThemeColors.inkMuted)
+                        .scaledSystemFont(size: 15).foregroundStyle(selected ? ThemeColors.accentInk : ThemeColors.inkMuted)
                 } else {
                     Circle().fill(TaskCategoryColor.value(task.categoryColor).opacity(task.completed ? 0.45 : 1))
                         .frame(width: 7, height: 7).alignmentGuide(.firstTextBaseline) { $0[.bottom] - 1 }
                 }
-                Text(task.title).font(.system(size: 14)).lineLimit(2)
+                Text(task.title).scaledSystemFont(size: 14).lineLimit(2)
                     .foregroundStyle(task.completed ? ThemeColors.inkMuted : ThemeColors.inkStrong)
                     .strikethrough(task.completed)
                 Spacer(minLength: 0)
@@ -416,7 +416,7 @@ private final class WeekDragLifetime: Sendable {
                         .frame(width: compact ? 14 : 26, height: compact ? 14 : 26)
                         .frame(width: compact ? 18 : 44, height: compact ? 30 : 44)
                     TextField("新任务", text: $title)
-                        .font(.system(size: compact ? 14 : 17)).foregroundStyle(ThemeColors.inkStrong)
+                        .scaledSystemFont(size: compact ? 14 : 17).foregroundStyle(ThemeColors.inkStrong)
                         .focused($focused).submitLabel(.next).onSubmit(submit)
                         .onKeyPress(.escape) { focused = false; end(); return .handled }
                         .accessibilityLabel("新任务标题")
@@ -430,9 +430,9 @@ private final class WeekDragLifetime: Sendable {
             } else {
                 Button { composingDate = date } label: {
                     HStack(spacing: compact ? 6 : 14) {
-                        Image(systemName: "plus.circle.fill").font(.system(size: compact ? 16 : 26))
+                        Image(systemName: "plus.circle.fill").scaledSystemFont(size: compact ? 16 : 26)
                             .frame(width: compact ? 18 : 44, height: compact ? 30 : 44)
-                        Text("新任务").font(.system(size: compact ? 14 : 17))
+                        Text("新任务").scaledSystemFont(size: compact ? 14 : 17)
                         Spacer(minLength: 0)
                     }
                     .foregroundStyle(ThemeColors.accentInk)

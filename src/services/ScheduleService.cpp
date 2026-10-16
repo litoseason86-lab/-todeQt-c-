@@ -556,6 +556,14 @@ QVariantList ScheduleService::findConflicts(int weekday, int startMinutes, int e
 
 QVariantList ScheduleService::getPeriods() const
 {
+    return getPeriods(nullptr);
+}
+
+QVariantList ScheduleService::getPeriods(bool* ok) const
+{
+    if (ok) {
+        *ok = false;
+    }
     QVariantList periods;
 
     QSqlDatabase db = DatabaseManager::instance()->database();
@@ -580,6 +588,12 @@ QVariantList ScheduleService::getPeriods() const
         period.insert(QStringLiteral("startMinutes"), query.value(1).toInt());
         period.insert(QStringLiteral("endMinutes"), query.value(2).toInt());
         periods.append(period);
+    }
+    if (query.lastError().isValid()) {
+        return {};
+    }
+    if (ok) {
+        *ok = true;
     }
     return periods;
 }

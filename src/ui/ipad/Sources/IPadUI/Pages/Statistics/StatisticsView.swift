@@ -77,16 +77,16 @@ private struct StatisticsCardView: View {
     // 定稿数字卡：标题 15、数字 30 粗配 15 的单位；副标题与比较各一行，比较为空也留行高。
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 6 : 10) {
-            Text(card.title).font(.system(size: compact ? 13 : 15)).foregroundStyle(ThemeColors.inkSoft)
+            Text(card.title).scaledSystemFont(size: compact ? 13 : 15).foregroundStyle(ThemeColors.inkSoft)
                 .lineLimit(2).frame(alignment: .topLeading)
             MixedNumberText(parts: valueParts, numberSize: compact ? 22 : 30, unitSize: compact ? 12 : 15)
                 .lineLimit(1).minimumScaleFactor(0.6)
             if !card.subtitle.isEmpty {
-                Text(card.subtitle).font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft).lineLimit(2)
+                Text(card.subtitle).scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft).lineLimit(2)
             }
             // 比较为空仍预留位置，当前周期与结束周期切换不推动下面图表跳动。
             Text(card.comparison.isEmpty ? " " : card.comparison)
-                .font(.system(size: 13)).lineLimit(2).foregroundStyle(card.trend > 0 ? ThemeColors.successInk : card.trend < 0 ? ThemeColors.danger : ThemeColors.inkSoft)
+                .scaledSystemFont(size: 13).lineLimit(2).foregroundStyle(card.trend > 0 ? ThemeColors.successInk : card.trend < 0 ? ThemeColors.danger : ThemeColors.inkSoft)
                 .accessibilityHidden(card.comparison.isEmpty)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

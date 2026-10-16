@@ -27,7 +27,7 @@ import SwiftUI
                 }
                 if store.searched && store.tasks.isEmpty && store.gaps.isEmpty && store.errorMessage.isEmpty {
                     Text("没有找到「\(store.query.trimmingCharacters(in: .whitespaces))」")
-                        .font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+                        .scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
                         .plainRow(insets: EdgeInsets(top: 0, leading: 4, bottom: 0, trailing: 4))
                 }
                 if !store.tasks.isEmpty {
@@ -79,15 +79,15 @@ import SwiftUI
         count == 1 ? .single : index == 0 ? .top : index == count - 1 ? .bottom : .middle
     }
     private func sectionTitle(_ title: String) -> some View {
-        Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColors.inkSoft)
+        Text(title).scaledSystemFont(size: 13, weight: .semibold).foregroundStyle(ThemeColors.inkSoft)
             .plainRow(insets: EdgeInsets(top: 12, leading: 6, bottom: 6, trailing: 6))
     }
     private func taskRow(_ task: TaskValue) -> some View {
         HStack(spacing: 12) {
             Image(systemName: task.completed ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 20)).foregroundStyle(task.completed ? ThemeColors.accentInk : ThemeColors.accentStrong)
+                .scaledSystemFont(size: 20).foregroundStyle(task.completed ? ThemeColors.accentInk : ThemeColors.accentStrong)
             VStack(alignment: .leading, spacing: 3) {
-                Text(task.title).font(.system(size: 16)).foregroundStyle(task.completed ? ThemeColors.inkSoft : ThemeColors.inkStrong)
+                Text(task.title).scaledSystemFont(size: 16).foregroundStyle(task.completed ? ThemeColors.inkSoft : ThemeColors.inkStrong)
                     .strikethrough(task.completed).lineLimit(2)
                 HStack(spacing: 6) {
                     if !task.categoryName.isEmpty {
@@ -95,7 +95,7 @@ import SwiftUI
                     }
                     Text([TodayDisplayDate.title(task.date), task.categoryName].filter { !$0.isEmpty }.joined(separator: " · "))
                 }
-                .font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
+                .scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
             }
             Spacer(minLength: 0)
         }
@@ -105,14 +105,14 @@ import SwiftUI
     private func gapRow(_ gap: GapValue) -> some View {
         HStack(spacing: 12) {
             Image(systemName: gap.status == 2 ? "checkmark.seal" : "pencil.and.list.clipboard")
-                .font(.system(size: 17)).foregroundStyle(ThemeColors.accentInk).frame(width: 22)
+                .scaledSystemFont(size: 17).foregroundStyle(ThemeColors.accentInk).frame(width: 22)
             VStack(alignment: .leading, spacing: 3) {
-                Text(gap.title).font(.system(size: 16)).foregroundStyle(ThemeColors.inkStrong).lineLimit(2)
+                Text(gap.title).scaledSystemFont(size: 16).foregroundStyle(ThemeColors.inkStrong).lineLimit(2)
                 Text([gap.categoryName.isEmpty ? "未分类" : gap.categoryName, gap.status == 2 ? "已解决" : "未解决"].joined(separator: " · "))
-                    .font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
+                    .scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)).foregroundStyle(ThemeColors.inkMuted)
+            Image(systemName: "chevron.right").scaledSystemFont(size: 12, weight: .semibold).foregroundStyle(ThemeColors.inkMuted)
         }
         .padding(.horizontal, 16).frame(minHeight: 64).contentShape(Rectangle())
         .accessibilityElement(children: .combine)

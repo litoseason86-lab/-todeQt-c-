@@ -70,4 +70,12 @@ import XCTest
         shell.triggerToastAction(); XCTAssertEqual(bridge.calls.map(\.name), ["requestSession", "cancel"])
         XCTAssertTrue(store.commitIfNeeded()); XCTAssertEqual(bridge.calls.count, 2)
     }
+    // 产品保证：外壳切换旁白状态时，撤销仓库独立转发暂停状态，不夹带任何撤销、提交或取消操作。
+    func testSetAutomaticCommitSuspendedForwardsToBridgeWithoutExtraCalls() {
+        let (_, bridge, _, store) = fixture()
+        store.setAutomaticCommitSuspended(true)
+        store.setAutomaticCommitSuspended(false)
+        XCTAssertEqual(bridge.automaticCommitSuspensions, [true, false])
+        XCTAssertTrue(bridge.calls.isEmpty)
+    }
 }

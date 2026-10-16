@@ -1,0 +1,43 @@
+--- a/tests/BackupServiceTests.cpp
++++ b/tests/BackupServiceTests.cpp
+@@ -128,2 +128,3 @@
+ private slots:
++    void generateQt69CompatibilityFixture();
+     void init();
+@@ -206,2 +207,8 @@
+     QVERIFY(m_tempDir->isValid());
++    // 生成夹具只能使用临时INI和测试身份，不访问本机正式偏好。
++    QCoreApplication::setOrganizationName(QStringLiteral("BackupCompatibilityFixture"));
++    QCoreApplication::setApplicationName(QStringLiteral("Qt690Generator"));
++    QSettings::setDefaultFormat(QSettings::IniFormat);
++    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_tempDir->path());
++    QSettings::setPath(QSettings::IniFormat, QSettings::SystemScope, m_tempDir->path());
+     QVERIFY(DatabaseManager::instance()->initialize(dbPath()));
+@@ -1941 +1948,27 @@
+ }
++
++
++// 产品保证：兼容样本由Qt6.9实际旧实现生成，内容仅包含明确的虚构任务和偏好。
++void BackupServiceTests::generateQt69CompatibilityFixture()
++{
++    QCOMPARE(QString::fromLatin1(qVersion()), QStringLiteral("6.9.0"));
++    QSettings settings(settingsPath(), QSettings::IniFormat);
++    settings.setValue(QStringLiteral("focus/workMinutes"), 37);
++    settings.setValue(QStringLiteral("appearance/compatBool"), true);
++    settings.setValue(QStringLiteral("appearance/compatUnicode"), QStringLiteral("旧SDK学习👩‍💻\n虚构数据"));
++    settings.setValue(QStringLiteral("appearance/compatInteger"), QVariant::fromValue(qlonglong(-1234567890123LL)));
++    settings.setValue(QStringLiteral("appearance/compatReal"), 0.625);
++    settings.sync();
++    QCOMPARE(settings.status(), QSettings::NoError);
++    const int id = insertTask(QStringLiteral("Qt6.9虚构兼容任务"));
++    QVERIFY(id > 0);
++    QVERIFY(insertFocusSession(id, 1500));
++    const QString output = qEnvironmentVariable("POMODORO_QT69_FIXTURE_OUTPUT");
++    QVERIFY(!output.isEmpty());
++    QVERIFY(!QFileInfo::exists(output));
++    QVERIFY(BackupService::instance()->createBackup(output));
++    const auto info = BackupService::instance()->readBackupInfo(output);
++    QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
++    QCOMPARE(info.value(QStringLiteral("taskCount")).toInt(), 1);
++    QCOMPARE(info.value(QStringLiteral("sessionCount")).toInt(), 1);
++}

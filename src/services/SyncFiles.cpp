@@ -1,5 +1,6 @@
 #include "SyncFiles.h"
 
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
@@ -281,6 +282,9 @@ QByteArray encodeMarker(const Marker& marker)
 
 ParseStatus decodeMarker(const QByteArray& bytes, Marker* marker, QString* error)
 {
+    if (bytes.size() > kMaxMarkerBytes) {
+        return fail(error, ParseStatus::Corrupt, QStringLiteral("标记文件大小超出预算上限"));
+    }
     QJsonObject root;
     const ParseStatus status = parseEnvelope(bytes, QStringLiteral("marker"), &root, error);
     if (status != ParseStatus::Ok) {
@@ -313,6 +317,9 @@ QByteArray encodeChanges(const ChangeFile& file)
 ParseStatus decodeChanges(const QByteArray& bytes, const QString& expectedDevice, const SyncPosition& expected,
                           ChangeFile* file, QString* error)
 {
+    if (bytes.size() > kMaxChangesBytes) {
+        return fail(error, ParseStatus::Corrupt, QStringLiteral("改动文件大小超出预算上限"));
+    }
     QJsonObject root;
     ParseStatus status = parseEnvelope(bytes, QStringLiteral("changes"), &root, error);
     if (status != ParseStatus::Ok) {
@@ -349,6 +356,9 @@ QByteArray encodeSnapshot(const SnapshotFile& file)
 ParseStatus decodeSnapshot(const QByteArray& bytes, const QString& expectedDevice, const SyncPosition& expected,
                            SnapshotFile* file, QString* error)
 {
+    if (bytes.size() > kMaxSnapshotBytes) {
+        return fail(error, ParseStatus::Corrupt, QStringLiteral("快照文件大小超出预算上限"));
+    }
     QJsonObject root;
     ParseStatus status = parseEnvelope(bytes, QStringLiteral("snapshot"), &root, error);
     if (status != ParseStatus::Ok) {
@@ -389,6 +399,9 @@ QByteArray encodeCursor(const CursorFile& file)
 
 ParseStatus decodeCursor(const QByteArray& bytes, const QString& expectedDevice, CursorFile* file, QString* error)
 {
+    if (bytes.size() > kMaxCursorBytes) {
+        return fail(error, ParseStatus::Corrupt, QStringLiteral("游标文件大小超出预算上限"));
+    }
     QJsonObject root;
     const ParseStatus status = parseEnvelope(bytes, QStringLiteral("cursor"), &root, error);
     if (status != ParseStatus::Ok) {
@@ -409,6 +422,46 @@ ParseStatus decodeCursor(const QByteArray& bytes, const QString& expectedDevice,
     }
     *file = parsed;
     return ParseStatus::Ok;
+}
+
+FileCategory classifyPath(const QString& relativePath)
+{
+    const QString fileName = QFileInfo(relativePath).fileName();
+    if (relativePath == markerFileName() || fileName == markerFileName()) {
+        return FileCategory::Marker;
+    }
+    if (fileName == cursorFileName()) {
+        return FileCategory::Cursor;
+    }
+    if (relativePath.contains(QStringLiteral("/changes/")) || parseChangeFileName(fileName, nullptr)) {
+        return FileCategory::Changes;
+    }
+    if (parseSnapshotFileName(fileName, nullptr)) {
+        return FileCategory::Snapshot;
+    }
+    return FileCategory::Unknown;
+}
+
+qint64 maxFileBudget(FileCategory category)
+{
+    switch (category) {
+    case FileCategory::Marker:
+        return kMaxMarkerBytes;
+    case FileCategory::Cursor:
+        return kMaxCursorBytes;
+    case FileCategory::Changes:
+        return kMaxChangesBytes;
+    case FileCategory::Snapshot:
+        return kMaxSnapshotBytes;
+    case FileCategory::Unknown:
+        return 0;
+    }
+    return 0;
+}
+
+qint64 maxBudgetForPath(const QString& relativePath)
+{
+    return maxFileBudget(classifyPath(relativePath));
 }
 
 } // namespace SyncFiles

@@ -131,7 +131,7 @@ src/ui/ipad/           iPad 原生前端（Package.swift；Sources/IPadCore 展�
 src/platform/apple/    macOS 与 iOS 共用的 Apple 框架层（系统通知 UNUserNotificationCenter、iCloud 云盘文件的上传状态，Objective-C++）
 qml/                   QML 界面（views/ 页面、components/ 组件、components/settings/ 设置面板）
 resources/             Qt 资源文件（字体、壁纸、音效）
-shaders/               预编译 Shader 资源
+shaders/               Shader 源码，构建时由 qsb 生成资源
 cmake/                 构建脚本（DeployLocalApp.cmake：部署到 /Applications 的原子切换逻辑）
 tests/                 Qt Test 自动化测试（C++ 与 Objective-C++ 用例、Qt Quick Test、架构门禁）
 docs/                  当前业务规则与运行命令

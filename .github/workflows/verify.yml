@@ -1,0 +1,60 @@
+name: 验证
+
+"on":
+  push:
+    # 首次审计交付在功能分支验证，不必先把尚未远端验证的代码送进main。
+    branches: [main, fix/058-audit-gates]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos-verify:
+    name: macOS 构建与回归
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: 读取源码
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: 安装验证用 Qt
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4.4.1
+        with:
+          version: '6.10.3'
+          host: mac
+          target: desktop
+          arch: clang_64
+          modules: qtshadertools
+          cache: true
+
+      # 使用与本地审计相同的目录和显式开关，禁止CI覆盖安装应用。
+      - name: 配置离屏验证构建
+        run: |
+          "$QT_ROOT_DIR/bin/qt-cmake" -S . -B "$HOME/pt-audit" \
+            -DCMAKE_BUILD_TYPE=Debug -DPOMODORO_TODO_DEPLOY_LOCAL=OFF
+
+      - name: 完整构建
+        run: cmake --build "$HOME/pt-audit" --parallel 3
+
+      - name: C++、QML、桥接与架构门禁
+        # QML 与 MCP 集成用例会共享离屏事件循环、临时偏好和辅助进程；
+        # 串行只改变调度，不放宽断言，避免托管 runner 的资源争用制造假失败。
+        run: ctest --test-dir "$HOME/pt-audit" --output-on-failure --timeout 240 --parallel 1
+
+      - name: Swift 数据层
+        run: swift test --package-path src/ui/ipad --scratch-path "$HOME/pt-audit/ipad-swift"
+
+      # 只运行锁定SDK的隔离宿主验证；不运行verify-claude，不调用模型或生产数据库。
+      - name: 准备锁定的 MCP SDK 依赖
+        run: npm ci --ignore-scripts --prefix tests/mcp-sdk
+
+      - name: MCP SDK 兼容性
+        run: npm test --prefix tests/mcp-sdk

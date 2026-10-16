@@ -345,6 +345,19 @@ TestCase {
         return row.mapToItem(null, row.width / 2, row.height / 2)
     }
 
+    function settleDragRows() {
+        // 产品保证：拖动命中测试只在三行已经完成布局后计算场景坐标，不能把异步布局中的零高度当成落点。
+        tryVerify(function () {
+            var countdown = testCase.rowIn(appearancePage, "countdown")
+            var today = testCase.rowIn(appearancePage, "today")
+            var focus = testCase.rowIn(appearancePage, "focus")
+            return appearancePage.sidebarOrder.length === 3
+                    && countdown !== null && today !== null && focus !== null
+                    && countdown.height > 0 && today.height > 0 && focus.height > 0
+                    && countdown.y < today.y && today.y < focus.y
+        }, 3000, "侧栏拖动行未完成布局")
+    }
+
     function test_sidebarOrderRowsHaveNoMoveButtons() {
         settingsMock.sidebarOrder = ["countdown", "today", "focus"]
         wait(20)
@@ -355,7 +368,7 @@ TestCase {
 
     function test_dragDownDropsAfterTargetAndCommitsWholeOrder() {
         settingsMock.sidebarOrder = ["countdown", "today", "focus"]
-        wait(20)
+        settleDragRows()
 
         appearancePage.beginDrag("countdown")
         var target = testCase.rowCenterScene("focus")
@@ -386,7 +399,7 @@ TestCase {
 
     function test_dragUpDropsBeforeTarget() {
         settingsMock.sidebarOrder = ["countdown", "today", "focus"]
-        wait(20)
+        settleDragRows()
 
         appearancePage.beginDrag("focus")
         var target = testCase.rowCenterScene("countdown")

@@ -99,6 +99,7 @@ public:
     // —— 节次预设 ——
     // 节次既是录入时的快捷填充来源，也是「按节次」显示模式的行定义。
     Q_INVOKABLE QVariantList getPeriods() const;
+    QVariantList getPeriods(bool* ok) const;
     // 整表替换节次。传入元素形如 { startMinutes, endMinutes }，
     // 服务按开始时间排序后重新编号为 1..N——「第 3 节」必须永远晚于「第 2 节」，
     // 让调用方自己维护编号迟早会排出乱序的节次表。

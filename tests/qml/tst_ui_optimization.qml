@@ -616,7 +616,9 @@ TestCase {
         compare(todayTaskView.tasks[0].completed, true);
         var refreshedContainer = findChild(todayTaskView, "completionParticleContainer");
         verify(refreshedContainer !== null);
-        compare(refreshedContainer.particleCount, 0);
+        // 定时刷新和粒子销毁都由事件循环推进；远端 macOS runner 可能在刷新完成时仍处于最后一帧，
+        // 等待实际归零再断言，避免把动画尚未收尾误报成刷新重播。
+        tryCompare(refreshedContainer, "particleCount", 0, testCase.uiTimeout);
         compare(taskManager.setTaskCompletedCallCount, 1);
     }
 
@@ -661,7 +663,9 @@ TestCase {
         compare(weekPlanView.weekTasks[0].completed, true);
         var refreshedContainer = findChild(weekPlanView, "completionParticleContainer");
         verify(refreshedContainer !== null);
-        compare(refreshedContainer.particleCount, 0);
+        // 定时刷新和粒子销毁都由事件循环推进；刷新完成时可能还处于最后一帧，
+        // 等待归零再断言，避免把动画尚未收尾误报成刷新重播。
+        tryCompare(refreshedContainer, "particleCount", 0, testCase.uiTimeout);
         compare(taskManager.setTaskCompletedCallCount, 1);
     }
 
@@ -849,11 +853,11 @@ TestCase {
 
     function test_addTaskDialogUsesOptimizedPanelAndInputStates() {
         addTaskDialog.open();
-        wait(260);
 
         var dialogPanel = addTaskDialog.background;
         var titleField = findChild(addTaskDialog, "titleField");
         var titleFieldBackground = findChild(addTaskDialog, "titleFieldBackground");
+        var titleErrorLabel = findChild(addTaskDialog, "addTaskErrorLabel");
         var categoryComboBackground = findChild(addTaskDialog, "categoryComboBackground");
         var cancelButton = findChild(addTaskDialog, "cancelButton");
         var cancelButtonBackground = findChild(addTaskDialog, "cancelButtonBackground");
@@ -863,11 +867,17 @@ TestCase {
         verify(dialogPanel !== null);
         verify(titleField !== null);
         verify(titleFieldBackground !== null);
+        verify(titleErrorLabel !== null);
         verify(categoryComboBackground !== null);
         verify(cancelButton !== null);
         verify(cancelButtonBackground !== null);
         verify(submitButton !== null);
         verify(submitButtonBackground !== null);
+        // Popup 的 opened 信号和入场动画必须先收口；否则 onOpened 里的初始化可能在 submit 后才执行，
+        // 把刚写入的错误文案清掉。只等可观察的打开态和有效尺寸，不用固定休眠猜时间。
+        tryVerify(function () {
+            return addTaskDialog.opened && titleField.width > 0 && titleField.height > 0;
+        }, testCase.uiTimeout, "添加任务弹窗未完成打开");
 
         compare(dialogPanel.objectName, "dialogPanel");
         compare(dialogPanel.radius, Theme.radiusLg);
@@ -886,9 +896,15 @@ TestCase {
         compare(submitButton.contentItem.font.weight, Font.Medium);
 
         addTaskDialog.submit();
-        wait(220);
+        tryVerify(function () {
+            // forceActiveFocus 只有在测试窗口成为系统 active window 时才会置 activeFocus；
+            // 离屏 runner 不保证这一点，提交失败的稳定产品契约是错误文案和危险边框。
+            return titleErrorLabel.text === "任务标题不能为空"
+                    && Qt.colorEqual(titleFieldBackground.border.color, Theme.dangerBorder)
+                    && titleFieldBackground.border.width === 2;
+        }, testCase.uiTimeout, "提交空任务后标题错误状态未落位");
 
-        verify(titleField.activeFocus);
+        compare(titleErrorLabel.text, "任务标题不能为空");
         verify(Qt.colorEqual(titleFieldBackground.border.color, Theme.dangerBorder));
         compare(titleFieldBackground.border.width, 2);
     }

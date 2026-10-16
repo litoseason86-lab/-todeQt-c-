@@ -34,11 +34,11 @@ import SwiftUI
                             Text("周" + ScheduleView.weekdayName(day))
                             let number = Text(WeekView.day(store.dateForWeekday(day))).monospacedDigit()
                             if today {
-                                number.font(.system(size: 13, weight: .bold)).foregroundStyle(ThemeColors.surface)
+                                number.scaledSystemFont(size: 13, weight: .bold).foregroundStyle(ThemeColors.surface)
                                     .frame(width: 26, height: 26).background(ThemeColors.accentInk, in: Circle())
                             } else { number }
                         }
-                        .font(.system(size: 14, weight: .semibold))
+                        .scaledSystemFont(size: 14, weight: .semibold)
                         .foregroundStyle(today ? ThemeColors.accentInk : ThemeColors.ink)
                         .frame(width: width, height: 44)
                         .accessibilityElement(children: .combine)
@@ -83,7 +83,7 @@ import SwiftUI
             Color.clear.frame(height: height)
             if store.displayMode == .time {
                 ForEach(Array(stride(from: start, through: end, by: 120)), id: \.self) { minute in
-                    Text(ScheduleFormat.formatMinutes(Double(minute))).font(.system(size: 11)).monospacedDigit()
+                    Text(ScheduleFormat.formatMinutes(Double(minute))).scaledSystemFont(size: 11).monospacedDigit()
                         .foregroundStyle(ThemeColors.inkSoft).padding(.trailing, 6)
                         .offset(y: Double(minute - start) * minuteHeight - 7)
                 }
@@ -114,10 +114,10 @@ import SwiftUI
                 Button { edit(item.entry) } label: {
                     // 定稿课程块：科目色浅底、左边 3 宽科目色条，课名 13 粗、地点与时间 11。
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(item.entry.title).font(.system(size: 13, weight: .semibold)).lineLimit(2)
-                        if !item.entry.location.isEmpty { Text(item.entry.location).font(.system(size: 11)).lineLimit(2) }
+                        Text(item.entry.title).scaledSystemFont(size: 13, weight: .semibold).lineLimit(2)
+                        if !item.entry.location.isEmpty { Text(item.entry.location).scaledSystemFont(size: 11).lineLimit(2) }
                         Text(ScheduleFormat.formatMinutes(Double(item.entry.startMinutes)) + "–" + ScheduleFormat.formatMinutes(Double(item.entry.endMinutes)))
-                            .font(.system(size: 11)).monospacedDigit().lineLimit(1)
+                            .scaledSystemFont(size: 11).monospacedDigit().lineLimit(1)
                     }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(.horizontal, 8).padding(.vertical, 6)
                         .foregroundStyle(ThemeColors.inkStrong)
                         .background(TaskCategoryColor.value(item.entry.categoryColor).opacity(0.18))

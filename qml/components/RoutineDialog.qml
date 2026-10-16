@@ -44,6 +44,7 @@ Popup {
     readonly property int routineRowHeight: 52
     // 重复弹窗的对外句柄：它是 Popup，不在可视子项树里，findChild 拿不到。
     readonly property alias weekdayDialogRef: weekdayDialog
+    readonly property alias deleteConfirmationRef: deleteConfirmation
     // 编辑复用顶部表单：0 表示新增模式，避免复制一套标题和科目输入控件后状态漂移。
     property int editingRoutineId: -1
     readonly property bool editingRoutine: editingRoutineId > 0
@@ -111,6 +112,7 @@ Popup {
     }
 
     onClosed: {
+        deleteConfirmation.close()
         if (root.editingRoutine) {
             // 关闭弹窗等同放弃当前编辑，不能让旧标题遗留在新增模式里被误添加。
             root.editingRoutineId = -1
@@ -274,6 +276,21 @@ Popup {
     }
 
     function deleteRoutine(routineId) {
+        root.errorText = ""
+        deleteConfirmation.pendingId = Number(routineId)
+        deleteConfirmation.pendingTitle = ""
+        for (var i = 0; i < root.routines.length; ++i) {
+            if (Number(root.routines[i].id) === Number(routineId)) {
+                deleteConfirmation.pendingTitle = String(root.routines[i].title || "")
+                break
+            }
+        }
+        deleteConfirmation.open()
+    }
+
+    function commitRoutineDeletion(routineId) {
+        if (Number(routineId) <= 0)
+            return
         if (!root.routineManagerRef || !root.routineManagerRef.deleteRoutine) {
             root.errorText = "每日例行服务不可用"
             return
@@ -287,8 +304,77 @@ Popup {
                 root.errorText = ""
             }
             root.refresh()
+            deleteConfirmation.close()
         } else {
             root.errorText = "例行任务删除失败"
+        }
+    }
+
+    Popup {
+        id: deleteConfirmation
+        objectName: "routineDeleteConfirmation"
+        // 确认时只使用打开窗口时的稳定编号；列表重排或刷新不能把删除转到另一条规则。
+        property int pendingId: -1
+        property string pendingTitle: ""
+        parent: root.Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(420, parent ? parent.width - Theme.space32 : 420)
+        padding: Theme.space16
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape
+        onOpened: deleteCancelButton.forceActiveFocus(Qt.PopupFocusReason)
+        onAboutToHide: pendingId = -1
+        background: Rectangle {
+            radius: Theme.radiusMd
+            color: Theme.surfaceRaised
+            border.color: Theme.border
+        }
+        contentItem: ColumnLayout {
+            spacing: Theme.space16
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("删除例行任务？")
+                textFormat: Text.PlainText
+                color: Theme.inkStrong
+                font.pixelSize: Theme.fontXl
+            }
+            Label {
+                Layout.fillWidth: true
+                text: deleteConfirmation.pendingTitle
+                textFormat: Text.PlainText
+                color: Theme.ink
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("规则将移入废纸篓，30天内可以恢复。当天尚未操作的实例会按原规则收回。")
+                textFormat: Text.PlainText
+                color: Theme.inkSoft
+                wrapMode: Text.Wrap
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: root.errorText.length > 0
+                text: root.errorText
+                textFormat: Text.PlainText
+                color: Theme.danger
+                wrapMode: Text.Wrap
+            }
+            RowLayout {
+                Layout.alignment: Qt.AlignRight
+                PageActionButton {
+                    id: deleteCancelButton
+                    objectName: "cancelRoutineDeleteButton"
+                    text: qsTr("取消")
+                    onClicked: deleteConfirmation.close()
+                }
+                PageActionButton {
+                    objectName: "confirmRoutineDeleteButton"
+                    text: qsTr("确认删除")
+                    onClicked: root.commitRoutineDeletion(deleteConfirmation.pendingId)
+                }
+            }
         }
     }
 

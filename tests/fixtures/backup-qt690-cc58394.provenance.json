@@ -1,0 +1,14 @@
+{
+  "purpose": "实际Qt6.9.0及基线备份实现生成的完整兼容样本；仅含虚构数据，不是用户历史备份。",
+  "baselineCommit": "cc58394f1e6c482c65a484b091eef86fa055f234",
+  "qtVersion": "6.9.0",
+  "databaseSchema": 21,
+  "sha256": "ee7f4270178b5c0834f8b421cdad74a1cf8a0d05351c2315c31b22bf3c191a89",
+  "sizeBytes": 360448,
+  "generatorModifications": "仅在隔离原始BackupServiceTests中新增generateQt69CompatibilityFixture及临时INI/测试身份设置；BackupService/BackupOperations生产实现与基线逐字节一致。",
+  "expectedTask": "Qt6.9虚构兼容任务",
+  "expectedSessionDurationSeconds": 1500,
+  "src/services/BackupOperations.cppSHA256": "702ef43ca44fb06f57a8f2f063bb55067bf25c0f38939bab23dcaf8ed7e10c03",
+  "src/services/BackupService.cppSHA256": "53303586cc256717d7fb816d2ba1ebf289c572665e484017b71c0d199538ab0c",
+  "generatorPatchSHA256": "781e51ce282d1325447a0a2b424d44d7edd9170c4f24e2a691f026bcf62c5545"
+}

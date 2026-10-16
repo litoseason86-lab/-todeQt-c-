@@ -50,4 +50,7 @@ import Observation
         guard bridge.state.active else { return true }
         do { try bridge.commit(); return true } catch { return false }
     }
+    public func setAutomaticCommitSuspended(_ suspended: Bool) {
+        bridge.setAutomaticCommitSuspended(suspended)
+    }
 }

@@ -37,12 +37,12 @@ struct TodayBanners: View {
     @ViewBuilder private func banner<Actions: View>(text: String, @ViewBuilder actions: () -> Actions) -> some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 12) {
-                Text(text).font(.system(size: 15, weight: .medium)).foregroundStyle(ThemeColors.inkStrong)
+                Text(text).scaledSystemFont(size: 15, weight: .medium).foregroundStyle(ThemeColors.inkStrong)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 actions()
             }
             VStack(alignment: .leading, spacing: 8) {
-                Text(text).font(.system(size: 15, weight: .medium)).foregroundStyle(ThemeColors.inkStrong)
+                Text(text).scaledSystemFont(size: 15, weight: .medium).foregroundStyle(ThemeColors.inkStrong)
                 HStack(spacing: 12) { actions() }
             }
         }

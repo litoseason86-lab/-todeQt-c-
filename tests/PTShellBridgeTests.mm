@@ -76,6 +76,20 @@ void PTShellBridgeTests::convertsServiceSnapshotAndPersistsLocalSelection()
         const int second = TaskManager::instance()->createTask(QStringLiteral("已完成"), today, -1, 0, QString());
         QVERIFY(first > 0 && second > 0 && first != second);
         QVERIFY(TaskManager::instance()->setTaskCompleted(second, true));
+
+        // 给第一个任务插入一段当天逻辑日期中午 12:00–12:10、duration=600、mode=0、pomodoro_completed=0 的已结束专注
+        QSqlQuery sessionQuery(DatabaseManager::instance()->database());
+        sessionQuery.prepare(QStringLiteral(
+            "INSERT INTO focus_sessions (task_id, start_time, end_time, duration, mode, pomodoro_completed) "
+            "VALUES (:taskId, :startTime, :endTime, :duration, :mode, :pomodoroCompleted)"));
+        sessionQuery.bindValue(QStringLiteral(":taskId"), first);
+        sessionQuery.bindValue(QStringLiteral(":startTime"), today.toString(Qt::ISODate) + QStringLiteral("T12:00:00"));
+        sessionQuery.bindValue(QStringLiteral(":endTime"), today.toString(Qt::ISODate) + QStringLiteral("T12:10:00"));
+        sessionQuery.bindValue(QStringLiteral(":duration"), 600);
+        sessionQuery.bindValue(QStringLiteral(":mode"), 0);
+        sessionQuery.bindValue(QStringLiteral(":pomodoroCompleted"), 0);
+        QVERIFY(sessionQuery.exec());
+
         const int gap = KnowledgeGapService::instance()->addGap(QStringLiteral("到期"), -1, QString(), 1, today, -1);
         QVERIFY(gap > 0);
         PTShellBridge *bridge = [PTShellBridge new];
@@ -83,6 +97,7 @@ void PTShellBridgeTests::convertsServiceSnapshotAndPersistsLocalSelection()
         QVERIFY(snapshot.valid);
         QCOMPARE(snapshot.todayPendingCount, NSInteger(1));
         QCOMPARE(snapshot.weekPendingCount, NSInteger(1));
+        QCOMPARE(snapshot.todayFocusedSeconds, NSInteger(600));
         QCOMPARE(snapshot.dueGapCount, NSInteger(1));
         QVERIFY([snapshot.sidebarOrder.firstObject isEqualToString:AppSettings::instance()->sidebarOrder().first().toNSString()]);
         [bridge selectPage:@"memo"];

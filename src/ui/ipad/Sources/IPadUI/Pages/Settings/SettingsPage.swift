@@ -131,7 +131,7 @@ import SwiftUI
                         ForEach(systemModes, id: \.0) { mode in
                             let selected = shell.selectedSystemAppearance == mode.0
                             Button { shell.setAppearance(mode.0) } label: {
-                                Text(mode.1).font(.system(size: 14, weight: selected ? .semibold : .regular))
+                                Text(mode.1).scaledSystemFont(size: 14, weight: selected ? .semibold : .regular)
                                     .foregroundStyle(selected ? ThemeColors.accentFillInk : ThemeColors.ink)
                                     .padding(.horizontal, 14).frame(height: 32)
                                     .background(selected ? ThemeColors.surface : Color.clear, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -158,7 +158,7 @@ import SwiftUI
                                         RoundedRectangle(cornerRadius: 10, style: .continuous)
                                             .strokeBorder(selected ? ThemeColors.accentInk : ThemeColors.border, lineWidth: selected ? 3 : 1)
                                     }
-                                Text(theme.title).font(.system(size: 13, weight: selected ? .semibold : .regular))
+                                Text(theme.title).scaledSystemFont(size: 13, weight: selected ? .semibold : .regular)
                                     .foregroundStyle(ThemeColors.inkStrong)
                             }
                             .contentShape(Rectangle())
@@ -262,7 +262,7 @@ import SwiftUI
     }
     private func button(_ symbol: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 13, weight: .semibold))
+            Image(systemName: symbol).scaledSystemFont(size: 13, weight: .semibold)
                 .frame(width: 44, height: 32).contentShape(Rectangle())
         }
         .buttonStyle(.borderless)

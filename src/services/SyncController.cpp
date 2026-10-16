@@ -12,10 +12,18 @@
 
 #include <QCoreApplication>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QFutureWatcher>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPointer>
+#include <QRegularExpression>
+#include <QSaveFile>
 #include <QSettings>
 #include <QTimer>
+#include <QUuid>
 #include <QtConcurrent/QtConcurrentRun>
 
 #include <utility>
@@ -109,7 +117,332 @@ QString syncedAtText(const QDateTime& time)
                                                 : time.toString(QStringLiteral("M月d日 HH:mm"));
 }
 
+// 恢复日志文件预算上限：16 KiB
+constexpr qint64 kMaxJournalSize = 16 * 1024;
+
+QString journalFilePath(const QString& dbPath)
+{
+    if (dbPath.isEmpty()) {
+        return QString();
+    }
+    return dbPath + QStringLiteral(".sync-restore.json");
+}
+
 } // namespace
+
+SyncController::JournalReadResult SyncController::readJournalFile(
+    const QString& journalPath, const QString& expectedDbPath,
+    JournalData* outData, QString* errorMessage)
+{
+    QFileInfo fi(journalPath);
+    // 拒绝符号链接（必须在 exists 之前判断，避免悬空链接被当成不存在）
+    if (fi.isSymLink()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志文件是符号链接：%1").arg(journalPath);
+        }
+        return JournalReadResult::Corrupt;
+    }
+    if (!fi.exists()) {
+        return JournalReadResult::NotFound;
+    }
+    // 拒绝非普通文件（如目录、套接字等）
+    if (!fi.isFile()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志文件不是普通文件：%1").arg(journalPath);
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    QFile file(journalPath);
+    if (!file.open(QIODevice::ReadOnly)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("无法读取恢复日志文件：%1").arg(file.errorString());
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    // 读取最多 16 KiB + 1 字节，超限必须拒绝
+    const QByteArray content = file.read(kMaxJournalSize + 1);
+    if (content.size() > kMaxJournalSize) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志文件大小超过 16 KiB 限制");
+        }
+        return JournalReadResult::Corrupt;
+    }
+    if (file.error() != QFile::NoError) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("读取恢复日志文件出错：%1").arg(file.errorString());
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(content, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志解析失败：%1").arg(parseError.errorString());
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    const QJsonObject obj = doc.object();
+
+    // v 必须数值精确等于 1，拒绝小数截断或版本不匹配
+    const QJsonValue vVal = obj.value(QStringLiteral("v"));
+    if (!vVal.isDouble() || vVal.toDouble() != 1.0 || vVal.toInteger() != 1) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志版本不支持或非整数1");
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    static const QRegularExpression s_epochRegex(QStringLiteral(R"(\A[0-9]+\z)"));
+    static const QRegularExpression s_hex32Regex(QStringLiteral(R"(\A[0-9a-fA-F]{32}\z)"));
+    static const QRegularExpression s_uuidRegex(QStringLiteral(R"(\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z)"));
+
+    // operationId 必须为有效 UUID
+    const QJsonValue opVal = obj.value(QStringLiteral("operationId"));
+    if (!opVal.isString()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志缺少 operationId");
+        }
+        return JournalReadResult::Corrupt;
+    }
+    const QString opId = opVal.toString();
+    if (!s_uuidRegex.match(opId).hasMatch() || QUuid::fromString(opId).isNull()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志缺少有效 UUID 操作标识");
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    // phase 仅允许 prepared / installed
+    const QJsonValue phaseVal = obj.value(QStringLiteral("phase"));
+    if (!phaseVal.isString()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志缺少 phase 字符串");
+        }
+        return JournalReadResult::Corrupt;
+    }
+    const QString phase = phaseVal.toString();
+    if (phase != QLatin1String("prepared") && phase != QLatin1String("installed")) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志状态未知：%1").arg(phase);
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    // epoch 只接受非负十进制字符串，拒绝 JSON double，用正则 \A[0-9]+\z 后 toLongLong 检范围
+    const QJsonValue epochVal = obj.value(QStringLiteral("epoch"));
+    if (!epochVal.isString()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志中 epoch 必须为十进制整数字符串");
+        }
+        return JournalReadResult::Corrupt;
+    }
+    const QString epochStr = epochVal.toString();
+    if (!s_epochRegex.match(epochStr).hasMatch()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志中 epoch 格式无效，必须为纯数字字符串");
+        }
+        return JournalReadResult::Corrupt;
+    }
+    bool epochOk = false;
+    const qint64 epoch = epochStr.toLongLong(&epochOk);
+    if (!epochOk || epoch < 0) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志中 epoch 超出合法范围");
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    // deviceId 必须是正常 32 位十六进制非空字符串
+    const QJsonValue devVal = obj.value(QStringLiteral("deviceId"));
+    if (!devVal.isString()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志缺少有效的 deviceId");
+        }
+        return JournalReadResult::Corrupt;
+    }
+    const QString deviceId = devVal.toString();
+    if (!s_hex32Regex.match(deviceId).hasMatch()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志中 deviceId 不是合法的 32 位十六进制字符串");
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    // folderId 必须是显式字符串（空字符串合法），缺失/null 不属于合法空值
+    if (!obj.contains(QStringLiteral("folderId"))) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志缺少 folderId 字段");
+        }
+        return JournalReadResult::Corrupt;
+    }
+    const QJsonValue folderVal = obj.value(QStringLiteral("folderId"));
+    if (!folderVal.isString()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志中 folderId 必须为字符串类型");
+        }
+        return JournalReadResult::Corrupt;
+    }
+    const QString folderId = folderVal.toString();
+    const bool isFolderUuid = !folderId.isEmpty() && s_uuidRegex.match(folderId).hasMatch() && !QUuid::fromString(folderId).isNull();
+    const bool isFolderHex32 = !folderId.isEmpty() && s_hex32Regex.match(folderId).hasMatch();
+    if (!folderId.isEmpty() && !isFolderUuid && !isFolderHex32) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志中 folderId 格式无效，必须为空、合法 UUID 或 32 位十六进制");
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    // dbPath 必须存在、是字符串且为绝对路径，且绝对路径等于当前DB
+    const QJsonValue dbPathVal = obj.value(QStringLiteral("dbPath"));
+    if (!dbPathVal.isString()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志缺少有效的 dbPath 字符串");
+        }
+        return JournalReadResult::Corrupt;
+    }
+    const QString dbPath = dbPathVal.toString();
+    if (dbPath.isEmpty() || !QDir::isAbsolutePath(dbPath) || expectedDbPath.isEmpty()
+        || QFileInfo(expectedDbPath).absoluteFilePath() != QFileInfo(dbPath).absoluteFilePath()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志数据库路径不是绝对路径或与当前数据库不匹配");
+        }
+        return JournalReadResult::Corrupt;
+    }
+
+    if (outData) {
+        outData->v = 1;
+        outData->operationId = opId;
+        outData->epoch = epoch;
+        outData->deviceId = deviceId;
+        outData->folderId = folderId;
+        outData->phase = phase;
+        outData->dbPath = dbPath;
+    }
+    return JournalReadResult::Success;
+}
+
+bool SyncController::writeJournalFile(const QString& journalPath, const JournalData& data, QString* errorMessage)
+{
+    if (journalPath.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志路径为空");
+        }
+        return false;
+    }
+
+    QFileInfo fi(journalPath);
+    if (fi.isSymLink() || (fi.exists() && !fi.isFile())) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志路径已存在符号链接或非普通文件：%1").arg(journalPath);
+        }
+        return false;
+    }
+
+    QJsonObject obj;
+    obj.insert(QStringLiteral("v"), data.v);
+    obj.insert(QStringLiteral("operationId"), data.operationId);
+    obj.insert(QStringLiteral("epoch"), QString::number(data.epoch));
+    obj.insert(QStringLiteral("deviceId"), data.deviceId);
+    obj.insert(QStringLiteral("folderId"), data.folderId);
+    obj.insert(QStringLiteral("phase"), data.phase);
+    obj.insert(QStringLiteral("dbPath"), data.dbPath);
+
+    const QByteArray json = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+
+    QSaveFile saveFile(journalPath);
+    saveFile.setDirectWriteFallback(false);
+    if (!saveFile.open(QIODevice::WriteOnly)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("无法打开恢复日志文件进行写入：%1").arg(saveFile.errorString());
+        }
+        return false;
+    }
+    if (saveFile.write(json) != json.size()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("写入恢复日志内容不完整");
+        }
+        saveFile.cancelWriting();
+        return false;
+    }
+    if (!saveFile.commit()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("提交恢复日志文件失败：%1").arg(saveFile.errorString());
+        }
+        return false;
+    }
+    return true;
+}
+
+bool SyncController::deleteJournalFileSafely(const QString& journalPath, const QString& expectedDbPath,
+                                            const QString& expectedOperationId, QString* errorMessage)
+{
+    if (journalPath.isEmpty() || expectedDbPath.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("日志路径或数据库路径为空");
+        }
+        return false;
+    }
+    static const QRegularExpression s_uuidRegex(QStringLiteral(R"(\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\z)"));
+    if (expectedOperationId.isEmpty() || !s_uuidRegex.match(expectedOperationId).hasMatch() || QUuid::fromString(expectedOperationId).isNull()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("预期恢复操作标识为空或非有效 UUID");
+        }
+        return false;
+    }
+    const QString expectedJournal = journalFilePath(expectedDbPath);
+    if (QFileInfo(journalPath).absoluteFilePath() != QFileInfo(expectedJournal).absoluteFilePath()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("删除路径与当前数据库绑定的日志路径不匹配");
+        }
+        return false;
+    }
+    QFileInfo fi(journalPath);
+    if (fi.isSymLink()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("拒绝删除符号链接：%1").arg(journalPath);
+        }
+        return false;
+    }
+    if (!fi.exists()) {
+        return true;
+    }
+    if (!fi.isFile()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("拒绝删除非普通文件：%1").arg(journalPath);
+        }
+        return false;
+    }
+
+    // 清理前读取校验当前有效日志且 operationId 匹配本次操作，不能删除被替换的未知普通文件
+    JournalData currentData;
+    QString readErr;
+    const JournalReadResult readRes = readJournalFile(journalPath, expectedDbPath, &currentData, &readErr);
+    if (readRes != JournalReadResult::Success) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("删除前校验恢复日志失败，拒绝删除未知或损坏文件：%1").arg(readErr);
+        }
+        return false;
+    }
+    if (currentData.operationId != expectedOperationId) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("恢复日志 operationId (%1) 与期望 (%2) 不匹配，拒绝删除")
+                .arg(currentData.operationId, expectedOperationId);
+        }
+        return false;
+    }
+
+    if (!QFile::remove(journalPath)) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("删除恢复日志失败：%1").arg(journalPath);
+        }
+        return false;
+    }
+    return true;
+}
 
 SyncController::SyncController(Platform platform, QObject* parent)
     : QObject(parent)
@@ -145,7 +478,57 @@ void SyncController::setSafetyBackup(std::function<bool(QString* error)> backup)
 void SyncController::initialize()
 {
     m_initialized = true;
-    reconcileSettings();
+    m_journalCorrupted = false;
+
+    // 检查恢复日志（必须先于 reconcileSettings 和 startEngine 检查）
+    const QString dbPath = currentDatabasePath();
+    const QString journalPath = journalFilePath(dbPath);
+    if (!journalPath.isEmpty()) {
+        JournalData journal;
+        QString err;
+        const JournalReadResult res = readJournalFile(journalPath, dbPath, &journal, &err);
+        if (res == JournalReadResult::Corrupt) {
+            m_journalCorrupted = true;
+            m_restoreError = err.isEmpty()
+                ? QStringLiteral("恢复日志文件损坏或存在未知文件，同步已暂停以保护数据。")
+                : err;
+            refreshLog();
+            emit statusChanged();
+            return;
+        }
+        if (res == JournalReadResult::Success) {
+            if (journal.phase == QLatin1String("prepared")) {
+                m_restoreRetry.phase = QStringLiteral("prepared");
+                m_restoreRetry.epoch = journal.epoch;
+                m_restoreRetry.deviceId = journal.deviceId;
+                m_restoreRetry.folderId = journal.folderId;
+                m_restoreRetry.operationId = journal.operationId;
+                m_restoreError = QStringLiteral("检测到未完成的备份恢复意图，同步已暂停以保护数据。请重新执行备份恢复。");
+                refreshLog();
+                emit statusChanged();
+                return;
+            } else if (journal.phase == QLatin1String("installed")) {
+                SyncStore store;
+                m_restoreRetry.phase = QStringLiteral("installed");
+                m_restoreRetry.needsEpoch = true;
+                m_restoreRetry.needsFolder = (store.folderId() != journal.folderId);
+                m_restoreRetry.needsSettings = true;
+                m_restoreRetry.needsJournalDelete = true;
+                m_restoreRetry.epoch = journal.epoch;
+                m_restoreRetry.deviceId = journal.deviceId;
+                m_restoreRetry.folderId = journal.folderId;
+                m_restoreRetry.operationId = journal.operationId;
+                m_restoreError = QStringLiteral("备份已恢复但同步收尾未完成，同步已暂停以保护数据。点击立即同步继续。");
+                refreshLog();
+                emit statusChanged();
+                return;
+            }
+        }
+    }
+
+    if (!reconcileSettings()) {
+        qWarning() << "Initial settings reconciliation failed:" << m_restoreError;
+    }
     refreshLog();
     SyncStore store;
     m_knownEpoch = store.epoch();
@@ -171,25 +554,115 @@ void SyncController::setApplicationState(Qt::ApplicationState state)
     setForeground(state != Qt::ApplicationSuspended && state != Qt::ApplicationHidden);
 }
 
-void SyncController::prepareForRestore()
+QString SyncController::currentDatabasePath() const
+{
+    if (!DatabaseManager::instance()->isOpen()) {
+        return QString();
+    }
+    const QString name = DatabaseManager::instance()->database().databaseName();
+    return QFileInfo(name).absoluteFilePath();
+}
+
+bool SyncController::prepareForRestore(QString* error)
 {
     // 同一次恢复只记一次：记下的必须是恢复之前的样子。
     if (m_restore.pending || !DatabaseManager::instance()->isOpen()) {
-        return;
+        if (error) {
+            *error = m_restore.pending
+                ? QStringLiteral("另一项恢复正在进行中")
+                : QStringLiteral("数据库未打开");
+        }
+        return false;
     }
-    // 库马上要被整个换掉：先停下同步（还在路上的结果会被丢掉），并记下恢复前的纪元、设备标识和加入的文件夹。
+
+    const QString dbPath = currentDatabasePath();
+    const QString journalPath = journalFilePath(dbPath);
+
+    JournalData existingJournal;
+    QString readErr;
+    const JournalReadResult readRes = readJournalFile(journalPath, dbPath, &existingJournal, &readErr);
+    if (readRes == JournalReadResult::Corrupt) {
+        if (error) {
+            *error = readErr;
+        }
+        m_journalCorrupted = true;
+        m_restoreError = readErr;
+        if (m_engine) {
+            m_engine->stop();
+        }
+        emit statusChanged();
+        return false;
+    }
+
+    if (readRes == JournalReadResult::Success) {
+        m_previousJournal = existingJournal;
+    } else {
+        m_previousJournal = std::nullopt;
+    }
+
     SyncStore store;
+    QString targetDevice;
+    QString targetFolder;
+    qint64 targetEpoch = 0;
+
+    if (m_previousJournal.has_value()) {
+        targetDevice = m_previousJournal->deviceId;
+        targetFolder = m_previousJournal->folderId;
+        targetEpoch = std::max(store.epoch(), m_previousJournal->epoch);
+    } else if (m_restoreRetry.hasPending()) {
+        targetDevice = m_restoreRetry.deviceId;
+        targetFolder = m_restoreRetry.folderId;
+        targetEpoch = std::max(store.epoch(), m_restoreRetry.epoch);
+    } else {
+        targetEpoch = store.epoch();
+        targetDevice = store.deviceId();
+        targetFolder = store.folderId();
+    }
+
+    const QString operationId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    JournalData newJournal;
+    newJournal.v = 1;
+    newJournal.operationId = operationId;
+    newJournal.epoch = targetEpoch;
+    newJournal.deviceId = targetDevice;
+    newJournal.folderId = targetFolder;
+    newJournal.phase = QStringLiteral("prepared");
+    newJournal.dbPath = dbPath;
+
+    QString writeErr;
+    if (!writeJournalFile(journalPath, newJournal, &writeErr)) {
+        if (error) {
+            *error = writeErr;
+        }
+        m_restoreError = writeErr;
+        if (m_engine) {
+            m_engine->stop();
+        }
+        emit statusChanged();
+        return false;
+    }
+
+    m_journalCorrupted = false;
     m_restore.pending = true;
-    m_restore.epoch = store.epoch();
-    m_restore.deviceId = store.deviceId();
-    m_restore.folderId = store.folderId();
+    m_restore.epoch = targetEpoch;
+    m_restore.deviceId = targetDevice;
+    m_restore.folderId = targetFolder;
+    m_restore.operationId = operationId;
+
     if (m_engine) {
         m_engine->stop();
     }
     emit statusChanged();
+    return true;
 }
 
-void SyncController::finishRestore(bool success)
+bool SyncController::isRestoreStateUncertain() const
+{
+    return m_restore.pending || m_journalCorrupted || m_restoreRetry.phase == QLatin1String("prepared");
+}
+
+void SyncController::finishRestore(bool success, bool safeToResume)
 {
     // 没经过 prepareForRestore 的结束（例如另一项备份正在进行、恢复根本没开始）：库没换，什么都不用做。
     if (!m_restore.pending) {
@@ -197,28 +670,237 @@ void SyncController::finishRestore(bool success)
     }
     const RestoreState before = m_restore;
     m_restore = {};
-    // 恢复失败时库已经回到恢复前的样子，照原样接着同步。
-    if (success && DatabaseManager::instance()->isOpen()) {
-        SyncStore store;
-        // 恢复备份 = 全局回滚（计划 D1）：在恢复前与备份里两者较大的纪元上加一，清空待发送，
-        // 下一轮给所有设备写一份全量快照，另一台读到更高的纪元就先自动备份、再整体换成这份。
-        // 设备标识改回恢复前的：备份可能来自另一台设备，两台共用一个标识会把合并搅乱。
-        if (!store.beginEpochAfterRestore(before.epoch, before.deviceId)) {
-            qWarning() << "Failed to start a new sync epoch after restoring a backup";
+
+    const QString dbPath = currentDatabasePath();
+    const QString journalPath = journalFilePath(dbPath);
+
+    if (!success) {
+        if (!safeToResume) {
+            // 回滚失败（不安全）：必须保留当前 prepared 日志及当前操作身份，阻断同步，
+            // 不能恢复旧 installed 日志，不能允许 syncNow 自行收尾，要求重新恢复。
+            m_restoreRetry.clear();
+            m_restoreRetry.phase = QStringLiteral("prepared");
+            m_restoreRetry.epoch = before.epoch;
+            m_restoreRetry.deviceId = before.deviceId;
+            m_restoreRetry.folderId = before.folderId;
+            m_restoreRetry.operationId = before.operationId;
+            m_restoreRetry.needsJournalDelete = false;
+            m_restoreRetry.needsJournalWrite = false;
+            m_restoreRetry.needsEpoch = false;
+            m_restoreRetry.needsFolder = false;
+            m_previousJournal = std::nullopt;
+            m_restoreError = QStringLiteral("恢复备份失败且未能安全回滚原数据，同步已暂停以保护数据。请重新执行备份恢复。");
+            if (m_engine) {
+                m_engine->stop();
+            }
+            refreshLog();
+            emit notice(m_restoreError);
+            emit statusChanged();
+            return;
         }
-        // 加入的是哪个同步文件夹，也保留恢复前的：备份可能做于加入同步之前、或者另一个同步文件夹的时候。
-        // 不改回来，iPad 会把它当成第一次加入，反过来用对方的数据把刚恢复的备份整个换掉；
-        // 恢复前没加入过的设备也不会因为恢复了别人的备份，就不经确认直接进了那个文件夹。
-        if (store.folderId() != before.folderId && !store.setFolderId(before.folderId)) {
-            qWarning() << "Failed to keep the joined sync folder after restoring a backup";
+
+        // 第二次恢复失败，恢复先前日志和上下文；没有先前日志才删除新意图。保存/删除失败继续阻断。
+        if (m_previousJournal.has_value()) {
+            m_restoreRetry.clear();
+            m_restoreRetry.phase = m_previousJournal->phase;
+            m_restoreRetry.epoch = m_previousJournal->epoch;
+            m_restoreRetry.deviceId = m_previousJournal->deviceId;
+            m_restoreRetry.folderId = m_previousJournal->folderId;
+            m_restoreRetry.operationId = m_previousJournal->operationId;
+
+            QString writeBackErr;
+            if (!writeJournalFile(journalPath, *m_previousJournal, &writeBackErr)) {
+                qWarning() << "Failed to restore previous journal after second restore failure:" << writeBackErr;
+                m_restoreError = writeBackErr;
+                if (m_previousJournal->phase == QLatin1String("installed")) {
+                    m_restoreRetry.needsJournalWrite = true;
+                    m_restoreRetry.needsEpoch = true;
+                    m_restoreRetry.needsFolder = true;
+                } else {
+                    // previous 为 prepared 时继续阻断并要求重新恢复，不允许 syncNow 认作 installed
+                    m_restoreRetry.phase = QStringLiteral("prepared");
+                    m_restoreRetry.needsJournalWrite = false;
+                    m_restoreRetry.needsEpoch = false;
+                    m_restoreRetry.needsFolder = false;
+                }
+                // 只有写回成功或最终收尾成功才丢弃需要恢复的旧上下文，此处写回失败不清空 m_previousJournal
+            } else {
+                if (m_previousJournal->phase == QLatin1String("installed")) {
+                    m_restoreRetry.needsJournalWrite = false;
+                    m_restoreRetry.needsEpoch = true;
+                    m_restoreRetry.needsFolder = true;
+                    m_restoreError = QStringLiteral("恢复备份后新纪元或文件夹尚未完成同步，同步已暂停以保护数据。");
+                } else {
+                    m_restoreRetry.phase = QStringLiteral("prepared");
+                    m_restoreError = QStringLiteral("前次备份恢复尚未完成确认，同步已暂停以保护数据。");
+                }
+                m_previousJournal = std::nullopt;
+            }
+        } else {
+            QString delErr;
+            if (!deleteJournalFileSafely(journalPath, dbPath, before.operationId, &delErr)) {
+                qWarning() << "Failed to delete prepared journal after restore failure:" << delErr;
+                m_restoreRetry.clear();
+                m_restoreRetry.phase.clear();
+                m_restoreRetry.needsJournalDelete = true;
+                m_restoreRetry.epoch = before.epoch;
+                m_restoreRetry.deviceId = before.deviceId;
+                m_restoreRetry.folderId = before.folderId;
+                m_restoreRetry.operationId = before.operationId;
+                m_restoreError = delErr;
+            } else {
+                m_restoreRetry.clear();
+                m_restoreError.clear();
+            }
         }
-        // 恢复的若是更早版本的备份，库里没记过第二期的设置：把恢复出来的本机设置记进去，
-        // 下一轮写出的全量快照才带得上它们。
-        reconcileSettings();
-        m_knownEpoch = store.epoch();
-        m_knownFolderId = store.folderId();
+        refreshLog();
+        startEngine();
+        emit statusChanged();
+        return;
     }
-    // 同步日志跟着库回到了备份那一刻。
+
+    if (!DatabaseManager::instance()->isOpen()) {
+        m_restoreRetry.phase = QStringLiteral("installed");
+        m_restoreRetry.needsEpoch = true;
+        m_restoreRetry.needsFolder = true;
+        m_restoreRetry.needsJournalWrite = true;
+        m_restoreRetry.epoch = before.epoch;
+        m_restoreRetry.deviceId = before.deviceId;
+        m_restoreRetry.folderId = before.folderId;
+        m_restoreRetry.operationId = before.operationId;
+        m_restoreError = QStringLiteral("恢复备份后数据库未处于打开状态，同步已暂停以保护数据。");
+        if (m_engine) {
+            m_engine->stop();
+        }
+        refreshLog();
+        emit notice(m_restoreError);
+        emit statusChanged();
+        return;
+    }
+
+    // 先写 installed 日志，再调用收尾。写 installed 失败不得启动；内存保留该成功事实，允许重试写日志。
+    JournalData installedJournal;
+    installedJournal.v = 1;
+    installedJournal.operationId = before.operationId;
+    installedJournal.epoch = before.epoch;
+    installedJournal.deviceId = before.deviceId;
+    installedJournal.folderId = before.folderId;
+    installedJournal.phase = QStringLiteral("installed");
+    installedJournal.dbPath = dbPath;
+
+    QString installErr;
+    if (!writeJournalFile(journalPath, installedJournal, &installErr)) {
+        qWarning() << "Failed to write installed journal after restore:" << installErr;
+        m_restoreRetry.phase = QStringLiteral("installed");
+        m_restoreRetry.needsJournalWrite = true;
+        m_restoreRetry.needsEpoch = true;
+        m_restoreRetry.needsFolder = true;
+        m_restoreRetry.epoch = before.epoch;
+        m_restoreRetry.deviceId = before.deviceId;
+        m_restoreRetry.folderId = before.folderId;
+        m_restoreRetry.operationId = before.operationId;
+        m_restoreError = QStringLiteral("记录恢复完成状态失败，同步已暂停以保护数据：%1").arg(installErr);
+        if (m_engine) {
+            m_engine->stop();
+        }
+        refreshLog();
+        emit notice(m_restoreError);
+        emit statusChanged();
+        return;
+    }
+
+    SyncStore store;
+    const bool epochStarted = store.beginEpochAfterRestore(before.epoch, before.deviceId, before.operationId);
+    if (!epochStarted) {
+        qWarning() << "Failed to start a new sync epoch after restoring a backup";
+        m_restoreRetry.phase = QStringLiteral("installed");
+        m_restoreRetry.needsEpoch = true;
+        m_restoreRetry.needsFolder = (store.folderId() != before.folderId);
+        m_restoreRetry.epoch = before.epoch;
+        m_restoreRetry.deviceId = before.deviceId;
+        m_restoreRetry.folderId = before.folderId;
+        m_restoreRetry.operationId = before.operationId;
+        m_restoreError = QStringLiteral("恢复备份后建立同步新纪元失败，同步已暂停以保护数据。");
+        if (m_engine) {
+            m_engine->stop();
+        }
+        refreshLog();
+        emit notice(m_restoreError);
+        emit statusChanged();
+        return;
+    }
+
+    const bool folderKept = (store.folderId() == before.folderId || store.setFolderId(before.folderId));
+    if (!folderKept) {
+        qWarning() << "Failed to keep the joined sync folder after restoring a backup";
+        m_restoreRetry.phase = QStringLiteral("installed");
+        m_restoreRetry.needsEpoch = false;
+        m_restoreRetry.needsFolder = true;
+        m_restoreRetry.epoch = before.epoch;
+        m_restoreRetry.deviceId = before.deviceId;
+        m_restoreRetry.folderId = before.folderId;
+        m_restoreRetry.operationId = before.operationId;
+        m_restoreError = QStringLiteral("恢复备份后保留同步文件夹失败，同步已暂停以保护数据。");
+        if (m_engine) {
+            m_engine->stop();
+        }
+        refreshLog();
+        emit notice(m_restoreError);
+        emit statusChanged();
+        return;
+    }
+
+    if (!reconcileSettings()) {
+        qWarning() << "Failed to reconcile settings after restoring a backup";
+        m_restoreRetry.phase = QStringLiteral("installed");
+        m_restoreRetry.needsEpoch = false;
+        m_restoreRetry.needsFolder = false;
+        m_restoreRetry.needsSettings = true;
+        m_restoreRetry.epoch = before.epoch;
+        m_restoreRetry.deviceId = before.deviceId;
+        m_restoreRetry.folderId = before.folderId;
+        m_restoreRetry.operationId = before.operationId;
+        if (m_restoreError.isEmpty()) {
+            m_restoreError = QStringLiteral("恢复备份后整理同步设置失败，同步已暂停以保护数据。");
+        }
+        if (m_engine) {
+            m_engine->stop();
+        }
+        refreshLog();
+        emit notice(m_restoreError);
+        emit statusChanged();
+        return;
+    }
+
+    QString deleteErr;
+    if (!deleteJournalFileSafely(journalPath, dbPath, before.operationId, &deleteErr)) {
+        qWarning() << "Failed to delete restore journal after completion:" << deleteErr;
+        m_restoreRetry.phase = QStringLiteral("installed");
+        m_restoreRetry.needsJournalDelete = true;
+        m_restoreRetry.needsEpoch = false;
+        m_restoreRetry.needsFolder = false;
+        m_restoreRetry.needsSettings = false;
+        m_restoreRetry.epoch = before.epoch;
+        m_restoreRetry.deviceId = before.deviceId;
+        m_restoreRetry.folderId = before.folderId;
+        m_restoreRetry.operationId = before.operationId;
+        m_restoreError = QStringLiteral("恢复备份后清除恢复日志失败，同步已暂停以保护数据：%1").arg(deleteErr);
+        if (m_engine) {
+            m_engine->stop();
+        }
+        refreshLog();
+        emit notice(m_restoreError);
+        emit statusChanged();
+        return;
+    }
+
+    m_restoreRetry.clear();
+    m_restoreError.clear();
+    m_previousJournal = std::nullopt;
+    m_knownEpoch = store.epoch();
+    m_knownFolderId = store.folderId();
+
+    // 同步日志跟着库回到了备份那一刻。恢复失败时（!success）不清除先前 m_restoreRetry，startEngine() 守卫会维持阻断。
     refreshLog();
     startEngine();
     emit statusChanged();
@@ -234,6 +916,12 @@ void SyncController::shutdown(int timeoutMs)
 
 QString SyncController::statusKey() const
 {
+    if (m_journalCorrupted || m_restoreRetry.hasPending() || !m_restoreError.isEmpty()) {
+        return QStringLiteral("error");
+    }
+    if (!m_settingsError.isEmpty()) {
+        return QStringLiteral("error");
+    }
     if (!m_engine) {
         return QStringLiteral("stopped");
     }
@@ -270,11 +958,37 @@ QString SyncController::statusKey() const
 
 bool SyncController::hasProblem() const
 {
-    return m_engine && isProblem(m_engine->status());
+    return m_journalCorrupted || m_restoreRetry.hasPending() || !m_restoreError.isEmpty()
+        || !m_settingsError.isEmpty()
+        || (m_engine && isProblem(m_engine->status()));
 }
 
 QString SyncController::summaryText() const
 {
+    if (m_journalCorrupted) {
+        return QStringLiteral("恢复日志损坏");
+    }
+    if (m_restoreRetry.phase == QLatin1String("prepared")) {
+        return QStringLiteral("备份恢复未完成");
+    }
+    if (m_restoreRetry.needsJournalWrite) {
+        return QStringLiteral("恢复状态记录失败");
+    }
+    if (m_restoreRetry.needsEpoch) {
+        return QStringLiteral("恢复后开启新纪元失败");
+    }
+    if (m_restoreRetry.needsFolder) {
+        return QStringLiteral("恢复后保留同步文件夹失败");
+    }
+    if (m_restoreRetry.needsJournalDelete) {
+        return QStringLiteral("恢复日志清理失败");
+    }
+    if (!m_restoreError.isEmpty()) {
+        return QStringLiteral("恢复备份后同步受阻");
+    }
+    if (!m_settingsError.isEmpty()) {
+        return QStringLiteral("偏好设置保存失败");
+    }
     if (!m_enabled) {
         return QStringLiteral("已关闭");
     }
@@ -316,6 +1030,26 @@ QString SyncController::summaryText() const
 
 QString SyncController::statusText() const
 {
+    if (m_journalCorrupted) {
+        return m_restoreError.isEmpty()
+            ? QStringLiteral("恢复日志文件损坏或存在未知文件，同步已暂停以保护数据。")
+            : m_restoreError;
+    }
+    if (m_restoreRetry.phase == QLatin1String("prepared")) {
+        return QStringLiteral("检测到未完成的备份恢复意图，同步已暂停以保护数据。请重新执行备份恢复。");
+    }
+    if (m_restoreRetry.needsEpoch) {
+        return QStringLiteral("备份已恢复到本机，但未能为同步建立新纪元。为防止数据覆盖，同步已保持暂停。请检查数据库后重试。");
+    }
+    if (m_restoreRetry.needsFolder) {
+        return QStringLiteral("备份已恢复到本机，但未能保留原同步文件夹。为防止错误同步，同步已保持暂停。请检查数据库后重试。");
+    }
+    if (!m_restoreError.isEmpty()) {
+        return m_restoreError;
+    }
+    if (!m_settingsError.isEmpty()) {
+        return m_settingsError;
+    }
     // 设置行里已经有一句「发生了什么」（summaryText），这里只写为什么、下一步怎么办，不把同一句话再说一遍。
     if (!m_engine) {
         return QString();
@@ -367,6 +1101,18 @@ QString SyncController::statusText() const
 
 QString SyncController::statusDetail() const
 {
+    if (!m_restoreError.isEmpty()) {
+        return m_restoreError;
+    }
+    if (m_journalCorrupted) {
+        return QStringLiteral("恢复日志文件损坏或存在未知文件，同步已暂停");
+    }
+    if (m_restoreRetry.phase == QLatin1String("prepared")) {
+        return QStringLiteral("恢复意图未完成确认，同步已暂停");
+    }
+    if (!m_settingsError.isEmpty()) {
+        return m_settingsError;
+    }
     // 选错文件夹时，引擎把「选错了哪一层」直接写进了状态说明，这里不再重复。
     if (!m_engine || m_engine->status() == SyncEngine::Status::WrongFolder) {
         return QString();
@@ -425,9 +1171,6 @@ void SyncController::setEnabled(bool enabled)
 {
     if (!enabled) {
         setEnabledState(false);
-        if (m_engine) {
-            m_engine->stop();
-        }
         m_joinRequested = false;
         emit statusChanged();
         return;
@@ -437,8 +1180,9 @@ void SyncController::setEnabled(bool enabled)
         chooseFolder();
         return;
     }
-    setEnabledState(true);
-    startEngine();
+    if (setEnabledState(true)) {
+        startEngine();
+    }
     emit statusChanged();
 }
 
@@ -453,6 +1197,116 @@ void SyncController::confirmJoin()
 
 void SyncController::syncNow()
 {
+    if (m_journalCorrupted || m_restoreRetry.phase == QLatin1String("prepared")) {
+        return;
+    }
+    if (!m_restoreError.isEmpty() && !m_restoreRetry.hasPending()) {
+        return;
+    }
+    // 若此前恢复备份后建立新纪元或保留文件夹失败，点击立即同步尝试重试未完成的步骤
+    if (m_restoreRetry.hasPending() && DatabaseManager::instance()->isOpen()) {
+        const QString dbPath = currentDatabasePath();
+        const QString journalPath = journalFilePath(dbPath);
+
+        // 如果是 finishRestore(false) 安全失败清理（phase 为空，仅需删除日志）：
+        // 只安全删除日志，不推进 epoch/folder，不做设置整理。
+        if (m_restoreRetry.phase.isEmpty() && m_restoreRetry.needsJournalDelete) {
+            QString delErr;
+            if (!deleteJournalFileSafely(journalPath, dbPath, m_restoreRetry.operationId, &delErr)) {
+                qWarning() << "Retry to delete restore journal failed:" << delErr;
+                m_restoreRetry.needsJournalDelete = true;
+                m_restoreError = QStringLiteral("恢复备份后清除恢复日志失败，同步已暂停以保护数据：%1").arg(delErr);
+                emit statusChanged();
+                return;
+            }
+            m_restoreRetry.clear();
+            m_restoreError.clear();
+            m_previousJournal = std::nullopt;
+            refreshLog();
+            startEngine();
+            emit statusChanged();
+            if (m_engine) {
+                m_engine->syncNow();
+            }
+            return;
+        }
+
+        if (m_restoreRetry.needsJournalWrite) {
+            JournalData j;
+            j.v = 1;
+            j.operationId = m_restoreRetry.operationId;
+            j.epoch = m_restoreRetry.epoch;
+            j.deviceId = m_restoreRetry.deviceId;
+            j.folderId = m_restoreRetry.folderId;
+            j.phase = QStringLiteral("installed");
+            j.dbPath = dbPath;
+            QString err;
+            if (!writeJournalFile(journalPath, j, &err)) {
+                m_restoreError = QStringLiteral("记录恢复完成状态失败，同步已暂停以保护数据：%1").arg(err);
+                emit statusChanged();
+                return;
+            }
+            m_restoreRetry.needsJournalWrite = false;
+            m_previousJournal = std::nullopt;
+        }
+
+        SyncStore store;
+        if (m_restoreRetry.needsEpoch) {
+            if (store.beginEpochAfterRestore(m_restoreRetry.epoch, m_restoreRetry.deviceId, m_restoreRetry.operationId)) {
+                m_restoreRetry.needsEpoch = false;
+            } else {
+                qWarning() << "Retry to start sync epoch after restore failed";
+                m_restoreError = QStringLiteral("恢复备份后建立同步新纪元失败，同步已暂停以保护数据。");
+                emit statusChanged();
+                return;
+            }
+        }
+        // needsEpoch 成功后本次再执行 needsFolder；若 epoch 此前已成功则绝不再次调用 beginEpochAfterRestore
+        if (m_restoreRetry.needsFolder) {
+            if (store.folderId() == m_restoreRetry.folderId || store.setFolderId(m_restoreRetry.folderId)) {
+                m_restoreRetry.needsFolder = false;
+            } else {
+                qWarning() << "Retry to keep sync folder after restore failed";
+                m_restoreError = QStringLiteral("恢复备份后保留同步文件夹失败，同步已暂停以保护数据。");
+                emit statusChanged();
+                return;
+            }
+        }
+
+        if (m_restoreRetry.needsSettings || (!m_restoreRetry.needsEpoch && !m_restoreRetry.needsFolder)) {
+            if (!reconcileSettings()) {
+                qWarning() << "Retry to reconcile settings after restore failed";
+                m_restoreRetry.needsSettings = true;
+                if (m_restoreError.isEmpty()) {
+                    m_restoreError = QStringLiteral("恢复备份后整理同步设置失败，同步已暂停以保护数据。");
+                }
+                emit statusChanged();
+                return;
+            }
+            m_restoreRetry.needsSettings = false;
+        }
+
+        if (m_restoreRetry.needsJournalDelete || QFileInfo::exists(journalPath)) {
+            QString delErr;
+            if (!deleteJournalFileSafely(journalPath, dbPath, m_restoreRetry.operationId, &delErr)) {
+                qWarning() << "Retry to delete restore journal failed:" << delErr;
+                m_restoreRetry.needsJournalDelete = true;
+                m_restoreError = QStringLiteral("恢复备份后清除恢复日志失败，同步已暂停以保护数据：%1").arg(delErr);
+                emit statusChanged();
+                return;
+            }
+            m_restoreRetry.needsJournalDelete = false;
+        }
+
+        m_restoreRetry.clear();
+        m_restoreError.clear();
+        m_previousJournal = std::nullopt;
+        m_knownEpoch = store.epoch();
+        m_knownFolderId = store.folderId();
+        refreshLog();
+        startEngine();
+        emit statusChanged();
+    }
     if (m_engine) {
         m_engine->syncNow();
     }
@@ -608,8 +1462,11 @@ void SyncController::ensureEngine()
 void SyncController::startEngine()
 {
     // 数据库还没打开（initialize 之前）不能开始：引擎一开始就要读库里的同步进度。
-    // 恢复备份进行中也不开始：库马上要被整个换掉，等 finishRestore 再开。
-    if (!m_initialized || m_restore.pending || !m_enabled) {
+    // 恢复备份进行中或恢复后新纪元建立/文件夹保留失败/日志损坏/存在恢复错误时也不开始：防止 fail-open 路径继续同步。
+    // 偏好设置持久化错误存在时也禁止开始同步。
+    if (!DatabaseManager::instance()->isOpen() || !m_initialized || m_restore.pending
+        || m_restoreRetry.hasPending() || m_journalCorrupted || !m_restoreError.isEmpty()
+        || !m_settingsError.isEmpty() || !m_enabled) {
         return;
     }
     ensureEngine();
@@ -618,16 +1475,51 @@ void SyncController::startEngine()
     }
 }
 
-void SyncController::setEnabledState(bool enabled)
+bool SyncController::setEnabledState(bool enabled)
 {
-    if (m_enabled == enabled) {
-        return;
+    if (!enabled) {
+        // 关闭请求：无论 QSettings 写入是否成功，都先停止当前引擎并把本次运行态设为关闭
+        if (m_engine) {
+            m_engine->stop();
+        }
+        const bool wasEnabled = m_enabled;
+        m_enabled = false;
+        if (wasEnabled) {
+            emit enabledChanged();
+        }
+
+        // 调用 sync 后检查 status；再次 setEnabled(false) 即使 m_enabled 已是 false 也必须重试持久化
+        QSettings settings;
+        settings.setValue(kEnabledKey, false);
+        settings.sync();
+        if (settings.status() != QSettings::NoError) {
+            m_settingsError = QStringLiteral("同步开关状态保存失败，同步已暂停以保护数据。");
+            m_settingsRetryNeeded = true;
+            return false;
+        }
+        m_settingsError.clear();
+        m_settingsRetryNeeded = false;
+        return true;
+    } else {
+        // 开启请求：只有 QSettings sync 成功才把 m_enabled 设为 true 并允许 startEngine；失败保持关闭、错误可见、可重试。
+        QSettings settings;
+        settings.setValue(kEnabledKey, true);
+        settings.sync();
+        if (settings.status() != QSettings::NoError) {
+            m_enabled = false;
+            m_settingsError = QStringLiteral("同步开关状态保存失败，无法开启同步。");
+            m_settingsRetryNeeded = true;
+            return false;
+        }
+        m_settingsError.clear();
+        m_settingsRetryNeeded = false;
+        const bool wasDisabled = !m_enabled;
+        m_enabled = true;
+        if (wasDisabled) {
+            emit enabledChanged();
+        }
+        return true;
     }
-    m_enabled = enabled;
-    QSettings settings;
-    settings.setValue(kEnabledKey, enabled);
-    settings.sync();
-    emit enabledChanged();
 }
 
 void SyncController::setChoosingFolder(bool choosing, const QString& problem)
@@ -730,18 +1622,37 @@ QByteArray SyncController::storedBookmark() const
 
 void SyncController::acceptFolder(const QByteArray& bookmark, const QString& displayPath)
 {
+    const QByteArray oldBookmark = storedBookmark();
+    const QString oldFolderPath = QSettings().value(kFolderPathKey).toString();
+
     QSettings settings;
     settings.setValue(kBookmarkKey, bookmark);
     settings.setValue(kFolderPathKey, displayPath);
     settings.sync();
-    // 引擎已经在用别的文件夹：换上新的，正在进行的一轮作废。选中的若是另一个同步文件夹，
-    // 下一轮会停在「等你确认加入」；还是原来那个，就接着同步。还没有引擎的，打开同步时按新书签建。
+
+    if (settings.status() != QSettings::NoError) {
+        // 尽最大努力恢复旧两项偏好
+        settings.setValue(kBookmarkKey, oldBookmark);
+        settings.setValue(kFolderPathKey, oldFolderPath);
+        settings.sync();
+
+        m_settingsError = QStringLiteral("同步文件夹信息保存失败，无法切换文件夹。");
+        m_settingsRetryNeeded = true;
+        emit statusChanged();
+        return;
+    }
+
+    m_settingsError.clear();
+    m_settingsRetryNeeded = false;
+
+    // 只有两项持久化成功，才切换 m_engine->setFolder、发 folderChanged、setEnabledState(true)、startEngine
     if (m_engine) {
         m_engine->setFolder(makeFolder(bookmark));
     }
     emit folderChanged();
-    setEnabledState(true);
-    startEngine();
+    if (setEnabledState(true)) {
+        startEngine();
+    }
     emit statusChanged();
 }
 
@@ -754,6 +1665,13 @@ void SyncController::onBookmarkRefreshed(quint64 folderGeneration, const QByteAr
     QSettings settings;
     settings.setValue(kBookmarkKey, bookmark);
     settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        m_settingsError = QStringLiteral("同步文件夹书签更新保存失败。");
+        emit statusChanged();
+    } else if (!m_settingsError.isEmpty()) {
+        m_settingsError.clear();
+        emit statusChanged();
+    }
 }
 
 void SyncController::onCycleFinished()
@@ -812,53 +1730,152 @@ void SyncController::recordSettings()
     }
 }
 
-void SyncController::reconcileSettings()
+bool SyncController::reconcileSettings()
 {
     if (!DatabaseManager::instance()->isOpen()) {
-        return;
+        m_restoreError = QStringLiteral("数据库未打开，无法整理同步设置。");
+        return false;
     }
     SyncStore store;
-    const QHash<QString, QString> synced = store.syncedSettings();
-    const QHash<QString, QString> pending = store.pendingSettingWriteBacks();
-    QHash<QString, QString> local = SyncedSettings::currentValues();
+    bool syncedOk = false;
+    const QHash<QString, QString> synced = store.syncedSettings(&syncedOk);
+    if (!syncedOk) {
+        m_restoreError = QStringLiteral("读取已同步设置失败，同步已暂停以保护数据。");
+        return false;
+    }
+
+    bool pendingOk = false;
+    const QHash<QString, QString> pending = store.pendingSettingWriteBacks(&pendingOk);
+    if (!pendingOk) {
+        m_restoreError = QStringLiteral("读取待写回设置标记失败，同步已暂停以保护数据。");
+        return false;
+    }
+
+    bool localOk = false;
+    QHash<QString, QString> local = SyncedSettings::currentValues(&localOk);
+    if (!localOk) {
+        m_restoreError = QStringLiteral("读取本地设置失败，同步已暂停以保护数据。");
+        return false;
+    }
+
     const auto isRemoval = [](const QString& kind) { return kind == QLatin1String("remove"); };
     // 库里记的和本机设置不一致，有两种来由，靠「待写回」标记分辨（标记和对方的值在同一个事务里进库）：
     // - 有标记：对方的改动进了库、还没写回本机就被结束了。以库为准写回（「今天」是哪天、番茄多长才和另一台一致）。
     // - 没有标记：本机改了设置，却没记进库（记录失败：库被别的连接长时间占着而等待超时、磁盘满……）。
     //   这时以本机为准，下面补记一个新版本；以前一律以库为准，会把你的改动在下次启动时悄悄改回去。
     // 库里有、本机却没有的项（例如某一天的今日目标）没有本机的值可留，同样以库为准。
+    bool writeBackFailed = false;
+    QString writeBackErrMsg;
+    QSet<QString> failedKeys;
+
+    struct ScopedConnection {
+        QMetaObject::Connection conn;
+        ~ScopedConnection() {
+            if (conn) {
+                QObject::disconnect(conn);
+            }
+        }
+    };
+
     {
+        ScopedConnection connGuard;
+        auto* appSettings = AppSettings::instance();
+        if (appSettings) {
+            connGuard.conn = QObject::connect(appSettings, &AppSettings::settingsWriteFailed,
+                                             [&writeBackFailed, &failedKeys, &writeBackErrMsg](const QString& key, const QString& msg) {
+                                                 writeBackFailed = true;
+                                                 if (key == QLatin1String("schedule")) {
+                                                     failedKeys.insert(QStringLiteral("schedule/periods"));
+                                                     failedKeys.insert(QStringLiteral("schedule/semesterStartDate"));
+                                                     failedKeys.insert(QStringLiteral("schedule/semesterWeeks"));
+                                                 } else if (!key.isEmpty()) {
+                                                     failedKeys.insert(key);
+                                                 }
+                                                 if (writeBackErrMsg.isEmpty()) {
+                                                     writeBackErrMsg = msg;
+                                                 }
+                                             });
+        }
         const SyncedSettings::WriteBackScope writingBack;
         for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
-            if (isRemoval(it.value())) {
-                SyncedSettings::remove(it.key());
-            } else if (synced.contains(it.key()) && local.value(it.key()) != synced.value(it.key())
-                       && !SyncedSettings::apply(it.key(), synced.value(it.key()))) {
-                qWarning() << "Failed to write back a synced setting:" << it.key();
+            const QString& key = it.key();
+            const QString& kind = it.value();
+            bool stepOk = true;
+            if (isRemoval(kind)) {
+                stepOk = SyncedSettings::remove(key);
+            } else if (synced.contains(key) && local.value(key) != synced.value(key)) {
+                stepOk = SyncedSettings::apply(key, synced.value(key));
+            }
+            if (!stepOk || failedKeys.contains(key)) {
+                writeBackFailed = true;
+                failedKeys.insert(key);
+                qWarning() << "Failed to write back a synced setting:" << key;
             }
         }
         for (auto it = synced.cbegin(); it != synced.cend(); ++it) {
-            if (!pending.contains(it.key()) && SyncSchema::isSyncedSettingKey(it.key()) && !local.contains(it.key())
-                && !SyncedSettings::apply(it.key(), it.value())) {
-                qWarning() << "Failed to write back a synced setting:" << it.key();
+            const QString& key = it.key();
+            if (!pending.contains(key) && SyncSchema::isSyncedSettingKey(key) && !local.contains(key)) {
+                if (!SyncedSettings::apply(key, it.value()) || failedKeys.contains(key)) {
+                    writeBackFailed = true;
+                    failedKeys.insert(key);
+                    qWarning() << "Failed to write back a synced setting:" << key;
+                }
             }
         }
     }
-    local = SyncedSettings::currentValues();
+
+    bool recheckOk = false;
+    local = SyncedSettings::currentValues(&recheckOk);
+    if (!recheckOk) {
+        m_restoreError = QStringLiteral("写回设置后重新读取本地设置失败，同步已暂停以保护数据。");
+        return false;
+    }
+
     // 写回真的成了的，清掉标记；没成的（取值写不回本机、偏好文件写不进去）留着，下次启动再试，
     // 也不拿本机的值去盖它——那多半是对方的取值本机认不得（例如更新版本的写法），不能反过来把它改掉。
     QSet<QString> unresolved;
+    bool finishMarkFailed = false;
     for (auto it = pending.cbegin(); it != pending.cend(); ++it) {
+        const QString& key = it.key();
+        if (failedKeys.contains(key)) {
+            unresolved.insert(key);
+            continue;
+        }
+
         const bool done = isRemoval(it.value())
             // 固定的几项不删（保留本机的值，下面按本机的记进库）；今日目标要确认真的删掉了。
             ? (SyncSchema::dailyGoalDateOf(it.key()).isEmpty() || !local.contains(it.key()))
             : (!synced.contains(it.key()) || local.value(it.key()) == synced.value(it.key()));
         if (done) {
-            store.finishSettingWriteBack(it.key());
+            if (!store.finishSettingWriteBack(it.key())) {
+                qWarning() << "Failed to finish setting writeback marker:" << it.key();
+                unresolved.insert(key);
+                finishMarkFailed = true;
+            }
         } else {
-            unresolved.insert(it.key());
+            unresolved.insert(key);
         }
     }
+
+    if (writeBackFailed) {
+        m_restoreError = writeBackErrMsg.isEmpty()
+            ? QStringLiteral("写回同步设置失败，同步已暂停以保护数据。")
+            : QStringLiteral("写回同步设置失败：%1").arg(writeBackErrMsg);
+        return false;
+    }
+
+    if (finishMarkFailed) {
+        m_restoreError = QStringLiteral("更新设置写回标记失败，同步已暂停以保护数据。");
+        return false;
+    }
+
+    if (!unresolved.isEmpty()) {
+        if (m_restoreError.isEmpty()) {
+            m_restoreError = QStringLiteral("存在未解决的同步设置待写回项，同步已暂停以保护数据。");
+        }
+        return false;
+    }
+
     // 本机的值库里没记、或记的不一样（又不是在等写回的）：以本机为准记一个新版本、等着发出。
     // 库里还没有的（刚升级、新装、恢复了更早版本的备份）也走这里。还是出厂默认值的用最小版本，
     // 另一台设备改过的设置会盖过它，而不是反过来被这个默认值盖掉。
@@ -869,8 +1886,12 @@ void SyncController::reconcileSettings()
         }
         if (!store.recordLocalSetting(it.key(), it.value(), SyncedSettings::isFactoryDefault(it.key(), it.value()))) {
             qWarning() << "Failed to record a synced setting:" << it.key();
+            m_restoreError = QStringLiteral("记录本地设置失败，同步已暂停以保护数据。");
+            return false;
         }
     }
+
+    return true;
 }
 
 void SyncController::copyLostValue(const QString& text)

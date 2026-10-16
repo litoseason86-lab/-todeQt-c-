@@ -328,6 +328,25 @@ QByteArray tamper(const QByteArray& bytes, const std::function<void(QJsonObject&
     return QJsonDocument(object).toJson(QJsonDocument::Compact);
 }
 
+// 读快照时可受控注入 I/O 错误的本地同步文件夹替身，用于故障注入测试
+class FaultySnapshotFolder : public LocalSyncFolder
+{
+public:
+    using LocalSyncFolder::LocalSyncFolder;
+    bool failSnapshotRead = true;
+
+    bool read(const QString& path, QByteArray* data, Error* error) override
+    {
+        if (failSnapshotRead && path.contains(QStringLiteral("snapshot-"))) {
+            if (error) {
+                *error = {ErrorKind::Io, QStringLiteral("注入的快照 I/O 读取失败")};
+            }
+            return false;
+        }
+        return LocalSyncFolder::read(path, data, error);
+    }
+};
+
 } // namespace
 
 class SyncTransportTests : public QObject
@@ -402,6 +421,25 @@ private slots:
     // 3g：平台层（Mac）
     void macFolderLivesInsideICloudDrive();
     void macFolderIsUnavailableWithoutICloudDrive();
+
+    // 058 阶段 5：高纪元损坏快照有界恢复与候选竞争
+    void higherEpochCorruptedSnapshotRequestsSnapshotAndHealsViaPeer();
+    void higherEpochMultipleCandidatesPicksValidOverCorrupted();
+    void higherEpochMultipleSnapshotsOnSameDevicePicksValidOverCorrupted();
+    void higherEpochChangesOnlyWithoutSnapshotRequestsSnapshotAndHeals();
+    void higherEpochSnapshotRequestPersistenceFailureEntersError();
+    void higherEpochNewerFormatSnapshotYieldsNewerVersion();
+    void higherEpochSnapshotReadFailureExposesErrorStatus();
+
+    // 058 阶段 4：快照发布阻断与有界预算
+    void publishSnapshotFailureDoesNotAdvancePositionOrWriteFile();
+    void localSyncFolderRejectsFilesExceedingBudget();
+    void decodeDefendsAgainstFilesExceedingBudget();
+    void writeMarkerRejectsWhenExceedingBudget();
+    void writeCursorRejectsWhenExceedingBudget();
+    void writeChangesRejectsWhenExceedingBudget();
+    void writeSnapshotRejectsWhenExceedingBudget();
+    void enginePublishSnapshotRejectsWhenSnapshotExceedsBudget();
 
 private:
     Device openDevice(const QString& name);
@@ -2415,6 +2453,1059 @@ void SyncTransportTests::newerBatchFormatStopsWithoutAdvancingTrashCursor()
              QStringLiteral("{\"v\":1,\"body\":\"不能跳过\"}"));
     QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT origin_sync_id FROM trash_items")).toString(),
              QStringLiteral("origin-trash"));
+}
+
+void SyncTransportTests::higherEpochCorruptedSnapshotRequestsSnapshotAndHealsViaPeer()
+{
+    // 保证更高纪元快照损坏时，设备不会陷入无出口的 WaitingForSnapshot，而是记录问题、向源设备请求重发快照，
+    // 保留本地数据库和游标不变且状态呈现 Error；源设备即使在恢复后仅有 snapshot seq=0 且无任何新增 changes 的情况下，
+    // 也能成功响应旧纪元接收端的恢复请求并重写快照，且相同游标请求不会每轮重复重写；最终接收端能够成功采用新快照并恢复至 UpToDate。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    SyncEngine::Options options = testOptions();
+    options.maintenanceIntervalMs = 0;
+    setUpPair(cloud, &mac, &ipad, options);
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 初始任务")).isEmpty());
+    QVERIFY(syncOnce(*ipad));
+
+    const QString backupPath = m_data->filePath(QStringLiteral("mac-backup.sqlite"));
+    QVERIFY(QFile::copy(mac->device.path, backupPath));
+    restoreBackup(*mac, backupPath);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    // 关键条件：恢复后仅有 snapshot seq=0，不添加任何新增 changes
+    QVERIFY(syncOnce(*mac));
+
+    // Mac 在新纪元 1 写了快照文件 snapshot-0001-00000000.json
+    const QString snapshotRelPath = SyncFiles::deviceDirectory(mac->device.id)
+        + QLatin1Char('/') + SyncFiles::snapshotFileName({1, 0});
+    const QString snapshotAbsPath = cloud.path(mac->device, snapshotRelPath);
+    QVERIFY(QFile::exists(snapshotAbsPath));
+
+    // 故障注入点：用非法截断的 JSON 替换快照文件内容
+    {
+        QFile file(snapshotAbsPath);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QVERIFY(file.write("{\"corrupted_json\":") > 0);
+        file.close();
+    }
+
+    // 前置断言：验证该文件 decodeSnapshot 必定返回 Corrupt
+    {
+        QFile file(snapshotAbsPath);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        SyncFiles::SnapshotFile parsed;
+        QString decodeError;
+        QCOMPARE(SyncFiles::decodeSnapshot(file.readAll(), mac->device.id, {1, 0}, &parsed, &decodeError),
+                 SyncFiles::ParseStatus::Corrupt);
+    }
+
+    // 将损坏的快照与改动同步给 iPad
+    cloud.deliver(mac->device, ipad->device);
+
+    // iPad 触发同步一轮
+    QVERIFY(syncOnce(*ipad));
+
+    // 断言 1：iPad 因高纪元快照损坏进入 Error 状态，而不是永久挂在 WaitingForSnapshot
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::Error);
+    QVERIFY(ipad->engine->statusDetail().contains(QStringLiteral("读不懂")));
+
+    // 断言 2：iPad 本地数据库和游标均保留原样未受损
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("iPad 初始任务")});
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 0);
+
+    // 断言 3：iPad 记录了坏文件问题日志与向源设备请求覆盖高纪元快照的请求
+    QVERIFY(scalar(ipad->device, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE kind = 'file'")).toInt() > 0);
+    QCOMPARE(SyncStore(ipad->device.connection).snapshotRequests().value(mac->device.id), (SyncPosition{1, 0}));
+
+    // 断言 4：iPad 写出的 cursor.json 包含对 Mac 高纪元快照的请求（未被本机旧纪元过滤）
+    {
+        const QString cursorAbsPath = cloud.path(ipad->device, SyncFiles::deviceDirectory(ipad->device.id)
+                                                + QLatin1Char('/') + SyncFiles::cursorFileName());
+        QFile file(cursorAbsPath);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        SyncFiles::CursorFile parsedCursor;
+        QString decodeError;
+        QCOMPARE(SyncFiles::decodeCursor(file.readAll(), ipad->device.id, &parsedCursor, &decodeError),
+                 SyncFiles::ParseStatus::Ok);
+        QCOMPARE(parsedCursor.epoch, 0);
+        QCOMPARE(parsedCursor.snapshotRequests.value(mac->device.id), (SyncPosition{1, 0}));
+    }
+
+    // 将 iPad 的 cursor 交付给 Mac
+    cloud.deliver(ipad->device, mac->device);
+
+    // Mac 执行同步与维护：应当响应旧纪元接收端的高纪元恢复请求并重写快照（即使无新增 changes 且 seq <= covered）
+    QVERIFY(syncOnce(*mac));
+
+    // 断言 5：Mac 的快照已被重写为合法快照
+    qint64 firstWrittenAt = 0;
+    {
+        const SyncPosition snapPos = SyncStore(mac->device.connection).snapshotPosition();
+        QCOMPARE(snapPos, (SyncPosition{1, 0}));
+        QFile file(snapshotAbsPath);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        SyncFiles::SnapshotFile parsedSnapshot;
+        QString decodeError;
+        QCOMPARE(SyncFiles::decodeSnapshot(file.readAll(), mac->device.id, {1, 0}, &parsedSnapshot, &decodeError),
+                 SyncFiles::ParseStatus::Ok);
+        firstWrittenAt = parsedSnapshot.writtenAtMs;
+        QVERIFY(firstWrittenAt > 0);
+    }
+
+    // 断言 6：相同游标请求指纹不会在下一轮重复重写快照
+    QTest::qWait(20);
+    QVERIFY(syncOnce(*mac));
+    {
+        QFile file(snapshotAbsPath);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        SyncFiles::SnapshotFile secondParsed;
+        QString decodeError;
+        QCOMPARE(SyncFiles::decodeSnapshot(file.readAll(), mac->device.id, {1, 0}, &secondParsed, &decodeError),
+                 SyncFiles::ParseStatus::Ok);
+        // 时间戳未变，证明未再次进入 writeSnapshot
+        QCOMPARE(secondParsed.writtenAtMs, firstWrittenAt);
+    }
+
+    // 将 Mac 重写后的快照交付给 iPad
+    cloud.deliver(mac->device, ipad->device);
+
+    // iPad 再次触发同步：成功采用新快照并恢复至 UpToDate
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 1);
+    QVERIFY(!SyncStore(ipad->device.connection).snapshotRequests().contains(mac->device.id));
+}
+
+void SyncTransportTests::higherEpochMultipleCandidatesPicksValidOverCorrupted()
+{
+    // 保证在更高纪元存在多个候选快照时，若按设备标识先扫描到的候选快照损坏，系统继续尝试同纪元其他设备的候选快照，
+    // 立即采用合法候选并恢复至 UpToDate。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    // Mac 恢复备份开新纪元 1 并发布合法快照
+    const QString backupPath = m_data->filePath(QStringLiteral("mac-backup.sqlite"));
+    QVERIFY(QFile::copy(mac->device.path, backupPath));
+    restoreBackup(*mac, backupPath);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QVERIFY(!addTask(mac->device, QStringLiteral("Mac 恢复后新任务")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+
+    // Mac 产生的快照文件路径
+    const QString macSnapshotRelPath = SyncFiles::deviceDirectory(mac->device.id)
+        + QLatin1Char('/') + SyncFiles::snapshotFileName({1, 0});
+    const QString macSnapshotAbsPath = cloud.path(mac->device, macSnapshotRelPath);
+    QVERIFY(QFile::exists(macSnapshotAbsPath));
+
+    // 交付给 iPad 副本
+    cloud.deliver(mac->device, ipad->device);
+
+    // 在 iPad 的同步文件夹副本中伪造一个字母序排在前面的设备 badDevice，也带有纪元 1 的快照，但内容损坏
+    const QString badDeviceId = QStringLiteral("00000000000000000000000000000001");
+    // 前提断言：badDeviceId 在字母序上严格先于 mac->device.id
+    QVERIFY(badDeviceId < mac->device.id);
+
+    const QString badSnapshotRelPath = SyncFiles::deviceDirectory(badDeviceId)
+        + QLatin1Char('/') + SyncFiles::snapshotFileName({1, 0});
+    const QString badSnapshotAbsPath = cloud.path(ipad->device, badSnapshotRelPath);
+    QDir(cloud.replica(ipad->device)).mkpath(SyncFiles::deviceDirectory(badDeviceId));
+    {
+        QFile file(badSnapshotAbsPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write("{\"corrupted\":true") > 0);
+        file.close();
+    }
+
+    // iPad 触发同步一轮
+    QVERIFY(syncOnce(*ipad));
+
+    // 断言：虽然先遇到了损坏的 badDevice 快照，但跳过并继续尝试 mac 的快照，成功完成采用
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 1);
+    QVERIFY(taskTitles(ipad->device).contains(QStringLiteral("Mac 恢复后新任务")));
+}
+
+void SyncTransportTests::higherEpochMultipleSnapshotsOnSameDevicePicksValidOverCorrupted()
+{
+    // 保证同一设备存在多个高纪元快照时（较新快照损坏、较旧快照合法），系统能够尝试较旧快照并成功采用，
+    // 再通过连续的改动增量追平进度，恢复至 UpToDate。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    // 在 Mac 恢复前先添加并同步一条“恢复前保留任务”
+    QVERIFY(!addTask(mac->device, QStringLiteral("恢复前保留任务")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("恢复前保留任务")});
+
+    // 备份并恢复 Mac，开新纪元 1
+    const QString backupPath = m_data->filePath(QStringLiteral("mac-backup.sqlite"));
+    QVERIFY(QFile::copy(mac->device.path, backupPath));
+    restoreBackup(*mac, backupPath);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+
+    // 恢复后初始快照 {1, 0} 生成
+    QVERIFY(syncOnce(*mac));
+
+    // 再添加一条“恢复后新增任务”并 sync
+    QVERIFY(!addTask(mac->device, QStringLiteral("恢复后新增任务")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+
+    // 前置断言：Mac 端真实存在 changes {1, 1} 与 snapshot {1, 0}
+    const QString change1Rel = SyncFiles::changesDirectory(mac->device.id)
+        + QLatin1Char('/') + SyncFiles::changeFileName({1, 1});
+    QVERIFY(QFile::exists(cloud.path(mac->device, change1Rel)));
+    const QString oldSnapshotRel = SyncFiles::deviceDirectory(mac->device.id)
+        + QLatin1Char('/') + SyncFiles::snapshotFileName({1, 0});
+    QVERIFY(QFile::exists(cloud.path(mac->device, oldSnapshotRel)));
+
+    // 交付合法旧 snapshot {1, 0} + changes {1, 1} 给 iPad
+    cloud.deliver(mac->device, ipad->device, [](const QString& rel) {
+        // 若 Mac 生成了其他快照，拦截之，确保交付的快照只有旧快照 {1, 0}
+        return rel.contains(QStringLiteral("snapshot-")) && !rel.contains(QStringLiteral("snapshot-0001-00000000.json"));
+    });
+    const QString oldSnapshotIpadAbs = cloud.path(ipad->device, oldSnapshotRel);
+    QVERIFY(QFile::exists(oldSnapshotIpadAbs));
+    const QString change1IpadAbs = cloud.path(ipad->device, change1Rel);
+    QVERIFY(QFile::exists(change1IpadAbs));
+
+    // 在 iPad 接收副本伪造损坏的较新快照 {1, 1}
+    const QString badSnapshotRel = SyncFiles::deviceDirectory(mac->device.id)
+        + QLatin1Char('/') + SyncFiles::snapshotFileName({1, 1});
+    const QString badSnapshotIpadAbs = cloud.path(ipad->device, badSnapshotRel);
+    {
+        QFile file(badSnapshotIpadAbs);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QVERIFY(file.write("{\"corrupted\":true") > 0);
+        file.close();
+    }
+
+    // 断言旧快照 decode 合法且含恢复前任务，坏快照 decodeCorrupt
+    {
+        QFile file(oldSnapshotIpadAbs);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        SyncFiles::SnapshotFile parsed;
+        QString decodeError;
+        QCOMPARE(SyncFiles::decodeSnapshot(file.readAll(), mac->device.id, {1, 0}, &parsed, &decodeError),
+                 SyncFiles::ParseStatus::Ok);
+        bool hasPreservedTask = false;
+        for (const auto& rec : parsed.batch.records) {
+            if (rec.table == QLatin1String("tasks")
+                && rec.fields.value(QStringLiteral("title")).value.toString() == QStringLiteral("恢复前保留任务")) {
+                hasPreservedTask = true;
+                break;
+            }
+        }
+        QVERIFY(hasPreservedTask);
+    }
+    {
+        QFile file(badSnapshotIpadAbs);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        SyncFiles::SnapshotFile parsed;
+        QString decodeError;
+        QCOMPARE(SyncFiles::decodeSnapshot(file.readAll(), mac->device.id, {1, 1}, &parsed, &decodeError),
+                 SyncFiles::ParseStatus::Corrupt);
+    }
+
+    // iPad 触发同步一轮
+    QVERIFY(syncOnce(*ipad));
+
+    // 断言：成功采用旧快照并连续应用增量追平，epoch=1、两条任务都在且 peerCursor 指向 {1, 1}，状态为 UpToDate
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 1);
+    const QStringList titles = taskTitles(ipad->device);
+    QVERIFY(titles.contains(QStringLiteral("恢复前保留任务")));
+    QVERIFY(titles.contains(QStringLiteral("恢复后新增任务")));
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors().value(mac->device.id), (SyncPosition{1, 1}));
+}
+
+void SyncTransportTests::higherEpochChangesOnlyWithoutSnapshotRequestsSnapshotAndHeals()
+{
+    // 保证当更高纪元仅有改动文件（changes）到达而没有任何快照文件时，设备不会静默无请求，
+    // 而是向改动来源设备持久化并写出快照请求；源设备收到请求后重写快照，接收端最终成功采用。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    SyncEngine::Options options = testOptions();
+    options.maintenanceIntervalMs = 0;
+    setUpPair(cloud, &mac, &ipad, options);
+
+    // Mac 恢复备份开新纪元 1 并添加新任务
+    const QString backupPath = m_data->filePath(QStringLiteral("mac-backup.sqlite"));
+    QVERIFY(QFile::copy(mac->device.path, backupPath));
+    restoreBackup(*mac, backupPath);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QVERIFY(!addTask(mac->device, QStringLiteral("Mac 高纪元任务")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+
+    // 将 Mac 的改动同步给 iPad，但拦截/不交付任何快照文件
+    cloud.deliver(mac->device, ipad->device, [](const QString& rel) {
+        return rel.contains(QStringLiteral("snapshot-"));
+    });
+
+    // 前置断言：iPad 副本中存在 Mac 的 changes 文件，但不存在任何 snapshot 文件
+    const QString changeRel = SyncFiles::changesDirectory(mac->device.id)
+        + QLatin1Char('/') + SyncFiles::changeFileName({1, 1});
+    QVERIFY(QFile::exists(cloud.path(ipad->device, changeRel)));
+    const QString snapRel = SyncFiles::deviceDirectory(mac->device.id)
+        + QLatin1Char('/') + SyncFiles::snapshotFileName({1, 1});
+    QVERIFY(!QFile::exists(cloud.path(ipad->device, snapRel)));
+
+    // iPad 触发同步一轮
+    QVERIFY(syncOnce(*ipad));
+
+    // 断言 1：iPad 处于 WaitingForSnapshot 状态
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::WaitingForSnapshot);
+
+    // 断言 2：iPad 持久化了高纪元快照请求（指向 Mac 和最高 changes 序号 {1, 1}）
+    QCOMPARE(SyncStore(ipad->device.connection).snapshotRequests().value(mac->device.id), (SyncPosition{1, 1}));
+
+    // 断言 3：iPad 此分支未伪记文件损坏
+    QCOMPARE(scalar(ipad->device, QStringLiteral("SELECT COUNT(*) FROM sync_conflict_log WHERE kind = 'file'")).toInt(), 0);
+
+    // 断言 4：iPad 写出的 cursor.json 包含该高纪元请求
+    {
+        const QString cursorAbsPath = cloud.path(ipad->device, SyncFiles::deviceDirectory(ipad->device.id)
+                                                + QLatin1Char('/') + SyncFiles::cursorFileName());
+        QFile file(cursorAbsPath);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        SyncFiles::CursorFile parsedCursor;
+        QString decodeError;
+        QCOMPARE(SyncFiles::decodeCursor(file.readAll(), ipad->device.id, &parsedCursor, &decodeError),
+                 SyncFiles::ParseStatus::Ok);
+        QCOMPARE(parsedCursor.snapshotRequests.value(mac->device.id), (SyncPosition{1, 1}));
+    }
+
+    // 将 iPad 的 cursor 交付给 Mac
+    cloud.deliver(ipad->device, mac->device);
+
+    // Mac 执行同步与维护：应当响应高纪元请求并重写快照
+    QVERIFY(syncOnce(*mac));
+
+    // 将 Mac 重写后的快照交付给 iPad（本次不拦截）
+    cloud.deliver(mac->device, ipad->device);
+
+    // iPad 再次同步：成功采用快照
+    QVERIFY(syncOnce(*ipad));
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 1);
+    QVERIFY(taskTitles(ipad->device).contains(QStringLiteral("Mac 高纪元任务")));
+    QVERIFY(!SyncStore(ipad->device.connection).snapshotRequests().contains(mac->device.id));
+}
+
+void SyncTransportTests::higherEpochSnapshotRequestPersistenceFailureEntersError()
+{
+    // 保证在为高纪元损坏快照记录快照请求时，若持久化至 sync_state 失败，系统立即进入 Error 状态，
+    // 不声称已请求、不写出缺少请求的游标文件，不修改本地数据库、纪元或游标进度；撤销触发器后同一轮重试可恢复。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 初始任务")).isEmpty());
+    QVERIFY(syncOnce(*ipad));
+
+    // Mac 恢复备份并发布快照
+    const QString backupPath = m_data->filePath(QStringLiteral("mac-backup.sqlite"));
+    QVERIFY(QFile::copy(mac->device.path, backupPath));
+    restoreBackup(*mac, backupPath);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QVERIFY(syncOnce(*mac));
+
+    // 损坏 Mac 的快照
+    const QString snapshotAbsPath = cloud.path(mac->device, SyncFiles::deviceDirectory(mac->device.id)
+                                             + QLatin1Char('/') + SyncFiles::snapshotFileName({1, 0}));
+    {
+        QFile file(snapshotAbsPath);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QVERIFY(file.write("{\"corrupted_json\":") > 0);
+        file.close();
+    }
+    cloud.deliver(mac->device, ipad->device);
+
+    // 在 iPad 上创建阻止写入 snapshot request 的 SQLite 触发器
+    QVERIFY(exec(ipad->device, QStringLiteral(
+        "CREATE TRIGGER fail_snapshot_request_insert "
+        "BEFORE INSERT ON sync_state "
+        "WHEN NEW.key LIKE 'request/%' "
+        "BEGIN "
+        "    SELECT RAISE(ABORT, 'injected failure for snapshot request insert'); "
+        "END;")));
+
+    // 同步动作前先验证触发器真实命中，并断言无请求
+    QVERIFY(!SyncStore(ipad->device.connection).setSnapshotRequest(mac->device.id, {1, 0}));
+    QVERIFY(!SyncStore(ipad->device.connection).snapshotRequests().contains(mac->device.id));
+
+    // 动作前保存 peerCursors 和 cursor 文件完整字节
+    const QHash<QString, SyncPosition> peerCursorsBefore = SyncStore(ipad->device.connection).peerCursors();
+    const QString cursorAbsPath = cloud.path(ipad->device, SyncFiles::deviceDirectory(ipad->device.id)
+                                            + QLatin1Char('/') + SyncFiles::cursorFileName());
+    QVERIFY(QFile::exists(cursorAbsPath));
+    QByteArray cursorBytesBefore;
+    {
+        QFile file(cursorAbsPath);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        cursorBytesBefore = file.readAll();
+        file.close();
+    }
+
+    // iPad 触发同步：setSnapshotRequest 应当失败
+    QVERIFY(syncOnce(*ipad));
+
+    // 断言 1：持久化失败立即进入 Error 状态
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::Error);
+    QVERIFY(ipad->engine->statusDetail().contains(QStringLiteral("无法记录快照请求")));
+
+    // 断言 2：不声称已请求（数据库中无请求）
+    QVERIFY(!SyncStore(ipad->device.connection).snapshotRequests().contains(mac->device.id));
+
+    // 断言 3：不写缺少请求的游标文件，cursor 字节与动作前完全一致
+    {
+        QFile file(cursorAbsPath);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QByteArray cursorBytesAfter = file.readAll();
+        file.close();
+        QCOMPARE(cursorBytesAfter, cursorBytesBefore);
+    }
+
+    // 断言 4：不改动本地 epoch、数据与 peerCursors
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 0);
+    QCOMPARE(SyncStore(ipad->device.connection).peerCursors(), peerCursorsBefore);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("iPad 初始任务")});
+
+    // 撤销触发器注入
+    QVERIFY(exec(ipad->device, QStringLiteral("DROP TRIGGER fail_snapshot_request_insert;")));
+
+    // 重试同步
+    QVERIFY(syncOnce(*ipad));
+
+    // 此时 setSnapshotRequest 成功，请求被记录并写出到 cursor.json
+    QCOMPARE(SyncStore(ipad->device.connection).snapshotRequests().value(mac->device.id), (SyncPosition{1, 0}));
+    {
+        const QString cursorAbsPath = cloud.path(ipad->device, SyncFiles::deviceDirectory(ipad->device.id)
+                                                + QLatin1Char('/') + SyncFiles::cursorFileName());
+        QFile file(cursorAbsPath);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        SyncFiles::CursorFile parsedCursor;
+        QString decodeError;
+        QCOMPARE(SyncFiles::decodeCursor(file.readAll(), ipad->device.id, &parsedCursor, &decodeError),
+                 SyncFiles::ParseStatus::Ok);
+        QCOMPARE(parsedCursor.snapshotRequests.value(mac->device.id), (SyncPosition{1, 0}));
+    }
+}
+
+void SyncTransportTests::higherEpochNewerFormatSnapshotYieldsNewerVersion()
+{
+    // 保证在扫描更高纪元快照时，若候选快照格式高于本机支持版本（NewerFormat），引擎仍返回 NewerVersion。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+    QVERIFY(!addTask(ipad->device, QStringLiteral("iPad 初始任务")).isEmpty());
+    QVERIFY(syncOnce(*ipad));
+
+    const QString backupPath = m_data->filePath(QStringLiteral("mac-backup.sqlite"));
+    QVERIFY(QFile::copy(mac->device.path, backupPath));
+    restoreBackup(*mac, backupPath);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QVERIFY(!addTask(mac->device, QStringLiteral("Mac 恢复后新任务")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+
+    const QString snapshotRelPath = SyncFiles::deviceDirectory(mac->device.id)
+        + QLatin1Char('/') + SyncFiles::snapshotFileName({1, 0});
+    const QString snapshotAbsPath = cloud.path(mac->device, snapshotRelPath);
+    QVERIFY(QFile::exists(snapshotAbsPath));
+
+    // 读取原始快照并篡改内部 batch 格式版本为未来版本
+    QFile file(snapshotAbsPath);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray original = file.readAll();
+    file.close();
+    const QByteArray newer = tamper(original, [](QJsonObject& o) {
+        auto batch = o.value(QStringLiteral("batch")).toObject();
+        batch.insert(QStringLiteral("format"), SyncJson::kFormatVersion + 1);
+        o.insert(QStringLiteral("batch"), batch);
+    });
+    QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    QVERIFY(file.write(newer) > 0);
+    file.close();
+
+    // 交付给 iPad 并同步
+    cloud.deliver(mac->device, ipad->device);
+    QVERIFY(syncOnce(*ipad));
+
+    // 断言：引擎状态为 NewerVersion，本地数据和纪元不被篡改
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::NewerVersion);
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 0);
+    QCOMPARE(taskTitles(ipad->device), QStringList{QStringLiteral("iPad 初始任务")});
+}
+
+void SyncTransportTests::higherEpochSnapshotReadFailureExposesErrorStatus()
+{
+    // 保证同步文件夹在读取更高纪元快照遭遇 I/O 错误时的注入稳定性，并记录当前实现进入 Error 的基线状态。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    // 注入点单元验证：直接测试 FaultySnapshotFolder 的读取拦截能力
+    FaultySnapshotFolder probeFolder(cloud.replica(ipad->device));
+    SyncFolder::Error probeError;
+    QByteArray probeData;
+    probeFolder.failSnapshotRead = true;
+    QVERIFY(!probeFolder.read(QStringLiteral("devices/some_device/snapshot-0001-00000000.json"), &probeData, &probeError));
+    QCOMPARE(probeError.kind, SyncFolder::ErrorKind::Io);
+    probeFolder.failSnapshotRead = false;
+    QVERIFY(!probeFolder.read(QStringLiteral("devices/some_device/snapshot-0001-00000000.json"), &probeData, &probeError));
+    QCOMPARE(probeError.kind, SyncFolder::ErrorKind::NotFound);
+
+    // 将 iPad 引擎的文件夹换为带有故障注入能力的 FaultySnapshotFolder
+    auto faultyFolder = std::make_unique<FaultySnapshotFolder>(cloud.replica(ipad->device));
+    FaultySnapshotFolder* faultyPtr = faultyFolder.get();
+    faultyPtr->failSnapshotRead = true;
+    ipad->engine->setFolder(std::move(faultyFolder));
+
+    // Mac 恢复备份开新纪元 1 并发布快照
+    const QString backupPath = m_data->filePath(QStringLiteral("mac-backup.sqlite"));
+    QVERIFY(QFile::copy(mac->device.path, backupPath));
+    restoreBackup(*mac, backupPath);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QVERIFY(!addTask(mac->device, QStringLiteral("Mac 新纪元任务")).isEmpty());
+    QVERIFY(syncOnce(*mac));
+
+    // 将 Mac 的快照送入 iPad 的副本
+    cloud.deliver(mac->device, ipad->device);
+
+    // 前置断言：验证副本中确实存在该快照
+    const QString snapshotRel = SyncFiles::deviceDirectory(mac->device.id)
+        + QLatin1Char('/') + SyncFiles::snapshotFileName({1, 0});
+    QVERIFY(QFile::exists(cloud.path(ipad->device, snapshotRel)));
+
+    // iPad 触发同步一轮
+    QVERIFY(syncOnce(*ipad));
+
+    // 当前暴露行为：快照读取发生 I/O 错误时，SyncWorker 返回 I/O 读取错误，SyncEngine 结束本轮并进入 Error 状态
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::Error);
+    QCOMPARE(ipad->engine->statusDetail(), QStringLiteral("注入的快照 I/O 读取失败"));
+
+    // 撤销注入：恢复正常读取
+    faultyPtr->failSnapshotRead = false;
+    QVERIFY(syncOnce(*ipad));
+
+    // 快照成功应用，状态恢复为 UpToDate
+    QCOMPARE(ipad->engine->status(), SyncEngine::Status::UpToDate);
+    QCOMPARE(SyncStore(ipad->device.connection).epoch(), 1);
+}
+
+void SyncTransportTests::publishSnapshotFailureDoesNotAdvancePositionOrWriteFile()
+{
+    // 保证全量快照导出失败时阻断发布：不写出快照文件、不推进快照位置且引擎暴露错误，故障解除后重试成功。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud-pub-fail")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    // 建立新任务，让数据库有实际数据
+    QVERIFY(!addTask(mac->device, QStringLiteral("物理任务")).isEmpty());
+
+    // 请求全量快照
+    SyncStore store(mac->device.connection);
+    QVERIFY(store.requestFullSnapshot());
+    QVERIFY(store.needsSnapshot());
+
+    // 故障注入：重命名 sync_settings 表，使 exportSnapshot 失败
+    QVERIFY(exec(mac->device, QStringLiteral("ALTER TABLE sync_settings RENAME TO sync_settings_fault")));
+
+    // 记录注入前的快照位置和快照文件列表
+    const SyncPosition initialSnapshotPos = store.snapshotPosition();
+    const QString deviceDir = cloud.path(mac->device, SyncFiles::deviceDirectory(mac->device.id));
+    QStringList snapshotsBefore;
+    {
+        QDirIterator it(deviceDir, QStringList() << QStringLiteral("snapshot-*.json"), QDir::Files);
+        while (it.hasNext()) {
+            snapshotsBefore.append(QFileInfo(it.next()).fileName());
+        }
+    }
+
+    // 执行一轮同步
+    QVERIFY(syncOnce(*mac));
+
+    // 此时引擎应因导出快照失败而进入 Error 状态
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::Error);
+    // 且不得推进快照位置
+    QCOMPARE(SyncStore(mac->device.connection).snapshotPosition(), initialSnapshotPos);
+    // 云盘目录中不得产生新的 snapshot 文件
+    {
+        QStringList snapshotsDuringFault;
+        QDirIterator it(deviceDir, QStringList() << QStringLiteral("snapshot-*.json"), QDir::Files);
+        while (it.hasNext()) {
+            snapshotsDuringFault.append(QFileInfo(it.next()).fileName());
+        }
+        QCOMPARE(snapshotsDuringFault, snapshotsBefore);
+    }
+
+    // 撤销注入：恢复表名
+    QVERIFY(exec(mac->device, QStringLiteral("ALTER TABLE sync_settings_fault RENAME TO sync_settings")));
+
+    // 重试同步
+    QVERIFY(syncOnce(*mac));
+
+    // 成功完成同步
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::UpToDate);
+    // 全量快照标记已被清除
+    QVERIFY(!SyncStore(mac->device.connection).needsSnapshot());
+    // 验证新快照文件已被成功更新并包含新加的物理任务
+    {
+        const QString snapshotPath = deviceDir + QLatin1Char('/') + SyncFiles::snapshotFileName({0, 0});
+        QFile snapFile(snapshotPath);
+        QVERIFY(snapFile.open(QIODevice::ReadOnly));
+        SyncFiles::SnapshotFile parsedSnapshot;
+        QString parseErr;
+        QCOMPARE(SyncFiles::decodeSnapshot(snapFile.readAll(), mac->device.id, {0, 0}, &parsedSnapshot, &parseErr),
+                 SyncFiles::ParseStatus::Ok);
+        bool foundTask = false;
+        for (const SyncRecord& rec : parsedSnapshot.batch.records) {
+            if (rec.table == QStringLiteral("tasks")
+                && rec.fields.value(QStringLiteral("title")).value.toString() == QStringLiteral("物理任务")) {
+                foundTask = true;
+                break;
+            }
+        }
+        QVERIFY(foundTask);
+    }
+}
+
+void SyncTransportTests::localSyncFolderRejectsFilesExceedingBudget()
+{
+    // 保证 LocalSyncFolder 循环读取时累计并在 append 前拒绝超出预算的文件，刚好处于预算内的文件正常读取。
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    LocalSyncFolder folder(tempDir.path());
+    SyncFolder::Error openErr;
+    QVERIFY(folder.open(&openErr));
+
+    // 1. 测试 Marker（预算 64KB）
+    SyncFiles::Marker marker;
+    marker.folderId = QStringLiteral("folder-123");
+    marker.createdBy = kDeviceA;
+    const QByteArray validMarker = SyncFiles::encodeMarker(marker);
+    QVERIFY(validMarker.size() < SyncFiles::kMaxMarkerBytes);
+
+    // 刚好等于预算（有效 JSON + 空白填充）
+    const QByteArray exactMarker = validMarker + QByteArray(SyncFiles::kMaxMarkerBytes - validMarker.size(), ' ');
+    QCOMPARE(exactMarker.size(), SyncFiles::kMaxMarkerBytes);
+    {
+        QFile f(tempDir.filePath(SyncFiles::markerFileName()));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(exactMarker);
+        f.close();
+    }
+    QByteArray readData;
+    SyncFolder::Error readErr;
+    QVERIFY(folder.read(SyncFiles::markerFileName(), &readData, &readErr));
+    QCOMPARE(readData.size(), SyncFiles::kMaxMarkerBytes);
+    SyncFiles::Marker parsedMarker;
+    QString parseErr;
+    QCOMPARE(SyncFiles::decodeMarker(readData, &parsedMarker, &parseErr), SyncFiles::ParseStatus::Ok);
+
+    // 超出预算 1 字节
+    const QByteArray overMarker = exactMarker + " ";
+    QCOMPARE(overMarker.size(), SyncFiles::kMaxMarkerBytes + 1);
+    {
+        QFile f(tempDir.filePath(SyncFiles::markerFileName()));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(overMarker);
+        f.close();
+    }
+    readData.clear();
+    readErr = {};
+    QVERIFY(!folder.read(SyncFiles::markerFileName(), &readData, &readErr));
+    QCOMPARE(readErr.kind, SyncFolder::ErrorKind::Io);
+    QVERIFY(readErr.message.contains(QStringLiteral("预算上限")));
+    QVERIFY(readData.isEmpty());
+
+    // 2. 测试 Changes（预算 8MB）
+    const QString changesPath = SyncFiles::changesDirectory(kDeviceA)
+        + QLatin1Char('/') + SyncFiles::changeFileName({1, 1});
+    SyncFiles::ChangeFile changeFile;
+    changeFile.seq = 1;
+    changeFile.writtenAtMs = 1700000000000;
+    changeFile.batch = sampleBatch(kDeviceA, 1);
+    const QByteArray validChange = SyncFiles::encodeChanges(changeFile);
+    QVERIFY(validChange.size() < SyncFiles::kMaxChangesBytes);
+
+    const QByteArray exactChange = validChange + QByteArray(SyncFiles::kMaxChangesBytes - validChange.size(), ' ');
+    QCOMPARE(exactChange.size(), SyncFiles::kMaxChangesBytes);
+    QDir(tempDir.path()).mkpath(SyncFiles::changesDirectory(kDeviceA));
+    {
+        QFile f(tempDir.filePath(changesPath));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(exactChange);
+        f.close();
+    }
+    readData.clear();
+    readErr = {};
+    QVERIFY(folder.read(changesPath, &readData, &readErr));
+    QCOMPARE(readData.size(), SyncFiles::kMaxChangesBytes);
+
+    const QByteArray overChange = exactChange + " ";
+    QCOMPARE(overChange.size(), SyncFiles::kMaxChangesBytes + 1);
+    {
+        QFile f(tempDir.filePath(changesPath));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write(overChange);
+        f.close();
+    }
+    readData.clear();
+    readErr = {};
+    QVERIFY(!folder.read(changesPath, &readData, &readErr));
+    QCOMPARE(readErr.kind, SyncFolder::ErrorKind::Io);
+    QVERIFY(readErr.message.contains(QStringLiteral("预算上限")));
+    QVERIFY(readData.isEmpty());
+
+    // 3. 测试未知同步文件直接被拒绝（预算为 0）
+    const QString unknownPath = QStringLiteral("devices/some_device/unknown_file.json");
+    QDir(tempDir.path()).mkpath(QStringLiteral("devices/some_device"));
+    {
+        QFile f(tempDir.filePath(unknownPath));
+        QVERIFY(f.open(QIODevice::WriteOnly));
+        f.write("{\"key\":\"value\"}");
+        f.close();
+    }
+    readData.clear();
+    readErr = {};
+    QVERIFY(!folder.read(unknownPath, &readData, &readErr));
+    QCOMPARE(readErr.kind, SyncFolder::ErrorKind::Io);
+    QVERIFY(readErr.message.contains(QStringLiteral("未知同步文件")));
+    QVERIFY(readData.isEmpty());
+}
+
+void SyncTransportTests::decodeDefendsAgainstFilesExceedingBudget()
+{
+    // 保证 SyncFiles 各 decode 解析入口在解析前拦截超预算数据并判定为 Corrupt。
+    // 1. 预算映射校验：已知四类返回各自安全预算，未知同步文件必须映射为 0
+    QCOMPARE(SyncFiles::maxBudgetForPath(SyncFiles::markerFileName()), SyncFiles::kMaxMarkerBytes);
+    QCOMPARE(SyncFiles::maxBudgetForPath(QStringLiteral("devices/0123456789abcdef0123456789abcdef/cursor.json")),
+             SyncFiles::kMaxCursorBytes);
+    QCOMPARE(SyncFiles::maxBudgetForPath(QStringLiteral("devices/0123456789abcdef0123456789abcdef/changes/0001-00000001.json")),
+             SyncFiles::kMaxChangesBytes);
+    QCOMPARE(SyncFiles::maxBudgetForPath(QStringLiteral("devices/0123456789abcdef0123456789abcdef/snapshot-0001-00000001.json")),
+             SyncFiles::kMaxSnapshotBytes);
+    QCOMPARE(SyncFiles::maxBudgetForPath(QStringLiteral("other.json")), 0);
+    QCOMPARE(SyncFiles::maxBudgetForPath(QStringLiteral("devices/0123456789abcdef0123456789abcdef/other.dat")), 0);
+    QCOMPARE(SyncFiles::maxBudgetForPath(QStringLiteral("snapshot.json")), 0);
+
+    // 2. decodeMarker 防守
+    SyncFiles::Marker marker;
+    marker.folderId = QStringLiteral("fid");
+    marker.createdBy = kDeviceA;
+    const QByteArray validMarker = SyncFiles::encodeMarker(marker);
+    const QByteArray overMarker = validMarker + QByteArray(SyncFiles::kMaxMarkerBytes - validMarker.size() + 1, ' ');
+    SyncFiles::Marker parsedMarker;
+    QString parseErr;
+    QCOMPARE(SyncFiles::decodeMarker(overMarker, &parsedMarker, &parseErr), SyncFiles::ParseStatus::Corrupt);
+    QVERIFY(parseErr.contains(QStringLiteral("预算上限")));
+
+    // 3. decodeCursor 防守
+    SyncFiles::CursorFile cursor;
+    cursor.device = kDeviceA;
+    cursor.epoch = 1;
+    cursor.writtenAtMs = 1700000000000;
+    const QByteArray validCursor = SyncFiles::encodeCursor(cursor);
+    const QByteArray overCursor = validCursor + QByteArray(SyncFiles::kMaxCursorBytes - validCursor.size() + 1, ' ');
+    SyncFiles::CursorFile parsedCursor;
+    QCOMPARE(SyncFiles::decodeCursor(overCursor, kDeviceA, &parsedCursor, &parseErr), SyncFiles::ParseStatus::Corrupt);
+    QVERIFY(parseErr.contains(QStringLiteral("预算上限")));
+}
+
+void SyncTransportTests::writeMarkerRejectsWhenExceedingBudget()
+{
+    // 保证 SyncWorker::createMarker 在写入前拦截超出安全预算的标记文件并拒绝写出，原文件不被替换。
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    auto folder = std::make_unique<LocalSyncFolder>(tempDir.path());
+    SyncFolder* folderPtr = folder.get();
+    SyncFolder::Error openErr;
+    QVERIFY(folderPtr->open(&openErr));
+    SyncWorker worker(std::move(folder));
+
+    // 1. 先证明写正常小 marker 能成功，并保存原文件内容
+    SyncFiles::Marker normalMarker;
+    normalMarker.folderId = QStringLiteral("normal-fid-12345");
+    normalMarker.createdBy = kDeviceA;
+    const QByteArray normalBytes = SyncFiles::encodeMarker(normalMarker);
+    QVERIFY(normalBytes.size() < SyncFiles::kMaxMarkerBytes);
+    const SyncFolder::Error normalErr = worker.createMarker(normalMarker);
+    QVERIFY(normalErr.ok());
+    const QString markerPath = tempDir.filePath(SyncFiles::markerFileName());
+    QVERIFY(QFile::exists(markerPath));
+    QFile normalFile(markerPath);
+    QVERIFY(normalFile.open(QIODevice::ReadOnly));
+    const QByteArray originalMarkerBytes = normalFile.readAll();
+    normalFile.close();
+    QCOMPARE(originalMarkerBytes, normalBytes);
+
+    // 2. 构造编码后超过 64 KiB 预算的 marker
+    SyncFiles::Marker overMarker;
+    overMarker.folderId = QString(70 * 1024, QLatin1Char('m'));
+    overMarker.createdBy = kDeviceA;
+    const QByteArray overBytes = SyncFiles::encodeMarker(overMarker);
+    QVERIFY(overBytes.size() > SyncFiles::kMaxMarkerBytes);
+
+    // 3. 断言写入接口返回错误且原文件未被替换
+    const SyncFolder::Error err = worker.createMarker(overMarker);
+    QVERIFY(!err.ok());
+    QCOMPARE(err.kind, SyncFolder::ErrorKind::Io);
+    QVERIFY(err.message.contains(QStringLiteral("预算")));
+
+    QFile afterFile(markerPath);
+    QVERIFY(afterFile.open(QIODevice::ReadOnly));
+    QCOMPARE(afterFile.readAll(), originalMarkerBytes);
+}
+
+void SyncTransportTests::writeCursorRejectsWhenExceedingBudget()
+{
+    // 保证 SyncWorker::writeCursor 在写入前拦截超出安全预算的游标文件并拒绝写出，原文件不被替换。
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    auto folder = std::make_unique<LocalSyncFolder>(tempDir.path());
+    SyncFolder* folderPtr = folder.get();
+    SyncFolder::Error openErr;
+    QVERIFY(folderPtr->open(&openErr));
+    SyncWorker worker(std::move(folder));
+
+    // 1. 先证明写正常小 cursor 成功，并保存原文件内容
+    SyncFiles::CursorFile normalCursor;
+    normalCursor.device = kDeviceA;
+    normalCursor.epoch = 1;
+    normalCursor.writtenAtMs = 1700000000000;
+    normalCursor.applied.insert(kDeviceB, {1, 10});
+    const QByteArray normalBytes = SyncFiles::encodeCursor(normalCursor);
+    QVERIFY(normalBytes.size() < SyncFiles::kMaxCursorBytes);
+    const SyncFolder::Error normalErr = worker.writeCursor(normalCursor);
+    QVERIFY(normalErr.ok());
+    const QString cursorPath = tempDir.filePath(SyncFiles::deviceDirectory(kDeviceA) + QLatin1Char('/') + SyncFiles::cursorFileName());
+    QVERIFY(QFile::exists(cursorPath));
+    QFile normalFile(cursorPath);
+    QVERIFY(normalFile.open(QIODevice::ReadOnly));
+    const QByteArray originalCursorBytes = normalFile.readAll();
+    normalFile.close();
+    QCOMPARE(originalCursorBytes, normalBytes);
+
+    // 2. 构造编码后超过 128 KiB 预算的 cursor（填充 2500 个合法 32 位 hex 设备标识）
+    SyncFiles::CursorFile overCursor;
+    overCursor.device = kDeviceA;
+    overCursor.epoch = 1;
+    overCursor.writtenAtMs = 1700000000000;
+    for (int i = 0; i < 2500; ++i) {
+        const QString peer = QStringLiteral("%1").arg(i, 32, 16, QLatin1Char('0'));
+        overCursor.applied.insert(peer, {1, static_cast<qint64>(i + 1)});
+    }
+    const QByteArray overBytes = SyncFiles::encodeCursor(overCursor);
+    QVERIFY(overBytes.size() > SyncFiles::kMaxCursorBytes);
+
+    // 3. 断言写入接口返回错误且原文件未被替换
+    const SyncFolder::Error err = worker.writeCursor(overCursor);
+    QVERIFY(!err.ok());
+    QCOMPARE(err.kind, SyncFolder::ErrorKind::Io);
+    QVERIFY(err.message.contains(QStringLiteral("预算")));
+
+    QFile afterFile(cursorPath);
+    QVERIFY(afterFile.open(QIODevice::ReadOnly));
+    QCOMPARE(afterFile.readAll(), originalCursorBytes);
+}
+
+void SyncTransportTests::writeChangesRejectsWhenExceedingBudget()
+{
+    // 保证 SyncWorker::writeChanges 在写入前拦截超出安全预算的增量文件并拒绝写出，不产生新改动文件。
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    auto folder = std::make_unique<LocalSyncFolder>(tempDir.path());
+    SyncFolder* folderPtr = folder.get();
+    SyncFolder::Error openErr;
+    QVERIFY(folderPtr->open(&openErr));
+    SyncWorker worker(std::move(folder));
+
+    // 1. 先证明写正常小 changes 能成功，生成第 1 批改动
+    SyncBatch normalBatch;
+    normalBatch.device = kDeviceA;
+    normalBatch.epoch = 1;
+    SyncRecord normalRec;
+    normalRec.table = QStringLiteral("tasks");
+    normalRec.syncId = QStringLiteral("normal-task-1");
+    normalRec.fields.insert(QStringLiteral("title"), {QStringLiteral("正常任务"), {1700000000000, kDeviceA}, {0, QString()}});
+    normalBatch.records.append(normalRec);
+
+    const SyncWorker::WriteResult normalResult = worker.writeChanges(normalBatch, 0, 1700000000000);
+    QVERIFY(normalResult.error.ok());
+    QCOMPARE(normalResult.position.seq, 1);
+    const QString change1Path = tempDir.filePath(normalResult.path);
+    QVERIFY(QFile::exists(change1Path));
+
+    // 2. 构造编码后超过 8 MiB 预算的 changes（单条任务 notes 填充 9 MiB 文本）
+    SyncBatch overBatch;
+    overBatch.device = kDeviceA;
+    overBatch.epoch = 1;
+    SyncRecord bigRec;
+    bigRec.table = QStringLiteral("tasks");
+    bigRec.syncId = QStringLiteral("over-task-1");
+    const QString bigNotes(9 * 1024 * 1024, QLatin1Char('c'));
+    bigRec.fields.insert(QStringLiteral("notes"), {bigNotes, {1700000000001, kDeviceA}, {0, QString()}});
+    overBatch.records.append(bigRec);
+
+    SyncFiles::ChangeFile overChangeFile;
+    overChangeFile.seq = 2;
+    overChangeFile.writtenAtMs = 1700000000001;
+    overChangeFile.batch = overBatch;
+    const QByteArray overBytes = SyncFiles::encodeChanges(overChangeFile);
+    QVERIFY(overBytes.size() > SyncFiles::kMaxChangesBytes);
+
+    // 3. 断言写入接口返回错误且没有第 2 批文件生成
+    const SyncWorker::WriteResult result = worker.writeChanges(overBatch, 1, 1700000000001);
+    QVERIFY(!result.error.ok());
+    QCOMPARE(result.error.kind, SyncFolder::ErrorKind::Io);
+    QVERIFY(result.error.message.contains(QStringLiteral("预算")));
+
+    const QString change2Path = tempDir.filePath(SyncFiles::changesDirectory(kDeviceA)
+                                                + QLatin1Char('/') + SyncFiles::changeFileName({1, 2}));
+    QVERIFY(!QFile::exists(change2Path));
+}
+
+void SyncTransportTests::writeSnapshotRejectsWhenExceedingBudget()
+{
+    // 保证 SyncWorker::writeSnapshot 在写入前拦截超出安全预算的快照文件并拒绝写出，原快照不被替换。
+    QTemporaryDir tempDir;
+    QVERIFY(tempDir.isValid());
+    auto folder = std::make_unique<LocalSyncFolder>(tempDir.path());
+    SyncFolder* folderPtr = folder.get();
+    SyncFolder::Error openErr;
+    QVERIFY(folderPtr->open(&openErr));
+    SyncWorker worker(std::move(folder));
+
+    // 1. 先证明写正常小快照能成功，并保存原快照文件
+    SyncFiles::SnapshotFile normalSnapshot;
+    normalSnapshot.coveredSeq = 1;
+    normalSnapshot.writtenAtMs = 1700000000000;
+    normalSnapshot.batch = sampleBatch(kDeviceA, 1);
+    const QByteArray normalBytes = SyncFiles::encodeSnapshot(normalSnapshot);
+    QVERIFY(normalBytes.size() < SyncFiles::kMaxSnapshotBytes);
+
+    const SyncWorker::WriteResult normalResult = worker.writeSnapshot(normalSnapshot);
+    QVERIFY(normalResult.error.ok());
+    const QString snapPath = tempDir.filePath(normalResult.path);
+    QVERIFY(QFile::exists(snapPath));
+    QFile normalSnapFile(snapPath);
+    QVERIFY(normalSnapFile.open(QIODevice::ReadOnly));
+    const QByteArray originalSnapBytes = normalSnapFile.readAll();
+    normalSnapFile.close();
+
+    // 2. 构造编码后超过 64 MiB 预算的快照（65 MiB 文本字段）
+    SyncFiles::SnapshotFile overSnapshot;
+    overSnapshot.coveredSeq = 1;
+    overSnapshot.writtenAtMs = 1700000000001;
+    overSnapshot.batch.device = kDeviceA;
+    overSnapshot.batch.epoch = 1;
+    SyncRecord bigRec;
+    bigRec.table = QStringLiteral("tasks");
+    bigRec.syncId = QStringLiteral("over-task-snap");
+    const QString bigNotes(65 * 1024 * 1024, QLatin1Char('s'));
+    bigRec.fields.insert(QStringLiteral("notes"), {bigNotes, {1700000000001, kDeviceA}, {0, QString()}});
+    overSnapshot.batch.records.append(bigRec);
+
+    const QByteArray overBytes = SyncFiles::encodeSnapshot(overSnapshot);
+    QVERIFY(overBytes.size() > SyncFiles::kMaxSnapshotBytes);
+
+    // 3. 断言写入接口返回错误且原快照文件未被替换
+    const SyncWorker::WriteResult result = worker.writeSnapshot(overSnapshot);
+    QVERIFY(!result.error.ok());
+    QCOMPARE(result.error.kind, SyncFolder::ErrorKind::Io);
+    QVERIFY(result.error.message.contains(QStringLiteral("预算")));
+
+    QFile afterSnapFile(snapPath);
+    QVERIFY(afterSnapFile.open(QIODevice::ReadOnly));
+    QCOMPARE(afterSnapFile.readAll(), originalSnapBytes);
+}
+
+void SyncTransportTests::enginePublishSnapshotRejectsWhenSnapshotExceedsBudget()
+{
+    // 保证 SyncEngine 在发布全量快照时若编码超出预算则阻断发布，不确认队列、不推进位置、不生成超限快照。
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud-pub-budget")));
+    std::unique_ptr<Node> mac;
+    std::unique_ptr<Node> ipad;
+    setUpPair(cloud, &mac, &ipad);
+
+    // 1. 先用正常小数据证明全量发布路径可成功
+    QVERIFY(!addTask(mac->device, QStringLiteral("正常小任务")).isEmpty());
+    SyncStore store(mac->device.connection);
+    QVERIFY(store.requestFullSnapshot());
+    QVERIFY(store.needsSnapshot());
+    QVERIFY(syncOnce(*mac));
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::UpToDate);
+    QVERIFY(!store.needsSnapshot());
+
+    // 2. 推进到新 epoch 并进入 needsSnapshot 状态
+    QVERIFY(store.beginEpochAfterRestore(store.epoch(), mac->device.id));
+    QCOMPARE(store.epoch(), 1);
+    QVERIFY(store.needsSnapshot());
+
+    // 3. 用参数绑定生成导致快照编码超限（> 64 MiB）的记录
+    const QString hugeNotes(65 * 1024 * 1024, QLatin1Char('h'));
+    QSqlQuery insertBig(deviceDb(mac->device));
+    insertBig.prepare(QStringLiteral(
+        "INSERT INTO tasks (title, notes, date, completed, display_order) VALUES (:title, :notes, :date, 0, 1)"));
+    insertBig.bindValue(QStringLiteral(":title"), QStringLiteral("超大任务"));
+    insertBig.bindValue(QStringLiteral(":notes"), hugeNotes);
+    insertBig.bindValue(QStringLiteral(":date"), QStringLiteral("2026-10-01"));
+    QVERIFY(insertBig.exec());
+
+    // 前置断言：快照编码实际长度确实超出预算上限
+    bool exportOk = false;
+    QString exportErr;
+    const SyncBatch hugeBatch = store.exportSnapshot(&exportOk, &exportErr);
+    QVERIFY(exportOk);
+    SyncFiles::SnapshotFile hugeSnapFile;
+    hugeSnapFile.coveredSeq = store.outboundPosition().seq;
+    hugeSnapFile.writtenAtMs = 1700000000000;
+    hugeSnapFile.batch = hugeBatch;
+    const QByteArray encodedHuge = SyncFiles::encodeSnapshot(hugeSnapFile);
+    QVERIFY(encodedHuge.size() > SyncFiles::kMaxSnapshotBytes);
+
+    // 4. 保存状态基线
+    const int outboxCountBefore = scalar(mac->device, QStringLiteral("SELECT COUNT(*) FROM sync_outbox")).toInt();
+    QVERIFY(outboxCountBefore > 0);
+    const SyncPosition outboundPosBefore = store.outboundPosition();
+    const SyncPosition snapshotPosBefore = store.snapshotPosition();
+    const bool needsSnapshotBefore = store.needsSnapshot();
+    QVERIFY(needsSnapshotBefore);
+
+    const QString deviceDir = cloud.path(mac->device, SyncFiles::deviceDirectory(mac->device.id));
+    const QString overSnapshotPath = deviceDir + QLatin1Char('/') + SyncFiles::snapshotFileName({store.epoch(), 0});
+    QVERIFY(!QFile::exists(overSnapshotPath));
+
+    // 5. 启动同步：期望进入 Error 状态且所有状态不被推进、不写出超限快照
+    QVERIFY(syncOnce(*mac));
+
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::Error);
+    QVERIFY(mac->engine->statusDetail().contains(QStringLiteral("预算")));
+    QCOMPARE(scalar(mac->device, QStringLiteral("SELECT COUNT(*) FROM sync_outbox")).toInt(), outboxCountBefore);
+    QCOMPARE(SyncStore(mac->device.connection).outboundPosition().epoch, outboundPosBefore.epoch);
+    QCOMPARE(SyncStore(mac->device.connection).outboundPosition().seq, outboundPosBefore.seq);
+    QCOMPARE(SyncStore(mac->device.connection).snapshotPosition().epoch, snapshotPosBefore.epoch);
+    QCOMPARE(SyncStore(mac->device.connection).snapshotPosition().seq, snapshotPosBefore.seq);
+    QCOMPARE(SyncStore(mac->device.connection).needsSnapshot(), needsSnapshotBefore);
+    QVERIFY(!QFile::exists(overSnapshotPath));
 }
 
 QTEST_GUILESS_MAIN(SyncTransportTests)

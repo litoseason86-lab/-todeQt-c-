@@ -157,6 +157,12 @@ bool McpAccessController::setEnabled(bool value)
 }
 bool McpAccessController::setWriteEnabled(bool value)
 {
+    // 接入关闭期间不能预授权；否则稍后重新开启会直接恢复写入，绕过单独授权规则。
+    if (value && !m_enabled) {
+        m_error = QStringLiteral("外部 AI 接入已关闭，不能开启任务写入权限");
+        emit stateChanged();
+        return false;
+    }
     const bool saved = savePolicy(QStringLiteral("mcp/writeEnabled"), value, m_writeEnabled);
     if (saved || !value) m_writeEnabled = value;
     if (!saved) {

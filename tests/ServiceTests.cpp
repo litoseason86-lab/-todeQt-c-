@@ -1073,6 +1073,8 @@ private slots:
     void weeklyReviewFactsPriorityAndCurrentWeekSuppression();
     void weeklyReviewErrorsAreReturnedWithoutSignals();
     void weeklyReviewContentFlags();
+    void taskSummaryUsesLogicalWeekAndServiceFocusCaliber();
+    void taskSummaryRejectsQueryFailure();
 
 private:
     // 需要访问 FocusTimer 私有时钟状态，必须挂在 friend 类下而不是自由函数里。
@@ -9670,4 +9672,87 @@ void ServiceTests::timelineStartEditNormalizesTimezone()
     QCOMPARE(query.value(2).toInt(), 1800);
     QCOMPARE(history->getDayTotalDuration(day), 1800);
     QCOMPARE(history->getDayTotalDuration(day.addDays(-1)), 0);
+}
+
+// 产品保证：getTaskSummary 依据传入的逻辑日严格按周一至周日边界汇总本周与今日待办任务，且复用服务专注时长口径。
+void ServiceTests::taskSummaryUsesLogicalWeekAndServiceFocusCaliber()
+{
+    const QDate logicalToday(2026, 10, 14);
+    const QDate prevSunday(2026, 10, 11);
+    const QDate monday(2026, 10, 12);
+    const QDate wednesday = logicalToday;
+    const QDate sunday(2026, 10, 18);
+    const QDate nextMonday(2026, 10, 19);
+
+    // 插入顺序打乱：包含前周日、下周一未完成任务，确保不会被计入周统计。
+    const int postWeek = insertTaskRow(QStringLiteral("下周一未完成"), nextMonday, QString(), false);
+    const int wedCompleted = insertTaskRow(QStringLiteral("周三已完成"), wednesday, QString(), true);
+    const int preWeek = insertTaskRow(QStringLiteral("上周日未完成"), prevSunday, QString(), false);
+    const int wedPending = insertTaskRow(QStringLiteral("周三未完成"), wednesday, QString(), false);
+    const int sunCompleted = insertTaskRow(QStringLiteral("周日已完成"), sunday, QString(), true);
+    const int monPending = insertTaskRow(QStringLiteral("周一未完成"), monday, QString(), false);
+    const int sunPending = insertTaskRow(QStringLiteral("周日未完成"), sunday, QString(), false);
+
+    QVERIFY(postWeek > 0);
+    QVERIFY(wedCompleted > 0);
+    QVERIFY(preWeek > 0);
+    QVERIFY(wedPending > 0);
+    QVERIFY(sunCompleted > 0);
+    QVERIFY(monPending > 0);
+    QVERIFY(sunPending > 0);
+
+    QVERIFY(insertFocusSessionRow(wedPending, wednesday, 600));
+
+    const QVariantMap summary = StatisticsService::instance()->getTaskSummary(logicalToday);
+    QCOMPARE(summary.value(QStringLiteral("todayPendingCount")).toInt(), 1);
+    QCOMPARE(summary.value(QStringLiteral("weekPendingCount")).toInt(), 3);
+    QCOMPARE(summary.value(QStringLiteral("todayFocusedSeconds")).toInt(), 600);
+}
+
+// 产品保证：底层统计查询失败时 getTaskSummary 拒绝返回零值摘要伪造正常状态，而是发出 operationFailed 并返回空映射。
+void ServiceTests::taskSummaryRejectsQueryFailure()
+{
+    const QDate logicalToday(2026, 10, 14);
+    const int taskId = insertTaskRow(QStringLiteral("正常任务"), logicalToday);
+    QVERIFY(taskId > 0);
+    QVERIFY(insertFocusSessionRow(taskId, logicalToday, 600));
+
+    auto* service = StatisticsService::instance();
+    const QVariantMap normalSummary = service->getTaskSummary(logicalToday);
+    QVERIFY(!normalSummary.isEmpty());
+    QCOMPARE(normalSummary.value(QStringLiteral("todayPendingCount")).toInt(), 1);
+    QCOMPARE(normalSummary.value(QStringLiteral("todayFocusedSeconds")).toInt(), 600);
+
+    const auto db = DatabaseManager::instance()->database();
+    QSqlQuery renameQuery(db);
+    QVERIFY(renameQuery.exec(QStringLiteral("ALTER TABLE focus_sessions RENAME TO focus_sessions_backup")));
+    bool restored = false;
+    auto restoreTable = qScopeGuard([db, &restored] {
+        if (!restored) {
+            QSqlQuery restoreQuery(db);
+            restoreQuery.exec(QStringLiteral("ALTER TABLE focus_sessions_backup RENAME TO focus_sessions"));
+        }
+    });
+
+    // 证明任务表仍可读，而专注表因缺失导致后续会话聚合失败。
+    QSqlQuery taskCheck(db);
+    QVERIFY(taskCheck.exec(QStringLiteral("SELECT COUNT(*) FROM tasks")));
+    QVERIFY(taskCheck.next());
+    QVERIFY(taskCheck.value(0).toInt() >= 1);
+
+    QSignalSpy failedSpy(service, &StatisticsService::operationFailed);
+    QVERIFY(failedSpy.isValid());
+    const QVariantMap failedSummary = service->getTaskSummary(logicalToday);
+    QVERIFY(failedSummary.isEmpty());
+    QCOMPARE(failedSpy.count(), 1);
+
+    QSqlQuery restoreQuery(db);
+    QVERIFY(restoreQuery.exec(QStringLiteral("ALTER TABLE focus_sessions_backup RENAME TO focus_sessions")));
+    restored = true;
+    restoreTable.dismiss();
+
+    const QVariantMap recoveredSummary = service->getTaskSummary(logicalToday);
+    QVERIFY(!recoveredSummary.isEmpty());
+    QCOMPARE(recoveredSummary.value(QStringLiteral("todayPendingCount")).toInt(), 1);
+    QCOMPARE(recoveredSummary.value(QStringLiteral("todayFocusedSeconds")).toInt(), 600);
 }

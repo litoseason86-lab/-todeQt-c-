@@ -32,3 +32,6 @@ compile_commands.json
 
 # iPad Swift 包的 SourceKit 索引与本地 SwiftPM 产物不入库
 /src/ui/ipad/.build/
+
+# 本机SDK路径与个人CMake覆盖不入库
+CMakeUserPresets.json

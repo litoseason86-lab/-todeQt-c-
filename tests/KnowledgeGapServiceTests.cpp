@@ -686,6 +686,7 @@ void KnowledgeGapServiceTests::reminderSummaryUsesLogicalDayBoundary()
     // 分桶的边界必须正好落在逻辑今天上：今天到期算 dueToday，明天到期两个桶都不进。
     QCOMPARE(summary.value(QStringLiteral("dueToday")).toInt(), 1);
     QCOMPARE(summary.value(QStringLiteral("overdue")).toInt(), 2);
+    QCOMPARE(summary.value(QStringLiteral("dueCount")).toInt(), 3);
     QCOMPARE(summary.value(QStringLiteral("unscheduled")).toInt(), 1);
     QCOMPARE(summary.value(QStringLiteral("openTotal")).toInt(), 5);
     // 最久的那条决定提示条上的天数；已解决的不参与，它不需要任何人停下来处理。
@@ -801,6 +802,7 @@ void KnowledgeGapServiceTests::reminderSummarySkipsGapsWhoseTaskIsStillOpen()
     QVariantMap summary = service->getReminderSummary();
     QCOMPARE(summary.value(QStringLiteral("overdue")).toInt(), 1);
     QCOMPARE(summary.value(QStringLiteral("dueToday")).toInt(), 1);
+    QCOMPARE(summary.value(QStringLiteral("dueCount")).toInt(), 2);
 
     const int overdueTaskId = service->convertToTask(overdueId, today);
     QVERIFY(overdueTaskId > 0);
@@ -814,12 +816,14 @@ void KnowledgeGapServiceTests::reminderSummarySkipsGapsWhoseTaskIsStillOpen()
     QCOMPARE(summary.value(QStringLiteral("oldestOverdueDays")).toInt(), 0);
     // 总数照旧统计全部未解决条目：转成任务不等于解决。
     QCOMPARE(summary.value(QStringLiteral("openTotal")).toInt(), 2);
+    QCOMPARE(summary.value(QStringLiteral("dueCount")).toInt(), 0);
 
     // 任务做完但条目没标记解决：做完不等于想明白，重新回到提醒里，拖延天数仍按原到期日算。
     QVERIFY(TaskManager::instance()->completeTask(overdueTaskId));
     summary = service->getReminderSummary();
     QCOMPARE(summary.value(QStringLiteral("overdue")).toInt(), 1);
     QCOMPARE(summary.value(QStringLiteral("oldestOverdueDays")).toInt(), 3);
+    QCOMPARE(summary.value(QStringLiteral("dueCount")).toInt(), 1);
 }
 
 // 产品保证：「全部加到今天」只转今天到期和已逾期、未解决、还没有未完成关联任务的条目，

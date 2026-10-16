@@ -212,8 +212,8 @@ Popup {
 
                 background: Rectangle {
                     color: continueButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
-                    border.color: continueButton.activeFocus ? Theme.focusRing : Theme.border
-                    border.width: continueButton.activeFocus ? 2 : 1
+                    border.color: continueButton.visualFocus ? Theme.focusRing : Theme.border
+                    border.width: continueButton.visualFocus ? 2 : 1
                     radius: Theme.radiusMd
                 }
 
@@ -241,8 +241,8 @@ Popup {
 
                 background: Rectangle {
                     color: discardButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
-                    border.color: discardButton.activeFocus ? Theme.focusRing : Theme.border
-                    border.width: discardButton.activeFocus ? 2 : 1
+                    border.color: discardButton.visualFocus ? Theme.focusRing : Theme.border
+                    border.width: discardButton.visualFocus ? 2 : 1
                     radius: Theme.radiusMd
                 }
 
@@ -268,8 +268,8 @@ Popup {
 
                 background: Rectangle {
                     color: recordButton.hovered ? Theme.accentFillStrong : Theme.accentFill
-                    border.color: recordButton.activeFocus ? Theme.focusRing : "transparent"
-                    border.width: recordButton.activeFocus ? 2 : 0
+                    border.color: recordButton.visualFocus ? Theme.focusRing : "transparent"
+                    border.width: recordButton.visualFocus ? 2 : 0
                     radius: Theme.radiusMd
                 }
 

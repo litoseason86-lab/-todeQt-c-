@@ -56,6 +56,67 @@ private slots:
                 return McpToolDispatcher::Context{session, QDateTime::fromString("2026-09-18T02:00:00+08:00", Qt::ISODate), 4};
             });
     }
+    // 产品保证：非法控制字符使整次写入失败，创建与编辑均不留下部分修改。
+    void controlCharactersRejectWholeWrite_data()
+    {
+        QTest::addColumn<bool>("create");
+        QTest::addColumn<QString>("field");
+        QTest::addColumn<QString>("text");
+        for (bool create : {true, false}) {
+            for (const QString& field : {QStringLiteral("title"), QStringLiteral("notes")}) {
+                const QList<char16_t> controls = {0, 1, 8, 11, 12, 27, 127, 0x85};
+                for (char16_t value : controls) {
+                    const QByteArray name = QByteArray(create ? "create-" : "update-") + field.toUtf8() + '-' + QByteArray::number(value);
+                    QTest::newRow(name.constData()) << create << field << (QStringLiteral("前") + QChar(value) + QStringLiteral("后"));
+                }
+                if (field == QStringLiteral("title")) {
+                    for (char16_t value : {u'\n', u'\r', u'\t', u'\u2028', u'\u2029'}) {
+                        const QByteArray name = QByteArray(create ? "create-title-" : "update-title-") + QByteArray::number(value);
+                        // 前导控制字符也必须被拒绝，不能先trimmed再当成正常标题写入。
+                        QTest::newRow(name.constData()) << create << field << (QString(QChar(value)) + QStringLiteral("标题"));
+                    }
+                }
+            }
+        }
+    }
+    // 产品保证：拒绝后原任务内容与任务总数不变，接口明确报告输入错误。
+    void controlCharactersRejectWholeWrite()
+    {
+        QFETCH(bool, create);
+        QFETCH(QString, field);
+        QFETCH(QString, text);
+        const int id = task();
+        QVERIFY(id > 0);
+        const auto before = output(run(Tool::GetTask, {{"task_id", id}}));
+        QCOMPARE(output(run(Tool::ListTasks, range())).value("count").toInt(), 1);
+        auto args = create ? createArgs() : editArgs(id);
+        args.insert(field, text);
+        const auto result = run(create ? Tool::CreateTask : Tool::UpdateTask, args);
+        QVERIFY(result.value("isError").toBool());
+        QCOMPARE(code(result), QStringLiteral("VALIDATION_ERROR"));
+        QCOMPARE(output(run(Tool::GetTask, {{"task_id", id}})), before);
+        QCOMPARE(output(run(Tool::ListTasks, range())).value("count").toInt(), 1);
+    }
+    // 产品保证：合法多行备注、制表符与emoji组合经创建和编辑完整保留。
+    void multilineNotesAndEmojiRemainIntact()
+    {
+        const QString title = QString::fromUtf8("读书👩‍💻");
+        const QString notes = QStringLiteral("第一行\r\n第二行\t缩进\n第三行\u2028第四行");
+        auto args = createArgs();
+        args.insert("title", title);
+        args.insert("notes", notes);
+        const auto created = run(Tool::CreateTask, args);
+        QVERIFY(!created.value("isError").toBool());
+        const int id = output(created).value("created_task_id").toInt();
+        QVERIFY(id > 0);
+        QCOMPARE(TaskManager::instance()->readTask(id).value.value("title").toString(), title);
+        QCOMPARE(TaskManager::instance()->readTask(id).value.value("notes").toString(), notes);
+        args = editArgs(id);
+        args.insert("notes", notes + QStringLiteral("\n追加"));
+        const auto updated = run(Tool::UpdateTask, args);
+        QVERIFY(!updated.value("isError").toBool());
+        QCOMPARE(TaskManager::instance()->readTask(id).value.value("notes").toString(), notes + QStringLiteral("\n追加"));
+    }
     void invalidTextReturnsValidationError()
     {
         const int id = task();

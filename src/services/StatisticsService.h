@@ -20,6 +20,9 @@ public:
     // 统计结果直接给 QML 卡片和图表使用，所以返回 QVariantMap/QVariantList。
     Q_INVOKABLE QVariantMap getDayStats(const QDate& date) const;
     Q_INVOKABLE QVariantMap getTodayStats() const;
+    // 供外壳主线程刷新使用，逻辑日期只读取一次，界面不重算待办。
+    Q_INVOKABLE QVariantMap getTaskSummary(const QDate& logicalToday) const;
+    Q_INVOKABLE QVariantMap getTaskSummary() const;
     Q_INVOKABLE QVariantMap getDayComparison(const QDate& date) const;
     Q_INVOKABLE QVariantList getWeekStats(const QDate& weekStart) const;
     Q_INVOKABLE QVariantList getWeekStats() const;

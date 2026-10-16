@@ -35,6 +35,25 @@ enum class ParseStatus {
     NewerFormat,
 };
 
+// ── 四类文件的有界读取预算 ──
+// 单个文件读取和内存分配的硬性上限，防止异常文件耗尽内存或引起拒绝服务。
+constexpr qint64 kMaxMarkerBytes = 64 * 1024; // 64 KB（实际标记文件约 200 B）
+constexpr qint64 kMaxCursorBytes = 128 * 1024; // 128 KB（实际游标文件 1-2 KB）
+constexpr qint64 kMaxChangesBytes = 8 * 1024 * 1024; // 8 MB
+constexpr qint64 kMaxSnapshotBytes = 64 * 1024 * 1024; // 64 MB
+
+enum class FileCategory {
+    Marker,
+    Cursor,
+    Changes,
+    Snapshot,
+    Unknown,
+};
+
+FileCategory classifyPath(const QString& relativePath);
+qint64 maxFileBudget(FileCategory category);
+qint64 maxBudgetForPath(const QString& relativePath);
+
 // ── 名字与路径（相对同步文件夹的根） ──
 
 QString defaultFolderName();

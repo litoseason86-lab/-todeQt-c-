@@ -26,6 +26,9 @@ namespace BackupOperations {
 // 未受信文件的解析上限。设置项都是标量或短字符串，这两个数留了几个数量级余量。
 constexpr int kMaxSettingValueBytes = 64 * 1024;
 constexpr int kMaxSettingEntries = 500;
+// 格式1只允许标量，固定到最低支持SDK的流格式，避免升级Qt后默认版本改变备份编码。
+// 当前允许类型在Qt6.7与Qt6.10编码相同；新增类型时必须同时核对固定夹具和旧备份兼容。
+constexpr auto kSettingsStreamVersion = QDataStream::Qt_6_7;
 
 std::unique_ptr<QSettings> openSettings(const QString& settingsFilePath)
 {
@@ -57,6 +60,7 @@ const QStringList kRequiredTables = {
 bool hasSafeSettingEncoding(const QByteArray& blob)
 {
     QDataStream header(blob);
+    header.setVersion(kSettingsStreamVersion);
     quint32 type = 0;
     quint8 nullFlag = 0;
     header >> type >> nullFlag;
@@ -98,6 +102,97 @@ QString uniqueConnectionName(const QString& prefix)
 QString escapedSqlString(QString value)
 {
     return value.replace(QLatin1Char('\''), QStringLiteral("''"));
+}
+
+QString quotedIdentifier(QString name)
+{
+    return QLatin1Char('"') + name.replace(QLatin1Char('"'), QStringLiteral("\"\"")) + QLatin1Char('"');
+}
+
+bool validateDataBudget(const QSqlDatabase& database, QString* reason)
+{
+    // 先使用SQLite解析结果识别虚拟表，不能对未受信模块发出数据查询。
+    QSqlQuery virtualTables(database);
+    if (!virtualTables.exec(QStringLiteral("SELECT name FROM pragma_table_list WHERE type IN ('virtual', 'shadow')"))) {
+        *reason = QStringLiteral("读取备份结构失败");
+        return false;
+    }
+    if (virtualTables.next()) {
+        *reason = QStringLiteral("备份包含虚拟表（%1），出于安全考虑拒绝恢复")
+                      .arg(virtualTables.value(0).toString());
+        return false;
+    }
+    if (virtualTables.lastError().isValid()) {
+        *reason = QStringLiteral("读取备份结构失败");
+        return false;
+    }
+    QSqlQuery tables(database);
+    tables.setForwardOnly(true);
+    if (!tables.exec(QStringLiteral("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"))) {
+        *reason = QStringLiteral("读取备份数据规模失败");
+        return false;
+    }
+    qint64 totalRows = 0;
+    while (tables.next()) {
+        const QString name = tables.value(0).toString();
+        const QString table = quotedIdentifier(name);
+        // COUNT只扫描剩余额度加一行，不为拒绝异常文件先做一次无界全表计数。
+        QSqlQuery count(database);
+        if (!count.exec(QStringLiteral("SELECT COUNT(*) FROM (SELECT 1 FROM %1 LIMIT %2)")
+                            .arg(table).arg(kMaxBackupRows - totalRows + 1)) || !count.next()) {
+            *reason = QStringLiteral("检查备份行数预算失败");
+            return false;
+        }
+        totalRows += count.value(0).toLongLong();
+        if (totalRows > kMaxBackupRows) {
+            *reason = QStringLiteral("备份总行数超出预算上限（500万行）");
+            return false;
+        }
+        count.finish();
+
+        QSqlQuery columns(database);
+        columns.prepare(QStringLiteral("SELECT name, hidden FROM pragma_table_xinfo(:table)"));
+        columns.bindValue(QStringLiteral(":table"), name);
+        if (!columns.exec()) {
+            *reason = QStringLiteral("读取备份字段结构失败");
+            return false;
+        }
+        QStringList predicates;
+        while (columns.next()) {
+            // 数据库程序不能在规模检查时被当成数据执行，生成列可能临时制造巨量内容。
+            if (columns.value(1).toInt() != 0) {
+                *reason = QStringLiteral("备份包含生成列或隐藏列，无法按普通数据安全恢复");
+                return false;
+            }
+            // 在SQLite内只取字节长度，不把整块文本/BLOB复制到Qt；TEXT的NUL不能截短检查值。
+            predicates.append(QStringLiteral("length(CAST(%1 AS BLOB)) > %2")
+                                  .arg(quotedIdentifier(columns.value(0).toString()))
+                                  .arg(kMaxBackupCellBytes));
+        }
+        if (columns.lastError().isValid() || predicates.isEmpty()) {
+            *reason = QStringLiteral("读取备份字段结构失败");
+            return false;
+        }
+        QSqlQuery oversized(database);
+        if (!oversized.exec(QStringLiteral("SELECT 1 FROM %1 WHERE %2 LIMIT 1")
+                                .arg(table, predicates.join(QStringLiteral(" OR "))))) {
+            *reason = QStringLiteral("检查备份字段预算失败");
+            return false;
+        }
+        if (oversized.next()) {
+            *reason = QStringLiteral("备份字段大小超出预算上限（16 MiB）");
+            return false;
+        }
+        if (oversized.lastError().isValid()) {
+            *reason = QStringLiteral("检查备份字段预算失败");
+            return false;
+        }
+    }
+    if (tables.lastError().isValid()) {
+        *reason = QStringLiteral("读取备份数据规模失败");
+        return false;
+    }
+    return true;
 }
 
 QString normalizedPath(const QString& path)
@@ -436,6 +531,7 @@ OperationResult embedMetadataAndSettings(const QString& snapshotPath,
                     }
                     QByteArray blob;
                     QDataStream stream(&blob, QIODevice::WriteOnly);
+                    stream.setVersion(kSettingsStreamVersion);
                     stream << settings->value(key);
                     if (stream.status() != QDataStream::Ok) {
                         result.error = QStringLiteral("序列化偏好失败：") + key;
@@ -479,12 +575,21 @@ OperationResult embedMetadataAndSettings(const QString& snapshotPath,
 
 } // namespace
 
-OperationResult atomicCopy(const QString& sourcePath, const QString& destinationPath)
+OperationResult atomicCopy(const QString& sourcePath, const QString& destinationPath, qint64 maxBytes)
 {
     OperationResult result;
+    if (!QFileInfo(sourcePath).isFile()) {
+        result.error = QStringLiteral("复制源必须是普通文件");
+        return result;
+    }
     QFile source(sourcePath);
     if (!source.open(QIODevice::ReadOnly)) {
         result.error = QStringLiteral("无法读取源文件：") + source.errorString();
+        return result;
+    }
+    // 在创建目标临时文件之前拒绝越界源；负值仅用于可信本地回滚，不限制原有数据规模。
+    if (maxBytes >= 0 && source.size() > maxBytes) {
+        result.error = QStringLiteral("备份文件大小超出预算上限，未复制");
         return result;
     }
 
@@ -503,6 +608,7 @@ OperationResult atomicCopy(const QString& sourcePath, const QString& destination
     }
 
     constexpr qint64 kChunkSize = 1024 * 1024;
+    qint64 copiedBytes = 0;
     while (!source.atEnd()) {
         const QByteArray chunk = source.read(kChunkSize);
         if (chunk.isEmpty() && source.error() != QFileDevice::NoError) {
@@ -510,11 +616,18 @@ OperationResult atomicCopy(const QString& sourcePath, const QString& destination
             result.error = QStringLiteral("读取源文件失败：") + source.errorString();
             return result;
         }
+        // 初始大小检查后源仍可能增长；按实际字节再检查，QSaveFile失败不替换旧目标。
+        if (maxBytes >= 0 && chunk.size() > maxBytes - copiedBytes) {
+            destination.cancelWriting();
+            result.error = QStringLiteral("备份文件大小超出预算上限，未复制");
+            return result;
+        }
         if (destination.write(chunk) != chunk.size()) {
             destination.cancelWriting();
             result.error = QStringLiteral("写入目标文件失败：") + destination.errorString();
             return result;
         }
+        copiedBytes += chunk.size();
     }
 
     if (!destination.commit()) {
@@ -632,7 +745,17 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
         return result;
     }
 
-    result = atomicCopy(temporaryPath, destinationPath);
+    // 发布与恢复采用同一可恢复性门禁；否则超限的本地数据会产生“成功但无法恢复”的备份。
+    const QVariantMap inspection = inspectBackup(temporaryPath, currentSchemaVersion);
+    if (!inspection.value(QStringLiteral("valid")).toBool()) {
+        result.success = false;
+        result.error = inspection.value(QStringLiteral("reason")).toString();
+        QFile::remove(temporaryPath);
+        return result;
+    }
+
+    // 不发布本版本会拒绝恢复的超限文件；失败保留原目标，临时快照在下面统一移除。
+    result = atomicCopy(temporaryPath, destinationPath, kMaxBackupFileBytes);
     QFile::remove(temporaryPath);
     return result;
 }
@@ -647,6 +770,10 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
         result.insert(QStringLiteral("reason"), QStringLiteral("备份文件不存在或无法读取"));
         return result;
     }
+    if (info.size() > kMaxBackupFileBytes) {
+        result.insert(QStringLiteral("reason"), QStringLiteral("备份文件大小超出预算上限（512 MiB），无法恢复"));
+        return result;
+    }
 
     const QString connectionName = uniqueConnectionName(QStringLiteral("BackupInspect_"));
     QString reason;
@@ -657,10 +784,13 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
         if (!database.open()) {
             reason = QStringLiteral("这不是有效的备份文件");
         } else {
-            QSqlQuery integrity(database);
-            if (!integrity.exec(QStringLiteral("PRAGMA integrity_check")) || !integrity.next()
-                || integrity.value(0).toString() != QStringLiteral("ok")) {
-                reason = QStringLiteral("备份文件已损坏，无法恢复");
+            // 在读取元数据值、业务结构和完整性检查前拒绝超额数据，不能先物化大字段再检查。
+            if (validateDataBudget(database, &reason)) {
+                QSqlQuery integrity(database);
+                if (!integrity.exec(QStringLiteral("PRAGMA integrity_check")) || !integrity.next()
+                    || integrity.value(0).toString() != QStringLiteral("ok")) {
+                    reason = QStringLiteral("备份文件已损坏，无法恢复");
+                }
             }
 
             if (reason.isEmpty()) {
@@ -759,19 +889,6 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion)
                     }
                 }
             }
-            // 让 SQLite 返回解析后的表类型，SQL 中的空白和注释不能绕过此检查。
-            if (reason.isEmpty()) {
-                QSqlQuery virtualTables(database);
-                if (!virtualTables.exec(QStringLiteral(
-                        "SELECT name FROM pragma_table_list "
-                        "WHERE type IN ('virtual', 'shadow')"))) {
-                    reason = QStringLiteral("读取备份结构失败");
-                } else if (virtualTables.next()) {
-                    reason = QStringLiteral("备份包含虚拟表（%1），出于安全考虑拒绝恢复")
-                                 .arg(virtualTables.value(0).toString());
-                }
-            }
-
             if (reason.isEmpty()) {
                 for (auto it = metadata.constBegin(); it != metadata.constEnd(); ++it) {
                     result.insert(it.key(), it.value());
@@ -848,6 +965,7 @@ EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath)
                         break;
                     }
                     QDataStream stream(&blob, QIODevice::ReadOnly);
+                    stream.setVersion(kSettingsStreamVersion);
                     QVariant value;
                     stream >> value;
                     if (stream.status() != QDataStream::Ok || !stream.atEnd()) {

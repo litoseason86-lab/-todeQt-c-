@@ -531,8 +531,15 @@ void SyncEngine::publishStep()
 void SyncEngine::publishFullSnapshot()
 {
     SyncStore s = store();
+    bool ok = false;
+    QString exportError;
+    const SyncBatch snapshotBatch = s.exportSnapshot(&ok, &exportError);
+    if (!ok) {
+        return finishCycle(Status::Error,
+                           exportError.isEmpty() ? QStringLiteral("导出全量快照失败") : exportError);
+    }
     SyncFiles::SnapshotFile file;
-    file.batch = s.exportSnapshot();
+    file.batch = snapshotBatch;
     const SyncPosition outbound = s.outboundPosition();
     file.coveredSeq = outbound.epoch == file.batch.epoch ? outbound.seq : 0;
     file.writtenAtMs = wallClockMs();
@@ -732,7 +739,92 @@ void SyncEngine::adopt(const SyncWorker::Adoption& adoption)
         if (adoption.status == SyncFiles::ParseStatus::NewerFormat) {
             return finishCycle(Status::NewerVersion, adoption.error);
         }
-        // 对方恢复了备份、新纪元的改动先到了，快照还在路上（或者读不出来）：这一轮什么都不应用，等快照。
+        if (adoption.status == SyncFiles::ParseStatus::Corrupt && !adoption.device.isEmpty()) {
+            SyncStore s = store();
+            QList<SyncWorker::Adoption::CorruptedCandidate> bads = adoption.corruptedCandidates;
+            if (bads.isEmpty()) {
+                bads.append({adoption.device, adoption.position, adoption.error});
+            }
+            for (const auto& bad : bads) {
+                const QString path = SyncFiles::deviceDirectory(bad.device) + QLatin1Char('/')
+                    + SyncFiles::snapshotFileName(bad.position);
+                if (!m_loggedBadFiles.contains(path)) {
+                    if (s.logFileProblem(bad.device, path, bad.error)) {
+                        m_loggedBadFiles.insert(path);
+                    }
+                }
+                if (!s.setSnapshotRequest(bad.device, bad.position)) {
+                    return finishCycle(Status::Error, QStringLiteral("无法记录快照请求"));
+                }
+            }
+            m_cursorDirty = true;
+            const QString firstPath = SyncFiles::deviceDirectory(adoption.device) + QLatin1Char('/')
+                + SyncFiles::snapshotFileName(adoption.position);
+            const QString errDetail = QStringLiteral("%1 读不懂：%2").arg(firstPath, adoption.error);
+
+            // 写出覆盖高 epoch 的 snapshot request（writeCursor 不能把这个高 epoch 请求按本机旧 epoch 过滤掉）
+            const qint64 wallNow = wallClockMs();
+            SyncFiles::CursorFile cursor;
+            cursor.device = s.deviceId();
+            cursor.epoch = s.epoch();
+            cursor.writtenAtMs = wallNow;
+            cursor.applied = positionsInEpoch(s.peerCursors(), cursor.epoch);
+            QHash<QString, SyncPosition> requests;
+            const QHash<QString, SyncPosition> allRequests = s.snapshotRequests();
+            for (auto it = allRequests.cbegin(); it != allRequests.cend(); ++it) {
+                if (it.value().epoch >= cursor.epoch) {
+                    requests.insert(it.key(), it.value());
+                }
+            }
+            cursor.snapshotRequests = requests;
+
+            runOnWorker<SyncFolder::Error>(
+                [cursor](SyncWorker& worker) { return worker.writeCursor(cursor); },
+                [this, errDetail, wallNow](const SyncFolder::Error& error) {
+                    if (!error.ok()) {
+                        return finishCycle(statusFor(error), error.message);
+                    }
+                    m_cursorDirty = false;
+                    m_lastCursorWrittenMs = wallNow;
+                    finishCycle(Status::Error, errDetail);
+                });
+            return;
+        }
+        if (!adoption.device.isEmpty() && adoption.position.epoch > store().epoch()) {
+            SyncStore s = store();
+            if (!s.setSnapshotRequest(adoption.device, adoption.position)) {
+                return finishCycle(Status::Error, QStringLiteral("无法记录快照请求"));
+            }
+            m_cursorDirty = true;
+            const qint64 wallNow = wallClockMs();
+            SyncFiles::CursorFile cursor;
+            cursor.device = s.deviceId();
+            cursor.epoch = s.epoch();
+            cursor.writtenAtMs = wallNow;
+            cursor.applied = positionsInEpoch(s.peerCursors(), cursor.epoch);
+            QHash<QString, SyncPosition> requests;
+            const QHash<QString, SyncPosition> allRequests = s.snapshotRequests();
+            for (auto it = allRequests.cbegin(); it != allRequests.cend(); ++it) {
+                if (it.value().epoch >= cursor.epoch) {
+                    requests.insert(it.key(), it.value());
+                }
+            }
+            cursor.snapshotRequests = requests;
+
+            runOnWorker<SyncFolder::Error>(
+                [cursor](SyncWorker& worker) { return worker.writeCursor(cursor); },
+                [this, wallNow](const SyncFolder::Error& error) {
+                    if (!error.ok()) {
+                        return finishCycle(statusFor(error), error.message);
+                    }
+                    m_cursorDirty = false;
+                    m_lastCursorWrittenMs = wallNow;
+                    finishCycle(Status::WaitingForSnapshot,
+                                QStringLiteral("另一台设备恢复了备份，正在等它的数据传过来"));
+                });
+            return;
+        }
+        // 对方恢复了备份、新纪元的改动先到了，快照还在路上：这一轮什么都不应用，等快照。
         return finishCycle(Status::WaitingForSnapshot,
                            QStringLiteral("另一台设备恢复了备份，正在等它的数据传过来"));
     }
@@ -760,7 +852,14 @@ void SyncEngine::writeCursorStep()
     cursor.epoch = s.epoch();
     cursor.writtenAtMs = wallNow;
     cursor.applied = positionsInEpoch(s.peerCursors(), cursor.epoch);
-    cursor.snapshotRequests = positionsInEpoch(s.snapshotRequests(), cursor.epoch);
+    QHash<QString, SyncPosition> validRequests;
+    const QHash<QString, SyncPosition> allRequests = s.snapshotRequests();
+    for (auto it = allRequests.cbegin(); it != allRequests.cend(); ++it) {
+        if (it.value().epoch >= cursor.epoch) {
+            validRequests.insert(it.key(), it.value());
+        }
+    }
+    cursor.snapshotRequests = validRequests;
     runOnWorker<SyncFolder::Error>(
         [cursor](SyncWorker& worker) { return worker.writeCursor(cursor); },
         [this, wallNow](const SyncFolder::Error& error) {
@@ -803,14 +902,32 @@ void SyncEngine::afterSurvey(const SyncWorker::Survey& survey)
     // - 有设备请本机补（读到了本机的坏文件，或者本机的某一批它一直没收到）；
     // - 自上一份快照以来又写了很多批：有了新快照，这些旧改动文件才能删。
     bool needed = false;
+    QHash<QString, ServedRequestFingerprint> pendingFingerprints;
     for (const SyncWorker::PeerCursor& peer : survey.peers) {
-        if (!peer.present || peer.status != SyncFiles::ParseStatus::Ok || peer.cursor.epoch != epoch) {
+        if (!peer.present || peer.status != SyncFiles::ParseStatus::Ok
+            || !peer.cursor.snapshotRequests.contains(me)) {
             continue;
         }
         const SyncPosition request = peer.cursor.snapshotRequests.value(me);
-        // 请求的那一批本机确实写过，新快照才覆盖得到；写都没写过的（外部改坏的请求）不理，免得每次维护都重写快照。
-        if (request.epoch == epoch && request.seq > covered && request.seq <= written) {
-            needed = true;
+        if (request.epoch != epoch) {
+            continue;
+        }
+        if (peer.cursor.epoch == epoch) {
+            // 保留普通同 epoch 缺号请求规则：请求的序号本机确实写过，且大于当前快照覆盖序号
+            if (request.seq > covered && request.seq <= written) {
+                needed = true;
+            }
+        } else if (peer.cursor.epoch < epoch) {
+            // 单独允许 peer.cursor.epoch < 本机 epoch、request.epoch 等于本机 epoch、
+            // request.seq 在本机已写出范围内的恢复请求，即使 seq <= covered 也重写。
+            // 用内存记录每个 peer 已成功服务的请求指纹（cursor.writtenAtMs 和 request 位置），相同指纹不重复重写。
+            if (request.seq >= 0 && request.seq <= written) {
+                const ServedRequestFingerprint fp{peer.cursor.writtenAtMs, request};
+                if (m_servedSnapshotRequests.value(peer.device) != fp) {
+                    needed = true;
+                    pendingFingerprints.insert(peer.device, fp);
+                }
+            }
         }
     }
     int sinceSnapshot = 0;
@@ -826,16 +943,28 @@ void SyncEngine::afterSurvey(const SyncWorker::Survey& survey)
         return cleanupStep(survey);
     }
 
+    bool ok = false;
+    QString exportError;
+    const SyncBatch snapshotBatch = s.exportSnapshot(&ok, &exportError);
+    if (!ok) {
+        return finishCycle(Status::Error,
+                           exportError.isEmpty() ? QStringLiteral("导出追赶快照失败") : exportError);
+    }
+
     SyncFiles::SnapshotFile file;
-    file.batch = s.exportSnapshot();
+    file.batch = snapshotBatch;
     file.coveredSeq = written;
     file.writtenAtMs = wallClockMs();
     file.applied = positionsInEpoch(s.peerCursors(), epoch);
     runOnWorker<SyncWorker::WriteResult>(
         [file](SyncWorker& worker) { return worker.writeSnapshot(file); },
-        [this, survey](const SyncWorker::WriteResult& result) {
+        [this, survey, pendingFingerprints](const SyncWorker::WriteResult& result) {
             if (!result.error.ok()) {
                 return finishCycle(statusFor(result.error), result.error.message);
+            }
+            // 只在 writeSnapshot 成功后记录已成功服务的请求指纹
+            for (auto it = pendingFingerprints.cbegin(); it != pendingFingerprints.cend(); ++it) {
+                m_servedSnapshotRequests.insert(it.key(), it.value());
             }
             // 这份快照只是给落后的设备追赶、给旧文件兜底用的，不确认待发送的改动：
             // 已经跟上的设备不会读它，那些改动仍要照常写成改动文件发给它们。

@@ -939,6 +939,7 @@ QVariantMap KnowledgeGapService::getReminderSummary() const
     summary.insert(QStringLiteral("valid"), false);
     summary.insert(QStringLiteral("dueToday"), 0);
     summary.insert(QStringLiteral("overdue"), 0);
+    summary.insert(QStringLiteral("dueCount"), 0);
     summary.insert(QStringLiteral("unscheduled"), 0);
     summary.insert(QStringLiteral("openTotal"), 0);
     summary.insert(QStringLiteral("oldestOverdueDays"), 0);
@@ -982,6 +983,7 @@ QVariantMap KnowledgeGapService::getReminderSummary() const
 
     summary.insert(QStringLiteral("dueToday"), query.value(0).toInt());
     summary.insert(QStringLiteral("overdue"), query.value(1).toInt());
+    summary.insert(QStringLiteral("dueCount"), query.value(0).toInt() + query.value(1).toInt());
     summary.insert(QStringLiteral("unscheduled"), query.value(2).toInt());
     summary.insert(QStringLiteral("openTotal"), query.value(3).toInt());
 

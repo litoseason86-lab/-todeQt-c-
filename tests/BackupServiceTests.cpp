@@ -3,9 +3,14 @@
 #include <QFileInfo>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QScopeGuard>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QDataStream>
+#include <QCryptographicHash>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSqlDatabase>
 #include <QTemporaryDir>
 #include <QUuid>
@@ -16,6 +21,7 @@
 #include "../src/services/BackupService.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusTimer.h"
+#include "../src/services/SyncController.h"
 #include "../src/services/SyncSchema.h"
 #include "../src/services/TaskManager.h"
 
@@ -134,6 +140,13 @@ private slots:
     void backupRejectsRuntimeProtectedDestinations();
     void backupCapturesAllBusinessTables();
     void backupWorksUnderWalMode();
+    void oversizedBackupIsRejectedBeforeRestore_data();
+    void oversizedBackupIsRejectedBeforeRestore();
+    void boundedCopyPreservesDestinationAndAcceptsExactLimit();
+    void backupResourceShapeIsRejected_data();
+    void backupResourceShapeIsRejected();
+    void backupAcceptsCellExactlyAtBudget();
+    void backupPublicationRejectsUnrestorableLargeField();
     void corruptedBackupIsRejected();
     void backupMissingRequiredTableIsRejected();
     void backupMissingRequiredColumnIsRejected();
@@ -159,6 +172,10 @@ private slots:
     void restoreCreatesPreRestoreSnapshot();
     void restoreDropsForeignSettingKeysAndKeepsShortcutOverrides();
     void backupEmbedsOnlyOwnedSettingKeys();
+    void qt69BackupRestoresWithCurrentRuntime_data();
+    void qt69BackupRestoresWithCurrentRuntime();
+    void settingsScalarEncodingRemainsCompatible_data();
+    void settingsScalarEncodingRemainsCompatible();
     void settingsSnapshotSkipsForeignKeysAndApplyLeavesThemAlone();
     void nativeSettingsDoNotFallBackToGlobalDomain();
     void restoreRefusesOversizedSettingValue();
@@ -190,6 +207,9 @@ private slots:
     void autoBackupDisabledDoesNothing();
     void beforeSyncBackupHasItsOwnQuotaAndYieldsToOtherJobs();
     void shutdownWaitsForAsyncWorkers();
+    void restoreRejectsWhenPreparationCallbackFails();
+    void restoreSucceedsWhenNoPreparationCallbackRegistered();
+    void restoreSyncCompletedSignalSemanticsAndBranchCoverage();
 
 private:
     QString dbPath() const { return m_tempDir->filePath(QStringLiteral("pomodoro.db")); }
@@ -211,9 +231,196 @@ void BackupServiceTests::init()
 void BackupServiceTests::cleanup()
 {
     BackupService::instance()->m_afterRestoreValidationHookForTest = {};
+    BackupService::instance()->m_shutdownPrepared = false;
+    BackupService::instance()->setRestorePreparationCallback(nullptr);
     DatabaseManager::instance()->close();
     delete m_tempDir;
     m_tempDir = nullptr;
+}
+
+// 产品保证：检查信息及两种恢复入口都拒绝超限备份，不把体积检查遗漏在某个入口。
+void BackupServiceTests::oversizedBackupIsRejectedBeforeRestore_data()
+{
+    QTest::addColumn<QString>("entry");
+    QTest::newRow("inspect") << QStringLiteral("inspect");
+    QTest::newRow("sync") << QStringLiteral("sync");
+    QTest::newRow("async") << QStringLiteral("async");
+}
+
+// 产品保证：超限文件即使包含有效SQLite数据，也不会覆盖当前任务、偏好或消耗恢复点。
+void BackupServiceTests::oversizedBackupIsRejectedBeforeRestore()
+{
+    QFETCH(QString, entry);
+    QVERIFY(insertTask(QStringLiteral("备份任务")) > 0);
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("timer/workDuration"), 25);
+    settings.sync();
+    auto* backup = BackupService::instance();
+    QVERIFY(backup->createBackup(backupFile()));
+    QVERIFY(backup->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool());
+    QVERIFY(insertTask(QStringLiteral("恢复前保留任务")) > 0);
+    settings.setValue(QStringLiteral("timer/workDuration"), 40);
+    settings.sync();
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+    const auto snapshots = QDir(backupsDir()).entryList(QStringList{QStringLiteral("before-restore-*.tomatobackup")}, QDir::Files);
+    {
+        // 稀疏填充不分配同等物理磁盘；SQLite允许尾随零，因此失败不能被无效格式掩盖。
+        QFile file(backupFile());
+        QVERIFY(file.open(QIODevice::ReadWrite));
+        QVERIFY(file.resize(BackupOperations::kMaxBackupFileBytes + 1));
+        QVERIFY(file.size() > BackupOperations::kMaxBackupFileBytes);
+    }
+    QString reason;
+    if (entry == QStringLiteral("inspect")) {
+        const auto info = backup->readBackupInfo(backupFile());
+        QVERIFY(!info.value(QStringLiteral("valid")).toBool());
+        reason = info.value(QStringLiteral("reason")).toString();
+    } else {
+        QSignalSpy completed(backup, &BackupService::restoreCompleted);
+        if (entry == QStringLiteral("sync")) {
+            QVERIFY(!backup->restoreBackup(backupFile()));
+        } else {
+            backup->requestRestore(backupFile());
+            QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
+        }
+        QCOMPARE(completed.count(), 1);
+        QVERIFY(!completed.first().at(0).toBool());
+        reason = completed.first().at(1).toString();
+    }
+    QVERIFY2(reason.contains(QStringLiteral("预算")), qPrintable(reason));
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+    settings.sync();
+    QCOMPARE(settings.value(QStringLiteral("timer/workDuration")).toInt(), 40);
+    QCOMPARE(QDir(backupsDir()).entryList(QStringList{QStringLiteral("before-restore-*.tomatobackup")}, QDir::Files), snapshots);
+    QVERIFY(QDir(backupsDir()).entryList(QStringList{QStringLiteral(".restore-staging-*")}, QDir::Files | QDir::Hidden).isEmpty());
+}
+
+// 产品保证：有界复制失败保留旧目标，恰好达到边界的文件仍能完整原子替换。
+void BackupServiceTests::boundedCopyPreservesDestinationAndAcceptsExactLimit()
+{
+    const QString sourcePath = m_tempDir->filePath(QStringLiteral("copy-source"));
+    const QString destinationPath = m_tempDir->filePath(QStringLiteral("copy-target"));
+    {
+        QFile source(sourcePath);
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        QCOMPARE(source.write("123456789"), qint64(9));
+        QFile target(destinationPath);
+        QVERIFY(target.open(QIODevice::WriteOnly));
+        QCOMPARE(target.write("原有内容"), qint64(12));
+    }
+    const auto rejected = BackupOperations::atomicCopy(sourcePath, destinationPath, 8);
+    QVERIFY(!rejected.success);
+    QVERIFY(rejected.error.contains(QStringLiteral("预算")));
+    {
+        QFile target(destinationPath);
+        QVERIFY(target.open(QIODevice::ReadOnly));
+        QCOMPARE(target.readAll(), QByteArray("原有内容"));
+    }
+    QVERIFY(BackupOperations::atomicCopy(sourcePath, destinationPath, 9).success);
+    QFile target(destinationPath);
+    QVERIFY(target.open(QIODevice::ReadOnly));
+    QCOMPARE(target.readAll(), QByteArray("123456789"));
+}
+
+// 产品保证：预算覆盖跨表总行数、文本真实字节及BLOB，生成表达式不会作为普通数据执行。
+void BackupServiceTests::backupResourceShapeIsRejected_data()
+{
+    QTest::addColumn<QString>("kind");
+    for (const char* kind : {"rows", "text", "blob", "generated"}) {
+        QTest::newRow(kind) << QString::fromLatin1(kind);
+    }
+}
+
+// 产品保证：小于文件体积上限的合法SQLite仍须满足内部数据规模约束。
+void BackupServiceTests::backupResourceShapeIsRejected()
+{
+    QFETCH(QString, kind);
+    QVERIFY(insertTask(QStringLiteral("有效备份任务")) > 0);
+    auto* backup = BackupService::instance();
+    QVERIFY(backup->createBackup(backupFile()));
+    QVERIFY(backup->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool());
+    const QString connection = QStringLiteral("ResourceShape_") + QUuid::createUuid().toString();
+    const auto removeConnection = qScopeGuard([&] { QSqlDatabase::removeDatabase(connection); });
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery q(db);
+        if (kind == QStringLiteral("rows")) {
+            // 每张额外表单独未超限，合计超过上限；引号表名防止检查器拼SQL时漏转义。
+            QVERIFY(q.exec(QStringLiteral("CREATE TABLE \"audit\"\"rows\"(n INTEGER)")));
+            QVERIFY(q.exec(QStringLiteral("CREATE TABLE extra_rows(n INTEGER)")));
+            const qint64 half = BackupOperations::kMaxBackupRows / 2 + 1;
+            const QString fill = QStringLiteral("WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM rows WHERE n<%1) INSERT INTO %2 SELECT n FROM rows");
+            QVERIFY(q.exec(fill.arg(half).arg(QStringLiteral("\"audit\"\"rows\""))));
+            QVERIFY(q.exec(fill.arg(half).arg(QStringLiteral("extra_rows"))));
+            QVERIFY(q.exec(QStringLiteral("SELECT (SELECT count(*) FROM \"audit\"\"rows\") + (SELECT count(*) FROM extra_rows)")) && q.next());
+            QVERIFY(q.value(0).toLongLong() > BackupOperations::kMaxBackupRows);
+        } else if (kind == QStringLiteral("generated")) {
+            QVERIFY(q.exec(QStringLiteral("CREATE TABLE extra_generated(n INTEGER, computed INTEGER GENERATED ALWAYS AS (n+1) VIRTUAL)")));
+            QVERIFY(q.exec(QStringLiteral("INSERT INTO extra_generated(n) VALUES(1)")));
+        } else {
+            const QString expression = QStringLiteral("zeroblob(%1)").arg(BackupOperations::kMaxBackupCellBytes + 1);
+            if (kind == QStringLiteral("text")) {
+                QVERIFY(q.exec(QStringLiteral("UPDATE tasks SET notes=CAST(%1 AS TEXT)").arg(expression)));
+                // length(TEXT)遇NUL返回0，按字符计数的错误预算检查会被此数据绕过。
+                QVERIFY(q.exec(QStringLiteral("SELECT length(notes), length(CAST(notes AS BLOB)) FROM tasks")) && q.next());
+                QCOMPARE(q.value(0).toLongLong(), qint64(0));
+                QVERIFY(q.value(1).toLongLong() > BackupOperations::kMaxBackupCellBytes);
+            } else {
+                QVERIFY(q.exec(QStringLiteral("CREATE TABLE \"extra\"\"field\"(\"value\"\"bytes\" BLOB)")));
+                QVERIFY(q.exec(QStringLiteral("INSERT INTO \"extra\"\"field\" VALUES(%1)").arg(expression)));
+            }
+        }
+        db.close();
+    }
+    QVERIFY(QFileInfo(backupFile()).size() < BackupOperations::kMaxBackupFileBytes);
+    const auto info = backup->readBackupInfo(backupFile());
+    QVERIFY(!info.value(QStringLiteral("valid")).toBool());
+    const QString reason = info.value(QStringLiteral("reason")).toString();
+    QVERIFY2(reason.contains(kind == QStringLiteral("generated") ? QStringLiteral("生成列") : QStringLiteral("预算")), qPrintable(reason));
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+}
+
+// 产品保证：恰好达到字段字节上限的备份仍可检查，不能把包含NUL的文本误判为无数据。
+void BackupServiceTests::backupAcceptsCellExactlyAtBudget()
+{
+    QVERIFY(insertTask(QStringLiteral("边界任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    const QString connection = QStringLiteral("ResourceBoundary_") + QUuid::createUuid().toString();
+    const auto removeConnection = qScopeGuard([&] { QSqlDatabase::removeDatabase(connection); });
+    {
+        QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery q(db);
+        QVERIFY(q.exec(QStringLiteral("UPDATE tasks SET notes=CAST(zeroblob(%1) AS TEXT)").arg(BackupOperations::kMaxBackupCellBytes)));
+        db.close();
+    }
+    const auto info = BackupService::instance()->readBackupInfo(backupFile());
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
+}
+
+// 产品保证：不能成功发布本版本无法恢复的超限快照，失败保留上一次可恢复的文件。
+void BackupServiceTests::backupPublicationRejectsUnrestorableLargeField()
+{
+    QVERIFY(insertTask(QStringLiteral("原有备份任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    QByteArray original;
+    {
+        QFile file(backupFile());
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        original = file.readAll();
+    }
+    QVERIFY(!original.isEmpty());
+    QSqlQuery q(DatabaseManager::instance()->database());
+    QVERIFY(q.exec(QStringLiteral("UPDATE tasks SET notes=CAST(zeroblob(%1) AS TEXT)").arg(BackupOperations::kMaxBackupCellBytes + 1)));
+    q.finish();
+    QVERIFY(!BackupService::instance()->createBackup(backupFile()));
+    QVERIFY(BackupService::instance()->lastError().contains(QStringLiteral("预算")));
+    QFile file(backupFile());
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), original);
 }
 
 void BackupServiceTests::createBackupProducesSingleFileNoTemp()
@@ -1664,6 +1871,144 @@ void BackupServiceTests::restoreDropsForeignSettingKeysAndKeepsShortcutOverrides
 // 还会把它们原样写进应用自己的偏好，从此本应用不再跟随系统设置变化。
 // 测试走 ini 文件碰不到原生回退，所以直接把「外来键」写进 ini 来模拟那份列表。
 
+// 产品保证：实际旧SDK生成的备份在同步和异步入口都继续可恢复。
+void BackupServiceTests::qt69BackupRestoresWithCurrentRuntime_data()
+{
+    QTest::addColumn<bool>("asynchronous");
+    QTest::newRow("sync") << false;
+    QTest::newRow("async") << true;
+}
+
+// 产品保证：Qt6.9/旧实现生成的真实备份保留任务、专注和标量偏好，不被当前流版本误拒绝或改值。
+void BackupServiceTests::qt69BackupRestoresWithCurrentRuntime()
+{
+    QFETCH(bool, asynchronous);
+    const QString fixturePath = QFINDTESTDATA("fixtures/backup-qt690-cc58394.tomatobackup");
+    QFile fixture(fixturePath);
+    QVERIFY(fixture.open(QIODevice::ReadOnly));
+    QFile provenance(QFINDTESTDATA("fixtures/backup-qt690-cc58394.provenance.json"));
+    QVERIFY(provenance.open(QIODevice::ReadOnly));
+    const auto proof = QJsonDocument::fromJson(provenance.readAll()).object();
+    QCOMPARE(proof.value(QStringLiteral("qtVersion")).toString(), QStringLiteral("6.9.0"));
+    QCOMPARE(QCryptographicHash::hash(fixture.readAll(), QCryptographicHash::Sha256).toHex(),
+             proof.value(QStringLiteral("sha256")).toString().toLatin1());
+    fixture.close();
+    const auto settings = BackupOperations::readEmbeddedSettings(fixturePath);
+    QVERIFY2(settings.success, qPrintable(settings.error));
+    QCOMPARE(settings.values.value(QStringLiteral("appearance/compatBool")).metaType().id(), QMetaType::Bool);
+    QCOMPARE(settings.values.value(QStringLiteral("appearance/compatBool")).toBool(), true);
+    QCOMPARE(settings.values.value(QStringLiteral("appearance/compatInteger")).metaType().id(), QMetaType::LongLong);
+    QCOMPARE(settings.values.value(QStringLiteral("appearance/compatInteger")).toLongLong(), qlonglong(-1234567890123LL));
+    QCOMPARE(settings.values.value(QStringLiteral("appearance/compatReal")).toDouble(), 0.625);
+    QCOMPARE(settings.values.value(QStringLiteral("appearance/compatUnicode")).toString(), QStringLiteral("旧SDK学习👩‍💻\n虚构数据"));
+
+    auto* service = BackupService::instance();
+    const auto info = service->readBackupInfo(fixturePath);
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QCOMPARE(info.value(QStringLiteral("taskCount")).toInt(), 1);
+    QCOMPARE(info.value(QStringLiteral("sessionCount")).toInt(), 1);
+    // 当前库有不同任务/偏好，只有真实替换成功才能满足后续断言。
+    QVERIFY(insertTask(QStringLiteral("当前库应被替换的虚构任务")) > 0);
+    QSettings current(settingsPath(), QSettings::IniFormat);
+    current.setValue(QStringLiteral("focus/workMinutes"), 19);
+    current.sync();
+    QCOMPARE(current.value(QStringLiteral("focus/workMinutes")).toInt(), 19);
+    QSignalSpy completed(service, &BackupService::restoreCompleted);
+    if (asynchronous) {
+        service->requestRestore(fixturePath);
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 10000);
+    } else {
+        QVERIFY(service->restoreBackup(fixturePath));
+        QCOMPARE(completed.count(), 1);
+    }
+    QVERIFY2(completed.first().at(0).toBool(), qPrintable(completed.first().at(1).toString()));
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='Qt6.9虚构兼容任务'")), 1);
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE duration=1500")), 1);
+    current.sync();
+    QCOMPARE(current.value(QStringLiteral("focus/workMinutes")).toInt(), 37);
+    QCOMPARE(current.value(QStringLiteral("appearance/compatUnicode")).toString(), QStringLiteral("旧SDK学习👩‍💻\n虚构数据"));
+}
+
+// 产品保证：已支持的标量类型保持固定字节表示，不能随着构建SDK默认流版本漂移。
+void BackupServiceTests::settingsScalarEncodingRemainsCompatible_data()
+{
+    QTest::addColumn<QVariant>("value");
+    QTest::addColumn<QByteArray>("encoded");
+    QFile fixture(QFINDTESTDATA("fixtures/backup-settings-scalars.json"));
+    QVERIFY(fixture.open(QIODevice::ReadOnly));
+    const auto samples = QJsonDocument::fromJson(fixture.readAll()).object().value(QStringLiteral("samples")).toArray();
+    QCOMPARE(samples.size(), 9);
+    for (const QJsonValue& sample : samples) {
+        const auto row = sample.toObject();
+        const QString kind = row.value(QStringLiteral("kind")).toString();
+        const auto stored = row.value(QStringLiteral("value"));
+        QVariant value;
+        if (kind == QStringLiteral("bool")) value = stored.toBool();
+        else if (kind == QStringLiteral("int")) value = stored.toInt();
+        else if (kind == QStringLiteral("uint")) value = QVariant::fromValue(static_cast<uint>(stored.toDouble()));
+        else if (kind == QStringLiteral("longlong")) value = QVariant::fromValue(static_cast<qlonglong>(stored.toDouble()));
+        else if (kind == QStringLiteral("ulonglong")) value = QVariant::fromValue(stored.toString().toULongLong());
+        else if (kind == QStringLiteral("double")) value = stored.toDouble();
+        else value = stored.toString();
+        QTest::newRow(kind.toUtf8().constData()) << value << QByteArray::fromHex(row.value(QStringLiteral("hex")).toString().toLatin1());
+    }
+}
+
+// 产品保证：固定样本、受支持旧流版本与真实备份的编码/解码互相兼容，类型和值均保留。
+void BackupServiceTests::settingsScalarEncodingRemainsCompatible()
+{
+    QFETCH(QVariant, value);
+    QFETCH(QByteArray, encoded);
+    QVERIFY(!encoded.isEmpty());
+    // 用当前SDK的兼容编码器验证两代历史格式，不能称为实际运行过旧SDK。
+    QList<int> versions{QDataStream::Qt_6_7};
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+    versions.append(QDataStream::Qt_6_10);
+#endif
+    for (int version : versions) {
+        QByteArray bytes;
+        QDataStream writer(&bytes, QIODevice::WriteOnly);
+        writer.setVersion(version);
+        writer << value;
+        QCOMPARE(writer.status(), QDataStream::Ok);
+        QCOMPARE(bytes, encoded);
+    }
+    const QString key = QStringLiteral("appearance/encodingFixture");
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    settings.setValue(key, value);
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    QCOMPARE(settings.value(key).metaType().id(), value.metaType().id());
+    QVERIFY(insertTask(QStringLiteral("编码兼容任务")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    const QString connection = QStringLiteral("ScalarFixture_") + QUuid::createUuid().toString();
+    const auto removeConnection = qScopeGuard([&] { QSqlDatabase::removeDatabase(connection); });
+    {
+        auto db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        QSqlQuery q(db);
+        q.prepare(QStringLiteral("SELECT value FROM backup_settings WHERE key=:key"));
+        q.bindValue(QStringLiteral(":key"), key);
+        QVERIFY(q.exec() && q.next());
+        QCOMPARE(q.value(0).toByteArray(), encoded);
+        q.finish();
+        // 独立固定字节重新装入备份，不以同一写实现自证解码正确。
+        q.prepare(QStringLiteral("UPDATE backup_settings SET value=:value WHERE key=:key"));
+        q.bindValue(QStringLiteral(":value"), encoded);
+        q.bindValue(QStringLiteral(":key"), key);
+        QVERIFY(q.exec());
+        QCOMPARE(q.numRowsAffected(), 1);
+        q.finish();
+        db.close();
+    }
+    const auto restored = BackupOperations::readEmbeddedSettings(backupFile());
+    QVERIFY2(restored.success, qPrintable(restored.error));
+    QCOMPARE(restored.values.value(key).metaType().id(), value.metaType().id());
+    QCOMPARE(restored.values.value(key), value);
+}
+
 void BackupServiceTests::backupEmbedsOnlyOwnedSettingKeys()
 {
     {
@@ -1938,4 +2283,239 @@ void BackupServiceTests::commentedVirtualTableIsRejected()
     }
     QSqlDatabase::removeDatabase(connection);
     QVERIFY(!BackupService::instance()->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool());
+}
+
+void BackupServiceTests::restoreRejectsWhenPreparationCallbackFails()
+{
+    // 保证恢复意图准备回调拒绝时，同步 restoreBackup 与异步 requestRestore 均拒绝换库，原任务和偏好不变，不派发后台工作。
+    // 准备基线备份文件
+    QVERIFY(insertTask(QStringLiteral("备份里的原始任务")) > 0);
+    const QString backupPath = m_tempDir->filePath(QStringLiteral("prep_fail_test.tomatobackup"));
+    QVERIFY(BackupService::instance()->createBackup(backupPath));
+
+    // 在当前库修改数据和偏好
+    QVERIFY(insertTask(QStringLiteral("当前库的新任务")) > 0);
+    AppSettings::instance()->setWorkMinutes(45);
+    QCOMPARE(AppSettings::instance()->workMinutes(), 45);
+
+    // 真实 BackupService 同步/异步入口遇 sidecar 同名目录拒绝且原任务/偏好不变（用真实控制器回调）
+    SyncController controller(SyncController::Platform{});
+    BackupService::instance()->setRestorePreparationCallback([&controller](QString* err) {
+        return controller.prepareForRestore(err);
+    });
+
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalDir = dbPath + QStringLiteral(".sync-restore.json");
+    QVERIFY(QDir().mkdir(journalDir));
+
+    // 1. 同步 restoreBackup 入口验证
+    {
+        QSignalSpy spy(BackupService::instance(), &BackupService::restoreCompleted);
+        const bool ok = BackupService::instance()->restoreBackup(backupPath);
+        QVERIFY(!ok);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toBool(), false);
+        QVERIFY2(!BackupService::instance()->lastError().isEmpty(), "错误信息不应为空");
+
+        // 数据库与设置未被替换
+        QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='当前库的新任务'")), 1);
+        QCOMPARE(AppSettings::instance()->workMinutes(), 45);
+        QVERIFY(QFileInfo(journalDir).isDir());
+    }
+
+    // 2. 异步 requestRestore 入口验证
+    {
+        QSignalSpy spy(BackupService::instance(), &BackupService::restoreCompleted);
+        BackupService::instance()->requestRestore(backupPath);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toBool(), false);
+        QVERIFY2(!BackupService::instance()->lastError().isEmpty(), "错误信息不应为空");
+        QVERIFY(!BackupService::instance()->busy());
+
+        // 数据库与设置依然完整
+        QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='当前库的新任务'")), 1);
+        QCOMPARE(AppSettings::instance()->workMinutes(), 45);
+        QVERIFY(QFileInfo(journalDir).isDir());
+    }
+
+    QVERIFY(QDir(journalDir).removeRecursively());
+}
+
+void BackupServiceTests::restoreSucceedsWhenNoPreparationCallbackRegistered()
+{
+    // 保证未装配恢复意图回调时，BackupService 保持现有独立恢复能力，正常完成备份换库与设置恢复。
+    BackupService::instance()->setRestorePreparationCallback(nullptr);
+    QVERIFY(insertTask(QStringLiteral("独立测试任务")) > 0);
+    const QString backupPath = m_tempDir->filePath(QStringLiteral("standalone_test.tomatobackup"));
+    QVERIFY(BackupService::instance()->createBackup(backupPath));
+
+    QVERIFY(BackupService::instance()->restoreBackup(backupPath));
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='独立测试任务'")), 1);
+}
+
+void BackupServiceTests::restoreSyncCompletedSignalSemanticsAndBranchCoverage()
+{
+    // 保证 restoreSyncCompleted 内部信号在所有恢复入口与出口中具备精准语义：
+    // 1. 严格先于 UI restoreCompleted 发送；
+    // 2. 准备前拒绝绝不发送；
+    // 3. safeToResume 精确反映真实回滚/重开安全状态。
+
+    // 基线有效备份
+    QVERIFY(insertTask(QStringLiteral("基线任务")) > 0);
+    const QString validBackup = m_tempDir->filePath(QStringLiteral("sync_sem_valid.tomatobackup"));
+    QVERIFY(BackupService::instance()->createBackup(validBackup));
+
+    struct SignalTracker {
+        QList<QString> order;
+        bool lastSuccess = false;
+        bool lastSafe = false;
+    } tracker;
+
+    auto recordSignals = [&](QMetaObject::Connection& connSync, QMetaObject::Connection& connUi) {
+        tracker.order.clear();
+        connSync = connect(BackupService::instance(), &BackupService::restoreSyncCompleted,
+                           this, [&](bool success, bool safe) {
+            tracker.order.append(QStringLiteral("restoreSyncCompleted"));
+            tracker.lastSuccess = success;
+            tracker.lastSafe = safe;
+        });
+        connUi = connect(BackupService::instance(), &BackupService::restoreCompleted,
+                         this, [&](bool, const QString&) {
+            tracker.order.append(QStringLiteral("restoreCompleted"));
+        });
+    };
+
+    QMetaObject::Connection cSync;
+    QMetaObject::Connection cUi;
+
+    // 分支 1：准备前回调拒绝 -> 绝不发射 restoreSyncCompleted
+    {
+        recordSignals(cSync, cUi);
+        BackupService::instance()->setRestorePreparationCallback([](QString* err) {
+            if (err) *err = QStringLiteral("测试准备拒绝");
+            return false;
+        });
+        QVERIFY(!BackupService::instance()->restoreBackup(validBackup));
+        disconnect(cSync);
+        disconnect(cUi);
+        QCOMPARE(tracker.order.count(), 1);
+        QCOMPARE(tracker.order.first(), QStringLiteral("restoreCompleted"));
+    }
+
+    // 清除准备回调，后续测试走准入
+    BackupService::instance()->setRestorePreparationCallback(nullptr);
+
+    // 分支 2：同步入口 restoreBackup 成功 -> (true, true)
+    {
+        recordSignals(cSync, cUi);
+        QVERIFY(BackupService::instance()->restoreBackup(validBackup));
+        disconnect(cSync);
+        disconnect(cUi);
+        QCOMPARE(tracker.order.count(), 2);
+        QCOMPARE(tracker.order.at(0), QStringLiteral("restoreSyncCompleted"));
+        QCOMPARE(tracker.order.at(1), QStringLiteral("restoreCompleted"));
+        QCOMPARE(tracker.lastSuccess, true);
+        QCOMPARE(tracker.lastSafe, true);
+    }
+
+    // 分支 3：同步入口 restoreBackup 安装失败但安全回滚 -> (false, true)
+    {
+        recordSignals(cSync, cUi);
+        BackupService::instance()->m_forceRollbackCopyFailureForTest = false;
+        BackupService::instance()->m_afterRestoreValidationHookForTest = [&]() {
+            QDir dir(BackupService::instance()->backupsDirectory());
+            const QStringList tmps = dir.entryList(QStringList() << QStringLiteral(".restore-staging-*.tmp"), QDir::Files | QDir::Hidden);
+            for (const QString& f : tmps) {
+                const QString p = dir.filePath(f);
+                const QString conn = QStringLiteral("HookDrop_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+                {
+                    QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+                    db.setDatabaseName(p);
+                    if (db.open()) {
+                        QSqlQuery q(db);
+                        q.exec(QStringLiteral("PRAGMA user_version = 999"));
+                        db.close();
+                    }
+                }
+                QSqlDatabase::removeDatabase(conn);
+            }
+        };
+        const bool ok = BackupService::instance()->restoreBackup(validBackup);
+        disconnect(cSync);
+        disconnect(cUi);
+        QVERIFY(!ok);
+        QCOMPARE(tracker.order.count(), 2);
+        QCOMPARE(tracker.order.at(0), QStringLiteral("restoreSyncCompleted"));
+        QCOMPARE(tracker.order.at(1), QStringLiteral("restoreCompleted"));
+        QCOMPARE(tracker.lastSuccess, false);
+        QCOMPARE(tracker.lastSafe, true);
+    }
+
+    // 分支 4：异步入口 requestRestore 预检失败（未关库） -> (false, true)
+    {
+        const QString brokenBackup = m_tempDir->filePath(QStringLiteral("broken_preflight.tomatobackup"));
+        {
+            QFile f(brokenBackup);
+            QVERIFY(f.open(QIODevice::WriteOnly));
+            f.write("not a valid sqlite backup file");
+            f.close();
+        }
+        recordSignals(cSync, cUi);
+        QSignalSpy spy(BackupService::instance(), &BackupService::restoreCompleted);
+        BackupService::instance()->requestRestore(brokenBackup);
+        QVERIFY(spy.wait(10000));
+        disconnect(cSync);
+        disconnect(cUi);
+        QCOMPARE(tracker.order.count(), 2);
+        QCOMPARE(tracker.order.at(0), QStringLiteral("restoreSyncCompleted"));
+        QCOMPARE(tracker.order.at(1), QStringLiteral("restoreCompleted"));
+        QCOMPARE(tracker.lastSuccess, false);
+        QCOMPARE(tracker.lastSafe, true);
+    }
+
+    // 分支 5：异步入口 requestRestore 成功 -> (true, true)
+    {
+        recordSignals(cSync, cUi);
+        QSignalSpy spy(BackupService::instance(), &BackupService::restoreCompleted);
+        BackupService::instance()->requestRestore(validBackup);
+        QVERIFY(spy.wait(10000));
+        disconnect(cSync);
+        disconnect(cUi);
+        QCOMPARE(tracker.order.count(), 2);
+        QCOMPARE(tracker.order.at(0), QStringLiteral("restoreSyncCompleted"));
+        QCOMPARE(tracker.order.at(1), QStringLiteral("restoreCompleted"));
+        QCOMPARE(tracker.lastSuccess, true);
+        QCOMPARE(tracker.lastSafe, true);
+    }
+
+    // 分支 6：异步入口 requestRestore 回滚失败 -> (false, false)
+    {
+        const QString settingsFile = m_tempDir->filePath(QStringLiteral("sem_settings.ini"));
+        BackupService::instance()->configure(settingsFile, backupsDir());
+        auto guard = qScopeGuard([&]() {
+            BackupService::instance()->configure(settingsPath(), backupsDir());
+        });
+        {
+            QSettings seed(settingsFile, QSettings::IniFormat);
+            seed.setValue(QStringLiteral("backup/seed"), 1);
+            seed.sync();
+        }
+        QVERIFY(QFile::setPermissions(settingsFile, QFileDevice::ReadOwner));
+        BackupService::instance()->m_forceRollbackCopyFailureForTest = true;
+
+        recordSignals(cSync, cUi);
+        QSignalSpy spy(BackupService::instance(), &BackupService::restoreCompleted);
+        BackupService::instance()->requestRestore(validBackup);
+        QVERIFY(spy.wait(10000));
+        disconnect(cSync);
+        disconnect(cUi);
+
+        QVERIFY(QFile::setPermissions(settingsFile, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+        QCOMPARE(tracker.order.count(), 2);
+        QCOMPARE(tracker.order.at(0), QStringLiteral("restoreSyncCompleted"));
+        QCOMPARE(tracker.order.at(1), QStringLiteral("restoreCompleted"));
+        QCOMPARE(tracker.lastSuccess, false);
+        QCOMPARE(tracker.lastSafe, false);
+    }
 }

@@ -27,6 +27,20 @@ void PendingDeletion::setDelayMs(int delayMs)
     emit delayMsChanged();
 }
 
+void PendingDeletion::setAutomaticCommitSuspended(bool suspended)
+{
+    if (m_automaticCommitSuspended == suspended) {
+        return;
+    }
+    m_automaticCommitSuspended = suspended;
+    if (suspended) {
+        m_timer.stop();
+    } else if (active()) {
+        // 恢复完整撤销窗口，不能让读屏结束后的剩余时间短到无法操作；沿用这次请求的时长。
+        m_timer.start(m_activeDelayMs);
+    }
+}
+
 bool PendingDeletion::requestTask(int taskId, const QString& title)
 {
     if (taskId <= 0) {
@@ -40,7 +54,10 @@ bool PendingDeletion::requestTask(int taskId, const QString& title)
     m_sessionId = -1;
     m_sessionIsRest = false;
     m_title = title;
-    m_timer.start(m_delayMs);
+    m_activeDelayMs = m_delayMs;
+    if (!m_automaticCommitSuspended) {
+        m_timer.start(m_activeDelayMs);
+    }
     emit changed();
     return true;
 }
@@ -57,7 +74,10 @@ bool PendingDeletion::requestSession(int sessionId, const QString& title, bool i
     m_sessionId = sessionId;
     m_sessionIsRest = isRest;
     m_title = title;
-    m_timer.start(m_delayMs);
+    m_activeDelayMs = m_delayMs;
+    if (!m_automaticCommitSuspended) {
+        m_timer.start(m_activeDelayMs);
+    }
     emit changed();
     return true;
 }

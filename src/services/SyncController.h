@@ -12,6 +12,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 
 // 设备间同步在应用里的总开关（050 阶段 4）。
 // 界面通过它开关同步、看状态、确认第一次加入、查同步日志；装配层（main.cpp）通过它把同步接到
@@ -87,9 +88,11 @@ public:
     // 来电横幅）：以前把它也当成后台，每切一下就单独写一批小文件（另一台每读一个约 1 秒），
     // 窗口还看得见时也停止读取对方的改动。
     void setApplicationState(Qt::ApplicationState state);
-    // 恢复备份开始前、结束后（接 BackupService 的 restoreStarted、restoreCompleted）。
-    void prepareForRestore();
-    void finishRestore(bool success);
+    // 恢复备份开始前、结束后（接 BackupService 的准备回调与 restoreSyncCompleted）。
+    bool prepareForRestore(QString* error = nullptr);
+    void finishRestore(bool success, bool safeToResume = true);
+    // 未确认的恢复意味着数据库与偏好可能不属于同一截面，自动永久清理也必须暂停。
+    bool isRestoreStateUncertain() const;
     // 退出前（aboutToQuit，必须排在关库之前）：把攒下的改动写出去，最多等 timeoutMs。
     void shutdown(int timeoutMs);
 
@@ -148,7 +151,7 @@ signals:
 private:
     void ensureEngine();
     void startEngine();
-    void setEnabledState(bool enabled);
+    bool setEnabledState(bool enabled);
     void setChoosingFolder(bool choosing, const QString& problem = QString());
     void checkChosenFolder(const QByteArray& bookmark, const QString& displayPath);
     std::unique_ptr<SyncFolder> makeFolder(const QByteArray& bookmark);
@@ -160,7 +163,7 @@ private:
     // 本机改了跟着同步的设置：逐项和库里记下的比，变了的记一个新版本、等着发出。
     void recordSettings();
     // 启动时（和恢复备份之后）核对：库里记下的和本机设置不一致的，以库里的为准写回；库里还没有的，记下本机的。
-    void reconcileSettings();
+    bool reconcileSettings();
 
     Platform m_platform;
     std::function<bool(QString*)> m_safetyBackup;
@@ -183,14 +186,64 @@ private:
     qint64 m_lastLogId = -1;
     int m_logRevision = 0;
 
+    enum class JournalReadResult {
+        NotFound,
+        Success,
+        Corrupt,
+    };
+
+    struct JournalData {
+        int v = 1;
+        QString operationId;
+        qint64 epoch = 0;
+        QString deviceId;
+        QString folderId;
+        QString phase; // "prepared" or "installed"
+        QString dbPath;
+    };
+
+    static JournalReadResult readJournalFile(const QString& journalPath, const QString& expectedDbPath,
+                                            JournalData* outData, QString* errorMessage);
+    static bool writeJournalFile(const QString& journalPath, const JournalData& data, QString* errorMessage);
+    static bool deleteJournalFileSafely(const QString& journalPath, const QString& expectedDbPath,
+                                        const QString& expectedOperationId, QString* errorMessage);
+
     // 恢复备份开始前记下的：恢复之后据此开新纪元，并保留本机的设备标识和加入的文件夹。
     struct RestoreState {
         bool pending = false;
         qint64 epoch = 0;
         QString deviceId;
         QString folderId;
+        QString operationId;
     };
     RestoreState m_restore;
+
+    // 恢复备份完成但新纪元建立或文件夹保留失败时暂存，用于 fail-closed 阻断与精确重试
+    struct RestoreRetryState {
+        QString phase; // "prepared" or "installed"
+        bool needsEpoch = false;
+        bool needsFolder = false;
+        bool needsSettings = false;
+        bool needsJournalWrite = false;
+        bool needsJournalDelete = false;
+        qint64 epoch = 0;
+        QString deviceId;
+        QString folderId;
+        QString operationId;
+
+        bool hasPending() const {
+            return needsEpoch || needsFolder || needsSettings || needsJournalWrite || needsJournalDelete || !phase.isEmpty();
+        }
+        void clear() { *this = {}; }
+    };
+    RestoreRetryState m_restoreRetry;
+    QString m_restoreError;
+    std::optional<JournalData> m_previousJournal;
+    bool m_journalCorrupted = false;
+    QString m_settingsError;
+    bool m_settingsRetryNeeded = false;
+
+    QString currentDatabasePath() const;
 };
 
 #endif // SYNCCONTROLLER_H

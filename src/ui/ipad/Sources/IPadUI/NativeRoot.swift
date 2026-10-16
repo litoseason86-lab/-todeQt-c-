@@ -18,6 +18,9 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         // 055-P3B：各页复用一份动作与撤销槽；每个 Store 独占自己的信号适配器，独立的 Qt 连接仍读取同一 C++ 服务。
         let tasks = TaskBridgeAdapter()
         let pending = PendingDeletionStore(bridge: PendingDeletionBridgeAdapter(), tasks: tasks, shell: store)
+        store.onAccessibilityTimeoutSuspensionChanged = { [weak pending] suspended in
+            pending?.setAutomaticCommitSuspended(suspended)
+        }
         let actions = TaskActions(tasks: tasks, pendingDeletion: pending, shell: store)
         store.taskActions = actions
         let logicalDay = LogicalDayBridgeAdapter()

@@ -1,0 +1,97 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "qt-local",
+      "hidden": true,
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "environment": {
+        "POMODORO_QT_SDK_ROOT": "$penv{HOME}/Qt/6.10.3"
+      }
+    },
+    {
+      "name": "mac-audit",
+      "displayName": "Mac 离屏审计（不部署）",
+      "inherits": "qt-local",
+      "generator": "Unix Makefiles",
+      "binaryDir": "$penv{HOME}/pt-audit",
+      "toolchainFile": "$env{POMODORO_QT_SDK_ROOT}/macos/lib/cmake/Qt6/qt.toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "POMODORO_TODO_DEPLOY_LOCAL": false
+      }
+    },
+    {
+      "name": "mac-deploy",
+      "displayName": "Mac 本机部署（须明确授权）",
+      "inherits": "qt-local",
+      "generator": "Unix Makefiles",
+      "binaryDir": "$penv{HOME}/pt-build",
+      "toolchainFile": "$env{POMODORO_QT_SDK_ROOT}/macos/lib/cmake/Qt6/qt.toolchain.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "POMODORO_TODO_DEPLOY_LOCAL": true
+      }
+    },
+    {
+      "name": "ios-audit",
+      "displayName": "iOS 不签名编译（不安装）",
+      "inherits": "qt-local",
+      "generator": "Xcode",
+      "binaryDir": "$penv{HOME}/pt-ios",
+      "toolchainFile": "$env{POMODORO_QT_SDK_ROOT}/ios/lib/cmake/Qt6/qt.toolchain.cmake",
+      "cacheVariables": {
+        "QT_HOST_PATH": "$env{POMODORO_QT_SDK_ROOT}/macos",
+        "POMODORO_TODO_DEPLOY_LOCAL": false
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "mac-audit",
+      "configurePreset": "mac-audit",
+      "jobs": 8
+    },
+    {
+      "name": "mac-deploy",
+      "configurePreset": "mac-deploy",
+      "targets": [
+        "deploy-local-app"
+      ],
+      "jobs": 8
+    },
+    {
+      "name": "ios-audit",
+      "configurePreset": "ios-audit",
+      "configuration": "Debug",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "mac-audit",
+      "configurePreset": "mac-audit",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "jobs": 8,
+        "timeout": 240,
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

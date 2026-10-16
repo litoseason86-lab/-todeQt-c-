@@ -323,6 +323,7 @@ Item {
             Button {
                 id: immersiveExitButton
                 objectName: "immersiveExitButton"
+                Accessible.name: qsTr("退出沉浸模式")
 
                 implicitWidth: 40
                 implicitHeight: Theme.controlHeightMd

@@ -16,10 +16,12 @@ TestCase {
     QtObject {
         id: taskManager
 
+        property var todayTasks: []
+
         signal tasksChanged
 
         function getTodayTasks() {
-            return [];
+            return todayTasks;
         }
 
         function getWeekTasks(weekStart) {
@@ -52,14 +54,23 @@ TestCase {
         property int minimumValidMinutes: 3
         property int completedPomodoros: 0
 
+        property int startCalls: 0
+        property int stopCalls: 0
+
         signal focusCompleted(int duration)
         signal phaseCompleted(int phase)
 
         function startFocus(id, title) {
+            startCalls++
+            isRunning = true
+            hasActiveSession = true
             return true;
         }
 
         function startPomodoroWork(id, title, workSeconds) {
+            startCalls++
+            isRunning = true
+            hasActiveSession = true
             return true;
         }
 
@@ -78,7 +89,31 @@ TestCase {
         }
 
         function stopFocus() {
+            stopCalls++
+            isRunning = false
+            hasActiveSession = false
             return true;
+        }
+    }
+
+    QtObject {
+        id: focusSessionControllerMock
+
+        property int endCurrentCalls: 0
+        property int endPomodoroCycleCalls: 0
+
+        function autoStartCandidate(taskId, taskTitle) {
+            return { id: 101, title: "今日专注任务", selectionStale: false }
+        }
+
+        function endCurrent() {
+            endCurrentCalls++
+            return { result: "ended", kind: "free", discarded: false, error: "" }
+        }
+
+        function endPomodoroCycle() {
+            endPomodoroCycleCalls++
+            return { result: "ended", kind: "pomodoro", discarded: false, error: "" }
         }
     }
 
@@ -285,13 +320,40 @@ TestCase {
         mainWindow.isSwitching = false;
         mainWindow.opacity = 1.0;
         mainWindow.focusImmersiveActive = false;
+        mainWindow.focusSessionControllerRef = null;
         appSettings.reduceMotion = false;
         appSettings.sidebarVisible = true;
         appSettings.reduceTransparency = false;
         appSettings.soundEnabled = true;
-        backupService.operationBlocksUi = false
-        backupService.operationText = ""
+        backupService.operationBlocksUi = false;
+        backupService.operationText = "";
+        taskManager.todayTasks = [];
+        focusTimer.isRunning = false;
+        focusTimer.hasActiveSession = false;
+        focusTimer.mode = 0;
+        focusTimer.phase = 0;
+        focusTimer.startCalls = 0;
+        focusTimer.stopCalls = 0;
+        focusSessionControllerMock.endCurrentCalls = 0;
+        focusSessionControllerMock.endPomodoroCycleCalls = 0;
         wait(20);
+    }
+
+    function cleanup() {
+        backupService.operationBlocksUi = false;
+        backupService.operationText = "";
+        mainWindow.focusSessionControllerRef = null;
+        taskManager.todayTasks = [];
+        focusTimer.isRunning = false;
+        focusTimer.hasActiveSession = false;
+        focusTimer.mode = 0;
+        focusTimer.phase = 0;
+        const todayTaskView = findChild(mainWindow, "todayTaskViewPage");
+        const addTaskDialog = findAddTaskDialog(todayTaskView);
+        if (addTaskDialog && addTaskDialog.visible) {
+            addTaskDialog.close();
+        }
+        mainWindow.focusImmersiveActive = false;
     }
 
     function test_reduceTransparencyStopsSidebarBackdrop() {
@@ -667,6 +729,190 @@ TestCase {
         tryCompare(mainWindow, "textInputFocused", false)
         tryCompare(instantiator.objectAt(1), "enabled", true)
     }
+
+    SignalSpy {
+        id: addTaskDialogSpy
+        signalName: "aboutToShow"
+    }
+
+    Timer {
+        id: loopDrainTimer
+        interval: 0
+        repeat: false
+        property int drainCount: 0
+        onTriggered: drainCount++
+    }
+
+    // 证明排在此之前的 Qt.callLater 已经出队并有机会执行：
+    // 通过 Qt.callLater 安排零间隔 Timer 触发，并用 tryCompare 等待 drainCount 递增。
+    // 由于 Qt 事件队列严格保证 FIFO 顺序，后置的 callLater 和零间隔 Timer 触发完成时，
+    // 前面被测代码派发的 callLater 回调必然已经出队执行完毕。
+    function flushCallLaterQueue() {
+        const expected = loopDrainTimer.drainCount + 1
+        Qt.callLater(function() {
+            loopDrainTimer.restart()
+        })
+        tryCompare(loopDrainTimer, "drainCount", expected, 2000)
+    }
+
+    function findAddTaskDialog(view) {
+        if (!view || !view.data) {
+            return null
+        }
+        for (let i = 0; i < view.data.length; i++) {
+            const d = view.data[i]
+            if (d && d.toString().indexOf("AddTaskDialog") >= 0) {
+                return d
+            }
+        }
+        return null
+    }
+
+    function test_z_callLaterSecondaryGuard_newTask() {
+        // 保证在快捷键分发新建任务后、Qt.callLater 回调执行前，若恢复操作阻断输入，
+        // 回调内部的二次守卫必须阻止打开新建任务对话框（写库入口）。
+        const todayTaskView = findChild(mainWindow, "todayTaskViewPage")
+        verify(todayTaskView)
+        const addTaskDialog = findAddTaskDialog(todayTaskView)
+        verify(addTaskDialog)
+
+        appSettings.reduceMotion = true
+        try {
+            addTaskDialogSpy.target = addTaskDialog
+            addTaskDialogSpy.clear()
+            compare(addTaskDialogSpy.count, 0)
+            compare(mainWindow.backupOperationBlocksInput, false)
+
+            // 分发快捷键，调度 Qt.callLater
+            mainWindow.triggerShortcutAction("task.new")
+
+            // 在 Qt.callLater 回调执行前注入恢复阻断
+            backupService.operationBlocksUi = true
+            tryCompare(mainWindow, "backupOperationBlocksInput", true)
+
+            // 证明前序 Qt.callLater 回调已从事件循环出队并有机会执行
+            flushCallLaterQueue()
+
+            // 断言：由于二次守卫拦截，新建对话框未被打开（可观察计数仍为 0）
+            compare(addTaskDialogSpy.count, 0, "二次守卫必须阻止新建任务对话框打开")
+        } finally {
+            backupService.operationBlocksUi = false
+            tryCompare(mainWindow, "backupOperationBlocksInput", false)
+            if (addTaskDialog.visible) {
+                addTaskDialog.close()
+            }
+        }
+    }
+
+    function test_z_callLaterSecondaryGuard_toggleFocus() {
+        // 保证在快捷键启动专注后、Qt.callLater 回调执行前，若恢复操作阻断输入，
+        // 回调内部的二次守卫必须阻止启动专注或改变计时状态。
+        const focusView = findChild(mainWindow, "focusViewPage")
+        verify(focusView)
+
+        appSettings.reduceMotion = true
+        mainWindow.focusSessionControllerRef = focusSessionControllerMock
+        try {
+            // 准备未完成任务候选，使 startFromShortcut 命中任务并启动计时
+            taskManager.todayTasks = [{ id: 101, title: "今日专注任务", completed: false, categoryId: 0 }]
+            focusTimer.startCalls = 0
+            focusTimer.hasActiveSession = false
+            focusTimer.isRunning = false
+            focusTimer.phase = 0
+            compare(mainWindow.backupOperationBlocksInput, false)
+
+            // 分发快捷键启动专注，调度 Qt.callLater
+            mainWindow.triggerShortcutAction("focus.toggle")
+
+            // 在 Qt.callLater 执行前注入恢复阻断
+            backupService.operationBlocksUi = true
+            tryCompare(mainWindow, "backupOperationBlocksInput", true)
+
+            // 证明前序 Qt.callLater 回调已从事件循环出队并有机会执行
+            flushCallLaterQueue()
+
+            // 断言：由于二次守卫拦截，专注计时器未被启动（可观察计数仍为 0）
+            compare(focusTimer.startCalls, 0, "二次守卫必须阻止专注启动改变计时器状态")
+        } finally {
+            mainWindow.focusSessionControllerRef = null
+            taskManager.todayTasks = []
+            backupService.operationBlocksUi = false
+            tryCompare(mainWindow, "backupOperationBlocksInput", false)
+        }
+    }
+
+    function test_z_callLaterSecondaryGuard_stopFocus() {
+        // 保证在快捷键结束专注后、Qt.callLater 回调执行前，若恢复操作阻断输入，
+        // 回调内部的二次守卫必须阻止结束专注或改变计时状态。
+        appSettings.reduceMotion = true
+        mainWindow.focusSessionControllerRef = focusSessionControllerMock
+        try {
+            focusSessionControllerMock.endCurrentCalls = 0
+            focusSessionControllerMock.endPomodoroCycleCalls = 0
+            focusTimer.hasActiveSession = true
+            focusTimer.isRunning = true
+            focusTimer.mode = 0 // 自由模式
+            focusTimer.phase = 1
+            compare(mainWindow.backupOperationBlocksInput, false)
+
+            // 分发快捷键结束专注，调度 Qt.callLater
+            mainWindow.triggerShortcutAction("focus.stop")
+
+            // 在 Qt.callLater 执行前注入恢复阻断
+            backupService.operationBlocksUi = true
+            tryCompare(mainWindow, "backupOperationBlocksInput", true)
+
+            // 证明前序 Qt.callLater 回调已从事件循环出队并有机会执行
+            flushCallLaterQueue()
+
+            // 断言：由于二次守卫拦截，控制器结束调用未被执行（可观察计数仍为 0）
+            compare(focusSessionControllerMock.endCurrentCalls, 0, "二次守卫必须阻止结束专注写库")
+            compare(focusSessionControllerMock.endPomodoroCycleCalls, 0, "二次守卫必须阻止结束专注写库")
+        } finally {
+            mainWindow.focusSessionControllerRef = null
+            focusTimer.hasActiveSession = false
+            focusTimer.isRunning = false
+            focusTimer.phase = 0
+            backupService.operationBlocksUi = false
+            tryCompare(mainWindow, "backupOperationBlocksInput", false)
+        }
+    }
+
+    function test_z_callLaterSecondaryGuard_longFreeFocusStop() {
+        // 保证在长自由专注结束请求后、Qt.callLater 回调执行前，若恢复操作阻断输入，
+        // 回调内部的二次守卫必须阻止结束长自由专注。
+        appSettings.reduceMotion = true
+        mainWindow.focusSessionControllerRef = focusSessionControllerMock
+        try {
+            focusSessionControllerMock.endCurrentCalls = 0
+            focusTimer.hasActiveSession = true
+            focusTimer.isRunning = true
+            focusTimer.mode = 0
+            focusTimer.phase = 1
+            compare(mainWindow.backupOperationBlocksInput, false)
+
+            // 触发长自由专注结束，调度 Qt.callLater
+            mainWindow.requestLongFreeFocusStop()
+
+            // 在 Qt.callLater 执行前注入恢复阻断
+            backupService.operationBlocksUi = true
+            tryCompare(mainWindow, "backupOperationBlocksInput", true)
+
+            // 证明前序 Qt.callLater 回调已从事件循环出队并有机会执行
+            flushCallLaterQueue()
+
+            // 断言：由于二次守卫拦截，控制器结束调用未被执行（可观察计数仍为 0）
+            compare(focusSessionControllerMock.endCurrentCalls, 0, "二次守卫必须阻止长自由专注结束写库")
+        } finally {
+            mainWindow.focusSessionControllerRef = null
+            focusTimer.hasActiveSession = false
+            focusTimer.isRunning = false
+            focusTimer.phase = 0
+            backupService.operationBlocksUi = false
+            tryCompare(mainWindow, "backupOperationBlocksInput", false)
+        }
+    }
+
 
     MemoServiceMock { id: memoService }
     MemoCategoryMock { id: memoCategories }

@@ -414,7 +414,13 @@ Item {
         // 新建任务对话框属于今日任务页；先切页再打开，避免在统计页这类无关页面上
         // 弹出一个没有上下文的输入框。切页可能带淡入淡出，用 callLater 等它落定。
         root.switchToView("today")
-        Qt.callLater(function() { todayTaskView.openAddTaskDialog() })
+        Qt.callLater(function() {
+            // 调度到回调执行期间可能恰逢恢复临界区，二次守卫阻止打开写库对话框。
+            if (root.backupOperationBlocksInput) {
+                return
+            }
+            todayTaskView.openAddTaskDialog()
+        })
     }
 
     function openShortcutSettings() {
@@ -445,6 +451,10 @@ Item {
         // 于是快捷键把人送到一个做不到该动作的页面——那是一条死路。
         root.switchToView("focus")
         Qt.callLater(function () {
+            // 延迟调度期间若数据库进入恢复临界区，阻断启动计时与写库操作。
+            if (root.backupOperationBlocksInput) {
+                return
+            }
             if (!focusView.startFromShortcut() && focusView.shortcutOpenedSelector) {
                 root.showToast("今天还没有可以开始的任务，挑一条或新建一个")
             }
@@ -465,6 +475,10 @@ Item {
         root.focusImmersiveActive = false
         root.switchToView("focus")
         Qt.callLater(function() {
+            // 延迟调度期间若数据库进入恢复临界区，阻断结束专注与写库操作。
+            if (root.backupOperationBlocksInput) {
+                return
+            }
             if (focusView.state === "manualRest") {
                 focusView.endManualRest()
             } else if (focusView.pomodoroModeSelected) {
@@ -568,7 +582,13 @@ Item {
         root.focusImmersiveActive = false
         root.switchToView("focus")
         // 弹窗状态属于 FocusView；菜单栏只传递“用户要结束”这一意图。
-        Qt.callLater(focusView.endFreeFocus)
+        // 回调执行时重新检查数据库恢复阻断，避免在临界区内结束计时与写库。
+        Qt.callLater(function() {
+            if (root.backupOperationBlocksInput) {
+                return
+            }
+            focusView.endFreeFocus()
+        })
     }
 
     // 在其它页面原地结束计时期间为真（仪表盘「结束」、完成正在计时的任务）。

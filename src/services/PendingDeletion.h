@@ -67,6 +67,10 @@ public:
     bool active() const { return m_taskId > 0 || m_sessionId > 0; }
     int delayMs() const { return m_delayMs; }
     void setDelayMs(int delayMs);
+    // 读屏开启时暂停自动提交计时，避免提示条未读完但待删项已自动落库导致撤销失效。
+    // 默认不暂停；解除后使用请求时长；显式提交规则不变。
+    // 开启期间新请求也保持暂停，显式 commit/cancel 语义不变。
+    Q_INVOKABLE void setAutomaticCommitSuspended(bool suspended);
 
     // 请求删除一条任务/一条专注或休息记录（isRest 为真是休息记录）。
     // 编号不大于 0 直接返回 false，不改任何状态、不发信号。
@@ -97,6 +101,8 @@ private:
     bool m_sessionIsRest = false;
     QString m_title;
     int m_delayMs = 5000;
+    bool m_automaticCommitSuspended = false;
+    int m_activeDelayMs = 5000;
     // 正在自己的 commit() 里触库：deleteTask 会同步发 taskDeleted，那一发要忽略。
     bool m_committing = false;
 };

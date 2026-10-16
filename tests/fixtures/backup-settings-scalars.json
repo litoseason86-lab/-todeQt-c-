@@ -1,0 +1,50 @@
+{
+  "description": "格式1标量编码的固定合成夹具，独立按大端QVariant结构构造；不是用户历史备份。由兼容测试对Qt6.7/6.10编码和实际备份读写交叉核对。",
+  "samples": [
+    {
+      "kind": "bool",
+      "value": true,
+      "hex": "000000010001"
+    },
+    {
+      "kind": "int",
+      "value": 25,
+      "hex": "000000020000000019"
+    },
+    {
+      "kind": "uint",
+      "value": 4000000000,
+      "hex": "0000000300ee6b2800"
+    },
+    {
+      "kind": "longlong",
+      "value": -1234567890123,
+      "hex": "0000000400fffffee08e04fb35"
+    },
+    {
+      "kind": "ulonglong",
+      "value": "18446744073709551600",
+      "hex": "0000000500fffffffffffffff0"
+    },
+    {
+      "kind": "double",
+      "value": 0.625,
+      "hex": "00000006003fe4000000000000"
+    },
+    {
+      "kind": "empty",
+      "value": "",
+      "hex": "0000000a0000000000"
+    },
+    {
+      "kind": "unicode",
+      "value": "学习👩‍💻\n第二行",
+      "hex": "0000000a00000000165b664e60d83ddc69200dd83ddcbb000a7b2c4e8c884c"
+    },
+    {
+      "kind": "embedded_nul",
+      "value": "前\u0000后",
+      "hex": "0000000a0000000006524d0000540e"
+    }
+  ]
+}

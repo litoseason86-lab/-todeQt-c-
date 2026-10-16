@@ -9,6 +9,7 @@ import IPadCore
     var error: Error?
     var commitError: Error?
     var calls: [(name: String, id: Int, title: String, isRest: Bool)] = []
+    var automaticCommitSuspensions: [Bool] = []
     func requestTask(id: Int, title: String) throws {
         calls.append(("requestTask", id, title, false)); if let error { throw error }
         // 真实 PendingDeletion 的新请求先提交旧槽，不能让旧提示的退场回调提交新槽。
@@ -26,4 +27,5 @@ import IPadCore
         if let commitError { onCommitFailed?(title); throw commitError }
     }
     func cancel() { calls.append(("cancel", -1, "", false)); state = PendingDeletionState(); onChanged?() }
+    func setAutomaticCommitSuspended(_ suspended: Bool) { automaticCommitSuspensions.append(suspended) }
 }

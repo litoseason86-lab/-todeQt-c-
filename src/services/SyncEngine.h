@@ -228,6 +228,17 @@ private:
     QHash<QString, qint64> m_gapSinceMs;
     // 已经记过日志的坏快照：同一份每轮都会读到，只记一次。
     QSet<QString> m_loggedBadFiles;
+    // 已成功响应并写出快照的请求指纹（游标时间戳与请求位置），避免对同一个游标请求在每轮维护重复重写快照
+    struct ServedRequestFingerprint {
+        qint64 writtenAtMs = 0;
+        SyncPosition position;
+        bool operator==(const ServedRequestFingerprint& other) const
+        {
+            return writtenAtMs == other.writtenAtMs && position == other.position;
+        }
+        bool operator!=(const ServedRequestFingerprint& other) const { return !(*this == other); }
+    };
+    QHash<QString, ServedRequestFingerprint> m_servedSnapshotRequests;
     qint64 m_lastPublishMs = -1;
     qint64 m_lastScanMs = -1;
     qint64 m_retryAtMs = 0;

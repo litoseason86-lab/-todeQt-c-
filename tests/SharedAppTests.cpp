@@ -127,7 +127,14 @@ private slots:
     void applicationIdentityAndDatabasePathContract();
     void crossServiceSignalsWiring();
     void logicalDayAndDatabaseChangesMaintainDailyData();
+    void restoreUsesRestoredDayBoundaryBeforePurgingTrash_data();
+    void restoreUsesRestoredDayBoundaryBeforePurgingTrash();
+    void unsafeRestoreKeepsMaintenanceBlockedUntilSafeCompletion();
+    void interruptedRestoreKeepsTrashAfterRestart_data();
+    void interruptedRestoreKeepsTrashAfterRestart();
     void syncClipboardCopyWiring();
+    void sharedAppWiresBackupServicePreparationCallbackToSyncController();
+    void sharedAppRestoreFailureSafetyClassificationWiringAndLifecycle();
 
 private:
     QTemporaryDir m_preferences;
@@ -172,6 +179,7 @@ void SharedAppTests::init()
     timer->setManualRestAllowed(true);
     m_clock.ns = 1000000000;
     timer->m_clock = &m_clock;
+    BackupService::instance()->m_shutdownPrepared = false;
 }
 
 void SharedAppTests::cleanup()
@@ -184,6 +192,8 @@ void SharedAppTests::cleanup()
     timer->setApplicationActivity(nullptr);
     timer->setManualRestAllowed(true);
     TrashService::instance()->setNowForTesting({});
+    BackupService::instance()->setRestorePreparationCallback(nullptr);
+    BackupService::instance()->m_shutdownPrepared = false;
     DatabaseManager::instance()->close();
     m_tempDir.reset();
 }
@@ -551,6 +561,169 @@ void SharedAppTests::logicalDayAndDatabaseChangesMaintainDailyData()
     QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 0);
 }
 
+// 产品保证：同步与异步恢复都必须先恢复备份日界，再按同一口径判断废纸篓是否已满保留期。
+void SharedAppTests::restoreUsesRestoredDayBoundaryBeforePurgingTrash_data()
+{
+    // 产品保证：同步与异步恢复入口都在设置安装完成后才清理废纸篓。
+    QTest::addColumn<bool>("asynchronous");
+    QTest::newRow("synchronous") << false;
+    QTest::newRow("asynchronous") << true;
+}
+
+// 产品保证：恢复时仍剩一个逻辑日的项目不被旧设置提前清掉，已经满期的项目仍会正常清理。
+void SharedAppTests::restoreUsesRestoredDayBoundaryBeforePurgingTrash()
+{
+    QFETCH(bool, asynchronous);
+    auto* backup = BackupService::instance();
+    const QString previousSettingsPath = backup->m_settingsFilePath;
+    const QString previousBackupsDir = backup->m_backupsDir;
+    const auto restoreConfiguration = qScopeGuard([=] {
+        backup->configure(previousSettingsPath, previousBackupsDir);
+    });
+    backup->configure(QString(), m_tempDir->filePath(QStringLiteral("isolated-backups")));
+
+    const QDateTime now(QDate(2026, 11, 1), QTime(2, 0));
+    const QDateTime protectedDeletion(QDate(2026, 10, 2), QTime(12, 0));
+    const QDateTime expiredDeletion(QDate(2026, 10, 1), QTime(12, 0));
+    // 两套日界对同一条记录必须确实得出不同结果；只注入服务时钟，不改系统时间。
+    QCOMPARE(LogicalDay::dateOf(protectedDeletion, 4).daysTo(LogicalDay::dateOf(now, 4)), 29);
+    QCOMPARE(LogicalDay::dateOf(expiredDeletion, 4).daysTo(LogicalDay::dateOf(now, 4)), 30);
+    QCOMPARE(LogicalDay::dateOf(protectedDeletion, 0).daysTo(LogicalDay::dateOf(now, 0)), 30);
+    TrashService::instance()->setNowForTesting(now);
+    AppSettings::instance()->setDayStartHour(4);
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 4);
+
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    SharedApp app(options);
+    QVERIFY(app.openDatabase());
+    app.startDay();
+    const QList<QPair<QString, QDateTime>> cases = {
+        {QStringLiteral("保留期内"), protectedDeletion},
+        {QStringLiteral("确实到期"), expiredDeletion}
+    };
+    for (const auto& item : cases) {
+        const int taskId = TaskManager::instance()->createTask(item.first, QDate(2026, 10, 2), -1, 0, QString());
+        QVERIFY(taskId > 0);
+        QVERIFY(TaskManager::instance()->deleteTask(taskId));
+        QSqlQuery stamp(DatabaseManager::instance()->database());
+        stamp.prepare(QStringLiteral("UPDATE trash_items SET deleted_at=:deleted WHERE title=:title"));
+        stamp.bindValue(QStringLiteral(":deleted"), item.second.toUTC().toString(Qt::ISODateWithMs));
+        stamp.bindValue(QStringLiteral(":title"), item.first);
+        QVERIFY(stamp.exec());
+        QCOMPARE(stamp.numRowsAffected(), 1);
+    }
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 2);
+    const QString backupPath = m_tempDir->filePath(QStringLiteral("logical-day.tomatobackup"));
+    QVERIFY(backup->createBackup(backupPath));
+    AppSettings::instance()->setDayStartHour(0);
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 0);
+
+    QSignalSpy completed(backup, &BackupService::restoreCompleted);
+    QVERIFY(completed.isValid());
+    if (asynchronous) {
+        backup->requestRestore(backupPath);
+        QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 10000);
+    } else {
+        QVERIFY(backup->restoreBackup(backupPath));
+        QCOMPARE(completed.count(), 1);
+    }
+    QVERIFY2(completed.first().at(0).toBool(), qPrintable(completed.first().at(1).toString()));
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 4);
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE title='保留期内'")).toInt(), 1);
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE title='确实到期'")).toInt(), 0);
+}
+
+// 产品保证：恢复中或不安全失败后不自动清理，外部拒绝通知不解除保护，安全完成后恢复正常维护。
+void SharedAppTests::unsafeRestoreKeepsMaintenanceBlockedUntilSafeCompletion()
+{
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    SharedApp app(options);
+    QVERIFY(app.openDatabase());
+    app.startDay();
+    const int taskId = TaskManager::instance()->createTask(QStringLiteral("恢复保护中的到期项"), QDate(2026, 10, 2), -1, 0, QString());
+    QVERIFY(taskId > 0);
+    QVERIFY(TaskManager::instance()->deleteTask(taskId));
+    QVERIFY(executeSql(QStringLiteral("UPDATE trash_items SET deleted_at='2000-01-01T12:00:00.000Z'")));
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+
+    auto* backup = BackupService::instance();
+    // 这里只验证装配对恢复分类信号的响应；两条完整恢复链由相邻数据驱动用例覆盖。
+    emit backup->restoreStarted();
+    QVERIFY(DatabaseManager::instance()->initialize(m_testDbPath));
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+    emit backup->restoreCompleted(false, QStringLiteral("另一次请求被拒绝"));
+    QVERIFY(DatabaseManager::instance()->initialize(m_testDbPath));
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+
+    emit backup->restoreSyncCompleted(false, false);
+    auto* boundary = LogicalDayService::instance()->findChild<QTimer*>(QStringLiteral("logicalDayBoundaryTimer"));
+    QVERIFY(boundary != nullptr);
+    QVERIFY(QMetaObject::invokeMethod(boundary, "timeout", Qt::DirectConnection));
+    QVERIFY(DatabaseManager::instance()->initialize(m_testDbPath));
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+
+    emit backup->restoreSyncCompleted(false, true);
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 0);
+}
+
+// 产品保证：未确认完成或日志损坏的恢复在重启后也不能按旧日界提前永久删除项目。
+void SharedAppTests::interruptedRestoreKeepsTrashAfterRestart_data()
+{
+    QTest::addColumn<bool>("corruptJournal");
+    QTest::newRow("prepared") << false;
+    QTest::newRow("corrupt") << true;
+}
+
+// 产品保证：恢复保护跨控制器和数据库重建保留，日界维护也不能绕过未完成恢复。
+void SharedAppTests::interruptedRestoreKeepsTrashAfterRestart()
+{
+    QFETCH(bool, corruptJournal);
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    const QString folder = m_tempDir->filePath(QStringLiteral("interrupted-sync"));
+    const QString journalPath = m_testDbPath + QStringLiteral(".sync-restore.json");
+    TrashService::instance()->setNowForTesting(QDateTime(QDate(2026, 11, 1), QTime(2, 0)));
+    AppSettings::instance()->setDayStartHour(4);
+    {
+        SharedApp before(options);
+        QVERIFY(before.openDatabase());
+        before.setUpSync(makeTestPlatform(folder));
+        const int id = TaskManager::instance()->createTask(QStringLiteral("恢复中断保留项"), QDate(2026, 10, 2), -1, 0, QString());
+        QVERIFY(id > 0);
+        QVERIFY(TaskManager::instance()->deleteTask(id));
+        QSqlQuery stamp(DatabaseManager::instance()->database());
+        stamp.prepare(QStringLiteral("UPDATE trash_items SET deleted_at=:deleted"));
+        stamp.bindValue(QStringLiteral(":deleted"), QDateTime(QDate(2026, 10, 2), QTime(12, 0)).toUTC().toString(Qt::ISODateWithMs));
+        QVERIFY(stamp.exec());
+        QCOMPARE(stamp.numRowsAffected(), 1);
+        QString error;
+        QVERIFY2(before.services().syncController()->prepareForRestore(&error), qPrintable(error));
+        QVERIFY(QFileInfo::exists(journalPath));
+        // 模拟进程在换库后、备份设置尚未安装的持久化截面；不调用完成通知，不伪造成功。
+        AppSettings::instance()->setDayStartHour(0);
+        QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+    }
+    DatabaseManager::instance()->close();
+    if (corruptJournal) {
+        QFile journal(journalPath);
+        QVERIFY(journal.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(journal.write("{"), qint64(1));
+    }
+    SharedApp restarted(options);
+    QVERIFY(restarted.openDatabase());
+    restarted.setUpSync(makeTestPlatform(folder));
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 0);
+    restarted.startDay();
+    QVERIFY(restarted.services().syncController()->hasProblem());
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+    auto* boundary = LogicalDayService::instance()->findChild<QTimer*>(QStringLiteral("logicalDayBoundaryTimer"));
+    QVERIFY(boundary != nullptr);
+    QVERIFY(QMetaObject::invokeMethod(boundary, "timeout", Qt::DirectConnection));
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+}
+
 void SharedAppTests::syncClipboardCopyWiring()
 {
     // 保证在 Mac 和 iOS 选项下，通过 SyncController 发起复制请求，系统剪贴板均能同步更新为待复制文本。
@@ -594,6 +767,262 @@ void SharedAppTests::syncClipboardCopyWiring()
         app.services().syncController()->copyLostValue(QStringLiteral("ios_lost_conflict_value"));
         QCOMPARE(QGuiApplication::clipboard()->text(), QStringLiteral("ios_lost_conflict_value"));
     }
+}
+
+void SharedAppTests::sharedAppWiresBackupServicePreparationCallbackToSyncController()
+{
+    // 保证 SharedApp 正确装配 BackupService 的恢复意图准备回调至 SyncController，在真实恢复链路中拦截 sidecar 冲突，且使用弱引用在控制器销毁后安全返回拒绝。
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    auto app = std::make_unique<SharedApp>(options);
+    QVERIFY(app->openDatabase());
+    const QString syncFolder = m_tempDir->filePath(QStringLiteral("shared_prep_sync"));
+    app->setUpSync(makeTestPlatform(syncFolder));
+
+    SyncController* controller = app->services().syncController();
+    QVERIFY(controller != nullptr);
+
+    // 创建基线备份文件
+    const QString backupPath = m_tempDir->filePath(QStringLiteral("shared_test.tomatobackup"));
+    QVERIFY(BackupService::instance()->createBackup(backupPath));
+
+    // 1. 制造 sidecar 目录占位，走真实 BackupService::restoreBackup 链路测试
+    const QString journalDir = m_testDbPath + QStringLiteral(".sync-restore.json");
+    QVERIFY(QDir().mkdir(journalDir));
+
+    {
+        QSignalSpy spy(BackupService::instance(), &BackupService::restoreCompleted);
+        const bool ok = BackupService::instance()->restoreBackup(backupPath);
+        QVERIFY(!ok);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toBool(), false);
+        QVERIFY2(!BackupService::instance()->lastError().isEmpty(), "错误信息不应为空");
+        QVERIFY(QFileInfo(journalDir).isDir());
+    }
+    QVERIFY(QDir(journalDir).removeRecursively());
+
+    // 2. 销毁 app 从而释放 SyncController
+    app.reset();
+
+    // 验证控制器销毁后，真实 restoreBackup 链路安全返回拒绝且给出控制器已失效报错
+    {
+        QSignalSpy spy(BackupService::instance(), &BackupService::restoreCompleted);
+        const bool ok = BackupService::instance()->restoreBackup(backupPath);
+        QVERIFY(!ok);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.first().at(0).toBool(), false);
+        QVERIFY(BackupService::instance()->lastError().contains(QStringLiteral("同步控制器已失效")));
+    }
+}
+
+void SharedAppTests::sharedAppRestoreFailureSafetyClassificationWiringAndLifecycle()
+{
+    // 保证在 SharedApp 真实装配下：
+    // 1. 回滚失败 (safeToResume=false) 发射 restoreSyncCompleted(false, false) 且早于 restoreCompleted，
+    //    SyncController 保持 prepared 日志阻断且跨重启仍阻断，syncNow 无法绕过；
+    // 2. 安全回滚 (safeToResume=true) 发射 restoreSyncCompleted(false, true)，清理日志并恢复引擎；
+    // 3. 准备前与忙碌拒绝不发射 restoreSyncCompleted，不破坏现有阻断状态。
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    auto app = std::make_unique<SharedApp>(options);
+    QVERIFY(app->openDatabase());
+    const QString syncFolder = m_tempDir->filePath(QStringLiteral("shared_safety_sync"));
+    app->setUpSync(makeTestPlatform(syncFolder));
+
+    SyncController* controller = app->services().syncController();
+    QVERIFY(controller != nullptr);
+    controller->initialize();
+    controller->setEnabled(true);
+    QVERIFY(waitIdle(controller->engine()));
+
+    const QString backupPath = m_tempDir->filePath(QStringLiteral("shared_safety_test.tomatobackup"));
+    QVERIFY(BackupService::instance()->createBackup(backupPath));
+
+    const QString journalPath = m_testDbPath + QStringLiteral(".sync-restore.json");
+
+    // 子场景 1：干净状态下的安全回滚 (safeToResume = true)
+    // 利用 validationHook 在校验后破坏暂存副本，使安装校验失败并触发完整安全回滚
+    BackupService::instance()->configure(QString(), m_tempDir->filePath(QStringLiteral("backups")));
+    BackupService::instance()->m_forceRollbackCopyFailureForTest = false;
+    BackupService::instance()->m_afterRestoreValidationHookForTest = [&]() {
+        QDir dir(BackupService::instance()->backupsDirectory());
+        const QStringList tmps = dir.entryList(QStringList() << QStringLiteral(".restore-staging-*.tmp"), QDir::Files | QDir::Hidden);
+        for (const QString& f : tmps) {
+            const QString p = dir.filePath(f);
+            const QString conn = QStringLiteral("HookDrop_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+            {
+                QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+                db.setDatabaseName(p);
+                if (db.open()) {
+                    QSqlQuery q(db);
+                    q.exec(QStringLiteral("PRAGMA user_version = 999"));
+                    db.close();
+                }
+            }
+            QSqlDatabase::removeDatabase(conn);
+        }
+    };
+
+    QList<QString> signalOrder;
+    bool syncCompletedSuccess = true;
+    bool syncCompletedSafe = false;
+
+    auto connSync = connect(BackupService::instance(), &BackupService::restoreSyncCompleted,
+                            this, [&](bool success, bool safeToResume) {
+        signalOrder.append(QStringLiteral("restoreSyncCompleted"));
+        syncCompletedSuccess = success;
+        syncCompletedSafe = safeToResume;
+    });
+    auto connUi = connect(BackupService::instance(), &BackupService::restoreCompleted,
+                          this, [&](bool, const QString&) {
+        signalOrder.append(QStringLiteral("restoreCompleted"));
+    });
+
+    const bool restoreOk = BackupService::instance()->restoreBackup(backupPath);
+    QVERIFY(!restoreOk);
+
+    disconnect(connSync);
+    disconnect(connUi);
+
+    // 断言 1：信号发射顺序与参数（restoreSyncCompleted 先于 restoreCompleted）
+    QCOMPARE(signalOrder.count(), 2);
+    QCOMPARE(signalOrder.at(0), QStringLiteral("restoreSyncCompleted"));
+    QCOMPARE(signalOrder.at(1), QStringLiteral("restoreCompleted"));
+    QCOMPARE(syncCompletedSuccess, false);
+    QCOMPARE(syncCompletedSafe, true);
+
+    // 断言 2：安全回滚后 prepared 日志已被删除，引擎恢复运行，无 problem
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QVERIFY(!controller->hasProblem());
+    QVERIFY(controller->engine() && controller->engine()->isRunning());
+
+    // 子场景 2：回滚失败导致 safeToResume = false
+    // 设置文件只读触发安装校验失败，配合 m_forceRollbackCopyFailureForTest 强制回滚拷贝失败
+    const QString settingsFile = QDir(m_tempDir->path()).filePath(QStringLiteral("settings.ini"));
+    BackupService::instance()->configure(settingsFile, m_tempDir->filePath(QStringLiteral("backups")));
+    auto configGuard = qScopeGuard([]() {
+        BackupService::instance()->configure(QString(), QString());
+    });
+    {
+        QSettings seed(settingsFile, QSettings::IniFormat);
+        seed.setValue(QStringLiteral("backup/seed"), 1);
+        seed.sync();
+    }
+    QVERIFY(QFile::setPermissions(settingsFile, QFileDevice::ReadOwner));
+    BackupService::instance()->m_forceRollbackCopyFailureForTest = true;
+
+    signalOrder.clear();
+    connSync = connect(BackupService::instance(), &BackupService::restoreSyncCompleted,
+                       this, [&](bool success, bool safeToResume) {
+        signalOrder.append(QStringLiteral("restoreSyncCompleted"));
+        syncCompletedSuccess = success;
+        syncCompletedSafe = safeToResume;
+    });
+    connUi = connect(BackupService::instance(), &BackupService::restoreCompleted,
+                     this, [&](bool, const QString&) {
+        signalOrder.append(QStringLiteral("restoreCompleted"));
+    });
+
+    QSignalSpy uiSpy(BackupService::instance(), &BackupService::restoreCompleted);
+    BackupService::instance()->requestRestore(backupPath);
+    if (uiSpy.isEmpty()) {
+        QVERIFY2(uiSpy.wait(10000), qPrintable(QStringLiteral("异步恢复未在 10 秒内结束，lastError=%1, busy=%2, dbOpen=%3, spyCount=%4")
+            .arg(BackupService::instance()->lastError())
+            .arg(BackupService::instance()->busy())
+            .arg(DatabaseManager::instance()->isOpen())
+            .arg(uiSpy.count())));
+    }
+
+    disconnect(connSync);
+    disconnect(connUi);
+
+    // 恢复文件权限
+    QVERIFY(QFile::setPermissions(settingsFile, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+
+    QCOMPARE(signalOrder.count(), 2);
+    QCOMPARE(signalOrder.at(0), QStringLiteral("restoreSyncCompleted"));
+    QCOMPARE(signalOrder.at(1), QStringLiteral("restoreCompleted"));
+    QCOMPARE(syncCompletedSuccess, false);
+    QCOMPARE(syncCompletedSafe, false);
+
+    // 断言：SyncController 保持阻断，磁盘保留 prepared 日志
+    QVERIFY(controller->hasProblem());
+    QVERIFY(!controller->engine() || !controller->engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    // 断言：同进程 syncNow 无法解除阻断
+    controller->syncNow();
+    QVERIFY(controller->hasProblem());
+    QVERIFY(!controller->engine() || !controller->engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    // 断言：重建控制器重启应用，依然受 prepared 日志阻断
+    {
+        SyncController restartedController(makeTestPlatform(syncFolder));
+        restartedController.initialize();
+        QVERIFY(restartedController.hasProblem());
+        QVERIFY(!restartedController.engine() || !restartedController.engine()->isRunning());
+    }
+
+    // 子场景 3：已有 prepared 阻断下第二次恢复失败但安全回滚，写回旧 prepared 日志继续阻断
+    BackupService::instance()->configure(QString(), m_tempDir->filePath(QStringLiteral("backups")));
+    BackupService::instance()->m_forceRollbackCopyFailureForTest = false;
+    BackupService::instance()->m_afterRestoreValidationHookForTest = [&]() {
+        QDir dir(BackupService::instance()->backupsDirectory());
+        const QStringList tmps = dir.entryList(QStringList() << QStringLiteral(".restore-staging-*.tmp"), QDir::Files | QDir::Hidden);
+        for (const QString& f : tmps) {
+            const QString p = dir.filePath(f);
+            const QString conn = QStringLiteral("HookDrop2_") + QUuid::createUuid().toString(QUuid::WithoutBraces);
+            {
+                QSqlDatabase db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), conn);
+                db.setDatabaseName(p);
+                if (db.open()) {
+                    QSqlQuery q(db);
+                    q.exec(QStringLiteral("PRAGMA user_version = 999"));
+                    db.close();
+                }
+            }
+            QSqlDatabase::removeDatabase(conn);
+        }
+    };
+
+    signalOrder.clear();
+    connSync = connect(BackupService::instance(), &BackupService::restoreSyncCompleted,
+                       this, [&](bool success, bool safeToResume) {
+        signalOrder.append(QStringLiteral("restoreSyncCompleted"));
+        syncCompletedSuccess = success;
+        syncCompletedSafe = safeToResume;
+    });
+    connUi = connect(BackupService::instance(), &BackupService::restoreCompleted,
+                     this, [&](bool, const QString&) {
+        signalOrder.append(QStringLiteral("restoreCompleted"));
+    });
+
+    const bool restoreOk2 = BackupService::instance()->restoreBackup(backupPath);
+    QVERIFY(!restoreOk2);
+
+    disconnect(connSync);
+    disconnect(connUi);
+
+    QCOMPARE(signalOrder.count(), 2);
+    QCOMPARE(signalOrder.at(0), QStringLiteral("restoreSyncCompleted"));
+    QCOMPARE(signalOrder.at(1), QStringLiteral("restoreCompleted"));
+    QCOMPARE(syncCompletedSuccess, false);
+    QCOMPARE(syncCompletedSafe, true);
+
+    // 因为先前已有未确认的 prepared 日志，即使本次回滚成功，仍写回前次 prepared 日志并保持阻断
+    QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY(controller->hasProblem());
+    QVERIFY(!controller->engine() || !controller->engine()->isRunning());
+
+    // 子场景 4：准备前拒绝不发射 restoreSyncCompleted
+    QSignalSpy syncSpy4(BackupService::instance(), &BackupService::restoreSyncCompleted);
+    BackupService::instance()->setRestorePreparationCallback([](QString* err) {
+        if (err) *err = QStringLiteral("测试准备拒绝");
+        return false;
+    });
+    QVERIFY(!BackupService::instance()->restoreBackup(backupPath));
+    QCOMPARE(syncSpy4.count(), 0);
 }
 
 QTEST_MAIN(SharedAppTests)

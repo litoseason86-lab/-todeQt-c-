@@ -1,4 +1,5 @@
 #include "IosSyncFolder.h"
+#include "../../services/SyncFiles.h"
 
 #include "../apple/AppleUbiquitousItem.h"
 
@@ -234,8 +235,14 @@ QStringList IosSyncFolder::list(const QString& relativeDir, Error* error)
 bool IosSyncFolder::read(const QString& relativePath, QByteArray* data, Error* error)
 {
     @autoreleasepool {
+        const qint64 budget = SyncFiles::maxBudgetForPath(relativePath);
+        if (budget <= 0) {
+            setError(error, {ErrorKind::Io, QStringLiteral("拒绝读取未知同步文件: %1").arg(relativePath)});
+            return false;
+        }
         __block NSData* content = nil;
         __block NSError* readError = nil;
+        __block bool exceededBudget = false;
         NSError* coordinationError = nil;
         NSFileCoordinator* coordinator = d->beginCoordination();
         [coordinator coordinateReadingItemAtURL:d->urlFor(relativePath)
@@ -243,12 +250,32 @@ bool IosSyncFolder::read(const QString& relativePath, QByteArray* data, Error* e
                                           error:&coordinationError
                                      byAccessor:^(NSURL* newURL) {
             NSError* localError = nil;
+            // 在分配 NSData 之前通过文件属性检查大小，超出预算时直接拒绝，防止极端大文件耗尽内存
+            NSDictionary<NSFileAttributeKey, id>* attrs =
+                [[NSFileManager defaultManager] attributesOfItemAtPath:newURL.path error:&localError];
+            if (attrs != nil) {
+                const unsigned long long fileSize = [attrs fileSize];
+                if (fileSize > static_cast<unsigned long long>(budget)) {
+                    exceededBudget = true;
+                    return;
+                }
+            }
             content = [NSData dataWithContentsOfURL:newURL options:0 error:&localError];
             readError = localError;
         }];
         d->endCoordination();
+        if (exceededBudget) {
+            setError(error, {ErrorKind::Io, QStringLiteral("文件大小超出预算上限: %1").arg(relativePath)});
+            return false;
+        }
         if (coordinationError != nil || content == nil) {
             setError(error, errorFrom(coordinationError ?: readError, QStringLiteral("读不出 %1").arg(relativePath)));
+            return false;
+        }
+        // 二次防御：在 NSData 读取成功后追加实际 content.length 检查，
+        // 保证在属性检查失效（attrs 为 nil）或读取过程中文件并发增长时同样阻断
+        if (static_cast<qint64>(content.length) > budget) {
+            setError(error, {ErrorKind::Io, QStringLiteral("文件大小超出预算上限: %1").arg(relativePath)});
             return false;
         }
         *data = QByteArray::fromNSData(content);

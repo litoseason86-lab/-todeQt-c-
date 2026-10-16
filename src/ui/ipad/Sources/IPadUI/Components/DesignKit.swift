@@ -9,6 +9,44 @@ enum Design {
     static func pagePadding(compact: Bool) -> CGFloat { compact ? 16 : 32 }
 }
 
+// 基准字号保持定稿外观；相对文本角色决定系统大字号下的缩放曲线。
+private func scaledFontTextStyle(for size: CGFloat) -> Font.TextStyle {
+    switch size {
+    case ...11: return .caption2
+    case ...12: return .caption
+    case ...13: return .footnote
+    case ...15: return .subheadline
+    case ...17: return .body
+    case ...20: return .title3
+    case ...24: return .title2
+    case ...28: return .title
+    default: return .largeTitle
+    }
+}
+
+private struct ScaledSystemFont: ViewModifier {
+    @ScaledMetric private var size: CGFloat
+    let weight: Font.Weight
+    let design: Font.Design
+
+    init(size: CGFloat, weight: Font.Weight, design: Font.Design) {
+        _size = ScaledMetric(wrappedValue: size, relativeTo: scaledFontTextStyle(for: size))
+        self.weight = weight
+        self.design = design
+    }
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: size, weight: weight, design: design))
+    }
+}
+
+extension View {
+    func scaledSystemFont(size: CGFloat, weight: Font.Weight = .regular,
+                          design: Font.Design = .default) -> some View {
+        modifier(ScaledSystemFont(size: size, weight: weight, design: design))
+    }
+}
+
 // 白卡片：定稿 .card（#fffef9、圆角 18、0 1px 3px 的浅投影）。
 struct DesignCard<Content: View>: View {
     var padding: EdgeInsets = EdgeInsets()
@@ -28,10 +66,10 @@ struct PageHeader: View {
     var subtitle: String = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 34, weight: .bold)).foregroundStyle(ThemeColors.inkStrong)
+            Text(title).scaledSystemFont(size: 34, weight: .bold).foregroundStyle(ThemeColors.inkStrong)
                 .accessibilityAddTraits(.isHeader)
             if !subtitle.isEmpty {
-                Text(subtitle).font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+                Text(subtitle).scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -42,7 +80,7 @@ struct PageHeader: View {
 struct SoftPillStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 14, weight: .semibold))
+            .scaledSystemFont(size: 14, weight: .semibold)
             .foregroundStyle(ThemeColors.accentFillInk)
             .padding(.horizontal, 14).frame(minHeight: 36)
             .background(ThemeColors.accentFill, in: Capsule())
@@ -55,7 +93,7 @@ struct SoftPillStyle: ButtonStyle {
 struct ProminentPillStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 15, weight: .semibold))
+            .scaledSystemFont(size: 15, weight: .semibold)
             .foregroundStyle(ThemeColors.surface)
             .padding(.horizontal, 16).frame(minHeight: 40)
             .background(ThemeColors.accentInk, in: Capsule())
@@ -69,7 +107,7 @@ struct AccentTextButtonStyle: ButtonStyle {
     var size: CGFloat = 14
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: size, weight: .semibold))
+            .scaledSystemFont(size: size, weight: .semibold)
             .foregroundStyle(ThemeColors.accentInk)
             .padding(.horizontal, 12).frame(minHeight: 36)
             .opacity(configuration.isPressed ? 0.6 : 1)
@@ -88,10 +126,20 @@ struct CardDivider: View {
 // 数字与单位混排：定稿里「1小时05分」「72天」数字大、单位小。只排版服务给出的数，不做换算。
 struct MixedNumberText: View {
     let parts: [(text: String, isNumber: Bool)]
-    var numberSize: CGFloat = 30
-    var unitSize: CGFloat = 15
+    @ScaledMetric private var numberSize: CGFloat
+    @ScaledMetric private var unitSize: CGFloat
     // 字色由调用方给：外层 foregroundStyle 盖不过这里，选中态要换色时必须传进来。
-    var color: Color = ThemeColors.inkStrong
+    var color: Color
+
+    init(parts: [(text: String, isNumber: Bool)],
+         numberSize: CGFloat = 30,
+         unitSize: CGFloat = 15,
+         color: Color = ThemeColors.inkStrong) {
+        self.parts = parts
+        _numberSize = ScaledMetric(wrappedValue: numberSize, relativeTo: scaledFontTextStyle(for: numberSize))
+        _unitSize = ScaledMetric(wrappedValue: unitSize, relativeTo: scaledFontTextStyle(for: unitSize))
+        self.color = color
+    }
     var body: some View {
         // iOS 26 已废弃 Text 的 + 拼接；用带字体属性的 AttributedString 拼成一个 Text。
         var string = AttributedString()
@@ -223,8 +271,8 @@ struct ToolbarTextLabel: View {
     let systemImage: String
     var body: some View {
         HStack(spacing: 5) {
-            Image(systemName: systemImage).font(.system(size: 15, weight: .medium))
-            Text(title).font(.system(size: 15, weight: .semibold))
+            Image(systemName: systemImage).scaledSystemFont(size: 15, weight: .medium)
+            Text(title).scaledSystemFont(size: 15, weight: .semibold)
         }
         .foregroundStyle(ThemeColors.accentInk)
         .padding(.horizontal, 4)
@@ -282,7 +330,7 @@ struct SelectionActionBar<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         HStack(spacing: 8) { content }
-            .padding(.horizontal, 14).frame(height: 64)
+            .padding(.horizontal, 14).frame(minHeight: 64)
             .background(ThemeColors.surface.opacity(0.94), in: Capsule())
             .shadow(color: ThemeColors.shadow.opacity(0.16), radius: 15, y: 12)
             .padding(.bottom, 12)
@@ -299,8 +347,8 @@ struct SelectionBarButton: View {
     var body: some View {
         Button(role: role, action: action) {
             VStack(spacing: 3) {
-                Image(systemName: systemImage).font(.system(size: 19, weight: .semibold))
-                Text(title).font(.system(size: 13, weight: .semibold))
+                Image(systemName: systemImage).scaledSystemFont(size: 19, weight: .semibold)
+                Text(title).scaledSystemFont(size: 13, weight: .semibold)
             }
             .frame(minWidth: 72, minHeight: 52)
             .contentShape(Rectangle())

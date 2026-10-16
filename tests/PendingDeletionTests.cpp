@@ -33,6 +33,11 @@ private slots:
     void sessionDeletionFollowsTheKind();
     void invalidRequestsChangeNothing();
     void delayMsIgnoresNonPositiveValuesAndOnlyAffectsTheNextRequest();
+    void suspendedAutomaticCommitKeepsAllKindsUntilExplicitCommit_data();
+    void suspendedAutomaticCommitKeepsAllKindsUntilExplicitCommit();
+    void suspendingActiveWindowRestartsItsOriginalDelayOnResume();
+    void cancelDuringSuspensionKeepsTaskWithoutRetired();
+    void secondRequestDuringSuspensionCommitsFirstAndHoldsSecond();
 
 private:
     QTemporaryDir* m_tempDir = nullptr;
@@ -414,6 +419,168 @@ void PendingDeletionTests::delayMsIgnoresNonPositiveValuesAndOnlyAffectsTheNextR
     QVERIFY(pending.requestTask(second, QStringLiteral("按新时长的任务")));
     QCOMPARE(rowCount(QStringLiteral("tasks"), first), 0);
     QTRY_COMPARE_WITH_TIMEOUT(rowCount(QStringLiteral("tasks"), second), 0, 2000);
+}
+
+// 产品保证：数据驱动覆盖任务、专注与休息三类待删项，隔离验证暂停行为在不同记录类型下一致。
+void PendingDeletionTests::suspendedAutomaticCommitKeepsAllKindsUntilExplicitCommit_data()
+{
+    QTest::addColumn<QString>("kind");
+    QTest::addColumn<QString>("table");
+
+    QTest::newRow("task") << QStringLiteral("task") << QStringLiteral("tasks");
+    QTest::newRow("focus") << QStringLiteral("focus") << QStringLiteral("focus_sessions");
+    QTest::newRow("rest") << QStringLiteral("rest") << QStringLiteral("rest_sessions");
+}
+
+// 产品保证：自动提交暂停时各类待删项（任务、专注记录、休息记录）在窗口期后均不自动删除，直到显式 commit 才真正落库并发出 retired。
+void PendingDeletionTests::suspendedAutomaticCommitKeepsAllKindsUntilExplicitCommit()
+{
+    QFETCH(QString, kind);
+    QFETCH(QString, table);
+
+    int id = -1;
+    if (kind == QStringLiteral("task")) {
+        id = makeTask(QStringLiteral("暂停待删任务"));
+    } else if (kind == QStringLiteral("focus")) {
+        id = insertFocusSession();
+    } else if (kind == QStringLiteral("rest")) {
+        id = insertRestSession();
+    }
+    QVERIFY(id > 0);
+    QCOMPARE(rowCount(table, id), 1);
+
+    PendingDeletion pending(TaskManager::instance(), FocusHistoryService::instance());
+    pending.setDelayMs(20);
+    pending.setAutomaticCommitSuspended(true);
+
+    QSignalSpy retiredSpy(&pending, &PendingDeletion::retired);
+    QSignalSpy failedSpy(&pending, &PendingDeletion::commitFailed);
+
+    if (kind == QStringLiteral("task")) {
+        QVERIFY(pending.requestTask(id, QStringLiteral("暂停待删任务")));
+    } else if (kind == QStringLiteral("focus")) {
+        QVERIFY(pending.requestSession(id, QStringLiteral("暂停待删专注"), false));
+    } else {
+        QVERIFY(pending.requestSession(id, QStringLiteral("暂停待删休息"), true));
+    }
+
+    // 等待 80ms 超过原 20ms 窗口，以证明自动提交被暂停阻断
+    QTest::qWait(80);
+    QCOMPARE(rowCount(table, id), 1);
+    QVERIFY(pending.active());
+    QCOMPARE(retiredSpy.count(), 0);
+
+    // 显式提交才真正执行数据库删除并发出退场通知
+    QVERIFY(pending.commit());
+    QCOMPARE(rowCount(table, id), 0);
+    QVERIFY(!pending.active());
+    QCOMPARE(retiredSpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 0);
+
+    // 空槽再次提交不重复发退场通知
+    QVERIFY(pending.commit());
+    QCOMPARE(retiredSpy.count(), 1);
+}
+
+// 产品保证：在撤销窗口进行中暂停能阻断自动提交；解除暂停后按原有窗口时长重启计时，且不被后续修改的 delayMs 干扰。
+void PendingDeletionTests::suspendingActiveWindowRestartsItsOriginalDelayOnResume()
+{
+    const int doomed = makeTask(QStringLiteral("进行中暂停任务"));
+    QVERIFY(doomed > 0);
+    QCOMPARE(rowCount(QStringLiteral("tasks"), doomed), 1);
+
+    PendingDeletion pending(TaskManager::instance(), FocusHistoryService::instance());
+    pending.setDelayMs(80);
+
+    QSignalSpy retiredSpy(&pending, &PendingDeletion::retired);
+    QSignalSpy failedSpy(&pending, &PendingDeletion::commitFailed);
+
+    QVERIFY(pending.requestTask(doomed, QStringLiteral("进行中暂停任务")));
+    pending.setAutomaticCommitSuspended(true);
+
+    // 撤销窗口为 80ms，等待 120ms 超过原窗口，以证明进行中暂停截停了自动落库
+    QTest::qWait(120);
+    QCOMPARE(rowCount(QStringLiteral("tasks"), doomed), 1);
+    QVERIFY(pending.active());
+
+    // 修改 delayMs 只应影响未来请求，解除暂停后必须沿用本次请求的原时长 80ms，不能缩短为 1ms
+    pending.setDelayMs(1);
+    pending.setAutomaticCommitSuspended(false);
+
+    auto* timer = pending.findChild<QTimer*>();
+    QVERIFY(timer != nullptr);
+    QCOMPARE(timer->interval(), 80);
+
+    // 恢复计时后在完整窗口期满时自动落库，且退场通知恰好触发一次
+    QTRY_COMPARE_WITH_TIMEOUT(rowCount(QStringLiteral("tasks"), doomed), 0, 3000);
+    QCOMPARE(retiredSpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 0);
+    QVERIFY(!pending.active());
+}
+
+// 产品保证：在自动提交暂停期间执行撤销，待删任务恢复可见且不触发退场信号。
+void PendingDeletionTests::cancelDuringSuspensionKeepsTaskWithoutRetired()
+{
+    const int doomed = makeTask(QStringLiteral("暂停撤销任务"));
+    QVERIFY(doomed > 0);
+    QCOMPARE(rowCount(QStringLiteral("tasks"), doomed), 1);
+
+    PendingDeletion pending(TaskManager::instance(), FocusHistoryService::instance());
+    pending.setDelayMs(20);
+    pending.setAutomaticCommitSuspended(true);
+
+    QSignalSpy retiredSpy(&pending, &PendingDeletion::retired);
+    QSignalSpy failedSpy(&pending, &PendingDeletion::commitFailed);
+
+    QVERIFY(pending.requestTask(doomed, QStringLiteral("暂停撤销任务")));
+    // 等待 80ms 超过原窗口，证明暂停生效且任务未被提前提交
+    QTest::qWait(80);
+    QCOMPARE(rowCount(QStringLiteral("tasks"), doomed), 1);
+    QVERIFY(pending.active());
+
+    pending.cancel();
+    QCOMPARE(rowCount(QStringLiteral("tasks"), doomed), 1);
+    QVERIFY(!pending.active());
+    QCOMPARE(retiredSpy.count(), 0);
+    QCOMPARE(failedSpy.count(), 0);
+}
+
+// 产品保证：自动提交暂停期间到来的新请求仍会立即提交上一项，新请求继续保留在槽中不自动超时。
+void PendingDeletionTests::secondRequestDuringSuspensionCommitsFirstAndHoldsSecond()
+{
+    const int first = makeTask(QStringLiteral("暂停第一个"));
+    const int second = makeTask(QStringLiteral("暂停第二个"));
+    QVERIFY(first > 0 && second > 0);
+    QCOMPARE(rowCount(QStringLiteral("tasks"), first), 1);
+    QCOMPARE(rowCount(QStringLiteral("tasks"), second), 1);
+
+    PendingDeletion pending(TaskManager::instance(), FocusHistoryService::instance());
+    pending.setDelayMs(20);
+    pending.setAutomaticCommitSuspended(true);
+
+    QSignalSpy retiredSpy(&pending, &PendingDeletion::retired);
+    QSignalSpy failedSpy(&pending, &PendingDeletion::commitFailed);
+
+    QVERIFY(pending.requestTask(first, QStringLiteral("暂停第一个")));
+    QCOMPARE(retiredSpy.count(), 0);
+
+    // 单槽语义要求新请求到来时先显式提交上一项，即便当前处于暂停状态
+    QVERIFY(pending.requestTask(second, QStringLiteral("暂停第二个")));
+    QCOMPARE(retiredSpy.count(), 1);
+    QCOMPARE(rowCount(QStringLiteral("tasks"), first), 0);
+    QCOMPARE(rowCount(QStringLiteral("tasks"), second), 1);
+    QCOMPARE(pending.taskId(), second);
+
+    // 等待 80ms 超过原窗口，证明第二个请求在暂停状态下依然不会自动提交
+    QTest::qWait(80);
+    QCOMPARE(rowCount(QStringLiteral("tasks"), second), 1);
+    QVERIFY(pending.active());
+    QCOMPARE(retiredSpy.count(), 1);
+    QCOMPARE(failedSpy.count(), 0);
+
+    pending.cancel();
+    QCOMPARE(rowCount(QStringLiteral("tasks"), second), 1);
+    QVERIFY(!pending.active());
 }
 
 QTEST_GUILESS_MAIN(PendingDeletionTests)

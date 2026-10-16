@@ -253,7 +253,7 @@ QJsonObject taskTitleInput(const QString& description)
     return SchemaBuilder::string()
         .minLength(1)
         .maxLength(kTaskTitleMaxLength)
-        .description(description + QStringLiteral("去除首尾空白后不能为空，最多 100 个 UTF-16 单元；多数 emoji 占两个单元。"))
+        .description(description + QStringLiteral("去除首尾空白后不能为空，单行且不能含控制字符；最多 100 个 UTF-16 单元，多数 emoji 占两个单元。"))
         .build();
 }
 
@@ -656,7 +656,7 @@ ToolContract createTaskContract()
                   SchemaBuilder::string()
                       .maxLength(kTaskNotesMaxLength)
                       .defaultValue(QString())
-                      .description(QStringLiteral("备注。"))
+                      .description(QStringLiteral("备注。允许换行和制表符，拒绝 NUL 等其它控制字符。"))
                       .build(),
                   Presence::Optional)
         .property(QStringLiteral("app_session_id"), sessionIdInput())
@@ -736,7 +736,7 @@ ToolContract updateTaskContract()
         .property(QStringLiteral("notes"),
                   SchemaBuilder::string()
                       .maxLength(kTaskNotesMaxLength)
-                      .description(QStringLiteral("新备注；空字符串清空。最多 2000 个 UTF-16 单元，多数 emoji 占两个单元。"))
+                      .description(QStringLiteral("新备注；空字符串清空。允许换行和制表符，拒绝 NUL 等其它控制字符。最多 2000 个 UTF-16 单元，多数 emoji 占两个单元。"))
                       .build(),
                   Presence::Optional)
         .closed()
@@ -1113,6 +1113,26 @@ void checkKnowledgeGapFilters(const QJsonObject& arguments, QList<FieldError>& e
 // 保留标准 schema 语义，再在调用服务前补齐业务边界，避免把输入错误误报为数据库故障。
 void checkTaskText(const QJsonObject& arguments, QList<FieldError>& errors)
 {
+    // 先检查原始输入，不能让 trimmed 隐藏前后控制字符。备注是多行文本，保留常用排版字符；
+    // Unicode 格式字符不属于这里的控制字符，emoji 的连接符也必须原样保留。
+    for (const QString& field : {QStringLiteral("title"), QStringLiteral("notes")}) {
+        const bool isNotes = field == QLatin1String("notes");
+        const QString text = arguments.value(field).toString();
+        for (const QChar character : text) {
+            if (isNotes && (character == QLatin1Char('\n') || character == QLatin1Char('\r')
+                            || character == QLatin1Char('\t'))) {
+                continue;
+            }
+            const auto category = character.category();
+            if (category == QChar::Other_Control
+                || (!isNotes && (category == QChar::Separator_Line || category == QChar::Separator_Paragraph))) {
+                errors.append({field, QStringLiteral("control_character"),
+                               isNotes ? QStringLiteral("备注包含不支持的控制字符；换行和制表符可以保留")
+                                       : QStringLiteral("标题必须是单行，不能包含控制字符")});
+                break;
+            }
+        }
+    }
     if (arguments.contains(QStringLiteral("title"))) {
         const QString title = arguments.value(QStringLiteral("title")).toString().trimmed();
         if (title.isEmpty())

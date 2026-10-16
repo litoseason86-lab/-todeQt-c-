@@ -6,7 +6,7 @@ struct StatisticsBarChart: View {
     let store: StatsStore
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("每日专注").font(.system(size: 16, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+            Text("每日专注").scaledSystemFont(size: 16, weight: .semibold).foregroundStyle(ThemeColors.inkStrong)
             StatisticsBarPlot(bars: store.snapshot.bars, store: store).equatable()
             if let label = store.selectedBarLabel, let selected = store.snapshot.bars.first(where: { $0.label == label }) {
                 Text(selected.date + " · " + StatisticsFormat.formatDuration(Double(selected.seconds))).font(.subheadline)
@@ -46,7 +46,7 @@ private struct StatisticsBarPlot: View, Equatable {
             AxisMarks(position: .leading, values: ticks) { value in
                 AxisGridLine().foregroundStyle(ThemeColors.borderSubtle)
                 AxisValueLabel {
-                    if let seconds = value.as(Int.self), seconds > 0 { Text("\(seconds / 3600)h").font(.system(size: 11)).foregroundStyle(ThemeColors.inkSoft) }
+                    if let seconds = value.as(Int.self), seconds > 0 { Text("\(seconds / 3600)h").scaledSystemFont(size: 11).foregroundStyle(ThemeColors.inkSoft) }
                 }
             }
         }
@@ -55,7 +55,7 @@ private struct StatisticsBarPlot: View, Equatable {
                 AxisValueLabel {
                     if let label = value.as(String.self) {
                         let today = todayLabels[label] == true
-                        Text(label).font(.system(size: 12, weight: today ? .bold : .regular))
+                        Text(label).scaledSystemFont(size: 12, weight: today ? .bold : .regular)
                             .foregroundStyle(today ? ThemeColors.accentInk : ThemeColors.inkSoft)
                     }
                 }
@@ -69,7 +69,7 @@ struct StatisticsPieChart: View {
     let store: StatsStore
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("科目分配").font(.system(size: 16, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+            Text("科目分配").scaledSystemFont(size: 16, weight: .semibold).foregroundStyle(ThemeColors.inkStrong)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 16) { StatisticsCategoryRing(store: store); StatisticsCategoryLegend(store: store) }
                 VStack(alignment: .leading, spacing: 16) { StatisticsCategoryRing(store: store).frame(maxWidth: .infinity); StatisticsCategoryLegend(store: store) }
@@ -105,7 +105,7 @@ private struct StatisticsCategoryRing: View {
         .chartBackground { _ in
             VStack(spacing: 3) {
                 Text(StatisticsFormat.formatDuration(Double(store.snapshot.categories.totalDuration)))
-                    .font(.system(size: 17, weight: .bold)).monospacedDigit().multilineTextAlignment(.center)
+                    .scaledSystemFont(size: 17, weight: .bold).monospacedDigit().multilineTextAlignment(.center)
                     .lineLimit(2).minimumScaleFactor(0.7)
                 Text("合计").font(.caption2).foregroundStyle(ThemeColors.inkMuted)
             }.frame(width: 80).allowsHitTesting(false)

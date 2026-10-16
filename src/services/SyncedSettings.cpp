@@ -51,17 +51,6 @@ QString periodsText(const QList<QPair<int, int>>& periods)
     return QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact));
 }
 
-QList<QPair<int, int>> currentPeriods()
-{
-    QList<QPair<int, int>> periods;
-    for (const QVariant& item : ScheduleService::instance()->getPeriods()) {
-        const QVariantMap period = item.toMap();
-        periods.append({period.value(QStringLiteral("startMinutes")).toInt(),
-                        period.value(QStringLiteral("endMinutes")).toInt()});
-    }
-    return periods;
-}
-
 // 文本 → 交给课表服务的节次列表。格式不对（不是数组、某一节不是两个整数）时返回 false，什么都不写。
 bool parsePeriods(const QString& text, QVariantList* periods)
 {
@@ -82,9 +71,28 @@ bool parsePeriods(const QString& text, QVariantList* periods)
 
 } // namespace
 
-QHash<QString, QString> currentValues()
+QHash<QString, QString> currentValues(bool* ok)
 {
-    const AppSettings* settings = AppSettings::instance();
+    if (ok) {
+        *ok = false;
+    }
+    AppSettings* settings = AppSettings::instance();
+    if (!settings || !settings->isBackendHealthy()) {
+        return {};
+    }
+    bool periodsOk = false;
+    const QVariantList periodList = ScheduleService::instance()->getPeriods(&periodsOk);
+    if (!periodsOk) {
+        return {};
+    }
+
+    QList<QPair<int, int>> periods;
+    for (const QVariant& item : periodList) {
+        const QVariantMap period = item.toMap();
+        periods.append({period.value(QStringLiteral("startMinutes")).toInt(),
+                        period.value(QStringLiteral("endMinutes")).toInt()});
+    }
+
     QHash<QString, QString> values{
         {kDayStartHour, QString::number(settings->dayStartHour())},
         {kWorkMinutes, QString::number(settings->workMinutes())},
@@ -97,14 +105,18 @@ QHash<QString, QString> currentValues()
         {kSemesterStartDate, settings->semesterStartDate()},
         {kSemesterWeeks, QString::number(settings->semesterWeeks())},
     };
-    // 节次表读不出来（库没打开、读失败）时不放这一项：放一个空值进去，会被当成本机把节次清空了发出去。
-    const QList<QPair<int, int>> periods = currentPeriods();
     if (!periods.isEmpty()) {
         values.insert(kPeriods, periodsText(periods));
     }
     const QMap<QString, int> goals = settings->dailyFocusGoals();
     for (auto it = goals.cbegin(); it != goals.cend(); ++it) {
         values.insert(SyncSchema::dailyGoalSettingKey(it.key()), QString::number(it.value()));
+    }
+    if (!settings->isBackendHealthy()) {
+        return {};
+    }
+    if (ok) {
+        *ok = true;
     }
     return values;
 }

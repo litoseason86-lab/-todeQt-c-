@@ -13,5 +13,6 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)requestSession:(NSInteger)sessionId title:(NSString *)title isRest:(BOOL)isRest error:(NSError **)error;
 - (BOOL)commit:(NSError **)error;
 - (void)cancel;
+- (void)setAutomaticCommitSuspended:(BOOL)suspended;
 @end
 NS_ASSUME_NONNULL_END

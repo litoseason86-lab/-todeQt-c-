@@ -9,7 +9,7 @@ struct MonthGrid: View {
         VStack(spacing: 8) {
             HStack(spacing: 0) {
                 ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { weekday in
-                    Text(weekday).font(.system(size: 12)).foregroundStyle(ThemeColors.inkSoft).frame(maxWidth: .infinity)
+                    Text(weekday).scaledSystemFont(size: 12).foregroundStyle(ThemeColors.inkSoft).frame(maxWidth: .infinity)
                 }
             }.accessibilityHidden(true)
             LazyVGrid(columns: columns, spacing: 8) {
@@ -45,7 +45,7 @@ private struct HistoryDateCell: View, Equatable {
         return Button { store.select(date) } label: {
             // 定稿格子：左上日期，底部一条投入条；选中日浅焦糖底，今天焦糖描边与焦糖日期，二者独立。
             VStack(alignment: .leading, spacing: 0) {
-                Text("\(cell.day)").font(.system(size: 15, weight: cell.today || selected ? .semibold : .regular))
+                Text("\(cell.day)").scaledSystemFont(size: 15, weight: cell.today || selected ? .semibold : .regular)
                     .foregroundStyle(cell.today ? ThemeColors.accentInk : (cell.future ? ThemeColors.inkMuted : ThemeColors.inkStrong))
                 if !compact && !cell.future && cell.seconds >= 60 { dayTotal(duration) }
                 Spacer(minLength: 8)
@@ -75,7 +75,7 @@ private struct HistoryDateCell: View, Equatable {
                 VStack(alignment: .leading, spacing: 0) { Text(split.0); Text(split.1) }
             }
         }
-        .font(.system(size: 12)).monospacedDigit().foregroundStyle(ThemeColors.inkSoft)
+        .scaledSystemFont(size: 12).monospacedDigit().foregroundStyle(ThemeColors.inkSoft)
         .padding(.top, 2)
         .accessibilityHidden(true)
     }

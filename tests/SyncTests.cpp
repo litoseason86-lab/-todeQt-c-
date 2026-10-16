@@ -2,6 +2,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -812,6 +813,20 @@ private slots:
     void trashRowIdentityComesFromTheOriginalRecordAndFallsBackToRandom();
     void trashRecordThatFailsToApplyIsStillLoggedWithItsTitle();
     void trashDeletionBeatingALateEditWritesNoSyncLog();
+
+    // 058 阶段 4：快照导出原子性与错误传播
+    void exportSnapshotFailureAbortsAndRollsBackWithoutPartialData();
+    void exportSnapshotEmptyDatabaseSucceedsWithEmptyBatch();
+    void exportSnapshotFailsWhenFieldVersionsQueryFails();
+    void exportSnapshotFailsWhenPendingRefsQueryFails();
+    void exportSnapshotFailsWhenStateIdentityQueryFails();
+    void exportSnapshotSucceedsWhenSingleFieldVersionRowIsMissing();
+    void exportSnapshotRejectsMissingOrMalformedIdentityAndEpoch();
+
+    // 058 阶段 1：本地恢复幂等事务
+    void restoreOperationIdProvidesIdempotencyAcrossRetries();
+    void restoreTokenFailureRollsBackEntireRestoreTransaction();
+    void restoreRejectsWhenRequiredStateRowsAreMissing();
 
 private:
     Device openDevice(const QString& name);
@@ -4323,6 +4338,516 @@ void SyncTests::trashDeletionBeatingALateEditWritesNoSyncLog()
     for (const Device& d : {a, b}) {
         QCOMPARE(trashRows(d), 0);
         QCOMPARE(trashLogRows(d), 0);
+    }
+}
+
+void SyncTests::exportSnapshotFailureAbortsAndRollsBackWithoutPartialData()
+{
+    // 保证快照导出过程中查询失败时原子回滚并不暴露残缺数据，恢复后重试导出完整快照。
+    Device a = openDevice(QStringLiteral("a"));
+    const QString cat = addCategory(a, QStringLiteral("物理"));
+    const QString task = addTask(a, QStringLiteral("力学实验"), cat);
+    QVERIFY(!task.isEmpty());
+
+    // 删掉任务生成墓碑记录
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM tasks WHERE sync_id = '%1'").arg(task)));
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_tombstones")), 1);
+
+    SyncStore store(a.connection);
+    bool ok = false;
+    QString error;
+    const SyncBatch normalSnapshot = store.exportSnapshot(&ok, &error);
+    QVERIFY(ok);
+    QVERIFY(error.isEmpty());
+    bool hasTombstone = false;
+    for (const SyncRecord& rec : normalSnapshot.records) {
+        if (rec.deleted && rec.syncId == task) {
+            hasTombstone = true;
+            break;
+        }
+    }
+    // 前置断言：正常情况下 exportSnapshot 必定包含已删除任务的墓碑记录
+    QVERIFY(hasTombstone);
+
+    // 故障注入点：临时重命名 sync_tombstones 表，模拟 exportSnapshot 执行到墓碑查询时查询失败
+    QVERIFY(exec(a, QStringLiteral("ALTER TABLE sync_tombstones RENAME TO sync_tombstones_fault")));
+
+    // 前置断言：验证原表查询在重命名后必定失败
+    {
+        QSqlQuery failQuery(deviceDb(a));
+        QVERIFY(!failQuery.exec(QStringLiteral("SELECT tbl, sync_id FROM sync_tombstones")));
+    }
+
+    // 调用被测 exportSnapshot：必须报错且返回空快照，不能暴露部分数据
+    ok = true;
+    error.clear();
+    const SyncBatch faultSnapshot = store.exportSnapshot(&ok, &error);
+    QVERIFY(!ok);
+    QVERIFY(!error.isEmpty());
+    QVERIFY(faultSnapshot.records.isEmpty());
+    QVERIFY(faultSnapshot.settings.isEmpty());
+
+    // 撤销注入：恢复表名，验证快照导出恢复完整性（保证注入点可控可逆）
+    QVERIFY(exec(a, QStringLiteral("ALTER TABLE sync_tombstones_fault RENAME TO sync_tombstones")));
+    ok = false;
+    error.clear();
+    const SyncBatch recoveredSnapshot = store.exportSnapshot(&ok, &error);
+    QVERIFY(ok);
+    QVERIFY(error.isEmpty());
+    bool tombstoneInRecoveredSnapshot = false;
+    for (const SyncRecord& rec : recoveredSnapshot.records) {
+        if (rec.deleted && rec.syncId == task) {
+            tombstoneInRecoveredSnapshot = true;
+            break;
+        }
+    }
+    QVERIFY(tombstoneInRecoveredSnapshot);
+}
+
+void SyncTests::exportSnapshotEmptyDatabaseSucceedsWithEmptyBatch()
+{
+    // 保证空数据库导出快照成功且返回空记录，不误报失败。
+    Device a = openDevice(QStringLiteral("empty_device"));
+    // 清空初始化生成的预置科目与相关字段版本、墓碑记录，确保是真正的空数据
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM categories")));
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM sync_tombstones")));
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM sync_field_versions")));
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM sync_outbox")));
+    SyncStore store(a.connection);
+    bool ok = false;
+    QString error;
+    const SyncBatch snapshot = store.exportSnapshot(&ok, &error);
+    QVERIFY(ok);
+    QVERIFY(error.isEmpty());
+    QVERIFY(snapshot.records.isEmpty());
+    QVERIFY(snapshot.settings.isEmpty());
+}
+
+void SyncTests::restoreOperationIdProvidesIdempotencyAcrossRetries()
+{
+    // 保证同一恢复操作标识重试时事务幂等：不重复递增纪元、不篡改设备标识且保留后续改动队列；不同标识才开启新纪元。
+    Device a = openDevice(QStringLiteral("a"));
+    const qint64 initialEpoch = SyncStore(a.connection).epoch();
+    const QString originalDevice = a.id;
+    const QString restoreOpId1 = QStringLiteral("restore-op-20261015-001");
+    const QString restoreOpId2 = QStringLiteral("restore-op-20261015-002");
+
+    // 模拟备份库恢复场景：先将库中 device_id 设为异机备份标识，验证首次调用能切回本机标识并建立新纪元
+    QVERIFY(exec(a, QStringLiteral("UPDATE sync_state SET value = 'foreign-backup-device-xyz' WHERE key = 'device_id'")));
+    QCOMPARE(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key = 'device_id'")).toString(),
+             QStringLiteral("foreign-backup-device-xyz"));
+
+    // 首次以 restoreOpId1 调用恢复纪元
+    QVERIFY(SyncStore(a.connection).beginEpochAfterRestore(initialEpoch, originalDevice, restoreOpId1));
+    const qint64 expectedEpoch = initialEpoch + 1;
+    QCOMPARE(SyncStore(a.connection).epoch(), expectedEpoch);
+    QCOMPARE(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key = 'device_id'")).toString(),
+             originalDevice);
+    QCOMPARE(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key = 'local_restore_operation_id'")).toString(),
+             restoreOpId1);
+
+    // 新增任务形成非空 outbox
+    const QString task = addTask(a, QStringLiteral("恢复后产生的新待发任务"));
+    QVERIFY(!task.isEmpty());
+    const int outboxCount = count(a, QStringLiteral("SELECT COUNT(*) FROM sync_outbox"));
+    QVERIFY(outboxCount > 0);
+
+    // 重建 SyncStore，再用相同的 restoreOpId1 重试调用
+    // 传入不同的 previousEpoch 与不同的 previousDeviceId，验证幂等分支绝不修改 epoch、device_id 与队列
+    {
+        SyncStore storeAgain(a.connection);
+        QVERIFY(storeAgain.beginEpochAfterRestore(expectedEpoch + 10, QStringLiteral("unexpected-device-id"), restoreOpId1));
+    }
+
+    // 断言幂等保护：epoch 只 +1（仍是 expectedEpoch），device 不变，新 outbox 完整无损
+    QCOMPARE(SyncStore(a.connection).epoch(), expectedEpoch);
+    QCOMPARE(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key = 'device_id'")).toString(),
+             originalDevice);
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_outbox")), outboxCount);
+
+    // 再用不同 restoreOpId2 调用，确认新的恢复操作会正常开启新纪元（epoch 再次 +1，清理 outbox）
+    {
+        SyncStore storeNewOp(a.connection);
+        QVERIFY(storeNewOp.beginEpochAfterRestore(expectedEpoch, originalDevice, restoreOpId2));
+    }
+    QCOMPARE(SyncStore(a.connection).epoch(), expectedEpoch + 1);
+    QCOMPARE(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key = 'device_id'")).toString(),
+             originalDevice);
+    QCOMPARE(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key = 'local_restore_operation_id'")).toString(),
+             restoreOpId2);
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_outbox")), 0);
+}
+
+void SyncTests::restoreTokenFailureRollsBackEntireRestoreTransaction()
+{
+    // 保证写入恢复操作标识失败时整个恢复事务完全回滚，原纪元、设备标识与队列完整保留，故障排除后同标识重试成功。
+    Device a = openDevice(QStringLiteral("a"));
+    const qint64 originalEpoch = SyncStore(a.connection).epoch();
+    const QString originalDevice = a.id;
+    const QString restoreOpId = QStringLiteral("restore-op-abort-token");
+
+    // 产生非空 outbox 并断言前置条件
+    const QString task = addTask(a, QStringLiteral("回滚前已有待发送任务"));
+    QVERIFY(!task.isEmpty());
+    const int originalOutboxCount = count(a, QStringLiteral("SELECT COUNT(*) FROM sync_outbox"));
+    QVERIFY(originalOutboxCount > 0);
+
+    // 断言注入前 token 尚不存在
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'local_restore_operation_id'")), 0);
+
+    // 注入故障：针对 local_restore_operation_id 的 INSERT 安装 BEFORE INSERT ABORT 触发器
+    QVERIFY(exec(a, QStringLiteral(
+        "CREATE TRIGGER abort_restore_token BEFORE INSERT ON sync_state "
+        "WHEN NEW.key = 'local_restore_operation_id' "
+        "BEGIN SELECT RAISE(ABORT, 'injected restore token failure'); END;")));
+
+    const QString targetDevice = QStringLiteral("new-target-device-id");
+    // 调用 beginEpochAfterRestore，因 token 插入失败，事务必须整体回滚并返回 false
+    QVERIFY(!SyncStore(a.connection).beginEpochAfterRestore(originalEpoch, targetDevice, restoreOpId));
+
+    // 断言事务回滚后状态原样保留：epoch/device/outbox 原样，token 不存在
+    QCOMPARE(SyncStore(a.connection).epoch(), originalEpoch);
+    QCOMPARE(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key = 'device_id'")).toString(),
+             originalDevice);
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_outbox")), originalOutboxCount);
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'local_restore_operation_id'")), 0);
+
+    // 移除注入触发器
+    QVERIFY(exec(a, QStringLiteral("DROP TRIGGER abort_restore_token")));
+
+    // 同一 restoreOpId 重试一次，必须成功
+    QVERIFY(SyncStore(a.connection).beginEpochAfterRestore(originalEpoch, targetDevice, restoreOpId));
+
+    // 断言重试成功后生效：epoch +1，device 变更为目标值，outbox 已清空，token 成功写入
+    QCOMPARE(SyncStore(a.connection).epoch(), originalEpoch + 1);
+    QCOMPARE(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key = 'device_id'")).toString(),
+             targetDevice);
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_outbox")), 0);
+    QCOMPARE(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key = 'local_restore_operation_id'")).toString(),
+             restoreOpId);
+}
+
+void SyncTests::restoreRejectsWhenRequiredStateRowsAreMissing()
+{
+    // 保证 sync_state 缺失 epoch 或 device_id 关键状态行时拒绝恢复事务且不记录 token，防止状态行缺失下虚假成功。
+    const QString restoreOpEpoch = QStringLiteral("restore-op-missing-epoch");
+    const QString restoreOpDevice = QStringLiteral("restore-op-missing-device");
+
+    // 子场景 1：缺失 epoch 状态行（使用独立设备临时库 a）
+    {
+        Device a = openDevice(QStringLiteral("dev_missing_epoch"));
+        QVERIFY(exec(a, QStringLiteral("DELETE FROM sync_state WHERE key = 'epoch'")));
+        // 直接 SQL 断言前提，不用 getter 自动补行掩盖
+        QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'epoch'")), 0);
+
+        // 调用必须拒绝
+        QVERIFY(!SyncStore(a.connection).beginEpochAfterRestore(0, a.id, restoreOpEpoch));
+
+        // 直接 SQL 断言：不得记录 token，epoch 行依然不存在
+        QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'local_restore_operation_id'")), 0);
+        QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'epoch'")), 0);
+    }
+
+    // 子场景 2：缺失 device_id 状态行（使用独立设备临时库 b）
+    {
+        Device b = openDevice(QStringLiteral("dev_missing_device"));
+        QVERIFY(exec(b, QStringLiteral("DELETE FROM sync_state WHERE key = 'device_id'")));
+        // 直接 SQL 断言前提
+        QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'device_id'")), 0);
+
+        // 传入非空目标 device id 调用，必须因 device_id 行缺失拒绝
+        QVERIFY(!SyncStore(b.connection).beginEpochAfterRestore(0, QStringLiteral("target-device-xyz"), restoreOpDevice));
+
+        // 直接 SQL 断言：不得记录 token，device_id 行依然不存在
+        QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'local_restore_operation_id'")), 0);
+        QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'device_id'")), 0);
+    }
+}
+
+void SyncTests::exportSnapshotFailsWhenFieldVersionsQueryFails()
+{
+    // 保证快照导出过程中字段版本元数据查询失败时原子回滚并不暴露残缺数据，不能误报成功或输出缺失版本的记录。
+    Device a = openDevice(QStringLiteral("dev_fault_field_versions"));
+    const QString task = addTask(a, QStringLiteral("合法测试任务"));
+    QVERIFY(!task.isEmpty());
+
+    SyncStore store(a.connection);
+    bool normalOk = false;
+    QString normalErr;
+    const SyncBatch normalSnapshot = store.exportSnapshot(&normalOk, &normalErr);
+    QVERIFY(normalOk);
+    QVERIFY(normalErr.isEmpty());
+    bool hasTask = false;
+    for (const SyncRecord& rec : normalSnapshot.records) {
+        if (rec.table == QLatin1String("tasks") && rec.syncId == task) {
+            hasTask = true;
+            break;
+        }
+    }
+    QVERIFY(hasTask);
+
+    // 故障注入：临时重命名 sync_field_versions
+    QVERIFY(exec(a, QStringLiteral("ALTER TABLE sync_field_versions RENAME TO sync_field_versions_fault")));
+    auto cleanup = qScopeGuard([&] {
+        exec(a, QStringLiteral("ALTER TABLE sync_field_versions_fault RENAME TO sync_field_versions"));
+    });
+
+    // 证明故障夹具命中：外层任务行仍能 SELECT，但版本元数据查询确实失败
+    QVERIFY(!scalar(a, QStringLiteral("SELECT sync_id FROM tasks WHERE sync_id = '%1'").arg(task)).toString().isEmpty());
+    {
+        QSqlQuery failQuery(deviceDb(a));
+        QVERIFY(!failQuery.exec(QStringLiteral("SELECT field, v_time, v_device FROM sync_field_versions WHERE tbl = 'tasks'")));
+    }
+
+    bool ok = true;
+    QString error;
+    const SyncBatch faultSnapshot = store.exportSnapshot(&ok, &error);
+    QVERIFY(!ok);
+    QVERIFY(!error.isEmpty());
+    QVERIFY(faultSnapshot.records.isEmpty());
+    QVERIFY(faultSnapshot.settings.isEmpty());
+
+    // 表名恢复后验证同一数据重新导出成功，且连接可开启新事务证明未泄漏事务状态
+    cleanup.dismiss();
+    QVERIFY(exec(a, QStringLiteral("ALTER TABLE sync_field_versions_fault RENAME TO sync_field_versions")));
+    bool recoveredOk = false;
+    QString recoveredErr;
+    const SyncBatch recoveredSnapshot = store.exportSnapshot(&recoveredOk, &recoveredErr);
+    QVERIFY(recoveredOk);
+    QVERIFY(recoveredErr.isEmpty());
+    QVERIFY(!recoveredSnapshot.records.isEmpty());
+    QVERIFY(exec(a, QStringLiteral("BEGIN IMMEDIATE TRANSACTION")));
+    QVERIFY(exec(a, QStringLiteral("ROLLBACK")));
+}
+
+void SyncTests::exportSnapshotFailsWhenPendingRefsQueryFails()
+{
+    // 保证快照导出过程中待接回引用查询失败时原子回滚并整体失败，不能把 SQL 错误冒充正常空引用并返回虚假成功。
+    Device a = openDevice(QStringLiteral("dev_fault_pending_refs"));
+    const QString task = addTask(a, QStringLiteral("无科目任务"));
+    QVERIFY(!task.isEmpty());
+
+    // 前置断言：category_id IS NULL
+    QVERIFY(scalar(a, QStringLiteral("SELECT category_id FROM tasks WHERE sync_id = '%1'").arg(task)).isNull());
+
+    SyncStore store(a.connection);
+    bool normalOk = false;
+    QString normalErr;
+    const SyncBatch normalSnapshot = store.exportSnapshot(&normalOk, &normalErr);
+    QVERIFY(normalOk);
+    QVERIFY(normalErr.isEmpty());
+
+    // 故障注入：临时重命名 sync_pending_refs
+    QVERIFY(exec(a, QStringLiteral("ALTER TABLE sync_pending_refs RENAME TO sync_pending_refs_fault")));
+    auto cleanup = qScopeGuard([&] {
+        exec(a, QStringLiteral("ALTER TABLE sync_pending_refs_fault RENAME TO sync_pending_refs"));
+    });
+
+    // 证明故障夹具命中：外层任务和版本表仍可读，但待接回查询确实失败
+    QVERIFY(!scalar(a, QStringLiteral("SELECT sync_id FROM tasks WHERE sync_id = '%1'").arg(task)).toString().isEmpty());
+    QVERIFY(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_field_versions WHERE tbl = 'tasks'")) > 0);
+    {
+        QSqlQuery failQuery(deviceDb(a));
+        QVERIFY(!failQuery.exec(QStringLiteral("SELECT target_sync_id FROM sync_pending_refs WHERE tbl = 'tasks'")));
+    }
+
+    bool ok = true;
+    QString error;
+    const SyncBatch faultSnapshot = store.exportSnapshot(&ok, &error);
+    QVERIFY(!ok);
+    QVERIFY(!error.isEmpty());
+    QVERIFY(faultSnapshot.records.isEmpty());
+    QVERIFY(faultSnapshot.settings.isEmpty());
+
+    // 表名恢复后验证同一数据重新导出成功，且连接可开启新事务证明未泄漏事务状态
+    cleanup.dismiss();
+    QVERIFY(exec(a, QStringLiteral("ALTER TABLE sync_pending_refs_fault RENAME TO sync_pending_refs")));
+    bool recoveredOk = false;
+    QString recoveredErr;
+    const SyncBatch recoveredSnapshot = store.exportSnapshot(&recoveredOk, &recoveredErr);
+    QVERIFY(recoveredOk);
+    QVERIFY(recoveredErr.isEmpty());
+    QVERIFY(!recoveredSnapshot.records.isEmpty());
+    QVERIFY(exec(a, QStringLiteral("BEGIN IMMEDIATE TRANSACTION")));
+    QVERIFY(exec(a, QStringLiteral("ROLLBACK")));
+}
+
+void SyncTests::exportSnapshotFailsWhenStateIdentityQueryFails()
+{
+    // 保证快照导出过程中设备身份与纪元状态查询失败时原子回滚并整体失败，不能返回空设备或默认纪元0的快照。
+    Device a = openDevice(QStringLiteral("dev_fault_sync_state"));
+    const QString task = addTask(a, QStringLiteral("快照身份任务"));
+    QVERIFY(!task.isEmpty());
+
+    SyncStore store(a.connection);
+    bool normalOk = false;
+    QString normalErr;
+    const SyncBatch normalSnapshot = store.exportSnapshot(&normalOk, &normalErr);
+    QVERIFY(normalOk);
+    QVERIFY(normalErr.isEmpty());
+    QCOMPARE(normalSnapshot.device, a.id);
+    QCOMPARE(normalSnapshot.epoch, 0);
+
+    // 故障注入：临时重命名 sync_state
+    QVERIFY(exec(a, QStringLiteral("ALTER TABLE sync_state RENAME TO sync_state_fault")));
+    auto cleanup = qScopeGuard([&] {
+        exec(a, QStringLiteral("ALTER TABLE sync_state_fault RENAME TO sync_state"));
+    });
+
+    // 证明故障夹具命中：外层任务、版本和待接回表仍可读，而快照身份查询确实失败
+    QVERIFY(!scalar(a, QStringLiteral("SELECT sync_id FROM tasks WHERE sync_id = '%1'").arg(task)).toString().isEmpty());
+    QVERIFY(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_field_versions WHERE tbl = 'tasks'")) > 0);
+    QVERIFY(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs")) >= 0);
+    {
+        QSqlQuery failQuery(deviceDb(a));
+        QVERIFY(!failQuery.exec(QStringLiteral("SELECT value FROM sync_state WHERE key = 'device_id'")));
+    }
+
+    bool ok = true;
+    QString error;
+    const SyncBatch faultSnapshot = store.exportSnapshot(&ok, &error);
+    QVERIFY(!ok);
+    QVERIFY(!error.isEmpty());
+    QVERIFY(faultSnapshot.records.isEmpty());
+    QVERIFY(faultSnapshot.settings.isEmpty());
+
+    // 表名恢复后验证同一数据重新导出成功，且连接可开启新事务证明未泄漏事务状态
+    cleanup.dismiss();
+    QVERIFY(exec(a, QStringLiteral("ALTER TABLE sync_state_fault RENAME TO sync_state")));
+    bool recoveredOk = false;
+    QString recoveredErr;
+    const SyncBatch recoveredSnapshot = store.exportSnapshot(&recoveredOk, &recoveredErr);
+    QVERIFY(recoveredOk);
+    QVERIFY(recoveredErr.isEmpty());
+    QCOMPARE(recoveredSnapshot.device, a.id);
+    QCOMPARE(recoveredSnapshot.epoch, 0);
+    QVERIFY(!recoveredSnapshot.records.isEmpty());
+    QVERIFY(exec(a, QStringLiteral("BEGIN IMMEDIATE TRANSACTION")));
+    QVERIFY(exec(a, QStringLiteral("ROLLBACK")));
+}
+
+void SyncTests::exportSnapshotSucceedsWhenSingleFieldVersionRowIsMissing()
+{
+    // 保证字段版本查询成功但某列缺失历史版本记录时，保留原兼容语义以最小版本成功导出，不拒绝旧数据。
+    Device a = openDevice(QStringLiteral("dev_missing_single_field_version"));
+    const QString task = addTask(a, QStringLiteral("缺列版本任务"));
+    QVERIFY(!task.isEmpty());
+
+    // 前置断言：正常状态下 tasks 记录所有同步列均有版本记录
+    QVERIFY(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_field_versions WHERE tbl = 'tasks' AND sync_id = '%1'").arg(task)) > 0);
+    QVERIFY(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_field_versions WHERE tbl = 'tasks' AND sync_id = '%1' AND field = 'notes'").arg(task)) > 0);
+
+    // 模拟旧版本迁移或缺列：单单删除 notes 字段的版本行
+    QVERIFY(exec(a, QStringLiteral("DELETE FROM sync_field_versions WHERE tbl = 'tasks' AND sync_id = '%1' AND field = 'notes'").arg(task)));
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM sync_field_versions WHERE tbl = 'tasks' AND sync_id = '%1' AND field = 'notes'").arg(task)), 0);
+
+    SyncStore store(a.connection);
+    bool ok = false;
+    QString error;
+    const SyncBatch snapshot = store.exportSnapshot(&ok, &error);
+    QVERIFY(ok);
+    QVERIFY(error.isEmpty());
+
+    // 断言快照中包含该任务，且 notes 字段退化为默认最小版本 {0, ""}，其他字段保留原有正常版本
+    bool found = false;
+    for (const SyncRecord& rec : snapshot.records) {
+        if (rec.table == QLatin1String("tasks") && rec.syncId == task) {
+            found = true;
+            QVERIFY(rec.fields.contains(QStringLiteral("notes")));
+            const SyncFieldValue notesVal = rec.fields.value(QStringLiteral("notes"));
+            QCOMPARE(notesVal.version.time, 0);
+            QCOMPARE(notesVal.version.device, QString());
+            QVERIFY(rec.fields.contains(QStringLiteral("title")));
+            const SyncFieldValue titleVal = rec.fields.value(QStringLiteral("title"));
+            QVERIFY(titleVal.version.time > 0);
+            QCOMPARE(titleVal.version.device, a.id);
+            break;
+        }
+    }
+    QVERIFY(found);
+}
+
+void SyncTests::exportSnapshotRejectsMissingOrMalformedIdentityAndEpoch()
+{
+    // 保证快照导出事务内严格校验 device_id 与 epoch 键存在性与格式合法性，任何异常均原子回滚拒绝且不泄漏事务。
+    Device a = openDevice(QStringLiteral("dev_identity_epoch_bounds"));
+    const QString task = addTask(a, QStringLiteral("边界测试任务"));
+    QVERIFY(!task.isEmpty());
+    SyncStore store(a.connection);
+
+    // 边界 1：缺少 device_id 键
+    {
+        QVERIFY(exec(a, QStringLiteral("DELETE FROM sync_state WHERE key = 'device_id'")));
+        bool ok = true;
+        QString err;
+        const SyncBatch snap = store.exportSnapshot(&ok, &err);
+        QVERIFY(!ok);
+        QVERIFY(err.contains(QStringLiteral("缺少必要键")));
+        QVERIFY(snap.records.isEmpty());
+        // 验证失败后未泄漏事务
+        QVERIFY(exec(a, QStringLiteral("BEGIN IMMEDIATE TRANSACTION")));
+        QVERIFY(exec(a, QStringLiteral("ROLLBACK")));
+        // 恢复合法 device_id
+        QVERIFY(exec(a, QStringLiteral("INSERT INTO sync_state (key, value) VALUES ('device_id', '%1')").arg(a.id)));
+    }
+
+    // 边界 2：非法格式 device_id（非 32 位 hex）
+    {
+        QVERIFY(exec(a, QStringLiteral("UPDATE sync_state SET value = 'not-a-valid-hex-device-id' WHERE key = 'device_id'")));
+        bool ok = true;
+        QString err;
+        const SyncBatch snap = store.exportSnapshot(&ok, &err);
+        QVERIFY(!ok);
+        QVERIFY(err.contains(QStringLiteral("设备标识格式非法")));
+        QVERIFY(snap.records.isEmpty());
+        QVERIFY(exec(a, QStringLiteral("BEGIN IMMEDIATE TRANSACTION")));
+        QVERIFY(exec(a, QStringLiteral("ROLLBACK")));
+        // 恢复合法 device_id
+        QVERIFY(exec(a, QStringLiteral("UPDATE sync_state SET value = '%1' WHERE key = 'device_id'").arg(a.id)));
+    }
+
+    // 边界 3：缺少 epoch 键
+    {
+        QVERIFY(exec(a, QStringLiteral("DELETE FROM sync_state WHERE key = 'epoch'")));
+        bool ok = true;
+        QString err;
+        const SyncBatch snap = store.exportSnapshot(&ok, &err);
+        QVERIFY(!ok);
+        QVERIFY(err.contains(QStringLiteral("缺少必要键")));
+        QVERIFY(snap.records.isEmpty());
+        QVERIFY(exec(a, QStringLiteral("BEGIN IMMEDIATE TRANSACTION")));
+        QVERIFY(exec(a, QStringLiteral("ROLLBACK")));
+        // 恢复合法 epoch
+        QVERIFY(exec(a, QStringLiteral("INSERT INTO sync_state (key, value) VALUES ('epoch', '0')")));
+    }
+
+    // 边界 4：非法 epoch 格式（负数、文本、浮点数、超出 qint64 范围大数）
+    for (const QString& invalidEpoch : {QStringLiteral("-1"), QStringLiteral("invalid_epoch"),
+                                        QStringLiteral("1.5"), QStringLiteral("99999999999999999999")}) {
+        QVERIFY(exec(a, QStringLiteral("UPDATE sync_state SET value = '%1' WHERE key = 'epoch'").arg(invalidEpoch)));
+        bool ok = true;
+        QString err;
+        const SyncBatch snap = store.exportSnapshot(&ok, &err);
+        QVERIFY(!ok);
+        QVERIFY(err.contains(QStringLiteral("epoch")));
+        QVERIFY(snap.records.isEmpty());
+        QVERIFY(exec(a, QStringLiteral("BEGIN IMMEDIATE TRANSACTION")));
+        QVERIFY(exec(a, QStringLiteral("ROLLBACK")));
+    }
+
+    // 边界 5：合法 epoch 0 重试导出成功
+    {
+        QVERIFY(exec(a, QStringLiteral("UPDATE sync_state SET value = '0' WHERE key = 'epoch'")));
+        bool ok = false;
+        QString err;
+        const SyncBatch snap = store.exportSnapshot(&ok, &err);
+        QVERIFY(ok);
+        QVERIFY(err.isEmpty());
+        QCOMPARE(snap.device, a.id);
+        QCOMPARE(snap.epoch, 0);
+        QVERIFY(!snap.records.isEmpty());
+        QVERIFY(exec(a, QStringLiteral("BEGIN IMMEDIATE TRANSACTION")));
+        QVERIFY(exec(a, QStringLiteral("ROLLBACK")));
     }
 }
 

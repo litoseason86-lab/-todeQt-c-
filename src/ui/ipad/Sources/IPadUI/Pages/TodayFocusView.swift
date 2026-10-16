@@ -52,7 +52,7 @@ import SwiftUI
     private var notices: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !store.error.isEmpty { errorRow }
-            if store.isFutureDate { Text("未来日期不能补录").font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft) }
+            if store.isFutureDate { Text("未来日期不能补录").scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft) }
         }
     }
 
@@ -95,7 +95,7 @@ import SwiftUI
             ZStack(alignment: .topLeading) {
                 ForEach(Array(stride(from: hours.lowerBound, through: hours.upperBound, by: 2)), id: \.self) { hour in
                     Rectangle().fill(ThemeColors.borderSubtle).frame(height: 1).offset(y: y(hour * 60))
-                    Text(TimelineLayout.clockText(hour * 60)).font(.system(size: 12)).foregroundStyle(ThemeColors.inkSoft)
+                    Text(TimelineLayout.clockText(hour * 60)).scaledSystemFont(size: 12).foregroundStyle(ThemeColors.inkSoft)
                         .padding(.trailing, 6).background(ThemeColors.surface)
                         .offset(x: 12, y: y(hour * 60) - 8)
                 }
@@ -133,7 +133,7 @@ import SwiftUI
             Spacer(minLength: 8)
             Text(detail).monospacedDigit().lineLimit(1)
         }
-        .font(.system(size: small ? 12 : 14))
+        .scaledSystemFont(size: small ? 12 : 14)
         .foregroundStyle(session.isRest ? ThemeColors.focusBreakInk : ThemeColors.accentFillInk)
         .padding(.horizontal, 12).padding(.vertical, small ? 0 : 6)
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: small ? .leading : .topLeading)
@@ -158,17 +158,17 @@ import SwiftUI
             if compact {
                 HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("今日专注").font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
+                        Text("今日专注").scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
                         total
                     }
                     Spacer()
-                    Text(counts).font(.system(size: 14)).foregroundStyle(ThemeColors.inkSoft).multilineTextAlignment(.trailing)
+                    Text(counts).scaledSystemFont(size: 14).foregroundStyle(ThemeColors.inkSoft).multilineTextAlignment(.trailing)
                 }
             } else {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("今日专注").font(.system(size: 14)).foregroundStyle(ThemeColors.inkSoft)
+                    Text("今日专注").scaledSystemFont(size: 14).foregroundStyle(ThemeColors.inkSoft)
                     total
-                    Text(counts).font(.system(size: 14)).foregroundStyle(ThemeColors.inkSoft)
+                    Text(counts).scaledSystemFont(size: 14).foregroundStyle(ThemeColors.inkSoft)
                 }
             }
         }
@@ -182,7 +182,7 @@ import SwiftUI
     @ViewBuilder private var categoryCard: some View {
         if !store.categoryStatistics.categories.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                Text("按科目").font(.system(size: 14)).foregroundStyle(ThemeColors.inkSoft)
+                Text("按科目").scaledSystemFont(size: 14).foregroundStyle(ThemeColors.inkSoft)
                 ForEach(Array(store.categoryStatistics.categories.enumerated()), id: \.offset) { _, item in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -190,7 +190,7 @@ import SwiftUI
                             Spacer()
                             Text(store.formatDuration(item.duration)).monospacedDigit()
                         }
-                        .font(.system(size: 14)).foregroundStyle(ThemeColors.inkStrong)
+                        .scaledSystemFont(size: 14).foregroundStyle(ThemeColors.inkStrong)
                         GeometryReader { bar in
                             ZStack(alignment: .leading) {
                                 Capsule().fill(ThemeColors.accentFill)
@@ -246,17 +246,17 @@ import SwiftUI
     private func compactRow(_ block: TimelineBlock) -> some View {
         let session = block.session
         return HStack(spacing: 14) {
-            Text(clock(block.startMinute)).font(.system(size: 14)).monospacedDigit().foregroundStyle(ThemeColors.inkSoft)
+            Text(clock(block.startMinute)).scaledSystemFont(size: 14).monospacedDigit().foregroundStyle(ThemeColors.inkSoft)
                 .frame(width: 48, alignment: .leading)
             Capsule().fill(session.isRest ? ThemeColors.focusBreakAccent : ThemeColors.accentInk).frame(width: 4, height: 44)
             VStack(alignment: .leading, spacing: 2) {
                 if session.isRest {
-                    Text("休息 · " + store.formatDuration(session.durationSeconds)).font(.system(size: 17))
+                    Text("休息 · " + store.formatDuration(session.durationSeconds)).scaledSystemFont(size: 17)
                         .foregroundStyle(ThemeColors.focusBreakInk)
                 } else {
-                    Text(session.taskTitle.isEmpty ? "自由专注" : session.taskTitle).font(.system(size: 17))
+                    Text(session.taskTitle.isEmpty ? "自由专注" : session.taskTitle).scaledSystemFont(size: 17)
                         .foregroundStyle(ThemeColors.inkStrong).lineLimit(1)
-                    Text(store.formatDuration(session.durationSeconds)).font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
+                    Text(store.formatDuration(session.durationSeconds)).scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
                 }
             }
             Spacer()
@@ -288,7 +288,7 @@ private struct ActiveSessionBlock: View {
             Spacer(minLength: 8)
             Text(DurationFormat.seconds(Double(focus.snapshot.elapsedSeconds))).monospacedDigit()
         }
-        .font(.system(size: 12))
+        .scaledSystemFont(size: 12)
         .foregroundStyle(ThemeColors.danger)
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)

@@ -440,8 +440,8 @@ FocusScope {
             implicitWidth: 96
             color: action.primary ? (action.hovered ? Theme.accentFillStrong : Theme.accentFill)
                                   : (action.hovered ? Theme.surfaceSunken : Theme.surfaceRaised)
-            border.color: action.activeFocus ? Theme.focusRing : (action.primary ? "transparent" : Theme.border)
-            border.width: action.activeFocus ? 2 : 1
+            border.color: action.visualFocus ? Theme.focusRing : (action.primary ? "transparent" : Theme.border)
+            border.width: action.visualFocus ? 2 : 1
             radius: Theme.radiusMd
             opacity: action.enabled ? 1 : 0.5
         }
@@ -472,8 +472,8 @@ FocusScope {
 
         background: Rectangle {
             color: control.hovered ? Theme.surfaceSunken : "transparent"
-            border.color: control.activeFocus ? Theme.focusRing : "transparent"
-            border.width: control.activeFocus ? 2 : 0
+            border.color: control.visualFocus ? Theme.focusRing : "transparent"
+            border.width: control.visualFocus ? 2 : 0
             radius: Theme.radiusMd
         }
 

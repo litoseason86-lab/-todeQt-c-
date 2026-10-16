@@ -42,4 +42,10 @@ using namespace PTBridgeSupport;
     return (_service && _service->commit()) || fail(error, QStringLiteral("提交删除失败"));
 }
 - (void)cancel { NSAssert(NSThread.isMainThread, @"撤销必须在主线程"); if (_service) _service->cancel(); }
+- (void)setAutomaticCommitSuspended:(BOOL)suspended {
+    NSAssert(NSThread.isMainThread, @"暂停自动提交状态必须在主线程设置");
+    if (_service) {
+        _service->setAutomaticCommitSuspended(suspended);
+    }
+}
 @end

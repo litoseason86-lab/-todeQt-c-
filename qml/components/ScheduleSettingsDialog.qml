@@ -492,6 +492,7 @@ Popup {
                     id: removePeriodButton
 
                     text: "×"
+                    Accessible.name: qsTr("删除第 %1 个课表节次").arg(periodRow.index + 1)
                     implicitWidth: 28
                     implicitHeight: Theme.controlHeightSm
 

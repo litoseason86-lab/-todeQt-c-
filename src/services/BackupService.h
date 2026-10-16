@@ -58,6 +58,11 @@ public:
     // 同步整体替换本机数据之前调用（主线程，同步执行）：备份写成了才允许替换，被换掉的数据只能从这份里找回。
     // 另一项备份或恢复正在进行时拒绝（error 说明原因），同步稍后会再试。
     bool backupBeforeSyncReplace(QString* error);
+    // 恢复意图准备回调（主线程执行，接 SyncController::prepareForRestore）：
+    // 在 emit restoreStarted、关库或派发任务前调用；返回 false 时中止恢复。
+    using RestorePreparationCallback = std::function<bool(QString* error)>;
+    void setRestorePreparationCallback(RestorePreparationCallback callback);
+
     // QML 使用异步入口，避免完整性检查、VACUUM、复制和恢复阻塞 GUI 事件循环。
     Q_INVOKABLE void requestBackup(const QString& destPath);
     Q_INVOKABLE void requestBackupInfo(const QString& srcPath);
@@ -89,6 +94,9 @@ signals:
     void backupInfoReady(const QString& sourcePath, const QVariantMap& info);
     void restoreStarted();
     void restoreCompleted(bool success, const QString& message);
+    // 仅供同步装配使用的内部恢复完成信号（严格先于 UI restoreCompleted 发送）：
+    // 只有实际通过 prepareForRestore 准入的恢复才发送；safeToResume 区分是否已安全回滚原数据。
+    void restoreSyncCompleted(bool success, bool safeToResume);
     void autoBackupEnabledChanged();
     void lastBackupTimeChanged();
     void busyChanged();
@@ -100,6 +108,7 @@ private:
     // 沿用 FocusTimer 的受控友元约定，用一个测试专用开关强制该分支，
     // 避免测试侧 #define private public 的未定义行为写法。
     friend class BackupServiceTests;
+    friend class SharedAppTests;
 
     struct RestoreContext;
 
@@ -151,6 +160,7 @@ private:
     bool m_forceRollbackCopyFailureForTest = false;
     // 仅供测试在“校验完成、安装尚未开始”的窗口替换外部源路径，锁定恢复必须使用受控副本。
     std::function<void()> m_afterRestoreValidationHookForTest;
+    RestorePreparationCallback m_restorePreparationCallback;
 };
 
 #endif // BACKUPSERVICE_H

@@ -13,7 +13,7 @@
 namespace SyncedSettings {
 
 // 本机现在的全部同步设置（键 → 值）：固定的几项，加上每一天的今日目标。
-QHash<QString, QString> currentValues();
+QHash<QString, QString> currentValues(bool* ok = nullptr);
 // 是不是出厂默认值。第一次记下时默认值用最小版本，另一台设备改过的会盖过它，而不是反过来。今日目标没有默认值。
 bool isFactoryDefault(const QString& key, const QString& value);
 // 把同步来的值写回本机。不认识的键、不合法的值（外部改坏的、更新版本的取值）不写，返回 false。

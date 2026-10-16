@@ -10,6 +10,7 @@
 #include <QHash>
 #include <QtMath>
 #include <QMap>
+#include <QScopeGuard>
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -567,6 +568,48 @@ QVariantMap StatisticsService::getDayStats(const QDate& date) const
 QVariantMap StatisticsService::getTodayStats() const
 {
     return getDayStats(LogicalDay::today(AppSettings::instance()->dayStartHour()));
+}
+
+QVariantMap StatisticsService::getTaskSummary(const QDate& logicalToday) const
+{
+    if (!logicalToday.isValid()) {
+        reportStatisticsFailure(QStringLiteral("摘要的逻辑日期无效"));
+        return {};
+    }
+    bool readFailed = false;
+    // 旧读取接口用同步失败信号报告 SQL 错误；作用域内收集它，避免把部分结果当作成功摘要。
+    const auto failureConnection = QObject::connect(
+        this, &StatisticsService::operationFailed, this,
+        [&readFailed](const QString&) { readFailed = true; }, Qt::DirectConnection);
+    const auto disconnectFailure = qScopeGuard([failureConnection] {
+        QObject::disconnect(failureConnection);
+    });
+    const QVariantMap today = getDayStats(logicalToday);
+    if (readFailed) {
+        return {};
+    }
+    // 本周与单日共用同一个逻辑日期，按现有周一至周日口径汇总，不另查一次物理今天。
+    const QVariantList week = getWeekStats(logicalToday.addDays(1 - logicalToday.dayOfWeek()));
+    if (readFailed) {
+        return {};
+    }
+    int weekPending = 0;
+    for (const QVariant& value : week) {
+        const QVariantMap day = value.toMap();
+        weekPending += day.value(QStringLiteral("tasks")).toInt()
+            - day.value(QStringLiteral("completedTasks")).toInt();
+    }
+    return {
+        {QStringLiteral("todayPendingCount"), today.value(QStringLiteral("totalTasks")).toInt()
+            - today.value(QStringLiteral("completedTasks")).toInt()},
+        {QStringLiteral("weekPendingCount"), weekPending},
+        {QStringLiteral("todayFocusedSeconds"), today.value(QStringLiteral("totalDuration")).toInt()}
+    };
+}
+
+QVariantMap StatisticsService::getTaskSummary() const
+{
+    return getTaskSummary(LogicalDay::today(AppSettings::instance()->dayStartHour()));
 }
 
 QVariantMap StatisticsService::buildComparisonResult(int currentValue, int previousValue, const QString& label) const

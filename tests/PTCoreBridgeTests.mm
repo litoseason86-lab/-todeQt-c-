@@ -64,6 +64,7 @@ private slots:
     void taskPlannedMinutesMatchesService();
     void taskOverdueRolloverDaysMatchesService();
     void pendingDeletionSignalsAndState();
+    void pendingDeletionSuspensionViaBridge();
     void interactionTokenOwnsRegistration();
     void coreSignalsReturnToMainThreadAndDisconnect();
     void convertsStringsWithoutTruncation();
@@ -370,6 +371,39 @@ void PTCoreBridgeTests::pendingDeletionSignalsAndState() {
         QVERIFY([bridge requestSession:99999 title:@"记录" isRest:YES error:&error]);
         QVERIFY(bridge.sessionIsRest); QCOMPARE(bridge.sessionId, NSInteger(99999));
         QVERIFY(![bridge commit:&error]); QVERIFY([failedTitle isEqualToString:@"记录"]); QCOMPARE(retired, 2);
+    }
+}
+// 产品保证：经桥接暂停与恢复自动提交时，撤销窗口在暂停期间不超时落库，解除后恢复自动落库并发出退场通知。
+void PTCoreBridgeTests::pendingDeletionSuspensionViaBridge() {
+    @autoreleasepool {
+        auto *tasks = TaskManager::instance();
+        const int id = tasks->createTask(QStringLiteral("桥接暂停任务"), QDate(2024, 2, 29), -1, 0, QString());
+        QVERIFY(id > 0);
+        PendingDeletion pending(tasks, FocusHistoryService::instance());
+        pending.setDelayMs(20);
+        PTBridgeSupport::registerService(QStringLiteral("pendingDeletion"), &pending);
+        struct Deregister { ~Deregister() { PTBridgeSupport::registerService(QStringLiteral("pendingDeletion"), nullptr); } } deregister;
+
+        PTPendingDeletionBridge *bridge = [PTPendingDeletionBridge new];
+        __block int retired = 0;
+        bridge.onRetired = ^{ ++retired; };
+
+        [bridge setAutomaticCommitSuspended:YES];
+        NSError *error = nil;
+        QVERIFY([bridge requestTask:id title:@"桥接暂停任务" error:&error]);
+        QVERIFY(bridge.active);
+
+        // 窗口原为 20ms，等待 80ms 超过原窗口，证明经由桥接暂停未发生自动提交
+        QTest::qWait(80);
+        QVERIFY(tasks->readTask(id).ok());
+        QVERIFY(bridge.active);
+        QCOMPARE(retired, 0);
+
+        [bridge setAutomaticCommitSuspended:NO];
+        // 恢复后应在完整窗口期满时自动落库且退场一次
+        QTRY_VERIFY_WITH_TIMEOUT(!tasks->readTask(id).ok(), 3000);
+        QVERIFY(!bridge.active);
+        QCOMPARE(retired, 1);
     }
 }
 // 产品保证：编辑读回最新任务，令牌释放或显式结束都会撤销刷新冻结，重复结束安全。

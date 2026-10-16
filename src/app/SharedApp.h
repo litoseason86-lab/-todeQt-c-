@@ -90,6 +90,7 @@ public:
 private:
     // 数据库打开成功后才创建业务单例，避免启动失败路径提前触发偏好迁移或业务装配。
     void initializeRuntimeServices();
+    void purgeTrashIfReady();
 
     Options m_options;
     AppLifecycle m_lifecycle;
@@ -105,6 +106,8 @@ private:
     std::unique_ptr<FocusSessionController> m_focusSessionController;
     bool m_naturalCompletionNoticeRequired = false;
     bool m_runtimeServicesInitialized = false;
+    // 恢复会先换库再恢复设置；完成或安全回滚之前不能按旧日界永久清理新库内容。
+    bool m_restoreMaintenanceBlocked = false;
 };
 
 #endif // SHAREDAPP_H

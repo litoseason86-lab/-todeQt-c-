@@ -126,8 +126,8 @@ private struct TodayTaskList: View {
     private var newTaskButton: some View {
         Button { store.requestNewTask() } label: {
             HStack(spacing: 14) {
-                Image(systemName: "plus.circle.fill").font(.system(size: 26)).frame(width: 44, height: 44)
-                Text("新任务").font(.system(size: 17))
+                Image(systemName: "plus.circle.fill").scaledSystemFont(size: 26).frame(width: 44, height: 44)
+                Text("新任务").scaledSystemFont(size: 17)
                 Spacer(minLength: 0)
             }
             .foregroundStyle(ThemeColors.accentInk)
@@ -143,9 +143,9 @@ private struct TodayTaskList: View {
             let fill = ThemeColors.surface.opacity(0.72)
             Button { store.completedExpanded.toggle() } label: {
                 HStack {
-                    Text("已完成 · \(rows.count)").font(.system(size: 15, weight: .semibold))
+                    Text("已完成 · \(rows.count)").scaledSystemFont(size: 15, weight: .semibold)
                     Spacer()
-                    Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
+                    Image(systemName: "chevron.right").scaledSystemFont(size: 13, weight: .semibold)
                         .rotationEffect(.degrees(store.completedExpanded ? 90 : 0))
                 }
                 .foregroundStyle(ThemeColors.inkSoft)
@@ -185,11 +185,11 @@ private struct TodayGoalCard: View {
         HStack(spacing: 20) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    if !narrow { Text("已专注").font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft) }
+                    if !narrow { Text("已专注").scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft) }
                     Text(DurationFormat.seconds(Double(store.focusedSeconds)))
-                        .font(.system(size: 24, weight: .bold)).monospacedDigit().foregroundStyle(ThemeColors.inkStrong)
+                        .scaledSystemFont(size: 24, weight: .bold).monospacedDigit().foregroundStyle(ThemeColors.inkStrong)
                     Text(store.goalMinutes > 0 ? "/ 目标 " + DurationFormat.minutes(Double(store.goalMinutes)) : "/ 未设目标")
-                        .font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+                        .scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
                 }
                 .lineLimit(1).minimumScaleFactor(0.8)
                 ProgressBar(percent: store.goalProgressPercent)
@@ -197,7 +197,7 @@ private struct TodayGoalCard: View {
                     .accessibilityValue(StatisticsFormat.percent(store.goalProgressPercent))
             }
             Button { presentation.sheet = .goal } label: {
-                Image(systemName: "pencil").font(.system(size: 17)).frame(width: 44, height: 44)
+                Image(systemName: "pencil").scaledSystemFont(size: 17).frame(width: 44, height: 44)
             }
             .buttonStyle(.borderless).foregroundStyle(ThemeColors.accentInk)
             .accessibilityLabel("修改今日目标")
@@ -321,7 +321,7 @@ private struct TodayComposeRow: View {
             Circle().strokeBorder(ThemeColors.accentStrong.opacity(0.5), lineWidth: 2)
                 .frame(width: 26, height: 26).frame(width: 44, height: 44)
             TextField("新任务", text: $store.newTitle)
-                .font(.system(size: 17)).foregroundStyle(ThemeColors.inkStrong)
+                .scaledSystemFont(size: 17).foregroundStyle(ThemeColors.inkStrong)
                 .focused($focused)
                 .submitLabel(.next)
                 .onSubmit(submit)
@@ -356,7 +356,7 @@ struct BatchDatePicker: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(spacing: 12) {
-            Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+            Text(title).scaledSystemFont(size: 16, weight: .semibold).foregroundStyle(ThemeColors.inkStrong)
             DatePicker("改期到", selection: $date, displayedComponents: .date)
                 .datePickerStyle(.graphical).labelsHidden()
             HStack {

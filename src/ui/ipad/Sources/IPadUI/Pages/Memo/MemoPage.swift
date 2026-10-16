@@ -74,7 +74,7 @@ import UIKit
                                     Text("\(store.categoryCount(id))").monospacedDigit()
                                 }
                                 // 定稿：选中的分类焦糖实底浅字，其余浅焦糖底。
-                                .font(.system(size: 14, weight: .semibold)).padding(.horizontal, 12).frame(height: 34)
+                                .scaledSystemFont(size: 14, weight: .semibold).padding(.horizontal, 12).frame(minHeight: 34)
                                 .foregroundStyle(store.filterCategoryID == id ? ThemeColors.surface : ThemeColors.accentFillInk)
                                 .background(store.filterCategoryID == id ? ThemeColors.accentInk : ThemeColors.accentFill, in: Capsule())
                             }
@@ -93,12 +93,12 @@ import UIKit
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(alignment: .firstTextBaseline) {
                                     Text(MemoFormat.shownTitle(title: memo.title, body: memo.body))
-                                        .font(.system(size: 15, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong).lineLimit(1)
+                                        .scaledSystemFont(size: 15, weight: .semibold).foregroundStyle(ThemeColors.inkStrong).lineLimit(1)
                                     Spacer(minLength: 8)
                                     Text(MemoFormat.formatUpdatedAt(memo.updatedAt, now: store.displayNow))
-                                        .font(.system(size: 12)).foregroundStyle(ThemeColors.inkSoft)
+                                        .scaledSystemFont(size: 12).foregroundStyle(ThemeColors.inkSoft)
                                 }
-                                Text(memo.body.components(separatedBy: "\n").first ?? "").font(.system(size: 13))
+                                Text(memo.body.components(separatedBy: "\n").first ?? "").scaledSystemFont(size: 13)
                                     .foregroundStyle(ThemeColors.inkSoft).lineLimit(1)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -143,10 +143,10 @@ import UIKit
             if store.selectedID != nil {
                 // 定稿纸面：左上分类名（13 粗焦糖），右上「X 更新」，下面大标题与正文。
                 HStack {
-                    Text(store.categoryName(store.editorCategoryID)).font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColors.accentInk)
+                    Text(store.categoryName(store.editorCategoryID)).scaledSystemFont(size: 13, weight: .semibold).foregroundStyle(ThemeColors.accentInk)
                     Spacer()
                     let updated = MemoFormat.formatUpdatedAt(store.updatedAt, now: store.displayNow)
-                    if !updated.isEmpty { Text(updated + " 更新").font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft) }
+                    if !updated.isEmpty { Text(updated + " 更新").scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft) }
                 }
                 if !store.errorMessage.isEmpty { errorRow }
                 MemoTitleEditor(text: store.editorTitle, isComposing: store.titleComposing,

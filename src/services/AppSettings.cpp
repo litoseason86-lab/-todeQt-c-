@@ -1230,3 +1230,19 @@ bool AppSettings::isOwnedSettingKey(const QString& key)
     const QString group = key.section(QLatin1Char('/'), 0, 0);
     return ownedSettingGroups().contains(group);
 }
+
+bool AppSettings::isBackendHealthy()
+{
+    if (!m_settings) {
+        return false;
+    }
+    m_settings->sync();
+    if (m_settings->status() != QSettings::NoError) {
+        recreateSettingsBackend();
+        if (!m_settings) {
+            return false;
+        }
+        m_settings->sync();
+    }
+    return m_settings->status() == QSettings::NoError;
+}

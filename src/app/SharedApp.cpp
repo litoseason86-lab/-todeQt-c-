@@ -117,11 +117,22 @@ void SharedApp::setUpSync(SyncController::Platform platform)
         return BackupService::instance()->backupBeforeSyncReplace(error);
     });
 
-    connect(BackupService::instance(), &BackupService::restoreStarted,
-            m_syncController.get(), &SyncController::prepareForRestore);
-    connect(BackupService::instance(), &BackupService::restoreCompleted,
-            m_syncController.get(), [this](bool success, const QString&) {
-        m_syncController->finishRestore(success);
+    const QPointer<SyncController> controller = m_syncController.get();
+    BackupService::instance()->setRestorePreparationCallback([controller](QString* error) {
+        if (!controller) {
+            if (error) {
+                *error = QStringLiteral("同步控制器已失效，无法准备恢复");
+            }
+            return false;
+        }
+        return controller->prepareForRestore(error);
+    });
+
+    connect(BackupService::instance(), &BackupService::restoreSyncCompleted,
+            m_syncController.get(), [this](bool success, bool safeToResume) {
+        if (m_syncController) {
+            m_syncController->finishRestore(success, safeToResume);
+        }
     });
 
     m_lifecycle.setSyncController(m_syncController.get());
@@ -161,17 +172,35 @@ void SharedApp::startDay()
     connect(LogicalDayService::instance(), &LogicalDayService::changed,
             this, [] { RoutineManager::instance()->materializeToday(); });
 
-    TrashService::instance()->purgeExpired();
+    auto* backup = BackupService::instance();
+    connect(backup, &BackupService::restoreStarted, this, [this] {
+        m_restoreMaintenanceBlocked = true;
+    });
+    connect(backup, &BackupService::restoreSyncCompleted, this, [this](bool success, bool safeToResume) {
+        // 只接受已准入恢复的内部结果；UI 的拒绝通知可能属于另一次请求，不能解除当前保护。
+        m_restoreMaintenanceBlocked = !success && !safeToResume;
+        purgeTrashIfReady();
+    });
+    purgeTrashIfReady();
     connect(LogicalDayService::instance(), &LogicalDayService::changed,
-            this, [] { TrashService::instance()->purgeExpired(); });
+            this, &SharedApp::purgeTrashIfReady);
     connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged,
-            this, [] { TrashService::instance()->purgeExpired(); });
+            this, &SharedApp::purgeTrashIfReady);
 
     connect(FocusHistoryService::instance(), &FocusHistoryService::historyChanged,
             this, [] { emit TaskManager::instance()->tasksChanged(); });
 
     connect(KnowledgeGapService::instance(), &KnowledgeGapService::tasksAffected,
             this, [] { emit TaskManager::instance()->tasksChanged(); });
+}
+
+void SharedApp::purgeTrashIfReady()
+{
+    // 进程重启后没有 restoreStarted 信号，必须同时遵守持久化恢复日志的保护状态。
+    if (!m_restoreMaintenanceBlocked
+        && (!m_syncController || !m_syncController->isRestoreStateUncertain())) {
+        TrashService::instance()->purgeExpired();
+    }
 }
 
 void SharedApp::createInteractionServices()

@@ -28,16 +28,16 @@ struct DashboardView: View {
                 }
                 // 定稿：「今日任务」卡片，标题行右边「全部任务 ›」，下面前六条；行尾开始按钮与今日任务页一致（不放 ⓘ）。
                 HStack {
-                    Text("今日任务").font(.system(size: 17, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+                    Text("今日任务").scaledSystemFont(size: 17, weight: .semibold).foregroundStyle(ThemeColors.inkStrong)
                     Spacer()
                     Button { shell.select(.today) } label: {
-                        HStack(spacing: 4) { Text(narrow ? "全部" : "全部任务"); Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold)) }
+                        HStack(spacing: 4) { Text(narrow ? "全部" : "全部任务"); Image(systemName: "chevron.right").scaledSystemFont(size: 12, weight: .semibold) }
                     }
                     .buttonStyle(AccentTextButtonStyle(size: 15))
                 }
                 .cardRow(store.topTasks.isEmpty ? .top : .top, insets: EdgeInsets(top: 12, leading: 16, bottom: 4, trailing: 4))
                 if store.topTasks.isEmpty {
-                    Text("今天还没有任务").font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+                    Text("今天还没有任务").scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
                         .frame(maxWidth: .infinity, minHeight: 80).cardRow(.bottom)
                 } else {
                     ForEach(Array(store.topTasks.enumerated()), id: \.element.id) { index, task in
@@ -81,7 +81,7 @@ struct DashboardView: View {
 
     private func stat(_ title: String, _ parts: [(text: String, isNumber: Bool)]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+            Text(title).scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
             MixedNumberText(parts: parts, numberSize: 30, unitSize: 15).lineLimit(1).minimumScaleFactor(0.6)
         }
         .padding(EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 16))

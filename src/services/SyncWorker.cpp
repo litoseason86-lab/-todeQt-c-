@@ -16,6 +16,25 @@ QString joinPath(const QString& directory, const QString& name)
     return directory + QLatin1Char('/') + name;
 }
 
+// 发送与接收共用同一字节预算；先拒绝超限内容，避免本机确认发布后对端却一律拒读。
+SyncFolder::Error writeWithinBudget(SyncFolder& folder, const QString& path, const QByteArray& bytes)
+{
+    const qint64 maxBytes = SyncFiles::maxBudgetForPath(path);
+    if (maxBytes <= 0) {
+        return {SyncFolder::ErrorKind::Io, QStringLiteral("不支持的同步文件路径：%1").arg(path)};
+    }
+    if (bytes.size() > maxBytes) {
+        return {SyncFolder::ErrorKind::Io,
+                QStringLiteral("同步文件大小超出预算上限，未写出：%1（%2 > %3 字节）")
+                    .arg(path).arg(bytes.size()).arg(maxBytes)};
+    }
+    SyncFolder::Error error;
+    if (!folder.write(path, bytes, &error) && error.ok()) {
+        return {SyncFolder::ErrorKind::Io, QStringLiteral("写入同步文件失败：%1").arg(path)};
+    }
+    return error;
+}
+
 // 包在真正的文件夹外面，每做完一次文件操作（不论成败）就把计数加一。
 // 同步引擎在主线程里看这个数有没有在涨，来区分「慢，但一直在做」和「卡住了」。
 class ProgressFolder final : public SyncFolder
@@ -93,10 +112,15 @@ SyncWorker::OpenResult SyncWorker::open(const QString& lastWrittenPath)
     QByteArray bytes;
     SyncFolder::Error readError;
     if (m_folder->read(SyncFiles::markerFileName(), &bytes, &readError)) {
-        const SyncFiles::ParseStatus status = SyncFiles::decodeMarker(bytes, &result.marker, &result.markerError);
-        result.markerState = status == SyncFiles::ParseStatus::Ok            ? MarkerState::Present
-                           : status == SyncFiles::ParseStatus::NewerFormat ? MarkerState::Newer
-                                                                             : MarkerState::Corrupt;
+        if (bytes.size() > SyncFiles::kMaxMarkerBytes) {
+            result.markerState = MarkerState::Corrupt;
+            result.markerError = QStringLiteral("标记文件大小超出预算上限");
+        } else {
+            const SyncFiles::ParseStatus status = SyncFiles::decodeMarker(bytes, &result.marker, &result.markerError);
+            result.markerState = status == SyncFiles::ParseStatus::Ok            ? MarkerState::Present
+                               : status == SyncFiles::ParseStatus::NewerFormat ? MarkerState::Newer
+                                                                                 : MarkerState::Corrupt;
+        }
     } else if (isMissing(readError)) {
         result.markerState = MarkerState::Missing;
         // 根目录本身不存在（Mac 还没建过）也走这里：列出来是空的，可以新建。
@@ -120,9 +144,7 @@ SyncWorker::OpenResult SyncWorker::open(const QString& lastWrittenPath)
 
 SyncFolder::Error SyncWorker::createMarker(const SyncFiles::Marker& marker)
 {
-    SyncFolder::Error error;
-    m_folder->write(SyncFiles::markerFileName(), SyncFiles::encodeMarker(marker), &error);
-    return error;
+    return writeWithinBudget(*m_folder, SyncFiles::markerFileName(), SyncFiles::encodeMarker(marker));
 }
 
 SyncWorker::WriteResult SyncWorker::writeChanges(const SyncBatch& batch, qint64 lastSeq, qint64 writtenAtMs)
@@ -135,7 +157,7 @@ SyncWorker::WriteResult SyncWorker::writeChanges(const SyncBatch& batch, qint64 
     const qint64 seq = std::max(lastSeq, existing.isEmpty() ? 0 : existing.last()) + 1;
     result.position = {batch.epoch, seq};
     result.path = joinPath(SyncFiles::changesDirectory(batch.device), SyncFiles::changeFileName(result.position));
-    m_folder->write(result.path, SyncFiles::encodeChanges({seq, writtenAtMs, batch}), &result.error);
+    result.error = writeWithinBudget(*m_folder, result.path, SyncFiles::encodeChanges({seq, writtenAtMs, batch}));
     return result;
 }
 
@@ -157,16 +179,14 @@ SyncWorker::WriteResult SyncWorker::writeSnapshot(const SyncFiles::SnapshotFile&
     WriteResult result;
     result.position = {snapshot.batch.epoch, snapshot.coveredSeq};
     result.path = joinPath(SyncFiles::deviceDirectory(snapshot.batch.device), SyncFiles::snapshotFileName(result.position));
-    m_folder->write(result.path, SyncFiles::encodeSnapshot(snapshot), &result.error);
+    result.error = writeWithinBudget(*m_folder, result.path, SyncFiles::encodeSnapshot(snapshot));
     return result;
 }
 
 SyncFolder::Error SyncWorker::writeCursor(const SyncFiles::CursorFile& cursor)
 {
-    SyncFolder::Error error;
-    m_folder->write(joinPath(SyncFiles::deviceDirectory(cursor.device), SyncFiles::cursorFileName()),
-                    SyncFiles::encodeCursor(cursor), &error);
-    return error;
+    return writeWithinBudget(*m_folder, joinPath(SyncFiles::deviceDirectory(cursor.device), SyncFiles::cursorFileName()),
+                             SyncFiles::encodeCursor(cursor));
 }
 
 SyncWorker::SnapshotFetch SyncWorker::fetchJoinSnapshot(const QString& me, const QString& preferredDevice)
@@ -232,22 +252,103 @@ SyncWorker::ScanResult SyncWorker::scan(const ScanRequest& request)
     }
     if (highest > request.epoch) {
         result.adoption.needed = true;
+        struct Candidate {
+            QString device;
+            SyncPosition position;
+        };
+        QList<Candidate> candidates;
         for (const QString& device : devices) {
-            SyncPosition best{-1, -1};
+            QList<SyncPosition> deviceSnapshots;
             for (const SyncPosition& snapshot : files.value(device).snapshots) {
-                if (snapshot.epoch == highest && snapshot.seq > best.seq) {
-                    best = snapshot;
+                if (snapshot.epoch == highest) {
+                    deviceSnapshots.append(snapshot);
                 }
             }
-            if (best.epoch != highest) {
-                continue;
+            std::sort(deviceSnapshots.begin(), deviceSnapshots.end(), [](const SyncPosition& a, const SyncPosition& b) {
+                return a.seq > b.seq;
+            });
+            for (const SyncPosition& snapshot : deviceSnapshots) {
+                candidates.append({device, snapshot});
             }
-            result.adoption.device = device;
-            result.adoption.position = best;
-            result.adoption.status = readSnapshot(device, best, &result.adoption.snapshot, &result.adoption.error,
-                                                  &result.error);
-            result.adoption.ready = result.error.ok() && result.adoption.status == SyncFiles::ParseStatus::Ok;
-            break;
+        }
+        if (candidates.isEmpty()) {
+            // 新纪元的快照还在路上：从最高纪元的设备改动中选确定来源（按设备标识升序，取其最高改动序号），
+            // 填入 adoption.device 和 adoption.position，由 adopt 写入请求，不能静默无请求。
+            result.adoption.ready = false;
+            result.adoption.status = SyncFiles::ParseStatus::Ok;
+            for (const QString& device : devices) {
+                qint64 maxSeq = -1;
+                for (const SyncPosition& change : files.value(device).changes) {
+                    if (change.epoch == highest && change.seq > maxSeq) {
+                        maxSeq = change.seq;
+                    }
+                }
+                if (maxSeq >= 0) {
+                    result.adoption.device = device;
+                    result.adoption.position = {highest, maxSeq};
+                    break;
+                }
+            }
+            return result;
+        }
+
+        struct CorruptInfo {
+            QString device;
+            SyncPosition position;
+            QString error;
+        };
+        QList<CorruptInfo> corruptList;
+        SyncFolder::Error lastIoError;
+
+        for (const Candidate& cand : candidates) {
+            SyncFiles::SnapshotFile snapshot;
+            QString parseError;
+            SyncFolder::Error readError;
+            const SyncFiles::ParseStatus status = readSnapshot(cand.device, cand.position, &snapshot,
+                                                               &parseError, &readError);
+            if (readError.ok() && status == SyncFiles::ParseStatus::Ok) {
+                // 合法候选立即采用
+                result.adoption.ready = true;
+                result.adoption.device = cand.device;
+                result.adoption.position = cand.position;
+                result.adoption.status = SyncFiles::ParseStatus::Ok;
+                result.adoption.snapshot = std::move(snapshot);
+                result.adoption.error.clear();
+                return result;
+            }
+            if (status == SyncFiles::ParseStatus::NewerFormat) {
+                // NewerFormat 仍返回 NewerVersion
+                result.adoption.ready = false;
+                result.adoption.device = cand.device;
+                result.adoption.position = cand.position;
+                result.adoption.status = SyncFiles::ParseStatus::NewerFormat;
+                result.adoption.error = parseError;
+                return result;
+            }
+            if (!readError.ok()) {
+                lastIoError = readError;
+            } else {
+                // 损坏候选继续尝试同 epoch 其他设备
+                corruptList.append({cand.device, cand.position, parseError});
+            }
+        }
+
+        // 若全部候选均遭遇 I/O 读取错误（无明确损坏的格式内容），向上报告底层 I/O 错误
+        if (corruptList.isEmpty() && !lastIoError.ok()) {
+            result.error = lastIoError;
+            return result;
+        }
+
+        // 全部候选均损坏（或至少有损坏候选）
+        result.adoption.ready = false;
+        result.adoption.status = SyncFiles::ParseStatus::Corrupt;
+        if (!corruptList.isEmpty()) {
+            result.adoption.device = corruptList.first().device;
+            result.adoption.position = corruptList.first().position;
+            result.adoption.error = corruptList.first().error;
+            for (const auto& item : corruptList) {
+                result.adoption.corruptedCandidates.append({item.device, item.position, item.error});
+            }
         }
         return result;
     }
@@ -339,6 +440,13 @@ SyncWorker::ScanResult SyncWorker::scan(const ScanRequest& request)
             if (!m_folder->read(file.path, &bytes, &peer.readError)) {
                 break;
             }
+            if (bytes.size() > SyncFiles::kMaxChangesBytes) {
+                file.kind = IncomingFile::Kind::Corrupt;
+                file.error = QStringLiteral("改动文件大小超出预算上限");
+                peer.files.append(file);
+                ++expected;
+                continue;
+            }
             SyncFiles::ChangeFile content;
             const SyncFiles::ParseStatus status =
                 SyncFiles::decodeChanges(bytes, device, {request.epoch, seq}, &content, &file.error);
@@ -375,8 +483,12 @@ SyncWorker::Survey SyncWorker::survey(const QString& me)
         const QString path = joinPath(SyncFiles::deviceDirectory(device), SyncFiles::cursorFileName());
         if (m_folder->read(path, &bytes, &error)) {
             peer.present = true;
-            QString parseError;
-            peer.status = SyncFiles::decodeCursor(bytes, device, &peer.cursor, &parseError);
+            if (bytes.size() > SyncFiles::kMaxCursorBytes) {
+                peer.status = SyncFiles::ParseStatus::Corrupt;
+            } else {
+                QString parseError;
+                peer.status = SyncFiles::decodeCursor(bytes, device, &peer.cursor, &parseError);
+            }
         } else if (!isMissing(error)) {
             result.error = error;
             return result;
@@ -474,6 +586,12 @@ SyncFiles::ParseStatus SyncWorker::readSnapshot(const QString& device, const Syn
     QByteArray bytes;
     const QString path = joinPath(SyncFiles::deviceDirectory(device), SyncFiles::snapshotFileName(position));
     if (!m_folder->read(path, &bytes, error)) {
+        return SyncFiles::ParseStatus::Corrupt;
+    }
+    if (bytes.size() > SyncFiles::kMaxSnapshotBytes) {
+        if (parseError) {
+            *parseError = QStringLiteral("快照文件大小超出预算上限");
+        }
         return SyncFiles::ParseStatus::Corrupt;
     }
     return SyncFiles::decodeSnapshot(bytes, device, position, snapshot, parseError);

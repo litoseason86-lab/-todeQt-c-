@@ -39,6 +39,8 @@ Item {
             Layout.preferredHeight: Theme.controlHeightLg
             focusPolicy: Qt.StrongFocus
             Accessible.role: Accessible.CheckBox
+            Accessible.checkable: true
+            Accessible.checked: root.completed
             Accessible.name: root.completed ? qsTr("取消完成：%1").arg(root.title)
                                             : qsTr("完成：%1").arg(root.title)
 

@@ -70,21 +70,21 @@ private struct HistorySelectionSummary: View {
         VStack(alignment: .leading, spacing: 0) {
             if !store.selectedDate.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(TodayDisplayDate.title(store.selectedDate)).font(.system(size: 14)).foregroundStyle(ThemeColors.inkSoft)
+                    Text(TodayDisplayDate.title(store.selectedDate)).scaledSystemFont(size: 14).foregroundStyle(ThemeColors.inkSoft)
                     MixedNumberText(parts: MixedNumberText.split(store.durationText(store.selectedSeconds)), numberSize: 30, unitSize: 15)
-                    Text("\(store.selectedSessions.count) 段专注").font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
+                    Text("\(store.selectedSessions.count) 段专注").scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
                 }
                 .padding(EdgeInsets(top: 18, leading: 18, bottom: 14, trailing: 18))
                 ForEach(store.detailSessions(compact: compact)) { session in
                     CardDivider()
                     HStack(spacing: 12) {
-                        Text(MonthGoalFormat.formatClock(session.startTime)).font(.system(size: 13)).monospacedDigit()
+                        Text(MonthGoalFormat.formatClock(session.startTime)).scaledSystemFont(size: 13).monospacedDigit()
                             .foregroundStyle(ThemeColors.inkSoft).frame(width: 44, alignment: .leading)
                         Capsule().fill(session.taskTitle.isEmpty ? ThemeColors.border : ThemeColors.accentInk).frame(width: 4, height: 36)
-                        Text(session.taskTitle.isEmpty ? "未关联任务" : session.taskTitle).font(.system(size: 16))
+                        Text(session.taskTitle.isEmpty ? "未关联任务" : session.taskTitle).scaledSystemFont(size: 16)
                             .foregroundStyle(session.taskTitle.isEmpty ? ThemeColors.inkSoft : ThemeColors.inkStrong).lineLimit(1)
                         Spacer(minLength: 8)
-                        Text(store.durationText(session.durationSeconds)).font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
+                        Text(store.durationText(session.durationSeconds)).scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
                     }
                     .padding(.horizontal, 18).frame(minHeight: 66)
                     .accessibilityElement(children: .combine)
@@ -94,9 +94,9 @@ private struct HistorySelectionSummary: View {
                     HStack {
                         Text(compact ? "全部 \(store.selectedSessions.count) 段 · 查看今日专注" : "查看这天的今日专注")
                         Spacer()
-                        Image(systemName: "chevron.right").font(.system(size: 12, weight: .semibold))
+                        Image(systemName: "chevron.right").scaledSystemFont(size: 12, weight: .semibold)
                     }
-                    .font(.system(size: 15, weight: .semibold)).foregroundStyle(ThemeColors.accentInk)
+                    .scaledSystemFont(size: 15, weight: .semibold).foregroundStyle(ThemeColors.accentInk)
                     .padding(.horizontal, 18).frame(minHeight: 52).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

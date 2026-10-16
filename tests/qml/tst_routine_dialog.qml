@@ -25,6 +25,8 @@ TestCase {
     property int weekdaysRoutineId: -1
     property bool weekdaysResult: true
     property int deletedId: -1
+    property int deleteCalls: 0
+    property bool deleteResult: true
     property bool addResult: true
     property bool updateResult: true
 
@@ -67,6 +69,9 @@ TestCase {
         }
 
         function deleteRoutine(id) {
+            testCase.deleteCalls += 1
+            if (!testCase.deleteResult)
+                return false
             testCase.deletedId = id
             testCase.added = testCase.added.filter(function(item) { return item.id !== id })
             routinesChanged()
@@ -179,6 +184,8 @@ TestCase {
         testCase.weekdaysRoutineId = -1
         testCase.weekdaysResult = true
         testCase.deletedId = -1
+        testCase.deleteCalls = 0
+        testCase.deleteResult = true
         testCase.addResult = true
         testCase.updateResult = true
         fakeRoutineManager.failLoad = false
@@ -188,6 +195,7 @@ TestCase {
         // 重复弹窗是套在本弹窗上的第二层 Popup：上一条用例开着它离开，
         // 会挡住后面用例的点击（用例按函数名字母序跑，不是书写顺序）。
         dialog.weekdayDialogRef.close()
+        dialog.deleteConfirmationRef.close()
         // 切过主题的用例若中途失败就来不及还原；每条用例开始前统一回到暖色主题。
         Theme.activeThemeId = "warm"
         dialog.close()
@@ -319,10 +327,95 @@ TestCase {
         compare(list.count, 1)
 
         dialog.deleteRoutine(42)
+        tryCompare(dialog.deleteConfirmationRef, "opened", true)
+        mouseClick(findChild(dialog.deleteConfirmationRef.contentItem, "confirmRoutineDeleteButton"))
         wait(120)
         compare(testCase.deletedId, 42)
         compare(list.count, 0)
         dialog.close()
+    }
+
+    // 产品保证：点删除只展示确认，取消或Esc都不调用服务，确认后才删除原来选中的规则。
+    function test_deleteRequiresConfirmationAndCancelKeepsRule() {
+        testCase.added = [{ id: 42, title: "需要确认的例行", categoryId: -1, categoryName: "", categoryColor: "", active: true, displayOrder: 0 }]
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        var row = routineRowWith(true)
+        var button = findChild(row, "routineDeleteButton")
+        verify(button !== null)
+        mouseClick(button)
+        compare(testCase.deleteCalls, 0)
+        compare(testCase.added.length, 1)
+        var confirmation = dialog.deleteConfirmationRef
+        verify(confirmation !== null)
+        tryCompare(confirmation, "opened", true)
+        var cancel = findChild(confirmation.contentItem, "cancelRoutineDeleteButton")
+        verify(cancel !== null)
+        mouseClick(cancel)
+        tryCompare(confirmation, "opened", false)
+        compare(testCase.deleteCalls, 0)
+        compare(testCase.added.length, 1)
+        mouseClick(button)
+        tryCompare(confirmation, "opened", true)
+        keyClick(Qt.Key_Escape)
+        tryCompare(confirmation, "opened", false)
+        compare(testCase.deleteCalls, 0)
+        mouseClick(button)
+        tryCompare(confirmation, "opened", true)
+        var confirm = findChild(confirmation.contentItem, "confirmRoutineDeleteButton")
+        verify(confirm !== null)
+        mouseClick(confirm)
+        tryCompare(testCase, "deleteCalls", 1)
+        compare(testCase.deletedId, 42)
+        compare(testCase.added.length, 0)
+        tryCompare(confirmation, "opened", false)
+    }
+
+    // 产品保证：关闭例行管理会一并撤销待确认删除，不把旧目标带到下次打开。
+    function test_closingManagerCancelsPendingDeletion() {
+        testCase.added = [{ id: 64, title: "关闭时保留", categoryId: -1, categoryName: "", categoryColor: "", active: true, displayOrder: 0 }]
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        mouseClick(findChild(routineRowWith(true), "routineDeleteButton"))
+        tryCompare(dialog.deleteConfirmationRef, "opened", true)
+        compare(testCase.deleteCalls, 0)
+        dialog.close()
+        tryCompare(dialog, "opened", false)
+        tryCompare(dialog.deleteConfirmationRef, "opened", false)
+        compare(dialog.deleteConfirmationRef.pendingId, -1)
+        compare(testCase.added.length, 1)
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        compare(dialog.deleteConfirmationRef.opened, false)
+        compare(testCase.deleteCalls, 0)
+    }
+
+    // 产品保证：确认窗口冻结目标编号，列表刷新不把删除指向另一条；服务失败时保留规则并可重试。
+    function test_deleteConfirmationKeepsTargetAndReportsFailure() {
+        testCase.added = [{ id: 51, title: "原目标", categoryId: -1, categoryName: "", categoryColor: "", active: true, displayOrder: 0 }]
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        mouseClick(findChild(routineRowWith(true), "routineDeleteButton"))
+        compare(testCase.deleteCalls, 0)
+        var confirmation = dialog.deleteConfirmationRef
+        tryCompare(confirmation, "opened", true)
+        testCase.added = [{ id: 52, title: "刷新后第一条", categoryId: -1, categoryName: "", categoryColor: "", active: true, displayOrder: 0 }].concat(testCase.added)
+        fakeRoutineManager.routinesChanged()
+        testCase.deleteResult = false
+        var confirm = findChild(confirmation.contentItem, "confirmRoutineDeleteButton")
+        verify(confirm !== null)
+        mouseClick(confirm)
+        compare(testCase.deleteCalls, 1)
+        compare(testCase.added.length, 2)
+        compare(dialog.errorText, "例行任务删除失败")
+        compare(confirmation.opened, true)
+        testCase.deleteResult = true
+        mouseClick(confirm)
+        compare(testCase.deleteCalls, 2)
+        compare(testCase.deletedId, 51)
+        compare(testCase.added.length, 1)
+        compare(testCase.added[0].id, 52)
+        tryCompare(confirmation, "opened", false)
     }
 
     function test_editRoutineLoadsValuesAndSavesChanges() {
@@ -667,6 +760,8 @@ TestCase {
         tryCompare(dialog, "editingRoutineId", 89)
 
         dialog.deleteRoutine(89)
+        tryCompare(dialog.deleteConfirmationRef, "opened", true)
+        mouseClick(findChild(dialog.deleteConfirmationRef.contentItem, "confirmRoutineDeleteButton"))
         compare(testCase.deletedId, 89)
         compare(dialog.editingRoutineId, -1)
         compare(input.text, "")

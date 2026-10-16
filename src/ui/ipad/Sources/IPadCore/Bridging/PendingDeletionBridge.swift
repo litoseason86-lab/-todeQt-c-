@@ -17,4 +17,5 @@ public struct PendingDeletionState: Equatable, Sendable {
     func requestSession(id: Int, title: String, isRest: Bool) throws
     func commit() throws
     func cancel()
+    func setAutomaticCommitSuspended(_ suspended: Bool)
 }

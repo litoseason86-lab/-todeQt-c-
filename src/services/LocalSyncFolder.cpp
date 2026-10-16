@@ -1,4 +1,5 @@
 #include "LocalSyncFolder.h"
+#include "SyncFiles.h"
 
 #include <QDir>
 #include <QFile>
@@ -140,6 +141,11 @@ QStringList LocalSyncFolder::list(const QString& relativeDir, Error* error)
 
 bool LocalSyncFolder::read(const QString& relativePath, QByteArray* data, Error* error)
 {
+    const qint64 budget = SyncFiles::maxBudgetForPath(relativePath);
+    if (budget <= 0) {
+        setError(error, {ErrorKind::Io, QStringLiteral("拒绝读取未知同步文件: %1").arg(relativePath)});
+        return false;
+    }
     const QString path = absolutePath(relativePath);
     // Mac 开着「优化 Mac 存储」时，对方刚写来的文件可能只是占位：这里的读取会让系统先把内容下载回来，
     // 所以可能要等上一秒左右（049 实测）。
@@ -163,6 +169,12 @@ bool LocalSyncFolder::read(const QString& relativePath, QByteArray* data, Error*
         }
         if (count == 0) {
             break;
+        }
+        // 循环读取时累计并在 append 前拒绝超限文件，防止异常大文件耗尽内存
+        if (content.size() + count > budget) {
+            ::close(fd);
+            setError(error, {ErrorKind::Io, QStringLiteral("文件大小超出预算上限: %1").arg(relativePath)});
+            return false;
         }
         content.append(buffer, count);
     }

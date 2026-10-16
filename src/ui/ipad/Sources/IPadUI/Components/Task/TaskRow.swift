@@ -83,7 +83,7 @@ struct TaskRow: View {
     @ViewBuilder private var leading: some View {
         if selectionMode {
             Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 26)).foregroundStyle(selected ? ThemeColors.accentInk : ThemeColors.inkMuted)
+                .scaledSystemFont(size: 26).foregroundStyle(selected ? ThemeColors.accentInk : ThemeColors.inkMuted)
                 .frame(width: 44, height: 44)
                 .accessibilityLabel(selected ? "已选「\(task.title)」" : "选择「\(task.title)」")
         } else if allowsCompletion {
@@ -97,7 +97,7 @@ struct TaskRow: View {
             } label: {
                 Group {
                     if task.completed {
-                        Image(systemName: "checkmark.circle.fill").font(.system(size: 26))
+                        Image(systemName: "checkmark.circle.fill").scaledSystemFont(size: 26)
                             .foregroundStyle(ThemeColors.accentInk)
                     } else {
                         Circle().strokeBorder(ThemeColors.accentStrong, lineWidth: 2).frame(width: 26, height: 26)
@@ -116,13 +116,13 @@ struct TaskRow: View {
             @Bindable var editor = editor
             VStack(alignment: .leading, spacing: 6) {
                 TextField("标题", text: $editor.title)
-                    .font(.system(size: 17)).foregroundStyle(ThemeColors.inkStrong)
+                    .scaledSystemFont(size: 17).foregroundStyle(ThemeColors.inkStrong)
                     .focused($field, equals: .title)
                     .submitLabel(.done)
                     .onSubmit { field = nil; editor.finish() }
                     .accessibilityLabel("任务标题")
                 TextField("备注", text: $editor.notes, axis: .vertical)
-                    .font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+                    .scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
                     .lineLimit(1...4)
                     .focused($field, equals: .notes)
                     .accessibilityLabel("任务备注")
@@ -144,7 +144,7 @@ struct TaskRow: View {
         } else {
             let meta = metaText
             VStack(alignment: .leading, spacing: 3) {
-                Text(task.title).font(.system(size: 17))
+                Text(task.title).scaledSystemFont(size: 17)
                     .foregroundStyle(task.completed ? ThemeColors.inkMuted : ThemeColors.inkStrong)
                     .strikethrough(task.completed).lineLimit(2)
                 if !meta.isEmpty {
@@ -155,10 +155,10 @@ struct TaskRow: View {
                         }
                         Text(meta).lineLimit(1)
                     }
-                    .font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
+                    .scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
                 }
                 if task.completed && !task.completionNote.isEmpty {
-                    Text("完成：\(task.completionNote)").font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft).lineLimit(2)
+                    Text("完成：\(task.completionNote)").scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft).lineLimit(2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -178,7 +178,7 @@ struct TaskRow: View {
             } else if allowsStart && !task.completed {
                 if compact {
                     Button { act { actions.openFocus(id: task.id, title: task.title) } } label: {
-                        Image(systemName: "play.fill").font(.system(size: 15)).frame(width: 44, height: 44)
+                        Image(systemName: "play.fill").scaledSystemFont(size: 15).frame(width: 44, height: 44)
                     }
                     .buttonStyle(.borderless).foregroundStyle(ThemeColors.accentInk)
                     .accessibilityLabel("开始专注「\(task.title)」")
@@ -195,7 +195,7 @@ struct TaskRow: View {
     }
     private var infoButton: some View {
         Button { act { detailTaskID.wrappedValue = task.id } } label: {
-            Image(systemName: "info.circle").font(.system(size: 18)).frame(width: 44, height: 44)
+            Image(systemName: "info.circle").scaledSystemFont(size: 18).frame(width: 44, height: 44)
         }
         .buttonStyle(.borderless).foregroundStyle(ThemeColors.accentInk)
         .accessibilityLabel("「\(task.title)」的详细信息")
@@ -247,14 +247,14 @@ private struct FocusElapsedLabel: View {
     var body: some View {
         let seconds = focus.snapshot.elapsedSeconds
         Text("专注中 " + String(format: "%02d:%02d", seconds / 60, seconds % 60))
-            .font(.system(size: 14, weight: .semibold).monospacedDigit()).foregroundStyle(ThemeColors.accentInk)
+            .scaledSystemFont(size: 14, weight: .semibold).monospacedDigit().foregroundStyle(ThemeColors.accentInk)
     }
 }
 
 // 胶囊里的图标与文字：图标小一号，间距 6（定稿 .start 内 svg 14px、gap 6px）。
 struct PillLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: 6) { configuration.icon.font(.system(size: 12)); configuration.title }
+        HStack(spacing: 6) { configuration.icon.scaledSystemFont(size: 12); configuration.title }
     }
 }
 

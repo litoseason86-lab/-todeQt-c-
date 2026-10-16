@@ -246,6 +246,10 @@ Rectangle {
         id: deleteButton
 
         objectName: "scheduleEntryDelete-" + root.entryId
+        Accessible.role: Accessible.Button
+        Accessible.name: qsTr("删除课程：%1").arg(root.title)
+        // 读屏动作与指针操作共用删除请求，由页面统一确认，避免绕过业务入口。
+        Accessible.onPressAction: root.deleteRequested(root.entryId, root.title)
         anchors.top: parent.top
         anchors.right: parent.right
         anchors.margins: 2

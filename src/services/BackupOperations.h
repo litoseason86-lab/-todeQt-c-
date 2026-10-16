@@ -10,6 +10,11 @@ class QSettings;
 
 namespace BackupOperations {
 
+// 外部备份包含本机历史、同步日志和索引，独立于同步快照预算；超限必须拒绝，不能截断。
+inline constexpr qint64 kMaxBackupFileBytes = 512LL * 1024 * 1024;
+inline constexpr qint64 kMaxBackupRows = 5'000'000;
+inline constexpr qint64 kMaxBackupCellBytes = 16LL * 1024 * 1024;
+
 // 打开偏好存储：路径为空时是生产用的 macOS 原生偏好，否则是 ini 文件（测试用）。
 // 原生偏好默认开启回退，allKeys() 会连系统全局域的键（文本替换词典、语言、地区……）
 // 一起列出来；这里一律关掉回退，只看本应用自己的偏好域。
@@ -39,7 +44,9 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
                                int currentSchemaVersion);
 QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion);
 EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath);
-OperationResult atomicCopy(const QString& sourcePath, const QString& destinationPath);
+// 外部暂存和发布备份必须传同源预算；本地可信回滚沿用负值，不因新支持上限丢失回滚能力。
+OperationResult atomicCopy(const QString& sourcePath, const QString& destinationPath,
+                           qint64 maxBytes = -1);
 
 } // namespace BackupOperations
 

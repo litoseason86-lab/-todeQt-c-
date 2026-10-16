@@ -111,7 +111,7 @@ struct FocusView: View {
     // 错误块参与布局与滚动范围，不随计时按钮隐藏；两行之外的完整内容仍提供给旁白。
     @ViewBuilder private func errorBlock(_ layout: FocusPageLayout) -> some View {
         if layout.errorHeight > 0 {
-            Text(store.errorText).font(.system(size: 15)).foregroundStyle(ThemeColors.danger)
+            Text(store.errorText).scaledSystemFont(size: 15).foregroundStyle(ThemeColors.danger)
                 .multilineTextAlignment(.center).lineLimit(2)
                 .accessibilityLabel(store.errorText)
                 .padding(.top, 12)
@@ -131,9 +131,9 @@ struct FocusView: View {
             } label: {
                 HStack(spacing: 8) {
                     Text(hasTask ? store.selectedTaskTitle : "选择要专注的任务").lineLimit(1)
-                    Image(systemName: "chevron.down").font(.system(size: 12, weight: .semibold))
+                    Image(systemName: "chevron.down").scaledSystemFont(size: 12, weight: .semibold)
                 }
-                .font(.system(size: 17, weight: .semibold))
+                .scaledSystemFont(size: 17, weight: .semibold)
                 .foregroundStyle(hasTask ? ThemeColors.inkStrong : ThemeColors.accentInk)
                 .padding(.horizontal, 18).frame(height: FocusPageLayout.taskHeight)
                 .glassEffect(.regular.interactive(), in: .capsule)
@@ -144,7 +144,7 @@ struct FocusView: View {
                 FocusTaskPicker(store: store).presentationCompactAdaptation(.sheet)
             }
         } else {
-            Text(store.taskTitleText).font(.system(size: 17, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+            Text(store.taskTitleText).scaledSystemFont(size: 17, weight: .semibold).foregroundStyle(ThemeColors.inkStrong)
                 .lineLimit(1).frame(maxWidth: layout.taskMaxWidth)
         }
     }
@@ -162,7 +162,7 @@ struct FocusView: View {
                                slim: store.slimClockFont, color: timeColor)
                 if store.taskSelectorActive { modeMenu }
                 else {
-                    Text(store.ringStatusText).font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+                    Text(store.ringStatusText).scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
                         .lineLimit(1).frame(height: 32)
                 }
             }
@@ -181,9 +181,9 @@ struct FocusView: View {
         } label: {
             HStack(spacing: 6) {
                 Text(store.modeMenuTitle)
-                Image(systemName: "chevron.down").font(.system(size: 10, weight: .semibold))
+                Image(systemName: "chevron.down").scaledSystemFont(size: 10, weight: .semibold)
             }
-            .font(.system(size: 15, weight: .medium)).foregroundStyle(ThemeColors.inkSoft)
+            .scaledSystemFont(size: 15, weight: .medium).foregroundStyle(ThemeColors.inkSoft)
             .padding(.horizontal, 12).frame(height: 32)
             .background(ThemeColors.accentInk.opacity(0.09), in: Capsule())
         }
@@ -209,10 +209,10 @@ struct FocusView: View {
         if store.taskSelectorActive {
             Button(action: startOrPickTask) {
                 HStack(spacing: 8) {
-                    Image(systemName: "play.fill").font(.system(size: 14, weight: .semibold))
+                    Image(systemName: "play.fill").scaledSystemFont(size: 14, weight: .semibold)
                     Text("开始专注")
                 }
-                .font(.system(size: 16, weight: .semibold)).foregroundStyle(ThemeColors.accentInk)
+                .scaledSystemFont(size: 16, weight: .semibold).foregroundStyle(ThemeColors.accentInk)
                 .padding(.horizontal, 22).frame(height: 48)
                 .glassEffect(.regular.interactive(), in: .capsule)
             }
@@ -240,7 +240,7 @@ struct FocusView: View {
     private var secondaryIcon: String { store.state == .pomoBreak ? "forward.fill" : "stop.fill" }
     private func outlineButton(_ title: String, icon: String, enabled: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon).font(.system(size: 16, weight: .semibold)).foregroundStyle(ThemeColors.accentInk)
+            Image(systemName: icon).scaledSystemFont(size: 16, weight: .semibold).foregroundStyle(ThemeColors.accentInk)
                 .frame(width: 52, height: 52)
                 .background(ThemeColors.surface.opacity(0.28), in: Circle())
                 .overlay(Circle().strokeBorder(ThemeColors.accentInk.opacity(0.55), lineWidth: 1.5))

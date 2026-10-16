@@ -329,8 +329,8 @@ Popup {
 
                 background: Rectangle {
                     color: cancelButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
-                    border.color: cancelButton.activeFocus ? Theme.focusRing : Theme.border
-                    border.width: cancelButton.activeFocus ? 2 : 1
+                    border.color: cancelButton.visualFocus ? Theme.focusRing : Theme.border
+                    border.width: cancelButton.visualFocus ? 2 : 1
                     radius: Theme.radiusMd
                 }
 
@@ -358,7 +358,7 @@ Popup {
                 background: Rectangle {
                     color: confirmButton.hovered ? Theme.accentFillStrong : Theme.accentFill
                     border.color: Theme.focusRing
-                    border.width: confirmButton.activeFocus ? 2 : 0
+                    border.width: confirmButton.visualFocus ? 2 : 0
                     radius: Theme.radiusMd
                 }
 

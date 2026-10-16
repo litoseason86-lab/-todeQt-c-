@@ -22,4 +22,5 @@ import PTBridge
     func requestSession(id: Int, title: String, isRest: Bool) throws { try bridge.requestSession(id, title: title, isRest: isRest) }
     func commit() throws { try bridge.commit() }
     func cancel() { bridge.cancel() }
+    func setAutomaticCommitSuspended(_ suspended: Bool) { bridge.setAutomaticCommitSuspended(suspended) }
 }

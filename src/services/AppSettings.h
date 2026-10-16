@@ -197,6 +197,8 @@ public:
     // 保留认识的 id 并维持用户顺序，丢掉已不存在的 id，去重，最后把新页面补到末尾。
     static QStringList normalizeSidebarOrder(const QStringList& stored);
     static bool isOwnedSettingKey(const QString& key);
+    // 检查底层的偏好存储后端是否健康。状态不为 NoError 时若为 AccessError 会尝试重建后端自愈。
+    bool isBackendHealthy();
 
 signals:
     void lastModeChanged();

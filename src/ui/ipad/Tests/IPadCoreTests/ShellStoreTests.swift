@@ -402,4 +402,106 @@ import XCTest
         store.flushEdits()
         XCTAssertEqual(saved, ["保留"])
     }
+
+    // 产品保证：旁白开启时带动作的提示不自动超时退场，用户触发动作执行一次且不调退场回调。
+    func testVoiceOverActionToastDoesNotTimeoutAndActionExecutesOnce() async {
+        let store = ShellStore(bridge: FakeShellBridge())
+        store.setVoiceOverEnabled(true)
+        var actionCount = 0
+        var retiredCount = 0
+        store.showToast("撤销提示", actionTitle: "撤销", durationMilliseconds: 20, action: {
+            actionCount += 1
+        }, onRetired: {
+            retiredCount += 1
+        })
+        guard let initialID = store.toast?.id else {
+            XCTFail("提示必须已建立")
+            return
+        }
+        try? await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(store.toast?.id, initialID)
+        XCTAssertEqual(actionCount, 0)
+        XCTAssertEqual(retiredCount, 0)
+
+        store.triggerToastAction()
+        XCTAssertNil(store.toast)
+        XCTAssertEqual(actionCount, 1)
+        XCTAssertEqual(retiredCount, 0)
+    }
+
+    // 产品保证：先展示带动作提示再开启旁白依然暂停超时，重复设置同一状态只通知一次；关闭旁白后重新开始倒计时并正常退场。
+    func testVoiceOverTogglingWhileToastActiveRestartsTimeoutOnDisable() async {
+        let store = ShellStore(bridge: FakeShellBridge())
+        var suspensionChanges: [Bool] = []
+        store.onAccessibilityTimeoutSuspensionChanged = { suspended in
+            suspensionChanges.append(suspended)
+        }
+        var retiredCount = 0
+        var actionCount = 0
+        store.showToast("稍后开启旁白", actionTitle: "撤销", durationMilliseconds: 20, action: {
+            actionCount += 1
+        }, onRetired: {
+            retiredCount += 1
+        })
+        guard let initialID = store.toast?.id else {
+            XCTFail("提示必须已建立")
+            return
+        }
+        store.setVoiceOverEnabled(true)
+        store.setVoiceOverEnabled(true)
+        XCTAssertEqual(suspensionChanges, [true])
+
+        try? await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(store.toast?.id, initialID)
+        XCTAssertEqual(retiredCount, 0)
+
+        store.setVoiceOverEnabled(false)
+        XCTAssertEqual(suspensionChanges, [true, false])
+
+        var exited = false
+        for _ in 0..<300 {
+            if store.toast == nil {
+                exited = true
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(exited, "关闭旁白后提示应在重新计时的窗口内退场")
+        XCTAssertEqual(retiredCount, 1)
+        XCTAssertEqual(actionCount, 0)
+    }
+
+    // 产品保证：旁白开启时纯信息提示没有撤销动作，依然按原时长自动超时退场。
+    func testVoiceOverInformationalToastStillTimesOut() async {
+        let store = ShellStore(bridge: FakeShellBridge())
+        store.setVoiceOverEnabled(true)
+        var retiredCount = 0
+        store.showToast("纯信息提示", durationMilliseconds: 20, onRetired: {
+            retiredCount += 1
+        })
+        XCTAssertNotNil(store.toast)
+        var exited = false
+        for _ in 0..<300 {
+            if store.toast == nil {
+                exited = true
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(exited, "纯信息提示即便在旁白开启时也应正常超时退场")
+        XCTAssertEqual(retiredCount, 1)
+    }
+
+    // 产品保证：初次传入关闭旁白状态依然向外部转发以恢复潜在的挂起状态，重复设置同一状态不重复触发回调。
+    func testVoiceOverInitialFalseIsForwardedAndDuplicatesAreDeduplicated() {
+        let store = ShellStore(bridge: FakeShellBridge())
+        var records: [Bool] = []
+        store.onAccessibilityTimeoutSuspensionChanged = { records.append($0) }
+        store.setVoiceOverEnabled(false)
+        store.setVoiceOverEnabled(false)
+        store.setVoiceOverEnabled(true)
+        store.setVoiceOverEnabled(true)
+        store.setVoiceOverEnabled(false)
+        XCTAssertEqual(records, [false, true, false])
+    }
 }

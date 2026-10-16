@@ -65,18 +65,18 @@ public:
     // 同步记下的值；从没记过时返回空的 QString。
     QString syncedSetting(const QString& key) const;
     // 同步记下的全部设置项（键 → 值）。启动时与本机设置逐项核对。
-    QHash<QString, QString> syncedSettings() const;
+    QHash<QString, QString> syncedSettings(bool* ok = nullptr) const;
     // 设置的「待写回」标记（键 → set / remove）。对方改的设置进库时（applyRemote、整体替换），同一个事务里记下：
     // set 是要把库里的值写回本机，remove 是快照里没有、要从本机删掉。写回成功后由写回方清掉。
     // 启动核对据此分辨方向：有标记的，是对方的改动还没写回（进库之后、写回之前被结束了），以库为准；
     // 没有标记却不一致的，是本机改了却没记进库（记录失败），以本机为准。
-    QHash<QString, QString> pendingSettingWriteBacks() const;
+    QHash<QString, QString> pendingSettingWriteBacks(bool* ok = nullptr) const;
     bool finishSettingWriteBack(const QString& key);
 
     // ── 全量快照：首次加入与全局回滚（计划 050「首次加入与恢复备份」） ──
     // 本机全部已发布的记录（带字段版本）、全部删除记录与全部设置。给新加入的设备起步用；
     // 本机恢复备份做全局回滚之后，另一台也靠它整体换成这份状态。
-    SyncBatch exportSnapshot() const;
+    SyncBatch exportSnapshot(bool* ok = nullptr, QString* errorOut = nullptr) const;
     // 快照已经写进同步文件：待发送队列里快照已经带上的改动出队（与 acknowledge 相同），并清掉「需要发布快照」标记。
     bool markSnapshotPublished(const SyncBatch& snapshot);
     // 用快照整体替换本机的同步数据，并采用快照的纪元：首次加入（你定了以 Mac 为准）、另一台做了全局回滚时用。
@@ -86,7 +86,9 @@ public:
     ApplyResult replaceWithSnapshot(const SyncBatch& snapshot);
     // 本机恢复了备份（全局回滚）之后调用：纪元在恢复前与备份里两者较大的基础上加一；设备标识改回恢复前的
     // （备份可能来自另一台设备，两台共用一个标识会把合并搅乱）；清空待发送；置「需要发布快照」。
-    bool beginEpochAfterRestore(qint64 previousEpoch, const QString& previousDeviceId);
+    // 可选传入 restoreOperationId 作为本地幂等恢复事务标识，同标识重试时不重复递增纪元。
+    bool beginEpochAfterRestore(qint64 previousEpoch, const QString& previousDeviceId,
+                                const QString& restoreOperationId = QString());
     bool needsSnapshot() const;
     // 下一轮要给所有设备写一份全量快照：新建了同步文件夹时用，和恢复备份之后走同一条路。
     // 标记记在库里，写出之前应用被结束，下次启动照样会写。

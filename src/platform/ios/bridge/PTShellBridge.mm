@@ -20,29 +20,26 @@
 #include <memory>
 
 @interface PTShellSnapshot ()
-- (instancetype)initWithToday:(const QVariantMap &)today week:(const QVariantList &)week
-                         gaps:(const QVariantMap &)gaps error:(const QString &)error;
+- (instancetype)initWithSummary:(const QVariantMap &)summary
+                           gaps:(const QVariantMap &)gaps
+                          error:(const QString &)error;
 @end
 @interface PTShellTimerSnapshot ()
 - (instancetype)initWithError:(const QString &)error;
 @end
 @implementation PTShellSnapshot
-- (instancetype)initWithToday:(const QVariantMap &)today week:(const QVariantList &)week
-                         gaps:(const QVariantMap &)gaps error:(const QString &)error
+- (instancetype)initWithSummary:(const QVariantMap &)summary
+                           gaps:(const QVariantMap &)gaps
+                          error:(const QString &)error
 {
     if ((self = [super init])) {
         _valid = error.isEmpty();
         _error = error.toNSString();
-        // 只投影统计服务已经计算的总数与完成数；逻辑日、有效专注和到期条件均由原服务决定。
-        _todayPendingCount = today.value(QStringLiteral("totalTasks")).toInt()
-            - today.value(QStringLiteral("completedTasks")).toInt();
-        for (const QVariant &value : week) {
-            const auto day = value.toMap();
-            _weekPendingCount += day.value(QStringLiteral("tasks")).toInt()
-                - day.value(QStringLiteral("completedTasks")).toInt();
-        }
-        _todayFocusedSeconds = today.value(QStringLiteral("totalDuration")).toInt();
-        _dueGapCount = gaps.value(QStringLiteral("dueToday")).toInt() + gaps.value(QStringLiteral("overdue")).toInt();
+        // 只投影统计服务已经计算的摘要与缺口数；逻辑日、有效专注和到期条件均由原服务决定。
+        _todayPendingCount = summary.value(QStringLiteral("todayPendingCount")).toInt();
+        _weekPendingCount = summary.value(QStringLiteral("weekPendingCount")).toInt();
+        _todayFocusedSeconds = summary.value(QStringLiteral("todayFocusedSeconds")).toInt();
+        _dueGapCount = gaps.value(QStringLiteral("dueCount")).toInt();
         const auto *timer = FocusTimer::instance();
         _hasTimer = timer->hasActiveSession() || timer->phase() != FocusTimer::NoPhase;
         _running = timer->isRunning();
@@ -167,20 +164,18 @@
     NSAssert(NSThread.isMainThread, @"读取外壳状态必须在主线程");
     _readError.clear();
     _reading = true;
-    QVariantMap today;
-    QVariantList week;
+    QVariantMap summary;
     QVariantMap gaps;
     if (!DatabaseManager::instance()->database().isOpen()) {
         _readError = QStringLiteral("数据库未打开");
     } else {
-        today = StatisticsService::instance()->getTodayStats();
-        week = StatisticsService::instance()->getWeekStats();
+        summary = StatisticsService::instance()->getTaskSummary();
         gaps = KnowledgeGapService::instance()->getReminderSummary();
         if (!gaps.value(QStringLiteral("valid")).toBool() && _readError.isEmpty())
             _readError = QStringLiteral("读取知识缺口失败");
     }
     _reading = false;
-    return [[PTShellSnapshot alloc] initWithToday:today week:week gaps:gaps error:_readError];
+    return [[PTShellSnapshot alloc] initWithSummary:summary gaps:gaps error:_readError];
 }
 - (PTShellTimerSnapshot *)readTimerSnapshot
 {

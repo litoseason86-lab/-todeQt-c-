@@ -135,6 +135,12 @@ public:
         SyncFiles::ParseStatus status = SyncFiles::ParseStatus::Ok;
         QString error;
         SyncFiles::SnapshotFile snapshot;
+        struct CorruptedCandidate {
+            QString device;
+            SyncPosition position;
+            QString error;
+        };
+        QList<CorruptedCandidate> corruptedCandidates;
     };
     struct ScanResult {
         SyncFolder::Error error;

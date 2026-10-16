@@ -304,6 +304,40 @@ private slots:
         QVERIFY(until([&] { return client.has(7); }));
         QCOMPARE(client.take(7).value("result").toObject().value("structuredContent").toObject().value("connected"), QJsonValue(true));
     }
+    // 产品保证：接入关闭时不能新增写授权，重新打开接入只能读取。
+    void disabledAccessCannotGrantWrite()
+    {
+        Host host;
+        QVERIFY(!host.access.enabled());
+        QVERIFY(!host.access.writeEnabled());
+        QVERIFY(!host.access.setWriteEnabled(true));
+        QVERIFY(!host.access.writeEnabled());
+        QVERIFY(!host.access.lastError().isEmpty());
+        host.settings.sync();
+        QCOMPARE(host.settings.value("mcp/writeEnabled", false).toBool(), false);
+        QVERIFY(host.access.setEnabled(true));
+        QVERIFY(!host.access.writeEnabled());
+        QVERIFY(host.access.setWriteEnabled(true));
+        QVERIFY(host.access.setEnabled(false));
+        QVERIFY(!host.access.setWriteEnabled(true));
+        QVERIFY(!host.access.writeEnabled());
+        QVERIFY(host.access.setEnabled(true));
+        QVERIFY(!host.access.writeEnabled());
+    }
+    // 产品保证：接入开启时，写授权仍必须在偏好真实保存成功后才能生效。
+    void enabledAccessWritePersistenceFailureDoesNotGrant()
+    {
+        Host host;
+        QVERIFY(host.access.setEnabled(true));
+        QVERIFY(QFile::setPermissions(host.settings.fileName(), QFileDevice::ReadOwner));
+        QVERIFY(!host.access.setWriteEnabled(true));
+        QVERIFY(!host.access.writeEnabled());
+        QVERIFY(!host.access.lastError().isEmpty());
+        QVERIFY(QFile::setPermissions(host.settings.fileName(), QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        QVERIFY(host.access.setWriteEnabled(true));
+        QVERIFY(host.access.writeEnabled());
+        QVERIFY(host.access.lastError().isEmpty());
+    }
     void policyWriteFailureDoesNotGrant()
     {
         Host host;
@@ -317,10 +351,10 @@ private slots:
         QVERIFY(!host.access.lastError().isEmpty());
         QVERIFY(QFile::setPermissions(host.settings.fileName(), QFileDevice::ReadOwner | QFileDevice::WriteOwner));
         // 同一控制器不重启：恢复权限后应能保存，并清掉此前的失败提示。
+        QVERIFY(host.access.setEnabled(true));
         QVERIFY(host.access.setWriteEnabled(true));
         QVERIFY(host.access.writeEnabled());
         QVERIFY(host.access.lastError().isEmpty());
-        QVERIFY(host.access.setEnabled(true));
         QVERIFY(host.access.enabled());
         QVERIFY(host.access.listening());
         QSettings persisted(host.settings.fileName(), QSettings::IniFormat);
@@ -341,10 +375,10 @@ private slots:
         QVERIFY(!host.access.listening());
         QVERIFY(QFile::setPermissions(host.settings.fileName(), QFileDevice::ReadOwner | QFileDevice::WriteOwner));
         // 同一控制器不重启：恢复权限后应能保存，并清掉此前的失败提示。
+        QVERIFY(host.access.setEnabled(true));
         QVERIFY(host.access.setWriteEnabled(true));
         QVERIFY(host.access.writeEnabled());
         QVERIFY(host.access.lastError().isEmpty());
-        QVERIFY(host.access.setEnabled(true));
         QVERIFY(host.access.enabled());
         QVERIFY(host.access.listening());
         QSettings persisted(host.settings.fileName(), QSettings::IniFormat);
@@ -791,8 +825,9 @@ private slots:
         // 同一批请求里既有几条大结果，也有上百条同步响应的请求，期间客户端短暂不读 stdout：
         // 辅助程序既不能退出，也不能丢结果——背压只推迟，不丢弃。
         Host host; QVERIFY(host.access.setEnabled(true));
-        // 单条结果约 940 KiB：贴近真实工具的响应预算（1 MiB 减去信封余量）。
-        const QString blob(470000, QChar(u'x'));
+        // 单条结果约 400 KiB：足以触发标准输出背压，同时给 JSON-RPC 信封和
+        // 主应用/辅助程序两层转发留下明确余量，避免不同 macOS 管道缓冲把合法响应推过 1 MiB 上限。
+        const QString blob(200000, QChar(u'x'));
         host.access.setDataHandler([&](Tool, const QJsonObject&) { return makeToolSuccessResult({{"blob", blob}}); });
         int output[2]; QVERIFY(::pipe(output) == 0);
         QVERIFY(::fcntl(output[0], F_SETFL, ::fcntl(output[0], F_GETFL) | O_NONBLOCK) == 0);
@@ -840,8 +875,13 @@ private slots:
         QCOMPARE(received.count('\n'), kBatch + 1);
         int big = 0;
         for (const auto& reply : received.trimmed().split('\n')) {
-            QVERIFY(!QJsonDocument::fromJson(reply).object().value("result").toObject().value("isError").toBool());
-            if (reply.size() > 500000) ++big;
+            const auto document = QJsonDocument::fromJson(reply);
+            QVERIFY(document.isObject());
+            const auto message = document.object();
+            QCOMPARE(message.value("jsonrpc"), QJsonValue(QStringLiteral("2.0")));
+            QVERIFY(message.value("id").isDouble());
+            QVERIFY(message.contains("result") || message.contains("error"));
+            if (reply.size() > 300000) ++big;
         }
         QCOMPARE(big, kBigCalls);
         process.closeWriteChannel();

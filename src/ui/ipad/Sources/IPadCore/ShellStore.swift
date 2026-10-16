@@ -167,6 +167,10 @@ public final class ShellStore {
     @ObservationIgnored public var captureSourceProvider: (() -> ShellCaptureSource?)?
     @ObservationIgnored private var captureSource = ShellCaptureSource()
     @ObservationIgnored private var editFlushers: [UUID: () -> Void] = [:]
+    @ObservationIgnored public var onAccessibilityTimeoutSuspensionChanged: ((Bool) -> Void)?
+    // nil 表示尚未接收系统状态；首次关闭也要转发，解除旧根视图可能留在共享删除槽中的暂停。
+    @ObservationIgnored private var voiceOverEnabled: Bool?
+    @ObservationIgnored private var toastDurationMilliseconds: UInt64 = 5000
     @ObservationIgnored private let bridge: any ShellBridgeProtocol
     @ObservationIgnored private var toastAction: (() -> Void)?
     @ObservationIgnored private var toastRetired: (() -> Void)?
@@ -359,6 +363,29 @@ public final class ShellStore {
         return true
     }
 
+    public func setVoiceOverEnabled(_ enabled: Bool) {
+        guard voiceOverEnabled != enabled else { return }
+        voiceOverEnabled = enabled
+        onAccessibilityTimeoutSuspensionChanged?(enabled)
+        scheduleToastTimeout()
+    }
+
+    // 读屏时保留带动作的提示，避免尚未到达撤销按钮就自动提交；纯信息提示仍按原时长退出。
+    private func scheduleToastTimeout() {
+        toastTask?.cancel()
+        toastTask = nil
+        guard let current = toast,
+              !(voiceOverEnabled == true && current.actionTitle != nil && toastAction != nil) else { return }
+        let id = current.id
+        let duration = toastDurationMilliseconds
+        toastTask = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(duration)) }
+            catch { return }
+            guard self?.toast?.id == id else { return }
+            self?.retireToast()
+        }
+    }
+
     // 提示条只有一个槽；替换、超时、主动收起均通知原调用方，供待删项提交，动作执行时不重复提交。
     public func showToast(_ message: String, actionTitle: String? = nil,
                           durationMilliseconds: UInt64 = 5000,
@@ -368,12 +395,8 @@ public final class ShellStore {
         toast = ShellToast(id: id, message: message, actionTitle: actionTitle)
         toastAction = action
         toastRetired = onRetired
-        toastTask = Task { [weak self] in
-            do { try await Task.sleep(for: .milliseconds(durationMilliseconds)) }
-            catch { return }
-            guard self?.toast?.id == id else { return }
-            self?.retireToast()
-        }
+        toastDurationMilliseconds = durationMilliseconds
+        scheduleToastTimeout()
     }
     public func retireToast() {
         toastTask?.cancel()

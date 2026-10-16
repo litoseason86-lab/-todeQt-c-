@@ -84,7 +84,7 @@ import SwiftUI
                 Image(systemName: "magnifyingglass").foregroundStyle(ThemeColors.inkSoft).accessibilityHidden(true)
                 TextField("搜索", text: $binding.search).accessibilityLabel("搜索知识缺口")
             }
-            .font(.system(size: 15))
+            .scaledSystemFont(size: 15)
             .padding(.horizontal, 12).frame(height: 40)
             .background(ThemeColors.accentFill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             if !store.errorMessage.isEmpty { errorRow }
@@ -93,7 +93,7 @@ import SwiftUI
                     let selected = !compact && store.selectedID == gap.id
                     Button { store.select(gap.id) } label: {
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(gap.title).font(.system(size: 16, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+                            Text(gap.title).scaledSystemFont(size: 16, weight: .semibold).foregroundStyle(ThemeColors.inkStrong)
                                 .lineLimit(2).multilineTextAlignment(.leading)
                             HStack(spacing: 6) {
                                 Circle().fill(TaskCategoryColor.value(gap.categoryColor)).frame(width: 7, height: 7)
@@ -122,7 +122,7 @@ import SwiftUI
     // 定稿详情：大标题、科目 / 优先级 / 到期三个胶囊标签、两段原文（空写「—」）、四个同样宽的操作。
     private func detail(_ gap: GapValue) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text(gap.title).font(.system(size: 26, weight: .bold)).foregroundStyle(ThemeColors.inkStrong)
+            Text(gap.title).scaledSystemFont(size: 26, weight: .bold).foregroundStyle(ThemeColors.inkStrong)
             HStack(spacing: 8) {
                 tag {
                     HStack(spacing: 6) {
@@ -137,7 +137,7 @@ import SwiftUI
             section("当时遇到了什么", gap.detail)
             section("后来想明白了什么", gap.resolution)
             if !gap.linkedTaskTitle.isEmpty {
-                Text("已转成任务：\(gap.linkedTaskTitle)").font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+                Text("已转成任务：\(gap.linkedTaskTitle)").scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
             }
             // 四个操作同分量常驻：放得下就一行四个等宽，窄时两行两个。
             ViewThatFits(in: .horizontal) {
@@ -179,14 +179,14 @@ import SwiftUI
          AnyView(action("编辑") { store.requestForm(.edit(gap)) })]
     }
     private func tag<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        content().font(.system(size: 14)).foregroundStyle(ThemeColors.ink)
+        content().scaledSystemFont(size: 14).foregroundStyle(ThemeColors.ink)
             .padding(.horizontal, 12).frame(height: 30)
             .background(ThemeColors.accentFill, in: Capsule())
     }
     private func section(_ title: String, _ text: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColors.inkSoft)
-            Text(text.isEmpty ? "—" : text).font(.system(size: 16)).foregroundStyle(ThemeColors.inkStrong).textSelection(.enabled)
+            Text(title).scaledSystemFont(size: 13, weight: .semibold).foregroundStyle(ThemeColors.inkSoft)
+            Text(text.isEmpty ? "—" : text).scaledSystemFont(size: 16).foregroundStyle(ThemeColors.inkStrong).textSelection(.enabled)
         }
     }
     private func action(_ title: String, _ perform: @escaping () -> Void) -> some View {
@@ -202,7 +202,7 @@ import SwiftUI
         // 颜色只消费服务的到期事实；不拿 Swift 日期比较来派生今天或逾期。
         let prefix = (gap.categoryName.isEmpty ? "未分类" : gap.categoryName) + " · " + priority(gap.priority) + " · "
         return Text("\(Text(prefix).foregroundStyle(ThemeColors.inkSoft))\(Text(dueText(gap)).foregroundStyle(dueColor(gap)).fontWeight(gap.overdue || gap.dueToday ? .semibold : .regular))")
-            .font(.system(size: 13)).lineLimit(1)
+            .scaledSystemFont(size: 13).lineLimit(1)
     }
     private func priority(_ value: Int) -> String { switch value { case 2: "高"; case 1: "中"; default: "低" } }
     private func dueText(_ gap: GapValue) -> String {

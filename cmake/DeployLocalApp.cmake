@@ -6,6 +6,21 @@ cmake_minimum_required(VERSION 3.16)
 # 不得改成「先删旧包再复制新包」：中途失败会让用户既没有旧包也没有新包。
 # DeployLocalAppTests 用伪应用包验证新包不完整时旧包原样保留，改这里后必须让它通过。
 
+# 包身份先于任何复制或移动核对；仅凭 .app 后缀不能证明目标是本项目。
+# PlistBuddy 同时支持文本和二进制 plist，不以文件名或可执行文件名冒充身份。
+function(pomodoro_todo_check_bundle_identity bundle)
+    execute_process(
+        COMMAND /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${bundle}/Contents/Info.plist"
+        RESULT_VARIABLE identity_result
+        OUTPUT_VARIABLE bundle_identity
+        ERROR_QUIET
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT identity_result EQUAL 0 OR NOT bundle_identity STREQUAL "com.zerionlito.pomodorotodo")
+        message(FATAL_ERROR "应用包身份不符或无法读取，拒绝部署：${bundle}")
+    endif()
+endfunction()
+
 function(pomodoro_todo_deploy_local_app)
     foreach(required_variable SOURCE_APP DESTINATION_APP BUNDLE_EXECUTABLE)
         if(NOT DEFINED ${required_variable} OR "${${required_variable}}" STREQUAL "")
@@ -29,6 +44,18 @@ function(pomodoro_todo_deploy_local_app)
     if(NOT IS_DIRECTORY "${destination_parent}")
         message(FATAL_ERROR "部署目录不存在：${destination_parent}")
     endif()
+    if(IS_SYMLINK "${destination_app}")
+        message(FATAL_ERROR "部署目标不能是符号链接：${destination_app}")
+    endif()
+    get_filename_component(source_real "${source_app}" REALPATH)
+    get_filename_component(destination_real "${destination_app}" REALPATH)
+    if(source_real STREQUAL destination_real)
+        message(FATAL_ERROR "部署源和目标不能是同一个应用包")
+    endif()
+    pomodoro_todo_check_bundle_identity("${source_app}")
+    if(EXISTS "${destination_app}")
+        pomodoro_todo_check_bundle_identity("${destination_app}")
+    endif()
 
     string(RANDOM LENGTH 12 ALPHABET 0123456789abcdef deploy_token)
     set(staging_app "${destination_app}.staging-${deploy_token}")
@@ -45,6 +72,19 @@ function(pomodoro_todo_deploy_local_app)
     if(NOT copy_result EQUAL 0)
         execute_process(COMMAND "${CMAKE_COMMAND}" -E rm -rf "${staging_app}")
         message(FATAL_ERROR "复制新应用包失败，旧应用未改动")
+    endif()
+
+    # 复制期间源包可能被其它构建替换，移动旧包前再核对实际暂存内容。
+    execute_process(
+        COMMAND /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${staging_app}/Contents/Info.plist"
+        RESULT_VARIABLE staging_identity_result
+        OUTPUT_VARIABLE staging_identity
+        ERROR_QUIET
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(NOT staging_identity_result EQUAL 0 OR NOT staging_identity STREQUAL "com.zerionlito.pomodorotodo")
+        execute_process(COMMAND "${CMAKE_COMMAND}" -E rm -rf "${staging_app}")
+        message(FATAL_ERROR "暂存应用包身份不符或无法读取，旧应用未改动")
     endif()
 
     set(staging_executable "${staging_app}/Contents/MacOS/${BUNDLE_EXECUTABLE}")

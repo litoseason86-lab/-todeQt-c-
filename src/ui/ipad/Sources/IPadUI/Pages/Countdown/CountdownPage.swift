@@ -31,8 +31,8 @@ import SwiftUI
                                 Button { store.requestEdit(goal) } label: {
                                     HStack(spacing: 16) {
                                         VStack(alignment: .leading, spacing: 4) {
-                                            Text(goal.name).font(.system(size: 16)).foregroundStyle(ThemeColors.inkStrong)
-                                            Text(CountdownFormat.targetDate(goal.targetDate)).font(.system(size: 13)).foregroundStyle(ThemeColors.inkSoft)
+                                            Text(goal.name).scaledSystemFont(size: 16).foregroundStyle(ThemeColors.inkStrong)
+                                            Text(CountdownFormat.targetDate(goal.targetDate)).scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft)
                                         }
                                         Spacer(minLength: 0)
                                         daysText(goal.daysRemaining, numberSize: 22, unitSize: 13)
@@ -75,16 +75,16 @@ import SwiftUI
     private func primaryCard(_ main: CountdownValue, wide: Bool) -> some View {
         let days = main.daysRemaining
         let left = VStack(alignment: .leading, spacing: 6) {
-            Text("主目标").font(.system(size: 13, weight: .semibold)).foregroundStyle(ThemeColors.accentInk)
-            Text(main.name).font(.system(size: 28, weight: .bold)).foregroundStyle(ThemeColors.inkStrong).lineLimit(2)
-            Text(CountdownFormat.targetDate(main.targetDate)).font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
+            Text("主目标").scaledSystemFont(size: 13, weight: .semibold).foregroundStyle(ThemeColors.accentInk)
+            Text(main.name).scaledSystemFont(size: 28, weight: .bold).foregroundStyle(ThemeColors.inkStrong).lineLimit(2)
+            Text(CountdownFormat.targetDate(main.targetDate)).scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
         }
         let right = HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text(days < 0 ? "已过" : "还有").font(.system(size: 15)).foregroundStyle(ThemeColors.inkSoft)
-            Text("\(abs(days))").font(.system(size: wide ? 72 : 56, weight: .bold)).monospacedDigit()
+            Text(days < 0 ? "已过" : "还有").scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
+            Text("\(abs(days))").scaledSystemFont(size: wide ? 72 : 56, weight: .bold).monospacedDigit()
                 .foregroundStyle(days < 0 ? ThemeColors.danger : ThemeColors.accentInk)
                 .lineLimit(1).minimumScaleFactor(0.5)
-            Text("天").font(.system(size: 20, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+            Text("天").scaledSystemFont(size: 20, weight: .semibold).foregroundStyle(ThemeColors.inkStrong)
         }
         return Group {
             if wide {
@@ -101,7 +101,7 @@ import SwiftUI
     private func daysText(_ days: Int, numberSize: CGFloat, unitSize: CGFloat) -> some View {
         Group {
             if days < 0 {
-                Text(CountdownFormat.days(days)).font(.system(size: 15, weight: .semibold)).foregroundStyle(ThemeColors.danger)
+                Text(CountdownFormat.days(days)).scaledSystemFont(size: 15, weight: .semibold).foregroundStyle(ThemeColors.danger)
             } else {
                 MixedNumberText(parts: [("\(days)", true), ("天", false)], numberSize: numberSize, unitSize: unitSize)
             }

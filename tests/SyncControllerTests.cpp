@@ -301,6 +301,44 @@ private slots:
     void invalidRemoteSettingsAreNotWrittenBack();
     void startupWritesBackSeveralSettingsWithoutReRecordingThem();
 
+    // 058 阶段 1：恢复后 epoch / 文件夹处理失败必须 fail-closed
+    void epochFailureAfterRestoreHaltsSyncAndAllowsRetry();
+    void folderFailureAfterRestoreHaltsSyncAndAllowsRetryWithoutEpochBumping();
+    void restoreEpochFailureBlocksNewController();
+    void failedSecondRestoreKeepsOriginalRecoveryBlock();
+    void secondSuccessfulRestorePreservesOriginalDeviceAndFolder();
+    void epochTransactionRollsBackWhenDeviceUpdateFails();
+
+    // 058 阶段 1 B2：恢复日志持久化与启动校验
+    void preparedJournalOnRestartBlocksSyncAndAllowsFreshRestore();
+    void installedJournalOnRestartCompletesPendingStepsIdempotently();
+    void corruptOrOversizedJournalBlocksSyncWithoutDeletingUnknownFiles();
+    void cleanJournalRemovesOnlyValidJournalFile();
+    void journalDeleteFailureBlocksSyncAndRetryDoesNotBumpEpoch();
+    void actualDbCloseReopenWithInstalledJournalResumesWithSameToken();
+    void corruptFieldsAndDanglingSymlinkBlockSync();
+    void prepareForRestoreWriteFailureBlocksSyncAndTogglingCannotBypass();
+    void corruptedJournalPathResolvedAllowsFreshRestore();
+    void finishRestoreFalseWhenJournalDeleteFailsPreservesContextAndAllowsRetry();
+    void finishRestoreTrueWhenDbClosedRetainsContextAndBlocksSync();
+    void finishRestoreTrueDbClosedSyncNowRequiresInstalledJournalWriteBeforeEpoch();
+    void secondRestoreFailureWithOldInstalledJournalWriteBackFailureResumesOnRetry();
+    void installedJournalWithProductionUuidFolderResumesSuccessfully();
+    void finishRestoreSafetyClassificationKeepsPreparedJournalOnRollbackFailure();
+
+    // 058 阶段 1 B3：设置整理错误传播
+    void restoreFinalizeSyncSettingsReadFailureBlocksSyncAndResumesWhenHealthy();
+    void restoreFinalizeIsolatedWritebackQueryFailureSkipsCompletedStepsAndResumes();
+    void restoreFinalizeWriteBackMarkerClearFailurePreservesMarkersAndJournal();
+    void restoreFinalizeLocalRecordFailureBlocksSyncAndPreservesJournal();
+    void restoreFinalizeQSettingsWriteBackFailureBlocksSyncAndPreservesJournal();
+
+    // 058 阶段 2：同步开关与iPad文件夹持久化
+    void settingsAccessErrorOnDisableStopsEngineAndRecoversOnRetry();
+    void settingsAccessErrorOnEnableBlocksEngineAndRecoversOnRetry();
+    void settingsAccessErrorOnAcceptFolderPreservesExistingEngineAndRecovers();
+    void settingsAccessErrorOnBookmarkRefreshPreservesEngineAndExposesError();
+
 private:
     QString cloudFolder() const { return m_data->filePath(QStringLiteral("cloud/番茄Todo同步")); }
 
@@ -1742,6 +1780,2153 @@ void SyncControllerTests::memoDeletedElsewhereShowsCopyNotConflict()
     }
     copied.sort();
     QCOMPARE(copied, QStringList({QStringLiteral("张宇 36 讲"), QStringLiteral("第 8 讲做完")}));
+}
+
+void SyncControllerTests::epochFailureAfterRestoreHaltsSyncAndAllowsRetry()
+{
+    // 保证恢复后建立新纪元的事务失败时控制器不得启动同步引擎，保留本地恢复结果，暴露可观察错误并允许重试。
+    // beginEpochAfterRestore() 是原子事务：任一失败整体回滚，device_id 保持备份值不变。
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    const QString thisDevice = SyncStore().deviceId();
+    QVERIFY(!addTask(QStringLiteral("备份前任务")).isEmpty());
+    controller.syncNow();
+    QVERIFY(waitIdle(controller.engine()));
+
+    const QString backup = m_data->filePath(QStringLiteral("backup.sqlite"));
+    QVERIFY(copyDatabaseTo(backup));
+
+    // 修改备份中的 device_id 为异机标识，验证事务失败时原子回滚保持备份值
+    const QString backupDevice = QStringLiteral("backup_device_identity_9876");
+    {
+        const QString tempConn = QStringLiteral("temp_backup_conn");
+        {
+            QSqlDatabase backupDb = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), tempConn);
+            backupDb.setDatabaseName(backup);
+            QVERIFY(backupDb.open());
+            QSqlQuery update(backupDb);
+            QVERIFY(update.exec(QStringLiteral("UPDATE sync_state SET value = '%1' WHERE key = 'device_id'").arg(backupDevice)));
+            backupDb.close();
+        }
+        QSqlDatabase::removeDatabase(tempConn);
+    }
+
+    QVERIFY(!addTask(QStringLiteral("备份后任务")).isEmpty());
+    controller.syncNow();
+    QVERIFY(waitIdle(controller.engine()));
+
+    controller.prepareForRestore();
+    QVERIFY(!controller.engine()->isRunning());
+    QVERIFY(replaceDatabaseWith(backup));
+
+    // 换库后确认库里的 device_id 是备份里的异机标识
+    QCOMPARE(SyncStore().deviceId(), backupDevice);
+
+    // 故障注入点：通过临时 SQLite 触发器让 sync_state 中 epoch 的 UPDATE 触发 ABORT，
+    // 导致 beginEpochAfterRestore 中的事务失败并回滚。不依赖系统磁盘已满、真实 iCloud 或外部未定义状态。
+    QSqlQuery trigger(DatabaseManager::instance()->database());
+    QVERIFY(trigger.exec(QStringLiteral(
+        "CREATE TRIGGER test_inject_epoch_abort BEFORE UPDATE OF value ON sync_state "
+        "WHEN NEW.key = 'epoch' "
+        "BEGIN SELECT RAISE(ABORT, 'injected epoch abort'); END;")));
+
+    // 前置断言：验证注入点能稳定导致 beginEpochAfterRestore 失败且保持原纪元与设备标识不变
+    SyncStore probeStore;
+    const qint64 epochBefore = probeStore.epoch();
+    QVERIFY(!probeStore.beginEpochAfterRestore(epochBefore, thisDevice));
+    QCOMPARE(probeStore.epoch(), epochBefore);
+    QCOMPARE(probeStore.deviceId(), backupDevice);
+
+    QSignalSpy notices(&controller, &SyncController::notice);
+
+    // 调用被测路径：执行 finishRestore(true)
+    controller.finishRestore(true);
+
+    // 阶段 1 核心保证 1：建立新纪元失败时，同步引擎严格禁止启动（fail-closed），防止在旧纪元或错误状态下同步
+    QVERIFY(!controller.engine()->isRunning());
+
+    // 阶段 1 核心保证 2：本地恢复出来的数据完整保留，不因纪元失败而损毁
+    QCOMPARE(taskTitles(DatabaseManager::instance()->database()), QStringList{QStringLiteral("备份前任务")});
+
+    // 阶段 1 核心保证 3：事务整体回滚，device_id 保持备份中的值，未被部分更新
+    QCOMPARE(SyncStore().deviceId(), backupDevice);
+
+    // 阶段 1 核心保证 4：暴露可观察错误状态与通知
+    QCOMPARE(controller.statusKey(), QStringLiteral("error"));
+    QVERIFY(controller.hasProblem());
+    QCOMPARE(controller.statusDetail(), QStringLiteral("恢复备份后建立同步新纪元失败，同步已暂停以保护数据。"));
+    QCOMPARE(notices.count(), 1);
+
+    // 阶段 1 核心保证 5：撤销注入后，提供可重试动作（调用 syncNow），新纪元成功建立，device_id 恢复为本机标识，并恢复正常同步
+    QVERIFY(trigger.exec(QStringLiteral("DROP TRIGGER test_inject_epoch_abort")));
+    controller.syncNow();
+
+    QCOMPARE(SyncStore().epoch(), epochBefore + 1);
+    QCOMPARE(SyncStore().deviceId(), thisDevice);
+    QVERIFY(controller.engine()->isRunning());
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
+    QVERIFY(!controller.hasProblem());
+}
+
+void SyncControllerTests::folderFailureAfterRestoreHaltsSyncAndAllowsRetryWithoutEpochBumping()
+{
+    // 保证在备份恢复后若仅保留同步文件夹步骤失败（epoch已建立成功），控制器保持停止（fail-closed），
+    // 暴露错误状态；且在多次重试或最终成功重试过程中，绝不重复递增 epoch，严格保证一次恢复最多建立一个新 epoch。
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    const QString thisFolder = SyncStore().folderId();
+    const qint64 epochBefore = SyncStore().epoch();
+
+    // 准备一份没有 folderId 的备份（模拟加入同步前的备份或异机备份）
+    const QString otherPath = m_data->filePath(QStringLiteral("other_folder.sqlite"));
+    const QString currentPath = DatabaseManager::instance()->database().databaseName();
+    DatabaseManager::instance()->close();
+    QVERIFY(DatabaseManager::instance()->initialize(otherPath));
+    QVERIFY(!addTask(QStringLiteral("备份任务")).isEmpty());
+    QVERIFY(SyncStore().folderId().isEmpty());
+    const QString backupPath = m_data->filePath(QStringLiteral("folder_backup.sqlite"));
+    QVERIFY(copyDatabaseTo(backupPath));
+    DatabaseManager::instance()->close();
+    QVERIFY(DatabaseManager::instance()->initialize(currentPath));
+
+    // 进入恢复流程
+    controller.prepareForRestore();
+    QVERIFY(!controller.engine()->isRunning());
+    QVERIFY(replaceDatabaseWith(backupPath));
+
+    // 故障注入点：拦截 sync_state 中 folder_id 的写入（覆盖 INSERT 与 UPDATE），
+    // 使得 beginEpochAfterRestore 成功，但随后的 setFolderId 失败。
+    QSqlQuery trigger(DatabaseManager::instance()->database());
+    QVERIFY(trigger.exec(QStringLiteral(
+        "CREATE TRIGGER test_inject_folder_insert_abort BEFORE INSERT ON sync_state "
+        "WHEN NEW.key = 'folder_id' "
+        "BEGIN SELECT RAISE(ABORT, 'injected folder insert abort'); END;")));
+    QVERIFY(trigger.exec(QStringLiteral(
+        "CREATE TRIGGER test_inject_folder_update_abort BEFORE UPDATE OF value ON sync_state "
+        "WHEN NEW.key = 'folder_id' "
+        "BEGIN SELECT RAISE(ABORT, 'injected folder update abort'); END;")));
+
+    // 前置断言：验证注入生效，setFolderId 必失败
+    QVERIFY(!SyncStore().setFolderId(thisFolder));
+
+    QSignalSpy notices(&controller, &SyncController::notice);
+
+    // 调用被测路径：执行 finishRestore(true)
+    controller.finishRestore(true);
+
+    // 核心保证 1：保留文件夹失败时，同步引擎严格禁止启动（fail-closed）
+    QVERIFY(!controller.engine()->isRunning());
+
+    // 核心保证 2：备份恢复的数据已落盘保留
+    QCOMPARE(taskTitles(DatabaseManager::instance()->database()), QStringList{QStringLiteral("备份任务")});
+
+    // 核心保证 3：暴露可观察错误状态与通知
+    QCOMPARE(controller.statusKey(), QStringLiteral("error"));
+    QVERIFY(controller.hasProblem());
+    QCOMPARE(controller.statusDetail(), QStringLiteral("恢复备份后保留同步文件夹失败，同步已暂停以保护数据。"));
+    QCOMPARE(notices.count(), 1);
+
+    // 核心保证 4：此时 epoch 已成功递增 1，但 folderId 仍为空
+    QCOMPARE(SyncStore().epoch(), epochBefore + 1);
+    QCOMPARE(SyncStore().folderId(), QString());
+
+    // 核心保证 5：在未解除注入前调用 syncNow() 重试，不得重复递增 epoch！
+    controller.syncNow();
+    QVERIFY(!controller.engine()->isRunning());
+    QCOMPARE(controller.statusKey(), QStringLiteral("error"));
+    QCOMPARE(SyncStore().epoch(), epochBefore + 1); // 严格保持 epoch 不重复递增！
+
+    // 核心保证 6：解除注入后调用 syncNow() 重试成功，folderId 成功保留，且 epoch 仍然为 epochBefore + 1
+    QVERIFY(trigger.exec(QStringLiteral("DROP TRIGGER test_inject_folder_insert_abort")));
+    QVERIFY(trigger.exec(QStringLiteral("DROP TRIGGER test_inject_folder_update_abort")));
+    controller.syncNow();
+
+    SyncStore after;
+    QCOMPARE(after.folderId(), thisFolder);
+    QCOMPARE(after.epoch(), epochBefore + 1); // 保证一次恢复最多建立一个新 epoch
+    QVERIFY(controller.engine()->isRunning());
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
+    QVERIFY(!controller.hasProblem());
+}
+
+void SyncControllerTests::restoreEpochFailureBlocksNewController()
+{
+    // 保证恢复备份后建立新纪元失败时，即使旧控制器销毁并重新构造新实例，新控制器仍必须阻止引擎启动并暴露错误问题。
+    const QString backup = m_data->filePath(QStringLiteral("backup_epoch_fail.sqlite"));
+    {
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+        controller.setEnabled(true);
+        QVERIFY(waitIdle(controller.engine()));
+        QVERIFY(!addTask(QStringLiteral("恢复前任务")).isEmpty());
+        controller.syncNow();
+        QVERIFY(waitIdle(controller.engine()));
+
+        QVERIFY(copyDatabaseTo(backup));
+
+        QVERIFY(!addTask(QStringLiteral("恢复后任务")).isEmpty());
+        controller.syncNow();
+        QVERIFY(waitIdle(controller.engine()));
+
+        controller.prepareForRestore();
+        QVERIFY(!controller.engine()->isRunning());
+        QVERIFY(replaceDatabaseWith(backup));
+
+        // 安装 BEFORE UPDATE epoch 的 ABORT 触发器
+        QSqlQuery trigger(DatabaseManager::instance()->database());
+        QVERIFY(trigger.exec(QStringLiteral(
+            "CREATE TRIGGER test_inject_epoch_abort_new_ctrl BEFORE UPDATE OF value ON sync_state "
+            "WHEN NEW.key = 'epoch' "
+            "BEGIN SELECT RAISE(ABORT, 'injected epoch abort for new ctrl'); END;")));
+
+        controller.finishRestore(true);
+        // 断言旧 controller 停下
+        QVERIFY(!controller.engine()->isRunning());
+        QVERIFY(controller.hasProblem());
+    }
+
+    // 销毁旧 controller（保留数据库、隔离 INI 和触发器），构造新 controller 并 initialize
+    SyncController newController(macPlatform(cloudFolder()));
+    newController.initialize();
+
+    // 严格断言：跨控制器实例仍必须阻断引擎运行并暴露问题
+    QVERIFY(!newController.engine() || !newController.engine()->isRunning());
+    QVERIFY(newController.hasProblem());
+
+    // 补充验证：解除触发器，关闭并重新打开数据库，构造另一实例；重试利用同 token 幂等成功并安全删除日志
+    {
+        QSqlQuery trigger(DatabaseManager::instance()->database());
+        QVERIFY(trigger.exec(QStringLiteral("DROP TRIGGER test_inject_epoch_abort_new_ctrl")));
+    }
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    DatabaseManager::instance()->close();
+    QVERIFY(DatabaseManager::instance()->initialize(dbPath));
+
+    SyncController reloadedController(macPlatform(cloudFolder()));
+    reloadedController.initialize();
+    QVERIFY(reloadedController.hasProblem());
+    QVERIFY(!reloadedController.engine() || !reloadedController.engine()->isRunning());
+
+    reloadedController.syncNow();
+    QVERIFY(reloadedController.engine() && reloadedController.engine()->isRunning());
+    QVERIFY(!reloadedController.hasProblem());
+    QVERIFY(!QFileInfo::exists(dbPath + QStringLiteral(".sync-restore.json")));
+}
+
+void SyncControllerTests::failedSecondRestoreKeepsOriginalRecoveryBlock()
+{
+    // 保证在首次恢复备份因新纪元建立失败而暂停同步后，后续一次取消或失败的恢复操作（finishRestore(false)）绝不能清除原有的恢复阻断，引擎必须继续保持停止且暴露问题。
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(!addTask(QStringLiteral("初次任务")).isEmpty());
+    controller.syncNow();
+    QVERIFY(waitIdle(controller.engine()));
+
+    const QString backup = m_data->filePath(QStringLiteral("backup_second_restore.sqlite"));
+    QVERIFY(copyDatabaseTo(backup));
+
+    controller.prepareForRestore();
+    QVERIFY(!controller.engine()->isRunning());
+    QVERIFY(replaceDatabaseWith(backup));
+
+    // 安装 BEFORE UPDATE epoch 的 ABORT 触发器
+    QSqlQuery trigger(DatabaseManager::instance()->database());
+    QVERIFY(trigger.exec(QStringLiteral(
+        "CREATE TRIGGER test_inject_epoch_abort_second_restore BEFORE UPDATE OF value ON sync_state "
+        "WHEN NEW.key = 'epoch' "
+        "BEGIN SELECT RAISE(ABORT, 'injected epoch abort for second restore'); END;")));
+
+    controller.finishRestore(true);
+    QVERIFY(!controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+
+    // 不解除触发器，调用 prepareForRestore() 与 finishRestore(false)（模拟第二次恢复操作失败，库原样保留）
+    controller.prepareForRestore();
+    controller.finishRestore(false);
+
+    // 严格断言：第二次恢复失败绝不能冲掉第一次的恢复阻断，引擎仍必须停止且具有错误问题（当前预计红灯失败）
+    QVERIFY(!controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+}
+
+void SyncControllerTests::secondSuccessfulRestorePreservesOriginalDeviceAndFolder()
+{
+    // 保证首次恢复异机备份因新纪元建立失败暂停后，再次执行恢复同一异机备份成功时，设备标识与加入文件夹仍还原为原本机身份，而不是残留的异机身份。
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+
+    const QString originalDevice = SyncStore().deviceId();
+    const QString originalFolder = SyncStore().folderId();
+    const qint64 originalEpoch = SyncStore().epoch();
+    QVERIFY(!originalDevice.isEmpty());
+    QVERIFY(!addTask(QStringLiteral("本机原任务")).isEmpty());
+    controller.syncNow();
+    QVERIFY(waitIdle(controller.engine()));
+
+    // 准备一份异机备份：将备份库里的 device_id 改为异机标识
+    const QString backup = m_data->filePath(QStringLiteral("backup_reentrant_other.sqlite"));
+    QVERIFY(copyDatabaseTo(backup));
+    const QString otherDevice = QStringLiteral("fedcba9876543210fedcba9876543210");
+    QVERIFY(otherDevice != originalDevice);
+    {
+        const QString tempConn = QStringLiteral("temp_reentrant_conn");
+        {
+            QSqlDatabase backupDb = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), tempConn);
+            backupDb.setDatabaseName(backup);
+            QVERIFY(backupDb.open());
+            QSqlQuery update(backupDb);
+            QVERIFY(update.exec(QStringLiteral("UPDATE sync_state SET value = '%1' WHERE key = 'device_id'").arg(otherDevice)));
+            backupDb.close();
+        }
+        QSqlDatabase::removeDatabase(tempConn);
+    }
+
+    // 第一次恢复：换入异机备份并注入 epoch 失败
+    controller.prepareForRestore();
+    QVERIFY(!controller.engine()->isRunning());
+    QVERIFY(replaceDatabaseWith(backup));
+    QCOMPARE(SyncStore().deviceId(), otherDevice);
+
+    QSqlQuery trigger(DatabaseManager::instance()->database());
+    QVERIFY(trigger.exec(QStringLiteral(
+        "CREATE TRIGGER test_inject_epoch_abort_reentrant BEFORE UPDATE OF value ON sync_state "
+        "WHEN NEW.key = 'epoch' "
+        "BEGIN SELECT RAISE(ABORT, 'injected epoch abort reentrant'); END;")));
+
+    controller.finishRestore(true);
+    // 验证第一次恢复失败且阻断生效
+    QVERIFY(!controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+
+    // 解除注入
+    QVERIFY(trigger.exec(QStringLiteral("DROP TRIGGER test_inject_epoch_abort_reentrant")));
+
+    // 再次调用 prepareForRestore()，重新换入同一异机备份，执行第二次恢复
+    controller.prepareForRestore();
+    QVERIFY(replaceDatabaseWith(backup));
+    QCOMPARE(SyncStore().deviceId(), otherDevice);
+
+    controller.finishRestore(true);
+
+    // 核心保证：恢复的是原本机 device_id（不是第一次失败后留在库里的异机 id），folder 仍是原本机 folder
+    QCOMPARE(SyncStore().deviceId(), originalDevice);
+    QCOMPARE(SyncStore().folderId(), originalFolder);
+    QCOMPARE(SyncStore().epoch(), originalEpoch + 1);
+    QVERIFY(controller.engine()->isRunning());
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(controller.statusKey(), QStringLiteral("upToDate"));
+    QVERIFY(!controller.hasProblem());
+    QCOMPARE(taskTitles(DatabaseManager::instance()->database()), QStringList{QStringLiteral("本机原任务")});
+}
+
+void SyncControllerTests::epochTransactionRollsBackWhenDeviceUpdateFails()
+{
+    // 保证 SyncStore::beginEpochAfterRestore 在更新 device_id 失败时将已递增的纪元与待发送队列完整原子回滚。
+    // 产生本地待发送记录以验证 outbox 在事务回滚时未被误清空
+    QVERIFY(!addTask(QStringLiteral("测试待发送任务")).isEmpty());
+
+    SyncStore store;
+    const qint64 epochBefore = store.epoch();
+    const QString deviceBefore = store.deviceId();
+
+    // 记录并断言前提：deviceBefore 非空，outbox 中有待发送记录
+    QVERIFY(!deviceBefore.isEmpty());
+    QSqlQuery countQuery(DatabaseManager::instance()->database());
+    QVERIFY(countQuery.exec(QStringLiteral("SELECT COUNT(*) FROM sync_outbox")));
+    QVERIFY(countQuery.next());
+    const int outboxCountBefore = countQuery.value(0).toInt();
+    QVERIFY(outboxCountBefore > 0);
+
+    const QString otherDevice = QStringLiteral("0123456789abcdef0123456789abcdef");
+    QVERIFY(otherDevice != deviceBefore);
+
+    // 安装 BEFORE UPDATE OF value ON sync_state WHEN NEW.key='device_id' 的 ABORT 触发器
+    // beginEpochAfterRestore 先执行 UPDATE epoch 成功，再执行 UPDATE device_id 触发 ABORT，进而验证事务回滚
+    QSqlQuery trigger(DatabaseManager::instance()->database());
+    QVERIFY(trigger.exec(QStringLiteral(
+        "CREATE TRIGGER test_inject_device_abort_tx BEFORE UPDATE OF value ON sync_state "
+        "WHEN NEW.key = 'device_id' "
+        "BEGIN SELECT RAISE(ABORT, 'injected device abort for tx'); END;")));
+
+    const bool success = store.beginEpochAfterRestore(epochBefore, otherDevice);
+    QVERIFY(!success);
+
+    // 断言事务回滚：epoch 恢复原值、device 原值不变、原 outbox 记录仍在
+    QCOMPARE(store.epoch(), epochBefore);
+    QCOMPARE(store.deviceId(), deviceBefore);
+
+    QVERIFY(countQuery.exec(QStringLiteral("SELECT COUNT(*) FROM sync_outbox")));
+    QVERIFY(countQuery.next());
+    QCOMPARE(countQuery.value(0).toInt(), outboxCountBefore);
+
+    // 删除触发器再重试，确认 epoch 只加 1 且 device 改变
+    QVERIFY(trigger.exec(QStringLiteral("DROP TRIGGER test_inject_device_abort_tx")));
+    QVERIFY(store.beginEpochAfterRestore(epochBefore, otherDevice));
+
+    QCOMPARE(store.epoch(), epochBefore + 1);
+    QCOMPARE(store.deviceId(), otherDevice);
+}
+
+
+void SyncControllerTests::settingsAccessErrorOnDisableStopsEngineAndRecoversOnRetry()
+{
+    // 保证在偏好存储不可写时关闭同步能够停止当前引擎并将运行态置为关闭且暴露错误，故障解除后重试关闭可持久化成功并清除错误。
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(controller.isEnabled());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+
+    // 故障注入点：获取当前隔离 INI 文件路径，替换为同名目录导致 AccessError
+    QSettings probeSettings;
+    const QString iniPath = probeSettings.fileName();
+    QVERIFY(!iniPath.isEmpty());
+    QFile::remove(iniPath);
+    QVERIFY(QDir().mkdir(iniPath));
+
+    auto cleanupGuard = qScopeGuard([&]() {
+        if (QFileInfo(iniPath).isDir()) {
+            QDir(iniPath).removeRecursively();
+        }
+        QFile emptyFile(iniPath);
+        if (emptyFile.open(QIODevice::WriteOnly)) {
+            emptyFile.close();
+        }
+    });
+
+    // 动作前断言：底层偏好后端处于不可写状态
+    {
+        QSettings testProbe;
+        testProbe.setValue(QStringLiteral("probe_key"), 1);
+        testProbe.sync();
+        QCOMPARE(testProbe.status(), QSettings::AccessError);
+    }
+
+    // 执行关闭同步
+    controller.setEnabled(false);
+
+    // 断言：运行态为关闭、引擎已停止、暴露设置错误
+    QCOMPARE(controller.isEnabled(), false);
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+    QCOMPARE(controller.statusKey(), QStringLiteral("error"));
+    QVERIFY(!controller.statusDetail().isEmpty());
+
+    // 解除故障注入
+    QVERIFY(QDir(iniPath).removeRecursively());
+    {
+        QFile emptyFile(iniPath);
+        QVERIFY(emptyFile.open(QIODevice::WriteOnly));
+        emptyFile.close();
+    }
+    cleanupGuard.dismiss();
+
+    // 再次调用 setEnabled(false)：重试持久化成功，错误被清除
+    controller.setEnabled(false);
+    QCOMPARE(controller.isEnabled(), false);
+    QVERIFY(!controller.hasProblem());
+    QCOMPARE(controller.statusKey(), QStringLiteral("stopped"));
+
+    // 单独检查持久化结果
+    {
+        QSettings readSettings;
+        QCOMPARE(readSettings.value(QStringLiteral("sync/enabled")).toBool(), false);
+    }
+}
+
+void SyncControllerTests::settingsAccessErrorOnEnableBlocksEngineAndRecoversOnRetry()
+{
+    // 保证在偏好存储不可写时开启同步被阻断且不启动引擎，故障解除后再次开启可成功启动。
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(false);
+    QVERIFY(!controller.isEnabled());
+    QVERIFY(!controller.hasProblem());
+
+    // 故障注入点：替换 INI 为同名目录
+    QSettings probeSettings;
+    const QString iniPath = probeSettings.fileName();
+    QVERIFY(!iniPath.isEmpty());
+    QFile::remove(iniPath);
+    QVERIFY(QDir().mkdir(iniPath));
+
+    auto cleanupGuard = qScopeGuard([&]() {
+        if (QFileInfo(iniPath).isDir()) {
+            QDir(iniPath).removeRecursively();
+        }
+        QFile emptyFile(iniPath);
+        if (emptyFile.open(QIODevice::WriteOnly)) {
+            emptyFile.close();
+        }
+    });
+
+    // 动作前断言：偏好后端不可写
+    {
+        QSettings testProbe;
+        testProbe.setValue(QStringLiteral("probe_key"), 1);
+        testProbe.sync();
+        QCOMPARE(testProbe.status(), QSettings::AccessError);
+    }
+
+    // 执行开启同步
+    controller.setEnabled(true);
+
+    // 断言：保持关闭、引擎未启动、暴露错误
+    QCOMPARE(controller.isEnabled(), false);
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+    QCOMPARE(controller.statusKey(), QStringLiteral("error"));
+    QVERIFY(!controller.statusDetail().isEmpty());
+
+    // 解除故障注入
+    QVERIFY(QDir(iniPath).removeRecursively());
+    {
+        QFile emptyFile(iniPath);
+        QVERIFY(emptyFile.open(QIODevice::WriteOnly));
+        emptyFile.close();
+    }
+    cleanupGuard.dismiss();
+
+    // 恢复后再次开启同步：成功开启并启动引擎
+    controller.setEnabled(true);
+    QCOMPARE(controller.isEnabled(), true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+}
+
+void SyncControllerTests::settingsAccessErrorOnAcceptFolderPreservesExistingEngineAndRecovers()
+{
+    // 保证更换同步文件夹持久化失败时保留现有引擎与旧文件夹运行态，故障解除后重新选择可成功切换。
+    std::unique_ptr<Peer> mac = openMacPeer();
+    mac->engine->start();
+    QVERIFY(waitIdle(mac->engine.get()));
+
+    const QString oldCloudFolder = cloudFolder();
+    const QString newCloudFolder = m_data->filePath(QStringLiteral("cloud2/番茄Todo同步"));
+    QVERIFY(QDir().mkpath(newCloudFolder));
+    QVERIFY(QFile::copy(oldCloudFolder + QLatin1Char('/') + SyncFiles::markerFileName(),
+                        newCloudFolder + QLatin1Char('/') + SyncFiles::markerFileName()));
+
+    FakePicker picker;
+    picker.bookmark = oldCloudFolder.toUtf8();
+    picker.message = QStringLiteral("iCloud 云盘/番茄Todo同步");
+    SyncController controller(ipadPlatform(&picker));
+    controller.initialize();
+    controller.chooseFolder();
+    QTRY_VERIFY(!controller.isChoosingFolder());
+    QVERIFY(controller.isEnabled());
+    QVERIFY(controller.hasFolder());
+    QVERIFY(waitIdle(controller.engine()));
+
+    const QByteArray oldBookmark = QSettings().value(QStringLiteral("sync/bookmark")).toByteArray();
+    SyncEngine* const oldEngine = controller.engine();
+    QVERIFY(oldEngine != nullptr);
+
+    // 故障注入点：替换 INI 为同名目录
+    QSettings settings;
+    const QString iniPath = settings.fileName();
+    QVERIFY(!iniPath.isEmpty());
+    QFile::remove(iniPath);
+    QVERIFY(QDir().mkdir(iniPath));
+
+    auto cleanupGuard = qScopeGuard([&]() {
+        if (QFileInfo(iniPath).isDir()) {
+            QDir(iniPath).removeRecursively();
+        }
+        QFile emptyFile(iniPath);
+        if (emptyFile.open(QIODevice::WriteOnly)) {
+            emptyFile.close();
+        }
+    });
+
+    // 动作前断言：偏好不可写
+    {
+        QSettings probe;
+        probe.setValue(QStringLiteral("probe_key"), 1);
+        probe.sync();
+        QCOMPARE(probe.status(), QSettings::AccessError);
+    }
+
+    // 尝试选择新文件夹
+    picker.bookmark = newCloudFolder.toUtf8();
+    picker.message = QStringLiteral("新文件夹");
+    controller.chooseFolder();
+    QTRY_VERIFY(!controller.isChoosingFolder());
+
+    // 断言失败后：报错且暴露 hasProblem，但旧 engine、m_enabled 保持，并未切换到新文件夹
+    QVERIFY(controller.hasProblem());
+    QCOMPARE(controller.statusKey(), QStringLiteral("error"));
+    QCOMPARE(controller.engine(), oldEngine);
+    QCOMPARE(controller.isEnabled(), true);
+
+    // 解除故障注入
+    QVERIFY(QDir(iniPath).removeRecursively());
+    {
+        QFile emptyFile(iniPath);
+        QVERIFY(emptyFile.open(QIODevice::WriteOnly));
+        emptyFile.close();
+    }
+    cleanupGuard.dismiss();
+
+    // 故障解除后重新选择新文件夹：成功切换
+    controller.chooseFolder();
+    QTRY_VERIFY(!controller.isChoosingFolder());
+    QVERIFY(!controller.hasProblem());
+    QCOMPARE(QSettings().value(QStringLiteral("sync/bookmark")).toByteArray(), newCloudFolder.toUtf8());
+}
+
+void SyncControllerTests::settingsAccessErrorOnBookmarkRefreshPreservesEngineAndExposesError()
+{
+    // 保证工作线程刷新书签写入持久化失败时暴露错误状态且不破坏当前引擎，解除故障后重试或恢复正常。
+    std::unique_ptr<Peer> mac = openMacPeer();
+    mac->engine->start();
+    QVERIFY(waitIdle(mac->engine.get()));
+
+    FakePicker picker;
+    picker.bookmark = cloudFolder().toUtf8();
+    QList<std::function<void(const QByteArray&)>> refreshers;
+    SyncController controller(ipadPlatform(&picker, &refreshers));
+    controller.initialize();
+    controller.setEnabled(true);
+    QTRY_VERIFY(controller.isEnabled());
+    QVERIFY(waitIdle(controller.engine()));
+    QCOMPARE(refreshers.size(), 2);
+
+    std::function<void(const QByteArray&)> currentRefresher = refreshers.last();
+
+    // 故障注入点：替换 INI 为同名目录
+    QSettings settings;
+    const QString iniPath = settings.fileName();
+    QVERIFY(!iniPath.isEmpty());
+    QFile::remove(iniPath);
+    QVERIFY(QDir().mkdir(iniPath));
+
+    auto cleanupGuard = qScopeGuard([&]() {
+        if (QFileInfo(iniPath).isDir()) {
+            QDir(iniPath).removeRecursively();
+        }
+        QFile emptyFile(iniPath);
+        if (emptyFile.open(QIODevice::WriteOnly)) {
+            emptyFile.close();
+        }
+    });
+
+    // 动作前断言：偏好不可写
+    {
+        QSettings probe;
+        probe.setValue(QStringLiteral("probe_key"), 1);
+        probe.sync();
+        QCOMPARE(probe.status(), QSettings::AccessError);
+    }
+
+    // 在工作线程中调用刷新书签回调
+    QThread* thread = QThread::create([currentRefresher] {
+        currentRefresher(QByteArrayLiteral("刷新后的书签内容"));
+    });
+    thread->start();
+    QVERIFY(thread->wait(5000));
+    delete thread;
+
+    // 投递一个主线程哨兵，等待 queued connection 在主线程中执行完毕
+    bool processed = false;
+    QMetaObject::invokeMethod(&controller, [&processed] { processed = true; }, Qt::QueuedConnection);
+    QTRY_VERIFY(processed);
+
+    // 断言错误状态：hasProblem 成立，statusKey 为 error，但当前引擎保持运行
+    QVERIFY(controller.hasProblem());
+    QCOMPARE(controller.statusKey(), QStringLiteral("error"));
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+
+    // 解除故障注入
+    QVERIFY(QDir(iniPath).removeRecursively());
+    {
+        QFile emptyFile(iniPath);
+        QVERIFY(emptyFile.open(QIODevice::WriteOnly));
+        emptyFile.close();
+    }
+    cleanupGuard.dismiss();
+
+    // 再次在工作线程中调用刷新回调：成功持久化并清除错误
+    QThread* recoverThread = QThread::create([currentRefresher] {
+        currentRefresher(QByteArrayLiteral("成功恢复的书签内容"));
+    });
+    recoverThread->start();
+    QVERIFY(recoverThread->wait(5000));
+    delete recoverThread;
+
+    bool recoverProcessed = false;
+    QMetaObject::invokeMethod(&controller, [&recoverProcessed] { recoverProcessed = true; }, Qt::QueuedConnection);
+    QTRY_VERIFY(recoverProcessed);
+
+    QVERIFY(!controller.hasProblem());
+    QCOMPARE(QSettings().value(QStringLiteral("sync/bookmark")).toByteArray(), QByteArrayLiteral("成功恢复的书签内容"));
+}
+
+void SyncControllerTests::preparedJournalOnRestartBlocksSyncAndAllowsFreshRestore()
+{
+    // 保证重启时遇到 prepared 恢复意图日志保持阻断，立即同步不启动引擎且不增加纪元，但允许发起新的合法恢复。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    // 写入处于 prepared 状态的恢复意图日志
+    const QString prepOpId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString prepDevice = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+    const QString prepFolder = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+    QJsonObject obj;
+    obj.insert(QStringLiteral("v"), 1);
+    obj.insert(QStringLiteral("operationId"), prepOpId);
+    obj.insert(QStringLiteral("epoch"), QStringLiteral("5"));
+    obj.insert(QStringLiteral("deviceId"), prepDevice);
+    obj.insert(QStringLiteral("folderId"), prepFolder);
+    obj.insert(QStringLiteral("phase"), QStringLiteral("prepared"));
+    obj.insert(QStringLiteral("dbPath"), QFileInfo(dbPath).absoluteFilePath());
+    QFile file(journalPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    file.close();
+
+    // 模拟之前已开启同步，重启后保持开启配置
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("sync/enabled"), true);
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+    }
+
+    const qint64 initialEpoch = SyncStore().epoch();
+
+    // 构造新控制器模拟进程重启启动
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+
+    // 验证阻断：hasProblem 为 true，引擎未运行，说明为 prepared 未完成
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(controller.statusDetail().contains(QStringLiteral("恢复意图")));
+
+    // 点击立即同步：不得启动引擎，不得递增纪元
+    controller.syncNow();
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QCOMPARE(SyncStore().epoch(), initialEpoch);
+
+    // 重新发起新的合法恢复
+    QVERIFY(controller.prepareForRestore());
+    controller.finishRestore(true);
+
+    // 验证新恢复完成后成功启动引擎，恢复阻断解除，日志被安全清理
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(!QFileInfo::exists(journalPath));
+}
+
+void SyncControllerTests::installedJournalOnRestartCompletesPendingStepsIdempotently()
+{
+    // 保证重启时遇到 installed 恢复日志加载待修复上下文，重试幂等执行未完成步骤，folder失败不重复增加纪元，全部成功后安全删除日志并启动。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+    const QString opId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const qint64 targetEpoch = 10;
+    const QString targetDevice = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+    const QString targetFolder = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+
+    // 写入处于 installed 状态的恢复意图日志
+    QJsonObject obj;
+    obj.insert(QStringLiteral("v"), 1);
+    obj.insert(QStringLiteral("operationId"), opId);
+    obj.insert(QStringLiteral("epoch"), QString::number(targetEpoch));
+    obj.insert(QStringLiteral("deviceId"), targetDevice);
+    obj.insert(QStringLiteral("folderId"), targetFolder);
+    obj.insert(QStringLiteral("phase"), QStringLiteral("installed"));
+    obj.insert(QStringLiteral("dbPath"), QFileInfo(dbPath).absoluteFilePath());
+    QFile file(journalPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    file.close();
+
+    // 模拟之前已开启同步，重启后保持开启配置
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("sync/enabled"), true);
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+    }
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+
+    // 启动时必须保持阻断
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 动作前断言目标 folder 与现值不同
+    QVERIFY(SyncStore().folderId() != targetFolder);
+
+    // 注入 folder_id 写入失败（SQLite 的 INSERT OR REPLACE 触发 INSERT）
+    QSqlQuery trigger(DatabaseManager::instance()->database());
+    QVERIFY(trigger.exec(QStringLiteral(
+        "CREATE TRIGGER abort_folder_on_sync BEFORE INSERT ON sync_state "
+        "WHEN NEW.key = 'folder_id' BEGIN SELECT RAISE(ABORT, 'injected folder failure'); END;")));
+
+    // 点击立即同步：epoch 首次建立成功，但 folder 步骤失败，同步继续保持阻断
+    controller.syncNow();
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QCOMPARE(SyncStore().epoch(), targetEpoch + 1);
+
+    // 再次点击立即同步：因为 B1 operationId 幂等保护，绝不再次递增纪元
+    controller.syncNow();
+    QCOMPARE(SyncStore().epoch(), targetEpoch + 1);
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 移除注入触发器
+    QVERIFY(trigger.exec(QStringLiteral("DROP TRIGGER abort_folder_on_sync")));
+
+    // 再次点击立即同步：完成剩余步骤，日志被安全删除，引擎启动
+    controller.syncNow();
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QCOMPARE(SyncStore().folderId(), targetFolder);
+    QVERIFY(!QFileInfo::exists(journalPath));
+}
+
+void SyncControllerTests::corruptOrOversizedJournalBlocksSyncWithoutDeletingUnknownFiles()
+{
+    // 保证遇到损坏、超预算或同名目录占位的恢复日志时阻断同步并明确报错，绝不擅自删除或误删未知文件。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    // 子场景 1：损坏 JSON
+    {
+        QFile file(journalPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("{\"v\": 1, \"phase\": \"corrupted json without closing");
+        file.close();
+
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+        QVERIFY(controller.hasProblem());
+        QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+        // 损坏文件完好保留，未被擅自删除
+        QVERIFY(QFileInfo::exists(journalPath));
+        QVERIFY(QFile::remove(journalPath));
+    }
+
+    // 子场景 2：超预算文件 (>16KiB)，禁止用非法字符填充，需使用合法 JSON + 尾部合法 JSON 空白填至 17KiB
+    {
+        const QString validOpId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        const QString validDevice = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+        const QString validFolder = QUuid::createUuid().toString(QUuid::WithoutBraces);
+        QJsonObject validObj;
+        validObj.insert(QStringLiteral("v"), 1);
+        validObj.insert(QStringLiteral("operationId"), validOpId);
+        validObj.insert(QStringLiteral("epoch"), QStringLiteral("1"));
+        validObj.insert(QStringLiteral("deviceId"), validDevice);
+        validObj.insert(QStringLiteral("folderId"), validFolder);
+        validObj.insert(QStringLiteral("phase"), QStringLiteral("installed"));
+        validObj.insert(QStringLiteral("dbPath"), QFileInfo(dbPath).absoluteFilePath());
+
+        QByteArray content = QJsonDocument(validObj).toJson(QJsonDocument::Compact);
+        const int targetSize = 17 * 1024;
+        if (content.size() < targetSize) {
+            content.append(QByteArray(targetSize - content.size(), ' '));
+        }
+
+        // 先通过 QJsonDocument::fromJson 断言其为合法 JSON（解析成功），且内容大小确已超限 (>16KiB)
+        QJsonParseError parseErr;
+        const QJsonDocument parsed = QJsonDocument::fromJson(content, &parseErr);
+        QCOMPARE(parseErr.error, QJsonParseError::NoError);
+        QVERIFY(!parsed.isNull());
+        QVERIFY(content.size() > 16 * 1024);
+
+        QFile file(journalPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(content);
+        file.close();
+
+        const qint64 initialEpoch = SyncStore().epoch();
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+        QVERIFY(controller.hasProblem());
+        QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+        QCOMPARE(controller.summaryText(), QStringLiteral("恢复日志损坏"));
+        QVERIFY(controller.statusDetail().contains(QStringLiteral("16 KiB")));
+
+        // 立即同步不能接受（纪元不推进，引擎不启动）
+        controller.syncNow();
+        QCOMPARE(SyncStore().epoch(), initialEpoch);
+        QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+        QVERIFY(controller.hasProblem());
+
+        // 重新 prepare 不能接受（返回 false 且报错明确含 16 KiB）
+        QString prepErr;
+        const bool prepOk = controller.prepareForRestore(&prepErr);
+        QVERIFY(!prepOk);
+        QVERIFY(!prepErr.isEmpty());
+        QVERIFY(prepErr.contains(QStringLiteral("16 KiB")));
+
+        // 超预算文件内容完整保留，未被擅自覆写或删除
+        QFile checkFile(journalPath);
+        QVERIFY(checkFile.open(QIODevice::ReadOnly));
+        QCOMPARE(checkFile.readAll(), content);
+        checkFile.close();
+
+        QVERIFY(QFile::remove(journalPath));
+    }
+
+    // 子场景 3：同名目录占用
+    {
+        QVERIFY(QDir().mkdir(journalPath));
+
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+        QVERIFY(controller.hasProblem());
+        QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+        // 目录完好保留，未被擅自删除
+        QVERIFY(QFileInfo(journalPath).isDir());
+        QVERIFY(QDir(journalPath).removeRecursively());
+    }
+}
+
+void SyncControllerTests::cleanJournalRemovesOnlyValidJournalFile()
+{
+    // 保证恢复日志清理严格限定于与当前数据库绑定的普通恢复日志文件，绝不误删数据库或其它文件。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+    const QString siblingFile = dbPath + QStringLiteral(".other.data");
+
+    // 创建伴随文件
+    QFile sib(siblingFile);
+    QVERIFY(sib.open(QIODevice::WriteOnly));
+    sib.write("important sibling file");
+    sib.close();
+
+    // 正常执行一次恢复与收尾
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+
+    QVERIFY(controller.prepareForRestore());
+    QVERIFY(QFileInfo::exists(journalPath));
+    controller.finishRestore(true);
+
+    // 验证 journal 被删除，而数据库文件和伴随文件完整无损
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QVERIFY(QFileInfo::exists(dbPath));
+    QVERIFY(QFileInfo::exists(siblingFile));
+
+    QFile::remove(siblingFile);
+}
+
+void SyncControllerTests::journalDeleteFailureBlocksSyncAndRetryDoesNotBumpEpoch()
+{
+    // 保证恢复日志删除失败时同步保持阻断，重试时不重复增加纪元，解除删除障碍后重试成功删除日志并恢复同步。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+    const QString opId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const qint64 targetEpoch = 15;
+    const QString targetDevice = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+    const QString targetFolder = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+
+    // 写入处于 installed 状态的有效恢复意图日志
+    QJsonObject obj;
+    obj.insert(QStringLiteral("v"), 1);
+    obj.insert(QStringLiteral("operationId"), opId);
+    obj.insert(QStringLiteral("epoch"), QString::number(targetEpoch));
+    obj.insert(QStringLiteral("deviceId"), targetDevice);
+    obj.insert(QStringLiteral("folderId"), targetFolder);
+    obj.insert(QStringLiteral("phase"), QStringLiteral("installed"));
+    obj.insert(QStringLiteral("dbPath"), QFileInfo(dbPath).absoluteFilePath());
+    QFile file(journalPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    file.close();
+
+    // 偏好中标记已开启同步
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("sync/enabled"), true);
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+    }
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+
+    // 启动时遇到 installed 日志保持阻断
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 故障注入：将恢复日志文件暂存，并在原路径建立同名目录占位，使 deleteJournalFileSafely 拒绝删除非普通文件
+    const QString backupJournal = journalPath + QStringLiteral(".bak");
+    QVERIFY(QFile::rename(journalPath, backupJournal));
+    QVERIFY(QDir().mkdir(journalPath));
+
+    auto cleanupGuard = qScopeGuard([&]() {
+        if (QFileInfo(journalPath).isDir()) {
+            QDir(journalPath).removeRecursively();
+        }
+        if (QFileInfo::exists(backupJournal)) {
+            QFile::remove(backupJournal);
+        }
+    });
+
+    // 点击立即同步：epoch 推进到 targetEpoch + 1，folder 写入成功，但删除日志因非普通文件占位失败，同步继续保持阻断
+    controller.syncNow();
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+    QCOMPARE(SyncStore().epoch(), targetEpoch + 1);
+    QCOMPARE(SyncStore().deviceId(), targetDevice);
+    QCOMPARE(SyncStore().folderId(), targetFolder);
+
+    // 再次点击立即同步：因为 needsEpoch 已为 false，绝不再次递增纪元
+    controller.syncNow();
+    QCOMPARE(SyncStore().epoch(), targetEpoch + 1);
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(controller.hasProblem());
+
+    // 解除占位：移除目录占位，还原合法恢复日志
+    QVERIFY(QDir(journalPath).removeRecursively());
+    QVERIFY(QFile::rename(backupJournal, journalPath));
+
+    // 再次点击立即同步：成功删除日志并启动引擎，纪元依然保持 targetEpoch + 1 不递增
+    controller.syncNow();
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(SyncStore().epoch(), targetEpoch + 1);
+}
+
+void SyncControllerTests::actualDbCloseReopenWithInstalledJournalResumesWithSameToken()
+{
+    // 保证在事务已落库且产生新待发送后进程中断重启，新控制器遇到 installed 日志幂等完成收尾，不重复递增纪元且不重复清空待发送队列。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+    const QString opId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const qint64 targetEpoch = 25;
+    const QString targetDevice = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+    const QString targetFolder = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    // 1. 模拟恢复收尾在关闭前的执行：先用 opId 成功提交 beginEpochAfterRestore
+    {
+        SyncStore store;
+        QVERIFY(store.beginEpochAfterRestore(targetEpoch, targetDevice, opId));
+        QCOMPARE(store.epoch(), targetEpoch + 1);
+        QCOMPARE(store.deviceId(), targetDevice);
+        QCOMPARE(scalar(QStringLiteral("SELECT value FROM sync_state WHERE key = 'local_restore_operation_id'")).toString(), opId);
+    }
+
+    // 2. 在 token 提交后新增一条任务改动入待发送（outbox）
+    const QString newSyncId = addTask(QStringLiteral("token提交后新增的任务"));
+    QVERIFY(!newSyncId.isEmpty());
+    QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM sync_outbox")).toInt(), 1);
+
+    // 3. 模拟收尾未彻底删除日志即发生崩溃：保留 installed sidecar
+    QJsonObject obj;
+    obj.insert(QStringLiteral("v"), 1);
+    obj.insert(QStringLiteral("operationId"), opId);
+    obj.insert(QStringLiteral("epoch"), QString::number(targetEpoch));
+    obj.insert(QStringLiteral("deviceId"), targetDevice);
+    obj.insert(QStringLiteral("folderId"), targetFolder);
+    obj.insert(QStringLiteral("phase"), QStringLiteral("installed"));
+    obj.insert(QStringLiteral("dbPath"), QFileInfo(dbPath).absoluteFilePath());
+    QFile file(journalPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    file.close();
+
+    // 偏好中标记已开启同步
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("sync/enabled"), true);
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+    }
+
+    // 4. 真实关闭并重新打开数据库，清除所有连接缓存和内存单例状态
+    DatabaseManager::instance()->close();
+    QVERIFY(DatabaseManager::instance()->initialize(dbPath));
+
+    // 5. 构造全新控制器，模拟重启后启动检查
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+
+    // 启动时识别到 installed 日志保持阻断
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    // 6. 点击立即同步：利用同一 operationId 幂等完成收尾并删除日志
+    controller.syncNow();
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(!QFileInfo::exists(journalPath));
+
+    // 7. 断言纪元不重复增加，设备和文件夹身份正确
+    QCOMPARE(SyncStore().epoch(), targetEpoch + 1);
+    QCOMPARE(SyncStore().deviceId(), targetDevice);
+    QCOMPARE(SyncStore().folderId(), targetFolder);
+
+    // 8. 核心断言：token 命中幂等分支，未重复清空待发送队列，崩溃前新增的 outbox 改动依然完好保留
+    QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM sync_outbox")).toInt(), 1);
+}
+
+void SyncControllerTests::corruptFieldsAndDanglingSymlinkBlockSync()
+{
+    // 保证恢复日志存在悬空符号链接、非合法 UUID、非法设备或文件夹标识、浮点版本或路径不匹配等损坏字段时严格阻断同步，且不误删日志文件。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    // 偏好标记开启同步，以验证阻断会阻止引擎启动
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("sync/enabled"), true);
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+    }
+
+    const QString validOpId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString validDevice = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+    const QString validFolder = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+
+    auto runCorruptCheck = [&](const std::function<void()>& setup, const std::function<void()>& teardown) {
+        setup();
+        const qint64 initialEpoch = SyncStore().epoch();
+        SyncController controller(macPlatform(cloudFolder()));
+        controller.initialize();
+        QVERIFY2(controller.hasProblem(), "损坏日志必须使控制器处于 problem 状态");
+        QVERIFY2(!controller.engine() || !controller.engine()->isRunning(), "损坏日志必须阻止同步引擎启动");
+        QCOMPARE(controller.summaryText(), QStringLiteral("恢复日志损坏"));
+
+        // 调用 syncNow 后断言 epoch 不变、引擎仍停、文件或 symlink 仍在
+        controller.syncNow();
+        QCOMPARE(SyncStore().epoch(), initialEpoch);
+        QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+        const QFileInfo fi(journalPath);
+        QVERIFY(fi.exists() || fi.isSymLink());
+
+        // 调用 prepareForRestore(&error) 必须返回 false 且 error 非空，证明不会把坏字段当合法日志覆写
+        QString prepErr;
+        const bool prepOk = controller.prepareForRestore(&prepErr);
+        QVERIFY(!prepOk);
+        QVERIFY(!prepErr.isEmpty());
+        const QFileInfo fiAfter(journalPath);
+        QVERIFY(fiAfter.exists() || fiAfter.isSymLink());
+
+        teardown();
+    };
+
+    // 1. 悬空符号链接
+    runCorruptCheck([&]() {
+        const QString danglingTarget = m_data->filePath(QStringLiteral("non_existent_target.json"));
+        QVERIFY(QFile::link(danglingTarget, journalPath));
+        QVERIFY(QFileInfo(journalPath).isSymLink());
+    }, [&]() {
+        QVERIFY(QFileInfo(journalPath).isSymLink());
+        QVERIFY(QFile::remove(journalPath));
+    });
+
+    // 辅助 lambda：写入 json object 并校验
+    auto checkJsonObject = [&](const QJsonObject& obj) {
+        runCorruptCheck([&]() {
+            QFile file(journalPath);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+            file.close();
+        }, [&]() {
+            QVERIFY(QFileInfo::exists(journalPath));
+            QVERIFY(QFile::remove(journalPath));
+        });
+    };
+
+    auto baseValidObject = [&]() {
+        QJsonObject obj;
+        obj.insert(QStringLiteral("v"), 1);
+        obj.insert(QStringLiteral("operationId"), validOpId);
+        obj.insert(QStringLiteral("epoch"), QStringLiteral("1"));
+        obj.insert(QStringLiteral("deviceId"), validDevice);
+        obj.insert(QStringLiteral("folderId"), validFolder);
+        obj.insert(QStringLiteral("phase"), QStringLiteral("installed"));
+        obj.insert(QStringLiteral("dbPath"), QFileInfo(dbPath).absoluteFilePath());
+        return obj;
+    };
+
+    // 2. 非合法 UUID (非 UUID 字符串，例如 op-installed-restart-test)
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("operationId"), QStringLiteral("op-installed-restart-test"));
+        checkJsonObject(obj);
+    }
+
+    // 3. 非合法 deviceId (非 32 位十六进制)
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("deviceId"), QStringLiteral("not-a-32-hex-device-id"));
+        checkJsonObject(obj);
+    }
+
+    // 4. 非合法 folderId (非空但非 32 位十六进制且非有效 UUID)
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("folderId"), QStringLiteral("bad-folder-id"));
+        checkJsonObject(obj);
+    }
+
+    // 5. 浮点版本号 (v = 1.5)
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("v"), 1.5);
+        checkJsonObject(obj);
+    }
+
+    // 6. JSON 数字 epoch (非十进制字符串)
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("epoch"), 10);
+        checkJsonObject(obj);
+    }
+
+    // 7. 包含非法字符的 epoch 字符串
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("epoch"), QStringLiteral("10.5"));
+        checkJsonObject(obj);
+    }
+
+    // 8. 数据库绝对路径不匹配
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("dbPath"), m_data->filePath(QStringLiteral("other.sqlite")));
+        checkJsonObject(obj);
+    }
+
+    // 9. 未知 phase
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("phase"), QStringLiteral("unknown_phase"));
+        checkJsonObject(obj);
+    }
+
+    // 10. 缺少 folderId 字段（缺失不属于合法空值）
+    {
+        QJsonObject obj = baseValidObject();
+        obj.remove(QStringLiteral("folderId"));
+        checkJsonObject(obj);
+    }
+
+    // 11. folderId 字段为 null（null 不属于合法空值）
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("folderId"), QJsonValue::Null);
+        checkJsonObject(obj);
+    }
+
+    // 12. folderId 包含尾随换行
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("folderId"), validFolder + QStringLiteral("\n"));
+        checkJsonObject(obj);
+    }
+
+    // 13. epoch 包含尾随换行
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("epoch"), QStringLiteral("1\n"));
+        checkJsonObject(obj);
+    }
+
+    // 14. deviceId 包含尾随换行
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("deviceId"), validDevice + QStringLiteral("\n"));
+        checkJsonObject(obj);
+    }
+
+    // 15. dbPath 为相对路径（拒绝相对路径回退）
+    {
+        QJsonObject obj = baseValidObject();
+        obj.insert(QStringLiteral("dbPath"), QStringLiteral("this.sqlite"));
+        checkJsonObject(obj);
+    }
+}
+
+void SyncControllerTests::prepareForRestoreWriteFailureBlocksSyncAndTogglingCannotBypass()
+{
+    // 保证恢复意图写入失败时引擎停止且错误可见，切换同步开关或点击立即同步均无法绕过阻断，发起新的合法恢复成功后清除错误并恢复同步。
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString dbDir = QFileInfo(dbPath).absolutePath();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    QVERIFY(!QFileInfo::exists(journalPath));
+
+    const QFile::Permissions origPerms = QFile::permissions(dbDir);
+    auto permGuard = qScopeGuard([&]() {
+        QFile::setPermissions(dbDir, origPerms);
+    });
+
+    // 故障注入：临时将数据库父目录去掉写权限，使 sidecar 不存在的情况下 writeJournalFile 失败
+    QVERIFY(QFile::setPermissions(dbDir, origPerms & ~QFile::WriteOwner & ~QFile::WriteUser & ~QFile::WriteGroup & ~QFile::WriteOther));
+
+    // 使用探针断言确实无法在该目录下新建文件
+    const QString probePath = dbDir + QStringLiteral("/probe.tmp");
+    QFile probe(probePath);
+    QVERIFY(!probe.open(QIODevice::WriteOnly));
+
+    QString err;
+    const bool prepOk = controller.prepareForRestore(&err);
+    QVERIFY(!prepOk);
+    QVERIFY(!err.isEmpty());
+    QVERIFY(err.contains(QStringLiteral("无法打开恢复日志文件进行写入")) || err.contains(QStringLiteral("提交恢复日志文件失败")));
+    QVERIFY(!QFileInfo::exists(journalPath));
+
+    // 确认引擎停止且错误可见
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(!controller.statusDetail().isEmpty());
+
+    // 验证切换同步开关（关闭再打开）无法绕过停止
+    controller.setEnabled(false);
+    controller.setEnabled(true);
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 验证调用 syncNow 也无法恢复同步或启动引擎
+    controller.syncNow();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 解除故障注入：恢复目录权限，探针验证成功
+    QVERIFY(QFile::setPermissions(dbDir, origPerms));
+    QVERIFY(probe.open(QIODevice::WriteOnly));
+    probe.close();
+    QFile::remove(probePath);
+
+    // 发起新的合法恢复重试：意图写入成功，并在 finishRestore 成功后清除错误、恢复同步
+    QVERIFY(controller.prepareForRestore());
+    controller.finishRestore(true);
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(!QFileInfo::exists(journalPath));
+}
+
+void SyncControllerTests::corruptedJournalPathResolvedAllowsFreshRestore()
+{
+    // 保证日志路径被非普通文件损坏时阻断同步，在损坏路径修复后发起新的合法恢复能成功清除损坏标记并恢复同步。
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    // 故障注入：恢复日志路径被同名目录占位，导致 readJournalFile 判定 Corrupt 并设置 m_journalCorrupted
+    QVERIFY(QDir().mkdir(journalPath));
+    auto cleanupGuard = qScopeGuard([&]() {
+        if (QFileInfo(journalPath).isDir()) {
+            QDir(journalPath).removeRecursively();
+        }
+    });
+
+    QString err;
+    const bool prepOk = controller.prepareForRestore(&err);
+    QVERIFY(!prepOk);
+    QVERIFY(!err.isEmpty());
+
+    // 确认引擎停止且错误可见（损坏标记生效）
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QCOMPARE(controller.summaryText(), QStringLiteral("恢复日志损坏"));
+
+    // 验证切换同步开关（关闭再打开）无法绕过停止
+    controller.setEnabled(false);
+    controller.setEnabled(true);
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 验证调用 syncNow 也无法恢复同步或启动引擎
+    controller.syncNow();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 解除故障注入：移除目录占位
+    QVERIFY(QDir(journalPath).removeRecursively());
+
+    // 发起新的合法恢复：意图写入成功后清除 m_journalCorrupted，并在 finishRestore 成功后恢复同步
+    QVERIFY(controller.prepareForRestore());
+    controller.finishRestore(true);
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(!QFileInfo::exists(journalPath));
+}
+
+void SyncControllerTests::finishRestoreFalseWhenJournalDeleteFailsPreservesContextAndAllowsRetry()
+{
+    // 保证恢复取消时若删除 prepared 日志失败，能完整保留 operationId 与恢复上下文，重试时可根据操作标识成功安全清理日志且纪元恒定。
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    const qint64 initialEpoch = SyncStore().epoch();
+    const QString initialDevice = SyncStore().deviceId();
+    const QString initialFolder = SyncStore().folderId();
+
+    QVERIFY(controller.prepareForRestore());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    // 故障注入：将原 prepared 日志暂存，以同名目录占位制造删除失败
+    const QString backupJournal = journalPath + QStringLiteral(".bak");
+    QVERIFY(QFile::rename(journalPath, backupJournal));
+    QVERIFY(QDir().mkdir(journalPath));
+
+    auto cleanupGuard = qScopeGuard([&]() {
+        if (QFileInfo(journalPath).isDir()) {
+            QDir(journalPath).removeRecursively();
+        }
+        if (QFileInfo::exists(backupJournal)) {
+            QFile::remove(backupJournal);
+        }
+    });
+
+    // 调用 finishRestore(false)，由于占位导致删除 prepared 日志失败
+    controller.finishRestore(false);
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QCOMPARE(SyncStore().epoch(), initialEpoch);
+
+    // 解除占位：还原原始 prepared 日志
+    QVERIFY(QDir(journalPath).removeRecursively());
+    QVERIFY(QFile::rename(backupJournal, journalPath));
+
+    // 点击立即同步：重试清除日志，因为完整保留了 operationId，能够通过删除校验并恢复引擎，且纪元不变
+    controller.syncNow();
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(SyncStore().epoch(), initialEpoch);
+    QCOMPARE(SyncStore().deviceId(), initialDevice);
+    QCOMPARE(SyncStore().folderId(), initialFolder);
+}
+
+void SyncControllerTests::finishRestoreTrueWhenDbClosedRetainsContextAndBlocksSync()
+{
+    // 保证恢复完成时若数据库意外关闭，控制器保留恢复上下文并设置阻断错误，重新打开数据库后通过 syncNow 先写 installed 日志再推进纪元。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+
+    const qint64 prevEpoch = SyncStore().epoch();
+
+    QVERIFY(controller.prepareForRestore());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    auto readJournalJson = [](const QString& path) -> QJsonObject {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return {};
+        }
+        return QJsonDocument::fromJson(file.readAll()).object();
+    };
+
+    // 断言磁盘当前是 prepared 日志
+    QCOMPARE(readJournalJson(journalPath).value(QStringLiteral("phase")).toString(), QStringLiteral("prepared"));
+
+    // 故障注入：在 finishRestore(true) 之前关闭数据库
+    DatabaseManager::instance()->close();
+
+    controller.finishRestore(true);
+
+    // 断言处于阻断状态且报错明确，磁盘仍保留 prepared 日志
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(controller.statusDetail().contains(QStringLiteral("数据库未处于打开状态")));
+    QCOMPARE(readJournalJson(journalPath).value(QStringLiteral("phase")).toString(), QStringLiteral("prepared"));
+
+    // 重新打开数据库
+    QVERIFY(DatabaseManager::instance()->initialize(dbPath));
+
+    // 验证切开关不能绕过阻断
+    controller.setEnabled(false);
+    controller.setEnabled(true);
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 点击立即同步：先写 installed 日志，再完成纪元建立与日志清理
+    controller.syncNow();
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(SyncStore().epoch(), prevEpoch + 1);
+}
+
+void SyncControllerTests::finishRestoreTrueDbClosedSyncNowRequiresInstalledJournalWriteBeforeEpoch()
+{
+    // 保证数据库关闭后完成恢复保留 installed 上下文且 needsJournalWrite=true，重试时若写 installed 日志失败则不推进纪元。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString dbDir = QFileInfo(dbPath).absolutePath();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+
+    const qint64 initialEpoch = SyncStore().epoch();
+    QVERIFY(controller.prepareForRestore());
+
+    DatabaseManager::instance()->close();
+    controller.finishRestore(true);
+    QVERIFY(controller.hasProblem());
+
+    QVERIFY(DatabaseManager::instance()->initialize(dbPath));
+
+    // 注入写日志失败（父目录去掉写权限）
+    const QFile::Permissions origPerms = QFile::permissions(dbDir);
+    auto permGuard = qScopeGuard([&]() {
+        QFile::setPermissions(dbDir, origPerms);
+    });
+    QVERIFY(QFile::setPermissions(dbDir, origPerms & ~QFile::WriteOwner & ~QFile::WriteUser & ~QFile::WriteGroup & ~QFile::WriteOther));
+
+    // 调用 syncNow，因为 needsJournalWrite=true，必须先写 installed 日志；写日志失败则终止，不推进 epoch
+    controller.syncNow();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QCOMPARE(SyncStore().epoch(), initialEpoch); // 纪元绝不推进！
+
+    // 恢复权限
+    QVERIFY(QFile::setPermissions(dbDir, origPerms));
+
+    // 再次 syncNow：成功写入 installed 并完成纪元推进和日志清理
+    controller.syncNow();
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(SyncStore().epoch(), initialEpoch + 1);
+}
+
+void SyncControllerTests::secondRestoreFailureWithOldInstalledJournalWriteBackFailureResumesOnRetry()
+{
+    // 保证第二次恢复取消且写回前次已安装日志失败时保留旧上下文，故障解除后同进程立即同步可幂等重试并维持纪元不变。
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString dbDir = QFileInfo(dbPath).absolutePath();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    const qint64 initialEpoch = SyncStore().epoch();
+    const QString initialDevice = SyncStore().deviceId();
+    const QString initialFolder = SyncStore().folderId();
+    const QString opId1 = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    // 模拟第一次恢复已由 store 提交该 opId1
+    QVERIFY(SyncStore().beginEpochAfterRestore(initialEpoch, initialDevice, opId1));
+    const qint64 committedEpoch = SyncStore().epoch();
+    QCOMPARE(committedEpoch, initialEpoch + 1);
+
+    auto readJournalJson = [](const QString& path) -> QJsonObject {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return {};
+        }
+        return QJsonDocument::fromJson(file.readAll()).object();
+    };
+    auto writeJournalJson = [](const QString& path, const QJsonObject& obj) -> bool {
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly)) {
+            return false;
+        }
+        file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+        file.close();
+        return true;
+    };
+
+    // 模拟磁盘遗留 opId1 的 installed 日志
+    QJsonObject j1;
+    j1.insert(QStringLiteral("v"), 1);
+    j1.insert(QStringLiteral("operationId"), opId1);
+    j1.insert(QStringLiteral("epoch"), QString::number(initialEpoch));
+    j1.insert(QStringLiteral("deviceId"), initialDevice);
+    j1.insert(QStringLiteral("folderId"), initialFolder);
+    j1.insert(QStringLiteral("phase"), QStringLiteral("installed"));
+    j1.insert(QStringLiteral("dbPath"), QFileInfo(dbPath).absoluteFilePath());
+    QVERIFY(writeJournalJson(journalPath, j1));
+
+    // 第二次恢复发起：prepareForRestore 会识别出磁盘原有的 j1 并记录为 m_previousJournal，然后写入新 prepared 日志 (opId2)
+    QVERIFY(controller.prepareForRestore());
+    QJsonObject diskJ2 = readJournalJson(journalPath);
+    QCOMPARE(diskJ2.value(QStringLiteral("phase")).toString(), QStringLiteral("prepared"));
+    const QString opId2 = diskJ2.value(QStringLiteral("operationId")).toString();
+    QVERIFY(opId2 != opId1);
+
+    // 故障注入：临时去掉父目录写权限，使得 finishRestore(false) 写回旧 installed 日志失败
+    const QFile::Permissions origPerms = QFile::permissions(dbDir);
+    auto permGuard = qScopeGuard([&]() {
+        QFile::setPermissions(dbDir, origPerms);
+    });
+    QVERIFY(QFile::setPermissions(dbDir, origPerms & ~QFile::WriteOwner & ~QFile::WriteUser & ~QFile::WriteGroup & ~QFile::WriteOther));
+
+    // 调用 finishRestore(false)，写回 j1 失败
+    controller.finishRestore(false);
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 解除故障注入
+    QVERIFY(QFile::setPermissions(dbDir, origPerms));
+
+    // 同进程 syncNow：写回旧 installed 日志，重试 epoch（命中 opId1 幂等不自增），安全删除日志，恢复引擎
+    controller.syncNow();
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(SyncStore().epoch(), committedEpoch);
+    QCOMPARE(SyncStore().deviceId(), initialDevice);
+    QCOMPARE(SyncStore().folderId(), initialFolder);
+}
+
+void SyncControllerTests::installedJournalWithProductionUuidFolderResumesSuccessfully()
+{
+    // 保证包含生产格式带连字符 UUID 文件夹标识的 installed 日志在重启时能被正常识别并幂等完成恢复。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+    const QString opId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const qint64 targetEpoch = 18;
+    const QString targetDevice = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+    // 生产格式：QUuid::createUuid().toString(QUuid::WithoutBraces) 带连字符（36 字符）
+    const QString targetFolder = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QCOMPARE(targetFolder.size(), 36);
+    QVERIFY(targetFolder.contains(QLatin1Char('-')));
+
+    QJsonObject obj;
+    obj.insert(QStringLiteral("v"), 1);
+    obj.insert(QStringLiteral("operationId"), opId);
+    obj.insert(QStringLiteral("epoch"), QString::number(targetEpoch));
+    obj.insert(QStringLiteral("deviceId"), targetDevice);
+    obj.insert(QStringLiteral("folderId"), targetFolder);
+    obj.insert(QStringLiteral("phase"), QStringLiteral("installed"));
+    obj.insert(QStringLiteral("dbPath"), QFileInfo(dbPath).absoluteFilePath());
+    QFile file(journalPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    file.close();
+
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("sync/enabled"), true);
+        settings.sync();
+    }
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    controller.syncNow();
+
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(SyncStore().epoch(), targetEpoch + 1);
+    QCOMPARE(SyncStore().deviceId(), targetDevice);
+    QCOMPARE(SyncStore().folderId(), targetFolder);
+}
+
+void SyncControllerTests::finishRestoreSafetyClassificationKeepsPreparedJournalOnRollbackFailure()
+{
+    // 保证 finishRestore(false, false) 必须保留当前 prepared 日志及操作身份，
+    // 即使先前有旧 installed 日志也绝不恢复旧日志，阻断同步且禁止 syncNow 自行收尾，跨重启仍阻断；
+    // 而 finishRestore(false, true) 在安全回滚时正常清理日志并恢复引擎。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+    const QString oldOpId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const qint64 oldEpoch = 50;
+    const QString oldDevice = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+    const QString oldFolder = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    // 1. 制造原有的 installed 日志
+    QJsonObject oldObj;
+    oldObj.insert(QStringLiteral("v"), 1);
+    oldObj.insert(QStringLiteral("operationId"), oldOpId);
+    oldObj.insert(QStringLiteral("epoch"), QString::number(oldEpoch));
+    oldObj.insert(QStringLiteral("deviceId"), oldDevice);
+    oldObj.insert(QStringLiteral("folderId"), oldFolder);
+    oldObj.insert(QStringLiteral("phase"), QStringLiteral("installed"));
+    oldObj.insert(QStringLiteral("dbPath"), QFileInfo(dbPath).absoluteFilePath());
+    {
+        QFile file(journalPath);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(QJsonDocument(oldObj).toJson(QJsonDocument::Compact));
+        file.close();
+    }
+
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("sync/enabled"), true);
+        settings.sync();
+    }
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    QVERIFY(controller.hasProblem());
+
+    auto readDiskJson = [&](const QString& path) -> QJsonObject {
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly)) {
+            return {};
+        }
+        return QJsonDocument::fromJson(f.readAll()).object();
+    };
+
+    // 发起第二次恢复准备：生成当前新的 prepared 日志
+    QVERIFY(controller.prepareForRestore());
+    QJsonObject newPrepared = readDiskJson(journalPath);
+    QCOMPARE(newPrepared.value(QStringLiteral("phase")).toString(), QStringLiteral("prepared"));
+    const QString newOpId = newPrepared.value(QStringLiteral("operationId")).toString();
+    QVERIFY(!newOpId.isEmpty());
+    QVERIFY(newOpId != oldOpId);
+
+    // 调用 finishRestore(false, false)：回滚失败
+    controller.finishRestore(false, false);
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 磁盘上必须保留当前这次的 prepared 日志，绝不能写回 oldOpId 的 installed 日志
+    QJsonObject diskAfter = readDiskJson(journalPath);
+    QCOMPARE(diskAfter.value(QStringLiteral("phase")).toString(), QStringLiteral("prepared"));
+    QCOMPARE(diskAfter.value(QStringLiteral("operationId")).toString(), newOpId);
+
+    // 同进程 syncNow 必须被拒绝：不启动引擎，纪元不自增
+    controller.syncNow();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QCOMPARE(readDiskJson(journalPath).value(QStringLiteral("phase")).toString(), QStringLiteral("prepared"));
+
+    // 重建控制器模拟重启：读取磁盘 prepared 日志，依然阻断
+    {
+        SyncController restarted(macPlatform(cloudFolder()));
+        restarted.initialize();
+        QVERIFY(restarted.hasProblem());
+        QVERIFY(!restarted.engine() || !restarted.engine()->isRunning());
+    }
+
+    // 2. 验证 finishRestore(false, true) 安全回滚分支：
+    // 清理坏日志后重新进入一次干净的 prepare -> finishRestore(false, true)
+    QVERIFY(QFile::remove(journalPath));
+    SyncController cleanController(macPlatform(cloudFolder()));
+    cleanController.initialize();
+    cleanController.setEnabled(true);
+    QVERIFY(waitIdle(cleanController.engine()));
+    QVERIFY(!cleanController.hasProblem());
+
+    QVERIFY(cleanController.prepareForRestore());
+    QVERIFY(QFileInfo::exists(journalPath));
+    cleanController.finishRestore(false, true);
+
+    // 安全回滚后日志被安全删除，引擎恢复运行，无 problem
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QVERIFY(!cleanController.hasProblem());
+    QVERIFY(cleanController.engine() && cleanController.engine()->isRunning());
+}
+
+void SyncControllerTests::restoreFinalizeSyncSettingsReadFailureBlocksSyncAndResumesWhenHealthy()
+{
+    // 保证恢复收尾时读取已同步设置失败（sync_settings 表重命名/损坏）能阻断同步且保留日志，待环境恢复健康后调用 syncNow 成功收尾。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(!controller.hasProblem());
+
+    // 1. prepareForRestore 成功生成 prepared 日志
+    QVERIFY(controller.prepareForRestore());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    // 2. 模拟恢复收尾时 sync_settings 表丢失：重命名 sync_settings 表，导致读取已同步设置失败
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("ALTER TABLE sync_settings RENAME TO sync_settings_bak")));
+
+    auto tableGuard = qScopeGuard([&]() {
+        QSqlQuery restoreQuery(DatabaseManager::instance()->database());
+        restoreQuery.exec(QStringLiteral("ALTER TABLE sync_settings_bak RENAME TO sync_settings"));
+    });
+
+    // 动作前断言故障生效：sync_settings 表不存在
+    QCOMPARE(scalar(QStringLiteral("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_settings'")).toString(), QString());
+
+    // 3. 模拟恢复完成收尾：finishRestore(true)
+    controller.finishRestore(true);
+
+    // 必须阻断：引擎停止，hasProblem 为 true，错误信息可见，且恢复日志绝对不能被删除
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY(!controller.statusDetail().isEmpty());
+
+    // 4. 在故障未修复前调用 syncNow：不得跳过错误，日志不得删除，引擎依然保持停止
+    controller.syncNow();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    // 5. 恢复健康：还原 sync_settings 表
+    QVERIFY(query.exec(QStringLiteral("ALTER TABLE sync_settings_bak RENAME TO sync_settings")));
+    tableGuard.dismiss();
+
+    // 6. 调用 syncNow 重试：成功整理设置，安全删除日志，启动引擎
+    controller.syncNow();
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!QFileInfo::exists(journalPath));
+}
+
+void SyncControllerTests::restoreFinalizeWriteBackMarkerClearFailurePreservesMarkersAndJournal()
+{
+    // 保证恢复收尾中设置写回标记清理失败时，写回标记与日志不丢失且引擎保持停止，修复后重试收尾成功。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(!controller.hasProblem());
+
+    // 1. 在 sync_state 中插入待写回标记与对应的 sync_settings
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("INSERT INTO sync_state (key, value) VALUES ('writeback/logic/dayStartHour', 'set')")));
+    QVERIFY(query.exec(QStringLiteral("INSERT OR REPLACE INTO sync_settings (key, value, v_time, v_device) VALUES ('logic/dayStartHour', '4', 1, 'dev1')")));
+    AppSettings::instance()->setDayStartHour(4);
+
+    // 2. 准备恢复
+    QVERIFY(controller.prepareForRestore());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    // 3. 注入故障：创建触发器阻止从 sync_state 删除 writeback/ 记录，使得 finishSettingWriteBack 失败
+    QVERIFY(query.exec(QStringLiteral(
+        "CREATE TRIGGER block_writeback_delete BEFORE DELETE ON sync_state "
+        "WHEN OLD.key = 'writeback/logic/dayStartHour' "
+        "BEGIN SELECT RAISE(ABORT, 'blocked writeback deletion'); END;")));
+
+    auto triggerGuard = qScopeGuard([&]() {
+        QSqlQuery cleanupQuery(DatabaseManager::instance()->database());
+        cleanupQuery.exec(QStringLiteral("DROP TRIGGER IF EXISTS block_writeback_delete"));
+    });
+
+    // 动作前断言：触发器确实存在
+    QCOMPARE(scalar(QStringLiteral("SELECT name FROM sqlite_master WHERE type='trigger' AND name='block_writeback_delete'")).toString(),
+             QStringLiteral("block_writeback_delete"));
+
+    // 4. 模拟恢复完成收尾：finishRestore(true)
+    controller.finishRestore(true);
+
+    // 必须阻断：引擎停、日志在、错误可见、writeback 标记未丢
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+    QCOMPARE(scalar(QStringLiteral("SELECT value FROM sync_state WHERE key = 'writeback/logic/dayStartHour'")).toString(),
+             QStringLiteral("set"));
+
+    // 在故障修复前调用 syncNow：不得跳过，日志与标记依然保留
+    controller.syncNow();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+    QCOMPARE(scalar(QStringLiteral("SELECT value FROM sync_state WHERE key = 'writeback/logic/dayStartHour'")).toString(),
+             QStringLiteral("set"));
+
+    // 5. 修复故障：移除触发器
+    QVERIFY(query.exec(QStringLiteral("DROP TRIGGER block_writeback_delete")));
+    triggerGuard.dismiss();
+
+    // 6. 重试收尾成功：标记被清理，日志被安全删除，引擎恢复启动
+    controller.syncNow();
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'writeback/logic/dayStartHour'")).toInt(), 0);
+}
+
+void SyncControllerTests::restoreFinalizeLocalRecordFailureBlocksSyncAndPreservesJournal()
+{
+    // 保证恢复收尾中本地新设置入库记录失败时，同步阻断并保留恢复日志，移除故障后重试成功收尾。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(!controller.hasProblem());
+
+    // 本地产生改动（非默认值），确保在 reconcileSettings 时会调用 store.recordLocalSetting
+    AppSettings::instance()->setDayStartHour(6);
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 6);
+
+    // 1. 准备恢复
+    QVERIFY(controller.prepareForRestore());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    // 删除库中已同步项，使本地改动在恢复整理时被判定为需要入库的新改动
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("DELETE FROM sync_settings WHERE key = 'logic/dayStartHour'")));
+
+    // 2. 注入故障：创建触发器阻止向 sync_settings 写入/更新记录，导致 recordLocalSetting 失败
+    QVERIFY(query.exec(QStringLiteral(
+        "CREATE TRIGGER block_sync_settings_insert BEFORE INSERT ON sync_settings "
+        "WHEN NEW.key = 'logic/dayStartHour' "
+        "BEGIN SELECT RAISE(ABORT, 'blocked sync_settings insert'); END;")));
+    QVERIFY(query.exec(QStringLiteral(
+        "CREATE TRIGGER block_sync_settings_update BEFORE UPDATE ON sync_settings "
+        "WHEN NEW.key = 'logic/dayStartHour' AND NEW.pending = 1 "
+        "BEGIN SELECT RAISE(ABORT, 'blocked sync_settings update'); END;")));
+
+    auto triggerGuard = qScopeGuard([&]() {
+        QSqlQuery cleanupQuery(DatabaseManager::instance()->database());
+        cleanupQuery.exec(QStringLiteral("DROP TRIGGER IF EXISTS block_sync_settings_insert"));
+        cleanupQuery.exec(QStringLiteral("DROP TRIGGER IF EXISTS block_sync_settings_update"));
+    });
+
+    // 动作前断言：触发器存在且阻止写入 logic/dayStartHour
+    QCOMPARE(scalar(QStringLiteral("SELECT name FROM sqlite_master WHERE type='trigger' AND name='block_sync_settings_insert'")).toString(),
+             QStringLiteral("block_sync_settings_insert"));
+    {
+        QSqlQuery testQuery(DatabaseManager::instance()->database());
+        QVERIFY(!testQuery.exec(QStringLiteral("INSERT INTO sync_settings (key, value, v_time, v_device, base_time, base_device, pending) "
+                                               "VALUES ('logic/dayStartHour', '6', 1, 'dev', 0, '', 1)")));
+    }
+
+    // 3. 模拟恢复完成收尾：finishRestore(true)
+    controller.finishRestore(true);
+
+    // 必须阻断：引擎停止、恢复日志保留、错误信息明确
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+    QVERIFY(controller.statusDetail().contains(QStringLiteral("记录本地设置失败"))
+            || controller.statusDetail().contains(QStringLiteral("整理同步设置失败")));
+
+    // 在故障修复前调用 syncNow：不得跳过，日志依然保留
+    controller.syncNow();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    // 4. 修复故障：移除触发器
+    QVERIFY(query.exec(QStringLiteral("DROP TRIGGER block_sync_settings_insert")));
+    QVERIFY(query.exec(QStringLiteral("DROP TRIGGER block_sync_settings_update")));
+    triggerGuard.dismiss();
+
+    // 5. 重试收尾成功：本地设置被成功记录进库，恢复日志被安全删除，引擎恢复启动
+    controller.syncNow();
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!QFileInfo::exists(journalPath));
+}
+
+void SyncControllerTests::restoreFinalizeIsolatedWritebackQueryFailureSkipsCompletedStepsAndResumes()
+{
+    // 保证恢复收尾完成纪元与文件夹后因删除受阻保留上下文时，后续隔离重试准确触发 writeback 查询失败并保持阻断，恢复表后重试收尾成功且同一操作令牌不重复递增纪元。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+    const QString backupJournal = dbPath + QStringLiteral(".sync-restore.json.bak");
+    const QString opId = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const qint64 targetEpoch = 15;
+    const QString targetDevice = QUuid::createUuid().toString(QUuid::WithoutBraces).remove(QLatin1Char('-')).toLower();
+    const QString targetFolder = QUuid::createUuid().toString(QUuid::WithoutBraces);
+
+    // 1. 写入 installed 状态有效恢复意图日志
+    QJsonObject obj;
+    obj.insert(QStringLiteral("v"), 1);
+    obj.insert(QStringLiteral("operationId"), opId);
+    obj.insert(QStringLiteral("epoch"), QString::number(targetEpoch));
+    obj.insert(QStringLiteral("deviceId"), targetDevice);
+    obj.insert(QStringLiteral("folderId"), targetFolder);
+    obj.insert(QStringLiteral("phase"), QStringLiteral("installed"));
+    obj.insert(QStringLiteral("dbPath"), QFileInfo(dbPath).absoluteFilePath());
+    QFile file(journalPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(obj).toJson(QJsonDocument::Compact));
+    file.close();
+
+    // 偏好中标记已开启同步
+    {
+        QSettings settings;
+        settings.setValue(QStringLiteral("sync/enabled"), true);
+        settings.sync();
+        QCOMPARE(settings.status(), QSettings::NoError);
+    }
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+
+    // 启动时遇到 installed 日志保持阻断
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+
+    // 2. 模拟日志删除受阻：暂存恢复日志，原路径以目录占位
+    const QString backupJournalFile = journalPath + QStringLiteral(".bak");
+    QVERIFY(QFile::rename(journalPath, backupJournalFile));
+    QVERIFY(QDir().mkdir(journalPath));
+
+    auto cleanupGuard = qScopeGuard([&]() {
+        if (QFileInfo(journalPath).isDir()) {
+            QDir(journalPath).removeRecursively();
+        }
+        if (QFileInfo::exists(backupJournalFile)) {
+            QFile::remove(backupJournalFile);
+        }
+        QSqlQuery restoreStateQuery(DatabaseManager::instance()->database());
+        restoreStateQuery.exec(QStringLiteral("ALTER TABLE sync_state_bak RENAME TO sync_state"));
+    });
+
+    // 第一次调用 syncNow：同进程恢复成功完成 epoch(token) 和 folder，但仅因日志删除受阻保留 installed 收尾上下文
+    controller.syncNow();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QCOMPARE(SyncStore().epoch(), targetEpoch + 1);
+    QCOMPARE(SyncStore().deviceId(), targetDevice);
+    QCOMPARE(SyncStore().folderId(), targetFolder);
+
+    // 3. 隔离 writeback 查询故障：临时重命名 sync_state 表
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("ALTER TABLE sync_state RENAME TO sync_state_bak")));
+
+    // 动作前断言：sync_state 表已不存在
+    QCOMPARE(scalar(QStringLiteral("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_state'")).toString(), QString());
+
+    // 4. 第二次调用 syncNow：因 epoch/folder 已完成而跳过，在设置整理阶段准确触发 writeback 查询失败并保持阻断
+    controller.syncNow();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(controller.statusDetail().contains(QStringLiteral("读取待写回设置标记失败"))
+            || controller.statusDetail().contains(QStringLiteral("整理同步设置失败")));
+    QVERIFY(QFileInfo(journalPath).isDir()); // 占位目录依然未被破坏
+
+    // 5. 恢复环境：还原 sync_state 表，并移除目录占位、还原真正的恢复日志
+    QVERIFY(query.exec(QStringLiteral("ALTER TABLE sync_state_bak RENAME TO sync_state")));
+    QVERIFY(QDir(journalPath).removeRecursively());
+    QVERIFY(QFile::rename(backupJournalFile, journalPath));
+    cleanupGuard.dismiss();
+
+    // 6. 再次调用 syncNow 重试：设置整理成功，安全删除日志并启动引擎
+    controller.syncNow();
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!QFileInfo::exists(journalPath));
+
+    // 7. 严格断言：同一 token 幂等，纪元保持 targetEpoch + 1 不变，绝不重复递增！
+    QCOMPARE(SyncStore().epoch(), targetEpoch + 1);
+    QCOMPARE(scalar(QStringLiteral("SELECT value FROM sync_state WHERE key = 'local_restore_operation_id'")).toString(), opId);
+}
+
+void SyncControllerTests::restoreFinalizeQSettingsWriteBackFailureBlocksSyncAndPreservesJournal()
+{
+    // 保证恢复收尾时底层偏好后端不可写导致设置写回失败时，阻断同步并保留待写回标记与恢复日志，后端恢复后 syncNow 成功收尾。
+    const QString dbPath = DatabaseManager::instance()->database().databaseName();
+    const QString journalPath = dbPath + QStringLiteral(".sync-restore.json");
+
+    SyncController controller(macPlatform(cloudFolder()));
+    controller.initialize();
+    controller.setEnabled(true);
+    QVERIFY(waitIdle(controller.engine()));
+    QVERIFY(!controller.hasProblem());
+
+    // 1. 构造待写回的有效远端设置：在 sync_state 中插入待写回标记，在 sync_settings 中写入远端设置
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("INSERT INTO sync_state (key, value) VALUES ('writeback/logic/dayStartHour', 'set')")));
+    QVERIFY(query.exec(QStringLiteral("INSERT OR REPLACE INTO sync_settings (key, value, v_time, v_device) VALUES ('logic/dayStartHour', '5', 10, 'peer1')")));
+    AppSettings::instance()->setDayStartHour(4);
+
+    // 2. 准备恢复
+    QVERIFY(controller.prepareForRestore());
+    QVERIFY(QFileInfo::exists(journalPath));
+
+    // 3. 故障注入点：获取当前隔离 INI 文件路径，删掉该文件并创建同名目录，致底层 QSettings 陷入 AccessError
+    QSettings probeSettings;
+    const QString iniPath = probeSettings.fileName();
+    QVERIFY(!iniPath.isEmpty());
+    QFile::remove(iniPath);
+    QVERIFY(QDir().mkdir(iniPath));
+
+    auto cleanupGuard = qScopeGuard([&]() {
+        if (QFileInfo(iniPath).isDir()) {
+            QDir(iniPath).removeRecursively();
+        }
+        QFile emptyFile(iniPath);
+        if (emptyFile.open(QIODevice::WriteOnly)) {
+            emptyFile.close();
+        }
+    });
+
+    // 动作前断言：底层偏好后端处于不健康状态
+    QVERIFY(!AppSettings::instance()->isBackendHealthy());
+
+    // 4. 模拟恢复完成收尾：finishRestore(true)
+    controller.finishRestore(true);
+
+    // 必须阻断：引擎停止、恢复日志保留、待写回标记保留
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+    QCOMPARE(scalar(QStringLiteral("SELECT value FROM sync_state WHERE key = 'writeback/logic/dayStartHour'")).toString(),
+             QStringLiteral("set"));
+
+    // 在故障修复前调用 syncNow：不得跳过，日志与标记依然保留
+    controller.syncNow();
+    QVERIFY(controller.hasProblem());
+    QVERIFY(!controller.engine() || !controller.engine()->isRunning());
+    QVERIFY(QFileInfo::exists(journalPath));
+    QCOMPARE(scalar(QStringLiteral("SELECT value FROM sync_state WHERE key = 'writeback/logic/dayStartHour'")).toString(),
+             QStringLiteral("set"));
+
+    // 5. 修复故障：移除目录占位，创建空文件恢复偏好后端可写
+    QVERIFY(QDir(iniPath).removeRecursively());
+    QFile emptyFile(iniPath);
+    QVERIFY(emptyFile.open(QIODevice::WriteOnly));
+    emptyFile.close();
+    cleanupGuard.dismiss();
+    QVERIFY(AppSettings::instance()->isBackendHealthy());
+
+    // 6. 重试收尾成功：设置被正确写回本地偏好，标记被清理，恢复日志被安全删除，引擎恢复启动
+    controller.syncNow();
+    QVERIFY(!controller.hasProblem());
+    QVERIFY(controller.engine() && controller.engine()->isRunning());
+    QVERIFY(!QFileInfo::exists(journalPath));
+    QCOMPARE(scalar(QStringLiteral("SELECT COUNT(*) FROM sync_state WHERE key = 'writeback/logic/dayStartHour'")).toInt(), 0);
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 5);
 }
 
 QTEST_GUILESS_MAIN(SyncControllerTests)

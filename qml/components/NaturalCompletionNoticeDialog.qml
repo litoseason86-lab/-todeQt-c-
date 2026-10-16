@@ -114,8 +114,8 @@ Popup {
                 color: acknowledgeButton.pressed ? Theme.accentFillStrong
                                                   : (acknowledgeButton.hovered
                                                      ? Theme.accentFillStrong : Theme.accentFill)
-                border.color: acknowledgeButton.activeFocus ? Theme.focusRing : Theme.accentFillStrong
-                border.width: acknowledgeButton.activeFocus ? 2 : 1
+                border.color: acknowledgeButton.visualFocus ? Theme.focusRing : Theme.accentFillStrong
+                border.width: acknowledgeButton.visualFocus ? 2 : 1
                 radius: Theme.radiusMd
             }
 

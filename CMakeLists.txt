@@ -21,6 +21,20 @@ set(CMAKE_AUTORCC ON)
 # 6.7 是 QDateTime::TransitionResolution 的引入版本（见 src/services/LogicalDay.h 的逻辑日边界计算）。
 # 不写下界的话，用更低版本的 Qt 也能配置成功，报错要推迟到编译期才出现。
 find_package(Qt6 6.7 REQUIRED COMPONENTS Concurrent Core Gui Network Qml Quick QuickControls2 QuickLayouts Sql)
+# Shader编译是构建输入，缺少同SDK的qsb时直接失败，不能继续打包过期二进制。
+find_package(Qt6 6.7 REQUIRED COMPONENTS ShaderTools)
+
+# 主应用和资源测试采用同一生成选项，保持原资源URL和跨图形后端集合。
+function(pomodoro_todo_add_glass_shader target resource_name)
+    qt_add_shaders(${target} ${resource_name}
+        PREFIX "/shaders"
+        BASE "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
+        GLSL "100 es,120,150"
+        HLSL 50
+        MSL 12
+        FILES "${CMAKE_CURRENT_SOURCE_DIR}/shaders/liquid_glass.frag"
+    )
+endfunction()
 if(NOT IOS)
     # 测试只在 macOS 上离屏运行；iOS 构建不注册任何测试，也就不要求 iOS 套件带测试模块。
     set(QT_NO_PRIVATE_MODULE_WARNING ON)
@@ -184,7 +198,6 @@ set(APP_SOURCES
     resources/qml.qrc
     resources/wallpapers.qrc
     resources/fonts.qrc
-    resources/shaders.qrc
 )
 
 if(NOT IOS)
@@ -385,9 +398,8 @@ if(NOT IOS)
     set_target_properties(PomodoroTodo PROPERTIES MACOSX_BUNDLE_ICON_FILE "PomodoroTodo.icns")
 endif()
 
-# 日常开发目录保持自动同步；审计/CI/临时构建传 -DPOMODORO_TODO_DEPLOY_LOCAL=OFF，
-# 避免非正式构建悄悄覆盖固定启动入口。
-option(POMODORO_TODO_DEPLOY_LOCAL "构建后自动把应用同步到本机固定启动入口" ON)
+# 普通构建只产出应用包；日常部署目录显式传 ON，避免新构建目录覆盖正式安装。
+option(POMODORO_TODO_DEPLOY_LOCAL "构建后自动把应用同步到本机固定启动入口" OFF)
 
 # 会被同步到 /Applications 的构建，不指定类型就默认 RelWithDebInfo。
 #
@@ -527,6 +539,7 @@ set_property(TARGET PomodoroTodo PROPERTY SOURCES "${POMODORO_TODO_TARGET_SOURCE
 list(REMOVE_ITEM APP_SOURCES ${PTCORE_SOURCES})
 list(REMOVE_ITEM APP_SOURCES ${PTQML_SOURCES})
 target_link_libraries(PomodoroTodo PRIVATE PTQml PTApp PTCore)
+pomodoro_todo_add_glass_shader(PomodoroTodo app_glass_shader)
 
 pomodoro_todo_enable_warnings(PomodoroTodo)
 
@@ -1856,12 +1869,16 @@ set_tests_properties(WallpaperAssetsTests PROPERTIES
 
 add_executable(ShaderAssetsTests
     tests/ShaderAssetsTests.cpp
-    resources/shaders.qrc
 )
+pomodoro_todo_add_glass_shader(ShaderAssetsTests test_glass_shader)
 
 target_link_libraries(ShaderAssetsTests PRIVATE
     Qt6::Core
     Qt6::Test
+)
+target_compile_definitions(ShaderAssetsTests PRIVATE
+    "POMODORO_SHADER_SOURCE=\"${CMAKE_CURRENT_SOURCE_DIR}/shaders/liquid_glass.frag\""
+    "POMODORO_SHADER_BAKER=\"$<TARGET_FILE:Qt6::qsb>\""
 )
 
 pomodoro_todo_enable_warnings(ShaderAssetsTests)

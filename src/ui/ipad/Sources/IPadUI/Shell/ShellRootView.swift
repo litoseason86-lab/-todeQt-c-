@@ -30,6 +30,7 @@ struct ShellRootView: View {
             .background { ShellKeyboardCommands(store: store, compactTab: $compactTab, morePath: $morePath) }
             .modifier(OperationBlockModifier(store: store))
             .modifier(SelectionSyncModifier(store: store, regularTab: $regularTab, compactTab: $compactTab, morePath: $morePath))
+            .modifier(ShellAccessibilityFeedback(store: store))
     }
 
     // 055-R4：宽窄是两个独立的 TabView，切换尺寸时整份重建，不在同一个标签控制器里改标签。
@@ -216,6 +217,62 @@ private struct SelectionSyncModifier: ViewModifier {
     }
 }
 
+// 读屏状态同步与提示播报：根 body 仅挂一次，避免每页各自播报与重复发通知。
+private struct ShellAccessibilityFeedback: ViewModifier {
+    let store: ShellStore
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                store.setVoiceOverEnabled(voiceOverEnabled)
+                announceCurrentFeedback()
+            }
+            .onChange(of: voiceOverEnabled) { _, newValue in
+                store.setVoiceOverEnabled(newValue)
+                if newValue {
+                    announceCurrentFeedback()
+                }
+            }
+            .onChange(of: store.toast?.id) { _, _ in
+                announceToast()
+            }
+            .onChange(of: store.errorMessage) { _, newError in
+                announceError(newError)
+            }
+    }
+
+    private func announceToast() {
+        guard let toast = store.toast else { return }
+        let speech: String
+        if let actionTitle = toast.actionTitle, !actionTitle.isEmpty {
+            speech = "\(toast.message)。可选择：\(actionTitle)。"
+        } else {
+            speech = toast.message
+        }
+        announce(speech)
+    }
+
+    private func announceError(_ error: String) {
+        guard !error.isEmpty, error != store.toast?.message else { return }
+        announce(error)
+    }
+
+    private func announceCurrentFeedback() {
+        announceToast()
+        announceError(store.errorMessage)
+    }
+
+    private func announce(_ message: String) {
+        guard voiceOverEnabled, !message.isEmpty else { return }
+        // 低优先级排队，避免提示出现时打断用户正在听的控件说明。
+        let speech = NSAttributedString(string: message, attributes: [
+            .accessibilitySpeechAnnouncementPriority: UIAccessibilityPriority.low
+        ])
+        UIAccessibility.post(notification: .announcement, argument: speech)
+    }
+}
+
 // 硬件键盘快捷键：零尺寸、不参与无障碍。
 private struct ShellKeyboardCommands: View {
     let store: ShellStore
@@ -260,14 +317,14 @@ private struct SidebarSummaryTiles: View {
         return Button { store.select(tile.page) } label: {
             VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Image(systemName: tile.page.symbol).font(.system(size: 17))
+                    Image(systemName: tile.page.symbol).scaledSystemFont(size: 17)
                         .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.accentInk)
                     Spacer(minLength: 4)
                     MixedNumberText(parts: MixedNumberText.split(tile.value), numberSize: 22, unitSize: 13,
                                     color: selected ? ThemeColors.surface : ThemeColors.inkStrong)
                         .lineLimit(1).minimumScaleFactor(0.5)
                 }
-                Text(tile.title).font(.system(size: 13)).lineLimit(1)
+                Text(tile.title).scaledSystemFont(size: 13).lineLimit(1)
                     .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.ink)
             }
             .padding(12)
@@ -295,12 +352,12 @@ private struct SidebarFixedEntries: View {
                 let selected = current == page
                 Button { store.select(page) } label: {
                     HStack(spacing: 12) {
-                        Image(systemName: page.symbol).font(.system(size: 17)).imageScale(.large)
+                        Image(systemName: page.symbol).scaledSystemFont(size: 17).imageScale(.large)
                             .foregroundStyle(ThemeColors.accentInk).frame(width: 24)
                         Text(page.title).font(.body).foregroundStyle(ThemeColors.inkStrong)
                         Spacer()
                     }
-                    .padding(.horizontal, 14).frame(height: 44)
+                    .padding(.horizontal, 14).frame(minHeight: 44)
                     .background(selected ? ThemeColors.accentFill : Color.clear,
                                 in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .contentShape(Rectangle())
@@ -401,9 +458,9 @@ private struct CapturePopover: View {
     @FocusState private var focused: Bool
     var body: some View {
         let form = VStack(alignment: .leading, spacing: 14) {
-            Text("记一笔").font(.system(size: 17, weight: .semibold)).foregroundStyle(ThemeColors.inkStrong)
+            Text("记一笔").scaledSystemFont(size: 17, weight: .semibold).foregroundStyle(ThemeColors.inkStrong)
             TextField("写下问题或关键词", text: $store.captureTitle, axis: .vertical)
-                .font(.system(size: 17)).foregroundStyle(ThemeColors.inputInk)
+                .scaledSystemFont(size: 17).foregroundStyle(ThemeColors.inputInk)
                 .lineLimit(4...8)
                 .focused($focused)
                 .onSubmit { store.capture() }
@@ -458,6 +515,7 @@ private struct ShellToastBar: View {
                     .accessibilityLabel("关闭提示")
             }
             .padding(12).background(.regularMaterial, in: Capsule()).padding(12)
+            .accessibilityElement(children: .contain)
         }
     }
 }
@@ -468,7 +526,8 @@ private struct ShellErrorBar: View {
         if !store.errorMessage.isEmpty {
             HStack {
                 Text(store.errorMessage)
-                Button("重试") { store.refresh() }
+                Button("重新读取") { store.refresh() }
+                    .accessibilityHint("重新加载数据，不会重做失败的修改")
             }
             .padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)).padding()
         }

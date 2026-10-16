@@ -112,7 +112,7 @@ public:
                                       int limit) const;
     Q_INVOKABLE QVariantMap getGap(int gapId) const;
     // 今日任务页提示条只读这一个结果，不在 QML 里算「今天」和「逾期」。
-    // 返回 {dueToday, overdue, unscheduled, openTotal, oldestOverdueDays, valid}。
+    // 返回 {dueToday, overdue, dueCount, unscheduled, openTotal, oldestOverdueDays, valid}。
     // dueToday / overdue / oldestOverdueDays 不计已有没做完关联任务的条目：它们已经由任务列表提醒。
     Q_INVOKABLE QVariantMap getReminderSummary() const;
 

@@ -130,6 +130,11 @@ void BackupService::setLastError(const QString& message) const
     }
 }
 
+void BackupService::setRestorePreparationCallback(RestorePreparationCallback callback)
+{
+    m_restorePreparationCallback = std::move(callback);
+}
+
 bool BackupService::busy() const
 {
     return m_busy;
@@ -476,7 +481,7 @@ bool BackupService::restoreBackup(const QString& srcPath)
     // 外部路径只读取这一次。后续完整性检查、设置解析和安装都使用应用控制的同一副本，
     // 避免用户或同步软件在检查后替换源文件，使“实际安装内容”脱离已验证内容。
     const BackupOperations::OperationResult staged =
-        BackupOperations::atomicCopy(srcPath, stagedSourcePath);
+        BackupOperations::atomicCopy(srcPath, stagedSourcePath, BackupOperations::kMaxBackupFileBytes);
     if (!staged.success) {
         setLastError(staged.error);
         emit restoreCompleted(false, m_lastError);
@@ -521,8 +526,17 @@ bool BackupService::restoreBackup(const QString& srcPath)
 
     const QString preRestorePath = QDir(autoBackupsDir()).filePath(
         kBeforeRestorePrefix + timestampToken() + kBackupExtension);
+    if (m_restorePreparationCallback) {
+        QString prepError;
+        if (!m_restorePreparationCallback(&prepError)) {
+            setLastError(prepError.isEmpty() ? QStringLiteral("准备恢复备份失败，已中止") : prepError);
+            emit restoreCompleted(false, m_lastError);
+            return false;
+        }
+    }
     emit restoreStarted();
     if (!writeSnapshot(preRestorePath, QStringLiteral("before-restore"))) {
+        emit restoreSyncCompleted(false, true);
         emit restoreCompleted(
             false, QStringLiteral("恢复前备份当前数据失败，已中止：") + m_lastError);
         return false;
@@ -557,10 +571,12 @@ bool BackupService::restoreBackup(const QString& srcPath)
         setLastError(rolledBack
                          ? QStringLiteral("恢复失败，已安全回滚到恢复前数据")
                          : rollbackError);
+        emit restoreSyncCompleted(false, rolledBack);
         emit restoreCompleted(false, m_lastError);
         return false;
     }
 
+    emit restoreSyncCompleted(true, true);
     emit restoreCompleted(true, QStringLiteral("恢复完成"));
     return true;
 }
@@ -720,6 +736,15 @@ void BackupService::requestRestore(const QString& srcPath)
         kBeforeRestorePrefix + timestampToken() + kBackupExtension);
     context->originalSettings = originalSettings;
 
+    if (m_restorePreparationCallback) {
+        QString prepError;
+        if (!m_restorePreparationCallback(&prepError)) {
+            setLastError(prepError.isEmpty() ? QStringLiteral("准备恢复备份失败，已中止") : prepError);
+            emit restoreCompleted(false, m_lastError);
+            return;
+        }
+    }
+
     setBusy(true, QStringLiteral("正在校验恢复文件"), true);
     emit restoreStarted();
 
@@ -735,6 +760,7 @@ void BackupService::requestRestore(const QString& srcPath)
         if (!result.success) {
             setLastError(result.error);
             setBusy(false);
+            emit restoreSyncCompleted(false, true);
             emit restoreCompleted(false, result.error);
             return;
         }
@@ -744,7 +770,7 @@ void BackupService::requestRestore(const QString& srcPath)
     watcher->setFuture(QtConcurrent::run([srcPath, context]() {
         RestorePreflightResult result;
         const BackupOperations::OperationResult staged =
-            BackupOperations::atomicCopy(srcPath, context->stagedSourcePath);
+            BackupOperations::atomicCopy(srcPath, context->stagedSourcePath, BackupOperations::kMaxBackupFileBytes);
         if (!staged.success) {
             result.error = staged.error;
             return result;
@@ -799,6 +825,7 @@ void BackupService::installPreparedRestore(
                     + result.operation.error;
             setLastError(message);
             setBusy(false);
+            emit restoreSyncCompleted(false, reopened);
             emit restoreCompleted(false, message);
             return;
         }
@@ -827,6 +854,7 @@ void BackupService::installPreparedRestore(
 
         setLastError(QString());
         setBusy(false);
+        emit restoreSyncCompleted(true, true);
         emit restoreCompleted(true, QStringLiteral("恢复完成"));
     });
 
@@ -904,6 +932,7 @@ void BackupService::rollbackAsyncRestore(
         }
         setLastError(message);
         setBusy(false);
+        emit restoreSyncCompleted(false, rolledBack);
         emit restoreCompleted(false, message);
     });
     const bool forceFailure = m_forceRollbackCopyFailureForTest;

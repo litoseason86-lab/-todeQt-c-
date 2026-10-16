@@ -297,8 +297,8 @@ Popup {
 
                 background: Rectangle {
                     color: closeButton.hovered ? Theme.surfaceSunken : Theme.surfaceRaised
-                    border.color: closeButton.activeFocus ? Theme.focusRing : Theme.border
-                    border.width: closeButton.activeFocus ? 2 : 1
+                    border.color: closeButton.visualFocus ? Theme.focusRing : Theme.border
+                    border.width: closeButton.visualFocus ? 2 : 1
                     radius: Theme.radiusMd
                 }
                 contentItem: Text {
