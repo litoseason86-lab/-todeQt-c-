@@ -4,7 +4,7 @@
 
 ## 断言与可见性
 
-- 不要断言 `item.visible === true`。`visible` 是沿父链算出的有效可见性，而 `TestCase` 默认 `visible: false`（Qt 自带的 `TestCase.qml`），挂在它下面的项读回来恒为假；后台无头环境里窗口本身是否显示也不可靠。改为断言驱动 `visible:` 绑定的那个属性（如 `view.state`、自定义布尔），或其它不沿父链传递的属性。断言 `false` 不受影响。
+- 不要断言 `item.visible === true`。`visible` 是沿父链算出的有效可见性，而 `TestCase` 默认 `visible: false`（Qt 自带的 `TestCase.qml`），挂在它下面的项读回来恒为假；后台无头环境里窗口本身是否显示也不可靠。改为断言驱动 `visible:` 绑定的那个属性（如 `view.state`、自定义布尔），或其它不沿父链传递的属性。断言 `false`（`compare(x.visible, false)`、`verify(!x.visible)`）同样无效：项挂在不可见的 `TestCase` 下时恒为假，被测代码怎么写都通过（062 查出 6 个文件 10 处）。要验证的是控件真的隐藏时，只断言驱动属性拦不住把 `visible:` 绑定改成常真：在该用例里临时把 `TestCase` 设为可见、结束在 `finally` 还原（`tst_task_item_edit.qml` 的 `withVisibleHost`），先等控件显示，再断言隐藏，最好再恢复显示一次做对照。弹层及其内容挂在窗口 overlay 上、不在 `TestCase` 子树里，`Popup.visible` 是弹层自己的开关状态，这两种读 `visible` 有效。
 - 同一原因会让 Layout 里「先隐藏、后显示」的子项永远拿不到尺寸：有效可见性一直是假，不发 `visibleChanged`，布局不把它算进来，里面的 ListView 一个委托都不建，`findChild` 找委托得到 null。做法：Layout 的直接子项用一个始终可见的包裹 Item，条件可见的内容放在里面（`CountdownView.qml` 的 `countdownSecondaryList` 就是这样，别把包裹层「简化」掉）。
 
 ## 查找对象

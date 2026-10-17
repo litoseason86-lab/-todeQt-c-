@@ -13,6 +13,18 @@ TestCase {
     width: 960
     height: 640
 
+    // TestCase 默认不可见，不能在该父链下直接读 visible；只在相关用例临时显示宿主，结束后还原。
+    // 驱动状态已有独立断言，仍需验证实际隐藏绑定；先核对可见父项，避免 false 再次被祖先遮蔽。
+    function withVisibleHost(check) {
+        const previousVisible = testCase.visible
+        testCase.visible = true
+        try {
+            check()
+        } finally {
+            testCase.visible = previousVisible
+        }
+    }
+
     QtObject {
         id: taskManager
 
@@ -701,21 +713,26 @@ TestCase {
         interactionCoordinator.lastPendingDeleteId = -1
     }
 
+    // 产品保证：自由专注立即启动并切到专注页，活动计时不再显示开始按钮。
     function test_freeModeStartsImmediately() {
-        appSettings.lastMode = 0
+        withVisibleHost(function () {
+            appSettings.lastMode = 0
 
-        mainWindow.startFocusForTask(7, "自由任务")
+            mainWindow.startFocusForTask(7, "自由任务")
 
-        var focusView = findChild(mainWindow, "focusViewPage")
-        verify(focusView)
-        compare(focusTimer.startFocusCalls, 1)
-        compare(focusView.selectedTaskId, 7)
-        compare(focusView.selectedTaskTitle, "自由任务")
-        compare(focusView.taskTitle(), "自由任务")
-        var startButton = findChild(focusView, "freeStartButton")
-        verify(startButton)
-        compare(startButton.visible, false)
-        compare(mainWindow.pendingView, "focus")
+            var focusView = findChild(mainWindow, "focusViewPage")
+            verify(focusView)
+            compare(focusTimer.startFocusCalls, 1)
+            compare(focusView.selectedTaskId, 7)
+            compare(focusView.selectedTaskTitle, "自由任务")
+            compare(focusView.taskTitle(), "自由任务")
+            var startButton = findChild(focusView, "freeStartButton")
+            verify(startButton)
+            tryCompare(mainWindow, "currentView", "focus", 3000)
+            tryCompare(startButton.parent, "visible", true, 3000)
+            compare(startButton.visible, false)
+            compare(mainWindow.pendingView, "focus")
+        })
     }
 
     function test_freeStartReplacesStalePomodoroTaskState() {

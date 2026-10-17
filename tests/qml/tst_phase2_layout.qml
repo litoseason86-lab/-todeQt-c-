@@ -12,6 +12,19 @@ TestCase {
     when: windowShown
     width: 900
     height: 640
+
+    // TestCase 默认不可见，不能在该父链下直接读 visible；只在相关用例临时显示宿主，结束后还原。
+    // 驱动状态已有独立断言，仍需验证实际隐藏绑定；先核对可见父项，避免 false 再次被祖先遮蔽。
+    function withVisibleHost(check) {
+        const previousVisible = testCase.visible
+        testCase.visible = true
+        try {
+            check()
+        } finally {
+            testCase.visible = previousVisible
+        }
+    }
+
     property date todaySnapshot: new Date()
 
     QtObject {
@@ -396,18 +409,32 @@ TestCase {
     // 统计卡的底色、描边、圆角、顶部高光和落影都来自 GlassPanel，与各页面的玻璃框同一套。
     // 原先它自带一份落影（Theme.ink 色：夜间是浅米色，落影变成一圈浅色光晕），
     // 同一页的柱图、饼图又完全没有落影、圆角也小一号。
+    // 产品保证：统计卡复用玻璃外观，隐藏时停用阴影图层，显示时恢复。
     function test_statCardUsesUnifiedGlassPanel() {
-        verify(warmShadowCard.layer.effect !== null)
-        compare(warmShadowCard.panelShadowEnabled, true)
-        compare(warmShadowCard.radius, Theme.radiusLg)
-        verify(Qt.colorEqual(warmShadowCard.color, Theme.glassCard))
-        verify(Qt.colorEqual(warmShadowCard.border.color, Theme.glassBorder))
-        verify(findChild(warmShadowCard, "glassSpecularRim") !== null)
-        // 自带的那一套落影参数已经删掉，不能再有第二套。
-        compare(warmShadowCard.cardShadowOpacity, undefined)
-        // GlassPanel 的约定：不可见时不开图层，不让离屏缓冲常驻。
-        compare(warmShadowCard.visible, false)
-        compare(warmShadowCard.layer.enabled, false)
+        withVisibleHost(function () {
+            try {
+                verify(warmShadowCard.layer.effect !== null)
+                compare(warmShadowCard.panelShadowEnabled, true)
+                compare(warmShadowCard.radius, Theme.radiusLg)
+                verify(Qt.colorEqual(warmShadowCard.color, Theme.glassCard))
+                verify(Qt.colorEqual(warmShadowCard.border.color, Theme.glassBorder))
+                verify(findChild(warmShadowCard, "glassSpecularRim") !== null)
+                // 自带的那一套落影参数已经删掉，不能再有第二套。
+                compare(warmShadowCard.cardShadowOpacity, undefined)
+                // GlassPanel 的约定：不可见时不开图层，不让离屏缓冲常驻。
+                compare(warmShadowCard.parent.visible, true, "前提：统计卡父项可见")
+                compare(warmShadowCard.visible, false)
+                compare(warmShadowCard.layer.enabled, false)
+                warmShadowCard.visible = true
+                tryCompare(warmShadowCard.layer, "enabled", true, 3000)
+                // 卡片初始透明度为 0；先证明图层已启用，再隐藏，避免透明度门禁代替可见性门禁让测试空过。
+                verify(warmShadowCard.opacity > 0.01)
+                warmShadowCard.visible = false
+                tryCompare(warmShadowCard.layer, "enabled", false, 3000)
+            } finally {
+                warmShadowCard.visible = false
+            }
+        })
     }
 
     function test_statisticsDurationFormatsSubMinuteSessions() {

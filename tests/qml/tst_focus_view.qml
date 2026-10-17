@@ -11,6 +11,18 @@ TestCase {
     width: 720
     height: 520
 
+    // TestCase 默认不可见，不能在该父链下直接读 visible；只在相关用例临时显示宿主，结束后还原。
+    // 驱动状态已有独立断言，仍需验证实际隐藏绑定；先核对可见父项，避免 false 再次被祖先遮蔽。
+    function withVisibleHost(check) {
+        const previousVisible = testCase.visible
+        testCase.visible = true
+        try {
+            check()
+        } finally {
+            testCase.visible = previousVisible
+        }
+    }
+
     QtObject {
         id: focusTimer
 
@@ -1232,41 +1244,45 @@ TestCase {
         compare(controller.finishCalls[0].seconds, 9 * 60 * 60)
     }
 
+    // 产品保证：主动休息隐藏模式切换器，沿用独立计时面板且不要求先选任务。
     function test_manualRestUsesSeparatePanelAndDoesNotRequireTask() {
-        focusTimer.hasActiveSession = false
-        focusTimer.isRunning = true
-        focusTimer.mode = 2
-        focusTimer.phase = 3
-        focusTimer.elapsedSeconds = 3661
+        withVisibleHost(function () {
+            focusTimer.hasActiveSession = false
+            focusTimer.isRunning = true
+            focusTimer.mode = 2
+            focusTimer.phase = 3
+            focusTimer.elapsedSeconds = 3661
 
-        tryCompare(view, "state", "manualRest")
-        compare(view.immersiveAvailable, true)
-        const modeSwitch = findChild(view, "focusModeSwitch")
-        verify(modeSwitch)
-        compare(modeSwitch.visible, false)
-        const panel = findChild(view, "manualRestPanel")
-        verify(panel)
-        const timeText = findChild(panel, "manualRestTime")
-        verify(timeText)
-        compare(timeText.text, "01:01:01")
-        // 主动休息沿用自由专注的大号计时层级，不应重新包成独立卡片风格。
-        compare(timeText.font.pixelSize, Theme.fontDisplay)
-        // 「休息时间不会计入今日专注」说明已移除。
-        compare(findChild(panel, "manualRestAccountingNote"), null)
+            tryCompare(view, "state", "manualRest")
+            compare(view.immersiveAvailable, true)
+            const modeSwitch = findChild(view, "focusModeSwitch")
+            verify(modeSwitch)
+            compare(modeSwitch.parent.visible, true, "前提：切换器的父链可见")
+            compare(modeSwitch.visible, false)
+            const panel = findChild(view, "manualRestPanel")
+            verify(panel)
+            const timeText = findChild(panel, "manualRestTime")
+            verify(timeText)
+            compare(timeText.text, "01:01:01")
+            // 主动休息沿用自由专注的大号计时层级，不应重新包成独立卡片风格。
+            compare(timeText.font.pixelSize, Theme.fontDisplay)
+            // 「休息时间不会计入今日专注」说明已移除。
+            compare(findChild(panel, "manualRestAccountingNote"), null)
 
-        const pauseButton = findChild(panel, "manualRestPauseResumeButton")
-        verify(pauseButton)
-        compare(pauseButton.implicitWidth, 104)
-        // 高度断言指向刻度而不是字面量：控件高度只有三档，改档要在 Theme 里改。
-        compare(pauseButton.implicitHeight, Theme.controlHeightMd)
-        pauseButton.clicked()
-        compare(focusTimer.isRunning, false)
+            const pauseButton = findChild(panel, "manualRestPauseResumeButton")
+            verify(pauseButton)
+            compare(pauseButton.implicitWidth, 104)
+            // 高度断言指向刻度而不是字面量：控件高度只有三档，改档要在 Theme 里改。
+            compare(pauseButton.implicitHeight, Theme.controlHeightMd)
+            pauseButton.clicked()
+            compare(focusTimer.isRunning, false)
 
-        const endButton = findChild(panel, "manualRestEndButton")
-        verify(endButton)
-        endButton.clicked()
-        compare(focusTimer.phase, 0)
-        compare(manualRestEndedSpy.count, 1)
+            const endButton = findChild(panel, "manualRestEndButton")
+            verify(endButton)
+            endButton.clicked()
+            compare(focusTimer.phase, 0)
+            compare(manualRestEndedSpy.count, 1)
+        })
     }
 
     function test_longFreeFocusCanBeDiscardedAfterConfirmation() {

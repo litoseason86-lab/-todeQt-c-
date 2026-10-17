@@ -13,6 +13,18 @@ TestCase {
     width: 960
     height: 640
 
+    // TestCase 默认不可见，不能在该父链下直接读 visible；只在相关用例临时显示宿主，结束后还原。
+    // 驱动状态已有独立断言，仍需验证实际隐藏绑定；先核对可见父项，避免 false 再次被祖先遮蔽。
+    function withVisibleHost(check) {
+        const previousVisible = testCase.visible
+        testCase.visible = true
+        try {
+            check()
+        } finally {
+            testCase.visible = previousVisible
+        }
+    }
+
     QtObject {
         id: taskManager
 
@@ -355,14 +367,18 @@ TestCase {
         mainWindow.focusImmersiveActive = false;
     }
 
+    // 产品保证：减少透明度后停止显示侧栏实时采样树。
     function test_reduceTransparencyStopsSidebarBackdrop() {
-        var frost = findChild(mainWindow, "sidebarFrost")
-        verify(frost)
-        tryCompare(Theme, "glassBlurAllowed", true)
+        withVisibleHost(function () {
+            var frost = findChild(mainWindow, "sidebarFrost")
+            verify(frost)
+            tryCompare(Theme, "glassBlurAllowed", true)
 
-        appSettings.reduceTransparency = true
-        tryCompare(Theme, "glassBlurAllowed", false)
-        tryCompare(frost, "visible", false)
+            tryCompare(frost, "visible", true, 3000)
+            appSettings.reduceTransparency = true
+            tryCompare(Theme, "glassBlurAllowed", false)
+            tryCompare(frost, "visible", false)
+        })
     }
 
     function test_sidebarCollapseAndRevealAppleToggle() {
@@ -590,28 +606,33 @@ TestCase {
         compare(stack.opacity, 1.0)
     }
 
+    // 产品保证：进入沉浸后隐藏普通内容，退出后恢复普通内容。
     function test_immersiveWiringActivatesAndDeactivates() {
-        compare(mainWindow.focusImmersiveActive, false)
+        withVisibleHost(function () {
+            compare(mainWindow.focusImmersiveActive, false)
 
-        focusTimer.hasActiveSession = true
-        focusTimer.isRunning = true
+            focusTimer.hasActiveSession = true
+            focusTimer.isRunning = true
 
-        const focusView = findChild(mainWindow, "focusViewPage")
-        verify(focusView)
-        focusView.immersiveRequested()
-        compare(mainWindow.focusImmersiveActive, true)
+            const focusView = findChild(mainWindow, "focusViewPage")
+            verify(focusView)
+            focusView.immersiveRequested()
+            compare(mainWindow.focusImmersiveActive, true)
 
-        const row = findChild(mainWindow, "mainContentRow")
-        verify(row)
-        compare(row.visible, false)
+            const row = findChild(mainWindow, "mainContentRow")
+            verify(row)
+            compare(row.parent.visible, true, "前提：主内容父链可见")
+            compare(row.visible, false)
 
-        const overlay = findChild(mainWindow, "focusImmersiveOverlay")
-        verify(overlay)
-        overlay.exitRequested()
-        compare(mainWindow.focusImmersiveActive, false)
+            const overlay = findChild(mainWindow, "focusImmersiveOverlay")
+            verify(overlay)
+            overlay.exitRequested()
+            compare(mainWindow.focusImmersiveActive, false)
+            tryCompare(row, "visible", true, 3000)
 
-        focusTimer.hasActiveSession = false
-        focusTimer.isRunning = false
+            focusTimer.hasActiveSession = false
+            focusTimer.isRunning = false
+        })
     }
 
     function test_focusEndedExitsImmersiveAndReturnsToday() {

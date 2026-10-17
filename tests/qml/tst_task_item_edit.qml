@@ -9,6 +9,18 @@ TestCase {
     width: 600
     height: 200
 
+    // TestCase 默认不可见，不能在该父链下直接读 visible；只在相关用例临时显示宿主，结束后还原。
+    // 驱动状态已有独立断言，仍需验证实际隐藏绑定；先核对可见父项，避免 false 再次被祖先遮蔽。
+    function withVisibleHost(check) {
+        const previousVisible = testCase.visible
+        testCase.visible = true
+        try {
+            check()
+        } finally {
+            testCase.visible = previousVisible
+        }
+    }
+
     TaskItem {
         id: item
         width: testCase.width
@@ -147,13 +159,19 @@ TestCase {
         compare(editSpy.signalArguments[0][0], 42)
     }
 
+    // 产品保证：任务完成后隐藏开始专注按钮，取消完成后仍能显示。
     function test_completedTaskHidesFocusButton() {
-        const focusButton = findChild(item, "focusButton")
-        verify(focusButton)
+        withVisibleHost(function () {
+            const focusButton = findChild(item, "focusButton")
+            verify(focusButton)
 
-        item.taskCompleted = true
-        tryCompare(focusButton, "visible", false, 3000)
-        compare(focusButton.visible, false)
+            tryCompare(focusButton, "visible", true, 3000)
+            item.taskCompleted = true
+            tryCompare(focusButton, "visible", false, 3000)
+            compare(focusButton.visible, false)
+            item.taskCompleted = false
+            tryCompare(focusButton, "visible", true, 3000)
+        })
     }
 
     function test_focusSummaryReadsAsDurationNotPomodoroCount() {

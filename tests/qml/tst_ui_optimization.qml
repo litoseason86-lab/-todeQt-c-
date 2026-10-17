@@ -12,6 +12,18 @@ TestCase {
     width: 480
     height: 180
 
+    // TestCase 默认不可见，不能在该父链下直接读 visible；只在相关用例临时显示宿主，结束后还原。
+    // 驱动状态已有独立断言，仍需验证实际隐藏绑定；先核对可见父项，避免 false 再次被祖先遮蔽。
+    function withVisibleHost(check) {
+        const previousVisible = testCase.visible
+        testCase.visible = true
+        try {
+            check()
+        } finally {
+            testCase.visible = previousVisible
+        }
+    }
+
     // 动画/状态到位的等待上限。取值要宽：tryCompare 与 tryVerify 一旦条件成立就立即返回，
     // 所以放宽上限在通过时**不花任何时间**，只在真失败时多等一会儿。
     // 反过来，写死 120–220ms 这种紧上限没有任何收益，只会在机器被并行任务抢占时
@@ -680,54 +692,63 @@ TestCase {
         compare(weekPlanView.isoDate(weekPlanView.pendingAddDate), weekPlanView.isoDate(originalPendingDate));
     }
 
+    // 产品保证：过去任务不显示专注按钮，过去日期也不显示添加入口。
     function test_weekPlanViewHidesPastTaskExecutionActions() {
-        weekPlanView.weekStart = weekPlanView.mondayOf(weekPlanView.logicalToday);
-        var blockedIndex = pastWeekIndex();
-        taskManager.fakeWeekTasks = [{
-                id: 302,
-                title: "过去任务",
-                date: weekPlanView.dayDate(blockedIndex),
-                completed: false,
-                categoryText: "测试"
-            }];
-        weekPlanView.visible = true;
-        weekPlanView.refresh();
-        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, testCase.uiTimeout);
+        withVisibleHost(function () {
+            weekPlanView.weekStart = weekPlanView.mondayOf(weekPlanView.logicalToday);
+            var blockedIndex = pastWeekIndex();
+            taskManager.fakeWeekTasks = [{
+                    id: 302,
+                    title: "过去任务",
+                    date: weekPlanView.dayDate(blockedIndex),
+                    completed: false,
+                    categoryText: "测试"
+                }];
+            weekPlanView.visible = true;
+            weekPlanView.refresh();
+            tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, testCase.uiTimeout);
 
-        var focusButton = findChild(weekPlanView, "focusButton");
-        verify(focusButton !== null);
-        compare(focusButton.visible, false);
-        compare(focusButton.enabled, false);
-        var pastAddButton = findChild(weekPlanView, "weekAddButton-" + blockedIndex);
-        verify(pastAddButton !== null);
-        compare(pastAddButton.visible, false);
-        compare(pastAddButton.enabled, false);
+            var focusButton = findChild(weekPlanView, "focusButton");
+            verify(focusButton !== null);
+            compare(focusButton.parent.visible, true, "前提：专注按钮父链可见");
+            compare(focusButton.visible, false);
+            compare(focusButton.enabled, false);
+            var pastAddButton = findChild(weekPlanView, "weekAddButton-" + blockedIndex);
+            verify(pastAddButton !== null);
+            compare(pastAddButton.parent.visible, true, "前提：添加按钮父链可见");
+            compare(pastAddButton.visible, false);
+            compare(pastAddButton.enabled, false);
 
-        compare(weekStartFocusSpy.count, 0);
+            compare(weekStartFocusSpy.count, 0);
+        })
     }
 
+    // 产品保证：未来日期可以规划任务，但不显示开始专注入口。
     function test_weekPlanViewShowsFuturePlanningButNotExecutionActions() {
-        weekPlanView.weekStart = weekPlanView.mondayOf(weekPlanView.logicalToday);
-        var futureIndex = futureWeekIndex();
-        taskManager.fakeWeekTasks = [{
-                id: 303,
-                title: "未来任务",
-                date: weekPlanView.dayDate(futureIndex),
-                completed: false,
-                categoryText: "测试"
-            }];
-        weekPlanView.visible = true;
-        weekPlanView.refresh();
-        tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, testCase.uiTimeout);
-        compare(weekPlanView.tasksForDay(futureIndex).length, 1);
+        withVisibleHost(function () {
+            weekPlanView.weekStart = weekPlanView.mondayOf(weekPlanView.logicalToday);
+            var futureIndex = futureWeekIndex();
+            taskManager.fakeWeekTasks = [{
+                    id: 303,
+                    title: "未来任务",
+                    date: weekPlanView.dayDate(futureIndex),
+                    completed: false,
+                    categoryText: "测试"
+                }];
+            weekPlanView.visible = true;
+            weekPlanView.refresh();
+            tryCompare(weekPlanView, "weekTasks", taskManager.fakeWeekTasks, testCase.uiTimeout);
+            compare(weekPlanView.tasksForDay(futureIndex).length, 1);
 
-        var focusButton = findChild(weekPlanView, "focusButton");
-        verify(focusButton !== null);
-        compare(focusButton.visible, false);
-        compare(focusButton.enabled, false);
-        var futureAddButton = findChild(weekPlanView, "weekAddButton-" + futureIndex);
-        verify(futureAddButton !== null);
-        compare(futureAddButton.enabled, true);
+            var focusButton = findChild(weekPlanView, "focusButton");
+            verify(focusButton !== null);
+            compare(focusButton.parent.visible, true, "前提：专注按钮父链可见");
+            compare(focusButton.visible, false);
+            compare(focusButton.enabled, false);
+            var futureAddButton = findChild(weekPlanView, "weekAddButton-" + futureIndex);
+            verify(futureAddButton !== null);
+            compare(futureAddButton.enabled, true);
+        })
     }
 
     function test_focusButtonStatesLoadAndCompletedDisablesAction() {
