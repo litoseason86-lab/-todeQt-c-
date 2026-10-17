@@ -77,7 +77,6 @@ TestCase {
     }
 
     function test_noLineIsEverClipped() {
-        wait(150)
         for (var i = 0; i < testCase.heights.length; ++i) {
             var h = testCase.heights[i]
             var block = findChild(bench, "fitBlock-" + h)
@@ -91,7 +90,6 @@ TestCase {
     }
 
     function test_shortBlockKeepsLocationRatherThanASecondTitleLine() {
-        wait(150)
         // 54px（一节 60 分钟的课）只排得下两行。标题占满两行会把地点整行挤出预算，
         // 这一格于是只剩课程名，回答不了「我该去哪」——
         // 「课程名 + 地点」这一对才是它的答案，标题占满不是。
@@ -114,7 +112,6 @@ TestCase {
     // 每一档块高都必须画得出地点。裁切守卫可以让一行「不画」来避免半个字，
     // 但如果它把地点也一并挡掉，问题只是从「看起来坏了」变成「信息没了」。
     function test_locationIsNeverSilentlyDropped() {
-        wait(150)
         for (var i = 0; i < testCase.heights.length; ++i) {
             var h = testCase.heights[i]
             var block = findChild(bench, "fitBlock-" + h)
@@ -131,7 +128,6 @@ TestCase {
     // 但块矮到 24px（网格给极短条目保底的最小可点高度）时两者会叠在一起，
     // 悬停时删除按钮会压在角标上，看起来像一个粘住的脏印子。
     function test_parityBadgeStepsAsideInVeryShortBlocks() {
-        wait(150)
         var shortBlock = findChild(bench, "fitBlock-24")
         verify(shortBlock !== null)
         verify(shortBlock.compact, "24px 的块应处于 compact 态")
@@ -145,7 +141,6 @@ TestCase {
     }
 
     function test_parityBadgeSurvivesEveryWidthAndIsAnnounced() {
-        wait(150)
         // 单双周在界面上只剩一个视觉角标，读屏用户必须能从名称里拿到它，
         // 否则「这门课只在单周上」就成了不知道就会跑错教室的信息。
         var block = findChild(bench, "fitBlock-90")

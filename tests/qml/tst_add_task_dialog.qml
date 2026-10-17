@@ -144,7 +144,6 @@ TestCase {
 
     function verifyDialogLayout(popup: Popup) {
         popup.open()
-        wait(100)
 
         var titleField = findChild(popup, "titleField")
         var categoryComboBox = findChild(popup, "categoryComboBox")
@@ -177,7 +176,7 @@ TestCase {
         // -1 是“未选择科目”的约定值，服务层会把它写成空科目。
         testCase.lastCategoryId = -999
         categoryDialog.open()
-        wait(100)
+        tryCompare(categoryDialog, "opened", true, 3000)
 
         var titleField = findChild(categoryDialog, "titleField")
         var categoryComboBox = findChild(categoryDialog, "categoryComboBox")
@@ -195,7 +194,6 @@ TestCase {
 
     function test_panelIsGlassDialog() {
         dialog.open()
-        wait(20)
         var panel = findChild(dialog, "dialogPanel")
         verify(panel)
         verify(Qt.colorEqual(panel.color, Theme.glassDialog))
@@ -203,7 +201,6 @@ TestCase {
     }
 
     function test_failedSubmitKeepsInputAndDialogOpen() {
-        wait(260)
         failingDialog.open()
         tryCompare(failingDialog, "opened", true, 3000)
         var titleField = findChild(failingDialog, "titleField")

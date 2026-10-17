@@ -336,7 +336,6 @@ TestCase {
         focusTimer.stopCalls = 0;
         focusSessionControllerMock.endCurrentCalls = 0;
         focusSessionControllerMock.endPomodoroCycleCalls = 0;
-        wait(20);
     }
 
     function cleanup() {
@@ -596,7 +595,6 @@ TestCase {
 
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
-        wait(20)
 
         const focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
@@ -619,7 +617,6 @@ TestCase {
     function test_focusEndedExitsImmersiveAndReturnsToday() {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
-        wait(20)
 
         const focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
@@ -637,7 +634,6 @@ TestCase {
     function test_unprojectableAutoExitsViaOverlay() {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
-        wait(20)
 
         const focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
@@ -645,7 +641,7 @@ TestCase {
         compare(mainWindow.focusImmersiveActive, true)
 
         focusTimer.hasActiveSession = false
-        wait(20)
+        tryCompare(mainWindow, "focusImmersiveActive", false)
         compare(mainWindow.focusImmersiveActive, false)
 
         focusTimer.isRunning = false

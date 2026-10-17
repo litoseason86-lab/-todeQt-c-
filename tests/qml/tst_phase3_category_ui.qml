@@ -110,9 +110,8 @@ TestCase {
 
     function test_categoryDialogLoadsInjectedManager() {
         categoryDialog.open()
-        wait(100)
 
-        compare(categoryDialog.categories.length, 2)
+        tryVerify(function () { return categoryDialog.categories.length === 2 }, 5000, "categoryDialog.categories.length 应为 2")
         compare(categoryDialog.categories[0].name, "数学")
         compare(categoryDialog.categories[1].name, "算法")
         categoryDialog.close()
@@ -120,12 +119,10 @@ TestCase {
 
     function test_categoryDialogCanAddWithInjectedManager() {
         categoryDialog.open()
-        wait(100)
 
         fakeCategoryManager.addCategory("写作", "#9aa66b")
-        wait(50)
 
-        compare(fakeCategoryManager.addedCount, 1)
+        tryCompare(fakeCategoryManager, "addedCount", 1)
         compare(categoryDialog.categories.length, 3)
         compare(categoryDialog.categories[2].name, "写作")
         categoryDialog.close()
@@ -133,14 +130,12 @@ TestCase {
 
     function test_categoryDialogCanEditCustomCategory() {
         categoryDialog.open()
-        wait(100)
 
         // 通过公开方法进入编辑态，验证弹窗不会直接依赖按钮点击顺序。
         categoryDialog.beginEdit(categoryDialog.categories[1])
         compare(categoryDialog.editingCategoryId, 6)
         categoryDialog.newCategoryColor = "#445566"
         categoryDialog.saveCategory()
-        wait(50)
 
         compare(fakeCategoryManager.updatedId, 6)
         compare(categoryDialog.categories[1].name, "算法")
@@ -151,7 +146,6 @@ TestCase {
 
     function test_categoryDialogCanEditPresetCategory() {
         categoryDialog.open()
-        wait(100)
 
         const listView = findChild(categoryDialog, "categoryListView")
         verify(listView)
@@ -170,7 +164,6 @@ TestCase {
         input.text = "高等数学"
         categoryDialog.newCategoryColor = "#334455"
         categoryDialog.saveCategory()
-        wait(50)
 
         compare(fakeCategoryManager.updatedId, 1)
         compare(categoryDialog.categories[0].name, "高等数学")

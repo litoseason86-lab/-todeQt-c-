@@ -36,7 +36,6 @@ TestCase {
         var dlg = createTemporaryObject(dialogComponent, testCase)
         verify(!!dlg, "Component exists")
         dlg.openForAdd("2026-08-10", [{ id: 7, title: "考研数学" }])
-        wait(30)
 
         findChild(dlg, "manualSessionHourField").text = "14"
         findChild(dlg, "manualSessionMinuteField").text = "05"
@@ -56,7 +55,6 @@ TestCase {
     function test_task_can_be_attributed() {
         var dlg = createTemporaryObject(dialogComponent, testCase)
         dlg.openForAdd("2026-08-10", [{ id: 7, title: "考研数学" }])
-        wait(30)
         findChild(dlg, "manualSessionTaskCombo").currentIndex = 1
         dlg.submit()
         compare(testCase.lastCall.taskId, 7)
@@ -65,7 +63,6 @@ TestCase {
     function test_edit_prefills_from_the_existing_record() {
         var dlg = createTemporaryObject(dialogComponent, testCase)
         dlg.openForEdit({ id: 42, startTime: "2026-08-09T20:15:00", durationSeconds: 45 * 60 }, [])
-        wait(30)
 
         compare(findChild(dlg, "manualSessionDateField").text, "2026-08-09")
         compare(findChild(dlg, "manualSessionHourField").text, "20")
@@ -80,7 +77,6 @@ TestCase {
     function test_service_failure_keeps_the_dialog_open_with_the_reason() {
         var dlg = createTemporaryObject(dialogComponent, testCase)
         dlg.openForAdd("2026-08-10", [])
-        wait(30)
         testCase.nextFailure = "这段时间已有专注记录"
         dlg.submit()
 
@@ -92,7 +88,7 @@ TestCase {
     function test_malformed_date_is_rejected_before_reaching_the_service() {
         var dlg = createTemporaryObject(dialogComponent, testCase)
         dlg.openForAdd("2026-08-10", [])
-        wait(30)
+        tryCompare(dlg, "opened", true, 3000)
         findChild(dlg, "manualSessionDateField").text = "八月十日"
         dlg.submit()
 

@@ -16,7 +16,7 @@
 
 - 模型整体换新（换数组、reset）后要按坐标操作委托：先 `verify(waitForItemPolished(容器))`。新委托先建在 (0,0)，Flow 或布局下一帧才排好位置，按旧坐标移过去会落在别的项上。悬停没生效时先打印 `mapToItem(null, …)` 看坐标落在哪，再怀疑环境。
 - 会量颜色或切主题的用例，在 `initTestCase` 把 `Theme.reduceMotion` 和替身 `appSettings.reduceMotion` 设为 true，`cleanupTestCase` 还原（照 `tst_contrast_audit.qml`）。`Theme.reduceMotion` 只在 `main.qml` 绑定，测试里默认是 false，颜色动画照常跑，并行时量到的是过渡色。
-- 指针位置会跨用例留在同一个测试窗口里。弹层出现在静止的指针下时，Qt 下一帧会补发一次悬停，选项行跟着改高亮（`ChoicePopup.openedByKeyboard` 就是为此加的）。测「键盘打开弹层」的用例：先把指针停到弹层将出现的位置再打开，`wait(300)` 让补发的悬停送到，才能稳定复现。
+- 指针位置会跨用例留在同一个测试窗口里。弹层出现在静止的指针下时，Qt 下一帧会补发一次悬停，选项行跟着改高亮（`ChoicePopup.openedByKeyboard` 就是为此加的）。测「键盘打开弹层」的用例：先把指针停到弹层将出现的位置再打开，`TestWaits.letElapse(testCase, 300, "…")` 让补发的悬停送到，才能稳定复现（补发没有可等的信号；`tests/qml` 里不能直接写 `wait()`，见 `QmlFixedWaitGate`）。
 
 ## 输入与字体
 

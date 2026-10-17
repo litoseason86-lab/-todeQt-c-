@@ -41,7 +41,6 @@ TestCase {
         view.logicalToday = view.computeLogicalToday()
         view.setMonth(view.logicalToday.getFullYear(), view.logicalToday.getMonth() + 1,
                       view.logicalToday.getDate())
-        wait(20)
     }
 
     function test_initialSelectionAndHighlightUseLogicalToday() {

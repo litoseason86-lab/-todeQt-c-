@@ -121,7 +121,7 @@ TestCase {
         logDialog.close()
         restoreDialog.close()
         settingsDialog.close()
-        wait(20)
+        tryVerify(function () { return !logDialog.visible && !restoreDialog.visible && !settingsDialog.visible }, 3000, "上一条用例的弹窗还没收起")
     }
 
     function test_switchAsksTheControllerAndShowsOnlyWhatItAccepted() {

@@ -53,7 +53,6 @@ TestCase {
         item.setPointerInside(false)
         renameSpy.clear()
         editSpy.clear()
-        wait(20)
     }
 
     function test_coordinatorFreshReadAndPageExit() {
@@ -138,8 +137,7 @@ TestCase {
         compare(deleteButton.opacity, 1)
 
         item.setPointerInside(true)
-        wait(20)
-        compare(editButton.enabled, true)
+        tryCompare(editButton, "enabled", true)
         compare(deleteButton.enabled, true)
         compare(editButton.opacity, 1)
         compare(deleteButton.opacity, 1)
@@ -154,7 +152,7 @@ TestCase {
         verify(focusButton)
 
         item.taskCompleted = true
-        wait(260)
+        tryCompare(focusButton, "visible", false, 3000)
         compare(focusButton.visible, false)
     }
 

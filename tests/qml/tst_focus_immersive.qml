@@ -107,7 +107,6 @@ TestCase {
         overlay.controlsRevealed = false
         overlay.active = true
         exitSpy.clear()
-        wait(20)
     }
 
     function test_backdropShowsWallpaper() {
@@ -148,7 +147,6 @@ TestCase {
     function test_freeProjectsBigClock() {
         focusViewStub.state = "free"
         focusViewStub.timeText = "01:02:03"
-        wait(20)
 
         const freeTime = findChild(overlay, "immersiveFreeTimeText")
         verify(freeTime)
@@ -166,9 +164,8 @@ TestCase {
         focusViewStub.stageText = "专注完成"
         focusViewStub.progressValue = 1
         focusViewStub.ringColorValue = Theme.success
-        wait(20)
 
-        compare(overlay.completionState, true)
+        tryCompare(overlay, "completionState", true)
 
         const banner = findChild(overlay, "immersiveBannerText")
         verify(banner)
@@ -182,7 +179,6 @@ TestCase {
 
     function test_errorTextProjected() {
         focusViewStub.errorText = "番茄结束失败，请重试"
-        wait(20)
 
         const error = findChild(overlay, "immersiveErrorText")
         verify(error)
@@ -325,7 +321,6 @@ TestCase {
         timerStub.isRunning = true
         timerStub.hasActiveSession = false
         timerStub.phase = 3
-        wait(20)
 
         compare(overlay.projectable, true)
         compare(overlay.secondaryButtonText, "结束休息")
@@ -350,18 +345,15 @@ TestCase {
 
     function test_unprojectableStateAutoExits() {
         focusViewStub.state = "pomoIdle"
-        wait(20)
-        compare(exitSpy.count, 1)
+        tryCompare(exitSpy, "count", 1)
     }
 
     function test_activationIntoUnprojectableStateAutoExits() {
         overlay.active = false
         focusViewStub.state = "pomoIdle"
-        wait(20)
         exitSpy.clear()
 
         overlay.active = true
-        wait(20)
-        compare(exitSpy.count, 1)
+        tryCompare(exitSpy, "count", 1)
     }
 }

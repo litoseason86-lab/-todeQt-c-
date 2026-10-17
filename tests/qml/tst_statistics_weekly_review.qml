@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../qml/views"
 import "../../qml"
+import "TestWaits.js" as TestWaits
 
 // 统计页「本周」与复盘卡的接线：逻辑今天只生成一次、当前周隐藏涨跌、卡片出现条件、
 // 契约缺失与整页异常的错误态、今日目标变更触发刷新，以及切换范围时统计卡高度不变。
@@ -197,7 +198,7 @@ TestCase {
         view.refreshCurrentDateSnapshot()
         view.applyCurrentPeriodSelection()
         view.refresh()
-        wait(20)
+        TestWaits.letElapse(testCase, 20, "复位收尾：让刷新触发的排版走完再进入用例，后续断言读的是排好后的尺寸")
     }
 
     function statCards() {
@@ -241,7 +242,7 @@ TestCase {
         var trend = findChild(view, "statisticsTrendChart")
         verify(trend)
         var cards = statCards()
-        wait(50)
+        TestWaits.letElapse(testCase, 50, "先让首屏排版走完再记趋势图的基准位置；位置本就不该变，没有可等的变化")
         const trendY = trend.y
         const expectHeights = function(tag) {
             for (var i = 0; i < cards.length; ++i) {
@@ -251,19 +252,19 @@ TestCase {
 
         expectHeights("今日")
         view.currentTimeRange = "week"
-        wait(50)
+        TestWaits.letElapse(testCase, 50, "切到本周后等排版走完再比较；要验证的是卡片高度与趋势图位置不变，没有可等的变化")
         // 当前周隐藏涨跌：比较行照样占位，卡片与下方趋势图都不跳。
         compare(cards[0].showComparison, false)
         expectHeights("本周")
         compare(trend.y, trendY)
 
         view.goToPreviousPeriod()
-        wait(50)
+        TestWaits.letElapse(testCase, 50, "切到上一周后等排版走完再比较；要验证的是位置不变，没有可等的变化")
         expectHeights("上一周")
         compare(trend.y, trendY)
 
         view.currentTimeRange = "month"
-        wait(50)
+        TestWaits.letElapse(testCase, 50, "切到本月后等排版走完再比较；要验证的是位置不变，没有可等的变化")
         expectHeights("本月")
         compare(trend.y, trendY)
     }
@@ -277,13 +278,17 @@ TestCase {
         // 加载成功但没有可展示的块：卡片不占位，饼图紧接趋势图。
         statisticsService.reviewData = readyReview(false)
         view.currentTimeRange = "week"
-        wait(50)
+        // 列布局在下一次排版才挪位置：等到整组位置关系成立，再逐条断言给出清楚的失败信息。
+        tryVerify(function() { return pie.y === trend.y + trend.height + Theme.space16 })
         compare(pie.y, trend.y + trend.height + Theme.space16)
 
         // 有内容：卡片夹在两图之间，上下都是统一的列间距，没有额外底边距。
         statisticsService.reviewData = readyReview(true)
         view.refresh()
-        wait(50)
+        tryVerify(function() {
+            return card.height > 0 && card.y === trend.y + trend.height + Theme.space16
+                    && pie.y === card.y + card.height + Theme.space16
+        })
         verify(card.height > 0)
         compare(card.y, trend.y + trend.height + Theme.space16)
         compare(pie.y, card.y + card.height + Theme.space16)
@@ -291,7 +296,10 @@ TestCase {
         // 查询失败：错误态必须占位显示，不能当成空周藏起来。
         statisticsService.reviewData = errorReview()
         view.refresh()
-        wait(50)
+        tryVerify(function() {
+            return card.errorState && card.y === trend.y + trend.height + Theme.space16
+                    && pie.y === card.y + card.height + Theme.space16
+        })
         compare(card.y, trend.y + trend.height + Theme.space16)
         compare(pie.y, card.y + card.height + Theme.space16)
         compare(card.errorState, true)
@@ -327,7 +335,7 @@ TestCase {
         view.pageActive = false
         before = statisticsService.weeklyReviewCalls
         appSettings.dailyFocusGoalChanged()
-        wait(50)
+        TestWaits.observe(testCase, 50, "页面不活跃时目标变化不应触发复盘查询；没有可等的信号，给它一个窗口确认没有查询")
         compare(statisticsService.weeklyReviewCalls, before)
         view.pageActive = true
         tryVerify(function() { return statisticsService.weeklyReviewCalls > before }, 3000)

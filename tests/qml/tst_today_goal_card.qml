@@ -286,7 +286,6 @@ TestCase {
         var view = createTemporaryObject(todayViewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(60)
 
         var total = findChild(view, "stripPlannedMinutes")
         verify(!!total, "Object exists")
@@ -306,7 +305,6 @@ TestCase {
         var view = createTemporaryObject(todayViewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(60)
 
         compare(findChild(view, "stripPlannedMinutes").text, "45 分钟")
         compare(findChild(view, "stripPlannedDelta").text, "")

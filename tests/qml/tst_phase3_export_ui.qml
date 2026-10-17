@@ -54,7 +54,6 @@ TestCase {
 
     function test_quickDateRangeButtonsWriteIsoDates() {
         exportDialog.open()
-        wait(100)
 
         exportDialog.setDateRangeAll()
         var startDateInput = findChild(exportDialog, "startDateInput")
@@ -69,7 +68,7 @@ TestCase {
 
     function test_validateRejectsInvertedRange() {
         exportDialog.open()
-        wait(100)
+        tryCompare(exportDialog, "opened", true, 3000)
 
         // 开始日期晚于结束日期时，界面要先拦截，不进入真实导出流程。
         var startDateInput = findChild(exportDialog, "startDateInput")
@@ -84,7 +83,6 @@ TestCase {
 
     function test_progressSignalUpdatesProgressState() {
         exportDialog.open()
-        wait(100)
 
         fakeExportService.exportProgress(2, 5)
 
@@ -95,7 +93,6 @@ TestCase {
 
     function test_completedSignalKeepsSpecificErrorMessage() {
         exportDialog.open()
-        wait(100)
 
         fakeExportService.exportCompleted(false, "无法创建文件: Permission denied")
 

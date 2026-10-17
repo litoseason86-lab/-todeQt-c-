@@ -160,7 +160,7 @@ TestCase {
         var view = createTemporaryObject(trackedViewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(80)
+        tryVerify(function () { return !!testCase.findTaskRow(view, 1) }, 5000, "待挪任务这一行未就绪")
         var row = testCase.findTaskRow(view, 1)
         verify(!!row, "待挪任务这一行未就绪")
 
@@ -184,7 +184,6 @@ TestCase {
         var view = createTemporaryObject(viewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(80)
         testCase.weekQueryCount = 0
 
         // 目标取原日的下一天：目标就是原日的话，服务按"没改期"处理、不发 tasksChanged，
@@ -213,7 +212,6 @@ TestCase {
         var view = createTemporaryObject(viewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(80)
 
         // 原日用视图自己的日期换算找出来，前提先断言成立。
         var home = testCase.dayIndexOfDate(view, taskManager.weekRows[0].date)
@@ -233,7 +231,6 @@ TestCase {
     function test_dropping_outside_any_day_is_cancelled() {
         var view = createTemporaryObject(viewComponent, testCase)
         view.refresh()
-        wait(80)
 
         view.beginDrag(1)
         view.dropTargetIndex = -1
@@ -247,7 +244,6 @@ TestCase {
     function test_cancelled_drag_does_not_move_task() {
         var view = createTemporaryObject(viewComponent, testCase)
         view.refresh()
-        wait(80)
 
         view.beginDrag(1)
         view.dropTargetIndex = 4
@@ -263,9 +259,8 @@ TestCase {
                                 makeTask(2, "未完成", testCase.logicalToday())]
         var view = createTemporaryObject(viewComponent, testCase)
         view.refresh()
-        wait(80)
         // 契约由 delegate 的 draggable 绑定表达；这里确认服务支持判定本身成立。
-        compare(view.canMoveTasks, true)
+        tryCompare(view, "canMoveTasks", true)
     }
 
     function test_reschedule_is_disabled_without_service_support() {

@@ -4,6 +4,7 @@ import "../../qml/components"
 import "../../qml/views"
 import "../../qml"
 import "../../qml/views/StatisticsFormat.js" as StatFmt
+import "TestWaits.js" as TestWaits
 
 TestCase {
     id: testCase
@@ -280,10 +281,8 @@ TestCase {
         statisticsView.selectedMonth = todaySnapshot.getMonth() + 1
         if (statisticsView.currentTimeRange === "today") {
             statisticsView.currentTimeRange = "week"
-            wait(1)
         }
         statisticsView.currentTimeRange = "today"
-        wait(20)
         statisticsService.resetTracking()
     }
 
@@ -358,11 +357,9 @@ TestCase {
 
         verify(segment !== null)
         segment.clicked()
-        wait(80)
     }
 
     function test_emptyChartsRenderStableFallbacks() {
-        wait(50)
 
         // 空数据时应该显示兜底文案，不能露出 NaN 这类计算错误文本。
         var barEmptyLabel = findChild(emptyBarChart, "emptyStateLabel")
@@ -377,7 +374,6 @@ TestCase {
     }
 
     function test_zeroChartsAvoidInvalidGeometry() {
-        wait(50)
 
         // 全是 0 的数据也要能画图；这里验证比例计算不会产生无效数字。
         verify(zeroBarChart.maxValue === 0)
@@ -389,7 +385,6 @@ TestCase {
     }
 
     function test_zeroPieChartShowsStableZeroState() {
-        wait(50)
 
         // 「暂无有效数据」文案已移除；零值态仍必须由 showInvalidData 标志表达，
         // 且扇区计算不得漏出 NaN。
@@ -438,7 +433,6 @@ TestCase {
     }
 
     function test_statisticsTimeRangeDefaultsToToday() {
-        wait(50)
 
         var firstCard = findChild(statisticsView, "statisticsPrimaryStatCard")
         var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
@@ -473,7 +467,6 @@ TestCase {
 
     function test_statisticsDayArrowNavigationUsesSelectedDate() {
         statisticsView.visible = true
-        wait(50)
 
         var previousButton = findChild(statisticsView, "statisticsPreviousPeriodButton")
         var previousArea = findChild(statisticsView, "statisticsPreviousPeriodArea")
@@ -537,7 +530,6 @@ TestCase {
 
     function test_statisticsComparisonDefaultsToTodayAndFollowsNavigation() {
         statisticsView.visible = true
-        wait(50)
 
         var firstCard = findChild(statisticsView, "statisticsPrimaryStatCard")
         var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
@@ -785,7 +777,6 @@ TestCase {
     function test_statisticsActiveSegmentClickResetsCurrentRangeToCurrentPeriod() {
         // 点击已选中的段等价于旧菜单的「回到当前期」语义。
         statisticsView.visible = true
-        wait(50)
 
         var selectorText = findChild(statisticsView, "statisticsTimeRangeSelectorText")
         var todaySegment = findChild(statisticsView, "segmentedSwitchSegment0")
@@ -824,7 +815,6 @@ TestCase {
 
     function test_statisticsRefreshTracksCurrentPeriodAfterDateSnapshotChanges() {
         statisticsView.visible = true
-        wait(50)
 
         var selectorText = findChild(statisticsView, "statisticsTimeRangeSelectorText")
         verify(selectorText !== null)
@@ -888,7 +878,6 @@ TestCase {
     }
 
     function test_statisticsTimeRangeSwitchesWeekAndMonthData() {
-        wait(50)
 
         var firstCard = findChild(statisticsView, "statisticsPrimaryStatCard")
         var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
@@ -905,11 +894,9 @@ TestCase {
 
         statisticsService.resetTracking()
         statisticsView.visible = true
-        wait(50)
         weekSegment.clicked()
-        wait(80)
 
-        compare(statisticsView.currentTimeRange, "week")
+        tryCompare(statisticsView, "currentTimeRange", "week")
         compare(firstCard.title, "有效天数")
         // 单位一律走 unit 属性，不拼进 value：三张卡的数字与单位字号才一致。
         compare(firstCard.value, "3")
@@ -927,9 +914,8 @@ TestCase {
 
         statisticsService.resetTracking()
         monthSegment.clicked()
-        wait(80)
 
-        compare(statisticsView.currentTimeRange, "month")
+        tryCompare(statisticsView, "currentTimeRange", "month")
         compare(firstCard.title, "有效天数")
         compare(firstCard.value, "5")
         compare(firstCard.unit, "天")
@@ -950,7 +936,7 @@ TestCase {
         statisticsView.visible = true
         statisticsView.width = 900
         statisticsView.height = 640
-        wait(80)
+        TestWaits.letElapse(testCase, 80, "改成 900 宽后等统计页重新排版再读各模块位置；断言的是整组边界关系，没有单一可等的属性")
 
         var firstCard = findChild(statisticsView, "statisticsPrimaryStatCard")
         var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
@@ -979,7 +965,7 @@ TestCase {
         verify(thirdPos.x > secondPos.x + secondCard.width)
 
         statisticsView.width = 520
-        wait(80)
+        TestWaits.letElapse(testCase, 80, "改成 520 宽后等卡片改为纵向堆叠再读位置；断言的是整组边界关系，没有单一可等的属性")
 
         firstPos = firstCard.mapToItem(statisticsView, 0, 0)
         secondPos = secondCard.mapToItem(statisticsView, 0, 0)

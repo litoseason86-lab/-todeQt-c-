@@ -321,7 +321,6 @@ TestCase {
         verify(hit !== null, "找不到侧栏条目 " + marker)
         mouseClick(hit, hit.width / 2, hit.height / 2)
         tryVerify(function () { return mainWindow.currentView === target && !mainWindow.isSwitching }, 3000)
-        wait(80)
     }
 
     function taskRow(taskId) {
@@ -364,7 +363,6 @@ TestCase {
             { id: 502, title: "第二条", completed: false },
             { id: 503, title: "第三条", completed: false }
         ])
-        wait(20)
     }
 
     // —— 键盘入口：真实点击、真实按键（2026-09-14 审查修复）——
@@ -391,12 +389,10 @@ TestCase {
         // 再点一次侧栏当前项：焦点回到侧栏，页面没有切换、也不会再次交接焦点。
         var hit = findChild(mainWindow, "sidebarHitArea-周")
         mouseClick(hit, hit.width / 2, hit.height / 2)
-        wait(60)
 
         var row = taskRow(502)
         mouseClick(row, Math.min(40, row.width / 4), row.height / 2)
-        wait(60)
-        compare(view.cursorTaskId, 502)
+        tryCompare(view, "cursorTaskId", 502)
 
         keyClick(Qt.Key_Down)
         compare(view.cursorTaskId, 503)
@@ -444,7 +440,6 @@ TestCase {
 
         view.setCursor(602)
         keyClick(Qt.Key_Return)
-        wait(40)
         compare(focusTimer.startFocusCalls + focusTimer.startPomodoroCalls, 0)
         // 行内「开始」按钮对同一条也不出现：两边读的是同一个条件。
         compare(taskRow(602).showStartFocus && !taskRow(602).visualTaskCompleted, false)
@@ -466,7 +461,6 @@ TestCase {
         keyClick(Qt.Key_Space)
         compare(taskManager.setCompletedCalls, 1)
         keyClick(Qt.Key_Return)
-        wait(40)
 
         compare(focusTimer.startFocusCalls + focusTimer.startPomodoroCalls, 0)
         compare(view.canStartFocusFor(501), false)
@@ -483,12 +477,10 @@ TestCase {
         mousePress(row, 60, row.height / 2)
         for (var i = 1; i <= 12; ++i) {
             mouseMove(row, 60, row.height / 2 + i * 6)
-            wait(16)
             if (view.draggingTaskId === 502)
                 sawDrag = true
         }
         mouseRelease(row, 60, row.height / 2 + 72)
-        wait(60)
 
         verify(sawDrag, "按住拖动没有进入拖动态")
         compare(view.cursorTaskId, -1)

@@ -57,7 +57,6 @@ TestCase {
 
     function init() {
         testCase.received = []
-        wait(120)
     }
 
     function test_tapping_a_block_only_edits() {
@@ -66,7 +65,6 @@ TestCase {
 
         var point = block.mapToItem(grid, block.width / 2, block.height / 2)
         mouseClick(grid, point.x, point.y)
-        wait(120)
 
         // 关键断言是「只有一个」。外层列的新增处理器一起响应时，
         // 这里会同时收到 edit 和 add，而界面上看到的就是一个空白的新增弹窗。
@@ -86,13 +84,12 @@ TestCase {
         // × 只在悬停时出现，先把指针移到块上。
         var center = block.mapToItem(grid, block.width / 2, block.height / 2)
         mouseMove(grid, center.x, center.y)
-        wait(120)
+        tryVerify(function () { var badge = findChild(grid, "scheduleEntryDelete-42"); return badge !== null && badge.visible }, 5000, "悬停后删除按钮没有出现")
 
         var badge = findChild(grid, "scheduleEntryDelete-42")
         verify(badge !== null, "找不到删除按钮")
         var point = badge.mapToItem(grid, badge.width / 2, badge.height / 2)
         mouseClick(grid, point.x, point.y)
-        wait(120)
 
         compare(testCase.received.length, 1,
                 "点删除按钮应只触发一个信号，实际：" + JSON.stringify(testCase.received))
@@ -108,17 +105,14 @@ TestCase {
         var block = blockForEntry(1, 42)
         verify(block !== null, "找不到课程块")
         block.forceActiveFocus()
-        wait(60)
 
         keyClick(Qt.Key_Backspace)
-        wait(60)
         compare(testCase.received.length, 1, "Backspace 应触发删除，实际："
                 + JSON.stringify(testCase.received))
         compare(testCase.received[0], "delete:42")
 
         testCase.received = []
         keyClick(Qt.Key_Delete)
-        wait(60)
         compare(testCase.received.length, 1, "Delete 应仍然触发删除，实际："
                 + JSON.stringify(testCase.received))
         compare(testCase.received[0], "delete:42")
@@ -126,8 +120,7 @@ TestCase {
         // 回车走的是编辑，不能被上面两个处理器抢掉。
         testCase.received = []
         keyClick(Qt.Key_Return)
-        wait(60)
-        compare(testCase.received.length, 1)
+        tryVerify(function () { return testCase.received.length === 1 }, 5000, "testCase.received.length 应为 1")
         compare(testCase.received[0], "edit:42")
     }
 
@@ -137,7 +130,6 @@ TestCase {
 
         var point = column.mapToItem(grid, column.width / 2, 40)
         mouseClick(grid, point.x, point.y)
-        wait(120)
 
         compare(testCase.received.length, 1,
                 "点空白应只触发一个信号，实际：" + JSON.stringify(testCase.received))

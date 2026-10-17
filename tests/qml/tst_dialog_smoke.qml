@@ -191,7 +191,6 @@ TestCase {
         settingsDialog.close()
         knowledgeGapDialog.close()
         knowledgeGapCapturePopup.close()
-        wait(60)
         categoryManager.categoryRows = [{ id: 1, name: "专业课", color: "#d4a574" }]
         categoryManager.failRead = false
         knowledgeGapService.lastChanges = null

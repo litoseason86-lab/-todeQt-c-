@@ -3,6 +3,7 @@ import QtTest
 import "../../qml"
 import "../../qml/views"
 import "../../qml/mobile"
+import "TestWaits.js" as TestWaits
 
 // 移动端的界面规则：
 //   · 平台不支持自由计时时，任何「开始」入口都落到番茄；支持时照常走自由计时（iPad 现在的配置）；
@@ -308,7 +309,7 @@ TestCase {
         timerStub.finishWork()
         timerStub.phaseSettledOffline(1)
         // 自动衔接在减少动效时是 0 延迟的 Timer；等足几轮事件循环确认它没有被触发。
-        wait(100)
+        TestWaits.observe(testCase, 100, "确认减少动效下 0 延迟的自动衔接 Timer 在几轮事件循环里都没有开始休息；没发生的事没有信号可等")
         compare(timerStub.startBreakCalls, 0)
     }
 
@@ -331,7 +332,7 @@ TestCase {
 
         timerStub.finishWork()
         timerStub.phaseSettledOffline(1)
-        wait(100)
+        TestWaits.observe(testCase, 100, "确认伴侣页离线结算后几轮事件循环里都没有自动开始休息；没发生的事没有信号可等")
         compare(timerStub.startBreakCalls, 0)
         // 停在「完成」态，由用户决定要不要开始休息。
         compare(companion.justCompletedPhase, 1)

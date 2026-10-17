@@ -81,7 +81,6 @@ TestCase {
     function test_currentWeekShowsOverviewWithoutFacts() {
         var card = createTemporaryObject(cardComponent, testCase, { review: currentWeekReview() })
         verify(card)
-        wait(30)
 
         compare(findChild(card, "weeklyReviewTitle").text, "本周概览")
         compare(card.showGoal, true)
@@ -122,7 +121,6 @@ TestCase {
         ]
         var card = createTemporaryObject(cardComponent, testCase, { review: review })
         verify(card)
-        wait(30)
 
         compare(findChild(card, "weeklyReviewTitle").text, "所选周复盘")
         compare(card.showToday, false)
@@ -144,7 +142,6 @@ TestCase {
         review.facts = [ { type: "estimateOnTrack", ratioPercent: 100 } ]
         var card = createTemporaryObject(cardComponent, testCase, { review: review })
         verify(card)
-        wait(30)
 
         compare(card.errorState, true)
         compare(findChild(card, "weeklyReviewErrorTitle").text, "周统计加载失败")
@@ -174,7 +171,6 @@ TestCase {
                        currentSharePercent: 40, deltaPoints: 20 } ]
         } })
         verify(card)
-        wait(30)
 
         compare(card.showGoal, false)
         compare(card.showToday, false)

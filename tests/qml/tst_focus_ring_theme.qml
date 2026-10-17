@@ -24,7 +24,6 @@ TestCase {
 
     function test_themeChangeRepaintsRing() {
         Theme.activeThemeId = "warm"
-        wait(50)
         painted.clear()
         Theme.activeThemeId = "starry"
         tryVerify(function() { return painted.count > 0 })

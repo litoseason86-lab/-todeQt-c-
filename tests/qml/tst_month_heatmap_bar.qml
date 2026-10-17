@@ -82,7 +82,6 @@ TestCase {
         view.logicalToday = view.computeLogicalToday()
         view.setMonth(year, month, selected)
         view.refresh()
-        wait(20)
     }
 
     function init() {
@@ -225,7 +224,6 @@ TestCase {
         testCase.secondsByDate = data
         view.height = 560
         reload(testCase.fakeNow, 2026, 7, 18)
-        wait(50)
 
         var text = findChild(view, "monthDayText-10")
         verify(text !== null)

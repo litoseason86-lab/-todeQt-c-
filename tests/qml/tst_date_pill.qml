@@ -48,7 +48,10 @@ TestCase {
         // opened 为真只说明弹层开始显示，内容这时还没排好版：
         // 立刻发鼠标事件会落在格子的旧坐标上，点不中。
         tryVerify(function () { return pill.popup.contentItem.width > 0 })
-        wait(100)
+        var grid = testCase.popupChild("datePillMonthGrid")
+        tryVerify(function () { return grid !== null && grid.width > 0 && grid.contentItem.width > 0 }, 5000, "日历格子还没排好版")
+        verify(waitForItemPolished(pill.popup.contentItem))
+        verify(waitForItemPolished(grid.contentItem))
     }
 
     function test_emptyDateShowsPlaceholder() {

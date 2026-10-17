@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../qml"
 import "../../qml/views"
+import "TestWaits.js" as TestWaits
 
 TestCase {
     id: testCase
@@ -379,7 +380,6 @@ TestCase {
         focusEndedSpy.clear()
         manualRestEndedSpy.clear()
         immersiveSpy.clear()
-        wait(20)
     }
 
     function test_pageBackdropIsTransparent() {
@@ -396,12 +396,10 @@ TestCase {
 
         // 点番茄段：控件自己不改选中态，必须由页面把模式改掉再反映回来。
         findChild(modeSwitch, "segmentedSwitchSegment1").clicked()
-        wait(20)
-        compare(view.pomodoroModeSelected, true)
+        tryCompare(view, "pomodoroModeSelected", true)
         compare(modeSwitch.currentIndex, 1, "模式切换后选中段应跟着走")
 
         findChild(modeSwitch, "segmentedSwitchSegment0").clicked()
-        wait(20)
         compare(view.pomodoroModeSelected, false)
         compare(modeSwitch.currentIndex, 0)
     }
@@ -413,11 +411,11 @@ TestCase {
         verify(modeSwitch, "专注页应有模式分段控件")
 
         view.toPomodoroTab(false)
-        wait(20)
+        TestWaits.letElapse(testCase, 20, "切到自由模式后等正文重新排版再读切换器位置；要验证的是位置不变，没有可等的变化")
         var freePos = modeSwitch.mapToItem(view, 0, 0)
 
         view.toPomodoroTab(true)
-        wait(20)
+        TestWaits.letElapse(testCase, 20, "切到番茄模式后等正文重新排版再读切换器位置；要验证的是位置不变，没有可等的变化")
         var pomoPos = modeSwitch.mapToItem(view, 0, 0)
 
         // 顺带确认两种模式的正文高度确实不同，否则这条用例会变成永远成立的空壳。
@@ -431,10 +429,8 @@ TestCase {
     function test_modeSwitchFollowsExternalModeChange() {
         var modeSwitch = findChild(view, "focusModeSwitch")
         findChild(modeSwitch, "segmentedSwitchSegment1").clicked()
-        wait(20)
 
         view.toPomodoroTab(false)
-        wait(20)
         compare(modeSwitch.currentIndex, 0, "外部改模式后选中段仍应同步")
     }
 
@@ -461,9 +457,8 @@ TestCase {
 
     function test_switchToPomodoroShowsPresetsAndIdleState() {
         view.toPomodoroTab(true)
-        wait(20)
 
-        compare(view.state, "pomoIdle")
+        tryCompare(view, "state", "pomoIdle")
         verify(findChild(view, "workPreset25") !== null)
         verify(findChild(view, "workPreset45") !== null)
         verify(findChild(view, "workPreset60") !== null)
@@ -477,9 +472,8 @@ TestCase {
         view.toPomodoroTab(true)
         view.selectWorkMinutes(45)
         view.startPomodoro()
-        wait(20)
 
-        compare(focusTimer.stopFocusCalls, 1)
+        tryCompare(focusTimer, "stopFocusCalls", 1)
         compare(focusTimer.startPomodoroWorkTaskId, 7)
         compare(focusTimer.startPomodoroWorkTitle, "测试任务")
         compare(focusTimer.startPomodoroWorkSeconds, 45 * 60)
@@ -488,7 +482,6 @@ TestCase {
 
     function test_presetButtonsUseWarmSelectedColor() {
         view.toPomodoroTab(true)
-        wait(20)
 
         const workBackground = findChild(view, "workPreset25Background")
         const breakBackground = findChild(view, "breakPreset5Background")
@@ -502,7 +495,6 @@ TestCase {
         focusTimer.currentTaskId = -1
         focusTimer.currentTaskTitle = ""
         view.toPomodoroTab(true)
-        wait(20)
 
         const startButton = findChild(view, "pomodoroStartButton")
         verify(startButton)
@@ -513,16 +505,13 @@ TestCase {
         focusTimer.hasActiveSession = true
         view.toPomodoroTab(true)
         view.startPomodoro()
-        wait(20)
 
         focusTimer.phaseCompleted(1)
-        wait(20)
-        compare(view.state, "workDone")
+        tryCompare(view, "state", "workDone")
 
         view.startBreak()
         focusTimer.stopFocus()
         focusTimer.phaseCompleted(2)
-        wait(20)
 
         const startButton = findChild(view, "pomodoroStartButton")
         verify(startButton)
@@ -531,9 +520,8 @@ TestCase {
 
         focusTimer.startPomodoroWorkTaskId = 0
         view.startPomodoro()
-        wait(20)
 
-        compare(focusTimer.startPomodoroWorkTaskId, 7)
+        tryCompare(focusTimer, "startPomodoroWorkTaskId", 7)
         compare(view.state, "pomoWork")
     }
 
@@ -542,8 +530,7 @@ TestCase {
         view.selectedTaskId = 7
         view.selectedTaskTitle = "测试任务"
         focusTimer.phaseCompleted(1)
-        wait(20)
-        compare(view.state, "workDone")
+        tryCompare(view, "state", "workDone")
 
         focusTimer.startBreakFails = true
         view.startBreak()
@@ -565,7 +552,6 @@ TestCase {
         focusTimer.isRunning = true
         focusTimer.hasActiveSession = false
         focusTimer.remainingSeconds = 120
-        wait(20)
 
         view.endPomodoro()
 
@@ -579,7 +565,6 @@ TestCase {
         // 祖先链的——qmltestrunner 里顶层测试窗口自身的 OS 级可见性并不可靠，直接断言
         // ring.visible 会被这个和本组件无关的因素污染。改成断言驱动它的源头布尔值。
         view.toPomodoroTab(false)
-        wait(20)
 
         const ring = findChild(view, "focusRing")
         verify(ring)
@@ -588,9 +573,8 @@ TestCase {
 
     function test_pomoIdleShowsRingPreview() {
         view.toPomodoroTab(true)
-        wait(20)
 
-        compare(view.pomodoroModeSelected, true)
+        tryCompare(view, "pomodoroModeSelected", true)
         const ring = findChild(view, "focusRing")
         verify(ring)
         compare(ring.showPreview, true)
@@ -601,7 +585,6 @@ TestCase {
         view.toPomodoroTab(true)
         view.startPomodoro()
         focusTimer.remainingSeconds = 932 // 15:32 剩余，对应 25 分钟目标的 62.1%
-        wait(20)
 
         const ring = findChild(view, "focusRing")
         verify(ring)
@@ -616,7 +599,6 @@ TestCase {
         view.toPomodoroTab(true)
         view.startPomodoro()
         focusTimer.isRunning = false
-        wait(20)
 
         const ring = findChild(view, "focusRing")
         verify(ring)
@@ -630,7 +612,6 @@ TestCase {
     function test_breakRingUsesBreakAccent() {
         view.toPomodoroTab(true)
         view.startBreak()
-        wait(20)
 
         const ring = findChild(view, "focusRing")
         verify(ring)
@@ -642,11 +623,9 @@ TestCase {
         focusTimer.hasActiveSession = true
         view.toPomodoroTab(true)
         view.startPomodoro()
-        wait(20)
 
         focusTimer.phaseCompleted(1)
-        wait(20)
-        compare(view.state, "workDone")
+        tryCompare(view, "state", "workDone")
 
         const ring = findChild(view, "focusRing")
         verify(ring)
@@ -659,11 +638,9 @@ TestCase {
         focusTimer.hasActiveSession = true
         view.toPomodoroTab(true)
         view.startPomodoro()
-        wait(20)
 
         focusTimer.phaseCompleted(1)
-        wait(20)
-        compare(view.state, "workDone")
+        tryCompare(view, "state", "workDone")
 
         var banner = findChild(view, "focusCompletionBanner")
         verify(banner)
@@ -678,15 +655,12 @@ TestCase {
         focusTimer.hasActiveSession = true
         view.toPomodoroTab(true)
         view.startPomodoro()
-        wait(20)
         focusTimer.phaseCompleted(1)
-        wait(20)
 
         view.startBreak()
         focusTimer.stopFocus()
         focusTimer.phaseCompleted(2)
-        wait(20)
-        compare(view.state, "breakDone")
+        tryCompare(view, "state", "breakDone")
 
         const ring = findChild(view, "focusRing")
         verify(ring)
@@ -706,17 +680,15 @@ TestCase {
     function test_startPomodoroWritesLastMode() {
         view.toPomodoroTab(true)
         view.startPomodoro()
-        wait(20)
 
-        compare(view.state, "pomoWork")
+        tryCompare(view, "state", "pomoWork")
         compare(appSettingsMock.lastMode, 1)
     }
 
     function test_enterPomodoroWithTaskPreloadsIdle() {
         view.enterPomodoroWithTask(9, "直达任务")
-        wait(20)
 
-        compare(view.state, "pomoIdle")
+        tryCompare(view, "state", "pomoIdle")
         compare(view.pomodoroModeSelected, true)
         compare(view.selectedTaskId, 9)
         compare(view.selectedTaskTitle, "直达任务")
@@ -725,14 +697,11 @@ TestCase {
 
     function test_directTaskSurvivesModeToggleBeforeStarting() {
         view.enterPomodoroWithTask(9, "直达任务")
-        wait(20)
 
         view.toPomodoroTab(false)
-        wait(20)
         view.toPomodoroTab(true)
-        wait(20)
 
-        compare(view.state, "pomoIdle")
+        tryCompare(view, "state", "pomoIdle")
         compare(view.selectedTaskId, 9)
         compare(view.selectedTaskTitle, "直达任务")
         compare(view.taskTitle(), "直达任务")
@@ -741,12 +710,11 @@ TestCase {
 
     function test_switchingDirectPomodoroTaskToFreeWaitsForStart() {
         view.enterPomodoroWithTask(9, "直达任务")
-        wait(20)
 
         view.toPomodoroTab(false)
-        wait(20)
+        TestWaits.observe(testCase, 20, "切到自由页签后不应自动开始计时；自动开始若走延后路径，也要在这段时间里暴露出来")
 
-        compare(view.state, "free")
+        tryCompare(view, "state", "free")
         compare(focusTimer.startFocusCalls, 0)
         compare(focusTimer.hasActiveSession, false)
         compare(view.taskTitle(), "直达任务")
@@ -765,7 +733,6 @@ TestCase {
         focusTimer.isRunning = true
 
         view.enterPomodoroWithTask(9, "直达任务")
-        wait(20)
 
         // 复用 toPomodoroTab 的停止逻辑：进入直达前必须结束进行中的自由会话。
         compare(focusTimer.stopFocusCalls, 1)
@@ -790,7 +757,6 @@ TestCase {
     function test_pomoIdleShowsRuleHint() {
         view.toPomodoroTab(true)
         view.panelExpanded = true
-        wait(20)
 
         const hint = findChild(view, "ruleHintText")
         verify(hint)
@@ -805,7 +771,6 @@ TestCase {
 
     function test_durationPillShowsSelectionAndToggles() {
         view.toPomodoroTab(true)
-        wait(20)
 
         const pill = findChild(view, "durationPill")
         verify(pill)
@@ -824,23 +789,19 @@ TestCase {
     function test_panelCollapsesWhenLeavingIdle() {
         view.toPomodoroTab(true)
         view.panelExpanded = true
-        wait(20)
 
         view.startPomodoro()
-        wait(20)
-        compare(view.state, "pomoWork")
+        tryCompare(view, "state", "pomoWork")
         compare(view.panelExpanded, false)
 
         view.toPomodoroTab(true)
         view.panelExpanded = true
         view.toPomodoroTab(false)
-        wait(20)
         compare(view.panelExpanded, false)
     }
 
     function test_idleStatesCarryNoDescriptiveText() {
         view.toPomodoroTab(true)
-        wait(20)
 
         // 待机态的解释性文案（环内「准备开始／等待任务」、标题下「番茄待机」、
         // 底部「到今日任务里点开始专注」）已全部移除，守住它们不再回来。
@@ -857,7 +818,6 @@ TestCase {
         focusTimer.currentTaskId = -1
         focusTimer.currentTaskTitle = ""
         view.selectedTaskId = -1
-        wait(20)
         compare(caption.text, "")
         compare(stageText.text, "")
     }
@@ -885,7 +845,6 @@ TestCase {
     function test_stepperAdjustsValueAndClampsAtBounds() {
         view.toPomodoroTab(true)
         view.panelExpanded = true
-        wait(20)
 
         const plus = findChild(view, "workStepperPlus")
         const minus = findChild(view, "workStepperMinus")
@@ -900,10 +859,8 @@ TestCase {
         compare(valueText.text, "26")
 
         view.selectWorkMinutes(5)
-        wait(20)
         compare(minus.enabled, false)
         view.selectWorkMinutes(180)
-        wait(20)
         compare(plus.enabled, false)
 
         const breakPlus = findChild(view, "breakStepperPlus")
@@ -911,17 +868,14 @@ TestCase {
         verify(breakPlus)
         verify(breakMinus)
         view.selectBreakMinutes(1)
-        wait(20)
         compare(breakMinus.enabled, false)
         view.selectBreakMinutes(60)
-        wait(20)
         compare(breakPlus.enabled, false)
     }
 
     function test_chipsMatchPurelyByValue() {
         view.toPomodoroTab(true)
         view.panelExpanded = true
-        wait(20)
 
         const chip25 = findChild(view, "workPreset25")
         const chip45 = findChild(view, "workPreset45")
@@ -933,15 +887,13 @@ TestCase {
 
         // 步进到非预设值：chips 全灭，步进器本身就是“自定义”。
         view.selectWorkMinutes(90)
-        wait(20)
         compare(chip25.checked, false)
         compare(chip45.checked, false)
         compare(chip60.checked, false)
 
         // 点 chip 回到预设：值与选中态同步恢复。
         chip45.clicked()
-        wait(20)
-        compare(view.selectedWorkMinutes, 45)
+        tryCompare(view, "selectedWorkMinutes", 45)
         compare(chip45.checked, true)
     }
 
@@ -1078,7 +1030,6 @@ TestCase {
     function test_endFreeFocusStopsSessionAndSignals() {
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = true
-        wait(20)
 
         view.endFreeFocus()
 
@@ -1091,7 +1042,6 @@ TestCase {
     function test_endFreeFocusFailureShowsErrorWithoutSignal() {
         focusTimer.hasActiveSession = true
         controller.endOutcome = { result: "failed", kind: "free", discarded: false, error: "控制器给的失败文案" }
-        wait(20)
 
         view.endFreeFocus()
 
@@ -1106,7 +1056,6 @@ TestCase {
         view.selectedTaskId = 7
         view.selectedTaskTitle = "测试任务"
         view.errorText = "旧错误"
-        wait(20)
 
         view.endFreeFocus()
 
@@ -1189,7 +1138,7 @@ TestCase {
         verify(recordButton)
         mouseClick(recordButton)
         // 接线：「记录」把「记录、不修正」交给控制器，成功后发 focusEnded。
-        tryCompare(controller.finishCalls, "length", 1)
+        tryVerify(function () { return controller.finishCalls.length === 1 }, 5000, "controller.finishCalls.length 应为 1")
         compare(controller.finishCalls[0].record, true)
         compare(controller.finishCalls[0].seconds, -1)
         tryCompare(focusEndedSpy, "count", 1)
@@ -1208,7 +1157,7 @@ TestCase {
         tryCompare(dialog, "opened", true)
         mouseClick(findChild(dialog, "longFreeFocusRecordButton"))
 
-        tryCompare(controller.finishCalls, "length", 1)
+        tryVerify(function () { return controller.finishCalls.length === 1 }, 5000, "controller.finishCalls.length 应为 1")
         tryCompare(view, "errorText", "控制器给的收尾失败文案")
         compare(focusEndedSpy.count, 0)
     }
@@ -1238,7 +1187,7 @@ TestCase {
         mouseClick(recordButton)
 
         // 接线：弹窗里填的 2 小时 15 分换算成秒交给控制器；修正是否合法由 C++ 服务层把关。
-        tryCompare(controller.finishCalls, "length", 1)
+        tryVerify(function () { return controller.finishCalls.length === 1 }, 5000, "controller.finishCalls.length 应为 1")
         compare(controller.finishCalls[0].record, true)
         compare(controller.finishCalls[0].seconds, 2 * 60 * 60 + 15 * 60)
         tryCompare(focusEndedSpy, "count", 1)
@@ -1279,7 +1228,7 @@ TestCase {
         hourField.text = "9"
         minuteField.text = "0"
         mouseClick(recordButton)
-        tryCompare(controller.finishCalls, "length", 1)
+        tryVerify(function () { return controller.finishCalls.length === 1 }, 5000, "controller.finishCalls.length 应为 1")
         compare(controller.finishCalls[0].seconds, 9 * 60 * 60)
     }
 
@@ -1336,7 +1285,7 @@ TestCase {
         mouseClick(discardButton)
 
         // 接线：「不记录」交给控制器的是 record=false。
-        tryCompare(controller.finishCalls, "length", 1)
+        tryVerify(function () { return controller.finishCalls.length === 1 }, 5000, "controller.finishCalls.length 应为 1")
         compare(controller.finishCalls[0].record, false)
         tryCompare(focusEndedSpy, "count", 1)
     }
@@ -1400,8 +1349,7 @@ TestCase {
         focusTimer.isRunning = true
         focusTimer.elapsedSeconds = 9 * 60 * 60
         controller.needsConfirmation = true
-        wait(20)
-        compare(view.pomodoroModeSelected, true)
+        tryCompare(view, "pomodoroModeSelected", true)
         compare(view.state, "pomoIdle")
         compare(focusTimer.mode, 0)
         compare(controller.planModeSwitch(view.selectedTaskId, view.selectedTaskTitle).kind, "pageOnly")
@@ -1418,7 +1366,7 @@ TestCase {
         mouseClick(findChild(dialog, "longFreeFocusRecordButton"))
 
         // 确认记录、控制器收尾成功后才换到自由页签，停在待机。
-        tryCompare(controller.finishCalls, "length", 1)
+        tryVerify(function () { return controller.finishCalls.length === 1 }, 5000, "controller.finishCalls.length 应为 1")
         compare(controller.finishCalls[0].record, true)
         tryCompare(view, "pomodoroModeSelected", false)
         compare(focusTimer.hasActiveSession, false)
@@ -1436,8 +1384,7 @@ TestCase {
         focusTimer.phase = 1
         view.clearSelectedTask()
         focusTimer.stopFocusFails = true
-        wait(20)
-        compare(view.pomodoroModeSelected, true)
+        tryCompare(view, "pomodoroModeSelected", true)
         compare(view.state, "pomoWork")
         compare(controller.planModeSwitch(view.selectedTaskId, view.selectedTaskTitle).kind, "pageOnly")
 
@@ -1487,26 +1434,22 @@ TestCase {
         // 自由模式有会话（含暂停）：可进。
         focusTimer.hasActiveSession = true
         focusTimer.isRunning = false
-        wait(20)
-        compare(view.immersiveAvailable, true)
+        tryCompare(view, "immersiveAvailable", true)
 
         // 番茄待机：不可进。
         focusTimer.hasActiveSession = false
         view.toPomodoroTab(true)
-        wait(20)
-        compare(view.state, "pomoIdle")
+        tryCompare(view, "state", "pomoIdle")
         compare(view.immersiveAvailable, false)
 
         // 番茄工作中：可进。
         view.startPomodoro()
-        wait(20)
-        compare(view.state, "pomoWork")
+        tryCompare(view, "state", "pomoWork")
         compare(view.immersiveAvailable, true)
 
         // 工作完成态：不可进（完成态按钮常驻，无需先全屏）。
         focusTimer.phaseCompleted(1)
-        wait(20)
-        compare(view.state, "workDone")
+        tryCompare(view, "state", "workDone")
         compare(view.immersiveAvailable, false)
     }
 
@@ -1626,8 +1569,7 @@ TestCase {
         view.toPomodoroTab(true)
         focusTimer.startBreakSeconds = 0
         focusTimer.phaseCompleted(1)
-        wait(60)
-        compare(view.state, "workDone")
+        tryCompare(view, "state", "workDone")
         compare(focusTimer.startBreakSeconds, 0)
     }
 
@@ -1669,9 +1611,8 @@ TestCase {
         focusTimer.hasActiveSession = true
         view.toPomodoroTab(true)
         view.startPomodoro()
-        wait(20)
 
-        verify(view.immersiveAvailable, "番茄工作段里沉浸入口应当开放，否则这条断言测不到重叠")
+        tryVerify(function() { return view.immersiveAvailable }, 5000, "番茄工作段里沉浸入口应当开放，否则这条断言测不到重叠")
 
         var capture = findChild(view, "focusGapCaptureButton")
         var immersive = findChild(view, "immersiveButton")
@@ -1698,7 +1639,7 @@ TestCase {
         focusTimer.hasActiveSession = true
         view.toPomodoroTab(true)
         view.startPomodoro()
-        wait(20)
+        TestWaits.letElapse(testCase, 20, "开始番茄后等工具钮排好版再记基准位置；之后要验证的是位置不变，没有可等的变化")
         var capture = findChild(view, "focusGapCaptureButton")
         verify(capture)
         var whileActive = capture.mapToItem(view, 0, 0)
@@ -1706,8 +1647,9 @@ TestCase {
         view.endPomodoro()
         focusTimer.hasActiveSession = false
         focusTimer.phase = 0
-        wait(20)
-        verify(!view.immersiveAvailable)
+        tryVerify(function() { return !view.immersiveAvailable })
+        // 要比的是重新排版后的坐标：等下一帧渲染完（布局在渲染前完成），否则读到的仍是旧位置、断言恒成立。
+        verify(waitForRendering(view))
 
         var whileIdle = capture.mapToItem(view, 0, 0)
         compare(Math.round(whileIdle.x), Math.round(whileActive.x))
@@ -1720,7 +1662,6 @@ TestCase {
         focusTimer.hasActiveSession = true
         view.toPomodoroTab(true)
         view.startPomodoro()
-        wait(20)
 
         var capture = findChild(view, "focusGapCaptureButton")
         var immersive = findChild(view, "immersiveButton")

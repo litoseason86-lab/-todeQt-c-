@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../qml/views"
 import "../../qml"
+import "TestWaits.js" as TestWaits
 
 // 同一天里的任务此前只能按创建时间排，十几条并列时无法表达「先做哪个」。
 // 拖动排序的界面契约：拖动期间只在本地换位，松手才落库；已完成的不参与。
@@ -144,11 +145,10 @@ TestCase {
     function test_queuedRefreshWaitsForDragEnd() {
         const view = createTemporaryObject(viewComponent, testCase)
         view.refresh()
-        wait(60)
         view.beginReorder(3)
         const reads = testCase.todayQueryCount
         taskManager.tasksChanged()
-        wait(30)
+        TestWaits.observe(testCase, 30, "拖动排序进行中收到 tasksChanged 不应重新查询；没有可等的信号，给它一个窗口确认没有查询")
         compare(testCase.todayQueryCount, reads)
         verify(coordinator.refreshBlocked)
         view.commitReorder(true)
@@ -163,7 +163,10 @@ TestCase {
         const view = createTemporaryObject(trackedViewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(60)
+        tryVerify(function() {
+            var l = findChild(view, "todayTaskList")
+            return l !== null && l.itemAtIndex(0) !== null
+        }, 3000, "前置：任务列表的行已建好")
         const list = findChild(view, "todayTaskList")
         const row = list.itemAtIndex(2)
         verify(!!row, "丙这一行的 delegate 未就绪")
@@ -187,7 +190,10 @@ TestCase {
     function test_releasedDragEndsTheRowRegistration() {
         const view = createTemporaryObject(trackedViewComponent, testCase)
         view.refresh()
-        wait(60)
+        tryVerify(function() {
+            var l = findChild(view, "todayTaskList")
+            return l !== null && l.itemAtIndex(0) !== null
+        }, 3000, "前置：任务列表的行已建好")
         const row = findChild(view, "todayTaskList").itemAtIndex(2)
         verify(!!row)
         row.dragStarted()
@@ -203,7 +209,10 @@ TestCase {
         var view = createTemporaryObject(viewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(60)
+        tryVerify(function() {
+            var l = findChild(view, "todayTaskList")
+            return l !== null && l.itemAtIndex(0) !== null
+        }, 3000, "前置：任务列表的行已建好")
 
         view.beginReorder(3)
         // 把丙拖到最上面。
@@ -229,7 +238,10 @@ TestCase {
         var view = createTemporaryObject(viewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(60)
+        tryVerify(function() {
+            var l = findChild(view, "todayTaskList")
+            return l !== null && l.itemAtIndex(0) !== null
+        }, 3000, "前置：任务列表的行已建好")
 
         view.beginReorder(3)
         view.updateReorder(3, 0)
@@ -246,7 +258,10 @@ TestCase {
         var view = createTemporaryObject(viewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(60)
+        tryVerify(function() {
+            var l = findChild(view, "todayTaskList")
+            return l !== null && l.itemAtIndex(0) !== null
+        }, 3000, "前置：任务列表的行已建好")
 
         var list = findChild(view, "todayTaskList")
         verify(!!list, "Object exists")
@@ -278,7 +293,10 @@ TestCase {
         var view = createTemporaryObject(viewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(60)
+        tryVerify(function() {
+            var l = findChild(view, "todayTaskList")
+            return l !== null && l.itemAtIndex(0) !== null
+        }, 3000, "前置：任务列表的行已建好")
 
         var list = findChild(view, "todayTaskList")
         verify(!!list, "Object exists")
@@ -297,7 +315,10 @@ TestCase {
         taskManager.rows = [makeTask(1, "甲"), makeTask(2, "已完成", true)]
         var view = createTemporaryObject(viewComponent, testCase)
         view.refresh()
-        wait(60)
+        tryVerify(function() {
+            var l = findChild(view, "todayTaskList")
+            return l !== null && l.itemAtIndex(0) !== null
+        }, 3000, "前置：任务列表的行已建好")
 
         var rows = findChild(view, "todayTaskList")
         verify(!!rows, "Object exists")
@@ -313,7 +334,10 @@ TestCase {
         var view = createTemporaryObject(viewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(60)
+        tryVerify(function() {
+            var l = findChild(view, "todayTaskList")
+            return l !== null && l.itemAtIndex(0) !== null
+        }, 3000, "前置：任务列表的行已建好")
 
         view.beginReorder(3)
         view.updateReorder(3, 0)
@@ -337,7 +361,10 @@ TestCase {
         var view = createTemporaryObject(viewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(60)
+        tryVerify(function() {
+            var l = findChild(view, "todayTaskList")
+            return l !== null && l.itemAtIndex(0) !== null
+        }, 3000, "前置：任务列表的行已建好")
 
         var list = findChild(view, "todayTaskList")
         verify(!!list, "Object exists")
@@ -379,12 +406,14 @@ TestCase {
         var view = createTemporaryObject(viewComponent, testCase)
         verify(!!view, "Component exists")
         view.refresh()
-        wait(80)
+        tryVerify(function() {
+            var l = findChild(view, "todayTaskList")
+            return l !== null && l.itemAtIndex(0) !== null
+        }, 3000, "前置：任务列表的行已建好")
 
         var list = findChild(view, "todayTaskList")
         verify(!!list, "Object exists")
         list.contentY = list.contentHeight - list.height
-        wait(60)
         verify(list.contentY > 0, "列表没有滚动，用例失去意义")
 
         // 把第 1 条拖到当前可见区域的中间位置。用 indexAt 独立求出那里到底是第几条，

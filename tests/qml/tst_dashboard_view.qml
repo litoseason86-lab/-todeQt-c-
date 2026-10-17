@@ -422,7 +422,6 @@ TestCase {
     function test_statCardsStayOnOneRowAtDefaultWindowWidth() {
         var view = createTemporaryObject(dashboardComponent, testCase, { width: 815, height: 740 })
         verify(view)
-        wait(50)
 
         var grid = findChild(view, "dashboardStatsGrid")
         verify(grid)
@@ -498,7 +497,6 @@ TestCase {
 
         view.completionRefreshDelayActive = true
         taskManager.tasksChanged()
-        wait(40)
         compare(taskManager.todayTasksCalls, callsBefore)
         view.completionRefreshDelayActive = false
     }
@@ -579,7 +577,7 @@ TestCase {
         view.filterMode = "all"
         compare(view.doneFilter, false)
         compare(countBadge.text, "3")
-        wait(40)
+        tryVerify(function () { var item = findFirstTaskItem(view); return item !== null && item.compact === false }, 5000, "切回全部后任务行没有回到可编辑规格")
         taskItem = findFirstTaskItem(view)
         verify(taskItem !== null)
         compare(taskItem.compact, false)
@@ -1019,7 +1017,11 @@ TestCase {
     function test_narrowDashboardKeepsTaskAndStatCardsInside() {
         var view = createTemporaryObject(dashboardComponent, testCase, { width: 590 })
         verify(view)
-        wait(50)
+        tryVerify(function () {
+            var panel = findChild(view, "dashboardTaskPanel")
+            var statCard = findChild(view, "todayFocusDurationCard")
+            return panel.width >= 500 && statCard.width >= 190 && statCard.mapToItem(view, statCard.width, 0).x <= view.width
+        }, 5000, "窄仪表盘的统计卡与任务面板没有排进视图")
         compare(view.compactLayout, true)
         compare(view.timerPanelVisible, false)
         var grid = findChild(view, "dashboardStatsGrid")

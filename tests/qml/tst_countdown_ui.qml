@@ -152,7 +152,6 @@ TestCase {
     function cleanup() {
         countdownDialog.close()
         countdownView.visible = false
-        wait(260)
     }
 
     function test_bannerRoutesEmptyAndExistingGoalClicks() {
@@ -165,7 +164,6 @@ TestCase {
 
     function test_dialogAddsGoalThroughInjectedService() {
         countdownDialog.openForAdd()
-        wait(120)
 
         var nameField = findChild(countdownDialog, "countdownNameField")
         var dateField = findChild(countdownDialog, "countdownDateField")
@@ -221,7 +219,6 @@ TestCase {
     function test_countdownViewReflectsPrimaryGoal() {
         fakeCountdownService.addGoal("研究生初试", new Date(2026, 11, 23))
         countdownView.visible = true
-        wait(80)
 
         verify(fakeCountdownService.primaryGoal !== null)
         compare(countdownModel.count, 1)
@@ -251,7 +248,7 @@ TestCase {
         })
         fakeCountdownService.primaryGoal = countdownModel.get(0)
         countdownView.visible = true
-        wait(100)
+        tryVerify(function () { return findChild(countdownView, "countdownSecondaryItem") !== null }, 5000, "次要目标列表的行还没建好")
 
         var list = findChild(countdownView, "countdownSecondaryList")
         var item = findChild(countdownView, "countdownSecondaryItem")

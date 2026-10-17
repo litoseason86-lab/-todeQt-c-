@@ -226,7 +226,7 @@ TestCase {
 
     function test_addRoutineShowsInList() {
         dialog.open()
-        wait(120)
+        tryCompare(dialog, "opened", true, 3000)
 
         var input = findChild(dialog, "routineTitleField")
         var addBtn = findChild(dialog, "routineAddButton")
@@ -237,7 +237,6 @@ TestCase {
 
         input.text = "背单词 list"
         dialog.submit()
-        wait(120)
 
         compare(testCase.added.length, 1)
         compare(testCase.added[0].title, "背单词 list")
@@ -258,7 +257,7 @@ TestCase {
 
     function test_emptyTitleDoesNotCallService() {
         dialog.open()
-        wait(120)
+        tryCompare(dialog, "opened", true, 3000)
 
         var input = findChild(dialog, "routineTitleField")
         verify(input !== null)
@@ -285,7 +284,7 @@ TestCase {
     function test_serviceUnavailableShowsInlineError() {
         dialog.routineManagerRef = null
         dialog.open()
-        wait(120)
+        tryCompare(dialog, "opened", true, 3000)
 
         var input = findChild(dialog, "routineTitleField")
         verify(input !== null)
@@ -299,7 +298,7 @@ TestCase {
 
     function test_categorySelectionPassesCategoryId() {
         dialog.open()
-        wait(120)
+        tryCompare(dialog, "opened", true, 3000)
 
         var combo = findChild(dialog, "routineCategoryCombo")
         verify(combo !== null)
@@ -317,19 +316,17 @@ TestCase {
 
     function test_routinesChangedRefreshesListAndDeleteRemovesItem() {
         dialog.open()
-        wait(120)
+        tryCompare(dialog, "opened", true, 3000)
 
         var list = findChild(dialog, "routineListView")
         verify(list !== null)
         testCase.added = [{ id: 42, title: "政治选择题", categoryId: -1, categoryName: "", categoryColor: "", active: true, displayOrder: 0 }]
         fakeRoutineManager.routinesChanged()
-        wait(120)
-        compare(list.count, 1)
+        tryCompare(list, "count", 1)
 
         dialog.deleteRoutine(42)
         tryCompare(dialog.deleteConfirmationRef, "opened", true)
         mouseClick(findChild(dialog.deleteConfirmationRef.contentItem, "confirmRoutineDeleteButton"))
-        wait(120)
         compare(testCase.deletedId, 42)
         compare(list.count, 0)
         dialog.close()

@@ -4,6 +4,7 @@ import QtQuick
 import QtTest
 import "../../qml/components"
 import "../../qml"
+import "TestWaits.js" as TestWaits
 
 TestCase {
     id: testCase
@@ -67,8 +68,7 @@ TestCase {
         // 根项不负责子 Layout 的 polish；等待固定项真正排到新窗口底部再发输入。
         tryCompare(sidebar, "height", 620, 3000)
         tryVerify(function () { return sidebarY(entry("设")) === 560 }, 3000)
-        // 让本轮布局排队的选中项定位回调执行完，再模拟下一轮用户输入。
-        wait(0)
+        TestWaits.letElapse(testCase, 0, "让本轮布局排队的选中项定位回调（Qt.callLater）执行完，再模拟下一轮用户输入；回调本身没有可等的状态")
     }
     function assertFixedBottom() {
         compare(sidebarY(entry("废")), 512)

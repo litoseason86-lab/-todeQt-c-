@@ -5,6 +5,7 @@ import QtQuick.Controls.Basic
 import QtTest
 import "../../qml"
 import "fixtures"
+import "TestWaits.js" as TestWaits
 
 // 全视图对比度门禁。
 //
@@ -573,7 +574,7 @@ TestCase {
         for (var i = 0; i < views.length; ++i) {
             mainWindow.currentView = views[i]
             mainWindow.pendingView = views[i]
-            wait(200)
+            TestWaits.letElapse(testCase, 200, "切页后让页面的激活刷新与排版走完再扫整页文字；扫描对象是整页，没有单一可等的就绪状态")
             if (views[i] === "memo") {
                 // 产品保证：两套主题都扫描真正带胶囊、组头、行和编辑区的备忘录页，不能空扫。
                 var memoPage = findChild(mainWindow, "memoViewPage")
@@ -643,7 +644,7 @@ TestCase {
         // 把当前周概览、已结束周的事实、错误态各扫一遍，否则目标、事实、对账与错误文字全在门禁之外。
         mainWindow.currentView = "stats"
         mainWindow.pendingView = "stats"
-        wait(100)
+        TestWaits.letElapse(testCase, 100, "切到统计页后让激活刷新与排版走完；下面要扫的是整页，没有单一可等的就绪状态")
         var statsView = statisticsViewOf(mainWindow)
         verify(statsView, "找不到统计页")
         var reviewCard = findChild(statsView, "statisticsWeeklyReviewCard")
@@ -653,7 +654,10 @@ TestCase {
         for (var r = 0; r < reviewStates.length; ++r) {
             statisticsService.weeklyReviewData = reviewStates[r].review
             statsView.refresh()
-            wait(100)
+            tryVerify(function () {
+                return reviewCard.implicitHeight > 100
+                        && reviewCard.errorState === (reviewStates[r].review.loadState === "error")
+            }, 3000, "前置：复盘卡换上了这组内容")
             // 防止空扫：卡片确实带着这组内容。
             verify(reviewCard.implicitHeight > 100, reviewStates[r].name)
             compare(reviewCard.errorState, reviewStates[r].review.loadState === "error", reviewStates[r].name)
@@ -672,10 +676,10 @@ TestCase {
             focusTimer.phase = mode === 0 ? 0 : mode === 1 ? 1 : 3
             focusTimer.hasActiveSession = mode !== 2
             focusTimer.isRunning = true
-            wait(100)
+            TestWaits.letElapse(testCase, 100, "计时状态改变后让各处文字、按钮换到计时态并排好版再扫；没有单一可等的状态")
             walk(mainWindow, tag + "计时模式" + mode, Theme.surface, 0)
             focusTimer.isRunning = false
-            wait(100)
+            TestWaits.letElapse(testCase, 100, "切到暂停后让文字与按钮换到暂停态并排好版再扫；没有单一可等的状态")
             walk(mainWindow, tag + "暂停模式" + mode, Theme.surface, 0)
         }
         focusTimer.hasActiveSession = false

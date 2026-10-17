@@ -56,7 +56,6 @@ TestCase {
     function test_valuePulseGatedByReduceMotion() {
         statCard.reduceMotionActive = false
         statCard.value = "1"
-        wait(20)
 
         statCard.value = "2"
         tryCompare(statCard, "valuePulseRunning", true, 3000)
@@ -64,7 +63,6 @@ TestCase {
 
         statCard.reduceMotionActive = true
         statCard.value = "3"
-        wait(20)
         compare(statCard.valuePulseRunning, false)
     }
 

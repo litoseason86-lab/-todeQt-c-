@@ -2,6 +2,7 @@ import QtQuick
 import QtTest
 import "../../qml/views"
 import "../../qml"
+import "TestWaits.js" as TestWaits
 
 // 今日任务页的「完成」弹窗接线：点卡片上的「完成」→ 写下记录 → 一次写库完成，
 // 与复选框共用完成动画的延迟刷新和撤销入口；以及编辑弹窗把完成记录原样转交给服务。
@@ -240,7 +241,7 @@ TestCase {
 
         compare(view.completionRefreshDelayActive, true)
         // 排队刷新走 Qt.callLater，下一轮事件循环就会执行；等过这一轮再看。
-        wait(60)
+        TestWaits.observe(testCase, 60, "排队刷新走 Qt.callLater，下一轮事件循环就会执行；确认这一轮过去后仍没有重读，没发生的事没有信号可等")
         compare(testCase.todayQueryCount, readsBefore)
         compare(row.visualTaskCompleted, true)
         // 动画放完后的整页刷新一并重读专注数据，所以跳过的那次刷新不会漏掉什么。

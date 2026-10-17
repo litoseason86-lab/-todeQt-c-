@@ -4,6 +4,7 @@ import QtQuick
 import QtQuick.Controls
 import QtTest
 import "../../qml"
+import "TestWaits.js" as TestWaits
 
 TestCase {
     id: testCase
@@ -698,14 +699,12 @@ TestCase {
         pendingDeletion.resetForTest()
         interactionCoordinator.pendingDeleteReports = 0
         interactionCoordinator.lastPendingDeleteId = -1
-        wait(20)
     }
 
     function test_freeModeStartsImmediately() {
         appSettings.lastMode = 0
 
         mainWindow.startFocusForTask(7, "自由任务")
-        wait(20)
 
         var focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
@@ -730,7 +729,7 @@ TestCase {
         appSettings.lastMode = 0
 
         mainWindow.startFocusForTask(12, "操作系统")
-        wait(20)
+        tryCompare(focusTimer, "startFocusCalls", 1)
 
         compare(focusTimer.startFocusCalls, 1)
         compare(focusView.pomodoroModeSelected, false)
@@ -740,7 +739,7 @@ TestCase {
 
         var startButton = findChild(focusView, "freeStartButton")
         verify(startButton)
-        wait(20)
+        tryCompare(focusTimer, "startFocusTaskId", 12)
         compare(focusTimer.startFocusTaskId, 12)
         compare(focusTimer.startFocusTaskTitle, "操作系统")
         compare(focusView.pomodoroModeSelected, false)
@@ -752,9 +751,8 @@ TestCase {
         appSettings.lastMode = 1
 
         mainWindow.startFocusForTask(9, "番茄任务")
-        wait(20)
 
-        compare(focusTimer.startPomodoroCalls, 1)
+        tryCompare(focusTimer, "startPomodoroCalls", 1)
         compare(focusTimer.phase, 1)
         var focusView = findChild(mainWindow, "focusViewPage")
         verify(focusView)
@@ -835,7 +833,7 @@ TestCase {
         focusSessionController.planOverride = { kind: "apply", usePomodoro: true, autoStart: false, title: "任务" }
 
         mainWindow.startFocusForTask(7, "任务")
-        wait(20)
+        TestWaits.observe(testCase, 20, "计划要求不自动开始时不应调用开始计时；没有可等的信号，给它一个窗口确认没有开始")
 
         compare(focusSessionController.planCalls.length >= 1, true)
         compare(focusSessionController.planCalls[0].taskId, 7)
@@ -854,7 +852,7 @@ TestCase {
         focusSessionController.planOverride = { kind: "apply", usePomodoro: false, autoStart: true, title: "任务" }
 
         mainWindow.startFocusForTask(7, "任务")
-        wait(20)
+        tryCompare(focusTimer, "startFocusCalls", 1)
 
         compare(focusTimer.startFocusCalls, 1)
         compare(focusTimer.startPomodoroCalls, 0)
@@ -1013,9 +1011,8 @@ TestCase {
         verify(toast)
 
         focusTimer.sessionDiscarded(60)
-        wait(20)
 
-        compare(toast.shown, true)
+        tryCompare(toast, "shown", true)
         var label = findChild(mainWindow, "toastText")
         compare(label.text, "本次专注不足 3 分钟，未计入记录")
     }
@@ -1459,9 +1456,8 @@ TestCase {
         appSettings.lastMode = 0
 
         mainWindow.triggerShortcutAction("focus.toggle")
-        wait(40)
 
-        compare(focusTimer.startFocusCalls, 1)
+        tryCompare(focusTimer, "startFocusCalls", 1)
         compare(focusTimer.startFocusTaskId, 31)
         compare(focusTimer.startFocusTaskTitle, "高数")
     }
@@ -1476,9 +1472,8 @@ TestCase {
         appSettings.lastMode = 0
 
         mainWindow.triggerShortcutAction("focus.toggle")
-        wait(40)
 
-        compare(focusTimer.startFocusCalls, 1)
+        tryCompare(focusTimer, "startFocusCalls", 1)
         compare(focusTimer.startFocusTaskId, 42)
     }
 
@@ -1493,10 +1488,9 @@ TestCase {
         appSettings.lastMode = 0
 
         mainWindow.triggerShortcutAction("focus.toggle")
-        wait(40)
 
         // 刚在今日页点过某条再按快捷键，不该被换成列表第一条。
-        compare(focusTimer.startFocusTaskId, 52)
+        tryCompare(focusTimer, "startFocusTaskId", 52)
     }
 
     function test_shortcutWithNoTodayTasksOpensPicker() {
@@ -1504,7 +1498,10 @@ TestCase {
         var view = focusPage()
 
         mainWindow.triggerShortcutAction("focus.toggle")
-        wait(40)
+        tryVerify(function() {
+            var p = findChild(view, "focusTaskPicker")
+            return p !== null && p.expanded
+        }, 3000, "快捷键没有展开任务选择器")
 
         compare(focusTimer.startFocusCalls, 0)
         compare(focusTimer.startPomodoroCalls, 0)
@@ -1524,7 +1521,10 @@ TestCase {
         var view = focusPage()
 
         mainWindow.triggerShortcutAction("focus.toggle")
-        wait(40)
+        tryVerify(function() {
+            var p = findChild(view, "focusTaskPicker")
+            return p !== null && p.expanded
+        }, 3000, "快捷键没有展开任务选择器")
 
         compare(focusTimer.startFocusCalls, 0)
         compare(focusTimer.startPomodoroCalls, 0)
@@ -1681,7 +1681,7 @@ TestCase {
         compare(view.taskSelectorActive, true)
 
         mainWindow.startFocusForTask(81, "正在做的")
-        wait(40)
+        tryCompare(view, "taskSelectorActive", false)
 
         // 计时中任务由计时器说了算，换任务要走既有的确认流程，这里不能再给选择器。
         compare(view.taskSelectorActive, false)
@@ -1694,14 +1694,12 @@ TestCase {
         ]
         appSettings.lastMode = 0
         mainWindow.startFocusForTask(91, "在跑的任务")
-        wait(40)
-        compare(focusTimer.startFocusCalls, 1)
+        tryCompare(focusTimer, "startFocusCalls", 1)
 
         mainWindow.triggerShortcutAction("focus.toggle")
-        wait(40)
 
         // 没有开出第二段会话。
-        compare(focusTimer.startFocusCalls, 1)
+        tryCompare(focusTimer, "startFocusCalls", 1)
     }
 
     // —— 记一笔的键盘入口 ——
@@ -1719,10 +1717,8 @@ TestCase {
         ]
         appSettings.lastMode = 0
         mainWindow.startFocusForTask(56, "正在做的英语")
-        wait(40)
-        compare(focusTimer.isRunning, true)
+        tryCompare(focusTimer, "isRunning", true)
         mainWindow.currentView = "focus"
-        wait(40)
 
         mainWindow.triggerShortcutAction("gap.capture")
 
@@ -1779,7 +1775,6 @@ TestCase {
         ]
         // 专注页只在自己是当前页时响应 tasksChanged（切回本页时另有重读），所以先切过去。
         mainWindow.currentView = "focus"
-        wait(40)
         var view = focusPage()
         view.reloadTodayTasks()
         var picker = findChild(view, "focusTaskPicker")
@@ -1792,9 +1787,8 @@ TestCase {
             { id: 82, title: "绑定的这条", completed: true, displayOrder: 2 }
         ]
         taskManager.tasksChanged()
-        wait(40)
 
-        compare(view.selectedTaskId, 82)
+        tryCompare(view, "selectedTaskId", 82)
         compare(picker.currentTaskId, 82)
         var ids = picker.candidates.map(function (task) { return Number(task.id) })
         verify(ids.indexOf(82) >= 0, "绑定任务不在候选里：" + JSON.stringify(ids))
@@ -1808,7 +1802,6 @@ TestCase {
             { id: 84, title: "要改期的", completed: false, displayOrder: 2 }
         ]
         mainWindow.currentView = "focus"
-        wait(40)
         var view = focusPage()
         view.reloadTodayTasks()
         var picker = findChild(view, "focusTaskPicker")
@@ -1819,9 +1812,8 @@ TestCase {
             { id: 83, title: "今天的", completed: false, displayOrder: 1 }
         ]
         taskManager.tasksChanged()
-        wait(40)
 
-        compare(picker.currentTaskId, 84)
+        tryCompare(picker, "currentTaskId", 84)
         compare(Number(picker.candidates[0].id), 84)
     }
 
@@ -1844,7 +1836,6 @@ TestCase {
         ]
         appSettings.lastMode = 0
         mainWindow.startFocusForTask(55, "正在做的数学")
-        wait(40)
         mainWindow.currentView = "focus"
 
         mainWindow.triggerShortcutAction("gap.capture")
@@ -1892,7 +1883,6 @@ TestCase {
         var switchDialog = findChild(mainWindow, "focusSwitchDialog")
         verify(switchDialog)
         switchDialog.open()
-        wait(60)
 
         if (!mainWindow.overlayHoldsFocus) {
             // 离屏平台下弹窗不一定真的拿到焦点；拿不到就不断言这条，
@@ -1957,7 +1947,6 @@ TestCase {
         mainWindow.showToast("基线提示")
 
         mainWindow.triggerShortcutAction("focus.toggle")
-        wait(40)
 
         var label = findChild(mainWindow, "toastText")
         verify(label)
@@ -2022,7 +2011,6 @@ TestCase {
 
         var switchDialog = findChild(mainWindow, "focusSwitchDialog")
         switchDialog.open()
-        wait(60)
         if (!mainWindow.overlayHoldsFocus) {
             switchDialog.close()
             mainWindow.cancelPendingGapCapture()
@@ -2040,14 +2028,13 @@ TestCase {
         // 请求挂起后开始了备份/恢复：激活时数据库正处在临界区。
         // 初次分发时的守卫挡不住这条延后执行的路径，执行前必须把数据库阻断也判进去。
         mainWindow.currentView = viewName
-        wait(40)
         mainWindow.windowActive = false
         mainWindow.triggerShortcutAction("global.captureGap")
         compare(mainWindow.pendingGapCapture, true)
 
         backupService.operationBlocksUi = true
         mainWindow.windowActive = true
-        wait(60)
+        tryCompare(mainWindow, "pendingGapCapture", false)
 
         var globalPopup = findChild(mainWindow, "globalKnowledgeGapCapturePopup")
         var focusPopup = findChild(findChild(mainWindow, "focusViewPage"),
@@ -2059,12 +2046,12 @@ TestCase {
 
         // 阻断结束后也不补弹，再切一次前后台同样不弹。
         backupService.operationBlocksUi = false
-        wait(60)
+        TestWaits.observe(testCase, 60, "阻断结束后不应补弹记录浮层；没有可等的信号，给它一个窗口确认没有弹出")
         compare(globalPopup.opened, false)
         compare(focusPopup.opened, false)
         mainWindow.windowActive = false
         mainWindow.windowActive = true
-        wait(60)
+        TestWaits.observe(testCase, 60, "再切一次前后台也不应补弹；没有可等的信号，给它一个窗口确认没有弹出")
         compare(globalPopup.opened, false)
         compare(focusPopup.opened, false)
         compare(knowledgeGapService.captureCalls, 0)
@@ -2089,7 +2076,6 @@ TestCase {
         focusTimer.isRunning = true
         focusTimer.currentTaskId = 55
         focusTimer.currentTaskTitle = "休息前做的任务"
-        wait(40)
         var focusView = findChild(mainWindow, "focusViewPage")
         compare(focusView.state, "manualRest")
 
@@ -2159,9 +2145,8 @@ TestCase {
         // 接线：结束交给控制器；连续计数归零由控制器负责（C++ endPomodoroResetsConsecutiveCount）。
         compare(focusSessionController.endCurrentCalls, 1)
         compare(focusTimer.stopFocusCalls, 1)
-        wait(40)
         // 从仪表盘结束就留在仪表盘；「结束后回今日页」只针对从专注页结束。
-        compare(mainWindow.currentView, "dashboard")
+        tryCompare(mainWindow, "currentView", "dashboard")
     }
 
     function test_dashboardStopFailureIsVisible() {

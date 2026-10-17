@@ -108,7 +108,6 @@ TestCase {
         completionDialog.close()
         completionDialog.maxNotesLength = 2000
         testCase.lastSubmission = null
-        wait(20)
     }
 
     function isoWithOffset(offset) {
@@ -134,7 +133,6 @@ TestCase {
 
     function test_openPrefillsFields() {
         dialog.openForTask({ id: 7, title: "高数例题", categoryId: 5, date: isoWithOffset(0) })
-        wait(20)
 
         const titleField = findChild(dialog, "editTitleField")
         verify(titleField)
@@ -149,7 +147,7 @@ TestCase {
 
     function test_offPresetDateKeepsOriginal() {
         dialog.openForTask({ id: 8, title: "旧任务", categoryId: -1, date: "2026-06-30" })
-        wait(20)
+        tryCompare(dialog, "opened", true)
 
         compare(dialog.dateOffsetSelection, -1)
         compare(dialog.resultIsoDate(), "2026-06-30")
@@ -175,7 +173,6 @@ TestCase {
 
     function test_submitEmitsEditedValues() {
         dialog.openForTask({ id: 9, title: "旧标题", categoryId: -1, date: isoWithOffset(0) })
-        wait(20)
 
         const titleField = findChild(dialog, "editTitleField")
         titleField.text = "  新标题  "
@@ -198,7 +195,7 @@ TestCase {
     function test_submitSendsOnlyChangedFields() {
         dialog.openForTask({ id: 21, title: "整理错题", categoryId: 3, date: "2026-06-30",
                              estimatedMinutes: 60, notes: "原备注" })
-        wait(20)
+        tryCompare(dialog, "opened", true)
         compare(dialog.dateOffsetSelection, -1, "前置：日期不在快捷项里，走日期框")
         findChild(dialog, "editNotesField").text = "  新备注  "
         dialog.submit()
@@ -249,7 +246,6 @@ TestCase {
     function test_categoryChangeSendsOnlyCategory() {
         dialog.openForTask({ id: 23, title: "阅读", categoryId: 3, date: isoWithOffset(0),
                              estimatedMinutes: 0, notes: "" })
-        wait(20)
         verify(dialog.selectCategoryById(5))
         dialog.submit()
         compare(editedSpy.count, 1)
@@ -263,7 +259,7 @@ TestCase {
     function test_missingCategoryIsNotRewritten() {
         dialog.openForTask({ id: 24, title: "旧科目的任务", categoryId: 99, date: isoWithOffset(0),
                              estimatedMinutes: 0, notes: "" })
-        wait(20)
+        tryCompare(dialog, "opened", true)
         compare(Number(dialog.categoryOptions[findChild(dialog, "editCategoryCombo").currentIndex].id), -1,
                 "前置：下拉里没有科目 99，落在「不设置科目」")
         findChild(dialog, "editTitleField").text = "改个名"
@@ -274,7 +270,7 @@ TestCase {
 
     function test_blankTitleBlocksSubmit() {
         dialog.openForTask({ id: 10, title: "有内容", categoryId: -1, date: isoWithOffset(0) })
-        wait(20)
+        tryCompare(dialog, "opened", true)
 
         const titleField = findChild(dialog, "editTitleField")
         titleField.text = "   "
@@ -302,7 +298,6 @@ TestCase {
 
     function test_panelIsGlassDialog() {
         dialog.openForTask({ id: 1, title: "任意", categoryId: -1, date: isoWithOffset(0) })
-        wait(20)
         var panel = findChild(dialog, "editDialogPanel")
         verify(panel)
         verify(Qt.colorEqual(panel.color, Theme.glassDialog))
@@ -320,7 +315,6 @@ TestCase {
     function test_openPrefillsEstimateAsHoursAndMinutes() {
         estimateDialog.openForTask({ id: 11, title: "线代", categoryId: 3,
                                      date: isoWithOffset(0), estimatedMinutes: 150 })
-        wait(20)
 
         var fields = estimateFieldsOf(estimateDialog)
         compare(fields.hour.text, "2")
@@ -330,7 +324,6 @@ TestCase {
         estimateDialog.close()
         estimateDialog.openForTask({ id: 12, title: "英语", categoryId: 5,
                                      date: isoWithOffset(0), estimatedMinutes: 45 })
-        wait(20)
         fields = estimateFieldsOf(estimateDialog)
         compare(fields.hour.text, "0")
         compare(fields.minute.text, "45")
@@ -342,7 +335,6 @@ TestCase {
         estimateDialog.close()
         estimateDialog.openForTask({ id: 12, title: "英语", categoryId: 5,
                                      date: isoWithOffset(0), estimatedMinutes: 45 })
-        wait(20)
         fields = estimateFieldsOf(estimateDialog)
         compare(fields.hour.text, "0")
         compare(fields.minute.text, "45")
@@ -354,7 +346,7 @@ TestCase {
         estimateDialog.openForTask({ id: 14, title: "高数", categoryId: 3,
                                      date: isoWithOffset(0), estimatedMinutes: 60,
                                      notes: "原备注" })
-        wait(20)
+        tryCompare(estimateDialog, "opened", true)
 
         var notes = findChild(estimateDialog, "editNotesField")
         var longNotes = new Array(estimateDialog.maxNotesLength + 2).join("y")
@@ -369,7 +361,6 @@ TestCase {
     function test_editedEstimateIsSubmittedAsMinutes() {
         estimateDialog.openForTask({ id: 13, title: "高数", categoryId: 3,
                                      date: isoWithOffset(0), estimatedMinutes: 60 })
-        wait(20)
 
         var fields = estimateFieldsOf(estimateDialog)
         fields.hour.text = "1"
@@ -381,7 +372,7 @@ TestCase {
     function test_incompleteEstimateBlocksEditSubmit() {
         estimateDialog.openForTask({ id: 14, title: "政治", categoryId: 3,
                                      date: isoWithOffset(0), estimatedMinutes: 60 })
-        wait(20)
+        tryCompare(estimateDialog, "opened", true)
 
         var fields = estimateFieldsOf(estimateDialog)
         fields.hour.text = ""
@@ -399,7 +390,7 @@ TestCase {
     function test_categoryReadFailureKeepsSelectedCategory() {
         dialog.openForTask({ id: 31, title: "背单词", categoryId: 5, date: isoWithOffset(0),
                              estimatedMinutes: 0, notes: "" })
-        wait(20)
+        tryCompare(dialog, "opened", true)
         var combo = findChild(dialog, "editCategoryCombo")
         compare(Number(dialog.categoryOptions[combo.currentIndex].id), 5, "前置：选中的是科目 5")
         compare(dialog.errorText, "", "前置：打开时读得到科目")
@@ -455,8 +446,7 @@ TestCase {
     function test_completedTaskEditsCompletionNote() {
         completionDialog.openForTask({ id: 8, title: "数据结构", categoryId: -1, date: isoWithOffset(0),
                                        completed: true, notes: "第三章", completionNote: "做完 1–10 题" })
-        wait(20)
-        compare(completionDialog.editingCompleted, true)
+        tryCompare(completionDialog, "editingCompleted", true)
         const field = findChild(completionDialog, "editCompletionNoteField")
         verify(field)
         compare(field.text, "做完 1–10 题")
@@ -475,7 +465,7 @@ TestCase {
         // 若带上空串，取消完成前写的记录就会被悄悄清空。改一下标题，确保这次确实提交了。
         completionDialog.openForTask({ id: 9, title: "高等数学", categoryId: -1, date: isoWithOffset(0),
                                        completed: false, completionNote: "取消完成前写的" })
-        wait(20)
+        tryCompare(completionDialog, "opened", true)
         compare(completionDialog.editingCompleted, false)
         findChild(completionDialog, "editTitleField").text = "高等数学（下）"
         completionDialog.submit()
@@ -487,7 +477,7 @@ TestCase {
         completionDialog.maxNotesLength = 10
         completionDialog.openForTask({ id: 8, title: "数据结构", categoryId: -1, date: isoWithOffset(0),
                                        completed: true, completionNote: "" })
-        wait(20)
+        tryCompare(completionDialog, "opened", true)
         const field = findChild(completionDialog, "editCompletionNoteField")
 
         // 超一个字：拦下、指明是完成记录，草稿原样保留。

@@ -160,7 +160,6 @@ TestCase {
         focusTimer.elapsedSeconds = 0
         view.pendingDeleteTaskId = -1
         view.refresh()
-        wait(20)
     }
 
     function makeOverdue(id, title) {
@@ -178,9 +177,8 @@ TestCase {
 
         taskManager.overdueData = [makeOverdue(11, "上周残留"), makeOverdue(12, "昨天残留")]
         view.refresh()
-        wait(20)
 
-        compare(view.rolloverBannerActive, true)
+        tryCompare(view, "rolloverBannerActive", true)
         const text = findChild(view, "rolloverBannerText")
         verify(text)
         verify(text.text.indexOf("2") !== -1)
@@ -190,7 +188,6 @@ TestCase {
     function test_bannerSaysHowFarBackItLooks() {
         taskManager.overdueData = [makeOverdue(11, "上周残留"), makeOverdue(12, "昨天残留")]
         view.refresh()
-        wait(20)
         compare(findChild(view, "rolloverBannerText").text, "最近 7 天还有 2 个未完成任务")
 
         // 服务上下文没有提供天数时不编一个数，退回不带天数的说法。
@@ -201,10 +198,8 @@ TestCase {
     function test_moveAllSendsIdsAndHidesBanner() {
         taskManager.overdueData = [makeOverdue(11, "上周残留"), makeOverdue(12, "昨天残留")]
         view.refresh()
-        wait(20)
 
         view.moveOverdueToToday()
-        wait(20)
 
         compare(taskManager.moveCalls, 1)
         compare(taskManager.movedIds.length, 2)
@@ -216,17 +211,14 @@ TestCase {
     function test_ignoreHidesForTodayAndPersistsDate() {
         taskManager.overdueData = [makeOverdue(11, "上周残留")]
         view.refresh()
-        wait(20)
-        compare(view.rolloverBannerActive, true)
+        tryCompare(view, "rolloverBannerActive", true)
 
         view.ignoreOverdueForToday()
-        wait(20)
 
         compare(settingsMock.rolloverIgnoredDate, view.todayIsoDate())
         compare(view.rolloverBannerActive, false)
 
         view.refresh()
-        wait(20)
         compare(view.rolloverBannerActive, false)
     }
 
@@ -236,17 +228,14 @@ TestCase {
             { id: 32, title: "待删", completed: false, date: "2026-07-06", categoryId: -1 }
         ]
         view.refresh()
-        wait(20)
-        compare(view.tasks.length, 2)
+        tryVerify(function () { return view.tasks.length === 2 }, 5000, "view.tasks.length 应为 2")
 
         view.pendingDeleteTaskId = 32
-        wait(20)
-        compare(view.tasks.length, 1)
+        tryVerify(function () { return view.tasks.length === 1 }, 5000, "view.tasks.length 应为 1")
         compare(Number(view.tasks[0].id), 31)
 
         view.pendingDeleteTaskId = -1
-        wait(20)
-        compare(view.tasks.length, 2)
+        tryVerify(function () { return view.tasks.length === 2 }, 5000, "view.tasks.length 应为 2")
     }
 
     function test_pendingDeletePreviewsTaskCountsButKeepsFocusTime() {
@@ -262,13 +251,11 @@ TestCase {
         }
         view.pendingDeleteTaskId = -1
         view.refresh()
-        wait(20)
         compare(Number(view.todayStats.totalTasks), 3)
         compare(Number(view.todayStats.completedTasks), 2)
 
         view.pendingDeleteTaskId = 42
         view.refresh()
-        wait(20)
         compare(Number(view.todayStats.totalTasks), 2)
         compare(Number(view.todayStats.completedTasks), 1)
         compare(Number(view.todayStats.completionRate), 0.5)
@@ -276,7 +263,6 @@ TestCase {
 
         view.pendingDeleteTaskId = -1
         view.refresh()
-        wait(20)
         compare(Number(view.todayStats.totalTasks), 3)
         compare(Number(view.todayStats.completedTasks), 2)
     }

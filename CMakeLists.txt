@@ -2153,6 +2153,18 @@ if(Python3_FOUND)
     set_tests_properties(QmlTextFormatGate PROPERTIES TIMEOUT 60)
     message(STATUS "QML 文本格式门禁已启用")
 
+    # 固定等待门禁（062 A059）：tests/qml 下不直接写 wait()/qWait()。固定时长要么白等，要么在并行负载下不够长；
+    # 等状态用 tryCompare / tryVerify，确需时间窗（确认没发生、让计时器下一拍走完）走 TestWaits.js 并写明原因。
+    add_test(NAME QmlFixedWaitGate
+             COMMAND ${Python3_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml_fixed_wait_gate.py
+                     ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml)
+    set_tests_properties(QmlFixedWaitGate PROPERTIES TIMEOUT 60)
+    # 门禁自身的自检：每种直接等待写法都拦、注释与字符串不误报、TestWaits 调用必须写原因。
+    add_test(NAME QmlFixedWaitGateTests
+             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_qml_fixed_wait_gate.py)
+    set_tests_properties(QmlFixedWaitGateTests PROPERTIES TIMEOUT 30)
+
     # 悬停过渡门禁：带 `Behavior on color` 的状态色不得回落到黑基透明。
     # Qt 的 "transparent" / Qt.rgba(0,0,0,0) 是透明黑，ColorAnimation 会从它插值出灰色，
     # 界面上就是「鼠标刚放上去，按钮下面闪过一道阴影」。同样是纯文本判据，跟着上面这条走。

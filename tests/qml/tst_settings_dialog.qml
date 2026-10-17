@@ -56,7 +56,6 @@ TestCase {
         dialog.currentSection = 0
         dialog.statusIsError = false
         dialog.statusText = "设置将自动保存到本机"
-        wait(20)
     }
 
     function test_shellUsesSixCategoryNavigation() {

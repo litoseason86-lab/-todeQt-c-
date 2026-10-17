@@ -78,7 +78,6 @@ TestCase {
         var timeline = createTemporaryObject(timelineComponent, testCase,
                                              { sessions: testCase.sampleSessions })
         verify(timeline)
-        wait(50)
 
         // 关键断言：任务标题必须真的出现在渲染出来的文本里。
         // delegate 的 modelData 被限定错对象时，这些文本会全部变成空/undefined。
@@ -158,7 +157,6 @@ TestCase {
     function test_empty_sessions_render_without_error() {
         var timeline = createTemporaryObject(timelineComponent, testCase, { sessions: [] })
         verify(timeline)
-        wait(50)
         // 空列表不该抛异常，也不该渲染出任何会话文本。
         var texts = collectTexts(timeline, [])
         verify(texts.indexOf("英语阅读") < 0)

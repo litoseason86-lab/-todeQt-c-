@@ -3,6 +3,7 @@ import QtTest
 import "../../qml/components"
 import "../../qml/views"
 import "../../qml"
+import "TestWaits.js" as TestWaits
 
 TestCase {
     id: testCase
@@ -502,7 +503,7 @@ TestCase {
 
         Theme.reduceMotion = true;
         taskItem.taskCompleted = true;
-        wait(30);
+        TestWaits.observe(testCase, 30, "减少动态效果时完成任务不应放粒子；没有可等的信号，给它一个窗口确认没有粒子");
 
         compare(container.particleCount, 0);
     }
@@ -534,15 +535,15 @@ TestCase {
         tryCompare(container, "particleCount", 6, testCase.uiTimeout);
 
         taskItem.taskCompleted = false;
-        wait(40);
+        TestWaits.letElapse(testCase, 40, "取消完成后隔一小段再重新完成，模拟快速反复点；要的就是这段间隔本身");
         taskItem.taskCompleted = true;
-        wait(120);
+        TestWaits.observe(testCase, 120, "上一组粒子还在播时重新完成不应叠加第二组；没有可等的信号，给它一个窗口确认仍是 6 个");
         compare(container.particleCount, 6);
 
         tryCompare(container, "particleCount", 0, testCase.uiTimeout);
 
         taskItem.taskCompleted = false;
-        wait(220);
+        TestWaits.letElapse(testCase, 220, "取消后隔 220 毫秒再完成，覆盖上一组已结束后的再次播放；要的就是这段间隔本身");
         taskItem.taskCompleted = true;
         tryCompare(container, "particleCount", 6, testCase.uiTimeout);
         tryCompare(container, "particleCount", 0, testCase.uiTimeout);
@@ -552,7 +553,7 @@ TestCase {
         var container = initiallyCompletedParticleContainer();
         verify(container !== null);
 
-        wait(900);
+        TestWaits.observe(testCase, 900, "初始即完成的行不应在加载后补放粒子；窗口覆盖一次完整的粒子动画");
         compare(initiallyCompletedTaskItem.taskCompleted, true);
         compare(container.particleCount, 0);
     }
@@ -587,7 +588,7 @@ TestCase {
         tryCompare(container, "particleCount", 0, testCase.uiTimeout);
 
         taskItem.taskCompleted = false;
-        wait(120);
+        TestWaits.observe(testCase, 120, "取消完成不应放粒子；没有可等的信号，给它一个窗口确认没有粒子");
         compare(container.particleCount, 0);
 
         taskItem.taskCompleted = true;
@@ -912,7 +913,6 @@ TestCase {
     }
 
     function test_todayTaskViewUsesOptimizedCardsAndControls() {
-        wait(80);
 
         var addButton = findChild(todayTaskView, "todayAddButton");
         var addButtonBackground = findChild(todayTaskView, "todayAddButtonBackground");
@@ -953,7 +953,11 @@ TestCase {
 
     function test_monthGoalViewUsesOptimizedCalendarAndPanels() {
         monthGoalView.visible = true;
-        wait(80);
+        tryVerify(function () {
+            var calendar = findChild(monthGoalView, "monthCalendarContainer");
+            return calendar !== null && calendar.width > 0
+                    && findChild(monthGoalView, "monthDayCell-" + monthGoalView.selectedDay) !== null;
+        }, testCase.uiTimeout, "前置：月历排好版、选中日的格子已建好");
 
         var previousButton = findChild(monthGoalView, "monthPreviousButton");
         var currentButton = findChild(monthGoalView, "monthCurrentButton");
@@ -1005,7 +1009,6 @@ TestCase {
         taskManager.fakeWeekTasks = []
         weekPlanView.visible = true
         weekPlanView.refresh()
-        wait(80)
 
         var emptyCard = findChild(weekPlanView, "weekEmptyDayCard")
         verify(emptyCard, "空日子占位块应有 objectName 供守护")
@@ -1015,7 +1018,6 @@ TestCase {
 
     function test_weekScrollTrackTransparent() {
         weekPlanView.visible = true
-        wait(80)
 
         var bar = findChild(weekPlanView, "weekScrollBar")
         verify(bar)
@@ -1025,7 +1027,6 @@ TestCase {
 
     function test_todayFocusTimelineScrollTrackTransparent() {
         todayFocusView.visible = true
-        wait(80)
 
         var bar = findChild(todayFocusView, "focusTimelineVerticalScrollBar")
         verify(bar)
@@ -1034,7 +1035,6 @@ TestCase {
 
     function test_monthContainersAreGlass() {
         monthGoalView.visible = true
-        wait(80)
 
         var calendar = findChild(monthGoalView, "monthCalendarContainer")
         verify(calendar)
@@ -1044,7 +1044,6 @@ TestCase {
 
     function test_todayFocusTimelineIsGlass() {
         todayFocusView.visible = true
-        wait(80)
 
         var timeline = findChild(todayFocusView, "focusTimelinePanel")
         verify(timeline)

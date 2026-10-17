@@ -241,7 +241,7 @@ TestCase {
         // QtTest 在 macOS 上不稳定触发真实 hover，这里直接验证组件内部悬停状态。
         inactiveItem.setPointerInside(true);
         tryCompare(inactiveItem, "visualHovered", true, 3000);
-        wait(1200);
+        tryVerify(function () { return Qt.colorEqual(inactiveItem.color, sidebar.sidebarItemHoverColor); }, 3000, "悬停底色的渐变没有走到目标色");
 
         verify(Qt.colorEqual(inactiveItem.color, sidebar.sidebarItemHoverColor));
         verify(Qt.colorEqual(inactiveItem.border.color, Theme.border));
@@ -256,7 +256,7 @@ TestCase {
         tryCompare(inactiveItem, "visualHovered", true, 3000);
         inactiveItem.setPointerInside(false);
         tryCompare(inactiveItem, "visualHovered", false, 3000);
-        wait(1200);
+        tryVerify(function () { return Qt.colorEqual(inactiveItem.color, sidebar.sidebarItemIdleColor); }, 3000, "退场底色的渐变没有走到目标色");
 
         // 退场目标色必须是白基透明，不用 Qt 的黑基 transparent，避免 hover 动画插出灰闪。
         verify(Qt.colorEqual(inactiveItem.color, sidebar.sidebarItemIdleColor));
@@ -283,7 +283,6 @@ TestCase {
         focusTimerMock.mode = 1;
         focusTimerMock.phase = 1;
         focusTimerMock.remainingSeconds = 932;
-        wait(20);
 
         const status = findChild(sidebar, "sidebarStatus-专");
         verify(status);
@@ -301,7 +300,6 @@ TestCase {
         focusTimerMock.mode = 1
         focusTimerMock.phase = 1
         focusTimerMock.remainingSeconds = 300
-        wait(20)
 
         var pulse = findChild(sidebar, "sidebarStatusPulse-专")
         verify(pulse)
@@ -322,7 +320,6 @@ TestCase {
         focusTimerMock.mode = 0;
         focusTimerMock.phase = 0;
         focusTimerMock.elapsedSeconds = 1934;
-        wait(20);
 
         const status = findChild(sidebar, "sidebarStatus-专");
         verify(status);
@@ -339,7 +336,6 @@ TestCase {
         focusTimerMock.isRunning = false;
         focusTimerMock.mode = 0;
         focusTimerMock.phase = 0;
-        wait(20);
 
         const status = findChild(sidebar, "sidebarStatus-专");
         verify(status);

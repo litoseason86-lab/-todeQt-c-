@@ -116,7 +116,6 @@ TestCase {
         var dialog = createTemporaryObject(addComponent, testCase)
         verify(dialog)
         dialog.open()
-        wait(50)
 
         var field = findChild(dialog, "titleField")
         verify(field)
@@ -152,12 +151,10 @@ TestCase {
                                            { categoryManagerRef: categoryManagerMock })
         verify(dialog)
         dialog.open()
-        wait(50)
 
         var combo = findChild(dialog, "categoryComboBox")
         verify(combo)
         combo.popup.open()
-        wait(80)
 
         // 这就是上报的那一处：面板底走 palette.window，不接管就是白的，
         // 而选项文字是跟着主题的米白 —— 夜间主题下白底米白字，看不见。
@@ -204,7 +201,6 @@ TestCase {
         var dialog = createTemporaryObject(addComponent, testCase)
         verify(dialog)
         dialog.open()
-        wait(50)
 
         // 预计用时的两个框自己写死了 Theme.inkStrong，不依赖 palette；
         // 这条断言保证它们在夜间主题下同样达标，别因为「有显式色」就免检。

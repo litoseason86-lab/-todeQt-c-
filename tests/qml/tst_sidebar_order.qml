@@ -68,7 +68,6 @@ TestCase {
         settingsMock.sidebarOrder = testCase.defaultOrder()
         settingsMock.sidebarOrderIsDefault = true
         clickSpy.clear()
-        wait(20)
     }
 
     function markersInOrder() {
@@ -96,7 +95,6 @@ TestCase {
         var custom = ["knowledgeGaps", "today", "dashboard", "todayFocus", "focus",
                       "schedule", "week", "month", "stats", "countdown"]
         settingsMock.sidebarOrder = custom
-        wait(20)
 
         compare(sidebar.orderedEntryIds.length, custom.length)
         for (var i = 0; i < custom.length; ++i) {
@@ -109,17 +107,15 @@ TestCase {
 
     function test_unknownIdsAreSkippedInsteadOfRenderingBlankRows() {
         settingsMock.sidebarOrder = ["today", "somePageFromTheFuture", "focus"]
-        wait(20)
 
-        compare(sidebar.orderedEntryIds.length, 2)
+        tryVerify(function () { return sidebar.orderedEntryIds.length === 2 }, 5000, "sidebar.orderedEntryIds.length 应为 2")
         compare(sidebar.orderedEntryIds[0], "today")
         compare(sidebar.orderedEntryIds[1], "focus")
     }
 
     function test_duplicateIdsRenderOnce() {
         settingsMock.sidebarOrder = ["today", "today", "focus"]
-        wait(20)
-        compare(sidebar.orderedEntryIds.length, 2)
+        tryVerify(function () { return sidebar.orderedEntryIds.length === 2 }, 5000, "sidebar.orderedEntryIds.length 应为 2")
     }
 
     function test_missingSettingsFallsBackToDefaultOrder() {
@@ -127,7 +123,6 @@ TestCase {
         // 侧栏不能因为没拿到设置就整个空掉。
         var bare = createTemporaryObject(bareSidebarComponent, testCase)
         verify(bare)
-        wait(20)
         compare(bare.orderedEntryIds.length, testCase.defaultOrder().length)
         compare(bare.orderedEntryIds[0], "dashboard")
     }
@@ -143,7 +138,6 @@ TestCase {
 
     function test_settingsEntryStaysPinnedAtBottom() {
         settingsMock.sidebarOrder = ["knowledgeGaps", "today"]
-        wait(20)
         // 「设置」不是视图，不参与排序，也不该被用户排走。
         verify(sidebar.orderedEntryIds.indexOf("settings") < 0)
         verify(findChild(sidebar, "sidebarItem-设") !== null)
@@ -176,7 +170,7 @@ TestCase {
     // 产品保证：用户把侧栏顺序改成别的样子（少几项、换位置）之后，废纸篓仍固定在设置上方，不会被排走或消失。
     function test_trashEntryStaysPinnedWhenTheUserReordersTheSidebar() {
         settingsMock.sidebarOrder = ["knowledgeGaps", "today"]
-        wait(20)
+        verify(waitForItemPolished(sidebar))
         var trash = findChild(sidebar, "sidebarItem-废")
         var settings = findChild(sidebar, "sidebarItem-设")
         verify(trash)
@@ -217,7 +211,6 @@ TestCase {
 
     function test_clickStillReportsTheRightView() {
         settingsMock.sidebarOrder = ["knowledgeGaps", "today", "focus"]
-        wait(20)
         var item = findChild(sidebar, "sidebarItem-补")
         verify(item)
         item.clicked()
@@ -234,7 +227,6 @@ TestCase {
         focusTimerMock.phase = 1
         focusTimerMock.remainingSeconds = 754
         settingsMock.sidebarOrder = ["focus", "today", "dashboard"]
-        wait(20)
 
         var focusItem = findChild(sidebar, "sidebarItem-专")
         verify(focusItem)
@@ -261,15 +253,13 @@ TestCase {
 
     function test_settingsPageListsEntriesInCurrentOrder() {
         settingsMock.sidebarOrder = ["countdown", "today", "focus"]
-        wait(20)
-        compare(appearancePage.sidebarOrder.length, 3)
+        tryVerify(function () { return appearancePage.sidebarOrder.length === 3 }, 5000, "appearancePage.sidebarOrder.length 应为 3")
         verify(findChild(appearancePage, "settingsSidebarOrderRow-countdown") !== null)
         verify(findChild(appearancePage, "settingsSidebarOrderRow-today") !== null)
     }
 
     function test_moveEntryWritesWholeOrderBack() {
         settingsMock.sidebarOrder = ["countdown", "today", "focus"]
-        wait(20)
 
         appearancePage.moveEntry(2, 0)
         compare(settingsMock.sidebarOrder.length, 3)
@@ -278,13 +268,11 @@ TestCase {
         compare(settingsMock.sidebarOrder[2], "today")
 
         // 整份提交而不是就地改副本：侧栏必须跟着变，否则界面和存储会悄悄分家。
-        wait(20)
         compare(sidebar.orderedEntryIds[0], "focus")
     }
 
     function test_moveEntryIgnoresOutOfRangeAndNoOp() {
         settingsMock.sidebarOrder = ["countdown", "today", "focus"]
-        wait(20)
 
         appearancePage.moveEntry(0, 0)
         appearancePage.moveEntry(-1, 1)
@@ -295,15 +283,13 @@ TestCase {
 
     function test_resetButtonOnlyEnabledWhenOrderDiffers() {
         settingsMock.sidebarOrderIsDefault = true
-        wait(20)
         compare(appearancePage.orderIsDefault, true)
         var resetButton = findChild(appearancePage, "settingsSidebarOrderResetButton")
         verify(resetButton)
         compare(resetButton.enabled, false)
 
         settingsMock.sidebarOrderIsDefault = false
-        wait(20)
-        compare(resetButton.enabled, true)
+        tryCompare(resetButton, "enabled", true)
 
         resetButton.clicked()
         compare(testCase.resetCalls, 1)
@@ -360,7 +346,6 @@ TestCase {
 
     function test_sidebarOrderRowsHaveNoMoveButtons() {
         settingsMock.sidebarOrder = ["countdown", "today", "focus"]
-        wait(20)
         // 2026-09-11 用户看过设计稿后选定「只留拖动，去掉 ↑↓」。
         compare(findChild(appearancePage, "settingsSidebarMoveUp-countdown"), null)
         compare(findChild(appearancePage, "settingsSidebarMoveDown-countdown"), null)
@@ -393,7 +378,6 @@ TestCase {
         compare(appearancePage.dropTargetIndex, -1)
 
         // 整份提交，侧栏跟着变。
-        wait(20)
         compare(sidebar.orderedEntryIds[2], "countdown")
     }
 
@@ -419,7 +403,12 @@ TestCase {
 
     function test_cancelledOrUnmovedDragWritesNothing() {
         settingsMock.sidebarOrder = ["countdown", "today", "focus"]
-        wait(20)
+        tryVerify(function() {
+            var a = testCase.rowIn(appearancePage, "countdown"), b = testCase.rowIn(appearancePage, "today"),
+                c = testCase.rowIn(appearancePage, "focus")
+            return a && b && c && a.mapToItem(appearancePage, 0, 0).y < b.mapToItem(appearancePage, 0, 0).y
+                    && b.mapToItem(appearancePage, 0, 0).y < c.mapToItem(appearancePage, 0, 0).y
+        }, 3000, "前置：三行按新顺序排好")
 
         appearancePage.beginDrag("countdown")
         var target = testCase.rowCenterScene("focus")
@@ -438,7 +427,12 @@ TestCase {
 
     function test_pointerOutsideListClampsToFirstOrLastSlot() {
         settingsMock.sidebarOrder = ["countdown", "today", "focus"]
-        wait(20)
+        tryVerify(function() {
+            var a = testCase.rowIn(appearancePage, "countdown"), b = testCase.rowIn(appearancePage, "today"),
+                c = testCase.rowIn(appearancePage, "focus")
+            return a && b && c && a.mapToItem(appearancePage, 0, 0).y < b.mapToItem(appearancePage, 0, 0).y
+                    && b.mapToItem(appearancePage, 0, 0).y < c.mapToItem(appearancePage, 0, 0).y
+        }, 3000, "前置：三行按新顺序排好")
 
         appearancePage.beginDrag("today")
         // 拖到列表上方松手就是「放到第一个」，不能因为指针出界就判成无效落点。
@@ -454,7 +448,12 @@ TestCase {
 
     function test_mouseDragReordersThroughDragHandler() {
         settingsMock.sidebarOrder = ["countdown", "today", "focus"]
-        wait(20)
+        tryVerify(function() {
+            var a = testCase.rowIn(appearancePage, "countdown"), b = testCase.rowIn(appearancePage, "today"),
+                c = testCase.rowIn(appearancePage, "focus")
+            return a && b && c && a.mapToItem(appearancePage, 0, 0).y < b.mapToItem(appearancePage, 0, 0).y
+                    && b.mapToItem(appearancePage, 0, 0).y < c.mapToItem(appearancePage, 0, 0).y
+        }, 3000, "前置：三行按新顺序排好")
 
         var row = testCase.rowIn(appearancePage, "countdown")
         var lastRow = testCase.rowIn(appearancePage, "focus")
@@ -464,7 +463,6 @@ TestCase {
         // 否则收不到真实鼠标事件。
         var originalY = appearancePage.y
         appearancePage.y = originalY - row.mapToItem(appearancePage, 0, 0).y + 40
-        wait(20)
 
         var dropY = lastRow.mapToItem(row, 0, lastRow.height / 2).y
         mousePress(row, 60, row.height / 2)
@@ -479,13 +477,15 @@ TestCase {
 
     function test_dragNearViewportEdgeAutoScrolls() {
         settingsMock.sidebarOrder = testCase.defaultOrder()
-        wait(20)
+        tryVerify(function() {
+            var a = testCase.rowIn(scrolledPage, "dashboard"), b = testCase.rowIn(scrolledPage, "memo")
+            return a && b && a.mapToItem(scrolledPage, 0, 0).y < b.mapToItem(scrolledPage, 0, 0).y
+        }, 3000, "前置：默认顺序排好")
 
         var firstRow = testCase.rowIn(scrolledPage, "dashboard")
         verify(firstRow)
         // 先滚到侧栏顺序那一段的开头。
         scroller.contentY = Math.max(0, firstRow.mapToItem(scrolledPage, 0, 0).y - 20)
-        wait(20)
         var before = scroller.contentY
 
         scrolledPage.beginDrag("dashboard")

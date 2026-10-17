@@ -157,7 +157,6 @@ TestCase {
                 dc.close()
             if (ec)
                 ec.close()
-            wait(0)
         }
     }
 

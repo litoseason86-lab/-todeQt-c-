@@ -6,6 +6,7 @@ import QtTest
 import "../../qml"
 import "../../qml/views"
 import "fixtures"
+import "TestWaits.js" as TestWaits
 
 TestCase {
     id: testCase
@@ -464,7 +465,7 @@ TestCase {
         touch.press(0, list, 80, 300).commit();
         for (var j = 0; j < 6; ++j) {
             touch.move(0, list, 80, 300 - (j + 1) * 30).commit();
-            wait(20);
+            TestWaits.letElapse(testCase, 20, "触摸拖动每步之间留一拍，模拟真实手指移动的间隔，列表才会判成拖动");
         }
         touch.release(0, list, 80, 120).commit();
         tryVerify(function () {
@@ -923,7 +924,7 @@ TestCase {
         compare(body.preeditText, "jin", "前置：拼音正在组合，文字本身没变");
         compare(view.dirty, false);
         // 要证明的是「一秒自动保存的窗口里什么都没发生」，只能等过这个窗口。
-        wait(1300);
+        TestWaits.observe(testCase, 1300, "一秒自动保存的窗口里，组合中的拼音不应触发保存；只能等过这个窗口");
         compare(service.updates.length, 0);
     }
     // 产品保证：拼音还在组合时切到另一条备忘，编辑框直接换成新备忘的内容，旧备忘的文字不会在装载途中写进模型。
@@ -1164,7 +1165,7 @@ TestCase {
         verify(first !== null && first.contains(first.mapFromItem(view, parked.x, parked.y)), "前置：指针压在第一项上");
         compare(popup.options[0].id, 1, "前置：第一项不是当前分类");
         // 等系统补发的悬停送到（它跟着画面更新走）。
-        wait(300);
+        TestWaits.observe(testCase, 300, "等系统补发的悬停送到（跟着画面更新走），确认高亮仍停在当前分类");
         compare(popup.options[popup.list.currentIndex].id, 2, "高亮停在当前分类");
         mouseMove(view, parked.x + 30, parked.y + 2);
         tryCompare(popup.list, "currentIndex", 0, 3000, "指针动了，高亮跟着指针");
@@ -1205,7 +1206,7 @@ TestCase {
         }, 3000);
         var tag = child("memoCategoryTag");
         mouseClick(tag, 4, tag.height / 2);
-        wait(300);
+        TestWaits.observe(testCase, 300, "点编辑区的分类不应弹出任何浮层；没有可等的信号，给它一个窗口确认什么都没弹");
         verify(!popup.visible && !child("memoSubjectPicker").visible && !child("memoNewMenu").visible, "点编辑区的分类什么都不弹");
         compare(view.editorCategoryId, 2);
     }
@@ -1239,7 +1240,7 @@ TestCase {
         tryVerify(function () {
             return service.reorders.length === 1;
         }, 3000, "长按后拖动照常排序");
-        wait(100);
+        TestWaits.observe(testCase, 100, "长按后拖动松手不应弹出改分类；给长按判定一个窗口确认没有弹出");
         verify(!popup.visible, "拖完松手不弹改分类");
     }
     // 产品保证：点「新建」弹出菜单。「新建备忘录」点下就在当前筛选的科目里建好一条空备忘，列表里马上有它，光标在标题里；
@@ -1411,7 +1412,7 @@ TestCase {
         tryVerify(function () {
             return !menu.visible;
         }, 3000);
-        wait(200);
+        TestWaits.observe(testCase, 200, "再点「新建」收起后不应又弹出来；给它一个窗口确认菜单保持收起");
         verify(!menu.visible, "再点「新建」就收起，不会又弹出来");
         Theme.reduceMotion = false;
         try {
@@ -1461,7 +1462,7 @@ TestCase {
             tryVerify(function () {
                 return !menu.visible;
             }, 3000);
-            wait(50);
+            TestWaits.observe(testCase, 50, "菜单收起后焦点不应被抢走；给它一个窗口确认光标仍在标题里");
             verify(title.activeFocus, "光标留在标题里");
         } finally {
             Theme.reduceMotion = true;
@@ -1536,8 +1537,7 @@ TestCase {
         tryVerify(function () {
             return shortPill.hovered;
         }, 3000, "前置：鼠标停在「物理」上");
-        // 提示要停留 delay 毫秒才出现，多等一会儿再看，确认不是还没到时间。
-        wait(shortTip.delay + 300);
+        TestWaits.observe(testCase, shortTip.delay + 300, "提示要停留 delay 毫秒才出现，多等 300 毫秒确认名字完整时确实不弹；没发生的事没有信号可等");
         verify(!shortTip.visible && !shortTip.opened, "名字完整时不弹提示");
         // 对照：同样的停留，被省略的名字会弹出提示，说明上面没弹不是因为悬停没生效。
         mouseMove(longPill, longPill.width / 2, longPill.height / 2);
@@ -1558,7 +1558,7 @@ TestCase {
         }, 3000, "鼠标移开就收起");
         shortPill.forceActiveFocus(Qt.TabFocusReason);
         verify(shortPill.visualFocus, "前置：键盘焦点在「物理」上");
-        wait(shortTip.delay + 300);
+        TestWaits.observe(testCase, shortTip.delay + 300, "键盘聚焦同样要过 delay 才弹，多等 300 毫秒确认完整名字确实不弹；没发生的事没有信号可等");
         verify(!shortTip.visible && !shortTip.opened, "键盘聚焦到完整名字也不弹");
         longPill.forceActiveFocus(Qt.TabFocusReason);
         tryVerify(function () {
