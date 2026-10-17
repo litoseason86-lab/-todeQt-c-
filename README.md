@@ -145,6 +145,6 @@ plans/                 当前状态、待评估事项与未采纳决策
 - `PTCore`：包含业务核心与同步数据层，严禁链接 QML，不反向依赖上层；
 - `PTApp`：负责跨平台共享装配与生命周期管理，不写平台分支，严禁链接 QML；
 - `PTQml`：封装 QML 上下文注入、控件风格、打包字体注册与展示辅助；
-- 平台入口：`src/entry/mac` 与 `src/entry/ios` 保持独立，仅编入所属平台的可执行目标，自顶向下单向链接 `PTQml`、`PTApp` 与 `PTCore`。分层约束由 `ArchitectureGate` 与 `ArchitectureGateR8` 自动化门禁守护。
+- 平台入口：`src/entry/mac` 与 `src/entry/ios` 保持独立，仅编入所属平台的可执行目标，自顶向下单向链接 `PTQml`、`PTApp` 与 `PTCore`。分层约束由 `ArchitectureGate`、`ArchitectureGateR8` 与 `ArchitectureGateR9` 自动化门禁守护。
 
 外部 AI 接入按同样的方式分层：包内辅助程序只编译 `src/mcp/helper` 与 `src/mcp/common`，不链接业务服务与数据库，权限判断和读写一律在主应用内完成（由 `McpHelperLinkGate` 这条测试守门）。

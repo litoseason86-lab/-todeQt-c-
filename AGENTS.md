@@ -32,8 +32,9 @@
   - `src/mcp/helper` 只做协议转发，不链接业务服务、SQL、QML（`McpHelperLinkGate` 测试会拦）；权限判断和读写在主应用内完成。
 - 架构分层与依赖门禁：
   - 核心依赖方向保持单向：可执行入口 → `PTQml` → `PTApp` → `PTCore`。`PTCore` 包含业务与同步逻辑，严禁直接或接口链接 QML，严禁反向依赖上层；`PTApp` 负责共享装配与生命周期，严禁链接 QML；`PTQml` 仅封装 QML 上下文与展示辅助。
-  - `ArchitectureGate`：自动化校验三库的静态链接属性、头文件包含白名单、禁止越层包含、平台宏位置及双平台入口启动时序（规则 R1–R8）。
+  - `ArchitectureGate`：自动化校验三库的静态链接属性、头文件包含白名单、禁止越层包含、平台宏位置、双平台入口启动时序及服务单例冻结（规则 R1–R9）。R9：新服务由 `SharedApp` 构造、经 `AppServices` 注入，不再新增 `instance()` 单例，迁移顺序见 `docs/062-服务单例迁移设计.md`。
   - `ArchitectureGateR8`：仅测试 R8 检查器本身的 30 组反例与正例，不直接替代生产入口门禁；生产入口由 `ArchitectureGate` 调用 `architecture_gate.py` 校验。
+  - `ArchitectureGateR9`：测试 R9 检查器本身，并核对单例白名单与现有代码一一对应；迁走一个单例就从白名单删掉它。
 
 ## 编写约定
 

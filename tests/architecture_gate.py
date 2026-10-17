@@ -45,6 +45,37 @@ SYNC_INCLUDE_ALLOWLIST = {
 INCLUDE_RE = re.compile(r"^\s*#\s*include\s*[<\"]([^>\"]+)[>\"]")
 QML_INCLUDE_RE = re.compile(r"^(?:QQml|QQuick|QJS|QtQml/|QtQuick/)")
 
+# R9：服务单例只减不增（062 A057）。存量约 569 处 ::instance() 调用不一次性迁移，迁移顺序见
+# docs/062-服务单例迁移设计.md；新服务由 SharedApp 构造、经 AppServices 注入。名单按 instance()
+# 的返回类型记（TrashStore.h 里的单例是 TrashNotifier，MonotonicClock.h 里的是 SystemMonotonicClock）。
+SINGLETON_ALLOWLIST = frozenset({
+    "AppSettings",
+    "BackupService",
+    "CategoryManager",
+    "CountdownService",
+    "DatabaseManager",
+    "ExportService",
+    "FocusHistoryService",
+    "FocusTimer",
+    "KnowledgeGapService",
+    "LogicalDayService",
+    "MemoService",
+    "NotificationService",
+    "PhaseSoundService",
+    "RoutineManager",
+    "ScheduleService",
+    "ShortcutRegistry",
+    "StatisticsService",
+    "SystemMonotonicClock",
+    "TaskManager",
+    "TrashNotifier",
+    "TrashService",
+})
+# 只认类内的静态声明（out-of-line 定义不带 static，不会重复计数）；允许 const、命名空间限定和任意空白。
+SINGLETON_DECL_RE = re.compile(
+    r"\bstatic\s+(?:const\s+)?((?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)\s*\*\s*instance\s*\(\s*\)"
+)
+
 
 def fail(message: str) -> None:
     print(f"ArchitectureGate: {message}", file=sys.stderr)
@@ -516,6 +547,44 @@ def check_entry_r8(entry_path: Path) -> bool:
     return True
 
 
+def find_singletons(source_root: Path) -> dict[str, list[Path]] | None:
+    """列出 source_root 下头文件里声明 instance() 单例的类型及所在头文件；读不出文件时返回 None。"""
+    found: dict[str, list[Path]] = {}
+    for header in sorted(list(source_root.rglob("*.h")) + list(source_root.rglob("*.hpp"))):
+        try:
+            text = header.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            fail(f"R9：无法读取头文件 {header}: {exc}")
+            return None
+        # 先去掉注释和字符串，注释里举例的 static X* instance() 不算声明。
+        for match in SINGLETON_DECL_RE.finditer(strip_comments_and_strings(text)):
+            type_name = re.sub(r"\s+", "", match.group(1)).split("::")[-1]
+            found.setdefault(type_name, []).append(header)
+    return found
+
+
+def check_singletons_r9(source_root: Path, allowlist: frozenset[str] = SINGLETON_ALLOWLIST) -> bool:
+    """R9：source_root 下头文件里声明的 instance() 单例不得超出白名单。
+
+    白名单里的类去掉单例不算失败（允许逐步迁移），只提示把它从名单里删掉，免得名单留着空位被复用。
+    """
+    found = find_singletons(source_root)
+    if found is None:
+        return False
+
+    valid = True
+    for type_name in sorted(set(found) - allowlist):
+        locations = "、".join(str(path) for path in found[type_name])
+        fail(
+            f"R9：{locations} 新增了 {type_name}::instance() 单例。新服务由 SharedApp/AppServices "
+            f"构造并注入，不再新增 instance() 单例（见 docs/062-服务单例迁移设计.md）"
+        )
+        valid = False
+    for type_name in sorted(allowlist - set(found)):
+        print(f"ArchitectureGate R9 提示：{type_name} 已不再声明 instance()，请从 SINGLETON_ALLOWLIST 中移除")
+    return valid
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         fail("用法：architecture_gate.py <manifest-path> <source-root>")
@@ -760,11 +829,15 @@ def main() -> int:
     if not check_entry_r8(ios_entry):
         valid = False
 
+    # 6. R9 检查：服务单例只减不增
+    if not check_singletons_r9(root / "src"):
+        valid = False
+
     if not valid:
         return 1
 
     print(
-        f"ArchitectureGate: PTCore、PTApp 与 PTQml R1-R8 全部通过（"
+        f"ArchitectureGate: PTCore、PTApp 与 PTQml R1-R9 全部通过（"
         f"PTCore {len(core_sources)} 个源文件，"
         f"PTApp {len(app_sources)} 个源文件，"
         f"PTQml {len(qml_sources)} 个源文件）"

@@ -2511,4 +2511,9 @@ if(NOT IOS AND Python3_FOUND)
     add_test(NAME ArchitectureGateR8
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_architecture_gate_r8.py")
     set_tests_properties(ArchitectureGateR8 PROPERTIES TIMEOUT 30)
+
+    # R9 检查器自身的反例与正例，并核对单例白名单与现有代码一一对应（062 A057）。
+    add_test(NAME ArchitectureGateR9
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_architecture_gate_r9.py")
+    set_tests_properties(ArchitectureGateR9 PROPERTIES TIMEOUT 30)
 endif()
