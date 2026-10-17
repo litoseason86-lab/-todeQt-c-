@@ -42,6 +42,11 @@ QDateTime QDateTime::currentDateTime() {
 class PTCoreBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void focusPreferenceRejectionKeepsSpecificReason();
+    void taskActionRejectionsKeepSpecificReason_data();
+    void taskActionRejectionsKeepSpecificReason();
+    void pendingDeletionRejectionReportsReason_data();
+    void pendingDeletionRejectionReportsReason();
     void independentLogicalDayReceivers();
     void clockOverrideDrivesLogicalDayService();
     void categoryValuesAndErrors();
@@ -249,6 +254,27 @@ void PTCoreBridgeTests::taskReadsPreserveFieldsAndPartialChanges() {
         QVERIFY(updated.value("categoryId").isNull());
     }
 }
+// 产品保证：专注页写模式及工作/休息时长时，设置服务失效的具体原因不会被桥接吞掉。
+void PTCoreBridgeTests::focusPreferenceRejectionKeepsSpecificReason()
+{
+    @autoreleasepool {
+        PTSettingsBridge* bridge = nil;
+        {
+            AppSettings settings;
+            bridge = [[PTSettingsBridge alloc] initWithSettings:&settings];
+        }
+        NSError* error = nil;
+        QVERIFY(![bridge setLastMode:1 error:&error]);
+        QVERIFY([error.localizedDescription isEqualToString:@"设置服务已释放"]);
+        error = nil;
+        QVERIFY(![bridge setWorkMinutes:30 error:&error]);
+        QVERIFY([error.localizedDescription isEqualToString:@"设置服务已释放"]);
+        error = nil;
+        QVERIFY(![bridge setBreakMinutes:10 error:&error]);
+        QVERIFY([error.localizedDescription isEqualToString:@"设置服务已释放"]);
+    }
+}
+
 // 产品保证：空列表是有效结果；数据库读取失败只返回给调用方，不重复走背景失败回调。
 void PTCoreBridgeTests::taskFailuresAreCollectedOnce() {
     @autoreleasepool {
@@ -263,6 +289,51 @@ void PTCoreBridgeTests::taskFailuresAreCollectedOnce() {
         NSError *error = nil; QVERIFY(![bridge moveTask:NSIntegerMax before:-1 error:&error]); QVERIFY(error != nil);
     }
 }
+// 产品保证：排序、结转及批量撤销完成的存储拒绝分别保留服务给出的具体原因。
+void PTCoreBridgeTests::taskActionRejectionsKeepSpecificReason_data()
+{
+    QTest::addColumn<int>("action");
+    QTest::addColumn<QString>("expected");
+    QTest::newRow("move-before") << 0 << QStringLiteral("任务排序失败：数据库未打开");
+    QTest::newRow("move-today") << 1 << QStringLiteral("改期失败：无法开始数据库事务");
+    QTest::newRow("undo-completion") << 2 << QStringLiteral("取消完成失败：无法开始数据库事务");
+}
+
+// 产品保证：服务拒绝写入后，三个任务动作的 NSError 保留本次原因且不再发背景失败提示。
+void PTCoreBridgeTests::taskActionRejectionsKeepSpecificReason()
+{
+    @autoreleasepool {
+        QFETCH(int, action);
+        QFETCH(QString, expected);
+        auto* tasks = TaskManager::instance();
+        const QDate yesterday = LogicalDay::today(AppSettings::instance()->dayStartHour()).addDays(-1);
+        const int id = tasks->createTask(QStringLiteral("任务错误传播"), yesterday, -1, 0, QString());
+        QVERIFY(id > 0);
+        if (action == 2) {
+            QVERIFY(tasks->setTaskCompleted(id, true));
+            QVERIFY(tasks->getTask(id).value(QStringLiteral("completed")).toBool());
+        }
+        PTTaskBridge* bridge = [PTTaskBridge new];
+        __block int backgroundFailures = 0;
+        bridge.onFailure = ^(NSString*) { ++backgroundFailures; };
+        QSignalSpy failures(tasks, &TaskManager::operationFailed);
+        QVERIFY(failures.isValid());
+        QVERIFY(DatabaseManager::instance()->database().isOpen());
+        // 关闭的只是本用例临时数据库，稳定触发存储拒绝而不依赖文件权限或系统环境。
+        DatabaseManager::instance()->close();
+        NSError* error = nil;
+        const BOOL result = action == 0 ? [bridge moveTask:id before:-1 error:&error]
+            : action == 1 ? [bridge moveTasksToToday:@[@(id)] error:&error]
+                          : [bridge setTasksCompleted:@[@(id)] completed:NO error:&error];
+        QVERIFY(!result);
+        QVERIFY(error != nil);
+        QCOMPARE(QString::fromNSString(error.localizedDescription), expected);
+        QCOMPARE(failures.count(), 1);
+        QCOMPARE(failures.first().first().toString(), expected);
+        QCOMPARE(backgroundFailures, 0);
+    }
+}
+
 // 产品保证：各任务动作使用原服务接口，完成记录保留，排序与改期不误操作同名任务。
 void PTCoreBridgeTests::taskWriteAndReadEntryPoints() {
     @autoreleasepool {
@@ -373,6 +444,42 @@ void PTCoreBridgeTests::pendingDeletionSignalsAndState() {
         QVERIFY(![bridge commit:&error]); QVERIFY([failedTitle isEqualToString:@"记录"]); QCOMPARE(retired, 2);
     }
 }
+// 产品保证：删除请求的无效编号和缺失服务都有明确原因，未请求成功不产生撤销槽。
+void PTCoreBridgeTests::pendingDeletionRejectionReportsReason_data()
+{
+    QTest::addColumn<int>("action");
+    QTest::addColumn<bool>("registered");
+    QTest::addColumn<QString>("expected");
+    QTest::newRow("task-invalid") << 0 << true << QStringLiteral("任务编号无效");
+    QTest::newRow("session-invalid") << 1 << true << QStringLiteral("记录编号无效");
+    QTest::newRow("task-unavailable") << 0 << false << QStringLiteral("删除服务未登记或已释放");
+    QTest::newRow("session-unavailable") << 1 << false << QStringLiteral("删除服务未登记或已释放");
+    QTest::newRow("commit-unavailable") << 2 << false << QStringLiteral("删除服务未登记或已释放");
+}
+
+// 产品保证：删除桥接失败返回 NSError 的本次原因，不靠不存在的后台信号解释参数拒绝。
+void PTCoreBridgeTests::pendingDeletionRejectionReportsReason()
+{
+    @autoreleasepool {
+        QFETCH(int, action);
+        QFETCH(bool, registered);
+        QFETCH(QString, expected);
+        PendingDeletion pending(TaskManager::instance(), FocusHistoryService::instance());
+        PTBridgeSupport::registerService(QStringLiteral("pendingDeletion"), registered ? &pending : nullptr);
+        PTPendingDeletionBridge* bridge = [PTPendingDeletionBridge new];
+        QVERIFY(!bridge.active);
+        NSError* error = nil;
+        const NSInteger id = registered ? 0 : 1;
+        const BOOL result = action == 0 ? [bridge requestTask:id title:@"任务" error:&error]
+            : action == 1 ? [bridge requestSession:id title:@"记录" isRest:NO error:&error]
+                          : [bridge commit:&error];
+        QVERIFY(!result);
+        QVERIFY(error != nil);
+        QCOMPARE(QString::fromNSString(error.localizedDescription), expected);
+        QVERIFY(!bridge.active);
+    }
+}
+
 // 产品保证：经桥接暂停与恢复自动提交时，撤销窗口在暂停期间不超时落库，解除后恢复自动落库并发出退场通知。
 void PTCoreBridgeTests::pendingDeletionSuspensionViaBridge() {
     @autoreleasepool {

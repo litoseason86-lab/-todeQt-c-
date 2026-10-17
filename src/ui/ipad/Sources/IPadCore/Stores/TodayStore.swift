@@ -210,7 +210,7 @@ import Observation
     // MARK: 结转
     public func moveOverdueToToday() {
         do { try taskBridge.moveToToday(ids: overdue.map(\.id)) }
-        catch { loadError = "结转失败，请重试"; return }
+        catch { loadError = error.localizedDescription; return }
         refresh()
     }
     public func ignoreOverdueForToday() {
@@ -350,7 +350,7 @@ import Observation
         else if target + 1 < list.count { before = list[target + 1].id }
         else { before = finished.first?.id ?? 0 }
         do { try taskBridge.move(id: taskID, before: before) }
-        catch { loadError = "任务排序保存失败，请重试"; return false }
+        catch { loadError = error.localizedDescription; return false }
         written = true
         return true
     }

@@ -65,13 +65,14 @@ static NSString *readError(ServiceReadError error) { return error == ServiceRead
 - (NSString *)folderProblem { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); return string(_controller ? _controller->folderProblem() : QString()); }
 - (NSInteger)logRevision { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); return _controller ? _controller->logRevision() : 0; }
 - (NSInteger)logCount { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); return _controller ? _controller->logCount() : 0; }
-- (void)setEnabled:(BOOL)value { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (_controller) _controller->setEnabled(value); }
-- (void)confirmJoin { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (_controller) _controller->confirmJoin(); }
-- (void)syncNow { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (_controller) _controller->syncNow(); }
-- (void)chooseFolder { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (_controller) _controller->chooseFolder(); }
-- (void)rebuildFolder { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (_controller) _controller->rebuildFolder(); }
+// 登记指针失效时也必须返回原因，不能把用户动作静默丢掉；已派发动作的异步结果仍走原状态与通知。
+- (BOOL)setEnabled:(BOOL)value error:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (!_controller) return fail(error, QStringLiteral("同步服务未登记或已释放")); _controller->setEnabled(value); return YES; }
+- (BOOL)confirmJoin:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (!_controller) return fail(error, QStringLiteral("同步服务未登记或已释放")); _controller->confirmJoin(); return YES; }
+- (BOOL)syncNow:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (!_controller) return fail(error, QStringLiteral("同步服务未登记或已释放")); _controller->syncNow(); return YES; }
+- (BOOL)chooseFolder:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (!_controller) return fail(error, QStringLiteral("同步服务未登记或已释放")); _controller->chooseFolder(); return YES; }
+- (BOOL)rebuildFolder:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (!_controller) return fail(error, QStringLiteral("同步服务未登记或已释放")); _controller->rebuildFolder(); return YES; }
 - (PTSyncLogReadResult *)syncLog:(NSInteger)limit { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); int value; if (!integer(limit, &value)) value = 200; return [[PTSyncLogReadResult alloc] initWithResult:_controller ? _controller->readSyncLog(value) : ServiceReadResult<QVariantList>{QVariantList{}, ServiceReadError::Database}]; }
 - (NSInteger)readLogCount:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); const auto result = _controller ? _controller->readLogCount() : ServiceReadResult<int>{0, ServiceReadError::Database}; if (!result.ok() && error) *error = syncError(readError(result.error)); return result.value; }
-- (void)copyLostValue:(NSString *)text { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (_controller) _controller->copyLostValue(string(text)); }
+- (BOOL)copyLostValue:(NSString *)text error:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); if (!_controller) return fail(error, QStringLiteral("同步服务未登记或已释放")); _controller->copyLostValue(string(text)); return YES; }
 - (NSString *)restoreWarning { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); return string(_controller ? _controller->restoreWarning() : QString()); }
 @end

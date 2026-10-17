@@ -174,6 +174,27 @@ import XCTest
         XCTAssertEqual(store.errorMessage, "导出数据库不可读")
         XCTAssertEqual(files.cleanups, 1)
     }
+    // 产品保证：六个同步动作未能派发时都显示桥接原因，不伪称复制成功或静默忽略。
+    func testSyncActionFailuresPreserveBridgeReason() {
+        for action in 0..<6 {
+            let bridge = SettingsSyncFake()
+            let store = SettingsSyncStore(bridge: bridge)
+            XCTAssertEqual(store.errorMessage, "")
+            bridge.actionError = NSError(domain: "测试", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "同步服务未登记或已释放"])
+            switch action {
+            case 0: store.setEnabled(true)
+            case 1: store.confirmJoin()
+            case 2: store.syncNow()
+            case 3: store.chooseFolder()
+            case 4: store.rebuildFolder()
+            default: store.copy(SyncLogEntry(id: 1, kind: "edit", kindLabel: "", time: "", title: "",
+                summary: "", detail: "", fieldLabel: "", lostValue: "原文", keptValue: "", canCopyLostValue: true))
+            }
+            XCTAssertEqual(store.errorMessage, "同步服务未登记或已释放")
+            XCTAssertEqual(store.notice, "")
+        }
+    }
 }
 
 @MainActor final class SettingsFilesFake: FileTransferWorkspaceProtocol {
@@ -202,6 +223,7 @@ import XCTest
     func readBackups() throws -> [BackupEntry] { [] }
     func suggestedBackupFileName() -> String { "backup.tomatobackup" }
     func backupFileExtension() -> String { "tomatobackup" }
+
 }
 @MainActor final class SettingsExportFake: ExportBridgeProtocol {
     var onProgress: ((Int, Int) -> Void)?
@@ -220,16 +242,17 @@ import XCTest
     var onCopyRequested: ((String) -> Void)?
     var logs: [SyncLogEntry] = []
     var error: Error?
+    var actionError: Error?
     var copied = ""
     var result = SyncSnapshot()
     var calls: [String] = []
     func snapshot() throws -> SyncSnapshot { if let error { throw error }; return result }
-    func setEnabled(_ value: Bool) { calls.append("enabled:\(value)") }
-    func confirmJoin() { calls.append("join") }
-    func syncNow() { calls.append("sync") }
-    func chooseFolder() { calls.append("choose") }
-    func rebuildFolder() { calls.append("rebuild") }
+    func setEnabled(_ value: Bool) throws { calls.append("enabled:\(value)"); if let actionError { throw actionError } }
+    func confirmJoin() throws { calls.append("join"); if let actionError { throw actionError } }
+    func syncNow() throws { calls.append("sync"); if let actionError { throw actionError } }
+    func chooseFolder() throws { calls.append("choose"); if let actionError { throw actionError } }
+    func rebuildFolder() throws { calls.append("rebuild"); if let actionError { throw actionError } }
     func syncLog(limit: Int) throws -> [SyncLogEntry] { if let error { throw error }; return logs }
-    func copyLostValue(_ text: String) { copied = text; onCopyRequested?(text) }
+    func copyLostValue(_ text: String) throws { if let actionError { throw actionError }; copied = text; onCopyRequested?(text) }
     func restoreWarning() -> String { "" }
 }

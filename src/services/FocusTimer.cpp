@@ -441,6 +441,8 @@ bool FocusTimer::resumeFocus()
     const bool canResumeManualRest = m_mode == ManualRestMode && m_phase == ManualRestPhase;
     if (m_sessionId == -1 && !canResumeBreak && !canResumeManualRest) {
         qWarning() << "Failed to resume focus: no active focus session";
+        // 桥接依靠这次调用的失败信号返回原因；没有可恢复阶段时也不能只给 false。
+        emit operationFailed(QStringLiteral("没有进行中的专注或休息，无法继续"));
         return false;
     }
 

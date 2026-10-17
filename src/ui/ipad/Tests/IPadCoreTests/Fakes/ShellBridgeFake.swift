@@ -27,8 +27,12 @@ import IPadCore
         if let appearanceError { throw appearanceError }
         snapshot.useWallpaper = value; onChanged?()
     }
-    func pause() -> Bool { calls.append("pause"); return pauseResult }
-    func resume() -> Bool { calls.append("resume"); return resumeResult }
-    func capture(title: String, categoryID: Int, sourceTaskID: Int) -> Int { calls.append("capture:\(title):\(categoryID):\(sourceTaskID)"); return captureResult }
-    func select(page: String) { calls.append("select:\(page)") }
+    func pause() throws { calls.append("pause"); if !pauseResult { throw CocoaError(.fileWriteUnknown) } }
+    func resume() throws { calls.append("resume"); if !resumeResult { throw CocoaError(.fileWriteUnknown) } }
+    func capture(title: String, categoryID: Int, sourceTaskID: Int) throws -> Int {
+        calls.append("capture:\(title):\(categoryID):\(sourceTaskID)")
+        if captureResult <= 0 { throw CocoaError(.fileWriteUnknown) }
+        return captureResult
+    }
+    func select(page: String) throws { calls.append("select:\(page)") }
 }

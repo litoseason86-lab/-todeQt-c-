@@ -30,16 +30,22 @@ using namespace PTBridgeSupport;
 - (BOOL)requestTask:(NSInteger)taskId title:(NSString *)title error:(NSError **)error {
     NSAssert(NSThread.isMainThread, @"删除请求必须在主线程");
     int id; if (!integer(taskId, &id)) return fail(error, QStringLiteral("任务编号越界"));
-    return (_service && _service->requestTask(id, string(title))) || fail(error, QStringLiteral("请求删除任务失败"));
+    // 参数与登记拒绝没有后续提交回调，必须直接返回原因，Swift 才能说明为何没有进入撤销槽。
+    if (id <= 0) return fail(error, QStringLiteral("任务编号无效"));
+    if (!_service) return fail(error, QStringLiteral("删除服务未登记或已释放"));
+    return _service->requestTask(id, string(title)) || fail(error, QStringLiteral("请求删除任务失败"));
 }
 - (BOOL)requestSession:(NSInteger)sessionId title:(NSString *)title isRest:(BOOL)isRest error:(NSError **)error {
     NSAssert(NSThread.isMainThread, @"删除请求必须在主线程");
     int id; if (!integer(sessionId, &id)) return fail(error, QStringLiteral("记录编号越界"));
-    return (_service && _service->requestSession(id, string(title), isRest)) || fail(error, QStringLiteral("请求删除记录失败"));
+    if (id <= 0) return fail(error, QStringLiteral("记录编号无效"));
+    if (!_service) return fail(error, QStringLiteral("删除服务未登记或已释放"));
+    return _service->requestSession(id, string(title), isRest) || fail(error, QStringLiteral("请求删除记录失败"));
 }
 - (BOOL)commit:(NSError **)error {
     NSAssert(NSThread.isMainThread, @"删除提交必须在主线程");
-    return (_service && _service->commit()) || fail(error, QStringLiteral("提交删除失败"));
+    if (!_service) return fail(error, QStringLiteral("删除服务未登记或已释放"));
+    return _service->commit() || fail(error, QStringLiteral("提交删除失败"));
 }
 - (void)cancel { NSAssert(NSThread.isMainThread, @"撤销必须在主线程"); if (_service) _service->cancel(); }
 - (void)setAutomaticCommitSuspended:(BOOL)suspended {

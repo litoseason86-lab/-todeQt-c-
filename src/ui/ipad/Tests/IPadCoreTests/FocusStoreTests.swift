@@ -510,7 +510,7 @@ import XCTest
         XCTAssertEqual(count(r, "startFree") + count(r, "startPomodoro"), 0)
         let thrown = rig(); thrown.focus.failing = ["createTodayTask"]
         XCTAssertFalse(thrown.store.createTaskAndStart(title: "x"))
-        XCTAssertEqual(thrown.store.errorText, "新建任务失败，请重试")
+        XCTAssertEqual(thrown.store.errorText, "createTodayTask 失败")
     }
     // 产品保证：待删任务不出现在选择器里；选中项恰是待删任务时先收起，撤销后还回去，真删了就不还。
     func testPendingDeletionHidesFromPickerAndRestoresSelectionOnUndo() {
@@ -712,7 +712,7 @@ import XCTest
         finishWork(r)
         r.focus.failing = ["startBreak"]
         r.scheduler.fire(0)
-        XCTAssertEqual(r.store.errorText, "休息启动失败")
+        XCTAssertEqual(r.store.errorText, "startBreak 失败")
         XCTAssertEqual(r.store.state, .workDone)
         XCTAssertNil(r.shell.toast)
         r.focus.failing = []
@@ -746,17 +746,70 @@ import XCTest
 
     // MARK: 开始、暂停与时长
 
+    // 产品保证：新建、启动、休息及时间偏好失败都保留桥接原因，不被页面的通用文案覆盖。
+    func testActionAndPreferenceFailuresPreserveBridgeReason() {
+        for action in ["create", "free", "pomodoro", "break", "workMinutes", "breakMinutes", "lastMode"] {
+            let r = rig([task(1)])
+            r.store.selectTask(id: 1, title: "任务1")
+            let reason = "本次操作失败：\(action) 的存储不可写"
+            let failure = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+            if action.hasSuffix("Minutes") || action == "lastMode" { r.settings.error = failure }
+            else { r.focus.error = failure }
+            switch action {
+            case "create": XCTAssertFalse(r.store.createTaskAndStart(title: "草稿"))
+            case "free": XCTAssertFalse(r.store.startFreeFocus())
+            case "pomodoro": XCTAssertFalse(r.store.startPomodoro())
+            case "break": XCTAssertFalse(r.store.startBreak())
+            case "workMinutes": r.store.selectWorkMinutes(30)
+            case "breakMinutes": r.store.selectBreakMinutes(10)
+            default: XCTAssertTrue(r.store.startFreeFocus())
+            }
+            XCTAssertEqual(r.store.errorText, reason, action)
+        }
+    }
+
+    // 产品保证：快捷键暂停或继续失败时显示本次原因，不同时出现已暂停或已继续的成功提示。
+    func testShortcutTimerFailureDoesNotShowSuccessToast() {
+        for running in [true, false] {
+            let r = rig([task(1)])
+            setTimer(r, mode: 0, active: true, taskID: 1, title: "任务1", elapsed: 700)
+            r.focus.focusSnapshot.running = running
+            r.store.refreshSnapshot()
+            let reason = running ? "暂停没有保存成功，计时仍在继续，请重试" : "继续没有保存成功，请重试"
+            r.focus.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+            r.store.startOrPauseFromShortcut()
+            XCTAssertEqual(r.store.errorText, reason)
+            XCTAssertNil(r.shell.toast)
+            XCTAssertEqual(r.store.snapshot.running, running)
+        }
+    }
+
+    // 产品保证：继续失败显示桥接返回的本次原因，暂停状态保留，不伪称计时已经恢复。
+    func testResumeFailurePreservesBridgeReason() {
+        let r = rig([task(1)])
+        setTimer(r, mode: 0, active: true, taskID: 1, title: "任务1", elapsed: 700)
+        r.focus.focusSnapshot.running = false
+        r.store.refreshSnapshot()
+        XCTAssertFalse(r.store.snapshot.running)
+        r.focus.error = NSError(domain: "测试", code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "继续没有保存成功，请重试"])
+        r.store.togglePause()
+        XCTAssertEqual(r.store.errorText, "继续没有保存成功，请重试")
+        XCTAssertFalse(r.store.snapshot.running)
+        XCTAssertEqual(count(r, "resume"), 1)
+    }
+
     // 产品保证：开始失败时不记忆模式也不假装成功。
     func testStartFailureDoesNotRememberMode() {
         let r = rig([task(1)])
         r.store.selectTask(id: 1, title: "任务1")
         r.focus.failing = ["startFree"]
         XCTAssertFalse(r.store.startFreeFocus())
-        XCTAssertEqual(r.store.errorText, "自由专注启动失败，请重试")
+        XCTAssertEqual(r.store.errorText, "startFree 失败")
         r.store.requestModeSwitch(usePomodoro: true)
         r.focus.failing = ["startPomodoro"]
         XCTAssertFalse(r.store.startPomodoro())
-        XCTAssertEqual(r.store.errorText, "番茄专注启动失败")
+        XCTAssertEqual(r.store.errorText, "startPomodoro 失败")
         XCTAssertEqual(lastMode(r), [])
         let none = rig()
         XCTAssertFalse(none.store.startFreeFocus())
@@ -840,7 +893,7 @@ import XCTest
         failing.store.startOrPauseFromShortcut()
         XCTAssertFalse(failing.store.taskSelectorPresented)
         XCTAssertNil(failing.shell.toast)
-        XCTAssertEqual(failing.store.errorText, "自由专注启动失败，请重试")
+        XCTAssertEqual(failing.store.errorText, "startFree 失败")
     }
 
     // MARK: 记一笔带来源与外壳文字

@@ -62,7 +62,7 @@ public enum TaskCompletionFocusOutcome: Equatable, Sendable {
         shell?.showToast(message, actionTitle: "撤销", action: { [weak self] in
             guard let self, self.shell?.operationBlocksUI != true else { return }
             do { try self.tasks.setCompleted(ids: ids, completed: false) }
-            catch { self.shell?.showToast("撤销完成失败，请重试") }
+            catch { self.shell?.showToast(error.localizedDescription) }
         })
         return true
     }

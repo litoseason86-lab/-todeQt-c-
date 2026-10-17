@@ -14,20 +14,25 @@ import XCTest
     var nativeUIError: Error?
     var error: Error?
     var captureResult = 9
-    // 写入期间由服务经桥接报上来的失败（真实桥接里服务的失败信号同步转发到 onFailure）。
+    // 真实桥接认领服务失败后抛给调用方，不再同时走外壳后台失败回调。
     var captureFailure: String?
+    var selectionFailure: String?
     var calls: [String] = []
     func readTimer() throws -> ShellTimerSnapshot { timerReads += 1; if let timerError { throw timerError }; return timerSnapshot }
     func read() throws -> ShellSnapshot { fullReads += 1; if let error { throw error }; return snapshot }
     func setNativeUI(_ value: Bool) throws { if let nativeUIError { throw nativeUIError }; calls.append("nativeUI:\(value)") }
-    func pause() -> Bool { calls.append("pause"); return true }
-    func resume() -> Bool { calls.append("resume"); return true }
-    func capture(title: String, categoryID: Int, sourceTaskID: Int) -> Int {
+    func pause() throws { calls.append("pause") }
+    func resume() throws { calls.append("resume") }
+    func capture(title: String, categoryID: Int, sourceTaskID: Int) throws -> Int {
         calls.append("capture:\(title):\(categoryID):\(sourceTaskID)")
-        if let captureFailure { onFailure?(captureFailure) }
+        if let captureFailure { throw NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: captureFailure]) }
+        if captureResult <= 0 { throw NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "没能存下来，请再试一次"]) }
         return captureResult
     }
-    func select(page: String) { calls.append("select:\(page)") }
+    func select(page: String) throws {
+        calls.append("select:\(page)")
+        if let selectionFailure { throw NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: selectionFailure]) }
+    }
 }
 
 @MainActor final class ShellStoreTests: XCTestCase {
@@ -269,13 +274,25 @@ import XCTest
         XCTAssertEqual(store.errorMessage, "早先的同步失败", "前提：壳层留着一条与记一笔无关的旧错误")
         store.presentCapture()
         store.captureTitle = "来源编号越界"
-        // 桥接拒绝越界编号时只返回 -1、不发失败：这次失败没有具体原因，只能用通用提示。
+        // 新接口把越界检查的原因作为本次调用错误返回，不能采用先前的同步失败。
+        bridge.captureFailure = "来源编号无效"
         XCTAssertFalse(store.capture())
-        XCTAssertEqual(store.captureError, "没能存下来，请再试一次")
-        // 写入期间服务报了失败：用这条新原因。
+        XCTAssertEqual(store.captureError, "来源编号无效")
+        XCTAssertEqual(store.errorMessage, "早先的同步失败")
+        // 再次调用的错误也只取这一次返回的原因。
         bridge.captureFailure = "知识缺口写入失败"
         XCTAssertFalse(store.capture())
         XCTAssertEqual(store.captureError, "知识缺口写入失败")
+    }
+    // 产品保证：页面偏好写入失败显示本次原因，导航仍按原有选择规则进行。
+    func testSelectionPersistenceFailureShowsReason() {
+        let bridge = FakeShellBridge()
+        let store = ShellStore(bridge: bridge)
+        bridge.selectionFailure = "页面状态保存失败"
+        store.select(.memo)
+        XCTAssertEqual(store.selection, .memo)
+        XCTAssertEqual(store.errorMessage, "页面状态保存失败")
+        XCTAssertEqual(bridge.calls.last, "select:memo")
     }
     // 产品保证：快捷键选页保存本机状态，更多与侧栏遵循用户顺序且固定入口末尾。
     func testSelectionAndNavigationGroupsUsePreferences() {

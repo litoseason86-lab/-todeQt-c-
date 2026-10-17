@@ -233,31 +233,46 @@
     if (error) *error = [NSError errorWithDomain:@"PTShellBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: message.toNSString()}];
     return NO;
 }
-- (BOOL)pause
+- (BOOL)pause:(NSError **)error
 {
     NSAssert(NSThread.isMainThread, @"计时动作必须在主线程");
-    return FocusTimer::instance()->pauseFocus();
+    // Swift 必须认领本次失败原因，不能在外壳收到信号后又按 bool 另显示一次通用提示。
+    PTBridgeSupport::FailureCollector::Call call(_failures);
+    return FocusTimer::instance()->pauseFocus() || PTBridgeSupport::fail(error, call.error());
 }
-- (BOOL)resume
+- (BOOL)resume:(NSError **)error
 {
     NSAssert(NSThread.isMainThread, @"计时动作必须在主线程");
-    return FocusTimer::instance()->resumeFocus();
+    PTBridgeSupport::FailureCollector::Call call(_failures);
+    return FocusTimer::instance()->resumeFocus() || PTBridgeSupport::fail(error, call.error());
 }
-- (NSInteger)captureTitle:(NSString *)title categoryId:(NSInteger)categoryId sourceTaskId:(NSInteger)sourceTaskId
+- (NSInteger)captureTitle:(NSString *)title categoryId:(NSInteger)categoryId sourceTaskId:(NSInteger)sourceTaskId error:(NSError **)error
 {
     NSAssert(NSThread.isMainThread, @"快速记录必须在主线程");
     // Objective-C 的 NSInteger 比服务编号宽；越界拒绝，避免截断后关联到另一条记录。
-    if (categoryId < -1 || categoryId > std::numeric_limits<int>::max()
-        || sourceTaskId < -1 || sourceTaskId > std::numeric_limits<int>::max()) return -1;
-    return KnowledgeGapService::instance()->captureGap(QString::fromNSString(title),
+    if (categoryId < -1 || categoryId > std::numeric_limits<int>::max()) {
+        PTBridgeSupport::fail(error, QStringLiteral("科目编号无效"));
+        return -1;
+    }
+    if (sourceTaskId < -1 || sourceTaskId > std::numeric_limits<int>::max()) {
+        PTBridgeSupport::fail(error, QStringLiteral("来源编号无效"));
+        return -1;
+    }
+    // 参数拒绝与服务拒绝都从 NSError 返回，不依赖上一次外壳错误或后台失败回调。
+    PTBridgeSupport::FailureCollector::Call call(_failures);
+    const int id = KnowledgeGapService::instance()->captureGap(QString::fromNSString(title),
         static_cast<int>(categoryId), static_cast<int>(sourceTaskId));
+    if (id <= 0) PTBridgeSupport::fail(error, call.error());
+    return id;
 }
-- (void)selectPage:(NSString *)page
+- (BOOL)selectPage:(NSString *)page error:(NSError **)error
 {
     NSAssert(NSThread.isMainThread, @"页面状态必须在主线程保存");
     QString message;
     if (!IPadShellPreferences::setSelectedPage(QString::fromNSString(page), &message)) {
         qWarning().noquote() << message;
+        return PTBridgeSupport::fail(error, message);
     }
+    return YES;
 }
 @end

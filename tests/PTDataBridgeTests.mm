@@ -14,6 +14,16 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+// 旧实现先用选择器断言暴露缺失契约，避免测试向尚不存在的方法发消息。
+@interface PTSyncBridge (T24FailureContract)
+- (BOOL)setEnabled:(BOOL)value error:(NSError **)error;
+- (BOOL)confirmJoin:(NSError **)error;
+- (BOOL)syncNow:(NSError **)error;
+- (BOOL)chooseFolder:(NSError **)error;
+- (BOOL)rebuildFolder:(NSError **)error;
+- (BOOL)copyLostValue:(NSString *)text error:(NSError **)error;
+@end
+
 // 仅测试声明内部转换入口，不把 QVariantMap 暴露给 Swift 模块。
 @interface PTTrashItemValue (PTDataBridgeTests)
 - (instancetype)initWithMap:(const QVariantMap &)map;
@@ -37,6 +47,8 @@
 class PTDataBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void syncActionsRejectReleasedService_data();
+    void syncActionsRejectReleasedService();
     void initTestCase();
     void init();
     void cleanup();
@@ -181,9 +193,45 @@ void PTDataBridgeTests::syncBridgeSurvivesServiceDestruction() {
         }
         QVERIFY(![bridge syncLog:10].valid);
         NSError *error = nil; [bridge readLogCount:&error]; QVERIFY(error != nil);
-        [bridge syncNow];
+        error = nil;
+        QVERIFY(![bridge syncNow:&error]);
+        QVERIFY([error.localizedDescription isEqualToString:@"同步服务未登记或已释放"]);
     }
 }
+// 产品保证：同步的每个动作在服务未登记或已释放时都能返回具体原因。
+void PTDataBridgeTests::syncActionsRejectReleasedService_data()
+{
+    QTest::addColumn<int>("action");
+    for (int action = 0; action < 6; ++action)
+        QTest::newRow(qPrintable(QString::number(action))) << action;
+}
+
+// 产品保证：失效登记不能让用户动作静默成功，NSError 明确指出同步服务不可用。
+void PTDataBridgeTests::syncActionsRejectReleasedService()
+{
+    @autoreleasepool {
+        QFETCH(int, action);
+        PTBridgeSupport::registerService(QStringLiteral("syncController"), nullptr);
+        PTSyncBridge* bridge = [PTSyncBridge new];
+        const SEL selectors[] = {@selector(setEnabled:error:), @selector(confirmJoin:), @selector(syncNow:),
+            @selector(chooseFolder:), @selector(rebuildFolder:), @selector(copyLostValue:error:)};
+        QVERIFY([bridge respondsToSelector:selectors[action]]);
+        NSError* error = nil;
+        BOOL result = YES;
+        switch (action) {
+        case 0: result = [bridge setEnabled:YES error:&error]; break;
+        case 1: result = [bridge confirmJoin:&error]; break;
+        case 2: result = [bridge syncNow:&error]; break;
+        case 3: result = [bridge chooseFolder:&error]; break;
+        case 4: result = [bridge rebuildFolder:&error]; break;
+        case 5: result = [bridge copyLostValue:@"丢失值" error:&error]; break;
+        }
+        QVERIFY(!result);
+        QVERIFY(error != nil);
+        QVERIFY([error.localizedDescription isEqualToString:@"同步服务未登记或已释放"]);
+    }
+}
+
 // 产品保证：自动备份开关只有落盘成功才算保存，内存读回不能吞掉偏好写失败。
 void PTDataBridgeTests::backupBridgeDetectsPreferenceWriteFailure() {
     @autoreleasepool {

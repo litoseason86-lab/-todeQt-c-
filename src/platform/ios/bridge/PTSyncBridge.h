@@ -44,14 +44,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly, copy) NSString *folderProblem;
 @property(nonatomic, readonly) NSInteger logRevision;
 @property(nonatomic, readonly) NSInteger logCount;
-- (void)setEnabled:(BOOL)enabled;
-- (void)confirmJoin;
-- (void)syncNow;
-- (void)chooseFolder;
-- (void)rebuildFolder;
+- (BOOL)setEnabled:(BOOL)enabled error:(NSError **)error __attribute__((swift_error(nonnull_error)));
+- (BOOL)confirmJoin:(NSError **)error __attribute__((swift_error(nonnull_error)));
+- (BOOL)syncNow:(NSError **)error __attribute__((swift_error(nonnull_error)));
+- (BOOL)chooseFolder:(NSError **)error __attribute__((swift_error(nonnull_error)));
+- (BOOL)rebuildFolder:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (PTSyncLogReadResult *)syncLog:(NSInteger)limit;
 - (NSInteger)readLogCount:(NSError **)error __attribute__((swift_error(nonnull_error)));
-- (void)copyLostValue:(NSString *)text;
+- (BOOL)copyLostValue:(NSString *)text error:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (NSString *)restoreWarning;
 @end
 NS_ASSUME_NONNULL_END

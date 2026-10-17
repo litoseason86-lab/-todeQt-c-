@@ -69,10 +69,10 @@ import PTBridge
     func setAppearance(_ value: String) throws { try bridge.setAppearance(value) }
     func setNativeUI(_ value: Bool) throws { try bridge.setNativeUI(value) }
     func setUseWallpaper(_ value: Bool) throws { try bridge.setUseWallpaper(value) }
-    func pause() -> Bool { bridge.pause() }
-    func resume() -> Bool { bridge.resume() }
-    func capture(title: String, categoryID: Int, sourceTaskID: Int) -> Int {
-        bridge.capture(title: title, categoryID: categoryID, sourceTaskID: sourceTaskID)
+    func pause() throws { try bridge.pause() }
+    func resume() throws { try bridge.resume() }
+    func capture(title: String, categoryID: Int, sourceTaskID: Int) throws -> Int {
+        try bridge.capture(title: title, categoryID: categoryID, sourceTaskID: sourceTaskID)
     }
-    func select(page: String) { bridge.select(page: page) }
+    func select(page: String) throws { try bridge.select(page: page) }
 }

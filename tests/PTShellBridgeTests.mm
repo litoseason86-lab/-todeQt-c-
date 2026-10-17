@@ -20,9 +20,19 @@
 #include "../src/services/LogicalDay.h"
 #include "../src/services/TaskManager.h"
 
+// 先对旧桥接验证缺少错误契约；选择器检查失败时立即返回，避免给旧实现发送不存在的方法。
+@interface PTShellBridge (T24FailureContract)
+- (BOOL)pause:(NSError **)error;
+- (BOOL)resume:(NSError **)error;
+- (NSInteger)captureTitle:(NSString *)title categoryId:(NSInteger)categoryId sourceTaskId:(NSInteger)sourceTaskId error:(NSError **)error;
+- (BOOL)selectPage:(NSString *)page error:(NSError **)error;
+@end
+
 class PTShellBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void shellActionFailureReasons_data();
+    void shellActionFailureReasons();
     void taskCallClaimsFailureAcrossBridges_data();
     void taskCallClaimsFailureAcrossBridges();
     void unclaimedCrossServiceFailureReachesShellAfterCall();
@@ -118,7 +128,7 @@ void PTShellBridgeTests::convertsServiceSnapshotAndPersistsLocalSelection()
         QCOMPARE(snapshot.todayFocusedSeconds, NSInteger(600));
         QCOMPARE(snapshot.dueGapCount, NSInteger(1));
         QVERIFY([snapshot.sidebarOrder.firstObject isEqualToString:AppSettings::instance()->sidebarOrder().first().toNSString()]);
-        [bridge selectPage:@"memo"];
+        QVERIFY([bridge selectPage:@"memo" error:nil]);
         QVERIFY([bridge readSnapshot].selectedPage && [[bridge readSnapshot].selectedPage isEqualToString:@"memo"]);
         QCOMPARE(QSettings().value(QStringLiteral("ipad/selectedPage")).toString(), QStringLiteral("memo"));
     }
@@ -199,19 +209,23 @@ void PTShellBridgeTests::capturesWithoutInterruptingFocusAndForwardsFailure()
         QVERIFY(timer.hasTimer && timer.running);
         QCOMPARE(timer.currentTaskId, NSInteger(task));
         QVERIFY([timer.taskTitle isEqualToString:@"计时中的任务"]);
-        QVERIFY([bridge pause]);
+        QVERIFY([bridge pause:nil]);
         QVERIFY(![bridge readSnapshot].running);
-        QVERIFY([bridge resume]);
+        QVERIFY([bridge resume:nil]);
         QVERIFY([bridge readSnapshot].running);
-        const NSInteger id = [bridge captureTitle:@"中文 <b>标题" categoryId:-1 sourceTaskId:-1];
+        const NSInteger id = [bridge captureTitle:@"中文 <b>标题" categoryId:-1 sourceTaskId:-1 error:nil];
         QVERIFY(id > 0);
         QCOMPARE(KnowledgeGapService::instance()->getGap(static_cast<int>(id)).value(QStringLiteral("title")).toString(), QStringLiteral("中文 <b>标题"));
         QVERIFY(FocusTimer::instance()->hasActiveSession());
         __block NSString *failure = nil;
         bridge.onFailure = ^(NSString *message) { failure = message; };
-        QCOMPARE([bridge captureTitle:@"" categoryId:-1 sourceTaskId:-1], NSInteger(-1));
-        QVERIFY(failure.length > 0);
-        QCOMPARE([bridge captureTitle:@"越界" categoryId:NSIntegerMax sourceTaskId:-1], NSInteger(-1));
+        NSError* error = nil;
+        QCOMPARE([bridge captureTitle:@"" categoryId:-1 sourceTaskId:-1 error:&error], NSInteger(-1));
+        QVERIFY(error.localizedDescription.length > 0);
+        QVERIFY(failure == nil);
+        error = nil;
+        QCOMPARE([bridge captureTitle:@"越界" categoryId:NSIntegerMax sourceTaskId:-1 error:&error], NSInteger(-1));
+        QVERIFY([error.localizedDescription isEqualToString:@"科目编号无效"]);
     }
 }
 // 产品保证：读取失败与空数据分开返回，界面可以保留旧读数并提示重试。
@@ -304,7 +318,7 @@ void PTShellBridgeTests::bothUIEntrancesWriteTheSameLocalKey()
 {
     @autoreleasepool {
         PTShellBridge *native = [PTShellBridge new];
-        [native selectPage:@"settings"];
+        QVERIFY([native selectPage:@"settings" error:nil]);
         NSError *error = nil;
         QVERIFY([native setNativeUI:NO error:&error]); QVERIFY(error == nil);
         QVERIFY(QSettings().contains(QStringLiteral("ipad/nativeUI")));
@@ -466,7 +480,7 @@ void PTShellBridgeTests::pageSelectionFailureKeepsPreviousValue_data()
     QTest::newRow("no-page-key") << false;
 }
 
-// 产品保证：桥接选页的 void 接口也遵守失败还原，且不会广播成功变化。
+// 产品保证：选页保存失败返回本次具体原因、还原偏好，且不广播成功变化。
 void PTShellBridgeTests::pageSelectionFailureKeepsPreviousValue()
 {
     @autoreleasepool {
@@ -490,12 +504,93 @@ void PTShellBridgeTests::pageSelectionFailureKeepsPreviousValue()
         __block int changes = 0;
         bridge.onChanged = ^{ ++changes; };
 
-        [bridge selectPage:@"history"];
+        QVERIFY([bridge respondsToSelector:@selector(selectPage:error:)]);
+        NSError* error = nil;
+        QVERIFY(![bridge selectPage:@"history" error:&error]);
+        QVERIFY(error != nil);
+        QVERIFY([error.localizedDescription isEqualToString:@"页面状态保存失败"]);
 
         QCOMPARE(observed.contains(key), hadPage);
         QCOMPARE(observed.value(key, QStringLiteral("dashboard")).toString(),
                  hadPage ? QStringLiteral("memo") : QStringLiteral("dashboard"));
         QCOMPARE(changes, 0);
+    }
+}
+
+// 产品保证：外壳计时和记一笔的每类失败都有可交给 Swift 的本次原因。
+void PTShellBridgeTests::shellActionFailureReasons_data()
+{
+    QTest::addColumn<QString>("failure");
+    QTest::addColumn<QString>("expected");
+    QTest::newRow("pause-write") << QStringLiteral("pause-write") << QStringLiteral("暂停没有保存成功，计时仍在继续，请重试");
+    QTest::newRow("resume-write") << QStringLiteral("resume-write") << QStringLiteral("继续没有保存成功，请重试");
+    QTest::newRow("resume-idle") << QStringLiteral("resume-idle") << QStringLiteral("没有进行中的专注或休息，无法继续");
+    QTest::newRow("capture-empty") << QStringLiteral("capture-empty") << QStringLiteral("请先填写要记录的内容");
+    QTest::newRow("capture-closed") << QStringLiteral("capture-closed") << QStringLiteral("数据库未打开，知识缺口暂不可用");
+    QTest::newRow("capture-category") << QStringLiteral("capture-category") << QStringLiteral("科目编号无效");
+    QTest::newRow("capture-source") << QStringLiteral("capture-source") << QStringLiteral("来源编号无效");
+}
+
+// 产品保证：失败返回 NSError 原因而非只给 bool 或 -1，且已认领的失败不再走外壳或旁观桥接。
+void PTShellBridgeTests::shellActionFailureReasons()
+{
+    @autoreleasepool {
+        QFETCH(QString, failure);
+        QFETCH(QString, expected);
+        PTShellBridge* bridge = [PTShellBridge new];
+        PTShellBridge* observer = [PTShellBridge new];
+        const bool pausing = failure == QStringLiteral("pause-write");
+        const bool resuming = failure.startsWith(QStringLiteral("resume"));
+        const SEL selector = pausing ? @selector(pause:) : resuming ? @selector(resume:)
+            : @selector(captureTitle:categoryId:sourceTaskId:error:);
+        QVERIFY([bridge respondsToSelector:selector]);
+        __block int failures = 0;
+        bridge.onFailure = ^(NSString*) { ++failures; };
+        observer.onFailure = ^(NSString*) { ++failures; };
+        auto* timer = FocusTimer::instance();
+        // 关库制造落盘失败后，离开用例前必须重开同一隔离库，供 cleanup 正常结束仍在内存里的计时。
+        const auto reopenDatabase = qScopeGuard([this] {
+            if (!DatabaseManager::instance()->database().isOpen())
+                DatabaseManager::instance()->initialize(m_database.filePath(QStringLiteral("test.sqlite")));
+        });
+        if (failure.endsWith(QStringLiteral("write"))) {
+            const int id = TaskManager::instance()->createTask(QStringLiteral("外壳失败测试"),
+                LogicalDay::today(AppSettings::instance()->dayStartHour()), -1, 0, QString());
+            QVERIFY(id > 0);
+            QVERIFY(timer->startFocus(id, QStringLiteral("外壳失败测试")));
+            if (resuming) QVERIFY(timer->pauseFocus());
+            QCOMPARE(timer->isRunning(), pausing);
+            DatabaseManager::instance()->close();
+        } else if (failure == QStringLiteral("capture-closed")) {
+            DatabaseManager::instance()->close();
+        } else if (failure == QStringLiteral("resume-idle")) {
+            QVERIFY(!timer->hasActiveSession());
+            QVERIFY(!timer->isRunning());
+        }
+        QSignalSpy emittedTimer(timer, &FocusTimer::operationFailed);
+        QSignalSpy emittedGap(KnowledgeGapService::instance(), &KnowledgeGapService::operationFailed);
+        NSError* error = nil;
+        if (pausing) {
+            QVERIFY(![bridge pause:&error]);
+        } else if (resuming) {
+            QVERIFY(![bridge resume:&error]);
+        } else {
+            NSString* title = failure == QStringLiteral("capture-empty") ? @"" : @"没有写入的草稿";
+            const NSInteger category = failure == QStringLiteral("capture-category") ? NSIntegerMax : -1;
+            const NSInteger source = failure == QStringLiteral("capture-source") ? NSIntegerMax : -1;
+            QCOMPARE([bridge captureTitle:title categoryId:category sourceTaskId:source error:&error], NSInteger(-1));
+        }
+        QVERIFY(error != nil);
+        QCOMPARE(QString::fromNSString(error.localizedDescription), expected);
+        QCOMPARE(failures, 0);
+        if (pausing || resuming) {
+            QCOMPARE(emittedTimer.count(), 1);
+            QCOMPARE(emittedTimer.first().first().toString(), expected);
+            if (failure.endsWith(QStringLiteral("write"))) QCOMPARE(timer->isRunning(), pausing);
+        } else if (failure == QStringLiteral("capture-empty") || failure == QStringLiteral("capture-closed")) {
+            QCOMPARE(emittedGap.count(), 1);
+            QCOMPARE(emittedGap.first().first().toString(), expected);
+        }
     }
 }
 

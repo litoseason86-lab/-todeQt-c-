@@ -60,10 +60,12 @@ NS_ASSUME_NONNULL_BEGIN
     __attribute__((swift_error(nonnull_error)));
 - (BOOL)setNativeUI:(BOOL)value error:(NSError **)error
     __attribute__((swift_error(nonnull_error)));
-- (BOOL)pause;
-- (BOOL)resume;
-- (NSInteger)captureTitle:(NSString *)title categoryId:(NSInteger)categoryId sourceTaskId:(NSInteger)sourceTaskId
+- (BOOL)pause:(NSError **)error __attribute__((swift_error(nonnull_error)));
+- (BOOL)resume:(NSError **)error __attribute__((swift_error(nonnull_error)));
+- (NSInteger)captureTitle:(NSString *)title categoryId:(NSInteger)categoryId sourceTaskId:(NSInteger)sourceTaskId error:(NSError **)error
+    __attribute__((swift_error(nonnull_error)))
     NS_SWIFT_NAME(capture(title:categoryID:sourceTaskID:));
-- (void)selectPage:(NSString *)page NS_SWIFT_NAME(select(page:));
+- (BOOL)selectPage:(NSString *)page error:(NSError **)error
+    __attribute__((swift_error(nonnull_error))) NS_SWIFT_NAME(select(page:));
 @end
 NS_ASSUME_NONNULL_END

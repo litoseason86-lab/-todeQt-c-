@@ -94,13 +94,14 @@ import XCTest
         XCTAssertFalse(r.store.commitDrag(taskID: 10, toIndex: 1))
         XCTAssertTrue(moves(r).isEmpty)
     }
-    // 产品保证：排序写入失败要提示重试，并释放拖动冻结。
+    // 产品保证：排序写入失败保留桥接原因，并释放拖动冻结。
     func testMoveFailureShowsRetryAndReleasesFreeze() {
         let r = rig([task(10), task(20), task(30)])
         r.tasks.failing = ["moveBefore"]
+        r.tasks.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "任务排序失败：写入顺序失败"])
         XCTAssertTrue(r.store.beginDrag(taskID: 10))
         XCTAssertFalse(r.store.commitDrag(taskID: 10, toIndex: 2))
-        XCTAssertEqual(r.store.loadError, "任务排序保存失败，请重试"); XCTAssertFalse(r.interactions.refreshBlocked)
+        XCTAssertEqual(r.store.loadError, "任务排序失败：写入顺序失败"); XCTAssertFalse(r.interactions.refreshBlocked)
     }
     // 产品保证：编辑期间收到任务变化不重读（以免销毁正在编辑的行），令牌释放后只补读一次。
     func testEditFreezesRefreshAndCatchesUpOnce() throws {
@@ -143,12 +144,13 @@ import XCTest
         XCTAssertEqual(r.tasks.calls.last(where: { $0.name == "moveToday" })?.ids, [8, 3])
         XCTAssertFalse(r.store.rolloverBannerActive)
     }
-    // 产品保证：结转失败要说出来，列表和提示条保持原样。
+    // 产品保证：结转失败显示服务原文，列表和结转提示条保持原样。
     func testRolloverFailureKeepsBannerAndSaysSo() {
         let r = rig([]); r.tasks.overdue = [task(8)]; r.store.refresh()
         r.tasks.failing = ["moveToday"]
+        r.tasks.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "改期失败：任务已变化，请刷新重试"])
         r.store.moveOverdueToToday()
-        XCTAssertEqual(r.store.loadError, "结转失败，请重试"); XCTAssertTrue(r.store.rolloverBannerActive)
+        XCTAssertEqual(r.store.loadError, "改期失败：任务已变化，请刷新重试"); XCTAssertTrue(r.store.rolloverBannerActive)
     }
     // 产品保证：「忽略」把逻辑今日写进设置，当天不再提示；到了新的一天再次提示。
     func testIgnoreRolloverWritesLogicalTodayAndReturnsNextDay() {

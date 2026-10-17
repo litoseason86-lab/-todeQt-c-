@@ -54,12 +54,25 @@ import XCTest
         XCTAssertEqual(shell.toast?.message, "已删除「第二个」"); XCTAssertEqual(shell.toast?.actionTitle, "撤销")
         shell.triggerToastAction(); XCTAssertEqual(bridge.calls.last?.name, "cancel")
     }
-    // 产品保证：请求失败不制造删除成功提示，也不覆盖已经显示的提示。
-    func testFailedRequestDoesNotShowToast() {
-        let (shell, bridge, _, store) = fixture(); shell.showToast("已有提示"); let id = shell.toast?.id
-        bridge.error = NSError(domain: "测试", code: 1)
-        XCTAssertFalse(store.requestTask(id: 7, title: "甲")); XCTAssertEqual(shell.toast?.id, id)
-        XCTAssertFalse(store.requestSession(id: 9, isRest: false)); XCTAssertEqual(shell.toast?.id, id)
+    // 产品保证：请求失败显示本次原因，不保留无关旧提示，也不制造删除成功提示。
+    func testFailedRequestShowsBridgeReason() {
+        let (shell, bridge, _, store) = fixture(); shell.showToast("已有提示")
+        bridge.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "删除服务未登记或已释放"])
+        XCTAssertFalse(store.requestTask(id: 7, title: "甲"))
+        XCTAssertEqual(shell.toast?.message, "删除服务未登记或已释放")
+        bridge.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "记录编号无效"])
+        XCTAssertFalse(store.requestSession(id: 9, isRest: false))
+        XCTAssertEqual(shell.toast?.message, "记录编号无效")
+        XCTAssertFalse(bridge.state.active)
+    }
+    // 产品保证：新请求提交旧槽失败时仍只用原条目标题提示，不被随后抛出的通用错误盖掉。
+    func testFailedPreviousCommitKeepsSingleTitleFailure() {
+        let (shell, bridge, _, store) = fixture()
+        XCTAssertTrue(store.requestTask(id: 7, title: "旧任务"))
+        bridge.commitError = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "请求删除任务失败"])
+        XCTAssertFalse(store.requestTask(id: 9, title: "新任务"))
+        XCTAssertEqual(shell.toast?.message, "删除「旧任务」失败，请重试")
+        XCTAssertEqual(bridge.calls.filter { $0.name == "commit" }.count, 1)
     }
     // 产品保证：专注与休息编号互不混用，缺省标题是专注记录，撤销不提交。
     func testSessionRequestPreservesKindAndDefaultTitle() {

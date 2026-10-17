@@ -458,7 +458,7 @@ public struct ActiveFocusSession: Equatable, Sendable {
     @discardableResult public func createTaskAndStart(title: String) -> Bool {
         let newID: Int
         do { newID = try focus.createTodayTask(title: title) }
-        catch { errorText = "新建任务失败，请重试"; return false }
+        catch { errorText = error.localizedDescription; return false }
         guard newID > 0 else { errorText = "新建任务失败，请重试"; return false }
         // 先重读清单再记选中：重读会校验选中项，新任务要等清单里有了再选。
         reloadTodayTasks()
@@ -490,7 +490,7 @@ public struct ActiveFocusSession: Equatable, Sendable {
     public func startOrPauseFromShortcut() {
         refreshSnapshot()
         if snapshot.hasActiveSession || snapshot.phase != 0 {
-            togglePause()
+            guard togglePause() else { return }
             let rest = snapshot.mode == 2 && snapshot.phase == 3
             shell?.showToast(snapshot.running ? (rest ? "已继续休息" : "已继续专注") : (rest ? "已暂停休息" : "已暂停专注"))
             return
@@ -547,12 +547,14 @@ public struct ActiveFocusSession: Equatable, Sendable {
         // 范围而非白名单：自定义时长和预设走同一入口。
         guard (5...180).contains(minutes) else { return }
         selectedWorkMinutes = minutes
-        try? settings.setWorkMinutes(minutes)
+        do { try settings.setWorkMinutes(minutes) }
+        catch { errorText = error.localizedDescription }
     }
     public func selectBreakMinutes(_ minutes: Int) {
         guard (1...60).contains(minutes) else { return }
         selectedBreakMinutes = minutes
-        try? settings.setBreakMinutes(minutes)
+        do { try settings.setBreakMinutes(minutes) }
+        catch { errorText = error.localizedDescription }
     }
     // 长休息的判定在控制器，手动和自动开始休息共用。
     private func nextBreakMinutes() -> Int { (try? focus.nextBreakMinutes(selected: selectedBreakMinutes)) ?? selectedBreakMinutes }
@@ -564,9 +566,10 @@ public struct ActiveFocusSession: Equatable, Sendable {
         guard freeModeAvailable else { errorText = "这台设备暂时只支持番茄专注"; return false }
         guard canStartFreeFocus else { errorText = "请先选择要专注的任务"; return false }
         do { try focus.startFree(taskID: selectedTaskID, title: selectedTaskTitle) }
-        catch { errorText = "自由专注启动失败，请重试"; return false }
+        catch { errorText = error.localizedDescription; return false }
         errorText = ""; justCompletedPhase = 0
-        try? settings.setLastMode(0)
+        do { try settings.setLastMode(0) }
+        catch { errorText = error.localizedDescription }
         refreshSnapshot()
         return true
     }
@@ -575,12 +578,15 @@ public struct ActiveFocusSession: Equatable, Sendable {
         justCompletedPhase = 0
         let taskID = selectedTaskID > 0 ? selectedTaskID : snapshot.currentTaskID
         let title = !selectedTaskTitle.isEmpty ? selectedTaskTitle : (!snapshot.currentTaskTitle.isEmpty ? snapshot.currentTaskTitle : "番茄专注")
-        guard taskID > 0, (try? focus.startPomodoro(taskID: taskID, title: title, seconds: selectedWorkMinutes * 60)) != nil else {
+        guard taskID > 0 else {
             errorText = "番茄专注启动失败"; return false
         }
+        do { try focus.startPomodoro(taskID: taskID, title: title, seconds: selectedWorkMinutes * 60) }
+        catch { errorText = error.localizedDescription; return false }
         errorText = ""
         // 只在真正启动番茄后记忆模式；单纯切到番茄页不改变用户偏好。
-        try? settings.setLastMode(1)
+        do { try settings.setLastMode(1) }
+        catch { errorText = error.localizedDescription }
         refreshSnapshot()
         return true
     }
@@ -589,19 +595,25 @@ public struct ActiveFocusSession: Equatable, Sendable {
         let taskID = selectedTaskID > 0 ? selectedTaskID : snapshot.currentTaskID
         let title = !selectedTaskTitle.isEmpty ? selectedTaskTitle : snapshot.currentTaskTitle
         do { try focus.startBreak(seconds: nextBreakMinutes() * 60, taskID: taskID, title: title) }
-        catch { errorText = "休息启动失败"; return false }   // 失败时保留完成态，用户必须仍能重试
+        catch { errorText = error.localizedDescription; return false }   // 失败时保留完成态，用户必须仍能重试
         justCompletedPhase = 0; errorText = ""
         refreshSnapshot()
         return true
     }
-    public func togglePause() {
+    @discardableResult public func togglePause() -> Bool {
         refreshSnapshot()
-        if snapshot.running {
-            do { try focus.pause() } catch { errorText = error.localizedDescription }
-        } else {
-            do { try focus.resume(); errorText = "" } catch { errorText = "专注恢复失败" }
+        do {
+            if snapshot.running { try focus.pause() }
+            else { try focus.resume() }
+            errorText = ""
+        } catch {
+            // 调用方按返回值停止成功提示，错误仍显示在原专注提示区域。
+            errorText = error.localizedDescription
+            refreshSnapshot()
+            return false
         }
         refreshSnapshot()
+        return true
     }
 
     // MARK: 结束

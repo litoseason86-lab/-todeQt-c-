@@ -1048,6 +1048,7 @@ private slots:
     void freeFocusStillCountsUpUnchanged();
     void focusTimerUsesMonotonicElapsedTimeAfterBlockedEventLoop();
     void interruptedFocusRestoresPausedAndKeepsProgress();
+    void resumeWithoutActiveSessionReportsReason();
     void restoreWithoutActiveStateResetsPomodoroCount();
     void restoreKeepsSessionWhenTaskWasDeleted();
     void completionSaveFailureNotifiesOnceAndKeepsRetrying();
@@ -7196,6 +7197,19 @@ void ServiceTests::focusTimerUsesMonotonicElapsedTimeAfterBlockedEventLoop()
 
     setFocusElapsedSeconds(timer, kTestMinimumValidDurationSeconds);
     QVERIFY(timer->stopFocus());
+}
+
+void ServiceTests::resumeWithoutActiveSessionReportsReason()
+{
+    // 产品保证：没有可继续的专注或休息时，失败只报一次具体原因，不让桥接退回通用文案。
+    auto* timer = FocusTimer::instance();
+    QVERIFY(!timer->hasActiveSession());
+    QVERIFY(!timer->isRunning());
+    QSignalSpy failed(timer, &FocusTimer::operationFailed);
+    QVERIFY(failed.isValid());
+    QVERIFY(!timer->resumeFocus());
+    QCOMPARE(failed.count(), 1);
+    QCOMPARE(failed.first().first().toString(), QStringLiteral("没有进行中的专注或休息，无法继续"));
 }
 
 void ServiceTests::interruptedFocusRestoresPausedAndKeepsProgress()

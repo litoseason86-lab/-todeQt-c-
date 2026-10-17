@@ -24,13 +24,20 @@ import Observation
         do { logs = try bridge.syncLog(limit: 200); errorMessage = "" }
         catch { errorMessage = error.localizedDescription }
     }
-    public func setEnabled(_ enabled: Bool) { bridge.setEnabled(enabled); refresh() }
-    public func confirmJoin() { bridge.confirmJoin() }
-    public func syncNow() { bridge.syncNow() }
-    public func chooseFolder() { bridge.chooseFolder() }
-    public func rebuildFolder() { bridge.rebuildFolder() }
+    // 桥接拒绝派发时显示本次原因；已派发动作的进度和失败仍由原通知与状态承接。
+    private func perform(_ action: () throws -> Void) {
+        do { try action() } catch { errorMessage = error.localizedDescription }
+    }
+    public func setEnabled(_ enabled: Bool) {
+        do { try bridge.setEnabled(enabled); refresh() }
+        catch { errorMessage = error.localizedDescription }
+    }
+    public func confirmJoin() { perform { try bridge.confirmJoin() } }
+    public func syncNow() { perform { try bridge.syncNow() } }
+    public func chooseFolder() { perform { try bridge.chooseFolder() } }
+    public func rebuildFolder() { perform { try bridge.rebuildFolder() } }
     public func copy(_ entry: SyncLogEntry) {
         guard entry.canCopyLostValue else { return }
-        bridge.copyLostValue(entry.lostValue)
+        perform { try bridge.copyLostValue(entry.lostValue) }
     }
 }

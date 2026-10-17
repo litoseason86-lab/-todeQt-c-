@@ -46,6 +46,8 @@ public:
 class PTFocusBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void actionRejectionKeepsSpecificReason_data();
+    void actionRejectionKeepsSpecificReason();
     void partialGapFailureIsClaimedByReturnedSummary();
     void initTestCase();
     void init();
@@ -204,6 +206,43 @@ void PTFocusBridgeTests::candidateCreationAndTaskCompletion() {
         QVERIFY([completed.error isEqualToString:@"专注保存失败，请重试"]);
     }
 }
+// 产品保证：页面实际使用的计时动作能把参数或服务状态原因交给 Swift。
+void PTFocusBridgeTests::actionRejectionKeepsSpecificReason_data()
+{
+    QTest::addColumn<QString>("action");
+    QTest::addColumn<QString>("expected");
+    for (const QString& action : {QStringLiteral("free"), QStringLiteral("pomodoro"), QStringLiteral("break")})
+        QTest::newRow(qPrintable(action)) << action << QStringLiteral("专注参数越界");
+    QTest::newRow("create") << QStringLiteral("create") << QStringLiteral("专注控制器不可用");
+    QTest::newRow("resume") << QStringLiteral("resume") << QStringLiteral("没有进行中的专注或休息，无法继续");
+}
+
+// 产品保证：专注动作失败返回的 NSError 保留具体原因，调用方认领后不再回调背景失败。
+void PTFocusBridgeTests::actionRejectionKeepsSpecificReason()
+{
+    @autoreleasepool {
+        QFETCH(QString, action);
+        QFETCH(QString, expected);
+        PTFocusBridge* bridge = [PTFocusBridge new];
+        __block int failures = 0;
+        bridge.onFailure = ^(NSString*) { ++failures; };
+        NSError* error = nil;
+        if (action == QStringLiteral("free")) QVERIFY(![bridge startFree:NSIntegerMax title:@"任务" error:&error]);
+        else if (action == QStringLiteral("pomodoro")) QVERIFY(![bridge startPomodoro:m_task title:@"任务" seconds:NSIntegerMax error:&error]);
+        else if (action == QStringLiteral("break")) QVERIFY(![bridge startBreak:NSIntegerMax taskId:m_task title:@"任务" error:&error]);
+        else if (action == QStringLiteral("create")) {
+            m_controller.reset();
+            QCOMPARE([bridge createTodayTask:@"草稿" error:&error], NSInteger(-1));
+        } else {
+            QVERIFY(!FocusTimer::instance()->hasActiveSession());
+            QVERIFY(![bridge resume:&error]);
+        }
+        QVERIFY(error != nil);
+        QCOMPARE(QString::fromNSString(error.localizedDescription), expected);
+        QCOMPARE(failures, 0);
+    }
+}
+
 // 产品保证：调用期错误只归当前返回值，宽整数越界不截断；登记失效后安全报错而非使用悬空指针。
 void PTFocusBridgeTests::failuresAndMissingController() {
     @autoreleasepool {

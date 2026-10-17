@@ -64,10 +64,10 @@ public struct ShellTimerSnapshot: Equatable, Sendable {
     func setAppearance(_ value: String) throws
     func selectTheme(_ value: String) throws
     func setUseWallpaper(_ value: Bool) throws
-    func pause() -> Bool
-    func resume() -> Bool
-    func capture(title: String, categoryID: Int, sourceTaskID: Int) -> Int
-    func select(page: String)
+    func pause() throws
+    func resume() throws
+    func capture(title: String, categoryID: Int, sourceTaskID: Int) throws -> Int
+    func select(page: String) throws
 }
 
 // 旧外壳替身不涉及新增的本机外观写入；默认拒绝，防止测试或其它实现假装保存成功。
@@ -132,8 +132,6 @@ public final class ShellStore {
     }
     public private(set) var selection: PageID = .dashboard
     public private(set) var errorMessage = ""
-    // 每收到一次桥接报来的失败加一。errorMessage 是壳层共用的最后一条错误，单看它分不出是不是刚才那次调用报的。
-    @ObservationIgnored private var failureSerial = 0
     public private(set) var toast: ShellToast?
     public private(set) var sidebarPages: [PageID] = PageID.ordered([]).filter {
         !PageID.summary.prefix(3).contains($0) && !PageID.fixed.contains($0)
@@ -186,7 +184,6 @@ public final class ShellStore {
         bridge.onTimerChanged = { [weak self] in self?.refreshTimer() }
         bridge.onFailure = { [weak self] message in
             guard let self else { return }
-            self.failureSerial &+= 1
             self.errorMessage = message
         }
         refresh()
@@ -326,7 +323,8 @@ public final class ShellStore {
         selection = page
         searchShown = false
         navigationRequest += 1
-        bridge.select(page: page.rawValue)
+        do { try bridge.select(page: page.rawValue) }
+        catch { errorMessage = error.localizedDescription }
     }
     public func presentCapture() {
         presentCapture(from: searchShown ? .search : .page(selection))
@@ -358,11 +356,14 @@ public final class ShellStore {
         guard !operationBlocksUI else { return false }
         let title = captureTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if title.isEmpty { captureError = "先写一句，哪怕只是几个关键词"; return false }
-        // 服务的失败信号在写入调用里同步转发到 onFailure；桥接拒绝越界编号时只返回 -1、不报失败。
-        // 所以只采用这次调用期间新到的原因，否则用通用提示，不把别处留下的旧错误安到这次记录上（062 A039）。
-        let failuresBefore = failureSerial
-        if bridge.capture(title: title, categoryID: captureSource.categoryID, sourceTaskID: captureSource.taskID) <= 0 {
-            captureError = failureSerial != failuresBefore && !errorMessage.isEmpty ? errorMessage : "没能存下来，请再试一次"
+        // 桥接用抛错返回本次已认领的原因，不再从外壳共用错误中猜测，避免沿用旧错误（062 A039）。
+        do {
+            guard try bridge.capture(title: title, categoryID: captureSource.categoryID, sourceTaskID: captureSource.taskID) > 0 else {
+                captureError = "没能存下来，请再试一次"
+                return false
+            }
+        } catch {
+            captureError = error.localizedDescription
             return false
         }
         captureTitle = ""

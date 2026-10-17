@@ -96,6 +96,18 @@ import XCTest
         XCTAssertEqual(tasks.calls.count, 2); XCTAssertEqual(tasks.calls.last?.ids, [9, 4, 7]); XCTAssertEqual(tasks.calls.last?.numbers, [0])
         XCTAssertEqual(hook.completed, [9, 4, 7])
     }
+    // 产品保证：批量完成撤销失败保留服务给出的原因，不被通用重试提示替换。
+    func testBatchUndoFailurePreservesServiceReason() {
+        let (shell, tasks, actions) = fixture()
+        XCTAssertTrue(actions.complete(ids: [7, 9]))
+        let reason = "取消完成失败：任务已变化，请刷新重试"
+        tasks.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+        shell.triggerToastAction()
+        XCTAssertEqual(tasks.calls.last?.name, "setCompletedBatch")
+        XCTAssertEqual(tasks.calls.last?.numbers, [0])
+        XCTAssertEqual(shell.toast?.message, reason)
+    }
+
     // 产品保证：批量删除只写一次，提示的查看动作切到废纸篓。
     func testBatchDeleteOpensTrash() {
         let (shell, tasks, actions) = fixture()
