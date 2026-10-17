@@ -196,10 +196,17 @@ QString versionStampUpdate(const Table& table, bool inserting)
         }
         condition = QStringLiteral(" AND (%1)").arg(changed.join(QStringLiteral(" OR ")));
     }
-    // 服务取时间与 SQL 落库可能跨毫秒，逻辑时钟还可能比墙上时间快。
-    // 本机也使用真正记录的版本时间，才能与对方显示的更新时间逐毫秒一致。
+    // 字段因果递增后的版本可能远超全局时钟，内容时间须取实际字段版本，才能与远端显示一致。
+    QStringList fields;
+    for (const QString& field : table.versionStamp.fields) {
+        fields.append(QStringLiteral("'%1'").arg(field));
+    }
+    const QString contentClock = QStringLiteral(
+        "(SELECT COALESCE(MAX(v_time), %1) FROM sync_field_versions "
+        "WHERE tbl = '%2' AND sync_id = (SELECT sync_id FROM %2 WHERE id = NEW.id) AND field IN (%3))")
+        .arg(sqlCurrentClock(), table.name, fields.join(QStringLiteral(", ")));
     return QStringLiteral("UPDATE %1 SET %2 = %3 WHERE id = NEW.id%4; ")
-        .arg(table.name, table.versionStamp.column, sqlVersionTimestamp(sqlCurrentClock()), condition);
+        .arg(table.name, table.versionStamp.column, sqlVersionTimestamp(contentClock), condition);
 }
 
 QPair<QString, QString> insertTrigger(const Table& table)
@@ -210,16 +217,21 @@ QPair<QString, QString> insertTrigger(const Table& table)
         ? QStringLiteral("DELETE FROM sync_tombstones WHERE tbl = 'tasks' AND kind = 'reclaim' "
                          "AND sync_id = (SELECT sync_id FROM tasks WHERE id = NEW.id); ")
         : QString();
+    // 同一身份重新生成时须超过旧删除版本（例行收回后再生成），只提升这条记录，不反灌全局时钟。
+    // UPSERT 表示本机覆盖旧字段：即使候选时间较小，也用旧版本 + 1，设备始终归本机；
+    // 最小版本 (0, '') 只在此前没有字段版本的新行上保留。
     const QString sql = fill(QStringLiteral(
         "CREATE TRIGGER {NAME} AFTER INSERT ON {TBL} WHEN {NOT_APPLYING} BEGIN "
         "{ADVANCE} "
         "UPDATE {TBL} SET sync_id = {NEW_ID} WHERE id = NEW.id AND (sync_id IS NULL OR sync_id = ''); "
         "INSERT INTO sync_field_versions (tbl, sync_id, field, v_time, v_device, base_time, base_device, pending) "
-        "SELECT '{TBL}', r.sync_id, f.column1, CASE WHEN {MINIMAL} THEN 0 ELSE {CLOCK} END, "
+        "SELECT '{TBL}', r.sync_id, f.column1, CASE WHEN {MINIMAL} THEN 0 ELSE "
+        "MAX({CLOCK}, COALESCE((SELECT v_time + 1 FROM sync_tombstones "
+        "WHERE tbl = '{TBL}' AND sync_id = r.sync_id), 0)) END, "
         "CASE WHEN {MINIMAL} THEN '' ELSE {DEVICE} END, 0, '', 1 "
         "FROM {TBL} r, {FIELDS} f WHERE r.id = NEW.id AND r.sync_id IS NOT NULL AND {PUBLISH} "
-        "ON CONFLICT(tbl, sync_id, field) DO UPDATE SET v_time = excluded.v_time, "
-        "v_device = excluded.v_device, base_time = 0, base_device = '', pending = 1; "
+        "ON CONFLICT(tbl, sync_id, field) DO UPDATE SET v_time = MAX(excluded.v_time, sync_field_versions.v_time + 1), "
+        "v_device = {DEVICE}, base_time = 0, base_device = '', pending = 1; "
         "INSERT INTO sync_outbox (tbl, sync_id, change_time) "
         "SELECT '{TBL}', r.sync_id, {CLOCK} FROM {TBL} r "
         "WHERE r.id = NEW.id AND r.sync_id IS NOT NULL AND {PUBLISH} "
@@ -250,13 +262,14 @@ QPair<QString, QString> updateTrigger(const Table& table)
         changed.append(QStringLiteral("OLD.%1 IS NOT NEW.%1").arg(field.column));
         // 只给真的变了的列记新版本。base 记「对方可能已经见过的那一版」：这一列上一次改动还没发出去时，
         // 对方见过的仍是更早那一版，所以保留原 base 不动。冲突日志靠它区分「先后修改」和「同时修改」。
+        // 版本至少是旧字段时间 + 1，哪怕全局时钟未跟随异常超前值也不会分叉；新版本的设备始终是本机。
         perField.append(fill(QStringLiteral(
             "INSERT INTO sync_field_versions (tbl, sync_id, field, v_time, v_device, base_time, base_device, pending) "
             "SELECT '{TBL}', NEW.sync_id, '{COL}', {CLOCK}, {DEVICE}, 0, '', 1 WHERE OLD.{COL} IS NOT NEW.{COL} "
             "ON CONFLICT(tbl, sync_id, field) DO UPDATE SET "
             "base_time = CASE WHEN pending = 1 THEN base_time ELSE v_time END, "
             "base_device = CASE WHEN pending = 1 THEN base_device ELSE v_device END, "
-            "v_time = excluded.v_time, v_device = excluded.v_device, pending = 1;"),
+            "v_time = MAX(excluded.v_time, sync_field_versions.v_time + 1), v_device = excluded.v_device, pending = 1;"),
             {{QStringLiteral("{TBL}"), table.name},
              {QStringLiteral("{COL}"), field.column},
              {QStringLiteral("{CLOCK}"), sqlCurrentClock()},
@@ -286,7 +299,8 @@ QPair<QString, QString> updateTrigger(const Table& table)
     return {name, sql};
 }
 
-// 行从「不发布」变成「发布」（专注记录结束那一刻）：此前没有记过任何字段版本，整条补发。
+// 行从「不发布」变成「发布」（专注记录结束那一刻）：整条补发。
+// 若有旧字段版本，仍按字段因果递增，版本设备归这次本机发布，避免重新发布时倒退。
 QPair<QString, QString> publishTrigger(const Table& table)
 {
     const QString name = table.name + QStringLiteral("_sync_publish");
@@ -296,7 +310,7 @@ QPair<QString, QString> publishTrigger(const Table& table)
         "{ADVANCE} "
         "INSERT INTO sync_field_versions (tbl, sync_id, field, v_time, v_device, base_time, base_device, pending) "
         "SELECT '{TBL}', NEW.sync_id, f.column1, {CLOCK}, {DEVICE}, 0, '', 1 FROM {FIELDS} f WHERE 1 "
-        "ON CONFLICT(tbl, sync_id, field) DO UPDATE SET v_time = excluded.v_time, "
+        "ON CONFLICT(tbl, sync_id, field) DO UPDATE SET v_time = MAX(excluded.v_time, sync_field_versions.v_time + 1), "
         "v_device = excluded.v_device, base_time = 0, base_device = '', pending = 1; "
         "INSERT INTO sync_outbox (tbl, sync_id, change_time) VALUES ('{TBL}', NEW.sync_id, {CLOCK}) "
         "ON CONFLICT(tbl, sync_id) DO UPDATE SET change_time = excluded.change_time; "
@@ -323,12 +337,17 @@ QPair<QString, QString> deleteTrigger(const Table& table)
     const QString kind = table.name == QLatin1String("tasks")
         ? QStringLiteral("COALESCE((SELECT delete_kind FROM sync_runtime WHERE singleton_id = 1), 'delete')")
         : QStringLiteral("'delete'");
+    // 删除覆盖整条记录：取所有字段及已有删除版本的最大值再加一，防止慢时钟生成过旧的收回记录。
+    // 保留全局 HLC 原值；否则删除一条超前记录也会污染其它记录的后续写入。
     const QString sql = fill(QStringLiteral(
         "CREATE TRIGGER {NAME} AFTER DELETE ON {TBL} "
         "WHEN {NOT_APPLYING} AND OLD.sync_id IS NOT NULL AND {PUBLISH_OLD} BEGIN "
         "{ADVANCE} "
         "INSERT INTO sync_tombstones (tbl, sync_id, v_time, v_device, kind, merged_into, deleted_at) "
-        "VALUES ('{TBL}', OLD.sync_id, {CLOCK}, {DEVICE}, {KIND}, NULL, {NOW}) "
+        "VALUES ('{TBL}', OLD.sync_id, MAX({CLOCK}, "
+        "COALESCE((SELECT MAX(v_time) + 1 FROM sync_field_versions WHERE tbl = '{TBL}' AND sync_id = OLD.sync_id), 0), "
+        "COALESCE((SELECT v_time + 1 FROM sync_tombstones WHERE tbl = '{TBL}' AND sync_id = OLD.sync_id), 0)), "
+        "{DEVICE}, {KIND}, NULL, {NOW}) "
         "ON CONFLICT(tbl, sync_id) DO UPDATE SET v_time = excluded.v_time, v_device = excluded.v_device, "
         "kind = excluded.kind, merged_into = NULL, deleted_at = excluded.deleted_at; "
         "DELETE FROM sync_field_versions WHERE tbl = '{TBL}' AND sync_id = OLD.sync_id; "

@@ -726,6 +726,12 @@ private slots:
     void redeliveredBatchesChangeNothing();
     void editDuringSendIsNotLost();
     void causalEditWinsDespiteClockSkew();
+    void remoteClockMergeIsBounded_data();
+    void remoteClockMergeIsBounded();
+    void localWriteOutranksFutureVersion_data();
+    void localWriteOutranksFutureVersion();
+    void routineRecoveryOutranksFutureReclaim_data();
+    void routineRecoveryOutranksFutureReclaim();
     void sameLogicalTimeConvergesByDevice();
     void badRecordIsSkippedWithoutBlockingBatch();
     void storageFailureRollsBackAndRetries_data();
@@ -1731,6 +1737,209 @@ void SyncTests::causalEditWinsDespiteClockSkew()
     QCOMPARE(taskValue(a, id, QStringLiteral("title")).toString(), QStringLiteral("A 看过之后又改"));
     QCOMPARE(taskValue(b, id, QStringLiteral("title")).toString(), QStringLiteral("A 看过之后又改"));
     QCOMPARE(logCount(a) + logCount(b), 0);
+}
+
+void SyncTests::remoteClockMergeIsBounded_data()
+{
+    // 增量和快照都限制异常时差，秒级正常时差仍完整跟随。
+    QTest::addColumn<bool>("snapshot");
+    QTest::addColumn<qint64>("lead");
+    for (bool snapshot : {false, true}) {
+        const QByteArray path = snapshot ? "snapshot-" : "batch-";
+        QTest::newRow((path + "30-days").constData()) << snapshot << qint64(30LL * 86400000);
+        QTest::newRow((path + "2-seconds").constData()) << snapshot << qint64(2000);
+    }
+}
+
+void SyncTests::remoteClockMergeIsBounded()
+{
+    // 收下超前版本不污染其它记录的本机版本，收到的远端版本本身保持原样。
+    QFETCH(bool, snapshot);
+    QFETCH(qint64, lead);
+    const Device a = openDevice(QStringLiteral("a"));
+    const Device b = openDevice(QStringLiteral("b"));
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(setClock(b, kFuture + lead));
+    SyncStore aStore(a.connection);
+    SyncStore bStore(b.connection);
+    const QString id = addTask(b, QStringLiteral("远端任务"));
+    QVERIFY(!id.isEmpty());
+    const QString versionSql = QStringLiteral("SELECT v_time FROM sync_field_versions "
+                                              "WHERE tbl='tasks' AND sync_id='%1' AND field='title'").arg(id);
+    const qint64 remoteTime = scalar(b, versionSql).toLongLong();
+    QCOMPARE(remoteTime, kFuture + lead);
+    const auto result = snapshot ? aStore.replaceWithSnapshot(bStore.exportSnapshot())
+                                 : aStore.applyRemote(bStore.collectPending());
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(scalar(a, versionSql).toLongLong(), remoteTime);
+    const qint64 expected = kFuture + qMin(lead, qint64(600000));
+    QCOMPARE(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key='hlc'")).toLongLong(), expected);
+    const QString other = addTask(a, QStringLiteral("本机另一条"), QStringLiteral("2026-09-29"));
+    QVERIFY(!other.isEmpty());
+    QVERIFY(exec(a, QStringLiteral("UPDATE tasks SET title='本机修改' WHERE sync_id='%1'").arg(other)));
+    const qint64 otherTime = scalar(a, QStringLiteral("SELECT v_time FROM sync_field_versions "
+        "WHERE tbl='tasks' AND sync_id='%1' AND field='title'").arg(other)).toLongLong();
+    QVERIFY(otherTime > expected);
+    QVERIFY(otherTime <= expected + 2);
+}
+
+void SyncTests::localWriteOutranksFutureVersion_data()
+{
+    // 修改、删除、设置和备忘内容都必须超过被覆盖的超前版本，并同步收敛。
+    QTest::addColumn<QString>("action");
+    for (const char* action : {"edit", "delete", "setting", "memo"}) {
+        QTest::newRow(action) << QString::fromLatin1(action);
+    }
+}
+
+void SyncTests::localWriteOutranksFutureVersion()
+{
+    // 本机看过远端版本后再写一定赢，且不会把未来时间传染给全局逻辑时钟。
+    QFETCH(QString, action);
+    const Device a = openDevice(QStringLiteral("a"));
+    const Device b = openDevice(QStringLiteral("b"));
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(setClock(b, kFuture + 30LL * 86400000));
+    SyncStore aStore(a.connection);
+    SyncStore bStore(b.connection);
+    const bool setting = action == QLatin1String("setting");
+    const bool memo = action == QLatin1String("memo");
+    const QString table = memo ? QStringLiteral("memos") : QStringLiteral("tasks");
+    const QString key = QStringLiteral("logic/dayStartHour");
+    QString id;
+    if (setting) {
+        QVERIFY(bStore.recordLocalSetting(key, QStringLiteral("5"), false));
+    } else {
+        id = memo ? addMemo(b, QStringLiteral("远端标题"), QStringLiteral("远端正文"))
+                  : addTask(b, QStringLiteral("远端标题"));
+        QVERIFY(!id.isEmpty());
+    }
+    const bool deleting = action == QLatin1String("delete");
+    if (deleting) {
+        // 最高版本刻意放在非标题字段，确保删除取整条记录的最大值。
+        QVERIFY(setClock(b, kFuture + 30LL * 86400000 + 100));
+        QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET notes='更晚的备注' WHERE sync_id='%1'").arg(id)));
+    }
+    const QString versionSql = setting
+        ? QStringLiteral("SELECT v_time FROM sync_settings WHERE key='%1'").arg(key)
+        : deleting ? QStringLiteral("SELECT MAX(v_time) FROM sync_field_versions WHERE tbl='tasks' AND sync_id='%1'").arg(id)
+        : QStringLiteral("SELECT v_time FROM sync_field_versions WHERE tbl='%1' AND sync_id='%2' AND field='title'")
+              .arg(table, id);
+    const qint64 remoteTime = scalar(b, versionSql).toLongLong();
+    QVERIFY(remoteTime >= kFuture + 30LL * 86400000);
+    const SyncBatch original = bStore.collectPending();
+    QVERIFY(!original.isEmpty());
+    QVERIFY(bStore.acknowledge(original));
+    const auto received = aStore.applyRemote(original);
+    QVERIFY2(received.ok, qPrintable(received.error));
+    QCOMPARE(scalar(a, versionSql).toLongLong(), remoteTime);
+    if (setting) {
+        QVERIFY(aStore.recordLocalSetting(key, QStringLiteral("6"), false));
+    } else if (action == QLatin1String("delete")) {
+        QVERIFY(exec(a, QStringLiteral("DELETE FROM tasks WHERE sync_id='%1'").arg(id)));
+    } else {
+        QVERIFY(exec(a, QStringLiteral("UPDATE %1 SET title='本机看过之后再改' WHERE sync_id='%2'").arg(table, id)));
+    }
+    const QString localVersionSql = action == QLatin1String("delete")
+        ? QStringLiteral("SELECT v_time FROM sync_tombstones WHERE tbl='tasks' AND sync_id='%1'").arg(id)
+        : versionSql;
+    const QString ownerSql = setting
+        ? QStringLiteral("SELECT v_device FROM sync_settings WHERE key='%1'").arg(key)
+        : deleting ? QStringLiteral("SELECT v_device FROM sync_tombstones WHERE tbl='tasks' AND sync_id='%1'").arg(id)
+        : QStringLiteral("SELECT v_device FROM sync_field_versions WHERE tbl='%1' AND sync_id='%2' AND field='title'")
+              .arg(table, id);
+    QCOMPARE(scalar(a, ownerSql).toString(), a.id);
+    if (memo) {
+        QCOMPARE(valueOf(a, table, id, QStringLiteral("updated_at")).toString(),
+                 memoStamp(scalar(a, versionSql).toLongLong()));
+    }
+    const SyncBatch local = aStore.collectPending();
+    QVERIFY(!local.isEmpty());
+    const auto returned = bStore.applyRemote(local);
+    QVERIFY2(returned.ok, qPrintable(returned.error));
+    if (setting) {
+        QCOMPARE(bStore.syncedSettings().value(key), QStringLiteral("6"));
+    } else if (action == QLatin1String("delete")) {
+        QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id='%1'").arg(id)), 0);
+        QVERIFY(aStore.applyRemote(original).ok);
+        QVERIFY(bStore.applyRemote(local).ok);
+        QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id='%1'").arg(id)), 0);
+    } else {
+        QCOMPARE(valueOf(b, table, id, QStringLiteral("title")).toString(), QStringLiteral("本机看过之后再改"));
+        if (memo) {
+            QCOMPARE(valueOf(b, table, id, QStringLiteral("updated_at")).toString(),
+                     valueOf(a, table, id, QStringLiteral("updated_at")).toString());
+        }
+    }
+    QCOMPARE(scalar(b, localVersionSql).toLongLong(), scalar(a, localVersionSql).toLongLong());
+    QVERIFY(scalar(a, localVersionSql).toLongLong() > remoteTime);
+    if (action != QLatin1String("delete")) {
+        const QString baseSql = setting
+            ? QStringLiteral("SELECT base_time FROM sync_settings WHERE key='%1'").arg(key)
+            : QStringLiteral("SELECT base_time FROM sync_field_versions WHERE tbl='%1' AND sync_id='%2' AND field='title'")
+                  .arg(table, id);
+        QCOMPARE(scalar(a, baseSql).toLongLong(), remoteTime);
+    }
+    QVERIFY(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key='hlc'")).toLongLong()
+            < kFuture + 600010);
+}
+
+void SyncTests::routineRecoveryOutranksFutureReclaim_data()
+{
+    // 例行恢复无论走重新生成还是拒绝收回后的补发，都须超过超前设备的收回版本。
+    QTest::addColumn<bool>("republish");
+    QTest::newRow("regenerate") << false;
+    QTest::newRow("republish") << true;
+}
+
+void SyncTests::routineRecoveryOutranksFutureReclaim()
+{
+    // 慢时钟设备能恢复被超前版本收回的例行实例，且恢复不会污染其它记录的全局时钟。
+    QFETCH(bool, republish);
+    const Device a = openDevice(QStringLiteral("a"));
+    const Device b = openDevice(QStringLiteral("b"));
+    QVERIFY(setClock(a, kFuture));
+    QVERIFY(setClock(b, kFuture + 30LL * 86400000));
+    withServices(b, [] {
+        QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("例行"), -1, RoutineRules::kEveryDayMask));
+        QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
+    });
+    SyncStore aStore(a.connection);
+    SyncStore bStore(b.connection);
+    const SyncBatch initial = bStore.collectPending();
+    QVERIFY(aStore.applyRemote(initial).ok);
+    QVERIFY(bStore.acknowledge(initial));
+    const QString routine = scalar(b, QStringLiteral("SELECT sync_id FROM routines")).toString();
+    QVERIFY(!routine.isEmpty());
+    const QString instance = SyncSchema::routineInstanceSyncId(routine, today().toString(Qt::ISODate));
+    QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id='%1'").arg(instance)), 1);
+    if (republish) {
+        QVERIFY(exec(a, QStringLiteral("INSERT INTO focus_sessions(task_id,start_time,end_time,duration,mode) "
+            "VALUES(%1,'2026-09-30T09:00:00','2026-09-30T09:25:00',1500,1)")
+                .arg(localIdOf(a, QStringLiteral("tasks"), instance))));
+    }
+    withServices(b, [&] {
+        QVERIFY(RoutineManager::instance()->setRoutineActive(int(localIdOf(b, QStringLiteral("routines"), routine)), false));
+    });
+    const qint64 reclaimed = scalar(b, QStringLiteral("SELECT v_time FROM sync_tombstones WHERE tbl='tasks' AND sync_id='%1'")
+        .arg(instance)).toLongLong();
+    QVERIFY(reclaimed > kFuture + 30LL * 86400000);
+    QVERIFY(aStore.applyRemote(bStore.collectPending()).ok);
+    if (!republish) {
+        QCOMPARE(count(a, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id='%1'").arg(instance)), 0);
+        withServices(a, [&] {
+            QVERIFY(RoutineManager::instance()->setRoutineActive(int(localIdOf(a, QStringLiteral("routines"), routine)), true));
+            QCOMPARE(RoutineManager::instance()->materializeToday(), 1);
+        });
+    }
+    const qint64 recovered = scalar(a, QStringLiteral("SELECT v_time FROM sync_field_versions "
+        "WHERE tbl='tasks' AND sync_id='%1' AND field='routine_generated'").arg(instance)).toLongLong();
+    QVERIFY(recovered > reclaimed);
+    QVERIFY(bStore.applyRemote(aStore.collectPending()).ok);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM tasks WHERE sync_id='%1'").arg(instance)), 1);
+    QCOMPARE(scalar(b, QStringLiteral("SELECT v_time FROM sync_field_versions "
+        "WHERE tbl='tasks' AND sync_id='%1' AND field='routine_generated'").arg(instance)).toLongLong(), recovered);
+    QVERIFY(scalar(a, QStringLiteral("SELECT value FROM sync_state WHERE key='hlc'")).toLongLong() < kFuture + 600020);
 }
 
 void SyncTests::sameLogicalTimeConvergesByDevice()

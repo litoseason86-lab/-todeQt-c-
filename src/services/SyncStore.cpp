@@ -25,6 +25,8 @@ constexpr int kConflictLogLimit = 500;
 // 合并链（A 并进 B、B 又并进 C……）最多追这么多步。合并总是并向身份较小的一方，不会成环；
 // 上限只防外部改坏的数据让这里死循环。
 constexpr int kMaxMergeHops = 16;
+// 正常设备时差在秒级；不跟随异常超前部分，因果顺序由被覆盖字段各自递增保证。
+constexpr qint64 kMaxRemoteClockLeadMs = 10 * 60 * 1000;
 
 const QString kKindDelete = QStringLiteral("delete");
 const QString kKindReclaim = QStringLiteral("reclaim");
@@ -132,7 +134,7 @@ public:
     bool dropRecordsMissingFrom(const SyncBatch& snapshot, QString* error);
     bool overwriteFromSnapshot(const SyncRecord& record, QString* error);
     bool replaceSettings(const QList<SyncSettingRecord>& settings, QString* error);
-    qint64 maxSeenTime() const { return m_maxSeenTime; }
+    bool mergeRemoteClock(QString* error);
     bool logSkipped(const SyncRecord& record, const QString& reason);
     bool takeStorageFailure(QString* error);
 
@@ -221,8 +223,8 @@ private:
     SyncVersion fieldVersion(const QString& table, const QString& syncId, const QString& field);
 
     // 以本机改动的身份发出：推进逻辑时钟，给这一列记新版本并入队。用于合并、收回被拒后补发。
-    bool advanceClock(SyncVersion* version, QString* error);
-    bool republish(const QString& table, const QString& syncId, const QString& field, QString* error);
+    bool advanceClock(qint64 afterTime, SyncVersion* version, QString* error);
+    bool republish(const QString& table, const QString& syncId, const QString& field, qint64 afterTime, QString* error);
     // 临时放开触发器：排序归一、预置科目加后缀是本机改动，要由触发器照常记版本、入队。
     bool setApplying(bool applying, QString* error);
 
@@ -230,6 +232,7 @@ private:
     QString m_me;
     SyncStore::ApplyResult* m_result;
     qint64 m_maxSeenTime = 0;
+    bool m_warnedFutureClock = false;
     // 查询准备、执行、取行和辅助日志都可能先出错；后续 SQL 不得覆盖本条最初的存储错误。
     bool m_storageFailure = false;
     QString m_storageError;
@@ -551,7 +554,7 @@ bool Applier::applyDeletion(const SyncSchema::Table& table, const SyncRecord& re
                 return false;
             }
             if (next(touched) || winner.version < latestLocalVersion(table.name, record.syncId)) {
-                return republish(table.name, record.syncId, QStringLiteral("routine_generated"), error);
+                return republish(table.name, record.syncId, QStringLiteral("routine_generated"), winner.version.time, error);
             }
         }
         if (table.name == QLatin1String("categories") && row.values.value(QStringLiteral("is_preset")).toInt() == 1) {
@@ -1514,17 +1517,37 @@ bool Applier::setApplying(bool applying, QString* error)
     return exec(query, error);
 }
 
-bool Applier::advanceClock(SyncVersion* version, QString* error)
+bool Applier::mergeRemoteClock(QString* error)
 {
-    // 应用对方改动的中途生成的本机版本（例如重新发布一条被收回、其实专注过的实例），是「看过这批之后」的改动，
-    // 必须排在这批里已经见过的所有版本之后。整批的最大时间要到收尾前才并进时钟，这里先并进去：
-    // 不这样的话，对方的时钟稍快（连着做几件事就会把逻辑时间推到墙钟前面），新版本可能比它的收回记录还旧，
-    // 它收到后不会把实例补回来，两边从此不一致。并进去的时间和这批数据在同一个事务里，失败时一起回滚。
     QSqlQuery query(m_db);
+    if (!exec(query, QStringLiteral("SELECT (%1) + %2").arg(SyncSchema::sqlNowMs()).arg(kMaxRemoteClockLeadMs), error)
+        || !next(query)) {
+        return false;
+    }
+    const qint64 limit = query.value(0).toLongLong();
+    query.finish();
+    if (m_maxSeenTime > limit && !m_warnedFutureClock) {
+        qWarning() << "远端同步时钟超前超过十分钟，限制本机逻辑时钟跟随：" << m_maxSeenTime << "上限：" << limit;
+        m_warnedFutureClock = true;
+    }
+    // 只限制全局时钟，远端记录保留原版本；同批中途和收尾共用此口径，失败随事务回滚。
     prepare(query, QStringLiteral(
-        "UPDATE sync_state SET value = CAST(MAX(CAST(value AS INTEGER), :seen) AS TEXT) WHERE key = 'hlc'"));
+        "UPDATE sync_state SET value = CAST(MAX(CAST(value AS INTEGER), MIN(:seen, :limit)) AS TEXT) WHERE key = 'hlc'"));
     query.bindValue(QStringLiteral(":seen"), m_maxSeenTime);
-    if (!exec(query, nullptr) || !exec(query, SyncSchema::sqlAdvanceClock(), nullptr)
+    query.bindValue(QStringLiteral(":limit"), limit);
+    return exec(query, error);
+}
+
+bool Applier::advanceClock(qint64 afterTime, SyncVersion* version, QString* error)
+{
+    // 应用对方改动的中途生成的本机版本（例如重新发布一条被收回、其实专注过的实例）是「看过这批之后」的改动，
+    // 必须排在这批已经见过的版本之后，所以先把见过的时间（有上限地）并进时钟；超出上限的部分由 afterTime + 1 兜住。
+    // 并进去的时间和这批数据在同一个事务里，失败时一起回滚。
+    if (!mergeRemoteClock(error)) {
+        return false;
+    }
+    QSqlQuery query(m_db);
+    if (!exec(query, SyncSchema::sqlAdvanceClock(), nullptr)
         || !exec(query, QStringLiteral("SELECT %1, %2").arg(SyncSchema::sqlCurrentClock(), SyncSchema::sqlDeviceId()), nullptr)
         || !next(query)) {
         if (error) {
@@ -1532,14 +1555,15 @@ bool Applier::advanceClock(SyncVersion* version, QString* error)
         }
         return false;
     }
-    *version = {query.value(0).toLongLong(), query.value(1).toString()};
+    // 中途补发、科目合并也须超过被覆盖版本；只提高这次本机版本，不把异常超前值写回全局 HLC。
+    *version = {qMax(query.value(0).toLongLong(), afterTime + 1), query.value(1).toString()};
     return true;
 }
 
-bool Applier::republish(const QString& table, const QString& syncId, const QString& field, QString* error)
+bool Applier::republish(const QString& table, const QString& syncId, const QString& field, qint64 afterTime, QString* error)
 {
     SyncVersion version;
-    if (!advanceClock(&version, error)) {
+    if (!advanceClock(qMax(afterTime, latestLocalVersion(table, syncId).time), &version, error)) {
         return false;
     }
     // 值不变，只给这一列一个本机的新版本：整条记录会带着它发出去，版本比对方手里的删除记录新。
@@ -1550,7 +1574,7 @@ bool Applier::republish(const QString& table, const QString& syncId, const QStri
         "ON CONFLICT(tbl, sync_id, field) DO UPDATE SET "
         "base_time = CASE WHEN pending = 1 THEN base_time ELSE v_time END, "
         "base_device = CASE WHEN pending = 1 THEN base_device ELSE v_device END, "
-        "v_time = excluded.v_time, v_device = excluded.v_device, pending = 1"));
+        "v_time = MAX(excluded.v_time, sync_field_versions.v_time + 1), v_device = excluded.v_device, pending = 1"));
     stamp.bindValue(QStringLiteral(":tbl"), table);
     stamp.bindValue(QStringLiteral(":id"), syncId);
     stamp.bindValue(QStringLiteral(":field"), field);
@@ -1593,7 +1617,8 @@ bool Applier::mergeCategory(qint64 loserId, const QString& loserSyncId, qint64 w
     // 合并本身必须发出去：对方可能没有撞名（例如对方同时把这个科目改成了别的名字），
     // 不告诉它，它会一直留着这个科目，两边从此不一致。
     SyncVersion version;
-    if (!advanceClock(&version, error)) {
+    if (!advanceClock(qMax(latestLocalVersion(QStringLiteral("categories"), loserSyncId).time,
+                           readTombstone(QStringLiteral("categories"), loserSyncId).version.time), &version, error)) {
         return false;
     }
     Tombstone tombstone;
@@ -2267,12 +2292,13 @@ bool SyncStore::recordLocalSetting(const QString& key, const QString& value, boo
         version = {query.value(0).toLongLong(), query.value(1).toString()};
         query.finish();
     }
+    // 设置项同样只提升被覆盖项的版本，设备归本机；base 仍保留对端可能已见过的版本。
     QSqlQuery write(db);
     write.prepare(exists
         ? QStringLiteral("UPDATE sync_settings SET "
                          "base_time = CASE WHEN pending = 1 THEN base_time ELSE v_time END, "
                          "base_device = CASE WHEN pending = 1 THEN base_device ELSE v_device END, "
-                         "value = :value, v_time = :t, v_device = :d, pending = 1 WHERE key = :key")
+                         "value = :value, v_time = MAX(:t, v_time + 1), v_device = :d, pending = 1 WHERE key = :key")
         : QStringLiteral("INSERT INTO sync_settings (key, value, v_time, v_device, base_time, base_device, pending) "
                          "VALUES (:key, :value, :t, :d, 0, '', 1)"));
     write.bindValue(QStringLiteral(":key"), key);
@@ -2628,11 +2654,9 @@ SyncStore::ApplyResult SyncStore::replaceWithSnapshot(const SyncBatch& snapshot)
     if (!query.exec()) {
         return fail(query.lastError().text());
     }
-    query.prepare(QStringLiteral(
-        "UPDATE sync_state SET value = CAST(MAX(CAST(value AS INTEGER), :seen) AS TEXT) WHERE key = 'hlc'"));
-    query.bindValue(QStringLiteral(":seen"), applier.maxSeenTime());
-    if (!query.exec()) {
-        return fail(query.lastError().text());
+    QString clockError;
+    if (!applier.mergeRemoteClock(&clockError)) {
+        return fail(clockError);
     }
     if (!applier.finalizeCategoryNames(&error) || !applier.resolveAllPendingRefs(&error)) {
         return fail(error);
@@ -2928,13 +2952,10 @@ SyncStore::ApplyResult SyncStore::applyRemote(const SyncBatch& batch)
         }
     }
 
-    // 把见过的最大逻辑时间并入本机时钟：之后本机再改这些记录，新版本一定排在它们后面。
-    // 要在收尾之前做：收尾里的合并、重排是「看过这批之后」的本机改动，版本必须比这批里的都新。
-    query.prepare(QStringLiteral(
-        "UPDATE sync_state SET value = CAST(MAX(CAST(value AS INTEGER), :seen) AS TEXT) WHERE key = 'hlc'"));
-    query.bindValue(QStringLiteral(":seen"), applier.maxSeenTime());
-    if (!query.exec()) {
-        return fail(query.lastError().text());
+    // 收尾的合并、重排也是本机改动；先有限跟随远端时钟，异常超前由字段因果递增处理。
+    QString clockError;
+    if (!applier.mergeRemoteClock(&clockError)) {
+        return fail(clockError);
     }
     // 收尾失败只可能是数据库本身出错（磁盘满之类），整批回滚，下次再试；不会因为某条数据卡住。
     // 接回引用要在重排之前：重排会临时放开触发器，而接回不是本机改动，不能被记成新版本。
