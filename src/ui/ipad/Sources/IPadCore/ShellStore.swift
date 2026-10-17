@@ -132,6 +132,8 @@ public final class ShellStore {
     }
     public private(set) var selection: PageID = .dashboard
     public private(set) var errorMessage = ""
+    // 每收到一次桥接报来的失败加一。errorMessage 是壳层共用的最后一条错误，单看它分不出是不是刚才那次调用报的。
+    @ObservationIgnored private var failureSerial = 0
     public private(set) var toast: ShellToast?
     public private(set) var sidebarPages: [PageID] = PageID.ordered([]).filter {
         !PageID.summary.prefix(3).contains($0) && !PageID.fixed.contains($0)
@@ -182,7 +184,11 @@ public final class ShellStore {
         // 弱引用避免 Store 与桥接回调互相保留。
         bridge.onChanged = { [weak self] in self?.refresh() }
         bridge.onTimerChanged = { [weak self] in self?.refreshTimer() }
-        bridge.onFailure = { [weak self] message in self?.errorMessage = message }
+        bridge.onFailure = { [weak self] message in
+            guard let self else { return }
+            self.failureSerial &+= 1
+            self.errorMessage = message
+        }
         refresh()
         selection = PageID(rawValue: details.selectedPage) ?? .dashboard
     }
@@ -352,8 +358,11 @@ public final class ShellStore {
         guard !operationBlocksUI else { return false }
         let title = captureTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if title.isEmpty { captureError = "先写一句，哪怕只是几个关键词"; return false }
+        // 服务的失败信号在写入调用里同步转发到 onFailure；桥接拒绝越界编号时只返回 -1、不报失败。
+        // 所以只采用这次调用期间新到的原因，否则用通用提示，不把别处留下的旧错误安到这次记录上（062 A039）。
+        let failuresBefore = failureSerial
         if bridge.capture(title: title, categoryID: captureSource.categoryID, sourceTaskID: captureSource.taskID) <= 0 {
-            captureError = errorMessage.isEmpty ? "没能存下来，请再试一次" : errorMessage
+            captureError = failureSerial != failuresBefore && !errorMessage.isEmpty ? errorMessage : "没能存下来，请再试一次"
             return false
         }
         captureTitle = ""
