@@ -1,6 +1,28 @@
 import XCTest
 @testable import IPadCore
 
+// 范围偏好只用字符串读写；替身不创建独立偏好域，避免清空域后仍留下空 plist 文件。
+// UserDefaults 的 Sendable 约定允许跨并发域传递，替身同样用锁保护自己的存储。
+private final class MemoryStatisticsDefaults: UserDefaults, @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: String]
+    private var keys: [String] = []
+
+    init(values: [String: String]) {
+        self.values = values
+        super.init(suiteName: nil)!
+    }
+    override func string(forKey defaultName: String) -> String? {
+        lock.withLock { values[defaultName] }
+    }
+    override func set(_ value: Any?, forKey defaultName: String) {
+        guard let value = value as? String else { XCTFail("范围偏好只应写入字符串"); return }
+        lock.withLock { values[defaultName] = value; keys.append(defaultName) }
+    }
+    var strings: [String: String] { lock.withLock { values } }
+    var writtenKeys: [String] { lock.withLock { keys } }
+}
+
 // 读取计数替身故意让第二次读取跨日界，识别一次刷新内各模块各读时钟的实现。
 @MainActor private final class CountingDayBridge: LogicalDayBridgeProtocol {
     let fake = LogicalDayBridgeFake()
@@ -153,16 +175,22 @@ import XCTest
         XCTAssertEqual(day.reads, inactive)
         store.setActive(true); XCTAssertEqual(day.reads, inactive + 1)
     }
-    // 产品保证：范围状态只存本机 ipadui 键，不创建同步或业务状态；测试设置域独立隔离。
+    // 产品保证：范围偏好只读写本机 ipadui.statistics.range 键，测试存储与正式偏好隔离且不落盘。
     func testRangePreferenceStaysLocal() {
-        let name = "P4-4-tests-" + UUID().uuidString
-        let defaults = UserDefaults(suiteName: name)!
-        defer { defaults.removePersistentDomain(forName: name) }
-        defaults.set("week", forKey: "ipadui.statistics.range")
+        let key = "ipadui.statistics.range"
+        let defaults = MemoryStatisticsDefaults(values: [key: "week", "unrelated": "保留"])
+        let otherDefaults = MemoryStatisticsDefaults(values: [key: "day"])
+        XCTAssertEqual(defaults.string(forKey: key), "week")
+        XCTAssertTrue(defaults.writtenKeys.isEmpty)
         let store = StatsStore(statistics: StatisticsBridgeFake(), logicalDay: CountingDayBridge(), defaults: defaults)
         XCTAssertEqual(store.range, .week)
         store.setActive(true); store.selectRange(.month)
-        XCTAssertEqual(defaults.string(forKey: "ipadui.statistics.range"), "month")
+        XCTAssertEqual(store.range, .month)
+        XCTAssertEqual(defaults.strings, [key: "month", "unrelated": "保留"])
+        XCTAssertEqual(defaults.writtenKeys, [key])
+        XCTAssertEqual(otherDefaults.strings, [key: "day"])
+        let reloaded = StatsStore(statistics: StatisticsBridgeFake(), logicalDay: CountingDayBridge(), defaults: defaults)
+        XCTAssertEqual(reloaded.range, .month)
     }
     // 产品保证：数字卡按时长、日任务完成或周月有记录天数、次数排列，数值、完成率和比较均消费对应服务指标。
     func testCardsUseServiceValuesInDesignOrderForEveryRange() {
