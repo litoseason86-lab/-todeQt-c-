@@ -34,6 +34,7 @@
 
 #include "platform/macos/MacGlobalHotkeyBackend.h"
 #include "platform/macos/MacBackupExecutor.h"
+#include "platform/macos/MacExitWatchdog.h"
 #include "platform/macos/MacPreferencesCleanup.h"
 #include "platform/macos/MacStatusBarController.h"
 #include "platform/macos/MacSyncFolder.h"
@@ -211,7 +212,12 @@ int main(int argc, char *argv[])
         }
     });
 
-    QObject::connect(&app, &QCoreApplication::aboutToQuit, &sharedApp, [&sharedApp] {
+    // Mac 退出总期限从 shutdown 前开始，覆盖所有有序步骤及事件循环返回后的显式收尾。
+    // 正常退出远少于 30 秒：备份执行器停止 2 秒＋回收 2 秒，同步 3 秒，其余是本机小写入；
+    // 超过此期限表示某一步卡住。iOS 已由系统看门狗处理超时退出，只在 Mac 装配。
+    MacExitWatchdog exitWatchdog;
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &sharedApp, [&sharedApp, &exitWatchdog] {
+        exitWatchdog.arm(std::chrono::seconds(30));
         sharedApp.lifecycle().shutdown();
     });
 
@@ -240,5 +246,7 @@ int main(int argc, char *argv[])
     }
     statusBar.detachController();
 
+    // 正常退出保留 return 的析构语义；撤防之后的栈对象和全局静态析构不在本期限内。
+    exitWatchdog.disarm();
     return exitCode;
 }

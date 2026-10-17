@@ -2,6 +2,15 @@
 enable_testing()
 
 if(APPLE)
+    add_executable(MacExitWatchdogTests tests/MacExitWatchdogTests.cpp
+        src/platform/macos/MacExitWatchdog.h src/platform/macos/MacExitWatchdog.cpp)
+    target_include_directories(MacExitWatchdogTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_link_libraries(MacExitWatchdogTests PRIVATE Qt6::Core Qt6::Test)
+    pomodoro_todo_enable_warnings(MacExitWatchdogTests)
+    add_test(NAME MacExitWatchdogTests COMMAND MacExitWatchdogTests)
+    set_tests_properties(MacExitWatchdogTests PROPERTIES TIMEOUT 30
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
     add_executable(BackupExecutorStub tests/support/BackupExecutorStub.cpp)
     target_link_libraries(BackupExecutorStub PRIVATE Qt6::Core)
     pomodoro_todo_enable_warnings(BackupExecutorStub)

@@ -257,6 +257,8 @@ if(NOT IOS)
         src/platform/macos/MacSyncFolder.cpp
         src/platform/macos/MacBackupExecutor.h
         src/platform/macos/MacBackupExecutor.cpp
+        src/platform/macos/MacExitWatchdog.h
+        src/platform/macos/MacExitWatchdog.cpp
     )
 
     set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app-icons/PomodoroTodo.icns")
