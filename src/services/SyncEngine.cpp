@@ -984,16 +984,47 @@ void SyncEngine::cleanupStep(const SyncWorker::Survey& survey)
     const SyncPosition snapshot = s.snapshotPosition();
     const bool haveSnapshot = snapshot.epoch == epoch;
     // 删到哪一批：必须有快照兜底（快照覆盖到的才删），还要所有还在用的设备都已经读过。
-    // 很久没更新游标文件的设备当作不再使用，不等它：它回来时缺号，从快照追上。
+    // 对端时钟可能快慢不一，只比较本机观察同一游标指纹经过的时间；过期设备回来时从快照追上。
     const qint64 staleMs = qint64(m_options.peerStaleDays) * 24 * 60 * 60 * 1000;
-    const qint64 wallNow = wallClockMs();
+    const qint64 wallNow = m_options.localWallClockMs ? m_options.localWallClockMs() : wallClockMs();
     qint64 deleteUpTo = haveSnapshot ? snapshot.seq : 0;
     for (const SyncWorker::PeerCursor& peer : survey.peers) {
-        if (!peer.present || peer.status != SyncFiles::ParseStatus::Ok
-            || wallNow - peer.cursor.writtenAtMs >= staleMs) {
+        if (!peer.present) {
+            // 文件确实不存在仍不等待：设备再次加入或回来缺号时有快照兜底，沿用已有清理语义。
             continue;
         }
-        const SyncPosition read = peer.cursor.epoch == epoch ? peer.cursor.applied.value(me) : SyncPosition{};
+        auto previous = s.peerObservation(peer.device);
+        bool changed = !previous.has_value();
+        SyncStore::PeerObservation observation = previous.value_or(
+            SyncStore::PeerObservation{epoch, QStringLiteral(""), wallNow, {}});
+        if (peer.status == SyncFiles::ParseStatus::Ok) {
+            const SyncPosition reportedRead = peer.cursor.applied.value(me);
+            // 时间戳只参与识别内容变化，不拿它减本机时间；读取位置变化也能重新开始观察。
+            const QString fingerprint = QStringLiteral("%1:%2:%3:%4")
+                .arg(peer.cursor.writtenAtMs).arg(peer.cursor.epoch).arg(reportedRead.epoch).arg(reportedRead.seq);
+            if (observation.fingerprint != fingerprint) {
+                observation.fingerprint = fingerprint;
+                observation.observedAtMs = wallNow;
+                // 旧纪元游标的进度不能许可删除本纪元的改动文件。
+                observation.readPosition = peer.cursor.epoch == epoch ? reportedRead : SyncPosition{};
+                changed = true;
+            }
+        }
+        // 文件存在但解析失败时，沿用最后成功读取的位置；从未读到过则从位置零保守等待。
+        // 本机时钟回拨时重置观察起点，不能因负时间间隔误判为过期。
+        if (wallNow < observation.observedAtMs) {
+            observation.observedAtMs = wallNow;
+            changed = true;
+        }
+        if (changed && !s.setPeerObservation(peer.device, observation)) {
+            deleteUpTo = 0;
+            warn(Status::Error, QStringLiteral("无法保存对端观察记录，本轮保留旧改动文件"));
+            break;
+        }
+        if (wallNow - observation.observedAtMs >= staleMs) {
+            continue;
+        }
+        const SyncPosition read = observation.readPosition;
         deleteUpTo = std::min(deleteUpTo, read.epoch == epoch ? read.seq : 0);
     }
     runOnWorker<SyncWorker::CleanupResult>(

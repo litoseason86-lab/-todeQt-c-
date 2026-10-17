@@ -11,6 +11,8 @@
 #include <QSqlDatabase>
 #include <QString>
 
+#include <optional>
+
 // 设备间同步的本地数据层（050 阶段 2）：只和数据库打交道，不关心改动怎么在设备之间传递。
 // 读出本机待发送的改动、确认已经发出，以及把对方的一批改动合并进本机库，都在这里。
 //
@@ -113,6 +115,16 @@ public:
     bool setPeerCursor(const QString& device, const SyncPosition& position);
     // 整体换掉：首次加入、采用了对方的新纪元之后，按快照里记的进度重新起步。
     bool replacePeerCursors(const QHash<QString, SyncPosition>& cursors);
+    struct PeerObservation {
+        qint64 epoch = 0;
+        QString fingerprint;
+        qint64 observedAtMs = 0;
+        SyncPosition readPosition;
+    };
+    // 只在本机记账：同一游标指纹第一次被看到的本机时间和最近读到的进度。
+    // 恢复/换纪元后，旧纪元观察不能继续决定新纪元改动文件的保留期限。
+    std::optional<PeerObservation> peerObservation(const QString& device) const;
+    bool setPeerObservation(const QString& device, const PeerObservation& observation);
     // 本机写到第几批改动。
     SyncPosition outboundPosition() const;
     bool setOutboundPosition(const SyncPosition& position);

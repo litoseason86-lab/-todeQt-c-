@@ -8,6 +8,7 @@
 
 #include <QDateTime>
 #include <QDebug>
+#include <QJsonDocument>
 #include <QMap>
 #include <QRegularExpression>
 #include <QSqlError>
@@ -3024,6 +3025,7 @@ const QString kSnapshotPositionKey = QStringLiteral("snapshot_position");
 const QString kLastSyncedKey = QStringLiteral("last_synced_at");
 const QString kCursorPrefix = QStringLiteral("cursor/");
 const QString kRequestPrefix = QStringLiteral("request/");
+const QString kPeerSeenPrefix = QStringLiteral("peer_seen/");
 
 QString positionText(const SyncPosition& position)
 {
@@ -3145,6 +3147,45 @@ bool SyncStore::replacePeerCursors(const QHash<QString, SyncPosition>& cursors)
         return false;
     }
     return true;
+}
+
+std::optional<SyncStore::PeerObservation> SyncStore::peerObservation(const QString& device) const
+{
+    const QByteArray bytes = stateValue(database(), kPeerSeenPrefix + device).toUtf8();
+    const QJsonDocument document = QJsonDocument::fromJson(bytes);
+    if (!document.isObject()) {
+        return std::nullopt;
+    }
+    const QJsonObject object = document.object();
+    PeerObservation observation;
+    // 观察记录会影响文件删除；缺字段、类型错误或负数一律重新保守观察，不把默认零值当作可信旧记录。
+    const auto readInteger = [&object](const char* key, qint64* value) {
+        const QJsonValue field = object.value(QLatin1String(key));
+        if (!field.isDouble()) return false;
+        *value = field.toInteger(-1);
+        return *value >= 0 && field.toDouble() == double(*value);
+    };
+    if (!readInteger("epoch", &observation.epoch) || observation.epoch != epoch()
+        || !object.value(QStringLiteral("fingerprint")).isString()
+        || !readInteger("observed_at_ms", &observation.observedAtMs)
+        || !readInteger("read_epoch", &observation.readPosition.epoch)
+        || !readInteger("read_seq", &observation.readPosition.seq)) {
+        return std::nullopt;
+    }
+    observation.fingerprint = object.value(QStringLiteral("fingerprint")).toString();
+    return observation;
+}
+
+bool SyncStore::setPeerObservation(const QString& device, const PeerObservation& observation)
+{
+    // 现有键值表中的本机元数据，不进入同步文件；整条 JSON 一次写入，时间和进度不能只更新一半。
+    const QJsonObject object{{QStringLiteral("epoch"), observation.epoch},
+                             {QStringLiteral("fingerprint"), observation.fingerprint},
+                             {QStringLiteral("observed_at_ms"), observation.observedAtMs},
+                             {QStringLiteral("read_epoch"), observation.readPosition.epoch},
+                             {QStringLiteral("read_seq"), observation.readPosition.seq}};
+    return setStateValue(database(), kPeerSeenPrefix + device,
+                         QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact)));
 }
 
 SyncPosition SyncStore::outboundPosition() const

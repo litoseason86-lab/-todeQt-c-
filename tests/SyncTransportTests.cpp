@@ -396,6 +396,8 @@ private slots:
     // 3e：快照、清理与全局回滚
     void oldFilesAreDeletedOnlyAfterEveryoneReadThem();
     void compactionSnapshotDoesNotSwallowPendingChanges();
+    void cleanupUsesLocalPeerObservations_data();
+    void cleanupUsesLocalPeerObservations();
     void lateDeviceCatchesUpFromSnapshotAfterCleanup();
     void farBehindDeviceReadsSnapshotInsteadOfManyFiles();
     void restoringBackupRollsBackTheOtherDevice();
@@ -1528,6 +1530,146 @@ void SyncTransportTests::compactionSnapshotDoesNotSwallowPendingChanges()
     QVERIFY(syncOnce(*ipad));
     QCOMPARE(taskTitles(ipad->device), (QStringList{QStringLiteral("快照时还攒着的"), QStringLiteral("第 1 批"),
                                                     QStringLiteral("第 2 批")}));
+}
+
+void SyncTransportTests::cleanupUsesLocalPeerObservations_data()
+{
+    // 清理只依据本机观察到的游标变化和读取进度，不能被对端时钟、暂时损坏或旧纪元记录误导。
+    QTest::addColumn<QString>("scenario");
+    for (const char* name : {"slow-clock", "fast-clock", "corrupt", "known-then-corrupt", "new-epoch", "clock-rollback", "write-failure"}) {
+        QTest::newRow(name) << QString::fromLatin1(name);
+    }
+}
+
+void SyncTransportTests::cleanupUsesLocalPeerObservations()
+{
+    // 对端未读的旧改动须等本机观察满过期期限才清理，读不出游标时沿用已知进度，换纪元重新观察。
+    QFETCH(QString, scenario);
+    constexpr qint64 dayMs = 24 * 60 * 60 * 1000;
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 firstSeen = now;
+    FakeICloud cloud(m_data->filePath(QStringLiteral("cloud")));
+    SyncEngine::Options options = testOptions();
+    options.maintenanceIntervalMs = 0;
+    options.compactAfterFiles = 100;
+    options.localWallClockMs = [&now] { return now; };
+    auto mac = makeNode(QStringLiteral("observing-mac"), true, cloud, options);
+    QVERIFY(mac->device.id != kDeviceB);
+    mac->engine->start();
+    QVERIFY(waitIdle(*mac->engine));
+    QCOMPARE(mac->engine->status(), SyncEngine::Status::UpToDate);
+    SyncStore store(mac->device.connection);
+    for (int batch = 1; batch <= 3; ++batch) {
+        QVERIFY(!addTask(mac->device, QStringLiteral("观察前第 %1 批").arg(batch)).isEmpty());
+        QVERIFY(syncOnce(*mac));
+    }
+    const QStringList allFiles{SyncFiles::changeFileName({0, 1}), SyncFiles::changeFileName({0, 2}),
+                               SyncFiles::changeFileName({0, 3})};
+    QCOMPARE(cloud.changeFiles(mac->device, mac->device), allFiles);
+    QCOMPARE(store.snapshotPosition(), (SyncPosition{0, 0}));
+    SyncFiles::CursorFile cursor;
+    cursor.device = kDeviceB;
+    cursor.epoch = 0;
+    // 两种偏差都远超 14 天；对端时间只当指纹的一部分，不是本机的过期时钟。
+    cursor.writtenAtMs = now + (scenario == QLatin1String("slow-clock") ? -30 : 30) * dayMs;
+    const qint64 acknowledged = scenario == QLatin1String("known-then-corrupt") ? 1
+        : (scenario == QLatin1String("write-failure") ? 3 : 0);
+    cursor.applied.insert(mac->device.id, {0, acknowledged});
+    const QString cursorPath = cloud.path(mac->device, SyncFiles::deviceDirectory(kDeviceB) + QLatin1Char('/')
+                                                                      + SyncFiles::cursorFileName());
+    const auto writeCursor = [&](const QByteArray& bytes) {
+        if (!QDir().mkpath(QFileInfo(cursorPath).absolutePath())) return false;
+        QSaveFile file(cursorPath);
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() && file.commit();
+    };
+    const bool initiallyCorrupt = scenario == QLatin1String("corrupt");
+    QVERIFY(writeCursor(initiallyCorrupt ? QByteArray("{") : SyncFiles::encodeCursor(cursor)));
+    QVERIFY(fileExists(cursorPath));
+    if (scenario == QLatin1String("write-failure")) {
+        // 只阻止新的观察记账，其它同步状态仍可写；清理必须保守保留文件，不能把写失败当作设备消失。
+        QVERIFY(exec(mac->device, QStringLiteral(
+            "CREATE TRIGGER fail_peer_seen BEFORE INSERT ON sync_state WHEN NEW.key LIKE 'peer_seen/%' "
+            "BEGIN SELECT RAISE(ABORT, 'peer observation failure'); END")));
+    }
+    // 用生产入口写覆盖三批的快照，再做维护；此前三批都在，才能区分清理有没有越过对端读取位置。
+    QVERIFY(store.requestFullSnapshot());
+    QVERIFY(syncOnce(*mac));
+    QCOMPARE(store.snapshotPosition(), (SyncPosition{0, 3}));
+    QVERIFY(fileExists(cloud.path(mac->device, SyncFiles::deviceDirectory(mac->device.id) + QLatin1Char('/')
+                                                                           + SyncFiles::snapshotFileName({0, 3}))));
+    if (scenario == QLatin1String("known-then-corrupt")) {
+        const QStringList unread{SyncFiles::changeFileName({0, 2}), SyncFiles::changeFileName({0, 3})};
+        QCOMPARE(cloud.changeFiles(mac->device, mac->device), unread);
+        QVERIFY(writeCursor(QByteArray("{")));
+        // 重开连接后仍须沿用位置 1，不能只靠引擎内存保存的进度使测试通过。
+        mac->engine->stop();
+        reopen(mac->device);
+        QVERIFY(exec(mac->device, QStringLiteral("PRAGMA foreign_keys=ON")));
+        mac->engine->start();
+        QVERIFY(waitIdle(*mac->engine));
+        QVERIFY(syncOnce(*mac));
+        QCOMPARE(cloud.changeFiles(mac->device, mac->device), unread);
+    } else {
+        QCOMPARE(cloud.changeFiles(mac->device, mac->device), allFiles);
+    }
+    if (scenario == QLatin1String("write-failure")) {
+        QCOMPARE(mac->engine->status(), SyncEngine::Status::Error);
+        QVERIFY(mac->engine->statusDetail().contains(QStringLiteral("观察记录")));
+        QVERIFY(exec(mac->device, QStringLiteral("DROP TRIGGER fail_peer_seen")));
+        cursor.applied[mac->device.id] = {0, 3};
+        QVERIFY(writeCursor(SyncFiles::encodeCursor(cursor)));
+        QVERIFY(syncOnce(*mac));
+        QVERIFY(cloud.changeFiles(mac->device, mac->device).isEmpty());
+        return;
+    }
+    if (scenario == QLatin1String("new-epoch")) {
+        // 旧指纹已观察超过 14 天，但新纪元必须重新计时；用真实恢复入口推进纪元，不直接伪造观察 JSON。
+        now += 15 * dayMs;
+        mac->engine->stop();
+        QVERIFY(store.beginEpochAfterRestore(0, mac->device.id));
+        QCOMPARE(store.epoch(), qint64(1));
+        QVERIFY(writeCursor(QByteArray("{")));
+        mac->engine->start();
+        QVERIFY(waitIdle(*mac->engine));
+        for (int batch = 1; batch <= 3; ++batch) {
+            QVERIFY(!addTask(mac->device, QStringLiteral("新纪元第 %1 批").arg(batch)).isEmpty());
+            QVERIFY(syncOnce(*mac));
+        }
+        const QStringList newFiles{SyncFiles::changeFileName({1, 1}), SyncFiles::changeFileName({1, 2}),
+                                   SyncFiles::changeFileName({1, 3})};
+        QCOMPARE(cloud.changeFiles(mac->device, mac->device), newFiles);
+        QVERIFY(store.requestFullSnapshot());
+        QVERIFY(syncOnce(*mac));
+        QCOMPARE(store.snapshotPosition(), (SyncPosition{1, 3}));
+        QCOMPARE(cloud.changeFiles(mac->device, mac->device), newFiles);
+        return;
+    }
+    if (scenario == QLatin1String("slow-clock")) {
+        // 指纹再次变化即从本机此刻重新观察，不受对端仍落后 30 天的时间戳影响。
+        now += 13 * dayMs;
+        ++cursor.writtenAtMs;
+        QVERIFY(writeCursor(SyncFiles::encodeCursor(cursor)));
+        QVERIFY(syncOnce(*mac));
+        QCOMPARE(cloud.changeFiles(mac->device, mac->device), allFiles);
+        now += 2 * dayMs;
+        QVERIFY(syncOnce(*mac));
+        QCOMPARE(cloud.changeFiles(mac->device, mac->device), allFiles);
+        return;
+    }
+    if (scenario == QLatin1String("clock-rollback")) {
+        now -= dayMs;
+        QVERIFY(syncOnce(*mac));
+        QCOMPARE(cloud.changeFiles(mac->device, mac->device), allFiles);
+    }
+    const qint64 observedAt = scenario == QLatin1String("clock-rollback") ? firstSeen - dayMs : firstSeen;
+    now = observedAt + 14 * dayMs - 1;
+    QVERIFY(syncOnce(*mac));
+    const QStringList beforeExpiry = scenario == QLatin1String("known-then-corrupt")
+        ? QStringList{SyncFiles::changeFileName({0, 2}), SyncFiles::changeFileName({0, 3})} : allFiles;
+    QCOMPARE(cloud.changeFiles(mac->device, mac->device), beforeExpiry);
+    ++now;
+    QVERIFY(syncOnce(*mac));
+    QVERIFY(cloud.changeFiles(mac->device, mac->device).isEmpty());
 }
 
 void SyncTransportTests::lateDeviceCatchesUpFromSnapshotAfterCleanup()
