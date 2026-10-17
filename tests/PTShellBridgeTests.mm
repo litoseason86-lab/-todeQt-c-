@@ -2,6 +2,7 @@
 #import "../src/platform/ios/bridge/PTLifecycleBridge.h"
 #include <QCoreApplication>
 #include "../src/platform/ios/native/IPadUiPreferences.h"
+#include "../src/platform/ios/native/IPadShellPreferences.h"
 #include <QSettings>
 #include <QScopeGuard>
 #include <QTemporaryDir>
@@ -20,6 +21,16 @@
 class PTShellBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void shellPreferencesWriteAndReadBack();
+    void shellPreferencesFailureRestoresState_data();
+    void shellPreferencesFailureRestoresState();
+    void shellAppearanceLegacyReadDoesNotWrite_data();
+    void shellAppearanceLegacyReadDoesNotWrite();
+    void shellThemeServiceFailureRestoresAppearance_data();
+    void shellThemeServiceFailureRestoresAppearance();
+    void sameThemeSelectionStillRefreshesAppearance();
+    void pageSelectionFailureKeepsPreviousValue_data();
+    void pageSelectionFailureKeepsPreviousValue();
     void themeChoicePersistsTogetherAndAcceptsNonempty();
     void themeChoiceFailureRestoresBothKeys();
     void primaryGoalProjectsServiceAndRefreshes();
@@ -440,5 +451,249 @@ void PTShellBridgeTests::appearanceWriteFailureRestoresValue()
         QCOMPARE(changes, 0);
     }
 }
+// 产品保证：选页失败时保留已有页或无键状态，不把未落盘的新选择留在缓存中。
+void PTShellBridgeTests::pageSelectionFailureKeepsPreviousValue_data()
+{
+    QTest::addColumn<bool>("hadPage");
+    QTest::newRow("existing-page") << true;
+    QTest::newRow("no-page-key") << false;
+}
+
+// 产品保证：桥接选页的 void 接口也遵守失败还原，且不会广播成功变化。
+void PTShellBridgeTests::pageSelectionFailureKeepsPreviousValue()
+{
+    @autoreleasepool {
+        QFETCH(bool, hadPage);
+        QTemporaryDir blocked;
+        QVERIFY(blocked.isValid());
+        QFile obstruction(blocked.filePath(QStringLiteral("PomodoroTodoTests")));
+        QVERIFY(obstruction.open(QIODevice::WriteOnly));
+        obstruction.close();
+        // 普通文件挡住偏好目录，稳定制造写失败；持有观察后端，确保能看到错误的缓存写入。
+        const auto restorePath = qScopeGuard([this] {
+            QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+        });
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, blocked.path());
+        QSettings observed;
+        const QString key = QStringLiteral("ipad/selectedPage");
+        if (hadPage) observed.setValue(key, QStringLiteral("memo"));
+        QCOMPARE(observed.contains(key), hadPage);
+        if (hadPage) QCOMPARE(observed.value(key).toString(), QStringLiteral("memo"));
+        PTShellBridge *bridge = [PTShellBridge new];
+        __block int changes = 0;
+        bridge.onChanged = ^{ ++changes; };
+
+        [bridge selectPage:@"history"];
+
+        QCOMPARE(observed.contains(key), hadPage);
+        QCOMPARE(observed.value(key, QStringLiteral("dashboard")).toString(),
+                 hadPage ? QStringLiteral("memo") : QStringLiteral("dashboard"));
+        QCOMPARE(changes, 0);
+    }
+}
+
+// 产品保证：四个 C++ 偏好入口成功后可读回，主题仍经服务保存，未变主题会要求外壳补刷新。
+void PTShellBridgeTests::shellPreferencesWriteAndReadBack()
+{
+    auto snapshot = IPadShellPreferences::readSnapshot();
+    QVERIFY(!snapshot.useWallpaper);
+    QCOMPARE(snapshot.appearance, QStringLiteral("system"));
+    QCOMPARE(snapshot.selectedPage, QStringLiteral("dashboard"));
+    QVERIFY(!QSettings().contains(QStringLiteral("ipad/appearance")));
+    QString error = QStringLiteral("旧错误");
+    QVERIFY(IPadShellPreferences::setUseWallpaper(true, &error));
+    QVERIFY(error.isEmpty());
+    snapshot = IPadShellPreferences::readSnapshot();
+    QVERIFY(snapshot.useWallpaper);
+    QCOMPARE(snapshot.appearance, QStringLiteral("theme"));
+    QCOMPARE(QSettings().value(QStringLiteral("ipad/useWallpaper")).toBool(), true);
+    QVERIFY(!QSettings().contains(QStringLiteral("ipad/appearance")));
+    for (const QString& mode : {QStringLiteral("light"), QStringLiteral("dark"),
+                                QStringLiteral("theme"), QStringLiteral("system")}) {
+        error = QStringLiteral("旧错误");
+        QVERIFY(IPadShellPreferences::setAppearance(mode, &error));
+        QVERIFY(error.isEmpty());
+        QCOMPARE(IPadShellPreferences::readSnapshot().appearance, mode);
+        QCOMPARE(QSettings().value(QStringLiteral("ipad/appearance")).toString(), mode);
+    }
+    auto* settings = AppSettings::instance();
+    const QString theme = QStringLiteral("cpp-future-theme");
+    QVERIFY(settings->backgroundTheme() != theme);
+    QSignalSpy changed(settings, &AppSettings::backgroundThemeChanged);
+    bool needsRefresh = true;
+    QVERIFY(IPadShellPreferences::selectTheme(theme, &error, &needsRefresh));
+    QVERIFY(error.isEmpty());
+    QVERIFY(!needsRefresh);
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(settings->backgroundTheme(), theme);
+    QCOMPARE(QSettings().value(QStringLiteral("appearance/backgroundTheme")).toString(), theme);
+    QCOMPARE(IPadShellPreferences::readSnapshot().appearance, QStringLiteral("theme"));
+    QVERIFY(IPadShellPreferences::setAppearance(QStringLiteral("system"), &error));
+    changed.clear();
+    needsRefresh = false;
+    QVERIFY(IPadShellPreferences::selectTheme(theme, &error, &needsRefresh));
+    QVERIFY(needsRefresh);
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(IPadShellPreferences::readSnapshot().appearance, QStringLiteral("theme"));
+    QVERIFY(IPadShellPreferences::setSelectedPage(QStringLiteral("memo"), &error));
+    QVERIFY(error.isEmpty());
+    QCOMPARE(IPadShellPreferences::readSnapshot().selectedPage, QStringLiteral("memo"));
+    QCOMPARE(QSettings().value(QStringLiteral("ipad/selectedPage")).toString(), QStringLiteral("memo"));
+}
+
+// 产品保证：四个入口的写失败都还原已有值，原先无键时删除新键。
+void PTShellBridgeTests::shellPreferencesFailureRestoresState_data()
+{
+    QTest::addColumn<QString>("operation");
+    QTest::addColumn<bool>("existed");
+    for (const QString& operation : {QStringLiteral("wallpaper"), QStringLiteral("appearance"),
+                                     QStringLiteral("theme"), QStringLiteral("page")}) {
+        QTest::newRow(qPrintable(operation + QStringLiteral("-existing"))) << operation << true;
+        QTest::newRow(qPrintable(operation + QStringLiteral("-absent"))) << operation << false;
+    }
+}
+
+// 产品保证：保存失败返回 false 和中文原因，缓存及读取快照继续反映原偏好。
+void PTShellBridgeTests::shellPreferencesFailureRestoresState()
+{
+    QFETCH(QString, operation);
+    QFETCH(bool, existed);
+    QTemporaryDir blocked;
+    QVERIFY(blocked.isValid());
+    QFile obstruction(blocked.filePath(QStringLiteral("PomodoroTodoTests")));
+    QVERIFY(obstruction.open(QIODevice::WriteOnly));
+    obstruction.close();
+    auto* appSettings = AppSettings::instance();
+    const QString oldTheme = appSettings->backgroundTheme();
+    // 仅阻断新的本机偏好后端；主题服务仍持有原后端，保证测到第一步失败时不会执行第二步。
+    const auto restorePath = qScopeGuard([this] {
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+    });
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, blocked.path());
+    const QString key = operation == QStringLiteral("wallpaper") ? QStringLiteral("ipad/useWallpaper")
+        : operation == QStringLiteral("page") ? QStringLiteral("ipad/selectedPage") : QStringLiteral("ipad/appearance");
+    const QVariant previous = operation == QStringLiteral("wallpaper") ? QVariant(false)
+        : operation == QStringLiteral("page") ? QVariant(QStringLiteral("memo")) : QVariant(QStringLiteral("light"));
+    QSettings observed;
+    if (existed) observed.setValue(key, previous);
+    QCOMPARE(observed.contains(key), existed);
+    if (existed) {
+        QCOMPARE(observed.value(key), previous);
+        observed.sync();
+        QCOMPARE(observed.status(), QSettings::AccessError);
+    }
+    QString error;
+    bool needsRefresh = true;
+    const bool saved = [&] {
+        if (operation == QStringLiteral("wallpaper")) return IPadShellPreferences::setUseWallpaper(true, &error);
+        if (operation == QStringLiteral("appearance")) return IPadShellPreferences::setAppearance(QStringLiteral("dark"), &error);
+        if (operation == QStringLiteral("theme")) return IPadShellPreferences::selectTheme(QStringLiteral("starry"), &error, &needsRefresh);
+        return IPadShellPreferences::setSelectedPage(QStringLiteral("history"), &error);
+    }();
+    QVERIFY(!saved);
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(observed.contains(key), existed);
+    if (existed) QCOMPARE(observed.value(key), previous);
+    const auto snapshot = IPadShellPreferences::readSnapshot();
+    if (operation == QStringLiteral("wallpaper")) QVERIFY(!snapshot.useWallpaper);
+    else if (operation == QStringLiteral("page")) QCOMPARE(snapshot.selectedPage, existed ? QStringLiteral("memo") : QStringLiteral("dashboard"));
+    else QCOMPARE(snapshot.appearance, existed ? QStringLiteral("light") : QStringLiteral("system"));
+    QCOMPARE(appSettings->backgroundTheme(), oldTheme);
+    if (operation == QStringLiteral("theme")) QVERIFY(!needsRefresh);
+}
+
+// 产品保证：旧壁纸键无论开启或关闭，都只在读取时推导外观，不自动补写外观键。
+void PTShellBridgeTests::shellAppearanceLegacyReadDoesNotWrite_data()
+{
+    QTest::addColumn<bool>("wallpaper");
+    QTest::newRow("wallpaper-off") << false;
+    QTest::newRow("wallpaper-on") << true;
+}
+
+// 产品保证：C++ 快照兼容旧壁纸体验，重复读取也不改变磁盘键集合。
+void PTShellBridgeTests::shellAppearanceLegacyReadDoesNotWrite()
+{
+    QFETCH(bool, wallpaper);
+    QSettings settings;
+    QVERIFY(!settings.contains(QStringLiteral("ipad/appearance")));
+    settings.setValue(QStringLiteral("ipad/useWallpaper"), wallpaper);
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    const QStringList keys = settings.allKeys();
+    for (int read = 0; read < 2; ++read) {
+        const auto snapshot = IPadShellPreferences::readSnapshot();
+        QCOMPARE(snapshot.useWallpaper, wallpaper);
+        QCOMPARE(snapshot.appearance, wallpaper ? QStringLiteral("theme") : QStringLiteral("system"));
+        QCOMPARE(snapshot.selectedPage, QStringLiteral("dashboard"));
+        QVERIFY(!settings.contains(QStringLiteral("ipad/appearance")));
+        QCOMPARE(settings.allKeys(), keys);
+    }
+}
+
+// 产品保证：主题服务第二步失败时也恢复第一步的外观已有值或无键状态。
+void PTShellBridgeTests::shellThemeServiceFailureRestoresAppearance_data()
+{
+    QTest::addColumn<bool>("hadAppearance");
+    QTest::newRow("existing-appearance") << true;
+    QTest::newRow("no-appearance-key") << false;
+}
+
+// 产品保证：主题保存失败保留原主题、回退本机外观，并返回失败且不要求成功刷新。
+void PTShellBridgeTests::shellThemeServiceFailureRestoresAppearance()
+{
+    QFETCH(bool, hadAppearance);
+    auto* appSettings = AppSettings::instance();
+    QTemporaryDir blocked;
+    QVERIFY(blocked.isValid());
+    QFile obstruction(blocked.filePath(QStringLiteral("PomodoroTodoTests")));
+    QVERIFY(obstruction.open(QIODevice::WriteOnly));
+    obstruction.close();
+    // 服务后端留在被阻断的位置，再恢复全局路径，使本机外观可写，隔离第二步失败。
+    const auto restore = qScopeGuard([this, appSettings] {
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+        appSettings->reload();
+    });
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, blocked.path());
+    appSettings->reload();
+    const QString oldTheme = appSettings->backgroundTheme();
+    QVERIFY(oldTheme != QStringLiteral("starry"));
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+    QSettings observed;
+    const QString key = QStringLiteral("ipad/appearance");
+    if (hadAppearance) observed.setValue(key, QStringLiteral("light"));
+    observed.sync();
+    QCOMPARE(observed.status(), QSettings::NoError);
+    QCOMPARE(observed.contains(key), hadAppearance);
+    if (hadAppearance) QCOMPARE(observed.value(key).toString(), QStringLiteral("light"));
+    QSignalSpy failures(appSettings, &AppSettings::settingsWriteFailed);
+    QString error;
+    bool needsRefresh = true;
+    QVERIFY(!IPadShellPreferences::selectTheme(QStringLiteral("starry"), &error, &needsRefresh));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(!needsRefresh);
+    QCOMPARE(failures.count(), 1);
+    QCOMPARE(appSettings->backgroundTheme(), oldTheme);
+    QCOMPARE(observed.contains(key), hadAppearance);
+    if (hadAppearance) QCOMPARE(observed.value(key).toString(), QStringLiteral("light"));
+}
+
+// 产品保证：主题没有变化但外观切到主题时，桥接仍恰好补发一次外壳刷新。
+void PTShellBridgeTests::sameThemeSelectionStillRefreshesAppearance()
+{
+    @autoreleasepool {
+        PTShellBridge* bridge = [PTShellBridge new];
+        NSError* error = nil;
+        QVERIFY([bridge setAppearance:@"system" error:&error]);
+        const QString theme = AppSettings::instance()->backgroundTheme();
+        QVERIFY(!theme.isEmpty());
+        __block int changes = 0;
+        bridge.onChanged = ^{ ++changes; };
+        QVERIFY([bridge selectTheme:theme.toNSString() error:&error]);
+        QVERIFY(error == nil);
+        QCOMPARE(changes, 1);
+        QVERIFY([[bridge readSnapshot].appearance isEqualToString:@"theme"]);
+    }
+}
+
 QTEST_GUILESS_MAIN(PTShellBridgeTests)
 #include "PTShellBridgeTests.moc"
