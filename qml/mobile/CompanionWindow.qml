@@ -144,6 +144,9 @@ Item {
         }
 
         function onOperationFailed(message) {
+            // 完成和撤销由 setCompleted 的返回值提示；其它入口的完成失败也不应显示成加载错误。
+            if (/^(完成|取消完成|完成并记笔记)失败：/.test(String(message || "")))
+                return
             root.loadError = String(message || "")
         }
     }

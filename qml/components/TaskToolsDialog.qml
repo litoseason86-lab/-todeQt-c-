@@ -130,7 +130,12 @@ Dialog {
         target: root.taskManagerRef
         ignoreUnknownSignals: true
         function onTasksChanged() { if (root.opened) root.refresh(false) }
-        function onOperationFailed(message) { if (root.visible) root.message = message }
+        function onOperationFailed(message) {
+            // 这里没有完成入口，别处为 iPad 播报的完成原因不能污染当前弹窗。
+            if (/^(完成|取消完成|完成并记笔记)失败：/.test(String(message || "")))
+                return
+            if (root.visible) root.message = message
+        }
     }
     Timer { id: searchDelay; interval: 180; onTriggered: root.refresh(true) }
     contentItem: ColumnLayout {

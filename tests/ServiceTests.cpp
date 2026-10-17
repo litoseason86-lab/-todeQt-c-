@@ -893,6 +893,9 @@ private slots:
     void notesRoundTripAndRenameDoesNotEraseThem();
     void overlongNotesAreRejectedInsteadOfTruncated();
     void completeTaskWithNoteStoresNoteAndCompletesInOneWrite();
+    void taskCompletionFailuresReportReason_data();
+    void taskCompletionFailuresReportReason();
+    void successfulTaskCompletionDoesNotReportFailure();
     void completionNoteSurvivesUndoAndCanBeRewritten();
     void overlongCompletionNoteIsRejectedWithoutSideEffects();
     void editingKeepsCompletionNoteUnlessExplicitlyGiven();
@@ -8465,6 +8468,116 @@ void ServiceTests::completeTaskWithNoteStoresNoteAndCompletesInOneWrite()
     QVERIFY(tasks->completeTaskWithNote(nullId, QString()));
     QVERIFY(tasks->getTask(nullId).value(QStringLiteral("completed")).toBool());
     QVERIFY(tasks->getTask(nullId).value(QStringLiteral("completionNote")).toString().isEmpty());
+}
+
+void ServiceTests::taskCompletionFailuresReportReason_data()
+{
+    // 产品保证：完成、取消完成、完成并记笔记的每种失败都报出对应操作和具体原因。
+    QTest::addColumn<QString>("operation");
+    QTest::addColumn<QString>("failure");
+    QTest::addColumn<QString>("expectedMessage");
+    const QStringList operations = {QStringLiteral("完成"), QStringLiteral("取消完成"),
+                                    QStringLiteral("完成并记笔记")};
+    const QList<QPair<QString, QString>> failures = {
+        {QStringLiteral("invalid-zero"), QStringLiteral("任务编号无效")},
+        {QStringLiteral("invalid-negative"), QStringLiteral("任务编号无效")},
+        {QStringLiteral("missing"), QStringLiteral("任务不存在")},
+        {QStringLiteral("closed"), QStringLiteral("数据库未打开")},
+        {QStringLiteral("write"), QStringLiteral("数据库写入失败")}
+    };
+    for (const QString& operation : operations) {
+        for (const auto& failure : failures) {
+            const QByteArray name = (operation + QLatin1Char('-') + failure.first).toUtf8();
+            QTest::newRow(name.constData()) << operation << failure.first
+                << QStringLiteral("%1失败：%2").arg(operation, failure.second);
+        }
+    }
+    QTest::newRow("note-too-long") << QStringLiteral("完成并记笔记")
+        << QStringLiteral("long-note") << QStringLiteral("完成并记笔记失败：笔记超长");
+}
+
+void ServiceTests::taskCompletionFailuresReportReason()
+{
+    // 产品保证：单次完成写入失败只播报一次原因，不发成功通知，也不改变完成态或原笔记。
+    QFETCH(QString, operation);
+    QFETCH(QString, failure);
+    QFETCH(QString, expectedMessage);
+    TaskManager* tasks = TaskManager::instance();
+    const int taskId = tasks->createTask(QStringLiteral("失败后可重试"), logicalToday(), -1, 0,
+                                         QStringLiteral("原备注"));
+    QVERIFY(taskId > 0);
+    QVERIFY(tasks->completeTaskWithNote(taskId, QStringLiteral("原完成记录")));
+    if (operation != QStringLiteral("取消完成"))
+        QVERIFY(tasks->setTaskCompleted(taskId, false));
+    const QVariantMap before = tasks->getTask(taskId);
+    QCOMPARE(before.value(QStringLiteral("completed")).toBool(),
+             operation == QStringLiteral("取消完成"));
+    QCOMPARE(before.value(QStringLiteral("completionNote")).toString(), QStringLiteral("原完成记录"));
+    QVERIFY(DatabaseManager::instance()->database().isOpen());
+
+    int requestedId = taskId;
+    QString note = QStringLiteral("新完成记录");
+    if (failure == QStringLiteral("invalid-zero")) {
+        requestedId = 0;
+    } else if (failure == QStringLiteral("invalid-negative")) {
+        requestedId = -1;
+    } else if (failure == QStringLiteral("missing")) {
+        requestedId = taskId + 1000;
+        QVERIFY(tasks->getTask(requestedId).isEmpty());
+    } else if (failure == QStringLiteral("closed")) {
+        DatabaseManager::instance()->close();
+        QVERIFY(!DatabaseManager::instance()->database().isOpen());
+    } else if (failure == QStringLiteral("write")) {
+        // 只在隔离库拦截这次 UPDATE，保证存在的任务确实因写入失败，而非参数或查无记录被拒绝。
+        QSqlQuery reject(DatabaseManager::instance()->database());
+        QVERIFY(reject.exec(QStringLiteral(
+            "CREATE TEMP TRIGGER reject_task_completion BEFORE UPDATE OF completed ON tasks "
+            "BEGIN SELECT RAISE(ABORT, 'T23 completion write blocked'); END")));
+    } else if (failure == QStringLiteral("long-note")) {
+        note = QString(TaskManager::kMaxNotesLength + 1, QLatin1Char('x'));
+        QVERIFY(note.size() > TaskManager::kMaxNotesLength);
+    }
+
+    QSignalSpy failed(tasks, &TaskManager::operationFailed);
+    QSignalSpy changed(tasks, &TaskManager::tasksChanged);
+    QVERIFY(failed.isValid());
+    QVERIFY(changed.isValid());
+    const bool result = operation == QStringLiteral("完成并记笔记")
+        ? tasks->completeTaskWithNote(requestedId, note)
+        : tasks->setTaskCompleted(requestedId, operation == QStringLiteral("完成"));
+    QVERIFY(!result);
+    QCOMPARE(failed.count(), 1);
+    const QString message = failed.first().first().toString();
+    QVERIFY2(message.startsWith(expectedMessage), qPrintable(message));
+    if (failure == QStringLiteral("write"))
+        QVERIFY2(message.contains(QStringLiteral("T23 completion write blocked")), qPrintable(message));
+    if (failure == QStringLiteral("long-note"))
+        QVERIFY(message.contains(QString::number(TaskManager::kMaxNotesLength)));
+    QCOMPARE(changed.count(), 0);
+    if (failure == QStringLiteral("closed"))
+        QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("test.sqlite")));
+    QCOMPARE(tasks->getTask(taskId), before);
+}
+
+void ServiceTests::successfulTaskCompletionDoesNotReportFailure()
+{
+    // 产品保证：完成、撤销和带笔记完成成功时只发任务变化，不误报失败。
+    TaskManager* tasks = TaskManager::instance();
+    const int taskId = tasks->createTask(QStringLiteral("成功完成"), logicalToday(), -1, 0, QString());
+    QVERIFY(taskId > 0);
+    QVERIFY(!tasks->getTask(taskId).value(QStringLiteral("completed")).toBool());
+    QSignalSpy failed(tasks, &TaskManager::operationFailed);
+    QSignalSpy changed(tasks, &TaskManager::tasksChanged);
+    QVERIFY(failed.isValid());
+    QVERIFY(changed.isValid());
+    QVERIFY(tasks->completeTask(taskId));
+    QVERIFY(tasks->setTaskCompleted(taskId, false));
+    QVERIFY(tasks->setTaskCompleted(taskId, true));
+    QVERIFY(tasks->completeTaskWithNote(taskId, QStringLiteral("完成记录")));
+    QCOMPARE(changed.count(), 4);
+    QCOMPARE(failed.count(), 0);
+    QCOMPARE(tasks->getTask(taskId).value(QStringLiteral("completionNote")).toString(),
+             QStringLiteral("完成记录"));
 }
 
 void ServiceTests::completionNoteSurvivesUndoAndCanBeRewritten()

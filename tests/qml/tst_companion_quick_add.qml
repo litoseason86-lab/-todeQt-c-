@@ -119,4 +119,22 @@ TestCase {
         compare(field.text, "")
         verify(!hint.atLimit)
     }
+
+    function test_unrelatedCompletionFailureDoesNotBecomeLoadError_data() {
+        // 产品保证：伴侣页不会把其它入口的完成、撤销或带笔记完成失败再显示为加载错误。
+        return [ { tag: "complete", message: "完成失败：任务不存在" },
+                 { tag: "uncomplete", message: "取消完成失败：数据库未打开" },
+                 { tag: "note", message: "完成并记笔记失败：笔记超长" } ]
+    }
+
+    function test_unrelatedCompletionFailureDoesNotBecomeLoadError(data) {
+        // 产品保证：完成失败沿用原入口提示，伴侣页只保留自身的其它任务错误。
+        var companion = createTemporaryObject(companionComponent, testCase)
+        verify(companion !== null)
+        compare(companion.loadError, "")
+        taskStub.operationFailed(data.message)
+        compare(companion.loadError, "")
+        taskStub.operationFailed("任务加载失败")
+        compare(companion.loadError, "任务加载失败")
+    }
 }

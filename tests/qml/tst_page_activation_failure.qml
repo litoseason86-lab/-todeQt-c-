@@ -362,4 +362,33 @@ TestCase {
         routineManager.operationFailed("别处的失败")
         compare(dashboard.loadError, "")
     }
+
+    function test_completionFailureDoesNotBecomePageLoadError_data() {
+        // 产品保证：三个任务页面都不把调用方已处理的完成失败再显示为加载错误。
+        var rows = []
+        var pages = [{ name: "today", component: todayComponent },
+                     { name: "week", component: weekComponent },
+                     { name: "dashboard", component: dashboardComponent }]
+        var operations = ["完成", "取消完成", "完成并记笔记"]
+        for (var i = 0; i < pages.length; ++i) {
+            for (var j = 0; j < operations.length; ++j) {
+                rows.push({ tag: pages[i].name + "-" + operations[j], component: pages[i].component,
+                            message: operations[j] + "失败：数据库写入失败" })
+            }
+        }
+        return rows
+    }
+
+    function test_completionFailureDoesNotBecomePageLoadError(data) {
+        // 产品保证：完成失败只由原操作入口提示，不在活跃页面叠加红条，也不覆盖已有加载错误。
+        var view = createTemporaryObject(data.component, testCase)
+        verify(view)
+        view.pageActive = true
+        compare(view.loadError, "")
+        taskManager.operationFailed(data.message)
+        compare(view.loadError, "")
+        view.loadError = "原来的加载错误"
+        taskManager.operationFailed(data.message)
+        compare(view.loadError, "原来的加载错误")
+    }
 }

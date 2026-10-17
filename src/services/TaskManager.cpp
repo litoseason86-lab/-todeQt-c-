@@ -406,14 +406,18 @@ bool TaskManager::completeTask(int taskId)
 
 bool TaskManager::setTaskCompleted(int taskId, bool completed)
 {
+    // iPad 从 operationFailed 收集本次调用的原因；只记日志会让桥接返回的错误退化成通用文案。
+    const QString action = completed ? QStringLiteral("完成") : QStringLiteral("取消完成");
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to update task completion: invalid task id" << taskId;
+        reportFailure(QStringLiteral("%1失败：任务编号无效").arg(action));
         return false;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to update task completion: database is not open";
+        reportFailure(QStringLiteral("%1失败：数据库未打开").arg(action));
         return false;
     }
 
@@ -427,11 +431,13 @@ bool TaskManager::setTaskCompleted(int taskId, bool completed)
 
     if (!query.exec()) {
         qWarning() << "Failed to update task completion:" << query.lastError().text();
+        reportFailure(QStringLiteral("%1失败：数据库写入失败：%2").arg(action, query.lastError().text()));
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to update task completion: task not found" << taskId;
+        reportFailure(QStringLiteral("%1失败：任务不存在").arg(action));
         return false;
     }
 
@@ -441,20 +447,24 @@ bool TaskManager::setTaskCompleted(int taskId, bool completed)
 
 bool TaskManager::completeTaskWithNote(int taskId, const QString& note)
 {
+    // 与单条完成保持一致：失败必须带原因发给 iPad，调用方认领后只显示一次。
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to complete task with note: invalid task id" << taskId;
+        reportFailure(QStringLiteral("完成并记笔记失败：任务编号无效"));
         return false;
     }
     // 超长拒绝而不是截断，理由与备注相同：截断会让保存照常「成功」，丢的往往是结论那段。
     if (note.size() > kMaxNotesLength) {
         qWarning() << "Failed to complete task with note: note exceeds" << kMaxNotesLength
                    << "characters";
+        reportFailure(QStringLiteral("完成并记笔记失败：笔记超长，最多 %1 字").arg(kMaxNotesLength));
         return false;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to complete task with note: database is not open";
+        reportFailure(QStringLiteral("完成并记笔记失败：数据库未打开"));
         return false;
     }
 
@@ -468,11 +478,13 @@ bool TaskManager::completeTaskWithNote(int taskId, const QString& note)
 
     if (!query.exec()) {
         qWarning() << "Failed to complete task with note:" << query.lastError().text();
+        reportFailure(QStringLiteral("完成并记笔记失败：数据库写入失败：%1").arg(query.lastError().text()));
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to complete task with note: task not found" << taskId;
+        reportFailure(QStringLiteral("完成并记笔记失败：任务不存在"));
         return false;
     }
 

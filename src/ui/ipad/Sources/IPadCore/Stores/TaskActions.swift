@@ -37,8 +37,8 @@ public enum TaskCompletionFocusOutcome: Equatable, Sendable {
         guard shell?.snapshot.operationBlocksUI != true else { return false }
         do { try tasks.setCompleted(id: id, completed: false); return true }
         catch {
-            // 撤销失败沿用 Mac 的动作提示，不把桥接技术错误替换成另一套用户文案。
-            shell?.showToast("撤销完成失败，请重试"); return false
+            // 桥接已认领服务给出的失败原因；取消完成也要保留原文，不能再次退回通用重试提示。
+            shell?.showToast(error.localizedDescription); return false
         }
     }
     @discardableResult public func delete(id: Int, title: String) -> Bool { pendingDeletion.requestTask(id: id, title: title) }

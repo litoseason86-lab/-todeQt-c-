@@ -32,12 +32,19 @@ import XCTest
         XCTAssertEqual(tasks.calls.last?.name, "setCompleted"); XCTAssertEqual(tasks.calls.last?.ids, [7]); XCTAssertEqual(tasks.calls.last?.numbers, [0])
         XCTAssertEqual(hook.completed, [7])
     }
-    // 产品保证：任务完成失败显示服务原文，不调用专注钩子、不切页。
+    // 产品保证：普通完成和带笔记完成失败都显示服务原文，不调用专注钩子、不切页。
     func testFailedCompletionNeverCallsHook() {
-        let (shell, tasks, actions) = fixture(); let hook = FocusFlowHookFake(); actions.focusHook = hook
-        tasks.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "数据库不可写"])
-        XCTAssertFalse(actions.complete(id: 7, title: "甲")); XCTAssertTrue(hook.completed.isEmpty)
-        XCTAssertEqual(shell.toast?.message, "数据库不可写"); XCTAssertEqual(shell.selection, .dashboard)
+        let cases: [(String?, String)] = [
+            (nil, "完成失败：数据库写入失败：database is locked"),
+            ("完成草稿", "完成并记笔记失败：笔记超长，最多 2000 字")
+        ]
+        for (note, reason) in cases {
+            let (shell, tasks, actions) = fixture(); let hook = FocusFlowHookFake(); actions.focusHook = hook
+            tasks.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
+            XCTAssertFalse(actions.complete(id: 7, title: "甲", note: note)); XCTAssertTrue(hook.completed.isEmpty)
+            XCTAssertEqual(tasks.calls.last?.name, note == nil ? "setCompleted" : "complete")
+            XCTAssertEqual(shell.toast?.message, reason); XCTAssertEqual(shell.selection, .dashboard)
+        }
     }
     // 产品保证：P4-1 未装配钩子时完成仍可用，去专注页只切页。
     func testNilHookCompletesAndNavigates() {
@@ -64,16 +71,17 @@ import XCTest
         XCTAssertTrue(tasks.calls.isEmpty); XCTAssertEqual(blockedShell.selection, .dashboard)
         shell.retireToast()
     }
-    // 产品保证：撤销完成失败与 Mac 文案一致，不把桥接的技术错误直接交给用户。
-    func testFailedUncompleteUsesMacMessageForDirectAndToastActions() {
+    // 产品保证：直接取消完成和提示条撤销失败都保留服务原因，不退回通用重试文案。
+    func testFailedUncompletePreservesServiceReasonForDirectAndToastActions() {
         let (shell, tasks, actions) = fixture()
         XCTAssertTrue(actions.complete(id: 7, title: "甲"))
-        tasks.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "数据库技术错误"])
+        let reason = "取消完成失败：数据库未打开"
+        tasks.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
         shell.triggerToastAction()
-        XCTAssertEqual(shell.toast?.message, "撤销完成失败，请重试")
+        XCTAssertEqual(shell.toast?.message, reason)
         XCTAssertEqual(tasks.calls.last?.numbers, [0])
         XCTAssertFalse(actions.uncomplete(id: 7))
-        XCTAssertEqual(shell.toast?.message, "撤销完成失败，请重试")
+        XCTAssertEqual(shell.toast?.message, reason)
     }
 
     // 产品保证：批量完成一次写库，只有正在专注项补文案，撤销一次取消整批完成。

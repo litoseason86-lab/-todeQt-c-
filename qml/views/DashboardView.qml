@@ -179,6 +179,9 @@ Item {
         function onOperationFailed(message) {
             if (!root.pageActive)
                 return
+            // 完成、撤销和完成弹窗已有各自的失败提示；服务为 iPad 播报的原因不能再叠加为页面错误。
+            if (/^(完成|取消完成|完成并记笔记)失败：/.test(String(message || "")))
+                return
             root.loadError = String(message || "任务加载失败")
         }
     }

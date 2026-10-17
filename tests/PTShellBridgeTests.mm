@@ -706,8 +706,12 @@ void PTShellBridgeTests::sameThemeSelectionStillRefreshesAppearance()
 void PTShellBridgeTests::taskCallClaimsFailureAcrossBridges_data()
 {
     QTest::addColumn<bool>("shellFirst");
-    QTest::newRow("shell-first") << true;
-    QTest::newRow("task-first") << false;
+    QTest::addColumn<QString>("operation");
+    for (const QString& operation : {QStringLiteral("read"), QStringLiteral("complete"),
+                                      QStringLiteral("uncomplete"), QStringLiteral("note")}) {
+        QTest::newRow(qPrintable(QStringLiteral("shell-first-%1").arg(operation))) << true << operation;
+        QTest::newRow(qPrintable(QStringLiteral("task-first-%1").arg(operation))) << false << operation;
+    }
 }
 
 // 产品保证：任务调用返回失败时，外壳及其它任务桥接不再同时弹出同一失败。
@@ -715,8 +719,9 @@ void PTShellBridgeTests::taskCallClaimsFailureAcrossBridges()
 {
     @autoreleasepool {
         QFETCH(bool, shellFirst);
+        QFETCH(QString, operation);
         QVERIFY(DatabaseManager::instance()->database().isOpen());
-        // 关闭隔离库，使用明确会发 operationFailed 的读取路径；完成写入失败只记日志，不适合本测试。
+        // 关闭隔离库，让读取及三类完成写入都走服务失败出口；不得触碰正式用户数据库。
         DatabaseManager::instance()->close();
         QVERIFY(!DatabaseManager::instance()->database().isOpen());
         PTShellBridge* shell = shellFirst ? [PTShellBridge new] : nil;
@@ -729,11 +734,23 @@ void PTShellBridgeTests::taskCallClaimsFailureAcrossBridges()
         caller.onFailure = ^(NSString*) { ++callerFailures; };
         QSignalSpy emitted(TaskManager::instance(), &TaskManager::operationFailed);
         QCOMPARE(emitted.count(), 0);
-        PTTaskResult* result = [caller tasksForDate:@"2026-10-17"];
-        QVERIFY(!result.valid);
+        NSString* reason = nil;
+        if (operation == QStringLiteral("read")) {
+            PTTaskResult* result = [caller tasksForDate:@"2026-10-17"];
+            QVERIFY(!result.valid);
+            reason = result.error;
+        } else {
+            NSError* error = nil;
+            const BOOL result = operation == QStringLiteral("note")
+                ? [caller completeTask:1 note:@"完成记录" error:&error]
+                : [caller setCompleted:1 completed:operation == QStringLiteral("complete") error:&error];
+            QVERIFY(!result);
+            QVERIFY(error != nil);
+            reason = error.localizedDescription;
+        }
         QCOMPARE(emitted.count(), 1);
-        QVERIFY(result.error.length > 0);
-        QCOMPARE(QString::fromNSString(result.error), emitted.at(0).at(0).toString());
+        QVERIFY([reason containsString:@"数据库未打开"]);
+        QCOMPARE(QString::fromNSString(reason), emitted.at(0).at(0).toString());
         QCOMPARE(shellFailures, 0);
         QCOMPARE(observerFailures, 0);
         QCOMPARE(callerFailures, 0);

@@ -13,6 +13,7 @@ TestCase {
     QtObject {
         id: manager
         signal tasksChanged()
+        signal operationFailed(string message)
         property bool succeeds: true
         property bool hideSecond: false
         property var lastIds: []
@@ -95,5 +96,22 @@ TestCase {
         dialog.toggle(1, true)
         dialog.refresh(false)
         compare(dialog.selectedIds.length, 0)
+    }
+
+    function test_unrelatedCompletionFailureDoesNotEnterDialog_data() {
+        // 产品保证：任务工具不会接收别处的三类完成失败。
+        return [ { tag: "complete", message: "完成失败：任务不存在" },
+                 { tag: "uncomplete", message: "取消完成失败：数据库未打开" },
+                 { tag: "note", message: "完成并记笔记失败：笔记超长" } ]
+    }
+
+    function test_unrelatedCompletionFailureDoesNotEnterDialog(data) {
+        // 产品保证：工具弹窗开着时，别处完成失败不覆盖本弹窗的操作结果，自己的其它错误仍可显示。
+        verify(dialog.opened)
+        dialog.message = "原来的改期结果"
+        manager.operationFailed(data.message)
+        compare(dialog.message, "原来的改期结果")
+        manager.operationFailed("任务搜索失败")
+        compare(dialog.message, "任务搜索失败")
     }
 }

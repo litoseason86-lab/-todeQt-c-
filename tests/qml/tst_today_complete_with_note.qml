@@ -58,6 +58,7 @@ TestCase {
         id: taskManager
 
         signal tasksChanged()
+        signal operationFailed(string message)
 
         readonly property int maxNotesLength: 2000
         property var rows: []
@@ -77,8 +78,11 @@ TestCase {
         // 与真实服务同一契约：写库成功后同步发 tasksChanged，失败不发、不改数据。
         function completeTaskWithNote(id, note) {
             taskManager.completeCalls = taskManager.completeCalls.concat([{ id: id, note: note }])
-            if (!taskManager.completeResult)
+            if (!taskManager.completeResult) {
+                // 与 C++ 同步播报的契约一致，才能发现弹窗错误又被页面重复显示的问题。
+                taskManager.operationFailed("完成并记笔记失败：数据库写入失败")
                 return false
+            }
             taskManager.rows = taskManager.rows.map(function (row) {
                 return Number(row.id) === id
                         ? Object.assign({}, row, { completed: true, completionNote: note })
@@ -250,6 +254,7 @@ TestCase {
     }
 
     function test_failedCompletionKeepsRowAndDialog() {
+        // 产品保证：带笔记完成失败保留草稿和原行，只在完成弹窗提示，不叠加页面加载错误。
         taskManager.completeResult = false
         const view = testCase.createView()
         const undoSpy = createTemporaryObject(spyComponent, testCase,
@@ -266,6 +271,8 @@ TestCase {
         // 写库失败：弹窗留着让用户重试；行不能先画成已完成，也不能给「撤销」。
         compare(dialog.opened, true)
         compare(dialog.errorText, "保存失败，请检查数据库后重试")
+        compare(findChild(dialog, "completeNoteField").text, "做完第三章习题")
+        compare(view.loadError, "")
         compare(row.visualTaskCompleted, false)
         compare(undoSpy.count, 0)
         // 延迟刷新要跟着解除，否则之后别处的变更都进不来。
