@@ -11,8 +11,10 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QSaveFile>
 #include <QSettings>
+#include <QSet>
 #include <QRegularExpression>
 #include <QSqlDatabase>
 #include <QSqlError>
@@ -445,6 +447,168 @@ bool validateRequiredTableStructure(const QSqlDatabase& database,
         return false;
     }
 
+    return true;
+}
+
+QString businessDateCondition(const QString& column)
+{
+    // date() 归一后与原文比较：2 月 30 日这类非法日期会变成别的日子，比较不等即被识别。加 '+0 days'
+    // 让日期必经一次换算，不依赖各 SQLite 版本对无修饰符输入是否归一（实测 3.54 不加也归一）。
+    // Qt 的 QDate 不存在公元 0 年；不对可处理的历史日期再套当前界面的输入范围。
+    return QStringLiteral("typeof(%1) = 'text' AND substr(%1, 1, 4) <> '0000' AND date(%1, '+0 days') IS %1")
+        .arg(quotedIdentifier(column));
+}
+
+QString businessDateTimeCondition(const QString& column)
+{
+    // 历史写入既有 SQLite 的空格分隔时间，也有 Qt ISO 时间（含毫秒、Z 或时区偏移）。
+    // 只往返原日期部分并检查时间可解析，不把 datetime() 转成 UTC 后的文本强行与原文比较。
+    return QStringLiteral("typeof(%1) = 'text' AND substr(%1, 1, 4) <> '0000' "
+                          "AND date(substr(%1, 1, 10), '+0 days') IS substr(%1, 1, 10) "
+                          "AND datetime(%1) IS NOT NULL")
+        .arg(quotedIdentifier(column));
+}
+
+bool validateBusinessValues(const QSqlDatabase& database, int schemaVersion,
+                            const BackupOperation& control, QString* reason)
+{
+    struct ValueContract {
+        QString table;
+        int sinceVersion;
+        QString column;
+        QString condition;
+        QString description;
+    };
+    // 宁可放过，不可误拒：这里只拦当前读取/计算无法正确处理的值，不复制新建、编辑界面的限制。
+    // 每条注明读取依据；已有 CHECK 的枚举由完整性检查兜底，不重复收紧历史取值。
+    const QList<ValueContract> contracts = {
+        // TaskManager 按 date 的 ISO 文本取日期区间，按 completed=0/1 筛状态。
+        {QStringLiteral("tasks"), 0, QStringLiteral("date"), businessDateCondition(QStringLiteral("date")),
+         QStringLiteral("任务日期 date")},
+        {QStringLiteral("tasks"), 0, QStringLiteral("completed"),
+         QStringLiteral("typeof(completed) = 'integer' AND completed IN (0, 1)"), QStringLiteral("完成状态 completed")},
+        // CategoryManager 分别用 is_preset=0/1 查询两组；其它值会在分组和删除规则里消失。
+        {QStringLiteral("categories"), 2, QStringLiteral("is_preset"),
+         QStringLiteral("typeof(is_preset) = 'integer' AND is_preset IN (0, 1)"), QStringLiteral("预置标志 is_preset")},
+        // RoutineManager 只生成 active=1 且生成戳早于今天的实例，乱码戳会永久阻止生成。
+        // NULL 与空戳均是旧记录/收回后允许的未生成状态。
+        {QStringLiteral("routines"), 3, QStringLiteral("active"),
+         QStringLiteral("typeof(active) = 'integer' AND active IN (0, 1)"), QStringLiteral("启用标志 active")},
+        // v15 的 CHECK 已保证掩码范围；位掩码是生成日的整数开关，小数会在 SQL 位运算和界面读取时被丢弃。
+        {QStringLiteral("routines"), 15, QStringLiteral("weekdays"), QStringLiteral("typeof(weekdays) = 'integer'"),
+         QStringLiteral("重复日掩码 weekdays")},
+        {QStringLiteral("routines"), 3, QStringLiteral("last_generated_date"),
+         QStringLiteral("last_generated_date IS NULL OR last_generated_date = '' OR (%1)")
+             .arg(businessDateCondition(QStringLiteral("last_generated_date"))), QStringLiteral("生成日期 last_generated_date")},
+        // FocusHistoryService 按 SQLite 日期聚合并以整数秒读取；未结束行允许 NULL，旧短记录和零秒不套 180 秒门槛。
+        {QStringLiteral("focus_sessions"), 0, QStringLiteral("start_time"), businessDateTimeCondition(QStringLiteral("start_time")),
+         QStringLiteral("开始时间 start_time")},
+        {QStringLiteral("focus_sessions"), 0, QStringLiteral("end_time"),
+         QStringLiteral("end_time IS NULL OR (%1)").arg(businessDateTimeCondition(QStringLiteral("end_time"))),
+         QStringLiteral("结束时间 end_time")},
+        {QStringLiteral("focus_sessions"), 0, QStringLiteral("duration"),
+         QStringLiteral("duration IS NULL OR (typeof(duration) = 'integer' AND duration >= 0)"),
+         QStringLiteral("专注秒数 duration")},
+        // rest_sessions 不由 user_version 引入；按实际表/列存在性判断。休息读取同样依赖有效时间和整数正秒数。
+        {QStringLiteral("rest_sessions"), 0, QStringLiteral("start_time"), businessDateTimeCondition(QStringLiteral("start_time")),
+         QStringLiteral("开始时间 start_time")},
+        {QStringLiteral("rest_sessions"), 0, QStringLiteral("end_time"), businessDateTimeCondition(QStringLiteral("end_time")),
+         QStringLiteral("结束时间 end_time")},
+        {QStringLiteral("rest_sessions"), 0, QStringLiteral("duration"),
+         QStringLiteral("typeof(duration) = 'integer' AND duration > 0"), QStringLiteral("休息秒数 duration")},
+        // KnowledgeGapService 用 ISO 日期计算逾期；旧空串与 NULL 都可显示为无排期，不拒绝整份备份。
+        {QStringLiteral("knowledge_gaps"), 14, QStringLiteral("due_date"),
+         QStringLiteral("due_date IS NULL OR due_date = '' OR (%1)").arg(businessDateCondition(QStringLiteral("due_date"))),
+         QStringLiteral("计划日期 due_date")},
+        // ScheduleService 把这些列读作整数，并以原值查询星期、时间与周次；小数会造成显示和冲突查询不一致。
+        // v13 表约束已校验原有范围和先后关系，这里只补整数性，不引入当前界面的额外上限。
+        {QStringLiteral("schedule_entries"), 13, QStringLiteral("weekday"), QStringLiteral("typeof(weekday) = 'integer'"),
+         QStringLiteral("星期 weekday")},
+        {QStringLiteral("schedule_entries"), 13, QStringLiteral("start_minutes"), QStringLiteral("typeof(start_minutes) = 'integer'"),
+         QStringLiteral("开始分钟 start_minutes")},
+        {QStringLiteral("schedule_entries"), 13, QStringLiteral("end_minutes"), QStringLiteral("typeof(end_minutes) = 'integer'"),
+         QStringLiteral("结束分钟 end_minutes")},
+        {QStringLiteral("schedule_entries"), 13, QStringLiteral("week_start"), QStringLiteral("typeof(week_start) = 'integer'"),
+         QStringLiteral("起始周 week_start")},
+        {QStringLiteral("schedule_entries"), 13, QStringLiteral("week_end"), QStringLiteral("typeof(week_end) = 'integer'"),
+         QStringLiteral("结束周 week_end")},
+        {QStringLiteral("schedule_periods"), 13, QStringLiteral("period_index"), QStringLiteral("typeof(period_index) = 'integer'"),
+         QStringLiteral("节次编号 period_index")},
+        {QStringLiteral("schedule_periods"), 13, QStringLiteral("start_minutes"), QStringLiteral("typeof(start_minutes) = 'integer'"),
+         QStringLiteral("开始分钟 start_minutes")},
+        {QStringLiteral("schedule_periods"), 13, QStringLiteral("end_minutes"), QStringLiteral("typeof(end_minutes) = 'integer'"),
+         QStringLiteral("结束分钟 end_minutes")},
+        // 倒计时早期由服务惰性建表，无固定 schema 起点；无效目标日期会被当成剩余零天。
+        {QStringLiteral("countdown_goals"), 0, QStringLiteral("target_date"), businessDateCondition(QStringLiteral("target_date")),
+         QStringLiteral("目标日期 target_date")},
+        // TrashService 先解析 JSON，再判断类型/载荷版本；未知类型与未来版本仍允许留存，不限制为当前枚举。
+        {QStringLiteral("trash_items"), 21, QStringLiteral("payload"), QStringLiteral("json_valid(payload)"),
+         QStringLiteral("JSON 载荷 payload")},
+        // TrashStore 写 UTC ISO 毫秒；TrashService 依赖删除时间展示和计算清理期限。
+        {QStringLiteral("trash_items"), 21, QStringLiteral("deleted_at"), businessDateTimeCondition(QStringLiteral("deleted_at")),
+         QStringLiteral("删除时间 deleted_at")},
+    };
+    QHash<QString, QSet<QString>> columnsByTable;
+    for (const ValueContract& contract : contracts) {
+        if (schemaVersion < contract.sinceVersion) {
+            continue;
+        }
+        if (!control->checkpoint("inspect-domain-values")) {
+            *reason = control->message();
+            return false;
+        }
+        if (!columnsByTable.contains(contract.table)) {
+            // 版本列可能由防御性迁移补齐，旧版也可能没有惰性表；只检查确实存在的普通表和列。
+            // 不读取同名 View 的表达式：数据库对象合法性仍由后面的专门检查决定。
+            QSqlQuery table(database);
+            table.prepare(QStringLiteral("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name"));
+            table.bindValue(QStringLiteral(":name"), contract.table);
+            if (!table.exec()) {
+                *reason = QStringLiteral("读取备份业务表失败：%1").arg(contract.table);
+                return false;
+            }
+            QSet<QString> names;
+            if (table.next()) {
+                QSqlQuery columns(database);
+                if (!columns.exec(QStringLiteral("PRAGMA table_info(%1)").arg(quotedIdentifier(contract.table)))) {
+                    *reason = QStringLiteral("读取备份业务字段失败：%1").arg(contract.table);
+                    return false;
+                }
+                while (columns.next()) {
+                    names.insert(columns.value(1).toString());
+                }
+                if (columns.lastError().isValid()) {
+                    *reason = QStringLiteral("读取备份业务字段失败：%1").arg(contract.table);
+                    return false;
+                }
+            } else if (table.lastError().isValid()) {
+                *reason = QStringLiteral("读取备份业务表失败：%1").arg(contract.table);
+                return false;
+            }
+            columnsByTable.insert(contract.table, names);
+        }
+        if (!columnsByTable.value(contract.table).contains(contract.column)) {
+            continue;
+        }
+        QSqlQuery invalid(database);
+        if (!invalid.exec(QStringLiteral("SELECT COUNT(*) FROM %1 WHERE NOT (%2)")
+                              .arg(quotedIdentifier(contract.table), contract.condition)) || !invalid.next()) {
+            *reason = control->stopped() ? control->message()
+                : QStringLiteral("检查备份中 %1 的 %2 失败").arg(contract.table, contract.description);
+            return false;
+        }
+        const qint64 count = invalid.value(0).toLongLong();
+        invalid.finish();
+        if (!control->checkpoint("inspect-domain-values")) {
+            *reason = control->message();
+            return false;
+        }
+        if (count > 0) {
+            *reason = QStringLiteral("备份中 %1 的 %2 有 %3 条不合法")
+                          .arg(contract.table, contract.description).arg(count);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -905,6 +1069,10 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion, c
                     || cycle.next()) {
                     reason = QStringLiteral("备份中的番茄循环状态缺失或无效");
                 }
+            }
+
+            if (reason.isEmpty()) {
+                validateBusinessValues(database, pragmaVersion, control, &reason);
             }
 
             // 备份是数据，不是可信的数据库程序。

@@ -205,6 +205,9 @@ private slots:
     void boundedCopyPreservesDestinationAndAcceptsExactLimit();
     void backupResourceShapeIsRejected_data();
     void backupResourceShapeIsRejected();
+    void backupBusinessValuesAreChecked_data();
+    void backupBusinessValuesAreChecked();
+    void businessValueInspectionCanBeCancelled();
     void backupAcceptsCellExactlyAtBudget();
     void backupPublicationRejectsUnrestorableLargeField();
     void corruptedBackupIsRejected();
@@ -446,6 +449,160 @@ void BackupServiceTests::backupResourceShapeIsRejected()
     const QString reason = info.value(QStringLiteral("reason")).toString();
     QVERIFY2(reason.contains(kind == QStringLiteral("generated") ? QStringLiteral("生成列") : QStringLiteral("预算")), qPrintable(reason));
     QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+}
+
+// 产品保证：备份里读取方无法正确处理的业务取值在替换当前数据前就被拒绝，合法边界和可处理的旧值仍可恢复。
+void BackupServiceTests::backupBusinessValuesAreChecked_data()
+{
+    QTest::addColumn<QString>("table");
+    QTest::addColumn<QString>("column");
+    QTest::addColumn<QString>("expression");
+    QTest::addColumn<bool>("valid");
+    const auto row = [](const char* name, const char* table, const char* column, const QString& value, bool valid) {
+        QTest::newRow(name) << QString::fromLatin1(table) << QString::fromLatin1(column) << value << valid;
+    };
+    const auto pair = [&row](const char* table, const char* column, const QString& bad, const QString& good) {
+        const QByteArray key = QByteArray(table) + '-' + column;
+        row((key + "-invalid").constData(), table, column, bad, false);
+        row((key + "-valid").constData(), table, column, good, true);
+    };
+    pair("tasks", "date", QStringLiteral("'乱码日期'"), QStringLiteral("'2000-02-29'"));
+    pair("tasks", "completed", QStringLiteral("2"), QStringLiteral("0"));
+    pair("categories", "is_preset", QStringLiteral("2"), QStringLiteral("0"));
+    pair("routines", "active", QStringLiteral("2"), QStringLiteral("0"));
+    pair("routines", "weekdays", QStringLiteral("1.5"), QStringLiteral("1"));
+    pair("routines", "last_generated_date", QStringLiteral("'乱码日期'"), QStringLiteral("NULL"));
+    pair("focus_sessions", "start_time", QStringLiteral("'不是时间'"), QStringLiteral("'2026-07-20 10:00:00'"));
+    pair("focus_sessions", "end_time", QStringLiteral("'不是时间'"), QStringLiteral("NULL"));
+    pair("focus_sessions", "duration", QStringLiteral("-1"), QStringLiteral("0"));
+    pair("rest_sessions", "start_time", QStringLiteral("'不是时间'"), QStringLiteral("'2026-07-20T10:00:00.123+08:00'"));
+    pair("rest_sessions", "end_time", QStringLiteral("'不是时间'"), QStringLiteral("'2026-07-20T10:01:00Z'"));
+    // 正数小数满足旧表 CHECK(duration > 0)，却不能作为整数秒交给读取方；不能靠破坏 CHECK 来假装新校验生效。
+    pair("rest_sessions", "duration", QStringLiteral("0.5"), QStringLiteral("1"));
+    pair("knowledge_gaps", "due_date", QStringLiteral("'乱码日期'"), QStringLiteral("NULL"));
+    pair("schedule_entries", "weekday", QStringLiteral("1.5"), QStringLiteral("7"));
+    pair("schedule_entries", "start_minutes", QStringLiteral("0.5"), QStringLiteral("0"));
+    pair("schedule_entries", "end_minutes", QStringLiteral("60.5"), QStringLiteral("1440"));
+    pair("schedule_entries", "week_start", QStringLiteral("1.5"), QStringLiteral("1"));
+    pair("schedule_entries", "week_end", QStringLiteral("30.5"), QStringLiteral("30"));
+    pair("schedule_periods", "period_index", QStringLiteral("1.5"), QStringLiteral("1"));
+    pair("schedule_periods", "start_minutes", QStringLiteral("0.5"), QStringLiteral("0"));
+    pair("schedule_periods", "end_minutes", QStringLiteral("60.5"), QStringLiteral("1440"));
+    pair("countdown_goals", "target_date", QStringLiteral("'2026-02-30'"), QStringLiteral("'9999-12-31'"));
+    pair("trash_items", "payload", QStringLiteral("'{broken'"), QStringLiteral("'{\"v\":1}'"));
+    pair("trash_items", "deleted_at", QStringLiteral("'不是时间'"), QStringLiteral("'2026-07-20T10:00:00.123Z'"));
+    row("invalid-leap-day", "tasks", "date", QStringLiteral("'1900-02-29'"), false);
+    row("invalid-year-zero", "tasks", "date", QStringLiteral("'0000-01-01'"), false);
+    row("invalid-fractional-focus-seconds", "focus_sessions", "duration", QStringLiteral("0.5"), false);
+    row("ongoing-focus-duration", "focus_sessions", "duration", QStringLiteral("NULL"), true);
+    row("short-historical-focus", "focus_sessions", "duration", QStringLiteral("1"), true);
+    row("empty-generation-stamp", "routines", "last_generated_date", QStringLiteral("''"), true);
+    row("valid-generation-stamp", "routines", "last_generated_date", QStringLiteral("'2026-07-20'"), true);
+    row("empty-optional-due-date", "knowledge_gaps", "due_date", QStringLiteral("''"), true);
+    row("valid-optional-due-date", "knowledge_gaps", "due_date", QStringLiteral("'2026-07-20'"), true);
+    row("valid-ended-focus", "focus_sessions", "end_time", QStringLiteral("'2026-07-20T10:25:00.123+08:00'"), true);
+    row("date-only-compatible-time", "focus_sessions", "start_time", QStringLiteral("'2026-07-20'"), true);
+    row("boolean-one", "tasks", "completed", QStringLiteral("1"), true);
+    row("old-negative-estimate", "tasks", "estimated_minutes", QStringLiteral("-1"), true);
+    row("old-zero-task-order", "tasks", "display_order", QStringLiteral("0"), true);
+    row("old-negative-category-order", "categories", "display_order", QStringLiteral("-1"), true);
+    row("old-long-title", "tasks", "title", QStringLiteral("'%1'").arg(QString(300, QLatin1Char('x'))), true);
+    row("future-trash-kind", "trash_items", "kind", QStringLiteral("'future-kind'"), true);
+    row("future-trash-payload-version", "trash_items", "payload", QStringLiteral("'{\"v\":999}'"), true);
+}
+
+// 产品保证：非法备份的拒绝原因指出表、字段和条数，并保住当前任务、偏好与恢复点；合法历史边界真正完成恢复。
+void BackupServiceTests::backupBusinessValuesAreChecked()
+{
+    QFETCH(QString, table);
+    QFETCH(QString, column);
+    QFETCH(QString, expression);
+    QFETCH(bool, valid);
+    const int task = insertTask(QStringLiteral("备份任务"));
+    QVERIFY(task > 0);
+    QVERIFY(insertFocusSession(task, 1500));
+    QVERIFY(insertCountdownGoal(QStringLiteral("备份目标")));
+    QSqlQuery seed(DatabaseManager::instance()->database());
+    QVERIFY(seed.exec(QStringLiteral("INSERT INTO routines(title) VALUES('备份例行')")));
+    QVERIFY(seed.exec(QStringLiteral("INSERT INTO rest_sessions(start_time,end_time,duration,manual) "
+                                    "VALUES('2026-07-20T10:00:00','2026-07-20T10:01:00',60,1)")));
+    QVERIFY(seed.exec(QStringLiteral("INSERT INTO knowledge_gaps(title,created_at,updated_at) "
+                                    "VALUES('备份缺口','2026-07-20T10:00:00','2026-07-20T10:00:00')")));
+    QVERIFY(seed.exec(QStringLiteral("INSERT INTO schedule_entries(title,weekday,start_minutes,end_minutes) "
+                                    "VALUES('备份课程',1,0,60)")));
+    // 固定一个从零点开始的节次，使 0 与 1440 边界对照不受默认课表时间影响。
+    QVERIFY(seed.exec(QStringLiteral("DELETE FROM schedule_periods")));
+    QVERIFY(seed.exec(QStringLiteral("INSERT INTO schedule_periods(period_index,start_minutes,end_minutes) VALUES(1,0,60)")));
+    QVERIFY(seed.exec(QStringLiteral("INSERT INTO trash_items(kind,title,payload,deleted_at) "
+                                    "VALUES('task','废纸篓内容','{\"v\":1}','2026-07-20T10:00:00.123Z')")));
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("focus/workMinutes"), 25);
+    settings.sync();
+    auto* backup = BackupService::instance();
+    QVERIFY(backup->createBackup(backupFile()));
+    QVERIFY(backup->readBackupInfo(backupFile()).value(QStringLiteral("valid")).toBool());
+    QVERIFY(insertTask(QStringLiteral("当前数据必须保留")) > 0);
+    settings.setValue(QStringLiteral("focus/workMinutes"), 51);
+    settings.sync();
+    const QStringList beforeSnapshots = QDir(backupsDir()).entryList(QDir::Files);
+    const QString connection = QStringLiteral("BusinessValues_") + QUuid::createUuid().toString(QUuid::Id128);
+    qint64 affected = 0;
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        database.setDatabaseName(backupFile());
+        QVERIFY(database.open());
+        QSqlQuery mutate(database);
+        QVERIFY(mutate.exec(QStringLiteral("UPDATE %1 SET %2=%3").arg(table, column, expression)));
+        affected = mutate.numRowsAffected();
+        QVERIFY(affected > 0);
+        // 新用例只改数据，不关闭约束；先确认旧检查可接受的数据库完整性仍然成立。
+        QVERIFY(mutate.exec(QStringLiteral("PRAGMA integrity_check")));
+        QVERIFY(mutate.next());
+        QCOMPARE(mutate.value(0).toString(), QStringLiteral("ok"));
+        database.close();
+    }
+    QSqlDatabase::removeDatabase(connection);
+    const QVariantMap info = backup->readBackupInfo(backupFile());
+    QCOMPARE(info.value(QStringLiteral("valid")).toBool(), valid);
+    if (valid) {
+        QVERIFY2(backup->restoreBackup(backupFile()), qPrintable(info.value(QStringLiteral("reason")).toString()));
+        QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 1);
+        QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='当前数据必须保留'")), 0);
+    } else {
+        const QString reason = info.value(QStringLiteral("reason")).toString();
+        QVERIFY2(reason.contains(table), qPrintable(reason));
+        QVERIFY2(reason.contains(column), qPrintable(reason));
+        QVERIFY2(reason.contains(QStringLiteral("有 %1 条不合法").arg(affected)), qPrintable(reason));
+        QSignalSpy restored(backup, &BackupService::restoreCompleted);
+        QVERIFY(!backup->restoreBackup(backupFile()));
+        QCOMPARE(restored.size(), 1);
+        QVERIFY(restored.first().at(1).toString().contains(table));
+        QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks")), 2);
+        QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='当前数据必须保留'")), 1);
+        QCOMPARE(QDir(backupsDir()).entryList(QDir::Files), beforeSnapshots);
+    }
+    QSettings after(settingsPath(), QSettings::IniFormat);
+    QCOMPARE(after.value(QStringLiteral("focus/workMinutes")).toInt(), valid ? 25 : 51);
+}
+
+// 产品保证：业务取值校验响应协作取消，取消后不再遍历规则、不误报备份有效。
+void BackupServiceTests::businessValueInspectionCanBeCancelled()
+{
+    QVERIFY(insertTask(QStringLiteral("当前数据")) > 0);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    const auto operation = std::make_shared<BackupOperationControl>();
+    int checkpoints = 0;
+    operation->m_checkpointForTest = [&](const char* stage) {
+        if (qstrcmp(stage, "inspect-domain-values") == 0) {
+            ++checkpoints;
+            operation->requestStop();
+        }
+    };
+    const auto info = BackupOperations::inspectBackup(backupFile(), DatabaseManager::kCurrentSchemaVersion, operation);
+    QCOMPARE(checkpoints, 1);
+    QVERIFY(!info.value(QStringLiteral("valid")).toBool());
+    QCOMPARE(info.value(QStringLiteral("reason")).toString(), operation->message());
+    QCOMPARE(scalarCount(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='当前数据'")), 1);
 }
 
 // 产品保证：恰好达到字段字节上限的备份仍可检查，不能把包含NUL的文本误判为无数据。
