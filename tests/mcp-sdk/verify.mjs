@@ -7,12 +7,16 @@ import {auditDir, startHost} from './harness.mjs';
 // 测试只使用预先准备的本地依赖；这里绝不触发 npm/npx 或网络安装。
 if (Number(process.versions.node.split('.')[0]) < 20) throw new Error('未运行：需要 Node >=20');
 let Client, StdioClientTransport;
+const manifest = JSON.parse(await readFile(new URL('./package.json', import.meta.url)));
+const sdkVersion = manifest.dependencies['@modelcontextprotocol/sdk'];
+// 清单必须精确固定版本；测试只接受与清单一致的安装结果，不接受范围或漂移版本。
+assert.match(sdkVersion, /^\d+\.\d+\.\d+$/);
 try {
     const metadata = JSON.parse(await readFile(new URL('./node_modules/@modelcontextprotocol/sdk/package.json', import.meta.url)));
-    assert.equal(metadata.version, '1.29.0');
+    assert.equal(metadata.version, sdkVersion);
     ({Client} = await import('@modelcontextprotocol/sdk/client/index.js'));
     ({StdioClientTransport} = await import('@modelcontextprotocol/sdk/client/stdio.js'));
-} catch (error) { throw new Error('未运行：缺少锁定的 SDK 1.29.0 本地依赖，请先单独准备依赖', {cause: error}); }
+} catch (error) { throw new Error(`未运行：缺少锁定的 SDK ${sdkVersion} 本地依赖，请先单独准备依赖`, {cause: error}); }
 
 // SDK 仍负责生命周期及 AJV 输出校验；仅让 initialize 显式请求待验版本。
 class VersionClient extends Client {
@@ -105,4 +109,4 @@ for (const version of ['2025-11-25', '2025-06-18']) {
         console.log(`${version}：官方 SDK schema 校验、错误码、仅文本读写、重放、阻断与会话轮换通过`);
     } finally { await client?.close(); await host.close(); }
 }
-console.log(`SDK 1.29.0：两个协议版本，共 ${calls} 次工具调用通过。`);
+console.log(`SDK ${sdkVersion}：两个协议版本，共 ${calls} 次工具调用通过。`);
