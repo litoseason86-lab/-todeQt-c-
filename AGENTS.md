@@ -62,7 +62,7 @@
 - 全量测试出现与本次改动无关的失败 → 单独重跑一次；仍失败就在汇报里写明，不顺手修。
 - 代码改动的完成标准：构建通过、全量 `ctest` 通过、没有新增编译告警。汇报写实际运行的命令和结果，没运行的标「未运行」。
 - 用户说「构建」「重新构建」或要最新应用 → 在 `~/pt-build` 构建（`deploy-local-app` 会部署到 `/Applications/番茄Todo.app`），然后：
-  1. 按 `docs/运行命令.md` 用 `shasum` 校验 `PomodoroTodo`、`PomodoroTodoMcp` 两个二进制与已部署的一致；
+  1. 按 `docs/运行命令.md` 用 `shasum` 校验 `PomodoroTodo`、`PomodoroTodoMcp`、`PomodoroTodoBackupExecutor` 三个二进制与已部署的一致；
   2. `pgrep -x PomodoroTodo` 有结果 → 不结束进程，提醒用户退出后重新打开。
 - iOS 只在 `~/pt-ios` 做不签名编译检查；签名与装机命令见 `docs/运行命令.md`。
 
