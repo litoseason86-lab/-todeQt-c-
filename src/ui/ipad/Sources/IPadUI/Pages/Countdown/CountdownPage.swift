@@ -132,7 +132,7 @@ import SwiftUI
         NavigationStack {
             Form {
                 TextField("目标名称", text: $value.name)
-                DatePicker("目标日期", selection: Binding(get: { ContentDateFormat.date(value.targetDate) ?? ContentDateFormat.date(store.logicalToday) ?? Date() }, set: { value.targetDate = ContentDateFormat.isoDate($0) }), displayedComponents: .date)
+                DatePicker("目标日期", selection: Binding(get: { ContentDateFormat.date(value.targetDate) ?? LogicalDateNavigation.dateOrLogicalToday(store.logicalToday) }, set: { value.targetDate = ContentDateFormat.isoDate($0) }), displayedComponents: .date)
                 if !store.errorMessage.isEmpty { Text(store.errorMessage).foregroundStyle(ThemeColors.danger) }
             }
             .navigationTitle(opened == nil ? "新增目标" : "编辑目标").sheetChrome()

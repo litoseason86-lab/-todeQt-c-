@@ -49,6 +49,7 @@ private slots:
     void pendingDeletionRejectionReportsReason();
     void independentLogicalDayReceivers();
     void clockOverrideDrivesLogicalDayService();
+    void logicalTodayRemainsAvailableWithoutDatabase();
     void categoryValuesAndErrors();
     void settingsSnapshotWritesAndFailures();
     void configurationSignalsAndLifetime();
@@ -579,6 +580,25 @@ void PTCoreBridgeTests::clockOverrideDrivesLogicalDayService() {
     QVERIFY([bridge.today isEqualToString:@"2024-02-29"]);
     QCOMPARE(LogicalDay::today(4), QDate(2024, 2, 29));
 }
+// 产品保证：数据库关闭时仍能读到 C++ 逻辑今天，日界前后按当前时钟返回各自日期。
+void PTCoreBridgeTests::logicalTodayRemainsAvailableWithoutDatabase()
+{
+    // 仅覆盖本测试目标的墙钟；无论断言成功与否都还原，不影响后续服务日期。
+    struct Reset { ~Reset() { bridgeTestNow.reset(); } } reset;
+    bridgeTestNow = QDateTime(QDate(2024, 2, 29), QTime(3, 59));
+    AppSettings::instance()->setDayStartHour(4);
+    QCOMPARE(AppSettings::instance()->dayStartHour(), 4);
+    @autoreleasepool {
+        PTLogicalDayBridge* bridge = [PTLogicalDayBridge new];
+        QVERIFY(DatabaseManager::instance()->database().isOpen());
+        DatabaseManager::instance()->close();
+        QVERIFY(!DatabaseManager::instance()->database().isOpen());
+        QVERIFY([bridge.today isEqualToString:@"2024-02-28"]);
+        bridgeTestNow = QDateTime(QDate(2024, 2, 29), QTime(4, 0));
+        QVERIFY([bridge.today isEqualToString:@"2024-02-29"]);
+    }
+}
+
 // 产品保证：科目保留字段并走原服务增删改，空结果与数据库失败可区分。
 void PTCoreBridgeTests::categoryValuesAndErrors() {
     @autoreleasepool {

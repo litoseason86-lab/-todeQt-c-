@@ -390,7 +390,7 @@ struct BatchDatePicker: View {
         formatters[format] = value
         return value
     }
-    static func date(_ iso: String) -> Date { formatter("yyyy-MM-dd").date(from: iso) ?? Date() }
+    static func date(_ iso: String) -> Date { LogicalDateNavigation.dateOrLogicalToday(iso) }
     static func iso(_ date: Date) -> String { formatter("yyyy-MM-dd").string(from: date) }
     static func title(_ iso: String) -> String {
         guard let parsed = formatter("yyyy-MM-dd").date(from: iso) else { return "" }

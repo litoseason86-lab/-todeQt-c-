@@ -14,6 +14,9 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
 
 @MainActor enum NativeRoot {
     static func makeController() -> UIViewController {
+        let logicalDay = LogicalDayBridgeAdapter()
+        // 所有表单装配前注入 C++ 的纯计算日期；闭包实时读取，不能缓存启动时的逻辑今天。
+        LogicalDateNavigation.logicalTodayProvider = { logicalDay.today }
         let store = ShellStore(bridge: ShellBridgeAdapter())
         // 055-P3B：各页复用一份动作与撤销槽；每个 Store 独占自己的信号适配器，独立的 Qt 连接仍读取同一 C++ 服务。
         let tasks = TaskBridgeAdapter()
@@ -23,7 +26,6 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
         }
         let actions = TaskActions(tasks: tasks, pendingDeletion: pending, shell: store)
         store.taskActions = actions
-        let logicalDay = LogicalDayBridgeAdapter()
         let statisticsBridge = StatisticsBridgeAdapter()
         let focusHistory = FocusHistoryBridgeAdapter()
         let settingsBridge = SettingsBridgeAdapter()

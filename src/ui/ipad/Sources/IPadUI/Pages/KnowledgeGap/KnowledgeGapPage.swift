@@ -263,7 +263,7 @@ import SwiftUI
         Group {
             Toggle("排期", isOn: Binding(get: { !value.dueDate.isEmpty }, set: { enabled in value.dueDate = enabled ? store.logicalToday : "" }))
             if !value.dueDate.isEmpty {
-                DatePicker("到期日", selection: Binding(get: { ContentDateFormat.date(value.dueDate) ?? ContentDateFormat.date(store.logicalToday) ?? Date() }, set: { value.dueDate = ContentDateFormat.isoDate($0) }), displayedComponents: .date)
+                DatePicker("到期日", selection: Binding(get: { ContentDateFormat.date(value.dueDate) ?? LogicalDateNavigation.dateOrLogicalToday(store.logicalToday) }, set: { value.dueDate = ContentDateFormat.isoDate($0) }), displayedComponents: .date)
             }
         }
     }

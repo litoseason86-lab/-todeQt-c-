@@ -1,6 +1,9 @@
 import Foundation
 
 public enum LogicalDateNavigation {
+    // 未装配的测试与预览仅有系统日期；应用启动时注入 C++ 逻辑今日，Swift 不另算日界。
+    @MainActor public static var logicalTodayProvider: @MainActor () -> String = { isoDate(Date()) }
+
     private static var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
         value.timeZone = .current
@@ -23,8 +26,13 @@ public enum LogicalDateNavigation {
         let parts = calendar.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 1, parts.month ?? 1, parts.day ?? 1)
     }
-    public static func initialSessionStart(date iso: String) -> Date {
-        let day = date(iso) ?? Date()
+    @MainActor public static func dateOrLogicalToday(_ iso: String) -> Date {
+        // 上游日期缺失或损坏时先用 C++ 的逻辑今天，避免凌晨日界前把控件初值移到自然日。
+        // 每次兜底都重读 provider；仅它也不能解析时才使用系统时间，Swift 不复制日界计算。
+        date(iso) ?? date(logicalTodayProvider()) ?? Date()
+    }
+    @MainActor public static func initialSessionStart(date iso: String) -> Date {
+        let day = dateOrLogicalToday(iso)
         return calendar.date(bySettingHour: 9, minute: 0, second: 0, of: day) ?? day
     }
     // 专注记录按本地墙钟跨桥接传递；固定公历与 POSIX 区域，避免系统历法改变落库字段。
