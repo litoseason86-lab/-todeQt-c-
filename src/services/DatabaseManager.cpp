@@ -2749,7 +2749,8 @@ bool DatabaseManager::backupDatabaseBeforeMigration() const
     }
 
     const QDir databaseDir = databaseInfo.absoluteDir();
-    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz"));
+    // UTC 加 Z 标记，避免本地时区变化打乱新旧迁移快照的保留顺序。
+    const QString timestamp = QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss_zzz'Z'"));
     QString backupPath = databaseDir.filePath(QStringLiteral("pomodoro_backup_%1.db").arg(timestamp));
     int suffix = 1;
     while (QFileInfo::exists(backupPath)) {

@@ -3,6 +3,9 @@
 #include <QFutureWatcher>
 #include <QSemaphore>
 #include <QThread>
+#include <QTimeZone>
+#include <QRegularExpression>
+#include <ctime>
 #include <cstdio>
 #include <cstring>
 #include <utility>
@@ -32,9 +35,29 @@
 #include "../src/services/FocusTimer.h"
 #include "../src/services/SyncController.h"
 #include "../src/services/SyncSchema.h"
+#include "../src/services/SnapshotRetention.h"
 #include "../src/services/TaskManager.h"
 
 namespace {
+
+// 固定本地时区隔离宿主设置；退出作用域时连同“原先未设置 TZ”的状态一起恢复。
+class SnapshotTestTimeZone
+{
+public:
+    explicit SnapshotTestTimeZone(const QByteArray& zone) : m_previous(qgetenv("TZ"))
+    {
+        qputenv("TZ", zone);
+        tzset();
+    }
+    ~SnapshotTestTimeZone()
+    {
+        if (m_previous.isNull()) qunsetenv("TZ");
+        else qputenv("TZ", m_previous);
+        tzset();
+    }
+private:
+    QByteArray m_previous;
+};
 
 int insertTask(const QString& title)
 {
@@ -221,6 +244,10 @@ private slots:
     void commentedVirtualTableIsRejected();
     void restoreRefusesBackupCarryingTriggers();
     void restoreReplacesSyncTriggersWithTheAppsOwn();
+    void snapshotRetentionUsesUtcOrder_data();
+    void snapshotRetentionUsesUtcOrder();
+    void generatedSnapshotNamesUseUtc_data();
+    void generatedSnapshotNamesUseUtc();
     void repeatedRestoresCapPreRestoreSnapshots();
     void newPreRestoreSnapshotSurvivesOlderSnapshotsWithFutureTimes();
     void failedAsyncPreflightKeepsAllPreRestoreSnapshots_data();
@@ -927,6 +954,146 @@ void BackupServiceTests::restoreCreatesPreRestoreSnapshot()
     const QStringList before = dir.entryList(
         QStringList{QStringLiteral("before-restore-*.tomatobackup")}, QDir::Files);
     QVERIFY(!before.isEmpty());
+}
+
+// 保证两类快照的新旧名字按同一时间轴清理，并覆盖回拨、坏名字和强制保留边界。
+void BackupServiceTests::snapshotRetentionUsesUtcOrder_data()
+{
+    QTest::addColumn<QByteArray>("zone");
+    QTest::addColumn<QStringList>("names");
+    QTest::addColumn<QStringList>("expected");
+    QTest::addColumn<QString>("keepName");
+    QTest::addColumn<int>("retention");
+    QTest::addColumn<bool>("lexicalMustDiffer");
+
+    // UTC+8 的 1 月 2 日 00:30 是 UTC 1 月 1 日 16:30，比 UTC 17:00 更早，字典序却更大。
+    QTest::newRow("mixed-backup") << QByteArray("Etc/GMT-8")
+        << QStringList{"auto-20260102-003000-000.tomatobackup", "auto-20260101-170000-000Z.tomatobackup"}
+        << QStringList{"auto-20260101-170000-000Z.tomatobackup"} << QString() << 1 << true;
+    // 迁移快照同毫秒碰撞时附加 _1，仍须按前面的完整时间戳解析。
+    QTest::newRow("mixed-migration-with-suffix") << QByteArray("Etc/GMT-8")
+        << QStringList{"pomodoro_backup_20260102_003000_000_1.db", "pomodoro_backup_20260101_170000_000Z_1.db"}
+        << QStringList{"pomodoro_backup_20260101_170000_000Z_1.db"} << QString() << 1 << true;
+    // UTC-8 的 09:00 是 UTC 17:00；覆盖负偏移，避免把旧格式也当成 UTC。
+    QTest::newRow("mixed-negative-offset") << QByteArray("Etc/GMT+8")
+        << QStringList{"auto-20260101-090000-000.tomatobackup", "auto-20260101-160000-000Z.tomatobackup"}
+        << QStringList{"auto-20260101-090000-000.tomatobackup"} << QString() << 1 << true;
+    // 纽约 2026-11-01 在 UTC 06:00 回拨：本地 01:59 后变为 01:01，UTC 仍递增。
+    QTest::newRow("utc-across-dst-fallback") << QByteArray("America/New_York")
+        << QStringList{"auto-20261101-055900-000Z.tomatobackup", "auto-20261101-060100-000Z.tomatobackup"}
+        << QStringList{"auto-20261101-060100-000Z.tomatobackup"} << QString() << 1 << false;
+    QTest::newRow("invalid-name-is-oldest") << QByteArray("Etc/GMT-8")
+        << QStringList{"auto-zzzz.tomatobackup", "auto-20260101-170000-000Z.tomatobackup"}
+        << QStringList{"auto-20260101-170000-000Z.tomatobackup"} << QString() << 1 << true;
+    QTest::newRow("invalid-date-is-oldest") << QByteArray("Etc/GMT-8")
+        << QStringList{"auto-20261399-999999-999Z.tomatobackup", "auto-20260101-170000-000Z.tomatobackup"}
+        << QStringList{"auto-20260101-170000-000Z.tomatobackup"} << QString() << 1 << true;
+    QTest::newRow("keep-oldest") << QByteArray("Etc/GMT-8")
+        << QStringList{"auto-20260101-170000-000Z.tomatobackup", "auto-20000101-000000-000Z.tomatobackup"}
+        << QStringList{"auto-20000101-000000-000Z.tomatobackup"}
+        << QString("auto-20000101-000000-000Z.tomatobackup") << 1 << false;
+    QTest::newRow("keep-future-occupies-slot") << QByteArray("Etc/GMT-8")
+        << QStringList{"auto-20260101-160000-000Z.tomatobackup", "auto-20990101-000000-000Z.tomatobackup", "auto-20260101-170000-000Z.tomatobackup"}
+        << QStringList{"auto-20260101-170000-000Z.tomatobackup", "auto-20990101-000000-000Z.tomatobackup"}
+        << QString("auto-20990101-000000-000Z.tomatobackup") << 2 << false;
+    // 两个名字代表同一毫秒，沿用文件名倒序作稳定决胜，避免不确定删除。
+    QTest::newRow("equal-instant-stable-name-order") << QByteArray("Etc/GMT-8")
+        << QStringList{"auto-20260101-170000-000Z.tomatobackup", "auto-20260102-010000-000.tomatobackup"}
+        << QStringList{"auto-20260102-010000-000.tomatobackup"} << QString() << 1 << false;
+}
+
+// 保证保留配额留下真实较新的快照，且 keepPath 始终保留并占一个名额。
+void BackupServiceTests::snapshotRetentionUsesUtcOrder()
+{
+    QFETCH(QByteArray, zone);
+    QFETCH(QStringList, names);
+    QFETCH(QStringList, expected);
+    QFETCH(QString, keepName);
+    QFETCH(int, retention);
+    QFETCH(bool, lexicalMustDiffer);
+    const SnapshotTestTimeZone timeZone(zone);
+    const QDateTime reference(QDate(2026, 1, 1), QTime(0, 0), QTimeZone::UTC);
+    if (zone == "America/New_York") {
+        const auto before = QDateTime::fromString("2026-11-01T05:59:00Z", Qt::ISODate).toLocalTime();
+        const auto after = QDateTime::fromString("2026-11-01T06:01:00Z", Qt::ISODate).toLocalTime();
+        QCOMPARE(before.time(), QTime(1, 59));
+        QCOMPARE(after.time(), QTime(1, 1));
+        QVERIFY(before < after);
+    } else {
+        QCOMPARE(reference.toLocalTime().offsetFromUtc(), zone == "Etc/GMT-8" ? 28800 : -28800);
+    }
+    if (lexicalMustDiffer) {
+        QStringList lexical = names;
+        std::sort(lexical.begin(), lexical.end(), std::greater<QString>());
+        QVERIFY(lexical.first() != expected.first());
+    }
+    QDir dir(backupsDir());
+    QVERIFY(dir.mkpath("."));
+    for (const QString& name : names) {
+        QFile file(dir.filePath(name));
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write("snapshot"), 8);
+    }
+    const QString filter = names.first().startsWith("pomodoro_backup_")
+        ? QStringLiteral("pomodoro_backup_*.db") : QStringLiteral("auto-*.tomatobackup");
+    QCOMPARE(dir.entryList({filter}, QDir::Files).size(), names.size());
+    if (!keepName.isEmpty()) QVERIFY(QFileInfo::exists(dir.filePath(keepName)));
+
+    SnapshotRetention::prune(dir, filter, retention, keepName.isEmpty() ? QString() : dir.filePath(keepName));
+
+    expected.sort();
+    QCOMPARE(dir.entryList({filter}, QDir::Files, QDir::Name), expected);
+}
+
+// 保证自动、恢复前、同步前和迁移前快照均使用带 Z 的 UTC 文件名。
+void BackupServiceTests::generatedSnapshotNamesUseUtc_data()
+{
+    QTest::addColumn<QString>("kind");
+    QTest::newRow("auto") << QStringLiteral("auto");
+    QTest::newRow("before-restore") << QStringLiteral("before-restore");
+    QTest::newRow("before-sync") << QStringLiteral("before-sync");
+    QTest::newRow("migration") << QStringLiteral("migration");
+}
+
+// 保证新名字标明 UTC，且时间落在实际创建操作的 UTC 起止时间内。
+void BackupServiceTests::generatedSnapshotNamesUseUtc()
+{
+    QFETCH(QString, kind);
+    const SnapshotTestTimeZone timeZone("Etc/GMT-8");
+    QCOMPARE(QDateTime::currentDateTime().offsetFromUtc(), 28800);
+    const bool migration = kind == "migration";
+    const QDir dir(migration ? m_tempDir->filePath("migration") : backupsDir());
+    QVERIFY(dir.mkpath("."));
+    const QString filter = migration ? QStringLiteral("pomodoro_backup_*.db")
+        : kind + QStringLiteral("-*.tomatobackup");
+    QVERIFY(dir.entryList({filter}, QDir::Files).isEmpty());
+    if (kind == "before-restore") QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    if (kind == "auto") BackupService::instance()->setAutoBackupEnabled(true);
+    const QDateTime before = QDateTime::currentDateTimeUtc();
+    if (migration) {
+        DatabaseManager::instance()->close();
+        QVERIFY(DatabaseManager::instance()->initialize(dir.filePath("fresh.sqlite")));
+    } else if (kind == "auto") {
+        QVERIFY(BackupService::instance()->runAutoBackupIfDue());
+    } else if (kind == "before-sync") {
+        QString error;
+        QVERIFY2(BackupService::instance()->backupBeforeSyncReplace(&error), qPrintable(error));
+    } else {
+        QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+    }
+    const QDateTime after = QDateTime::currentDateTimeUtc();
+    const QStringList created = dir.entryList({filter}, QDir::Files);
+    QCOMPARE(created.size(), 1);
+    const QRegularExpression pattern(migration
+        ? QStringLiteral("^pomodoro_backup_([0-9]{8}_[0-9]{6}_[0-9]{3}Z)(?:_[0-9]+)?\\.db$")
+        : QStringLiteral("^%1-([0-9]{8}-[0-9]{6}-[0-9]{3}Z)\\.tomatobackup$").arg(kind));
+    const auto match = pattern.match(created.first());
+    QVERIFY2(match.hasMatch(), qPrintable(created.first()));
+    QDateTime timestamp = QDateTime::fromString(match.captured(1), migration
+        ? QStringLiteral("yyyyMMdd_HHmmss_zzz'Z'") : QStringLiteral("yyyyMMdd-HHmmss-zzz'Z'"));
+    timestamp.setTimeZone(QTimeZone::UTC);
+    QVERIFY(timestamp.isValid());
+    QVERIFY2(timestamp >= before && timestamp <= after, qPrintable(created.first()));
 }
 
 void BackupServiceTests::repeatedRestoresCapPreRestoreSnapshots()

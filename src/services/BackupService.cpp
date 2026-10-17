@@ -37,7 +37,8 @@ const auto kLastBackupIsoKey = QStringLiteral("backup/lastBackupIso");
 
 QString timestampToken()
 {
-    return QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz"));
+    // UTC 不随本地时区或夏令时回拨；Z 标记让清理时能与旧的本地时间名字区分。
+    return QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd-HHmmss-zzz'Z'"));
 }
 
 QVariantMap settingsWithLocalBackupPolicy(const QVariantMap& restored,
