@@ -6,6 +6,8 @@
 #include <QSqlDatabase>
 #include <QString>
 
+class QSqlQuery;
+
 class DatabaseManager : public QObject
 {
     Q_OBJECT
@@ -58,6 +60,16 @@ signals:
     void databaseChanged();
 
 private:
+    // 初始化与迁移共用同一份建表 SQL 和预置科目，不在两个实现文件复制定义。
+    static QString pomodoroCycleStateTableSql();
+    static bool execSql(QSqlQuery& query, const QString& sql, const char* context);
+    static QString presetDefaultsValuesSql();
+    struct PresetCategory {
+        const char* name;
+        const char* color;
+    };
+    static const PresetCategory kPresetCategories[5];
+
     explicit DatabaseManager(QObject* parent = nullptr);
     ~DatabaseManager() override;
 

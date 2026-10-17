@@ -28,10 +28,11 @@ ALLOWED_QML_LINKS = ALLOWED_QT_LINKS | {
     "Qt6::Quick",
     "Qt6::QuickControls2",
 }
-SYNC_FILES = {"SyncEngine", "SyncStore", "SyncWorker", "SyncFiles", "SyncRecord"}
+SYNC_FILES = {"SyncEngine", "SyncStore", "SyncApplier", "SyncWorker", "SyncFiles", "SyncRecord"}
 SYNC_INCLUDE_ALLOWLIST = {
     "SyncEngine.h",
     "SyncStore.h",
+    "SyncApplier.h",
     "SyncWorker.h",
     "SyncFiles.h",
     "SyncRecord.h",
