@@ -108,7 +108,7 @@ iPad 原生「设置 → 外观 → 界面」可选择下次启动用旧版；�
 使用 Qt 6.7 或更高版本的 SDK；本机已验证 Qt 6.10.3。部署目录固定为 `~/pt-build`，验证目录固定为 `~/pt-audit`，不能混用；iPad 版与 Mac 共用 C++ 业务层，iOS / iPadOS 最低 26，两台之间的云盘同步见上文「功能」，iOS 构建另用 `~/pt-ios`，永不部署。完整命令、环境要求和部署校验见 [运行命令](docs/运行命令.md)。
 
 ```bash
-/Users/zerionlito/Qt/6.10.3/macos/bin/qt-cmake -B ~/pt-build -S . \
+"$HOME/Qt/6.10.3/macos/bin/qt-cmake" -B ~/pt-build -S . \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPOMODORO_TODO_DEPLOY_LOCAL=ON
 cmake --build ~/pt-build --target deploy-local-app -j8
 ```
