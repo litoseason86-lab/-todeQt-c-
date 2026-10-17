@@ -25,6 +25,10 @@ public:
         timer.setSingleShot(true);
         timer.start(server->m_handshakeTimeoutMs);
         connect(&timer, &QTimer::timeout, this, [this] { socket->abort(); });
+        idleTimer.setSingleShot(true);
+        connect(&idleTimer, &QTimer::timeout, this, [this] {
+            if (isIdle()) socket->disconnectFromServer();
+        });
         connect(&stream, &McpJsonStream::failed, this, [this] { socket->abort(); });
         connect(&stream, &McpJsonStream::malformed, this, [this] { socket->abort(); });
         connect(socket, &QLocalSocket::disconnected, this, [this] {
@@ -44,6 +48,7 @@ public:
             if (request.tool == Tool::GetStatus) queue.append(request);
             else send(request.id, makeToolErrorResult(error));
         }
+        schedule();
     }
     void send(const QString& id, const QJsonObject& result)
     {
@@ -64,6 +69,7 @@ public:
             if (!reason.isEmpty()) { socket->disconnectFromServer(); return; }
             authenticated = true;
             timer.stop();
+            updateIdleTimer();
             return;
         }
         const QString id = frame.value("id").toString();
@@ -71,6 +77,7 @@ public:
         if (kind == QStringLiteral("cancel")) {
             for (qsizetype i = queue.size(); i > 0; --i)
                 if (queue[i - 1].id == id) queue.removeAt(i - 1);
+            updateIdleTimer();
             return;
         }
         if (kind != QStringLiteral("call") || !frame.value("arguments").isObject()) { socket->abort(); return; }
@@ -85,25 +92,34 @@ public:
         if (!remaining.isDouble() || remaining.toDouble() != milliseconds
             || milliseconds < 1 || milliseconds > kToolTimeoutMs) { socket->abort(); return; }
         queue.append({id, definition->tool, frame.value("arguments").toObject(), QDeadlineTimer(milliseconds)});
+        idleTimer.stop();
         // 不在读帧回调里执行：同批取消先入队，再在主线程依次检查权限、期限并调用业务层。
         schedule();
     }
     void schedule()
     {
+        updateIdleTimer();
         // 背压：上一条结果还没写进内核就先不执行下一条。否则并行的两条大结果会叠在发送缓冲里，
         // 以前这会越过上限把整条连接断开，连已经写库的请求也变成“结果未知”。
         // 等待期间请求的截止时间照常计算，执行前仍会检查是否已过期。
-        if (scheduled || queue.isEmpty() || socket->bytesToWrite() > 0) return;
+        if (executing || scheduled || queue.isEmpty() || socket->bytesToWrite() > 0) return;
         scheduled = true;
         QTimer::singleShot(0, this, [this] { execute(); });
     }
     void execute()
     {
         scheduled = false;
-        if (queue.isEmpty() || socket->state() != QLocalSocket::ConnectedState) return;
+        if (queue.isEmpty() || socket->state() != QLocalSocket::ConnectedState) {
+            // 最后一项可能在排队执行前被取消；解除scheduled后才真正进入空闲。
+            updateIdleTimer();
+            return;
+        }
         // 排队期间可能有 reject() 等其它输出写进缓冲，这里再确认一次缓冲已空。
         if (socket->bytesToWrite() > 0) return;
         const Request request = queue.takeFirst();
+        // 回调允许事件循环重入；队列已空不代表执行结束，不能启动idle或并发执行下一条。
+        executing = true;
+        idleTimer.stop();
         QJsonObject result;
         if (request.deadline.hasExpired()) {
             result = makeToolErrorResult(makeError(ErrorCode::AppUnavailable, QStringLiteral("请求在执行前已过期")));
@@ -112,17 +128,31 @@ public:
             result = validation.ok() ? owner->m_handler(request.tool, applySchemaDefaults(request.tool, request.arguments))
                                      : makeToolErrorResult(makeValidationError(validation));
         }
+        executing = false;
         if (socket->state() != QLocalSocket::ConnectedState) return;
         send(request.id, result);
         schedule();
+    }
+    bool isIdle() const
+    {
+        return authenticated && !executing && !scheduled && queue.isEmpty()
+            && socket->bytesToWrite() == 0 && socket->state() == QLocalSocket::ConnectedState;
+    }
+    void updateIdleTimer()
+    {
+        // 只在真正进入空闲时开始计时，零字节回调不能反复延长已开始的期限。
+        if (!isIdle()) idleTimer.stop();
+        else if (!idleTimer.isActive()) idleTimer.start(owner->m_idleTimeoutMs);
     }
     QLocalSocket* socket;
     McpLocalServer* owner;
     McpJsonStream stream;
     QTimer timer;
+    QTimer idleTimer;
     QList<Request> queue;
     bool authenticated = false;
     bool scheduled = false;
+    bool executing = false;
     bool atCapacity = false;
 };
 

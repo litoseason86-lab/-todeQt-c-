@@ -20,6 +20,9 @@ public:
     // 只影响之后新来的连接。
     void setHandshakeTimeoutMs(int milliseconds) { m_handshakeTimeoutMs = qMax(1, milliseconds); }
     int handshakeTimeoutMs() const { return m_handshakeTimeoutMs; }
+    // 默认期限长于官方辅助程序，仅兜底非官方客户端；测试缩短期限，执行中和背压期间不计算空闲。
+    void setIdleTimeoutMs(int milliseconds) { m_idleTimeoutMs = qMax(1, milliseconds); }
+    int idleTimeoutMs() const { return m_idleTimeoutMs; }
 signals:
     void connectionsChanged();
 private:
@@ -34,4 +37,5 @@ private:
     // 正在等待握手、只为回一句“连接已满”的连接数；不占用 m_peers 的名额。
     int m_rejecting = 0;
     int m_handshakeTimeoutMs = McpContracts::kHandshakeTimeoutMs;
+    int m_idleTimeoutMs = McpContracts::kServerIdleDisconnectMs;
 };

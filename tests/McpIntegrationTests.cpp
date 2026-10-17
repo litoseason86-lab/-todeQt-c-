@@ -1059,6 +1059,84 @@ private slots:
         }, timeout + 3000));
         RawPeer recovered; QVERIFY(recovered.authenticate(host.endpoint));
     }
+    void serverIdleOutlastsOfficialHelper()
+    {
+        // 官方辅助程序总是先于主应用释放空闲连接，主应用的回收不会截断辅助程序刚发出的请求。
+        Host host;
+        McpLocalServer server(host.endpoint.paths);
+        // 粗精度计时器允许约 5% 偏差；服务端最早触发仍须晚于辅助程序最晚触发。
+        QVERIFY(server.idleTimeoutMs() * 95 > McpContracts::kBridgeIdleDisconnectMs * 105);
+    }
+
+    void authenticatedPeerIdleIsReclaimed()
+    {
+        // 已认证但无请求的非官方客户端也会释放连接名额，后续客户端可正常接入。
+        Host host;
+        QString error;
+        QVERIFY(McpEndpointFiles::prepareRoot(host.endpoint.paths, &error));
+        McpLocalServer server(host.endpoint.paths);
+        server.setIdleTimeoutMs(100);
+        const QByteArray credential(64, 'a');
+        QVERIFY(server.listen(credential, [](Tool, const QJsonObject&) { return QJsonObject{}; }));
+        QVERIFY(McpEndpointFiles::publish(host.endpoint.paths, credential));
+        RawPeer peer;
+        QVERIFY(peer.authenticate(host.endpoint));
+        QCOMPARE(server.connectionCount(), 1);
+        QVERIFY(until([&] { return server.connectionCount() == 0; }, 1000));
+        RawPeer replacement;
+        QVERIFY(replacement.authenticate(host.endpoint));
+    }
+
+    void executingPeerIsNotIdle()
+    {
+        // 业务回调即使重入事件循环并超过idle期限也不能被误杀，结果发送后才开始空闲计时。
+        Host host;
+        QString error;
+        QVERIFY(McpEndpointFiles::prepareRoot(host.endpoint.paths, &error));
+        McpLocalServer server(host.endpoint.paths);
+        server.setIdleTimeoutMs(100);
+        bool remainedConnected = false;
+        const QByteArray credential(64, 'a');
+        QVERIFY(server.listen(credential, [&](Tool, const QJsonObject&) {
+            QTest::qWait(250); // 有意跨过期限，以反证“队列空就空闲”的实现。
+            remainedConnected = server.connectionCount() == 1;
+            return QJsonObject{{"ok", true}};
+        }));
+        QVERIFY(McpEndpointFiles::publish(host.endpoint.paths, credential));
+        RawPeer peer;
+        QVERIFY(peer.authenticate(host.endpoint));
+        peer.stream.send(peer.call(QStringLiteral("busy"), Tool::GetStatus));
+        QVERIFY(until([&] { return !peer.frames.isEmpty(); }));
+        QVERIFY(remainedConnected);
+        QCOMPARE(peer.frames.first().value("id").toString(), QStringLiteral("busy"));
+        QVERIFY(until([&] { return server.connectionCount() == 0; }, 1000));
+    }
+
+    void cancelledLastQueuedRequestBecomesIdle()
+    {
+        // 最后一条排队请求在执行前被取消后，连接仍须开始空闲回收，且取消请求不能执行业务。
+        Host host;
+        QString error;
+        QVERIFY(McpEndpointFiles::prepareRoot(host.endpoint.paths, &error));
+        McpLocalServer server(host.endpoint.paths);
+        server.setIdleTimeoutMs(100);
+        int calls = 0;
+        const QByteArray credential(64, 'a');
+        QVERIFY(server.listen(credential, [&](Tool, const QJsonObject&) {
+            ++calls;
+            return QJsonObject{};
+        }));
+        QVERIFY(McpEndpointFiles::publish(host.endpoint.paths, credential));
+        RawPeer peer;
+        QVERIFY(peer.authenticate(host.endpoint));
+        QCOMPARE(server.connectionCount(), 1);
+        // 一次写入两帧，确保取消先于服务端下一轮排队执行，避免靠调度偶然性通过。
+        peer.socket.write(line(peer.call(QStringLiteral("cancelled"), Tool::GetStatus))
+                          + line({{"kind", "cancel"}, {"id", "cancelled"}}));
+        QVERIFY(until([&] { return server.connectionCount() == 0; }, 1000));
+        QCOMPARE(calls, 0);
+    }
+
     void partialFrameTimeout()
     {
         // 收到半帧、迟迟等不到换行时，等满期限就判失败。生产期限就是握手期限；这里改短，不必真等 5 秒。

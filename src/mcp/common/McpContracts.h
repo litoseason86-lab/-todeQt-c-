@@ -57,6 +57,10 @@ constexpr qint64 kOutputPauseBytes = kMaxResponseBytes;
 // 辅助程序空闲这么久就释放到主应用的连接，下次调用按需重连。每个 AI 会话各拉起一个辅助程序，
 // 空闲的会话若一直占着连接，同时开的会话一多就会挤满 kMaxConnections。
 constexpr int kBridgeIdleDisconnectMs = 30000;
+// 服务端与辅助程序分别从结果写完、收到结果开始计时，粗精度计时器（Qt::CoarseTimer）还允许约 5% 偏差。
+// 服务端期限必须明显更长，让官方辅助程序先释放连接；否则服务端先断开会把辅助程序刚发出的写请求
+// 变成“结果未知”。服务端回收只兜底不按官方空闲契约释放连接的非官方客户端。
+constexpr int kServerIdleDisconnectMs = 2 * kBridgeIdleDisconnectMs;
 
 constexpr int kDefaultListLimit = 50;
 constexpr int kMaxListLimit = 100;
