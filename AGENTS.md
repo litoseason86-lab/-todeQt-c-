@@ -17,7 +17,7 @@
 
 - 只改完成任务需要的代码。顺手发现的问题写进汇报，不顺手修、不顺手重构。
 - 工作区里与本任务无关的未提交修改：不覆盖、不还原、不一起提交；提交时按文件添加，不用 `git add -A`、`git commit -a`。
-- 新增 C++/Objective-C++ 源文件登记到 `CMakeLists.txt` 实际所属目标（`PTCore`、`PTApp`、`PTQml` 或各平台入口）的源文件列表，新增 Swift 源文件登记到其中的 iOS 源文件列表；新增 `qml/` 下的文件登记到 `resources/qml.qrc`（`tests/qml/tst_*.qml` 自动收集，不用登记）。
+- 新增 C++/Objective-C++ 源文件登记到 `CMakeLists.txt` 实际所属目标（`PTCore`、`PTApp`、`PTQml` 或各平台入口）的源文件列表，新增 Swift 源文件登记到其中的 iOS 源文件列表；新增 `qml/` 下的文件登记到 `resources/qml.qrc`（`tests/qml/tst_*.qml` 自动收集，不用登记）。测试目标与门禁在 `cmake/PomodoroTodoTests.cmake`；测试目标显式列了被测源文件的，被测文件拆分或新增实现文件时那里也要补登记。
 - 临时文件（截图、日志、试验脚本）写到仓库外的，本次任务结束前删掉；要跨会话保留的，放仓库内已被忽略的目录（如 `.superpowers/`）。
 - 仓库内 `build/` 是旧产物：不写、不删、不当构建目录。
 - 目录职责：
@@ -58,7 +58,7 @@
 - 其它 worktree 里的任务也用这几个目录：构建前确认 `CMakeCache.txt` 的 `CMAKE_HOME_DIRECTORY` 指向当前源码目录，不是就先问用户；重新配置或 `rm -rf` 前，先列出目录顶层不属于构建产物的文件，有就先问。构建目录里不放非构建文件。
 - 改了 C++、QML 或 CMake → 在 `~/pt-audit` 构建并跑全量 `ctest`（约 30 秒）；只改文档或注释 → 不构建。
 - 改了 Swift 或桥接层 → 在 `~/pt-ios` 做不签名编译，同时在 `~/pt-audit` 跑全量 `ctest`（含桥接测试）和 `swift test`。
-- 测试一律离屏：`ctest` 已在 CMake 里设好环境；直接运行测试二进制时加 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic`；新增测试目标照现有写法设 `ENVIRONMENT`。
+- 测试一律离屏：`ctest` 已在 CMake 里设好环境；直接运行测试二进制时加 `QT_QPA_PLATFORM=offscreen QT_QUICK_CONTROLS_STYLE=Basic`；新增测试目标照 `cmake/PomodoroTodoTests.cmake` 里的现有写法设 `ENVIRONMENT`。
 - 全量测试出现与本次改动无关的失败 → 单独重跑一次；仍失败就在汇报里写明，不顺手修。
 - 代码改动的完成标准：构建通过、全量 `ctest` 通过、没有新增编译告警。汇报写实际运行的命令和结果，没运行的标「未运行」。
 - 用户说「构建」「重新构建」或要最新应用 → 在 `~/pt-build` 构建（`deploy-local-app` 会部署到 `/Applications/番茄Todo.app`），然后：
