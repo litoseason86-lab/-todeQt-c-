@@ -34,6 +34,8 @@
 #include "services/SyncStore.h"
 #include "services/PendingDeletion.h"
 #include "services/RoutineManager.h"
+#include "services/RoutineRules.h"
+#include "services/SyncNotifier.h"
 #include "services/SyncController.h"
 #include "services/TaskManager.h"
 #include "services/TrashService.h"
@@ -128,6 +130,8 @@ private slots:
     void applicationIdentityAndDatabasePathContract();
     void crossServiceSignalsWiring();
     void logicalDayAndDatabaseChangesMaintainDailyData();
+    void routineChangesMaterializeTodayAndNotify_data();
+    void routineChangesMaterializeTodayAndNotify();
     void restoreUsesRestoredDayBoundaryBeforePurgingTrash_data();
     void restoreUsesRestoredDayBoundaryBeforePurgingTrash();
     void unsafeRestoreKeepsMaintenanceBlockedUntilSafeCompletion();
@@ -518,9 +522,94 @@ void SharedAppTests::crossServiceSignalsWiring()
     QCOMPARE(tasksChangedSpy.count(), 2);
 }
 
+void SharedAppTests::routineChangesMaterializeTodayAndNotify_data()
+{
+    // 当天变得适用的例行立即补生成并通知任务页，不含今天的规则不产生额外任务通知。
+    QTest::addColumn<QString>("action");
+    QTest::newRow("add") << QStringLiteral("add");
+    QTest::newRow("reactivate") << QStringLiteral("reactivate");
+    QTest::newRow("restore-weekday") << QStringLiteral("restore-weekday");
+    QTest::newRow("not-today") << QStringLiteral("not-today");
+    QTest::newRow("sync") << QStringLiteral("sync");
+}
+
+void SharedAppTests::routineChangesMaterializeTodayAndNotify()
+{
+    // 例行规则在当天变得适用后，不等跨日也不依赖前台页面，今天的任务就会出现并通知页面。
+    QFETCH(QString, action);
+    SharedApp::Options options;
+    options.databasePath = m_testDbPath;
+    SharedApp app(options);
+    QVERIFY(app.openDatabase());
+    app.startDay();
+    auto* routines = RoutineManager::instance();
+    const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
+    const int todayMask = RoutineRules::maskForDayOfWeek(today.dayOfWeek());
+    const int otherDays = RoutineRules::kEveryDayMask & ~todayMask;
+    QVERIFY(todayMask != 0);
+    QVERIFY(RoutineRules::isValidWeekdayMask(otherDays));
+    const QString title = QStringLiteral("当天规则变更例行");
+    const QString taskCountSql = QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='%1' AND date='%2'")
+                                     .arg(title, today.toString(Qt::ISODate));
+    int routineId = 0;
+    if (action == QLatin1String("reactivate") || action == QLatin1String("restore-weekday")) {
+        QVERIFY(routines->addRoutine(title, 0));
+        routineId = queryValue(QStringLiteral("SELECT id FROM routines WHERE title='%1'").arg(title)).toInt();
+        QVERIFY(routineId > 0);
+        // 直接生成只用于准备已有且未操作的实例；被测的重新启用/勾回今天不得依靠测试主动生成。
+        QCOMPARE(routines->materializeToday(), 1);
+        QCOMPARE(queryValue(taskCountSql).toInt(), 1);
+        if (action == QLatin1String("reactivate")) {
+            QVERIFY(routines->setRoutineActive(routineId, false));
+        } else {
+            QVERIFY(routines->setRoutineWeekdays(routineId, otherDays));
+        }
+        // 清空准备动作留下的排队调用，后面的计数只归属于一次被测规则变更。
+        QCoreApplication::sendPostedEvents(&app, QEvent::MetaCall);
+        QCOMPARE(queryValue(taskCountSql).toInt(), 0);
+        QVERIFY(queryValue(QStringLiteral("SELECT last_generated_date FROM routines WHERE id=%1").arg(routineId)).isNull());
+    }
+    QCOMPARE(queryValue(taskCountSql).toInt(), 0);
+    QSignalSpy tasksChanged(TaskManager::instance(), &TaskManager::tasksChanged);
+    QVERIFY(tasksChanged.isValid());
+    if (action == QLatin1String("reactivate")) {
+        QVERIFY(routines->setRoutineActive(routineId, true));
+    } else if (action == QLatin1String("restore-weekday")) {
+        QVERIFY(routines->setRoutineWeekdays(routineId, RoutineRules::kEveryDayMask));
+    } else if (action == QLatin1String("sync")) {
+        // SQL 模拟远端规则已经提交；发布入口与同步提交后相同，不经本机 addRoutine 偷发规则信号。
+        QVERIFY(executeSql(QStringLiteral("INSERT INTO routines (title, weekdays) VALUES ('%1', %2)")
+                               .arg(title).arg(todayMask)));
+        QCOMPARE(queryValue(taskCountSql).toInt(), 0);
+        SyncNotifier::publishTableChanges({QStringLiteral("routines")});
+    } else {
+        QVERIFY(routines->addRoutine(title, 0, action == QLatin1String("not-today") ? otherDays : todayMask));
+    }
+    // 规则写入必须先返回，生成在排队回调中执行，不能在写操作的信号栈里重入数据库。
+    QCOMPARE(queryValue(taskCountSql).toInt(), 0);
+    QCOMPARE(tasksChanged.count(), 0);
+    QCoreApplication::sendPostedEvents(&app, QEvent::MetaCall);
+    QCoreApplication::processEvents();
+    const bool shouldGenerate = action != QLatin1String("not-today");
+    QCOMPARE(queryValue(taskCountSql).toInt(), shouldGenerate ? 1 : 0);
+    if (shouldGenerate) {
+        QVERIFY(tasksChanged.count() >= 1);
+        QVERIFY(tasksChanged.count() <= 2);
+        QCOMPARE(queryValue(QStringLiteral("SELECT routine_generated FROM tasks WHERE title='%1'").arg(title)).toInt(), 1);
+    } else {
+        QCOMPARE(tasksChanged.count(), 0);
+    }
+    const qsizetype notifications = tasksChanged.count();
+    // 再推进事件，确保同一次变更不会继续排队刷新或重复生成。
+    QCoreApplication::sendPostedEvents(&app, QEvent::MetaCall);
+    QCoreApplication::processEvents();
+    QCOMPARE(tasksChanged.count(), notifications);
+    QCOMPARE(queryValue(taskCountSql).toInt(), shouldGenerate ? 1 : 0);
+}
+
 void SharedAppTests::logicalDayAndDatabaseChangesMaintainDailyData()
 {
-    // 保证逻辑日失效后补出今天的例行并清理到期废纸篓，换库通知也能清理到期项。
+    // 保证生产日界通知和换库通知都能补出今天的例行、通知任务页，并清理到期废纸篓。
     SharedApp::Options options;
     options.databasePath = m_testDbPath;
     SharedApp app(options);
@@ -529,7 +618,20 @@ void SharedAppTests::logicalDayAndDatabaseChangesMaintainDailyData()
 
     QVERIFY(RoutineManager::instance()->addRoutine(QStringLiteral("跨日例行"), 0));
     QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM routines WHERE title='跨日例行'")).toInt(), 1);
+    QCoreApplication::sendPostedEvents(&app, QEvent::MetaCall);
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='跨日例行'")).toInt(), 1);
+    const QString yesterday = LogicalDay::today(AppSettings::instance()->dayStartHour()).addDays(-1).toString(Qt::ISODate);
+    const auto rewindRoutine = [&] {
+        // 同日新增现在会自动生成。模拟昨天尚待生成的库状态，才能区分日界/换库连线是否存在；
+        // 准备期间屏蔽同步触发器，避免 SQL 删实例产生永久删除记录，阻止当天例行重新生成。
+        return executeSql(QStringLiteral("UPDATE sync_runtime SET applying=1 WHERE singleton_id=1"))
+            && executeSql(QStringLiteral("DELETE FROM tasks WHERE title='跨日例行'"))
+            && executeSql(QStringLiteral("UPDATE routines SET last_generated_date='%1' WHERE title='跨日例行'").arg(yesterday))
+            && executeSql(QStringLiteral("UPDATE sync_runtime SET applying=0 WHERE singleton_id=1"));
+    };
+    QVERIFY(rewindRoutine());
     QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='跨日例行'")).toInt(), 0);
+    QCOMPARE(queryValue(QStringLiteral("SELECT last_generated_date FROM routines WHERE title='跨日例行'")).toString(), yesterday);
     QVERIFY(TaskManager::instance()->addTask(QStringLiteral("过期废纸篓"), QDate::currentDate()));
     const int expiredTask = queryValue(QStringLiteral("SELECT id FROM tasks WHERE title='过期废纸篓'")).toInt();
     QVERIFY(expiredTask > 0);
@@ -542,8 +644,10 @@ void SharedAppTests::logicalDayAndDatabaseChangesMaintainDailyData()
     auto* boundary = LogicalDayService::instance()->findChild<QTimer*>(QStringLiteral("logicalDayBoundaryTimer"));
     QVERIFY(boundary != nullptr);
     QSignalSpy dayChanged(LogicalDayService::instance(), &LogicalDayService::changed);
+    QSignalSpy tasksChanged(TaskManager::instance(), &TaskManager::tasksChanged);
     QVERIFY(QMetaObject::invokeMethod(boundary, "timeout", Qt::DirectConnection));
     QCOMPARE(dayChanged.count(), 1);
+    QCOMPARE(tasksChanged.count(), 1);
     QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='跨日例行'")).toInt(), 1);
     QCOMPARE(queryValue(QStringLiteral("SELECT date FROM tasks WHERE title='跨日例行'")).toString(),
              LogicalDay::today(AppSettings::instance()->dayStartHour()).toString(Qt::ISODate));
@@ -555,10 +659,18 @@ void SharedAppTests::logicalDayAndDatabaseChangesMaintainDailyData()
     QVERIFY(TaskManager::instance()->deleteTask(restoredTask));
     QVERIFY(executeSql(QStringLiteral("UPDATE trash_items SET deleted_at='2000-01-01T00:00:00.000Z' WHERE title='换库后清理'")));
     QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 1);
+    QVERIFY(rewindRoutine());
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='跨日例行'")).toInt(), 0);
+    tasksChanged.clear();
     // initialize 的已有连接路径同样发布 databaseChanged，覆盖备份换库完成后的共享刷新入口。
     QSignalSpy databaseChanged(DatabaseManager::instance(), &DatabaseManager::databaseChanged);
     QVERIFY(DatabaseManager::instance()->initialize(m_testDbPath));
     QCOMPARE(databaseChanged.count(), 1);
+    QVERIFY(tasksChanged.count() >= 1);
+    QVERIFY(tasksChanged.count() <= 2);
+    QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title='跨日例行'")).toInt(), 1);
+    QCOMPARE(queryValue(QStringLiteral("SELECT date FROM tasks WHERE title='跨日例行'")).toString(),
+             LogicalDay::today(AppSettings::instance()->dayStartHour()).toString(Qt::ISODate));
     QCOMPARE(queryValue(QStringLiteral("SELECT COUNT(*) FROM trash_items")).toInt(), 0);
 }
 

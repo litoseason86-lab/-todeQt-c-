@@ -90,6 +90,7 @@ public:
 private:
     // 数据库打开成功后才创建业务单例，避免启动失败路径提前触发偏好迁移或业务装配。
     void initializeRuntimeServices();
+    void materializeTodayAndNotify();
     void purgeTrashIfReady();
 
     Options m_options;

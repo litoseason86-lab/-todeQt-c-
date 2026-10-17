@@ -169,8 +169,14 @@ void SharedApp::startDay()
     }
 
     RoutineManager::instance()->materializeToday();
+    // 规则写入、科目转发和同步发布都汇入这里；排队等写操作完整返回，避免在其信号栈里重入生成事务。
+    connect(RoutineManager::instance(), &RoutineManager::routinesChanged,
+            this, &SharedApp::materializeTodayAndNotify, Qt::QueuedConnection);
     connect(LogicalDayService::instance(), &LogicalDayService::changed,
-            this, [] { RoutineManager::instance()->materializeToday(); });
+            this, &SharedApp::materializeTodayAndNotify);
+    // 换库或恢复后重新检查当天规则，任务通知由生成结果决定，不依赖页面信号接收的先后顺序。
+    connect(DatabaseManager::instance(), &DatabaseManager::databaseChanged,
+            this, &SharedApp::materializeTodayAndNotify);
 
     auto* backup = BackupService::instance();
     connect(backup, &BackupService::restoreStarted, this, [this] {
@@ -192,6 +198,15 @@ void SharedApp::startDay()
 
     connect(KnowledgeGapService::instance(), &KnowledgeGapService::tasksAffected,
             this, [] { emit TaskManager::instance()->tasksChanged(); });
+}
+
+void SharedApp::materializeTodayAndNotify()
+{
+    // 生成服务只写库，共享装配层负责把新增任务通知到两端页面。生成零条不发信号，
+    // 避免 Mac 页面刷新时再次生成，形成“刷新 → 生成 → 通知 → 刷新”的循环。
+    if (RoutineManager::instance()->materializeToday() > 0) {
+        emit TaskManager::instance()->tasksChanged();
+    }
 }
 
 void SharedApp::purgeTrashIfReady()
