@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
 """运行使用系统偏好的测试，并在进程退出后清理其专用偏好域。"""
 
-import hashlib
+from __future__ import annotations
+
 from pathlib import Path
 import plistlib
+import re
 import subprocess
 import sys
 import time
 
+# 偏好域只由测试自己决定（tests/support/NativePreferenceDomain.h 写出 <可执行文件>.prefdomain），
+# 这里不再重复摘要算法和域名表。文件内容仍可能被写错或被别的东西改掉，所以删除前用白名单把关：
+# 只认带构建目录摘要的测试域和清理测试的固定域，正式应用的 com.pomodorotodo.* 永远匹配不上。
+# pomodorotodotests? 里的可选 s：KnowledgeGapServiceTests 历来用 PomodoroTodoTest- 前缀。
+DOMAIN_PATTERN = re.compile(
+    r"^(?:com\.pomodorotodotests?-[0-9a-f]{8}\.[A-Za-z]+Tests|com\.pomodorotodo\.cleanup-tests)$"
+)
 
-def preference_domain(executable: Path) -> str:
-    # 与三套测试的 initTestCase 保持一致：Qt 用构建目录的 SHA-1 前八位隔离偏好域。
-    digest = hashlib.sha1(str(executable.parent).encode("utf-8")).hexdigest()[:8]
-    domains = {
-        "PomodoroTodoTests": f"com.pomodorotodotests-{digest}.PomodoroTodoTests",
-        "TrashServiceTests": f"com.pomodorotodotests-{digest}.TrashServiceTests",
-        "KnowledgeGapServiceTests": f"com.pomodorotodotest-{digest}.KnowledgeGapServiceTests",
-        "MacPreferencesCleanupTests": "com.pomodorotodo.cleanup-tests",
-    }
-    # 使用显式白名单，拒绝把任意应用或正式应用的偏好传入删除流程。
-    return domains[executable.name]
+
+def domain_file(executable: Path) -> Path:
+    return executable.with_name(executable.name + ".prefdomain")
+
+
+def take_domain(executable: Path) -> str | None:
+    """读出并删掉测试写下的域名文件；测试在设定偏好域之前就退出时没有这个文件。"""
+    path = domain_file(executable)
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def cleanup_domain(domain: str) -> None:
@@ -52,14 +64,23 @@ def cleanup_domain(domain: str) -> None:
     raise RuntimeError(f"测试偏好未能清空或持续被重新写入：{path}；{deletion.stderr.strip()}")
 
 
-def main() -> int:
-    executable = Path(sys.argv[1]).resolve()
-    domain = preference_domain(executable)
-    result = subprocess.run([str(executable), *sys.argv[2:]], check=False)
+def main(argv: list[str] | None = None, run=subprocess.run, cleanup=cleanup_domain) -> int:
+    args = sys.argv[1:] if argv is None else argv
+    executable = Path(args[0]).resolve()
+    # 先删掉上一次运行留下的域名文件，免得这次在写出之前就崩溃时拿旧文件冒充本次结果。
+    domain_file(executable).unlink(missing_ok=True)
+    result = run([str(executable), *args[1:]], check=False)
     # 包括断言失败和崩溃在内的测试结果必须继续向 CTest 传播。
     exit_code = result.returncode if result.returncode >= 0 else 128 - result.returncode
+    domain = take_domain(executable)
+    if domain is None:
+        print(f"未找到 {domain_file(executable).name}：测试在设定偏好域之前就已退出，不做清理", file=sys.stderr)
+        return exit_code
+    if not DOMAIN_PATTERN.fullmatch(domain):
+        print(f"拒绝清理不在白名单内的偏好域：{domain!r}", file=sys.stderr)
+        return exit_code or 1
     try:
-        cleanup_domain(domain)
+        cleanup(domain)
     except (OSError, RuntimeError, plistlib.InvalidFileException, subprocess.TimeoutExpired) as error:
         print(f"测试偏好清理失败：{error}", file=sys.stderr)
         return exit_code or 1

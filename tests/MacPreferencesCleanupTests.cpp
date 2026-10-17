@@ -4,6 +4,7 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 
+#include "support/NativePreferenceDomain.h"
 #include "../src/platform/macos/MacPreferencesCleanup.h"
 
 // 旧版恢复失败回滚会把系统全局偏好钉进本应用的偏好域。清理只能删「与全局域值完全相同」
@@ -32,6 +33,8 @@ private:
 void MacPreferencesCleanupTests::init()
 {
     m_domain = QStringLiteral("com.pomodorotodo.cleanup-tests");
+    // 固定域不随构建目录变，也照样写出域名文件，清理脚本只认这一个来源。
+    QVERIFY2(NativePreferenceDomain::publish(m_domain), "无法写出 .prefdomain，退出后清理不到本测试的偏好域");
     // 上一次运行中途崩溃可能留下键，先清空再开始。
     cleanup();
 }
@@ -115,5 +118,6 @@ void MacPreferencesCleanupTests::emptyDomainIsIgnored()
     QCOMPARE(MacPreferencesCleanup::removeValuesPinnedFromGlobalDomain(QString()), 0);
 }
 
-QTEST_APPLESS_MAIN(MacPreferencesCleanupTests)
+// 需要 QCoreApplication 才能取到可执行文件路径，写出给清理脚本的域名文件；它不读写任何偏好。
+QTEST_GUILESS_MAIN(MacPreferencesCleanupTests)
 #include "MacPreferencesCleanupTests.moc"

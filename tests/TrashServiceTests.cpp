@@ -1,4 +1,3 @@
-#include <QCryptographicHash>
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -10,6 +9,7 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include "support/NativePreferenceDomain.h"
 #include "../src/services/AppSettings.h"
 #include "../src/services/CategoryManager.h"
 #include "../src/services/CountdownService.h"
@@ -122,9 +122,9 @@ QString today()
 void TrashServiceTests::initTestCase()
 {
     // 偏好域按构建目录区分，免得几个工作区同时跑本程序时互相改设置；原因见 ServiceTests::initTestCase。
-    const QByteArray buildDirDigest = QCryptographicHash::hash(
-        QCoreApplication::applicationDirPath().toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
-    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTests-") + QString::fromLatin1(buildDirDigest));
+    bool published = false;
+    NativePreferenceDomain::isolateByBuildDirectory(QStringLiteral("PomodoroTodoTests-"), &published);
+    QVERIFY2(published, "无法写出 .prefdomain，退出后清理不到本测试的偏好域");
 }
 
 void TrashServiceTests::init()

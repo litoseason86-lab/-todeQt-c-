@@ -1,5 +1,4 @@
 #include <QCoreApplication>
-#include <QCryptographicHash>
 #include <QDate>
 #include <QDir>
 #include <QFile>
@@ -22,6 +21,7 @@
 #include <utility>
 #include <vector>
 
+#include "support/NativePreferenceDomain.h"
 #include "../src/services/AppSettings.h"
 #include "../src/services/LogicalDay.h"
 #include "../src/services/LogicalDayService.h"
@@ -1101,10 +1101,10 @@ void ServiceTests::initTestCase()
     // 互相改掉对方的日界和每日目标：协调者 10-09 同时起两个进程跑三轮，两轮出现失败，单独跑全过。
     // 组织名带上构建目录路径的摘要后各用一份；同一构建目录里仍跨运行保留，由 init / cleanup 负责清理。
     // 不改成临时目录里的 INI：INI 每次写入都原子替换并强制刷盘，本程序会从十几秒变成一分半。
-    // 必须在第一次构造 QSettings（含 AppSettings::instance()）之前设置。
-    const QByteArray buildDirDigest = QCryptographicHash::hash(
-        QCoreApplication::applicationDirPath().toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
-    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTests-") + QString::fromLatin1(buildDirDigest));
+    // 必须在第一次构造 QSettings（含 AppSettings::instance()）之前设置；域名同时写给退出后的清理脚本。
+    bool published = false;
+    NativePreferenceDomain::isolateByBuildDirectory(QStringLiteral("PomodoroTodoTests-"), &published);
+    QVERIFY2(published, "无法写出 .prefdomain，退出后清理不到本测试的偏好域");
 }
 
 void ServiceTests::init()

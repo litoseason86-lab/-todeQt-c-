@@ -1,5 +1,4 @@
 #include <QCoreApplication>
-#include <QCryptographicHash>
 #include <QDate>
 #include <QDateTime>
 #include <QScopeGuard>
@@ -11,6 +10,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+#include "support/NativePreferenceDomain.h"
 #include "../src/services/AppSettings.h"
 #include "../src/services/CategoryManager.h"
 #include "../src/services/DatabaseManager.h"
@@ -130,10 +130,11 @@ void KnowledgeGapServiceTests::initTestCase()
     QVERIFY(m_tempDir->isValid());
 
     // 偏好域按构建目录区分，免得几个工作区同时跑本程序时互相改设置；原因见 ServiceTests::initTestCase。
-    const QByteArray buildDirDigest = QCryptographicHash::hash(
-        QCoreApplication::applicationDirPath().toUtf8(), QCryptographicHash::Sha1).toHex().left(8);
-    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoTest-") + QString::fromLatin1(buildDirDigest));
+    // 应用名要先于共用函数设定：它按设定后的组织名与应用名读出 Qt 实际使用的偏好域。
     QCoreApplication::setApplicationName(QStringLiteral("KnowledgeGapServiceTests"));
+    bool published = false;
+    NativePreferenceDomain::isolateByBuildDirectory(QStringLiteral("PomodoroTodoTest-"), &published);
+    QVERIFY2(published, "无法写出 .prefdomain，退出后清理不到本测试的偏好域");
     m_databasePath = m_tempDir->filePath(QStringLiteral("knowledge-gap-test.sqlite"));
     QVERIFY(DatabaseManager::instance()->initialize(m_databasePath));
 }

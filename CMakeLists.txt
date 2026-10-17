@@ -891,6 +891,7 @@ endfunction()
 
 add_executable(PomodoroTodoTests
     tests/ServiceTests.cpp
+    tests/support/NativePreferenceDomain.h
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
@@ -1056,6 +1057,7 @@ add_test(NAME CountdownServiceTests COMMAND CountdownServiceTests)
 # 不引入 FocusTimer——知识缺口本来就不接计时。
 add_executable(KnowledgeGapServiceTests
     tests/KnowledgeGapServiceTests.cpp
+    tests/support/NativePreferenceDomain.h
     src/models/Task.h
     src/models/Task.cpp
     src/services/DatabaseManager.h
@@ -1193,6 +1195,7 @@ add_test(NAME AppleNotificationBackendTests COMMAND AppleNotificationBackendTest
 # 启动脚本在进程退出后删除文件，避免偏好守护进程在退出阶段重新写回空 plist。
 add_executable(MacPreferencesCleanupTests
     tests/MacPreferencesCleanupTests.cpp
+    tests/support/NativePreferenceDomain.h
     src/platform/macos/MacPreferencesCleanup.h
     src/platform/macos/MacPreferencesCleanup.mm
 )
@@ -1441,6 +1444,7 @@ add_test(NAME SyncTests COMMAND SyncTests)
 # 因为恢复会走 SyncNotifier 的按表发信号，连带各服务；仍用真实建表逻辑，不手写简化表。
 add_executable(TrashServiceTests
     tests/TrashServiceTests.cpp
+    tests/support/NativePreferenceDomain.h
     src/models/Task.cpp
     src/models/FocusSession.cpp
     src/services/DatabaseManager.h
@@ -2516,4 +2520,9 @@ if(NOT IOS AND Python3_FOUND)
     add_test(NAME ArchitectureGateR9
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_architecture_gate_r9.py")
     set_tests_properties(ArchitectureGateR9 PROPERTIES TIMEOUT 30)
+
+    # 原生偏好测试的清理脚本自检：读域名文件、白名单拒绝、缺文件不清理与退出码传播（062 A060）。
+    add_test(NAME NativePreferencesRunnerTests
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_run_native_preferences.py")
+    set_tests_properties(NativePreferencesRunnerTests PROPERTIES TIMEOUT 30)
 endif()
