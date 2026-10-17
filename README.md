@@ -148,3 +148,7 @@ plans/                 当前状态、待评估事项与未采纳决策
 - 平台入口：`src/entry/mac` 与 `src/entry/ios` 保持独立，仅编入所属平台的可执行目标，自顶向下单向链接 `PTQml`、`PTApp` 与 `PTCore`。分层约束由 `ArchitectureGate`、`ArchitectureGateR8` 与 `ArchitectureGateR9` 自动化门禁守护。
 
 外部 AI 接入按同样的方式分层：包内辅助程序只编译 `src/mcp/helper` 与 `src/mcp/common`，不链接业务服务与数据库，权限判断和读写一律在主应用内完成（由 `McpHelperLinkGate` 这条测试守门）。
+
+## 许可证
+
+源代码与文档按 [MIT 许可证](LICENSE) 发布。`resources/wallpapers/`、`resources/app-icons/`、`resources/sounds/` 下的资源文件不在 MIT 范围内，来源与授权尚未确认，不得在本项目之外使用或再分发；`resources/fonts/` 下的字体按各自随附的 SIL Open Font License 1.1 授权。详见[资源来源与授权清单](docs/资源来源与授权清单.md)。
