@@ -1635,6 +1635,8 @@ list(REMOVE_ITEM PT_SHELL_TEST_SOURCES tests/TrashServiceTests.cpp)
 add_executable(PTShellBridgeTests ${PT_SHELL_TEST_SOURCES}
     resources/wallpapers.qrc
     tests/PTShellBridgeTests.mm
+    src/platform/ios/bridge/PTBridgeSupport.h src/platform/ios/bridge/PTBridgeSupport.mm
+    src/platform/ios/bridge/PTTaskBridge.h src/platform/ios/bridge/PTTaskBridge.mm
     src/platform/ios/native/IPadUiPreferences.h
     src/platform/ios/native/IPadShellPreferences.h
     src/platform/ios/native/IPadShellPreferences.cpp

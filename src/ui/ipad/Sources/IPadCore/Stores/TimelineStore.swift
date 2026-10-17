@@ -103,7 +103,8 @@ public struct SessionEditorDraft: Equatable, Sendable {
         focus?.onFocusCompleted = { [weak self] _ in self?.refresh() }
         focus?.onRestCompleted = { [weak self] in self?.refresh() }
         logicalDay.onChanged = { [weak self] in self?.logicalDayChanged() }
-        statistics.onFailure = { [weak self] in self?.error = $0 }
+        // 后台统计失败由外壳提示，时间轴自己的读取失败继续由 refresh 承接。
+        statistics.onFailure = nil
         refresh()
     }
     public func selectDate(_ date: String) {

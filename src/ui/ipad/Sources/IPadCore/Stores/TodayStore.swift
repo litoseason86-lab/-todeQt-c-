@@ -111,10 +111,8 @@ import Observation
         guard !active else { return }
         active = true
         taskBridge.onChanged = { [weak self] in self?.requestRefresh() }
-        taskBridge.onFailure = { [weak self] message in
-            guard let self, self.active else { return }
-            self.loadError = message.isEmpty ? "任务加载失败，请重试" : message
-        }
+        // 后台服务失败只由外壳提示；本页读取和动作的 catch 仍各自承接调用错误。
+        taskBridge.onFailure = nil
         interactions.onChanged = { [weak self] in self?.interactionChanged() }
         logicalDay.onChanged = { [weak self] in self?.requestRefresh() }
         settings.onDailyFocusGoalChanged = { [weak self] in
@@ -127,10 +125,7 @@ import Observation
             self.loadGaps()
         }
         gaps.onTasksAffected = { [weak self] in self?.requestRefresh() }
-        statistics.onFailure = { [weak self] message in
-            guard let self, self.active else { return }
-            self.loadError = message.isEmpty ? "统计数据加载失败，请重试" : message
-        }
+        statistics.onFailure = nil
         focus?.onFocusCompleted = { [weak self] _ in
             guard let self, self.active else { return }
             self.loadStats(); self.loadGoal()

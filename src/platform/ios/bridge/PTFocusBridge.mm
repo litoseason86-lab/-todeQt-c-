@@ -171,6 +171,11 @@ namespace {
 FocusSessionController *controller() { return service<FocusSessionController>(QStringLiteral("focusController")); }
 QVariantMap unavailable() { return {{"valid", false}, {"error", QStringLiteral("专注控制器不可用")}}; }
 QVariantMap overflow() { return {{"valid", false}, {"error", QStringLiteral("专注参数越界")}}; }
+QVariantMap claimReturnedFailure(const QVariantMap &value, const FailureCollector::Call &call) {
+    // 控制器已把失败写进类型化结果，Swift 会按返回值提示，不能再由未认领出口重复上报。
+    if (!value.value("valid", true).toBool() || !value.value("error").toString().isEmpty()) (void)call.error();
+    return value;
+}
 }
 @implementation PTFocusBridge {
     std::unique_ptr<QObject> _connections;
@@ -266,52 +271,52 @@ QVariantMap overflow() { return {{"valid", false}, {"error", QStringLiteral("专
     int id; if (!integer(taskId, &id)) return [[PTFocusTaskEntry alloc] initWithValue:overflow()];
     auto *c = controller();
     FailureCollector::Call call(_failures);
-    return [[PTFocusTaskEntry alloc] initWithValue:c ? c->planTaskEntry(id, string(title)) : unavailable()];
+    return [[PTFocusTaskEntry alloc] initWithValue:claimReturnedFailure(c ? c->planTaskEntry(id, string(title)) : unavailable(), call)];
 }
 - (PTFocusSwitchConsequence *)switchConsequence {
     NSAssert(NSThread.isMainThread, @"专注控制器必须在主线程调用");
     auto *c = controller();
     FailureCollector::Call call(_failures);
-    return [[PTFocusSwitchConsequence alloc] initWithValue:c ? c->switchConsequence() : unavailable()];
+    return [[PTFocusSwitchConsequence alloc] initWithValue:claimReturnedFailure(c ? c->switchConsequence() : unavailable(), call)];
 }
 - (PTFocusSwitchSource *)captureSwitchSource {
     NSAssert(NSThread.isMainThread, @"专注控制器必须在主线程调用");
     auto *c = controller();
     FailureCollector::Call call(_failures);
-    return [[PTFocusSwitchSource alloc] initWithValue:c ? c->captureSwitchSource() : unavailable()];
+    return [[PTFocusSwitchSource alloc] initWithValue:claimReturnedFailure(c ? c->captureSwitchSource() : unavailable(), call)];
 }
 - (PTFocusModeSwitch *)planModeSwitch:(NSInteger)taskId title:(NSString *)title {
     NSAssert(NSThread.isMainThread, @"专注控制器必须在主线程调用");
     int id; if (!integer(taskId, &id)) return [[PTFocusModeSwitch alloc] initWithValue:overflow()];
     auto *c = controller();
     FailureCollector::Call call(_failures);
-    return [[PTFocusModeSwitch alloc] initWithValue:c ? c->planModeSwitch(id, string(title)) : unavailable()];
+    return [[PTFocusModeSwitch alloc] initWithValue:claimReturnedFailure(c ? c->planModeSwitch(id, string(title)) : unavailable(), call)];
 }
 - (PTFocusCandidate *)autoStartCandidate:(NSInteger)taskId title:(NSString *)title {
     NSAssert(NSThread.isMainThread, @"专注控制器必须在主线程调用");
     int id; if (!integer(taskId, &id)) return [[PTFocusCandidate alloc] initWithValue:overflow()];
     auto *c = controller();
     FailureCollector::Call call(_failures);
-    return [[PTFocusCandidate alloc] initWithValue:c ? c->autoStartCandidate(id, string(title)) : unavailable()];
+    return [[PTFocusCandidate alloc] initWithValue:claimReturnedFailure(c ? c->autoStartCandidate(id, string(title)) : unavailable(), call)];
 }
 - (PTFocusTaskCompletion *)handleTaskCompleted:(NSInteger)taskId {
     NSAssert(NSThread.isMainThread, @"专注控制器必须在主线程调用");
     int id; if (!integer(taskId, &id)) return [[PTFocusTaskCompletion alloc] initWithValue:overflow()];
     auto *c = controller();
     FailureCollector::Call call(_failures);
-    return [[PTFocusTaskCompletion alloc] initWithValue:c ? c->handleTaskCompleted(id) : unavailable()];
+    return [[PTFocusTaskCompletion alloc] initWithValue:claimReturnedFailure(c ? c->handleTaskCompleted(id) : unavailable(), call)];
 }
 - (PTFocusEndResult *)endCurrent {
     NSAssert(NSThread.isMainThread, @"专注控制器必须在主线程调用");
     auto *c = controller();
     FailureCollector::Call call(_failures);
-    return [[PTFocusEndResult alloc] initWithValue:c ? c->endCurrent() : unavailable()];
+    return [[PTFocusEndResult alloc] initWithValue:claimReturnedFailure(c ? c->endCurrent() : unavailable(), call)];
 }
 - (PTFocusEndResult *)endPomodoroCycle {
     NSAssert(NSThread.isMainThread, @"专注控制器必须在主线程调用");
     auto *c = controller();
     FailureCollector::Call call(_failures);
-    return [[PTFocusEndResult alloc] initWithValue:c ? c->endPomodoroCycle() : unavailable()];
+    return [[PTFocusEndResult alloc] initWithValue:claimReturnedFailure(c ? c->endPomodoroCycle() : unavailable(), call)];
 }
 - (NSString *)stopForSwitch:(PTFocusSwitchSource *)source error:(NSError **)error {
     NSAssert(NSThread.isMainThread, @"切换确认必须在主线程");
@@ -324,7 +329,10 @@ QVariantMap overflow() { return {{"valid", false}, {"error", QStringLiteral("专
     }
     QVariantMap map{{"taskId", taskId}, {"mode", mode}, {"phase", phase}};
     FailureCollector::Call call(_failures);
-    return string(c->stopForSwitch(map));
+    const QString result = c->stopForSwitch(map);
+    // failed 已由调用方按返回状态处理；只认领已承接的失败，成功时附带的失败仍交外壳。
+    if (result == QStringLiteral("stopFailed")) (void)call.error();
+    return string(result);
 }
 - (NSInteger)createTodayTask:(NSString *)title error:(NSError **)error {
     NSAssert(NSThread.isMainThread, @"新建专注任务必须在主线程");
@@ -359,6 +367,6 @@ QVariantMap overflow() { return {{"valid", false}, {"error", QStringLiteral("专
     NSAssert(NSThread.isMainThread, @"超长确认收尾必须在主线程");
     int duration; if (!integer(seconds, &duration)) return [[PTFocusFinishResult alloc] initWithValue:overflow()];
     auto *c = controller(); FailureCollector::Call call(_failures);
-    return [[PTFocusFinishResult alloc] initWithValue:c ? c->finishLongFree(recordSession, duration) : unavailable()];
+    return [[PTFocusFinishResult alloc] initWithValue:claimReturnedFailure(c ? c->finishLongFree(recordSession, duration) : unavailable(), call)];
 }
 @end

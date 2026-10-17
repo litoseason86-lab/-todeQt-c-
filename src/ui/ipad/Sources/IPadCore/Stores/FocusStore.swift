@@ -291,7 +291,8 @@ public struct ActiveFocusSession: Equatable, Sendable {
         focus.onTaskAutoCompleteFailed = { [weak self] _ in
             self?.shell?.showToast("专注记录已保存，但任务自动完成失败，请手动检查")
         }
-        focus.onFailure = { [weak self] message in self?.shell?.showToast(message.isEmpty ? "专注操作失败" : message) }
+        // operationFailed 的后台失败交外壳提示条，动作返回错误仍由调用方处理，避免重复 toast。
+        focus.onFailure = nil
         focus.onPhaseSettledOffline = { [weak self] phase in
             self?.shell?.showToast(phase == 1 ? "离开期间番茄已到点，已记为完成" : "离开期间休息已结束")
         }

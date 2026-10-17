@@ -37,8 +37,9 @@ import Observation
         // 日界可能没有例行任务新增，不能靠任务信号间接刷新今日数据。
         logicalDay?.onChanged = { [weak self] in self?.refresh() }
         tasksBridge.onChanged = { [weak self] in self?.refresh() }
-        tasksBridge.onFailure = { [weak self] message in self?.loadError = message.isEmpty ? "任务加载失败，请重试" : message }
-        statistics.onFailure = { [weak self] message in self?.loadError = message.isEmpty ? "统计数据加载失败，请重试" : message }
+        // 后台任务与统计失败交外壳统一提示；refresh 的读取错误仍保留在本页。
+        tasksBridge.onFailure = nil
+        statistics.onFailure = nil
         settings.onNicknameChanged = { [weak self] in self?.nickname = self?.settings.snapshot().nickname ?? "" }
         focus?.onFocusCompletedForPages = { [weak self] in self?.refresh() }
         refresh()

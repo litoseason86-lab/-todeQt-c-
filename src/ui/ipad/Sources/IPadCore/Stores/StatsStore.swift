@@ -72,9 +72,8 @@ public struct StatsSnapshot: Equatable, Sendable {
         let invalidate: () -> Void = { [weak self] in self?.requestRefresh() }
         logicalDay.onChanged = invalidate; tasks?.onChanged = invalidate; settings?.onDailyFocusGoalChanged = invalidate
         categories?.onChanged = invalidate; history?.onChanged = invalidate
-        statistics.onFailure = { [weak self] message in
-            guard let self, self.active else { return }; self.errorMessage = message
-        }
+        // 后台统计失败由外壳提示，本页只显示自己读取时抛出的错误。
+        statistics.onFailure = nil
     }
     public var isEmpty: Bool { hasLoaded && errorMessage.isEmpty && snapshot.categories.totalDuration == 0 }
     public var showReview: Bool {

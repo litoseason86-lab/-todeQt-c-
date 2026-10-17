@@ -14,6 +14,7 @@
 #include "../src/services/PendingDeletion.h"
 #include "../src/services/TaskManager.h"
 #include <QSettings>
+#include <QScopeGuard>
 #include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QThread>
@@ -45,6 +46,7 @@ public:
 class PTFocusBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void partialGapFailureIsClaimedByReturnedSummary();
     void initTestCase();
     void init();
     void cleanup();
@@ -350,5 +352,32 @@ void PTFocusBridgeTests::gapPartialFailureAndReadFailure() {
         emit service->operationFailed(QStringLiteral("异步失败")); QCOMPARE(failures, 1);
     }
 }
+// 产品保证：缺口转换的部分失败由汇总返回给调用方，外壳不重复显示同一条失败。
+void PTFocusBridgeTests::partialGapFailureIsClaimedByReturnedSummary()
+{
+    @autoreleasepool {
+        QObject owner;
+        int unclaimed = 0;
+        PTBridgeSupport::registerUnclaimedFailureHandler(&owner, [&](const QString&) { ++unclaimed; });
+        const auto unregister = qScopeGuard([&] { PTBridgeSupport::unregisterUnclaimedFailureHandler(&owner); });
+        auto* gaps = KnowledgeGapService::instance();
+        const QDate today = LogicalDay::today(AppSettings::instance()->dayStartHour());
+        QVERIFY(gaps->addGap(QStringLiteral("认领成功"), -1, "", 0, today, -1) > 0);
+        QVERIFY(gaps->addGap(QStringLiteral("认领失败"), -1, "", 0, today, -1) > 0);
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec("CREATE TRIGGER reject_claimed_gap BEFORE INSERT ON tasks WHEN NEW.title = '认领失败' BEGIN SELECT RAISE(ABORT, '第二条失败'); END"));
+        const auto removeTrigger = qScopeGuard([&] { query.exec("DROP TRIGGER reject_claimed_gap"); });
+        PTGapReminderBridge* bridge = [PTGapReminderBridge new];
+        QSignalSpy failuresSpy(gaps, &KnowledgeGapService::operationFailed);
+        const auto result = bridge.convertDueGapsToTasks;
+        QVERIFY(result.valid);
+        QCOMPARE(result.converted, NSInteger(1));
+        QCOMPARE(result.failed, NSInteger(1));
+        QVERIFY(result.reason.length > 0);
+        QVERIFY(failuresSpy.count() > 0);
+        QCOMPARE(unclaimed, 0);
+    }
+}
+
 QTEST_GUILESS_MAIN(PTFocusBridgeTests)
 #include "PTFocusBridgeTests.moc"

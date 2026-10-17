@@ -62,7 +62,9 @@ using namespace PTBridgeSupport;
     NSAssert(NSThread.isMainThread, @"缺口转任务必须在主线程");
     FailureCollector::Call call(_failures); const auto map = KnowledgeGapService::instance()->convertDueGapsToTasks();
     // 每条转换独立事务；部分失败是合法汇总，不能把已成功的结果扔掉。候选读取失败才作为调用错误。
-    const QString error = map.value("failed").toInt() > 0 ? QString() : call.error();
+    // 部分失败已在结构化结果里交给调用方，仍须认领信号，避免外壳再提示同一次失败。
+    const QString collected = call.error();
+    const QString error = map.value("failed").toInt() > 0 ? QString() : collected;
     return [[PTGapConversionResult alloc] initWithMap:map error:error];
 }
 @end

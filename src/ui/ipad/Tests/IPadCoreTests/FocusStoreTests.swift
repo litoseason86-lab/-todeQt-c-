@@ -606,13 +606,13 @@ import XCTest
 
     // MARK: 提示
 
-    // 产品保证：计时相关的提示文案与 Mac 一字不差，空消息有兜底。
+    // 产品保证：计时专用提示文案保持一致，后台通用失败由外壳承接，不覆盖既有 toast。
     func testToastTexts() {
         let r = rig()
         func toast(_ fire: () -> Void) -> String? { fire(); return r.shell.toast?.message }
         XCTAssertEqual(toast { r.focus.onTaskAutoCompleteFailed?(1) }, "专注记录已保存，但任务自动完成失败，请手动检查")
-        XCTAssertEqual(toast { r.focus.onFailure?("") }, "专注操作失败")
-        XCTAssertEqual(toast { r.focus.onFailure?("磁盘满") }, "磁盘满")
+        XCTAssertEqual(toast { r.focus.onFailure?("") }, "专注记录已保存，但任务自动完成失败，请手动检查")
+        XCTAssertEqual(toast { r.focus.onFailure?("磁盘满") }, "专注记录已保存，但任务自动完成失败，请手动检查")
         XCTAssertEqual(toast { r.focus.onPhaseSettledOffline?(1) }, "离开期间番茄已到点，已记为完成")
         XCTAssertEqual(toast { r.focus.onPhaseSettledOffline?(2) }, "离开期间休息已结束")
         XCTAssertEqual(toast { r.focus.onAlarmUnavailable?("未授权") }, "到点提醒没有预约成功（未授权），离开应用后不会提醒")

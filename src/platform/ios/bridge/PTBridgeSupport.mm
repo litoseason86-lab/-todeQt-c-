@@ -2,6 +2,7 @@
 #include <QHash>
 #include <QThread>
 #include <limits>
+#include <utility>
 
 namespace PTBridgeSupport {
 namespace {
@@ -9,6 +10,45 @@ QHash<QString, QPointer<QObject>> &registry() {
     static QHash<QString, QPointer<QObject>> objects;
     return objects;
 }
+}
+namespace {
+QList<FailureCollector::Call *> &activeCalls() {
+    static QList<FailureCollector::Call *> calls;
+    return calls;
+}
+struct FailureOutlet {
+    QPointer<QObject> owner;
+    UnclaimedFailureHandler handler;
+};
+QList<FailureOutlet> &failureOutlets() {
+    static QList<FailureOutlet> outlets;
+    return outlets;
+}
+}
+void registerUnclaimedFailureHandler(QObject *owner, UnclaimedFailureHandler handler)
+{
+    NSCAssert(NSThread.isMainThread, @"失败出口只能在主线程登记");
+    Q_ASSERT(owner && handler);
+    unregisterUnclaimedFailureHandler(owner);
+    failureOutlets().append({owner, std::move(handler)});
+}
+void unregisterUnclaimedFailureHandler(QObject *owner)
+{
+    NSCAssert(NSThread.isMainThread, @"失败出口只能在主线程注销");
+    failureOutlets().removeIf([owner](const FailureOutlet &outlet) {
+        return outlet.owner.isNull() || outlet.owner.data() == owner;
+    });
+}
+void reportUnclaimedFailure(const QString &message, QObject *source)
+{
+    NSCAssert(NSThread.isMainThread, @"失败只能在主线程转发");
+    auto &outlets = failureOutlets();
+    while (!outlets.isEmpty() && outlets.last().owner.isNull()) outlets.removeLast();
+    if (outlets.isEmpty()) return;
+    // 先复制回调：Swift 收到失败后可能释放桥接，不能继续持有登记表元素的引用。
+    const FailureOutlet outlet = outlets.last();
+    if (source && source != outlet.owner.data()) return;
+    outlet.handler(message);
 }
 void registerService(const QString &name, QObject *service)
 {
@@ -22,19 +62,32 @@ QObject *registeredService(const QString &name)
     NSCAssert(NSThread.isMainThread, @"服务只能在主线程读取");
     return registry().value(name).data();
 }
-FailureCollector::Call::Call(FailureCollector &collector) : m_collector(collector)
+FailureCollector::Call::Call(FailureCollector &collector)
 {
-    m_collector.m_calls.append(&m_error);
+    Q_UNUSED(collector);
+    NSCAssert(NSThread.isMainThread, @"桥接调用只能在主线程收集失败");
+    activeCalls().append(this);
 }
 FailureCollector::Call::~Call()
 {
-    Q_ASSERT(!m_collector.m_calls.isEmpty() && m_collector.m_calls.last() == &m_error);
-    m_collector.m_calls.removeLast();
+    NSCAssert(NSThread.isMainThread, @"桥接调用只能在主线程结束");
+    Q_ASSERT(!activeCalls().isEmpty() && activeCalls().last() == this);
+    activeCalls().removeLast();
+    // 先弹栈，再交给外壳；未认领的内层失败不应被重新记到外层，也不能静默丢失。
+    if (!m_claimed && !m_error.isEmpty()) reportUnclaimedFailure(m_error);
+}
+QString FailureCollector::Call::error() const
+{
+    NSCAssert(NSThread.isMainThread, @"桥接失败只能在主线程认领");
+    m_claimed = true;
+    return m_error;
 }
 bool FailureCollector::collect(const QString &message)
 {
-    if (m_calls.isEmpty()) return false;
-    if (m_calls.last()->isEmpty()) *m_calls.last() = message;
+    NSCAssert(NSThread.isMainThread, @"桥接失败只能在主线程收集");
+    if (activeCalls().isEmpty()) return false;
+    Call *call = activeCalls().last();
+    if (call->m_error.isEmpty()) call->m_error = message;
     return true;
 }
 QString string(NSString *value) { return QString::fromNSString(value ?: @""); }

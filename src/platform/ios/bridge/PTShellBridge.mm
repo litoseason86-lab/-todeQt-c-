@@ -1,4 +1,5 @@
 #import "PTShellBridge.h"
+#include "PTBridgeSupport.h"
 #include "../native/IPadUiPreferences.h"
 #include "../native/IPadShellPreferences.h"
 
@@ -92,8 +93,7 @@
 
 @implementation PTShellBridge {
     std::unique_ptr<QObject> _connections;
-    QString _readError;
-    bool _reading;
+    PTBridgeSupport::FailureCollector _failures;
 }
 - (instancetype)init
 {
@@ -102,6 +102,11 @@
         // QObject 是 Qt 信号的接收上下文，随桥接对象析构自动断连；弱引用防止回调块形成保留环。
         _connections = std::make_unique<QObject>();
         __weak PTShellBridge *weakSelf = self;
+        // 外壳负责调用方未认领的失败；登记不保留桥接，析构时撤销接收上下文。
+        PTBridgeSupport::registerUnclaimedFailureHandler(_connections.get(), [weakSelf](const QString &message) {
+            PTShellBridge *bridge = weakSelf;
+            if (bridge.onFailure) bridge.onFailure(message.toNSString());
+        });
         const auto changed = [weakSelf] {
             PTShellBridge *bridge = weakSelf;
             if (bridge.onChanged) bridge.onChanged();
@@ -109,8 +114,8 @@
         const auto failed = [weakSelf](const QString &message) {
             PTShellBridge *bridge = weakSelf;
             if (!bridge) return;
-            if (bridge->_reading) bridge->_readError = message;
-            else if (bridge.onFailure) bridge.onFailure(message.toNSString());
+            if (!bridge->_failures.collect(message))
+                PTBridgeSupport::reportUnclaimedFailure(message, bridge->_connections.get());
         };
         // 服务均属主线程；AutoConnection 在跨线程发信号时排队到此上下文，Swift 始终在主线程收到回调。
         QObject *context = _connections.get();
@@ -145,6 +150,10 @@
     }
     return self;
 }
+- (void)dealloc
+{
+    PTBridgeSupport::unregisterUnclaimedFailureHandler(_connections.get());
+}
 + (NSData *)wallpaperDataForTheme:(NSString *)theme
 {
     // 白名单只是资源名映射，不接受任意文件路径；图片和 QML 共用同一份 qrc 资源。
@@ -160,20 +169,21 @@
 - (PTShellSnapshot *)readSnapshot
 {
     NSAssert(NSThread.isMainThread, @"读取外壳状态必须在主线程");
-    _readError.clear();
-    _reading = true;
+    PTBridgeSupport::FailureCollector::Call call(_failures);
+    QString readError;
     QVariantMap summary;
     QVariantMap gaps;
     if (!DatabaseManager::instance()->database().isOpen()) {
-        _readError = QStringLiteral("数据库未打开");
+        readError = QStringLiteral("数据库未打开");
     } else {
         summary = StatisticsService::instance()->getTaskSummary();
         gaps = KnowledgeGapService::instance()->getReminderSummary();
-        if (!gaps.value(QStringLiteral("valid")).toBool() && _readError.isEmpty())
-            _readError = QStringLiteral("读取知识缺口失败");
     }
-    _reading = false;
-    return [[PTShellSnapshot alloc] initWithSummary:summary gaps:gaps error:_readError];
+    const QString collected = call.error();
+    if (readError.isEmpty()) readError = collected;
+    if (readError.isEmpty() && !gaps.value(QStringLiteral("valid")).toBool())
+        readError = QStringLiteral("读取知识缺口失败");
+    return [[PTShellSnapshot alloc] initWithSummary:summary gaps:gaps error:readError];
 }
 - (PTShellTimerSnapshot *)readTimerSnapshot
 {

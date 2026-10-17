@@ -68,7 +68,8 @@ public enum GapFormIntent: Identifiable, Equatable {
         categories?.onChanged = { [weak self] in self?.relatedDataChanged() }
         tasks?.onChanged = { [weak self] in self?.relatedDataChanged() }
         bridge.onChanged = { [weak self] in if self?.active == true { self?.refresh() } }
-        bridge.onFailure = { [weak self] message in if self?.active == true { self?.errorMessage = message } }
+        // 后台缺口失败交外壳统一提示，页面读取与写入的 catch 仍保留原错误状态。
+        bridge.onFailure = nil
     }
     public func setActive(_ value: Bool) { active = value; if value { refresh() } }
     public func logicalDayChanged() { if active { refresh() } }

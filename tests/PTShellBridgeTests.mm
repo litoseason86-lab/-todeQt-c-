@@ -1,6 +1,8 @@
 #import "../src/platform/ios/bridge/PTShellBridge.h"
 #import "../src/platform/ios/bridge/PTLifecycleBridge.h"
 #include <QCoreApplication>
+#import "../src/platform/ios/bridge/PTTaskBridge.h"
+#include "../src/platform/ios/bridge/PTBridgeSupport.h"
 #include "../src/platform/ios/native/IPadUiPreferences.h"
 #include "../src/platform/ios/native/IPadShellPreferences.h"
 #include <QSettings>
@@ -21,6 +23,11 @@
 class PTShellBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void taskCallClaimsFailureAcrossBridges_data();
+    void taskCallClaimsFailureAcrossBridges();
+    void unclaimedCrossServiceFailureReachesShellAfterCall();
+    void backgroundFailureHasOneShellOutlet();
+    void nestedCallsAcrossCollectorsKeepTheirOwnFirstFailure();
     void shellPreferencesWriteAndReadBack();
     void shellPreferencesFailureRestoresState_data();
     void shellPreferencesFailureRestoresState();
@@ -693,6 +700,108 @@ void PTShellBridgeTests::sameThemeSelectionStillRefreshesAppearance()
         QCOMPARE(changes, 1);
         QVERIFY([[bridge readSnapshot].appearance isEqualToString:@"theme"]);
     }
+}
+
+// 产品保证：失败认领与桥接订阅顺序无关，调用方始终是唯一的失败接收者。
+void PTShellBridgeTests::taskCallClaimsFailureAcrossBridges_data()
+{
+    QTest::addColumn<bool>("shellFirst");
+    QTest::newRow("shell-first") << true;
+    QTest::newRow("task-first") << false;
+}
+
+// 产品保证：任务调用返回失败时，外壳及其它任务桥接不再同时弹出同一失败。
+void PTShellBridgeTests::taskCallClaimsFailureAcrossBridges()
+{
+    @autoreleasepool {
+        QFETCH(bool, shellFirst);
+        QVERIFY(DatabaseManager::instance()->database().isOpen());
+        // 关闭隔离库，使用明确会发 operationFailed 的读取路径；完成写入失败只记日志，不适合本测试。
+        DatabaseManager::instance()->close();
+        QVERIFY(!DatabaseManager::instance()->database().isOpen());
+        PTShellBridge* shell = shellFirst ? [PTShellBridge new] : nil;
+        PTTaskBridge* caller = [PTTaskBridge new];
+        PTTaskBridge* observer = [PTTaskBridge new];
+        if (!shell) shell = [PTShellBridge new];
+        __block int shellFailures = 0, observerFailures = 0, callerFailures = 0;
+        shell.onFailure = ^(NSString*) { ++shellFailures; };
+        observer.onFailure = ^(NSString*) { ++observerFailures; };
+        caller.onFailure = ^(NSString*) { ++callerFailures; };
+        QSignalSpy emitted(TaskManager::instance(), &TaskManager::operationFailed);
+        QCOMPARE(emitted.count(), 0);
+        PTTaskResult* result = [caller tasksForDate:@"2026-10-17"];
+        QVERIFY(!result.valid);
+        QCOMPARE(emitted.count(), 1);
+        QVERIFY(result.error.length > 0);
+        QCOMPARE(QString::fromNSString(result.error), emitted.at(0).at(0).toString());
+        QCOMPARE(shellFailures, 0);
+        QCOMPARE(observerFailures, 0);
+        QCOMPARE(callerFailures, 0);
+    }
+}
+
+// 产品保证：调用中未由返回值认领的跨服务失败，调用结束后才由外壳提示一次。
+void PTShellBridgeTests::unclaimedCrossServiceFailureReachesShellAfterCall()
+{
+    @autoreleasepool {
+        PTShellBridge* shell = [PTShellBridge new];
+        int failures = 0;
+        int* failureCount = &failures;
+        __block NSString* message = nil;
+        shell.onFailure = ^(NSString* value) { ++*failureCount; message = value; };
+        PTTaskBridge* caller = [PTTaskBridge new];
+        QObject context;
+        int duringCall = -1;
+        // 任务写入成功发变化时，同步产生另一服务的附带失败；任务返回成功不会读取 error()。
+        QObject::connect(TaskManager::instance(), &TaskManager::tasksChanged, &context, [&] {
+            emit FocusTimer::instance()->operationFailed(QStringLiteral("调用内未认领"));
+            emit FocusTimer::instance()->operationFailed(QStringLiteral("后续失败"));
+            duringCall = failures;
+        });
+        NSError* error = nil;
+        QVERIFY([caller createTask:@"成功但附带失败" date:@"2026-10-17" categoryId:-1 estimatedMinutes:0 notes:@"" error:&error] > 0);
+        QVERIFY(error == nil);
+        QCOMPARE(duringCall, 0);
+        QCOMPARE(failures, 1);
+        QCOMPARE(QString::fromNSString(message), QStringLiteral("调用内未认领"));
+    }
+}
+
+// 产品保证：后台失败只交一个存活的外壳出口，释放最近的桥接会恢复之前的出口。
+void PTShellBridgeTests::backgroundFailureHasOneShellOutlet()
+{
+    @autoreleasepool {
+        PTShellBridge* first = [PTShellBridge new];
+        PTShellBridge* latest = [PTShellBridge new];
+        __weak PTShellBridge* released = latest;
+        __block int firstFailures = 0, latestFailures = 0;
+        first.onFailure = ^(NSString*) { ++firstFailures; };
+        latest.onFailure = ^(NSString*) { ++latestFailures; };
+        emit TaskManager::instance()->operationFailed(QStringLiteral("后台失败"));
+        QCOMPARE(firstFailures, 0);
+        QCOMPARE(latestFailures, 1);
+        latest = nil;
+        QVERIFY(released == nil);
+        emit FocusTimer::instance()->operationFailed(QStringLiteral("出口恢复"));
+        QCOMPARE(firstFailures, 1);
+        QCOMPARE(latestFailures, 1);
+    }
+}
+
+// 产品保证：跨桥接的嵌套调用各自保留首条失败，认领内层后不会吞掉或覆盖外层失败。
+void PTShellBridgeTests::nestedCallsAcrossCollectorsKeepTheirOwnFirstFailure()
+{
+    PTBridgeSupport::FailureCollector first, second;
+    PTBridgeSupport::FailureCollector::Call outer(first);
+    QVERIFY(second.collect(QStringLiteral("外层首条")));
+    {
+        PTBridgeSupport::FailureCollector::Call inner(second);
+        QVERIFY(first.collect(QStringLiteral("内层首条")));
+        QVERIFY(second.collect(QStringLiteral("内层后续")));
+        QCOMPARE(inner.error(), QStringLiteral("内层首条"));
+    }
+    QVERIFY(second.collect(QStringLiteral("外层后续")));
+    QCOMPARE(outer.error(), QStringLiteral("外层首条"));
 }
 
 QTEST_GUILESS_MAIN(PTShellBridgeTests)
