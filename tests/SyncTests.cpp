@@ -809,6 +809,7 @@ private slots:
     void trashBothDevicesDeletingTheSameRecordListsOneAndRestoresOnce();
     void trashExpiryPurgeConvergesWhetherBothDevicesOrOnlyOneExpireIt();
     void trashChangesFromSyncNotifyTheTrashPage();
+    void phaseOneV21TrashAcquiresSyncWithoutVersionBump_data();
     void phaseOneV21TrashAcquiresSyncWithoutVersionBump();
     void trashSnapshotsReplaceTheTrashOnJoinAndRollback();
 
@@ -4174,10 +4175,21 @@ void SyncTests::trashChangesFromSyncNotifyTheTrashPage()
     QCOMPARE(spy.count(), 3);
 }
 
+void SyncTests::phaseOneV21TrashAcquiresSyncWithoutVersionBump_data()
+{
+    // 废纸篓同步补齐不抬高当前库版本；旧 v21 库仍完成后续必要迁移。
+    QTest::addColumn<int>("initialVersion");
+    QTest::newRow("legacy-v21") << 21;
+    QTest::newRow("current-schema") << DatabaseManager::kCurrentSchemaVersion;
+}
+
 void SyncTests::phaseOneV21TrashAcquiresSyncWithoutVersionBump()
 {
-    // 产品保证：阶段 1 留下的 v21 库（废纸篓里已有内容、还没有同步列）打开之后补齐身份、进待发送队列、
-    // 装上触发器，原有内容一字不动，版本号不变——已经装过阶段 1 的设备升级之后，废纸篓里现有的内容也会同步出去。
+    // 产品保证：废纸篓补齐同步列时身份、队列和触发器完整，原内容不变；当前版本不升级，v21 只因后续迁移升到当前版本。
+    QFETCH(int, initialVersion);
+    // 测试库由当前代码建出，循环计数表必须保留，避免把补同步列误测成 v22 缺表修补。
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pomodoro_cycle_state'")), 1);
+    QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state WHERE singleton_id=1")), 1);
     for (const auto& spec : SyncSchema::triggers()) {
         if (spec.first.startsWith(QStringLiteral("trash_items_sync_"))) {
             QVERIFY(exec(QStringLiteral("DROP TRIGGER %1").arg(spec.first)));
@@ -4193,9 +4205,9 @@ void SyncTests::phaseOneV21TrashAcquiresSyncWithoutVersionBump()
     QVERIFY(exec(QStringLiteral("INSERT INTO trash_items (kind, origin_sync_id, title, payload, deleted_at) "
                                 "VALUES ('memo', 'origin-two', '阶段一的备忘', '%1', '2026-10-06T01:00:00.000Z')")
                      .arg(QString(specialPayload).replace(QLatin1Char('\''), QStringLiteral("''")))));
-    QVERIFY(exec(QStringLiteral("PRAGMA user_version = 21")));
-    // 前提：没有同步列、索引、触发器，也没有版本和队列；数据在；版本是 21。
-    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 21);
+    QVERIFY(exec(QStringLiteral("PRAGMA user_version = %1").arg(initialVersion)));
+    // 前提：没有同步列、索引、触发器，也没有字段版本和队列；原内容在，库版本与本组起点一致。
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), initialVersion);
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM pragma_table_info('trash_items') WHERE name = 'sync_id'")), 0);
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE name = 'idx_trash_items_sync_id'")), 0);
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' "
@@ -4221,7 +4233,9 @@ void SyncTests::phaseOneV21TrashAcquiresSyncWithoutVersionBump()
 
     QVERIFY(DatabaseManager::instance()->createTables());
 
-    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 21);
+    // 当前版本起点直接与原版本比较，单独证明补同步列不推版本号；v21 起点还需完成 v22 迁移。
+    const int expectedVersion = initialVersion == 21 ? DatabaseManager::kCurrentSchemaVersion : initialVersion;
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), expectedVersion);
     QVERIFY(DatabaseManager::trashSchemaIsValid(db()));
     QCOMPARE(snapshotOf(), before); // 原数据一字不动（含编号）
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id IS NULL OR sync_id = ''")), 0);
@@ -4255,7 +4269,7 @@ void SyncTests::phaseOneV21TrashAcquiresSyncWithoutVersionBump()
     // 再打开一次：身份不变，已经发出去的不会重新排队。
     QVERIFY(markEverythingSent());
     QVERIFY(DatabaseManager::instance()->createTables());
-    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 21);
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), expectedVersion);
     for (const QString& identity : identities) {
         QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items WHERE sync_id = '%1'").arg(identity)), 1);
         QVERIFY(!queued(QStringLiteral("trash_items"), identity));

@@ -2,6 +2,7 @@
 
 #include "AppSettings.h"
 #include "FocusTimer.h"
+#include "FocusSessionController.h"
 
 TrayController::TrayController(FocusTimer* timer, QObject* parent)
     : QObject(parent)
@@ -115,20 +116,18 @@ void TrayController::requestResume()
 
 void TrayController::requestStop()
 {
-    if (m_timer->requiresFreeFocusStopConfirmation(
-            AppSettings::instance()->freeTimerWarningHours())) {
+    // 结束规则统一由控制器执行；菜单栏只把结构化结果转成宿主可展示的意图。
+    FocusSessionController controller(m_timer, nullptr, AppSettings::instance(), nullptr);
+    const QVariantMap outcome = controller.endCurrent();
+    if (outcome.value(QStringLiteral("result")).toString() == QLatin1String("needsConfirmation")) {
         // 菜单栏没有弹窗宿主；先召回主窗口，再让 FocusView 打开与页面按钮相同的确认框。
         emit showWindowRequested();
         emit longFreeFocusStopRequested();
         return;
     }
-    // stopFocus() 会把模式复位，判断轮次要用收尾前的模式。
-    const bool wasPomodoro = m_timer->mode() == FocusTimer::PomodoroMode;
-    // 只有收尾成功才重置轮次；失败时仍保留原会话，允许重试。
-    // 口径与专注页、仪表盘一致：只有结束番茄循环才归零连续计数，
-    // 自由专注与主动休息不打断已攒下的番茄轮次。
-    if (m_timer->stopFocus() && wasPomodoro) {
-        m_timer->resetPomodoroCount();
+    if (outcome.value(QStringLiteral("result")).toString() == QLatin1String("failed")) {
+        emit showWindowRequested();
+        emit stopFailed(outcome.value(QStringLiteral("error")).toString());
     }
 }
 

@@ -75,7 +75,18 @@ bool FocusSessionController::needsLongFreeStopConfirmation() const
 
 QVariantMap FocusSessionController::endCurrent()
 {
+    return endCurrentImpl(false);
+}
+
+QVariantMap FocusSessionController::endCurrentImpl(bool resetCycle)
+{
     if (!m_timer || (!m_timer->hasActiveSession() && m_timer->phase() == FocusTimer::NoPhase)) {
+        if (m_timer && resetCycle) {
+            return m_timer->resetPomodoroCount()
+                ? makeEndResult(QStringLiteral("ended"), QStringLiteral("pomodoro"))
+                : makeEndResult(QStringLiteral("failed"), QStringLiteral("pomodoro"), false,
+                                QStringLiteral("番茄循环保存失败，请重试"));
+        }
         return makeEndResult(QStringLiteral("none"));
     }
 
@@ -89,7 +100,7 @@ QVariantMap FocusSessionController::endCurrent()
     // 以下三路用的是计时器的真实模式。主动休息 mode 2、phase 3；番茄 mode 1（含番茄间的休息段，
     // 那时没有数据库会话，hasActiveSession 为假，仍必须允许结束）；其余按自由专注处理。
     if (m_timer->mode() == FocusTimer::ManualRestMode && m_timer->phase() == FocusTimer::ManualRestPhase) {
-        if (!m_timer->stopFocus()) {
+        if (!(resetCycle ? m_timer->stopAndResetPomodoroCycle() : m_timer->stopFocus())) {
             return makeEndResult(QStringLiteral("failed"), QStringLiteral("manualRest"), false,
                                  QStringLiteral("结束休息失败，请重试"));
         }
@@ -97,19 +108,18 @@ QVariantMap FocusSessionController::endCurrent()
     }
 
     if (m_timer->mode() == FocusTimer::PomodoroMode) {
-        if (!m_timer->stopFocus()) {
+        if (!m_timer->stopAndResetPomodoroCycle()) {
             return makeEndResult(QStringLiteral("failed"), QStringLiteral("pomodoro"), false,
                                  QStringLiteral("番茄结束失败，请重试"));
         }
         // 完全结束番茄循环：连续计数归零，下一轮长休息节奏从头开始。
-        m_timer->resetPomodoroCount();
         return makeEndResult(QStringLiteral("ended"), QStringLiteral("pomodoro"), discarded);
     }
 
     if (needsLongFreeStopConfirmation()) {
         return makeEndResult(QStringLiteral("needsConfirmation"), QStringLiteral("free"));
     }
-    if (!m_timer->stopFocus()) {
+    if (!(resetCycle ? m_timer->stopAndResetPomodoroCycle() : m_timer->stopFocus())) {
         return makeEndResult(QStringLiteral("failed"), QStringLiteral("free"), false,
                              QStringLiteral("专注保存失败，请重试"));
     }
@@ -118,21 +128,8 @@ QVariantMap FocusSessionController::endCurrent()
 
 QVariantMap FocusSessionController::endPomodoroCycle()
 {
-    const QVariantMap outcome = endCurrent();
-    // 没有计时器时 endCurrent 也报 none，这里不能再去解引用。
-    if (!m_timer) {
-        return outcome;
-    }
-    const QString result = outcome.value(QStringLiteral("result")).toString();
-    if (result == QLatin1String("none")) {
-        m_timer->resetPomodoroCount();
-        return makeEndResult(QStringLiteral("ended"), QStringLiteral("pomodoro"));
-    }
-    if (result == QLatin1String("ended")) {
-        // endCurrent 在番茄模式下已归零；会话若是按自由模式结束的，这里补上。
-        m_timer->resetPomodoroCount();
-    }
-    return outcome;
+    // 清零意图必须进入计时器事务，不能结束记录提交后另写一次计数。
+    return endCurrentImpl(true);
 }
 
 QVariantMap FocusSessionController::handleTaskCompleted(int taskId)

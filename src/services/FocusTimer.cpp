@@ -13,6 +13,8 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QtGlobal>
+#include <QScopedValueRollback>
+#include <limits>
 
 namespace {
 // 恢复时单调时钟与墙钟「走过的时长」允许的误差。自动校时的微调通常不到一秒；
@@ -82,10 +84,7 @@ void FocusTimer::finishExpiredPhase(bool settledOffline)
         // 手动提前结束走 stopFocus，不经过这里，不应算作完成一个番茄。计数先于完成信号，
         // 让 QML 的长休息判定读到已更新的值。离线结算同样计数：这个番茄确实完成了。
         // 以结算结果为准，而不是只看阶段：时长不足被整条丢弃的会话不推进长休息节奏。
-        if (completedPhase == WorkPhase && countedAsPomodoro) {
-            ++m_completedPomodoros;
-            emit completedPomodorosChanged();
-        }
+        // 计数已经与自然完成记录同事务提交，不能在这里再次增加。
         if (settledOffline) {
             emit phaseSettledOffline(completedPhase);
         } else {
@@ -209,6 +208,7 @@ bool FocusTimer::startBreakForTask(int breakSeconds, int taskId, const QString& 
 
 bool FocusTimer::startManualRest()
 {
+    if (m_cycleNotificationInProgress) return false;
     // 平台不开放主动休息时（目前是 iPad）服务层兜底拒绝，与界面隐藏入口同一个开关。
     if (!m_manualRestAllowed) {
         qWarning() << "Failed to start manual rest: free timing is disabled on this platform";
@@ -254,6 +254,7 @@ bool FocusTimer::startManualRest()
 
 bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& taskTitle)
 {
+    if (m_cycleNotificationInProgress) return false;
     if (hasActiveTimer()) {
         qWarning() << "Failed to start break: focus timer already has an active session"
                    << "sessionId=" << m_sessionId << "phase=" << m_phase;
@@ -300,6 +301,7 @@ bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& 
 
 bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMode mode, TimerPhase phase, int targetSeconds)
 {
+    if (m_cycleNotificationInProgress) return false;
     // 同一时间只允许一个活动会话，否则专注时长统计会被重叠记录污染。
     if (hasActiveTimer()) {
         qWarning() << "Failed to start focus: focus timer already has an active session"
@@ -400,6 +402,7 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
 
 bool FocusTimer::pauseFocus()
 {
+    if (m_cycleNotificationInProgress) return false;
     if (!m_isRunning) {
         return true;
     }
@@ -433,6 +436,7 @@ bool FocusTimer::pauseFocus()
 
 bool FocusTimer::resumeFocus()
 {
+    if (m_cycleNotificationInProgress) return false;
     const bool canResumeBreak = m_mode == PomodoroMode && m_phase == BreakPhase;
     const bool canResumeManualRest = m_mode == ManualRestMode && m_phase == ManualRestPhase;
     if (m_sessionId == -1 && !canResumeBreak && !canResumeManualRest) {
@@ -465,6 +469,7 @@ bool FocusTimer::resumeFocus()
 
 bool FocusTimer::stopFocus()
 {
+    if (m_cycleNotificationInProgress) return false;
     if (m_phase == BreakPhase || m_phase == ManualRestPhase) {
         // 休息保存和活动快照清理必须在同一事务内，否则失败重试可能重复生成记录。
         const bool wasRunning = m_isRunning;
@@ -496,7 +501,8 @@ bool FocusTimer::stopFocus()
                     qWarning() << "Failed to save rest session:" << query.lastError().text();
                 }
             }
-            saved = saved && clearActiveState(db) && db.commit();
+            saved = saved && (!m_resetCycleOnStop || writeCycleCount(db, 0))
+                && clearActiveState(db) && db.commit();
             if (!saved) {
                 db.rollback();
             }
@@ -509,6 +515,7 @@ bool FocusTimer::stopFocus()
             }
             return false;
         }
+        if (m_resetCycleOnStop) applyCycleCount(0);
         resetSession();
         emit runningStateChanged();
         emit currentTaskChanged();
@@ -595,6 +602,7 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion,
                                       bool* countedAsPomodoro,
                                       int correctedDurationSeconds)
 {
+    if (m_cycleNotificationInProgress) return false;
     if (countedAsPomodoro) {
         *countedAsPomodoro = false;
     }
@@ -770,16 +778,43 @@ QString FocusTimer::sessionLogicalDate() const
         .toString(Qt::ISODate);
 }
 
-void FocusTimer::resetPomodoroCount()
+bool FocusTimer::writeCycleCount(QSqlDatabase& db, int count)
 {
-    if (m_completedPomodoros == 0) {
-        return;
-    }
-    m_completedPomodoros = 0;
-    if (hasActiveTimer() && !persistActiveState()) {
-        qWarning() << "Failed to persist reset pomodoro count";
-    }
+    QSqlQuery query(db);
+    query.prepare(QStringLiteral("UPDATE pomodoro_cycle_state SET completed_pomodoros=:count WHERE singleton_id=1"));
+    query.bindValue(QStringLiteral(":count"), count);
+    return query.exec() && query.numRowsAffected() == 1;
+}
+
+void FocusTimer::applyCycleCount(int count)
+{
+    if (m_completedPomodoros == count) return;
+    m_completedPomodoros = count;
+    // 此通知可能发生在事务已提交而旧活动内存尚待收尾时，拒绝回调再次结束或清零。
+    QScopedValueRollback<bool> notifying(m_cycleNotificationInProgress, true);
     emit completedPomodorosChanged();
+}
+
+bool FocusTimer::resetPomodoroCount()
+{
+    if (m_cycleNotificationInProgress) return false;
+    QSqlDatabase db = DatabaseManager::instance()->database();
+    if (!db.isOpen() || !db.transaction()) return false;
+    // 空档也要写入，不能只看内存为零；换库后内存可能属于另一份数据库。
+    if (!writeCycleCount(db, 0) || !db.commit()) {
+        db.rollback();
+        return false;
+    }
+    applyCycleCount(0);
+    return true;
+}
+
+bool FocusTimer::stopAndResetPomodoroCycle()
+{
+    if (!hasActiveTimer()) return resetPomodoroCount();
+    // 作用域限定显式清零意图，普通休息自然结束仍保留循环。
+    QScopedValueRollback<bool> intent(m_resetCycleOnStop, true);
+    return stopFocus();
 }
 
 bool FocusTimer::hasActiveTimer() const
@@ -858,18 +893,23 @@ bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion,
         return false;
     }
 
-    if (!clearActiveState(db) || !db.commit()) {
+    const qint64 nextCount = m_resetCycleOnStop ? 0
+        : qint64(m_completedPomodoros) + (completedPomodoro ? 1 : 0);
+    if (nextCount > std::numeric_limits<int>::max()
+        || !writeCycleCount(db, int(nextCount)) || !clearActiveState(db) || !db.commit()) {
         qWarning() << "Failed to finish focus session transaction:" << db.lastError().text()
                    << "sessionId=" << m_sessionId;
         db.rollback();
         return false;
     }
 
+    applyCycleCount(int(nextCount));
     return true;
 }
 
 bool FocusTimer::discardFocusSession()
 {
+    if (m_cycleNotificationInProgress) return false;
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to discard invalid focus session: database is not open"
@@ -904,13 +944,14 @@ bool FocusTimer::discardFocusSession()
         return false;
     }
 
-    if (!clearActiveState(db) || !db.commit()) {
+    if ((m_resetCycleOnStop && !writeCycleCount(db, 0)) || !clearActiveState(db) || !db.commit()) {
         qWarning() << "Failed to discard focus session transaction:" << db.lastError().text()
                    << "sessionId=" << m_sessionId;
         db.rollback();
         return false;
     }
 
+    if (m_resetCycleOnStop) applyCycleCount(0);
     return true;
 }
 
@@ -1058,6 +1099,7 @@ void FocusTimer::handleTaskRestored(int taskId, const QList<int>& focusSessionId
 
 bool FocusTimer::restoreInterruptedSession()
 {
+    if (m_cycleNotificationInProgress) return false;
     if (hasActiveTimer()) {
         qWarning() << "Failed to restore focus state: timer already active";
         return false;
@@ -1067,6 +1109,17 @@ bool FocusTimer::restoreInterruptedSession()
     if (!db.isOpen()) {
         return false;
     }
+
+    // 循环属于当前数据库，不依赖活动行；换库与旧备份迁移后也只读取当前库事实。
+    QSqlQuery cycle(db);
+    if (!cycle.exec(QStringLiteral("SELECT completed_pomodoros FROM pomodoro_cycle_state "
+                                   "WHERE singleton_id=1 AND typeof(completed_pomodoros)='integer' "
+                                   "AND completed_pomodoros BETWEEN 0 AND 2147483647")) || !cycle.next()) {
+        return false;
+    }
+    const int cycleCount = cycle.value(0).toInt();
+    cycle.finish();
+    applyCycleCount(cycleCount);
 
     QSqlQuery stateQuery(db);
     if (!stateQuery.exec(QStringLiteral(R"SQL(
@@ -1080,14 +1133,7 @@ bool FocusTimer::restoreInterruptedSession()
     }
 
     if (!stateQuery.next()) {
-        // 换库或恢复不含活动状态的备份时，内存可能还保留上一库的番茄循环计数。
-        // 数据库没有活动状态就没有可继承的计数，必须清零并通知 QML 更新长休息判定。
-        const bool pomodoroCountChanged = m_completedPomodoros != 0;
-        m_completedPomodoros = 0;
         const bool cleanupSucceeded = cleanupOrphanedSessions();
-        if (pomodoroCountChanged) {
-            emit completedPomodorosChanged();
-        }
         return cleanupSucceeded;
     }
 
@@ -1098,7 +1144,6 @@ bool FocusTimer::restoreInterruptedSession()
     const int restoredMode = stateQuery.value(4).toInt();
     const int restoredPhase = stateQuery.value(5).toInt();
     const int restoredTarget = qMax(0, stateQuery.value(6).toInt());
-    const int restoredPomodoros = qMax(0, stateQuery.value(7).toInt());
     // 恢复锚点（旧快照这几列为空或默认 0，按「未在运行」处理，不补任何离线时段）。
     const bool restoredRunning = stateQuery.value(10).toInt() == 1;
     const qint64 restoredAccumulatedMs = stateQuery.value(11).toLongLong();
@@ -1172,7 +1217,7 @@ bool FocusTimer::restoreInterruptedSession()
     m_mode = static_cast<TimerMode>(restoredMode);
     m_phase = static_cast<TimerPhase>(restoredPhase);
     m_targetSeconds = restoredTarget;
-    m_completedPomodoros = restoredPomodoros;
+    m_completedPomodoros = cycleCount;
     m_runSegmentStartNsecs = -1;
     m_runSegmentStartUtcMs = -1;
     m_timer.stop();
@@ -1235,6 +1280,7 @@ bool FocusTimer::restoreInterruptedSession()
 
 void FocusTimer::prepareForShutdown()
 {
+    if (m_cycleNotificationInProgress) return;
     if (!hasActiveTimer()) {
         return;
     }
@@ -1260,6 +1306,7 @@ void FocusTimer::prepareForShutdown()
 
 void FocusTimer::checkpoint()
 {
+    if (m_cycleNotificationInProgress) return;
     if (!hasActiveTimer()) {
         return;
     }

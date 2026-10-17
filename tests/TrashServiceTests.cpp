@@ -1463,7 +1463,7 @@ void TrashServiceTests::upgradingFromV20AddsAnEmptyTrashAndKeepsData()
 
     QVERIFY(DatabaseManager::instance()->createTables());
 
-    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), 21);
+    QCOMPARE(count(QStringLiteral("PRAGMA user_version")), DatabaseManager::kCurrentSchemaVersion);
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM trash_items")), 0);
     QVERIFY(DatabaseManager::trashSchemaIsValid(db()));
     QCOMPARE(count(QStringLiteral("SELECT COUNT(*) FROM tasks WHERE title = '升级前任务'")), 1);

@@ -174,6 +174,7 @@ private slots:
     void backupRejectsRuntimeProtectedDestinations();
     void backupCapturesAllBusinessTables();
     void backupWorksUnderWalMode();
+    void restoreRestoresIndependentPomodoroCycle();
     void backupConnectionClosePreservesMainWriteLock_data();
     void backupConnectionClosePreservesMainWriteLock();
     void oversizedBackupIsRejectedBeforeRestore_data();
@@ -550,6 +551,30 @@ void BackupServiceTests::backupWorksUnderWalMode()
     const QVariantMap info = BackupService::instance()->readBackupInfo(backupFile());
     QCOMPARE(info.value(QStringLiteral("valid")).toBool(), true);
     QCOMPARE(info.value(QStringLiteral("taskCount")).toInt(), 1);
+}
+
+void BackupServiceTests::restoreRestoresIndependentPomodoroCycle()
+{
+    // 恢复整库备份必须恢复备份时的循环计数，不能继承当前库或内存中的另一轮计数。
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral("UPDATE pomodoro_cycle_state SET completed_pomodoros=2")));
+    }
+    QVERIFY(FocusTimer::instance()->restoreInterruptedSession());
+    QCOMPARE(FocusTimer::instance()->completedPomodoros(), 2);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    {
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec(QStringLiteral("UPDATE pomodoro_cycle_state SET completed_pomodoros=5")));
+    }
+    QVERIFY(FocusTimer::instance()->restoreInterruptedSession());
+    QCOMPARE(FocusTimer::instance()->completedPomodoros(), 5);
+    QVERIFY(BackupService::instance()->restoreBackup(backupFile()));
+    QCOMPARE(FocusTimer::instance()->completedPomodoros(), 2);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("SELECT completed_pomodoros FROM pomodoro_cycle_state")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 2);
 }
 
 void BackupServiceTests::corruptedBackupIsRejected()

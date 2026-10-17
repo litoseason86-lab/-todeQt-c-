@@ -4889,7 +4889,8 @@ void ServiceTests::migrationV17DropsLongGoalsAfterSnapshot()
     // v19 复核过：v19 那一步只推版本号、不建快照，结论不变。
     // v20 复核：本轮 v17 已留过快照，新增备忘录复用该快照，仍只新增一份。
     // v21 复核：废纸篓表新增前同样走「一次启动只拍一份」的防重，本轮 v17 已留过快照，仍只新增一份。
-    QCOMPARE(DatabaseManager::kCurrentSchemaVersion, 21);
+    // v22循环表迁移同样复用本轮快照，仍须保证只留一份升级前数据。
+    QCOMPARE(DatabaseManager::kCurrentSchemaVersion, 22);
 
     // 删之前留了一份快照，里面那条目标还在：用户真想找回，数据目录里有。
     QStringList newSnapshots = dir.entryList(snapshotPattern, QDir::Files);
@@ -6978,11 +6979,14 @@ void ServiceTests::pomodoroBreakRestoresTaskContextAndCount()
     const int taskId = insertTaskRow(QStringLiteral("跨启动任务"), QDate::currentDate());
     QVERIFY(taskId > 0);
     timer->m_completedPomodoros = 3;
+    // v22计数独立于活动镜像；测试前提同时设置持久化事实，不能靠内存伪造已完成循环。
+    QSqlQuery cycle(DatabaseManager::instance()->database());
+    QVERIFY(cycle.exec(QStringLiteral("UPDATE pomodoro_cycle_state SET completed_pomodoros=3 WHERE singleton_id=1")));
     QVERIFY(timer->startBreakForTask(600, taskId, QStringLiteral("跨启动任务")));
     setFocusElapsedSeconds(timer, 120);
     timer->prepareForShutdown();
 
-    // 模拟进程重建后的初始内存，恢复结果只能来自 active_focus_state。
+    // 模拟进程重建后的初始内存，阶段来自活动镜像，计数来自独立循环表。
     timer->resetSession();
     timer->m_completedPomodoros = 0;
     QVERIFY(timer->restoreInterruptedSession());

@@ -99,6 +99,7 @@ private slots:
     void menuActionsForwardToTimer();
     void menuStopRequestsConfirmationForLongFreeFocus();
     void menuStopKeepsPomodoroStreakOutsidePomodoroMode();
+    void menuStopCycleFailureKeepsActiveSession();
     void pausedStateOffersResumeAndKeepsTiming();
     void breakStateIsDistinguished();
     void manualRestStateIsDistinguished();
@@ -269,6 +270,27 @@ void PlatformControlTests::menuStopKeepsPomodoroStreakOutsidePomodoroMode()
         pomodoroTaskId, QStringLiteral("番茄任务"), 25 * 60));
     controller.requestStop();
     QCOMPARE(FocusTimer::instance()->completedPomodoros(), 0);
+}
+
+void PlatformControlTests::menuStopCycleFailureKeepsActiveSession()
+{
+    // 菜单栏结束时循环清零失败必须保留活动会话，不能先停表再忽略计数保存失败。
+    auto* timer = FocusTimer::instance();
+    TrayController controller(timer);
+    const int taskId = insertTaskRow(QStringLiteral("菜单结束失败"));
+    QVERIFY(taskId > 0);
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("菜单结束失败"), 25 * 60));
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("CREATE TRIGGER fail_cycle BEFORE UPDATE ON pomodoro_cycle_state "
+                                     "BEGIN SELECT RAISE(ABORT, 'cycle failure'); END")));
+    QSignalSpy failed(&controller, &TrayController::stopFailed);
+    controller.requestStop();
+    QVERIFY(timer->hasActiveSession());
+    QCOMPARE(failed.count(), 1);
+    QVERIFY(!failed.first().first().toString().isEmpty());
+    QVERIFY(query.exec(QStringLiteral("DROP TRIGGER fail_cycle")));
+    controller.requestStop();
+    QVERIFY(!timer->hasActiveSession());
 }
 
 void PlatformControlTests::pausedStateOffersResumeAndKeepsTiming()

@@ -62,6 +62,7 @@ signals:
     // 主窗口的显示与退出由宿主（QML/main）落实：菜单栏只发意图，不直接操作窗口或进程。
     void showWindowRequested();
     void longFreeFocusStopRequested();
+    void stopFailed(const QString& error);
     void quitRequested();
 
 private slots:

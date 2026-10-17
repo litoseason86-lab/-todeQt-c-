@@ -894,6 +894,18 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion, c
                                                pragmaVersion >= 21,
                                                &reason);
             }
+            if (reason.isEmpty() && pragmaVersion >= 22) {
+                // v22循环计数是独立业务事实；缺失或越界不能在恢复后静默变成零。
+                QSqlQuery cycle(database);
+                if (!cycle.exec(QStringLiteral("SELECT singleton_id, completed_pomodoros, "
+                                                "typeof(completed_pomodoros) FROM pomodoro_cycle_state"))
+                    || !cycle.next() || cycle.value(0).toInt() != 1
+                    || cycle.value(2).toString() != QLatin1String("integer")
+                    || cycle.value(1).toLongLong() < 0 || cycle.value(1).toLongLong() > 2147483647
+                    || cycle.next()) {
+                    reason = QStringLiteral("备份中的番茄循环状态缺失或无效");
+                }
+            }
 
             // 备份是数据，不是可信的数据库程序。
             //

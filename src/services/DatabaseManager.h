@@ -17,7 +17,7 @@ public:
     // v19 同步第二期（计划 051）：课表、知识缺口、目标倒计时也参与同步；升级后 v18 的应用打不开这个库。
     // v20 新增备忘录。旧应用不认识这张表，必须拒绝打开已经升级的数据库。
     // v21 新增废纸篓表 trash_items（计划 054）；旧应用不认识它，删除时不会写入，必须拒绝打开已升级的库。
-    static constexpr int kCurrentSchemaVersion = 21;
+    static constexpr int kCurrentSchemaVersion = 22;
 
     static DatabaseManager* instance();
     // 出厂的课表节次（开始、结束的分钟数，按节次先后）。建库时种入；同步据此判断节次是不是还没改过的默认值。
@@ -125,6 +125,10 @@ private:
     // 废纸篓表：建表与 v21 版本号分开，表在版本号之前建好，失败可在下次打开时继续补齐。
     bool createTrashTable();
     bool migrateToVersion21();
+    // v22独立保存本机番茄循环；旧版没有同步写此表，必须拒绝新库以免计数陈旧。
+    bool migrateToVersion22();
+    // 本机循环计数可从零重新开始；内容缺失或无效时事务内自愈，结构不可读仍拒绝打开。
+    bool ensurePomodoroCycleState();
     // 目标倒计时表原来由倒计时服务第一次用到时才建（CountdownService::initializeDatabase）。
     // 它要参与同步，迁移时表必须已经在，所以建表流程里也建一次，结构与服务里的相同。
     bool createCountdownGoalsTable();

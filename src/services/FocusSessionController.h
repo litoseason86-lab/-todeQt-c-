@@ -108,6 +108,7 @@ public:
     Q_INVOKABLE QVariantMap finishLongFree(bool recordSession, int correctedSeconds);
 
 private:
+    QVariantMap endCurrentImpl(bool resetCycle);
     FocusTimer* m_timer = nullptr;
     // 逻辑今日的「现在」。默认取系统时钟；测试经友元注入固定时刻，才能稳定构造「自然日与逻辑日不同」的凌晨场景。
     friend class FocusSessionControllerTests;

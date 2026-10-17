@@ -23,6 +23,15 @@
 namespace {
 constexpr auto kConnectionName = "PomodoroTodoConnection";
 
+QString pomodoroCycleStateTableSql()
+{
+    // 迁移与已升级库补表共用约束，避免两条建表路径对计数类型或范围的定义分叉。
+    return QStringLiteral(
+        "CREATE TABLE IF NOT EXISTS pomodoro_cycle_state (singleton_id INTEGER PRIMARY KEY CHECK(singleton_id=1), "
+        "completed_pomodoros INTEGER NOT NULL CHECK(typeof(completed_pomodoros)='integer' "
+        "AND completed_pomodoros BETWEEN 0 AND 2147483647))");
+}
+
 bool execSql(QSqlQuery& query, const QString& sql, const char* context)
 {
     if (!query.exec(sql)) {
@@ -576,6 +585,14 @@ bool DatabaseManager::createTables()
         return false;
     }
     if (version < 21 && !migrateToVersion21()) {
+        return false;
+    }
+    if (version < 22 && !migrateToVersion22()) {
+        return false;
+    }
+    // 已升级库丢失或损坏的循环计数只影响长休息节奏，告警后从零重新开始；
+    // 不从可能陈旧的活动镜像猜测计数。外部备份仍由恢复入口严格校验，不在这里放宽。
+    if (!ensurePomodoroCycleState()) {
         return false;
     }
 
@@ -2626,6 +2643,93 @@ bool DatabaseManager::knowledgeGapForeignKeysAreValid(const QSqlDatabase& db)
         matchedColumns.append(fromColumn);
     }
     return matchedColumns.size() == contracts.size();
+}
+
+bool DatabaseManager::ensurePomodoroCycleState()
+{
+    const bool missingTable = !tableExists(QStringLiteral("pomodoro_cycle_state"));
+    // VACUUM 快照必须在事务外、建表前拍下，且复用本次启动只拍一份的守卫。
+    if (missingTable && !backupDatabaseBeforeMigration()) {
+        return false;
+    }
+    if (!m_db.transaction()) {
+        qWarning() << "无法开始番茄循环状态修补事务" << m_db.lastError().text();
+        return false;
+    }
+    QSqlQuery query(m_db);
+    if ((missingTable && !query.exec(pomodoroCycleStateTableSql()))
+        || !query.exec(QStringLiteral("SELECT singleton_id, completed_pomodoros, typeof(singleton_id), "
+                                      "typeof(completed_pomodoros) FROM pomodoro_cycle_state"))) {
+        // 缺列等不可读结构不做猜测性重建；回滚本步，保留原库供用户排查。
+        qWarning() << "读取番茄循环状态失败" << query.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    const bool valid = query.next()
+        && query.value(2).toString() == QLatin1String("integer") && query.value(0).toLongLong() == 1
+        && query.value(3).toString() == QLatin1String("integer")
+        && query.value(1).toLongLong() >= 0 && query.value(1).toLongLong() <= 2147483647
+        && !query.next();
+    if (query.lastError().isValid()) {
+        qWarning() << "读取番茄循环状态失败" << query.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    query.finish();
+    // 无行、多行、类型或范围错误都只能恢复为单行零计数；清空与补种必须原子提交，
+    // 插入或提交失败时不能把旧内容留成已清空的半修补状态。
+    const bool repaired = valid || (query.exec(QStringLiteral("DELETE FROM pomodoro_cycle_state"))
+        && query.exec(QStringLiteral("INSERT INTO pomodoro_cycle_state (singleton_id, completed_pomodoros) VALUES (1, 0)")));
+    if (!repaired || !m_db.commit()) {
+        qWarning() << "番茄循环状态修补失败" << query.lastError().text() << m_db.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    if (missingTable) {
+        qWarning() << "番茄循环状态表缺失，已补建并将计数重置为 0";
+    } else if (!valid) {
+        qWarning() << "番茄循环状态缺失或无效，已重置为 0";
+    }
+    return true;
+}
+
+bool DatabaseManager::migrateToVersion22()
+{
+    // 迁移快照先于 DDL（表结构变更）；建表、继承活动期计数及版本推进必须一起提交。
+    // 旧版空档已丢失的计数无法重建，不从历史总数推断用户上次结束循环的时间。
+    // 防御性重跑可能只需推进版本；已有表不重建、不覆盖事实，也不额外消耗快照名额。
+    if ((!tableExists(QStringLiteral("pomodoro_cycle_state")) && !backupDatabaseBeforeMigration())
+        || !m_db.transaction()) return false;
+    QSqlQuery query(m_db);
+    bool ok = query.exec(pomodoroCycleStateTableSql())
+        && query.exec(QStringLiteral("SELECT completed_pomodoros, typeof(completed_pomodoros) "
+                                     "FROM active_focus_state WHERE singleton_id=1"));
+    qint64 inheritedCount = 0;
+    bool invalidLegacyCount = false;
+    if (ok && query.next()) {
+        // 旧活动行的无效计数不能阻止打开数据库；只接受 SQLite 实际存储的整数，
+        // 不把文本或小数经 QVariant 转换后误当作正常计数。没有活动行则沿用从零开始的语义。
+        invalidLegacyCount = query.value(1).toString() != QLatin1String("integer")
+            || query.value(0).toLongLong() < 0 || query.value(0).toLongLong() > 2147483647;
+        if (!invalidLegacyCount) inheritedCount = query.value(0).toLongLong();
+    }
+    ok = ok && !query.lastError().isValid();
+    query.finish();
+    if (ok) {
+        query.prepare(QStringLiteral("INSERT INTO pomodoro_cycle_state SELECT 1, :count "
+                                     "WHERE NOT EXISTS (SELECT 1 FROM pomodoro_cycle_state WHERE singleton_id=1)"));
+        query.bindValue(QStringLiteral(":count"), inheritedCount);
+        ok = query.exec() && setDatabaseVersion(22);
+    }
+    if (!ok || !m_db.commit()) {
+        qWarning() << "番茄循环状态迁移失败" << query.lastError().text();
+        m_db.rollback();
+        return false;
+    }
+    if (invalidLegacyCount) {
+        qWarning() << "旧活动番茄循环计数无效，迁移从 0 开始";
+    }
+    return true;
 }
 
 bool DatabaseManager::backupDatabaseBeforeMigration() const

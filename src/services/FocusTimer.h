@@ -92,7 +92,9 @@ public:
     // 用户在超长自由计时确认框选择“不记录”时，删除会话及活动快照，不进入统计。
     Q_INVOKABLE bool discardFreeFocus();
     // 用户完全结束番茄循环时重置连续计数，下一轮长休息节奏从头开始。
-    Q_INVOKABLE void resetPomodoroCount();
+    Q_INVOKABLE bool resetPomodoroCount();
+    // 明确放弃循环：活动记录收尾与计数清零同事务，失败时保留可重试的活动状态。
+    bool stopAndResetPomodoroCycle();
 
     // 数据库初始化后调用。默认（桌面）把中断的会话恢复为暂停状态，关闭应用期间不会被误算为专注时间；
     // CatchUpOffline 策略下，同一次开机内被结束的番茄段与自由计时改为按单调时钟补回离线时段并继续计时。
@@ -184,6 +186,10 @@ private:
     bool persistActiveState();
     bool writeActiveState(QSqlDatabase& db);
     bool clearActiveState(QSqlDatabase& db);
+    bool writeCycleCount(QSqlDatabase& db, int count);
+    void applyCycleCount(int count);
+    bool m_resetCycleOnStop = false;
+    bool m_cycleNotificationInProgress = false;
     bool cleanupOrphanedSessions();
     // 任务删除提交后按 ID 解绑当前会话；标题是历史快照，不能随任务一起清空。
     void handleTaskDeleted(int taskId);

@@ -1,3 +1,4 @@
+#include <QDir>
 #include <QSignalSpy>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -101,6 +102,20 @@ private slots:
     void recoveryFreezesAtCheckpointNotOfflineTime();
     void recoveredOverdueSessionCompletesOnceOnResume();
     void breakSleepPastEndCompletesOnce();
+    void pomodoroCountSurvivesIdleRestart();
+    void pomodoroCountWriteFailureRollsBackCompletion();
+    void explicitCycleEndFailureKeepsSession();
+    void cycleMigrationPreservesActiveCount();
+    void cycleMigrationFailureIsAtomic();
+    void cycleMissingRowIsRepaired();
+    void cycleMissingTableIsRepairedWithSnapshot();
+    void cycleInvalidStateIsRepaired_data();
+    void cycleInvalidStateIsRepaired();
+    void cycleValidStateIsPreserved();
+    void cycleMigrationInvalidCountStartsAtZero_data();
+    void cycleMigrationInvalidCountStartsAtZero();
+    void cycleNotificationCannotCompleteSessionTwice_data();
+    void cycleNotificationCannotCompleteSessionTwice();
 
     // iOS（CatchUpOffline 策略）：挂起返回与重启恢复走同一条离线结算路径。
     void suspendedAcrossExpirySettlesOnlyCurrentPhase();
@@ -385,6 +400,293 @@ void TimingRobustnessTests::breakSleepPastEndCompletesOnce()
     QCOMPARE(phaseSpy.count(), 1);
     QCOMPARE(countFocusSessions(), 0); // 休息不写会话
     QCOMPARE(FocusTimer::instance()->hasActiveSession(), false);
+}
+
+void TimingRobustnessTests::pomodoroCountSurvivesIdleRestart()
+{
+    // 自然完成后的空档跨重启和跨日仍保留循环计数，不因活动行已清理而丢失长休息节奏。
+    auto* timer = FocusTimer::instance();
+    const int taskId = insertTask(QStringLiteral("保留循环"));
+    QVERIFY(taskId > 0);
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("保留循环"), 25 * 60));
+    m_clock.advanceSecs(25 * 60);
+    tick();
+    QCOMPARE(timer->completedPomodoros(), 1);
+    QVERIFY(!timer->hasActiveSession());
+    timer->m_completedPomodoros = 0; // 模拟进程内存丢失，不能靠单例残留得到假绿灯。
+    m_clock.advanceSecs(2 * 24 * 60 * 60);
+    QVERIFY(timer->restoreInterruptedSession());
+    QCOMPARE(timer->completedPomodoros(), 1);
+}
+
+void TimingRobustnessTests::pomodoroCountWriteFailureRollsBackCompletion()
+{
+    // 计数写入失败时自然完成记录不能单独提交，解除故障后只完成一次。
+    auto* timer = FocusTimer::instance();
+    const int taskId = insertTask(QStringLiteral("计数回滚"));
+    QVERIFY(taskId > 0);
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("计数回滚"), 25 * 60));
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("CREATE TRIGGER fail_cycle BEFORE UPDATE ON pomodoro_cycle_state "
+                                     "BEGIN SELECT RAISE(ABORT, 'cycle failure'); END")));
+    m_clock.advanceSecs(25 * 60);
+    tick();
+    QVERIFY(timer->hasActiveSession());
+    QCOMPARE(timer->completedPomodoros(), 0);
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE end_time IS NOT NULL")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
+    query.finish();
+    QVERIFY(query.exec(QStringLiteral("DROP TRIGGER fail_cycle")));
+    tick();
+    QVERIFY(!timer->hasActiveSession());
+    QCOMPARE(timer->completedPomodoros(), 1);
+    QCOMPARE(countFocusSessions(), 1);
+}
+
+void TimingRobustnessTests::explicitCycleEndFailureKeepsSession()
+{
+    // 明确结束循环的记录与清零必须原子提交，失败后活动会话和旧计数都能重试。
+    auto* timer = FocusTimer::instance();
+    const int taskId = insertTask(QStringLiteral("结束回滚"));
+    QVERIFY(taskId > 0);
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("结束回滚"), 25 * 60));
+    m_clock.advanceSecs(25 * 60);
+    tick();
+    QCOMPARE(timer->completedPomodoros(), 1);
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("结束回滚"), 25 * 60));
+    m_clock.advanceSecs(4 * 60);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("CREATE TRIGGER fail_cycle BEFORE UPDATE ON pomodoro_cycle_state "
+                                     "BEGIN SELECT RAISE(ABORT, 'cycle failure'); END")));
+    QVERIFY(!timer->stopAndResetPomodoroCycle());
+    QVERIFY(timer->hasActiveSession());
+    QCOMPARE(timer->completedPomodoros(), 1);
+    QVERIFY(query.exec(QStringLiteral("DROP TRIGGER fail_cycle")));
+    QVERIFY(timer->stopAndResetPomodoroCycle());
+    QCOMPARE(timer->completedPomodoros(), 0);
+    timer->m_completedPomodoros = 7; // 故意污染内存，证明恢复读取数据库而非沿用旧值。
+    QVERIFY(timer->restoreInterruptedSession());
+    QCOMPARE(timer->completedPomodoros(), 0);
+}
+
+void TimingRobustnessTests::cycleMigrationPreservesActiveCount()
+{
+    // v21活动期已有计数在v22迁移后保留，旧活动镜像之后不能覆盖独立计数。
+    auto* timer = FocusTimer::instance();
+    const int taskId = insertTask(QStringLiteral("迁移计数"));
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("迁移计数"), 25 * 60));
+    timer->pauseFocus();
+    timer->resetSession();
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("UPDATE active_focus_state SET completed_pomodoros=3")));
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE pomodoro_cycle_state")));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version=21")));
+    const QString path = m_tempDir->filePath("timing.sqlite");
+    QVERIFY(DatabaseManager::instance()->initialize(path));
+    QVERIFY(timer->restoreInterruptedSession());
+    QCOMPARE(timer->completedPomodoros(), 3);
+    timer->resetSession();
+    QVERIFY(query.exec(QStringLiteral("UPDATE active_focus_state SET completed_pomodoros=9")));
+    QVERIFY(timer->restoreInterruptedSession());
+    QCOMPARE(timer->completedPomodoros(), 3);
+}
+
+void TimingRobustnessTests::cycleMigrationFailureIsAtomic()
+{
+    // v22 迁移执行失败时，版本和新表 DDL 必须一起回滚，旧活动数据仍可修复后重试。
+    auto* timer = FocusTimer::instance();
+    const int taskId = insertTask(QStringLiteral("迁移失败"));
+    QVERIFY(taskId > 0);
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("迁移失败"), 25 * 60));
+    timer->pauseFocus();
+    timer->resetSession();
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("UPDATE active_focus_state SET completed_pomodoros=3")));
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE pomodoro_cycle_state")));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version=21")));
+    // 启动前面的结构检查只核对活动表的计数和恢复锚点列，不读 singleton_id；
+    // 改名使 v22 在建好新表后读取旧活动行失败，专门验证这一步的事务回滚。
+    QVERIFY(query.exec(QStringLiteral("ALTER TABLE active_focus_state RENAME COLUMN singleton_id TO broken_singleton_id")));
+    QCOMPARE(queryInt(QStringLiteral("PRAGMA user_version")), 21);
+    QCOMPARE(queryInt(QStringLiteral("SELECT completed_pomodoros FROM active_focus_state WHERE broken_singleton_id=1")), 3);
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE name='pomodoro_cycle_state'")), 0);
+    QVERIFY(!DatabaseManager::instance()->initialize(m_tempDir->filePath("timing.sqlite")));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 21);
+    query.finish();
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE name='pomodoro_cycle_state'")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
+    query.finish();
+    QCOMPARE(queryInt(QStringLiteral("SELECT completed_pomodoros FROM active_focus_state WHERE broken_singleton_id=1")), 3);
+    QVERIFY(query.exec(QStringLiteral("ALTER TABLE active_focus_state RENAME COLUMN broken_singleton_id TO singleton_id")));
+    QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("timing.sqlite")));
+    QCOMPARE(queryInt(QStringLiteral("SELECT completed_pomodoros FROM pomodoro_cycle_state")), 3);
+}
+
+void TimingRobustnessTests::cycleMissingRowIsRepaired()
+{
+    // v22 循环计数行缺失时应用仍能打开，补回零计数并让计时器从零恢复。
+    QCOMPARE(queryInt(QStringLiteral("PRAGMA user_version")), 22);
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state")), 1);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("DELETE FROM pomodoro_cycle_state")));
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state")), 0);
+    QTest::ignoreMessage(QtWarningMsg, "番茄循环状态缺失或无效，已重置为 0");
+    QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("timing.sqlite")));
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state")), 1);
+    QCOMPARE(queryInt(QStringLiteral("SELECT completed_pomodoros FROM pomodoro_cycle_state WHERE singleton_id=1")), 0);
+    auto* timer = FocusTimer::instance();
+    timer->m_completedPomodoros = 7; // 排除单例旧内存值或初始零值造成的假通过。
+    QVERIFY(timer->restoreInterruptedSession());
+    QCOMPARE(timer->completedPomodoros(), 0);
+}
+
+void TimingRobustnessTests::cycleMissingTableIsRepairedWithSnapshot()
+{
+    // v22 循环计数表缺失时先留下迁移快照，再补表和零计数，应用照常打开。
+    QCOMPARE(queryInt(QStringLiteral("PRAGMA user_version")), 22);
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state")), 1);
+    const QDir directory(m_tempDir->path());
+    const QStringList pattern{QStringLiteral("pomodoro_backup_*.db")};
+    const qsizetype before = directory.entryList(pattern, QDir::Files).size();
+    QVERIFY(before < 3); // 快照未达到保留上限，数量才能直接证明新增了一份。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE pomodoro_cycle_state")));
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM sqlite_master WHERE name='pomodoro_cycle_state'")), 0);
+    QTest::ignoreMessage(QtWarningMsg, "番茄循环状态表缺失，已补建并将计数重置为 0");
+    QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("timing.sqlite")));
+    QCOMPARE(directory.entryList(pattern, QDir::Files).size(), before + 1);
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state")), 1);
+    QCOMPARE(queryInt(QStringLiteral("SELECT completed_pomodoros FROM pomodoro_cycle_state WHERE singleton_id=1")), 0);
+}
+
+void TimingRobustnessTests::cycleInvalidStateIsRepaired_data()
+{
+    // 无效的类型、范围、单例编号及多行内容都必须修补为同一个零计数状态。
+    QTest::addColumn<QString>("values");
+    QTest::newRow("text") << QStringLiteral("(1, 'abc')");
+    QTest::newRow("negative") << QStringLiteral("(1, -1)");
+    QTest::newRow("overflow") << QStringLiteral("(1, 2147483648)");
+    QTest::newRow("real") << QStringLiteral("(1, 1.5)");
+    QTest::newRow("null") << QStringLiteral("(1, NULL)");
+    QTest::newRow("wrong-singleton") << QStringLiteral("(2, 3)");
+    QTest::newRow("fractional-singleton") << QStringLiteral("(1.5, 3)");
+    QTest::newRow("multiple") << QStringLiteral("(1, 3), (2, 4)");
+}
+
+void TimingRobustnessTests::cycleInvalidStateIsRepaired()
+{
+    // v22 循环计数内容无效时清除无效内容，只留下 (1, 0) 并告警。
+    QFETCH(QString, values);
+    QCOMPARE(queryInt(QStringLiteral("PRAGMA user_version")), 22);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE pomodoro_cycle_state")));
+    // 去掉约束以模拟外部改库；保留列名使结构可读，测试仅针对内容自愈。
+    QVERIFY(query.exec(QStringLiteral("CREATE TABLE pomodoro_cycle_state (singleton_id, completed_pomodoros)")));
+    QVERIFY(query.exec(QStringLiteral("INSERT INTO pomodoro_cycle_state VALUES ") + values));
+    const int rowCount = queryInt(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state"));
+    const int validCount = queryInt(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state "
+                                                 "WHERE typeof(singleton_id)='integer' AND singleton_id=1 "
+                                                 "AND typeof(completed_pomodoros)='integer' "
+                                                 "AND completed_pomodoros BETWEEN 0 AND 2147483647"));
+    QVERIFY(rowCount > 0);
+    QVERIFY(rowCount != 1 || validCount != 1);
+    QTest::ignoreMessage(QtWarningMsg, "番茄循环状态缺失或无效，已重置为 0");
+    QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("timing.sqlite")));
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state")), 1);
+    QCOMPARE(queryInt(QStringLiteral("SELECT completed_pomodoros FROM pomodoro_cycle_state WHERE singleton_id=1 "
+                                     "AND typeof(singleton_id)='integer' AND typeof(completed_pomodoros)='integer'")), 0);
+}
+
+void TimingRobustnessTests::cycleValidStateIsPreserved()
+{
+    // 正常 v22 计数重新初始化仍为原值，不产生修补告警，也不占迁移快照名额。
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("UPDATE pomodoro_cycle_state SET completed_pomodoros=3")));
+    QCOMPARE(queryInt(QStringLiteral("PRAGMA user_version")), 22);
+    QCOMPARE(queryInt(QStringLiteral("SELECT completed_pomodoros FROM pomodoro_cycle_state WHERE singleton_id=1")), 3);
+    const QDir directory(m_tempDir->path());
+    const QStringList pattern{QStringLiteral("pomodoro_backup_*.db")};
+    const QStringList before = directory.entryList(pattern, QDir::Files);
+    QTest::failOnWarning();
+    QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("timing.sqlite")));
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state")), 1);
+    QCOMPARE(queryInt(QStringLiteral("SELECT completed_pomodoros FROM pomodoro_cycle_state WHERE singleton_id=1")), 3);
+    QCOMPARE(directory.entryList(pattern, QDir::Files), before);
+}
+
+void TimingRobustnessTests::cycleMigrationInvalidCountStartsAtZero_data()
+{
+    // v21 旧活动计数的非整数和越界值都不能阻止 v22 迁移。
+    QTest::addColumn<QString>("value");
+    QTest::newRow("overflow") << QStringLiteral("2147483648");
+    QTest::newRow("text") << QStringLiteral("'abc'");
+    QTest::newRow("real") << QStringLiteral("1.5");
+}
+
+void TimingRobustnessTests::cycleMigrationInvalidCountStartsAtZero()
+{
+    // v21 旧活动计数无效时迁移仍推进到 v22，并告警后从零开始循环。
+    QFETCH(QString, value);
+    auto* timer = FocusTimer::instance();
+    const int taskId = insertTask(QStringLiteral("无效旧计数"));
+    QVERIFY(taskId > 0);
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("无效旧计数"), 25 * 60));
+    timer->pauseFocus();
+    timer->resetSession();
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("UPDATE active_focus_state SET completed_pomodoros=") + value));
+    QVERIFY(query.exec(QStringLiteral("DROP TABLE pomodoro_cycle_state")));
+    QVERIFY(query.exec(QStringLiteral("PRAGMA user_version=21")));
+    QCOMPARE(queryInt(QStringLiteral("PRAGMA user_version")), 21);
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM active_focus_state WHERE typeof(completed_pomodoros)='integer' "
+                                     "AND completed_pomodoros BETWEEN 0 AND 2147483647")), 0);
+    QTest::ignoreMessage(QtWarningMsg, "旧活动番茄循环计数无效，迁移从 0 开始");
+    QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("timing.sqlite")));
+    QCOMPARE(queryInt(QStringLiteral("PRAGMA user_version")), 22);
+    QCOMPARE(queryInt(QStringLiteral("SELECT COUNT(*) FROM pomodoro_cycle_state")), 1);
+    QCOMPARE(queryInt(QStringLiteral("SELECT completed_pomodoros FROM pomodoro_cycle_state WHERE singleton_id=1")), 0);
+    QVERIFY(timer->restoreInterruptedSession());
+    QCOMPARE(timer->completedPomodoros(), 0);
+}
+
+void TimingRobustnessTests::cycleNotificationCannotCompleteSessionTwice_data()
+{
+    // 计数通知中的结束、暂停与生命周期检查点都不能重新写出已经完成的活动状态。
+    QTest::addColumn<QString>("action");
+    QTest::newRow("stop") << QStringLiteral("stop");
+    QTest::newRow("pause") << QStringLiteral("pause");
+    QTest::newRow("checkpoint") << QStringLiteral("checkpoint");
+}
+
+void TimingRobustnessTests::cycleNotificationCannotCompleteSessionTwice()
+{
+    // 计数变化通知重入结束操作不能再次结算已经提交的自然完成记录。
+    QFETCH(QString, action);
+    auto* timer = FocusTimer::instance();
+    const int taskId = insertTask(QStringLiteral("计数通知重入"));
+    QVERIFY(timer->startPomodoroWork(taskId, QStringLiteral("计数通知重入"), 25 * 60));
+    QSignalSpy completed(timer, &FocusTimer::focusCompleted);
+    const auto connection = connect(timer, &FocusTimer::completedPomodorosChanged, this, [timer, action] {
+        if (action == QLatin1String("stop")) timer->stopFocus();
+        else if (action == QLatin1String("pause")) timer->pauseFocus();
+        else timer->checkpoint();
+    });
+    m_clock.advanceSecs(25 * 60);
+    tick();
+    disconnect(connection);
+    QCOMPARE(completed.count(), 1);
+    QSqlQuery query(DatabaseManager::instance()->database());
+    QVERIFY(query.exec(QStringLiteral("SELECT pomodoro_completed FROM focus_sessions")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 1);
+    query.finish();
+    QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM active_focus_state")));
+    QVERIFY(query.next());
+    QCOMPARE(query.value(0).toInt(), 0);
 }
 
 void TimingRobustnessTests::suspendedAcrossExpirySettlesOnlyCurrentPhase()

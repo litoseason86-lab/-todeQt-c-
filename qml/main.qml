@@ -192,6 +192,11 @@ ApplicationWindow {
             mainContent.requestLongFreeFocusStop()
         }
 
+        // 菜单栏没有错误宿主；C++结束失败后召回窗口并把同一次结果展示为提示。
+        function onStopFailed(error) {
+            mainContent.showToast(error)
+        }
+
         function onQuitRequested() {
             const blockReason = root.shutdownBlockReason()
             if (blockReason.length > 0) {
