@@ -1266,4 +1266,3 @@ bool DatabaseManager::migrateToVersion22()
     }
     return true;
 }
-
