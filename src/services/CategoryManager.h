@@ -50,6 +50,7 @@ private:
     QVariantMap categoryFromQuery(const QSqlQuery& query) const;
     QVariantList queryCategories(const QString& sql) const;
     bool isValidColor(const QString& color) const;
+    QVariantMap categoryForAction(int id, const QString& action) const;
     void reportFailure(const QString& message) const;
 };
 

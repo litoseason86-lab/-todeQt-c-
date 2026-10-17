@@ -40,6 +40,13 @@ Popup {
         }
     ]
     property string errorText: ""
+    // 写入及本弹窗读取共用认领区间，重复日子弹窗和别处失败不能污染父表单。
+    property bool serviceCallActive: false
+    function callService(operation) {
+        var previous = root.serviceCallActive
+        root.serviceCallActive = true
+        try { return operation() } finally { root.serviceCallActive = previous }
+    }
     // 列表行高。面板高度要按「条数 × 行高」算，所以它必须是一个两边共用的常量。
     readonly property int routineRowHeight: 52
     // 重复弹窗的对外句柄：它是 Popup，不在可视子项树里，findChild 拿不到。
@@ -130,23 +137,14 @@ Popup {
         }
 
         function onOperationFailed(message) {
-            root.errorText = String(message || "每日例行加载失败")
-        }
-    }
-
-    Connections {
-        target: root.categoryManagerRef
-        ignoreUnknownSignals: true
-
-        function onOperationFailed(message) {
-            root.errorText = String(message || "科目加载失败")
+            if (root.visible && root.serviceCallActive) root.errorText = String(message || "每日例行加载失败")
         }
     }
 
     function refresh() {
         var previousCategoryId = root.selectedCategoryId()
         if (root.routineManagerRef && root.routineManagerRef.getRoutines) {
-            root.routines = root.routineManagerRef.getRoutines()
+            root.routines = root.callService(function() { return root.routineManagerRef.getRoutines() })
         } else {
             root.routines = []
         }
@@ -238,6 +236,7 @@ Popup {
 
         // 新增不带重复日：服务层默认按「每天」落地，之后在列表行的重复药丸里改。
         // 改标题/科目也不碰重复日——两者在服务层就是两条独立的写入。
+        root.errorText = ""
         var succeeded
         if (isEditing) {
             var changes = {}
@@ -247,9 +246,9 @@ Popup {
                 changes.categoryId = root.selectedCategoryId()
             // 什么都没改：不写库，照常退出编辑。
             succeeded = Object.keys(changes).length === 0
-                    || root.routineManagerRef.updateRoutineChanges(root.editingRoutineId, changes)
+                    || root.callService(function() { return root.routineManagerRef.updateRoutineChanges(root.editingRoutineId, changes) })
         } else {
-            succeeded = root.routineManagerRef.addRoutine(title, root.selectedCategoryId())
+            succeeded = root.callService(function() { return root.routineManagerRef.addRoutine(title, root.selectedCategoryId()) })
         }
         if (succeeded) {
             routineTitleField.text = ""
@@ -258,7 +257,7 @@ Popup {
             root.refresh()
             routineTitleField.forceActiveFocus()
         } else {
-            root.errorText = isEditing ? "例行任务保存失败，请检查名称后重试" : "例行任务添加失败，名称可能已存在"
+            if (root.errorText.length === 0) root.errorText = isEditing ? "例行任务保存失败，请检查名称后重试" : "例行任务添加失败，名称可能已存在"
             routineTitleField.forceActiveFocus()
         }
     }
@@ -269,9 +268,13 @@ Popup {
             return
         }
 
-        if (!root.routineManagerRef.setRoutineActive(routineId, active)) {
-            root.errorText = "例行任务状态更新失败"
+        root.errorText = ""
+        if (!root.callService(function() { return root.routineManagerRef.setRoutineActive(routineId, active) })) {
+            if (root.errorText.length === 0) root.errorText = "例行任务状态更新失败"
+            // 回读只用来恢复开关位置，不能把写入原因换成随后读取失败的文案。
+            var failureMessage = root.errorText
             root.refresh()
+            root.errorText = failureMessage
         }
     }
 
@@ -296,7 +299,8 @@ Popup {
             return
         }
 
-        if (root.routineManagerRef.deleteRoutine(routineId)) {
+        root.errorText = ""
+        if (root.callService(function() { return root.routineManagerRef.deleteRoutine(routineId) })) {
             if (root.editingRoutineId === Number(routineId)) {
                 // 正在编辑的规则被删掉后必须退出编辑态，否则后续“保存”会指向已不存在的 id。
                 root.cancelEditing()
@@ -306,7 +310,7 @@ Popup {
             root.refresh()
             deleteConfirmation.close()
         } else {
-            root.errorText = "例行任务删除失败"
+            if (root.errorText.length === 0) root.errorText = "例行任务删除失败"
         }
     }
 
@@ -354,6 +358,7 @@ Popup {
                 wrapMode: Text.Wrap
             }
             Label {
+                objectName: "routineDeletionError"
                 Layout.fillWidth: true
                 visible: root.errorText.length > 0
                 text: root.errorText
@@ -670,12 +675,13 @@ Popup {
         }
 
         RowLayout {
+            objectName: "routineFormError"
             Layout.fillWidth: true
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
             Layout.topMargin: Theme.space8
             Layout.preferredHeight: visible ? 36 : 0
-            visible: root.errorText.length > 0
+            visible: root.errorText.length > 0 && !deleteConfirmation.visible
             spacing: Theme.space8
 
             Label {

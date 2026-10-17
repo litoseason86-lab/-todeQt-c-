@@ -52,14 +52,21 @@ QVariantList CategoryManager::getCustomCategories() const
 
 QVariantMap CategoryManager::getCategoryById(int id) const
 {
+    return categoryForAction(id, QString());
+}
+
+QVariantMap CategoryManager::categoryForAction(int id, const QString& action) const
+{
     if (!isValidCategoryId(id)) {
+        if (!action.isEmpty()) reportFailure(action + QStringLiteral("失败：科目编号无效"));
         return QVariantMap();
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to get category: database is not open";
-        reportFailure(QStringLiteral("数据库未打开，无法加载科目"));
+        reportFailure(action.isEmpty() ? QStringLiteral("数据库未打开，无法加载科目")
+            : action + QStringLiteral("失败：数据库未打开"));
         return QVariantMap();
     }
 
@@ -71,11 +78,14 @@ QVariantMap CategoryManager::getCategoryById(int id) const
 
     if (!query.exec()) {
         qWarning() << "Failed to get category:" << query.lastError().text();
-        reportFailure(QStringLiteral("科目加载失败: %1").arg(query.lastError().text()));
+        reportFailure(action.isEmpty() ? QStringLiteral("科目加载失败: %1").arg(query.lastError().text())
+            : action + QStringLiteral("失败：科目读取失败：%1").arg(query.lastError().text()));
         return QVariantMap();
     }
 
-    return query.next() ? categoryFromQuery(query) : QVariantMap();
+    if (query.next()) return categoryFromQuery(query);
+    if (!action.isEmpty()) reportFailure(action + QStringLiteral("失败：科目不存在"));
+    return QVariantMap();
 }
 
 int CategoryManager::addCategory(const QString& name, const QString& color)
@@ -85,28 +95,33 @@ int CategoryManager::addCategory(const QString& name, const QString& color)
 
     if (normalizedName.isEmpty()) {
         qWarning() << "Failed to add category: name is empty";
+        reportFailure(QStringLiteral("新增科目失败：名称不能为空"));
         return -1;
     }
 
     if (!isValidColor(normalizedColor)) {
         qWarning() << "Failed to add category: invalid color" << normalizedColor;
+        reportFailure(QStringLiteral("新增科目失败：颜色无效"));
         return -1;
     }
 
     if (categoryNameExists(normalizedName)) {
         qWarning() << "Failed to add category: name already exists" << normalizedName;
+        reportFailure(QStringLiteral("新增科目失败：名称已存在"));
         return -1;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to add category: database is not open";
+        reportFailure(QStringLiteral("新增科目失败：数据库未打开"));
         return -1;
     }
 
     QSqlQuery orderQuery(db);
     if (!orderQuery.exec(QStringLiteral("SELECT COALESCE(MAX(display_order), 0) + 1 FROM categories")) || !orderQuery.next()) {
         qWarning() << "Failed to calculate category display order:" << orderQuery.lastError().text();
+        reportFailure(QStringLiteral("新增科目失败：排序读取失败：%1").arg(orderQuery.lastError().text()));
         return -1;
     }
 
@@ -120,6 +135,7 @@ int CategoryManager::addCategory(const QString& name, const QString& color)
 
     if (!query.exec()) {
         qWarning() << "Failed to add category:" << query.lastError().text();
+        reportFailure(QStringLiteral("新增科目失败：数据库写入失败：%1").arg(query.lastError().text()));
         return -1;
     }
 
@@ -129,7 +145,7 @@ int CategoryManager::addCategory(const QString& name, const QString& color)
 
 bool CategoryManager::updateCategory(int id, const QString& name, const QString& color)
 {
-    const QVariantMap existing = getCategoryById(id);
+    const QVariantMap existing = categoryForAction(id, QStringLiteral("修改科目"));
     if (existing.isEmpty()) {
         qWarning() << "Failed to update category: category not found" << id;
         return false;
@@ -139,16 +155,19 @@ bool CategoryManager::updateCategory(int id, const QString& name, const QString&
     const QString normalizedColor = color.trimmed();
     if (normalizedName.isEmpty()) {
         qWarning() << "Failed to update category: name is empty";
+        reportFailure(QStringLiteral("修改科目失败：名称不能为空"));
         return false;
     }
 
     if (!isValidColor(normalizedColor)) {
         qWarning() << "Failed to update category: invalid color" << normalizedColor;
+        reportFailure(QStringLiteral("修改科目失败：颜色无效"));
         return false;
     }
 
     if (categoryNameExists(normalizedName, id)) {
         qWarning() << "Failed to update category: name already exists" << normalizedName;
+        reportFailure(QStringLiteral("修改科目失败：名称已存在"));
         return false;
     }
 
@@ -162,11 +181,13 @@ bool CategoryManager::updateCategory(int id, const QString& name, const QString&
 
     if (!query.exec()) {
         qWarning() << "Failed to update category:" << query.lastError().text();
+        reportFailure(QStringLiteral("修改科目失败：数据库写入失败：%1").arg(query.lastError().text()));
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to update category: no rows changed" << id;
+        reportFailure(QStringLiteral("修改科目失败：科目不存在或未修改"));
         return false;
     }
 
@@ -176,7 +197,7 @@ bool CategoryManager::updateCategory(int id, const QString& name, const QString&
 
 bool CategoryManager::deleteCategory(int id)
 {
-    const QVariantMap existing = getCategoryById(id);
+    const QVariantMap existing = categoryForAction(id, QStringLiteral("删除科目"));
     if (existing.isEmpty()) {
         qWarning() << "Failed to delete category: category not found" << id;
         return false;
@@ -184,17 +205,20 @@ bool CategoryManager::deleteCategory(int id)
 
     if (existing.value(QStringLiteral("isPreset")).toBool()) {
         qWarning() << "Failed to delete category: preset category cannot be deleted";
+        reportFailure(QStringLiteral("删除科目失败：预设科目不能删除"));
         return false;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to delete category: database is not open";
+        reportFailure(QStringLiteral("删除科目失败：数据库未打开"));
         return false;
     }
 
     if (!db.transaction()) {
         qWarning() << "Failed to start delete category transaction:" << db.lastError().text();
+        reportFailure(QStringLiteral("删除科目失败：无法开始数据库事务：%1").arg(db.lastError().text()));
         return false;
     }
 
@@ -210,6 +234,7 @@ bool CategoryManager::deleteCategory(int id)
 
     if (!detachTasks.exec()) {
         qWarning() << "Failed to detach tasks before deleting category:" << detachTasks.lastError().text();
+        reportFailure(QStringLiteral("删除科目失败：解除任务关联失败：%1").arg(detachTasks.lastError().text()));
         db.rollback();
         return false;
     }
@@ -220,18 +245,21 @@ bool CategoryManager::deleteCategory(int id)
 
     if (!deleteQuery.exec()) {
         qWarning() << "Failed to delete category:" << deleteQuery.lastError().text();
+        reportFailure(QStringLiteral("删除科目失败：数据库写入失败：%1").arg(deleteQuery.lastError().text()));
         db.rollback();
         return false;
     }
 
     if (deleteQuery.numRowsAffected() == 0) {
         qWarning() << "Failed to delete category: no rows changed" << id;
+        reportFailure(QStringLiteral("删除科目失败：科目不存在或未修改"));
         db.rollback();
         return false;
     }
 
     if (!db.commit()) {
         qWarning() << "Failed to commit delete category transaction:" << db.lastError().text();
+        reportFailure(QStringLiteral("删除科目失败：提交数据库事务失败：%1").arg(db.lastError().text()));
         db.rollback();
         return false;
     }
@@ -299,6 +327,7 @@ QVariantMap CategoryManager::categoryFromQuery(const QSqlQuery& query) const
 
 void CategoryManager::reportFailure(const QString& message) const
 {
+    // 读取前置检查与写入共用一次带动作的失败，避免桥接及弹窗收到两条相同失败。
     emit const_cast<CategoryManager*>(this)->operationFailed(message);
 }
 

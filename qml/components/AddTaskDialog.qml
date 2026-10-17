@@ -105,6 +105,9 @@ Popup {
     // 预计用时（分钟），0 表示未设置。上限读 TaskManager 常量，与服务端校验同源。
     property int estimatedMinutes: 0
     property var categoryManagerRef: null
+    property var taskManagerRef: null
+    // 同步服务失败只由本次提交认领；不用 Connections.enabled，避免绑定重算晚于信号。
+    property bool writingTask: false
     // 生产页面注入返回 bool 的提交函数；信号保留给独立组件和旧测试使用。
     property var taskSubmitter: null
     // 备注长度上限，与 TaskManager::kMaxNotesLength 同一口径；宿主从 taskManager.maxNotesLength 注入。
@@ -252,13 +255,17 @@ Popup {
         if (root.taskSubmitter) {
             // taskSubmitter 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
             // qmllint disable use-proper-function
-            succeeded = Boolean(root.taskSubmitter(title, root.selectedDate, categoryId, root.estimatedMinutes, notesField.text.trim()));
+            errorLabel.text = ""
+            root.writingTask = true
+            try {
+                succeeded = Boolean(root.taskSubmitter(title, root.selectedDate, categoryId, root.estimatedMinutes, notesField.text.trim()));
+            } finally { root.writingTask = false }
             // qmllint enable use-proper-function
         } else {
             root.taskAdded(title, root.selectedDate, categoryId, root.estimatedMinutes, notesField.text.trim());
         }
         if (!succeeded) {
-            errorLabel.text = "保存失败，请检查数据库后重试";
+            if (errorLabel.text.length === 0) errorLabel.text = "保存失败，请检查数据库后重试";
             titleField.forceActiveFocus();
             return;
         }
@@ -291,15 +298,20 @@ Popup {
         target: root.categoryManagerRef
         ignoreUnknownSignals: true
 
-        function onOperationFailed(message) {
-            errorLabel.text = String(message || "科目加载失败")
-        }
         // 门禁写在处理函数里，不用 enabled 绑定：信号是同步发出的，
         // enabled 的重算可能晚于它，会漏掉刚打开那一刻的变化。关着时不必刷，打开时本来就会刷。
         function onCategoriesChanged() {
             if (root.visible) {
                 root.syncCategoriesWhileOpen()
             }
+        }
+    }
+
+    Connections {
+        target: root.taskManagerRef
+        ignoreUnknownSignals: true
+        function onOperationFailed(message) {
+            if (root.visible && root.writingTask) errorLabel.text = String(message)
         }
     }
 

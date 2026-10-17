@@ -28,6 +28,13 @@ Popup {
     property var manager: null
     property var categories: []
     property string errorText: ""
+    // 同步调用期间认领原因，弹窗关闭或别处操作时不覆盖当前表单。
+    property bool serviceCallActive: false
+    function callService(operation) {
+        var previous = root.serviceCallActive
+        root.serviceCallActive = true
+        try { return operation() } finally { root.serviceCallActive = previous }
+    }
     property string newCategoryColor: "#d4a574"
     property int editingCategoryId: -1
     // 编辑状态由 id 推导，让同一套表单同时服务新增和更新。
@@ -93,13 +100,13 @@ Popup {
         }
 
         function onOperationFailed(message) {
-            root.errorText = String(message || "科目加载失败")
+            if (root.visible && root.serviceCallActive) root.errorText = String(message || "科目加载失败")
         }
     }
 
     function refresh() {
         if (root.manager && root.manager.getAllCategories) {
-            root.categories = root.manager.getAllCategories()
+            root.categories = root.callService(function() { return root.manager.getAllCategories() })
         } else {
             root.categories = []
         }
@@ -156,12 +163,13 @@ Popup {
             return
         }
 
-        var id = root.manager.addCategory(name, root.newCategoryColor)
+        root.errorText = ""
+        var id = root.callService(function() { return root.manager.addCategory(name, root.newCategoryColor) })
         if (id > 0) {
             root.resetAddForm()
             root.refresh()
         } else {
-            root.errorText = "科目添加失败，名称可能已存在"
+            if (root.errorText.length === 0) root.errorText = "科目添加失败，名称可能已存在"
         }
     }
 
@@ -178,11 +186,12 @@ Popup {
             return
         }
 
-        if (root.manager.updateCategory(root.editingCategoryId, name, root.newCategoryColor)) {
+        root.errorText = ""
+        if (root.callService(function() { return root.manager.updateCategory(root.editingCategoryId, name, root.newCategoryColor) })) {
             root.resetAddForm()
             root.refresh()
         } else {
-            root.errorText = "科目更新失败，名称可能已存在"
+            if (root.errorText.length === 0) root.errorText = "科目更新失败，名称可能已存在"
         }
     }
 
@@ -198,14 +207,16 @@ Popup {
             return
         }
 
-        if (!root.manager.canDeleteCategory(categoryId)) {
-            root.errorText = "该科目不能删除"
+        root.errorText = ""
+        if (!root.callService(function() { return root.manager.canDeleteCategory(categoryId) })) {
+            if (root.errorText.length === 0) root.errorText = "该科目不能删除"
             return
         }
 
         // 用户已确认解除科目关联；服务层在事务中同步更新所有关联表。
-        if (!root.manager.deleteCategory(categoryId)) {
-            root.errorText = "科目删除失败"
+        root.errorText = ""
+        if (!root.callService(function() { return root.manager.deleteCategory(categoryId) })) {
+            if (root.errorText.length === 0) root.errorText = "科目删除失败"
             return
         }
 
@@ -247,6 +258,7 @@ Popup {
                 wrapMode: Text.WordWrap
             }
             Label {
+                objectName: "categoryDeletionError"
                 Layout.fillWidth: true
                 visible: root.errorText.length > 0
                 text: root.errorText
@@ -332,11 +344,12 @@ Popup {
             }
 
             Label {
+                objectName: "categoryListError"
                 Layout.fillWidth: true
                 Layout.leftMargin: Theme.space16
                 Layout.rightMargin: Theme.space16
                 Layout.topMargin: Theme.space12
-                visible: root.errorText.length > 0
+                visible: root.errorText.length > 0 && !addCategoryPanel.visible && !deleteConfirmation.visible
                 text: root.errorText
                 textFormat: Text.PlainText
                 color: Theme.danger
@@ -548,7 +561,7 @@ Popup {
                 Label {
                     objectName: "categoryEditorError"
                     Layout.fillWidth: true
-                    visible: root.errorText.length > 0
+                    visible: root.errorText.length > 0 && !deleteConfirmation.visible
                     text: root.errorText
                     textFormat: Text.PlainText
                     color: Theme.danger

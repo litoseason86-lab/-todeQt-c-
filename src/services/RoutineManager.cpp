@@ -47,7 +47,7 @@ bool routineWeekdaysAreValid(int weekdays, const char* action)
     return true;
 }
 
-bool routineCategoryExists(QSqlDatabase& db, int categoryId, const char* action)
+bool routineCategoryExists(QSqlDatabase& db, int categoryId, const char* action, QString* failure)
 {
     if (categoryId <= 0) {
         return true;
@@ -58,11 +58,13 @@ bool routineCategoryExists(QSqlDatabase& db, int categoryId, const char* action)
     query.bindValue(QStringLiteral(":id"), categoryId);
     if (!query.exec()) {
         qWarning() << "Failed to validate routine category:" << query.lastError().text();
+        *failure = QStringLiteral("科目读取失败：%1").arg(query.lastError().text());
         return false;
     }
 
     if (!query.next()) {
         qWarning().noquote() << QStringLiteral("Failed to %1 routine: category not found").arg(QString::fromLatin1(action)) << categoryId;
+        *failure = QStringLiteral("科目不存在（编号 %1）").arg(categoryId);
         return false;
     }
 
@@ -86,7 +88,7 @@ QString logicalTodayString()
 // （旧库曾经按标题回填过这一列），据此改写会误伤用户自己建的同名任务。
 // 当日实例即使已经完成也一起改：改名不破坏任何数据，而列表上摆着旧名字正是用户报的那个问题。
 bool syncTodayTaskToRoutine(QSqlDatabase& db, int routineId, const QString& title,
-                            int categoryId, const QString& today, bool* synced)
+                            int categoryId, const QString& today, bool* synced, QString* failure)
 {
     QSqlQuery query(db);
     // category 这一列存的是科目名快照，写法必须和 materializeToday 的插入保持一致。
@@ -103,6 +105,7 @@ bool syncTodayTaskToRoutine(QSqlDatabase& db, int routineId, const QString& titl
 
     if (!query.exec()) {
         qWarning() << "Failed to sync today's routine task:" << query.lastError().text();
+        *failure = QStringLiteral("更新今日例行任务失败：%1").arg(query.lastError().text());
         return false;
     }
 
@@ -120,7 +123,7 @@ bool syncTodayTaskToRoutine(QSqlDatabase& db, int routineId, const QString& titl
 // 不满足判据的当日实例留在原地，由调用方按老办法退化成普通任务。
 // 必须在调用方的事务里执行：先选出编号、再按编号删除，两步之间不能有别的写入插进来。
 bool reclaimTodayTask(QSqlDatabase& db, int routineId, const QString& today,
-                      QList<int>* reclaimedIds)
+                      QList<int>* reclaimedIds, QString* failure)
 {
     QSqlQuery candidates(db);
     candidates.prepare(QStringLiteral(
@@ -133,6 +136,7 @@ bool reclaimTodayTask(QSqlDatabase& db, int routineId, const QString& today,
 
     if (!candidates.exec()) {
         qWarning() << "Failed to find reclaimable routine task:" << candidates.lastError().text();
+        *failure = QStringLiteral("读取今日例行任务失败：%1").arg(candidates.lastError().text());
         return false;
     }
 
@@ -150,6 +154,7 @@ bool reclaimTodayTask(QSqlDatabase& db, int routineId, const QString& today,
     if (!ids.isEmpty()
         && !mark.exec(QStringLiteral("UPDATE sync_runtime SET delete_kind = 'reclaim' WHERE singleton_id = 1"))) {
         qWarning() << "Failed to mark routine reclaim:" << mark.lastError().text();
+        *failure = QStringLiteral("标记例行收回失败：%1").arg(mark.lastError().text());
         return false;
     }
 
@@ -161,6 +166,7 @@ bool reclaimTodayTask(QSqlDatabase& db, int routineId, const QString& today,
         remove.bindValue(QStringLiteral(":id"), taskId);
         if (!remove.exec()) {
             qWarning() << "Failed to reclaim routine task:" << remove.lastError().text();
+            *failure = QStringLiteral("收回今日例行任务失败：%1").arg(remove.lastError().text());
             return false;
         }
         if (remove.numRowsAffected() > 0 && reclaimedIds) {
@@ -171,6 +177,7 @@ bool reclaimTodayTask(QSqlDatabase& db, int routineId, const QString& today,
     if (!ids.isEmpty()
         && !mark.exec(QStringLiteral("UPDATE sync_runtime SET delete_kind = NULL WHERE singleton_id = 1"))) {
         qWarning() << "Failed to clear routine reclaim mark:" << mark.lastError().text();
+        *failure = QStringLiteral("清除例行收回标记失败：%1").arg(mark.lastError().text());
         return false;
     }
     return true;
@@ -180,7 +187,7 @@ bool reclaimTodayTask(QSqlDatabase& db, int routineId, const QString& today,
 // 这样「停用后又启用」「取消今天后又勾回今天」都能把今天的任务补回来；
 // 而用户自己删掉当日实例之后再停用，戳仍停在今天，重新启用也不会复活它——
 // 「删不复活」是例行生成一直守着的性质，回收路径不能把它打破。
-bool clearGenerationStamp(QSqlDatabase& db, int routineId)
+bool clearGenerationStamp(QSqlDatabase& db, int routineId, QString* failure)
 {
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
@@ -188,6 +195,7 @@ bool clearGenerationStamp(QSqlDatabase& db, int routineId)
     query.bindValue(QStringLiteral(":id"), routineId);
     if (!query.exec()) {
         qWarning() << "Failed to clear routine generation stamp:" << query.lastError().text();
+        *failure = QStringLiteral("清除例行生成日期失败：%1").arg(query.lastError().text());
         return false;
     }
     return true;
@@ -213,6 +221,7 @@ RoutineManager* RoutineManager::instance()
 
 void RoutineManager::reportFailure(const QString& message) const
 {
+    // 私有事务步骤只返回原因，由公开操作统一上报一次，桥接和 Mac 弹窗才能认领同一条失败。
     emit const_cast<RoutineManager*>(this)->operationFailed(message);
 }
 
@@ -237,25 +246,31 @@ bool RoutineManager::addRoutine(const QString& title, int categoryId, int weekda
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
         qWarning("Failed to add routine: title is empty");
+        reportFailure(QStringLiteral("新增例行失败：标题不能为空"));
         return false;
     }
     // 例行标题会物化成任务标题，必须遵守同一上限。
     if (normalizedTitle.size() > TaskManager::kMaxTitleLength) {
         qWarning() << "Failed to add routine: title exceeds"
                    << TaskManager::kMaxTitleLength << "characters";
+        reportFailure(QStringLiteral("新增例行失败：标题超长（最多 %1 字）").arg(TaskManager::kMaxTitleLength));
         return false;
     }
 
     if (!routineWeekdaysAreValid(weekdays, "add")) {
+        reportFailure(QStringLiteral("新增例行失败：重复日无效（必须为 1–127）"));
         return false;
     }
 
+    QString failure;
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to add routine: database is not open";
+        reportFailure(QStringLiteral("新增例行失败：数据库未打开"));
         return false;
     }
-    if (!routineCategoryExists(db, categoryId, "add")) {
+    if (!routineCategoryExists(db, categoryId, "add", &failure)) {
+        reportFailure(QStringLiteral("新增例行失败：%1").arg(failure));
         return false;
     }
 
@@ -263,6 +278,7 @@ bool RoutineManager::addRoutine(const QString& title, int categoryId, int weekda
     if (!orderQuery.exec(QStringLiteral("SELECT COALESCE(MAX(display_order), 0) + 1 FROM routines"))
         || !orderQuery.next()) {
         qWarning() << "Failed to calculate routine display order:" << orderQuery.lastError().text();
+        reportFailure(QStringLiteral("新增例行失败：排序读取失败：%1").arg(orderQuery.lastError().text()));
         return false;
     }
 
@@ -277,6 +293,7 @@ bool RoutineManager::addRoutine(const QString& title, int categoryId, int weekda
 
     if (!query.exec()) {
         qWarning() << "Failed to add routine:" << query.lastError().text();
+        reportFailure(QStringLiteral("新增例行失败：数据库写入失败：%1").arg(query.lastError().text()));
         return false;
     }
 
@@ -291,26 +308,31 @@ bool RoutineManager::updateRoutineChanges(int id, const QVariantMap& changes)
     for (auto it = changes.cbegin(); it != changes.cend(); ++it) {
         if (it.key() != titleKey && it.key() != categoryKey) {
             qWarning() << "Failed to update routine: unknown field" << it.key();
+            reportFailure(QStringLiteral("修改例行失败：未知字段 %1").arg(it.key()));
             return false;
         }
     }
     if (changes.contains(titleKey) && changes.value(titleKey).typeId() != QMetaType::QString) {
         qWarning() << "Failed to update routine: title must be text";
+        reportFailure(QStringLiteral("修改例行失败：标题必须是文本"));
         return false;
     }
     int categoryId = 0;
     if (changes.contains(categoryKey)
         && !QmlValues::integer(changes.value(categoryKey), -1, std::numeric_limits<int>::max(), &categoryId)) {
         qWarning() << "Failed to update routine: invalid category id";
+        reportFailure(QStringLiteral("修改例行失败：科目编号无效"));
         return false;
     }
     if (id <= 0) {
         qWarning() << "Failed to update routine: invalid id" << id;
+        reportFailure(QStringLiteral("修改例行失败：例行编号无效"));
         return false;
     }
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to update routine: database is not open";
+        reportFailure(QStringLiteral("修改例行失败：数据库未打开"));
         return false;
     }
     QSqlQuery query(db);
@@ -318,10 +340,12 @@ bool RoutineManager::updateRoutineChanges(int id, const QVariantMap& changes)
     query.bindValue(QStringLiteral(":id"), id);
     if (!query.exec()) {
         qWarning() << "Failed to read routine:" << query.lastError().text();
+        reportFailure(QStringLiteral("修改例行失败：例行读取失败：%1").arg(query.lastError().text()));
         return false;
     }
     if (!query.next()) {
         qWarning() << "Failed to update routine: routine not found" << id;
+        reportFailure(QStringLiteral("修改例行失败：例行不存在或未修改"));
         return false;
     }
     const QString currentTitle = query.value(0).toString();
@@ -342,26 +366,32 @@ bool RoutineManager::updateRoutine(int id, const QString& title, int categoryId)
 {
     if (id <= 0) {
         qWarning() << "Failed to update routine: invalid id" << id;
+        reportFailure(QStringLiteral("修改例行失败：例行编号无效"));
         return false;
     }
 
     const QString normalizedTitle = title.trimmed();
     if (normalizedTitle.isEmpty()) {
         qWarning() << "Failed to update routine: title is empty";
+        reportFailure(QStringLiteral("修改例行失败：标题不能为空"));
         return false;
     }
     if (normalizedTitle.size() > TaskManager::kMaxTitleLength) {
         qWarning() << "Failed to update routine: title exceeds"
                    << TaskManager::kMaxTitleLength << "characters";
+        reportFailure(QStringLiteral("修改例行失败：标题超长（最多 %1 字）").arg(TaskManager::kMaxTitleLength));
         return false;
     }
 
+    QString failure;
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to update routine: database is not open";
+        reportFailure(QStringLiteral("修改例行失败：数据库未打开"));
         return false;
     }
-    if (!routineCategoryExists(db, categoryId, "update")) {
+    if (!routineCategoryExists(db, categoryId, "update", &failure)) {
+        reportFailure(QStringLiteral("修改例行失败：%1").arg(failure));
         return false;
     }
 
@@ -369,6 +399,7 @@ bool RoutineManager::updateRoutine(int id, const QString& title, int categoryId)
     // 列表里的规则已是新名字，今日任务却还挂着旧名字，用户无从判断哪个才算数。
     if (!db.transaction()) {
         qWarning() << "Failed to start routine update transaction:" << db.lastError().text();
+        reportFailure(QStringLiteral("修改例行失败：无法开始数据库事务：%1").arg(db.lastError().text()));
         return false;
     }
 
@@ -383,12 +414,14 @@ bool RoutineManager::updateRoutine(int id, const QString& title, int categoryId)
 
     if (!query.exec()) {
         qWarning() << "Failed to update routine:" << query.lastError().text();
+        reportFailure(QStringLiteral("修改例行失败：数据库写入失败：%1").arg(query.lastError().text()));
         db.rollback();
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to update routine: routine not found" << id;
+        reportFailure(QStringLiteral("修改例行失败：例行不存在或未修改"));
         db.rollback();
         return false;
     }
@@ -397,13 +430,15 @@ bool RoutineManager::updateRoutine(int id, const QString& title, int categoryId)
     // 今日任务列表里仍然是旧标题、旧科目，要等到明天生成新任务才对得上。
     bool taskSynced = false;
     if (!syncTodayTaskToRoutine(db, id, normalizedTitle, categoryId, logicalTodayString(),
-                                &taskSynced)) {
+                                &taskSynced, &failure)) {
+        reportFailure(QStringLiteral("修改例行失败：%1").arg(failure));
         db.rollback();
         return false;
     }
 
     if (!db.commit()) {
         qWarning() << "Failed to commit routine update:" << db.lastError().text();
+        reportFailure(QStringLiteral("修改例行失败：提交数据库事务失败：%1").arg(db.lastError().text()));
         db.rollback();
         return false;
     }
@@ -422,24 +457,29 @@ bool RoutineManager::deleteRoutine(int id)
 {
     if (id <= 0) {
         qWarning() << "Failed to delete routine: invalid id" << id;
+        reportFailure(QStringLiteral("删除例行失败：例行编号无效"));
         return false;
     }
 
+    QString failure;
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to delete routine: database is not open";
+        reportFailure(QStringLiteral("删除例行失败：数据库未打开"));
         return false;
     }
 
     if (!db.transaction()) {
         qWarning() << "Failed to start routine delete transaction:" << db.lastError().text();
+        reportFailure(QStringLiteral("删除例行失败：无法开始数据库事务：%1").arg(db.lastError().text()));
         return false;
     }
 
     // 先收回今天那条还没动过的实例，再处理其余任务。顺序不能反：detach 会把 routine_id 清成
     // NULL，先 detach 的话回收查询按 routine_id 就再也找不到这条任务了。
     QList<int> reclaimedTaskIds;
-    if (!reclaimTodayTask(db, id, logicalTodayString(), &reclaimedTaskIds)) {
+    if (!reclaimTodayTask(db, id, logicalTodayString(), &reclaimedTaskIds, &failure)) {
+        reportFailure(QStringLiteral("删除例行失败：%1").arg(failure));
         db.rollback();
         return false;
     }
@@ -453,6 +493,7 @@ bool RoutineManager::deleteRoutine(int id)
     if (!detachTasks.exec()) {
         qWarning() << "Failed to detach tasks before deleting routine:"
                    << detachTasks.lastError().text();
+        reportFailure(QStringLiteral("删除例行失败：解除任务关联失败：%1").arg(detachTasks.lastError().text()));
         db.rollback();
         return false;
     }
@@ -464,8 +505,10 @@ bool RoutineManager::deleteRoutine(int id)
         // 例行不存在时保持原有的日志文案；其余是写废纸篓失败。
         if (trashError == TrashStore::kMissingRecord) {
             qWarning() << "Failed to delete routine: routine not found" << id;
+            reportFailure(QStringLiteral("删除例行失败：例行不存在或未修改"));
         } else {
             qWarning() << "Failed to move routine to trash:" << trashError;
+            reportFailure(QStringLiteral("删除例行失败：写入废纸篓失败：%1").arg(trashError));
         }
         db.rollback();
         return false;
@@ -477,18 +520,21 @@ bool RoutineManager::deleteRoutine(int id)
 
     if (!query.exec()) {
         qWarning() << "Failed to delete routine:" << query.lastError().text();
+        reportFailure(QStringLiteral("删除例行失败：数据库写入失败：%1").arg(query.lastError().text()));
         db.rollback();
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to delete routine: routine not found" << id;
+        reportFailure(QStringLiteral("删除例行失败：例行不存在或未修改"));
         db.rollback();
         return false;
     }
 
     if (!db.commit()) {
         qWarning() << "Failed to commit routine deletion:" << db.lastError().text();
+        reportFailure(QStringLiteral("删除例行失败：提交数据库事务失败：%1").arg(db.lastError().text()));
         db.rollback();
         return false;
     }
@@ -501,19 +547,24 @@ bool RoutineManager::deleteRoutine(int id)
 
 bool RoutineManager::setRoutineActive(int id, bool active)
 {
+    const QString action = active ? QStringLiteral("启用例行") : QStringLiteral("停用例行");
     if (id <= 0) {
         qWarning() << "Failed to set routine active: invalid id" << id;
+        reportFailure(action + QStringLiteral("失败：例行编号无效"));
         return false;
     }
 
+    QString failure;
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to set routine active: database is not open";
+        reportFailure(action + QStringLiteral("失败：数据库未打开"));
         return false;
     }
 
     if (!db.transaction()) {
         qWarning() << "Failed to start routine active transaction:" << db.lastError().text();
+        reportFailure(action + QStringLiteral("失败：无法开始数据库事务：%1").arg(db.lastError().text()));
         return false;
     }
 
@@ -524,12 +575,14 @@ bool RoutineManager::setRoutineActive(int id, bool active)
 
     if (!query.exec()) {
         qWarning() << "Failed to set routine active:" << query.lastError().text();
+        reportFailure(action + QStringLiteral("失败：数据库写入失败：%1").arg(query.lastError().text()));
         db.rollback();
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to set routine active: routine not found" << id;
+        reportFailure(action + QStringLiteral("失败：例行不存在或未修改"));
         db.rollback();
         return false;
     }
@@ -540,11 +593,13 @@ bool RoutineManager::setRoutineActive(int id, bool active)
     // 自然会把它生成回来；没收回过（用户已手动删掉，或实例已完成/专注过）则戳仍是今天，不会重复生成。
     QList<int> reclaimedTaskIds;
     if (!active) {
-        if (!reclaimTodayTask(db, id, logicalTodayString(), &reclaimedTaskIds)) {
+        if (!reclaimTodayTask(db, id, logicalTodayString(), &reclaimedTaskIds, &failure)) {
+            reportFailure(QStringLiteral("停用例行失败：%1").arg(failure));
             db.rollback();
             return false;
         }
-        if (!reclaimedTaskIds.isEmpty() && !clearGenerationStamp(db, id)) {
+        if (!reclaimedTaskIds.isEmpty() && !clearGenerationStamp(db, id, &failure)) {
+            reportFailure(QStringLiteral("停用例行失败：%1").arg(failure));
             db.rollback();
             return false;
         }
@@ -552,6 +607,7 @@ bool RoutineManager::setRoutineActive(int id, bool active)
 
     if (!db.commit()) {
         qWarning() << "Failed to commit routine active change:" << db.lastError().text();
+        reportFailure(action + QStringLiteral("失败：提交数据库事务失败：%1").arg(db.lastError().text()));
         db.rollback();
         return false;
     }
@@ -565,21 +621,26 @@ bool RoutineManager::setRoutineWeekdays(int id, int weekdays)
 {
     if (id <= 0) {
         qWarning() << "Failed to set routine weekdays: invalid id" << id;
+        reportFailure(QStringLiteral("修改例行重复日失败：例行编号无效"));
         return false;
     }
 
     if (!routineWeekdaysAreValid(weekdays, "set weekdays of")) {
+        reportFailure(QStringLiteral("修改例行重复日失败：重复日无效（必须为 1–127）"));
         return false;
     }
 
+    QString failure;
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to set routine weekdays: database is not open";
+        reportFailure(QStringLiteral("修改例行重复日失败：数据库未打开"));
         return false;
     }
 
     if (!db.transaction()) {
         qWarning() << "Failed to start routine weekdays transaction:" << db.lastError().text();
+        reportFailure(QStringLiteral("修改例行重复日失败：无法开始数据库事务：%1").arg(db.lastError().text()));
         return false;
     }
 
@@ -590,12 +651,14 @@ bool RoutineManager::setRoutineWeekdays(int id, int weekdays)
 
     if (!query.exec()) {
         qWarning() << "Failed to set routine weekdays:" << query.lastError().text();
+        reportFailure(QStringLiteral("修改例行重复日失败：数据库写入失败：%1").arg(query.lastError().text()));
         db.rollback();
         return false;
     }
 
     if (query.numRowsAffected() == 0) {
         qWarning() << "Failed to set routine weekdays: routine not found" << id;
+        reportFailure(QStringLiteral("修改例行重复日失败：例行不存在或未修改"));
         db.rollback();
         return false;
     }
@@ -609,11 +672,13 @@ bool RoutineManager::setRoutineWeekdays(int id, int weekdays)
     const QDate today = logicalTodayDate();
     const int todayBit = RoutineRules::maskForDayOfWeek(today.dayOfWeek());
     if ((weekdays & todayBit) == 0) {
-        if (!reclaimTodayTask(db, id, today.toString(Qt::ISODate), &reclaimedTaskIds)) {
+        if (!reclaimTodayTask(db, id, today.toString(Qt::ISODate), &reclaimedTaskIds, &failure)) {
+            reportFailure(QStringLiteral("修改例行重复日失败：%1").arg(failure));
             db.rollback();
             return false;
         }
-        if (!reclaimedTaskIds.isEmpty() && !clearGenerationStamp(db, id)) {
+        if (!reclaimedTaskIds.isEmpty() && !clearGenerationStamp(db, id, &failure)) {
+            reportFailure(QStringLiteral("修改例行重复日失败：%1").arg(failure));
             db.rollback();
             return false;
         }
@@ -621,6 +686,7 @@ bool RoutineManager::setRoutineWeekdays(int id, int weekdays)
 
     if (!db.commit()) {
         qWarning() << "Failed to commit routine weekdays change:" << db.lastError().text();
+        reportFailure(QStringLiteral("修改例行重复日失败：提交数据库事务失败：%1").arg(db.lastError().text()));
         db.rollback();
         return false;
     }

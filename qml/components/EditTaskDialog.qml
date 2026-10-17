@@ -68,6 +68,9 @@ Popup {
     // 正在编辑的任务是否已完成。已完成才显示「完成记录」一栏：未完成的任务还谈不上做完了什么，
     // 它残留的旧记录（取消完成时保留下来的）也不该在这里被改动。
     property bool editingCompleted: false
+    property var taskManagerRef: null
+    // 同步服务失败只由本次提交认领；不用 Connections.enabled，避免绑定重算晚于信号。
+    property bool writingTask: false
     // 生产页面注入返回 bool 的写入函数 (taskId, changes)；保留信号用于独立组件和兼容测试。
     // changes 只含用户改过的字段（见 changedFields），宿主原样交给 TaskManager.updateTaskChanges。
     property var taskSubmitter: null
@@ -177,15 +180,20 @@ Popup {
         target: root.categoryManagerRef
         ignoreUnknownSignals: true
 
-        function onOperationFailed(message) {
-            root.errorText = String(message || "科目加载失败")
-        }
         // 门禁写在处理函数里，不用 enabled 绑定：信号是同步发出的，
         // enabled 的重算可能晚于它。关着时不必刷，openForTask 本来就会刷。
         function onCategoriesChanged() {
             if (root.visible) {
                 root.syncCategoriesWhileOpen()
             }
+        }
+    }
+
+    Connections {
+        target: root.taskManagerRef
+        ignoreUnknownSignals: true
+        function onOperationFailed(message) {
+            if (root.visible && root.writingTask) root.errorText = String(message)
         }
     }
 
@@ -324,13 +332,17 @@ Popup {
         } else if (root.taskSubmitter) {
             // taskSubmitter 由宿主在运行时注入为函数，静态工具只能看到 var 属性。
             // qmllint disable use-proper-function
-            succeeded = Boolean(root.taskSubmitter(root.editingTaskId, changes))
+            root.errorText = ""
+            root.writingTask = true
+            try {
+                succeeded = Boolean(root.taskSubmitter(root.editingTaskId, changes))
+            } finally { root.writingTask = false }
             // qmllint enable use-proper-function
         } else {
             root.taskEdited(root.editingTaskId, changes)
         }
         if (!succeeded) {
-            root.errorText = "保存失败，请检查数据库后重试"
+            if (root.errorText.length === 0) root.errorText = "保存失败，请检查数据库后重试"
             titleField.forceActiveFocus()
             titleField.selectAll()
             return

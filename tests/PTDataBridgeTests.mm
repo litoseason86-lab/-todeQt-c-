@@ -1,3 +1,7 @@
+#include "../src/services/RoutineManager.h"
+#include "../src/services/CategoryManager.h"
+#include "../src/services/TaskManager.h"
+#include <QScopeGuard>
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/AppSettings.h"
 #include "../src/services/SyncController.h"
@@ -47,6 +51,8 @@
 class PTDataBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void entityWriteReasonsAreClaimed_data();
+    void entityWriteReasonsAreClaimed();
     void syncActionsRejectReleasedService_data();
     void syncActionsRejectReleasedService();
     void initTestCase();
@@ -68,6 +74,57 @@ private:
     QTemporaryDir m_preferences;
     QTemporaryDir m_database;
 };
+
+// 产品保证：每个写入桥接都保留参数、存储及数据库关闭的具体服务原因。
+void PTDataBridgeTests::entityWriteReasonsAreClaimed_data()
+{
+    QTest::addColumn<QString>("action"); QTest::addColumn<QString>("failure");
+    for (const QString& action : QStringList{"routine-add", "routine-update", "routine-delete", "routine-active", "routine-weekdays"})
+        for (const QString& failure : QStringList{"invalid", "closed", "write"})
+            QTest::newRow((action + '-' + failure).toUtf8().constData()) << action << failure;
+}
+// 产品保证：一次调用的 NSError 与服务原因逐字一致，外壳和旁观桥接均不重复收到。
+void PTDataBridgeTests::entityWriteReasonsAreClaimed()
+{
+    @autoreleasepool {
+        QFETCH(QString, action); QFETCH(QString, failure);
+        auto* categories = CategoryManager::instance();
+        const int category = categories->addCategory(QStringLiteral("桥接科目"), "#123456");
+        QVERIFY(category > 0);
+        auto* service = RoutineManager::instance();
+        QVERIFY(service->addRoutine(QStringLiteral("桥接例行"), category));
+        const int validId = service->getRoutines().first().toMap().value("id").toInt();
+        PTRoutineBridge* bridge = [PTRoutineBridge new]; PTRoutineBridge* observer = [PTRoutineBridge new];
+        __block int ownerFailures = 0, observerFailures = 0;
+        bridge.onFailure = ^(NSString*) { ++ownerFailures; }; observer.onFailure = ^(NSString*) { ++observerFailures; };
+        int shellFailures = 0; QObject shell;
+        PTBridgeSupport::registerUnclaimedFailureHandler(&shell, [&](const QString&) { ++shellFailures; });
+        const auto unregister = qScopeGuard([&] { PTBridgeSupport::unregisterUnclaimedFailureHandler(&shell); });
+        QSignalSpy failures(service, SIGNAL(operationFailed(QString))); QVERIFY(failures.isValid());
+        if (failure == "closed") DatabaseManager::instance()->close();
+        if (failure == "write") {
+            const QString table = action.startsWith("task-") ? "tasks" : action.startsWith("category-") ? "categories" : "routines";
+            const QString verb = action.endsWith("create") || action.endsWith("add") ? "INSERT" : action.endsWith("delete") ? "DELETE" : "UPDATE";
+            QSqlQuery trigger(DatabaseManager::instance()->database());
+            QVERIFY(trigger.exec("CREATE TEMP TRIGGER t32_bridge_failure BEFORE " + verb + " ON " + table + " BEGIN SELECT RAISE(ABORT, 'T32 bridge write blocked'); END"));
+        }
+        const int id = failure == "invalid" ? 0 : validId;
+        NSString* title = failure == "invalid" ? @"" : @"新标题";
+        NSError* error = nil;
+        const BOOL result = action == "routine-add" ? [bridge addTitle:title categoryId:category weekdays:127 error:&error]
+            : action == "routine-update" ? [bridge update:id changes:@{@"title":title} error:&error]
+            : action == "routine-delete" ? [bridge deleteRoutine:id error:&error]
+            : action == "routine-active" ? [bridge setActive:id active:NO error:&error]
+            : [bridge setWeekdays:id weekdays:1 error:&error];
+        QVERIFY(!result); QVERIFY(error != nil); QCOMPARE(failures.size(), 1);
+        const QString message = failures.first().first().toString();
+        QVERIFY(message.contains(QStringLiteral("失败：")));
+        if (failure == "write") QVERIFY(message.contains(QStringLiteral("T32 bridge write blocked")));
+        QCOMPARE(PTBridgeSupport::string(error.localizedDescription), message);
+        QCOMPARE(ownerFailures, 0); QCOMPARE(observerFailures, 0); QCOMPARE(shellFailures, 0);
+    }
+}
+
 // 产品保证：桥接验证只写测试偏好与临时数据库，不触及用户数据。
 void PTDataBridgeTests::initTestCase() {
     QVERIFY(m_preferences.isValid());

@@ -1,3 +1,4 @@
+#include <QScopeGuard>
 #include "../src/platform/ios/bridge/PTBridgeSupport.h"
 #include "../src/services/PendingDeletion.h"
 #include "../src/services/TaskInteractionCoordinator.h"
@@ -42,6 +43,8 @@ QDateTime QDateTime::currentDateTime() {
 class PTCoreBridgeTests : public QObject {
     Q_OBJECT
 private slots:
+    void entityWriteReasonsAreClaimed_data();
+    void entityWriteReasonsAreClaimed();
     void focusPreferenceRejectionKeepsSpecificReason();
     void taskActionRejectionsKeepSpecificReason_data();
     void taskActionRejectionsKeepSpecificReason();
@@ -82,6 +85,62 @@ private:
     QTemporaryDir m_preferences;
     QTemporaryDir m_database;
 };
+
+// 产品保证：每个写入桥接都保留参数、存储及数据库关闭的具体服务原因。
+void PTCoreBridgeTests::entityWriteReasonsAreClaimed_data()
+{
+    QTest::addColumn<QString>("action"); QTest::addColumn<QString>("failure");
+    for (const QString& action : QStringList{"task-create", "task-update", "task-move", "category-add", "category-update", "category-delete"})
+        for (const QString& failure : QStringList{"invalid", "closed", "write"})
+            QTest::newRow((action + '-' + failure).toUtf8().constData()) << action << failure;
+}
+// 产品保证：一次调用的 NSError 与服务原因逐字一致，外壳和旁观桥接均不重复收到。
+void PTCoreBridgeTests::entityWriteReasonsAreClaimed()
+{
+    @autoreleasepool {
+        QFETCH(QString, action); QFETCH(QString, failure);
+        auto* categories = CategoryManager::instance(); auto* tasks = TaskManager::instance();
+        const int category = categories->addCategory(QStringLiteral("桥接科目"), "#123456");
+        QVERIFY(category > 0);
+        const int task = tasks->createTask(QStringLiteral("桥接任务"), QDate(2024, 2, 29), category, 25, QStringLiteral("旧备注"));
+        QVERIFY(task > 0);
+        QObject* service = action.startsWith("task-") ? static_cast<QObject*>(tasks) : static_cast<QObject*>(categories);
+        const int validId = action.startsWith("task-") ? task : category;
+        PTTaskBridge* taskBridge = [PTTaskBridge new]; PTTaskBridge* taskObserver = [PTTaskBridge new];
+        PTCategoryBridge* categoryBridge = [PTCategoryBridge new]; PTCategoryBridge* categoryObserver = [PTCategoryBridge new];
+        __block int ownerFailures = 0, observerFailures = 0;
+        taskBridge.onFailure = ^(NSString*) { ++ownerFailures; }; categoryBridge.onFailure = ^(NSString*) { ++ownerFailures; };
+        taskObserver.onFailure = ^(NSString*) { ++observerFailures; }; categoryObserver.onFailure = ^(NSString*) { ++observerFailures; };
+        int shellFailures = 0; QObject shell;
+        PTBridgeSupport::registerUnclaimedFailureHandler(&shell, [&](const QString&) { ++shellFailures; });
+        const auto unregister = qScopeGuard([&] { PTBridgeSupport::unregisterUnclaimedFailureHandler(&shell); });
+        QSignalSpy failures(service, SIGNAL(operationFailed(QString))); QVERIFY(failures.isValid());
+        if (failure == "closed") DatabaseManager::instance()->close();
+        if (failure == "write") {
+            const QString table = action.startsWith("task-") ? "tasks" : action.startsWith("category-") ? "categories" : "routines";
+            const QString verb = action.endsWith("create") || action.endsWith("add") ? "INSERT" : action.endsWith("delete") ? "DELETE" : "UPDATE";
+            QSqlQuery trigger(DatabaseManager::instance()->database());
+            QVERIFY(trigger.exec("CREATE TEMP TRIGGER t32_bridge_failure BEFORE " + verb + " ON " + table + " BEGIN SELECT RAISE(ABORT, 'T32 bridge write blocked'); END"));
+        }
+        const int id = failure == "invalid" ? 0 : validId;
+        NSString* title = failure == "invalid" ? @"" : @"新标题";
+        NSError* error = nil;
+        PTTaskChanges* changes = [PTTaskChanges new]; changes.title = title;
+        const BOOL result = action == "task-create" ? [taskBridge createTask:title date:@"2024-02-29" categoryId:category estimatedMinutes:25 notes:@"" error:&error] > 0
+            : action == "task-update" ? [taskBridge updateTask:id changes:changes error:&error]
+            : action == "task-move" ? [taskBridge moveTask:id toDate:@"2024-03-01" error:&error]
+            : action == "category-add" ? [categoryBridge addCategory:title color:@"#123456" error:&error] > 0
+            : action == "category-update" ? [categoryBridge updateCategory:id name:title color:@"#123456" error:&error]
+            : [categoryBridge deleteCategory:id error:&error];
+        QVERIFY(!result); QVERIFY(error != nil); QCOMPARE(failures.size(), 1);
+        const QString message = failures.first().first().toString();
+        QVERIFY(message.contains(QStringLiteral("失败：")));
+        if (failure == "write") QVERIFY(message.contains(QStringLiteral("T32 bridge write blocked")));
+        QCOMPARE(PTBridgeSupport::string(error.localizedDescription), message);
+        QCOMPARE(ownerFailures, 0); QCOMPARE(observerFailures, 0); QCOMPARE(shellFailures, 0);
+    }
+}
+
 // 产品保证：整月合计桥接保留逻辑日和零日，错误不会伪装成全零月份，变更后新读取使用最新结果。
 void PTCoreBridgeTests::historyMonthTotalsAndReadFailures()
 {

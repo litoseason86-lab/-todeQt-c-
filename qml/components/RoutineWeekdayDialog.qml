@@ -26,6 +26,15 @@ Popup {
     // 弹窗里的选择是草稿：点「保存」才写库，点「取消」或按 Esc 原样丢弃。
     property int selectedWeekdays: Weekdays.EVERY_DAY
     property string errorText: ""
+    // 重复日保存的原因只显示在本子弹窗，父表单和页面不重复接收。
+    property bool saving: false
+    Connections {
+        target: root.routineManagerRef
+        ignoreUnknownSignals: true
+        function onOperationFailed(message) {
+            if (root.visible && root.saving) root.errorText = String(message)
+        }
+    }
 
     signal weekdaysSaved(int routineId, int weekdays)
 
@@ -114,11 +123,16 @@ Popup {
             return
         }
 
-        if (root.routineManagerRef.setRoutineWeekdays(root.routineId, root.selectedWeekdays)) {
+        root.errorText = ""
+        var succeeded
+        root.saving = true
+        try { succeeded = root.routineManagerRef.setRoutineWeekdays(root.routineId, root.selectedWeekdays) }
+        finally { root.saving = false }
+        if (succeeded) {
             root.weekdaysSaved(root.routineId, root.selectedWeekdays)
             root.close()
         } else {
-            root.errorText = "重复日保存失败，请重试"
+            if (root.errorText.length === 0) root.errorText = "重复日保存失败，请重试"
         }
     }
 

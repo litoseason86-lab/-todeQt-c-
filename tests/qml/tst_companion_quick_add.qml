@@ -121,8 +121,11 @@ TestCase {
     }
 
     function test_unrelatedCompletionFailureDoesNotBecomeLoadError_data() {
-        // 产品保证：伴侣页不会把其它入口的完成、撤销或带笔记完成失败再显示为加载错误。
-        return [ { tag: "complete", message: "完成失败：任务不存在" },
+        // 产品保证：伴侣页不会把其它入口的完成、新建、修改或改期失败再显示为加载错误。
+        return [ { tag: "create", message: "新建任务失败：数据库未打开" },
+                 { tag: "update", message: "修改任务失败：任务不存在" },
+                 { tag: "move", message: "任务改期失败：日期无效" },
+                 { tag: "complete", message: "完成失败：任务不存在" },
                  { tag: "uncomplete", message: "取消完成失败：数据库未打开" },
                  { tag: "note", message: "完成并记笔记失败：笔记超长" } ]
     }

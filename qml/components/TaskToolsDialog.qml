@@ -131,8 +131,8 @@ Dialog {
         ignoreUnknownSignals: true
         function onTasksChanged() { if (root.opened) root.refresh(false) }
         function onOperationFailed(message) {
-            // 这里没有完成入口，别处为 iPad 播报的完成原因不能污染当前弹窗。
-            if (/^(完成|取消完成|完成并记笔记)失败：/.test(String(message || "")))
+            // 完成和单条写入由各自发起处认领；不能把它们显示成工具的搜索或批量操作失败。
+            if (/^(完成|取消完成|完成并记笔记|新建任务|修改任务|任务改期)失败：/.test(String(message || "")))
                 return
             if (root.visible) root.message = message
         }
@@ -236,10 +236,12 @@ Dialog {
         Label { Layout.fillWidth: true; text: root.message; textFormat: Text.PlainText; wrapMode: Text.WordWrap; color: Theme.inkSoft }
     }
     EditTaskDialog {
+        taskManagerRef: root.taskManagerRef
         interactionCoordinatorRef: root.interactionCoordinatorRef
         interactionSource: "task_tools.edit_dialog"
         onOpenFailed: function(message) { root.message = message }
         id: taskEditor
+        objectName: "toolsEditTaskDialog"
         maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
         parent: root.parent
         categoryManagerRef: root.categoryManagerRef

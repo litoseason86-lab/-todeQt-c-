@@ -49,6 +49,8 @@ Item {
     property int totalFocusSeconds: 0
     property int dailyFocusGoalMinutes: 0
     property string loadError: ""
+    // 页面只认领自己发起的行内修改；直属或任务工具中的表单都在各自原位置显示失败。
+    property bool renamingTask: false
     // all=全部 done=已完成；仪表盘任务面板只看不加，添加去今日任务页。
     property string filterMode: "all"
     property bool completionRefreshDelayActive: false
@@ -182,6 +184,10 @@ Item {
             // 完成、撤销和完成弹窗已有各自的失败提示；服务为 iPad 播报的原因不能再叠加为页面错误。
             if (/^(完成|取消完成|完成并记笔记)失败：/.test(String(message || "")))
                 return
+            // 不能只检查本页的编辑弹窗：任务工具也可能在本页上方打开同类表单。
+            if (/^新建任务失败：/.test(String(message || ""))
+                    || (/^修改任务失败：/.test(String(message || "")) && !root.renamingTask))
+                return
             root.loadError = String(message || "任务加载失败")
         }
     }
@@ -247,6 +253,9 @@ Item {
 
         function onOperationFailed(message) {
             if (!root.pageActive)
+                return
+            // 规则编辑有自己的管理／重复日弹窗；这里只展示生成与读取失败。
+            if (/^(新增例行|修改例行|删除例行|启用例行|停用例行|修改例行重复日)失败：/.test(String(message || "")))
                 return
             root.loadError = String(message || "每日例行生成失败")
         }
@@ -842,11 +851,16 @@ Item {
                                         // 行内改名只改标题：科目、日期不经手，也就不会把同步刚写进来的值盖回去，
                                         // 只有旧科目文本、没有科目编号的老任务也不会因为改名丢掉科目。
                                         renameSubmitter: function (id, newTitle) {
-                                            var succeeded = Boolean(root.taskManagerRef.updateTaskChanges(id, {
-                                                title: newTitle
-                                            }))
+                                            root.loadError = ""
+                                            var succeeded
+                                            root.renamingTask = true
+                                            try {
+                                                succeeded = Boolean(root.taskManagerRef.updateTaskChanges(id, {
+                                                    title: newTitle
+                                                }))
+                                            } finally { root.renamingTask = false }
                                             if (!succeeded) {
-                                                root.loadError = "任务更新失败，请重试"
+                                                if (root.loadError.length === 0) root.loadError = "任务更新失败，请重试"
                                             }
                                             return succeeded
                                         }
@@ -1048,10 +1062,12 @@ Item {
     }
 
     EditTaskDialog {
+        taskManagerRef: root.taskManagerRef
         interactionCoordinatorRef: root.interactionCoordinatorRef
         interactionSource: "DashboardView.edit_dialog"
         onOpenFailed: function(message) { root.loadError = message }
         id: editTaskDialog
+        objectName: "dashboardEditTaskDialog"
         maxNotesLength: root.taskManagerRef ? Number(root.taskManagerRef.maxNotesLength || 2000) : 2000
 
         parent: root
@@ -1059,11 +1075,7 @@ Item {
 
         // changes 只含用户改过的字段，原样交给字段级接口；没改的字段不写回，不会盖掉同步刚写进来的值。
         taskSubmitter: function (taskId, changes) {
-            var succeeded = Boolean(root.taskManagerRef.updateTaskChanges(taskId, changes))
-            if (!succeeded) {
-                root.loadError = "任务更新失败，请重试"
-            }
-            return succeeded
+            return Boolean(root.taskManagerRef.updateTaskChanges(taskId, changes))
         }
     }
 

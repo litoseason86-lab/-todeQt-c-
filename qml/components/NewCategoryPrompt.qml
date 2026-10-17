@@ -29,6 +29,15 @@ Popup {
     ]
 
     property string errorText: ""
+    // 只认领本弹窗同步调用的失败，宿主的科目下拉不会再显示一次。
+    property bool writingCategory: false
+    Connections {
+        target: root.categoryManagerRef
+        ignoreUnknownSignals: true
+        function onOperationFailed(message) {
+            if (root.visible && root.writingCategory) root.errorText = String(message)
+        }
+    }
 
     // 新科目建成后发出，携带服务返回的编号与名字。
     signal created(int categoryId, string name)
@@ -59,10 +68,14 @@ Popup {
             return
         }
 
-        var newId = Number(root.categoryManagerRef.addCategory(name, root.nextColor()))
+        root.errorText = ""
+        var newId
+        root.writingCategory = true
+        try { newId = Number(root.categoryManagerRef.addCategory(name, root.nextColor())) }
+        finally { root.writingCategory = false }
         if (!(newId > 0)) {
-            // 服务拒绝的最常见原因是重名。保留输入让用户直接改，不要清空重打。
-            root.errorText = qsTr("没能新建，可能是重名了")
+            // 保留服务给出的本次原因与输入；旧替身没有失败信号时仍提供兜底。
+            if (root.errorText.length === 0) root.errorText = qsTr("没能新建，可能是重名了")
             return
         }
 

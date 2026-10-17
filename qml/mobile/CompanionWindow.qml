@@ -144,8 +144,9 @@ Item {
         }
 
         function onOperationFailed(message) {
-            // 完成和撤销由 setCompleted 的返回值提示；其它入口的完成失败也不应显示成加载错误。
-            if (/^(完成|取消完成|完成并记笔记)失败：/.test(String(message || "")))
+            // 完成和撤销由 setCompleted 的返回值提示；快速记录走旧的两参 addTask，也有自己的提示。
+            // 本轮 createTask、字段修改和单条改期的失败来自其它入口，不能显示成加载错误。
+            if (/^(完成|取消完成|完成并记笔记|新建任务|修改任务|任务改期)失败：/.test(String(message || "")))
                 return
             root.loadError = String(message || "")
         }

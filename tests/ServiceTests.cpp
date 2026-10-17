@@ -8,6 +8,7 @@
 #include <QSqlError>
 #include <QSignalSpy>
 #include <QSqlQuery>
+#include <QSqlRecord>
 #include <QElapsedTimer>
 #include <QSettings>
 #include <QSet>
@@ -893,6 +894,8 @@ private slots:
     void notesRoundTripAndRenameDoesNotEraseThem();
     void overlongNotesAreRejectedInsteadOfTruncated();
     void completeTaskWithNoteStoresNoteAndCompletesInOneWrite();
+    void entityWriteFailuresReportReason_data();
+    void entityWriteFailuresReportReason();
     void taskCompletionFailuresReportReason_data();
     void taskCompletionFailuresReportReason();
     void successfulTaskCompletionDoesNotReportFailure();
@@ -8482,6 +8485,224 @@ void ServiceTests::completeTaskWithNoteStoresNoteAndCompletesInOneWrite()
     QVERIFY(tasks->completeTaskWithNote(nullId, QString()));
     QVERIFY(tasks->getTask(nullId).value(QStringLiteral("completed")).toBool());
     QVERIFY(tasks->getTask(nullId).value(QStringLiteral("completionNote")).toString().isEmpty());
+}
+
+// 产品保证：任务、科目和例行的每种写入拒绝都包含动作与可定位原因，成功调用不误报。
+void ServiceTests::entityWriteFailuresReportReason_data()
+{
+    QTest::addColumn<QString>("action");
+    QTest::addColumn<QString>("failure");
+    QTest::addColumn<QString>("reason");
+    const auto row = [](const QString& action, const QString& failure, const QString& reason) {
+        QTest::newRow((action + QLatin1Char('-') + failure).toUtf8().constData()) << action << failure << reason;
+    };
+    const QStringList actions = {"task-create", "task-update", "task-move", "category-add", "category-update",
+        "category-delete", "routine-add", "routine-update", "routine-delete", "routine-active", "routine-weekdays"};
+    for (const QString& action : actions) {
+        row(action, "closed", "数据库未打开");
+        row(action, "write", "T32 write blocked");
+        row(action, "success", "");
+        if (!action.endsWith("create") && !action.endsWith("add")) {
+            row(action, "invalid-id", "编号无效");
+            row(action, "missing", "不存在");
+            if (action != "task-move") row(action, "ignored", "未");
+        }
+    }
+    for (const QString& action : {QString("task-create"), QString("task-update"), QString("routine-add"), QString("routine-update")}) {
+        row(action, "blank", "标题不能为空");
+        row(action, "long-title", "标题超长");
+        row(action, "category-missing", "科目不存在");
+        row(action, "category-read", "读取失败");
+    }
+    for (const QString& action : {QString("task-create"), QString("task-update")}) {
+        row(action, "bad-date", "日期无效");
+        row(action, "long-notes", "备注超长");
+    }
+    row("task-move", "bad-date", "日期无效");
+    row("task-move", "read", "读取失败");
+    row("task-move", "ignored", "不存在");
+    row("task-update", "unknown", "未知字段");
+    row("task-update", "text-type", "必须是文本");
+    row("task-update", "category-type", "科目编号无效");
+    row("task-update", "estimate-type", "预计用时无效");
+    row("task-update", "long-completion", "完成记录超长");
+    row("task-update", "empty-missing", "不存在");
+    row("task-create", "ignored", "未写入");
+    row("task-create", "insert-id", "已保存");
+    for (const QString& action : {QString("category-add"), QString("category-update")}) {
+        row(action, "blank", "名称不能为空");
+        row(action, "bad-color", "颜色无效");
+        row(action, "duplicate", "名称已存在");
+    }
+    row("category-add", "order", "no such column");
+    row("routine-add", "order", "no such column");
+    for (const QString& action : {QString("category-update"), QString("category-delete"), QString("routine-update")})
+        row(action, "read", "读取失败");
+    row("category-delete", "preset", "预设科目不能删除");
+    for (const QString& action : {QString("category-delete"), QString("routine-update"), QString("routine-delete"), QString("routine-active"), QString("routine-weekdays")}) {
+        row(action, "begin", "事务");
+        row(action, "commit", "FOREIGN KEY");
+        row(action, "task-write", "T32 task blocked");
+    }
+    row("routine-delete", "task-detach", "T32 detach blocked");
+    for (const QString& action : {QString("routine-delete"), QString("routine-active"), QString("routine-weekdays")})
+        row(action, "reclaim-read", "读取今日例行任务失败");
+    row("routine-active", "enable-write", "T32 write blocked");
+    row("routine-delete", "trash-write", "T32 trash blocked");
+    for (const QString& action : {QString("routine-add"), QString("routine-weekdays")}) {
+        row(action, "zero-mask", "重复日无效");
+        row(action, "bad-mask", "重复日无效");
+    }
+    row("routine-update", "unknown", "未知字段");
+    row("routine-update", "text-type", "必须是文本");
+    row("routine-update", "category-type", "科目编号无效");
+    row("routine-update", "empty-missing", "不存在");
+    row("routine-active", "stamp", "T32 stamp blocked");
+    row("routine-weekdays", "stamp", "T32 stamp blocked");
+    row("routine-delete", "reclaim-mark", "T32 mark blocked");
+    row("routine-delete", "reclaim-clear", "T32 clear blocked");
+}
+
+// 产品保证：写入失败只报告一次，不广播成功或改变业务数据；事务中已完成的前序写入也回滚。
+void ServiceTests::entityWriteFailuresReportReason()
+{
+    QFETCH(QString, action);
+    QFETCH(QString, failure);
+    QFETCH(QString, reason);
+    auto* tasks = TaskManager::instance();
+    auto* categories = CategoryManager::instance();
+    auto* routines = RoutineManager::instance();
+    auto db = DatabaseManager::instance()->database();
+    const int category = categories->addCategory(QStringLiteral("T32 科目"), "#123456");
+    QVERIFY(category > 0);
+    QVERIFY(categories->addCategory(QStringLiteral("另一个科目"), "#654321") > 0);
+    QVERIFY(routines->addRoutine(QStringLiteral("T32 例行"), category));
+    const int routine = routines->getRoutines().last().toMap().value("id").toInt();
+    QVERIFY(routine > 0);
+    QCOMPARE(routines->materializeToday(), 1);
+    const int task = tasks->createTask(QStringLiteral("T32 任务"), logicalToday(), category, 25, QStringLiteral("旧备注"));
+    QVERIFY(task > 0);
+    if (failure == "task-detach") {
+        QSqlQuery link(db);
+        QVERIFY(link.exec(QStringLiteral("UPDATE tasks SET routine_id = %1, routine_generated = 1, date = '%2' WHERE id = %3")
+            .arg(routine).arg(logicalToday().addDays(-1).toString(Qt::ISODate)).arg(task)));
+    }
+    const auto snapshot = [&]() {
+        QVariantList data;
+        for (const QString& table : {QString("tasks"), QString("categories"), QString("routines"), QString("trash_items")}) {
+            QSqlQuery query(db);
+            if (!query.exec("SELECT * FROM " + table + " ORDER BY id")) return QVariantList{};
+            while (query.next()) {
+                QVariantList values;
+                for (int column = 0; column < query.record().count(); ++column) values.append(query.value(column));
+                data.append(QVariant(values));
+            }
+        }
+        return data;
+    };
+    const QVariantList before = snapshot();
+    QVERIFY(!before.isEmpty());
+    int id = action.startsWith("task-") ? task : action.startsWith("category-") ? category : routine;
+    if (failure == "invalid-id") id = 0;
+    if (failure == "missing" || failure == "empty-missing") id += 10000;
+    if (failure == "preset") {
+        QSqlQuery preset(db); QVERIFY(preset.exec("SELECT id FROM categories WHERE is_preset = 1 LIMIT 1"));
+        QVERIFY(preset.next()); id = preset.value(0).toInt();
+    }
+    QString title = failure == "blank" ? " " : failure == "long-title" ? QString(TaskManager::kMaxTitleLength + 1, 'x') : QStringLiteral("新标题");
+    QString notes = failure == "long-notes" ? QString(TaskManager::kMaxNotesLength + 1, 'x') : QStringLiteral("新备注");
+    int selectedCategory = failure == "category-missing" ? category + 10000 : category;
+    int mask = failure == "zero-mask" ? 0 : failure == "bad-mask" ? 128
+        : (127 ^ RoutineRules::maskForDayOfWeek(logicalToday().dayOfWeek()));
+    QVariantMap changes{{"title", title}, {"categoryId", selectedCategory}};
+    if (action == "task-update") { changes.insert("date", logicalToday()); changes.insert("notes", notes); }
+    if (failure == "bad-date") changes.insert("date", "bad-date");
+    if (failure == "unknown") changes.insert("unknown", true);
+    if (failure == "text-type") changes.insert("title", 123);
+    if (failure == "category-type") changes.insert("categoryId", "bad-id");
+    if (failure == "estimate-type") changes.insert("estimatedMinutes", 1.5);
+    if (failure == "long-completion") changes.insert("completionNote", QString(TaskManager::kMaxNotesLength + 1, 'x'));
+    if (failure == "empty-missing") changes.clear();
+    QSqlQuery setup(db);
+    QString renamedTable, renamedColumn;
+    const QString table = action.startsWith("task-") ? "tasks" : action.startsWith("category-") ? "categories" : "routines";
+    if (failure == "begin") QVERIFY(db.transaction());
+    if (failure == "read" || failure == "category-read" || failure == "reclaim-read") {
+        renamedTable = failure == "category-read" ? "categories" : failure == "reclaim-read" ? "focus_sessions" : table;
+        QVERIFY(setup.exec("ALTER TABLE " + renamedTable + " RENAME TO t32_hidden"));
+    }
+    if (failure == "order") {
+        renamedColumn = table;
+        QVERIFY(setup.exec("ALTER TABLE " + table + " RENAME COLUMN display_order TO t32_order"));
+    }
+    QString trigger;
+    if (failure == "write" || failure == "enable-write" || failure == "ignored" || failure == "commit") {
+        const QString verb = action.endsWith("create") || action.endsWith("add") ? "INSERT" : action.endsWith("delete") ? "DELETE" : "UPDATE";
+        const QString body = failure == "ignored" ? "SELECT RAISE(IGNORE);" : failure == "commit" ? "INSERT INTO t32_child VALUES(1);" : "SELECT RAISE(ABORT, 'T32 write blocked');";
+        if (failure == "commit") {
+            QVERIFY(setup.exec("CREATE TEMP TABLE t32_parent(id INTEGER PRIMARY KEY)"));
+            QVERIFY(setup.exec("CREATE TEMP TABLE t32_child(id INTEGER REFERENCES t32_parent(id) DEFERRABLE INITIALLY DEFERRED)"));
+        }
+        trigger = "CREATE TEMP TRIGGER t32_failure BEFORE " + verb + " ON " + table + " BEGIN " + body + " END";
+    } else if (failure == "task-write") {
+        const QString verb = action == "routine-update" || action == "category-delete" ? "UPDATE" : "DELETE";
+        trigger = "CREATE TEMP TRIGGER t32_failure BEFORE " + verb + " ON tasks BEGIN SELECT RAISE(ABORT, 'T32 task blocked'); END";
+    } else if (failure == "task-detach") {
+        trigger = "CREATE TEMP TRIGGER t32_failure BEFORE UPDATE ON tasks BEGIN SELECT RAISE(ABORT, 'T32 detach blocked'); END";
+    } else if (failure == "trash-write") {
+        trigger = "CREATE TEMP TRIGGER t32_failure BEFORE INSERT ON trash_items BEGIN SELECT RAISE(ABORT, 'T32 trash blocked'); END";
+    } else if (failure == "stamp") {
+        trigger = "CREATE TEMP TRIGGER t32_failure BEFORE UPDATE OF last_generated_date ON routines BEGIN SELECT RAISE(ABORT, 'T32 stamp blocked'); END";
+    } else if (failure == "reclaim-mark" || failure == "reclaim-clear") {
+        trigger = "CREATE TEMP TRIGGER t32_failure BEFORE UPDATE OF delete_kind ON sync_runtime WHEN NEW.delete_kind "
+            + QString(failure == "reclaim-mark" ? "= 'reclaim'" : "IS NULL") + " BEGIN SELECT RAISE(ABORT, 'T32 "
+            + QString(failure == "reclaim-mark" ? "mark" : "clear") + " blocked'); END";
+    }
+    if (!trigger.isEmpty()) QVERIFY2(setup.exec(trigger), qPrintable(setup.lastError().text()));
+    if (failure == "insert-id") QVERIFY(setup.exec("UPDATE sqlite_sequence SET seq = 2147483647 WHERE name = 'tasks'"));
+    setup.finish();
+    if (failure == "closed") { DatabaseManager::instance()->close(); QVERIFY(!db.isOpen()); }
+    // 任何断言退出也先重开／恢复测试表，避免清理阶段在坏连接上工作。
+    const auto restore = qScopeGuard([&] {
+        if (!db.isOpen()) DatabaseManager::instance()->initialize(m_tempDir->filePath("test.sqlite"));
+        if (failure == "begin") db.rollback();
+        QSqlQuery query(db);
+        if (!renamedTable.isEmpty()) query.exec("ALTER TABLE t32_hidden RENAME TO " + renamedTable);
+        if (!renamedColumn.isEmpty()) query.exec("ALTER TABLE " + renamedColumn + " RENAME COLUMN t32_order TO display_order");
+    });
+    QObject* service = action.startsWith("task-") ? static_cast<QObject*>(tasks) : action.startsWith("category-") ? static_cast<QObject*>(categories) : static_cast<QObject*>(routines);
+    QSignalSpy failed(service, SIGNAL(operationFailed(QString)));
+    QSignalSpy taskChanged(tasks, &TaskManager::tasksChanged), categoryChanged(categories, &CategoryManager::categoriesChanged), routineChanged(routines, &RoutineManager::routinesChanged);
+    QSignalSpy deleted(tasks, &TaskManager::taskDeleted);
+    QVERIFY(failed.isValid());
+    const QVariant date = failure == "bad-date" ? QVariant("bad-date") : QVariant(logicalToday().addDays(1));
+    const bool succeeded = action == "task-create" ? tasks->createTask(title, date, selectedCategory, 25, notes) > 0
+        : action == "task-update" ? tasks->updateTaskChanges(id, changes)
+        : action == "task-move" ? tasks->moveTaskToDate(id, date)
+        : action == "category-add" ? categories->addCategory(failure == "duplicate" ? "另一个科目" : title, failure == "bad-color" ? "bad-color" : "#112233") > 0
+        : action == "category-update" ? categories->updateCategory(id, failure == "duplicate" ? "另一个科目" : title, failure == "bad-color" ? "bad-color" : "#112233")
+        : action == "category-delete" ? categories->deleteCategory(id)
+        : action == "routine-add" ? routines->addRoutine(title, selectedCategory, mask)
+        : action == "routine-update" ? routines->updateRoutineChanges(id, changes)
+        : action == "routine-delete" ? routines->deleteRoutine(id)
+        : action == "routine-active" ? routines->setRoutineActive(id, failure == "enable-write") : routines->setRoutineWeekdays(id, mask);
+    if (failure == "success") { QVERIFY(succeeded); QCOMPARE(failed.size(), 0); return; }
+    QVERIFY(!succeeded);
+    QCOMPARE(failed.size(), 1);
+    const QString message = failed.first().first().toString();
+    const QHash<QString, QString> prefixes{{"task-create", "新建任务"}, {"task-update", "修改任务"}, {"task-move", "任务改期"},
+        {"category-add", "新增科目"}, {"category-update", "修改科目"}, {"category-delete", "删除科目"},
+        {"routine-add", "新增例行"}, {"routine-update", "修改例行"}, {"routine-delete", "删除例行"},
+        {"routine-active", "停用例行"}, {"routine-weekdays", "修改例行重复日"}};
+    QVERIFY2(message.startsWith((failure == "enable-write" ? QStringLiteral("启用例行") : prefixes.value(action)) + QStringLiteral("失败：")), qPrintable(message));
+    QVERIFY2(message.contains(reason), qPrintable(message));
+    if (failure == "insert-id") { QCOMPARE(taskChanged.size(), 1); return; } // 已写入但无可用编号，保留原成功刷新契约。
+    QCOMPARE(taskChanged.size(), 0); QCOMPARE(categoryChanged.size(), 0); QCOMPARE(routineChanged.size(), 0); QCOMPARE(deleted.size(), 0);
+    if (failure == "closed") { QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("test.sqlite"))); db = DatabaseManager::instance()->database(); }
+    if (failure == "begin") { QVERIFY(db.rollback()); }
+    if (!renamedTable.isEmpty()) { QVERIFY(setup.exec("ALTER TABLE t32_hidden RENAME TO " + renamedTable)); renamedTable.clear(); }
+    if (!renamedColumn.isEmpty()) { QVERIFY(setup.exec("ALTER TABLE " + renamedColumn + " RENAME COLUMN t32_order TO display_order")); renamedColumn.clear(); }
+    QCOMPARE(snapshot(), before);
 }
 
 void ServiceTests::taskCompletionFailuresReportReason_data()
