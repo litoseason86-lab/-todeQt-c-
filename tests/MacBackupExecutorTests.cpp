@@ -231,8 +231,11 @@ void MacBackupExecutorTests::realExecutorMatchesInProcessOperations()
     auto isolatedInfo = executor.inspectBackup(request.destinationPath, DatabaseManager::kCurrentSchemaVersion, {});
     QVERIFY(normalInfo.value(QStringLiteral("valid")).toBool());
     QVERIFY2(isolatedInfo.value(QStringLiteral("valid")).toBool(), qPrintable(isolatedInfo.value(QStringLiteral("reason")).toString()));
-    normalInfo.remove(QStringLiteral("createdAt"));
-    isolatedInfo.remove(QStringLiteral("createdAt"));
+    // 两份快照先后生成，跨过整秒时元数据 created_at 会差 1 秒（ctest -j8 下实测出现过）；它是生成时刻，
+    // 不属于要对照的内容。先确认两边都有这个键，避免键名写错时删了个空、比较照样带着时间戳。
+    QVERIFY(normalInfo.contains(QStringLiteral("created_at")) && isolatedInfo.contains(QStringLiteral("created_at")));
+    normalInfo.remove(QStringLiteral("created_at"));
+    isolatedInfo.remove(QStringLiteral("created_at"));
     QCOMPARE(isolatedInfo, normalInfo);
     const auto embedded = BackupOperations::readEmbeddedSettings(request.destinationPath);
     QVERIFY(embedded.success);
