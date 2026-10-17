@@ -1,5 +1,6 @@
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QRegularExpression>
 #include <QScopeGuard>
@@ -23,6 +24,7 @@
 #include "../src/services/FocusTimer.h"
 #include "../src/services/KnowledgeGapService.h"
 #include "../src/services/LogicalDay.h"
+#include "../src/services/LocalSyncFolder.h"
 #include "../src/services/MemoService.h"
 #include "../src/services/RoutineManager.h"
 #include "../src/services/RoutineRules.h"
@@ -31,6 +33,7 @@
 #include "../src/services/SyncRecord.h"
 #include "../src/services/SyncSchema.h"
 #include "../src/services/SyncStore.h"
+#include "../src/services/SyncWorker.h"
 #include "../src/services/TaskManager.h"
 #include "../src/services/TrashService.h"
 
@@ -696,6 +699,7 @@ class SyncTests : public QObject
 
 private slots:
     void initTestCase();
+    void cleanupTestCase();
     void init();
     void cleanup();
 
@@ -774,6 +778,10 @@ private slots:
     // 2e：快照、首次加入与全局回滚
     void firstJoinReplacesJoiningDeviceWithSnapshot();
     void globalRollbackReplacesOtherDeviceAndRejectsOldEpoch();
+    void offlineRestoresResolveByRandomEpoch_data();
+    void offlineRestoresResolveByRandomEpoch();
+    void restoreEpochAdvancesFromMaximum_data();
+    void restoreEpochAdvancesFromMaximum();
     void publishedSnapshotAcknowledgesQueuedChanges();
 
     // 2f：提交后的精确通知
@@ -871,6 +879,8 @@ private:
 
 void SyncTests::initTestCase()
 {
+    // 既有用例验证恢复流程而非纪元增量；固定为零保留原断言，随机增量由专门用例覆盖。
+    SyncStore::setRestoreEpochRandomSourceForTesting([] { return quint32(0); });
     QVERIFY(m_preferences.isValid());
     // AppSettings 单例只落到临时 INI：例行生成要读日界点，不能读写真实偏好。
     QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoSyncTests"));
@@ -878,6 +888,12 @@ void SyncTests::initTestCase()
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
     AppSettings::instance()->setDayStartHour(4);
+}
+
+void SyncTests::cleanupTestCase()
+{
+    // 测试结束后恢复系统随机源，避免确定性装配泄漏到其它恢复调用。
+    SyncStore::setRestoreEpochRandomSourceForTesting({});
 }
 
 void SyncTests::init()
@@ -3239,6 +3255,159 @@ void SyncTests::globalRollbackReplacesOtherDeviceAndRejectsOldEpoch()
     QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET notes = '回滚后补的' WHERE sync_id = '%1'").arg(kept)));
     syncAll(fresh, {a, b});
     QCOMPARE(taskValue(a, kept, QStringLiteral("notes")).toString(), QStringLiteral("回滚后补的"));
+}
+
+void SyncTests::offlineRestoresResolveByRandomEpoch_data()
+{
+    // 独立恢复的纪元由注入随机数区分，发生碰撞时保留原有同纪元合并行为。
+    QTest::addColumn<quint32>("aRandom");
+    QTest::addColumn<quint32>("bRandom");
+    QTest::newRow("b-wins") << quint32(0) << quint32(1);
+    QTest::newRow("a-wins-max-random") << quint32((1U << 20) - 1) << quint32(0);
+    QTest::newRow("collision-merges") << quint32(0) << quint32(0);
+}
+
+void SyncTests::offlineRestoresResolveByRandomEpoch()
+{
+    // 两台离线恢复后以高纪元的备份内容整体收敛；随机碰撞时仍按同纪元规则合并。
+    QFETCH(quint32, aRandom);
+    QFETCH(quint32, bRandom);
+    const auto resetRandom = qScopeGuard([] {
+        SyncStore::setRestoreEpochRandomSourceForTesting([] { return quint32(0); });
+    });
+    const Device a = openDevice(QStringLiteral("a"));
+    const Device b = openDevice(QStringLiteral("b"));
+    // 从超过 32 位的同一纪元恢复，同时覆盖文件名、JSON 和 sync_state 的真实读取路径。
+    constexpr qint64 initialEpoch = 4000000000LL;
+    for (const Device& device : {a, b}) {
+        QVERIFY(exec(device, QStringLiteral("UPDATE sync_state SET value='%1' WHERE key='epoch'").arg(initialEpoch)));
+        QCOMPARE(SyncStore(device.connection).epoch(), initialEpoch);
+        QVERIFY(setClock(device, kFuture));
+    }
+    QVERIFY(!addTask(a, QStringLiteral("A 备份内容"), QStringLiteral("2026-09-29")).isEmpty());
+    QVERIFY(!addTask(b, QStringLiteral("B 备份内容"), QStringLiteral("2026-09-30")).isEmpty());
+    const QString aBackup = m_data->filePath(QStringLiteral("a-backup.sqlite"));
+    const QString bBackup = m_data->filePath(QStringLiteral("b-backup.sqlite"));
+    QVERIFY(QFile::copy(a.path, aBackup));
+    QVERIFY(QFile::copy(b.path, bBackup));
+    for (const Device& device : {a, b}) {
+        QVERIFY(!addTask(device, QStringLiteral("备份后新增，应被恢复丢弃")).isEmpty());
+        QCOMPARE(taskTitles(device).size(), 2);
+        QSqlDatabase::database(device.connection, false).close();
+        QVERIFY(QFile::remove(device.path));
+        QVERIFY(QFile::copy(device.connection == a.connection ? aBackup : bBackup, device.path));
+        QVERIFY(QSqlDatabase::database(device.connection).isOpen());
+        QVERIFY(exec(device, QStringLiteral("PRAGMA foreign_keys=ON")));
+    }
+    QCOMPARE(taskTitles(a), QStringList{QStringLiteral("A 备份内容")});
+    QCOMPARE(taskTitles(b), QStringList{QStringLiteral("B 备份内容")});
+    SyncStore aStore(a.connection);
+    SyncStore bStore(b.connection);
+    QCOMPARE(aStore.epoch(), bStore.epoch());
+    SyncStore::setRestoreEpochRandomSourceForTesting([aRandom] { return aRandom; });
+    QVERIFY(aStore.beginEpochAfterRestore(initialEpoch, a.id, QStringLiteral("restore-a")));
+    SyncStore::setRestoreEpochRandomSourceForTesting([bRandom] { return bRandom; });
+    QVERIFY(bStore.beginEpochAfterRestore(initialEpoch, b.id, QStringLiteral("restore-b")));
+    QCOMPARE(aStore.epoch() == bStore.epoch(), aRandom == bRandom);
+    QCOMPARE(aStore.epoch(), initialEpoch + 1 + aRandom);
+    QCOMPARE(bStore.epoch(), initialEpoch + 1 + bRandom);
+    const SyncBatch aSnapshot = aStore.exportSnapshot();
+    const SyncBatch bSnapshot = bStore.exportSnapshot();
+    QVERIFY(describe(aSnapshot) != describe(bSnapshot));
+
+    SyncWorker worker(std::make_unique<LocalSyncFolder>(m_data->filePath(QStringLiteral("cloud"))));
+    QVERIFY(worker.open(QString()).error.ok());
+    for (const SyncBatch& batch : {aSnapshot, bSnapshot}) {
+        // 用完整字段批次建立一个实际可读取的位置，快照覆盖它；同纪元对照组因此会经过普通合并路径。
+        const auto written = worker.writeChanges(batch, 0, kFuture);
+        QVERIFY2(written.error.ok(), qPrintable(written.error.message));
+        SyncFiles::SnapshotFile snapshot;
+        snapshot.batch = batch;
+        snapshot.coveredSeq = written.position.seq;
+        snapshot.writtenAtMs = kFuture;
+        const auto published = worker.writeSnapshot(snapshot);
+        QVERIFY2(published.error.ok(), qPrintable(published.error.message));
+    }
+    for (const Device& device : {a, b}) {
+        SyncStore store(device.connection);
+        SyncWorker::ScanRequest request;
+        request.me = device.id;
+        request.epoch = store.epoch();
+        const auto scanned = worker.scan(request);
+        QVERIFY2(scanned.error.ok(), qPrintable(scanned.error.message));
+        const bool lowerEpoch = aRandom != bRandom && request.epoch < qMax(aSnapshot.epoch, bSnapshot.epoch);
+        QCOMPARE(scanned.adoption.needed, lowerEpoch);
+        if (lowerEpoch) {
+            QVERIFY(scanned.adoption.ready);
+            QCOMPARE(scanned.adoption.position.epoch, qMax(aSnapshot.epoch, bSnapshot.epoch));
+            // 整体替换前留下低纪元设备自己的恢复状态，与引擎的安全备份边界一致。
+            const QString safety = m_data->filePath(device.connection + QStringLiteral("-before-adoption.sqlite"));
+            QVERIFY(QFile::copy(device.path, safety));
+            QVERIFY(QFileInfo(safety).size() > 0);
+            const auto adopted = store.replaceWithSnapshot(scanned.adoption.snapshot.batch);
+            QVERIFY2(adopted.ok, qPrintable(adopted.error));
+        } else {
+            for (const auto& peer : scanned.peers) {
+                QVERIFY(peer.readError.ok());
+                if (peer.hasSnapshot) {
+                    QVERIFY(store.applyRemote(peer.snapshot.batch).ok);
+                }
+                for (const auto& file : peer.files) {
+                    QCOMPARE(file.kind, SyncWorker::IncomingFile::Kind::Batch);
+                    const auto merged = store.applyRemote(file.batch);
+                    QVERIFY2(merged.ok, qPrintable(merged.error));
+                }
+            }
+        }
+    }
+    const QStringList expected = aRandom == bRandom
+        ? QStringList{QStringLiteral("A 备份内容"), QStringLiteral("B 备份内容")}
+        : QStringList{aRandom > bRandom ? QStringLiteral("A 备份内容") : QStringLiteral("B 备份内容")};
+    QCOMPARE(taskTitles(a), expected);
+    QCOMPARE(taskTitles(b), expected);
+    QCOMPARE(aStore.epoch(), bStore.epoch());
+    QCOMPARE(describe(aStore.exportSnapshot()), describe(bStore.exportSnapshot()));
+    if (aRandom != bRandom) {
+        QCOMPARE(describe(aStore.exportSnapshot()), describe(aRandom > bRandom ? aSnapshot : bSnapshot));
+    }
+}
+
+void SyncTests::restoreEpochAdvancesFromMaximum_data()
+{
+    // 恢复从当前与恢复前纪元的较大者推进，随机数为零也至少加一。
+    QTest::addColumn<qint64>("current");
+    QTest::addColumn<qint64>("previous");
+    QTest::addColumn<quint32>("random");
+    QTest::newRow("zero-from-current") << qint64(23) << qint64(7) << quint32(0);
+    QTest::newRow("zero-from-previous") << qint64(7) << qint64(23) << quint32(0);
+    QTest::newRow("max-random") << qint64(23) << qint64(7) << quint32((1U << 20) - 1);
+}
+
+void SyncTests::restoreEpochAdvancesFromMaximum()
+{
+    // 恢复纪元严格推进，同一恢复令牌重入既不再推进，也不再次消费随机数。
+    QFETCH(qint64, current);
+    QFETCH(qint64, previous);
+    QFETCH(quint32, random);
+    const auto resetRandom = qScopeGuard([] {
+        SyncStore::setRestoreEpochRandomSourceForTesting([] { return quint32(0); });
+    });
+    int draws = 0;
+    SyncStore::setRestoreEpochRandomSourceForTesting([&draws, random] { ++draws; return random; });
+    const Device device = openDevice(QStringLiteral("restore"));
+    QVERIFY(exec(device, QStringLiteral("UPDATE sync_state SET value='%1' WHERE key='epoch'").arg(current)));
+    SyncStore store(device.connection);
+    QCOMPARE(store.epoch(), current);
+    const QString token = QStringLiteral("same-restore");
+    QVERIFY(store.beginEpochAfterRestore(previous, device.id, token));
+    QCOMPARE(store.epoch(), qMax(current, previous) + 1 + random);
+    QCOMPARE(draws, 1);
+    const qint64 committed = store.epoch();
+    QVERIFY(committed > current);
+    QVERIFY(committed > previous);
+    QVERIFY(store.beginEpochAfterRestore(committed + 100, device.id, token));
+    QCOMPARE(store.epoch(), committed);
+    QCOMPARE(draws, 1);
 }
 
 void SyncTests::publishedSnapshotAcknowledgesQueuedChanges()

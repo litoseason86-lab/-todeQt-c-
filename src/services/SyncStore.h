@@ -11,6 +11,7 @@
 #include <QSqlDatabase>
 #include <QString>
 
+#include <functional>
 #include <optional>
 
 // 设备间同步的本地数据层（050 阶段 2）：只和数据库打交道，不关心改动怎么在设备之间传递。
@@ -29,6 +30,10 @@ class SyncStore
 public:
     // connectionName 为空时用应用主连接（DatabaseManager）；测试用它同时打开两台「设备」的库。
     explicit SyncStore(const QString& connectionName = QString());
+
+    // 测试注入恢复纪元的随机源，只使用返回值的低 20 位；空函数还原为系统源。
+    // 仅在恢复调用所在的线程装配，调用方负责在测试结束时还原。
+    static void setRestoreEpochRandomSourceForTesting(std::function<quint32()> source);
 
     QString deviceId() const;
     qint64 epoch() const;
@@ -88,7 +93,7 @@ public:
     // 已有的保留本机编号，课表、知识缺口这些不同步的表里的引用不会断。本机进行中的专注不受影响。
     // 调用前由调用方先做自动备份：被换掉的本机数据只能从那份备份里找回。
     ApplyResult replaceWithSnapshot(const SyncBatch& snapshot);
-    // 本机恢复了备份（全局回滚）之后调用：纪元在恢复前与备份里两者较大的基础上加一；设备标识改回恢复前的
+    // 本机恢复了备份（全局回滚）之后调用：纪元在恢复前与备份里两者较大的基础上加一及随机增量；设备标识改回恢复前的
     // （备份可能来自另一台设备，两台共用一个标识会把合并搅乱）；清空待发送；置「需要发布快照」。
     // 可选传入 restoreOperationId 作为本地幂等恢复事务标识，同标识重试时不重复递增纪元。
     bool beginEpochAfterRestore(qint64 previousEpoch, const QString& previousDeviceId,

@@ -355,6 +355,7 @@ class SyncTransportTests : public QObject
 
 private slots:
     void initTestCase();
+    void cleanupTestCase();
     void init();
     void cleanup();
 
@@ -783,6 +784,8 @@ void SyncTransportTests::localFolderClassifiesMissingAndUnavailable()
 
 void SyncTransportTests::initTestCase()
 {
+    // 本组验证传输流程而非纪元增量，固定为零保留原断言；增量由 SyncTests 专门覆盖。
+    SyncStore::setRestoreEpochRandomSourceForTesting([] { return quint32(0); });
     QVERIFY(m_preferences.isValid());
     // AppSettings 单例只落到临时 INI：例行生成、设置写回都不能碰真实偏好。
     QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoSyncTransportTests"));
@@ -790,6 +793,12 @@ void SyncTransportTests::initTestCase()
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
     AppSettings::instance()->setDayStartHour(4);
+}
+
+void SyncTransportTests::cleanupTestCase()
+{
+    // 测试结束后还原系统随机源，避免确定性装配泄漏到其它恢复调用。
+    SyncStore::setRestoreEpochRandomSourceForTesting({});
 }
 
 void SyncTransportTests::init()

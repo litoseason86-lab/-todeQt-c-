@@ -10,6 +10,7 @@
 #include <QDebug>
 #include <QJsonDocument>
 #include <QMap>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -27,6 +28,8 @@ constexpr int kConflictLogLimit = 500;
 constexpr int kMaxMergeHops = 16;
 // 正常设备时差在秒级；不跟随异常超前部分，因果顺序由被覆盖字段各自递增保证。
 constexpr qint64 kMaxRemoteClockLeadMs = 10 * 60 * 1000;
+
+std::function<quint32()> restoreEpochRandomSourceForTesting;
 
 const QString kKindDelete = QStringLiteral("delete");
 const QString kKindReclaim = QStringLiteral("reclaim");
@@ -2185,6 +2188,11 @@ SyncStore::SyncStore(const QString& connectionName)
 {
 }
 
+void SyncStore::setRestoreEpochRandomSourceForTesting(std::function<quint32()> source)
+{
+    restoreEpochRandomSourceForTesting = std::move(source);
+}
+
 QSqlDatabase SyncStore::database() const
 {
     return m_connectionName.isEmpty() ? DatabaseManager::instance()->database()
@@ -2720,11 +2728,21 @@ bool SyncStore::beginEpochAfterRestore(qint64 previousEpoch, const QString& prev
         }
     }
 
-    // 3. 未匹配时执行原逻辑：递增纪元并确保状态行存在（影响恰好 1 行，防止缺行时虚假成功）
+    // 独立离线恢复不能总从 N 走到相同的 N+1：系统随机源均匀取低 20 位，额外增量为 [0, 2^20)。
+    // 同一起点的两次恢复仍有约百万分之一的撞号概率，碰撞时保留原有同纪元合并行为；否则高纪元快照胜出。
+    // 沿用文件名最多 18 位和 JSON 精确整数上限 2^53 的兼容边界，单次最多推进 2^20，不改变文件格式。
+    // 取随机数须在令牌检查之后：同一恢复操作的幂等重入既不推进纪元，也不消费新的随机数。
+    constexpr quint32 kRestoreEpochRandomMask = (1U << 20) - 1;
+    const quint32 random = (restoreEpochRandomSourceForTesting ? restoreEpochRandomSourceForTesting()
+                                                             : QRandomGenerator::system()->generate())
+        & kRestoreEpochRandomMask;
+
+    // 递增与恢复令牌在同一事务中提交；状态行必须存在，防止缺行时虚假成功。
     QSqlQuery query(db);
     query.prepare(QStringLiteral(
-        "UPDATE sync_state SET value = CAST(MAX(CAST(value AS INTEGER), :previous) + 1 AS TEXT) WHERE key = 'epoch'"));
+        "UPDATE sync_state SET value = CAST(MAX(CAST(value AS INTEGER), :previous) + 1 + :random AS TEXT) WHERE key = 'epoch'"));
     query.bindValue(QStringLiteral(":previous"), previousEpoch);
+    query.bindValue(QStringLiteral(":random"), qint64(random));
     if (!query.exec() || query.numRowsAffected() != 1) {
         qWarning() << "Failed to update epoch state row:" << query.lastError().text();
         db.rollback();

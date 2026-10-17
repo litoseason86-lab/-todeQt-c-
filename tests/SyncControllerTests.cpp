@@ -4200,6 +4200,9 @@ void SyncControllerTests::restoreFinalizeQSettingsWriteBackFailureBlocksSyncAndP
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
+    // 本组及重启探针验证恢复流程而非纪元增量，固定为零保留原断言；增量由 SyncTests 专门覆盖。
+    SyncStore::setRestoreEpochRandomSourceForTesting([] { return quint32(0); });
+    const auto resetRandom = qScopeGuard([] { SyncStore::setRestoreEpochRandomSourceForTesting({}); });
     if (app.arguments().size() == 5
         && app.arguments().at(1) == QStringLiteral("--sync-restart-probe")) {
         return restartProbe(app.arguments());
