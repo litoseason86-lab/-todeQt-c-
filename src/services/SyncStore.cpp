@@ -147,7 +147,7 @@ private:
     // 引用：本机编号 ↔ sync_id。
     QVariant syncIdOfLocal(const QString& table, const QVariant& localId);
     // 按 sync_id 找本机编号，沿合并记录追到留下的那一条。找不到（已删除或从没见过）返回空，并置 dangling。
-    QVariant resolveLocal(const QString& table, const QVariant& syncId, bool* dangling);
+    QVariant resolveLocal(const QString& table, const QVariant& syncId, bool* dangling, bool* permanentlyDeleted = nullptr);
     // 待解析的引用（见 SyncSchema 里 sync_pending_refs 的说明）。收下一个引用列之后调用：
     // 目标找不到、又不是被永久删除（用户删除或合并）的，记下来；找得到或已永久删除的，清掉旧记录。
     bool noteReference(const QString& table, const QString& syncId, const SyncSchema::Field& field,
@@ -299,9 +299,12 @@ QVariant Applier::syncIdOfLocal(const QString& table, const QVariant& localId)
     return QVariant();
 }
 
-QVariant Applier::resolveLocal(const QString& table, const QVariant& syncId, bool* dangling)
+QVariant Applier::resolveLocal(const QString& table, const QVariant& syncId, bool* dangling, bool* permanentlyDeleted)
 {
     *dangling = false;
+    if (permanentlyDeleted) {
+        *permanentlyDeleted = false;
+    }
     if (!syncId.isValid() || syncId.isNull() || syncId.toString().isEmpty()) {
         return QVariant();
     }
@@ -317,6 +320,9 @@ QVariant Applier::resolveLocal(const QString& table, const QVariant& syncId, boo
         if (tombstone.exists && tombstone.kind == kKindMerge && !tombstone.mergedInto.isEmpty()) {
             current = tombstone.mergedInto;
             continue;
+        }
+        if (permanentlyDeleted) {
+            *permanentlyDeleted = tombstone.exists && tombstone.kind != kKindReclaim;
         }
         break;
     }
@@ -599,7 +605,7 @@ bool Applier::insertRow(const SyncSchema::Table& table, const SyncRecord& record
     QStringList columns{QStringLiteral("sync_id")};
     QVariantList values{record.syncId};
     bool categoryDangling = false;
-    bool routineDangling = false;
+    bool routineDeleted = false;
     QList<QPair<const SyncSchema::Field*, bool>> references;
     for (const SyncSchema::Field& field : table.fields) {
         if (!record.fields.contains(field.column)) {
@@ -609,9 +615,10 @@ bool Applier::insertRow(const SyncSchema::Table& table, const SyncRecord& record
         QVariant value = record.fields.value(field.column).value;
         if (!field.refTable.isEmpty()) {
             bool dangling = false;
-            value = resolveLocal(field.refTable, value, &dangling);
+            bool permanentlyDeleted = false;
+            value = resolveLocal(field.refTable, value, &dangling, &permanentlyDeleted);
             categoryDangling = categoryDangling || (dangling && field.column == QLatin1String("category_id"));
-            routineDangling = routineDangling || (dangling && field.column == QLatin1String("routine_id"));
+            routineDeleted = routineDeleted || (permanentlyDeleted && field.column == QLatin1String("routine_id"));
             references.append({&field, dangling});
         }
         columns.append(field.column);
@@ -623,8 +630,10 @@ bool Applier::insertRow(const SyncSchema::Table& table, const SyncRecord& record
         if (categoryDangling && categoryText >= 0) {
             values[categoryText] = QVariant();
         }
+        // 乱序到达只暂时解除引用，生成标记仍是发送方的业务事实；只有永久删除才清零。
+        // 接回时不能统一置1，否则合法的普通任务引用会被改成生成实例。
         const qsizetype generated = columns.indexOf(QStringLiteral("routine_generated"));
-        if (routineDangling && generated >= 0) {
+        if (routineDeleted && generated >= 0) {
             values[generated] = 0;
         }
     }
@@ -846,8 +855,24 @@ bool Applier::resolveAllPendingRefs(QString* error)
             // 目标还没有：被永久删除（用户删除、合并后追不到）的不用再等，置空就是最终结果；
             // 还没收到、或被收回、之后可能补回来的，接着等。
             const Tombstone tombstone = readTombstone(field->refTable, item.target);
-            if (tombstone.exists && tombstone.kind != kKindReclaim && !forget(item)) {
-                return false;
+            if (tombstone.exists && tombstone.kind != kKindReclaim) {
+                // 暂缺期间保留的生成事实在例行永久删除后才失效；只处理仍等待同一版本的引用。
+                if (item.table == QLatin1String("tasks") && item.field == QLatin1String("routine_id")
+                    && fieldVersion(item.table, item.syncId, item.field) == item.version) {
+                    QSqlQuery clearGenerated(m_db);
+                    clearGenerated.prepare(QStringLiteral(
+                        "UPDATE tasks SET routine_generated = 0 WHERE sync_id = :id AND routine_id IS NULL"));
+                    clearGenerated.bindValue(QStringLiteral(":id"), item.syncId);
+                    if (!exec(clearGenerated, error)) {
+                        return false;
+                    }
+                    if (clearGenerated.numRowsAffected() > 0) {
+                        m_result->changedTables.insert(item.table);
+                    }
+                }
+                if (!forget(item)) {
+                    return false;
+                }
             }
             continue;
         }
@@ -883,7 +908,7 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
     QList<QPair<QString, SyncFieldValue>> newVersions;
     SyncRecord acceptedContent;
     bool categoryDangling = false;
-    bool routineDangling = false;
+    bool routineDeleted = false;
 
     for (const SyncSchema::Field& field : table.fields) {
         if (!record.fields.contains(field.column)) {
@@ -939,9 +964,10 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
         QVariant value = incoming.value;
         if (!field.refTable.isEmpty()) {
             bool dangling = false;
-            value = resolveLocal(field.refTable, value, &dangling);
+            bool permanentlyDeleted = false;
+            value = resolveLocal(field.refTable, value, &dangling, &permanentlyDeleted);
             categoryDangling = categoryDangling || (dangling && field.column == QLatin1String("category_id"));
-            routineDangling = routineDangling || (dangling && field.column == QLatin1String("routine_id"));
+            routineDeleted = routineDeleted || (permanentlyDeleted && field.column == QLatin1String("routine_id"));
             if (!noteReference(table.name, record.syncId, field, incoming, dangling, error)) {
                 return false;
             }
@@ -973,7 +999,7 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
             assignments.append(QStringLiteral("category = ?"));
             assignedValues.append(QVariant());
         }
-        if (routineDangling) {
+        if (routineDeleted) {
             assignments.append(QStringLiteral("routine_generated = ?"));
             assignedValues.append(0);
         }
@@ -1268,7 +1294,7 @@ bool Applier::overwriteFromSnapshot(const SyncRecord& record, QString* error)
     QStringList assignments;
     QVariantList values;
     bool categoryDangling = false;
-    bool routineDangling = false;
+    bool routineDeleted = false;
     for (const SyncSchema::Field& field : table->fields) {
         if (!record.fields.contains(field.column)) {
             continue;
@@ -1277,9 +1303,10 @@ bool Applier::overwriteFromSnapshot(const SyncRecord& record, QString* error)
         QVariant value = incoming.value;
         if (!field.refTable.isEmpty()) {
             bool dangling = false;
-            value = resolveLocal(field.refTable, value, &dangling);
+            bool permanentlyDeleted = false;
+            value = resolveLocal(field.refTable, value, &dangling, &permanentlyDeleted);
             categoryDangling = categoryDangling || (dangling && field.column == QLatin1String("category_id"));
-            routineDangling = routineDangling || (dangling && field.column == QLatin1String("routine_id"));
+            routineDeleted = routineDeleted || (permanentlyDeleted && field.column == QLatin1String("routine_id"));
             if (!noteReference(table->name, record.syncId, field, incoming, dangling, error)) {
                 return false;
             }
@@ -1301,7 +1328,7 @@ bool Applier::overwriteFromSnapshot(const SyncRecord& record, QString* error)
             assignments.append(QStringLiteral("category = ?"));
             values.append(QVariant());
         }
-        if (routineDangling) {
+        if (routineDeleted) {
             assignments.append(QStringLiteral("routine_generated = ?"));
             values.append(0);
         }

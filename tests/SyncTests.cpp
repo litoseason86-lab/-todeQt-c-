@@ -754,6 +754,10 @@ private slots:
     void userDeletionOutranksConcurrentReclaimOnBothDevices();
     void dayStartHourSyncsWithDefaultsAndLatestWins();
     void referenceArrivingBeforeItsTargetIsRelinked();
+    void routineReferencePreservesGeneratedFlag_data();
+    void routineReferencePreservesGeneratedFlag();
+    void snapshotRoutineReferencePreservesGeneratedFlag_data();
+    void snapshotRoutineReferencePreservesGeneratedFlag();
     void derivedEmptyReferenceIsNotSentBack();
     void pendingReferenceRelinksWhenTargetIsRegeneratedLocally();
     void gapLinkToReclaimedInstanceComesBackOnBothDevices();
@@ -2430,6 +2434,164 @@ void SyncTests::referenceArrivingBeforeItsTargetIsRelinked()
     QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM focus_sessions fs JOIN tasks t ON t.id = fs.task_id "
                                      "WHERE fs.sync_id = 'early-session' AND t.sync_id = 'late-task'")), 1);
     QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs")), 0);
+}
+
+void SyncTests::routineReferencePreservesGeneratedFlag_data()
+{
+    // 乱序引用在新增和更新路径都须保留发送方的生成标记，包括合法的零值。
+    QTest::addColumn<bool>("existing");
+    QTest::addColumn<int>("generated");
+    QTest::addColumn<int>("arrival");
+    // 三种后续事实：同步收到目标、本机已有目标后扫描接回、目标永久删除。
+    for (int arrival = 0; arrival < 3; ++arrival) {
+        for (bool existing : {false, true}) {
+            for (int generated : {0, 1}) {
+                QTest::newRow(qPrintable(QStringLiteral("%1-%2-%3").arg(arrival).arg(existing).arg(generated)))
+                    << existing << generated << arrival;
+            }
+        }
+    }
+}
+
+void SyncTests::routineReferencePreservesGeneratedFlag()
+{
+    // 任务先到、例行后到时保持原生成标记，接回不制造本机修改或同步回声。
+    QFETCH(bool, existing);
+    QFETCH(int, generated);
+    QFETCH(int, arrival);
+    Device b = openDevice(QStringLiteral("b"));
+    SyncStore store(b.connection);
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const SyncVersion version{kFuture, remote};
+    SyncRecord task;
+    task.table = QStringLiteral("tasks");
+    task.syncId = QStringLiteral("early-routine-task");
+    task.fields.insert(QStringLiteral("title"), {QStringLiteral("乱序实例"), version, {}});
+    task.fields.insert(QStringLiteral("date"), {QStringLiteral("2026-09-30"), version, {}});
+    // 提供正常排序，避免排序补齐产生的合法outbox干扰引用接回的无回声断言。
+    task.fields.insert(QStringLiteral("display_order"), {1, version, {}});
+    SyncBatch batch;
+    batch.device = remote;
+    if (existing) {
+        batch.records = {task};
+        QVERIFY(store.applyRemote(batch).ok);
+    }
+    task.fields.insert(QStringLiteral("routine_id"), {QStringLiteral("late-routine"), version, {}});
+    task.fields.insert(QStringLiteral("routine_generated"), {generated, version, {}});
+    batch.records = {task};
+    const auto first = store.applyRemote(batch);
+    QVERIFY2(first.ok, qPrintable(first.error));
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs WHERE field='routine_id'")), 1);
+    QVERIFY(taskValue(b, task.syncId, QStringLiteral("routine_id")).isNull());
+    QCOMPARE(taskValue(b, task.syncId, QStringLiteral("routine_generated")).toInt(), generated);
+
+    SyncRecord routine;
+    routine.table = QStringLiteral("routines");
+    routine.syncId = QStringLiteral("late-routine");
+    routine.fields.insert(QStringLiteral("title"), {QStringLiteral("后到例行"), version, {}});
+    if (arrival == 2) {
+        routine.deleted = true;
+        routine.deleteVersion = {version.time + 1, remote};
+        routine.deleteKind = QStringLiteral("delete");
+    }
+    batch.records = {routine};
+    SyncStore::ApplyResult second;
+    if (arrival == 1) {
+        QVERIFY(exec(b, QStringLiteral("INSERT INTO routines (sync_id, title) VALUES ('late-routine', 'local')")));
+        second = store.resolvePendingReferences();
+    } else {
+        second = store.applyRemote(batch);
+    }
+    QVERIFY2(second.ok, qPrintable(second.error));
+    if (arrival == 2) {
+        QVERIFY(taskValue(b, task.syncId, QStringLiteral("routine_id")).isNull());
+    } else {
+        QVERIFY(localIdOf(b, QStringLiteral("routines"), routine.syncId) > 0);
+        QCOMPARE(taskValue(b, task.syncId, QStringLiteral("routine_id")).toLongLong(),
+                 localIdOf(b, QStringLiteral("routines"), routine.syncId));
+    }
+    QCOMPARE(taskValue(b, task.syncId, QStringLiteral("routine_generated")).toInt(), arrival == 2 ? 0 : generated);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs WHERE field='routine_id'")), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE sync_id='early-routine-task'")), 0);
+    QCOMPARE(scalar(b, QStringLiteral("SELECT v_time FROM sync_field_versions WHERE tbl='tasks' "
+                                    "AND sync_id='early-routine-task' AND field='routine_generated'")).toLongLong(),
+             version.time);
+}
+
+void SyncTests::snapshotRoutineReferencePreservesGeneratedFlag_data()
+{
+    // 整份快照覆盖时，例行暂缺的任务保留发送方的生成标记，例行被永久删除的才清零。
+    QTest::addColumn<bool>("deleted");
+    QTest::addColumn<int>("generated");
+    for (bool deleted : {false, true}) {
+        for (int generated : {0, 1}) {
+            QTest::newRow(qPrintable(QStringLiteral("%1-%2")
+                                        .arg(deleted ? QStringLiteral("deleted") : QStringLiteral("missing"))
+                                        .arg(generated))) << deleted << generated;
+        }
+    }
+}
+
+void SyncTests::snapshotRoutineReferencePreservesGeneratedFlag()
+{
+    // 整份快照覆盖时，例行暂缺的任务保留发送方的生成标记，例行被永久删除的才清零。
+    QFETCH(bool, deleted);
+    QFETCH(int, generated);
+    const Device b = openDevice(QStringLiteral("snapshot-routine"));
+    SyncStore store(b.connection);
+    const QString identity = addTask(b, QStringLiteral("快照前的任务"));
+    QVERIFY(!identity.isEmpty());
+    const qint64 localId = localIdOf(b, QStringLiteral("tasks"), identity);
+    QVERIFY(localId > 0);
+    // 必须先有同一身份的任务才能命中 overwriteFromSnapshot；本机标记取反，排除未覆盖的假通过。
+    QVERIFY(exec(b, QStringLiteral("UPDATE tasks SET routine_generated=%1 WHERE sync_id='%2'")
+                        .arg(1 - generated).arg(identity)));
+    QCOMPARE(taskValue(b, identity, QStringLiteral("routine_generated")).toInt(), 1 - generated);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM routines WHERE sync_id='snapshot-missing-routine'")), 0);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_tombstones WHERE tbl='routines' "
+                                     "AND sync_id='snapshot-missing-routine'")), 0);
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const SyncVersion version{kFuture, remote};
+    SyncRecord task;
+    task.table = QStringLiteral("tasks");
+    task.syncId = identity;
+    task.fields.insert(QStringLiteral("title"), {QStringLiteral("快照中的任务"), version, {}});
+    task.fields.insert(QStringLiteral("date"), {QStringLiteral("2026-09-30"), version, {}});
+    // 给出合法排序，避免排序修补产生的正常待发送记录干扰无回声断言。
+    task.fields.insert(QStringLiteral("display_order"), {1, version, {}});
+    task.fields.insert(QStringLiteral("routine_id"), {QStringLiteral("snapshot-missing-routine"), version, {}});
+    task.fields.insert(QStringLiteral("routine_generated"), {generated, version, {}});
+    SyncBatch snapshot;
+    snapshot.device = remote;
+    snapshot.records = {task};
+    if (deleted) {
+        SyncRecord routine;
+        routine.table = QStringLiteral("routines");
+        routine.syncId = QStringLiteral("snapshot-missing-routine");
+        routine.deleted = true;
+        routine.deleteVersion = {version.time + 1, remote};
+        routine.deleteKind = QStringLiteral("delete");
+        snapshot.records.append(routine);
+    }
+    const auto result = store.replaceWithSnapshot(throughJson(snapshot));
+    QVERIFY2(result.ok, qPrintable(result.error));
+    QCOMPARE(logCount(b, QStringLiteral("skipped")), 0);
+    QCOMPARE(localIdOf(b, QStringLiteral("tasks"), identity), localId);
+    QCOMPARE(taskValue(b, identity, QStringLiteral("title")).toString(), QStringLiteral("快照中的任务"));
+    QVERIFY(taskValue(b, identity, QStringLiteral("routine_id")).isNull());
+    QCOMPARE(taskValue(b, identity, QStringLiteral("routine_generated")).toInt(), deleted ? 0 : generated);
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_pending_refs WHERE tbl='tasks' "
+                                     "AND sync_id='%1' AND field='routine_id'").arg(identity)), deleted ? 0 : 1);
+    if (deleted) {
+        QCOMPARE(scalar(b, QStringLiteral("SELECT kind FROM sync_tombstones WHERE tbl='routines' "
+                                         "AND sync_id='snapshot-missing-routine'")).toString(), QStringLiteral("delete"));
+    } else {
+        QCOMPARE(scalar(b, QStringLiteral("SELECT target_sync_id FROM sync_pending_refs WHERE tbl='tasks' "
+                                         "AND sync_id='%1' AND field='routine_id'").arg(identity)).toString(),
+                 QStringLiteral("snapshot-missing-routine"));
+    }
+    QCOMPARE(count(b, QStringLiteral("SELECT COUNT(*) FROM sync_outbox WHERE tbl='tasks' AND sync_id='%1'")
+                         .arg(identity)), 0);
 }
 
 void SyncTests::derivedEmptyReferenceIsNotSentBack()
