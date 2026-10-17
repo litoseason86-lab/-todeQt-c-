@@ -963,7 +963,6 @@ TestCase {
         statisticsView.visible = true
         statisticsView.width = 900
         statisticsView.height = 640
-        TestWaits.letElapse(testCase, 80, "改成 900 宽后等统计页重新排版再读各模块位置；断言的是整组边界关系，没有单一可等的属性")
 
         var firstCard = findChild(statisticsView, "statisticsPrimaryStatCard")
         var secondCard = findChild(statisticsView, "statisticsSessionCountStatCard")
@@ -976,6 +975,13 @@ TestCase {
         verify(thirdCard !== null)
         verify(trendChart !== null)
         verify(pieChart !== null)
+        // 固定等 80 ms 在慢的 CI 机器上不够重新排版（10-18 PR #2 失败）；等三张卡真的横排后再读位置。
+        tryVerify(function () {
+            var a = firstCard.mapToItem(statisticsView, 0, 0)
+            var b = secondCard.mapToItem(statisticsView, 0, 0)
+            var c = thirdCard.mapToItem(statisticsView, 0, 0)
+            return b.x > a.x + firstCard.width && c.x > b.x + secondCard.width
+        }, 3000)
 
         var firstPos = firstCard.mapToItem(statisticsView, 0, 0)
         var secondPos = secondCard.mapToItem(statisticsView, 0, 0)
@@ -992,7 +998,13 @@ TestCase {
         verify(thirdPos.x > secondPos.x + secondCard.width)
 
         statisticsView.width = 520
-        TestWaits.letElapse(testCase, 80, "改成 520 宽后等卡片改为纵向堆叠再读位置；断言的是整组边界关系，没有单一可等的属性")
+        // 同上：等卡片真的改为纵向堆叠后再读位置。
+        tryVerify(function () {
+            var a = firstCard.mapToItem(statisticsView, 0, 0)
+            var b = secondCard.mapToItem(statisticsView, 0, 0)
+            var c = thirdCard.mapToItem(statisticsView, 0, 0)
+            return b.y > a.y + firstCard.height && c.y > b.y + secondCard.height
+        }, 3000)
 
         firstPos = firstCard.mapToItem(statisticsView, 0, 0)
         secondPos = secondCard.mapToItem(statisticsView, 0, 0)
