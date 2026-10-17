@@ -286,6 +286,24 @@ Item {
             }
         }
 
+        // maximumLength 到顶后输入框静默不再接收字符，粘贴的长文本也被截断；
+        // 不提示的话用户会以为键盘没反应，或以为整段都记下了。
+        Text {
+            objectName: "companionQuickAddLimitHint"
+            // 单列布尔供测试读取：visible 是沿父链算出的有效可见性，测试宿主里恒为假。
+            readonly property bool atLimit: quickAddField.maximumLength > 0
+                                            && quickAddField.length >= quickAddField.maximumLength
+            Layout.fillWidth: true
+            visible: atLimit
+            text: qsTr("标题最多 %1 字，超出的部分没有输入").arg(quickAddField.maximumLength)
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            color: Theme.inkSoft
+            font.pixelSize: Theme.fontSm
+            Accessible.role: Accessible.StaticText
+            Accessible.name: text
+        }
+
         // 今日任务：未完成在前（服务端已按完成状态排序）。
         Rectangle {
             Layout.fillWidth: true
