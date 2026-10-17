@@ -1,4 +1,7 @@
-cmake_minimum_required(VERSION 3.16)
+# 下限 3.22：Qt 6.10.3 的 Qt6ConfigExtras.cmake 要求使用方至少 3.22（QT_SUPPORTED_MIN_CMAKE_VERSION_FOR_USING_QT），
+# 再低 find_package(Qt6) 就会拒绝。上限 4.0：策略按本机实际验证过的 CMake 4.0.2 取新行为（062 A056）；
+# 改动前后逐一对比了 Mac 全部编译/链接命令、测试登记和 iOS Xcode 工程。
+cmake_minimum_required(VERSION 3.22...4.0)
 
 project(PomodoroTodo VERSION 0.1.0 LANGUAGES CXX)
 
@@ -8,9 +11,14 @@ project(PomodoroTodo VERSION 0.1.0 LANGUAGES CXX)
 enable_language(OBJCXX)
 # 055-P3A：SwiftUI 只在 iOS 编译。Qt 函数保留定义时的策略，故须在 find_package 前设默认值。
 # CMake 4.0.2 + Xcode 27 实测：CMP0142 OLD 会生成不存在的 Swift 库搜索路径副本。
+# 版本范围升到 4.0 后这行仍不能删：062 实测去掉它，Qt 函数里的库搜索路径照旧变回 OLD 写法。
 if(IOS)
     enable_language(Swift)
     set(CMAKE_POLICY_DEFAULT_CMP0142 NEW)
+    # CMP0157（3.29）取新行为后，CMake 不再自动给非 Debug 配置开整模块优化（wholemodule），这里显式指定：
+    # Debug 增量编译（Xcode 工程里与原来一样不写该属性），Release 等配置 wholemodule。原来只有应用目标被设上，
+    # 现在 IPadCore、IPadUI 两个纯 Swift 库也一致。真机安装用 Debug，不受影响。
+    set(CMAKE_Swift_COMPILATION_MODE "$<IF:$<CONFIG:Debug>,incremental,wholemodule>")
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
