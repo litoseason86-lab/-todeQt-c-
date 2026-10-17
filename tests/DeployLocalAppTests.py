@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只部署临时伪应用包，验证缺失/不可执行的 helper 不会挪走旧包。"""
+"""只部署临时伪应用包，验证产品二进制不完整时不会挪走旧包。"""
 from pathlib import Path
 import plistlib
 import subprocess
@@ -18,7 +18,9 @@ class DeployLocalAppTests(unittest.TestCase):
         self.destination = self.root / "target.app"
         self.write_binary(self.destination, "PomodoroTodo", b"old-main")
         self.write_binary(self.destination, "PomodoroTodoMcp", b"old-helper")
+        self.write_binary(self.destination, "PomodoroTodoBackupExecutor", b"old-backup-executor")
         self.write_binary(self.source, "PomodoroTodo", b"new-main")
+        self.write_binary(self.source, "PomodoroTodoBackupExecutor", b"new-backup-executor")
         self.write_identity(self.source)
         self.write_identity(self.destination)
 
@@ -34,11 +36,13 @@ class DeployLocalAppTests(unittest.TestCase):
     def deploy(self):
         return subprocess.run(["cmake", f"-DSOURCE_APP={self.source}", f"-DDESTINATION_APP={self.destination}",
                                "-DBUNDLE_EXECUTABLE=PomodoroTodo", "-DHELPER_EXECUTABLE=PomodoroTodoMcp",
+                               "-DBACKUP_EXECUTOR=PomodoroTodoBackupExecutor",
                                "-P", str(SCRIPT)], capture_output=True, text=True, timeout=15)
 
     def assert_old_preserved(self):
         self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodo").read_bytes(), b"old-main")
         self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodoMcp").read_bytes(), b"old-helper")
+        self.assertEqual((self.destination / "Contents/MacOS/PomodoroTodoBackupExecutor").read_bytes(), b"old-backup-executor")
         self.assertFalse(list(self.root.glob("target.app.*")))
 
     def test_missing_helper_keeps_old_package(self):
@@ -49,6 +53,42 @@ class DeployLocalAppTests(unittest.TestCase):
         self.write_binary(self.source, "PomodoroTodoMcp", b"new-helper", 0o644)
         self.assertNotEqual(self.deploy().returncode, 0)
         self.assert_old_preserved()
+
+    # 保证新包缺少备份执行器时拒绝部署，旧包的三个二进制原样保留。
+    def test_missing_backup_executor_keeps_old_package(self):
+        self.write_binary(self.source, "PomodoroTodoMcp", b"new-helper")
+        executor = self.source / "Contents/MacOS/PomodoroTodoBackupExecutor"
+        self.assertTrue(executor.is_file())
+        executor.unlink()
+        self.assertFalse(executor.exists())
+        result = self.deploy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PomodoroTodoBackupExecutor", result.stderr)
+        self.assert_old_preserved()
+
+    # 保证新包的备份执行器不可执行时拒绝部署，完整旧包继续可用。
+    def test_non_executable_backup_executor_keeps_old_package(self):
+        self.write_binary(self.source, "PomodoroTodoMcp", b"new-helper")
+        self.write_binary(self.source, "PomodoroTodoBackupExecutor", b"new-backup-executor", 0o644)
+        executor = self.source / "Contents/MacOS/PomodoroTodoBackupExecutor"
+        self.assertTrue(executor.is_file())
+        self.assertEqual(executor.stat().st_mode & 0o111, 0)
+        result = self.deploy()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("PomodoroTodoBackupExecutor", result.stderr)
+        self.assert_old_preserved()
+
+    # 保证主程序、MCP helper 和备份执行器作为一个完整新包一起替换。
+    def test_three_binaries_replaced_together(self):
+        self.write_binary(self.source, "PomodoroTodoMcp", b"new-helper")
+        self.assert_old_preserved()
+        result = self.deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for name, expected in (("PomodoroTodo", b"new-main"),
+                               ("PomodoroTodoMcp", b"new-helper"),
+                               ("PomodoroTodoBackupExecutor", b"new-backup-executor")):
+            self.assertEqual((self.destination / "Contents/MacOS" / name).read_bytes(), expected)
+        self.assertFalse(list(self.root.glob("target.app.*")))
 
     # 保证错误路径指向其它应用时，不会替换或删除该应用及其中的内容。
     def test_wrong_destination_identity_keeps_old_package(self):

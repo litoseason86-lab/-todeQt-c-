@@ -93,10 +93,13 @@ function(pomodoro_todo_deploy_local_app)
         message(FATAL_ERROR "新应用包缺少主二进制，旧应用未改动：${staging_executable}")
     endif()
 
-    # 辅助程序与主程序必须一起交付；在挪走旧包以前验证两者存在且可执行。
+    # 主程序、MCP helper 和备份执行器必须一起交付；在挪走旧包以前逐项验证存在且可执行。
     set(required_executables "${BUNDLE_EXECUTABLE}")
     if(DEFINED HELPER_EXECUTABLE)
         list(APPEND required_executables "${HELPER_EXECUTABLE}")
+    endif()
+    if(DEFINED BACKUP_EXECUTOR)
+        list(APPEND required_executables "${BACKUP_EXECUTOR}")
     endif()
     foreach(executable IN LISTS required_executables)
         set(candidate "${staging_app}/Contents/MacOS/${executable}")

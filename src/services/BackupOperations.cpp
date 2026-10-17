@@ -13,6 +13,7 @@
 #include <QFileInfo>
 #include <QHash>
 #include <QSaveFile>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSet>
 #include <QRegularExpression>
@@ -47,6 +48,44 @@ std::unique_ptr<QSettings> openSettings(const QString& settingsFilePath)
 bool isLocalSettingKey(const QString& key)
 {
     return AppSettings::isOwnedSettingKey(key) || key.startsWith(QStringLiteral("backup/"));
+}
+
+CapturedSettingsResult captureOwnedSettings(const QString& settingsFilePath,
+                                            const BackupOperation& operation)
+{
+    const auto control = operation ? operation : std::make_shared<BackupOperationControl>();
+    CapturedSettingsResult result;
+    if (control->stopped()) {
+        result.error = control->message();
+        return result;
+    }
+    auto settings = openSettings(settingsFilePath);
+    result.effectiveSettingsPath = settings->fileName();
+    settings->sync();
+    if (settings->status() != QSettings::NoError) {
+        result.error = QStringLiteral("读取当前偏好失败");
+        return result;
+    }
+    for (const QString& key : settings->allKeys()) {
+        if (!control->checkpoint("settings-capture")) {
+            result.error = control->message();
+            return result;
+        }
+        // 只带本应用拥有的键；backup/ 是当前设备策略，恢复时保留本机值。
+        if (!AppSettings::isOwnedSettingKey(key)) continue;
+        QByteArray blob;
+        QDataStream stream(&blob, QIODevice::WriteOnly);
+        stream.setVersion(kSettingsStreamVersion);
+        stream << settings->value(key);
+        if (stream.status() != QDataStream::Ok) {
+            result.error = QStringLiteral("序列化偏好失败：") + key;
+            return result;
+        }
+        result.values.insert(key, blob);
+    }
+    result.success = !control->stopped();
+    if (!result.success) result.error = control->message();
+    return result;
 }
 
 
@@ -613,7 +652,7 @@ bool validateBusinessValues(const QSqlDatabase& database, int schemaVersion,
 }
 
 OperationResult embedMetadataAndSettings(const QString& snapshotPath,
-                                         const QString& settingsFilePath,
+                                         const OwnedSettings& settings,
                                          const QString& kind,
                                          int schemaVersion, const BackupOperation& control)
 {
@@ -677,44 +716,19 @@ OperationResult embedMetadataAndSettings(const QString& snapshotPath,
                     && putMeta(QStringLiteral("kind"), kind);
             }
 
-            std::unique_ptr<QSettings> settings;
             if (ok) {
-                settings = openSettings(settingsFilePath);
-                settings->sync();
-                if (settings->status() != QSettings::NoError) {
-                    result.error = QStringLiteral("读取当前偏好失败");
-                    ok = false;
-                }
-            }
-
-            if (ok) {
-                for (const QString& key : settings->allKeys()) {
+                for (auto it = settings.constBegin(); it != settings.constEnd(); ++it) {
                     if (!control->checkpoint("metadata-setting")) {
                         result.error = control->message();
                         ok = false;
                         break;
                     }
-                    // 只带走本应用拥有的键：恢复时也只认这些键，别的键带进备份文件
-                    // 只会泄露信息。backup/ 是本机策略，恢复时按设计保留本机值，同样不带。
-                    if (!AppSettings::isOwnedSettingKey(key)) {
-                        continue;
-                    }
-                    QByteArray blob;
-                    QDataStream stream(&blob, QIODevice::WriteOnly);
-                    stream.setVersion(kSettingsStreamVersion);
-                    stream << settings->value(key);
-                    if (stream.status() != QDataStream::Ok) {
-                        result.error = QStringLiteral("序列化偏好失败：") + key;
-                        ok = false;
-                        break;
-                    }
-
                     QSqlQuery insert(database);
                     insert.prepare(QStringLiteral(
                         "INSERT OR REPLACE INTO backup_settings (key, value) "
                         "VALUES (:key, :value)"));
-                    insert.bindValue(QStringLiteral(":key"), key);
-                    insert.bindValue(QStringLiteral(":value"), blob);
+                    insert.bindValue(QStringLiteral(":key"), it.key());
+                    insert.bindValue(QStringLiteral(":value"), it.value());
                     if (!insert.exec()) {
                         result.error = QStringLiteral("写入偏好备份失败：")
                             + insert.lastError().text();
@@ -840,8 +854,24 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
                                const QString& settingsFilePath,
                                const QString& destinationPath,
                                const QString& kind,
-                               int currentSchemaVersion, const BackupOperation& operation)
+                               int currentSchemaVersion, const BackupOperation& operation,
+                               const QString& stagingDirectory)
 {
+    // 兼容同步调用方：仍使用同一偏好编码与校验，文件执行入口不再访问 QSettings。
+    const auto control = operation ? operation : std::make_shared<BackupOperationControl>();
+    const auto captured = captureOwnedSettings(settingsFilePath, control);
+    if (!captured.success) return {false, captured.error};
+    return createSnapshot({sourceDatabasePath, destinationPath, stagingDirectory,
+                           captured.effectiveSettingsPath, kind, currentSchemaVersion,
+                           captured.values}, control);
+}
+
+OperationResult createSnapshot(const SnapshotRequest& request, const BackupOperation& operation)
+{
+    const auto& sourceDatabasePath = request.sourceDatabasePath;
+    const auto& destinationPath = request.destinationPath;
+    const auto& effectiveSettingsPath = request.effectiveSettingsPath;
+    const int currentSchemaVersion = request.currentSchemaVersion;
     const auto control = operation ? operation : std::make_shared<BackupOperationControl>();
     OperationResult result;
     if (!control->checkpoint("operation-start")) {
@@ -864,7 +894,6 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
 
     // SQLite 的 WAL/SHM/journal 和 QSettings 锁文件都可能在运行时被写入；即使目标文件
     // 还不存在，也必须按规范化路径拒绝，避免快照的原子替换破坏当前进程的数据或偏好。
-    const QString effectiveSettingsPath = openSettings(settingsFilePath)->fileName();
     QStringList protectedRuntimeFiles = {
         sourceDatabasePath + QStringLiteral("-wal"),
         sourceDatabasePath + QStringLiteral("-shm"),
@@ -891,8 +920,16 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
         return result;
     }
 
-    const QString temporaryPath = destinationPath + QStringLiteral(".tmp-")
-        + QUuid::createUuid().toString(QUuid::WithoutBraces);
+    const QString stagingDirectory = request.stagingDirectory.isEmpty()
+        ? destinationInfo.absolutePath() : request.stagingDirectory;
+    if (!QDir().mkpath(stagingDirectory)) {
+        result.error = QStringLiteral("无法创建快照暂存目录");
+        return result;
+    }
+    const QString temporaryPath = QDir(stagingDirectory).filePath(
+        QStringLiteral(".snapshot-tmp-") + QUuid::createUuid().toString(QUuid::WithoutBraces)
+        + QStringLiteral(".tmp"));
+    const auto cleanup = qScopeGuard([&] { QFile::remove(temporaryPath); });
     const QString connectionName = uniqueConnectionName(QStringLiteral("BackupSnapshot_"));
     int schemaVersion = -1;
     {
@@ -918,6 +955,8 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
             }
 
             if (result.error.isEmpty()) {
+                // 默认回滚日志下 VACUUM INTO（生成完整 SQLite 副本）全程持有主库读锁。
+                // 先写本地暂存，避免外置目标的慢 I/O 一直阻塞主库写入；发布前已关闭源连接。
                 QSqlQuery vacuum(source);
                 const QString sql = QStringLiteral("VACUUM main INTO '%1'")
                     .arg(escapedSqlString(temporaryPath));
@@ -933,14 +972,12 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
 
     if (control->stopped()) result.error = control->message();
     if (!result.error.isEmpty()) {
-        QFile::remove(temporaryPath);
         return result;
     }
 
     result = embedMetadataAndSettings(
-        temporaryPath, settingsFilePath, kind, schemaVersion, control);
+        temporaryPath, request.settings, request.kind, schemaVersion, control);
     if (!result.success) {
-        QFile::remove(temporaryPath);
         return result;
     }
 
@@ -949,13 +986,11 @@ OperationResult createSnapshot(const QString& sourceDatabasePath,
     if (!inspection.value(QStringLiteral("valid")).toBool()) {
         result.success = false;
         result.error = inspection.value(QStringLiteral("reason")).toString();
-        QFile::remove(temporaryPath);
         return result;
     }
 
     // 不发布本版本会拒绝恢复的超限文件；失败保留原目标，临时快照在下面统一移除。
     result = atomicCopy(temporaryPath, destinationPath, kMaxBackupFileBytes, control);
-    QFile::remove(temporaryPath);
     return result;
 }
 

@@ -180,6 +180,10 @@ set(APP_SOURCES
     src/services/BackupSqliteDriver.cpp
     src/services/BackupOperations.h
     src/services/BackupOperations.cpp
+    src/services/BackupExecutor.h
+    src/services/BackupExecutor.cpp
+    src/services/BackupExecutorProtocol.h
+    src/services/BackupExecutorProtocol.cpp
     src/services/BackupService.h
     src/services/BackupService.cpp
     src/services/SnapshotRetention.h
@@ -243,6 +247,8 @@ if(NOT IOS)
         # 设备间同步：Mac 经文件协调读写 iCloud 云盘里的同步文件夹（协调实现在 src/platform/apple）。
         src/platform/macos/MacSyncFolder.h
         src/platform/macos/MacSyncFolder.cpp
+        src/platform/macos/MacBackupExecutor.h
+        src/platform/macos/MacBackupExecutor.cpp
     )
 
     set(APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/app-icons/PomodoroTodo.icns")
@@ -458,6 +464,7 @@ if(APPLE AND NOT IOS AND POMODORO_TODO_DEPLOY_LOCAL)
             "-DDESTINATION_APP=${POMODORO_TODO_LOCAL_APP_PATH}"
             "-DBUNDLE_EXECUTABLE=PomodoroTodo"
             "-DHELPER_EXECUTABLE=PomodoroTodoMcp"
+            "-DBACKUP_EXECUTOR=PomodoroTodoBackupExecutor"
             "-DLSREGISTER=${POMODORO_TODO_LSREGISTER}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/DeployLocalApp.cmake"
         DEPENDS PomodoroTodo
@@ -877,8 +884,51 @@ if(APPLE)
     endif()
 endif()
 
+if(APPLE)
+    # 文件执行器链接核心业务库，只提供 stdio 文件协议，不加载 QML 或主应用偏好域。
+    qt_add_executable(PomodoroTodoBackupExecutor src/entry/mac/backup-executor/main.cpp)
+    target_compile_definitions(PomodoroTodoBackupExecutor PRIVATE
+        POMODORO_TODO_VERSION="${PROJECT_VERSION}")
+    target_link_libraries(PomodoroTodoBackupExecutor PRIVATE PTCore)
+    pomodoro_todo_enable_warnings(PomodoroTodoBackupExecutor)
+    add_dependencies(PomodoroTodo PomodoroTodoBackupExecutor)
+    add_custom_target(bundle-backup-executor ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:PomodoroTodoBackupExecutor>"
+            "$<TARGET_BUNDLE_DIR:PomodoroTodo>/Contents/MacOS/PomodoroTodoBackupExecutor"
+        DEPENDS PomodoroTodo PomodoroTodoBackupExecutor VERBATIM)
+    if(TARGET deploy-local-app)
+        add_dependencies(deploy-local-app bundle-backup-executor)
+    endif()
+endif()
 
 enable_testing()
+
+if(APPLE)
+    add_executable(BackupExecutorStub tests/support/BackupExecutorStub.cpp)
+    target_link_libraries(BackupExecutorStub PRIVATE Qt6::Core)
+    pomodoro_todo_enable_warnings(BackupExecutorStub)
+    add_executable(MacBackupExecutorTests tests/MacBackupExecutorTests.cpp
+        src/platform/macos/MacBackupExecutor.h src/platform/macos/MacBackupExecutor.cpp)
+    target_link_libraries(MacBackupExecutorTests PRIVATE PTCore Qt6::Test)
+    target_compile_definitions(MacBackupExecutorTests PRIVATE
+        POMODORO_TODO_VERSION="${PROJECT_VERSION}"
+        POMODORO_BACKUP_EXECUTOR_PATH="$<TARGET_FILE:PomodoroTodoBackupExecutor>"
+        POMODORO_BACKUP_STUB_PATH="$<TARGET_FILE:BackupExecutorStub>"
+        POMODORO_BACKUP_MEASUREMENT_ROOT="${CMAKE_BINARY_DIR}")
+    add_dependencies(MacBackupExecutorTests PomodoroTodoBackupExecutor BackupExecutorStub)
+    pomodoro_todo_enable_warnings(MacBackupExecutorTests)
+    add_test(NAME MacBackupExecutorTests COMMAND MacBackupExecutorTests)
+    set_tests_properties(MacBackupExecutorTests PROPERTIES TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic;POMODORO_MEASURE_BACKUP_EXECUTOR=0")
+endif()
+
+add_executable(BackupExecutorProtocolTests tests/BackupExecutorProtocolTests.cpp)
+target_link_libraries(BackupExecutorProtocolTests PRIVATE PTCore Qt6::Test)
+pomodoro_todo_enable_warnings(BackupExecutorProtocolTests)
+add_test(NAME BackupExecutorProtocolTests COMMAND BackupExecutorProtocolTests)
+set_tests_properties(BackupExecutorProtocolTests PROPERTIES TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
 # 架构门禁与原生偏好测试的退出后清理均依赖 Python；iOS 已在上方返回。
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
@@ -2460,7 +2510,8 @@ if(APPLE AND NOT IOS)
     foreach(pt_sqlite_target IN LISTS pt_sqlite_targets)
         get_target_property(pt_sqlite_type ${pt_sqlite_target} TYPE)
         if(NOT pt_sqlite_type STREQUAL "EXECUTABLE" OR pt_sqlite_target STREQUAL "PomodoroTodo"
-           OR pt_sqlite_target STREQUAL "SqliteRuntimeTests")
+           OR pt_sqlite_target STREQUAL "SqliteRuntimeTests"
+           OR pt_sqlite_target STREQUAL "PomodoroTodoBackupExecutor")
             continue()
         endif()
         get_target_property(pt_sqlite_links ${pt_sqlite_target} LINK_LIBRARIES)

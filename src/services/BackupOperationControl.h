@@ -37,6 +37,16 @@ public:
         if (m_checkpointForTest) m_checkpointForTest(stage);
         return !stopped();
     }
+    StopReason stopReason() const
+    {
+        stopped();
+        return m_reason.load();
+    }
+    int remainingBudgetMs() const
+    {
+        // 跨进程阶段沿用同一次操作的剩余预算，不能为每次启动重新获得 120 秒。
+        return static_cast<int>(m_deadline.remainingTime());
+    }
     QString message() const
     {
         stopped();

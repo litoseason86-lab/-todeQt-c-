@@ -11,6 +11,8 @@
 #include <QTimeZone>
 #include <QUrl>
 
+#include <memory>
+
 #include "app/SharedApp.h"
 #include "qmlfacade/QmlFacade.h"
 #include "services/DatabaseManager.h"
@@ -31,6 +33,7 @@
 #include "mcp/bridge/McpToolDispatcher.h"
 
 #include "platform/macos/MacGlobalHotkeyBackend.h"
+#include "platform/macos/MacBackupExecutor.h"
 #include "platform/macos/MacPreferencesCleanup.h"
 #include "platform/macos/MacStatusBarController.h"
 #include "platform/macos/MacSyncFolder.h"
@@ -101,6 +104,9 @@ int main(int argc, char *argv[])
         qCritical() << sqliteRuntimeError;
         return QmlFacade::showStartupErrorWindow(app, DatabaseManager::defaultDatabasePath());
     }
+
+    // 备份后台文件操作与主进程隔离，退出时由 Mac 后端按停止和回收期限收尾。
+    BackupService::instance()->setExecutor(std::make_shared<MacBackupExecutor>());
 
     // 7. 打开数据库。
     SharedApp::Options sharedAppOptions;

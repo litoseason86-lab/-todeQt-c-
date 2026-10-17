@@ -1,6 +1,7 @@
 #include "BackupService.h"
 
 #include "AppSettings.h"
+#include "BackupExecutor.h"
 #include "BackupOperations.h"
 #include "DatabaseManager.h"
 #include "FocusTimer.h"
@@ -92,7 +93,7 @@ struct BackupService::RestoreContext
 };
 
 BackupService::BackupService(QObject* parent)
-    : QObject(parent)
+    : QObject(parent), m_executor(std::make_shared<InProcessBackupExecutor>())
 {
 }
 
@@ -112,6 +113,31 @@ void BackupService::configure(const QString& settingsFilePath, const QString& ba
 {
     m_settingsFilePath = settingsFilePath;
     m_backupsDir = backupsDir;
+    m_staleFilesCleaned = false;
+}
+
+void BackupService::setExecutor(std::shared_ptr<BackupExecutor> executor)
+{
+    m_executor = executor ? std::move(executor) : std::make_shared<InProcessBackupExecutor>();
+}
+
+bool BackupService::admitFileOperation() const
+{
+    if (m_executor->hasAbandonedWork()) {
+        // 未确认回收的旧执行器仍可能持有文件或发布目标；不能再启动下一写者。
+        setLastError(QStringLiteral("上一次备份操作没能确认结束，请重启应用后再备份或恢复"));
+        return false;
+    }
+    if (!m_staleFilesCleaned) {
+        m_staleFilesCleaned = true;
+        // 只在本次运行首个文件操作前清理；不能在后续调用中删掉仍被当前任务使用的暂存。
+        const QDir directory(autoBackupsDir());
+        const auto names = directory.entryList(
+            {QStringLiteral(".snapshot-tmp-*"), QStringLiteral(".restore-staging-*.tmp")},
+            QDir::Files | QDir::Hidden);
+        for (const auto& name : names) QFile::remove(directory.filePath(name));
+    }
+    return true;
 }
 
 QString BackupService::backupFileExtension() const
@@ -211,7 +237,7 @@ void BackupService::prepareForShutdown()
         return;
     }
     m_shutdownPrepared = true;
-    // 协作停止只缩短可控SQL/复制的收束，永久系统I/O仍需等待；不能销毁仍在访问的依赖。
+    // 隔离执行器按停止/回收期限返回；进程内恢复任务仍需真实收尾，不能提前销毁其依赖。
     if (m_operation && !m_activeWorkers.isEmpty()) {
         m_operation->requestStop(BackupOperationControl::StopReason::Shutdown);
         setLastError(m_operation->message());
@@ -310,13 +336,18 @@ bool BackupService::writeSnapshot(const QString& destPath, const QString& kind, 
                                          m_settingsFilePath,
                                          destPath,
                                          kind,
-                                         DatabaseManager::kCurrentSchemaVersion, operation);
+                                         DatabaseManager::kCurrentSchemaVersion, operation,
+                                         autoBackupsDir());
     setLastError(result.success ? QString() : result.error);
     return result.success;
 }
 
 bool BackupService::createBackup(const QString& destPath)
 {
+    if (!admitFileOperation()) {
+        emit backupCompleted(false, m_lastError);
+        return false;
+    }
     // 同步入口也必须遵守单操作准入，否则会覆盖异步worker持有的取消身份。
     if (m_busy || m_shutdownPrepared) {
         setLastError(m_shutdownPrepared ? QStringLiteral("应用正在退出")
@@ -343,6 +374,9 @@ bool BackupService::createBackup(const QString& destPath)
 
 QVariantMap BackupService::inspectBackup(const QString& srcPath) const
 {
+    if (!admitFileOperation()) {
+        return {{QStringLiteral("valid"), false}, {QStringLiteral("reason"), m_lastError}};
+    }
     return BackupOperations::inspectBackup(
         srcPath, DatabaseManager::kCurrentSchemaVersion, std::make_shared<BackupOperationControl>());
 }
@@ -487,6 +521,10 @@ bool BackupService::restoreFromPreRestoreSnapshot(const QString& preRestorePath,
 
 bool BackupService::restoreBackup(const QString& srcPath)
 {
+    if (!admitFileOperation()) {
+        emit restoreCompleted(false, m_lastError);
+        return false;
+    }
     if (m_shutdownPrepared) {
         setLastError(QStringLiteral("应用正在退出"));
         emit restoreCompleted(false, m_lastError);
@@ -642,6 +680,10 @@ void BackupService::startBackupJob(const QString& destinationPath,
                                    const QString& kind,
                                    bool automatic)
 {
+    if (!admitFileOperation()) {
+        if (!automatic) emit backupCompleted(false, m_lastError);
+        return;
+    }
     if (m_shutdownPrepared) {
         return;
     }
@@ -703,17 +745,16 @@ void BackupService::startBackupJob(const QString& destinationPath,
         }
     });
 
+    // 偏好属于主进程；在取得操作准入后固定字节快照，后台与独立执行器都只消费请求。
+    const auto captured = BackupOperations::captureOwnedSettings(m_settingsFilePath, operation);
+    const BackupOperations::SnapshotRequest request{
+        sourcePath, destinationPath, autoBackupsDir(), captured.effectiveSettingsPath,
+        kind, DatabaseManager::kCurrentSchemaVersion, captured.values};
     watcher->setFuture(QtConcurrent::run(
-        [sourcePath,
-         settingsPath = m_settingsFilePath,
-         destinationPath,
-         kind, operation]() {
-            return BackupOperations::createSnapshot(
-                sourcePath,
-                settingsPath,
-                destinationPath,
-                kind,
-                DatabaseManager::kCurrentSchemaVersion, operation);
+        [executor = m_executor, request, captured, operation]() {
+            // 保持后台失败的完成语义，偏好读取失败也经原来的 watcher 发出结果。
+            if (!captured.success) return BackupOperations::OperationResult{false, captured.error};
+            return executor->createSnapshot(request, operation);
         }));
 }
 
@@ -724,6 +765,11 @@ void BackupService::requestBackup(const QString& destPath)
 
 void BackupService::requestBackupInfo(const QString& srcPath)
 {
+    if (!admitFileOperation()) {
+        emit backupInfoReady(srcPath, {{QStringLiteral("valid"), false},
+                                      {QStringLiteral("reason"), m_lastError}});
+        return;
+    }
     if (m_shutdownPrepared) {
         return;
     }
@@ -752,14 +798,18 @@ void BackupService::requestBackupInfo(const QString& srcPath)
         setBusy(false);
         emit backupInfoReady(srcPath, info);
     });
-    watcher->setFuture(QtConcurrent::run([srcPath, operation]() {
-        return BackupOperations::inspectBackup(
+    watcher->setFuture(QtConcurrent::run([executor = m_executor, srcPath, operation]() {
+        return executor->inspectBackup(
             srcPath, DatabaseManager::kCurrentSchemaVersion, operation);
     }));
 }
 
 void BackupService::requestRestore(const QString& srcPath)
 {
+    if (!admitFileOperation()) {
+        emit restoreCompleted(false, m_lastError);
+        return;
+    }
     if (m_shutdownPrepared) {
         return;
     }
@@ -841,15 +891,16 @@ void BackupService::requestRestore(const QString& srcPath)
         context->restoredSettings = result.restoredSettings;
         installPreparedRestore(context);
     });
-    watcher->setFuture(QtConcurrent::run([srcPath, context, operation]() {
+    watcher->setFuture(QtConcurrent::run([executor = m_executor, srcPath, context, operation]() {
         RestorePreflightResult result;
         const BackupOperations::OperationResult staged =
-            BackupOperations::atomicCopy(srcPath, context->stagedSourcePath, BackupOperations::kMaxBackupFileBytes, operation);
+            executor->stageCopy(srcPath, context->stagedSourcePath,
+                                BackupOperations::kMaxBackupFileBytes, operation);
         if (!staged.success) {
             result.error = staged.error;
             return result;
         }
-        const QVariantMap info = BackupOperations::inspectBackup(
+        const QVariantMap info = executor->inspectBackup(
             context->stagedSourcePath, DatabaseManager::kCurrentSchemaVersion, operation);
         if (!info.value(QStringLiteral("valid")).toBool()) {
             result.error = info.value(QStringLiteral("reason")).toString();
@@ -1057,6 +1108,7 @@ bool BackupService::autoBackupDue() const
 
 bool BackupService::runAutoBackupIfDue()
 {
+    if (!admitFileOperation()) return false;
     if (m_shutdownPrepared) {
         return true;
     }
@@ -1107,6 +1159,7 @@ bool BackupService::backupBeforeSyncReplace(QString* error)
         }
         return false;
     };
+    if (!admitFileOperation()) return fail(m_lastError);
     if (m_shutdownPrepared) {
         return fail(QStringLiteral("应用正在退出，暂不替换"));
     }
@@ -1134,6 +1187,7 @@ bool BackupService::backupBeforeSyncReplace(QString* error)
 
 void BackupService::requestAutoBackupIfDue()
 {
+    if (!admitFileOperation()) return;
     if (m_shutdownPrepared || m_busy || !autoBackupDue()) {
         return;
     }

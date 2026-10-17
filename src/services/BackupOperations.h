@@ -3,6 +3,8 @@
 
 #include "BackupOperationControl.h"
 
+#include <QByteArray>
+#include <QMap>
 #include <QString>
 #include <QVariantMap>
 
@@ -41,12 +43,39 @@ struct EmbeddedSettingsResult
     QVariantMap values;
 };
 
+// 请求只带已经序列化的应用偏好；执行器不接触主进程的偏好域。
+using OwnedSettings = QMap<QString, QByteArray>;
+
+struct CapturedSettingsResult
+{
+    bool success = false;
+    QString error;
+    OwnedSettings values;
+    QString effectiveSettingsPath;
+};
+
+struct SnapshotRequest
+{
+    QString sourceDatabasePath;
+    QString destinationPath;
+    QString stagingDirectory;
+    QString effectiveSettingsPath;
+    QString kind;
+    int currentSchemaVersion = 0;
+    OwnedSettings settings;
+};
+
+CapturedSettingsResult captureOwnedSettings(const QString& settingsFilePath,
+                                            const BackupOperation& operation = {});
+OperationResult createSnapshot(const SnapshotRequest& request,
+                               const BackupOperation& operation = {});
 OperationResult createSnapshot(const QString& sourceDatabasePath,
                                const QString& settingsFilePath,
                                const QString& destinationPath,
                                const QString& kind,
                                int currentSchemaVersion,
-                               const BackupOperation& operation = {});
+                               const BackupOperation& operation = {},
+                               const QString& stagingDirectory = {});
 QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion,
                           const BackupOperation& operation = {});
 EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath,

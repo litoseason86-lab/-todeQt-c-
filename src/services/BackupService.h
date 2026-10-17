@@ -12,7 +12,9 @@
 #include "BackupOperationControl.h"
 
 #include <functional>
+#include <memory>
 
+class BackupExecutor;
 class QFutureWatcherBase;
 
 namespace BackupOperations {
@@ -49,6 +51,7 @@ public:
     // 测试注入设置文件路径与备份目录；生产用默认（默认 QSettings + AppDataLocation/backups）。
     // 数据库路径始终取自 DatabaseManager 当前连接，无需注入。
     void configure(const QString& settingsFilePath, const QString& backupsDir);
+    void setExecutor(std::shared_ptr<BackupExecutor> executor);
 
     Q_INVOKABLE bool createBackup(const QString& destPath);
     // 恢复前预览：返回 {valid,reason,createdAt,appVersion,schemaVersion,taskCount,sessionCount}。
@@ -69,8 +72,8 @@ public:
     Q_INVOKABLE void requestBackupInfo(const QString& srcPath);
     Q_INVOKABLE void requestRestore(const QString& srcPath);
     void requestAutoBackupIfDue();
-    // aboutToQuit 中调用：先请求协作停止并等后台任务实际结束，再允许数据库和Qt全局对象销毁。
-    // 永久阻塞的系统I/O仍可能拖住这里，不能把取消请求当作线程已退出。
+    // aboutToQuit 中调用：先请求停止，再等待执行器收尾，避免析构仍被后台访问的依赖。
+    // Mac 的隔离文件任务按后端期限返回；进程内任务及恢复安装、回滚仍是协作停止。
     // 该函数可重复调用，避免退出路径因重复信号或析构兜底而二次释放 watcher。
     void prepareForShutdown();
     // 只请求停止；busy与恢复保护由实际完成回调解除。
@@ -152,6 +155,7 @@ private:
                  bool operationBlocksUi = false);
     void trackWorker(QFutureWatcherBase* watcher);
     void retireWorker(QFutureWatcherBase* watcher);
+    bool admitFileOperation() const;
 
     QString m_settingsFilePath;   // 空 = 默认 QSettings（生产）
     QString m_backupsDir;         // 空 = AppDataLocation/backups
@@ -170,6 +174,8 @@ private:
     // 仅供测试在“校验完成、安装尚未开始”的窗口替换外部源路径，锁定恢复必须使用受控副本。
     std::function<void()> m_afterRestoreValidationHookForTest;
     RestorePreparationCallback m_restorePreparationCallback;
+    std::shared_ptr<BackupExecutor> m_executor;
+    mutable bool m_staleFilesCleaned = false;
 };
 
 #endif // BACKUPSERVICE_H
