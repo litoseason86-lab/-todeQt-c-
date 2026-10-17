@@ -21,10 +21,12 @@ import UniformTypeIdentifiers
     @State private var movingTask: TaskValue?
     @State private var batchReschedulePresented = false
     @FocusState private var listFocused: Bool
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         GeometryReader { geometry in
-            let narrow = geometry.size.width < 700
+            // 辅助字号下七列放不下（10-18 真机最大字号：列头竖排、任务只剩一个字），与统计、专注历史一样改用单日版式。
+            let narrow = geometry.size.width < 700 || typeSize.isAccessibilitySize
             Group {
                 if narrow { compactBody(geometry) } else { wideBody(geometry) }
             }
@@ -141,7 +143,9 @@ import UniformTypeIdentifiers
                 Button { store.selectDay(group.date) } label: {
                     VStack(spacing: 2) {
                         Text(Self.weekdayLabel(index)).scaledSystemFont(size: 12)
+                        // 七格等分宽度，大字号时两位数会被折成两行；单行缩小。
                         Text(Self.day(group.date)).scaledSystemFont(size: 18, weight: .semibold).monospacedDigit()
+                            .lineLimit(1).minimumScaleFactor(0.5)
                     }
                     .foregroundStyle(selected ? ThemeColors.surface : (store.isToday(group.date) ? ThemeColors.accentInk : ThemeColors.ink))
                     .frame(maxWidth: .infinity, minHeight: 52)

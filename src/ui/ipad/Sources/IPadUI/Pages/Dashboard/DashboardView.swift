@@ -82,7 +82,8 @@ struct DashboardView: View {
     private func stat(_ title: String, _ parts: [(text: String, isNumber: Bool)]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(title).scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
-            MixedNumberText(parts: parts, numberSize: 30, unitSize: 15).lineLimit(1).minimumScaleFactor(0.6)
+            // 数字宁可缩小也不截断：最大辅助字号下 0.6 仍会截成「4小时1…」。
+            MixedNumberText(parts: parts, numberSize: 30, unitSize: 15).lineLimit(1).minimumScaleFactor(0.3)
         }
         .padding(EdgeInsets(top: 18, leading: 20, bottom: 18, trailing: 16))
         .frame(maxWidth: .infinity, alignment: .leading)

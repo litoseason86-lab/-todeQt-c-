@@ -322,9 +322,10 @@ private struct SidebarSummaryTiles: View {
                     Spacer(minLength: 4)
                     MixedNumberText(parts: MixedNumberText.split(tile.value), numberSize: 22, unitSize: 13,
                                     color: selected ? ThemeColors.surface : ThemeColors.inkStrong)
-                        .lineLimit(1).minimumScaleFactor(0.5)
+                        .lineLimit(1).minimumScaleFactor(0.3)
                 }
-                Text(tile.title).scaledSystemFont(size: 13).lineLimit(1)
+                // 侧栏宽度固定，辅助字号下标题会被截成一个字；与数字一样单行缩小。
+                Text(tile.title).scaledSystemFont(size: 13).lineLimit(1).minimumScaleFactor(0.4)
                     .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.ink)
             }
             .padding(12)

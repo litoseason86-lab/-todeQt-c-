@@ -191,7 +191,8 @@ private struct TodayGoalCard: View {
                     Text(store.goalMinutes > 0 ? "/ 目标 " + DurationFormat.minutes(Double(store.goalMinutes)) : "/ 未设目标")
                         .scaledSystemFont(size: 15).foregroundStyle(ThemeColors.inkSoft)
                 }
-                .lineLimit(1).minimumScaleFactor(0.8)
+                // 下限放到 0.4：最大辅助字号下 0.8 仍放不下，时长会被截成「4…」；默认字号不受影响。
+                .lineLimit(1).minimumScaleFactor(0.4)
                 ProgressBar(percent: store.goalProgressPercent)
                     .accessibilityLabel("今日目标进度")
                     .accessibilityValue(StatisticsFormat.percent(store.goalProgressPercent))

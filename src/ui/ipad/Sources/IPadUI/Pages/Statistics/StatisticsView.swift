@@ -36,8 +36,11 @@ struct StatisticsView: View {
                             Spacer(); Button("重试") { store.refresh() }.buttonStyle(SoftPillStyle())
                         }
                     }
-                    // 三张卡等高：比较行留白时也不让卡片高低不齐。
-                    HStack(alignment: .top, spacing: wide ? 16 : 8) {
+                    // 三张卡等高：比较行留白时也不让卡片高低不齐。辅助字号下一行三张会把数字和比较截断，改为一张一行。
+                    let cardLayout = typeSize.isAccessibilitySize
+                        ? AnyLayout(VStackLayout(spacing: 8))
+                        : AnyLayout(HStackLayout(alignment: .top, spacing: wide ? 16 : 8))
+                    cardLayout {
                         ForEach(store.snapshot.cards) { card in StatisticsCardView(card: card, compact: !wide).frame(maxHeight: .infinity) }
                     }
                     .fixedSize(horizontal: false, vertical: true)
@@ -79,8 +82,9 @@ private struct StatisticsCardView: View {
         VStack(alignment: .leading, spacing: compact ? 6 : 10) {
             Text(card.title).scaledSystemFont(size: compact ? 13 : 15).foregroundStyle(ThemeColors.inkSoft)
                 .lineLimit(2).frame(alignment: .topLeading)
+            // 数字宁可缩小也不截断：最大辅助字号下 0.6 仍会截成「4.2…」。
             MixedNumberText(parts: valueParts, numberSize: compact ? 22 : 30, unitSize: compact ? 12 : 15)
-                .lineLimit(1).minimumScaleFactor(0.6)
+                .lineLimit(1).minimumScaleFactor(0.3)
             if !card.subtitle.isEmpty {
                 Text(card.subtitle).scaledSystemFont(size: 13).foregroundStyle(ThemeColors.inkSoft).lineLimit(2)
             }

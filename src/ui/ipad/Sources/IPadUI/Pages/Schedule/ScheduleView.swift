@@ -8,6 +8,7 @@ import SwiftUI
     @State private var settingsPresented = false
     @State private var deleting: ScheduleEntry?
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
     private struct EntryPresentation: Identifiable {
         let id = UUID()
         let entry: ScheduleEntry?
@@ -16,7 +17,8 @@ import SwiftUI
     }
     var body: some View {
         GeometryReader { geometry in
-            let narrow = geometry.size.width < 700
+            // 辅助字号下周网格放不下（10-18 真机最大字号宽窗整页空白），改用星期条＋单日课程列表。
+            let narrow = geometry.size.width < 700 || typeSize.isAccessibilitySize
             VStack(alignment: .leading, spacing: 12) {
                 PageHeader(title: "课表", subtitle: subtitle)
                 if !store.error.isEmpty {
@@ -50,7 +52,8 @@ import SwiftUI
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button { store.goToWeek(store.weekIndex - 1) } label: { Image(systemName: "chevron.left") }.accessibilityLabel("上一周").disabled(store.weekIndex <= 1)
                 Button { store.goToWeek(store.weekIndex + 1) } label: { Image(systemName: "chevron.right") }.accessibilityLabel("下一周").disabled(store.weekIndex >= store.settings.semesterWeeks)
-                if sizeClass != .compact {
+                // 单日版式自带分段控件（weekdaySelector），辅助字号强制单日时工具栏不再重复放一个。
+                if sizeClass != .compact && !typeSize.isAccessibilitySize {
                     Picker("显示方式", selection: Binding(get: { store.displayMode }, set: { _ = store.setDisplayMode($0) })) {
                         Text("时间").tag(ScheduleDisplayMode.time); Text("节次").tag(ScheduleDisplayMode.period)
                     }.pickerStyle(.segmented).frame(width: 132)
@@ -94,6 +97,7 @@ import SwiftUI
                         VStack(spacing: 2) {
                             Text(Self.weekdayName(day)).scaledSystemFont(size: 12)
                             Text(WeekView.day(store.dateForWeekday(day))).scaledSystemFont(size: 18, weight: .semibold).monospacedDigit()
+                                .lineLimit(1).minimumScaleFactor(0.5)
                             Circle().fill(today && !selected ? ThemeColors.danger : Color.clear).frame(width: 4, height: 4)
                         }
                         .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.ink)
