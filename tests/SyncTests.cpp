@@ -728,6 +728,8 @@ private slots:
     void causalEditWinsDespiteClockSkew();
     void sameLogicalTimeConvergesByDevice();
     void badRecordIsSkippedWithoutBlockingBatch();
+    void storageFailureRollsBackAndRetries_data();
+    void storageFailureRollsBackAndRetries();
     void remoteTaskDeletionKeepsItsSessions();
     void runningSessionIsNeverSent();
     void batchFromOtherEpochOrSameDeviceIsRejected();
@@ -1749,6 +1751,138 @@ void SyncTests::sameLogicalTimeConvergesByDevice()
     const QString expected = a.id > b.id ? QStringLiteral("甲") : QStringLiteral("乙");
     QCOMPARE(taskValue(a, id, QStringLiteral("title")).toString(), expected);
     QCOMPARE(taskValue(b, id, QStringLiteral("title")).toString(), expected);
+}
+
+void SyncTests::storageFailureRollsBackAndRetries_data()
+{
+    // 增量记录、设置和快照遇到存储错误都必须整批回滚，恢复空间后可用同一批重试。
+    QTest::addColumn<QString>("path");
+    QTest::newRow("records") << QStringLiteral("records");
+    QTest::newRow("settings") << QStringLiteral("settings");
+    QTest::newRow("snapshot") << QStringLiteral("snapshot");
+}
+
+void SyncTests::storageFailureRollsBackAndRetries()
+{
+    // 同步遇到磁盘满时整批不落地、不记成跳过，保留真实存储错误，空间恢复后同一批完整应用，不丢记录。
+    QFETCH(QString, path);
+    const Device device = openDevice(QStringLiteral("storage-retry"));
+    SyncStore store(device.connection);
+    const bool settings = path == QLatin1String("settings");
+    const bool snapshot = path == QLatin1String("snapshot");
+    const QString remote = QStringLiteral("0123456789abcdef0123456789abcdef");
+    const SyncVersion version{kFuture, remote};
+    const QString largeValue(8000, QLatin1Char('x'));
+    QVERIFY(exec(device, QStringLiteral("CREATE TABLE sync_storage_pressure (payload BLOB)")));
+    if (snapshot) {
+        QVERIFY(!addMemo(device, QStringLiteral("原有备忘"), QStringLiteral("原有内容")).isEmpty());
+    }
+    bool exported = false;
+    QString exportError;
+    const SyncBatch originalSnapshot = store.exportSnapshot(&exported, &exportError);
+    QVERIFY2(exported, qPrintable(exportError));
+    const QStringList original = describe(originalSnapshot);
+    const QStringList originalPending = describe(store.collectPending());
+    if (snapshot) {
+        QVERIFY(!originalPending.isEmpty());
+    }
+    const int skippedBefore = logCount(device, QStringLiteral("skipped"));
+    SyncBatch batch;
+    batch.device = remote;
+    if (settings) {
+        batch.settings = {{QStringLiteral("storage/first"), QStringLiteral("first"), version, {}},
+                          {QStringLiteral("storage/second"), largeValue, version, {}}};
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM sync_settings WHERE key LIKE 'storage/%'")), 0);
+        // 第二项写入前必须已经看见第一项，避免“第一项根本没写进去”也被误判为批量回滚。
+        QVERIFY(exec(device, QStringLiteral(
+            "CREATE TEMP TRIGGER require_first_setting BEFORE INSERT ON sync_settings "
+            "WHEN NEW.key='storage/second' BEGIN "
+            "SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM sync_settings WHERE key='storage/first' AND value='first') "
+            "THEN RAISE(ABORT, 'first setting must already be applied') END; "
+            "INSERT INTO sync_storage_pressure VALUES(zeroblob(524288)); END")));
+    } else {
+        for (const QString& id : {QStringLiteral("storage-first"), QStringLiteral("storage-second")}) {
+            SyncRecord record;
+            record.table = QStringLiteral("memos");
+            record.syncId = id;
+            record.fields.insert(QStringLiteral("title"), {id, version, {}});
+            record.fields.insert(QStringLiteral("created_at"), {QStringLiteral("2026-09-30T08:00:00.000Z"), version, {}});
+            record.fields.insert(QStringLiteral("body"), {id == QLatin1String("storage-first") ? QStringLiteral("first") : largeValue,
+                                                          version, {}});
+            record.fields.insert(QStringLiteral("sort_order"), {id == QLatin1String("storage-first") ? 1 : 2, version, {}});
+            batch.records.append(record);
+        }
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM memos WHERE sync_id IN ('storage-first','storage-second')")), 0);
+        // 先确认第一条的内容及字段版本均已落地，再让第二条分配额外磁盘页；不伪造 SQLite 错误码。
+        // 通过临时表施加页压力，备忘录正文仍保持在 10000 字符的合法范围内，避免测成约束错误。
+        QVERIFY(exec(device, QStringLiteral(
+            "CREATE TEMP TRIGGER require_first_record BEFORE INSERT ON memos "
+            "WHEN NEW.sync_id='storage-second' BEGIN "
+            "SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM memos WHERE sync_id='storage-first' AND body='first') "
+            "OR NOT EXISTS(SELECT 1 FROM sync_field_versions WHERE tbl='memos' AND sync_id='storage-first' "
+            "AND field='body' AND v_time=%1) "
+            "THEN RAISE(ABORT, 'first record must already be applied') END; "
+            "INSERT INTO sync_storage_pressure VALUES(zeroblob(524288)); END").arg(version.time)));
+    }
+    const qint64 originalLimit = scalar(device, QStringLiteral("PRAGMA max_page_count")).toLongLong();
+    const qint64 pages = scalar(device, QStringLiteral("PRAGMA page_count")).toLongLong();
+    const qint64 limit = pages + 16;
+    const auto restoreLimit = qScopeGuard([&] { exec(device, QStringLiteral("PRAGMA max_page_count=%1").arg(originalLimit)); });
+    // 留 16 页足够第一条小记录及版本写入；第二条触发器分配 512 KiB 必需更多新页，稳定触发真正的 SQLITE_FULL。
+    // 本机 Qt 6.10.3 驱动返回 nativeErrorCode="13"；SQLite 可能撤销语句或整个事务，
+    // 必须先读取最初的磁盘满原因，避免保存点处理掩盖原始存储错误。
+    QVERIFY(exec(device, QStringLiteral("PRAGMA max_page_count=%1").arg(limit)));
+    QCOMPARE(scalar(device, QStringLiteral("PRAGMA max_page_count")).toLongLong(), limit);
+    const auto apply = [&] { return snapshot ? store.replaceWithSnapshot(batch) : store.applyRemote(batch); };
+    const auto failed = apply();
+    QVERIFY(!failed.ok);
+    QCOMPARE(failed.skippedRecords, 0);
+    QCOMPARE(logCount(device, QStringLiteral("skipped")), skippedBefore);
+    const SyncBatch afterFailure = store.exportSnapshot(&exported, &exportError);
+    QVERIFY2(exported, qPrintable(exportError));
+    QCOMPARE(describe(afterFailure), original);
+    QCOMPARE(describe(store.collectPending()), originalPending);
+    QCOMPARE(store.epoch(), originalSnapshot.epoch);
+    QCOMPARE(scalar(device, QStringLiteral("SELECT applying FROM sync_runtime WHERE singleton_id=1")).toInt(), 0);
+    if (settings) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM sync_settings WHERE key LIKE 'storage/%'")), 0);
+    } else {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM memos WHERE sync_id IN ('storage-first','storage-second')")), 0);
+    }
+    // 这是错误保留的回归断言；产品代码只按 nativeErrorCode 分类，不靠这段文字决定是否重试。
+    QVERIFY2(failed.error.contains(QStringLiteral("database or disk is full")), qPrintable(failed.error));
+    QVERIFY(exec(device, QStringLiteral("PRAGMA max_page_count=%1").arg(originalLimit)));
+    QCOMPARE(scalar(device, QStringLiteral("PRAGMA max_page_count")).toLongLong(), originalLimit);
+    const auto retried = apply();
+    QVERIFY2(retried.ok, qPrintable(retried.error));
+    QCOMPARE(retried.skippedRecords, 0);
+    QCOMPARE(logCount(device, QStringLiteral("skipped")), skippedBefore);
+    if (settings) {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM sync_settings WHERE key LIKE 'storage/%'")), 2);
+        QCOMPARE(scalar(device, QStringLiteral("SELECT value FROM sync_settings WHERE key='storage/first'")).toString(), QStringLiteral("first"));
+        QCOMPARE(scalar(device, QStringLiteral("SELECT value FROM sync_settings WHERE key='storage/second'")).toString(), largeValue);
+        for (const QString& key : {QStringLiteral("storage/first"), QStringLiteral("storage/second")}) {
+            QCOMPARE(scalar(device, QStringLiteral("SELECT v_time FROM sync_settings WHERE key='%1'").arg(key)).toLongLong(), version.time);
+            QCOMPARE(scalar(device, QStringLiteral("SELECT v_device FROM sync_settings WHERE key='%1'").arg(key)).toString(), remote);
+        }
+    } else {
+        QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM memos WHERE sync_id IN ('storage-first','storage-second')")), 2);
+        QCOMPARE(scalar(device, QStringLiteral("SELECT body FROM memos WHERE sync_id='storage-first'")).toString(), QStringLiteral("first"));
+        QCOMPARE(scalar(device, QStringLiteral("SELECT body FROM memos WHERE sync_id='storage-second'")).toString(), largeValue);
+        for (const SyncRecord& record : batch.records) {
+            QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM sync_field_versions WHERE tbl='memos' AND sync_id='%1'")
+                                       .arg(record.syncId)), int(record.fields.size()));
+            QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM sync_field_versions WHERE tbl='memos' AND sync_id='%1' "
+                                                 "AND (v_time<>%2 OR v_device<>'%3')").arg(record.syncId).arg(version.time).arg(remote)), 0);
+            QCOMPARE(scalar(device, QStringLiteral("SELECT v_time FROM sync_field_versions WHERE tbl='memos' AND sync_id='%1' "
+                                                   "AND field='body'").arg(record.syncId)).toLongLong(), version.time);
+            QCOMPARE(scalar(device, QStringLiteral("SELECT v_device FROM sync_field_versions WHERE tbl='memos' AND sync_id='%1' "
+                                                   "AND field='body'").arg(record.syncId)).toString(), remote);
+        }
+        if (snapshot) {
+            QCOMPARE(count(device, QStringLiteral("SELECT COUNT(*) FROM memos WHERE title='原有备忘'")), 0);
+        }
+    }
 }
 
 void SyncTests::badRecordIsSkippedWithoutBlockingBatch()

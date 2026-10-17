@@ -85,7 +85,34 @@ QString nonNull(const QString& text)
     return text.isNull() ? QStringLiteral("") : text;
 }
 
-// 应用一批远端改动的全部状态。只活在 applyRemote 的一个事务里。
+bool isStorageError(const QSqlError& error)
+{
+    bool parsed = false;
+    const int code = error.nativeErrorCode().toInt(&parsed);
+    if (!parsed) {
+        return false;
+    }
+    // SQLite 扩展结果码的低 8 位是主码；只按原生码分类，不能依赖驱动错误文字或系统语言。
+    switch (code & 0xff) {
+    case 5:  // SQLITE_BUSY
+    case 6:  // SQLITE_LOCKED
+    case 7:  // SQLITE_NOMEM
+    case 8:  // SQLITE_READONLY
+    case 9:  // SQLITE_INTERRUPT
+    case 10: // SQLITE_IOERR
+    case 11: // SQLITE_CORRUPT
+    case 13: // SQLITE_FULL
+    case 14: // SQLITE_CANTOPEN
+    case 15: // SQLITE_PROTOCOL
+    case 17: // SQLITE_SCHEMA
+    case 26: // SQLITE_NOTADB
+        return true;
+    default:
+        return false;
+    }
+}
+
+// 应用一批远端改动的全部状态。只活在一次增量应用或快照替换的事务里。
 class Applier
 {
 public:
@@ -94,7 +121,7 @@ public:
     {
     }
 
-    // 应用一条记录。返回 false 表示这一条失败（error 里是原因），调用方回滚它的保存点、记日志、继续下一条。
+    // 应用一条记录。坏数据只撤销当前保存点；存储失败须由调用方取出后放弃整批，留待重试。
     bool apply(const SyncRecord& record, QString* error);
     // 应用一个设置项：版本新的赢；变了的交给调用方写回 AppSettings。
     bool applySetting(const SyncSettingRecord& setting, QString* error);
@@ -106,6 +133,7 @@ public:
     bool replaceSettings(const QList<SyncSettingRecord>& settings, QString* error);
     qint64 maxSeenTime() const { return m_maxSeenTime; }
     bool logSkipped(const SyncRecord& record, const QString& reason);
+    bool takeStorageFailure(QString* error);
 
     // 全部记录应用完之后的两步收尾，都在同一个事务里：
     // 1. 科目落最终名。应用时改名的科目先用临时名，等整批落地再逐个换回，这样两个科目互换名字时
@@ -168,6 +196,10 @@ private:
     // 记录已删除：清掉它的字段版本；dequeue 为真时连待发送也一并清掉（本机的删除记录不用再发的时候）。
     bool clearLocalSyncState(const QString& table, const QString& syncId, bool dequeue, QString* error);
     bool exec(QSqlQuery& query, QString* error);
+    bool exec(QSqlQuery& query, const QString& sql, QString* error);
+    bool prepare(QSqlQuery& query, const QString& sql);
+    bool next(QSqlQuery& query);
+    void recordSqlError(const QSqlError& sqlError, QString* error);
 
     // 冲突日志。
     void logConflict(const QString& kind, const SyncSchema::Table& table, const QString& syncId,
@@ -197,19 +229,72 @@ private:
     QString m_me;
     SyncStore::ApplyResult* m_result;
     qint64 m_maxSeenTime = 0;
+    // 查询准备、执行、取行和辅助日志都可能先出错；后续 SQL 不得覆盖本条最初的存储错误。
+    bool m_storageFailure = false;
+    QString m_storageError;
     // 待落最终名的科目：sync_id → (本机编号, 最终名)。按 sync_id 排序处理，所有设备的处理顺序一致。
     QMap<QString, QPair<qint64, QString>> m_pendingCategoryNames;
     // 本批动过的任务日期（改前与改后），收尾时检查这些日期的排序号不变量。
     QSet<QString> m_touchedTaskDates;
 };
 
+void Applier::recordSqlError(const QSqlError& sqlError, QString* error)
+{
+    if (error) {
+        *error = sqlError.text();
+    }
+    if (!m_storageFailure && isStorageError(sqlError)) {
+        m_storageFailure = true;
+        m_storageError = sqlError.text();
+    }
+}
+
+bool Applier::takeStorageFailure(QString* error)
+{
+    if (!m_storageFailure) {
+        return false;
+    }
+    *error = std::exchange(m_storageError, QString());
+    m_storageFailure = false;
+    return true;
+}
+
 bool Applier::exec(QSqlQuery& query, QString* error)
 {
     if (query.exec()) {
         return true;
     }
-    if (error) {
-        *error = query.lastError().text();
+    recordSqlError(query.lastError(), error);
+    return false;
+}
+
+bool Applier::exec(QSqlQuery& query, const QString& sql, QString* error)
+{
+    if (query.exec(sql)) {
+        return true;
+    }
+    recordSqlError(query.lastError(), error);
+    return false;
+}
+
+bool Applier::prepare(QSqlQuery& query, const QString& sql)
+{
+    if (query.prepare(sql)) {
+        return true;
+    }
+    // prepare 失败后 exec 可能只报告“语句未准备”，因此必须在原生错误被覆盖前记录。
+    recordSqlError(query.lastError(), nullptr);
+    return false;
+}
+
+bool Applier::next(QSqlQuery& query)
+{
+    if (query.next()) {
+        return true;
+    }
+    // 无下一行是正常终止；只有驱动实际报告取行错误时才交给同一分类入口。
+    if (query.lastError().isValid()) {
+        recordSqlError(query.lastError(), nullptr);
     }
     return false;
 }
@@ -218,14 +303,14 @@ bool Applier::readRow(const SyncSchema::Table& table, const QString& syncId, Loc
 {
     const QStringList columns = columnsOf(table);
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral("SELECT id, %1 FROM %2 WHERE sync_id = :id")
+    prepare(query, QStringLiteral("SELECT id, %1 FROM %2 WHERE sync_id = :id")
                       .arg(columns.join(QStringLiteral(", ")), table.name));
     query.bindValue(QStringLiteral(":id"), syncId);
     if (!exec(query, error)) {
         return false;
     }
     *row = LocalRow();
-    if (query.next()) {
+    if (next(query)) {
         row->exists = true;
         row->id = query.value(0).toLongLong();
         for (int index = 0; index < columns.size(); ++index) {
@@ -239,13 +324,13 @@ QHash<QString, LocalVersion> Applier::readVersions(const QString& table, const Q
 {
     QHash<QString, LocalVersion> versions;
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
+    prepare(query, QStringLiteral(
         "SELECT field, v_time, v_device, base_time, base_device, pending FROM sync_field_versions "
         "WHERE tbl = :tbl AND sync_id = :id"));
     query.bindValue(QStringLiteral(":tbl"), table);
     query.bindValue(QStringLiteral(":id"), syncId);
-    if (query.exec()) {
-        while (query.next()) {
+    if (exec(query, nullptr)) {
+        while (next(query)) {
             LocalVersion version;
             version.version = {query.value(1).toLongLong(), query.value(2).toString()};
             version.base = {query.value(3).toLongLong(), query.value(4).toString()};
@@ -260,11 +345,11 @@ Tombstone Applier::readTombstone(const QString& table, const QString& syncId)
 {
     Tombstone tombstone;
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
+    prepare(query, QStringLiteral(
         "SELECT v_time, v_device, kind, merged_into FROM sync_tombstones WHERE tbl = :tbl AND sync_id = :id"));
     query.bindValue(QStringLiteral(":tbl"), table);
     query.bindValue(QStringLiteral(":id"), syncId);
-    if (query.exec() && query.next()) {
+    if (exec(query, nullptr) && next(query)) {
         tombstone.exists = true;
         tombstone.version = {query.value(0).toLongLong(), query.value(1).toString()};
         tombstone.kind = query.value(2).toString();
@@ -290,9 +375,9 @@ QVariant Applier::syncIdOfLocal(const QString& table, const QVariant& localId)
         return QVariant();
     }
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral("SELECT sync_id FROM %1 WHERE id = :id").arg(table));
+    prepare(query, QStringLiteral("SELECT sync_id FROM %1 WHERE id = :id").arg(table));
     query.bindValue(QStringLiteral(":id"), localId);
-    if (query.exec() && query.next() && !query.value(0).toString().isEmpty()) {
+    if (exec(query, nullptr) && next(query) && !query.value(0).toString().isEmpty()) {
         return query.value(0).toString();
     }
     // 本机编号指向的记录已经不在（例如专注记录里的科目快照，科目删掉后就是这样）：当作没有引用。
@@ -311,9 +396,9 @@ QVariant Applier::resolveLocal(const QString& table, const QVariant& syncId, boo
     QString current = syncId.toString();
     for (int hop = 0; hop < kMaxMergeHops; ++hop) {
         QSqlQuery query(m_db);
-        query.prepare(QStringLiteral("SELECT id FROM %1 WHERE sync_id = :id").arg(table));
+        prepare(query, QStringLiteral("SELECT id FROM %1 WHERE sync_id = :id").arg(table));
         query.bindValue(QStringLiteral(":id"), current);
-        if (query.exec() && query.next()) {
+        if (exec(query, nullptr) && next(query)) {
             return query.value(0);
         }
         const Tombstone tombstone = readTombstone(table, current);
@@ -334,7 +419,7 @@ bool Applier::writeTombstone(const QString& table, const QString& syncId, const 
                              QString* error)
 {
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
+    prepare(query, QStringLiteral(
         "INSERT INTO sync_tombstones (tbl, sync_id, v_time, v_device, kind, merged_into, deleted_at) "
         "VALUES (:tbl, :id, :t, :d, :kind, :into, :now) "
         "ON CONFLICT(tbl, sync_id) DO UPDATE SET v_time = excluded.v_time, v_device = excluded.v_device, "
@@ -355,7 +440,7 @@ bool Applier::writeVersion(const QString& table, const QString& syncId, const QS
 {
     // 收下的是对方的值：版本照抄对方，不再待发送。
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
+    prepare(query, QStringLiteral(
         "INSERT INTO sync_field_versions (tbl, sync_id, field, v_time, v_device, base_time, base_device, pending) "
         "VALUES (:tbl, :id, :field, :t, :d, :bt, :bd, 0) "
         "ON CONFLICT(tbl, sync_id, field) DO UPDATE SET v_time = excluded.v_time, "
@@ -374,7 +459,7 @@ bool Applier::writeVersion(const QString& table, const QString& syncId, const QS
 bool Applier::clearLocalSyncState(const QString& table, const QString& syncId, bool dequeue, QString* error)
 {
     QSqlQuery versions(m_db);
-    versions.prepare(QStringLiteral("DELETE FROM sync_field_versions WHERE tbl = :tbl AND sync_id = :id"));
+    prepare(versions, QStringLiteral("DELETE FROM sync_field_versions WHERE tbl = :tbl AND sync_id = :id"));
     versions.bindValue(QStringLiteral(":tbl"), table);
     versions.bindValue(QStringLiteral(":id"), syncId);
     if (!exec(versions, error)) {
@@ -384,7 +469,7 @@ bool Applier::clearLocalSyncState(const QString& table, const QString& syncId, b
         return true;
     }
     QSqlQuery outbox(m_db);
-    outbox.prepare(QStringLiteral("DELETE FROM sync_outbox WHERE tbl = :tbl AND sync_id = :id"));
+    prepare(outbox, QStringLiteral("DELETE FROM sync_outbox WHERE tbl = :tbl AND sync_id = :id"));
     outbox.bindValue(QStringLiteral(":tbl"), table);
     outbox.bindValue(QStringLiteral(":id"), syncId);
     return exec(outbox, error);
@@ -457,14 +542,14 @@ bool Applier::applyDeletion(const SyncSchema::Table& table, const SyncRecord& re
             // （本机的专注记录挂在它上面，对方那边却没有这条任务）。所以用新版本把它重新发出去，
             // 新版本比那条收回记录新，对方收到就会把实例补回来。
             QSqlQuery touched(m_db);
-            touched.prepare(QStringLiteral(
+            prepare(touched, QStringLiteral(
                 "SELECT 1 FROM tasks t WHERE t.id = :id AND (t.completed = 1 "
                 "OR EXISTS (SELECT 1 FROM focus_sessions fs WHERE fs.task_id = t.id))"));
             touched.bindValue(QStringLiteral(":id"), row.id);
             if (!exec(touched, error)) {
                 return false;
             }
-            if (touched.next() || winner.version < latestLocalVersion(table.name, record.syncId)) {
+            if (next(touched) || winner.version < latestLocalVersion(table.name, record.syncId)) {
                 return republish(table.name, record.syncId, QStringLiteral("routine_generated"), error);
             }
         }
@@ -540,7 +625,7 @@ bool Applier::applyToDeleted(const SyncSchema::Table& table, const SyncRecord& r
         const bool completed = record.fields.value(QStringLiteral("completed")).value.toInt() == 1;
         if (completed || local.version < incomingLatest) {
             QSqlQuery remove(m_db);
-            remove.prepare(QStringLiteral("DELETE FROM sync_tombstones WHERE tbl = :tbl AND sync_id = :id"));
+            prepare(remove, QStringLiteral("DELETE FROM sync_tombstones WHERE tbl = :tbl AND sync_id = :id"));
             remove.bindValue(QStringLiteral(":tbl"), table.name);
             remove.bindValue(QStringLiteral(":id"), record.syncId);
             if (!exec(remove, error)) {
@@ -658,7 +743,7 @@ bool Applier::insertRow(const SyncSchema::Table& table, const SyncRecord& record
         placeholders.append(QStringLiteral("?"));
     }
     QSqlQuery insert(m_db);
-    insert.prepare(QStringLiteral("INSERT INTO %1 (%2) VALUES (%3)")
+    prepare(insert, QStringLiteral("INSERT INTO %1 (%2) VALUES (%3)")
                        .arg(table.name, columns.join(QStringLiteral(", ")), placeholders.join(QStringLiteral(", "))));
     for (const QVariant& value : values) {
         insert.addBindValue(value);
@@ -697,7 +782,7 @@ bool Applier::noteReference(const QString& table, const QString& syncId, const S
                             const SyncFieldValue& incoming, bool dangling, QString* error)
 {
     QSqlQuery clear(m_db);
-    clear.prepare(QStringLiteral("DELETE FROM sync_pending_refs WHERE tbl = :tbl AND sync_id = :id AND field = :field"));
+    prepare(clear, QStringLiteral("DELETE FROM sync_pending_refs WHERE tbl = :tbl AND sync_id = :id AND field = :field"));
     clear.bindValue(QStringLiteral(":tbl"), table);
     clear.bindValue(QStringLiteral(":id"), syncId);
     clear.bindValue(QStringLiteral(":field"), field.column);
@@ -714,7 +799,7 @@ bool Applier::noteReference(const QString& table, const QString& syncId, const S
         return true;
     }
     QSqlQuery note(m_db);
-    note.prepare(QStringLiteral(
+    prepare(note, QStringLiteral(
         "INSERT INTO sync_pending_refs (tbl, sync_id, field, target_sync_id, v_time, v_device) "
         "VALUES (:tbl, :id, :field, :target, :t, :d)"));
     note.bindValue(QStringLiteral(":tbl"), table);
@@ -737,13 +822,13 @@ bool Applier::resolvePendingRefsTo(const QString& targetTable, const QString& ta
     };
     QList<Pending> pending;
     QSqlQuery find(m_db);
-    find.prepare(QStringLiteral(
+    prepare(find, QStringLiteral(
         "SELECT tbl, sync_id, field, v_time, v_device FROM sync_pending_refs WHERE target_sync_id = :target"));
     find.bindValue(QStringLiteral(":target"), targetSyncId);
     if (!exec(find, error)) {
         return false;
     }
-    while (find.next()) {
+    while (next(find)) {
         pending.append({find.value(0).toString(), find.value(1).toString(), find.value(2).toString(),
                         {find.value(3).toLongLong(), find.value(4).toString()}});
     }
@@ -752,7 +837,7 @@ bool Applier::resolvePendingRefsTo(const QString& targetTable, const QString& ta
     for (const Pending& item : pending) {
         const SyncSchema::Field* field = SyncSchema::field(item.table, item.field);
         QSqlQuery remove(m_db);
-        remove.prepare(QStringLiteral(
+        prepare(remove, QStringLiteral(
             "DELETE FROM sync_pending_refs WHERE tbl = :tbl AND sync_id = :id AND field = :field"));
         remove.bindValue(QStringLiteral(":tbl"), item.table);
         remove.bindValue(QStringLiteral(":id"), item.syncId);
@@ -765,7 +850,7 @@ bool Applier::resolvePendingRefsTo(const QString& targetTable, const QString& ta
             continue;
         }
         QSqlQuery relink(m_db);
-        relink.prepare(QStringLiteral("UPDATE %1 SET %2 = :target WHERE sync_id = :id AND %2 IS NULL")
+        prepare(relink, QStringLiteral("UPDATE %1 SET %2 = :target WHERE sync_id = :id AND %2 IS NULL")
                            .arg(item.table, item.field));
         relink.bindValue(QStringLiteral(":target"), localId);
         relink.bindValue(QStringLiteral(":id"), item.syncId);
@@ -790,7 +875,7 @@ bool Applier::notePendingRefsToReclaimed(const QString& targetSyncId, qint64 loc
                 continue;
             }
             QSqlQuery note(m_db);
-            note.prepare(QStringLiteral(
+            prepare(note, QStringLiteral(
                 "INSERT INTO sync_pending_refs (tbl, sync_id, field, target_sync_id, v_time, v_device) "
                 "SELECT '%1', r.sync_id, '%2', :target, COALESCE(v.v_time, 0), COALESCE(v.v_device, '') "
                 "FROM %1 r LEFT JOIN sync_field_versions v "
@@ -820,12 +905,12 @@ bool Applier::resolveAllPendingRefs(QString* error)
     };
     QList<Pending> pending;
     QSqlQuery find(m_db);
-    find.prepare(QStringLiteral(
+    prepare(find, QStringLiteral(
         "SELECT tbl, sync_id, field, target_sync_id, v_time, v_device FROM sync_pending_refs"));
     if (!exec(find, error)) {
         return false;
     }
-    while (find.next()) {
+    while (next(find)) {
         pending.append({find.value(0).toString(), find.value(1).toString(), find.value(2).toString(),
                         find.value(3).toString(), {find.value(4).toLongLong(), find.value(5).toString()}});
     }
@@ -833,7 +918,7 @@ bool Applier::resolveAllPendingRefs(QString* error)
 
     const auto forget = [this, error](const Pending& item) {
         QSqlQuery remove(m_db);
-        remove.prepare(QStringLiteral(
+        prepare(remove, QStringLiteral(
             "DELETE FROM sync_pending_refs WHERE tbl = :tbl AND sync_id = :id AND field = :field"));
         remove.bindValue(QStringLiteral(":tbl"), item.table);
         remove.bindValue(QStringLiteral(":id"), item.syncId);
@@ -860,7 +945,7 @@ bool Applier::resolveAllPendingRefs(QString* error)
                 if (item.table == QLatin1String("tasks") && item.field == QLatin1String("routine_id")
                     && fieldVersion(item.table, item.syncId, item.field) == item.version) {
                     QSqlQuery clearGenerated(m_db);
-                    clearGenerated.prepare(QStringLiteral(
+                    prepare(clearGenerated, QStringLiteral(
                         "UPDATE tasks SET routine_generated = 0 WHERE sync_id = :id AND routine_id IS NULL"));
                     clearGenerated.bindValue(QStringLiteral(":id"), item.syncId);
                     if (!exec(clearGenerated, error)) {
@@ -884,7 +969,7 @@ bool Applier::resolveAllPendingRefs(QString* error)
             continue;
         }
         QSqlQuery relink(m_db);
-        relink.prepare(QStringLiteral("UPDATE %1 SET %2 = :target WHERE sync_id = :id AND %2 IS NULL")
+        prepare(relink, QStringLiteral("UPDATE %1 SET %2 = :target WHERE sync_id = :id AND %2 IS NULL")
                            .arg(item.table, item.field));
         relink.bindValue(QStringLiteral(":target"), target);
         relink.bindValue(QStringLiteral(":id"), item.syncId);
@@ -1013,7 +1098,7 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
     }
     if (!assignments.isEmpty()) {
         QSqlQuery update(m_db);
-        update.prepare(QStringLiteral("UPDATE %1 SET %2 WHERE id = ?")
+        prepare(update, QStringLiteral("UPDATE %1 SET %2 WHERE id = ?")
                            .arg(table.name, assignments.join(QStringLiteral(", "))));
         for (const QVariant& value : assignedValues) {
             update.addBindValue(value);
@@ -1032,7 +1117,7 @@ bool Applier::mergeRow(const SyncSchema::Table& table, const SyncRecord& record,
 
     // 本机待发送的修改全被对方覆盖了，这条就不用再发。
     QSqlQuery outbox(m_db);
-    outbox.prepare(QStringLiteral(
+    prepare(outbox, QStringLiteral(
         "DELETE FROM sync_outbox WHERE tbl = :tbl AND sync_id = :id AND NOT EXISTS ("
         "SELECT 1 FROM sync_field_versions v WHERE v.tbl = :tbl2 AND v.sync_id = :id2 AND v.pending = 1)"));
     outbox.bindValue(QStringLiteral(":tbl"), table.name);
@@ -1047,7 +1132,7 @@ bool Applier::deleteLocalRow(const SyncSchema::Table& table, const LocalRow& row
 {
     const auto run = [this, error](const QString& sql, const QVariantList& values) {
         QSqlQuery query(m_db);
-        query.prepare(sql);
+        prepare(query, sql);
         for (const QVariant& value : values) {
             query.addBindValue(value);
         }
@@ -1122,15 +1207,15 @@ bool Applier::applySetting(const SyncSettingRecord& incoming, QString* error)
 {
     m_maxSeenTime = qMax(m_maxSeenTime, incoming.version.time);
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
+    prepare(query, QStringLiteral(
         "SELECT value, v_time, v_device, base_time, base_device FROM sync_settings WHERE key = :key"));
     query.bindValue(QStringLiteral(":key"), incoming.key);
     if (!exec(query, error)) {
         return false;
     }
     QSqlQuery write(m_db);
-    if (!query.next()) {
-        write.prepare(QStringLiteral(
+    if (!next(query)) {
+        prepare(write, QStringLiteral(
             "INSERT INTO sync_settings (key, value, v_time, v_device, base_time, base_device, pending) "
             "VALUES (:key, :value, :t, :d, :bt, :bd, 0)"));
     } else {
@@ -1166,7 +1251,7 @@ bool Applier::applySetting(const SyncSettingRecord& incoming, QString* error)
         if (same && incoming.version == local) {
             return true;
         }
-        write.prepare(QStringLiteral(
+        prepare(write, QStringLiteral(
             "UPDATE sync_settings SET value = :value, v_time = :t, v_device = :d, base_time = :bt, "
             "base_device = :bd, pending = 0 WHERE key = :key"));
         if (same) {
@@ -1197,7 +1282,7 @@ bool Applier::markSettingWriteBack(const QString& key, const QString& kind, QStr
 {
     // 和库里的新值在同一个事务里落盘：要么都在、要么都不在。之后写回本机之前被结束，下次启动据此先把它写回。
     QSqlQuery mark(m_db);
-    mark.prepare(QStringLiteral("INSERT OR REPLACE INTO sync_state (key, value) VALUES (:key, :kind)"));
+    prepare(mark, QStringLiteral("INSERT OR REPLACE INTO sync_state (key, value) VALUES (:key, :kind)"));
     mark.bindValue(QStringLiteral(":key"), QStringLiteral("writeback/") + key);
     mark.bindValue(QStringLiteral(":kind"), kind);
     return exec(mark, error);
@@ -1218,15 +1303,15 @@ bool Applier::dropRecordsMissingFrom(const SyncBatch& snapshot, QString* error)
         const SyncSchema::Table& table = tables.at(index);
         // 只看已发布的行：进行中的专注只属于本机的计时器，快照里本来就没有它，不能删。
         QSqlQuery rows(m_db);
-        if (!rows.exec(QStringLiteral("SELECT sync_id FROM %1 r WHERE r.sync_id IS NOT NULL AND %2")
-                           .arg(table.name, SyncSchema::publishConditionFor(table, QStringLiteral("r"))))) {
+        if (!exec(rows, QStringLiteral("SELECT sync_id FROM %1 r WHERE r.sync_id IS NOT NULL AND %2")
+                           .arg(table.name, SyncSchema::publishConditionFor(table, QStringLiteral("r"))), nullptr)) {
             if (error) {
                 *error = rows.lastError().text();
             }
             return false;
         }
         QStringList missing;
-        while (rows.next()) {
+        while (next(rows)) {
             if (!live.value(table.name).contains(rows.value(0).toString())) {
                 missing.append(rows.value(0).toString());
             }
@@ -1255,7 +1340,7 @@ bool Applier::dropRecordsMissingFrom(const SyncBatch& snapshot, QString* error)
     for (const char* sql : {"DELETE FROM sync_field_versions", "DELETE FROM sync_tombstones",
                             "DELETE FROM sync_outbox", "DELETE FROM sync_pending_refs"}) {
         QSqlQuery clear(m_db);
-        if (!clear.exec(QString::fromLatin1(sql))) {
+        if (!exec(clear, QString::fromLatin1(sql), nullptr)) {
             if (error) {
                 *error = clear.lastError().text();
             }
@@ -1335,7 +1420,7 @@ bool Applier::overwriteFromSnapshot(const SyncRecord& record, QString* error)
     }
     if (!assignments.isEmpty()) {
         QSqlQuery update(m_db);
-        update.prepare(QStringLiteral("UPDATE %1 SET %2 WHERE id = ?")
+        prepare(update, QStringLiteral("UPDATE %1 SET %2 WHERE id = ?")
                            .arg(table->name, assignments.join(QStringLiteral(", "))));
         for (const QVariant& value : values) {
             update.addBindValue(value);
@@ -1359,18 +1444,18 @@ bool Applier::replaceSettings(const QList<SyncSettingRecord>& settings, QString*
 {
     QHash<QString, QString> previous;
     QSqlQuery read(m_db);
-    if (!read.exec(QStringLiteral("SELECT key, value FROM sync_settings"))) {
+    if (!exec(read, QStringLiteral("SELECT key, value FROM sync_settings"), nullptr)) {
         if (error) {
             *error = read.lastError().text();
         }
         return false;
     }
-    while (read.next()) {
+    while (next(read)) {
         previous.insert(read.value(0).toString(), read.value(1).toString());
     }
     read.finish();
     QSqlQuery clear(m_db);
-    if (!clear.exec(QStringLiteral("DELETE FROM sync_settings"))) {
+    if (!exec(clear, QStringLiteral("DELETE FROM sync_settings"), nullptr)) {
         if (error) {
             *error = clear.lastError().text();
         }
@@ -1379,7 +1464,7 @@ bool Applier::replaceSettings(const QList<SyncSettingRecord>& settings, QString*
     for (const SyncSettingRecord& setting : settings) {
         m_maxSeenTime = qMax(m_maxSeenTime, setting.version.time);
         QSqlQuery insert(m_db);
-        insert.prepare(QStringLiteral(
+        prepare(insert, QStringLiteral(
             "INSERT INTO sync_settings (key, value, v_time, v_device, base_time, base_device, pending) "
             "VALUES (:key, :value, :t, :d, :bt, :bd, 0)"));
         insert.bindValue(QStringLiteral(":key"), setting.key);
@@ -1423,7 +1508,7 @@ SyncVersion Applier::fieldVersion(const QString& table, const QString& syncId, c
 bool Applier::setApplying(bool applying, QString* error)
 {
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral("UPDATE sync_runtime SET applying = :applying WHERE singleton_id = 1"));
+    prepare(query, QStringLiteral("UPDATE sync_runtime SET applying = :applying WHERE singleton_id = 1"));
     query.bindValue(QStringLiteral(":applying"), applying ? 1 : 0);
     return exec(query, error);
 }
@@ -1435,12 +1520,12 @@ bool Applier::advanceClock(SyncVersion* version, QString* error)
     // 不这样的话，对方的时钟稍快（连着做几件事就会把逻辑时间推到墙钟前面），新版本可能比它的收回记录还旧，
     // 它收到后不会把实例补回来，两边从此不一致。并进去的时间和这批数据在同一个事务里，失败时一起回滚。
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
+    prepare(query, QStringLiteral(
         "UPDATE sync_state SET value = CAST(MAX(CAST(value AS INTEGER), :seen) AS TEXT) WHERE key = 'hlc'"));
     query.bindValue(QStringLiteral(":seen"), m_maxSeenTime);
-    if (!query.exec() || !query.exec(SyncSchema::sqlAdvanceClock())
-        || !query.exec(QStringLiteral("SELECT %1, %2").arg(SyncSchema::sqlCurrentClock(), SyncSchema::sqlDeviceId()))
-        || !query.next()) {
+    if (!exec(query, nullptr) || !exec(query, SyncSchema::sqlAdvanceClock(), nullptr)
+        || !exec(query, QStringLiteral("SELECT %1, %2").arg(SyncSchema::sqlCurrentClock(), SyncSchema::sqlDeviceId()), nullptr)
+        || !next(query)) {
         if (error) {
             *error = query.lastError().text();
         }
@@ -1458,7 +1543,7 @@ bool Applier::republish(const QString& table, const QString& syncId, const QStri
     }
     // 值不变，只给这一列一个本机的新版本：整条记录会带着它发出去，版本比对方手里的删除记录新。
     QSqlQuery stamp(m_db);
-    stamp.prepare(QStringLiteral(
+    prepare(stamp, QStringLiteral(
         "INSERT INTO sync_field_versions (tbl, sync_id, field, v_time, v_device, base_time, base_device, pending) "
         "VALUES (:tbl, :id, :field, :t, :d, 0, '', 1) "
         "ON CONFLICT(tbl, sync_id, field) DO UPDATE SET "
@@ -1471,7 +1556,7 @@ bool Applier::republish(const QString& table, const QString& syncId, const QStri
     stamp.bindValue(QStringLiteral(":t"), version.time);
     stamp.bindValue(QStringLiteral(":d"), nonNull(version.device));
     QSqlQuery outbox(m_db);
-    outbox.prepare(QStringLiteral(
+    prepare(outbox, QStringLiteral(
         "INSERT INTO sync_outbox (tbl, sync_id, change_time) VALUES (:tbl, :id, :t) "
         "ON CONFLICT(tbl, sync_id) DO UPDATE SET change_time = excluded.change_time"));
     outbox.bindValue(QStringLiteral(":tbl"), table);
@@ -1485,7 +1570,7 @@ bool Applier::mergeCategory(qint64 loserId, const QString& loserSyncId, qint64 w
 {
     const auto run = [this, error](const QString& sql, const QVariantList& values) {
         QSqlQuery query(m_db);
-        query.prepare(sql);
+        prepare(query, sql);
         for (const QVariant& value : values) {
             query.addBindValue(value);
         }
@@ -1542,18 +1627,18 @@ bool Applier::renameWithSuffix(qint64 id, const QString& name, QString* error)
         // 一次替换两个参数：用户起的名字里可能本来就有「%2」这样的文字，分两次 arg 会把它也换掉。
         candidate = QStringLiteral("%1（%2）").arg(name, QString::number(suffix));
         QSqlQuery taken(m_db);
-        taken.prepare(QStringLiteral("SELECT 1 FROM categories WHERE name = :name"));
+        prepare(taken, QStringLiteral("SELECT 1 FROM categories WHERE name = :name"));
         taken.bindValue(QStringLiteral(":name"), candidate);
         if (!exec(taken, error)) {
             return false;
         }
-        if (!taken.next()) {
+        if (!next(taken)) {
             break;
         }
     }
     // 这是本机做出的改名，放开触发器让它照常记版本、入队：两台设备算出同一个名字，版本不同也会收敛。
     QSqlQuery rename(m_db);
-    rename.prepare(QStringLiteral("UPDATE categories SET name = :name WHERE id = :id"));
+    prepare(rename, QStringLiteral("UPDATE categories SET name = :name WHERE id = :id"));
     rename.bindValue(QStringLiteral(":name"), candidate);
     rename.bindValue(QStringLiteral(":id"), id);
     if (!setApplying(false, error) || !exec(rename, error) || !setApplying(true, error)) {
@@ -1575,29 +1660,29 @@ bool Applier::finalizeCategoryNames(QString* error)
         const QString name = it.value().second;
 
         QSqlQuery self(m_db);
-        self.prepare(QStringLiteral("SELECT is_preset FROM categories WHERE id = :id"));
+        prepare(self, QStringLiteral("SELECT is_preset FROM categories WHERE id = :id"));
         self.bindValue(QStringLiteral(":id"), id);
         if (!exec(self, error)) {
             return false;
         }
-        if (!self.next()) {
+        if (!next(self)) {
             // 前面一步已经把它当作撞名的一方合并掉了。
             continue;
         }
         const bool selfPreset = self.value(0).toInt() == 1;
 
         QSqlQuery holder(m_db);
-        holder.prepare(QStringLiteral("SELECT id, sync_id, is_preset FROM categories WHERE name = :name AND id <> :id"));
+        prepare(holder, QStringLiteral("SELECT id, sync_id, is_preset FROM categories WHERE name = :name AND id <> :id"));
         holder.bindValue(QStringLiteral(":name"), name);
         holder.bindValue(QStringLiteral(":id"), id);
         if (!exec(holder, error)) {
             return false;
         }
         QSqlQuery finalize(m_db);
-        finalize.prepare(QStringLiteral("UPDATE categories SET name = :name WHERE id = :id"));
+        prepare(finalize, QStringLiteral("UPDATE categories SET name = :name WHERE id = :id"));
         finalize.bindValue(QStringLiteral(":name"), name);
         finalize.bindValue(QStringLiteral(":id"), id);
-        if (!holder.next()) {
+        if (!next(holder)) {
             if (!exec(finalize, error)) {
                 return false;
             }
@@ -1649,10 +1734,10 @@ bool Applier::normalizeTaskOrders(QString* error)
     }
     for (const QString& date : dates) {
         QSqlQuery check(m_db);
-        check.prepare(QStringLiteral(
+        prepare(check, QStringLiteral(
             "SELECT COUNT(*) - COUNT(DISTINCT display_order), MIN(display_order), COUNT(*) FROM tasks WHERE date = :date"));
         check.bindValue(QStringLiteral(":date"), date);
-        if (!exec(check, error) || !check.next()) {
+        if (!exec(check, error) || !next(check)) {
             return false;
         }
         const bool broken = check.value(2).toInt() > 0
@@ -1664,7 +1749,7 @@ bool Applier::normalizeTaskOrders(QString* error)
         // 排序键：完成状态、排序号（非正的排到后面）、创建时间、sync_id。前几项和界面的显示顺序一致，
         // 最后用 sync_id 打破平局——两台设备上它相同，本机编号却不同。只写真的变了的行。
         QSqlQuery renumber(m_db);
-        renumber.prepare(QStringLiteral(
+        prepare(renumber, QStringLiteral(
             "WITH ranked AS (SELECT id, ROW_NUMBER() OVER (ORDER BY completed ASC, "
             "CASE WHEN display_order <= 0 THEN 1 ELSE 0 END ASC, display_order ASC, created_at ASC, sync_id ASC) AS n "
             "FROM tasks WHERE date = :date) "
@@ -1687,8 +1772,8 @@ bool Applier::normalizeCountdownOrders(QString* error)
         return true;
     }
     QSqlQuery check(m_db);
-    if (!check.exec(QStringLiteral("SELECT COUNT(*) - COUNT(DISTINCT display_order) FROM countdown_goals"))
-        || !check.next()) {
+    if (!exec(check, QStringLiteral("SELECT COUNT(*) - COUNT(DISTINCT display_order) FROM countdown_goals"), nullptr)
+        || !next(check)) {
         if (error) {
             *error = check.lastError().text();
         }
@@ -1705,11 +1790,11 @@ bool Applier::normalizeCountdownOrders(QString* error)
         return false;
     }
     QSqlQuery renumber(m_db);
-    if (!renumber.exec(QStringLiteral(
+    if (!exec(renumber, QStringLiteral(
             "WITH ranked AS (SELECT id, ROW_NUMBER() OVER (ORDER BY display_order ASC, created_at ASC, sync_id ASC) - 1 AS n "
             "FROM countdown_goals) "
             "UPDATE countdown_goals SET display_order = (SELECT n FROM ranked WHERE ranked.id = countdown_goals.id) "
-            "WHERE display_order <> (SELECT n FROM ranked WHERE ranked.id = countdown_goals.id)"))) {
+            "WHERE display_order <> (SELECT n FROM ranked WHERE ranked.id = countdown_goals.id)"), nullptr)) {
         if (error) {
             *error = renumber.lastError().text();
         }
@@ -1725,13 +1810,13 @@ bool Applier::normalizeMemoOrders(QString* error)
     }
     QSqlQuery check(m_db);
     // GROUP BY 将 NULL 单独分组，未分类同样要处理；用 = NULL 会漏掉整组。
-    if (!check.exec(QStringLiteral("SELECT category_id FROM memos GROUP BY category_id "
-                                   "HAVING COUNT(*) > COUNT(DISTINCT sort_order)"))) {
+    if (!exec(check, QStringLiteral("SELECT category_id FROM memos GROUP BY category_id "
+                                   "HAVING COUNT(*) > COUNT(DISTINCT sort_order)"), nullptr)) {
         *error = check.lastError().text();
         return false;
     }
     QVariantList categories;
-    while (check.next()) {
+    while (next(check)) {
         categories.append(check.value(0));
     }
     check.finish();
@@ -1744,7 +1829,7 @@ bool Applier::normalizeMemoOrders(QString* error)
     }
     for (const QVariant& category : categories) {
         QSqlQuery renumber(m_db);
-        renumber.prepare(QStringLiteral(
+        prepare(renumber, QStringLiteral(
             "WITH ranked AS (SELECT id, ROW_NUMBER() OVER (ORDER BY sort_order, created_at, sync_id) AS n "
             "FROM memos WHERE category_id IS :category) "
             "UPDATE memos SET sort_order = (SELECT n FROM ranked WHERE ranked.id = memos.id) "
@@ -1789,7 +1874,7 @@ void Applier::logConflict(const QString& kind, const SyncSchema::Table& table, c
     // 空的 QString 绑定进去是 SQL 的 NULL，会撞上日志表的 NOT NULL；一律收敛成空串。
     const auto text = [](const QString& value) { return value.isNull() ? QStringLiteral("") : value; };
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral(
+    prepare(query, QStringLiteral(
         "INSERT INTO sync_conflict_log (logged_at, kind, tbl, sync_id, record_label, field, lost_value, "
         "kept_value, lost_device, kept_device, detail) "
         "VALUES (:at, :kind, :tbl, :id, :label, :field, :lost, :kept, :lostDevice, :keptDevice, :detail)"));
@@ -1805,15 +1890,15 @@ void Applier::logConflict(const QString& kind, const SyncSchema::Table& table, c
     query.bindValue(QStringLiteral(":lostDevice"), text(lostDevice));
     query.bindValue(QStringLiteral(":keptDevice"), text(keptDevice));
     query.bindValue(QStringLiteral(":detail"), text(detail));
-    if (!query.exec()) {
-        // 日志写不进去不影响合并本身：日志是给人看的，合并结果已经确定。
+    if (!exec(query, nullptr)) {
+        // 非存储类日志错误仍不影响已确定的合并结果；存储错误已记录，由外层事务统一回滚重试。
         qWarning() << "Failed to write sync conflict log:" << query.lastError().text();
         return;
     }
     ++m_result->conflictsLogged;
     QSqlQuery prune(m_db);
-    prune.exec(QStringLiteral("DELETE FROM sync_conflict_log WHERE id <= "
-                              "(SELECT MAX(id) - %1 FROM sync_conflict_log)").arg(kConflictLogLimit));
+    exec(prune, QStringLiteral("DELETE FROM sync_conflict_log WHERE id <= "
+                              "(SELECT MAX(id) - %1 FROM sync_conflict_log)").arg(kConflictLogLimit), nullptr);
 }
 
 QString Applier::recordLabel(const SyncSchema::Table& table, const QHash<QString, QVariant>& values)
@@ -1855,11 +1940,11 @@ QString Applier::nameOf(const QString& table, const QVariant& localId)
         return QString();
     }
     QSqlQuery query(m_db);
-    query.prepare(QStringLiteral("SELECT %1 FROM %2 WHERE id = :id")
+    prepare(query, QStringLiteral("SELECT %1 FROM %2 WHERE id = :id")
                       .arg(table == QLatin1String("categories") ? QStringLiteral("name") : QStringLiteral("title"),
                            table));
     query.bindValue(QStringLiteral(":id"), localId);
-    return query.exec() && query.next() ? query.value(0).toString() : QString();
+    return exec(query, nullptr) && next(query) ? query.value(0).toString() : QString();
 }
 
 QString Applier::displayValue(const SyncSchema::Field& field, const QVariant& localValue)
@@ -2510,12 +2595,16 @@ SyncStore::ApplyResult SyncStore::replaceWithSnapshot(const SyncBatch& snapshot)
         return tableOrder(a.table) < tableOrder(b.table);
     });
     for (const SyncRecord& record : records) {
-        // 与应用一批改动一样：一条坏记录只跳过它自己，不让整份快照都落不了地。
+        // 坏记录只跳过自身，避免毒丸让快照永远无法落地；存储错误不是数据坏了，整份回滚后重试。
         if (!query.exec(QStringLiteral("SAVEPOINT sync_snapshot_record"))) {
             return fail(query.lastError().text());
         }
         QString recordError;
         const bool applied = applier.overwriteFromSnapshot(record, &recordError);
+        QString storageError;
+        if (applier.takeStorageFailure(&storageError)) {
+            return fail(storageError);
+        }
         if (!applied && !query.exec(QStringLiteral("ROLLBACK TO sync_snapshot_record"))) {
             return fail(query.lastError().text());
         }
@@ -2524,6 +2613,9 @@ SyncStore::ApplyResult SyncStore::replaceWithSnapshot(const SyncBatch& snapshot)
         }
         if (!applied) {
             applier.logSkipped(record, recordError);
+            if (applier.takeStorageFailure(&storageError)) {
+                return fail(storageError);
+            }
         }
     }
     if (!applier.replaceSettings(snapshot.settings, &error)) {
@@ -2547,6 +2639,10 @@ SyncStore::ApplyResult SyncStore::replaceWithSnapshot(const SyncBatch& snapshot)
     if (!query.exec(QStringLiteral("DELETE FROM sync_state WHERE key = 'snapshot_needed'"))
         || !query.exec(QStringLiteral("UPDATE sync_runtime SET applying = 0 WHERE singleton_id = 1"))) {
         return fail(query.lastError().text());
+    }
+    QString storageError;
+    if (applier.takeStorageFailure(&storageError)) {
+        return fail(storageError);
     }
     if (!db.commit()) {
         return fail(db.lastError().text());
@@ -2782,13 +2878,19 @@ SyncStore::ApplyResult SyncStore::applyRemote(const SyncBatch& batch)
 
     Applier applier(db, me, &result);
     for (const SyncRecord& record : records) {
-        // 每条记录一个保存点：失败只撤掉这一条，整批照常提交。sol6 的方案一条记录撞上外键就整批失败、
-        // 每次重试都一样失败，同步从此卡死；这里绝不能这样。
+        // 每条记录一个保存点：坏数据只撤掉这一条，避免毒丸（反复重试都失败的数据）卡死同步。
+        // 存储/环境错误必须整批回滚，使 SyncEngine 不推进读取游标，环境恢复后同一批可完整重试。
         if (!query.exec(QStringLiteral("SAVEPOINT sync_record"))) {
             return fail(query.lastError().text());
         }
         QString error;
-        if (applier.apply(record, &error)) {
+        const bool applied = applier.apply(record, &error);
+        QString storageError;
+        // 即使辅助查询或日志吞掉返回值，首次存储错误也必须优先于保存点处理和成功结果。
+        if (applier.takeStorageFailure(&storageError)) {
+            return fail(storageError);
+        }
+        if (applied) {
             if (!query.exec(QStringLiteral("RELEASE sync_record"))) {
                 return fail(query.lastError().text());
             }
@@ -2799,6 +2901,9 @@ SyncStore::ApplyResult SyncStore::applyRemote(const SyncBatch& batch)
             return fail(query.lastError().text());
         }
         applier.logSkipped(record, error);
+        if (applier.takeStorageFailure(&storageError)) {
+            return fail(storageError);
+        }
     }
     for (const SyncSettingRecord& setting : batch.settings) {
         if (!query.exec(QStringLiteral("SAVEPOINT sync_setting"))) {
@@ -2806,6 +2911,10 @@ SyncStore::ApplyResult SyncStore::applyRemote(const SyncBatch& batch)
         }
         QString error;
         const bool applied = applier.applySetting(setting, &error);
+        QString storageError;
+        if (applier.takeStorageFailure(&storageError)) {
+            return fail(storageError);
+        }
         if (!applied && !query.exec(QStringLiteral("ROLLBACK TO sync_setting"))) {
             return fail(query.lastError().text());
         }
@@ -2836,6 +2945,10 @@ SyncStore::ApplyResult SyncStore::applyRemote(const SyncBatch& batch)
     }
     if (!query.exec(QStringLiteral("UPDATE sync_runtime SET applying = 0 WHERE singleton_id = 1"))) {
         return fail(query.lastError().text());
+    }
+    QString storageError;
+    if (applier.takeStorageFailure(&storageError)) {
+        return fail(storageError);
     }
     if (!db.commit()) {
         return fail(db.lastError().text());
@@ -2888,6 +3001,10 @@ SyncStore::ApplyResult SyncStore::resolvePendingReferences()
     }
     if (!query.exec(QStringLiteral("UPDATE sync_runtime SET applying = 0 WHERE singleton_id = 1"))) {
         return fail(query.lastError().text());
+    }
+    QString storageError;
+    if (applier.takeStorageFailure(&storageError)) {
+        return fail(storageError);
     }
     if (!db.commit()) {
         return fail(db.lastError().text());
