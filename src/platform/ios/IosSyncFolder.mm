@@ -1,5 +1,5 @@
 #include "IosSyncFolder.h"
-#include "../../services/SyncFiles.h"
+#include "../apple/AppleCoordinatedFiles.h"
 
 #include "../apple/AppleUbiquitousItem.h"
 
@@ -8,7 +8,6 @@
 #include <QSet>
 
 #include <cerrno>
-#include <mutex>
 
 namespace {
 
@@ -81,9 +80,7 @@ struct IosSyncFolder::State {
     std::function<void(const QByteArray&)> bookmarkRefreshed;
     NSURL* root = nil;
     bool accessing = false;
-    // 正在进行的文件协调。退出时从主线程取消它：下载不下来时协调读取可能一直等着。
-    std::mutex mutex;
-    NSFileCoordinator* current = nil;
+    AppleCoordinatedFiles files;
 
     NSURL* urlFor(const QString& relativePath) const
     {
@@ -91,20 +88,6 @@ struct IosSyncFolder::State {
             return root;
         }
         return [root URLByAppendingPathComponent:relativePath.toNSString()];
-    }
-
-    NSFileCoordinator* beginCoordination()
-    {
-        NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-        const std::lock_guard<std::mutex> lock(mutex);
-        current = coordinator;
-        return coordinator;
-    }
-
-    void endCoordination()
-    {
-        const std::lock_guard<std::mutex> lock(mutex);
-        current = nil;
     }
 
     void releaseAccess()
@@ -235,120 +218,21 @@ QStringList IosSyncFolder::list(const QString& relativeDir, Error* error)
 bool IosSyncFolder::read(const QString& relativePath, QByteArray* data, Error* error)
 {
     @autoreleasepool {
-        const qint64 budget = SyncFiles::maxBudgetForPath(relativePath);
-        if (budget <= 0) {
-            setError(error, {ErrorKind::Io, QStringLiteral("拒绝读取未知同步文件: %1").arg(relativePath)});
-            return false;
-        }
-        __block NSData* content = nil;
-        __block NSError* readError = nil;
-        __block bool exceededBudget = false;
-        NSError* coordinationError = nil;
-        NSFileCoordinator* coordinator = d->beginCoordination();
-        [coordinator coordinateReadingItemAtURL:d->urlFor(relativePath)
-                                        options:0
-                                          error:&coordinationError
-                                     byAccessor:^(NSURL* newURL) {
-            NSError* localError = nil;
-            // 在分配 NSData 之前通过文件属性检查大小，超出预算时直接拒绝，防止极端大文件耗尽内存
-            NSDictionary<NSFileAttributeKey, id>* attrs =
-                [[NSFileManager defaultManager] attributesOfItemAtPath:newURL.path error:&localError];
-            if (attrs != nil) {
-                const unsigned long long fileSize = [attrs fileSize];
-                if (fileSize > static_cast<unsigned long long>(budget)) {
-                    exceededBudget = true;
-                    return;
-                }
-            }
-            content = [NSData dataWithContentsOfURL:newURL options:0 error:&localError];
-            readError = localError;
-        }];
-        d->endCoordination();
-        if (exceededBudget) {
-            setError(error, {ErrorKind::Io, QStringLiteral("文件大小超出预算上限: %1").arg(relativePath)});
-            return false;
-        }
-        if (coordinationError != nil || content == nil) {
-            setError(error, errorFrom(coordinationError ?: readError, QStringLiteral("读不出 %1").arg(relativePath)));
-            return false;
-        }
-        // 二次防御：在 NSData 读取成功后追加实际 content.length 检查，
-        // 保证在属性检查失效（attrs 为 nil）或读取过程中文件并发增长时同样阻断
-        if (static_cast<qint64>(content.length) > budget) {
-            setError(error, {ErrorKind::Io, QStringLiteral("文件大小超出预算上限: %1").arg(relativePath)});
-            return false;
-        }
-        *data = QByteArray::fromNSData(content);
-        setError(error, {});
-        return true;
+        return d->files.read(QString::fromNSString(d->urlFor(relativePath).path), relativePath, data, error);
     }
 }
 
 bool IosSyncFolder::write(const QString& relativePath, const QByteArray& data, Error* error)
 {
     @autoreleasepool {
-        NSURL* url = d->urlFor(relativePath);
-        NSError* directoryError = nil;
-        if (![[NSFileManager defaultManager] createDirectoryAtURL:[url URLByDeletingLastPathComponent]
-                                      withIntermediateDirectories:YES
-                                                       attributes:nil
-                                                            error:&directoryError]) {
-            setError(error, errorFrom(directoryError, QStringLiteral("建不了目录")));
-            return false;
-        }
-        NSData* payload = data.toNSData();
-        __block BOOL written = NO;
-        __block NSError* writeError = nil;
-        NSError* coordinationError = nil;
-        NSFileCoordinator* coordinator = d->beginCoordination();
-        // 先写临时文件、写完整再换上（NSDataWritingAtomic）：对方永远读不到写了一半的文件。
-        [coordinator coordinateWritingItemAtURL:url
-                                        options:NSFileCoordinatorWritingForReplacing
-                                          error:&coordinationError
-                                     byAccessor:^(NSURL* newURL) {
-            NSError* localError = nil;
-            written = [payload writeToURL:newURL options:NSDataWritingAtomic error:&localError];
-            writeError = localError;
-        }];
-        d->endCoordination();
-        if (coordinationError != nil || !written) {
-            setError(error, errorFrom(coordinationError ?: writeError, QStringLiteral("写不进 %1").arg(relativePath)));
-            return false;
-        }
-        setError(error, {});
-        return true;
+        return d->files.write(QString::fromNSString(d->urlFor(relativePath).path), relativePath, data, error);
     }
 }
 
 bool IosSyncFolder::remove(const QString& relativePath, Error* error)
 {
     @autoreleasepool {
-        __block BOOL removed = NO;
-        __block NSError* removeError = nil;
-        NSError* coordinationError = nil;
-        NSFileCoordinator* coordinator = d->beginCoordination();
-        [coordinator coordinateWritingItemAtURL:d->urlFor(relativePath)
-                                        options:NSFileCoordinatorWritingForDeleting
-                                          error:&coordinationError
-                                     byAccessor:^(NSURL* newURL) {
-            NSError* localError = nil;
-            removed = [[NSFileManager defaultManager] removeItemAtURL:newURL error:&localError];
-            removeError = localError;
-        }];
-        d->endCoordination();
-        if (coordinationError == nil && removed) {
-            setError(error, {});
-            return true;
-        }
-        const SyncFolder::Error failure = errorFrom(coordinationError ?: removeError,
-                                                    QStringLiteral("删不掉 %1").arg(relativePath));
-        // 本来就不存在也算删掉了：对方可能已经删过。
-        if (failure.kind == ErrorKind::NotFound) {
-            setError(error, {});
-            return true;
-        }
-        setError(error, failure);
-        return false;
+        return d->files.remove(QString::fromNSString(d->urlFor(relativePath).path), relativePath, error);
     }
 }
 
@@ -364,11 +248,5 @@ QString IosSyncFolder::uploadProblem(const QString& relativePath)
 
 void IosSyncFolder::cancelPendingIo()
 {
-    NSFileCoordinator* coordinator = nil;
-    {
-        const std::lock_guard<std::mutex> lock(d->mutex);
-        coordinator = d->current;
-    }
-    // 苹果文档：cancel 可以从任何线程调用，正在等的协调会以错误结束。
-    [coordinator cancel];
+    d->files.cancelPendingIo();
 }

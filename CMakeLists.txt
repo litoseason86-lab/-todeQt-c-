@@ -240,7 +240,7 @@ if(NOT IOS)
         src/platform/macos/MacGlobalHotkeyBackend.mm
         src/platform/macos/MacPreferencesCleanup.h
         src/platform/macos/MacPreferencesCleanup.mm
-        # 设备间同步：Mac 直接读写 iCloud 云盘里的同步文件夹。
+        # 设备间同步：Mac 经文件协调读写 iCloud 云盘里的同步文件夹（协调实现在 src/platform/apple）。
         src/platform/macos/MacSyncFolder.h
         src/platform/macos/MacSyncFolder.cpp
     )
@@ -260,10 +260,13 @@ list(APPEND APP_SOURCES
     # iCloud 云盘里单个文件的上传状态（同步时提示「iCloud 空间已满」这类问题），两个平台同一套接口。
     src/platform/apple/AppleUbiquitousItem.h
     src/platform/apple/AppleUbiquitousItem.mm
+    src/platform/apple/AppleCoordinatedFiles.h
+    src/platform/apple/AppleCoordinatedFiles.mm
 )
 set_source_files_properties(
     src/platform/apple/AppleNotificationBackend.mm
     src/platform/apple/AppleUbiquitousItem.mm
+    src/platform/apple/AppleCoordinatedFiles.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
 )
 
@@ -1725,6 +1728,8 @@ add_executable(SyncTransportTests
     src/platform/macos/MacSyncFolder.cpp
     src/platform/apple/AppleUbiquitousItem.h
     src/platform/apple/AppleUbiquitousItem.mm
+    src/platform/apple/AppleCoordinatedFiles.h
+    src/platform/apple/AppleCoordinatedFiles.mm
     src/services/FocusTimer.h
     src/services/FocusTimer.cpp
     src/services/MonotonicClock.h
@@ -1772,6 +1777,20 @@ target_link_libraries(SyncTransportTests PRIVATE
 
 pomodoro_todo_enable_warnings(SyncTransportTests)
 add_test(NAME SyncTransportTests COMMAND SyncTransportTests)
+
+# 单独验证 Mac 文件协调与跨线程取消，真实文件呈现者仅登记在临时目录中。
+add_executable(MacSyncFolderTests
+    tests/MacSyncFolderTests.mm
+    src/platform/macos/MacSyncFolder.h src/platform/macos/MacSyncFolder.cpp
+    src/platform/apple/AppleUbiquitousItem.h src/platform/apple/AppleUbiquitousItem.mm
+    src/platform/apple/AppleCoordinatedFiles.h src/platform/apple/AppleCoordinatedFiles.mm
+)
+set_source_files_properties(tests/MacSyncFolderTests.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+target_link_libraries(MacSyncFolderTests PRIVATE PTCore Qt6::Core Qt6::Concurrent Qt6::Test "-framework Foundation")
+pomodoro_todo_enable_warnings(MacSyncFolderTests)
+add_test(NAME MacSyncFolderTests COMMAND MacSyncFolderTests)
+set_tests_properties(MacSyncFolderTests PROPERTIES TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
 # 设备间同步接进应用（050 阶段 4）：开关与书签、恢复备份与逻辑日起点的衔接、iPad 选文件夹、同步日志。
 # 平台差异（文件夹怎么建、怎么选）由测试注入，同步文件夹用临时目录，不碰真实的 iCloud 云盘。

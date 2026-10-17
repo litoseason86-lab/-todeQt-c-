@@ -36,3 +36,23 @@ QString MacSyncFolder::uploadProblem(const QString& relativePath)
 {
     return AppleUbiquitousItem::uploadProblem(absolutePath(relativePath));
 }
+
+bool MacSyncFolder::read(const QString& relativePath, QByteArray* data, Error* error)
+{
+    return m_files.read(absolutePath(relativePath), relativePath, data, error);
+}
+
+bool MacSyncFolder::write(const QString& relativePath, const QByteArray& data, Error* error)
+{
+    return m_files.write(absolutePath(relativePath), relativePath, data, error);
+}
+
+bool MacSyncFolder::remove(const QString& relativePath, Error* error)
+{
+    return m_files.remove(absolutePath(relativePath), relativePath, error);
+}
+
+void MacSyncFolder::cancelPendingIo()
+{
+    m_files.cancelPendingIo();
+}

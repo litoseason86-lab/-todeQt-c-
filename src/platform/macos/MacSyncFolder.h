@@ -2,8 +2,9 @@
 #define MACSYNCFOLDER_H
 
 #include "../../services/LocalSyncFolder.h"
+#include "../apple/AppleCoordinatedFiles.h"
 
-// Mac 上的同步文件夹：iCloud 云盘里的「番茄Todo同步」。Mac 版没有沙盒，直接读写这个目录，
+// Mac 上的同步文件夹：iCloud 云盘里的「番茄Todo同步」。Mac 版没有沙盒，经文件协调读写这个目录，
 // 系统在后台上传、下载；049 实测不弹授权框，重建应用之后也不弹。
 // 读一个刚从 iPad 同步来的文件时，开着「优化 Mac 存储」的话系统要先下载，约 1 秒，所以只在工作线程里用。
 class MacSyncFolder : public LocalSyncFolder
@@ -17,10 +18,15 @@ public:
 
     // iCloud 云盘目录不存在（没登录 Apple ID、没打开 iCloud 云盘）时报「不可用」，并说清楚是什么原因。
     bool open(Error* error) override;
+    bool read(const QString& relativePath, QByteArray* data, Error* error) override;
+    bool write(const QString& relativePath, const QByteArray& data, Error* error) override;
+    bool remove(const QString& relativePath, Error* error) override;
+    void cancelPendingIo() override;
     QString uploadProblem(const QString& relativePath) override;
 
 private:
     QString m_iCloudDriveRoot;
+    AppleCoordinatedFiles m_files;
 };
 
 #endif // MACSYNCFOLDER_H
