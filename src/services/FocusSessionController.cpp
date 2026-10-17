@@ -223,6 +223,7 @@ QVariantMap FocusSessionController::captureSwitchSource() const
 QString FocusSessionController::stopForSwitch(const QVariantMap& source)
 {
     if (!m_timer) {
+        emit operationFailed(QStringLiteral("切换计时失败：专注计时器不可用"));
         return QStringLiteral("stopFailed");
     }
     if (m_timer->currentTaskId() != source.value(QStringLiteral("taskId")).toInt()
@@ -310,9 +311,11 @@ QVariantMap FocusSessionController::autoStartCandidate(int selectedTaskId, const
 int FocusSessionController::createTodayTask(const QString& title)
 {
     const QString trimmed = title.trimmed();
-    if (!m_tasks || trimmed.isEmpty()) {
+    if (!m_tasks) {
+        emit operationFailed(QStringLiteral("新建专注任务失败：任务服务不可用"));
         return -1;
     }
+    // 标题校验交给 TaskManager，空标题同样保留服务给出的具体原因。
     const int id = m_tasks->createTask(trimmed, logicalToday(), -1, 0, QString());
     return id > 0 ? id : -1;
 }

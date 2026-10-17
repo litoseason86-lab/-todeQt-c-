@@ -20,6 +20,8 @@ TestCase {
         id: service
 
         signal trashChanged
+        signal operationFailed(string message)
+        property string purgeFailure: ""
 
         // 调用记录：「方法名」或「方法名:参数」，按发生顺序。
         property var calls: []
@@ -49,6 +51,7 @@ TestCase {
 
         function purgeExpired() {
             calls.push("purgeExpired")
+            if (purgeFailure.length > 0) { operationFailed(purgeFailure); return -1 }
             return 0
         }
 
@@ -137,6 +140,7 @@ TestCase {
     }
 
     function init() {
+        service.purgeFailure = ""
         service.calls = []
         service.data = smallData()
         service.todayValue = "2026-10-07"
@@ -500,4 +504,17 @@ TestCase {
         compare(child("trashRestoreButton-11").Accessible.name, "恢复「任务甲」")
         compare(child("trashDeleteButton-11").Accessible.name, "彻底删除「任务甲」")
     }
+
+    // 产品保证：进入废纸篓时清理失败在原操作错误区域显示具体原因，自动清理信号不污染本页。
+    function test_t33PurgeFailureIsOwnedByActivation() {
+        create({ trashServiceRef: service })
+        service.purgeFailure = "清理过期废纸篓失败：T33 database is locked"
+        view.activate()
+        compare(view.actionError, service.purgeFailure)
+        verify(view.loaded)
+        view.actionError = "手动操作的错误"
+        service.operationFailed("后台自动清理失败")
+        compare(view.actionError, "手动操作的错误")
+    }
+
 }

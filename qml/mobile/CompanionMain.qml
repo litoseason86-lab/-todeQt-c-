@@ -117,7 +117,7 @@ ApplicationWindow {
         }
 
         function onOperationFailed(message) {
-            toast.show(message)
+            if (!companion.timerFailureCall) toast.show(message)
         }
     }
 

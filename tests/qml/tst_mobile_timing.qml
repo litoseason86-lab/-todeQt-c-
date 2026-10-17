@@ -21,6 +21,12 @@ TestCase {
     QtObject {
         id: timerStub
 
+        signal operationFailed(string message)
+        property string t33Failure: ""
+        function rejectT33() {
+            if (t33Failure.length === 0) return false
+            operationFailed(t33Failure); return true
+        }
         signal phaseCompleted(int phase)
         signal phaseSettledOffline(int phase)
         signal currentTaskChanged()
@@ -47,6 +53,7 @@ TestCase {
             return false
         }
         function startPomodoroWork(taskId, title, seconds) {
+            if (rejectT33()) return false
             startPomodoroCalls += 1
             currentTaskId = taskId
             currentTaskTitle = title
@@ -63,6 +70,7 @@ TestCase {
             return startBreakForTask(seconds, -1, "")
         }
         function startBreakForTask(seconds, taskId, title) {
+            if (rejectT33()) return false
             startBreakCalls += 1
             mode = 1
             phase = 2
@@ -71,6 +79,7 @@ TestCase {
             return true
         }
         function stopFocus() {
+            if (rejectT33()) return false
             stopFocusCalls += 1
             hasActiveSession = false
             isRunning = false
@@ -236,6 +245,9 @@ TestCase {
     }
 
     function init() {
+        timerStub.t33Failure = ""
+        testCase.activeCompanion = null
+        testCase.t33Messages = []
         // 默认按「平台不支持自由计时」布置；需要开放的用例自己打开，下一条用例开始前复位。
         timerStub.freeTimingAllowed = false
         todayTimerStub.freeTimingAllowed = true
@@ -366,4 +378,38 @@ TestCase {
         companion.setCompleted({ id: 8, title: "别的任务", completed: false }, true)
         compare(timerStub.stopFocusCalls, 0)
     }
+
+    property var activeCompanion: null
+    property var t33Messages: []
+    Connections {
+        target: timerStub
+        function onOperationFailed(message) {
+            // 与 CompanionMain 相同的外壳门禁：本次同步调用已认领时，不再弹第二条。
+            if (testCase.activeCompanion && !testCase.activeCompanion.timerFailureCall)
+                testCase.t33Messages.push(message)
+        }
+    }
+    // 产品保证：伴侣页的启动与完成时停表失败只提示一次具体原因，失败不改变活动计时。
+    function test_t33CompanionFailureHasOneReason_data() {
+        return ["pomodoro", "break", "complete"].map(function(action) { return {tag: action, action: action} })
+    }
+    // 产品保证：伴侣页不再用通用文案覆盖服务原因，调用中的失败也不由外壳重复显示。
+    function test_t33CompanionFailureHasOneReason(data) {
+        var companion = createTemporaryObject(companionComponent, testCase)
+        verify(companion)
+        testCase.activeCompanion = companion
+        companion.toastRequested.connect(function(message) { testCase.t33Messages.push(message) })
+        if (data.action === "complete") {
+            companion.startPomodoro(7, "保留任务")
+            verify(timerStub.hasActiveSession)
+        }
+        timerStub.t33Failure = "计时操作失败：T33 storage blocked"
+        if (data.action === "pomodoro") companion.startPomodoro(7, "保留任务")
+        else if (data.action === "break") companion.startBreak()
+        else companion.setCompleted({id: 7}, true)
+        compare(testCase.t33Messages.length, 1)
+        verify(testCase.t33Messages[0].indexOf(timerStub.t33Failure) >= 0)
+        compare(timerStub.hasActiveSession, data.action === "complete")
+    }
+
 }

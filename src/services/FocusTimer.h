@@ -139,7 +139,7 @@ signals:
     void completedPomodorosChanged();
     void sessionLogicalDateChanged();
     void taskAutoCompleteFailed(int taskId);
-    // 到点保存失败进入每秒自动重试时提示一次；恢复成功或会话复位后允许再次提示。
+    // 手动动作失败携带本次原因；到点保存失败进入自动重试时只提示一次，恢复成功或会话复位后可再次提示。
     void operationFailed(const QString& message);
 
 private:
@@ -168,7 +168,7 @@ private:
     // 此前计数只看「刚结束的是工作阶段」，与写入口径是两套判断，靠「UI 把时长下限锁在
     // 5 分钟」这个外部事实才不出错——而 startPomodoroWork 是 Q_INVOKABLE，边界并不在这里。
     bool completeFocusSession(bool naturalCompletion, bool* countedAsPomodoro = nullptr,
-                              int correctedDurationSeconds = -1);
+                              int correctedDurationSeconds = -1, QString* failureReason = nullptr);
     // 番茄段到点后的统一结算。settledOffline 为真时发 phaseSettledOffline，否则发 phaseCompleted；
     // 保存、计数与失败重试完全相同，两条路径只差最后告诉界面的是哪种完成。
     void finishExpiredPhase(bool settledOffline);
@@ -181,12 +181,15 @@ private:
     // overshootSeconds 是自然到点时被截掉的超额（合盖跨过到点），结束时刻往回推这么多。
     bool saveFocusSession(int durationSeconds, bool naturalCompletion,
                           bool durationWasCorrected = false,
-                          int overshootSeconds = 0);
-    bool discardFocusSession();
-    bool persistActiveState();
-    bool writeActiveState(QSqlDatabase& db);
-    bool clearActiveState(QSqlDatabase& db);
-    bool writeCycleCount(QSqlDatabase& db, int count);
+                          int overshootSeconds = 0, QString* error = nullptr);
+    bool discardFocusSession(QString* error = nullptr);
+    bool persistActiveState(QString* error = nullptr);
+    bool writeActiveState(QSqlDatabase& db, QString* error = nullptr);
+    bool clearActiveState(QSqlDatabase& db, QString* error = nullptr);
+    bool writeCycleCount(QSqlDatabase& db, int count, QString* error = nullptr);
+    // 自然到点由外层合并失败提示；手动动作直接报告，底层 SQL 只回传本次原因。
+    bool stopFocusImpl(QString* failureReason);
+    bool failOperation(const QString& action, const QString& reason, QString* failureReason = nullptr);
     void applyCycleCount(int count);
     bool m_resetCycleOnStop = false;
     bool m_cycleNotificationInProgress = false;

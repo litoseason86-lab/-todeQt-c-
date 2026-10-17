@@ -89,6 +89,25 @@ Item {
         return true
     }
 
+    // 同步计时失败由发起处合并到现有提示，外壳只显示未被认领的后台失败。
+    property var timerFailureCall: null
+    function callTimer(action) {
+        var previous = root.timerFailureCall
+        var call = { value: undefined, error: "" }
+        root.timerFailureCall = call
+        try { call.value = action() }
+        finally { root.timerFailureCall = previous }
+        return call
+    }
+    Connections {
+        target: root.focusTimerRef
+        ignoreUnknownSignals: true
+        function onOperationFailed(message) {
+            if (root.timerFailureCall && root.timerFailureCall.error.length === 0)
+                root.timerFailureCall.error = String(message || "")
+        }
+    }
+
     function setCompleted(task, completed) {
         var taskId = Number(task.id)
         if (!root.taskManagerRef || !root.taskManagerRef.setTaskCompleted(taskId, completed)) {
@@ -100,10 +119,12 @@ Item {
             return
         // 完成的正是正在计时的任务：顺带结束这段专注，否则之后的时间也会记到它头上。
         if (root.focusTimerRef && root.focusTimerRef.hasActiveSession && root.currentTaskId === taskId) {
-            if (root.focusTimerRef.stopFocus()) {
+            var call = root.callTimer(function() { return root.focusTimerRef.stopFocus() })
+            if (call.value) {
                 root.toastRequested(qsTr("已完成，专注已结束"))
             } else {
-                root.toastRequested(qsTr("已完成，但结束专注失败，计时仍在继续"))
+                root.toastRequested(call.error.length > 0 ? qsTr("已完成，但%1").arg(call.error)
+                                                          : qsTr("已完成，但结束专注失败，计时仍在继续"))
             }
         }
     }
@@ -113,8 +134,9 @@ Item {
             return
         autoAdvanceTimer.stop()
         root.justCompletedPhase = 0
-        if (!root.focusTimerRef.startPomodoroWork(taskId, title, root.workMinutes * 60))
-            root.toastRequested(qsTr("番茄没有开始，请重试"))
+        var call = root.callTimer(function() { return root.focusTimerRef.startPomodoroWork(taskId, title, root.workMinutes * 60) })
+        if (!call.value)
+            root.toastRequested(call.error || qsTr("番茄没有开始，请重试"))
     }
 
     function startBreak() {
@@ -122,9 +144,10 @@ Item {
             return
         autoAdvanceTimer.stop()
         root.justCompletedPhase = 0
-        if (!root.focusTimerRef.startBreakForTask(root.nextBreakMinutes() * 60,
-                                                  root.lastTaskId, root.lastTaskTitle))
-            root.toastRequested(qsTr("休息没有开始，请重试"))
+        var call = root.callTimer(function() { return root.focusTimerRef.startBreakForTask(root.nextBreakMinutes() * 60,
+                                                  root.lastTaskId, root.lastTaskTitle) })
+        if (!call.value)
+            root.toastRequested(call.error || qsTr("休息没有开始，请重试"))
     }
 
     function adjustWorkMinutes(delta) {

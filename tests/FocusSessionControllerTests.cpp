@@ -1,4 +1,6 @@
 #include <QSettings>
+#include <QSignalSpy>
+#include <QSqlError>
 #include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QtTest>
@@ -73,6 +75,11 @@ class FocusSessionControllerTests : public QObject
     Q_OBJECT
 
 private slots:
+    void timerFailuresCarryOneSpecificReason_data();
+    void timerFailuresCarryOneSpecificReason();
+    void controllerAdmissionFailureHasSpecificReason();
+    void successfulTimerActionsDoNotReportFailure();
+    void automaticCompletionFailureReportsOnceWithReason();
     void init();
     void cleanup();
 
@@ -181,6 +188,7 @@ void FocusSessionControllerTests::init()
 void FocusSessionControllerTests::cleanup()
 {
     timer()->resetSession();
+    timer()->m_resetCycleOnStop = false;
     timer()->resetPomodoroCount();
     // 复位为真实系统时钟，避免假时钟泄漏到别的用例。
     timer()->m_clock = SystemMonotonicClock::instance();
@@ -961,6 +969,165 @@ void FocusSessionControllerTests::autoAdvanceFollowsPerPhaseSwitch()
         QCOMPARE(m_settings->autoStartNextPomodoro(), row.autoNext);
         QCOMPARE(m_controller->autoAdvanceAfter(row.phase), row.expected);
     }
+}
+
+
+// 产品保证：启动和停表被拒绝时说明具体原因，保留原计时与数据库状态，一次调用只报一次。
+void FocusSessionControllerTests::timerFailuresCarryOneSpecificReason_data()
+{
+    QTest::addColumn<QString>("action");
+    QTest::addColumn<QString>("fault");
+    QTest::addColumn<QString>("reason");
+    for (const QString& action : {QStringLiteral("startFree"), QStringLiteral("startPomodoro"), QStringLiteral("startBreak"), QStringLiteral("startManual")}) {
+        for (const QString& fault : {QStringLiteral("closed"), QStringLiteral("transaction"), QStringLiteral("snapshot"), QStringLiteral("busy")}) {
+            // 休息快照沿用单条写入，没有显式事务；不能用外部事务假装其启动失败。
+            if ((action == QLatin1String("startBreak") || action == QLatin1String("startManual")) && fault == QLatin1String("transaction")) continue;
+            const QString reason = fault == QLatin1String("closed") ? QStringLiteral("未打开")
+                : fault == QLatin1String("transaction") ? QStringLiteral("事务")
+                : fault == QLatin1String("busy") ? QStringLiteral("正在进行") : QStringLiteral("T33 blocked");
+            QTest::newRow(qPrintable(action + "-" + fault)) << action << fault << reason;
+        }
+    }
+    for (const QString& action : {QStringLiteral("startFree"), QStringLiteral("startPomodoro")}) {
+        for (const QString& fault : {QStringLiteral("id"), QStringLiteral("title"), QStringLiteral("missing"), QStringLiteral("insert"), QStringLiteral("commit")}) {
+            const QString reason = fault == QLatin1String("id") ? QStringLiteral("编号")
+                : fault == QLatin1String("title") ? QStringLiteral("标题")
+                : fault == QLatin1String("missing") ? QStringLiteral("不存在")
+                : fault == QLatin1String("commit") ? QStringLiteral("FOREIGN KEY") : QStringLiteral("T33 blocked");
+            QTest::newRow(qPrintable(action + "-" + fault)) << action << fault << reason;
+        }
+    }
+    for (const QString& action : {QStringLiteral("startPomodoro"), QStringLiteral("startBreak")})
+        QTest::newRow(qPrintable(action + "-duration")) << action << QStringLiteral("duration") << QStringLiteral("大于 0");
+    QTest::newRow("stop-idle") << QStringLiteral("stopIdle") << QStringLiteral("idle") << QStringLiteral("没有进行中");
+    for (const QString& action : {QStringLiteral("stopFree"), QStringLiteral("stopShort")}) {
+        QTest::newRow(qPrintable(action + "-missing-row")) << action << QStringLiteral("missing-row") << QStringLiteral("不存在");
+        QTest::newRow(qPrintable(action + "-missing-cycle")) << action << QStringLiteral("missing-cycle") << QStringLiteral("循环状态不存在");
+    }
+    for (const QString& action : {QStringLiteral("stopFree"), QStringLiteral("stopShort"), QStringLiteral("stopBreak"), QStringLiteral("stopManual")}) {
+        for (const QString& fault : {QStringLiteral("closed"), QStringLiteral("transaction"), QStringLiteral("write"), QStringLiteral("clear"), QStringLiteral("commit"), QStringLiteral("cycle")}) {
+            const QString reason = fault == QLatin1String("closed") ? QStringLiteral("未打开")
+                : fault == QLatin1String("transaction") ? QStringLiteral("事务")
+                : fault == QLatin1String("commit") ? QStringLiteral("FOREIGN KEY") : QStringLiteral("T33 blocked");
+            QTest::newRow(qPrintable(action + "-" + fault)) << action << fault << reason;
+        }
+    }
+}
+
+// 产品保证：每个失败出口同时返回失败与一条具体原因，不把未落库的启动或结束显示成成功。
+void FocusSessionControllerTests::timerFailuresCarryOneSpecificReason()
+{
+    QFETCH(QString, action); QFETCH(QString, fault); QFETCH(QString, reason);
+    const int task = insertTask(QStringLiteral("失败后保留")); QVERIFY(task > 0);
+    const bool stopping = action.startsWith("stop");
+    const bool rest = action == QLatin1String("stopBreak") || action == QLatin1String("stopManual");
+    if ((stopping && action != QLatin1String("stopIdle")) || fault == QLatin1String("busy")) {
+        if (action == QLatin1String("stopBreak")) QVERIFY(timer()->startBreak(300));
+        else if (action == QLatin1String("stopManual")) QVERIFY(timer()->startManualRest());
+        else QVERIFY(timer()->startFocus(task, QStringLiteral("失败后保留")));
+        m_clock.advanceSecs(action == QLatin1String("stopShort") ? 30 : 240);
+    }
+    QSqlDatabase database = DatabaseManager::instance()->database();
+    QSqlQuery setup(database);
+    QString target;
+    QString verb;
+    if (fault == QLatin1String("snapshot")) { target = "active_focus_state"; verb = "INSERT"; }
+    if (fault == QLatin1String("insert")) { target = "focus_sessions"; verb = "INSERT"; }
+    if (fault == QLatin1String("write")) {
+        target = rest ? "rest_sessions" : "focus_sessions";
+        verb = rest ? "INSERT" : action == QLatin1String("stopShort") ? "DELETE" : "UPDATE";
+    }
+    if (fault == QLatin1String("clear")) { target = "active_focus_state"; verb = "DELETE"; }
+    if (fault == QLatin1String("cycle")) { target = "pomodoro_cycle_state"; verb = "UPDATE"; }
+    if (!target.isEmpty()) QVERIFY2(setup.exec("CREATE TEMP TRIGGER t33_block BEFORE " + verb + " ON " + target
+        + " BEGIN SELECT RAISE(ABORT, 'T33 blocked'); END"), qPrintable(setup.lastError().text()));
+    if (fault == QLatin1String("commit")) {
+        // 延迟外键只在 COMMIT 拒绝写入，验证原因在 rollback 清掉连接错误之前被保存。
+        QVERIFY(setup.exec("CREATE TABLE t33_deferred(parent INTEGER REFERENCES tasks(id) DEFERRABLE INITIALLY DEFERRED)"));
+        target = stopping ? (rest ? "rest_sessions" : "focus_sessions") : "focus_sessions";
+        verb = stopping ? (rest ? "INSERT" : action == QLatin1String("stopShort") ? "DELETE" : "UPDATE") : "INSERT";
+        QVERIFY(setup.exec("CREATE TEMP TRIGGER t33_commit AFTER " + verb + " ON " + target
+            + " BEGIN INSERT INTO t33_deferred VALUES(-999); END"));
+    }
+    if (fault == QLatin1String("cycle") && rest) timer()->m_resetCycleOnStop = true;
+    if (fault == QLatin1String("cycle") && action == QLatin1String("stopShort")) timer()->m_resetCycleOnStop = true;
+    if (fault == QLatin1String("missing-row")) QVERIFY(setup.exec("DELETE FROM focus_sessions"));
+    if (fault == QLatin1String("missing-cycle")) {
+        QVERIFY(setup.exec("DELETE FROM pomodoro_cycle_state"));
+        timer()->m_resetCycleOnStop = true;
+    }
+    if (fault == QLatin1String("transaction")) QVERIFY(database.transaction());
+    const int beforeSessions = queryInt("SELECT COUNT(*) FROM focus_sessions");
+    const int beforeSnapshots = queryInt("SELECT COUNT(*) FROM active_focus_state");
+    const int beforeTask = timer()->currentTaskId(); const int beforePhase = timer()->phase();
+    const int beforeMode = timer()->mode(); const int beforeElapsed = timer()->elapsedSeconds();
+    const bool beforeRunning = timer()->isRunning(); const int beforeSession = timer()->m_sessionId;
+    if (fault == QLatin1String("closed")) DatabaseManager::instance()->close();
+    QSignalSpy failed(timer(), &FocusTimer::operationFailed);
+    bool result;
+    if (stopping) result = timer()->stopFocus();
+    else if (action == QLatin1String("startFree")) result = timer()->startFocus(fault == "id" ? -1 : fault == "missing" ? task + 999 : task, fault == "title" ? "  " : "失败后保留");
+    else if (action == QLatin1String("startPomodoro")) result = timer()->startPomodoroWork(fault == "id" ? -1 : fault == "missing" ? task + 999 : task, fault == "title" ? "  " : "失败后保留", fault == "duration" ? 0 : 1500);
+    else if (action == QLatin1String("startManual")) result = timer()->startManualRest();
+    else result = timer()->startBreak(fault == "duration" ? 0 : 300);
+    QVERIFY(!result); QCOMPARE(failed.count(), 1);
+    const QString message = failed.first().first().toString();
+    QVERIFY2(message.contains(stopping ? QStringLiteral("结束") : QStringLiteral("启动")), qPrintable(message));
+    QVERIFY2(message.contains(reason), qPrintable(message));
+    QCOMPARE(timer()->currentTaskId(), beforeTask); QCOMPARE(timer()->phase(), beforePhase);
+    QCOMPARE(timer()->mode(), beforeMode); QCOMPARE(timer()->isRunning(), beforeRunning);
+    QCOMPARE(timer()->m_sessionId, beforeSession); QCOMPARE(timer()->elapsedSeconds(), beforeElapsed);
+    if (fault != QLatin1String("closed")) {
+        QCOMPARE(queryInt("SELECT COUNT(*) FROM focus_sessions"), beforeSessions);
+        QCOMPARE(queryInt("SELECT COUNT(*) FROM active_focus_state"), beforeSnapshots);
+        QCOMPARE(queryInt("SELECT COUNT(*) FROM rest_sessions"), 0);
+    }
+    if (fault == QLatin1String("transaction")) QVERIFY(database.rollback());
+    timer()->m_resetCycleOnStop = false;
+}
+
+
+// 产品保证：专注控制器缺少必要服务时报告明确原因，不把无效新建或切换悄悄吞掉。
+void FocusSessionControllerTests::controllerAdmissionFailureHasSpecificReason()
+{
+    FocusSessionController unavailable(nullptr, nullptr, m_settings, m_pending);
+    QSignalSpy failure(&unavailable, &FocusSessionController::operationFailed);
+    QCOMPARE(unavailable.stopForSwitch({}), QStringLiteral("stopFailed"));
+    QCOMPARE(failure.count(), 1); QVERIFY(failure.takeFirst().first().toString().contains(QStringLiteral("计时器不可用")));
+    QCOMPARE(unavailable.createTodayTask(QStringLiteral("任务")), -1);
+    QCOMPARE(failure.count(), 1); QVERIFY(failure.takeFirst().first().toString().contains(QStringLiteral("任务服务不可用")));
+    QSignalSpy taskFailure(TaskManager::instance(), &TaskManager::operationFailed);
+    QSignalSpy controllerFailure(m_controller, &FocusSessionController::operationFailed);
+    QCOMPARE(m_controller->createTodayTask(QStringLiteral("  ")), -1);
+    QCOMPARE(taskFailure.count(), 1); QVERIFY(taskFailure.first().first().toString().contains(QStringLiteral("标题")));
+    QCOMPARE(controllerFailure.count(), 0);
+}
+
+// 产品保证：成功启动与结束三类计时不误报失败，测试不依赖真实流逝时间。
+void FocusSessionControllerTests::successfulTimerActionsDoNotReportFailure()
+{
+    const int task = insertTask(QStringLiteral("正常计时")); QVERIFY(task > 0);
+    QSignalSpy failed(timer(), &FocusTimer::operationFailed);
+    QVERIFY(timer()->startFocus(task, QStringLiteral("正常计时"))); m_clock.advanceSecs(240); QVERIFY(timer()->stopFocus());
+    QVERIFY(timer()->startPomodoroWork(task, QStringLiteral("正常计时"), 1500)); m_clock.advanceSecs(240); QVERIFY(timer()->stopFocus());
+    QVERIFY(timer()->startBreak(300)); m_clock.advanceSecs(20); QVERIFY(timer()->stopFocus());
+    QCOMPARE(failed.count(), 0);
+}
+
+// 产品保证：自然到点保存失败包含底层原因，自动重试不重复提示，修复存储后能完成结算。
+void FocusSessionControllerTests::automaticCompletionFailureReportsOnceWithReason()
+{
+    const int task = insertTask(QStringLiteral("自动结算")); QVERIFY(task > 0);
+    QVERIFY(timer()->startPomodoroWork(task, QStringLiteral("自动结算"), 180));
+    QSqlQuery setup(DatabaseManager::instance()->database());
+    QVERIFY(setup.exec("CREATE TEMP TRIGGER t33_finish BEFORE UPDATE ON focus_sessions BEGIN SELECT RAISE(ABORT, 'T33 finish blocked'); END"));
+    QSignalSpy failed(timer(), &FocusTimer::operationFailed);
+    m_clock.advanceSecs(180);
+    timer()->finishExpiredPhase(false); timer()->finishExpiredPhase(false);
+    QCOMPARE(failed.count(), 1); QVERIFY(failed.first().first().toString().contains("T33 finish blocked"));
+    QVERIFY(timer()->hasActiveSession());
+    QVERIFY(setup.exec("DROP TRIGGER t33_finish")); timer()->finishExpiredPhase(false);
+    QVERIFY(!timer()->hasActiveSession()); QCOMPARE(failed.count(), 1);
 }
 
 QTEST_GUILESS_MAIN(FocusSessionControllerTests)

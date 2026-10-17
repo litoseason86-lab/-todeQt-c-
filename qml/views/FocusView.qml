@@ -227,6 +227,27 @@ Item {
 
     // 选择器里直接新建今日任务并开始。
     //
+    // 同步调用栈认领本次服务失败，外壳据此跳过全局提示；退出时恢复外层调用，避免重入互相覆盖。
+    property var timerFailureCall: null
+    function callTimer(action) {
+        var previous = root.timerFailureCall
+        var call = { value: undefined, error: "" }
+        root.timerFailureCall = call
+        try { call.value = action() }
+        finally { root.timerFailureCall = previous }
+        return call
+    }
+    function collectTimerFailure(message) {
+        if (root.timerFailureCall && root.timerFailureCall.error.length === 0)
+            root.timerFailureCall.error = String(message || "")
+    }
+    function callTimerResult(action) {
+        var call = root.callTimer(action)
+        if (call.error.length > 0 && call.value)
+            call.value.error = call.error
+        return call.value
+    }
+
     // 用 createTask 拿新任务编号，不按标题反查：同一天允许同名任务，
     // 「标题相同 + display_order 最大」不是唯一键，反查可能绑到另一条任务上，
     // 而绑错任务的后果是这段专注记到了别人头上，用户看不出来。
@@ -236,9 +257,10 @@ Item {
             return false
         }
         // 建在逻辑今日、标题 trim、返回编号都由控制器负责。
-        var newId = Number(root.focusSessionControllerRef.createTodayTask(title))
+        var call = root.callTimer(function() { return root.focusSessionControllerRef.createTodayTask(title) })
+        var newId = Number(call.value)
         if (!(newId > 0)) {
-            root.errorText = "新建任务失败，请重试"
+            root.errorText = call.error || "新建任务失败，请重试"
             return false
         }
 
@@ -405,7 +427,7 @@ Item {
             return
         }
         var outcome = root.focusSessionControllerRef
-                ? root.focusSessionControllerRef.finishLongFree(recordSession, Number(correctedDurationSeconds || 0))
+                ? root.callTimerResult(function() { return root.focusSessionControllerRef.finishLongFree(recordSession, Number(correctedDurationSeconds || 0)) })
                 : { ok: false, error: recordSession ? "专注保存失败，请重试" : "专注丢弃失败，请重试" }
         if (!outcome.ok) {
             root.errorText = outcome.error
@@ -475,10 +497,13 @@ Item {
     //   "confirming"  超长自由专注，已弹确认框并记下确认后的动作 action，调用方应直接返回；
     //   "failed"      停表失败（计时保持原样），或控制器没接上。
     function stopBusyTimerForSwitch(action, taskId, title) {
+        root.errorText = ""
         if (!root.focusSessionControllerRef)
             return "failed"
-        var outcome = root.focusSessionControllerRef.stopForSwitch(
-                    root.focusSessionControllerRef.captureSwitchSource())
+        var call = root.callTimer(function() { return root.focusSessionControllerRef.stopForSwitch(
+                    root.focusSessionControllerRef.captureSwitchSource()) })
+        var outcome = call.value
+        if (outcome === "stopFailed" && call.error.length > 0) root.errorText = call.error
         if (outcome === "needsLongFreeConfirmation") {
             root.requestLongFreeConfirmation(action, taskId, title)
             return "confirming"
@@ -521,7 +546,8 @@ Item {
             if (stopped === "confirming")
                 return
             if (stopped === "failed") {
-                root.errorText = enabled ? "切换番茄失败，请重试" : "结束当前阶段失败，请重试"
+                if (root.errorText.length === 0)
+                    root.errorText = enabled ? "切换番茄失败，请重试" : "结束当前阶段失败，请重试"
                 return
             }
         }
@@ -548,7 +574,7 @@ Item {
             if (stopped === "confirming")
                 return true
             if (stopped === "failed") {
-                root.errorText = "切换番茄失败，请重试"
+                if (root.errorText.length === 0) root.errorText = "切换番茄失败，请重试"
                 return false
             }
         }
@@ -680,7 +706,8 @@ Item {
         if (!intent || !root.timer || !root.focusSessionControllerRef)
             return
         // 状态是否变过、要不要超长确认、停表是否成功都由控制器判断，本页按结果做界面动作。
-        var outcome = root.focusSessionControllerRef.stopForSwitch(intent.source)
+        var call = root.callTimer(function() { return root.focusSessionControllerRef.stopForSwitch(intent.source) })
+        var outcome = call.value
         if (outcome === "stateChanged") {
             root.errorText = "计时状态已变化，请重新选择任务"
             return
@@ -692,7 +719,7 @@ Item {
             return
         }
         if (outcome === "stopFailed") {
-            root.errorText = "当前计时保存失败，未切换"
+            root.errorText = call.error || "当前计时保存失败，未切换"
             return
         }
         root.applyTask(intent.taskId, intent.title, intent.pomodoro, intent.autoStart)
@@ -762,8 +789,9 @@ Item {
             root.errorText = "请先选择要专注的任务"
             return false
         }
-        if (!root.timer.startFocus(root.selectedTaskId, root.selectedTaskTitle)) {
-            root.errorText = "自由专注启动失败，请重试"
+        var call = root.callTimer(function() { return root.timer.startFocus(root.selectedTaskId, root.selectedTaskTitle) })
+        if (!call.value) {
+            root.errorText = call.error || "自由专注启动失败，请重试"
             return false
         }
 
@@ -784,7 +812,8 @@ Item {
             root.errorText = "番茄专注启动失败"
             return false
         }
-        if (taskId > 0 && root.timer.startPomodoroWork(taskId, taskTitle, root.selectedWorkMinutes * 60)) {
+        var call = root.callTimer(function() { return taskId > 0 && root.timer.startPomodoroWork(taskId, taskTitle, root.selectedWorkMinutes * 60) })
+        if (call.value) {
             root.errorText = ""
             // 只在真正启动番茄后记忆模式；单纯切到番茄页不改变用户偏好。
             if (root.settings) {
@@ -792,7 +821,7 @@ Item {
             }
             return true
         } else {
-            root.errorText = "番茄专注启动失败"
+            root.errorText = call.error || "番茄专注启动失败"
             return false
         }
     }
@@ -820,18 +849,20 @@ Item {
                                                           : root.timerTitle()
         var started = false
         if (root.timer && typeof root.timer.startBreakForTask === "function") {
-            started = root.timer.startBreakForTask(
-                        root.nextBreakMinutes() * 60, taskId, taskTitle)
+            var call = root.callTimer(function() { return root.timer.startBreakForTask(
+                        root.nextBreakMinutes() * 60, taskId, taskTitle) })
+            started = call.value
         } else if (root.timer) {
             // 仅保留给旧测试替身和滚动升级的兼容入口；生产后端始终提供带任务上下文的方法。
-            started = root.timer.startBreak(root.nextBreakMinutes() * 60)
+            call = root.callTimer(function() { return root.timer.startBreak(root.nextBreakMinutes() * 60) })
+            started = call.value
         }
         if (started) {
             // 只有后端真正建立休息阶段后才消费完成态；失败时用户必须仍能重试。
             root.justCompletedPhase = 0
             root.errorText = ""
         } else {
-            root.errorText = "休息启动失败"
+            root.errorText = (call && call.error) || "休息启动失败"
         }
     }
 
@@ -851,7 +882,7 @@ Item {
     // 控制器没接上时的退化结果：当作结束失败，计时保持原样。
     function endCurrentSession() {
         if (root.focusSessionControllerRef) {
-            return root.focusSessionControllerRef.endCurrent()
+            return root.callTimerResult(function() { return root.focusSessionControllerRef.endCurrent() })
         }
         return { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" }
     }
@@ -892,7 +923,7 @@ Item {
         }
         // 番茄页的结束用专门入口：空档里计时器已回到自由模式，只有它能放弃整个番茄循环（连续计数归零）。
         var outcome = root.focusSessionControllerRef
-                ? root.focusSessionControllerRef.endPomodoroCycle()
+                ? root.callTimerResult(function() { return root.focusSessionControllerRef.endPomodoroCycle() })
                 : { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" }
         root.applyEndResult(outcome)
     }
@@ -914,6 +945,8 @@ Item {
     Connections {
         target: root.timer
         ignoreUnknownSignals: true
+
+        function onOperationFailed(message) { root.collectTimerFailure(message) }
 
         function onCurrentTaskChanged() {
             root.syncToActiveTimer()
@@ -973,10 +1006,18 @@ Item {
         target: root.taskManagerRef
         ignoreUnknownSignals: true
 
+        function onOperationFailed(message) { root.collectTimerFailure(message) }
+
         function onTasksChanged() {
             root.reconcileSelectedTask()
             root.refreshTaskNotes()
         }
+    }
+
+    Connections {
+        target: root.focusSessionControllerRef
+        ignoreUnknownSignals: true
+        function onOperationFailed(message) { root.collectTimerFailure(message) }
     }
 
     // 自动衔接的延迟切换：减少动效时立即切，否则留 0.9s 缓冲。

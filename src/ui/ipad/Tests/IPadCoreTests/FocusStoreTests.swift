@@ -1221,6 +1221,29 @@ import XCTest
         XCTAssertEqual(tiny.axis, .vertical); XCTAssertEqual(tiny.ring, 120)
     }
 
+    // 产品保证：切换确认的停表存储失败显示桥接的具体原因，保留原计时且不启动新任务。
+    func testSwitchStorageFailurePreservesReason() {
+        let r = rig([task(7)])
+        setTimer(r, mode: 0, active: true, taskID: 1, title: "任务1", elapsed: 700)
+        r.focus.focusTaskEntry = entry("confirmSwitch", pomodoro: true, autoStart: true)
+        r.store.openTask(taskId: 7, title: "任务7")
+        XCTAssertNotNil(r.store.switchPrompt)
+        r.focus.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "结束专注失败：T33 database is locked"])
+        r.store.confirmSwitch()
+        XCTAssertEqual(r.store.errorText, "结束专注失败：T33 database is locked")
+        XCTAssertEqual(count(r, "startPomodoro"), 0)
+        XCTAssertEqual(r.store.snapshot.currentTaskID, 1)
+    }
+    // 产品保证：页签直接切换时的停表失败保留底层原因，不再被通用切换失败覆盖。
+    func testTabStorageFailurePreservesReason() {
+        let r = rig()
+        setTimer(r, mode: 0, active: true, elapsed: 700)
+        r.focus.failing = ["stopForSwitch"]
+        r.store.toPomodoroTab(true)
+        XCTAssertEqual(r.store.errorText, "stopForSwitch 失败")
+        XCTAssertFalse(r.store.pomodoroModeSelected)
+    }
+
 }
 
 // 测试里直接构造完成结果的便捷初始化。
@@ -1229,4 +1252,5 @@ extension FocusTaskCompletion {
         self.init()
         self.focusResult = focusResult; self.kind = kind; self.discarded = discarded; self.error = error
     }
+
 }

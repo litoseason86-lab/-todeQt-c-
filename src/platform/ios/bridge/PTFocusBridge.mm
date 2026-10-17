@@ -173,8 +173,12 @@ QVariantMap unavailable() { return {{"valid", false}, {"error", QStringLiteral("
 QVariantMap overflow() { return {{"valid", false}, {"error", QStringLiteral("专注参数越界")}}; }
 QVariantMap claimReturnedFailure(const QVariantMap &value, const FailureCollector::Call &call) {
     // 控制器已把失败写进类型化结果，Swift 会按返回值提示，不能再由未认领出口重复上报。
-    if (!value.value("valid", true).toBool() || !value.value("error").toString().isEmpty()) (void)call.error();
-    return value;
+    QVariantMap result = value;
+    if (!value.value("valid", true).toBool() || !value.value("error").toString().isEmpty()) {
+        const QString reason = call.error();
+        if (!reason.isEmpty()) result[QStringLiteral("error")] = reason;
+    }
+    return result;
 }
 }
 @implementation PTFocusBridge {
@@ -209,6 +213,7 @@ QVariantMap claimReturnedFailure(const QVariantMap &value, const FailureCollecto
             if (b && !b->_failures.collect(message) && b.onFailure) b.onFailure(string(message));
         };
         QObject::connect(timer, &FocusTimer::operationFailed, context, failure);
+        if (auto* c = controller()) QObject::connect(c, &FocusSessionController::operationFailed, context, failure);
         // 提醒类信号只用于前台提示。预约协调器由 main.cpp 在移动端创建并按名字登记，桥接创建时取不到就不连；
         // 登记晚于桥接创建的话本桥接收不到，所以原生根必须在登记之后才创建桥接。
         if (auto *alarms = service<PhaseAlarmCoordinator>(QStringLiteral("phaseAlarms"))) {
@@ -330,8 +335,12 @@ QVariantMap claimReturnedFailure(const QVariantMap &value, const FailureCollecto
     QVariantMap map{{"taskId", taskId}, {"mode", mode}, {"phase", phase}};
     FailureCollector::Call call(_failures);
     const QString result = c->stopForSwitch(map);
-    // failed 已由调用方按返回状态处理；只认领已承接的失败，成功时附带的失败仍交外壳。
-    if (result == QStringLiteral("stopFailed")) (void)call.error();
+    // 停表失败通过 NSError 保留本次原因；正常的状态变化/超长确认仍返回状态，不制造失败提示。
+    if (result == QStringLiteral("stopFailed")) {
+        const QString reason = call.error();
+        fail(error, reason.isEmpty() ? QStringLiteral("切换计时失败，请重试") : reason);
+        return nil;
+    }
     return string(result);
 }
 - (NSInteger)createTodayTask:(NSString *)title error:(NSError **)error {

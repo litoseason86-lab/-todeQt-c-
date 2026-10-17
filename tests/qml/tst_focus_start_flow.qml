@@ -90,6 +90,13 @@ TestCase {
         property int elapsedSeconds: 0
         property int minimumValidMinutes: 3
         property int completedPomodoros: 0
+        property string t33Failure: ""
+        function rejectT33() {
+            if (t33Failure.length === 0) return false
+            // 服务在同步返回 false 前发信号，才能检出全局提示与页内提示的重复。
+            operationFailed(t33Failure)
+            return true
+        }
         property bool stopSucceeds: true
         // 模拟不足 3 分钟：真实 FocusTimer 会丢弃这段会话、照常返回成功，并同步发 sessionDiscarded。
         property bool stopDiscards: false
@@ -113,6 +120,7 @@ TestCase {
         signal operationFailed(string message)
 
         function startFocus(id, title) {
+            if (rejectT33()) return false
             startFocusCalls += 1
             if (!startFocusSucceeds)
                 return false
@@ -126,6 +134,7 @@ TestCase {
         }
 
         function startPomodoroWork(id, title, workSeconds) {
+            if (rejectT33()) return false
             startPomodoroCalls++
             lastWorkSeconds = workSeconds
             currentTaskId = id
@@ -136,8 +145,9 @@ TestCase {
             isRunning = true
             return true
         }
-        function startBreak(breakSeconds) { return true }
-        function startBreakForTask(breakSeconds, taskId, title) { return true }
+        function startBreak(breakSeconds) { return !rejectT33() }
+        function startBreakForTask(breakSeconds, taskId, title) { return !rejectT33() }
+        function startManualRest() { return !rejectT33() }
         function resetPomodoroCount() { completedPomodoros = 0 }
         // 真实服务在返回 false 前同步报原因；替身必须保留这个时序，才能检出快捷键覆盖原因。
         function pauseFocus() {
@@ -160,6 +170,7 @@ TestCase {
         }
 
         function stopFocus() {
+            if (rejectT33()) return false
             stopFocusCalls += 1
             if (!stopSucceeds) return false
             hasActiveSession = false
@@ -705,6 +716,7 @@ TestCase {
         // 选择器同理：「…OpensPicker」几条用例展开它后不收起，用例按名字字母序跑，
         // 留着它开着，后面的捕获用例会被 overlayHoldsFocus 挡住。
         findChild(focusView, "focusTaskPicker").collapse()
+        focusTimer.t33Failure = ""
         focusTimer.stopSucceeds = true
         focusTimer.stopDiscards = false
         taskManager.setCompletedCalls = 0
@@ -2722,4 +2734,133 @@ TestCase {
         tryCompare(dialog, "opened", false)
         compare(shown, "")
     }
+
+    // 产品保证：专注页发起的启动、结束和切换失败只显示原位置的一条具体原因，不再同时弹全局通用提示。
+    function test_t33FocusFailureHasOneOwner_data() {
+        return ["free", "pomodoro", "break", "switch", "endFree", "endPomodoro", "endRest"].map(function(action) {
+            return { tag: action, action: action }
+        })
+    }
+    // 产品保证：失败后任务与计时状态保留，页面错误使用服务的本次原因，原有全局提示不被覆盖。
+    function test_t33FocusFailureHasOneOwner(data) {
+        var view = focusPage()
+        taskManager.todayTasks = [{id: 7, title: "保留任务", completed: false}]
+        view.selectedTaskId = 7; view.selectedTaskTitle = "保留任务"
+        if (data.action.indexOf("end") === 0 || data.action === "switch") {
+            focusTimer.currentTaskId = 7; focusTimer.currentTaskTitle = "保留任务"
+            focusTimer.hasActiveSession = true; focusTimer.isRunning = true
+            if (data.action === "endPomodoro") { focusTimer.mode = 1; focusTimer.phase = 1 }
+            if (data.action === "endRest") { focusTimer.mode = 2; focusTimer.phase = 3 }
+        }
+        const taskBefore = focusTimer.currentTaskId
+        const activeBefore = focusTimer.hasActiveSession
+        mainWindow.showToast("原有提示")
+        const label = findChild(mainWindow, "toastText")
+        var spy = Qt.createQmlObject('import QtTest; SignalSpy {}', testCase)
+        spy.target = label; spy.signalName = "textChanged"; verify(spy.valid)
+        focusTimer.t33Failure = "计时操作失败：T33 storage blocked"
+        try {
+            if (data.action === "free") compare(view.startFreeFocus(), false)
+            else if (data.action === "pomodoro") compare(view.startPomodoro(), false)
+            else if (data.action === "break") view.startBreak()
+            else if (data.action === "endFree") view.endFreeFocus()
+            else if (data.action === "endPomodoro") view.endPomodoro()
+            else if (data.action === "endRest") view.endManualRest()
+            else {
+                view.pendingSwitch = {taskId: 9, title: "另一条", pomodoro: false, autoStart: true,
+                                      source: focusSessionController.captureSwitchSource()}
+                view.confirmSwitch()
+            }
+            compare(view.errorText, focusTimer.t33Failure)
+            compare(spy.count, 0); compare(label.text, "原有提示")
+            compare(focusTimer.currentTaskId, taskBefore); compare(focusTimer.hasActiveSession, activeBefore)
+        } finally { spy.destroy() }
+    }
+    // 产品保证：仪表盘、菜单栏和快捷键的停表及主动休息启动失败在现有全局提示条只显示一次具体原因。
+    function test_t33ExternalFailureHasOneToast_data() {
+        return ["dashboard", "menu", "manual"].map(function(action) { return {tag: action, action: action} })
+    }
+    // 产品保证：外部入口的同步失败不会再覆盖为通用失败或成功，计时与当前页保持原状态。
+    function test_t33ExternalFailureHasOneToast(data) {
+        mainWindow.currentView = "dashboard"
+        if (data.action !== "manual") {
+            focusTimer.currentTaskId = 7; focusTimer.currentTaskTitle = "保留任务"
+            focusTimer.hasActiveSession = true; focusTimer.isRunning = true
+        }
+        mainWindow.showToast("原有提示")
+        const label = findChild(mainWindow, "toastText")
+        var spy = Qt.createQmlObject('import QtTest; SignalSpy {}', testCase)
+        spy.target = label; spy.signalName = "textChanged"; verify(spy.valid)
+        focusTimer.t33Failure = "计时操作失败：T33 storage blocked"
+        try {
+            if (data.action === "dashboard") mainWindow.endFocusFromDashboard()
+            else if (data.action === "shortcut") mainWindow.triggerShortcutAction("focus.stop")
+            else if (data.action === "menu") { focusTimer.operationFailed(focusTimer.t33Failure); mainWindow.showTrayStopFailure("通用结束失败") }
+            else mainWindow.startManualRest()
+            compare(label.text, focusTimer.t33Failure); compare(spy.count, 1)
+        } finally { spy.destroy() }
+    }
+
+
+    QtObject {
+        id: trayController
+        signal showWindowRequested()
+        signal longFreeFocusStopRequested()
+        signal stopFailed(string error)
+        signal quitRequested()
+    }
+    property int t33CompletedTurn: 0
+    Loader {
+        id: actualWindowLoader
+        active: false
+    }
+    // 产品保证：真实窗口的菜单栏失败接线保留计时器具体原因，不再追加一条通用失败。
+    function test_t33ActualWindowTrayCallbackDoesNotDuplicate() {
+        // Loader 的创建上下文随 TestCase 存活，窗口销毁时不会留下短命函数上下文中的绑定。
+        actualWindowLoader.setSource(Qt.resolvedUrl("../../qml/main.qml"), { visible: false })
+        actualWindowLoader.active = true
+        compare(actualWindowLoader.status, Loader.Ready)
+        var window = actualWindowLoader.item
+        verify(window)
+        try {
+            var content = null
+            for (var child of window.contentItem.children) {
+                if (typeof child.showToast === "function") { content = child; break }
+            }
+            verify(content)
+            var label = findChild(content, "toastText"); verify(label)
+            content.showToast("原有提示")
+            var spy = Qt.createQmlObject('import QtTest; SignalSpy {}', testCase)
+            spy.target = label; spy.signalName = "textChanged"; verify(spy.valid)
+            try {
+                focusTimer.operationFailed("结束专注失败：T33 storage blocked")
+                trayController.stopFailed("专注保存失败，请重试")
+                compare(label.text, "结束专注失败：T33 storage blocked")
+                compare(spy.count, 1)
+                // 等现有侧栏布局等延迟回调完成再卸载窗口，避免把测试销毁时序误报成生产错误。
+                const nextTurn = testCase.t33CompletedTurn + 1
+                Qt.callLater(function() { testCase.t33CompletedTurn = nextTurn })
+                tryCompare(testCase, "t33CompletedTurn", nextTurn)
+            } finally { spy.destroy() }
+        } finally { actualWindowLoader.active = false }
+    }
+    // 产品保证：快捷键启动或停表失败仅保留专注页的一条具体原因，不覆盖为成功或没有任务。
+    function test_t33ShortcutFailureKeepsPageReason_data() {
+        return [{tag: "start", stopping: false}, {tag: "stop", stopping: true}]
+    }
+    // 产品保证：快捷键延迟回调保留失败时的任务和活动状态，外壳提示不被同一次失败污染。
+    function test_t33ShortcutFailureKeepsPageReason(data) {
+        taskManager.todayTasks = [{id: 7, title: "保留任务", completed: false}]
+        if (data.stopping) {
+            focusTimer.currentTaskId = 7; focusTimer.currentTaskTitle = "保留任务"
+            focusTimer.hasActiveSession = true; focusTimer.isRunning = true
+        }
+        mainWindow.showToast("原有提示")
+        focusTimer.t33Failure = "计时操作失败：T33 storage blocked"
+        mainWindow.triggerShortcutAction(data.stopping ? "focus.stop" : "focus.toggle")
+        tryCompare(focusPage(), "errorText", focusTimer.t33Failure)
+        compare(toastText(), "原有提示")
+        compare(focusTimer.hasActiveSession, data.stopping)
+    }
+
 }

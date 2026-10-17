@@ -1,6 +1,7 @@
 #include "../src/services/RoutineManager.h"
 #include "../src/services/CategoryManager.h"
 #include "../src/services/TaskManager.h"
+#include "../src/services/TrashService.h"
 #include <QScopeGuard>
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/AppSettings.h"
@@ -55,6 +56,10 @@ private slots:
     void entityWriteReasonsAreClaimed();
     void syncActionsRejectReleasedService_data();
     void syncActionsRejectReleasedService();
+    void nestedSynchronousExportsKeepTheirOwnReasons();
+    void synchronousExportPreservesReason_data();
+    void synchronousExportPreservesReason();
+    void manualPurgePreservesReasonAndAutomaticPurgeStaysQuiet();
     void initTestCase();
     void init();
     void cleanup();
@@ -418,5 +423,79 @@ void PTDataBridgeTests::typedValuesPreserveRoutineBackupAndSyncFields() {
         QVERIFY(blocked.lostValue.length > 0); QVERIFY(!blocked.canCopyLostValue);
     }
 }
+
+// 产品保证：同步导出保留服务已经提供的具体原因，不被桥接的通用文案覆盖。
+void PTDataBridgeTests::synchronousExportPreservesReason_data()
+{
+    QTest::addColumn<int>("kind"); QTest::addColumn<bool>("invalidDate");
+    for (int kind = 0; kind < 3; ++kind)
+        for (bool invalid : {false, true}) QTest::newRow(qPrintable(QString::number(kind) + (invalid ? "-date" : "-closed"))) << kind << invalid;
+}
+
+// 产品保证：三个同步导出重载把本次失败交给 NSError，后续成功不继承旧原因。
+void PTDataBridgeTests::synchronousExportPreservesReason()
+{
+    @autoreleasepool {
+        QFETCH(int, kind); QFETCH(bool, invalidDate);
+        PTExportBridge* bridge = [PTExportBridge new];
+        __block NSString* observed = nil; __block int completed = 0;
+        bridge.onCompleted = ^(BOOL ok, NSString* message) { if (!ok) { observed = message; ++completed; } };
+        if (!invalidDate) DatabaseManager::instance()->close();
+        NSError* error = nil; NSString* start = invalidDate ? @"invalid" : @"2026-10-01";
+        NSString* path = PTBridgeSupport::string(m_database.filePath("export.csv"));
+        const BOOL ok = kind == 0 ? [bridge exportTasksFrom:start to:@"2026-10-18" path:path error:&error]
+            : kind == 1 ? [bridge exportFocusSessionsFrom:start to:@"2026-10-18" path:path error:&error]
+            : [bridge exportAllFrom:start to:@"2026-10-18" directory:PTBridgeSupport::string(m_database.path()) error:&error];
+        QVERIFY(!ok); QVERIFY(error != nil); QCOMPARE(completed, 1); QVERIFY(observed != nil);
+        QCOMPARE(PTBridgeSupport::string(error.localizedDescription), PTBridgeSupport::string(observed));
+        QVERIFY([observed containsString:invalidDate ? @"日期范围无效" : @"数据库未打开"]);
+    }
+}
+
+// 产品保证：手动清理通过 NSError 告知原因，自动清理只记录日志，不制造外壳提示或桥接后台回调。
+void PTDataBridgeTests::manualPurgePreservesReasonAndAutomaticPurgeStaysQuiet()
+{
+    @autoreleasepool {
+        PTTrashBridge* bridge = [PTTrashBridge new]; PTTrashBridge* observer = [PTTrashBridge new];
+        __block int ownerChanges = 0, observerChanges = 0;
+        bridge.onChanged = ^{ ++ownerChanges; }; observer.onChanged = ^{ ++observerChanges; };
+        QObject outlet; int shellFailures = 0;
+        PTBridgeSupport::registerUnclaimedFailureHandler(&outlet, [&](const QString&) { ++shellFailures; });
+        const auto cleanup = qScopeGuard([&] { PTBridgeSupport::unregisterUnclaimedFailureHandler(&outlet); });
+        DatabaseManager::instance()->close(); NSError* error = nil;
+        QCOMPARE([bridge purgeExpired:&error], NSInteger(-1)); QVERIFY(error != nil);
+        QVERIFY([error.localizedDescription containsString:@"数据库未打开"]);
+        QCOMPARE(TrashService::instance()->purgeExpired(), -1);
+        // 改日界等其它同步桥接也可能触发自动维护，不能把维护失败塞给无关调用的 NSError。
+        PTBridgeSupport::FailureCollector unrelated;
+        PTBridgeSupport::FailureCollector::Call call(unrelated);
+        QCOMPARE(TrashService::instance()->purgeExpired(), -1);
+        const QString unrelatedReason = call.error();
+        QVERIFY2(unrelatedReason.isEmpty(), qPrintable(unrelatedReason));
+        QCOMPARE(shellFailures, 0); QCOMPARE(ownerChanges, 0); QCOMPARE(observerChanges, 0);
+    }
+}
+
+
+// 产品保证：导出完成回调里再次同步导出失败时，两次调用分别拿到自己的原因，不互相串错。
+void PTDataBridgeTests::nestedSynchronousExportsKeepTheirOwnReasons()
+{
+    @autoreleasepool {
+        PTExportBridge* bridge = [PTExportBridge new]; __block bool nested = false;
+        __block NSError* innerError = nil;
+        __weak PTExportBridge* weakBridge = bridge;
+        bridge.onCompleted = ^(BOOL ok, NSString*) {
+            if (!ok && !nested) {
+                nested = true;
+                [weakBridge exportTasksFrom:@"invalid" to:@"2026-10-18" path:@"unused" error:&innerError];
+            }
+        };
+        DatabaseManager::instance()->close(); NSError* outerError = nil;
+        QVERIFY(![bridge exportTasksFrom:@"2026-10-01" to:@"2026-10-18" path:@"unused" error:&outerError]);
+        QVERIFY(nested); QVERIFY([innerError.localizedDescription containsString:@"日期范围无效"]);
+        QVERIFY([outerError.localizedDescription containsString:@"数据库未打开"]);
+    }
+}
+
 QTEST_GUILESS_MAIN(PTDataBridgeTests)
 #include "PTDataBridgeTests.moc"

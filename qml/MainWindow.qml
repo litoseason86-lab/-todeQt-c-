@@ -369,8 +369,9 @@ Item {
             root.switchToView("focus")
             return
         }
-        if (!root.focusTimerRef.startManualRest()) {
-            root.showToast("休息启动失败，请重试")
+        var call = focusView.callTimer(function() { return root.focusTimerRef.startManualRest() })
+        if (!call.value) {
+            root.showToast(call.error || "休息启动失败，请重试")
             return
         }
         focusView.syncToActiveTimer()
@@ -607,9 +608,7 @@ Item {
     //   "failed"     结束失败，计时仍在继续，原因写在 focusView.errorText。
     function endFocusInPlace() {
         // 按计时器的真实模式分发、超长确认、失败文案、连续计数归零都在控制器里，不看专注页本地的模式选择。
-        return root.applyInPlaceEnd(root.focusSessionControllerRef
-                ? root.focusSessionControllerRef.endCurrent()
-                : { result: "failed", kind: "", discarded: false, error: "专注结束失败，请重试" })
+        return root.applyInPlaceEnd(focusView.endCurrentSession())
     }
 
     // 把控制器的结束结果（{result, kind, discarded, error}）落成原地结束的界面动作，返回值含义同 endFocusInPlace。
@@ -636,6 +635,16 @@ Item {
         return "ended"
     }
 
+    // 菜单栏在同一同步调用中先发计时失败、再发 stopFailed；具体原因已弹过时消费这次确认，保留无信号的兜底。
+    property bool timerFailureShown: false
+    function showTrayStopFailure(error) {
+        if (root.timerFailureShown) {
+            root.timerFailureShown = false
+            return
+        }
+        root.showToast(error)
+    }
+
     // 仪表盘「结束」。
     function endFocusFromDashboard() {
         // 结束入口失败时只写专注页的 errorText，仪表盘上看不见，得转成提示条。
@@ -659,7 +668,7 @@ Item {
         // 由下面的完成提示一并说明，所以标志必须罩住这次调用本身。
         root.endingFocusForCompletion = true
         var completed = root.focusSessionControllerRef
-                ? root.focusSessionControllerRef.handleTaskCompleted(taskId)
+                ? focusView.callTimerResult(function() { return root.focusSessionControllerRef.handleTaskCompleted(taskId) })
                 : { focusResult: "none", kind: "", discarded: false, error: "" }
         root.endingFocusForCompletion = false
         var focusResult = completed.focusResult === "none"
@@ -1334,6 +1343,9 @@ Item {
         }
 
         function onOperationFailed(message) {
+            if (focusView.timerFailureCall) return
+            root.timerFailureShown = true
+            Qt.callLater(function() { root.timerFailureShown = false })
             root.showToast(String(message || "专注操作失败"))
         }
     }

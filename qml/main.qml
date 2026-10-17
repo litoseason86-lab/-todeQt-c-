@@ -192,9 +192,9 @@ ApplicationWindow {
             mainContent.requestLongFreeFocusStop()
         }
 
-        // 菜单栏没有错误宿主；C++结束失败后召回窗口并把同一次结果展示为提示。
+        // 计时器的具体失败已交主窗口；同一次菜单栏回调只补无服务信号时的提示，避免再覆盖为通用原因。
         function onStopFailed(error) {
-            mainContent.showToast(error)
+            mainContent.showTrayStopFailure(error)
         }
 
         function onQuitRequested() {

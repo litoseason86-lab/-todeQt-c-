@@ -748,8 +748,10 @@ public struct ActiveFocusSession: Equatable, Sendable {
     private enum StopOutcome { case stopped, confirming, failed }
     // 为切模式或切任务停掉忙碌中的计时器：停表与超长确认判断都经控制器。
     private func stopBusyTimerForSwitch(action: String, taskID: Int, title: String) -> StopOutcome {
+        errorText = ""
         let outcome: String
-        do { outcome = try focus.stopForSwitch(try focus.captureSwitchSource()) } catch { return .failed }
+        do { outcome = try focus.stopForSwitch(try focus.captureSwitchSource()) }
+        catch { errorText = error.localizedDescription; return .failed }
         if outcome == "needsLongFreeConfirmation" {
             requestLongFreeConfirmation(action: action, taskID: taskID, title: title); return .confirming
         }
@@ -770,7 +772,9 @@ public struct ActiveFocusSession: Equatable, Sendable {
         if busy {
             switch stopBusyTimerForSwitch(action: enabled ? "toPomodoro" : "toFree", taskID: -1, title: "") {
             case .confirming: return
-            case .failed: errorText = enabled ? "切换番茄失败，请重试" : "结束当前阶段失败，请重试"; return
+            case .failed:
+                if errorText.isEmpty { errorText = enabled ? "切换番茄失败，请重试" : "结束当前阶段失败，请重试" }
+                return
             case .stopped: break
             }
         }
@@ -795,7 +799,9 @@ public struct ActiveFocusSession: Equatable, Sendable {
         if snapshot.hasActiveSession || snapshot.phase != 0 {
             switch stopBusyTimerForSwitch(action: "enterPomodoro", taskID: taskID, title: safe) {
             case .confirming: return true
-            case .failed: errorText = "切换番茄失败，请重试"; return false
+            case .failed:
+                if errorText.isEmpty { errorText = "切换番茄失败，请重试" }
+                return false
             case .stopped: break
             }
         }
@@ -847,7 +853,7 @@ public struct ActiveFocusSession: Equatable, Sendable {
         do {
             guard let source = intent.source else { throw CocoaError(.fileReadUnknown) }
             outcome = try focus.stopForSwitch(source)
-        } catch { errorText = "计时状态已变化，请重新选择任务"; return }
+        } catch { errorText = error.localizedDescription; return }
         switch outcome {
         case "stateChanged": errorText = "计时状态已变化，请重新选择任务"
         case "needsLongFreeConfirmation":

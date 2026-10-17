@@ -107,6 +107,10 @@ public:
     //   记录且 correctedSeconds > 0 → 按修正时长结算；记录且不修正 → 原样结算；不记录 → 丢弃。
     Q_INVOKABLE QVariantMap finishLongFree(bool recordSession, int correctedSeconds);
 
+signals:
+    // 控制器自身的准入失败；计时和任务服务的失败由原服务上报，避免重复。
+    void operationFailed(const QString& message);
+
 private:
     QVariantMap endCurrentImpl(bool resetCycle);
     FocusTimer* m_timer = nullptr;

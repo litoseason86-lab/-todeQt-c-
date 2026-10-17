@@ -21,6 +21,12 @@ namespace {
 // 重启至少丢掉开机前的全部运行时长加上关机与开机时间，远大于这个值。
 constexpr qint64 kClockAgreementToleranceMs = 10 * 1000;
 
+bool storageFailure(QString* error, const QString& reason)
+{
+    if (error) *error = reason;
+    return false;
+}
+
 bool isCompletedPomodoroSession(bool naturalCompletion,
                                 FocusTimer::TimerMode mode,
                                 FocusTimer::TimerPhase phase,
@@ -75,9 +81,10 @@ void FocusTimer::finishExpiredPhase(bool settledOffline)
     // 到点后先保存当前 phase，因为 resetSession 会把阶段清空；信号必须告诉 QML 刚完成的是专注还是休息。
     const TimerPhase completedPhase = m_phase;
     bool countedAsPomodoro = false;
+    QString failureReason;
     const bool completed = completedPhase == BreakPhase
-        ? stopFocus()
-        : completeFocusSession(true, &countedAsPomodoro);
+        ? stopFocusImpl(&failureReason)
+        : completeFocusSession(true, &countedAsPomodoro, -1, &failureReason);
     if (completed) {
         m_completionFailureNotified = false;
         // 只有自然到点的番茄专注段才计入连续数（调用方已用 PomodoroMode 守卫圈定）；
@@ -94,9 +101,7 @@ void FocusTimer::finishExpiredPhase(bool settledOffline)
         // 保存失败时计时器继续走并在下一次 tick 重试；这里只在进入失败状态的
         // 第一刻通知界面，避免每秒一条提示刷屏。
         m_completionFailureNotified = true;
-        emit operationFailed(completedPhase == BreakPhase
-            ? QStringLiteral("休息记录保存失败，正在自动重试")
-            : QStringLiteral("专注记录保存失败，正在自动重试"));
+        emit operationFailed(failureReason + QStringLiteral("，正在自动重试"));
     }
 }
 
@@ -190,7 +195,7 @@ bool FocusTimer::startPomodoroWork(int taskId, const QString& taskTitle, int wor
 {
     if (workSeconds <= 0) {
         qWarning() << "Failed to start pomodoro work: invalid target seconds" << workSeconds;
-        return false;
+        return failOperation(QStringLiteral("启动番茄专注"), QStringLiteral("专注时长必须大于 0"));
     }
 
     return startFocusSession(taskId, taskTitle, PomodoroMode, WorkPhase, workSeconds);
@@ -218,7 +223,7 @@ bool FocusTimer::startManualRest()
     if (hasActiveTimer()) {
         qWarning() << "Failed to start manual rest: focus timer already has an active session"
                    << "sessionId=" << m_sessionId << "phase=" << m_phase;
-        return false;
+        return failOperation(QStringLiteral("启动主动休息"), QStringLiteral("已有计时正在进行，请先结束当前计时"));
     }
 
     // 主动休息只借用全局计时和恢复快照，不创建 focus_sessions。这样统计、历史和导出
@@ -236,9 +241,10 @@ bool FocusTimer::startManualRest()
     m_targetSeconds = 0;
     beginRunSegment();
 
-    if (!persistActiveState()) {
+    QString error;
+    if (!persistActiveState(&error)) {
         resetSession();
-        return false;
+        return failOperation(QStringLiteral("启动主动休息"), error);
     }
     ++m_runSegmentSerial;
     m_timer.start();
@@ -254,16 +260,17 @@ bool FocusTimer::startManualRest()
 
 bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& taskTitle)
 {
+    // 循环提交通知期间拒绝同步重入；正常用户入口不会在通知栈里再次启动。
     if (m_cycleNotificationInProgress) return false;
     if (hasActiveTimer()) {
         qWarning() << "Failed to start break: focus timer already has an active session"
                    << "sessionId=" << m_sessionId << "phase=" << m_phase;
-        return false;
+        return failOperation(QStringLiteral("启动休息"), QStringLiteral("已有计时正在进行，请先结束当前计时"));
     }
 
     if (breakSeconds <= 0) {
         qWarning() << "Failed to start break: invalid target seconds" << breakSeconds;
-        return false;
+        return failOperation(QStringLiteral("启动休息"), QStringLiteral("休息时长必须大于 0"));
     }
 
     // 休息段不创建 focus_sessions，结束后写入独立休息历史，保持专注统计隔离。
@@ -283,9 +290,10 @@ bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& 
     m_targetSeconds = breakSeconds;
     beginRunSegment();
 
-    if (!persistActiveState()) {
+    QString error;
+    if (!persistActiveState(&error)) {
         resetSession();
-        return false;
+        return failOperation(QStringLiteral("启动休息"), error);
     }
     ++m_runSegmentSerial;
     m_timer.start();
@@ -301,36 +309,38 @@ bool FocusTimer::startBreakSession(int breakSeconds, int taskId, const QString& 
 
 bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMode mode, TimerPhase phase, int targetSeconds)
 {
+    // 循环提交通知期间拒绝同步重入，不能在尚未收尾的计时上再建会话。
     if (m_cycleNotificationInProgress) return false;
+    const QString action = mode == PomodoroMode ? QStringLiteral("启动番茄专注") : QStringLiteral("启动自由专注");
     // 同一时间只允许一个活动会话，否则专注时长统计会被重叠记录污染。
     if (hasActiveTimer()) {
         qWarning() << "Failed to start focus: focus timer already has an active session"
                    << "sessionId=" << m_sessionId << "taskId=" << m_currentTaskId
                    << "phase=" << m_phase;
-        return false;
+        return failOperation(action, QStringLiteral("已有计时正在进行，请先结束当前计时"));
     }
 
     if (taskId <= 0) {
         qWarning() << "Failed to start focus: invalid task id" << taskId;
-        return false;
+        return failOperation(action, QStringLiteral("任务编号无效"));
     }
 
     const QString normalizedTitle = taskTitle.trimmed();
     if (normalizedTitle.isEmpty()) {
         qWarning() << "Failed to start focus: task title is empty after trimming";
-        return false;
+        return failOperation(action, QStringLiteral("任务标题不能为空"));
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to start focus: database is not open";
-        return false;
+        return failOperation(action, QStringLiteral("数据库未打开"));
     }
 
     const QDateTime now = QDateTime::currentDateTime();
     if (!db.transaction()) {
         qWarning() << "Failed to start focus: could not begin transaction" << db.lastError().text();
-        return false;
+        return failOperation(action, QStringLiteral("无法开始数据库事务：%1").arg(db.lastError().text()));
     }
 
     QSqlQuery query(db);
@@ -358,8 +368,9 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
     if (!query.exec() || query.numRowsAffected() != 1) {
         qWarning() << "Failed to create focus session:" << query.lastError().text()
                    << "taskId=" << taskId;
+        const QString reason = query.lastError().isValid() ? query.lastError().text() : QStringLiteral("任务不存在或已被删除");
         db.rollback();
-        return false;
+        return failOperation(action, reason);
     }
 
     m_sessionId = query.lastInsertId().toInt();
@@ -367,7 +378,7 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
         qWarning() << "Failed to create focus session: invalid inserted id"
                    << "taskId=" << taskId;
         db.rollback();
-        return false;
+        return failOperation(action, QStringLiteral("新会话编号无效"));
     }
     m_currentTaskId = taskId;
     m_currentTaskTitle = normalizedTitle;
@@ -381,12 +392,14 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
     m_targetSeconds = targetSeconds;
     beginRunSegment();
 
-    if (!writeActiveState(db) || !db.commit()) {
+    QString error;
+    if (!writeActiveState(db, &error) || !db.commit()) {
+        if (error.isEmpty()) error = db.lastError().text();
         qWarning() << "Failed to persist active focus state:" << db.lastError().text()
                    << "taskId=" << taskId;
         db.rollback();
         resetSession();
-        return false;
+        return failOperation(action, error);
     }
     ++m_runSegmentSerial;
     m_timer.start();
@@ -473,8 +486,22 @@ bool FocusTimer::resumeFocus()
     return true;
 }
 
+bool FocusTimer::failOperation(const QString& action, const QString& reason, QString* failureReason)
+{
+    const QString message = action + QStringLiteral("失败：") + reason;
+    if (failureReason) *failureReason = message;
+    else emit operationFailed(message);
+    return false;
+}
+
 bool FocusTimer::stopFocus()
 {
+    return stopFocusImpl(nullptr);
+}
+
+bool FocusTimer::stopFocusImpl(QString* failureReason)
+{
+    // 循环结算的同步通知尚未收尾时拒绝重入，不让回调二次结束同一段。
     if (m_cycleNotificationInProgress) return false;
     if (m_phase == BreakPhase || m_phase == ManualRestPhase) {
         // 休息保存和活动快照清理必须在同一事务内，否则失败重试可能重复生成记录。
@@ -485,6 +512,8 @@ bool FocusTimer::stopFocus()
         }
         QSqlDatabase db = DatabaseManager::instance()->database();
         bool saved = db.isOpen() && db.transaction();
+        QString error = !db.isOpen() ? QStringLiteral("数据库未打开")
+            : !saved ? QStringLiteral("无法开始数据库事务：%1").arg(db.lastError().text()) : QString();
         if (saved) {
             // 不套用专注最小时长门槛；仅忽略不足一秒的误触。
             const int duration = m_phase == BreakPhase
@@ -504,12 +533,14 @@ bool FocusTimer::stopFocus()
                 query.bindValue(QStringLiteral(":manual"), m_phase == ManualRestPhase ? 1 : 0);
                 saved = query.exec();
                 if (!saved) {
-                    qWarning() << "Failed to save rest session:" << query.lastError().text();
+                    error = query.lastError().text();
+                    qWarning() << "Failed to save rest session:" << error;
                 }
             }
-            saved = saved && (!m_resetCycleOnStop || writeCycleCount(db, 0))
-                && clearActiveState(db) && db.commit();
+            saved = saved && (!m_resetCycleOnStop || writeCycleCount(db, 0, &error))
+                && clearActiveState(db, &error) && db.commit();
             if (!saved) {
+                if (error.isEmpty()) error = db.lastError().text();
                 db.rollback();
             }
         }
@@ -519,7 +550,7 @@ bool FocusTimer::stopFocus()
                 beginRunSegment();
                 m_timer.start();
             }
-            return false;
+            return failOperation(QStringLiteral("结束休息"), error, failureReason);
         }
         if (m_resetCycleOnStop) applyCycleCount(0);
         resetSession();
@@ -532,7 +563,7 @@ bool FocusTimer::stopFocus()
         return true;
     }
 
-    return completeFocusSession(false);
+    return completeFocusSession(false, nullptr, -1, failureReason);
 }
 
 bool FocusTimer::stopFreeFocusWithDuration(int durationSeconds)
@@ -606,14 +637,14 @@ bool FocusTimer::discardFreeFocus()
 
 bool FocusTimer::completeFocusSession(bool naturalCompletion,
                                       bool* countedAsPomodoro,
-                                      int correctedDurationSeconds)
+                                      int correctedDurationSeconds, QString* failureReason)
 {
     if (m_cycleNotificationInProgress) return false;
     if (countedAsPomodoro) {
         *countedAsPomodoro = false;
     }
     if (m_sessionId == -1) {
-        return false;
+        return failOperation(QStringLiteral("结束专注"), QStringLiteral("没有进行中的专注"), failureReason);
     }
 
     const bool wasRunning = m_isRunning;
@@ -635,12 +666,13 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion,
     const int overshootSeconds = qMax(0, m_elapsedSeconds - duration);
     if (duration < FocusSessionRules::kMinimumValidDurationSeconds) {
         // 低于 3 分钟的会话视为无效，直接删除 startFocus 预先插入的占位记录，避免历史页出现 0 分钟噪音。
-        if (!discardFocusSession()) {
+        QString error;
+        if (!discardFocusSession(&error)) {
             if (wasRunning) {
                 beginRunSegment();
                 m_timer.start();
             }
-            return false;
+            return failOperation(QStringLiteral("结束专注"), error, failureReason);
         }
 
         resetSession();
@@ -656,13 +688,14 @@ bool FocusTimer::completeFocusSession(bool naturalCompletion,
     }
 
     // 保存失败时恢复计时器，不假装会话已经正常结束。
+    QString error;
     if (!saveFocusSession(duration, naturalCompletion, correctedDurationSeconds >= 0,
-                          correctedDurationSeconds >= 0 ? 0 : overshootSeconds)) {
+                          correctedDurationSeconds >= 0 ? 0 : overshootSeconds, &error)) {
         if (wasRunning) {
             beginRunSegment();
             m_timer.start();
         }
-        return false;
+        return failOperation(QStringLiteral("结束专注"), error, failureReason);
     }
 
     const int completedTaskId = m_currentTaskId;
@@ -784,12 +817,14 @@ QString FocusTimer::sessionLogicalDate() const
         .toString(Qt::ISODate);
 }
 
-bool FocusTimer::writeCycleCount(QSqlDatabase& db, int count)
+bool FocusTimer::writeCycleCount(QSqlDatabase& db, int count, QString* error)
 {
     QSqlQuery query(db);
     query.prepare(QStringLiteral("UPDATE pomodoro_cycle_state SET completed_pomodoros=:count WHERE singleton_id=1"));
     query.bindValue(QStringLiteral(":count"), count);
-    return query.exec() && query.numRowsAffected() == 1;
+    if (!query.exec()) return storageFailure(error, query.lastError().text());
+    if (query.numRowsAffected() != 1) return storageFailure(error, QStringLiteral("番茄循环状态不存在"));
+    return true;
 }
 
 void FocusTimer::applyCycleCount(int count)
@@ -830,7 +865,7 @@ bool FocusTimer::hasActiveTimer() const
 
 bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion,
                                   bool durationWasCorrected,
-                                  int overshootSeconds)
+                                  int overshootSeconds, QString* error)
 {
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
@@ -839,13 +874,13 @@ bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion,
                    << "taskId=" << m_currentTaskId
                    << "duration=" << durationSeconds
                    << "startTime=" << m_startTime.toString(Qt::ISODate);
-        return false;
+        return storageFailure(error, QStringLiteral("数据库未打开"));
     }
 
     if (!db.transaction()) {
         qWarning() << "Failed to save focus session: could not begin transaction"
                    << db.lastError().text();
-        return false;
+        return storageFailure(error, QStringLiteral("无法开始数据库事务：%1").arg(db.lastError().text()));
     }
 
     // 保存单调时钟累计秒数，而不是墙钟时间差，这样暂停、系统改时钟和 GUI 卡顿都不会污染时长。
@@ -886,8 +921,9 @@ bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion,
                    << "duration=" << durationSeconds
                    << "startTime=" << m_startTime.toString(Qt::ISODate)
                    << "endTime=" << endTime.toString(Qt::ISODate);
+        const QString reason = query.lastError().text();
         db.rollback();
-        return false;
+        return storageFailure(error, reason);
     }
 
     if (query.numRowsAffected() == 0) {
@@ -896,24 +932,26 @@ bool FocusTimer::saveFocusSession(int durationSeconds, bool naturalCompletion,
                    << "taskId=" << m_currentTaskId
                    << "duration=" << durationSeconds;
         db.rollback();
-        return false;
+        return storageFailure(error, QStringLiteral("专注记录不存在或已被删除"));
     }
 
     const qint64 nextCount = m_resetCycleOnStop ? 0
         : qint64(m_completedPomodoros) + (completedPomodoro ? 1 : 0);
     if (nextCount > std::numeric_limits<int>::max()
-        || !writeCycleCount(db, int(nextCount)) || !clearActiveState(db) || !db.commit()) {
+        || !writeCycleCount(db, int(nextCount), error) || !clearActiveState(db, error) || !db.commit()) {
         qWarning() << "Failed to finish focus session transaction:" << db.lastError().text()
                    << "sessionId=" << m_sessionId;
+        const QString reason = nextCount > std::numeric_limits<int>::max() ? QStringLiteral("番茄循环计数超出上限")
+            : error && !error->isEmpty() ? *error : db.lastError().text();
         db.rollback();
-        return false;
+        return storageFailure(error, reason);
     }
 
     applyCycleCount(int(nextCount));
     return true;
 }
 
-bool FocusTimer::discardFocusSession()
+bool FocusTimer::discardFocusSession(QString* error)
 {
     if (m_cycleNotificationInProgress) return false;
     QSqlDatabase db = DatabaseManager::instance()->database();
@@ -921,13 +959,13 @@ bool FocusTimer::discardFocusSession()
         qWarning() << "Failed to discard invalid focus session: database is not open"
                    << "sessionId=" << m_sessionId
                    << "taskId=" << m_currentTaskId;
-        return false;
+        return storageFailure(error, QStringLiteral("数据库未打开"));
     }
 
     if (!db.transaction()) {
         qWarning() << "Failed to discard invalid focus session: could not begin transaction"
                    << db.lastError().text();
-        return false;
+        return storageFailure(error, QStringLiteral("无法开始数据库事务：%1").arg(db.lastError().text()));
     }
 
     QSqlQuery query(db);
@@ -938,8 +976,9 @@ bool FocusTimer::discardFocusSession()
         qWarning() << "Failed to discard invalid focus session:" << query.lastError().text()
                    << "sessionId=" << m_sessionId
                    << "taskId=" << m_currentTaskId;
+        const QString reason = query.lastError().text();
         db.rollback();
-        return false;
+        return storageFailure(error, reason);
     }
 
     if (query.numRowsAffected() == 0) {
@@ -947,32 +986,33 @@ bool FocusTimer::discardFocusSession()
                    << "sessionId=" << m_sessionId
                    << "taskId=" << m_currentTaskId;
         db.rollback();
-        return false;
+        return storageFailure(error, QStringLiteral("专注记录不存在或已被删除"));
     }
 
-    if ((m_resetCycleOnStop && !writeCycleCount(db, 0)) || !clearActiveState(db) || !db.commit()) {
+    if ((m_resetCycleOnStop && !writeCycleCount(db, 0, error)) || !clearActiveState(db, error) || !db.commit()) {
         qWarning() << "Failed to discard focus session transaction:" << db.lastError().text()
                    << "sessionId=" << m_sessionId;
+        const QString reason = error && !error->isEmpty() ? *error : db.lastError().text();
         db.rollback();
-        return false;
+        return storageFailure(error, reason);
     }
 
     if (m_resetCycleOnStop) applyCycleCount(0);
     return true;
 }
 
-bool FocusTimer::persistActiveState()
+bool FocusTimer::persistActiveState(QString* error)
 {
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to persist active focus state: database is not open";
-        return false;
+        return storageFailure(error, QStringLiteral("数据库未打开"));
     }
 
-    return writeActiveState(db);
+    return writeActiveState(db, error);
 }
 
-bool FocusTimer::writeActiveState(QSqlDatabase& db)
+bool FocusTimer::writeActiveState(QSqlDatabase& db, QString* error)
 {
     QSqlQuery query(db);
     query.prepare(QStringLiteral(R"SQL(
@@ -1029,17 +1069,17 @@ bool FocusTimer::writeActiveState(QSqlDatabase& db)
     if (!query.exec()) {
         qWarning() << "Failed to write active focus state:" << query.lastError().text()
                    << "sessionId=" << m_sessionId << "phase=" << m_phase;
-        return false;
+        return storageFailure(error, query.lastError().text());
     }
     return true;
 }
 
-bool FocusTimer::clearActiveState(QSqlDatabase& db)
+bool FocusTimer::clearActiveState(QSqlDatabase& db, QString* error)
 {
     QSqlQuery query(db);
     if (!query.exec(QStringLiteral("DELETE FROM active_focus_state WHERE singleton_id = 1"))) {
         qWarning() << "Failed to clear active focus state:" << query.lastError().text();
-        return false;
+        return storageFailure(error, query.lastError().text());
     }
     return true;
 }

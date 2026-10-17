@@ -3,6 +3,17 @@ import Observation
 import XCTest
 
 @MainActor final class TrashBridgeTests: XCTestCase {
+    // 产品保证：进入废纸篓清理失败保留桥接具体原因，同时仍读取列表供用户处理。
+    func testPurgeFailureKeepsSpecificReasonAndReadsItems() {
+        let bridge = TrashBridgeFake(); bridge.result.items = [item(7)]
+        bridge.purgeError = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "清理过期废纸篓失败：T33 database is locked"])
+        let store = TrashStore(bridge: bridge); store.activate()
+        XCTAssertEqual(store.actionError, "清理过期废纸篓失败：T33 database is locked")
+        XCTAssertTrue(store.loaded); XCTAssertEqual(store.items.map(\.id), [7])
+        XCTAssertEqual(bridge.calls.map { $0.0 }, ["purge"])
+        XCTAssertEqual(bridge.readCount, 1)
+    }
+
     // 产品保证：清空确认时固定编号，确认期间新进废纸篓的记录不被误删。
     func testEmptyUsesIDsCapturedWhenConfirmationOpened() {
         let bridge = TrashBridgeFake(); bridge.result.items = [item(4), item(9)]

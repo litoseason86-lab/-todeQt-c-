@@ -2,6 +2,7 @@
 #include "PTBridgeSupport.h"
 #include "../../../services/TrashService.h"
 #include <memory>
+#include <QScopedValueRollback>
 #include <cmath>
 #include <limits>
 using namespace PTBridgeSupport;
@@ -102,10 +103,42 @@ static NSError *trashError(NSString *message) { return [NSError errorWithDomain:
 }
 @end
 
-@implementation PTTrashBridge { std::unique_ptr<QObject> _connections; }
-- (instancetype)init { NSAssert(NSThread.isMainThread, @"废纸篓桥接只能在主线程创建"); if ((self = [super init])) { _connections = std::make_unique<QObject>(); __weak PTTrashBridge *weakSelf = self; QObject::connect(TrashService::instance(), &TrashService::trashChanged, _connections.get(), [weakSelf] { PTTrashBridge *b = weakSelf; if (b.onChanged) b.onChanged(); }); } return self; }
+@implementation PTTrashBridge {
+    std::unique_ptr<QObject> _connections;
+    FailureCollector _failures;
+    bool _purgingExpired;
+}
+- (instancetype)init {
+    NSAssert(NSThread.isMainThread, @"废纸篓桥接只能在主线程创建");
+    if ((self = [super init])) {
+        _purgingExpired = false;
+        _connections = std::make_unique<QObject>();
+        __weak PTTrashBridge* weakSelf = self;
+        auto* service = TrashService::instance();
+        QObject::connect(service, &TrashService::trashChanged, _connections.get(), [weakSelf] {
+            PTTrashBridge* b = weakSelf; if (b.onChanged) b.onChanged();
+        });
+        // 启动和跨日清理沿用静默维护；只有桥接同步调用期间收集原因，不给外壳增加后台提示。
+        QObject::connect(service, &TrashService::operationFailed, _connections.get(), [weakSelf](const QString& reason) {
+            PTTrashBridge* b = weakSelf;
+            if (b && b->_purgingExpired) b->_failures.collect(reason);
+        });
+    }
+    return self;
+}
 - (PTTrashReadResult *)readItems { NSAssert(NSThread.isMainThread, @"废纸篓读取必须在主线程"); return [[PTTrashReadResult alloc] initWithMap:TrashService::instance()->readItems()]; }
-- (NSInteger)purgeExpired:(NSError **)error { NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用"); const int count = TrashService::instance()->purgeExpired(); if (count < 0) { if (error) *error = trashError(@"清理过期废纸篓项目失败"); return -1; } return count; }
+- (NSInteger)purgeExpired:(NSError **)error {
+    NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用");
+    // 只认领本桥接显式发起的清理；其它桥接栈内的自动维护也必须保持静默。
+    QScopedValueRollback<bool> purging(_purgingExpired, true);
+    FailureCollector::Call call(_failures);
+    const int count = TrashService::instance()->purgeExpired();
+    if (count < 0) {
+        const QString reason = call.error();
+        fail(error, reason.isEmpty() ? QStringLiteral("清理过期废纸篓失败，请重试") : reason);
+    }
+    return count;
+}
 - (PTTrashActionValue *)restoreItem:(NSInteger)trashId error:(NSError **)error
 {
     NSAssert(NSThread.isMainThread, @"桥接只能在主线程调用");

@@ -71,6 +71,8 @@ private slots:
     void expiredRowsAreHiddenAndFutureDeletionTimesAreClamped();
     void deleteItemAndEmptyTrashRemoveRows();
     void emptyTrashRemovesOnlyTheItemsItWasGiven();
+    void purgeFailureCarriesReasonAndRollsBack_data();
+    void purgeFailureCarriesReasonAndRollsBack();
     void retentionKeepsDay29AndPurgesDay30();
     void retentionFollowsTheLogicalDayBoundary();
     void readItemsFailsLoudlyWhenDatabaseIsClosed();
@@ -1498,6 +1500,47 @@ void TrashServiceTests::brokenTrashSchemaIsRejected()
     QVERIFY(exec(QStringLiteral("CREATE TABLE trash_items (%1)").arg(definition)));
     QVERIFY(!DatabaseManager::trashSchemaIsValid(db()));
     QVERIFY(!DatabaseManager::instance()->createTables());
+}
+
+
+// 产品保证：过期清理失败必须报告具体原因，整批回滚且不发内容已变化的通知。
+void TrashServiceTests::purgeFailureCarriesReasonAndRollsBack_data()
+{
+    QTest::addColumn<QString>("fault"); QTest::addColumn<QString>("reason");
+    QTest::newRow("closed") << QStringLiteral("closed") << QStringLiteral("未打开");
+    QTest::newRow("transaction") << QStringLiteral("transaction") << QStringLiteral("事务");
+    QTest::newRow("read") << QStringLiteral("read") << QStringLiteral("no such table");
+    QTest::newRow("second-delete") << QStringLiteral("delete") << QStringLiteral("T33 purge blocked");
+    QTest::newRow("commit") << QStringLiteral("commit") << QStringLiteral("FOREIGN KEY");
+}
+
+// 产品保证：清理在任一步失败都只报一次动作与原因，前面已经删除的行也必须恢复。
+void TrashServiceTests::purgeFailureCarriesReasonAndRollsBack()
+{
+    QFETCH(QString, fault); QFETCH(QString, reason);
+    auto* service = TrashService::instance();
+    service->setNowForTesting(QDateTime(QDate(2026, 10, 18), QTime(12, 0)));
+    const QString expired = utcText(QDateTime(QDate(2026, 8, 1), QTime(12, 0)));
+    const int first = insertTrashRow("task", "t33-first", "先删后回滚", "{}", expired);
+    const int second = insertTrashRow("task", "t33-second", "阻断后续", "{}", expired);
+    QVERIFY(first > 0); QVERIFY(second > first); QCOMPARE(count("SELECT COUNT(*) FROM trash_items"), 2);
+    if (fault == "transaction") QVERIFY(db().transaction());
+    if (fault == "read") QVERIFY(exec("ALTER TABLE trash_items RENAME TO t33_saved_trash"));
+    if (fault == "delete") QVERIFY(exec(QStringLiteral("CREATE TEMP TRIGGER t33_purge BEFORE DELETE ON trash_items WHEN OLD.id = %1 BEGIN SELECT RAISE(ABORT, 'T33 purge blocked'); END").arg(second)));
+    if (fault == "commit") {
+        // 延迟外键让删除语句先成功、COMMIT 才失败，不能只覆盖删除前就被拒绝的情况。
+        QVERIFY(exec("CREATE TABLE t33_deferred(parent INTEGER REFERENCES tasks(id) DEFERRABLE INITIALLY DEFERRED)"));
+        QVERIFY(exec("CREATE TEMP TRIGGER t33_purge AFTER DELETE ON trash_items BEGIN INSERT INTO t33_deferred VALUES(-999); END"));
+    }
+    if (fault == "closed") DatabaseManager::instance()->close();
+    QSignalSpy failed(service, SIGNAL(operationFailed(QString)));
+    QSignalSpy changed(service, &TrashService::trashChanged);
+    QCOMPARE(service->purgeExpired(), -1); QCOMPARE(failed.count(), 1);
+    const QString message = failed.first().first().toString();
+    QVERIFY2(message.contains(QStringLiteral("清理过期废纸篓失败")), qPrintable(message));
+    QVERIFY2(message.contains(reason), qPrintable(message)); QCOMPARE(changed.count(), 0);
+    if (fault != "closed") QCOMPARE(count(fault == "read" ? "SELECT COUNT(*) FROM t33_saved_trash" : "SELECT COUNT(*) FROM trash_items"), 2);
+    if (fault == "transaction") QVERIFY(db().rollback());
 }
 
 QTEST_GUILESS_MAIN(TrashServiceTests)

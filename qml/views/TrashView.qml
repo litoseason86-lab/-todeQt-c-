@@ -28,6 +28,8 @@ Item {
     // 读取失败与操作失败分开存：只有读取失败带「重试」，重试只会重读，补不上没做成的恢复或删除。
     property string loadError: ""
     property string actionError: ""
+    // 只认领进页面时的手动清理，启动/跨日自动维护失败沿用静默语义。
+    property bool purgingExpired: false
     readonly property var groups: TrashFormat.groupItems(root.items, root.today)
     readonly property bool hasItems: root.items.length > 0
     readonly property int controlHeight: root.touchUi ? 44 : Theme.controlHeightMd
@@ -69,9 +71,19 @@ Item {
         root.actionError = ""
         var svc = root.service()
         if (svc && typeof svc.purgeExpired === "function") {
-            svc.purgeExpired()
+            root.purgingExpired = true
+            try { svc.purgeExpired() }
+            finally { root.purgingExpired = false }
         }
         root.reload()
+    }
+
+    Connections {
+        target: root.trashServiceRef
+        ignoreUnknownSignals: true
+        function onOperationFailed(message) {
+            if (root.purgingExpired) root.actionError = String(message || "清理过期废纸篓失败")
+        }
     }
 
     // 另一台刚恢复或删掉这一项时，服务给 code "gone"（文案是「已经不在废纸篓里了」）：

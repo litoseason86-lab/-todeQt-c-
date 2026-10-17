@@ -49,6 +49,8 @@ private slots:
     void actionRejectionKeepsSpecificReason_data();
     void actionRejectionKeepsSpecificReason();
     void partialGapFailureIsClaimedByReturnedSummary();
+    void focusActionReasonsAreClaimed_data();
+    void focusActionReasonsAreClaimed();
     void initTestCase();
     void init();
     void cleanup();
@@ -203,7 +205,7 @@ void PTFocusBridgeTests::candidateCreationAndTaskCompletion() {
         QVERIFY([b startFree:m_task title:@"甲" error:&error]); m_clock.advance(180);
         QVERIFY(q.exec("CREATE TRIGGER reject_stop BEFORE UPDATE ON focus_sessions BEGIN SELECT RAISE(ABORT, '失败'); END"));
         completed = [b handleTaskCompleted:m_task]; QVERIFY([completed.focusResult isEqualToString:@"failed"]);
-        QVERIFY([completed.error isEqualToString:@"专注保存失败，请重试"]);
+        QVERIFY([completed.error containsString:@"结束专注失败：失败"]);
     }
 }
 // 产品保证：页面实际使用的计时动作能把参数或服务状态原因交给 Swift。
@@ -253,9 +255,10 @@ void PTFocusBridgeTests::failuresAndMissingController() {
         QVERIFY(![b startFree:123456 title:@"不存在" error:&error]); QVERIFY(error != nil); QCOMPARE(background, 0); error = nil;
         QVERIFY([b startFree:m_task title:@"甲" error:&error]); m_clock.advance(180);
         QSqlQuery q(DatabaseManager::instance()->database()); QVERIFY(q.exec("CREATE TRIGGER reject_stop BEFORE UPDATE ON focus_sessions BEGIN SELECT RAISE(ABORT, '失败'); END"));
-        PTFocusEndResult *end = b.endCurrent; QVERIFY(end.valid); QVERIFY([end.result isEqualToString:@"failed"]); QVERIFY([end.error isEqualToString:@"专注保存失败，请重试"]); QCOMPARE(background, 0);
-        QVERIFY([[b stopForSwitch:b.captureSwitchSource error:&error] isEqualToString:@"stopFailed"]);
-        PTFocusFinishResult *finish = [b finishLongFree:YES correctedSeconds:180]; QVERIFY(!finish.ok); QVERIFY([finish.error isEqualToString:@"专注保存失败，请重试"]);
+        PTFocusEndResult *end = b.endCurrent; QVERIFY(end.valid); QVERIFY([end.result isEqualToString:@"failed"]); QVERIFY([end.error containsString:@"结束专注失败：失败"]); QCOMPARE(background, 0);
+        QVERIFY([b stopForSwitch:b.captureSwitchSource error:&error] == nil);
+        QVERIFY([error.localizedDescription containsString:@"结束专注失败：失败"]); error = nil;
+        PTFocusFinishResult *finish = [b finishLongFree:YES correctedSeconds:180]; QVERIFY(!finish.ok); QVERIFY([finish.error containsString:@"结束专注失败：失败"]);
         QVERIFY(q.exec("DROP TRIGGER reject_stop"));
         QVERIFY(q.exec("CREATE TRIGGER reject_discard BEFORE DELETE ON focus_sessions BEGIN SELECT RAISE(ABORT, '失败'); END"));
         finish = [b finishLongFree:NO correctedSeconds:0]; QVERIFY(!finish.ok); QVERIFY([finish.error isEqualToString:@"专注丢弃失败，请重试"]);
@@ -415,6 +418,42 @@ void PTFocusBridgeTests::partialGapFailureIsClaimedByReturnedSummary()
         QVERIFY(result.reason.length > 0);
         QVERIFY(failuresSpy.count() > 0);
         QCOMPARE(unclaimed, 0);
+    }
+}
+
+
+// 产品保证：专注启动、停表和新建失败时，调用方拿到具体原因，旁观桥接和外壳不重复收到。
+void PTFocusBridgeTests::focusActionReasonsAreClaimed_data()
+{
+    QTest::addColumn<QString>("action");
+    for (const QString& action : QStringList{"free", "pomodoro", "break", "switch", "create", "blank"})
+        QTest::newRow(qPrintable(action)) << action;
+}
+
+// 产品保证：当前失败只归本次调用，失败计时不结束，新建失败不留下任务。
+void PTFocusBridgeTests::focusActionReasonsAreClaimed()
+{
+    @autoreleasepool {
+        QFETCH(QString, action);
+        PTFocusBridge* bridge = [PTFocusBridge new]; PTFocusBridge* observer = [PTFocusBridge new];
+        __block int ownerFailures = 0, observerFailures = 0;
+        bridge.onFailure = ^(NSString*) { ++ownerFailures; }; observer.onFailure = ^(NSString*) { ++observerFailures; };
+        QObject shell; int shellFailures = 0;
+        PTBridgeSupport::registerUnclaimedFailureHandler(&shell, [&](const QString&) { ++shellFailures; });
+        const auto cleanup = qScopeGuard([&] { PTBridgeSupport::unregisterUnclaimedFailureHandler(&shell); });
+        if (action == "switch") { QVERIFY(FocusTimer::instance()->startFocus(m_task, "桥接甲")); m_clock.advance(240); }
+        if (action != "blank") DatabaseManager::instance()->close();
+        NSError* error = nil;
+        if (action == "free") QVERIFY(![bridge startFree:m_task title:@"桥接甲" error:&error]);
+        else if (action == "pomodoro") QVERIFY(![bridge startPomodoro:m_task title:@"桥接甲" seconds:1500 error:&error]);
+        else if (action == "break") QVERIFY(![bridge startBreak:300 taskId:m_task title:@"桥接甲" error:&error]);
+        else if (action == "switch") {
+            QVERIFY([bridge stopForSwitch:bridge.captureSwitchSource error:&error] == nil);
+            QVERIFY(FocusTimer::instance()->hasActiveSession());
+        } else QCOMPARE([bridge createTodayTask:action == "blank" ? @"  " : @"新任务" error:&error], NSInteger(-1));
+        QVERIFY(error != nil);
+        QVERIFY2([error.localizedDescription containsString:action == "blank" ? @"标题" : @"数据库未打开"], error.localizedDescription.UTF8String);
+        QCOMPARE(ownerFailures, 0); QCOMPARE(observerFailures, 0); QCOMPARE(shellFailures, 0);
     }
 }
 

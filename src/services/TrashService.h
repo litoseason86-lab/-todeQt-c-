@@ -46,6 +46,8 @@ public:
 signals:
     // 废纸篓内容变了（放进、恢复、删除、清理、同步收到）。页面据此重读。
     void trashChanged();
+    // 过期清理失败：自动维护不弹提示，手动调用方认领本次同步原因。
+    void operationFailed(const QString& message);
 
 private:
     explicit TrashService(QObject* parent = nullptr);

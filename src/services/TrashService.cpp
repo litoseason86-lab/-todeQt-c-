@@ -648,15 +648,20 @@ QVariantMap TrashService::readItems() const
 
 int TrashService::purgeExpired()
 {
-    if (!DatabaseManager::instance()->isOpen()) {
+    // 自动维护沿用静默反馈；手动调用方在自己的同步调用期间认领这条失败信号。
+    const auto failed = [this](const QString& reason) {
+        emit operationFailed(QStringLiteral("清理过期废纸篓失败：%1").arg(reason));
         return -1;
+    };
+    if (!DatabaseManager::instance()->isOpen()) {
+        return failed(QStringLiteral("数据库未打开"));
     }
     QSqlDatabase db = DatabaseManager::instance()->database();
     // 到期按逻辑日在 C++ 里算（日界点是用户设置，SQL 里换算本地时区容易出错），先选出编号再一次性删除。
     // 选和删放在同一事务里，两步之间没有别的写入插进来。
     if (!db.transaction()) {
         qWarning() << "Failed to start trash purge:" << db.lastError().text();
-        return -1;
+        return failed(QStringLiteral("无法开始数据库事务：%1").arg(db.lastError().text()));
     }
     const int dayStartHour = AppSettings::instance()->dayStartHour();
     const QDate today = LogicalDay::dateOf(now().toLocalTime(), dayStartHour);
@@ -668,7 +673,7 @@ int TrashService::purgeExpired()
             query.finish();
             db.rollback();
             qWarning() << "Failed to read trash for purge:" << reason;
-            return -1;
+            return failed(reason);
         }
         while (query.next()) {
             const QDateTime deletedAt = QDateTime::fromString(query.value(1).toString(), Qt::ISODateWithMs);
@@ -690,13 +695,14 @@ int TrashService::purgeExpired()
             remove.finish();
             db.rollback();
             qWarning() << "Failed to purge trash item:" << reason;
-            return -1;
+            return failed(reason);
         }
     }
     if (!db.commit()) {
-        qWarning() << "Failed to commit trash purge:" << db.lastError().text();
+        const QString reason = db.lastError().text();
+        qWarning() << "Failed to commit trash purge:" << reason;
         db.rollback();
-        return -1;
+        return failed(reason);
     }
     if (!expired.isEmpty()) {
         emit trashChanged();
