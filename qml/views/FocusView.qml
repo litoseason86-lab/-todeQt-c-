@@ -838,17 +838,14 @@ Item {
     function togglePause() {
         if (!root.timer) {
             root.errorText = "专注恢复失败"
-            return
+            return false
         }
-        if (root.timer.isRunning) {
-            root.timer.pauseFocus()
-            return
-        }
-        if (!root.timer.resumeFocus()) {
-            root.errorText = "专注恢复失败"
-        } else {
-            root.errorText = ""
-        }
+        // 服务同步发出的具体原因由外壳提示条显示；页面不再叠加通用错误，只向调用方返回结果。
+        var succeeded = root.timer.isRunning ? root.timer.pauseFocus() : root.timer.resumeFocus()
+        if (!succeeded)
+            return false
+        root.errorText = ""
+        return true
     }
 
     // 控制器没接上时的退化结果：当作结束失败，计时保持原样。

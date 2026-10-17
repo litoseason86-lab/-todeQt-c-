@@ -402,6 +402,8 @@ bool FocusTimer::startFocusSession(int taskId, const QString& taskTitle, TimerMo
 
 bool FocusTimer::pauseFocus()
 {
+    // 主线程同步结算中用户操作不可达，这里只静默拦截通知回调重入；发失败信号会经
+    // Mac 的 showToast 提交待删，再由 taskDeleted → handleTaskDeleted 回来修改计时状态。
     if (m_cycleNotificationInProgress) return false;
     if (!m_isRunning) {
         return true;
@@ -436,6 +438,8 @@ bool FocusTimer::pauseFocus()
 
 bool FocusTimer::resumeFocus()
 {
+    // 主线程同步结算中用户操作不可达，这里只静默拦截通知回调重入；发失败信号会经
+    // Mac 的 showToast 提交待删，再由 taskDeleted → handleTaskDeleted 回来修改计时状态。
     if (m_cycleNotificationInProgress) return false;
     const bool canResumeBreak = m_mode == PomodoroMode && m_phase == BreakPhase;
     const bool canResumeManualRest = m_mode == ManualRestMode && m_phase == ManualRestPhase;

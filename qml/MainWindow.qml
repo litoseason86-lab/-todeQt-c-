@@ -433,7 +433,9 @@ Item {
             return
         }
         if (root.focusTimerRef.hasActiveSession || root.focusTimerRef.phase !== 0) {
-            focusView.togglePause()
+            // 失败原因已由服务同步交给提示条，不能再按未变化的状态覆盖成成功提示。
+            if (!focusView.togglePause())
+                return
             // togglePause 是同步的，这里读到的已经是切换之后的状态。
             var manualRest = root.isManualRestActive()
             root.showToast(root.focusTimerRef.isRunning

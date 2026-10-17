@@ -96,6 +96,9 @@ TestCase {
         // 服务端对已删除任务会插入 0 行而失败；用例按需置假模拟。
         property bool startFocusSucceeds: true
         property int pauseFocusCalls: 0
+        property int resumeFocusCalls: 0
+        property bool pauseSucceeds: true
+        property bool resumeSucceeds: true
         property int stopFocusCalls: 0
         property int startPomodoroCalls: 0
         property int startFocusCalls: 0
@@ -107,6 +110,7 @@ TestCase {
         signal phaseCompleted(int phase)
         signal sessionDiscarded(int duration)
         signal taskAutoCompleteFailed(int taskId)
+        signal operationFailed(string message)
 
         function startFocus(id, title) {
             startFocusCalls += 1
@@ -135,8 +139,25 @@ TestCase {
         function startBreak(breakSeconds) { return true }
         function startBreakForTask(breakSeconds, taskId, title) { return true }
         function resetPomodoroCount() { completedPomodoros = 0 }
-        function pauseFocus() { pauseFocusCalls += 1 }
-        function resumeFocus() { return true }
+        // 真实服务在返回 false 前同步报原因；替身必须保留这个时序，才能检出快捷键覆盖原因。
+        function pauseFocus() {
+            pauseFocusCalls += 1
+            if (!pauseSucceeds) {
+                operationFailed("暂停没有保存成功，计时仍在继续，请重试")
+                return false
+            }
+            isRunning = false
+            return true
+        }
+        function resumeFocus() {
+            resumeFocusCalls += 1
+            if (!resumeSucceeds) {
+                operationFailed("继续没有保存成功，请重试")
+                return false
+            }
+            isRunning = true
+            return true
+        }
 
         function stopFocus() {
             stopFocusCalls += 1
@@ -627,6 +648,17 @@ TestCase {
         signalName: "windowActivationRequested"
     }
 
+    SignalSpy {
+        id: timerFailureSpy
+        target: focusTimer
+        signalName: "operationFailed"
+    }
+
+    SignalSpy {
+        id: toastMessageSpy
+        signalName: "textChanged"
+    }
+
     function init() {
         // 上一用例可能刚触发切页动画，先等它收尾再重置状态，防止延迟 ScriptAction 串入下一用例。
         tryCompare(mainWindow, "isSwitching", false, 2000)
@@ -680,6 +712,9 @@ TestCase {
         taskManager.lastSetCompletedValue = undefined
         focusTimer.startFocusSucceeds = true
         focusTimer.pauseFocusCalls = 0
+        focusTimer.resumeFocusCalls = 0
+        focusTimer.pauseSucceeds = true
+        focusTimer.resumeSucceeds = true
         focusTimer.stopFocusCalls = 0
         focusTimer.startPomodoroCalls = 0
         focusTimer.lastWorkSeconds = 0
@@ -1717,6 +1752,123 @@ TestCase {
 
         // 没有开出第二段会话。
         tryCompare(focusTimer, "startFocusCalls", 1)
+    }
+
+    // 反馈用例沿用真实 MainWindow／FocusView／Toast，只替换服务；先置不同文案，才能数出原因被覆盖。
+    function preparePauseResumeFeedback(running, manualRest) {
+        mainWindow.currentView = "focus"
+        focusTimer.mode = manualRest ? 2 : 1
+        focusTimer.phase = manualRest ? 3 : 1
+        focusTimer.hasActiveSession = !manualRest
+        focusTimer.currentTaskId = 91
+        focusTimer.currentTaskTitle = "反馈测试任务"
+        focusTimer.isRunning = running
+        var view = focusPage()
+        tryCompare(view, "state", manualRest ? "manualRest" : "pomoWork", 3000)
+        view.errorText = ""
+        compare(pendingDeletion.active, false)
+        var label = findChild(mainWindow, "toastText")
+        verify(label)
+        toastMessageSpy.target = label
+        verify(toastMessageSpy.valid)
+        verify(timerFailureSpy.valid)
+        mainWindow.showToast("暂停／继续反馈的前置提示")
+        compare(label.text, "暂停／继续反馈的前置提示")
+        toastMessageSpy.clear()
+        timerFailureSpy.clear()
+        return view
+    }
+
+    // 产品保证：专注页暂停和继续失败都只显示服务原因，不叠加页内通用错误。
+    function test_focusPauseResumeFailureHasSingleReason_data() {
+        return [
+            { tag: "pause", running: true, reason: "暂停没有保存成功，计时仍在继续，请重试" },
+            { tag: "resume", running: false, reason: "继续没有保存成功，请重试" }
+        ]
+    }
+
+    // 产品保证：专注页失败原样保留计时状态，并以 false 返回给调用方，避免调用方误报成功。
+    function test_focusPauseResumeFailureHasSingleReason(data) {
+        var view = preparePauseResumeFeedback(data.running, false)
+        compare(focusTimer.isRunning, data.running)
+        focusTimer.pauseSucceeds = false
+        focusTimer.resumeSucceeds = false
+
+        var succeeded = view.togglePause()
+
+        compare(timerFailureSpy.count, 1)
+        compare(timerFailureSpy.signalArguments[0][0], data.reason)
+        compare(toastText(), data.reason)
+        compare(toastMessageSpy.count, 1)
+        compare(view.errorText, "")
+        compare(focusTimer.isRunning, data.running)
+        compare(focusTimer.pauseFocusCalls, data.running ? 1 : 0)
+        compare(focusTimer.resumeFocusCalls, data.running ? 0 : 1)
+        compare(succeeded, false)
+    }
+
+    // 产品保证：应用内与全局快捷键在专注、休息两种计时中都按暂停／继续的真实结果反馈。
+    function test_shortcutPauseResumeFailureKeepsReasonAndRetrySucceeds_data() {
+        return [
+            { tag: "pause-focus", running: true, manualRest: false, actionId: "focus.toggle",
+                reason: "暂停没有保存成功，计时仍在继续，请重试", success: "已暂停专注" },
+            { tag: "resume-focus", running: false, manualRest: false, actionId: "global.focusToggle",
+                reason: "继续没有保存成功，请重试", success: "已继续专注" },
+            { tag: "pause-rest", running: true, manualRest: true, actionId: "global.focusToggle",
+                reason: "暂停没有保存成功，计时仍在继续，请重试", success: "已暂停休息" },
+            { tag: "resume-rest", running: false, manualRest: true, actionId: "focus.toggle",
+                reason: "继续没有保存成功，请重试", success: "已继续休息" }
+        ]
+    }
+
+    // 产品保证：快捷键失败保留一次具体原因，修好后重试才提示成功并清掉旧的页内错误。
+    function test_shortcutPauseResumeFailureKeepsReasonAndRetrySucceeds(data) {
+        var view = preparePauseResumeFeedback(data.running, data.manualRest)
+        compare(focusTimer.isRunning, data.running)
+        focusTimer.pauseSucceeds = false
+        focusTimer.resumeSucceeds = false
+
+        mainWindow.triggerShortcutAction(data.actionId)
+
+        compare(timerFailureSpy.count, 1)
+        compare(timerFailureSpy.signalArguments[0][0], data.reason)
+        compare(toastText(), data.reason)
+        compare(toastMessageSpy.count, 1)
+        compare(view.errorText, "")
+        compare(focusTimer.isRunning, data.running)
+
+        focusTimer.pauseSucceeds = true
+        focusTimer.resumeSucceeds = true
+        view.errorText = "上次操作留下的错误"
+        toastMessageSpy.clear()
+
+        mainWindow.triggerShortcutAction(data.actionId)
+
+        compare(timerFailureSpy.count, 1)
+        compare(toastText(), data.success)
+        compare(toastMessageSpy.count, 1)
+        compare(view.errorText, "")
+        compare(focusTimer.isRunning, !data.running)
+        compare(focusTimer.pauseFocusCalls, data.running ? 2 : 0)
+        compare(focusTimer.resumeFocusCalls, data.running ? 0 : 2)
+    }
+
+    // 产品保证：计时服务缺失时专注页仍有就地错误，并返回失败，不假定全局一定能收到原因。
+    function test_togglePauseWithoutTimerKeepsPageError() {
+        var view = preparePauseResumeFeedback(false, false)
+        try {
+            view.timer = null
+            compare(view.timer, null)
+
+            compare(view.togglePause(), false)
+
+            compare(view.errorText, "专注恢复失败")
+            compare(timerFailureSpy.count, 0)
+            compare(toastMessageSpy.count, 0)
+        } finally {
+            // 只撤掉本页服务，不影响仪表盘；断言失败也恢复原装配绑定，避免影响后续换库与计时。
+            view.timer = Qt.binding(function () { return mainWindow.focusTimerRef })
+        }
     }
 
     // —— 记一笔的键盘入口 ——
