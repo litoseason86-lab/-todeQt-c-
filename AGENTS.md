@@ -85,9 +85,9 @@
 | 情况 | 先读 |
 | --- | --- |
 | 构建、部署、iOS 签名与装机、排错 | `docs/运行命令.md` |
-| 改 iPad 原生界面 | `docs/业务规则.md`「iPad 原生界面」 |
+| 改 iPad 原生界面 | `docs/iPad原生界面规则.md` |
 | 改某个功能的业务行为 | `docs/业务规则.md` 对应章节 |
-| 改数据库结构、备份恢复、设备同步、外部 AI 接入 | `docs/业务规则.md`「数据安全与跨层交互」「设备间同步」「外部 AI 接入」 |
+| 改数据库结构、备份恢复、设备同步、外部 AI 接入 | `docs/数据安全与同步规则.md` |
 | 写或跑 Qt Quick Test、做变异验证 | `.agents/skills/qt-qml-test/SKILL.md`；本项目的坑见同目录 `references/project-pitfalls.md` |
 | 写计划 | `plans/README.md`；文件名 `plans/<三位编号>-<标题>.md`，开工时登记到「进行中的计划」 |
 | 用户要求审查 / 调查性能 | `qt-qml-review`、`qt-cpp-review` / `qt-qml-profiler`（只在这两种情况下用） |
