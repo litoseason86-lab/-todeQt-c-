@@ -19,6 +19,10 @@ class PendingDeletionTests : public QObject
     Q_OBJECT
 
 private slots:
+    void deletionFailureKeepsSpecificReasonAndData_data();
+    void deletionFailureKeepsSpecificReasonAndData();
+    void pendingFailureCarriesTitleAndReason_data();
+    void pendingFailureCarriesTitleAndReason();
     void init();
     void cleanup();
 
@@ -581,6 +585,113 @@ void PendingDeletionTests::secondRequestDuringSuspensionCommitsFirstAndHoldsSeco
     pending.cancel();
     QCOMPARE(rowCount(QStringLiteral("tasks"), second), 1);
     QVERIFY(!pending.active());
+}
+
+
+// 产品保证：任务、专注和休息删除的每个拒绝出口都保留具体原因，失败不改变记录与废纸篓。
+void PendingDeletionTests::deletionFailureKeepsSpecificReasonAndData_data()
+{
+    QTest::addColumn<QString>("kind"); QTest::addColumn<QString>("fault"); QTest::addColumn<QString>("reason");
+    for (const QString& kind : QStringList{"task", "focus", "rest"}) {
+        for (const QString& fault : QStringList{"closed", "transaction", "read", "trash", "delete", "ignored", "commit", "missing", "success"}) {
+            const QString reason = fault == "closed" ? QStringLiteral("数据库未打开")
+                : fault == "transaction" ? QStringLiteral("事务")
+                : fault == "read" ? QStringLiteral("Parameter count mismatch")
+                : fault == "commit" ? QStringLiteral("FOREIGN KEY")
+                : fault == "missing" || fault == "ignored" ? QStringLiteral("不存在") : QStringLiteral("T33-2 blocked");
+            QTest::newRow(qPrintable(kind + '-' + fault)) << kind << fault << reason;
+        }
+        if (kind == "task") {
+            QTest::newRow("task-invalid") << kind << QStringLiteral("invalid") << QStringLiteral("编号无效");
+            QTest::newRow("task-detach") << kind << QStringLiteral("detach") << QStringLiteral("T33-2 blocked");
+        } else if (kind == "focus") QTest::newRow(qPrintable(kind + "-active")) << kind << QStringLiteral("active") << QStringLiteral("正在进行中");
+    }
+}
+
+// 产品保证：删除失败只报告一次动作及原始原因，事务里已经写入的废纸篓也回滚，成功不误报。
+void PendingDeletionTests::deletionFailureKeepsSpecificReasonAndData()
+{
+    QFETCH(QString, kind); QFETCH(QString, fault); QFETCH(QString, reason);
+    const int task = makeTask(QStringLiteral("保留任务")); QVERIFY(task > 0);
+    const QString table = kind == "task" ? "tasks" : kind == "focus" ? "focus_sessions" : "rest_sessions";
+    const int record = kind == "task" ? task : kind == "focus" ? insertFocusSession() : insertRestSession();
+    QVERIFY(record > 0); QCOMPARE(rowCount(table, record), 1);
+    QSqlQuery query(db()); QVERIFY(query.exec("SELECT COUNT(*) FROM trash_items")); QVERIFY(query.next()); QCOMPARE(query.value(0).toInt(), 0); query.finish();
+    if (kind == "task") {
+        const int session = insertFocusSession(); QVERIFY(session > 0);
+        QVERIFY(query.exec(QStringLiteral("UPDATE focus_sessions SET task_id=%1 WHERE id=%2").arg(task).arg(session)));
+    }
+    if (fault == "active") QVERIFY(query.exec("UPDATE " + table + " SET end_time=NULL"));
+    if (fault == "read") QVERIFY(query.exec("ALTER TABLE " + table + " RENAME TO t33_source"));
+    if (fault == "trash") QVERIFY(query.exec("CREATE TEMP TRIGGER t33_failure BEFORE INSERT ON trash_items BEGIN SELECT RAISE(ABORT, 'T33-2 blocked'); END"));
+    if (fault == "detach") QVERIFY(query.exec("CREATE TEMP TRIGGER t33_failure BEFORE UPDATE OF task_id ON focus_sessions BEGIN SELECT RAISE(ABORT, 'T33-2 blocked'); END"));
+    if (fault == "delete" || fault == "ignored") QVERIFY(query.exec("CREATE TEMP TRIGGER t33_failure BEFORE DELETE ON " + table
+        + (fault == "delete" ? " BEGIN SELECT RAISE(ABORT, 'T33-2 blocked'); END" : " BEGIN SELECT RAISE(IGNORE); END")));
+    if (fault == "commit") {
+        // 延迟外键让写废纸篓和 DELETE 都先成功，只在提交拒绝，不能以提前失败冒充提交回滚覆盖。
+        QVERIFY(query.exec("CREATE TABLE t33_deferred(parent INTEGER REFERENCES tasks(id) DEFERRABLE INITIALLY DEFERRED)"));
+        QVERIFY(query.exec("CREATE TEMP TRIGGER t33_failure AFTER DELETE ON " + table + " BEGIN INSERT INTO t33_deferred VALUES(-999); END"));
+    }
+    if (fault == "transaction") QVERIFY(db().transaction());
+    if (fault == "closed") DatabaseManager::instance()->close();
+    QObject* service = kind == "task" ? static_cast<QObject*>(TaskManager::instance()) : static_cast<QObject*>(FocusHistoryService::instance());
+    QSignalSpy failed(service, SIGNAL(operationFailed(QString)));
+    QSignalSpy changed(service, kind == "task" ? SIGNAL(tasksChanged()) : SIGNAL(historyChanged()));
+    const int id = fault == "invalid" ? 0 : fault == "missing" ? record + 999 : record;
+    const bool ok = kind == "task" ? TaskManager::instance()->deleteTask(id)
+        : kind == "focus" ? FocusHistoryService::instance()->deleteSession(id) : FocusHistoryService::instance()->deleteRestSession(id);
+    QCOMPARE(ok, fault == "success"); QCOMPARE(failed.count(), ok ? 0 : 1); QCOMPARE(changed.count(), ok ? 1 : 0);
+    if (!ok) {
+        const QString message = failed.first().first().toString();
+        const QString action = kind == "task" ? QStringLiteral("删除任务失败：") : kind == "focus" ? QStringLiteral("删除专注记录失败：") : QStringLiteral("删除休息记录失败：");
+        QVERIFY2(message.startsWith(action), qPrintable(message)); QVERIFY2(message.contains(reason), qPrintable(message));
+        if (kind != "task") QCOMPARE(FocusHistoryService::instance()->lastError(), message);
+    } else if (kind != "task") QVERIFY(FocusHistoryService::instance()->lastError().isEmpty());
+    if (fault != "closed") {
+        QCOMPARE(rowCount(fault == "read" ? QStringLiteral("t33_source") : table, record), ok ? 0 : 1);
+        QVERIFY(query.exec("SELECT COUNT(*) FROM trash_items")); QVERIFY(query.next()); QCOMPARE(query.value(0).toInt(), ok ? 1 : 0); query.finish();
+        if (kind == "task" && !ok && fault != "read") {
+            QVERIFY(query.exec(QStringLiteral("SELECT COUNT(*) FROM focus_sessions WHERE task_id=%1").arg(task))); QVERIFY(query.next()); QCOMPARE(query.value(0).toInt(), 1); query.finish();
+        }
+    }
+    if (fault == "transaction") QVERIFY(db().rollback());
+}
+
+// 产品保证：手动提交与自动到期失败都只有一次带原标题和具体原因的提交失败，原记录回来。
+void PendingDeletionTests::pendingFailureCarriesTitleAndReason_data()
+{
+    QTest::addColumn<QString>("kind"); QTest::addColumn<bool>("automatic");
+    for (const QString& kind : QStringList{"task", "focus", "rest"})
+        for (bool automatic : {false, true}) QTest::newRow(qPrintable(kind + (automatic ? "-automatic" : "-manual"))) << kind << automatic;
+}
+
+// 产品保证：到期不重试坏提交，清空隐藏槽且保留数据；提交期间的底层原因不会串到后一次操作。
+void PendingDeletionTests::pendingFailureCarriesTitleAndReason()
+{
+    QFETCH(QString, kind); QFETCH(bool, automatic);
+    const int record = kind == "task" ? makeTask(QStringLiteral("原标题")) : kind == "focus" ? insertFocusSession() : insertRestSession();
+    const QString table = kind == "task" ? "tasks" : kind == "focus" ? "focus_sessions" : "rest_sessions";
+    QVERIFY(record > 0); QCOMPARE(rowCount(table, record), 1);
+    PendingDeletion pending(TaskManager::instance(), FocusHistoryService::instance()); pending.setDelayMs(1);
+    QSignalSpy failed(&pending, &PendingDeletion::commitFailed); QSignalSpy retired(&pending, &PendingDeletion::retired);
+    QVERIFY(kind == "task" ? pending.requestTask(record, "原标题") : pending.requestSession(record, "原标题", kind == "rest"));
+    QSqlQuery query(db()); QVERIFY(query.exec("CREATE TEMP TRIGGER t33_failure BEFORE DELETE ON " + table + " BEGIN SELECT RAISE(ABORT, 'T33-2 commit blocked'); END"));
+    if (automatic) QTRY_COMPARE(failed.count(), 1); else QVERIFY(!pending.commit());
+    QCOMPARE(failed.count(), 1); QCOMPARE(retired.count(), 1); QCOMPARE(failed.first().size(), 2);
+    QCOMPARE(failed.first().at(0).toString(), QStringLiteral("原标题"));
+    QVERIFY(failed.first().at(1).toString().contains("T33-2 commit blocked"));
+    QVERIFY(!pending.active()); QCOMPARE(rowCount(table, record), 1);
+    QVERIFY(query.exec("SELECT COUNT(*) FROM trash_items")); QVERIFY(query.next()); QCOMPARE(query.value(0).toInt(), 0); query.finish();
+    QVERIFY(pending.commit()); QCOMPARE(failed.count(), 1);
+    QVERIFY(query.exec("DROP TRIGGER t33_failure"));
+    QVERIFY(query.exec("CREATE TEMP TRIGGER t33_failure BEFORE DELETE ON " + table + " BEGIN SELECT RAISE(ABORT, 'T33-2 second failure'); END"));
+    QVERIFY(kind == "task" ? pending.requestTask(record, "再次尝试") : pending.requestSession(record, "再次尝试", kind == "rest"));
+    QVERIFY(!pending.commit()); QCOMPARE(failed.count(), 2);
+    QVERIFY(failed.last().at(1).toString().contains("T33-2 second failure"));
+    QVERIFY(!failed.last().at(1).toString().contains("T33-2 commit blocked"));
+    QVERIFY(query.exec("DROP TRIGGER t33_failure"));
+    QVERIFY(kind == "task" ? pending.requestTask(record, "重试") : pending.requestSession(record, "重试", kind == "rest"));
+    QVERIFY(pending.commit()); QCOMPARE(failed.count(), 2); QCOMPARE(rowCount(table, record), 0);
 }
 
 QTEST_GUILESS_MAIN(PendingDeletionTests)

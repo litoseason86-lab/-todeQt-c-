@@ -60,7 +60,7 @@ QDate normalizeDate(const QVariant& value)
 // 在调用方已开启的事务里删掉一条任务，失败时把日志文案写进 failure、不回滚（回滚由调用方统一做）。
 // 单条删除与批量删除共用这一份步骤：先把任务写进废纸篓，再解除专注记录关联——解除之后就查不到挂在它上面的
 // 专注记录了，恢复时没法接回。写废纸篓失败整体回滚，宁可删不掉，也不能删了却没进废纸篓。
-bool removeTaskInTransaction(QSqlDatabase& db, int taskId, QString* failure)
+bool removeTaskInTransaction(QSqlDatabase& db, int taskId, QString* failure, QString* reason = nullptr)
 {
     QString trashError;
     if (!TrashStore::captureTask(db, taskId, &trashError)) {
@@ -68,6 +68,9 @@ bool removeTaskInTransaction(QSqlDatabase& db, int taskId, QString* failure)
         *failure = trashError == TrashStore::kMissingRecord
             ? QStringLiteral("Failed to delete task: task not found %1").arg(taskId)
             : QStringLiteral("Failed to move task to trash: %1").arg(trashError);
+        // 单条删除需要可展示原因，批量调用继续保留原诊断与上报契约。
+        if (reason) *reason = trashError == TrashStore::kMissingRecord
+            ? QStringLiteral("任务不存在或已被删除") : QStringLiteral("写入废纸篓失败：%1").arg(trashError);
         return false;
     }
 
@@ -78,6 +81,7 @@ bool removeTaskInTransaction(QSqlDatabase& db, int taskId, QString* failure)
     if (!detachSessions.exec()) {
         *failure = QStringLiteral("Failed to detach focus sessions before deleting task: %1")
                        .arg(detachSessions.lastError().text());
+        if (reason) *reason = QStringLiteral("解除专注记录关联失败：%1").arg(detachSessions.lastError().text());
         return false;
     }
 
@@ -86,10 +90,12 @@ bool removeTaskInTransaction(QSqlDatabase& db, int taskId, QString* failure)
     deleteQuery.bindValue(QStringLiteral(":id"), taskId);
     if (!deleteQuery.exec()) {
         *failure = QStringLiteral("Failed to delete task: %1").arg(deleteQuery.lastError().text());
+        if (reason) *reason = QStringLiteral("数据库写入失败：%1").arg(deleteQuery.lastError().text());
         return false;
     }
     if (deleteQuery.numRowsAffected() == 0) {
         *failure = QStringLiteral("Failed to delete task: task not found %1").arg(taskId);
+        if (reason) *reason = QStringLiteral("任务不存在或已被删除");
         return false;
     }
     return true;
@@ -824,30 +830,37 @@ bool TaskManager::deleteTask(int taskId)
 {
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to delete task: invalid task id" << taskId;
+        reportFailure(QStringLiteral("删除任务失败：任务编号无效"));
         return false;
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to delete task: database is not open";
+        reportFailure(QStringLiteral("删除任务失败：数据库未打开"));
         return false;
     }
 
     if (!db.transaction()) {
         qWarning() << "Failed to start delete task transaction:" << db.lastError().text();
+        reportFailure(QStringLiteral("删除任务失败：无法开始数据库事务：%1").arg(db.lastError().text()));
         return false;
     }
 
     QString failure;
-    if (!removeTaskInTransaction(db, taskId, &failure)) {
+    QString reason;
+    if (!removeTaskInTransaction(db, taskId, &failure, &reason)) {
         qWarning().noquote() << failure;
         db.rollback();
+        reportFailure(QStringLiteral("删除任务失败：%1").arg(reason));
         return false;
     }
 
     if (!db.commit()) {
-        qWarning() << "Failed to commit delete task transaction:" << db.lastError().text();
+        const QString error = db.lastError().text();
+        qWarning() << "Failed to commit delete task transaction:" << error;
         db.rollback();
+        reportFailure(QStringLiteral("删除任务失败：数据库提交失败：%1").arg(error));
         return false;
     }
 

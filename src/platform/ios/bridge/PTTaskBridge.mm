@@ -1,6 +1,7 @@
 #import "PTTaskBridge.h"
 #include "PTBridgeSupport.h"
 #include "../../../services/TaskManager.h"
+#include "../../../services/PendingDeletion.h"
 #include <QVariantMap>
 #include <memory>
 using namespace PTBridgeSupport;
@@ -72,6 +73,9 @@ using namespace PTBridgeSupport;
         });
         QObject::connect(tasks, &TaskManager::operationFailed, context, [weakSelf](const QString &message) {
             PTTaskBridge *b = weakSelf;
+            // 待删槽已认领单条提交失败，自动到期不在任何桥接 Call 内，也必须跳过原始提示。
+            const auto* pending = service<PendingDeletion>(QStringLiteral("pendingDeletion"));
+            if (pending && pending->isCommitting() && message.startsWith(QStringLiteral("删除任务失败："))) return;
             if (b && !b->_failures.collect(message) && b.onFailure) b.onFailure(string(message));
         });
     }

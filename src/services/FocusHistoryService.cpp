@@ -723,35 +723,42 @@ bool FocusHistoryService::deleteRestSession(int sessionId)
 bool FocusHistoryService::deleteTimelineRecord(int sessionId, bool isRest)
 {
     m_lastError.clear();
+    const QString action = isRest ? QStringLiteral("删除休息记录失败：") : QStringLiteral("删除专注记录失败：");
+    const auto failed = [this, &action](const QString& reason) {
+        const QString message = action + reason;
+        m_lastError = message;
+        emit operationFailed(message);
+        return false;
+    };
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
-        m_lastError = QStringLiteral("数据库未打开");
-        return false;
+        return failed(QStringLiteral("数据库未打开"));
     }
     // 先写废纸篓再删除，同一事务：写入失败（含记录不存在、仍在进行中，capture 只认已结束的行）
-    // 整体回滚，对外仍是原来的失败文案。
+    // 整体回滚；在回滚前保存本次 SQL 原因，不能用通用拒绝覆盖真正的存储失败。
     if (!db.transaction()) {
-        m_lastError = QStringLiteral("记录不存在、正在进行中或删除失败");
-        return false;
+        return failed(QStringLiteral("无法开始数据库事务：%1").arg(db.lastError().text()));
     }
     QString trashError;
     const bool captured = isRest ? TrashStore::captureRestSession(db, sessionId, &trashError)
                                  : TrashStore::captureFocusSession(db, sessionId, &trashError);
     if (!captured) {
         db.rollback();
-        m_lastError = QStringLiteral("记录不存在、正在进行中或删除失败");
-        return false;
+        return failed(trashError == TrashStore::kMissingRecord ? QStringLiteral("记录不存在或正在进行中")
+                                                              : QStringLiteral("写入废纸篓失败：%1").arg(trashError));
     }
     QSqlQuery query(db);
     query.prepare(QStringLiteral("DELETE FROM %1 WHERE id = :id AND end_time IS NOT NULL")
                   .arg(isRest ? QStringLiteral("rest_sessions") : QStringLiteral("focus_sessions")));
     query.bindValue(QStringLiteral(":id"), sessionId);
     const bool deleted = query.exec() && query.numRowsAffected() == 1;
+    const QString deleteError = query.lastError().isValid() ? query.lastError().text()
+                                                           : QStringLiteral("记录不存在或正在进行中");
     query.finish(); // 先释放语句，再提交或回滚。
     if (!deleted || !db.commit()) {
+        const QString reason = !deleted ? deleteError : QStringLiteral("数据库提交失败：%1").arg(db.lastError().text());
         db.rollback();
-        m_lastError = QStringLiteral("记录不存在、正在进行中或删除失败");
-        return false;
+        return failed(reason);
     }
     emit historyChanged();
     emit TrashNotifier::instance()->changed();

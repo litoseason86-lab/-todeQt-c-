@@ -4,13 +4,13 @@ import PTBridge
 @MainActor final class PendingDeletionBridgeAdapter: PendingDeletionBridgeProtocol {
     var onChanged: (() -> Void)?
     var onRetired: (() -> Void)?
-    var onCommitFailed: ((String) -> Void)?
+    var onCommitFailed: ((String, String) -> Void)?
     private let bridge = PTPendingDeletionBridge()
     init() {
         // 回调遵循 Qt 主线程上下文约束；弱引用使适配器可以随外壳释放。
         bridge.onChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
         bridge.onRetired = { [weak self] in MainActor.assumeIsolated { self?.onRetired?() } }
-        bridge.onCommitFailed = { [weak self] title in MainActor.assumeIsolated { self?.onCommitFailed?(title) } }
+        bridge.onCommitFailed = { [weak self] title, reason in MainActor.assumeIsolated { self?.onCommitFailed?(title, reason) } }
     }
     var state: PendingDeletionState {
         var value = PendingDeletionState()

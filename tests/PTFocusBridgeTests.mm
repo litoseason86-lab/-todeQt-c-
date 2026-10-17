@@ -51,6 +51,7 @@ private slots:
     void partialGapFailureIsClaimedByReturnedSummary();
     void focusActionReasonsAreClaimed_data();
     void focusActionReasonsAreClaimed();
+    void pendingDeletionDoesNotPolluteAnotherCall();
     void initTestCase();
     void init();
     void cleanup();
@@ -454,6 +455,26 @@ void PTFocusBridgeTests::focusActionReasonsAreClaimed()
         QVERIFY(error != nil);
         QVERIFY2([error.localizedDescription containsString:action == "blank" ? @"标题" : @"数据库未打开"], error.localizedDescription.UTF8String);
         QCOMPARE(ownerFailures, 0); QCOMPARE(observerFailures, 0); QCOMPARE(shellFailures, 0);
+    }
+}
+
+
+// 产品保证：专注桥接旁观到待删失败时不把原因塞进另一接口的调用，标题提示仍由待删槽负责。
+void PTFocusBridgeTests::pendingDeletionDoesNotPolluteAnotherCall()
+{
+    @autoreleasepool {
+        PTFocusBridge* bridge = [PTFocusBridge new]; __block int failures = 0;
+        bridge.onFailure = ^(NSString*) { ++failures; };
+        QVERIFY(m_pending->requestTask(m_task, "原标题"));
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec("CREATE TEMP TRIGGER t33_failure BEFORE DELETE ON tasks BEGIN SELECT RAISE(ABORT, 'T33-2 focus observer blocked'); END"));
+        QSignalSpy pendingFailure(m_pending.get(), &PendingDeletion::commitFailed);
+        PTBridgeSupport::FailureCollector unrelated;
+        PTBridgeSupport::FailureCollector::Call call(unrelated);
+        QVERIFY(!m_pending->commit());
+        const QString error = call.error();
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        QCOMPARE(pendingFailure.count(), 1); QCOMPARE(failures, 0);
     }
 }
 

@@ -1006,7 +1006,11 @@ Item {
         target: root.taskManagerRef
         ignoreUnknownSignals: true
 
-        function onOperationFailed(message) { root.collectTimerFailure(message) }
+        function onOperationFailed(message) {
+            // 单条删除已由待删槽合并原标题，不能串入另一次专注同步调用的原因。
+            if (String(message || "").indexOf("删除任务失败：") === 0) return
+            root.collectTimerFailure(message)
+        }
 
         function onTasksChanged() {
             root.reconcileSelectedTask()

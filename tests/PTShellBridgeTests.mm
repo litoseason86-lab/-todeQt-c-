@@ -19,6 +19,8 @@
 #include "../src/services/KnowledgeGapService.h"
 #include "../src/services/LogicalDay.h"
 #include "../src/services/TaskManager.h"
+#include "../src/services/PendingDeletion.h"
+#include "../src/services/FocusHistoryService.h"
 
 // 先对旧桥接验证缺少错误契约；选择器检查失败时立即返回，避免给旧实现发送不存在的方法。
 @interface PTShellBridge (T24FailureContract)
@@ -53,6 +55,8 @@ private slots:
     void primaryGoalProjectsServiceAndRefreshes();
     void appearanceMigrationAndPersistence();
     void appearanceWriteFailureRestoresValue();
+    void pendingDeletionFailureHasOnePresentation_data();
+    void pendingDeletionFailureHasOnePresentation();
     void initTestCase();
     void init();
     void cleanup();
@@ -914,6 +918,49 @@ void PTShellBridgeTests::nestedCallsAcrossCollectorsKeepTheirOwnFirstFailure()
     }
     QVERIFY(second.collect(QStringLiteral("外层后续")));
     QCOMPARE(outer.error(), QStringLiteral("外层首条"));
+}
+
+
+// 产品保证：待删任务手动或自动到期失败都由标题提示认领，外壳和任务桥接不再单独显示底层失败。
+void PTShellBridgeTests::pendingDeletionFailureHasOnePresentation_data()
+{
+    QTest::addColumn<bool>("automatic"); QTest::addColumn<QString>("kind");
+    for (const QString& kind : QStringList{"task", "focus", "rest"})
+        for (bool automatic : {false, true}) QTest::newRow(qPrintable(kind + (automatic ? "-automatic" : "-manual"))) << automatic << kind;
+}
+
+// 产品保证：自动失败即使没有桥接 Call 也不重复，非待删的批量删除失败仍正常上报。
+void PTShellBridgeTests::pendingDeletionFailureHasOnePresentation()
+{
+    @autoreleasepool {
+        QFETCH(bool, automatic); QFETCH(QString, kind);
+        int id = TaskManager::instance()->createTask("原标题", LogicalDay::today(4), -1, 0, ""); QVERIFY(id > 0);
+        const QString table = kind == "task" ? "tasks" : kind == "focus" ? "focus_sessions" : "rest_sessions";
+        QSqlQuery query(DatabaseManager::instance()->database());
+        if (kind != "task") {
+            QVERIFY(query.exec("INSERT INTO " + table + (kind == "rest" ? " (start_time,end_time,duration,manual) VALUES ('2026-10-01T12:00:00','2026-10-01T12:30:00',1800,0)" : " (start_time,end_time,duration) VALUES ('2026-10-01T12:00:00','2026-10-01T12:30:00',1800)")));
+            id = query.lastInsertId().toInt(); QVERIFY(id > 0);
+        }
+        PendingDeletion pending(TaskManager::instance(), FocusHistoryService::instance()); pending.setDelayMs(1);
+        PTBridgeSupport::registerService("pendingDeletion", &pending);
+        const auto unregister = qScopeGuard([&] { PTBridgeSupport::registerService("pendingDeletion", nullptr); });
+        PTShellBridge* shell = [PTShellBridge new]; PTTaskBridge* observer = [PTTaskBridge new];
+        __block int shellFailures = 0, observerFailures = 0;
+        shell.onFailure = ^(NSString*) { ++shellFailures; }; observer.onFailure = ^(NSString*) { ++observerFailures; };
+        QSignalSpy failed(&pending, &PendingDeletion::commitFailed);
+        QVERIFY(kind == "task" ? pending.requestTask(id, "原标题") : pending.requestSession(id, "原标题", kind == "rest"));
+        QVERIFY(query.exec("CREATE TEMP TRIGGER t33_failure BEFORE DELETE ON " + table + " BEGIN SELECT RAISE(ABORT, 'T33-2 automatic blocked'); END"));
+        if (automatic) QTRY_COMPARE(failed.count(), 1); else QVERIFY(!pending.commit());
+        QCOMPARE(failed.count(), 1); QCOMPARE(failed.first().size(), 2);
+        QCOMPARE(failed.first().at(0).toString(), QStringLiteral("原标题"));
+        QVERIFY(failed.first().at(1).toString().contains("T33-2 automatic blocked"));
+        QCOMPARE(shellFailures, 0); QCOMPARE(observerFailures, 0);
+        // 单条前缀的去重不能误吞批量前缀；退槽后也不能屏蔽后续独立失败。
+        emit TaskManager::instance()->operationFailed(QStringLiteral("删除失败：批量操作未完成"));
+        QCOMPARE(shellFailures, 1); QCOMPARE(observerFailures, 1);
+        emit TaskManager::instance()->operationFailed(QStringLiteral("删除任务失败：另一项独立失败"));
+        QCOMPARE(shellFailures, 2); QCOMPARE(observerFailures, 2);
+    }
 }
 
 QTEST_GUILESS_MAIN(PTShellBridgeTests)

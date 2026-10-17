@@ -16,10 +16,10 @@ import Observation
         // C++ 维护单槽与计时，Swift 只投影隐藏行状态并连接外壳提示。
         bridge.onChanged = { [weak self] in self?.refresh() }
         bridge.onRetired = { [weak self] in self?.retireOwnToast() }
-        bridge.onCommitFailed = { [weak self] title in
+        bridge.onCommitFailed = { [weak self] title, reason in
             guard let self else { return }
             self.commitFailureSerial &+= 1
-            self.shell?.showToast("删除「\(title)」失败，请重试")
+            self.shell?.showToast("删除「\(title)」失败：\(reason)")
         }
         refresh()
     }

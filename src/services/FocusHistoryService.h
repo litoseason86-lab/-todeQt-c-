@@ -57,6 +57,7 @@ public:
     // 只改动传入字段：startTime / durationSeconds / taskId / isRest。
     // 未传入的字段保留数据库原值，包括秒数、毫秒与暂停跨度。
     Q_INVOKABLE bool updateSessionFields(int sessionId, const QVariantMap& changes);
+    // 删除拒绝的同一份具体原因同时写入 lastError 并发 operationFailed，提交失败不改变记录或废纸篓。
     Q_INVOKABLE bool deleteSession(int sessionId);
     Q_INVOKABLE bool deleteRestSession(int sessionId);
     Q_INVOKABLE bool updateRestSessionFields(int sessionId, const QVariantMap& changes);
@@ -76,6 +77,8 @@ public:
 signals:
     // 手工改动后各视图需要重查；查询本身不缓存，只要有人重新拉一次就是最新的。
     void historyChanged();
+    // 删除拒绝携带本次原因，待提交删除收集后合并原标题，不复用之前调用的错误。
+    void operationFailed(const QString& message);
 
 private:
     explicit FocusHistoryService(QObject* parent = nullptr);

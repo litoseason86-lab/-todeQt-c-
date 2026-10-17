@@ -13,6 +13,7 @@
 #include "../../../services/LogicalDayService.h"
 #include "../../../services/StatisticsService.h"
 #include "../../../services/TaskManager.h"
+#include "../../../services/PendingDeletion.h"
 #include <QFile>
 #include <QObject>
 #include <QDebug>
@@ -143,7 +144,12 @@
         QObject::connect(LogicalDayService::instance(), &LogicalDayService::changed, context, changed);
         QObject::connect(backup, &BackupService::operationBlocksUiChanged, context, changed);
         QObject::connect(backup, &BackupService::operationTextChanged, context, changed);
-        QObject::connect(tasks, &TaskManager::operationFailed, context, failed);
+        QObject::connect(tasks, &TaskManager::operationFailed, context, [failed](const QString& message) {
+            // 自动到期没有 Call 可认领，由待删槽的标题加原因提示负责；其它失败仍沿用外壳出口。
+            const auto* pending = PTBridgeSupport::service<PendingDeletion>(QStringLiteral("pendingDeletion"));
+            if (pending && pending->isCommitting() && message.startsWith(QStringLiteral("删除任务失败："))) return;
+            failed(message);
+        });
         QObject::connect(timer, &FocusTimer::operationFailed, context, failed);
         QObject::connect(gaps, &KnowledgeGapService::operationFailed, context, failed);
         QObject::connect(StatisticsService::instance(), &StatisticsService::operationFailed, context, failed);

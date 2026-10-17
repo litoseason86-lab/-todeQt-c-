@@ -124,6 +124,7 @@ public:
     // 备注长度上限（QChar 计数）。超长一律拒绝而不是截断：截断会让保存照常「成功」，
     // 用户重新打开才发现末尾没了，而丢掉的往往正是最想留下的那段。
     static constexpr int kMaxNotesLength = 2000;
+    // 单条删除拒绝返回 false，并以「删除任务失败：原因」上报；待删槽据此合并原标题提示。
     Q_INVOKABLE bool deleteTask(int taskId);
     // iPad 多选的批量写入。整批一个事务：编号无效或重复整批拒绝；任何一条写不进去（任务已不在等）全部回滚，
     // 返回 false 并报 operationFailed；成功后只发一次 tasksChanged。删除与 deleteTask 同一套步骤（进废纸篓、

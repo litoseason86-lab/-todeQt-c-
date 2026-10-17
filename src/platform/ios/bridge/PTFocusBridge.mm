@@ -226,6 +226,8 @@ QVariantMap claimReturnedFailure(const QVariantMap &value, const FailureCollecto
         });
         // 新建专注任务的错误仅在调用期收集；其它页面的任务错误由任务桥接处理，不串到专注页。
         QObject::connect(TaskManager::instance(), &TaskManager::operationFailed, context, [weakSelf](const QString &message) {
+            // 专注桥接只收集自己新建任务的原因；单条删除已由待删槽认领，不能串进另一个 Call。
+            if (message.startsWith(QStringLiteral("删除任务失败："))) return;
             PTFocusBridge *b = weakSelf; if (b) b->_failures.collect(message);
         });
     }

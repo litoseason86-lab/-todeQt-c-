@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor final class PendingDeletionStoreTests: XCTestCase {
     private func fixture() -> (ShellStore, PendingDeletionBridgeFake, TaskBridgeFake, PendingDeletionStore) {
-        let shell = ShellStore(bridge: ShellBridgeFake()); let deletion = PendingDeletionBridgeFake(); let tasks = TaskBridgeFake()
+        let shell = ShellStore(bridge: ShellBridgeFake()); let deletion = PendingDeletionBridgeFake(); deletion.commitFailureReason = "数据库写入失败：T33-2 blocked"; let tasks = TaskBridgeFake()
         return (shell, deletion, tasks, PendingDeletionStore(bridge: deletion, tasks: tasks, shell: shell))
     }
     // 产品保证：请求删除显示撤销条与待删编号，撤销只调 cancel，不提交。
@@ -36,7 +36,7 @@ import XCTest
         XCTAssertTrue(store.requestTask(id: 7, title: "要保留的标题"))
         bridge.commitError = NSError(domain: "测试", code: 1)
         XCTAssertFalse(store.commitIfNeeded()); XCTAssertEqual(store.pendingTaskID, -1)
-        XCTAssertEqual(shell.toast?.message, "删除「要保留的标题」失败，请重试")
+        XCTAssertEqual(shell.toast?.message, "删除「要保留的标题」失败：数据库写入失败：T33-2 blocked")
     }
     // 产品保证：例行任务的撤销文案说明只删除今天的实例。
     func testRoutineMessageExplainsTodayOnly() {
@@ -70,8 +70,12 @@ import XCTest
         let (shell, bridge, _, store) = fixture()
         XCTAssertTrue(store.requestTask(id: 7, title: "旧任务"))
         bridge.commitError = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "请求删除任务失败"])
+        let callback = bridge.onCommitFailed
+        var callbackToastID: UUID?
+        bridge.onCommitFailed = { title, reason in callback?(title, reason); callbackToastID = shell.toast?.id }
         XCTAssertFalse(store.requestTask(id: 9, title: "新任务"))
-        XCTAssertEqual(shell.toast?.message, "删除「旧任务」失败，请重试")
+        XCTAssertEqual(shell.toast?.message, "删除「旧任务」失败：数据库写入失败：T33-2 blocked")
+        XCTAssertNotNil(callbackToastID); XCTAssertEqual(shell.toast?.id, callbackToastID)
         XCTAssertEqual(bridge.calls.filter { $0.name == "commit" }.count, 1)
     }
     // 产品保证：专注与休息编号互不混用，缺省标题是专注记录，撤销不提交。
@@ -91,4 +95,16 @@ import XCTest
         XCTAssertEqual(bridge.automaticCommitSuspensions, [true, false])
         XCTAssertTrue(bridge.calls.isEmpty)
     }
+    // 产品保证：Qt 自动到期的提交失败不经过 Store 调用包装，也只显示一条原标题和具体原因。
+    func testAutomaticCommitFailureKeepsTitleAndReason() {
+        let (shell, bridge, _, store) = fixture()
+        XCTAssertTrue(store.requestSession(id: 9, title: "原记录", isRest: true))
+        bridge.commitError = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "不应覆盖回调的错误"])
+        // 模拟 C++ 到期回调直接提交，不能误用 Store.commitIfNeeded 掩盖后台路径。
+        try? bridge.commit()
+        XCTAssertEqual(shell.toast?.message, "删除「原记录」失败：数据库写入失败：T33-2 blocked")
+        XCTAssertFalse(store.state.active)
+        XCTAssertEqual(bridge.calls.filter { $0.name == "commit" }.count, 1)
+    }
+
 }

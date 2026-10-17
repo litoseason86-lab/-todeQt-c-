@@ -4,10 +4,11 @@ import IPadCore
 @MainActor final class PendingDeletionBridgeFake: PendingDeletionBridgeProtocol {
     var onChanged: (() -> Void)?
     var onRetired: (() -> Void)?
-    var onCommitFailed: ((String) -> Void)?
+    var onCommitFailed: ((String, String) -> Void)?
     var state = PendingDeletionState()
     var error: Error?
     var commitError: Error?
+    var commitFailureReason = "数据库写入失败"
     var calls: [(name: String, id: Int, title: String, isRest: Bool)] = []
     var automaticCommitSuspensions: [Bool] = []
     func requestTask(id: Int, title: String) throws {
@@ -24,7 +25,7 @@ import IPadCore
     func commit() throws {
         calls.append(("commit", -1, "", false)); guard state.active else { return }
         let title = state.title; onRetired?(); state = PendingDeletionState(); onChanged?()
-        if let commitError { onCommitFailed?(title); throw commitError }
+        if let commitError { onCommitFailed?(title, commitFailureReason); throw commitError }
     }
     func cancel() { calls.append(("cancel", -1, "", false)); state = PendingDeletionState(); onChanged?() }
     func setAutomaticCommitSuspended(_ suspended: Bool) { automaticCommitSuspensions.append(suspended) }

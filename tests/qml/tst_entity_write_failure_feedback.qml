@@ -455,4 +455,23 @@ TestCase {
                 (data.add ? "新建任务" : "修改任务") + "失败：T32 写入被拒绝")
         compare(page.loadError,"")
     }
+
+    // 产品保证：单条待删失败由标题提示负责，三页和任务工具不重复显示，但批量删除原因仍显示。
+    function test_pendingDeletionPrefixIsNotABatchFailure_data() {
+        return [{tag:"today",component:todayComponent},{tag:"week",component:weekComponent},
+                {tag:"dashboard",component:dashboardComponent},{tag:"tools",component:toolsComponent}]
+    }
+    // 产品保证：只过滤新单条删除前缀，不误吞原来的批量删除失败。
+    function test_pendingDeletionPrefixIsNotABatchFailure(data) {
+        var item = data.tag === "tools" ? openDialog(data.component) : createTemporaryObject(data.component,testCase)
+        verify(item)
+        if (data.tag !== "tools") item.pageActive = true
+        var key = data.tag === "tools" ? "message" : "loadError"
+        item[key] = "原结果"
+        taskManager.operationFailed("删除任务失败：T33-2 pending blocked")
+        compare(item[key],"原结果")
+        taskManager.operationFailed("删除失败：T33-2 batch blocked")
+        compare(item[key],"删除失败：T33-2 batch blocked")
+    }
+
 }

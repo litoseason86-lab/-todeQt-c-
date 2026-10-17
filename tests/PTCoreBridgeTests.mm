@@ -63,6 +63,9 @@ private slots:
     void historyFieldsPartialChangesAndFailures();
     void historyMonthTotalsAndReadFailures();
     void dateRelationsForSelectedDay();
+    void automaticCommitDoesNotPolluteUnrelatedBridgeCall();
+    void pendingCommitPreservesTitleAndReason_data();
+    void pendingCommitPreservesTitleAndReason();
     void initTestCase();
     void init();
     void cleanup();
@@ -491,7 +494,7 @@ void PTCoreBridgeTests::pendingDeletionSignalsAndState() {
         PTPendingDeletionBridge *bridge = [PTPendingDeletionBridge new];
         __block int changes = 0, retired = 0; __block NSString *failedTitle = nil;
         bridge.onChanged = ^{ ++changes; }; bridge.onRetired = ^{ ++retired; };
-        bridge.onCommitFailed = ^(NSString *title) { failedTitle = title; };
+        bridge.onCommitFailed = ^(NSString *title, NSString*) { failedTitle = title; };
         NSError *error = nil;
         QVERIFY([bridge requestTask:id title:@"待删" error:&error]);
         QVERIFY(bridge.active); QCOMPARE(bridge.taskId, NSInteger(id)); QCOMPARE(bridge.sessionId, NSInteger(-1));
@@ -1326,6 +1329,79 @@ void PTCoreBridgeTests::independentLogicalDayReceivers()
         QCOMPARE(first, 1); QCOMPARE(second, 2);
     }
 }
+
+// 产品保证：三个待删桥接接口拒绝旧槽提交时，都把原标题和本次原因交给调用方。
+void PTCoreBridgeTests::pendingCommitPreservesTitleAndReason_data()
+{
+    QTest::addColumn<QString>("kind"); QTest::addColumn<QString>("action");
+    for (const QString& kind : QStringList{"task", "focus", "rest"})
+        for (const QString& action : QStringList{"commit", "requestTask", "requestSession"})
+            QTest::newRow(qPrintable(kind + '-' + action)) << kind << action;
+}
+
+// 产品保证：提交失败只有一次原标题回调和具体 NSError，外壳与任务旁观桥接不重复提示，新请求不进槽。
+void PTCoreBridgeTests::pendingCommitPreservesTitleAndReason()
+{
+    @autoreleasepool {
+        QFETCH(QString, kind); QFETCH(QString, action);
+        auto* tasks = TaskManager::instance();
+        const int task = tasks->createTask("原标题", LogicalDay::today(4), -1, 0, ""); QVERIFY(task > 0);
+        const QString table = kind == "task" ? "tasks" : kind == "focus" ? "focus_sessions" : "rest_sessions";
+        QSqlQuery query(DatabaseManager::instance()->database()); int record = task;
+        if (kind != "task") {
+            QVERIFY(query.exec("INSERT INTO " + table + (kind == "rest" ? " (start_time,end_time,duration,manual) VALUES ('2026-10-01T12:00:00','2026-10-01T12:30:00',1800,0)" : " (start_time,end_time,duration) VALUES ('2026-10-01T12:00:00','2026-10-01T12:30:00',1800)")));
+            record = query.lastInsertId().toInt(); QVERIFY(record > 0);
+        }
+        PendingDeletion pending(tasks, FocusHistoryService::instance()); pending.setDelayMs(60000);
+        PTBridgeSupport::registerService("pendingDeletion", &pending);
+        const auto unregister = qScopeGuard([&] { PTBridgeSupport::registerService("pendingDeletion", nullptr); });
+        PTPendingDeletionBridge* bridge = [PTPendingDeletionBridge new]; PTTaskBridge* observer = [PTTaskBridge new];
+        __block int callbacks = 0, observerFailures = 0; __block NSString* failedTitle = nil; __block NSString* callbackReason = nil;
+        bridge.onCommitFailed = ^(NSString* title, NSString* reason) { ++callbacks; failedTitle = title; callbackReason = reason; };
+        observer.onFailure = ^(NSString*) { ++observerFailures; };
+        QObject outlet; int shellFailures = 0;
+        PTBridgeSupport::registerUnclaimedFailureHandler(&outlet, [&](const QString&) { ++shellFailures; });
+        const auto clearOutlet = qScopeGuard([&] { PTBridgeSupport::unregisterUnclaimedFailureHandler(&outlet); });
+        NSError* error = nil;
+        QVERIFY(kind == "task" ? [bridge requestTask:record title:@"原标题" error:&error] : [bridge requestSession:record title:@"原标题" isRest:kind == "rest" error:&error]);
+        QVERIFY(bridge.active); QVERIFY(error == nil);
+        QVERIFY(query.exec("CREATE TEMP TRIGGER t33_failure BEFORE DELETE ON " + table + " BEGIN SELECT RAISE(ABORT, 'T33-2 bridge blocked'); END"));
+        const BOOL ok = action == "commit" ? [bridge commit:&error] : action == "requestTask" ? [bridge requestTask:task + 1 title:@"新任务" error:&error] : [bridge requestSession:record + 1 title:@"新记录" isRest:NO error:&error];
+        QVERIFY(!ok); QVERIFY(error != nil);
+        QVERIFY2([error.localizedDescription containsString:@"原标题"], error.localizedDescription.UTF8String);
+        QVERIFY2([error.localizedDescription containsString:@"T33-2 bridge blocked"], error.localizedDescription.UTF8String);
+        QCOMPARE(callbacks, 1); QVERIFY([failedTitle isEqualToString:@"原标题"]);
+        QVERIFY([callbackReason containsString:@"T33-2 bridge blocked"]);
+        QCOMPARE(PTBridgeSupport::string(error.localizedDescription), QStringLiteral("删除「原标题」失败：%1").arg(PTBridgeSupport::string(callbackReason)));
+        QCOMPARE(observerFailures, 0); QCOMPARE(shellFailures, 0); QVERIFY(!bridge.active);
+    }
+}
+
+
+// 产品保证：自动提交的标题失败仍交给 Store 回调，不把合并文案塞进当时活动的其它桥接调用。
+void PTCoreBridgeTests::automaticCommitDoesNotPolluteUnrelatedBridgeCall()
+{
+    @autoreleasepool {
+        auto* tasks = TaskManager::instance();
+        const int id = tasks->createTask("原标题", LogicalDay::today(4), -1, 0, ""); QVERIFY(id > 0);
+        PendingDeletion pending(tasks, FocusHistoryService::instance()); pending.setDelayMs(1);
+        PTBridgeSupport::registerService("pendingDeletion", &pending);
+        const auto unregister = qScopeGuard([&] { PTBridgeSupport::registerService("pendingDeletion", nullptr); });
+        PTPendingDeletionBridge* bridge = [PTPendingDeletionBridge new]; __block int callbacks = 0;
+        bridge.onCommitFailed = ^(NSString* title, NSString* reason) {
+            if ([title isEqualToString:@"原标题"] && [reason containsString:@"T33-2 unrelated blocked"]) ++callbacks;
+        };
+        QVERIFY(pending.requestTask(id, "原标题"));
+        QSqlQuery query(DatabaseManager::instance()->database());
+        QVERIFY(query.exec("CREATE TEMP TRIGGER t33_failure BEFORE DELETE ON tasks BEGIN SELECT RAISE(ABORT, 'T33-2 unrelated blocked'); END"));
+        PTBridgeSupport::FailureCollector unrelated;
+        PTBridgeSupport::FailureCollector::Call call(unrelated);
+        QTRY_COMPARE(callbacks, 1);
+        const QString message = call.error();
+        QVERIFY2(message.isEmpty(), qPrintable(message)); QVERIFY(!pending.active());
+    }
+}
+
 QTEST_GUILESS_MAIN(PTCoreBridgeTests)
 
 

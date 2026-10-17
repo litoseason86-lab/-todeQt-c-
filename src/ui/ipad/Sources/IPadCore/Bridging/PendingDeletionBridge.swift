@@ -11,7 +11,7 @@ public struct PendingDeletionState: Equatable, Sendable {
 @MainActor public protocol PendingDeletionBridgeProtocol: AnyObject {
     var onChanged: (() -> Void)? { get set }
     var onRetired: (() -> Void)? { get set }
-    var onCommitFailed: ((String) -> Void)? { get set }
+    var onCommitFailed: ((String, String) -> Void)? { get set }
     var state: PendingDeletionState { get }
     func requestTask(id: Int, title: String) throws
     func requestSession(id: Int, title: String, isRest: Bool) throws

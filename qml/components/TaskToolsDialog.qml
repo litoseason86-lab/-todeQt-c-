@@ -131,8 +131,8 @@ Dialog {
         ignoreUnknownSignals: true
         function onTasksChanged() { if (root.opened) root.refresh(false) }
         function onOperationFailed(message) {
-            // 完成和单条写入由各自发起处认领；不能把它们显示成工具的搜索或批量操作失败。
-            if (/^(完成|取消完成|完成并记笔记|新建任务|修改任务|任务改期)失败：/.test(String(message || "")))
+            // 单条删除由待删槽合并原标题，完成和单条写入由各自发起处认领；不能把它们显示成工具的搜索或批量操作失败。
+            if (/^(删除任务|完成|取消完成|完成并记笔记|新建任务|修改任务|任务改期)失败：/.test(String(message || "")))
                 return
             if (root.visible) root.message = message
         }

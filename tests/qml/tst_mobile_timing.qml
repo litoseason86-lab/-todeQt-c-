@@ -412,4 +412,15 @@ TestCase {
         compare(timerStub.hasActiveSession, data.action === "complete")
     }
 
+
+    // 产品保证：伴侣页没有待删入口，不把其它窗口单条删除失败重复显示成任务加载错误。
+    function test_companionIgnoresPendingDeletionFailure() {
+        var companion = createTemporaryObject(companionComponent,testCase)
+        verify(companion); companion.loadError = "原结果"
+        taskStub.operationFailed("删除任务失败：T33-2 pending blocked")
+        compare(companion.loadError,"原结果")
+        taskStub.operationFailed("删除失败：T33-2 batch blocked")
+        compare(companion.loadError,"删除失败：T33-2 batch blocked")
+    }
+
 }

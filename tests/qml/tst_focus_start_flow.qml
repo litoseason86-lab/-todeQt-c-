@@ -29,6 +29,7 @@ TestCase {
         id: taskManager
 
         signal tasksChanged
+        signal operationFailed(string message)
 
         // 选择器的候选来源。用例按需替换，默认空——保持原有用例的行为不变。
         property var todayTasks: []
@@ -541,7 +542,7 @@ TestCase {
 
         signal changed()
         signal retired()
-        signal commitFailed(string failedTitle)
+        signal commitFailed(string failedTitle, string reason)
 
         function clearSlot() {
             taskId = -1
@@ -598,7 +599,8 @@ TestCase {
             clearSlot()
             changed()
             if (!commitSucceeds) {
-                commitFailed(failedTitle)
+                taskManager.operationFailed("删除任务失败：T33-2 QML storage blocked")
+                commitFailed(failedTitle, "T33-2 QML storage blocked")
                 return false
             }
             return true
@@ -2861,6 +2863,45 @@ TestCase {
         tryCompare(focusPage(), "errorText", focusTimer.t33Failure)
         compare(toastText(), "原有提示")
         compare(focusTimer.hasActiveSession, data.stopping)
+    }
+
+
+    Timer { id: deletionExpiry; interval: 1; repeat: false; onTriggered: pendingDeletion.commit() }
+    // 产品保证：待删失败在今日、本周或仪表盘均只显示一条原标题加原因，自动到期也不叠加页面错误。
+    function test_pendingDeletionFailureHasOneOwner_data() {
+        var cases = []
+        for (var page of ["today", "week", "dashboard"])
+            for (var automatic of [false, true]) cases.push({tag: page + (automatic ? "-automatic" : "-manual"), page:page, automatic:automatic})
+        return cases
+    }
+    // 产品保证：同一底层失败不会先闪出页面错误条再清掉，标题提示只变化一次且撤销槽退出。
+    function test_pendingDeletionFailureHasOneOwner(data) {
+        mainWindow.currentView = data.page
+        var page = findChild(mainWindow, data.page === "today" ? "todayTaskViewPage" : data.page === "week" ? "weekPlanViewPage" : "dashboardViewPage")
+        verify(page); tryCompare(page,"pageActive",true); page.loadError = ""
+        pendingDeletion.commitSucceeds = false
+        verify(mainWindow.requestDeleteTask(7, "原标题"))
+        const label = findChild(mainWindow,"toastText")
+        var toastSpy = Qt.createQmlObject('import QtTest; SignalSpy {}',testCase)
+        var pageSpy = Qt.createQmlObject('import QtTest; SignalSpy {}',testCase)
+        toastSpy.target = label; toastSpy.signalName = "textChanged"; verify(toastSpy.valid)
+        pageSpy.target = page; pageSpy.signalName = "loadErrorChanged"; verify(pageSpy.valid)
+        try {
+            if (data.automatic) deletionExpiry.start()
+            else compare(mainWindow.commitPendingDelete(),false)
+            tryCompare(label,"text","删除「原标题」失败：T33-2 QML storage blocked")
+            compare(toastSpy.count,1); compare(pageSpy.count,0); compare(pendingDeletion.active,false)
+        } finally { deletionExpiry.stop(); toastSpy.destroy(); pageSpy.destroy() }
+    }
+
+
+    // 产品保证：待删失败发生在其它同步界面调用期间，也只由原标题提示负责，不串成专注操作失败。
+    function test_pendingDeletionDoesNotPolluteFocusCall() {
+        pendingDeletion.commitSucceeds = false
+        verify(mainWindow.requestDeleteTask(7,"原标题"))
+        const call = focusPage().callTimer(function() { return pendingDeletion.commit() })
+        compare(call.value,false); compare(call.error,"")
+        compare(toastText(),"删除「原标题」失败：T33-2 QML storage blocked")
     }
 
 }

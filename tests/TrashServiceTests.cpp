@@ -535,8 +535,8 @@ void TrashServiceTests::failedTrashWriteRollsBackTheDeletion_data()
     QTest::addColumn<QString>("kind");
     QTest::addColumn<QString>("failureText");
     QTest::newRow("task") << QStringLiteral("task") << QString();
-    QTest::newRow("focus_session") << QStringLiteral("focus_session") << QStringLiteral("记录不存在、正在进行中或删除失败");
-    QTest::newRow("rest_session") << QStringLiteral("rest_session") << QStringLiteral("记录不存在、正在进行中或删除失败");
+    QTest::newRow("focus_session") << QStringLiteral("focus_session") << QStringLiteral("删除专注记录失败：写入废纸篓失败：trash blocked");
+    QTest::newRow("rest_session") << QStringLiteral("rest_session") << QStringLiteral("删除休息记录失败：写入废纸篓失败：trash blocked");
     QTest::newRow("knowledge_gap") << QStringLiteral("knowledge_gap") << QStringLiteral("删除失败");
     QTest::newRow("memo") << QStringLiteral("memo") << QStringLiteral("删除备忘录失败");
     QTest::newRow("routine") << QStringLiteral("routine") << QString();
@@ -576,7 +576,8 @@ void TrashServiceTests::failedTrashWriteRollsBackTheDeletion()
                            .arg(attached).arg(id)), 1);
     }
     if (kind == QLatin1String("focus_session") || kind == QLatin1String("rest_session")) {
-        QCOMPARE(FocusHistoryService::instance()->lastError(), failureText);
+        const QString reason = FocusHistoryService::instance()->lastError();
+        QVERIFY2(reason.startsWith(failureText), qPrintable(reason));
     }
     const QList<QSignalSpy*> spies = {&gapFail, &memoFail, &scheduleFail, &goalFail};
     const QStringList kinds = {QStringLiteral("knowledge_gap"), QStringLiteral("memo"),

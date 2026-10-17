@@ -8,7 +8,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly, copy) NSString *title;
 @property(nonatomic, copy, nullable) void (^onChanged)(void);
 @property(nonatomic, copy, nullable) void (^onRetired)(void);
-@property(nonatomic, copy, nullable) void (^onCommitFailed)(NSString *title);
+@property(nonatomic, copy, nullable) void (^onCommitFailed)(NSString *title, NSString *reason);
 - (BOOL)requestTask:(NSInteger)taskId title:(NSString *)title error:(NSError **)error;
 - (BOOL)requestSession:(NSInteger)sessionId title:(NSString *)title isRest:(BOOL)isRest error:(NSError **)error;
 - (BOOL)commit:(NSError **)error;

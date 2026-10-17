@@ -1322,8 +1322,9 @@ Item {
             root.pendingDeleteUndoAction = null
         }
 
-        function onCommitFailed(title) {
-            root.showToast("删除「" + title + "」失败，请重试")
+        function onCommitFailed(title, reason) {
+            // 待删槽已收集本次底层原因，页面监听跳过单条删除前缀，这里只显示这一条。
+            root.showToast("删除「" + title + "」失败：" + reason)
         }
     }
 

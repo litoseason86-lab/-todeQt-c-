@@ -22,8 +22,8 @@ class TaskManager;
 //   - changed()：槽的任何内容变了（taskId、sessionId、sessionIsRest、title、active 共用这一个通知）。
 //   - retired()：这次删除的撤销窗口已经失效，界面应收起属于这次删除的撤销条。两种情况会发：
 //     马上要触库提交（不论成败），或待删任务被别处先删掉了。用户自己撤销（cancel）不发——撤销条是他自己点掉的。
-//   - commitFailed(title)：提交触库失败。发出时槽已经清空（隐藏的那一行回来），title 是待删项的标题，
-//     界面据此提示「删除「title」失败」。
+//   - commitFailed(title, reason)：提交触库失败。发出时槽已经清空（隐藏的那一行回来），title 是待删项的标题，
+//     reason 是本次底层拒绝的原因，界面据此只提示一条「删除「title」失败：reason」。
 //   - delayMsChanged()：撤销窗口的时长变了。
 //
 // 提交（commit）的顺序是有意排的：
@@ -66,6 +66,8 @@ public:
     QString title() const { return m_title; }
     bool active() const { return m_taskId > 0 || m_sessionId > 0; }
     int delayMs() const { return m_delayMs; }
+    // 同步提交中的底层失败已由本槽认领；桥接据此跳过原始提示，包括不在桥接调用内的自动到期。
+    bool isCommitting() const { return m_committing; }
     void setDelayMs(int delayMs);
     // 读屏开启时暂停自动提交计时，避免提示条未读完但待删项已自动落库导致撤销失效。
     // 默认不暂停；解除后使用请求时长；显式提交规则不变。
@@ -87,7 +89,7 @@ signals:
     void changed();
     void delayMsChanged();
     void retired();
-    void commitFailed(const QString& title);
+    void commitFailed(const QString& title, const QString& reason);
 
 private:
     void handleTaskDeleted(int taskId);

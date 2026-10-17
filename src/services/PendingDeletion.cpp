@@ -3,6 +3,8 @@
 #include "FocusHistoryService.h"
 #include "TaskManager.h"
 
+#include <QScopeGuard>
+
 PendingDeletion::PendingDeletion(TaskManager* tasks, FocusHistoryService* history, QObject* parent)
     : QObject(parent)
     , m_tasks(tasks)
@@ -96,13 +98,28 @@ bool PendingDeletion::commit()
     // 到这里才真正触库；撤销窗口内数据库没有被碰过，专注记录的关联也不会提前丢失。
     // 任务和专注/休息记录共用这一个槽，避免切页后遗失尚未提交的删除。
     bool deleted = false;
-    if (m_sessionId > 0) {
-        if (m_history) {
-            deleted = m_sessionIsRest ? m_history->deleteRestSession(m_sessionId)
-                                      : m_history->deleteSession(m_sessionId);
-        }
-    } else if (m_tasks) {
-        deleted = m_tasks->deleteTask(m_taskId);
+    QString reason;
+    const QString prefix = m_sessionId > 0
+        ? (m_sessionIsRest ? QStringLiteral("删除休息记录失败：") : QStringLiteral("删除专注记录失败："))
+        : QStringLiteral("删除任务失败：");
+    const auto collect = [&reason, &prefix](const QString& message) {
+        if (reason.isEmpty() && message.startsWith(prefix)) reason = message.mid(prefix.size());
+    };
+    // 只收集这次底层调用；连接在清槽、刷新和提交失败回调之前撤销，不能串入后一次操作。
+    {
+        QMetaObject::Connection connection;
+        if (m_sessionId > 0) {
+            if (m_history) {
+                connection = connect(m_history, &FocusHistoryService::operationFailed, this, collect);
+                const auto disconnectFailure = qScopeGuard([&] { disconnect(connection); });
+                deleted = m_sessionIsRest ? m_history->deleteRestSession(m_sessionId)
+                                          : m_history->deleteSession(m_sessionId);
+            } else reason = QStringLiteral("记录删除服务不可用");
+        } else if (m_tasks) {
+            connection = connect(m_tasks, &TaskManager::operationFailed, this, collect);
+            const auto disconnectFailure = qScopeGuard([&] { disconnect(connection); });
+            deleted = m_tasks->deleteTask(m_taskId);
+        } else reason = QStringLiteral("任务删除服务不可用");
     }
     m_committing = false;
 
@@ -113,7 +130,7 @@ bool PendingDeletion::commit()
     emit changed();
 
     if (!deleted) {
-        emit commitFailed(title);
+        emit commitFailed(title, reason.isEmpty() ? QStringLiteral("删除服务未提供失败原因，请重试") : reason);
         return false;
     }
     return true;

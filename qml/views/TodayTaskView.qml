@@ -242,8 +242,8 @@ Item {
         function onOperationFailed(message) {
             if (!root.pageActive)
                 return
-            // 完成、撤销和完成弹窗已有各自的失败提示；服务为 iPad 播报的原因不能再叠加为页面错误。
-            if (/^(完成|取消完成|完成并记笔记)失败：/.test(String(message || "")))
+            // 单条删除由待删槽合并原标题；完成、撤销和完成弹窗已有各自的失败提示；服务为 iPad 播报的原因不能再叠加为页面错误。
+            if (/^(删除任务|完成|取消完成|完成并记笔记)失败：/.test(String(message || "")))
                 return
             // 不能只检查本页的编辑弹窗：任务工具也可能在本页上方打开同类表单。
             if (/^新建任务失败：/.test(String(message || ""))
