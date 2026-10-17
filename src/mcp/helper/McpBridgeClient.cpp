@@ -31,7 +31,7 @@ McpBridgeClient::McpBridgeClient(const McpPaths::Resolution& endpoint, QObject* 
             if (!m_pending.contains(id) || !m_pending.value(id).deadline.hasExpired()) continue;
             const Pending pending = m_pending.value(id);
             cancel(id);
-            emit completed(id, unavailable(pending.tool, UnavailableReason::EndpointUnreachable, pending.sent));
+            emit completed(id, unavailable(pending.tool, UnavailableReason::RequestTimeout, pending.sent));
         }
     });
     m_idleTimer.setSingleShot(true);
@@ -120,7 +120,8 @@ void McpBridgeClient::receive(const QJsonObject& frame)
     const Pending pending = m_pending.value(id);
     if (pending.deadline.hasExpired()) {
         cancel(id);
-        emit completed(id, unavailable(pending.tool, UnavailableReason::EndpointUnreachable, pending.sent));
+        // 应答到达时期限已过也属于请求超时，不能因定时器尚未获调度就误报成连接不可达。
+        emit completed(id, unavailable(pending.tool, UnavailableReason::RequestTimeout, pending.sent));
         return;
     }
     QJsonObject result = frame.value("result").toObject();
@@ -148,6 +149,15 @@ QJsonObject McpBridgeClient::unavailable(Tool tool, UnavailableReason reason, bo
     if (tool == Tool::GetStatus) return makeToolSuccessResult(status(QJsonValue(QJsonValue::Null), reason));
     if (sent && contract(tool).access == ToolAccess::Write)
         return makeToolErrorResult(makeError(ErrorCode::OutcomeUnknown, QStringLiteral("写请求发出后未取得应答，无法确定是否已执行")));
+    if (reason == UnavailableReason::RequestTimeout) {
+        // 主应用可能仍在执行前面的请求；让用户启动应用或重新授权不能解决排队超时。
+        // 已发写入在上面保留结果未知，不能把超时误说成没有执行。
+        QJsonObject error = makeError(ErrorCode::AppUnavailable,
+            QStringLiteral("主应用未在 %1 秒内完成这次调用，可能正忙或请求积压").arg(kToolTimeoutMs / 1000),
+            QJsonObject{{"reason", unavailableReasonName(reason)}});
+        error.insert(QStringLiteral("next_action"), QStringLiteral("请稍后再试；不要循环重试。"));
+        return makeToolErrorResult(error);
+    }
     if (reason == UnavailableReason::ConnectionLimit) {
         // 请求根本没发出去（握手就被拒），不存在“结果未知”。通用的下一步会让用户去检查
         // 应用是否启动，这里必须改成“腾出连接”。

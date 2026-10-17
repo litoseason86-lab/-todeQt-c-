@@ -861,10 +861,19 @@ private slots:
         QCOMPARE(oversized.size(), 1);
         QCOMPARE(failed.size(), 0);
     }
+    // 产品保证：背压中的大请求允许明确超时，小请求仍成功，不依赖某台机器能在十秒内完成整批。
+    void helperSurvivesMixedBatchWhileBacklogged_data()
+    {
+        QTest::addColumn<int>("dispatchDelayMs");
+        QTest::newRow("normal") << 0;
+        // 六次执行至少 11.4 秒，第六个大请求必然跨过生产十秒期限；不缩小数据或修改辅助程序期限。
+        QTest::newRow("slow-main") << 1900;
+    }
     void helperSurvivesMixedBatchWhileBacklogged()
     {
-        // 产品保证：大结果与大量小请求混合积压时，所有响应仍成功且恰好返回一次，辅助程序保持连接。
+        // 产品保证：混合积压的每个请求恰好返回一次，小请求成功，大请求只允许成功或明确的请求超时。
         // 客户端短暂不读 stdout，背压只推迟，不丢弃；生产的请求期限保持原值。
+        QFETCH(int, dispatchDelayMs);
         Host host; QVERIFY(host.access.setEnabled(true));
         // 恢复原始约 940 KiB 样本，显式核对信封仍在协议预算内，不能通过缩小数据规避失败。
         const QString blob(470000, QChar(u'x'));
@@ -875,6 +884,8 @@ private slots:
         QList<qint64> dispatchTimes;
         host.access.setDataHandler([&](Tool, const QJsonObject&) {
             dispatchTimes.append(elapsed.elapsed());
+            // 仅测试中的主应用执行减速；泵事件循环让取消、管道读取和其它连接仍能正常运行。
+            if (dispatchDelayMs > 0) QTest::qWait(dispatchDelayMs);
             return makeToolSuccessResult({{"blob", blob}});
         });
         int output[2]; QVERIFY(::pipe(output) == 0);
@@ -932,10 +943,8 @@ private slots:
             batch += line({{"jsonrpc", "2.0"}, {"id", nextId}, {"method", "ping"}});
         QVERIFY(batch.size() > kMaxRequestBytes);
         process.write(batch);
-        // 先攒一段积压：这期间一个字节也不读。
-        QTest::qWait(300);
-        QCOMPARE(process.state(), QProcess::Running);
-        reader.setEnabled(true);
+        // 前 300 ms 一个字节也不读；独立定时开启，不能被主应用减速回调的嵌套等待延长。
+        QTimer::singleShot(300, &reader, [&] { reader.setEnabled(true); });
         QVERIFY(until([&] { return received.count('\n') == kBatch + 1
                                             || process.state() != QProcess::Running; }, 30000));
         QCOMPARE(process.state(), QProcess::Running);
@@ -944,7 +953,8 @@ private slots:
         if (qEnvironmentVariableIsSet("POMODORO_MCP_PRESSURE_TRACE"))
             qInfo().noquote() << "MCP pressure dispatch times (ms):" << dispatchTimes
                              << "\nhelper trace:\n" << helperTrace;
-        int big = 0;
+        int big = 0, timedOut = 0;
+        bool firstBigSucceeded = false, lastBigTimedOut = false;
         QSet<int> replyIds;
         for (const auto& reply : received.trimmed().split('\n')) {
             const auto document = QJsonDocument::fromJson(reply);
@@ -959,18 +969,30 @@ private slots:
             QVERIFY2(!message.contains("error"), reply.constData());
             QVERIFY(message.value("result").isObject());
             const auto result = message.value("result").toObject();
-            if (result.value("isError").toBool())
-                qWarning().noquote() << "MCP pressure dispatch times (ms):" << dispatchTimes
-                                     << "\nhelper trace:\n" << helperTrace;
-            QVERIFY2(!result.value("isError").toBool(), reply.constData());
             if (id >= 2 && id < 2 + kBigCalls) {
-                QCOMPARE(result.value("structuredContent").toObject().value("blob").toString(), blob);
-                QVERIFY(reply.size() > 500000);
+                if (result.value("isError").toBool()) {
+                    const auto error = errorBody(result);
+                    QCOMPARE(error.value("code"), QJsonValue("APP_UNAVAILABLE"));
+                    QCOMPARE(error.value("details").toObject().value("reason"), QJsonValue("request_timeout"));
+                    ++timedOut;
+                    if (id == 1 + kBigCalls) lastBigTimedOut = true;
+                } else {
+                    QCOMPARE(result.value("structuredContent").toObject().value("blob").toString(), blob);
+                    QVERIFY(reply.size() > 500000);
+                    if (id == 2) firstBigSucceeded = true;
+                }
                 ++big;
+            } else {
+                QVERIFY2(!result.value("isError").toBool(), reply.constData());
             }
         }
         QCOMPARE(big, kBigCalls);
         QCOMPARE(replyIds.size(), kBatch + 1);
+        QVERIFY(firstBigSucceeded);
+        if (dispatchDelayMs > 0) QVERIFY(lastBigTimedOut);
+        qInfo() << "MCP pressure results:" << "delay_ms=" << dispatchDelayMs
+                << "success=" << big - timedOut << "request_timeout=" << timedOut
+                << "responses=" << replyIds.size() << "dispatch_ms=" << dispatchTimes;
     }
     void staleWritePermissionIsClearedOnLoad()
     {
@@ -1169,6 +1191,97 @@ private slots:
         QCOMPARE(code(spy.first().at(1).toJsonObject()), QStringLiteral("OUTCOME_UNKNOWN"));
         QCOMPARE(calls, 1);
         QTest::qWait(100); QCOMPARE(calls, 1); QCOMPARE(spy.size(), 1);
+    }
+    // 产品保证：排在在途请求后面的调用超时要报告请求期限，已发出的写入仍保持结果未知。
+    void queuedToolTimeoutReportsSpecificReason_data()
+    {
+        QTest::addColumn<int>("toolValue");
+        QTest::newRow("read") << int(Tool::ListCategories);
+        QTest::newRow("status") << int(Tool::GetStatus);
+        QTest::newRow("sent-write") << int(Tool::CreateTask);
+    }
+    // 产品保证：超时只取消本次调用，不误报应用未启动，不重放，迟到应答不会产生第二次结果。
+    void queuedToolTimeoutReportsSpecificReason()
+    {
+        QFETCH(int, toolValue);
+        const auto tool = Tool(toolValue);
+        Host host; QString error;
+        QVERIFY(McpEndpointFiles::prepareRoot(host.endpoint.paths, &error));
+        QLocalServer server; QVERIFY(server.listen(host.endpoint.paths.socketPath));
+        QVERIFY(McpEndpointFiles::publish(host.endpoint.paths, QByteArray(64, 'a')));
+        QStringList calls, cancelled, queue;
+        McpJsonStream* peerStream = nullptr;
+        bool queuedBehindBlocker = false;
+        connect(&server, &QLocalServer::newConnection, &server, [&] {
+            auto* socket = server.nextPendingConnection();
+            peerStream = new McpJsonStream(socket, kMaxRequestBytes, socket);
+            connect(peerStream, &McpJsonStream::received, socket, [&](const QJsonObject& frame) {
+                const QString id = frame.value("id").toString();
+                if (frame.value("kind") == QJsonValue("hello")) {
+                    peerStream->send({{"kind", "hello"}, {"version", kBridgeProtocolVersion}, {"accepted", true}});
+                } else if (frame.value("kind") == QJsonValue("call")) {
+                    calls.append(id);
+                    if (id == QStringLiteral("barrier")) {
+                        peerStream->send({{"kind", "result"}, {"id", id}, {"result", makeToolSuccessResult({})}});
+                    } else {
+                        if (id == QStringLiteral("timeout"))
+                            queuedBehindBlocker = queue == QStringList{QStringLiteral("blocker")};
+                        // 测试端点保留首项不完成，第二项必然只排队；不靠机器慢到某个程度制造过期。
+                        queue.append(id);
+                    }
+                } else if (frame.value("kind") == QJsonValue("cancel")) {
+                    cancelled.append(id);
+                    queue.removeAll(id);
+                }
+            });
+        });
+        McpBridgeClient bridge(host.endpoint);
+        QSignalSpy completed(&bridge, &McpBridgeClient::completed);
+        QVERIFY(completed.isValid());
+        const auto cancelRemaining = qScopeGuard([&] { bridge.cancelAll(); });
+        QCOMPARE(bridge.toolTimeoutMs(), kToolTimeoutMs);
+        bridge.call("blocker", Tool::ListCategories, {});
+        QVERIFY(until([&] { return calls.size() == 1; }));
+        QCOMPARE(queue, QStringList{QStringLiteral("blocker")});
+        QCOMPARE(completed.size(), 0);
+        bridge.setToolTimeoutMs(200);
+        bridge.call("timeout", tool, tool == Tool::CreateTask ? createArguments(host.access.sessionId()) : QJsonObject{});
+        QVERIFY(until([&] { return completed.size() == 1 && cancelled.contains(QStringLiteral("timeout")); }));
+        QVERIFY(queuedBehindBlocker);
+        QCOMPARE(calls.count(QStringLiteral("timeout")), 1);
+        QCOMPARE(cancelled.count(QStringLiteral("timeout")), 1);
+        QCOMPARE(completed.first().first().toString(), QStringLiteral("timeout"));
+        const auto result = completed.first().at(1).toJsonObject();
+        if (tool == Tool::GetStatus) {
+            QVERIFY(!result.value("isError").toBool());
+            const auto status = result.value("structuredContent").toObject();
+            QCOMPARE(status.value("connected"), QJsonValue(false));
+            QCOMPARE(status.value("unavailable_reason"), QJsonValue("request_timeout"));
+            QVERIFY(validateAgainstSchema(status, contract(tool).outputSchema).ok());
+        } else {
+            const auto body = errorBody(result);
+            QCOMPARE(body.value("code"), QJsonValue(tool == Tool::CreateTask ? "OUTCOME_UNKNOWN" : "APP_UNAVAILABLE"));
+            QCOMPARE(body.value("retryable"), QJsonValue(false));
+            if (tool != Tool::CreateTask) {
+                QCOMPARE(body.value("details").toObject().value("reason"), QJsonValue("request_timeout"));
+                QVERIFY(body.value("message").toString().contains(QStringLiteral("积压")));
+                const QString nextAction = body.value("next_action").toString();
+                QVERIFY(nextAction.contains(QStringLiteral("稍后")));
+                QVERIFY(nextAction.contains(QStringLiteral("不要循环重试")));
+                QVERIFY(!nextAction.contains(QStringLiteral("启动")));
+                QVERIFY(!nextAction.contains(QStringLiteral("启用")));
+            }
+        }
+        // 同一 socket 上先送迟到结果、再等新调用的应答，确保迟到帧已被消费且没有重发／重复结果。
+        QVERIFY(peerStream);
+        peerStream->send({{"kind", "result"}, {"id", "timeout"}, {"result", makeToolSuccessResult({})}});
+        bridge.setToolTimeoutMs(3000);
+        bridge.call("barrier", Tool::ListCategories, {});
+        QVERIFY(until([&] { return completed.size() == 2; }));
+        QCOMPARE(completed.last().first().toString(), QStringLiteral("barrier"));
+        QVERIFY(!completed.last().at(1).toJsonObject().value("isError").toBool());
+        QCOMPARE(calls.count(QStringLiteral("timeout")), 1);
+        QCOMPARE(cancelled.count(QStringLiteral("timeout")), 1);
     }
     void toolTimeoutCancelsWithoutReplay()
     {

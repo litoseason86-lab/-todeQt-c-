@@ -81,8 +81,9 @@ socket 位于应用数据目录的 `mcp/s`。macOS 路径按编码字节数最�
 - 超过 64 KiB 的单条请求、重复的在途请求编号：只拒绝那一条（编号为 null 的 `-32600`），辅助程序继续服务其他请求。
 - 背压：主应用等上一条结果发完才执行下一条请求，并行的几条大结果按顺序送达，不会因为发送缓冲里叠了多条而断线。客户端暂时不读 stdout 时，辅助程序停在消息边界，不再解析同一批里后面的请求——已经读进来的字节留着，读走响应后自动继续，一条都不丢。缓冲上限按协议允许的最坏情况留足余量（最多 16 条在途结果各占一条消息上限，外加背压阈值）。
 - 每个 AI 会话各拉起一个辅助程序；辅助程序空闲 30 秒会释放连接，下次调用自动重连。8 条连接都在使用时，状态工具报告 `unavailable_reason: connection_limit`，数据调用返回 `APP_UNAVAILABLE`（`details.reason` 同名），请关闭不用的 AI 会话后再试。
+- 每次工具调用从辅助程序收到起计 10 秒，排在前面请求后面的等待也算在内。主应用正忙或请求积压到期时，数据调用返回 `APP_UNAVAILABLE`、`details.reason: request_timeout`，下一步是稍后再试、不要循环重试；状态工具照常返回结果，`connected: false`、`unavailable_reason: request_timeout`；写请求已经发出的仍返回 `OUTCOME_UNKNOWN`，先查询核实，不自动重发。这不代表主应用没启动或接入被关（064 起；此前误报为 `endpoint_unreachable`）。
 
-更新部署后，退出再打开主应用，并在客户端重连 MCP，才能让两个进程都加载新版本。关闭接入、恢复备份或主应用重启都会改变会话。`STATE_CONFLICT` 要重新读取任务；`PERMISSION_DENIED` 要检查写开关；`APP_UNAVAILABLE` 要先看 `details.reason`：`connection_limit` 是连接数满了，其余情况检查主应用、接入开关及私有协议版本。不要因为发现了写工具就认为已经有写权限。
+更新部署后，退出再打开主应用，并在客户端重连 MCP，才能让两个进程都加载新版本。关闭接入、恢复备份或主应用重启都会改变会话。`STATE_CONFLICT` 要重新读取任务；`PERMISSION_DENIED` 要检查写开关；`APP_UNAVAILABLE` 要先看 `details.reason`：`connection_limit` 是连接数满了，`request_timeout` 是主应用忙或积压、稍后再试，其余情况检查主应用、接入开关及私有协议版本。不要因为发现了写工具就认为已经有写权限。
 
 ## 兼容验证与维护
 

@@ -230,6 +230,7 @@ private slots:
     void successResultDuplicatesStructuredContentAsText();
     void errorResultHasNoStructuredContent();
     void sampleResultsMatchOutputSchemas();
+    void requestTimeoutStatusMatchesOutputSchema();
 
     // 本机路径
     void pathsStayInsideInjectedRoot();
@@ -866,6 +867,22 @@ void McpProtocolTests::errorResultHasNoStructuredContent()
     const QJsonObject parsed = firstTextAsJson(result);
     QCOMPARE(parsed, error);
     QCOMPARE(parsed.value(QStringLiteral("retryable")), QJsonValue(false));
+}
+
+// 产品保证：状态查询将请求超时与连接不可达区分，新增原因必须是公开输出 schema 允许的值。
+void McpProtocolTests::requestTimeoutStatusMatchesOutputSchema()
+{
+    const QJsonObject status{
+        {QStringLiteral("connected"), false},
+        {QStringLiteral("helper_version"), QStringLiteral("test")},
+        {QStringLiteral("bridge_protocol_version"), McpContracts::kBridgeProtocolVersion},
+        {QStringLiteral("unavailable_reason"), QStringLiteral("request_timeout")},
+        {QStringLiteral("path_error"), QJsonValue(QJsonValue::Null)},
+        {QStringLiteral("app"), QJsonValue(QJsonValue::Null)}
+    };
+    QVERIFY(matchesOutput(Tool::GetStatus, status));
+    QVERIFY(!matchesOutput(Tool::GetStatus,
+                           with(status, QStringLiteral("unavailable_reason"), QStringLiteral("unknown_timeout"))));
 }
 
 void McpProtocolTests::sampleResultsMatchOutputSchemas()

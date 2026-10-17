@@ -342,6 +342,7 @@ ToolContract getStatusContract()
         unavailableReasonName(UnavailableReason::AuthenticationFailed),
         unavailableReasonName(UnavailableReason::HandshakeFailed),
         unavailableReasonName(UnavailableReason::ConnectionLimit),
+        unavailableReasonName(UnavailableReason::RequestTimeout),
         QJsonValue(QJsonValue::Null)};
     const QJsonArray pathReasons{
         QStringLiteral("identity_not_applied"), QStringLiteral("empty_root"),
@@ -1338,6 +1339,8 @@ QString unavailableReasonName(UnavailableReason reason)
         return QStringLiteral("handshake_failed");
     case UnavailableReason::ConnectionLimit:
         return QStringLiteral("connection_limit");
+    case UnavailableReason::RequestTimeout:
+        return QStringLiteral("request_timeout");
     }
     Q_UNREACHABLE();
     return QString();

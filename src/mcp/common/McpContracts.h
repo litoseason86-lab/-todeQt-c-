@@ -167,7 +167,9 @@ enum class UnavailableReason {
     HandshakeFailed,
     // 主应用的本地连接已满（kMaxConnections）。主应用拒绝时会明说原因，
     // 不能混进 endpoint_unreachable，否则用户会去查“应用有没有启动”。
-    ConnectionLimit
+    ConnectionLimit,
+    // 调用期限包含排队和等待应答，超时不能被解释成主应用没有启动或接入没有开启。
+    RequestTimeout
 };
 QString unavailableReasonName(UnavailableReason reason);
 
