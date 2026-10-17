@@ -160,11 +160,12 @@ import UniformTypeIdentifiers
         @Bindable var store = store
         SettingsForm {
             Section("日期范围") {
+                // 起止日期缺失或非法时退回 C++ 的逻辑今天，凌晨日界前不显示成第二天（062 A040）。
                 DatePicker("开始日期", selection: Binding(
-                    get: { ContentDateFormat.date(store.startDate) ?? .now },
+                    get: { ContentDateFormat.date(store.startDate) ?? LogicalDateNavigation.dateOrLogicalToday(store.startDate) },
                     set: { store.startDate = ContentDateFormat.isoDate($0) }), displayedComponents: .date)
                 DatePicker("结束日期", selection: Binding(
-                    get: { ContentDateFormat.date(store.endDate) ?? .now },
+                    get: { ContentDateFormat.date(store.endDate) ?? LogicalDateNavigation.dateOrLogicalToday(store.endDate) },
                     set: { store.endDate = ContentDateFormat.isoDate($0) }), displayedComponents: .date)
                 Button("本周") { store.selectRange("week") }
                 Button("本月") { store.selectRange("month") }

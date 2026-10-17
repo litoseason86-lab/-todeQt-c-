@@ -26,8 +26,9 @@ import SwiftUI
         }
         .sheet(isPresented: $datePickerPresented) {
             NavigationStack {
+                // 选中日期缺失或非法时退回 C++ 的逻辑今天，凌晨日界前不显示成第二天（062 A040）。
                 DatePicker("日期", selection: Binding(
-                    get: { LogicalDateNavigation.date(store.selectedDate) ?? .now },
+                    get: { LogicalDateNavigation.dateOrLogicalToday(store.selectedDate) },
                     set: { store.selectDate(LogicalDateNavigation.isoDate($0)) }), displayedComponents: .date)
                     .datePickerStyle(.graphical).padding()
                     .navigationTitle("选择日期").sheetChrome()

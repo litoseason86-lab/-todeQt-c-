@@ -466,7 +466,8 @@ private final class WeekDragLifetime: Sendable {
     @State private var submitted = false
     init(store: WeekStore, task: TaskValue) {
         self.store = store; self.task = task
-        _target = State(initialValue: LogicalDateNavigation.date(task.date) ?? .now)
+        // 任务日期缺失或非法时退回 C++ 的逻辑今天，凌晨日界前不把初值移到第二天（062 A040）。
+        _target = State(initialValue: LogicalDateNavigation.dateOrLogicalToday(task.date))
     }
     var body: some View {
         NavigationStack {
