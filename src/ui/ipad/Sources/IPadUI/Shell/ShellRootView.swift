@@ -314,15 +314,25 @@ private struct SidebarSummaryTiles: View {
     }
     private func tile(_ tile: ShellSummaryTile, current: PageID?) -> some View {
         let selected = current == tile.page
+        let icon = Image(systemName: tile.page.symbol).scaledSystemFont(size: 17)
+            .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.accentInk)
+        let number = MixedNumberText(parts: MixedNumberText.split(tile.value), numberSize: 22, unitSize: 13,
+                                     color: selected ? ThemeColors.surface : ThemeColors.inkStrong)
+            .lineLimit(1).minimumScaleFactor(0.3)
         return Button { store.select(tile.page) } label: {
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Image(systemName: tile.page.symbol).scaledSystemFont(size: 17)
-                        .foregroundStyle(selected ? ThemeColors.surface : ThemeColors.accentInk)
-                    Spacer(minLength: 4)
-                    MixedNumberText(parts: MixedNumberText.split(tile.value), numberSize: 22, unitSize: 13,
-                                    color: selected ? ThemeColors.surface : ThemeColors.inkStrong)
-                        .lineLimit(1).minimumScaleFactor(0.3)
+                // 侧栏宽度固定：辅助字号下图标与数字横排放不下（10-18 真机最大字号数字被挤成「…」），
+                // 改为数字在图标下一行；默认字号横排放得下，版式不变。
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        icon
+                        Spacer(minLength: 4)
+                        number
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        icon
+                        number
+                    }
                 }
                 // 侧栏宽度固定，辅助字号下标题会被截成一个字；与数字一样单行缩小。
                 Text(tile.title).scaledSystemFont(size: 13).lineLimit(1).minimumScaleFactor(0.4)
