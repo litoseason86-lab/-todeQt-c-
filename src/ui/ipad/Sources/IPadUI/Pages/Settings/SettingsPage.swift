@@ -198,14 +198,22 @@ import SwiftUI
             if let image { Image(uiImage: image).resizable().scaledToFill() }
         }
         .task(id: theme) {
+            guard !Task.isCancelled else { return }
+            image = nil
             if let cached = Self.cache[theme] { image = cached; return }
-            let options = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 320,
-                           kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary
-            guard let data = PTShellBridge.wallpaperData(forTheme: theme),
-                  let source = CGImageSourceCreateWithData(data as CFData, nil),
-                  let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return }
-            let value = UIImage(cgImage: thumbnail)
+            // 桥接只能在主线程读取资源；解码 PNG 和缩小图片会占住主线程，交给不继承 MainActor 的独立任务。
+            guard let data = PTShellBridge.wallpaperData(forTheme: theme) else { return }
+            let decoded = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                let options = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 320,
+                               kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary
+                guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                      let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else { return nil }
+                return UIImage(cgImage: thumbnail)
+            }.value
+            guard let value = decoded else { return }
             Self.cache[theme] = value
+            // 离页或换主题后仍可复用已解码缓存，但旧任务不能再覆盖当前视图的状态。
+            guard !Task.isCancelled else { return }
             image = value
         }
     }
