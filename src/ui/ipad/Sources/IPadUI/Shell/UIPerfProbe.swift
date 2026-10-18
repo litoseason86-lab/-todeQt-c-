@@ -245,15 +245,22 @@ import UIKit
                 closeRequestedAt = now()
                 sheet.close()
             }
-            if sheet.name == "session" {
+            // 关闭动作的测量结束时，弹出动画可能尚未完成；只给弹出式表单补观察，行内新建仍读 isComposing。
+            var sheetClosed = true
+            if let name = ["gap": "知识缺口", "countdown": "倒计时", "session": "补录"][sheet.name] {
                 if let window {
-                    await diagnoseSessionDismissal(in: window, requestedAt: closeRequestedAt, log: log)
+                    sheetClosed = await observePresentationDismissal(in: window, name: name, action: "关·\(sheet.name)",
+                                                                     requestedAt: closeRequestedAt, log: log)
+                    if !sheetClosed && sheet.name == "session" {
+                        sheetClosed = await diagnoseSessionDismissal(in: window, log: log)
+                    }
                 } else {
-                    log("测速：关·session 测完后窗口不可用，无法检查补录浮层收起")
+                    sheetClosed = false
+                    log("测速：关·\(sheet.name) 测完后窗口不可用，无法检查\(name)浮层收起")
                 }
             }
             if ["new-task", "gap", "countdown", "session"].contains(sheet.name) {
-                guard let window, presentationIsClosed(in: window),
+                guard sheetClosed, let window, presentationIsClosed(in: window),
                       sheet.name != "new-task" || todayEditingState?()?.isComposing == false else {
                     log("测速：\(sheet.name) 上一次表单尚未收起或窗口不可用，跳过开·\(sheet.name)·第2次")
                     continue
@@ -351,7 +358,7 @@ import UIKit
         return chain
     }
 
-    // 补录和记一笔共用关闭后的观察；超时保留当时的控制器链，第二次打开由调用方据结果放行。
+    // 弹出式表单和记一笔共用关闭后的观察；超时保留当时的控制器链，第二次打开由调用方据结果放行。
     private static func observePresentationDismissal(in window: UIWindow, name: String, action: String,
                                                      requestedAt: Double, log: (String) -> Void) async -> Bool {
         let checkStartedAt = now()
@@ -365,10 +372,8 @@ import UIKit
         return false
     }
 
-    private static func diagnoseSessionDismissal(in window: UIWindow, requestedAt: Double, log: (String) -> Void) async {
-        if await observePresentationDismissal(in: window, name: "补录", action: "关·session", requestedAt: requestedAt, log: log) {
-            return
-        }
+    // 仅补录在首次收起观察超时后激活「取消」再等，保留取证，不替其它表单追加交互。
+    private static func diagnoseSessionDismissal(in window: UIWindow, log: (String) -> Void) async -> Bool {
         let cancelStartedAt = now()
         if let controller = presentedControllers(in: window).last,
            let cancel = findElement(in: controller.view, labelPrefix: "取消") {
@@ -378,6 +383,7 @@ import UIKit
         }
         let closed = await waitForPresentationToClose(in: window)
         log("测速：补录取消取证后等待 \(ms(now() - cancelStartedAt)) ms，\(closed ? "已收起" : "仍未收起，将跳过第二次打开")")
+        return closed
     }
 
     private static func repeatInlineEditing(in window: UIWindow?, close: () -> Void, log: (String) -> Void) async {
