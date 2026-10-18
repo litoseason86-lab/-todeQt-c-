@@ -706,7 +706,9 @@ void KnowledgeGapServiceTests::reminderSummaryUsesLogicalDayBoundary()
 
     const QVariantMap shifted = service->getReminderSummary();
     QCOMPARE(shifted.value(QStringLiteral("dueToday")).toInt(), shiftDays == 0 ? 1 : 0);
-    QCOMPARE(shifted.value(QStringLiteral("overdue")).toInt(), shiftDays == 0 ? 2 : 1);
+    // 「今天」退一天时只有今天到期那条移出 dueToday；逾期 5 天与 2 天的仍早于新的今天，逾期数不变。
+    // 此前这里写成位移后为 1，只在凌晨日界点之间运行才暴露（10-18 CI 于 UTC 05:56 失败）。
+    QCOMPARE(shifted.value(QStringLiteral("overdue")).toInt(), 2);
     QCOMPARE(shifted.value(QStringLiteral("unscheduled")).toInt(), 1);
     QCOMPARE(shifted.value(QStringLiteral("oldestOverdueDays")).toInt(), 5 - shiftDays);
 
