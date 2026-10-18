@@ -66,11 +66,22 @@ TestCase {
         // 上限取得很小，方便用短文本构造「刚好到顶」和「超出被截断」。
         property int maxTitleLength: 5
         property var added: []
+        property var addArguments: []
+        property string failWith: ""
+        property bool failSilently: false
 
         function getTodayTasks() { return [] }
         function getTask(id) { return null }
-        function addTask(title, date) {
+        function addTask(title, date, categoryId, estimatedMinutes, notes) {
+            addArguments = [arguments.length, title, date, categoryId, estimatedMinutes, notes]
             added = added.concat([title])
+            // 真实服务在返回 false 前同步报失败，才能验证页面的调用期认领。
+            if (failWith.length > 0) {
+                operationFailed(failWith)
+                return false
+            }
+            if (failSilently)
+                return false
             return true
         }
         function setTaskCompleted(id, completed) { return true }
@@ -88,14 +99,24 @@ TestCase {
         }
     }
 
+    Component {
+        id: toastSpyComponent
+        SignalSpy { signalName: "toastRequested" }
+    }
+
     function init() {
         taskStub.added = []
+        taskStub.addArguments = []
+        taskStub.failWith = ""
+        taskStub.failSilently = false
     }
 
     function test_limitHintAppearsWhenTitleReachesMaximum() {
         // 输入到上限（含粘贴被截断）时显示上限提示，没到上限时不打扰；提交成功清空后提示随之消失。
         var companion = createTemporaryObject(companionComponent, testCase)
         verify(companion !== null)
+        var toast = createTemporaryObject(toastSpyComponent, testCase, { target: companion })
+        verify(toast !== null && toast.valid)
         var field = findChild(companion, "companionQuickAddField")
         var hint = findChild(companion, "companionQuickAddLimitHint")
         verify(field !== null)
@@ -117,7 +138,41 @@ TestCase {
         keyClick(Qt.Key_Return)
         compare(taskStub.added, ["一二三四五"])
         compare(field.text, "")
+        compare(toast.count, 0)
         verify(!hint.atLimit)
+    }
+
+    function test_quickAddFailureKeepsReasonAndDraft_data() {
+        // 产品保证：快速记录失败有服务原因时原样提示，没有原因时保留通用提示。
+        return [ { tag: "specific", reason: "新建任务失败：数据库未打开", expected: "新建任务失败：数据库未打开" },
+                 { tag: "fallback", reason: "", expected: "没有记上，请重试" } ]
+    }
+
+    function test_quickAddFailureKeepsReasonAndDraft(data) {
+        // 产品保证：快速记录失败只提示一次，保留输入，且不会变成页面加载错误。
+        var companion = createTemporaryObject(companionComponent, testCase)
+        verify(companion !== null)
+        var field = findChild(companion, "companionQuickAddField")
+        verify(field !== null)
+        var toast = createTemporaryObject(toastSpyComponent, testCase, { target: companion })
+        verify(toast !== null && toast.valid)
+        field.text = " 记录 "
+        field.forceActiveFocus()
+        compare(field.text, " 记录 ")
+        tryCompare(field, "activeFocus", true, 3000)
+        compare(companion.loadError, "")
+        compare(toast.count, 0)
+        var expectedDate = companion.todayIso()
+        taskStub.failWith = data.reason
+        taskStub.failSilently = data.reason.length === 0
+
+        keyClick(Qt.Key_Return)
+
+        compare(toast.count, 1)
+        compare(toast.signalArguments[0][0], data.expected)
+        compare(companion.loadError, "")
+        compare(field.text, " 记录 ")
+        compare(taskStub.addArguments, [5, "记录", expectedDate, 0, 0, ""])
     }
 
     function test_unrelatedCompletionFailureDoesNotBecomeLoadError_data() {

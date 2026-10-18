@@ -1,4 +1,5 @@
 #include <QSettings>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QSqlError>
 #include <QSqlQuery>
@@ -77,6 +78,8 @@ class FocusSessionControllerTests : public QObject
 private slots:
     void timerFailuresCarryOneSpecificReason_data();
     void timerFailuresCarryOneSpecificReason();
+    void discardAndCycleResetFailuresCarrySpecificReason_data();
+    void discardAndCycleResetFailuresCarrySpecificReason();
     void controllerAdmissionFailureHasSpecificReason();
     void successfulTimerActionsDoNotReportFailure();
     void automaticCompletionFailureReportsOnceWithReason();
@@ -971,6 +974,141 @@ void FocusSessionControllerTests::autoAdvanceFollowsPerPhaseSwitch()
     }
 }
 
+
+// 产品保证：丢弃与清零的各类拒绝给出具体原因，结算通知期间的重入保持静默。
+void FocusSessionControllerTests::discardAndCycleResetFailuresCarrySpecificReason_data()
+{
+    QTest::addColumn<bool>("discard");
+    QTest::addColumn<QString>("fault");
+    QTest::addColumn<QString>("reason");
+    QTest::newRow("discard-idle") << true << QStringLiteral("idle") << QStringLiteral("没有进行中的自由专注");
+    QTest::newRow("discard-pomodoro") << true << QStringLiteral("pomodoro") << QStringLiteral("没有进行中的自由专注");
+    QTest::newRow("discard-missing-session") << true << QStringLiteral("missing-session") << QStringLiteral("专注记录不存在或已被删除");
+    QTest::newRow("discard-delete") << true << QStringLiteral("delete") << QStringLiteral("T36 blocked");
+    QTest::newRow("discard-clear") << true << QStringLiteral("clear") << QStringLiteral("T36 blocked");
+    QTest::newRow("reset-write") << false << QStringLiteral("write") << QStringLiteral("T36 blocked");
+    QTest::newRow("reset-missing-cycle") << false << QStringLiteral("missing-cycle") << QStringLiteral("番茄循环状态不存在");
+    QTest::newRow("reset-commit") << false << QStringLiteral("commit") << QStringLiteral("FOREIGN KEY");
+    for (const bool discard : {true, false}) {
+        const QString action = discard ? QStringLiteral("discard") : QStringLiteral("reset");
+        QTest::newRow(qPrintable(action + "-closed")) << discard << QStringLiteral("closed") << QStringLiteral("数据库未打开");
+        QTest::newRow(qPrintable(action + "-transaction")) << discard << QStringLiteral("transaction") << QStringLiteral("无法开始数据库事务：");
+        QTest::newRow(qPrintable(action + "-reentrant")) << discard << QStringLiteral("reentrant") << QString();
+    }
+}
+
+// 产品保证：丢弃与清零失败只报一次原因，保留原计时和数据库；重入保护不播报失败。
+void FocusSessionControllerTests::discardAndCycleResetFailuresCarrySpecificReason()
+{
+    QFETCH(bool, discard);
+    QFETCH(QString, fault);
+    QFETCH(QString, reason);
+    QSqlDatabase database = DatabaseManager::instance()->database();
+    // 每行使用隔离库；断言提前退出时也撤销故障注入，避免污染 cleanup 的正常清零。
+    const auto restore = qScopeGuard([&] {
+        timer()->m_cycleNotificationInProgress = false;
+        if (!database.isOpen()) database.open();
+        if (fault == QLatin1String("transaction")) database.rollback();
+        QSqlQuery cleanup(database);
+        cleanup.exec("DROP TRIGGER IF EXISTS t36_block");
+        cleanup.exec("DROP TRIGGER IF EXISTS t36_commit");
+        cleanup.exec("DROP TABLE IF EXISTS t36_deferred");
+    });
+    if (discard && fault != QLatin1String("idle")) {
+        if (fault == QLatin1String("pomodoro")) {
+            const int task = insertTask(QStringLiteral("保留番茄"));
+            QVERIFY(task > 0);
+            QVERIFY(timer()->startPomodoroWork(task, QStringLiteral("保留番茄"), 1500));
+            QCOMPARE(timer()->mode(), FocusTimer::PomodoroMode);
+        } else {
+            QVERIFY(startFreeFor(42) > 0);
+            QCOMPARE(timer()->mode(), FocusTimer::FreeMode);
+        }
+        QVERIFY(timer()->m_sessionId > 0);
+        QVERIFY(timer()->isRunning());
+        QCOMPARE(queryInt("SELECT COUNT(*) FROM focus_sessions"), 1);
+        QCOMPARE(queryInt("SELECT COUNT(*) FROM active_focus_state"), 1);
+    }
+    {
+        QSqlQuery setup(database);
+        if (!discard) {
+            // 从非零值清零，才能区分失败保持与错误地把计数改成零。
+            QVERIFY(setup.exec("UPDATE pomodoro_cycle_state SET completed_pomodoros=2 WHERE singleton_id=1"));
+            timer()->m_completedPomodoros = 2;
+            QCOMPARE(timer()->completedPomodoros(), 2);
+            QCOMPARE(queryInt("SELECT completed_pomodoros FROM pomodoro_cycle_state WHERE singleton_id=1"), 2);
+        }
+        const QString target = fault == QLatin1String("delete") ? QStringLiteral("focus_sessions")
+            : fault == QLatin1String("clear") ? QStringLiteral("active_focus_state")
+            : fault == QLatin1String("write") ? QStringLiteral("pomodoro_cycle_state") : QString();
+        if (!target.isEmpty()) {
+            const QString verb = discard ? QStringLiteral("DELETE") : QStringLiteral("UPDATE");
+            QVERIFY2(setup.exec("CREATE TEMP TRIGGER t36_block BEFORE " + verb + " ON " + target
+                + " BEGIN SELECT RAISE(ABORT, 'T36 blocked'); END"), qPrintable(setup.lastError().text()));
+        }
+        if (fault == QLatin1String("missing-session")) {
+            QVERIFY(setup.exec("DELETE FROM focus_sessions"));
+            QCOMPARE(queryInt("SELECT COUNT(*) FROM focus_sessions"), 0);
+        }
+        if (fault == QLatin1String("missing-cycle")) {
+            QVERIFY(setup.exec("DELETE FROM pomodoro_cycle_state"));
+            QCOMPARE(queryInt("SELECT COUNT(*) FROM pomodoro_cycle_state"), 0);
+        }
+        if (fault == QLatin1String("commit")) {
+            // 延迟外键只在提交时失败，验证已执行的清零也回滚，且原因不会被 rollback 清掉。
+            QVERIFY(setup.exec("CREATE TABLE t36_deferred(parent INTEGER REFERENCES tasks(id) DEFERRABLE INITIALLY DEFERRED)"));
+            QVERIFY(setup.exec("CREATE TEMP TRIGGER t36_commit AFTER UPDATE ON pomodoro_cycle_state"
+                               " BEGIN INSERT INTO t36_deferred VALUES(-999); END"));
+            QCOMPARE(queryInt("PRAGMA foreign_keys"), 1);
+            QCOMPARE(queryInt("SELECT COUNT(*) FROM t36_deferred"), 0);
+        }
+    }
+    if (fault == QLatin1String("transaction")) QVERIFY(database.transaction());
+    const int beforeSessions = queryInt("SELECT COUNT(*) FROM focus_sessions");
+    const int beforeSnapshots = queryInt("SELECT COUNT(*) FROM active_focus_state");
+    const int beforeCycles = queryInt("SELECT COUNT(*) FROM pomodoro_cycle_state");
+    const int beforeCount = timer()->completedPomodoros();
+    const int beforeSession = timer()->m_sessionId;
+    const int beforeTask = timer()->currentTaskId();
+    const int beforeElapsed = timer()->elapsedSeconds();
+    const auto beforeMode = timer()->mode();
+    const auto beforePhase = timer()->phase();
+    const bool beforeRunning = timer()->isRunning();
+    const bool reentrant = fault == QLatin1String("reentrant");
+    timer()->m_cycleNotificationInProgress = reentrant;
+    if (fault == QLatin1String("closed")) {
+        // 只关闭现有连接，动作后原样重开检查行数，避免 initialize 的修复逻辑掩盖写入。
+        database.close();
+        QVERIFY(!DatabaseManager::instance()->isOpen());
+    }
+    QSignalSpy failed(timer(), &FocusTimer::operationFailed);
+    QVERIFY(failed.isValid());
+
+    const bool result = discard ? timer()->discardFreeFocus() : timer()->resetPomodoroCount();
+
+    QVERIFY(!result);
+    QCOMPARE(failed.count(), reentrant ? 0 : 1);
+    if (!reentrant) {
+        const QString message = failed.first().first().toString();
+        const QString prefix = discard ? QStringLiteral("丢弃专注失败：") : QStringLiteral("番茄循环清零失败：");
+        QVERIFY2(message.startsWith(prefix), qPrintable(message));
+        QVERIFY2(message.contains(reason), qPrintable(message));
+    }
+    QCOMPARE(timer()->m_sessionId, beforeSession);
+    QCOMPARE(timer()->currentTaskId(), beforeTask);
+    QCOMPARE(timer()->isRunning(), beforeRunning);
+    QCOMPARE(timer()->elapsedSeconds(), beforeElapsed);
+    QCOMPARE(timer()->mode(), beforeMode);
+    QCOMPARE(timer()->phase(), beforePhase);
+    QCOMPARE(timer()->completedPomodoros(), beforeCount);
+    if (fault == QLatin1String("closed")) QVERIFY(database.open());
+    QCOMPARE(queryInt("SELECT COUNT(*) FROM focus_sessions"), beforeSessions);
+    QCOMPARE(queryInt("SELECT COUNT(*) FROM active_focus_state"), beforeSnapshots);
+    QCOMPARE(queryInt("SELECT COUNT(*) FROM pomodoro_cycle_state"), beforeCycles);
+    if (!discard && fault != QLatin1String("missing-cycle"))
+        QCOMPARE(queryInt("SELECT completed_pomodoros FROM pomodoro_cycle_state WHERE singleton_id=1"), beforeCount);
+    if (fault == QLatin1String("commit")) QCOMPARE(queryInt("SELECT COUNT(*) FROM t36_deferred"), 0);
+}
 
 // 产品保证：启动和停表被拒绝时说明具体原因，保留原计时与数据库状态，一次调用只报一次。
 void FocusSessionControllerTests::timerFailuresCarryOneSpecificReason_data()

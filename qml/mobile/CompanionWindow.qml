@@ -78,12 +78,19 @@ Item {
         return Number(settings.breakMinutes)
     }
 
+    // 新建任务的失败信号在同步调用期间认领，由快速记录入口合成一次提示。
+    property var taskWriteCall: null
     function addTask(title) {
         var trimmed = String(title || "").trim()
         if (trimmed.length === 0 || !root.taskManagerRef)
             return false
-        if (!root.taskManagerRef.addTask(trimmed, root.todayIso())) {
-            root.toastRequested(qsTr("没有记上，请重试"))
+        var previous = root.taskWriteCall
+        var call = { value: false, error: "" }
+        root.taskWriteCall = call
+        try { call.value = root.taskManagerRef.addTask(trimmed, root.todayIso(), 0, 0, "") }
+        finally { root.taskWriteCall = previous }
+        if (!call.value) {
+            root.toastRequested(call.error || qsTr("没有记上，请重试"))
             return false
         }
         return true
@@ -167,7 +174,12 @@ Item {
         }
 
         function onOperationFailed(message) {
-            // 完成和撤销由 setCompleted 的返回值提示；快速记录走旧的两参 addTask，也有自己的提示。
+            var reason = String(message || "")
+            if (root.taskWriteCall && root.taskWriteCall.error.length === 0 && /^新建任务失败：/.test(reason)) {
+                root.taskWriteCall.error = reason
+                return
+            }
+            // 完成和撤销由 setCompleted 的返回值提示；快速记录在调用期间认领原因并只提示一次。
             // 单条删除由待删槽合并原标题；createTask、字段修改和单条改期来自其它入口，不能显示成加载错误。
             if (/^(删除任务|完成|取消完成|完成并记笔记|新建任务|修改任务|任务改期)失败：/.test(String(message || "")))
                 return

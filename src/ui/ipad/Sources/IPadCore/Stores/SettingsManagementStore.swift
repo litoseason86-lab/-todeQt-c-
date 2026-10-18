@@ -48,9 +48,12 @@ import Observation
     }
     public func canDelete(_ value: CategoryValue) -> Bool { !value.isPreset && bridge.canDelete(id: value.id) }
     @discardableResult public func delete(_ value: CategoryValue) -> Bool {
-        guard canDelete(value) else { errorMessage = "此科目不能删除"; return false }
+        // 能否删除以服务的删除结果为准；canDelete 只供按钮判断能力，给不出拒绝原因。
         do { try bridge.delete(id: value.id); reload(); return true }
-        catch { errorMessage = error.localizedDescription; return false }
+        catch {
+            // 列表可能因另一台设备删除科目而过期；先刷新再写原因，避免 reload 成功清空本次错误。
+            reload(); errorMessage = error.localizedDescription; return false
+        }
     }
 }
 

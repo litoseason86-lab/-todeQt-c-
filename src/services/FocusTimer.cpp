@@ -607,7 +607,7 @@ bool FocusTimer::discardFreeFocus()
 {
     if (m_sessionId == -1 || m_mode != FreeMode || m_phase != NoPhase) {
         qWarning() << "Failed to discard free focus: no active free-focus session";
-        return false;
+        return failOperation(QStringLiteral("丢弃专注"), QStringLiteral("没有进行中的自由专注"));
     }
 
     const bool wasRunning = m_isRunning;
@@ -617,13 +617,16 @@ bool FocusTimer::discardFreeFocus()
     }
 
     // discardFocusSession 在同一事务中删除会话行和活动快照；失败时恢复计时，不能造成界面已结束但脏行仍在。
-    if (!discardFocusSession()) {
+    QString error;
+    if (!discardFocusSession(&error)) {
         if (wasRunning) {
             m_isRunning = true;
             beginRunSegment();
             m_timer.start();
         }
-        return false;
+        // 结算通知期间的重入保护不带原因，保持静默，避免失败提示经待删提交再次进入计时器。
+        if (error.isEmpty()) return false;
+        return failOperation(QStringLiteral("丢弃专注"), error);
     }
 
     resetSession();
@@ -839,12 +842,22 @@ void FocusTimer::applyCycleCount(int count)
 bool FocusTimer::resetPomodoroCount()
 {
     if (m_cycleNotificationInProgress) return false;
+    const QString action = QStringLiteral("番茄循环清零");
     QSqlDatabase db = DatabaseManager::instance()->database();
-    if (!db.isOpen() || !db.transaction()) return false;
+    if (!db.isOpen()) return failOperation(action, QStringLiteral("数据库未打开"));
+    if (!db.transaction())
+        return failOperation(action, QStringLiteral("无法开始数据库事务：%1").arg(db.lastError().text()));
     // 空档也要写入，不能只看内存为零；换库后内存可能属于另一份数据库。
-    if (!writeCycleCount(db, 0) || !db.commit()) {
+    QString error;
+    if (!writeCycleCount(db, 0, &error)) {
         db.rollback();
-        return false;
+        return failOperation(action, error);
+    }
+    if (!db.commit()) {
+        // 回滚可能清空连接错误，先保存提交失败的原因，才能交给发起入口提示。
+        const QString reason = db.lastError().text();
+        db.rollback();
+        return failOperation(action, reason);
     }
     applyCycleCount(0);
     return true;

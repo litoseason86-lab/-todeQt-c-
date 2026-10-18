@@ -19,14 +19,33 @@ import XCTest
         XCTAssertTrue(store.editing)
     }
 
-    // 产品保证：不能删除的科目连删除调用都不发起，固定能力由服务判断。
-    func testCategoryDeletionUsesServiceCapability() {
+    // 产品保证：服务拒绝删除时显示服务给出的原因并刷新列表，重试成功后清空原因。
+    func testCategoryDeletionShowsServiceReasonAndReloads() {
         let bridge = CategoryBridgeFake(); bridge.deletable = false
-        let store = SettingsCategoryStore(bridge: bridge)
         var value = CategoryValue(); value.id = 9
+        var remaining = CategoryValue(); remaining.id = 10
+        bridge.result = [value, remaining]
+        let store = SettingsCategoryStore(bridge: bridge)
+        store.reload()
+        XCTAssertEqual(store.values, [value, remaining])
+        bridge.result = [remaining]
+        bridge.deleteError = NSError(domain: "test", code: 1,
+                                     userInfo: [NSLocalizedDescriptionKey: "删除科目失败：科目不存在"])
+        bridge.calls.removeAll()
         XCTAssertFalse(store.delete(value))
-        XCTAssertTrue(bridge.calls.contains { $0.0 == "canDelete" && $0.1 == 9 })
-        XCTAssertFalse(bridge.calls.contains { $0.0 == "delete" })
+        XCTAssertEqual(bridge.calls.map { $0.0 }, ["delete", "allCategories"])
+        XCTAssertEqual(bridge.calls.first?.1, value.id)
+        XCTAssertEqual(store.errorMessage, "删除科目失败：科目不存在")
+        XCTAssertEqual(store.values, [remaining])
+
+        bridge.deleteError = nil
+        bridge.result = []
+        bridge.calls.removeAll()
+        XCTAssertTrue(store.delete(remaining))
+        XCTAssertEqual(bridge.calls.map { $0.0 }, ["delete", "allCategories"])
+        XCTAssertEqual(bridge.calls.first?.1, remaining.id)
+        XCTAssertEqual(store.errorMessage, "")
+        XCTAssertEqual(store.values, [])
     }
 
     // 产品保证：例行编辑只提交改过的字段，未改的科目保留同步更新，星期另存。

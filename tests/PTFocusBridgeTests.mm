@@ -61,6 +61,7 @@ private slots:
     void breakAndAutoAdvanceForwardController();
     void candidateCreationAndTaskCompletion();
     void failuresAndMissingController();
+    void discardFailureReturnsStorageReason();
     void allSignalsAndLifetime();
     void backgroundSignalsReturnToMain();
     void reminderFailureSignals();
@@ -246,6 +247,29 @@ void PTFocusBridgeTests::actionRejectionKeepsSpecificReason()
     }
 }
 
+// 产品保证：丢弃专注的存储失败原样进入桥接返回值，调用期原因不会再走后台提示。
+void PTFocusBridgeTests::discardFailureReturnsStorageReason() {
+    @autoreleasepool {
+        PTFocusBridge *b = [PTFocusBridge new];
+        __block int background = 0;
+        b.onFailure = ^(NSString *) { ++background; };
+        NSError *error = nil;
+        QVERIFY([b startFree:m_task title:@"保留自由专注" error:&error]);
+        QVERIFY(error == nil);
+        QVERIFY(FocusTimer::instance()->hasActiveSession());
+        DatabaseManager::instance()->close();
+        QVERIFY(!DatabaseManager::instance()->isOpen());
+
+        PTFocusFinishResult *finish = [b finishLongFree:NO correctedSeconds:0];
+
+        QVERIFY(finish.valid);
+        QVERIFY(!finish.ok);
+        QVERIFY2([finish.error containsString:@"丢弃专注失败：数据库未打开"], finish.error.UTF8String);
+        QCOMPARE(background, 0);
+        // cleanup 会重置计时并关闭隔离库；后续场景由 init 重新打开，故障不跨场景。
+    }
+}
+
 // 产品保证：调用期错误只归当前返回值，宽整数越界不截断；登记失效后安全报错而非使用悬空指针。
 void PTFocusBridgeTests::failuresAndMissingController() {
     @autoreleasepool {
@@ -262,7 +286,7 @@ void PTFocusBridgeTests::failuresAndMissingController() {
         PTFocusFinishResult *finish = [b finishLongFree:YES correctedSeconds:180]; QVERIFY(!finish.ok); QVERIFY([finish.error containsString:@"结束专注失败：失败"]);
         QVERIFY(q.exec("DROP TRIGGER reject_stop"));
         QVERIFY(q.exec("CREATE TRIGGER reject_discard BEFORE DELETE ON focus_sessions BEGIN SELECT RAISE(ABORT, '失败'); END"));
-        finish = [b finishLongFree:NO correctedSeconds:0]; QVERIFY(!finish.ok); QVERIFY([finish.error isEqualToString:@"专注丢弃失败，请重试"]);
+        finish = [b finishLongFree:NO correctedSeconds:0]; QVERIFY(!finish.ok); QVERIFY([finish.error containsString:@"丢弃专注失败：失败"]);
         emit TaskManager::instance()->operationFailed(QStringLiteral("其它页面的任务失败")); QCOMPARE(background, 0);
         emit FocusTimer::instance()->operationFailed(QStringLiteral("背景失败")); QCOMPARE(background, 1);
         m_controller.reset(); QVERIFY(!b.endCurrent.valid); QVERIFY([b.endCurrent.error isEqualToString:@"专注控制器不可用"]);
