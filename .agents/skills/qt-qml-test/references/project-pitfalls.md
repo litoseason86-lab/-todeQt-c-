@@ -18,6 +18,8 @@
 - 会量颜色或切主题的用例，在 `initTestCase` 把 `Theme.reduceMotion` 和替身 `appSettings.reduceMotion` 设为 true，`cleanupTestCase` 还原（照 `tst_contrast_audit.qml`）。`Theme.reduceMotion` 只在 `main.qml` 绑定，测试里默认是 false，颜色动画照常跑，并行时量到的是过渡色。
 - 指针位置会跨用例留在同一个测试窗口里。弹层出现在静止的指针下时，Qt 下一帧会补发一次悬停，选项行跟着改高亮（`ChoicePopup.openedByKeyboard` 就是为此加的）。测「键盘打开弹层」的用例：先把指针停到弹层将出现的位置再打开，`TestWaits.letElapse(testCase, 300, "…")` 让补发的悬停送到，才能稳定复现（补发没有可等的信号；`tests/qml` 里不能直接写 `wait()`，见 `QmlFixedWaitGate`）。
 
+- 验证短动画播过，不要用 `tryVerify` / `tryCompare` 要求轮询到透明度、缩放等中间值：主线程卡住后，100–140 ms 的过渡可能在两次轮询之间播完，延长超时也找不回已错过的帧。改为动作前给 `Transition` 的 `runningChanged` 挂 `SignalSpy`，先验证 `valid` 并清零，等最终打开 / 关闭状态后核对至少两次变化（开始、结束）及最终 `running === false`；再从 `Transition.animations`（含并行动画的子列表）读取 `NumberAnimation` 的 `from` / `to`、正常时长大于 0、减少动效时时长为 0。Qt 6.10.3 离屏实测见 `tst_memo_view.qml` 的 `test_choicePopupHighlightAndAnimation`。模拟卡顿时要让动画驱动器先处理首个时间片，再忙等并送达过期更新：只在 `open()` / `close()` 后立刻忙等 300 ms，可能仅延后驱动器起表，旧用例照样通过，不能当成红绿对照。
+
 ## 输入与字体
 
 - QML 测试发不出 `QInputMethodEvent`，而 iPad 的全部输入、Mac 的拼音上屏都走输入法，`TextArea` 在这条路径上不发 `textEdited`。测「编辑后自动保存」这类行为，用 `MemoQuickTests` 宿主注入的 `inputMethodProbe.commit(输入框, 文字)`、`inputMethodProbe.compose(输入框, 拼音)`（只发给当前焦点对象，焦点不对返回 false）；目前 `memo_view` 走这个宿主。

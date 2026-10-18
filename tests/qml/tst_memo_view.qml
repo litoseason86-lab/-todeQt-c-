@@ -1369,7 +1369,8 @@ TestCase {
         keyClick(Qt.Key_Return);
         verify(title.activeFocus, "组合中的回车归输入法，不跳到正文");
     }
-    // 产品保证：改分类的弹层打开时停在当前分类；鼠标移到哪行，哪行亮起焦糖底（看得出点下去会选哪个），
+    // 产品保证：分类弹层打开时淡入并从略小展开，收起时淡出并缩小，减少动效时直接显隐；悬停与对勾各自保持正确。
+    // 改分类的弹层打开时停在当前分类；鼠标移到哪行，哪行亮起焦糖底（看得出点下去会选哪个），
     // 当前分类的对勾不跟着走；文字在亮起的底色里上下居中；点弹层外面就收起；「新建」菜单开着时再点「新建」就收起；
     // 打开、收起有淡入淡出和轻微缩放，开了「减少动效」就没有。
     // 抓住的错误实现：悬停色和弹层底几乎一样（真机上看不出鼠标指着哪行）；当前项只靠底色标出，一悬停就分不清；
@@ -1416,22 +1417,76 @@ TestCase {
         verify(!menu.visible, "再点「新建」就收起，不会又弹出来");
         Theme.reduceMotion = false;
         try {
+            // 短过渡可能在慢机器的两次轮询之间播完；动作前记录 runningChanged，不靠采到某一帧证明动画发生。
+            var enterSpy = createTemporaryQmlObject('import QtTest; SignalSpy { signalName: "runningChanged" }', testCase);
+            var exitSpy = createTemporaryQmlObject('import QtTest; SignalSpy { signalName: "runningChanged" }', testCase);
+            verify(enterSpy !== null && exitSpy !== null);
+            enterSpy.target = popup.enter;
+            exitSpy.target = popup.exit;
+            verify(enterSpy.valid, "前置：能监听打开过渡的 runningChanged");
+            verify(exitSpy.valid, "前置：能监听收起过渡的 runningChanged");
+            compare(popup.enter.running, false);
+            compare(popup.exit.running, false);
+
+            // Transition 的动画列表可能包着并行动画；读取实际 NumberAnimation，分开验证播放记录与起止配置。
+            function numberAnimations(transition) {
+                var found = {};
+                function collect(animations) {
+                    for (var i = 0; i < animations.length; ++i) {
+                        var animation = animations[i];
+                        if (animation instanceof NumberAnimation) {
+                            verify(found[animation.property] === undefined, "同一属性只配置一条数值动画");
+                            found[animation.property] = animation;
+                        } else if (animation.animations !== undefined) {
+                            collect(animation.animations);
+                        }
+                    }
+                }
+                collect(transition.animations);
+                verify(found.opacity !== undefined && found.scale !== undefined, "过渡必须包含透明度和缩放两条数值动画");
+                return found;
+            }
+            var enterAnimations = numberAnimations(popup.enter);
+            var exitAnimations = numberAnimations(popup.exit);
+            var expected = [
+                { animation: enterAnimations.opacity, from: 0, to: 1 },
+                { animation: enterAnimations.scale, from: 0.96, to: 1 },
+                { animation: exitAnimations.opacity, from: 1, to: 0 },
+                { animation: exitAnimations.scale, from: 1, to: 0.96 }
+            ];
+            for (var i = 0; i < expected.length; ++i) {
+                compare(expected[i].animation.from, expected[i].from);
+                compare(expected[i].animation.to, expected[i].to);
+                verify(expected[i].animation.duration > 0, "允许动效时每条过渡动画都有时长");
+            }
+            enterSpy.clear();
+            exitSpy.clear();
             popup.open();
-            tryVerify(function () {
-                return popup.scale < 1 && popup.opacity < 1;
-            }, 1000, "打开时从略小、半透明展开");
             tryCompare(popup, "scale", 1, 3000);
             tryCompare(popup, "opacity", 1, 3000);
             tryVerify(function () {
                 return popup.opened;
             }, 3000);
+            tryCompare(popup.enter, "running", false, 3000);
+            verify(enterSpy.count >= 2, "打开过渡记录了开始和结束");
             popup.close();
-            tryVerify(function () {
-                return popup.opacity < 1;
-            }, 1000, "收起时淡出");
             tryVerify(function () {
                 return !popup.visible;
             }, 3000);
+            tryCompare(popup.exit, "running", false, 3000);
+            verify(exitSpy.count >= 2, "收起过渡记录了开始和结束");
+
+            Theme.reduceMotion = true;
+            for (var j = 0; j < expected.length; ++j)
+                compare(expected[j].animation.duration, 0, "减少动效时每条过渡动画时长为零");
+            popup.open();
+            tryCompare(popup, "opened", true, 3000);
+            compare(popup.scale, 1);
+            compare(popup.opacity, 1);
+            compare(popup.enter.running, false);
+            popup.close();
+            tryCompare(popup, "visible", false, 3000);
+            compare(popup.exit.running, false);
         } finally {
             Theme.reduceMotion = true;
         }
