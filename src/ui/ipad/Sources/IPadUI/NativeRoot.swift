@@ -131,6 +131,17 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                 .knowledgeGap: { [weak gaps] in gaps?.refresh() }, .memo: { [weak memos] in memos?.refresh() },
                 .trash: { [weak trashStore] in trashStore?.reload() }]
             UIPerfProbe.shellRefresh = { [weak store] in store?.refresh() }
+            // 与今日列表共用分组集合；不足两条时不拿第一条冒充第二条，也不从回收过的界面节点猜行数。
+            UIPerfProbe.editSecondTodayTask = { [weak today, weak core] in
+                guard let today, let core else { return false }
+                let rows = today.unfinished
+                guard rows.count >= 2 else { return false }
+                return core.inlineEditor.begin(id: rows[1].id)
+            }
+            UIPerfProbe.todayTaskCounts = { [weak today] in
+                guard let today else { return nil }
+                return (unfinished: today.unfinished.count, finished: today.finished.count)
+            }
             UIPerfProbe.extraActions = [
                 ("计时跳动·外壳", { [weak store] in store?.refreshTimer() }),
                 ("计时跳动·专注页", { [weak focus] in focus?.refreshSnapshot() }),
