@@ -3,7 +3,7 @@
 # 改动前后逐一对比了 Mac 全部编译/链接命令、测试登记和 iOS Xcode 工程。
 cmake_minimum_required(VERSION 3.22...4.0)
 
-project(PomodoroTodo VERSION 1.0.3 LANGUAGES CXX)
+project(PomodoroTodo VERSION 1.0.4 LANGUAGES CXX)
 
 # 菜单栏与系统通知走 macOS 原生 API（NSStatusItem / UNUserNotificationCenter），
 # 需要 Objective-C++ 编译能力。平台只有 macOS 与 iOS 两个：iOS 构建只产出应用本体，
