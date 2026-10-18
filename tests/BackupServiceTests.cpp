@@ -23,6 +23,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSqlDatabase>
+#include <QSysInfo>
 #include <QTemporaryDir>
 #include <QUuid>
 #include <QtTest>
@@ -267,6 +268,9 @@ private slots:
     void cleanup();
 
     void readBackupsSeparatesNoneFromUnreadableFolder();
+    void platformDisplayName_data();
+    void platformDisplayName();
+    void backupRecordsRuntimePlatform();
     void createBackupProducesSingleFileNoTemp();
     void backupRejectsRuntimeProtectedDestinations();
     void backupCapturesAllBusinessTables();
@@ -728,6 +732,38 @@ void BackupServiceTests::backupPublicationRejectsUnrestorableLargeField()
     QFile file(backupFile());
     QVERIFY(file.open(QIODevice::ReadOnly));
     QCOMPARE(file.readAll(), original);
+}
+
+// 产品保证：备份平台标记区分 macOS 与 iOS，空值可识别，其它产品类型不被改写。
+void BackupServiceTests::platformDisplayName_data()
+{
+    QTest::addColumn<QString>("productType");
+    QTest::addColumn<QString>("displayName");
+    QTest::newRow("macos") << QStringLiteral("macos") << QStringLiteral("macOS");
+    QTest::newRow("ios") << QStringLiteral("ios") << QStringLiteral("iOS");
+    QTest::newRow("empty") << QString() << QStringLiteral("unknown");
+    QTest::newRow("other") << QStringLiteral("debian") << QStringLiteral("debian");
+}
+
+// 产品保证：显示平台名由传入的运行时产品类型决定，不因测试运行在 Mac 上就固定为 macOS。
+void BackupServiceTests::platformDisplayName()
+{
+    QFETCH(QString, productType);
+    QFETCH(QString, displayName);
+    QCOMPARE(BackupOperations::platformDisplayName(productType), displayName);
+}
+
+// 产品保证：实际创建的备份元数据记录当前运行平台，Mac 的平台显示值保持兼容。
+void BackupServiceTests::backupRecordsRuntimePlatform()
+{
+    QVERIFY(!QFileInfo::exists(backupFile()));
+    auto* backup = BackupService::instance();
+    QVERIFY2(backup->createBackup(backupFile()), qPrintable(backup->lastError()));
+    const QVariantMap info = backup->readBackupInfo(backupFile());
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(),
+             qPrintable(info.value(QStringLiteral("reason")).toString()));
+    QCOMPARE(info.value(QStringLiteral("platform")).toString(),
+             BackupOperations::platformDisplayName(QSysInfo::productType()));
 }
 
 void BackupServiceTests::createBackupProducesSingleFileNoTemp()

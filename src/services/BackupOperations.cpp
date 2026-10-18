@@ -21,6 +21,7 @@
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QStringList>
+#include <QSysInfo>
 #include <QUuid>
 
 #include <memory>
@@ -33,6 +34,17 @@ constexpr int kMaxSettingEntries = 500;
 // 格式1只允许标量，固定到最低支持SDK的流格式，避免升级Qt后默认版本改变备份编码。
 // 当前允许类型在Qt6.7与Qt6.10编码相同；新增类型时必须同时核对固定夹具和旧备份兼容。
 constexpr auto kSettingsStreamVersion = QDataStream::Qt_6_7;
+
+QString platformDisplayName(const QString& productType)
+{
+    if (productType == QStringLiteral("macos")) {
+        return QStringLiteral("macOS");
+    }
+    if (productType == QStringLiteral("ios")) {
+        return QStringLiteral("iOS");
+    }
+    return productType.isEmpty() ? QStringLiteral("unknown") : productType;
+}
 
 std::unique_ptr<QSettings> openSettings(const QString& settingsFilePath)
 {
@@ -712,7 +724,7 @@ OperationResult embedMetadataAndSettings(const QString& snapshotPath,
                                QDateTime::currentDateTime().toString(Qt::ISODate))
                     && putMeta(QStringLiteral("app_version"), applicationVersion)
                     && putMeta(QStringLiteral("schema_version"), QString::number(schemaVersion))
-                    && putMeta(QStringLiteral("platform"), QStringLiteral("macOS"))
+                    && putMeta(QStringLiteral("platform"), platformDisplayName(QSysInfo::productType()))
                     && putMeta(QStringLiteral("kind"), kind);
             }
 

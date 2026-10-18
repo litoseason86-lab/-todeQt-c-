@@ -19,6 +19,10 @@ inline constexpr qint64 kMaxBackupFileBytes = 512LL * 1024 * 1024;
 inline constexpr qint64 kMaxBackupRows = 5'000'000;
 inline constexpr qint64 kMaxBackupCellBytes = 16LL * 1024 * 1024;
 
+// 平台字段只用于显示与排查；按运行时产品类型映射，避免服务层引入编译期平台分支。
+// macOS 保持旧备份的显示值，其余未识别产品类型原样保留。
+QString platformDisplayName(const QString& productType);
+
 // 打开偏好存储：路径为空时是生产用的 macOS 原生偏好，否则是 ini 文件（测试用）。
 // 原生偏好默认开启回退，allKeys() 会连系统全局域的键（文本替换词典、语言、地区……）
 // 一起列出来；这里一律关掉回退，只看本应用自己的偏好域。
