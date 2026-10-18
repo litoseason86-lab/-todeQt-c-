@@ -142,6 +142,14 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                 guard let today else { return nil }
                 return (unfinished: today.unfinished.count, finished: today.finished.count)
             }
+            // 只读编辑器公开状态；第二条编号同源返回，探针不用辅助功能树推断列表行是否存在。
+            UIPerfProbe.todayEditingState = { [weak today, weak core] in
+                guard let today, let core else { return nil }
+                let editor = core.inlineEditor
+                return UIPerfProbe.TodayEditingState(secondTaskID: today.unfinished.dropFirst().first?.id,
+                                                    taskID: editor.taskID, focusRequested: editor.focusRequested,
+                                                    isEditing: editor.isEditing, isComposing: today.composing)
+            }
             UIPerfProbe.extraActions = [
                 ("计时跳动·外壳", { [weak store] in store?.refreshTimer() }),
                 ("计时跳动·专注页", { [weak focus] in focus?.refreshSnapshot() }),

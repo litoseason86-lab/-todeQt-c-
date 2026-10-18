@@ -22,6 +22,15 @@ import UIKit
     // 第二条编辑与行数直接读列表实际使用的 Store 集合，不依赖虚拟化后的辅助功能节点。
     static var editSecondTodayTask: (() -> Bool)?
     static var todayTaskCounts: (() -> (unfinished: Int, finished: Int)?)?
+    struct TodayEditingState {
+        let secondTaskID: Int?
+        let taskID: Int
+        let focusRequested: Bool
+        let isEditing: Bool
+        let isComposing: Bool
+    }
+    // 编辑器状态与预期第二条编号同一次读取，避免把辅助功能树没生成节点误报成编辑没有打开。
+    static var todayEditingState: (() -> TodayEditingState?)?
     // 今日任务页登记的「打开 / 关闭某条任务的详情浮层」：浮层状态在视图里，测速只能经它触发。
     static var todayDetail: ((Int?) -> Void)?
     // 另带 --ipad-ui-tour-sample 时同时采样主线程调用栈，看时间花在哪些函数上（采样本身让主线程每毫秒停几微秒，
@@ -213,7 +222,7 @@ import UIKit
                 if page == .today && item.name == "结束新建",
                    let open = interactions[.today]?.first(where: { $0.name == "起一行新任务" })?.action {
                     guard let window, presentationIsClosed(in: window),
-                          findElement(in: window, labelPrefix: "新任务标题") == nil else {
+                          todayEditingState?()?.isComposing == false else {
                         log("测速：上一次新建尚未收起或窗口不可用，跳过起一行新任务·第2次")
                         continue
                     }
@@ -228,25 +237,7 @@ import UIKit
         }
         log("测速：页内与重读完成")
 
-        // 3. 今日任务：点 ⓘ 打开详情表单、再取消（经辅助功能激活真实按钮，等同于读屏双击）。
-        shell.select(.today)
-        try? await Task.sleep(for: .milliseconds(1200))
-        if let window {
-            if let info = findElement(in: window, labelSuffix: "」的详细信息") {
-                await measure("表单", "今日任务·点 ⓘ 开详情", settle: 1200) { _ = info.accessibilityActivate() }
-                if let cancel = findElement(in: window, labelPrefix: "取消") {
-                    await measure("表单", "详情·点取消", settle: 1000) { _ = cancel.accessibilityActivate() }
-                } else {
-                    window.rootViewController?.presentedViewController?.dismiss(animated: true)
-                    log("测速：详情表单里没找到「取消」，直接收起")
-                    try? await Task.sleep(for: .milliseconds(1000))
-                }
-            } else {
-                log("测速：今日任务页没找到 ⓘ 按钮（主窗口宽 \(Int(window.bounds.width))，\(wide ? "宽窗" : "窄窗")，未命中详情标签后缀）")
-            }
-        }
-
-        // 4. 其它表单与浮层：沿用原来的关闭动作和等待时间，确认已收起后才测第二次，避免把叠层当成再次打开。
+        // 3. 其它表单与浮层：沿用原来的关闭动作和等待时间，确认已收起后才测第二次，避免把叠层当成再次打开。
         for sheet in UITour.sheets {
             await measure("表单", "开·\(sheet.name)", settle: 1200) { sheet.open() }
             var closeRequestedAt = 0.0
@@ -263,7 +254,7 @@ import UIKit
             }
             if ["new-task", "gap", "countdown", "session"].contains(sheet.name) {
                 guard let window, presentationIsClosed(in: window),
-                      sheet.name != "new-task" || findElement(in: window, labelPrefix: "新任务标题") == nil else {
+                      sheet.name != "new-task" || todayEditingState?()?.isComposing == false else {
                     log("测速：\(sheet.name) 上一次表单尚未收起或窗口不可用，跳过开·\(sheet.name)·第2次")
                     continue
                 }
@@ -274,8 +265,17 @@ import UIKit
         shell.select(.today)
         try? await Task.sleep(for: .milliseconds(1000))
         await measure("浮层", "开·记一笔", settle: 1000) { shell.presentCapture(from: .page(.today)) }
-        await measure("浮层", "关·记一笔", settle: 800) { shell.dismissCapture() }
-        if let window, !shell.capturePresented, presentationIsClosed(in: window) {
+        var captureCloseRequestedAt = 0.0
+        await measure("浮层", "关·记一笔", settle: 800) {
+            captureCloseRequestedAt = now()
+            shell.dismissCapture()
+        }
+        var captureClosed = false
+        if let window {
+            captureClosed = await observePresentationDismissal(in: window, name: "记一笔", action: "关·记一笔",
+                                                               requestedAt: captureCloseRequestedAt, log: log)
+        }
+        if captureClosed && !shell.capturePresented {
             await measure("浮层", "开·记一笔·第2次", settle: 1000) { shell.presentCapture(from: .page(.today)) }
             await measure("浮层", "关·记一笔·第2次", settle: 800) { shell.dismissCapture() }
         } else {
@@ -306,7 +306,7 @@ import UIKit
             await measure("模拟", item.name, settle: 700, item.action)
         }
 
-        // 5. 静置：计时在走时每秒的刷新代价。
+        // 4. 静置：计时在走时每秒的刷新代价。
         for page in [PageID.today, .dashboard, .focus, .todayFocus, .week, .statistics] {
             shell.select(page)
             await idle(page.title, seconds: 6)
@@ -341,23 +341,36 @@ import UIKit
         return presentationIsClosed(in: window)
     }
 
-    private static func diagnoseSessionDismissal(in window: UIWindow, requestedAt: Double, log: (String) -> Void) async {
-        let checkStartedAt = now()
-        if await waitForPresentationToClose(in: window) {
-            log("测速：补录浮层已收起，关·session 测完后等待 \(ms(now() - checkStartedAt)) ms，距关闭请求 \(ms(now() - requestedAt)) ms")
-            return
-        }
-        // 只记录 UIKit 实际持有的逐级弹出控制器；不改产品绑定，也不直接 dismiss 掩盖原来的收起问题。
+    private static func presentedControllers(in window: UIWindow) -> [UIViewController] {
         var chain: [UIViewController] = []
         var presented = window.rootViewController?.presentedViewController
         while let controller = presented {
             chain.append(controller)
             presented = controller.presentedViewController
         }
-        log("测速：关·session 测完后等待 \(ms(now() - checkStartedAt)) ms 仍未收起，弹出控制器链："
-            + chain.map { String(describing: type(of: $0)) }.joined(separator: " → "))
+        return chain
+    }
+
+    // 补录和记一笔共用关闭后的观察；超时保留当时的控制器链，第二次打开由调用方据结果放行。
+    private static func observePresentationDismissal(in window: UIWindow, name: String, action: String,
+                                                     requestedAt: Double, log: (String) -> Void) async -> Bool {
+        let checkStartedAt = now()
+        if await waitForPresentationToClose(in: window) {
+            log("测速：\(name)浮层已收起，\(action) 测完后等待 \(ms(now() - checkStartedAt)) ms，距关闭请求 \(ms(now() - requestedAt)) ms")
+            return true
+        }
+        // 只记录 UIKit 实际持有的逐级弹出控制器；不改产品绑定，也不直接 dismiss 掩盖原来的收起问题。
+        log("测速：\(action) 测完后等待 \(ms(now() - checkStartedAt)) ms 仍未收起，弹出控制器链："
+            + presentedControllers(in: window).map { String(describing: type(of: $0)) }.joined(separator: " → "))
+        return false
+    }
+
+    private static func diagnoseSessionDismissal(in window: UIWindow, requestedAt: Double, log: (String) -> Void) async {
+        if await observePresentationDismissal(in: window, name: "补录", action: "关·session", requestedAt: requestedAt, log: log) {
+            return
+        }
         let cancelStartedAt = now()
-        if let controller = chain.last,
+        if let controller = presentedControllers(in: window).last,
            let cancel = findElement(in: controller.view, labelPrefix: "取消") {
             log("测速：在补录弹出视图中激活「取消」：\(cancel.accessibilityActivate() ? "成功" : "失败")")
         } else {
@@ -368,13 +381,19 @@ import UIKit
     }
 
     private static func repeatInlineEditing(in window: UIWindow?, close: () -> Void, log: (String) -> Void) async {
-        guard let window, presentationIsClosed(in: window),
-              findElement(in: window, labelPrefix: "任务标题") == nil else {
-            log("测速：上一次行内编辑尚未收起或窗口不可用，跳过行内编辑第二条")
+        guard let window, presentationIsClosed(in: window) else {
+            log("测速：仍有浮层或窗口不可用，跳过行内编辑第二条")
             return
         }
-        guard let counts = todayTaskCounts?(), counts.unfinished >= 2,
-              let open = editSecondTodayTask else {
+        guard let state = todayEditingState?() else {
+            log("测速：编辑器状态入口不可用，跳过行内编辑第二条")
+            return
+        }
+        guard !state.isEditing else {
+            log("测速：上一次行内编辑尚未收起（taskID=\(state.taskID)），跳过行内编辑第二条")
+            return
+        }
+        guard let secondTaskID = state.secondTaskID, let open = editSecondTodayTask else {
             log("测速：未完成任务不足两条或第二条编辑入口不可用，跳过行内编辑第二条")
             return
         }
@@ -384,8 +403,18 @@ import UIKit
             log("测速：第二条编辑入口返回失败，跳过行内编辑第二条，该次结果不可用")
             return
         }
-        if findElement(in: window, labelPrefix: "任务标题") == nil {
-            log("测速：第二条编辑入口未出现编辑框，该次结果不可用")
+        if let current = todayEditingState?() {
+            if current.taskID != secondTaskID {
+                log("测速：第二条编辑 taskID 不匹配（预期=\(secondTaskID)，实际=\(current.taskID)），该次结果不可用")
+            }
+            if current.focusRequested {
+                log("测速：第二条编辑 focusRequested 未清掉，该次结果不可用")
+            }
+            if current.taskID == secondTaskID && !current.focusRequested {
+                log("测速：第二条编辑状态核对通过（taskID=\(current.taskID)，focusRequested=false）")
+            }
+        } else {
+            log("测速：第二条编辑测完后状态入口不可用，该次结果不可用")
         }
         // 没有输入任何字符，复用第一条的结束入口，只释放编辑；不提交新标题或备注。
         await measure("页内·今日任务", "结束行内编辑·第2次", close)
@@ -394,21 +423,13 @@ import UIKit
     private static func tabControllers(_ controller: UIViewController) -> [UITabBarController] {
         ((controller as? UITabBarController).map { [$0] } ?? []) + controller.children.flatMap(tabControllers)
     }
-    // 只找首个匹配的可激活元素；既可查主窗口，也可限定在某个弹出视图，避免误点背后页面的「取消」。
-    private static func findElement(in root: NSObject, labelPrefix: String? = nil, labelSuffix: String? = nil) -> NSObject? {
-        var roots = [root]
-        var presented = (root as? UIWindow)?.rootViewController?.presentedViewController
-        while let controller = presented { roots.insert(controller.view, at: 0); presented = controller.presentedViewController }
+    // 只在补录弹出视图内查首个「取消」，不查列表行，也不遍历背后页面，避免误点其它入口。
+    private static func findElement(in root: NSObject, labelPrefix: String) -> NSObject? {
         var seen = Set<ObjectIdentifier>()
         let matching: (NSObject) -> Bool = { object in
-            object.isAccessibilityElement
-                && (labelPrefix.map { object.accessibilityLabel?.hasPrefix($0) == true } ?? true)
-                && (labelSuffix.map { object.accessibilityLabel?.hasSuffix($0) == true } ?? true)
+            object.isAccessibilityElement && object.accessibilityLabel?.hasPrefix(labelPrefix) == true
         }
-        for root in roots {
-            if let match = search(root, matching: matching, depth: 0, seen: &seen) { return match }
-        }
-        return nil
+        return search(root, matching: matching, depth: 0, seen: &seen)
     }
     private static func search(_ object: NSObject, matching: (NSObject) -> Bool, depth: Int,
                                seen: inout Set<ObjectIdentifier>) -> NSObject? {
