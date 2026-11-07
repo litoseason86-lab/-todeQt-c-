@@ -7,12 +7,13 @@ import "../../qml"
 
 // 设备间同步的界面（050 阶段 4）：设置「数据与管理」里的同步一节、同步日志弹窗、恢复确认里的同步提醒。
 // 控制器用替身：界面只认它的属性和方法，同步本身由 SyncControllerTests 覆盖。
-// 按项目约定不断言 visible === true（测试窗口的可见性在这里不可靠），改为断言驱动显示的属性。
+// 宿主显式可见，新增鼠标/键盘用例验证真实输入；隐藏行断言有可见行作对照，避免恒假误通过。
 TestCase {
     id: testCase
 
     name: "SettingsSync"
     when: windowShown
+    visible: true
     width: 900
     height: 760
 
@@ -46,6 +47,12 @@ TestCase {
         property string folderDisplayPath: "iCloud 云盘/番茄Todo同步"
         property bool choosingFolder: false
         property string folderProblem: ""
+        property string transport: "icloud"
+        property string serverHost: ""
+        property string serverUrl: ""
+        property bool switchingTransport: false
+        property string transportProblem: ""
+        property string pairingCodeValue: "ptsync1.test-pairing-code"
         property int logRevision: 0
         property int logCount: 0
         // 打开同步时是否真的打开（iPad 没选文件夹时，打开等于先去选，开关要回到关）。
@@ -65,6 +72,13 @@ TestCase {
         function syncNow() { calls.push("syncNow") }
         function chooseFolder() { calls.push("chooseFolder") }
         function rebuildFolder() { calls.push("rebuildFolder") }
+        function createServerSpace(url, key) {
+            calls.push("createServerSpace:" + url + "|" + key)
+            switchingTransport = true
+        }
+        function switchToICloud() { calls.push("switchToICloud") }
+        function pairingCode() { return pairingCodeValue }
+        function copyPairingCode() { calls.push("copyPairingCode") }
         function syncLog(limit) {
             calls.push("syncLog:" + limit)
             return entries
@@ -114,6 +128,12 @@ TestCase {
         syncMock.folderDisplayPath = "iCloud 云盘/番茄Todo同步"
         syncMock.choosingFolder = false
         syncMock.folderProblem = ""
+        syncMock.transport = "icloud"
+        syncMock.serverHost = ""
+        syncMock.serverUrl = ""
+        syncMock.switchingTransport = false
+        syncMock.transportProblem = ""
+        syncMock.pairingCodeValue = "ptsync1.test-pairing-code"
         syncMock.logCount = 0
         syncMock.acceptsEnable = true
         syncMock.calls = []
@@ -121,7 +141,30 @@ TestCase {
         logDialog.close()
         restoreDialog.close()
         settingsDialog.close()
-        tryVerify(function () { return !logDialog.visible && !restoreDialog.visible && !settingsDialog.visible }, 3000, "上一条用例的弹窗还没收起")
+        var serverDialog = findChild(dataPage, "serverSpaceDialog")
+        var pairingDialog = findChild(dataPage, "pairingCodeDialog")
+        var iCloudDialog = findChild(dataPage, "settingsSyncICloudConfirm")
+        if (serverDialog)
+            serverDialog.close()
+        if (pairingDialog)
+            pairingDialog.close()
+        if (iCloudDialog)
+            iCloudDialog.close()
+        tryVerify(function () {
+            return !logDialog.visible && !restoreDialog.visible && !settingsDialog.visible
+                    && (!serverDialog || !serverDialog.opened)
+                    && (!pairingDialog || !pairingDialog.opened)
+                    && (!iCloudDialog || !iCloudDialog.opened)
+        }, 3000, "上一条用例的弹窗还没收起")
+    }
+
+    // 等布局就绪后发送鼠标事件，避免刚切换方式时按到上一帧的位置。
+    function clickControl(control) {
+        verify(control !== null)
+        verify(waitForItemPolished(control.parent))
+        verify(control.visible && control.enabled)
+        verify(control.width > 0 && control.height > 0)
+        mouseClick(control, control.width / 2, control.height / 2)
     }
 
     function test_switchAsksTheControllerAndShowsOnlyWhatItAccepted() {
@@ -308,5 +351,202 @@ TestCase {
         findChild(loader.item, "settingsSyncLog").click()
         compare(spy.count, 1)
         tryCompare(settingsDialog, "opened", false)
+    }
+
+    // 产品保证：同步方式决定分区说明与服务器/文件夹行，切换进行中不能改方式。
+    function test_transportModesSwapTheRowsAndCaption() {
+        compare(dataPage.syncTransport, "icloud")
+        compare(dataPage.syncTransportCaption, "经 iCloud 云盘中转，可能要几分钟")
+        compare(dataPage.syncSectionDescription.indexOf("通过 iCloud 云盘里的"), 0)
+        verify(findChild(dataPage, "settingsSyncFolderRow").visible)
+        verify(!findChild(dataPage, "settingsSyncServerRow").visible)
+        verify(!findChild(dataPage, "settingsSyncPairingButton").visible)
+        verify(!findChild(dataPage, "settingsSyncRebuildSpaceButton").visible)
+
+        syncMock.transport = "server"
+        syncMock.serverHost = "sync.example.com"
+        tryCompare(dataPage, "syncTransport", "server")
+        compare(dataPage.syncTransportCaption, "改动几秒内到另一台")
+        compare(dataPage.syncSectionDescription.indexOf("经你自己的同步服务器"), 0)
+        verify(!findChild(dataPage, "settingsSyncFolderRow").visible)
+        var serverRow = findChild(dataPage, "settingsSyncServerRow")
+        verify(serverRow.visible)
+        compare(serverRow.caption, "sync.example.com · 端到端加密")
+        verify(findChild(dataPage, "settingsSyncPairingButton").visible)
+        verify(findChild(dataPage, "settingsSyncRebuildSpaceButton").visible)
+
+        var transportSwitch = findChild(dataPage, "settingsSyncTransportSwitch")
+        compare(transportSwitch.currentIndex, 0)
+        syncMock.switchingTransport = true
+        verify(!transportSwitch.enabled)
+    }
+
+    // 产品保证：iCloud 方式选择自建服务器只打开建空间弹窗，取消后仍保持 iCloud。
+    function test_iCloudServerChoiceDoesNotSwitchBeforeSpaceExists() {
+        var transportSwitch = findChild(dataPage, "settingsSyncTransportSwitch")
+        compare(transportSwitch.currentIndex, 1)
+        clickControl(findChild(transportSwitch, "segmentedSwitchSegment0"))
+        var serverDialog = findChild(dataPage, "serverSpaceDialog")
+        tryCompare(serverDialog, "opened", true)
+        compare(serverDialog.rebuilding, false)
+        compare(findChild(serverDialog, "serverSpaceDialogTitle").text, "改用自建服务器同步")
+        compare(syncMock.calls.length, 0)
+        compare(transportSwitch.currentIndex, 1)
+
+        clickControl(findChild(serverDialog, "serverSpaceCancelButton"))
+        tryCompare(serverDialog, "opened", false)
+        compare(dataPage.syncTransport, "icloud")
+        compare(syncMock.calls.length, 0)
+    }
+
+    // 产品保证：服务器方式切回 iCloud 必须先确认，确认后才调用控制器切换。
+    function test_serverICloudChoiceRequiresConfirmation() {
+        syncMock.transport = "server"
+        syncMock.serverHost = "sync.example.com"
+        var transportSwitch = findChild(dataPage, "settingsSyncTransportSwitch")
+        clickControl(findChild(transportSwitch, "segmentedSwitchSegment1"))
+        var confirmation = findChild(dataPage, "settingsSyncICloudConfirm")
+        tryCompare(confirmation, "opened", true)
+        compare(findChild(confirmation, "settingsSyncICloudConfirmTitle").text, "改用 iCloud 云盘？")
+        compare(findChild(confirmation, "settingsSyncICloudConfirmText").text,
+                "会在 iCloud 云盘里新建「番茄Todo同步」文件夹，iPad 要在设置里重新选择它并确认加入。服务器上的同步空间留着不删。")
+        compare(syncMock.calls.length, 0)
+        compare(transportSwitch.currentIndex, 0)
+
+        clickControl(findChild(confirmation, "settingsSyncICloudConfirmButton"))
+        tryCompare(confirmation, "opened", false)
+        compare(syncMock.calls[syncMock.calls.length - 1], "switchToICloud")
+    }
+
+    // 产品保证：建空间提交使用输入值，连接时锁住表单，成功后关窗并接上配对码弹窗。
+    function test_spaceCreationSuccessChainsThePairingDialog() {
+        var serverDialog = findChild(dataPage, "serverSpaceDialog")
+        clickControl(findChild(findChild(dataPage, "settingsSyncTransportSwitch"), "segmentedSwitchSegment0"))
+        tryCompare(serverDialog, "opened", true)
+        var addressField = findChild(serverDialog, "serverSpaceAddressField")
+        var keyField = findChild(serverDialog, "serverSpaceEnrollmentKeyField")
+        var submit = findChild(serverDialog, "serverSpaceSubmitButton")
+        compare(addressField.text, "")
+        addressField.text = "https://sync.example.com"
+        keyField.text = "enroll-secret"
+        clickControl(submit)
+        compare(syncMock.calls[syncMock.calls.length - 1],
+                "createServerSpace:https://sync.example.com|enroll-secret")
+        tryCompare(syncMock, "switchingTransport", true)
+        verify(!submit.enabled)
+        compare(submit.text, "正在建立…")
+        verify(addressField.readOnly)
+        verify(keyField.readOnly)
+
+        syncMock.transport = "server"
+        syncMock.serverHost = "sync.example.com"
+        syncMock.switchingTransport = false
+        tryCompare(serverDialog, "opened", false)
+        var pairingDialog = findChild(dataPage, "pairingCodeDialog")
+        tryCompare(pairingDialog, "opened", true)
+        compare(findChild(pairingDialog, "pairingCodeValue").text, pairingDialog.maskedCode)
+    }
+
+    // 产品保证：建空间失败留在原弹窗显示原因，关闭时清掉注册口令。
+    function test_spaceCreationFailureKeepsTheDialogForCorrection() {
+        syncMock.transport = "server"
+        syncMock.serverHost = "sync.example.com"
+        syncMock.serverUrl = "https://sync.example.com"
+        var serverDialog = findChild(dataPage, "serverSpaceDialog")
+        clickControl(findChild(dataPage, "settingsSyncRebuildSpaceButton"))
+        tryCompare(serverDialog, "opened", true)
+        compare(serverDialog.dialogTitle, "重新建立同步空间")
+        var addressField = findChild(serverDialog, "serverSpaceAddressField")
+        var keyField = findChild(serverDialog, "serverSpaceEnrollmentKeyField")
+        compare(addressField.text, "https://sync.example.com")
+        addressField.text = "https://sync.example.com"
+        keyField.text = "wrong-key"
+        clickControl(findChild(serverDialog, "serverSpaceSubmitButton"))
+        tryCompare(syncMock, "switchingTransport", true)
+        syncMock.transportProblem = "注册口令不对，服务器拒绝建立"
+        syncMock.switchingTransport = false
+        verify(serverDialog.opened)
+        compare(findChild(serverDialog, "serverSpaceProblem").text, "注册口令不对，服务器拒绝建立")
+        verify(!findChild(dataPage, "pairingCodeDialog").opened)
+
+        clickControl(findChild(serverDialog, "serverSpaceCancelButton"))
+        tryCompare(serverDialog, "opened", false)
+        compare(keyField.text, "")
+    }
+
+    // 产品保证：重新建立空间预填完整服务器地址，非默认端口与路径不会被丢弃。
+    function test_rebuildPrefillsTheCompleteServerUrl() {
+        syncMock.transport = "server"
+        syncMock.serverHost = "sync.example.com"
+        syncMock.serverUrl = "https://sync.example.com:9443/pt-sync"
+        var rebuild = findChild(dataPage, "settingsSyncRebuildSpaceButton")
+        verify(rebuild)
+        verify(waitForItemPolished(dataPage))
+        clickControl(rebuild)
+        var dialog = findChild(dataPage, "serverSpaceDialog")
+        tryCompare(dialog, "opened", true)
+        compare(findChild(dialog, "serverSpaceAddressField").text, syncMock.serverUrl)
+        keyClick(Qt.Key_Escape)
+        tryCompare(dialog, "opened", false)
+    }
+
+    // 产品保证：配对码默认遮住、眼睛按钮揭示，复制后按钮短暂显示「已复制」，重开后复位。
+    function test_pairingCodeMaskRevealCopyAndReset() {
+        syncMock.transport = "server"
+        var pairingDialog = findChild(dataPage, "pairingCodeDialog")
+        syncMock.pairingCodeValue = "ptsync1.visible-secret"
+        clickControl(findChild(dataPage, "settingsSyncPairingButton"))
+        tryCompare(pairingDialog, "opened", true)
+        var codeText = findChild(pairingDialog, "pairingCodeValue")
+        var reveal = findChild(pairingDialog, "pairingCodeRevealButton")
+        var copy = findChild(pairingDialog, "pairingCodeCopyButton")
+        compare(codeText.text, pairingDialog.maskedCode)
+        compare(reveal.Accessible.name, "显示配对码")
+        clickControl(reveal)
+        compare(codeText.text, "ptsync1.visible-secret")
+        compare(reveal.Accessible.name, "隐藏配对码")
+
+        clickControl(copy)
+        compare(syncMock.calls[syncMock.calls.length - 1], "copyPairingCode")
+        compare(copy.text, "已复制")
+        tryCompare(copy, "text", "复制配对码", 3000)
+
+        clickControl(findChild(pairingDialog, "pairingCodeDoneButton"))
+        tryCompare(pairingDialog, "opened", false)
+        clickControl(findChild(dataPage, "settingsSyncPairingButton"))
+        tryCompare(pairingDialog, "opened", true)
+        compare(findChild(pairingDialog, "pairingCodeValue").text, pairingDialog.maskedCode)
+        compare(findChild(pairingDialog, "pairingCodeRevealButton").Accessible.name, "显示配对码")
+        clickControl(findChild(pairingDialog, "pairingCodeDoneButton"))
+    }
+
+    // 产品保证：空闲时 Esc 可关闭建空间弹窗，正在切换时 Esc 和重复点击不会中断或重提请求。
+    function test_spaceDialogEscapeRespectsAnActiveSwitch() {
+        var segment = findChild(findChild(dataPage, "settingsSyncTransportSwitch"), "segmentedSwitchSegment0")
+        var dialog = findChild(dataPage, "serverSpaceDialog")
+        clickControl(segment)
+        tryCompare(dialog, "opened", true)
+        keyClick(Qt.Key_Escape)
+        tryCompare(dialog, "opened", false)
+
+        clickControl(segment)
+        tryCompare(dialog, "opened", true)
+        findChild(dialog, "serverSpaceAddressField").text = "https://sync.example.com"
+        findChild(dialog, "serverSpaceEnrollmentKeyField").text = "enroll-secret"
+        var submit = findChild(dialog, "serverSpaceSubmitButton")
+        clickControl(submit)
+        tryCompare(syncMock, "switchingTransport", true)
+        var callCount = syncMock.calls.length
+        verify(!submit.enabled)
+        keyClick(Qt.Key_Escape)
+        compare(dialog.opened, true)
+        mouseClick(submit)
+        compare(syncMock.calls.length, callCount)
+        syncMock.transportProblem = "连不上同步服务器"
+        syncMock.switchingTransport = false
+        tryCompare(submit, "enabled", true)
+        keyClick(Qt.Key_Escape)
+        tryCompare(dialog, "opened", false)
+        compare(findChild(dialog, "serverSpaceEnrollmentKeyField").text, "")
     }
 }

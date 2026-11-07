@@ -1368,6 +1368,13 @@ QString SyncController::serverHost() const
         : QString();
 }
 
+QString SyncController::serverUrl() const
+{
+    return m_transport == QStringLiteral("server")
+        ? m_serverBaseUrl.toString(QUrl::FullyEncoded)
+        : QString();
+}
+
 int SyncController::logCount() const
 {
     return readLogCount().value;

@@ -36,6 +36,42 @@ FocusScope {
                                                  && (root.syncStatusKey === "needsConfirmation"
                                                      || root.syncStatusKey === "waitingForSnapshot"
                                                      || root.syncHasProblem)
+    readonly property string syncTransport: {
+        if (!root.syncControllerRef || root.syncControllerRef.transport === undefined)
+            return "icloud"
+        return String(root.syncControllerRef.transport)
+    }
+    readonly property bool syncIsServerTransport: root.syncTransport === "server"
+    readonly property bool syncSwitchingTransport: root.syncControllerRef
+                                                    && root.syncControllerRef.switchingTransport !== undefined
+                                                    ? Boolean(root.syncControllerRef.switchingTransport) : false
+    readonly property string syncServerHost: root.syncControllerRef
+                                             && root.syncControllerRef.serverHost !== undefined
+                                             ? String(root.syncControllerRef.serverHost) : ""
+    readonly property string syncTransportProblem: root.syncControllerRef
+                                                   && root.syncControllerRef.transportProblem !== undefined
+                                                   ? String(root.syncControllerRef.transportProblem) : ""
+    readonly property string syncSectionDescription: root.syncIsServerTransport
+        ? "经你自己的同步服务器，让这台设备和另一台设备的任务、科目、每日例行、专注与休息记录、课表、知识缺口和倒计时保持一致。内容在设备上加密，服务器上只有密文。两边改了同一处时，以较晚的修改为准，被覆盖的内容记在同步日志里。"
+        : "通过 iCloud 云盘里的「番茄Todo同步」文件夹，让这台设备和另一台设备的任务、科目、每日例行、专注与休息记录、课表、知识缺口和倒计时保持一致，番茄时长、今日目标、学期与节次这些设置也跟着同步；外观、提醒和快捷键各台设备各自设。两边改了同一处时，以较晚的修改为准，被覆盖的内容记在同步日志里。"
+    readonly property string syncTransportCaption: root.syncIsServerTransport
+        ? "改动几秒内到另一台"
+        : "经 iCloud 云盘中转，可能要几分钟"
+
+    function requestSyncTransport(index) {
+        if (!root.syncControllerRef || root.syncSwitchingTransport)
+            return
+        if (index === 0 && !root.syncIsServerTransport) {
+            serverSpaceDialog.openForMode(false)
+        } else if (index === 1 && root.syncIsServerTransport) {
+            iCloudConfirmPopup.open()
+        }
+    }
+
+    function requestICloudSwitch() {
+        if (root.syncControllerRef)
+            root.syncControllerRef.switchToICloud()
+    }
 
     // 最近备份时间说明；无备份服务或从未备份时给出中性文案。
     readonly property string lastBackupCaption: {
@@ -61,7 +97,7 @@ FocusScope {
         SettingsSection {
             objectName: "settingsSyncSection"
             title: "设备间同步"
-            description: "通过 iCloud 云盘里的「番茄Todo同步」文件夹，让这台设备和另一台设备的任务、科目、每日例行、专注与休息记录、课表、知识缺口和倒计时保持一致，番茄时长、今日目标、学期与节次这些设置也跟着同步；外观、提醒和快捷键各台设备各自设。两边改了同一处时，以较晚的修改为准，被覆盖的内容记在同步日志里。"
+            description: root.syncSectionDescription
 
             SettingsRow {
                 label: "同步"
@@ -77,6 +113,26 @@ FocusScope {
                     enabled: Boolean(root.syncControllerRef) && !root.syncChoosingFolder
                     reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
                     onChangeRequested: value => { if (root.syncControllerRef) root.syncControllerRef.setEnabled(value) }
+                }
+            }
+
+            SettingsRow {
+                objectName: "settingsSyncTransportRow"
+                label: "同步方式"
+                caption: root.syncTransportCaption
+                iconName: "sync"
+                compact: root.compact
+
+                SegmentedSwitch {
+                    objectName: "settingsSyncTransportSwitch"
+                    segments: ["自建服务器", "iCloud 云盘"]
+                    minSegmentWidth: 100
+                    currentIndex: root.syncIsServerTransport ? 0 : 1
+                    reduceMotion: root.appSettingsRef ? root.appSettingsRef.reduceMotion : false
+                    solidFallback: !Theme.glassBlurAllowed
+                    enabled: Boolean(root.syncControllerRef) && !root.syncSwitchingTransport
+                    Accessible.name: "同步方式"
+                    onActivated: function (index) { root.requestSyncTransport(index) }
                 }
             }
 
@@ -121,7 +177,9 @@ FocusScope {
                         objectName: "settingsSyncConfirmJoin"
                         text: "确认加入"
                         primary: true
-                        Accessible.description: "本机数据先自动备份，再换成同步文件夹里的数据"
+                        Accessible.description: root.syncIsServerTransport
+                                                ? "本机数据先自动备份，再换成 Mac 的数据"
+                                                : "本机数据先自动备份，再换成同步文件夹里的数据"
                         onClicked: { if (root.syncControllerRef) root.syncControllerRef.confirmJoin() }
                     }
                     SyncActionButton {
@@ -134,7 +192,7 @@ FocusScope {
 
                 SyncActionButton {
                     objectName: "settingsSyncRebuild"
-                    visible: root.syncStatusKey === "folderMissing"
+                    visible: root.syncStatusKey === "folderMissing" && !root.syncIsServerTransport
                     text: root.syncChoosesFolder ? "重新选择文件夹" : "重新建立同步文件夹"
                     primary: true
                     Accessible.description: root.syncChoosesFolder
@@ -145,7 +203,9 @@ FocusScope {
 
                 Text {
                     Layout.fillWidth: true
-                    visible: root.syncStatusKey === "folderMissing" && !root.syncChoosesFolder
+                    visible: root.syncStatusKey === "folderMissing"
+                             && !root.syncChoosesFolder
+                             && !root.syncIsServerTransport
                     text: "重新建立后是一个新的同步文件夹，iPad 要在设置里重新选择它，并确认加入。"
                     textFormat: Text.PlainText
                     color: Theme.inkSoft
@@ -163,7 +223,7 @@ FocusScope {
             // iPad 要自己在「文件」里选同步文件夹；Mac 的位置固定，只显示在哪。
             ManageButton {
                 objectName: "settingsSyncChooseFolder"
-                visible: root.syncChoosesFolder
+                visible: root.syncChoosesFolder && !root.syncIsServerTransport
                 text: "同步文件夹"
                 caption: {
                     if (!root.syncControllerRef)
@@ -180,7 +240,8 @@ FocusScope {
             }
 
             SettingsRow {
-                visible: !root.syncChoosesFolder
+                objectName: "settingsSyncFolderRow"
+                visible: !root.syncChoosesFolder && !root.syncIsServerTransport
                 label: "同步文件夹"
                 caption: root.syncControllerRef ? root.syncControllerRef.folderDisplayPath : ""
                 iconName: "folder"
@@ -195,8 +256,64 @@ FocusScope {
                 Layout.fillWidth: true
                 Layout.leftMargin: 8 + Theme.space4 + 20 + Theme.space12
                 Layout.bottomMargin: Theme.space8
-                visible: text.length > 0
+                visible: text.length > 0 && !root.syncIsServerTransport
                 text: root.syncControllerRef ? root.syncControllerRef.folderProblem : ""
+                textFormat: Text.PlainText
+                color: Theme.danger
+                font.pixelSize: Theme.fontMd
+                wrapMode: Text.Wrap
+                Accessible.role: Accessible.AlertMessage
+                Accessible.name: text
+            }
+
+            SettingsRow {
+                objectName: "settingsSyncServerRow"
+                visible: root.syncIsServerTransport
+                label: "同步服务器"
+                caption: root.syncServerHost + " · 端到端加密"
+                iconName: "data"
+                compact: root.compact
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                visible: root.syncIsServerTransport
+                color: Theme.borderSubtle
+            }
+
+            ManageButton {
+                objectName: "settingsSyncPairingButton"
+                visible: root.syncIsServerTransport
+                text: "给 iPad 的配对码"
+                caption: "复制后在 iPad 上粘贴，iPad 就能加入"
+                iconName: "person"
+                onClicked: pairingCodeDialog.open()
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                visible: root.syncIsServerTransport
+                color: Theme.borderSubtle
+            }
+
+            ManageButton {
+                objectName: "settingsSyncRebuildSpaceButton"
+                visible: root.syncIsServerTransport
+                text: "重新建立同步空间"
+                caption: "服务器上的空间丢了或想换密钥时用；iPad 要重新输入配对码"
+                iconName: "sync"
+                onClicked: serverSpaceDialog.openForMode(true)
+            }
+
+            Text {
+                objectName: "settingsSyncTransportProblem"
+                Layout.fillWidth: true
+                Layout.leftMargin: 8 + Theme.space4 + 20 + Theme.space12
+                Layout.bottomMargin: Theme.space8
+                visible: root.syncIsServerTransport && root.syncTransportProblem.length > 0
+                text: root.syncTransportProblem
                 textFormat: Text.PlainText
                 color: Theme.danger
                 font.pixelSize: Theme.fontMd
@@ -418,6 +535,137 @@ FocusScope {
                     onChangeRequested: enabled => {
                         if (root.backupServiceRef)
                             root.backupServiceRef.autoBackupEnabled = enabled
+                    }
+                }
+            }
+        }
+    }
+
+    ServerSpaceDialog {
+        id: serverSpaceDialog
+
+        syncControllerRef: root.syncControllerRef
+        currentServerAddress: root.syncControllerRef
+                              && root.syncControllerRef.serverUrl !== undefined
+                              ? String(root.syncControllerRef.serverUrl) : ""
+        onPairingRequested: pairingCodeDialog.open()
+    }
+
+    PairingCodeDialog {
+        id: pairingCodeDialog
+
+        syncControllerRef: root.syncControllerRef
+    }
+
+    Popup {
+        id: iCloudConfirmPopup
+
+        objectName: "settingsSyncICloudConfirm"
+
+        modal: true
+        focus: true
+        closePolicy: Popup.CloseOnEscape
+        width: Math.min(460, parent ? Math.max(320, parent.width - 64) : 460)
+        height: confirmPanel.implicitHeight
+        x: parent ? Math.round((parent.width - width) / 2) : 0
+        y: parent ? Math.round((parent.height - height) / 2) : 0
+        padding: 0
+
+        palette.text: Theme.inputInk
+        palette.placeholderText: Theme.inputPlaceholderInk
+        palette.highlight: Theme.inputSelection
+        palette.highlightedText: Theme.inputSelectedInk
+        palette.window: Theme.inputPopupSurface
+        palette.mid: Theme.inputPopupBorder
+        palette.light: Theme.inputPopupHighlight
+        palette.midlight: Theme.inputPopupHighlight
+        palette.base: Theme.controlSurface
+        palette.button: Theme.controlSurface
+        palette.buttonText: Theme.controlInk
+        palette.windowText: Theme.controlInk
+
+        onOpened: iCloudCancelButton.forceActiveFocus()
+
+        Overlay.modal: Rectangle {
+            color: Theme.dialogScrim
+        }
+
+        background: Rectangle {
+            id: confirmPanel
+
+            implicitWidth: iCloudConfirmPopup.width
+            implicitHeight: confirmContent.implicitHeight
+            color: Theme.glassDialog
+            border.color: Theme.border
+            border.width: 1
+            radius: Theme.radiusLg
+        }
+
+        contentItem: ColumnLayout {
+            id: confirmContent
+
+            width: iCloudConfirmPopup.width
+            spacing: Theme.space12
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 48
+                color: Theme.surface
+                radius: Theme.radiusMd
+
+                Text {
+                    objectName: "settingsSyncICloudConfirmTitle"
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.space16
+                    text: "改用 iCloud 云盘？"
+                    textFormat: Text.PlainText
+                    color: Theme.inkStrong
+                    font.pixelSize: Theme.fontXl
+                    font.weight: Font.DemiBold
+                    Accessible.role: Accessible.Heading
+                    Accessible.name: text
+                }
+            }
+
+            Text {
+                objectName: "settingsSyncICloudConfirmText"
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.space16
+                Layout.rightMargin: Theme.space16
+                text: "会在 iCloud 云盘里新建「番茄Todo同步」文件夹，iPad 要在设置里重新选择它并确认加入。服务器上的同步空间留着不删。"
+                textFormat: Text.PlainText
+                color: Theme.ink
+                font.pixelSize: Theme.fontMd
+                wrapMode: Text.Wrap
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: Theme.space16
+                Layout.rightMargin: Theme.space16
+                Layout.topMargin: Theme.space4
+                Layout.bottomMargin: Theme.space16
+                spacing: Theme.space12
+
+                Item { Layout.fillWidth: true }
+
+                SyncActionButton {
+                    id: iCloudCancelButton
+
+                    objectName: "settingsSyncICloudCancelButton"
+                    text: "取消"
+                    onClicked: iCloudConfirmPopup.close()
+                }
+
+                SyncActionButton {
+                    objectName: "settingsSyncICloudConfirmButton"
+                    text: "改用 iCloud 云盘"
+                    implicitWidth: 132
+                    primary: true
+                    onClicked: {
+                        root.requestICloudSwitch()
+                        iCloudConfirmPopup.close()
                     }
                 }
             }

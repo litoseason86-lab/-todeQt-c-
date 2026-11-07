@@ -55,6 +55,8 @@ class SyncController : public QObject
     Q_PROPERTY(QString transport READ transport NOTIFY transportChanged)
     // 服务器方式只暴露域名，不把配对码、空间编号或密钥带到界面文本里。
     Q_PROPERTY(QString serverHost READ serverHost NOTIFY transportChanged)
+    // 重新建立同步空间时预填完整服务器地址，保留协议、端口与路径。
+    Q_PROPERTY(QString serverUrl READ serverUrl NOTIFY transportChanged)
     // Mac 可以在服务器上新建设置；iPad 只能输入配对码加入。
     Q_PROPERTY(bool canCreateServerSpace READ canCreateServerSpace CONSTANT)
     Q_PROPERTY(bool switchingTransport READ isSwitchingTransport NOTIFY switchingTransportChanged)
@@ -128,6 +130,7 @@ public:
     QString folderDisplayPath() const;
     QString transport() const { return m_transport; }
     QString serverHost() const;
+    QString serverUrl() const;
     bool canCreateServerSpace() const { return m_platform.engine.mayCreateFolder; }
     bool isSwitchingTransport() const { return m_switchingTransport; }
     QString transportProblem() const { return m_transportProblem; }
