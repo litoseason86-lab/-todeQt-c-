@@ -1,0 +1,40 @@
+# 番茄Todo 同步中转服务。
+#
+# 注册口令由 root 在本机生成；只把明文交给用户本人保存，不放进仓库或日志：
+#   install -d -m 0700 /etc/pt-sync
+#   umask 077
+#   openssl rand -hex 32 | tr -d '\n' > /etc/pt-sync/enroll.secret
+#   sha256sum /etc/pt-sync/enroll.secret | awk '{print $1}' \
+#     > /etc/pt-sync/enroll.sha256
+#   chmod 600 /etc/pt-sync/enroll.secret /etc/pt-sync/enroll.sha256
+#
+# 两个文件都必须 root:root、mode 600。systemd 只把哈希文件作为只读凭据交给
+# DynamicUser 进程，服务本身拿不到口令明文。
+[Unit]
+Description=Pomodoro Todo encrypted sync relay
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -E -s /opt/pt-sync/pt_sync_server.py serve --host 127.0.0.1 --port 9191 --state-dir /var/lib/pt-sync --enroll-hash-file ${CREDENTIALS_DIRECTORY}/enroll.sha256
+DynamicUser=yes
+StateDirectory=pt-sync
+StateDirectoryMode=0700
+LoadCredential=enroll.sha256:/etc/pt-sync/enroll.sha256
+ReadOnlyPaths=/opt/pt-sync
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+MemoryMax=128M
+Restart=on-failure
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

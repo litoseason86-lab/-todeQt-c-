@@ -1242,6 +1242,13 @@ endif()
 # "<b>" 就会被当富文本解析。qmllint 不管这件事，所以单独一条。
 # 用 Python 而不是再写一个 C++ 目标：判据是纯文本模式匹配，不需要跑起应用。
 if(Python3_FOUND)
+    # 同步服务器只用标准库；用解释器隔离模式启动，避免本机 site-packages
+    # 或环境变量掩盖线上 Python 3.12 的依赖/导入差异。
+    add_test(NAME SyncServerUnitTests
+             COMMAND ${Python3_EXECUTABLE} -I
+                     ${CMAKE_CURRENT_SOURCE_DIR}/server/tests/test_pt_sync_server.py)
+    set_tests_properties(SyncServerUnitTests PROPERTIES TIMEOUT 60)
+
     if(APPLE)
         add_test(NAME McpBundleSmoke
             COMMAND ${Python3_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_mcp_bundle.py"
