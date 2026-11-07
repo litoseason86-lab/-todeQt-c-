@@ -133,6 +133,8 @@ set(APP_SOURCES
     src/services/SyncCrypto.cpp
     src/services/RemoteSyncFolder.h
     src/services/RemoteSyncFolder.cpp
+    src/services/SyncServerWatcher.h
+    src/services/SyncServerWatcher.cpp
     src/services/LocalSyncFolder.h
     src/services/LocalSyncFolder.cpp
     src/services/SyncWorker.h
