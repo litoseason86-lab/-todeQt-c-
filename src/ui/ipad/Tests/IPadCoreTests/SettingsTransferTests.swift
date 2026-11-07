@@ -227,10 +227,73 @@ import XCTest
         bridge.onChanged?()
         XCTAssertEqual(store.transportProblem, "配对码里的服务器地址不安全")
         XCTAssertTrue(store.pairingSheetRequested)
+        // 成功状态必须清掉前一次失败原因，与控制器开始新一次配对时的行为一致。
+        bridge.result.transportProblem = ""
         bridge.result.transport = "server"
         bridge.onChanged?()
         XCTAssertFalse(store.pairingSheetRequested)
         XCTAssertEqual(store.snapshot.transport, "server")
+    }
+
+    // 产品保证：服务器重新配对格式错误时表单保留并显示问题，重试成功后才关闭。
+    func testServerRepairingKeepsSheetAfterImmediateFailureUntilRetrySucceeds() {
+        let bridge = SettingsSyncFake()
+        bridge.result.transport = "server"
+        let store = SettingsSyncStore(bridge: bridge)
+        store.requestPairingSheet()
+        XCTAssertTrue(store.isServerTransport)
+        XCTAssertTrue(store.pairingSheetRequested)
+        XCTAssertFalse(store.snapshot.switchingTransport)
+        bridge.onPairingCodeSubmitted = { [unowned bridge] in
+            bridge.result.transportProblem = "这不是番茄Todo 的配对码"
+            bridge.result.switchingTransport = false
+            bridge.onChanged?()
+        }
+
+        store.submitPairingCode("invalid-code")
+
+        XCTAssertEqual(bridge.calls, ["pair:invalid-code"])
+        XCTAssertEqual(store.transportProblem, "这不是番茄Todo 的配对码")
+        XCTAssertFalse(store.snapshot.switchingTransport)
+        XCTAssertTrue(store.pairingSheetRequested)
+
+        bridge.onPairingCodeSubmitted = { [unowned bridge] in
+            bridge.result.transportProblem = ""
+            bridge.result.switchingTransport = true
+            bridge.onChanged?()
+        }
+        store.submitPairingCode("new-code")
+        XCTAssertTrue(store.snapshot.switchingTransport)
+        XCTAssertTrue(store.pairingSheetRequested)
+        bridge.result.switchingTransport = false
+        bridge.onChanged?()
+        XCTAssertTrue(store.isServerTransport)
+        XCTAssertEqual(store.transportProblem, "")
+        XCTAssertFalse(store.pairingSheetRequested)
+    }
+
+    // 产品保证：服务器重新配对的网络检查失败时，原服务器方式不能被误判为本次成功。
+    func testServerRepairingKeepsSheetAfterConnectionFailure() {
+        let bridge = SettingsSyncFake()
+        bridge.result.transport = "server"
+        bridge.onPairingCodeSubmitted = { [unowned bridge] in
+            bridge.result.switchingTransport = true
+            bridge.onChanged?()
+        }
+        let store = SettingsSyncStore(bridge: bridge)
+        store.requestPairingSheet()
+        XCTAssertTrue(store.isServerTransport)
+        store.submitPairingCode("unreachable-code")
+        XCTAssertTrue(store.snapshot.switchingTransport)
+        XCTAssertTrue(store.pairingSheetRequested)
+
+        bridge.result.transportProblem = "连不上同步服务器"
+        bridge.result.switchingTransport = false
+        bridge.onChanged?()
+
+        XCTAssertTrue(store.isServerTransport)
+        XCTAssertEqual(store.transportProblem, "连不上同步服务器")
+        XCTAssertTrue(store.pairingSheetRequested)
     }
 
     // 产品保证：服务器方式的确认文案接上未发出改动警告，连接期间加入按钮不可用。
@@ -302,6 +365,7 @@ import XCTest
     var copied = ""
     var joinWarningValue = ""
     var pairingCodeSubmitted = ""
+    var onPairingCodeSubmitted: (() -> Void)?
     var result = SyncSnapshot()
     var calls: [String] = []
     func snapshot() throws -> SyncSnapshot { if let error { throw error }; return result }
@@ -314,6 +378,8 @@ import XCTest
         pairingCodeSubmitted = code
         calls.append("pair:\(code)")
         if let actionError { throw actionError }
+        // 控制器的校验失败会同步发状态信号；替身也在动作返回前转发，避免漏掉重入路径。
+        onPairingCodeSubmitted?()
     }
     func switchToICloud() throws { calls.append("icloud"); if let actionError { throw actionError } }
     func joinWarning() -> String { joinWarningValue }

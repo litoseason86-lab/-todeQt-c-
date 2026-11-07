@@ -38,9 +38,10 @@ import Observation
         do {
             snapshot = try bridge.snapshot()
             errorMessage = ""
-            // 加入成功以控制器把 transport 切到 server 且本次连接结束为准；
-            // 单纯清空输入或连接失败不能误关表单，方便用户修正后重试。
-            if pairingJoinStarted && isServerTransport && !snapshot.switchingTransport {
+            // 重新配对失败后 transport 仍可能是旧的 server；必须等本次切换结束且无问题，
+            // 才能关表单，格式错误和网络失败都留在表单里供用户修正重试。
+            if pairingJoinStarted && isServerTransport && !snapshot.switchingTransport
+                && snapshot.transportProblem.isEmpty {
                 pairingSheetRequested = false
                 pairingJoinStarted = false
             }

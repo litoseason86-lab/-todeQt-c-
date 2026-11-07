@@ -54,7 +54,7 @@ import UniformTypeIdentifiers
                 if store.snapshot.switchingTransport {
                     HStack(spacing: 8) {
                         ProgressView()
-                        Text("正在连接同步服务器…")
+                        Text("正在切换同步方式…")
                     }
                 }
             } header: {
