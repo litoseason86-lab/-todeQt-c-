@@ -128,6 +128,11 @@ set(APP_SOURCES
     src/services/SyncFiles.h
     src/services/SyncFiles.cpp
     src/services/SyncFolder.h
+    src/services/SyncHttpClient.h
+    src/services/SyncCrypto.h
+    src/services/SyncCrypto.cpp
+    src/services/RemoteSyncFolder.h
+    src/services/RemoteSyncFolder.cpp
     src/services/LocalSyncFolder.h
     src/services/LocalSyncFolder.cpp
     src/services/SyncWorker.h
@@ -278,11 +283,18 @@ list(APPEND APP_SOURCES
     src/platform/apple/AppleUbiquitousItem.mm
     src/platform/apple/AppleCoordinatedFiles.h
     src/platform/apple/AppleCoordinatedFiles.mm
+    # 远端同步：HTTP 与 AES 原语只在 Apple 层实现，PTCore 保持平台无关。
+    src/platform/apple/AppleSyncHttpClient.h
+    src/platform/apple/AppleSyncHttpClient.mm
+    src/platform/apple/AppleSyncBlockCipher.h
+    src/platform/apple/AppleSyncBlockCipher.mm
 )
 set_source_files_properties(
     src/platform/apple/AppleNotificationBackend.mm
     src/platform/apple/AppleUbiquitousItem.mm
     src/platform/apple/AppleCoordinatedFiles.mm
+    src/platform/apple/AppleSyncHttpClient.mm
+    src/platform/apple/AppleSyncBlockCipher.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
 )
 

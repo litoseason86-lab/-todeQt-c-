@@ -958,6 +958,45 @@ add_test(NAME MacSyncFolderTests COMMAND MacSyncFolderTests)
 set_tests_properties(MacSyncFolderTests PROPERTIES TIMEOUT 30
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
+# 端到端加密的平台无关部分：RFC 5869、用途密钥与带路径绑定的封装格式。
+add_executable(SyncCryptoTests tests/SyncCryptoTests.cpp)
+target_link_libraries(SyncCryptoTests PRIVATE PTCore Qt6::Test)
+pomodoro_todo_enable_warnings(SyncCryptoTests)
+add_test(NAME SyncCryptoTests COMMAND SyncCryptoTests)
+set_tests_properties(SyncCryptoTests PROPERTIES TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
+# 远端同步文件夹：真实 Python 中转服务器 + NSURLSession + CommonCrypto。
+# 源码根目录与 Python 解释器经编译定义传入，测试自身不依赖当前工作目录。
+add_executable(RemoteSyncFolderTests
+    tests/RemoteSyncFolderTests.mm
+    src/platform/apple/AppleSyncHttpClient.h
+    src/platform/apple/AppleSyncHttpClient.mm
+    src/platform/apple/AppleSyncBlockCipher.h
+    src/platform/apple/AppleSyncBlockCipher.mm
+)
+set_source_files_properties(
+    tests/RemoteSyncFolderTests.mm
+    src/platform/apple/AppleSyncHttpClient.mm
+    src/platform/apple/AppleSyncBlockCipher.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+)
+target_compile_definitions(RemoteSyncFolderTests PRIVATE
+    PTSYNC_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    PTSYNC_PYTHON3_EXECUTABLE="${Python3_EXECUTABLE}"
+)
+target_link_libraries(RemoteSyncFolderTests PRIVATE
+    PTCore
+    Qt6::Core
+    Qt6::Network
+    Qt6::Test
+    "-framework Foundation"
+)
+pomodoro_todo_enable_warnings(RemoteSyncFolderTests)
+add_test(NAME RemoteSyncFolderTests COMMAND RemoteSyncFolderTests)
+set_tests_properties(RemoteSyncFolderTests PROPERTIES TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
 # 设备间同步接进应用（050 阶段 4）：开关与书签、恢复备份与逻辑日起点的衔接、iPad 选文件夹、同步日志。
 # 平台差异（文件夹怎么建、怎么选）由测试注入，同步文件夹用临时目录，不碰真实的 iCloud 云盘。
 add_executable(SyncControllerTests
