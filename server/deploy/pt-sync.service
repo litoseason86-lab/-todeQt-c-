@@ -32,7 +32,7 @@ ProtectKernelModules=yes
 ProtectControlGroups=yes
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
-MemoryMax=128M
+MemoryMax=256M
 Restart=on-failure
 UMask=0077
 
