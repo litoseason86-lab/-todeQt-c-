@@ -6,17 +6,63 @@ import UniformTypeIdentifiers
 @MainActor struct SyncSettings: View {
     @Environment(SettingsSyncStore.self) private var store
     @State private var joinConfirmation = false
+    @State private var iCloudConfirmation = false
     var body: some View {
         SettingsForm {
-            Section("同步") {
+            Section {
                 Toggle("启用同步", isOn: Binding(get: { store.snapshot.enabled }, set: store.setEnabled))
-                    .disabled(store.snapshot.busy)
-                LabeledContent("同步文件夹", value: store.snapshot.folderDisplayPath.isEmpty ? "—" : store.snapshot.folderDisplayPath)
-                if !store.snapshot.folderProblem.isEmpty { Text(store.snapshot.folderProblem).foregroundStyle(ThemeColors.danger) }
-                Button(store.folderActionTitle, systemImage: "folder") {
-                    if store.snapshot.statusKey == "folderMissing" { store.rebuildFolder() }
-                    else { store.chooseFolder() }
-                }.disabled(store.snapshot.busy || store.snapshot.choosingFolder)
+                    .disabled(store.snapshot.busy || store.snapshot.switchingTransport)
+                Picker("同步方式", selection: Binding(
+                    get: { store.snapshot.transport },
+                    set: { value in
+                        if value == "server" {
+                            store.selectTransport("server")
+                        } else if value == "icloud" {
+                            iCloudConfirmation = true
+                        }
+                    })) {
+                    Text("自建服务器").tag("server")
+                    Text("iCloud 云盘").tag("icloud")
+                }
+                .pickerStyle(.menu)
+                .disabled(store.snapshot.switchingTransport)
+                .alert("改用 iCloud 云盘？", isPresented: $iCloudConfirmation) {
+                    Button("取消", role: .cancel) {}
+                    Button("改用 iCloud 云盘", role: .destructive) {
+                        store.selectTransport("icloud")
+                    }
+                } message: {
+                    Text("改用后要在「文件」里重新选择 Mac 新建的「番茄Todo同步」文件夹，并确认加入。")
+                }
+                if store.isServerTransport {
+                    LabeledContent("同步服务器", value: store.snapshot.serverHost.isEmpty ? "—" : store.snapshot.serverHost)
+                    Button("输入配对码", systemImage: "key") { store.requestPairingSheet() }
+                        .disabled(store.snapshot.switchingTransport)
+                } else {
+                    LabeledContent("同步文件夹", value: store.snapshot.folderDisplayPath.isEmpty ? "—" : store.snapshot.folderDisplayPath)
+                    if !store.snapshot.folderProblem.isEmpty {
+                        Text(store.snapshot.folderProblem).foregroundStyle(ThemeColors.danger)
+                    }
+                    Button(store.folderActionTitle, systemImage: "folder") {
+                        if store.snapshot.statusKey == "folderMissing" { store.rebuildFolder() }
+                        else { store.chooseFolder() }
+                    }.disabled(store.snapshot.busy || store.snapshot.choosingFolder)
+                }
+                if !store.transportProblem.isEmpty {
+                    Text(store.transportProblem).foregroundStyle(ThemeColors.danger)
+                }
+                if store.snapshot.switchingTransport {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("正在连接同步服务器…")
+                    }
+                }
+            } header: {
+                Text("同步")
+            } footer: {
+                if store.isServerTransport {
+                    Text("在 Mac 的「设置 › 数据 › 设备间同步」里复制配对码，回到这里粘贴。")
+                }
             }
             Section("状态") {
                 Text(store.snapshot.statusText).foregroundStyle(store.snapshot.hasProblem ? ThemeColors.danger : ThemeColors.ink)
@@ -39,11 +85,72 @@ import UniformTypeIdentifiers
                 Button("重试读取同步状态") { store.refresh() }
             }
         }.formStyle(.grouped)
-        .alert("加入同步文件夹？", isPresented: $joinConfirmation) {
+        .sheet(isPresented: Binding(
+            get: { store.pairingSheetRequested },
+            set: { if !$0 { store.cancelPairingSheet() } })) {
+            PairingCodeSheet()
+        }
+        .alert(store.joinTitle, isPresented: $joinConfirmation) {
             Button("取消", role: .cancel) {}
             Button("确认加入", role: .destructive) { store.confirmJoin() }
-        } message: { Text("本机数据先自动备份，再换成同步文件夹里的数据。") }
+        } message: { Text(store.joinConfirmationText) }
         .task { store.refresh() }
+    }
+}
+
+@MainActor private struct PairingCodeSheet: View {
+    @Environment(SettingsSyncStore.self) private var store
+    @Environment(\.dismiss) private var dismiss
+    @State private var code = ""
+
+    var body: some View {
+        NavigationStack {
+            SettingsForm {
+                Section {
+                    TextField("配对码", text: $code, axis: .vertical)
+                        .font(.system(.body, design: .monospaced))
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .lineLimit(4...8)
+                    Button("从剪贴板粘贴", systemImage: "doc.on.clipboard") {
+                        // UIPasteboard 只在 IPadUI 读取；IPadCore 的测试包不依赖 UIKit。
+                        if let value = UIPasteboard.general.string { code = value }
+                    }
+                } footer: {
+                    Text("在 Mac 的「设置 › 数据 › 设备间同步」里复制配对码，回到这里粘贴。")
+                }
+                if !store.transportProblem.isEmpty {
+                    Section {
+                        Text(store.transportProblem).foregroundStyle(ThemeColors.danger)
+                    }
+                } else if !store.errorMessage.isEmpty {
+                    Section {
+                        Text(store.errorMessage).foregroundStyle(ThemeColors.danger)
+                    }
+                }
+                if store.snapshot.switchingTransport {
+                    Section {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("正在连接同步服务器…")
+                        }
+                    }
+                }
+            }
+            .navigationTitle("输入配对码")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        store.cancelPairingSheet()
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("加入") { store.submitPairingCode(code) }
+                        .disabled(!store.canSubmitPairingCode(code))
+                }
+            }
+        }
     }
 }
 

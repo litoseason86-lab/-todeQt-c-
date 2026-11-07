@@ -66,6 +66,7 @@ private slots:
     void trashBridgeDistinguishesEmptyAndReadFailure();
     void trashBridgeEmptyUsesProvidedIdentifiers();
     void syncBridgeDistinguishesEmptyAndDatabaseFailure();
+    void syncBridgeExposesTransportPairingAndCallbacks();
     void backupBridgeDistinguishesMissingAndUnreadableFolder();
     void exportAndRoutineBridgeForwardServiceOperations();
     void routineBridgePreservesFieldTypesAndReadFailures();
@@ -193,6 +194,39 @@ void PTDataBridgeTests::syncBridgeDistinguishesEmptyAndDatabaseFailure() {
         PTBridgeSupport::registerService(QStringLiteral("syncController"), nullptr);
     }
 }
+// 产品保证：服务器方式属性与控制器一致，对应 C++ 信号逐次回调，错误配对码只产生问题不改方式。
+void PTDataBridgeTests::syncBridgeExposesTransportPairingAndCallbacks()
+{
+    @autoreleasepool {
+        SyncController controller(SyncController::Platform{});
+        PTBridgeSupport::registerService(QStringLiteral("syncController"), &controller);
+        PTSyncBridge *bridge = [PTSyncBridge new];
+        __block int transportChanges = 0;
+        __block int switchingChanges = 0;
+        bridge.onTransportChanged = ^{ ++transportChanges; };
+        bridge.onSwitchingTransportChanged = ^{ ++switchingChanges; };
+        QCOMPARE(QString::fromNSString(bridge.transport), controller.transport());
+        QCOMPARE(QString::fromNSString(bridge.serverHost), controller.serverHost());
+        QCOMPARE(bridge.switchingTransport, controller.isSwitchingTransport());
+        QCOMPARE(QString::fromNSString(bridge.transportProblem), controller.transportProblem());
+        QCOMPARE(QString::fromNSString(bridge.joinWarning), controller.joinWarning());
+
+        QVERIFY(QMetaObject::invokeMethod(
+            &controller, "transportChanged", Qt::DirectConnection));
+        QVERIFY(QMetaObject::invokeMethod(
+            &controller, "switchingTransportChanged", Qt::DirectConnection));
+        QCOMPARE(transportChanges, 1);
+        QCOMPARE(switchingChanges, 1);
+
+        NSError *error = nil;
+        QVERIFY([bridge joinWithPairingCode:@"not-a-pairing-code" error:&error]);
+        QVERIFY(error == nil);
+        QVERIFY([bridge.transport isEqualToString:@"icloud"]);
+        QVERIFY(bridge.transportProblem.length > 0);
+        QVERIFY([bridge.transportProblem containsString:@"不是番茄Todo 的配对码"]);
+        PTBridgeSupport::registerService(QStringLiteral("syncController"), nullptr);
+    }
+}
 // 产品保证：不存在的备份目录是空列表，存在但不是目录的路径报告存储错误。
 void PTDataBridgeTests::backupBridgeDistinguishesMissingAndUnreadableFolder() {
     @autoreleasepool {
@@ -264,7 +298,7 @@ void PTDataBridgeTests::syncBridgeSurvivesServiceDestruction() {
 void PTDataBridgeTests::syncActionsRejectReleasedService_data()
 {
     QTest::addColumn<int>("action");
-    for (int action = 0; action < 6; ++action)
+    for (int action = 0; action < 8; ++action)
         QTest::newRow(qPrintable(QString::number(action))) << action;
 }
 
@@ -276,7 +310,8 @@ void PTDataBridgeTests::syncActionsRejectReleasedService()
         PTBridgeSupport::registerService(QStringLiteral("syncController"), nullptr);
         PTSyncBridge* bridge = [PTSyncBridge new];
         const SEL selectors[] = {@selector(setEnabled:error:), @selector(confirmJoin:), @selector(syncNow:),
-            @selector(chooseFolder:), @selector(rebuildFolder:), @selector(copyLostValue:error:)};
+            @selector(chooseFolder:), @selector(rebuildFolder:), @selector(copyLostValue:error:),
+            @selector(joinWithPairingCode:error:), @selector(switchToICloud:)};
         QVERIFY([bridge respondsToSelector:selectors[action]]);
         NSError* error = nil;
         BOOL result = YES;
@@ -287,6 +322,8 @@ void PTDataBridgeTests::syncActionsRejectReleasedService()
         case 3: result = [bridge chooseFolder:&error]; break;
         case 4: result = [bridge rebuildFolder:&error]; break;
         case 5: result = [bridge copyLostValue:@"丢失值" error:&error]; break;
+        case 6: result = [bridge joinWithPairingCode:@"test-code" error:&error]; break;
+        case 7: result = [bridge switchToICloud:&error]; break;
         }
         QVERIFY(!result);
         QVERIFY(error != nil);

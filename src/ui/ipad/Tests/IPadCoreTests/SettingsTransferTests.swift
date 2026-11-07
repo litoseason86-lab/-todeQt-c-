@@ -195,6 +195,62 @@ import XCTest
             XCTAssertEqual(store.notice, "")
         }
     }
+
+    // 产品保证：iCloud 选服务器只请求配对表单，选回 iCloud 才调用服务切换。
+    func testSyncTransportSelectionRequestsPairingBeforeSwitching() {
+        let bridge = SettingsSyncFake()
+        let store = SettingsSyncStore(bridge: bridge)
+        XCTAssertFalse(store.isServerTransport)
+        store.selectTransport("server")
+        XCTAssertTrue(store.pairingSheetRequested)
+        XCTAssertFalse(bridge.calls.contains { $0.hasPrefix("pair:") || $0 == "icloud" })
+        store.cancelPairingSheet()
+        XCTAssertFalse(store.pairingSheetRequested)
+        bridge.result.transport = "server"
+        bridge.onChanged?()
+        store.selectTransport("icloud")
+        XCTAssertEqual(bridge.calls, ["icloud"])
+    }
+
+    // 产品保证：配对码提交只转发给桥接，连接失败保留表单和问题，成功切到服务器后自动关闭。
+    func testPairingSubmissionPreservesProblemAndClosesOnlyAfterSuccess() {
+        let bridge = SettingsSyncFake()
+        let store = SettingsSyncStore(bridge: bridge)
+        store.requestPairingSheet()
+        bridge.result.switchingTransport = true
+        store.submitPairingCode(" valid-code ")
+        XCTAssertEqual(bridge.pairingCodeSubmitted, " valid-code ")
+        XCTAssertEqual(bridge.calls, ["pair: valid-code "])
+        XCTAssertFalse(store.canSubmitPairingCode("another-code"))
+        bridge.result.transportProblem = "配对码里的服务器地址不安全"
+        bridge.result.switchingTransport = false
+        bridge.onChanged?()
+        XCTAssertEqual(store.transportProblem, "配对码里的服务器地址不安全")
+        XCTAssertTrue(store.pairingSheetRequested)
+        bridge.result.transport = "server"
+        bridge.onChanged?()
+        XCTAssertFalse(store.pairingSheetRequested)
+        XCTAssertEqual(store.snapshot.transport, "server")
+    }
+
+    // 产品保证：服务器方式的确认文案接上未发出改动警告，连接期间加入按钮不可用。
+    func testServerJoinConfirmationIncludesWarningAndRespectsSwitching() {
+        let bridge = SettingsSyncFake()
+        bridge.result.transport = "server"
+        bridge.joinWarningValue = "本机还有 2 条改动没发出，加入后只留在自动备份里。"
+        let store = SettingsSyncStore(bridge: bridge)
+        XCTAssertTrue(store.isServerTransport)
+        XCTAssertEqual(store.joinTitle, "加入同步空间？")
+        XCTAssertEqual(store.joinConfirmationText,
+                       "本机数据先自动备份，再换成 Mac 的数据。\n" + bridge.joinWarningValue)
+        bridge.result.switchingTransport = true
+        bridge.onChanged?()
+        XCTAssertFalse(store.canSubmitPairingCode("code"))
+        bridge.result.switchingTransport = false
+        bridge.onChanged?()
+        XCTAssertTrue(store.canSubmitPairingCode("code"))
+        XCTAssertFalse(store.canSubmitPairingCode("   "))
+    }
 }
 
 @MainActor final class SettingsFilesFake: FileTransferWorkspaceProtocol {
@@ -244,6 +300,8 @@ import XCTest
     var error: Error?
     var actionError: Error?
     var copied = ""
+    var joinWarningValue = ""
+    var pairingCodeSubmitted = ""
     var result = SyncSnapshot()
     var calls: [String] = []
     func snapshot() throws -> SyncSnapshot { if let error { throw error }; return result }
@@ -252,6 +310,13 @@ import XCTest
     func syncNow() throws { calls.append("sync"); if let actionError { throw actionError } }
     func chooseFolder() throws { calls.append("choose"); if let actionError { throw actionError } }
     func rebuildFolder() throws { calls.append("rebuild"); if let actionError { throw actionError } }
+    func joinWithPairingCode(_ code: String) throws {
+        pairingCodeSubmitted = code
+        calls.append("pair:\(code)")
+        if let actionError { throw actionError }
+    }
+    func switchToICloud() throws { calls.append("icloud"); if let actionError { throw actionError } }
+    func joinWarning() -> String { joinWarningValue }
     func syncLog(limit: Int) throws -> [SyncLogEntry] { if let error { throw error }; return logs }
     func copyLostValue(_ text: String) throws { if let actionError { throw actionError }; copied = text; onCopyRequested?(text) }
     func restoreWarning() -> String { "" }

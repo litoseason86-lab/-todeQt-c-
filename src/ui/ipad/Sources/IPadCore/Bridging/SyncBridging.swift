@@ -1,5 +1,27 @@
 import Foundation
-public struct SyncSnapshot: Equatable, Sendable { public var enabled = false; public var statusKey = ""; public var hasProblem = false; public var summaryText = ""; public var statusText = ""; public var statusDetail = ""; public var pendingCount = 0; public var lastSyncedAt = ""; public var busy = false; public var hasFolder = false; public var folderDisplayPath = ""; public var choosingFolder = false; public var folderProblem = ""; public var logRevision = 0; public var logCount = 0; public init() {} }
+public struct SyncSnapshot: Equatable, Sendable {
+    public var enabled = false
+    public var statusKey = ""
+    public var hasProblem = false
+    public var summaryText = ""
+    public var statusText = ""
+    public var statusDetail = ""
+    public var pendingCount = 0
+    public var lastSyncedAt = ""
+    public var busy = false
+    public var hasFolder = false
+    public var folderDisplayPath = ""
+    public var choosingFolder = false
+    public var folderProblem = ""
+    // 服务器方式与配对进度都来自 C++；Swift 只据此显示 Picker、服务器行和连接中状态。
+    public var transport = "icloud"
+    public var serverHost = ""
+    public var switchingTransport = false
+    public var transportProblem = ""
+    public var logRevision = 0
+    public var logCount = 0
+    public init() {}
+}
 public struct SyncLogEntry: Equatable, Sendable, Identifiable {
     public let id: Int64
     public let kind: String
@@ -18,4 +40,20 @@ public struct SyncLogEntry: Equatable, Sendable, Identifiable {
         self.summary = summary; self.detail = detail; self.fieldLabel = fieldLabel; self.lostValue = lostValue; self.keptValue = keptValue; self.canCopyLostValue = canCopyLostValue
     }
 }
-@MainActor public protocol SyncBridgeProtocol: AnyObject { var onChanged: (() -> Void)? { get set }; var onNotice: ((String) -> Void)? { get set }; var onCopyRequested: ((String) -> Void)? { get set }; func snapshot() throws -> SyncSnapshot; func setEnabled(_ value: Bool) throws; func confirmJoin() throws; func syncNow() throws; func chooseFolder() throws; func rebuildFolder() throws; func syncLog(limit: Int) throws -> [SyncLogEntry]; func copyLostValue(_ text: String) throws; func restoreWarning() -> String }
+@MainActor public protocol SyncBridgeProtocol: AnyObject {
+    var onChanged: (() -> Void)? { get set }
+    var onNotice: ((String) -> Void)? { get set }
+    var onCopyRequested: ((String) -> Void)? { get set }
+    func snapshot() throws -> SyncSnapshot
+    func setEnabled(_ value: Bool) throws
+    func confirmJoin() throws
+    func syncNow() throws
+    func chooseFolder() throws
+    func rebuildFolder() throws
+    func joinWithPairingCode(_ code: String) throws
+    func switchToICloud() throws
+    func joinWarning() -> String
+    func syncLog(limit: Int) throws -> [SyncLogEntry]
+    func copyLostValue(_ text: String) throws
+    func restoreWarning() -> String
+}

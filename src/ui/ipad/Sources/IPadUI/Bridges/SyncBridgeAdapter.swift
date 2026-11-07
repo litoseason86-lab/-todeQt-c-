@@ -4,9 +4,54 @@ import PTBridge
 import UIKit
 @MainActor final class SyncBridgeAdapter: SyncBridgeProtocol {
     private let native = PTSyncBridge(); var onChanged: (() -> Void)?; var onNotice: ((String) -> Void)?; var onCopyRequested: ((String) -> Void)?
-    init() { native.onStatusChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }; native.onFolderChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }; native.onChoosingFolderChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }; native.onLogChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }; native.onNotice = { [weak self] value in MainActor.assumeIsolated { self?.onNotice?(value) } }; native.onCopyRequested = { [weak self] value in MainActor.assumeIsolated { UIPasteboard.general.string = value; self?.onCopyRequested?(value) } } }
-    func snapshot() throws -> SyncSnapshot { var s = SyncSnapshot(); s.enabled = native.enabled; s.statusKey = native.statusKey; s.hasProblem = native.hasProblem; s.summaryText = native.summaryText; s.statusText = native.statusText; s.statusDetail = native.statusDetail; s.pendingCount = native.pendingCount; s.lastSyncedAt = native.lastSyncedAt; s.busy = native.busy; s.hasFolder = native.hasFolder; s.folderDisplayPath = native.folderDisplayPath; s.choosingFolder = native.choosingFolder; s.folderProblem = native.folderProblem; s.logRevision = native.logRevision; s.logCount = try native.readLogCount(); return s }
-    func setEnabled(_ value: Bool) throws { try native.setEnabled(value) }; func confirmJoin() throws { try native.confirmJoin() }; func syncNow() throws { try native.syncNow() }; func chooseFolder() throws { try native.chooseFolder() }; func rebuildFolder() throws { try native.rebuildFolder() }; func copyLostValue(_ text: String) throws { try native.copyLostValue(text) }; func restoreWarning() -> String { native.restoreWarning() }
+    init() {
+        native.onStatusChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
+        native.onFolderChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
+        native.onChoosingFolderChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
+        native.onTransportChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
+        native.onSwitchingTransportChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
+        native.onLogChanged = { [weak self] in MainActor.assumeIsolated { self?.onChanged?() } }
+        native.onNotice = { [weak self] value in MainActor.assumeIsolated { self?.onNotice?(value) } }
+        native.onCopyRequested = { [weak self] value in
+            MainActor.assumeIsolated {
+                UIPasteboard.general.string = value
+                self?.onCopyRequested?(value)
+            }
+        }
+    }
+    func snapshot() throws -> SyncSnapshot {
+        var s = SyncSnapshot()
+        s.enabled = native.enabled
+        s.statusKey = native.statusKey
+        s.hasProblem = native.hasProblem
+        s.summaryText = native.summaryText
+        s.statusText = native.statusText
+        s.statusDetail = native.statusDetail
+        s.pendingCount = native.pendingCount
+        s.lastSyncedAt = native.lastSyncedAt
+        s.busy = native.busy
+        s.hasFolder = native.hasFolder
+        s.folderDisplayPath = native.folderDisplayPath
+        s.choosingFolder = native.choosingFolder
+        s.folderProblem = native.folderProblem
+        s.transport = native.transport
+        s.serverHost = native.serverHost
+        s.switchingTransport = native.switchingTransport
+        s.transportProblem = native.transportProblem
+        s.logRevision = native.logRevision
+        s.logCount = try native.readLogCount()
+        return s
+    }
+    func setEnabled(_ value: Bool) throws { try native.setEnabled(value) }
+    func confirmJoin() throws { try native.confirmJoin() }
+    func syncNow() throws { try native.syncNow() }
+    func chooseFolder() throws { try native.chooseFolder() }
+    func rebuildFolder() throws { try native.rebuildFolder() }
+    func joinWithPairingCode(_ code: String) throws { try native.join(withPairingCode: code) }
+    func switchToICloud() throws { try native.switchToICloud() }
+    func joinWarning() -> String { native.joinWarning() }
+    func copyLostValue(_ text: String) throws { try native.copyLostValue(text) }
+    func restoreWarning() -> String { native.restoreWarning() }
     func syncLog(limit: Int) throws -> [SyncLogEntry] {
         let result = native.syncLog(limit)
         guard result.valid else { throw NSError(domain: "PTSyncBridge", code: 1, userInfo: [NSLocalizedDescriptionKey: result.error]) }
