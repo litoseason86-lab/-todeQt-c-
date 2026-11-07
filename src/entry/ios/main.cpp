@@ -23,6 +23,8 @@
 #include "platform/ios/native/NativeRoot.h"
 #include "platform/ios/native/IPadUiPreferences.h"
 #include "platform/apple/AppleNotificationBackend.h"
+#include "platform/apple/AppleSyncBlockCipher.h"
+#include "platform/apple/AppleSyncHttpClient.h"
 
 int main(int argc, char *argv[])
 {
@@ -68,6 +70,12 @@ int main(int argc, char *argv[])
         presentSyncFolderPicker(std::move(done));
     };
     syncPlatform.backgroundTask = [] { return beginIosBackgroundTask(QStringLiteral("番茄Todo同步")); };
+    syncPlatform.makeHttpClient = [] {
+        return std::make_shared<AppleSyncHttpClient>();
+    };
+    syncPlatform.makeBlockCipher = [] {
+        return std::make_shared<AppleSyncBlockCipher>();
+    };
     syncPlatform.engine.mayCreateFolder = false;
     syncPlatform.engine.runInBackground = false;
     sharedApp.setUpSync(std::move(syncPlatform));

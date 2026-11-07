@@ -62,6 +62,7 @@ void SyncServerWatcher::start()
         return;
     }
     m_stopRequested.store(false);
+    m_threadFinished.store(false);
     const std::uint64_t generation = m_generation.fetch_add(1) + 1;
     m_running.store(true);
     m_thread = std::thread([this, generation] { run(generation); });
@@ -79,10 +80,17 @@ void SyncServerWatcher::stop()
         m_stopRequested.store(true);
         m_running.store(false);
         m_wake.notify_all();
+        threadToJoin = std::move(m_thread);
+    }
+    // 工作线程可能刚通过循环顶部的停止检查、还没把 data task 登记进 HTTP 客户端。
+    // 单次 cancelAll 会漏掉这个窗口；反复取消并最多等待 20 毫秒，直到线程真正退出。
+    while (!m_threadFinished.load()) {
         if (m_http) {
             m_http->cancelAll();
         }
-        threadToJoin = std::move(m_thread);
+        std::unique_lock<std::mutex> lock(m_stateMutex);
+        m_wake.wait_for(lock, std::chrono::milliseconds(20),
+                        [this] { return m_threadFinished.load(); });
     }
     if (threadToJoin.joinable()) {
         threadToJoin.join();
@@ -232,4 +240,6 @@ void SyncServerWatcher::run(std::uint64_t generation)
     if (m_generation.load() == generation) {
         m_running.store(false);
     }
+    m_threadFinished.store(true);
+    m_wake.notify_all();
 }

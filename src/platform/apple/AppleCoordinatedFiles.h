@@ -20,6 +20,10 @@ public:
     bool write(const QString& absolutePath, const QString& relativePath,
                const QByteArray& data, SyncFolder::Error* error);
     bool remove(const QString& absolutePath, const QString& relativePath, SyncFolder::Error* error);
+    // 在文件协调内把目录原子改名。目标名必须事先由调用方选好且不存在。
+    bool move(const QString& sourceAbsolutePath,
+              const QString& destinationAbsolutePath,
+              SyncFolder::Error* error);
 
     // 取消是唯一可跨线程调用的方法；它不等待协调线程，不改变之后新建协调者的状态。
     void cancelPendingIo();

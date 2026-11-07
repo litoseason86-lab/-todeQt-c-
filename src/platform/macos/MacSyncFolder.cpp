@@ -4,6 +4,7 @@
 #include "../apple/AppleUbiquitousItem.h"
 
 #include <QDir>
+#include <QDateTime>
 #include <QFileInfo>
 
 MacSyncFolder::MacSyncFolder(const QString& iCloudDriveRoot)
@@ -15,6 +16,53 @@ MacSyncFolder::MacSyncFolder(const QString& iCloudDriveRoot)
 QString MacSyncFolder::defaultICloudDriveRoot()
 {
     return QDir::homePath() + QStringLiteral("/Library/Mobile Documents/com~apple~CloudDocs");
+}
+
+bool MacSyncFolder::retireFolder(const QString& iCloudDriveRoot,
+                                 const QDateTime& nowUtc, QString* error)
+{
+    const QString source
+        = iCloudDriveRoot + QLatin1Char('/') + SyncFiles::defaultFolderName();
+    if (!QFileInfo::exists(source)) {
+        return true;
+    }
+    const QStringList entries = QDir(source).entryList(
+        QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden);
+    if (SyncFiles::isEffectivelyEmpty(entries)) {
+        // SyncWorker 的 createFolder 本来就把空目录当作可新建；保留空目录不会挡住切换。
+        return true;
+    }
+
+    const QString baseName = source
+        + QStringLiteral("-旧-")
+        + nowUtc.toUTC().toString(QStringLiteral("yyyyMMdd-HHmmss"))
+        + QStringLiteral("Z");
+    QString destination = baseName;
+    for (int suffix = 2; QFileInfo::exists(destination); ++suffix) {
+        destination = baseName + QStringLiteral("-%1").arg(suffix);
+    }
+
+    AppleCoordinatedFiles files;
+    SyncFolder::Error moveError;
+    if (!files.move(source, destination, &moveError)) {
+        if (error) {
+            *error = moveError.message;
+        }
+        return false;
+    }
+
+    SyncFolder::Error markerError;
+    const QString markerPath
+        = destination + QLatin1Char('/') + SyncFiles::markerFileName();
+    if (!files.remove(markerPath, SyncFiles::markerFileName(), &markerError)) {
+        if (error) {
+            *error = QStringLiteral("同步文件夹已改名为 %1，但标记文件没能删除：%2")
+                         .arg(QDir::toNativeSeparators(destination),
+                              markerError.message);
+        }
+        return false;
+    }
+    return true;
 }
 
 bool MacSyncFolder::open(Error* error)

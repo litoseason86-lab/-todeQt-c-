@@ -33,6 +33,8 @@
 #include "mcp/bridge/McpToolDispatcher.h"
 
 #include "platform/macos/MacGlobalHotkeyBackend.h"
+#include "platform/apple/AppleSyncBlockCipher.h"
+#include "platform/apple/AppleSyncHttpClient.h"
 #include "platform/macos/MacBackupExecutor.h"
 #include "platform/macos/MacExitWatchdog.h"
 #include "platform/macos/MacPreferencesCleanup.h"
@@ -174,6 +176,17 @@ int main(int argc, char *argv[])
         return std::unique_ptr<SyncFolder>(std::make_unique<MacSyncFolder>());
     };
     syncPlatform.fixedFolderDisplayPath = QStringLiteral("iCloud 云盘/番茄Todo同步");
+    syncPlatform.makeHttpClient = [] {
+        return std::make_shared<AppleSyncHttpClient>();
+    };
+    syncPlatform.makeBlockCipher = [] {
+        return std::make_shared<AppleSyncBlockCipher>();
+    };
+    syncPlatform.retireICloudFolder = [](QString* error) {
+        return MacSyncFolder::retireFolder(
+            MacSyncFolder::defaultICloudDriveRoot(),
+            QDateTime::currentDateTimeUtc(), error);
+    };
     syncPlatform.engine.mayCreateFolder = true;
     syncPlatform.engine.runInBackground = true;
     sharedApp.setUpSync(std::move(syncPlatform));

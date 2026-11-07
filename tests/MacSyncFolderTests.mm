@@ -4,6 +4,7 @@
 #include "../src/services/SyncFiles.h"
 
 #include <QDir>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
@@ -122,6 +123,9 @@ private slots:
     void readRejectsOversizedFiles_data();
     void readRejectsOversizedFiles();
     void writeCreatesParentsAndMissingRemovalSucceeds();
+    void retireFolderIgnoresMissingAndEmpty();
+    void retireFolderRenamesAndRemovesMarker();
+    void retireFolderSuffixesWhenTimestampNameExists();
 };
 
 // 保证 Mac 同步文件的读、写、删均通过文件协调，文件呈现者能在操作前作出响应。
@@ -297,6 +301,89 @@ void MacSyncFolderTests::writeCreatesParentsAndMissingRemovalSucceeds()
     QVERIFY(error.ok());
     QVERIFY(!folder.read(relativePath, &content, &error));
     QCOMPARE(error.kind, SyncFolder::ErrorKind::NotFound);
+}
+
+// 保证旧同步目录不存在或是空目录时不改名，现有 createFolder 仍能把空目录当成可新建位置。
+void MacSyncFolderTests::retireFolderIgnoresMissingAndEmpty()
+{
+    QTemporaryDir drive;
+    QVERIFY(drive.isValid());
+    QString error;
+    QVERIFY(MacSyncFolder::retireFolder(
+        drive.path(), QDateTime::fromString(
+                          QStringLiteral("2026-11-07T10:20:30Z"),
+                          Qt::ISODate), &error));
+    QVERIFY(error.isEmpty());
+
+    const QString empty
+        = drive.filePath(
+            SyncFiles::defaultFolderName());
+    QVERIFY(QDir().mkpath(empty));
+    QVERIFY(MacSyncFolder::retireFolder(
+        drive.path(), QDateTime::currentDateTimeUtc(), &error));
+    QVERIFY(error.isEmpty());
+    QVERIFY(QFileInfo(empty).isDir());
+}
+
+// 保证非空旧目录被加上 UTC 时间改名，标记文件消失，普通同步文件仍完整保留。
+void MacSyncFolderTests::retireFolderRenamesAndRemovesMarker()
+{
+    QTemporaryDir drive;
+    QVERIFY(drive.isValid());
+    const QString source
+        = drive.filePath(SyncFiles::defaultFolderName());
+    QVERIFY(QDir().mkpath(source));
+    QFile marker(source + QLatin1Char('/') + SyncFiles::markerFileName());
+    QVERIFY(marker.open(QIODevice::WriteOnly));
+    QVERIFY(marker.write("marker"));
+    marker.close();
+    QFile payload(source + QStringLiteral("/keep.json"));
+    QVERIFY(payload.open(QIODevice::WriteOnly));
+    QVERIFY(payload.write("payload"));
+    payload.close();
+
+    const QDateTime now
+        = QDateTime::fromString(QStringLiteral("2026-11-07T10:20:30Z"),
+                                Qt::ISODate);
+    QString error;
+    QVERIFY2(MacSyncFolder::retireFolder(drive.path(), now, &error),
+             qPrintable(error));
+    const QString retired
+        = source + QStringLiteral("-旧-20261107-102030Z");
+    QVERIFY(QFileInfo(retired).isDir());
+    QVERIFY(!QFileInfo::exists(source));
+    QVERIFY(!QFileInfo::exists(
+        retired + QLatin1Char('/') + SyncFiles::markerFileName()));
+    QFile kept(retired + QStringLiteral("/keep.json"));
+    QVERIFY(kept.open(QIODevice::ReadOnly));
+    QCOMPARE(kept.readAll(), QByteArrayLiteral("payload"));
+}
+
+// 保证同一秒重复退役时目标名按 -2、-3 递增，不覆盖上一份旧目录。
+void MacSyncFolderTests::retireFolderSuffixesWhenTimestampNameExists()
+{
+    QTemporaryDir drive;
+    QVERIFY(drive.isValid());
+    const QString source
+        = drive.filePath(SyncFiles::defaultFolderName());
+    QVERIFY(QDir().mkpath(source));
+    QFile marker(source + QLatin1Char('/') + SyncFiles::markerFileName());
+    QVERIFY(marker.open(QIODevice::WriteOnly));
+    QVERIFY(marker.write("marker"));
+    marker.close();
+
+    const QDateTime now
+        = QDateTime::fromString(QStringLiteral("2026-11-07T10:20:30Z"),
+                                Qt::ISODate);
+    const QString occupied
+        = source + QStringLiteral("-旧-20261107-102030Z");
+    QVERIFY(QDir().mkpath(occupied));
+    QString error;
+    QVERIFY2(MacSyncFolder::retireFolder(drive.path(), now, &error),
+             qPrintable(error));
+    QVERIFY(QFileInfo(occupied).isDir());
+    QVERIFY(QFileInfo(occupied + QStringLiteral("-2")).isDir());
+    QVERIFY(!QFileInfo::exists(source));
 }
 
 QTEST_GUILESS_MAIN(MacSyncFolderTests)

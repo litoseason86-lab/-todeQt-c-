@@ -1027,6 +1027,35 @@ add_test(NAME RemoteSyncTransportTests COMMAND RemoteSyncTransportTests)
 set_tests_properties(RemoteSyncTransportTests PROPERTIES TIMEOUT 180
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
 
+# 控制器接入服务器方式：真实中转服务器、配对码、iCloud 切换、watcher 与入口装配行为。
+add_executable(SyncControllerServerTests
+    tests/SyncControllerServerTests.mm
+    src/platform/apple/AppleSyncHttpClient.h
+    src/platform/apple/AppleSyncHttpClient.mm
+    src/platform/apple/AppleSyncBlockCipher.h
+    src/platform/apple/AppleSyncBlockCipher.mm
+)
+set_source_files_properties(
+    tests/SyncControllerServerTests.mm
+    src/platform/apple/AppleSyncHttpClient.mm
+    src/platform/apple/AppleSyncBlockCipher.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+)
+target_compile_definitions(SyncControllerServerTests PRIVATE
+    PTSYNC_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    PTSYNC_PYTHON3_EXECUTABLE="${Python3_EXECUTABLE}"
+)
+target_link_libraries(SyncControllerServerTests PRIVATE
+    PTCore
+    Qt6::Core
+    Qt6::Test
+    "-framework Foundation"
+)
+pomodoro_todo_enable_warnings(SyncControllerServerTests)
+add_test(NAME SyncControllerServerTests COMMAND SyncControllerServerTests)
+set_tests_properties(SyncControllerServerTests PROPERTIES TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_CONTROLS_STYLE=Basic")
+
 # 设备间同步接进应用（050 阶段 4）：开关与书签、恢复备份与逻辑日起点的衔接、iPad 选文件夹、同步日志。
 # 平台差异（文件夹怎么建、怎么选）由测试注入，同步文件夹用临时目录，不碰真实的 iCloud 云盘。
 add_executable(SyncControllerTests

@@ -8,11 +8,16 @@
 #include <QDateTime>
 #include <QObject>
 #include <QString>
+#include <QUrl>
 #include <QVariantList>
 
 #include <functional>
 #include <memory>
 #include <optional>
+
+class SyncBlockCipher;
+class SyncHttpClient;
+class SyncServerWatcher;
 
 // 设备间同步在应用里的总开关（050 阶段 4）。
 // 界面通过它开关同步、看状态、确认第一次加入、查同步日志；装配层（main.cpp）通过它把同步接到
@@ -46,6 +51,14 @@ class SyncController : public QObject
     Q_PROPERTY(bool choosesFolder READ choosesFolder CONSTANT)
     Q_PROPERTY(bool hasFolder READ hasFolder NOTIFY folderChanged)
     Q_PROPERTY(QString folderDisplayPath READ folderDisplayPath NOTIFY folderChanged)
+    // 同步文件的传输方式：iCloud 云盘或自建服务器。切换期间旧引擎保持原状，只有设置写入成功后才换。
+    Q_PROPERTY(QString transport READ transport NOTIFY transportChanged)
+    // 服务器方式只暴露域名，不把配对码、空间编号或密钥带到界面文本里。
+    Q_PROPERTY(QString serverHost READ serverHost NOTIFY transportChanged)
+    // Mac 可以在服务器上新建设置；iPad 只能输入配对码加入。
+    Q_PROPERTY(bool canCreateServerSpace READ canCreateServerSpace CONSTANT)
+    Q_PROPERTY(bool switchingTransport READ isSwitchingTransport NOTIFY switchingTransportChanged)
+    Q_PROPERTY(QString transportProblem READ transportProblem NOTIFY switchingTransportChanged)
     // 正在弹选择器，或者正在校验选中的文件夹。
     Q_PROPERTY(bool choosingFolder READ isChoosingFolder NOTIFY choosingFolderChanged)
     // 上次选的文件夹为什么没用上（选错了哪一层、读不了……）。选好了、或者又去选的时候清空。
@@ -71,6 +84,11 @@ public:
         std::function<std::function<void()>()> backgroundTask;
         // 位置固定时给人看的路径（Mac）。iPad 显示选中时记下的路径。
         QString fixedFolderDisplayPath;
+        // 服务器方式每次建引擎都取新的 HTTP 实例；watcher 也独占一份。
+        std::function<std::shared_ptr<SyncHttpClient>()> makeHttpClient;
+        std::function<std::shared_ptr<SyncBlockCipher>()> makeBlockCipher;
+        // Mac 从 iCloud 切到服务器时，把旧同步目录改名并删标记。iPad 为空。
+        std::function<bool(QString*)> retireICloudFolder;
         SyncEngine::Options engine;
     };
 
@@ -108,6 +126,11 @@ public:
     bool choosesFolder() const;
     bool hasFolder() const;
     QString folderDisplayPath() const;
+    QString transport() const { return m_transport; }
+    QString serverHost() const;
+    bool canCreateServerSpace() const { return m_platform.engine.mayCreateFolder; }
+    bool isSwitchingTransport() const { return m_switchingTransport; }
+    QString transportProblem() const { return m_transportProblem; }
     bool isChoosingFolder() const { return m_choosingFolder; }
     QString folderProblem() const { return m_folderProblem; }
     int logRevision() const { return m_logRevision; }
@@ -125,6 +148,12 @@ public:
     Q_INVOKABLE void chooseFolder();
     // 同步文件夹不见了之后：Mac 在原处重新建一个（新的文件夹身份），iPad 重新选。
     Q_INVOKABLE void rebuildFolder();
+    Q_INVOKABLE void createServerSpace(const QString& url, const QString& enrollKey);
+    Q_INVOKABLE void joinWithPairingCode(const QString& code);
+    Q_INVOKABLE QString pairingCode() const;
+    Q_INVOKABLE void copyPairingCode();
+    Q_INVOKABLE void switchToICloud();
+    Q_INVOKABLE QString joinWarning() const;
     // 同步日志，新的在前。每一项是给界面直接显示的文字。
     Q_INVOKABLE QVariantList syncLog(int limit = 200) const;
     // 同 syncLog / logCount，但区分「没有日志」（成功的空列表、0）与读取失败（数据库没开或查询出错，报 Database）。
@@ -141,6 +170,8 @@ signals:
     void enabledChanged();
     void statusChanged();
     void folderChanged();
+    void transportChanged();
+    void switchingTransportChanged();
     void choosingFolderChanged();
     void logChanged();
     // 只传递复制意图；测试监听信号，不接触系统剪贴板。
@@ -151,6 +182,7 @@ signals:
 private:
     void ensureEngine();
     void startEngine();
+    void destroyEngine();
     bool setEnabledState(bool enabled);
     void loadDisableIntent();
     void setChoosingFolder(bool choosing, const QString& problem = QString());
@@ -161,6 +193,25 @@ private:
     void onBookmarkRefreshed(quint64 folderGeneration, const QByteArray& bookmark);
     void onCycleFinished();
     void refreshLog();
+    void startServerWatcher();
+    void stopServerWatcher();
+    bool serverConfigComplete() const;
+    void setTransportSwitching(bool switching, const QString& problem = {});
+    void finishTransportProblem(const QString& problem);
+    void beginCreateServerNetwork(const QUrl& url, const QString& enrollKey,
+                                  bool wasICloud, bool hadJoinedFolder);
+    void completeCreateServer(const QUrl& url, const QString& spaceId,
+                              const QByteArray& secret, bool wasICloud,
+                              bool hadJoinedFolder);
+    bool persistServerSettings(const QUrl& url, const QString& spaceId,
+                               const QByteArray& secret, bool clearICloudSelection,
+                               QString* error);
+    bool persistICloudSettings(QString* error);
+    void applyServerEngine(bool enableAndStart);
+    void applyICloudEngine(bool enableAndStart);
+    void waitForOneSyncThen(const std::function<void()>& continuation,
+                            const QString& failureMessage);
+    void finishSwitchToICloud();
     // 本机改了跟着同步的设置：逐项和库里记下的比，变了的记一个新版本、等着发出。
     void recordSettings();
     // 启动时（和恢复备份之后）核对：库里记下的和本机设置不一致的，以库里的为准写回；库里还没有的，记下本机的。
@@ -169,6 +220,7 @@ private:
     Platform m_platform;
     std::function<bool(QString*)> m_safetyBackup;
     std::unique_ptr<SyncEngine> m_engine;
+    std::unique_ptr<SyncServerWatcher> m_watcher;
     bool m_enabled = false;
     bool m_initialized = false;
     bool m_choosingFolder = false;
@@ -186,6 +238,14 @@ private:
     // 同步日志里最新一条的编号：变了才通知界面重新读。
     qint64 m_lastLogId = -1;
     int m_logRevision = 0;
+    QString m_transport = QStringLiteral("icloud");
+    QUrl m_serverBaseUrl;
+    QString m_serverSpaceId;
+    QByteArray m_serverSecret;
+    bool m_switchingTransport = false;
+    QString m_transportProblem;
+    quint64 m_transportAttempt = 0;
+    bool m_foreground = true;
 
     enum class JournalReadResult {
         NotFound,
@@ -248,6 +308,11 @@ private:
     bool m_changingEnabled = false;
 
     QString currentDatabasePath() const;
+
+public:
+    // 服务器方式：2 秒攒批、60 秒兜底扫描；失败从 5 秒退避到 60 秒，
+    // 单次文件操作 60 秒没有进展就放弃这一轮。其余选项继承平台配置。
+    static SyncEngine::Options serverEngineOptions(const SyncEngine::Options& base);
 };
 
 #endif // SYNCCONTROLLER_H

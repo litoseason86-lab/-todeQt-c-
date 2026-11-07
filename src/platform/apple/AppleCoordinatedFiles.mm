@@ -219,6 +219,40 @@ bool AppleCoordinatedFiles::remove(const QString& absolutePath, const QString& r
     }
 }
 
+bool AppleCoordinatedFiles::move(const QString& sourceAbsolutePath,
+                                 const QString& destinationAbsolutePath,
+                                 SyncFolder::Error* error)
+{
+    @autoreleasepool {
+        __block BOOL moved = NO;
+        __block NSError* moveError = nil;
+        NSError* coordinationError = nil;
+        NSURL* sourceURL = [NSURL fileURLWithPath:sourceAbsolutePath.toNSString()];
+        NSURL* destinationURL
+            = [NSURL fileURLWithPath:destinationAbsolutePath.toNSString()];
+        NSFileCoordinator* coordinator = d->beginCoordination();
+        [coordinator coordinateWritingItemAtURL:sourceURL
+                                        options:NSFileCoordinatorWritingForMoving
+                                          error:&coordinationError
+                                     byAccessor:^(NSURL* newURL) {
+            NSError* localError = nil;
+            moved = [[NSFileManager defaultManager] moveItemAtURL:newURL
+                                                              toURL:destinationURL
+                                                              error:&localError];
+            moveError = localError;
+        }];
+        d->endCoordination();
+        if (coordinationError == nil && moved) {
+            setError(error, {});
+            return true;
+        }
+        setError(error,
+                 errorFrom(coordinationError ?: moveError,
+                           QStringLiteral("移不动 %1").arg(sourceAbsolutePath)));
+        return false;
+    }
+}
+
 void AppleCoordinatedFiles::cancelPendingIo()
 {
     NSFileCoordinator* coordinator = nil;

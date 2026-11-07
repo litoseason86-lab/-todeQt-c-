@@ -62,6 +62,7 @@ private:
     std::thread m_thread;
     std::atomic_bool m_running{false};
     std::atomic_bool m_stopRequested{false};
+    std::atomic_bool m_threadFinished{false};
     std::atomic<std::uint64_t> m_generation{0};
 };
 

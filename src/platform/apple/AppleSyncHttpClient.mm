@@ -42,7 +42,7 @@
 @implementation AppleSyncHttpResult
 @end
 
-// 350 一类重定向必须交回调用方，防止鉴权头被带到另一台主机。
+// 3xx 重定向必须交回调用方，防止鉴权头被带到另一台主机。
 @interface AppleSyncHttpSessionDelegate
     : NSObject <NSURLSessionTaskDelegate>
 @end

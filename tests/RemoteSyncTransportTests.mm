@@ -99,6 +99,78 @@ public:
     bool released = false;
 };
 
+// 精确复现 T03 遗留的取消竞态：第二次 send 在“登记进取消集合”之前停在闸门上。
+// 闸门前的 cancelAll 对这次请求无效；只有登记之后再取消一次，send 才会返回。
+class GateWatchHttp final : public SyncHttpClient
+{
+public:
+    Response send(const Request& request) override
+    {
+        Q_UNUSED(request);
+        if (calls.fetch_add(1) == 0) {
+            Response response;
+            response.status = 200;
+            response.body = QByteArrayLiteral("{\"rev\":0}");
+            return response;
+        }
+        gateReached.store(true);
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            condition.wait(lock, [this] { return gateOpen; });
+        }
+        {
+            const std::lock_guard<std::mutex> lock(mutex);
+            registered = true;
+        }
+        std::unique_lock<std::mutex> lock(mutex);
+        condition.wait(lock, [this] { return longWaitReleased; });
+        Response response;
+        response.failure = Failure::Cancelled;
+        response.message = QStringLiteral("闸门测试取消");
+        return response;
+    }
+
+    void cancelAll() override
+    {
+        {
+            const std::lock_guard<std::mutex> lock(mutex);
+            if (!registered) {
+                cancelledBeforeRegistration = true;
+            } else {
+                longWaitReleased = true;
+            }
+        }
+        condition.notify_all();
+    }
+
+    void releaseGate()
+    {
+        {
+            const std::lock_guard<std::mutex> lock(mutex);
+            gateOpen = true;
+        }
+        condition.notify_all();
+    }
+
+    void releaseLongWait()
+    {
+        {
+            const std::lock_guard<std::mutex> lock(mutex);
+            longWaitReleased = true;
+        }
+        condition.notify_all();
+    }
+
+    std::atomic<int> calls{0};
+    std::atomic<bool> gateReached{false};
+    std::atomic<bool> cancelledBeforeRegistration{false};
+    std::mutex mutex;
+    std::condition_variable condition;
+    bool gateOpen = false;
+    bool registered = false;
+    bool longWaitReleased = false;
+};
+
 QSqlDatabase deviceDb(const Device& device)
 {
     return QSqlDatabase::database(device.connection);
@@ -221,6 +293,7 @@ private slots:
     void watchersDoNotExciteSyncCycles();
     void watcherRecoversAfterServerRestart();
     void watcherStopIsPromptAndSilencesChanges();
+    void watcherStopClosesPreRegistrationRace();
 
 private:
     Device openDevice(const QString& name);
@@ -997,6 +1070,51 @@ void RemoteSyncTransportTests::watcherStopIsPromptAndSilencesChanges()
         QCOMPARE(changes.count(), 0);
         QTest::qWait(10);
     }
+}
+
+// 保证 stop() 能关闭“已经过停止检查但尚未登记 HTTP 任务”的窗口，而不是等满一次长轮询。
+void RemoteSyncTransportTests::watcherStopClosesPreRegistrationRace()
+{
+    auto gate = std::make_shared<GateWatchHttp>();
+    SyncServerWatcher stopWatcher(
+        {baseUrl(), kSpace, QStringLiteral("test-token"), 25, 100, 500},
+        gate);
+    QSignalSpy changes(&stopWatcher, &SyncServerWatcher::changed);
+    stopWatcher.start();
+    QTRY_VERIFY_WITH_TIMEOUT(gate->gateReached.load(), 2000);
+
+    std::atomic<bool> stopDone{false};
+    std::thread stopper([&] {
+        stopWatcher.stop();
+        stopDone.store(true);
+    });
+    QElapsedTimer cancelWait;
+    cancelWait.start();
+    while (!gate->cancelledBeforeRegistration.load()
+           && cancelWait.elapsed() < 1000) {
+        QTest::qWait(5);
+    }
+    if (!gate->cancelledBeforeRegistration.load()) {
+        gate->releaseGate();
+        gate->releaseLongWait();
+        stopper.join();
+        QFAIL("stop() 没有先执行登记前 cancelAll");
+    }
+    gate->releaseGate();
+
+    QElapsedTimer timer;
+    timer.start();
+    while (!stopDone.load() && timer.elapsed() < 1000) {
+        QTest::qWait(5);
+    }
+    if (!stopDone.load()) {
+        gate->releaseLongWait();
+        stopper.join();
+        QFAIL("stop() 没有关闭登记前取消窗口");
+    }
+    stopper.join();
+    QVERIFY(timer.elapsed() < 1000);
+    QCOMPARE(changes.count(), 0);
 }
 
 QTEST_GUILESS_MAIN(RemoteSyncTransportTests)

@@ -2,15 +2,21 @@
 
 #include "AppSettings.h"
 #include "DatabaseManager.h"
+#include "RemoteSyncFolder.h"
+#include "SyncCrypto.h"
 #include "SyncFiles.h"
+#include "SyncHttpClient.h"
+#include "SyncPairing.h"
 #include "ScheduleService.h"
 #include "SyncSchema.h"
+#include "SyncServerWatcher.h"
 #include "SyncStore.h"
 #include "SyncWorker.h"
 #include "SyncNotifier.h"
 #include "SyncedSettings.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QDir>
 #include <QFile>
@@ -18,6 +24,7 @@
 #include <QFutureWatcher>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonValue>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -36,6 +43,31 @@ namespace {
 const auto kEnabledKey = QStringLiteral("sync/enabled");
 const auto kBookmarkKey = QStringLiteral("sync/bookmark");
 const auto kFolderPathKey = QStringLiteral("sync/folderPath");
+const auto kTransportKey = QStringLiteral("sync/transport");
+const auto kServerUrlKey = QStringLiteral("sync/server/url");
+const auto kServerSpaceKey = QStringLiteral("sync/server/space");
+const auto kServerSecretKey = QStringLiteral("sync/server/secret");
+
+struct ServerCreateResult {
+    bool ok = false;
+    QString problem;
+    QUrl url;
+    QString spaceId;
+    QByteArray secret;
+};
+
+QUrl serverApiUrl(QUrl baseUrl, const QString& suffix)
+{
+    QString path = baseUrl.path(QUrl::FullyEncoded);
+    while (path.endsWith(QLatin1Char('/'))) {
+        path.chop(1);
+    }
+    path += QStringLiteral("/v1/spaces") + suffix;
+    baseUrl.setPath(path, QUrl::StrictMode);
+    baseUrl.setQuery(QString());
+    baseUrl.setFragment(QString());
+    return baseUrl;
+}
 
 bool isProblem(SyncEngine::Status status)
 {
@@ -521,7 +553,18 @@ SyncController::SyncController(Platform platform, QObject* parent)
     : QObject(parent)
     , m_platform(std::move(platform))
 {
-    m_enabled = QSettings().value(kEnabledKey, false).toBool();
+    QSettings preferences;
+    m_enabled = preferences.value(kEnabledKey, false).toBool();
+    m_transport = preferences.value(kTransportKey, QStringLiteral("icloud")).toString();
+    if (m_transport != QStringLiteral("server")) {
+        m_transport = QStringLiteral("icloud");
+    } else {
+        m_serverBaseUrl = QUrl(preferences.value(kServerUrlKey).toString());
+        m_serverSpaceId = preferences.value(kServerSpaceKey).toString();
+        m_serverSecret = QByteArray::fromBase64(
+            preferences.value(kServerSecretKey).toString().toLatin1(),
+            QByteArray::Base64UrlEncoding);
+    }
     loadDisableIntent();
     // 本机改了跟着同步的设置（SyncSchema::syncedSettingKeys 与每一天的今日目标），记进库等着发出。
     // 同步写回对方的改动时这些信号也会发出，那时值与库里记下的相同，不会再记一次。
@@ -539,9 +582,22 @@ SyncController::SyncController(Platform platform, QObject* parent)
 
 SyncController::~SyncController()
 {
+    stopServerWatcher();
     // 引擎的析构会等工作线程把手头的文件操作做完（最多几秒）；先于其它成员析构，
     // 免得工作线程回调时控制器已经只剩一半。
     m_engine.reset();
+}
+
+SyncEngine::Options SyncController::serverEngineOptions(
+    const SyncEngine::Options& base)
+{
+    SyncEngine::Options options = base;
+    options.publishIntervalMs = 2000;
+    options.scanIntervalMs = 60000;
+    options.retryMinMs = 5000;
+    options.retryMaxMs = 60000;
+    options.stallTimeoutMs = 60000;
+    return options;
 }
 
 void SyncController::setSafetyBackup(std::function<bool(QString* error)> backup)
@@ -627,6 +683,7 @@ void SyncController::loadDisableIntent()
     const bool wasEnabled = m_enabled;
     m_enabled = false;
     m_disableIntentBlocked = true;
+    stopServerWatcher();
     if (m_engine) m_engine->stop();
     if (state == DisableIntentState::Invalid) {
         m_settingsError = error;
@@ -640,8 +697,14 @@ void SyncController::loadDisableIntent()
 
 void SyncController::setForeground(bool foreground)
 {
+    m_foreground = foreground;
     if (m_engine) {
         m_engine->setForeground(foreground);
+    }
+    if (foreground) {
+        startServerWatcher();
+    } else {
+        stopServerWatcher();
     }
 }
 
@@ -672,6 +735,7 @@ bool SyncController::prepareForRestore(QString* error)
         }
         return false;
     }
+    stopServerWatcher();
 
     const QString dbPath = currentDatabasePath();
     const QString journalPath = journalFilePath(dbPath);
@@ -766,6 +830,7 @@ void SyncController::finishRestore(bool success, bool safeToResume)
     if (!m_restore.pending) {
         return;
     }
+    stopServerWatcher();
     const RestoreState before = m_restore;
     m_restore = {};
 
@@ -1006,6 +1071,7 @@ void SyncController::finishRestore(bool success, bool safeToResume)
 
 void SyncController::shutdown(int timeoutMs)
 {
+    stopServerWatcher();
     // flushBeforeExit 先停下引擎，再同步写出最后一批；写不完的改动还留在本机，下次启动再写。
     if (m_engine && !m_engine->flushBeforeExit(timeoutMs)) {
         qWarning() << "Sync changes were not all written before exit; they stay queued for next launch";
@@ -1091,13 +1157,18 @@ QString SyncController::summaryText() const
         return QStringLiteral("已关闭");
     }
     if (!m_engine) {
+        if (m_transport == QStringLiteral("server")) {
+            return QStringLiteral("已暂停");
+        }
         return choosesFolder() ? QStringLiteral("还没有选择同步文件夹") : QStringLiteral("已暂停");
     }
     switch (m_engine->status()) {
     case SyncEngine::Status::Stopped:
         return QStringLiteral("已暂停");
     case SyncEngine::Status::Starting:
-        return QStringLiteral("正在连接同步文件夹…");
+        return m_transport == QStringLiteral("server")
+            ? QStringLiteral("正在连接同步服务器…")
+            : QStringLiteral("正在连接同步文件夹…");
     case SyncEngine::Status::UpToDate: {
         const QString at = syncedAtText(m_engine->lastSyncedAt());
         return at.isEmpty() ? QStringLiteral("已同步") : QStringLiteral("已同步 · %1").arg(at);
@@ -1105,15 +1176,25 @@ QString SyncController::summaryText() const
     case SyncEngine::Status::NeedsConfirmation:
         return QStringLiteral("等你确认加入");
     case SyncEngine::Status::WaitingForSnapshot:
-        return QStringLiteral("正在等同步文件夹里的数据");
+        return m_transport == QStringLiteral("server")
+            ? QStringLiteral("正在等同步服务器上的数据")
+            : QStringLiteral("正在等同步文件夹里的数据");
     case SyncEngine::Status::FolderUnavailable:
-        return QStringLiteral("暂时无法访问同步文件夹");
+        return m_transport == QStringLiteral("server")
+            ? QStringLiteral("连不上同步服务器")
+            : QStringLiteral("暂时无法访问同步文件夹");
     case SyncEngine::Status::WrongFolder:
-        return QStringLiteral("选中的不是同步文件夹");
+        return m_transport == QStringLiteral("server")
+            ? QStringLiteral("同步空间内容不对")
+            : QStringLiteral("选中的不是同步文件夹");
     case SyncEngine::Status::FolderMissing:
-        return QStringLiteral("同步文件夹不见了，同步已暂停");
+        return m_transport == QStringLiteral("server")
+            ? QStringLiteral("同步空间不见了")
+            : QStringLiteral("同步文件夹不见了，同步已暂停");
     case SyncEngine::Status::NoSpace:
-        return QStringLiteral("存储空间不足");
+        return m_transport == QStringLiteral("server")
+            ? QStringLiteral("同步服务器空间已满")
+            : QStringLiteral("存储空间不足");
     case SyncEngine::Status::UploadFailed:
         return QStringLiteral("上传到 iCloud 失败");
     case SyncEngine::Status::NewerVersion:
@@ -1156,17 +1237,28 @@ QString SyncController::statusText() const
     case SyncEngine::Status::Stopped:
         return QStringLiteral("同步暂停中，改动先留在这台设备上。");
     case SyncEngine::Status::Starting:
-        return QStringLiteral("正在连接同步文件夹…");
+        return m_transport == QStringLiteral("server")
+            ? QStringLiteral("正在连接同步服务器…")
+            : QStringLiteral("正在连接同步文件夹…");
     case SyncEngine::Status::UpToDate:
         return QStringLiteral("两台设备的数据已经一致。");
     case SyncEngine::Status::NeedsConfirmation:
-        return m_engine->statusText();
+        return m_transport == QStringLiteral("server")
+            ? QStringLiteral("第一次加入这个同步空间：本机数据先自动备份，再换成 Mac 的数据。")
+            : m_engine->statusText();
     case SyncEngine::Status::WaitingForSnapshot:
-        return QStringLiteral("另一台设备写的数据还在从 iCloud 传过来，到了之后会自动接着同步。");
+        return m_transport == QStringLiteral("server")
+            ? QStringLiteral("Mac 的数据还在传到同步服务器，传完会自动接着同步。")
+            : QStringLiteral("另一台设备写的数据还在从 iCloud 传过来，到了之后会自动接着同步。");
     case SyncEngine::Status::FolderUnavailable:
-        return QStringLiteral("请确认这台设备已登录 Apple ID，并打开了 iCloud 云盘。恢复之后会自动接着同步，"
-                              "这期间的改动先留在本机。");
+        return m_transport == QStringLiteral("server")
+            ? QStringLiteral("连不上同步服务器。网络恢复后会自动接着同步，改动先留在本机。")
+            : QStringLiteral("请确认这台设备已登录 Apple ID，并打开了 iCloud 云盘。恢复之后会自动接着同步，"
+                             "这期间的改动先留在本机。");
     case SyncEngine::Status::WrongFolder:
+        if (m_transport == QStringLiteral("server")) {
+            return QStringLiteral("这个同步空间里的内容不是番茄Todo 的同步数据。");
+        }
         // Mac 不选文件夹，位置是固定的：引擎给的「选错了哪一层」是写给 iPad 选择器的，在 Mac 上会让人摸不着头脑。
         // Mac 出现这个状态只有一种可能：iCloud 云盘里已经有一个同名文件夹，却不是能接上的同步文件夹。
         if (!choosesFolder()) {
@@ -1176,12 +1268,20 @@ QString SyncController::statusText() const
         }
         return m_engine->statusText();
     case SyncEngine::Status::FolderMissing:
+        if (m_transport == QStringLiteral("server")) {
+            return choosesFolder()
+                ? QStringLiteral("同步服务器上的同步空间不见了，请在 Mac 上重新建立，再输入新的配对码。")
+                : QStringLiteral("同步服务器上的同步空间不见了。重新建立同步空间后，iPad 要重新输入配对码。");
+        }
         return choosesFolder()
             ? QStringLiteral("原来选的同步文件夹被删除或移走了。Mac 重新建了同步文件夹的话，请在这里重新选择它。")
             : QStringLiteral("iCloud 云盘里的「%1」被删除或移走了。已经加入过的文件夹不会自动重建："
                              "另一台设备还认着原来那个。")
                   .arg(SyncFiles::defaultFolderName());
     case SyncEngine::Status::NoSpace:
+        if (m_transport == QStringLiteral("server")) {
+            return QStringLiteral("同步服务器空间已满，改动先留在本机。");
+        }
         return QStringLiteral("改动暂时写不出去，先留在这台设备上；空出空间之后会自动写出。");
     case SyncEngine::Status::UploadFailed:
         return QStringLiteral("改动已经写进同步文件夹，但没能上传到 iCloud，可能是 iCloud 空间已满。"
@@ -1212,7 +1312,9 @@ QString SyncController::statusDetail() const
         return m_settingsError;
     }
     // 选错文件夹时，引擎把「选错了哪一层」直接写进了状态说明，这里不再重复。
-    if (!m_engine || m_engine->status() == SyncEngine::Status::WrongFolder) {
+    if (!m_engine
+        || (m_engine->status() == SyncEngine::Status::WrongFolder
+            && m_transport != QStringLiteral("server"))) {
         return QString();
     }
     return m_engine->statusDetail();
@@ -1243,13 +1345,27 @@ bool SyncController::choosesFolder() const
 
 bool SyncController::hasFolder() const
 {
+    if (m_transport == QStringLiteral("server")) {
+        return serverConfigComplete();
+    }
     return !choosesFolder() || !storedBookmark().isEmpty();
 }
 
 QString SyncController::folderDisplayPath() const
 {
+    if (m_transport == QStringLiteral("server")) {
+        return serverHost();
+    }
     return choosesFolder() ? friendlyFolderPath(QSettings().value(kFolderPathKey).toString())
                            : m_platform.fixedFolderDisplayPath;
+}
+
+QString SyncController::serverHost() const
+{
+    return m_transport == QStringLiteral("server")
+        && RemoteSyncFolder::isAcceptableBaseUrl(m_serverBaseUrl)
+        ? m_serverBaseUrl.host()
+        : QString();
 }
 
 int SyncController::logCount() const
@@ -1274,7 +1390,8 @@ void SyncController::setEnabled(bool enabled)
         return;
     }
     // iPad 还没选过文件夹：先去选，选好、校验通过才算打开（见 acceptFolder）。
-    if (choosesFolder() && storedBookmark().isEmpty()) {
+    if (m_transport == QStringLiteral("icloud")
+        && choosesFolder() && storedBookmark().isEmpty()) {
         chooseFolder();
         return;
     }
@@ -1282,6 +1399,560 @@ void SyncController::setEnabled(bool enabled)
         startEngine();
     }
     emit statusChanged();
+}
+
+bool SyncController::persistServerSettings(
+    const QUrl& url, const QString& spaceId, const QByteArray& secret,
+    bool clearICloudSelection, QString* error)
+{
+    QSettings settings;
+    const auto oldUrl = settings.value(kServerUrlKey);
+    const auto oldSpace = settings.value(kServerSpaceKey);
+    const auto oldSecret = settings.value(kServerSecretKey);
+    const auto oldTransport = settings.value(kTransportKey);
+    const bool hadOldUrl = settings.contains(kServerUrlKey);
+    const bool hadOldSpace = settings.contains(kServerSpaceKey);
+    const bool hadOldSecret = settings.contains(kServerSecretKey);
+    const bool hadOldTransport = settings.contains(kTransportKey);
+    const auto oldBookmark = settings.value(kBookmarkKey);
+    const auto oldFolderPath = settings.value(kFolderPathKey);
+    const bool hadOldBookmark = settings.contains(kBookmarkKey);
+    const bool hadOldFolderPath = settings.contains(kFolderPathKey);
+
+    settings.setValue(kTransportKey, QStringLiteral("server"));
+    settings.setValue(kServerUrlKey, url.toString(QUrl::FullyEncoded));
+    settings.setValue(kServerSpaceKey, spaceId);
+    settings.setValue(
+        kServerSecretKey,
+        QString::fromLatin1(
+            secret.toBase64(QByteArray::Base64UrlEncoding
+                            | QByteArray::OmitTrailingEquals)));
+    if (clearICloudSelection) {
+        settings.remove(kBookmarkKey);
+        settings.remove(kFolderPathKey);
+    }
+    settings.sync();
+
+    if (settings.status() != QSettings::NoError) {
+        const auto restore = [&](const QString& key, const QVariant& value,
+                                 bool existed) {
+            if (existed) {
+                settings.setValue(key, value);
+            } else {
+                settings.remove(key);
+            }
+        };
+        restore(kServerUrlKey, oldUrl, hadOldUrl);
+        restore(kServerSpaceKey, oldSpace, hadOldSpace);
+        restore(kServerSecretKey, oldSecret, hadOldSecret);
+        restore(kTransportKey, oldTransport, hadOldTransport);
+        restore(kBookmarkKey, oldBookmark, hadOldBookmark);
+        restore(kFolderPathKey, oldFolderPath, hadOldFolderPath);
+        settings.sync();
+        m_settingsError = QStringLiteral(
+            "同步方式设置保存失败，无法切换同步方式。");
+        m_settingsRetryNeeded = true;
+        if (error) {
+            *error = m_settingsError;
+        }
+        emit statusChanged();
+        return false;
+    }
+
+    m_transport = QStringLiteral("server");
+    m_serverBaseUrl = url;
+    m_serverSpaceId = spaceId;
+    m_serverSecret = secret;
+    m_settingsError.clear();
+    m_settingsRetryNeeded = false;
+    return true;
+}
+
+bool SyncController::persistICloudSettings(QString* error)
+{
+    QSettings settings;
+    const auto oldUrl = settings.value(kServerUrlKey);
+    const auto oldSpace = settings.value(kServerSpaceKey);
+    const auto oldSecret = settings.value(kServerSecretKey);
+    const auto oldTransport = settings.value(kTransportKey);
+    const bool hadOldUrl = settings.contains(kServerUrlKey);
+    const bool hadOldSpace = settings.contains(kServerSpaceKey);
+    const bool hadOldSecret = settings.contains(kServerSecretKey);
+    const bool hadOldTransport = settings.contains(kTransportKey);
+
+    settings.setValue(kTransportKey, QStringLiteral("icloud"));
+    settings.remove(kServerUrlKey);
+    settings.remove(kServerSpaceKey);
+    settings.remove(kServerSecretKey);
+    settings.sync();
+    if (settings.status() != QSettings::NoError) {
+        const auto restore = [&](const QString& key, const QVariant& value,
+                                 bool existed) {
+            if (existed) {
+                settings.setValue(key, value);
+            } else {
+                settings.remove(key);
+            }
+        };
+        restore(kServerUrlKey, oldUrl, hadOldUrl);
+        restore(kServerSpaceKey, oldSpace, hadOldSpace);
+        restore(kServerSecretKey, oldSecret, hadOldSecret);
+        restore(kTransportKey, oldTransport, hadOldTransport);
+        settings.sync();
+        m_settingsError = QStringLiteral(
+            "同步方式设置保存失败，无法切换同步方式。");
+        m_settingsRetryNeeded = true;
+        if (error) {
+            *error = m_settingsError;
+        }
+        emit statusChanged();
+        return false;
+    }
+
+    m_transport = QStringLiteral("icloud");
+    m_serverBaseUrl.clear();
+    m_serverSpaceId.clear();
+    m_serverSecret.clear();
+    m_settingsError.clear();
+    m_settingsRetryNeeded = false;
+    return true;
+}
+
+void SyncController::applyServerEngine(bool enableAndStart)
+{
+    destroyEngine();
+    if (enableAndStart && setEnabledState(true)) {
+        startEngine();
+    }
+    emit folderChanged();
+    emit statusChanged();
+}
+
+void SyncController::applyICloudEngine(bool enableAndStart)
+{
+    destroyEngine();
+    if (enableAndStart && setEnabledState(true)) {
+        startEngine();
+    }
+    emit folderChanged();
+    emit statusChanged();
+}
+
+void SyncController::waitForOneSyncThen(
+    const std::function<void()>& continuation,
+    const QString& failureMessage)
+{
+    if (!m_enabled || !m_engine || !m_engine->isRunning()) {
+        continuation();
+        return;
+    }
+    const quint64 attempt = m_transportAttempt;
+    const QPointer<SyncController> self(this);
+    const std::shared_ptr<QMetaObject::Connection> connection
+        = std::make_shared<QMetaObject::Connection>();
+    *connection = connect(
+        m_engine.get(), &SyncEngine::cycleFinished, this,
+        [this, self, connection, continuation, failureMessage, attempt] {
+            if (!self || attempt != m_transportAttempt) {
+                QObject::disconnect(*connection);
+                return;
+            }
+            // 当前一轮结束时可能已经排着下一轮；等引擎真的空闲再判断最终状态。
+            if (m_engine && !m_engine->isIdle()) {
+                return;
+            }
+            QObject::disconnect(*connection);
+            if (!failureMessage.isEmpty()
+                && (!m_engine
+                    || m_engine->status() != SyncEngine::Status::UpToDate)) {
+                finishTransportProblem(
+                    failureMessage.arg(summaryText()));
+                return;
+            }
+            continuation();
+        });
+    m_engine->syncNow();
+}
+
+void SyncController::createServerSpace(
+    const QString& urlText, const QString& enrollKey)
+{
+    if (m_switchingTransport) {
+        return;
+    }
+    const QUrl url(urlText.trimmed());
+    if (!RemoteSyncFolder::isAcceptableBaseUrl(url)) {
+        finishTransportProblem(
+            QStringLiteral("服务器地址必须是 https"));
+        return;
+    }
+    if (enrollKey.trimmed().isEmpty()) {
+        finishTransportProblem(QStringLiteral("请填写注册口令"));
+        return;
+    }
+
+    ++m_transportAttempt;
+    setTransportSwitching(true);
+    stopServerWatcher();
+    const bool wasICloud = m_transport == QStringLiteral("icloud");
+    const bool hadJoinedFolder
+        = DatabaseManager::instance()->isOpen()
+        && !SyncStore().folderId().isEmpty();
+    const quint64 attempt = m_transportAttempt;
+    const auto beginNetwork = [this, url, enrollKey, wasICloud,
+                               hadJoinedFolder, attempt] {
+        if (attempt != m_transportAttempt || !m_switchingTransport) {
+            return;
+        }
+        beginCreateServerNetwork(
+            url, enrollKey, wasICloud, hadJoinedFolder);
+    };
+    if (wasICloud && m_enabled && m_engine && m_engine->isRunning()) {
+        waitForOneSyncThen(
+            beginNetwork,
+            QStringLiteral("先让同步恢复正常再切换（现在：%1）"));
+    } else {
+        beginNetwork();
+    }
+}
+
+void SyncController::beginCreateServerNetwork(
+    const QUrl& url, const QString& enrollKey, bool wasICloud,
+    bool hadJoinedFolder)
+{
+    if (!m_platform.makeHttpClient) {
+        finishTransportProblem(
+            QStringLiteral("服务器同步的 HTTP 组件没有配置"));
+        return;
+    }
+    const quint64 attempt = m_transportAttempt;
+    const auto http = m_platform.makeHttpClient();
+    if (!http) {
+        finishTransportProblem(
+            QStringLiteral("服务器同步的 HTTP 组件创建失败"));
+        return;
+    }
+    auto* watcher = new QFutureWatcher<ServerCreateResult>(this);
+    const QPointer<SyncController> self(this);
+    connect(watcher, &QFutureWatcherBase::finished, this,
+            [this, self, watcher, http, url, wasICloud,
+             hadJoinedFolder, attempt] {
+        watcher->deleteLater();
+        if (!self || attempt != m_transportAttempt
+            || !m_switchingTransport) {
+            return;
+        }
+        const ServerCreateResult result = watcher->result();
+        if (!result.ok) {
+            finishTransportProblem(result.problem);
+            return;
+        }
+        completeCreateServer(result.url, result.spaceId, result.secret,
+                             wasICloud, hadJoinedFolder);
+    });
+    QTimer::singleShot(30000, this, [this, attempt, http] {
+        if (attempt != m_transportAttempt || !m_switchingTransport) {
+            return;
+        }
+        ++m_transportAttempt;
+        if (http) {
+            http->cancelAll();
+        }
+        finishTransportProblem(
+            QStringLiteral("连接同步服务器超过 30 秒没有响应"));
+    });
+
+    watcher->setFuture(QtConcurrent::run(
+        [url, enrollKey, http] {
+            ServerCreateResult result;
+            result.url = url;
+            for (int attemptIndex = 0; attemptIndex < 2; ++attemptIndex) {
+                result.spaceId = SyncPairing::newSpaceId();
+                result.secret = SyncPairing::newSecret();
+                const SyncCrypto::Keys keys = SyncCrypto::deriveKeys(
+                    result.secret, result.spaceId);
+                const QByteArray tokenText
+                    = SyncCrypto::authTokenText(keys).toUtf8();
+                const QJsonObject body{
+                    {QStringLiteral("space"), result.spaceId},
+                    {QStringLiteral("tokenSha256"),
+                     QString::fromLatin1(
+                         QCryptographicHash::hash(
+                             tokenText, QCryptographicHash::Sha256)
+                             .toHex())},
+                };
+                SyncHttpClient::Request request;
+                request.method = QByteArrayLiteral("POST");
+                request.url = serverApiUrl(url, QString());
+                request.timeoutMs = 20000;
+                request.headers = {
+                    {QByteArrayLiteral("Content-Type"),
+                     QByteArrayLiteral("application/json")},
+                    {QByteArrayLiteral("X-PT-Enroll"), enrollKey.toUtf8()},
+                };
+                request.body = QJsonDocument(body).toJson(
+                    QJsonDocument::Compact);
+                const SyncHttpClient::Response response = http->send(request);
+                if (response.failure != SyncHttpClient::Failure::None) {
+                    result.problem
+                        = response.failure == SyncHttpClient::Failure::Timeout
+                        ? QStringLiteral("同步服务器响应超时")
+                        : response.failure
+                                == SyncHttpClient::Failure::Cancelled
+                        ? QStringLiteral("建同步空间的请求已取消")
+                        : QStringLiteral("连不上同步服务器：%1")
+                              .arg(response.message);
+                    return result;
+                }
+                if (response.status == 201) {
+                    result.ok = true;
+                    return result;
+                }
+                if (response.status == 403) {
+                    result.problem = QStringLiteral(
+                        "注册口令不对，服务器拒绝建立");
+                    return result;
+                }
+                if (response.status == 507) {
+                    result.problem = QStringLiteral(
+                        "服务器上的同步空间已满，请先在服务器上清理");
+                    return result;
+                }
+                if (response.status == 409 && attemptIndex == 0) {
+                    continue;
+                }
+                result.problem
+                    = QStringLiteral("同步服务器出错（HTTP %1）")
+                          .arg(response.status);
+                return result;
+            }
+            result.problem = QStringLiteral(
+                "服务器上的同步空间编号发生冲突，请重试");
+            return result;
+        }));
+}
+
+void SyncController::completeCreateServer(
+    const QUrl& url, const QString& spaceId, const QByteArray& secret,
+    bool wasICloud, bool hadJoinedFolder)
+{
+    QString error;
+    if (!persistServerSettings(url, spaceId, secret, false, &error)) {
+        finishTransportProblem(error);
+        return;
+    }
+    if (wasICloud && hadJoinedFolder && m_platform.retireICloudFolder) {
+        // 先停掉仍在写 iCloud 的旧引擎，再把目录改名；改名失败不中止切换，
+        // 但 iPad 可能还会往旧目录写，所以必须明确提示用户手动移走。
+        stopServerWatcher();
+        if (m_engine) {
+            m_engine->stop();
+        }
+        QString retireError;
+        if (!m_platform.retireICloudFolder(&retireError)) {
+            emit notice(QStringLiteral(
+                "iCloud 里的旧同步文件夹没能改名，iPad 可能还会往里写，请手动把它移走"));
+        }
+    }
+    if (DatabaseManager::instance()->isOpen()
+        && !SyncStore().setFolderId(QString())) {
+        finishTransportProblem(
+            QStringLiteral("没能清除旧同步文件夹记录"));
+        return;
+    }
+    m_knownFolderId.clear();
+    applyServerEngine(true);
+    emit transportChanged();
+    setTransportSwitching(false);
+    emit statusChanged();
+}
+
+void SyncController::joinWithPairingCode(const QString& code)
+{
+    if (m_switchingTransport) {
+        return;
+    }
+    SyncPairing::Info info;
+    QString decodeError;
+    if (!SyncPairing::decode(code, &info, &decodeError)) {
+        finishTransportProblem(decodeError);
+        return;
+    }
+    if (!m_platform.makeHttpClient || !m_platform.makeBlockCipher) {
+        finishTransportProblem(
+            QStringLiteral("服务器同步组件没有配置"));
+        return;
+    }
+
+    ++m_transportAttempt;
+    setTransportSwitching(true);
+    stopServerWatcher();
+    const quint64 attempt = m_transportAttempt;
+    const auto http = m_platform.makeHttpClient();
+    const auto cipher = m_platform.makeBlockCipher();
+    if (!http || !cipher) {
+        finishTransportProblem(
+            QStringLiteral("服务器同步组件创建失败"));
+        return;
+    }
+    auto folder = std::make_unique<RemoteSyncFolder>(
+        RemoteSyncFolder::Config{info.baseUrl, info.spaceId, info.secret},
+        http, cipher);
+    const auto worker = std::make_shared<SyncWorker>(std::move(folder));
+    auto* watcher = new QFutureWatcher<SyncWorker::OpenResult>(this);
+    const QPointer<SyncController> self(this);
+    connect(watcher, &QFutureWatcherBase::finished, this,
+            [this, self, watcher, info, attempt] {
+        watcher->deleteLater();
+        if (!self || attempt != m_transportAttempt
+            || !m_switchingTransport) {
+            return;
+        }
+        const SyncWorker::OpenResult result = watcher->result();
+        if (!result.error.ok()) {
+            finishTransportProblem(result.error.message);
+            return;
+        }
+        switch (result.markerState) {
+        case SyncWorker::MarkerState::Missing:
+            finishTransportProblem(QStringLiteral(
+                "Mac 还没在这个同步空间里建好同步，请稍后再试"));
+            return;
+        case SyncWorker::MarkerState::Corrupt:
+            finishTransportProblem(QStringLiteral(
+                "同步空间里的标记文件「%1」坏了：%2")
+                                       .arg(SyncFiles::markerFileName(),
+                                            result.markerError));
+            return;
+        case SyncWorker::MarkerState::Newer:
+            finishTransportProblem(QStringLiteral(
+                "这个同步空间是更新版本的番茄Todo 建的，请先更新这台设备上的应用。"));
+            return;
+        case SyncWorker::MarkerState::Present:
+            break;
+        }
+
+        QString error;
+        if (!persistServerSettings(info.baseUrl, info.spaceId,
+                                   info.secret, true, &error)) {
+            finishTransportProblem(error);
+            return;
+        }
+        applyServerEngine(true);
+        emit transportChanged();
+        emit folderChanged();
+        setTransportSwitching(false);
+        emit statusChanged();
+    });
+    QTimer::singleShot(30000, this, [this, attempt, worker] {
+        if (attempt != m_transportAttempt || !m_switchingTransport) {
+            return;
+        }
+        ++m_transportAttempt;
+        worker->cancelPendingIo();
+        finishTransportProblem(
+            QStringLiteral("检查配对码超过 30 秒没有响应"));
+    });
+    watcher->setFuture(
+        QtConcurrent::run([worker] { return worker->open(QString()); }));
+}
+
+void SyncController::finishSwitchToICloud()
+{
+    if (!m_switchingTransport) {
+        return;
+    }
+    QString error;
+    if (!choosesFolder()) {
+        // Mac 切回时先让旧服务器目录彻底退休；失败就留在服务器方式，
+        // 避免下一轮 createFolder 接上 iPad 还认识的旧文件夹。
+        if (m_platform.retireICloudFolder
+            && !m_platform.retireICloudFolder(&error)) {
+            finishTransportProblem(QStringLiteral(
+                "iCloud 云盘里已有旧的同步文件夹，没能改名，请手动移走后再试"));
+            return;
+        }
+    }
+    if (!persistICloudSettings(&error)) {
+        finishTransportProblem(error);
+        return;
+    }
+    if (!choosesFolder()) {
+        if (DatabaseManager::instance()->isOpen()
+            && !SyncStore().setFolderId(QString())) {
+            finishTransportProblem(
+                QStringLiteral("没能清除旧同步空间记录"));
+            return;
+        }
+        m_knownFolderId.clear();
+        applyICloudEngine(m_enabled);
+        emit transportChanged();
+        emit folderChanged();
+        setTransportSwitching(false);
+        emit statusChanged();
+        return;
+    }
+
+    destroyEngine();
+    setEnabledState(false);
+    emit transportChanged();
+    emit folderChanged();
+    setTransportSwitching(false);
+    emit statusChanged();
+    chooseFolder();
+}
+
+void SyncController::switchToICloud()
+{
+    if (m_switchingTransport
+        || m_transport == QStringLiteral("icloud")) {
+        return;
+    }
+    ++m_transportAttempt;
+    setTransportSwitching(true);
+    stopServerWatcher();
+    const quint64 attempt = m_transportAttempt;
+    if (m_enabled && m_engine && m_engine->isRunning()) {
+        waitForOneSyncThen(
+            [this, attempt] {
+                if (attempt == m_transportAttempt) {
+                    finishSwitchToICloud();
+                }
+            },
+            QString());
+    } else {
+        finishSwitchToICloud();
+    }
+}
+
+QString SyncController::pairingCode() const
+{
+    if (m_transport != QStringLiteral("server")
+        || !serverConfigComplete()) {
+        return QString();
+    }
+    return SyncPairing::encode(
+        {m_serverBaseUrl, m_serverSpaceId, m_serverSecret});
+}
+
+void SyncController::copyPairingCode()
+{
+    const QString code = pairingCode();
+    if (!code.isEmpty()) {
+        emit copyRequested(code);
+    }
+}
+
+QString SyncController::joinWarning() const
+{
+    if (statusKey() != QStringLiteral("needsConfirmation")) {
+        return QString();
+    }
+    const int pending = pendingCount();
+    return pending > 0
+        ? QStringLiteral("本机还有 %1 条改动没发出，加入后只留在自动备份里。")
+              .arg(pending)
+        : QString();
 }
 
 void SyncController::confirmJoin()
@@ -1295,6 +1966,9 @@ void SyncController::confirmJoin()
 
 void SyncController::syncNow()
 {
+    if (m_switchingTransport) {
+        return;
+    }
     if (m_journalCorrupted || m_restoreRetry.phase == QLatin1String("prepared")) {
         return;
     }
@@ -1412,6 +2086,9 @@ void SyncController::syncNow()
 
 void SyncController::chooseFolder()
 {
+    if (m_transport != QStringLiteral("icloud")) {
+        return;
+    }
     if (!m_platform.pickFolder || m_choosingFolder) {
         return;
     }
@@ -1432,6 +2109,9 @@ void SyncController::chooseFolder()
 
 void SyncController::rebuildFolder()
 {
+    if (m_transport == QStringLiteral("server")) {
+        return;
+    }
     // iPad 不能建同步文件夹，只能重新选 Mac 建好的那个。
     if (choosesFolder()) {
         chooseFolder();
@@ -1541,11 +2221,33 @@ void SyncController::ensureEngine()
     if (m_engine) {
         return;
     }
-    std::unique_ptr<SyncFolder> folder = makeFolder(storedBookmark());
+    std::unique_ptr<SyncFolder> folder;
+    SyncEngine::Options options = m_platform.engine;
+    if (m_transport == QStringLiteral("server")) {
+        if (!serverConfigComplete()) {
+            return;
+        }
+        const auto http = m_platform.makeHttpClient
+            ? m_platform.makeHttpClient()
+            : nullptr;
+        const auto cipher = m_platform.makeBlockCipher
+            ? m_platform.makeBlockCipher()
+            : nullptr;
+        if (!http || !cipher) {
+            return;
+        }
+        folder = std::make_unique<RemoteSyncFolder>(
+            RemoteSyncFolder::Config{
+                m_serverBaseUrl, m_serverSpaceId, m_serverSecret},
+            http, cipher);
+        options = serverEngineOptions(options);
+    } else {
+        folder = makeFolder(storedBookmark());
+    }
     if (!folder) {
         return;
     }
-    m_engine = std::make_unique<SyncEngine>(std::move(folder), m_platform.engine);
+    m_engine = std::make_unique<SyncEngine>(std::move(folder), options);
     m_engine->setChangeNotifier(SyncNotifier::publish);
     if (m_safetyBackup) {
         m_engine->setSafetyBackup(m_safetyBackup);
@@ -1557,6 +2259,15 @@ void SyncController::ensureEngine()
     connect(m_engine.get(), &SyncEngine::cycleFinished, this, &SyncController::onCycleFinished);
 }
 
+void SyncController::destroyEngine()
+{
+    stopServerWatcher();
+    // 旧引擎销毁后，工作线程仍可能把刷新过的书签投递回来；递增代次后一律丢掉。
+    ++m_folderGeneration;
+    m_engine.reset();
+    m_joinRequested = false;
+}
+
 void SyncController::startEngine()
 {
     // 数据库还没打开（initialize 之前）不能开始：引擎一开始就要读库里的同步进度。
@@ -1565,12 +2276,75 @@ void SyncController::startEngine()
     if (!DatabaseManager::instance()->isOpen() || !m_initialized || m_restore.pending
         || m_restoreRetry.hasPending() || m_journalCorrupted || !m_restoreError.isEmpty()
         || !m_settingsError.isEmpty() || m_disableIntentBlocked || !m_enabled) {
+        stopServerWatcher();
         return;
     }
     ensureEngine();
     if (m_engine) {
         m_engine->start();
+        startServerWatcher();
     }
+}
+
+bool SyncController::serverConfigComplete() const
+{
+    static const QRegularExpression spacePattern(
+        QStringLiteral("^[A-Za-z0-9_-]{16,64}$"));
+    return RemoteSyncFolder::isAcceptableBaseUrl(m_serverBaseUrl)
+        && spacePattern.match(m_serverSpaceId).hasMatch()
+        && m_serverSecret.size() == 32
+        && bool(m_platform.makeHttpClient)
+        && bool(m_platform.makeBlockCipher);
+}
+
+void SyncController::startServerWatcher()
+{
+    if (m_transport != QStringLiteral("server")
+        || !m_engine || !m_engine->isRunning()
+        || (!m_foreground && !m_platform.engine.runInBackground)
+        || !m_platform.makeHttpClient || !serverConfigComplete()
+        || m_watcher) {
+        return;
+    }
+    const SyncCrypto::Keys keys = SyncCrypto::deriveKeys(
+        m_serverSecret, m_serverSpaceId);
+    SyncServerWatcher::Config config{
+        m_serverBaseUrl,
+        m_serverSpaceId,
+        SyncCrypto::authTokenText(keys),
+        25,
+        5000,
+        60000,
+    };
+    m_watcher = std::make_unique<SyncServerWatcher>(
+        config, m_platform.makeHttpClient());
+    connect(m_watcher.get(), &SyncServerWatcher::changed,
+            this, &SyncController::syncNow, Qt::QueuedConnection);
+    m_watcher->start();
+}
+
+void SyncController::stopServerWatcher()
+{
+    m_watcher.reset();
+}
+
+void SyncController::setTransportSwitching(
+    bool switching, const QString& problem)
+{
+    if (m_switchingTransport == switching
+        && m_transportProblem == problem) {
+        return;
+    }
+    m_switchingTransport = switching;
+    m_transportProblem = problem;
+    emit switchingTransportChanged();
+}
+
+void SyncController::finishTransportProblem(const QString& problem)
+{
+    setTransportSwitching(false, problem);
+    startServerWatcher();
+    emit statusChanged();
 }
 
 bool SyncController::setEnabledState(bool enabled)
@@ -1585,6 +2359,7 @@ bool SyncController::setEnabledState(bool enabled)
     if (!enabled) {
         m_enabled = false;
         m_disableIntentBlocked = true;
+        stopServerWatcher();
         if (m_engine) m_engine->stop();
         QString intentError;
         const bool intentSaved = writeDisableIntent(disableIntentPath(currentDatabasePath()), &intentError);
@@ -1616,6 +2391,7 @@ bool SyncController::setEnabledState(bool enabled)
         if (state == DisableIntentState::Invalid) {
             m_enabled = false;
             m_disableIntentBlocked = true;
+            stopServerWatcher();
             if (m_engine) m_engine->stop();
             m_settingsError = intentError;
             m_settingsRetryNeeded = true;
@@ -1627,6 +2403,7 @@ bool SyncController::setEnabledState(bool enabled)
         settings.sync();
         if (settings.status() != QSettings::NoError) {
             m_enabled = false;
+            stopServerWatcher();
             if (m_engine) m_engine->stop();
             m_settingsError = QStringLiteral("同步开关状态保存失败，无法开启同步。");
             m_settingsRetryNeeded = true;
@@ -1635,6 +2412,7 @@ bool SyncController::setEnabledState(bool enabled)
         if (!removeDisableIntent(path, &intentError)) {
             m_enabled = false;
             m_disableIntentBlocked = true;
+            stopServerWatcher();
             if (m_engine) m_engine->stop();
             m_settingsError = intentError;
             m_settingsRetryNeeded = true;
@@ -1785,7 +2563,8 @@ void SyncController::acceptFolder(const QByteArray& bookmark, const QString& dis
 void SyncController::onBookmarkRefreshed(quint64 folderGeneration, const QByteArray& bookmark)
 {
     // 只存现在用的这个文件夹刷新出来的书签。换过文件夹以后，排在队里的旧操作刷新的是旧文件夹的书签。
-    if (folderGeneration != m_folderGeneration || bookmark.isEmpty()) {
+    if (m_transport != QStringLiteral("icloud")
+        || folderGeneration != m_folderGeneration || bookmark.isEmpty()) {
         return;
     }
     QSettings settings;
@@ -1809,8 +2588,10 @@ void SyncController::onCycleFinished()
         m_joinRequested = false;
         emit notice(QStringLiteral("已加入同步：本机数据已换成同步文件夹里的，原来的数据已自动备份。"));
     } else if (m_knownFolderId.isEmpty() && !folderId.isEmpty() && !choosesFolder()) {
-        emit notice(QStringLiteral("已在 iCloud 云盘建好「%1」文件夹。到 iPad 上选这个文件夹，就能加入同步。")
-                        .arg(SyncFiles::defaultFolderName()));
+        emit notice(m_transport == QStringLiteral("server")
+                        ? QStringLiteral("已在同步服务器建好同步空间。在 iPad 上输入配对码，就能加入同步。")
+                        : QStringLiteral("已在 iCloud 云盘建好「%1」文件夹。到 iPad 上选这个文件夹，就能加入同步。")
+                              .arg(SyncFiles::defaultFolderName()));
     } else if (m_knownEpoch >= 0 && epoch != m_knownEpoch && folderId == m_knownFolderId) {
         // 纪元变了、文件夹没换：另一台设备恢复了备份，本机跟着整体换成了它的数据（换之前已自动备份）。
         emit notice(QStringLiteral("另一台设备恢复了备份，这台设备已跟着回到那份备份的状态（换之前已自动备份）。"));
