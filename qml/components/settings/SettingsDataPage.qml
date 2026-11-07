@@ -541,9 +541,11 @@ FocusScope {
         }
     }
 
+    // 设置页高度包含整段滚动内容，按它居中会落到窗口下方；挂到窗口覆盖层后按窗口居中。
     ServerSpaceDialog {
         id: serverSpaceDialog
 
+        parent: root.Overlay.overlay
         syncControllerRef: root.syncControllerRef
         currentServerAddress: root.syncControllerRef
                               && root.syncControllerRef.serverUrl !== undefined
@@ -554,12 +556,14 @@ FocusScope {
     PairingCodeDialog {
         id: pairingCodeDialog
 
+        parent: root.Overlay.overlay
         syncControllerRef: root.syncControllerRef
     }
 
     Popup {
         id: iCloudConfirmPopup
 
+        parent: root.Overlay.overlay
         objectName: "settingsSyncICloudConfirm"
 
         modal: true

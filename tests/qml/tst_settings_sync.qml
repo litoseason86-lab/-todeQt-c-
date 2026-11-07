@@ -85,12 +85,22 @@ TestCase {
         }
     }
 
-    SettingsDataPage {
-        id: dataPage
+    Item {
+        id: shortViewport
 
         width: 620
-        appSettingsRef: appSettingsMock
-        syncControllerRef: syncMock
+        height: 600
+        clip: true
+
+        SettingsDataPage {
+            id: dataPage
+
+            width: shortViewport.width
+            // 模拟设置窗口中的长内容页，弹窗不能用这段滚动内容的高度作为居中参照。
+            height: Math.max(1600, implicitHeight)
+            appSettingsRef: appSettingsMock
+            syncControllerRef: syncMock
+        }
     }
 
     SyncLogDialog {
@@ -518,6 +528,39 @@ TestCase {
         compare(findChild(pairingDialog, "pairingCodeValue").text, pairingDialog.maskedCode)
         compare(findChild(pairingDialog, "pairingCodeRevealButton").Accessible.name, "显示配对码")
         clickControl(findChild(pairingDialog, "pairingCodeDoneButton"))
+    }
+
+    // 产品保证：长设置内容里的三种同步弹窗都相对可见窗口居中且完整落在窗口内。
+    function test_syncDialogsCenterOnWindowOverlay_data() {
+        return [
+            { tag: "server-space", popupName: "serverSpaceDialog" },
+            { tag: "pairing-code", popupName: "pairingCodeDialog" },
+            { tag: "icloud-confirm", popupName: "settingsSyncICloudConfirm" }
+        ]
+    }
+
+    // 产品保证：内容超过可见高度时，建空间、配对码和切回确认都能在窗口中央操作。
+    function test_syncDialogsCenterOnWindowOverlay(data) {
+        verify(waitForItemPolished(dataPage))
+        verify(dataPage.height >= 1600)
+        verify(dataPage.height > shortViewport.height * 2)
+        var overlay = dataPage.Overlay.overlay
+        verify(overlay !== null)
+        verify(overlay.width > 0 && overlay.height > 0)
+        var popup = findChild(dataPage, data.popupName)
+        verify(popup !== null)
+        popup.open()
+        tryCompare(popup, "opened", true)
+        verify(waitForItemPolished(popup.contentItem))
+        verify(popup.width > 0 && popup.height > 0)
+        verify(Math.abs(popup.y + popup.height / 2 - overlay.height / 2) <= 2,
+               "弹窗中心偏离窗口中心：" + popup.y + ", " + popup.height + ", " + overlay.height)
+        verify(Math.abs(popup.x + popup.width / 2 - overlay.width / 2) <= 2)
+        verify(popup.x >= 0 && popup.y >= 0)
+        verify(popup.x + popup.width <= overlay.width)
+        verify(popup.y + popup.height <= overlay.height)
+        keyClick(Qt.Key_Escape)
+        tryCompare(popup, "opened", false)
     }
 
     // 产品保证：空闲时 Esc 可关闭建空间弹窗，正在切换时 Esc 和重复点击不会中断或重提请求。
