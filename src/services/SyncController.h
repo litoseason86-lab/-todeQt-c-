@@ -175,6 +175,8 @@ signals:
     void folderChanged();
     void transportChanged();
     void switchingTransportChanged();
+    // 建空间弹窗只据此判定成功，避免属性变化通知时 QML 派生绑定尚未刷新而漏关窗。
+    void serverSpaceCreated();
     void choosingFolderChanged();
     void logChanged();
     // 只传递复制意图；测试监听信号，不接触系统剪贴板。

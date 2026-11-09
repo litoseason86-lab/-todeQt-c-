@@ -62,6 +62,7 @@ TestCase {
 
         signal logChanged()
         signal notice(string message)
+        signal serverSpaceCreated()
 
         function setEnabled(value) {
             calls.push("setEnabled:" + value)
@@ -451,10 +452,52 @@ TestCase {
         syncMock.transport = "server"
         syncMock.serverHost = "sync.example.com"
         syncMock.switchingTransport = false
+        syncMock.serverSpaceCreated()
         tryCompare(serverDialog, "opened", false)
         var pairingDialog = findChild(dataPage, "pairingCodeDialog")
         tryCompare(pairingDialog, "opened", true)
         compare(findChild(pairingDialog, "pairingCodeValue").text, pairingDialog.maskedCode)
+    }
+
+    // 产品保证：切换结束不能冒充建空间成功，只有明确成功通知才能关窗并显示配对码。
+    function test_spaceCreationWaitsForExplicitSuccess() {
+        syncMock.transport = "server"
+        var dialog = findChild(dataPage, "serverSpaceDialog")
+        clickControl(findChild(dataPage, "settingsSyncRebuildSpaceButton"))
+        tryCompare(dialog, "opened", true)
+        findChild(dialog, "serverSpaceAddressField").text = "https://sync.example.com"
+        findChild(dialog, "serverSpaceEnrollmentKeyField").text = "enroll-secret"
+        clickControl(findChild(dialog, "serverSpaceSubmitButton"))
+        tryCompare(syncMock, "switchingTransport", true)
+        syncMock.switchingTransport = false
+        compare(dialog.opened, true, "未收到 serverSpaceCreated 时必须保留建空间弹窗")
+        syncMock.serverSpaceCreated()
+        tryCompare(dialog, "opened", false)
+        tryCompare(findChild(dataPage, "pairingCodeDialog"), "opened", true)
+    }
+
+    // 产品保证：控制器正在切换时，直接调用表单提交也不能再次发出建空间请求。
+    function test_spaceSubmitReadsControllerSwitchingState() {
+        var dialog = findChild(dataPage, "serverSpaceDialog")
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        var callsBefore = syncMock.calls.length
+        syncMock.switchingTransport = true
+        verify(syncMock.switchingTransport)
+        dialog.submit()
+        compare(syncMock.calls.length, callsBefore)
+    }
+
+    // 产品保证：注册口令从表单提交时去掉首尾空白，避免粘贴时多出的空格导致注册失败。
+    function test_spaceSubmitTrimsEnrollmentKey() {
+        var dialog = findChild(dataPage, "serverSpaceDialog")
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        findChild(dialog, "serverSpaceAddressField").text = "https://sync.example.com"
+        findChild(dialog, "serverSpaceEnrollmentKeyField").text = "  enroll-secret  "
+        clickControl(findChild(dialog, "serverSpaceSubmitButton"))
+        compare(syncMock.calls[syncMock.calls.length - 1],
+                "createServerSpace:https://sync.example.com|enroll-secret")
     }
 
     // 产品保证：建空间失败留在原弹窗显示原因，关闭时清掉注册口令。
@@ -511,6 +554,9 @@ TestCase {
         var reveal = findChild(pairingDialog, "pairingCodeRevealButton")
         var copy = findChild(pairingDialog, "pairingCodeCopyButton")
         compare(codeText.text, pairingDialog.maskedCode)
+        verify(codeText.text.indexOf("ptsync1.") === 0)
+        verify(reveal.visible)
+        verify(copy.enabled)
         compare(reveal.Accessible.name, "显示配对码")
         clickControl(reveal)
         compare(codeText.text, "ptsync1.visible-secret")
@@ -528,6 +574,26 @@ TestCase {
         compare(findChild(pairingDialog, "pairingCodeValue").text, pairingDialog.maskedCode)
         compare(findChild(pairingDialog, "pairingCodeRevealButton").Accessible.name, "显示配对码")
         clickControl(findChild(pairingDialog, "pairingCodeDoneButton"))
+    }
+
+    // 产品保证：没有配对码时显示空状态和建立空间指引，不显示伪遮罩或可用的复制入口。
+    function test_pairingCodeEmptyState() {
+        syncMock.transport = "server"
+        syncMock.pairingCodeValue = ""
+        clickControl(findChild(dataPage, "settingsSyncPairingButton"))
+        var dialog = findChild(dataPage, "pairingCodeDialog")
+        tryCompare(dialog, "opened", true)
+        var codeText = findChild(dialog, "pairingCodeValue")
+        compare(codeText.text, "还没有配对码")
+        verify(codeText.text.indexOf("ptsync1.") === -1)
+        compare(codeText.color, Theme.inkSoft)
+        verify(codeText.font.family !== "Menlo")
+        verify(!findChild(dialog, "pairingCodeRevealButton").visible)
+        verify(!findChild(dialog, "pairingCodeCopyButton").enabled)
+        var hint = findChild(dialog, "pairingCodeEmptyHint")
+        verify(hint)
+        verify(hint.visible)
+        compare(hint.text, "先在「同步方式」里选自建服务器并建立同步空间。")
     }
 
     // 产品保证：长设置内容里的三种同步弹窗都相对可见窗口居中且完整落在窗口内。

@@ -663,7 +663,7 @@ void SyncControllerServerTests::defaultsToICloudAndKeepsOriginalOptions()
     QVERIFY(!AppSettings::ownedSettingGroups().contains(QStringLiteral("sync")));
 }
 
-// 保证错误口令不改状态，正确口令写入服务器配置、生成可解码配对码并退役旧 iCloud 目录。
+// 保证错误口令不发成功通知，带首尾空白的正确口令完成切换后恰好通知一次并给出有效配对码。
 void SyncControllerServerTests::macCreatesServerSpaceWithPairingAndRetiresICloud()
 {
     openMainDatabase(QStringLiteral("main"));
@@ -677,6 +677,15 @@ void SyncControllerServerTests::macCreatesServerSpaceWithPairingAndRetiresICloud
     SyncEngine* const oldEngine = controller.engine();
     QVERIFY(oldEngine != nullptr);
 
+    QSignalSpy createdSpy(&controller, &SyncController::serverSpaceCreated);
+    QVERIFY(createdSpy.isValid());
+    bool completedStateAtSignal = false;
+    connect(&controller, &SyncController::serverSpaceCreated, &controller, [&] {
+        // 成功通知本身必须位于切换收尾之后，不能只检查最终稳定状态。
+        completedStateAtSignal = !controller.isSwitchingTransport()
+            && controller.transport() == QStringLiteral("server")
+            && !controller.pairingCode().isEmpty();
+    });
     controller.createServerSpace(
         baseUrl().toString(), QStringLiteral("wrong-enroll"));
     QTRY_VERIFY_WITH_TIMEOUT(!controller.isSwitchingTransport(), 5000);
@@ -684,11 +693,14 @@ void SyncControllerServerTests::macCreatesServerSpaceWithPairingAndRetiresICloud
     QCOMPARE(controller.transport(), QStringLiteral("icloud"));
     QCOMPARE(controller.engine(), oldEngine);
     QVERIFY(!QSettings().contains(QStringLiteral("sync/server/url")));
+    QCOMPARE(createdSpy.count(), 0);
+    QVERIFY(!completedStateAtSignal);
 
     QSignalSpy transportSpy(&controller, &SyncController::transportChanged);
     // 本地服务器绑定非默认端口，完整地址必须带回端口，不能只复制 host。
     QVERIFY(baseUrl().port() > 0);
-    controller.createServerSpace(baseUrl().toString(), enrollSecret);
+    controller.createServerSpace(baseUrl().toString(),
+                                 QStringLiteral("  %1\n").arg(enrollSecret));
     QTRY_VERIFY_WITH_TIMEOUT(
         controller.transport() == QStringLiteral("server")
         && !controller.isSwitchingTransport(), 10000);
@@ -698,6 +710,8 @@ void SyncControllerServerTests::macCreatesServerSpaceWithPairingAndRetiresICloud
     QCOMPARE(controller.folderDisplayPath(), QStringLiteral("127.0.0.1"));
     QVERIFY(controller.hasFolder());
     QCOMPARE(transportSpy.count(), 1);
+    QCOMPARE(createdSpy.count(), 1);
+    QVERIFY(completedStateAtSignal);
     QCOMPARE(harness->retireCalls, 1);
 
     QSettings settings;
@@ -730,6 +744,7 @@ void SyncControllerServerTests::macCreatesServerSpaceWithPairingAndRetiresICloud
         controller.transport() == QStringLiteral("icloud")
         && !controller.isSwitchingTransport(), 10000);
     QVERIFY(controller.serverUrl().isEmpty());
+    QCOMPARE(createdSpy.count(), 1);
 }
 
 // 保证 Mac 切服务器前先同步一轮 iCloud，把另一台刚写出的改动带进服务器快照。

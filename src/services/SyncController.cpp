@@ -1593,7 +1593,8 @@ void SyncController::createServerSpace(
             QStringLiteral("服务器地址必须是 https"));
         return;
     }
-    if (enrollKey.trimmed().isEmpty()) {
+    const QString trimmedEnrollKey = enrollKey.trimmed();
+    if (trimmedEnrollKey.isEmpty()) {
         finishTransportProblem(QStringLiteral("请填写注册口令"));
         return;
     }
@@ -1606,13 +1607,13 @@ void SyncController::createServerSpace(
         = DatabaseManager::instance()->isOpen()
         && !SyncStore().folderId().isEmpty();
     const quint64 attempt = m_transportAttempt;
-    const auto beginNetwork = [this, url, enrollKey, wasICloud,
+    const auto beginNetwork = [this, url, trimmedEnrollKey, wasICloud,
                                hadJoinedFolder, attempt] {
         if (attempt != m_transportAttempt || !m_switchingTransport) {
             return;
         }
         beginCreateServerNetwork(
-            url, enrollKey, wasICloud, hadJoinedFolder);
+            url, trimmedEnrollKey, wasICloud, hadJoinedFolder);
     };
     if (wasICloud && m_enabled && m_engine && m_engine->isRunning()) {
         waitForOneSyncThen(
@@ -1772,6 +1773,7 @@ void SyncController::completeCreateServer(
     emit transportChanged();
     setTransportSwitching(false);
     emit statusChanged();
+    emit serverSpaceCreated();
 }
 
 void SyncController::joinWithPairingCode(const QString& code)

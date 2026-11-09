@@ -35,26 +35,13 @@ Popup {
     }
 
     function submit() {
-        if (!root.syncControllerRef || root.busy)
+        // 控制器通知期间 busy 绑定可能尚未刷新，准入必须直接读取控制器的切换状态。
+        if (!root.syncControllerRef || root.syncControllerRef.switchingTransport)
             return
         root.submitted = true
         root.syncControllerRef.createServerSpace(
                     addressField.text.trim(),
-                    enrollmentKeyField.text)
-    }
-
-    // createServerSpace 先发 transportChanged，结束本轮切换时才发
-    // switchingTransportChanged；只有“已切到 server、切换结束且无问题”才关窗并打开配对码。
-    function checkCompleted() {
-        if (!root.opened || !root.submitted || !root.syncControllerRef)
-            return
-        if (root.busy || root.problem.length > 0)
-            return
-        if (String(root.syncControllerRef.transport) !== "server")
-            return
-        root.submitted = false
-        root.close()
-        Qt.callLater(function () { root.pairingRequested() })
+                    enrollmentKeyField.text.trim())
     }
 
     modal: true
@@ -96,8 +83,14 @@ Popup {
         target: root.syncControllerRef
         ignoreUnknownSignals: true
 
-        function onTransportChanged() { root.checkCompleted() }
-        function onSwitchingTransportChanged() { root.checkCompleted() }
+        // 明确成功信号在控制器收尾后发出，不再从几个派生属性的刷新先后推断成功。
+        function onServerSpaceCreated() {
+            if (root.opened && root.submitted) {
+                root.submitted = false
+                root.close()
+                Qt.callLater(function () { root.pairingRequested() })
+            }
+        }
     }
 
     Overlay.modal: Rectangle {

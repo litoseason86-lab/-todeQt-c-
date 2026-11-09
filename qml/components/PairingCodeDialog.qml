@@ -17,7 +17,9 @@ Popup {
     property bool showCode: false
     property bool copied: false
     readonly property string maskedCode: "ptsync1.••••••••••••••••••••••••"
-    readonly property string displayedCode: root.showCode ? root.actualCode : root.maskedCode
+    readonly property string displayedCode: root.actualCode.length === 0
+                                            ? "还没有配对码"
+                                            : (root.showCode ? root.actualCode : root.maskedCode)
 
     function copyCode() {
         if (!root.syncControllerRef || root.actualCode.length === 0)
@@ -125,11 +127,12 @@ Popup {
                     Layout.fillWidth: true
                     text: root.displayedCode
                     textFormat: Text.PlainText
-                    color: Theme.inkStrong
-                    font.family: "Menlo"
+                    color: root.actualCode.length > 0 ? Theme.inkStrong : Theme.inkSoft
+                    font.family: root.actualCode.length > 0 ? "Menlo" : root.font.family
                     font.pixelSize: Theme.fontMd
                     wrapMode: Text.WrapAnywhere
-                    Accessible.name: root.showCode ? "配对码已显示" : "配对码已隐藏"
+                    Accessible.name: root.actualCode.length === 0 ? "还没有配对码"
+                                     : (root.showCode ? "配对码已显示" : "配对码已隐藏")
                 }
 
                 Button {
@@ -141,6 +144,7 @@ Popup {
                     padding: 0
                     activeFocusOnTab: true
                     enabled: root.actualCode.length > 0
+                    visible: root.actualCode.length > 0
                     Accessible.name: root.showCode ? "隐藏配对码" : "显示配对码"
                     onClicked: root.showCode = !root.showCode
 
@@ -219,6 +223,19 @@ Popup {
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
             text: "在 iPad 的「设置 › 同步 › 输入配对码」里粘贴。配对码里有解密密钥，只给自己的设备，别截图、别发给别人。"
+            textFormat: Text.PlainText
+            color: Theme.inkSoft
+            font.pixelSize: Theme.fontMd
+            wrapMode: Text.Wrap
+        }
+
+        Text {
+            objectName: "pairingCodeEmptyHint"
+            Layout.fillWidth: true
+            Layout.leftMargin: Theme.space16
+            Layout.rightMargin: Theme.space16
+            visible: root.actualCode.length === 0
+            text: "先在「同步方式」里选自建服务器并建立同步空间。"
             textFormat: Text.PlainText
             color: Theme.inkSoft
             font.pixelSize: Theme.fontMd
