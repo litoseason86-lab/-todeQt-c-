@@ -11,6 +11,8 @@ private slots:
     void authorizationQueryFailureDoesNotSubmit();
     void submitFailureKeepsObservedAuthorization();
     void foregroundNotificationsStillShowBannerAndPlaySound();
+    void scheduleIntervalDeductsAuthorizationWait_data();
+    void scheduleIntervalDeductsAuthorizationWait();
 };
 
 void AppleNotificationBackendTests::deniedThenReauthorizedQueriesAgainAndDelivers()
@@ -118,6 +120,29 @@ void AppleNotificationBackendTests::foregroundNotificationsStillShowBannerAndPla
     QVERIFY(presentation.banner);
     QVERIFY(presentation.list);
     QVERIFY(presentation.sound);
+}
+
+void AppleNotificationBackendTests::scheduleIntervalDeductsAuthorizationWait_data()
+{
+    // 保证权限查询等待从原触发间隔中扣除，耗尽期限后不能再预约未来提醒。
+    QTest::addColumn<int>("originalSeconds");
+    QTest::addColumn<qint64>("waitedNsecs");
+    QTest::addColumn<double>("expectedInterval");
+    QTest::newRow("没有等待") << 60 << qint64(0) << 60.0;
+    QTest::newRow("等待整秒") << 60 << qint64(17000000000LL) << 43.0;
+    QTest::newRow("等待不足一秒仍扣除") << 60 << qint64(250000000) << 59.75;
+    QTest::newRow("恰好到点") << 60 << qint64(60000000000LL) << 0.0;
+    QTest::newRow("超过到点") << 60 << qint64(61000000000LL) << 0.0;
+    QTest::newRow("原期限已经到点") << 0 << qint64(0) << 0.0;
+}
+
+void AppleNotificationBackendTests::scheduleIntervalDeductsAuthorizationWait()
+{
+    // 保证预约只使用权限查询后真实剩余的秒数，0 明确表示过期而不是强行延长到一秒。
+    QFETCH(int, originalSeconds);
+    QFETCH(qint64, waitedNsecs);
+    QFETCH(double, expectedInterval);
+    QCOMPARE(AppleNotificationBackend::remainingScheduleInterval(originalSeconds, waitedNsecs), expectedInterval);
 }
 
 QTEST_APPLESS_MAIN(AppleNotificationBackendTests)

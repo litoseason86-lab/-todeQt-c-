@@ -48,8 +48,8 @@ private:
         enum class Kind { Schedule, CancelAll };
         Kind kind = Kind::Schedule;
         quint64 generation = 0;
+        quint64 segment = 0;
         QString id;
-        int fireAfterSeconds = 0;
         QString title;
         QString body;
         bool playSound = true;
@@ -81,6 +81,7 @@ private:
 
     // 最近一次结束是否为自然到点（含离线结算）。由完成信号同步置位，对账时消费。
     bool m_naturalEndPending = false;
+    bool m_contentDirty = false;
     bool m_reconcileQueued = false;
     bool m_started = false;
 

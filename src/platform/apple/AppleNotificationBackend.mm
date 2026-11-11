@@ -5,6 +5,8 @@
 
 #include <QDebug>
 
+#include "../../services/MonotonicClock.h"
+
 #include <utility>
 
 // 通知中心委托：只处理「应用在前台时收到通知」这一种情况。
@@ -223,6 +225,13 @@ void AppleNotificationBackend::deliver(const QString& title,
     });
 }
 
+double AppleNotificationBackend::remainingScheduleInterval(int fireAfterSeconds, qint64 waitedNsecs)
+{
+    // 保留不足一秒的等待，避免取整把授权查询的延迟重新加到提醒期限上。
+    const double waitedSeconds = static_cast<double>(qMax(qint64(0), waitedNsecs)) / 1000000000.0;
+    return qMax(0.0, static_cast<double>(fireAfterSeconds) - waitedSeconds);
+}
+
 void AppleNotificationBackend::schedule(const QString& id,
                                       int fireAfterSeconds,
                                       const QString& title,
@@ -230,6 +239,7 @@ void AppleNotificationBackend::schedule(const QString& id,
                                       bool playSound,
                                       ScheduleCallback callback)
 {
+    const qint64 submittedAtNsecs = SystemMonotonicClock::instance()->nowNsecs();
     UNUserNotificationCenter* center = safeNotificationCenter();
     if (center == nil) {
         callback(false, QStringLiteral("系统通知中心不可用"));
@@ -239,8 +249,6 @@ void AppleNotificationBackend::schedule(const QString& id,
     NSString* identifier = [id.toNSString() copy];
     NSString* notificationTitle = [title.toNSString() copy];
     NSString* notificationBody = [body.toNSString() copy];
-    // 系统要求触发间隔大于 0；到点已过的段不会走到这里（协调器只预约剩余时间大于 0 的段）。
-    const NSTimeInterval interval = static_cast<NSTimeInterval>(qMax(1, fireAfterSeconds));
     const std::shared_ptr<std::atomic<int>> state = m_authState;
     const auto completion = std::make_shared<ScheduleCallback>(std::move(callback));
 
@@ -252,6 +260,14 @@ void AppleNotificationBackend::schedule(const QString& id,
         state->store(allowed ? 1 : 2);
         if (!allowed) {
             (*completion)(false, QStringLiteral("系统通知权限不可用"));
+            return;
+        }
+
+        // 权限查询是异步的，包含休眠的单调时钟与计时器同源；等待已耗尽期限时不能再约一条未来提醒。
+        const NSTimeInterval interval = remainingScheduleInterval(
+            fireAfterSeconds, SystemMonotonicClock::instance()->nowNsecs() - submittedAtNsecs);
+        if (interval <= 0) {
+            (*completion)(false, QStringLiteral("到点时间已过，未预约"));
             return;
         }
 

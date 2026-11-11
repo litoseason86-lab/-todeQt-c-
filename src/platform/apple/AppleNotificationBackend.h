@@ -39,6 +39,8 @@ public:
                   bool playSound,
                   ScheduleCallback callback) override;
     void cancelScheduled(const QString& prefix, const QString& keepId, ScheduleCallback callback) override;
+    // 扣除权限查询经过的单调时间（纳秒）；返回秒级间隔，0 表示期限已过，不能再创建相对触发器。
+    static double remainingScheduleInterval(int fireAfterSeconds, qint64 waitedNsecs);
     // 验证用诊断：把 id 以 prefix 开头的待投递与已投递通知打印到日志，供真机验收取证。
     static void logScheduledNotifications(const QString& prefix);
 

@@ -19,6 +19,11 @@ PhaseAlarmCoordinator::PhaseAlarmCoordinator(FocusTimer* timer,
     connect(m_timer, &FocusTimer::runningStateChanged, this, &PhaseAlarmCoordinator::requestReconcile);
     connect(m_timer, &FocusTimer::phaseChanged, this, &PhaseAlarmCoordinator::requestReconcile);
     connect(m_timer, &FocusTimer::modeChanged, this, &PhaseAlarmCoordinator::requestReconcile);
+    // 系统预约保存的是当时的声音内容，设置变化后必须撤销重约，不能复用同一运行段的旧内容。
+    connect(AppSettings::instance(), &AppSettings::soundEnabledChanged, this, [this] {
+        m_contentDirty = true;
+        requestReconcile();
+    });
     // 完成信号在计时器结算的同一调用栈里发出，先于排队的对账，这里只记下「是自然到点」。
     const auto markNaturalEnd = [this](int) {
         m_naturalEndPending = true;
@@ -68,6 +73,8 @@ void PhaseAlarmCoordinator::requestReconcile()
 void PhaseAlarmCoordinator::reconcile()
 {
     m_reconcileQueued = false;
+    const bool contentDirty = m_contentDirty;
+    m_contentDirty = false;
     if (!m_started) {
         return;
     }
@@ -96,8 +103,8 @@ void PhaseAlarmCoordinator::reconcile()
     }
 
     const quint64 segment = m_timer->runSegmentSerial();
-    if (m_hasCurrent && m_currentSegment == segment) {
-        // 同一段运行，到点时刻没变，已有的预约继续有效。
+    if (m_hasCurrent && m_currentSegment == segment && !contentDirty) {
+        // 同一段运行且内容未变，到点时刻没变，已有的预约继续有效。
         return;
     }
     if (m_hasCurrent && !naturalEnd) {
@@ -115,8 +122,8 @@ void PhaseAlarmCoordinator::reconcile()
     }
     ++m_generation;
     schedule.generation = m_generation;
+    schedule.segment = segment;
     schedule.id = idPrefix() + m_processToken + QLatin1Char('-') + QString::number(m_generation);
-    schedule.fireAfterSeconds = qMax(1, m_timer->remainingSeconds());
 
     m_hasCurrent = true;
     m_currentGeneration = m_generation;
@@ -169,7 +176,27 @@ void PhaseAlarmCoordinator::runNext()
 {
     // 一次只让系统处理一个操作：撤销与预约交错执行时，「先预约、后撤销」可能被系统
     // 调换顺序，留下一条已经作废的提醒。
-    if (m_operationRunning || m_queue.isEmpty()) {
+    if (m_operationRunning) {
+        return;
+    }
+    // 入队到提交之间可能先等串行撤销；不能把这段等待又加到到点时间上。
+    // 被取代的预约不再创建，已过期的当前段保持未覆盖，让自然到点的即时通知兜底。
+    while (!m_queue.isEmpty() && m_queue.first().kind == Operation::Kind::Schedule) {
+        const Operation& queued = m_queue.first();
+        if (!m_hasCurrent || queued.generation != m_currentGeneration) {
+            m_queue.removeFirst();
+            continue;
+        }
+        if (!m_timer->isRunning() || m_timer->runSegmentSerial() != queued.segment
+            || m_timer->remainingSeconds() <= 0) {
+            m_queue.removeFirst();
+            m_currentStatus = AlarmStatus::Failed;
+            emit currentAlarmChanged();
+            continue;
+        }
+        break;
+    }
+    if (m_queue.isEmpty()) {
         return;
     }
     m_operationRunning = true;
@@ -184,7 +211,7 @@ void PhaseAlarmCoordinator::runNext()
         m_notifications->cancelScheduledNotifications(idPrefix(), QString(), done);
     } else {
         m_notifications->scheduleNotification(operation.id,
-                                              operation.fireAfterSeconds,
+                                              m_timer->remainingSeconds(),
                                               operation.title,
                                               operation.body,
                                               operation.playSound,
@@ -202,7 +229,11 @@ void PhaseAlarmCoordinator::finishOperation(const Operation& operation, bool suc
             emit currentAlarmChanged();
             if (!success) {
                 qWarning() << "Failed to schedule phase alarm:" << reason;
-                emit alarmUnavailable(reason);
+                // 权限查询等异步等待期间可能已经到点或换段；旧期限失效不代表当前提醒能力不可用。
+                if (m_timer->isRunning() && m_timer->runSegmentSerial() == operation.segment
+                    && m_timer->remainingSeconds() > 0) {
+                    emit alarmUnavailable(reason);
+                }
             }
         }
     } else if (!success) {

@@ -1,3 +1,4 @@
+#include <QSettings>
 #include <QSignalSpy>
 #include <QSqlQuery>
 #include <QTemporaryDir>
@@ -33,6 +34,7 @@ public:
         QString id;   // 预约的 id，或撤销的前缀
         int fireAfterSeconds = 0;
         QString title;
+        bool playSound = false;
         ScheduleCallback callback;
     };
 
@@ -59,14 +61,14 @@ public:
     void requestAuthorization() override {}
 
     void schedule(const QString& id, int fireAfterSeconds, const QString& title, const QString&,
-                  bool, ScheduleCallback callback) override
+                  bool playSound, ScheduleCallback callback) override
     {
-        calls.append({QStringLiteral("schedule"), id, fireAfterSeconds, title, std::move(callback)});
+        calls.append({QStringLiteral("schedule"), id, fireAfterSeconds, title, playSound, std::move(callback)});
     }
     void cancelScheduled(const QString& prefix, const QString& keepId, ScheduleCallback callback) override
     {
         Q_UNUSED(keepId);
-        calls.append({QStringLiteral("cancel"), prefix, 0, QString(), std::move(callback)});
+        calls.append({QStringLiteral("cancel"), prefix, 0, QString(), false, std::move(callback)});
     }
 
     // 以 success 答复第 index 次调用，并按结果更新「待投递」集合。
@@ -103,6 +105,7 @@ class PhaseAlarmCoordinatorTests : public QObject
     Q_OBJECT
 
 private slots:
+    void initTestCase();
     void init();
     void cleanup();
 
@@ -116,6 +119,13 @@ private slots:
     void scheduleFailureFallsBackToImmediateDelivery();
     void coveredExpiryDoesNotDeliverTwice();
     void stopBeforeExpiryCancels();
+    void soundChangeReschedulesCurrentSegment_data();
+    void soundChangeReschedulesCurrentSegment();
+    void unchangedSoundDoesNotReschedule();
+    void queuedScheduleUsesCurrentRemainingTime_data();
+    void queuedScheduleUsesCurrentRemainingTime();
+    void supersededQueuedScheduleIsNotSubmitted();
+    void scheduleFailureAfterExpiryDoesNotReportUnavailable();
     void alreadyExpiredSegmentIsNotScheduled();
     void workCompletionNotifiesNextBreakKind();
     void breakCompletionRemembersLongBreakAndFallsBackToChime();
@@ -133,6 +143,7 @@ private:
         return taskId;
     }
 
+    QTemporaryDir m_preferences;
     QTemporaryDir* m_tempDir = nullptr;
     FakeMonotonicClock m_clock;
     FakeBackend* m_backend = nullptr;
@@ -140,8 +151,24 @@ private:
     PhaseAlarmCoordinator* m_coordinator = nullptr;
 };
 
+void PhaseAlarmCoordinatorTests::initTestCase()
+{
+    // 保证预约测试只修改隔离偏好，不触碰真实应用设置或受到前一轮设置影响。
+    QVERIFY(m_preferences.isValid());
+    QCoreApplication::setOrganizationName(QStringLiteral("PomodoroTodoPhaseAlarmTests"));
+    QCoreApplication::setApplicationName(QStringLiteral("PhaseAlarmCoordinatorTests"));
+    QSettings::setDefaultFormat(QSettings::IniFormat);
+    QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, m_preferences.path());
+}
+
 void PhaseAlarmCoordinatorTests::init()
 {
+    // 每条用例重建偏好后端，避免单例缓存使提示音初始值依赖上一个用例。
+    QSettings settings;
+    settings.clear();
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    AppSettings::instance()->reload();
     m_tempDir = new QTemporaryDir();
     QVERIFY(m_tempDir->isValid());
     QVERIFY(DatabaseManager::instance()->initialize(m_tempDir->filePath("alarms.sqlite")));
@@ -391,6 +418,179 @@ void PhaseAlarmCoordinatorTests::stopBeforeExpiryCancels()
     m_backend->answer(static_cast<int>(m_backend->calls.size()) - 1, true);
     settle();
     QVERIFY(m_backend->pending.isEmpty());
+}
+
+void PhaseAlarmCoordinatorTests::soundChangeReschedulesCurrentSegment_data()
+{
+    // 保证提示音双向切换在预约成功前后都能更新当前运行段的系统提醒。
+    QTest::addColumn<bool>("initialSound");
+    QTest::addColumn<bool>("firstCompleted");
+    QTest::newRow("有声改静音-预约已成功") << true << true;
+    QTest::newRow("静音改有声-预约已成功") << false << true;
+    QTest::newRow("有声改静音-预约仍在途") << true << false;
+    QTest::newRow("静音改有声-预约仍在途") << false << false;
+}
+
+void PhaseAlarmCoordinatorTests::soundChangeReschedulesCurrentSegment()
+{
+    // 保证计时中切换提示音会撤销旧预约并按原期限重约，旧代迟到成功不能冒充当前覆盖。
+    QFETCH(bool, initialSound);
+    QFETCH(bool, firstCompleted);
+    AppSettings::instance()->setSoundEnabled(initialSound);
+    QCOMPARE(AppSettings::instance()->soundEnabled(), initialSound);
+    QVERIFY(startPomodoro(25) > 0);
+    m_coordinator->start();
+    settle();
+    m_backend->answer(0, true);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 2);
+    QCOMPARE(m_backend->calls.at(1).playSound, initialSound);
+    const QString oldId = m_backend->calls.at(1).id;
+    if (firstCompleted) {
+        m_backend->answer(1, true);
+        settle();
+        QVERIFY(m_coordinator->coversPhase(FocusTimer::WorkPhase));
+    }
+    QSignalSpy unavailable(m_coordinator, &PhaseAlarmCoordinator::alarmUnavailable);
+    m_clock.advanceSecs(37);
+    AppSettings::instance()->setSoundEnabled(!initialSound);
+    settle();
+    QVERIFY(!m_coordinator->coversPhase(FocusTimer::WorkPhase));
+    if (!firstCompleted) {
+        // 系统仍在处理旧代预约，串行撤销必须等它答复，迟到成功也不能覆盖当前代次。
+        QCOMPARE(m_backend->calls.size(), 2);
+        m_backend->answer(1, true);
+        settle();
+        QVERIFY(!m_coordinator->currentAlarmScheduled());
+    }
+    QCOMPARE(m_backend->calls.size(), 3);
+    QCOMPARE(m_backend->calls.at(2).kind, QStringLiteral("cancel"));
+    m_backend->answer(2, true);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 4);
+    const auto& latest = m_backend->calls.at(3);
+    QCOMPARE(latest.kind, QStringLiteral("schedule"));
+    QCOMPARE(latest.playSound, !initialSound);
+    QCOMPARE(latest.fireAfterSeconds, 25 * 60 - 37);
+    QVERIFY(latest.id != oldId);
+    QVERIFY(!m_coordinator->coversPhase(FocusTimer::WorkPhase));
+    m_backend->answer(3, true);
+    settle();
+    QVERIFY(m_coordinator->coversPhase(FocusTimer::WorkPhase));
+    QCOMPARE(m_backend->pending, QSet<QString>{m_backend->calls.at(3).id});
+    QCOMPARE(unavailable.count(), 0);
+}
+
+void PhaseAlarmCoordinatorTests::unchangedSoundDoesNotReschedule()
+{
+    // 保证提示音未变化时同一运行段重复对账不增加预约或撤销，也不失去覆盖。
+    QVERIFY(startPomodoro(25) > 0);
+    m_coordinator->start();
+    settle();
+    m_backend->answer(0, true);
+    settle();
+    m_backend->answer(1, true);
+    settle();
+    QVERIFY(m_coordinator->coversPhase(FocusTimer::WorkPhase));
+    const auto callsBefore = m_backend->calls.size();
+    m_clock.advanceSecs(11);
+    AppSettings::instance()->setSoundEnabled(AppSettings::instance()->soundEnabled());
+    emit FocusTimer::instance()->runningStateChanged();
+    settle();
+    QCOMPARE(m_backend->calls.size(), callsBefore);
+    QVERIFY(m_coordinator->coversPhase(FocusTimer::WorkPhase));
+    QCOMPARE(m_backend->pending.size(), 1);
+}
+
+void PhaseAlarmCoordinatorTests::queuedScheduleUsesCurrentRemainingTime_data()
+{
+    // 保证撤销排队期间消耗的时间不会推迟预约，排队过期的运行段不再提交系统。
+    QTest::addColumn<int>("delaySeconds");
+    QTest::newRow("扣除撤销等待时间") << 29;
+    QTest::newRow("撤销等待超过到点期限") << 25 * 60 + 1;
+}
+
+void PhaseAlarmCoordinatorTests::queuedScheduleUsesCurrentRemainingTime()
+{
+    // 保证预约提交使用此刻剩余时间；排队已过期时由即时通知兜底一次且不报预约不可用。
+    QFETCH(int, delaySeconds);
+    QVERIFY(startPomodoro(25) > 0);
+    m_coordinator->start();
+    settle();
+    QCOMPARE(m_backend->calls.size(), 1);
+    QCOMPARE(m_backend->calls.at(0).kind, QStringLiteral("cancel"));
+    QSignalSpy unavailable(m_coordinator, &PhaseAlarmCoordinator::alarmUnavailable);
+    m_clock.advanceSecs(delaySeconds);
+    m_backend->answer(0, true);
+    settle();
+    if (delaySeconds < 25 * 60) {
+        QCOMPARE(m_backend->calls.size(), 2);
+        QCOMPARE(m_backend->calls.at(1).fireAfterSeconds, 25 * 60 - delaySeconds);
+        m_backend->answer(1, true);
+        settle();
+        QVERIFY(m_coordinator->coversPhase(FocusTimer::WorkPhase));
+    } else {
+        QCOMPARE(m_backend->calls.size(), 1);
+        QVERIFY(!m_coordinator->coversPhase(FocusTimer::WorkPhase));
+        tick();
+        m_service->notifyPhaseComplete(FocusTimer::WorkPhase, 1, 5, false, true);
+        settle();
+        QCOMPARE(m_backend->deliverCount, 1);
+        QVERIFY(m_backend->pending.isEmpty());
+        QCOMPARE(m_backend->calls.size(), 1);
+    }
+    QCOMPARE(unavailable.count(), 0);
+}
+
+void PhaseAlarmCoordinatorTests::supersededQueuedScheduleIsNotSubmitted()
+{
+    // 保证排队期间被暂停和继续取代的预约不交给系统，最终只留下最新运行段的一条预约。
+    QVERIFY(startPomodoro(25) > 0);
+    m_coordinator->start();
+    settle();
+    QCOMPARE(m_backend->calls.size(), 1);
+    QVERIFY(FocusTimer::instance()->pauseFocus());
+    settle();
+    QVERIFY(FocusTimer::instance()->resumeFocus());
+    settle();
+    m_clock.advanceSecs(7);
+    QSignalSpy unavailable(m_coordinator, &PhaseAlarmCoordinator::alarmUnavailable);
+    m_backend->answer(0, true);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 2);
+    QCOMPARE(m_backend->calls.at(1).kind, QStringLiteral("cancel"));
+    QVERIFY(!m_coordinator->coversPhase(FocusTimer::WorkPhase));
+    m_backend->answer(1, true);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 3);
+    QCOMPARE(m_backend->calls.at(2).kind, QStringLiteral("schedule"));
+    QCOMPARE(m_backend->calls.at(2).fireAfterSeconds, 25 * 60 - 7);
+    m_backend->answer(2, true);
+    settle();
+    QCOMPARE(m_backend->pending, QSet<QString>{m_backend->calls.at(2).id});
+    QVERIFY(m_coordinator->coversPhase(FocusTimer::WorkPhase));
+    QCOMPARE(unavailable.count(), 0);
+}
+
+void PhaseAlarmCoordinatorTests::scheduleFailureAfterExpiryDoesNotReportUnavailable()
+{
+    // 保证后端在运行段到期后才报告预约失败时，不弹过期错误且仍能即时提醒一次。
+    QVERIFY(startPomodoro(25) > 0);
+    m_coordinator->start();
+    settle();
+    m_backend->answer(0, true);
+    settle();
+    QCOMPARE(m_backend->calls.size(), 2);
+    QSignalSpy unavailable(m_coordinator, &PhaseAlarmCoordinator::alarmUnavailable);
+    m_clock.advanceSecs(25 * 60 + 1);
+    m_backend->answer(1, false, QStringLiteral("到点时间已过，未预约"));
+    settle();
+    QCOMPARE(unavailable.count(), 0);
+    QVERIFY(!m_coordinator->coversPhase(FocusTimer::WorkPhase));
+    tick();
+    m_service->notifyPhaseComplete(FocusTimer::WorkPhase, 1, 5, false, true);
+    settle();
+    QCOMPARE(m_backend->deliverCount, 1);
 }
 
 void PhaseAlarmCoordinatorTests::alreadyExpiredSegmentIsNotScheduled()
