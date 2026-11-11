@@ -2349,6 +2349,15 @@ void SyncController::setTransportSwitching(
     emit switchingTransportChanged();
 }
 
+void SyncController::clearTransportProblem()
+{
+    // 表单关闭只清理已结束尝试的提示；不能结束在途切换或重启服务器监听。
+    if (m_switchingTransport) {
+        return;
+    }
+    setTransportSwitching(false, {});
+}
+
 void SyncController::finishTransportProblem(const QString& problem)
 {
     setTransportSwitching(false, problem);

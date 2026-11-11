@@ -116,6 +116,12 @@ Popup {
         root.contentItem.forceActiveFocus()
     }
 
+    // 设置页上的切回 iCloud 等失败只属于本轮操作，关窗后经控制器清理。
+    onClosed: {
+        if (root.syncControllerRef && typeof root.syncControllerRef.clearTransportProblem === "function")
+            root.syncControllerRef.clearTransportProblem()
+    }
+
     enter: Transition {
         ParallelAnimation {
             NumberAnimation {

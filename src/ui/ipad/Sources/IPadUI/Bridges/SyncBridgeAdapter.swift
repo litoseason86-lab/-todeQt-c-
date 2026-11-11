@@ -49,6 +49,7 @@ import UIKit
     func rebuildFolder() throws { try native.rebuildFolder() }
     func joinWithPairingCode(_ code: String) throws { try native.join(withPairingCode: code) }
     func switchToICloud() throws { try native.switchToICloud() }
+    func clearTransportProblem() { native.clearTransportProblem() }
     func joinWarning() -> String { native.joinWarning() }
     func copyLostValue(_ text: String) throws { try native.copyLostValue(text) }
     func restoreWarning() -> String { native.restoreWarning() }

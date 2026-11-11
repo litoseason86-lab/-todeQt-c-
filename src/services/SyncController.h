@@ -152,6 +152,7 @@ public:
     // 同步文件夹不见了之后：Mac 在原处重新建一个（新的文件夹身份），iPad 重新选。
     Q_INVOKABLE void rebuildFolder();
     Q_INVOKABLE void createServerSpace(const QString& url, const QString& enrollKey);
+    Q_INVOKABLE void clearTransportProblem();
     Q_INVOKABLE void joinWithPairingCode(const QString& code);
     Q_INVOKABLE QString pairingCode() const;
     Q_INVOKABLE void copyPairingCode();

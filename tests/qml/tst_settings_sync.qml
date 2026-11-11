@@ -77,6 +77,11 @@ TestCase {
             calls.push("createServerSpace:" + url + "|" + key)
             switchingTransport = true
         }
+        function clearTransportProblem() {
+            calls.push("clearTransportProblem")
+            if (!switchingTransport)
+                transportProblem = ""
+        }
         function switchToICloud() { calls.push("switchToICloud") }
         function pairingCode() { return pairingCodeValue }
         function copyPairingCode() { calls.push("copyPairingCode") }
@@ -163,10 +168,12 @@ TestCase {
             iCloudDialog.close()
         tryVerify(function () {
             return !logDialog.visible && !restoreDialog.visible && !settingsDialog.visible
-                    && (!serverDialog || !serverDialog.opened)
-                    && (!pairingDialog || !pairingDialog.opened)
-                    && (!iCloudDialog || !iCloudDialog.opened)
+                    && (!serverDialog || !serverDialog.visible)
+                    && (!pairingDialog || !pairingDialog.visible)
+                    && (!iCloudDialog || !iCloudDialog.visible)
         }, 3000, "上一条用例的弹窗还没收起")
+        // 关闭回调会记录清理调用；等待退出动画和 onClosed 完成后再隔离本条用例。
+        syncMock.calls = []
     }
 
     // 等布局就绪后发送鼠标事件，避免刚切换方式时按到上一帧的位置。
@@ -401,13 +408,15 @@ TestCase {
         tryCompare(serverDialog, "opened", true)
         compare(serverDialog.rebuilding, false)
         compare(findChild(serverDialog, "serverSpaceDialogTitle").text, "改用自建服务器同步")
-        compare(syncMock.calls.length, 0)
+        compare(syncMock.calls.length, 1)
+        compare(syncMock.calls[0], "clearTransportProblem")
         compare(transportSwitch.currentIndex, 1)
 
         clickControl(findChild(serverDialog, "serverSpaceCancelButton"))
-        tryCompare(serverDialog, "opened", false)
+        tryCompare(serverDialog, "visible", false)
         compare(dataPage.syncTransport, "icloud")
-        compare(syncMock.calls.length, 0)
+        compare(syncMock.calls.length, 2)
+        compare(syncMock.calls[1], "clearTransportProblem")
     }
 
     // 产品保证：服务器方式切回 iCloud 必须先确认，确认后才调用控制器切换。
@@ -498,6 +507,59 @@ TestCase {
         clickControl(findChild(dialog, "serverSpaceSubmitButton"))
         compare(syncMock.calls[syncMock.calls.length - 1],
                 "createServerSpace:https://sync.example.com|enroll-secret")
+    }
+
+    // 产品保证：建空间弹窗打开与关闭均清除旧问题，当前提交失败仍显示到关闭为止。
+    function test_spaceDialogClearsProblemOnOpenAndClose() {
+        const dialog = findChild(dataPage, "serverSpaceDialog")
+        verify(dialog)
+        const problem = findChild(dialog, "serverSpaceProblem")
+        verify(problem)
+        syncMock.transportProblem = "上一轮失败"
+        const before = syncMock.calls.length
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        compare(syncMock.calls[before], "clearTransportProblem")
+        compare(syncMock.transportProblem, "")
+        compare(problem.visible, false)
+        syncMock.transportProblem = "本轮失败"
+        tryCompare(problem, "visible", true)
+        compare(problem.text, "本轮失败")
+        const beforeClose = syncMock.calls.length
+        clickControl(findChild(dialog, "serverSpaceCancelButton"))
+        tryCompare(dialog, "visible", false)
+        compare(syncMock.calls.length, beforeClose + 1)
+        compare(syncMock.calls[beforeClose], "clearTransportProblem")
+        compare(syncMock.transportProblem, "")
+    }
+
+    // 产品保证：强制关闭建空间弹窗时，正在切换的状态不触发清理请求。
+    function test_spaceDialogCloseDuringSwitchDoesNotClear() {
+        const dialog = findChild(dataPage, "serverSpaceDialog")
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        syncMock.switchingTransport = true
+        const before = syncMock.calls.length
+        dialog.close()
+        tryCompare(dialog, "visible", false)
+        compare(syncMock.calls.length, before)
+        compare(syncMock.switchingTransport, true)
+    }
+
+    // 产品保证：关闭设置窗会清掉挂在同步页的上一轮失败，重新打开不再显示。
+    function test_settingsCloseClearsTransportProblem() {
+        settingsDialog.open()
+        tryCompare(settingsDialog, "opened", true)
+        syncMock.transportProblem = "切回 iCloud 失败"
+        const before = syncMock.calls.length
+        settingsDialog.requestClose()
+        tryCompare(settingsDialog, "visible", false)
+        compare(syncMock.calls.length, before + 1)
+        compare(syncMock.calls[before], "clearTransportProblem")
+        compare(syncMock.transportProblem, "")
+        settingsDialog.open()
+        tryCompare(settingsDialog, "opened", true)
+        compare(syncMock.transportProblem, "")
     }
 
     // 产品保证：建空间失败留在原弹窗显示原因，关闭时清掉注册口令。

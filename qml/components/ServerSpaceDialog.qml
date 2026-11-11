@@ -67,6 +67,9 @@ Popup {
     palette.windowText: Theme.controlInk
 
     onOpened: {
+        // 每次打开是新一轮输入；后端负责守住在途切换，避免清理改变切换状态。
+        if (root.syncControllerRef && typeof root.syncControllerRef.clearTransportProblem === "function")
+            root.syncControllerRef.clearTransportProblem()
         addressField.text = root.rebuilding ? root.currentServerAddress : ""
         enrollmentKeyField.text = ""
         root.submitted = false
@@ -74,6 +77,10 @@ Popup {
     }
 
     onClosed: {
+        // 关闭后同步页也不能继续显示本轮旧原因；切换中保留给当前请求收尾。
+        if (root.syncControllerRef && !root.syncControllerRef.switchingTransport
+                && typeof root.syncControllerRef.clearTransportProblem === "function")
+            root.syncControllerRef.clearTransportProblem()
         // 注册口令只在本次建立请求里使用，关闭后不留在内存中的输入框里。
         enrollmentKeyField.text = ""
         root.submitted = false

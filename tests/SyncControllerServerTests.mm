@@ -191,6 +191,8 @@ private slots:
     void init();
     void cleanup();
 
+    void clearTransportProblemOnlyNotifiesWhenIdleProblemChanges();
+    void clearTransportProblemPreservesActiveSwitch();
     void defaultsToICloudAndKeepsOriginalOptions();
     void macCreatesServerSpaceWithPairingAndRetiresICloud();
     void macSynchronizesICloudBeforeCreatingSpace();
@@ -635,6 +637,47 @@ void SyncControllerServerTests::startPeerWatcher(
             peer->engine.get(), &SyncEngine::syncNow,
             Qt::QueuedConnection);
     peer->watcher->start();
+}
+
+// 产品保证：上一轮切换失败可显式清空且只通知一次，不改变同步方式或引擎。
+void SyncControllerServerTests::clearTransportProblemOnlyNotifiesWhenIdleProblemChanges()
+{
+    SyncController controller(SyncController::Platform{});
+    controller.createServerSpace(QStringLiteral("http://example.com"), QStringLiteral("key"));
+    QVERIFY(!controller.transportProblem().isEmpty());
+    QVERIFY(!controller.isSwitchingTransport());
+    const QString transport = controller.transport();
+    SyncEngine* const engine = controller.engine();
+    QSignalSpy spy(&controller, &SyncController::switchingTransportChanged);
+    QVERIFY(spy.isValid());
+    controller.clearTransportProblem();
+    QVERIFY(controller.transportProblem().isEmpty());
+    QCOMPARE(spy.count(), 1);
+    controller.clearTransportProblem();
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(controller.transport(), transport);
+    QCOMPARE(controller.engine(), engine);
+}
+
+// 产品保证：切换请求在途时清理旧提示不能结束切换，也不产生额外状态通知。
+void SyncControllerServerTests::clearTransportProblemPreservesActiveSwitch()
+{
+    openMainDatabase(QStringLiteral("main"));
+    auto harness = std::make_shared<MacHarness>();
+    harness->iCloudRoot = data->filePath(QStringLiteral("icloud"));
+    QVERIFY(QDir().mkpath(harness->iCloudRoot));
+    SyncController controller(macPlatform(harness));
+    controller.initialize();
+    controller.createServerSpace(baseUrl().toString(), QStringLiteral("wrong-enroll"));
+    // 网络收尾通过主线程排队回调；送事件前仍处于切换中，不依赖固定休眠或网络速度。
+    QVERIFY(controller.isSwitchingTransport());
+    QSignalSpy spy(&controller, &SyncController::switchingTransportChanged);
+    QVERIFY(spy.isValid());
+    controller.clearTransportProblem();
+    QVERIFY(controller.isSwitchingTransport());
+    QCOMPARE(spy.count(), 0);
+    QTRY_VERIFY_WITH_TIMEOUT(!controller.isSwitchingTransport(), 5000);
+    QVERIFY(controller.transportProblem().contains(QStringLiteral("注册口令不对")));
 }
 
 // 保证老用户没有 sync/transport 时仍按 iCloud 方式启动，服务器专用节拍不污染原选项。

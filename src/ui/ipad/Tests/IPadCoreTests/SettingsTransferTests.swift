@@ -3,6 +3,60 @@ import IPadCore
 import XCTest
 
 @MainActor final class SettingsTransferTests: XCTestCase {
+    // 产品保证：打开配对表单先清空上一轮问题，再读取快照，选择服务器也经过同一入口。
+    func testPairingSheetRequestClearsStaleTransportProblem() {
+        for selectServer in [false, true] {
+            let bridge = SettingsSyncFake()
+            bridge.result.transportProblem = "上一轮连接失败"
+            let store = SettingsSyncStore(bridge: bridge)
+            XCTAssertEqual(store.transportProblem, "上一轮连接失败")
+            if selectServer { store.selectTransport("server") }
+            else { store.requestPairingSheet() }
+            XCTAssertTrue(store.pairingSheetRequested)
+            XCTAssertEqual(bridge.calls, ["clearTransportProblem"])
+            XCTAssertEqual(store.transportProblem, "")
+        }
+    }
+
+    // 产品保证：取消配对表单清除本轮问题并立即更新页面快照。
+    func testPairingSheetCancelClearsTransportProblem() {
+        let bridge = SettingsSyncFake()
+        let store = SettingsSyncStore(bridge: bridge)
+        store.requestPairingSheet()
+        XCTAssertTrue(store.pairingSheetRequested)
+        bridge.calls = []
+        bridge.result.transportProblem = "本轮配对失败"
+        bridge.onChanged?()
+        XCTAssertEqual(store.transportProblem, "本轮配对失败")
+        store.cancelPairingSheet()
+        XCTAssertEqual(bridge.calls, ["clearTransportProblem"])
+        XCTAssertEqual(store.transportProblem, "")
+        XCTAssertFalse(store.pairingSheetRequested)
+    }
+
+    // 产品保证：提交失败保留问题和表单，刷新及成功自动关闭均不调用错误清理入口。
+    func testPairingFailureAndAutomaticCloseDoNotClearProblem() {
+        let bridge = SettingsSyncFake()
+        bridge.result.transport = "server"
+        let store = SettingsSyncStore(bridge: bridge)
+        store.requestPairingSheet()
+        bridge.calls = []
+        bridge.onPairingCodeSubmitted = { [unowned bridge] in
+            bridge.result.transportProblem = "这不是番茄Todo 的配对码"
+            bridge.onChanged?()
+        }
+        store.submitPairingCode("invalid-code")
+        XCTAssertEqual(bridge.calls, ["pair:invalid-code"])
+        XCTAssertEqual(store.transportProblem, "这不是番茄Todo 的配对码")
+        XCTAssertTrue(store.pairingSheetRequested)
+        store.refresh()
+        XCTAssertEqual(store.transportProblem, "这不是番茄Todo 的配对码")
+        bridge.result.transportProblem = ""
+        bridge.onChanged?()
+        XCTAssertFalse(store.pairingSheetRequested)
+        XCTAssertEqual(bridge.calls, ["pair:invalid-code"])
+    }
+
     // 产品保证：每次同步用户动作先清掉旧通知，随后回调送达的新通知仍可展示。
     func testSyncActionsClearOldNoticeAndKeepLaterNotice() {
         let actions: [(String, (SettingsSyncStore) -> Void)] = [
@@ -298,7 +352,7 @@ import XCTest
         bridge.result.transport = "server"
         bridge.onChanged?()
         store.selectTransport("icloud")
-        XCTAssertEqual(bridge.calls, ["icloud"])
+        XCTAssertEqual(bridge.calls, ["clearTransportProblem", "clearTransportProblem", "icloud"])
     }
 
     // 产品保证：配对码提交只转发给桥接，连接失败保留表单和问题，成功切到服务器后自动关闭。
@@ -309,7 +363,7 @@ import XCTest
         bridge.result.switchingTransport = true
         store.submitPairingCode(" valid-code ")
         XCTAssertEqual(bridge.pairingCodeSubmitted, " valid-code ")
-        XCTAssertEqual(bridge.calls, ["pair: valid-code "])
+        XCTAssertEqual(bridge.calls, ["clearTransportProblem", "pair: valid-code "])
         XCTAssertFalse(store.canSubmitPairingCode("another-code"))
         bridge.result.transportProblem = "配对码里的服务器地址不安全"
         bridge.result.switchingTransport = false
@@ -341,7 +395,7 @@ import XCTest
 
         store.submitPairingCode("invalid-code")
 
-        XCTAssertEqual(bridge.calls, ["pair:invalid-code"])
+        XCTAssertEqual(bridge.calls, ["clearTransportProblem", "pair:invalid-code"])
         XCTAssertEqual(store.transportProblem, "这不是番茄Todo 的配对码")
         XCTAssertFalse(store.snapshot.switchingTransport)
         XCTAssertTrue(store.pairingSheetRequested)
@@ -469,6 +523,10 @@ import XCTest
         if let actionError { throw actionError }
         // 控制器的校验失败会同步发状态信号；替身也在动作返回前转发，避免漏掉重入路径。
         onPairingCodeSubmitted?()
+    }
+    func clearTransportProblem() {
+        calls.append("clearTransportProblem")
+        if !result.switchingTransport { result.transportProblem = "" }
     }
     func switchToICloud() throws { calls.append("icloud"); if let actionError { throw actionError } }
     func joinWarning() -> String { joinWarningValue }

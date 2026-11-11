@@ -224,6 +224,13 @@ void PTDataBridgeTests::syncBridgeExposesTransportPairingAndCallbacks()
         QVERIFY([bridge.transport isEqualToString:@"icloud"]);
         QVERIFY(bridge.transportProblem.length > 0);
         QVERIFY([bridge.transportProblem containsString:@"不是番茄Todo 的配对码"]);
+        const int changesBeforeClear = switchingChanges;
+        QVERIFY([bridge respondsToSelector:@selector(clearTransportProblem)]);
+        [bridge clearTransportProblem];
+        QCOMPARE(bridge.transportProblem.length, NSUInteger(0));
+        QCOMPARE(switchingChanges, changesBeforeClear + 1);
+        [bridge clearTransportProblem];
+        QCOMPARE(switchingChanges, changesBeforeClear + 1);
         PTBridgeSupport::registerService(QStringLiteral("syncController"), nullptr);
     }
 }

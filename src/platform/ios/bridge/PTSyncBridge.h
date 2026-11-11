@@ -57,6 +57,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)rebuildFolder:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (BOOL)joinWithPairingCode:(NSString *)code error:(NSError **)error __attribute__((swift_error(nonnull_error)));
 - (BOOL)switchToICloud:(NSError **)error __attribute__((swift_error(nonnull_error)));
+- (void)clearTransportProblem;
 - (NSString *)joinWarning;
 - (PTSyncLogReadResult *)syncLog:(NSInteger)limit;
 - (NSInteger)readLogCount:(NSError **)error __attribute__((swift_error(nonnull_error)));

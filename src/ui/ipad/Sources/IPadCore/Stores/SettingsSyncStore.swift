@@ -67,10 +67,17 @@ import Observation
     public func syncNow() { clearNotice(); perform { try bridge.syncNow() } }
     public func chooseFolder() { clearNotice(); perform { try bridge.chooseFolder() } }
     public func rebuildFolder() { clearNotice(); perform { try bridge.rebuildFolder() } }
-    public func requestPairingSheet() { pairingSheetRequested = true }
+    public func requestPairingSheet() {
+        // 清理命令可能同步通知；显式刷新也保证未发通知时快照立即更新。
+        bridge.clearTransportProblem()
+        refresh()
+        pairingSheetRequested = true
+    }
     public func cancelPairingSheet() {
         pairingSheetRequested = false
         pairingJoinStarted = false
+        bridge.clearTransportProblem()
+        refresh()
     }
     public func selectTransport(_ transport: String) {
         clearNotice()

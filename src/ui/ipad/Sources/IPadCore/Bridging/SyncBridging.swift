@@ -52,6 +52,7 @@ public struct SyncLogEntry: Equatable, Sendable, Identifiable {
     func rebuildFolder() throws
     func joinWithPairingCode(_ code: String) throws
     func switchToICloud() throws
+    func clearTransportProblem()
     func joinWarning() -> String
     func syncLog(limit: Int) throws -> [SyncLogEntry]
     func copyLostValue(_ text: String) throws
