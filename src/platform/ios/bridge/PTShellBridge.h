@@ -44,12 +44,19 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly, copy) NSString *taskTitle;
 @end
 
+// 恢复控制值只来自内存服务，不附 valid/error，也不查询数据库。
+@interface PTShellOperationState : NSObject
+@property(nonatomic, readonly) BOOL operationBlocksUi;
+@property(nonatomic, readonly, copy) NSString *operationText;
+@end
+
 @interface PTShellBridge : NSObject
 @property(nonatomic, copy, nullable) void (^onChanged)(void);
 @property(nonatomic, copy, nullable) void (^onTimerChanged)(void);
 @property(nonatomic, copy, nullable) void (^onFailure)(NSString *message);
 // 从 Qt 资源读取现有壁纸，避免原生应用再复制一套图片；不依赖 UIKit。
 + (nullable NSData *)wallpaperDataForTheme:(NSString *)theme NS_SWIFT_NAME(wallpaperData(forTheme:));
+- (PTShellOperationState *)readOperationState;
 - (PTShellSnapshot *)readSnapshot NS_SWIFT_NAME(read());
 - (PTShellTimerSnapshot *)readTimerSnapshot NS_SWIFT_NAME(readTimer());
 - (BOOL)setUseWallpaper:(BOOL)value error:(NSError **)error

@@ -34,6 +34,15 @@ public struct ShellSnapshot: Equatable, Sendable {
     public init() {}
 }
 
+// 恢复阻断是内存状态，独立于可失败的数据库摘要，读取不抛错。
+public struct ShellOperationState: Equatable, Sendable {
+    public var operationBlocksUI: Bool
+    public var operationText: String
+    public init(operationBlocksUI: Bool = false, operationText: String = "") {
+        self.operationBlocksUI = operationBlocksUI; self.operationText = operationText
+    }
+}
+
 // 外观三项：主题、外观模式、壁纸开关。各页外壳修饰与壁纸只读这一项（10-12 拆出，见 ShellStore.appearanceState）。
 public struct ShellAppearanceState: Equatable, Sendable {
     public var backgroundTheme = "warm"
@@ -58,6 +67,7 @@ public struct ShellTimerSnapshot: Equatable, Sendable {
     var onChanged: (() -> Void)? { get set }
     var onTimerChanged: (() -> Void)? { get set }
     var onFailure: ((String) -> Void)? { get set }
+    func readOperationState() -> ShellOperationState
     func read() throws -> ShellSnapshot
     func readTimer() throws -> ShellTimerSnapshot
     func setNativeUI(_ value: Bool) throws
@@ -223,6 +233,10 @@ public final class ShellStore {
     }
 
     public func refresh() {
+        // 先更新无失败的控制状态，再读摘要；换库或读库失败不能让遮罩漏开或一直挡住失败结果。
+        let operation = bridge.readOperationState()
+        if operation.operationBlocksUI != operationBlocksUI { operationBlocksUI = operation.operationBlocksUI }
+        if operation.operationText != operationText { operationText = operation.operationText }
         do {
             let value = try bridge.read()
             apply(value)
@@ -243,8 +257,6 @@ public final class ShellStore {
         appearance.appearance = value.appearance
         appearance.useWallpaper = value.useWallpaper
         if appearance != appearanceState { appearanceState = appearance }
-        if value.operationBlocksUI != operationBlocksUI { operationBlocksUI = value.operationBlocksUI }
-        if value.operationText != operationText { operationText = value.operationText }
         if value.dueGapCount != dueGapCount { dueGapCount = value.dueGapCount }
         var timerValue = ShellTimerSnapshot()
         timerValue.hasTimer = value.hasTimer; timerValue.running = value.running

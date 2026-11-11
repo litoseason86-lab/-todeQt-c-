@@ -92,6 +92,17 @@
 }
 @end
 
+@implementation PTShellOperationState
+- (instancetype)init
+{
+    if ((self = [super init])) {
+        _operationBlocksUi = BackupService::instance()->operationBlocksUi();
+        _operationText = BackupService::instance()->operationText().toNSString();
+    }
+    return self;
+}
+@end
+
 @implementation PTShellBridge {
     std::unique_ptr<QObject> _connections;
     PTBridgeSupport::FailureCollector _failures;
@@ -171,6 +182,12 @@
     if (!file.open(QIODevice::ReadOnly)) return nil;
     const QByteArray data = file.readAll();
     return [NSData dataWithBytes:data.constData() length:static_cast<NSUInteger>(data.size())];
+}
+- (PTShellOperationState *)readOperationState
+{
+    NSAssert(NSThread.isMainThread, @"读取恢复阻断状态必须在主线程");
+    // 不经过摘要读取或 FailureCollector（服务失败收集器），关库和查询错误不能阻断控制状态更新。
+    return [PTShellOperationState new];
 }
 - (PTShellSnapshot *)readSnapshot
 {

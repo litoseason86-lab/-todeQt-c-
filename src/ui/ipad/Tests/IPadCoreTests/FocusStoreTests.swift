@@ -22,7 +22,7 @@ import XCTest
         }
         var live: [Int] { items.indices.filter { !items[$0].cancelled } }
     }
-    @MainActor private final class Flag { var reduceMotion = false }
+    @MainActor private final class Flag { var reduceMotion = false; var operationBlocked = false }
     private struct Rig {
         let store: FocusStore
         let focus: FocusBridgeFake
@@ -50,7 +50,7 @@ import XCTest
         let scheduler = Scheduler(); let flag = Flag()
         configure(focus, settings)
         let store = FocusStore(focus: focus, settings: settings, tasks: tasks, pendingDeletion: pending, shell: shell,
-                               reduceMotion: { flag.reduceMotion }, delay: scheduler.delayFn)
+                               reduceMotion: { flag.reduceMotion }, delay: scheduler.delayFn, operationBlocksInput: { flag.operationBlocked })
         store.start()
         retained += [shell, pending, scheduler, flag]
         return Rig(store: store, focus: focus, settings: settings, tasks: tasks, shell: shell, shellBridge: shellBridge,
@@ -1244,6 +1244,66 @@ import XCTest
         XCTAssertFalse(r.store.pomodoroModeSelected)
     }
 
+    // 产品保证：恢复前清空旧库选择和切换确认，新库同号任务不会被自动重新关联。
+    func testPrepareForRestoreClearsOldTaskIdentityAndSwitchPrompt() {
+        let r = rig([task(7, "旧任务")])
+        r.store.selectTask(id: 7, title: "旧任务")
+        r.focus.focusTaskEntry = entry("confirmSwitch", pomodoro: true, autoStart: true)
+        r.store.openTask(taskId: 7, title: "旧任务")
+        XCTAssertEqual(r.store.selectedTaskID, 7)
+        XCTAssertNotNil(r.store.switchPrompt)
+        r.store.prepareForRestore()
+        XCTAssertEqual(r.store.selectedTaskID, -1)
+        XCTAssertEqual(r.store.selectedTaskTitle, "")
+        XCTAssertNil(r.store.switchPrompt)
+        r.tasks.result = [task(7, "新任务")]; r.tasks.tasksByID = [7: task(7, "新任务")]
+        r.store.reloadTodayTasks()
+        XCTAssertEqual(r.store.selectedTaskID, -1)
+        XCTAssertEqual(r.store.selectedTaskTitle, "")
+    }
+
+    // 产品保证：恢复前取消两种已排队的阶段衔接，迟到回调即使无视取消也不能启动计时。
+    func testPrepareForRestoreCancelsBothPendingAutoAdvances() {
+        for phase in [1, 2] {
+            let r = rig([task(1)]) { focus, _ in focus.autoAdvance = [phase: true] }
+            if phase == 1 { finishWork(r) }
+            else {
+                r.store.selectTask(id: 1, title: "任务1")
+                setTimer(r, mode: 1, phase: 2, active: true)
+                r.focus.onPhaseCompleted?(2)
+                setTimer(r, mode: 0, phase: 0, active: false)
+            }
+            XCTAssertEqual(r.store.justCompletedPhase, phase)
+            XCTAssertEqual(r.scheduler.live, [0])
+            r.store.prepareForRestore()
+            XCTAssertTrue(r.scheduler.items[0].cancelled)
+            XCTAssertEqual(r.store.justCompletedPhase, 0)
+            r.scheduler.fire(0, ignoringCancel: true)
+            XCTAssertEqual(count(r, "startBreak"), 0)
+            XCTAssertEqual(count(r, "startPomodoro"), 0)
+        }
+    }
+
+    // 产品保证：自动衔接在执行时重判恢复阻断，阻断后不启动，未阻断时两种阶段仍正常衔接。
+    func testAutoAdvanceRechecksOperationBlockAtExecution() {
+        for phase in [1, 2] {
+            for blocked in [true, false] {
+                let r = rig([task(1)]) { focus, _ in focus.autoAdvance = [phase: true] }
+                if phase == 1 { finishWork(r) }
+                else {
+                    r.store.selectTask(id: 1, title: "任务1")
+                    setTimer(r, mode: 1, phase: 2, active: true)
+                    r.focus.onPhaseCompleted?(2)
+                    setTimer(r, mode: 0, phase: 0, active: false)
+                }
+                XCTAssertEqual(r.scheduler.live, [0])
+                r.flag.operationBlocked = blocked
+                r.scheduler.fire(0)
+                XCTAssertEqual(count(r, phase == 1 ? "startBreak" : "startPomodoro"), blocked ? 0 : 1)
+            }
+        }
+    }
+
 }
 
 // 测试里直接构造完成结果的便捷初始化。
@@ -1252,5 +1312,6 @@ extension FocusTaskCompletion {
         self.init()
         self.focusResult = focusResult; self.kind = kind; self.discarded = discarded; self.error = error
     }
+
 
 }

@@ -16,6 +16,9 @@ import IPadCore
     var captureResult = 1
     var pauseResult = true
     var resumeResult = true
+    func readOperationState() -> ShellOperationState {
+        ShellOperationState(operationBlocksUI: snapshot.operationBlocksUI, operationText: snapshot.operationText)
+    }
     func readTimer() throws -> ShellTimerSnapshot { timerReads += 1; if let timerError { throw timerError }; return timerSnapshot }
     func read() throws -> ShellSnapshot { fullReads += 1; calls.append("read"); if let error { throw error }; return snapshot }
     func setAppearance(_ value: String) throws { if let appearanceError { throw appearanceError }; snapshot.appearance = value; onChanged?() }

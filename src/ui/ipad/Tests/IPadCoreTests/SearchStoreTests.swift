@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import XCTest
 @testable import IPadCore
 
@@ -11,7 +12,8 @@ import XCTest
         let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake()
         tasks.result = [task(3, "线代 第 4 讲"), task(9, "线代 第 3 讲")]
         gaps.rows = [gap(5, "线代 特征值")]
-        let store = SearchStore(tasks: tasks, gaps: gaps)
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: ShellStore(bridge: ShellBridgeFake()))
+        let store = SearchStore(tasks: tasks, gaps: gaps, pendingDeletion: pending)
         store.query = "  线代 "
         store.search()
         XCTAssertEqual(tasks.calls.last?.name, "search")
@@ -29,7 +31,8 @@ import XCTest
     func testBlankQueryClearsWithoutCallingService() {
         let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake()
         tasks.result = [task(1, "旧结果")]
-        let store = SearchStore(tasks: tasks, gaps: gaps)
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: ShellStore(bridge: ShellBridgeFake()))
+        let store = SearchStore(tasks: tasks, gaps: gaps, pendingDeletion: pending)
         store.query = "旧"; store.search()
         XCTAssertEqual(store.tasks.count, 1)
         let before = tasks.calls.count
@@ -42,7 +45,8 @@ import XCTest
     func testFailureKeepsPreviousResultsAndShowsReason() {
         let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake()
         tasks.result = [task(1, "高数")]
-        let store = SearchStore(tasks: tasks, gaps: gaps)
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: ShellStore(bridge: ShellBridgeFake()))
+        let store = SearchStore(tasks: tasks, gaps: gaps, pendingDeletion: pending)
         store.query = "高"; store.search()
         tasks.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "数据库忙"])
         store.query = "高数"; store.search()
@@ -56,7 +60,8 @@ import XCTest
     // 改名后不再匹配的条目消失；还没搜索过时变更不触发读取。
     func testDataChangeRerunsCurrentQuery() {
         let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake()
-        let store = SearchStore(tasks: tasks, gaps: gaps)
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: ShellStore(bridge: ShellBridgeFake()))
+        let store = SearchStore(tasks: tasks, gaps: gaps, pendingDeletion: pending)
         tasks.onChanged?(); gaps.onChanged?()
         XCTAssertFalse(tasks.calls.contains { $0.name == "search" })
         tasks.result = [task(3, "线代 第 4 讲"), task(9, "线代 第 3 讲")]
@@ -75,7 +80,8 @@ import XCTest
     // 不再匹配的任务消失。
     func testCategoryChangeRerunsCurrentQuery() {
         let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake(), categories = CategoryBridgeFake()
-        let store = SearchStore(tasks: tasks, gaps: gaps, categories: categories)
+        let pending = PendingDeletionStore(bridge: PendingDeletionBridgeFake(), tasks: tasks, shell: ShellStore(bridge: ShellBridgeFake()))
+        let store = SearchStore(tasks: tasks, gaps: gaps, pendingDeletion: pending, categories: categories)
         tasks.result = [task(3, "微积分 第 2 章")]
         store.query = "数学"; store.search()
         XCTAssertEqual(store.tasks.map(\.id), [3])
@@ -84,4 +90,35 @@ import XCTest
         XCTAssertTrue(store.tasks.isEmpty)
         XCTAssertEqual(tasks.calls.last?.text, ["数学"])
     }
+
+    // 产品保证：搜索只根据共享待删槽投影结果，撤销或提交失败清槽立即恢复，不依赖任务变更或重搜。
+    func testPendingDeletionProjectsResultsWithoutTaskRefresh() throws {
+        let tasks = TaskBridgeFake(), gaps = KnowledgeGapFake()
+        let ids = [9, 4, 7, 1, 12, 3, 8]
+        tasks.result = ids.map { task($0, "任务\($0)") }
+        let shell = ShellStore(bridge: ShellBridgeFake())
+        let bridge = PendingDeletionBridgeFake()
+        let pending = PendingDeletionStore(bridge: bridge, tasks: tasks, shell: shell)
+        let store = SearchStore(tasks: tasks, gaps: gaps, pendingDeletion: pending)
+        store.query = "任务"; store.search()
+        XCTAssertEqual(store.tasks.map(\.id), ids)
+        let calls = tasks.calls.count
+        // SwiftUI 依赖计算属性的观察追踪；只变待删槽时也必须发出失效通知。
+        final class Changed: @unchecked Sendable { var value = false }
+        let changed = Changed()
+        withObservationTracking({ _ = store.tasks }) { changed.value = true }
+        bridge.state.active = true; bridge.state.taskID = 4; bridge.onChanged?()
+        XCTAssertEqual(pending.pendingTaskID, 4)
+        XCTAssertTrue(changed.value)
+        XCTAssertEqual(store.tasks.map(\.id), [9, 7, 1, 12, 3, 8])
+        XCTAssertEqual(tasks.calls.count, calls)
+        bridge.cancel()
+        XCTAssertEqual(store.tasks.map(\.id), ids)
+        bridge.state.active = true; bridge.state.taskID = 4; bridge.onChanged?()
+        bridge.commitError = NSError(domain: "测试", code: 1)
+        XCTAssertThrowsError(try bridge.commit())
+        XCTAssertEqual(store.tasks.map(\.id), ids)
+        XCTAssertEqual(tasks.calls.count, calls)
+    }
+
 }

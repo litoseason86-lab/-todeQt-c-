@@ -1,3 +1,4 @@
+import Observation
 import XCTest
 @testable import IPadCore
 
@@ -32,7 +33,7 @@ import XCTest
         let focus = FocusStore(focus: focusBridge, settings: settings, tasks: tasks,
                                pendingDeletion: pendingStore, shell: shell)
         let store = DashboardStore(tasks: tasks, statistics: statistics, settings: settings,
-                                   actions: actions, shell: shell, focus: focus,
+                                   pendingDeletion: pendingStore, actions: actions, shell: shell, focus: focus,
                                    nowProvider: { now })
         return Rig(store: store, tasks: tasks, statistics: statistics, settings: settings,
                    focus: focus, pending: pending, shell: shell)
@@ -46,7 +47,7 @@ import XCTest
         let actions = TaskActions(tasks: tasks, pendingDeletion: pending, shell: shell)
         let focus = FocusStore(focus: FocusBridgeFake(), settings: settings, tasks: tasks, pendingDeletion: pending, shell: shell)
         let store = DashboardStore(tasks: tasks, statistics: statistics, settings: settings,
-                                   actions: actions, shell: shell, focus: focus, logicalDay: day)
+                                   pendingDeletion: pending, actions: actions, shell: shell, focus: focus, logicalDay: day)
         store.start(); XCTAssertEqual(store.todayStats.totalDuration, 0)
         statistics.day.totalDuration = 123
         day.today = "2026-10-11"
@@ -150,4 +151,32 @@ import XCTest
         r.store.openFocus(task(3, "报告"))
         XCTAssertEqual(r.shell.selection, .focus)
     }
+
+    // 产品保证：仅待删槽变化就隐藏任务并补齐前六条，撤销和提交失败清槽后按原顺序恢复，不重算统计。
+    func testPendingDeletionProjectsBeforeLimitWithoutTaskRefresh() throws {
+        let ids = [9, 4, 7, 1, 12, 3, 8]
+        let r = rig(ids.map { task($0) })
+        r.statistics.day.totalTasks = 7
+        r.store.start()
+        XCTAssertEqual(r.store.topTasks.map(\.id), Array(ids.prefix(6)))
+        let calls = r.tasks.calls.count
+        // SwiftUI 依赖计算属性的观察追踪；只变待删槽时也必须发出失效通知。
+        final class Changed: @unchecked Sendable { var value = false }
+        let changed = Changed()
+        withObservationTracking({ _ = r.store.topTasks }) { changed.value = true }
+        r.pending.state.active = true; r.pending.state.taskID = 4
+        r.pending.onChanged?()
+        XCTAssertTrue(changed.value)
+        XCTAssertEqual(r.store.topTasks.map(\.id), [9, 7, 1, 12, 3, 8])
+        XCTAssertEqual(r.store.todayStats.totalTasks, 7)
+        XCTAssertEqual(r.tasks.calls.count, calls)
+        r.pending.cancel()
+        XCTAssertEqual(r.store.topTasks.map(\.id), Array(ids.prefix(6)))
+        r.pending.state.active = true; r.pending.state.taskID = 4; r.pending.onChanged?()
+        r.pending.commitError = NSError(domain: "测试", code: 1)
+        XCTAssertThrowsError(try r.pending.commit())
+        XCTAssertEqual(r.store.topTasks.map(\.id), Array(ids.prefix(6)))
+        XCTAssertEqual(r.tasks.calls.count, calls)
+    }
+
 }

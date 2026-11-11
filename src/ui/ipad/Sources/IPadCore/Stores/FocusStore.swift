@@ -96,6 +96,7 @@ public struct ActiveFocusSession: Equatable, Sendable {
     @ObservationIgnored private weak var shell: ShellStore?
     @ObservationIgnored private let reduceMotion: @MainActor () -> Bool
     @ObservationIgnored private let delay: FocusDelay
+    @ObservationIgnored private let operationBlocksInput: () -> Bool
     @ObservationIgnored private var cancelAutoAdvanceAction: (@MainActor () -> Void)?
     @ObservationIgnored private var autoAdvancePhase = 0
     @ObservationIgnored private var cancelControlsHideAction: (@MainActor () -> Void)?
@@ -119,10 +120,12 @@ public struct ActiveFocusSession: Equatable, Sendable {
     public init(focus: any FocusBridgeProtocol, settings: any SettingsBridgeProtocol,
                 tasks: any TaskBridgeProtocol, pendingDeletion: PendingDeletionStore, shell: ShellStore,
                 reduceMotion: @escaping @MainActor () -> Bool = { false },
-                delay: @escaping FocusDelay = FocusStore.realDelay) {
+                delay: @escaping FocusDelay = FocusStore.realDelay,
+                operationBlocksInput: @escaping () -> Bool = { false }) {
         self.focus = focus; self.settings = settings; self.taskBridge = tasks
         self.pendingDeletion = pendingDeletion; self.shell = shell
         self.reduceMotion = reduceMotion; self.delay = delay
+        self.operationBlocksInput = operationBlocksInput
     }
 
     // MARK: 派生展示
@@ -369,8 +372,8 @@ public struct ActiveFocusSession: Equatable, Sendable {
     }
     private func autoAdvanceFired(_ phase: Int) {
         autoAdvancePhase = 0; cancelAutoAdvanceAction = nil
-        // 延迟期间用户可能已经结束循环或关闭自动衔接；到点必须再问一次。
-        guard justCompletedPhase == phase, wantsAutoAdvance(phase) else { return }
+        // 这是恢复准入之后才可能触发的延迟动作，执行时必须重判阻断；用户也可能已结束循环或关闭开关。
+        guard !operationBlocksInput(), justCompletedPhase == phase, wantsAutoAdvance(phase) else { return }
         if phase == 1 {
             startBreak()
             if errorText.isEmpty { autoAdvanced(1) }
@@ -383,6 +386,13 @@ public struct ActiveFocusSession: Equatable, Sendable {
         // 用户正盯着专注页时切换本身可见，不必再提示。
         guard shell?.selection != .focus else { return }
         shell?.showToast(phase == 1 ? "专注完成，已自动开始休息" : "休息结束，已自动开始下一个番茄")
+    }
+    // 不同数据库可能复用任务编号；恢复开始即丢弃旧库选择、确认框及待续动作，不等换库后按编号刷新。
+    public func prepareForRestore() {
+        cancelAutoAdvance()
+        justCompletedPhase = 0
+        clearSelectedTask()
+        switchPrompt = nil
     }
     public func cancelAutoAdvance() {
         cancelAutoAdvanceAction?(); cancelAutoAdvanceAction = nil; autoAdvancePhase = 0

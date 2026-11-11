@@ -18,6 +18,10 @@ import PTBridge
             MainActor.assumeIsolated { self?.onFailure?(message) }
         }
     }
+    func readOperationState() -> ShellOperationState {
+        let value = bridge.readOperationState()
+        return ShellOperationState(operationBlocksUI: value.operationBlocksUi, operationText: value.operationText)
+    }
     func read() throws -> ShellSnapshot {
         let value = bridge.read()
         if !value.valid {
@@ -36,8 +40,6 @@ import PTBridge
         result.remainingSeconds = value.remainingSeconds
         result.currentTaskId = value.currentTaskId
         result.taskTitle = value.taskTitle
-        result.operationBlocksUI = value.operationBlocksUi
-        result.operationText = value.operationText
         result.sidebarOrder = value.sidebarOrder
         result.backgroundTheme = value.backgroundTheme
         result.appearance = value.appearance

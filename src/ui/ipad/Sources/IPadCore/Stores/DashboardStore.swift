@@ -10,10 +10,12 @@ import Observation
     public private(set) var nickname = ""
     public private(set) var loadError = ""
     public private(set) var now = Date()
-    public var topTasks: [TaskValue] { Array(tasks.prefix(6)) }
+    // 先投影共享待删槽再取前六项；待删状态可独立变化，不能依赖任务信号重读或先截断列表。
+    public var topTasks: [TaskValue] { Array(tasks.filter { $0.id != pendingDeletion.pendingTaskID }.prefix(6)) }
     public var greeting: String { DashboardFormat.greeting(for: Calendar.current.component(.hour, from: now)) }
     public var dateText: String { DashboardFormat.dateText(now) }
 
+    @ObservationIgnored private let pendingDeletion: PendingDeletionStore
     @ObservationIgnored private let tasksBridge: any TaskBridgeProtocol
     @ObservationIgnored private let statistics: any StatisticsBridgeProtocol
     @ObservationIgnored private let settings: any SettingsBridgeProtocol
@@ -25,8 +27,9 @@ import Observation
     @ObservationIgnored private var active = false
 
     public init(tasks: any TaskBridgeProtocol, statistics: any StatisticsBridgeProtocol,
-                settings: any SettingsBridgeProtocol, actions: TaskActions, shell: ShellStore,
+                settings: any SettingsBridgeProtocol, pendingDeletion: PendingDeletionStore, actions: TaskActions, shell: ShellStore,
                 focus: FocusStore, logicalDay: (any LogicalDayBridgeProtocol)? = nil, nowProvider: @escaping () -> Date = Date.init) {
+        self.pendingDeletion = pendingDeletion
         self.tasksBridge = tasks; self.statistics = statistics; self.settings = settings
         self.actions = actions; self.shell = shell; self.focus = focus; self.logicalDay = logicalDay; self.nowProvider = nowProvider
     }

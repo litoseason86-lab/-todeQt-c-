@@ -34,7 +34,7 @@ import XCTest
         let pending = pending(tasks, shell)
         let focus = FocusStore(focus: FocusBridgeFake(), settings: settings, tasks: tasks, pendingDeletion: pending, shell: shell)
         let actions = TaskActions(tasks: tasks, pendingDeletion: pending, shell: shell)
-        let store = DashboardStore(tasks: tasks, statistics: statistics, settings: settings, actions: actions, shell: shell, focus: focus)
+        let store = DashboardStore(tasks: tasks, statistics: statistics, settings: settings, pendingDeletion: pending, actions: actions, shell: shell, focus: focus)
         store.start()
         XCTAssertEqual(store.loadError, "")
         tasks.onFailure?("后台任务失败"); statistics.onFailure?("后台统计失败")

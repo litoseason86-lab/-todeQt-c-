@@ -18,6 +18,9 @@ import XCTest
     var captureFailure: String?
     var selectionFailure: String?
     var calls: [String] = []
+    func readOperationState() -> ShellOperationState {
+        ShellOperationState(operationBlocksUI: snapshot.operationBlocksUI, operationText: snapshot.operationText)
+    }
     func readTimer() throws -> ShellTimerSnapshot { timerReads += 1; if let timerError { throw timerError }; return timerSnapshot }
     func read() throws -> ShellSnapshot { fullReads += 1; if let error { throw error }; return snapshot }
     func setNativeUI(_ value: Bool) throws { if let nativeUIError { throw nativeUIError }; calls.append("nativeUI:\(value)") }
@@ -541,4 +544,28 @@ import XCTest
         store.setVoiceOverEnabled(false)
         XCTAssertEqual(records, [false, true, false])
     }
+
+    // 产品保证：摘要读取失败仍实时进入和解除恢复遮罩，同时保留旧摘要并展示读取错误。
+    func testOperationStateRefreshSurvivesSnapshotFailure() {
+        let bridge = FakeShellBridge()
+        bridge.snapshot.todayPendingCount = 7
+        let store = ShellStore(bridge: bridge)
+        XCTAssertEqual(store.details.todayPendingCount, 7)
+        XCTAssertFalse(store.operationBlocksUI)
+        bridge.error = NSError(domain: "测试", code: 1, userInfo: [NSLocalizedDescriptionKey: "摘要读取失败"])
+        bridge.snapshot.todayPendingCount = 99
+        bridge.snapshot.operationBlocksUI = true; bridge.snapshot.operationText = "正在恢复"
+        bridge.onChanged?()
+        XCTAssertTrue(store.operationBlocksUI)
+        XCTAssertEqual(store.operationText, "正在恢复")
+        XCTAssertEqual(store.details.todayPendingCount, 7)
+        XCTAssertEqual(store.errorMessage, "摘要读取失败")
+        bridge.snapshot.operationBlocksUI = false; bridge.snapshot.operationText = ""
+        bridge.onChanged?()
+        XCTAssertFalse(store.operationBlocksUI)
+        XCTAssertEqual(store.operationText, "")
+        XCTAssertEqual(store.details.todayPendingCount, 7)
+        XCTAssertEqual(store.errorMessage, "摘要读取失败")
+    }
+
 }

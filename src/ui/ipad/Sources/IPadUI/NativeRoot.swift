@@ -54,8 +54,12 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                taskActions: actions, inlineEditor: InlineTaskEditor(tasks: tasks, interactions: interactions, shell: store),
                                weekStore: week, timelineStore: timeline, scheduleStore: schedule,
                                trash: trash, sync: sync, backup: backup, export: export, routines: routines)
+        // 恢复回调是单槽，独立桥接不能占用设置页或 CoreBridges 的回调；由 FocusStore 的闭包强持有。
+        let focusBackup = BackupBridgeAdapter()
         let focus = FocusStore(focus: FocusBridgeAdapter(), settings: SettingsBridgeAdapter(), tasks: TaskBridgeAdapter(),
-                               pendingDeletion: pending, shell: store, reduceMotion: { UIAccessibility.isReduceMotionEnabled })
+                               pendingDeletion: pending, shell: store, reduceMotion: { UIAccessibility.isReduceMotionEnabled },
+                               operationBlocksInput: { focusBackup.snapshot().operationBlocksUI })
+        focusBackup.onRestoreStarted = { [weak focus] in focus?.prepareForRestore() }
         focus.start()
         actions.focusHook = focus
         // 055-P4-1：今日任务页的 Store 在根上装配一份，⌘N 经外壳现有回调切页并请求新建输入。
@@ -66,7 +70,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                                pendingDeletion: pending, shell: store, focus: FocusBridgeAdapter())
         // 仪表盘使用独立桥接实例；这些桥的回调是单槽，避免覆盖其它 Store 的单槽回调。
         let dashboard = DashboardStore(tasks: TaskBridgeAdapter(), statistics: StatisticsBridgeAdapter(),
-                                       settings: SettingsBridgeAdapter(),
+                                       settings: SettingsBridgeAdapter(), pendingDeletion: pending,
                                        actions: actions, shell: store, focus: focus, logicalDay: LogicalDayBridgeAdapter())
         store.onStartOrPause = { [weak focus] in focus?.startOrPauseFromShortcut() }
         store.captureSourceProvider = { [weak focus] in focus?.captureSource }
@@ -102,7 +106,7 @@ public func makeNativeRootViewController() -> UnsafeMutableRawPointer {
                 store?.flushEdits()
             }
         }
-        let search = SearchStore(tasks: TaskBridgeAdapter(), gaps: KnowledgeGapAdapter(), categories: CategoryBridgeAdapter())
+        let search = SearchStore(tasks: TaskBridgeAdapter(), gaps: KnowledgeGapAdapter(), pendingDeletion: pending, categories: CategoryBridgeAdapter())
         let root = ShellRootView(store: store)
             .environment(search).environment(core).environment(today).environment(dashboard).environment(focus).environment(store)
             .environment(gaps).environment(memos).environment(countdown)

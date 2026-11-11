@@ -13,6 +13,7 @@
 #include <memory>
 #include <QtTest>
 #include "../src/services/AppSettings.h"
+#include "../src/services/BackupService.h"
 #include "../src/services/CountdownService.h"
 #include "../src/services/DatabaseManager.h"
 #include "../src/services/FocusTimer.h"
@@ -72,6 +73,7 @@ private slots:
     void nativeUIIsDefaultWithDeviceAndOverridePrecedence();
     void bothUIEntrancesWriteTheSameLocalKey();
     void timerSnapshotDoesNotQueryStatistics();
+    void operationStateDoesNotRequireOpenDatabase();
 private:
     QTemporaryDir m_preferences;
     QTemporaryDir m_database;
@@ -960,6 +962,42 @@ void PTShellBridgeTests::pendingDeletionFailureHasOnePresentation()
         QCOMPARE(shellFailures, 1); QCOMPARE(observerFailures, 1);
         emit TaskManager::instance()->operationFailed(QStringLiteral("删除任务失败：另一项独立失败"));
         QCOMPARE(shellFailures, 2); QCOMPARE(observerFailures, 2);
+    }
+}
+
+// 产品保证：数据库关闭且摘要失败时，恢复阻断状态和文案仍能无失败地读取，并跟随服务解除。
+void PTShellBridgeTests::operationStateDoesNotRequireOpenDatabase()
+{
+    @autoreleasepool {
+        PTShellBridge* bridge = [PTShellBridge new];
+        QVERIFY([bridge respondsToSelector:@selector(readOperationState)]);
+        auto* service = BackupService::instance();
+        service->configure(m_preferences.filePath(QStringLiteral("restore-settings.ini")),
+                           m_database.filePath(QStringLiteral("restore-backups")));
+        QSignalSpy completed(service, &BackupService::restoreCompleted);
+        QVERIFY(!service->operationBlocksUi());
+        service->requestRestore(m_database.filePath(QStringLiteral("missing.tomatobackup")));
+        QVERIFY(service->operationBlocksUi());
+        const QString expected = service->operationText();
+        QVERIFY(!expected.isEmpty());
+        DatabaseManager::instance()->close();
+        QVERIFY(!DatabaseManager::instance()->isOpen());
+        __block int failures = 0;
+        bridge.onFailure = ^(NSString*) { ++failures; };
+        PTShellOperationState* blocked = [bridge readOperationState];
+        const bool blocks = blocked.operationBlocksUi;
+        const QString text = QString::fromNSString(blocked.operationText);
+        const bool summaryInvalid = ![bridge readSnapshot].valid;
+        QTRY_COMPARE(completed.count(), 1);
+        QVERIFY(blocks);
+        QCOMPARE(text, expected);
+        QVERIFY(summaryInvalid);
+        QVERIFY(!service->operationBlocksUi());
+        PTShellOperationState* released = [bridge readOperationState];
+        QVERIFY(!released.operationBlocksUi);
+        QCOMPARE(QString::fromNSString(released.operationText), service->operationText());
+        QVERIFY(!DatabaseManager::instance()->isOpen());
+        QCOMPARE(failures, 0);
     }
 }
 
