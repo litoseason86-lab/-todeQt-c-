@@ -110,6 +110,8 @@ Popup {
             Layout.leftMargin: Theme.space16
             Layout.rightMargin: Theme.space16
             Layout.minimumHeight: 52
+            // 配对码会折成多行，按文字自然高度留足上下内边距，不能让 RowLayout 把文字压回一行。
+            Layout.preferredHeight: Math.max(52, codeText.implicitHeight + Theme.space12 * 2)
             color: Theme.surfaceSunken
             border.color: Theme.border
             border.width: 1

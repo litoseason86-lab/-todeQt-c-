@@ -48,8 +48,12 @@ Rectangle {
         }
     }
 
-    implicitWidth: contentRow.implicitWidth + Theme.space24 * 2
-    implicitHeight: 40
+    // 自然宽度只从未换行文字和动作计算，不反向读取 Row 的受限宽度，避免父子尺寸绑定成环。
+    readonly property real actionWidth: actionButton.visible ? actionButton.implicitWidth + contentRow.spacing : 0
+    readonly property real naturalWidth: label.implicitWidth + root.actionWidth + Theme.space24 * 2
+    implicitWidth: parent ? Math.min(root.naturalWidth, Math.max(0, parent.width - Theme.space24 * 2)) : root.naturalWidth
+    // 保留原单行 40px 的上下留白；两行文字增加的高度直接加到提示条，不挤压动作。
+    implicitHeight: Math.max(40, contentRow.implicitHeight + 40 - Math.ceil(labelMetrics.height))
     radius: Theme.radiusLg
     color: Theme.inkStrong
     opacity: root.shown ? 0.92 : 0
@@ -80,6 +84,12 @@ Rectangle {
         easing.type: Easing.OutQuad
     }
 
+    TextMetrics {
+        id: labelMetrics
+        font: label.font
+        text: label.text
+    }
+
     Row {
         id: contentRow
 
@@ -91,12 +101,19 @@ Rectangle {
 
             objectName: "toastText"
             anchors.verticalCenter: parent.verticalCenter
+            width: Math.min(implicitWidth, Math.max(0, root.width - Theme.space24 * 2 - root.actionWidth))
+            wrapMode: Text.Wrap
+            maximumLineCount: 2
+            elide: Text.ElideRight
             textFormat: Text.PlainText
+            Accessible.name: text
             color: Theme.surface
             font.pixelSize: Theme.fontMd
         }
 
         Text {
+            id: actionButton
+
             objectName: "toastActionButton"
             anchors.verticalCenter: parent.verticalCenter
             visible: root.actionText.length > 0

@@ -658,4 +658,61 @@ TestCase {
         tryCompare(dialog, "opened", false)
         compare(findChild(dialog, "serverSpaceEnrollmentKeyField").text, "")
     }
+    // 产品保证：真实长度配对码显示时边框随文字增高、不压说明，重新隐藏后恢复原来的框高。
+    function test_pairingCodeLongValueStaysInsideItsFrame() {
+        syncMock.pairingCodeValue = "ptsync1." + "aB9_-".repeat(36)
+        verify(syncMock.pairingCodeValue.length >= 180)
+        const dialog = findChild(dataPage, "pairingCodeDialog")
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        const label = findChild(dialog, "pairingCodeValue")
+        const frame = label.parent.parent
+        const description = findChild(dialog, "pairingCodeDescription")
+        const reveal = findChild(dialog, "pairingCodeRevealButton")
+        verify(waitForItemPolished(dialog.contentItem))
+        const maskedHeight = frame.height
+        compare(label.text, dialog.maskedCode)
+        clickControl(reveal)
+        verify(waitForItemPolished(dialog.contentItem))
+        verify(label.lineCount >= 3, "前提：配对码必须折为多行")
+        // 旧布局会压低 Text.height，但实际绘制仍多行；按 contentHeight 核对可见内容底边。
+        const labelTop = label.mapToItem(frame, 0, 0).y
+        verify(labelTop + label.contentHeight <= frame.height, "配对码文字不能越过边框")
+        compare(frame.height, Math.max(52, label.contentHeight + 2 * Theme.space12))
+        const frameBottom = frame.mapToItem(dialog.contentItem, 0, frame.height).y
+        const descriptionTop = description.mapToItem(dialog.contentItem, 0, 0).y
+        verify(frameBottom <= descriptionTop, "边框不能侵入说明文字")
+        clickControl(reveal)
+        verify(waitForItemPolished(dialog.contentItem))
+        compare(frame.height, maskedHeight)
+        compare(label.text, dialog.maskedCode)
+    }
+
+    // 产品保证：地址回车移到口令，口令回车只提交一次并去空白，切换中两种回车都不重复建空间。
+    function test_spaceReturnMovesFocusAndSubmitsOnce() {
+        const dialog = findChild(dataPage, "serverSpaceDialog")
+        dialog.open()
+        tryCompare(dialog, "opened", true)
+        const address = findChild(dialog, "serverSpaceAddressField")
+        const key = findChild(dialog, "serverSpaceEnrollmentKeyField")
+        address.text = "  https://sync.example.com  "
+        key.text = "  test-enrollment  "
+        address.forceActiveFocus()
+        tryCompare(address, "activeFocus", true)
+        const before = syncMock.calls.length
+        keyClick(Qt.Key_Return)
+        tryCompare(key, "activeFocus", true)
+        compare(syncMock.calls.length, before)
+        keyClick(Qt.Key_Return)
+        compare(syncMock.calls.length, before + 1)
+        compare(syncMock.calls[before], "createServerSpace:https://sync.example.com|test-enrollment")
+        compare(syncMock.switchingTransport, true)
+        keyClick(Qt.Key_Return)
+        keyClick(Qt.Key_Enter)
+        address.forceActiveFocus()
+        keyClick(Qt.Key_Return)
+        keyClick(Qt.Key_Return)
+        compare(syncMock.calls.length, before + 1)
+    }
+
 }

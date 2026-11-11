@@ -939,4 +939,61 @@ TestCase {
 
         TextField {}
     }
+    // 产品保证：长标题撤销条限制在窗口留白内、正文至多两行，动作可见可点，短消息保持单行与原高度。
+    function test_toastLongTitleKeepsUndoInsideWindowAndShortMessageCompact() {
+        withVisibleHost(function () {
+            const oldWidth = testCase.width
+            const oldReduceMotion = appSettings.reduceMotion
+            testCase.width = 1024
+            // 固定减少动态效果，鼠标命中只验证动作区域，不与提示条入场位移动画竞争。
+            appSettings.reduceMotion = true
+            tryCompare(mainWindow, "width", 1024)
+            const toast = findChild(mainWindow, "globalToast")
+            const label = findChild(toast, "toastText")
+            const action = findChild(toast, "toastActionButton")
+            verify(toast && label && action)
+            try {
+                toast.show("已复制")
+                verify(waitForItemPolished(toast))
+                compare(toast.height, 40)
+                compare(label.lineCount, 1)
+                tryCompare(toast, "width", label.implicitWidth + 2 * Theme.space24)
+                const shortVerticalPadding = toast.height - label.height
+                const title = "长".repeat(100)
+                const message = "已删除「" + title + "」"
+                let undone = false
+                toast.show(message, "撤销", function () { undone = true })
+                verify(waitForItemPolished(toast))
+                verify(label.implicitWidth > mainWindow.width, "前提：自然文字宽度必须超出窗口")
+                tryCompare(label, "lineCount", 2)
+                verify(waitForItemPolished(label.parent))
+                verify(toast.width <= toast.parent.width - 2 * Theme.space24)
+                verify(toast.x >= 0)
+                verify(toast.x + toast.width <= mainWindow.width)
+                const left = action.mapToItem(mainWindow, 0, 0).x
+                verify(left >= 0)
+                verify(left + action.width <= mainWindow.width)
+                const actionInToast = action.mapToItem(toast, 0, 0).x
+                verify(actionInToast >= 0 && actionInToast + action.width <= toast.width)
+                compare(label.lineCount, 2)
+                compare(label.elide, Text.ElideRight)
+                compare(label.Accessible.name, message)
+                verify(toast.height > 40)
+                fuzzyCompare(toast.height - label.height, shortVerticalPadding, 1)
+                tryCompare(toast, "opacity", 0.92)
+                mouseClick(action, action.width / 2, action.height / 2)
+                compare(undone, true)
+                const overlongMessage = "已删除「" + "长".repeat(300) + "」"
+                toast.show(overlongMessage, "撤销", function () {})
+                tryCompare(label, "truncated", true)
+                compare(label.lineCount, 2)
+                compare(label.Accessible.name, overlongMessage)
+            } finally {
+                toast.shown = false
+                testCase.width = oldWidth
+                appSettings.reduceMotion = oldReduceMotion
+            }
+        })
+    }
+
 }

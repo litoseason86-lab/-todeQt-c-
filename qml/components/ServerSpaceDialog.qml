@@ -147,6 +147,7 @@ Popup {
             readOnly: root.busy
             inputMethodHints: Qt.ImhUrlCharactersOnly | Qt.ImhNoPredictiveText
             Accessible.name: "服务器地址"
+            onAccepted: enrollmentKeyField.forceActiveFocus()
         }
 
         DialogLabel {
@@ -161,6 +162,8 @@ Popup {
             readOnly: root.busy
             inputMethodHints: Qt.ImhSensitiveData | Qt.ImhNoPredictiveText
             Accessible.name: "注册口令"
+            // 与按钮共用提交入口，保留控制器切换中的重复请求守卫。
+            onAccepted: root.submit()
         }
 
         Text {
