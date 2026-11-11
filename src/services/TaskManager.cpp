@@ -1440,23 +1440,44 @@ bool TaskManager::moveTaskBefore(int taskId, int beforeTaskId)
 
 bool TaskManager::moveTaskToDate(int taskId, const QVariant& dateValue)
 {
+    return moveTaskToDateImpl(taskId, dateValue, true, nullptr);
+}
+
+bool TaskManager::moveTaskToDateWithoutBroadcast(int taskId, const QVariant& dateValue, QString* error)
+{
+    return moveTaskToDateImpl(taskId, dateValue, false, error);
+}
+
+bool TaskManager::moveTaskToDateImpl(int taskId, const QVariant& dateValue, bool broadcastFailure, QString* error)
+{
+    if (error) {
+        error->clear();
+    }
+    // 页面会把共享失败信号当成本页加载错误；失败改期又不发刷新信号，错误会一直残留。
+    // MCP 等外部写入只返回本次原因；页面与 iPad 仍经原入口广播，保留发起处的错误反馈。
+    const auto fail = [this, broadcastFailure, error](const QString& reason) {
+        if (error) {
+            *error = reason;
+        }
+        if (broadcastFailure) {
+            reportFailure(reason);
+        }
+        return false;
+    };
     if (!isValidTaskId(taskId)) {
         qWarning() << "Failed to move task: invalid task id" << taskId;
-        reportFailure(QStringLiteral("任务改期失败：任务编号无效"));
-        return false;
+        return fail(QStringLiteral("任务改期失败：任务编号无效"));
     }
     const QDate date = normalizeDate(dateValue);
     if (!date.isValid()) {
         qWarning() << "Failed to move task: invalid date";
-        reportFailure(QStringLiteral("任务改期失败：日期无效"));
-        return false;
+        return fail(QStringLiteral("任务改期失败：日期无效"));
     }
 
     QSqlDatabase db = DatabaseManager::instance()->database();
     if (!db.isOpen()) {
         qWarning() << "Failed to move task: database is not open";
-        reportFailure(QStringLiteral("任务改期失败：数据库未打开"));
-        return false;
+        return fail(QStringLiteral("任务改期失败：数据库未打开"));
     }
 
     // 改期到任务原来那天不算改期：直接成功，不写库、不发信号。照常写一次会把它挪到当天末尾，
@@ -1468,13 +1489,11 @@ bool TaskManager::moveTaskToDate(int taskId, const QVariant& dateValue)
     currentQuery.bindValue(QStringLiteral(":id"), taskId);
     if (!currentQuery.exec()) {
         qWarning() << "Failed to move task:" << currentQuery.lastError().text();
-        reportFailure(QStringLiteral("任务改期失败：数据库读取失败：%1").arg(currentQuery.lastError().text()));
-        return false;
+        return fail(QStringLiteral("任务改期失败：数据库读取失败：%1").arg(currentQuery.lastError().text()));
     }
     if (!currentQuery.next()) {
         qWarning() << "Failed to move task: task not found" << taskId;
-        reportFailure(QStringLiteral("任务改期失败：任务不存在"));
-        return false;
+        return fail(QStringLiteral("任务改期失败：任务不存在"));
     }
     const bool alreadyOnTargetDate =
         currentQuery.value(0).toString() == date.toString(Qt::ISODate);
@@ -1498,13 +1517,11 @@ bool TaskManager::moveTaskToDate(int taskId, const QVariant& dateValue)
 
     if (!query.exec()) {
         qWarning() << "Failed to move task:" << query.lastError().text();
-        reportFailure(QStringLiteral("任务改期失败：数据库写入失败：%1").arg(query.lastError().text()));
-        return false;
+        return fail(QStringLiteral("任务改期失败：数据库写入失败：%1").arg(query.lastError().text()));
     }
     if (query.numRowsAffected() != 1) {
         qWarning() << "Failed to move task: task not found" << taskId;
-        reportFailure(QStringLiteral("任务改期失败：任务不存在"));
-        return false;
+        return fail(QStringLiteral("任务改期失败：任务不存在"));
     }
 
     emit tasksChanged();

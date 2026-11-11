@@ -120,6 +120,8 @@ public:
     // 不写库、不改顺序、不发 tasksChanged（与 moveTasksToDate 对已在目标日的任务同一口径）。
     // 任务不存在返回 false。
     Q_INVOKABLE bool moveTaskToDate(int taskId, const QVariant& dateValue);
+    // 外部写入自行向调用方返回错误，不走页面共享的 operationFailed；成功仍发正常刷新信号。
+    bool moveTaskToDateWithoutBroadcast(int taskId, const QVariant& dateValue, QString* error = nullptr);
 
     // 备注长度上限（QChar 计数）。超长一律拒绝而不是截断：截断会让保存照常「成功」，
     // 用户重新打开才发现末尾没了，而丢掉的往往正是最想留下的那段。
@@ -184,6 +186,7 @@ signals:
 private:
     explicit TaskManager(QObject* parent = nullptr);
     void reportFailure(const QString& message) const;
+    bool moveTaskToDateImpl(int taskId, const QVariant& dateValue, bool broadcastFailure, QString* error);
 };
 
 #endif // TASKMANAGER_H

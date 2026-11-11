@@ -138,7 +138,7 @@ QJsonObject McpToolDispatcher::writeTask(Tool tool, const QJsonObject& args, con
             args.contains("estimated_minutes") ? args.value("estimated_minutes").toInt() : -1,
             args.contains("notes") ? args.value("notes").toString(QStringLiteral("")) : QString(), !args.contains("category_id"),
             !args.contains("title"));
-    } else if (tool == Tool::RescheduleTask) ok = m_tasks->moveTaskToDate(id, args.value("date").toString());
+    } else if (tool == Tool::RescheduleTask) ok = m_tasks->moveTaskToDateWithoutBroadcast(id, args.value("date").toString());
     else ok = m_tasks->setTaskCompleted(id, args.value("completed").toBool());
     // 服务层的单条 UPDATE 失败时整条不生效，可以明确告诉模型任务没被改动。
     if (!ok) return makeToolErrorResult(makeError(ErrorCode::DatabaseError, QStringLiteral("保存失败，任务 #%1 未被修改").arg(id),

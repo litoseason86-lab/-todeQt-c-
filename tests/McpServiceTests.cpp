@@ -10,6 +10,7 @@
 #include <QTemporaryDir>
 #include <QSettings>
 #include <QSqlQuery>
+#include <QSqlError>
 #include <QSignalSpy>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -321,6 +322,68 @@ private slots:
                                           "VALUES(%1,'2026-09-17T10:00:00','2026-09-17T10:05:00',300,1,1)").arg(id)));
         QCOMPARE(token(), previous);
         session = QUuid::createUuid().toString(QUuid::WithoutBraces); QVERIFY(token() != previous);
+    }
+    void rescheduleWriteFailureDoesNotBroadcastToPages()
+    {
+        // 保证 MCP 改期写入被拒绝时只向调用方报错，不污染页面错误状态，任务日期保持原样。
+        const int id = task();
+        QVERIFY(id > 0);
+        auto* tasks = TaskManager::instance();
+        const auto before = tasks->readTask(id);
+        QVERIFY(before.ok());
+        const QString oldDate = before.value.value("date").toString();
+        const QString newDate = QStringLiteral("2026-09-18");
+        QVERIFY(oldDate != newDate);
+        QSqlQuery query(DatabaseManager::instance()->database());
+        // 只拒绝 UPDATE，允许改期入口先读取任务；探测失败后确认原日期没变，再执行真实 MCP 路径。
+        QVERIFY(query.exec("CREATE TEMP TRIGGER reject_reschedule BEFORE UPDATE ON tasks "
+                           "BEGIN SELECT RAISE(ABORT, 'reschedule blocked'); END"));
+        QVERIFY(!query.exec(QStringLiteral("UPDATE tasks SET date='%1' WHERE id=%2").arg(newDate).arg(id)));
+        QVERIFY(query.lastError().text().contains(QStringLiteral("reschedule blocked")));
+        QCOMPARE(tasks->readTask(id).value.value("date").toString(), oldDate);
+        auto args = editArgs(id);
+        args.insert("date", newDate);
+        QSignalSpy failed(tasks, &TaskManager::operationFailed);
+        QSignalSpy changed(tasks, &TaskManager::tasksChanged);
+        const auto result = run(Tool::RescheduleTask, args);
+        QVERIFY(result.value("isError").toBool());
+        const auto error = body(result);
+        QCOMPARE(error.value("code").toString(), QStringLiteral("DATABASE_ERROR"));
+        QCOMPARE(error.value("message").toString(), QStringLiteral("保存失败，任务 #%1 未被修改").arg(id));
+        QCOMPARE(error.value("details").toObject().value("task_id").toInt(), id);
+        const auto after = tasks->readTask(id);
+        QVERIFY(after.ok());
+        QCOMPARE(after.value, before.value);
+        QCOMPARE(changed.count(), 0);
+        QCOMPARE(failed.count(), 0);
+    }
+    void pageRescheduleWriteFailureStillBroadcasts()
+    {
+        // 保证页面原改期入口写入被拒绝时继续广播一次失败，页面和 iPad 能收到本次操作错误。
+        const int id = task();
+        QVERIFY(id > 0);
+        auto* tasks = TaskManager::instance();
+        const auto before = tasks->readTask(id);
+        QVERIFY(before.ok());
+        const QString oldDate = before.value.value("date").toString();
+        const QString newDate = QStringLiteral("2026-09-18");
+        QVERIFY(oldDate != newDate);
+        QSqlQuery query(DatabaseManager::instance()->database());
+        // 与 MCP 用例相同的 UPDATE 拒绝，确保比较的是错误传播通道，而不是不同的失败层。
+        QVERIFY(query.exec("CREATE TEMP TRIGGER reject_reschedule BEFORE UPDATE ON tasks "
+                           "BEGIN SELECT RAISE(ABORT, 'reschedule blocked'); END"));
+        QVERIFY(!query.exec(QStringLiteral("UPDATE tasks SET date='%1' WHERE id=%2").arg(newDate).arg(id)));
+        QVERIFY(query.lastError().text().contains(QStringLiteral("reschedule blocked")));
+        QCOMPARE(tasks->readTask(id).value.value("date").toString(), oldDate);
+        QSignalSpy failed(tasks, &TaskManager::operationFailed);
+        QSignalSpy changed(tasks, &TaskManager::tasksChanged);
+        QVERIFY(!tasks->moveTaskToDate(id, newDate));
+        const auto after = tasks->readTask(id);
+        QVERIFY(after.ok());
+        QCOMPARE(after.value, before.value);
+        QCOMPARE(changed.count(), 0);
+        QCOMPARE(failed.count(), 1);
+        QVERIFY(failed.at(0).at(0).toString().startsWith(QStringLiteral("任务改期失败：")));
     }
     void errorsStayOutOfUi()
     {
