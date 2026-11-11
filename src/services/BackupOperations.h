@@ -19,6 +19,13 @@ inline constexpr qint64 kMaxBackupFileBytes = 512LL * 1024 * 1024;
 inline constexpr qint64 kMaxBackupRows = 5'000'000;
 inline constexpr qint64 kMaxBackupCellBytes = 16LL * 1024 * 1024;
 
+// 每日目标历史每天最多一个键，约 365 个/年；40000 项可容纳约 100 年历史及几十项普通偏好。
+inline constexpr int kMaxSettingEntries = 40000;
+// 单值按序列化后的字节计量，沿用旧格式上限，避免外部长度字段引起过量分配。
+inline constexpr int kMaxSettingValueBytes = 64 * 1024;
+// 自有键的 UTF-8 字节与序列化值合计；限制外部文件解析内存，不作为业务输入限制。
+inline constexpr qint64 kMaxSettingsTotalBytes = 8LL * 1024 * 1024;
+
 // 平台字段只用于显示与排查；按运行时产品类型映射，避免服务层引入编译期平台分支。
 // macOS 保持旧备份的显示值，其余未识别产品类型原样保留。
 QString platformDisplayName(const QString& productType);
@@ -49,6 +56,9 @@ struct EmbeddedSettingsResult
 
 // 请求只带已经序列化的应用偏好；执行器不接触主进程的偏好域。
 using OwnedSettings = QMap<QString, QByteArray>;
+
+// 捕获、协议及文件读取共用预算；只计本应用拥有的键，不截断或删除历史。
+bool checkSettingsBudget(const OwnedSettings& values, QString* reason);
 
 struct CapturedSettingsResult
 {

@@ -28,9 +28,6 @@
 
 namespace BackupOperations {
 
-// 未受信文件的解析上限。设置项都是标量或短字符串，这两个数留了几个数量级余量。
-constexpr int kMaxSettingValueBytes = 64 * 1024;
-constexpr int kMaxSettingEntries = 500;
 // 格式1只允许标量，固定到最低支持SDK的流格式，避免升级Qt后默认版本改变备份编码。
 // 当前允许类型在Qt6.7与Qt6.10编码相同；新增类型时必须同时核对固定夹具和旧备份兼容。
 constexpr auto kSettingsStreamVersion = QDataStream::Qt_6_7;
@@ -60,6 +57,48 @@ std::unique_ptr<QSettings> openSettings(const QString& settingsFilePath)
 bool isLocalSettingKey(const QString& key)
 {
     return AppSettings::isOwnedSettingKey(key) || key.startsWith(QStringLiteral("backup/"));
+}
+
+namespace {
+
+class SettingsBudget
+{
+public:
+    bool add(const QString& key, qsizetype valueBytes, QString* reason)
+    {
+        if (!AppSettings::isOwnedSettingKey(key)) return true;
+        const auto fail = [reason](const QString& message) {
+            if (reason) *reason = message;
+            return false;
+        };
+        if (++m_entries > kMaxSettingEntries) {
+            return fail(QStringLiteral("偏好条目超出备份上限"));
+        }
+        if (valueBytes > kMaxSettingValueBytes) {
+            return fail(QStringLiteral("备份偏好数据异常：%1 的值过大").arg(key));
+        }
+        // 先累计原始字节再解码 QVariant（Qt 的带类型值），不先把外部文件全部物化为偏好。
+        m_totalBytes += key.toUtf8().size() + valueBytes;
+        if (m_totalBytes > kMaxSettingsTotalBytes) {
+            return fail(QStringLiteral("偏好总字节数超出备份上限"));
+        }
+        return true;
+    }
+private:
+    int m_entries = 0;
+    qint64 m_totalBytes = 0;
+};
+
+} // namespace
+
+bool checkSettingsBudget(const OwnedSettings& values, QString* reason)
+{
+    if (reason) reason->clear();
+    SettingsBudget budget;
+    for (auto it = values.cbegin(); it != values.cend(); ++it) {
+        if (!budget.add(it.key(), it.value().size(), reason)) return false;
+    }
+    return true;
 }
 
 CapturedSettingsResult captureOwnedSettings(const QString& settingsFilePath,
@@ -95,6 +134,7 @@ CapturedSettingsResult captureOwnedSettings(const QString& settingsFilePath,
         }
         result.values.insert(key, blob);
     }
+    if (!checkSettingsBudget(result.values, &result.error)) return result;
     result.success = !control->stopped();
     if (!result.success) result.error = control->message();
     return result;
@@ -1001,6 +1041,10 @@ OperationResult createSnapshot(const SnapshotRequest& request, const BackupOpera
         return result;
     }
 
+    // 显式保留发布前的偏好读取门禁，直接传入序列化字节的执行器也不能发布不可恢复文件。
+    const auto embedded = readEmbeddedSettings(temporaryPath, control);
+    if (!embedded.success) return {false, embedded.error};
+
     // 不发布本版本会拒绝恢复的超限文件；失败保留原目标，临时快照在下面统一移除。
     result = atomicCopy(temporaryPath, destinationPath, kMaxBackupFileBytes, control);
     return result;
@@ -1180,6 +1224,11 @@ QVariantMap inspectBackup(const QString& sourcePath, int currentSchemaVersion, c
     }
     QSqlDatabase::removeDatabase(connectionName);
 
+    // 文件检查与恢复共享同一解码入口，避免检查有效却在恢复时才发现偏好超限或编码损坏。
+    if (reason.isEmpty()) {
+        const auto embedded = readEmbeddedSettings(sourcePath, control);
+        if (!embedded.success) reason = embedded.error;
+    }
     if (!control->checkpoint("inspect-complete")) reason = control->message();
     result.insert(QStringLiteral("valid"), reason.isEmpty());
     result.insert(QStringLiteral("reason"), reason);
@@ -1205,11 +1254,13 @@ EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath, const Bac
             result.error = QStringLiteral("备份缺少偏好数据");
         } else {
             QSqlQuery rows(database);
+            rows.setForwardOnly(true);
             if (!rows.exec(QStringLiteral("SELECT key, value FROM backup_settings"))) {
                 result.error = QStringLiteral("读取备份偏好失败：") + rows.lastError().text();
             } else {
                 bool ok = true;
                 int skipped = 0;
+                SettingsBudget budget;
                 while (rows.next()) {
                     const QString key = rows.value(0).toString();
 
@@ -1222,11 +1273,7 @@ EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath, const Bac
                     }
 
                     QByteArray blob = rows.value(1).toByteArray();
-                    // 单个值的字节数上限。QDataStream 解 QVariant 时会先读出容器长度
-                    // 再按该长度预留空间，一个被篡改的长度字段能让这里试图分配几个 GB。
-                    // 正常设置值都是标量或短字符串，这个上限留了几个数量级的余量。
-                    if (blob.size() > kMaxSettingValueBytes) {
-                        result.error = QStringLiteral("备份偏好数据异常：%1 的值过大").arg(key);
+                    if (!budget.add(key, blob.size(), &result.error)) {
                         ok = false;
                         break;
                     }
@@ -1246,12 +1293,6 @@ EmbeddedSettingsResult readEmbeddedSettings(const QString& sourcePath, const Bac
                         break;
                     }
                     result.values.insert(key, value);
-
-                    if (result.values.size() > kMaxSettingEntries) {
-                        result.error = QStringLiteral("备份偏好条目过多");
-                        ok = false;
-                        break;
-                    }
                 }
                 if (ok && skipped > 0) {
                     // 不静默：丢了什么必须留下痕迹，否则用户只会发现"恢复后某项没回来"。

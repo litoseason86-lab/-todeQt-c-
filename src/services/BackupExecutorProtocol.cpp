@@ -56,6 +56,7 @@ QByteArray encodeRequest(const Request& request)
         object.insert(QStringLiteral("settingsPath"), snapshot.effectiveSettingsPath);
         object.insert(QStringLiteral("kind"), snapshot.kind);
         object.insert(QStringLiteral("schema"), snapshot.currentSchemaVersion);
+        if (!BackupOperations::checkSettingsBudget(snapshot.settings, nullptr)) return {};
         QJsonObject settings;
         for (auto it = snapshot.settings.constBegin(); it != snapshot.settings.constEnd(); ++it) {
             settings.insert(it.key(), QString::fromLatin1(it.value().toBase64()));
@@ -130,7 +131,9 @@ std::optional<Request> decodeRequest(const QByteArray& line, QString* error)
         }
         if (!object.value(QStringLiteral("settings")).isObject()) return fail(QStringLiteral("偏好表无效"));
         const auto settings = object.value(QStringLiteral("settings")).toObject();
-        if (settings.size() > 500) return fail(QStringLiteral("偏好条数超限"));
+        if (settings.size() > BackupOperations::kMaxSettingEntries) {
+            return fail(QStringLiteral("偏好条目超出备份上限"));
+        }
         BackupOperations::OwnedSettings values;
         for (auto it = settings.constBegin(); it != settings.constEnd(); ++it) {
             if (!AppSettings::isOwnedSettingKey(it.key()) || it.key().contains(QChar::Null)
@@ -138,15 +141,19 @@ std::optional<Request> decodeRequest(const QByteArray& line, QString* error)
                 return fail(QStringLiteral("偏好键或编码无效"));
             }
             const QString encoded = it.value().toString();
-            if (encoded.size() > ((64 * 1024 + 2) / 3) * 4) return fail(QStringLiteral("偏好值超限"));
+            if (encoded.size() > ((BackupOperations::kMaxSettingValueBytes + 2) / 3) * 4) {
+                return fail(QStringLiteral("偏好值超限"));
+            }
             const auto decoded = QByteArray::fromBase64Encoding(encoded.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
-            if (!decoded || decoded.decoded.size() > 64 * 1024
+            if (!decoded || decoded.decoded.size() > BackupOperations::kMaxSettingValueBytes
                 || QString::fromLatin1(decoded.decoded.toBase64()) != encoded) {
                 return fail(QStringLiteral("偏好值不是规范 base64"));
             }
             // 协议只转送原始字节，不解码 QVariant；备份格式的类型白名单仍由原有检查负责。
             values.insert(it.key(), decoded.decoded);
         }
+        QString budgetError;
+        if (!BackupOperations::checkSettingsBudget(values, &budgetError)) return fail(budgetError);
         request.snapshot = {request.sourcePath, request.destinationPath,
                             object.value(QStringLiteral("stagingDirectory")).toString(),
                             object.value(QStringLiteral("settingsPath")).toString(), kind,

@@ -9,6 +9,8 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
+#include <algorithm>
+
 namespace {
 BackupExecutorProtocol::Request snapshotRequest()
 {
@@ -25,6 +27,9 @@ class BackupExecutorProtocolTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void longHistorySettingsRoundTrip();
+    void settingsBudgetBoundaries_data();
+    void settingsBudgetBoundaries();
     void requestsAndResultsRoundTrip();
     void settingsKeepTheirTypesAndBytes();
     void invalidRequestsAreRejected_data();
@@ -212,6 +217,69 @@ void BackupExecutorProtocolTests::stopMessagesUseKnownReasons()
     }
     QVERIFY(!BackupExecutorProtocol::decodeStop("{\"stop\":\"unknown\"}"));
     QVERIFY(!BackupExecutorProtocol::decodeStop("{\"stop\":\"cancelled\",\"extra\":1}"));
+}
+
+
+// 保证超过旧版五百条门槛的每日目标历史通过协议后字节不变。
+void BackupExecutorProtocolTests::longHistorySettingsRoundTrip()
+{
+    auto request = snapshotRequest();
+    for (int i = 0; i < 600; ++i) request.snapshot.settings.insert(QStringLiteral("focus/dailyGoalHistory/%1").arg(i), QByteArray("value"));
+    QString error;
+    const auto decoded = BackupExecutorProtocol::decodeRequest(BackupExecutorProtocol::encodeRequest(request), &error);
+    QVERIFY2(decoded, qPrintable(error));
+    QCOMPARE(decoded->snapshot.settings, request.snapshot.settings);
+}
+
+// 保证协议在条数、单值和含中文键的总字节边界接受等号、拒绝多一字节或一条。
+void BackupExecutorProtocolTests::settingsBudgetBoundaries_data()
+{
+    QTest::addColumn<QString>("budget");
+    QTest::newRow("entries") << QStringLiteral("entries");
+    QTest::newRow("value") << QStringLiteral("value");
+    QTest::newRow("total") << QStringLiteral("total");
+}
+
+// 保证编码与外部解码执行同一预算，外部请求不能绕过编码器的超限拒绝。
+void BackupExecutorProtocolTests::settingsBudgetBoundaries()
+{
+    QFETCH(QString, budget);
+    auto request = snapshotRequest();
+    auto& values = request.snapshot.settings;
+    if (budget == QStringLiteral("entries")) {
+        for (int i = 0; i < 40000; ++i) values.insert(QStringLiteral("focus/key/%1").arg(i), QByteArray("v"));
+    } else if (budget == QStringLiteral("value")) {
+        values.insert(QStringLiteral("focus/key"), QByteArray(64 * 1024, 'v'));
+    } else {
+        qint64 remaining = 8 * 1024 * 1024;
+        for (int i = 0; remaining > 0; ++i) {
+            const auto key = QStringLiteral("focus/中文/%1").arg(i);
+            const auto size = qMin<qint64>(64 * 1024, remaining - key.toUtf8().size());
+            QVERIFY(size > 0);
+            values.insert(key, QByteArray(size, 'v'));
+            remaining -= key.toUtf8().size() + size;
+        }
+        QCOMPARE(remaining, qint64(0));
+    }
+    const auto encoded = BackupExecutorProtocol::encodeRequest(request);
+    QVERIFY(!encoded.isEmpty());
+    QVERIFY(encoded.size() < BackupExecutorProtocol::kMaxLineBytes);
+    QString error;
+    QVERIFY2(BackupExecutorProtocol::decodeRequest(encoded, &error), qPrintable(error));
+    auto object = QJsonDocument::fromJson(encoded).object();
+    if (budget == QStringLiteral("entries")) values.insert(QStringLiteral("focus/extra"), QByteArray("v"));
+    else if (budget == QStringLiteral("value")) values.last().append('v');
+    else {
+        auto partial = std::find_if(values.begin(), values.end(), [](const QByteArray& value) { return value.size() < 64 * 1024; });
+        QVERIFY(partial != values.end());
+        partial.value().append('v');
+    }
+    QJsonObject over;
+    for (auto it = values.cbegin(); it != values.cend(); ++it) over.insert(it.key(), QString::fromLatin1(it.value().toBase64()));
+    object.insert(QStringLiteral("settings"), over);
+    QVERIFY(!BackupExecutorProtocol::decodeRequest(QJsonDocument(object).toJson(QJsonDocument::Compact), &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(BackupExecutorProtocol::encodeRequest(request).isEmpty());
 }
 
 QTEST_GUILESS_MAIN(BackupExecutorProtocolTests)

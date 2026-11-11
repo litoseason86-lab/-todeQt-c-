@@ -175,6 +175,7 @@ class MacBackupExecutorTests : public QObject
 private slots:
     void initTestCase();
     void cleanup();
+    void longHistorySurvivesRealExecutor();
     void realExecutorMatchesInProcessOperations();
     void cancelledSnapshotExitsAndRemovesStaging();
     void ignoredStopIsKilledWithinDeadline();
@@ -200,6 +201,35 @@ void MacBackupExecutorTests::initTestCase()
 void MacBackupExecutorTests::cleanup()
 {
     DatabaseManager::instance()->close();
+}
+
+// 保证六百条日期目标历史与正常偏好经真实 Mac 执行器备份后完整可读。
+void MacBackupExecutorTests::longHistorySurvivesRealExecutor()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QVERIFY(populateDatabase(directory.filePath(QStringLiteral("database.db")), 0));
+    QVariantMap expected{{QStringLiteral("profile/nickname"), QStringLiteral("长期使用")},
+                         {QStringLiteral("focus/workMinutes"), 35}};
+    for (int i = 0; i < 600; ++i) expected.insert(QStringLiteral("focus/dailyGoalHistory/")
+        + QDate(2020, 1, 1).addDays(i).toString(Qt::ISODate), i + 1);
+    QSettings settings(directory.filePath(QStringLiteral("settings.ini")), QSettings::IniFormat);
+    for (auto it = expected.cbegin(); it != expected.cend(); ++it) settings.setValue(it.key(), it.value());
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    const auto request = makeSnapshotRequest(directory, directory.filePath(QStringLiteral("history.tomatobackup")));
+    QCOMPARE(request.settings.size(), expected.size());
+    const auto guard = std::make_shared<GuardedProcessControl>();
+    MacBackupExecutor executor(QStringLiteral(POMODORO_BACKUP_EXECUTOR_PATH), guard);
+    const auto created = executor.createSnapshot(request, {});
+    QVERIFY2(created.success, qPrintable(created.error));
+    QVERIFY(created.committed);
+    QCOMPARE(guard->spawnCount.load(), 1);
+    const auto info = executor.inspectBackup(request.destinationPath, DatabaseManager::kCurrentSchemaVersion, {});
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
+    const auto embedded = BackupOperations::readEmbeddedSettings(request.destinationPath);
+    QVERIFY2(embedded.success, qPrintable(embedded.error));
+    QCOMPARE(embedded.values, expected);
 }
 
 void MacBackupExecutorTests::realExecutorMatchesInProcessOperations()

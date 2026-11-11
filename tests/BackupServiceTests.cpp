@@ -267,6 +267,13 @@ private slots:
     void init();
     void cleanup();
 
+    void settingsHistorySurvivesSnapshot();
+    void snapshotSettingsBudgetPreservesDestination_data();
+    void snapshotSettingsBudgetPreservesDestination();
+    void inspectionRejectsUnrestorableSettings_data();
+    void inspectionRejectsUnrestorableSettings();
+    void publicationRejectsMalformedSettings();
+    void overBudgetAutomaticBackupKeepsScheduleAndHistory();
     void readBackupsSeparatesNoneFromUnreadableFolder();
     void platformDisplayName_data();
     void platformDisplayName();
@@ -4074,4 +4081,171 @@ void BackupServiceTests::completionNotificationsPreserveReentrantOperation()
     QCOMPARE(service.operationText(), nextText);
     QCOMPARE(service.m_operation, next);
     QVERIFY(service.m_activeWorkers.size() == 1);
+}
+
+// 保证长期每日目标历史能完整通过进程内快照、有效性检查和恢复偏好读取。
+void BackupServiceTests::settingsHistorySurvivesSnapshot()
+{
+    QVariantMap expected{{QStringLiteral("profile/nickname"), QStringLiteral("长期使用")},
+                         {QStringLiteral("focus/workMinutes"), 35}};
+    for (int i = 0; i < 600; ++i) {
+        expected.insert(QStringLiteral("focus/dailyGoalHistory/")
+                            + QDate(2020, 1, 1).addDays(i).toString(Qt::ISODate), i + 1);
+    }
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    for (auto it = expected.cbegin(); it != expected.cend(); ++it) settings.setValue(it.key(), it.value());
+    // 陌生域不属于备份预算，也不应随本应用的历史一起写进快照。
+    settings.setValue(QStringLiteral("foreign/large"), QString(70000, QLatin1Char('x')));
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    const auto captured = BackupOperations::captureOwnedSettings(settingsPath());
+    QVERIFY2(captured.success, qPrintable(captured.error));
+    QCOMPARE(captured.values.size(), expected.size());
+    InProcessBackupExecutor executor;
+    const auto created = executor.createSnapshot({dbPath(), backupFile(), backupsDir(), settingsPath(),
+        QStringLiteral("manual"), DatabaseManager::kCurrentSchemaVersion, captured.values}, {});
+    QVERIFY2(created.success, qPrintable(created.error));
+    const auto info = executor.inspectBackup(backupFile(), DatabaseManager::kCurrentSchemaVersion, {});
+    QVERIFY2(info.value(QStringLiteral("valid")).toBool(), qPrintable(info.value(QStringLiteral("reason")).toString()));
+    const auto embedded = BackupOperations::readEmbeddedSettings(backupFile());
+    QVERIFY2(embedded.success, qPrintable(embedded.error));
+    QCOMPARE(embedded.values, expected);
+}
+
+// 保证条数、合计字节和单值预算失败都保护新目标及已有目标。
+void BackupServiceTests::snapshotSettingsBudgetPreservesDestination_data()
+{
+    QTest::addColumn<QString>("budget");
+    QTest::newRow("entries") << QStringLiteral("entries");
+    QTest::newRow("total") << QStringLiteral("total");
+    QTest::newRow("value") << QStringLiteral("value");
+}
+
+// 保证捕获阶段拒绝超限偏好，快照失败不发布文件、不覆盖已有内容。
+void BackupServiceTests::snapshotSettingsBudgetPreservesDestination()
+{
+    QFETCH(QString, budget);
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    const int count = budget == QStringLiteral("entries") ? 40001 : budget == QStringLiteral("total") ? 140 : 1;
+    const QVariant value = budget == QStringLiteral("entries") ? QVariant(1)
+        : QVariant(QString(budget == QStringLiteral("total") ? 31000 : 33000, QLatin1Char('x')));
+    for (int i = 0; i < count; ++i) settings.setValue(QStringLiteral("focus/budget/%1").arg(i), value);
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    QVERIFY(!QFileInfo::exists(backupFile()));
+    const auto absent = BackupOperations::createSnapshot(dbPath(), settingsPath(), backupFile(),
+        QStringLiteral("manual"), DatabaseManager::kCurrentSchemaVersion);
+    QVERIFY2(!absent.success, "超限偏好不得发布快照");
+    QVERIFY(!absent.error.isEmpty());
+    QVERIFY(!QFileInfo::exists(backupFile()));
+    const auto captured = BackupOperations::captureOwnedSettings(settingsPath());
+    QVERIFY(!captured.success);
+    QCOMPARE(captured.error, absent.error);
+    QFile target(backupFile());
+    QVERIFY(target.open(QIODevice::WriteOnly));
+    QCOMPARE(target.write("original"), qint64(8));
+    target.close();
+    const auto existing = BackupOperations::createSnapshot(dbPath(), settingsPath(), backupFile(),
+        QStringLiteral("manual"), DatabaseManager::kCurrentSchemaVersion);
+    QVERIFY(!existing.success);
+    QCOMPARE(existing.error, absent.error);
+    QVERIFY(target.open(QIODevice::ReadOnly));
+    QCOMPARE(target.readAll(), QByteArray("original"));
+    QVERIFY(QDir(backupsDir()).entryList({QStringLiteral(".snapshot-tmp-*")}, QDir::Files | QDir::Hidden).isEmpty());
+}
+
+// 保证外部文件的条数、合计、单值及编码错误在检查和恢复时得到一致拒绝。
+void BackupServiceTests::inspectionRejectsUnrestorableSettings_data()
+{
+    QTest::addColumn<QString>("defect");
+    for (const auto& name : {"entries", "total", "value", "encoding"}) QTest::newRow(name) << QString::fromLatin1(name);
+}
+
+// 保证检查判为有效的备份能够读取偏好，超限或非法编码不会被当成可恢复文件。
+void BackupServiceTests::inspectionRejectsUnrestorableSettings()
+{
+    QFETCH(QString, defect);
+    QVERIFY(BackupService::instance()->createBackup(backupFile()));
+    QByteArray blob;
+    QDataStream stream(&blob, QIODevice::WriteOnly);
+    stream.setVersion(QDataStream::Qt_6_7);
+    stream << (defect == QStringLiteral("total") ? QVariant(QString(31000, QLatin1Char('x'))) : QVariant(42));
+    if (defect == QStringLiteral("value")) blob = QByteArray(65537, 'x');
+    if (defect == QStringLiteral("encoding")) blob = QByteArray("broken");
+    const int count = defect == QStringLiteral("entries") ? 40001 : defect == QStringLiteral("total") ? 140 : 1;
+    const QString connection = QStringLiteral("BudgetInject");
+    {
+        auto db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), connection);
+        db.setDatabaseName(backupFile());
+        QVERIFY(db.open());
+        // 测试夹具用一次事务提交数万条外部偏好，避免逐条落盘拖慢预算边界验证。
+        QVERIFY(db.transaction());
+        QSqlQuery rows(db);
+        QVERIFY(rows.exec(QStringLiteral("DELETE FROM backup_settings")));
+        QVERIFY(rows.prepare(QStringLiteral("INSERT INTO backup_settings VALUES (?, ?)")));
+        for (int i = 0; i < count; ++i) {
+            rows.bindValue(0, QStringLiteral("focus/budget/%1").arg(i));
+            rows.bindValue(1, blob);
+            QVERIFY(rows.exec());
+        }
+        QVERIFY(db.commit());
+    }
+    QSqlDatabase::removeDatabase(connection);
+    const auto info = BackupOperations::inspectBackup(backupFile(), DatabaseManager::kCurrentSchemaVersion);
+    const auto embedded = BackupOperations::readEmbeddedSettings(backupFile());
+    QVERIFY(!info.value(QStringLiteral("valid")).toBool());
+    QVERIFY(!embedded.success);
+    QVERIFY(!embedded.error.isEmpty());
+    QCOMPARE(info.value(QStringLiteral("reason")).toString(), embedded.error);
+}
+
+// 保证直接传入已捕获字节的执行器也不会发布本版本无法读取的偏好编码。
+void BackupServiceTests::publicationRejectsMalformedSettings()
+{
+    QFile target(backupFile());
+    QVERIFY(target.open(QIODevice::WriteOnly));
+    QCOMPARE(target.write("original"), qint64(8));
+    target.close();
+    const BackupOperations::SnapshotRequest request{dbPath(), backupFile(), backupsDir(), settingsPath(),
+        QStringLiteral("manual"), DatabaseManager::kCurrentSchemaVersion,
+        {{QStringLiteral("focus/workMinutes"), QByteArray("broken")}}};
+    const auto result = BackupOperations::createSnapshot(request);
+    QVERIFY(!result.success);
+    QVERIFY(result.error.contains(QStringLiteral("偏好")));
+    QVERIFY(!result.committed);
+    QVERIFY(target.open(QIODevice::ReadOnly));
+    QCOMPARE(target.readAll(), QByteArray("original"));
+    QVERIFY(QDir(backupsDir()).entryList({QStringLiteral(".snapshot-tmp-*")}, QDir::Files | QDir::Hidden).isEmpty());
+}
+
+// 保证自动备份因偏好超限失败时不推进成功时间、不减少旧恢复点。
+void BackupServiceTests::overBudgetAutomaticBackupKeepsScheduleAndHistory()
+{
+    QVERIFY(QDir().mkpath(backupsDir()));
+    for (int i = 0; i < BackupService::kAutoBackupRetention + 2; ++i) {
+        QFile old(QDir(backupsDir()).filePath(QStringLiteral("auto-20000101-%1.tomatobackup").arg(i)));
+        QVERIFY(old.open(QIODevice::WriteOnly));
+        QCOMPARE(old.write("preserve"), qint64(8));
+    }
+    const auto before = QDir(backupsDir()).entryList(QDir::Files);
+    QVERIFY(before.size() > BackupService::kAutoBackupRetention);
+    const QString last = QStringLiteral("2000-01-01T00:00:00Z");
+    QSettings settings(settingsPath(), QSettings::IniFormat);
+    settings.setValue(QStringLiteral("backup/lastBackupIso"), last);
+    for (int i = 0; i < 40001; ++i) settings.setValue(QStringLiteral("focus/budget/%1").arg(i), i);
+    settings.sync();
+    QCOMPARE(settings.status(), QSettings::NoError);
+    auto* service = BackupService::instance();
+    QCOMPARE(service->lastBackupTimeIso(), last);
+    QVERIFY(!service->runAutoBackupIfDue());
+    QVERIFY(!service->lastError().isEmpty());
+    settings.sync();
+    QCOMPARE(settings.value(QStringLiteral("backup/lastBackupIso")).toString(), last);
+    QCOMPARE(service->lastBackupTimeIso(), last);
+    QCOMPARE(QDir(backupsDir()).entryList(QDir::Files), before);
+    for (const auto& name : before) {
+        QFile old(QDir(backupsDir()).filePath(name));
+        QVERIFY(old.open(QIODevice::ReadOnly));
+        QCOMPARE(old.readAll(), QByteArray("preserve"));
+    }
 }
